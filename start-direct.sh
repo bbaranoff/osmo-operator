@@ -537,7 +537,9 @@ _check() {
     fi
 }
 # Variables optionnelles selon le profil ; on ne bloque que si presentes et cassees
-for v in QEMU_BIN FIRMWARE_ELF DSP_PROM0 OSMOCON; do
+# (DSP_PROM0 retire : ROM plus generee depuis le merge `sans-dsp` de
+#  qosmo-grgsm — cf. run.sh --check-paths et run_modules/00-prereqs.sh.)
+for v in QEMU_BIN FIRMWARE_ELF OSMOCON; do
     # `[ -n x ] && _check || true` avalait le verdict : _check pouvait poser
     # path_ok=0 sans que la boucle ne le laisse remonter. Forme explicite.
     if [ -n "${!v:-}" ]; then _check "$v"; fi

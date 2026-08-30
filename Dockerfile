@@ -447,17 +447,31 @@ RUN mkdir -p /opt/GSM/qemu/build \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
     && ln -sf /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
-# ROM DSP binaire, derivee du .txt symlinke juste au-dessus (ex-Dockerfile.run).
-# Semantique inchangee : elle etait deja generee AVANT le `git pull` de qosmo-grgsm
-# de l'image run. Pour un /opt/GSM/calypso_dsp a jour il faudrait la rejouer
-# APRES ce pull — ce n'est pas l'objet de ce decoupage.
-RUN python3 /opt/GSM/qosmo-grgsm/tools/dsp_txt2bin.py /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp
+# [2026-08-30] ETAPE SUPPRIMEE — « ROM DSP binaire, derivee du .txt ».
+#   RUN python3 /opt/GSM/qosmo-grgsm/tools/dsp_txt2bin.py \
+#       /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp
+# L'amont bbaranoff/qosmo-grgsm a fusionne la PR #1 « sans-dsp » (merge a547b01),
+# qui SUPPRIME tools/dsp_txt2bin.py — le seul generateur des sept
+# calypso_dsp.{PROM0..3,DROM,PDROM,Registers}.bin. Le build mourait donc a cette
+# etape sur « can't open file ... [Errno 2] », apres ~40 etapes.
+# Rien dans ce depot ne consomme /opt/GSM/calypso_dsp (le binaire produit ici) :
+# le runtime lit les DSP_PROM* de environnement/paths.env, et les gardes qui les
+# exigeaient ont ete levees (run.sh --check-paths, run_modules/00-prereqs.sh,
+# run_modules/40-qemu.sh, start-direct.sh). Le .txt reste symlinke juste au-dessus
+# pour les outils d'analyse (tools/tic54x-dis.py, tests/test_calypso_milestones.py).
 
 # Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
 # dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
 # osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-RUN cd /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+# NON BLOQUANT pour la meme raison que la ROM DSP ci-dessus : si l'amont ne
+# fournit pas le repertoire, on log et on continue au lieu de casser le build.
+RUN if [ -d /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device ]; then \
+        cd /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device \
+        && make clean && make -j"$(nproc)"; \
+    else \
+        echo "[skip] calypso-ipc-device absent de qosmo-grgsm/tools"; \
+    fi
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).

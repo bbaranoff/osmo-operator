@@ -132,7 +132,12 @@ fi
 
 if [ "$ACTION" = checkpaths ]; then
     rc=0
-    for v in QEMU_BIN FIRMWARE_ELF DSP_PROM0 OSMOCON OSMOCOM_CFG; do
+    # [2026-08-30] DSP_PROM0 retire de la liste : l'amont qosmo-grgsm a fusionne
+    # la branche `sans-dsp`, qui supprime tools/dsp_txt2bin.py — le seul
+    # generateur des sept calypso_dsp.*.bin. Les exiger ici faisait echouer
+    # --check-paths sur toute installation a jour, y compris pour les profils
+    # (faketrx, core, pont) qui n'ouvrent jamais une ROM DSP.
+    for v in QEMU_BIN FIRMWARE_ELF OSMOCON OSMOCOM_CFG; do
         p="${!v:-}"
         if [ -z "$p" ];      then say_end FAIL "$C_KO" "$v" "non defini"; rc=1
         elif [ -e "$p" ];    then say_end " OK " "$C_OK" "$v" "$p"

@@ -19,12 +19,22 @@ mod_qemu_check() {
                                 mod_hint "compilez-le : ./configure --target-list=arm-softmmu && ninja -C build qemu-system-arm"
                                 return $MOD_RC_FAIL; }
     [ -r "${FIRMWARE_ELF:-}" ] || { mod_fail "firmware ARM introuvable : ${FIRMWARE_ELF:-<non defini>}"; return $MOD_RC_FAIL; }
-    local r
-    for r in "$DSP_PROM0" "$DSP_PROM1" "$DSP_PROM2" "$DSP_PROM3" "$DSP_DROM" "$DSP_PDROM"; do
-        [ -r "$r" ] || { mod_fail "ROM du DSP manquante : $r"
-                         mod_hint "les six binaires du DSP sont indispensables au demarrage"
-                         return $MOD_RC_FAIL; }
+    # [2026-08-30] Les ROM du DSP ne sont plus un PREREQUIS DUR. Le merge
+    # `sans-dsp` de qosmo-grgsm a supprime tools/dsp_txt2bin.py, seul generateur
+    # des calypso_dsp.*.bin : les exiger revenait a interdire tout demarrage de
+    # QEMU. La machine `calypso` sait tourner sans (dsp-blob/shunt), et le mode
+    # par defaut ici est CALYPSO_SKIP_DSP=1. On previent, on ne bloque plus.
+    local r missing=0
+    # `:-` obligatoire : sans l'arbre voisin qosmo-grgsm, son environnement/paths.env
+    # n'est pas source (environment/paths.env l.103) et ces variables n'existent
+    # pas — un `$DSP_PROM0` nu tuait le module sous le `set -u` de run.sh.
+    for r in "${DSP_PROM0:-}" "${DSP_PROM1:-}" "${DSP_PROM2:-}" "${DSP_PROM3:-}" \
+             "${DSP_DROM:-}" "${DSP_PDROM:-}"; do
+        [ -n "$r" ] && [ -r "$r" ] || missing=$((missing + 1))
     done
+    if [ "$missing" -gt 0 ]; then
+        mod_hint "$missing ROM DSP absente(s) sous ${DSP_ROM_DIR:-\$GSM_ROOT} : QEMU demarre sans (shunt/CALYPSO_SKIP_DSP)"
+    fi
     mod_ok
 }
 
@@ -44,9 +54,15 @@ _qemu_log_guard() {
 
 mod_qemu_start() {
     local mach="calypso"
-    mach="$mach,dsp-prom0=$DSP_PROM0,dsp-prom1=$DSP_PROM1,dsp-prom2=$DSP_PROM2"
-    mach="$mach,dsp-prom3=$DSP_PROM3,dsp-drom=$DSP_DROM,dsp-pdrom=$DSP_PDROM"
-    mach="$mach,dsp-registers=$DSP_REGISTERS"
+    # Une propriete `dsp-*=` pointant sur un fichier absent fait avorter QEMU au
+    # demarrage : on ne passe que les sections REELLEMENT presentes. Aucune ->
+    # machine `calypso` nue, ce que le shunt (CALYPSO_SKIP_DSP=1) attend.
+    local _p _v
+    for _p in prom0:DSP_PROM0 prom1:DSP_PROM1 prom2:DSP_PROM2 prom3:DSP_PROM3 \
+              drom:DSP_DROM pdrom:DSP_PDROM registers:DSP_REGISTERS; do
+        _v="${_p#*:}"; _v="${!_v:-}"
+        [ -n "$_v" ] && [ -r "$_v" ] && mach="$mach,dsp-${_p%%:*}=$_v"
+    done
     local qlog="${LOG_DIR}/qemu.log"
     mod_say "machine  : $mach"
     mod_say "journal  : $qlog (plafond ${QEMU_LOG_MAX} o)"

@@ -141,10 +141,17 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator && git pull
 # (start.sh l.492-497 refait le pull et le `ninja` au demarrage du conteneur,
 #  mais PAS calypso-ipc-device : ce RUN est le seul endroit qui les garde
 #  synchronises. Ne pas le decouper en plusieurs RUN.)
+# (Le rebuild du device est NON BLOQUANT : si l'amont ne fournit plus
+#  tools/calypso-ipc-device, on garde celui de l'image de base au lieu de
+#  casser le build de l'image run.)
 RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qosmo-grgsm && git pull && \
     (cd build && ninja) && \
-    make -C tools/calypso-ipc-device clean && \
-    make -C tools/calypso-ipc-device -j"$(nproc)"
+    if [ -d tools/calypso-ipc-device ]; then \
+        make -C tools/calypso-ipc-device clean && \
+        make -C tools/calypso-ipc-device -j"$(nproc)"; \
+    else \
+        echo "[skip] calypso-ipc-device absent de qosmo-grgsm/tools"; \
+    fi
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]

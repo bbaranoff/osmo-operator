@@ -8,7 +8,11 @@ MOD_PROFILES[prereqs]="calypso faketrx hybrid core"
 
 mod_prereqs_check() {
     local missing=""
-    for v in QEMU_BIN FIRMWARE_ELF DSP_PROM0; do
+    # [2026-08-30] Plus de DSP_PROM0 ici : ce module est `MOD_REQUIRED=1` sur
+    # les quatre profils, donc une ROM DSP absente bloquait meme `faketrx` et
+    # `core`. Les ROM ne sont plus generees depuis le merge `sans-dsp` de
+    # qosmo-grgsm ; seul le mode qemu s'en sert, et 40-qemu.sh en juge lui-meme.
+    for v in QEMU_BIN FIRMWARE_ELF; do
         local p="${!v:-}"
         [ -n "$p" ] && [ -e "$p" ] || missing="$missing $v"
     done
