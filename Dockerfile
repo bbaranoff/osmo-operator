@@ -230,15 +230,32 @@ RUN cd ${ROOT} && \
     
 # ── Calypso build ─────────────────────────────
 
-# ── Patch osmocon : filtre Kc (chiffrement A5/1) ──────────────────────────────
-# osmocon capte L1CTL_CRYPTO_REQ (mobile->L1) et ecrit /dev/shm/calypso_kc =
-# SEULE source du Kc pour le chiffrement : UL (qemu_wrap osmo_a5) + DL (si_bridge
-# grgsm -k). Sans ce patch : pas de Kc -> aucun chiffrement. NE TOUCHE PAS au
-# firmware. Patch maintenu dans patches/ (regenere si osmocon.c change).
-COPY patches/osmocom-bb-osmocon-kc-filter.patch /tmp/osmocom-bb-osmocon-kc-filter.patch
+# ── Patch osmocon : filtre Kc — RETIRE le 2026-08-30 ─────────────────────────
+# Ce patch faisait ecrire /dev/shm/calypso_kc a osmocon, en espionnant
+# L1CTL_CRYPTO_REQ au passage sur le lien serie. Il etait la SEULE source du Kc
+# a l'epoque ; il ne l'est plus, et il faisait desormais plus de mal que de bien.
+#
+# POURQUOI ON LE RETIRE. Un espion voit passer la cle, mais pas sa fin de vie :
+# il doit la DEVINER. Le patch la devinait sur DM_EST_REQ et DM_REL_REQ, et
+# remettait le fichier a 32 zeros. L'intention est juste pour le RELEASE, fausse
+# pour l'ESTABLISH -- le mobile emet aussi un DM_EST_REQ pour ouvrir un lien
+# SUPPLEMENTAIRE sur un canal DEJA chiffre (le SAPI 3 du SMS). La cle
+# disparaissait donc en pleine session chiffree.
+#
+# Pire, il y avait TROIS ecrivains sur ce fichier (osmocon, l1ctl_sock.c, le
+# shunt DSP) sans le moindre arbitrage : le dernier qui ecrit gagne, et c'est
+# l'effaceur. Mesure du 30/08 : fichier a 32 zeros, « A5=non » sur tout le canal
+# dedie, premier appel mort.
+#
+# CE QUI LE REMPLACE. calypso_dsp_shunt.c publie /dev/shm/calypso_kc_l1 depuis
+# d_a5mode et a_kc du NDB -- ce que le FIRMWARE a reellement charge dans le DSP
+# (calypso/dsp.c:dsp_load_ciph_param). Ce n'est plus un espion qui devine, c'est
+# l'etat de la couche 1, remis a zero par le firmware lui-meme quand il repart
+# en clair. Et le fichier lui est PROPRE : plus de course a l'ecriture.
+#
+# Le patch reste dans patches/ a titre documentaire, il n'est plus applique.
 RUN cd ${ROOT} && \
     git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
-    git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-osmocon-kc-filter.patch && \
     cd osmocom-bb/src && \
     # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
     # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour

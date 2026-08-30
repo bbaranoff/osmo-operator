@@ -727,8 +727,21 @@ echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_
 #
 # Ce que ca coute : ~1,6 Go de plus dans le squashfs (moins une fois compresse).
 # A surveiller si l'ISO doit tenir en RAM (toram).
+# ── OSMO_QEMU_SRC : L'ARBRE LOCAL PREND LE PAS, QUAND ON LE DEMANDE ─────────
+# [2026-08-30] L'image docker clone qosmo-grgsm depuis GitHub (Dockerfile:433).
+# Un correctif fait ICI, dans l'arbre local, ne partait donc PAS dans l'ISO --
+# il fallait le pousser sur GitHub d'abord, et rien ne le disait. C'est ainsi
+# que les correctifs du shunt DSP (publication du Kc depuis le NDB) auraient pu
+# etre "appliques" et absents de l'image produite.
+# OSMO_QEMU_SRC=/chemin force desormais l'arbre local, en remplacant celui de
+# l'image. Sans la variable, rien ne change : l'image fait foi, comme avant.
 QSRC="$ROOTFS/opt/GSM/qosmo-grgsm"
-if [ -d "$QSRC" ]; then
+if [ -n "${OSMO_QEMU_SRC:-}" ] && [ -d "$OSMO_QEMU_SRC" ]; then
+    rm -rf "$QSRC"
+    mkdir -p "$ROOTFS/opt/GSM"
+    cp -a "$OSMO_QEMU_SRC" "$QSRC"
+    echo -e "  ${GREEN}✓${NC} qosmo-grgsm FORCE depuis ${CYAN}${OSMO_QEMU_SRC}${NC} (OSMO_QEMU_SRC) ($(du -sh "$QSRC" | cut -f1))"
+elif [ -d "$QSRC" ]; then
     echo -e "  ${GREEN}✓${NC} qosmo-grgsm conserve ENTIER ($(du -sh "$QSRC" | cut -f1), .git + build/ compris)"
 else
     # L'image ne l'avait pas : on prend l'arbre de l'hote, entier lui aussi.

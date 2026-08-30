@@ -392,7 +392,12 @@ fi
 #   CALYPSO_DSP_SHUNT_LEGIT=1  chemin « legit » du shunt (celui qui campe et LU)
 set -a
 : "${CALYPSO_SHUNT_NO_CANNED:=0}"
-: "${CALYPSO_CANNED:=1}"
+# FULL et pas 1. shunt_parse_canned() attend une LISTE DE JETONS
+# (FBDET,TOA,PM,SNR,ANGLE,CRC | FULL | ALL | NONE) : "1" n'en est aucun, il
+# etait signale « token inconnu » au demarrage et le masque restait VIDE. Le
+# banc tournait donc avec RIEN de canne en croyant tout canner. Le parseur
+# accepte desormais les booleens, mais on ecrit ce qu'on veut dire.
+: "${CALYPSO_CANNED:=FULL}"
 : "${CALYPSO_SKIP_DSP:=1}"
 : "${CALYPSO_DSP_SHUNT_LEGIT:=1}"
 set +a

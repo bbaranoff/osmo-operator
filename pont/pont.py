@@ -126,7 +126,17 @@ _cod.gsm0503_sch_decode.argtypes       = [ctypes.POINTER(ctypes.c_uint8), ctypes
 _gsm = ctypes.CDLL("libosmogsm.so", use_errno=True)
 _gsm.osmo_a5.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
                          ctypes.POINTER(ubit), ctypes.POINTER(ubit)]
-KC_PATH   = "/dev/shm/calypso_kc"
+# DEUX CHEMINS, PAR ORDRE D'AUTORITE.
+#   calypso_kc_l1  ecrit par le SEUL shunt DSP (calypso_dsp_shunt.c) depuis
+#                  d_a5mode et a_kc du NDB : ce que le firmware a reellement
+#                  charge dans le DSP. Personne d'autre n'y touche.
+#   calypso_kc     l'historique. Trois ecrivains sans arbitrage, dont osmocon
+#                  qui le remettait a 32 zeros sur DM_EST_REQ -- en pleine
+#                  session chiffree, des que le mobile ouvrait un lien de plus.
+#                  Ce patch osmocon est retire depuis le 2026-08-30 ; ce chemin
+#                  ne sert plus que de repli pour un binaire non reconstruit.
+KC_PATH    = "/dev/shm/calypso_kc"
+KC_L1_PATH = "/dev/shm/calypso_kc_l1"
 A5_FORCE  = int(os.environ.get("PONT_A5", "0"))      # 0 = suit l'algo du Kc ; 1..3 = force
 A5_FN_ADJ = int(os.environ.get("PONT_A5_FN_ADJ", "0"))
 
@@ -144,14 +154,22 @@ def kc_read():
     montants partaient une trame en retard et fake_trx les jetait ("Stale TRXD").
     On garde donc UN fd et on ne relit qu'au plus toutes les KC_TTL secondes.
     pread reste obligatoire (un lecteur bufferise figerait la valeur, regle projet)."""
-    global _kc_fd, _kc_cache, _kc_next
+    global _kc_fd, _kc_cache, _kc_next, _kc_src
     now = time.monotonic()
     if now < _kc_next:
         return _kc_cache
     _kc_next = now + KC_TTL
     try:
         if _kc_fd is None:
-            _kc_fd = os.open(KC_PATH, os.O_RDONLY)
+            # La source autoritaire d'abord, et on ne redescend JAMAIS vers
+            # l'historique tant qu'elle repond : melanger les deux, c'est
+            # reintroduire la course qu'on vient de supprimer.
+            try:
+                _kc_fd = os.open(KC_L1_PATH, os.O_RDONLY)
+                _kc_src = "l1"
+            except OSError:
+                _kc_fd = os.open(KC_PATH, os.O_RDONLY)
+                _kc_src = "legacy"
         b = os.pread(_kc_fd, 32, 0)
     except OSError:
         try:
@@ -315,8 +333,22 @@ def kc_read():
 # Les trois marqueurs devines d'avant (seq de dcch_cfg, SABM, IMMEDIATE
 # ASSIGNMENT) devenaient faux des qu'un cas de plus se presentait. Celui-ci ne
 # devine pas : il lit qui parle.
+# [2026-08-30, 2e passe] DEFAUT REMIS A 0, ET CETTE FOIS POUR UNE BONNE RAISON.
+# La retenue etait un pansement sur l'effaceur d'osmocon. Cet effaceur N'EXISTE
+# PLUS : le patch qui le posait est retire du Dockerfile, et la source
+# autoritaire (calypso_kc_l1) a son propre fichier que personne n'ecrase. Il n'y
+# a donc plus rien a compenser -- et retenir une cle est DANGEREUX : un canal
+# neuf demarre toujours en clair, lui appliquer l'A5 rend l'UA brouillee, T200
+# x6, MDL-ERROR, appel mort avant le CM SERVICE. C'est mesure, le 27/08.
+# PONT_KC_RETENTION=1 la reactive pour un binaire osmocon non reconstruit.
+# DEFAUT 1. La retenue n'est plus le pansement d'avant : l'effaceur d'osmocon
+# n'existe plus (patch retire), et ce qu'on compense ici est autre chose -- la
+# fenetre pendant laquelle NOTRE L1 est en clair alors que le RESEAU chiffre
+# encore (bascule de canal). Les deux marqueurs de relachement sont des
+# evenements reseau, pas un etat local. PONT_KC_RETENTION=0 pour comparer.
 KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "1") == "1"
 _kc_seq_vu = 0           # seq du dernier enregistrement lu (0 = personne)
+_kc_src    = "?"         # "l1" (autoritaire) ou "legacy" (historique)
 _kc_tenu = None          # (algo, kc) retenu, ou None
 _kc_retenues = 0
 _kc_laches = 0
@@ -365,18 +397,34 @@ def a5_apply(burst148, fn, uplink):
     global _kc_tenu, _kc_retenues, _a5_last
     if algo:
         _kc_tenu = (algo, kc)                 # cle fraiche : on la retient
-    elif KC_RETENTION and _kc_tenu is not None and _kc_seq_vu == 0:
-        # seq == 0 : le fichier a ete remis a zero (osmocon, DM_EST_REQ) ou
-        # personne ne l'ecrit. Aucune AFFIRMATION de clair -> on tient.
+    elif KC_RETENTION and _kc_tenu is not None:
+        # ── ON TIENT LA CLE, MEME QUAND LA L1 SE DIT EN CLAIR ───────────────
+        # [2026-08-30, 3e passe] La passe precedente lachait la cle des qu'un
+        # producteur AUTORITAIRE annoncait algo=0. C'etait faux, et mesure :
+        #     Kc LACHE (la couche 1 declare le clair (seq=7))
+        #     TCH arme TN=2 depuis 5 s SANS ASSIGNMENT COMPLETE : le mobile n'a
+        #     pas bascule (il n'a probablement pas recu l'ASSIGNMENT COMMAND).
+        #
+        # POURQUOI. d_a5mode decrit le chiffrement de NOTRE couche 1, pas celui
+        # du RESEAU sur le descendant courant. Le firmware appelle
+        # dsp_load_ciph_param(0, NULL) a chaque resynchronisation de canal
+        # (sync.c:419), donc PENDANT la bascule SDCCH -> TCH. Dans cette
+        # fenetre la L1 est en clair et le reseau chiffre encore : lacher la
+        # cle la, c'est cesser de dechiffrer l'ASSIGNMENT COMMAND elle-meme.
+        # Le DSP etant shunte, c'est le pont qui dechiffre pour le firmware :
+        # le mobile ne recoit alors jamais l'ordre de basculer, et le deuxieme
+        # appel meurt sur ce silence.
+        #
+        # La fin de vie de la cle n'est PAS un etat local, c'est un evenement du
+        # RESEAU, et on en a deja les deux marqueurs, poses la ou ils ont un
+        # sens : l'IMMEDIATE ASSIGNMENT (seul octroi d'un canal NEUF, qui
+        # demarre toujours en clair) et le CHANNEL RELEASE. On s'en tient a eux.
         algo, kc = _kc_tenu
         _kc_retenues += 1
         if _kc_retenues == 1 or (_kc_retenues % 2000) == 0:
-            ST.log("Kc EFFACE EN COURS DE SESSION (seq=0) -- on garde la cle "
-                   "(#%d) ; lachee a l'IMMEDIATE ASSIGNMENT. Cf. osmocon "
-                   "DM_EST_REQ." % _kc_retenues)
-    elif _kc_tenu is not None and _kc_seq_vu:
-        # Un producteur affirme « en clair » : on le croit et on lache.
-        kc_lacher("la couche 1 declare le clair (seq=%d)" % _kc_seq_vu)
+            ST.log("Kc absent a l'instant t (seq=%d) -- on garde la cle (#%d) ; "
+                   "lachee a l'IMMEDIATE ASSIGNMENT ou au CHANNEL RELEASE."
+                   % (_kc_seq_vu, _kc_retenues))
     if not algo:
         # [audit A2] _a5_last = etat de SESSION DL (badge/DEDIE-TRACE) : SEUL le
         # thread DL l'ecrit (rebind atomique), le montant n'y touche plus -> plus
@@ -956,6 +1004,18 @@ def ul_facch_from_sideband():
 _tch_cfg_fd = None
 _tch_cfg_t  = 0.0
 TCH_CFG_TTL = float(os.environ.get("PONT_TCH_CFG_TTL", "0.1"))
+# PONT_TCH_TRACE=1 : une ligne par bloc TCH/F qui ECHOUE, avec de quoi trancher
+# entre les trois causes possibles -- et elles ne se distinguent pas dans un
+# compteur global :
+#   fenetre  fn/m26/idx disent si le bloc est bien aligne sur une frontiere
+#            (idx%4==3) et si les 8 bursts sont consecutifs ;
+#   chiffre  a5 dit si on a DECHIFFRE ce bloc, et avec quelle cle ;
+#   contenu  rc est le retour de gsm0503_tch_fr_decode : 33 = voix, 23 = FACCH,
+#            autre = echec. ne/nb (erreurs binaires) separent « bruit » de
+#            « desynchronise » : un bloc bien aligne mais mal dechiffre sort
+#            avec un nb tres haut, un bloc desaligne sort avec un nb moyen.
+TCH_TRACE = os.environ.get("PONT_TCH_TRACE", "0") == "1"
+_tch_tr_n = 0
 
 def tch_cfg_read():
     """TN du TCH assigne, ou None. Publie a l'ASSIGNMENT, donc jamais devine.
@@ -1033,6 +1093,32 @@ def tch_dl_burst(fn, burst148):
     m26 = fn % 26
     if m26 in (12, 25):          # 12 = SACCH du TCH, 25 = idle : pas de voix
         return
+    # ── LE REMPLISSAGE DE C0 N'EST PAS UN ECHEC, SUR LE TCH NON PLUS ────────
+    # [2026-08-30] Ce test existait deja pour le xcch (cf. _is_dummy plus bas),
+    # avec sa mesure : 515 blocs de remplissage comptes en crc_fail, 76 % d'echec
+    # annonces sur une radio saine. Le chemin TCH ne l'avait JAMAIS eu, parce que
+    # dl_dispatch fait `return` sur la branche TCH avant d'atteindre le filtre.
+    # osmo-bts remplit TOUS les timeslots de C0 avec le dummy burst
+    # (scheduler_trx.c) pour tenir la puissance de la balise : un TCH ARME mais
+    # au repos -- avant la reponse, apres le raccrochage, entre deux salves --
+    # recoit donc du remplissage en continu, et chaque groupe de 8 comptait un
+    # n_tch_crc.
+    #
+    # LA TRACE LE DISAIT, EN DEUX TEMPS. Le dummy est un motif FIGE : huit
+    # bursts identiques donnent une entree constante au Viterbi, donc un ne
+    # CONSTANT -- mesure : ne=0 sur les 250 premiers echecs. Puis le Kc arrive,
+    # a5_apply chiffre ce remplissage avec une cle qui change a chaque trame, et
+    # la meme entree devient pseudo-aleatoire : ne passe a ~50. Une seule cause,
+    # deux signatures, et aucune des deux n'est une panne radio.
+    #
+    # AVANT l'A5, pour la meme raison que cote xcch : le dummy n'est jamais
+    # chiffre, et le passer au keystream le rendrait meconnaissable.
+    if _is_dummy(burst148):
+        ST.n_dl_dummy += 1
+        # On ne met PAS a jour _tch_last_fn : le burst suivant sera vu comme un
+        # trou et videra la fenetre. C'est voulu -- un bloc a cheval sur du
+        # remplissage n'a rien a reassembler.
+        return
     burst148 = a5_apply(burst148, fn, False)      # TCH : canal dedie -> chiffre
     # ⚠️ CONTINUITE DES FN. La fenetre de 8 bursts n'a de sens que si les bursts
     # sont CONSECUTIFS sur le canal. On accumulait a l'aveugle : un seul burst
@@ -1092,6 +1178,31 @@ def tch_dl_burst(fn, burst148):
             kc_lacher("CHANNEL RELEASE (FACCH)")
     else:
         ST.n_tch_crc += 1
+        if TCH_TRACE:
+            global _tch_tr_n
+            _tch_tr_n += 1
+            if _tch_tr_n <= 40 or (_tch_tr_n % 50) == 0:
+                a5 = _a5_last
+                # HISTOGRAMME DES OCTETS. _TBL_SOFT ne sait traduire qu'UN
+                # encodage (bits durs 0x00/0x01). Si les bursts arrivent en
+                # bits SOUPLES (0x01/0xFF, ce que produisent
+                # normal_from_burst116 et la branche UL d'a5_apply), la table
+                # ecrase 0x01 et 0xFF sur la meme valeur -127 : l'entree
+                # devient CONSTANTE, et une entree constante donne exactement
+                # le ne=0 observe. On mesure au lieu de supposer.
+                _h = {}
+                for _b in acc:
+                    for _v in bytes(_b):
+                        _h[_v] = _h.get(_v, 0) + 1
+                _hs = " ".join("%02x:%d" % (k, _h[k])
+                               for k in sorted(_h, key=lambda x: -_h[x])[:5])
+                ST.log("TCH-ECHEC #%d fn=%u m26=%u idx=%u acc=%d rc=%d "
+                       "ne=%d nb=%d A5=%s%s octets[%s]"
+                       % (_tch_tr_n, fn, fn % 26, idx, len(acc), rc,
+                          ne.value, nb.value,
+                          "OUI" if a5.get("applied") else "non",
+                          ("(a5/%d kc=%s)" % (a5.get("algo", 0), a5.get("kc4", "")))
+                          if a5.get("applied") else "", _hs))
 
 def tch_ul_loop():
     """UL : consomme l'anneau voix montant EN ORDRE et emet 8 bursts TCH."""
