@@ -1,0 +1,45 @@
+[Unit]
+Description=osmo-nitb-for-calypso Operations Console (web dashboard)
+Documentation=https://github.com/bbaranoff/osmo-egprs-weB
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/GSM/osmo-egprs-web
+# Le TLS prend le 80 (demande explicite du 12/08). Le clair descend sur 8080 :
+# les deux listeners ne peuvent pas partager un port, et supprimer le clair
+# priverait `curl http://localhost` de tout point d'entree de diagnostic.
+Environment=HTTP_PORT=8080
+Environment=OSMO_NATIVE=1
+Environment=OSMO_OP_IDS=1
+# ⚠️ NE PAS RETIRER : interface de capture du dashboard (GSMTAP/SCTP). La copie
+# de ce unit qui vit dans le depot osmo-egprs-web l'avait perdue ; comme
+# install-web-service.sh reinstalle le unit depuis CE fichier (le Dockerfile le
+# recopie dans /opt/GSM/osmo-egprs-web/, cf. Dockerfile.run), la source unique est
+# ici. Sans CAP_IFACE la capture se rabat sur un defaut et l'onglet trafic se
+# tait — panne silencieuse, aucun message d'erreur.
+Environment=CAP_IFACE=any
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+Environment=AUDIO_SOURCE=gsm_audio.monitor
+# --- TLS (12/08/2026) ---------------------------------------------------------
+# server.js:1161-1183 n'arme le listener HTTPS que si CES DEUX fichiers existent ;
+# sinon il journalise « HTTPS non arme : certificat absent » et reste en clair.
+# Ils sont poses par install-web-service.sh (auto-signe, jamais dans l'image :
+# une cle privee dans une image serait partagee par tous ceux qui la tirent).
+# Le meme gestionnaire de requetes et la MEME instance WebSocket servent les deux
+# portes -- on ajoute une entree, on ne deplace rien : http:// continue de marcher.
+# ⚠️ TLS sur le 80, pas sur le 443 : l'URL doit donc s'ecrire `https://<ip>:80`
+# explicitement (un navigateur qui lit `https://<ip>` irait sur 443, ferme), et
+# `http://<ip>` ne repond plus en clair — c'est du TLS qui ecoute la.
+Environment=HTTPS_PORT=80
+Environment=TLS_CERT=/opt/GSM/osmo-egprs-web/tls/cert.pem
+Environment=TLS_KEY=/opt/GSM/osmo-egprs-web/tls/key.pem
+ExecStart=/usr/local/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-egprs-web
+
+[Install]
+WantedBy=multi-user.target

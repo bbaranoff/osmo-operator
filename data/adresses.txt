@@ -1,0 +1,20 @@
+# adresses.txt - "rue, ville" par ligne. start.sh prefixe un numero tire au
+# hasard. Rien de tout cela n'existe non plus.
+rue des Ondes Courtes, Fontaine-sur-Onde
+impasse du Burst, Val-de-Trame
+allee Erlang, Bourg-la-Cellule
+boulevard de la Trame, Saint-Handover
+quai des Timeslots, Neuville-les-Relais
+place du Handover, Clairmont-du-Spectre
+chemin des Bursts Perdus, Rocheporte
+avenue du Codec, Aubain-sur-Bande
+sentier du Roaming, Montcodec
+cour des Antennes, Fontaine-sur-Onde
+passage du Silence Radio, Val-de-Trame
+rue du Ki Perdu, Bourg-la-Cellule
+venelle des Slots Vides, Saint-Handover
+rond-point du Paging, Neuville-les-Relais
+descente de la Bande Basse, Clairmont-du-Spectre
+montee du Rejet d'Authentification, Rocheporte
+square des Abonnes Fantomes, Aubain-sur-Bande
+esplanade du Timeout, Montcodec

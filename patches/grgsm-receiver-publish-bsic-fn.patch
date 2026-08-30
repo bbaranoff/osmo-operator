@@ -1,0 +1,36 @@
+diff --git a/lib/receiver/receiver_impl.cc b/lib/receiver/receiver_impl.cc
+index 558e276..e0269d6 100644
+--- a/lib/receiver/receiver_impl.cc
++++ b/lib/receiver/receiver_impl.cc
+@@ -377,6 +377,31 @@ namespace gr
+           send_burst(d_burst_nr, output_binary,
+             GSMTAP_BURST_SCH, input_nr, d_c0_burst_start);
+ 
++          /* gr-gsm = le DSP : publier le BSIC/FN REELS decodes du SCH sur le
++           * port `measurements` (le "DSP" poste son resultat de sync, comme un
++           * vrai DSP ecrit dans le NDB). Consomme par tools/grgsm_relay_decode.py ->
++           * shunt -> shunt_dispatch_sb (remplace SHUNT_CANNED_BSIC 63). */
++          {
++            int bsic = ((ncc & 0x7) << 3) | (bcc & 0x7);
++            /* TOA REEL mesure : residu de timing du burst SCH (d_c0_burst_start
++             * vs position nominale GUARD_PERIOD), en qbits @OSR (1 sample OSR =
++             * 1 qbit), recale sur la base firmware 23 ("on time"). gr-gsm aligne
++             * bien -> ~23. Le shunt l'utilise si TOA hors CALYPSO_CANNED. */
++            int toa = 23 + (int)(d_c0_burst_start - (long)floor((GUARD_PERIOD) * d_OSR));
++            pmt::pmt_t msg = pmt::make_tuple(pmt::mp("sch"),
++              pmt::from_long(bsic),
++              pmt::from_long((long)d_burst_nr.get_frame_nr()),
++              pmt::from_long((long)toa));
++            message_port_pub(pmt::mp("measurements"), msg);
++            /* Et sur stdout : le CLI grgsm_decode avale le port measurements,
++             * donc on imprime aussi le SCH pour que si_bridge.py (qui parse le
++             * stdout de grgsm_decode) le forwarde au shunt (UDP 4731 -> feed_sb).
++             * Prefixe distinctif "SCHBSIC " (ne collisionne pas avec les hex SI). */
++            printf("SCHBSIC %d %u %d\n", bsic,
++                   (unsigned)d_burst_nr.get_frame_nr(), toa);
++            fflush(stdout);
++          }
++
+           /**
+            * Decoding was successful, now
+            * compute offset from burst_start,

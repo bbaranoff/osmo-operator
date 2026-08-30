@@ -1,0 +1,30 @@
+#!/usr/bin/env expect
+
+set container [lindex $argv 0]
+set port [lindex $argv 1]
+set vty_type [lindex $argv 2]
+# On récupère l'IP du groupe, par défaut 127.0.0.1
+set target_ip [lindex $argv 3]
+if {$target_ip == ""} { set target_ip "127.0.0.1" }
+
+# On se connecte à l'IP spécifique du groupe Baseband
+spawn sudo docker exec -ti $container telnet $target_ip $port
+
+expect {
+    "Connection refused" { exit 1 }
+    "Connected to" { }
+    ">" 
+}
+
+# La suite du script reste identique pour activer les logs automatiques
+send "enable\r" 
+expect "#" 
+send "logging enable\r" 
+expect "#" 
+send "logging level set-all notice\r" 
+expect "#" 
+send "logging filter all 1\r" 
+expect "#" 
+
+puts "\n--- CONSOLE VTY ACTIVE : $vty_type ($target_ip:$port) ---"
+interact

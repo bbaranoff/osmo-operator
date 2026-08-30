@@ -1,0 +1,42 @@
+[Unit]
+# Joue install-web-service.sh AU BOOT DU CONTENEUR, pas au build de l'image.
+#
+# POURQUOI PAS UN `RUN` DANS LE Dockerfile. Deux raisons, chacune suffisante :
+#   1. le script finit par `systemctl daemon-reload` + `systemctl restart` ;
+#      pendant `docker build` il n'y a pas de systemd (« System has not been
+#      booted with systemd »), et le script est en `set -eu` : le build
+#      echouerait ;
+#   2. il genere un certificat TLS auto-signe. Une cle privee posee au build
+#      serait IDENTIQUE pour quiconque tire l'image — n'importe qui pourrait se
+#      faire passer pour la console. Le script le dit lui-meme dans son § 3.
+#      On la genere donc une fois par conteneur, au premier boot.
+#
+# PAS DE `Before=osmo-egprs-web.service` — c'est deliberé. Le script se termine
+# par `systemctl restart osmo-egprs-web` : ordonner cette unite AVANT le service
+# creerait un cycle (systemctl attendrait un job qui attend cette unite).
+# Consequence assumee et visible au journal : au tout premier boot le dashboard
+# demarre une fois SANS TLS (« HTTPS non arme : certificat absent »), puis cette
+# unite pose le certificat et le redemarre AVEC. Aux boots suivants le
+# certificat est deja la (le script est idempotent, garde de 30 jours) et il n'y
+# a pas de second demarrage.
+#
+# ⚠️ Le certificat vit dans /opt/GSM/osmo-egprs-web/tls, DANS le conteneur : il ne
+# survit pas a un `docker rm` (les conteneurs sont lances avec --rm). C'est
+# voulu — il est regenere au boot suivant, avec les IP du moment dans le SAN.
+Description=Installe/rafraichit le dashboard osmo-egprs-web (runtime, unit, certificat TLS)
+Documentation=file:/opt/GSM/osmo-egprs-web/install-web-service.sh
+After=network.target local-fs.target
+ConditionPathIsDirectory=/opt/GSM/osmo-egprs-web
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /opt/GSM/osmo-egprs-web/install-web-service.sh
+# Le script peut passer par un `npm install` : large, mais borne.
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-egprs-web-install
+
+[Install]
+WantedBy=multi-user.target

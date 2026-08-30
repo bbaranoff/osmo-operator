@@ -1,0 +1,25 @@
+# op.txt - noms d'operateur, un par ligne. start.sh en tire un au hasard par
+# operateur au lancement.
+# PAS D'ESPACE dans un nom : la commande VTY "short name" d'osmo-msc prend UN
+# mot, et un nom coupe en deux y passe pour un argument surnumeraire - osmo-msc
+# refuse alors la ligne et demarre sans nom de reseau.
+FreeRadis
+OrangeMecanique
+SFRagile
+BouyguesTrous
+CelluleGrise
+OndesDeChoc
+RoamingEmpire
+AntenneRelais
+SansFilDeFer
+BurstEnStock
+TrameCassee
+ReseauQuiTombe
+BarreEtDemie
+CoupeCircuit
+HandoverPerdu
+KiPerdu
+PasDeSignal
+DebordeTelecom
+EchoLointain
+GigaFlop

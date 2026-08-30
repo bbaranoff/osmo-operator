@@ -1,0 +1,46 @@
+
+======================================================================
+  TEST DE LA CONSOLE SS7 - 2026-08-26 23:45:44
+======================================================================
+  depot      : /home/nirvana/osmo_egprs
+  journaux   : /home/nirvana/osmo_egprs/navigation/logs/20260826-234544
+  conteneurs : 0   hub : aucun
+  mode       : rapide (ni M3UA ni MAP)
+
+1. LE PAQUET S'IMPORTE
+----------------------------------------------------------------------
+  ✓ import-modules   01-import-modules.log
+  ✓ encodage-ber-sccp   02-encodage-ber-sccp.log
+  ✓ aide-console   03-aide-console.log
+  ✓ aide-diag   04-aide-diag.log
+
+2. INVENTAIRE ET CATALOGUE
+----------------------------------------------------------------------
+  ✓ console-ops   05-console-ops.log
+  ✓ console-list   06-console-list.log
+  ✓ console-list-sonde   07-console-list-sonde.log
+
+3. VTY (un test par demon)
+----------------------------------------------------------------------
+  - VTY : aucun conteneur ne tourne
+
+4. SS7 REEL (M3UA, DAUD, MAP)
+----------------------------------------------------------------------
+  - M3UA et MAP : mode rapide
+
+5. DIAGNOSTIC COMPLET
+----------------------------------------------------------------------
+  ✓ diag-rapide   10-diag-rapide.log
+  - diagnostic complet : lab a l'arret ou mode rapide
+
+6. LE SCHEMA (interface aux fleches)
+----------------------------------------------------------------------
+  ✓ schema-rendu   12-schema-rendu.log
+  ✓ schema-navigation   13-schema-navigation.log
+
+RESUME
+----------------------------------------------------------------------
+  10 reussi(s)   0 echec(s)   3 ignore(s)
+  journaux : /home/nirvana/osmo_egprs/navigation/logs/20260826-234544  (un fichier par commande)
+  rapport  : /home/nirvana/osmo_egprs/navigation/logs/20260826-234544/rapport.txt
+

@@ -1,0 +1,29 @@
+
+============================================================
+  DIAGNOSTIC SS7 - osmo_egprs - 2026-08-26 23:43:24
+============================================================
+
+1. ENVIRONNEMENT
+----------------------------------------------------------------------
+  ! docker ne rend aucun conteneur - mode natif, ou docker arrete
+  ✓ SCTP disponible sur l'hote (IPPROTO_SCTP)
+    depot   : /home/nirvana/osmo_egprs
+    python  : 3.12.3
+
+2. TOPOLOGIE (heritee des configurations)
+----------------------------------------------------------------------
+  ✗ aucun operateur trouve
+
+4. LIEN VERS L'INTER-STP (vu des noeuds)
+----------------------------------------------------------------------
+  - pas de hub connu
+
+5-6. M3UA ET MAP
+----------------------------------------------------------------------
+  - ignores (--rapide)
+
+RESUME
+----------------------------------------------------------------------
+  1 ok   1 avertissement(s)   1 echec(s)   2 ignore(s)
+  Des elements du SS7 sont en panne (voir ci-dessus).
+

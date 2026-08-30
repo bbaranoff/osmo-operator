@@ -1,0 +1,152 @@
+# Dockerfile.run — COUCHE DE MISE A JOUR (image d'execution osmocom-run)
+# ─────────────────────────────────────────────────────────────────────────────
+# Ce fichier ne CONSTRUIT rien. Il repart de l'image de base osmocom-nitb
+# (Dockerfile : ~11 Go, ~40 min de compilation) et n'y rafraichit que ce qui
+# bouge a chaque iteration du lab :
+#   - les scripts et les configs du depot (COPY, quelques secondes) ;
+#   - le pont TRX pont/pont.py, source iteree a chaud au meme titre ;
+#   - les arbres git qemu-src et osmo_egprs (git pull + rebuild).
+#
+# Tout le reste vit desormais dans Dockerfile : paquets apt, Node/dashboard web,
+# firmware Calypso, config PulseAudio, prompt, repertoires, units systemd,
+# verification proto-smsc, dsp_txt2bin, pip matplotlib. IL N'Y A PLUS UN SEUL
+# `apt` ICI — l'image d'execution n'a plus a connaitre apt du tout.
+#
+# Le recouvrement des COPY avec Dockerfile est VOULU, ce n'est pas un doublon a
+# supprimer : c'est exactement ce qui permet de rebatir une config en secondes
+# au lieu de rebatir l'image de base. Cote Dockerfile, les memes COPY restent en
+# place parce que l'image osmocom-nitb doit rester autonome (start-nitb.sh la
+# lance seule, avec son propre ENTRYPOINT).
+FROM osmocom-nitb AS osmocom-run
+
+# ── Scripts ───────────────────────────────────────────────────────────────────
+# Deux destinations, deux usages :
+#   /scripts      -> entrypoint.sh (l'ENTRYPOINT ci-dessous) et les outils que
+#                    scripts/run.sh appelle par ce chemin (pulse-gsm-setup.sh) ;
+#   /etc/osmocom  -> ce que consomment les modules ($OSMOCOM_CFG/...). L'image de
+#                    base les y depose deja, mais a l'etat de SON build : sans
+#                    cette COPY, osmo-start.sh / status.sh / check.sh /
+#                    audio-chain.sh n'etaient JAMAIS rafraichis par l'image
+#                    legere — trou dans la « mise a jour des scripts ».
+# Cette COPY groupee remplace les 7 COPY unitaires d'avant (sms-interop-relay.py,
+# gapk-start.sh, smsc-start.sh, send-mt-sms.sh, pulse-gsm-setup.sh...), qui
+# recopiaient un a un des fichiers deja couverts.
+# ⚠️ Le depot versionne ces fichiers en 644 (cf. start-nitb.sh l.50-55) : le bit
+# +x se pose APRES les COPY, dans le RUN plus bas — une COPY posterieure au
+# chmod reposerait le mode 644 et annulerait le chmod.
+COPY scripts/* /etc/osmocom/
+COPY scripts/entrypoint.sh /scripts/
+
+# ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
+# Toutes les configs sont copiées ; les valeurs réelles sont injectées
+# au démarrage via start.sh (apply_config_templates) et montées en volume.
+COPY configs/*.conf /etc/asterisk/
+COPY configs/*.cfg configs/sms-routing.conf /etc/osmocom/
+COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
+COPY configs/asound.conf /etc/
+
+# ── Pont TRX burst-level (CALYPSO_BRIDGE=pont) ────────────────────────────────
+# AVANT : le pont n'etait NULLE PART dans cette image. Il n'existait dans le
+# conteneur que parce qu'on l'y avait depose a la main ; une reconstruction de
+# l'image le faisait disparaitre, et start-direct.sh tombait sur sa branche
+# « pont introuvable (...) » en degradant silencieusement le mode.
+# Le chemin est desormais EXPLICITE et unique : /opt/GSM/pont/pont.py, expose
+# par PONT_PY que start-direct.sh consomme (`_PONT="${PONT_PY:-...}"`).
+# ⚠️ La source qui part dans l'image est pont/pont.py DU CONTEXTE DE BUILD
+# (/opt/GSM/osmo_egprs/pont/). Apres avoir modifie /opt/GSM/pont/pont.py a
+# chaud, la recopier ici avant de reconstruire, sinon l'image reste en arriere.
+#
+# EXCEPTION ASSUMEE au « tout dans Dockerfile » : pont.py est une source iteree
+# a chaud, de la meme famille que scripts/ et configs/ — le garder ici, c'est
+# une reconstruction en secondes au lieu de l'image de base. build-iso.sh
+# l.590-592 nomme d'ailleurs explicitement Dockerfile.run comme la raison pour
+# laquelle pont/ doit figurer dans la charge de l'ISO.
+# (Le `mkdir -p /opt/GSM/pont` qui precedait est supprime : une COPY cree
+#  toujours ses repertoires parents.)
+# [2026-08-27] COPY RETIRE. Il fabriquait /opt/GSM/pont/pont.py, une copie
+# HORS DEPOT que rien ne gardait en phase avec pont/pont.py -- et l ENV
+# PONT_PY la rendait souveraine. Le 27/08 cette copie etait restee a une
+# version sans plan SDCCH/8 : deux heures de LU en echec, SMS rejete et
+# appel impossible, sans un message. Le depot est desormais la seule source ;
+# start-direct.sh resout $NITB_ROOT/pont/pont.py.
+ENV PONT_PY=/opt/GSM/osmo_egprs/pont/pont.py
+
+# Bits d'execution + chemins uniques. DOIT rester APRES toutes les COPY ci-dessus.
+# /scripts/run.sh (laissé par "COPY scripts/*") et /etc/osmocom/run.sh
+# pointent vers la même source que /root/run.sh — on symlink pour éviter
+# trois copies divergentes. Idem /root/osmo-start.sh, chemin de memoire
+# musculaire que rien ne reference dans le depot : un symlink plutot qu'une
+# deuxieme copie qui divergerait.
+RUN chmod +x /etc/osmocom/*.sh
+
+# ── Disclaimer au login du conteneur (pendant du 01-osmo-disclaimer.sh de l'ISO)
+# On veut le MEME rappel a l'entree d'un conteneur qu'au boot de l'ISO. Le
+# conteneur se rejoint par `docker exec -ti <ct> bash` : un shell interactif
+# NON-login, qui lit ~/.bashrc (et pas /etc/profile.d) - c'est la qu'est deja
+# pose le prompt calypso. On depose donc le texte dans un fichier a part et on
+# le source depuis .bashrc, garde par [ -t 1 ] et OSMO_DISCLAIMER_SHOWN :
+#   - [ -t 1 ]                : uniquement quand un humain a un terminal ;
+#   - OSMO_DISCLAIMER_SHOWN   : une seule fois par session, pas a chaque sous-shell.
+# Les `bash -c "..."` de start.sh (lancement des piles) sont NON-interactifs :
+# bash n'y lit pas .bashrc, le disclaimer ne pollue donc pas le defilement des
+# [ OK ]. Le fichier n'est pas interpole au build : $(hostname) n'est evalue
+# qu'a l'ouverture du shell, il nomme donc le conteneur courant.
+# Le texte lui-meme vit dans scripts/osmo-disclaimer.sh (deja depose en
+# /etc/osmocom/ par la COPY plus haut) : PAS de heredoc ici. Le builder docker
+# classique (`Step N/M`, sans BuildKit) ne connait pas les heredocs — il joignait
+# les lignes de continuation et lancait le RUN sans le corps :
+#   /bin/bash: warning: here-document at line 1 delimited by end-of-file
+# laissant /etc/osmo-disclaimer.sh VIDE et le disclaimer muet. Un fichier du
+# depot + un symlink marchent avec les deux builders.
+# Le `grep -q` garde l'ajout idempotent si l'image de base a deja pose le bloc.
+RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
+    { grep -q '### osmo-disclaimer ###' /root/.bashrc || \
+      printf '%s\n' '' \
+        '### osmo-disclaimer ###' \
+        '[ -z "${OSMO_DISCLAIMER_SHOWN:-}" ] && [ -t 1 ] && . /etc/osmo-disclaimer.sh' \
+        '### end osmo-disclaimer ###' >> /root/.bashrc; }
+
+# ── Mise a jour des arbres git ────────────────────────────────────────────────
+# [refactor] start.sh l.323 et l.326 lancent
+#   `docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run`
+# mais AUCUN `ARG QEMU_CACHE_BUST` n'existait : docker repondait « unused build
+# argument » et servait les deux `git pull` ci-dessous DEPUIS LE CACHE — les
+# deux RUN qu'on garde justement pour la fraicheur ne rafraichissaient rien, et
+# l'image run pouvait embarquer un qemu-src et un osmo_egprs perimes sans que
+# rien ne le signale. L'ARG est declare ici, JUSTE AVANT les pulls (un ARG
+# invalide le cache a son PREMIER USAGE, pas a sa declaration : d'ou le
+# `: "${QEMU_CACHE_BUST:-}"` en tete de chaque RUN, qui le consomme reellement).
+ARG QEMU_CACHE_BUST
+
+# [2026-08-12] Le `cd /opt/GSM/osmo_egprs && git pull` qui était ici a été
+# supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
+# deux ne consomme /opt/GSM/osmo_egprs. On garde le plus tardif, au plus près
+# de l'entrypoint.
+# Le tag RELEASE-0.1 masque la branche du meme nom (cf. Dockerfile l.538) :
+# fetch explicite + `checkout -B` sur origin/RELEASE-0.1, sinon HEAD detache
+# et le pull echoue.
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo_egprs && git fetch origin RELEASE-0.1 && git checkout -B RELEASE-0.1 origin/RELEASE-0.1
+
+# ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
+# [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
+# Le pull rapatrie tout l'arbre qemu-src, mais deux binaires distincts en
+# sortent et meson/ninja n'en connait qu'un :
+#   - qemu-system-arm            -> build/ (ninja)
+#   - calypso-ipc-device         -> tools/calypso-ipc-device/ (Makefile a part)
+# Le second n'etait construit QUE dans l'image de base (Dockerfile:289). Un
+# `git push` touchant `tools/calypso-ipc-device/qemu_wrap.c` — c'est-a-dire tout
+# le montant : RACH, SDCCH, TCH, chiffrement A5, offsets de TOA — n'arrivait
+# donc JAMAIS dans l'image run : on tournait avec le device de l'image de base,
+# sans rien qui le signale. On refait les deux ici, dans le meme layer que le
+# pull pour qu'ils ne puissent pas se desynchroniser via le cache docker.
+# (start.sh l.492-497 refait le pull et le `ninja` au demarrage du conteneur,
+#  mais PAS calypso-ipc-device : ce RUN est le seul endroit qui les garde
+#  synchronises. Ne pas le decouper en plusieurs RUN.)
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qemu-src && git checkout RELEASE-0.1 && git pull && \
+    (cd build && ninja) && \
+    make -C tools/calypso-ipc-device clean && \
+    make -C tools/calypso-ipc-device -j"$(nproc)"
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+ENTRYPOINT ["/scripts/entrypoint.sh"]
+CMD ["bash"]

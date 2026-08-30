@@ -1,0 +1,16 @@
+--- a/python/__init__.py
++++ b/python/__init__.py
+@@ -54,7 +54,11 @@
+     #from fcch_burst_tagger import fcch_burst_tagger
+     #from sch_detector import sch_detector
+     #from fcch_detector import fcch_detector
+     from .clock_offset_corrector_tagged import clock_offset_corrector_tagged
+-    from .multiarfcns_receiver import multiarfcns_receiver
++    try:
++        # multiarfcns_receiver tire qtgui (GUI Qt) - optionnel, inutile au decodage
++        from .multiarfcns_receiver import multiarfcns_receiver
++    except ImportError:
++        pass
+     from .gsm_input import gsm_input
+     from .gsm_bcch_ccch_demapper import gsm_bcch_ccch_demapper
+     from .gsm_bcch_ccch_sdcch4_demapper import gsm_bcch_ccch_sdcch4_demapper

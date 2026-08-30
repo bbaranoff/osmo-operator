@@ -1,0 +1,131 @@
+# =============================================================================
+# Dockerfile.lite - l'image d'EXECUTION : les binaires, sans les sources
+# =============================================================================
+#
+# osmocom-nitb pese ~11 Go, dont 4 Go de /opt/GSM : les arbres de construction
+# de gnuradio, gr-gsm, libosmocore, qemu, osmo-* ... Ces arbres ont servi a
+# COMPILER ; ce qui tourne ensuite vit dans /usr/local/bin (119 Mo) et
+# /usr/local/lib (17 Mo). Les garder revient a trimballer l'atelier avec la
+# machine.
+#
+# POURQUOI DEUX ETAPES ET UN APLATISSEMENT
+# Effacer dans une couche supplementaire ne rend RIEN : une image est la somme
+# de ses couches, et les fichiers effaces continuent d'occuper celles d'avant.
+# On elague donc dans une etape (prune), puis on recopie la racine obtenue dans
+# une image vierge : seule la version elaguee est ecrite, et l'espace est
+# reellement rendu.
+#
+# On repart de la racine COMPLETE plutot que de reconstruire une base a partir
+# d'une liste de paquets : les binaires de /usr/local dependent de dizaines de
+# bibliotheques posees par apt (boost, volk, fftw, sofia-sip...). Une liste
+# reecrite a la main s'en approche, ne les couvre jamais toutes, et la panne
+# n'apparait qu'a l'execution - un binaire qui ne demarre pas, faute d'un .so.
+# Ici, tout ce qui n'est pas une source reste EXACTEMENT ce qu'il etait.
+#
+# Ce qui est GARDE dans /opt/GSM : ce que la pile lance vraiment.
+#   qemu-src/                    l'arbre ENTIER, moins ses objets de compilation.
+#                                [2026-08-27] Avant, on n'en gardait que quatre
+#                                morceaux (le binaire, pc-bios, tools, le
+#                                firmware compal_e88). Il manquait ce qui LANCE :
+#                                run.sh, run_modules/, environnement/, cfgs/,
+#                                scripts/. start-direct.sh delegue a
+#                                $OQC_ROOT/run.sh - absent, l'image lite savait
+#                                emuler un Calypso mais pas le demarrer.
+#                                build/ ne garde que qemu-system-arm : 1,5 Go de
+#                                .o et de .a en moins, et .git reste coherent
+#                                avec son arbre (build/ est dans son .gitignore).
+#   osmocom-bb/src/host/osmocon/osmocon       le chargeur
+#   osmocom-bb/src/target/trx_toolkit         fake_trx.py et compagnie
+#   calypso_dsp.*.bin                         les ROM du DSP
+#   firmware/, qemu-install/, osmo_egprs/     images, qemu installe, ce depot
+#
+# LES DEPOTS GARDENT LEUR .git - qemu-src comme osmo_egprs. Ce n'est pas un
+# oubli : c'est lui qui permet "osmo-update" (git fetch en place) sur la machine
+# qui tourne, au lieu d'un effacement suivi d'un reclone. Les 96 Mo qu'il pese
+# ne sont rien a cote des 4 Go d'ateliers que cette image retire.
+#
+# Construction :  ./build.sh --lite      (ou docker build -f Dockerfile.lite .)
+# L'ISO correspondante :  ./build-iso.sh --role=operator --lite
+# =============================================================================
+
+ARG BASE=osmocom-nitb
+
+# ── Etape 1 : elagage ───────────────────────────────────────────────────────
+FROM ${BASE} AS prune
+
+# set -e implicite (SHELL par defaut) : si l'elagage echoue, l'image ne sort pas
+# a moitie taillee. Tout se fait dans UNE couche - c'est son etat final qui sera
+# recopie, pas les etapes intermediaires.
+RUN set -eux; \
+    cd /opt/GSM; \
+    mkdir -p /keep/qemu-src/build /keep/osmocom-bb/src/host/osmocon \
+             /keep/osmocom-bb/src/target; \
+    # qemu-src : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
+    # la copie, et --exclude=./build empeche le tar de le recouvrir ensuite.
+    cp -a qemu-src/build/qemu-system-arm  /keep/qemu-src/build/ 2>/dev/null || true; \
+    # [2026-08-28] qemu-bundle SUIT le binaire, et ce n'est pas un detail de
+    # confort : c'est par LUI que QEMU trouve ses donnees quand il est lance
+    # depuis un arbre de compilation. QEMU 8 n'utilise pas le prefix compile
+    # tel quel - il le RELOCALISE par rapport a l'endroit ou le binaire se
+    # trouve reellement, et dans un arbre de build cette relocalisation passe
+    # par build/qemu-bundle/, qui rejoue l'arborescence d'installation.
+    #
+    # En le supprimant avec les 1,5 Go d'objets, l'image lite laissait un
+    # qemu-system-arm incapable de lire son propre keymap :
+    #
+    #     qemu-system-arm: could not read keymap file: 'en-us'
+    #
+    # QEMU mourait AVANT d'allouer ses PTY, et start-direct.sh s'arretait sur
+    #     [FAIL] Emulator serial PTY (... s'est arrete avant d'allouer son PTY)
+    # c'est-a-dire une image, et une ISO, sans MS. Le fichier existait pourtant
+    # en trois exemplaires sur la machine - a un chemin que QEMU ne consulte
+    # jamais. Diagnostique sur banc le 2026-08-28 : sans qemu-bundle rc=1 et
+    # QEMU meurt, avec lui il tourne.
+    #
+    # Ce que ca coute : 146 Ko, 175 entrees dont 140 liens symboliques. C'est
+    # la difference entre l'image complete, ou le Calypso demarre, et la lite,
+    # ou il ne demarrait pas.
+    cp -a qemu-src/build/qemu-bundle      /keep/qemu-src/build/ 2>/dev/null || true; \
+    tar -C qemu-src --exclude=./build -cf - . | tar -C /keep/qemu-src -xf -; \
+    cp -a osmocom-bb/src/host/osmocon/osmocon \
+          /keep/osmocom-bb/src/host/osmocon/ 2>/dev/null || true; \
+    cp -a osmocom-bb/src/target/trx_toolkit \
+          /keep/osmocom-bb/src/target/ 2>/dev/null || true; \
+    cp -a *.bin /keep/ 2>/dev/null || true; \
+    for d in firmware qemu-install osmo_egprs pont; do \
+        [ -e "$d" ] && cp -a "$d" /keep/ || true; \
+    done; \
+    # La coupe : tout /opt/GSM disparait, seuls les artefacts reviennent.
+    cd /; rm -rf /opt/GSM; mkdir -p /opt/GSM; \
+    cp -a /keep/. /opt/GSM/; rm -rf /keep; \
+    # Reste de l'atelier : en-tetes, bibliotheques statiques, objets, caches.
+    rm -rf /usr/local/include /root/.cache /root/.cargo /root/.rustup \
+           /usr/share/doc /usr/share/man /usr/share/locale \
+           /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
+           /tmp/* /var/tmp/*; \
+    find /usr/local/lib -name '*.a' -delete 2>/dev/null || true; \
+    # Le balayage des .o EVITE /opt/GSM. [2026-08-27] Il y passait, et
+    # qemu-src/tools/calypso-ipc-device/*.o sont SUIVIS PAR GIT (six fichiers) :
+    # les effacer laissait un arbre que git voit comme modifie, et "osmo-update"
+    # refuse alors de l'avancer - a raison, il ne sait pas ce qu'on y a fait.
+    # Ce qui restait a couper est de toute facon parti avec l'atelier.
+    find / -xdev -path /opt/GSM -prune -o -name '*.o' -exec rm -f {} + 2>/dev/null || true; \
+    du -sh /opt/GSM /usr/local/bin /usr/local/lib
+
+# ── Etape 2 : aplatissement ─────────────────────────────────────────────────
+# FROM scratch + COPY de la racine : une seule couche, qui ne contient que
+# l'etat elague. C'est ce qui fait reellement tomber la taille.
+FROM scratch
+COPY --from=prune / /
+
+# La configuration ne traverse pas un FROM scratch : on la redeclare a
+# l'identique de l'image d'origine, sinon l'image lite ne demarre pas pareil.
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    container=docker \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+    LD_LIBRARY_PATH=/usr/local/lib \
+    DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /etc/osmocom
+ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
+CMD ["/bin/bash"]

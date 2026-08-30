@@ -1,0 +1,54 @@
+# noms.txt - etat civil des abonnes du banc. Un "Prenom Nom" par ligne.
+# Tout est faux : ces gens n'existent pas, ils servent a mettre un visage sur
+# un IMSI dans un journal. start.sh en pioche un au hasard par abonne.
+# Lignes vides et lignes commencant par # ignorees.
+Aline Boulanger
+Bastien Carpentier
+Chloe Delaunay
+Damien Estevez
+Elodie Fontaine
+Farid Grandjean
+Gwenael Hautier
+Hind Ibanez
+Ismael Jouvenel
+Jocelyne Kerbrat
+Karim Lachance
+Lucie Marceau
+Mathis Nourrisson
+Nadia Ozanne
+Octave Pelletier
+Prune Quesnel
+Quentin Rabourdin
+Rosalie Sauvage
+Samir Thibault
+Tiphaine Urbain
+Ulysse Vasseur
+Valentine Wattiez
+Wassim Ximenes
+Yasmine Yvenou
+Zoe Zelmati
+Anatole Bourdaloue
+Berenice Crampon
+Casimir Ducrocq
+Delphine Frochot
+Eusebe Gringoire
+Fanny Hurluberlu
+Gaspard Ippolite
+Henriette Jacquemin
+Isidore Klapisch
+Josephine Lartigue
+Kevin Mouchard
+Ludivine Nectoux
+Marcel Oudinot
+Nathalie Pignouf
+Odilon Quenneville
+Pierrette Ravachol
+Raoul Soubeyran
+Solange Tourbillon
+Thibaut Uzanne
+Ursule Vaillancourt
+Victorien Wachtel
+Wilhelmine Xanthos
+Xavier Yvrard
+Yolande Zuberbuhler
+Zacharie Amblard

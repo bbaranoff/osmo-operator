@@ -1,0 +1,62 @@
+diff --git a/src/host/osmocon/osmocon.c b/src/host/osmocon/osmocon.c
+index 547f49fe..d8921885 100644
+--- a/src/host/osmocon/osmocon.c
++++ b/src/host/osmocon/osmocon.c
+@@ -1281,6 +1281,57 @@ static int un_tool_read(struct osmo_fd *fd, unsigned int flags)
+ 		c += rc;
+ 	}
+ 
++	/* === FILTRE Kc en amont du firmware (chiffrement A5) ===
++	 * Capture L1CTL_CRYPTO_REQ (mobile -> L1) et ecrit /dev/shm/calypso_kc
++	 * pour qemu_wrap (cipher UL) + si_bridge/grgsm (decipher DL).
++	 * Layout fichier (32o): [0..3]seq LE [4]algo [5]key_len=8 [6..13]Kc [14]key_seq(CKSN)
++	 * NE TOUCHE PAS au firmware. */
++	if (length >= 10 && buf[0] == 0x15 /* L1CTL_CRYPTO_REQ */) {
++		uint8_t algo = buf[8];
++		uint8_t klen = buf[9];
++		unsigned i;
++		fprintf(stderr, "[osmocon] CRYPTO_REQ FILTRE: len=%u algo=%u key_len=%u key=",
++			length, algo, klen);
++		for (i = 10; i < length && i < 32; i++)
++			fprintf(stderr, "%02x", buf[i]);
++		fprintf(stderr, "\n");
++		if (algo) {
++			static uint32_t kc_seq = 0;
++			uint8_t kc[32];
++			/* key_seq (CKSN) : 9e octet quand key_len=9, sinon inconnu */
++			uint8_t key_seq = (klen == 9 && length >= 19) ? buf[18] : 0xff;
++			FILE *kf;
++			memset(kc, 0, sizeof(kc));
++			kc_seq++;
++			memcpy(kc, &kc_seq, 4);
++			kc[4] = algo;
++			kc[5] = 8;                 /* on stocke toujours 8 octets de Kc */
++			memcpy(kc + 6, &buf[10], 8);
++			kc[14] = key_seq;
++			kf = fopen("/dev/shm/calypso_kc", "wb");
++			if (kf) { fwrite(kc, 1, sizeof(kc), kf); fclose(kf); }
++			fprintf(stderr, "[osmocon] Kc ecrit (seq=%u algo=%u cksn=0x%02x)\n",
++				kc_seq, algo, key_seq);
++			if (klen != 8)
++				buf[9] = 8;        /* force key_len=8 (inert: corruption en aval) */
++		} else {
++			/* algo=0 : pas de chiffrement -> efface le Kc */
++			uint8_t zero[32];
++			FILE *kf;
++			memset(zero, 0, sizeof(zero));
++			kf = fopen("/dev/shm/calypso_kc", "wb");
++			if (kf) { fwrite(zero, 1, sizeof(zero), kf); fclose(kf); }
++		}
++	} else if (length >= 1 && (buf[0] == 0x05 /* DM_EST_REQ */ ||
++				  buf[0] == 0x12 /* DM_REL_REQ */)) {
++		/* nouveau canal dedie ou release -> repart en clair */
++		uint8_t zero[32];
++		FILE *kf;
++		memset(zero, 0, sizeof(zero));
++		kf = fopen("/dev/shm/calypso_kc", "wb");
++		if (kf) { fwrite(zero, 1, sizeof(zero), kf); fclose(kf); }
++	}
++
+ 	hdlc_send_to_phone(con->server->dlci, buf, length);
+ 
+ 	return 0;

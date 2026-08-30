@@ -1,0 +1,24 @@
+# pays.txt - les pays du banc, un par ligne. Le MCC designe un PAYS, et sur ce
+# banc un pays est un noeud : le noeud 1 habite la premiere ligne, le 2 la
+# deuxieme... start.sh melange la liste a chaque lancement, puis s'y tient pour
+# toute la duree du run (un pays qui change en cours de route ne veut rien dire).
+# Aucun n'existe. C'est fait expres : si l'on voit "Syldavie" dans un journal,
+# on sait qu'on regarde le banc et pas un vrai reseau.
+Syldavie
+Bordurie
+Poldevie
+Molvanie
+Ruritanie
+Freedonie
+Elbonie
+Latverie
+Zubrowka
+Grand-Fenwick
+Costa Gravas
+Bas-Bourbier
+Haute-Ferraille
+Republique du Bruit Blanc
+Duche de Sans-Signal
+Ile de la Trame Perdue
+Confins de Bassebande
+Principaute de Roamie

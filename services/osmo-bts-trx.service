@@ -1,0 +1,30 @@
+[Unit]
+Description=Osmocom GSM Base Transceiver Station (BTS)
+# S'assure que le réseau et l'interface de bouclage sont prêts
+After=network.target network-online.target
+Wants=network-online.target
+# Si tu utilises osmo-bsc sur la même machine, décommente la ligne suivante
+# After=osmo-bsc.service
+
+[Service]
+Type=simple
+# Adapte l'utilisateur (ex: root ou ton utilisateur actuel 'nirvana')
+User=root
+Group=root
+
+# Chemin vers l'exécutable (vérifie avec 'which osmo-bts-trx')
+# -c spécifie le fichier de configuration
+# -r 1 permet d'activer la priorité temps réel si le noyau le permet
+ExecStart=/usr/bin/osmo-bts-trx -c /etc/osmocom/osmo-bts-trx.cfg -r 1
+
+# Redémarrage automatique en cas de crash (utile pour la stabilité radio)
+Restart=always
+RestartSec=5
+
+# Limites de ressources pour éviter les "hangs" système
+LimitNOFILE=65535
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=1
+
+[Install]
+WantedBy=multi-user.target

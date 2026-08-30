@@ -1,0 +1,34 @@
+# air-mesh.txt - QUI ENTEND QUI, sur le maillage de bursts.
+#
+# Une arete par ligne :
+#     <noeud a> <noeud b> <attenuation dB> [uni]
+#
+# Sans le mot "uni" a la fin, l'arete vaut DANS LES DEUX SENS. Avec, elle ne
+# vaut que de a vers b - utile pour un noeud qui emet fort et recoit mal, ou
+# pour forcer un handover a sens unique.
+#
+# UNE PAIRE ABSENTE DE CE FICHIER NE S'ENTEND PAS. C'est ce qui fait un
+# maillage et non un bus : sans graphe, chaque mobile entendrait toutes les
+# BTS du banc a pleine puissance, il n'y aurait plus de cellule, plus de
+# reselection, plus rien a demontrer.
+#
+# ORDRE DE GRANDEUR. Le RSSI annonce par la BTS tourne autour de -60 dBm ; le
+# plancher d'airmesh est a -110 dBm par defaut. Donc :
+#     10-25 dB   deux cellules voisines, les deux lisibles - reselection
+#     30-45 dB   cellule lointaine, lisible mais moins bonne que la voisine
+#     50 dB et + a la limite : de quoi voir un mobile hesiter puis decrocher
+#     au-dela de 50, ou pas de ligne du tout : hors de portee
+#
+# Ce fichier n'est PAS relu a chaud : airmesh le charge au demarrage. Le
+# modifier demande de relancer airmesh, pas toute la pile.
+
+# ── Le banc courant : trois noeuds ──────────────────────────────────────────
+# 1 et 2 sont deux conteneurs sur la meme machine, donc deux cellules
+# adjacentes. 3 est la VM : plus loin, lisible depuis 2 seulement.
+1 2 20
+2 3 35
+
+# 1 et 3 ne s'entendent pas : la ligne n'existe pas, et c'est delibere.
+# Un mobile du noeud 1 qui veut joindre le noeud 3 doit passer par la cellule
+# du noeud 2 - c'est le seul moyen d'avoir un vrai chemin a deux sauts sur un
+# banc de trois machines.

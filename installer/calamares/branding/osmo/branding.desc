@@ -1,0 +1,31 @@
+---
+componentName: osmo
+
+# Les chaines vides sont VOLONTAIRES : elles retirent les liens (support, notes
+# de version) que l'ecran d'accueil afficherait sinon vers des pages qui
+# n'existent pas pour ce projet.
+strings:
+    productName:         osmo_egprs
+    shortProductName:    osmo_egprs
+    version:             0.1
+    shortVersion:        0.1
+    versionedName:       osmo_egprs 0.1 - banc GSM/EGPRS
+    shortVersionedName:  osmo_egprs 0.1
+    bootloaderEntryName: osmo_egprs
+    productUrl:          ""
+    supportUrl:          ""
+    knownIssuesUrl:      ""
+    releaseNotesUrl:     ""
+
+images:
+    productLogo:   "logo.png"
+    productIcon:   "logo.png"
+    productWelcome: "welcome.png"
+
+slideshow: "show.qml"
+
+style:
+    sidebarBackground:     "#0d1b2a"
+    sidebarText:           "#ffffff"
+    sidebarTextSelect:     "#1b98e0"
+    sidebarTextHighlight:  "#13293d"

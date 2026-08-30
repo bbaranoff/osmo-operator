@@ -1,0 +1,109 @@
+osmocom-bb : rendre reglables les deux budgets d'une tentative de synchro.
+
+Sous emulation QEMU-Calypso, l'interpreteur c54x fait tourner le tick TDMA a
+~10 Hz au lieu de 217 (facteur ~96). Les deux budgets qu'osmocom fixe en dur
+sont alors trop courts d'autant, et le mobile boucle :
+
+  gsm322_sync_to_cell() emet L1CTL_RESET_REQ puis un FBSB_REQ avec un timeout
+  litteral de 100 TRAMES (461 ms de temps GSM, correct sur silicium, ~10 s de
+  temps reel ici). Le firmware abandonne, renvoie un FBSB_CONF d'echec, la
+  couche 3 loggue « Channel sync error » / « Cell selection failed » et rappelle
+  gsm322_sync_to_cell() — donc re-emet le RESET. Le DSP emule n'obtient jamais
+  une fenetre assez longue pour acquerir FB+SB.
+
+  support.c fixe scan_to = 4 s, sans aucune commande VTY : impossible a regler
+  depuis mobile.cfg.
+
+Ce correctif n'introduit AUCUNE valeur fabriquee : ni detection, ni resultat
+DSP, ni cellule d'API. Il empeche seulement le banc d'interrompre son propre
+sujet. Si le DSP ne trouve rien, il ne trouvera toujours rien — sans etre coupe.
+
+  CALYPSO_FBSB_TIMEOUT=<trames>    defaut 100   (plafond 65535, champ uint16)
+  CALYPSO_SCAN_TO=<secondes>       defaut 4     (plafond 255, champ uint8)
+
+Les deux doivent etre accordes : SCAN_TO doit depasser la duree MUR de
+FBSB_TIMEOUT trames. A ~10 Hz, 2000 trames (~200 s) va avec SCAN_TO=240.
+
+Absentes, les deux variables laissent le comportement osmocom d'origine.
+diff --git a/src/host/layer23/src/common/support.c b/src/host/layer23/src/common/support.c
+index 3e053713..a1c1c8bf 100644
+--- a/src/host/layer23/src/common/support.c
++++ b/src/host/layer23/src/common/support.c
+@@ -89,7 +89,24 @@ void gsm_support_init(struct osmocom_ms *ms)
+ 	sup->ch_cap = GSM_CAP_SDCCH_TCHF_TCHH;
+ 	sup->min_rxlev_dbm = -106; // TODO
+ 	sup->sync_to = 6; /* how long to wait sync (0.9 s) */
++	/* [2026-08-03] Reglable : sous emulation le DSP est ~96x trop lent, et 4 s
++	 * de mur ne couvrent qu'une fraction du temps GSM necessaire. Sans commande
++	 * VTY jusqu'ici, d'ou l'impossibilite de le regler depuis mobile.cfg.
++	 * CALYPSO_SCAN_TO=<secondes> ; absente = 4 = comportement d'origine.
++	 * Champ uint8_t -> plafonne a 255. Instrument de banc, pas une bequille :
++	 * aucune valeur radio n'est fabriquee. */
+ 	sup->scan_to = 4; /* how long to wait for all sysinfos (>=4 s) */
++	{
++		const char *e = getenv("CALYPSO_SCAN_TO");
++		if (e && *e) {
++			long v = strtol(e, NULL, 0);
++			if (v < 1) v = 1;
++			if (v > 255) v = 255;
++			sup->scan_to = (uint8_t)v;
++			printf("[support] CALYPSO_SCAN_TO=%u s (defaut 4)\n",
++			       sup->scan_to);
++		}
++	}
+ 	sup->dsc_max = 90; /* the specs defines 90 */
+ 
+ 	/* codec */
+diff --git a/src/host/layer23/src/mobile/gsm322.c b/src/host/layer23/src/mobile/gsm322.c
+index 3d0cc77d..698648c8 100644
+--- a/src/host/layer23/src/mobile/gsm322.c
++++ b/src/host/layer23/src/mobile/gsm322.c
+@@ -493,10 +493,44 @@ static int gsm322_sync_to_cell(struct gsm322_cellsel *cs,
+ 
+ 	cs->sync_pending = 1;
+ 	l1ctl_tx_reset_req(ms, L1CTL_RES_T_FULL);
+-	return l1ctl_tx_fbsb_req(ms, cs->arfcn,
+-			L1CTL_FBSB_F_FB01SB, 100, 0,
+-			cs->ccch_mode,
+-			cs->list[cs->arfci].rxlev);
++
++	/* [2026-08-03] BUDGET D'UNE TENTATIVE FBSB, en TRAMES TDMA.
++	 *
++	 * Etait le litteral 100 : 100 trames = 461 ms de temps GSM, parfaitement
++	 * correct sur silicium. Mais sous emulation le tick TDMA du DSP tourne a
++	 * ~10 Hz au lieu de 217 (interpreteur c54x ~96x trop lent), donc ces
++	 * 100 trames valent ~10 s de temps REEL. Le firmware abandonne, envoie un
++	 * FBSB_CONF d'echec, la couche 3 loggue « Channel sync error » puis
++	 * « Cell selection failed », et gsm322_sync_to_cell() est rappelee — ce qui
++	 * re-emet le L1CTL_RESET_REQ ci-dessus. C'est CETTE boucle qui empeche le
++	 * DSP natif d'avoir une seule fenetre assez longue pour acquerir FB+SB.
++	 *
++	 * CE N'EST PAS UNE BEQUILLE : on ne fabrique aucun resultat DSP, aucune
++	 * detection, aucune valeur d'API. On empeche seulement le banc d'interrompre
++	 * son propre sujet toutes les ~8 s. Le juge reste intact : si le DSP ne
++	 * trouve rien, il ne trouvera toujours rien, simplement sans etre coupe.
++	 *
++	 * CALYPSO_FBSB_TIMEOUT=<trames> ; absente = 100 = comportement d'origine.
++	 * Champ uint16 cote protocole -> plafonne a 65535. En natif, viser large :
++	 * 20000 trames ~= 30 min de mur a 10 Hz, soit ~92 s de temps GSM simule. */
++	{
++		static int fbsb_to = -1;
++		if (fbsb_to < 0) {
++			const char *e = getenv("CALYPSO_FBSB_TIMEOUT");
++			long v = (e && *e) ? strtol(e, NULL, 0) : 100;
++			if (v < 1) v = 1;
++			if (v > 65535) v = 65535;
++			fbsb_to = (int)v;
++			if (fbsb_to != 100)
++				LOGP(DCS, LOGL_NOTICE, "FBSB timeout force a %d trames "
++				     "(defaut 100) — fenetre de synchro allongee pour le "
++				     "DSP emule ; aucun resultat n'est fabrique\n", fbsb_to);
++		}
++		return l1ctl_tx_fbsb_req(ms, cs->arfcn,
++				L1CTL_FBSB_F_FB01SB, (uint16_t)fbsb_to, 0,
++				cs->ccch_mode,
++				cs->list[cs->arfci].rxlev);
++	}
+ }
+ 
+ /* this is called whenever the serving cell is unselectied */

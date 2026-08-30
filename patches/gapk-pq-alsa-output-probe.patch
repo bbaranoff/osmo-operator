@@ -1,0 +1,221 @@
+diff --git a/src/pq_alsa.c b/src/pq_alsa.c
+index 50479e6..05efbda 100644
+--- a/src/pq_alsa.c
++++ b/src/pq_alsa.c
+@@ -20,6 +20,7 @@
+ 
+ #include <errno.h>
+ #include <stdint.h>
++#include <stdlib.h>	/* getenv() — vanne GAPK_ALSA_PROBE */
+ #include <talloc.h>
+ 
+ #include <osmocom/gapk/logging.h>
+@@ -51,14 +52,96 @@ pq_cb_alsa_input(void *_state, uint8_t *out, const uint8_t *in, unsigned int in_
+ 	return rv * sizeof(uint16_t);
+ }
+ 
++/* SONDE GAPK_ALSA_PROBE — le PCM qui part vers ALSA est-il muet ?
++ *
++ * Pourquoi elle existe (mesures du 2026-08-09, Calypso emule sous QEMU) : le
++ * mobile recoit a sa porte 300/300 trames FR DISTINCTES, cadrage 49 o et
++ * signature 0xd correctes (releve dans osmocon.log, hdlc_recv dlci=5), la meme
++ * libosmogapk decode ces memes trames en audio reel quand on l'appelle par le
++ * binaire osmo-gapk autonome (RMS 391, 98,2 % d'echantillons non nuls), et
++ * pourtant la sortie ALSA du mobile est du ZERO NUMERIQUE EXACT (crete 0 sur
++ * 48000 echantillons). Aucune erreur n'est journalisee, car
++ * osmo_gapk_pq_execute ne se plaint que d'un retour negatif.
++ *
++ * Cette sonde tranche en un appel : le PCM remis a snd_pcm_writei est-il nul
++ * (le defaut est en amont, dans la chaine) ou non nul (le defaut est en aval,
++ * dans ALSA/PulseAudio) ?
++ *
++ * Compteurs CUMULATIFS, jamais un taux : un taux tire d'un journal bufferise a
++ * deja produit deux chiffres faux dans cette enquete. La sonde s'annonce au
++ * premier passage dans les deux cas — une sonde muette rend le silence
++ * indecidable. Diagnostic pur : aucun effet sur le flux quand elle est eteinte.
++ */
++static void pq_alsa_out_probe(void *_state, const uint8_t *in, unsigned int in_len,
++			      int rv, int rv_avant_reprise)
++{
++	struct pq_state_alsa *state = _state;
++	static int on = -1;
++	static unsigned long long n, muettes, ecrites_court, epipe, autres_err;
++	static unsigned long long pic_max;
++	unsigned int i;
++	unsigned long long pic = 0;
++	snd_pcm_state_t st;
++	snd_pcm_sframes_t dispo, retard = 0;
++
++	if (on < 0) {
++		const char *e = getenv("GAPK_ALSA_PROBE");
++		on = (e && *e == '1') ? 1 : 0;
++		LOGPGAPK(LOGL_NOTICE, "SONDE GAPK_ALSA_PROBE %s\n",
++			 on ? "ACTIVE" : "inactive");
++	}
++	if (!on)
++		return;
++
++	for (i = 0; i + 1 < in_len; i += 2) {
++		int16_t s = (int16_t)(in[i] | (in[i + 1] << 8));
++		unsigned long long a = (s < 0) ? (unsigned long long)-(long long)s : (unsigned long long)s;
++		if (a > pic)
++			pic = a;
++	}
++	n++;
++	if (pic == 0)
++		muettes++;
++	if (pic > pic_max)
++		pic_max = pic;
++	if (rv >= 0 && (unsigned int)rv != in_len / 2)
++		ecrites_court++;
++	/* L'ECHEC EST RECUPERE EN SILENCE par pq_cb_alsa_output : sur -EPIPE il
++	 * fait snd_pcm_prepare() puis reecrit, et ne renvoie que le rv d'apres.
++	 * Un flux qui sous-alimente en permanence boucle donc XRUN -> prepare ->
++	 * write sans que rien ne le dise, et PulseAudio n'a jamais rien en file
++	 * (symptome observe : « Buffer Latency: 0 usec » constant). C'est ce que
++	 * ce compteur rend visible. */
++	if (rv_avant_reprise == -EPIPE)
++		epipe++;
++	else if (rv_avant_reprise < 0)
++		autres_err++;
++
++	st = snd_pcm_state(state->pcm_handle);
++	dispo = snd_pcm_avail_update(state->pcm_handle);
++	if (snd_pcm_delay(state->pcm_handle, &retard) < 0)
++		retard = -1;
++
++	if (n <= 3 || (n % 250) == 0)
++		LOGPGAPK(LOGL_NOTICE, "GAPK-ALSA-PROBE : %llu blocs, in_len=%u "
++			 "(%u ech), rendus par ALSA=%d -- blocs MUETS : %llu, "
++			 "ecritures courtes : %llu, XRUN recuperes : %llu, "
++			 "autres erreurs : %llu, crete max vue : %llu, "
++			 "etat=%s avail=%ld delay=%ld\n",
++			 n, in_len, in_len / 2, rv, muettes, ecrites_court,
++			 epipe, autres_err, pic_max,
++			 snd_pcm_state_name(st), (long)dispo, (long)retard);
++}
++
+ static int
+ pq_cb_alsa_output(void *_state, uint8_t *out, const uint8_t *in, unsigned int in_len)
+ {
+ 	struct pq_state_alsa *state = _state;
+ 	unsigned int num_samples = in_len/2;
+-	int rv;
++	int rv, rv_avant_reprise;
+ 
+ 	rv = snd_pcm_writei(state->pcm_handle, in, num_samples);
++	rv_avant_reprise = rv;
+ 	if (rv == -EPIPE) {
+ 		/* Recover from buffer underrun */
+ 		snd_pcm_prepare(state->pcm_handle);
+@@ -66,6 +149,8 @@ pq_cb_alsa_output(void *_state, uint8_t *out, const uint8_t *in, unsigned int in
+ 		rv = snd_pcm_writei(state->pcm_handle, in, num_samples);
+ 	}
+ 
++	pq_alsa_out_probe(state, in, in_len, rv, rv_avant_reprise);
++
+ 	return rv == num_samples ? 0 : -1;
+ }
+ 
+@@ -129,12 +214,101 @@ pq_queue_alsa_op(struct osmo_gapk_pq *pq, const char *alsa_dev, unsigned int blk
+ 	if (rc < 0)
+ 		goto out_free_par;
+ 
++	/* DIMENSIONNEMENT DE LA PERIODE ET DU TAMPON — sans ça, l'ecouteur est MUET.
++	 *
++	 * Ces deux appels manquaient. snd_pcm_hw_params() prenait donc le maximum
++	 * offert par le greffon ALSA-pulse, mesure dans le conteneur :
++	 *   HW  period_size=2048  buffer_size=2097152  periods=1024   (a 8 kHz :
++	 *       une periode de 256 ms, un tampon de 262 SECONDES)
++	 *   SW  start_threshold=1  avail_min=2048
++	 * Or la voix arrive par blocs de 160 trames = 20 ms. Le flux demarre des le
++	 * premier echantillon (start_threshold=1), sous-alimente bien avant que
++	 * pulse ne tire une periode complete, ALSA declare XRUN, et la reprise
++	 * silencieuse de pq_cb_alsa_output appelle snd_pcm_prepare() — qui sur ce
++	 * greffon fait pa_stream_flush() et JETTE ce qui etait en file.
++	 *
++	 * MESURE IN VIVO (archive 20260809-030334, appel ETABLI de bout en bout :
++	 * premier bloc a 02:54:17, instant exact de CALL_DELIVERED -> ACTIVE) :
++	 *   24250 blocs, XRUN recuperes : 24249  =  99,996 %
++	 *   crete max vue : 15432   -> c'etait bien de la voix
++	 *   delay epingle a ~155 trames = un seul bloc jamais consomme
++	 * Cote sortie : parec sur gsm_audio.monitor rendait un ZERO EXACT.
++	 *
++	 * ⚠️ La variable discriminante immediate est la CADENCE, pas la taille :
++	 * a 20 ms/bloc on mesure 0 XRUN, a 28 ms/bloc on en mesure 99,7 %. Le
++	 * defaut du dimensionnement ne CAUSE pas l'XRUN, il ne laisse AUCUNE MARGE
++	 * — la moindre gigue d'arrivee d'une trame DL suffit alors a tout jeter.
++	 * Une periode d'un bloc et huit periodes de tampon donnent 160 ms de coussin.
++	 *
++	 * Mesure apres correctif, meme banc : 0,1 % -> 73,0 % d'echantillons non
++	 * nuls sur gsm_audio.monitor, crete 20000 = exactement l'amplitude injectee.
++	 *
++	 * GAPK_ALSA_NO_SIZING=1 retablit l'ancien comportement (aucun dimensionnement)
++	 * pour refaire l'A/B sans reconstruire. Ce n'est PAS une bequille : le
++	 * correctif est le defaut, la vanne n'existe que pour la mesure. */
++	{
++		const char *no_sz = getenv("GAPK_ALSA_NO_SIZING");
++		if (!(no_sz && *no_sz == '1')) {
++			snd_pcm_uframes_t period = blk_len / 2;	/* blk_len en octets -> trames */
++			snd_pcm_uframes_t buffer = period * 8;	/* 8 blocs = 160 ms de marge */
++			int dir = 0;
++
++			if (period == 0)
++				period = 160;
++			rc = snd_pcm_hw_params_set_period_size_near(state->pcm_handle,
++								   hw_params, &period, &dir);
++			if (rc < 0)
++				goto out_free_par;
++			buffer = period * 8;
++			rc = snd_pcm_hw_params_set_buffer_size_near(state->pcm_handle,
++								   hw_params, &buffer);
++			if (rc < 0)
++				goto out_free_par;
++		}
++	}
++
+ 	rc = snd_pcm_hw_params(state->pcm_handle, hw_params);
+ 	if (rc < 0)
+ 		goto out_free_par;
+ 
+ 	snd_pcm_hw_params_free(hw_params);
+ 
++	/* SW params : demarrer seulement quand la moitie du tampon est remplie, pour
++	 * que le puits ne parte pas en famine des le premier bloc. Sans ce reglage,
++	 * start_threshold vaut 1 trame (defaut pose par snd_pcm_hw_params) et le flux
++	 * demarre a vide. Non fatal : si ca echoue on continue avec les defauts, mais
++	 * on le DIT — une degradation silencieuse rendrait le diagnostic impossible. */
++	{
++		const char *no_sz = getenv("GAPK_ALSA_NO_SIZING");
++		if (!(no_sz && *no_sz == '1')) {
++			snd_pcm_sw_params_t *sw = NULL;
++			snd_pcm_uframes_t period = 0, buffer = 0;
++
++			if (snd_pcm_get_params(state->pcm_handle, &buffer, &period) == 0 &&
++			    snd_pcm_sw_params_malloc(&sw) == 0) {
++				if (snd_pcm_sw_params_current(state->pcm_handle, sw) == 0) {
++					snd_pcm_sw_params_set_start_threshold(state->pcm_handle,
++									      sw, buffer / 2);
++					snd_pcm_sw_params_set_avail_min(state->pcm_handle,
++									sw, period);
++					if (snd_pcm_sw_params(state->pcm_handle, sw) < 0)
++						LOGPGAPK(LOGL_ERROR, "ALSA '%s': sw_params refuses, "
++							 "on garde les defauts (start_threshold=1)\n",
++							 alsa_dev);
++				}
++				snd_pcm_sw_params_free(sw);
++			}
++			LOGPGAPK(LOGL_NOTICE, "ALSA '%s': periode=%lu trames tampon=%lu trames "
++				 "(%lu ms de marge a 8 kHz)\n", alsa_dev,
++				 (unsigned long)period, (unsigned long)buffer,
++				 (unsigned long)(buffer / 8));
++		} else {
++			LOGPGAPK(LOGL_NOTICE, "ALSA '%s': GAPK_ALSA_NO_SIZING=1 -- "
++				 "dimensionnement laisse au greffon (ancien comportement)\n",
++				 alsa_dev);
++		}
++	}
++
+ 	item = osmo_gapk_pq_add_item(pq);
+ 	if (!item) {
+ 		rc = -ENOMEM;
