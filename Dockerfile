@@ -589,10 +589,8 @@ RUN update-alternatives --set gcc /usr/bin/gcc-11
 # sources pour le meme depot, qui n'avancaient pas ensemble.
 RUN if [ ! -d "/opt/GSM/osmo-egprs-web/" ]; then \
       mkdir -p /opt/GSM && \
-      git clone https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web; \
+      git clone -b main https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web; \
     fi
-# Compatibilite : tout ce qui nomme encore l'ancien chemin le retrouve.
-RUN ln -sfn /opt/GSM/osmo-egprs-web /opt/osmo-egprs-web
 
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/GSM/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
@@ -613,29 +611,23 @@ RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-lin
     ln -sf /opt/node/bin/npm  /usr/local/bin/npm && \
     ln -sf /opt/node/bin/npx  /usr/local/bin/npx && \
     node --version
-# Dépendances JS (ws) — node_modules est versionné dans le repo, on (re)installe
-# pour garantir la cohérence ; non-fatal si déjà présent / réseau absent.
-RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
 # Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
 # Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
 COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
 
-RUN cd /opt/GSM/osmo-egprs-web && git pull
-
 # ── Dashboard web : install-web-service.sh joue AU BOOT ───────────────────────
 # [2026-08-12] Remplace le geste manuel `bash /opt/GSM/osmo-egprs-web/install-web-service.sh`
 # qu'il fallait refaire dans chaque conteneur pour armer le HTTPS.
 #
-# Ce qui reste au BUILD (deja plus haut) : node, `npm install`, le unit du
-# service. Ce qui passe au BOOT : le certificat TLS auto-signe — une cle privee
-# generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
+# Ce qui reste au BUILD : node et le unit du service (plus haut), le
+# `npm install` (juste en dessous). Ce qui passe au BOOT : le certificat TLS
+# auto-signe — une cle privee generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
 # du raisonnement est dans services/osmo-egprs-web-install.service.
 #
-# ⚠️ ORDRE : ce bloc DOIT rester APRES le `RUN cd /opt/GSM/osmo-egprs-web && git pull`
-# ci-dessus. La COPY ci-dessous modifie un fichier suivi par ce depot ; placee
-# avant, le `git pull` echouerait (« local changes would be overwritten »).
+# ⚠️ ORDRE : ce bloc DOIT rester APRES le clone de /opt/GSM/osmo-egprs-web
+# (haut de cette section) — la COPY ci-dessous ecrit dans ce depot.
 #
 # SOURCE UNIQUE DU UNIT. install-web-service.sh installe le unit en le copiant
 # depuis /opt/GSM/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
@@ -647,13 +639,7 @@ COPY services/osmo-egprs-web.service /opt/GSM/osmo-egprs-web/osmo-egprs-web.serv
 # Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
 # un HTTPS muet.
 RUN test -s /opt/GSM/osmo-egprs-web/install-web-service.sh
-# [2026-08-12] REJOUER L'INSTALL WEB APRES LE PULL.
-# Le `npm install` plus haut (le premier des deux) tourne AVANT le `git pull` de
-# /opt/GSM/osmo-egprs-web ci-dessus : si le
-# pull rapatrie un package.json avec une dependance en plus, node_modules reste
-# a l'etat d'avant et le dashboard tombe au demarrage sur un `Cannot find
-# module` — au boot, dans le journal systemd, loin du build qui l'a cause. On
-# rejoue donc les dependances APRES le pull.
+# Dependances JS (ws) — UN SEUL `npm install`, apres le clone.
 # Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
 # hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
 RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
