@@ -408,8 +408,37 @@ ENCRYPTION="a5 1"   # A5/1 par defaut dans l'ISO -- la valeur suit enfin le comm
 # adresse et ecouter sur l'autre. C'est aussi ce qui remplace les 172.20.1.x
 # d'avant : une adresse de boucle locale existe toujours, une adresse de NIC
 # peut manquer au moment ou le service demarre.
-HOST_IP="127.0.0.2"        # ip1 : __CONTAINER_IP__ - ggsn/sgsn/upf/bsc-nsvc
+ISO_PRIV_BASE=$(( ${ISO_NODE:-1} + 1 ))
+ISO_PRIV_GW="192.168.${ISO_PRIV_BASE}.1"
+ISO_PRIV_IP="192.168.${ISO_PRIV_BASE}.10"
+
+# ── L ADRESSE DE BASE EST CELLE DU SEGMENT PRIVE, PLUS LA BOUCLE LOCALE ─────
+# ip1 valait 127.0.0.2. Une boucle locale a l avantage d exister toujours, mais
+# elle ne se voit que de la machine : deux noeuds ne peuvent rien se dire, et
+# surtout SGSN et GGSN se retrouvaient sur LA MEME adresse. Or les deux ouvrent
+# le meme socket GTP :
+#     osmo-ggsn : gtp bind-ip  127.0.0.2  -> prend 2123/2152/3386 en premier
+#     osmo-sgsn : gtp local-ip 127.0.0.2  -> « bind failed: Address already in
+#                 use », « FATAL Cannot bind/listen on GTP socket », et systemd
+#                 le relance en boucle (compteur a 58 sur le banc).
+# Le packet attach restait alors en « [ .. ] » pour toujours, sans qu aucun
+# journal du lanceur ne le dise - c est celui du demon qui parle.
+#
+# Le plan du noeud donne DEUX adresses, c est exactement ce qu il faut :
+#     .10  ip1  le coeur : GGSN, NS/Gb du SGSN, UPF, nsvc du BSC
+#     .1   gw prive       le point GTP du SGSN, a lui seul
+# Elles sont posees en /32 par network/osmo-ip-plan.sh avant que run.sh ne
+# demarre quoi que ce soit, et son repli les pose sur `lo` quand aucune carte
+# ne fournit Internet : l argument « une boucle locale existe toujours » reste
+# donc vrai, sans l inconvenient de l adresse unique.
+HOST_IP="$ISO_PRIV_IP"     # ip1 : __CONTAINER_IP__ - ggsn/sgsn-NS/upf/bsc-nsvc
+SGSN_GTP_IP="$ISO_PRIV_GW" # le point GTP du SGSN, distinct du GGSN
 GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  - log gsmtap + dns 0 du ggsn
+# HLR et GSUP restent sur la boucle locale : c est un plan de controle interne
+# au noeud, que personne n appelle de l exterieur, et osmo-hlr.cfg y fige son
+# « bind ip 127.0.0.2 ». Les deplacer demanderait de bouger les deux ensemble
+# sans rien y gagner.
+HLR_IP="127.0.0.2"
 
 # ── Le segment prive de ce noeud : 192.168.<noeud+1>.x ──────────────────────
 # Meme plan que le cote docker (start.sh : op_private_*), pour qu'une VM et un
@@ -421,10 +450,6 @@ GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  - log gsmtap + dns 0 du ggsn
 # revendiquent rien (/32) : le but n'est pas de creer un segment - une VM n'a
 # pas de BTS derriere une carte - mais de donner un point d'attache stable aux
 # configurations qui nomment encore une adresse privee.
-ISO_PRIV_BASE=$(( ${ISO_NODE:-1} + 1 ))
-ISO_PRIV_GW="192.168.${ISO_PRIV_BASE}.1"
-ISO_PRIV_IP="192.168.${ISO_PRIV_BASE}.10"
-
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
 PHY_MODE="${PHY_MODE:-faketrx}"
@@ -505,8 +530,8 @@ if [ -n "$ISO_WAN_NODES" ]; then
     printf 'WAN_NODES="%s"\n' "$ISO_WAN_NODES" > "$ISO_WAN_TMP"
 fi
 apply_native_post_patches "$TEMP_CONFIG" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
-    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}"
-echo -e "  ${GREEN}✓${NC} retouches natives : sms-routing (${CYAN}${ISO_N_MS}${NC} route(s) MS), SGSN, MSC vers ${CYAN}${HOST_IP}${NC}"
+    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}" "$SGSN_GTP_IP" "$HLR_IP"
+echo -e "  ${GREEN}✓${NC} retouches natives : sms-routing (${CYAN}${ISO_N_MS}${NC} route(s) MS), GGSN/NS ${CYAN}${HOST_IP}${NC}, GTP SGSN ${CYAN}${SGSN_GTP_IP}${NC}, HLR ${CYAN}${HLR_IP}${NC}"
 
 if [ "$ISO_ROLE" = "interstp" ]; then
     ISO_RUN_IMAGE="osmocom-stp-iso"
@@ -905,7 +930,7 @@ echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 # l'etape 5), pas de $TEMP_CONFIG - l'image peut porter des fichiers que la
 # substitution n'a pas traverses.
 apply_native_post_patches "$ROOTFS/etc" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
-    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}"
+    "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}" "$SGSN_GTP_IP" "$HLR_IP"
 
 if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     chmod +x "$ROOTFS/etc/osmocom/run.sh"
@@ -1065,6 +1090,59 @@ sys.exit(0 if n[0] >= 6 else 2)
 PYEOF
 fi
 
+# ── LE DASHBOARD DOIT SE LEVER SEUL, ICI COMME SUR LE DISQUE ────────────────
+# Tout etait deja dans l image - server.js, node, node_modules - SAUF les deux
+# unites systemd. services/ n etait copie nulle part par ce script : l ISO
+# arrivait donc avec un dashboard complet et rien pour le demarrer, et il
+# fallait lancer install-web-service.sh a la main a chaque demarrage. C est
+# exactement ce qu on a constate sur le banc.
+#
+# DEUX UNITES, ET PAS UNE :
+#   osmo-egprs-web.service          le dashboard lui-meme.
+#   osmo-egprs-web-install.service  un oneshot qui rejoue install-web-service.sh
+#                                   AU BOOT. Il porte le certificat TLS, et
+#                                   c est la seule place correcte pour lui : une
+#                                   cle posee ici, au build, serait la MEME dans
+#                                   toutes les ISO tirees de cette image -
+#                                   n importe qui pourrait se faire passer pour
+#                                   la console. Genere au boot, il porte le nom
+#                                   et les adresses REELS de la machine, ce qui
+#                                   vaut aussi pour le systeme installe : le
+#                                   disque recoit les unites avec le squashfs et
+#                                   fabrique SON propre certificat au premier
+#                                   demarrage, different de celui de la cle.
+#
+# On active l ONESHOT, pas le service : le script se termine par un
+# `systemctl restart osmo-egprs-web` et l unite le dit - l ordonner avant le
+# service creerait un cycle. Le dashboard est tire par lui.
+_SVC_SRC="$DIR/services"
+if [ -f "$_SVC_SRC/osmo-egprs-web.service" ] && [ -f "$_SVC_SRC/osmo-egprs-web-install.service" ]; then
+    install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+    cp -f "$_SVC_SRC/osmo-egprs-web.service"         "$ROOTFS/etc/systemd/system/"
+    cp -f "$_SVC_SRC/osmo-egprs-web-install.service" "$ROOTFS/etc/systemd/system/"
+    # Le depot web embarque sa propre copie du unit, qui a deja DIVERGE de
+    # celle-ci (cf. Dockerfile) : on impose celle du depot operateur, une seule
+    # verite.
+    [ -d "$ROOTFS/opt/GSM/osmo-egprs-web" ] && \
+        cp -f "$_SVC_SRC/osmo-egprs-web.service" \
+              "$ROOTFS/opt/GSM/osmo-egprs-web/osmo-egprs-web.service"
+    ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
+           "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service"
+    echo -e "  ${GREEN}✓${NC} dashboard : unites ${CYAN}osmo-egprs-web${NC} + ${CYAN}-install${NC} posees et activees au boot"
+else
+    echo -e "  ${RED}✗ services/osmo-egprs-web*.service introuvables - le dashboard ne demarrerait pas seul${NC}" >&2
+    exit 1
+fi
+
+# /usr/local/bin/node pointait sur /opt/node/bin/node, absent de l image : un
+# lien mort AVANT /usr/bin dans le PATH. `node` marche par chance, parce que le
+# shell continue son parcours ; un script qui teste `-x /usr/local/bin/node`,
+# lui, se trompe. On ne garde le lien que s il mene quelque part.
+if [ -L "$ROOTFS/usr/local/bin/node" ] && [ ! -e "$ROOTFS/usr/local/bin/node" ]; then
+    rm -f "$ROOTFS/usr/local/bin/node" "$ROOTFS/usr/local/bin/npm" "$ROOTFS/usr/local/bin/npx"
+    echo -e "  ${GREEN}✓${NC} liens morts /usr/local/bin/node,npm,npx retires (node reste en /usr/bin)"
+fi
+
 # ── Etape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 # ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo-operator ────────────────────────────
@@ -1164,22 +1242,34 @@ plugins=keyfile
 unmanaged-devices=interface-name:apn*;interface-name:tun*;interface-name:veth*;interface-name:docker*;interface-name:br-*;interface-name:osmo*
 NMCONF
 
-# Chromium : installe au PREMIER DEMARRAGE, depuis les .snap embarques quand ils
+# Firefox : installe au PREMIER DEMARRAGE, depuis les .snap embarques quand ils
 # sont la, depuis le magasin sinon. Voir la variante desktop du chroot.
 #
-# CHROMIUM ET PAS FIREFOX, et ce n'est pas une preference.
-# Les deux ne sont disponibles qu'en snap sur jammy - le .deb "chromium-browser"
-# comme le .deb "firefox" sont des paquets de TRANSITION qui appellent snapd.
-# Mais sur ce banc, Firefox ne capte pas le micro et Chrome oui, constate des
-# deux cotes : le tableau de bord a besoin de getUserMedia pour injecter la voix
-# dans gsm_mic, et un navigateur qui ne capture pas rend cette fonction
-# inutilisable. La cause de fond - PulseAudio en mode systeme, dont le socket
-# n'est pas la ou un snap le cherche - est corrigee par osmo-pulse-link.sh plus
-# bas, mais Chromium reste le navigateur qui fonctionne dans les deux cas.
+# FIREFOX. [2026-08-30] Ce bloc disait "CHROMIUM ET PAS FIREFOX, et ce n'est pas
+# une preference", au motif que "Firefox ne capte pas le micro et Chrome oui".
+# Le motif etait REEL mais mal attribue : Firefox ne captait rien parce que le
+# snap ne pouvait pas se CONNECTER a PulseAudio du tout, ni en entree ni en
+# sortie. Le journal du noyau le dit :
+#     apparmor="DENIED" operation="connect" profile="snap.firefox.firefox"
+#     name="/run/pulse/native" fsuid=0 ouid=107
+# Le profil autorise pourtant ce chemin -- mais avec le qualificateur `owner`,
+# qui exige proprietaire == fsuid. Le socket appartenait a `pulse` (107), la
+# session tourne en root (0). Le commentaire d'origine creditait deja
+# osmo-pulse-link.sh d'avoir corrige "la cause de fond" : il n'en avait corrige
+# que la moitie (le CHEMIN, par un lien symbolique -- alors qu'AppArmor resout
+# le chemin reel et que le vrai manque etait le PROPRIETAIRE).
+# Le chown est pose la-bas ; le son et le micro marchent dans Firefox, et la
+# raison de preferer Chromium tombe avec.
+#
+# Les deux ne sont de toute facon disponibles qu'en snap sur jammy : les .deb
+# "firefox" et "chromium-browser" sont des paquets de TRANSITION qui appellent
+# snapd. Firefox declare la MEME base (core24) et les MEMES fournisseurs de
+# contenu (mesa-2404, gtk-common-themes, gnome-46-2404) que chromium : la
+# mecanique ci-dessous ne change pas, seul le nom du snap change.
 if [ "$ISO_DESKTOP" = "1" ]; then
-cat > "$ROOTFS/etc/systemd/system/osmo-chromium-snap.service" <<'CRSNAP'
+cat > "$ROOTFS/etc/systemd/system/osmo-firefox-snap.service" <<'CRSNAP'
 [Unit]
-Description=Installation de Chromium (snap) au premier demarrage
+Description=Installation de Firefox (snap) au premier demarrage
 # snapd.seeded : snapd a fini de deballer ce que l'image portait deja. Partir
 # avant, c'est installer par-dessus une graine encore en cours de montage.
 After=snapd.seeded.service network-online.target
@@ -1191,29 +1281,29 @@ Type=oneshot
 RemainAfterExit=yes
 # Poser ~1 Go de snaps prend des MINUTES sur un medium optique ou une cle lente.
 # Le delai par defaut de systemd (90 s) tuait l'unite en pleine installation, et
-# ne laissait derriere lui qu'un "chromium introuvable" sans rapport apparent.
+# ne laissait derriere lui qu'un "firefox introuvable" sans rapport apparent.
 TimeoutStartSec=infinity
 # Hors ligne d'abord (les .snap embarques), le magasin ensuite : un banc sans
 # Internet doit quand meme avoir son navigateur.
 #
 # L'ORDRE COMPTE. Un snap ne s'installe pas avant sa base : "snap install
-# chromium.snap" sans core24 pose sort sur
-#     cannot install snap "chromium": snap "core24" is required
+# firefox.snap" sans core24 pose sort sur
+#     cannot install snap "firefox": snap "core24" is required
 # Le fichier "ordre", ecrit au build, porte la sequence exacte (snapd, la base,
-# puis les fournisseurs de contenu, puis chromium).
+# puis les fournisseurs de contenu, puis firefox).
 #
 # LES INTERFACES DE CONTENU decident si le navigateur DEMARRE, pas seulement
-# s'il est joli : chromium 15x passe par gpu-2404 (mesa-2404) et gnome-46-2404
+# s'il est joli : firefox 15x passe par gpu-2404 (mesa-2404) et gnome-46-2404
 # via sa command-chain. Sans ces slots connectes, le lanceur du snap s'arrete
 # avant meme d'ouvrir une fenetre. audio-record, elle, n'est jamais connectee
 # d'office : sans elle le bac a sable refuse le micro et getUserMedia rend
 # NotFoundError, sans qu'une seule ligne ne parle de confinement.
 #
-# Tout est journalise dans /var/log/osmo-chromium-snap.log : la version
+# Tout est journalise dans /var/log/osmo-firefox-snap.log : la version
 # precedente envoyait stderr dans /dev/null, et une installation ratee etait
 # indiscernable d'une installation absente.
 ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
-  exec >>/var/log/osmo-chromium-snap.log 2>&1; \
+  exec >>/var/log/osmo-firefox-snap.log 2>&1; \
   echo "=== $(date -Is) installation des snaps ==="; \
   for a in *.assert; do [ -e "$a" ] && snap ack "$a"; done; \
   if [ -s ordre ]; then \
@@ -1223,10 +1313,10 @@ ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
       snap install "$s.snap" || echo "ECHEC hors ligne: $s"; \
     done < ordre; \
   fi; \
-  snap list chromium >/dev/null 2>&1 || snap install chromium || true; \
+  snap list firefox >/dev/null 2>&1 || snap install firefox || true; \
   for i in gpu-2404 gnome-46-2404 gtk-3-themes icon-themes sound-themes \
            audio-record audio-playback camera removable-media; do \
-    snap connect "chromium:$i" || true; \
+    snap connect "firefox:$i" || true; \
   done; \
   snap list; \
   touch /var/lib/osmo-snaps/.installe'
@@ -1234,7 +1324,7 @@ ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
 [Install]
 WantedBy=multi-user.target
 CRSNAP
-echo -e "  ${GREEN}✓${NC} osmo-chromium-snap.service (Chromium par snap, au premier boot)"
+echo -e "  ${GREEN}✓${NC} osmo-firefox-snap.service (Firefox par snap, au premier boot)"
 fi
 
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
@@ -1478,7 +1568,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # ni /etc/calamares dans le squashfs livre). On installe, PUIS on verifie
     # que le binaire est bien la ; sinon on arrete le build.
     apt-get install -y $APT_OPTS \
-        calamares squashfs-tools dosfstools efibootmgr os-prober \
+        calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
+        grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
     # On est DANS le chroot (ce bloc tourne sous "chroot ... bash -c") : le
@@ -1491,6 +1582,47 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         echo "        (dependance Qt/KDE manquante au miroir ? relancer avec un cache .deb)" >&2
         exit 1
     fi
+
+    # ── LES OUTILS QUE CALAMARES APPELLE, ET QU IL NE TIRE PAS ──────────────
+    # unpackfs ne fait pas la copie lui-meme : il lance unsquashfs, puis RSYNC.
+    # Le paquet calamares ne depend d aucun des deux. Sans rsync, l installeur
+    # va jusqu au bout du partitionnement, puis s arrete sur
+    # "rsync a echoue avec le code d erreur 127" - 127, c est "commande
+    # introuvable", et rien dans le message ne le dit. Le disque cible reste
+    # partitionne et vide. On verifie donc a la construction, pas sur le banc.
+    for _t in rsync unsquashfs; do
+        if ! command -v "$_t" >/dev/null 2>&1; then
+            echo "ERREUR: $_t absent du rootfs - unpackfs echouerait a l installation." >&2
+            exit 1
+        fi
+    done
+
+    # ── GRUB DOIT ETRE DANS LA CIBLE, PAS SEULEMENT SUR LA MACHINE DE BUILD ──
+    # ISO_HOST_PKGS pose grub-efi-amd64-bin sur l HOTE, pour fabriquer l image
+    # amorcable. Le module bootloader de calamares, lui, lance grub-install DANS
+    # LE SYSTEME INSTALLE - c est-a-dire dans ce rootfs. Le rootfs n avait que
+    # grub-common (grub-mkconfig, grub-probe) et PAS grub2-common, qui fournit
+    # grub-install : l installation allait jusqu au bout de la copie, puis
+    # s arretait sur
+    #     "grub-install --target=x86_64-efi ... a renvoye le code d erreur 127"
+    # 127 = commande introuvable, sur un disque deja partitionne et rempli.
+    #
+    # Les binaires SIGNES vont avec : bootloader.conf pose
+    # efiBootloaderId=ubuntu precisement pour que le systeme installe reste
+    # amorcable en Secure Boot, ce qui suppose shimx64 et grubx64 signes ici.
+    for _t in grub-install grub-mkconfig grub-probe; do
+        if ! command -v "$_t" >/dev/null 2>&1; then
+            echo "ERREUR: $_t absent du rootfs - le module bootloader echouerait." >&2
+            exit 1
+        fi
+    done
+    for _f in /usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed \
+              /usr/lib/shim/shimx64.efi.signed; do
+        if [ ! -e "$_f" ]; then
+            echo "ERREUR: $_f absent - le systeme installe ne demarrerait pas en Secure Boot." >&2
+            exit 1
+        fi
+    done
 
     # ── CHROMIUM : LE SNAP, PAS LE DEB ─────────────────────────────────────
     # Sur jammy, "apt install chromium-browser" (comme "apt install firefox")
@@ -1525,27 +1657,27 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # au lieu de les recopier : la prochaine bascule de base (core26...) se
     # fera toute seule. cups est volontairement ecarte - c est un fournisseur
     # d impression optionnel de 200 Mo, son absence ne bloque pas le demarrage.
-    ( cd /var/lib/osmo-snaps && snap download chromium --basename=chromium ) \
-        || { echo "  [desktop] WARN: snap download chromium a echoue"; _snap_ok=0; }
+    ( cd /var/lib/osmo-snaps && snap download firefox --basename=firefox ) \
+        || { echo "  [desktop] WARN: snap download firefox a echoue"; _snap_ok=0; }
 
     #
     # Pas une seule apostrophe ici : ce bloc tourne dans un bash -c en quotes
     # simples (voir plus haut) - les programmes awk sont donc en guillemets,
     # avec \$2 echappe pour qu il arrive intact a awk.
     _base=""; _providers=""
-    if [ -s /var/lib/osmo-snaps/chromium.snap ] && command -v unsquashfs >/dev/null; then
-        unsquashfs -cat /var/lib/osmo-snaps/chromium.snap meta/snap.yaml \
-            > /tmp/chromium-snap.yaml 2>/dev/null || true
+    if [ -s /var/lib/osmo-snaps/firefox.snap ] && command -v unsquashfs >/dev/null; then
+        unsquashfs -cat /var/lib/osmo-snaps/firefox.snap meta/snap.yaml \
+            > /tmp/firefox-snap.yaml 2>/dev/null || true
         # || true : ce chroot tourne sous set -e, et grep qui ne retient rien
         # sort avec 1 - une liste vide ferait echouer la construction entiere.
-        _base=$(awk "/^base:[[:space:]]/{print \$2; exit}" /tmp/chromium-snap.yaml) || true
-        _providers=$(awk "/default-provider:[[:space:]]/{print \$2}" /tmp/chromium-snap.yaml \
+        _base=$(awk "/^base:[[:space:]]/{print \$2; exit}" /tmp/firefox-snap.yaml) || true
+        _providers=$(awk "/default-provider:[[:space:]]/{print \$2}" /tmp/firefox-snap.yaml \
                      | sort -u | grep -vx cups) || true
-        rm -f /tmp/chromium-snap.yaml
+        rm -f /tmp/firefox-snap.yaml
     fi
     [ -n "$_base" ] || _base=core24
     [ -n "$_providers" ] || _providers="mesa-2404 gnome-46-2404 gtk-common-themes"
-    echo "  [desktop] chromium : base=$_base, contenu=$(echo $_providers)"
+    echo "  [desktop] firefox : base=$_base, contenu=$(echo $_providers)"
 
     # snapd en tete : sur une base core2x, les snaps montent /snap/snapd et
     # refusent de demarrer sans lui.
@@ -1557,14 +1689,14 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     done
     # En dernier, et jamais en "[ ... ] && ..." : sous set -e, un test faux
     # en fin de bloc arreterait le chroot net.
-    if [ -s /var/lib/osmo-snaps/chromium.snap ]; then
-        echo chromium >> /var/lib/osmo-snaps/ordre
+    if [ -s /var/lib/osmo-snaps/firefox.snap ]; then
+        echo firefox >> /var/lib/osmo-snaps/ordre
     fi
-    systemctl enable osmo-chromium-snap 2>/dev/null || true
+    systemctl enable osmo-firefox-snap 2>/dev/null || true
     if [ "$_snap_ok" = "1" ]; then
-        echo "  [desktop] Chromium : snap embarque ($(du -sh /var/lib/osmo-snaps 2>/dev/null | cut -f1)), installe au premier boot"
+        echo "  [desktop] Firefox : snap embarque ($(du -sh /var/lib/osmo-snaps 2>/dev/null | cut -f1)), installe au premier boot"
     else
-        echo "  [desktop] Chromium : snap NON embarque - installation depuis le magasin au premier boot (reseau requis)"
+        echo "  [desktop] Firefox : snap NON embarque - installation depuis le magasin au premier boot (reseau requis)"
     fi
 
     systemctl set-default graphical.target
@@ -1637,7 +1769,7 @@ GDM
     fi
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
-    echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Chromium snap"
+    echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox snap"
 fi
 
 # ── Les certificats, POUR DE BON ────────────────────────────────────────────
@@ -2259,12 +2391,46 @@ cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
 # pendant que pactl listait deux entrees en RUNNING.
 #
 # Toujours exit 0 : l'audio ne doit jamais empecher la pile de monter.
+#
+# [2026-08-30] LE LIEN NE SUFFISAIT PAS : IL FAUT AUSSI LE PROPRIETAIRE.
+# Le lien ci-dessous est necessaire mais pas suffisant, et le symptome etait
+# tenace : les haut-parleurs marchaient, pactl listait la carte en RUNNING, et
+# le navigateur restait MUET. La raison est dans le profil AppArmor du snap
+# (/var/lib/snapd/apparmor/profiles/snap.firefox.firefox) :
+#
+#     owner /{,var/}run/pulse/native rwk,
+#
+# Le chemin EST autorise. C'est le qualificateur `owner` qui refuse : AppArmor
+# exige que le proprietaire du fichier soit egal au fsuid du processus. Le
+# journal du noyau le dit mot pour mot :
+#
+#     apparmor="DENIED" operation="connect" profile="snap.firefox.firefox"
+#     name="/run/pulse/native" fsuid=0 ouid=107
+#
+# fsuid=0 (la session tourne en root) contre ouid=107 (le socket appartient a
+# l'utilisateur `pulse`, puisque c'est lui qui fait tourner le demon systeme).
+# Deux nombres differents, et tout le reste marche : c'est exactement le genre
+# d'ecart qu'on cherche pendant des heures cote « permission micro » ou
+# « pilote son », alors que la carte joue deja.
+#
+# ⚠️ AppArmor resout le CHEMIN REEL : le lien symbolique ci-dessous ne masque
+# rien, la regle appliquee est bien celle de /run/pulse/native, pas celle de
+# /run/user/<uid>/pulse/native.
+#
+# On donne donc le socket a l'uid de la session graphique. Sur cette ISO c'est
+# root (autologin root, cf. gdm3/custom.conf) ; OSMO_PULSE_UID permet d'en
+# choisir un autre. Le demon, lui, continue de tourner en `pulse` : accept()
+# ne demande pas d'etre proprietaire, et le mode srwxrwxrwx laisse tout le
+# monde se connecter. Un seul socket ne peut avoir qu'un proprietaire : un
+# navigateur SNAP lance sous un AUTRE compte que celui-ci resterait muet.
 set -u
+PUID="${OSMO_PULSE_UID:-0}"
 for d in /run/user/*; do
     [ -d "$d" ] || continue
     mkdir -p "$d/pulse" 2>/dev/null || continue
     ln -sfn /run/pulse/native "$d/pulse/native" 2>/dev/null || true
 done
+[ -S /run/pulse/native ] && chown "$PUID" /run/pulse/native 2>/dev/null || true
 exit 0
 PLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
@@ -2281,7 +2447,7 @@ ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # PulseAudio tourne ici en mode SYSTEME : il n'ecoute que sur /run/pulse/native.
 # Or une application cherche $XDG_RUNTIME_DIR/pulse/native, et c'est ce
 # chemin-la - et lui seul - que snapd monte dans le bac a sable d'un snap.
-# Chromium etant un snap (voir osmo-chromium-snap.service), il ne trouverait aucun
+# Firefox etant un snap (voir osmo-firefox-snap.service), il ne trouverait aucun
 # serveur audio, enumerait ZERO entree, et getUserMedia rendait
 # « NotFoundError — The object can not be found here ». Le diagnostic partait
 # invariablement sur une permission micro refusee, alors que la machine a deux
@@ -2868,14 +3034,66 @@ if [ ! -r /etc/calamares/settings.conf ]; then
     echo "Calamares n est pas installe sur cette image (ISO_DESKTOP=0 ?)." >&2
     exit 1
 fi
-# Deja installe : /run/live/medium n existe que quand on a demarre sur le medium.
-if [ ! -d /run/live/medium ]; then
-    echo "Ce systeme ne tourne pas depuis une cle live - rien a installer." >&2
+
+# On repasse root TOUT DE SUITE, et sur ce script - pas sur calamares. Ce qui
+# suit (monter le medium, demonter une cible restee ouverte) demande root ;
+# le faire apres pkexec, c etait le faire en simple utilisateur, donc pas du
+# tout. pkexec transmet DISPLAY et XAUTHORITY, l interface s ouvre quand meme.
+if [ "$(id -u)" -ne 0 ]; then
+    exec pkexec --disable-internal-agent "$0" "$@"
+fi
+
+# ── Retrouver le medium, sans le supposer ───────────────────────────────────
+# unpackfs.conf pointe /run/live/medium/live/filesystem.squashfs. Ce chemin
+# n est PAS garanti. Au demarrage sur l entree "persistant", live-boot balaie
+# les disques a la recherche d un volume de persistance et monte la cle sous
+# /run/live/persistence/sda ; c est LA qu il trouve le squashfs, et
+# /run/live/medium reste un repertoire vide. Calamares echoue alors sur
+# "Mauvaise configuration unpackfs" - mais APRES avoir partitionne le disque
+# cible, qui reste vide et bon a rien.
+#
+# On ne devine donc pas le chemin, on le DEDUIT de ce qui tourne : la racine est
+# un overlay sur /run/live/rootfs/filesystem.squashfs, lui-meme un loop dont le
+# fichier de backing est le squashfs pose SUR le medium. Deux dirname et on
+# tient la racine du medium, ou que live-boot l ait montee. Un bind la remet a
+# l endroit ou unpackfs la cherche.
+MEDIUM=/run/live/medium
+if [ ! -e "$MEDIUM/live/filesystem.squashfs" ]; then
+    _loop=$(findmnt -no SOURCE /run/live/rootfs/filesystem.squashfs 2>/dev/null || true)
+    _sq=""
+    [ -n "$_loop" ] && _sq=$(losetup -nO BACK-FILE "$_loop" 2>/dev/null || true)
+    if [ -n "$_sq" ] && [ -e "$_sq" ]; then
+        mkdir -p "$MEDIUM"
+        mount --bind "$(dirname "$(dirname "$_sq")")" "$MEDIUM" 2>/dev/null || true
+    fi
+fi
+
+# Le FICHIER, pas le repertoire. Tester "-d /run/live/medium" ne prouvait rien :
+# le repertoire existe meme vide, le test passait, et l echec tombait plus loin
+# dans Calamares - au pire endroit, le disque deja repartitionne.
+if [ ! -e "$MEDIUM/live/filesystem.squashfs" ]; then
+    echo "Medium live introuvable - ce systeme ne tourne pas depuis une cle live," >&2
+    echo "ou le squashfs n est pas lisible. Rien a installer." >&2
     exit 1
 fi
-if [ "$(id -u)" -ne 0 ]; then
-    exec pkexec --disable-internal-agent /usr/bin/calamares -d "$@"
-fi
+
+# ── Nettoyer la cible d un essai precedent ──────────────────────────────────
+# Quand une etape echoue, Calamares saute tous les jobs suivants, "umount"
+# compris : la cible reste montee sous /tmp/calamares-root-*. Au lancement
+# d apres il voit un disque monte, retire "Effacer le disque" de la liste et ne
+# laisse que le partitionnement manuel. Chaque echec degradait l essai suivant.
+for _t in /tmp/calamares-root-*; do
+    [ -d "$_t" ] || continue
+    if mountpoint -q "$_t"; then
+        umount -R "$_t" 2>/dev/null || {
+            echo "Cible $_t encore montee et non demontable - fermez ce qui l occupe" >&2
+            echo "(un terminal, un gestionnaire de fichiers) ou redemarrez." >&2
+            exit 1
+        }
+    fi
+    rmdir "$_t" 2>/dev/null || true
+done
+
 exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"
@@ -2904,6 +3122,60 @@ DESKTOP
         chmod +x "$_h/Bureau/osmo-install.desktop" "$_h/Desktop/osmo-install.desktop" 2>/dev/null || true
     done
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+
+    # ── LES ICONES DU BUREAU DOIVENT ETRE "APPROUVEES" ─────────────────────
+    # Un .desktop pose sur le bureau ne s affiche avec son nom et son icone que
+    # s il est executable ET porteur de l attribut metadata::trusted. Sans lui,
+    # l extension DING d Ubuntu affiche le NOM DE FICHIER BRUT
+    # ("osmo-install.desktop") avec une pastille rouge, et le double-clic ne
+    # lance rien - l icone est la, elle ne sert a rien.
+    #
+    # Cet attribut ne vit PAS dans le fichier : il est range dans les
+    # metadonnees gvfs de chaque utilisateur (~/.local/share/gvfs-metadata),
+    # ecrites par un demon de session. On ne peut donc pas le poser ici, dans
+    # le chroot, sans session ni bus. On le pose au premier login.
+    cat > "$ROOTFS/usr/local/bin/osmo-trust-desktop" <<'TRUSTD'
+#!/bin/bash
+# Marque les raccourcis du bureau comme approuves. Lance au login (autostart).
+set -u
+for d in "$HOME/Desktop" "$HOME/Bureau"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.desktop; do
+        [ -f "$f" ] || continue
+        chmod +x "$f" 2>/dev/null || true
+        # DING lit la chaine "true" ; Nautilus a longtemps lu "yes". On pose
+        # "true" : c est DING qui dessine le bureau sous Ubuntu.
+        gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+    done
+    # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
+    # force a rebalayer, sinon la pastille rouge reste jusqu au login suivant.
+    touch "$d" 2>/dev/null || true
+done
+TRUSTD
+    chmod +x "$ROOTFS/usr/local/bin/osmo-trust-desktop"
+
+    # /etc/xdg/autostart et pas ~/.config/autostart : l entree vaut alors pour
+    # TOUS les comptes, y compris ceux que l installeur creera sur le disque.
+    install -d "$ROOTFS/etc/xdg/autostart"
+    cat > "$ROOTFS/etc/xdg/autostart/osmo-trust-desktop.desktop" <<'TRUSTA'
+[Desktop Entry]
+Type=Application
+Name=osmo-operator - approuver les raccourcis du bureau
+Exec=/usr/local/bin/osmo-trust-desktop
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+TRUSTA
+
+    # Le paquet calamares pose SA propre entree de menu, qui lance
+    # /usr/bin/calamares directement. Elle court-circuite osmo-install : ni le
+    # medium remis a sa place, ni la cible d un essai precedent demontee - donc
+    # exactement la panne qu on vient de corriger, a un clic de la bonne icone.
+    # NoDisplay la retire des menus sans toucher au paquet.
+    if [ -f "$ROOTFS/usr/share/applications/calamares.desktop" ]; then
+        grep -q '^NoDisplay=' "$ROOTFS/usr/share/applications/calamares.desktop" \
+            || echo 'NoDisplay=true' >> "$ROOTFS/usr/share/applications/calamares.desktop"
+    fi
 
     echo -e "  ${GREEN}✓${NC} installeur ${CYAN}Calamares${NC} : /usr/local/bin/osmo-install (+ icone sur le bureau)"
 elif [ "${ISO_DESKTOP:-0}" = "1" ]; then
@@ -3264,7 +3536,9 @@ printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
 printf '      \033[1;32mcd /opt/GSM/osmo-operator && ./start-direct.sh\033[0m\n\n'
 printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
 printf '  \033[2mChromium est confine par defaut ; --no-sandbox pour passer outre.\033[0m\n'
-if [ -d /run/live/medium ]; then
+# Le squashfs monte prouve qu on tourne en live ; /run/live/medium, non - il
+# existe vide quand live-boot a monte le medium ailleurs (entree "persistant").
+if [ -e /run/live/rootfs/filesystem.squashfs ]; then
     printf '  \033[2mSysteme live : \033[0mosmo-install\033[2m pour l installer sur le disque.\033[0m\n'
 fi
 printf '\n'

@@ -883,7 +883,17 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     #
     # La copie libre et son COPY sont supprimes ; PONT_PY reste disponible pour
     # qui veut essayer une variante, mais c est alors un choix explicite.
-    _PONT="${PONT_PY:-${NITB_ROOT:-/opt/GSM/osmo-operator}/pont/pont.py}"
+    #
+    # [2026-08-30] NITB_ROOT RETIRE DE CE CHEMIN. Le defaut passait par lui, et
+    # NITB_ROOT n appartient pas a ce depot : qosmo-grgsm/environnement/paths.env
+    # le pose a "$GSM_ROOT/osmo_egprs" - l ANCIEN nom de cet arbre. Le pont etait
+    # donc cherche dans /opt/GSM/osmo_egprs/pont/pont.py, d ou
+    # "pont introuvable (/opt/GSM/osmo_egprs/pont/pont.py)" sur un banc ou le
+    # fichier est pourtant la, dans le depot. Pire quand ce vieux dossier existe
+    # encore : on y trouve une COPIE, et on retombe mot pour mot dans la panne
+    # decrite ci-dessus - un pont hors depot qui derive sans que rien ne le dise.
+    # $HERE est le repertoire de CE script : le pont voyage avec lui, toujours.
+    _PONT="${PONT_PY:-$HERE/pont/pont.py}"
 
     # ── LE PONT DOIT SAVOIR SUR QUELLE CELLULE IL TRAVAILLE ─────────────────
     # pont.py fait le codage/decodage de canal entre le Calypso de QEMU et la

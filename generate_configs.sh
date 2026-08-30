@@ -756,25 +756,45 @@ apply_native_post_patches() {
     local dest="${1:?apply_native_post_patches : racine manquante}"
     local op_id="${2:-1}" n_ms="${3:-2}" host_ip="${4:-127.0.0.2}"
     local node="${5:-$(osmo_node_id)}" wanf="${6:-${WAN_CONF_FILE:-/etc/osmo-wan.conf}}"
+    # ── DEUX ADRESSES DE PLUS, ET POURQUOI ELLES NE SONT PAS host_ip ────────
+    # sgsn_gtp_ip  Le SGSN et le GGSN ouvrent tous deux un socket GTP. Leur
+    #              donner la meme adresse - ce que faisait ce patch, qui ecrivait
+    #              host_ip dans « gtp local-ip » alors que le gabarit du GGSN
+    #              met ce meme host_ip dans « gtp bind-ip » - donne un GGSN qui
+    #              prend le port et un SGSN qui meurt sur « Address already in
+    #              use », relance par systemd sans fin. Le packet attach ne se
+    #              termine jamais. Par defaut : la passerelle du segment prive
+    #              du noeud, 192.168.<noeud+1>.1, posee par osmo-ip-plan.sh.
+    # hlr_ip       « gsup remote-ip » et le « remote-ip » du bloc hlr du MSC
+    #              designent OU ECOUTE LE HLR, pas l adresse locale du noeud.
+    #              Les aligner sur host_ip ne se voyait pas tant que les deux
+    #              valaient 127.0.0.2 ; des que host_ip bouge, le MSC et le SGSN
+    #              appellent une adresse ou personne ne repond. On suit donc le
+    #              « bind ip » d osmo-hlr.cfg.
+    local sgsn_gtp_ip="${7:-}"
+    local hlr_ip="${8:-127.0.0.2}"
     local cfg="$dest/osmocom"
     [ -d "$cfg" ] || return 0
     [ "$n_ms" -ge 1 ] 2>/dev/null || n_ms=1
     case "$node" in [1-9]) ;; *) node=1 ;; esac
+    # APRES la validation du noeud, jamais avant : un $node vide donnerait
+    # 192.168.1.1 - le LAN du banc, ou vivent deja les VM et le hub SS7.
+    : "${sgsn_gtp_ip:=192.168.$((node + 1)).1}"
 
     _write_sms_routing_native "$cfg/sms-routing.conf" \
         "$node" "$op_id" "$n_ms" "$host_ip" "$wanf"
 
     if [ -f "$cfg/osmo-sgsn.cfg" ]; then
         sed -i \
-            -e "s/^\([[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\).*/\1${host_ip}/" \
-            -e "s/^\([[:space:]]*gsup[[:space:]]\+remote-ip[[:space:]]\+\).*/\1${host_ip}/" \
+            -e "s/^\([[:space:]]*gtp[[:space:]]\+local-ip[[:space:]]\+\).*/\1${sgsn_gtp_ip}/" \
+            -e "s/^\([[:space:]]*gsup[[:space:]]\+remote-ip[[:space:]]\+\).*/\1${hlr_ip}/" \
             -e "/^[[:space:]]*bind udp local\$/,/^[[:space:]]*!\$/ s/^\([[:space:]]*listen[[:space:]]\+\).*/\1${host_ip} 23000/" \
             "$cfg/osmo-sgsn.cfg"
     fi
 
     if [ -f "$cfg/osmo-msc.cfg" ]; then
         sed -i \
-            -e "/^hlr\$/,/^!\$/ s/^\([[:space:]]*remote-ip[[:space:]]\+\).*/\1${host_ip}/" \
+            -e "/^hlr\$/,/^!\$/ s/^\([[:space:]]*remote-ip[[:space:]]\+\).*/\1${hlr_ip}/" \
             "$cfg/osmo-msc.cfg"
     fi
 

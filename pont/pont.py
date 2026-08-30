@@ -161,9 +161,16 @@ def kc_read():
             pass
         _kc_fd = None
         _kc_cache = (0, None)
+        globals()["_kc_seq_vu"] = 0     # fichier absent = aucun producteur
         return _kc_cache
     if len(b) < 14:
         _kc_cache = (0, None); return _kc_cache
+    # Le seq DISTINGUE « personne n'a rien ecrit / le fichier a ete remis a
+    # zero » (seq == 0) de « un producteur affirme un etat » (seq > 0), y
+    # compris l'etat « en clair ». C'est ce qui permet de ne plus deviner
+    # quand retenir la cle -- cf. a5_apply.
+    global _kc_seq_vu
+    _kc_seq_vu = struct.unpack_from("<I", b, 0)[0]
     algo = b[4]
     kc = b[6:14]
     if algo < 1 or algo > 3 or not any(kc):
@@ -285,7 +292,31 @@ def kc_read():
 # serait chiffrer un canal qui ne l est pas. Retenue OFF, et c est le bon
 # reglage pour la premiere fois : il n y a plus d effacement parasite a
 # compenser. PONT_KC_RETENTION=1 la reactive pour comparer.
-KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "0") == "1"
+# [2026-08-30] DEFAUT REMIS A 1, ET CETTE FOIS AVEC UN DISCRIMINANT.
+# La note du 27/08 au soir mettait la retenue a 0 en disant : « Desormais QEMU
+# publie /dev/shm/calypso_kc depuis le NDB du DSP (calypso_dsp_shunt.c,
+# shunt_publish_kc) ». Cette fonction N'EXISTAIT PAS -- verifie, `grep
+# shunt_publish_kc` ne rendait rien dans tout qosmo-grgsm. On a donc coupe le
+# seul filet qui restait en se fiant a un producteur imaginaire : plus personne
+# n'ecrivait de cle valable, le fichier restait a zero, et le pont laissait EN
+# CLAIR un canal chiffre. Tout ce qui suit le CIPHERING MODE COMMAND ratait le
+# CRC -- SDCCH d'abord, puis le TCH, qui CONSERVE le chiffrement apres
+# l'ASSIGNMENT COMMAND. D'ou des CRC qui n'apparaissent qu'au deuxieme appel :
+# le premier passe en clair, le second trouve un reseau qui chiffre.
+#
+# shunt_publish_kc existe maintenant (calypso_dsp_shunt.c), mais la retenue
+# n'est plus un pari : le SEQ tranche.
+#     seq == 0  le fichier n'a jamais ete ecrit, ou il a ete REMIS A ZERO par
+#               l'effaceur d'osmocon (DM_EST_REQ). Personne n'affirme rien ->
+#               on garde la cle qu'on avait.
+#     seq  > 0  un producteur AFFIRME un etat, « en clair » compris (le
+#               publieur du shunt ecrit toujours un enregistrement complet,
+#               jamais des zeros). On le croit, et on lache.
+# Les trois marqueurs devines d'avant (seq de dcch_cfg, SABM, IMMEDIATE
+# ASSIGNMENT) devenaient faux des qu'un cas de plus se presentait. Celui-ci ne
+# devine pas : il lit qui parle.
+KC_RETENTION = os.environ.get("PONT_KC_RETENTION", "1") == "1"
+_kc_seq_vu = 0           # seq du dernier enregistrement lu (0 = personne)
 _kc_tenu = None          # (algo, kc) retenu, ou None
 _kc_retenues = 0
 _kc_laches = 0
@@ -334,13 +365,18 @@ def a5_apply(burst148, fn, uplink):
     global _kc_tenu, _kc_retenues, _a5_last
     if algo:
         _kc_tenu = (algo, kc)                 # cle fraiche : on la retient
-    elif KC_RETENTION and _kc_tenu is not None:
-        algo, kc = _kc_tenu                   # effacement parasite : on tient
+    elif KC_RETENTION and _kc_tenu is not None and _kc_seq_vu == 0:
+        # seq == 0 : le fichier a ete remis a zero (osmocon, DM_EST_REQ) ou
+        # personne ne l'ecrit. Aucune AFFIRMATION de clair -> on tient.
+        algo, kc = _kc_tenu
         _kc_retenues += 1
         if _kc_retenues == 1 or (_kc_retenues % 2000) == 0:
-            ST.log("Kc EFFACE EN COURS DE SESSION -- on garde la cle (#%d) ; "
-                   "elle sera lachee a la prochaine SABM. Cf. osmocon DM_EST_REQ."
-                   % _kc_retenues)
+            ST.log("Kc EFFACE EN COURS DE SESSION (seq=0) -- on garde la cle "
+                   "(#%d) ; lachee a l'IMMEDIATE ASSIGNMENT. Cf. osmocon "
+                   "DM_EST_REQ." % _kc_retenues)
+    elif _kc_tenu is not None and _kc_seq_vu:
+        # Un producteur affirme « en clair » : on le croit et on lache.
+        kc_lacher("la couche 1 declare le clair (seq=%d)" % _kc_seq_vu)
     if not algo:
         # [audit A2] _a5_last = etat de SESSION DL (badge/DEDIE-TRACE) : SEUL le
         # thread DL l'ecrit (rebind atomique), le montant n'y touche plus -> plus
