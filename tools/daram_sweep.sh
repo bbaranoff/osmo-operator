@@ -11,7 +11,7 @@
 # Usage (conteneur) : /opt/GSM/daram_sweep.sh
 # Env : ADDRS (defaut "0x0080 0x2a00 0x0060"), SETTLE (attente post-boot, 50s)
 set -u
-RUN=/opt/GSM/qemu-src/run.sh
+RUN=/opt/GSM/qosmo-grgsm/run.sh
 QLOG=/root/qemu.log
 ADDRS="${ADDRS:-0x0080 0x2a00 0x0060}"
 SETTLE="${SETTLE:-50}"

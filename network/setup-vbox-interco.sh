@@ -3,13 +3,13 @@
 # network/setup-vbox-interco.sh - interconnexion WAN entre CETTE machine et des
 # VM VirtualBox, sur un seul PC
 #
-# Le WAN d'osmo_egprs relie des machines par leur IP publique. Pour l'eprouver
+# Le WAN d'osmo-operator relie des machines par leur IP publique. Pour l'eprouver
 # sans louer N serveurs, on remplace les pairs distants par des VM et le lien
 # public par un segment host-only : la maquette est la meme, les adresses sont
 # locales.
 #
 #   ┌─ cette machine ────────────┐        ┌─ VM osmo-wan-2 ─┐  ┌─ VM osmo-wan-3 ─┐
-#   │ lab docker ou natif        │        │ ISO osmo_egprs  │  │ ISO osmo_egprs  │
+#   │ lab docker ou natif        │        │ ISO osmo-operator  │  │ ISO osmo-operator  │
 #   │ noeud 1 · indicatif 11     │        │ noeud 2 · 22    │  │ noeud 3 · 33    │
 #   └──────────┬─────────────────┘        └────────┬────────┘  └────────┬────────┘
 #              │ vboxnet0 192.168.56.11            │ .12                │ .13

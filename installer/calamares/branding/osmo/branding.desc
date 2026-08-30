@@ -5,13 +5,13 @@ componentName: osmo
 # de version) que l'ecran d'accueil afficherait sinon vers des pages qui
 # n'existent pas pour ce projet.
 strings:
-    productName:         osmo_egprs
-    shortProductName:    osmo_egprs
+    productName:         osmo-operator
+    shortProductName:    osmo-operator
     version:             0.1
     shortVersion:        0.1
-    versionedName:       osmo_egprs 0.1 - banc GSM/EGPRS
-    shortVersionedName:  osmo_egprs 0.1
-    bootloaderEntryName: osmo_egprs
+    versionedName:       osmo-operator 0.1 - banc GSM/EGPRS
+    shortVersionedName:  osmo-operator 0.1
+    bootloaderEntryName: osmo-operator
     productUrl:          ""
     supportUrl:          ""
     knownIssuesUrl:      ""

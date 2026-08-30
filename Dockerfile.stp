@@ -108,7 +108,7 @@ RUN mkdir -p /etc/osmocom \
 # et les objets de compilation — l'essentiel du volume.
 FROM base
 LABEL org.opencontainers.image.title="osmocom-stp" \
-      org.opencontainers.image.description="Inter-STP osmo_egprs — hub SS7/M3UA, PC 0.0.0"
+      org.opencontainers.image.description="Inter-STP osmo-operator — hub SS7/M3UA, PC 0.0.0"
 
 # groupadd et useradd échouent (code 9) si le compte existe déjà — et il existe
 # déjà quand BASE_IMAGE=osmocom-nitb, où le Dockerfile principal le crée. Sans

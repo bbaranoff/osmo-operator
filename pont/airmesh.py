@@ -66,7 +66,7 @@
 # On declare donc DEUX mobiles de plus que le banc n'en a - N_MS + 2 - et
 # airmesh prend leurs deux places. Il accorde la premiere comme un mobile et la
 # seconde a l'envers, comme une BTS. Aucune modification du lanceur, aucun
-# fichier de qemu-src touche : deux emplacements deja prevus, occupes autrement.
+# fichier de qosmo-grgsm touche : deux emplacements deja prevus, occupes autrement.
 #
 # CE QU'IL FAUT SAVOIR EN LES LISANT : `pgrep -a fake_trx` montrera deux
 # mobiles qui n'existent pas, et le journal de fake_trx annoncera ue3 et ue4.

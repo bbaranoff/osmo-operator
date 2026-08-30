@@ -208,7 +208,7 @@ LOCAL_IND="$(wan_local_ind)"
 
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║   WAN mesh - routage par indicatif entre N noeuds osmo_egprs     ║"
+echo "║   WAN mesh - routage par indicatif entre N noeuds osmo-operator     ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 echo -e "  Mode        : ${CYAN}${MODE}${NC}   Operateurs locaux : ${CYAN}${N_OPS}${NC} (${OP_IDS[*]})"

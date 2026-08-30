@@ -1,13 +1,13 @@
 
 ============================================================
-  DIAGNOSTIC SS7 - osmo_egprs - 2026-08-26 23:43:24
+  DIAGNOSTIC SS7 - osmo-operator - 2026-08-26 23:43:24
 ============================================================
 
 1. ENVIRONNEMENT
 ----------------------------------------------------------------------
   ! docker ne rend aucun conteneur - mode natif, ou docker arrete
   ✓ SCTP disponible sur l'hote (IPPROTO_SCTP)
-    depot   : /home/nirvana/osmo_egprs
+    depot   : /home/nirvana/osmo-operator
     python  : 3.12.3
 
 2. TOPOLOGIE (heritee des configurations)

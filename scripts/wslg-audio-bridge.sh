@@ -126,7 +126,7 @@ MIC_MIN_NONZERO="${MIC_MIN_NONZERO:-100}"
 MIC_MAX_PROBES="${MIC_MAX_PROBES:-8}"
 # 1 = ne JAMAIS toucher au defaut systeme de l'hote (on se contente de dire ce
 # qu'on a mesure). Utile sur un poste de travail : la selection ci-dessous est
-# permanente, elle survit a l'arret d'osmo_egprs.
+# permanente, elle survit a l'arret d'osmo-operator.
 MIC_KEEP_DEFAULT="${MIC_KEEP_DEFAULT:-0}"
 
 # Renvoie "<octets_captures> <octets_non_nuls>" sur stdout.
@@ -210,7 +210,7 @@ host_mic() {
             if host_pa pactl set-default-source "$src" >/dev/null 2>&1; then
                 log "[mic] source par defaut -> ${src} (signal detecte)"
                 # La bascule est PERMANENTE : pulse la garde apres l'arret
-                # d'osmo_egprs. On journalise l'ancienne valeur pour que le
+                # d'osmo-operator. On journalise l'ancienne valeur pour que le
                 # retour en arriere soit une commande, pas une enquete.
                 [ -n "$cur" ] && log "[mic]   ancien defaut : ${cur}"
                 [ -n "$cur" ] && log "[mic]   restaurer : pactl set-default-source ${cur}"

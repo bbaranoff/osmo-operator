@@ -166,7 +166,7 @@ class App(object):
     def draw(self):
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        title = " CONSOLE SS7 - osmo_egprs "
+        title = " CONSOLE SS7 - osmo-operator "
         link = "M3UA %s" % (self.client.asp.state if self.client and self.client.asp
                             else "hors ligne")
         head = "%s| %s operateur(s) | hub %s:%s | console PC %s | %s" % (

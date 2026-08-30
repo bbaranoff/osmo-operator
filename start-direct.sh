@@ -31,7 +31,7 @@ set -uo pipefail
 #
 # CE QU'ON PERD, et c'etait sa raison d'etre (constat du 12/08) : lance par
 # erreur sur un HOTE qui a Docker, ce script repart sur un environnement a
-# moitie construit - /opt/GSM/qemu-src n'y existe pas, mais /tmp/osmo-nitb/logs,
+# moitie construit - /opt/GSM/qosmo-grgsm n'y existe pas, mais /tmp/osmo-nitb/logs,
 # lui, se cree tout seul - et meurt sur un "run.sh introuvable" qui ne designe
 # pas la vraie cause. Si ce symptome reapparait sur une machine avec Docker,
 # c'est ca : la-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
@@ -349,10 +349,10 @@ else
     : "${NITB_TREE:=$HERE}"
     if [ -x "$HERE/run.sh" ]; then
         : "${OQC_ROOT:=$HERE}"
-    elif [ -x "$HERE/../qemu-src/run.sh" ]; then
-        : "${OQC_ROOT:=$(cd "$HERE/../qemu-src" && pwd)}"
+    elif [ -x "$HERE/../qosmo-grgsm/run.sh" ]; then
+        : "${OQC_ROOT:=$(cd "$HERE/../qosmo-grgsm" && pwd)}"
     else
-        : "${OQC_ROOT:=$GSM_ROOT/qemu-src}"
+        : "${OQC_ROOT:=$GSM_ROOT/qosmo-grgsm}"
     fi
     say_end " OK " "$C_OK" "Chargement de l'environnement" "fallback minimal"
 fi
@@ -408,10 +408,10 @@ say_begin "Resolution de run.sh"
 # gagne toujours") : RUN_SH etait la seule variable non surchargeable.
 # Ordre : RUN_SH explicite > OQC_ROOT resolu > chemin historique.
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
-: "${RUN_SH:=/opt/GSM/qemu-src/run.sh}"
+: "${RUN_SH:=/opt/GSM/qosmo-grgsm/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
     say_end "FAIL" "$C_KO" "Resolution de run.sh" "$RUN_SH introuvable ou non executable"
-    printf '       %s→ Verifiez que /opt/GSM/qemu-src/run.sh existe et est executable%s\n' "$C_DIM" "$C_Z"
+    printf '       %s→ Verifiez que /opt/GSM/qosmo-grgsm/run.sh existe et est executable%s\n' "$C_DIM" "$C_Z"
     exit 1
 fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
@@ -624,7 +624,7 @@ EOF
 # Le mobile Calypso tourne avec
 #     mobile -c /root/.osmocom/bb/mobile_group1.cfg
 # alors qu'on ne generait ici que mobile.cfg. mobile_group1.cfg, lui, est COPIE
-# tel quel par qemu-src (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
+# tel quel par qosmo-grgsm (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
 # un fichier statique, jamais derive de l'operateur. Il porte donc l'identite de
 # l'operateur 1 - IMSI 001010001000001, ARFCN 514 - quel que soit l'operateur.
 #
@@ -662,7 +662,7 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 
 # ── LE QUATRIEME PROVISIONNEUR ──────────────────────────────────────────────
 # run.sh embarque son propre module d'abonnes (run_modules/21-abonnes-hlr.sh,
-# dans qemu-src). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
+# dans qosmo-grgsm). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
 # formule que nous - mais lit MCC et MNC dans /etc/osmocom/osmo-msc.cfg via un
 # chemin qui n'aboutit pas toujours ; il retombe alors sur ses defauts, 001 et
 # 01. Sur l'operateur 2 il fabriquait donc 001010002000001 : un abonne que
@@ -672,7 +672,7 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 # Il honore MCC et MNC depuis l'environnement. En les posant, son IMSI devient
 # exactement celui que start.sh a deja provisionne - et son propre controle
 # d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
-# On neutralise ainsi un doublon par son idempotence, sans toucher a qemu-src.
+# On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo-grgsm.
 export MCC="${MCC:-$MS_MCC}"
 export MNC="${MNC:-$MS_MNC}"
 
@@ -704,9 +704,9 @@ MS_ARFCN1="${PLAN_ARFCN:-}"
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1=$(( 512 + MS_OP_ID * 2 ))
 
 # MS#2 suit le side-car. Celui-la, c'est NOUS qui le decidons : le module
-# 13-sidecar-cfg.sh de qemu-src lit SC_ARFCN et SC_UNIT_ID dans
+# 13-sidecar-cfg.sh de qosmo-grgsm lit SC_ARFCN et SC_UNIT_ID dans
 # l'environnement (run_modules/_lib/radio.sh : « : "${SC_ARFCN:=516}" »).
-# Les poser ici evite de modifier qemu-src, et garde une seule source par
+# Les poser ici evite de modifier qosmo-grgsm, et garde une seule source par
 # valeur - les memes formules que generate_configs.sh.
 export SC_ARFCN="${SC_ARFCN:-${PLAN_ARFCN_BTS1:-$(( 612 + MS_OP_ID * 2 ))}}"
 export SC_UNIT_ID="${SC_UNIT_ID:-${PLAN_UNIT_ID_BTS1:-$(( 6000 + MS_OP_ID * 10 + 2 ))}}"
@@ -747,18 +747,18 @@ generate_mobile_cfg "$MS1_CFG" \
     "$(ms_ki 1)"
 # La copie que le lanceur ouvre reellement. On la REGENERE plutot que de la
 # copier : generate_mobile_cfg fixe aussi le port VTY, les sockets et l'ARFCN,
-# et un simple cp propagerait le fichier statique de qemu-src.
+# et un simple cp propagerait le fichier statique de qosmo-grgsm.
 # ── ET ON EMPECHE QU'IL SOIT ECRASE ─────────────────────────────────────
 # Ecrire ce fichier ne suffit pas : run.sh le REECRIT juste apres. Son module
 # 20-mobile-cfg.sh copie MOBILE_CFG_SRC par-dessus, et ce chemin vaut par
-# defaut $QEMU_TREE/cfgs/mobile_group1.cfg - le fichier statique de qemu-src,
+# defaut $QEMU_TREE/cfgs/mobile_group1.cfg - le fichier statique de qosmo-grgsm,
 # fige sur l'operateur 1. Mesure sur le banc :
 #     mobile.cfg          18:22:22  imsi=002010002000001 arfcn=516
 #     mobile_group1.cfg   18:22:27  imsi=001010001000001 arfcn=514
 # Cinq secondes d'ecart, et c'est le second que le mobile ouvre.
 # On designe donc NOTRE fichier comme source : le module recopie alors le bon
 # contenu, et son controle d'idempotence (cmp -s src dest) passe puisque les
-# deux sont identiques. Aucune modification de qemu-src.
+# deux sont identiques. Aucune modification de qosmo-grgsm.
 export MOBILE_CFG_SRC="$MS1_CFG"
 
 MS1_GROUP_CFG="$BB_DIR/mobile_group1.cfg"
@@ -881,7 +881,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     #
     # La copie libre et son COPY sont supprimes ; PONT_PY reste disponible pour
     # qui veut essayer une variante, mais c est alors un choix explicite.
-    _PONT="${PONT_PY:-${NITB_ROOT:-/opt/GSM/osmo_egprs}/pont/pont.py}"
+    _PONT="${PONT_PY:-${NITB_ROOT:-/opt/GSM/osmo-operator}/pont/pont.py}"
 
     # ── LE PONT DOIT SAVOIR SUR QUELLE CELLULE IL TRAVAILLE ─────────────────
     # pont.py fait le codage/decodage de canal entre le Calypso de QEMU et la
@@ -996,10 +996,10 @@ fi
 # Ici c'est le burst qui traverse : pont/airmesh.py prend ce qui passe sur le
 # fake_trx local et l'echange avec les pairs. Voir l'en-tete d'airmesh.py pour
 # le detail - notamment pourquoi il faut DEUX emplacements de transceiver, et
-# comment on les obtient sans modifier une ligne de qemu-src.
+# comment on les obtient sans modifier une ligne de qosmo-grgsm.
 if [ "${AIR_MESH:-0}" = "1" ]; then
     _AIRMESH="${AIRMESH_PY:-${HERE}/pont/airmesh.py}"
-    [ -f "$_AIRMESH" ] || _AIRMESH=/opt/GSM/osmo_egprs/pont/airmesh.py
+    [ -f "$_AIRMESH" ] || _AIRMESH=/opt/GSM/osmo-operator/pont/airmesh.py
     if [ ! -f "$_AIRMESH" ]; then
         printf '  %sair-mesh%s : airmesh.py introuvable - maillage de bursts non lance\n' "${C_KO:-}" "${C_Z:-}"
     else
@@ -1669,14 +1669,14 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
 fi
 
 # --- 7quinquies. Le wrapper tcpdump ------------------------------------------
-# La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qemu-src : un
+# La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qosmo-grgsm : un
 # autre depot, qu'on ne modifie pas. Elle ecrit un pcap NON BORNE, et la racine
 # du live etant un tmpfs, une capture un peu chargee finit par remplir la RAM.
 #
 # Le wrapper y substitue un anneau. Il est aussi pose par build-iso.sh, mais une
 # ISO deja gravee ne le connait pas, et un live sans persistance le perd a chaque
 # reboot : le reposer ICI, a chaque demarrage de la pile, est ce qui le rend
-# effectif sans reconstruire ni toucher a qemu-src.
+# effectif sans reconstruire ni toucher a qosmo-grgsm.
 #
 # DEUX PIEGES, DEUX PARADES - c'est tout l'objet de ce script :
 #   -Z root : avec -C/-W, tcpdump cree les membres suivants de l'anneau APRES
@@ -1697,7 +1697,7 @@ install_pcap_wrapper() {
     tmp="$(mktemp)" || return 0
     cat > "$tmp" <<'PCAPWRAP'
 #!/bin/sh
-# tcpdump - wrapper osmo_egprs : impose un anneau aux captures sur fichier.
+# tcpdump - wrapper osmo-operator : impose un anneau aux captures sur fichier.
 # Pose par start-direct.sh et par build-iso.sh. Voir leurs commentaires.
 # Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
 REAL=/usr/bin/tcpdump

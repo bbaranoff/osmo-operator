@@ -23,7 +23,7 @@
 # Ici, tout ce qui n'est pas une source reste EXACTEMENT ce qu'il etait.
 #
 # Ce qui est GARDE dans /opt/GSM : ce que la pile lance vraiment.
-#   qemu-src/                    l'arbre ENTIER, moins ses objets de compilation.
+#   qosmo-grgsm/                    l'arbre ENTIER, moins ses objets de compilation.
 #                                [2026-08-27] Avant, on n'en gardait que quatre
 #                                morceaux (le binaire, pc-bios, tools, le
 #                                firmware compal_e88). Il manquait ce qui LANCE :
@@ -37,9 +37,9 @@
 #   osmocom-bb/src/host/osmocon/osmocon       le chargeur
 #   osmocom-bb/src/target/trx_toolkit         fake_trx.py et compagnie
 #   calypso_dsp.*.bin                         les ROM du DSP
-#   firmware/, qemu-install/, osmo_egprs/     images, qemu installe, ce depot
+#   firmware/, qemu-install/, osmo-operator/     images, qemu installe, ce depot
 #
-# LES DEPOTS GARDENT LEUR .git - qemu-src comme osmo_egprs. Ce n'est pas un
+# LES DEPOTS GARDENT LEUR .git - qosmo-grgsm comme osmo-operator. Ce n'est pas un
 # oubli : c'est lui qui permet "osmo-update" (git fetch en place) sur la machine
 # qui tourne, au lieu d'un effacement suivi d'un reclone. Les 96 Mo qu'il pese
 # ne sont rien a cote des 4 Go d'ateliers que cette image retire.
@@ -58,11 +58,11 @@ FROM ${BASE} AS prune
 # recopie, pas les etapes intermediaires.
 RUN set -eux; \
     cd /opt/GSM; \
-    mkdir -p /keep/qemu-src/build /keep/osmocom-bb/src/host/osmocon \
+    mkdir -p /keep/qosmo-grgsm/build /keep/osmocom-bb/src/host/osmocon \
              /keep/osmocom-bb/src/target; \
-    # qemu-src : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
+    # qosmo-grgsm : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
     # la copie, et --exclude=./build empeche le tar de le recouvrir ensuite.
-    cp -a qemu-src/build/qemu-system-arm  /keep/qemu-src/build/ 2>/dev/null || true; \
+    cp -a qosmo-grgsm/build/qemu-system-arm  /keep/qosmo-grgsm/build/ 2>/dev/null || true; \
     # [2026-08-28] qemu-bundle SUIT le binaire, et ce n'est pas un detail de
     # confort : c'est par LUI que QEMU trouve ses donnees quand il est lance
     # depuis un arbre de compilation. QEMU 8 n'utilise pas le prefix compile
@@ -85,14 +85,14 @@ RUN set -eux; \
     # Ce que ca coute : 146 Ko, 175 entrees dont 140 liens symboliques. C'est
     # la difference entre l'image complete, ou le Calypso demarre, et la lite,
     # ou il ne demarrait pas.
-    cp -a qemu-src/build/qemu-bundle      /keep/qemu-src/build/ 2>/dev/null || true; \
-    tar -C qemu-src --exclude=./build -cf - . | tar -C /keep/qemu-src -xf -; \
+    cp -a qosmo-grgsm/build/qemu-bundle      /keep/qosmo-grgsm/build/ 2>/dev/null || true; \
+    tar -C qosmo-grgsm --exclude=./build -cf - . | tar -C /keep/qosmo-grgsm -xf -; \
     cp -a osmocom-bb/src/host/osmocon/osmocon \
           /keep/osmocom-bb/src/host/osmocon/ 2>/dev/null || true; \
     cp -a osmocom-bb/src/target/trx_toolkit \
           /keep/osmocom-bb/src/target/ 2>/dev/null || true; \
     cp -a *.bin /keep/ 2>/dev/null || true; \
-    for d in firmware qemu-install osmo_egprs pont; do \
+    for d in firmware qemu-install osmo-operator pont; do \
         [ -e "$d" ] && cp -a "$d" /keep/ || true; \
     done; \
     # La coupe : tout /opt/GSM disparait, seuls les artefacts reviennent.
@@ -105,7 +105,7 @@ RUN set -eux; \
            /tmp/* /var/tmp/*; \
     find /usr/local/lib -name '*.a' -delete 2>/dev/null || true; \
     # Le balayage des .o EVITE /opt/GSM. [2026-08-27] Il y passait, et
-    # qemu-src/tools/calypso-ipc-device/*.o sont SUIVIS PAR GIT (six fichiers) :
+    # qosmo-grgsm/tools/calypso-ipc-device/*.o sont SUIVIS PAR GIT (six fichiers) :
     # les effacer laissait un arbre que git voit comme modifie, et "osmo-update"
     # refuse alors de l'avancer - a raison, il ne sait pas ce qu'on y a fait.
     # Ce qui restait a couper est de toute facon parti avec l'atelier.

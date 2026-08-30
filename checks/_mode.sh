@@ -85,7 +85,7 @@
 #
 #  SOURCING (le meme bloc partout ; marche depuis le depot et depuis /opt) :
 #      _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#      for _c in "$_here/_mode.sh" /opt/GSM/osmo_egprs/checks/_mode.sh; do
+#      for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
 #          [ -r "$_c" ] && { . "$_c"; break; }
 #      done
 #      command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
@@ -194,7 +194,7 @@ osmo_mode_force() {
 _osmo_globals() {
     local k="${1:-}" f v
     for f in "${OSMO_GLOBALS:-}" "$OSMO_REPO/globals.conf" \
-             /opt/GSM/osmo_egprs/globals.conf ./globals.conf; do
+             /opt/GSM/osmo-operator/globals.conf ./globals.conf; do
         [ -n "$f" ] && [ -r "$f" ] || continue
         v="$(awk -F= -v k="$k" '$1 == k { gsub(/[" \r\t]/, "", $2); if ($2 != "") print $2 }' "$f" | tail -1)"
         [ -n "$v" ] && { printf '%s\n' "$v"; return 0; }

@@ -15,7 +15,7 @@ Presentation {
             horizontalAlignment: Text.AlignHCenter
             font.pixelSize: 20
             color: "#13293d"
-            text: "osmo_egprs — banc GSM / EGPRS complet\n\n" +
+            text: "osmo-operator — banc GSM / EGPRS complet\n\n" +
                   "BTS, BSC, MSC, HLR, SGSN, GGSN, STP et Asterisk,\n" +
                   "avec l'emulation Calypso du telephone."
         }
@@ -39,7 +39,7 @@ Presentation {
             font.pixelSize: 20
             color: "#13293d"
             text: "Pour demarrer le banc\n\n" +
-                  "    cd /opt/GSM/osmo_egprs && ./start-direct.sh\n\n" +
+                  "    cd /opt/GSM/osmo-operator && ./start-direct.sh\n\n" +
                   "Le tableau de bord web ecoute deja sur cette machine."
         }
     }

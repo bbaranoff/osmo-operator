@@ -252,7 +252,7 @@ wan_local_ind() { printf '%s' "${WAN_IND[${WAN_NODE_ID}]:-}"; }
 _wan_ask() {   # titre  question  defaut
     local title="$1" q="$2" def="${3:-}" ans
     if [ -t 0 ] && [ -t 2 ] && command -v whiptail >/dev/null 2>&1 && [ -z "${WAN_NO_WHIPTAIL:-}" ]; then
-        ans=$(whiptail --backtitle "osmo_egprs - WAN" --title "$title" \
+        ans=$(whiptail --backtitle "osmo-operator - WAN" --title "$title" \
                 --inputbox "$q" 10 72 "$def" 3>&1 1>&2 2>&3) || return 1
     elif [ -t 0 ]; then
         printf '  %s [%s] : ' "$q" "$def" >&2

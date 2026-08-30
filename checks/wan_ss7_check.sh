@@ -7,7 +7,7 @@
 #
 # CE QU'IL FAUT SAVOIR AVANT DE LIRE LA SORTIE
 # --------------------------------------------
-# Le WAN d'osmo_egprs ne transporte PAS de SS7. Entre deux noeuds il n'y a que :
+# Le WAN d'osmo-operator ne transporte PAS de SS7. Entre deux noeuds il n'y a que :
 #     • SIP/RTP  (Asterisk ↔ Asterisk)  → la voix
 #     • TCP 789x (sms-interop-relay)    → les SMS
 # Le SS7/M3UA (osmo-stp, point codes 1.N.2, inter-STP 0.0.0) reste INTERNE a un
@@ -54,7 +54,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║   WAN - diagnostic voix / SMS / SS7 entre noeuds osmo_egprs      ║"
+echo "║   WAN - diagnostic voix / SMS / SS7 entre noeuds osmo-operator      ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -198,7 +198,7 @@ for i in $(seq 1 "$N_OPS"); do
     done
     # Le relais doit savoir lire strip= : une conf correcte sur un relais qui
     # l'ignore est exactement aussi cassee qu'une conf sans strip.
-    if inside "$i" 'grep -q lookup_strip /opt/GSM/osmo_egprs/scripts/sms-interop-relay.py 2>/dev/null || grep -q lookup_strip /etc/osmocom/sms-interop-relay.py 2>/dev/null || grep -rq lookup_strip /usr/local/bin 2>/dev/null'; then
+    if inside "$i" 'grep -q lookup_strip /opt/GSM/osmo-operator/scripts/sms-interop-relay.py 2>/dev/null || grep -q lookup_strip /etc/osmocom/sms-interop-relay.py 2>/dev/null || grep -rq lookup_strip /usr/local/bin 2>/dev/null'; then
         ok "op${i} : le relais SMS gere strip="
     else
         warn "op${i} : relais SMS sans lookup_strip - version anterieure, SMS WAN muets"

@@ -48,7 +48,7 @@ MODE_ENV="${OSMO_MODE:-}"
 # racine, et l'ISO embarque checks/ en entier - donc _mode.sh est toujours a
 # cote de ce fichier, jamais a un chemin absolu du depot.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _c in "$_here/_mode.sh" /opt/GSM/osmo_egprs/checks/_mode.sh; do
+for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }

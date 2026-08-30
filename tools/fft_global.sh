@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tools/fft_global.sh - FFT "jolie" d'un cfile LOCAL passe en argument (fichier statique).
 #
-# Derive de tools/fft.sh (osmo_egprs) mais SANS docker / ring / tail-live : lit
+# Derive de tools/fft.sh (osmo-operator) mais SANS docker / ring / tail-live : lit
 # directement un cfile sur l'hote, le balaye en boucle, et affiche
 # PSD moyennee (Welch maison) + waterfall defilant (FuncAnimation).
 #

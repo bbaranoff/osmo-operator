@@ -23,7 +23,7 @@ export W="${W:-240}"          # colonnes (multiframes d'historique)
 export DISPLAY="${DISPLAY:-:0}"
 PY="${PY:-/root/.env/bin/python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python3
 
-SNIFF=/opt/GSM/qemu-src/opt-gsm-scripts/gsm_sniff.py
+SNIFF=/opt/GSM/qosmo-grgsm/opt-gsm-scripts/gsm_sniff.py
 docker exec "$CONTAINER" test -f "$SNIFF" || { echo "gsm_sniff absent dans $CONTAINER"; exit 1; }
 
 # gsm_sniff (conteneur, passif) -> stdout -> python hote (rendu matrice live)

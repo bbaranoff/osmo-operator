@@ -6,7 +6,7 @@ dans les conteneurs et dans les configurations du depot.
 
 ## 1. En trente secondes
 
-    cd /home/nirvana/osmo_egprs
+    cd /home/nirvana/osmo-operator
     sudo ./start.sh --wan --operators 2 --hub-ip 192.168.1.49   # le lab
     ./ss7-console.py                                            # le schema
 

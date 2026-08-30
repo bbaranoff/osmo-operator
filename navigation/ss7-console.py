@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ss7-console.py - point d'entree de la console SS7 de osmo_egprs.
+# ss7-console.py - point d'entree de la console SS7 de osmo-operator.
 #
 #   ./navigation/ss7-console.py                 le schema navigable (fleches)
 #   ./navigation/ss7-console.py --list          l'inventaire, en texte
@@ -168,7 +168,7 @@ def cmd_ops(topo, args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Console SS7 de osmo_egprs : schema navigable, VTY et MAP.")
+        description="Console SS7 de osmo-operator : schema navigable, VTY et MAP.")
     ap.add_argument("--pc", dest="global_pc",
                     help="point code de la console (avant la sous-commande)")
     ap.add_argument("--no-probe", action="store_true",

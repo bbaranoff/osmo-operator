@@ -1,6 +1,6 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-wan-interop.sh - Interconnexion WAN entre deux instances osmo_egprs
+# network/setup-wan-interop.sh - Interconnexion WAN entre deux instances osmo-operator
 #
 # Permet aux MS d'un serveur d'appeler les MS de l'autre serveur via le
 # prefixe +66. Exemple : composer 6610001 depuis le serveur A appelle
@@ -83,7 +83,7 @@ op_container()   { echo "${CONTAINER_PREFIX}$1"; }
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║        WAN Interop - Interconnexion osmo_egprs distante         ║"
+echo "║        WAN Interop - Interconnexion osmo-operator distante         ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 echo -e "  Local       : ${CYAN}${LOCAL_IP}${NC}"

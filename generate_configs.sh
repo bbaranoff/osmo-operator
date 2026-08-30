@@ -288,7 +288,7 @@ apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
 
     # ── OSMO_NO_REGEN : ne pas refaire ce qui vient d'etre fait ─────────────
-    # run.sh (qemu-src) peut rejouer cette fonction au demarrage. Dans un
+    # run.sh (qosmo-grgsm) peut rejouer cette fonction au demarrage. Dans un
     # conteneur, c'est une REGRESSION : les configs viennent d'etre generees par
     # start.sh, avec l'identite du noeud, ses point codes et son inter-STP. Les
     # regenerer depuis les gabarits les remplace par les valeurs par defaut -
@@ -437,7 +437,7 @@ apply_config_templates() {
     # ── Le plan radio, ECRIT, a cote des configurations ─────────────────────
     # ARFCN, unit-id, PLMN etaient recalcules ailleurs a partir des memes
     # formules - dans start-direct.sh pour les mobiles, dans un module de
-    # qemu-src pour le side-car. Trois copies d'une meme regle, et la serie de
+    # qosmo-grgsm pour le side-car. Trois copies d'une meme regle, et la serie de
     # pannes qui va avec : un unit-id 6002 fige, un ARFCN 516 fige, des IMSI
     # sur le PLMN de l'operateur 1. Chaque fois, les valeurs concordaient pour
     # l'operateur 1 et divergeaient pour les suivants.
@@ -560,7 +560,7 @@ _apply_node_ss7_addressing() {
     [ -d "$dest/osmocom" ] || return 0
 
     # ── L'ENVIRONNEMENT D'ABORD, le fichier de role ensuite ─────────────────
-    # Cette fonction s'execute AUSSI dans un conteneur : run.sh (qemu-src) peut
+    # Cette fonction s'execute AUSSI dans un conteneur : run.sh (qosmo-grgsm) peut
     # y rejouer apply_config_templates, ce qui regenere tout /etc/osmocom a
     # partir des gabarits - et efface l'identite SS7 que start.sh venait
     # d'ecrire. Le conteneur repartait alors avec le plan du gabarit :

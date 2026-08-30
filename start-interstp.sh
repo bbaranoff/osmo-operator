@@ -108,7 +108,7 @@ done
 banner() {
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║   Inter-STP - hub SS7 du WAN osmo_egprs   ·   PC 0.0.0           ║"
+    echo "║   Inter-STP - hub SS7 du WAN osmo-operator   ·   PC 0.0.0           ║"
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }

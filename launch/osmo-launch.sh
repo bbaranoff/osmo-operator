@@ -1,6 +1,6 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# /opt/osmo-launch.sh - Orchestrateur osmo_egprs (lab + web dashboard)
+# /opt/osmo-launch.sh - Orchestrateur osmo-operator (lab + web dashboard)
 #
 # Usage :
 #   sudo /opt/osmo-launch.sh           # lance tout (interactif)
@@ -11,7 +11,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-LAB_DIR="/opt/GSM/osmo_egprs"
+LAB_DIR="/opt/GSM/osmo-operator"
 WEB_DIR="/opt/GSM/osmo-egprs-web"
 WEB_SERVICE="osmo-egprs-web"
 LOG_DIR="/var/log/osmocom"
@@ -27,7 +27,7 @@ mkdir -p "$LOG_DIR"
 banner() {
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  osmo_egprs - GSM/EGPRS Multi-PLMN + Web Dashboard          ║"
+    echo "║  osmo-operator - GSM/EGPRS Multi-PLMN + Web Dashboard          ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -108,7 +108,7 @@ stop_web() {
 
 # ══════════════════════════════════════════════════════════════════════════════
 start_lab() {
-    echo -e "${GREEN}[lab] Demarrage osmo_egprs...${NC}"
+    echo -e "${GREEN}[lab] Demarrage osmo-operator...${NC}"
 
     if [ ! -f "$LAB_DIR/start.sh" ]; then
         echo -e "  ${RED}✗${NC} $LAB_DIR/start.sh introuvable"
@@ -120,7 +120,7 @@ start_lab() {
 }
 
 stop_lab() {
-    echo -e "${YELLOW}[lab] Arret osmo_egprs...${NC}"
+    echo -e "${YELLOW}[lab] Arret osmo-operator...${NC}"
     if [ -f "$LAB_DIR/start.sh" ]; then
         cd "$LAB_DIR"
         bash ./start.sh stop

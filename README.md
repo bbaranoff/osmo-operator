@@ -4,8 +4,8 @@ Standalone mode (no interstp)
 ```bash
 sudo docker pull bastienbaranoff/norf_gsm
 sudo docker tag bastienbaranoff/norf_gsm osmocom-nitb
-git clone https://github.com/bbaranoff/osmo_egprs
-cd osmo_egprs
+git clone https://github.com/bbaranoff/osmo-operator
+cd osmo-operator
 sudo ./start.sh
 ```
 To go in container
@@ -15,7 +15,7 @@ sudo docker exec -ti osmo-operator-1 bash
 
 then in docker container
 ```bash
-cd /opt/GSM/osmo_egprs
+cd /opt/GSM/osmo-operator
 ./start-direct.sh --regen
 ./start-direct.sh --stop
 ./start-direct.sh
@@ -438,7 +438,7 @@ Le premier chiffre d'un numéro NXXXX identifie l'opérateur. Le dialplan `[gsm_
 
 ## 11. RAN virtuel QEMU (PHY_MODE=qemu)
 
-Le projet intègre [bbaranoff/qemu](https://github.com/bbaranoff/qemu) — un fork
+Le projet intègre [bbaranoff/qosmo-grgsm](https://github.com/bbaranoff/qosmo-grgsm) — un fork
 de QEMU avec une machine `calypso` qui émule le SoC GSM TI Calypso (ARM7TDMI +
 DSP TMS320C54x). Cela permet d'exécuter le **vrai firmware** OsmocomBB
 `layer1.highram.elf` au-dessus d'un baseband virtualisé, sans aucun hardware.
@@ -474,10 +474,10 @@ flowchart LR
 
 | Composant | Path container | Source |
 |-----------|---------------|--------|
-| `qemu-system-arm` (machine `calypso`) | `/usr/local/bin/qemu-system-arm` | bbaranoff/qemu |
+| `qemu-system-arm` (machine `calypso`) | `/usr/local/bin/qemu-system-arm` | bbaranoff/qosmo-grgsm |
 | Firmware Calypso layer1 | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
-| ROM DSP | `${GSM_ROOT}/calypso_dsp.txt` | bbaranoff/qemu (symlink) |
-| Bridge BTS↔BSP | `${OQC_ROOT}/bridge.py` | bbaranoff/qemu |
+| ROM DSP | `${GSM_ROOT}/calypso_dsp.txt` | bbaranoff/qosmo-grgsm (symlink) |
+| Bridge BTS↔BSP | `${OQC_ROOT}/bridge.py` | bbaranoff/qosmo-grgsm |
 | `transceiver` (BTS soft-SDR Calypso) | `/usr/local/bin/transceiver` | osmocom-bb branche jolly/testing |
 | `ccch_scan`, `bcch_scan`, `cell_log` | `/usr/local/bin/` | osmocom-bb branche fixeria/burst_ind |
 
@@ -535,7 +535,7 @@ docker exec -ti osmo-operator-1 socat - unix-connect:/tmp/qemu-calypso-mon.sock
 | Socket `/tmp/osmocom_l2` jamais créé | Firmware ne boote pas | `head -50 /var/log/osmocom/qemu.log` (chercher MVPD/PROM0) |
 
 L'intégration QEMU est en développement actif côté DSP (voir
-`bbaranoff/qemu/CLAUDE.md` pour le statut courant des bugs C54x).
+`bbaranoff/qosmo-grgsm/CLAUDE.md` pour le statut courant des bugs C54x).
 
 ---
 

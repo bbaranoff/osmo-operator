@@ -10,7 +10,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
 VERSION="${OSMO_ISO_VERSION:-main}"
-OUTPUT="osmo_egprs-${VERSION}.iso"
+OUTPUT="osmo-operator-${VERSION}.iso"
 # Repertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
 # space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
 WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
@@ -309,7 +309,7 @@ for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
 done
 mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
-echo -e "${CYAN}${BOLD}══ osmo_egprs ISO builder (via build.sh + start.sh) ══${NC}"
+echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start.sh) ══${NC}"
 
 # ── Etape 1 : Executer build.sh pour preparer l'hote et construire osmocom-nitb ──
 if [ "$ISO_ROLE" = "interstp" ]; then
@@ -584,7 +584,7 @@ docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/opt/GSM"             "$ROOTFS/opt/GSM"     2>/dev/null||true
-# venv python (gr-gsm + bridges) attendu par /opt/GSM/qemu-src/start-clean.sh
+# venv python (gr-gsm + bridges) attendu par /opt/GSM/qosmo-grgsm/start-clean.sh
 docker cp "$CID:/root/.env"           "$ROOTFS/root/"       2>/dev/null||true
 docker cp "$CID:/etc/osmocom/."       "$ROOTFS/etc/osmocom/" 2>/dev/null||true
 docker cp "$CID:/etc/asterisk/."      "$ROOTFS/etc/asterisk/" 2>/dev/null||true
@@ -594,14 +594,14 @@ done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 
-# ── osmo_egprs : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
+# ── osmo-operator : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
 # La copie docker cp ci-dessus peut etre perimee ; on avance la branche main du
 # depot (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
-EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo_egprs}"
-echo -e "${GREEN}[5a/9] Mise a jour osmo_egprs en place (branche ${EGPRS_BRANCH}, .git conserve)...${NC}"
+EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo-operator}"
+echo -e "${GREEN}[5a/9] Mise a jour osmo-operator en place (branche ${EGPRS_BRANCH}, .git conserve)...${NC}"
 # [2026-08-27] Le tarball est abandonne. Il donnait un arbre NU : on effacait
-# /opt/GSM/osmo_egprs, on deballait le tar.gz, on supprimait les .git*. Trois
+# /opt/GSM/osmo-operator, on deballait le tar.gz, on supprimait les .git*. Trois
 # consequences, toutes vues sur l'ISO :
 #   - sans .git, update.sh n'a pas le choix au demarrage : il ne peut pas faire
 #     "git fetch", il EFFACE et RECLONE (wipe=1) - a chaque boot, et sans reseau
@@ -613,13 +613,13 @@ echo -e "${GREEN}[5a/9] Mise a jour osmo_egprs en place (branche ${EGPRS_BRANCH}
 # de l'image ($CID:/opt/GSM, il a son .git) ; on ne le remplace pas, on avance
 # le HEAD - et seulement si c'est une avance directe (--ff-only) : un arbre de
 # l'image avec des commits locaux n'est pas ecrase en silence, il est signale.
-EGPRS_TREE="$ROOTFS/opt/GSM/osmo_egprs"
+EGPRS_TREE="$ROOTFS/opt/GSM/osmo-operator"
 if [ -d "$EGPRS_TREE/.git" ]; then
     if git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
        && git -C "$EGPRS_TREE" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} osmo_egprs a jour en place (${EGPRS_BRANCH}, .git conserve) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s')"
+        echo -e "  ${GREEN}✓${NC} osmo-operator a jour en place (${EGPRS_BRANCH}, .git conserve) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s')"
     else
-        echo -e "  ${YELLOW}⚠${NC} osmo_egprs : mise a jour impossible (reseau ? commits locaux ?) - arbre de l'image conserve" >&2
+        echo -e "  ${YELLOW}⚠${NC} osmo-operator : mise a jour impossible (reseau ? commits locaux ?) - arbre de l'image conserve" >&2
     fi
 elif [ -d "$EGPRS_TREE" ]; then
     # Arbre sans depot : on ne l'efface pas, on lui rend son .git, sur place.
@@ -627,16 +627,16 @@ elif [ -d "$EGPRS_TREE" ]; then
        && git -C "$EGPRS_TREE" remote add origin "$EGPRS_REPO" 2>/dev/null \
        && git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
        && git -C "$EGPRS_TREE" checkout -q -B "$EGPRS_BRANCH" FETCH_HEAD 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} osmo_egprs : depot reconstitue sur l'arbre existant (${EGPRS_BRANCH})"
+        echo -e "  ${GREEN}✓${NC} osmo-operator : depot reconstitue sur l'arbre existant (${EGPRS_BRANCH})"
     else
-        echo -e "  ${YELLOW}⚠${NC} osmo_egprs : depot non reconstitue - arbre de l'image conserve tel quel" >&2
+        echo -e "  ${YELLOW}⚠${NC} osmo-operator : depot non reconstitue - arbre de l'image conserve tel quel" >&2
     fi
 else
     mkdir -p "$ROOTFS/opt/GSM"
     if git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TREE" >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} osmo_egprs clone (${EGPRS_BRANCH}, .git conserve)"
+        echo -e "  ${GREEN}✓${NC} osmo-operator clone (${EGPRS_BRANCH}, .git conserve)"
     else
-        echo -e "  ${RED}✗${NC} osmo_egprs absent de l'image ET clone impossible" >&2
+        echo -e "  ${RED}✗${NC} osmo-operator absent de l'image ET clone impossible" >&2
     fi
 fi
 
@@ -646,13 +646,13 @@ fi
 # MS suivants se voyaient refuser le rattachement ("IMSI unknown in HLR") -
 # panne lue a tort comme un defaut radio.
 #
-# PAS dans /opt/GSM/osmo_egprs/environment : ce fichier n'est pas dans git. Il y
+# PAS dans /opt/GSM/osmo-operator/environment : ce fichier n'est pas dans git. Il y
 # a survecu au demarrage tant que personne ne mettait le depot a jour, et pas une
 # minute de plus - a l'epoque osmo-update.service effacait et reclonait l'arbre
 # a chaque boot (wipe=1), aujourd'hui "osmo-update" fait un git fetch, dont le
 # reset --hard emporte de la meme facon ce qui n'est pas suivi. N_MS retombait
 # a 1, MS#2 restait inconnu du HLR, et start-direct.sh le lancait quand meme.
-# /opt/GSM/qemu-src/environment, lui, n'a jamais existe : ce depot-la nomme son
+# /opt/GSM/qosmo-grgsm/environment, lui, n'a jamais existe : ce depot-la nomme son
 # repertoire "environnement".
 # /etc/osmocom n'appartient a aucun depot : ce qui y est ecrit reste.
 mkdir -p "$ROOTFS/etc/osmocom"
@@ -665,14 +665,14 @@ COEUR
 echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmocom)"
 
 
-# ── qemu-src : arbre ELAGUE + binaire installe ──────────────────────────────
+# ── qosmo-grgsm : arbre ELAGUE + binaire installe ──────────────────────────────
 # Deux choses distinctes, et l'ISO a besoin des DEUX :
-#   - l'arbre qemu-src (run.sh, run_modules/, environnement/) :
+#   - l'arbre qosmo-grgsm (run.sh, run_modules/, environnement/) :
 #     c'est LUI le mode qemu de start-direct.sh. Il reste dans l'image, prive de
 #     .git et de build/ (voir plus bas).
 #   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
 #     l'arbre sous le nom que paths.env cherche (build/qemu-system-arm).
-QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}/build}"
+QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qosmo-grgsm}/build}"
 echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
 # L'elagage est HORS de la condition, et l'absence du binaire est FATALE. Avant,
 # les deux etaient dans la branche "binaire present" : sur une machine ou QEMU
@@ -683,8 +683,8 @@ echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_
 # heure de construction, et la taille de l'ISO etait le seul indice.
 # Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
 # (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
-# ── qemu-src : l'arbre part ENTIER, .git et build/ compris ─────────────────
-# [2026-08-27] L'effacement pur ("rm -rf $ROOTFS/opt/GSM/qemu-src") reglait le
+# ── qosmo-grgsm : l'arbre part ENTIER, .git et build/ compris ─────────────────
+# [2026-08-27] L'effacement pur ("rm -rf $ROOTFS/opt/GSM/qosmo-grgsm") reglait le
 # poids, mais retirait de l'image le depot dont run.sh, run_modules/ et
 # environnement/ SONT le mode qemu : l'ISO ne savait plus emuler le Calypso par
 # elle-meme et dependait, a CHAQUE demarrage, d'un reclone GitHub par
@@ -702,28 +702,28 @@ echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_
 #
 # Ce que ca coute : ~1,6 Go de plus dans le squashfs (moins une fois compresse).
 # A surveiller si l'ISO doit tenir en RAM (toram).
-QSRC="$ROOTFS/opt/GSM/qemu-src"
+QSRC="$ROOTFS/opt/GSM/qosmo-grgsm"
 if [ -d "$QSRC" ]; then
-    echo -e "  ${GREEN}✓${NC} qemu-src conserve ENTIER ($(du -sh "$QSRC" | cut -f1), .git + build/ compris)"
+    echo -e "  ${GREEN}✓${NC} qosmo-grgsm conserve ENTIER ($(du -sh "$QSRC" | cut -f1), .git + build/ compris)"
 else
     # L'image ne l'avait pas : on prend l'arbre de l'hote, entier lui aussi.
-    QSRC_HOST="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
+    QSRC_HOST="${OSMO_QEMU_SRC:-/opt/GSM/qosmo-grgsm}"
     if [ -d "$QSRC_HOST" ]; then
         mkdir -p "$ROOTFS/opt/GSM"
         cp -a "$QSRC_HOST" "$QSRC"
-        echo -e "  ${GREEN}✓${NC} qemu-src repris de l'hote ${CYAN}${QSRC_HOST}${NC} ($(du -sh "$QSRC" | cut -f1))"
+        echo -e "  ${GREEN}✓${NC} qosmo-grgsm repris de l'hote ${CYAN}${QSRC_HOST}${NC} ($(du -sh "$QSRC" | cut -f1))"
     else
-        echo -e "  ${YELLOW}!${NC} qemu-src introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
+        echo -e "  ${YELLOW}!${NC} qosmo-grgsm introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
     fi
 fi
 
 # ── Firmware Calypso : /opt/GSM/firmware, et rien d'autre ───────────────────
 # [2026-08-28] Il y avait ici un bloc qui remplacait $QSRC/target/firmware par
 # un lien vers /opt/GSM/firmware. Il reparait une coquille vide laissee dans
-# l'arbre qemu-src, sur laquelle la premiere branche de
+# l'arbre qosmo-grgsm, sur laquelle la premiere branche de
 # environnement/paths.env tombait, d'ou :
 #
-#   [FAIL] FIRMWARE_ELF (/opt/GSM/qemu-src/target/firmware/board/compal_e88/layer1.highram.elf)
+#   [FAIL] FIRMWARE_ELF (/opt/GSM/qosmo-grgsm/target/firmware/board/compal_e88/layer1.highram.elf)
 #
 # La cause a ete traitee a sa source : paths.env (et local.env) du depot qemu
 # ne connaissent plus qu'un seul chemin, $GSM_ROOT/firmware. Il n'y a donc plus
@@ -759,8 +759,8 @@ fi
 # REELLEMENT. Ici :
 #
 #   compile avec   prefix=/opt/GSM/qemu-install   (donc bin/ et share/qemu/ y sont)
-#   execute depuis /opt/GSM/qemu-src/build/qemu-system-arm   (run.sh -> QEMU_BIN)
-#   QEMU cherche   /opt/GSM/qemu-src/share/qemu   <- n'existait pas
+#   execute depuis /opt/GSM/qosmo-grgsm/build/qemu-system-arm   (run.sh -> QEMU_BIN)
+#   QEMU cherche   /opt/GSM/qosmo-grgsm/share/qemu   <- n'existait pas
 #
 # Le prefix compile n'est alors plus jamais consulte. Mesure faite sur le banc,
 # meme binaire, meme machine :
@@ -774,12 +774,12 @@ fi
 QINST="$ROOTFS/opt/GSM/qemu-install/share/qemu"
 if [ -d "$QSRC" ] && [ -d "$QINST/keymaps" ]; then
     if [ -e "$QSRC/share/qemu/keymaps/en-us" ]; then
-        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qemu-src/share/qemu${NC} deja resolu"
+        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qosmo-grgsm/share/qemu${NC} deja resolu"
     else
         mkdir -p "$QSRC/share"
         rm -rf "$QSRC/share/qemu"
         ln -sfn /opt/GSM/qemu-install/share/qemu "$QSRC/share/qemu"
-        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qemu-src/share/qemu${NC} -> /opt/GSM/qemu-install/share/qemu (keymap 'en-us' resolu)"
+        echo -e "  ${GREEN}✓${NC} datadir QEMU : ${CYAN}/opt/GSM/qosmo-grgsm/share/qemu${NC} -> /opt/GSM/qemu-install/share/qemu (keymap 'en-us' resolu)"
     fi
 elif [ -d "$QSRC" ] && [ "$ISO_ROLE" != "interstp" ]; then
     echo -e "  ${YELLOW}!${NC} /opt/GSM/qemu-install/share/qemu/keymaps absent - QEMU mourra sur 'could not read keymap file'" >&2
@@ -804,7 +804,7 @@ if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] \
     echo -e "  ${YELLOW}Ni build local : ${QEMU_BUILD_LOCAL}/qemu-system-arm${NC}" >&2
     echo -e "  ${YELLOW}Ni binaire venu de l'image : ${ROOTFS_QEMU}${NC}" >&2
     echo -e "  ${YELLOW}L'image d'operateur emule le Calypso : sans ce binaire elle n'a pas de MS.${NC}" >&2
-    echo -e "  ${YELLOW}Trois issues : compiler qemu-src, pointer OSMO_QEMU_BUILD sur un build${NC}" >&2
+    echo -e "  ${YELLOW}Trois issues : compiler qosmo-grgsm, pointer OSMO_QEMU_BUILD sur un build${NC}" >&2
     echo -e "  ${YELLOW}existant, ou reconstruire l'image docker qui, elle, porte le binaire.${NC}" >&2
     exit 1
 fi
@@ -849,12 +849,12 @@ if [ -d "$QSRC" ] && [ ! -e "$QSRC/build/qemu-system-arm" ]; then
     if [ -n "$qbin" ]; then
         mkdir -p "$QSRC/build"
         ln -sfn "$qbin" "$QSRC/build/qemu-system-arm"
-        echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qemu-src/build/qemu-system-arm${NC} -> ${CYAN}${qbin}${NC}"
+        echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qosmo-grgsm/build/qemu-system-arm${NC} -> ${CYAN}${qbin}${NC}"
     elif [ "$ISO_ROLE" != "interstp" ]; then
         echo -e "  ${YELLOW}!${NC} binaire QEMU introuvable dans le rootfs - QEMU_BIN restera non resolu" >&2
     fi
 elif [ -e "$QSRC/build/qemu-system-arm" ]; then
-    echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qemu-src/build/qemu-system-arm${NC} (binaire compile de l'arbre)"
+    echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qosmo-grgsm/build/qemu-system-arm${NC} (binaire compile de l'arbre)"
 fi
 
 # ── Keymaps QEMU : 917 ko qui decident si la machine demarre ────────────────
@@ -922,10 +922,10 @@ mkdir -p "$ROOTFS/usr/bin"
 cp -a "$ROOTFS/usr/local/bin/." "$ROOTFS/usr/bin/" 2>/dev/null || true
 
 mkdir -p "$ROOTFS/root/.osmocom/bb"
-if [ -f "$ROOTFS/opt/GSM/osmo_egprs/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/GSM/osmo_egprs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
-elif [ -f "$ROOTFS/opt/GSM/osmo_egprs/configs/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/GSM/osmo_egprs/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+if [ -f "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+elif [ -f "$ROOTFS/opt/GSM/osmo-operator/configs/mobile.cfg" ]; then
+    cp "$ROOTFS/opt/GSM/osmo-operator/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
 elif [ -f "$ROOTFS/etc/osmocom/mobile.cfg" ]; then
     cp "$ROOTFS/etc/osmocom/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
 fi
@@ -1067,15 +1067,15 @@ fi
 
 # ── Etape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
-# ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo_egprs ────────────────────────────
-# Ici vivait la fabrication d'un SECOND arbre, /opt/GSM/osmo_egprs : une copie
+# ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo-operator ────────────────────────────
+# Ici vivait la fabrication d'un SECOND arbre, /opt/GSM/osmo-operator : une copie
 # PARTIELLE du depot (une liste de fichiers nommes un a un, plus sept
 # repertoires), sans .git, figee a la construction. L'ISO partait donc avec
-# deux osmo_egprs :
+# deux osmo-operator :
 #
-#   /opt/GSM/osmo_egprs   l'arbre COMPLET, avec son .git, mis a jour a
+#   /opt/GSM/osmo-operator   l'arbre COMPLET, avec son .git, mis a jour a
 #                         l'etape [5a/9] et par "osmo-update" ensuite ;
-#   /opt/GSM/osmo_egprs       une copie partielle que plus rien ne mettait a jour.
+#   /opt/GSM/osmo-operator       une copie partielle que plus rien ne mettait a jour.
 #
 # Et c'est le second que visaient les liens osmo-start-direct / osmo-start-lab,
 # le message de login, l'alias osmo-lab et l'unite du hub SS7. Autrement dit :
@@ -1088,9 +1088,9 @@ echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 # conserve, mais AU MEME ENDROIT : si l'arbre complet n'a pas pu etre recupere,
 # on le remplit depuis le depot de construction, et il n'y a toujours qu'un
 # seul chemin.
-P="$ROOTFS/opt/GSM/osmo_egprs"
+P="$ROOTFS/opt/GSM/osmo-operator"
 if [ ! -x "$P/start-direct.sh" ]; then
-    echo -e "  ${YELLOW}!${NC} /opt/GSM/osmo_egprs sans lanceur (image perimee, clone impossible)"
+    echo -e "  ${YELLOW}!${NC} /opt/GSM/osmo-operator sans lanceur (image perimee, clone impossible)"
     echo -e "    -> remplissage depuis le depot de construction ${CYAN}${DIR}${NC}"
     mkdir -p "$P"
     # --exclude .git : on ne fabrique pas un faux depot. S'il en manquait un,
@@ -1102,11 +1102,11 @@ if [ ! -x "$P/start-direct.sh" ]; then
     echo -e "  ${RED}✗${NC} start-direct.sh introuvable - l'ISO n'aura pas de lanceur" >&2
     exit 1
 fi
-ln -sf /opt/GSM/osmo_egprs/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
-ln -sf /opt/GSM/osmo_egprs/start.sh        "$ROOTFS/usr/local/bin/osmo-start-lab"    2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/start.sh        "$ROOTFS/usr/local/bin/osmo-start-lab"    2>/dev/null || true
 [ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
 ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
-echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo_egprs${NC} (arbre unique, avec .git)"
+echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo-operator${NC} (arbre unique, avec .git)"
 
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
@@ -1352,7 +1352,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       ffmpeg"
 
     # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
-    # L image normale embarque /opt/GSM/qemu-src avec son .git ET son build/ :
+    # L image normale embarque /opt/GSM/qosmo-grgsm avec son .git ET son build/ :
     # c est un atelier, on y developpe l emulation Calypso et on doit pouvoir
     # relancer "make -C build qemu-system-arm" sur la machine. Or les runtimes
     # seuls (liburing2, libslirp0, libpixman-1-0) ne suffisent pas : ninja
@@ -1391,7 +1391,7 @@ echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
 
 # -- venv /root/.env : il doit EXISTER et porter tomli --------------------
-# /root/.env est le venv que start-clean.sh (qemu-src) et le profil de root
+# /root/.env est le venv que start-clean.sh (qosmo-grgsm) et le profil de root
 # activent : le .bashrc pose plus bas fait
 #     [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 # Il arrive ici par un docker cp du CID vers /root/, suivi de || true : si
@@ -1626,7 +1626,7 @@ GDM
     # la page bbaranoff.github.io), pose comme fond GNOME par DEFAUT de session
     # (live sans persistance : il faut le defaut de schema, pas un reglage
     # utilisateur). zoom : l image est en 16:9, elle remplit sans deformer.
-    _WP=/opt/GSM/osmo_egprs/configs/gsm-lab-wallpaper.png
+    _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.png
     if [ -f "$_WP" ]; then
         install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.png
         printf "\n[org.gnome.desktop.background]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" \
@@ -1806,12 +1806,12 @@ EOF
 # ── Animation SMS a l'ouverture de session ─────────────────────────────────
 # [2026-08-27] Ce qui vivait ici : osmo-update.service, qui a CHAQUE demarrage
 # telechargeait update.sh depuis GitHub et l'executait - lequel effacait puis
-# reclonait osmo_egprs et osmo-egprs-web, resynchronisait qemu-src et installait
+# reclonait osmo-operator et osmo-egprs-web, resynchronisait qosmo-grgsm et installait
 # socat a coups d'apt. Le contenu de la machine etait donc decide au boot par le
 # reseau, et sans reseau il ne restait rien des arbres effaces.
 #
 # Tout cela se fait ICI, une fois, a la construction : les trois depots partent
-# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qemu-src avec son
+# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qosmo-grgsm avec son
 # build/ compile, les paquets sont installes dans le rootfs (etape 5), et le
 # service du dashboard est pose plus bas. Du update.sh il ne reste que ce qui
 # exige un terminal et quelqu'un devant : l'animation SMS.
@@ -1842,7 +1842,7 @@ echo -e "  ${GREEN}✓${NC} animation SMS a l'ouverture de session (99-osmo-sms.
 
 # ── /usr/local/bin/osmo-update : la mise a jour, EN PLACE, par git ─────────
 # [2026-08-27] L'ancien mecanisme n'etait pas une mise a jour, c'etait un
-# remplacement : effacer /opt/GSM/osmo_egprs et /opt/GSM/osmo-egprs-web, recloner
+# remplacement : effacer /opt/GSM/osmo-operator et /opt/GSM/osmo-egprs-web, recloner
 # depuis GitHub, a chaque demarrage. Il fallait un reseau pour demarrer, ce qui
 # tournait n'etait jamais ce que l'ISO portait, et tout ce qui avait ete pose
 # dans un arbre disparaissait au boot suivant.
@@ -1857,7 +1857,7 @@ cat > "$ROOTFS/usr/local/bin/osmo-update" <<'OSMOUPD'
 # osmo-update - met a jour, en place, les depots embarques dans l'image.
 #
 #   osmo-update              les trois depots
-#   osmo-update qemu-src     un seul (osmo_egprs | osmo-egprs-web | qemu-src)
+#   osmo-update qosmo-grgsm     un seul (osmo-operator | osmo-egprs-web | qosmo-grgsm)
 #   osmo-update --check      dit ce qui est en retard, n'ecrit rien
 #   osmo-update --quiet      sans couleurs ni fioritures (journal, cron)
 #   osmo-update --boot       mode demarrage : --quiet, journalise, sort toujours 0
@@ -1893,9 +1893,9 @@ fi
 
 # nom|chemin - les chemins que cherchent deja start-direct.sh, le dashboard et
 # environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
-REPOS="osmo_egprs|/opt/GSM/osmo_egprs
+REPOS="osmo-operator|/opt/GSM/osmo-operator
 osmo-egprs-web|/opt/GSM/osmo-egprs-web
-qemu-src|/opt/GSM/qemu-src"
+qosmo-grgsm|/opt/GSM/qosmo-grgsm"
 
 WANT="${1:-}"
 rc=0; web_moved=0
@@ -1971,7 +1971,7 @@ $REPOS
 REPOEOF
 
 if [ -z "${found:-}" ]; then
-    echo "depot inconnu : $WANT  (osmo_egprs | osmo-egprs-web | qemu-src)" >&2
+    echo "depot inconnu : $WANT  (osmo-operator | osmo-egprs-web | qosmo-grgsm)" >&2
     exit 2
 fi
 
@@ -1993,7 +1993,7 @@ chmod +x "$ROOTFS/usr/local/bin/osmo-update"
 # qui sort toujours 0 en mode --boot : une machine hors ligne demarre pareil.
 cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
 [Unit]
-Description=osmo_egprs - mise a jour des depots embarques (git, en place)
+Description=osmo-operator - mise a jour des depots embarques (git, en place)
 Wants=network-online.target
 After=network-online.target systemd-networkd-wait-online.service
 [Service]
@@ -2006,13 +2006,13 @@ EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage : git fetch, jamais de reclone)"
 
-# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qemu-src ──
+# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qosmo-grgsm ──
 # [2026-08-27] Deux decisions justes, prises separement, se contredisent :
 #
-# L'arbre qemu-src part maintenant entier - .git et build/ compris - donc
+# L'arbre qosmo-grgsm part maintenant entier - .git et build/ compris - donc
 # QEMU_BIN est resolu des la gravure, et ce service n'a rien a faire. Il est la
 # pour le seul cas ou l'arbre perdrait son build/ : quelqu'un qui le reclone a
-# la main, ou qui remplace /opt/GSM/qemu-src par un checkout frais. Sans build/,
+# la main, ou qui remplace /opt/GSM/qosmo-grgsm par un checkout frais. Sans build/,
 # environnement/paths.env resout QEMU_BIN a un chemin inexistant et la pile
 # s'arrete des le premier module :
 #     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
@@ -2025,11 +2025,11 @@ echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage 
 # clone frais le ferait, et ce service repasse a chaque demarrage.
 cat > "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh" <<'QLINK'
 #!/bin/bash
-# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qemu-src.
+# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qosmo-grgsm.
 # Voir build-iso.sh, etape [6/9], pour le pourquoi.
 set -u
 SRC="${OSMO_QEMU_BIN:-/usr/local/bin/qemu-system-arm}"
-TREE="${OSMO_QEMU_SRC:-/opt/GSM/qemu-src}"
+TREE="${OSMO_QEMU_SRC:-/opt/GSM/qosmo-grgsm}"
 LNK="$TREE/build/qemu-system-arm"
 
 # Pas de binaire (image inter-STP) ou pas d'arbre (reclone impossible, reseau
@@ -2052,7 +2052,7 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-qemu-link.service" <<'EOF'
 [Unit]
-Description=osmo_egprs - QEMU_BIN dans l'arbre qemu-src (build/qemu-system-arm)
+Description=osmo-operator - QEMU_BIN dans l'arbre qosmo-grgsm (build/qemu-system-arm)
 After=local-fs.target
 [Service]
 Type=oneshot
@@ -2062,7 +2062,7 @@ ExecStart=/usr/local/sbin/osmo-qemu-link.sh
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-qemu-link 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qemu-src)"
+echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo-grgsm)"
 
 
 # ── Marqueur de role : ce que CETTE image est ───────────────────────────────
@@ -2124,9 +2124,9 @@ sed -i -e '/^NAME=/d' -e '/^PRETTY_NAME=/d' \
     printf 'VARIANT_ID="%s"\n'    "$OS_VARIANT_ID"
     printf 'IMAGE_ID="%s"\n'      "$OS_NAME"
     printf 'IMAGE_VERSION="%s"\n' "$LABEL"
-    printf 'HOME_URL="https://github.com/bbaranoff/osmo_egprs"\n'
-    printf 'SUPPORT_URL="https://github.com/bbaranoff/osmo_egprs"\n'
-    printf 'BUG_REPORT_URL="https://github.com/bbaranoff/osmo_egprs/issues"\n'
+    printf 'HOME_URL="https://github.com/bbaranoff/osmo-operator"\n'
+    printf 'SUPPORT_URL="https://github.com/bbaranoff/osmo-operator"\n'
+    printf 'BUG_REPORT_URL="https://github.com/bbaranoff/osmo-operator/issues"\n'
 } >> "$_osrel"
 echo -e "  ${GREEN}✓${NC} os-release : ${CYAN}${OS_PRETTY}${NC}"
 
@@ -2147,14 +2147,14 @@ if [ "$ISO_ROLE" = "interstp" ]; then
     # course perdue d'avance.
     cat > "$ROOTFS/etc/systemd/system/osmo-interstp.service" <<EOF
 [Unit]
-Description=osmo_egprs inter-STP - hub SS7 du WAN (PC 0.0.0)
+Description=osmo-operator inter-STP - hub SS7 du WAN (PC 0.0.0)
 Wants=network-online.target
 After=network-online.target systemd-networkd-wait-online.service
 [Service]
 Type=forking
 PIDFile=/run/osmo-interstp.pid
-ExecStart=/opt/GSM/osmo_egprs/start-interstp.sh --ip ${ISO_HUB_IP}
-ExecStop=/opt/GSM/osmo_egprs/start-interstp.sh --stop
+ExecStart=/opt/GSM/osmo-operator/start-interstp.sh --ip ${ISO_HUB_IP}
+ExecStop=/opt/GSM/osmo-operator/start-interstp.sh --stop
 Restart=on-failure
 RestartSec=5
 [Install]
@@ -2176,7 +2176,7 @@ EOF
 # Service web dashboard
 cat > "$ROOTFS/etc/systemd/system/osmo-egprs-web.service" <<'EOF'
 [Unit]
-Description=osmo_egprs Web Dashboard (native)
+Description=osmo-operator Web Dashboard (native)
 After=network.target
 [Service]
 Type=simple
@@ -2240,7 +2240,7 @@ cat > "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh" <<'ACHAIN'
 # jetee par le null-sink. Toujours exit 0 : l'audio ne doit jamais empecher la
 # pile de monter. AUDIO=0 ou AUDIO_LOCAL_LOOPBACK=0 neutralisent.
 set -u
-for r in /opt/GSM/osmo_egprs /etc/osmocom/osmo_egprs; do
+for r in /opt/GSM/osmo-operator /etc/osmocom/osmo-operator; do
     [ -x "$r/scripts/audio-chain.sh" ] && exec "$r/scripts/audio-chain.sh" "${1:-30}"
 done
 exit 0
@@ -2271,7 +2271,7 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]
-Description=osmo_egprs PulseAudio system daemon (GSM audio)
+Description=osmo-operator PulseAudio system daemon (GSM audio)
 After=sound.target
 [Service]
 Type=forking
@@ -2322,25 +2322,25 @@ EOF
 # bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 # Active par defaut l'environnement python (gr-gsm + bridges) utilise par
-# /opt/GSM/osmo_egprs/start-direct.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+# /opt/GSM/osmo-operator/start-direct.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 # coeur.env est pose dans /etc/osmocom pour survivre au reclone de boot, mais
 # environment/load.env ne va le chercher QUE dans son propre repertoire : sorti
 # de l'arbre, personne ne le lit. On le charge donc ici, ou les deux arbres en
-# heritent - l'arbre fige /opt/GSM/osmo_egprs, qui n'embarque pas environment/, et
-# l'arbre reclone /opt/GSM/osmo_egprs, ou il ne survivrait pas. set -a : sans
+# heritent - l'arbre fige /opt/GSM/osmo-operator, qui n'embarque pas environment/, et
+# l'arbre reclone /opt/GSM/osmo-operator, ou il ne survivrait pas. set -a : sans
 # export, la valeur ne franchirait pas le fork vers start-direct.sh. L'idiome
 # ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
 alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 # Trois annonces designaient trois arbres differents. Le MOTD et le message de
-# login pointent /opt/GSM/osmo_egprs (l'arbre fige, present meme sans reseau) ;
-# l'alias visait /opt/GSM/osmo_egprs (l'arbre reclone au demarrage). Les deux
+# login pointent /opt/GSM/osmo-operator (l'arbre fige, present meme sans reseau) ;
+# l'alias visait /opt/GSM/osmo-operator (l'arbre reclone au demarrage). Les deux
 # fonctionnent, mais un utilisateur qui suit l'un puis l'autre ne travaille pas
 # au meme endroit. On prend le premier chemin qui existe, dans l'ordre ou ils
 # sont les plus complets.
-alias osmo-lab='cd /opt/GSM/osmo_egprs; ./start-direct.sh'
+alias osmo-lab='cd /opt/GSM/osmo-operator; ./start-direct.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
 alias osmo-status='/etc/osmocom/status.sh status'
 export PATH="$HOME/.local/bin:$PATH"
@@ -2370,11 +2370,11 @@ LOGO
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
   # Le chemin annonce ici est celui de l'arbre FIGE, comme le message de login
-  # et comme le lien osmo-start-direct. Il nommait /opt/GSM/osmo_egprs, que
+  # et comme le lien osmo-start-direct. Il nommait /opt/GSM/osmo-operator, que
   # osmo-update.service effacait et reclonait au demarrage : sans reseau au boot,
   # la premiere chose que lisait l'utilisateur designait un arbre qui pouvait ne
   # pas etre la. Le reclone a disparu, l'arbre fige reste - il ne depend de rien.
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo_egprs/start-direct.sh"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo-operator/start-direct.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "FFT spectres   ->  http://<vm-ip>:8081"
@@ -2413,11 +2413,11 @@ touch "$ROOTFS/etc/fstab"
 sed -i -E \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]/d' \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/dev\/shm[[:space:]]/d' \
-    -e '/^# osmo_egprs live - espace writable/d' \
+    -e '/^# osmo-operator live - espace writable/d' \
     "$ROOTFS/etc/fstab"
 # /dev/shm : sizing via fstab (sans risque de doublon generateur).
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
-# osmo_egprs live - espace writable (cfiles I/Q FFT)
+# osmo-operator live - espace writable (cfiles I/Q FFT)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=20%   0 0
 FSTAB
 # /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
@@ -2453,7 +2453,7 @@ chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
 #    plafonne. Sans RuntimeMaxUse, journald s'autorise 10 % de la RAM.
 mkdir -p "$ROOTFS/etc/systemd/journald.conf.d"
 cat > "$ROOTFS/etc/systemd/journald.conf.d/osmo-live.conf" <<'EOF'
-# osmo_egprs live : la racine est en RAM, le journal ne doit pas la manger.
+# osmo-operator live : la racine est en RAM, le journal ne doit pas la manger.
 [Journal]
 Storage=volatile
 RuntimeMaxUse=64M
@@ -2479,14 +2479,14 @@ EOF
 # logrotate.timer ne passe qu'une fois par jour : trop tard pour un tmpfs.
 cat > "$ROOTFS/etc/systemd/system/osmo-logrotate.service" <<'EOF'
 [Unit]
-Description=osmo_egprs - rotation des journaux Osmocom (racine en RAM)
+Description=osmo-operator - rotation des journaux Osmocom (racine en RAM)
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/logrotate /etc/logrotate.d/osmocom --state /run/osmo-logrotate.state
 EOF
 cat > "$ROOTFS/etc/systemd/system/osmo-logrotate.timer" <<'EOF'
 [Unit]
-Description=osmo_egprs - rotation des journaux Osmocom toutes les 15 min
+Description=osmo-operator - rotation des journaux Osmocom toutes les 15 min
 [Timer]
 OnBootSec=10min
 OnUnitActiveSec=15min
@@ -2500,7 +2500,7 @@ chroot "$ROOTFS" systemctl enable osmo-logrotate.timer 2>/dev/null || true
 #    constituer un historique - qu'aucun live ne pourrait de toute facon garder.
 mkdir -p "$ROOTFS/etc/tmpfiles.d"
 cat > "$ROOTFS/etc/tmpfiles.d/osmo-captures.conf" <<'EOF'
-# osmo_egprs : les captures vivent en RAM, on ne les garde pas plus d'une heure.
+# osmo-operator : les captures vivent en RAM, on ne les garde pas plus d'une heure.
 d /run/user/0/osmo-nitb/captures 0755 root root 1h
 EOF
 
@@ -2521,7 +2521,7 @@ EOF
 # -w il n'y a rien a borner.
 cat > "$ROOTFS/usr/local/bin/tcpdump" <<'TCPDUMPEOF'
 #!/bin/sh
-# tcpdump - wrapper osmo_egprs : impose un anneau aux captures sur fichier.
+# tcpdump - wrapper osmo-operator : impose un anneau aux captures sur fichier.
 #
 # La racine du live est un tmpfs : une capture non bornee finit par remplir la
 # RAM, et l'erreur ("No space left on device") tombe des heures plus tard, sur
@@ -2635,7 +2635,7 @@ PURGEEOF
 chmod +x "$ROOTFS/usr/local/sbin/osmo-purge.sh"
 cat > "$ROOTFS/etc/systemd/system/osmo-purge.service" <<'EOF'
 [Unit]
-Description=osmo_egprs - purge des journaux, captures et fichiers de travail
+Description=osmo-operator - purge des journaux, captures et fichiers de travail
 DefaultDependencies=no
 After=local-fs.target
 Before=osmo-stp.service osmo-interstp.service osmo-msc.service osmo-bsc.service
@@ -2682,10 +2682,10 @@ chroot "$ROOTFS" dpkg-reconfigure -f noninteractive keyboard-configuration 2>/de
 # start-direct.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
 # Lui dicter start-direct.sh, c'est envoyer droit dans une erreur.
 if [ "$ISO_ROLE" = "interstp" ]; then
-    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo_egprs/start-interstp.sh'
+    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo-operator/start-interstp.sh'
     OSMO_START_HINT2='  (etat des noeuds attaches : ./start-interstp.sh --status)'
 else
-    OSMO_START_HINT='Pour demarrer la stack : /opt/GSM/osmo_egprs/start-direct.sh --node N'
+    OSMO_START_HINT='Pour demarrer la stack : /opt/GSM/osmo-operator/start-direct.sh --node N'
     OSMO_START_HINT2='  (N de 1 a 9 : il fixe les point codes 1.<N>1.x du noeud)'
 fi
 cat > "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh" <<KBSCRIPT
@@ -2883,8 +2883,8 @@ INSTALLER
     cat > "$ROOTFS/usr/share/applications/osmo-install.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
-Name=Installer osmo_egprs
-Name[fr]=Installer osmo_egprs
+Name=Installer osmo-operator
+Name[fr]=Installer osmo-operator
 Comment=Installer le banc GSM/EGPRS sur le disque
 Comment[fr]=Installer le banc GSM/EGPRS sur le disque
 Exec=/usr/local/bin/osmo-install
@@ -2912,7 +2912,7 @@ fi
 
 # ── LE LANCEUR GTK "UPDATE" -> update.sh DU DEPOT ───────────────────────────
 # Independant de Calamares : c'est une icone de bureau qui rejoue update.sh, le
-# fichier SUIVI dans le depot osmo_egprs (/opt/GSM/osmo_egprs/update.sh).
+# fichier SUIVI dans le depot osmo-operator (/opt/GSM/osmo-operator/update.sh).
 # update.sh est une animation de TERMINAL : sa premiere ligne utile est
 # "[ -t 1 ] || exit 0", donc lance sans tty (depuis une icone GTK) il sort
 # aussitot sans rien montrer. Le lanceur l'ouvre DONC dans un emulateur de
@@ -2921,9 +2921,9 @@ fi
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > "$ROOTFS/usr/local/bin/osmo-update-anim" <<'UPDGUI'
 #!/bin/bash
-# Rejoue l animation update.sh du depot osmo_egprs, dans une fenetre terminal.
+# Rejoue l animation update.sh du depot osmo-operator, dans une fenetre terminal.
 set -u
-SCRIPT=/opt/GSM/osmo_egprs/update.sh
+SCRIPT=/opt/GSM/osmo-operator/update.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="update.sh introuvable : $SCRIPT" 2>/dev/null
@@ -2935,8 +2935,8 @@ CMD="\"$SCRIPT\"; echo; read -n1 -rsp 'Termine - une touche pour fermer...'"
 for term in x-terminal-emulator gnome-terminal xterm; do
     command -v "$term" >/dev/null 2>&1 || continue
     case "$term" in
-        gnome-terminal) exec "$term" --title="osmo_egprs update" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "osmo_egprs update" -e bash -c "$CMD" ;;
+        gnome-terminal) exec "$term" --title="osmo-operator update" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "osmo-operator update" -e bash -c "$CMD" ;;
     esac
 done
 # Aucun emulateur : dernier recours, on joue directement (utile en tty).
@@ -2947,10 +2947,10 @@ UPDGUI
     cat > "$ROOTFS/usr/share/applications/osmo-update.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
-Name=Update osmo_egprs
-Name[fr]=Mise a jour osmo_egprs
-Comment=Rejouer update.sh du depot osmo_egprs
-Comment[fr]=Rejouer update.sh du depot osmo_egprs
+Name=Update osmo-operator
+Name[fr]=Mise a jour osmo-operator
+Comment=Rejouer update.sh du depot osmo-operator
+Comment[fr]=Rejouer update.sh du depot osmo-operator
 Exec=/usr/local/bin/osmo-update-anim
 Icon=system-software-update
 Terminal=false
@@ -3261,7 +3261,7 @@ printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered - MT end-to-end Message 
 
 printf '\n'
 printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
-printf '      \033[1;32mcd /opt/GSM/osmo_egprs && ./start-direct.sh\033[0m\n\n'
+printf '      \033[1;32mcd /opt/GSM/osmo-operator && ./start-direct.sh\033[0m\n\n'
 printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
 printf '  \033[2mChromium est confine par defaut ; --no-sandbox pour passer outre.\033[0m\n'
 if [ -d /run/live/medium ]; then
@@ -3280,7 +3280,7 @@ for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom" "$ROOTFS/etc/skel"; do
     [ -f "$_h/.bashrc" ] || cp "$ROOTFS/etc/skel/.bashrc" "$_h/.bashrc" 2>/dev/null || : > "$_h/.bashrc"
     grep -q 'osmo-banner' "$_h/.bashrc" 2>/dev/null || cat >> "$_h/.bashrc" <<'BASHRC'
 
-# ── Banniere osmo_egprs ─────────────────────────────────────────────────────
+# ── Banniere osmo-operator ─────────────────────────────────────────────────────
 # Interactif ET terminal ET pas deja jouee : voir /usr/local/bin/osmo-banner.
 # Retirer ces trois lignes suffit a s en debarrasser.
 if [[ $- == *i* ]] && [ -t 1 ] && [ -z "${OSMO_BANNER:-}" ] && [ -x /usr/local/bin/osmo-banner ]; then
@@ -3290,7 +3290,7 @@ fi
 BASHRC
 done
 chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} banniere de terminal : animation + ${CYAN}cd /opt/GSM/osmo_egprs && ./start-direct.sh${NC}"
+echo -e "  ${GREEN}✓${NC} banniere de terminal : animation + ${CYAN}cd /opt/GSM/osmo-operator && ./start-direct.sh${NC}"
 
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
@@ -3378,7 +3378,7 @@ set timeout=5
 # TROIS entrees, et le reste dans un sous-menu. Cinq lignes dont deux doublons
 # "verbose", c est un menu ou l on cherche - alors que le choix reel n en compte
 # que trois : lire depuis le medium, copier en RAM, ecrire sur le medium.
-menuentry "osmo_egprs" {
+menuentry "osmo-operator" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
@@ -3390,7 +3390,7 @@ menuentry "osmo_egprs" {
 # fige plusieurs minutes sans le moindre signe de vie, et on croit a un
 # plantage. D ou "toram=filesystem.squashfs" (seul le squashfs est copie, et le
 # tmpfs est dimensionne sur lui) et l absence de "quiet" ici : la copie se voit.
-menuentry "osmo_egprs - en RAM (copie ${SQ_GB} Go - ${RAM_TORAM_GB} Go de RAM mini)" {
+menuentry "osmo-operator - en RAM (copie ${SQ_GB} Go - ${RAM_TORAM_GB} Go de RAM mini)" {
     linux  /boot/vmlinuz boot=live toram=filesystem.squashfs
     initrd /boot/initrd.img
 }
@@ -3406,7 +3406,7 @@ menuentry "osmo_egprs - en RAM (copie ${SQ_GB} Go - ${RAM_TORAM_GB} Go de RAM mi
 #   sudo mount /dev/sdX3 /mnt && echo "/ union" | sudo tee /mnt/persistence.conf
 # En VM, un second disque suffit. Sans volume ainsi etiquete, cette entree
 # demarre comme un live ordinaire : rien ne casse, rien n est garde.
-menuentry "osmo_egprs - persistant (ecrit sur le medium)" {
+menuentry "osmo-operator - persistant (ecrit sur le medium)" {
     linux  /boot/vmlinuz boot=live persistence persistence-encryption=none quiet
     initrd /boot/initrd.img
 }
@@ -3415,11 +3415,11 @@ menuentry "osmo_egprs - persistant (ecrit sur le medium)" {
 # lignes de commande sans "quiet". Elles restent atteignables, mais elles ne
 # tiennent plus la moitie du menu.
 submenu "Options (demarrage verbeux)" {
-    menuentry "osmo_egprs - verbose" {
+    menuentry "osmo-operator - verbose" {
         linux  /boot/vmlinuz boot=live
         initrd /boot/initrd.img
     }
-    menuentry "osmo_egprs - persistant verbose" {
+    menuentry "osmo-operator - persistant verbose" {
         linux  /boot/vmlinuz boot=live persistence persistence-encryption=none
         initrd /boot/initrd.img
     }
@@ -3455,7 +3455,7 @@ echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; tora
 #
 # Les ISO Ubuntu et Debian posent ce meme fichier, pour cette meme raison.
 mkdir -p "$ISOROOT/.disk"
-printf 'osmo_egprs %s - live amd64 (%s)\n' "$VERSION" "$LABEL" > "$ISOROOT/.disk/info"
+printf 'osmo-operator %s - live amd64 (%s)\n' "$VERSION" "$LABEL" > "$ISOROOT/.disk/info"
 cp "$ISOROOT/.disk/info" "$ISOROOT/.disk/mini-info"
 echo -e "  ${GREEN}✓${NC} ${CYAN}/.disk/info${NC} pose : le GRUB signe retrouve le medium en UEFI"
 
@@ -3690,7 +3690,7 @@ EOF
 chmod +x "$XORRISO_WRAP"
 
     grub-mkrescue --xorriso="$XORRISO_WRAP" -o "$OUTPUT" "$ISOROOT" \
-        --product-name "osmo_egprs $VERSION" -- -volid "$LABEL"
+        --product-name "osmo-operator $VERSION" -- -volid "$LABEL"
     if command -v isohybrid &>/dev/null; then
         isohybrid --uefi "$OUTPUT"
     fi

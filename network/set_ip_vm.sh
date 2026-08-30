@@ -409,7 +409,7 @@ if [ "$PERSIST" = 1 ]; then
     else
         cat > /etc/systemd/system/osmo-docker-route.service <<EOF
 [Unit]
-Description=osmo_egprs - route vers les conteneurs docker (${DOCKER_NET})
+Description=osmo-operator - route vers les conteneurs docker (${DOCKER_NET})
 After=network-online.target
 Wants=network-online.target
 [Service]

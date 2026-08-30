@@ -372,7 +372,7 @@ def main():
 
     out("")
     out("%s============================================================%s" % (C, N))
-    out("%s  DIAGNOSTIC SS7 - osmo_egprs - %s%s"
+    out("%s  DIAGNOSTIC SS7 - osmo-operator - %s%s"
         % (C, time.strftime("%Y-%m-%d %H:%M:%S"), N))
     out("%s============================================================%s" % (C, N))
 

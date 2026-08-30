@@ -2656,7 +2656,7 @@ def main():
     # a5/1 anterieur fait chiffrer le pont avec une cle etrangere — y compris sur un
     # reseau en a5 0. Mesure : A5 dl=680 alors qu'osmocon n'avait ecrit AUCUN Kc.
     # (Prescrit par SHUNT_LEGIT_ADDRESS_MAP.md:271 ; 09-teardown.sh:175 le fait pour
-    # le pipeline qemu-src, mais pas pour le pont.)
+    # le pipeline qosmo-grgsm, mais pas pour le pont.)
     try:
         os.unlink(KC_PATH)
         ST.log("Kc purge au demarrage (%s) — pas de cle heritee d'un run precedent" % KC_PATH)

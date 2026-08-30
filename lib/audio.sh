@@ -1,5 +1,5 @@
 # =============================================================================
-#  lib/audio.sh - la chaine audio d'osmo_egprs (PulseAudio + pont GAPK)
+#  lib/audio.sh - la chaine audio d'osmo-operator (PulseAudio + pont GAPK)
 # =============================================================================
 #
 #  CE FICHIER EST UNE EXTRACTION, PAS UNE REECRITURE.
@@ -8,7 +8,7 @@
 #
 #  POURQUOI LES PRESERVER.
 #  Le mode `qemu` de start-direct.sh appelait ensure_gapk JUSTE AVANT de passer
-#  la main a qemu-src/start-clean.sh (legacy L1077). C'est ce qui branche le RTP
+#  la main a qosmo-grgsm/start-clean.sh (legacy L1077). C'est ce qui branche le RTP
 #  du MGW sur le sink `gsm_audio` : sans lui, la pile monte, l'appel s'etablit,
 #  et personne n'entend rien. Le chemin `qemu` devant continuer a marcher a
 #  l'identique, cette precondition devait survivre au decoupage - on la deplace,
@@ -20,7 +20,7 @@
 #  AUDIO=0 desactive toute la mise en place, exactement comme dans l'original.
 # -----------------------------------------------------------------------------
 
-: "${HERE:=/opt/GSM/osmo_egprs}"
+: "${HERE:=/opt/GSM/osmo-operator}"
 : "${LOG_DIR:=/root}"
 : "${AUDIO:=1}"
 : "${PULSE_SOCK:=/var/run/pulse/native}"
@@ -324,5 +324,5 @@ ensure_gapk() {
 #   Les 2 MS s'enregistrent sur le meme osmo-bsc/MSC/HLR → appel intra-MSC.
 #   1 BTS = 1 horloge (clk_s par process osmo-bts-trx) → pas de conflit d'horloge :
 #   une seule osmo-bts-trx 2-PHY est IMPOSSIBLE (clk_s partage, reset ping-pong),
-#   d'ou 2 process distincts. On NE TOUCHE NI qemu-src/run.sh NI osmo-bts-trx.cfg.
+#   d'ou 2 process distincts. On NE TOUCHE NI qosmo-grgsm/run.sh NI osmo-bts-trx.cfg.
 # ══════════════════════════════════════════════════════════════════════════

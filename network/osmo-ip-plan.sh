@@ -100,7 +100,7 @@ uplink_dev() {
 # Le plan prive (192.168.<noeud+1>.x) est une convention ; ce qui compte, c'est
 # l'adresse que chaque demon va REELLEMENT essayer de lier. Elle est ecrite dans
 # /etc/osmocom, et elle peut venir d'un autre generateur que le notre :
-# qemu-src/run_modules/08-gabarits.sh passe op_private_ip() a
+# qosmo-grgsm/run_modules/08-gabarits.sh passe op_private_ip() a
 # apply_config_templates, donc 192.168.2.10, quand la recette native de l'ISO
 # passe 127.0.0.2. Deux verites, et le demon suit la sienne :
 #     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> bind sur une adresse absente

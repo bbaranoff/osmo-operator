@@ -3,7 +3,7 @@
 # tools/vbox-wan-lab.sh - N machines VirtualBox, un noeud de WAN chacune
 #
 # Monte un WAN complet sur une seule machine : N VM (1 a 9, 3 par defaut)
-# bootent la MEME ISO osmo_egprs, sur un reseau interne commun, et chacune se
+# bootent la MEME ISO osmo-operator, sur un reseau interne commun, et chacune se
 # reconnait comme le noeud dont l'IP est la sienne. Depuis un MS de la VM 2,
 # composer <indicatif de la VM 1> + le numero joint un MS de la VM 1.
 #
@@ -216,7 +216,7 @@ build_table() {
 
 find_iso() {
     local latest
-    latest="$(ls -t "$DIR"/osmo_egprs-*.iso 2>/dev/null | head -1)"
+    latest="$(ls -t "$DIR"/osmo-operator-*.iso 2>/dev/null | head -1)"
     [ -n "$latest" ] && { echo "$latest"; return 0; }
     return 1
 }
@@ -463,9 +463,9 @@ do_hint() {
     echo -e "  ${BOLD}Demarrer :${NC} ${CYAN}$0 start${NC}"
     echo ""
     echo -e "  ${BOLD}Dans chaque VM (autologin root) :${NC}"
-    echo -e "    ${CYAN}/opt/GSM/osmo_egprs/start-direct.sh${NC}"
+    echo -e "    ${CYAN}/opt/GSM/osmo-operator/start-direct.sh${NC}"
     echo -e "    → la table WAN figee dans l'ISO est appliquee toute seule (WAN_AUTO=1)."
-    echo -e "    → sans ISO --wan : ${CYAN}/opt/GSM/osmo_egprs/start-direct.sh --wan${NC}"
+    echo -e "    → sans ISO --wan : ${CYAN}/opt/GSM/osmo-operator/start-direct.sh --wan${NC}"
     echo ""
     echo -e "  ${BOLD}Appeler d'un noeud a l'autre :${NC}"
     local a b
@@ -473,7 +473,7 @@ do_hint() {
     echo -e "    depuis un MS du noeud ${a} : ${CYAN}${WAN_IND[$b]}10001${NC} → MS 10001 du noeud ${b}"
     echo -e "    SMS : meme numerotation (${CYAN}${WAN_IND[$b]}10001${NC})"
     echo ""
-    echo -e "  ${BOLD}Diagnostic dans une VM :${NC} ${CYAN}/opt/GSM/osmo_egprs/checks/wan_ss7_check.sh${NC}"
+    echo -e "  ${BOLD}Diagnostic dans une VM :${NC} ${CYAN}/opt/GSM/osmo-operator/checks/wan_ss7_check.sh${NC}"
     echo ""
 }
 

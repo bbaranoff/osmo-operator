@@ -14,5 +14,5 @@ export OSMO_DISCLAIMER_SHOWN=1
 printf "\n  \033[1;33mDisclaimer\033[0m - banc d'essai GSM/SS7 Osmocom (conteneur %s).\n" "$(hostname)"
 printf "  A n'utiliser que sur un reseau radio \033[1mISOLE\033[0m (cage/attenuateur) ou\n"
 printf "  sur une bande sous licence : emettre sur le spectre public est illegal.\n"
-printf "  \033[1;33mDemarrer la pile radio :\033[0m cd /opt/GSM/osmo_egprs && ./start-direct.sh --force\n"
+printf "  \033[1;33mDemarrer la pile radio :\033[0m cd /opt/GSM/osmo-operator && ./start-direct.sh --force\n"
 printf "  \033[0;36mSuivre :\033[0m tmux attach -t calypso   \033[0;36m(Ctrl-b puis d pour se detacher)\033[0m\n\n"

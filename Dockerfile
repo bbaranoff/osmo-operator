@@ -9,7 +9,7 @@
 #
 # L'iteration quotidienne se fait dans Dockerfile.run, qui repart de cette image
 # (`FROM osmocom-nitb`) et n'y rafraichit que les scripts, les configs, le pont
-# et les arbres git qemu-src / osmo_egprs — en secondes, pas en 40 minutes.
+# et les arbres git qosmo-grgsm / osmo-operator — en secondes, pas en 40 minutes.
 #
 # Cette image reste AUTONOME : elle a son propre ENTRYPOINT et start-nitb.sh la
 # lance seule. Ne pas retirer ses COPY de configs/scripts sous pretexte que
@@ -88,7 +88,7 @@ RUN apt-fast update && apt-fast install -y --no-install-recommends \
     gcc-9 g++-9 gcc-11 g++-11 \
     # log4cpp : etait installe a part avec le build-dep gnuradio (gr-gsm).
     liblog4cpp5-dev \
-    # QEMU Calypso (fork bbaranoff/qemu) : venv + numpy/scipy pour l'outillage
+    # QEMU Calypso (fork bbaranoff/qosmo-grgsm) : venv + numpy/scipy pour l'outillage
     # DSP, glib/pixman/slirp pour la cible arm-softmmu, ninja pour meson, socat
     # pour les PTY de scripts/run.sh. (Ex-bloc apt-get juste avant le build QEMU.)
     python3-venv python3-pip python3-numpy python3-scipy \
@@ -428,11 +428,10 @@ RUN set -eux; \
 #  a ete fusionne dans la liste apt-fast en tete de fichier : une seule liste,
 #  un seul endroit ou la faire evoluer. Aucun paquet perdu.)
 
-# Build QEMU fork bbaranoff/qemu (cible arm-softmmu, machine "calypso")
+# Build QEMU fork bbaranoff/qosmo-grgsm (cible arm-softmmu, machine "calypso")
 RUN cd /opt/GSM \
-    && git clone https://github.com/bbaranoff/qemu.git /opt/GSM/qemu-src \
-    && cd /opt/GSM/qemu-src \
-    && git checkout RELEASE-0.1 \
+    && git clone https://github.com/bbaranoff/qosmo-grgsm /opt/GSM/qosmo-grgsm \
+    && cd /opt/GSM/qosmo-grgsm \
     && python3 -m venv /root/.venv-qemu \
     && . /root/.venv-qemu/bin/activate \
     && pip install --no-cache-dir tomli \
@@ -444,21 +443,21 @@ RUN cd /opt/GSM \
 
 # Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
 RUN mkdir -p /opt/GSM/qemu/build \
-    && cp /opt/GSM/qemu-src/*.py /opt/GSM/qemu/ 2>/dev/null || true \
+    && cp /opt/GSM/qosmo-grgsm/*.py /opt/GSM/qemu/ 2>/dev/null || true \
     && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
-    && ln -sf /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
+    && ln -sf /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
 
 # ROM DSP binaire, derivee du .txt symlinke juste au-dessus (ex-Dockerfile.run).
-# Semantique inchangee : elle etait deja generee AVANT le `git pull` de qemu-src
+# Semantique inchangee : elle etait deja generee AVANT le `git pull` de qosmo-grgsm
 # de l'image run. Pour un /opt/GSM/calypso_dsp a jour il faudrait la rejouer
 # APRES ce pull — ce n'est pas l'objet de ce decoupage.
-RUN python3 /opt/GSM/qemu-src/tools/dsp_txt2bin.py /opt/GSM/qemu-src/calypso_dsp.txt /opt/GSM/calypso_dsp
+RUN python3 /opt/GSM/qosmo-grgsm/tools/dsp_txt2bin.py /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp
 
 # Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
 # PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
 # dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
 # osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-RUN cd /opt/GSM/qemu-src/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
+RUN cd /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device && make clean && make -j"$(nproc)"
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
@@ -492,7 +491,7 @@ RUN git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 RUN . ~/.env/bin/activate && pip install matplotlib
 
-# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qemu-src/run.sh casse) :
+# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qosmo-grgsm/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
 COPY opt-gsm/. /opt/GSM/
@@ -507,17 +506,17 @@ RUN cd /opt/GSM \
     && make install \
     && ldconfig
 
-# ── si_bridge.py : la version qemu-src ecrase celle du depot ─────────────────
+# ── si_bridge.py : la version qosmo-grgsm ecrase celle du depot ─────────────────
 # Ex-Dockerfile.run. ⚠️ ORDRE CRITIQUE : ce `cp` DOIT rester APRES
 # `COPY opt-gsm/. /opt/GSM/` ci-dessus. Place avant, c'est opt-gsm/si_bridge.py
 # (version du depot) qui reprendrait le dessus et le demodulateur du SI reel
 # changerait EN SILENCE — panne visible seulement par un camping qui ne se fait
 # plus, sans message.
-# Comportement identique a avant le decoupage : c'est la version qemu-src qui
+# Comportement identique a avant le decoupage : c'est la version qosmo-grgsm qui
 # est en place dans l'image. Quelle copie fait foi (opt-gsm/si_bridge.py du
-# depot ou qemu-src/opt-gsm-scripts/si_bridge.py) reste un arbitrage A TRANCHER
+# depot ou qosmo-grgsm/opt-gsm-scripts/si_bridge.py) reste un arbitrage A TRANCHER
 # — cf. start-nitb.sh l.7 : « 4 copies de si_bridge.py, toutes divergentes ».
-RUN cp /opt/GSM/qemu-src/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
+RUN cp /opt/GSM/qosmo-grgsm/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
 
 # ── GCC 9 pour osmocom-bb branches expérimentales (jolly/testing, burst_ind) ─
 # gcc-9 et gcc-11 sont installés avec le reste, plus haut : ici on ne fait que
@@ -531,18 +530,14 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 
 # Chemin EXPLICITE. Sans lui, ce clone heritait du WORKDIR /etc/osmocom (pose
 # beaucoup plus haut, jamais remis a ${ROOT}) et atterrissait dans
-# /etc/osmocom/osmo_egprs — masque au runtime par le montage de start.sh l.505,
+# /etc/osmocom/osmo-operator — masque au runtime par le montage de start.sh l.505,
 # et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
-# HEAD, un seul utilise. /opt/GSM/osmo_egprs est le chemin nominal, teste en
+# HEAD, un seul utilise. /opt/GSM/osmo-operator est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
-# ⚠️ `git checkout RELEASE-0.1` TOUT COURT NE MARCHE PAS ICI : le depot porte
-# AUSSI un tag nomme RELEASE-0.1 (457ff2e, la pointe de main). Git resout
-# refs/tags/ AVANT le DWIM vers refs/remotes/origin/, donc on atterrissait sur
-# le TAG en HEAD detache — pas sur la branche (2ca6e24) — et le `git pull` de
-# Dockerfile.run l.125 mourait sur « You are not currently on a branch ».
-# `-B <branche> origin/<branche>` est explicite : jamais ambigu, et pose le
-# suivi amont dont le pull a besoin.
-RUN git clone https://github.com/bbaranoff/osmo_egprs /opt/GSM/osmo_egprs && cd /opt/GSM/osmo_egprs && git checkout -B RELEASE-0.1 origin/RELEASE-0.1
+# On reste sur la branche par defaut du depot (main) : pas de checkout explicite,
+# donc pas de ref a maintenir ici, et HEAD est attache — ce dont le `git pull`
+# de Dockerfile.run a besoin.
+RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 RUN git clone --branch jolly/testing --depth 1 \

@@ -1,4 +1,4 @@
-# ss7console - console SS7 de osmo_egprs.
+# ss7console - console SS7 de osmo-operator.
 #
 # Le paquet est volontairement sans dependance : rien que la bibliotheque
 # standard de Python 3. Il tourne sur l'HOTE, et parle au lab par deux

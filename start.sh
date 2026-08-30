@@ -19,7 +19,7 @@ set -eu
 # aurait legitimement sa place.
 if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
     printf '\033[1;31mVous etes dans le docker ! Utilisez start-direct.sh\033[0m\n' >&2
-    printf '\n  \033[0;36m/opt/GSM/osmo_egprs/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le depot)\n' >&2
+    printf '\n  \033[0;36m/opt/GSM/osmo-operator/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le depot)\n' >&2
     printf '\n  start.sh est le lanceur de l'"'"'HOTE : il construit l'"'"'image, cree les\n' >&2
     printf '  reseaux et fait le "docker run". Rien de tout ca n'"'"'a de sens ici.\n' >&2
     exit 1
@@ -154,7 +154,7 @@ op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 #   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
 #            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
 #
-# Sans cette distinction, qemu-src/run_modules/08-gabarits.sh appelait
+# Sans cette distinction, qosmo-grgsm/run_modules/08-gabarits.sh appelait
 # op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
 # TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
 # 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
@@ -314,7 +314,7 @@ wt_msg() {
 # ── Loopback audio cote session utilisateur ───────────────────────────────
 # ── Session audio de l'hote : QUI, et OU ────────────────────────────────────
 # [2026-08-12] Ces deux fonctions codaient "nirvana" en dur et cherchaient
-# /home/<user>/osmo_egprs/loopback.sh - un chemin QUI N'EXISTE PAS (le script
+# /home/<user>/osmo-operator/loopback.sh - un chemin QUI N'EXISTE PAS (le script
 # est network/loopback.sh). Resultat : enable_user_loopback echouait sur toute
 # machine sans utilisateur nirvana, et disable_user_loopback (appele a l'arret)
 # etait deja du code mort ICI. On resout les deux a l'execution.
@@ -614,13 +614,13 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 # ORDRE : cette fonction DOIT etre appelee apres `docker run` et AVANT le
 # `docker exec ... run.sh`. Apres, run.sh aurait deja lu l'ancien code.
 #
-# `--ff-only`, PAS de `reset --hard` : le depot qemu-src du conteneur recoit des
+# `--ff-only`, PAS de `reset --hard` : le depot qosmo-grgsm du conteneur recoit des
 # commits faits a la main pendant une session (c'est le mode de travail : on
 # corrige, on compile, on commite dans le conteneur). Un reset dur les
 # effacerait sans le dire. En avance-rapide seule, une divergence s'ARRETE et se
 # VOIT au lieu d'etre ecrasee en silence.
 #
-# qemu-src est RECOMPILE apres le pull : mettre la source a jour sans relier le
+# qosmo-grgsm est RECOMPILE apres le pull : mettre la source a jour sans relier le
 # binaire ne change rien a ce qui tourne - et c'est indiscernable d'un pull qui
 # aurait echoue. Le juge d'un binaire a jour reste `stat -L /proc/<pid>/exe`.
 #
@@ -629,7 +629,7 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
-    for repo in /opt/GSM/qemu-src /opt/GSM/osmo_egprs /opt/GSM/osmo-egprs-web; do
+    for repo in /opt/GSM/qosmo-grgsm /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
             echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
@@ -650,11 +650,11 @@ force_update_trees() {
     # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
     # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
     echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
-    if docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja' >/dev/null 2>&1; then
-        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qemu-src/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
+    if docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja' >/dev/null 2>&1; then
+        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo-grgsm/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
     else
         echo -e "    ${RED}ninja KO - le run utilisera le binaire de l'image${NC}"
-        docker exec "$c" bash -c 'cd /opt/GSM/qemu-src/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
+        docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
     fi
 }
 
@@ -1199,7 +1199,7 @@ reassert_docker_lan_return() {
 # PoC QEMU - entree par defaut du premier menu
 # ══════════════════════════════════════════════════════════════════════════════
 start_qemu_poc() {
-    echo -e "${GREEN}PoC QEMU Calypso - bring-up minimal + qemu-src/run.sh...${NC}"
+    echo -e "${GREEN}PoC QEMU Calypso - bring-up minimal + qosmo-grgsm/run.sh...${NC}"
     QEMU_POC=1
     start_bridge_mode
 }
@@ -1223,7 +1223,7 @@ start_bridge_mode() {
         [ "${WAN_MESH:-0}" = "1" ] && wan_mesh_configure 1
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="a5 0"
-        echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qemu-src/run.sh · A5/1${NC}"
+        echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qosmo-grgsm/run.sh · A5/1${NC}"
     else
         # ── Mode interactif ──────────────────────────────────────────────────
         # Deja repondu dans le menu WAN (« combien tournent ICI ») : on ne
@@ -2072,7 +2072,7 @@ start_bridge_mode() {
         # que start.sh executait quand il imprimait les lignes a recopier.
         _hcmd() {                      # $1=indice du conteneur -> imprime la commande
             local _na; _na="$(_node_args "$1")"
-            local _cmd="cd /opt/GSM/osmo_egprs && NO_MENU=1"
+            local _cmd="cd /opt/GSM/osmo-operator && NO_MENU=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
             _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
@@ -2267,7 +2267,7 @@ choose_ran_host() {
 choose_network_mode() {
     local choice
     choice=$(wt_menu "Que lancer ?" "Premier choix :" \
-        "qemu"    "PoC QEMU Calypso - qemu-src/run.sh (defaut)" \
+        "qemu"    "PoC QEMU Calypso - qosmo-grgsm/run.sh (defaut)" \
         "virtual" "Reseau VIRTUEL multi-operateurs SS7 (config niveau 2)" \
         "hw"      "SDR physique (net-host) - hw (in dev)") || { echo "Annule."; exit 1; }
     case "$choice" in

@@ -38,7 +38,7 @@ MODE="${MODE:-single}"
 # a la racine du depot (calypso-full.qmd + sketchy.css + sk-filter.html, puis
 # calypso-full.html et calypso-full_files/ au rendu) : quatre artefacts laches
 # dans le depot, que la passe suivante rescannait comme des sources.
-# Nom derive du depot (osmo_egprs -> ./osmo_egprs-qmd) : les bundles de deux
+# Nom derive du depot (osmo-operator -> ./osmo-operator-qmd) : les bundles de deux
 # depots differents peuvent ainsi etre deposes cote a cote sans collision.
 OUTDIR="${OUTDIR:-./$(basename "$(cd "$(dirname "$0")" && pwd)")-qmd}"
 # Section pl4y.store visee par ce bundle : ecrite dans .pl4y-section a la racine

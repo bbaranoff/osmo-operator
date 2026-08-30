@@ -1,5 +1,5 @@
 # =============================================================================
-#  lib/gabarits.sh - le moteur de gabarits de configuration d'osmo_egprs
+#  lib/gabarits.sh - le moteur de gabarits de configuration d'osmo-operator
 # =============================================================================
 #
 #  CE FICHIER EST UNE EXTRACTION, PAS UNE REECRITURE.
@@ -22,7 +22,7 @@
 #
 #  DEPENDANCES D'ENVIRONNEMENT (posees par l'appelant, valeurs de l'ancien
 #  script en defaut) : ENCRYPTION, HOST_IP, ALSA_OUTPUT, ALSA_INPUT.
-#  Le repertoire courant doit etre celui d'osmo_egprs : les fonctions lisent
+#  Le repertoire courant doit etre celui d'osmo-operator : les fonctions lisent
 #  `configs/*.cfg` et `scripts/*` en chemin RELATIF, comme dans l'original.
 # -----------------------------------------------------------------------------
 
@@ -52,7 +52,7 @@ op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 #   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
 #            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
 #
-# Sans cette distinction, qemu-src/run_modules/08-gabarits.sh appelait
+# Sans cette distinction, qosmo-grgsm/run_modules/08-gabarits.sh appelait
 # op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
 # TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
 # 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se

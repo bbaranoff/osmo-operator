@@ -3,8 +3,8 @@
 # update.sh - l'animation SMS de l'ouverture de session. Rien d'autre.
 #
 # [2026-08-27] Ce fichier ne faisait pas ce que son nom dit : il posait un
-# osmo-sync.sh qui, a CHAQUE demarrage, effacait puis reclonait osmo_egprs et
-# osmo-egprs-web depuis GitHub, resynchronisait qemu-src, installait socat a
+# osmo-sync.sh qui, a CHAQUE demarrage, effacait puis reclonait osmo-operator et
+# osmo-egprs-web depuis GitHub, resynchronisait qosmo-grgsm, installait socat a
 # coups d'apt, et rearmait un declencheur sur la console. Trois consequences :
 #
 #   - ce qui tournait sur la machine n'etait plus ce que l'ISO portait, mais ce
@@ -13,7 +13,7 @@
 #   - un paquet reinstalle a chaque boot, c'est un boot qui depend du reseau.
 #
 # Tout cela appartient a la CONSTRUCTION, pas au demarrage : c'est build-iso.sh
-# qui embarque desormais les trois depots AVEC leur .git (et qemu-src avec son
+# qui embarque desormais les trois depots AVEC leur .git (et qosmo-grgsm avec son
 # build/ compile), installe socat/nc/tcpdump/git dans le rootfs, et pose le
 # service du dashboard. Une machine qui demarre n'a plus rien a aller chercher.
 #
