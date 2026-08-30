@@ -28,6 +28,15 @@ Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisa
 
 **Support N opérateurs** : le démarrage en mode bridge accepte de 1 à 9 opérateurs sans modifier aucune configuration. Tous les fichiers (pjsip, dialplan, SMS routing, inter-STP) sont générés dynamiquement selon N.
 
+### Documents voisins
+
+| document | sujet |
+|---|---|
+| [`pont/README.md`](pont/README.md) | **Chiffrement A5, Kc et SACCH** — compte rendu de mesure. À lire avant de chercher une panne radio dans un compteur de CRC : les causes documentées là (Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant) se présentent **toutes** comme « le pont a des CRC ». |
+| [`environment/README.md`](environment/README.md) | variables d'environnement et résolution des chemins |
+| [`services/README.md`](services/README.md) | unités systemd livrées |
+| [`navigation/QUICKSTART.md`](navigation/QUICKSTART.md) | prise en main |
+
 ---
 
 ## 1. Architecture d'un PLMN (Osmocom)
