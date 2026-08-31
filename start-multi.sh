@@ -114,17 +114,49 @@ fi
 : "${MULTI_OPS:=}"
 : "${MULTI_IMAGE:=osmocom-run}"
 
+# ── LIRE LE NATIF PLUTOT QUE LE SUPPOSER ────────────────────────────────────
+# [2026-08-31] La topologie ecrite par addition.sh dit ce qu on ATTEND du
+# natif ; ces deux fonctions disent ce qu il EST. Les confondre a coute cher :
+# on affichait "op natif actif" sur la seule presence d un processus, sans voir
+# qu il portait le point code d un conteneur.
+#
+# Le point code depend du plan choisi, et les deux existent :
+#   plan LOCAL (set-node-id.sh --local) : 1.<op>.<role>        - une machine
+#   plan WAN   (defaut)                 : 1.<noeud><op>.<role> - plusieurs
+# Sur un banc a une machine c est le plan local qui vaut, mais rien n empeche
+# la config d avoir ete posee autrement : on LIT, on ne recalcule pas.
+natif_pc() {
+    awk '/^[[:space:]]*point-code[[:space:]]/{print $2; exit}' \
+        /etc/osmocom/osmo-stp.cfg 2>/dev/null
+}
+
+# L adresse par laquelle le natif sort vers le hub : le local-ip de son ASP
+# asp-to-inter. C est elle qui doit exister sur l hote - un local-ip inbindable
+# est un ASP qui ne monte jamais, sans message clair (cf. le 172.20.0.11 des
+# gabarits, corrige dans generate_configs.sh).
+natif_asp_ip() {
+    awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{a=1; next}
+         a && /^[[:space:]]*local-ip[[:space:]]/{print $2; exit}' \
+        /etc/osmocom/osmo-stp.cfg 2>/dev/null
+}
+
 # ── ETAT ────────────────────────────────────────────────────────────────────
 etat() {
-    local spec idx mode ip pc
+    local spec idx mode ip pc _r
     echo -e "  ${BOLD}Topologie${NC} ($MULTI_CONF)"
     for spec in $MULTI_OPS; do
         IFS=: read -r idx mode ip pc _rctx <<< "$spec"
+        if [ "$mode" = "native" ]; then ip="$(natif_asp_ip)"; fi
         printf '    op %-2s %-7s %-13s PC %-8s ' "$idx" "$mode" "${ip:-(hote)}" "$pc"
         if [ "$mode" = "native" ]; then
             if pgrep -x osmo-bsc >/dev/null 2>&1 || systemctl is-active --quiet asterisk 2>/dev/null \
                || pgrep -f 'asterisk' >/dev/null 2>&1; then
-                echo -e "${GREEN}actif${NC}"
+                _r="$(natif_pc)"
+                if [ -n "$_r" ] && [ "$_r" != "$pc" ]; then
+                    echo -e "${GREEN}actif${NC} ${YELLOW}(PC reel ${_r})${NC}"
+                else
+                    echo -e "${GREEN}actif${NC}"
+                fi
             else
                 echo -e "${YELLOW}arrete${NC}"
             fi
@@ -268,13 +300,13 @@ rc=$?
 # mensongere - un superviseur vivant au-dessus d un pont qui n a jamais
 # transporte un echantillon. On verifie donc l etat REEL, apres coup.
 verifier() {
-    local ko=0 spec idx mode nom
+    local ko=0 spec idx mode nom _ip pc _rctx _pc_reel
     echo
     echo -e "  ${BOLD}── Verification ──${NC}"
 
     # 1. Les quatre elements sont-ils la ?
     for spec in $MULTI_OPS; do
-        IFS=: read -r idx mode _ <<< "$spec"
+        IFS=: read -r idx mode _ip pc _rctx <<< "$spec"
         if [ "$mode" = "docker" ]; then
             nom="osmo-operator-${idx}"
             if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$nom"; then
@@ -283,10 +315,27 @@ verifier() {
                 echo -e "    ${RED}✗${NC} conteneur ${nom} absent"; ko=1
             fi
         else
-            if pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1; then
-                echo -e "    ${GREEN}✓${NC} operateur natif (op ${idx})"
+            if ! pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1; then
+                echo -e "    ${RED}✗${NC} operateur natif arrete - ${CYAN}sudo ${DIR}/start-direct.sh --op ${idx}${NC}"; ko=1
             else
-                echo -e "    ${RED}✗${NC} operateur natif arrete - ${CYAN}sudo ${DIR}/start-direct.sh${NC}"; ko=1
+                # ── LE POINT CODE DU NATIF DOIT CORRESPONDRE A SON RANG ──
+                # Un natif lance sans --op tourne en operateur 1, donc en
+                # PC 1.1.2 - le meme que le PREMIER CONTENEUR, que start.sh
+                # numerote toujours a partir de 1. La pile demarre des deux
+                # cotes, tout parait vert, et c est le ROUTAGE SS7 qui est faux :
+                # deux equipements a la meme adresse. On le verifie donc au lieu
+                # de se contenter de "le processus tourne".
+                _pc_reel="$(natif_pc)"
+                if [ -z "$_pc_reel" ]; then
+                    echo -e "    ${YELLOW}?${NC} operateur natif actif, point code illisible (/etc/osmocom/osmo-stp.cfg)"
+                elif [ "$_pc_reel" = "$pc" ]; then
+                    echo -e "    ${GREEN}✓${NC} operateur natif (op ${idx}, PC ${_pc_reel})"
+                else
+                    echo -e "    ${RED}✗${NC} operateur natif en PC ${_pc_reel}, attendu ${pc}"
+                    echo -e "      il tourne en operateur $(echo "$_pc_reel" | cut -d. -f2), rang deja pris par un CONTENEUR"
+                    echo -e "      ${CYAN}sudo ${DIR}/start-direct.sh --op ${idx}${NC}  (puis relancer ce script)"
+                    ko=1
+                fi
             fi
         fi
     done
