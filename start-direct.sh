@@ -1634,6 +1634,25 @@ if [ -n "$NODE_ID" ]; then
     fi
     say_begin "Identite SS7 du noeud $NODE_ID"
     setid_args=(--node "$NODE_ID" --op "$NODE_OP" --mode "$NODE_MODE")
+    # ── PLAN LOCAL HORS WAN ─────────────────────────────────────────────────
+    # [2026-08-31] --local n etait JAMAIS passe. set-node-id.sh prenait donc
+    # toujours le plan WAN, MID=<noeud><op> :
+    #     noeud 1 / op 2 -> 1.12.2      noeud 1 / op 3 -> 1.13.2
+    # alors que le hub et la topologie du banc attendent le plan LOCAL,
+    # MID=<op> :
+    #     op 2 -> 1.2.2                 op 3 -> 1.3.2
+    # Les conteneurs s enregistraient donc en 1.12.2 / 1.13.2 (visible cote hub
+    # sous as-rkm-1250 / as-rkm-1350, ACTIFS), pendant que les AS statiques
+    # as-op2 / as-op3 attendaient en 1.2.2 / 1.3.2 et restaient AS_DOWN.
+    # Consequence : tout le monde attache, personne routable - les routes vers
+    # 1.2.2 et 1.3.2 sortaient PROHIB chez le natif. Rien ne signalait le
+    # desaccord de plan : les deux cotes avaient raison, chacun dans le sien.
+    #
+    # Le plan WAN n a de sens qu ENTRE MACHINES. Sans WAN, une seule machine
+    # porte tout : c est le plan local qui vaut, et c est deja celui du natif.
+    if [ "${WAN_MESH:-0}" != "1" ] && [ -z "${WAN_NODES:-}" ]; then
+        setid_args+=(--local)
+    fi
     [ -n "$HUB_IP" ] && setid_args+=(--hub-ip "$HUB_IP")
     if [ "$DRY" -eq 1 ]; then
         say_end " -- " "$C_DIM" "Identite SS7 du noeud $NODE_ID" "dry-run"

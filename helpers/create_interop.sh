@@ -129,7 +129,15 @@ EOF
         done
     done
 else
-for i in $(seq 1 "$n_operators"); do
+# [2026-08-31] DE 1 AU RANG LE PLUS HAUT, pas "1 a n_operators".
+# n_operators compte les CONTENEURS ; il ne dit rien du natif, qui est un
+# operateur du banc au meme titre. Avec OP_ID_BASE=2 - conteneurs en 2 et 3,
+# natif en 1 - la boucle produisait as-op1 et as-op2 pour DEUX conteneurs
+# qui sont en realite op2 et op3 : le hub declarait donc un as-op2 en 1.2.2
+# que personne ne venait prendre, et AUCUN as-op3. D ou, cote natif,
+#     1.2.2/14 INACC ... PROHIB   1.3.2/14 INACC ... PROHIB
+# et un banc ou les operateurs sont attaches mais ne se routent pas.
+for i in $(seq 1 "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
     rctx_inter=$(( i * 100 + 50 ))
     pc_stp="1.${i}.2"
 
@@ -157,7 +165,15 @@ EOF
         done
     done
 else
-for i in $(seq 1 "$n_operators"); do
+# [2026-08-31] DE 1 AU RANG LE PLUS HAUT, pas "1 a n_operators".
+# n_operators compte les CONTENEURS ; il ne dit rien du natif, qui est un
+# operateur du banc au meme titre. Avec OP_ID_BASE=2 - conteneurs en 2 et 3,
+# natif en 1 - la boucle produisait as-op1 et as-op2 pour DEUX conteneurs
+# qui sont en realite op2 et op3 : le hub declarait donc un as-op2 en 1.2.2
+# que personne ne venait prendre, et AUCUN as-op3. D ou, cote natif,
+#     1.2.2/14 INACC ... PROHIB   1.3.2/14 INACC ... PROHIB
+# et un banc ou les operateurs sont attaches mais ne se routent pas.
+for i in $(seq 1 "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
     cat >> "$outfile" <<EOF
   update route 1.${i}.1 7.255.7 linkset as-op${i}
   update route 1.${i}.3 7.255.7 linkset as-op${i}

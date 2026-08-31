@@ -21,7 +21,7 @@
 #      osmo-sgsn 4245 · osmo-ggsn 4260 · osmo-mgw 4243 · mobile/BB 4247
 #
 #  Avant ce fichier, la meme detection etait recopiee dans cinq scripts, avec
-#  cinq variantes : deux d'entre elles employaient "docker ps | grep -q", qui
+#  cinq variantes : deux d'entre elles employaient "docker ps | grep -aq", qui
 #  rend 141 sous "set -o pipefail" (grep sort au premier match, le producteur
 #  prend un SIGPIPE) - l'inter-STP etait alors declare absent alors qu'il
 #  tournait, de facon intermittente. Une seule regle, ecrite une fois, corrigee
@@ -35,7 +35,7 @@
 #     son code de retour ;
 #   • les sondes rendent 0 = vrai, non-0 = faux ;
 #   • sourcable deux fois sans effet de bord (garde OSMO_MODE_LIB_LOADED) ;
-#   • aucun "grep -q" en fin de pipeline, aucun "awk ... exit" au milieu d'un
+#   • aucun "grep -aq" en fin de pipeline, aucun "awk ... exit" au milieu d'un
 #     tube : sous "set -o pipefail" ces deux formes rendent 141 ;
 #   • compatible "set -euo pipefail" chez l'appelant.
 #
@@ -143,12 +143,12 @@ _osmo_mode_detect() {
     # LA regle du depot (checks/wan_ss7_check.sh:88, network/setup-wan-mesh.sh:122) :
     # on ne se fie pas a la presence du binaire docker - l'hote du lab l'a, une
     # machine de dev aussi - mais a celle d'un conteneur operateur EN COURS.
-    # On capture la liste AVANT de la filtrer : "docker ps | grep -q" rendrait
+    # On capture la liste AVANT de la filtrer : "docker ps | grep -aq" rendrait
     # 141 sous pipefail.
     if command -v docker >/dev/null 2>&1; then
         local names
         names="$(docker ps --format '{{.Names}}' 2>/dev/null || true)"
-        if grep -x 'osmo-operator-1' >/dev/null 2>&1 <<<"$names"; then
+        if grep -ax 'osmo-operator-1' >/dev/null 2>&1 <<<"$names"; then
             printf 'docker\n'; return 0
         fi
     fi
@@ -349,11 +349,11 @@ osmo_hub() {
     if [ "$(osmo_mode)" = docker ]; then
         local names
         names="$(docker ps --format '{{.Names}}' 2>/dev/null || true)"
-        grep -x 'osmo-inter-stp' >/dev/null 2>&1 <<<"$names" || return 1
+        grep -ax 'osmo-inter-stp' >/dev/null 2>&1 <<<"$names" || return 1
         printf 'osmo-inter-stp\n'; return 0
     fi
     if [ -r /etc/osmo-role ] \
-       && grep -E '^OSMO_ROLE[[:space:]]*=[[:space:]]*interstp' /etc/osmo-role >/dev/null 2>&1; then
+       && grep -aE '^OSMO_ROLE[[:space:]]*=[[:space:]]*interstp' /etc/osmo-role >/dev/null 2>&1; then
         printf 'osmo-inter-stp\n'; return 0
     fi
     if pgrep -f 'osmo-stp .*osmo-stp-interop\.cfg' >/dev/null 2>&1; then
@@ -452,7 +452,7 @@ osmo_hub_assoc() {
         out="$(osmo_exec "$op" ss -an --sctp 2>/dev/null || true)"
         [ -n "$out" ] || continue
         probed=1
-        grep -qE "ESTAB.*[[:space:]]${pat}([[:space:]]|$)" <<<"$out" && n=$((n+1))
+        grep -aqE "ESTAB.*[[:space:]]${pat}([[:space:]]|$)" <<<"$out" && n=$((n+1))
     done
     [ "$probed" -eq 1 ] || return 2
     printf '%s/%s\n' "$n" "$tot"
@@ -544,7 +544,7 @@ osmo_ast() {
 # detache quand systemd est absent - auquel cas seul pgrep repond.
 #
 # Le repli "pgrep -f" n'est pas decoratif : /proc/PID/comm est TRONQUE a 15
-# caracteres, donc "pgrep -x osmo-sip-connector" (18) ne trouve jamais rien,
+# caracteres, donc "pgrep -ax osmo-sip-connector" (18) ne trouve jamais rien,
 # quand bien meme le demon tourne. On retente alors sur la ligne de commande.
 #
 # Limite assumee du natif multi-operateur : "ip netns exec" n'isole pas les
@@ -553,14 +553,14 @@ osmo_running() {
     local op="${1:-}" name="${2:-}"
     [ -n "$name" ] || return 2
     if [ "$(osmo_mode)" = docker ]; then
-        osmo_exec "$op" pgrep -x "$name" >/dev/null 2>&1 && return 0
+        osmo_exec "$op" pgrep -ax "$name" >/dev/null 2>&1 && return 0
         osmo_exec "$op" pgrep -f "(^|/)${name}([[:space:]]|\$)" >/dev/null 2>&1
         return $?
     fi
     if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
         systemctl is-active --quiet "$name" 2>/dev/null && return 0
     fi
-    pgrep -x "$name" >/dev/null 2>&1 && return 0
+    pgrep -ax "$name" >/dev/null 2>&1 && return 0
     pgrep -f "(^|/)${name}([[:space:]]|\$)" >/dev/null 2>&1
 }
 
@@ -580,7 +580,7 @@ osmo_sock() {
 }
 
 # osmo_port <op> <port> [tcp|udp|sctp] - ce port est-il en ecoute sur le noeud ?
-# Remplace le "ss -tlnp | grep -c ':7890'" de global_check.sh:493 : pas de
+# Remplace le "ss -tlnp | grep -ac ':7890'" de global_check.sh:493 : pas de
 # tube fragile, et ":7890" ne peut plus se confondre avec 17890 ou 78901.
 osmo_port() {
     local op="${1:-}" port="${2:-}" proto="${3:-tcp}" out
@@ -686,7 +686,7 @@ osmo_vty_up() {
 #
 # LES TEMPORISATIONS SONT DES PARAMETRES, par variables d'environnement, parce
 # que chaque script a les siennes et que les changer changerait la QUANTITE de
-# sortie capturee - donc les "grep -c" qui la comptent :
+# sortie capturee - donc les "grep -ac" qui la comptent :
 #     OSMO_VTY_OPEN  attente avant d'ecrire (0.5 ; ss7_check : 1)
 #     OSMO_VTY_READ  attente de lecture     (2   ; ss7_check : 1.5)
 #     OSMO_VTY_Q     nc -q<N>               (1   ; vty-debug-dump : 2)
@@ -735,7 +735,7 @@ VTY server|Use.*help|Press.*tab|[A-Za-z0-9_-]+[#>] |\
 Enter password|% Unknown|% Command incomplete|% Error|\
 Connection closed)"
     [ -n "$extra" ] && re="${re%)}|${extra})"
-    grep -vE "$re" | sed 's/\r//' | grep -v '^[[:space:]]*$' || true
+    grep -avE "$re" | sed 's/\r//' | grep -av '^[[:space:]]*$' || true
 }
 
 # osmo_vty_interactive <op> <port> [hote] - ouvre une session VTY INTERACTIVE
@@ -840,8 +840,8 @@ osmo_require_docker() {
 #  6. DIVERS
 # =============================================================================
 
-# osmo_qgrep <args...> - "grep -q" sans le piege.
-# "cmd | grep -q motif" : grep sort a la PREMIERE correspondance, le
+# osmo_qgrep <args...> - "grep -aq" sans le piege.
+# "cmd | grep -aq motif" : grep sort a la PREMIERE correspondance, le
 # producteur recoit un SIGPIPE et meurt en 141 - et sous "set -o pipefail"
 # c'est 141 que rend le tube. "trouve" se lit alors "pas trouve", de facon
 # intermittente, selon que la sortie tenait dans le tampon du tube. Ici grep lit
