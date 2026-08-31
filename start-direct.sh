@@ -707,8 +707,25 @@ EOF
 MS_OP_ID="${OPERATOR_ID:-1}"
 MS_MCC="$(awk '$1=="network" && $2=="country" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
 MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
-[ -n "$MS_MCC" ] || MS_MCC="$(printf '%03d' "$MS_OP_ID")"
-[ -n "$MS_MNC" ] || MS_MNC="01"
+# ── LES REPLIS SUIVENT LE PLAN, ILS NE L INVENTENT PAS ──────────────────────
+# [2026-08-31] Ces deux lignes se declenchent quand osmo-bsc.cfg n est pas
+# encore lisible (configs pas regenerees a cet instant), et elles etaient
+# fausses toutes les deux :
+#
+#   MS_MNC="01"  en dur : l operateur 2 heritait du MNC de l operateur 1, et
+#   ms_imsi() produisait 001|01|0002|000001 - MNC d un operateur, identifiant
+#   d un autre. Ces abonnes-la arrivaient dans le HLR SANS MSISDN ni IMEI
+#   ("none" / "-------------"), a cote des bons : le VLR ne pouvait les
+#   rattacher a personne. Rien ne signalait l incoherence.
+#
+#   MS_MCC=<op sur 3 chiffres> : aurait donne MCC 002 pour l operateur 2,
+#   alors que TOUT le banc est en 001 - c est le PLMN d essai, commun a tous
+#   les operateurs, et c est le MNC qui les distingue.
+#
+# Le plan reel, verifie dans /var/tmp/osmo-annuaire.csv :
+#   op 1 -> 001|01   op 2 -> 001|02   op 3 -> 001|03
+[ -n "$MS_MCC" ] || MS_MCC="001"
+[ -n "$MS_MNC" ] || MS_MNC="$(printf '%02d' "$MS_OP_ID")"
 ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 
 # ── LE QUATRIEME PROVISIONNEUR ──────────────────────────────────────────────

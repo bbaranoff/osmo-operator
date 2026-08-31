@@ -265,8 +265,76 @@ _GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -r "$_GAB_ROOT/generate_configs.sh" ] && . "$_GAB_ROOT/generate_configs.sh"
 
 # ── Install configs natif. $1=src $2=prefix racine (/ ou /etc/netns/<ns>) ──
+# ── LES ADRESSES DE CONTENEUR N ONT RIEN A FAIRE SUR L HOTE ─────────────────
+# [2026-08-31] Les gabarits sont ecrits pour un CONTENEUR : ils posent
+# l adresse de dorsale de l operateur (172.20.0.<10+N>) et la passerelle du
+# bridge docker (172.20.0.1). Sur l hote, aucune des deux n existe.
+#
+# Ces corrections vivaient dans apply_native_post_patches (generate_configs.sh),
+# que start-direct.sh appelle. Mais qosmo-grgsm/run_modules/08-gabarits.sh, lui,
+# n appelle QUE apply_config_templates + install_configs_native, et ne source
+# meme pas generate_configs.sh : il reappliquait donc les gabarits bruts a
+# chaque demarrage du natif et REMETTAIT les adresses de conteneur. Le symptome
+# etait un natif affiche en 172.20.0.11 et un ASP qui ne montait jamais, une
+# seconde apres qu on ait corrige le fichier a la main.
+# (Ce module ne s executait plus depuis un renommage de depot, ce qui cachait
+# le probleme derriere un [SKIP] : il est reparu en le reparant.)
+#
+# On accroche donc ici, dans install_configs_native - le passage OBLIGE du
+# natif, quel que soit l appelant. Idempotent : rejouer ne change rien.
+_gab_fixups_natifs() {
+    local src="$1" f
+
+    # 1. osmo-stp.cfg : le local-ip de l ASP vers l inter-STP. 127.0.0.1 est la
+    #    seule adresse dont on soit certain sur un hote. On ne touche QUE le
+    #    local-ip qui suit « asp asp-to-inter » : ceux du bloc d ecoute
+    #    au-dessus (127.0.0.1 / 127.0.0.2) sont corrects.
+    f="$src/osmocom/osmo-stp.cfg"
+    if [ -f "$f" ]; then
+        awk '
+            /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { a = 1; print; next }
+            a && /^[[:space:]]*local-ip[[:space:]]/ {
+                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); a = 0; print; next
+            }
+            /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { a = 0 }
+            { print }
+        ' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+    fi
+
+    # 2. mobile.cfg : la cible GSMTAP. 172.20.0.1 disparait avec le bridge, et
+    #    les paquets partent alors dans le vide - Wireshark reste vide sur
+    #    udp/4729 sans qu aucun message ne le dise.
+    for f in "$src/osmocom/mobile.cfg" "$src/bb/mobile.cfg" "$src/bb/mobile_group1.cfg"; do
+        [ -f "$f" ] || continue
+        sed -i "/^gsmtap\$/,/^!\$/ s/^\([[:space:]]*remote-host[[:space:]]\+\).*/\1127.0.0.1/" "$f"
+    done
+
+    # 3. pjsip.conf : sur un hote plat il n y a pas de frontiere NAT a declarer.
+    #    external_* fait REECRIRE Contact et SDP pour tout pair hors local_net -
+    #    un Linphone du LAN recevait une adresse injoignable. Sans eux, pjsip
+    #    repond avec l adresse de la socket, la bonne, par destination.
+    f="$src/asterisk/pjsip.conf"
+    if [ -f "$f" ]; then
+        awk '
+            /^\[transport-udp\]/ { t = 1; print; next }
+            t && /^\[/            { t = 0 }
+            t && /^[[:space:]]*external_(media|signaling)_address[[:space:]]*=/ { next }
+            t && /^[[:space:]]*local_net[[:space:]]*=/ {
+                if (!d) {
+                    print "local_net=127.0.0.0/8"; print "local_net=10.0.0.0/8"
+                    print "local_net=172.16.0.0/12"; print "local_net=192.168.0.0/16"
+                    print "local_net=176.16.32.0/24"; d = 1
+                }
+                next
+            }
+            { print }
+        ' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+    fi
+}
+
 install_configs_native() {
     local src=$1 root="${2:-}"
+    _gab_fixups_natifs "$src"
     mkdir -p "${root}/etc/osmocom" "${root}/etc/asterisk" "$HOME/.osmocom/bb"
     cp -f "$src/osmocom"/*      "${root}/etc/osmocom/"  2>/dev/null || true
     cp -f "$src/asterisk"/*.conf "${root}/etc/asterisk/" 2>/dev/null || true

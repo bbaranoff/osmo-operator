@@ -135,9 +135,24 @@ natif_pc() {
 # est un ASP qui ne monte jamais, sans message clair (cf. le 172.20.0.11 des
 # gabarits, corrige dans generate_configs.sh).
 natif_asp_ip() {
-    awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{a=1; next}
-         a && /^[[:space:]]*local-ip[[:space:]]/{print $2; exit}' \
-        /etc/osmocom/osmo-stp.cfg 2>/dev/null
+    local ip
+    ip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{a=1; next}
+               a && /^[[:space:]]*local-ip[[:space:]]/{print $2; exit}' \
+          /etc/osmocom/osmo-stp.cfg 2>/dev/null)"
+    [ -n "$ip" ] || return 0
+    # [2026-08-31] ON VERIFIE QUE L ADRESSE EXISTE ICI.
+    # Cette colonne affichait bêtement ce que disait la config, et la config
+    # portait 172.20.0.11 - l adresse du PREMIER CONTENEUR, remise par les
+    # gabarits a chaque demarrage du natif. On lisait donc "op 1 native
+    # 172.20.0.11", ce qui est impossible : le natif tourne sur l hote.
+    # Une adresse absente de la machine est un ASP qui ne montera jamais ; on le
+    # DIT dans la colonne plutot que de laisser croire a une topologie saine.
+    if ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 \
+         | grep -qx "$ip"; then
+        printf '%s\n' "$ip"
+    else
+        printf '%s(absente!)\n' "$ip"
+    fi
 }
 
 # ── ETAT ────────────────────────────────────────────────────────────────────
