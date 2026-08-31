@@ -936,9 +936,14 @@ def ul_facch_from_sideband():
     le BSC reste en rll_ready=no et l'assignation echoue (EQUIPMENT FAILURE).
     Meme layout 48 o que le SDCCH UL : seq@0 l1s_fn@4 fn@8 task_u@12 l1s%51@14 l2[23]@16."""
     fd = None; last = 0
+    _tn_epoque = None            # TN de l'epoque courante ; None = desarme
     while True:
         tn = tch_cfg_read()
         if tn is None or not TCH_ENABLED:
+            # Desarme : on OUBLIE l'epoque, pour que le prochain armement soit
+            # vu comme neuf meme s'il retombe sur le MEME TN (le BSC reutilise
+            # systematiquement TS2 : identite n'est pas instance).
+            _tn_epoque = None
             time.sleep(0.1); continue
         try:
             if fd is None:
@@ -946,6 +951,59 @@ def ul_facch_from_sideband():
             b = os.pread(fd, 48, 0)
             if len(b) >= 39:
                 seq = struct.unpack_from("<I", b, 0)[0]
+                # ── LE SLOT PORTE ENCORE LE DISC DE L'APPEL PRECEDENT ───────
+                # [2026-08-31] LA CAUSE DES ECHECS D'ASSIGNATION INTERMITTENTS.
+                #
+                # calypso_tch_facch_ul est un slot UNIQUE dont le `seq` est de
+                # portee-processus cote shunt : il ne connait pas la notion
+                # d'epoque de canal dedie. Quand un appel se termine NORMALEMENT,
+                # tch_desarme() met _tch_tn a None ; ce thread part alors en
+                # `continue` sans jamais lire -- et `last` gele. Le mobile emet
+                # ensuite son DISC LAPDm de liberation, que le shunt publie avec
+                # un seq NEUF. Le bloc reste donc dans le slot, avec seq > last,
+                # indefiniment.
+                #
+                # A l'ASSIGNMENT COMMAND suivant, ce thread se reveille, voit
+                # `seq != last`, et traite ce vieux DISC comme un montant frais :
+                # il pose _tch_mobile_ok AVANT toute bascule reelle, puis
+                # l'ordonnanceur l'emet sur la FACCH du TCH tout neuf. La LAPDm
+                # de la BTS, en LAPD_STATE_IDLE sur ce lchan fraichement active,
+                # repond DM ; le mobile, qui vient d'envoyer son vrai SABM, recoit
+                # ce DM en SABM_SENT -> ASSIGNMENT FAILURE. Le BSC n'a jamais son
+                # ASSIGNMENT COMPLETE -> WAIT_RR_ASS_COMPLETE, T10, Timeout.
+                #
+                # MESURE (pcap GSMTAP, 6 appels, correlation 6/6 aux octets) :
+                #   1er UL FACCH emis par le pont apres l'ASSIGNMENT COMMAND
+                #     01 3f (SABM) -> 01 73 (UA)   => appel OK
+                #     01 53 (DISC) -> 01 1f (DM)   => appel ECHOUE
+                # L'arithmetique de propagation exclut « le DM repondait au
+                # SABM » : DISC fn 26340 -> DM fn 26367 (d=27), SABM fn 26353 ->
+                # UA fn 26380 (d=27). Meme delta ; le DM repond au bloc emis 13
+                # trames AVANT le SABM.
+                #
+                # ET CELA EXPLIQUE L'INTERMITTENCE, qui n'a rien de positionnel :
+                # ce qui compte est le MODE DE SORTIE de l'appel precedent.
+                #   sortie normale -> tch_desarme, _tch_tn=None -> le thread ne
+                #     lit plus -> le DISC empoisonne le slot -> l'appel suivant
+                #     ECHOUE ;
+                #   sortie en echec -> tch_suspend, qui CONSERVE _tch_tn -> le
+                #     thread continue de vider la bande laterale -> pas de poison
+                #     -> l'appel suivant REUSSIT.
+                # D'ou des series ECHEC/OK/ECHEC ou OK/ECHEC/OK selon l'amorce.
+                #
+                # LE CORRECTIF est celui que ce fichier applique DEJA a l'anneau
+                # voix montant (« session precedente : on ignore ») : a chaque
+                # NOUVELLE epoque de canal, on resynchronise `last` sur le seq
+                # courant SANS consommer le bloc. Ce qui date d'avant l'armement
+                # n'appartient pas a ce canal.
+                if _tn_epoque != tn:
+                    if seq and seq != last:
+                        ST.log("FACCH UL : slot resynchronise a l'armement TN=%s "
+                               "(seq=%d, dernier vu=%d) -- bloc anterieur au canal "
+                               "IGNORE (probable DISC de l'appel precedent)"
+                               % (tn, seq, last))
+                    last = seq
+                    _tn_epoque = tn
                 if seq and seq != last:
                     last = seq
                     l2 = b[16:39]
