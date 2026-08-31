@@ -52,7 +52,22 @@ Environment=TLS_KEY=/etc/osmo-web-tls/key.pem
 # demarrage, osmo-egprs-web-install echouait dans la foulee, et le dashboard
 # n'avait ni TLS ni micro. /usr/bin/node existe des DEUX cotes (le paquet
 # nodesource s'y installe aussi) : c'est le seul chemin qui vaut partout.
-ExecStart=/usr/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
+# ── LE CHEMIN DE NODE N EST PAS LE MEME PARTOUT ──────────────────────────────
+# [2026-08-31] Cette ligne portait /usr/bin/node en dur. C est vrai sur l HOTE,
+# faux dans les conteneurs osmo-operator-*, ou node vit en /usr/local/bin/node
+# (lien vers /opt/node/bin/node, celui qu install-web-service.sh depose quand
+# node manque). systemd sortait alors en
+#     status=203/EXEC
+# et relançait en boucle (Restart=on-failure). 203/EXEC ne dit pas « fichier
+# introuvable » mais « je n ai pas pu executer » : on cherche des droits ou du
+# SELinux, jamais un chemin.
+#
+# /usr/bin/env resout node dans le PATH, donc a l un OU l autre emplacement.
+# Le PATH est pose explicitement juste au-dessus : celui de systemd ne contient
+# pas toujours /usr/local/bin, et un env sans PATH sur mesure retomberait
+# exactement sur le probleme qu on corrige.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env node /opt/GSM/osmo-egprs-web/server.js --verbose
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

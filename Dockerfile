@@ -668,12 +668,30 @@ RUN test -s /opt/GSM/osmo-egprs-web/install-web-service.sh
 # Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
 # hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
 RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
-# Le reste de install-web-service.sh (certificat TLS + unit + enable) est joue AU
-# BOOT par osmo-egprs-web-install.service — cf. le commentaire de ce unit : ni
-# les `systemctl` ni la generation d'une cle privee n'ont leur place au build.
-COPY services/osmo-egprs-web-install.service /etc/systemd/system/osmo-egprs-web-install.service
-RUN ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
-        /etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service
+# ── L INSTALLATION EST JOUEE ICI, AU BUILD ──────────────────────────────────
+# [2026-08-31] On se contentait de VERIFIER que le script existe (le `test -s`
+# ci-dessus) et on remettait tout au boot. L unite arrivait donc dans l image
+# telle que le gabarit la portait, avec son ExecStart fige — et dans un
+# conteneur, ou node vit en /usr/local/bin et non /usr/bin, systemd sortait en
+#     status=203/EXEC
+# en boucle, sans que rien ne parle d un chemin.
+#
+# Le script sait resoudre node et poser l unite avec le bon chemin : on le
+# joue donc au build, pour que l image contienne une unite deja juste.
+#
+# `|| true` : dans un build il n y a PAS de systemd. Le script le sait et ne
+# s arrete pas dessus (voir son en-tete), mais ses `systemctl` echouent
+# forcement ; les avaler ici evite qu un detail d environnement fasse tomber
+# une image de 11 Go. Ce qui compte - le unit, le certificat, le runtime - est
+# ecrit avant ces appels.
+#
+# ⚠️ ET IL N Y A PLUS DE REJEU AU BOOT. osmo-egprs-web-install.service a ete
+# retire des trois chemins de deploiement, pour une raison simple : ce script
+# TELECHARGE node quand il manque. Le laisser au demarrage faisait dependre
+# d Internet un banc concu pour tourner isole - et un premier boot hors ligne
+# repartait sans dashboard. Tout est desormais fige dans l image ; le
+# demarrage ne fait plus que lancer osmo-egprs-web.service.
+RUN bash /opt/GSM/osmo-egprs-web/install-web-service.sh || true
 
 # --- Metadonnees de l'image ---------------------------------------------------
 # Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape

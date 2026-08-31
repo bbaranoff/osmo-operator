@@ -1134,18 +1134,22 @@ fi
 # `systemctl restart osmo-egprs-web` et l unite le dit - l ordonner avant le
 # service creerait un cycle. Le dashboard est tire par lui.
 _SVC_SRC="$DIR/services"
-if [ -f "$_SVC_SRC/osmo-egprs-web.service" ] && [ -f "$_SVC_SRC/osmo-egprs-web-install.service" ]; then
+# [2026-08-31] SEUL LE SERVICE DU DASHBOARD EST POSE. Le oneshot d installation
+# (osmo-egprs-web-install.service) n est plus deploye : il rejouait au premier
+# demarrage un script qui TELECHARGE node s il manque, donc un boot qui exige
+# Internet. L installation est faite au BUILD (Dockerfile, RUN bash
+# install-web-service.sh) : l image arrive complete, le boot ne fait que lancer.
+if [ -f "$_SVC_SRC/osmo-egprs-web.service" ]; then
     install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
     cp -f "$_SVC_SRC/osmo-egprs-web.service"         "$ROOTFS/etc/systemd/system/"
-    cp -f "$_SVC_SRC/osmo-egprs-web-install.service" "$ROOTFS/etc/systemd/system/"
     # Le depot web embarque sa propre copie du unit, qui a deja DIVERGE de
     # celle-ci (cf. Dockerfile) : on impose celle du depot operateur, une seule
     # verite.
     [ -d "$ROOTFS/opt/GSM/osmo-egprs-web" ] && \
         cp -f "$_SVC_SRC/osmo-egprs-web.service" \
               "$ROOTFS/opt/GSM/osmo-egprs-web/osmo-egprs-web.service"
-    ln -sf /etc/systemd/system/osmo-egprs-web-install.service \
-           "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-egprs-web-install.service"
+    ln -sf /etc/systemd/system/osmo-egprs-web.service \
+           "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service"
     echo -e "  ${GREEN}✓${NC} dashboard : unites ${CYAN}osmo-egprs-web${NC} + ${CYAN}-install${NC} posees et activees au boot"
 else
     echo -e "  ${RED}✗ services/osmo-egprs-web*.service introuvables - le dashboard ne demarrerait pas seul${NC}" >&2
@@ -1609,7 +1613,7 @@ fi
 if [ -x /opt/GSM/osmo-egprs-web/install-web-service.sh ]; then
     echo "  [web] install-web-service.sh (sans TLS ni demarrage : chroot)"
     WEB_NO_TLS=1 WEB_NO_START=1 bash /opt/GSM/osmo-egprs-web/install-web-service.sh \
-        || echo "  [web] WARN: install-web-service.sh a echoue - osmo-egprs-web-install rattrapera au boot"
+        || echo "  [web] WARN: install-web-service.sh a echoue - le dashboard peut manquer dans l ISO"
 else
     echo "  [web] WARN: install-web-service.sh absent de /opt/GSM/osmo-egprs-web"
 fi
