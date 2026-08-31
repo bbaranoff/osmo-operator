@@ -378,18 +378,41 @@ fi
 # travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
 #   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS a la place
 #   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaine IQ
+# Memoriser si l'appelant a VRAIMENT choisi, AVANT que le defaut ne le masque.
+# Sans ca, --dsp ne peut pas distinguer « l'operateur veut le pont » de « le pont
+# est simplement le defaut », et ne peut donc pas rendre la chaine IQ sans risquer
+# d'ecraser un choix explicite.
+_BRIDGE_EXPLICITE=0; [ -n "${CALYPSO_BRIDGE:-}" ] && _BRIDGE_EXPLICITE=1
 : "${CALYPSO_BRIDGE:=pont}"
 
 # ── LES DEFAUTS DU PONT LEGIT, EN := (SURCHARGEABLES), PAS EN export FORCE ────
-# Ces quatre variables gouvernent le shunt DSP « legit » du Calypso. On les pose
+# Ces DEUX variables gouvernent le shunt DSP du Calypso. On les pose
 # ICI, APRES le sourcing de environment/load.env (donc de modes.env) : si un mode
 # les a deja fixees, son choix gagne ; sinon ce sont les defauts. Le ":=" laisse
 # l'environnement l'emporter (VAR=... ./start-direct.sh), ce qu'un "export VAR=0"
 # interdirait. Le set -a les exporte vers QEMU/le shunt sans ligne "export VAR=".
 #   CALYPSO_SHUNT_NO_CANNED=0  le SCH reste REEL (le pont le decode/publie)
 #   CALYPSO_CANNED=1           SI bakes cote shunt (pas de dependance grgsm)
-#   CALYPSO_SKIP_DSP=1         on court-circuite le DSP TI (le pont fait le canal)
-#   CALYPSO_DSP_SHUNT_LEGIT=1  chemin « legit » du shunt (celui qui campe et LU)
+#
+# CALYPSO_DSP_SHUNT_LEGIT A ETE RETIREE (2026-08-31), pour la meme raison que
+# CALYPSO_SKIP_DSP juste en dessous : zero `getenv`, zero occurrence hors de ce
+# fichier. Elle etait documentee « chemin legit du shunt (celui qui campe et
+# LU) » et n activait rien du tout. Le drapeau qui existe VRAIMENT est
+# CALYPSO_DSP_SHUNT (lu deux fois dans le C) ; c est lui qui gouverne le shunt.
+#
+# CALYPSO_SKIP_DSP A ETE RETIREE (2026-08-31). Elle etait posee ici depuis
+# toujours et documentee « on court-circuite le DSP TI » -- mais AUCUN code ne la
+# lisait : zero `getenv("CALYPSO_SKIP_DSP")`, zero occurrence dans tout le C de
+# QEMU. La poser ne coupait rien ; elle donnait seulement la certitude que le DSP
+# etait hors circuit. Un drapeau qui ne fait rien est pire que pas de drapeau :
+# il empeche de chercher ailleurs. Meme famille que CALYPSO_CANNED=1, qui
+# annoncait « tout canne » et ne cannait rien.
+#
+# CE QUI GOUVERNE REELLEMENT LE DSP, et qu'il faut regarder a la place :
+#   CALYPSO_DSP=c54x           relie le VRAI DSP au shunt (calypso_dsp_helper.c)
+#   CALYPSO_DSP_RUN_C54X=1     autorise l'execution du c54x au tick de trame
+#   CALYPSO_SHUNT_DRIVE_DSP=1  fait piloter le DSP par le shunt
+# Sans ces trois-la, le c54x n'est ni relie ni execute.
 set -a
 : "${CALYPSO_SHUNT_NO_CANNED:=0}"
 # FULL et pas 1. shunt_parse_canned() attend une LISTE DE JETONS
@@ -398,8 +421,6 @@ set -a
 # banc tournait donc avec RIEN de canne en croyant tout canner. Le parseur
 # accepte desormais les booleens, mais on ecrit ce qu'on veut dire.
 : "${CALYPSO_CANNED:=FULL}"
-: "${CALYPSO_SKIP_DSP:=1}"
-: "${CALYPSO_DSP_SHUNT_LEGIT:=1}"
 set +a
 
 : "${MS_COUNT:=2}"
@@ -820,6 +841,36 @@ export CALYPSO_MS2_CFG="$MS2_CFG"
 # chaine par le pont maison. Si le banc a besoin de la chaine d'origine,
 # c'est --dsp qu'il faut passer.
 if [ "${DSP_MODE:-0}" -eq 1 ]; then
+    # ── --dsp ET LE PONT SONT INCOMPATIBLES, ET CA SE DISAIT PAS ────────────
+    # [2026-08-31] Ce bloc posait l'outillage, et le bloc PONT quelques lignes
+    # plus bas le defaisait sans condition :
+    #     export CALYPSO_SKIP_IPC_DEVICE=1
+    #     export CALYPSO_PIPELINE=bridge   (qui pose SKIP_IPC_DEVICE/SKIP_TRX_IPC)
+    # Pas de `${VAR:-}`, pas de test de DSP_MODE. On passait --dsp, la banniere
+    # annoncait « outillage ACTIF », et trois lignes plus loin tout etait eteint.
+    # La banniere mentait, et rien dans le journal ne le disait.
+    #
+    # C'est structurel, pas accidentel : le pont REMPLACE osmo-trx-ipc et
+    # calypso-ipc-device : c'est meme sa raison d'etre. --dsp, qui veut
+    # justement l'ipc-device, demande donc l'inverse. Les deux ne peuvent pas
+    # etre vrais en meme temps ; ce qui manquait, c'est de le DIRE.
+    #
+    # On tranche selon ce que l'operateur a reellement demande :
+    #   pont par DEFAUT   -> --dsp rend la chaine IQ (CALYPSO_BRIDGE=none),
+    #                        ce que documente deja l'en-tete de CALYPSO_BRIDGE ;
+    #   pont EXPLICITE    -> on respecte le choix, et on previent que --dsp ne
+    #                        sera pas honore. Un avertissement vaut mieux qu'une
+    #                        banniere fausse.
+    if [ "$_BRIDGE_EXPLICITE" = 0 ] && [ "$CALYPSO_BRIDGE" = pont ]; then
+        CALYPSO_BRIDGE=none; export CALYPSO_BRIDGE
+        printf '  %sDSP%s        --dsp : chaine IQ rendue (%sCALYPSO_BRIDGE=none%s) -- le pont l aurait eteinte\n' \
+            "${C_DIM:-}" "${C_Z:-}" "${C_CY:-}" "${C_Z:-}"
+    elif [ "$CALYPSO_BRIDGE" = pont ]; then
+        printf '  %s!%s  --dsp IGNORE : CALYPSO_BRIDGE=pont demande explicitement.\n' \
+            "${C_KO:-}" "${C_Z:-}"
+        printf '     Le pont REMPLACE osmo-trx-ipc et calypso-ipc-device : les deux\n'
+        printf '     s excluent. Relancer sans CALYPSO_BRIDGE pour avoir --dsp.\n'
+    fi
     printf '  %sDSP%s        outillage d inspection ACTIF (--dsp) : ipc-device, trx-ipc, asm, mailbox\n' \
         "${C_DIM:-}" "${C_Z:-}"
     # On n'IMPOSE rien : --dsp rend la main aux reglages de l'appelant et aux
@@ -956,7 +1007,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
             killall -9 python3 2>/dev/null || true
         fi
         sleep 1
-        printf '  %spont TRX%s : REMPLACE osmo-trx-ipc + calypso-ipc-device + si_bridge (SHUNT_LEGIT burst-direct)\n' "${C_DIM:-}" "${C_Z:-}"
+        printf '  %spont TRX%s : REMPLACE osmo-trx-ipc + calypso-ipc-device + si_bridge (shunt burst-direct)\n' "${C_DIM:-}" "${C_Z:-}"
         # LANCEMENT DIFFERE : run.sh fait d'abord son teardown (qui verifie que
         # 5700-5702 sont LIBRES). On ne binde donc qu'apres, sinon on se
         # bloque nous-memes. 25 s = teardown + demarrage des modules.

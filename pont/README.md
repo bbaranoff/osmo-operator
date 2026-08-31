@@ -130,7 +130,7 @@ laquelle notre L1 est en clair alors que le réseau chiffre encore.
 
 ---
 
-## 3. Le SACCH — l'en-tête L1 n'est pas retiré
+## 3. `unsupported SAPI` — deux diagnostics faux, un vrai défaut trouvé en chemin
 
 ### Le symptôme
 
@@ -144,49 +144,174 @@ DMNCC  mnccms.c:714    Call has been released (cause 16)
 
 SAPI 6 n'existe pas en LAPDm (0 = signalisation, 3 = SMS).
 
-### La démonstration
+### Une fausse piste, gardée parce qu'elle était convaincante
 
-`lapdm_rx_ph_data_ind` calcule `sapi = (l2h[0] >> 2) & 7`, donc sur **l'octet
-d'adresse**. Pour un bloc SACCH, il ne saute les 2 octets d'en-tête L1 que si le
-drapeau SACCH (`link_id & 0x40`) est posé.
+Première explication : l'en-tête L1 du SACCH (2 octets) ne serait pas retiré, et
+LAPDm lirait l'octet de **puissance ordonnée** comme octet d'adresse. Le
+comptage collait parfaitement — 33 SAPI invalides pour exactement 33 blocs SACCH
+tentés (`TS1/32 : 30/33`), et les quatre valeurs observées se rangeaient dans les
+paliers de puissance.
 
-L'octet 0 de l'en-tête L1 SACCH porte la **puissance ordonnée** (bits 0-4), et
-elle varie en permanence (`CTRL SETPOWER` en continu dans le journal du pont) :
+**C'était faux.** Le tampon réellement présenté commence par `07` :
+`(0x07 >> 2) & 7` = **SAPI 1** — une valeur jamais observée. Une corrélation de
+comptage n'est pas une preuve tant que l'arithmétique du mécanisme ne suit pas.
 
-| puissance | `(p >> 2) & 7` | SAPI observé | occurrences |
-|---|---|---|---|
-| 24–27 | 6 | 6 | 28 |
-| 20–23 | 5 | 5 | 2 |
-| 16–19 | 4 | 4 | 1 |
-| 8–11 | 2 | 2 | 2 |
+Vérifié au passage, et négatif aussi : la table `mf_sdcch8_0` du firmware est
+conforme au 05.02 (`MF_F_SACCH` bien posé à `fn%102 ∈ [32,35]`), et
+`prim_rx_nb.c:122` en tire correctement `link_id = 0x40`. **Aucun patch firmware
+n'était nécessaire** — c'est précisément ce que la mesure a évité.
 
-**Total 33.** Le pont a tenté exactement **33** blocs SACCH (`TS1/32 : 30/33`).
+### Deuxième explication : le SI du camp — réfutée elle aussi
 
-Les quatre valeurs de SAPI ne sont pas du bruit : ce sont les **paliers de
-puissance**. C'est ce qui transforme une corrélation de comptage en preuve.
+`lapdm_rx_ph_data_ind` calcule `sapi = (l2h[0] >> 2) & 7`. Les valeurs observées
+correspondent à des premiers octets dans `0x08–0x1B`, soit la forme d'un **octet
+de pseudo-longueur** de bloc BCCH — `(L << 2) | 1`, donc `SAPI = L & 7` :
 
-### Ce que ce n'est pas
+| SI | L | 1er octet | `L & 7` | SAPI observé |
+|---|---|---|---|---|
+| SI1 / SI2 | 21 | `0x55` | 5 | 5 (×2) |
+| SI3 | 18 | `0x49` | 2 | 2 (×2) |
+| SI4 | 12 | `0x31` | 4 | 4 (×1) |
+| — | 22 | `0x59` | 6 | 6 (×28) |
 
-Le contenu est **bien formé**. Le tampon du shunt, journalisé :
+Ce ne sont pas des blocs SACCH : ce sont les **SI du camp**, injectés dans `a_cd`
+pendant le canal dédié. Le rapport de forces, mesuré :
+
+| écrivain de `a_cd` | occurrences |
+|---|---|
+| `DCCH-SACCH #` (présentation légitime) | **3** |
+| `DISPATCH ALLC → SI3 a_cd[3..14]` | **29 483** |
+
+`DCCH-GARDE` doit empêcher exactement cela. Elle s'armait bien, mais se levait
+sur un **TTL de fraîcheur de blocs** (`dcch_guard_tick`, ~2 s) rafraîchi
+uniquement par le **descendant** — donc par notre chance de décodage. Trois blocs
+sur tout le run : entre deux, le TTL expirait, la garde concluait « canal fini »,
+et le camp reprenait `a_cd`.
 
 ```
-07 00 | 03 03 49 | 06 1d ...
- L1     addr ctrl len   PD=RR  SI5
+DCCH-GARDE : ARMEE  -- SI du camp supprime dans a_cd
+DCCH-GARDE : levee (peremption) -- SI du camp retabli     ← ×4, canal bien vivant
 ```
 
-⚠️ Le commentaire de `calypso_dsp_shunt.c:1607` attend `[4]` = début du L3, donc
-un format B4 **sans** octet de longueur. C'est **faux** : le SACCH descendant
-porte bien un octet de longueur (`0x49` = 18). Le format observé est le bon ;
-c'est le commentaire qui trompera la prochaine lecture.
+C'est **la même erreur de raisonnement** qu'aux §1 et §2 : déduire un événement de
+cycle de vie (« le canal est fini ») d'un symptôme local (« je n'ai rien décodé
+depuis 2 s »). Sur un banc où le décodage est imparfait, les deux sont confondus
+en permanence, et la garde se retourne contre le canal qu'elle protège.
 
-### Conséquence
+### Le correctif — et ce qu'il a prouvé, ce qu'il n'a pas prouvé
 
-Le mobile ne traite **aucun** SACCH : ni rapport de mesure, ni supervision de
-lien. Le réseau finit par lâcher le lien radio. **C'est ce qui bloque le deuxième
-appel — pas le Kc.**
+La garde est rafraîchie par le **montant dédié** (`d_task_u` ∈ {12 DUL, 13 TCHT,
+14 TCHA}) : le mobile qui émet sur son canal dédié prouve que ce canal existe,
+indépendamment de notre décodage.
 
-> **Non corrigé à ce jour.** Le correctif touche la façon dont le firmware est
-> averti qu'un bloc est du SACCH (drapeau `link_id & 0x40`).
+**Mesuré, et le correctif fait ce qu'il annonce** — sonde du site de présentation
+(`CAMP: a_cd<-SI`), et non celle du point d'injection, qui continue d'imprimer en
+amont de la garde :
+
+| | avant | après |
+|---|---|---|
+| `CAMP: a_cd<-SI` pendant le dédié | flot continu | **0** |
+| `levee (peremption)` | ×4 | **0** |
+
+**Mais les SAPI invalides ont AUGMENTÉ : 33 → 52.** Le SI du camp n'était donc
+pas leur source. La cause reste **inconnue** — c'est le deuxième diagnostic faux
+sur ce même symptôme, après celui des paliers de puissance. Le correctif de la
+garde est conservé parce qu'il corrige un défaut réel et démontré ; il ne corrige
+simplement pas celui-là.
+
+### Entretenir n'est pas armer
+
+La première version **armait** la garde depuis le montant. `task_u` vaut 12/13/14
+bien au-delà du canal dédié (621 / 1954 / 81 sur le run) : la garde s'est armée à
+6 % du journal et n'a **jamais** été levée — `CAMP: a_cd<-SI` = 0 sur les 94 %
+restants, et 27 lignes de sélection de cellule côté mobile. C'est trait pour trait
+la famine de SI que ce TTL existait pour éviter (commentaire du 2026-08-12), et
+qu'on réintroduisait en croyant la contourner.
+
+Corrigé : l'**armement** reste au descendant (`set_dcch_active`), seul signal lié
+à un bloc dédié réel ; le montant ne fait que **repousser la péremption** d'une
+garde déjà armée. Le TTL reste court (~2 s) — c'est lui qui rend le camp au mobile
+dès la fin du canal, et l'allonger l'affame. Le montant couvre les trous *pendant*
+le canal ; le TTL tranche *après*.
+
+## 3bis. Identité n'est pas instance — la cause du 2ᵉ appel
+
+### La mesure
+
+Un LU suivi de **deux appels**, tous trois sur SDCCH/8 SS0 :
+
+```
+DCCH #1 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1 (vu sur DATA_IND)     ← et c'est tout
+/dev/shm/calypso_dcch_cfg : seq=1
+```
+
+**Trois canaux dédiés successifs, un seul appris.**
+
+### La cause
+
+```c
+/* l1ctl_sock.c */
+if (kind >= 0 && chan_nr != last_chan_nr) {
+    dcch_seq++;
+    ... écrit /dev/shm/calypso_dcch_cfg ...
+    calypso_dsp_shunt_set_dcch(kind, ss);
+}
+```
+
+La mise à jour ne se déclenche que si `chan_nr` **change**. Or le BSC réalloue
+volontiers la même sous-voie : un second appel qui retombe sur SDCCH/8 SS0
+présente le même `chan_nr = 0x41`. Rien ne se passe — ni nouveau `dcch_seq`, ni
+`set_dcch()`. Le shunt reste configuré sur l'**instance précédente** : fenêtre de
+présentation `a_cd` périmée pour le canal courant.
+
+`chan_nr` **est** l'identité du canal ; il ne porte aucun numéro d'instance. On ne
+peut donc pas comparer plus finement — il faut **oublier** l'identité quand le
+canal se termine.
+
+### Le correctif
+
+`calypso_l1ctl_dcch_forget()` remet `last_chan_nr` à `0xFF`. Elle est appelée par
+la garde `DCCH` au moment où celle-ci conclut à la fin du canal — et la mesure
+montre que la garde, elle, cycle correctement (**4** paires `ARMEE`/`levee` sur ce
+run). C'est donc elle qui sait, et c'est d'elle qu'on prévient.
+
+La prochaine établissement redéclenche alors, même à `chan_nr` égal.
+
+### Confirmation par le réseau, et par la mesure d'après
+
+Le BSC voit la même chose par l'autre bout — il réutilise tout, jusqu'à l'objet :
+
+```
+lchan(0-0-2-TCH_F-0)[0x5e7e3da21f50]   ×7    (jamais TS3..TS7, sur six TCH/F)
+lchan(0-0-1-SDCCH8-0)[0x5e7e3da21e20]  ×4    (jamais SS1..SS7, sur huit)
+lchan(0-0-1-SDCCH8-0){ESTABLISHED}: ERROR INDICATION
+    cause=SABM frame with information not allowed in this state   ×4
+```
+
+Le mobile réémet un SABM sur un lien que le BSC tient pour établi : il n'a jamais
+vu l'UA. Puis `EQUIPMENT FAILURE: Timeout` et `rll_ready=no`.
+
+**La réutilisation n'est pas le défaut, c'est le révélateur.** Rien dans le GSM ne
+l'interdit, et l'allocateur reprend naturellement le premier canal libre : avec un
+seul mobile, c'est toujours le même. Un réseau réel ferait pareil — donc ce défaut
+frapperait *tous* les deuxièmes appels, partout. Ce n'est pas un artefact de banc.
+
+Après correctif :
+
+```
+DCCH #1 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1
+DCCH #2 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1     ← MEME chan_nr, et pourtant appris
+dcch_cfg : seq=2      identite oubliee : x1      DCCH-GARDE : ARMEE x2, levee x1
+```
+
+### Le motif, pour la quatrième fois
+
+Déduire un **événement** (« canal neuf ») d'une **comparaison d'état**
+(« `chan_nr` a changé ») au lieu de l'événement lui-même. Exactement comme :
+osmocon devinant la fin de vie du Kc sur `DM_EST_REQ` (§1), les trois marqueurs
+de relâchement (§2), et la garde concluant « canal fini » sur un TTL de fraîcheur
+de décodage (§3). Quand ce dépôt se trompe, c'est presque toujours de cette
+façon-là.
 
 ---
 
@@ -255,7 +380,10 @@ Conservées pour ne pas être réexplorées.
 
 ## 7. Reste ouvert
 
-* **SACCH** — le drapeau `link_id & 0x40` (§3). C'est le blocage du 2ᵉ appel.
+* **`unsupported SAPI` côté mobile** — 38 sur le run LU + 2 appels. Ni l'en-tête
+  L1 du SACCH (§3, réfuté), ni le SI du camp (§3, réfuté par la mesure). Source
+  toujours inconnue : chercher qui d'autre atteint `a_cd`, ou si le firmware
+  relit un bloc périmé faute de rafraîchissement (`B_BLUD`).
 * **CRC résiduels** — `chiffre 62/69`, soit 7 échecs sur le SDCCH chiffré, plus
   3 sur le SACCH. Non isolés.
 * **TCH** — l'histogramme rend `octets[00:928]` : les 928 octets de la fenêtre

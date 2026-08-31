@@ -23,7 +23,9 @@ mod_qemu_check() {
     # `sans-dsp` de qosmo-grgsm a supprime tools/dsp_txt2bin.py, seul generateur
     # des calypso_dsp.*.bin : les exiger revenait a interdire tout demarrage de
     # QEMU. La machine `calypso` sait tourner sans (dsp-blob/shunt), et le mode
-    # par defaut ici est CALYPSO_SKIP_DSP=1. On previent, on ne bloque plus.
+    # par defaut ici est le shunt (le pont fait le canal). On previent, on ne
+    # bloque plus. [2026-08-31] Ne plus citer CALYPSO_SKIP_DSP : cette variable
+    # etait un drapeau FANTOME, lue par personne, retiree de start-direct.sh.
     local r missing=0
     # `:-` obligatoire : sans l'arbre voisin qosmo-grgsm, son environnement/paths.env
     # n'est pas source (environment/paths.env l.103) et ces variables n'existent
@@ -33,7 +35,7 @@ mod_qemu_check() {
         [ -n "$r" ] && [ -r "$r" ] || missing=$((missing + 1))
     done
     if [ "$missing" -gt 0 ]; then
-        mod_hint "$missing ROM DSP absente(s) sous ${DSP_ROM_DIR:-\$GSM_ROOT} : QEMU demarre sans (shunt/CALYPSO_SKIP_DSP)"
+        mod_hint "$missing ROM DSP absente(s) sous ${DSP_ROM_DIR:-\$GSM_ROOT} : QEMU demarre sans (machine calypso nue, shunt)"
     fi
     mod_ok
 }
@@ -56,7 +58,7 @@ mod_qemu_start() {
     local mach="calypso"
     # Une propriete `dsp-*=` pointant sur un fichier absent fait avorter QEMU au
     # demarrage : on ne passe que les sections REELLEMENT presentes. Aucune ->
-    # machine `calypso` nue, ce que le shunt (CALYPSO_SKIP_DSP=1) attend.
+    # machine `calypso` nue, ce que le shunt attend.
     local _p _v
     for _p in prom0:DSP_PROM0 prom1:DSP_PROM1 prom2:DSP_PROM2 prom3:DSP_PROM3 \
               drom:DSP_DROM pdrom:DSP_PDROM registers:DSP_REGISTERS; do
