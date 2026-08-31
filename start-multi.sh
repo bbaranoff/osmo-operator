@@ -62,7 +62,14 @@ case " $* " in
     *" --status "*|*" --dry-run "*|*" -h "*|*" --help "*) _multi_readonly=1 ;;
 esac
 
-if [ "$_multi_readonly" = "0" ] && [ ! -t 0 ] && [ "${OSMO_MULTI_TERM:-0}" != "1" ]; then
+# [2026-08-31] stdin ET stdout : `[ ! -t 0 ]` seul prenait un
+# `./start-multi.sh < fichier` lance depuis un vrai terminal pour un
+# double-clic, et ouvrait une fenetre dont la sortie n allait pas a l appelant.
+_multi_besoin=0
+if [ "$_multi_readonly" = "0" ]; then
+    { [ ! -t 0 ] || [ ! -t 1 ]; } && _multi_besoin=1
+fi
+if [ "$_multi_besoin" = "1" ] && [ "${OSMO_MULTI_TERM:-0}" != "1" ]; then
     export OSMO_MULTI_TERM=1
     for _t in gnome-terminal xfce4-terminal konsole xterm; do
         command -v "$_t" >/dev/null 2>&1 || continue
@@ -73,12 +80,20 @@ if [ "$_multi_readonly" = "0" ] && [ ! -t 0 ] && [ "${OSMO_MULTI_TERM:-0}" != "1
     done
 fi
 
+# Le drapeau ne sert qu a ne pas boucler sur la relance. On le RETIRE de
+# l environnement : exporte, il descendait dans start.sh, dans le raccourci du
+# natif et jusqu a launch.sh, ou il n a aucun sens. La valeur reste ici, dans
+# une variable de shell : c est elle qui decide de retenir la fenetre a la fin.
+_multi_own_window=0
+[ "${OSMO_MULTI_TERM:-0}" = "1" ] && _multi_own_window=1
+unset OSMO_MULTI_TERM
+
 # Meme raison pour root : une lecture n a pas a demander de mot de passe.
 if [ "$_multi_readonly" = "0" ]; then
         if [ "$(id -u)" -ne 0 ]; then
             if command -v pkexec >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
                 exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
-                     OSMO_MULTI_TERM="${OSMO_MULTI_TERM:-0}" "$0" "$@"
+                     OSMO_MULTI_TERM="$_multi_own_window" "$0" "$@"
             fi
             command -v sudo >/dev/null 2>&1 && exec sudo -E "$0" "$@"
         fi
@@ -155,6 +170,36 @@ natif_asp_ip() {
     fi
 }
 
+# ── UN PROCESSUS DE L HOTE, PAS CELUI D UN CONTENEUR ────────────────────────
+# [2026-08-31] `pgrep -x osmo-bsc` et `pgrep -f 'osmo-bsc|asterisk'` repondaient
+# OUI des qu un CONTENEUR tournait : l hote voit TOUS les processus, y compris
+# les leurs (mesure : osmo-bsc pid 140689 et asterisk pid 140878, enfants du
+# systemd de osmo-operator-2, listes par le `ps` de l hote). Le natif etait donc
+# confondu avec n importe quelle pile du banc. Deux consequences, vues toutes
+# les deux :
+#   - etat() affichait « op 1 native actif » sans rien de natif en marche ;
+#   - lancer_natif_si_absent() sortait aussitot et NE LANCAIT JAMAIS le natif
+#     des qu un conteneur tournait deja - precisement le cas d un start-multi
+#     relance, celui ou on en a le plus besoin.
+# Le discriminant est le NAMESPACE PID : un conteneur a le sien, l hote garde
+# celui de son init. Plus sur que le cgroup, qui depend de --cgroupns.
+#
+# `pgrep -x` ET NON `pgrep -f` : on compare le NOM du processus, pas sa ligne de
+# commande. `-f 'osmo-bsc|asterisk'` repondait OUI sur n importe quelle ligne
+# CITANT ces mots - le `tail -F /var/log/osmocom/osmo-bsc.log` que le natif
+# ouvre lui-meme, un editeur, ou le shell appelant. Un nom exact ne peut pas
+# mentir de cette facon, et rend inutile l exclusion de notre propre PID.
+_ns_hote="$(readlink /proc/1/ns/pid 2>/dev/null)"
+_est_natif() {          # $@ = noms EXACTS ; vrai si l un tourne hors conteneur
+    local n p
+    for n in "$@"; do
+        for p in $(pgrep -x "$n" 2>/dev/null); do
+            [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" = "$_ns_hote" ] && return 0
+        done
+    done
+    return 1
+}
+
 # ── ETAT ────────────────────────────────────────────────────────────────────
 etat() {
     local spec idx mode ip pc _r
@@ -164,8 +209,8 @@ etat() {
         if [ "$mode" = "native" ]; then ip="$(natif_asp_ip)"; fi
         printf '    op %-2s %-7s %-13s PC %-8s ' "$idx" "$mode" "${ip:-(hote)}" "$pc"
         if [ "$mode" = "native" ]; then
-            if pgrep -x osmo-bsc >/dev/null 2>&1 || systemctl is-active --quiet asterisk 2>/dev/null \
-               || pgrep -f 'asterisk' >/dev/null 2>&1; then
+            if _est_natif osmo-bsc asterisk \
+               || systemctl is-active --quiet asterisk 2>/dev/null; then
                 _r="$(natif_pc)"
                 if [ -n "$_r" ] && [ "$_r" != "$pc" ]; then
                     echo -e "${GREEN}actif${NC} ${YELLOW}(PC reel ${_r})${NC}"
@@ -436,7 +481,7 @@ tout_arreter
 NATIF_DESKTOP="${NATIF_DESKTOP:-/root/Desktop/osmo-launch.desktop}"
 
 lancer_natif_si_absent() {
-    pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1 && return 0
+    _est_natif osmo-bsc asterisk && return 0
 
     echo -e "  ${YELLOW}!${NC} operateur natif a l arret - lancement de son raccourci"
     local d="$NATIF_DESKTOP"
@@ -459,6 +504,11 @@ lancer_natif_si_absent() {
     # et firefox sont deja ouverts par ailleurs (ou le seront par nos soins pour
     # les dashboards). Sans ce drapeau, launch.sh les rouvrait une seconde fois.
     export OSMO_LAUNCH_APPS=0
+    # (a) LE NATIF PREND SA PROPRE FENETRE. Sans ce marqueur, launch.sh voyait
+    # un tty - LE NOTRE - le prenait pour le sien, et start-direct.sh le tenait
+    # jusqu au bout : notre sortie ecrasee, et la main rendue seulement a la fin
+    # du natif. Voir launch.sh, garde « 1. Un terminal ».
+    export OSMO_TERM_TAKEN=1
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
     if command -v gio >/dev/null 2>&1 && gio launch "$d" >/dev/null 2>&1; then
@@ -480,7 +530,7 @@ lancer_natif_si_absent() {
     echo -ne "  ${CYAN}→${NC} attente du natif"
     local i
     for i in $(seq 1 120); do
-        pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1 && { echo -e " ${GREEN}✓${NC}"; return 0; }
+        _est_natif osmo-bsc asterisk && { echo -e " ${GREEN}✓${NC}"; return 0; }
         sleep 1; echo -n "."
     done
     echo -e " ${YELLOW}toujours absent apres 120 s - on continue quand meme${NC}"
@@ -515,7 +565,7 @@ verifier() {
                 echo -e "    ${RED}✗${NC} conteneur ${nom} absent"; ko=1
             fi
         else
-            if ! pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1; then
+            if ! _est_natif osmo-bsc asterisk; then
                 echo -e "    ${RED}✗${NC} operateur natif arrete - ${CYAN}sudo ${DIR}/start-direct.sh --op ${idx}${NC}"; ko=1
             else
                 # ── LE POINT CODE DU NATIF DOIT CORRESPONDRE A SON RANG ──
@@ -658,7 +708,7 @@ echo
 etat
 verifier || rc=1
 # Ouverte par nos soins : on la retient, sinon le bilan disparait avec elle.
-if [ "${OSMO_MULTI_TERM:-0}" = "1" ]; then
+if [ "$_multi_own_window" = "1" ]; then
     echo
     echo "Fenetre maintenue ouverte - Entree pour fermer."
     read -r _ || true

@@ -40,12 +40,28 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC
 
 [ -x "$TARGET" ] || { echo -e "${RED}start-direct.sh introuvable ou non executable dans $DIR${NC}" >&2; exit 1; }
 
-# ── 1. Un terminal, si on n en a pas ────────────────────────────────────────
+# ── 1. Un terminal, si on n en a pas — OU s il n est pas a nous ─────────────
 # On teste la presence d un TTY, pas $DISPLAY : c est la difference reelle entre
 # « lance a la main » et « lance par une icone ». OSMO_LAUNCH_TERM marque le
 # tour de relance pour ne pas boucler.
-if [ ! -t 0 ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
+#
+# [2026-08-31] DEUX DEFAUTS, LE MEME MALENTENDU : la garde demandait « y a-t-il
+# UN terminal ? », jamais « est-ce LE MIEN ? ».
+#   1. stdin SEUL. `./launch.sh < fichier` depuis un vrai terminal se croyait
+#      lance par une icone et ouvrait une fenetre en trop, dont la sortie
+#      n allait pas a l appelant. On teste donc stdin ET stdout.
+#   2. UN TTY HERITE N EST PAS LE NOTRE. start-direct.sh TIENT le terminal
+#      jusqu a la fin (cf. l en-tete de ce fichier). Appele par un autre
+#      lanceur — start-multi.sh, qui monte le natif AVANT ses conteneurs — il
+#      heritait du terminal de celui-ci, ecrivait par-dessus sa sortie et ne
+#      lui rendait la main qu a la fin du natif. OSMO_TERM_TAKEN=1 dit « ce
+#      terminal est deja occupe » : on ouvre alors LA NOTRE, tty ou pas.
+_lt_besoin=0
+{ [ ! -t 0 ] || [ ! -t 1 ]; } && _lt_besoin=1
+[ "${OSMO_TERM_TAKEN:-0}" = "1" ] && _lt_besoin=1
+if [ "$_lt_besoin" = "1" ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
     export OSMO_LAUNCH_TERM=1
+    unset OSMO_TERM_TAKEN            # la fenetre qu on ouvre ici EST la notre
     for _t in gnome-terminal xfce4-terminal konsole xterm; do
         command -v "$_t" >/dev/null 2>&1 || continue
         case "$_t" in
@@ -53,7 +69,22 @@ if [ ! -t 0 ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
             *)              exec "$_t" -e "$0" "$@" ;;
         esac
     done
+    # AUCUN emulateur installe. On ne reprend pas le terminal de l appelant -
+    # ce serait refaire exactement la panne que cette garde empeche. On se
+    # detache, et la sortie va dans un journal plutot que dans le vide.
+    _lt_log="${OSMO_LAUNCH_LOG:-/var/log/osmo-launch.log}"
+    echo -e "${YELLOW}Aucun emulateur de terminal - lancement detache, journal : ${_lt_log}${NC}" >&2
+    exec setsid "$0" "$@" </dev/null >>"$_lt_log" 2>&1
 fi
+
+# Le drapeau a joue son role. On le RETIRE de l environnement : exporte, il
+# descendait dans start-direct.sh et tout ce qui suit, ou il ferait croire a
+# n importe quel descendant rappelant ce script qu il est deja dans sa fenetre
+# - et plus aucune ne s ouvrirait. La valeur reste ici, dans une variable de
+# shell, la ou on en a besoin (retenir la fenetre a la fin).
+_own_window=0
+[ "${OSMO_LAUNCH_TERM:-0}" = "1" ] && _own_window=1
+unset OSMO_LAUNCH_TERM
 
 # ── 2. Les privileges ───────────────────────────────────────────────────────
 if [ "$(id -u)" -ne 0 ]; then
@@ -61,7 +92,7 @@ if [ "$(id -u)" -ne 0 ]; then
         # pkexec lave l environnement : DISPLAY et XAUTHORITY sont repasses a la
         # main, sinon rien de graphique ne peut s ouvrir ensuite.
         exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
-             OSMO_LAUNCH_TERM="${OSMO_LAUNCH_TERM:-0}" "$0" "$@"
+             OSMO_LAUNCH_TERM="$_own_window" "$0" "$@"
     fi
     command -v sudo >/dev/null 2>&1 && exec sudo -E "$0" "$@"
     echo -e "${RED}Root requis et ni pkexec ni sudo disponibles.${NC}" >&2
@@ -306,7 +337,7 @@ else
 fi
 # Uniquement dans une fenetre ouverte par nos soins : au terminal, rendre la
 # main tout de suite est le comportement attendu.
-if [ "${OSMO_LAUNCH_TERM:-0}" = "1" ]; then
+if [ "$_own_window" = "1" ]; then
     echo "Fenetre maintenue ouverte - Entree pour fermer."
     read -r _ || true
 fi
