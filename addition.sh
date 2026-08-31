@@ -75,19 +75,28 @@ etat() {
 # double-clic partait droit sur un apt-get de plusieurs centaines de Mo et une
 # compilation Osmocom, sans rien demander. On coche ce qu on veut.
 #
-# Les trois lignes ne sont pas independantes : "multi-operateur SS7" a BESOIN
-# des deux autres. Le cocher les entraine (voir plus bas) plutot que de le
-# refuser - refuser obligerait a savoir, avant de cliquer, ce que le supplement
-# contient.
+# LES TROIS LIGNES SONT PRE-COCHEES, et ce n est pas de la paresse.
+# "multi-operateur SS7" a BESOIN des deux autres, et les cocher pour l
+# utilisateur (voir l implication plus bas) est deja ce que fait le script.
+# Les AFFICHER decochees pendant qu on les installe quand meme etait donc
+# mensonger : la fenetre disait une chose, le script en faisait une autre.
+#
+# Une vraie auto-selection - cocher la premiere ligne coche les deux autres
+# SOUS LES YEUX de l utilisateur - n est PAS possible avec zenity : sa
+# --checklist est statique et n expose aucun signal sur changement de case.
+# Il faudrait une fenetre GTK ecrite a la main (python3-gi) pour cela, ce qui
+# ajouterait une dependance et du code d interface a maintenir pour trois
+# cases. Le pre-cochage donne le meme resultat visible.
+# Decocher reste possible : qui veut docker seul decoche les deux autres.
 if [ "$ANY_FLAG" = "0" ]; then
     if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
         _sel="$(zenity --list --checklist --width=620 --height=320 \
             --title="osmo-operator - supplements" \
             --text="Ces elements ne sont PAS dans l ISO. Cochez ce qu il faut installer :" \
             --column="" --column="Supplement" --column="Detail" \
-            TRUE  "multi-operateur SS7" "op1 natif + op2/op3 docker + inter-STP (entraine les deux lignes suivantes)" \
-            FALSE "docker"              "moteur de conteneurs (apt : docker.io)" \
-            FALSE "image operateur"     "build.sh - compilation Osmocom, tres long" \
+            TRUE  "multi-operateur SS7" "op1 natif + op2/op3 docker + inter-STP" \
+            TRUE  "docker"              "moteur de conteneurs (apt : docker.io) - requis par le SS7" \
+            TRUE  "image operateur"     "build.sh - compilation Osmocom, tres long - requis par le SS7" \
             --separator="|" 2>/dev/null)" || { echo "Annule."; exit 0; }
         case "$_sel" in *"multi-operateur SS7"*) DO_MULTI=1 ;; esac
         case "$_sel" in *"docker"*)              DO_DOCKER=1 ;; esac

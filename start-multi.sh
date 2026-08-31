@@ -129,18 +129,27 @@ esac
 docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 \
     || manque "image '$MULTI_IMAGE' absente"
 
-# ── L ADRESSE DE L HOTE, VUE DES CONTENEURS ─────────────────────────────────
-# Le natif tourne sur l HOTE : pour les conteneurs il n est pas "127.0.0.1"
-# mais la passerelle du bridge. La prendre depuis la table plutot que de la
-# deviner - une adresse fausse ici ne casse rien au demarrage, elle casse les
-# appels INTER-operateurs, bien plus tard et sans rapport apparent.
-HOST_SEEN="${MULTI_NET_GW:-172.20.0.1}"
+# ── LE RACCORD DU NATIF AU HUB : CE QU IL FAUT SAVOIR ───────────────────────
+# Verifie le 31/08, et NON RESOLU par ce script :
+#   - /etc/osmocom/osmo-stp.cfg (natif) declare
+#         asp asp-to-inter 2908 2910 m3ua
+#          remote-ip 127.0.0.1
+#          local-ip  172.20.0.11
+#   - or 172.20.0.11 N EXISTE PAS sur l hote : c est l adresse du PREMIER
+#     CONTENEUR operateur, et build-iso.sh la retire deliberement de l ISO.
+#     Un local-ip inbindable = un ASP qui ne monte jamais.
+#   - et rien n ecoute sur 127.0.0.1:2908 tant que le hub conteneur ne publie
+#     pas ce port (docker port osmo-inter-stp : vide).
+# Le natif ne peut donc PAS s associer au hub tel quel. Les deux sorties
+# possibles - publier 2908 sur la boucle locale, ou pointer l ASP natif sur
+# 172.20.0.10 avec local-ip 172.20.0.1 - touchent une config regeneree par
+# start-direct.sh, et je n ai pas pu valider l association SCTP. On SIGNALE
+# donc l etat au lieu de le maquiller (voir verifier()).
 
 # ── COMBIEN DE CONTENEURS ───────────────────────────────────────────────────
 # Ceux marques "docker" dans la table, pas un compte fige : la topologie est
 # la seule source.
 N_DOCKER=0
-NATIVE_PREFIX=11
 for spec in $MULTI_OPS; do
     IFS=: read -r idx mode _ <<< "$spec"
     [ "$mode" = "docker" ] && N_DOCKER=$((N_DOCKER + 1))
@@ -150,10 +159,23 @@ done
 # OPERATOR_COUNT_HINT : start.sh l utilise pour NE PAS reposer la question du
 # nombre de conteneurs (voir start_bridge_mode). Sans elle, le script s arrete
 # sur une boite de dialogue - fatal pour un lancement par icone.
-CMD=(env "OPERATOR_COUNT_HINT=${N_DOCKER}" "$DIR/start.sh" virtual
-     --wan --wan-id "${MULTI_NODE:-1}"
-     --hub-ip "$MULTI_HUB_IP"
-     --operator "${HOST_SEEN}:${NATIVE_PREFIX}")
+# [2026-08-31] PAS DE --wan ICI, ET C EST LE POINT IMPORTANT.
+# La premiere version passait --wan --wan-id --hub-ip --operator. Resultat
+# mesure : le check de fin cherchait le hub en 192.168.1.49 et l operateur
+# portait le point code 1.23.2, alors que la topologie dit 172.20.0.10 et
+# 1.2.2. --wan est la machinerie MULTI-MACHINE : il lit/ecrit
+# /etc/osmo-wan.conf (qui n existe meme pas ici), renumerote les point codes en
+# 1.<noeud><op>.<role> et attend un hub a une adresse routable entre machines.
+# Sur UNE machine, c est l inverse qu on veut - et c est deja le defaut :
+# checks/wan_ss7_check.sh le dit noir sur blanc, "sans WAN l ASP de chaque
+# operateur pointe sur 172.20.0.10", le hub local, avec un catch-all
+# "route 0.0.0 0.0.0 → as-inter". Il n y a donc rien a demander a start.sh
+# au-dela du nombre de conteneurs.
+#
+# OPERATOR_COUNT_HINT : start.sh l utilise pour NE PAS reposer la question du
+# nombre de conteneurs (voir start_bridge_mode). Sans elle, le script s arrete
+# sur une boite de dialogue - fatal pour un lancement par icone.
+CMD=(env "OPERATOR_COUNT_HINT=${N_DOCKER}" "$DIR/start.sh" virtual)
 
 echo -e "  ${BOLD}Topologie${NC} : op1 natif + ${N_DOCKER} conteneur(s) + hub ${MULTI_HUB_IP}"
 echo -e "  ${CYAN}→${NC} ${CMD[*]}"

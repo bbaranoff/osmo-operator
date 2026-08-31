@@ -798,6 +798,105 @@ apply_native_post_patches() {
             "$cfg/osmo-msc.cfg"
     fi
 
+    # ── osmo-stp.cfg : LE local-ip DE L ASP VERS L INTER-STP ────────────────
+    # [2026-08-31] Ce fichier manquait a la liste, et c'est une adresse de
+    # CONTENEUR qui restait dans une config d'HOTE.
+    #
+    # Le gabarit pose  local-ip __INTER_LOCAL_IP__  sous  asp asp-to-inter,
+    # substitue par op_backbone_ip(N) = 172.20.0.<10+N>, soit 172.20.0.11 pour
+    # l'operateur 1. C'est juste DANS le conteneur, qui porte cette adresse.
+    # Sur l'hote elle N'EXISTE PAS - build-iso.sh la retire meme explicitement
+    # ("172.20.0.11 est RETIREE : c'est l'adresse du PREMIER CONTENEUR").
+    #
+    # Un local-ip inbindable ne produit pas d'erreur lisible : l'ASP ne monte
+    # simplement jamais, et le diagnostic sort en aval, tres loin de la cause -
+    #     as-inter : AS_DOWN
+    #     Route par defaut -> inter-STP absente ou non avail
+    # ce qui envoie chercher un probleme de hub ou de filtrage alors que la
+    # patte locale n'a jamais pu s'ouvrir. Constate le 31/08 sur le banc natif.
+    #
+    # 127.0.0.1 : la seule adresse dont on soit certain sur un hote, quelle que
+    # soit sa topologie reseau. Le remote-ip, lui, est deja resolu par le
+    # gabarit (__INTER_STP_IP__) et n'est pas touche ici.
+    #
+    # awk et pas sed : il faut ne modifier QUE le local-ip qui suit
+    # « asp asp-to-inter », pas ceux du bloc d'ecoute juste au-dessus
+    # (local-ip 127.0.0.1 / 127.0.0.2), qui sont corrects.
+    if [ -f "$cfg/osmo-stp.cfg" ]; then
+        awk '
+            /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { in_asp = 1; print; next }
+            in_asp && /^[[:space:]]*local-ip[[:space:]]/ {
+                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); in_asp = 0; print; next
+            }
+            /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { in_asp = 0 }
+            { print }
+        ' "$cfg/osmo-stp.cfg" > "$cfg/osmo-stp.cfg.tmp" \
+            && mv -f "$cfg/osmo-stp.cfg.tmp" "$cfg/osmo-stp.cfg"
+    fi
+
+    # ── pjsip.conf : LE BLOC [transport-udp] ────────────────────────────────
+    # [2026-08-31] Troisieme adresse de conteneur dans une config d'hote, et la
+    # plus couteuse. configs/pjsip.conf ne porte AUCUN placeholder : le bloc
+    # transport est fige sur le plan docker -
+    #     external_media_address=10.2.0.2
+    #     external_signaling_address=10.2.0.2
+    #     local_net=172.20.0.0/16
+    # et generate_configs.sh n'y ajoutait que les trunks interop, jamais le
+    # transport. Sur un banc natif, 10.2.0.2 n'existe nulle part.
+    #
+    # CE QUE CA CASSE. external_* est une option de NAT : pour tout pair HORS
+    # local_net, Asterisk REECRIT le Contact et le SDP avec cette adresse. Un
+    # Linphone sur le LAN (192.168.x, hors du 172.20.0.0/16 declare) recevait
+    # donc "10.2.0.2" et n'avait plus personne a joindre - enregistrement ou
+    # audio muet, selon le moment. Le trunk Zadarma le montrait en clair :
+    # il nous interrogeait sur sip:474117@127.0.0.1:5060, un Contact
+    # inexploitable qu'il avait appris de nous.
+    #
+    # LE CORRECTIF : sur un hote plat il n'y a pas de frontiere NAT a declarer.
+    # On SUPPRIME les external_* - sans eux, pjsip repond avec l'adresse de la
+    # socket, c'est-a-dire la bonne, par destination - et on declare local_net
+    # sur tout l'espace prive plutot que sur le seul plan docker. Ce jeu est
+    # topologie-INDEPENDANT : il reste vrai que l'ISO tourne sur un LAN en
+    # 192.168.x, en 10.x, derriere docker, ou avec l'APN GSM.
+    if [ -f "$dest/asterisk/pjsip.conf" ]; then
+        awk '
+            /^\[transport-udp\]/ { in_t = 1; print; next }
+            in_t && /^\[/         { in_t = 0 }
+            in_t && /^[[:space:]]*external_(media|signaling)_address[[:space:]]*=/ { next }
+            in_t && /^[[:space:]]*local_net[[:space:]]*=/ {
+                if (!done) {
+                    print "local_net=127.0.0.0/8"
+                    print "local_net=10.0.0.0/8"
+                    print "local_net=172.16.0.0/12"
+                    print "local_net=192.168.0.0/16"
+                    print "local_net=176.16.32.0/24"
+                    done = 1
+                }
+                next
+            }
+            { print }
+        ' "$dest/asterisk/pjsip.conf" > "$dest/asterisk/pjsip.conf.tmp" \
+            && mv -f "$dest/asterisk/pjsip.conf.tmp" "$dest/asterisk/pjsip.conf"
+    fi
+
+    # ── mobile.cfg : LA CIBLE GSMTAP ────────────────────────────────────────
+    # [2026-08-31] Deuxieme adresse de conteneur dans une config d'hote.
+    # Le gabarit pose  remote-host __INTER_NET_GATEWAY__  sous  gsmtap,
+    # substitue par 172.20.0.1 - la passerelle du bridge docker. Elle n'existe
+    # QUE tant qu'un reseau docker est monte : sur un banc natif, ou des que
+    # les conteneurs sont arretes, l'adresse disparait et les paquets GSMTAP
+    # partent dans le vide.
+    # Personne ne le signale : le mobile continue a fonctionner, l'appel passe,
+    # et c'est Wireshark qui reste desesperement vide sur udp/4729 - ce qu'on
+    # met naturellement sur le compte de la radio ou du filtre de capture.
+    # Les autres composants (osmo-bts-trx, osmo-pcu, osmo-bsc) tapent deja sur
+    # 127.0.0.1:4729 ; le mobile etait le seul a viser ailleurs.
+    if [ -f "$cfg/mobile.cfg" ]; then
+        sed -i \
+            -e "/^gsmtap\$/,/^!\$/ s/^\([[:space:]]*remote-host[[:space:]]\+\).*/\1127.0.0.1/" \
+            "$cfg/mobile.cfg"
+    fi
+
     if [ -f "$cfg/run.sh" ]; then
         sed -i \
             -e 's#^[[:space:]]*\([^[:space:]]*/\)\?trxcon\([[:space:]].*\)\?$#trxcon#' \
