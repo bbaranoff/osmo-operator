@@ -82,10 +82,23 @@ sms_routing_generate() {
     mkdir -p "$destdir"
     local outfile="${destdir}/sms-routing-op${op_id}.conf"
 
-    # Valeurs par defaut si ms_counts non fourni
+    # ── LES NUMEROS D OPERATEUR NE COMMENCENT PAS FORCEMENT A 1 ─────────────
+    # [2026-08-31] Tout ce fichier enumerait 1..n_ops. Sur le banc
+    # multi-operateur, les CONTENEURS portent les rangs 2 et 3 - le 1 est au
+    # natif (OP_ID_BASE=2). La table sortait donc "Op1 172.20.0.11 / Op2
+    # 172.20.0.12" pour ce qui est en realite op2 et op3 : de mauvais MSISDN
+    # (100101 au lieu de 100201), de mauvaises IMSI, et un relais annonce a une
+    # adresse qui n est celle de personne (172.20.0.11 est le natif, qui n est
+    # pas un conteneur).
+    #
+    # ⚠️ ms_counts reste une liste POSITIONNELLE 0-based : son premier element
+    # decrit le premier operateur enumere, quel que soit son rang. On decale
+    # donc la NUMEROTATION, pas l indexation - d ou le (i - _b).
+    local _b="${OP_ID_BASE:-1}"
+    local _last=$(( _b + n_ops - 1 ))
     local -a nms
-    for i in $(seq 1 "$n_ops"); do
-        nms[$i]=${ms_counts[$((i-1))]:-1}
+    for i in $(seq "$_b" "$_last"); do
+        nms[$i]=${ms_counts[$((i - _b))]:-1}
     done
 
     local mcc="${MCC:-001}"
@@ -97,7 +110,7 @@ sms_routing_generate() {
 #
 # Operateur local  : ${op_id}
 # Nombre d'operat. : ${n_ops}
-# MS par operateur : $(for i in $(seq 1 "$n_ops"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
+# MS par operateur : $(for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
 #
 # Routage MSISDN :
 #   MSISDN = <noeud> × 100000 + op_id × 100 + ms_idx
@@ -117,7 +130,7 @@ mo_log = /var/log/osmocom/mo-sms-op${op_id}.log
 # operator_id = container_ip  (reseau backbone 172.20.0.0/24)
 HEADER
 
-    for i in $(seq 1 "$n_ops"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         printf '%s = %s\n' "$i" "$(_sms_op_backbone_ip "$i")" >> "$outfile"
     done
 
@@ -134,7 +147,7 @@ HEADER
 ROUTES_HEADER
 
     # ── Routes exactes par MS (priorite maximale) ─────────────────────────────
-    for i in $(seq 1 "$n_ops"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         local mnc; mnc=$(printf '%02d' "$i")
         printf '\n# ── Operateur %s (SC=%s) ──────────────────────────────────────\n' \
                "$i" "$(_sms_sc_address "$i")" >> "$outfile"
@@ -191,7 +204,7 @@ sms_routing_generate_all() {
 
     echo -e "${CYAN}${BOLD}── SMS Routing - generation configs (${n_ops} operateurs) ──${NC}"
 
-    for i in $(seq 1 "$n_ops"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         sms_routing_generate "$i" "$n_ops" "$destdir" "${ms_counts[@]}"
     done
 
@@ -364,7 +377,7 @@ sms_routing_summary() {
            "────────────" "────────" "────────────────────" "──────────────────" "───────────────"
 
     local total_ms=0
-    for i in $(seq 1 "$n_ops"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         local n_ms=${ms_counts[$((i-1))]:-1}
         local mnc; mnc=$(printf '%02d' "$i")
         local container_ip; container_ip=$(_sms_op_backbone_ip "$i")
@@ -389,7 +402,7 @@ sms_routing_summary() {
 
     echo ""
     echo -e "${CYAN}── Reseau inter-operateurs ──${NC}"
-    for i in $(seq 1 "$n_ops"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         local n_ms=${ms_counts[$((i-1))]:-1}
         printf "  Op%-2s  %s  ← TCP 7890  (relay)  %d MS\n" \
                "$i" "$(_sms_op_backbone_ip "$i")" "$n_ms"

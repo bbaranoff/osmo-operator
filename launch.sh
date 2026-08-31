@@ -207,7 +207,14 @@ fi
 # En ROOT, et pas sous $GUI_USER : la capture sur `any` demande CAP_NET_RAW.
 # -k demarre la capture tout de suite (sinon on ouvre sur un ecran de choix
 # d interface, et rien n est capture tant qu on n a pas clique).
-if [ "$OSMO_LAUNCH_APPS" = "1" ] && command -v wireshark >/dev/null 2>&1; then
+# [2026-08-31] LES DEUX RAISONS DE NE PAS LANCER SONT DISTINGUEES.
+# Le test cumulait "demande ?" et "installe ?" dans un seul if, et le else
+# annoncait toujours "absent". En mode banc seul (OSMO_LAUNCH_APPS=0, pose par
+# start-multi.sh), on lisait donc "wireshark absent" pour un wireshark
+# parfaitement installe - un message qui envoie verifier un paquet present.
+if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
+    echo -e "  ${CYAN}○${NC} wireshark : non demande (mode banc seul)"
+elif command -v wireshark >/dev/null 2>&1; then
     setsid wireshark -k -i any -f "udp port ${GSMTAP_PORT}" \
         </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
@@ -221,7 +228,9 @@ fi
 # ⚠️ Linphone ne relit PAS sa config a chaud : s il tourne deja, il garde son
 # etat en memoire. On ne le relance donc pas de force ici - on le laisse tel
 # quel plutot que de couper un appel en cours.
-if [ "$OSMO_LAUNCH_APPS" = "1" ] && command -v linphone >/dev/null 2>&1; then
+if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
+    echo -e "  ${CYAN}○${NC} linphone : non demande (mode banc seul)"
+elif command -v linphone >/dev/null 2>&1; then
     if pgrep -x linphone >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} linphone : deja lance (laisse en place)"
     else
