@@ -205,7 +205,11 @@ fi
 # CHECK 1 : Inter-STP (hub central)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$HAS_INTER_STP" -eq 1 ]; then
-    banner "INTER-STP (hub SS7) - 0.23.0"
+    # [2026-08-31] Le point code etait ecrit en dur "0.23.0", comme celui des
+    # operateurs l etait en "${op_id}.23.2". Le hub est en 0.0.0 (c est ce que
+    # start.sh annonce au lancement, et ce que porte osmo-multi.conf) : le
+    # bandeau affichait donc une adresse qui n est celle de personne.
+    banner "INTER-STP (hub SS7) - $(osmo_hub_pc 2>/dev/null || echo 0.0.0)"
 
     if ! vty_available "$HUB_NODE" 4239; then
         fail "VTY inter-STP (4239) inaccessible"

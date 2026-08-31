@@ -255,6 +255,13 @@ osmo_op_mode() {
     osmo_mode
 }
 
+# osmo_hub_pc - point code du hub, depuis la topologie ; vide sinon.
+osmo_hub_pc() {
+    _osmo_multi_load || return 1
+    [ -n "${MULTI_HUB_PC:-}" ] || return 1
+    printf '%s\n' "$MULTI_HUB_PC"
+}
+
 # osmo_op_pc <id> - point code attendu, depuis la topologie ; vide sinon.
 osmo_op_pc() {
     local want="${1:-}" spec idx mode ip pc
