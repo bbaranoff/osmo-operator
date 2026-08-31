@@ -30,6 +30,11 @@ TARGET="$DIR/start-direct.sh"
 GSMTAP_PORT="${GSMTAP_PORT:-4729}"
 DASH_URL="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
 DASH_PORT="${DASH_URL##*:}"
+# Le tutoriel s ouvre en DEUXIEME ONGLET, a cote du tableau de bord. Servi par
+# le dashboard (et non en file://) : Firefox est un snap, son bac a sable ne lui
+# donne acces ni a /root ni aux repertoires caches - un file:// rendrait
+# "L acces au fichier a ete refuse". Voir /usr/local/bin/osmo-tutorial.
+TUTO_URL="${OSMO_TUTORIAL_URL:-${DASH_URL%/}/tutorial.html}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
 
@@ -189,7 +194,12 @@ if command -v firefox >/dev/null 2>&1; then
         for _i in $(seq 1 180); do
             if (exec 3<>"/dev/tcp/127.0.0.1/${DASH_PORT}") 2>/dev/null; then
                 exec 3>&- 2>/dev/null
-                gui_run firefox "$DASH_URL"
+                # Deux URL sur la meme ligne de commande = deux ONGLETS, dans
+                # la meme fenetre. Un second `firefox <url>` marcherait aussi
+                # (le premier processus recupere l argument), mais il faudrait
+                # le cadencer : lance trop tot, il fait la course avec le
+                # demarrage du navigateur et ouvre parfois une 2e fenetre.
+                gui_run firefox "$DASH_URL" "$TUTO_URL"
                 exit 0
             fi
             sleep 1
