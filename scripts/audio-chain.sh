@@ -60,6 +60,28 @@ if ! pactl info >/dev/null 2>&1; then
     exit 0
 fi
 
+# ── 2 bis. Attendre une SORTIE MATERIELLE, pas seulement le demon ────────────
+# [2026-08-31] Au premier demarrage d'un disque fraichement installe, ce script
+# concluait "aucune sortie materielle - loopback local ignore" et rendait la
+# main : l'appel montait, et il etait MUET. Le demon repondait pourtant deja -
+# c'est bien lui qu'attend l'etape 2 - mais les modules snd_hda_* finissaient
+# de se charger, et module-udev-detect n'avait encore declare aucun sink ALSA.
+# La cle live n'en souffrait pas : elle demarre plus lentement, la course se
+# jouait dans l'autre sens, et le bug ne se voyait qu'apres installation.
+#
+# module-udev-detect rattrape les cartes qui arrivent apres coup, mais
+# ensure_local_loopback, lui, ne passe qu'UNE fois : s'il passe trop tot, le
+# loopback n'est jamais pose et plus rien ne le posera. On lui laisse donc la
+# meme fenetre qu'au demon. Non bloquant au-dela : sans carte du tout (un banc
+# sans son, une VM sans peripherique audio), on continue - les null-sinks
+# suffisent a gapk_io, seule l'ecoute locale manque.
+hw_deadline="${1:-30}"
+while [ "$hw_deadline" -gt 0 ] \
+      && ! pactl list short sinks 2>/dev/null | grep -q 'module-alsa-card'; do
+    sleep 1
+    hw_deadline=$(( hw_deadline - 1 ))
+done
+
 # ── 3. Les DEUX null-sinks, puis le loopback ─────────────────────────────────
 # load_gsm_sinks() boucle sur GSM_SINKS = gsm_audio + gsm_mic : c'est ce qui
 # rattrape un system.pa qui n'en declarerait qu'un.

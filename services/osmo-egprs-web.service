@@ -1,6 +1,6 @@
 [Unit]
 Description=osmo-nitb-for-calypso Operations Console (web dashboard)
-Documentation=https://github.com/bbaranoff/osmo-egprs-weB
+Documentation=https://github.com/bbaranoff/osmo-egprs-web
 After=network.target
 
 [Service]
@@ -32,9 +32,27 @@ Environment=AUDIO_SOURCE=gsm_audio.monitor
 # explicitement (un navigateur qui lit `https://<ip>` irait sur 443, ferme), et
 # `http://<ip>` ne repond plus en clair — c'est du TLS qui ecoute la.
 Environment=HTTPS_PORT=80
-Environment=TLS_CERT=/opt/GSM/osmo-egprs-web/tls/cert.pem
-Environment=TLS_KEY=/opt/GSM/osmo-egprs-web/tls/key.pem
-ExecStart=/usr/local/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
+# ⚠️ /etc/osmo-web-tls, PAS /opt/GSM/osmo-egprs-web/tls. C'est LA que
+# install-web-service.sh ecrit le certificat (son § 3, variable TLS_DIR), et
+# c'est aussi le defaut de server.js:1805. Ce unit nommait un troisieme
+# chemin, que personne n'ecrit jamais : le certificat existait, le listener
+# HTTPS ne s'armait pas, le journal disait « HTTPS non arme : certificat
+# absent » en citant un repertoire absent, et le dashboard restait en clair.
+# Consequence directe et sans rapport apparent : depuis une IP, le bouton
+# micro etait REFUSE PAR LE NAVIGATEUR - navigator.mediaDevices n'existe pas
+# hors contexte securise. Le diagnostic partait invariablement sur Firefox.
+Environment=TLS_CERT=/etc/osmo-web-tls/cert.pem
+Environment=TLS_KEY=/etc/osmo-web-tls/key.pem
+# ⚠️ /usr/bin/node, PAS /usr/local/bin/node. Dans le conteneur, node vient de
+# install-web-service.sh, qui deballe /opt/node et pose les liens dans
+# /usr/local/bin. Dans l'ISO il vient du paquet nodesource, donc de
+# /usr/bin/node, et build-iso.sh SUPPRIME les liens /usr/local/bin/node,npm,npx
+# parce qu'ils y pendent dans le vide. Cette unite nommait l'autre chemin :
+# apres installation sur disque, le service sortait en 203/EXEC a chaque
+# demarrage, osmo-egprs-web-install echouait dans la foulee, et le dashboard
+# n'avait ni TLS ni micro. /usr/bin/node existe des DEUX cotes (le paquet
+# nodesource s'y installe aussi) : c'est le seul chemin qui vaut partout.
+ExecStart=/usr/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

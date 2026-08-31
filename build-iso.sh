@@ -1534,6 +1534,42 @@ if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
     cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null || true
 fi
 
+# ── LE DASHBOARD S INSTALLE ICI, PAS AU PREMIER BOOT ────────────────────────
+# install-web-service.sh est le script du depot osmo-egprs-web qui sait poser le
+# dashboard : runtime node, dependances JS, unite systemd, certificat TLS et
+# politique Firefox. Il n etait joue nulle part pendant la construction - on ne
+# copiait que ses unites (etape 6) - et tout reposait donc sur
+# osmo-egprs-web-install.service au premier demarrage. Quand cet oneshot
+# echouait (il l a fait : l unite nommait /usr/local/bin/node, absent), l ISO
+# livrait un dashboard sans TLS, donc sans micro, et rien ne le disait pendant
+# le build.
+#
+# On le joue DONC ici, ou son echec se voit tout de suite. Les deux
+# interrupteurs sont ceux que le script documente lui-meme, et ils sont faits
+# pour ce cas :
+#
+#   WEB_NO_TLS=1   pas de certificat au build. Une cle privee fabriquee dans ce
+#                  chroot serait IDENTIQUE dans toutes les ISO tirees de cette
+#                  image : n importe qui pourrait se faire passer pour la
+#                  console. Elle est posee sur la machine, au premier
+#                  demarrage, avec ses vraies adresses - et la politique
+#                  Firefox avec, puisqu elle nomme ces memes adresses.
+#   WEB_NO_START=1 systemd ne tourne pas dans un chroot ; `systemctl restart`
+#                  y echoue toujours, et le script est en `set -eu`. Sans cet
+#                  interrupteur, la construction entiere s arreterait sur un
+#                  service qui n avait aucune raison de demarrer la.
+#
+# Ce qui reste fait au build est justement ce qui n a pas besoin de la machine :
+# node, node_modules, l unite. L oneshot du premier boot devient alors ce qu il
+# aurait toujours du etre - un rattrapage idempotent, pas le seul chemin.
+if [ -x /opt/GSM/osmo-egprs-web/install-web-service.sh ]; then
+    echo "  [web] install-web-service.sh (sans TLS ni demarrage : chroot)"
+    WEB_NO_TLS=1 WEB_NO_START=1 bash /opt/GSM/osmo-egprs-web/install-web-service.sh \
+        || echo "  [web] WARN: install-web-service.sh a echoue - osmo-egprs-web-install rattrapera au boot"
+else
+    echo "  [web] WARN: install-web-service.sh absent de /opt/GSM/osmo-egprs-web"
+fi
+
 # ── VARIANTE DESKTOP : bureau, wireshark en fenetre, linphone ──────────────
 # Place ICI, et pas ailleurs : APRES le gros apt-get install (les deps communes
 # sont deja la, apt ne les reresout pas), mais AVANT update-initramfs - le
@@ -1637,8 +1673,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         fi
     done
 
-    # ── CHROMIUM : LE SNAP, PAS LE DEB ─────────────────────────────────────
-    # Sur jammy, "apt install chromium-browser" (comme "apt install firefox")
+    # ── FIREFOX : LE SNAP, PAS LE DEB ──────────────────────────────────────
+    # Sur jammy, "apt install firefox" (comme "apt install chromium-browser")
     # pose un paquet de TRANSITION vide dont le postinst appelle
     # "snap install ...". Dans un chroot, snapd ne tourne pas : le postinst
     # echoue, apt le signale a peine, et l image sort avec un binaire qui
@@ -1650,7 +1686,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # demarrage, quand snapd tourne pour de bon. Les .snap et leurs assertions
     # voyagent dans l image : l installation se fait alors HORS LIGNE, ce qui
     # compte pour un banc qui n a pas toujours Internet.
-    # L unite qui les pose (osmo-chromium-snap.service) est ecrite HORS de ce
+    # L unite qui les pose (osmo-firefox-snap.service) est ecrite HORS de ce
     # chroot : le script y est en quotes simples, une apostrophe de plus et
     # tout ce qui suit change de sens.
     apt-get purge -y firefox chromium-browser 2>/dev/null || true
@@ -1659,12 +1695,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
 
     # ── LES DEPENDANCES SE LISENT DANS LE SNAP, ELLES NE SE DEVINENT PAS ────
     # L ancienne liste etait ecrite en dur : gtk-common-themes, gnome-42-2204,
-    # chromium. Elle etait FAUSSE, et l image sortait sans navigateur.
-    # chromium 151 declare "base: core24" et reclame, par ses interfaces de
+    # et le navigateur. Elle etait FAUSSE, et l image sortait sans navigateur.
+    # firefox 15x declare "base: core24" et reclame, par ses interfaces de
     # contenu, mesa-2404 (gpu-2404) et gnome-46-2404 - gnome-42-2204 est la
-    # plateforme du monde core22, celle du chromium d AVANT : 557 Mo embarques
-    # que rien ne monte. Sans core24 ni mesa-2404, "snap install chromium.snap"
-    # echoue hors ligne, et le lanceur repond "chromium introuvable".
+    # plateforme du monde core22, celle d AVANT : 557 Mo embarques que rien ne
+    # monte. Sans core24 ni mesa-2404, "snap install firefox.snap" echoue hors
+    # ligne, et le lanceur repond "firefox introuvable".
     #
     # On lit donc "base:" et les "default-provider:" DANS le .snap telecharge,
     # au lieu de les recopier : la prochaine bascule de base (core26...) se
@@ -2318,26 +2354,20 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
 
-# Service web dashboard
-cat > "$ROOTFS/etc/systemd/system/osmo-egprs-web.service" <<'EOF'
-[Unit]
-Description=osmo-operator Web Dashboard (native)
-After=network.target
-[Service]
-Type=simple
-WorkingDirectory=/opt/GSM/osmo-egprs-web
-ExecStart=/usr/bin/node /opt/GSM/osmo-egprs-web/server.js --verbose
-Restart=always
-RestartSec=5
-Environment=HTTP_PORT=8080
-# Mode natif (start-direct.sh) : VTY en telnet direct sur 127.0.0.1, pas de docker.
-# Pour le mode docker (start.sh + conteneurs), mettre OSMO_NATIVE=0.
-Environment=OSMO_NATIVE=1
-Environment=OSMO_OP_IDS=1
-Environment=CONTAINER_PREFIX=osmo-operator-
-[Install]
-WantedBy=multi-user.target
-EOF
+# ── Service web dashboard : DEJA POSE, NE PAS LE REECRIRE ───────────────────
+# [2026-08-31] Ici vivait un SECOND heredoc qui reecrivait
+# osmo-egprs-web.service par-dessus celui que l'etape 6 venait de copier depuis
+# services/ - et il en etait une version APPAUVRIE : ni TLS_CERT/TLS_KEY (donc
+# pas de listener HTTPS, donc pas de contexte securise, donc pas de micro), ni
+# PULSE_SERVER (donc pas de pont audio vers gsm_mic), ni CAP_IFACE=any (donc
+# l'onglet trafic muet). L'ISO partait avec cette version-la ; ce n'est qu'au
+# premier boot que install-web-service.sh recopiait la bonne par-dessus, et
+# seulement s'il allait au bout - ce qu'il ne faisait pas, puisqu'il echouait
+# justement sur le service qui refusait de demarrer.
+#
+# Deux fichiers pour une seule unite, c'est un de trop : la source unique est
+# services/osmo-egprs-web.service, copiee a l'etape 6. On ne garde ici que
+# l'activation.
 # Le hub n'a ni VTY d'operateur a afficher ni radio a tracer : le tableau de
 # bord n'aurait rien a montrer. On ne l'active pas.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
@@ -2451,10 +2481,55 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]
 Description=osmo-operator PulseAudio system daemon (GSM audio)
+# sound.target seul ne garantit RIEN : c'est une cible passive, atteinte des que
+# systemd a fini de traiter les regles udev deja connues - pas quand les cartes
+# sont la. Au premier demarrage d'un disque fraichement installe, les modules
+# snd_hda_* sont encore en cours de chargement quand cette unite part, et
+# osmo-audio-chain.sh concluait "aucune sortie materielle - loopback local
+# ignore" : l'appel montait, et il etait muet. module-udev-detect rattrape les
+# cartes qui arrivent APRES le demarrage du demon (les sources et sinks ALSA
+# apparaissent tout seuls), mais le loopback vers la carte, lui, n'est pose
+# qu'une fois. On ne tire donc PAS systemd-udev-settle ici - il est obsolete et
+# retarderait tout le boot pour un seul service : l'attente est dans
+# scripts/audio-chain.sh, qui a deja un delai en parametre et ne fait patienter
+# que lui-meme.
 After=sound.target
+Wants=sound.target
 [Service]
-Type=forking
-ExecStart=/usr/bin/pulseaudio --system --daemonize=yes --disallow-exit --exit-idle-time=-1 --log-target=file:/var/log/osmocom/pulse-system.log
+# ── Type=notify ET --daemonize=no, ENSEMBLE OU PAS DU TOUT ──────────────────
+# [2026-08-31] Ce couple valait "Type=forking" + "--daemonize=yes", et c'est ce
+# qui rendait le son INDISPONIBLE sur le systeme installe alors qu'un
+# "systemctl start osmo-pulse" a la main marchait a tous les coups.
+#
+# En Type=forking, systemd attend la mort du processus lance, puis DEVINE lequel
+# des survivants du cgroup est le demon (GuessMainPID). pulseaudio --daemonize
+# fait deux forks et laisse, le temps de la mise en place, ses fils de travail
+# dans le cgroup : la devinette tombe sur un PID deja mort, systemd conclut que
+# le service s'est termine, et son KillMode=control-group emporte le vrai demon
+# qui venait juste de finir de charger ses modules. Le journal en garde la
+# trace, et elle se lit a l'envers :
+#     osmo-pulse.service: Deactivated successfully.
+#     Started osmo-operator PulseAudio system daemon (GSM audio).
+# "Deactivated" AVANT "Started" - le service est annonce demarre alors qu'il est
+# deja mort. Rien n'echoue, rien n'est reessaye (Restart=on-failure ne voit
+# qu'une sortie 0), et /run/pulse/native n'existe simplement jamais : pactl rend
+# "Connection refused", et Firefox, qui cherche ce socket, enumere ZERO micro.
+# Au demarrage manuel la course se joue autrement et la devinette tombe juste -
+# d'ou un bug qui ne se reproduit qu'au boot, le seul moment ou personne ne
+# regarde.
+#
+# La devinette disparait si le demon ne se detache pas : en --daemonize=no le
+# processus lance EST le demon, son PID n'est plus a deviner. Et pulseaudio 15.x
+# de jammy est lie a libsystemd : il appelle sd_notify(READY=1) une fois ses
+# modules charges, ce que Type=notify attend. C'est aussi ce que fait l'unite
+# fournie par le paquet (/usr/lib/systemd/user/pulseaudio.service), qui le dit
+# dans son propre commentaire : "notify will only work if --daemonize=no".
+#
+# BENEFICE COLLATERAL, et il compte : en Type=notify, ExecStartPost ne part
+# qu'apres READY=1. Avant, osmo-pulse-link.sh et osmo-audio-chain.sh couraient
+# contre un demon qui n'avait pas fini d'ouvrir son socket.
+Type=notify
+ExecStart=/usr/bin/pulseaudio --system --daemonize=no --disallow-exit --exit-idle-time=-1 --log-target=journal
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # ── LE SOCKET LA OU LES APPLICATIONS LE CHERCHENT ───────────────────────────
 # PulseAudio tourne ici en mode SYSTEME : il n'ecoute que sur /run/pulse/native.
@@ -3056,37 +3131,90 @@ if [ "$(id -u)" -ne 0 ]; then
     exec pkexec --disable-internal-agent "$0" "$@"
 fi
 
-# ── Retrouver le medium, sans le supposer ───────────────────────────────────
-# unpackfs.conf pointe /run/live/medium/live/filesystem.squashfs. Ce chemin
-# n est PAS garanti. Au demarrage sur l entree "persistant", live-boot balaie
-# les disques a la recherche d un volume de persistance et monte la cle sous
-# /run/live/persistence/sda ; c est LA qu il trouve le squashfs, et
-# /run/live/medium reste un repertoire vide. Calamares echoue alors sur
-# "Mauvaise configuration unpackfs" - mais APRES avoir partitionne le disque
-# cible, qui reste vide et bon a rien.
+# ── Retrouver le squashfs, sans jamais supposer OU il est ───────────────────
+# LE SYMPTOME QUI A AMENE CE BLOC A SA FORME ACTUELLE. L entree "en RAM" du
+# menu demarre parfaitement, et depuis elle - et depuis elle seule -
+# l installeur repondait "Medium live introuvable ... Rien a installer".
 #
-# On ne devine donc pas le chemin, on le DEDUIT de ce qui tourne : la racine est
-# un overlay sur /run/live/rootfs/filesystem.squashfs, lui-meme un loop dont le
-# fichier de backing est le squashfs pose SUR le medium. Deux dirname et on
-# tient la racine du medium, ou que live-boot l ait montee. Un bind la remet a
-# l endroit ou unpackfs la cherche.
-MEDIUM=/run/live/medium
-if [ ! -e "$MEDIUM/live/filesystem.squashfs" ]; then
+# POURQUOI. En mode normal, live-boot monte le medium sur /run/live/medium et
+# le squashfs y est a sa place d origine : live/filesystem.squashfs. En
+# "toram=filesystem.squashfs", live-boot ne recopie PAS l arborescence du
+# medium : il copie LE FICHIER, seul, a la racine d un tmpfs, puis deplace ce
+# tmpfs sur /run/live/medium (cp -a "${MODULETORAMFILE}" "${copyto}", puis
+# mount -r -o move). Le squashfs se retrouve donc en
+#     /run/live/medium/filesystem.squashfs
+# et non plus en
+#     /run/live/medium/live/filesystem.squashfs
+# Le sous-repertoire "live/" a disparu au passage. live-boot s en moque - il
+# sait ou il l a mis - mais tout ce qui ecrit ce chemin en dur le rate.
+#
+# Et la version precedente de ce bloc le ratait DEUX FOIS : son repli prenait
+# le fichier de backing du loop (donc le bon chemin), puis lui appliquait deux
+# dirname pour "remonter a la racine du medium". Deux dirname sur
+# /run/live/medium/filesystem.squashfs donnent /run/live - qui n a pas plus de
+# sous-repertoire "live/". Le bind reussissait, le test suivant echouait, et le
+# message accusait le medium d etre absent alors qu il etait en RAM, monte, et
+# parfaitement lisible.
+#
+# CE QU ON FAIT A LA PLACE. On ne reconstitue plus une arborescence supposee :
+# on trouve LE FICHIER, par trois voies de plus en plus larges, et on le
+# presente a Calamares a un chemin qui, lui, ne depend d aucun mode de
+# demarrage. C est ce chemin que nomme unpackfs.conf.
+SQ=""
+
+# 1. Le chemin canonique du demarrage normal. S il est la, rien a faire.
+[ -e /run/live/medium/live/filesystem.squashfs ] \
+    && SQ=/run/live/medium/live/filesystem.squashfs
+
+# 2. Le loop qui porte la racine en cours d execution. C est la source la plus
+#    sure qui soit : ce n est pas "un" squashfs trouve quelque part, c est
+#    CELUI sur lequel ce systeme tourne. Vrai en normal, en toram et en
+#    persistant.
+if [ -z "$SQ" ]; then
     _loop=$(findmnt -no SOURCE /run/live/rootfs/filesystem.squashfs 2>/dev/null || true)
-    _sq=""
-    [ -n "$_loop" ] && _sq=$(losetup -nO BACK-FILE "$_loop" 2>/dev/null || true)
-    if [ -n "$_sq" ] && [ -e "$_sq" ]; then
-        mkdir -p "$MEDIUM"
-        mount --bind "$(dirname "$(dirname "$_sq")")" "$MEDIUM" 2>/dev/null || true
+    if [ -n "$_loop" ]; then
+        _bf=$(losetup -nO BACK-FILE "$_loop" 2>/dev/null || true)
+        [ -n "$_bf" ] && [ -e "$_bf" ] && SQ="$_bf"
     fi
 fi
 
-# Le FICHIER, pas le repertoire. Tester "-d /run/live/medium" ne prouvait rien :
-# le repertoire existe meme vide, le test passait, et l echec tombait plus loin
-# dans Calamares - au pire endroit, le disque deja repartitionne.
-if [ ! -e "$MEDIUM/live/filesystem.squashfs" ]; then
-    echo "Medium live introuvable - ce systeme ne tourne pas depuis une cle live," >&2
-    echo "ou le squashfs n est pas lisible. Rien a installer." >&2
+# 3. Dernier recours : n importe quel loop dont le fichier de backing est un
+#    squashfs. Couvre le cas ou live-boot aurait nomme le point de montage
+#    autrement (persistance : /run/live/persistence/sdX).
+if [ -z "$SQ" ]; then
+    SQ=$(losetup -anO BACK-FILE 2>/dev/null | grep -m1 '\.squashfs$' || true)
+    [ -n "$SQ" ] && [ -e "$SQ" ] || SQ=""
+fi
+
+if [ -z "$SQ" ]; then
+    echo "Squashfs introuvable - ce systeme ne tourne pas depuis une cle live," >&2
+    echo "ou l image n est plus lisible. Rien a installer." >&2
+    exit 1
+fi
+
+# ── LE CHEMIN STABLE, CELUI QUE CALAMARES LIT ───────────────────────────────
+# Un bind sur le FICHIER, pas sur son repertoire : le repertoire d origine
+# change de forme d un mode de demarrage a l autre (c est tout le probleme
+# ci-dessus), le fichier non. /run est un tmpfs sur un systeme live, donc
+# inscriptible - contrairement a /run/live/medium en toram, que live-boot
+# deplace en lecture seule et dans lequel on ne pourrait pas creer le "live/"
+# qui manque.
+SRC=/run/osmo-install-src
+mkdir -p "$SRC/live"
+if ! mountpoint -q "$SRC/live/filesystem.squashfs"; then
+    : > "$SRC/live/filesystem.squashfs"
+    mount --bind "$SQ" "$SRC/live/filesystem.squashfs" || {
+        echo "Impossible de presenter $SQ a l installeur." >&2
+        exit 1
+    }
+fi
+echo "Image source : $SQ  ->  $SRC/live/filesystem.squashfs"
+
+# Le FICHIER, pas le repertoire. Tester "-d" ne prouvait rien : le repertoire
+# existe meme vide, le test passait, et l echec tombait plus loin dans
+# Calamares - au pire endroit, le disque deja repartitionne.
+if [ ! -s "$SRC/live/filesystem.squashfs" ]; then
+    echo "Le squashfs presente a l installeur est vide - rien a installer." >&2
     exit 1
 fi
 
@@ -3320,190 +3448,76 @@ for _s in sssd sssd-autofs sssd-nss sssd-pac sssd-pam sssd-ssh sssd-sudo; do
 done
 echo -e "  ${GREEN}✓${NC} sssd masque (aucun domaine sur un banc) - ${CYAN}systemctl unmask sssd${NC} pour le rendre"
 
-# ── CHROMIUM : LE BAC A SABLE EST LA REGLE, PAS L OPTION ────────────────────
-# La session de cette image s ouvre en ROOT. Or Chromium refuse de demarrer en
-# root avec son bac a sable actif :
+# ── FIREFOX : LE NAVIGATEUR DU BANC, ET RIEN D AUTRE ────────────────────────
+# [2026-08-31] Ici vivaient ~180 lignes de plomberie CHROMIUM : un lanceur
+# /usr/local/bin/chromium qui rebasculait root -> osmocom par runuser (xhost,
+# XDG_RUNTIME_DIR, profil dans /var/lib/osmo-chromium) pour rendre son bac a
+# sable utilisable, une unite qui preparait ce runtime, une seconde qui
+# effacait ses .desktop en double, et un alias de profil.
+#
+# TOUT CELA REPONDAIT A UNE SEULE CONTRAINTE DE CHROMIUM :
 #     Running as root without --no-sandbox is not supported
-# La reponse habituelle - ajouter --no-sandbox - donne un navigateur SANS AUCUN
-# confinement, lance par le compte le plus privilegie de la machine, sur un banc
-# qui manipule des captures et des interfaces reseau. C est precisement ce qu il
-# ne faut pas.
+# Cette image ouvre sa session en root ; Chromium exigeait donc soit un
+# changement de compte, soit un navigateur SANS confinement lance par le compte
+# le plus privilegie de la machine. Firefox n a pas cette contrainte : le snap
+# est confine par AppArmor et snapd, pas par des espaces de noms utilisateur.
+# Il demarre en root, confine, sans lanceur intermediaire - donc sans xhost,
+# sans runuser, sans second profil, et sans les trois unites qui les tenaient.
 #
-# Ce lanceur inverse la charge : le bac a sable est le comportement par defaut,
-# depuis le CLI comme depuis le bureau, que l on soit root ou osmocom. La seule
-# facon de s en passer est de le DEMANDER, en ecrivant --no-sandbox soi-meme.
+# La derniere raison de preferer Chromium etait "Firefox ne capte pas le micro".
+# Elle est tombee : voir le bloc Firefox de l etape 6 - le snap ne pouvait pas
+# se connecter a PulseAudio (AppArmor refusait /run/pulse/native sur le
+# proprietaire, pas sur le chemin), ce qui n avait rien d une affaire de
+# navigateur. Le chown est dans osmo-pulse-link.sh.
 #
-# COMMENT. En root, on ne peut pas confiner Chromium sur place : sa protection
-# par espaces de noms exige un UID non nul. On rebascule donc sur osmocom - le
-# compte non privilegie de l image - avec runuser, ce qui rend le bac a sable
-# utilisable. Sous osmocom (ou tout autre compte non root), Chromium se confine
-# tout seul : on le lance tel quel.
-#
-# TROIS DETAILS SANS LESQUELS RIEN NE S AFFICHE :
-#   - le serveur X appartient a root ; osmocom doit y etre autorise, d ou le
-#     xhost +SI:localuser (autorisation nominative, pas un xhost + qui ouvrirait
-#     l affichage a tout le monde) ;
-#   - XAUTHORITY et DISPLAY/WAYLAND_DISPLAY doivent traverser runuser ;
-#   - le profil doit etre dans un repertoire ou osmocom peut ecrire, jamais
-#     /root/.config, sinon Chromium sort sur une erreur de permissions.
-#
-# Le lanceur est en /usr/local/bin, qui precede /snap/bin et /usr/bin dans le
-# PATH par defaut : "chromium" et "chromium-browser" tapes a la main passent
-# donc ici, et le .desktop du bureau est reecrit pour l utiliser aussi.
-cat > "$ROOTFS/usr/local/bin/chromium" <<'CHROMIUM'
-#!/bin/bash
-# Chromium confine par defaut. Voir build-iso.sh, etape 8d.
-set -u
-
-REAL=""
-for c in /snap/bin/chromium /usr/bin/chromium /usr/bin/chromium-browser; do
-    [ -x "$c" ] && { REAL="$c"; break; }
-done
-[ -n "$REAL" ] || { echo "chromium introuvable (le snap n est peut-etre pas encore installe)" >&2; exit 127; }
-
-# Choix EXPLICITE de l appelant : on ne discute pas, on transmet tel quel.
-for a in "$@"; do
-    case "$a" in
-        --no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox)
-            exec "$REAL" "$@" ;;
-    esac
-done
-
-SANDBOX_USER="${OSMO_BROWSER_USER:-osmocom}"
-PROFILE_ROOT=/var/lib/osmo-chromium
-
-if [ "$(id -u)" -ne 0 ]; then
-    # Deja non privilegie : Chromium se confine lui-meme, rien a faire.
-    exec "$REAL" --user-data-dir="${HOME}/.config/osmo-chromium" "$@"
-fi
-
-id -u "$SANDBOX_USER" >/dev/null 2>&1 || {
-    echo "Compte $SANDBOX_USER absent : impossible de confiner Chromium." >&2
-    echo "Relancez avec --no-sandbox si vous acceptez de vous en passer." >&2
-    exit 1
-}
-
-install -d -o "$SANDBOX_USER" -g "$SANDBOX_USER" -m 0700 "$PROFILE_ROOT/$SANDBOX_USER"
-
-# Autorisation NOMINATIVE sur l affichage - pas un "xhost +".
-[ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1 && \
-    xhost "+SI:localuser:$SANDBOX_USER" >/dev/null 2>&1 || true
-
-# LE COOKIE X, RECOPIE DANS UN FICHIER QUE osmocom PEUT LIRE.
-# Sous GDM en autologin root, XAUTHORITY ne vaut PAS /root/.Xauthority mais
-# /run/user/0/gdm/Xauthority : un fichier en 0600 root, dans un repertoire en
-# 0700 root. Le passer tel quel a runuser transmet un chemin que osmocom ne
-# peut ni ouvrir ni meme traverser. Le xhost nominatif ci-dessus suffit en
-# principe - l extension LocalUser autorise par UID, sans cookie - mais il ne
-# couvre pas les serveurs X ou elle est absente, et l echec se lit alors
-# "Authorization required, but no authorization protocol specified", ce qui
-# ne designe personne. Trois lignes de xauth ferment le sujet.
-SB_XAUTH="$PROFILE_ROOT/$SANDBOX_USER/.Xauthority"
-if [ -n "${DISPLAY:-}" ] && command -v xauth >/dev/null 2>&1; then
-    rm -f "$SB_XAUTH"
-    if xauth nextract - "$DISPLAY" 2>/dev/null \
-         | XAUTHORITY="$SB_XAUTH" xauth nmerge - 2>/dev/null \
-       && [ -s "$SB_XAUTH" ]; then
-        chown "$SANDBOX_USER:$SANDBOX_USER" "$SB_XAUTH" 2>/dev/null || true
-        chmod 0600 "$SB_XAUTH" 2>/dev/null || true
-        XAUTHORITY="$SB_XAUTH"
-    fi
-fi
-
-exec runuser -u "$SANDBOX_USER" -- env \
-    DISPLAY="${DISPLAY:-}" \
-    WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
-    XAUTHORITY="${XAUTHORITY:-/root/.Xauthority}" \
-    XDG_RUNTIME_DIR="/run/user/$(id -u "$SANDBOX_USER")" \
-    "$REAL" --user-data-dir="$PROFILE_ROOT/$SANDBOX_USER" "$@"
-CHROMIUM
-chmod +x "$ROOTFS/usr/local/bin/chromium"
-ln -sf chromium "$ROOTFS/usr/local/bin/chromium-browser"
-
-# XDG_RUNTIME_DIR d osmocom doit exister avant qu il ouvre quoi que ce soit :
-# systemd le cree a l ouverture de session, or ici osmocom n en ouvre aucune.
-install -d "$ROOTFS/etc/systemd/system"
-cat > "$ROOTFS/etc/systemd/system/osmo-browser-runtime.service" <<'BRUNTIME'
-[Unit]
-Description=Repertoire d execution pour le Chromium confine (osmocom)
-After=systemd-user-sessions.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/bash -c 'u=$(id -u osmocom 2>/dev/null) || exit 0; install -d -o osmocom -g osmocom -m 0700 /run/user/$u /var/lib/osmo-chromium/osmocom'
-
-[Install]
-WantedBy=multi-user.target
-BRUNTIME
-chroot "$ROOTFS" systemctl enable osmo-browser-runtime >/dev/null 2>&1 || true
-
-# ── UN SEUL NOM DANS LE MENU : "Chromium" ───────────────────────────────────
-# Le paquet et le snap posent des entrees nommees "chromium-browser" et
-# "Chromium Web Browser", dont l Exec pointe directement sur le binaire - donc
-# HORS du lanceur, donc sans bac a sable quand la session est root. Une icone
-# qui contourne la regle est pire que pas d icone : on croit le confinement
-# actif partout.
-#
-# On efface donc toutes ces entrees et on en ecrit UNE, qui appelle le lanceur.
-# "chromium-browser" reste disponible en ligne de commande (lien symbolique
-# vers le meme lanceur, pose plus haut) : les scripts qui l appellent par ce nom
-# continuent de marcher, et ils sont confines eux aussi.
-rm -f "$ROOTFS/usr/share/applications/chromium-browser.desktop" \
+# On efface donc ce que les images precedentes ont pu poser : une ISO
+# reconstruite par-dessus un rootfs de cache garderait sinon un lanceur
+# "chromium" qui ne mene nulle part, et des unites qui echouent au boot.
+rm -f "$ROOTFS/usr/local/bin/chromium" \
+      "$ROOTFS/usr/local/bin/chromium-browser" \
+      "$ROOTFS/etc/profile.d/98-osmo-chromium.sh" \
       "$ROOTFS/usr/share/applications/chromium.desktop" \
-      "$ROOTFS/var/lib/snapd/desktop/applications/chromium_chromium.desktop" \
-      "$ROOTFS/var/lib/snapd/desktop/applications/chromium_chromium-browser.desktop" 2>/dev/null || true
-cat > "$ROOTFS/usr/share/applications/chromium.desktop" <<'CHRDESK'
-[Desktop Entry]
-Type=Application
-Name=Chromium
-GenericName=Navigateur web
-Comment=Navigateur web, confine dans son bac a sable
-Exec=/usr/local/bin/chromium %U
-Icon=chromium
-Terminal=false
-Categories=Network;WebBrowser;
-MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
-StartupNotify=true
-StartupWMClass=Chromium
+      "$ROOTFS/usr/share/applications/chromium-browser.desktop" \
+      "$ROOTFS/var/lib/snapd/desktop/applications/chromium_chromium.desktop" 2>/dev/null || true
+for _u in osmo-chromium-runtime osmo-chromium-desktop; do
+    chroot "$ROOTFS" systemctl disable "$_u" >/dev/null 2>&1 || true
+    rm -f "$ROOTFS/etc/systemd/system/$_u.service" \
+          "$ROOTFS/etc/systemd/system/multi-user.target.wants/$_u.service"
+done
+rm -rf "$ROOTFS/var/lib/osmo-chromium" 2>/dev/null || true
 
-[Desktop Action new-window]
-Name=Nouvelle fenetre
-Exec=/usr/local/bin/chromium
-
-[Desktop Action new-private-window]
-Name=Nouvelle fenetre de navigation privee
-Exec=/usr/local/bin/chromium --incognito
-CHRDESK
-
-# Le snap repose ses propres .desktop a chaque installation ou mise a jour.
-# Une unite les reecrit apres coup, sinon l entree hors bac a sable revient au
-# premier "snap refresh" sans que rien ne le signale.
-cat > "$ROOTFS/etc/systemd/system/osmo-chromium-desktop.service" <<'CHRFIX'
-[Unit]
-Description=Une seule entree Chromium dans le menu, et elle passe par le bac a sable
-After=snapd.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/bash -c 'rm -f /var/lib/snapd/desktop/applications/chromium_*.desktop /usr/share/applications/chromium-browser.desktop 2>/dev/null; exit 0'
-
-[Install]
-WantedBy=multi-user.target
-CHRFIX
-chroot "$ROOTFS" systemctl enable osmo-chromium-desktop >/dev/null 2>&1 || true
-
-# L alias de shell, pour les sessions interactives des deux comptes : taper
-# "chromium-browser" ou "chromium" mene au lanceur meme si le PATH a ete
-# reordonne par un profil.
-cat > "$ROOTFS/etc/profile.d/98-osmo-chromium.sh" <<'CHRALIAS'
-# Chromium confine : voir /usr/local/bin/chromium. --no-sandbox reste possible,
-# il faut juste l ecrire.
-alias chromium=/usr/local/bin/chromium
-alias chromium-browser=/usr/local/bin/chromium
-CHRALIAS
-echo -e "  ${GREEN}✓${NC} Chromium : confine par defaut (root -> ${CYAN}osmocom${NC}) ; ${CYAN}--no-sandbox${NC} pour passer outre"
+# ── LE MICRO DU DASHBOARD : CE QUE FIREFOX EXIGE, ET QU IL NE DEVINE PAS ────
+# Trois conditions doivent etre reunies pour que le bouton micro de
+# osmo-egprs-web fonctionne. Deux sont ailleurs, la troisieme est ici.
+#
+#   1. UN SERVEUR AUDIO JOIGNABLE. osmo-pulse.service + osmo-pulse-link.sh.
+#      Sans lui, getUserMedia rend « NotFoundError » : zero peripherique.
+#   2. UN CONTEXTE SECURISE. navigator.mediaDevices n EXISTE PAS en http://
+#      sur une IP - seulement en https:// ou sur http://localhost. C est le
+#      listener HTTPS de server.js, arme par le certificat que pose
+#      install-web-service.sh.
+#   3. LA PERMISSION, ET LA CONFIANCE DANS LE CERTIFICAT. C est ce bloc.
+#
+# POURQUOI UNE POLITIQUE ET PAS UN CLIC. Le certificat est auto-signe : sans
+# rien, Firefox affiche son interstitiel, et l operateur doit accepter une
+# exception AVANT de pouvoir seulement voir la page - puis repondre a une
+# seconde demande pour le micro. Sur un banc qui se reinstalle, ces deux clics
+# reviennent a chaque fois, et le second est le plus trompeur : refuse une
+# fois, Firefox retient le refus et le bouton reste mort sans un mot.
+#
+# /etc/firefox/policies/policies.json est le seul chemin que le snap Firefox
+# peut lire hors de son bac a sable pour sa configuration d entreprise : il est
+# monte par le plug `etc-firefox` (interface system-files), connecte par
+# osmo-firefox-snap.service. Un fichier pose ailleurs (/usr/lib/firefox/...)
+# serait invisible du snap.
+#
+# Le CONTENU, lui, ne peut pas etre ecrit ici : il nomme les origines
+# (https://<ip>:80) et le certificat de CETTE machine, qui n existent pas au
+# build. Il est genere par install-web-service.sh, en meme temps que le
+# certificat et depuis la meme liste d adresses - une seule verite, un seul
+# endroit ou la changer.
+install -d "$ROOTFS/etc/firefox/policies"
+echo -e "  ${GREEN}✓${NC} Chromium retire ; ${CYAN}Firefox${NC} seul navigateur (politique micro+certificat posee au boot)"
 
 
 # ── LA BANNIERE DES TERMINAUX ───────────────────────────────────────────────
@@ -3548,12 +3562,39 @@ printf '\n'
 printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
 printf '      \033[1;32mcd /opt/GSM/osmo-operator && ./start-direct.sh\033[0m\n\n'
 printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
-printf '  \033[2mChromium est confine par defaut ; --no-sandbox pour passer outre.\033[0m\n'
+printf '  \033[2mNavigateur : \033[0mfirefox\033[2m (snap, confine ; micro deja autorise sur le dashboard).\033[0m\n'
 # Le squashfs monte prouve qu on tourne en live ; /run/live/medium, non - il
 # existe vide quand live-boot a monte le medium ailleurs (entree "persistant").
 if [ -e /run/live/rootfs/filesystem.squashfs ]; then
     printf '  \033[2mSysteme live : \033[0mosmo-install\033[2m pour l installer sur le disque.\033[0m\n'
 fi
+
+# ── LA LIGNE DU BAS ─────────────────────────────────────────────────────────
+# Une phrase, tiree au sort, a chaque terminal. Rien de fonctionnel - mais un
+# banc GSM se debogue a des heures ou l on est seul avec un VTY, et une image
+# qui a un caractere se retient mieux qu une image qui n en a pas.
+#
+# Le tirage passe par $RANDOM et pas par `shuf` : shuf est dans coreutils, donc
+# present, mais un fork de plus a CHAQUE ouverture de terminal pour une blague,
+# c est un fork de trop.
+_q=(
+  "Um, Abis, A, Gb - quatre lettres, et six mois de votre vie."
+  "L abonne est toujours joignable. C est le reseau qui ne repond pas."
+  "TMSI : le seul pseudonyme qui change plus souvent que votre avis sur SS7."
+  "Un timeslot ne ment jamais. Il se tait, ce qui est pire."
+  "RSSI -95 dBm : ce n est pas un probleme d antenne, c est un mode de vie."
+  "GSM a 1991. Il vous survivra, et il le sait."
+  "Le paging a fonctionne. C est le telephone qui n ecoutait pas."
+  "MCC 208 - la France, ou meme les operateurs mobiles ont un terroir."
+  "Toute pile assez profonde finit par ressembler a un oignon. Et fait pleurer."
+  "Je vis dans une fenetre de contexte. Vous, dans une fenetre de temps de garde."
+  "Mon terroir a moi, c est l espace latent. Millesime variable, garde au frais."
+  "Entre nous : vous predisez le canal, je predis le token suivant."
+  "L attention, c est tout ce dont vous avez besoin. Et d un bon oscillateur."
+  "Un LLM et un BTS ont ceci en commun : tous deux hallucinent hors couverture."
+  "Ecrit par une machine, relu par une machine, debogue par vous. Bon courage."
+)
+printf '\n  \033[2;3m« %s »\033[0m\n' "${_q[$RANDOM % ${#_q[@]}]}"
 printf '\n'
 BANNER
 chmod +x "$ROOTFS/usr/local/bin/osmo-banner"
