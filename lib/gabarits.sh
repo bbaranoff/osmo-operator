@@ -96,86 +96,38 @@ op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
-# ── COHABITATION AVEC LA PILE NATIVE ────────────────────────────────────────
-# [2026-08-31] Le natif et les conteneurs peuvent tourner ENSEMBLE, et ils se
-# disputaient le meme port. L operateur 1 publie 5060/udp - exactement ce que
-# l Asterisk natif tient deja sur 0.0.0.0 - et docker refuse de demarrer :
-#     docker: Error response from daemon: failed to set up container networking:
-#     driver failed programming external connectivity on endpoint
-#     osmo-operator-1: failed to bind host port 0.0.0.0:5060/udp:
-#     address already in use
-# Message qui parle de docker et de reseau, jamais de la pile native qui tourne
-# a cote - on cherche la panne dans le conteneur, elle est sur l hote.
+# ── PLUS AUCUN DECALAGE DE PORTS ────────────────────────────────────────────
+# [2026-08-31] Il y avait ici une detection : "5060 est-il pris ? alors decale
+# les publications de +100". Elle ne servait qu a une chose - eviter que le
+# 5060 publie d un conteneur n entre en conflit avec l Asterisk du natif.
 #
-# ⚠️ CE N EST PAS UN CHANGEMENT DE PLAN D ADRESSAGE. A l INTERIEUR du
-# conteneur, Asterisk ecoute toujours sur 5060 et le RTP reste en 30000+ :
-# seule la FACE HOTE des publications bouge. Rien dans les configs generees
-# n a donc a suivre ce decalage.
+# On ne publie PLUS aucun port SIP/RTP pour les conteneurs : ils sont sur un
+# bridge routable et se joignent en direct, a leur propre adresse, sur le port
+# nominal (verifie : 172.20.0.12:5060 et 172.20.0.13:5060 repondent 401 depuis
+# l hote, sans la moindre publication). Le conflit ayant disparu avec sa cause,
+# le decalage n a plus d objet - et il tirait avec lui une sonde instantanee,
+# donc une course : lancee juste apres l arret du banc, elle voyait 5060 libre,
+# ne decalait rien, et le conteneur mourait quand le natif remontait.
 #
-# OSMO_PORT_OFFSET=N le force ; OSMO_PORT_OFFSET=0 le desactive (et l on
-# retrouve le conflit, ce qui est parfois exactement ce qu on veut constater).
-port_pris() {   # $1 = port, $2 = proto (udp par defaut)
-    local p="$1" pr="${2:-udp}" opt
-    case "$pr" in tcp) opt="-ltn" ;; *) opt="-lun" ;; esac
-    # COLONNE 4, pas 5. `ss -lun` sort : State Recv-Q Send-Q Local:Port
-    # Peer:Port [Process] - l adresse LOCALE est la quatrieme. Prendre la
-    # cinquieme lit le pair (toujours "0.0.0.0:*" en ecoute) : la sonde
-    # repondait alors "libre" pour TOUS les ports, y compris ceux que la pile
-    # native tenait sous le nez. Verifie a la main : Asterisk sur 0.0.0.0:5060
-    # etait annonce libre.
-    ss $opt 2>/dev/null | awk '{print $4}' | grep -qE "(^|[:.])${p}\$"
-}
-
-detect_port_offset() {
-    [ -n "${OSMO_PORT_OFFSET:-}" ] && { echo "$OSMO_PORT_OFFSET"; return 0; }
-    # ── LE NATIF COMPTE MEME QUAND IL EST ARRETE ────────────────────────────
-    # [2026-08-31] Sonder "5060 est-il pris ?" est juste, mais depend de
-    # L INSTANT. Depuis que les lanceurs arretent le banc avant de le relancer,
-    # start.sh calculait l offset pendant que le natif etait A TERRE : port
-    # libre, offset 0. Le natif remontait ensuite et reprenait 5060, pendant
-    # qu osmo-sip-connector tenait deja 5061 - et le conteneur, lance avec les
-    # ports non decales, mourait sur
-    #     failed to bind host port 0.0.0.0:5061/udp: address already in use
-    # en restant en etat "Created". Une course que la sonde ne pouvait pas voir.
-    #
-    # La topologie, elle, ne bouge pas : si elle declare un operateur NATIF,
-    # celui-ci occupera 5060-5061 et le plan RTP 30000-30199, arrete ou non.
-    # On decale donc d office, sans rien sonder.
-    local _mc="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
-    if [ -r "$_mc" ] && grep -q ':native:' "$_mc" 2>/dev/null; then
-        echo 100; return 0
-    fi
-    local off
-    # Pas de dichotomie : 100 par cran, cinq crans. Au-dela, ce n est plus un
-    # conflit avec le natif mais une machine deja saturee, et un decalage
-    # supplementaire ne ferait que deplacer le probleme sans le dire.
-    for off in 0 100 200 300 400; do
-        port_pris $(( 5060 + off )) udp || { echo "$off"; return 0; }
-    done
-    echo 0
-}
-
-PORT_OFFSET="${PORT_OFFSET:-$(detect_port_offset)}"
-# ⚠️ COULEURS GARDEES : ${YELLOW:-} et pas ${YELLOW}.
-# [2026-08-31] Ce fichier est SOURCE par les modules de run.sh, qui tournent
-# sous `set -u`. start.sh, lui, definit YELLOW/NC en tete - pas eux. Le message
-# recopie tel quel d une jumelle a l autre faisait donc sortir le module :
-#     lib/gabarits.sh: line 160: YELLOW: unbound variable
-# et start-direct.sh echouait sur "[ .. ] Core configuration templates", sans
-# rapport visible avec des couleurs. Toute variable d affichage ajoutee ici doit
-# porter son repli.
-if [ "${PORT_OFFSET:-0}" != "0" ]; then
-    echo "  [ports] 5060/udp reserve a la pile native - publications decalees de +${PORT_OFFSET}" >&2
-fi
-
-# Le RTP se decale de dix fois le meme cran : la plage native (rtp.conf,
-# 30000-30199) fait 200 ports, un decalage de +100 la chevaucherait encore.
+# Les fonctions ci-dessous gardent leur forme (generate_configs.sh s en sert
+# encore pour ecrire les configs) mais rendent desormais les valeurs NOMINALES.
+# OSMO_PORT_OFFSET=N reste disponible pour qui voudrait retablir un decalage.
+PORT_OFFSET="${OSMO_PORT_OFFSET:-0}"
+# Le RTP suit la meme regle : plage nominale, 200 ports par operateur.
 linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
+# [2026-08-31] Les boucles de ce fichier enumeraient 1..N en dur, comme celles
+# de start.sh avant leur decalage. Avec OP_ID_BASE=2 - les conteneurs prenant
+# les rangs 2 et 3, le 1 restant au natif - l operateur 2 se fabriquait donc un
+# trunk vers l "operateur 1" a 172.20.0.11, une adresse de dorsale que PERSONNE
+# ne porte (le natif est sur l hote), et AUCUN trunk vers l operateur 3.
+# Les appels inter-operateurs entre conteneurs ne pouvaient pas aboutir, et
+# rien ne le disait : le trunk existe, il pointe simplement dans le vide.
+# Les deux jumelles doivent donc partager la meme base.
 generate_pjsip_interop_trunks() {
     local op_id=$1 n_operators=$2 remote_op remote_ip
-    for remote_op in $(seq 1 "$n_operators"); do
+    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         remote_ip=$(op_backbone_ip "$remote_op")
         cat <<EOF
@@ -217,7 +169,7 @@ generate_extensions_interop_out() {
     # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>. Les
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    for remote_op in $(seq 1 "$n_operators"); do
+    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
 exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
@@ -247,9 +199,9 @@ _generate_sms_routing_conf_fallback() {
     local i
     local op_id=$1 n_operators=$2 i j
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
-    for i in $(seq 1 "$n_operators"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         # Les MSISDN EXACTS, pas un prefixe : un prefixe trop court avalait
         # les numeros voisins, un prefixe absent laissait le relais rejeter
         # tout SMS local avec "No route for destination" (2026-07-29).

@@ -291,72 +291,24 @@ wan_sms_port()    { echo $(( 7890 + $1 - 1 )); }
 wan_active()      { [ "$WAN_ENABLED" = "true" ] || [ "${WAN_MESH:-0}" = "1" ]; }
 
 # Linphone helpers - port SIP/RTP expose sur le host
-# ── COHABITATION AVEC LA PILE NATIVE ────────────────────────────────────────
-# [2026-08-31] Le natif et les conteneurs peuvent tourner ENSEMBLE, et ils se
-# disputaient le meme port. L operateur 1 publie 5060/udp - exactement ce que
-# l Asterisk natif tient deja sur 0.0.0.0 - et docker refuse de demarrer :
-#     docker: Error response from daemon: failed to set up container networking:
-#     driver failed programming external connectivity on endpoint
-#     osmo-operator-1: failed to bind host port 0.0.0.0:5060/udp:
-#     address already in use
-# Message qui parle de docker et de reseau, jamais de la pile native qui tourne
-# a cote - on cherche la panne dans le conteneur, elle est sur l hote.
+# ── PLUS AUCUN DECALAGE DE PORTS ────────────────────────────────────────────
+# [2026-08-31] Il y avait ici une detection : "5060 est-il pris ? alors decale
+# les publications de +100". Elle ne servait qu a une chose - eviter que le
+# 5060 publie d un conteneur n entre en conflit avec l Asterisk du natif.
 #
-# ⚠️ CE N EST PAS UN CHANGEMENT DE PLAN D ADRESSAGE. A l INTERIEUR du
-# conteneur, Asterisk ecoute toujours sur 5060 et le RTP reste en 30000+ :
-# seule la FACE HOTE des publications bouge. Rien dans les configs generees
-# n a donc a suivre ce decalage.
+# On ne publie PLUS aucun port SIP/RTP pour les conteneurs : ils sont sur un
+# bridge routable et se joignent en direct, a leur propre adresse, sur le port
+# nominal (verifie : 172.20.0.12:5060 et 172.20.0.13:5060 repondent 401 depuis
+# l hote, sans la moindre publication). Le conflit ayant disparu avec sa cause,
+# le decalage n a plus d objet - et il tirait avec lui une sonde instantanee,
+# donc une course : lancee juste apres l arret du banc, elle voyait 5060 libre,
+# ne decalait rien, et le conteneur mourait quand le natif remontait.
 #
-# OSMO_PORT_OFFSET=N le force ; OSMO_PORT_OFFSET=0 le desactive (et l on
-# retrouve le conflit, ce qui est parfois exactement ce qu on veut constater).
-port_pris() {   # $1 = port, $2 = proto (udp par defaut)
-    local p="$1" pr="${2:-udp}" opt
-    case "$pr" in tcp) opt="-ltn" ;; *) opt="-lun" ;; esac
-    # COLONNE 4, pas 5. `ss -lun` sort : State Recv-Q Send-Q Local:Port
-    # Peer:Port [Process] - l adresse LOCALE est la quatrieme. Prendre la
-    # cinquieme lit le pair (toujours "0.0.0.0:*" en ecoute) : la sonde
-    # repondait alors "libre" pour TOUS les ports, y compris ceux que la pile
-    # native tenait sous le nez. Verifie a la main : Asterisk sur 0.0.0.0:5060
-    # etait annonce libre.
-    ss $opt 2>/dev/null | awk '{print $4}' | grep -qE "(^|[:.])${p}\$"
-}
-
-detect_port_offset() {
-    [ -n "${OSMO_PORT_OFFSET:-}" ] && { echo "$OSMO_PORT_OFFSET"; return 0; }
-    # ── LE NATIF COMPTE MEME QUAND IL EST ARRETE ────────────────────────────
-    # [2026-08-31] Sonder "5060 est-il pris ?" est juste, mais depend de
-    # L INSTANT. Depuis que les lanceurs arretent le banc avant de le relancer,
-    # start.sh calculait l offset pendant que le natif etait A TERRE : port
-    # libre, offset 0. Le natif remontait ensuite et reprenait 5060, pendant
-    # qu osmo-sip-connector tenait deja 5061 - et le conteneur, lance avec les
-    # ports non decales, mourait sur
-    #     failed to bind host port 0.0.0.0:5061/udp: address already in use
-    # en restant en etat "Created". Une course que la sonde ne pouvait pas voir.
-    #
-    # La topologie, elle, ne bouge pas : si elle declare un operateur NATIF,
-    # celui-ci occupera 5060-5061 et le plan RTP 30000-30199, arrete ou non.
-    # On decale donc d office, sans rien sonder.
-    local _mc="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
-    if [ -r "$_mc" ] && grep -q ':native:' "$_mc" 2>/dev/null; then
-        echo 100; return 0
-    fi
-    local off
-    # Pas de dichotomie : 100 par cran, cinq crans. Au-dela, ce n est plus un
-    # conflit avec le natif mais une machine deja saturee, et un decalage
-    # supplementaire ne ferait que deplacer le probleme sans le dire.
-    for off in 0 100 200 300 400; do
-        port_pris $(( 5060 + off )) udp || { echo "$off"; return 0; }
-    done
-    echo 0
-}
-
-PORT_OFFSET="${PORT_OFFSET:-$(detect_port_offset)}"
-if [ "${PORT_OFFSET:-0}" != "0" ]; then
-    echo -e "  ${YELLOW}[ports] 5060/udp deja pris (pile native ?) - publications decalees de +${PORT_OFFSET}${NC}" >&2
-fi
-
-# Le RTP se decale de dix fois le meme cran : la plage native (rtp.conf,
-# 30000-30199) fait 200 ports, un decalage de +100 la chevaucherait encore.
+# Les fonctions ci-dessous gardent leur forme (generate_configs.sh s en sert
+# encore pour ecrire les configs) mais rendent desormais les valeurs NOMINALES.
+# OSMO_PORT_OFFSET=N reste disponible pour qui voudrait retablir un decalage.
+PORT_OFFSET="${OSMO_PORT_OFFSET:-0}"
+# Le RTP suit la meme regle : plage nominale, 200 ports par operateur.
 linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
@@ -1926,13 +1878,25 @@ start_bridge_mode() {
         # ── Ports a exposer ──────────────────────────────────────────────────
         local port_args=""
 
-        # Linphone SIP/RTP - toujours expose
-        local lsip_port lrtp_s lrtp_e
-        lsip_port=$(linphone_sip_port "$i")
-        lrtp_s=$(linphone_rtp_start "$i")
-        lrtp_e=$(linphone_rtp_end "$i")
-        port_args="-p ${lsip_port}:5060/udp -p ${lrtp_s}-${lrtp_e}:${lrtp_s}-${lrtp_e}/udp"
-        echo -e "  Linphone   : ${CYAN}${HOST_IP}:${lsip_port}${NC}  RTP ${lrtp_s}-${lrtp_e}"
+        # ── SIP/RTP : PLUS AUCUNE PUBLICATION SUR L HOTE ─────────────────
+        # [2026-08-31] On publiait le 5060 et la plage RTP de chaque conteneur
+        # sur l hote. C etait la SEULE source du conflit de ports : l operateur
+        # natif tient 5060/udp (Asterisk) et 5061 (osmo-sip-connector) en
+        # permanence, puisqu il tourne EN MEME TEMPS que les conteneurs.
+        #
+        # On a d abord decale les publications (+100). Ca marchait, mais ca
+        # reposait sur une sonde "5060 est-il pris ?" prise a un instant t -
+        # donc sur une course : lancee juste apres l arret du banc, la sonde
+        # voyait le port libre, ne decalait rien, et le conteneur mourait sur
+        #     failed to bind host port 0.0.0.0:5061/udp: address already in use
+        # en restant en etat "Created", des que le natif remontait.
+        #
+        # La publication etait de toute facon INUTILE : les conteneurs sont sur
+        # un bridge routable depuis l hote. On les joint en direct, a leur
+        # propre adresse, sur le port nominal. Supprimer la publication
+        # supprime le conflit, l offset ET la course, d un coup.
+        local _cip; _cip="$(op_backbone_ip "$i")"
+        echo -e "  Linphone   : ${CYAN}${_cip}:5060${NC}  RTP 30000-30199 (direct, sans publication)"
 
         # WAN en plus si active (legacy ou mesh)
         if wan_active; then
@@ -2000,7 +1964,13 @@ start_bridge_mode() {
             -e WAN_NODE_ID="${_node_i}" \
             -e OSMO_WAN_NODE="${_node_i}" \
             -e HOST_IP="${HOST_IP}" \
-            -e SIP_HOST_PORT="${lsip_port}" \
+            # 5060 : le port DANS le conteneur, seul port qui compte
+            # maintenant qu on ne publie plus rien sur l hote - on joint le
+            # conteneur a son adresse de bridge. (Cette ligne portait
+            # ${lsip_port}, la variable du port publie : supprimee avec la
+            # publication, elle aurait fait sortir start.sh sur "unbound
+            # variable" des le premier conteneur, set -eu oblige.)
+            -e SIP_HOST_PORT="5060" \
             -e PHY_MODE="${PHY_MODE}" \
             -e HOST_AUDIO_RELAY="${HOST_AUDIO_RELAY}" \
             $vol_args \
@@ -2214,9 +2184,8 @@ start_bridge_mode() {
     echo ""
     echo -e "  ${BOLD}Linphone (depuis l'hote) :${NC}"
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
-        local lsip bb_ip
-        lsip=$(linphone_sip_port "$i"); bb_ip=$(op_backbone_ip "$i")
-        echo -e "    Op${i}: ${CYAN}${HOST_IP}:${lsip}${NC}  (ou direct ${bb_ip}:5060)"
+        local bb_ip; bb_ip=$(op_backbone_ip "$i")
+        echo -e "    Op${i}: ${CYAN}${bb_ip}:5060${NC}"
     done
     echo -e "    linphone_A / tester → 100  |  linphone_B / testerB → 200"
 

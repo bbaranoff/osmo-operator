@@ -100,7 +100,7 @@ banner() {
 # sinon la sortie nettoyee. Le dialogue lui-meme (nc/telnet, docker exec ou
 # local, netns) est dans osmo_vty ; on garde ICI les temporisations de ce
 # script - les changer changerait la QUANTITE de sortie capturee, donc les
-# "grep -c" qui la comptent juste en dessous.
+# "grep -ac" qui la comptent juste en dessous.
 : "${OSMO_VTY_OPEN:=1}"    # sleep avant d'ecrire   (valeur historique de ss7_check)
 : "${OSMO_VTY_READ:=1.5}"  # sleep de lecture       (idem)
 : "${OSMO_VTY_Q:=1}"       # nc -q1                 (idem)
@@ -214,8 +214,8 @@ if [ "$HAS_INTER_STP" -eq 1 ]; then
 
         # Verifier que l'inter-STP voit tous les operateurs comme AS
         as_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 as all")
-        n_as_total=$(echo "$as_output" | grep -cE 'as-op[0-9]+' || true)
-        n_as_active=$(echo "$as_output" | grep -cE 'AS_ACTIVE' || true)
+        n_as_total=$(echo "$as_output" | grep -acE 'as-op[0-9]+' || true)
+        n_as_active=$(echo "$as_output" | grep -acE 'AS_ACTIVE' || true)
         info "AS declares sur le hub : ${n_as_total}"
 
         if [ "$EXPECT_AS" -gt 0 ]; then
@@ -236,7 +236,7 @@ if [ "$HAS_INTER_STP" -eq 1 ]; then
 
         # Verifier les ASP connectes
         asp_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 asp")
-        n_asp_active=$(echo "$asp_output" | grep -cE 'ASP_ACTIVE' || true)
+        n_asp_active=$(echo "$asp_output" | grep -acE 'ASP_ACTIVE' || true)
 
         if [ "$EXPECT_AS" -gt 0 ]; then
             if [ "$n_asp_active" -eq "$EXPECT_AS" ]; then
@@ -252,7 +252,7 @@ if [ "$HAS_INTER_STP" -eq 1 ]; then
 
         # Verifier l'absence de PROHIB (routes bloquees)
         route_output=$(vty_cmd "$HUB_NODE" 4239 "show cs7 instance 0 route")
-        n_prohib=$(echo "$route_output" | grep -ciE 'prohib' || true)
+        n_prohib=$(echo "$route_output" | grep -aciE 'prohib' || true)
 
         if [ "$n_prohib" -eq 0 ]; then
             ok "Routes : aucun PROHIB"
@@ -299,7 +299,21 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
     # osmo_node garde l'etiquette "osmo-operator-N" meme en natif : c'est le
     # nom d'affichage que les autres checks correlent.
     container="$(osmo_node "$op")"
-    banner "OPERATEUR ${op_id} (${container}) - STP ${op_id}.23.2"
+    # ── LE LIBELLE DIT CE QUI EST, PAS UNE FORMULE ──────────────────────────
+    # [2026-08-31] Le point code etait ECRIT EN DUR comme "${op_id}.23.2" -
+    # d ou "STP 1.23.2", "2.23.2", "3.23.2", des adresses qui ne sont celles de
+    # personne (le plan local donne 1.<op>.2). Et le nom affichait toujours
+    # "osmo-operator-N", y compris pour l operateur NATIF, qui n est pas un
+    # conteneur : on lisait "OPERATEUR 1 (osmo-operator-1)" pour une pile qui
+    # tourne sur l hote, et on cherchait un conteneur inexistant.
+    # On lit desormais la topologie (osmo-multi.conf) quand elle existe.
+    _pc="$(osmo_op_pc "$op_id" 2>/dev/null || true)"
+    if [ "$(osmo_op_mode "$op_id" 2>/dev/null)" = "native" ]; then
+        _label="natif (hote)"
+    else
+        _label="$container"
+    fi
+    banner "OPERATEUR ${op_id} (${_label}) - STP ${_pc:-inconnu}"
 
     # ── STP local (4239) ─────────────────────────────────────────────────
     echo -e "  ${BOLD}STP local :${NC}"
@@ -308,7 +322,7 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
     else
         # Verifier la connexion vers l'inter-STP
         as_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 as all")
-        inter_state=$(echo "$as_out" | grep -oP 'as-inter\s+\K(AS_\w+)' || echo "ABSENT")
+        inter_state=$(echo "$as_out" | grep -aoP 'as-inter\s+\K(AS_\w+)' || echo "ABSENT")
 
         if [[ "$inter_state" == "AS_ACTIVE" ]]; then
             ok "as-inter → hub : ACTIVE"
@@ -322,7 +336,7 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
 
         # Verifier les ASP locaux (MSC/BSC)
         asp_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 asp")
-        n_asp_ok=$(echo "$asp_out" | grep -cE 'ASP_ACTIVE' || true)
+        n_asp_ok=$(echo "$asp_out" | grep -acE 'ASP_ACTIVE' || true)
 
         if [ "$n_asp_ok" -ge 2 ]; then
             ok "ASP locaux : au moins 2 actifs (MSC+BSC)"
@@ -337,7 +351,7 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         # se voit dans la table de routage du STP local, meme si son VTY a lui
         # est hors de portee.
         route_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 route")
-        has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
+        has_default=$(echo "$route_out" | grep -acE '0\.0\.0/0.*avail' || true)
 
         if [ "$has_default" -gt 0 ] && [ "$HUB_EXPECTED" -eq 1 ]; then
             ok "Route par defaut → inter-STP : presente et avail"
@@ -348,13 +362,13 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         fi
 
         # Verifier l'absence de PROHIB
-        n_prohib=$(echo "$route_out" | grep -ciE 'prohib' || true)
+        n_prohib=$(echo "$route_out" | grep -aciE 'prohib' || true)
         if [ "$n_prohib" -gt 0 ]; then
             fail "Routes PROHIB detectees : ${n_prohib}"
         fi
 
         # Compter les routes dynamiques (juste pour info)
-        n_dyn=$(echo "$route_out" | grep -c 'dyn' || true)
+        n_dyn=$(echo "$route_out" | grep -ac 'dyn' || true)
         info "Routes dynamiques apprises : ${n_dyn} (normal: devrait augmenter avec le nombre d'operateurs)"
     fi
 
@@ -369,13 +383,13 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         fail "MSC VTY (4254) inaccessible"
     else
         msc_asp=$(vty_cmd "$op" 4254 "show cs7 instance 0 asp")
-        msc_active=$(echo "$msc_asp" | grep -cE 'ASP_ACTIVE' || true)
+        msc_active=$(echo "$msc_asp" | grep -acE 'ASP_ACTIVE' || true)
         [ "$msc_active" -gt 0 ] && ok "MSC→STP : ASP_ACTIVE" || fail "MSC→STP : pas de ASP actif"
 
-        # SCCP - osmo_qgrep, et non "grep -q" : en bout de tube, grep -q sort
+        # SCCP - osmo_qgrep, et non "grep -aq" : en bout de tube, grep -aq sort
         # au premier match et tue le producteur en SIGPIPE (141 sous pipefail).
         msc_sccp=$(vty_cmd "$op" 4254 "show cs7 instance 0 sccp users")
-        echo "$msc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (MSC-A) enregistre" || fail "SCCP SSN 254 absent"
+        echo "$msc_sccp" | osmo_qgrep -aE 'SSN 254' && ok "SCCP SSN 254 (MSC-A) enregistre" || fail "SCCP SSN 254 absent"
     fi
 
     # ── BSC (4242) ───────────────────────────────────────────────────────
@@ -384,16 +398,16 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         fail "BSC VTY (4242) inaccessible"
     else
         bsc_asp=$(vty_cmd "$op" 4242 "show cs7 instance 0 asp")
-        bsc_active=$(echo "$bsc_asp" | grep -cE 'ASP_ACTIVE' || true)
+        bsc_active=$(echo "$bsc_asp" | grep -acE 'ASP_ACTIVE' || true)
         [ "$bsc_active" -gt 0 ] && ok "BSC→STP : ASP_ACTIVE" || fail "BSC→STP : pas de ASP actif"
 
         # SCCP
         bsc_sccp=$(vty_cmd "$op" 4242 "show cs7 instance 0 sccp users")
-        echo "$bsc_sccp" | osmo_qgrep -E 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistre" || fail "SCCP SSN 254 absent"
+        echo "$bsc_sccp" | osmo_qgrep -aE 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistre" || fail "SCCP SSN 254 absent"
 
         # BTS state (optionnel)
         bsc_bts=$(vty_cmd "$op" 4242 "show bts 0" 2>/dev/null || echo "")
-        if echo "$bsc_bts" | osmo_qgrep -E "Oper 'Enabled'.*Avail 'OK'"; then
+        if echo "$bsc_bts" | osmo_qgrep -aE "Oper 'Enabled'.*Avail 'OK'"; then
             ok "BTS 0 : OK"
         fi
     fi
@@ -404,7 +418,7 @@ for op in ${OPS[@]+"${OPS[@]}"}; do
         fail "HLR VTY (4258) inaccessible"
     else
         hlr_gsup=$(vty_cmd "$op" 4258 "show gsup-connections")
-        vlr_conn=$(echo "$hlr_gsup" | grep -cE "VLR" || true)
+        vlr_conn=$(echo "$hlr_gsup" | grep -acE "VLR" || true)
         [ "$vlr_conn" -gt 0 ] && ok "GSUP : VLR connecte" || fail "GSUP : VLR absent"
     fi
 done
@@ -435,7 +449,7 @@ if [ "$HUB_EXPECTED" -eq 1 ] && [ "$N_OPS" -gt 1 ]; then
 
         # On ne teste que la connectivite de base : l'operateur a-t-il une route par defaut ?
         route_out=$(vty_cmd "$op" 4239 "show cs7 instance 0 route" 2>/dev/null || echo "")
-        has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
+        has_default=$(echo "$route_out" | grep -acE '0\.0\.0/0.*avail' || true)
 
         for j in "${OPS[@]}"; do
             if [ "$j" -eq "$src_id" ]; then
