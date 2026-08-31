@@ -1665,7 +1665,17 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # Ceinture et bretelles : si une dependance future le reinstalle, il ne
     # demarrera pas pour autant.
     systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
-    sed -i 's/[[:space:]]*mdns4_minimal[[:space:]]*\[NOTFOUND=return\]//; s/[[:space:]]*mdns4//' \
+    # ⚠️ GUILLEMETS DOUBLES, ET AUCUNE APOSTROPHE - COMMENTAIRES COMPRIS.
+    # Ce bloc entier est passe a bash -c en quotes SIMPLES : la moindre
+    # apostrophe y ferme la chaine. Ce sed en portait deux ; la sequence se
+    # terminait donc au milieu du chroot et bash sortait sur
+    #     bash: -c: line 270: syntax error: unexpected end of file
+    # apres avoir execute tout ce qui precedait - le message ne designe donc
+    # meme pas la bonne ligne. Et `bash -n build-iso.sh` ne peut PAS le voir :
+    # pour lui, ce bloc n est qu une chaine de caracteres.
+    # Les guillemets doubles passent sans encombre ; le depot utilise \047
+    # ailleurs quand une apostrophe est vraiment necessaire.
+    sed -i "s/[[:space:]]*mdns4_minimal[[:space:]]*\[NOTFOUND=return\]//; s/[[:space:]]*mdns4//" \
         /etc/nsswitch.conf 2>/dev/null || true
     echo "  [desktop] avahi purge (mDNS retire du banc)"
 
