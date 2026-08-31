@@ -2201,6 +2201,42 @@ start_bridge_mode() {
     fi
     echo ""
 
+    # ── LES CHECKS, JUSTE APRES LE LANCEMENT ────────────────────────────────
+    # [2026-08-31] Ils tournent ICI depuis que la pile complete demarre
+    # (no-attach au lieu de no-process). Avant, il n y avait rien a mesurer : le
+    # coeur seul tournait, ni PHY ni mobile ni Asterisk, et "Stack demarree !"
+    # etait tout ce qu on obtenait - un banc annonce pret dont personne
+    # n avait verifie qu il portait un appel.
+    #
+    #   ss7_check.sh        ASP, AS, routes, SSN - la couche qui porte les appels.
+    #   operator_summary.sh ce que chaque operateur a REELLEMENT : abonnes
+    #                       HLR/VLR, BTS, contextes PDP. --live lui fait generer
+    #                       son propre dump ; sans ce drapeau il analyserait
+    #                       celui d un lab precedent et decrirait un autre banc.
+    #
+    # Chemins RELATIFS, comme ./helpers/prepare_host.sh plus haut : ce script
+    # suppose deja d etre lance depuis la racine du depot.
+    # Ni l un ni l autre ne doit faire echouer le lancement - la pile est
+    # debout, on RAPPORTE son etat, d ou le || true.
+    # OSMO_SKIP_CHECKS=1 les saute (start-multi.sh le pose : il enchaine ses
+    # propres verifications juste apres, inutile de jouer ss7_check deux fois).
+    if [ "${OSMO_SKIP_CHECKS:-0}" != "1" ]; then
+        if [ -r ./checks/ss7_check.sh ]; then
+            echo -e "${GREEN}${BOLD}── Check SS7 ──${NC}"
+            bash ./checks/ss7_check.sh || true
+            echo ""
+        else
+            echo -e "  ${YELLOW}checks/ss7_check.sh introuvable - check SS7 saute${NC}"
+        fi
+        if [ -r ./checks/operator_summary.sh ]; then
+            echo -e "${GREEN}${BOLD}── Check operateurs ──${NC}"
+            bash ./checks/operator_summary.sh --live || true
+            echo ""
+        else
+            echo -e "  ${YELLOW}checks/operator_summary.sh introuvable - resume saute${NC}"
+        fi
+    fi
+
     # --virtualbox : le "set" ne se limite pas a cette machine. Les VM sont
     # creees avant (setup-vbox-interco.sh) ; on les demarre ici, une fois que le
     # hub et les operateurs locaux sont debout - un noeud qui monte avant le hub

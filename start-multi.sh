@@ -268,7 +268,10 @@ done
 # HANDOFF_MODE=faketrx-qemu : la radio MIXTE, un faketrx + un QEMU Calypso par
 # operateur - le meme montage que le natif. start.sh ne la choisissait seul
 # qu en mode WAN ; impose ici, elle vaut aussi pour ce banc a une machine.
-CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu"
+# OSMO_SKIP_CHECKS=1 : start.sh joue desormais ss7_check et operator_summary en
+# fin de lancement. Ici on enchaine verifier(), qui rejoue ss7_check avec en
+# plus la lecture de la topologie - inutile de le passer deux fois de suite.
+CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
