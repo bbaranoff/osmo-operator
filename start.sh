@@ -818,6 +818,24 @@ force_update_trees() {
                 echo -e "    ${CYAN}$repo${NC} : deja a jour ($after)"
             else
                 echo -e "    ${GREEN}$repo${NC} : $before -> $after"
+                # ── LE SERVEUR WEB TOURNE DEJA, ET NODE A DEJA LU SON FICHIER ──
+                # [2026-08-31] Exactement le piege du ninja ci-dessous, sur un
+                # autre maillon : le pull change le FICHIER, pas le PROCESSUS.
+                # osmo-egprs-web.service est une unite systemd, donc lancee au
+                # BOOT du conteneur - avant cet appel - et node ne lit server.js
+                # qu'une fois. Mesure du 31/08 dans osmo-operator-2 :
+                #     node demarre 18:58:18   server.js reecrit 18:58:21
+                # Le disque portait le correctif Kc (grep kcPollVty : 2), le
+                # process tournait encore sur l'ancien code, et le dashboard
+                # affichait « Kc absent » - panne indiscernable d'un pull rate.
+                # On ne relance QUE si le pull a reellement bouge.
+                if [ "$repo" = /opt/GSM/osmo-egprs-web ]; then
+                    if docker exec "$c" systemctl restart osmo-egprs-web 2>/dev/null; then
+                        echo -e "    ${GREEN}osmo-egprs-web.service relance${NC} (le dashboard charge le nouveau code)"
+                    else
+                        echo -e "    ${YELLOW}osmo-egprs-web.service : relance KO - le dashboard garde l'ancien code${NC}"
+                    fi
+                fi
             fi
         else
             echo -e "    ${RED}$repo : pull KO (divergence ou reseau) - le run part sur $before${NC}"
