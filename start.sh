@@ -1542,7 +1542,11 @@ start_bridge_mode() {
                     mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
                     mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
                     name=$(wt_input "Operateur ${i}" "Nom :" "$dname") || exit 1; OP_NAME[$i]=${name:-$dname}
-                    n_ms=$(wt_input "Operateur ${i}" "Nombre de MS (1-64) :" "1") || exit 1; OP_MS[$i]=${n_ms:-1}
+                    # 2 par defaut, pas 1 : c est le minimum pour une radio
+                    # MIXTE - un faketrx et un QEMU Calypso, comme le natif.
+                    # A 1, l operateur n avait qu un seul MS et le mode hybride
+                    # n avait plus rien a repartir.
+                    n_ms=$(wt_input "Operateur ${i}" "Nombre de MS (1-64) :" "2") || exit 1; OP_MS[$i]=${n_ms:-2}
                     if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
                 done
             fi
@@ -1552,7 +1556,16 @@ start_bridge_mode() {
         # ── RAN / Encryption ─────────────────────────────────────────────────
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 0}"
-        if [ "${WAN_MESH:-0}" = "1" ] && [ -z "$HANDOFF_MODE_FROM_ENV" ]; then
+        if [ -n "$HANDOFF_MODE_FROM_ENV" ]; then
+            # [2026-08-31] L APPELANT A IMPOSE LE MODE : on ne lui repose pas la
+            # question. Sans cette branche, seul --wan pouvait choisir l hybride
+            # et tout autre lancement retombait sur choose_ran_host - un menu.
+            # En non interactif ce menu s auto-repondait par sa PREMIERE entree,
+            # donc "full-grgsm" : un HANDOFF_MODE=faketrx-qemu passe en
+            # environnement etait lu (HANDOFF_MODE_FROM_ENV=1, l.137) puis
+            # ignore ici. On ne pouvait pas obtenir la radio mixte hors WAN.
+            echo -e "  ${GREEN}[RAN] mode impose par l appelant : ${CYAN}${HANDOFF_MODE}${NC}"
+        elif [ "${WAN_MESH:-0}" = "1" ]; then
             # Un noeud de WAN est une maquette complete : il lui faut une radio
             # des DEUX types pour que l'appel inter-noeud soit vraiment porte de
             # bout en bout. D'ou l'hybride par defaut - un faketrx + un QEMU

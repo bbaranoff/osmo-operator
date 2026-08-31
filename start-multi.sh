@@ -265,7 +265,10 @@ done
 # sa ligne 70 - corrige depuis, mais l argument reste la voie sure : il est
 # analyse apres, il prime, et il documente l intention dans la ligne de
 # commande qu on affiche.
-CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1"
+# HANDOFF_MODE=faketrx-qemu : la radio MIXTE, un faketrx + un QEMU Calypso par
+# operateur - le meme montage que le natif. start.sh ne la choisissait seul
+# qu en mode WAN ; impose ici, elle vaut aussi pour ce banc a une machine.
+CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
@@ -304,6 +307,31 @@ cd "$DIR" || { echo -e "${RED}Impossible d entrer dans $DIR${NC}"; exit 1; }
 #   --hub-ip  sinon l ASP est repointe sur 192.168.1.49, le hub WAN par defaut,
 #             qui n existe pas ici : c est de la que venait le "Aucune
 #             association SCTP vers 192.168.1.49:2908" des premiers essais.
+# ── L IDENTITE DU NATIF NE TIENT PAS QU AU POINT CODE ───────────────────────
+# [2026-08-31] set-node-id.sh repointe les point codes, et rien d autre. Or
+# start-direct.sh derive TOUT le reste de son operateur depuis OPERATOR_ID
+# (/etc/osmocom/coeur.env) :
+#     MS_OP_ID  = OPERATOR_ID
+#     ms_imsi() = MCC MNC <op sur 4> <ms sur 6>      -> l IMSI
+#     MSISDN    = 100<op><ms>
+#     MS_ARFCN1 = 512 + MS_OP_ID * 2                 -> la FREQUENCE
+# Un natif realigne en operateur 3 mais laisse a OPERATOR_ID=1 gardait donc les
+# abonnes de l operateur 1 - MSISDN 100101, IMSI 001010001000001 - exactement
+# ceux que start.sh donne a son conteneur osmo-operator-1. Deux abonnes avec le
+# meme MSISDN dans deux HLR, et deux cellules sur le MEME ARFCN : rien ne
+# proteste au demarrage, et c est a l appel que ca part de travers.
+_aligner_coeur_env() {
+    local idx="$1" f="/etc/osmocom/coeur.env"
+    [ -f "$f" ] || return 0
+    if grep -qE '^[[:space:]]*:[[:space:]]*"\$\{OPERATOR_ID:=' "$f"; then
+        sed -i -E "s|^([[:space:]]*:[[:space:]]*\"\\\$\\{OPERATOR_ID:=)[0-9]+(\\}\")|\\1${idx}\\2|" "$f"
+        echo -e "  ${GREEN}✓${NC} coeur.env : OPERATOR_ID=${idx} (IMSI, MSISDN et ARFCN du natif suivent)"
+    else
+        echo ": \"\${OPERATOR_ID:=${idx}}\"" >> "$f"
+        echo -e "  ${GREEN}✓${NC} coeur.env : OPERATOR_ID=${idx} ajoute"
+    fi
+}
+
 aligner_natif() {
     local idx pc spec reel
     for spec in $MULTI_OPS; do
@@ -317,6 +345,7 @@ aligner_natif() {
             if bash "$DIR/network/set-node-id.sh" --node "${MULTI_NODE:-1}" --op "$idx" \
                     --local --hub-ip 127.0.0.1 >/dev/null 2>&1; then
                 echo -e "  ${GREEN}✓${NC} natif realigne : PC $(natif_pc)"
+                _aligner_coeur_env "$idx"
                 echo -e "  ${YELLOW}!${NC} les demons natifs gardent l ancienne identite en memoire :"
                 echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC} pour qu ils la relisent."
             else
