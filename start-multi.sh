@@ -268,7 +268,7 @@ done
 CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
-echo -e "  ${BOLD}Topologie${NC} : op1 natif + ${N_DOCKER} conteneur(s) + hub ${MULTI_HUB_IP}"
+echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
 echo -e "  ${CYAN}→${NC} ${CMD[*]}"
 echo
 
@@ -289,6 +289,46 @@ fi
 # ensuite "conteneur absent" trois fois, ce qui faisait chercher un probleme
 # de docker alors que le script n avait jamais atteint le docker run.
 cd "$DIR" || { echo -e "${RED}Impossible d entrer dans $DIR${NC}"; exit 1; }
+
+# ── ALIGNER L IDENTITE SS7 DU NATIF, AVANT DE LANCER ────────────────────────
+# start.sh numerote SES conteneurs 1..N sans decalage possible : avec 2
+# conteneurs il produit les point codes 1.1.2 et 1.2.2. Un natif laisse a son
+# defaut porte 1.1.2 lui aussi - deux equipements a la meme adresse SS7, ce que
+# ce depot decrit comme "pas un conflit de nom, du routage faux".
+#
+# On repointe donc le natif sur le rang que la topologie lui donne, AVANT de
+# lancer les conteneurs. Deux drapeaux comptent :
+#   --local   plan d une seule machine, MID=<op> -> 1.<op>.<role>. SANS lui,
+#             set-node-id.sh prend le plan WAN (MID=<noeud><op>) et rend
+#             1.13.2 au lieu de 1.3.2 - verifie en dry-run.
+#   --hub-ip  sinon l ASP est repointe sur 192.168.1.49, le hub WAN par defaut,
+#             qui n existe pas ici : c est de la que venait le "Aucune
+#             association SCTP vers 192.168.1.49:2908" des premiers essais.
+aligner_natif() {
+    local idx pc spec reel
+    for spec in $MULTI_OPS; do
+        IFS=: read -r idx mode _ip pc _rctx <<< "$spec"
+        [ "$mode" = "native" ] || continue
+        reel="$(natif_pc)"
+        [ -n "$reel" ] || return 0
+        [ "$reel" = "$pc" ] && { echo -e "  ${GREEN}✓${NC} natif deja en PC ${pc} (op ${idx})"; return 0; }
+        echo -e "  ${CYAN}→${NC} natif en PC ${reel}, attendu ${pc} : realignement sur l operateur ${idx}"
+        if [ -x "$DIR/network/set-node-id.sh" ] || [ -r "$DIR/network/set-node-id.sh" ]; then
+            if bash "$DIR/network/set-node-id.sh" --node "${MULTI_NODE:-1}" --op "$idx" \
+                    --local --hub-ip 127.0.0.1 >/dev/null 2>&1; then
+                echo -e "  ${GREEN}✓${NC} natif realigne : PC $(natif_pc)"
+                echo -e "  ${YELLOW}!${NC} les demons natifs gardent l ancienne identite en memoire :"
+                echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC} pour qu ils la relisent."
+            else
+                echo -e "  ${RED}✗${NC} realignement du natif echoue - voir network/set-node-id.sh"
+            fi
+        fi
+        return 0
+    done
+}
+aligner_natif
+
+
 
 "${CMD[@]}"
 rc=$?
