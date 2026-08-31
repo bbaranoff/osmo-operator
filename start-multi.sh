@@ -325,7 +325,8 @@ _aligner_coeur_env() {
     [ -f "$f" ] || return 0
     if grep -qE '^[[:space:]]*:[[:space:]]*"\$\{OPERATOR_ID:=' "$f"; then
         sed -i -E "s|^([[:space:]]*:[[:space:]]*\"\\\$\\{OPERATOR_ID:=)[0-9]+(\\}\")|\\1${idx}\\2|" "$f"
-        echo -e "  ${GREEN}✓${NC} coeur.env : OPERATOR_ID=${idx} (IMSI, MSISDN et ARFCN du natif suivent)"
+        grep -qE "OPERATOR_ID:=${idx}\\}" "$f" \
+            || echo -e "  ${GREEN}✓${NC} coeur.env : OPERATOR_ID=${idx} (IMSI, MSISDN et ARFCN du natif suivent)"
     else
         echo ": \"\${OPERATOR_ID:=${idx}}\"" >> "$f"
         echo -e "  ${GREEN}✓${NC} coeur.env : OPERATOR_ID=${idx} ajoute"
@@ -337,6 +338,16 @@ aligner_natif() {
     for spec in $MULTI_OPS; do
         IFS=: read -r idx mode _ip pc _rctx <<< "$spec"
         [ "$mode" = "native" ] || continue
+        # [2026-08-31] coeur.env est aligne D ABORD, et INCONDITIONNELLEMENT.
+        # Il etait traite dans la branche "point code different" plus bas : une
+        # fois les point codes deja bons, aligner_natif sortait par le
+        # raccourci "deja en PC 1.3.2" et OPERATOR_ID restait a 1 pour
+        # toujours. Le natif gardait alors les IMSI/MSISDN de l operateur 1 -
+        # 001010001000001, 100101 - exactement ceux du conteneur op1, et
+        # l ARFCN avec. Les deux reglages sont INDEPENDANTS : point codes
+        # (set-node-id.sh) et plan d abonnes (OPERATOR_ID) ; les lier faisait
+        # que le second ne se rattrapait jamais.
+        _aligner_coeur_env "$idx"
         reel="$(natif_pc)"
         [ -n "$reel" ] || return 0
         [ "$reel" = "$pc" ] && { echo -e "  ${GREEN}✓${NC} natif deja en PC ${pc} (op ${idx})"; return 0; }
@@ -345,7 +356,6 @@ aligner_natif() {
             if bash "$DIR/network/set-node-id.sh" --node "${MULTI_NODE:-1}" --op "$idx" \
                     --local --hub-ip 127.0.0.1 >/dev/null 2>&1; then
                 echo -e "  ${GREEN}✓${NC} natif realigne : PC $(natif_pc)"
-                _aligner_coeur_env "$idx"
                 echo -e "  ${YELLOW}!${NC} les demons natifs gardent l ancienne identite en memoire :"
                 echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC} pour qu ils la relisent."
             else
