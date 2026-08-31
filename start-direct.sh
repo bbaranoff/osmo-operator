@@ -1375,6 +1375,23 @@ ask_node_identity
 # d'un run parce qu'on a demande une regeneration.
 #
 #   $1 numero de noeud   $2 numero d'operateur   $3 inter-STP (peut etre vide)
+# ── LE POINT CODE AFFICHE SUIT LE PLAN REELLEMENT APPLIQUE ──────────────────
+# [2026-08-31] Ces bandeaux calculaient toujours 1.<noeud><op>.x, la formule du
+# plan WAN, alors que set-node-id.sh recoit --local hors WAN et ecrit
+# 1.<op>.x. On lisait donc, dans la meme sortie :
+#     [ OK ] Identite SS7 (noeud 1 · PC 1.13.x · mode docker)
+#       SS7  point-code 1.3.2
+# deux valeurs contradictoires pour la meme chose - la premiere fausse. Sur un
+# banc ou le desaccord de plan a justement coute une demi-journee, un bandeau
+# qui annonce le mauvais plan est exactement ce qu il ne faut pas.
+_pc_affiche() {   # $1 = noeud, $2 = operateur
+    if [ "${WAN_MESH:-0}" != "1" ] && [ -z "${WAN_NODES:-}" ]; then
+        printf '1.%s.x' "$2"          # plan local, celui qu on applique
+    else
+        printf '1.%s%s.x' "$1" "$2"   # plan WAN, entre machines
+    fi
+}
+
 regen_configs_natif() {
     local node="$1" op="$2" hub="$3"
     local tmp rc=0
@@ -1549,7 +1566,7 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
         say_end " -- " "$C_DIM" "Regeneration des configurations" "dry-run"
     elif regen_configs_natif "$REGEN_NODE" "$REGEN_OP" "$REGEN_HUB"; then
         say_end " OK " "$C_OK" "Regeneration des configurations" \
-            "/etc/osmocom + /etc/asterisk  ·  PC 1.${REGEN_NODE}${REGEN_OP}.x"
+            "/etc/osmocom + /etc/asterisk  ·  PC $(_pc_affiche "$REGEN_NODE" "$REGEN_OP")"
     else
         say_end " KO " "$C_KO" "Regeneration des configurations" \
             "echec - les fichiers d'avant sont dans ${LOG_DIR:-/tmp}"
@@ -1658,7 +1675,7 @@ if [ -n "$NODE_ID" ]; then
         say_end " -- " "$C_DIM" "Identite SS7 du noeud $NODE_ID" "dry-run"
         bash "$SETID" "${setid_args[@]}" --dry-run 2>&1 | sed 's/^/  /'
     elif bash "$SETID" "${setid_args[@]}" </dev/null > "${LOG_DIR:-/tmp}/set-node-id.log" 2>&1; then
-        say_end " OK " "$C_OK" "Identite SS7" "noeud $NODE_ID · PC 1.${NODE_ID}${NODE_OP}.x · mode $NODE_MODE"
+        say_end " OK " "$C_OK" "Identite SS7" "noeud $NODE_ID · PC $(_pc_affiche "$NODE_ID" "$NODE_OP") · mode $NODE_MODE"
         # Ce qui a REELLEMENT ete ecrit, relu dans le fichier. Jusqu'ici il
         # fallait deduire l'identite d'un routing-key pour savoir si elle avait
         # pris - et une regeneration ulterieure pouvait l'effacer sans bruit.

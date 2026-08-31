@@ -378,7 +378,13 @@ sms_routing_summary() {
 
     local total_ms=0
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
-        local n_ms=${ms_counts[$((i-1))]:-1}
+        # ms_counts est POSITIONNELLE (0-based) alors que i est un RANG
+        # d operateur, qui ne commence plus forcement a 1. Le (i-1)
+        # d origine lisait donc l element du VOISIN : avec les rangs 2 et
+        # 3, op2 heritait du compte d op3 et op3 tombait sur un element
+        # absent, donc sur le defaut de 1 MS. La table affichait "3 MS"
+        # pour quatre abonnes reellement provisionnes.
+        local n_ms=${ms_counts[$((i - ${OP_ID_BASE:-1}))]:-1}
         local mnc; mnc=$(printf '%02d' "$i")
         local container_ip; container_ip=$(_sms_op_backbone_ip "$i")
         local sc; sc=$(_sms_sc_address "$i")
@@ -403,7 +409,13 @@ sms_routing_summary() {
     echo ""
     echo -e "${CYAN}── Reseau inter-operateurs ──${NC}"
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
-        local n_ms=${ms_counts[$((i-1))]:-1}
+        # ms_counts est POSITIONNELLE (0-based) alors que i est un RANG
+        # d operateur, qui ne commence plus forcement a 1. Le (i-1)
+        # d origine lisait donc l element du VOISIN : avec les rangs 2 et
+        # 3, op2 heritait du compte d op3 et op3 tombait sur un element
+        # absent, donc sur le defaut de 1 MS. La table affichait "3 MS"
+        # pour quatre abonnes reellement provisionnes.
+        local n_ms=${ms_counts[$((i - ${OP_ID_BASE:-1}))]:-1}
         printf "  Op%-2s  %s  ← TCP 7890  (relay)  %d MS\n" \
                "$i" "$(_sms_op_backbone_ip "$i")" "$n_ms"
     done
