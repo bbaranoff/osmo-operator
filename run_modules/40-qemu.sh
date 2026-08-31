@@ -1,6 +1,15 @@
 # =============================================================================
 #  40-qemu - l'emulateur Calypso (ARM7TDMI + DSP TMS320C54x)
 # =============================================================================
+# [2026-08-31] Ce module ne sourcait PAS _lib/radio.sh, contrairement a tous les
+# autres modules radio (60-fake-trx, 64-trxcon, 66-mobile...). Il n'en avait pas
+# besoin tant qu'il ne lisait que QEMU_BIN et FIRMWARE_ELF ; il en a besoin
+# maintenant qu'il lit QEMU_DUMMY_SOCK et QEMU_GDB_PORT - et sous le `set -u` de
+# run.sh, une variable non posee ne donne pas un defaut vide mais un module qui
+# avorte. radio.sh n'utilise que des `: "${X:=...}"` : le sourcer est idempotent
+# et n'ecrase rien de ce que paths.env a deja resolu.
+. "$(dirname "${BASH_SOURCE[0]}")/_lib/radio.sh"
+
 MOD_REGISTER qemu "Emulateur Calypso (QEMU)"
 MOD_REQUIRED[qemu]=1
 MOD_DEPS[qemu]="prereqs"
@@ -40,7 +49,13 @@ mod_qemu_check() {
     mod_ok
 }
 
-mod_qemu_status() { have_proc "qemu-system-arm.*calypso"; }
+# [2026-08-31] Le motif "qemu-system-arm.*calypso" designe TOUS les QEMU Calypso
+# de la machine, pas le notre : en multi-operateur, chaque module voyait le QEMU
+# du voisin et se croyait deja demarre. Le discriminant sur la ligne de commande
+# est le socket du moniteur, qui vit sous RUN_DIR - un RUN_DIR par instance.
+_qemu_pattern() { printf 'qemu-system-arm.*%s/qemu-monitor.sock' "$RUN_DIR"; }
+
+mod_qemu_status() { have_proc "$(_qemu_pattern)"; }
 
 # Garde-fou de journal : tronque le fichier des qu'il depasse le plafond.
 # Tourne en arriere-plan et meurt avec QEMU.
@@ -68,9 +83,18 @@ mod_qemu_start() {
     local qlog="${LOG_DIR}/qemu.log"
     mod_say "machine  : $mach"
     mod_say "journal  : $qlog (plafond ${QEMU_LOG_MAX} o)"
+    mod_say "L1CTL    : $QEMU_DUMMY_SOCK (poubelle - le vrai socket est celui d'osmocon)"
+    mod_say "gdb      : tcp::${QEMU_GDB_PORT}"
 
+    # L1CTL_SOCK EN PREFIXE, PAS EN EXPORT. La variable ne doit atteindre QUE ce
+    # child : exportee, elle repointerait aussi les sondes et les modules qui
+    # cherchent le vrai socket. Sans elle, le serveur L1CTL interne de QEMU
+    # (l1ctl_sock.c) se rabat sur son defaut /tmp/osmocom_l2, unlink() le socket
+    # d'osmocon et ejecte le mobile en place - voir le bloc QEMU_DUMMY_SOCK de
+    # _lib/radio.sh pour la chaine complete jusqu'a "Layer2 socket failed".
+    L1CTL_SOCK="$QEMU_DUMMY_SOCK" \
     "$QEMU_BIN" -M "$mach" -cpu arm946 \
-        -gdb tcp::1234 -serial pty -serial pty \
+        -gdb "tcp::${QEMU_GDB_PORT}" -serial pty -serial pty \
         -monitor "unix:${RUN_DIR}/qemu-monitor.sock,server,nowait" \
         -kernel "$FIRMWARE_ELF" >>"$qlog" 2>&1 &
     local qpid=$!
@@ -116,7 +140,10 @@ mod_qemu_wait() {
 mod_qemu_stop() {
     local qpid; qpid="$(cat "${RUN_DIR}/qemu.pid" 2>/dev/null || echo 0)"
     [ "$qpid" != 0 ] && kill "$qpid" 2>/dev/null
-    pkill -f "qemu-system-arm.*calypso" 2>/dev/null
-    rm -f "${RUN_DIR}/qemu.pid" "${RUN_DIR}/qemu-monitor.sock"
+    # Rattrapage CIBLE. Le motif large "qemu-system-arm.*calypso" tuait le QEMU
+    # de TOUS les operateurs - un arret d'operateur 2 emportait le 1 et le 3,
+    # dont les mobiles sortaient aussitot en "Layer2 socket failed".
+    pkill -f "$(_qemu_pattern)" 2>/dev/null
+    rm -f "${RUN_DIR}/qemu.pid" "${RUN_DIR}/qemu-monitor.sock" "$QEMU_DUMMY_SOCK"
     return 0
 }

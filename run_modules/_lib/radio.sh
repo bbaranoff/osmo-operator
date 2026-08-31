@@ -82,6 +82,46 @@ _RADIO_LIB_LOADED=1
 : "${RUN_DIR:=/tmp/calypso}"
 : "${LOG_DIR:=$RUN_DIR/logs}"
 
+# --- socket L1CTL de QEMU : une POUBELLE, et une par instance ----------------
+# [2026-08-31] QEMU porte un SECOND serveur L1CTL, hw/arm/calypso/l1ctl_sock.c,
+# heritage du temps ou il remplacait le pont Python. Ce n'est plus le chemin
+# nominal - c'est osmocon (-s) qui sert /tmp/osmocom_l2 - mais il est toujours
+# compile, et son defaut est ce MEME /tmp/osmocom_l2 en dur (l1ctl_sock.c:55,
+# calypso_soc.c:328). Deux details le rendent destructeur :
+#
+#   1. l1ctl_sock_init() fait `unlink(path)` AVANT son bind() (l1ctl_sock.c:669)
+#      -> le dernier arrive VOLE le nom a osmocon, qui continue d'ecouter une
+#      socket que plus personne n'atteint. Constate sur le banc :
+#          u_str LISTEN /tmp/osmocom_l2  users:(("qemu-system-arm",pid=86434))
+#          u_str LISTEN /tmp/osmocom_l2  users:(("osmocon",pid=86582))
+#   2. l1ctl_accept_cb() ferme le client en place des qu'un autre se presente
+#      ("replacing existing client", l1ctl_sock.c:637).
+#
+# Cote mobile la sanction est immediate et n'a rien d'un plantage : layer2_read()
+# lit 0 octet, imprime "Layer2 socket failed" et fait exit(102), SANS reconnexion
+# (osmocom-bb/src/host/layer23/src/common/l1l2_interface.c:56). Le bandeau de
+# copyright qui suit dans mobile.log, c'est le superviseur qui relance.
+#
+# Un banc multi-operateur porte un QEMU PAR OPERATEUR : N serveurs sur UN chemin,
+# N mobiles qui s'ejectent mutuellement en boucle. C'est exactement ce que
+# start-multi.sh declenchait.
+#
+# Le remede est celui que le legacy appliquait deja (run.sh.legacy L1820-1821,
+# raisonne dans qosmo-grgsm/run_modules/05-config.sh « POURQUOI 4 ») : envoyer le
+# serveur interne de QEMU sur une adresse-poubelle via L1CTL_SOCK. 05-config.sh
+# POSE bien QEMU_DUMMY_SOCK - mais plus aucun lanceur ne l'APPLIQUAIT, et c'est
+# de la que venait la regression. On y ajoute ce que le legacy n'avait pas a
+# prevoir : une poubelle PAR INSTANCE, sous RUN_DIR, pour que deux stacks sur la
+# meme machine ne se disputent pas jusqu'a leur poubelle.
+: "${QEMU_DUMMY_SOCK:=${RUN_DIR}/qemu_l1ctl_disabled}"
+
+# --- port gdb de QEMU : un par operateur -------------------------------------
+# `-gdb tcp::1234` en dur, c'est UN port pour toute la machine : le deuxieme QEMU
+# ne peut pas l'ouvrir et MEURT au demarrage, sans que rien ne relie la panne a
+# sa cause. On le decale sur l'operateur, comme les ARFCN et les point codes le
+# sont deja (MS_ARFCN1 = 512 + MS_OP_ID*2, PC 1.<op>.2).
+: "${QEMU_GDB_PORT:=$(( 1234 + ${OPERATOR_ID:-1} - 1 ))}"
+
 # =============================================================================
 #  Helpers - aucun n'affiche quoi que ce soit sur la console.
 # =============================================================================
