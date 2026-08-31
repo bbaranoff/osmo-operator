@@ -234,7 +234,7 @@ garde déjà armée. Le TTL reste court (~2 s) — c'est lui qui rend le camp au
 dès la fin du canal, et l'allonger l'affame. Le montant couvre les trous *pendant*
 le canal ; le TTL tranche *après*.
 
-## 3bis. Identité n'est pas instance — la cause du 2ᵉ appel
+## 3bis. Identité n'est pas instance — un vrai défaut, mais pas LA cause
 
 ### La mesure
 
@@ -315,6 +315,85 @@ façon-là.
 
 ---
 
+## 3ter. Le DISC de l'appel précédent rejoué sur le canal suivant — LA cause
+
+C'est le défaut qui produisait les échecs d'assignation intermittents. Trouvé par
+un fan-out de 29 agents avec réfutation adversariale, après que quatre
+hypothèses posées à la main se soient révélées fausses.
+
+### Le mécanisme
+
+`/dev/shm/calypso_tch_facch_ul` est un slot **unique**, dont le `seq` est de
+portée-processus côté shunt : il n'a aucune notion d'époque de canal dédié.
+
+1. Un appel se termine **normalement** → `tch_desarme()` met `_tch_tn = None`.
+2. `ul_facch_from_sideband` part alors en `continue` sans jamais lire
+   (`pont.py:941-942`) — et son curseur `last`, **local au thread**, gèle.
+3. Le mobile émet ensuite son **DISC** LAPDm de libération. Le shunt le publie
+   dans le slot avec un `seq` neuf. Le bloc y reste, avec `seq > last`.
+4. À l'ASSIGNMENT COMMAND suivant, le thread se réveille, voit `seq != last`, et
+   traite ce vieux DISC comme un montant frais : il pose `_tch_mobile_ok`
+   **avant toute bascule réelle**, et l'ordonnanceur l'émet sur la FACCH du TCH
+   tout neuf.
+5. La LAPDm de la BTS, en `LAPD_STATE_IDLE` sur ce lchan fraîchement activé,
+   répond **DM**.
+6. Le mobile, qui vient d'envoyer son vrai SABM, reçoit ce DM en `SABM_SENT` →
+   `ASSIGNMENT FAILURE`. Le BSC n'a jamais son ASSIGNMENT COMPLETE → `T10` →
+   `EQUIPMENT FAILURE: Timeout`.
+
+### La mesure qui l'établit
+
+Capture GSMTAP, premier bloc FACCH montant réellement **émis par le pont** après
+chaque ASSIGNMENT COMMAND — corrélation **6/6**, aux octets :
+
+```
+01 3f (SABM) -> 01 73 (UA)    => appel OK
+01 53 (DISC) -> 01 1f (DM)    => appel ECHOUE
+```
+
+Et l'arithmétique de propagation exclut « le DM répondait au SABM » :
+DISC fn 26340 → DM fn 26367 (Δ=27) ; SABM fn 26353 → UA fn 26380 (Δ=27). **Même
+delta** — le DM répond au bloc émis 13 trames *avant* le SABM.
+
+### Pourquoi c'était intermittent — et pas « le 2ᵉ appel »
+
+Rien de positionnel : ce qui compte est le **mode de sortie de l'appel
+précédent**.
+
+| sortie précédente | effet | appel suivant |
+|---|---|---|
+| normale → `tch_desarme` (`_tch_tn = None`) | le thread cesse de lire, le DISC empoisonne le slot | **échoue** |
+| en échec → `tch_suspend` (**conserve** `_tch_tn`) | le thread continue de vider la bande latérale | **réussit** |
+| premier appel | slot à `seq=0`, la garde `if seq and ...` saute | réussit |
+
+D'où des séries `ÉCHEC/OK/ÉCHEC` ou `OK/ÉCHEC/OK` selon l'amorce. Toute la
+formulation « le 2ᵉ appel échoue », qui a orienté des heures d'enquête, était un
+artefact d'échantillon.
+
+### Le correctif
+
+À chaque **nouvelle époque de canal**, resynchroniser `last` sur le `seq` courant
+**sans consommer** le bloc : ce qui date d'avant l'armement n'appartient pas à ce
+canal. C'est exactement l'idiome que ce fichier applique déjà à l'anneau voix
+montant (`session precedente : on ignore`) et qui n'avait pas été porté sur ce
+sideband-ci.
+
+L'époque est suivie par `_tn_epoque`, remis à `None` au désarmement — car le BSC
+réalloue toujours TS2, donc comparer les TN ne suffit pas : **identité n'est pas
+instance**, encore (cf. §3bis).
+
+### Validation
+
+`scripts/banc-repro.sh --calls 4`, pile redémarrée :
+
+| | avant | après |
+|---|---|---|
+| appels | ÉCHEC / OK / ÉCHEC | **OK / OK / OK / OK** |
+| `Assignment failed` (BSC) | 20 | **0** |
+| `unsupported SAPI` | 14 | 4 |
+
+---
+
 ## 4. Le remplissage de C0 compté comme échec
 
 `osmo-bts` remplit **tous** les timeslots de C0 avec le dummy burst
@@ -380,7 +459,9 @@ Conservées pour ne pas être réexplorées.
 
 ## 7. Reste ouvert
 
-* **`unsupported SAPI` côté mobile** — 38 sur le run LU + 2 appels. Ni l'en-tête
+* **`unsupported SAPI` côté mobile** — tombés de 64 à 4, mais pas à zéro.
+  Source résiduelle inconnue. Ne bloque plus les appels (§3ter : 0 échec
+  d'assignation sur 4 appels). Ni l'en-tête
   L1 du SACCH (§3, réfuté), ni le SI du camp (§3, réfuté par la mesure). Source
   toujours inconnue : chercher qui d'autre atteint `a_cd`, ou si le firmware
   relit un bloc périmé faute de rafraîchissement (`B_BLUD`).
@@ -392,6 +473,24 @@ Conservées pour ne pas être réexplorées.
   mobile qui ne bascule pas, donc à revoir **après** le correctif SACCH.
 
 ---
+
+## Rejouer une experience
+
+`scripts/banc-repro.sh` fige toute la sequence : demarrage detache
+(`CALYPSO_NO_ATTACH=1`), attente du camp **interrogee** au VTY (`show ms` ->
+`C3`) et non supposee par un `sleep`, N appels identiques, verdict par appel
+calcule sur la seule tranche de `pont.log` de cet appel, collecte horodatee dans
+`/root/repro-<stamp>/`.
+
+```
+scripts/banc-repro.sh --calls 4                 # avec redemarrage
+scripts/banc-repro.sh --no-restart --calls 3    # sur la pile en cours
+PONT_KC_RETENTION=0 scripts/banc-repro.sh       # A/B d'un reglage
+```
+
+C'est ce qui a permis de decouvrir que l'echec n'etait pas positionnel : trois
+appels suffisent, et deux runs successifs donnent `ECHEC/OK/ECHEC` puis
+`OK/ECHEC/OK`. Sans sequence figee, on compare des runs qui ne se comparent pas.
 
 ## Outils de diagnostic
 
