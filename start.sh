@@ -569,8 +569,24 @@ ensure_host_audio_relay() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
-QUICK="${OSMO_QUICK:-0}"
-QUICK_EXPLICIT=0; [ -n "${OSMO_QUICK:-}" ] && QUICK_EXPLICIT=1
+# [2026-08-31] QUICK PAR DEFAUT, et sans poser la question.
+# Le defaut etait 0 - "normal (--no-cache)" - et, faute de choix explicite,
+# start.sh ouvrait une boite whiptail (l.2578, choose_build_mode) pour la
+# demander. Deux consequences :
+#   - la recompilation Osmocom complete, ~40 minutes, etait ce qu on obtenait
+#     en repondant trop vite, alors que l image ne change quasiment jamais ;
+#   - la QUESTION elle-meme rendait le script inutilisable depuis une icone ou
+#     un appel scripte : il s arretait sur un dialogue que personne ne voit.
+# Le cache docker est la bonne reponse dans la vie de tous les jours ; on ne
+# reconstruit a neuf que quand on le DEMANDE.
+#
+# Comment forcer une reconstruction complete, les deux marchent :
+#     ./start.sh normal ...        (argument positionnel)
+#     OSMO_QUICK=0 ./start.sh ...  (variable d environnement)
+QUICK="${OSMO_QUICK:-1}"
+# EXPLICIT a 1 meme sans demande : c est ce qui supprime le dialogue. Le passer
+# a 0 ici ferait revenir la question a chaque lancement non interactif.
+QUICK_EXPLICIT=1
 
 build_run_image() {
     if [ "${QUICK:-0}" = "1" ]; then
@@ -849,12 +865,43 @@ start_inter_stp() {
     # des ASP qui ouvrent leur SCTP vers personne. Les deux options sont
     # exclusives (docker refuse la combinaison au parsing), et le "docker rm -f"
     # ci-dessus tient deja le role de --rm : aucun reliquat du lancement d'avant.
+    # ── 2908 PUBLIE SUR LA BOUCLE LOCALE : LE RACCORD DE L OPERATEUR NATIF ──
+    # [2026-08-31] Sans cette ligne, un operateur NATIF (celui de
+    # start-direct.sh, hors conteneur) ne pouvait PAS s attacher au hub.
+    # Son /etc/osmocom/osmo-stp.cfg declare
+    #       asp asp-to-inter 2908 2910 m3ua
+    #        remote-ip 127.0.0.1
+    # ce qui est le bon choix - c est la seule adresse dont on soit sur - mais
+    # RIEN n ecoutait sur 127.0.0.1:2908 cote hote : le hub vit dans le
+    # conteneur, sur le reseau prive, et ne publiait aucun port
+    # ("docker port osmo-inter-stp" : vide). L ASP ouvrait donc son SCTP vers
+    # personne, et le diagnostic sortait tres loin de la cause -
+    #     Aucune association SCTP vers ...:2908 (0/1)
+    #     as-inter : AS_DOWN  /  Route par defaut -> inter-STP absente
+    # ce qui envoie chercher un hub en panne ou un filtrage, alors que le hub
+    # va bien et que rien ne le rendait joignable.
+    #
+    # /sctp, PAS /tcp : M3UA roule sur SCTP. Docker sait publier ce protocole
+    # (verifie sur ce banc : noyau avec module sctp, et
+    # "docker run -p 127.0.0.1:PORT:PORT/sctp" accepte).
+    #
+    # Lie a 127.0.0.1 et pas a 0.0.0.0 : ce point d entree ne sert QU au natif,
+    # sur la meme machine. L exposer sur toutes les interfaces ouvrirait le
+    # coeur SS7 au LAN - checks/wan_ss7_check.sh signale d ailleurs "un port
+    # M3UA expose sur l interface publique" comme un defaut a part entiere.
+    #
+    # L autre solution possible etait de repointer l ASP natif sur
+    # 172.20.0.10 avec local-ip 172.20.0.1. Ecartee : ces deux adresses
+    # n existent que TANT QUE le bridge docker est monte, et elles disparaissent
+    # avec les conteneurs - on aurait remplace une adresse absente par deux
+    # adresses intermittentes, dans une config que start-direct.sh regenere.
     docker run -d \
         --restart unless-stopped \
         --name "$INTER_STP_CONTAINER" \
         --hostname "$INTER_STP_CONTAINER" \
         --network "$INTER_NET" \
         --ip "$INTER_STP_IP" \
+        -p "127.0.0.1:2908:2908/sctp" \
         --cap-add NET_ADMIN \
         -v "${inter_cfg}:/etc/osmocom/osmo-stp-interop.cfg" \
         --entrypoint bash \
