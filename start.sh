@@ -1436,7 +1436,9 @@ start_bridge_mode() {
         # --wan reste valable en PoC QEMU : un noeud = un operateur, c'est
         # exactement la maquette "N machines qui s'appellent".
         [ "${WAN_MESH:-0}" = "1" ] && wan_mesh_configure 1
-        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
+        # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
+        # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
+        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
         ENCRYPTION="a5 0"
         echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qosmo-grgsm/run.sh · A5/1${NC}"
     else
@@ -1554,7 +1556,9 @@ start_bridge_mode() {
 
 
         # ── RAN / Encryption ─────────────────────────────────────────────────
-        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS=1; BRIDGE_QEMU=1
+        # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
+        # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
+        PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 0}"
         if [ -n "$HANDOFF_MODE_FROM_ENV" ]; then
             # [2026-08-31] L APPELANT A IMPOSE LE MODE : on ne lui repose pas la
@@ -1976,12 +1980,24 @@ start_bridge_mode() {
         force_update_trees "$container_name"
 
         # ── LE CONTENEUR S'ARRETE AU COEUR ──────────────────────────────────
-        # no-process par DEFAUT : run.sh monte STP, HLR, MSC, BSC, MGW, GGSN,
-        # SGSN et PCU, puis s'arrete la. Ni PHY, ni mobile, ni Asterisk, ni
-        # SMSC - c'est start-direct.sh qui les lance, et il est lance A LA MAIN
-        # (les commandes sont imprimees a la fin de ce script).
-        # BRIDGE_NO_PROCESS=0 ./start.sh retablit l'ancien comportement.
-        local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-1} /etc/osmocom/run.sh"
+        # [2026-08-31] NO-ATTACH, PLUS NO-PROCESS.
+        # no-process arretait run.sh au coeur : STP, HLR, MSC, BSC, MGW, GGSN,
+        # SGSN, PCU montaient, puis plus rien - ni PHY, ni mobile, ni Asterisk,
+        # ni SMSC. Il fallait lancer start-direct.sh A LA MAIN derriere, et en
+        # attendant le conteneur affichait
+        #     [no-process] mobile non lance - attente 4247 sautee
+        # c est-a-dire un operateur sans radio ni abonne joignable, alors que
+        # tout paraissait "pret".
+        #
+        # La pile complete demarre donc maintenant. Ce n est PAS un retour a
+        # l attachement bloquant : run.sh ne s attache jamais de lui-meme - il
+        # lance tout dans tmux et se contente d imprimer la commande d attache
+        # (scripts/run.sh, "Attach : tmux -S ... attach"). Le pipeline QEMU
+        # delegue, lui, prend CALYPSO_NO_ATTACH=1 (qosmo-grgsm/run.sh l.36).
+        #
+        # BRIDGE_NO_PROCESS=1 ./start.sh retablit l ancien comportement quand on
+        # veut vraiment le coeur seul.
+        local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} CALYPSO_NO_ATTACH=1 /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
         # DANS UN TMUX, pas en simple processus detache.
         #
