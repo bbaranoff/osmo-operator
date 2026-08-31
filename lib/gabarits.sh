@@ -199,8 +199,23 @@ _generate_sms_routing_conf_fallback() {
     local i
     local op_id=$1 n_operators=$2 i j
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
+    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ─────────────────────────
+    # [2026-08-31] start-multi.sh pose OP_ID_BASE=2 : les conteneurs prennent
+    # les rangs 2..N et l'operateur 1 reste NATIF, sur l'hote. Comme la boucle
+    # part de OP_ID_BASE, il n'apparaissait ni dans [operators] ni dans
+    # [routes] - releve dans osmo-operator-2 : « 2 = ... / 3 = ... » et rien
+    # pour le 1. Un SMS vers 100101 sortait donc en « No route for
+    # destination », et le natif etait injoignable depuis tout le banc.
+    # Il existe pourtant : il n'est simplement pas dans un conteneur. On le
+    # pointe sur la passerelle du bridge docker, qui EST l'hote vu d'un
+    # conteneur - la meme adresse que le pont audio (172.20.0.1).
+    local _natif_gw="${INTER_NET_GATEWAY:-172.20.0.1}"
+    for i in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))); do printf '%s = %s\n' "$i" "$_natif_gw"; done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
     printf '\n[routes]\n'
+    for i in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))); do
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done
+    done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         # Les MSISDN EXACTS, pas un prefixe : un prefixe trop court avalait
         # les numeros voisins, un prefixe absent laissait le relais rejeter
