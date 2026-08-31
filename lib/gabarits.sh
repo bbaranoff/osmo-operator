@@ -61,6 +61,20 @@ op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 # en heritent.
 _osmo_priv_index() {
     local op="${1:-1}"
+    # [2026-08-31] L ORCHESTRATEUR N EST PAS DANS LE CONTENEUR QU IL CREE.
+    # La detection ci-dessous demande "suis-je DANS un conteneur ?" et c est la
+    # bonne question pour du code qui tourne a l interieur. Mais start.sh, lui,
+    # provisionne les conteneurs DEPUIS L HOTE : il prenait donc la branche
+    # VM/natif et rendait l index du NOEUD - 1 - pour tous les operateurs.
+    # Les deux reseaux prives se retrouvaient sur 192.168.2.0/24, docker
+    # refusait le second pour chevauchement, et la boucle s arretait net :
+    #     ── Operateur 2 : ... Prive : 192.168.2.10
+    #     ✗ Echec creation reseau gsm-net-op2 (192.168.2.0/24)
+    # osmo-operator-2 n etait jamais cree, sans qu aucun message ne parle de
+    # collision d adresses.
+    # OSMO_PRIV_BY_OP=1 dit "je provisionne par operateur" ; start_bridge_mode
+    # la pose. C est la seule chose que la detection ne pouvait pas deviner.
+    [ "${OSMO_PRIV_BY_OP:-0}" = "1" ] && { printf '%s' "$op"; return; }
     # Meme detection que start-direct.sh : le couple /.dockerenv +
     # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
     # sert de repli pour un conteneur quelconque.
