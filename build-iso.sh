@@ -1874,6 +1874,35 @@ AutomaticLogin=root
 WaylandEnable=false
 GDM
 
+    # ── LA CONTREPARTIE DE LA SESSION ROOT : PIPEWIRE ───────────────────────
+    # [2026-08-31] Le screencast de GNOME (Ctrl+Alt+Shift+R) ne faisait RIEN.
+    # Seul le journal le disait :
+    #     gnome-shell -> org.gnome.Shell.Screencast
+    #     gjs: Failed to start recorder: Failed to start screen cast:
+    #          Couldn t connect pipewire context
+    # L enregistrement d ecran passe OBLIGATOIREMENT par PipeWire, et les unites
+    # livrees par upstream portent ConditionUser=!root - pipewire.socket:3 et
+    # pipewire.service:17. La session ouverte en root juste au-dessus n avait
+    # donc jamais /run/user/0/pipewire-0, et gnome-shell aucun contexte ou
+    # pousser ses images.
+    #
+    # C est la contrepartie directe du choix d AutomaticLogin=root : elle se
+    # corrige ICI, a cote de lui, et pas ailleurs.
+    #
+    # Une affectation VIDE remet la liste de conditions a zero - c est la facon
+    # systemd d annuler une condition heritee ; un "!=root" ne le ferait pas.
+    # /etc/systemd/user/ vaut pour toutes les sessions, quel que soit le compte.
+    #
+    # RESERVE : PipeWire en root n est pas supporte upstream. wireplumber n etant
+    # pas installe sur l image, PipeWire ne decouvre AUCUN peripherique audio et
+    # ne dispute donc pas les cartes au `pulseaudio --system` du banc. Installer
+    # wireplumber romprait cet equilibre : a ne pas faire sans le mesurer.
+    for _pwu in pipewire.socket pipewire.service; do
+        mkdir -p "/etc/systemd/user/${_pwu}.d"
+        printf '[Unit]\nConditionUser=\n' > "/etc/systemd/user/${_pwu}.d/10-allow-root.conf"
+    done
+    unset _pwu
+
     # L assistant de premier demarrage (langue, comptes en ligne, sondage) se
     # rejoue a CHAQUE boot sur un live sans persistance : il faut le desarmer,
     # sinon il est la premiere - et longtemps la seule - chose a l ecran.
