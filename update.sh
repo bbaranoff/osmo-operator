@@ -17,12 +17,17 @@
 # build/ compile), installe socat/nc/tcpdump/git dans le rootfs, et pose le
 # service du dashboard. Une machine qui demarre n'a plus rien a aller chercher.
 #
-# Ce qu'il reste ici est ce qui ne pouvait pas etre fait a la construction :
-# l'animation, qui a besoin d'un terminal et de quelqu'un devant.
+# Ce qu'il reste ici est ce qui ne peut pas etre fait a la construction, ou
+# qui doit rattraper les machines DEJA installees :
+#
+#   - l'animation, qui a besoin d'un terminal et de quelqu'un devant ;
+#   - la repose des ICONES DU BUREAU (voir le bloc dedie plus bas) : les
+#     raccourcis dessines tombaient en page blanche generique, et le
+#     correctif de build-iso.sh ne touche que les ISO a venir. Idempotent.
 #
 # Usage :
-#   sudo ./update.sh            joue l'animation
-#   sudo ./update.sh --quiet    ne joue rien (sortie silencieuse, code 0)
+#   sudo ./update.sh            repose les icones, puis joue l'animation
+#   sudo ./update.sh --quiet    repose les icones, sans l'animation (code 0)
 #
 # Sur l'ISO, /etc/profile.d/99-osmo-sms.sh l'appelle une fois par demarrage,
 # apres le choix du clavier (ordre alphabetique de /etc/profile.d).
@@ -30,8 +35,89 @@
 set -u
 
 case "${1:-}" in
+    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+# ── LES ICONES DU BUREAU, REPOSEES A CHAQUE DEMARRAGE ───────────────────────
+# [2026-08-31] Les trois raccourcis dessines - "Lancer le banc GSM",
+# "multi-operator", "Tutoriel" - s affichaient en PAGE BLANCHE generique sur le
+# bureau. Les SVG etaient pourtant valides et bien poses dans
+# /usr/share/icons/hicolor/scalable/apps/.
+#
+# La cause n est pas le fichier, c est la RESOLUTION DU NOM. "Icon=osmo-launch"
+# n est pas un chemin : c est un nom que GTK va chercher dans le thème, via
+# /usr/share/icons/hicolor/icon-theme.cache. Ce cache datait d AVANT l arrivee
+# des icones - releve sur le banc :
+#     strings /usr/share/icons/hicolor/icon-theme.cache | grep -c osmo  ->  0
+#     cache 17:22:12   ·   icones 17:28:07
+# Zero entree sur trois. Et un nom d icone qui ne resout pas ne provoque aucune
+# erreur : GNOME/DING le remplace EN SILENCE par la page blanche. "Supplements"
+# gardait la sienne parce que "system-software-install" vient de Yaru, deja
+# dans le cache depuis l installation du systeme.
+#
+# build-iso.sh pose desormais le correctif dans l image. Le meme correctif est
+# REJOUE ICI parce qu une machine deja installee ne repasse pas par la
+# construction : sans ce bloc, elle garderait ses pages blanches jusqu a la
+# prochaine ISO. Tout y est idempotent - on peut le rejouer a chaque session.
+osmo_reposer_icones() {
+    [ "$(id -u)" -eq 0 ] || return 0        # sans droits : on ne casse rien
+    local src=/opt/GSM/osmo-operator/data
+    local dst=/usr/share/osmo-operator/icons
+    [ -d "$src" ] || return 0
+
+    install -d "$dst" 2>/dev/null || return 0
+    local ic
+    for ic in osmo-launch osmo-multi osmo-tutorial; do
+        [ -f "$src/$ic.svg" ] || continue
+        cp -f "$src/$ic.svg" "$dst/$ic.svg" 2>/dev/null || continue
+        chmod 644 "$dst/$ic.svg" 2>/dev/null || true
+        # La copie du thème sert au MENU des applications, qui lui resout
+        # encore par nom ; le bureau, lui, passe par le chemin absolu.
+        install -d /usr/share/icons/hicolor/scalable/apps 2>/dev/null || true
+        cp -f "$src/$ic.svg" \
+              "/usr/share/icons/hicolor/scalable/apps/$ic.svg" 2>/dev/null || true
+    done
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+        gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+
+    # Icon= EN CHEMIN ABSOLU : plus de thème, plus de cache, plus de silence.
+    # Les raccourcis vivent en trois endroits (le menu, et les deux noms du
+    # bureau - Bureau en francais, Desktop en anglais, DING lit celui que la
+    # locale designe) ; les trois doivent porter la meme ligne.
+    local f b d
+    for d in /usr/share/applications /root/Bureau /root/Desktop \
+             /home/osmocom/Bureau /home/osmocom/Desktop; do
+        [ -d "$d" ] || continue
+        for b in osmo-launch osmo-multi osmo-tutorial; do
+            f="$d/$b.desktop"
+            [ -f "$f" ] || continue
+            grep -q "^Icon=$dst/$b.svg\$" "$f" && continue
+            sed -i "s|^Icon=.*|Icon=$dst/$b.svg|" "$f" 2>/dev/null || true
+        done
+    done
+
+    # Un .desktop du bureau ne s affiche avec son nom et son icone que s il est
+    # executable ET porteur de metadata::trusted. Cet attribut vit dans les
+    # metadonnees gvfs de la SESSION, jamais dans le fichier : il se repose
+    # donc ici, sous la session, et pas a la construction.
+    for d in "$HOME/Bureau" "$HOME/Desktop" /root/Bureau /root/Desktop; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.desktop; do
+            [ -f "$f" ] || continue
+            chmod +x "$f" 2>/dev/null || true
+            gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+        done
+        # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
+        # force a rebalayer, sinon la page blanche reste jusqu au login suivant.
+        touch "$d" 2>/dev/null || true
+    done
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    return 0
+}
+osmo_reposer_icones
+
+case "${1:-}" in
     --quiet) exit 0 ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 # Sur un tty seulement : les sequences de curseur (\033[?25l) ecrites dans un

@@ -16,10 +16,11 @@
 # C est un supplement, il s installe comme tel - ici.
 #
 # Usage :
-#   sudo ./addition.sh            liste a cocher (GTK) ou tout, en console
-#   sudo ./addition.sh --multi    multi-operateur SS7 : docker + image + topologie
-#   sudo ./addition.sh --docker   le moteur de conteneurs seul
-#   sudo ./addition.sh --image    l image operateur seule (build.sh)
+#   sudo ./addition.sh            fenetre GTK : un choix, "Docker container
+#                                 and SS7 multioperator"
+#   sudo ./addition.sh --multi    le meme, sans la fenetre
+#   sudo ./addition.sh --docker   le moteur de conteneurs seul   (depannage)
+#   sudo ./addition.sh --image    l image operateur seule, build.sh (depannage)
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -70,43 +71,44 @@ etat() {
 
 [ "$STATUS_ONLY" = "1" ] && { etat; exit 0; }
 
-# ── LA LISTE A COCHER ───────────────────────────────────────────────────────
+# ── LE CHOIX ────────────────────────────────────────────────────────────────
 # Lancee par l icone, cette fenetre est la SEULE interface : sans elle, un
 # double-clic partait droit sur un apt-get de plusieurs centaines de Mo et une
-# compilation Osmocom, sans rien demander. On coche ce qu on veut.
+# compilation Osmocom, sans rien demander.
 #
-# LES TROIS LIGNES SONT PRE-COCHEES, et ce n est pas de la paresse.
-# "multi-operateur SS7" a BESOIN des deux autres, et les cocher pour l
-# utilisateur (voir l implication plus bas) est deja ce que fait le script.
-# Les AFFICHER decochees pendant qu on les installe quand meme etait donc
-# mensonger : la fenetre disait une chose, le script en faisait une autre.
-#
-# Une vraie auto-selection - cocher la premiere ligne coche les deux autres
-# SOUS LES YEUX de l utilisateur - n est PAS possible avec zenity : sa
-# --checklist est statique et n expose aucun signal sur changement de case.
-# Il faudrait une fenetre GTK ecrite a la main (python3-gi) pour cela, ce qui
-# ajouterait une dependance et du code d interface a maintenir pour trois
-# cases. Le pre-cochage donne le meme resultat visible.
-# Decocher reste possible : qui veut docker seul decoche les deux autres.
+# [2026-08-31] UN SEUL CHOIX, ET C EST VOULU.
+# La liste a cocher en offrait trois - "multi-operateur SS7", "docker", "image
+# operateur" - alors qu il n y a jamais eu qu un scenario : le multi-operateur,
+# qui ENTRAINE les deux autres (l implication, juste en dessous, remettait
+# DO_DOCKER=1 et DO_IMAGE=1 des que la premiere ligne etait cochee). Les deux
+# dernieres cases n etaient donc decochables qu en apparence : les decocher ne
+# changeait rien tant que la premiere restait cochee, et les cocher seules
+# donnait un demi-supplement dont rien ne se sert - docker sans image, ou une
+# image de 11 Go sans la topologie qui l emploie.
+# Une fenetre qui propose des choix sans effet ment sur ce que fait le script.
+# Une question, une reponse : on installe "Docker container and SS7
+# multioperator", ou on ferme.
+# Les drapeaux --docker / --image restent, eux, pour le depannage en console.
 if [ "$ANY_FLAG" = "0" ]; then
     if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
-        _sel="$(zenity --list --checklist --width=620 --height=320 \
+        zenity --question --width=560 \
             --title="osmo-operator - supplements" \
-            --text="Ces elements ne sont PAS dans l ISO. Cochez ce qu il faut installer :" \
-            --column="" --column="Supplement" --column="Detail" \
-            TRUE  "multi-operateur SS7" "op1 natif + op2/op3 docker + inter-STP" \
-            TRUE  "docker"              "moteur de conteneurs (apt : docker.io) - requis par le SS7" \
-            TRUE  "image operateur"     "build.sh - compilation Osmocom, tres long - requis par le SS7" \
-            --separator="|" 2>/dev/null)" || { echo "Annule."; exit 0; }
-        case "$_sel" in *"multi-operateur SS7"*) DO_MULTI=1 ;; esac
-        case "$_sel" in *"docker"*)              DO_DOCKER=1 ;; esac
-        case "$_sel" in *"image operateur"*)     DO_IMAGE=1 ;; esac
-        [ "$DO_MULTI$DO_DOCKER$DO_IMAGE" = "000" ] && { echo "Rien de coche."; exit 0; }
-    else
-        # Console, sans zenity : on prend tout. C est le comportement le moins
-        # surprenant pour un lancement scripte.
-        DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1
+            --icon-name=system-software-install \
+            --ok-label="Installer" --cancel-label="Fermer" \
+            --text="<b>Docker container and SS7 multioperator</b>
+
+Ce supplement n est PAS dans l ISO. Il installe :
+
+  - docker (apt : docker.io) - le moteur de conteneurs
+  - l image operateur, via <tt>/opt/GSM/osmo-operator/build.sh</tt>
+     compilation Osmocom : <b>tres long</b>, plusieurs dizaines de minutes
+  - la topologie SS7 : op1 natif + op2/op3 docker + inter-STP
+
+Une connexion Internet est necessaire." \
+            2>/dev/null || { echo "Annule."; exit 0; }
     fi
+    # Console sans zenity, ou fenetre validee : c est le meme supplement.
+    DO_MULTI=1
 fi
 
 # Le multi-operateur ENTRAINE ses dependances : sans moteur ni image, la
@@ -147,8 +149,9 @@ if [ "$DO_IMAGE" = "1" ]; then
     if docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} image operateur deja presente (${MULTI_IMAGE})"
     elif [ -x "$DIR/build.sh" ]; then
-        echo -e "  ${CYAN}→${NC} construction de l image via build.sh (long : compilation Osmocom)..."
-        "$DIR/build.sh" || { echo -e "  ${RED}✗ build.sh a echoue${NC}"; exit 1; }
+        echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh${NC}"
+        echo -e "      compilation Osmocom - comptez plusieurs dizaines de minutes."
+        "$DIR/build.sh" || { echo -e "  ${RED}✗ ${DIR}/build.sh a echoue${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} image operateur construite"
     else
         echo -e "  ${RED}✗ build.sh introuvable dans $DIR${NC}"; exit 1

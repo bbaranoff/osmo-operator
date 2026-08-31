@@ -3442,12 +3442,38 @@ TRUSTA
     # se remplace EN SILENCE par un rectangle gris - le lanceur devient alors
     # introuvable sur le bureau qu il est cense ouvrir.
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
+              "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
     for _ic in osmo-launch osmo-multi osmo-tutorial; do
-        [ -f "$DIR/data/$_ic.svg" ] && \
-            cp -f "$DIR/data/$_ic.svg" \
-                  "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
+        [ -f "$DIR/data/$_ic.svg" ] || continue
+        cp -f "$DIR/data/$_ic.svg" \
+              "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
+        # LA COPIE QUI COMPTE POUR LE BUREAU. Voir le bloc juste dessous.
+        cp -f "$DIR/data/$_ic.svg" \
+              "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
+        chmod 644 "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
     done
+
+    # ⚠️ LES .desktop POINTENT LE FICHIER, PAS LE NOM DE L ICONE.
+    # [2026-08-31] Les trois raccourcis s affichaient en PAGE BLANCHE generique
+    # sur le bureau, SVG valides et bien installes. Cause : "Icon=osmo-launch"
+    # n est pas un chemin, c est un nom a resoudre dans le thème, et cette
+    # resolution passe par /usr/share/icons/hicolor/icon-theme.cache. Le cache
+    # etait construit AVANT que les icones n arrivent - constate sur le banc :
+    #     strings .../icon-theme.cache | grep -c osmo   ->  0
+    #     cache 17:22:12   ·   icones 17:28:07
+    # Zero entree sur trois, et rien ne le signale : un nom d icone qui ne
+    # resout pas se remplace EN SILENCE par la page blanche. "Supplements" s en
+    # sortait seul parce que son "system-software-install" vient de Yaru, deja
+    # dans le cache depuis l installation du systeme.
+    # D ou les deux mesures, et pas une seule :
+    #   - Icon= en CHEMIN ABSOLU (plus bas) : court-circuite thème et cache,
+    #     c est ce qui garantit l icone sur le bureau ;
+    #   - le cache reconstruit quand meme, pour le menu des applications, qui
+    #     lui continue de resoudre par nom.
+    if chroot "$ROOTFS" sh -c 'command -v gtk-update-icon-cache' >/dev/null 2>&1; then
+        chroot "$ROOTFS" gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+    fi
     [ -f "$DIR/data/tutorial.html" ] && \
         cp -f "$DIR/data/tutorial.html" "$ROOTFS/usr/share/osmo-operator/tutorial.html"
 
@@ -3490,7 +3516,7 @@ Name[fr]=Lancer le banc GSM
 Comment=Demarre le banc, Wireshark, Linphone et la console web
 Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
 Exec=/opt/GSM/osmo-operator/launch.sh
-Icon=osmo-launch
+Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
 Terminal=false
 Categories=System;Network;
 Keywords=gsm;osmocom;banc;lancer;
@@ -3504,7 +3530,7 @@ Name[fr]=multi-operator
 Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 Exec=/opt/GSM/osmo-operator/start-multi.sh
-Icon=osmo-multi
+Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
 Categories=System;Network;
 Keywords=ss7;m3ua;multi;operateur;interstp;
@@ -3552,8 +3578,8 @@ ADDGUI
 Type=Application
 Name=Supplements
 Name[fr]=Supplements
-Comment=Docker, image operateur, multi-operateur SS7 - a cocher
-Comment[fr]=Docker, image operateur, multi-operateur SS7 - a cocher
+Comment=Docker container and SS7 multioperator - installe via build.sh
+Comment[fr]=Docker container and SS7 multioperator - installe via build.sh
 Exec=/usr/local/bin/osmo-addition-anim
 Icon=system-software-install
 Terminal=false
@@ -3569,7 +3595,7 @@ Name[fr]=Tutoriel - demarrage rapide
 Comment=Prise en main du banc en cinq minutes
 Comment[fr]=Prise en main du banc en cinq minutes
 Exec=/usr/local/bin/osmo-tutorial
-Icon=osmo-tutorial
+Icon=/usr/share/osmo-operator/icons/osmo-tutorial.svg
 Terminal=false
 Categories=System;Documentation;
 Keywords=tutoriel;aide;demarrage;quickstart;
