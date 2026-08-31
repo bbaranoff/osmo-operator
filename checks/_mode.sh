@@ -208,8 +208,73 @@ _osmo_globals() {
 #            netns osmo-opN (multi-operateur natif), puis N_OPERATORS de
 #            globals.conf, sinon 1. Aucun inventaire n'existe en natif : la vie
 #            d'un noeud se deduit des demons, pas d'une liste de conteneurs.
+# ══ LA TOPOLOGIE MULTI-OPERATEUR ═════════════════════════════════════════════
+# [2026-08-31] Ces checks supposaient UN SEUL mode pour tout le banc :
+# osmo_mode() rend "docker" ou "native", et osmo_exec/osmo_ops/osmo_hub_ip s en
+# servent globalement. C etait vrai tant qu une machine portait soit des
+# conteneurs, soit un operateur natif.
+#
+# Le banc multi-operateur est MIXTE : op 1 natif sur l hote, op 2 et 3 en
+# conteneurs, hub en conteneur. Le mode global tranchait donc pour tout le
+# monde, et le check partait interroger un "osmo-operator-1" qui n existe plus,
+# au point code 1.23.2 qui n est celui de personne - d ou des "MSC VTY 4254
+# inaccessible" qui ne disaient rien de l etat reel du banc, juste qu on
+# sondait la mauvaise adresse.
+#
+# /etc/osmocom/osmo-multi.conf est ecrit par addition.sh et fait autorite :
+#   MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:1.2.2:250 ..."
+#   MULTI_HUB_IP=172.20.0.10  MULTI_HUB_NAME=osmo-inter-stp
+# On le lit quand il existe ; sinon RIEN ne change, l ancienne detection reste.
+OSMO_MULTI_CONF="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+_OSMO_MULTI_LOADED=""
+
+_osmo_multi_load() {
+    [ -n "$_OSMO_MULTI_LOADED" ] && return "$_OSMO_MULTI_LOADED"
+    _OSMO_MULTI_LOADED=1                      # 1 = pas de topologie
+    [ -r "$OSMO_MULTI_CONF" ] || return 1
+    # shellcheck disable=SC1090
+    . "$OSMO_MULTI_CONF" 2>/dev/null || return 1
+    [ -n "${MULTI_OPS:-}" ] || return 1
+    _OSMO_MULTI_LOADED=0
+    return 0
+}
+
+# osmo_multi_active - rc 0 si une topologie multi-operateur est declaree.
+osmo_multi_active() { _osmo_multi_load; }
+
+# osmo_op_mode <id> - "native" ou "docker" POUR CET OPERATEUR.
+# Sans topologie, retombe sur le mode global : le comportement d avant.
+osmo_op_mode() {
+    local want="${1:-}" spec idx mode
+    if _osmo_multi_load; then
+        for spec in $MULTI_OPS; do
+            IFS=: read -r idx mode _ <<< "$spec"
+            [ "$idx" = "$want" ] && { printf '%s\n' "$mode"; return 0; }
+        done
+    fi
+    osmo_mode
+}
+
+# osmo_op_pc <id> - point code attendu, depuis la topologie ; vide sinon.
+osmo_op_pc() {
+    local want="${1:-}" spec idx mode ip pc
+    _osmo_multi_load || return 1
+    for spec in $MULTI_OPS; do
+        IFS=: read -r idx mode ip pc _ <<< "$spec"
+        [ "$idx" = "$want" ] && { printf '%s\n' "$pc"; return 0; }
+    done
+    return 1
+}
+
 osmo_ops() {
     local ids=""
+    # La topologie declaree prime sur toute detection : elle enumere les
+    # operateurs ATTENDUS, natif compris - un operateur arrete doit apparaitre
+    # dans le bilan comme manquant, pas disparaitre de la liste.
+    if _osmo_multi_load; then
+        ids="$(tr ' ' '\n' <<<"$MULTI_OPS" | cut -d: -f1 | sed -n 's/^\([0-9][0-9]*\)$/\1/p')"
+        [ -n "$ids" ] && { sort -n -u <<<"$ids" | sed '/^$/d'; return 0; }
+    fi
     if [ "$(osmo_mode)" = docker ]; then
         local names
         names="$(docker ps --format '{{.Names}}' 2>/dev/null || true)"
@@ -327,6 +392,13 @@ osmo_hub_ip() {
         printf '%s\n' "$_OSMO_HUB_IP_CACHE"; return 0
     fi
     local v=""
+    # MULTI_HUB_IP fait autorite : sur un banc mixte, deduire l adresse du hub
+    # du mode global menait a la mauvaise (la boucle locale pour un natif,
+    # alors que le hub vit dans un conteneur).
+    if _osmo_multi_load && [ -n "${MULTI_HUB_IP:-}" ]; then
+        _OSMO_HUB_IP_CACHE="$MULTI_HUB_IP"
+        printf '%s\n' "$MULTI_HUB_IP"; return 0
+    fi
     if [ "$(osmo_mode)" = docker ]; then
         if osmo_hub >/dev/null 2>&1; then
             printf '%s.10\n' "$OSMO_BACKBONE_NET"; return 0
@@ -414,7 +486,9 @@ _osmo_ns_cmd() {
 osmo_exec() {
     local op="${1:-}"; shift || return 2
     [ $# -ge 1 ] || return 2
-    if [ "$(osmo_mode)" = docker ]; then
+    # Le mode se decide operateur par operateur : sur un banc mixte, le natif
+    # s interroge en local pendant que ses voisins passent par docker exec.
+    if [ "$(osmo_op_mode "$(_osmo_id "$op")")" = docker ]; then
         local c; c="$(osmo_node "$op")"
         [ -n "$c" ] || return 2
         docker exec "$c" "$@"
@@ -429,7 +503,7 @@ osmo_exec() {
 # Interne : reserve au dialogue VTY, ou le tube est l'entree de nc/telnet.
 _osmo_exec_in() {
     local op="${1:-}"; shift || return 2
-    if [ "$(osmo_mode)" = docker ]; then
+    if [ "$(osmo_op_mode "$(_osmo_id "$op")")" = docker ]; then
         docker exec -i "$(osmo_node "$op")" "$@"
         return $?
     fi
