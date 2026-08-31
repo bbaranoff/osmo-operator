@@ -224,7 +224,17 @@ done
 # "Build : normal (--no-cache)", soit une recompilation Osmocom complete de ~40
 # minutes A CHAQUE lancement du multi-operateur - alors que l image est deja la
 # (addition.sh s en charge, et le prealable plus haut le verifie).
-CMD=(env "OPERATOR_COUNT_HINT=${N_DOCKER}" "OSMO_QUICK=1" "$DIR/start.sh" virtual)
+# OSMO_NONINTERACTIVE=1 : les boites whiptail de start.sh rendent leur valeur
+# par defaut au lieu d attendre. Sans elle, le lancement s arretait sur
+# « Nombre d'operateurs (1-36) » - un dialogue que personne ne voit quand on a
+# clique sur une icone, et le banc paraissait mort.
+# --operators : le drapeau EXPLICITE de start.sh (l.2552), et non la seule
+# variable d environnement. start.sh remettait OPERATOR_COUNT_HINT a vide des
+# sa ligne 70 - corrige depuis, mais l argument reste la voie sure : il est
+# analyse apres, il prime, et il documente l intention dans la ligne de
+# commande qu on affiche.
+CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1"
+     "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : op1 natif + ${N_DOCKER} conteneur(s) + hub ${MULTI_HUB_IP}"
 echo -e "  ${CYAN}→${NC} ${CMD[*]}"

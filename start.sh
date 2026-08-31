@@ -67,7 +67,16 @@ WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
 # qu'on a sous les yeux - une VM, un conteneur - et les numeros suivent l'ordre
 # de declaration.
 OPERATOR_DECLS=()
-OPERATOR_COUNT_HINT=""
+# [2026-08-31] On HERITE de l environnement au lieu de l ecraser.
+# Cette ligne valait OPERATOR_COUNT_HINT="" sec : un appelant qui posait
+# la variable (env OPERATOR_COUNT_HINT=2 ./start.sh ...) la voyait effacee
+# ici, bien avant sa lecture l.1421 - et start.sh reposait la question
+# « Nombre d'operateurs (1-36) » qu on croyait justement avoir evitee.
+# Silencieux de bout en bout : la variable etait bien passee, bien nommee,
+# et simplement remise a zero en chemin.
+# --operators N reste la voie explicite (l.2552) et prime, puisqu il est
+# analyse plus tard.
+OPERATOR_COUNT_HINT="${OPERATOR_COUNT_HINT:-}"
 # --host : l'adresse de CETTE machine, telle que les VM doivent la joindre.
 # Elle est deduite de l'interface par defaut ; --host la fixe quand la deduction
 # se trompe - plusieurs cartes, un wifi et un ethernet actifs en meme temps, ou
@@ -339,12 +348,39 @@ check_whiptail() {
     fi
 }
 
+# ── MODE NON INTERACTIF : LE QUESTIONNAIRE REPOND TOUT SEUL ─────────────────
+# [2026-08-31] Chaque wt_* ouvre une boite whiptail et ATTEND. C est parfait au
+# terminal, et fatal partout ailleurs : lance par une icone du bureau, par
+# start-multi.sh ou par un script, start.sh s arretait sur « Nombre
+# d'operateurs (1-36) » - un dialogue que personne ne voit et que personne ne
+# valide. Le lancement paraissait bloque ou mort, alors qu il attendait une
+# reponse.
+#
+# On repond donc AUTOMATIQUEMENT, avec la valeur que la boite proposait deja :
+#   wt_input -> son defaut ($3), celui qui est pre-rempli dans le champ ;
+#   wt_menu  -> la PREMIERE entree, celle sur laquelle le curseur se pose ;
+#   wt_yesno -> non, parce que les boites sont en --defaultno ;
+#   wt_msg   -> ecrit sur stderr au lieu d attendre un <Ok>.
+# Aucune de ces reponses n est inventee : c est exactement ce qu on obtient en
+# appuyant sur Entree.
+#
+# DEUX DECLENCHEURS. OSMO_NONINTERACTIVE=1 le force (start-multi.sh le pose).
+# Et l absence de TTY sur l entree standard le declenche seule : c est la
+# signature d un appel par icone, par cron ou par pipe - la ou aucun dialogue
+# ne peut aboutir. Au terminal, rien ne change : les questions sont posees.
+_wt_auto() { [ "${OSMO_NONINTERACTIVE:-0}" = "1" ] || [ ! -t 0 ]; }
+
 wt_input() {
+    if _wt_auto; then
+        echo "[auto] $1 : ${3}" >&2
+        printf '%s' "$3"; return 0
+    fi
     whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
         --inputbox "$2" 10 "$WT_WIDTH" "$3" 3>&1 1>&2 2>&3
 }
 
 wt_yesno() {
+    if _wt_auto; then echo "[auto] $1 : non" >&2; return 1; fi
     whiptail --backtitle "$WT_BACKTITLE" --title "$1" \
         --defaultno --yesno "$2" 11 "$WT_WIDTH" 3>&1 1>&2 2>&3
 }
@@ -352,11 +388,16 @@ wt_yesno() {
 wt_menu() {
     local title="$1" prompt="$2"; shift 2
     local nitems=$(( $# / 2 ))
+    if _wt_auto; then
+        echo "[auto] $title : ${1}" >&2
+        printf '%s' "$1"; return 0
+    fi
     whiptail --backtitle "$WT_BACKTITLE" --title "$title" \
         --menu "$prompt" 20 "$WT_WIDTH" "$nitems" "$@" 3>&1 1>&2 2>&3
 }
 
 wt_msg() {
+    if _wt_auto; then echo "$1" >&2; return 0; fi
     whiptail --backtitle "$WT_BACKTITLE" --msgbox "$1" 10 "$WT_WIDTH"
 }
 
