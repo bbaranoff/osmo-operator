@@ -153,6 +153,17 @@ HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 # pour le meme reseau sur l'hote, et un conteneur qui ne peut plus joindre le
 # hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
 # 192.168.2.0/24.
+# ── LE RANG DU PREMIER CONTENEUR ────────────────────────────────────────────
+# [2026-08-31] start.sh numerotait SES operateurs 1..N, en dur. C est juste
+# quand la machine ne porte que des conteneurs ; ca ne l est plus des qu un
+# operateur NATIF tourne a cote, car il occupe deja un rang - et deux
+# equipements au meme point code, ce n est pas un conflit de nom, c est du
+# routage faux (checks/wan_ss7_check.sh).
+# OP_ID_BASE=2 fait donc commencer les conteneurs a l operateur 2, laissant le 1
+# au natif. TOUT en decoule sans autre reglage, puisque tout derive de l index :
+# nom du conteneur (osmo-operator-N), backbone (172.20.0.<10+N>), point code
+# (1.N.2), RCTX, segment prive (192.168.<N+1>.0/24) et ports publies.
+OP_ID_BASE="${OP_ID_BASE:-1}"
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 # ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
 # 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
@@ -667,7 +678,7 @@ check_image() {
 generate_pjsip_interop_trunks() {
     local op_id=$1
     local n_operators=$2
-    for remote_op in $(seq 1 "$n_operators"); do
+    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         local remote_ip
         remote_ip=$(op_backbone_ip "$remote_op")
@@ -715,7 +726,7 @@ EOF
     # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>.
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    for remote_op in $(seq 1 "$n_operators"); do
+    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
 exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
@@ -749,11 +760,11 @@ _generate_sms_routing_conf_fallback() {
     local i
     local op_id=$1 n_operators=$2
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"
     done
     printf '\n[routes]\n'
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> - PAS de concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
@@ -1255,7 +1266,7 @@ wan_mesh_apply() {
     # (build-iso.sh, set_stp_ip.sh, les diagnostics) lui connaissent.
     local _k
     if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
-        for _k in $(seq 1 "$n_operators"); do
+        for _k in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
             WAN_NOPS[$(( ${WAN_NODE_ID:-1} + _k - 1 ))]=1
         done
     else
@@ -1429,7 +1440,11 @@ start_bridge_mode() {
     if [ "${QEMU_POC:-0}" = "1" ]; then
         # ── PoC QEMU ──────────────────────────────────────────────────────────
         n_operators=1
-        OP_MCC[1]="001"; OP_MNC[1]="01"; OP_NAME[1]="OsmoQEMU"; OP_MS[1]=2
+        # Meme base que les boucles : sans ca, un OP_ID_BASE=2 ferait chercher
+        # OP_MCC[2] alors que tout est pose en [1] - tableaux vides et
+        # operateur sans MCC, sans que rien ne le signale.
+        _b="${OP_ID_BASE:-1}"
+        OP_MCC[$_b]="001"; OP_MNC[$_b]="01"; OP_NAME[$_b]="OsmoQEMU"; OP_MS[$_b]=2
         # PoC a un seul operateur : le PLMN de reference, celui des IMSI du
         # depot. On ne le derive pas du noeud, il n'y a pas de WAN ici.
         WAN_ENABLED="false"
@@ -1514,7 +1529,7 @@ start_bridge_mode() {
             common_ms=$(wt_input "MS" "MS par operateur (1-64) :" "8") || exit 1
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
-            for i in $(seq 1 "$n_operators"); do
+            for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
                 # Un PLMN par operateur, sur les DEUX composantes. Le MCC
                 # etait fige a 001 pour tout le monde : seul le MNC separait
                 # les reseaux, et la moindre valeur ecrite en dur ailleurs
@@ -1529,7 +1544,7 @@ start_bridge_mode() {
                 common_ms=$(wt_input "MS" "MS par operateur (1-64) :" "8") || exit 1
                 common_ms=${common_ms:-8}
                 if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
-                for i in $(seq 1 "$n_operators"); do
+                for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
                     local mcc mnc name dmcc dmnc dname
                     dmcc=$(op_mcc "$i"); dmnc=$(op_mnc "$i"); dname="$(op_default_name "$i")"
                     mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
@@ -1538,7 +1553,7 @@ start_bridge_mode() {
                     OP_MS[$i]=$common_ms
                 done
             else
-                for i in $(seq 1 "$n_operators"); do
+                for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
                     local mcc mnc name n_ms dmcc dmnc dname
                     dmcc=$(op_mcc "$i"); dmnc=$(op_mnc "$i"); dname="$(op_default_name "$i")"
                     mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
@@ -1643,7 +1658,7 @@ start_bridge_mode() {
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate_all > /dev/null 2>&1; then
         local _ms_counts=()
-        for i in $(seq 1 "$n_operators"); do _ms_counts+=("${OP_MS[$i]}"); done
+        for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do _ms_counts+=("${OP_MS[$i]}"); done
         sms_routing_generate_all "$n_operators" "$SMS_ROUTING_DIR" "${_ms_counts[@]}"
         sms_routing_summary "$n_operators" "${_ms_counts[@]}"
     fi
@@ -1688,7 +1703,7 @@ start_bridge_mode() {
         > "$ANNUAIRE_SS7"
     local _pick=0
     printf 'imsi;msisdn;operateur;pays;mcc;mnc;nom;adresse;ki\n' > "$ANNUAIRE_FILE"
-    for op_id in $(seq 1 "$n_operators"); do
+    for op_id in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         local mcc="${OP_MCC[$op_id]}" mnc="${OP_MNC[$op_id]}" n_ms="${OP_MS[$op_id]}"
         local _pays; _pays="$(op_country "$op_id")"
         for ms_idx in $(seq 1 "$n_ms"); do
@@ -1742,7 +1757,7 @@ start_bridge_mode() {
     fi
 
     # ── Demarrage sequentiel des operateurs ──────────────────────────────────
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         local container_name net_name subnet gateway container_ip inter_local_ip rctx_inter
         local n_groups last_group_ip
 
@@ -2155,7 +2170,7 @@ start_bridge_mode() {
 
     # ── Attente relays SMS ────────────────────────────────────────────────────
     if [ "${BRIDGE_NO_PROCESS:-0}" != "1" ] && declare -f sms_routing_wait_ready > /dev/null 2>&1; then
-        for i in $(seq 1 "$n_operators"); do
+        for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
         done
     fi
@@ -2172,7 +2187,7 @@ start_bridge_mode() {
     echo -e "${GREEN}${BOLD}Stack multi-operateurs demarree !${NC}"
     echo ""
     echo -e "  Inter-STP @ ${CYAN}${INTER_STP_IP}:2908${NC}  PC=0.0.0"
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         local rctx bb_ip n_groups
         rctx=$(op_rctx_inter "$i"); bb_ip=$(op_backbone_ip "$i")
         n_groups=$(( (${OP_MS[$i]} + 7) / 8 ))
@@ -2181,7 +2196,7 @@ start_bridge_mode() {
 
     echo ""
     echo -e "  ${BOLD}Linphone (depuis l'hote) :${NC}"
-    for i in $(seq 1 "$n_operators"); do
+    for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         local lsip bb_ip
         lsip=$(linphone_sip_port "$i"); bb_ip=$(op_backbone_ip "$i")
         echo -e "    Op${i}: ${CYAN}${HOST_IP}:${lsip}${NC}  (ou direct ${bb_ip}:5060)"
@@ -2353,6 +2368,19 @@ start_bridge_mode() {
         _hcmd() {                      # $1=indice du conteneur -> imprime la commande
             local _na; _na="$(_node_args "$1")"
             local _cmd="cd /opt/GSM/osmo-operator && NO_MENU=1"
+            # [2026-08-31] CALYPSO_NO_ATTACH SUIT LE HANDOFF.
+            # L attache ne venait ni d ici ni de start-direct.sh, mais du
+            # qosmo-grgsm/run.sh qu il appelle en bout de chaine :
+            #     NO_ATTACH="${CALYPSO_NO_ATTACH:-0}"      (run.sh l.36)
+            #     [ $TTY -eq 1 ] && [ "$NO_ATTACH" != 1 ] && exec tmux attach
+            # Le defaut est donc D ATTACHER, et `docker exec -t` fournit
+            # justement un TTY. Resultat : meme avec deux conteneurs - donc dans
+            # la branche NO-ATTACH de ce script - la fenetre finissait dans le
+            # tmux du conteneur, start-multi.sh ne reprenait jamais la main, et
+            # ni les checks ni le bilan ne s executaient.
+            # La variable posee plus haut sur /etc/osmocom/run.sh ne suffisait
+            # pas : elle ne traversait pas ce handoff-ci.
+            [ "${OSMO_NO_ATTACH:-0}" = "1" ] && _cmd="$_cmd CALYPSO_NO_ATTACH=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
             _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
@@ -2361,8 +2389,19 @@ start_bridge_mode() {
         }
 
         local _c _ct _cmd
-        if [ "$n_operators" -eq 1 ]; then
+        if [ "$n_operators" -eq 1 ] && [ "${OSMO_NO_ATTACH:-0}" != "1" ]; then
             # ── UN SEUL CONTENEUR : ON LANCE PUIS ON S'ATTACHE ──────────────
+            # [2026-08-31] ...SAUF si l appelant a demande le contraire.
+            # A un seul conteneur, ce bloc s attachait TOUJOURS a la session
+            # tmux du conteneur et n en ressortait plus. C est le bon geste
+            # quand on tape la commande soi-meme ; c est le mauvais quand le
+            # lancement vient d une icone ou d un script : le terminal reste
+            # bloque dans le tmux, le script appelant n a jamais la main, et
+            # rien de ce qui devait suivre - les checks, le bilan - ne
+            # s execute. Constate depuis start-multi.sh, dont la fenetre
+            # finissait sur les panneaux de osmo-operator-1.
+            # OSMO_NO_ATTACH=1 saute l attache ; la pile reste debout dans sa
+            # session calypso, on s y rattache a la main quand on veut.
             # start.sh lance lui-meme la pile radio, dans le terminal courant :
             # les [ OK ] de start-direct.sh puis de run.sh defilent sous les
             # yeux, et une fois le coeur monte on S'ATTACHE a la session tmux
@@ -2386,7 +2425,7 @@ start_bridge_mode() {
             # la demande, une fois tout monte.
             echo -e "  ${BOLD}${n_operators} conteneurs : lancement en no-attach - les ${GREEN}[ OK ]${NC}${BOLD} defilent ci-dessous.${NC}"
             echo ""
-            for _c in $(seq 1 "$n_operators"); do
+            for _c in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
                 _ct="$(op_container "$_c")"; _cmd="$(_hcmd "$_c")"
                 echo -e "  ${GREEN}────── ${_ct} ──────────────────────────────────${NC}"
                 docker exec -t "$_ct" bash -c "$_cmd"

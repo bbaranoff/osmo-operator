@@ -166,30 +166,17 @@ fi
 #     RCTX = noeud*1000 + op*100 + 50
 # Sur une seule machine le noeud vaut 1, donc PC = 1.<op>.<role>.
 #
-#   op 1  DOCKER  - PC 1.1.2, backbone 172.20.0.11
+#   op 1  NATIF   - PC 1.1.2, celui de start-direct.sh, laisse tel quel
 #   op 2  DOCKER  - PC 1.2.2, backbone 172.20.0.12
-#   op 3  NATIF   - PC 1.3.2, lance par  start-direct.sh --op 3
+#   op 3  DOCKER  - PC 1.3.2, backbone 172.20.0.13
 #
-# ⚠️ L ORDRE N EST PAS ARBITRAIRE, ET IL A ETE INVERSE LE 31/08.
-# La premiere version mettait le natif en op 1 et les conteneurs en 2 et 3.
-# Or start.sh numerote SES conteneurs 1..N, sans decalage possible : avec
-# --operators 2 il cree osmo-operator-1 et -2, donc un conteneur de point code
-# 1.1.2 - exactement celui du natif. Deux equipements sur la meme adresse SS7,
-# ce que ce depot decrit lui-meme comme "pas un conflit de nom, du routage
-# faux" (checks/wan_ss7_check.sh). Mesure : le conteneur osmo-operator-1
-# demarrait bien, et le bilan cherchait des osmo-operator-2/-3 qui n existent
-# jamais.
-# On aligne donc la topologie sur start.sh au lieu de le contraindre : les
-# conteneurs gardent 1..N, et le natif prend le rang suivant grace a son propre
-# drapeau, start-direct.sh --op N (aide l.113 : "operateur porte par ce noeud").
-#   hub   DOCKER  - inter-STP, 172.20.0.10, PC 0.0.0, M3UA/SCTP 2908
-#
-# NOM DU HUB : "osmo-inter-stp", avec le tiret entre inter et stp. C est la
-# valeur de INTER_STP_CONTAINER (start.sh l.78), donc le nom que docker porte
-# reellement. Ecrire "osmo-interstp" faisait rendre "arrete" par start-multi.sh
-# sur un hub parfaitement vivant - une sonde qui cherche un nom qui n existe pas
-# ne trouve jamais rien, et ne le dit pas autrement que par un faux negatif.
-#
+# ⚠️ LES CONTENEURS COMMENCENT A 2, ET CELA SE PILOTE.
+# start.sh numerotait ses conteneurs 1..N en dur : avec --operators 2 il creait
+# osmo-operator-1 en point code 1.1.2, celui du natif. Deux equipements a la
+# meme adresse SS7 - "pas un conflit de nom, du routage faux"
+# (checks/wan_ss7_check.sh). OP_ID_BASE=2 (start.sh) fait demarrer les
+# conteneurs au rang 2 et laisse le 1 au natif ; nom, backbone, point code,
+# RCTX, segment prive et ports publies en decoulent tous.
 # Le natif joint le hub par la passerelle du bridge : l hote atteint
 # 172.20.0.10 directement, sans NAT ni route a ajouter.
 if [ "$DO_MULTI" = "1" ]; then
@@ -207,10 +194,10 @@ MULTI_NET_SUBNET=172.20.0.0/24
 MULTI_NET_GW=172.20.0.1
 MULTI_IMAGE=osmocom-run
 # operateurs : "index:mode:backbone_ip:point_code:rctx"
-MULTI_OPS="1:docker:172.20.0.11:1.1.2:150 2:docker:172.20.0.12:1.2.2:250 3:native::1.3.2:350"
+MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:1.2.2:250 3:docker:172.20.0.13:1.3.2:350"
 CONF
     echo -e "  ${GREEN}✓${NC} topologie SS7 ecrite : ${CYAN}${MULTI_CONF}${NC}"
-    echo -e "      op1/op2 ${BOLD}docker${NC} (1.1.2 / 1.2.2) + op3 ${BOLD}natif${NC} (1.3.2) → hub 172.20.0.10"
+    echo -e "      op1 ${BOLD}natif${NC} (1.1.2) + op2/op3 ${BOLD}docker${NC} (1.2.2 / 1.3.2) → hub 172.20.0.10"
 fi
 
 echo

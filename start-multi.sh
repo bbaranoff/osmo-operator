@@ -271,7 +271,11 @@ done
 # OSMO_SKIP_CHECKS=1 : start.sh joue desormais ss7_check et operator_summary en
 # fin de lancement. Ici on enchaine verifier(), qui rejoue ss7_check avec en
 # plus la lecture de la topologie - inutile de le passer deux fois de suite.
+# OP_ID_BASE=2 : les conteneurs prennent les rangs 2 et 3, le 1 reste au natif.
+# OSMO_NO_ATTACH=1 : ne pas finir bloque dans le tmux d un conteneur - le script
+# doit rendre la main pour enchainer verifier().
 CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
+     "OP_ID_BASE=2" "OSMO_NO_ATTACH=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
@@ -369,6 +373,72 @@ aligner_natif() {
     done
 }
 aligner_natif
+
+# ── SI LE NATIF EST A TERRE, ON LANCE SON RACCOURCI ─────────────────────────
+# Le natif n est PAS lance par ce script : il a le sien (le telephone rouge du
+# bureau -> launch.sh -> start-direct.sh). Mais monter les conteneurs sans lui,
+# c est monter un banc a trois operateurs dont le premier manque : le hub
+# n aura qu un ASP sur les trois attendus, et le bilan de fin sortira en
+# DEGRADE pour une raison qui n a rien a voir avec ce qu on vient de lancer.
+#
+# On declenche donc son raccourci, et AVANT les conteneurs : l ordre compte,
+# start-direct.sh a besoin de poser ses configs et son coeur pendant que le
+# plan d adressage est encore libre.
+#
+# Pourquoi le .desktop et pas launch.sh en direct : c est le meme chemin que le
+# double-clic, donc le meme terminal, la meme elevation pkexec et le meme
+# comportement. Passer a cote reviendrait a tester une autre facon de demarrer
+# que celle des utilisateurs.
+NATIF_DESKTOP="${NATIF_DESKTOP:-/root/Desktop/osmo-launch.desktop}"
+
+lancer_natif_si_absent() {
+    pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1 && return 0
+
+    echo -e "  ${YELLOW}!${NC} operateur natif a l arret - lancement de son raccourci"
+    local d="$NATIF_DESKTOP"
+    # Repli sur les autres emplacements : Bureau (locale fr) puis le menu.
+    for _c in "$d" "${d%/Desktop/*}/Bureau/${d##*/}" "/usr/share/applications/${d##*/}"; do
+        [ -f "$_c" ] && { d="$_c"; break; }
+    done
+    if [ ! -f "$d" ]; then
+        echo -e "  ${RED}✗${NC} raccourci introuvable ($NATIF_DESKTOP)"
+        echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC}"
+        return 1
+    fi
+
+    # gio launch est LA facon d executer un .desktop : il lit Exec, applique
+    # Terminal= et passe par le bus de session. gtk-launch en repli (il veut un
+    # ID d application, pas un chemin - d ou le basename sans .desktop).
+    # En dernier recours on extrait Exec a la main : mieux vaut demarrer le banc
+    # que d echouer sur l outillage du bureau.
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
+    if command -v gio >/dev/null 2>&1 && gio launch "$d" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} raccourci lance : ${CYAN}${d}${NC}"
+    elif command -v gtk-launch >/dev/null 2>&1 \
+         && gtk-launch "$(basename "$d" .desktop)" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} raccourci lance (gtk-launch) : ${CYAN}${d}${NC}"
+    else
+        local _exec
+        _exec="$(sed -n 's/^Exec=//p' "$d" | head -1 | sed 's/ *%[fFuUdDnNickvm]//g')"
+        [ -n "$_exec" ] || { echo -e "  ${RED}✗${NC} pas de ligne Exec dans $d"; return 1; }
+        echo -e "  ${YELLOW}○${NC} gio/gtk-launch indisponibles - execution directe : ${CYAN}${_exec}${NC}"
+        setsid bash -c "$_exec" </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+    fi
+
+    # On attend qu il soit reellement debout : enchainer les conteneurs pendant
+    # que le natif se monte, c est se disputer les memes ressources.
+    echo -ne "  ${CYAN}→${NC} attente du natif"
+    local i
+    for i in $(seq 1 120); do
+        pgrep -f 'osmo-bsc|asterisk' >/dev/null 2>&1 && { echo -e " ${GREEN}✓${NC}"; return 0; }
+        sleep 1; echo -n "."
+    done
+    echo -e " ${YELLOW}toujours absent apres 120 s - on continue quand meme${NC}"
+    return 0
+}
+lancer_natif_si_absent
 
 
 

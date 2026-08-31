@@ -219,7 +219,27 @@ disown 2>/dev/null || true
 # ── 4. LE BANC, AU PREMIER PLAN ─────────────────────────────────────────────
 echo
 cd "$DIR" || exit 1
-"$TARGET" "$@"
+
+# ── AUCUNE SAISIE ───────────────────────────────────────────────────────────
+# [2026-08-31] start-direct.sh ouvre menu_interactif() : Profil, Noeud SS7,
+# Operateur, Inter-STP - quatre questions whiptail avant que quoi que ce soit
+# ne demarre. Il les saute quand PERSONNE ne peut repondre, et il teste ca sur
+# la presence d un terminal ([ -t 0 ]) - or launch.sh vient justement d en
+# ouvrir un pour afficher la sortie. La garde ne se declenchait donc jamais
+# ici, et un double-clic sur le telephone rouge s arretait sur un formulaire
+# au lieu de lancer le banc.
+#
+# NO_MENU=1 est le drapeau prevu pour ca (start-direct.sh l.460 et l.1263) :
+# les menus rendent la main sans rien demander et les valeurs par defaut
+# s appliquent - noeud 1, operateur 1, hub local. C est exactement ce que
+# start.sh pose deja devant ses conteneurs.
+#
+# OSMO_LAUNCH_MENU=1 ./launch.sh redonne les questions quand on les veut.
+if [ "${OSMO_LAUNCH_MENU:-0}" = "1" ]; then
+    "$TARGET" "$@"
+else
+    NO_MENU=1 "$TARGET" "$@"
+fi
 rc=$?
 
 echo
