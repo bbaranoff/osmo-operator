@@ -731,6 +731,32 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN}
 
 EOF
     done
+
+    # ── LES SOFTPHONES AUSSI, ET SANS PREFIXE ───────────────────────────────
+    # [2026-08-31] Depuis [internal], un Linphone ne pouvait joindre un autre
+    # operateur qu'en composant 9 + numero (_9. du gabarit - dont l'exemple
+    # « 920001 pour joindre 20001 sur Op2 » date d'ailleurs du plan a CINQ
+    # chiffres, abandonne). Compose tel quel, 100201 tombait sur le fourre-tout
+    # _X. de [internal] et partait au MSC LOCAL, qui le rendait en
+    #     rx MNCC_SETUP_REQ for unknown subscriber number '100201'
+    # avant de le ressortir par MNCC vers Asterisk. Le detour aboutissait, mais
+    # il consommait une transaction MNCC pour rien et faisait dependre un appel
+    # SIP->SIP du bon vouloir du MSC.
+    # On declare donc la route explicitement. _<pfx><op>XX est PLUS SPECIFIQUE
+    # que _X. : Asterisk la choisit d'office, sans qu'il faille toucher au
+    # fourre-tout du gabarit. Gosub(sub-record) comme pour _9., sinon ces
+    # appels-la seraient les seuls a ne pas etre enregistres.
+    printf '[internal]\n\n'
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+        [ "$remote_op" -eq "$op_id" ] && continue
+        cat <<EOF
+exten => _${_pfx}${remote_op}XX,1,NoOp(=== SIP -> INTER-OP Op${remote_op}: \${EXTEN} - CallerID: \${CALLERID(all)} ===)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
+ same => n,Goto(interop_out,\${EXTEN},1)
+
+EOF
+    done
     # PAS de fourre-tout _X. ici : le gabarit configs/extensions.conf en declare
     # deja un dans ce meme contexte. Deux extensions identiques dans un contexte
     # font refuser la seconde, avec six avertissements a chaque chargement :

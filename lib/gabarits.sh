@@ -205,6 +205,32 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN}
 
 EOF
     done
+
+    # ── LES SOFTPHONES AUSSI, ET SANS PREFIXE ───────────────────────────────
+    # [2026-08-31] Depuis [internal], un Linphone ne pouvait joindre un autre
+    # operateur qu'en composant 9 + numero (_9. du gabarit - dont l'exemple
+    # « 920001 pour joindre 20001 sur Op2 » date d'ailleurs du plan a CINQ
+    # chiffres, abandonne). Compose tel quel, 100201 tombait sur le fourre-tout
+    # _X. de [internal] et partait au MSC LOCAL, qui le rendait en
+    #     rx MNCC_SETUP_REQ for unknown subscriber number '100201'
+    # avant de le ressortir par MNCC vers Asterisk. Le detour aboutissait, mais
+    # il consommait une transaction MNCC pour rien et faisait dependre un appel
+    # SIP->SIP du bon vouloir du MSC.
+    # On declare donc la route explicitement. _<pfx><op>XX est PLUS SPECIFIQUE
+    # que _X. : Asterisk la choisit d'office, sans qu'il faille toucher au
+    # fourre-tout du gabarit. Gosub(sub-record) comme pour _9., sinon ces
+    # appels-la seraient les seuls a ne pas etre enregistres.
+    printf '[internal]\n\n'
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+        [ "$remote_op" -eq "$op_id" ] && continue
+        cat <<EOF
+exten => _${_pfx}${remote_op}XX,1,NoOp(=== SIP -> INTER-OP Op${remote_op}: \${EXTEN} - CallerID: \${CALLERID(all)} ===)
+ same => n,Gosub(sub-record,s,1(\${EXTEN}))
+ same => n,Goto(interop_out,\${EXTEN},1)
+
+EOF
+    done
     # PAS de fourre-tout _X. ici : le gabarit configs/extensions.conf en declare
     # deja un dans ce meme contexte. Deux extensions identiques dans un contexte
     # font refuser la seconde, avec six avertissements a chaque chargement :
@@ -386,6 +412,54 @@ _gab_fixups_natifs() {
                 done
                 printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
             } > "$f.tmp" && mv -f "$f.tmp" "$f"
+        fi
+    fi
+
+    # 5. LE CHEMIN VOIX INTER-OPERATEUR : trunks SIP + [interop_out].
+    #    [2026-08-31] Meme trou que le point 4, sur la VOIX. Releve sur l hote :
+    #        [interop_out] du natif :  _X.  ->  Congestion()   (et rien d autre)
+    #        pjsip.conf              :  aucun interop_trunk_opN
+    #    Un appel 100101 -> 100201 sortait donc du MSC ...
+    #        rx MNCC_SETUP_REQ for unknown subscriber number '100201'
+    #    ... passait a osmo-sip-connector, tombait sur le fourre-tout, et
+    #    revenait en
+    #        INVITE got status(503), releasing leg
+    #    Les SMS passaient (point 4), pas les appels : deux chemins, deux tables,
+    #    une seule des deux corrigee.
+    #
+    #    On NE REECRIT PAS la logique : generate_extensions_interop_out et
+    #    generate_pjsip_interop_trunks (plus haut dans ce fichier) savent deja
+    #    la produire. Elles etaient seulement appelees avec le nombre
+    #    d operateurs du CONTENEUR courant - le natif se croyait donc seul.
+    #    On les rejoue ici avec la topologie reelle, comme au point 4.
+    #    OP_ID_BASE=1 : vu du natif, tous les distants sont des conteneurs et
+    #    portent bien une adresse de dorsale ; c est l inverse du cas conteneur,
+    #    ou le natif est celui qui n en a pas.
+    local mc5="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+    if [ -r "$mc5" ]; then
+        local _ops5 _self5 _n5=0 _e5 _i5
+        _ops5="$(sed -n 's/^MULTI_OPS=//p' "$mc5" | tr -d '"' | tail -1)"
+        _self5="$(sed -n 's/^operator_id[[:space:]]*=[[:space:]]*//p' "$src/osmocom/sms-routing.conf" 2>/dev/null | head -1)"
+        case "$_self5" in [1-9]*) ;; *) _self5=1 ;; esac
+        for _e5 in $_ops5; do
+            IFS=: read -r _i5 _ <<< "$_e5"
+            case "$_i5" in [1-9]*) [ "$_i5" -gt "$_n5" ] && _n5="$_i5" ;; esac
+        done
+        # Marqueur d idempotence : rejouer install_configs_native ne doit pas
+        # empiler les memes extensions (Asterisk refuserait les doublons avec
+        # « already in use » et noierait le journal).
+        local _mk5='; --- interop natif : ajoute par _gab_fixups_natifs ---'
+        if [ "$_n5" -gt 1 ]; then
+            f="$src/asterisk/extensions.conf"
+            if [ -f "$f" ] && ! grep -qF "$_mk5" "$f"; then
+                { printf '\n%s\n' "$_mk5"
+                  OP_ID_BASE=1 generate_extensions_interop_out "$_self5" "$_n5"; } >> "$f"
+            fi
+            f="$src/asterisk/pjsip.conf"
+            if [ -f "$f" ] && ! grep -qF "$_mk5" "$f"; then
+                { printf '\n%s\n' "$_mk5"
+                  OP_ID_BASE=1 generate_pjsip_interop_trunks "$_self5" "$_n5"; } >> "$f"
+            fi
         fi
     fi
 }
