@@ -82,7 +82,8 @@ mod_fake_trx_start() {
 
     mod_say "commande : ${cmd[*]}"
     mod_say "journal  : $log"
-    "${cmd[@]}" >>"$log" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "${cmd[@]}" >>"$log" 2>&1 </dev/null &
     radio_save_pid fake-trx $!
     mod_ok
 }

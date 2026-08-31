@@ -2396,19 +2396,36 @@ start_bridge_mode() {
             echo ""
             docker exec -ti "$_ct" tmux attach -t calypso
         else
-            # ── PLUSIEURS CONTENEURS : NO-ATTACH, MAIS LES [ OK ] DEFILENT ───
+            # ── PLUSIEURS CONTENEURS : NO-ATTACH, ET DETACHE ────────────────
             # On ne peut pas s'attacher a N sessions tmux dans un seul terminal.
-            # On lance donc chaque start-direct.sh a LA SUITE, sans s'attacher a
-            # aucun tmux (docker exec -t, pas -ti) : sa sortie [ OK ] defile
-            # dans le shell courant, conteneur apres conteneur. Chaque pile
-            # reste debout dans sa propre session "calypso" ; on s'y attache a
-            # la demande, une fois tout monte.
-            echo -e "  ${BOLD}${n_operators} conteneurs : lancement en no-attach - les ${GREEN}[ OK ]${NC}${BOLD} defilent ci-dessous.${NC}"
+            #
+            # [2026-08-31] `docker exec -t` REMPLACE PAR `-d`. Le `-t` allouait
+            # un pty et le rendait au retour du script ; Docker le fermait, et
+            # le noyau envoyait SIGHUP a tout le groupe de premier plan - donc a
+            # TOUS les demons que run_modules lance en `cmd &` (un shell non
+            # interactif n'a pas de controle de tache : ils restent dans le
+            # groupe du script, dont ce pty est le terminal de controle). QEMU
+            # sortait sur "terminating on signal 1", fake_trx et tcpdump avec
+            # lui, et les deux `mobile` sur "Layer2 socket failed" - une
+            # quinzaine de secondes apres un demarrage annonce reussi, sans que
+            # rien ne relie la panne au lanceur. Les modules posent desormais
+            # `setsid` (voir run_modules/_lib/radio.sh, bloc SIGHUP) ; `-d`
+            # supprime la cause en amont : pas de pty, donc pas de hangup.
+            #
+            # CE QU'ON PERD : les [ OK ] ne defilent plus ici. Ils sont donc
+            # rediriges, DANS le conteneur, vers /var/log/osmocom/start-direct.log
+            # - chemin deja monte sur l'hote (/tmp/osmocom-logs/opN), rien n'est
+            # perdu. Meme convention que le lancement de run.sh plus haut.
+            # CE QU'ON GARDE : le sequencement. `wait_bb_vty` ne rend la main
+            # qu'une fois la pile du conteneur en ligne, donc un conteneur a la
+            # fois, et "Toutes les piles tournent" reste vrai a l'impression.
+            echo -e "  ${BOLD}${n_operators} conteneurs : lancement detache - journal ${CYAN}/var/log/osmocom/start-direct.log${NC}${BOLD} dans chaque conteneur.${NC}"
             echo ""
             for _c in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
                 _ct="$(op_container "$_c")"; _cmd="$(_hcmd "$_c")"
                 echo -e "  ${GREEN}────── ${_ct} ──────────────────────────────────${NC}"
-                docker exec -t "$_ct" bash -c "$_cmd"
+                docker exec -d "$_ct" bash -c "mkdir -p /var/log/osmocom && { ${_cmd}; } > /var/log/osmocom/start-direct.log 2>&1"
+                wait_bb_vty "$_ct" || echo -e "    ${RED}pile non prete - voir /var/log/osmocom/start-direct.log${NC}"
                 echo ""
             done
             echo -e "  ${BOLD}Toutes les piles tournent.${NC} Pour en suivre une :"

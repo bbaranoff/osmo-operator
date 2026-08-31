@@ -92,14 +92,18 @@ mod_qemu_start() {
     # (l1ctl_sock.c) se rabat sur son defaut /tmp/osmocom_l2, unlink() le socket
     # d'osmocon et ejecte le mobile en place - voir le bloc QEMU_DUMMY_SOCK de
     # _lib/radio.sh pour la chaine complete jusqu'a "Layer2 socket failed".
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
     L1CTL_SOCK="$QEMU_DUMMY_SOCK" \
-    "$QEMU_BIN" -M "$mach" -cpu arm946 \
+    setsid "$QEMU_BIN" -M "$mach" -cpu arm946 \
         -gdb "tcp::${QEMU_GDB_PORT}" -serial pty -serial pty \
         -monitor "unix:${RUN_DIR}/qemu-monitor.sock,server,nowait" \
-        -kernel "$FIRMWARE_ELF" >>"$qlog" 2>&1 &
+        -kernel "$FIRMWARE_ELF" >>"$qlog" 2>&1 </dev/null &
     local qpid=$!
     printf '%s\n' "$qpid" > "${RUN_DIR}/qemu.pid"
-    _qemu_log_guard "$qlog" "$QEMU_LOG_MAX" "$qpid" &
+    # Le garde-fou est une fonction shell : `setsid` ne s'y applique pas. Il
+    # ignore donc HUP explicitement, sinon il mourrait avec le pty et le
+    # plafond de journal disparaissait avec lui.
+    ( trap '' HUP; _qemu_log_guard "$qlog" "$QEMU_LOG_MAX" "$qpid" ) &
     mod_ok
 }
 

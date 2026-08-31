@@ -90,7 +90,8 @@ mod_osmo_trx_start() {
     mod_say "commande : $OSMO_TRX_BIN -C $OSMO_TRX_CFG"
     case "$OSMO_TRX_BIN" in *ipc*) mod_say "socket maitre : $IPC_MSOCK_PATH" ;; esac
     mod_say "journal  : $log"
-    "$OSMO_TRX_BIN" -C "$OSMO_TRX_CFG" >>"$log" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$OSMO_TRX_BIN" -C "$OSMO_TRX_CFG" >>"$log" 2>&1 </dev/null &
     radio_save_pid osmo-trx $!
     mod_ok
 }

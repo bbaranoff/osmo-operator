@@ -63,7 +63,8 @@ mod_ipc_device_start() {
     mod_say "relay=$CALYPSO_IPC_RELAY iq=$CALYPSO_TRX_IQ_HOST rx=$CALYPSO_TRX_IQ_RX_PORT tx=$CALYPSO_TRX_IQ_TX_PORT"
     mod_say "socket maitre attendu : $IPC_MSOCK_PATH"
 
-    "$CALYPSO_IPC_DEVICE" -u "$IPC_SOCK_DIR" -n 0 >>"$IPC_DEVICE_LOG" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$CALYPSO_IPC_DEVICE" -u "$IPC_SOCK_DIR" -n 0 >>"$IPC_DEVICE_LOG" 2>&1 </dev/null &
     printf '%s\n' "$!" > "${RUN_DIR:-/tmp/calypso}/ipc-device.pid"
     mod_ok
 }

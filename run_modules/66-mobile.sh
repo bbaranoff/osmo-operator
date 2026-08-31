@@ -121,7 +121,8 @@ mod_mobile_start() {
 
     mod_say "commande : $MOBILE_BIN -c $MOBILE_CFG -d $MOBILE_DEBUG"
     mod_say "journal  : $log"
-    "$MOBILE_BIN" -c "$MOBILE_CFG" -d "$MOBILE_DEBUG" >>"$log" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$MOBILE_BIN" -c "$MOBILE_CFG" -d "$MOBILE_DEBUG" >>"$log" 2>&1 </dev/null &
     radio_save_pid mobile $!
     mod_ok
 }

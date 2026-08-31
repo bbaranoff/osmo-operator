@@ -102,7 +102,8 @@ mod_osmo_bts_trx_start() {
     mod_say "commande : $BTS_TRX_BIN -c $BTS_TRX_CFG"
     mod_say "transceiver vise : $TRX_BASE_PORT"
     mod_say "journal  : $log"
-    "$BTS_TRX_BIN" -c "$BTS_TRX_CFG" >>"$log" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$BTS_TRX_BIN" -c "$BTS_TRX_CFG" >>"$log" 2>&1 </dev/null &
     radio_save_pid osmo-bts-trx $!
     mod_ok
 }

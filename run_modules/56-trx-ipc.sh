@@ -103,7 +103,8 @@ mod_trx_ipc_status() { have_proc "osmo-trx-ipc"; }
 mod_trx_ipc_start() {
     mkdir -p "${RUN_DIR:-/tmp/calypso}" "$(dirname "$OSMO_TRX_IPC_LOG")" 2>/dev/null || true
     : > "$OSMO_TRX_IPC_LOG" 2>/dev/null || true
-    "$OSMO_TRX_IPC" -C "$OSMO_TRX_IPC_CFG" >>"$OSMO_TRX_IPC_LOG" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$OSMO_TRX_IPC" -C "$OSMO_TRX_IPC_CFG" >>"$OSMO_TRX_IPC_LOG" 2>&1 </dev/null &
     printf '%s\n' "$!" > "${RUN_DIR:-/tmp/calypso}/trx-ipc.pid"
     mod_ok
 }

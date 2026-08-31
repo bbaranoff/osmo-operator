@@ -22,6 +22,39 @@
 [ -n "${_RADIO_LIB_LOADED:-}" ] && return 0
 _RADIO_LIB_LOADED=1
 
+# --- SIGHUP : POURQUOI CHAQUE DEMON EST LANCE SOUS `setsid` ------------------
+# [2026-08-31] Toute la pile radio mourait ~15 s apres son demarrage, sans un
+# mot : `qemu-system-arm: terminating on signal 1` dans qemu.log, fake_trx et
+# la capture gsmtap disparus, et les deux `mobile` sortis sur
+#     Layer2 socket failed          (l1l2_interface.c:58, exit(102))
+# Le mobile n'etait que la victime : il sort quand sa socket L1CTL rend EOF,
+# c'est-a-dire quand SON producteur (osmocon derriere QEMU, ou trxcon derriere
+# fake_trx) vient de mourir.
+#
+# LA CHAINE REELLE. start.sh lance la pile par
+#     docker exec -t <conteneur> bash -c "... ./start-direct.sh ..."
+# `-t` alloue un pty. Un shell NON interactif n'a pas de controle de tache : un
+# `cmd &` ne cree donc PAS de groupe de processus a lui, l'enfant reste dans le
+# groupe du script, dont le terminal de controle est ce pty. Quand le script se
+# termine et que `docker exec` rend la main, Docker ferme le pty et le noyau
+# envoie SIGHUP a TOUT le groupe de premier plan.
+#
+# Ce qui survivait le prouvait deja : osmo-bts-trx et trxcon, parce que
+# libosmocore pose un handler SIGHUP (application.c:97, reouverture des
+# journaux) ; `mobile`, parce qu'il l'ignore explicitement (mobile/main.c:157).
+# QEMU, fake_trx.py et tcpdump, eux, n'ont rien - action par defaut, terminate.
+#
+# `setsid` place chaque demon dans SA session, sans terminal de controle : la
+# fermeture du pty ne le concerne plus. Il s'exec en place tant que l'appelant
+# n'est pas chef de groupe - ce qui est le cas d'un `&` de shell non interactif
+# - donc `$!` reste le PID du demon et les .pid / radio_alive ne changent pas.
+# Le `</dev/null` qui l'accompagne coupe le dernier descripteur vers le pty.
+#
+# COROLLAIRE : ne pas "nettoyer" ces `setsid`, et ne pas en attendre d'effet
+# pour une fonction shell lancee en arriere-plan (setsid veut un binaire) - les
+# garde-fous de 40-qemu.sh utilisent `( trap '' HUP; ... ) &` pour la meme fin.
+# -----------------------------------------------------------------------------
+
 # --- PERIMETRE : a qui appartient quoi ---------------------------------------
 # Deux chaines radio coexistent dans ce depot, et elles ne doivent JAMAIS etre
 # jouees ensemble : elles se disputeraient la VTY 4241 (BTS), la VTY 4247

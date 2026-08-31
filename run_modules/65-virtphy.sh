@@ -73,7 +73,8 @@ mod_virtphy_start() {
         log="$(radio_log "virtphy-$n")"
         mod_say "ms$n : L1CTL $s ; journal $log"
         # shellcheck disable=SC2086
-        "$VIRTPHY_BIN" -s "$s" $VIRTPHY_EXTRA_ARGS >>"$log" 2>&1 &
+        # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+        setsid "$VIRTPHY_BIN" -s "$s" $VIRTPHY_EXTRA_ARGS >>"$log" 2>&1 </dev/null &
         radio_save_pid "virtphy-$n" $!
     done
     mod_ok

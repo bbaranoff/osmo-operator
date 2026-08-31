@@ -75,9 +75,10 @@ mod_trxcon_start() {
         log="$(radio_log "trxcon-$n")"
         mod_say "ms$n : TRXD $TRX_BIND_IP:$port (bind $gip) -> L1CTL $s ; journal $log"
         # shellcheck disable=SC2086
-        "$TRXCON_BIN" -i "$TRX_BIND_IP" -b "$gip" -p "$port" -s "$s" \
+        # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+        setsid "$TRXCON_BIN" -i "$TRX_BIND_IP" -b "$gip" -p "$port" -s "$s" \
                       -C 1 -F "$TRXCON_FN_ADVANCE" $TRXCON_EXTRA_ARGS \
-                      >>"$log" 2>&1 &
+                      >>"$log" 2>&1 </dev/null &
         radio_save_pid "trxcon-$n" $!
     done
     mod_ok

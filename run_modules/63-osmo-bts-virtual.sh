@@ -79,7 +79,8 @@ mod_osmo_bts_virtual_start() {
     local log; log="$(radio_log osmo-bts-virtual)"
     mod_say "commande : $BTS_VIRTUAL_BIN -c $BTS_VIRTUAL_CFG"
     mod_say "journal  : $log"
-    "$BTS_VIRTUAL_BIN" -c "$BTS_VIRTUAL_CFG" >>"$log" 2>&1 &
+    # setsid : detache du pty de "docker exec" (voir _lib/radio.sh, bloc SIGHUP)
+    setsid "$BTS_VIRTUAL_BIN" -c "$BTS_VIRTUAL_CFG" >>"$log" 2>&1 </dev/null &
     radio_save_pid osmo-bts-virtual $!
     mod_ok
 }
