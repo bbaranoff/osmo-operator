@@ -268,12 +268,45 @@ audio_bridge() {
     # est positionne par start.sh quand le relai a ete active : tcp:<gw>:4713).
     local relay="${HOST_AUDIO_RELAY:-}"
     if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
+        # ── UN SEUL PONT POUR TOUT LE BANC ──────────────────────────────
+        # [2026-08-31] Le pkill ci-dessous ne suffit pas des qu il y a
+        # PLUSIEURS conteneurs : il s execute DANS le conteneur, qui a son
+        # propre espace de PID, et ne voit donc jamais le pont du voisin.
+        # Chaque operateur demarrait le sien, et comme ils partagent tous le
+        # meme PulseAudio d hote, ils relisaient le MEME sink gsm_audio pour
+        # le rejouer sur la MEME sortie : le son etait entendu deux fois a
+        # deux operateurs, trois fois a trois. Constate le 31/08.
+        #
+        # On interroge donc le SERVEUR partage, pas la table des processus
+        # locale : un client deja connecte sous ce nom signifie qu un pont
+        # tourne quelque part, peu importe dans quel conteneur.
+        local _bridge_name="osmo-gsm-bridge"
+        if pactl --server="$relay" list clients 2>/dev/null \
+             | grep -q "application.name = \"${_bridge_name}\""; then
+            echo -e "  ${GREEN}✓ pont audio deja actif sur l hote (${relay}) - on n en ajoute pas un second${NC}"
+            return 0
+        fi
+        # ── NI DOUBLON AVEC LE LOOPBACK DE L HOTE ───────────────────────────
+        # L hote charge deja, de son cote, un module-loopback
+        # gsm_audio.monitor -> carte son (lib/audio.sh, ensure_local_loopback).
+        # C est le MEME travail que ce pont : meme source, meme sortie. Les
+        # deux ensemble, on entend tout DEUX FOIS - et le symptome survit a
+        # l arret d un conteneur, ce qui fait chercher le doublon du mauvais
+        # cote. Constate le 31/08 : sink-input #0 "Loopback from Monitor of
+        # GSM_Audio" et #399 "paplay" sur la meme sortie.
+        # On garde le loopback : il est cote hote et bien plus court
+        # (20 ms contre 250 ms pour le pont TCP).
+        if pactl --server="$relay" list short modules 2>/dev/null \
+             | grep -q 'source=gsm_audio.monitor'; then
+            echo -e "  ${GREEN}✓ loopback gsm_audio deja en place sur l hote - pont TCP inutile${NC}"
+            return 0
+        fi
         pkill -f "paplay --server=${relay}" 2>/dev/null || true
         [ -f /run/host-audio.pid ] && kill -- "-$(cat /run/host-audio.pid)" 2>/dev/null || true
         setsid sh -c '
           while true; do
             parec -d gsm_audio.monitor --latency-msec=30 --format=s16le --rate=8000 --channels=1 \
-              | paplay --server='"${relay}"' --latency-msec=250 --raw --format=s16le --rate=8000 --channels=1
+              | paplay --server='"${relay}"' --client-name='"${_bridge_name}"' --latency-msec=250 --raw --format=s16le --rate=8000 --channels=1
             sleep 1
           done' >/var/log/osmocom/host-audio.log 2>&1 &
         echo $! > /run/host-audio.pid
