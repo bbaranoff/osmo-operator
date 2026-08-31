@@ -29,6 +29,14 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+# NOM DE L IMAGE : osmocom-run, PAS "osmo-operator".
+# build.sh produit osmocom-nitb (Dockerfile, ~11 Go) puis Dockerfile.run en
+# derive osmocom-run, et c est CELLE-LA que start.sh lance - verifie sur le
+# banc : `docker inspect osmo-operator-1 --format {{.Config.Image}}` rend
+# osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
+# rendait la sonde toujours negative : "image absente" en permanence, et une
+# recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
+MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; STATUS_ONLY=0; ANY_FLAG=0
 for a in "$@"; do
@@ -52,7 +60,7 @@ etat() {
     local ok_d=0 ok_r=0 ok_i=0 ok_m=0
     command -v docker >/dev/null 2>&1 && ok_d=1
     [ "$ok_d" = "1" ] && docker info >/dev/null 2>&1 && ok_r=1
-    [ "$ok_r" = "1" ] && docker image inspect osmo-operator >/dev/null 2>&1 && ok_i=1
+    [ "$ok_r" = "1" ] && docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 && ok_i=1
     [ -f "$MULTI_CONF" ] && ok_m=1
     [ "$ok_d" = "1" ] && echo -e "  docker installe      : ${GREEN}oui${NC}"      || echo -e "  docker installe      : ${YELLOW}non${NC}"
     [ "$ok_r" = "1" ] && echo -e "  demon actif          : ${GREEN}oui${NC}"      || echo -e "  demon actif          : ${YELLOW}non${NC}"
@@ -127,8 +135,8 @@ fi
 
 # ── IMAGE OPERATEUR ─────────────────────────────────────────────────────────
 if [ "$DO_IMAGE" = "1" ]; then
-    if docker image inspect osmo-operator >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} image operateur deja presente"
+    if docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} image operateur deja presente (${MULTI_IMAGE})"
     elif [ -x "$DIR/build.sh" ]; then
         echo -e "  ${CYAN}→${NC} construction de l image via build.sh (long : compilation Osmocom)..."
         "$DIR/build.sh" || { echo -e "  ${RED}✗ build.sh a echoue${NC}"; exit 1; }
@@ -155,6 +163,12 @@ fi
 #   op 3  DOCKER  - PC 1.3.2, backbone 172.20.0.13
 #   hub   DOCKER  - inter-STP, 172.20.0.10, PC 0.0.0, M3UA/SCTP 2908
 #
+# NOM DU HUB : "osmo-inter-stp", avec le tiret entre inter et stp. C est la
+# valeur de INTER_STP_CONTAINER (start.sh l.78), donc le nom que docker porte
+# reellement. Ecrire "osmo-interstp" faisait rendre "arrete" par start-multi.sh
+# sur un hub parfaitement vivant - une sonde qui cherche un nom qui n existe pas
+# ne trouve jamais rien, et ne le dit pas autrement que par un faux negatif.
+#
 # Le natif joint le hub par la passerelle du bridge : l hote atteint
 # 172.20.0.10 directement, sans NAT ni route a ajouter.
 if [ "$DO_MULTI" = "1" ]; then
@@ -163,13 +177,14 @@ if [ "$DO_MULTI" = "1" ]; then
 # osmo-multi.conf - topologie multi-operateur, ecrite par addition.sh.
 # Relue par start-multi.sh. Ne pas editer a la main sans relire les deux.
 MULTI_NODE=1
-MULTI_HUB_NAME=osmo-interstp
+MULTI_HUB_NAME=osmo-inter-stp
 MULTI_HUB_IP=172.20.0.10
 MULTI_HUB_PC=0.0.0
 MULTI_M3UA_PORT=2908
 MULTI_NET_NAME=osmo-ss7
 MULTI_NET_SUBNET=172.20.0.0/24
 MULTI_NET_GW=172.20.0.1
+MULTI_IMAGE=osmocom-run
 # operateurs : "index:mode:backbone_ip:point_code:rctx"
 MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:1.2.2:250 3:docker:172.20.0.13:1.3.2:350"
 CONF

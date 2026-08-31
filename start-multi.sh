@@ -71,6 +71,7 @@ fi
 : "${MULTI_HUB_IP:=172.20.0.10}"
 : "${MULTI_M3UA_PORT:=2908}"
 : "${MULTI_OPS:=}"
+: "${MULTI_IMAGE:=osmocom-run}"
 
 # ── ETAT ────────────────────────────────────────────────────────────────────
 etat() {
@@ -95,7 +96,7 @@ etat() {
         fi
     done
     printf '    hub  %-7s %-13s PC %-8s ' "docker" "$MULTI_HUB_IP" "${MULTI_HUB_PC:-0.0.0}"
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${MULTI_HUB_NAME:-osmo-interstp}"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${MULTI_HUB_NAME:-osmo-inter-stp}"; then
         echo -e "${GREEN}actif${NC}"
     else
         echo -e "${YELLOW}arrete${NC}"
@@ -111,15 +112,22 @@ case "$ACTION" in
             docker rm -f "osmo-operator-${idx}" >/dev/null 2>&1 \
                 && echo -e "  ${GREEN}✓${NC} osmo-operator-${idx} arrete"
         done
-        docker rm -f "${MULTI_HUB_NAME:-osmo-interstp}" >/dev/null 2>&1 \
+        docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
             && echo -e "  ${GREEN}✓${NC} hub arrete"
         echo -e "  ${CYAN}i${NC} l operateur NATIF n est pas touche - ${BOLD}sudo ${DIR}/start-direct.sh stop${NC} pour lui."
         exit 0 ;;
 esac
 
 # ── L IMAGE ─────────────────────────────────────────────────────────────────
-docker image inspect osmo-operator >/dev/null 2>&1 \
-    || manque "image 'osmo-operator' absente"
+# NOM DE L IMAGE : osmocom-run, PAS "osmo-operator".
+# build.sh produit osmocom-nitb (Dockerfile, ~11 Go) puis Dockerfile.run en
+# derive osmocom-run, et c est CELLE-LA que start.sh lance - verifie sur le
+# banc : `docker inspect osmo-operator-1 --format {{.Config.Image}}` rend
+# osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
+# rendait la sonde toujours negative : "image absente" en permanence, et une
+# recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
+docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 \
+    || manque "image '$MULTI_IMAGE' absente"
 
 # ── L ADRESSE DE L HOTE, VUE DES CONTENEURS ─────────────────────────────────
 # Le natif tourne sur l HOTE : pour les conteneurs il n est pas "127.0.0.1"
@@ -190,7 +198,7 @@ verifier() {
             fi
         fi
     done
-    nom="${MULTI_HUB_NAME:-osmo-interstp}"
+    nom="${MULTI_HUB_NAME:-osmo-inter-stp}"
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$nom"; then
         echo -e "    ${GREEN}✓${NC} inter-STP ${nom}"
     else

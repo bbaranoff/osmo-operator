@@ -1046,6 +1046,17 @@ else
     fi
 fi
 
+# ── LE TUTORIEL, SERVI PAR LE DASHBOARD ─────────────────────────────────────
+# Ici et pas ailleurs : $WEB vient d etre peuple (clone ou source locale), et
+# c est la seule racine statique que le dashboard expose. /usr/share garde un
+# exemplaire pour le repli hors ligne, mais c est CELUI-CI que l icone ouvre -
+# voir /usr/local/bin/osmo-tutorial et le confinement du snap Firefox.
+if [ -f "$DIR/data/tutorial.html" ]; then
+    mkdir -p "$WEB/web"
+    cp -f "$DIR/data/tutorial.html" "$WEB/web/tutorial.html"
+    echo -e "  ${GREEN}✓${NC} tutoriel servi par le dashboard : ${CYAN}/tutorial.html${NC}"
+fi
+
 # Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
 # (ou ip netns exec) au lieu de docker exec. Idempotent ; n'echoue pas le build.
 if [ -f "$WEB/server.js" ] && command -v python3 >/dev/null 2>&1; then
@@ -3433,13 +3444,27 @@ TRUSTA
     # envoie chercher la panne du cote du fichier, qui est pourtant bien la.
     cat > "$ROOTFS/usr/local/bin/osmo-tutorial" <<'TUTO'
 #!/bin/bash
+# osmo-tutorial - ouvre le quick-start.
+#
+# PAR HTTP, PAS PAR file://. Firefox est un SNAP, et son bac a sable refuse le
+# fichier pour TROIS raisons cumulees, constatees le 31/08 :
+#   - firefox:home n est meme pas connecte (snap connections firefox -> "-") ;
+#   - l interface home, meme branchee, ne couvre QUE /home/* - jamais /root,
+#     qui est pourtant le compte de la session (gdm3 AutomaticLogin=root) ;
+#   - elle exclut les repertoires caches, donc ~/.local/share/... aussi.
+# Resultat a l ecran : "L acces au fichier a ete refuse" - message qui accuse
+# le fichier alors qu il est bien la et lisible. C est le confinement.
+# Le dashboard sert deja du statique sur 8080 : on passe par lui, et la
+# question du bac a sable ne se pose plus.
 set -u
-SRC=/usr/share/osmo-operator/tutorial.html
-DST="$HOME/.local/share/osmo-operator/tutorial.html"
-install -d "$(dirname "$DST")" 2>/dev/null || true
-cp -f "$SRC" "$DST" 2>/dev/null || true
-[ -f "$DST" ] || DST="$SRC"
-exec xdg-open "file://$DST"
+URL="${OSMO_TUTORIAL_URL:-http://127.0.0.1:8080/tutorial.html}"
+PORT="${URL##*:}"; PORT="${PORT%%/*}"
+if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+    exec 3>&- 2>/dev/null
+    exec xdg-open "$URL"
+fi
+echo "Dashboard injoignable sur $PORT - repli file:// (echouera sous Firefox snap)" >&2
+exec xdg-open "file:///usr/share/osmo-operator/tutorial.html"
 TUTO
     chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"
 

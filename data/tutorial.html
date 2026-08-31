@@ -72,6 +72,14 @@
   <tr><td>500 / 700</td><td>annonces enregistrées</td></tr>
   <tr><td>1001<i>XX</i></td><td>un mobile GSM du réseau local</td></tr>
 </table>
+<p><b>Depuis un mobile GSM</b>, tout passe par le <b>VTY de la console web</b>, pas par un clavier : dans la barre en haut, choisissez l'opérateur (<code>OP1</code>), puis le mobile (<code>BB MS1&nbsp;☎&nbsp;…</code>), et cliquez <b>Go</b>. Vous obtenez son terminal, d'où l'appel se compose :</p>
+<table>
+  <tr><th>Commande VTY</th><th>Effet</th></tr>
+  <tr><td>call 1 100</td><td>le mobile appelle Linphone A</td></tr>
+  <tr><td>call 1 hangup</td><td>raccrocher</td></tr>
+  <tr><td>call 1 answer</td><td>décrocher un appel entrant</td></tr>
+</table>
+<p>Le <code>1</code> est le nom du mobile, celui de <code>mobile.cfg</code>. En cas de doute, <code>list</code> dans le VTY affiche les commandes réellement disponibles.</p>
 <p><b>Commencez par le 600.</b> S'il vous répond, la chaîne SIP et l'audio sont bonnes — inutile de chercher plus loin côté téléphone.</p>
 
 <h2>3. Vérifier</h2>
