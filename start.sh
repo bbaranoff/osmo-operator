@@ -323,6 +323,23 @@ port_pris() {   # $1 = port, $2 = proto (udp par defaut)
 
 detect_port_offset() {
     [ -n "${OSMO_PORT_OFFSET:-}" ] && { echo "$OSMO_PORT_OFFSET"; return 0; }
+    # ── LE NATIF COMPTE MEME QUAND IL EST ARRETE ────────────────────────────
+    # [2026-08-31] Sonder "5060 est-il pris ?" est juste, mais depend de
+    # L INSTANT. Depuis que les lanceurs arretent le banc avant de le relancer,
+    # start.sh calculait l offset pendant que le natif etait A TERRE : port
+    # libre, offset 0. Le natif remontait ensuite et reprenait 5060, pendant
+    # qu osmo-sip-connector tenait deja 5061 - et le conteneur, lance avec les
+    # ports non decales, mourait sur
+    #     failed to bind host port 0.0.0.0:5061/udp: address already in use
+    # en restant en etat "Created". Une course que la sonde ne pouvait pas voir.
+    #
+    # La topologie, elle, ne bouge pas : si elle declare un operateur NATIF,
+    # celui-ci occupera 5060-5061 et le plan RTP 30000-30199, arrete ou non.
+    # On decale donc d office, sans rien sonder.
+    local _mc="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+    if [ -r "$_mc" ] && grep -q ':native:' "$_mc" 2>/dev/null; then
+        echo 100; return 0
+    fi
     local off
     # Pas de dichotomie : 100 par cran, cinq crans. Au-dela, ce n est plus un
     # conflit avec le natif mais une machine deja saturee, et un decalage

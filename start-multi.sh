@@ -382,26 +382,20 @@ aligner_natif
 # (verifie : config a jour sur le disque, ASP toujours ASP_DOWN sur l ancienne
 # adresse). Le seul geste qui compte est l arret complet.
 #
-# On arrete DANS L ORDRE : le natif d abord (il delegue a run.sh --stop, qui
-# demonte proprement radio et coeur), les conteneurs ensuite. L inverse
-# laisserait le natif parler a des conteneurs en train de disparaitre.
-# Rien ici ne doit faire echouer le lancement : ce qui est deja arrete l est
-# tres bien, d ou les || true.
+# On arrete le NATIF (il delegue a run.sh --stop, qui demonte proprement radio
+# et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
+# arrete l est tres bien, d ou les || true.
 tout_arreter() {
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
     if [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        local _ids
-        _ids="$(docker ps -aq --filter 'name=^osmo-' 2>/dev/null)"
-        if [ -n "$_ids" ]; then
-            # shellcheck disable=SC2086
-            docker rm -f $_ids >/dev/null 2>&1 || true
-            echo -e "    ${GREEN}✓${NC} conteneurs osmo-* retires"
-        fi
-    fi
+    # Les conteneurs ne sont PAS touches ici : start.sh fait deja
+    # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.
+    # Le refaire serait redondant, et surtout destructeur depuis launch.sh -
+    # un clic sur le telephone rouge, qui ne monte que le natif, balayerait
+    # les conteneurs multi-operateur d a cote.
     # Les ponts audio survivent aux conteneurs (setsid) : sans ca on empile un
     # relais de plus a chaque relance, et le son se dedouble.
     pkill -f 'paplay --server=tcp:' 2>/dev/null || true
@@ -446,6 +440,10 @@ lancer_natif_si_absent() {
     # ID d application, pas un chemin - d ou le basename sans .desktop).
     # En dernier recours on extrait Exec a la main : mieux vaut demarrer le banc
     # que d echouer sur l outillage du bureau.
+    # Le natif nous sert de PILE, pas de poste de travail : wireshark, linphone
+    # et firefox sont deja ouverts par ailleurs (ou le seront par nos soins pour
+    # les dashboards). Sans ce drapeau, launch.sh les rouvrait une seconde fois.
+    export OSMO_LAUNCH_APPS=0
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
     if command -v gio >/dev/null 2>&1 && gio launch "$d" >/dev/null 2>&1; then
@@ -567,6 +565,79 @@ verifier() {
     fi
     return "$ko"
 }
+
+# ── LES DASHBOARDS DES CONTENEURS, EN ONGLETS SUPPLEMENTAIRES ───────────────
+# launch.sh a deja ouvert Firefox sur le dashboard du NATIF et le tutoriel, et
+# lance Linphone et Wireshark avec lui : on ne redouble rien de tout ca. Il
+# manque seulement les consoles des conteneurs, une par operateur docker.
+#
+# Les adresses viennent de la topologie, pas d une liste en dur : ajouter un
+# operateur a osmo-multi.conf suffit a lui ouvrir son onglet.
+#
+# On attend que chaque port reponde avant d ouvrir : un onglet lance trop tot
+# affiche une page d erreur, et il faut alors recharger a la main - le
+# dashboard d un conteneur met plusieurs secondes a monter apres le demarrage.
+ouvrir_dashboards() {
+    command -v firefox >/dev/null 2>&1 || return 0
+
+    local spec idx mode ip urls="" i
+    for spec in $MULTI_OPS; do
+        IFS=: read -r idx mode ip _pc _rctx <<< "$spec"
+        [ "$mode" = "docker" ] && [ -n "$ip" ] || continue
+        for i in $(seq 1 60); do
+            (exec 3<>"/dev/tcp/${ip}/8080") 2>/dev/null && { exec 3>&- 2>/dev/null; break; }
+            sleep 1
+        done
+        if (exec 3<>"/dev/tcp/${ip}/8080") 2>/dev/null; then
+            exec 3>&- 2>/dev/null
+            urls="$urls http://${ip}:8080"
+        else
+            echo -e "  ${YELLOW}○${NC} dashboard op ${idx} (${ip}:8080) ne repond pas - onglet non ouvert"
+        fi
+    done
+    [ -n "$urls" ] || return 0
+
+    # Sous le compte de la session : Firefox y tourne deja, il ajoutera les URL
+    # comme ONGLETS a la fenetre existante plutot que d en ouvrir une seconde.
+    local u uid home
+    u="$(natif_session_user)"; uid="$(id -u "$u" 2>/dev/null || echo 0)"
+    home="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+    # shellcheck disable=SC2086
+    setsid sudo -u "$u" \
+        env DISPLAY="${DISPLAY:-:0}" \
+            XAUTHORITY="${XAUTHORITY:-${home:-/root}/.Xauthority}" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" \
+        firefox $urls </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} onglets dashboards :${CYAN}${urls}${NC}"
+}
+
+# Le compte de la session graphique, meme critere qu ailleurs : la presence de
+# son socket pulse, et non son nom (l ISO ouvre la session sous root).
+natif_session_user() {
+    local u uid sock
+    for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)"; do
+        [ -n "$u" ] || continue
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        [ -S "/run/user/${uid}/pulse/native" ] && { echo "$u"; return 0; }
+    done
+    for sock in /run/user/*/pulse/native; do
+        [ -S "$sock" ] || continue
+        uid="${sock#/run/user/}"; uid="${uid%%/*}"
+        u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+        [ -n "$u" ] && { echo "$u"; return 0; }
+    done
+    echo "${SUDO_USER:-$(id -un)}"
+}
+
+# EN TACHE DE FOND, et c est essentiel : cette fonction attend jusqu a 60 s par
+# conteneur que le port 8080 reponde. En avant-plan, ca fige le script jusqu a
+# deux minutes AVANT les verifications - et le silence ressemble a un blocage.
+# Pire quand le dashboard ne monte pas du tout : on attendait le maximum pour
+# n ouvrir aucun onglet. Les onglets s ouvriront quand ils pourront ; les tests,
+# eux, partent tout de suite.
+ouvrir_dashboards &
+disown 2>/dev/null || true
 
 echo
 etat

@@ -164,26 +164,20 @@ tile_windows() {
 # (verifie : config a jour sur le disque, ASP toujours ASP_DOWN sur l ancienne
 # adresse). Le seul geste qui compte est l arret complet.
 #
-# On arrete DANS L ORDRE : le natif d abord (il delegue a run.sh --stop, qui
-# demonte proprement radio et coeur), les conteneurs ensuite. L inverse
-# laisserait le natif parler a des conteneurs en train de disparaitre.
-# Rien ici ne doit faire echouer le lancement : ce qui est deja arrete l est
-# tres bien, d ou les || true.
+# On arrete le NATIF (il delegue a run.sh --stop, qui demonte proprement radio
+# et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
+# arrete l est tres bien, d ou les || true.
 tout_arreter() {
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
     if [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        local _ids
-        _ids="$(docker ps -aq --filter 'name=^osmo-' 2>/dev/null)"
-        if [ -n "$_ids" ]; then
-            # shellcheck disable=SC2086
-            docker rm -f $_ids >/dev/null 2>&1 || true
-            echo -e "    ${GREEN}✓${NC} conteneurs osmo-* retires"
-        fi
-    fi
+    # Les conteneurs ne sont PAS touches ici : start.sh fait deja
+    # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.
+    # Le refaire serait redondant, et surtout destructeur depuis launch.sh -
+    # un clic sur le telephone rouge, qui ne monte que le natif, balayerait
+    # les conteneurs multi-operateur d a cote.
     # Les ponts audio survivent aux conteneurs (setsid) : sans ca on empile un
     # relais de plus a chaque relance, et le son se dedouble.
     pkill -f 'paplay --server=tcp:' 2>/dev/null || true
@@ -191,11 +185,29 @@ tout_arreter() {
 
 tout_arreter
 
+# ── LES OUTILS D EXPLOITATION SONT-ILS DEMANDES ? ───────────────────────────
+# [2026-08-31] OSMO_LAUNCH_APPS=0 : ni wireshark, ni linphone. C est ce que
+# demande start-multi.sh quand il declenche ce lanceur pour remonter le natif -
+# il veut la PILE, pas une seconde instance des outils.
+#
+# ⚠️ FIREFOX N EST PAS CONCERNE, et c est deliberé : le navigateur porte le
+# dashboard du natif et le tutoriel, et start-multi.sh y AJOUTE les onglets des
+# dashboards conteneurs. Le couper ici priverait un clic sur l antenne bleue de
+# la base sur laquelle ces onglets viennent se greffer - on n aurait plus que
+# les deux consoles conteneurs, sans celle du natif ni le tutoriel.
+# Firefox, lui, sait ne pas se dedoubler : une seconde invocation ajoute des
+# onglets a la fenetre existante.
+# Par defaut a 1 : le double-clic sur le telephone rouge ne change pas.
+OSMO_LAUNCH_APPS="${OSMO_LAUNCH_APPS:-1}"
+if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
+    echo -e "  ${CYAN}i${NC} mode banc seul : wireshark et linphone non lances (firefox garde ses onglets)"
+fi
+
 # ── 1. WIRESHARK sur udp/4729 ───────────────────────────────────────────────
 # En ROOT, et pas sous $GUI_USER : la capture sur `any` demande CAP_NET_RAW.
 # -k demarre la capture tout de suite (sinon on ouvre sur un ecran de choix
 # d interface, et rien n est capture tant qu on n a pas clique).
-if command -v wireshark >/dev/null 2>&1; then
+if [ "$OSMO_LAUNCH_APPS" = "1" ] && command -v wireshark >/dev/null 2>&1; then
     setsid wireshark -k -i any -f "udp port ${GSMTAP_PORT}" \
         </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
@@ -209,7 +221,7 @@ fi
 # ⚠️ Linphone ne relit PAS sa config a chaud : s il tourne deja, il garde son
 # etat en memoire. On ne le relance donc pas de force ici - on le laisse tel
 # quel plutot que de couper un appel en cours.
-if command -v linphone >/dev/null 2>&1; then
+if [ "$OSMO_LAUNCH_APPS" = "1" ] && command -v linphone >/dev/null 2>&1; then
     if pgrep -x linphone >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} linphone : deja lance (laisse en place)"
     else
