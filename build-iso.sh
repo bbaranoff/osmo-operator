@@ -624,44 +624,38 @@ echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 # depot (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo-operator}"
-echo -e "${GREEN}[5a/9] Mise a jour osmo-operator en place (branche ${EGPRS_BRANCH}, .git conserve)...${NC}"
-# [2026-08-27] Le tarball est abandonne. Il donnait un arbre NU : on effacait
-# /opt/GSM/osmo-operator, on deballait le tar.gz, on supprimait les .git*. Trois
-# consequences, toutes vues sur l'ISO :
-#   - sans .git, update.sh n'a pas le choix au demarrage : il ne peut pas faire
-#     "git fetch", il EFFACE et RECLONE (wipe=1) - a chaque boot, et sans reseau
-#     il ne reste rien ;
-#   - tout ce qui avait ete pose dans l'arbre a la construction disparaissait au
-#     premier demarrage ;
-#   - impossible, sur la machine, de savoir sur quel commit on tourne.
-# On met donc l'arbre a jour EN PLACE, par git, en gardant .git. Le depot vient
-# de l'image ($CID:/opt/GSM, il a son .git) ; on ne le remplace pas, on avance
-# le HEAD - et seulement si c'est une avance directe (--ff-only) : un arbre de
-# l'image avec des commits locaux n'est pas ecrase en silence, il est signale.
+echo -e "${GREEN}[5a/9] Clone de osmo-operator (branche ${EGPRS_BRANCH})...${NC}"
+# [2026-08-31] CLONE, PAS "fetch + merge --ff-only" SUR L ARBRE DE L IMAGE.
+# L ancienne version avancait en place le depot venu du docker cp. Elle avait
+# deux defauts qui se voyaient au moment ou l on veut justement graver :
+#   - --ff-only echoue des que l arbre de l image porte le moindre commit local
+#     ou diverge, et la branche d echec se contentait d un ⚠ jaune : l ISO se
+#     construisait alors avec l arbre de l IMAGE, c est-a-dire avec du code
+#     vieux de la derniere reconstruction docker, sans que rien n arrete le
+#     build. On croyait graver son travail, on gravait celui d avant.
+#   - trois chemins (arbre avec .git / arbre sans .git / rien) pour un seul
+#     besoin : avoir le depot a jour dans l ISO.
+# Un clone rend le resultat previsible : ce qui est sur la branche est ce qui
+# est grave, point. Le .git est conserve - c est un clone, pas un tarball - donc
+# update.sh peut toujours faire son fetch au demarrage plutot que d effacer et
+# recloner a chaque boot (wipe=1), et l on sait sur quel commit on tourne.
+#
+# On clone A COTE puis on bascule : si le reseau manque, l arbre de l image
+# reste en place. Effacer d abord donnerait une ISO sans depot du tout.
 EGPRS_TREE="$ROOTFS/opt/GSM/osmo-operator"
-if [ -d "$EGPRS_TREE/.git" ]; then
-    if git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
-       && git -C "$EGPRS_TREE" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} osmo-operator a jour en place (${EGPRS_BRANCH}, .git conserve) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s')"
-    else
-        echo -e "  ${YELLOW}⚠${NC} osmo-operator : mise a jour impossible (reseau ? commits locaux ?) - arbre de l'image conserve" >&2
-    fi
-elif [ -d "$EGPRS_TREE" ]; then
-    # Arbre sans depot : on ne l'efface pas, on lui rend son .git, sur place.
-    if git -C "$EGPRS_TREE" init -q 2>/dev/null \
-       && git -C "$EGPRS_TREE" remote add origin "$EGPRS_REPO" 2>/dev/null \
-       && git -C "$EGPRS_TREE" fetch --depth 1 origin "$EGPRS_BRANCH" >/dev/null 2>&1 \
-       && git -C "$EGPRS_TREE" checkout -q -B "$EGPRS_BRANCH" FETCH_HEAD 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} osmo-operator : depot reconstitue sur l'arbre existant (${EGPRS_BRANCH})"
-    else
-        echo -e "  ${YELLOW}⚠${NC} osmo-operator : depot non reconstitue - arbre de l'image conserve tel quel" >&2
-    fi
-else
+EGPRS_TMP="$WORK/osmo-operator-clone"
+rm -rf "$EGPRS_TMP"
+if git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TMP" >/dev/null 2>&1; then
+    rm -rf "$EGPRS_TREE"
     mkdir -p "$ROOTFS/opt/GSM"
-    if git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TREE" >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} osmo-operator clone (${EGPRS_BRANCH}, .git conserve)"
+    mv "$EGPRS_TMP" "$EGPRS_TREE"
+    echo -e "  ${GREEN}✓${NC} osmo-operator clone (${EGPRS_BRANCH}, .git conserve) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s')"
+else
+    rm -rf "$EGPRS_TMP"
+    if [ -d "$EGPRS_TREE" ]; then
+        echo -e "  ${YELLOW}⚠${NC} osmo-operator : clone impossible (reseau ?) - arbre de l'image conserve" >&2
     else
-        echo -e "  ${RED}✗${NC} osmo-operator absent de l'image ET clone impossible" >&2
+        echo -e "  ${RED}✗${NC} osmo-operator : clone impossible ET absent de l'image" >&2
     fi
 fi
 
@@ -1315,24 +1309,63 @@ TimeoutStartSec=infinity
 # Tout est journalise dans /var/log/osmo-firefox-snap.log : la version
 # precedente envoyait stderr dans /dev/null, et une installation ratee etait
 # indiscernable d'une installation absente.
+# [2026-08-31] DEUX DEFAUTS CORRIGES ICI, constates sur le journal du premier
+# boot de l image precedente (/var/log/osmo-firefox-snap.log) :
+#
+#   1. COURSE AVEC LA GRAINE DE SNAPD. After=snapd.seeded.service ne suffit
+#      PAS : quand cette unite demarrait, snapd avait encore des changements
+#      "install-snap" EN COURS, et refusait tout -
+#          error: snap "snapd" has "install-snap" change in progress
+#          error: snap "core24" has "install-snap" change in progress
+#          error: snap "firefox" has "install-snap" change in progress
+#      soit les SIX installations hors ligne perdues d affilee. Le repli
+#      magasin tombait ensuite sur un DNS pas encore leve
+#      ("lookup api.snapcraft.io: Temporary failure in name resolution").
+#      Resultat : pas de navigateur, et un banc sans console web.
+#      -> On attend que la file de changements se VIDE (snap wait + boucle sur
+#         snap changes), et on reessaie chaque paquet.
+#
+#   2. L ECHEC ETAIT REND U DEFINITIF. Le `touch .installe` etait
+#      INCONDITIONNEL, en fin de ligne, execute meme apres six echecs. Combine
+#      au ConditionPathExists=!...installe ci-dessus, il interdisait toute
+#      nouvelle tentative : l unite ne repassait JAMAIS, et l image restait
+#      sans Firefox pour toujours. Le drapeau ne se pose plus que si
+#      `snap list firefox` confirme l installation ; sinon l unite sort en
+#      echec et retente au prochain demarrage.
 ExecStart=/bin/bash -c 'cd /var/lib/osmo-snaps 2>/dev/null || exit 0; \
   exec >>/var/log/osmo-firefox-snap.log 2>&1; \
   echo "=== $(date -Is) installation des snaps ==="; \
+  snap wait system seed.loaded || true; \
+  settle() { local i; for i in $(seq 1 180); do \
+      snap changes 2>/dev/null | grep -qE "^[0-9]+ +(Do|Doing|Undoing) " || return 0; \
+      sleep 5; \
+    done; echo "ATTENTION: file de changements snapd encore pleine"; return 1; }; \
+  settle; \
   for a in *.assert; do [ -e "$a" ] && snap ack "$a"; done; \
   if [ -s ordre ]; then \
     while read -r s; do \
       [ -n "$s" ] || continue; \
       [ -s "$s.snap" ] || { echo "absent: $s.snap"; continue; }; \
-      snap install "$s.snap" || echo "ECHEC hors ligne: $s"; \
+      snap list "$s" >/dev/null 2>&1 && { echo "deja installe: $s"; continue; }; \
+      for t in 1 2 3; do \
+        snap install "$s.snap" && break; \
+        echo "tentative $t echouee: $s"; settle; sleep 5; \
+      done; \
     done < ordre; \
   fi; \
-  snap list firefox >/dev/null 2>&1 || snap install firefox || true; \
+  snap list firefox >/dev/null 2>&1 || { settle; snap install firefox || true; }; \
   for i in gpu-2404 gnome-46-2404 gtk-3-themes icon-themes sound-themes \
            audio-record audio-playback camera removable-media; do \
     snap connect "firefox:$i" || true; \
   done; \
   snap list; \
-  touch /var/lib/osmo-snaps/.installe'
+  if snap list firefox >/dev/null 2>&1; then \
+    touch /var/lib/osmo-snaps/.installe; \
+    echo "OK: firefox installe, drapeau pose"; \
+  else \
+    echo "ECHEC: firefox absent - drapeau NON pose, nouvelle tentative au prochain boot"; \
+    exit 1; \
+  fi'
 
 [Install]
 WantedBy=multi-user.target
@@ -1587,9 +1620,39 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     #
     # linphone (sans suffixe) est un paquet de TRANSITION vide sur jammy ; le
     # client graphique s appelle linphone-desktop. wireshark tire wireshark-qt.
+    # wmctrl + x11-utils (xdpyinfo) : launch.sh s en sert pour paver les quatre
+    # fenetres en quarts d ecran. Sans eux le lancement marche toujours, mais
+    # les fenetres se posent ou le gestionnaire veut.
     apt-get install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop snapd \
+        wmctrl x11-utils zenity librsvg2-common \
         || echo "WARN: installation du bureau incomplete"
+
+    # ── AVAHI : PURGE ─────────────────────────────────────────────────────
+    # avahi n est demande NULLE PART dans ce depot : il arrive en Recommends de
+    # ubuntu-desktop-minimal, que l on installe volontairement AVEC ses
+    # recommends (sans eux, pas de gdm3 ni de session - voir plus haut). Il
+    # repart donc explicitement, apres coup.
+    #
+    # Pourquoi on n en veut pas sur un banc GSM : avahi-daemon diffuse en
+    # permanence du mDNS sur 224.0.0.251:5353 et sur TOUTE interface qui
+    # apparait - y compris apn0 et les veth du plan docker. Sur une capture
+    # GSMTAP ou une trace SIP, ce bruit periodique se mele au trafic qu on
+    # cherche a lire. Il pose aussi un .local qui prend le pas sur la
+    # resolution, ce qui n a aucun interet ici : tout est adresse en dur.
+    #
+    # --purge, et libnss-mdns avec : le paquet seul desinstalle laisserait la
+    # ligne "mdns4_minimal" dans /etc/nsswitch.conf, et chaque resolution
+    # paierait alors un aller-retour vers un service absent.
+    apt-get purge -y $APT_OPTS avahi-daemon avahi-utils avahi-autoipd libnss-mdns 2>/dev/null \
+        || echo "  [desktop] avahi deja absent"
+    apt-get autoremove -y $APT_OPTS 2>/dev/null || true
+    # Ceinture et bretelles : si une dependance future le reinstalle, il ne
+    # demarrera pas pour autant.
+    systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
+    sed -i 's/[[:space:]]*mdns4_minimal[[:space:]]*\[NOTFOUND=return\]//; s/[[:space:]]*mdns4//' \
+        /etc/nsswitch.conf 2>/dev/null || true
+    echo "  [desktop] avahi purge (mDNS retire du banc)"
 
     # ── L INSTALLEUR : CALAMARES, ET POURQUOI PAS UBIQUITY ─────────────────
     # Ubiquity est l installeur d Ubuntu et il est dans jammy (22.04.15). Il ne
@@ -3085,6 +3148,28 @@ GDMCONF
     echo -e "  ${GREEN}✓${NC} session graphique : ouverture automatique sur ${CYAN}root${NC} (osmocom au choix, apres deconnexion)"
 fi
 
+# ── LINPHONE : COMPTE PRE-PROVISIONNE ─────────────────────────────────
+# Place ICI, et pas ailleurs : le compte doit exister AVANT le premier
+# lancement du client. Linphone ne relit pas linphonerc a chaud - l instance
+# qui tourne garde son etat en memoire et REECRIT le fichier en sortant. Un
+# compte pose pendant que Linphone tourne n emet donc jamais de REGISTER, et
+# le symptome est muet des DEUX cotes : cote client rien dans les journaux,
+# cote Asterisk endpoint "Unavailable" sans le moindre 401 - puisque aucun
+# paquet n arrive. Diagnostic du 2026-08-31, une capture de 90 s pour le voir.
+# Le detail des deux pieges (relecture a chaud, publish de presence) est en
+# tete de configs/linphonerc.
+if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -f "$DIR/configs/linphonerc" ]; then
+    # Les DEUX comptes plus /etc/skel : la session s ouvre sur root (gdm3
+    # ci-dessus), osmocom reste disponible apres deconnexion, et skel couvre
+    # les comptes crees par l installeur sur le systeme cible.
+    for _lh in "$ROOTFS/root" "$ROOTFS/home/osmocom" "$ROOTFS/etc/skel"; do
+        install -d "$_lh/.config/linphone"
+        cp -a "$DIR/configs/linphonerc" "$_lh/.config/linphone/linphonerc"
+    done
+    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} linphone : compte ${CYAN}linphone_A${NC} pre-provisionne (poste ${CYAN}100${NC}, UDP vers 127.0.0.1:5060)"
+fi
+
 # ── L INSTALLEUR ────────────────────────────────────────────────────────────
 # La configuration vit dans le depot (installer/calamares/) plutot qu en
 # heredocs ici : elle est relisible, versionnee, et validable hors build
@@ -3288,6 +3373,24 @@ for d in "$HOME/Desktop" "$HOME/Bureau"; do
         # "true" : c est DING qui dessine le bureau sous Ubuntu.
         gio set -t string "$f" metadata::trusted true 2>/dev/null || true
     done
+    # POSITION FIXE : le lanceur en HAUT A GAUCHE, le tutoriel juste dessous.
+    # DING lit metadata::nautilus-icon-position ("x,y") dans les metadonnees
+    # gvfs de la SESSION. Impossible a poser au build - le chroot n a ni
+    # session ni bus - d ou ce passage au premier login, au meme endroit que
+    # l approbation. Sans lui, DING range les icones dans l ordre ou il les
+    # trouve, et le lanceur atterrit ou il veut.
+    [ -f "$d/osmo-launch.desktop" ] && \
+        gio set -t string "$d/osmo-launch.desktop" \
+            metadata::nautilus-icon-position "0,0" 2>/dev/null || true
+    [ -f "$d/osmo-multi.desktop" ] && \
+        gio set -t string "$d/osmo-multi.desktop" \
+            metadata::nautilus-icon-position "110,0" 2>/dev/null || true
+    [ -f "$d/osmo-tutorial.desktop" ] && \
+        gio set -t string "$d/osmo-tutorial.desktop" \
+            metadata::nautilus-icon-position "0,110" 2>/dev/null || true
+    [ -f "$d/osmo-addition.desktop" ] && \
+        gio set -t string "$d/osmo-addition.desktop" \
+            metadata::nautilus-icon-position "110,110" 2>/dev/null || true
     # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
     # force a rebalayer, sinon la pastille rouge reste jusqu au login suivant.
     touch "$d" 2>/dev/null || true
@@ -3307,6 +3410,146 @@ Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 TRUSTA
+
+    # ── LANCEUR ET TUTORIEL : ICONES DU BUREAU ────────────────────────────
+    # Icones du depot (data/*.svg) et pas des noms du theme : "call-start" est
+    # VERT dans Adwaita et n a pas de variante rouge, et un nom d icone absent
+    # se remplace EN SILENCE par un rectangle gris - le lanceur devient alors
+    # introuvable sur le bureau qu il est cense ouvrir.
+    install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
+              "$ROOTFS/usr/share/osmo-operator"
+    for _ic in osmo-launch osmo-multi osmo-tutorial; do
+        [ -f "$DIR/data/$_ic.svg" ] && \
+            cp -f "$DIR/data/$_ic.svg" \
+                  "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
+    done
+    [ -f "$DIR/data/tutorial.html" ] && \
+        cp -f "$DIR/data/tutorial.html" "$ROOTFS/usr/share/osmo-operator/tutorial.html"
+
+    # Le tutoriel passe par le HOME, et ce detour n est pas cosmetique :
+    # FIREFOX EST UN SNAP. Son bac a sable lui donne l interface "home", pas
+    # /opt ni /usr/share : un file:///opt/GSM/... s ouvre sur "Fichier
+    # introuvable" - message qui ne parle ni de snap ni de confinement, et qui
+    # envoie chercher la panne du cote du fichier, qui est pourtant bien la.
+    cat > "$ROOTFS/usr/local/bin/osmo-tutorial" <<'TUTO'
+#!/bin/bash
+set -u
+SRC=/usr/share/osmo-operator/tutorial.html
+DST="$HOME/.local/share/osmo-operator/tutorial.html"
+install -d "$(dirname "$DST")" 2>/dev/null || true
+cp -f "$SRC" "$DST" 2>/dev/null || true
+[ -f "$DST" ] || DST="$SRC"
+exec xdg-open "file://$DST"
+TUTO
+    chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"
+
+    cat > "$ROOTFS/usr/share/applications/osmo-launch.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Lancer le banc GSM
+Name[fr]=Lancer le banc GSM
+Comment=Demarre le banc, Wireshark, Linphone et la console web
+Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
+Exec=/opt/GSM/osmo-operator/launch.sh
+Icon=osmo-launch
+Terminal=false
+Categories=System;Network;
+Keywords=gsm;osmocom;banc;lancer;
+DESKTOP
+
+    cat > "$ROOTFS/usr/share/applications/osmo-multi.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=multi-operator
+Name[fr]=multi-operator
+Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
+Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
+Exec=/opt/GSM/osmo-operator/start-multi.sh
+Icon=osmo-multi
+Terminal=false
+Categories=System;Network;
+Keywords=ss7;m3ua;multi;operateur;interstp;
+DESKTOP
+
+    # ── SUPPLEMENTS : LA FENETRE A COCHER ─────────────────────────────────
+    # Meme facture que osmo-update-anim : un terminal, et la main rendue
+    # seulement quand on a lu la fin. addition.sh ouvre lui-meme sa liste a
+    # cocher (zenity) quand DISPLAY est la ; le terminal reste utile pour la
+    # suite, qui est longue et bavarde (apt, puis compilation Osmocom).
+    cat > "$ROOTFS/usr/local/bin/osmo-addition-anim" <<'ADDGUI'
+#!/bin/bash
+set -u
+SCRIPT=/opt/GSM/osmo-operator/addition.sh
+if [ ! -x "$SCRIPT" ]; then
+    command -v zenity >/dev/null 2>&1 && \
+        zenity --error --text="addition.sh introuvable : $SCRIPT" 2>/dev/null
+    exit 1
+fi
+# pkexec : les supplements installent des paquets et demarrent un demon. Sans
+# elevation, apt-get echoue a la premiere ligne et la fenetre se ferme sur un
+# "Permission denied" qui ne dit pas qu il fallait etre root.
+RUNNER="$SCRIPT"
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v pkexec >/dev/null 2>&1; then
+        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
+    else
+        RUNNER="sudo -E $SCRIPT"
+    fi
+fi
+CMD="$RUNNER; echo; read -n1 -rsp 'Termine - une touche pour fermer...'"
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="osmo-operator supplements" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "osmo-operator supplements" -e bash -c "$CMD" ;;
+    esac
+done
+exec bash -c "$RUNNER"
+ADDGUI
+    chmod +x "$ROOTFS/usr/local/bin/osmo-addition-anim"
+
+    cat > "$ROOTFS/usr/share/applications/osmo-addition.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Supplements
+Name[fr]=Supplements
+Comment=Docker, image operateur, multi-operateur SS7 - a cocher
+Comment[fr]=Docker, image operateur, multi-operateur SS7 - a cocher
+Exec=/usr/local/bin/osmo-addition-anim
+Icon=system-software-install
+Terminal=false
+Categories=System;
+Keywords=docker;supplement;multi;ss7;addition;
+DESKTOP
+
+    cat > "$ROOTFS/usr/share/applications/osmo-tutorial.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Tutoriel - demarrage rapide
+Name[fr]=Tutoriel - demarrage rapide
+Comment=Prise en main du banc en cinq minutes
+Comment[fr]=Prise en main du banc en cinq minutes
+Exec=/usr/local/bin/osmo-tutorial
+Icon=osmo-tutorial
+Terminal=false
+Categories=System;Documentation;
+Keywords=tutoriel;aide;demarrage;quickstart;
+DESKTOP
+
+    # Terminal=false pour les DEUX : launch.sh ouvre LUI-MEME son terminal et
+    # demande les privileges (pkexec). Laisser le .desktop s en charger
+    # donnerait deux fenetres, dont une sans les droits.
+    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
+        install -d "$_h/Bureau" "$_h/Desktop"
+        for _d in osmo-launch osmo-multi osmo-tutorial osmo-addition; do
+            for _dir in Bureau Desktop; do
+                cp -f "$ROOTFS/usr/share/applications/$_d.desktop" "$_h/$_dir/" 2>/dev/null || true
+                chmod +x "$_h/$_dir/$_d.desktop" 2>/dev/null || true
+            done
+        done
+    done
+    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} bureau : ${CYAN}telephone${NC} (lancer) · ${CYAN}antenne${NC} (multi-operator) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC}"
 
     # Le paquet calamares pose SA propre entree de menu, qui lance
     # /usr/bin/calamares directement. Elle court-circuite osmo-install : ni le

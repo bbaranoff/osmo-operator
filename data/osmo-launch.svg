@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<!-- ⚠️ CE COMMENTAIRE EST *DANS* <svg>, ET IL DOIT Y RESTER.
+     gdk-pixbuf ne RENIFLE le type d un fichier que sur ses ~256 premiers
+     octets : il y cherche la balise <svg. Un commentaire d en-tete un peu
+     long la repousse au-dela, et le chargeur repond alors
+         Couldn't recognize the image file format
+     sur un SVG parfaitement valide - `file` le reconnait, un parseur XML
+     l accepte, et l icone se remplace quand meme par la page blanche
+     generique sur le bureau. Constate le 31/08 sur les trois icones.
+     Tout texte d explication va donc APRES la balise ouvrante. -->
+<!-- osmo-launch.svg - icone du lanceur du banc osmo-operator.
+     Combine dessine a la main plutot qu un nom d icone du theme : "call-start"
+     est VERT dans Adwaita et n a pas de variante rouge, et une icone de theme
+     absente se remplace en silence par un rectangle gris - le lanceur devient
+     alors introuvable sur le bureau. Un SVG du depot ne peut pas manquer. -->
+  <defs>
+    <linearGradient id="corps" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#e8462f"/>
+      <stop offset="100%" stop-color="#b3160b"/>
+    </linearGradient>
+    <linearGradient id="brillance" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="55%"  stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Pastille de fond -->
+  <rect x="3" y="3" width="58" height="58" rx="14" ry="14" fill="url(#corps)"/>
+  <rect x="3" y="3" width="58" height="58" rx="14" ry="14" fill="url(#brillance)"/>
+  <rect x="3.75" y="3.75" width="56.5" height="56.5" rx="13.5" ry="13.5"
+        fill="none" stroke="#7d0d05" stroke-width="1.5" opacity="0.55"/>
+
+  <!-- Combine : ecouteur haut-gauche, micro bas-droite, cordon en arc.
+       Trace en une seule forme pour rester net a 24 px comme a 256 px. -->
+  <g transform="rotate(-32 32 32)">
+    <path fill="#ffffff" d="
+      M 20.2 14.0
+      c 3.9 0 7.0 3.1 7.0 7.0
+      c 0 2.6 -1.4 4.8 -3.4 6.1
+      c -1.1 0.7 -1.6 2.0 -1.2 3.2
+      c 1.6 4.9 5.4 8.7 10.3 10.3
+      c 1.2 0.4 2.5 -0.1 3.2 -1.2
+      c 1.3 -2.0 3.5 -3.4 6.1 -3.4
+      c 3.9 0 7.0 3.1 7.0 7.0
+      c 0 3.9 -3.1 7.0 -7.0 7.0
+      C 27.4 50.0 14.0 36.6 14.0 21.0
+      c 0 -3.9 3.1 -7.0 6.2 -7.0 z"/>
+  </g>
+</svg>

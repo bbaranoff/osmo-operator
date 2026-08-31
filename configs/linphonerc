@@ -1,0 +1,121 @@
+# =============================================================================
+# linphonerc - compte SIP pre-provisionne du client Linphone (ISO --desktop)
+#
+# Depose par build-iso.sh dans ~/.config/linphone/linphonerc des comptes root
+# et osmocom, et dans /etc/skel. Sans ce fichier l'ISO livrait Linphone VIERGE :
+# l'operateur creait le compte a la main, a chaque demarrage, et tombait sur les
+# deux pieges ci-dessous.
+#
+#   PIEGE 1 - LINPHONE NE RELIT PAS SA CONFIG A CHAUD.
+#   Le compte ecrit dans linphonerc pendant que Linphone TOURNE n'est jamais
+#   charge : l'instance en cours garde son etat en memoire et REECRIT le fichier
+#   en sortant. Symptome constate le 2026-08-31 sur ce banc : linphonerc correct
+#   (linphone_A / tester / bon proxy, reg_sendregister=1), process bien vivant,
+#   socket SIP UDP ouverte -- et pas UN REGISTER en 90 s de capture. Cote
+#   Asterisk : endpoint "Unavailable", zero contact, et RIEN dans les logs (pas
+#   de 401, pas de "No matching endpoint") puisque aucun paquet n'arrivait.
+#   Le serveur etait sain : un REGISTER injecte a la main sur 127.0.0.1:5060
+#   recevait bien son "401 Unauthorized" avec challenge digest.
+#   -> Il faut REDEMARRER Linphone. D'ou ce provisionnement au build, pose
+#      avant le premier lancement.
+#
+#   PIEGE 2 - publish=0, ET PAS 1 (voir la section [proxy_0]).
+#
+#   L'identifiant SIP est "linphone_A", PAS "100". Le 100 est l'extension
+#   composee dans le dialplan (configs/extensions.conf), pas le nom du compte.
+# =============================================================================
+
+[sip]
+# -2 = port UDP aleatoire. Surtout PAS 5060 : sur l'ISO, Linphone et Asterisk
+# partagent le meme hote, et Asterisk tient deja 0.0.0.0:5060 (pjsip.conf
+# [transport-udp] bind=0.0.0.0). Un port fixe a 5060 ici et le client ne
+# demarre pas sa pile SIP - sans le dire clairement.
+sip_port=-2
+# TCP et TLS coupes : pjsip.conf ne declare QU'UN transport, [transport-udp].
+# Rien n'ecoute en TCP 5060 (et chan_sip n'est meme pas charge). Un Linphone
+# laisse sur son transport par defaut echoue instantanement, sans qu'aucun
+# paquet n'arrive jusqu'a Asterisk - donc sans la moindre trace cote serveur.
+sip_tcp_port=-1
+sip_tls_port=-1
+media_encryption=none
+default_proxy=0
+
+# LES DEUX POSTES SONT PROVISIONNES DANS LA MEME INSTANCE. Linphone gere
+# plusieurs comptes de front : les deux s enregistrent au demarrage, et l on
+# appelle de l un vers l autre (100 <-> 200) sans rien reconfigurer. Le compte
+# par defaut (celui qui emet si l on ne choisit pas) est proxy_0, linphone_A,
+# fixe par default_proxy=0 dans [sip] ci-dessus.
+[auth_info_0]
+username=linphone_A
+passwd=tester
+# 127.0.0.1 est valable dans LES DEUX topologies - conteneur comme ISO :
+# Linphone et Asterisk partagent l'hote. Une IP de LAN (192.168.1.x) marcherait
+# sur ce banc mais serait fausse des le prochain bail DHCP.
+domain=127.0.0.1
+
+[auth_info_1]
+username=linphone_B
+passwd=testerB
+domain=127.0.0.1
+
+[proxy_0]
+reg_proxy=<sip:127.0.0.1;transport=udp>
+reg_identity=sip:linphone_A@127.0.0.1
+reg_expires=3600
+reg_sendregister=1
+# publish=0 IMPERATIF. A 1, Linphone emet un PUBLISH de presence a chaque
+# enregistrement et Asterisk 18 le refuse - il n'embarque aucun gestionnaire
+# pour l'evenement "presence" (c'est une brique absente de la version libre) :
+#     WARNING res_pjsip_pubsub.c: pubsub_on_rx_publish_request:
+#     No registered publish handler for event presence from linphone_A
+# Le warning est inoffensif mais il revient a chaque REGISTER et noie
+# /var/log/asterisk/messages. Rien a corriger cote Asterisk : c'est le client
+# qui doit se taire.
+publish=0
+avpf=0
+quality_reporting_enabled=0
+
+[proxy_1]
+reg_proxy=<sip:127.0.0.1;transport=udp>
+reg_identity=sip:linphone_B@127.0.0.1
+reg_expires=3600
+reg_sendregister=1
+# publish=0 pour la meme raison que proxy_0 : sans ce reglage, CHAQUE compte
+# emet son PUBLISH de presence a chaque enregistrement, et le warning
+# "No registered publish handler for event presence" arrive alors en DOUBLE.
+publish=0
+avpf=0
+quality_reporting_enabled=0
+
+# Codecs alignes sur l'endpoint Asterisk (pjsip.conf : disallow=all, puis
+# allow=alaw/ulaw/gsm). Opus et speex sont coupes : proposes par defaut, ils
+# ne sont jamais retenus et allongent le SDP pour rien.
+[audio_codec_0]
+mime=PCMA
+rate=8000
+channels=1
+enabled=1
+
+[audio_codec_1]
+mime=PCMU
+rate=8000
+channels=1
+enabled=1
+
+[audio_codec_2]
+mime=GSM
+rate=8000
+channels=1
+enabled=1
+
+[audio_codec_3]
+mime=opus
+rate=48000
+channels=2
+enabled=0
+
+[audio_codec_4]
+mime=speex
+rate=16000
+channels=1
+enabled=0

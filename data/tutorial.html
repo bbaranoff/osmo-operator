@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>osmo-operator — Démarrage rapide</title>
+<style>
+  :root{
+    --fond:#f7f6f4; --carte:#ffffff; --texte:#1c1b19; --doux:#5f5c57;
+    --trait:#e0ddd7; --rouge:#b3160b; --bleu:#1b4788; --code:#f0eee9;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --fond:#161513; --carte:#201f1c; --texte:#eceae6; --doux:#a5a09a;
+      --trait:#35332e; --rouge:#f0654e; --bleu:#7aa8e8; --code:#2a2825;
+    }
+  }
+  :root[data-theme="dark"]{
+    --fond:#161513; --carte:#201f1c; --texte:#eceae6; --doux:#a5a09a;
+    --trait:#35332e; --rouge:#f0654e; --bleu:#7aa8e8; --code:#2a2825;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fond);color:var(--texte);
+       font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .page{max-width:760px;margin:0 auto;padding:40px 24px 64px}
+  h1{font-size:28px;margin:0 0 4px;letter-spacing:-.01em}
+  .sous{color:var(--doux);margin:0 0 32px}
+  h2{font-size:17px;margin:32px 0 10px;padding-top:16px;border-top:1px solid var(--trait)}
+  h2:first-of-type{border-top:0;padding-top:0}
+  p{margin:0 0 12px}
+  ol,ul{margin:0 0 12px;padding-left:22px}
+  li{margin:4px 0}
+  code{background:var(--code);padding:1px 6px;border-radius:4px;
+       font:14px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:0 0 12px;font-size:15px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--trait)}
+  th{color:var(--doux);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+  td:first-child{white-space:nowrap;font:14px ui-monospace,Menlo,Consolas,monospace}
+  .grille{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--trait);
+          border:1px solid var(--trait);border-radius:8px;overflow:hidden;margin:0 0 12px}
+  .case{background:var(--carte);padding:14px 16px}
+  .case b{display:block;font-size:14px;margin-bottom:2px}
+  .case span{color:var(--doux);font-size:14px}
+  .note{background:var(--carte);border-left:3px solid var(--rouge);
+        padding:12px 16px;border-radius:0 6px 6px 0;margin:0 0 12px}
+  .note b{color:var(--rouge)}
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>osmo-operator — démarrage rapide</h1>
+<p class="sous">Réseau GSM/EGPRS complet sur une machine : BTS, cœur de réseau, Asterisk et softphones.</p>
+
+<h2>1. Lancer</h2>
+<p>Double-cliquez le <b>téléphone rouge</b> sur le bureau. Quatre fenêtres s'ouvrent, une par quart d'écran :</p>
+<div class="grille">
+  <div class="case"><b>Terminal</b><span>le banc démarre (<code>start-direct.sh</code>)</span></div>
+  <div class="case"><b>Firefox</b><span>console web sur <code>127.0.0.1:8080</code></span></div>
+  <div class="case"><b>Wireshark</b><span>GSMTAP, <code>udp/4729</code></span></div>
+  <div class="case"><b>Linphone</b><span>postes 100 et 200, déjà enregistrés</span></div>
+</div>
+<p>Comptez une à deux minutes avant que la radio soit stable.</p>
+
+<h2>2. Passer un appel</h2>
+<p>Dans Linphone, composez un numéro et décrochez :</p>
+<table>
+  <tr><th>Numéro</th><th>Destination</th></tr>
+  <tr><td>100</td><td>Linphone A</td></tr>
+  <tr><td>200</td><td>Linphone B</td></tr>
+  <tr><td>600</td><td>test d'écho — votre voix vous revient</td></tr>
+  <tr><td>500 / 700</td><td>annonces enregistrées</td></tr>
+  <tr><td>1001<i>XX</i></td><td>un mobile GSM du réseau local</td></tr>
+</table>
+<p><b>Commencez par le 600.</b> S'il vous répond, la chaîne SIP et l'audio sont bonnes — inutile de chercher plus loin côté téléphone.</p>
+
+<h2>3. Vérifier</h2>
+<ul>
+  <li>Les postes sont enregistrés : <code>asterisk -rx "pjsip show endpoints"</code> → <code>Avail</code></li>
+  <li>Le mobile est attaché : la console web, page <i>Abonnés</i></li>
+  <li>La radio parle : Wireshark défile en continu sur <code>udp/4729</code></li>
+</ul>
+
+<h2>4. Si ça coince</h2>
+<div class="note">
+  <p><b>Linphone ne s'enregistre pas.</b> Il ne relit jamais sa configuration à chaud : il faut le <b>redémarrer</b>. Un compte modifié pendant qu'il tourne n'est pas pris en compte, et il réécrit le fichier en quittant.</p>
+</div>
+<ul>
+  <li><b>Appel muet.</b> Le micro passe par la carte son, pas par le navigateur : <code>pactl list short modules | grep loopback</code> doit montrer deux lignes.</li>
+  <li><b>Écho.</b> Les enceintes rentrent dans le micro — mettez un casque.</li>
+  <li><b>Pas de console web.</b> <code>systemctl status osmo-egprs-web</code>, puis <code>journalctl -u osmo-egprs-web-install</code>.</li>
+</ul>
+
+<h2>5. Arrêter</h2>
+<p><code>sudo /opt/osmo-launch.sh stop</code>, ou <code>Ctrl+C</code> dans le terminal du banc.</p>
+
+</div>
+</body>
+</html>

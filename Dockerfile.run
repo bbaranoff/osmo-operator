@@ -124,7 +124,29 @@ ARG QEMU_CACHE_BUST
 # de l'entrypoint.
 # Le clone de l'image de base laisse HEAD sur la branche par defaut : un simple
 # pull suffit, aucune ref a nommer ici.
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator && git pull
+# [2026-08-31] LE PULL NE PEUT PLUS TUER LE BUILD.
+# Constate : `git pull` ici sort en 1 avec
+#     fatal: could not read Username for 'https://github.com': No such device or address
+#     fatal: expected flush after ref listing
+# et emporte une image de 11 Go et 40 minutes de compilation - pour un
+# rafraichissement, pas pour une dependance.
+#
+# CE N EST PAS UN PROBLEME D IDENTIFIANTS. Le depot est PUBLIC : depuis l hote
+# comme depuis un conteneur LANCE (docker run), `git ls-remote origin HEAD`
+# repond a0a7888 en anonyme, DNS compris. Seul le reseau du BUILD echoue. Git
+# lit alors une reponse HTTP qu il n attend pas ("expected flush after ref
+# listing"), la prend pour une demande d authentification, et va chercher un
+# terminal qui n existe pas dans un build - d ou le message trompeur sur le nom
+# d utilisateur, qui envoie chercher des identifiants la ou il n en faut aucun.
+#
+# GIT_TERMINAL_PROMPT=0 : echouer TOUT DE SUITE et clairement plutot que de
+# bloquer sur une invite invisible.
+# `|| echo` : l arbre du clone de base reste utilisable tel quel. Une image qui
+# se construit avec un depot de la veille vaut mieux qu une image qui ne se
+# construit pas - et le message dit lequel des deux on a.
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
+    && (GIT_TERMINAL_PROMPT=0 git pull --ff-only \
+        || echo "[warn] git pull osmo-operator impossible (reseau du build) - on garde l arbre du clone de base")
 
 # ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
 # [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
@@ -144,7 +166,13 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator && git pull
 # (Le rebuild du device est NON BLOQUANT : si l'amont ne fournit plus
 #  tools/calypso-ipc-device, on garde celui de l'image de base au lieu de
 #  casser le build de l'image run.)
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qosmo-grgsm && git pull && \
+# Meme garde que pour osmo-operator ci-dessus : le pull rafraichit, il ne
+# conditionne pas. Sans le `|| echo`, un reseau de build capricieux emportait
+# la reconstruction de QEMU qui suit - laquelle marche parfaitement sur
+# l'arbre deja present.
+RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qosmo-grgsm \
+    && (GIT_TERMINAL_PROMPT=0 git pull --ff-only \
+        || echo "[warn] git pull qosmo-grgsm impossible - on rebatit sur l arbre present") && \
     (cd build && ninja) && \
     if [ -d tools/calypso-ipc-device ]; then \
         make -C tools/calypso-ipc-device clean && \

@@ -82,9 +82,58 @@ op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
-linphone_sip_port()  { echo $(( 5060 + ($1 - 1) )); }
-linphone_rtp_start() { echo $(( 30000 + ($1 - 1) * 200 )); }
-linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
+# ── COHABITATION AVEC LA PILE NATIVE ────────────────────────────────────────
+# [2026-08-31] Le natif et les conteneurs peuvent tourner ENSEMBLE, et ils se
+# disputaient le meme port. L operateur 1 publie 5060/udp - exactement ce que
+# l Asterisk natif tient deja sur 0.0.0.0 - et docker refuse de demarrer :
+#     docker: Error response from daemon: failed to set up container networking:
+#     driver failed programming external connectivity on endpoint
+#     osmo-operator-1: failed to bind host port 0.0.0.0:5060/udp:
+#     address already in use
+# Message qui parle de docker et de reseau, jamais de la pile native qui tourne
+# a cote - on cherche la panne dans le conteneur, elle est sur l hote.
+#
+# ⚠️ CE N EST PAS UN CHANGEMENT DE PLAN D ADRESSAGE. A l INTERIEUR du
+# conteneur, Asterisk ecoute toujours sur 5060 et le RTP reste en 30000+ :
+# seule la FACE HOTE des publications bouge. Rien dans les configs generees
+# n a donc a suivre ce decalage.
+#
+# OSMO_PORT_OFFSET=N le force ; OSMO_PORT_OFFSET=0 le desactive (et l on
+# retrouve le conflit, ce qui est parfois exactement ce qu on veut constater).
+port_pris() {   # $1 = port, $2 = proto (udp par defaut)
+    local p="$1" pr="${2:-udp}" opt
+    case "$pr" in tcp) opt="-ltn" ;; *) opt="-lun" ;; esac
+    # COLONNE 4, pas 5. `ss -lun` sort : State Recv-Q Send-Q Local:Port
+    # Peer:Port [Process] - l adresse LOCALE est la quatrieme. Prendre la
+    # cinquieme lit le pair (toujours "0.0.0.0:*" en ecoute) : la sonde
+    # repondait alors "libre" pour TOUS les ports, y compris ceux que la pile
+    # native tenait sous le nez. Verifie a la main : Asterisk sur 0.0.0.0:5060
+    # etait annonce libre.
+    ss $opt 2>/dev/null | awk '{print $4}' | grep -qE "(^|[:.])${p}\$"
+}
+
+detect_port_offset() {
+    [ -n "${OSMO_PORT_OFFSET:-}" ] && { echo "$OSMO_PORT_OFFSET"; return 0; }
+    local off
+    # Pas de dichotomie : 100 par cran, cinq crans. Au-dela, ce n est plus un
+    # conflit avec le natif mais une machine deja saturee, et un decalage
+    # supplementaire ne ferait que deplacer le probleme sans le dire.
+    for off in 0 100 200 300 400; do
+        port_pris $(( 5060 + off )) udp || { echo "$off"; return 0; }
+    done
+    echo 0
+}
+
+PORT_OFFSET="${PORT_OFFSET:-$(detect_port_offset)}"
+if [ "${PORT_OFFSET:-0}" != "0" ]; then
+    echo -e "  ${YELLOW}[ports] 5060/udp deja pris (pile native ?) - publications decalees de +${PORT_OFFSET}${NC}" >&2
+fi
+
+# Le RTP se decale de dix fois le meme cran : la plage native (rtp.conf,
+# 30000-30199) fait 200 ports, un decalage de +100 la chevaucherait encore.
+linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
+linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
+linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
 generate_pjsip_interop_trunks() {
     local op_id=$1 n_operators=$2 remote_op remote_ip
     for remote_op in $(seq 1 "$n_operators"); do

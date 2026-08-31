@@ -257,9 +257,58 @@ wan_sms_port()    { echo $(( 7890 + $1 - 1 )); }
 wan_active()      { [ "$WAN_ENABLED" = "true" ] || [ "${WAN_MESH:-0}" = "1" ]; }
 
 # Linphone helpers - port SIP/RTP expose sur le host
-linphone_sip_port()  { echo $(( 5060 + ($1 - 1) )); }
-linphone_rtp_start() { echo $(( 30000 + ($1 - 1) * 200 )); }
-linphone_rtp_end()   { echo $(( 30000 + $1 * 200 - 1 )); }
+# ── COHABITATION AVEC LA PILE NATIVE ────────────────────────────────────────
+# [2026-08-31] Le natif et les conteneurs peuvent tourner ENSEMBLE, et ils se
+# disputaient le meme port. L operateur 1 publie 5060/udp - exactement ce que
+# l Asterisk natif tient deja sur 0.0.0.0 - et docker refuse de demarrer :
+#     docker: Error response from daemon: failed to set up container networking:
+#     driver failed programming external connectivity on endpoint
+#     osmo-operator-1: failed to bind host port 0.0.0.0:5060/udp:
+#     address already in use
+# Message qui parle de docker et de reseau, jamais de la pile native qui tourne
+# a cote - on cherche la panne dans le conteneur, elle est sur l hote.
+#
+# ⚠️ CE N EST PAS UN CHANGEMENT DE PLAN D ADRESSAGE. A l INTERIEUR du
+# conteneur, Asterisk ecoute toujours sur 5060 et le RTP reste en 30000+ :
+# seule la FACE HOTE des publications bouge. Rien dans les configs generees
+# n a donc a suivre ce decalage.
+#
+# OSMO_PORT_OFFSET=N le force ; OSMO_PORT_OFFSET=0 le desactive (et l on
+# retrouve le conflit, ce qui est parfois exactement ce qu on veut constater).
+port_pris() {   # $1 = port, $2 = proto (udp par defaut)
+    local p="$1" pr="${2:-udp}" opt
+    case "$pr" in tcp) opt="-ltn" ;; *) opt="-lun" ;; esac
+    # COLONNE 4, pas 5. `ss -lun` sort : State Recv-Q Send-Q Local:Port
+    # Peer:Port [Process] - l adresse LOCALE est la quatrieme. Prendre la
+    # cinquieme lit le pair (toujours "0.0.0.0:*" en ecoute) : la sonde
+    # repondait alors "libre" pour TOUS les ports, y compris ceux que la pile
+    # native tenait sous le nez. Verifie a la main : Asterisk sur 0.0.0.0:5060
+    # etait annonce libre.
+    ss $opt 2>/dev/null | awk '{print $4}' | grep -qE "(^|[:.])${p}\$"
+}
+
+detect_port_offset() {
+    [ -n "${OSMO_PORT_OFFSET:-}" ] && { echo "$OSMO_PORT_OFFSET"; return 0; }
+    local off
+    # Pas de dichotomie : 100 par cran, cinq crans. Au-dela, ce n est plus un
+    # conflit avec le natif mais une machine deja saturee, et un decalage
+    # supplementaire ne ferait que deplacer le probleme sans le dire.
+    for off in 0 100 200 300 400; do
+        port_pris $(( 5060 + off )) udp || { echo "$off"; return 0; }
+    done
+    echo 0
+}
+
+PORT_OFFSET="${PORT_OFFSET:-$(detect_port_offset)}"
+if [ "${PORT_OFFSET:-0}" != "0" ]; then
+    echo -e "  ${YELLOW}[ports] 5060/udp deja pris (pile native ?) - publications decalees de +${PORT_OFFSET}${NC}" >&2
+fi
+
+# Le RTP se decale de dix fois le meme cran : la plage native (rtp.conf,
+# 30000-30199) fait 200 ports, un decalage de +100 la chevaucherait encore.
+linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
+linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
+linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
 
 # Global - detecte avant la boucle operateurs
 HOST_IP="127.0.0.1"
@@ -407,7 +456,39 @@ build_alsa_args() {
         fi
     fi
     local has_pulse="true"
-    alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
+    # ── LE SOCKET PULSE DOIT ETRE MONTE, PAS SEULEMENT NOMME ────────────────
+    # [2026-08-31] Cette ligne posait PULSE_SERVER=unix:/run/pulse/native sans
+    # que RIEN ne monte ce socket dans le conteneur. Le chemin existe sur
+    # l hote, pas chez l invite : le plugin ALSA-pulse ouvrait donc dans le
+    # vide, et gapk mourait a l initialisation -
+    #     pulse.c:242 (pulse_connect) PulseAudio: Unable to connect: Connection refused
+    #     pq_alsa.c:168 Couldn't init ALSA device 'gsm_out': Connection refused
+    #     gapk_io.c:468 Failed to initialize GAPK I/O
+    # soit un appel parfaitement etabli et TOTALEMENT muet, sans une ligne qui
+    # parle d audio dans les logs du coeur. Verifie le 31/08 dans
+    # osmo-operator-1 : `docker inspect` ne montrait aucun montage pulse, et
+    # `PULSE_SERVER=unix:/run/pulse/native pactl info` echouait dans le
+    # conteneur la ou tcp:172.20.0.1:4713 repondait.
+    #
+    # On monte donc le socket quand il existe - c est le chemin le plus court
+    # et le moins bavard - et on retombe sur le relais TCP sinon. Le socket est
+    # en srwxrwxrwx et le module unix est en auth-anonymous=1 : l utilisateur
+    # osmocom du conteneur peut s y connecter.
+    local _pa_sock=""
+    for _s in /var/run/pulse/native /run/pulse/native "/run/user/$(id -u)/pulse/native"; do
+        [ -S "$_s" ] && { _pa_sock="$_s"; break; }
+    done
+    if [ -n "$_pa_sock" ]; then
+        alsa_args="${alsa_args} -v ${_pa_sock}:/run/pulse/native"
+        alsa_args="${alsa_args} -e PULSE_SERVER=unix:/run/pulse/native"
+    elif [ -n "${HOST_AUDIO_RELAY:-}" ]; then
+        alsa_args="${alsa_args} -e PULSE_SERVER=${HOST_AUDIO_RELAY}"
+    else
+        # Ni socket ni relais : on le DIT. Sans ce message, le silence de
+        # l appel restait la seule trace du probleme.
+        alsa_args="${alsa_args} -e PULSE_SERVER=tcp:${INTER_NET_GATEWAY:-172.20.0.1}:${WSLG_TCP_PORT:-4713}"
+        echo -e "  ${YELLOW}Audio : aucun socket pulse trouve et relais non arme - repli TCP a l aveugle${NC}" >&2
+    fi
     local asound_ok="false"
     if [ -f "$src_asound" ]; then
         if cp -f "$src_asound" "$host_asound" 2>/dev/null && [ -f "$host_asound" ]; then
@@ -440,8 +521,37 @@ ensure_host_audio_relay() {
     local bridge="$(dirname "$0")/scripts/wslg-audio-bridge.sh"
     [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
     if "$bridge" host-relay; then
-        HOST_AUDIO_RELAY="tcp:${INTER_NET_GATEWAY}:${WSLG_TCP_PORT:-4713}"
-        echo -e "  ${GREEN}[host-audio] relai pret → ${HOST_AUDIO_RELAY}${NC}"
+        # [2026-08-31] ON VERIFIE QUE LE PORT REPOND, on ne se fie plus au seul
+        # code de retour. `host-relay` rend 0 des que le chargement du module a
+        # ete DEMANDE - pas quand pulseaudio accepte des connexions. On
+        # annoncait donc "relai pret" pendant que gapk, dans le conteneur,
+        # recevait :
+        #     lib pulse.c:242:(pulse_connect) PulseAudio: Unable to connect:
+        #         Connection refused
+        #     pq_alsa.c:168 Couldn't init ALSA device 'gsm_out': Connection refused
+        #     gapk_io.c:468 Failed to initialize GAPK I/O
+        # -> appel etabli et TOTALEMENT muet, avec un demarrage qui affichait
+        # "relai pret" en vert. Constate le 31/08, cinq minutes apres un boot :
+        # la course se gagne ou se perd selon ce que la machine fait par
+        # ailleurs, ce qui en fait un "ca marche une fois sur deux".
+        # gapk n init son I/O QU UNE FOIS : rater cette fenetre, c est le
+        # silence pour tout l appel.
+        local _p=0 _i
+        for _i in $(seq 1 30); do
+            if (exec 3<>"/dev/tcp/${INTER_NET_GATEWAY}/${WSLG_TCP_PORT:-4713}") 2>/dev/null; then
+                exec 3>&- 2>/dev/null; _p=1; break
+            fi
+            sleep 1
+        done
+        if [ "$_p" = "1" ]; then
+            HOST_AUDIO_RELAY="tcp:${INTER_NET_GATEWAY}:${WSLG_TCP_PORT:-4713}"
+            echo -e "  ${GREEN}[host-audio] relai pret → ${HOST_AUDIO_RELAY}${NC}"
+        else
+            HOST_AUDIO_RELAY=""
+            echo -e "  ${RED}[host-audio] relai charge mais ${INTER_NET_GATEWAY}:${WSLG_TCP_PORT:-4713} NE REPOND PAS apres 30 s${NC}" >&2
+            echo -e "  ${YELLOW}             → l audio du conteneur sera muet. Verifier :${NC}" >&2
+            echo -e "  ${YELLOW}               pactl list modules | grep -A2 native-protocol-tcp${NC}" >&2
+        fi
     else
         HOST_AUDIO_RELAY=""
         echo -e "  ${YELLOW}[host-audio] relai non ouvert - fallback carte locale dans le conteneur${NC}"

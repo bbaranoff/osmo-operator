@@ -110,6 +110,14 @@ RUN setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
+# asound.conf DOIT AUSSI ETRE A LA RACINE. Le COPY ci-dessus le depose dans
+# /etc/asterisk/ - ALSA ne regarde jamais la : il lit /etc/asound.conf (ou
+# ~/.asoundrc). Sans ce second exemplaire, `aplay -D gsm_out` repond
+#     ALSA lib pcm.c: (snd_pcm_open_noupdate) Unknown PCM gsm_out
+# et le mobile du conteneur est MUET, sans qu aucun log ne parle d audio.
+# start.sh l.469 monte bien celui de l hote (-v ...:/etc/asound.conf), mais un
+# conteneur lance autrement - docker run a la main, diagnostic - n a rien.
+COPY configs/asound.conf /etc/asound.conf
 
 WORKDIR ${ROOT}
 

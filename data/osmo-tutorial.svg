@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<!-- ⚠️ CE COMMENTAIRE EST *DANS* <svg>, ET IL DOIT Y RESTER.
+     gdk-pixbuf ne RENIFLE le type d un fichier que sur ses ~256 premiers
+     octets : il y cherche la balise <svg. Un commentaire d en-tete un peu
+     long la repousse au-dela, et le chargeur repond alors
+         Couldn't recognize the image file format
+     sur un SVG parfaitement valide - `file` le reconnait, un parseur XML
+     l accepte, et l icone se remplace quand meme par la page blanche
+     generique sur le bureau. Constate le 31/08 sur les trois icones.
+     Tout texte d explication va donc APRES la balise ouvrante. -->
+<!-- osmo-tutorial.svg - icone du tutoriel. Meme facture que osmo-launch.svg
+     (pastille + glyphe blanc) pour que les deux se lisent comme une paire sur
+     le bureau ; teinte bleue pour qu on les distingue d un coup d oeil. -->
+  <defs>
+    <linearGradient id="corpsL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#3f7fd0"/>
+      <stop offset="100%" stop-color="#1b4788"/>
+    </linearGradient>
+    <linearGradient id="brillanceL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="55%"  stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="3" y="3" width="58" height="58" rx="14" ry="14" fill="url(#corpsL)"/>
+  <rect x="3" y="3" width="58" height="58" rx="14" ry="14" fill="url(#brillanceL)"/>
+  <rect x="3.75" y="3.75" width="56.5" height="56.5" rx="13.5" ry="13.5"
+        fill="none" stroke="#12305d" stroke-width="1.5" opacity="0.55"/>
+
+  <!-- Livre ouvert : deux pages et la reliure centrale. -->
+  <g>
+    <path fill="#ffffff" d="
+      M 31.0 20.4
+      c -3.6 -2.6 -8.0 -3.9 -13.1 -3.9
+      c -1.6 0 -3.1 0.1 -4.6 0.4
+      c -0.8 0.1 -1.3 0.8 -1.3 1.6
+      v 24.6
+      c 0 1.0 0.9 1.8 1.9 1.6
+      c 1.3 -0.2 2.7 -0.3 4.0 -0.3
+      c 5.0 0 9.2 1.3 12.6 3.8
+      c 0.2 0.2 0.4 0.2 0.5 0.2 z"/>
+    <path fill="#ffffff" d="
+      M 33.0 20.4
+      c 3.6 -2.6 8.0 -3.9 13.1 -3.9
+      c 1.6 0 3.1 0.1 4.6 0.4
+      c 0.8 0.1 1.3 0.8 1.3 1.6
+      v 24.6
+      c 0 1.0 -0.9 1.8 -1.9 1.6
+      c -1.3 -0.2 -2.7 -0.3 -4.0 -0.3
+      c -5.0 0 -9.2 1.3 -12.6 3.8
+      c -0.2 0.2 -0.4 0.2 -0.5 0.2 z"/>
+    <rect x="31.1" y="20.0" width="1.8" height="28.6" rx="0.9" fill="#ffffff" opacity="0.55"/>
+  </g>
+</svg>

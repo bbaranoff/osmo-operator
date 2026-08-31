@@ -112,6 +112,70 @@ ensure_local_loopback() {
     fi
 }
 
+# ── Micro local : la carte son de la machine → gsm_mic ─────────────────
+# [2026-08-31] SYMETRIQUE de ensure_local_loopback, et il manquait pareil. Le
+# montant (ce que le mobile EMET vers le reseau) part de gsm_in, c'est-a-dire de
+# gsm_mic.monitor - un null-sink que PERSONNE n'alimentait depuis la machine.
+# Le seul producteur etait la console web : le navigateur capturait le micro,
+# poussait les echantillons a /opt/GSM/osmo-egprs-web/server.js, qui les
+# reinjectait via `pacat --playback -d gsm_mic`. Chemin mesure le 31/08 :
+# 3 a 4 secondes de retard sur la voix montante, alors que TOUT le trajet
+# PulseAudio tient sous 100 ms (pacat 45 ms, capture du mobile 0 us, loopback
+# descendant 20 ms). Le tampon n'est donc pas dans PulseAudio mais dans le
+# transport navigateur -> node -> socket, qu'aucun reglage pulse n'atteint.
+# Un module-loopback depuis la carte son supprime ce transport au lieu de
+# l'accelerer : le micro alimente gsm_mic directement, en 20 ms.
+#
+# ⚠️ DEUX SOURCES A NE JAMAIS PRENDRE ICI :
+#   - gsm_audio.monitor : c'est le DESCENDANT. Le rejouer dans le montant, c'est
+#     exactement la boucle fermee du 08/08 (RMS x11 en 10 s) que le commentaire
+#     d'/etc/asound.conf documente. On ne garde qu'une entree MATERIELLE.
+#   - gsm_mic.monitor : le sink qu'on alimente - il se recopierait sur lui-meme.
+#
+# ⚠️ Boucle ACOUSTIQUE : le descendant sort sur les enceintes (loopback
+# ci-dessus) et le micro les reentend. Au casque c'est sans objet ; sur
+# haut-parleurs, couper l'un des deux ou baisser le volume.
+AUDIO_LOCAL_MIC="${AUDIO_LOCAL_MIC:-1}"
+
+ensure_local_mic() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    [ "$AUDIO_LOCAL_MIC" = "1" ] || {
+        echo -e "  ${YELLOW}[audio] micro local desactive (AUDIO_LOCAL_MIC=0)${NC}"; return 0; }
+    pactl info >/dev/null 2>&1 || return 0
+
+    pactl list short sinks 2>/dev/null | grep -qw 'gsm_mic' || {
+        echo -e "  ${YELLOW}[audio] sink gsm_mic absent - micro local ignore${NC}"; return 0; }
+
+    # Entree materielle = la source par defaut, SAUF si c'est un moniteur de
+    # null-sink (voir l'avertissement ci-dessus). Repli : la premiere source
+    # qui n'est pas un .monitor.
+    local src
+    src="$(pactl get-default-source 2>/dev/null || true)"
+    case "$src" in
+        ''|*.monitor|@*)
+            src="$(pactl list short sources 2>/dev/null \
+                    | awk '$2 !~ /\.monitor$/ { print $2; exit }')" ;;
+    esac
+    [ -n "$src" ] || {
+        echo -e "  ${YELLOW}[audio] aucune entree materielle - micro local ignore${NC}"; return 0; }
+
+    # Idempotent : un 2e loopback doublerait la voix montante.
+    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
+         | grep -F "source=${src}" | grep -qF 'sink=gsm_mic'; then
+        echo -e "  ${GREEN}[audio] micro local deja en place : ${src} → gsm_mic${NC}"
+        return 0
+    fi
+
+    if pactl load-module module-loopback \
+            source="$src" sink=gsm_mic \
+            latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}[audio] micro local charge : ${src} → gsm_mic (${LOOPBACK_LATENCY_MSEC} ms)${NC}"
+        echo -e "  ${CYAN}       → la console web n'est plus necessaire pour parler.${NC}"
+    else
+        echo -e "  ${YELLOW}[audio] echec du micro local depuis ${src}${NC}"
+    fi
+}
+
 # Post-condition : les PCM que `mobile` va reellement ouvrir s'ouvrent-ils ?
 # Tester le sink avec `pactl list sinks` ne suffit pas - c'est le mapping ALSA
 # de /etc/asound.conf qui casse (gsm_in → gsm_mic.monitor). On ouvre pour de
@@ -175,6 +239,7 @@ ensure_pulse() {
         echo -e "  ${GREEN}[audio] PulseAudio deja actif (sinks gsm_audio + gsm_mic uniques assures)${NC}"
         assert_audio_devices || true
         ensure_local_loopback
+        ensure_local_mic
         return 0
     fi
 
@@ -235,6 +300,7 @@ ensure_pulse() {
         echo -e "  ${GREEN}[audio] PulseAudio pret (sinks gsm_audio + gsm_mic) @ ${PULSE_SOCK}${NC}"
         assert_audio_devices || true
         ensure_local_loopback
+        ensure_local_mic
     else
         echo -e "  ${YELLOW}[audio] PulseAudio injoignable - audio degrade${NC}"
         echo -e "  ${YELLOW}        → voir ${LOG_DIR}/pulse-system.log${NC}"
