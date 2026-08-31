@@ -127,9 +127,27 @@ linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 ))
 # Les deux jumelles doivent donc partager la meme base.
 generate_pjsip_interop_trunks() {
     local op_id=$1 n_operators=$2 remote_op remote_ip
-    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
+    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
+    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
+    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
+    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
+    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
+    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
-        remote_ip=$(op_backbone_ip "$remote_op")
+        # Un operateur sous la base est NATIF : il tourne sur l hote, pas dans
+        # un conteneur. Vu d un conteneur, l hote est la passerelle du bridge
+        # docker - la meme adresse que le pont audio et que sms-routing.conf.
+        # NB : match=172.20.0.1 n avale pas les REGISTER Linphone, qui arrivent
+        # par la meme passerelle : pjsip.conf pose endpoint_identifier_order=
+        # username,ip,anonymous - le username passe avant l IP.
+        if [ "$remote_op" -lt "${OP_ID_BASE:-1}" ]; then
+            remote_ip="${INTER_NET_GATEWAY:-172.20.0.1}"
+        else
+            remote_ip=$(op_backbone_ip "$remote_op")
+        fi
         cat <<EOF
 
 [interop-identify-op${remote_op}]
@@ -169,7 +187,15 @@ generate_extensions_interop_out() {
     # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>. Les
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
+    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
+    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
+    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
+    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
+    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
+    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
 exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
@@ -296,6 +322,71 @@ _gab_fixups_natifs() {
             }
             { print }
         ' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
+    fi
+
+    # 4. sms-routing.conf : LE NATIF NE CONNAISSAIT QUE LUI-MEME.
+    #    [2026-08-31] Releve sur l hote :
+    #        [operators]   1 = 172.20.0.11
+    #        [routes]      100101 = 1   100102 = 1
+    #    Deux erreurs dans quatre lignes. 172.20.0.11 est l adresse de DORSALE
+    #    DOCKER de l operateur 1 - elle n existe pas sur l hote, ou le natif
+    #    tourne. Et aucun des autres operateurs n y figure : un SMS du natif
+    #    vers 100201 sortait en « No route for destination ».
+    #
+    #    POURQUOI CE FICHIER ETAIT FAUX. apply_native_post_patches
+    #    (generate_configs.sh) sait deja ecrire cette table - son propre
+    #    commentaire decrit exactement le defaut. Mais elle n est appelee que
+    #    par start-direct.sh --regen et build-iso.sh ; le demarrage ordinaire du
+    #    natif passe par 08-gabarits.sh, qui ne fait qu appliquer les gabarits
+    #    bruts. Le fichier repartait donc a chaque fois sur le fallback ecrit
+    #    POUR UN CONTENEUR - le meme piege que les points 1 a 3 ci-dessus, d ou
+    #    la correction au meme endroit : install_configs_native est le passage
+    #    OBLIGE du natif, quel que soit l appelant.
+    #
+    #    LA SOURCE DE VERITE est osmo-multi.conf (ecrit par addition.sh) :
+    #        MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:... 3:docker:..."
+    #    On garde le keying par OPERATEUR, celui des conteneurs : sur un banc a
+    #    une machine tout le monde est sur le noeud 1, un keying par noeud les
+    #    confondrait. Sans osmo-multi.conf (mono-operateur), on ne touche a rien.
+    f="$src/osmocom/sms-routing.conf"
+    local mc="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+    if [ -f "$f" ] && [ -r "$mc" ]; then
+        local _ops _node _self _sc _id _mode _ip _e
+        _ops="$(sed -n 's/^MULTI_OPS=//p' "$mc" | tr -d '"' | tail -1)"
+        _node="$(sed -n 's/^MULTI_NODE=//p' "$mc" | tail -1)"; case "$_node" in [1-9]) ;; *) _node=1 ;; esac
+        # Identite : on la RELIT, on ne la recalcule pas - c est elle qui dit
+        # quel operateur ce natif est, et elle a pu etre realignee par
+        # start-multi.sh (aligner_natif).
+        _self="$(sed -n 's/^operator_id[[:space:]]*=[[:space:]]*//p' "$f" | head -1)"
+        _sc="$(sed -n 's/^sc_address[[:space:]]*=[[:space:]]*//p'  "$f" | head -1)"
+        case "$_self" in [1-9]*) ;; *) _self=1 ;; esac
+        [ -n "$_sc" ] || _sc="1999001${_self}444"
+        if [ -n "$_ops" ]; then
+            {
+                printf '# sms-routing.conf - natif, reecrit par _gab_fixups_natifs\n'
+                printf '# Table issue de %s (MULTI_OPS). Cle = numero d operateur.\n' "$mc"
+                printf '# MSISDN = <noeud>00<operateur><rang du MS sur 2 chiffres>\n\n'
+                printf '[local]\noperator_id = %s\nsc_address  = %s\n\n[operators]\n' "$_self" "$_sc"
+                for _e in $_ops; do
+                    IFS=: read -r _id _mode _ip _ <<< "$_e"
+                    [ -n "$_id" ] || continue
+                    # Le natif, c est NOUS : 127.0.0.1 est la seule adresse dont
+                    # on soit certain sur un hote (meme choix qu au point 1).
+                    if [ "$_mode" = native ] || [ "$_id" = "$_self" ]; then _ip=127.0.0.1; fi
+                    [ -n "$_ip" ] || continue
+                    printf '%s = %s\n' "$_id" "$_ip"
+                done
+                printf '\n[routes]\n'
+                for _e in $_ops; do
+                    IFS=: read -r _id _mode _ip _ <<< "$_e"
+                    [ -n "$_id" ] || continue
+                    for _m in 1 2; do
+                        printf '%s = %s\n' "$(( _node * 100000 + _id * 100 + _m ))" "$_id"
+                    done
+                done
+                printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
+            } > "$f.tmp" && mv -f "$f.tmp" "$f"
+        fi
     fi
 }
 

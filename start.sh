@@ -647,10 +647,28 @@ check_image() {
 generate_pjsip_interop_trunks() {
     local op_id=$1
     local n_operators=$2
-    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
+    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
+    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
+    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
+    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
+    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
+    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         local remote_ip
-        remote_ip=$(op_backbone_ip "$remote_op")
+        # Un operateur sous la base est NATIF : il tourne sur l hote, pas dans
+        # un conteneur. Vu d un conteneur, l hote est la passerelle du bridge
+        # docker - la meme adresse que le pont audio et que sms-routing.conf.
+        # NB : match=172.20.0.1 n avale pas les REGISTER Linphone, qui arrivent
+        # par la meme passerelle : pjsip.conf pose endpoint_identifier_order=
+        # username,ip,anonymous - le username passe avant l IP.
+        if [ "$remote_op" -lt "${OP_ID_BASE:-1}" ]; then
+            remote_ip="${INTER_NET_GATEWAY:-172.20.0.1}"
+        else
+            remote_ip=$(op_backbone_ip "$remote_op")
+        fi
         cat <<EOF
 
 [interop-identify-op${remote_op}]
@@ -695,7 +713,15 @@ EOF
     # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>.
     # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
     # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    for remote_op in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
+    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
+    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
+    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
+    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
+    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
+    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
+    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
+                     $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         cat <<EOF
 exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN} ===)
