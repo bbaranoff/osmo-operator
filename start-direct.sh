@@ -296,6 +296,29 @@ fi
 # jusqu'aux configs. Le repli est pose ici, apres la boucle d'options, pour
 # que --hub-ip garde le dernier mot.
 [ -n "$HUB_IP" ] || HUB_IP="${OSMO_HUB_IP:-${INTER_STP_IP:-}}"
+# ── DERNIER REPLI : L ADRESSE QUE L ASP COMPOSE DEJA ─────────────────────────
+# [2026-08-31] Sans HUB_IP, network/set-node-id.sh retombe sur le hub WAN par
+# defaut, 192.168.1.49, calcule la source qui y route (192.168.1.31 ici) et
+# l ecrit en local-ip de l ASP. Or sur un banc a une machine le hub vit dans un
+# conteneur et l ASP compose 127.0.0.1:2908 - le port SCTP que le hub publie
+# sur la boucle. La source calculee pour 192.168.1.49 ne mene donc pas au hub,
+# et l ASP reste ASP_DOWN. Vu le 31/08 :
+#     asp-to-inter  as-inter  ASP_DOWN  client
+#                   Local 172.20.0.11:2910  Remote 127.0.0.1:2908
+# (172.20.0.11 etant, lui, la valeur du gabarit jamais corrigee - l adresse du
+# PREMIER CONTENEUR, qui n existe meme pas sur l hote.)
+# Rien de tout cela ne se signale : le journal ne dit qu un timeout.
+#
+# La config SAIT ou est le hub - c est son remote-ip. On le lit plutot que de
+# laisser deviner : la source et la destination viennent alors du meme
+# endroit, et `ip route get` rend la bonne patte locale.
+# --hub-ip et OSMO_HUB_IP gardent la priorite, ce repli ne sert qu au silence.
+if [ -z "$HUB_IP" ] && [ -r "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" ]; then
+    HUB_IP="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{a=1; next}
+                   a && /^[[:space:]]*remote-ip[[:space:]]/{print $2; exit}' \
+              "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" 2>/dev/null)"
+    [ -n "$HUB_IP" ] && echo "  hub        deduit du remote-ip de l ASP : $HUB_IP" >&2
+fi
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
 case "$RUNTIME_ENV" in docker) NODE_MODE=docker ;; *) NODE_MODE=native ;; esac
 

@@ -238,9 +238,12 @@ fi
 echo -e "${BOLD}Noeud ${NODE} - operateur ${OP}${NC}   (mode ${CYAN}${MODE}${NC})"
 echo -e "  STP ${CYAN}${PC_STP}${NC}   MSC ${CYAN}${PC_MSC}${NC}   BSC ${CYAN}${PC_BSC}${NC}"
 echo -e "  routing-key : stp ${RCTX_STP} · msc ${RCTX_MSC} · bsc ${RCTX_BSC} · inter ${RCTX_INTER}"
-[ "$LOCAL_PLAN" = "1" ] \
-    && echo -e "  ${YELLOW}plan LOCAL : cette machine ne peut pas partager un hub avec une autre${NC}" \
-    || echo -e "  ASP inter-STP → ${CYAN}${HUB_IP}${NC}$([ "$SET_LOCAL_IP" = "1" ] && echo "  depuis ${CYAN}${ASP_LOCAL_IP}${NC} (${LOCAL_IP_SRC})" || echo "  (source inchangee)")"
+if [ "$LOCAL_PLAN" = "1" ] && [ -z "$HUB_IP" ]; then
+    echo -e "  ${YELLOW}plan LOCAL sans hub : point codes 1.<op>.<role>, ASP inchange${NC}"
+else
+    [ "$LOCAL_PLAN" = "1" ] && echo -e "  ${CYAN}plan LOCAL${NC} (point codes 1.<op>.<role>) avec hub sur cette machine"
+    echo -e "  ASP inter-STP → ${CYAN}${HUB_IP}${NC}$([ "$SET_LOCAL_IP" = "1" ] && echo "  depuis ${CYAN}${ASP_LOCAL_IP}${NC} (${LOCAL_IP_SRC})" || echo "  (source inchangee)")"
+fi
 echo ""
 
 # ── Reecriture ──────────────────────────────────────────────────────────────
@@ -289,7 +292,23 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
     fi
 }
 
-rewrite "$STP" "$PC_STP" ""        "$RCTX_INTER" "$([ "$LOCAL_PLAN" = "1" ] && echo 0 || echo 1)"
+# ── LE PLAN DE POINT CODES ET LE HUB SONT DEUX CHOSES ───────────────────────
+# [2026-08-31] do_asp valait 0 des que LOCAL_PLAN=1 : le plan local coupait
+# TOUT traitement du bloc asp-to-inter. C etait vrai tant que "plan local"
+# voulait dire "machine isolee, aucun hub". Ce n est plus le cas : le banc
+# multi-operateur porte son inter-STP dans un CONTENEUR, sur la meme machine,
+# joignable en 127.0.0.1:2908 (port SCTP publie par start.sh). Le plan des
+# point codes y est bien local - 1.<op>.<role> - ET il y a un hub.
+# Consequence du couplage : `--local --hub-ip 127.0.0.1` affichait
+# "plan LOCAL : cette machine ne peut pas partager un hub avec une autre" et
+# laissait le local-ip du gabarit, 172.20.0.11 - l adresse du PREMIER
+# CONTENEUR, inexistante sur l hote. L ASP restait ASP_DOWN sans qu une seule
+# ligne ne parle d adresse : le journal ne montre qu un timeout.
+# On traite donc l ASP des qu un hub est CONFIGURE, quel que soit le plan.
+_DO_ASP=0
+[ -n "$HUB_IP" ] && _DO_ASP=1
+[ "$LOCAL_PLAN" = "1" ] || _DO_ASP=1
+rewrite "$STP" "$PC_STP" ""        "$RCTX_INTER" "$_DO_ASP"
 rewrite "$MSC" "$PC_MSC" "$PC_BSC" "$RCTX_MSC"   0
 rewrite "$BSC" "$PC_BSC" "$PC_MSC" "$RCTX_BSC"   0
 

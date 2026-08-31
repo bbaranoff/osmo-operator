@@ -156,6 +156,41 @@ tile_windows() {
     place 'linphone'                                   "$qw" "$qh"
 }
 
+# ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
+# [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
+# deja debout ne relance presque rien : les demons Osmocom ne relisent PAS leur
+# configuration a chaud. On l a paye plusieurs fois - un osmo-stp realigne sur
+# le bon point code gardait l ancien en memoire, et `kill -HUP` n y change rien
+# (verifie : config a jour sur le disque, ASP toujours ASP_DOWN sur l ancienne
+# adresse). Le seul geste qui compte est l arret complet.
+#
+# On arrete DANS L ORDRE : le natif d abord (il delegue a run.sh --stop, qui
+# demonte proprement radio et coeur), les conteneurs ensuite. L inverse
+# laisserait le natif parler a des conteneurs en train de disparaitre.
+# Rien ici ne doit faire echouer le lancement : ce qui est deja arrete l est
+# tres bien, d ou les || true.
+tout_arreter() {
+    echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
+    if [ -x "$DIR/start-direct.sh" ]; then
+        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
+        echo -e "    ${GREEN}✓${NC} pile native arretee"
+    fi
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local _ids
+        _ids="$(docker ps -aq --filter 'name=^osmo-' 2>/dev/null)"
+        if [ -n "$_ids" ]; then
+            # shellcheck disable=SC2086
+            docker rm -f $_ids >/dev/null 2>&1 || true
+            echo -e "    ${GREEN}✓${NC} conteneurs osmo-* retires"
+        fi
+    fi
+    # Les ponts audio survivent aux conteneurs (setsid) : sans ca on empile un
+    # relais de plus a chaque relance, et le son se dedouble.
+    pkill -f 'paplay --server=tcp:' 2>/dev/null || true
+}
+
+tout_arreter
+
 # ── 1. WIRESHARK sur udp/4729 ───────────────────────────────────────────────
 # En ROOT, et pas sous $GUI_USER : la capture sur `any` demande CAP_NET_RAW.
 # -k demarre la capture tout de suite (sinon on ouvre sur un ecran de choix
