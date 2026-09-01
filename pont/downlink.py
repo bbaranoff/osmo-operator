@@ -27,7 +27,7 @@ class Feeder:
             self.sock.sendto(pkt, (GSMTAP_HOST, self.cfg.tap_port))
 
     def sch(self, fn):
-        self.sock.sendto(b"SCH1" + struct.pack("<iii", self.cfg.bsic, fn, 0), (GSMTAP_HOST, self.cfg.sch_port))
+        self.sock.sendto(b"SCH2" + struct.pack("<iii", self.cfg.bsic, fn, self.cfg.arfcn), (GSMTAP_HOST, self.cfg.sch_port))
 
 
 class TchRing:
