@@ -133,7 +133,7 @@ Usage : ./start-direct.sh [options] [mode]
   1 faketrx + 1 QEMU Calypso), qui est deja le defaut de ce script.
   Composer <indicatif><numero> joint ce numero sur le noeud correspondant.
 Toute variable CALYPSO_* passee en prefixe est transmise a run.sh / QEMU :
-  CALYPSO_MODE=native ./start-direct.sh
+  CALYPSO_LANG=en ./start-direct.sh       CALYPSO_NO_ATTACH=1 ./start-direct.sh
 USAGE
 }
 while [ $# -gt 0 ]; do
