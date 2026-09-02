@@ -285,6 +285,23 @@ if [ "$DO_OPENCL" = "1" ]; then
             || echo -e "      ${YELLOW}!${NC} $_p non installe (absent du miroir ?)"
     done
 
+    # pyopencl : le binding Python d OpenCL, POSE DANS LE VENV /root/.env - le
+    # meme que start-clean.sh (qosmo-grgsm) et le profil de root activent, et ou
+    # vit deja gr-gsm. On l installe avec le pip DU VENV (/root/.env/bin/python3)
+    # et pas le pip systeme : sinon le module ne serait pas visible du code qui
+    # tourne sous ce venv. opencl-headers + ocl-icd-opencl-dev (poses au-dessus)
+    # fournissent les en-tetes et libOpenCL.so dont pyopencl a besoin. Non fatal.
+    if [ -x /root/.env/bin/python3 ]; then
+        echo -e "  ${CYAN}→${NC} pyopencl dans le venv ${BOLD}/root/.env${NC} ..."
+        if /root/.env/bin/python3 -m pip install --no-cache-dir --disable-pip-version-check pyopencl >/dev/null 2>&1; then
+            echo -e "      ${GREEN}✓${NC} pyopencl"
+        else
+            echo -e "      ${YELLOW}!${NC} pyopencl non installe (voir : /root/.env/bin/python3 -m pip install pyopencl)"
+        fi
+    else
+        echo -e "  ${YELLOW}!${NC} venv /root/.env absent - pyopencl non pose (attendu sur l ISO)"
+    fi
+
     # LA SEULE VERIFICATION QUI VAUT : est-ce qu une plateforme repond ?
     if command -v clinfo >/dev/null 2>&1; then
         _np="$(clinfo -l 2>/dev/null | grep -c Platform || true)"
@@ -317,8 +334,7 @@ if [ "$DO_OPENCL" = "1" ]; then
                 echo -e "  ${GREEN}✓${NC} pilote NVIDIA installe"
             else
                 echo -e "  ${YELLOW}!${NC} ubuntu-drivers install a echoue - repli : ${BOLD}nvidia-driver + nvidia-opencl-icd${NC}"
-                apt-get install -y nvidia-driver-535 nvidia-opencl-icd-535 >/dev/null 2>&1 \
-                    || apt-get install -y nvidia-driver nvidia-opencl-icd >/dev/null 2>&1 \
+                apt-get install -y  nvidia-driver-610 nvidia-opencl-icd >/dev/null 2>&1 \
                     || echo -e "  ${YELLOW}!${NC} pilote NVIDIA non installe (voir : ubuntu-drivers devices)"
             fi
         else
