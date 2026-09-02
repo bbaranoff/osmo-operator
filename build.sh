@@ -53,6 +53,35 @@ apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev 
      wireshark linphone* gnome-terminal whiptail expect netcat-openbsd \
      telnet iproute2 pulseaudio-utils
 
+# 3b. toast : le codec GSM 06.10 (quut.com), absent du paquet apt
+# libgsm1 (apt) fournit la LIB mais pas le binaire toast/untoast/tcat. On le
+# compile depuis les sources officielles, SOUS /opt/GSM, et on pose le binaire
+# dans /usr/local/bin. Non fatal : sans reseau on continue le build.
+echo "[*] Compilation de toast (codec GSM 06.10)..."
+_GSM_VER=gsm-1.0.24
+_GSM_URL="https://www.quut.com/gsm/${_GSM_VER}.tar.gz"
+if command -v toast >/dev/null 2>&1; then
+    echo -e "\033[0;32m[OK] toast deja present ($(command -v toast)).\033[0m"
+else
+    apt-get install -y --no-install-recommends build-essential wget >/dev/null 2>&1 || true
+    mkdir -p /opt/GSM
+    if ( cd /opt/GSM \
+         && wget -qO "${_GSM_VER}.tar.gz" "$_GSM_URL" \
+         && tar xzf "${_GSM_VER}.tar.gz" \
+         && cd "$_GSM_VER" \
+         && { make >/dev/null 2>&1 || true; } \
+         && { [ -x bin/toast ] || make toast >/dev/null 2>&1 || true; } \
+         && [ -x bin/toast ] ); then
+        for _b in toast untoast tcat; do
+            [ -e "/opt/GSM/${_GSM_VER}/bin/$_b" ] \
+                && install -m755 "/opt/GSM/${_GSM_VER}/bin/$_b" "/usr/local/bin/$_b"
+        done
+        echo -e "\033[0;32m[OK] toast installe dans /usr/local/bin (sources : /opt/GSM/${_GSM_VER}).\033[0m"
+    else
+        echo -e "\033[0;33m[WARN] compilation de toast echouee (reseau ou outils ?) - on continue.\033[0m"
+    fi
+fi
+
 # 4. Chargement des modules noyau
 echo "[*] Chargement des modules noyau (SCTP & TUN)..."
 modprobe sctp

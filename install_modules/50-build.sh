@@ -17,6 +17,32 @@ inst_build_run() {
           make -j"$(nproc)" ) || { inst_hint "detail dans le journal de cette etape"
                                    inst_fail "echec de compilation : $d"; return $INST_RC_FAIL; }
     done
+
+    # toast : codec GSM 06.10 (quut.com). libgsm1 fournit la lib, pas le binaire.
+    # Sources sous $GSM_ROOT, binaire dans /usr/local/bin. Optionnel : un echec
+    # (reseau, quut.com injoignable) n arrete pas l installation.
+    inst_say "=== toast (codec GSM 06.10) ==="
+    if command -v toast >/dev/null 2>&1; then
+        inst_say "toast deja present ($(command -v toast))"
+    else
+        local gver=gsm-1.0.24
+        local gurl="https://www.quut.com/gsm/${gver}.tar.gz"
+        if ( cd "$GSM_ROOT" \
+             && wget -qO "${gver}.tar.gz" "$gurl" \
+             && tar xzf "${gver}.tar.gz" \
+             && cd "$gver" \
+             && { make >/dev/null 2>&1 || true; } \
+             && { [ -x bin/toast ] || make toast >/dev/null 2>&1 || true; } \
+             && [ -x bin/toast ] ); then
+            for b in toast untoast tcat; do
+                [ -e "$GSM_ROOT/$gver/bin/$b" ] \
+                    && install -m755 "$GSM_ROOT/$gver/bin/$b" "/usr/local/bin/$b"
+            done
+            inst_say "toast installe dans /usr/local/bin (sources : $GSM_ROOT/$gver)"
+        else
+            inst_hint "toast non compile (reseau ou quut.com injoignable) - suite sans lui"
+        fi
+    fi
     inst_ok
 }
 inst_build_verify() {

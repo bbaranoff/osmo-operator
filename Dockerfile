@@ -23,7 +23,8 @@ ARG ROOT=/opt/GSM
 
 ENV container=docker \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
-    LD_LIBRARY_PATH=/usr/local/lib
+    LD_LIBRARY_PATH=/usr/local/lib \
+    GIT_TERMINAL_PROMPT=0
 
 # ── apt-fast : les téléchargements apt en parallèle ─────────────────────────
 # Cette image installe plusieurs centaines de paquets ; apt les récupère un par
@@ -107,6 +108,19 @@ RUN apt-fast update && apt-fast install -y --no-install-recommends \
 # Capture non-root pour le dashboard et tcpdump. Position OBLIGATOIRE : dumpcap
 # n'existe qu'une fois wireshark-common installe (tire par tshark, juste au-dessus).
 RUN setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
+
+# ── git HTTP/1.1 GLOBAL, pour TOUT le build ──────────────────────────────────
+# Certains clones ne sont pas ecrits ici : le build de GNU Radio passe par un
+# script distant (curl gist | bash) qui fait ses propres `git clone`. Sur le
+# reseau du docker build, un flux git HTTP/2 se fait corrompre par un
+# intermediaire ("expected flush after ref listing") ; git croit alors devoir
+# s authentifier, ne trouve pas de terminal, et meurt sur "could not read
+# Username". Poser http.version=HTTP/1.1 en config GLOBALE (donc heritee par
+# les scripts tiers qu on ne peut pas editer) supprime la corruption a la
+# source. postBuffer large en prime, pour les gros push/clone. GIT_TERMINAL_PROMPT
+# (ENV, plus haut) fait echouer NET plutot que d attendre un login fantome.
+RUN git config --global http.version HTTP/1.1 && \
+    git config --global http.postBuffer 524288000
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
@@ -289,7 +303,14 @@ RUN cd ${ROOT} && \
 # cp et PHY_MODE=qemu partirait sans layer1.
 # (Le `rm -rf /opt/GSM/firmware` qui precedait le clone dans Dockerfile.run est
 #  supprime : ici le chemin n'existe pas encore, l'instruction etait morte.)
-RUN git clone https://github.com/bbaranoff/firmware /opt/GSM/firmware
+# GIT_TERMINAL_PROMPT=0 + http.version=HTTP/1.1 : sans terminal (docker build),
+# un flux git HTTP/2 corrompu ("expected flush after ref listing") faisait
+# basculer git en demande de login et mourir sur "could not read Username".
+# HTTP/1.1 supprime la corruption ; le prompt off fait echouer NET (message
+# clair) au lieu d attendre un identifiant que personne ne tapera. --depth 1 :
+# on ne veut que les binaires prebuild, pas l historique.
+RUN GIT_TERMINAL_PROMPT=0 git -c http.version=HTTP/1.1 clone --depth 1 \
+        https://github.com/bbaranoff/firmware /opt/GSM/firmware
 # [2026-08-28] Les trois `cp` vers /opt/GSM/osmocom-bb/src/target/firmware qui
 # suivaient sont SUPPRIMES. Ils entretenaient un deuxieme exemplaire du firmware
 # que plus personne ne lit : depuis la normalisation, environnement/paths.env du

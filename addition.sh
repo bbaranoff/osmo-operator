@@ -41,6 +41,38 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 
+# ── _trust_desktop : rendre un raccourci du bureau VISIBLE par DING ──────────
+# DING n affiche un .desktop avec son nom et son icone que s il est executable,
+# possede par l utilisateur du bureau, ET porteur de metadata::trusted. Cet
+# attribut ne vit PAS dans le fichier : il est ecrit dans les metadonnees gvfs
+# de la SESSION, donc gio doit parler au bus de CET utilisateur.
+#
+# LE PIEGE QUI RENDAIT L ICONE INVISIBLE. addition.sh est lance par
+# `pkexec env DISPLAY=... XAUTHORITY=... ` (osmo-addition-anim) : pkexec NETTOIE
+# l environnement et ne transmet ni XDG_RUNTIME_DIR ni DBUS_SESSION_BUS_ADDRESS.
+# `gio set metadata::trusted` n avait alors aucun bus a joindre, echouait en
+# silence (2>/dev/null), et le fichier restait pose mais jamais approuve - donc
+# absent du bureau. On reconstruit l env a partir de l UID proprietaire du
+# bureau et on lance gio SOUS cet utilisateur.
+_trust_desktop() {
+    local f="$1" home="$2" owner uid bus
+    [ -f "$f" ] || return 1
+    owner="$(stat -c '%U' "$home" 2>/dev/null)"; [ -n "$owner" ] || owner=root
+    uid="$(id -u "$owner" 2>/dev/null)" || return 1
+    chown "$owner" "$f" 2>/dev/null || true
+    chmod +x "$f" 2>/dev/null || true
+    bus="/run/user/$uid/bus"
+    # Session active pour ce proprietaire : on pose l attribut TOUT DE SUITE.
+    # Sinon (pas de bus), osmo-trust-desktop (autostart) le posera au prochain
+    # login - l icone apparait alors sans intervention.
+    if [ -S "$bus" ] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+            gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+    fi
+    return 0
+}
+
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
 for a in "$@"; do
     case "$a" in
@@ -400,8 +432,7 @@ DEKADSK
             for _dir in Bureau Desktop; do
                 [ -d "$_h/$_dir" ] || continue
                 cp -f "$_deka_desktop" "$_h/$_dir/deka.desktop" 2>/dev/null || continue
-                chmod +x "$_h/$_dir/deka.desktop" 2>/dev/null || true
-                gio set -t string "$_h/$_dir/deka.desktop" metadata::trusted true 2>/dev/null || true
+                _trust_desktop "$_h/$_dir/deka.desktop" "$_h"
                 touch "$_h/$_dir" 2>/dev/null || true
                 _posee=1
             done
@@ -595,9 +626,7 @@ CONF
             for _dir in Bureau Desktop; do
                 [ -d "$_h/$_dir" ] || continue
                 cp -f /usr/share/applications/osmo-multi.desktop "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || continue
-                chmod +x "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || true
-                gio set -t string "$_h/$_dir/osmo-multi.desktop" metadata::trusted true 2>/dev/null || true
-                [ "$_h" != /root ] && chown "$SUDO_USER" "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || true
+                _trust_desktop "$_h/$_dir/osmo-multi.desktop" "$_h"
                 touch "$_h/$_dir" 2>/dev/null || true
                 _posee=1
             done
