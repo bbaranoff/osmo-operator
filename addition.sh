@@ -55,20 +55,24 @@ MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 # absent du bureau. On reconstruit l env a partir de l UID proprietaire du
 # bureau et on lance gio SOUS cet utilisateur.
 _trust_desktop() {
-    local f="$1" home="$2" owner uid bus
+    local f="$1" home="$2" pos="${3:-}" owner uid bus
     [ -f "$f" ] || return 1
     owner="$(stat -c '%U' "$home" 2>/dev/null)"; [ -n "$owner" ] || owner=root
     uid="$(id -u "$owner" 2>/dev/null)" || return 1
     chown "$owner" "$f" 2>/dev/null || true
     chmod +x "$f" 2>/dev/null || true
     bus="/run/user/$uid/bus"
-    # Session active pour ce proprietaire : on pose l attribut TOUT DE SUITE.
-    # Sinon (pas de bus), osmo-trust-desktop (autostart) le posera au prochain
-    # login - l icone apparait alors sans intervention.
+    # Session active pour ce proprietaire : on pose les attributs TOUT DE SUITE.
+    # Sinon (pas de bus), osmo-trust-desktop (autostart) posera trusted au
+    # prochain login - l icone apparait alors sans intervention.
+    # pos "x,y" (optionnel) : place l icone sur le bureau via DING.
     if [ -S "$bus" ] && command -v runuser >/dev/null 2>&1; then
         runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
             gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+        [ -n "$pos" ] && runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+            gio set -t string "$f" metadata::nautilus-icon-position "$pos" 2>/dev/null || true
     fi
     return 0
 }
@@ -210,7 +214,12 @@ if [ "$DO_OPENCL" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de la pile OpenCL ..."
     export DEBIAN_FRONTEND=noninteractive
 
-    _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd"
+    # lvm2 : PAS de l OpenCL, mais deka (installe avec ce supplement) monte ses
+    # tables sur des volumes LVM - sans vgchange, deka-start.sh ne monte rien.
+    # On le pose donc ici, avec deka.
+    # swig + python3-dev : compilation des modules natifs de deka (_delta.so,
+    # _libvankus.so) plus bas. build-essential est deja tire ailleurs.
+    _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd lvm2 swig python3-dev"
     _vga="$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display' || true)"
     _nvidia=0
     case "$_vga" in
@@ -318,6 +327,22 @@ if [ "$DO_OPENCL" = "1" ]; then
         fi
     done
 
+    # ── deka : compilation des modules natifs (make) ─────────────────────────
+    # deka importe _delta.so et _libvankus.so, produits par SWIG + gcc depuis
+    # delta.c / libvankus.c (voir son Makefile). Sans ce make, les workers
+    # importent des modules absents et deka ne calcule rien. Pre-requis : swig
+    # et les entetes python3. Non fatal : un echec le dit, sans stopper le reste.
+    if [ -f /root/deka/Makefile ]; then
+        echo -e "  ${CYAN}→${NC} deka : compilation des modules natifs (make) ..."
+        apt-get install -y --no-install-recommends swig python3-dev build-essential >/dev/null 2>&1 || true
+        if ( cd /root/deka && make >/dev/null 2>&1 ) \
+           && [ -e /root/deka/_delta.so ] && [ -e /root/deka/_libvankus.so ]; then
+            echo -e "      ${GREEN}✓${NC} _delta.so + _libvankus.so construits"
+        else
+            echo -e "      ${YELLOW}!${NC} make deka a echoue (swig / python3-dev ?) - voir : cd /root/deka && make"
+        fi
+    fi
+
     # ── deka : une ICONE d appli (pas un service) ────────────────────────────
     # deka monte des tables et lance des workers - ca ne doit PAS partir a
     # chaque boot dans le dos de l utilisateur (le montage suppose le groupe de
@@ -341,7 +366,9 @@ if [ "$DO_OPENCL" = "1" ]; then
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 LOG=/var/log/deka.log
-exec >>"$LOG" 2>&1
+# Sortie a l ECRAN + copie dans le log (tee) : on veut VOIR les montages et les
+# PID des workers, pas les chercher dans un fichier.
+exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date -Is) deka-start ==="
 [ "$(id -u)" -eq 0 ] || { echo "root requis : sudo $0"; exit 1; }
 PY="$(command -v python3.7 || command -v python3)"
@@ -403,10 +430,14 @@ exec bash -c "$RUNNER"
 DEKAGUI
         chmod 755 /usr/local/bin/osmo-deka-anim
 
-        # LE FICHIER .desktop : Icon= en nom de theme (drive-harddisk, present
-        # dans Yaru) - pas un chemin, deka n embarque pas d icone dediee.
-        # Terminal=false : le lanceur ouvre LUI-MEME son terminal (sinon deux
-        # fenetres, dont une sans les droits).
+        # ICONE DEDIEE : la mandala de connecteurs (data/deka.svg, facon BRMLAB),
+        # posee en CHEMIN ABSOLU dans Icon= - un nom de theme arrive apres
+        # icon-theme.cache s afficherait en page blanche (cf. update.sh).
+        install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
+        if [ -f "$DIR/data/deka.svg" ]; then
+            install -m644 "$DIR/data/deka.svg" /usr/share/osmo-operator/icons/deka.svg
+            install -m644 "$DIR/data/deka.svg" /usr/share/icons/hicolor/scalable/apps/deka.svg
+        fi
         _deka_desktop=/usr/share/applications/deka.desktop
         cat > "$_deka_desktop" <<'DEKADSK'
 [Desktop Entry]
@@ -416,12 +447,13 @@ Name[fr]=deka
 Comment=Monte les tables et lance les workers deka
 Comment[fr]=Monte les tables et lance les workers deka
 Exec=/usr/local/bin/osmo-deka-anim
-Icon=drive-harddisk
+Icon=/usr/share/osmo-operator/icons/deka.svg
 Terminal=false
 Categories=System;Utility;
 Keywords=deka;tables;workers;opencl;
 DEKADSK
         chmod 644 "$_deka_desktop"
+        command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
         update-desktop-database /usr/share/applications 2>/dev/null || true
 
         # Sur les bureaux : DING n affiche un .desktop avec son nom et son icone
@@ -432,7 +464,7 @@ DEKADSK
             for _dir in Bureau Desktop; do
                 [ -d "$_h/$_dir" ] || continue
                 cp -f "$_deka_desktop" "$_h/$_dir/deka.desktop" 2>/dev/null || continue
-                _trust_desktop "$_h/$_dir/deka.desktop" "$_h"
+                _trust_desktop "$_h/$_dir/deka.desktop" "$_h" "0,0"
                 touch "$_h/$_dir" 2>/dev/null || true
                 _posee=1
             done
@@ -497,6 +529,63 @@ if [ "$DO_CLAUDE" = "1" ]; then
     else
         echo -e "  ${YELLOW}!${NC} Claude Code pose, mais ne repond pas encore."
         echo -e "      Ouvrez un nouveau terminal (PATH), ou lancez ${BOLD}$_cc_home/.local/bin/claude${NC}"
+    fi
+
+    # ── ICONE CLAUDE : tuile clay + sunburst Anthropic (data/claude.svg) ──────
+    # Lanceur osmo-claude-anim : ouvre un terminal qui lance claude ; s il n est
+    # pas installe, il enchaine ce meme supplement (--claude) puis le lance.
+    install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
+    if [ -f "$DIR/data/claude.svg" ]; then
+        install -m644 "$DIR/data/claude.svg" /usr/share/osmo-operator/icons/claude.svg
+        install -m644 "$DIR/data/claude.svg" /usr/share/icons/hicolor/scalable/apps/claude.svg
+    fi
+    cat > /usr/local/bin/osmo-claude-anim <<'CLA'
+#!/bin/bash
+set -u
+if ! command -v claude >/dev/null 2>&1; then
+    ADD=/opt/GSM/osmo-operator/addition.sh
+    if [ -x "$ADD" ]; then
+        if [ "$(id -u)" -ne 0 ] && command -v pkexec >/dev/null 2>&1; then
+            pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" "$ADD" --claude
+        else
+            "$ADD" --claude
+        fi
+    fi
+fi
+CMD='if command -v claude >/dev/null 2>&1; then claude; else echo "Claude non installe - lancez le supplement (--claude)."; fi; echo; read -n1 -rsp "Une touche pour fermer..."'
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="Claude" -- bash -lc "$CMD" ;;
+        *)              exec "$term" -T "Claude" -e bash -lc "$CMD" ;;
+    esac
+done
+exec bash -lc "$CMD"
+CLA
+    chmod 755 /usr/local/bin/osmo-claude-anim
+    if [ -f "$DIR/data/desktop/claude.desktop" ]; then
+        install -m644 "$DIR/data/desktop/claude.desktop" /usr/share/applications/claude.desktop
+        sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/claude.svg|" /usr/share/applications/claude.desktop
+        command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+        update-desktop-database /usr/share/applications 2>/dev/null || true
+        _homes=(/root)
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+            _uh="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+            [ -n "$_uh" ] && [ -d "$_uh" ] && _homes+=("$_uh")
+        fi
+        _cposee=0
+        for _h in "${_homes[@]}"; do
+            for _dir in Bureau Desktop; do
+                [ -d "$_h/$_dir" ] || continue
+                cp -f /usr/share/applications/claude.desktop "$_h/$_dir/claude.desktop" 2>/dev/null || continue
+                _trust_desktop "$_h/$_dir/claude.desktop" "$_h" "110,0"
+                touch "$_h/$_dir" 2>/dev/null || true
+                _cposee=1
+            done
+        done
+        [ "$_cposee" = "1" ] \
+            && echo -e "  ${GREEN}✓${NC} icone ${BOLD}Claude${NC} posee sur le bureau (en haut a gauche)" \
+            || echo -e "  ${GREEN}✓${NC} icone ${BOLD}Claude${NC} dans le menu des applications"
     fi
 fi
 

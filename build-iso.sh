@@ -3617,6 +3617,9 @@ for d in "$HOME/Desktop" "$HOME/Bureau"; do
     [ -f "$d/osmo-addition.desktop" ] && \
         gio set -t string "$d/osmo-addition.desktop" \
             metadata::nautilus-icon-position "110,110" 2>/dev/null || true
+    [ -f "$d/claude.desktop" ] && \
+        gio set -t string "$d/claude.desktop" \
+            metadata::nautilus-icon-position "110,0" 2>/dev/null || true
     # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
     # force a rebalayer, sinon la pastille rouge reste jusqu au login suivant.
     touch "$d" 2>/dev/null || true
@@ -3645,7 +3648,7 @@ TRUSTA
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
               "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
-    for _ic in osmo-launch osmo-multi osmo-tutorial; do
+    for _ic in osmo-launch osmo-multi osmo-tutorial claude; do
         [ -f "$DIR/data/$_ic.svg" ] || continue
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
@@ -3779,12 +3782,46 @@ ADDGUI
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-tutorial.desktop" "$ROOTFS/usr/share/applications/osmo-tutorial.desktop"
 
+    # ── CLAUDE : lanceur + entree de menu ─────────────────────────────────
+    # Claude Code n est PAS dans l ISO (il s installe via le supplement) : le
+    # lanceur enchaine donc l installation (addition.sh --claude) au premier
+    # clic si claude manque, puis l ouvre. L icone est la des le boot, mais elle
+    # ne ment pas - elle sait s installer elle-meme.
+    cat > "$ROOTFS/usr/local/bin/osmo-claude-anim" <<'CLA'
+#!/bin/bash
+set -u
+if ! command -v claude >/dev/null 2>&1; then
+    ADD=/opt/GSM/osmo-operator/addition.sh
+    if [ -x "$ADD" ]; then
+        if [ "$(id -u)" -ne 0 ] && command -v pkexec >/dev/null 2>&1; then
+            pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" "$ADD" --claude
+        else
+            "$ADD" --claude
+        fi
+    fi
+fi
+CMD='if command -v claude >/dev/null 2>&1; then claude; else echo "Claude non installe - lancez le supplement (--claude)."; fi; echo; read -n1 -rsp "Une touche pour fermer..."'
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="Claude" -- bash -lc "$CMD" ;;
+        *)              exec "$term" -T "Claude" -e bash -lc "$CMD" ;;
+    esac
+done
+exec bash -lc "$CMD"
+CLA
+    chmod +x "$ROOTFS/usr/local/bin/osmo-claude-anim"
+    # Le fichier vit dans le depot (data/desktop/) ; Icon= en chemin absolu.
+    install -m644 "$DIR/data/desktop/claude.desktop" "$ROOTFS/usr/share/applications/claude.desktop"
+    sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/claude.svg|" \
+        "$ROOTFS/usr/share/applications/claude.desktop"
+
     # Terminal=false pour les DEUX : launch.sh ouvre LUI-MEME son terminal et
     # demande les privileges (pkexec). Laisser le .desktop s en charger
     # donnerait deux fenetres, dont une sans les droits.
     for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
         install -d "$_h/Bureau" "$_h/Desktop"
-        for _d in osmo-launch osmo-tutorial osmo-addition; do
+        for _d in osmo-launch osmo-tutorial osmo-addition claude; do
             for _dir in Bureau Desktop; do
                 cp -f "$ROOTFS/usr/share/applications/$_d.desktop" "$_h/$_dir/" 2>/dev/null || true
                 chmod +x "$_h/$_dir/$_d.desktop" 2>/dev/null || true
@@ -3792,7 +3829,7 @@ ADDGUI
         done
     done
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} bureau : ${CYAN}telephone${NC} (lancer) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC}"
+    echo -e "  ${GREEN}✓${NC} bureau : ${CYAN}telephone${NC} (lancer) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC} · ${CYAN}Claude${NC}"
 
     # Le paquet calamares pose SA propre entree de menu, qui lance
     # /usr/bin/calamares directement. Elle court-circuite osmo-install : ni le

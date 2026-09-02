@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<rect x="8" y="8" width="240" height="240" rx="54" fill="#0a0d10"/>
+<g fill="none" stroke="#9db8c9" stroke-width="2">
+<circle cx="128" cy="128" r="9"/>
+<circle cx="128" cy="128" r="15"/>
+<circle cx="143.0" cy="128.0" r="1.6"/>
+<circle cx="138.6" cy="138.6" r="1.6"/>
+<circle cx="128.0" cy="143.0" r="1.6"/>
+<circle cx="117.4" cy="138.6" r="1.6"/>
+<circle cx="113.0" cy="128.0" r="1.6"/>
+<circle cx="117.4" cy="117.4" r="1.6"/>
+<circle cx="128.0" cy="113.0" r="1.6"/>
+<circle cx="138.6" cy="117.4" r="1.6"/>
+<circle cx="158.0" cy="128.0" r="3"/>
+<circle cx="154.0" cy="143.0" r="3"/>
+<circle cx="143.0" cy="154.0" r="3"/>
+<circle cx="128.0" cy="158.0" r="3"/>
+<circle cx="113.0" cy="154.0" r="3"/>
+<circle cx="102.0" cy="143.0" r="3"/>
+<circle cx="98.0" cy="128.0" r="3"/>
+<circle cx="102.0" cy="113.0" r="3"/>
+<circle cx="113.0" cy="102.0" r="3"/>
+<circle cx="128.0" cy="98.0" r="3"/>
+<circle cx="143.0" cy="102.0" r="3"/>
+<circle cx="154.0" cy="113.0" r="3"/>
+<rect x="168.7" y="134.1" width="5" height="5" rx="1" transform="rotate(11.2 171.2 136.6)"/>
+<rect x="162.1" y="149.9" width="5" height="5" rx="1" transform="rotate(33.8 164.6 152.4)"/>
+<rect x="149.9" y="162.1" width="5" height="5" rx="1" transform="rotate(56.2 152.4 164.6)"/>
+<rect x="134.1" y="168.7" width="5" height="5" rx="1" transform="rotate(78.8 136.6 171.2)"/>
+<rect x="116.9" y="168.7" width="5" height="5" rx="1" transform="rotate(101.2 119.4 171.2)"/>
+<rect x="101.1" y="162.1" width="5" height="5" rx="1" transform="rotate(123.7 103.6 164.6)"/>
+<rect x="88.9" y="149.9" width="5" height="5" rx="1" transform="rotate(146.2 91.4 152.4)"/>
+<rect x="82.3" y="134.1" width="5" height="5" rx="1" transform="rotate(168.8 84.8 136.6)"/>
+<rect x="82.3" y="116.9" width="5" height="5" rx="1" transform="rotate(191.2 84.8 119.4)"/>
+<rect x="88.9" y="101.1" width="5" height="5" rx="1" transform="rotate(213.8 91.4 103.6)"/>
+<rect x="101.1" y="88.9" width="5" height="5" rx="1" transform="rotate(236.2 103.6 91.4)"/>
+<rect x="116.9" y="82.3" width="5" height="5" rx="1" transform="rotate(258.8 119.4 84.8)"/>
+<rect x="134.1" y="82.3" width="5" height="5" rx="1" transform="rotate(281.2 136.6 84.8)"/>
+<rect x="149.9" y="88.9" width="5" height="5" rx="1" transform="rotate(303.8 152.4 91.4)"/>
+<rect x="162.1" y="101.1" width="5" height="5" rx="1" transform="rotate(326.2 164.6 103.6)"/>
+<rect x="168.7" y="116.9" width="5" height="5" rx="1" transform="rotate(348.8 171.2 119.4)"/>
+<circle cx="186.0" cy="128.0" r="3"/>
+<circle cx="183.2" cy="145.9" r="3"/>
+<circle cx="174.9" cy="162.1" r="3"/>
+<circle cx="162.1" cy="174.9" r="3"/>
+<circle cx="145.9" cy="183.2" r="3"/>
+<circle cx="128.0" cy="186.0" r="3"/>
+<circle cx="110.1" cy="183.2" r="3"/>
+<circle cx="93.9" cy="174.9" r="3"/>
+<circle cx="81.1" cy="162.1" r="3"/>
+<circle cx="72.8" cy="145.9" r="3"/>
+<circle cx="70.0" cy="128.0" r="3"/>
+<circle cx="72.8" cy="110.1" r="3"/>
+<circle cx="81.1" cy="93.9" r="3"/>
+<circle cx="93.9" cy="81.1" r="3"/>
+<circle cx="110.1" cy="72.8" r="3"/>
+<circle cx="128.0" cy="70.0" r="3"/>
+<circle cx="145.9" cy="72.8" r="3"/>
+<circle cx="162.1" cy="81.1" r="3"/>
+<circle cx="174.9" cy="93.9" r="3"/>
+<circle cx="183.2" cy="110.1" r="3"/>
+<circle cx="200.6" cy="142.4" r="4"/>
+<circle cx="189.5" cy="169.1" r="4"/>
+<circle cx="169.1" cy="189.5" r="4"/>
+<circle cx="142.4" cy="200.6" r="4"/>
+<circle cx="113.6" cy="200.6" r="4"/>
+<circle cx="86.9" cy="189.5" r="4"/>
+<circle cx="66.5" cy="169.1" r="4"/>
+<circle cx="55.4" cy="142.4" r="4"/>
+<circle cx="55.4" cy="113.6" r="4"/>
+<circle cx="66.5" cy="86.9" r="4"/>
+<circle cx="86.9" cy="66.5" r="4"/>
+<circle cx="113.6" cy="55.4" r="4"/>
+<circle cx="142.4" cy="55.4" r="4"/>
+<circle cx="169.1" cy="66.5" r="4"/>
+<circle cx="189.5" cy="86.9" r="4"/>
+<circle cx="200.6" cy="113.6" r="4"/>
+<g transform="rotate(0.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(45.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(90.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(135.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(180.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(225.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(270.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(315.0 128 128)"><rect x="120.0" y="32.0" width="16.0" height="8" rx="1.5"/><line x1="122.0" y1="36.0" x2="134.0" y2="36.0"/><rect x="121.5" y="22.0" width="13.0" height="8" rx="1.5"/><line x1="123.5" y1="26.0" x2="132.5" y2="26.0"/><rect x="123.0" y="12.0" width="10.0" height="8" rx="1.5"/><line x1="125.0" y1="16.0" x2="131.0" y2="16.0"/></g>
+<g transform="rotate(22.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(67.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(112.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(157.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(202.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(247.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(292.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+<g transform="rotate(337.5 128 128)"><line x1="128" y1="48" x2="128" y2="38"/></g>
+</g>
+</svg>
