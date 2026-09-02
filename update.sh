@@ -34,6 +34,11 @@
 # ══════════════════════════════════════════════════════════════════════════════
 set -u
 
+# Meme raison que dans build.sh : ce script est appele depuis
+# /etc/profile.d et depuis les lanceurs du bureau, ou le repertoire courant
+# n'est pas le sien. On se place chez soi avant de toucher a quoi que ce soit.
+cd "$(dirname "$(readlink -f "$0")")" || true
+
 case "${1:-}" in
     -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
@@ -115,6 +120,33 @@ osmo_reposer_icones() {
     return 0
 }
 osmo_reposer_icones
+
+# ── FIREFOX ─────────────────────────────────────────────────────────────────
+# Le dashboard et fft-web s'ouvrent dans un navigateur ; l'ISO n'en embarque
+# pas toujours un. On le pose une seule fois : si le snap est deja la, on ne
+# touche a rien - un boot ne doit pas dependre du reseau (cf. l'entete).
+# Le vrai travail est dans /usr/local/sbin/osmo-firefox-snap, pose par
+# build-iso.sh : .snap embarques d abord, magasin ensuite, interfaces de
+# contenu reconnectees. On ne le redouble pas ici, on l appelle - et on garde
+# un repli direct pour les machines assez anciennes pour ne pas l avoir.
+osmo_installer_firefox() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    command -v snap >/dev/null 2>&1 || return 0
+    snap list firefox >/dev/null 2>&1 && return 0
+    echo "[*] Installation de Firefox (snap)..."
+    if [ -x /usr/local/sbin/osmo-firefox-snap ]; then
+        /usr/local/sbin/osmo-firefox-snap >/dev/null 2>&1
+    else
+        snap install firefox >/dev/null 2>&1
+    fi
+    if snap list firefox >/dev/null 2>&1; then
+        echo "[OK] Firefox installe."
+    else
+        echo "[WARN] Firefox non installe (reseau ?) - voir /var/log/osmo-firefox-snap.log"
+    fi
+    return 0
+}
+osmo_installer_firefox
 
 case "${1:-}" in
     --quiet) exit 0 ;;

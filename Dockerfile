@@ -148,9 +148,7 @@ RUN for repo in \
     name=$(echo $repo | cut -d: -f1) && \
     version=$(echo $repo | cut -d: -f2) && \
     \
-    if [ "$name" = "libosmocore" ]; then \
-        GIT_URL="https://github.com/osmocom/$name"; \
-    elif [[ "$name" =~ "libosmo" ]]; then \
+    if [[ "$name" =~ ^libosmo ]]; then \
         GIT_URL="https://gitea.osmocom.org/osmocom/$name"; \
     else \
         GIT_URL="https://gitea.osmocom.org/cellular-infrastructure/$name"; \
@@ -172,7 +170,8 @@ RUN for repo in \
     ./configure $EXTRA_FLAGS && \
     make -j$(nproc) && \
     make install && \
-    ldconfig; \
+    ldconfig \
+    || { echo "ECHEC build osmocom: $name"; exit 1; }; \
     done
 
 # ── Patch osmo-trx IPC : alignement ts_initial sur la trame TDMA (fix RACH/LU) ──

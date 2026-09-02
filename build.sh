@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# Contexte de build : le repertoire de CE script, pas le cwd de l appelant.
+# Le lanceur .desktop passe par pkexec, qui demarre dans /root : sans ce cd,
+# "docker build ." cherche /root/Dockerfile et echoue.
+cd "$(dirname "$(readlink -f "$0")")"
+
 # 0. Parsing des arguments
 NO_CACHE=""
 LITE=0

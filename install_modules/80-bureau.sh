@@ -4,8 +4,12 @@
 #  Pose EXACTEMENT ce que l ISO pose (build-iso.sh, etape 8d) a partir des
 #  memes fichiers du depot :
 #     data/desktop/osmo-launch.desktop   "Lancer le banc GSM"  -> launch.sh
-#     data/desktop/osmo-multi.desktop    "multi-operator"      -> start-multi.sh
 #     data/*.svg                         les icones
+#
+#  osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI : son lanceur
+#  start-multi.sh suppose le supplement SS7 (docker + image + topologie), qui
+#  n existe qu apres addition.sh. C est addition.sh qui pose l antenne, a la fin
+#  d une install SS7 reussie - pas avant, ou elle ne ferait rien au clic.
 #  et le lien /usr/local/bin/osmo-start-direct -> start-direct.sh.
 #
 #  Icon= est reecrit en CHEMIN ABSOLU (/usr/share/osmo-operator/icons/*.svg) :
@@ -29,7 +33,7 @@ INST_DEPS[bureau]="configs"
 INST_REQUIRED[bureau]=0
 
 _BUREAU_ICONS=/usr/share/osmo-operator/icons
-_BUREAU_ENTRIES="osmo-launch osmo-multi"
+_BUREAU_ENTRIES="osmo-launch"
 
 _bureau_homes() {
     local h

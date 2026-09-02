@@ -21,6 +21,8 @@
 #   sudo ./addition.sh --multi    le meme, sans la fenetre
 #   sudo ./addition.sh --docker   le moteur de conteneurs seul   (depannage)
 #   sudo ./addition.sh --image    l image operateur seule, build.sh (depannage)
+#   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
+#   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -39,15 +41,17 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 
-DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; STATUS_ONLY=0; ANY_FLAG=0
+DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
         --image)  DO_IMAGE=1;  ANY_FLAG=1 ;;
         --multi)  DO_MULTI=1;  ANY_FLAG=1 ;;
-        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; ANY_FLAG=1 ;;
+        --opencl) DO_OPENCL=1; ANY_FLAG=1 ;;
+        --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
+        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
-        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     esac
 done
 
@@ -63,10 +67,23 @@ etat() {
     [ "$ok_d" = "1" ] && docker info >/dev/null 2>&1 && ok_r=1
     [ "$ok_r" = "1" ] && docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 && ok_i=1
     [ -f "$MULTI_CONF" ] && ok_m=1
+    local ok_cl=0
+    # clinfo qui rend au moins une plateforme : c est la seule preuve qu une
+    # pile OpenCL est UTILISABLE. Les paquets poses ne prouvent rien - un ICD
+    # sans pilote derriere laisse "Number of platforms 0".
+    command -v clinfo >/dev/null 2>&1 \
+        && [ "$(clinfo -l 2>/dev/null | grep -c Platform)" -gt 0 ] && ok_cl=1
+    local ok_cc=0
+    # claude qui repond --version : la seule preuve qu il est UTILISABLE. Le
+    # binaire pose sans node derriere (installation npm cassee) sort en erreur.
+    command -v claude >/dev/null 2>&1 \
+        && claude --version >/dev/null 2>&1 && ok_cc=1
     [ "$ok_d" = "1" ] && echo -e "  docker installe      : ${GREEN}oui${NC}"      || echo -e "  docker installe      : ${YELLOW}non${NC}"
     [ "$ok_r" = "1" ] && echo -e "  demon actif          : ${GREEN}oui${NC}"      || echo -e "  demon actif          : ${YELLOW}non${NC}"
     [ "$ok_i" = "1" ] && echo -e "  image operateur      : ${GREEN}presente${NC}" || echo -e "  image operateur      : ${YELLOW}absente${NC}"
     [ "$ok_m" = "1" ] && echo -e "  topologie SS7        : ${GREEN}posee${NC}"    || echo -e "  topologie SS7        : ${YELLOW}absente${NC}"
+    [ "$ok_cl" = "1" ] && echo -e "  OpenCL               : ${GREEN}operationnel${NC}" || echo -e "  OpenCL               : ${YELLOW}absent${NC}"
+    [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
 }
 
 [ "$STATUS_ONLY" = "1" ] && { etat; exit 0; }
@@ -86,29 +103,43 @@ etat() {
 # donnait un demi-supplement dont rien ne se sert - docker sans image, ou une
 # image de 11 Go sans la topologie qui l emploie.
 # Une fenetre qui propose des choix sans effet ment sur ce que fait le script.
-# Une question, une reponse : on installe "Docker container and SS7
-# multioperator", ou on ferme.
-# Les drapeaux --docker / --image restent, eux, pour le depannage en console.
+#
+# [2026-09-02] DEUX CHOIX MAINTENANT - ET LA REGLE N A PAS CHANGE.
+# Ce qui etait reproche aux trois cases d avant, ce n est pas leur nombre :
+# c est qu elles etaient FAUSSES (cocher "docker" seul ne donnait rien
+# d utilisable, et le decocher ne l empechait pas d etre installe). OpenCL,
+# lui, est un supplement REELLEMENT independant : il n entraine rien, rien ne
+# l entraine, on peut le vouloir sans le multi-operateur et l inverse. Une case
+# qui commande quelque chose a le droit d exister ; une case decorative, non.
+# Les drapeaux --docker / --image / --opencl restent pour le depannage console.
 if [ "$ANY_FLAG" = "0" ]; then
     if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
-        zenity --question --width=560 \
+        # --print-column=2 N EST PAS FACULTATIF : le defaut de zenity est la
+        # colonne 1, qui pour un --checklist est la CASE A COCHER - on
+        # recupererait une liste de "TRUE" au lieu des choix. On imprime donc
+        # la colonne 2, cachee, qui porte la CLE ("multi", "opencl") : le
+        # libelle affiche peut alors changer sans casser les tests.
+        # --separator : le defaut "|" traverse mal les tests ci-dessous ; on
+        # prend un caractere qui n apparait dans aucun libelle.
+        _choix=$(zenity --list --checklist --width=680 --height=340 \
             --title="osmo-operator - supplements" \
-            --icon-name=system-software-install \
+            --text="Supplements qui ne sont PAS dans l ISO.\nUne connexion Internet est necessaire." \
             --ok-label="Installer" --cancel-label="Fermer" \
-            --text="<b>Docker container and SS7 multioperator</b>
-
-Ce supplement n est PAS dans l ISO. Il installe :
-
-  - docker (apt : docker.io) - le moteur de conteneurs
-  - l image operateur, via <tt>/opt/GSM/osmo-operator/build.sh</tt>
-     compilation Osmocom : <b>tres long</b>, plusieurs dizaines de minutes
-  - la topologie SS7 : op1 natif + op2/op3 docker + inter-STP
-
-Une connexion Internet est necessaire." \
-            2>/dev/null || { echo "Annule."; exit 0; }
+            --separator="~" \
+            --column="" --column="cle" --column="Supplement" \
+            --hide-column=2 --print-column=2 \
+            TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (build.sh : compilation Osmocom, plusieurs dizaines de minutes), et la topologie op1 natif + op2/op3 docker + inter-STP" \
+            FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
+            FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
+            2>/dev/null) || { echo "Annule."; exit 0; }
+        [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
+        case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
+        case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
+        case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
+    else
+        # Console sans zenity : le supplement historique, celui de l icone.
+        DO_MULTI=1
     fi
-    # Console sans zenity, ou fenetre validee : c est le meme supplement.
-    DO_MULTI=1
 fi
 
 # Le multi-operateur ENTRAINE ses dependances : sans moteur ni image, la
@@ -116,6 +147,327 @@ fi
 if [ "$DO_MULTI" = "1" ]; then DO_DOCKER=1; DO_IMAGE=1; fi
 
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis : sudo $0${NC}"; exit 1; }
+
+# ── OPENCL ──────────────────────────────────────────────────────────────────
+# Supplement independant : rien ici n entraine docker, et docker n entraine pas
+# ceci. Il sert au calcul GPU - les traitements lourds du cote SDR (correlation,
+# FFT larges) et tout ce qu un utilisateur voudra faire tourner a cote.
+#
+# UNE PILE OPENCL, C EST DEUX MOITIES, ET L ERREUR CLASSIQUE EST DE N EN POSER
+# QU UNE. Le "runtime" (ocl-icd) n est qu un aiguilleur : il lit
+# /etc/OpenCL/vendors/*.icd et charge la bibliotheque du VENDEUR qui y est
+# nommee. Sans ICD de vendeur, tout s installe sans une erreur et clinfo rend
+#     Number of platforms   0
+# ce qui ressemble a un materiel non supporte alors qu il ne manque qu un
+# paquet. On pose donc l aiguilleur ET le pilote de la carte reellement
+# presente, lue dans lspci.
+#
+# pocl est pose dans tous les cas : c est une implementation PROCESSEUR. Elle
+# ne remplace pas un GPU, mais elle garantit qu un programme OpenCL trouve
+# toujours une plateforme - y compris en machine virtuelle, ou dans un banc
+# sans carte graphique dediee, ou l absence totale de plateforme fait echouer
+# le code avec un CL_PLATFORM_NOT_FOUND_KHR que personne ne sait lire.
+#
+# NVIDIA est le cas a part : son ICD OpenCL n est pas un paquet separe
+# installable seul, il voyage avec le pilote proprietaire (le paquet
+# libnvidia-compute-xxx, tire par nvidia-driver-xxx). On l installe donc via
+# ubuntu-drivers, qui choisit le pilote recommande pour la carte. C est un
+# pilote graphique proprietaire, sur une machine dont l ecran depend : il faut
+# le plus souvent REDEMARRER pour qu il prenne - on le dit clairement.
+if [ "$DO_OPENCL" = "1" ]; then
+    echo -e "  ${CYAN}→${NC} installation de la pile OpenCL ..."
+    export DEBIAN_FRONTEND=noninteractive
+
+    _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd"
+    _vga="$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display' || true)"
+    _nvidia=0
+    case "$_vga" in
+        *[Ii]ntel*)   _cl_pkgs="$_cl_pkgs intel-opencl-icd" ;;
+    esac
+    case "$_vga" in
+        *AMD*|*ATI*|*[Rr]adeon*) _cl_pkgs="$_cl_pkgs mesa-opencl-icd" ;;
+    esac
+    case "$_vga" in
+        *NVIDIA*|*nVidia*) _nvidia=1 ;;
+    esac
+    echo -e "      paquets : ${BOLD}${_cl_pkgs}${NC}"
+
+    apt-get update || { echo -e "  ${RED}✗ apt-get update a echoue - pas de reseau ?${NC}"
+                        echo -e "    Ce supplement a BESOIN d Internet : rien n est pre-telecharge dans l ISO."
+                        exit 1; }
+    # Paquet par paquet, et non fatal : un ICD de vendeur absent du miroir
+    # (cela arrive) ne doit pas emporter le runtime avec lui - la pile
+    # processeur reste utilisable, et c est mieux que rien du tout.
+    for _p in $_cl_pkgs; do
+        apt-get install -y "$_p" >/dev/null 2>&1 \
+            && echo -e "      ${GREEN}✓${NC} $_p" \
+            || echo -e "      ${YELLOW}!${NC} $_p non installe (absent du miroir ?)"
+    done
+
+    # LA SEULE VERIFICATION QUI VAUT : est-ce qu une plateforme repond ?
+    if command -v clinfo >/dev/null 2>&1; then
+        _np="$(clinfo -l 2>/dev/null | grep -c Platform || true)"
+        if [ "${_np:-0}" -gt 0 ]; then
+            echo -e "  ${GREEN}✓${NC} OpenCL operationnel - ${BOLD}${_np}${NC} plateforme(s) :"
+            clinfo -l 2>/dev/null | sed 's/^/      /'
+        else
+            echo -e "  ${YELLOW}!${NC} paquets poses, mais aucune plateforme OpenCL ne repond."
+            echo -e "      Voir : ${BOLD}ls /etc/OpenCL/vendors/${NC} puis ${BOLD}clinfo${NC}"
+        fi
+    fi
+
+    if [ "$_nvidia" = "1" ]; then
+        echo -e "  ${CYAN}→${NC} carte ${BOLD}NVIDIA${NC} detectee : installation du pilote (ICD OpenCL inclus) ..."
+        # LES HEADERS DU NOYAU D ABORD. Le pilote NVIDIA compile son module par
+        # DKMS contre le noyau EN COURS : sans linux-headers-$(uname -r), dkms
+        # et build-essential, le build du module echoue et l installation part
+        # en erreur (souvent muette : le paquet s installe, mais nvidia.ko
+        # n existe pas, et OpenCL reste absent). On les pose avant.
+        _kver="$(uname -r)"
+        echo -e "      ${CYAN}→${NC} pre-requis DKMS : linux-headers-${_kver}, dkms, build-essential"
+        apt-get install -y "linux-headers-${_kver}" dkms build-essential >/dev/null 2>&1 \
+            || echo -e "      ${YELLOW}!${NC} headers/dkms : installation partielle (headers absents du miroir ?)"
+        # linux-headers-generic en filet : garde les headers alignes sur le
+        # meta-noyau pour les mises a jour de noyau suivantes.
+        apt-get install -y linux-headers-generic >/dev/null 2>&1 || true
+        apt-get install -y ubuntu-drivers-common >/dev/null 2>&1 || true
+        if command -v ubuntu-drivers >/dev/null 2>&1; then
+            if ubuntu-drivers install; then
+                echo -e "  ${GREEN}✓${NC} pilote NVIDIA installe"
+            else
+                echo -e "  ${YELLOW}!${NC} ubuntu-drivers install a echoue - repli : ${BOLD}nvidia-driver + nvidia-opencl-icd${NC}"
+                apt-get install -y nvidia-driver-535 nvidia-opencl-icd-535 >/dev/null 2>&1 \
+                    || apt-get install -y nvidia-driver nvidia-opencl-icd >/dev/null 2>&1 \
+                    || echo -e "  ${YELLOW}!${NC} pilote NVIDIA non installe (voir : ubuntu-drivers devices)"
+            fi
+        else
+            echo -e "  ${YELLOW}!${NC} ubuntu-drivers absent - installez a la main : ${BOLD}sudo ubuntu-drivers install${NC}"
+        fi
+        echo -e "  ${YELLOW}!${NC} un ${BOLD}redemarrage${NC} est generalement necessaire pour que le pilote"
+        echo -e "      NVIDIA (et donc son OpenCL) soit actif - ${BOLD}clinfo${NC} le confirmera ensuite."
+    fi
+
+    # ── LES OUTILS QUI TOURNENT SUR OPENCL ───────────────────────────────────
+    # deka, a51_tools, dst80_reversing, tea1-cracker : quatre depots de calcul
+    # qui se servent du GPU. Ils VONT AVEC OpenCL - c est pour eux qu on le
+    # pose - donc ils s installent ici, avec lui, et pas dans l ISO : l image
+    # reste un noeud GSM, ces outils sont un supplement de calcul.
+    # Clones dans /root. Idempotent : si le depot est deja la, on met a jour
+    # (git pull) au lieu de recloner. Non fatal - un depot injoignable (prive,
+    # reseau) n arrete pas le reste.
+    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
+    # NON-INTERACTIF, SINON LA FENETRE FIGE. Sur un depot prive ou absent, git
+    # reclame un identifiant sur le terminal et attend INDEFINIMENT - lance par
+    # l icone, il n y a personne pour repondre. GIT_TERMINAL_PROMPT=0 le fait
+    # echouer net (pas de prompt), et le message plus bas dit quoi faire.
+    export GIT_TERMINAL_PROMPT=0
+    for _rt in "deka=https://github.com/bbaranoff/deka" \
+               "a51_tools=https://github.com/bbaranoff/a51_tools" \
+               "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
+               "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
+        _name="${_rt%%=*}"; _url="${_rt#*=}"; _dst="/root/$_name"
+        # http.version=HTTP/1.1 : "expected flush after ref listing" vient d un
+        # flux git corrompu par HTTP/2 (proxy/antivirus qui s intercale) - le
+        # symptome depend de la taille, d ou certains depots qui passent et
+        # d autres non. Forcer HTTP/1.1 est le remede de cette erreur exacte.
+        # On CAPTURE la sortie de git et on la MONTRE en cas d echec.
+        GIT="git -c http.version=HTTP/1.1"
+        if [ -d "$_dst/.git" ]; then
+            if _err=$($GIT -C "$_dst" pull --ff-only 2>&1); then
+                echo -e "      ${GREEN}✓${NC} $_name a jour ($(git -C "$_dst" log -1 --format='%h'))"
+            else
+                echo -e "      ${YELLOW}!${NC} $_name : git pull a echoue - $(echo "$_err" | tail -1)"
+            fi
+        elif _err=$($GIT clone --depth 1 "$_url" "$_dst" 2>&1); then
+            echo -e "      ${GREEN}✓${NC} $_name clone ($(git -C "$_dst" log -1 --format='%h'))"
+        else
+            echo -e "      ${YELLOW}!${NC} $_name : clone impossible - $_url"
+            echo -e "        ${YELLOW}git:${NC} $(echo "$_err" | tail -1)"
+        fi
+    done
+
+    # ── deka : une ICONE d appli (pas un service) ────────────────────────────
+    # deka monte des tables et lance des workers - ca ne doit PAS partir a
+    # chaque boot dans le dos de l utilisateur (le montage suppose le groupe de
+    # volumes present). On pose donc une icone : l utilisateur la clique quand
+    # il veut demarrer deka. deka-start.sh reste le moteur ; l icone l appelle
+    # avec les droits root (pkexec) dans un terminal, pour voir la sortie.
+    if [ -d /root/deka ]; then
+        echo -e "  ${CYAN}→${NC} deka : pose de l icone d application ..."
+        # deka-start.sh vit dans le depot : s il est la (clone a jour), on n y
+        # touche pas. On ne l ecrit qu en SECOURS, pour un clone qui ne l aurait
+        # pas encore.
+        if [ ! -f /root/deka/deka-start.sh ]; then
+        cat > /root/deka/deka-start.sh <<'DEKASTART'
+#!/bin/bash
+# deka-start.sh - montage des tables deka et lancement des workers.
+# Pose par addition.sh (supplement OpenCL). Lance par l icone deka (pkexec), ou
+# a la main : sudo /root/deka/deka-start.sh
+#   1. vgchange -ay : active le groupe de volumes (sinon /dev/tables/* absent).
+#   2. les 4 points de montage, puis les 4 volumes (1_10..31_40).
+#   3. les 3 workers python, depuis /root/deka (delta.pyc y vit).
+set -u
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+LOG=/var/log/deka.log
+exec >>"$LOG" 2>&1
+echo "=== $(date -Is) deka-start ==="
+[ "$(id -u)" -eq 0 ] || { echo "root requis : sudo $0"; exit 1; }
+PY="$(command -v python3.7 || command -v python3)"
+[ -n "$PY" ] || { echo "aucun python3 trouve"; exit 1; }
+vgchange -ay || echo "ATTENTION: vgchange -ay a echoue (groupe absent ?)"
+mkdir -p /mnt1 /mnt2 /mnt3
+monter() {
+    local dev="$1" pt="$2"
+    if mountpoint -q "$pt"; then echo "deja monte: $pt"; return 0; fi
+    if [ ! -e "$dev" ]; then echo "ABSENT: $dev - non monte sur $pt"; return 1; fi
+    mount "$dev" "$pt" && echo "monte: $dev -> $pt" || echo "ECHEC montage: $dev -> $pt"
+}
+monter /dev/tables/1_10  /mnt
+monter /dev/tables/11_20 /mnt1
+monter /dev/tables/21_30 /mnt2
+monter /dev/tables/31_40 /mnt3
+cd "$DIR" || exit 1
+for w in paplon.py oclvankus.py delta_client.py; do
+    [ -f "$w" ] || { echo "worker absent: $w"; continue; }
+    echo "lancement: $PY $DIR/$w"
+    "$PY" "$DIR/$w" >>"/var/log/deka-${w%.py}.log" 2>&1 &
+    echo "  pid $!"
+done
+echo "deka-start termine."
+DEKASTART
+        chmod 755 /root/deka/deka-start.sh
+        fi
+
+        # LE LANCEUR : deka-start.sh a besoin de root (vgchange, mount). Depuis
+        # une icone on n est pas root : pkexec eleve, et un terminal reste
+        # ouvert pour lire la sortie (montages, PID des workers). Meme facture
+        # que osmo-addition-anim.
+        cat > /usr/local/bin/osmo-deka-anim <<'DEKAGUI'
+#!/bin/bash
+set -u
+SCRIPT=/root/deka/deka-start.sh
+if [ ! -x "$SCRIPT" ]; then
+    command -v zenity >/dev/null 2>&1 && \
+        zenity --error --text="deka-start.sh introuvable : $SCRIPT" 2>/dev/null
+    exit 1
+fi
+RUNNER="$SCRIPT"
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v pkexec >/dev/null 2>&1; then
+        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
+    else
+        RUNNER="sudo -E $SCRIPT"
+    fi
+fi
+CMD="$RUNNER; echo; read -n1 -rsp 'deka lance - une touche pour fermer...'"
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="deka" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "deka" -e bash -c "$CMD" ;;
+    esac
+done
+exec bash -c "$RUNNER"
+DEKAGUI
+        chmod 755 /usr/local/bin/osmo-deka-anim
+
+        # LE FICHIER .desktop : Icon= en nom de theme (drive-harddisk, present
+        # dans Yaru) - pas un chemin, deka n embarque pas d icone dediee.
+        # Terminal=false : le lanceur ouvre LUI-MEME son terminal (sinon deux
+        # fenetres, dont une sans les droits).
+        _deka_desktop=/usr/share/applications/deka.desktop
+        cat > "$_deka_desktop" <<'DEKADSK'
+[Desktop Entry]
+Type=Application
+Name=deka
+Name[fr]=deka
+Comment=Monte les tables et lance les workers deka
+Comment[fr]=Monte les tables et lance les workers deka
+Exec=/usr/local/bin/osmo-deka-anim
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Utility;
+Keywords=deka;tables;workers;opencl;
+DEKADSK
+        chmod 644 "$_deka_desktop"
+        update-desktop-database /usr/share/applications 2>/dev/null || true
+
+        # Sur les bureaux : DING n affiche un .desktop avec son nom et son icone
+        # que s il est executable ET porteur de metadata::trusted (voir la meme
+        # mecanique dans update.sh). On le pose sous chaque bureau existant.
+        _posee=0
+        for _h in /root /home/*; do
+            for _dir in Bureau Desktop; do
+                [ -d "$_h/$_dir" ] || continue
+                cp -f "$_deka_desktop" "$_h/$_dir/deka.desktop" 2>/dev/null || continue
+                chmod +x "$_h/$_dir/deka.desktop" 2>/dev/null || true
+                gio set -t string "$_h/$_dir/deka.desktop" metadata::trusted true 2>/dev/null || true
+                touch "$_h/$_dir" 2>/dev/null || true
+                _posee=1
+            done
+        done
+        [ "$_posee" = "1" ] \
+            && echo -e "  ${GREEN}✓${NC} icone ${BOLD}deka${NC} posee sur le bureau (clic pour monter + lancer)" \
+            || echo -e "  ${GREEN}✓${NC} icone ${BOLD}deka${NC} dans le menu des applications"
+    fi
+fi
+
+# ── CLAUDE CODE ──────────────────────────────────────────────────────────────
+# Supplement independant : Claude Code, la CLI de l assistant. Rien ici
+# n entraine docker ni OpenCL, et rien ne l entraine - on peut le vouloir seul.
+#
+# ON PREND L INSTALLEUR NATIF (claude.ai/install.sh), PAS npm, ET C EST VOULU.
+# @anthropic-ai/claude-code par npm exige node >= 18 ; or le node des depots
+# Ubuntu 22.04 est une v12, trop vieille - l installation npm casserait, ou
+# reclamerait un depot tiers (NodeSource) qu on evite ici comme on evite
+# get.docker.com plus bas. L installeur natif pose un binaire autonome (node
+# embarque), sans toucher au systeme : c est le chemin le plus sur.
+#
+# Il pose dans ~/.local/bin (donc /root/.local/bin, lance en sudo). On lie ce
+# binaire dans /usr/local/bin pour qu il soit sur le PATH de tout le monde et
+# que la sonde `command -v claude` le voie.
+if [ "$DO_CLAUDE" = "1" ]; then
+    echo -e "  ${CYAN}→${NC} installation de Claude Code ..."
+    export DEBIAN_FRONTEND=noninteractive
+
+    # curl + certificats : l installeur les exige. Non fatal en soi, mais on
+    # previent tot si le reseau manque - rien n est pre-telecharge dans l ISO.
+    command -v curl >/dev/null 2>&1 || apt-get install -y curl ca-certificates >/dev/null 2>&1 || true
+    if ! command -v curl >/dev/null 2>&1; then
+        echo -e "  ${RED}✗ curl absent et non installable - pas de reseau ?${NC}"
+        echo -e "    Ce supplement a BESOIN d Internet : rien n est pre-telecharge dans l ISO."
+        exit 1
+    fi
+
+    # HOME explicite : lance par pkexec/sudo, $HOME peut manquer ou pointer
+    # ailleurs ; l installeur pose dans $HOME/.local/bin, on veut savoir ou.
+    _cc_home="${HOME:-/root}"
+    if _out=$(HOME="$_cc_home" bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1); then
+        echo -e "      ${GREEN}✓${NC} installeur natif termine"
+    else
+        echo -e "      ${YELLOW}!${NC} installeur natif en echec - $(echo "$_out" | tail -1)"
+    fi
+
+    # Trouver le binaire pose et le lier sur le PATH global. On regarde les
+    # emplacements connus de l installeur (~/.local/bin, puis repli /root).
+    _cc_bin=""
+    for _c in "$_cc_home/.local/bin/claude" /root/.local/bin/claude "$_cc_home/.claude/bin/claude"; do
+        [ -x "$_c" ] && { _cc_bin="$_c"; break; }
+    done
+    if [ -n "$_cc_bin" ] && [ ! -e /usr/local/bin/claude ]; then
+        ln -sf "$_cc_bin" /usr/local/bin/claude
+        echo -e "      ${GREEN}✓${NC} lien /usr/local/bin/claude -> $_cc_bin"
+    fi
+
+    # LA SEULE VERIFICATION QUI VAUT : est-ce que claude repond ?
+    if command -v claude >/dev/null 2>&1 && _ver=$(claude --version 2>/dev/null); then
+        echo -e "  ${GREEN}✓${NC} Claude Code operationnel - ${BOLD}${_ver}${NC}"
+        echo -e "      lancez-le avec la commande ${BOLD}claude${NC}"
+    else
+        echo -e "  ${YELLOW}!${NC} Claude Code pose, mais ne repond pas encore."
+        echo -e "      Ouvrez un nouveau terminal (PATH), ou lancez ${BOLD}$_cc_home/.local/bin/claude${NC}"
+    fi
+fi
 
 # ── DOCKER ──────────────────────────────────────────────────────────────────
 # docker.io des depots Ubuntu, PAS le script get.docker.com : celui-ci ajoute un
@@ -149,9 +501,13 @@ if [ "$DO_IMAGE" = "1" ]; then
     if docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} image operateur deja presente (${MULTI_IMAGE})"
     elif [ -x "$DIR/build.sh" ]; then
-        echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh${NC}"
+        # --no-cache : le supplement rebatit l image PROPRE. Le cache docker
+        # gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
+        # github casse de libosmocore) et les rejouait a l identique - un build
+        # deja casse restait casse a chaque passage. On force la reconstruction.
+        echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh --no-cache${NC}"
         echo -e "      compilation Osmocom - comptez plusieurs dizaines de minutes."
-        "$DIR/build.sh" || { echo -e "  ${RED}✗ ${DIR}/build.sh a echoue${NC}"; exit 1; }
+        "$DIR/build.sh" --no-cache || { echo -e "  ${RED}✗ ${DIR}/build.sh a echoue${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} image operateur construite"
     else
         echo -e "  ${RED}✗ build.sh introuvable dans $DIR${NC}"; exit 1
@@ -201,6 +557,57 @@ MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:1.2.2:250 3:docker:172.20.0.
 CONF
     echo -e "  ${GREEN}✓${NC} topologie SS7 ecrite : ${CYAN}${MULTI_CONF}${NC}"
     echo -e "      op1 ${BOLD}natif${NC} (1.1.2) + op2/op3 ${BOLD}docker${NC} (1.2.2 / 1.3.2) → hub 172.20.0.10"
+
+    # ── L ICONE MULTI-OPERATOR : POSEE ICI, A LA FIN, ET PAS AVANT ────────────
+    # L antenne bleue lance start-multi.sh, qui suppose docker, l image et la
+    # topologie ci-dessus. La poser au build ISO (comme le telephone ou le
+    # tutoriel) la faisait apparaitre sur le bureau des le premier boot, AVANT
+    # que ce supplement n existe : un clic ne donnait rien. On la pose donc
+    # seulement maintenant, une fois l install SS7 reellement faite - build-iso
+    # et install_modules/80-bureau.sh ne la posent plus.
+    _ico_dir=/usr/share/osmo-operator/icons
+    _svg="$DIR/data/osmo-multi.svg"
+    _dsk="$DIR/data/desktop/osmo-multi.desktop"
+    if [ -f "$_dsk" ]; then
+        install -d "$_ico_dir" /usr/share/icons/hicolor/scalable/apps /usr/share/applications
+        # SVG en CHEMIN ABSOLU dans Icon= (voir build-iso.sh) : un nom de theme
+        # arrive apres icon-theme.cache s affiche en page blanche.
+        if [ -f "$_svg" ]; then
+            install -m644 "$_svg" "$_ico_dir/osmo-multi.svg"
+            install -m644 "$_svg" /usr/share/icons/hicolor/scalable/apps/osmo-multi.svg
+        fi
+        install -m644 "$_dsk" /usr/share/applications/osmo-multi.desktop
+        # Exec= et Icon= suivent l arbre reel ($DIR), pas /opt/GSM en dur.
+        sed -i -e "s|^Exec=/opt/GSM/osmo-operator/|Exec=$DIR/|" \
+               -e "s|^Icon=.*|Icon=$_ico_dir/osmo-multi.svg|" \
+               /usr/share/applications/osmo-multi.desktop
+
+        # Sur les bureaux de root et de l utilisateur sudo, en Bureau/ et
+        # Desktop/. metadata::trusted pour que DING l affiche sans pastille ;
+        # osmo-trust-desktop (au login) la repositionne et la trust aussi.
+        _homes=(/root)
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+            _uh="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+            [ -n "$_uh" ] && [ -d "$_uh" ] && _homes+=("$_uh")
+        fi
+        _posee=0
+        for _h in "${_homes[@]}"; do
+            for _dir in Bureau Desktop; do
+                [ -d "$_h/$_dir" ] || continue
+                cp -f /usr/share/applications/osmo-multi.desktop "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || continue
+                chmod +x "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || true
+                gio set -t string "$_h/$_dir/osmo-multi.desktop" metadata::trusted true 2>/dev/null || true
+                [ "$_h" != /root ] && chown "$SUDO_USER" "$_h/$_dir/osmo-multi.desktop" 2>/dev/null || true
+                touch "$_h/$_dir" 2>/dev/null || true
+                _posee=1
+            done
+        done
+        command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+        command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
+        [ "$_posee" = "1" ] \
+            && echo -e "  ${GREEN}✓${NC} icone ${BOLD}multi-operator${NC} (antenne) posee sur le bureau" \
+            || echo -e "  ${GREEN}✓${NC} icone ${BOLD}multi-operator${NC} dans le menu des applications"
+    fi
 fi
 
 echo
@@ -208,4 +615,6 @@ etat
 echo
 [ "$DO_MULTI" = "1" ] && \
     echo -e "  ${CYAN}→${NC} lancer : ${BOLD}sudo $DIR/start-multi.sh${NC}  (ou l antenne bleue du bureau)"
+[ "$DO_OPENCL" = "1" ] && \
+    echo -e "  ${CYAN}→${NC} verifier OpenCL : ${BOLD}clinfo${NC}"
 exit 0
