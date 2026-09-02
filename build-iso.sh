@@ -767,6 +767,21 @@ else
     echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
 fi
 
+# ── Firmware audio TI TAS2781 (ampli Lenovo Legion 7) ───────────────────────
+# Le codec TAS2781 des Legion 7 ne sort AUCUN son tant que son firmware n est
+# pas dans /lib/firmware : le pilote snd_soc_tas2781 le reclame au chargement
+# et reste muet sinon. On le pose dans le rootfs (donc /lib/firmware du systeme
+# installe), pas dans le /lib/firmware de l hote de build. Non fatal : une image
+# sans ce binaire boote quand meme, seul l audio du Legion manque.
+_TAS_URL="https://github.com/bbaranoff/sound_firmware_lenovo_legion_7/raw/refs/heads/main/TIAS2781RCA2.bin"
+install -d "$ROOTFS/lib/firmware"
+if wget -qO "$ROOTFS/lib/firmware/TIAS2781RCA2.bin" "$_TAS_URL"; then
+    echo -e "  ${GREEN}✓${NC} firmware audio : ${CYAN}/lib/firmware/TIAS2781RCA2.bin${NC} (TAS2781, Legion 7)"
+else
+    rm -f "$ROOTFS/lib/firmware/TIAS2781RCA2.bin"
+    echo -e "  ${YELLOW}!${NC} TIAS2781RCA2.bin non telecharge (reseau ?) - audio Legion 7 muet" >&2
+fi
+
 # ── Datadir QEMU : le lien que reclame la RELOCALISATION ────────────────────
 # [2026-08-28] Diagnostique en direct sur un banc lite (192.168.1.7), ou la
 # sequence mourait sur :
