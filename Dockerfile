@@ -545,17 +545,6 @@ RUN cd /opt/GSM \
     && make install \
     && ldconfig
 
-# ── si_bridge.py : la version qosmo-grgsm ecrase celle du depot ─────────────────
-# Ex-Dockerfile.run. ⚠️ ORDRE CRITIQUE : ce `cp` DOIT rester APRES
-# `COPY opt-gsm/. /opt/GSM/` ci-dessus. Place avant, c'est opt-gsm/si_bridge.py
-# (version du depot) qui reprendrait le dessus et le demodulateur du SI reel
-# changerait EN SILENCE — panne visible seulement par un camping qui ne se fait
-# plus, sans message.
-# Comportement identique a avant le decoupage : c'est la version qosmo-grgsm qui
-# est en place dans l'image. Quelle copie fait foi (opt-gsm/si_bridge.py du
-# depot ou qosmo-grgsm/opt-gsm-scripts/si_bridge.py) reste un arbitrage A TRANCHER
-# — cf. start-nitb.sh l.7 : « 4 copies de si_bridge.py, toutes divergentes ».
-RUN cp /opt/GSM/qosmo-grgsm/opt-gsm-scripts/si_bridge.py /opt/GSM/si_bridge.py
 
 # ── GCC 9 pour osmocom-bb branches expérimentales (jolly/testing, burst_ind) ─
 # gcc-9 et gcc-11 sont installés avec le reste, plus haut : ici on ne fait que
