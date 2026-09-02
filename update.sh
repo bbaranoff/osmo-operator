@@ -152,6 +152,9 @@ case "${1:-}" in
     --quiet) exit 0 ;;
 esac
 
+git config --global http.version HTTP/1.1 
+
+
 # Sur un tty seulement : les sequences de curseur (\033[?25l) ecrites dans un
 # fichier de log le rendent illisible, et l'attente ne sert plus personne.
 [ -t 1 ] || exit 0
