@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Installer osmo-operator
+Name[fr]=Installer osmo-operator
+Comment=Installer le banc GSM/EGPRS sur le disque
+Comment[fr]=Installer le banc GSM/EGPRS sur le disque
+Exec=/usr/local/bin/osmo-install
+Icon=drive-harddisk
+Terminal=false
+Categories=System;
+Keywords=install;installer;calamares;

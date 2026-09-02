@@ -63,12 +63,14 @@ class Downlink:
         self.tch_acc = []
         self.tch_last_fn = None
         self.sacch_acc = {}
+        self._deciphered = {}
         tch.on_close.append(self._tch_reset)
 
     def _tch_reset(self):
         self.tch_acc = []
         self.tch_last_fn = None
         self.sacch_acc = {}
+        self._deciphered = {}
 
     def dispatch(self, tn, fn, burst):
         if self.record:
@@ -116,15 +118,13 @@ class Downlink:
         if gsm.is_dummy(burst):
             self.stats.dl_dummy += 1
             return
-        if base in plan.ded_bases:
-            burst = self.cipher.apply(burst, fn, False)
         acc = self.blocks.setdefault((tn, fn0), [])
-        acc.append(gsm.coded_from_burst(burst))
+        acc.append((fn, burst))
         self.stats.dl_bursts += 1
         if len(acc) < 4:
             return
         del self.blocks[(tn, fn0)]
-        l2 = gsm.xcch_decode(acc)
+        l2 = self._decode(acc, base in plan.ded_bases)
         self.stats.block(tn, base, l2 is not None)
         if l2 is None:
             self.stats.dl_crc_fail += 1
@@ -149,6 +149,54 @@ class Downlink:
         elif mt in gsm.CCCH_TYPES:
             self.feed.l2(fn0, gsm.GSMTAP_CCCH, l2, tn)
 
+    def _clear(self, bursts):
+        return [gsm.coded_from_burst(b) for _, b in bursts]
+
+    def _ciphered(self, bursts):
+        if len(self._deciphered) > 64:
+            self._deciphered.clear()
+        out = []
+        for fn, b in bursts:
+            d = self._deciphered.get(fn)
+            if d is None:
+                d = self._deciphered[fn] = gsm.coded_from_burst(self.cipher.apply(b, fn, False))
+            out.append(d)
+        return out
+
+    def _decode(self, bursts, dedicated):
+        # Comme dans un vrai reseau : clair, puis chiffre. La BTS n'active le
+        # chiffrement descendant qu'apres la premiere trame montante chiffree,
+        # donc SI5/SI6 et les premieres trames du SDCCH arrivent en clair meme
+        # quand le Kc est deja connu. On decode en clair tant que ca passe, et
+        # on verrouille l'etat global "descendant chiffre" des qu'un bloc ne
+        # decode qu'une fois dechiffre. Tous les canaux suivent cet etat.
+        if not dedicated or self.cipher.current() is None:
+            return gsm.xcch_decode(self._clear(bursts))
+        if not self.cipher.dl_active:
+            l2 = gsm.xcch_decode(self._clear(bursts))
+            if l2 is not None:
+                return l2
+        l2 = gsm.xcch_decode(self._ciphered(bursts))
+        if l2 is not None:
+            self.cipher.confirm_dl(bursts[0][0])
+        return l2
+
+    def _decode_tch(self, bursts):
+        # Meme regle pour le TCH : la parole suit l'etat global, une FACCH
+        # valide (CRC Fire) sert de preuve pour basculer l'etat.
+        if self.cipher.current() is None:
+            return gsm.tch_fr_decode(self._clear(bursts))
+        if self.cipher.dl_active:
+            return gsm.tch_fr_decode(self._ciphered(bursts))
+        rc, fr = gsm.tch_fr_decode(self._clear(bursts))
+        if rc == gsm.MACBLOCK_LEN:
+            return rc, fr
+        rc2, fr2 = gsm.tch_fr_decode(self._ciphered(bursts))
+        if rc2 == gsm.MACBLOCK_LEN:
+            self.cipher.confirm_dl(bursts[0][0])
+            return rc2, fr2
+        return rc, fr
+
     def _rr_downlink(self, l2, fn):
         off, mt = gsm.rr_message_type(l2)
         if mt == gsm.RR_ASSIGNMENT_COMMAND and len(l2) > off + 4:
@@ -158,28 +206,26 @@ class Downlink:
                 return
             self.tch.arm(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
         elif mt == gsm.RR_CHANNEL_RELEASE:
-            self.tch.close("CHANNEL RELEASE")
-            self.cipher.release("CHANNEL RELEASE")
+            self.tch.release_requested("CHANNEL RELEASE")
 
     def _tch(self, tn, fn, burst):
         if gsm.is_dummy(burst):
             self.stats.dl_dummy += 1
             return
         if fn % 26 == gsm.sacch_tf_frame(tn):
-            self._tch_sacch(tn, fn, self.cipher.apply(burst, fn, False))
+            self._tch_sacch(tn, fn, burst)
             return
         if not gsm.is_tch_carrier(fn):
             return
-        burst = self.cipher.apply(burst, fn, False)
         if self.tch_last_fn is not None and fn != gsm.next_tch_carrier(self.tch_last_fn):
             self.tch_acc = []
         self.tch_last_fn = fn
-        self.tch_acc.append(gsm.coded_from_burst(burst))
+        self.tch_acc.append((fn, burst))
         if len(self.tch_acc) > 8:
             del self.tch_acc[0]
         if len(self.tch_acc) < 8 or gsm.tch_burst_index(fn) % 4 != 3:
             return
-        rc, fr = gsm.tch_fr_decode(self.tch_acc)
+        rc, fr = self._decode_tch(self.tch_acc)
         if rc == gsm.FR_BYTES:
             self.stats.tch_dl += 1
             self.ring.publish(fr, fn)
@@ -188,23 +234,22 @@ class Downlink:
             l2 = fr[:gsm.MACBLOCK_LEN]
             self.feed.l2(fn, gsm.GSMTAP_TCH_F, l2, tn)
             if gsm.rr_message_type(l2)[1] == gsm.RR_CHANNEL_RELEASE:
-                self.tch.close("CHANNEL RELEASE (FACCH)")
-                self.cipher.release("CHANNEL RELEASE (FACCH)")
+                self.tch.release_requested("CHANNEL RELEASE (FACCH)")
         else:
             self.stats.tch_crc += 1
 
     def _tch_sacch(self, tn, fn, burst):
-        start = gsm.sacch_tf_frame(tn)
+        start = gsm.sacch_tf_block_base(tn)
         block = fn - ((fn % 104 - start) % 104)
         acc = self.sacch_acc.setdefault(block, [])
-        acc.append(gsm.coded_from_burst(burst))
+        acc.append((fn, burst))
         if len(self.sacch_acc) > 4:
             for k in sorted(self.sacch_acc)[:-2]:
                 del self.sacch_acc[k]
         if len(acc) < 4:
             return
         del self.sacch_acc[block]
-        l2 = gsm.xcch_decode(acc)
+        l2 = self._decode(acc, True)
         if l2 is None:
             self.stats.tch_crc += 1
             return

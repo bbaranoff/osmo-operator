@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lancer le banc GSM
+Name[fr]=Lancer le banc GSM
+Comment=Demarre le banc, Wireshark, Linphone et la console web
+Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
+Exec=/opt/GSM/osmo-operator/launch.sh
+Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
+Terminal=false
+Categories=System;Network;
+Keywords=gsm;osmocom;banc;lancer;

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Update osmo-operator
+Name[fr]=Mise a jour osmo-operator
+Comment=Rejouer update.sh du depot osmo-operator
+Comment[fr]=Rejouer update.sh du depot osmo-operator
+Exec=/usr/local/bin/osmo-update-anim
+Icon=system-software-update
+Terminal=false
+Categories=System;
+Keywords=update;sms;osmo;

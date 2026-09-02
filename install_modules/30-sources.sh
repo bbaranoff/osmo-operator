@@ -20,7 +20,17 @@ inst_sources_run() {
     local dir url br n=0
     while IFS='|' read -r dir url br; do
         [ -z "$dir" ] && continue
-        have_repo "$GSM_ROOT/$dir" && { inst_say "$dir : deja present, laisse tel quel"; continue; }
+        if have_repo "$GSM_ROOT/$dir"; then
+            if [ "${REINSTALL:-0}" = 1 ]; then
+                inst_say "$dir : deja present, mise a jour (git pull --ff-only)"
+                git -C "$GSM_ROOT/$dir" pull --ff-only \
+                    || inst_say "$dir : mise a jour impossible (modifications locales ?), laisse tel quel"
+                n=$((n+1))
+            else
+                inst_say "$dir : deja present, laisse tel quel"
+            fi
+            continue
+        fi
         inst_say "clonage $dir"
         git clone ${br:+--branch "$br"} "$url" "$GSM_ROOT/$dir" || { inst_fail "echec du clonage de $dir ($url)"; return $INST_RC_FAIL; }
         n=$((n+1))

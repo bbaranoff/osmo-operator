@@ -176,8 +176,13 @@ def sacch_tf_frame(tn):
     return 12 if tn % 2 == 0 else 25
 
 
+def sacch_tf_block_base(tn):
+    # 45.002 table 5 : le bloc SACCH/TF du TN commence a la trame 12 + 13*TN de la 104-multitrame
+    return (12 + 13 * tn) % 104
+
+
 def sacch_tf_block_start(fn, tn):
-    return fn % 104 == sacch_tf_frame(tn)
+    return fn % 104 == sacch_tf_block_base(tn)
 
 
 class SlotPlan:

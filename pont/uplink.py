@@ -20,6 +20,7 @@ TCH_UL_FR_OFS = 16
 POLL = gsm.FRAME_DUR / 8
 TX_BURSTS = 24
 BPLEN = 116
+RELEASE_FALLBACK = 20.0
 
 
 class Sideband:
@@ -92,13 +93,15 @@ class TchUplinkRing:
 
 
 class Uplink(threading.Thread):
-    def __init__(self, cfg, clock, stats, dedicated, tch, transmitter, feeder):
+    def __init__(self, cfg, clock, stats, dedicated, tch, transmitter, feeder, cipher):
         super().__init__(name="uplink", daemon=True)
         self.cfg = cfg
         self.clock = clock
         self.stats = stats
         self.dedicated = dedicated
         self.tch = tch
+        self.cipher = cipher
+        self.ded_active = False
         self.tx = transmitter
         self.feed = feeder
         self.sb_rach = Sideband(SB_RACH, 12)
@@ -185,6 +188,19 @@ class Uplink(threading.Thread):
         self.sacch_l2 = bytes(b[16:39])
         self.stats.sacch_ul += 1
 
+    def _poll_release(self):
+        active = self.dedicated.plan() is not None
+        if self.ded_active and not active:
+            reason = "canal libere par le mobile"
+        elif self.tch.release_overdue(RELEASE_FALLBACK):
+            reason = "CHANNEL RELEASE sans liberation du mobile depuis %ds" % RELEASE_FALLBACK
+        else:
+            self.ded_active = active
+            return
+        self.ded_active = active
+        self.tch.close(reason)
+        self.cipher.release(reason)
+
     def _poll_voice(self):
         if not self.tch.is_open():
             return
@@ -199,6 +215,7 @@ class Uplink(threading.Thread):
 
     def run(self):
         while True:
+            self._poll_release()
             self._poll_rach()
             self._poll_sdcch()
             self._poll_facch()

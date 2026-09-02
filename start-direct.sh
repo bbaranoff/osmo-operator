@@ -57,9 +57,6 @@ HUB_IP=""
 # et effacerait l'identite SS7 posee juste avant. --regen retablit l'ancien
 # comportement pour qui veut repartir des gabarits.
 REGEN_GABARITS=0
-# --dsp : la chaine d'INSPECTION du Calypso. Eteinte par defaut - voir le bloc
-# « Outillage DSP » plus bas.
-DSP_MODE=0
 # --menu : demande les choix au lieu de les deviner. Voir le bloc « Menu » plus bas.
 MENU_MODE=0
 usage() {
@@ -69,11 +66,9 @@ Usage : ./start-direct.sh [options] [mode]
     faketrx-qemu   coeur + BTS#0 QEMU + BTS#1 faketrx (defaut)
     faketrx        coeur + fake_trx + trxcon + mobile
     qemu           pipeline Calypso QEMU seul
-    virtphy        coeur + osmo-bts-virtual + virtphy
     noproc         coeur seul (no-process)
     core           alias noproc
     hybrid         alias faketrx-qemu
-    hw             SDR physique
   Options :
     --list              affiche le plan (delegue a run.sh --list)
     --dry-run           deroule sans effet de bord
@@ -92,16 +87,10 @@ Usage : ./start-direct.sh [options] [mode]
     --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
     --menu              demande les choix au lieu de les deviner : profil,
                         noeud, operateur, inter-STP, WAN, regeneration des
-                        configs, outillage DSP. Les valeurs proposees sont
+                        configs. Les valeurs proposees sont
                         celles que le lanceur aurait prises tout seul, donc
                         valider sans rien changer equivaut a ne pas passer
                         l'option. Sans terminal, l'option est ignoree.
-    --dsp               outillage d'inspection du Calypso : pont I/Q
-                        calypso-ipc-device + osmo-trx-ipc, trace asm de QEMU et
-                        croisement mailbox x desassemblage DSP. ETEINT par
-                        defaut : ces trois-la servent a debugger le modele, pas
-                        a faire tourner un banc, et ils coutent un processus,
-                        deux fenetres et un journal qui grossit sans fin.
     --regen             regenere les configs depuis les gabarits (par defaut on
                         CONSERVE celles deja en place : run.sh les ecraserait)
                         est omis : environnement, puis /etc/osmo-role, puis la
@@ -167,7 +156,6 @@ while [ $# -gt 0 ]; do
         --air-mesh)     AIR_MESH=1 ;;
         --air-mesh=*)   AIR_MESH=1; AIRMESH_PORT="${1#*=}" ;;
         --regen)        REGEN_GABARITS=1 ;;
-        --dsp)          DSP_MODE=1 ;;
         --menu)         MENU_MODE=1 ;;
         --op)           NODE_OP="${2:-1}"; shift ;;
         --op=*)         NODE_OP="${1#*=}" ;;
@@ -188,7 +176,7 @@ while [ $# -gt 0 ]; do
                        fi
                        L2_CLIENT_CHOISI="$_l2c" ;;
         -h|--help)     usage; exit 0 ;;
-        faketrx-qemu|faketrx|qemu|virtphy|noproc|core|hybrid|hw)
+        faketrx-qemu|faketrx|qemu|noproc|core|hybrid)
             PROFILE="$1"
             [ "$PROFILE" = "hybrid" ] && PROFILE=faketrx-qemu
             [ "$PROFILE" = "core" ]   && PROFILE=noproc
@@ -370,9 +358,7 @@ else
     # Fallback minimal (chemins typiques du depot)
     : "${GSM_ROOT:=/opt/GSM}"
     : "${NITB_TREE:=$HERE}"
-    if [ -x "$HERE/run.sh" ]; then
-        : "${OQC_ROOT:=$HERE}"
-    elif [ -x "$HERE/../qosmo-grgsm/run.sh" ]; then
+    if [ -x "$HERE/../qosmo-grgsm/run.sh" ]; then
         : "${OQC_ROOT:=$(cd "$HERE/../qosmo-grgsm" && pwd)}"
     else
         : "${OQC_ROOT:=$GSM_ROOT/qosmo-grgsm}"
@@ -393,58 +379,20 @@ fi
 # - l'ISO, un conteneur nu. La valeur qui s'applique en pratique vient de la-bas,
 # et c'est pourquoi elle y a ete changee aussi.
 : "${ENCRYPTION:=a5 1}"
-# Le pont TRX par defaut : il REMPLACE la chaine IQ (osmo-trx-ipc,
-# calypso-ipc-device, si_bridge, demod-bridge) par un transceiver unique qui
-# decode le DL et encode l'UL. C'est le mode que start.sh passe deja en
-# hand-off ; le lancement direct s'aligne.
+# Le pont TRX par defaut : un transceiver unique (pont/pont.py) qui se presente
+# a osmo-bts-trx en TRX-UDP, decode le DL vers GSMTAP 4730/4731 et encode l'UL.
 # CALYPSO_BRIDGE n'est pas declare dans globals.conf (les CALYPSO_* "passent au
 # travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
-#   CALYPSO_BRIDGE=ipc  ./start-direct.sh   -> le pont IPC-MS a la place
-#   CALYPSO_BRIDGE=none ./start-direct.sh   -> ni l'un ni l'autre, chaine IQ
-# Memoriser si l'appelant a VRAIMENT choisi, AVANT que le defaut ne le masque.
-# Sans ca, --dsp ne peut pas distinguer « l'operateur veut le pont » de « le pont
-# est simplement le defaut », et ne peut donc pas rendre la chaine IQ sans risquer
-# d'ecraser un choix explicite.
-_BRIDGE_EXPLICITE=0; [ -n "${CALYPSO_BRIDGE:-}" ] && _BRIDGE_EXPLICITE=1
+#   CALYPSO_BRIDGE=none ./start-direct.sh   -> pas de pont (QEMU + BTS seuls)
+#
+# [2026-09-02] LE DSP EST ENTERRE SUR CE FORK. La chaine I/Q (osmo-trx-ipc,
+# calypso-ipc-device, si_bridge, demod-bridge), le mode CALYPSO_BRIDGE=ipc,
+# l'option --dsp (trace asm, mailbox) et les drapeaux CALYPSO_SHUNT_* /
+# CALYPSO_CANNED / CALYPSO_SKIP_* / CALYPSO_PIPELINE ont ete retires d'ici :
+# le modele QEMU de qosmo-grgsm ne lit plus qu'UNE variable d'environnement,
+# CALYPSO_SIM_CFG (voir plus bas), et son lanceur run.sh aucune de celles-la.
+# Le travail DSP continue dans le fork qosmo-dsp, pas ici.
 : "${CALYPSO_BRIDGE:=pont}"
-
-# ── LES DEFAUTS DU PONT LEGIT, EN := (SURCHARGEABLES), PAS EN export FORCE ────
-# Ces DEUX variables gouvernent le shunt DSP du Calypso. On les pose
-# ICI, APRES le sourcing de environment/load.env (donc de modes.env) : si un mode
-# les a deja fixees, son choix gagne ; sinon ce sont les defauts. Le ":=" laisse
-# l'environnement l'emporter (VAR=... ./start-direct.sh), ce qu'un "export VAR=0"
-# interdirait. Le set -a les exporte vers QEMU/le shunt sans ligne "export VAR=".
-#   CALYPSO_SHUNT_NO_CANNED=0  le SCH reste REEL (le pont le decode/publie)
-#   CALYPSO_CANNED=1           SI bakes cote shunt (pas de dependance grgsm)
-#
-# CALYPSO_DSP_SHUNT_LEGIT A ETE RETIREE (2026-08-31), pour la meme raison que
-# CALYPSO_SKIP_DSP juste en dessous : zero `getenv`, zero occurrence hors de ce
-# fichier. Elle etait documentee « chemin legit du shunt (celui qui campe et
-# LU) » et n activait rien du tout. Le drapeau qui existe VRAIMENT est
-# CALYPSO_DSP_SHUNT (lu deux fois dans le C) ; c est lui qui gouverne le shunt.
-#
-# CALYPSO_SKIP_DSP A ETE RETIREE (2026-08-31). Elle etait posee ici depuis
-# toujours et documentee « on court-circuite le DSP TI » -- mais AUCUN code ne la
-# lisait : zero `getenv("CALYPSO_SKIP_DSP")`, zero occurrence dans tout le C de
-# QEMU. La poser ne coupait rien ; elle donnait seulement la certitude que le DSP
-# etait hors circuit. Un drapeau qui ne fait rien est pire que pas de drapeau :
-# il empeche de chercher ailleurs. Meme famille que CALYPSO_CANNED=1, qui
-# annoncait « tout canne » et ne cannait rien.
-#
-# CE QUI GOUVERNE REELLEMENT LE DSP, et qu'il faut regarder a la place :
-#   CALYPSO_DSP=c54x           relie le VRAI DSP au shunt (calypso_dsp_helper.c)
-#   CALYPSO_DSP_RUN_C54X=1     autorise l'execution du c54x au tick de trame
-#   CALYPSO_SHUNT_DRIVE_DSP=1  fait piloter le DSP par le shunt
-# Sans ces trois-la, le c54x n'est ni relie ni execute.
-set -a
-: "${CALYPSO_SHUNT_NO_CANNED:=0}"
-# FULL et pas 1. shunt_parse_canned() attend une LISTE DE JETONS
-# (FBDET,TOA,PM,SNR,ANGLE,CRC | FULL | ALL | NONE) : "1" n'en est aucun, il
-# etait signale « token inconnu » au demarrage et le masque restait VIDE. Le
-# banc tournait donc avec RIEN de canne en croyant tout canner. Le parseur
-# accepte desormais les booleens, mais on ecrit ce qu'on veut dire.
-: "${CALYPSO_CANNED:=FULL}"
-set +a
 
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
@@ -516,7 +464,7 @@ menu_interactif() {
         "${C_DIM:-}" "${C_Z:-}"
 
     PROFILE="$(_ask "Profil" \
-        "Profil de pile :\n  faketrx-qemu  coeur + BTS QEMU + BTS faketrx (defaut)\n  faketrx  qemu  virtphy  noproc  hw" \
+        "Profil de pile :\n  faketrx-qemu  coeur + BTS QEMU + BTS faketrx (defaut)\n  faketrx  qemu  noproc" \
         "$PROFILE")"
 
     # Le noeud est deja resolu plus haut (--node, environnement, /etc/osmo-role,
@@ -537,14 +485,9 @@ menu_interactif() {
         "$([ "${REGEN_GABARITS:-0}" -eq 1 ] && echo 0 || echo 1)" \
         && REGEN_GABARITS=1 || REGEN_GABARITS=0
 
-    _yesno "Outillage DSP" \
-        "Activer l'inspection du Calypso ?\n\ncalypso-ipc-device + osmo-trx-ipc, trace asm, fenetre mailbox.\nUtile pour debugger le modele, inutile pour faire tourner un banc." \
-        "$([ "${DSP_MODE:-0}" -eq 1 ] && echo 0 || echo 1)" \
-        && DSP_MODE=1 || DSP_MODE=0
-
-    printf "  %smenu%s       profil=%s  noeud=%s  op=%s  hub=%s  wan=%s  regen=%s  dsp=%s\n" \
+    printf "  %smenu%s       profil=%s  noeud=%s  op=%s  hub=%s  wan=%s  regen=%s\n" \
         "${C_DIM:-}" "${C_Z:-}" "$PROFILE" "${NODE_ID:-?}" "$NODE_OP" \
-        "${HUB_IP:-inchange}" "$WAN_MESH" "$REGEN_GABARITS" "$DSP_MODE"
+        "${HUB_IP:-inchange}" "$WAN_MESH" "$REGEN_GABARITS"
 }
 menu_interactif
 
@@ -553,13 +496,10 @@ case "$PROFILE" in
     faketrx-qemu|hybrid) CALYPSO_PROFILE=hybrid;   MODE=faketrx-qemu ;;
     faketrx)             CALYPSO_PROFILE=faketrx;  MODE=faketrx ;;
     qemu)                CALYPSO_PROFILE=calypso;  MODE=qemu ;;
-    virtphy)             CALYPSO_PROFILE=faketrx;  MODE=virtphy; PHY_MODE=virtphy ;;
     noproc|core)         CALYPSO_PROFILE=core;     MODE=noproc; RUN_NO_PROCESS=1 ;;
-    hw)                  CALYPSO_PROFILE=faketrx;  MODE=hw; PHY_MODE=trx ;;
     *)                   CALYPSO_PROFILE=hybrid;   MODE=faketrx-qemu; PROFILE=faketrx-qemu ;;
 esac
 export CALYPSO_PROFILE MODE
-export PHY_MODE="${PHY_MODE:-faketrx}"
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
 # Client de couche 2 : l'option de ligne de commande ECRASE tout, et elle est
@@ -853,115 +793,26 @@ generate_mobile_cfg "$MS2_CFG" \
     "$(ms_ki 2)" \
     gsm_out gsm_in
 say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
-# Export pour que les modules run.sh / hybrid puissent les retrouver
-export MOBILE_CFG_MS1="$MS1_CFG"
-export MOBILE_CFG_MS2="$MS2_CFG"
-export CALYPSO_MS2_CFG="$MS2_CFG"
+# ── LA SIM EMULEE LIT LE MEME FICHIER QUE LE MOBILE ─────────────────────────
+# CALYPSO_SIM_CFG est la SEULE variable d'environnement que lit le modele QEMU
+# (hw/arm/calypso/calypso_sim.c) : il y prend la section « test-sim » - imsi et
+# ki comp128 - au format de mobile.cfg, donc exactement le fichier MS#1 genere
+# ci-dessus. Sans elle, la SIM emulee garde son IMSI par defaut
+# (001010000000001), inconnu du HLR provisionne avec le plan. Elle n'etait
+# exportee nulle part.
+# (MOBILE_CFG_MS1/MS2 et CALYPSO_MS2_CFG, exportes ici jusqu'au 2026-09-02,
+#  n'avaient aucun lecteur dans qosmo-grgsm ; le side-car MS#2 lit
+#  SC_MOBILE_CFG / le fichier lui-meme.)
+export CALYPSO_SIM_CFG="$MS1_CFG"
 
-# --- Outillage DSP (--dsp) : ETEINT par defaut --------------------------------
-# Trois choses n'ont rien a faire dans un lancement ordinaire. Elles servent a
-# regarder DEDANS le modele Calypso, pas a faire fonctionner un banc :
-#
-#   calypso-ipc-device + osmo-trx-ipc   le pont I/Q entre QEMU et le
-#       transceiver. Un processus de plus, une memoire partagee, un socket
-#       maitre - et quand il manque, osmo-trx-ipc sort en boucle sur
-#       « socket maitre IPC absent », ce qui se lit comme une panne radio.
-#   la trace asm de QEMU (CALYPSO_ASM)  un journal qui grossit sans fin, dans
-#       un anneau qu'il faut faire tourner. `in_asm` ne dit meme pas ce qui a
-#       ete EXECUTE, seulement ce qui a ete traduit.
-#   le croisement mailbox x desassemblage (CALYPSO_MAILBOX)  une fenetre de
-#       plus, alimentee par un python relance toutes les deux secondes.
-#
-# On les eteint donc explicitement, plutot que de compter sur leurs defauts :
-# ces variables sont EXPORTEES et survivent a un run precedent dans le meme
-# shell - un banc « propre » heritait ainsi d'une trace asm allumee la veille.
-#
-# ⚠ EN COUPANT LE PONT I/Q on coupe la chaine IQ du profil hybride. C'est le
-# meme choix que fait CALYPSO_BRIDGE=pont juste en dessous, qui remplace cette
-# chaine par le pont maison. Si le banc a besoin de la chaine d'origine,
-# c'est --dsp qu'il faut passer.
-if [ "${DSP_MODE:-0}" -eq 1 ]; then
-    # ── --dsp ET LE PONT SONT INCOMPATIBLES, ET CA SE DISAIT PAS ────────────
-    # [2026-08-31] Ce bloc posait l'outillage, et le bloc PONT quelques lignes
-    # plus bas le defaisait sans condition :
-    #     export CALYPSO_SKIP_IPC_DEVICE=1
-    #     export CALYPSO_PIPELINE=bridge   (qui pose SKIP_IPC_DEVICE/SKIP_TRX_IPC)
-    # Pas de `${VAR:-}`, pas de test de DSP_MODE. On passait --dsp, la banniere
-    # annoncait « outillage ACTIF », et trois lignes plus loin tout etait eteint.
-    # La banniere mentait, et rien dans le journal ne le disait.
-    #
-    # C'est structurel, pas accidentel : le pont REMPLACE osmo-trx-ipc et
-    # calypso-ipc-device : c'est meme sa raison d'etre. --dsp, qui veut
-    # justement l'ipc-device, demande donc l'inverse. Les deux ne peuvent pas
-    # etre vrais en meme temps ; ce qui manquait, c'est de le DIRE.
-    #
-    # On tranche selon ce que l'operateur a reellement demande :
-    #   pont par DEFAUT   -> --dsp rend la chaine IQ (CALYPSO_BRIDGE=none),
-    #                        ce que documente deja l'en-tete de CALYPSO_BRIDGE ;
-    #   pont EXPLICITE    -> on respecte le choix, et on previent que --dsp ne
-    #                        sera pas honore. Un avertissement vaut mieux qu'une
-    #                        banniere fausse.
-    if [ "$_BRIDGE_EXPLICITE" = 0 ] && [ "$CALYPSO_BRIDGE" = pont ]; then
-        CALYPSO_BRIDGE=none; export CALYPSO_BRIDGE
-        printf '  %sDSP%s        --dsp : chaine IQ rendue (%sCALYPSO_BRIDGE=none%s) -- le pont l aurait eteinte\n' \
-            "${C_DIM:-}" "${C_Z:-}" "${C_CY:-}" "${C_Z:-}"
-    elif [ "$CALYPSO_BRIDGE" = pont ]; then
-        printf '  %s!%s  --dsp IGNORE : CALYPSO_BRIDGE=pont demande explicitement.\n' \
-            "${C_KO:-}" "${C_Z:-}"
-        printf '     Le pont REMPLACE osmo-trx-ipc et calypso-ipc-device : les deux\n'
-        printf '     s excluent. Relancer sans CALYPSO_BRIDGE pour avoir --dsp.\n'
-    fi
-    printf '  %sDSP%s        outillage d inspection ACTIF (--dsp) : ipc-device, trx-ipc, asm, mailbox\n' \
-        "${C_DIM:-}" "${C_Z:-}"
-    # On n'IMPOSE rien : --dsp rend la main aux reglages de l'appelant et aux
-    # defauts des modules. Poser CALYPSO_ASM ici figerait une taille d'anneau
-    # que personne n'a demandee.
-    : "${CALYPSO_ASM:=8}"
-    export CALYPSO_ASM
-    export CALYPSO_MAILBOX="${CALYPSO_MAILBOX:-1}"
-else
-    export CALYPSO_SKIP_IPC_DEVICE=1
-    export CALYPSO_SKIP_TRX_IPC=1
-    export CALYPSO_ASM=0
-    export CALYPSO_MAILBOX=0
-    printf '  %sDSP%s        outillage d inspection eteint (--dsp pour ipc-device, asm, mailbox)\n' \
-        "${C_DIM:-}" "${C_Z:-}"
-fi
-
-# --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison REMPLACE la chaine IQ --
-# Le pont (/opt/GSM/pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
-# (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 (shunt in-QEMU ->
-# a_cd), et encode l'UL depuis les sidebands /dev/shm/calypso_* -> TRXD -> BTS.
-# Il REND REDONDANTS et on ETEINT : osmo-trx-ipc (transceiver), calypso-ipc-device
-# (pont IQ), si_bridge (decode DL), demod-bridge. On GARDE QEMU (Calypso+shunt) et
-# osmo-bts-trx. Reversible : ne pas passer CALYPSO_BRIDGE=pont.
+# --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison est le transceiver --
+# Le pont (pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
+# (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 vers le
+# modele QEMU, et encode l'UL depuis les sidebands /dev/shm/calypso_* -> TRXD
+# -> BTS. Il a BESOIN d'osmo-bts-trx en face : c'est qosmo-grgsm/60-bts.sh qui
+# le lance, et la barriere plus bas attend son retour avant de lancer le pont.
 if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     export CALYPSO_BRIDGE
-    export CALYPSO_SKIP_TRX_IPC=1        # plus d'osmo-trx-ipc (le pont est le transceiver)
-    export CALYPSO_SKIP_IPC_DEVICE=1     # plus de calypso-ipc-device (plus d'IQ)
-    export CALYPSO_SKIP_BRIDGE_PY=1      # plus de si_bridge (le pont decode)
-    export CALYPSO_SKIP_DEMOD_BRIDGE=1   # plus de demod-bridge
-    # Le pont a BESOIN d'osmo-bts-trx en face (c'est son interlocuteur TRX-UDP).
-    # On l'impose explicitement : un SKIP_BTS herite d'un run precedent (env
-    # fossilise) laisserait le pont sans personne au bout du fil.
-    export CALYPSO_SKIP_BTS=0
-    # FB (FCCH) : en mode pont il n'y a plus de chaine gr-gsm/IQ, donc plus de
-    # detection FB REELLE (calypso_dsp_shunt_real_fb_read). Sans FB, la FBSB de
-    # l'ARM echoue -> "Channel sync error" -> le mobile ne campe jamais, meme
-    # avec des SI. On laisse donc le shunt FABRIQUER le FB (canned), tandis que
-    # le SCH, lui, reste REEL : le pont le decode et le publie sur 4731.
-    export CALYPSO_SHUNT_REAL_FB=0
-    # CALYPSO_SHUNT_NO_CANNED est desormais un defaut := plus haut (bloc « defauts
-    # du pont legit ») : surchargeable, et deja exporte. Ne pas le re-forcer ici
-    # par un "export ...=0" - ca ecraserait une surcharge voulue de l'operateur.
-    # 65-record-drain / 66-grgsm-decode sont rallumes par ce forceur meme hors
-    # full-grgsm : on le neutralise (aucune IQ a drainer ni a decoder ici).
-    export CALYPSO_FORCE_DEMOD_BRIDGE=0
-    # Preset EXISTANT "bridge" = pont Python a la place d'ipc/trx-ipc : c'est
-    # exactement notre cas. Il pose SKIP_IPC_DEVICE=1 / SKIP_TRX_IPC=1, et
-    # comme il n'est pas full-grgsm il DESACTIVE aussi 65-record-drain et
-    # 66-grgsm-decode (MOD_ENABLED_IF) - le pont fournit lui-meme le GSMTAP.
-    export CALYPSO_PIPELINE=bridge
     # ── LE PONT VIENT DU DEPOT, POINT ──────────────────────────────────────
     # Le defaut etait /opt/GSM/pont/pont.py, un chemin HORS DEPOT alimente par un
     # `COPY pont/pont.py` de Dockerfile.run et fige par un `ENV PONT_PY=`. Rien
@@ -1047,7 +898,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
             killall -9 python3 2>/dev/null || true
         fi
         sleep 1
-        printf '  %spont TRX%s : REMPLACE osmo-trx-ipc + calypso-ipc-device + si_bridge (shunt burst-direct)\n' "${C_DIM:-}" "${C_Z:-}"
+        printf '  %spont TRX%s : transceiver TRX-UDP d osmo-bts-trx (pont/pont.py)\n' "${C_DIM:-}" "${C_Z:-}"
         # LANCEMENT DIFFERE : run.sh fait d'abord son teardown (qui verifie que
         # 5700-5702 sont LIBRES). On ne binde donc qu'apres, sinon on se
         # bloque nous-memes. 25 s = teardown + demarrage des modules.
@@ -1160,38 +1011,6 @@ if [ "${AIR_MESH:-0}" = "1" ]; then
     fi
 fi
 
-# --- Mode BRIDGE IPC-MS (CALYPSO_BRIDGE=ipc) : MS#1 servi par osmo-trx-ms-ipc ----
-# Le firmware qemu/osmocon de MS#1 est SKIP (gates dans 40-qemu.sh/50-osmocon.sh).
-# osmo-trx-ms-ipc lit le DL fc32 relaye par l'IPC (UDP CALYPSO_TRX_IQ_RX_PORT=5810),
-# emet l'UL fc32 sur 5811 (relay_init le lit deja), et sert L1CTL sur /tmp/osmocom_l2.
-if [ "${CALYPSO_BRIDGE:-}" = ipc ]; then
-    export CALYPSO_BRIDGE
-    export CALYPSO_IPC_RELAY=1
-    : "${CALYPSO_TRX_IQ_HOST:=127.0.0.1}";   export CALYPSO_TRX_IQ_HOST
-    : "${CALYPSO_TRX_IQ_RX_PORT:=5810}";     export CALYPSO_TRX_IQ_RX_PORT
-    : "${CALYPSO_TRX_IQ_TX_PORT:=5811}";     export CALYPSO_TRX_IQ_TX_PORT
-    _MSIPC="$(command -v osmo-trx-ms-ipc || echo /opt/GSM/osmo-trx/Transceiver52M/osmo-trx-ms-ipc)"
-    if [ -x "$_MSIPC" ]; then
-        printf '  %sMS#1 = osmo-trx-ms-ipc%s  (DL<-udp %s:%s, UL->%s, L1CTL /tmp/osmocom_l2)\n' \
-            "${C_DIM:-}" "${C_Z:-}" "$CALYPSO_TRX_IQ_HOST" "$CALYPSO_TRX_IQ_RX_PORT" "$CALYPSO_TRX_IQ_TX_PORT"
-        ( sleep 6; "$_MSIPC" >"${LOG_DIR:-/tmp/osmo-nitb/logs}/osmo-trx-ms-ipc.log" 2>&1 ) &
-    else
-        printf '  osmo-trx-ms-ipc PAS COMPILE (%s) - build requis\n' "$_MSIPC"
-    fi
-fi
-
-
-# --- 5. exports supplementaires pour le profil hybrid -------------------------
-if [ "$MODE" = "faketrx-qemu" ] || [ "$CALYPSO_PROFILE" = "hybrid" ]; then
-    export QEMU_ATTACH_TRX="${QEMU_ATTACH_TRX:-0}"
-    export NO_LOCAL_BTS="${NO_LOCAL_BTS:-0}"
-    export NO_LOCAL_TRX="${NO_LOCAL_TRX:-0}"
-    export TRX_BASE_PORT="${TRX_BASE_PORT:-6700}"
-    export TRX_BIND="${TRX_BIND:-127.0.0.1}"
-    export BTS1_UNIT_ID=6002
-    export BTS1_ARFCN=516
-    export BTS0_ARFCN=514
-fi
 # --- 6. resume ----------------------------------------------------------------
 banner
 printf '  %sprofil%s     %s (%s)\n' "$C_DIM" "$C_Z" "$CALYPSO_PROFILE" "$MODE"

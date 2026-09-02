@@ -61,6 +61,7 @@ class Tch:
         self.open = False
         self.seq = 0
         self.on_close = []
+        self.release_seen = None
 
     def arm(self, tn, tsc, arfcn):
         with self.lock:
@@ -79,8 +80,24 @@ class Tch:
             tn = self.tn
         log.info("le mobile est sur le TCH TN=%d (%s) : montant TCH ouvert", tn, source)
 
+    def release_requested(self, reason):
+        with self.lock:
+            if self.release_seen is not None:
+                return
+            self.release_seen = time.monotonic()
+            tn = self.tn
+        if tn is None:
+            log.info("%s : en attente de la liberation du canal par le mobile", reason)
+        else:
+            log.info("%s : TCH TN=%d maintenu jusqu'a la liberation par le mobile", reason, tn)
+
+    def release_overdue(self, delay):
+        with self.lock:
+            return self.release_seen is not None and time.monotonic() - self.release_seen > delay
+
     def close(self, reason):
         with self.lock:
+            self.release_seen = None
             if self.tn is None:
                 return
             tn = self.tn

@@ -49,7 +49,7 @@ def main(argv=None):
     feeder = Feeder(cfg, stats)
     timeslots = load_timeslots(cfg.bsc_cfg)
     downlink = Downlink(cfg, stats, cipher, dedicated, tch, feeder, record, timeslots)
-    uplink = Uplink(cfg, clock, stats, dedicated, tch, transmitter, feeder)
+    uplink = Uplink(cfg, clock, stats, dedicated, tch, transmitter, feeder, cipher)
     scheduler = TchScheduler(cfg, clock, stats, tch, uplink, transmitter)
 
     log.info("pont TRX : ports %d/%d/%d, ARFCN %d, BSIC %d, avance UL %d trames",

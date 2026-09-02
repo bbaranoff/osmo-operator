@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Supplements
+Name[fr]=Supplements
+Comment=Docker container and SS7 multioperator - installe via build.sh
+Comment[fr]=Docker container and SS7 multioperator - installe via build.sh
+Exec=/usr/local/bin/osmo-addition-anim
+Icon=system-software-install
+Terminal=false
+Categories=System;
+Keywords=docker;supplement;multi;ss7;addition;

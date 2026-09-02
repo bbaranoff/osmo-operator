@@ -69,7 +69,7 @@ def parse(argv=None):
         record_ul_path=_env("PONT_AIRREC_UL_PATH", "/root/record_ul.cfile"),
         record_dl_fifo=_env("PONT_AIRREC_DL_FIFO", "/tmp/iq_fft.fifo"),
         record_ul_fifo=_env("PONT_AIRREC_UL_FIFO", "/tmp/iq_fft_ms.fifo"),
-        record_max_mb=int(_env("PONT_AIRREC_MAX_MB", "512")),
-        record_min_free_mb=int(_env("PONT_AIRREC_MINFREE_MB", "1024")),
+        record_max_mb=int(_env("PONT_AIRREC_MAX_MB", "4096")),
+        record_min_free_mb=int(_env("PONT_AIRREC_MINFREE_MB", "8192")),
         record_osr=int(_env("PONT_AIRREC_OSR", "4")),
     )

@@ -76,7 +76,6 @@ ISO_ALL=0
 # (192.168.56.1) reste possible, mais via --hub-ip : il n'existe sur aucun
 # segment quand les VM sont pontees.
 ISO_HUB_IP="192.168.1.49"
-ISO_SUBNET="192.168.56"
 # ── Table WAN par defaut : le banc ──────────────────────────────────────────
 # Format : <noeud>:<IP>:<indicatif>
 #   noeud 1  172.20.0.11  osmo-operator-1  indicatif 11   (conteneur)
@@ -98,7 +97,6 @@ for arg in "$@"; do case "$arg" in
     --role=*)       ISO_ROLE="${arg#*=}"; ISO_ROLE_GIVEN=1 ;;
     --node=*)       ISO_NODE="${arg#*=}" ;;
     --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
-    --subnet=*)     ISO_SUBNET="${arg#*=}" ;;
     --kb=*)         OSMO_ISO_KB="${arg#*=}" ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
@@ -450,9 +448,6 @@ HLR_IP="127.0.0.2"
 # revendiquent rien (/32) : le but n'est pas de creer un segment - une VM n'a
 # pas de BTS derriere une carte - mais de donner un point d'attache stable aux
 # configurations qui nomment encore une adresse privee.
-ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
-ALSA_INPUT="${ALSA_INPUT:-default}"
-PHY_MODE="${PHY_MODE:-faketrx}"
 # __INTER_STP_IP__ : ASP vers le STP d'un autre operateur. Inerte ici - l'ISO
 # n'a qu'un operateur et passe inter_stp_shutdown=shutdown a apply_config_
 # templates - mais on ne laisse pas une IP docker morte dans les configs.
@@ -463,7 +458,6 @@ echo -e "  Gateway    : ${CYAN}${GATEWAY_IP}${NC}"
 echo -e "  Inter-STP  : ${CYAN}${INTER_STP_IP}${NC}"
 echo -e "  MS         : ${CYAN}${ISO_N_MS}${NC}"
 echo -e "  Encryption : ${CYAN}${ENCRYPTION}${NC}"
-echo -e "  PHY        : ${CYAN}${PHY_MODE}${NC}"
 
 TEMP_CONFIG="$(mktemp -d)"
 
@@ -526,7 +520,7 @@ fi
 # le generateur n'ecrit que notre propre entree.
 ISO_WAN_TMP=""
 if [ -n "$ISO_WAN_NODES" ]; then
-    ISO_WAN_TMP="$(mktemp)"
+    ISO_WAN_TMP="$(mktemp -p "$WORK")"
     printf 'WAN_NODES="%s"\n' "$ISO_WAN_NODES" > "$ISO_WAN_TMP"
 fi
 apply_native_post_patches "$TEMP_CONFIG" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
@@ -990,9 +984,9 @@ rm -rf "$ROOTFS/home/osmocom"
 chown -R 0:0 "$ROOTFS/root/.osmocom" "$ROOTFS/var/lib/osmocom" \
              "$ROOTFS/var/log/osmocom" 2>/dev/null || true
 
-echo -e "  ${GREEN}✓${NC} compte osmocom supprime (tout tourne en root) + /usr/bin + mobile.cfg prets"
-
-chmod +x "$ROOTFS/etc/osmocom/run.sh"
+# Le compte "osmocom" de l image Docker etait un alias d UID 0 : on le retire
+# ici ; le VRAI compte osmocom, non privilegie, est recree en 8d.
+echo -e "  ${GREEN}✓${NC} alias uid-0 osmocom retire (unites osmo-* rendues a root) + /usr/bin + mobile.cfg prets"
 
 # ── Etape 6 : Injection du dashboard web ───────────────────────────────────
 echo -e "${GREEN}[6/9] Dashboard web (git clone)...${NC}"
@@ -1150,7 +1144,7 @@ if [ -f "$_SVC_SRC/osmo-egprs-web.service" ]; then
               "$ROOTFS/opt/GSM/osmo-egprs-web/osmo-egprs-web.service"
     ln -sf /etc/systemd/system/osmo-egprs-web.service \
            "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service"
-    echo -e "  ${GREEN}✓${NC} dashboard : unites ${CYAN}osmo-egprs-web${NC} + ${CYAN}-install${NC} posees et activees au boot"
+    echo -e "  ${GREEN}✓${NC} dashboard : unite ${CYAN}osmo-egprs-web${NC} posee et activee au boot"
 else
     echo -e "  ${RED}✗ services/osmo-egprs-web*.service introuvables - le dashboard ne demarrerait pas seul${NC}" >&2
     exit 1
@@ -1203,9 +1197,12 @@ if [ ! -x "$P/start-direct.sh" ]; then
     exit 1
 fi
 ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
-ln -sf /opt/GSM/osmo-operator/start.sh        "$ROOTFS/usr/local/bin/osmo-start-lab"    2>/dev/null || true
-[ -f "$DIR/launch/osmo-launch.sh" ] && cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
-ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
+# (osmo-start-lab -> start.sh retire le 2026-09-02 : start.sh est le lanceur
+#  Docker, et cette image n a pas Docker.)
+if [ -f "$DIR/launch/osmo-launch.sh" ]; then
+    cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
+    ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
+fi
 echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo-operator${NC} (arbre unique, avec .git)"
 
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────
@@ -1388,6 +1385,30 @@ CRSNAP
 echo -e "  ${GREEN}✓${NC} osmo-firefox-snap.service (Firefox par snap, au premier boot)"
 fi
 
+# ── Etape 7c : les paquets .deb du banc, EMBARQUES dans l image ─────────────
+# packaging/build-debs.sh fabrique un .deb par composant (osmo-operator, pont,
+# qemu-calypso, calypso-firmware) depuis les arbres que cette ISO embarque de
+# toute facon. On les range dans /var/cache/osmo-debs : une machine installee
+# depuis l ISO, ou n importe quelle autre, peut alors faire
+#     dpkg -i /var/cache/osmo-debs/*.deb
+# et obtenir le banc sans Docker ni git. L ISO elle-meme continue de tourner
+# sur les arbres complets (le depot et qosmo-grgsm avec leur .git : c est un
+# atelier) - les paquets ne les remplacent pas, ils voyagent avec.
+# Non fatal : sans dpkg-deb ou sans qemu construit, l image sort sans eux.
+if [ -x "$DIR/packaging/build-debs.sh" ] && command -v dpkg-deb >/dev/null 2>&1; then
+    echo -e "${GREEN}[7c/9] Paquets .deb du banc...${NC}"
+    _DEBS="$WORK/debs"
+    if OSMO_OPERATOR_SRC="$DIR" QOSMO_SRC="$ROOTFS/opt/GSM/qosmo-grgsm" \
+       FIRMWARE_SRC="$ROOTFS/opt/GSM/firmware" \
+       "$DIR/packaging/build-debs.sh" --out "$_DEBS" >"$WORK/build-debs.log" 2>&1; then
+        install -d "$ROOTFS/var/cache/osmo-debs"
+        cp -f "$_DEBS"/*.deb "$ROOTFS/var/cache/osmo-debs/"
+        echo -e "  ${GREEN}✓${NC} $(ls "$_DEBS"/*.deb | wc -l) paquets dans ${CYAN}/var/cache/osmo-debs${NC} ($(du -sh "$_DEBS" | cut -f1))"
+    else
+        echo -e "  ${YELLOW}!${NC} paquets .deb non construits (voir $WORK/build-debs.log) - l image sort sans eux"
+    fi
+fi
+
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
@@ -1435,6 +1456,57 @@ deb http://archive.ubuntu.com/ubuntu jammy           main universe multiverse
 deb http://archive.ubuntu.com/ubuntu jammy-updates    main universe multiverse
 deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
 SOURCES
+
+# ── Les certificats D ABORD ─────────────────────────────────────────────────
+# Installer ca-certificates ne suffit pas : c est update-ca-certificates qui
+# deballe /usr/share/ca-certificates/* dans /etc/ssl/certs et fabrique le
+# ca-certificates.crt que lisent OpenSSL, curl, git, apt (https) et snap. Dans
+# un chroot le postinst ne le fait pas toujours, et le rootfs sortait avec un
+# magasin vide : "certificate verify failed" partout, et le message accuse le
+# reseau. On le fait ICI, avant le premier octet TLS (la cle NodeSource
+# ci-dessous), et plus jamais apres : un --reinstall du paquet en fin de chroot
+# ne faisait que rejouer ce meme appel, une resolution apt de plus pour rien.
+# --fresh : on repart du magasin du paquet plutot que d un etat herite du
+# debootstrap, dont on ne sait pas ce qu il contient.
+update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
+
+# ── deb-src : AVANT l unique apt-get update ─────────────────────────────────
+# Le build-dep gnuradio plus bas lit les index Sources. Ils etaient tires par
+# un DEUXIEME apt-get update, juste pour lui ; en ecrivant deb-src.list ici, le
+# seul update du chroot les ramene avec le reste. Le hub inter-STP n a pas de
+# gr-gsm : lui faire tirer ~80 Mo d index Sources, c est du temps pour rien -
+# il n a donc pas de deb-src, et pas de build-dep.
+if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
+    sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
+        /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
+fi
+
+# ── NodeSource : AVANT l unique apt-get update, et nodejs dans PKGS ─────────
+# Le dashboard tourne sous node 22, que jammy n a pas (12.22 dans les depots).
+# L ancien chemin lancait le script setup_22.x de NodeSource, qui fait SON
+# apt-get update, puis un apt-get install nodejs a part : deux resolutions de
+# plus. On pose le depot a la main - cle ASCII dans /etc/apt/keyrings, apt 2.4
+# la lit telle quelle, sans gpg --dearmor - et nodejs rejoint la liste unique.
+# Si la cle ne se telecharge pas (pas de reseau vers NodeSource), on retombe
+# plus bas sur le script officiel, comme avant.
+NODE_VIA_APT=0
+if ! command -v node >/dev/null 2>&1; then
+    mkdir -p /etc/apt/keyrings
+    if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+            -o /etc/apt/keyrings/nodesource.asc; then
+        echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main" \
+            > /etc/apt/sources.list.d/nodesource.list
+        NODE_VIA_APT=1
+    else
+        echo "  WARN: cle NodeSource non telechargee - repli sur setup_22.x apres l install"
+        rm -f /etc/apt/keyrings/nodesource.asc
+    fi
+fi
+
+# ── UN SEUL apt-get update ──────────────────────────────────────────────────
+# [2026-09-02] Il y en avait trois dans ce chroot : celui-ci, un pour les
+# deb-src du build-dep, un dans le script NodeSource. Tout ce qui ajoute une
+# source est maintenant fait AVANT, et cet appel les lit toutes d un coup.
 apt-get update -qq
 
 # ── UN SEUL apt-get install ────────────────────────────────────────────────
@@ -1463,12 +1535,10 @@ apt-get update -qq
 # inter-STP ne fait que router du M3UA : ni radio, ni QEMU, ni audio, ni PBX.
 # Lui installer asterisk, pulseaudio et ffmpeg, c est du poids et des services
 # en plus pour rien.
-# ca-certificates EN TETE, et reinstalle explicitement plus bas. Le rootfs sort
-# de debootstrap avec le paquet mais SANS son magasin a jour : /etc/ssl/certs
-# n est peuple que par update-ca-certificates, que rien n appelait ici. Tout ce
-# qui parle en TLS depuis l image echouait alors sur "certificate verify
-# failed" - git clone https, curl, snap download, npm - et le message accuse le
-# reseau, pas le magasin vide.
+# ca-certificates EN TETE de liste ; son magasin, lui, est regenere en tete de
+# ce chroot (update-ca-certificates --fresh, voir plus haut) : le rootfs sort
+# de debootstrap avec le paquet mais SANS /etc/ssl/certs peuple, et tout ce qui
+# parle en TLS echouait sur "certificate verify failed".
 # LE NOYAU : 6.8 (HWE), PAS 5.15 (GA). linux-image-generic sur jammy est fige a
 # la serie 5.15 ; le materiel recent (NIC, USB3, SDR branches en direct) y perd
 # des pilotes que la serie 6.8 porte. linux-image-generic-hwe-22.04 est le noyau
@@ -1493,6 +1563,7 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
       psmisc
       python3 python3-venv python3-scapy
       tshark wireshark-common"
+[ "$NODE_VIA_APT" = "1" ] && PKGS="$PKGS nodejs"
 
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     # Radio, emulation Calypso, audio, PBX : le noeud operateur seulement.
@@ -1510,7 +1581,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     # reclame le lien de developpement .so ET l en-tete.
     #
     # MESURE DU 2026-08-27, sur l ISO telle que construite jusqu ici :
-    #   ninja: error: '/usr/lib/x86_64-linux-gnu/libpixman-1.so' missing
+    #   ninja: error: "/usr/lib/x86_64-linux-gnu/libpixman-1.so" missing
     #   include/block/aio.h:18: fatal error: liburing.h: No such file
     # -> la recompilation etait IMPOSSIBLE sur la machine, alors que tout
     # l atelier (sources, .git, build/ deja peuple) etait la pour ca.
@@ -1526,15 +1597,11 @@ fi
 
 apt-get install -y $APT_OPTS --no-install-recommends $PKGS
 
-# deb-src + build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw,
-# gmp, log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local.
-# Genere les lignes deb-src a partir des deb (tous composants), comme le Dockerfile.
-# Le hub n a pas de gr-gsm : lui faire tirer ~80 Mo d index Sources et une
-# cloture de build GNU Radio, c est quelques minutes de construction pour rien.
-if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
-    sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
-        /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
-    apt-get update -qq
+# build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
+# log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
+# index Sources sont deja la : deb-src.list a ete ecrit avant l unique
+# apt-get update. Le hub n a pas de gr-gsm, donc pas de deb-src ni de build-dep.
+if [ -s /etc/apt/sources.list.d/deb-src.list ]; then
     apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
 fi
 
@@ -1573,7 +1640,9 @@ fi
 # dashboard web via node natif. Le build sur le HOTE utilise le docker du HOTE pour
 # extraire binaires/configs, mais le ISO final nembarque pas docker.
 
-if ! command -v node &>/dev/null; then
+# Repli NodeSource : uniquement si la cle n a pas pu etre posee avant l update
+# (voir NODE_VIA_APT plus haut). Le script officiel fait son propre update.
+if ! command -v node >/dev/null 2>&1; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
@@ -1638,10 +1707,20 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # wmctrl + x11-utils (xdpyinfo) : launch.sh s en sert pour paver les quatre
     # fenetres en quarts d ecran. Sans eux le lancement marche toujours, mais
     # les fenetres se posent ou le gestionnaire veut.
+    #
+    # [2026-09-02] UN SEUL appel pour le bureau ET l installeur (calamares, grub
+    # signe, outils de partitionnement - voir le bloc suivant pour le detail de
+    # chaque paquet). Il y en avait deux : deux resolutions, deux lots de
+    # telechargement, et le premier avalait son echec ("|| echo WARN") - une
+    # image DESKTOP sans bureau sortait avec "done". Ici l echec ARRETE le
+    # build : sans bureau ou sans installeur, cette image ne sert a rien.
     apt-get install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop snapd \
         wmctrl x11-utils zenity librsvg2-common \
-        || echo "WARN: installation du bureau incomplete"
+        calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
+        grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
+        qml-module-qtquick2 qml-module-qtquick-layouts \
+        qml-module-qtquick-window2 qml-module-qtquick-controls
 
     # ── AVAHI : PURGE ─────────────────────────────────────────────────────
     # avahi n est demande NULLE PART dans ce depot : il arrive en Recommends de
@@ -1702,16 +1781,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # chaine de dependances Qt/KDE ; si le miroir en manque une, apt sort en
     # erreur - et un "|| echo WARN" laissait alors construire une image DESKTOP
     # SANS installeur, exactement le "calamares marche pas" observe (ni binaire
-    # ni /etc/calamares dans le squashfs livre). On installe, PUIS on verifie
-    # que le binaire est bien la ; sinon on arrete le build.
-    apt-get install -y $APT_OPTS \
-        calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
-        grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
-        qml-module-qtquick2 qml-module-qtquick-layouts \
-        qml-module-qtquick-window2 qml-module-qtquick-controls
+    # ni /etc/calamares dans le squashfs livre). Ces paquets sont dans l unique
+    # apt-get install du bureau, plus haut ; ici on VERIFIE que le binaire est
+    # bien la, sinon on arrete le build.
     # On est DANS le chroot (ce bloc tourne sous "chroot ... bash -c") : le
     # binaire est donc a /usr/bin/calamares, pas sous $ROOTFS (variable absente
-    # ici). set -e est actif ; l apt-get ci-dessus n a plus de "|| echo" donc un
+    # ici). set -e est actif ; l apt-get du bureau n a pas de "|| echo" donc un
     # echec avorte deja - ce test attrape le cas ou apt sort 0 mais sans poser le
     # binaire (paquet recommande saute, etc.).
     if [ ! -x /usr/bin/calamares ]; then
@@ -1899,7 +1974,10 @@ GDM
     # wireplumber romprait cet equilibre : a ne pas faire sans le mesurer.
     for _pwu in pipewire.socket pipewire.service; do
         mkdir -p "/etc/systemd/user/${_pwu}.d"
-        printf '[Unit]\nConditionUser=\n' > "/etc/systemd/user/${_pwu}.d/10-allow-root.conf"
+        # GUILLEMETS DOUBLES : ce bloc est en quotes simples. Avec des
+        # apostrophes, le printf recevait [Unit]nConditionUser=n sans aucun
+        # retour a la ligne - le drop-in etait illisible et le correctif mort.
+        printf "[Unit]\nConditionUser=\n" > "/etc/systemd/user/${_pwu}.d/10-allow-root.conf"
     done
     unset _pwu
 
@@ -1938,15 +2016,9 @@ GDM
     echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox snap"
 fi
 
-# ── Les certificats, POUR DE BON ────────────────────────────────────────────
-# Installer ca-certificates ne suffit pas : c est update-ca-certificates qui
-# deballe /usr/share/ca-certificates/* dans /etc/ssl/certs et fabrique le
-# ca-certificates.crt que lisent OpenSSL, curl, git et snap. Dans un chroot le
-# postinst ne le fait pas toujours - et le rootfs sortait avec un magasin vide.
-# --fresh : on repart du magasin du paquet plutot que d ajouter a un etat
-# herite du debootstrap, dont on ne sait pas ce qu il contient.
-apt-get install -y $APT_OPTS --reinstall ca-certificates >/dev/null 2>&1 || true
-update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
+# ── Les certificats : verification finale ───────────────────────────────────
+# Le magasin a ete regenere EN TETE de ce chroot (update-ca-certificates
+# --fresh, avant le premier acces TLS). On verifie seulement qu il est plein.
 if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
     echo "  certificats : $(grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt) autorites dans /etc/ssl/certs"
 else
@@ -2463,13 +2535,7 @@ EOF
 fi
 
 
-# Autologin root
-mkdir -p "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
-cat > "$ROOTFS/etc/systemd/system/getty@tty1.service.d/override.conf" <<'EOF'
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
-EOF
+# Autologin root : pose plus bas (8d, getty@tty1.service.d/10-autologin-root.conf).
 
 # ── Service web dashboard : DEJA POSE, NE PAS LE REECRIRE ───────────────────
 # [2026-08-31] Ici vivait un SECOND heredoc qui reecrivait
@@ -2704,7 +2770,6 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 # export, la valeur ne franchirait pas le fork vers start-direct.sh. L'idiome
 # ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
-alias faketrx='python3 /opt/GSM/osmocom-bb/src/target/trx_toolkit/fake_trx.py'
 # Trois annonces designaient trois arbres differents. Le MOTD et le message de
 # login pointent /opt/GSM/osmo-operator (l'arbre fige, present meme sans reseau) ;
 # l'alias visait /opt/GSM/osmo-operator (l'arbre reclone au demarrage). Les deux
@@ -3378,19 +3443,10 @@ exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-install.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Installer osmo-operator
-Name[fr]=Installer osmo-operator
-Comment=Installer le banc GSM/EGPRS sur le disque
-Comment[fr]=Installer le banc GSM/EGPRS sur le disque
-Exec=/usr/local/bin/osmo-install
-Icon=drive-harddisk
-Terminal=false
-Categories=System;
-Keywords=install;installer;calamares;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-install.desktop" "$ROOTFS/usr/share/applications/osmo-install.desktop"
 
     # Sur le bureau de root, ou la session s ouvre : l icone est la premiere
     # chose qu on cherche sur une cle live, et c est celle qu on ne trouve
@@ -3537,33 +3593,15 @@ exec xdg-open "file:///usr/share/osmo-operator/tutorial.html"
 TUTO
     chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-launch.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Lancer le banc GSM
-Name[fr]=Lancer le banc GSM
-Comment=Demarre le banc, Wireshark, Linphone et la console web
-Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
-Exec=/opt/GSM/osmo-operator/launch.sh
-Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
-Terminal=false
-Categories=System;Network;
-Keywords=gsm;osmocom;banc;lancer;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-launch.desktop" "$ROOTFS/usr/share/applications/osmo-launch.desktop"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-multi.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=multi-operator
-Name[fr]=multi-operator
-Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
-Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
-Exec=/opt/GSM/osmo-operator/start-multi.sh
-Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
-Terminal=false
-Categories=System;Network;
-Keywords=ss7;m3ua;multi;operateur;interstp;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-multi.desktop" "$ROOTFS/usr/share/applications/osmo-multi.desktop"
 
     # ── SUPPLEMENTS : LA FENETRE A COCHER ─────────────────────────────────
     # Meme facture que osmo-update-anim : un terminal, et la main rendue
@@ -3602,33 +3640,15 @@ exec bash -c "$RUNNER"
 ADDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-addition-anim"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-addition.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Supplements
-Name[fr]=Supplements
-Comment=Docker container and SS7 multioperator - installe via build.sh
-Comment[fr]=Docker container and SS7 multioperator - installe via build.sh
-Exec=/usr/local/bin/osmo-addition-anim
-Icon=system-software-install
-Terminal=false
-Categories=System;
-Keywords=docker;supplement;multi;ss7;addition;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-addition.desktop" "$ROOTFS/usr/share/applications/osmo-addition.desktop"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-tutorial.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Tutoriel - demarrage rapide
-Name[fr]=Tutoriel - demarrage rapide
-Comment=Prise en main du banc en cinq minutes
-Comment[fr]=Prise en main du banc en cinq minutes
-Exec=/usr/local/bin/osmo-tutorial
-Icon=/usr/share/osmo-operator/icons/osmo-tutorial.svg
-Terminal=false
-Categories=System;Documentation;
-Keywords=tutoriel;aide;demarrage;quickstart;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-tutorial.desktop" "$ROOTFS/usr/share/applications/osmo-tutorial.desktop"
 
     # Terminal=false pour les DEUX : launch.sh ouvre LUI-MEME son terminal et
     # demande les privileges (pkexec). Laisser le .desktop s en charger
@@ -3694,19 +3714,10 @@ exec "$SCRIPT"
 UPDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-update-anim"
 
-    cat > "$ROOTFS/usr/share/applications/osmo-update.desktop" <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Update osmo-operator
-Name[fr]=Mise a jour osmo-operator
-Comment=Rejouer update.sh du depot osmo-operator
-Comment[fr]=Rejouer update.sh du depot osmo-operator
-Exec=/usr/local/bin/osmo-update-anim
-Icon=system-software-update
-Terminal=false
-Categories=System;
-Keywords=update;sms;osmo;
-DESKTOP
+    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
+    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
+    # le MEME.
+    install -m644 "$DIR/data/desktop/osmo-update.desktop" "$ROOTFS/usr/share/applications/osmo-update.desktop"
 
     for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
         install -d "$_h/Bureau" "$_h/Desktop"
@@ -3756,7 +3767,10 @@ sys.exit(0 if (open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1)) and 
 PYLB
     if grep -q '_lbsz' "$_LB_TORAM"; then
         _LB_K=$(ls "$ROOTFS"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 | sed "s|.*/vmlinuz-||")
-        [ -n "$_LB_K" ] && chroot "$ROOTFS" update-initramfs -u -k "$_LB_K" >/dev/null 2>&1
+        if [ -n "$_LB_K" ]; then
+            chroot "$ROOTFS" update-initramfs -u -k "$_LB_K" >/dev/null 2>&1 \
+                || echo -e "  ${YELLOW}!${NC} update-initramfs a echoue apres la retouche live-boot"
+        fi
         echo -e "  ${GREEN}✓${NC} live-boot : calcul de taille ${CYAN}toram${NC} fiabilise (plus d appel a expr)"
     else
         echo -e "  ${YELLOW}!${NC} live-boot : la ligne attendue n a pas ete trouvee - non modifie"
@@ -3965,9 +3979,11 @@ echo -e "  ${GREEN}✓${NC} config terminee"
 echo -e "${GREEN}[9/9] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
 
-VMLINUZ=$(ls "$ROOTFS"/boot/vmlinuz-*|sort -V|tail -1)
-INITRD=$(ls "$ROOTFS"/boot/initrd.img-*|sort -V|tail -1)
-[ -z "$VMLINUZ" ]||[ -z "$INITRD" ] && { echo -e "${RED}Kernel absent${NC}"; exit 1; }
+# 2>/dev/null || true : sous pipefail, un ls sans resultat faisait sortir le
+# script AVANT le message « Kernel absent » qui suit.
+VMLINUZ=$(ls "$ROOTFS"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 || true)
+INITRD=$(ls "$ROOTFS"/boot/initrd.img-* 2>/dev/null | sort -V | tail -1 || true)
+if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then echo -e "${RED}Kernel absent${NC}"; exit 1; fi
 echo -e "  Kernel: ${CYAN}$(basename "$VMLINUZ")${NC}"
 
 # ── Compression du squashfs : zstd, et non xz ────────────────────────────────
@@ -4008,9 +4024,14 @@ else
     echo -e "  Compression: ${YELLOW}xz${NC} (mksquashfs sans zstd - ISO plus petite, mais lente a lire)"
 fi
 
+# [2026-09-02] PLUS D EXCLUSION de boot/vmlinuz-* ni de boot/initrd* : ce
+# squashfs n est pas seulement la racine du live, c est aussi la SOURCE de
+# Calamares (unpackfs.conf). Sans noyau dedans, le systeme installe n avait ni
+# vmlinuz ni initrd : grub-mkconfig n ecrivait aucune entree Linux et la
+# machine ne demarrait plus apres « installation reussie ». Les ~100 Mo de
+# plus sont deja compresses (le noyau l est), ils ne pesent presque rien ici.
 mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
     "${SQUASH_COMP[@]}" -b 1M \
-    -e 'boot/vmlinuz-*' -e 'boot/initrd*' \
     -e 'var/cache/apt' -e 'var/lib/apt/lists' \
     -no-progress
 echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"

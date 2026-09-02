@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=multi-operator
+Name[fr]=multi-operator
+Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
+Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
+Exec=/opt/GSM/osmo-operator/start-multi.sh
+Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
+Terminal=false
+Categories=System;Network;
+Keywords=ss7;m3ua;multi;operateur;interstp;

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Tutoriel - demarrage rapide
+Name[fr]=Tutoriel - demarrage rapide
+Comment=Prise en main du banc en cinq minutes
+Comment[fr]=Prise en main du banc en cinq minutes
+Exec=/usr/local/bin/osmo-tutorial
+Icon=/usr/share/osmo-operator/icons/osmo-tutorial.svg
+Terminal=false
+Categories=System;Documentation;
+Keywords=tutoriel;aide;demarrage;quickstart;

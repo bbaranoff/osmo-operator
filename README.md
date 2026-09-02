@@ -306,6 +306,32 @@ Le dialplan `[interop_out]` route automatiquement sur le premier chiffre du num�
 
 ## 8. Utilisation du lab
 
+### 8.0 Installation native (sans Docker)
+
+Le dépôt s'installe aussi directement sur une machine Ubuntu 22.04, sans conteneur :
+
+```bash
+sudo ./install.sh                  # toutes les étapes (deps, sources, build, binaires, configs, bureau)
+./install.sh --list                # les étapes, sans rien faire
+./install.sh --check               # ce qui est déjà en place
+sudo ./install.sh --reinstall      # rejoue tout : sources mises à jour, configs et raccourcis réécrits
+sudo ./install.sh --only bureau    # seulement les icônes et raccourcis du bureau
+```
+
+L'étape `bureau` pose les mêmes fichiers que l'ISO (`data/desktop/*.desktop`, `data/*.svg`) :
+« Lancer le banc GSM » (`launch.sh`) et « multi-operator » (`start-multi.sh`), dans le menu
+et sur le bureau de root et de l'utilisateur `sudo`. Le lancement natif reste `./start-direct.sh`,
+qui délègue à `/opt/GSM/qosmo-grgsm/run.sh`.
+
+Un paquet `.deb` par composant, pour installer sans git :
+
+```bash
+./packaging/build-debs.sh          # osmo-operator, pont, qemu-calypso, calypso-firmware -> packaging/dist/
+sudo dpkg -i packaging/dist/*.deb  # refuse de s'installer par-dessus un clone git au même chemin
+```
+
+Les ISO construites par `build-iso.sh` embarquent ces paquets dans `/var/cache/osmo-debs`.
+
 ### 8.1 Démarrage et arrêt
 
 ```bash

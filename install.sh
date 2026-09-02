@@ -13,8 +13,13 @@
 #      sudo ./install.sh --only deps    une seule etape
 #      sudo ./install.sh --skip build   tout sauf celle-la
 #      ./install.sh --check             ce qui est deja installe
+#      sudo ./install.sh --reinstall    rejoue TOUT, meme ce qui est deja la
+#                                       (sources mises a jour, configs et
+#                                       raccourcis reecrits, binaires refaits)
 #
 #  Ou : GSM_ROOT (defaut /opt/GSM) recoit sources et binaires.
+#  Le bureau (icones, raccourcis "Lancer le banc GSM" et "multi-operator") est
+#  l etape `bureau` : elle pose les MEMES fichiers que l ISO (data/desktop/).
 #
 #  SI VOUS DECOUVREZ LE PROJET, PREFEREZ DOCKER : `./tools/make-docker-image.sh` produit une image
 #  complete et reproductible. Cette installation native s'adresse a ceux qui
@@ -31,12 +36,13 @@ MODDIR="$INST_TREE/install_modules"
 : "${OSMOCOM_HOME:=$HOME/.osmocom}"
 export INST_TREE GSM_ROOT OSMOCOM_HOME
 
-DRY=0 ONLY="" SKIP="" ACTION=install
+DRY=0 ONLY="" SKIP="" ACTION=install REINSTALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --list)    ACTION=list ;;
         --check)   ACTION=check ;;
         --dry-run) DRY=1 ;;
+        --reinstall) REINSTALL=1 ;;
         --only)    ONLY="${2:-}"; shift ;;
         --skip)    SKIP="${2:-}"; shift ;;
         -h|--help) sed -n '3,24p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit 0 ;;
@@ -55,6 +61,7 @@ end()   { [ $TTY -eq 1 ] && printf '\r\033[K'; printf '[%s%s%s] %s' "$2" "$1" "$
           [ -n "${4:-}" ] && printf ' %s(%s)%s' "$C_DIM" "$4" "$C_Z"; printf '\n'; }
 
 LOGDIR="${LOG_DIR:-/tmp/osmo-nitb-install}"; mkdir -p "$LOGDIR" 2>/dev/null || true
+export REINSTALL
 
 [ -d "$MODDIR" ] || { printf 'install_modules/ introuvable\n' >&2; exit 2; }
 . "$MODDIR/_lib/inst.sh"
@@ -109,8 +116,13 @@ for s in "${selected[@]}"; do
     p="$(inst_prefix "$s")"; log="$LOGDIR/$s.log"
     _INST_REASON=""; _INST_HINT=""
 
+    # Une etape prerequise que l appelant a ECARTEE (--only, --skip) n est pas
+    # un echec : c est son choix. Seule une etape jouee et RATEE bloque. Sans
+    # ca, "--only deps" sautait deps parce que prereqs n etait pas dans la
+    # selection - l exemple de l en-tete ne marchait pas.
     dep_ko=""
     for d in ${INST_DEPS[$s]}; do
+        in_csv "$(IFS=,; echo "${selected[*]}")" "$d" || continue
         case "${STATE[$d]:-absent}" in ok|skip) ;; *) dep_ko="$d"; break;; esac
     done
     if [ -n "$dep_ko" ]; then
@@ -120,7 +132,10 @@ for s in "${selected[@]}"; do
 
     begin "${INST_DESC[$s]}"
 
-    if declare -F "${p}_done" >/dev/null && "${p}_done" >>"$log" 2>&1; then
+    # --reinstall : on ne demande plus « deja fait ? », on refait. Les modules
+    # lisent REINSTALL pour ecraser ce qu ils conservent d ordinaire (cp -n,
+    # depot laisse tel quel).
+    if [ "$REINSTALL" -eq 0 ] && declare -F "${p}_done" >/dev/null && "${p}_done" >>"$log" 2>&1; then
         end "SKIP" "$C_SK" "${INST_DESC[$s]}" "deja installe"
         STATE[$s]=skip; nb_skip=$((nb_skip+1)); continue
     fi
@@ -171,7 +186,7 @@ done
 printf '\n%d ok · %d ignores · %d echecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
 if [ $nb_fail -eq 0 ] && [ $DRY -eq 0 ]; then
     printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
-    printf '  %slancer%s     ./run.sh --list   puis   ./run.sh\n\n' "$C_DIM" "$C_Z"
+    printf '  %slancer%s     ./start-direct.sh --list   puis   sudo ./start-direct.sh\n\n' "$C_DIM" "$C_Z"
 fi
 [ $nb_fail -gt 0 ] && exit 1
 exit 0

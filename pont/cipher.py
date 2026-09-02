@@ -21,7 +21,10 @@ class Cipher:
         self._cache = None
         self._next = 0.0
         self._held = None
-        self.applied_dl = None
+        # La BTS ne chiffre le descendant qu'apres avoir recu la premiere trame
+        # montante chiffree (osmo-bts l1sap.c check_for_first_ciphrd). Tant que
+        # ce n'est pas constate, le descendant du canal dedie est en clair.
+        self.dl_active = False
 
     def _read(self):
         now = time.monotonic()
@@ -61,12 +64,18 @@ class Cipher:
             if self._held is None:
                 return
             self._held = None
+            self.dl_active = False
         log.info("Kc lache (%s) : le lien repart en clair", reason)
+
+    def confirm_dl(self, fn):
+        with self._lock:
+            if self.dl_active:
+                return
+            self.dl_active = True
+        log.info("chiffrement descendant confirme par la BTS (fn=%u)", fn)
 
     def apply(self, burst, fn, uplink):
         key = self.current()
-        if not uplink:
-            self.applied_dl = key
         if key is None:
             return burst
         dl, ul = gsm.a5_keystream(key[0], key[1], fn)
