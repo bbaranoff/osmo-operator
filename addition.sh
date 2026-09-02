@@ -16,11 +16,20 @@
 # C est un supplement, il s installe comme tel - ici.
 #
 # Usage :
-#   sudo ./addition.sh            fenetre GTK : un choix, "Docker container
-#                                 and SS7 multioperator"
-#   sudo ./addition.sh --multi    le meme, sans la fenetre
+#   sudo ./addition.sh            fenetre GTK : "Docker container and SS7
+#                                 multioperator", puis une seconde fenetre en
+#                                 boutons radio : image TELECHARGEE ou COMPILEE
+#                                 (exclusif). osmocom-run est derivee dans la
+#                                 foulee : start-multi.sh demarre juste apres.
+#   sudo ./addition.sh --multi    le meme, sans la fenetre : image TELECHARGEE
+#                                 (docker pull bastienbaranoff/norf_gsm, taguee
+#                                 osmocom-nitb)
+#   sudo ./addition.sh --multi-build
+#                                 le meme, image COMPILEE sur place (build.sh,
+#                                 plusieurs dizaines de minutes)
 #   sudo ./addition.sh --docker   le moteur de conteneurs seul   (depannage)
-#   sudo ./addition.sh --image    l image operateur seule, build.sh (depannage)
+#   sudo ./addition.sh --image    l image operateur seule, telechargee (depannage)
+#   sudo ./addition.sh --build    l image operateur seule, compilee  (depannage)
 #   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --status   dit seulement ce qui est present
@@ -40,6 +49,14 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # rendait la sonde toujours negative : "image absente" en permanence, et une
 # recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
+# IMAGE DE BASE ET SON ORIGINE. osmocom-nitb est ce que build.sh COMPILE
+# (~40 min) ; la meme pile est publiee sur le hub sous bastienbaranoff/norf_gsm.
+# Par defaut on la TIRE et on la tague osmocom-nitb : start.sh en derive ensuite
+# osmocom-run via Dockerfile.run exactement comme apres un build local.
+# Les deux chemins sont EXCLUSIFS et choisis explicitement (fenetre ou
+# drapeau) : pas de repli silencieux de l un vers l autre.
+BASE_IMAGE="${BASE_IMAGE:-osmocom-nitb}"
+HUB_IMAGE="${HUB_IMAGE:-bastienbaranoff/norf_gsm}"
 
 # ── _trust_desktop : rendre un raccourci du bureau VISIBLE par DING ──────────
 # DING n affiche un .desktop avec son nom et son icone que s il est executable,
@@ -78,16 +95,19 @@ _trust_desktop() {
 }
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
+DO_BUILD=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
         --image)  DO_IMAGE=1;  ANY_FLAG=1 ;;
+        --build)  DO_IMAGE=1;  DO_BUILD=1; ANY_FLAG=1 ;;
         --multi)  DO_MULTI=1;  ANY_FLAG=1 ;;
+        --multi-build) DO_MULTI=1; DO_BUILD=1; ANY_FLAG=1 ;;
         --opencl) DO_OPENCL=1; ANY_FLAG=1 ;;
         --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
         --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     esac
 done
 
@@ -164,12 +184,32 @@ if [ "$ANY_FLAG" = "0" ]; then
             --separator="~" \
             --column="" --column="cle" --column="Supplement" \
             --hide-column=2 --print-column=2 \
-            TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (build.sh : compilation Osmocom, plusieurs dizaines de minutes), et la topologie op1 natif + op2/op3 docker + inter-STP" \
+            TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (telechargee du hub OU compilee sur place : le choix vient ensuite), et la topologie op1 natif + op2/op3 docker + inter-STP" \
             FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
             FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
+        # L ORIGINE DE L IMAGE : une seconde fenetre, en BOUTONS RADIO.
+        # Telecharger et compiler sont exclusifs par construction - un radiolist
+        # ne rend qu une valeur, il n y a pas de "les deux" a rattraper apres
+        # coup comme avec des cases a cocher.
+        if [ "$DO_MULTI" = "1" ]; then
+            _orig=$(zenity --list --radiolist --width=680 --height=260 \
+                --title="osmo-operator - image operateur" \
+                --text="D ou vient l image operateur (osmocom-nitb, ~11 Go) ?" \
+                --ok-label="Continuer" --cancel-label="Fermer" \
+                --column="" --column="cle" --column="Origine" \
+                --hide-column=2 --print-column=2 \
+                TRUE  dl    "TELECHARGER - docker pull ${HUB_IMAGE} (quelques minutes selon le debit)" \
+                FALSE build "COMPILER sur place - build.sh, compilation Osmocom (plusieurs dizaines de minutes)" \
+                2>/dev/null) || { echo "Annule."; exit 0; }
+            case "$_orig" in
+                build) DO_BUILD=1 ;;
+                dl)    DO_BUILD=0 ;;
+                *)     echo "Aucune origine choisie."; exit 0 ;;
+            esac
+        fi
         case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
         case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
     else
@@ -617,20 +657,56 @@ if [ "$DO_DOCKER" = "1" ]; then
 fi
 
 # ── IMAGE OPERATEUR ─────────────────────────────────────────────────────────
+# Deux chemins pour obtenir osmocom-nitb :
+#   1. docker pull ${HUB_IMAGE} && docker tag ... osmocom-nitb  (defaut)
+#      La pile Osmocom deja compilee, publiee sur le hub : le telechargement
+#      remplace 40 minutes de compilation. Le tag donne au resultat le nom que
+#      start.sh (Dockerfile.run : FROM osmocom-nitb) et start-nitb.sh attendent.
+#   2. build.sh --no-cache  (--build / --multi-build / case "compiler")
+#      --no-cache : le supplement rebatit l image PROPRE. Le cache docker
+#      gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
+#      github casse de libosmocore) et les rejouait a l identique - un build
+#      deja casse restait casse a chaque passage. On force la reconstruction.
+_build_image() {
+    [ -x "$DIR/build.sh" ] || { echo -e "  ${RED}✗ build.sh introuvable dans $DIR${NC}"; return 1; }
+    echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh --no-cache${NC}"
+    echo -e "      compilation Osmocom - comptez plusieurs dizaines de minutes."
+    "$DIR/build.sh" --no-cache || { echo -e "  ${RED}✗ ${DIR}/build.sh a echoue${NC}"; return 1; }
+    echo -e "  ${GREEN}✓${NC} image operateur construite (${BASE_IMAGE})"
+}
+_pull_image() {
+    echo -e "  ${CYAN}→${NC} telechargement de l image : ${BOLD}docker pull ${HUB_IMAGE}${NC}"
+    echo -e "      ~11 Go depuis le hub - selon le debit, quelques minutes a une heure."
+    docker pull "$HUB_IMAGE" || { echo -e "  ${RED}✗ docker pull ${HUB_IMAGE} a echoue${NC} - reseau, ou image absente du hub"
+                                  echo -e "    Alternative : compiler sur place avec ${BOLD}$0 --multi-build${NC}"; return 1; }
+    docker tag "$HUB_IMAGE" "$BASE_IMAGE" || { echo -e "  ${RED}✗ docker tag ${HUB_IMAGE} ${BASE_IMAGE} a echoue${NC}"; return 1; }
+    echo -e "  ${GREEN}✓${NC} image operateur tiree du hub et taguee ${BASE_IMAGE}"
+}
+# L IMAGE QUE LE MULTI-OPERATEUR LANCE EST osmocom-run, PAS osmocom-nitb.
+# Ni le pull ni build.sh ne la produisent : c est Dockerfile.run (FROM
+# osmocom-nitb) qui la derive, en quelques secondes. start-multi.sh sonde
+# osmocom-run et renvoie ici si elle manque : sans cette derivation, un
+# supplement "reussi" laissait le multi-operateur incapable de demarrer.
+# Meme commande que start.sh (build_run_image, mode quick).
+_derive_run_image() {
+    echo -e "  ${CYAN}→${NC} derivation de l image d execution : ${BOLD}docker build -f Dockerfile.run -t ${MULTI_IMAGE}${NC}"
+    ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
+                       -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
+        || { echo -e "  ${RED}✗ derivation de ${MULTI_IMAGE} echouee${NC}"; return 1; }
+    echo -e "  ${GREEN}✓${NC} image d execution prete (${MULTI_IMAGE})"
+}
 if [ "$DO_IMAGE" = "1" ]; then
-    if docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+    if [ "$DO_BUILD" = "1" ]; then
+        _build_image || exit 1
+        _derive_run_image || exit 1
+    elif docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} image operateur deja presente (${MULTI_IMAGE})"
-    elif [ -x "$DIR/build.sh" ]; then
-        # --no-cache : le supplement rebatit l image PROPRE. Le cache docker
-        # gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
-        # github casse de libosmocore) et les rejouait a l identique - un build
-        # deja casse restait casse a chaque passage. On force la reconstruction.
-        echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh --no-cache${NC}"
-        echo -e "      compilation Osmocom - comptez plusieurs dizaines de minutes."
-        "$DIR/build.sh" --no-cache || { echo -e "  ${RED}✗ ${DIR}/build.sh a echoue${NC}"; exit 1; }
-        echo -e "  ${GREEN}✓${NC} image operateur construite"
+    elif docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} image de base deja presente (${BASE_IMAGE})"
+        _derive_run_image || exit 1
     else
-        echo -e "  ${RED}✗ build.sh introuvable dans $DIR${NC}"; exit 1
+        _pull_image || exit 1
+        _derive_run_image || exit 1
     fi
 fi
 

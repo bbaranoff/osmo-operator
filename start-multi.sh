@@ -259,8 +259,21 @@ esac
 # osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
 # rendait la sonde toujours negative : "image absente" en permanence, et une
 # recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
-docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 \
-    || manque "image '$MULTI_IMAGE' absente"
+# [2026-09-02] SI SEULE LA BASE EST LA, ON DERIVE ICI. addition.sh peut
+# desormais TELECHARGER osmocom-nitb (docker pull bastienbaranoff/norf_gsm)
+# au lieu de la compiler ; osmocom-run en decoule par Dockerfile.run en
+# quelques secondes. Refuser de demarrer pour ca et renvoyer vers addition.sh
+# - qui aurait repondu "image deja presente" - etait une boucle sans issue.
+if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+    if docker image inspect osmocom-nitb >/dev/null 2>&1; then
+        echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente, base osmocom-nitb presente : derivation (Dockerfile.run)"
+        ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
+                           -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
+            || manque "derivation de l image '$MULTI_IMAGE' echouee"
+    else
+        manque "image '$MULTI_IMAGE' absente"
+    fi
+fi
 
 # ── LE RACCORD DU NATIF AU HUB ──────────────────────────────────────────────
 # [2026-08-31] RESOLU, dans start.sh, au lancement du hub.
