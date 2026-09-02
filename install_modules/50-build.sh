@@ -26,19 +26,20 @@ inst_build_run() {
         inst_say "toast deja present ($(command -v toast))"
     else
         local gver=gsm-1.0.24
+        local gdir=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
         local gurl="https://www.quut.com/gsm/${gver}.tar.gz"
         if ( cd "$GSM_ROOT" \
              && wget -qO "${gver}.tar.gz" "$gurl" \
              && tar xzf "${gver}.tar.gz" \
-             && cd "$gver" \
+             && cd "$gdir" \
              && { make >/dev/null 2>&1 || true; } \
              && { [ -x bin/toast ] || make toast >/dev/null 2>&1 || true; } \
              && [ -x bin/toast ] ); then
             for b in toast untoast tcat; do
-                [ -e "$GSM_ROOT/$gver/bin/$b" ] \
-                    && install -m755 "$GSM_ROOT/$gver/bin/$b" "/usr/local/bin/$b"
+                [ -e "$GSM_ROOT/$gdir/bin/$b" ] \
+                    && install -m755 "$GSM_ROOT/$gdir/bin/$b" "/usr/local/bin/$b"
             done
-            inst_say "toast installe dans /usr/local/bin (sources : $GSM_ROOT/$gver)"
+            inst_say "toast installe dans /usr/local/bin (sources : $GSM_ROOT/$gdir)"
         else
             inst_hint "toast non compile (reseau ou quut.com injoignable) - suite sans lui"
         fi

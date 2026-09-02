@@ -59,6 +59,7 @@ apt-get install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev 
 # dans /usr/local/bin. Non fatal : sans reseau on continue le build.
 echo "[*] Compilation de toast (codec GSM 06.10)..."
 _GSM_VER=gsm-1.0.24
+_GSM_DIR=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
 _GSM_URL="https://www.quut.com/gsm/${_GSM_VER}.tar.gz"
 if command -v toast >/dev/null 2>&1; then
     echo -e "\033[0;32m[OK] toast deja present ($(command -v toast)).\033[0m"
@@ -68,15 +69,15 @@ else
     if ( cd /opt/GSM \
          && wget -qO "${_GSM_VER}.tar.gz" "$_GSM_URL" \
          && tar xzf "${_GSM_VER}.tar.gz" \
-         && cd "$_GSM_VER" \
+         && cd "$_GSM_DIR" \
          && { make >/dev/null 2>&1 || true; } \
          && { [ -x bin/toast ] || make toast >/dev/null 2>&1 || true; } \
          && [ -x bin/toast ] ); then
         for _b in toast untoast tcat; do
-            [ -e "/opt/GSM/${_GSM_VER}/bin/$_b" ] \
-                && install -m755 "/opt/GSM/${_GSM_VER}/bin/$_b" "/usr/local/bin/$_b"
+            [ -e "/opt/GSM/${_GSM_DIR}/bin/$_b" ] \
+                && install -m755 "/opt/GSM/${_GSM_DIR}/bin/$_b" "/usr/local/bin/$_b"
         done
-        echo -e "\033[0;32m[OK] toast installe dans /usr/local/bin (sources : /opt/GSM/${_GSM_VER}).\033[0m"
+        echo -e "\033[0;32m[OK] toast installe dans /usr/local/bin (sources : /opt/GSM/${_GSM_DIR}).\033[0m"
     else
         echo -e "\033[0;33m[WARN] compilation de toast echouee (reseau ou outils ?) - on continue.\033[0m"
     fi

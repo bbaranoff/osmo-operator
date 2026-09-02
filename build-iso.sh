@@ -789,6 +789,7 @@ fi
 # tourne sur l hote de build ; l ISO etant amd64 sur hote amd64, le binaire est
 # bon. Non fatal : sans reseau ou sans toolchain, l ISO se construit sans toast.
 _GSM_VER=gsm-1.0.24
+_GSM_DIR=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
 _GSM_URL="https://www.quut.com/gsm/${_GSM_VER}.tar.gz"
 if [ -x "$ROOTFS/usr/local/bin/toast" ]; then
     echo -e "  ${GREEN}✓${NC} toast deja dans le rootfs (image ?)"
@@ -799,15 +800,15 @@ else
     if ( cd "$ROOTFS/opt/GSM" \
          && wget -qO "${_GSM_VER}.tar.gz" "$_GSM_URL" \
          && tar xzf "${_GSM_VER}.tar.gz" \
-         && cd "$_GSM_VER" \
+         && cd "$_GSM_DIR" \
          && { make >/dev/null 2>&1 || true; } \
          && { [ -x bin/toast ] || make toast >/dev/null 2>&1 || true; } \
          && [ -x bin/toast ] ); then
         for _b in toast untoast tcat; do
-            [ -e "$ROOTFS/opt/GSM/${_GSM_VER}/bin/$_b" ] \
-                && install -m755 "$ROOTFS/opt/GSM/${_GSM_VER}/bin/$_b" "$ROOTFS/usr/local/bin/$_b"
+            [ -e "$ROOTFS/opt/GSM/${_GSM_DIR}/bin/$_b" ] \
+                && install -m755 "$ROOTFS/opt/GSM/${_GSM_DIR}/bin/$_b" "$ROOTFS/usr/local/bin/$_b"
         done
-        echo -e "  ${GREEN}✓${NC} toast : ${CYAN}/usr/local/bin/toast${NC} (sources : /opt/GSM/${_GSM_VER})"
+        echo -e "  ${GREEN}✓${NC} toast : ${CYAN}/usr/local/bin/toast${NC} (sources : /opt/GSM/${_GSM_DIR})"
     else
         echo -e "  ${YELLOW}!${NC} compilation de toast echouee (reseau ?) - ISO sans toast" >&2
     fi
