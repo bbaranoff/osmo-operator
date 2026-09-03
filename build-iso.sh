@@ -98,10 +98,37 @@ for arg in "$@"; do case "$arg" in
     --node=*)       ISO_NODE="${arg#*=}" ;;
     --hub-ip=*)     ISO_HUB_IP="${arg#*=}" ;;
     --kb=*)         OSMO_ISO_KB="${arg#*=}" ;;
+    --version=*)    ISO_UBUNTU="${arg#*=}" ;;
+    # Forme en deux mots (`--version 24.04`) : la boucle est un `for` sans
+    # shift, donc le drapeau memorise que la valeur arrive au tour suivant, et
+    # le motif ci-dessous la ramasse. Ces valeurs ne signifient rien d autre
+    # dans la ligne de commande : aucun risque de collision.
+    --version)      ISO_UBUNTU_NEXT=1 ;;
+    22.04|24.04|jammy|noble)
+                    if [ "${ISO_UBUNTU_NEXT:-0}" = 1 ]; then
+                        ISO_UBUNTU="$arg"; ISO_UBUNTU_NEXT=0
+                    fi ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
 esac; done
+
+# ── BASE UBUNTU : 22.04 (jammy) ou 24.04 (noble) ──────────────────────────────
+# Le nom de suite etait ecrit EN DUR a quatre endroits (debootstrap, les trois
+# lignes de sources.list). Une seule variable maintenant, et un seul endroit ou
+# la faire varier.
+#
+# Defaut 22.04 : c est la base sur laquelle la pile est construite et testee.
+# 24.04 est offerte parce qu il faudra bien y passer, mais elle n a PAS ete
+# validee de bout en bout — noble a python 3.12 (la pile vise 3.10), un autre
+# jeu de paquets snap, et gnome 46 au lieu de 42. A traiter comme un essai.
+: "${ISO_UBUNTU:=22.04}"
+case "$ISO_UBUNTU" in
+    22.04|jammy) ISO_UBUNTU=22.04; ISO_SUITE=jammy ;;
+    24.04|noble) ISO_UBUNTU=24.04; ISO_SUITE=noble ;;
+    *) echo -e "${RED}--version : 22.04 ou 24.04 (recu : $ISO_UBUNTU)${NC}" >&2; exit 2 ;;
+esac
+export ISO_UBUNTU ISO_SUITE
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
 
@@ -588,12 +615,12 @@ if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
     DEBOOTSTRAP_CACHE_OPT="--cache-dir=$ISO_DEB_CACHE/debootstrap"
     echo -e "  ${GREEN}cache .deb debootstrap : $ISO_DEB_CACHE/debootstrap${NC}"
 fi
-echo -e "${GREEN}[4/9] debootstrap jammy (minimal)...${NC}"
+echo -e "${GREEN}[4/9] debootstrap $ISO_SUITE ($ISO_UBUNTU, minimal)...${NC}"
 debootstrap $DEBOOTSTRAP_CACHE_OPT --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
 ca-certificates,curl,gnupg,\
 iproute2,iputils-ping,procps,less,nano \
-    jammy "$ROOTFS" http://archive.ubuntu.com/ubuntu
+    "$ISO_SUITE" "$ROOTFS" http://archive.ubuntu.com/ubuntu
 echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
 
 # ── Etape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
@@ -741,6 +768,26 @@ else
     else
         echo -e "  ${YELLOW}!${NC} qosmo-grgsm introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
     fi
+fi
+
+# ── qosmo-dsp : le second fork, celui qui emule le DSP C54x ────────────────
+# [2026-09-03] start-direct.sh --dsp le cherche en /opt/GSM/qosmo-dsp (cf.
+# CALYPSO_FORK dans environment/paths.env). Sans lui dans l'image, l'option
+# echoue avec "run.sh introuvable" -- et le message ne dit pas qu'il manque un
+# depot entier.
+#
+# Meme regle que pour qosmo-grgsm juste au-dessus : l'arbre de l'hote fait foi
+# s'il existe, OSMO_QDSP_SRC=/chemin le force. Il n'est PAS fatal s'il manque :
+# l'image reste utilisable, --dsp seul devient indisponible.
+QDSP="$ROOTFS/opt/GSM/qosmo-dsp"
+QDSP_HOST="${OSMO_QDSP_SRC:-/opt/GSM/qosmo-dsp}"
+if [ -d "$QDSP_HOST" ]; then
+    rm -rf "$QDSP"
+    mkdir -p "$ROOTFS/opt/GSM"
+    cp -a "$QDSP_HOST" "$QDSP"
+    echo -e "  ${GREEN}✓${NC} qosmo-dsp repris de ${CYAN}${QDSP_HOST}${NC} ($(du -sh "$QDSP" | cut -f1))"
+else
+    echo -e "  ${YELLOW}!${NC} qosmo-dsp introuvable - l'ISO n'aura pas le mode --dsp" >&2
 fi
 
 # ── Firmware Calypso : /opt/GSM/firmware, et rien d'autre ───────────────────
@@ -1567,10 +1614,24 @@ echo "keyboard-configuration keyboard-configuration/layoutcode string us" | debc
 echo "keyboard-configuration keyboard-configuration/modelcode string pc105" | debconf-set-selections
 echo "console-setup console-setup/charmap47 select UTF-8" | debconf-set-selections
 
+# ${ISO_SUITE} vient de l environnement du chroot (export plus haut) ; le
+# heredoc est NON quote pour que la substitution ait lieu ici.
+_S="${ISO_SUITE:-jammy}"
+# ── GIT : HTTP/1.1 IMPOSE POUR TOUTE L IMAGE ────────────────────────────────
+# [2026-09-03] Le contournement etait pose commande par commande dans ce script
+# (git -c http.version=HTTP/1.1) et globalement par update.sh -- mais PAS dans
+# l image : un clone lance depuis le systeme livre retombait sur l erreur.
+# Symptome exact : "expected flush after ref listing". Il vient de HTTP/2 sur
+# certains miroirs et proxys, qui coupent le flux entre l annonce des refs et le
+# paquet. Forcer HTTP/1.1 est le remede de cette erreur-la, pas un reglage de
+# performance : on ne le retire que si on sait que le chemin reseau va bien.
+# --system et non --global : ca vaut pour tous les comptes de l image.
+git config --system http.version HTTP/1.1 2>/dev/null || true
+
 cat > /etc/apt/sources.list <<SOURCES
-deb http://archive.ubuntu.com/ubuntu jammy           main universe multiverse
-deb http://archive.ubuntu.com/ubuntu jammy-updates    main universe multiverse
-deb http://archive.ubuntu.com/ubuntu jammy-security   main universe multiverse
+deb http://archive.ubuntu.com/ubuntu $_S           main universe multiverse
+deb http://archive.ubuntu.com/ubuntu $_S-updates    main universe multiverse
+deb http://archive.ubuntu.com/ubuntu $_S-security   main universe multiverse
 SOURCES
 
 # ── Les certificats D ABORD ─────────────────────────────────────────────────
@@ -1832,6 +1893,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # build : sans bureau ou sans installeur, cette image ne sert a rien.
     apt-get install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop snapd \
+        vlc \
         wmctrl x11-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
@@ -2127,6 +2189,24 @@ GDM
     else
         echo "  [desktop] WARN: $_WP absent -- fond d ecran GNOME par defaut"
     fi
+    # ── DOCK : LES FAVORIS DU BANC ──────────────────────────────────────
+    # Meme raison que le fond d ecran : sur un live sans persistance, un
+    # reglage utilisateur ne survit pas au boot. C est donc le DEFAUT DE SCHEMA
+    # qu il faut poser, pas un gsettings dans une session.
+    #
+    # L ordre est celui du banc de reference, gauche a droite dans le dock :
+    #   firefox · fichiers · aide · osmo-launch · deka · claude · linphone ·
+    #   osmo-multi · wireshark
+    #
+    # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
+    # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
+    # et claude.desktop meme sur une image ou ils ne sont pas installes.
+    # firefox_firefox.desktop est la forme SNAP (le paquet deb serait
+    # firefox.desktop) : c est le snap qui est installe ici.
+    printf "\n[org.gnome.shell]\nfavorite-apps=[\047firefox_firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047yelp.desktop\047, \047osmo-launch.desktop\047, \047deka.desktop\047, \047claude.desktop\047, \047linphone.desktop\047, \047osmo-multi.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" \
+        >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    echo "  [desktop] favoris du dock poses (9 entrees)"
+
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
     echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox snap"
@@ -3562,16 +3642,31 @@ INSTALLER
     # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
     # le MEME.
-    install -m644 "$DIR/data/desktop/osmo-install.desktop" "$ROOTFS/usr/share/applications/osmo-install.desktop"
+    # [2026-09-03] TOUS les raccourcis du depot, pas seulement osmo-install.
+    # Ils etaient poses par l install native (install_modules/80-bureau.sh) et
+    # par le .deb, mais PAS dans l ISO : la cle live n avait qu une icone sur
+    # neuf, et les huit autres n existaient meme pas dans le menu des
+    # applications — donc le dock ne pouvait pas les afficher non plus.
+    for _d in "$DIR"/data/desktop/*.desktop; do
+        [ -f "$_d" ] || continue
+        install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
+    done
 
     # Sur le bureau de root, ou la session s ouvre : l icone est la premiere
     # chose qu on cherche sur une cle live, et c est celle qu on ne trouve
     # jamais quand elle n est que dans le menu des applications.
+    #
+    # osmo-install reste a part : il ne va sur le bureau QUE sur l image live,
+    # ou installer le systeme est la premiere chose a faire. Les autres sont les
+    # outils du banc.
     for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
         install -d "$_h/Bureau" "$_h/Desktop"
-        cp "$ROOTFS/usr/share/applications/osmo-install.desktop" "$_h/Bureau/"  2>/dev/null || true
-        cp "$ROOTFS/usr/share/applications/osmo-install.desktop" "$_h/Desktop/" 2>/dev/null || true
-        chmod +x "$_h/Bureau/osmo-install.desktop" "$_h/Desktop/osmo-install.desktop" 2>/dev/null || true
+        for _d in "$DIR"/data/desktop/*.desktop; do
+            [ -f "$_d" ] || continue
+            cp "$_d" "$_h/Bureau/"  2>/dev/null || true
+            cp "$_d" "$_h/Desktop/" 2>/dev/null || true
+        done
+        chmod +x "$_h"/Bureau/*.desktop "$_h"/Desktop/*.desktop 2>/dev/null || true
     done
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 

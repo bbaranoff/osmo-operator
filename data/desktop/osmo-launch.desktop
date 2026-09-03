@@ -9,3 +9,24 @@ Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
 Terminal=false
 Categories=System;Network;
 Keywords=gsm;osmocom;banc;lancer;
+
+# ── ACTIONS DU CLIC DROIT ────────────────────────────────────────────────────
+# GNOME/DING lit `Actions=` et ajoute une entree par action au menu contextuel
+# de l icone (bureau ET dock). launch.sh passe tout son "$@" a start-direct.sh :
+# les deux actions ci-dessous sont donc exactement les deux lignes de commande,
+# sans duplication de logique.
+#
+# Les noms des groupes doivent correspondre EXACTEMENT aux jetons de `Actions=`,
+# a la casse pres inclus : une entree qui ne correspond a rien est ignoree en
+# silence, et le clic droit affiche simplement une action de moins.
+Actions=Dsp;Stop;
+
+[Desktop Action Dsp]
+Name=Lancer en mode DSP (C54x)
+Name[fr]=Lancer en mode DSP (C54x)
+Exec=/opt/GSM/osmo-operator/launch.sh --dsp
+
+[Desktop Action Stop]
+Name=Arreter le banc
+Name[fr]=Arreter le banc
+Exec=/opt/GSM/osmo-operator/launch.sh --stop

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Banc GSM - mode DSP
+Name[fr]=Banc GSM - mode DSP
+Comment=Le DSP TMS320C54x emule decode lui-meme (fork qosmo-dsp)
+Comment[fr]=Le DSP TMS320C54x emule decode lui-meme (fork qosmo-dsp)
+Exec=/opt/GSM/osmo-operator/launch.sh --dsp
+Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
+Terminal=false
+Categories=System;Network;
+Keywords=gsm;osmocom;dsp;c54x;calypso;natif;
+
+Actions=Stop;
+
+[Desktop Action Stop]
+Name=Arreter le banc
+Name[fr]=Arreter le banc
+Exec=/opt/GSM/osmo-operator/launch.sh --stop

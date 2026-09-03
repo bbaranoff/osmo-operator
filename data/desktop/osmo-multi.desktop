@@ -9,3 +9,12 @@ Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
 Categories=System;Network;
 Keywords=ss7;m3ua;multi;operateur;interstp;
+
+# start-multi.sh --stop arrete les conteneurs ET delegue a run.sh --stop pour le
+# natif (cf. son en-tete). Une seule action suffit donc ici.
+Actions=Stop;
+
+[Desktop Action Stop]
+Name=Arreter le multi-operateur
+Name[fr]=Arreter le multi-operateur
+Exec=/opt/GSM/osmo-operator/start-multi.sh --stop

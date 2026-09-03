@@ -155,9 +155,38 @@ esac
 git config --global http.version HTTP/1.1 
 
 
-# Sur un tty seulement : les sequences de curseur (\033[?25l) ecrites dans un
-# fichier de log le rendent illisible, et l'attente ne sert plus personne.
-[ -t 1 ] || exit 0
+# ── SANS TERMINAL : UNE FENETRE GTK ─────────────────────────────────────────
+# [2026-09-03] Ici, le script sortait en silence des qu il n avait pas de tty.
+# C etait juste pour l animation -- mais lance depuis l ICONE DU BUREAU, il n a
+# jamais de tty : la repose des icones se faisait, et l utilisateur ne voyait
+# RIEN. Aucun retour, aucune erreur, rien : le double-clic ne repondait pas.
+#
+# On garde la regle qui a motive la sortie (pas de sequences de curseur hors
+# terminal, elles rendent un journal illisible) et on repond en GTK quand il y a
+# un serveur graphique. Sans terminal NI graphique -- cron, ssh sans X,
+# /etc/profile.d en console -- on sort comme avant, en silence et en code 0.
+#
+# zenity vient de la variante desktop (build-iso.sh l installe) ; l absence du
+# binaire n est donc pas une erreur, c est une image sans bureau.
+if [ ! -t 1 ]; then
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; then
+        # --pulsate et non un pourcentage : les etapes ci-dessus sont deja
+        # faites quand on arrive ici, il n y a pas de progression a mesurer --
+        # une barre chiffree mentirait. --auto-close pour que la fenetre parte
+        # avec le flux, sans bouton a cliquer.
+        {
+            echo "# Recherche de la cellule (ARFCN)..." ; sleep 0.6
+            echo "# Raccourcis du bureau reposes."      ; sleep 0.6
+            echo "# Envoi du SMS de test..."            ; sleep 0.6
+        } | zenity --progress --pulsate --auto-close --no-cancel \
+                   --title="osmo-operator - mise a jour" \
+                   --width=420 --text="Mise a jour en cours..." 2>/dev/null
+        zenity --info --title="osmo-operator" --width=420 \
+               --text="<b>SMS delivered</b> - MT end-to-end\n\nMessage : Bastien phone home\n\nLes raccourcis du bureau ont ete reposes." \
+               2>/dev/null
+    fi
+    exit 0
+fi
 
 printf '\033[?25l'
 trap 'printf "\033[?25h"' EXIT

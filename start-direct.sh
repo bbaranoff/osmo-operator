@@ -40,6 +40,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
+# 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
+# Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
+PROFILE_CHOISI=0
+[ -n "${CALYPSO_PROFILE:-}" ] && PROFILE_CHOISI=1
 # WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
@@ -70,6 +74,11 @@ Usage : ./start-direct.sh [options] [mode]
     core           alias noproc
     hybrid         alias faketrx-qemu
   Options :
+    --dsp               emule le DSP C54x (fork qosmo-dsp) au lieu de la
+                        couche 1 gr-gsm. Le DSP decode lui-meme : aucun
+                        decodeur gr-gsm n'est lance. Banc de travail — le
+                        decodage SCH ne passe pas encore, le mobile ne campe pas.
+    --grgsm             force le fork qosmo-grgsm (defaut)
     --list              affiche le plan (delegue a run.sh --list)
     --dry-run           deroule sans effet de bord
     --profile <nom>     force le profil
@@ -133,13 +142,15 @@ while [ $# -gt 0 ]; do
                            printf '%s\n\n' "--profile attend un nom de profil" >&2
                            usage >&2; exit 2
                        fi
-                       PROFILE="$2"; shift ;;
+                       PROFILE="$2"; PROFILE_CHOISI=1; shift ;;
         --stop)        ACTION=stop ;;
         --status)      ACTION=status ;;
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
         --check-paths) ACTION=checkpaths ;;
         --wan)         WAN_MESH=1 ;;
+        --dsp)         CALYPSO_FORK=qosmo-dsp; export CALYPSO_FORK; DSP_MODE=1 ;;
+        --grgsm)       CALYPSO_FORK=qosmo-grgsm; export CALYPSO_FORK ;;
         --wan=*)       WAN_MESH=1; WAN_NODES="${1#*=}" ;;
         --wan-nodes)   WAN_MESH=1; WAN_NODES="${2:-}"; shift ;;
         --wan-nodes=*) WAN_MESH=1; WAN_NODES="${1#*=}" ;;
@@ -177,7 +188,7 @@ while [ $# -gt 0 ]; do
                        L2_CLIENT_CHOISI="$_l2c" ;;
         -h|--help)     usage; exit 0 ;;
         faketrx-qemu|faketrx|qemu|noproc|core|hybrid)
-            PROFILE="$1"
+            PROFILE="$1"; PROFILE_CHOISI=1
             [ "$PROFILE" = "hybrid" ] && PROFILE=faketrx-qemu
             [ "$PROFILE" = "core" ]   && PROFILE=noproc
             ;;
@@ -185,6 +196,25 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# --- --dsp implique le profil « qemu » ----------------------------------------
+# Le defaut `faketrx-qemu` (hybrid) monte un SIDE-CAR : fake_trx + un second
+# osmo-bts-trx + un second mobile, pour que MS#2 puisse appeler MS#1. C'est
+# utile a la demo gr-gsm, ca n'a rien a voir avec le DSP — et c'est REQUIS
+# (MOD_REQUIRED=1 sur sidecar-faketrx et sidecar-bts), donc sa moindre panne
+# AVORTE toute la sequence avant meme que QEMU demarre. Un banc DSP n'a pas a
+# dependre d'une seconde station de base.
+#
+# Un profil nomme explicitement (--profile, ou le mode en positionnel) gagne
+# toujours : on ne decide qu'a la place de personne.
+if [ "${DSP_MODE:-0}" = 1 ] && [ "$PROFILE_CHOISI" = 0 ]; then
+    PROFILE=qemu
+    printf '%s--dsp : profil « qemu » (pipeline Calypso seul, pas de side-car).%s\n' \
+        "${C_DIM:-}" "${C_Z:-}"
+    printf '%s        --dsp faketrx-qemu pour garder le side-car MS#2.%s\n' \
+        "${C_DIM:-}" "${C_Z:-}"
+fi
+
 # --- ou tourne-t-on ? ---------------------------------------------------------
 # La question n'est pas cosmetique : le plan d'adressage EN DEPEND.
 #   docker  → l'inter-STP est le conteneur osmo-inter-stp (172.20.0.10), le
@@ -358,10 +388,14 @@ else
     # Fallback minimal (chemins typiques du depot)
     : "${GSM_ROOT:=/opt/GSM}"
     : "${NITB_TREE:=$HERE}"
-    if [ -x "$HERE/../qosmo-grgsm/run.sh" ]; then
-        : "${OQC_ROOT:=$(cd "$HERE/../qosmo-grgsm" && pwd)}"
+    # Meme selection de fork qu'environment/paths.env, repliquee pour le cas ou
+    # load.env est absent (ISO, conteneur nu). Defaut : qosmo-grgsm ; --dsp a
+    # deja pose CALYPSO_FORK=qosmo-dsp plus haut si l'operateur l'a demande.
+    : "${CALYPSO_FORK:=qosmo-grgsm}"
+    if [ -x "$HERE/../$CALYPSO_FORK/run.sh" ]; then
+        : "${OQC_ROOT:=$(cd "$HERE/../$CALYPSO_FORK" && pwd)}"
     else
-        : "${OQC_ROOT:=$GSM_ROOT/qosmo-grgsm}"
+        : "${OQC_ROOT:=$GSM_ROOT/$CALYPSO_FORK}"
     fi
     say_end " OK " "$C_OK" "Chargement de l'environnement" "fallback minimal"
 fi
@@ -385,13 +419,20 @@ fi
 # travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
 #   CALYPSO_BRIDGE=none ./start-direct.sh   -> pas de pont (QEMU + BTS seuls)
 #
-# [2026-09-02] LE DSP EST ENTERRE SUR CE FORK. La chaine I/Q (osmo-trx-ipc,
-# calypso-ipc-device, si_bridge, demod-bridge), le mode CALYPSO_BRIDGE=ipc,
-# l'option --dsp (trace asm, mailbox) et les drapeaux CALYPSO_SHUNT_* /
-# CALYPSO_CANNED / CALYPSO_SKIP_* / CALYPSO_PIPELINE ont ete retires d'ici :
-# le modele QEMU de qosmo-grgsm ne lit plus qu'UNE variable d'environnement,
-# CALYPSO_SIM_CFG (voir plus bas), et son lanceur run.sh aucune de celles-la.
-# Le travail DSP continue dans le fork qosmo-dsp, pas ici.
+# [2026-09-03] DEUX FORKS, SELECTIONNES PAR --dsp (cf. CALYPSO_FORK dans
+# environment/paths.env). Le DEFAUT reste qosmo-grgsm : c'est la pile qui va de
+# bout en bout, jusqu'a l'appel voix. La note du 2026-09-02 (« le DSP est enterre
+# sur ce fork ») decrivait bien celui-la, et reste vraie pour lui.
+#
+# `--dsp` bascule sur qosmo-dsp, ou le vrai DSP C54x tourne sur la mask-ROM TI et
+# decode lui-meme. Son run.sh monte la chaine I/Q complete (osmo-trx-ipc,
+# calypso-ipc-device, ROMs DSP) via ses propres run_modules, et n'y lance AUCUN
+# decodeur gr-gsm : son pipeline par defaut est `dsp`, pas `full-grgsm`.
+# Ce script ne lui impose rien de plus, il lui delegue — comme pour l'autre.
+#
+# ATTENTION AUX ATTENTES avec --dsp : le FB est acquis par le DSP, mais le
+# decodage SCH ne passe pas encore (a_sch[0]=0x8100, CRC toujours faux) — le
+# mobile ne campe donc PAS. C'est un banc de travail, pas une demo.
 : "${CALYPSO_BRIDGE:=pont}"
 
 : "${MS_COUNT:=2}"
@@ -405,10 +446,11 @@ say_begin "Resolution de run.sh"
 # gagne toujours") : RUN_SH etait la seule variable non surchargeable.
 # Ordre : RUN_SH explicite > OQC_ROOT resolu > chemin historique.
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
-: "${RUN_SH:=/opt/GSM/qosmo-grgsm/run.sh}"
+: "${RUN_SH:=$GSM_ROOT/${CALYPSO_FORK:-qosmo-grgsm}/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
     say_end "FAIL" "$C_KO" "Resolution de run.sh" "$RUN_SH introuvable ou non executable"
-    printf '       %s→ Verifiez que /opt/GSM/qosmo-grgsm/run.sh existe et est executable%s\n' "$C_DIM" "$C_Z"
+    printf '       %s→ Verifiez que %s existe et est executable%s\n' "$C_DIM" "$RUN_SH" "$C_Z"
+    printf '       %s→ Fork DSP : %s --dsp%s\n' "$C_DIM" "$0" "$C_Z"
     exit 1
 fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"

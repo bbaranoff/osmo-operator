@@ -1,0 +1,18 @@
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var box = document.getElementById('sk-filter');
+  if (!box) return;
+  var rows = Array.from(document.querySelectorAll('.bundle-index tbody tr'));
+  var toc  = Array.from(document.querySelectorAll('#TOC a, nav[role=doc-toc] a'));
+  box.addEventListener('input', function () {
+    var q = box.value.trim().toLowerCase();
+    rows.forEach(function (r) {
+      r.style.display = (!q || r.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+    toc.forEach(function (a) {
+      var li = a.closest('li') || a;
+      li.style.display = (!q || a.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+  });
+});
+</script>
