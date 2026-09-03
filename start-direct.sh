@@ -79,6 +79,11 @@ Usage : ./start-direct.sh [options] [mode]
                         decodeur gr-gsm n'est lance. Banc de travail — le
                         decodage SCH ne passe pas encore, le mobile ne campe pas.
     --grgsm             force le fork qosmo-grgsm (defaut)
+    --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/<fork>,
+                        soit qosmo-grgsm ou qosmo-dsp). Ces lanceurs remplacent
+                        l'appel direct a qemu-system-arm : memes defauts, sockets
+                        et pty publies (<RUN_DIR>/modem.pty), osmocon direct.
+                        Se compilent dans <fork>/tools/qosmo-launch (make install).
     --list              affiche le plan (delegue a run.sh --list)
     --dry-run           deroule sans effet de bord
     --profile <nom>     force le profil
@@ -151,6 +156,8 @@ while [ $# -gt 0 ]; do
         --wan)         WAN_MESH=1 ;;
         --dsp)         CALYPSO_FORK=qosmo-dsp; export CALYPSO_FORK; DSP_MODE=1 ;;
         --grgsm)       CALYPSO_FORK=qosmo-grgsm; export CALYPSO_FORK ;;
+        --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
+        --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1; WAN_NODES="${1#*=}" ;;
         --wan-nodes)   WAN_MESH=1; WAN_NODES="${2:-}"; shift ;;
         --wan-nodes=*) WAN_MESH=1; WAN_NODES="${1#*=}" ;;
@@ -433,6 +440,21 @@ fi
 # ATTENTION AUX ATTENTES avec --dsp : le FB est acquis par le DSP, mais le
 # decodage SCH ne passe pas encore (a_sch[0]=0x8100, CRC toujours faux) — le
 # mobile ne campe donc PAS. C'est un banc de travail, pas une demo.
+#
+# [2026-09-03] --dsp : PAS DE PONT PAR DEFAUT. Le pipeline de qosmo-dsp monte
+# son propre transceiver, osmo-trx-ipc (61-osmo-trx.sh), qui tient 5700-5702
+# face a osmo-bts-trx, et calypso-ipc-device qui porte l'I/Q jusqu'au BSP
+# (udp 6702). Le pont est un SECOND transceiver TRX-UDP sur les memes ports :
+# lance ici, il mourait a chaque run sur « Address already in use »
+# (/dev/shm/pont.log) — sans effet sur la pile, mais un cadavre a chaque
+# demarrage et une piste fausse au diagnostic. `none` = rien a lancer.
+# Ne PAS mettre `ipc` : dans qosmo-dsp cette valeur veut dire « MS#1 via
+# osmo-trx-ms-ipc, firmware QEMU non lance » (40-qemu.sh, 50-osmocon.sh).
+# Une valeur posee par l'operateur (CALYPSO_BRIDGE=... ./start-direct.sh --dsp)
+# reste respectee.
+if [ "${DSP_MODE:-0}" = 1 ]; then
+    : "${CALYPSO_BRIDGE:=none}"
+fi
 : "${CALYPSO_BRIDGE:=pont}"
 
 : "${MS_COUNT:=2}"
@@ -455,6 +477,29 @@ if [ ! -x "$RUN_SH" ]; then
 fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
 RUN_ROOT="$(dirname "$RUN_SH")"
+
+# --- 2b. lanceur C de QEMU (qosmo-grgsm / qosmo-dsp) ---------------------------
+# [2026-09-03] QEMU n'est plus appele directement par 40-qemu.sh : chaque fork
+# porte un lanceur C, tools/qosmo-launch, installe dans /usr/local/bin sous le
+# nom du fork. Il fixe les defauts qui marchent (machine calypso + ROMs DSP,
+# -cpu arm946, -gdb tcp::1234, -serial pty x2, -monitor unix:$RUN_DIR/...),
+# lit l1s/last_rach dans l'ELF, et publie des liens stables vers les pty
+# ($RUN_DIR/modem.pty pour osmocon, $RUN_DIR/irda.pty). Options : --bind,
+# --trx-port, --iq-tee, --l1ctl, --monitor, --gdb (voir `qosmo-dsp --help`).
+# Le nom est passe a run.sh par QOSMO_LAUNCHER ; s'il manque, 40-qemu.sh
+# retombe sur la ligne qemu-system-arm historique - on le dit, sans bloquer.
+say_begin "Lanceur QEMU"
+: "${QOSMO_LAUNCHER:=/usr/local/bin/${CALYPSO_FORK:-qosmo-grgsm}}"
+export QOSMO_LAUNCHER
+if [ -x "$QOSMO_LAUNCHER" ]; then
+    say_end " OK " "$C_OK" "Lanceur QEMU" "$QOSMO_LAUNCHER ($("$QOSMO_LAUNCHER" -V 2>/dev/null | head -1))"
+elif [ -f "$RUN_ROOT/tools/qosmo-launch/qosmo-launch.c" ] && command -v gcc >/dev/null 2>&1 \
+     && make -s -C "$RUN_ROOT/tools/qosmo-launch" install >/dev/null 2>&1 && [ -x "$QOSMO_LAUNCHER" ]; then
+    say_end " OK " "$C_OK" "Lanceur QEMU" "$QOSMO_LAUNCHER (compile a l'instant depuis $RUN_ROOT/tools/qosmo-launch)"
+else
+    say_end "WARN" "$C_SK" "Lanceur QEMU" "$QOSMO_LAUNCHER absent : 40-qemu.sh appellera qemu-system-arm directement"
+    printf '       %s-> make -C %s/tools/qosmo-launch install%s\n' "$C_DIM" "$RUN_ROOT" "$C_Z"
+fi
 # ══ --menu : on DEMANDE, au lieu de deviner ════════════════════════════════
 # Le lanceur resout tout seul le profil, le noeud, l'inter-STP, le WAN. C'est ce
 # qu'il faut pour une ISO qui demarre sans personne devant. Mais devant un banc,
@@ -502,11 +547,77 @@ menu_interactif() {
         case "${rep:-$d}" in [oOyY]*) return 0 ;; *) return 1 ;; esac
     }
 
+    # Un choix parmi une liste FERMEE. `_ask` est une saisie libre : elle
+    # convient a un numero de noeud, pas a « gr-gsm ou DSP », ou toute frappe
+    # hors liste part en lancement casse. whiptail --radiolist rend le jeton
+    # choisi ; sans newt, on numerote et on lit un chiffre.
+    #   $1 titre  $2 question  $3 defaut  $4.. = jeton libelle jeton libelle...
+    _menu() {
+        local titre="$1" q="$2" def="$3"; shift 3
+        local rep
+        if [ "$has_wt" -eq 1 ]; then
+            local args=() j l
+            while [ $# -gt 0 ]; do
+                j="$1"; l="$2"; shift 2
+                if [ "$j" = "$def" ]; then args+=("$j" "$l" ON); else args+=("$j" "$l" OFF); fi
+            done
+            rep="$(whiptail --title "$titre" --radiolist "$q" 15 74 4 "${args[@]}" 3>&1 1>&2 2>&3)" || rep="$def"
+        else
+            local -a jetons=() i=1
+            printf "  %s\n" "$q" >&2
+            while [ $# -gt 0 ]; do
+                jetons+=("$1")
+                printf "    %d) %-12s %s\n" "$i" "$1" "$2" >&2
+                shift 2; i=$((i+1))
+            done
+            printf "  choix [%s] : " "$def" >&2
+            read -r rep </dev/tty || rep=""
+            case "$rep" in
+                ''|*[!0-9]*) rep="$def" ;;
+                *) rep="${jetons[$((rep-1))]:-$def}" ;;
+            esac
+        fi
+        printf "%s" "${rep:-$def}"
+    }
+
     printf "  %smenu%s       --menu : les defauts proposes sont ceux du lancement automatique\n" \
         "${C_DIM:-}" "${C_Z:-}"
 
+    # ── 1. QUI FAIT LA COUCHE 1 ──────────────────────────────────────────────
+    # Le premier choix, parce qu il commande le second : le DSP n a que faire
+    # d une seconde station de base.
+    CALYPSO_FORK="$(_menu "Couche 1" \
+        "Qui demodule ?\n\n  gr-gsm  la pile va jusqu a l appel voix. Le DSP ne tourne pas.\n  DSP     le C54x execute la mask-ROM TI et decode lui-meme.\n          Banc de travail : le SCH ne passe pas encore, pas de camp." \
+        "${CALYPSO_FORK:-qosmo-grgsm}" \
+        qosmo-grgsm "couche 1 gr-gsm (pile complete)" \
+        qosmo-dsp   "DSP C54x natif (travail en cours)")"
+    export CALYPSO_FORK
+    [ "$CALYPSO_FORK" = qosmo-dsp ] && DSP_MODE=1
+
+    # ── 2. TOPOLOGIE : SEUL OU HYBRIDE ───────────────────────────────────────
+    # Meme axe que CALYPSO_PROFILE, dit dans les termes du banc :
+    #   seul     = profil `qemu`         -> une BTS, un QEMU
+    #   hybride  = profil `faketrx-qemu` -> + side-car fake_trx et un MS#2
+    # Le defaut suit le choix ci-dessus : hybride en gr-gsm, seul en DSP.
+    _topo_def=hybride
+    [ "${DSP_MODE:-0}" = 1 ] && _topo_def=seul
+    [ "$PROFILE" = qemu ] && _topo_def=seul
+    _topo="$(_menu "Topologie" \
+        "Combien de stations de base ?\n\n  seul     une BTS et un QEMU. C est ce qu il faut pour le DSP.\n  hybride  + un side-car fake_trx et un second mobile, pour que\n           MS#2 appelle MS#1 sans sortir de la maquette." \
+        "$_topo_def" \
+        seul    "une BTS, un QEMU" \
+        hybride "+ side-car fake_trx et MS#2")"
+    case "$_topo" in
+        seul)    PROFILE=qemu ;;
+        hybride) PROFILE=faketrx-qemu ;;
+    esac
+    PROFILE_CHOISI=1
+    unset _topo _topo_def
+
+    # Les autres profils (faketrx seul, noproc) restent joignables, mais en
+    # ligne de commande : les proposer ici alourdirait le choix courant.
     PROFILE="$(_ask "Profil" \
-        "Profil de pile :\n  faketrx-qemu  coeur + BTS QEMU + BTS faketrx (defaut)\n  faketrx  qemu  noproc" \
+        "Profil de pile retenu (modifiable) :\n  faketrx-qemu = hybride   qemu = seul\n  faketrx  noproc  aussi acceptes" \
         "$PROFILE")"
 
     # Le noeud est deja resolu plus haut (--node, environnement, /etc/osmo-role,

@@ -789,6 +789,40 @@ if [ -d "$QDSP_HOST" ]; then
 else
     echo -e "  ${YELLOW}!${NC} qosmo-dsp introuvable - l'ISO n'aura pas le mode --dsp" >&2
 fi
+# Le binaire QEMU de qosmo-dsp n'est PAS celui de qosmo-grgsm : il porte le
+# modele C54x. Aucun lien vers /usr/local/bin/qemu-system-arm ne peut le
+# remplacer ; il doit voyager dans build/ de son propre arbre (c'est ce que
+# le lanceur qosmo-dsp et environnement/paths.env cherchent).
+if [ -d "$QDSP" ]; then
+    if [ -x "$QDSP/build/qemu-system-arm" ]; then
+        echo -e "  ${GREEN}✓${NC} qosmo-dsp : ${CYAN}build/qemu-system-arm${NC} present ($(du -h "$QDSP/build/qemu-system-arm" | cut -f1))"
+    else
+        echo -e "  ${YELLOW}!${NC} qosmo-dsp : build/qemu-system-arm ABSENT - compilez le fork (ninja -C build qemu-system-arm) avant de graver, --dsp ne demarrera pas" >&2
+    fi
+fi
+
+# ── ROMs du DSP TMS320C54x : sans elles, --dsp ne demarre pas ─────────────────
+# [2026-09-03] Sept dumps du silicium (PROM0..3, DROM, PDROM, Registers), lus
+# par environnement/paths.env de qosmo-dsp sous $DSP_ROM_DIR (= /opt/GSM) et
+# passes a la machine par le lanceur qosmo-dsp (-dsp /opt/GSM). ~330 Ko.
+# Ils ne sont dans AUCUN depot : on les prend sur l'hote. Non fatal.
+_ROM_SRC="${OSMO_DSP_ROM_DIR:-/opt/GSM}"
+_rom_ok=0; _rom_miss=""
+for _r in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do
+    if [ -f "$_ROM_SRC/calypso_dsp.$_r.bin" ]; then
+        install -Dm644 "$_ROM_SRC/calypso_dsp.$_r.bin" "$ROOTFS/opt/GSM/calypso_dsp.$_r.bin"
+        _rom_ok=$((_rom_ok + 1))
+    elif [ -f "$ROOTFS/opt/GSM/calypso_dsp.$_r.bin" ]; then
+        _rom_ok=$((_rom_ok + 1))
+    else
+        _rom_miss="$_rom_miss $_r"
+    fi
+done
+if [ -z "$_rom_miss" ]; then
+    echo -e "  ${GREEN}✓${NC} ROMs DSP : ${CYAN}/opt/GSM/calypso_dsp.{PROM0..3,DROM,PDROM,Registers}.bin${NC} (7/7, depuis ${_ROM_SRC})"
+elif [ -d "$QDSP" ]; then
+    echo -e "  ${YELLOW}!${NC} ROMs DSP incompletes (${_rom_ok}/7, manquent :${_rom_miss}) - OSMO_DSP_ROM_DIR=/chemin ; --dsp ne demarrera pas" >&2
+fi
 
 # ── Firmware Calypso : /opt/GSM/firmware, et rien d'autre ───────────────────
 # [2026-08-28] Il y avait ici un bloc qui remplacait $QSRC/target/firmware par
@@ -813,6 +847,16 @@ if [ -e "$ROOTFS/opt/GSM/firmware/$FW_ELF" ]; then
 else
     echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
 fi
+# [2026-09-03] Le firmware est interchangeable (compal_e86, gta0x, ...) : les
+# lanceurs lisent l1s/last_rach dans l'ELF choisi par FIRMWARE_ELF, plus besoin
+# de nm ni d'adresses figees. On dit quels boards l'image embarque, pour que
+# « FIRMWARE_ELF=.../board/X/layer1.highram.elf » ne soit pas une devinette.
+_boards=""
+for _b in "$ROOTFS"/opt/GSM/firmware/board/*/layer1.highram.elf; do
+    [ -f "$_b" ] || continue
+    _boards="$_boards $(basename "$(dirname "$_b")")"
+done
+[ -n "$_boards" ] && echo -e "  ${GREEN}✓${NC} boards layer1 embarques :${CYAN}${_boards}${NC}"
 
 # ── Firmware audio TI TAS2781 (ampli Lenovo Legion 7) ───────────────────────
 # Le codec TAS2781 des Legion 7 ne sort AUCUN son tant que son firmware n est
@@ -949,6 +993,33 @@ else
     # Seul le hub arrive ici : il ne fait que router du M3UA, il n'a pas de MS a
     # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
+fi
+# ── Lanceurs C qosmo-grgsm / qosmo-dsp : ce que 40-qemu.sh appelle ──────────
+# [2026-09-03] Chaque fork porte tools/qosmo-launch/qosmo-launch.c, compile dans
+# SON dossier (make) et installe dans /usr/local/bin sous le nom du fork. Sans
+# lui, run.sh retombe sur qemu-system-arm direct : l'ISO marche, mais sans les
+# liens pty stables ni les options reseau/sockets. On construit sur l'hote (C
+# pur, libc seule, aucun warning sous -Wall -Wextra) et on copie ; a defaut de
+# source, on reprend le binaire deja installe sur l'hote. Jamais fatal.
+if [ "$ISO_ROLE" != "interstp" ]; then
+    for fork in qosmo-grgsm qosmo-dsp; do
+        lsrc=""
+        for c in "/opt/GSM/$fork/tools/qosmo-launch" "$ROOTFS/opt/GSM/$fork/tools/qosmo-launch"; do
+            [ -f "$c/qosmo-launch.c" ] && { lsrc="$c"; break; }
+        done
+        if [ -n "$lsrc" ] && command -v gcc >/dev/null 2>&1 \
+           && make -s -C "$lsrc" "$fork" >/dev/null 2>&1 && [ -x "$lsrc/$fork" ]; then
+            install -Dm755 "$lsrc/$fork" "$ROOTFS/usr/local/bin/$fork"
+            echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} (compile depuis $lsrc)"
+        elif [ -x "/usr/local/bin/$fork" ]; then
+            install -Dm755 "/usr/local/bin/$fork" "$ROOTFS/usr/local/bin/$fork"
+            echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} (repris de l'hote)"
+        elif [ -x "$ROOTFS/usr/local/bin/$fork" ]; then
+            echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} (deja dans l'image)"
+        else
+            echo -e "  ${YELLOW}!${NC} lanceur $fork absent (ni source, ni binaire) : run.sh appellera qemu-system-arm directement" >&2
+        fi
+    done
 fi
 # ── QEMU_BIN dans l'arbre : le lien, SEULEMENT si le binaire n'y est pas ───
 # environnement/paths.env du depot qemu resout QEMU_BIN a
@@ -2203,9 +2274,9 @@ GDM
     # et claude.desktop meme sur une image ou ils ne sont pas installes.
     # firefox_firefox.desktop est la forme SNAP (le paquet deb serait
     # firefox.desktop) : c est le snap qui est installe ici.
-    printf "\n[org.gnome.shell]\nfavorite-apps=[\047firefox_firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047yelp.desktop\047, \047osmo-launch.desktop\047, \047deka.desktop\047, \047claude.desktop\047, \047linphone.desktop\047, \047osmo-multi.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" \
+    printf "\n[org.gnome.shell]\nfavorite-apps=[\047firefox_firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047yelp.desktop\047, \047osmo-launch.desktop\047, \047osmo-dsp.desktop\047, \047deka.desktop\047, \047claude.desktop\047, \047linphone.desktop\047, \047osmo-multi.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" \
         >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
-    echo "  [desktop] favoris du dock poses (9 entrees)"
+    echo "  [desktop] favoris du dock poses (10 entrees)"
 
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
@@ -2423,7 +2494,7 @@ cat > "$ROOTFS/usr/local/bin/osmo-update" <<'OSMOUPD'
 # osmo-update - met a jour, en place, les depots embarques dans l'image.
 #
 #   osmo-update              les trois depots
-#   osmo-update qosmo-grgsm     un seul (osmo-operator | osmo-egprs-web | qosmo-grgsm)
+#   osmo-update qosmo-grgsm  un seul (osmo-operator | osmo-egprs-web | qosmo-grgsm | qosmo-dsp)
 #   osmo-update --check      dit ce qui est en retard, n'ecrit rien
 #   osmo-update --quiet      sans couleurs ni fioritures (journal, cron)
 #   osmo-update --boot       mode demarrage : --quiet, journalise, sort toujours 0
@@ -2461,10 +2532,11 @@ fi
 # environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
 REPOS="osmo-operator|/opt/GSM/osmo-operator
 osmo-egprs-web|/opt/GSM/osmo-egprs-web
-qosmo-grgsm|/opt/GSM/qosmo-grgsm"
+qosmo-grgsm|/opt/GSM/qosmo-grgsm
+qosmo-dsp|/opt/GSM/qosmo-dsp"
 
 WANT="${1:-}"
-rc=0; web_moved=0
+rc=0; web_moved=0; forks_moved=""
 
 while IFS='|' read -r name dir; do
     [ -n "$name" ] || continue
@@ -2517,12 +2589,14 @@ while IFS='|' read -r name dir; do
         # 1. Avance rapide : on est en retard sur la meme branche.
         printf "    ${G}✓${N} %s\n" "$(git -C "$dir" log -1 --format='%h %s')"
         [ "$name" = "osmo-egprs-web" ] && web_moved=1
+        case "$name" in qosmo-*) forks_moved="$forks_moved $name" ;; esac
     elif [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
         # 2. Pas d'ancetre commun (depot greffe par --depth 1) mais arbre propre :
         #    il n'y a rien a perdre, on aligne sur le serveur.
         if git -C "$dir" reset --hard FETCH_HEAD >/dev/null 2>&1; then
             printf "    ${G}✓${N} aligne sur origin/%s - %s\n" "$br" "$(git -C "$dir" log -1 --format='%h %s')"
             [ "$name" = "osmo-egprs-web" ] && web_moved=1
+            case "$name" in qosmo-*) forks_moved="$forks_moved $name" ;; esac
         else
             printf "    ${Y}⚠${N} alignement impossible - arbre inchange\n"; rc=1
         fi
@@ -2537,9 +2611,23 @@ $REPOS
 REPOEOF
 
 if [ -z "${found:-}" ]; then
-    echo "depot inconnu : $WANT  (osmo-operator | osmo-egprs-web | qosmo-grgsm)" >&2
+    echo "depot inconnu : $WANT  (osmo-operator | osmo-egprs-web | qosmo-grgsm | qosmo-dsp)" >&2
     exit 2
 fi
+
+# Un fork qui avance peut changer tools/qosmo-launch : le lanceur installe
+# (/usr/local/bin/<fork>, celui que 40-qemu.sh appelle) est recompile sur place.
+# C pur, libc seule, quelques secondes ; sans gcc on le dit et on laisse
+# l'ancien binaire, qui reste valide (40-qemu.sh retombe sinon sur QEMU_BIN).
+for f in $forks_moved; do
+    src="/opt/GSM/$f/tools/qosmo-launch"
+    [ -f "$src/qosmo-launch.c" ] || continue
+    if command -v gcc >/dev/null 2>&1 && make -s -C "$src" install >/dev/null 2>&1; then
+        printf "  ${G}✓${N} lanceur %s recompile (/usr/local/bin/%s)\n" "$f" "$f"
+    else
+        printf "  ${Y}⚠${N} lanceur %s non recompile (gcc/make ?) - l'ancien reste en place\n" "$f"
+    fi
+done
 
 # Le dashboard tourne en service : un depot avance ne change rien tant que le
 # demon fait tourner l'ancien server.js.
@@ -2613,12 +2701,32 @@ fi
 mkdir -p "$TREE/build"
 ln -sfn "$SRC" "$LNK"
 echo "osmo-qemu-link: $LNK -> $SRC"
+
+# ── Lanceurs C (tools/qosmo-launch) : ce que 40-qemu.sh appelle ─────────────
+# [2026-09-03] /usr/local/bin/<fork> est recompile s'il manque ou si la source
+# de l'arbre est plus recente (reclone, osmo-update). Le fork qosmo-dsp n'a
+# pas de lien possible : son QEMU porte le modele C54x, il doit etre dans son
+# propre build/ ; on le dit si ce n'est pas le cas.
+for fork in qosmo-grgsm qosmo-dsp; do
+    src="/opt/GSM/$fork/tools/qosmo-launch"
+    [ -f "$src/qosmo-launch.c" ] || continue
+    if [ ! -x "/usr/local/bin/$fork" ] || [ "$src/qosmo-launch.c" -nt "/usr/local/bin/$fork" ]; then
+        if command -v gcc >/dev/null 2>&1 && make -s -C "$src" install >/dev/null 2>&1; then
+            echo "osmo-qemu-link: lanceur /usr/local/bin/$fork (re)compile"
+        else
+            echo "osmo-qemu-link: lanceur $fork non compile (gcc/make absents ?) - 40-qemu.sh retombe sur QEMU_BIN"
+        fi
+    fi
+done
+if [ -d /opt/GSM/qosmo-dsp ] && [ ! -x /opt/GSM/qosmo-dsp/build/qemu-system-arm ]; then
+    echo "osmo-qemu-link: qosmo-dsp sans build/qemu-system-arm - --dsp indisponible (ninja -C /opt/GSM/qosmo-dsp/build qemu-system-arm)"
+fi
 QLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-qemu-link.service" <<'EOF'
 [Unit]
-Description=osmo-operator - QEMU_BIN dans l'arbre qosmo-grgsm (build/qemu-system-arm)
+Description=osmo-operator - QEMU_BIN dans l'arbre qosmo-grgsm + lanceurs qosmo-grgsm/qosmo-dsp
 After=local-fs.target
 [Service]
 Type=oneshot
@@ -2628,7 +2736,7 @@ ExecStart=/usr/local/sbin/osmo-qemu-link.sh
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-qemu-link 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo-grgsm)"
+echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo-grgsm ; lanceurs qosmo-grgsm/qosmo-dsp recompiles si besoin)"
 
 
 # ── Marqueur de role : ce que CETTE image est ───────────────────────────────
@@ -3811,6 +3919,12 @@ TUTO
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-launch.desktop" "$ROOTFS/usr/share/applications/osmo-launch.desktop"
+    # [2026-09-03] Le mode DSP a sa propre icone (data/desktop/osmo-dsp.desktop,
+    # launch.sh --dsp -> start-direct.sh --dsp -> fork qosmo-dsp + lanceur
+    # qosmo-dsp). Le clic droit de osmo-launch offre deja l'action ; l'icone
+    # dediee le rend visible dans la grille d'applications et le dock.
+    [ -f "$DIR/data/desktop/osmo-dsp.desktop" ] && \
+        install -m644 "$DIR/data/desktop/osmo-dsp.desktop" "$ROOTFS/usr/share/applications/osmo-dsp.desktop"
 
     # osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI. Son lanceur
     # start-multi.sh suppose docker + l image + la topologie SS7, qui n existent

@@ -219,6 +219,16 @@ if wanted qemu-calypso; then
     if [ "$STRIP" = 1 ] && command -v strip >/dev/null 2>&1; then
         strip --strip-unneeded "$D/build/qemu-system-arm" || true
     fi
+    # Lanceur C qosmo-grgsm (tools/qosmo-launch) : c'est lui que 40-qemu.sh
+    # appelle a la place de qemu-system-arm. Compile dans son dossier, livre
+    # dans /usr/local/bin sous le nom du fork ; la source part avec l'arbre.
+    if [ -f "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" ]; then
+        mkdir -p "$D/tools/qosmo-launch" "$P/usr/local/bin"
+        install -m644 "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" "$QOSMO_SRC/tools/qosmo-launch/Makefile" "$D/tools/qosmo-launch/"
+        make -s -C "$QOSMO_SRC/tools/qosmo-launch" qosmo-grgsm >/dev/null \
+            || { echo "compilation du lanceur qosmo-grgsm echouee ($QOSMO_SRC/tools/qosmo-launch)" >&2; exit 1; }
+        install -m755 "$QOSMO_SRC/tools/qosmo-launch/qosmo-grgsm" "$P/usr/local/bin/qosmo-grgsm"
+    fi
     km=""
     for c in "$QOSMO_SRC/build/pc-bios/keymaps" "$QOSMO_SRC/pc-bios/keymaps" \
              /opt/GSM/qemu-install/share/qemu/keymaps /usr/share/qemu/keymaps; do

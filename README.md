@@ -509,7 +509,8 @@ flowchart LR
 
 | Composant | Path container | Source |
 |-----------|---------------|--------|
-| `qemu-system-arm` (machine `calypso`) | `/usr/local/bin/qemu-system-arm` | bbaranoff/qosmo-grgsm |
+| `qemu-system-arm` (machine `calypso`) | `${OQC_ROOT}/build/qemu-system-arm` | bbaranoff/qosmo-grgsm / qosmo-dsp |
+| `qosmo-grgsm`, `qosmo-dsp` (lanceurs C de QEMU, voir 11.4) | `/usr/local/bin/` | `<fork>/tools/qosmo-launch` |
 | Firmware Calypso layer1 | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
 | ROM DSP | `${GSM_ROOT}/calypso_dsp.txt` | bbaranoff/qosmo-grgsm (symlink) |
 | Bridge BTS↔BSP | `${OQC_ROOT}/bridge.py` | bbaranoff/qosmo-grgsm |
@@ -542,6 +543,38 @@ sur UDP 6700 → `mobile`. Tout est lancé dans des fenêtres tmux distinctes.
 | `QEMU_BRIDGE` | `${OQC_ROOT}/bridge.py` | Script bridge BTS↔BSP |
 | `QEMU_L1CTL_SOCK` | `/tmp/osmocom_l2` | Socket L1CTL publié par QEMU |
 | `QEMU_MON_SOCK` | `/tmp/qemu-calypso-mon.sock` | Monitor QEMU (HMP) |
+| `QOSMO_LAUNCHER` | `/usr/local/bin/${CALYPSO_FORK}` | Lanceur C appelé par `40-qemu.sh` à la place de `qemu-system-arm` |
+
+### 11.4 Lanceurs `qosmo-grgsm` / `qosmo-dsp`
+
+Depuis le 2026-09-03, `40-qemu.sh` n'appelle plus `qemu-system-arm` directement :
+chaque fork porte un lanceur C, `tools/qosmo-launch/qosmo-launch.c`, **compilé dans
+son propre dossier** et installé sous le nom du fork :
+
+```bash
+make -C /opt/GSM/qosmo-grgsm/tools/qosmo-launch install   # -> /usr/local/bin/qosmo-grgsm
+make -C /opt/GSM/qosmo-dsp/tools/qosmo-launch   install   # -> /usr/local/bin/qosmo-dsp
+```
+
+Les défauts sont ceux qui marchent déjà (`-M calypso` + ROMs DSP, `-cpu arm946`,
+`-gdb tcp::1234`, `-serial pty -serial pty`, moniteur unix, L1CTL `/tmp/osmocom_l2`,
+TRXDv0 `0.0.0.0:6702`, IQ tee `127.0.0.1:6703`) ; chacun se choisit par une option.
+Le lanceur lit `l1s`/`last_rach` dans l'ELF (plus besoin de `nm`), relaie la sortie
+de QEMU telle quelle et publie des liens stables vers les pty :
+
+```bash
+qosmo-grgsm -k /opt/GSM/firmware/board/compal_e88/layer1.highram.elf
+qosmo-dsp   -k /opt/GSM/firmware/board/compal_e88/layer1.highram.elf -dsp /opt/GSM
+#   -> /tmp/qosmo-dsp/modem.pty, /tmp/qosmo-dsp/irda.pty, /tmp/qosmo-dsp/qemu-monitor.sock
+osmocon -m romload -i 100 -p /tmp/qosmo-dsp/modem.pty -s /tmp/osmocom_l2 layer1.highram.bin
+qosmo-dsp -k .../layer1.highram.elf -dsp /opt/GSM -o        # lance osmocon lui-même
+qosmo-dsp ... --bind eth0 --trx-port 6712 --gdb lo:2345 --l1ctl /tmp/ms2_l2 --rundir /run/ms2
+qosmo-dsp --help
+```
+
+`start-direct.sh` résout le lanceur (`--launcher <bin>` ou `QOSMO_LAUNCHER`), le
+compile s'il manque et que la source est là, et le transmet à `run.sh`. Sans
+lanceur, `40-qemu.sh` retombe sur la ligne `qemu-system-arm` historique.
 
 `PHY_MODE=qemu` force `N_MS=1` : le bridge utilise des ports UDP fixes (un seul
 Calypso émulé par conteneur). Pour faire tourner plusieurs MS virtuels, lancer
