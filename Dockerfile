@@ -581,6 +581,44 @@ RUN if [ -d /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device ]; then \
         echo "[skip] calypso-ipc-device absent de qosmo-grgsm/tools"; \
     fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+# qosmo-dsp — le SECOND fork QEMU : le vrai DSP C54x emule (start-direct.sh --dsp)
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-09-03] Il manquait a l image : build-iso.sh le reprenait de l HOTE
+# (/opt/GSM/qosmo-dsp) et start-direct.sh --dsp echouait sur toute machine ou il
+# n avait pas ete clone a la main. Meme recette que qosmo-grgsm : clone, venv
+# partage (/root/.venv-qemu, tomli pour meson), cible arm-softmmu, puis :
+#   - les 7 ROM du DSP (calypso_dsp.{PROM0..3,DROM,PDROM,Registers}.bin) dans
+#     /opt/GSM, decoupees depuis calypso_dsp.txt par tools/dsp_txt2bin.py -
+#     c est la que environnement/paths.env (DSP_ROM_DIR) les cherche ;
+#   - le device IPC de CE fork (tools/calypso-ipc-device), distinct de celui
+#     de qosmo-grgsm.
+# Le prefix d installation est propre au fork (/opt/GSM/qemu-dsp-install) : les
+# deux QEMU ne se marchent pas dessus, le lanceur qosmo-dsp prend
+# build/qemu-system-arm de son arbre. Non fatal si le depot n est pas
+# joignable : l image reste utilisable, seul --dsp manque.
+RUN if ! osmo-deb install qosmo-dsp 0.git; then \
+      if git clone https://github.com/bbaranoff/qosmo-dsp /opt/GSM/qosmo-dsp; then \
+        cd /opt/GSM/qosmo-dsp \
+        && . /root/.venv-qemu/bin/activate \
+        && mkdir -p build && cd build \
+        && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-dsp-install --disable-werror \
+        && make -j$(nproc) \
+        && make install \
+        && cd /opt/GSM/qosmo-dsp \
+        && for s in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do \
+             python3 tools/dsp_txt2bin.py calypso_dsp.txt "/opt/GSM/calypso_dsp.$s.bin" --section "$s" || exit 1; \
+           done \
+        && { [ ! -d tools/calypso-ipc-device ] || { make -C tools/calypso-ipc-device clean && make -C tools/calypso-ipc-device -j"$(nproc)"; }; } \
+        && osmo-deb snapshot qosmo-dsp 0.git /opt/GSM/qosmo-dsp /opt/GSM/qemu-dsp-install \
+             /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
+             /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
+             /opt/GSM/calypso_dsp.Registers.bin; \
+      else \
+        echo "[warn] qosmo-dsp non clonable - l image n aura pas le mode --dsp"; \
+      fi; \
+    fi
+
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
 # Deps GNU Radio via apt build-dep. Noble ecrit ses sources en deb822

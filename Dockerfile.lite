@@ -87,12 +87,20 @@ RUN set -eux; \
     # ou il ne demarrait pas.
     cp -a qosmo-grgsm/build/qemu-bundle      /keep/qosmo-grgsm/build/ 2>/dev/null || true; \
     tar -C qosmo-grgsm --exclude=./build -cf - . | tar -C /keep/qosmo-grgsm -xf -; \
+    # qosmo-dsp (--dsp) : meme coupe que qosmo-grgsm - l arbre entier, build/
+    # reduit au binaire et a qemu-bundle. Les ROM DSP sont dans /opt/GSM/*.bin.
+    if [ -d qosmo-dsp ]; then \
+        mkdir -p /keep/qosmo-dsp/build; \
+        cp -a qosmo-dsp/build/qemu-system-arm /keep/qosmo-dsp/build/ 2>/dev/null || true; \
+        cp -a qosmo-dsp/build/qemu-bundle     /keep/qosmo-dsp/build/ 2>/dev/null || true; \
+        tar -C qosmo-dsp --exclude=./build -cf - . | tar -C /keep/qosmo-dsp -xf -; \
+    fi; \
     cp -a osmocom-bb/src/host/osmocon/osmocon \
           /keep/osmocom-bb/src/host/osmocon/ 2>/dev/null || true; \
     cp -a osmocom-bb/src/target/trx_toolkit \
           /keep/osmocom-bb/src/target/ 2>/dev/null || true; \
     cp -a *.bin /keep/ 2>/dev/null || true; \
-    for d in firmware qemu-install osmo-operator pont; do \
+    for d in firmware qemu-install qemu-dsp-install osmo-operator pont; do \
         [ -e "$d" ] && cp -a "$d" /keep/ || true; \
     done; \
     # La coupe : tout /opt/GSM disparait, seuls les artefacts reviennent.

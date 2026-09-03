@@ -759,7 +759,7 @@ docker cp "$CID:/usr/local/sbin/." "$ROOTFS/usr/local/sbin/" 2>/dev/null||true
 if [ "$ISO_ROLE" != "interstp" ]; then
     _excl=()
     if [ "$ISO_DEBS_USED" = "1" ]; then
-        for _t in osmocom-bb qosmo-grgsm qemu-install firmware; do
+        for _t in osmocom-bb qosmo-grgsm qosmo-dsp qemu-install qemu-dsp-install firmware; do
             [ -d "$ROOTFS/opt/GSM/$_t" ] && _excl+=("--exclude=GSM/$_t" "--exclude=GSM/$_t/*")
         done
     fi
@@ -918,18 +918,25 @@ fi
 # echoue avec "run.sh introuvable" -- et le message ne dit pas qu'il manque un
 # depot entier.
 #
-# Meme regle que pour qosmo-grgsm juste au-dessus : l'arbre de l'hote fait foi
-# s'il existe, OSMO_QDSP_SRC=/chemin le force. Il n'est PAS fatal s'il manque :
+# [2026-09-03] Le Dockerfile le construit desormais (clone, QEMU, ROM DSP,
+# device IPC) et il arrive dans le rootfs par le paquet qosmo-dsp ou le docker
+# cp de /opt/GSM : c est CET arbre qui fait foi, comme pour qosmo-grgsm.
+# OSMO_QDSP_SRC=/chemin force un arbre local a la place ; sans arbre du tout
+# (image sans --dsp), on tente l hote. Il n'est PAS fatal s'il manque :
 # l'image reste utilisable, --dsp seul devient indisponible.
 QDSP="$ROOTFS/opt/GSM/qosmo-dsp"
-QDSP_HOST="${OSMO_QDSP_SRC:-/opt/GSM/qosmo-dsp}"
-if [ -d "$QDSP_HOST" ]; then
-    rm -rf "$QDSP"
+if [ -n "${OSMO_QDSP_SRC:-}" ] && [ -d "$OSMO_QDSP_SRC" ]; then
+    rm -rf "$QDSP"; mkdir -p "$ROOTFS/opt/GSM"
+    cp -a "$OSMO_QDSP_SRC" "$QDSP"
+    echo -e "  ${GREEN}✓${NC} qosmo-dsp FORCE depuis ${CYAN}${OSMO_QDSP_SRC}${NC} (OSMO_QDSP_SRC) ($(du -sh "$QDSP" | cut -f1))"
+elif [ -d "$QDSP" ]; then
+    echo -e "  ${GREEN}✓${NC} qosmo-dsp : arbre de l image conserve ($(du -sh "$QDSP" | cut -f1))"
+elif [ -d /opt/GSM/qosmo-dsp ]; then
     mkdir -p "$ROOTFS/opt/GSM"
-    cp -a "$QDSP_HOST" "$QDSP"
-    echo -e "  ${GREEN}✓${NC} qosmo-dsp repris de ${CYAN}${QDSP_HOST}${NC} ($(du -sh "$QDSP" | cut -f1))"
+    cp -a /opt/GSM/qosmo-dsp "$QDSP"
+    echo -e "  ${GREEN}✓${NC} qosmo-dsp repris de l hote ${CYAN}/opt/GSM/qosmo-dsp${NC} ($(du -sh "$QDSP" | cut -f1))"
 else
-    echo -e "  ${YELLOW}!${NC} qosmo-dsp introuvable - l'ISO n'aura pas le mode --dsp" >&2
+    echo -e "  ${YELLOW}!${NC} qosmo-dsp introuvable (ni image, ni hote) - l'ISO n'aura pas le mode --dsp" >&2
 fi
 # Le binaire QEMU de qosmo-dsp n'est PAS celui de qosmo-grgsm : il porte le
 # modele C54x. Aucun lien vers /usr/local/bin/qemu-system-arm ne peut le
@@ -4675,12 +4682,13 @@ if [ "$ISO_LITE" = "1" ]; then
         cp -a "$_G/osmocom-bb/src/target/trx_toolkit"   "$_k/src/target/"      2>/dev/null || true
         rm -rf "$_G/osmocom-bb"; mv "$_k" "$_G/osmocom-bb"
     fi
-    if [ -d "$_G/qosmo-grgsm/build" ]; then
+    for _q in qosmo-grgsm qosmo-dsp; do
+        [ -d "$_G/$_q/build" ] || continue
         _k="$WORK/keep-qbuild"; rm -rf "$_k"; mkdir -p "$_k"
-        cp -a "$_G/qosmo-grgsm/build/qemu-system-arm" "$_k/" 2>/dev/null || true
-        cp -a "$_G/qosmo-grgsm/build/qemu-bundle"     "$_k/" 2>/dev/null || true
-        rm -rf "$_G/qosmo-grgsm/build"; mv "$_k" "$_G/qosmo-grgsm/build"
-    fi
+        cp -a "$_G/$_q/build/qemu-system-arm" "$_k/" 2>/dev/null || true
+        cp -a "$_G/$_q/build/qemu-bundle"     "$_k/" 2>/dev/null || true
+        rm -rf "$_G/$_q/build"; mv "$_k" "$_G/$_q/build"
+    done
     rm -rf "$ROOTFS/usr/local/include" "$ROOTFS/var/cache/osmo-debs" "$ROOTFS/root/.cache" \
            "$ROOTFS/usr/share/doc" "$ROOTFS/usr/share/man"
     find "$ROOTFS/usr/local/lib" -name '*.a' -delete 2>/dev/null || true
