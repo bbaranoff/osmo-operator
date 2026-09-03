@@ -365,19 +365,28 @@ RUN if ! osmo-deb install calypso-firmware 0.git; then \
 # Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
 #              proto-smsc-sendmt (injection MT SMS via socket UNIX local)
 # Dépendances build : libosmocore, libosmogsm, libosmo-gsup-client
+# [2026-09-03] Son Makefile de tete lance `make DESTDIR= install` dans daemon/
+# et sendmt/ - DESTDIR force a vide, le staging d osmo-deb restait vide ("rien
+# n a ete installe dans DESTDIR") alors que la compilation (gcc courant) etait
+# bonne. On installe donc les deux sous-repertoires nous-memes, avec le DESTDIR
+# qu osmo-deb pose : leurs Makefiles, eux, l honorent.
 RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
       cd gsup-smsc-proto && \
       ./configure --with-osmo=/usr/local && \
       make -j$(nproc) && \
-      osmo-deb pack gsup-smsc-proto 0.git make install && \
+      osmo-deb pack gsup-smsc-proto 0.git \
+        sh -c 'for i in daemon sendmt; do make -C "$i" DESTDIR="$DESTDIR" install || exit 1; done' && \
       ldconfig; \
     fi
 
 # ── sms-coding-utils : encodage/décodage SMS PDU (GSM 03.40) ──────────────────
 # sms-encode-text, gen-sms-deliver-pdu, sms-pdu-decode, etc.
-# Son Makefile ne connait pas DESTDIR mais INSTDIR : on le lui passe compose.
+# Son Makefile de tete pose `DESTDIR=` (vide) et le repasse aux sous-repertoires :
+# une variable donnee SUR LA LIGNE DE COMMANDE de make l emporte et descend
+# avec, d ou `make install DESTDIR=...` explicite (l ancien INSTDIR=... n existait
+# dans aucun de ses Makefiles). bindir vaut /usr/local/bin par configure.
 RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       cd ${ROOT} && \
       wget -q https://www.freecalypso.org/pub/GSM/FreeCalypso/sms-coding-utils-latest.tar.bz2 && \
@@ -385,7 +394,8 @@ RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       cd sms-coding-utils-r1 && \
       ./configure && \
       make -j$(nproc) && \
-      osmo-deb pack sms-coding-utils 0.r1 sh -c 'make install INSTDIR="$DESTDIR/usr/local/bin"'; \
+      osmo-deb pack sms-coding-utils 0.r1 \
+        sh -c 'mkdir -p "$DESTDIR/usr/local/bin" && make install DESTDIR="$DESTDIR"'; \
     fi
 
 # 4. Installation des fichiers du projet
