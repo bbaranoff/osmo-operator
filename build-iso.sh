@@ -1019,6 +1019,21 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         else
             echo -e "  ${YELLOW}!${NC} lanceur $fork absent (ni source, ni binaire) : run.sh appellera qemu-system-arm directement" >&2
         fi
+        # ── Console gdb en telnet (44-gdb-telnet.sh) : le panneau cmd.gdb ─────
+        # tools/gdb-telnet.py sert `telnet localhost 44444` -> gdb-multiarch sur le
+        # gdbstub ARM, cible en marche ; il source tools/cmd.gdb, GENERE par
+        # tools/gdb_cmd.sh (68 commandes osmocom : dsp, sb, tasks, fake_sb,
+        # trace_frames, help_osmo...). On le regenere dans l'arbre embarque pour
+        # qu'il corresponde au gdb_cmd.sh qui part. gdb-multiarch et telnet sont
+        # dans PKGS (role operateur), il n'y a rien d'autre a installer.
+        if [ -f "$ROOTFS/opt/GSM/$fork/tools/gdb_cmd.sh" ]; then
+            if (cd "$ROOTFS/opt/GSM/$fork/tools" && bash ./gdb_cmd.sh >/dev/null 2>&1) \
+               && [ -s "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb" ]; then
+                echo -e "  ${GREEN}✓${NC} gdb telnet ${CYAN}$fork${NC} : tools/cmd.gdb genere ($(grep -c '^define ' "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb") commandes), serveur 44-gdb-telnet.sh"
+            else
+                echo -e "  ${YELLOW}!${NC} $fork : tools/gdb_cmd.sh n'a pas produit cmd.gdb - la console telnet marchera sans le panneau" >&2
+            fi
+        fi
     done
 fi
 # ── QEMU_BIN dans l'arbre : le lien, SEULEMENT si le binaire n'y est pas ───

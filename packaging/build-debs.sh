@@ -229,6 +229,14 @@ if wanted qemu-calypso; then
             || { echo "compilation du lanceur qosmo-grgsm echouee ($QOSMO_SRC/tools/qosmo-launch)" >&2; exit 1; }
         install -m755 "$QOSMO_SRC/tools/qosmo-launch/qosmo-grgsm" "$P/usr/local/bin/qosmo-grgsm"
     fi
+    # Console gdb en telnet (run_modules/44-gdb-telnet.sh) : le serveur, le
+    # generateur du panneau et le panneau genere. gdb-multiarch et telnet
+    # passent en Depends : sans eux le module se declare en echec (non bloquant).
+    if [ -f "$QOSMO_SRC/tools/gdb-telnet.py" ]; then
+        install -m755 "$QOSMO_SRC/tools/gdb-telnet.py" "$D/tools/gdb-telnet.py"
+        install -m755 "$QOSMO_SRC/tools/gdb_cmd.sh" "$D/tools/gdb_cmd.sh"
+        (cd "$D/tools" && bash ./gdb_cmd.sh >/dev/null) || { echo "gdb_cmd.sh : generation de cmd.gdb echouee" >&2; exit 1; }
+    fi
     km=""
     for c in "$QOSMO_SRC/build/pc-bios/keymaps" "$QOSMO_SRC/pc-bios/keymaps" \
              /opt/GSM/qemu-install/share/qemu/keymaps /usr/share/qemu/keymaps; do
@@ -245,7 +253,7 @@ Section: otherosfs
 Priority: optional
 Architecture: $ARCH_HOST
 Maintainer: $MAINT
-Depends: ${DEPS:+$DEPS, }bash, socat, tmux, tcpdump, procps, psmisc, gawk, python3, iproute2
+Depends: ${DEPS:+$DEPS, }bash, socat, tmux, tcpdump, procps, psmisc, gawk, python3, iproute2, gdb-multiarch, telnet
 Recommends: osmo-operator, calypso-firmware
 Homepage: https://github.com/bbaranoff/qosmo-grgsm
 Description: QEMU avec la machine calypso (telephone Osmocom-BB emule) et son lanceur
