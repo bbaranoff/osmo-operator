@@ -54,19 +54,21 @@ OPS=1
 MENU=0
 USE_DEFAULTS=0
 IPS=""
-# Le hub du banc, en acces par pont. L'ancien defaut (192.168.56.1, host-only
+# Le hub du banc : le conteneur osmo-inter-stp, sur le backbone docker
+# (INTER_STP_IP de start.sh). L'ancien defaut (192.168.56.1, host-only
 # VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
 # s'y liait sans que personne ne puisse l'atteindre.
-HUB_IP="192.168.1.49"
+HUB_IP="172.20.0.10"
 # ── La table du banc, defaut de tous les prompts ────────────────────────────
-# Les conteneurs d'abord, dans l'ordre de leur nom, puis les machines distantes.
-# C'est le meme ordre que start.sh et build-iso.sh : une table lue ici doit
-# ressembler a celle qu'ils ecrivent, sinon les point codes d'un cote ne
+# [2026-09-03] Table remise a jour - la meme que build-iso.sh : une table lue
+# ici doit ressembler a celle qu'il ecrit, sinon les point codes d'un cote ne
 # correspondent plus aux AS declares de l'autre.
-#   noeud 1  172.20.0.11  osmo-operator-1  (conteneur)
-#   noeud 2  172.20.0.12  osmo-operator-2  (conteneur)
-#   noeud 3  192.168.1.2  la VM
-WAN_NODES_DEFAULT="1:172.20.0.11:11 2:172.20.0.12:22 3:192.168.1.2:33"
+#   noeud 1  192.168.1.2  la VM              indicatif 11
+#   noeud 2  172.20.0.12  osmo-operator-2    indicatif 22   (conteneur)
+#   noeud 3  172.20.0.13  osmo-operator-3    indicatif 33   (conteneur)
+#   hub      172.20.0.10  osmo-inter-stp
+# MSISDN = <noeud>00<op><ms> (100101 = noeud 1, op 1, MS 1).
+WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
 
 # L'adresse par defaut du noeud i, lue dans cette table.
 _default_node_ip() {

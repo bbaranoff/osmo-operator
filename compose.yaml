@@ -1,0 +1,167 @@
+# =============================================================================
+#  compose.yaml - les images du banc et le banc a un operateur, en compose v2
+# =============================================================================
+#
+#  DEUX PROFILS, DEUX USAGES.
+#
+#  build   : les quatre images, chacune par son Dockerfile. C est ce que
+#            build.sh (et derriere lui build-iso.sh, start.sh) appelle :
+#                docker compose build nitb          Dockerfile      osmocom-nitb
+#                docker compose build run           Dockerfile.run  osmocom-run
+#                docker compose build lite          Dockerfile.lite osmocom-run:lite
+#                docker compose build stp           Dockerfile.stp  osmocom-stp
+#            Elles se nomment sur la ligne de commande : pas besoin d activer
+#            le profil. `run` part de l image osmocom-nitb DEJA construite (ou
+#            tiree du hub : docker pull bastienbaranoff/norf_gsm) - on ne la
+#            declare pas en additional_context expres, sinon compose la
+#            reconstruirait a chaque fois.
+#
+#  bench   : le banc minimal - le hub SS7 (osmo-inter-stp) et UN operateur
+#            (osmo-operator-1), avec les memes capacites, reseaux, montages et
+#            variables que le `docker run` de start.sh. Les configs sont
+#            GENEREES par ./compose.sh up (apply_config_templates de ce depot,
+#            create_interop.sh) dans data/compose/ ; le fichier .env qui va
+#            avec porte les adresses calculees. Pour N operateurs, le WAN, les
+#            ports SIP publies : start.sh reste l orchestrateur.
+#                ./compose.sh up      ./compose.sh down     ./compose.sh ps
+#
+#  Variables (data/compose/.env, ecrit par compose.sh ; defauts ici) :
+#    IMAGE_RUN IMAGE_STP        les images a lancer
+#    OSMO_COMPOSE_DIR           ou sont les configs generees (./data/compose)
+#    OP1_BACKBONE_IP            172.20.0.11   (op_backbone_ip 1)
+#    OP1_PRIV_NET/GW/IP         192.168.2.0/24 .1 .10  (op_private_* 1)
+#    N_MS PHY_MODE HOST_IP WAN_NODE_ID PULSE_SERVER
+# =============================================================================
+name: osmo-operator
+
+services:
+  # ── Images ─────────────────────────────────────────────────────────────────
+  nitb:
+    image: osmocom-nitb
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
+    profiles: [build]
+
+  run:
+    image: ${IMAGE_RUN:-osmocom-run}
+    build:
+      context: .
+      dockerfile: Dockerfile.run
+      args:
+        QEMU_CACHE_BUST: ${QEMU_CACHE_BUST:-0}
+    profiles: [build]
+
+  lite:
+    image: ${LITE_IMAGE:-osmocom-run:lite}
+    build:
+      context: .
+      dockerfile: Dockerfile.lite
+      args:
+        BASE: ${LITE_BASE:-osmocom-run}
+    profiles: [build]
+
+  stp:
+    image: ${IMAGE_STP:-osmocom-stp}
+    build:
+      context: .
+      dockerfile: Dockerfile.stp
+      args:
+        BASE_IMAGE: ${STP_BASE_IMAGE:-ubuntu:24.04}
+        HUB_NODES: ${HUB_NODES:-3}
+        HUB_OPS: ${HUB_OPS:-1}
+        OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
+    profiles: [build]
+
+  # ── Le banc : hub + operateur 1 ────────────────────────────────────────────
+  inter-stp:
+    image: ${IMAGE_STP:-osmocom-stp}
+    container_name: osmo-inter-stp
+    hostname: osmo-inter-stp
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    networks:
+      gsm-inter:
+        ipv4_address: 172.20.0.10
+    # 2908 sur la boucle locale, en SCTP : le raccord de l operateur NATIF
+    # (start-direct.sh), voir start.sh start_inter_stp.
+    ports:
+      - "127.0.0.1:2908:2908/sctp"
+    volumes:
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/hub/osmo-stp-interop.cfg:/etc/osmocom/osmo-stp-interop.cfg:ro
+    profiles: [bench]
+
+  operator-1:
+    image: ${IMAGE_RUN:-osmocom-run}
+    container_name: osmo-operator-1
+    hostname: osmo-operator-1
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    depends_on: [inter-stp]
+    cap_add: [NET_ADMIN, SYS_ADMIN, NET_RAW]
+    ulimits:
+      rtprio: 18
+    shm_size: 8g
+    cgroup: host
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /tmp:exec,rw,mode=1777,size=2g
+      - /run:exec,size=64m
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /tmp/osmocom-logs/op1:/var/log/osmocom
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/osmocom:/etc/osmocom
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/asterisk/extensions.conf:/etc/asterisk/extensions.conf
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/asterisk/pjsip.conf:/etc/asterisk/pjsip.conf
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/asterisk/rtp.conf:/etc/asterisk/rtp.conf
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/asterisk/modules.conf:/etc/asterisk/modules.conf
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/asterisk/annuaire.conf:/etc/asterisk/annuaire.conf
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/op1/bb/mobile.cfg:/root/.osmocom/bb/mobile.cfg
+      - ${OSMO_COMPOSE_DIR:-./data/compose}/asound.conf:/etc/asound.conf:rw
+    environment:
+      OPERATOR_ID: "1"
+      OSMO_ROLE: operator
+      N_MS: ${N_MS:-2}
+      CONTAINER_IP: ${OP1_PRIV_IP:-192.168.2.10}
+      GATEWAY_IP: ${OP1_PRIV_GW:-192.168.2.1}
+      INTER_STP_IP: 172.20.0.10
+      OSMO_HUB_IP: 172.20.0.10
+      WAN_NODE_ID: ${WAN_NODE_ID:-1}
+      OSMO_WAN_NODE: ${WAN_NODE_ID:-1}
+      HOST_IP: ${HOST_IP:-}
+      SIP_HOST_PORT: "5060"
+      PHY_MODE: ${PHY_MODE:-faketrx}
+      HOST_AUDIO_RELAY: ${HOST_AUDIO_RELAY:-}
+      PULSE_SERVER: ${PULSE_SERVER:-tcp:172.20.0.1:4713}
+      ALSA_OUTPUT: gsm_out
+      ALSA_INPUT: gsm_in
+      ALSA_CARD: gsm_out
+      GAPK_ALSA_DEV: gsm_out
+    networks:
+      gsm-inter:
+        ipv4_address: ${OP1_BACKBONE_IP:-172.20.0.11}
+      gsm-net-op1:
+        ipv4_address: ${OP1_PRIV_IP:-192.168.2.10}
+    profiles: [bench]
+
+networks:
+  # Le backbone SS7 : hub en .10, operateur N en .(10+N) - INTER_NET de start.sh.
+  gsm-inter:
+    name: gsm-inter
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+  # Le reseau prive de l operateur 1 - gsm-net-op1 de start.sh (op_private_*).
+  gsm-net-op1:
+    name: gsm-net-op1
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${OP1_PRIV_NET:-192.168.2.0/24}
+          gateway: ${OP1_PRIV_GW:-192.168.2.1}

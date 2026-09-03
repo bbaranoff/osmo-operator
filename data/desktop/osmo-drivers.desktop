@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pilotes graphiques
+Name[fr]=Pilotes graphiques
+Comment=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
+Comment[fr]=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
+Exec=/opt/GSM/osmo-operator/tools/osmo-drivers.sh
+Icon=preferences-desktop-display
+Terminal=true
+Categories=System;Settings;HardwareSettings;
+Keywords=nvidia;pilote;driver;ubuntu-drivers;

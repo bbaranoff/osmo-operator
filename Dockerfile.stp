@@ -15,8 +15,11 @@
 #
 # DEUX FAÇONS DE LA CONSTRUIRE, ET POURQUOI
 #
-#   autonome (défaut) — compile les trois bibliothèques depuis ubuntu:22.04.
+#   autonome (défaut) — compile les trois bibliothèques depuis ubuntu:24.04
+#   (noble, la meme base que Dockerfile), en passant par le cache .deb de
+#   packaging/osmo-deb.sh : la seconde construction ne compile plus rien.
 #     docker build -f Dockerfile.stp -t osmocom-stp .
+#     docker compose build stp          (build.sh / build-iso.sh --role=interstp)
 #
 #   sur la pile existante — si osmocom-nitb est déjà là (c'est la base de
 #   Dockerfile.run), elle porte DÉJÀ ces bibliothèques et osmo-stp. On les
@@ -37,18 +40,22 @@
 # interpreter found » — python3 sert à ses générateurs de code, pas à
 # l'exécution). La déclarer une seule fois évite qu'elle diverge entre l'étage
 # qui compile et celui qui exécute.
-ARG BASE_IMAGE=ubuntu:22.04
+ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE} AS base
 ARG DEBIAN_FRONTEND=noninteractive
+# apt-fast : le meme installeur que Dockerfile (packaging/apt-fast-install.sh).
+COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
+RUN chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install
 # apt est idempotent : sur osmocom-nitb, où tout est déjà installé, cette étape
 # ne fait que constater. On ne duplique donc pas la liste pour ce cas.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# libasound2t64 : nom noble de libasound2 (transition time_t 64 bits).
+RUN apt-fast update && apt-fast install -y --no-install-recommends \
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     python3 python3-dev python3-scapy ca-certificates \
-    libasound2-dev libasound2 libgsm1-dev libgsm1 libpcap0.8-dev libsystemd-dev \
+    libasound2-dev libasound2t64 libgsm1-dev libgsm1 libpcap0.8-dev libsystemd-dev \
     && rm -rf /var/lib/apt/lists/*
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib
@@ -60,6 +67,14 @@ ARG LIBOSMO_NETIF_VERSION=1.7.0
 ARG LIBOSMO_SIGTRAN_VERSION=2.2.1
 
 WORKDIR /build
+
+# ── Cache .deb (packaging/osmo-deb.sh) : les memes paquets que l image nitb ──
+# .deb-cache/ est le miroir du cache de l hote (/var/cache/osmo-debs). Un
+# paquet osmo-build-libosmocore_1.12.1~noble deja la = pas de compilation.
+ARG OSMO_DEB_REFRESH=0
+COPY packaging/osmo-deb.sh /usr/local/sbin/osmo-deb
+COPY .deb-cache/ /var/cache/osmo-debs/
+RUN chmod 755 /usr/local/sbin/osmo-deb
 
 # Ordre imposé : chaque bibliothèque se compile contre la précédente.
 # libosmocore depuis github (miroir officiel), les deux autres depuis gitea —
@@ -81,13 +96,14 @@ RUN set -eux; \
     ; do \
         name="${repo%%:*}"; rest="${repo#*:}"; \
         version="${rest%%:*}"; url="${rest#*:}"; \
+        if osmo-deb install "$name" "$version"; then continue; fi; \
         git clone "$url" "$name"; \
         cd "/build/$name"; \
         git checkout "$version"; \
         autoreconf -fi; \
         ./configure --prefix=/usr/local --disable-static; \
         make -j"$(nproc)"; \
-        make install; \
+        osmo-deb pack "$name" "$version" make install; \
         ldconfig; \
         cd /build; \
     done
@@ -126,6 +142,10 @@ RUN getent group osmocom >/dev/null || groupadd -r osmocom \
 COPY --from=builder /usr/local/bin/osmo-stp /usr/local/bin/osmo-stp
 COPY --from=builder /usr/local/lib/         /usr/local/lib/
 COPY --from=builder /etc/osmocom/osmo-stp-interop.cfg /etc/osmocom/osmo-stp-interop.cfg
+# Les paquets produits voyagent dans l image finale : build.sh les ramene dans
+# le cache de l hote (docker cp), et build-iso.sh --role=interstp les pose
+# dans le rootfs du hub par dpkg.
+COPY --from=builder /var/cache/osmo-debs/ /var/cache/osmo-debs/
 
 # La clôture des dépendances vérifiée sur l'image LIVRÉE, binaire et
 # bibliothèques : une .so manquante ne se verrait sinon qu'au premier démarrage,

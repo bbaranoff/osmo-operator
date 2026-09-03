@@ -308,7 +308,7 @@ Le dialplan `[interop_out]` route automatiquement sur le premier chiffre du num�
 
 ### 8.0 Installation native (sans Docker)
 
-Le dépôt s'installe aussi directement sur une machine Ubuntu 22.04, sans conteneur :
+Le dépôt s'installe aussi directement sur une machine Ubuntu 24.04 (noble, la base du Dockerfile depuis le 2026-09-03), sans conteneur :
 
 ```bash
 sudo ./install.sh                  # toutes les étapes (deps, sources, build, binaires, configs, bureau)
@@ -332,12 +332,53 @@ sudo dpkg -i packaging/dist/*.deb  # refuse de s'installer par-dessus un clone g
 
 Les ISO construites par `build-iso.sh` embarquent ces paquets dans `/var/cache/osmo-debs`.
 
+### 8.0b Le cache `.deb` des composants compilés
+
+Tout ce que l'image Docker compile (libosmocore, osmo-*, gapk, QEMU et son arbre,
+osmocom-bb, le venv gr-gsm, le firmware) sort en paquet `.deb` via `packaging/osmo-deb.sh`
+et reste **sur l'hôte**, dans `/var/cache/osmo-debs` (`OSMO_DEB_CACHE` pour déplacer) :
+
+```bash
+sudo ./build.sh              # 1er build : tout compile, les .deb partent dans le cache
+sudo ./build.sh              # rebuild : dpkg -i des .deb, aucune compilation
+sudo ./build.sh --no-cache   # tout recompiler et réécrire le cache
+./compose.sh debs            # le contenu du cache
+```
+
+`build-iso.sh` pose ces mêmes paquets dans le rootfs de l'ISO par `dpkg` avant de
+recopier le reste de l'image (`ISO_EMBED_DEBS=1` pour les embarquer aussi dans l'ISO).
+
 ### 8.1 Démarrage et arrêt
 
 ```bash
-sudo ./tools/make-docker-image.sh          # Build l'image Docker (1 fois)
+sudo ./build.sh          # Build l'image Docker (apt-fast, docker compose v2, cache .deb)
 sudo ./start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
 sudo ./start.sh stop     # Arrête tous les containers
+```
+
+Avec docker compose v2 (installé par `build.sh` avec `docker-buildx`), `compose.yaml`
+décrit les images (`nitb`, `run`, `lite`, `stp`) et le banc minimal hub + un opérateur :
+
+```bash
+sudo ./compose.sh build [--no-cache] [--lite] [--stp]   # = build.sh
+sudo ./compose.sh up [--ms 2] [--phy faketrx]            # hub + osmo-operator-1, HLR alimenté
+sudo ./compose.sh down | ps | logs | shell
+```
+
+Les ISO (`sudo ./build-iso.sh`, les quatre images) ne font **qu'un seul build docker**
+(`osmocom-nitb`), puis dérivent chaque rootfs : interstp, normal (de zéro), lite (copie de la
+normale, ateliers retirés), desktop (la normale + le bureau). `--role=interstp` seul est la seule
+exception : il ne construit que `osmocom-stp` (Dockerfile.stp). Sur le disque installé par
+Calamares, les comptes sont ceux de l'écran « Utilisateurs » (+ root déverrouillé) : plus de
+compte `osmocom` du live ; le chiffrement LUKS est proposé dans les choix de partitionnement (LVM
+en partitionnement manuel, `lvm2` embarqué) ; une page « Pilotes graphiques » liste les pilotes
+NVIDIA que `ubuntu-drivers` propose (recommandé, déjà installé) quand `lspci` voit une carte, et
+les installe depuis les dépôts (réseau requis). Après coup, l'icône « Pilotes graphiques »
+(`tools/osmo-drivers.sh`) montre l'état et installe ou met à jour. Un Conky
+(`configs/conky/osmo-conky.conf`) affiche l'état du banc dans toute session GNOME, sur la clé
+comme sur le disque.
+
+```bash
 
 sudo ./provision_hlr.sh  # Provisionne les abonnés de test dans les HLR
 ```

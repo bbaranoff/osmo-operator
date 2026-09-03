@@ -93,11 +93,11 @@ RESTART=0
 # que la machine sait deja d'elle-meme :
 #   role     interstp si son adresse EST celle du hub, operateur sinon ;
 #   son IP   celle du pont, deduite ;
-#   le hub   192.168.1.49 ;
+#   le hub   172.20.0.10 (osmo-inter-stp, backbone docker) ;
 #   le noeud /etc/osmo-role, puis la table WAN, puis 1.
 # Chaque valeur reste surchargeable : --defaut --node 3 gagne sur la deduction.
 USE_DEFAULTS=0
-DEFAULT_HUB_IP="192.168.1.49"
+DEFAULT_HUB_IP="172.20.0.10"
 DRY=0
 SHOW=0
 

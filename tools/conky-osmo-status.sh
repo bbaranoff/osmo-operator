@@ -1,0 +1,79 @@
+#!/bin/bash
+# conky-osmo-status.sh - les lignes du Conky du banc (configs/conky/osmo-conky.conf)
+#   role | net | core | radio | subs | services
+# Chaque sortie est du texte conky (execpi) : ${color2} vert, ${color3} rouge,
+# ${color4} jaune. Rapide et sans dependance dure : ce qui manque s affiche "-".
+set -u
+OK='${color2}●${color}'; KO='${color3}○${color}'; WARN='${color4}●${color}'
+C1='${color1}'; C='${color}'; C2='${color2}'; AR='${alignr}'
+port_open() { timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+case "${1:-}" in
+role)
+    r="$(awk -F= '/^OSMO_ROLE=/{print $2}' /etc/osmo-role 2>/dev/null)"
+    n="$(awk -F= '/^OSMO_NODE=|^NODE_ID=/{print $2}' /etc/osmo-role 2>/dev/null | head -1)"
+    h="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role 2>/dev/null)"
+    live=""; [ -e /run/live/rootfs/filesystem.squashfs ] && live=" \${color4}LIVE${C}"
+    echo "${r:-operateur}${n:+ noeud $n}${h:+ · hub $h}$live" ;;
+net)
+    ip -o -4 addr show up 2>/dev/null | awk '$2!="lo" && $2!~/^(veth|br-|docker|apn)/ {print $2, $4}' | sort -u | head -5 \
+    | while read -r ifc addr; do
+        printf '%s ${alignr}${downspeedf %s} K/s ↓  ${upspeedf %s} K/s ↑\n%-8s ${color1}%s${color}\n' "$ifc" "$ifc" "$ifc" "" "$addr"
+      done
+    [ -n "$(ip -o -4 addr show up 2>/dev/null | awk '$2!="lo"')" ] || echo "${WARN} aucune interface avec adresse" ;;
+core)
+    # nom:processus:port VTY
+    for e in HLR:osmo-hlr:4258 MSC:osmo-msc:4254 BSC:osmo-bsc:4242 STP:osmo-stp:4239 \
+             MGW:osmo-mgw:4243 SGSN:osmo-sgsn:4245 GGSN:osmo-ggsn:4260 PCU:osmo-pcu:4240 \
+             BTS:osmo-bts-trx:4241 SIP:osmo-sip-connector:4256 SMSC:proto-smsc-daemon:0 PBX:asterisk:0; do
+        IFS=: read -r name proc port <<< "$e"
+        if pgrep -x "$proc" >/dev/null 2>&1; then
+            if [ "$port" != 0 ] && ! port_open "$port"; then s="$WARN"; else s="$OK"; fi
+        else s="$KO"; fi
+        printf '%s %-5s' "$s" "$name"
+        i=$((${i:-0}+1)); [ $((i % 4)) -eq 0 ] && echo
+    done; echo ;;
+radio)
+    phy="-"
+    pgrep -f 'qemu-system-arm' >/dev/null 2>&1 && phy="qemu (Calypso emule)"
+    pgrep -f 'fake_trx.py' >/dev/null 2>&1 && phy="faketrx"
+    pgrep -x virtphy >/dev/null 2>&1 && phy="virtphy"
+    pgrep -f 'pont.py' >/dev/null 2>&1 && phy="$phy + pont"
+    echo "PHY ${C1}${phy}${C}"
+    for e in TRX:osmo-trx:f MOBILE:mobile:x TRXCON:trxcon:x QEMU:qemu-system-arm:f GAPK:gapk:x GRGSM:grgsm_decode:f; do
+        IFS=: read -r name proc mode <<< "$e"
+        if [ "$mode" = x ]; then pgrep -x "$proc" >/dev/null 2>&1 && s="$OK" || s="$KO"
+        else pgrep -f "$proc" >/dev/null 2>&1 && s="$OK" || s="$KO"; fi
+        printf '%s %-7s' "$s" "$name"
+    done; echo
+    cfg=/etc/osmocom/osmo-bts.cfg; [ -f /etc/osmocom/osmo-bts-trx.cfg ] && cfg=/etc/osmocom/osmo-bts-trx.cfg
+    arfcn="$(awk '/^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null)"
+    plmn="$(awk '/network country code/{c=$4} /mobile network code/{n=$4} END{if(c) print c"-"n}' /etc/osmocom/osmo-msc.cfg 2>/dev/null)"
+    a5="$(awk '/encryption a5/{$1="";$2="";print; exit}' /etc/osmocom/osmo-msc.cfg 2>/dev/null | sed 's/^ *//')"
+    echo "PLMN ${C1}${plmn:--}${C}  ARFCN ${C1}${arfcn:--}${C}  A5 ${C1}${a5:--}${C}" ;;
+subs)
+    db=/var/lib/osmocom/hlr.db
+    if have sqlite3 && [ -r "$db" ]; then
+        tot="$(sqlite3 "$db" 'select count(*) from subscriber;' 2>/dev/null)"
+        att="$(sqlite3 "$db" "select count(*) from subscriber where vlr_number is not null and vlr_number != '';" 2>/dev/null)"
+        last="$(sqlite3 "$db" 'select max(last_lu_seen) from subscriber;' 2>/dev/null)"
+        echo "HLR ${C1}${tot:-0}${C} abonnes · ${C2}${att:-0}${C} rattaches ${AR}LU ${last:--}"
+        sqlite3 "$db" "select imsi, coalesce(msisdn,'-'), case when vlr_number is not null and vlr_number != '' then 1 else 0 end from subscriber order by imsi limit 6;" 2>/dev/null \
+        | awk -F'|' -v ok="$OK" -v ko="$KO" '{printf "%s %s ${alignr}%s\n", ($3==1?ok:ko), $1, $2}'
+    else
+        echo "HLR ${KO} base introuvable (${db})"
+    fi ;;
+services)
+    s=""
+    port_open 8080 || port_open 8443 && s="$s$OK web " || s="$s$KO web "
+    pgrep -x pulseaudio >/dev/null 2>&1 && s="$s$OK pulse " || s="$s$KO pulse "
+    n="$(tmux -S /tmp/osmocom_tmux list-sessions 2>/dev/null | wc -l)"; [ "$n" -gt 0 ] && s="$s$OK tmux($n) " || s="$s$KO tmux "
+    if have docker; then c="$(docker ps -q 2>/dev/null | wc -l)"; [ "$c" -gt 0 ] && s="$s$OK docker($c) " || s="$s$KO docker "; fi
+    have nvidia-smi && s="$s$OK nvidia "
+    echo "$s"
+    f="$(systemctl --failed --no-legend 2>/dev/null | wc -l)"
+    [ "$f" -gt 0 ] && echo "${WARN} ${f} service(s) systemd en echec" || echo "${OK} systemd sans echec"
+    ;;
+*) echo "usage: $0 role|net|core|radio|subs|services" >&2; exit 2 ;;
+esac

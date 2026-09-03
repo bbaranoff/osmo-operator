@@ -624,12 +624,22 @@ QUICK="${OSMO_QUICK:-1}"
 QUICK_EXPLICIT=1
 
 build_run_image() {
+    # [2026-09-03] docker compose v2 (compose.yaml, service "run") quand il est
+    # la - c est lui qui porte les build-args et le nom d image - et docker
+    # build tel quel sinon. Le resultat est le meme : osmocom-run depuis
+    # Dockerfile.run, par-dessus osmocom-nitb.
+    local _dir; _dir="$(dirname "${OSMO_REPO_DIR:-$0}")"; [ -n "${OSMO_REPO_DIR:-}" ] && _dir="$OSMO_REPO_DIR"
+    local _nc=""; [ "${QUICK:-0}" = "1" ] || _nc="--no-cache"
     if [ "${QUICK:-0}" = "1" ]; then
         echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick - cache docker reutilise)${NC}"
-        docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     else
         echo -e "${GREEN}Build de l'image run...${NC} ${CYAN}(normal - --no-cache)${NC}"
-        docker build --no-cache --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
+    fi
+    if docker compose version >/dev/null 2>&1 && [ -f "$_dir/compose.yaml" ]; then
+        ( cd "$_dir" && QEMU_CACHE_BUST=$(date +%s) IMAGE_RUN="$IMAGE_RUN" \
+          docker compose -f "$_dir/compose.yaml" build $_nc run )
+    else
+        docker build $_nc --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run -t "$IMAGE_RUN" .
     fi
     echo -e "${GREEN}Image '$IMAGE_RUN' prete.${NC}"
 }

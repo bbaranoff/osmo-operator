@@ -363,12 +363,9 @@ if [ "$DO_OPENCL" = "1" ]; then
                "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
                "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
         _name="${_rt%%=*}"; _url="${_rt#*=}"; _dst="/root/$_name"
-        # http.version=HTTP/1.1 : "expected flush after ref listing" vient d un
-        # flux git corrompu par HTTP/2 (proxy/antivirus qui s intercale) - le
-        # symptome depend de la taille, d ou certains depots qui passent et
-        # d autres non. Forcer HTTP/1.1 est le remede de cette erreur exacte.
-        # On CAPTURE la sortie de git et on la MONTRE en cas d echec.
-        GIT="git -c http.version=HTTP/1.1"
+        # [2026-09-03] Plus de -c http.version=HTTP/1.1 (retire partout dans le
+        # depot). On CAPTURE la sortie de git et on la MONTRE en cas d echec.
+        GIT="git"
         if [ -d "$_dst/.git" ]; then
             if _err=$($GIT -C "$_dst" pull --ff-only 2>&1); then
                 echo -e "      ${GREEN}✓${NC} $_name a jour ($(git -C "$_dst" log -1 --format='%h'))"

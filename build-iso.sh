@@ -72,20 +72,24 @@ ISO_DESKTOP=0
 # change rien au comportement par defaut - la desktop pese ~2,5 Go de plus et
 # n a pas a s imposer a qui ne l a pas demandee.
 ISO_ALL=0
-# Defaut : le hub du banc, en acces par pont. Le host-only VirtualBox
-# (192.168.56.1) reste possible, mais via --hub-ip : il n'existe sur aucun
-# segment quand les VM sont pontees.
-ISO_HUB_IP="192.168.1.49"
+# Defaut : le hub du banc = le conteneur osmo-inter-stp, sur le backbone docker
+# (INTER_STP_IP de start.sh). Les VM le joignent par la route LAN -> docker
+# (network/setup-docker-lan-route.sh). Le host-only VirtualBox (192.168.56.1)
+# reste possible, mais via --hub-ip.
+ISO_HUB_IP="172.20.0.10"
 # ── Table WAN par defaut : le banc ──────────────────────────────────────────
-# Format : <noeud>:<IP>:<indicatif>
-#   noeud 1  172.20.0.11  osmo-operator-1  indicatif 11   (conteneur)
-#   noeud 2  172.20.0.12  osmo-operator-2  indicatif 22   (conteneur)
-#   noeud 3  192.168.1.2  la VM            indicatif 33
-#   hub      192.168.1.49                                  (hors table)
+# [2026-09-03] Table remise a jour. Format : <noeud>:<IP>:<indicatif>
+#   noeud 1  192.168.1.2  la VM (cette ISO)   indicatif 11
+#   noeud 2  172.20.0.12  osmo-operator-2     indicatif 22   (conteneur)
+#   noeud 3  172.20.0.13  osmo-operator-3     indicatif 33   (conteneur)
+#   hub      172.20.0.10  osmo-inter-stp                     (hors table)
+# Plan de numerotation : MSISDN = <noeud>00<op><ms> (100101 = noeud 1, op 1,
+# MS 1 ; 200101 = noeud 2...) - voir osmo_msisdn dans generate_configs.sh.
+# L indicatif (11, 22, 33) est le prefixe compose pour joindre un autre noeud.
 # Elle sert quand --wan-nodes n'est pas donne. Sans defaut, une construction
 # sans terminal - la CI - s'arretait a l'etape 7b sur une question que personne
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
-ISO_WAN_NODES_DEFAULT="1:172.20.0.11:11 2:172.20.0.12:22 3:192.168.1.2:33"
+ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
 OUTPUT_SET=0
 for arg in "$@"; do case "$arg" in
     --output=*)     OUTPUT="${arg#*=}"; OUTPUT_SET=1 ;;
@@ -118,11 +122,13 @@ esac; done
 # lignes de sources.list). Une seule variable maintenant, et un seul endroit ou
 # la faire varier.
 #
-# Defaut 22.04 : c est la base sur laquelle la pile est construite et testee.
-# 24.04 est offerte parce qu il faudra bien y passer, mais elle n a PAS ete
-# validee de bout en bout — noble a python 3.12 (la pile vise 3.10), un autre
-# jeu de paquets snap, et gnome 46 au lieu de 42. A traiter comme un essai.
-: "${ISO_UBUNTU:=22.04}"
+# Defaut 24.04 (noble) : c est la base du Dockerfile depuis le 2026-09-03, et
+# l ISO DOIT partir de la meme suite que l image dont elle copie /usr/local et
+# le venv /root/.env (python 3.12, glibc 2.39, bibliotheques *t64). Un rootfs
+# jammy sous une image noble donnerait un venv sans interpreteur et des .so
+# sans leurs symboles. La verification est faite plus bas, sur l os-release de
+# l image source. 22.04 reste accepte pour une image construite sur jammy.
+: "${ISO_UBUNTU:=24.04}"
 case "$ISO_UBUNTU" in
     22.04|jammy) ISO_UBUNTU=22.04; ISO_SUITE=jammy ;;
     24.04|noble) ISO_UBUNTU=24.04; ISO_SUITE=noble ;;
@@ -181,10 +187,84 @@ echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 # au demarrage (`start-direct.sh --node N`), qui reecrit les point codes. C'est
 # la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
 #
+# ══════════════════════════════════════════════════════════════════════════════
+# CE QUI NE SE FAIT QU UNE FOIS : les paquets de l hote, le build docker
+# ══════════════════════════════════════════════════════════════════════════════
+# [2026-09-03] Chaque passe fille refaisait son apt sur l hote et SON build
+# docker (build.sh, puis Dockerfile.run, puis Dockerfile.lite) : quatre images
+# = quatre fois le meme travail. Les deux fonctions ci-dessous sont appelees
+# par la passe parente (--all) une seule fois, et les filles les sautent sur
+# OSMO_ISO_HOST_READY / OSMO_ISO_IMAGE_READY. Une passe lancee seule les
+# appelle elle-meme, une fois.
+
+# ── Paquets hote requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
+# Installes ici plutot que dans le workflow CI : `sudo ./build-iso.sh` suffit
+# sur une machine Debian/Ubuntu vierge, sans etape "Install host tools" externe.
+# shim-signed / grub-efi-amd64-signed / dosfstools : la chaine Secure Boot.
+# Voir "Etape 9" plus bas - sans eux l'ISO ne demarre pas sur une machine dont
+# le Secure Boot est actif, et le firmware ne dit qu'une erreur de certificat.
+# apt-fast partout : le meme installeur que le Dockerfile et le chroot
+# (packaging/apt-fast-install.sh), donc les memes reglages apt sur l hote.
+ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git isolinux shim-signed grub-efi-amd64-signed zstd"
+iso_host_packages() {
+    if [ "${OSMO_ISO_HOST_READY:-0}" = "1" ]; then
+        echo -e "${GREEN}[0/9] Paquets hote : deja poses par la passe parente${NC}"; return 0
+    fi
+    if command -v apt-get &>/dev/null; then
+        echo -e "${GREEN}[0/9] Installation des paquets hote (apt-fast)...${NC}"
+        export DEBIAN_FRONTEND=noninteractive
+        bash "$DIR/packaging/apt-fast-install.sh" >/dev/null 2>&1 \
+            || echo -e "  ${YELLOW}apt-fast non installe - apt-get${NC}"
+        command -v apt-fast >/dev/null 2>&1 || apt-fast() { apt-get "$@"; }
+        apt-fast update -qq || true
+        # isolinux est optionnel (isohybrid) : on n'echoue pas s'il manque.
+        apt-fast install -y --no-install-recommends $ISO_HOST_PKGS \
+            || apt-fast install -y --no-install-recommends \
+               squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git
+    else
+        echo -e "${YELLOW}apt-get absent : verification seule des outils hote.${NC}"
+    fi
+}
+
+# ── UN SEUL build docker ────────────────────────────────────────────────────
+# L image source de TOUTES les ISO est osmocom-nitb (Dockerfile), construite
+# par build.sh - qui la passe par docker compose et par le cache .deb. Plus de
+# Dockerfile.run ni de Dockerfile.lite ici : les configs sont injectees depuis
+# ce depot (etape 2b), l elagage lite se fait sur le rootfs (etape 8c).
+# Seule exception : --role=interstp demande SEUL. Le hub n a besoin que
+# d osmo-stp et de trois bibliotheques : Dockerfile.stp, et on ne va pas au
+# bout de la pile.
+iso_docker_build() {
+    local role="$1"
+    if [ "${OSMO_ISO_IMAGE_READY:-0}" = "1" ]; then
+        echo -e "${GREEN}[1/9] Image docker : deja construite par la passe parente${NC}"; return 0
+    fi
+    if [ "$role" = "interstp" ]; then
+        echo -e "${GREEN}[1/9] Hub seul : construction de ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"
+        echo -e "  ${CYAN}osmo-stp + libosmocore + libosmo-netif + libosmo-sigtran. Rien d'autre.${NC}"
+        if docker compose version >/dev/null 2>&1; then
+            ( cd "$DIR" && OSMO_DEB_REFRESH="$([ -n "$NO_CACHE" ] && echo 1 || echo 0)" \
+              docker compose -f "$DIR/compose.yaml" build $NO_CACHE stp ) \
+                || { echo -e "${RED}Echec de la construction d'osmocom-stp${NC}"; exit 1; }
+        else
+            docker build $NO_CACHE -f "$DIR/Dockerfile.stp" -t osmocom-stp "$DIR" \
+                || { echo -e "${RED}Echec de la construction d'osmocom-stp${NC}"; exit 1; }
+        fi
+        echo -e "  ${GREEN}✓${NC} osmocom-stp construite ($(docker image inspect osmocom-stp --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
+        return 0
+    fi
+    echo -e "${GREEN}[1/9] Execution de build.sh (image osmocom-nitb, docker compose + cache .deb)...${NC}"
+    if [ -f "$DIR/build.sh" ]; then
+        bash "$DIR/build.sh" $NO_CACHE
+    else
+        echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
+        docker build $NO_CACHE -t osmocom-nitb "$DIR"
+    fi
+    echo -e "  ${GREEN}✓${NC} image osmocom-nitb prete"
+}
+
 if [ "$ISO_ALL" = "1" ] || { [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0" ] \
    && [ -z "$ISO_NODE" ] && [ "$ISO_LITE" = "0" ] && [ "$ISO_DESKTOP" = "0" ]; }; then
-    # --all ajoute la desktop aux trois images historiques. Sans lui (aucun
-    # role demande), on garde exactement les trois d'avant.
     _N="QUATRE"   # [2026-08-29] --all par defaut : les QUATRE images, desktop incluse
     echo -e "${CYAN}${BOLD}══ Construction des ${_N} images ══${NC}"
     echo -e "  1. ${CYAN}interstp.iso${NC}               le hub SS7 (PC 0.0.0)"
@@ -203,27 +283,34 @@ if [ "$ISO_ALL" = "1" ] || { [ "$ISO_ROLE_GIVEN" = "0" ] && [ "$OUTPUT_SET" = "0
     done
     set -- "${SUB_ARGS[@]+"${SUB_ARGS[@]}"}"
 
-    # L'ordre n'est pas cosmetique. Le hub d'abord : il ne depend ni de build.sh
-    # ni de l'image osmocom-run, un echec de son cote se voit en minutes. Les
-    # variantes du noeud en DERNIER : elles se greffent sur l'image osmocom-run
-    # que la passe operateur vient de construire, donc elles ne coutent que
-    # l'elagage (lite), l'ajout du bureau (desktop) et l'assemblage.
-    "$0" --role=interstp "$@" || { echo -e "${RED}Echec de interstp.iso${NC}" >&2; exit 1; }
-    "$0" --role=operator --output=osmo-operator.iso "$@" \
-        || { echo -e "${RED}Echec de osmo-operator.iso${NC}" >&2; exit 1; }
-    # --no-cache RETIRE pour les passes greffees, et lui seul. Il vaut pour la
-    # construction des images docker ; ces passes ne construisent rien, elles
-    # reprennent osmocom-run que la passe precedente vient de produire. Le leur
-    # repasser relancerait build.sh et build_run_image depuis zero : deux heures
-    # de compilation pour aboutir a la meme image, puis a la meme coupe.
-    GRAFT_ARGS=(); for _a in "$@"; do [ "$_a" = "--no-cache" ] || GRAFT_ARGS+=("$_a"); done
-    "$0" --role=operator --lite --output=osmo-operator-lite.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
-        || { echo -e "${RED}Echec de osmo-operator-lite.iso${NC}" >&2; exit 1; }
+    # ── [2026-09-03] UNE SEULE FOIS : apt sur l hote, build docker ───────────
+    iso_host_packages
+    iso_docker_build operator
+    export OSMO_ISO_HOST_READY=1 OSMO_ISO_IMAGE_READY=1 OSMO_ISO_ALL_RUN=1
+
+    # ── L ORDRE : interstp, normal, lite, desktop - et le rootfs se transmet ──
+    # Le hub d abord : petit, independant, un echec se voit en minutes. Puis la
+    # NORMALE, construite de zero (debootstrap + apt + injection) : c est elle
+    # qui coute. Les deux autres REPRENNENT SON ROOTFS au lieu de le refaire :
+    #   lite     = une COPIE de la normale, dont on RETIRE les ateliers (elle
+    #              enleve, elle vient donc apres la normale, jamais avant) ;
+    #   desktop  = la normale elle-meme (deplacee), a laquelle on AJOUTE la
+    #              difference apt : le bureau, l installeur, les snaps.
+    # apt est idempotent : sur un rootfs herite, la liste commune coute quelques
+    # secondes de resolution, seul le delta est telecharge.
+    _KEEP="$WORK"; mkdir -p "$_KEEP"
+    _all_fail() { echo -e "${RED}Echec de $1${NC}" >&2; rm -rf "$_KEEP"; exit 1; }
+    "$0" --role=interstp "$@" || _all_fail interstp.iso
+    OSMO_ISO_ROOTFS_KEEP="$_KEEP/rootfs-normal" \
+        "$0" --role=operator --output=osmo-operator.iso "$@" || _all_fail osmo-operator.iso
+    [ -d "$_KEEP/rootfs-normal" ] || _all_fail "osmo-operator.iso (rootfs non transmis)"
+    OSMO_ISO_ROOTFS_FROM="$_KEEP/rootfs-normal" OSMO_ISO_ROOTFS_MODE=copy \
+        "$0" --role=operator --lite --output=osmo-operator-lite.iso "$@" || _all_fail osmo-operator-lite.iso
     _ISOS=("$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" "$(pwd)/osmo-operator-lite.iso")
-    # [2026-08-29] --all par defaut : la desktop est TOUJOURS construite.
-    "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "${GRAFT_ARGS[@]+"${GRAFT_ARGS[@]}"}" \
-        || { echo -e "${RED}Echec de osmo-operator-desktop.iso${NC}" >&2; exit 1; }
+    OSMO_ISO_ROOTFS_FROM="$_KEEP/rootfs-normal" OSMO_ISO_ROOTFS_MODE=move \
+        "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "$@" || _all_fail osmo-operator-desktop.iso
     _ISOS+=("$(pwd)/osmo-operator-desktop.iso")
+    rm -rf "$_KEEP"
     echo -e "${GREEN}${BOLD}═══ Les ${_N} images sont pretes ═══${NC}"
     ls -lh "${_ISOS[@]}" 2>/dev/null | sed 's/^/  /'
     exit 0
@@ -305,28 +392,8 @@ cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$
 trap cleanup EXIT
 
 
-# ── Paquets hote requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
-# Installes ici plutot que dans le workflow CI : `sudo ./build-iso.sh` suffit
-# sur une machine Debian/Ubuntu vierge, sans etape "Install host tools" externe.
-# shim-signed / grub-efi-amd64-signed / dosfstools : la chaine Secure Boot.
-# Voir "Etape 9" plus bas - sans eux l'ISO ne demarre pas sur une machine dont
-# le Secure Boot est actif, et le firmware ne dit qu'une erreur de certificat.
-ISO_HOST_PKGS="squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git isolinux shim-signed grub-efi-amd64-signed"
-if command -v apt-get &>/dev/null; then
-    echo -e "${GREEN}[0/9] Installation des paquets hote (apt)...${NC}"
-    export DEBIAN_FRONTEND=noninteractive
-    # Options passees EN LIGNE, pas via /etc/apt : on est sur la machine de
-    # l'utilisateur, pas dans un rootfs jetable. On allege ce qui est telecharge
-    # (traductions) sans toucher aux garanties d'ecriture de son dpkg.
-    HOST_APT_FAST="-o Acquire::Languages=none -o Acquire::Retries=3 -o Acquire::http::Pipeline-Depth=5"
-    apt-get update -qq $HOST_APT_FAST || true
-    # isolinux est optionnel (isohybrid) : on n'echoue pas s'il manque.
-    apt-get install -y $HOST_APT_FAST --no-install-recommends $ISO_HOST_PKGS \
-        || apt-get install -y $HOST_APT_FAST --no-install-recommends \
-           squashfs-tools xorriso grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools debootstrap git
-else
-    echo -e "${YELLOW}apt-get absent : verification seule des outils hote.${NC}"
-fi
+# Paquets hote : une fois (voir iso_host_packages, plus haut).
+iso_host_packages
 
 # Docker n'est pas auto-installe ici (paquet docker-ce hors apt standard).
 for t in docker mksquashfs xorriso grub-mkrescue debootstrap git; do
@@ -336,21 +403,8 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
 echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start.sh) ══${NC}"
 
-# ── Etape 1 : Executer build.sh pour preparer l'hote et construire osmocom-nitb ──
-if [ "$ISO_ROLE" = "interstp" ]; then
-    echo -e "${GREEN}[1/9] Role inter-STP : build.sh SAUTE${NC}"
-    echo -e "  ${CYAN}Le hub route du M3UA. Ni HLR, ni MSC, ni BSC, ni radio, ni Asterisk :${NC}"
-    echo -e "  ${CYAN}rien de ce que construit build.sh ne le concerne.${NC}"
-else
-echo -e "${GREEN}[1/9] Execution de build.sh...${NC}"
-if [ -f "$DIR/build.sh" ]; then
-    bash "$DIR/build.sh" $NO_CACHE
-else
-    echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
-    docker build $NO_CACHE -t osmocom-nitb "$DIR"
-fi
-echo -e "  ${GREEN}✓${NC} image osmocom-nitb prete"
-fi
+# ── Etape 1 : LE build docker (une fois ; voir iso_docker_build) ─────────────
+iso_docker_build "$ISO_ROLE"
 
 load_start_lib() {
     local src="$DIR/start.sh"
@@ -375,41 +429,13 @@ load_start_lib() {
     source "$lib"
 }
 
-# ── Etape 2 : Construire l'image osmocom-run via start.sh ─────────────────────
-# load_start_lib est necessaire dans TOUS les cas : c'est lui qui apporte
-# apply_config_templates. C'est build_run_image - deux heures de compilation de
-# la pile complete - que le hub n'a aucune raison de payer.
+# ── Etape 2 : la bibliotheque de start.sh (apply_config_templates) ───────────
+# [2026-09-03] Plus de build_run_image ni de Dockerfile.lite ici : une seule
+# image docker (etape 1), les configs viennent de ce depot, l elagage lite se
+# fait sur le rootfs (etape 8c). load_start_lib reste necessaire : c est lui qui
+# apporte apply_config_templates.
 load_start_lib
-if [ "$ISO_ROLE" = "interstp" ]; then
-    echo -e "${GREEN}[2/9] Construction de l'image ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"
-    echo -e "  ${CYAN}osmo-stp + libosmocore + libosmo-netif + libosmo-sigtran. Rien d'autre.${NC}"
-    docker build $NO_CACHE -f "$DIR/Dockerfile.stp" -t osmocom-stp "$DIR" \
-        || { echo -e "${RED}Echec de la construction d'osmocom-stp${NC}"; exit 1; }
-    echo -e "  ${GREEN}✓${NC} osmocom-stp construite ($(docker image inspect osmocom-stp --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
-else
-    echo -e "${GREEN}[2/9] Construction de l'image osmocom-run via start.sh...${NC}"
-    build_run_image
-    echo -e "  ${GREEN}✓${NC} osmocom-run construite"
-
-    # ── La variante lite : on elague l'image d'EXECUTION, pas celle de build ──
-    # Dockerfile.lite est ecrit pour partir de n'importe quelle base (ARG BASE).
-    # On le branche sur osmocom-run - celle qui porte les configs et que l'ISO
-    # copie - et non sur osmocom-nitb comme le fait "build.sh --lite" : elaguer
-    # l'etage du dessous obligerait a refaire build_run_image par-dessus, soit
-    # deux heures pour le meme resultat.
-    # Pas de docker build a partir de zero ici : l'image est deja la, il ne
-    # reste que la coupe et l'aplatissement - quelques minutes.
-    if [ "$ISO_LITE" = "1" ]; then
-        echo -e "${GREEN}[2-lite/9] Elagage vers ${CYAN}osmocom-run:lite${NC}${GREEN} (Dockerfile.lite)...${NC}"
-        docker build $NO_CACHE -f "$DIR/Dockerfile.lite" --build-arg BASE=osmocom-run \
-            -t osmocom-run:lite "$DIR" \
-            || { echo -e "${RED}Echec de l'elagage (Dockerfile.lite)${NC}"; exit 1; }
-        _full=$(docker image inspect osmocom-run      --format '{{.Size}}' 2>/dev/null || echo 0)
-        _lite=$(docker image inspect osmocom-run:lite --format '{{.Size}}' 2>/dev/null || echo 0)
-        echo -e "  ${GREEN}✓${NC} osmocom-run:lite $(awk -v a="$_full" -v b="$_lite" \
-            'BEGIN{printf "%.1f Go -> %.1f Go", a/1073741824, b/1073741824}')"
-    fi
-fi
+echo -e "${GREEN}[2/9] Image source : ${CYAN}$([ "$ISO_ROLE" = "interstp" ] && [ "${OSMO_ISO_ALL_RUN:-0}" != "1" ] && echo osmocom-stp || echo osmocom-nitb)${NC}"
 
 echo -e "${GREEN}[2b/9] Preparation de l'image source de l'ISO...${NC}"
 
@@ -554,19 +580,43 @@ apply_native_post_patches "$TEMP_CONFIG" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
     "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}" "$SGSN_GTP_IP" "$HLR_IP"
 echo -e "  ${GREEN}✓${NC} retouches natives : sms-routing (${CYAN}${ISO_N_MS}${NC} route(s) MS), GGSN/NS ${CYAN}${HOST_IP}${NC}, GTP SGSN ${CYAN}${SGSN_GTP_IP}${NC}, HLR ${CYAN}${HLR_IP}${NC}"
 
-if [ "$ISO_ROLE" = "interstp" ]; then
-    ISO_RUN_IMAGE="osmocom-stp-iso"
+# ── L image source ──────────────────────────────────────────────────────────
+# osmocom-nitb pour tout le monde (un seul build), sauf le hub demande SEUL :
+# osmocom-stp, construite a l etape 1. Dans une passe --all, le hub prend aussi
+# osmocom-nitb (qui porte osmo-stp) : une image osmocom-stp restee d une autre
+# base sur la machine ne doit pas s inviter. OSMO_ISO_SRC_IMAGE force une image.
+if [ -n "${OSMO_ISO_SRC_IMAGE:-}" ]; then
+    ISO_SRC_IMAGE="$OSMO_ISO_SRC_IMAGE"
+elif [ "$ISO_ROLE" = "interstp" ] && [ "${OSMO_ISO_ALL_RUN:-0}" != "1" ] \
+     && docker image inspect osmocom-stp >/dev/null 2>&1; then
     ISO_SRC_IMAGE="osmocom-stp"
-elif [ "$ISO_LITE" = "1" ]; then
-    # Meme chaine, meme configs : seule la SOURCE change. Tout ce qui suit -
-    # docker cp des binaires, des libs, de /opt/GSM - travaille donc sur l'image
-    # elaguee sans avoir a le savoir.
-    ISO_RUN_IMAGE="osmocom-run-lite-iso"
-    ISO_SRC_IMAGE="osmocom-run:lite"
 else
-    ISO_RUN_IMAGE="osmocom-run-iso-net-host"
-    ISO_SRC_IMAGE="osmocom-run"
+    ISO_SRC_IMAGE="${IMAGE_NITB:-osmocom-nitb}"
 fi
+case "$ISO_ROLE:$ISO_LITE" in
+    interstp:*) ISO_RUN_IMAGE="osmocom-stp-iso" ;;
+    *:1)        ISO_RUN_IMAGE="osmocom-run-lite-iso" ;;
+    *)          ISO_RUN_IMAGE="osmocom-run-iso-net-host" ;;
+esac
+docker image inspect "$ISO_SRC_IMAGE" >/dev/null 2>&1 \
+    || { echo -e "${RED}Image source ${ISO_SRC_IMAGE} introuvable${NC}" >&2; exit 1; }
+
+# ── L image et le rootfs doivent etre de la MEME suite Ubuntu ───────────────
+# /usr/local, /root/.env et /root/.venv-qemu sont copies tels quels : un venv
+# noble (python 3.12) sur un rootfs jammy (python 3.10) n a pas d interpreteur,
+# et les .so de l image cherchent une glibc que le rootfs n a pas. On lit
+# l os-release de l image et on refuse le melange - --version=<suite> aligne.
+_img_suite="$(docker run --rm --entrypoint sh "$ISO_SRC_IMAGE" -c '. /etc/os-release; echo "$VERSION_CODENAME"' 2>/dev/null | tr -d '[:space:]' || true)"
+if [ -n "$_img_suite" ] && [ "$_img_suite" != "$ISO_SUITE" ]; then
+    if [ "${OSMO_ISO_SUITE_MISMATCH_OK:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠ image ${ISO_SRC_IMAGE} en ${_img_suite}, rootfs en ${ISO_SUITE} (OSMO_ISO_SUITE_MISMATCH_OK=1 : on continue)${NC}"
+    else
+        echo -e "${RED}L image ${ISO_SRC_IMAGE} est construite sur ${_img_suite}, le rootfs demande est ${ISO_SUITE}.${NC}" >&2
+        echo -e "${RED}Relancez avec --version=${_img_suite}, ou reconstruisez l image (./build.sh) sur la base voulue.${NC}" >&2
+        exit 1
+    fi
+fi
+echo -e "  ${GREEN}✓${NC} image source ${CYAN}${ISO_SRC_IMAGE}${NC} (${_img_suite:-suite inconnue}) -> rootfs ${CYAN}${ISO_SUITE}${NC}"
 TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 
 # Le hub ne porte AUCUN operateur : lui pousser le jeu complet, c'est embarquer
@@ -615,23 +665,112 @@ if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
     DEBOOTSTRAP_CACHE_OPT="--cache-dir=$ISO_DEB_CACHE/debootstrap"
     echo -e "  ${GREEN}cache .deb debootstrap : $ISO_DEB_CACHE/debootstrap${NC}"
 fi
-echo -e "${GREEN}[4/9] debootstrap $ISO_SUITE ($ISO_UBUNTU, minimal)...${NC}"
-debootstrap $DEBOOTSTRAP_CACHE_OPT --variant=minbase --include=\
+# ── Rootfs HERITE d une passe precedente (--all : lite et desktop reprennent la
+# normale) ou debootstrap de zero. Un rootfs herite est complet et configure :
+# les etapes 5 (injection) sont sautees, les autres rejouent - elles ecrivent
+# leurs fichiers, apt ne pose que le delta.
+OSMO_ISO_INHERITED=0
+if [ -n "${OSMO_ISO_ROOTFS_FROM:-}" ]; then
+    [ -d "$OSMO_ISO_ROOTFS_FROM" ] || { echo -e "${RED}Rootfs herite introuvable : ${OSMO_ISO_ROOTFS_FROM}${NC}" >&2; exit 1; }
+    rmdir "$ROOTFS" 2>/dev/null || true
+    case "${OSMO_ISO_ROOTFS_MODE:-move}" in
+        copy)
+            echo -e "${GREEN}[4/9] Rootfs repris (COPIE) de ${CYAN}${OSMO_ISO_ROOTFS_FROM}${NC}..."
+            # --reflink=auto : instantane sur btrfs/xfs, copie ordinaire ailleurs.
+            cp -a --reflink=auto "$OSMO_ISO_ROOTFS_FROM" "$ROOTFS" ;;
+        *)
+            echo -e "${GREEN}[4/9] Rootfs repris (deplace) de ${CYAN}${OSMO_ISO_ROOTFS_FROM}${NC}..."
+            mv "$OSMO_ISO_ROOTFS_FROM" "$ROOTFS" ;;
+    esac
+    OSMO_ISO_INHERITED=1
+    echo -e "  ${GREEN}✓${NC} rootfs herite $(du -sh "$ROOTFS"|cut -f1) - debootstrap et injection sautes"
+else
+    # Le script debootstrap de la suite : sur un hote jammy, le paquet ne connait
+    # pas noble. Les scripts Ubuntu sont tous le meme (gutsy) : on lie.
+    _DBS=/usr/share/debootstrap/scripts
+    if [ -d "$_DBS" ] && [ ! -e "$_DBS/$ISO_SUITE" ] && [ -e "$_DBS/gutsy" ]; then
+        ln -s gutsy "$_DBS/$ISO_SUITE"
+        echo -e "  ${YELLOW}debootstrap ne connaissait pas ${ISO_SUITE} : script gutsy lie${NC}"
+    fi
+    echo -e "${GREEN}[4/9] debootstrap $ISO_SUITE ($ISO_UBUNTU, minimal)...${NC}"
+    debootstrap $DEBOOTSTRAP_CACHE_OPT --variant=minbase --include=\
 systemd,systemd-sysv,dbus,kmod,\
 ca-certificates,curl,gnupg,\
 iproute2,iputils-ping,procps,less,nano \
-    "$ISO_SUITE" "$ROOTFS" http://archive.ubuntu.com/ubuntu
-echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
+        "$ISO_SUITE" "$ROOTFS" http://archive.ubuntu.com/ubuntu
+    echo -e "  ${GREEN}✓${NC} rootfs base $(du -sh "$ROOTFS"|cut -f1)"
+fi
 
-# ── Etape 5 : Injection des binaires et libs depuis l'image osmocom-run ───
-echo -e "${GREEN}[5/9] Injection stack Osmocom...${NC}"
+# ── Etape 5 : LES .deb DU BUILD DOCKER D ABORD, puis le reste de l image ────
+# [2026-09-03] Ce que l image a compile est sorti en paquets (packaging/
+# osmo-deb.sh) : libosmocore et les osmo-*, gapk, QEMU et son arbre, osmocom-bb,
+# le venv gr-gsm, le firmware. On les pose dans le rootfs par dpkg, comme sur
+# n importe quelle machine, et on ne recopie de l image que ce qui n est pas
+# en paquet (scripts, configs, unites, node, le depot, les ateliers restants).
+# Source des paquets : le cache de l HOTE (/var/cache/osmo-debs, que build.sh
+# alimente), sinon le cache embarque dans l image. Seuls ceux de la suite du
+# rootfs (~noble) sont pris. Sans paquet, on retombe sur le docker cp complet.
+if [ "$OSMO_ISO_INHERITED" = "1" ]; then
+    echo -e "${GREEN}[5/9] Injection : rootfs herite, deja fait${NC}"
+else
+echo -e "${GREEN}[5/9] Injection stack Osmocom (paquets .deb du build, puis image)...${NC}"
 CID=$(docker create "$ISO_RUN_IMAGE" /bin/true)
+ISO_DEB_HOST_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
+_iso_debs="$WORK/debs-build"; mkdir -p "$_iso_debs"
+cp -f "$ISO_DEB_HOST_CACHE"/osmo-build-*"~${ISO_SUITE}_"*.deb "$_iso_debs/" 2>/dev/null || true
+if ! ls "$_iso_debs"/*.deb >/dev/null 2>&1; then
+    docker cp "$CID:/var/cache/osmo-debs/." "$_iso_debs/" 2>/dev/null || true
+    find "$_iso_debs" -name '*.deb' ! -name "*~${ISO_SUITE}_*" -delete 2>/dev/null || true
+fi
+# Le hub n a besoin que du STP : libosmocore, libosmo-netif, libosmo-sigtran.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    find "$_iso_debs" -name '*.deb' ! -name 'osmo-build-libosmocore_*' \
+        ! -name 'osmo-build-libosmo-netif_*' ! -name 'osmo-build-libosmo-sigtran_*' -delete 2>/dev/null || true
+fi
+ISO_DEBS_USED=0
+_ndebs=$(ls "$_iso_debs"/*.deb 2>/dev/null | wc -l)
+if [ "$_ndebs" -gt 0 ]; then
+    # Poses via un repertoire DANS le rootfs (dpkg lit ses paquets sous la
+    # racine), retire ensuite : les paquets ne voyagent dans l ISO que sur
+    # ISO_EMBED_DEBS=1 - un arbre QEMU en zstd dans une image qui tient en RAM,
+    # ca ne va pas de soi.
+    install -d "$ROOTFS/var/cache/osmo-debs"
+    cp -f "$_iso_debs"/*.deb "$ROOTFS/var/cache/osmo-debs/"
+    if chroot "$ROOTFS" sh -c 'dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb' \
+           > "$WORK/dpkg-debs.log" 2>&1; then
+        chroot "$ROOTFS" ldconfig 2>/dev/null || true
+        ISO_DEBS_USED=1
+        echo -e "  ${GREEN}✓${NC} ${_ndebs} paquets du build docker poses par dpkg ($(du -sh "$_iso_debs" | cut -f1))"
+    else
+        echo -e "  ${YELLOW}⚠${NC} dpkg -i des paquets du build a echoue (voir $WORK/dpkg-debs.log) - repli sur l image" >&2
+        tail -5 "$WORK/dpkg-debs.log" | sed 's/^/     /' >&2
+    fi
+    [ "${ISO_EMBED_DEBS:-0}" = "1" ] || rm -rf "$ROOTFS/var/cache/osmo-debs"
+else
+    echo -e "  ${CYAN}aucun paquet .deb du build pour ${ISO_SUITE} (cache ${ISO_DEB_HOST_CACHE}) - tout vient de l image${NC}"
+fi
 docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
-docker cp "$CID:/opt/GSM"             "$ROOTFS/opt/GSM"     2>/dev/null||true
+docker cp "$CID:/usr/local/sbin/." "$ROOTFS/usr/local/sbin/" 2>/dev/null||true
+# /opt/GSM : tout, SAUF les arbres que les paquets viennent de poser (osmocom-bb,
+# qosmo-grgsm, qemu-install, firmware) - et rien du tout pour le hub, qui n en
+# lit pas une ligne (le depot lui-meme est clone a l etape 5a).
+if [ "$ISO_ROLE" != "interstp" ]; then
+    _excl=()
+    if [ "$ISO_DEBS_USED" = "1" ]; then
+        for _t in osmocom-bb qosmo-grgsm qemu-install firmware; do
+            [ -d "$ROOTFS/opt/GSM/$_t" ] && _excl+=("--exclude=GSM/$_t" "--exclude=GSM/$_t/*")
+        done
+    fi
+    mkdir -p "$ROOTFS/opt"
+    docker cp "$CID:/opt/GSM" - 2>/dev/null | tar -x -C "$ROOTFS/opt" "${_excl[@]+"${_excl[@]}"}" 2>/dev/null || true
+fi
 # venv python (gr-gsm + bridges) attendu par /opt/GSM/qosmo-grgsm/start-clean.sh
-docker cp "$CID:/root/.env"           "$ROOTFS/root/"       2>/dev/null||true
+# - en paquet (grgsm-venv) quand le cache l a, depuis l image sinon.
+[ -d "$ROOTFS/root/.env" ] || docker cp "$CID:/root/.env" "$ROOTFS/root/" 2>/dev/null||true
+[ -d "$ROOTFS/root/.venv-qemu" ] || docker cp "$CID:/root/.venv-qemu" "$ROOTFS/root/" 2>/dev/null||true
+docker cp "$CID:/opt/node"            "$ROOTFS/opt/"        2>/dev/null||true
 docker cp "$CID:/etc/osmocom/."       "$ROOTFS/etc/osmocom/" 2>/dev/null||true
 docker cp "$CID:/etc/asterisk/."      "$ROOTFS/etc/asterisk/" 2>/dev/null||true
 for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector; do
@@ -639,6 +778,7 @@ for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn o
 done
 docker rm "$CID" &>/dev/null
 echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
+fi
 
 # ── osmo-operator : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
 # La copie docker cp ci-dessus peut etre perimee ; on avance la branche main du
@@ -666,7 +806,9 @@ echo -e "${GREEN}[5a/9] Clone de osmo-operator (branche ${EGPRS_BRANCH})...${NC}
 EGPRS_TREE="$ROOTFS/opt/GSM/osmo-operator"
 EGPRS_TMP="$WORK/osmo-operator-clone"
 rm -rf "$EGPRS_TMP"
-if GIT_TERMINAL_PROMPT=0 git -c http.version=HTTP/1.1 clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TMP" >/dev/null 2>&1; then
+if [ "$OSMO_ISO_INHERITED" = "1" ] && [ -d "$EGPRS_TREE/.git" ]; then
+    echo -e "  ${GREEN}✓${NC} osmo-operator : arbre du rootfs herite conserve"
+elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TMP" >/dev/null 2>&1; then
     rm -rf "$EGPRS_TREE"
     mkdir -p "$ROOTFS/opt/GSM"
     mv "$EGPRS_TMP" "$EGPRS_TREE"
@@ -1196,7 +1338,7 @@ if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
 else
     WEB_TMP="$WORK/osmo-egprs-web"
-    GIT_TERMINAL_PROMPT=0 git -c http.version=HTTP/1.1 clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
     # [2026-08-27] Le clone entier part dans l'image, .git COMPRIS. Avant, on ne
     # prelevait que quelques fichiers : l'ISO recevait un dossier sans depot, et
     # update.sh, faute de .git, ne pouvait qu'EFFACER et RECLONER a chaque
@@ -1663,6 +1805,9 @@ mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
+# L installeur apt-fast, le meme que celui du Dockerfile, dans le rootfs.
+install -m755 "$DIR/packaging/apt-fast-install.sh" "$ROOTFS/usr/local/sbin/apt-fast-install"
+
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
@@ -1685,12 +1830,9 @@ export DPKG_OPTIONS="--force-confold --force-confdef"
 #                     entiere - ce chroot tourne sous set -e
 mkdir -p /etc/dpkg/dpkg.cfg.d /etc/apt/apt.conf.d
 echo "force-unsafe-io" > /etc/dpkg/dpkg.cfg.d/02-unsafe-io
-cat > /etc/apt/apt.conf.d/99osmo-fast <<APTFAST
-Acquire::Languages "none";
-Acquire::Retries "3";
-Acquire::http::Pipeline-Depth "5";
-Dpkg::Use-Pty "0";
-APTFAST
+# Les reglages de telechargement (Languages, Retries, Pipeline, Use-Pty) sont
+# poses par apt-fast-install, plus bas, dans /etc/apt/apt.conf.d/90osmo-operator
+# - les memes que dans l image docker et sur l hote.
 
 APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
 
@@ -1702,17 +1844,14 @@ echo "console-setup console-setup/charmap47 select UTF-8" | debconf-set-selectio
 
 # ${ISO_SUITE} vient de l environnement du chroot (export plus haut) ; le
 # heredoc est NON quote pour que la substitution ait lieu ici.
-_S="${ISO_SUITE:-jammy}"
-# ── GIT : HTTP/1.1 IMPOSE POUR TOUTE L IMAGE ────────────────────────────────
-# [2026-09-03] Le contournement etait pose commande par commande dans ce script
-# (git -c http.version=HTTP/1.1) et globalement par update.sh -- mais PAS dans
-# l image : un clone lance depuis le systeme livre retombait sur l erreur.
-# Symptome exact : "expected flush after ref listing". Il vient de HTTP/2 sur
-# certains miroirs et proxys, qui coupent le flux entre l annonce des refs et le
-# paquet. Forcer HTTP/1.1 est le remede de cette erreur-la, pas un reglage de
-# performance : on ne le retire que si on sait que le chemin reseau va bien.
-# --system et non --global : ca vaut pour tous les comptes de l image.
-git config --system http.version HTTP/1.1 2>/dev/null || true
+_S="${ISO_SUITE:-noble}"
+# ── GIT : plus de forcage HTTP/1.1 ──────────────────────────────────────────
+# [2026-09-03] RETIRE, ici comme dans le Dockerfile et update.sh. Le reglage
+# http.version=HTTP/1.1 datait d un incident de reseau ("expected flush after
+# ref listing") ; il ralentissait tous les clones de l image. Si une machine
+# retombe dessus, c est un reglage LOCAL a poser sur elle :
+#     git config --global http.version HTTP/1.1
+git config --system --unset http.version 2>/dev/null || true
 
 cat > /etc/apt/sources.list <<SOURCES
 deb http://archive.ubuntu.com/ubuntu $_S           main universe multiverse
@@ -1766,11 +1905,16 @@ if ! command -v node >/dev/null 2>&1; then
     fi
 fi
 
-# ── UN SEUL apt-get update ──────────────────────────────────────────────────
+# ── UN SEUL apt update, puis apt-fast pour tout le reste ───────────────────
 # [2026-09-02] Il y en avait trois dans ce chroot : celui-ci, un pour les
 # deb-src du build-dep, un dans le script NodeSource. Tout ce qui ajoute une
 # source est maintenant fait AVANT, et cet appel les lit toutes d un coup.
+# [2026-09-03] apt-fast : le meme installeur que le Dockerfile
+# (/usr/local/sbin/apt-fast-install, copie dans le rootfs avant ce chroot).
+# Il pose aria2 et curl par apt-get - le seul apt-get qui reste - puis tout
+# passe en parallele. Repli integre sur apt-get si GitHub est injoignable.
 apt-get update -qq
+/usr/local/sbin/apt-fast-install
 
 # ── UN SEUL apt-get install ────────────────────────────────────────────────
 # [2026-08-27] Il y en avait cinq a la suite. apt resout, telecharge puis
@@ -1809,15 +1953,26 @@ apt-get update -qq
 # cle Canonical - donc toujours signe pour Secure Boot) et tire
 # linux-modules-extra en dependance. La detection plus bas [ls vmlinuz-star,
 # sort -V, tail -1] choisit automatiquement le 6.8 pour l ISO.
+# [2026-09-03] LES NOMS DEPENDENT DE LA SUITE. noble a renomme les
+# bibliotheques dont l ABI portait un time_t (transition 64 bits) : libasound2
+# -> libasound2t64, libgnutls30 -> libgnutls30t64, libdbi1 -> libdbi1t64,
+# libsofia-sip-ua-glib3 -> libsofia-sip-ua-glib3t64 ; et c-ares s appelle
+# libcares2. Le noyau : sur noble, linux-image-generic EST la serie 6.8 (GA),
+# la meme que le HWE de jammy - pas besoin du HWE de noble (7.0). Verifie le
+# 2026-09-03 sur ubuntu:24.04 (apt-cache policy) pour chacun de ces noms.
+case "$_S" in
+    noble) _KERNEL_PKG="linux-image-generic";           _T64="t64"; _CARES="libcares2" ;;
+    *)     _KERNEL_PKG="linux-image-generic-hwe-22.04"; _T64="";    _CARES="libc-ares2" ;;
+esac
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
-      linux-image-generic-hwe-22.04 initramfs-tools
+      $_KERNEL_PKG initramfs-tools
       live-boot live-boot-initramfs-tools
-      libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2
-      libgnutls30 libgnutls28-dev libmnl-dev libmnl0
-      libortp-dev libdbi1 libdbd-sqlite3 sqlite3
+      libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev $_CARES
+      libgnutls30${_T64} libgnutls28-dev libmnl-dev libmnl0
+      libortp-dev libdbi1${_T64} libdbd-sqlite3 sqlite3
       libfftw3-single3 libusb-1.0-0
-      libgsm1 libasound2
-      libsofia-sip-ua-glib3
+      libgsm1 libasound2${_T64}
+      libsofia-sip-ua-glib3${_T64}
       liburing2 libslirp0
       iproute2 iptables net-tools lksctp-tools
       tmux telnet expect whiptail
@@ -1858,14 +2013,14 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     fi
 fi
 
-apt-get install -y $APT_OPTS --no-install-recommends $PKGS
+apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
 
 # build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
 # log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
 # index Sources sont deja la : deb-src.list a ete ecrit avant l unique
 # apt-get update. Le hub n a pas de gr-gsm, donc pas de deb-src ni de build-dep.
 if [ -s /etc/apt/sources.list.d/deb-src.list ]; then
-    apt-get build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
+    apt-fast build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
 fi
 
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
@@ -1889,7 +2044,8 @@ ldconfig
 #
 # tomli : lecteur TOML entre dans la bibliotheque standard en 3.11 sous le
 # nom tomllib, mais ABSENT de la 3.10 de jammy. Ce qui lit un TOML depuis
-# le venv en depend donc explicitement.
+# le venv en depend donc explicitement - et le garde sur noble (3.12), ou il
+# ne coute rien : le code importe tomli, pas tomllib.
 python3 -m venv /root/.env
 /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli \
     || echo "WARN: pip a echoue pour tomli dans /root/.env"
@@ -1977,11 +2133,13 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # telechargement, et le premier avalait son echec ("|| echo WARN") - une
     # image DESKTOP sans bureau sortait avec "done". Ici l echec ARRETE le
     # build : sans bureau ou sans installeur, cette image ne sert a rien.
-    apt-get install -y $APT_OPTS \
+    apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop snapd \
         vlc \
         wmctrl x11-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
+        cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
+        conky-all fonts-dejavu \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
@@ -2002,9 +2160,9 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # --purge, et libnss-mdns avec : le paquet seul desinstalle laisserait la
     # ligne "mdns4_minimal" dans /etc/nsswitch.conf, et chaque resolution
     # paierait alors un aller-retour vers un service absent.
-    apt-get purge -y $APT_OPTS avahi-daemon avahi-utils avahi-autoipd libnss-mdns 2>/dev/null \
+    apt-fast purge -y $APT_OPTS avahi-daemon avahi-utils avahi-autoipd libnss-mdns 2>/dev/null \
         || echo "  [desktop] avahi deja absent"
-    apt-get autoremove -y $APT_OPTS 2>/dev/null || true
+    apt-fast autoremove -y $APT_OPTS 2>/dev/null || true
     # Ceinture et bretelles : si une dependance future le reinstalle, il ne
     # demarrera pas pour autant.
     systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
@@ -2040,6 +2198,17 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     #   dosfstools      la partition EFI, formatee en FAT
     #   efibootmgr      l entree de demarrage UEFI
     #   os-prober       les autres systemes, pour le menu GRUB
+    #   pciutils        lspci : la detection de la carte NVIDIA (osmo-install
+    #   ubuntu-drivers  et contextualprocess@nvidia) ; ubuntu-drivers choisit
+    #   -common         le pilote nvidia-driver-5xx recommande pour la carte
+    #   conky-all       le tableau de bord Conky du banc (configs/conky/,
+    #   fonts-dejavu    autostart GNOME pose plus bas) - live et disque installe
+    #   lvm2            LVM dans le partitionnement manuel de Calamares (groupes
+    #                   de volumes, LUKS sur LVM) ; son hook initramfs suit
+    #   cryptsetup      LUKS : la case "Chiffrer le systeme" de l installeur
+    #   (+ -initramfs)  (partition.conf) ; l initrd de la cible doit savoir
+    #                   ouvrir la racine, et c est cryptsetup-initramfs qui
+    #                   pose le hook - sans lui, disque chiffre = boot mort
     #   qml-module-*    le diaporama pendant la copie
     # L echec de CETTE etape ne doit PAS etre avale. calamares tire une longue
     # chaine de dependances Qt/KDE ; si le miroir en manque une, apt sort en
@@ -2116,7 +2285,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # L unite qui les pose (osmo-firefox-snap.service) est ecrite HORS de ce
     # chroot : le script y est en quotes simples, une apostrophe de plus et
     # tout ce qui suit change de sens.
-    apt-get purge -y firefox chromium-browser 2>/dev/null || true
+    apt-fast purge -y firefox chromium-browser 2>/dev/null || true
     mkdir -p /var/lib/osmo-snaps
     _snap_ok=1
 
@@ -2176,6 +2345,19 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     fi
 
     systemctl set-default graphical.target
+
+    # ── AUDIO DE SESSION : PIPEWIRE SUR NOBLE ──────────────────────────────
+    # ubuntu-desktop-minimal de noble tire pipewire-pulse et wireplumber ; le
+    # paquet pulseaudio reste installe (verifie par simulation apt le
+    # 2026-09-03 : les deux cohabitent, rien n est retire) parce que le BANC
+    # en a besoin en mode SYSTEME (gapk -> plugin ALSA pulse -> demon systeme,
+    # unite ecrite plus bas dans ce script). Mais ses unites de SESSION
+    # disputeraient le socket utilisateur a pipewire-pulse : on les masque,
+    # la session GNOME garde PipeWire, comme sur tout noble.
+    if [ "$_S" = "noble" ]; then
+        systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
+        echo "  [desktop] audio de session : pipewire-pulse (pulseaudio ne sert que le mode systeme du banc)"
+    fi
 
     # ── NetworkManager : ACTIF ──────────────────────────────────────────────
     # Il etait masque pour laisser systemd-networkd seul maitre des interfaces.
@@ -3758,9 +3940,110 @@ for _t in /tmp/calamares-root-*; do
     rmdir "$_t" 2>/dev/null || true
 done
 
+# ── NVIDIA : la page "Pilotes graphiques" de l installeur suit la machine ────
+# Calamares ne sait pas griser une entree selon le materiel, et ne connait pas
+# la liste des pilotes disponibles : on ECRIT sa page de choix et le module
+# qui installe a CHAQUE lancement, d apres lspci et ubuntu-drivers :
+#   - une entree par pilote que ubuntu-drivers propose (nvidia-driver-5xx,
+#     -open, -server...), avec son etat : "recommande", "deja installe" ;
+#   - une entree "recommande par ubuntu-drivers" pre-selectionnee quand une
+#     carte est vue, "aucun" sinon ;
+#   - sans carte NVIDIA, la page le dit et tout choix reste sans effet
+#     (contextualprocess refait le test lspci dans la cible).
+# Sur le systeme installe, tools/osmo-drivers.sh (icone "Pilotes graphiques")
+# montre le meme etat et laisse installer ou mettre a jour plus tard.
+_pc=/etc/calamares/modules/packagechooser-nvidia.conf
+_cp=/etc/calamares/modules/contextualprocess-nvidia.conf
+if [ -f "$_pc" ] && [ -f "$_cp" ]; then
+    _nv="$(lspci -d 10de: 2>/dev/null | head -1 | cut -d: -f3- | sed 's/^ //; s/ (rev.*//')"
+    _drivers=""; _reco=""
+    if [ -n "$_nv" ] && command -v ubuntu-drivers >/dev/null 2>&1; then
+        _drivers="$(ubuntu-drivers list 2>/dev/null | awk '/^nvidia-driver-/{print $1}' | sed 's/,.*//' | sort -u)"
+        _reco="$(ubuntu-drivers devices 2>/dev/null | awk '/^driver *:/ && /recommended/{print $3; exit}')"
+    fi
+    # Aucun guillemet dans cette commande : elle est posee entre apostrophes
+    # (bash -c) dans une chaine YAML entre guillemets - l un comme l autre y
+    # seraient une fin de chaine. /run de la cible est un tmpfs vide (mount.conf)
+    # et /etc/resolv.conf y pointe : on y ecrit des resolveurs le temps de l apt.
+    _apt_cmd='mkdir -p /run/systemd/resolve; [ -s /run/systemd/resolve/stub-resolv.conf ] || { echo nameserver 1.1.1.1 > /run/systemd/resolve/stub-resolv.conf; echo nameserver 8.8.8.8 >> /run/systemd/resolve/stub-resolv.conf; }; export DEBIAN_FRONTEND=noninteractive; lspci -n 2>/dev/null | grep -qi 10de: || { echo [nvidia] aucune carte NVIDIA : rien a installer; exit 0; }; apt-get update -qq || { echo [nvidia] pas de reseau : pilote non installe; exit 0; }'
+    {
+        echo "---"
+        echo "mode: optional"
+        echo "method: legacy"
+        echo "labels:"
+        echo "    step: \"Pilotes graphiques\""
+        if [ -n "$_nv" ]; then echo "default: recommended"; else echo "default: none"; fi
+        echo "items:"
+        echo "    - id: none"
+        echo "      name: \"Aucun pilote supplementaire\""
+        if [ -n "$_nv" ]; then
+            echo "      description: \"Carte detectee : ${_nv}. Le pilote libre (nouveau) du noyau, comme sur la cle live.\""
+            echo "    - id: recommended"
+            echo "      name: \"Pilote NVIDIA recommande (ubuntu-drivers)\""
+            echo "      description: \"Installe ${_reco:-le pilote recommande par ubuntu-drivers} depuis les depots Ubuntu (reseau requis).\""
+            for _drv in $_drivers; do
+                _state=""
+                [ "$_drv" = "$_reco" ] && _state=" - recommande"
+                dpkg -s "$_drv" >/dev/null 2>&1 && _state="$_state - deja installe sur ce systeme"
+                echo "    - id: ${_drv}"
+                echo "      name: \"${_drv}\""
+                echo "      description: \"Pilote proprietaire NVIDIA ${_drv#nvidia-driver-}${_state}. Installe depuis les depots Ubuntu (reseau requis).\""
+            done
+        else
+            echo "      description: \"AUCUNE carte NVIDIA detectee (lspci) : rien a installer sur cette machine.\""
+        fi
+    } > "$_pc"
+    {
+        echo "---"
+        echo "dontChroot: false"
+        echo "timeout: 1800"
+        echo "packagechooser_nvidia:"
+        echo "    \"none\":"
+        echo "        - \"-/bin/true\""
+        echo "    \"recommended\":"
+        echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y --no-install-recommends ubuntu-drivers-common >/dev/null 2>&1; ubuntu-drivers install || apt-get install -y ${_reco:-nvidia-driver-550}; update-initramfs -u >/dev/null 2>&1 || true'\""
+        for _drv in $_drivers; do
+            echo "    \"${_drv}\":"
+            echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y ${_drv}; update-initramfs -u >/dev/null 2>&1 || true'\""
+        done
+    } > "$_cp"
+    if [ -n "$_nv" ]; then
+        echo "NVIDIA : $_nv - pilotes proposes : $(echo ${_drivers:-(liste ubuntu-drivers vide)})${_reco:+ ; recommande : $_reco}"
+    else
+        echo "NVIDIA : aucune carte detectee - la page le dira, sans effet"
+    fi
+fi
+
 exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"
+
+    # ── CONKY : le tableau de bord du banc, dans TOUTE session GNOME ─────────
+    # [2026-09-03] /etc/xdg/autostart vaut pour tous les comptes : root sur la
+    # cle live, l utilisateur cree par Calamares sur le disque (le fichier
+    # voyage dans le squashfs, donc dans la copie installee). La config et le
+    # script d etat vivent dans le depot (/opt/GSM/osmo-operator, present sur
+    # les deux) : configs/conky/osmo-conky.conf, tools/conky-osmo-status.sh.
+    # sleep 6 : conky doit trouver le bureau GNOME deja peint (own_window_type
+    # desktop), sinon il reste derriere le fond d ecran. --daemonize : la
+    # session n attend pas. Une seule instance : pkill avant.
+    cat > "$ROOTFS/etc/xdg/autostart/osmo-conky.desktop" <<'CONKY'
+[Desktop Entry]
+Type=Application
+Name=Conky osmo-operator
+Comment=Tableau de bord du banc GSM (coeur, radio, abonnes, services)
+Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
+Icon=utilities-system-monitor
+Terminal=false
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=6
+CONKY
+    chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-conky.desktop"
+    chmod +x "$ROOTFS/opt/GSM/osmo-operator/tools/conky-osmo-status.sh" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-drivers.sh" 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} Conky du banc : autostart GNOME (live et disque), config ${CYAN}configs/conky/osmo-conky.conf${NC}"
 
     # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
@@ -4365,6 +4648,46 @@ umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminee"
 
+# ── Etape 8c : LITE = la normale MOINS les ateliers, sur le rootfs ──────────
+# [2026-09-03] Plus de Dockerfile.lite ici : on retire du rootfs ce que
+# Dockerfile.lite retirait de l image, avec les memes regles (voir son en-tete
+# pour le pourquoi de chaque exception). Ce qui reste dans /opt/GSM :
+#   qosmo-grgsm/          l arbre entier, build/ reduit a qemu-system-arm et
+#                         qemu-bundle (QEMU se relocalise par lui)
+#   osmocom-bb/           osmocon (le chargeur) et trx_toolkit (fake_trx.py)
+#   firmware/ qemu-install/ osmo-operator/ pont/ osmo-egprs-web/ qemu/ qosmo-dsp/
+#   *.bin *.py *.txt      ROM DSP, scripts de pont, calypso_dsp.txt
+if [ "$ISO_LITE" = "1" ]; then
+    echo -e "${GREEN}[8c/9] Elagage lite : les ateliers de compilation quittent le rootfs...${NC}"
+    _G="$ROOTFS/opt/GSM"
+    _before=$(du -sh "$_G" 2>/dev/null | cut -f1)
+    for _d in libosmocore libosmo-netif libosmo-abis libosmo-sigtran libsmpp34 libgtpnl \
+              libosmo-gprs osmo-hlr osmo-mgw osmo-ggsn osmo-sgsn osmo-msc osmo-bsc osmo-trx \
+              osmo-bts osmo-pcu osmo-sip-connector osmo-gapk gsup-smsc-proto libosmo-dsp \
+              gnuradio gr-osmosdr gr-gsm osmocom-bb-transceiver osmocom-bb-burst_ind; do
+        rm -rf "$_G/$_d"
+    done
+    rm -rf "$_G"/sms-coding-utils* "$_G"/*.tar.bz2 "$_G"/*.tar.gz
+    if [ -d "$_G/osmocom-bb" ]; then
+        _k="$WORK/keep-bb"; rm -rf "$_k"
+        mkdir -p "$_k/src/host/osmocon" "$_k/src/target"
+        cp -a "$_G/osmocom-bb/src/host/osmocon/osmocon" "$_k/src/host/osmocon/" 2>/dev/null || true
+        cp -a "$_G/osmocom-bb/src/target/trx_toolkit"   "$_k/src/target/"      2>/dev/null || true
+        rm -rf "$_G/osmocom-bb"; mv "$_k" "$_G/osmocom-bb"
+    fi
+    if [ -d "$_G/qosmo-grgsm/build" ]; then
+        _k="$WORK/keep-qbuild"; rm -rf "$_k"; mkdir -p "$_k"
+        cp -a "$_G/qosmo-grgsm/build/qemu-system-arm" "$_k/" 2>/dev/null || true
+        cp -a "$_G/qosmo-grgsm/build/qemu-bundle"     "$_k/" 2>/dev/null || true
+        rm -rf "$_G/qosmo-grgsm/build"; mv "$_k" "$_G/qosmo-grgsm/build"
+    fi
+    rm -rf "$ROOTFS/usr/local/include" "$ROOTFS/var/cache/osmo-debs" "$ROOTFS/root/.cache" \
+           "$ROOTFS/usr/share/doc" "$ROOTFS/usr/share/man"
+    find "$ROOTFS/usr/local/lib" -name '*.a' -delete 2>/dev/null || true
+    find "$ROOTFS" -xdev -path "$_G" -prune -o -name '*.o' -exec rm -f {} + 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} /opt/GSM : ${_before:-?} -> $(du -sh "$_G" | cut -f1)"
+fi
+
 # ── Creation du squashfs et de l'ISO ───────────────────────────────────────
 echo -e "${GREEN}[9/9] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
@@ -4778,6 +5101,17 @@ fi
 if [ ! -f "$OUTPUT" ]; then
     echo -e "${RED}Creation de l'ISO echouee - rien n'a ete ecrit${NC}"
     exit 1
+fi
+
+# ── Le rootfs survit a cette passe si la parente le demande (--all) ─────────
+# Deplace, pas copie : meme systeme de fichiers, instantane. cleanup() efface
+# ensuite $WORK sans lui.
+if [ -n "${OSMO_ISO_ROOTFS_KEEP:-}" ]; then
+    umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null || true
+    rm -rf "$OSMO_ISO_ROOTFS_KEEP"
+    mkdir -p "$(dirname "$OSMO_ISO_ROOTFS_KEEP")"
+    mv "$ROOTFS" "$OSMO_ISO_ROOTFS_KEEP"
+    echo -e "  ${GREEN}✓${NC} rootfs conserve pour la passe suivante : ${CYAN}${OSMO_ISO_ROOTFS_KEEP}${NC}"
 fi
 
 echo ""

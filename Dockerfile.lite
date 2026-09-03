@@ -99,9 +99,13 @@ RUN set -eux; \
     cd /; rm -rf /opt/GSM; mkdir -p /opt/GSM; \
     cp -a /keep/. /opt/GSM/; rm -rf /keep; \
     # Reste de l'atelier : en-tetes, bibliotheques statiques, objets, caches.
+    # /var/cache/osmo-debs : le cache des paquets compiles (packaging/osmo-deb.sh)
+    # est un outil de CONSTRUCTION - l arbre QEMU en zstd, le venv gr-gsm... Il
+    # vit sur l hote ; dans l image d execution elaguee il n a pas sa place.
     rm -rf /usr/local/include /root/.cache /root/.cargo /root/.rustup \
            /usr/share/doc /usr/share/man /usr/share/locale \
            /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
+           /var/cache/osmo-debs /var/cache/apt/apt-fast \
            /tmp/* /var/tmp/*; \
     find /usr/local/lib -name '*.a' -delete 2>/dev/null || true; \
     # Le balayage des .o EVITE /opt/GSM. [2026-08-27] Il y passait, et

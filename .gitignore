@@ -1,0 +1,10 @@
+# Cache des .deb compiles (voir packaging/osmo-deb.sh) : recopie depuis
+# /var/cache/osmo-debs par build.sh avant chaque build, jamais versionne.
+.deb-cache/*.deb
+# Configs generees pour docker compose (compose.sh up)
+data/compose/
+packaging/dist/
+__pycache__/
+*.pyc
+*.iso
+vty-debug-dump-*.txt

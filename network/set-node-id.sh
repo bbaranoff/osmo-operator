@@ -150,7 +150,7 @@ if [ -z "$MODE" ]; then
     if [ -f /.dockerenv ]; then MODE="docker"; else MODE="native"; fi
 fi
 
-: "${HUB_IP_DEFAULT:=192.168.1.49}"   # le hub du banc, en acces par pont
+: "${HUB_IP_DEFAULT:=172.20.0.10}"    # le hub du banc : osmo-inter-stp, backbone docker
 
 if [ -z "$HUB_IP" ]; then
     if [ -r /etc/osmo-role ]; then

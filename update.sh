@@ -152,7 +152,9 @@ case "${1:-}" in
     --quiet) exit 0 ;;
 esac
 
-git config --global http.version HTTP/1.1 
+# [2026-09-03] Le "git config --global http.version HTTP/1.1" qui etait ici est
+# retire (voir Dockerfile) : on defait meme le reglage s il traine encore.
+git config --global --unset http.version 2>/dev/null || true
 
 
 # ── SANS TERMINAL : UNE FENETRE GTK ─────────────────────────────────────────

@@ -1291,7 +1291,7 @@ ask_node_identity() {
     # rempli depuis cette meme source. NODE_ID et HUB_IP sont donc repris de
     # l'environnement la-bas, une fois, et pas ici.
     cached_hub="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
-    [ -n "$cached_hub" ] || cached_hub="192.168.1.49"
+    [ -n "$cached_hub" ] || cached_hub="172.20.0.10"
 
     if command -v whiptail >/dev/null 2>&1; then
         [ -n "$NODE_ID" ] || NODE_ID="$(whiptail --title "Identite du noeud" \
