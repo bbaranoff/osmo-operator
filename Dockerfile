@@ -82,6 +82,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # dans le sed qui suit), pas ici : ne pas repasser cette liste en apt-get pour
 # contourner le probleme.
 RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections
+# deb-src AVANT l unique `apt-fast update` : le build-dep gnuradio (gr-gsm, fin
+# du bloc ci-dessous) lit les index Sources. Il avait son propre RUN avec un
+# deuxieme update + une deuxieme resolution apt : fusionne ici. Noble ecrit ses
+# sources en deb822 (ubuntu.sources, ligne "Types: deb") ; l ancien
+# /etc/apt/sources.list (jammy) reste gere au cas ou la base change (gnuradio
+# est dans universe : tous les composants).
+RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+        sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources; \
+    else \
+        sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p' \
+            /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list; \
+    fi
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     apt-fast update && apt-fast install -y --no-install-recommends \
     # Outils de build
@@ -126,7 +138,12 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     #        ouverture ALSA (gapk, mobile) echoue et l'audio est mort des 2 cotes
     #   tshark/tcpdump/libcap2-bin -> capture ; libcap2-bin fournit le setcap ci-dessous
     telnet nano whiptail xz-utils libasound2-plugins \
-    tcpdump tshark libcap2-bin
+    tcpdump tshark libcap2-bin \
+    # Deps GNU Radio 3.10 (gr-gsm, venv /root/.env plus bas) : meme resolution
+    # apt que le reste, pas de second RUN apt. (Le && ferme la liste pour
+    # l extracteur de install_modules/10-deps.sh.)
+    && apt-fast build-dep -y gnuradio \
+    && rm -rf /var/lib/apt/lists/*
 
 # Capture non-root pour le dashboard et tcpdump. Position OBLIGATOIRE : dumpcap
 # n'existe qu'une fois wireshark-common installe (tire par tshark, juste au-dessus).
@@ -632,21 +649,8 @@ RUN if ! osmo-deb install qosmo-dsp 0.git; then \
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
 # (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
-# Deps GNU Radio via apt build-dep. Noble ecrit ses sources en deb822
-# (/etc/apt/sources.list.d/ubuntu.sources, ligne "Types: deb") : on y ajoute
-# deb-src. L ancien /etc/apt/sources.list (jammy) reste gere, au cas ou la base
-# change : on en derive les lignes deb-src avec TOUS les composants (gnuradio
-# est dans universe).
-RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
-        sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources; \
-    else \
-        sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p' \
-            /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list; \
-    fi \
-    && apt-fast update \
-    && apt-fast build-dep -y gnuradio \
-    && rm -rf /var/lib/apt/lists/*
+# Les deps GNU Radio (apt build-dep) sont posees par l unique bloc apt en tete
+# de fichier, deb-src compris : plus aucun apt ici.
 
 # ── GNU Radio + gr-osmosdr + gr-gsm, en UN paquet : le venv /root/.env ────────
 # On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409). Il
