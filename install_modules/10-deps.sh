@@ -24,13 +24,19 @@ _deps_list() {
     # qui ressemblent tous a des noms de paquets. On coupe donc a `&&`, `||`,
     # `{` ou une URL, et on ne garde que ce qu'il y a avant.
     awk '
-        /^RUN apt-(get|fast) update && apt-(get|fast) install/ {
+        /^RUN( --mount=[^ ]+)? *\\?$/ { pending = 1; next }
+        /^RUN( --mount=[^ ]+)? +apt-(get|fast) update && apt-(get|fast) install/ || (pending && /^ *apt-(get|fast) update && apt-(get|fast) install/) {
+            pending = 0
             inblk = 1
             line = $0
-            sub(/^RUN.*--no-install-recommends/, "", line)
+            # Le RUN peut porter un --mount=... (cache apt BuildKit) et se
+            # continuer a la ligne suivante : on coupe tout ce qui precede la
+            # fin de la commande apt, que la ligne commence par RUN ou non.
+            sub(/^.*--no-install-recommends/, "", line)
             emit(line)
             next
         }
+        pending && !/^ *apt-(get|fast) update/ { pending = 0 }
         inblk { emit($0) }
 
         function emit(l,   n, a, i, cont) {

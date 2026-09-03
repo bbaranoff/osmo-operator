@@ -49,8 +49,18 @@ ENV container=docker \
 # pose aussi /etc/apt/apt.conf.d/90osmo-operator, les reglages de
 # telechargement communs. Repli integre : sans GitHub, apt-fast appelle apt-get
 # et le build continue, plus lentement.
+#
+# LE CACHE APT DU BUILD. [2026-09-04] Chaque etape apt de ce fichier monte
+# /var/cache/apt/archives en cache BuildKit (id osmo-apt-archives, partage avec
+# Dockerfile.stp) : les .deb telecharges une fois y restent, sur l hote, dans le
+# cache de BuildKit - une reconstruction ne retelecharge que ce qui a change.
+# apt-fast-install retire docker-clean et pose Keep-Downloaded-Packages, sinon
+# apt effacerait les paquets a peine installes. Necessite BuildKit (docker
+# compose, ou docker-buildx : build.sh les installe) - le builder historique
+# ne connait pas --mount.
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
-RUN chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
     && rm -rf /var/lib/apt/lists/*
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -72,7 +82,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # dans le sed qui suit), pas ici : ne pas repasser cette liste en apt-get pour
 # contourner le probleme.
 RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections
-RUN apt-fast update && apt-fast install -y --no-install-recommends \
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    apt-fast update && apt-fast install -y --no-install-recommends \
     # Outils de build
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     # Dépendances Osmocom Core & Network
@@ -626,7 +637,8 @@ RUN if ! osmo-deb install qosmo-dsp 0.git; then \
 # deb-src. L ancien /etc/apt/sources.list (jammy) reste gere, au cas ou la base
 # change : on en derive les lignes deb-src avec TOUS les composants (gnuradio
 # est dans universe).
-RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
         sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources; \
     else \
         sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p' \

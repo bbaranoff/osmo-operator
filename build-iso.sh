@@ -362,11 +362,13 @@ case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 #
 # On la fige donc maintenant, avec la table du banc pour defaut. --wan-nodes
 # reste prioritaire et n'est pas touche.
-# Avec terminal on DEMANDE - un banc n'a pas toujours les adresses du notre.
-# Sans terminal (CI, cron) on prend le defaut : rester bloque sur une lecture
-# que personne ne verra ne ferait qu'echouer plus tard, et plus obscurement.
+# [2026-09-04] AUTOMATIQUE. La question etait posee a chaque passe fille (quatre
+# fois pour --all), au milieu d une construction d une heure, pour une reponse
+# qui est presque toujours le defaut. La table du banc et le hub s appliquent
+# donc sans rien demander ; pour autre chose, --wan-nodes="..." et --hub-ip=...
+# (ou OSMO_ISO_WAN_ASK=1 pour retrouver la question, avec un terminal).
 if [ "$ISO_WAN" = "1" ] && [ -z "$ISO_WAN_NODES" ]; then
-    if [ -t 0 ]; then
+    if [ "${OSMO_ISO_WAN_ASK:-0}" = "1" ] && [ -t 0 ]; then
         echo -e "${CYAN}${BOLD}== Table WAN de l'image ==${NC}"
         echo -e "  Format : ${CYAN}<noeud>:<IP>:<indicatif>${NC}, separes par des espaces."
         echo -e "  Entree vide = le banc : ${CYAN}${ISO_WAN_NODES_DEFAULT}${NC}"
@@ -378,9 +380,8 @@ if [ "$ISO_WAN" = "1" ] && [ -z "$ISO_WAN_NODES" ]; then
         fi
     else
         ISO_WAN_NODES="$ISO_WAN_NODES_DEFAULT"
-        echo -e "  ${YELLOW}Pas de terminal : table WAN par defaut${NC}"
     fi
-    echo -e "  ${GREEN}✓${NC} WAN : ${CYAN}${ISO_WAN_NODES}${NC}   hub ${CYAN}${ISO_HUB_IP}${NC}"
+    echo -e "  ${GREEN}✓${NC} WAN : ${CYAN}${ISO_WAN_NODES}${NC}   hub ${CYAN}${ISO_HUB_IP}${NC}  (defaut du banc ; --wan-nodes= / --hub-ip= pour changer)"
 fi
 
 # Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
@@ -388,7 +389,7 @@ fi
 export DOCKER_NO_CACHE="$NO_CACHE"
 
 
-cleanup() { umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$WORK"; }
+cleanup() { umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true; umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 
@@ -1809,6 +1810,22 @@ fi
 
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
+# ── LE CACHE APT DU CHROOT EST PERSISTANT ───────────────────────────────────
+# [2026-09-04] Chaque passe retelechargeait ~700 paquets (le hub, la normale,
+# et toute reconstruction). Le repertoire ou apt (et apt-fast, DLDIR) range ses
+# .deb est un bind du cache de l hote, ISO_DEB_CACHE/apt-archives : telecharge
+# une fois, reutilise par toutes les passes et les builds suivants. Il est
+# demonte AVANT le squashfs (les .deb ne partent pas dans l ISO), et le
+# chroot ne fait plus "apt-get clean" quand il est monte - ce serait vider le
+# cache de l hote. --no-cache : pas de bind, comportement d avant.
+ISO_APT_CACHE_BOUND=0
+if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
+    mkdir -p "$ISO_DEB_CACHE/apt-archives/partial" "$ROOTFS/var/cache/apt/archives"
+    if mount --bind "$ISO_DEB_CACHE/apt-archives" "$ROOTFS/var/cache/apt/archives"; then
+        ISO_APT_CACHE_BOUND=1
+        echo -e "  ${GREEN}cache apt du chroot : $ISO_DEB_CACHE/apt-archives ($(du -sh "$ISO_DEB_CACHE/apt-archives" | cut -f1), $(find "$ISO_DEB_CACHE/apt-archives" -maxdepth 1 -name '*.deb' | wc -l) paquets)${NC}"
+    fi
+fi
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
@@ -1818,7 +1835,7 @@ install -m755 "$DIR/packaging/apt-fast-install.sh" "$ROOTFS/usr/local/sbin/apt-f
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
-chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" \
+chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
                    ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
@@ -2505,7 +2522,13 @@ update-initramfs -u -k "$KERNEL"
 # pesent ~80 Mo, et sur un live en toram ils sont repris en RAM au premier
 # "apt-get update" du boot. Ils n ont servi qu au build-dep gnuradio ci-dessus,
 # qui est deja passe - et plus rien n installe de paquet au demarrage.
-apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# Pas de "apt-get clean" quand /var/cache/apt/archives est le cache de l hote
+# (bind, voir plus haut) : on ne retire que les index et les caches binaires.
+if [ "${ISO_APT_CACHE_BOUND:-0}" = "1" ]; then
+    rm -f /var/cache/apt/*.bin; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+else
+    apt-get clean; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+fi
 rm -f /etc/apt/sources.list.d/deb-src.list
 '
 
@@ -4651,6 +4674,7 @@ done
 chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} banniere de terminal : animation + ${CYAN}cd /opt/GSM/osmo-operator && ./start-direct.sh${NC}"
 
+umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 
 echo -e "  ${GREEN}✓${NC} config terminee"
@@ -5115,6 +5139,7 @@ fi
 # Deplace, pas copie : meme systeme de fichiers, instantane. cleanup() efface
 # ensuite $WORK sans lui.
 if [ -n "${OSMO_ISO_ROOTFS_KEEP:-}" ]; then
+    umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null || true
     umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null || true
     rm -rf "$OSMO_ISO_ROOTFS_KEEP"
     mkdir -p "$(dirname "$OSMO_ISO_ROOTFS_KEEP")"

@@ -44,12 +44,15 @@ ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE} AS base
 ARG DEBIAN_FRONTEND=noninteractive
 # apt-fast : le meme installeur que Dockerfile (packaging/apt-fast-install.sh).
+# Cache apt BuildKit, le meme que Dockerfile (id osmo-apt-archives).
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
-RUN chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install
 # apt est idempotent : sur osmocom-nitb, où tout est déjà installé, cette étape
 # ne fait que constater. On ne duplique donc pas la liste pour ce cas.
 # libasound2t64 : nom noble de libasound2 (transition time_t 64 bits).
-RUN apt-fast update && apt-fast install -y --no-install-recommends \
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    apt-fast update && apt-fast install -y --no-install-recommends \
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \

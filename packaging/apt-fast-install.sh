@@ -17,6 +17,11 @@
 #  apt-fast qui appelle apt-get : la commande existe toujours, le build
 #  continue, plus lentement.
 #
+#  DLDIR = /var/cache/apt/archives : apt-fast telecharge la ou apt range ses
+#  paquets. C est ce qui permet a build-iso.sh de monter un cache PERSISTANT
+#  a cet endroit dans le chroot (les .deb du rootfs sont telecharges une fois,
+#  pour toutes les passes et toutes les reconstructions).
+#
 #  Il pose aussi /etc/apt/apt.conf.d/90osmo-operator - les reglages apt qui
 #  etaient repetes dans le chroot de l ISO et en ligne de commande sur l hote :
 #  pas de traductions, 3 essais, pipeline HTTP, dpkg sans pty. Ce sont des
@@ -69,10 +74,20 @@ _MAXCONPERSRV=10
 _SPLITCON=8
 _MINSPLITSZ="1M"
 _PIECEALGO="default"
-DLDIR=/var/cache/apt/apt-fast
+DLDIR=/var/cache/apt/archives
 DLLIST=/tmp/apt-fast.list
 APT_FAST_TIMEOUT=60
 VERBOSE_OUTPUT=false
 CONF
-mkdir -p /var/cache/apt/apt-fast
+mkdir -p /var/cache/apt/archives/partial
+
+# Garder les .deb telecharges : c est le principe du cache. Les images docker
+# posent /etc/apt/apt.conf.d/docker-clean, qui les efface apres chaque
+# installation - il part. Keep-Downloaded-Packages vaut pour apt >= 1.2.
+rm -f /etc/apt/apt.conf.d/docker-clean
+cat > /etc/apt/apt.conf.d/91osmo-keep-debs <<'CONF'
+// osmo-operator : les paquets telecharges restent dans /var/cache/apt/archives
+Binary::apt::APT::Keep-Downloaded-Packages "true";
+APT::Keep-Downloaded-Packages "true";
+CONF
 echo "[apt-fast] pret : $BIN"
