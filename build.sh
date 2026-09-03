@@ -149,7 +149,9 @@ if [[ -n "$NO_CACHE" ]]; then
     echo "[*] Mode --no-cache actif : reconstruction complete, paquets .deb recompiles."
 else
     cp -f "$OSMO_DEB_CACHE"/osmo-build-*.deb "$DIR/.deb-cache/" 2>/dev/null || true
-    _n=$(ls "$DIR/.deb-cache"/*.deb 2>/dev/null | wc -l)
+    # find, pas "ls | wc" : sous pipefail, un ls sans resultat sortait en 2 et
+    # set -e arretait le script ici, sans un mot, des le premier build.
+    _n=$(find "$DIR/.deb-cache" -maxdepth 1 -name '*.deb' | wc -l)
     if [ "$_n" -gt 0 ]; then
         echo -e "${GREEN}[OK] cache .deb : ${_n} paquets repris de ${OSMO_DEB_CACHE} ($(du -sh "$DIR/.deb-cache" | cut -f1))${NC}"
     else
@@ -178,7 +180,7 @@ debs_from_image() {
     mkdir -p "$DIR/.deb-cache/out"
     docker cp "$cid:/var/cache/osmo-debs/." "$DIR/.deb-cache/out/" 2>/dev/null || true
     docker rm "$cid" >/dev/null 2>&1 || true
-    n=$(ls "$DIR/.deb-cache/out"/osmo-build-*.deb 2>/dev/null | wc -l)
+    n=$(find "$DIR/.deb-cache/out" -maxdepth 1 -name 'osmo-build-*.deb' | wc -l)
     if [ "$n" -gt 0 ]; then
         cp -f "$DIR/.deb-cache/out"/osmo-build-*.deb "$OSMO_DEB_CACHE/"
         echo -e "${GREEN}[OK] cache .deb : ${n} paquets dans ${OSMO_DEB_CACHE} ($(du -sh "$OSMO_DEB_CACHE" | cut -f1))${NC}"

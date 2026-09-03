@@ -728,7 +728,7 @@ if [ "$ISO_ROLE" = "interstp" ]; then
         ! -name 'osmo-build-libosmo-netif_*' ! -name 'osmo-build-libosmo-sigtran_*' -delete 2>/dev/null || true
 fi
 ISO_DEBS_USED=0
-_ndebs=$(ls "$_iso_debs"/*.deb 2>/dev/null | wc -l)
+_ndebs=$(find "$_iso_debs" -maxdepth 1 -name '*.deb' | wc -l)
 if [ "$_ndebs" -gt 0 ]; then
     # Poses via un repertoire DANS le rootfs (dpkg lit ses paquets sous la
     # racine), retire ensuite : les paquets ne voyagent dans l ISO que sur
