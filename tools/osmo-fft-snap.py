@@ -67,6 +67,41 @@ W, H = BOX[2] - BOX[0], BOX[3] - BOX[1]
 PAD, FOOT = 18, 30
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x07")
+# ── LES COULEURS DU JOURNAL SONT DEJA DANS LE JOURNAL ───────────────────────
+# mobile.log est ecrit AVEC ses codes ANSI (osmocom colorie par sous-systeme :
+# « \033[0;31m<0004> gsm322.c:... \033[0;m »). L encart les jetait et
+# repeignait les lignes au petit bonheur, sur des mots-cles (« error »,
+# « call »...) : deux lignes du meme sous-systeme sortaient de couleurs
+# differentes, et la lecture ne ressemblait plus du tout a celle du terminal.
+# On rend donc la couleur que le journal porte, avec la palette Tango - celle
+# du profil gnome-terminal de l image (85-installeur-bureau.sh).
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
+TANGO = {
+    "30": (85, 87, 83),    "31": (204, 0, 0),     "32": (78, 154, 6),
+    "33": (196, 160, 0),   "34": (52, 101, 164),  "35": (117, 80, 123),
+    "36": (6, 152, 154),   "37": (211, 215, 207),
+}
+TANGO_VIF = {
+    "30": (128, 130, 126), "31": (239, 41, 41),   "32": (138, 226, 52),
+    "33": (252, 233, 79),  "34": (114, 159, 207), "35": (173, 127, 168),
+    "36": (52, 226, 226),  "37": (238, 238, 236),
+}
+LOG_DEFAUT = (200, 210, 225)
+
+
+def couleur_ansi(brut):
+    """La couleur que ce terminal donnerait a cette ligne. None si elle n en a pas."""
+    for m in SGR.finditer(brut):
+        codes = [c for c in m.group(1).split(";") if c]
+        if not codes or codes == ["0"]:
+            continue                      # remise a zero : pas une couleur
+        table = TANGO_VIF if "1" in codes else TANGO
+        for c in codes:
+            if c in table:
+                return table[c]
+            if c.startswith("9") and len(c) == 2 and c[1] in "01234567":
+                return TANGO_VIF["3" + c[1]]   # 90-97 : les vifs d ECMA-48
+    return None
 
 
 def font(name, size):
@@ -198,7 +233,7 @@ def tail_lines(path, n, width):
                                   capture_output=True, text=True, timeout=3)
             data = (data.stdout + data.stderr)
         except Exception as e:
-            return [f"{op['NAME']} : journal inaccessible ({type(e).__name__})"]
+            return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
     else:
         try:
             with open(path, "rb") as f:
@@ -207,15 +242,17 @@ def tail_lines(path, n, width):
                 f.seek(max(0, size - 16384))
                 data = f.read().decode("utf-8", "replace")
         except OSError:
-            return [f"{os.path.basename(path)} : pas encore de journal"]
-    lines = [ANSI.sub("", l).rstrip() for l in data.splitlines()]
-    lines = [l for l in lines if l.strip()]
+            return [(f"{os.path.basename(path)} : pas encore de journal", None)]
+    # On garde la ligne BRUTE le temps d en lire la couleur, puis on la nettoie.
+    brutes = [l for l in data.splitlines() if ANSI.sub("", l).strip()]
     out = []
-    for l in lines[-n:]:
+    for brut in brutes[-n:]:
+        col = couleur_ansi(brut)
+        l = ANSI.sub("", brut).rstrip()
         # L horodatage osmocom (20260904135215721) mange 17 colonnes pour rien.
         l = re.sub(r"^\d{17}\s+", "", l)
-        out.append(l[:width])
-    return out or ["(journal vide)"]
+        out.append((l[:width], col))
+    return out or [("(journal vide)", None)]
 
 
 # ── LE BANC : SPECTRE A GAUCHE, JOURNAL A DROITE ────────────────────────────
@@ -271,12 +308,15 @@ def render_live(data):
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)
     cols = max(10, int((x1 - lx0) / 7.3))
-    for i, l in enumerate(tail_lines(MOBILE_LOG, n, cols)):
-        col = (200, 210, 225)
-        if re.search(r"error|fail|reject|lost", l, re.I):
-            col = (248, 81, 73)
-        elif re.search(r"attach|answer|call|SMS|proceed", l, re.I):
-            col = (63, 185, 80)
+    for i, (l, col) in enumerate(tail_lines(MOBILE_LOG, n, cols)):
+        if col is None:
+            # Journal sans couleurs (docker logs, redirection qui les a
+            # mangees) : on retombe sur la lecture par mots-cles.
+            col = LOG_DEFAUT
+            if re.search(r"error|fail|reject|lost", l, re.I):
+                col = TANGO_VIF["31"]
+            elif re.search(r"attach|answer|call|SMS|proceed", l, re.I):
+                col = TANGO_VIF["32"]
         d.text((lx0, y0 + 26 + i * line_h), l, font=F_LOG, fill=col)
     # Le pied : une barre sombre d abord, la legende du strip est dessous.
     d.rounded_rectangle((x0 - 6, y1 + 8, x1 + 6, H - PAD + 4), radius=6, fill=(20, 24, 36))
