@@ -153,3 +153,8 @@ if [ "${ISO_ARCH:-amd64}" = "arm64" ] && [ "$OUTPUT_SET" != "1" ]; then
 fi
 case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

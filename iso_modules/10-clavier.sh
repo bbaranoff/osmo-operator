@@ -63,3 +63,8 @@ echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 # OSMO_ISO_HOST_READY / OSMO_ISO_IMAGE_READY. Une passe lancee seule les
 # appelle elle-meme, une fois.
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

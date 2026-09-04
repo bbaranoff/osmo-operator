@@ -115,3 +115,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -f "$DIR/configs/linphonerc" ]; then
     echo -e "  ${GREEN}✓${NC} linphone : compte ${CYAN}linphone_A${NC} pre-provisionne (poste ${CYAN}100${NC}, UDP vers 127.0.0.1:5060)"
 fi
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

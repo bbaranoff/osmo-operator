@@ -388,3 +388,8 @@ dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 echo -e "  \033[1;32mClavier : ${KB_LAYOUT}\033[0m   (sans persistance, revient au reboot)"
 KBCMD
 chmod +x "$ROOTFS/usr/local/bin/osmo-keyboard"
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

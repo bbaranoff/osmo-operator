@@ -86,3 +86,8 @@ dd if="$ROOT_IMG" of="$OUTPUT" bs=512 seek="$_root_start" conv=notrunc,sparse st
 rm -f "$BOOT_IMG" "$ROOT_IMG"
 sfdisk --dump "$OUTPUT" | sed 's/^/    /' | grep -E "^ +$OUTPUT" || true
 echo -e "  ${GREEN}✓${NC} image assemblee : $(du -h "$OUTPUT" | cut -f1) occupes, $(du -h --apparent-size "$OUTPUT" | cut -f1) apparents"
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

@@ -299,3 +299,8 @@ CRSNAP
 echo -e "  ${GREEN}✓${NC} osmo-firefox-snap.service (Firefox par snap, au premier boot)"
 fi
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

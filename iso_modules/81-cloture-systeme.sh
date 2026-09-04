@@ -438,3 +438,8 @@ chroot "$ROOTFS" systemctl enable osmo-qemu-link 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo-grgsm ; lanceurs qosmo-grgsm/qosmo-dsp recompiles si besoin)"
 
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

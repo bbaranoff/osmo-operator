@@ -57,3 +57,8 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
 echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start.sh) ══${NC}"
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

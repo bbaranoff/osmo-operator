@@ -84,6 +84,39 @@ export DEBIAN_FRONTEND=noninteractive
 echo "[*] apt-fast (packaging/apt-fast-install.sh)..."
 bash "$DIR/packaging/apt-fast-install.sh" || echo -e "${YELLOW}[WARN] apt-fast non installe - apt-get${NC}"
 command -v apt-fast >/dev/null 2>&1 || apt-fast() { apt-get "$@"; }
+
+# ── Le miroir Ubuntu : mesure, pas suppose - pour l image ET pour l hote ────
+# archive.ubuntu.com peut repondre a 3 Ko/s ou pas du tout depuis ici (vu le
+# 2026-09-04 : dix minutes muettes a l etape 3/64, et un apt de l hote qui ne
+# rend jamais la main). packaging/apt-mirror.sh mesure quelques miroirs :
+#   - le plus rapide part dans l image en build-arg (compose le lit dans
+#     l environnement) ; OSMO_UBUNTU_MIRROR=http://... force un miroir ;
+#   - si archive.ubuntu.com ne repond PAS et que les sources apt de l hote le
+#     designent, elles sont basculees sur le plus rapide, avec une sauvegarde
+#     (*.osmo-bak) - sinon aucun paquet hote (qemu-user-static, docker...) ne
+#     s installe. OSMO_HOST_MIRROR=0 interdit de toucher aux sources de l hote,
+#     OSMO_HOST_MIRROR=force les bascule meme si archive repond (lentement).
+echo "[*] Miroir Ubuntu (packaging/apt-mirror.sh)..."
+_MLIST="$(bash "$DIR/packaging/apt-mirror.sh" --list noble 2>&1 | tee /dev/stderr | grep -E '^[0-9]+' || true)"
+OSMO_UBUNTU_MIRROR="${OSMO_UBUNTU_MIRROR:-$(printf '%s\n' "$_MLIST" | head -1 | cut -f2)}"
+OSMO_UBUNTU_MIRROR="${OSMO_UBUNTU_MIRROR:-http://archive.ubuntu.com/ubuntu}"
+export OSMO_UBUNTU_MIRROR
+echo -e "${GREEN}[OK] miroir : ${OSMO_UBUNTU_MIRROR}${NC}"
+if { [ "${OSMO_HOST_MIRROR:-1}" = "force" ] || { [ "${OSMO_HOST_MIRROR:-1}" = "1" ] && ! printf '%s\n' "$_MLIST" | grep -q 'archive\.ubuntu\.com'; }; } \
+   && [ "$OSMO_UBUNTU_MIRROR" != "http://archive.ubuntu.com/ubuntu" ]; then
+    _switched=""
+    for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$_f" ] || continue
+        grep -qE '^(deb|deb-src|URIs:).*https?://(archive|[a-z]{2}\.archive|security)\.ubuntu\.com/ubuntu' "$_f" || continue
+        cp -f "$_f" "$_f.osmo-bak"
+        sed -i -E "s#https?://(archive|[a-z]{2}\.archive|security)\.ubuntu\.com/ubuntu/?#${OSMO_UBUNTU_MIRROR}#g" "$_f"
+        _switched="$_switched $_f"
+    done
+    if [ -n "$_switched" ]; then
+        echo -e "${YELLOW}[WARN] archive.ubuntu.com ne repond pas : sources apt de l hote basculees sur ${OSMO_UBUNTU_MIRROR}${NC}"
+        echo -e "${YELLOW}       (sauvegarde en *.osmo-bak :${_switched} ; OSMO_HOST_MIRROR=0 pour ne pas y toucher)${NC}"
+    fi
+fi
 apt-fast update -qq || true
 
 # 3. Docker, docker compose v2 et buildx : TOUJOURS dans les dependances.
@@ -119,7 +152,9 @@ if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
         *) echo -e "${RED}[ERREUR] --arch : amd64 ou arm64 (recu : $OSMO_ARCH)${NC}"; exit 2 ;;
     esac
     IMG_TAG=":$OSMO_ARCH"
-    apt-fast install -y --no-install-recommends qemu-user-static binfmt-support >/dev/null 2>&1 || true
+    echo "[*] qemu-user-static + binfmt-support (emulation ${OSMO_ARCH} pour docker et chroot)..."
+    apt-fast install -y --no-install-recommends qemu-user-static binfmt-support \
+        || echo -e "${YELLOW}[WARN] qemu-user-static non installe (apt) - binfmt via docker ci-dessous${NC}"
     _bf="/proc/sys/fs/binfmt_misc/qemu-${OSMO_ARCH/arm64/aarch64}"
     _bf="${_bf/amd64/x86_64}"
     [ -e "$_bf" ] || update-binfmts --enable "$(basename "$_bf")" >/dev/null 2>&1 || true
@@ -134,15 +169,6 @@ if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
     fi
     docker buildx version >/dev/null 2>&1 || { echo -e "${RED}[ERREUR] docker buildx requis pour --arch${NC}"; exit 1; }
 fi
-# ── Le miroir Ubuntu de l image : mesure, pas suppose ───────────────────────
-# archive.ubuntu.com peut repondre a 3 Ko/s depuis ici (vu le 2026-09-04 : dix
-# minutes muettes a l etape 3/64). packaging/apt-mirror.sh mesure quelques
-# miroirs et rend le plus rapide ; il part dans l image en build-arg (compose le
-# lit dans l environnement). OSMO_UBUNTU_MIRROR=http://... force un miroir.
-echo "[*] Miroir Ubuntu (packaging/apt-mirror.sh)..."
-OSMO_UBUNTU_MIRROR="$(bash "$DIR/packaging/apt-mirror.sh" noble)"
-export OSMO_UBUNTU_MIRROR
-echo -e "${GREEN}[OK] miroir : ${OSMO_UBUNTU_MIRROR}${NC}"
 IMG_NITB="osmocom-nitb${IMG_TAG}"
 IMG_LITE="osmocom-nitb:lite${IMG_TAG:+-$OSMO_ARCH}"
 IMG_STP="osmocom-stp${IMG_TAG}"

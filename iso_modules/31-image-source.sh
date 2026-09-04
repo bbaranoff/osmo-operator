@@ -77,3 +77,8 @@ echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prete"
 # et configs vers le rootfs a l'etape 6). On ne la save plus dans l'ISO : pas de
 # docker au runtime, pas de tar.gz de plusieurs Go embarque.
 
+
+# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
+# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
+# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+true

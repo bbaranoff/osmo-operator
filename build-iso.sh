@@ -40,6 +40,10 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # numeros, dans CE shell : les variables, les fonctions et le trap restent
 # globaux, exactement comme avant le decoupage. Un module qui n a rien a
 # faire (une variante, une architecture) fait `return` en tete.
+# ATTENTION : `. fichier` rend le statut de la derniere commande du fichier,
+# et set -e est actif. Chaque module se termine donc par `true` - sans quoi
+# un module finissant par un test faux ("[ ... ] && { ... }", le test root de
+# 00-options quand on EST root) arretait le script en silence, statut 1.
 MODDIR="$DIR/iso_modules"
 [ -d "$MODDIR" ] || { echo -e "${RED}iso_modules/ introuvable a cote de $0${NC}" >&2; exit 2; }
 shopt -s nullglob; _ISO_MODS=("$MODDIR"/[0-9][0-9]-*.sh); shopt -u nullglob
