@@ -19,6 +19,10 @@
 # install` pose le paquet et saute le clone + la compilation ; `osmo-deb pack`
 # et `osmo-deb snapshot` fabriquent le paquet la premiere fois. build.sh
 # --no-cache passe OSMO_DEB_REFRESH=1 : tout est recompile et le cache reecrit.
+# LES SOURCES RESTENT DANS /opt/GSM : `osmo-deb pack` embarque l arbre courant
+# (/opt/GSM/<nom>, .git et objets compris) dans le paquet, et les snapshots
+# nomment l arbre. Un rebuild depuis le cache redonne donc la meme image, avec
+# ses ateliers - pas une image ou seul /usr/local subsiste.
 #
 # L'iteration quotidienne se fait dans Dockerfile.run, qui repart de cette image
 # (`FROM osmocom-nitb`) et n'y rafraichit que les scripts, les configs, le pont
@@ -724,7 +728,8 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
-# Seul le binaire est mis en cache : l arbre ne sert qu a le produire.
+# Le binaire ET l arbre partent dans le paquet : les sources restent dans
+# /opt/GSM au rebuild depuis le cache (voir l en-tete, CACHE .deb).
 RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
       git clone --branch jolly/testing --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
@@ -733,7 +738,8 @@ RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
       && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
       && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \
          /usr/local/bin/transceiver \
-      && osmo-deb snapshot osmocom-bb-transceiver 0.git /usr/local/bin/transceiver; \
+      && osmo-deb snapshot osmocom-bb-transceiver 0.git /usr/local/bin/transceiver \
+             /opt/GSM/osmocom-bb-transceiver; \
     fi
 
 # osmocom-bb fixeria/burst_ind → ccch_scan / bcch_scan / cell_log
@@ -749,7 +755,7 @@ RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
          /usr/local/bin/bcch_scan 2>/dev/null || true; } \
       && { cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/cell_log \
          /usr/local/bin/cell_log 2>/dev/null || true; } \
-      && osmo-deb snapshot osmocom-bb-burst-ind 0.git \
+      && osmo-deb snapshot osmocom-bb-burst-ind 0.git /opt/GSM/osmocom-bb-burst_ind \
            $(ls /usr/local/bin/ccch_scan /usr/local/bin/bcch_scan /usr/local/bin/cell_log 2>/dev/null); \
     fi
 

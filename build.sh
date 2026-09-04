@@ -32,6 +32,11 @@ set -euo pipefail
 # "docker build ." cherche /root/Dockerfile et echoue.
 cd "$(dirname "$(readlink -f "$0")")"
 DIR="$(pwd)"
+# /usr/local/sbin DANS le PATH : apt-fast-install pose apt-fast la (comme le
+# Dockerfile). Un root dont le PATH ne le contient pas (shell perso, sans sudo)
+# voyait "[apt-fast] pret : /usr/local/sbin/apt-fast" puis "apt-fast: command
+# not found" a la ligne suivante.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 

@@ -90,4 +90,11 @@ cat > /etc/apt/apt.conf.d/91osmo-keep-debs <<'CONF'
 Binary::apt::APT::Keep-Downloaded-Packages "true";
 APT::Keep-Downloaded-Packages "true";
 CONF
+# Si /usr/local/sbin n est pas dans le PATH de l appelant (root sans sudo, PATH
+# perso), la commande resterait introuvable juste apres "pret" : un lien dans
+# /usr/local/bin, qui y est toujours, regle le cas sans toucher au PATH.
+if ! command -v apt-fast >/dev/null 2>&1; then
+    ln -sfn "$BIN" /usr/local/bin/apt-fast
+    echo "[apt-fast] /usr/local/sbin absent du PATH - lien /usr/local/bin/apt-fast"
+fi
 echo "[apt-fast] pret : $BIN"

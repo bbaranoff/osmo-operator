@@ -18,6 +18,11 @@ ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# /usr/local/sbin DANS le PATH : apt-fast-install pose apt-fast la, sur l hote
+# comme dans le rootfs. Le chroot plus bas herite de ce PATH (env ... bash -c) :
+# sans lui, "[apt-fast] pret : /usr/local/sbin/apt-fast" etait suivi de
+# "bash: line 202: apt-fast: command not found" dans le chroot.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 NO_CACHE=""
 # ── WAN : jamais par defaut. Avec --wan, l'ISO EST un noeud du WAN ───────────
@@ -1835,7 +1840,8 @@ install -m755 "$DIR/packaging/apt-fast-install.sh" "$ROOTFS/usr/local/sbin/apt-f
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
-chroot "$ROOTFS" env ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
+chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                   ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
                    ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
@@ -3282,7 +3288,7 @@ printf 'sctp\ntun\n' > "$ROOTFS/etc/modules-load.d/osmocom.conf"
 
 # Variables d'environnement
 cat > "$ROOTFS/etc/environment" <<'EOF'
-PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH="/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 LD_LIBRARY_PATH="/usr/local/lib"
 EOF

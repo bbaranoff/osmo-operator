@@ -24,6 +24,12 @@
 #        fabrique le .deb depuis le staging, l installe dans la racine et le
 #        range dans le cache. Usage type :
 #            ./configure && make -j && osmo-deb pack libosmocore 1.12.1 make install
+#        L ARBRE DE SOURCES PART AVEC : le dossier courant, quand il est sous
+#        /opt/GSM, est ajoute tel quel au paquet (.git, objets compiles). Au
+#        rebuild depuis le cache, /opt/GSM/<nom> existe donc toujours - l image
+#        et l ISO restent un atelier ou l on peut relire, patcher et refaire
+#        `make`. Sans cela, un cache plein donnait une image SANS aucune source.
+#        OSMO_DEB_SRC=/chemin designe un autre arbre ; OSMO_DEB_NO_SRC=1 le retire.
 #
 #    osmo-deb snapshot <nom> <version> <chemin...>
 #        Pour ce qui n a pas d etape d installation (un arbre de sources qui
@@ -45,6 +51,7 @@ set -euo pipefail
 CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 REFRESH="${OSMO_DEB_REFRESH:-0}"
 PREFIX="osmo-build-"
+SRC_ROOT="${OSMO_DEB_SRC_ROOT:-/opt/GSM}"   # les arbres de sources vivent la
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 SUITE="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-unknown}")"
 MAINT="osmo-operator <bastienbaranoff@gmail.com>"
@@ -115,6 +122,16 @@ cmd_pack() {
     if [ -z "$(find "$stage" -mindepth 1 -maxdepth 1 ! -name DEBIAN 2>/dev/null)" ]; then
         rm -rf "$stage"
         die "$name : rien n a ete installe dans DESTDIR - la commande l ignore-t-elle ?"
+    fi
+    # L arbre de sources (le dossier courant, sous /opt/GSM) part dans le
+    # paquet : les sources restent dans /opt/GSM meme quand le cache dispense
+    # de cloner et de compiler. Voir l en-tete.
+    local src="${OSMO_DEB_SRC:-$PWD}"
+    if [ "${OSMO_DEB_NO_SRC:-0}" != "1" ] && [ -d "$src" ] && [ ! -e "$stage$src" ] \
+       && case "$src" in "$SRC_ROOT"/?*) true ;; *) false ;; esac; then
+        mkdir -p "$stage$(dirname "$src")"
+        cp -a "$src" "$stage$(dirname "$src")/"
+        log "$name : arbre de sources $src inclus dans le paquet"
     fi
     make_deb "$stage" "$name" "$ver"
     dpkg -i --force-overwrite "$(deb_path "$name" "$ver")" >/dev/null
