@@ -73,6 +73,15 @@ lancement_possible() {
     banc_en_demarrage && return 1
     verrou_pris
 }
+# [2026-09-04] LE VERROU DOIT MOURIR AVEC LE DEMARRAGE, PAS AVEC LA FENETRE.
+# Tenu par le descripteur 9, il vivait aussi longtemps que le processus - donc
+# jusqu a ce que quelqu un appuie sur Entree devant « Fenetre maintenue
+# ouverte », et au-dela si la fenetre restait la (ou si on s attachait a tmux,
+# l exec gardant le descripteur). Une fenetre oubliee sur un coin de bureau
+# suffisait alors a faire repondre « un lancement est deja en cours » a TOUS
+# les clics suivants, y compris « Demarrer le banc en service ». On le rend
+# donc des que le banc est monte.
+verrou_liberer() { exec 9>&- 2>/dev/null || true; }
 
 # ── 0. DEMARRER COMME UN SERVICE (action du clic droit) ─────────────────────
 # [2026-09-04] L icone n avait que deux gestes : « lancer » (qui ouvre un
@@ -88,7 +97,8 @@ lancement_possible() {
 # demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
 # l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
 # « c est parti » sans suite.
-if [ "${1:-}" = "--service" ] || [ "${1:-}" = "--stop" ]; then
+case "${1:-}" in --service|--stop|--dashboard|--console) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
+if [ "$_bloc_direct" = "1" ]; then
     # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
     # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
     # c est precisement ce que ces deux actions promettent de ne pas ouvrir.
@@ -106,6 +116,43 @@ if [ "${1:-}" = "--service" ] || [ "${1:-}" = "--stop" ]; then
         fi
         echo -e "  ${CYAN}→${NC} $1"
     }
+
+    # ── LE TABLEAU DE BORD ─────────────────────────────────────────────────
+    # Un clic, une page. xdg-open passe par le navigateur par defaut, donc par
+    # la fenetre deja ouverte s il y en a une : un onglet de plus, pas une
+    # deuxieme fenetre.
+    if [ "$_action" = "--dashboard" ]; then
+        _u="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
+        if command -v xdg-open >/dev/null 2>&1; then
+            setsid xdg-open "$_u" >/dev/null 2>&1 &
+        elif command -v firefox >/dev/null 2>&1; then
+            setsid firefox "$_u" >/dev/null 2>&1 &
+        else
+            _note "Aucun navigateur - ouvrez $_u a la main."; exit 1
+        fi
+        exit 0
+    fi
+
+    # ── LA CONSOLE DU BANC ─────────────────────────────────────────────────
+    # Celle-ci, ET ELLE SEULE, ouvre un terminal : `tmux attach` est une session
+    # interactive, elle n a nulle part ailleurs ou vivre. Le lancement du banc,
+    # lui, n en ouvre plus (voir le bloc « UN CLIC = UN SERVICE »).
+    if [ "$_action" = "--console" ]; then
+        _sess="${TMUX_SESSION:-calypso}"
+        if ! tmux has-session -t "$_sess" 2>/dev/null; then
+            _note "Pas de session « $_sess » : le banc ne tourne pas."
+            exit 1
+        fi
+        for _t in gnome-terminal xfce4-terminal konsole xterm; do
+            command -v "$_t" >/dev/null 2>&1 || continue
+            case "$_t" in
+                gnome-terminal) exec "$_t" -- tmux attach -t "$_sess" ;;
+                *)              exec "$_t" -e "tmux attach -t $_sess" ;;
+            esac
+        done
+        _note "Aucun emulateur de terminal - tapez : tmux attach -t $_sess"
+        exit 1
+    fi
 
     # ── ARRETER ────────────────────────────────────────────────────────────
     # [2026-09-04] « Arreter le banc » etait traite APRES le bloc terminal :
@@ -127,8 +174,14 @@ if [ "${1:-}" = "--service" ] || [ "${1:-}" = "--stop" ]; then
         # tableau de bord aussi, et l arret semblait ne rien faire. On demonte
         # alors a la main ce que ExecStop n a pas eu l occasion de demonter.
         case "$_etat" in
-            active|activating|reloading) ;;
-            *) [ -x "$TARGET" ] && timeout 120 "$TARGET" --stop >/dev/null 2>&1 || true ;;
+            active|activating|reloading) ;;   # ExecStop a fait le travail
+            *)
+                [ -x "$TARGET" ] && timeout 120 "$TARGET" --stop >/dev/null 2>&1 || true
+                # Les deux unites que le second ExecStop de osmo-banc.service
+                # arrete : elles ne sont PAS dans le cgroup du banc et
+                # survivraient a un arret par ce chemin-la.
+                systemctl stop osmo-egprs-web.service osmo-hlr.service 2>/dev/null || true
+                ;;
         esac
         # Sans ca l unite reste « failed » et le prochain demarrage part d un
         # etat d echec.
@@ -161,6 +214,43 @@ if [ "${1:-}" = "--service" ] || [ "${1:-}" = "--stop" ]; then
         exit 0
     fi
     _note "Echec de $_svc - journalctl -u ${_svc%.service} -n 80"
+    exit 1
+fi
+
+# ── UN CLIC = UN SERVICE ; UN DEUXIEME CLIC = UNE FENETRE QUI DIT POURQUOI ──
+# [2026-09-04] Un clic sur le telephone rouge ouvrait une fenetre de terminal et
+# y deroulait tout le demarrage. C est utile quand on lance a la main, ca ne
+# l est pas depuis une icone : on veut le banc, pas sa sortie, et la fenetre
+# reste ensuite ouverte sur un « Entree pour fermer » que personne ne lit.
+#
+# Depuis une icone (ni stdin ni stdout sur un terminal), on part donc en mode
+# service : systemd monte le banc, une notification annonce le resultat, aucune
+# fenetre ne s ouvre. C est exactement l action « Demarrer le banc en service »
+# du clic droit - un seul chemin, pas deux comportements a tenir a jour.
+#
+# LE DEUXIEME CLIC NE DOIT RIEN OUVRIR NON PLUS - mais il doit se VOIR. Sans
+# rien, un double-clic sortirait en silence et l icone passerait pour morte. Il
+# repond donc par une notification de bureau : le verrou est annonce, aucune
+# fenetre n apparait.
+#
+# Lancement a la main dans un terminal : rien ne change, on garde ce terminal,
+# et c est la que l avertissement encadre du verrou (plus bas) s affiche.
+if { [ ! -t 0 ] || [ ! -t 1 ]; } \
+   && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ] && [ "${OSMO_TERM_TAKEN:-0}" != "1" ] \
+   && [ "${OSMO_LAUNCH_NO_SERVICE:-0}" != "1" ] \
+   && systemctl cat "${OSMO_BANC_SERVICE:-osmo-banc.service}" >/dev/null 2>&1; then
+    if lancement_possible; then
+        # Le verrou pris ici survit a l exec : c est le meme processus qui va
+        # tenir le demarrage, sous son autre nom.
+        exec "$0" --service "$@"
+    fi
+    # Verrou pris : on le dit, et on s arrete la. Pas de fenetre.
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -i /usr/share/osmo-operator/icons/osmo-launch.svg "Banc GSM" \
+            "Un lancement est deja en cours. Rien de fait - suivez-le avec journalctl -u osmo-banc -f." \
+            2>/dev/null || true
+    fi
+    echo "Un lancement est deja en cours - rien de fait." >&2
     exit 1
 fi
 
@@ -429,10 +519,17 @@ tout_arreter
 # les deux consoles conteneurs, sans celle du natif ni le tutoriel.
 # Firefox, lui, sait ne pas se dedoubler : une seconde invocation ajoute des
 # onglets a la fenetre existante.
-# Par defaut a 1 : le double-clic sur le telephone rouge ne change pas.
-OSMO_LAUNCH_APPS="${OSMO_LAUNCH_APPS:-1}"
+#
+# [2026-09-04] PAR DEFAUT A 0. Un clic sur le telephone rouge ouvrait QUATRE
+# fenetres d un coup : son terminal, Wireshark, Linphone et le navigateur -
+# empilees, a repositionner a la main, alors qu on voulait seulement monter le
+# banc. Wireshark et Linphone sont des outils qu on ouvre QUAND on en a besoin,
+# depuis leur propre icone ; ils ne font pas partie du demarrage. Restent le
+# terminal (la sortie du demarrage) et le navigateur (le tableau de bord).
+# OSMO_LAUNCH_APPS=1 ./launch.sh les rouvre pour qui les veut tous.
+OSMO_LAUNCH_APPS="${OSMO_LAUNCH_APPS:-0}"
 if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
-    echo -e "  ${CYAN}i${NC} mode banc seul : wireshark et linphone non lances (firefox garde ses onglets)"
+    echo -e "  ${CYAN}i${NC} wireshark et linphone non lances (OSMO_LAUNCH_APPS=1 pour les avoir)"
 fi
 
 # ── 1. WIRESHARK sur udp/4729 ───────────────────────────────────────────────
@@ -532,6 +629,7 @@ if banc_unit_present; then
     if [ "$rc" -eq 0 ] && [ -t 1 ] && tmux has-session -t "${TMUX_SESSION:-calypso}" 2>/dev/null; then
         echo -e "  ${CYAN}connexion a la session tmux « ${TMUX_SESSION:-calypso} »  (Ctrl-b d pour detacher)${NC}"
         sleep 1
+        verrou_liberer   # sinon le client tmux le garderait tant qu on reste attache
         exec tmux attach -t "${TMUX_SESSION:-calypso}"
     fi
 elif [ "${OSMO_LAUNCH_MENU:-0}" = "1" ]; then
@@ -541,6 +639,8 @@ else
     NO_MENU=1 "$TARGET" "$@"
     rc=$?
 fi
+
+verrou_liberer
 
 echo
 if [ "$rc" -eq 0 ]; then

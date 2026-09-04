@@ -231,8 +231,14 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     d.text((x1 - pad - d.textlength(site, font=sf), y + 6), site, font=sf, fill=(180, 200, 240))
 
 
-def strip_panel(base, box, strip_path, date_str):
-    """Le strip Calvin & Hobbes du jour, dans un cadre blanc arrondi."""
+def strip_panel(base, box, strip_path, date_str, credit=None):
+    """L image du jour, dans un cadre blanc arrondi.
+
+    `credit` est la ligne de pied : elle NOMME la source. Elle etait ecrite en
+    dur (« Calvin & Hobbes ... gocomics.com ») du temps ou il n y avait qu une
+    source ; depuis que osmo-wallpaper.sh en tire une au sort, une legende figee
+    aurait attribue a Bill Watterson un xkcd ou une photo de la NASA.
+    """
     x0, y0, x1, y1 = box
     glass_panel(base, box, fill=(20, 24, 36), alpha=210, border=(200, 200, 210))
     d = ImageDraw.Draw(base)
@@ -252,7 +258,7 @@ def strip_panel(base, box, strip_path, date_str):
                         fill=(255, 255, 255))
     base.paste(strip, (sx, sy))
     d = ImageDraw.Draw(base)
-    cap = f"Calvin & Hobbes  ·  Bill Watterson  ·  {date_str}  ·  gocomics.com"
+    cap = credit or f"Calvin & Hobbes  ·  Bill Watterson  ·  {date_str}  ·  gocomics.com"
     cf = font("DejaVuSansMono.ttf", 13)
     d.text((x0 + pad, y1 - foot + 6), cap, font=cf, fill=(160, 170, 190))
 
@@ -262,6 +268,9 @@ def main():
     ap.add_argument("--tower", required=True)
     ap.add_argument("--strip", default=None)
     ap.add_argument("--date", default=datetime.date.today().isoformat())
+    ap.add_argument("--credit", default=None,
+                    help="ligne de pied sous l image (source, auteur). "
+                         "Defaut : la legende Calvin & Hobbes.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--arfcn", default="514")
     ap.add_argument("--band", default="DCS 1800")
@@ -271,7 +280,7 @@ def main():
     card(base, (320, 60, 1430, 560), a.arfcn, a.band)
     if a.strip and os.path.isfile(a.strip):
         try:
-            strip_panel(base, (320, 600, 1430, 1010), a.strip, a.date)
+            strip_panel(base, (320, 600, 1430, 1010), a.strip, a.date, a.credit)
         except Exception as e:  # GIF corrompu, page HTML au lieu d une image...
             print(f"[wallpaper] strip ignore : {e}", file=sys.stderr)
     tmp = a.out + ".tmp.png"

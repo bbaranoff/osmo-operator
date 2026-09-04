@@ -91,6 +91,34 @@ EOF
 chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
 chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
 
+# ── DNS : NE PAS EMBARQUER LE resolv.conf DE L HOTE DE CONSTRUCTION ─────────
+# [2026-09-04] 80-chroot.sh copie /etc/resolv.conf de l hote dans le rootfs pour
+# que l apt du chroot ait un DNS. Sur un hote Ubuntu, ce fichier est le STUB de
+# systemd-resolved : « nameserver 127.0.0.53 », une adresse qui n a de sens que
+# si systemd-resolved tourne. Il partait tel quel dans l image, en fichier
+# ordinaire - et la machine demarree n avait pas systemd-resolved (paquet a part
+# sur noble, ajoute depuis dans PKGS). Resultat : personne derriere 127.0.0.53,
+# et TOUTE resolution echouait par « Temporary failure in name resolution »,
+# sur une machine dont l IP marchait parfaitement (route par defaut, ping vers
+# une IP nue, tout allait). Le fond d ecran ne trouvait plus son strip, apt ne
+# trouvait plus ses depots, et l on cherchait une panne de reseau qui n existait
+# pas.
+#
+# On remet donc le lien standard d Ubuntu vers le stub. Il pointe vers un
+# fichier de /run que systemd-resolved ecrit a chaque demarrage ; le paquet
+# etant maintenant installe ET active (ci-dessus), quelqu un ecoute bien
+# derriere. Sans le lien, le fichier fige de l hote resterait prioritaire.
+ln -sfn ../run/systemd/resolve/stub-resolv.conf "$ROOTFS/etc/resolv.conf"
+# Filet : si systemd-resolved ne demarrait pas, /run/.../stub-resolv.conf serait
+# absent et le lien pendouillerait - donc AUCUN DNS. On laisse une copie de
+# secours que NetworkManager ou un operateur peut remettre en place.
+printf '# Repli hors systemd-resolved : cp %s /etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+' \
+    /etc/resolv.conf.secours > "$ROOTFS/etc/resolv.conf.secours"
+echo -e "  ${GREEN}✓${NC} DNS : /etc/resolv.conf -> stub systemd-resolved (repli /etc/resolv.conf.secours)"
+
 # ── Les adresses privees du noeud, posees a l'EXECUTION ─────────────────────
 # Voir network/osmo-ip-plan.sh : il choisit la carte qui fournit reellement
 # Internet, y pose 192.168.<noeud+1>.1 et .10, et retombe sur 127.0.0.66 sur lo

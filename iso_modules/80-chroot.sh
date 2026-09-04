@@ -23,6 +23,10 @@ if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
     fi
 fi
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
+# Le resolv.conf de l HOTE, et seulement pour la duree du chroot : c est lui qui
+# donne un DNS a apt pendant la construction. Il est REMPLACE a la fin
+# (81-cloture-systeme.sh) - voir le bloc DNS la-bas pour ce qu il cassait quand
+# il restait.
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
 # L installeur apt-fast, le meme que celui du Dockerfile, dans le rootfs.
@@ -242,7 +246,11 @@ if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
       linux-firmware-raspi rpi-eeprom libraspberrypi-bin raspi-config build-essential wget"
     _LIVE_PKGS=""
 fi
-PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate
+# systemd-resolved : sur noble c est un paquet A PART, et il n est PAS tire par
+# le minbase de debootstrap. Sans lui, le stub 127.0.0.53 que designe
+# /etc/resolv.conf n a personne derriere - voir le bloc DNS de
+# 81-cloture-systeme.sh.
+PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved
       $_KERNEL_PKG initramfs-tools
       $_LIVE_PKGS
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev $_CARES
@@ -580,6 +588,23 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
             apt-fast install -y $APT_OPTS "firefox-l10n-${OSMO_ISO_KB:-fr}" 2>/dev/null \
                 || echo "  [desktop] firefox-l10n-${OSMO_ISO_KB:-fr} indisponible - interface en anglais"
         fi
+    fi
+    # ── LA PAGE DE DEMARRAGE ────────────────────────────────────────────────
+    # Par une preference PAR DEFAUT (defaults/pref/), pas par une politique :
+    # /etc/firefox/policies/policies.json a deja un proprietaire
+    # (install-web-service.sh, qui y met les origines et le certificat du
+    # tableau de bord), et Firefox n en lit qu UN SEUL - le deuxieme qui ecrit
+    # efface le premier. Une preference par defaut ne croise rien, et
+    # l operateur peut toujours changer sa page d accueil dans les reglages.
+    # OSMO_FF_HOME permet de la choisir au build.
+    if [ "$_ff_ok" = "1" ] && [ -d /usr/lib/firefox/defaults/pref ]; then
+        cat > /usr/lib/firefox/defaults/pref/osmo-homepage.js <<FFPREF
+// Pose par build-iso.sh (iso_modules/80-chroot.sh). Preference PAR DEFAUT :
+// modifiable dans Firefox, remise a cette valeur sur un profil neuf.
+pref("browser.startup.homepage", "${OSMO_FF_HOME:-https://pl4y.store}");
+pref("browser.startup.page", 1);
+FFPREF
+        echo "  [desktop] Firefox : page de demarrage ${OSMO_FF_HOME:-https://pl4y.store}"
     fi
     if [ "$_ff_ok" = "1" ]; then
         echo "  [desktop] Firefox : $(dpkg-query -W -f=\${Version} firefox 2>/dev/null) (deb Mozilla, packages.mozilla.org)"

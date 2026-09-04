@@ -11,6 +11,7 @@
 #
 #   [ Dashboard ]  firefox http://<operateur>:8080
 #   [ tmux ]       un terminal attache a la session du banc
+#   [ VTY 4247 ]   un terminal sur telnet 127.0.0.1 4247 (console du mobile)
 #   [ < ] op 2/3 [ > ]   SEULEMENT en multi-operateur : passe d un operateur a
 #                  l autre. Le choix est ecrit dans /run/osmo-fft/operator ; le
 #                  rendu FFT (osmo-fft-snap.py) et le Conky en haut a droite
@@ -43,6 +44,9 @@ PID_FILE = os.path.join(RUN, "panel.pid")
 MULTI_CONF = os.environ.get("MULTI_CONF", "/etc/osmocom/osmo-multi.conf")
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "calypso")
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
+# Le VTY du client mobile (osmocom-bb « mobile »). 4247 pour MS#1 ; MS#2 est sur
+# 4248 - voir start-direct.sh, qui les attribue.
+VTY_PORT = int(os.environ.get("MS_VTY_PORT", "4247"))
 # La boite du strip dans le fond (1920x1080).
 BOX = (320, 600, 1110, 410)
 FW, FH = 1920, 1080
@@ -184,13 +188,19 @@ class Panel(Gtk.Window):
         b_tmux = Gtk.Button(label="tmux")
         b_tmux.set_tooltip_text("terminal attache a la session du banc (Ctrl-b d pour detacher)")
         b_tmux.connect("clicked", self.on_tmux)
+        # Le VTY du mobile : la console ou l on tape « show ms », « call 100102 »
+        # ... C est le troisieme endroit qu on ouvre a la main dix fois par
+        # seance ; il n avait pas de bouton.
+        b_vty = Gtk.Button(label="VTY 4247")
+        b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} (console du mobile)")
+        b_vty.connect("clicked", self.on_vty)
         self.b_prev = Gtk.Button(label="<")
         self.b_next = Gtk.Button(label=">")
         self.b_prev.connect("clicked", self.on_prev)
         self.b_next.connect("clicked", self.on_next)
         self.l_op = Gtk.Label(label="")
         self.l_op.get_style_context().add_class("op")
-        for wdg in (b_dash, b_tmux, self.b_prev, self.l_op, self.b_next):
+        for wdg in (b_dash, b_tmux, b_vty, self.b_prev, self.l_op, self.b_next):
             bar.pack_start(wdg, False, False, 0)
         overlay.add_overlay(bar)
         self.add(overlay)
@@ -266,6 +276,17 @@ class Panel(Gtk.Window):
             if subprocess.run(["which", browser], capture_output=True).returncode == 0:
                 spawn([browser, url])
                 return
+
+    def on_vty(self, *_):
+        # telnet, et pas nc : c est ce que la documentation Osmocom donne, et le
+        # VTY attend un vrai terminal ligne a ligne. Le `read` final garde la
+        # fenetre ouverte quand le port est ferme - sinon elle se refermerait
+        # avant qu on ait lu pourquoi.
+        op = self.ops[self.cur] if self.ops else ("1", "native", "")
+        host = op[2] or "127.0.0.1"
+        cmd = (f"telnet {host} {VTY_PORT}"
+               f" || {{ echo; echo 'VTY {host}:{VTY_PORT} injoignable - banc arrete ?'; read -r _; }}")
+        terminal(cmd)
 
     def on_tmux(self, *_):
         op = self.ops[self.cur] if self.ops else ("1", "native", "")

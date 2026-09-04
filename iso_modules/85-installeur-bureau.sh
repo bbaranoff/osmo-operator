@@ -302,12 +302,41 @@ INSTALLER
     # sleep 6 : conky doit trouver le bureau GNOME deja peint (own_window_type
     # desktop), sinon il reste derriere le fond d ecran. --daemonize : la
     # session n attend pas. Une seule instance : pkill avant.
+    # ── UN VEILLEUR, PAS UN LANCEMENT UNIQUE ───────────────────────────────
+    # [2026-09-04] L autostart lancait osmo-panel.py UNE FOIS, en tache de fond.
+    # osmo-panel.py est la fenetre qui AFFICHE /run/osmo-fft/panel.png : sans
+    # elle, l encart n existe pas a l ecran, quoi que fabrique osmo-fft-snap.
+    # Or c est un python3 - et le demontage du banc tuait tous les python3 (voir
+    # killall_python dans start-direct.sh). Un seul arret du banc, et l encart
+    # disparaissait de l ecran POUR LE RESTE DE LA SESSION : plus de FFT, plus
+    # de mobile.log, et rien dans aucun journal pour le dire.
+    # Le teardown les epargne desormais, mais un plantage, un OOM ou un kill a
+    # la main auraient le meme effet. On les surveille donc : ce script relance
+    # ce qui manque, toutes les cinq secondes, sans jamais doubler.
+    cat > "$ROOTFS/usr/local/bin/osmo-desktop-panel" <<'PANEL'
+#!/bin/sh
+# osmo-desktop-panel - tient l encart et Conky en vie pour toute la session.
+# Lance par /etc/xdg/autostart/osmo-conky.desktop. Voir build-iso.sh (85).
+REPO=/opt/GSM/osmo-operator
+# Conky doit trouver le bureau GNOME deja peint (own_window_type desktop),
+# sinon il se pose derriere le fond d ecran.
+sleep 6
+while :; do
+    pgrep -f "$REPO/tools/osmo-panel.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
+    pgrep -x conky >/dev/null 2>&1 || \
+        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
+    sleep 5
+done
+PANEL
+    chmod 755 "$ROOTFS/usr/local/bin/osmo-desktop-panel"
+
     cat > "$ROOTFS/etc/xdg/autostart/osmo-conky.desktop" <<'CONKY'
 [Desktop Entry]
 Type=Application
 Name=Conky osmo-operator
 Comment=Tableau de bord du banc GSM (coeur, radio, abonnes, services)
-Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; /opt/GSM/osmo-operator/tools/osmo-panel.py >/tmp/osmo-panel.log 2>&1 & exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
+Exec=/usr/local/bin/osmo-desktop-panel
 Icon=utilities-system-monitor
 Terminal=false
 NoDisplay=true

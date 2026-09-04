@@ -101,7 +101,18 @@ subs)
         dbl="/tmp/.conky-hlr-${OP_NAME}.db"
         docker cp "$OP_NAME:$db" "$dbl" >/dev/null 2>&1 && db="$dbl"
     fi
-    if have sqlite3 && [ -r "$db" ]; then
+    # ── L ETAT DU HLR NE SE LIT PAS DANS SA BASE ─────────────────────────
+    # [2026-09-04] Ce bloc ouvrait hlr.db et affichait « N abonnes · M
+    # rattaches » sans jamais regarder si osmo-hlr tournait. La base survit au
+    # demon : le tableau de bord montrait donc un HLR allume, et des abonnes
+    # « rattaches » a un VLR disparu, des heures apres l arret du banc. On
+    # regarde le demon d abord ; la base ne dit que ce qui est PROVISIONNE.
+    if ! alive_x osmo-hlr; then
+        _n=""
+        have sqlite3 && [ -r "$db" ] && \
+            _n="$(sqlite3 "$db" 'select count(*) from subscriber;' 2>/dev/null)"
+        echo "HLR ${KO} arrete${_n:+ ${AR}${_n} abonnes en base}"
+    elif have sqlite3 && [ -r "$db" ]; then
         tot="$(sqlite3 "$db" 'select count(*) from subscriber;' 2>/dev/null)"
         att="$(sqlite3 "$db" "select count(*) from subscriber where vlr_number is not null and vlr_number != '';" 2>/dev/null)"
         last="$(sqlite3 "$db" 'select max(last_lu_seen) from subscriber;' 2>/dev/null)"

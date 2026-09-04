@@ -5,7 +5,10 @@ Documentation=file:/opt/GSM/osmo-operator/README.md
 # et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
 # services absent ne doit pas empecher la radio de monter.
 After=network-online.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
-Wants=network-online.target osmo-pulse.service
+# osmo-egprs-web est TIRE par le banc : ExecStop l arrete, il faut donc que le
+# demarrage le remonte, sinon un cycle arret/relance laisserait le tableau de
+# bord eteint.
+Wants=network-online.target osmo-pulse.service osmo-egprs-web.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-direct.sh
 # Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
 # (Requires= dans osmo-multi.service), il ne le remplace pas.
@@ -42,6 +45,13 @@ EnvironmentFile=-/etc/default/osmo-banc
 # n existe pas, et l unite est alors sautee sans jamais demarrer.
 ExecStart=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --no-attach $OSMO_BANC_ARGS
 ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
+# LE COEUR ET LE TABLEAU DE BORD SUIVENT LE BANC. osmo-hlr et osmo-egprs-web
+# sont des unites a part, demarrees l une par run.sh, l autre au boot : elles
+# survivaient a l arret du banc. On se retrouvait avec un HLR qui garde ses
+# abonnes et un tableau de bord qui affiche un banc qui n existe plus.
+# `-` en tete : une unite deja arretee, ou absente, n a pas a faire echouer
+# l arret.
+ExecStop=-/usr/bin/systemctl stop osmo-egprs-web.service osmo-hlr.service
 # L ENCART DU BUREAU SUIT LE BANC. osmo-fft-snap.py lit /psd et le mobile.log
 # du run : un banc neuf, ce sont de nouveaux chemins sous /run/user/0 et un
 # nouveau journal. On le relance donc avec le banc, sans jamais le rendre
@@ -49,6 +59,11 @@ ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
 # ni faire echouer le demarrage ni le retarder. try-restart ne fait rien si
 # l unite n est pas la (image sans bureau).
 ExecStartPost=-/usr/bin/systemctl --no-block try-restart osmo-fft-snap.service
+# UNE IMAGE NEUVE A CHAQUE BANC NEUF. osmo-wallpaper.sh tire sa source au sort
+# (xkcd, APOD, Bing, turnoff.us, gocomics) et evite celle du coup precedent :
+# relancer le banc change donc le fond, et l on voit du premier coup d oeil
+# qu on regarde un nouveau run et pas l ecran d avant.
+ExecStartPost=-/usr/bin/systemctl --no-block start osmo-wallpaper.service
 # QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
 TimeoutStartSec=900
 TimeoutStopSec=180

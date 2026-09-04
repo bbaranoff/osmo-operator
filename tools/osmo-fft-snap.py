@@ -13,9 +13,8 @@
 # (tools/osmo-conky-panel.sh) est invisible. Des que le pont alimente la FFT,
 # l image glisse en ~3 s (Image.blend) du strip vers le banc ; si le banc
 # s arrete - /psd rend une erreur au lieu d un spectre - elle revient au strip
-# de la meme facon. Le banc ne recouvre JAMAIS completement le strip : il est
-# compose a OSMO_FFT_OPACITY (0.86), donc Calvin & Hobbes reste visible en
-# transparence dessous.
+# de la meme facon. Une fois le fondu fini, le banc est OPAQUE : le spectre et
+# mobile.log doivent se lire, pas se deviner par-dessus un dessin.
 #
 # Source FFT : le dashboard, http://127.0.0.1:8080/psd?src=ms - le meme JSON
 # que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal : le
@@ -40,12 +39,23 @@ URL = os.environ.get("OSMO_FFT_URL", "http://127.0.0.1:8080/psd")
 OUT = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 PERIOD = float(os.environ.get("OSMO_FFT_PERIOD", "1"))
 FADE_S = float(os.environ.get("OSMO_FFT_FADE", "3"))
-# Opacite du banc PAR-DESSUS le strip. 1.0 = le strip disparait completement
-# (ce que faisait la version d avant) ; en dessous, Calvin & Hobbes reste
-# visible en transparence sous le spectre et le journal, et l encart continue
-# de se lire comme un morceau du fond d ecran plutot que comme une fenetre
-# posee dessus. Le fondu joue sur alpha, celle-ci en fixe le plafond.
-OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "0.86"))))
+# Opacite du banc PAR-DESSUS l image du fond, une fois le fondu termine.
+#
+# [2026-09-04] ESSAYEE A 0.86, REMISE A 1.0. L idee etait de laisser l image du
+# jour transparaitre sous le spectre. A l ecran, la bande dessinee traversait le
+# journal et le spectre : les traits noirs du dessin passaient entre les lignes
+# de mobile.log, et le spectre se lisait sur un fond a motifs. On perdait les
+# deux - l image, hachee par le panneau, et le banc, illisible.
+# Le fondu, lui, reste : c est LUI qui fait passer de l image au banc et
+# retour (FADE_S), et pendant ces trois secondes les deux se superposent.
+# OSMO_FFT_OPACITY=0.86 rend l ancien comportement a qui veut l essayer.
+OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "1.0"))))
+# Etat ecrit par tools/osmo-wallpaper.sh : y a-t-il un strip dans le fond ?
+# Sans reseau, gocomics ne rend pas l image et le fond part SANS strip - le
+# cadre est alors vide, et composer le banc en transparence par-dessus du vide
+# ne fait que ternir le spectre et le journal. Dans ce cas l encart passe en
+# opacite pleine : pas de png, mais le mobile.log et la FFT restent nets.
+STRIP_STATE = os.environ.get("OSMO_WP_STATE", "/var/cache/osmo-wallpaper/strip.state")
 WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.png")
 MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
@@ -125,6 +135,29 @@ def resample(vals, n):
         a, b = int(i * step), max(int((i + 1) * step), int(i * step) + 1)
         out.append(max(vals[a:b]))
     return out
+
+
+_strip = {"mtime": None, "present": True}
+
+
+def strip_present():
+    """Le fond du jour porte-t-il un strip ? (defaut : oui, on ne devine pas)"""
+    try:
+        mt = os.stat(STRIP_STATE).st_mtime
+    except OSError:
+        return True
+    if mt != _strip["mtime"]:
+        val = True
+        try:
+            with open(STRIP_STATE) as fh:
+                for line in fh:
+                    k, _, v = line.strip().partition("=")
+                    if k == "STRIP":
+                        val = v.strip().lower() != "non"
+        except OSError:
+            pass
+        _strip.update(mtime=mt, present=val)
+    return _strip["present"]
 
 
 # ── LE STRIP : DECOUPE DANS LE FOND D ECRAN, RELU QUAND IL CHANGE ───────────
@@ -287,8 +320,10 @@ def main():
             else:
                 live = render_live(data)
                 # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
-                # le strip transparaitre sous le banc (OPACITY).
-                write(Image.blend(base_image(), live, alpha * OPACITY))
+                # le strip transparaitre sous le banc. Sans strip derriere, rien
+                # a laisser voir : opacite pleine.
+                op = OPACITY if strip_present() else 1.0
+                write(Image.blend(base_image(), live, alpha * op))
         except Exception as e:
             print(f"[fft-snap] rendu : {e}", file=sys.stderr, flush=True)
         time.sleep(max(0.2, PERIOD - (time.time() - t)))
