@@ -57,6 +57,12 @@ ISO_DESKTOP=0
 # change rien au comportement par defaut - la desktop pese ~2,5 Go de plus et
 # n a pas a s imposer a qui ne l a pas demandee.
 ISO_ALL=0
+# --skip-build : pas de docker build. On PULL l image publiee sur Docker Hub
+# (bastienbaranoff/norf_gsm:latest, ou --skip-build=<image:tag>), on la tague
+# osmocom-nitb:latest et la chaine continue exactement comme apres build.sh.
+# Sert a la CI et a une machine qui n a ni le temps ni le cache .deb du build.
+ISO_SKIP_BUILD=0
+ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}"
 
 # ── ARCHITECTURE : amd64 (ISO PC) ou arm64 (image SD Raspberry Pi 4) ─────────
 # --arm : la MEME pile, construite pour arm64 sur une base ARMBIAN 24.04 (le
@@ -111,6 +117,8 @@ for arg in "$@"; do case "$arg" in
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
+    --skip-build)   ISO_SKIP_BUILD=1 ;;
+    --skip-build=*) ISO_SKIP_BUILD=1; ISO_PULL_IMAGE="${arg#*=}" ;;
     --arm|--arch=arm64) ISO_ARCH=arm64 ;;
     --arch=amd64)   ISO_ARCH=amd64 ;;
     --arch=*)       echo -e "${RED}--arch : amd64 ou arm64 (recu : ${arg#*=})${NC}" >&2; exit 2 ;;

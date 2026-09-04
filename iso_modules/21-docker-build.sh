@@ -17,6 +17,21 @@ iso_docker_build() {
     if [ "${OSMO_ISO_IMAGE_READY:-0}" = "1" ]; then
         echo -e "${GREEN}[1/9] Image docker : deja construite par la passe parente${NC}"; return 0
     fi
+    # --skip-build : l image vient de Docker Hub, taguee du nom que build.sh
+    # aurait produit (osmocom-nitb, ou osmocom-nitb:arm64 en --arm) pour que
+    # 31-image-source et la suite n y voient aucune difference. Le hub seul
+    # (interstp) prend AUSSI cette image : osmocom-nitb porte osmo-stp, et
+    # OSMO_ISO_SRC_IMAGE empeche une osmocom-stp locale de s inviter.
+    if [ "${ISO_SKIP_BUILD:-0}" = "1" ]; then
+        local _local="osmocom-nitb${ISO_IMG_TAG}"
+        echo -e "${GREEN}[1/9] --skip-build : pull de ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} (Docker Hub) -> ${CYAN}${_local}${NC}"
+        docker pull --platform "linux/${ISO_ARCH:-amd64}" "$ISO_PULL_IMAGE" \
+            || { echo -e "${RED}Echec du pull de ${ISO_PULL_IMAGE}${NC}" >&2; exit 1; }
+        docker tag "$ISO_PULL_IMAGE" "$_local"
+        export OSMO_ISO_SRC_IMAGE="$_local"
+        echo -e "  ${GREEN}✓${NC} image ${_local} prete ($(docker image inspect "$_local" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
+        return 0
+    fi
     if [ "$role" = "interstp" ]; then
         echo -e "${GREEN}[1/9] Hub seul : construction de ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"
         echo -e "  ${CYAN}osmo-stp + libosmocore + libosmo-netif + libosmo-sigtran. Rien d'autre.${NC}"

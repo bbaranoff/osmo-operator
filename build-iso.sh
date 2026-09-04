@@ -9,6 +9,8 @@
 #                         (osmo-operator-<...>-rpi4.img) ; --lite accepte,
 #                         --desktop et --all refuses. Voir iso_modules/00-options.sh.
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
+#    --skip-build[=image:tag]   pas de build : pull bastienbaranoff/norf_gsm:latest
+#                         depuis Docker Hub, tague osmocom-nitb:latest, et continue
 #    --wan --wan-nodes=... --wan-id=N --wan-ops=N --hub-ip=IP
 set -euo pipefail
 
