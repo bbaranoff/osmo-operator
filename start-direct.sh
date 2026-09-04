@@ -61,6 +61,9 @@ PROFILE_CHOISI=0
 # WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
+# --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
+WAN_IMPORT_FILES=()
+GEN_CONF_OUT=""
 # --virtualbox : monte le segment et les VM avant le WAN. Refuse si l'on tourne
 # DANS une VM - c'est l'hote qui pilote VirtualBox (le script le verifie).
 VBOX_INTERCO=0
@@ -109,6 +112,14 @@ Usage : ./start-direct.sh [options] [mode]
     --wan               monte le WAN a N noeuds (1 a 9) AVANT run.sh et demande :
                           nombre de noeuds, IP de chaque noeud, indicatif de
                           chaque noeud, numero du noeud construit par ce lancement
+    --wan mynode1.conf [--wan mynode3.conf ...]
+                        WAN a partir des FICHES des autres noeuds (ecrites par
+                        leur run : /etc/osmocom/mynode<N>.conf). Ce noeud est
+                        ajoute a la table avec son adresse locale ; aucune
+                        question. Le maillage SIP + SMS suit comme avec --wan.
+    --gen-conf [FICHIER] ecrit la fiche de CE noeud (defaut
+                        /etc/osmocom/mynode<N>.conf) SANS lancer le banc. Le
+                        run l'ecrit de toute facon, juste avant run.sh.
     --wan-nodes "1:IP:IND ..."   meme chose sans question (scriptable)
     --wan-id N          numero du noeud local (sinon deduit des IP locales)
     --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
@@ -167,12 +178,18 @@ while [ $# -gt 0 ]; do
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
         --check-paths) ACTION=checkpaths ;;
-        --wan)         WAN_MESH=1 ;;
+        --wan)         WAN_MESH=1
+                       # --wan FICHIER : la fiche d'un autre noeud (network/node-conf.sh).
+                       if [ -n "${2:-}" ] && [ -f "$2" ]; then WAN_IMPORT_FILES+=("$2"); shift; fi ;;
+        --gen-conf)    ACTION=genconf
+                       if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then GEN_CONF_OUT="$2"; shift; fi ;;
+        --gen-conf=*)  ACTION=genconf; GEN_CONF_OUT="${1#*=}" ;;
         --dsp)         CALYPSO_FORK=qosmo-dsp; export CALYPSO_FORK; DSP_MODE=1 ;;
         --grgsm)       CALYPSO_FORK=qosmo-grgsm; export CALYPSO_FORK ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
-        --wan=*)       WAN_MESH=1; WAN_NODES="${1#*=}" ;;
+        --wan=*)       WAN_MESH=1
+                       if [ -f "${1#*=}" ]; then WAN_IMPORT_FILES+=("${1#*=}"); else WAN_NODES="${1#*=}"; fi ;;
         --wan-nodes)   WAN_MESH=1; WAN_NODES="${2:-}"; shift ;;
         --wan-nodes=*) WAN_MESH=1; WAN_NODES="${1#*=}" ;;
         --wan-id)      WAN_MESH=1; WAN_NODE_ID="${2:-}"; shift ;;
@@ -1243,6 +1260,28 @@ case "$ACTION" in
     list)
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
         ;;
+    genconf)
+        # ── LA FICHE DU NOEUD, SANS LANCER ──────────────────────────────
+        # [2026-09-04] La meme que celle ecrite par le run (juste avant run.sh) :
+        # identite resolue comme au lancement (--node, environnement,
+        # /etc/osmo-role, table WAN), table WAN relue si elle existe.
+        . "$HERE/network/wan-nodes.sh"; . "$HERE/network/node-conf.sh"
+        _gc_node="$NODE_ID"
+        if [ -z "$_gc_node" ]; then
+            _gc="$(detect_node_id)"; _gc_node="${_gc%%|*}"
+        fi
+        _gc_node="${_gc_node:-1}"
+        wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true
+        _gc_hub="${HUB_IP:-${OSMO_HUB_IP:-}}"
+        [ -n "$_gc_hub" ] || _gc_hub="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role 2>/dev/null | tr -d ' \r')"
+        _gc_out="${GEN_CONF_OUT:-$(node_conf_path "$_gc_node")}"
+        if node_conf_write "$_gc_out" "$_gc_node" "${NODE_OP:-1}" "$_gc_hub"; then
+            say_end " OK " "$C_OK" "Fiche du noeud $_gc_node" "$_gc_out"
+            printf '  %ssur un autre noeud :%s  ./start-direct.sh --wan %s\n' "${C_DIM:-}" "${C_Z:-}" "$(basename "$_gc_out")"
+            exit 0
+        fi
+        say_end " KO " "$C_KO" "Fiche du noeud" "ecriture impossible : $_gc_out"; exit 1
+        ;;
     stop)
         say_begin "Arret de la pile via run.sh"
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
@@ -1622,6 +1661,16 @@ fi
 # pile demarrerait avec les point codes du gabarit (1.1.2 pour tout le monde),
 # deux noeuds porteraient la meme adresse SS7, et aucun ASP ne s'attacherait -
 # sans qu'une seule ligne ne le signale.
+# --wan FICHIER sans --node : ce noeud prend le premier numero que les fiches
+# ne portent pas (les fiches disent qui est deja la, on dit qu'on l'a fait).
+if [ -z "$NODE_ID" ] && [ "${#WAN_IMPORT_FILES[@]}" -gt 0 ]; then
+    _used=" $(sed -n 's/^OSMO_NODE_ID=//p' "${WAN_IMPORT_FILES[@]}" 2>/dev/null | tr -d '" ' | tr '\n' ' ') "
+    for _cand in 1 2 3 4 5 6 7 8 9; do
+        case "$_used" in *" $_cand "*) ;; *) NODE_ID="$_cand"; break ;; esac
+    done
+    NODE_ID_SRC="premier numero libre d'apres les fiches"
+    printf '  %sIdentite%s   noeud %s (%s ; --node N pour choisir)\n' "${C_DIM:-}" "${C_Z:-}" "$NODE_ID" "$NODE_ID_SRC"
+fi
 if [ -z "$NODE_ID" ] && [ "${WAN_MESH:-0}" -eq 1 ]; then
     say_end " KO " "$C_KO" "Identite SS7" "WAN demande mais aucun noeud : --node N, ou WAN_NODE_ID"
     exit 1
@@ -1719,7 +1768,22 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         WAN_NODE_ID="$VBOX_HOST_NODE"
     fi
 
-    if [ -n "${WAN_NODES:-}" ]; then
+    if [ "${#WAN_IMPORT_FILES[@]}" -gt 0 ]; then
+        # ── --wan mynode1.conf : LA TABLE VIENT DES FICHES ──────────────────
+        # [2026-09-04] Chaque ISO ecrit sa fiche au run (network/node-conf.sh) ;
+        # on les importe par-dessus la table en place, on s'y ajoute avec
+        # l'adresse locale, et le maillage habituel fait le reste. Pas de
+        # question : tout ce qu'il fallait demander est dans les fiches.
+        . "$HERE/network/node-conf.sh"
+        wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true
+        printf '  %sWAN%s        fiches de noeuds :\n' "$C_DIM" "$C_Z"
+        for _nf in "${WAN_IMPORT_FILES[@]}"; do node_conf_import "$_nf" || exit 1; done
+        [ -n "$NODE_ID" ] || { say_end " KO " "$C_KO" "WAN" "--wan FICHIER exige de connaitre ce noeud (--node N)"; exit 1; }
+        WAN_NODE_ID="$NODE_ID"
+        node_conf_self "$NODE_ID" || exit 1
+        WAN_NODES="$(wan_nodes_spec)"
+        wan_nodes_parse "$WAN_NODES" || exit 1
+    elif [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         # --node DIT DEJA quel noeud est cette machine : c'est la meme notion
         # que --wan-id, vue depuis le SS7. S'en servir evite d'echouer sur une
@@ -1943,6 +2007,24 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
                   bash "$IPPLAN" --apply 2>&1)" || true
         say_end " OK " "$C_OK" "Adresses privees du noeud" \
             "$(printf '%s' "$_ipout" | tail -1 | sed 's/^osmo-ip-plan : //')"
+    fi
+fi
+
+# ── LA FICHE DU NOEUD : LE RESULTAT DU RUN ───────────────────────────────────
+# [2026-09-04] /etc/osmocom/mynode<N>.conf (network/node-conf.sh) : ce qu'un
+# autre noeud doit savoir pour joindre celui-ci (--wan mynode<N>.conf). Ecrite
+# ici, une fois l'identite SS7, l'adresse et l'indicatif definitivement poses.
+# start-multi.sh la reecrit quand les conteneurs sont montes (--gen-conf).
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
+    . "$HERE/network/wan-nodes.sh" 2>/dev/null
+    . "$HERE/network/node-conf.sh" 2>/dev/null
+    _nc_node="${NODE_ID:-${WAN_NODE_ID:-}}"; [[ "${_nc_node:-0}" =~ ^[1-9]$ ]] || _nc_node=1
+    [ "${WAN_NODE_COUNT:-0}" -gt 0 ] || wan_nodes_load "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null || true
+    _nc_out="$(node_conf_path "$_nc_node")"
+    if node_conf_write "$_nc_out" "$_nc_node" "${NODE_OP:-1}" "${HUB_IP:-${OSMO_HUB_IP:-}}" 2>/dev/null; then
+        say_end " OK " "$C_OK" "Fiche du noeud $_nc_node" "$_nc_out  (pour un autre noeud : --wan $(basename "$_nc_out"))"
+    else
+        say_end " -- " "$C_DIM" "Fiche du noeud" "non ecrite ($_nc_out)"
     fi
 fi
 

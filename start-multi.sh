@@ -770,6 +770,14 @@ disown 2>/dev/null || true
 echo
 etat
 verifier || rc=1
+
+# ── LA FICHE DU NOEUD SUIT LE MULTI ─────────────────────────────────────────
+# [2026-09-04] Le natif l'a ecrite avec un seul operateur ; les conteneurs
+# sont la maintenant : on la reecrit (network/node-conf.sh compte les
+# osmo-operator-N en marche). C'est cette fiche qu'un autre noeud importe.
+if [ "$ACTION" = "start" ] && [ -x "$DIR/start-direct.sh" ]; then
+    NO_MENU=1 "$DIR/start-direct.sh" --gen-conf 2>/dev/null | grep -E "Fiche|mynode" || true
+fi
 # Ouverte par nos soins : on la retient, sinon le bilan disparait avec elle.
 if [ "$_multi_own_window" = "1" ]; then
     echo
