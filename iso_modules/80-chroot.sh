@@ -550,16 +550,15 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     done
 
     # ── FIREFOX : LE DEB DE MOZILLA, PAS LE SNAP ────────────────────────────
-    # [2026-09-04] Le snap ne s installait JAMAIS sur la cle : au premier boot
-    # osmo-firefox-snap.service restait en "activating" pendant des minutes
-    # (1,5 Go de .snap a poser, snapd qui refuse tant qu un changement est en
-    # cours) et le banc tournait sans navigateur. Le paquet "firefox" des
-    # depots Ubuntu est un paquet de transition qui appelle snapd : inutilisable
-    # dans un chroot. Mozilla publie ses propres .deb (packages.mozilla.org),
+    # [2026-09-04] L installation par snap au premier boot ne s achevait JAMAIS
+    # sur la cle : des minutes en "activating" (1,5 Go a deballer, snapd qui
+    # refuse tant qu un changement est en cours), et le banc tournait sans
+    # navigateur. Le paquet "firefox" des depots Ubuntu ne remplace rien : c est
+    # un paquet de transition qui rappelle snapd, inutilisable dans un chroot. Mozilla publie ses propres .deb (packages.mozilla.org),
     # a jour a chaque version : on prend celui-la, epingle au-dessus de celui
     # d Ubuntu, et apt le tient a jour sur le systeme installe. Le .desktop
-    # est firefox.desktop (le snap etait firefox_firefox.desktop) et la
-    # politique /etc/firefox/policies/policies.json est lue telle quelle.
+    # est firefox.desktop et la politique /etc/firefox/policies/policies.json
+    # est lue telle quelle, sans plug ni bac a sable.
     apt-fast purge -y firefox chromium-browser 2>/dev/null || true
     install -d -m0755 /etc/apt/keyrings
     _ff_ok=0
@@ -582,12 +581,16 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     else
         echo "  [desktop] WARN: Firefox (deb Mozilla) NON installe - packages.mozilla.org injoignable ?"
     fi
-    # Plus aucun snap : le service d installation au premier boot reste dans
-    # l image (update.sh le connait, il sort de lui-meme si le deb est la) mais
-    # n est pas active, et snapd ne demarre pas - il n a plus rien a poser et
-    # retardait le boot.
+    # PLUS AUCUN SNAP DANS L IMAGE. Le navigateur etant un .deb, snapd n a plus
+    # rien a poser : il ne fait que retarder le boot (snapd.seeded attend le
+    # deballage de la graine). On le desactive, et on efface ce que les images
+    # precedentes posaient - une ISO reconstruite sur un rootfs de cache
+    # garderait sinon l unite d installation par snap, qui echouerait au boot
+    # faute de snapd.
     rm -rf /var/lib/osmo-snaps
-    systemctl disable osmo-firefox-snap 2>/dev/null || true
+    rm -f /etc/systemd/system/osmo-firefox-snap.service \
+          /etc/systemd/system/multi-user.target.wants/osmo-firefox-snap.service \
+          /usr/local/sbin/osmo-firefox-snap
     systemctl disable snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service 2>/dev/null || true
     systemctl mask snapd.service snapd.socket 2>/dev/null || true
 
@@ -725,7 +728,7 @@ GDM
         done
         unset _sec
         # Icones du bureau en haut a gauche (DING), la ou le fond leur laisse la
-        # place : la carte LAB GRGSM commence a x=320 (tools/wallpaper-render.py).
+        # place : la carte LAB GSM commence a x=320 (tools/wallpaper-render.py).
         for _sec in "org.gnome.shell.extensions.ding" "org.gnome.shell.extensions.ding:ubuntu"; do
             printf "\n[%s]\nstart-corner=\047top-left\047\nshow-trash=false\nshow-volumes=false\n" "$_sec" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
@@ -749,7 +752,7 @@ GDM
     # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
     # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
     # et claude.desktop meme sur une image ou ils ne sont pas installes.
-    # firefox.desktop est le deb Mozilla (le snap etait firefox_firefox.desktop).
+    # firefox.desktop : celui du deb Mozilla (packages.mozilla.org).
     for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
         printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override

@@ -7,7 +7,7 @@
 # Disposition, pensee pour ne rien faire chevaucher sur l ecran :
 #
 #   +--------+------------------------------------------+-------------------+
-#   | dock + | carte LAB GRGSM (x 320..1430, y 60..560)  | conky (400 px,    |
+#   | dock + | carte LAB GSM (x 320..1430, y 60..560)  | conky (400 px,    |
 #   | icones |                                          | gap 24, y 40..660)|
 #   | bureau | strip Calvin & Hobbes (x 320..1430,      |                   |
 #   | (haut  |                          y 600..1010)    |                   |
@@ -147,7 +147,7 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     # Titre
     y += 46
     # Titre en violet uni (pas de degrade).
-    tw, th = gradient_text(base, (x - 4, y), "LAB GRGSM", font("DejaVuSans-Bold.ttf", 86),
+    tw, th = gradient_text(base, (x - 4, y), "LAB GSM", font("DejaVuSans-Bold.ttf", 86),
                            [(150, 100, 245), (150, 100, 245)])
     d = ImageDraw.Draw(base)
     y += th + 20

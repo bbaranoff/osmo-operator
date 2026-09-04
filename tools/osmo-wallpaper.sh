@@ -7,7 +7,7 @@
 # 1. Le strip du jour vient de gocomics.com, comme le fait le gist "hellogist"
 #    (curl de la page du jour, balise og:image, curl de l image). Sans reseau,
 #    on reprend le dernier strip en cache ; sans cache, le fond part sans strip.
-# 2. tools/wallpaper-render.py compose photo + carte LAB GRGSM + strip.
+# 2. tools/wallpaper-render.py compose photo + carte LAB GSM + strip.
 # 3. Le PNG est ecrit sous DEUX noms : le fichier fixe que le schema GNOME
 #    designe par defaut (gsm-lab-wallpaper.png, ce que voit une session qui
 #    s ouvre), et un fichier DATE que l on pousse dans chaque session ouverte

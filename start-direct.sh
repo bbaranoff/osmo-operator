@@ -108,6 +108,8 @@ Usage : ./start-direct.sh [options] [mode]
     --status            interroge l'etat (delegue a run.sh --status)
     --force             relance meme les modules deja demarres
     --verbose           montre la sortie des modules
+    --no-attach         ne s'attache pas a tmux a la fin (= CALYPSO_NO_ATTACH=1 ;
+                        c'est ce que pose osmo-banc.service : personne devant)
     --check-paths       verifie les dependances declarees
     --wan               monte le WAN a N noeuds (1 a 9) AVANT run.sh et demande :
                           nombre de noeuds, IP de chaque noeud, indicatif de
@@ -177,6 +179,13 @@ while [ $# -gt 0 ]; do
         --status)      ACTION=status ;;
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
+        # [2026-09-04] Equivalent de CALYPSO_NO_ATTACH=1, en option de ligne de
+        # commande pour que l'unite systemd le dise sur son ExecStart. Avant, cette
+        # option n'existait pas : posee sur ExecStart elle tombait dans « option
+        # inconnue » (exit 2), et posee ailleurs dans l'unite elle cassait la ligne
+        # qui la portait (ConditionPathExists=... --no-attach : chemin inexistant,
+        # unite jamais lancee).
+        --no-attach)   CALYPSO_NO_ATTACH=1; export CALYPSO_NO_ATTACH ;;
         --check-paths) ACTION=checkpaths ;;
         --wan)         WAN_MESH=1
                        # --wan FICHIER : la fiche d'un autre noeud (network/node-conf.sh).
@@ -1224,6 +1233,10 @@ RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
 # CALYPSO_NO_RESTART=1 pour demarrer sans reinitialiser (l'ancien comportement
 # n'etait pas atteignable du tout).
 [ "${CALYPSO_NO_RESTART:-0}" = "1" ] || RUN_ARGS+=(--restart)
+# run.sh lit deja CALYPSO_NO_ATTACH (run.sh:8), mais une variable ne se voit
+# pas dans --dry-run ni dans la ligne affichee juste avant l exec : l option
+# porte le meme reglage la ou on le cherche.
+[ "${CALYPSO_NO_ATTACH:-0}" = "1" ] && RUN_ARGS+=(--no-attach)
 # ── Les sessions tmux d'un run precedent ────────────────────────────────────
 # Le teardown de run.sh arrete les processus mais laisse la session tmux
 # debout. Au demarrage suivant, son module de panes RECREE ses fenetres dans la
@@ -1887,6 +1900,15 @@ install_pcap_wrapper() {
     [ "${OSMO_NO_PCAP_RING:-0}" = "1" ] && return 0
     [ "$(id -u)" -eq 0 ] || return 0
     command -v tcpdump >/dev/null 2>&1 || return 0
+    # Le vrai binaire doit exister sous /usr/bin ou /usr/sbin ET etre un ELF :
+    # un script a sa place (voir le garde-fou dans le wrapper) rendrait le
+    # wrapper recursif. Dans ce cas on ne pose rien et on le dit.
+    local real=/usr/bin/tcpdump; [ -x "$real" ] || real=/usr/sbin/tcpdump
+    if [ ! -x "$real" ] || [ "$(head -c 2 "$real" 2>/dev/null)" = "#!" ]; then
+        printf '  %s!%s pcap : %s n est pas le binaire tcpdump - anneau non arme (apt-get install --reinstall tcpdump)\n' \
+            "${C_WARN:-}" "$C_Z" "$real" >&2
+        return 0
+    fi
 
     tmp="$(mktemp)" || return 0
     cat > "$tmp" <<'PCAPWRAP'
@@ -1896,6 +1918,13 @@ install_pcap_wrapper() {
 # Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
 REAL=/usr/bin/tcpdump
 [ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
+# [2026-09-04] Si REAL est lui-meme un script (ce wrapper copie par-dessus le
+# binaire dpkg, cf. iso_modules/52-qemu.sh), exec "$REAL" boucle a l'infini :
+# aucune capture, et un `tcpdump --version` qui ne rend jamais la main.
+if [ "$(head -c 2 "$REAL" 2>/dev/null)" = "#!" ]; then
+    echo "tcpdump (wrapper) : $REAL n'est pas le vrai binaire - reinstallez le paquet tcpdump" >&2
+    exit 127
+fi
 
 has_w=0; has_ring=0; has_z=0; wfile=""; next_is_w=0
 for a in "$@"; do

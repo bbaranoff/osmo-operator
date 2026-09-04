@@ -106,205 +106,21 @@ plugins=keyfile
 unmanaged-devices=interface-name:apn*;interface-name:tun*;interface-name:veth*;interface-name:docker*;interface-name:br-*;interface-name:osmo*
 NMCONF
 
-# Firefox : installe au PREMIER DEMARRAGE, depuis les .snap embarques quand ils
-# sont la, depuis le magasin sinon. Voir la variante desktop du chroot.
+# ── FIREFOX : PLUS RIEN A FAIRE ICI ────────────────────────────────────────
+# [2026-09-04] Ce module posait /usr/local/sbin/osmo-firefox-snap et son unite
+# de premier demarrage : une centaine de lignes pour installer Firefox par snap,
+# hors ligne depuis /var/lib/osmo-snaps puis depuis le magasin. Le navigateur
+# vient desormais du .deb de Mozilla, installe dans le chroot par
+# 80-chroot.sh - donc PRESENT DANS L IMAGE, et tenu a jour par apt sur le
+# systeme installe.
 #
-# FIREFOX. [2026-08-30] Ce bloc disait "CHROMIUM ET PAS FIREFOX, et ce n'est pas
-# une preference", au motif que "Firefox ne capte pas le micro et Chrome oui".
-# Le motif etait REEL mais mal attribue : Firefox ne captait rien parce que le
-# snap ne pouvait pas se CONNECTER a PulseAudio du tout, ni en entree ni en
-# sortie. Le journal du noyau le dit :
-#     apparmor="DENIED" operation="connect" profile="snap.firefox.firefox"
-#     name="/run/pulse/native" fsuid=0 ouid=107
-# Le profil autorise pourtant ce chemin -- mais avec le qualificateur `owner`,
-# qui exige proprietaire == fsuid. Le socket appartenait a `pulse` (107), la
-# session tourne en root (0). Le commentaire d'origine creditait deja
-# osmo-pulse-link.sh d'avoir corrige "la cause de fond" : il n'en avait corrige
-# que la moitie (le CHEMIN, par un lien symbolique -- alors qu'AppArmor resout
-# le chemin reel et que le vrai manque etait le PROPRIETAIRE).
-# Le chown est pose la-bas ; le son et le micro marchent dans Firefox, et la
-# raison de preferer Chromium tombe avec.
-#
-# Les deux ne sont de toute facon disponibles qu'en snap sur jammy : les .deb
-# "firefox" et "chromium-browser" sont des paquets de TRANSITION qui appellent
-# snapd. Firefox declare la MEME base (core24) et les MEMES fournisseurs de
-# contenu (mesa-2404, gtk-common-themes, gnome-46-2404) que chromium : la
-# mecanique ci-dessous ne change pas, seul le nom du snap change.
-# [2026-09-02] TROIS DEFAUTS QUI FAISAIENT QU IL FALLAIT INSTALLER FIREFOX A LA
-# MAIN, A CHAQUE IMAGE :
-#
-#   1. TOUTE LA LOGIQUE VIVAIT DANS LE ExecStart= de l unite - vingt lignes de
-#      shell continuees par des "\" dans un fichier .ini. Rien n etait
-#      testable : pas moyen de la lancer a la main pour voir ce qui cloche,
-#      pas moyen de la relancer apres coup, et la moindre retouche se faisait
-#      a l aveugle sur du shell echappe deux fois. Elle vit desormais dans un
-#      VRAI script, /usr/local/sbin/osmo-firefox-snap, que l unite se contente
-#      d appeler et que l on peut lancer soi-meme :
-#          sudo osmo-firefox-snap
-#
-#   2. "After=network-online.target" SANS "Wants=" NE FAIT RIEN. network-online
-#      n est pas tiree par defaut : personne ne la demandait, donc elle n etait
-#      jamais atteinte, donc le After= n ordonnait rien. Le repli magasin
-#      partait DNS mort - exactement le "Temporary failure in name resolution"
-#      releve au boot precedent. Le Wants= manquant est ajoute.
-#
-#   3. "cd /var/lib/osmo-snaps || exit 0" ABANDONNAIT EN SILENCE. Sur une image
-#      ou les .snap n ont pas pu etre pre-telecharges (pas de reseau au build,
-#      ou build non-desktop), le repertoire n existe pas : l unite sortait
-#      avec un beau code 0 sans avoir rien tente, pas meme l installation
-#      depuis le magasin. Le repertoire manquant n interdit plus le repli.
-#
-# Le script est pose MEME hors ISO_DESKTOP : update.sh s en sert pour rattraper
-# les machines deja installees, ou l unite n a jamais existe.
-install -d "$ROOTFS/usr/local/sbin"
-cat > "$ROOTFS/usr/local/sbin/osmo-firefox-snap" <<'FFSNAP'
-#!/bin/bash
-# osmo-firefox-snap - pose Firefox par snap. Ecrit par build-iso.sh.
-#
-# Hors ligne d abord (les .snap embarques dans /var/lib/osmo-snaps par le
-# build), le magasin ensuite : un banc sans Internet doit quand meme avoir son
-# navigateur, et un banc sans .snap embarques doit quand meme pouvoir aller les
-# chercher.
-#
-# Appele par osmo-firefox-snap.service au demarrage, par update.sh, et a la
-# main. Idempotent : si firefox est deja la, il ne fait que reconnecter les
-# interfaces et sort.
-set -u
-SNAPDIR=/var/lib/osmo-snaps
-LOG=/var/log/osmo-firefox-snap.log
-
-[ "$(id -u)" -eq 0 ] || { echo "root requis : sudo $0" >&2; exit 1; }
-
-# Lance a la main, on veut voir ce qui se passe ; lance par systemd, tout va
-# dans le journal du fichier. Dans les deux cas le log garde une trace.
-if [ -t 1 ]; then exec > >(tee -a "$LOG") 2>&1; else exec >>"$LOG" 2>&1; fi
-echo "=== $(date -Is) osmo-firefox-snap ==="
-
-# [2026-09-04] Firefox est le .deb de Mozilla (packages.mozilla.org) depuis
-# cette date : l ISO ne l installe plus par snap. Ce script ne sert plus qu aux
-# machines installees avant, et il se retire si le deb est la.
-if dpkg-query -W -f='${Maintainer}' firefox 2>/dev/null | grep -qi mozilla; then
-    echo "firefox est le deb Mozilla ($(dpkg-query -W -f='${Version}' firefox)) - rien a faire"
-    exit 0
-fi
-command -v snap >/dev/null 2>&1 || { echo "snapd absent - rien a faire"; exit 1; }
-
-# snapd refuse tout tant qu un changement est en cours :
-#     error: snap "core24" has "install-snap" change in progress
-# C est ce qui perdait les six installations d affilee au premier boot. On
-# attend que la file se vide avant chaque tentative.
-settle() {
-    local i
-    for i in $(seq 1 180); do
-        snap changes 2>/dev/null | grep -qE '^[0-9]+ +(Do|Doing|Undoing) ' || return 0
-        sleep 5
-    done
-    echo "ATTENTION: file de changements snapd encore pleine"
-    return 1
-}
-
-connecter() {
-    # Les interfaces de contenu decident si le navigateur DEMARRE, pas
-    # seulement s il est joli : firefox passe par gpu-2404 et gnome-46-2404 via
-    # sa command-chain. audio-record n est jamais connectee d office : sans
-    # elle, getUserMedia rend NotFoundError sans qu une ligne ne parle de
-    # confinement.
-    local i
-    for i in gpu-2404 gnome-46-2404 gtk-3-themes icon-themes sound-themes \
-             audio-record audio-playback camera removable-media; do
-        snap connect "firefox:$i" 2>/dev/null || true
-    done
-}
-
-if snap list firefox >/dev/null 2>&1; then
-    echo "firefox deja installe"
-    connecter
-    touch "$SNAPDIR/.installe" 2>/dev/null || true
-    exit 0
-fi
-
-snap wait system seed.loaded || true
-settle
-
-# ── 1. Hors ligne : les .snap embarques ─────────────────────────────────────
-# L ORDRE COMPTE. Un snap ne s installe pas avant sa base : "snap install
-# firefox.snap" sans core24 sort sur
-#     cannot install snap "firefox": snap "core24" is required
-# Le fichier "ordre", ecrit au build, porte la sequence exacte.
-if [ -d "$SNAPDIR" ]; then
-    cd "$SNAPDIR" || exit 1
-    for a in *.assert; do [ -e "$a" ] && snap ack "$a"; done
-    if [ -s ordre ]; then
-        while read -r sn; do
-            [ -n "$sn" ] || continue
-            [ -s "$sn.snap" ] || { echo "absent: $sn.snap"; continue; }
-            snap list "$sn" >/dev/null 2>&1 && { echo "deja installe: $sn"; continue; }
-            for t in 1 2 3; do
-                snap install "$sn.snap" && break
-                echo "tentative $t echouee: $sn"; settle; sleep 5
-            done
-        done < ordre
-    else
-        echo "pas de fichier ordre dans $SNAPDIR"
-    fi
-else
-    echo "$SNAPDIR absent - rien d embarque, on passe au magasin"
-fi
-
-# ── 2. Le magasin, si le hors-ligne n a pas suffi ───────────────────────────
-if ! snap list firefox >/dev/null 2>&1; then
-    settle
-    echo "installation depuis le magasin..."
-    snap install firefox || true
-fi
-
-connecter
-snap list
-
-# LE DRAPEAU NE SE POSE QU EN CAS DE SUCCES. Il etait pose inconditionnellement
-# en fin de ligne, meme apres six echecs : combine au ConditionPathExists de
-# l unite, il interdisait DEFINITIVEMENT toute nouvelle tentative, et l image
-# restait sans Firefox pour toujours.
-if snap list firefox >/dev/null 2>&1; then
-    install -d "$SNAPDIR"; touch "$SNAPDIR/.installe"
-    echo "OK: firefox installe, drapeau pose"
-    exit 0
-fi
-echo "ECHEC: firefox absent - drapeau NON pose, nouvelle tentative au prochain boot"
-exit 1
-FFSNAP
-chmod 755 "$ROOTFS/usr/local/sbin/osmo-firefox-snap"
-echo -e "  ${GREEN}✓${NC} /usr/local/sbin/osmo-firefox-snap (installable a la main)"
-
-if [ "$ISO_DESKTOP" = "1" ]; then
-cat > "$ROOTFS/etc/systemd/system/osmo-firefox-snap.service" <<'CRSNAP'
-[Unit]
-Description=Installation de Firefox (snap) au premier demarrage
-# snapd.seeded : snapd a fini de deballer ce que l'image portait deja. Partir
-# avant, c'est installer par-dessus une graine encore en cours de montage.
-# network-online : le Wants= est INDISPENSABLE - sans lui la cible n'est jamais
-# tiree, le After= n'ordonne rien, et le repli magasin part DNS mort.
-After=snapd.seeded.service network-online.target
-Wants=snapd.seeded.service network-online.target
-ConditionPathExists=!/var/lib/osmo-snaps/.installe
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-# Poser ~1 Go de snaps prend des MINUTES sur un medium optique ou une cle lente.
-# Le delai par defaut de systemd (90 s) tuait l'unite en pleine installation, et
-# ne laissait derriere lui qu'un "firefox introuvable" sans rapport apparent.
-TimeoutStartSec=infinity
-# Toute la logique est dans le script : lancable a la main pour voir ce qui
-# cloche (sudo osmo-firefox-snap), journalisee dans
-# /var/log/osmo-firefox-snap.log.
-ExecStart=/usr/local/sbin/osmo-firefox-snap
-
-[Install]
-WantedBy=multi-user.target
-CRSNAP
-echo -e "  ${GREEN}✓${NC} osmo-firefox-snap.service (Firefox par snap, au premier boot)"
-fi
+# Ce que le snap coutait, et pourquoi on ne le regrette pas : l unite restait en
+# "activating" des minutes au premier boot (1,5 Go a deballer, snapd qui refuse
+# tant qu un changement est en cours), et quand elle echouait - medium lent, pas
+# de reseau - le banc demarrait SANS navigateur, donc sans tableau de bord. Le
+# bac a sable, lui, refusait le socket PulseAudio et les file:// hors /home, ce
+# qui a coute deux enquetes entieres (micro muet, tutoriel "introuvable").
+# Le .deb n a ni bac a sable, ni service d installation, ni delai au boot.
 
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et

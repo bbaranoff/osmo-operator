@@ -179,10 +179,18 @@ cat > "$ROOTFS/usr/local/bin/tcpdump" <<'TCPDUMPEOF'
 #            fichier lit la capture en cours, et rien n'a a etre reecrit.
 #
 # Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
-REAL=/usr/bin/tcpdump
-[ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
-
-has_w=0; has_ring=0; has_z=0; wfile=""; next_is_w=0
+mkdir -p "$ROOTFS/usr/bin"
+# [2026-09-04] SANS ECRASER LES BINAIRES DE DPKG. Ce `cp -a` recopiait TOUT
+# /usr/local/bin - dont le wrapper tcpdump (docker cp de l'image en 50, puis
+# 83-espace-ram.sh) - par-dessus /usr/bin/tcpdump, le vrai binaire. Le wrapper
+# appelle /usr/bin/tcpdump : il s'appelait donc lui-meme a l'infini. Sur la
+# machine demarree : "tcpdump n'a pas cree <pcap>", 1 module en echec, run.sh
+# sort en 1, et osmo-banc.service (oneshot) tue toute la pile. On ne copie que
+# ce qui n'existe pas deja dans /usr/bin (-n) ; les lanceurs qemu/qosmo, eux,
+# n'ont pas d'homonyme dpkg et passent comme avant.
+find "$ROOTFS/usr/local/bin" -mindepth 1 -maxdepth 1 ! -name tcpdump \
+    -exec cp -an {} "$ROOTFS/usr/bin/" \; 2>/dev/null || true
+ has_ring=0; has_z=0; wfile=""; next_is_w=0
 for a in "$@"; do
     if [ "$next_is_w" = 1 ]; then wfile="$a"; next_is_w=0; continue; fi
     case "$a" in
@@ -222,6 +230,14 @@ fi
 exec "$REAL" -Z root -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
 TCPDUMPEOF
 chmod +x "$ROOTFS/usr/local/bin/tcpdump"
+# Le vrai binaire doit etre reste un ELF : si un module l'a remplace par un
+# script, l'image part avec un tcpdump qui boucle. On arrete la construction
+# plutot que de decouvrir ca sur la machine demarree.
+if [ "$(head -c 2 "$ROOTFS/usr/bin/tcpdump" 2>/dev/null)" = "#!" ]; then
+    echo -e "  ${RED}✗ /usr/bin/tcpdump du rootfs est un script, pas le binaire dpkg${NC}" >&2
+    exit 1
+fi
+echo -e "  ${GREEN}✓${NC} wrapper tcpdump (anneau pcap) dans /usr/local/bin, binaire dpkg intact dans /usr/bin"
 
 # ── Purge complete a chaque relance ─────────────────────────────────────────
 # Les caps ci-dessus empechent la derive PENDANT une session ; celui-ci repart

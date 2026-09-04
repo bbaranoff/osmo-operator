@@ -60,7 +60,7 @@ fi
 # Ici et pas ailleurs : $WEB vient d etre peuple (clone ou source locale), et
 # c est la seule racine statique que le dashboard expose. /usr/share garde un
 # exemplaire pour le repli hors ligne, mais c est CELUI-CI que l icone ouvre -
-# voir /usr/local/bin/osmo-tutorial et le confinement du snap Firefox.
+# voir /usr/local/bin/osmo-tutorial.
 if [ -f "$DIR/data/tutorial.html" ]; then
     mkdir -p "$WEB/web"
     cp -f "$DIR/data/tutorial.html" "$WEB/web/tutorial.html"

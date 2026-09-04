@@ -36,7 +36,11 @@ Environment=NO_MENU=1 CALYPSO_NO_ATTACH=1 NO_COLOR=1 OSMO_NO_TERM=1 OSMO_LAUNCH_
 #   - durables : OSMO_BANC_ARGS="--dsp" dans /etc/default/osmo-banc
 #   - pour une fois : launch.sh les pose via systemctl set-environment
 EnvironmentFile=-/etc/default/osmo-banc
-ExecStart=/bin/bash /opt/GSM/osmo-operator/start-direct.sh $OSMO_BANC_ARGS
+# --no-attach : l option de start-direct.sh (meme effet que CALYPSO_NO_ATTACH=1
+# ci-dessus). Elle va ICI, sur la ligne de commande - pas sur
+# ConditionPathExists, qui ne prend qu un chemin : « chemin --no-attach »
+# n existe pas, et l unite est alors sautee sans jamais demarrer.
+ExecStart=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --no-attach $OSMO_BANC_ARGS
 ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
 # QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
 TimeoutStartSec=900

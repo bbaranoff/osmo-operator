@@ -31,14 +31,107 @@ GSMTAP_PORT="${GSMTAP_PORT:-4729}"
 DASH_URL="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
 DASH_PORT="${DASH_URL##*:}"
 # Le tutoriel s ouvre en DEUXIEME ONGLET, a cote du tableau de bord. Servi par
-# le dashboard (et non en file://) : Firefox est un snap, son bac a sable ne lui
-# donne acces ni a /root ni aux repertoires caches - un file:// rendrait
-# "L acces au fichier a ete refuse". Voir /usr/local/bin/osmo-tutorial.
+# le dashboard plutot qu en file:// : une seule copie fait foi, celle que le
+# dashboard expose, et l URL marche a l identique depuis une autre machine du
+# banc. Voir /usr/local/bin/osmo-tutorial.
 TUTO_URL="${OSMO_TUTORIAL_URL:-${DASH_URL%/}/tutorial.html}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
 
 [ -x "$TARGET" ] || { echo -e "${RED}start-direct.sh introuvable ou non executable dans $DIR${NC}" >&2; exit 1; }
+
+# ── UN SEUL LANCEMENT A LA FOIS ─────────────────────────────────────────────
+# [2026-09-04] Un double-clic sur le telephone rouge, c est DEUX lancements. Le
+# second n attend pas le premier : il commence par tout arreter (un clic = un
+# banc neuf) et demonte donc la pile que le premier est en train de monter. On
+# obtient un banc a moitie debout, deux journaux entrelaces dans deux fenetres,
+# et une panne qui ne ressemble a aucune panne connue - pour un geste qui
+# n etait meme pas voulu.
+#
+# DEUX FACONS D ETRE DEJA EN TRAIN DE DEMARRER, DEUX TESTS :
+#   1. un autre launch.sh tient le verrou. C est un flock non bloquant sur un
+#      descripteur qui SURVIT a l exec de start-direct.sh : il couvre donc tout
+#      le demarrage, et le noyau le libere quand le processus meurt, meme tue -
+#      rien a nettoyer, et surtout aucun verrou fantome apres une coupure.
+#   2. l unite osmo-banc est « activating ». Le banc lance au boot par systemd
+#      ne passe par aucun launch.sh : il ne tient aucun verrou, et sans ce
+#      second test un clic pendant le demarrage automatique passerait au
+#      travers.
+# `--stop` n est jamais bloque : c est justement le geste qui reprend la main
+# quand un lancement s eternise.
+LOCK_FILE="${OSMO_LAUNCH_LOCK:-/run/lock/osmo-launch.lock}"
+verrou_pris() {
+    command -v flock >/dev/null 2>&1 || return 0   # pas de flock : on ne bloque rien
+    mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null || true
+    exec 9>>"$LOCK_FILE" 2>/dev/null || return 0
+    flock -n 9
+}
+banc_en_demarrage() {
+    [ "$(systemctl is-active "${OSMO_BANC_SERVICE:-osmo-banc.service}" 2>/dev/null)" = activating ]
+}
+lancement_possible() {
+    banc_en_demarrage && return 1
+    verrou_pris
+}
+
+# ── 0. DEMARRER COMME UN SERVICE (action du clic droit) ─────────────────────
+# [2026-09-04] L icone n avait que deux gestes : « lancer » (qui ouvre un
+# terminal et y deroule tout le demarrage) et « arreter ». Il manquait celui
+# qu on veut sur une machine qui tourne toute seule : monter le banc COMME UN
+# SERVICE - pas de fenetre a garder ouverte, pas de sortie a surveiller, et un
+# banc qui survit a la fermeture de la session.
+#
+# On parle donc a systemd et a personne d autre, AVANT le bloc terminal
+# ci-dessous : cette action ne doit jamais ouvrir de fenetre. Le compte rendu
+# passe par une notification de bureau, seul endroit ou l operateur regarde
+# quand il n a pas de terminal. `systemctl restart` rend la main a la fin du
+# demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
+# l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
+# « c est parti » sans suite.
+if [ "${1:-}" = "--service" ]; then
+    # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
+    # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
+    # c est precisement ce que cette action promet de ne pas ouvrir.
+    if [ "$(id -u)" -ne 0 ] && command -v pkexec >/dev/null 2>&1 \
+       && [ -n "${DISPLAY:-}" ]; then
+        exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
+             "$0" "$@"
+    fi
+    shift
+    _svc="${OSMO_BANC_SERVICE:-osmo-banc.service}"
+    _icon=/usr/share/osmo-operator/icons/osmo-launch.svg
+    _note() {
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -i "$_icon" "Banc GSM" "$1" 2>/dev/null || true
+        fi
+        echo -e "  ${CYAN}→${NC} $1"
+    }
+    if ! systemctl cat "$_svc" >/dev/null 2>&1; then
+        _note "Unite $_svc absente : utilisez « Lancer le banc GSM »."
+        exit 1
+    fi
+    # Meme garde que le lancement en fenetre : deux demarrages a la fois se
+    # demontent l un l autre.
+    if ! lancement_possible; then
+        _note "Un lancement est deja en cours - rien de fait. journalctl -u ${_svc%.service} -f"
+        exit 1
+    fi
+    # Les options du clic droit (--dsp...) passent a l unite comme dans
+    # banc_unit_restart : meme mecanique, meme portee (jusqu au reboot).
+    if [ $# -gt 0 ]; then
+        systemctl set-environment OSMO_BANC_ARGS="$*" 2>/dev/null || true
+    else
+        systemctl unset-environment OSMO_BANC_ARGS 2>/dev/null || true
+    fi
+    systemctl reset-failed "$_svc" 2>/dev/null || true
+    _note "Demarrage de $_svc - comptez plusieurs minutes."
+    if systemctl restart "$_svc"; then
+        _note "Banc demarre. Console : tmux attach -t calypso"
+        exit 0
+    fi
+    _note "Echec de $_svc - journalctl -u ${_svc%.service} -n 80"
+    exit 1
+fi
 
 # ── 1. Un terminal, si on n en a pas — OU s il n est pas a nous ─────────────
 # On teste la presence d un TTY, pas $DISPLAY : c est la difference reelle entre
@@ -211,6 +304,18 @@ banc_unit_present() {
 banc_unit_stop() {
     echo -e "  ${CYAN}→${NC} arret de ${BANC_UNIT}"
     timeout 200 systemctl stop "$BANC_UNIT" || true
+    # [2026-09-04] `systemctl stop` ne lance ExecStop QUE si l unite est active.
+    # Quand start-direct.sh est sorti en erreur (unite « failed »), systemd a
+    # deja tue le cgroup - mais le coeur (osmo-stp, hlr, msc, bsc...) vit dans
+    # SES PROPRES unites, que run.sh a demarrees par systemctl : elles restent
+    # debout, le telephone du tableau de bord aussi, et « Arreter le banc »
+    # au clic droit ne faisait rien de visible. On demonte donc a la main ce
+    # que ExecStop n a pas eu l occasion de faire, puis on efface l etat
+    # « failed » pour que le prochain start reparte propre.
+    if [ -x "$DIR/start-direct.sh" ]; then
+        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
+    fi
+    systemctl reset-failed "$BANC_UNIT" 2>/dev/null || true
     echo -e "    ${GREEN}✓${NC} banc arrete"
 }
 # Suit le journal de l unite pendant le demarrage : c est la sortie de
@@ -238,6 +343,35 @@ banc_unit_restart() {
 if [ "${1:-}" = "--stop" ] && banc_unit_present; then
     banc_unit_stop
     exit 0
+fi
+
+# Le verrou (voir son bloc en tete de fichier). Ici, et pas plus haut : `--stop`
+# doit passer, et les privileges doivent etre regles - un flock pris avant le
+# re-exec sudo serait tenu par un processus qui disparait aussitot.
+if [ "${1:-}" != "--stop" ] && ! lancement_possible; then
+    echo
+    echo -e "${YELLOW}+------------------------------------------------------------+${NC}"
+    echo -e "${YELLOW}|  UN LANCEMENT EST DEJA EN COURS                            |${NC}"
+    echo -e "${YELLOW}|  Cette fenetre ne lancera RIEN.                            |${NC}"
+    echo -e "${YELLOW}+------------------------------------------------------------+${NC}"
+    echo
+    echo -e "  Le banc met plusieurs minutes a monter (QEMU, Calypso, mobiles)."
+    echo -e "  Un second lancement ARRETERAIT le premier : un clic = un banc"
+    echo -e "  neuf, et le neuf commence par demonter celui d avant."
+    echo
+    echo -e "  Suivre le demarrage   : ${CYAN}journalctl -u osmo-banc -f${NC}"
+    echo -e "  Console du banc       : ${CYAN}tmux attach -t calypso${NC}"
+    echo -e "  Vraiment recommencer  : clic droit sur l icone, ${CYAN}Arreter le banc${NC},"
+    echo -e "                          puis relancer."
+    echo
+    command -v notify-send >/dev/null 2>&1 && \
+        notify-send -i /usr/share/osmo-operator/icons/osmo-launch.svg "Banc GSM" \
+            "Un lancement est deja en cours - cette fenetre ne fera rien." 2>/dev/null || true
+    if [ "$_own_window" = "1" ]; then
+        echo "Entree pour fermer."
+        read -r _ || true
+    fi
+    exit 1
 fi
 
 # ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────

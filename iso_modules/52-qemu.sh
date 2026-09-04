@@ -449,7 +449,36 @@ fi
 
 echo -e "  ${GREEN}✓${NC} retouches natives rejouees sur le rootfs (SGSN, MSC, sms-routing, run.sh)"
 mkdir -p "$ROOTFS/usr/bin"
-cp -a "$ROOTFS/usr/local/bin/." "$ROOTFS/usr/bin/" 2>/dev/null || true
+# ── /usr/local/bin AUSSI DANS /usr/bin, MAIS JAMAIS SUR UN BINAIRE DE DPKG ──
+# [2026-09-04] Ce `cp -a` recopiait TOUT /usr/local/bin dans /usr/bin. Or
+# /usr/local/bin contient le wrapper tcpdump (l'image l'apporte en 50-injection,
+# 83-espace-ram.sh le repose) - et le wrapper, lui, appelle /usr/bin/tcpdump.
+# Recopie par-dessus le vrai binaire, il s'appelait donc LUI-MEME, indefiniment.
+# L'apt de l'etape 8 ne rattrapait rien : le paquet etant deja installe dans
+# l'image, dpkg n'avait aucune raison de reecrire le fichier.
+#
+# Ce que ca donnait sur la machine demarree, et pourquoi ca ne ressemblait pas a
+# un probleme de tcpdump : run_modules/75-gsmtap.sh attend son pcap, ne le voit
+# jamais venir, et rend "[FAIL] GSMTAP capture (pcap)". run.sh sort alors en 1
+# (nb_fail > 0) ; osmo-banc.service est un oneshot, donc systemd conclut a un
+# service en echec et SIGKILL tout le cgroup - la pile entiere, montee et
+# fonctionnelle, tuee par une capture reseau.
+#
+# On ne copie donc que ce qui n'appartient a AUCUN paquet. La liste des fichiers
+# de dpkg se lit directement dans le rootfs : pas de chroot (qui ne marcherait
+# pas en construction croisee arm64), pas de dpkg-query.
+_ubin_dpkg="$WORK/usr-bin-dpkg.txt"
+cat "$ROOTFS"/var/lib/dpkg/info/*.list 2>/dev/null \
+    | grep '^/usr/bin/' | sort -u > "$_ubin_dpkg" || true
+for _f in "$ROOTFS/usr/local/bin/"*; do
+    [ -e "$_f" ] || continue
+    _b="${_f##*/}"
+    if grep -qxF "/usr/bin/$_b" "$_ubin_dpkg"; then
+        echo -e "  ${YELLOW}!${NC} /usr/bin/$_b appartient a un paquet - laisse intact (${CYAN}/usr/local/bin/$_b${NC} le precede dans le PATH)"
+        continue
+    fi
+    cp -a "$_f" "$ROOTFS/usr/bin/" 2>/dev/null || true
+done
 
 mkdir -p "$ROOTFS/root/.osmocom/bb"
 if [ -f "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" ]; then

@@ -600,7 +600,7 @@ fi
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # ── 1. Le fond d ecran du jour : strip Calvin & Hobbes incruste ──────────
     # tools/osmo-wallpaper.sh va chercher le strip du jour (gocomics, comme le
-    # gist hellogist), recompose la photo + carte LAB GRGSM + strip
+    # gist hellogist), recompose la photo + carte LAB GSM + strip
     # (tools/wallpaper-render.py) et pousse le resultat dans les sessions
     # ouvertes. Au boot (40 s, le reseau est la), chaque jour a 6h30, et
     # toutes les 4 h en rattrapage (banc hors ligne au boot).
