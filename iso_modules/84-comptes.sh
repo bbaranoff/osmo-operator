@@ -30,7 +30,7 @@ echo -e "${GREEN}[8d/9] Comptes, session et installeur...${NC}"
 # croit travailler sans privileges et on est root. C etait aussi la raison pour
 # laquelle Chromium refusait de demarrer avec son bac a sable. Ici, osmocom est
 # un vrai compte non privilegie, avec son propre UID.
-chroot "$ROOTFS" bash -c "
+chroot "$ROOTFS" env LC_ALL=C.UTF-8 LANGUAGE= bash -c "
 set -u
 id -u osmocom >/dev/null 2>&1 || useradd -m -s /bin/bash -c 'Compte osmocom (non privilegie)' osmocom
 echo 'osmocom:osmo' | chpasswd

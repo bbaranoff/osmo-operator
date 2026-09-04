@@ -31,7 +31,12 @@ install -m755 "$DIR/packaging/apt-fast-install.sh" "$ROOTFS/usr/local/sbin/apt-f
 # ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
 # est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
 # seule facon de lui dire quelle image on construit est de le lui passer.
+# LC_ALL=C.UTF-8 : la locale de l hote (fr_FR.UTF-8) fuyait dans le chroot, ou
+# elle n est pas encore generee ; perl (dpkg-preconfigure, debconf) le disait a
+# chaque paquet - "Setting locale failed" - et retombait sur C. On le fait
+# d emblee, sans bruit. C.UTF-8 existe toujours dans la libc, sans locale-gen.
 chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                   LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE= \
                    ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
                    ISO_ARCH="$ISO_ARCH" ISO_MIRROR="$ISO_MIRROR" \
                    ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" bash -c '

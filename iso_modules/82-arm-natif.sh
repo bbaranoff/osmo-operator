@@ -25,7 +25,7 @@ if [ "${ISO_ARCH:-amd64}" = "amd64" ]; then return 0; fi
 echo -e "${GREEN}[8e/9] Compilation native dans le chroot ${ISO_ARCH} (toast, lanceurs, .deb du banc)...${NC}"
 _arm_chroot() {
     chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        DEBIAN_FRONTEND=noninteractive "$@"
+        LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE= DEBIAN_FRONTEND=noninteractive "$@"
 }
 
 # ── toast ────────────────────────────────────────────────────────────────────
