@@ -724,6 +724,47 @@ X-GNOME-Autostart-Delay=12
 EOF
     chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop"
     echo -e "  ${GREEN}✓${NC} bureau : fond du jour (osmo-wallpaper.timer), spectres (osmo-fft-snap), DING relance a l ouverture"
+
+    # ── 5. VLC DEPUIS UNE SESSION ROOT ───────────────────────────────────────
+    # [2026-09-04] La session de la cle s ouvre sous root, et VLC refuse de
+    # demarrer en root ("VLC is not supposed to be run as root") : l icone ne
+    # faisait rien. On ne touche pas au binaire : le wrapper /usr/local/bin/vlc
+    # (devant /usr/bin dans le PATH, vise par le .desktop local) relance VLC
+    # sous le compte osmocom quand on est root - acces X par xhost (local
+    # seulement), son par le demon PulseAudio systeme du banc (osmo-pulse,
+    # groupe pulse-access). Un utilisateur normal passe tout droit.
+    if [ -x "$ROOTFS/usr/bin/vlc" ]; then
+        chroot "$ROOTFS" getent passwd osmocom >/dev/null 2>&1 \
+            || chroot "$ROOTFS" useradd -m -s /bin/bash osmocom 2>/dev/null || true
+        chroot "$ROOTFS" getent group pulse-access >/dev/null 2>&1 \
+            && chroot "$ROOTFS" usermod -aG pulse-access,audio,video osmocom 2>/dev/null || true
+        cat > "$ROOTFS/usr/local/bin/vlc" <<'VLCW'
+#!/bin/bash
+# vlc - wrapper osmo-operator : VLC refuse root, la session de la cle EST root.
+# Root : on relance sous osmocom (X local par xhost, son par osmo-pulse).
+VLC_USER="${OSMO_VLC_USER:-osmocom}"
+export PULSE_SERVER="${PULSE_SERVER:-unix:/var/run/pulse/native}"
+if [ "$(id -u)" -eq 0 ] && id "$VLC_USER" >/dev/null 2>&1; then
+    export DISPLAY="${DISPLAY:-:0}"
+    xhost "+SI:localuser:$VLC_USER" >/dev/null 2>&1 || true
+    exec runuser -u "$VLC_USER" -- env DISPLAY="$DISPLAY" PULSE_SERVER="$PULSE_SERVER" \
+        XDG_RUNTIME_DIR="/run/user/$(id -u "$VLC_USER")" HOME="$(getent passwd "$VLC_USER" | cut -d: -f6)" \
+        /usr/bin/vlc "$@"
+fi
+exec /usr/bin/vlc "$@"
+VLCW
+        chmod 755 "$ROOTFS/usr/local/bin/vlc"
+        # Le .desktop du paquet appelle /usr/bin/vlc en chemin absolu : copie
+        # locale (prioritaire, apt ne l ecrase pas) qui passe par le wrapper.
+        if [ -f "$ROOTFS/usr/share/applications/vlc.desktop" ]; then
+            install -d "$ROOTFS/usr/local/share/applications"
+            sed 's|^Exec=/usr/bin/vlc|Exec=/usr/local/bin/vlc|; s|^Exec=vlc |Exec=/usr/local/bin/vlc |' \
+                "$ROOTFS/usr/share/applications/vlc.desktop" > "$ROOTFS/usr/local/share/applications/vlc.desktop"
+        fi
+        echo -e "  ${GREEN}✓${NC} vlc : wrapper ${CYAN}/usr/local/bin/vlc${NC} (root -> osmocom, .desktop redirige)"
+    else
+        echo -e "  ${YELLOW}!${NC} vlc absent du rootfs - pas de wrapper"
+    fi
 fi
 
 
