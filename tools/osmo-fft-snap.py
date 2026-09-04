@@ -12,7 +12,10 @@
 # strip du jour, decoupe dans le fond d ecran : le Conky qui l affiche
 # (tools/osmo-conky-panel.sh) est invisible. Des que le pont alimente la FFT,
 # l image glisse en ~3 s (Image.blend) du strip vers le banc ; si le banc
-# s arrete, elle revient au strip de la meme facon.
+# s arrete - /psd rend une erreur au lieu d un spectre - elle revient au strip
+# de la meme facon. Le banc ne recouvre JAMAIS completement le strip : il est
+# compose a OSMO_FFT_OPACITY (0.86), donc Calvin & Hobbes reste visible en
+# transparence dessous.
 #
 # Source FFT : le dashboard, http://127.0.0.1:8080/psd?src=ms - le meme JSON
 # que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal : le
@@ -37,6 +40,12 @@ URL = os.environ.get("OSMO_FFT_URL", "http://127.0.0.1:8080/psd")
 OUT = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 PERIOD = float(os.environ.get("OSMO_FFT_PERIOD", "1"))
 FADE_S = float(os.environ.get("OSMO_FFT_FADE", "3"))
+# Opacite du banc PAR-DESSUS le strip. 1.0 = le strip disparait completement
+# (ce que faisait la version d avant) ; en dessous, Calvin & Hobbes reste
+# visible en transparence sous le spectre et le journal, et l encart continue
+# de se lire comme un morceau du fond d ecran plutot que comme une fenetre
+# posee dessus. Le fondu joue sur alpha, celle-ci en fixe le plafond.
+OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "0.86"))))
 WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.png")
 MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
@@ -277,7 +286,9 @@ def main():
                 write(base_image())
             else:
                 live = render_live(data)
-                write(live if alpha >= 1.0 else Image.blend(base_image(), live, alpha))
+                # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
+                # le strip transparaitre sous le banc (OPACITY).
+                write(Image.blend(base_image(), live, alpha * OPACITY))
         except Exception as e:
             print(f"[fft-snap] rendu : {e}", file=sys.stderr, flush=True)
         time.sleep(max(0.2, PERIOD - (time.time() - t)))

@@ -656,6 +656,12 @@ ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 RuntimeDirectory=osmo-fft
 RuntimeDirectoryMode=0755
+# [2026-09-04] SANS CECI, UNE RELANCE EFFACE L ENCART. systemd supprime le
+# RuntimeDirectory a l arret de l unite : /run/osmo-fft/panel.png disparaissait
+# le temps de la relance, et Conky affichait un trou dans le fond d ecran la ou
+# on attendait le strip Calvin & Hobbes. Le fichier est reecrit chaque seconde :
+# le conserver ne coute rien et supprime le clignotement.
+RuntimeDirectoryPreserve=yes
 Restart=always
 RestartSec=5
 Nice=10

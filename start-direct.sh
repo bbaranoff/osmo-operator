@@ -396,6 +396,34 @@ else
     TTY=0
     C_OK=""; C_KO=""; C_SK=""; C_DIM=""; C_CYAN=""; C_BOLD=""; C_Z=""
 fi
+# ── TUER LES PYTHON DU BANC, PAS CEUX DU BUREAU ─────────────────────────────
+# [2026-09-04] Le demontage faisait `killall -9 python3` : TOUS les python3 de
+# la machine. Le pont, fake_trx et trxcon devaient partir - mais l encart vivant
+# du bureau (tools/osmo-fft-snap.py) est un python3 lui aussi, et il partait
+# avec. Deux consequences a l ecran, qu on n allait evidemment pas chercher dans
+# un teardown radio :
+#   - l encart DISPARAISSAIT au lieu de revenir au strip Calvin & Hobbes : son
+#     unite a RuntimeDirectory=osmo-fft, que systemd EFFACE a chaque relance -
+#     donc plus de panel.png, donc un trou dans le fond d ecran ;
+#   - Restart=always + un arret par run relance l unite en boucle, jusqu a la
+#     limite de demarrages, apres quoi l encart ne revient plus du tout.
+# Le bureau n appartient pas au banc : ses python3 survivent au demontage.
+# CALYPSO_KILL_PYTHON_BUREAU=1 revient a l ancien comportement (tout tuer).
+PY_BUREAU='osmo-fft-snap\.py|osmo-panel\.py|wallpaper-render\.py'
+killall_python() {
+    local sig="${1:--TERM}" pid tue=0
+    if [ "${CALYPSO_KILL_PYTHON_BUREAU:-0}" = "1" ]; then
+        killall "$sig" python3 2>/dev/null && return 0
+        return 1
+    fi
+    for pid in $(pgrep -x python3 2>/dev/null); do
+        [ "$pid" = "$$" ] && continue
+        tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq "$PY_BUREAU" && continue
+        kill "$sig" "$pid" 2>/dev/null && tue=1
+    done
+    [ "$tue" = 1 ]
+}
+
 say_begin() {
     if [ $TTY -eq 1 ]; then
         printf '[ %s.. %s] %s' "$C_DIM" "$C_Z" "$1"
@@ -1087,8 +1115,8 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # module de run.sh, ou il tuerait le filtre d'horodatage du run en cours.
         # CALYPSO_NO_KILLALL=1 pour s'en passer.
         if [ "${CALYPSO_NO_KILLALL:-0}" != "1" ]; then
-            printf '  %spont TRX%s : killall -9 python3 (demande ; emporte aussi fake_trx / sms-interop-relay)\n' "${C_DIM:-}" "${C_Z:-}"
-            killall -9 python3 2>/dev/null || true
+            printf '  %spont TRX%s : python3 du banc termines (emporte aussi fake_trx / sms-interop-relay ; l encart du bureau est epargne)\n' "${C_DIM:-}" "${C_Z:-}"
+            killall_python -9 || true
         fi
         sleep 1
         printf '  %spont TRX%s : transceiver TRX-UDP d osmo-bts-trx (pont/pont.py)\n' "${C_DIM:-}" "${C_Z:-}"
@@ -1305,11 +1333,11 @@ case "$ACTION" in
         # faire echouer le run suivant sur « port UDP 5720 deja pris ».
         # run.sh le fait deja de son cote ; le repeter ne coute rien et couvre le
         # cas ou RUN_SH est introuvable ou sort en erreur.
-        # PORTEE : tue TOUS les python3 de la machine. CALYPSO_STOP_KILL_PYTHON=0
-        # le desactive.
+        # PORTEE : tous les python3 SAUF ceux du bureau (voir killall_python).
+        # CALYPSO_STOP_KILL_PYTHON=0 le desactive.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
-            if killall -9 python3 2>/dev/null; then
-                say_end " OK " "$C_OK" "python3 restants termines (killall)"
+            if killall_python -9; then
+                say_end " OK " "$C_OK" "python3 restants termines (hors encart du bureau)"
             fi
         fi
         exit 0
@@ -1567,10 +1595,10 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
         declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
         # Meme filet qu'au --stop : un python3 orphelin (pont, fake_trx, trxcon)
         # garde son port et fait echouer le demarrage suivant sur « port UDP
-        # 5720 deja pris ». PORTEE : tue TOUS les python3 de la machine.
+        # 5720 deja pris ». PORTEE : tous les python3 sauf ceux du bureau.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
-            killall python3 2>/dev/null && \
-                say_end " OK " "$C_OK" "python3 restants termines (killall)"
+            killall_python -TERM && \
+                say_end " OK " "$C_OK" "python3 restants termines (hors encart du bureau)"
         fi
     fi
 
@@ -2007,7 +2035,7 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
-        killall python3 2>/dev/null || true
+        killall_python -TERM || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi

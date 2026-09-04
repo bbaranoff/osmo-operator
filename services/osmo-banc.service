@@ -42,6 +42,13 @@ EnvironmentFile=-/etc/default/osmo-banc
 # n existe pas, et l unite est alors sautee sans jamais demarrer.
 ExecStart=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --no-attach $OSMO_BANC_ARGS
 ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
+# L ENCART DU BUREAU SUIT LE BANC. osmo-fft-snap.py lit /psd et le mobile.log
+# du run : un banc neuf, ce sont de nouveaux chemins sous /run/user/0 et un
+# nouveau journal. On le relance donc avec le banc, sans jamais le rendre
+# obligatoire - `-` en tete et --no-block : l encart est un ornement, il ne doit
+# ni faire echouer le demarrage ni le retarder. try-restart ne fait rien si
+# l unite n est pas la (image sans bureau).
+ExecStartPost=-/usr/bin/systemctl --no-block try-restart osmo-fft-snap.service
 # QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
 TimeoutStartSec=900
 TimeoutStopSec=180
