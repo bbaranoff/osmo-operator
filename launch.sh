@@ -97,7 +97,7 @@ verrou_liberer() { exec 9>&- 2>/dev/null || true; }
 # demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
 # l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
 # « c est parti » sans suite.
-case "${1:-}" in --service|--stop|--dashboard|--console) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
+case "${1:-}" in --service|--stop|--dashboard|--console|--vty) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
 if [ "$_bloc_direct" = "1" ]; then
     # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
     # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
@@ -123,14 +123,35 @@ if [ "$_bloc_direct" = "1" ]; then
     # deuxieme fenetre.
     if [ "$_action" = "--dashboard" ]; then
         _u="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
-        if command -v xdg-open >/dev/null 2>&1; then
-            setsid xdg-open "$_u" >/dev/null 2>&1 &
-        elif command -v firefox >/dev/null 2>&1; then
+        # Firefox EN PREMIER, pas xdg-open : c est le navigateur de l image, et
+        # une seconde invocation lui ajoute un onglet au lieu d ouvrir une
+        # fenetre de plus. xdg-open ne sert que de repli.
+        if command -v firefox >/dev/null 2>&1; then
             setsid firefox "$_u" >/dev/null 2>&1 &
+        elif command -v xdg-open >/dev/null 2>&1; then
+            setsid xdg-open "$_u" >/dev/null 2>&1 &
         else
             _note "Aucun navigateur - ouvrez $_u a la main."; exit 1
         fi
         exit 0
+    fi
+
+    # ── LA CONSOLE DU MOBILE (VTY) ─────────────────────────────────────────
+    # telnet, comme le dit la documentation Osmocom : le VTY attend un terminal
+    # ligne a ligne. Le `read` final garde la fenetre le temps de lire l erreur
+    # quand le port est ferme.
+    if [ "$_action" = "--vty" ]; then
+        _p="${OSMO_MS_VTY_PORT:-4247}"
+        for _t in gnome-terminal xfce4-terminal konsole xterm; do
+            command -v "$_t" >/dev/null 2>&1 || continue
+            _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; read -r _; }"
+            case "$_t" in
+                gnome-terminal) exec "$_t" -- bash -c "$_c" ;;
+                *)              exec "$_t" -e "bash -c \"$_c\"" ;;
+            esac
+        done
+        _note "Aucun emulateur de terminal - tapez : telnet 127.0.0.1 $_p"
+        exit 1
     fi
 
     # ── LA CONSOLE DU BANC ─────────────────────────────────────────────────

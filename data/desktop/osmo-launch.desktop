@@ -19,7 +19,7 @@ Keywords=gsm;osmocom;banc;lancer;
 # Les noms des groupes doivent correspondre EXACTEMENT aux jetons de `Actions=`,
 # a la casse pres inclus : une entree qui ne correspond a rien est ignoree en
 # silence, et le clic droit affiche simplement une action de moins.
-Actions=Service;Dashboard;Console;Dsp;Stop;
+Actions=Service;Dashboard;Console;Vty;Dsp;Stop;
 
 # « Comme un service » : systemctl, pas de terminal, et le banc survit a la
 # fermeture de la session. C est launch.sh --service qui parle a systemd -
@@ -43,6 +43,12 @@ Name=Console du banc (tmux attach)
 Name[fr]=Console du banc (tmux attach)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --console
+
+[Desktop Action Vty]
+Name=Console du mobile (telnet 4247)
+Name[fr]=Console du mobile (telnet 4247)
+
+Exec=/opt/GSM/osmo-operator/launch.sh --vty
 
 [Desktop Action Dsp]
 Name=Lancer en mode DSP (C54x)
