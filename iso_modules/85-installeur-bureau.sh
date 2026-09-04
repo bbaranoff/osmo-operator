@@ -157,6 +157,27 @@ for _t in /tmp/calamares-root-*; do
     rmdir "$_t" 2>/dev/null || true
 done
 
+# ── GARDE-FOU : une page generee invalide ne doit pas bloquer l installation ─
+# [2026-09-04] Un seul antislash de trop dans contextualprocess-mirror.conf et
+# Calamares s ouvrait sur "Calamares Initialization Failed - the following
+# modules could not be loaded : contextualprocess@mirror" : plus d installeur
+# du tout, pour une QUESTION DE MIROIR. Les deux pages ci-dessous sont
+# ECRITES a chaque lancement, donc verifiees a chaque lancement : si le YAML
+# ne se relit pas, on repose la version minimale (celle qui ne fait rien) et
+# l operateur installe quand meme. yaml.safe_load lit ce que lit yaml-cpp.
+# Sans python3-yaml sous la main, on ne bloque rien : le test s efface.
+_yamlok() {
+    python3 -c "import yaml" 2>/dev/null || return 0
+    python3 - "$1" <<'YAMLCHECK'
+import io, sys, yaml
+lines = io.open(sys.argv[1], encoding="utf-8").read().splitlines()
+i = next((n for n, l in enumerate(lines) if l.strip() == "---"), -1)
+d = yaml.safe_load("\n".join(lines[i + 1:]))
+if not isinstance(d, dict):
+    raise SystemExit("pas une table YAML")
+YAMLCHECK
+}
+
 # ── MIROIR : la page "Miroir Ubuntu" de l installeur suit le reseau ─────────
 # packaging/apt-mirror.sh --list mesure les miroirs d ici (5 s max chacun) ;
 # la page propose ceux qui repondent, du plus rapide au plus lent, le premier
@@ -212,7 +233,15 @@ if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
             echo "        - \"-/bin/bash -c 'sed -i -E \\\"s,^deb[[:space:]]+https?://[^[:space:]]+,deb ${_url},\\\" /etc/apt/sources.list; [ -f /etc/apt/sources.list.d/ubuntu.sources ] && sed -i -E \\\"s,^URIs:[[:space:]]+https?://[^[:space:]]+,URIs: ${_url},\\\" /etc/apt/sources.list.d/ubuntu.sources; echo [mirror] ${_url}'\""
         done
     } > "$_cm"
-    if [ -n "$_mlist" ]; then
+    if ! _yamlok "$_pm" || ! _yamlok "$_cm"; then
+        echo "Miroir Ubuntu : page generee ILLISIBLE - retour au choix minimal" >&2
+        printf '%s\n' "---" "mode: required" "method: legacy" "labels:" \
+            "    step: \"Miroir Ubuntu\"" "default: keep" "items:" \
+            "    - id: keep" "      name: \"Celui de la cle live\"" \
+            "      description: \"Le systeme installe garde le miroir de la cle.\"" > "$_pm"
+        printf '%s\n' "---" "dontChroot: false" "timeout: 60" \
+            "packagechooser_mirror:" "    \"keep\":" "        - \"-/bin/true\"" > "$_cm"
+    elif [ -n "$_mlist" ]; then
         echo "Miroir Ubuntu : $(printf '%s\n' "$_mlist" | wc -l) miroirs mesures, le plus rapide : $(printf '%s\n' "$_mlist" | head -1 | cut -f2)"
     else
         echo "Miroir Ubuntu : aucune mesure (pas de reseau ?) - la cible garde ${_cur:-archive.ubuntu.com}"
@@ -286,7 +315,15 @@ if [ -f "$_pc" ] && [ -f "$_cp" ]; then
             echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y ${_drv}; update-initramfs -u >/dev/null 2>&1 || true'\""
         done
     } > "$_cp"
-    if [ -n "$_nv" ]; then
+    if ! _yamlok "$_pc" || ! _yamlok "$_cp"; then
+        echo "NVIDIA : page generee ILLISIBLE - retour au choix minimal" >&2
+        printf '%s\n' "---" "mode: optional" "method: legacy" "labels:" \
+            "    step: \"Pilotes graphiques\"" "default: none" "items:" \
+            "    - id: none" "      name: \"Aucun pilote supplementaire\"" \
+            "      description: \"Le pilote libre (nouveau) du noyau.\"" > "$_pc"
+        printf '%s\n' "---" "dontChroot: false" "timeout: 1800" \
+            "packagechooser_nvidia:" "    \"none\":" "        - \"-/bin/true\"" > "$_cp"
+    elif [ -n "$_nv" ]; then
         echo "NVIDIA : $_nv - pilotes proposes : $(echo ${_drivers:-(liste ubuntu-drivers vide)})${_reco:+ ; recommande : $_reco}"
     else
         echo "NVIDIA : aucune carte detectee - la page le dira, sans effet"

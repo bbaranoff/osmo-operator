@@ -23,9 +23,23 @@ images:
     productWelcome: "welcome.png"
 
 slideshow: "show.qml"
+# show.qml est ecrit pour l API 1 du diaporama (un Timer qui tourne du debut a
+# la fin). Sans cette cle, Calamares journalise "Invalid or missing
+# *slideshowAPI*" et devine.
+slideshowAPI: 1
 
+# ── LES COULEURS DE LA BARRE LATERALE ──────────────────────────────────────
+# [2026-09-04] CES QUATRE NOMS ONT CHANGE EN CALAMARES 3.3. Les anciens
+# (sidebarBackground, sidebarText, sidebarTextSelect, sidebarTextHighlight)
+# etaient refuses un par un - "Unknown branding *style* entry" dans
+# ~/.cache/calamares/session.log - et la barre retombait sur la palette Qt du
+# bureau sombre : noir sur noir, les etapes INVISIBLES, seule l etape courante
+# se voyait. Les seuls noms que 3.3 accepte sont ceux-ci, majuscule initiale
+# (lus dans libcalamaresui : SidebarBackground, SidebarText,
+# SidebarTextCurrent, SidebarBackgroundCurrent). "Current" = l etape en cours,
+# ce que les anciens noms appelaient "Select"/"Highlight".
 style:
-    sidebarBackground:     "#0d1b2a"
-    sidebarText:           "#ffffff"
-    sidebarTextSelect:     "#1b98e0"
-    sidebarTextHighlight:  "#13293d"
+    SidebarBackground:         "#0d1b2a"
+    SidebarText:               "#ffffff"
+    SidebarBackgroundCurrent:  "#1b98e0"
+    SidebarTextCurrent:        "#13293d"
