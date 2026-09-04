@@ -114,6 +114,16 @@ for arg in "$@"; do case "$arg" in
                     if [ "${ISO_UBUNTU_NEXT:-0}" = 1 ]; then
                         ISO_UBUNTU="$arg"; ISO_UBUNTU_NEXT=0
                     fi ;;
+    # ── LE BANC AU BOOT : NON, SAUF DEMANDE EXPLICITE ────────────────────
+    # osmo-banc.service et osmo-multi.service sont POSES dans toutes les images
+    # (82-services.sh) mais plus ACTIVES : une machine fraichement installee
+    # demarre sur son bureau, pas sur une pile radio qu'on n'a pas encore
+    # configuree. --banc / --multi (ou OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1)
+    # rendent l'activation au demarrage, image par image.
+    --banc)         OSMO_ISO_BANC=1 ;;
+    --no-banc)      OSMO_ISO_BANC=0 ;;
+    --multi)        OSMO_ISO_MULTI=1 ;;
+    --no-multi)     OSMO_ISO_MULTI=0 ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;

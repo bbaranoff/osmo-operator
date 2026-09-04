@@ -8,6 +8,12 @@
 #    --arm                image SD arm64 pour Raspberry Pi 4, base Armbian 24.04
 #                         (osmo-operator-<...>-rpi4.img) ; --lite accepte,
 #                         --desktop et --all refuses. Voir iso_modules/00-options.sh.
+#    --banc --multi       active osmo-banc.service / osmo-multi.service au boot
+#                         de l'image. Par defaut les deux unites sont POSEES mais
+#                         NON activees : la machine demarre sur son bureau, et
+#                         c'est l'operateur qui lance son banc (icone, launch.sh,
+#                         systemctl start osmo-banc). Equivalents en variables :
+#                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
 #    --skip-build[=image:tag]   pas de build : pull bastienbaranoff/norf_gsm:latest
 #                         depuis Docker Hub, tague osmocom-nitb:latest, et continue

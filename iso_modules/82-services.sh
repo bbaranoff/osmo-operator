@@ -128,14 +128,27 @@ fi
 # bord n'aurait rien a montrer. On ne l'active pas.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
-# ── LE BANC DEMARRE EN SERVICE, SANS TERMINAL ────────────────────────────────
+# ── LE BANC EST POSE EN SERVICE, MAIS NE PART PAS TOUT SEUL ─────────────────
 # [2026-09-04] services/osmo-banc.service (standalone : start-direct.sh) et
-# services/osmo-multi.service (multi-operateur : start-multi.sh). Le standalone
-# est ACTIVE au boot ; le multi est pose mais laisse a l'operateur
-# (systemctl start|enable osmo-multi). Les deux tiennent leur pile dans tmux :
-# `tmux attach -t calypso` depuis n'importe quel terminal de root reprend la
-# main, exactement comme la fin de run.sh le faisait dans le terminal du
-# lanceur. launch.sh et start-multi.sh detectent l'unite et passent par elle.
+# services/osmo-multi.service (multi-operateur : start-multi.sh). Les deux
+# tiennent leur pile dans tmux : `tmux attach -t calypso` depuis n'importe quel
+# terminal de root reprend la main, exactement comme la fin de run.sh le
+# faisait dans le terminal du lanceur. launch.sh et start-multi.sh detectent
+# l'unite et passent par elle.
+#
+# [2026-09-05] AUCUNE DES DEUX N'EST PLUS ACTIVEE AU BOOT. osmo-banc l'etait
+# depuis le debut, osmo-multi depuis la veille. Ce que ca donnait sur une
+# machine fraichement installee : la pile radio entiere (QEMU/Calypso, le
+# coeur, les conteneurs du multi) montait AVANT que l'operateur ait pu voir
+# l'ecran de session - plusieurs minutes de demarrage, un banc deja lance sur
+# une configuration qu'on n'avait pas encore choisie (noeud, --dsp, topologie),
+# et rien a faire d'autre que l'arreter pour le relancer autrement.
+# Un banc se DEMARRE : c'est le geste de l'operateur, pas un effet de bord du
+# boot.
+#   systemctl start osmo-banc          une session (ou l'icone du bureau)
+#   systemctl enable --now osmo-banc   pour qu'il reparte a chaque demarrage
+# Au build : OSMO_ISO_BANC=1 (ou --banc) et OSMO_ISO_MULTI=1 (ou --multi)
+# rendent l'activation au boot, image par image.
 if [ "$ISO_ROLE" != "interstp" ]; then
     for _u in osmo-banc osmo-multi; do
         if [ -f "$DIR/services/$_u.service" ]; then
@@ -144,31 +157,30 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             echo -e "  ${RED}✗ services/$_u.service introuvable${NC}" >&2; exit 1
         fi
     done
-    chroot "$ROOTFS" systemctl enable osmo-banc 2>/dev/null ||         ln -sf /etc/systemd/system/osmo-banc.service                "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-banc.service"
-    # ── LE MULTI-OPERATEUR EST UN SERVICE, LUI AUSSI ────────────────────────
-    # [2026-09-04] Il etait POSE mais desactive : le banc multi ne partait que
-    # par l icone du bureau, c est-a-dire par un pkexec sur start-multi.sh dont
-    # la sortie vit dans un terminal que personne ne relit. Quand un operateur
-    # ne demarrait pas - et c est arrive - il ne restait aucune trace : ni
-    # `systemctl status`, ni `journalctl -u`, juste des conteneurs manquants.
-    #
-    # En unite, le lancement a un journal (`journalctl -u osmo-multi`), un etat
-    # (`systemctl status osmo-multi`), un arret propre (ExecStop : les
-    # conteneurs et le hub, le natif reste a osmo-banc) et il repart au boot.
-    # Requires=osmo-banc.service : le multi RACCORDE le natif, il ne le lance
-    # pas - les deux unites sont donc actives ensemble, dans cet ordre.
-    #
-    # OSMO_ISO_MULTI=0 au build rend l ancien comportement (pose, non active) :
-    # un banc a un seul operateur n a pas besoin de monter deux conteneurs et
-    # un hub a chaque demarrage.
-    if [ "${OSMO_ISO_MULTI:-1}" = "1" ]; then
-        chroot "$ROOTFS" systemctl enable osmo-multi 2>/dev/null ||             ln -sf /etc/systemd/system/osmo-multi.service                "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-multi.service"
-        echo -e "  ${GREEN}✓${NC} osmo-banc.service (standalone) et ${CYAN}osmo-multi.service${NC} (multi-operateur) actives au boot"
-        echo -e "      ${CYAN}systemctl disable osmo-multi${NC} pour n avoir que le standalone · ${CYAN}journalctl -u osmo-multi${NC}"
-    else
-        chroot "$ROOTFS" systemctl disable osmo-multi 2>/dev/null || true
-        echo -e "  ${GREEN}✓${NC} osmo-banc.service active au boot (standalone) · ${CYAN}osmo-multi.service${NC} pose, non active (OSMO_ISO_MULTI=0)"
-    fi
+    # `systemctl disable` NE SUFFIT PAS SEUL ICI. Le rootfs vient d'une image
+    # qui a pu etre construite quand ces unites etaient activees : le lien
+    # multi-user.target.wants/ y est deja, et un `disable` dans le chroot
+    # echoue en silence quand systemd n'y tourne pas (2>/dev/null || true).
+    # On efface donc le lien nous-memes, ce qui est de toute facon ce que
+    # `disable` fait - le symetrique exact du `ln -sf` qui sert de repli a
+    # l'`enable` dans l'autre branche.
+    mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+    for _u in osmo-banc osmo-multi; do
+        # osmo-banc -> OSMO_ISO_BANC, osmo-multi -> OSMO_ISO_MULTI ; ${!_var}
+        # est l'expansion indirecte de bash (la valeur de la variable NOMMEE
+        # par $_var), pas un eval.
+        _var="OSMO_ISO_${_u#osmo-}"; _var="${_var^^}"
+        if [ "${!_var:-0}" = "1" ]; then
+            chroot "$ROOTFS" systemctl enable "$_u" 2>/dev/null || \
+                ln -sf "/etc/systemd/system/$_u.service" \
+                       "$ROOTFS/etc/systemd/system/multi-user.target.wants/$_u.service"
+            echo -e "  ${GREEN}✓${NC} ${CYAN}$_u.service${NC} pose ET active au boot (${_var}=1)"
+        else
+            chroot "$ROOTFS" systemctl disable "$_u" 2>/dev/null || true
+            rm -f "$ROOTFS/etc/systemd/system/multi-user.target.wants/$_u.service"
+            echo -e "  ${GREEN}✓${NC} ${CYAN}$_u.service${NC} pose, ${BOLD}non active${NC} au boot · ${CYAN}systemctl start $_u${NC} pour le lancer, ${CYAN}${_var}=1${NC} au build pour l'activer"
+        fi
+    done
 fi
 
 # ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────

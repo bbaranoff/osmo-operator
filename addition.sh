@@ -809,10 +809,25 @@ CONF
         install -m644 "$DIR/services/$_u.service" "/etc/systemd/system/$_u.service"
     done
     systemctl daemon-reload 2>/dev/null || true
+    # ── POSEES, PAS ACTIVEES ────────────────────────────────────────────────
+    # [2026-09-05] `systemctl enable osmo-multi` etait fait ICI, et l ISO
+    # activait osmo-banc de son cote : le supplement SS7 suffisait donc a ce
+    # que la machine monte, a chaque demarrage, la pile radio ET les conteneurs
+    # du multi - avant meme l ouverture de session, sur une configuration que
+    # personne n avait choisie. Un banc se DEMARRE :
+    #   systemctl start osmo-banc | osmo-multi     une session (ou l icone)
+    #   systemctl enable --now osmo-multi          a chaque demarrage
+    # OSMO_MULTI_ENABLE=1 ./addition.sh retablit l activation automatique.
     if [ -f /etc/systemd/system/osmo-multi.service ]; then
-        systemctl enable osmo-multi.service >/dev/null 2>&1 \
-            && echo -e "  ${GREEN}✓${NC} ${BOLD}osmo-multi.service${NC} installe et active au demarrage" \
-            || echo -e "  ${YELLOW}!${NC} osmo-multi.service installe, activation KO (systemctl enable osmo-multi)"
+        if [ "${OSMO_MULTI_ENABLE:-0}" = "1" ]; then
+            systemctl enable osmo-multi.service >/dev/null 2>&1 \
+                && echo -e "  ${GREEN}✓${NC} ${BOLD}osmo-multi.service${NC} installe et active au demarrage (OSMO_MULTI_ENABLE=1)" \
+                || echo -e "  ${YELLOW}!${NC} osmo-multi.service installe, activation KO (systemctl enable osmo-multi)"
+        else
+            systemctl disable osmo-multi.service >/dev/null 2>&1 || true
+            echo -e "  ${GREEN}✓${NC} ${BOLD}osmo-multi.service${NC} installe, ${BOLD}non active${NC} au demarrage"
+            echo -e "      ${CYAN}systemctl start osmo-multi${NC} pour une session · ${CYAN}systemctl enable --now osmo-multi${NC} a chaque boot"
+        fi
     fi
 
     if [ -f "$_dsk" ]; then

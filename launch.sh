@@ -53,10 +53,11 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC
 #      descripteur qui SURVIT a l exec de start-direct.sh : il couvre donc tout
 #      le demarrage, et le noyau le libere quand le processus meurt, meme tue -
 #      rien a nettoyer, et surtout aucun verrou fantome apres une coupure.
-#   2. l unite osmo-banc est « activating ». Le banc lance au boot par systemd
-#      ne passe par aucun launch.sh : il ne tient aucun verrou, et sans ce
-#      second test un clic pendant le demarrage automatique passerait au
-#      travers.
+#   2. l unite osmo-banc est « activating ». Un banc lance par systemd
+#      (`systemctl start osmo-banc`, l action « en service » de l icone, ou une
+#      image gravee avec --banc) ne passe par aucun launch.sh : il ne tient
+#      aucun verrou, et sans ce second test un clic pendant ce demarrage-la
+#      passerait au travers.
 # `--stop` n est jamais bloque : c est justement le geste qui reprend la main
 # quand un lancement s eternise.
 LOCK_FILE="${OSMO_LAUNCH_LOCK:-/run/lock/osmo-launch.lock}"
@@ -462,8 +463,10 @@ tile_windows() {
 }
 
 # ── LE BANC EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ─────────────────────────
-# [2026-09-04] services/osmo-banc.service demarre le banc au boot, sans
-# terminal, et le tient dans la session tmux « calypso ». Quand l unite est
+# [2026-09-04] services/osmo-banc.service demarre le banc sans terminal et le
+# tient dans la session tmux « calypso ». (Elle est POSEE mais plus activee au
+# boot depuis le 2026-09-05 : c est ce script, ou l icone, qui la demarre.)
+# Quand l unite est
 # installee, ce script ne lance plus start-direct.sh lui-meme : il (re)demarre
 # l unite, ouvre les applications du bureau comme avant, puis S ATTACHE a tmux
 # dans son terminal - le meme ecran qu avant, mais un seul proprietaire du

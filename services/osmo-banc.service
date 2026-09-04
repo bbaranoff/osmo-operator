@@ -18,6 +18,14 @@ Wants=osmo-pulse.service osmo-egprs-web.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-direct.sh
 # Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
 # (Requires= dans osmo-multi.service), il ne le remplace pas.
+#
+# [2026-09-05] POSEE, PAS ACTIVEE. Cette unite partait au boot depuis le debut :
+# une machine fraichement installee montait QEMU/Calypso et tout le coeur avant
+# meme l'ouverture de session - plusieurs minutes, et un banc lance sur une
+# configuration (noeud, --dsp, topologie) que personne n'avait choisie.
+#   systemctl start osmo-banc           pour une session (ou l'icone du bureau)
+#   systemctl enable --now osmo-banc    pour le demarrer a chaque boot
+# Au build : OSMO_ISO_BANC=1 (ou --banc) active l'unite dans l'image.
 
 [Service]
 # ── ONESHOT + RemainAfterExit : LE BANC VIT DANS TMUX, PAS DANS ExecStart ──

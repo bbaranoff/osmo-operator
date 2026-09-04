@@ -14,18 +14,22 @@ After=osmo-banc.service docker.service network.target
 Wants=docker.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-multi.sh
 # ── ET LA TOPOLOGIE DOIT EXISTER ────────────────────────────────────────────
-# [2026-09-04] Cette unite est desormais ACTIVEE au demarrage (le multi part
-# comme le mono). Sur une ISO fraiche, ce serait un echec a CHAQUE boot : ni
-# docker ni l image osmocom-run ne sont dans le squashfs - ils arrivent avec le
-# supplement SS7 (addition.sh), qui est aussi ce qui ecrit ce fichier.
+# [2026-09-04] Sur une ISO fraiche, un demarrage de cette unite serait un echec :
+# ni docker ni l image osmocom-run ne sont dans le squashfs - ils arrivent avec
+# le supplement SS7 (addition.sh), qui est aussi ce qui ecrit ce fichier.
 # Une condition non remplie n est PAS un echec pour systemd : l unite est
 # sautee, en silence, et `systemctl --failed` reste vide (ce que le Conky
-# affiche desormais nommement). Des que le supplement a pose la topologie, le
-# banc multi part tout seul au boot suivant.
+# affiche desormais nommement). La condition vaut pour le boot comme pour un
+# `systemctl start` a la main : tant que la topologie n existe pas, il n y a
+# rien a monter.
 ConditionPathExists=/etc/osmocom/osmo-multi.conf
-# NON active par defaut (le standalone l'est) :
+# [2026-09-05] NI CELLE-CI NI osmo-banc NE SONT ACTIVEES PAR DEFAUT. Les deux
+# sont posees par l'ISO (iso_modules/82-services.sh) et par addition.sh, et
+# c'est l'operateur qui demarre son banc - pas le boot, sur une configuration
+# qu'il n'a pas encore choisie.
 #   systemctl start osmo-multi          pour une session
-#   systemctl enable osmo-multi         pour le demarrer a chaque boot
+#   systemctl enable --now osmo-multi   pour le demarrer a chaque boot
+# Au build : OSMO_ISO_MULTI=1 (ou --multi) active l'unite dans l'image.
 
 [Service]
 Type=oneshot
