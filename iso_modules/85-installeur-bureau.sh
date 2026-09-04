@@ -425,12 +425,9 @@ TUTO
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-launch.desktop" "$ROOTFS/usr/share/applications/osmo-launch.desktop"
-    # [2026-09-03] Le mode DSP a sa propre icone (data/desktop/osmo-dsp.desktop,
-    # launch.sh --dsp -> start-direct.sh --dsp -> fork qosmo-dsp + lanceur
-    # qosmo-dsp). Le clic droit de osmo-launch offre deja l'action ; l'icone
-    # dediee le rend visible dans la grille d'applications et le dock.
-    [ -f "$DIR/data/desktop/osmo-dsp.desktop" ] && \
-        install -m644 "$DIR/data/desktop/osmo-dsp.desktop" "$ROOTFS/usr/share/applications/osmo-dsp.desktop"
+    # [2026-09-04] Plus d'icone DSP a part : le clic droit du telephone
+    # (osmo-launch.desktop, action « Lancer en mode DSP ») suffit.
+    rm -f "$ROOTFS/usr/share/applications/osmo-dsp.desktop"
 
     # osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI. Son lanceur
     # start-multi.sh suppose docker + l image + la topologie SS7, qui n existent

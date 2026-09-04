@@ -7,8 +7,8 @@
 # dynamique), arfcn, label. Ici pas de navigateur : on trace en Pillow, une
 # image par source, toutes les secondes, et Conky les affiche (${image ... -n}).
 #
-#   /run/osmo-fft/ms.png   376x150   spectre + chute d eau, MS
-#   /run/osmo-fft/bts.png  376x150   spectre + chute d eau, BTS
+#   /run/osmo-fft/ms.png   376x300   spectre + chute d eau, MS (seule source par defaut)
+#   /run/osmo-fft/bts.png  376x300   idem BTS, si OSMO_FFT_SOURCES=ms,bts
 #
 # Sans flux (stack arretee, "flux pas encore pret"), l image le dit en clair
 # plutot que de figer le dernier spectre. Lance par osmo-fft-snap.service.
@@ -23,12 +23,20 @@ from PIL import Image, ImageDraw, ImageFont
 URL = os.environ.get("OSMO_FFT_URL", "http://127.0.0.1:8080/psd")
 OUT = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 PERIOD = float(os.environ.get("OSMO_FFT_PERIOD", "1"))
-W, H = 376, 150
-TITLE_H, PSD_H = 18, 58
+# [2026-09-04] UN SEUL SPECTRE, CELUI DU MOBILE. Le Conky ne montre plus que le
+# montant (MS) : c est le signal qu on regarde sur le banc, la BTS emet en
+# continu et son spectre n apprend rien. L image prend donc toute la hauteur
+# (300 px : spectre plus haut, chute d eau plus longue). OSMO_FFT_SOURCES=ms,bts
+# et OSMO_FFT_H=150 redonnent les deux vignettes d avant.
+W = 376
+H = int(os.environ.get("OSMO_FFT_H", "300"))
+TITLE_H = 18
+PSD_H = int(os.environ.get("OSMO_FFT_PSD_H", str(max(58, H // 4))))
 WF_H = H - TITLE_H - PSD_H - 4
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
-SOURCES = {"ms": "MS  ·  montant (UL)", "bts": "BTS  ·  descendant (DL)"}
+ALL_SOURCES = {"ms": "MS  ·  montant (UL)", "bts": "BTS  ·  descendant (DL)"}
+SOURCES = {k: ALL_SOURCES[k] for k in os.environ.get("OSMO_FFT_SOURCES", "ms").split(",") if k in ALL_SOURCES}
 history = {k: [] for k in SOURCES}
 
 
