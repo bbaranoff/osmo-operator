@@ -198,47 +198,32 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh"
 cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
 #!/bin/sh
 # osmo-pulse-link.sh - rend le PulseAudio SYSTEME visible des applications qui
-# cherchent un socket par utilisateur, snaps compris.
+# cherchent un socket par utilisateur.
 #
 # En mode systeme, PulseAudio n'ecoute que sur /run/pulse/native. Les clients,
-# eux, regardent $XDG_RUNTIME_DIR/pulse/native (soit /run/user/<uid>/pulse) -
-# et c'est ce chemin que snapd monte dans le bac a sable. Sans lui, un snap ne
-# voit AUCUN peripherique : Firefox rendait « NotFoundError » sur le micro,
-# pendant que pactl listait deux entrees en RUNNING.
+# eux, regardent $XDG_RUNTIME_DIR/pulse/native (soit /run/user/<uid>/pulse).
+# Sans ce chemin, le navigateur ne voit AUCUN peripherique : « NotFoundError »
+# sur le micro, pendant que pactl liste deux entrees en RUNNING.
 #
 # Toujours exit 0 : l'audio ne doit jamais empecher la pile de monter.
 #
-# [2026-08-30] LE LIEN NE SUFFISAIT PAS : IL FAUT AUSSI LE PROPRIETAIRE.
-# Le lien ci-dessous est necessaire mais pas suffisant, et le symptome etait
-# tenace : les haut-parleurs marchaient, pactl listait la carte en RUNNING, et
-# le navigateur restait MUET. La raison est dans le profil AppArmor du snap
-# (/var/lib/snapd/apparmor/profiles/snap.firefox.firefox) :
+# [2026-08-30] LE LIEN NE SUFFIT PAS TOUJOURS : IL Y A AUSSI LE PROPRIETAIRE.
+# Un client confine par AppArmor peut se voir autoriser le chemin avec le
+# qualificateur `owner`, qui exige proprietaire du fichier == fsuid du
+# processus. Le socket appartient a `pulse` (uid 107, le compte du demon
+# systeme) et la session tourne en root (uid 0) : deux nombres differents, et
+# la connexion est refusee alors que tout le reste marche - haut-parleurs
+# audibles, carte en RUNNING, et un navigateur muet. C'est exactement l'ecart
+# qu'on cherche pendant des heures cote « permission micro » ou « pilote son ».
 #
-#     owner /{,var/}run/pulse/native rwk,
-#
-# Le chemin EST autorise. C'est le qualificateur `owner` qui refuse : AppArmor
-# exige que le proprietaire du fichier soit egal au fsuid du processus. Le
-# journal du noyau le dit mot pour mot :
-#
-#     apparmor="DENIED" operation="connect" profile="snap.firefox.firefox"
-#     name="/run/pulse/native" fsuid=0 ouid=107
-#
-# fsuid=0 (la session tourne en root) contre ouid=107 (le socket appartient a
-# l'utilisateur `pulse`, puisque c'est lui qui fait tourner le demon systeme).
-# Deux nombres differents, et tout le reste marche : c'est exactement le genre
-# d'ecart qu'on cherche pendant des heures cote « permission micro » ou
-# « pilote son », alors que la carte joue deja.
-#
-# ⚠️ AppArmor resout le CHEMIN REEL : le lien symbolique ci-dessous ne masque
-# rien, la regle appliquee est bien celle de /run/pulse/native, pas celle de
-# /run/user/<uid>/pulse/native.
+# ⚠️ Une telle regle porte sur le CHEMIN REEL : le lien symbolique ci-dessous
+# ne masque rien, c'est bien /run/pulse/native qui est evalue.
 #
 # On donne donc le socket a l'uid de la session graphique. Sur cette ISO c'est
 # root (autologin root, cf. gdm3/custom.conf) ; OSMO_PULSE_UID permet d'en
 # choisir un autre. Le demon, lui, continue de tourner en `pulse` : accept()
 # ne demande pas d'etre proprietaire, et le mode srwxrwxrwx laisse tout le
-# monde se connecter. Un seul socket ne peut avoir qu'un proprietaire : un
-# navigateur SNAP lance sous un AUTRE compte que celui-ci resterait muet.
+# monde se connecter. Un seul socket ne peut avoir qu'un proprietaire.
 set -u
 PUID="${OSMO_PULSE_UID:-0}"
 for d in /run/user/*; do
@@ -306,13 +291,11 @@ ExecStart=/usr/bin/pulseaudio --system --daemonize=no --disallow-exit --exit-idl
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
 # ── LE SOCKET LA OU LES APPLICATIONS LE CHERCHENT ───────────────────────────
 # PulseAudio tourne ici en mode SYSTEME : il n'ecoute que sur /run/pulse/native.
-# Or une application cherche $XDG_RUNTIME_DIR/pulse/native, et c'est ce
-# chemin-la - et lui seul - que snapd monte dans le bac a sable d'un snap.
-# Firefox etant un snap (voir osmo-firefox-snap.service), il ne trouverait aucun
-# serveur audio, enumerait ZERO entree, et getUserMedia rendait
-# « NotFoundError — The object can not be found here ». Le diagnostic partait
-# invariablement sur une permission micro refusee, alors que la machine a deux
-# entrees bien reelles et que Chrome, non confine, capturait au meme instant.
+# Or une application cherche $XDG_RUNTIME_DIR/pulse/native, soit
+# /run/user/<uid>/pulse/native. Sans ce chemin-la, elle ne trouve AUCUN serveur
+# audio, enumere ZERO entree, et getUserMedia rend « NotFoundError — The object
+# can not be found here ». Le diagnostic part alors invariablement sur une
+# permission micro refusee, alors que la machine a deux entrees bien reelles.
 # Un lien suffit ; il est pose par le demon lui-meme, donc il survit a un
 # restart du service.
 ExecStartPost=/usr/local/sbin/osmo-pulse-link.sh

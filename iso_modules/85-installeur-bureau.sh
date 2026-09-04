@@ -391,25 +391,17 @@ CONKY
     [ -f "$DIR/data/tutorial.html" ] && \
         cp -f "$DIR/data/tutorial.html" "$ROOTFS/usr/share/osmo-operator/tutorial.html"
 
-    # Le tutoriel passe par le HOME, et ce detour n est pas cosmetique :
-    # FIREFOX EST UN SNAP. Son bac a sable lui donne l interface "home", pas
-    # /opt ni /usr/share : un file:///opt/GSM/... s ouvre sur "Fichier
-    # introuvable" - message qui ne parle ni de snap ni de confinement, et qui
-    # envoie chercher la panne du cote du fichier, qui est pourtant bien la.
+    # Un exemplaire dans /usr/share sert de repli hors ligne : c est le seul
+    # chemin qui reste lisible quand le dashboard ne repond pas.
     cat > "$ROOTFS/usr/local/bin/osmo-tutorial" <<'TUTO'
 #!/bin/bash
 # osmo-tutorial - ouvre le quick-start.
 #
-# PAR HTTP, PAS PAR file://. Firefox est un SNAP, et son bac a sable refuse le
-# fichier pour TROIS raisons cumulees, constatees le 31/08 :
-#   - firefox:home n est meme pas connecte (snap connections firefox -> "-") ;
-#   - l interface home, meme branchee, ne couvre QUE /home/* - jamais /root,
-#     qui est pourtant le compte de la session (gdm3 AutomaticLogin=root) ;
-#   - elle exclut les repertoires caches, donc ~/.local/share/... aussi.
-# Resultat a l ecran : "L acces au fichier a ete refuse" - message qui accuse
-# le fichier alors qu il est bien la et lisible. C est le confinement.
-# Le dashboard sert deja du statique sur 8080 : on passe par lui, et la
-# question du bac a sable ne se pose plus.
+# PAR HTTP, PAS PAR file://. Le dashboard sert deja ce fichier sur 8080 : en
+# passant par lui, la page affichee est CELLE QUI FAIT FOI (celle du depot,
+# recopiee a chaque build), la meme que depuis une autre machine du banc, et
+# les liens relatifs vers le tableau de bord marchent. Le file:// reste en
+# repli, pour le cas ou le dashboard ne repond pas.
 set -u
 URL="${OSMO_TUTORIAL_URL:-http://127.0.0.1:8080/tutorial.html}"
 PORT="${URL##*:}"; PORT="${PORT%%/*}"
@@ -417,7 +409,7 @@ if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
     exec 3>&- 2>/dev/null
     exec xdg-open "$URL"
 fi
-echo "Dashboard injoignable sur $PORT - repli file:// (echouera sous Firefox snap)" >&2
+echo "Dashboard injoignable sur $PORT - repli file:// sur la copie de /usr/share" >&2
 exec xdg-open "file:///usr/share/osmo-operator/tutorial.html"
 TUTO
     chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"

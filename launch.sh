@@ -88,16 +88,16 @@ lancement_possible() {
 # demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
 # l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
 # « c est parti » sans suite.
-if [ "${1:-}" = "--service" ]; then
+if [ "${1:-}" = "--service" ] || [ "${1:-}" = "--stop" ]; then
     # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
     # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
-    # c est precisement ce que cette action promet de ne pas ouvrir.
+    # c est precisement ce que ces deux actions promettent de ne pas ouvrir.
     if [ "$(id -u)" -ne 0 ] && command -v pkexec >/dev/null 2>&1 \
        && [ -n "${DISPLAY:-}" ]; then
         exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
              "$0" "$@"
     fi
-    shift
+    _action="$1"; shift
     _svc="${OSMO_BANC_SERVICE:-osmo-banc.service}"
     _icon=/usr/share/osmo-operator/icons/osmo-launch.svg
     _note() {
@@ -106,6 +106,37 @@ if [ "${1:-}" = "--service" ]; then
         fi
         echo -e "  ${CYAN}→${NC} $1"
     }
+
+    # ── ARRETER ────────────────────────────────────────────────────────────
+    # [2026-09-04] « Arreter le banc » etait traite APRES le bloc terminal :
+    # le clic ouvrait donc une fenetre entiere pour y lancer un systemctl stop,
+    # et sur une machine sans emulateur de terminal il ne se passait
+    # simplement RIEN. Un arret n a rien a montrer : il se fait ici, avant
+    # toute fenetre.
+    if [ "$_action" = "--stop" ]; then
+        _etat="$(systemctl is-active "$_svc" 2>/dev/null || true)"
+        if systemctl cat "$_svc" >/dev/null 2>&1; then
+            _note "Arret de $_svc..."
+            timeout 200 systemctl stop "$_svc" || true
+        fi
+        # ExecStop ne tourne QUE si l unite etait active ou en cours de
+        # demarrage. Quand elle est « failed » (start-direct.sh sorti en
+        # erreur), systemd a deja tue son cgroup - mais le coeur (osmo-stp,
+        # hlr, msc, bsc...) vit dans SES PROPRES unites, que run.sh a
+        # demarrees par systemctl : elles restent debout, le telephone du
+        # tableau de bord aussi, et l arret semblait ne rien faire. On demonte
+        # alors a la main ce que ExecStop n a pas eu l occasion de demonter.
+        case "$_etat" in
+            active|activating|reloading) ;;
+            *) [ -x "$TARGET" ] && timeout 120 "$TARGET" --stop >/dev/null 2>&1 || true ;;
+        esac
+        # Sans ca l unite reste « failed » et le prochain demarrage part d un
+        # etat d echec.
+        systemctl reset-failed "$_svc" 2>/dev/null || true
+        _note "Banc arrete."
+        exit 0
+    fi
+
     if ! systemctl cat "$_svc" >/dev/null 2>&1; then
         _note "Unite $_svc absente : utilisez « Lancer le banc GSM »."
         exit 1
@@ -301,23 +332,8 @@ banc_unit_present() {
     [ -d /run/systemd/system ] || return 1
     systemctl cat "$BANC_UNIT" >/dev/null 2>&1
 }
-banc_unit_stop() {
-    echo -e "  ${CYAN}→${NC} arret de ${BANC_UNIT}"
-    timeout 200 systemctl stop "$BANC_UNIT" || true
-    # [2026-09-04] `systemctl stop` ne lance ExecStop QUE si l unite est active.
-    # Quand start-direct.sh est sorti en erreur (unite « failed »), systemd a
-    # deja tue le cgroup - mais le coeur (osmo-stp, hlr, msc, bsc...) vit dans
-    # SES PROPRES unites, que run.sh a demarrees par systemctl : elles restent
-    # debout, le telephone du tableau de bord aussi, et « Arreter le banc »
-    # au clic droit ne faisait rien de visible. On demonte donc a la main ce
-    # que ExecStop n a pas eu l occasion de faire, puis on efface l etat
-    # « failed » pour que le prochain start reparte propre.
-    if [ -x "$DIR/start-direct.sh" ]; then
-        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
-    fi
-    systemctl reset-failed "$BANC_UNIT" 2>/dev/null || true
-    echo -e "    ${GREEN}✓${NC} banc arrete"
-}
+# L arret vit en tete de fichier (bloc « ARRETER »), avant toute fenetre :
+# `launch.sh --stop` n arrive donc jamais jusqu ici.
 # Suit le journal de l unite pendant le demarrage : c est la sortie de
 # start-direct.sh / run.sh qu on lisait avant dans ce meme terminal.
 banc_unit_restart() {
@@ -340,10 +356,6 @@ banc_unit_restart() {
     fi
     return "$rc"
 }
-if [ "${1:-}" = "--stop" ] && banc_unit_present; then
-    banc_unit_stop
-    exit 0
-fi
 
 # Le verrou (voir son bloc en tete de fichier). Ici, et pas plus haut : `--stop`
 # doit passer, et les privileges doivent etre regles - un flock pris avant le

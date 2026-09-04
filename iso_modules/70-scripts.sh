@@ -1,5 +1,5 @@
 #!/bin/bash
-# iso_modules/70-scripts.sh - etape 7/7b : scripts projet, WAN, firefox-snap
+# iso_modules/70-scripts.sh - etape 7/7b : scripts projet, WAN, NetworkManager
 # Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
 # variables, memes fonctions. Ne s execute pas seul. `return` en tete de
 # module = "rien a faire ici" (c est ainsi que --arm saute une etape).

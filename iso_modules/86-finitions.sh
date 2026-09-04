@@ -84,16 +84,13 @@ echo -e "  ${GREEN}✓${NC} sssd masque (aucun domaine sur un banc) - ${CYAN}sys
 #     Running as root without --no-sandbox is not supported
 # Cette image ouvre sa session en root ; Chromium exigeait donc soit un
 # changement de compte, soit un navigateur SANS confinement lance par le compte
-# le plus privilegie de la machine. Firefox n a pas cette contrainte : le snap
-# est confine par AppArmor et snapd, pas par des espaces de noms utilisateur.
-# Il demarre en root, confine, sans lanceur intermediaire - donc sans xhost,
-# sans runuser, sans second profil, et sans les trois unites qui les tenaient.
+# le plus privilegie de la machine. Firefox n a pas cette contrainte : il
+# demarre en root sans lanceur intermediaire - donc sans xhost, sans runuser,
+# sans second profil, et sans les trois unites qui les tenaient.
 #
 # La derniere raison de preferer Chromium etait "Firefox ne capte pas le micro".
-# Elle est tombee : voir le bloc Firefox de l etape 6 - le snap ne pouvait pas
-# se connecter a PulseAudio (AppArmor refusait /run/pulse/native sur le
-# proprietaire, pas sur le chemin), ce qui n avait rien d une affaire de
-# navigateur. Le chown est dans osmo-pulse-link.sh.
+# Elle est tombee : le navigateur ne pouvait pas se connecter a PulseAudio, ce
+# qui n avait rien d une affaire de navigateur. Voir osmo-pulse-link.sh.
 #
 # On efface donc ce que les images precedentes ont pu poser : une ISO
 # reconstruite par-dessus un rootfs de cache garderait sinon un lanceur
@@ -132,7 +129,7 @@ rm -rf "$ROOTFS/var/lib/osmo-chromium" 2>/dev/null || true
 #
 # /etc/firefox/policies/policies.json est le chemin systeme des politiques
 # Firefox sur Linux ; le deb Mozilla (80-chroot.sh) le lit directement, sans
-# plug ni bac a sable - le snap, lui, exigeait une interface system-files.
+# plug ni bac a sable.
 #
 # Le CONTENU, lui, ne peut pas etre ecrit ici : il nomme les origines
 # (https://<ip>:80) et le certificat de CETTE machine, qui n existent pas au

@@ -122,29 +122,36 @@ osmo_reposer_icones() {
 osmo_reposer_icones
 
 # ── FIREFOX ─────────────────────────────────────────────────────────────────
-# Le dashboard et fft-web s'ouvrent dans un navigateur ; l'ISO n'en embarque
-# pas toujours un. On le pose une seule fois : si le snap est deja la, on ne
-# touche a rien - un boot ne doit pas dependre du reseau (cf. l'entete).
-# Le vrai travail est dans /usr/local/sbin/osmo-firefox-snap, pose par
-# build-iso.sh : .snap embarques d abord, magasin ensuite, interfaces de
-# contenu reconnectees. On ne le redouble pas ici, on l appelle - et on garde
-# un repli direct pour les machines assez anciennes pour ne pas l avoir.
+# Le dashboard et fft-web s ouvrent dans un navigateur. Les images du
+# 2026-09-04 et apres embarquent le .deb de Mozilla : il est deja la, apt le
+# tient a jour, et cette fonction ne fait rien.
+#
+# Elle ne sert donc qu aux machines plus anciennes, ou aux images ou le depot
+# Mozilla etait injoignable au build. Elle repose ce depot puis installe le
+# paquet - le "firefox" des depots Ubuntu n est PAS une solution de repli : il
+# rappelle snapd, et c est ce montage-la qui laissait des bancs sans navigateur.
 osmo_installer_firefox() {
     [ "$(id -u)" -eq 0 ] || return 0
-    command -v snap >/dev/null 2>&1 || return 0
-    # Deb Mozilla (ISO du 2026-09-04 et apres) : apt le tient a jour, rien a faire.
-    dpkg-query -W -f='${Maintainer}' firefox 2>/dev/null | grep -qi mozilla && return 0
-    snap list firefox >/dev/null 2>&1 && return 0
-    echo "[*] Installation de Firefox (snap)..."
-    if [ -x /usr/local/sbin/osmo-firefox-snap ]; then
-        /usr/local/sbin/osmo-firefox-snap >/dev/null 2>&1
-    else
-        snap install firefox >/dev/null 2>&1
+    command -v firefox >/dev/null 2>&1 && return 0
+    command -v apt-get >/dev/null 2>&1 || return 0
+    echo "[*] Installation de Firefox (deb Mozilla)..."
+    if [ ! -s /etc/apt/keyrings/packages.mozilla.org.asc ]; then
+        install -d -m0755 /etc/apt/keyrings
+        curl -fsSL --retry 3 https://packages.mozilla.org/apt/repo-signing-key.gpg \
+             -o /etc/apt/keyrings/packages.mozilla.org.asc || {
+            echo "[WARN] packages.mozilla.org injoignable - Firefox non installe."
+            return 0
+        }
     fi
-    if snap list firefox >/dev/null 2>&1; then
-        echo "[OK] Firefox installe."
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+        > /etc/apt/sources.list.d/mozilla.list
+    printf "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n" \
+        > /etc/apt/preferences.d/mozilla
+    apt-get update -qq 2>/dev/null || true
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y firefox >/dev/null 2>&1; then
+        echo "[OK] Firefox installe (deb Mozilla)."
     else
-        echo "[WARN] Firefox non installe (reseau ?) - voir /var/log/osmo-firefox-snap.log"
+        echo "[WARN] Firefox non installe (reseau ?)."
     fi
     return 0
 }

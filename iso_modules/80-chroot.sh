@@ -411,8 +411,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # telechargement, et le premier avalait son echec ("|| echo WARN") - une
     # image DESKTOP sans bureau sortait avec "done". Ici l echec ARRETE le
     # build : sans bureau ou sans installeur, cette image ne sert a rien.
+    # snapd n est PLUS demande ici : plus rien de cette image ne s installe par
+    # snap (le navigateur est un .deb Mozilla, voir plus bas). Il arrive encore
+    # comme recommandation d ubuntu-desktop-minimal - c est pourquoi il est
+    # desactive et masque en fin de bloc plutot que simplement absent.
     apt-fast install -y $APT_OPTS \
-        ubuntu-desktop-minimal wireshark linphone-desktop snapd \
+        ubuntu-desktop-minimal wireshark linphone-desktop \
         vlc \
         wmctrl x11-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
@@ -554,8 +558,9 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # sur la cle : des minutes en "activating" (1,5 Go a deballer, snapd qui
     # refuse tant qu un changement est en cours), et le banc tournait sans
     # navigateur. Le paquet "firefox" des depots Ubuntu ne remplace rien : c est
-    # un paquet de transition qui rappelle snapd, inutilisable dans un chroot. Mozilla publie ses propres .deb (packages.mozilla.org),
-    # a jour a chaque version : on prend celui-la, epingle au-dessus de celui
+    # un paquet de transition qui rappelle snapd, inutilisable dans un chroot.
+    # Mozilla publie ses propres .deb (packages.mozilla.org), a jour a chaque
+    # version : on prend celui-la, epingle au-dessus de celui
     # d Ubuntu, et apt le tient a jour sur le systeme installe. Le .desktop
     # est firefox.desktop et la politique /etc/firefox/policies/policies.json
     # est lue telle quelle, sans plug ni bac a sable.
