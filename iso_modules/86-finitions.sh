@@ -156,6 +156,67 @@ echo -e "  ${GREEN}✓${NC} Chromium retire ; ${CYAN}Firefox${NC} seul navigateu
 #               journal le rendent illisible.
 #   OSMO_BANNER un shell dans un shell (tmux, un sudo -i, un make qui ouvre un
 #               bash) ne la rejoue pas : une fois par terminal suffit.
+# ── PLYMOUTH : LE BANC SE PRESENTE DES L ALLUMAGE ───────────────────────────
+# [2026-09-04] L ecran de demarrage etait celui d Ubuntu. Un theme "script"
+# maison le remplace : un pylone a gauche, un mobile a droite, et une rafale
+# GSM qui fait l aller-retour entre les deux (les 8 intervalles de la trame,
+# celui qui est allume se deplace) - ce que la machine s apprete precisement a
+# faire tourner.
+#
+# LES IMAGES SONT GENEREES ICI, pas stockees : tools/plymouth-render.py les
+# dessine (Pillow + DejaVu, les memes dependances que le fond d ecran). Un
+# theme, ce sont trente PNG ; dans le depot ils seraient illisibles en diff et
+# incorrigibles. Le dessin est le code.
+#
+# Le theme gere AUSSI la saisie de la phrase LUKS (SetDisplayPasswordFunction) :
+# sur une installation chiffree, sans cette partie, l ecran reste fige sur
+# l animation pendant que la machine attend une phrase - elle parait plantee.
+_PLY_SRC="$DIR/configs/plymouth/osmo-bts"
+_PLY_DST="$ROOTFS/usr/share/plymouth/themes/osmo-bts"
+# plymouthd vit dans /usr/sbin sur noble (pas /usr/bin), et le theme est de
+# type "script" : sans le greffon script.so, plymouthd ignore le theme et
+# retombe sur le mode texte - un ecran noir avec des points, et personne pour
+# dire pourquoi. On verifie les deux.
+_PLY_SO="$(ls "$ROOTFS"/usr/lib/*/plymouth/script.so 2>/dev/null | head -1)"
+if [ -d "$_PLY_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" ]; then
+    install -d "$_PLY_DST"
+    install -m644 "$_PLY_SRC/osmo-bts.plymouth" "$_PLY_SRC/osmo-bts.script" "$_PLY_DST/"
+    # --template : le gabarit du depot ; le rendu ecrit a cote des images le
+    # script avec la geometrie injectee (il ECRASE la copie brute posee juste
+    # au-dessus, et c est voulu - c est la version calee sur le dessin).
+    if python3 "$DIR/tools/plymouth-render.py" --out "$_PLY_DST" \
+            --template "$_PLY_SRC/osmo-bts.script" >/dev/null 2>&1; then
+        chmod 644 "$_PLY_DST"/*.png
+        # ── LE CHOIX DU THEME PASSE PAR update-alternatives ─────────────
+        # [2026-09-04] `plymouth-set-default-theme` N EXISTE PAS sur noble :
+        # verifie sur la machine installee, "command not found", et il n est
+        # dans aucun des paquets plymouth. Ubuntu gere le theme par le systeme
+        # d alternatives - /usr/share/plymouth/themes/default.plymouth est un
+        # lien vers /etc/alternatives/default.plymouth, et bgrt y est inscrit
+        # en priorite 110. On s inscrit au-dessus (200) et on fixe le choix.
+        # Un `ln -sfn` direct sur default.plymouth serait EFFACE au premier
+        # apt-get qui touche a plymouth : les alternatives reprennent la main.
+        chroot "$ROOTFS" update-alternatives --install \
+            /usr/share/plymouth/themes/default.plymouth default.plymouth \
+            /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth 200 >/dev/null 2>&1 || true
+        chroot "$ROOTFS" update-alternatives --set default.plymouth \
+            /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth >/dev/null 2>&1 \
+            || ln -sfn /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth \
+                       "$ROOTFS/usr/share/plymouth/themes/default.plymouth"
+        # Le theme doit ENTRER dans l initrd : sans ce fichier, hook-functions
+        # n embarque que le theme par defaut d origine et l ecran reste celui
+        # d Ubuntu malgre le lien ci-dessus.
+        install -d "$ROOTFS/etc/initramfs-tools/conf.d"
+        echo "FRAMEBUFFER=y" > "$ROOTFS/etc/initramfs-tools/conf.d/splash"
+        chroot "$ROOTFS" update-initramfs -u >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}✓${NC} plymouth : theme ${CYAN}osmo-bts${NC} (pylone <-> mobile, rafale GSM, saisie LUKS)"
+    else
+        echo -e "  ${YELLOW}!${NC} plymouth : rendu des images echoue (python3-pil ?) - theme Ubuntu conserve"
+    fi
+else
+    echo -e "  ${YELLOW}!${NC} plymouth ou son greffon script absent du rootfs - pas de theme de demarrage"
+fi
+
 cat > "$ROOTFS/usr/local/bin/osmo-banner" <<'BANNER'
 #!/bin/bash
 # Banniere d ouverture de terminal : animation SMS puis la commande du banc.

@@ -1,0 +1,12 @@
+# osmo-bts - le theme Plymouth du banc.
+# Les images sont GENEREES par tools/plymouth-render.py au build de l ISO
+# (iso_modules/86-finitions.sh) : ce depot ne porte que le dessin, en Python,
+# et le script d animation ci-contre.
+[Plymouth Theme]
+Name=osmo-operator (BTS <-> MS)
+Description=Un pylone, un mobile, et une rafale GSM qui fait l aller-retour
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/osmo-bts
+ScriptFile=/usr/share/plymouth/themes/osmo-bts/osmo-bts.script

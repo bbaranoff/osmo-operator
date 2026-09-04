@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # osmo-fft-snap.py - l ENCART VIVANT du bureau : le cadre Calvin & Hobbes du fond
-# d ecran (tools/wallpaper-render.py, boite 320,600-1430,1010 en 1920x1080) qui
+# d ecran (tools/wallpaper-render.py, boite 510,600-1410,1010 en 1920x1080) qui
 # FOND vers le banc une fois qu il est pret :
 #
 #   +-----------------------------------------------------------+
@@ -20,7 +20,7 @@
 # que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal : le
 # mobile.log de la pile (QEMU MS#1), lu par la queue.
 #
-#   /run/osmo-fft/panel.png   1110x410  (coordonnees du fond ; Conky le met a
+#   /run/osmo-fft/panel.png   900x410   (coordonnees du fond ; Conky le met a
 #                                        l echelle de l ecran)
 #
 # Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
@@ -62,9 +62,20 @@ MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobil
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
 OP_FILE = os.path.join(OUT, "operator")
 # La boite du strip dans le fond d ecran (wallpaper-render.py, main()).
-BOX = (320, 600, 1430, 1010)
+BOX = (510, 600, 1410, 1010)
 W, H = BOX[2] - BOX[0], BOX[3] - BOX[1]
-PAD, FOOT = 18, 30
+PAD = 18
+# [2026-09-04] FOOT = 0 : PLUS DE BANDE DE PIED.
+# Il y avait en bas de l encart un bandeau de 30 px portant « Operateur N ·
+# spectre I/Q du mobile (http://...) », et la barre de boutons se posait dessus.
+# C est le « rectangle » qu on voyait en travers du bas : une bande pleine
+# largeur, distincte du contenu, pour une ligne de texte qui ne disait rien que
+# les boutons ne disent deja (ils portent le numero de l operateur depuis
+# qu ils suivent la selection). Le contenu - spectre, chute d eau, journal -
+# prend donc toute la hauteur, et il ne reste QUE les boutons, poses par-dessus
+# dans le coin. FOOT reste nomme : la geometrie s exprime avec, et le remettre
+# a 30 rend l ancien pied.
+FOOT = 0
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x07")
 # ── LES COULEURS DU JOURNAL SONT DEJA DANS LE JOURNAL ───────────────────────
@@ -259,9 +270,162 @@ def tail_lines(path, n, width):
 history = []
 
 
+# ── LA VUE DU HUB : DU SS7, PAS UNE FFT ─────────────────────────────────────
+# [2026-09-04] Quand les fleches se posent sur l inter-STP, l encart affichait
+# le meme spectre I/Q qu un operateur - c est-a-dire RIEN, et pour une raison
+# de fond : un hub M3UA n a pas de radio. Il n a pas de /psd a interroger, pas
+# d ARFCN, pas de mobile.log. Une FFT vide sur le noeud central du banc, c est
+# l ecran le plus inutile qu on puisse afficher au moment ou l on cherche
+# justement pourquoi le SS7 ne passe pas.
+#
+# Ce qu un hub a, en revanche : une matrice de connectivite (qui parle a qui),
+# ses ASP, ses routes, et un journal. C est ce qu on montre.
+#
+# La matrice vient du CACHE que remplit tools/conky-osmo-status.sh
+# (--refresh-matrix, depuis checks/ss7_check.sh) : la mesure prend une minute,
+# elle n a rien a faire dans une boucle de rendu a 1 Hz. On lit le meme fichier
+# que le Conky - une mesure, deux affichages. Les balises ${colorN} du Conky
+# sont retirees ici et rendues en couleurs Pillow.
+MATRIX_FILE = os.path.join(OUT, "ss7-matrix")
+CONKY_TAG = re.compile(r"\$\{color[0-9]?\}")
+COUL_SS7 = {"self": (88, 166, 255), "via": (63, 185, 80), "FAIL": (248, 81, 73)}
+
+
+def matrice_lignes():
+    """Le cache de la matrice, sans les balises Conky. [] s il n existe pas."""
+    try:
+        with open(MATRIX_FILE) as f:
+            return [CONKY_TAG.sub("", l.rstrip("\n")) for l in f if l.strip()]
+    except OSError:
+        return []
+
+
+# Les endroits ou le hub ecrit, dans l ordre ou on les essaie.
+#
+# [2026-09-04] `docker logs osmo-inter-stp` rend VIDE, et c est normal : le
+# conteneur a pour commande `sleep infinity`, et osmo-stp est lance APRES par
+# `docker exec` dans un tmux, sa sortie passant par un `tee` vers un fichier.
+# Rien de tout cela ne traverse le flux standard du conteneur - le cadre
+# « journal » restait donc desesperement vide sur un hub qui tournait tres bien.
+# On lit donc le fichier, DANS le conteneur ; docker logs reste en dernier
+# recours, pour une image qui lancerait le STP autrement.
+HUB_LOGS = ("/tmp/osmo-stp.log", "/var/log/osmocom/osmo-stp.log")
+
+
+def hub_journal(nom, n, width):
+    """Les dernieres lignes du STP du hub. Sans docker (ou sans droit), on le
+    dit plutot que de laisser un cadre vide - un cadre vide se lit comme une
+    panne du hub, alors que c est la sonde qui n a pas le bras assez long."""
+    for chemin in HUB_LOGS:
+        try:
+            out = subprocess.run(["docker", "exec", nom, "tail", "-n", str(n), chemin],
+                                 capture_output=True, text=True, timeout=4)
+        except Exception as e:
+            return [(f"journal indisponible : {e}", (212, 153, 34))]
+        if out.returncode == 0 and out.stdout.strip():
+            return [(ANSI.sub("", l)[:width], None) for l in out.stdout.splitlines()[-n:]]
+        if "permission denied" in (out.stderr or "").lower():
+            return [("journal indisponible (docker : droit refuse -",
+                     (212, 153, 34)), ("  le compte n est pas dans le groupe docker)", (212, 153, 34))]
+    try:
+        out = subprocess.run(["docker", "logs", "--tail", str(n), nom],
+                             capture_output=True, text=True, timeout=4)
+        lignes = (out.stdout + out.stderr).splitlines()[-n:]
+        if lignes:
+            return [(ANSI.sub("", l)[:width], None) for l in lignes]
+    except Exception:
+        pass
+    return [("pas de journal : " + " ni ".join(HUB_LOGS), (139, 148, 158)),
+            ("le hub tourne-t-il ?  docker ps --filter name=" + nom, (139, 148, 158))]
+
+
+def render_interstp(op):
+    """L encart quand la selection est l inter-STP : matrice a gauche, journal
+    du hub a droite. Meme cadre, memes marges et meme pied que la vue radio -
+    seul le contenu change, pour que l oeil ne perde pas ses reperes en
+    passant d un operateur au hub."""
+    img = base_image().copy()
+    d = ImageDraw.Draw(img)
+    # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
+    # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
+    # ces 18 px laissaient voir base_image() - c est-a-dire le morceau de fond
+    # d ecran, donc le `glass_panel` que wallpaper-render.py y a peint : un
+    # remplissage plus clair (20,24,36) et surtout une BORDURE (200,200,210).
+    # A l ecran, cela dessinait un cadre clair arrondi tout autour de l encart -
+    # « le rectangle ». Il ne venait ni de la barre GTK (dont le fond avait deja
+    # ete supprime) ni du pied (dont la couleur avait deja ete alignee) : il
+    # etait dans le fond d ecran, et l encart le laissait passer par ses marges.
+    #
+    # Quand le banc tourne, l encart est un panneau plein : il couvre TOUT le
+    # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
+    # Le cadre du fond reste visible quand le banc est a l arret - c est alors
+    # l image du jour qu il encadre, et la il a un sens.
+    d.rounded_rectangle((0, 0, W - 1, H - 1), radius=26, fill=(8, 10, 14))
+    x0, y0, x1, y1 = PAD, PAD, W - PAD, H - PAD - FOOT
+    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
+    split = x0 + int((x1 - x0) * 0.56)
+
+    d.text((x0, y0), "Matrice de connectivite  ·  via inter-STP", font=F_TITLE, fill=(88, 166, 255))
+    tag = f"PC {os.environ.get('MULTI_HUB_PC', '0.0.0')}"
+    d.text((split - 12 - d.textlength(tag, font=F_SMALL), y0 + 2), tag, font=F_SMALL, fill=(63, 185, 80))
+
+    lignes = matrice_lignes()
+    yy = y0 + 30
+    if not lignes:
+        d.text((x0, yy), "premiere mesure en cours (checks/ss7_check.sh)...",
+               font=F_SMALL, fill=(139, 148, 158))
+    for ligne in lignes:
+        xx = x0
+        # Chaque mot est peint a sa couleur : self/via/FAIL portent le sens.
+        for mot in re.split(r"(\s+)", ligne):
+            if not mot:
+                continue
+            col = COUL_SS7.get(mot.strip(), (200, 208, 220))
+            if mot.strip().startswith("SS7"):
+                col = (63, 185, 80) if "OK" in ligne else (212, 153, 34)
+            d.text((xx, yy), mot, font=F_LOG, fill=col)
+            xx += d.textlength(mot, font=F_LOG)
+        yy += 17
+        if yy > y1 - 14:
+            break
+
+    # Le journal du hub, a droite, exactement ou vit celui du mobile.
+    lx0 = split
+    d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
+    d.text((lx0, y0), f"journal  ·  {op['NAME']}", font=F_TITLE, fill=(88, 166, 255))
+    line_h = 15
+    n = max(1, (y1 - (y0 + 26)) // line_h)
+    cols = max(10, int((x1 - lx0) / 7.3))
+    for i, (l, col) in enumerate(hub_journal(op["NAME"], n, cols)):
+        if col is None:
+            col = LOG_DEFAUT
+            if re.search(r"error|fail|reject|lost|down", l, re.I):
+                col = TANGO_VIF["31"]
+            elif re.search(r"ASP|AS |active|established|route", l, re.I):
+                col = TANGO_VIF["32"]
+        d.text((lx0, y0 + 26 + i * line_h), l, font=F_LOG, fill=col)
+
+    return img
+
+
 def render_live(data):
     img = base_image().copy()
     d = ImageDraw.Draw(img)
+    # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
+    # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
+    # ces 18 px laissaient voir base_image() - c est-a-dire le morceau de fond
+    # d ecran, donc le `glass_panel` que wallpaper-render.py y a peint : un
+    # remplissage plus clair (20,24,36) et surtout une BORDURE (200,200,210).
+    # A l ecran, cela dessinait un cadre clair arrondi tout autour de l encart -
+    # « le rectangle ». Il ne venait ni de la barre GTK (dont le fond avait deja
+    # ete supprime) ni du pied (dont la couleur avait deja ete alignee) : il
+    # etait dans le fond d ecran, et l encart le laissait passer par ses marges.
+    #
+    # Quand le banc tourne, l encart est un panneau plein : il couvre TOUT le
+    # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
+    # Le cadre du fond reste visible quand le banc est a l arret - c est alors
+    # l image du jour qu il encadre, et la il a un sens.
+    d.rounded_rectangle((0, 0, W - 1, H - 1), radius=26, fill=(8, 10, 14))
     x0, y0, x1, y1 = PAD, PAD, W - PAD, H - PAD - FOOT
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
     split = x0 + int((x1 - x0) * 0.56)
@@ -318,11 +482,30 @@ def render_live(data):
             elif re.search(r"attach|answer|call|SMS|proceed", l, re.I):
                 col = TANGO_VIF["32"]
         d.text((lx0, y0 + 26 + i * line_h), l, font=F_LOG, fill=col)
-    # Le pied : une barre sombre d abord, la legende du strip est dessous.
-    d.rounded_rectangle((x0 - 6, y1 + 8, x1 + 6, H - PAD + 4), radius=6, fill=(20, 24, 36))
-    cap = (f"Operateur {op['OP']}  ·  spectre I/Q du mobile ({op['DASH']}/psd)  ·  "
-           + (os.path.basename(MOBILE_LOG) if op["MODE"] != "docker" else "docker logs"))
-    d.text((x0, y1 + 12), cap, font=font("DejaVuSansMono.ttf", 13), fill=(160, 170, 190))
+    # ── LE PIED COUVRE JUSQU AU BAS, SANS RIEN LAISSER DEPASSER ─────────────
+    # [2026-09-04] La barre s arretait a H - PAD + 4, et le commentaire d alors
+    # l assumait : « la legende du strip est dessous ». Elle l etait, et ELLE SE
+    # VOYAIT - une quinzaine de pixels de « NASA · Astronomy Picture of the Day
+    # · 2026-09-04 · apod.nasa.gov », coupee en deux par le bord de l encart,
+    # sous le spectre et le mobile.log. Une ligne orpheline en travers du
+    # bureau, que rien n expliquait.
+    #
+    # Le panneau est construit SUR une copie du fond d ecran (base_image) : tout
+    # ce que le rendu ne peint pas laisse voir le fond. On peint donc jusqu au
+    # bord. Le rayon reste, mais le bas du rectangle sort du cadre (H + 8) :
+    # l arrondi tombe hors de l image et le bas est franc, comme le bord de
+    # l encart lui-meme.
+    # [2026-09-04] LE PIED N EST PLUS D UNE AUTRE COULEUR QUE LE CORPS.
+    # Il etait peint en (20,24,36) sous un corps en (8,10,14) : mesure sur
+    # panel.png, c est une marche de douze niveaux, et elle dessinait une bande
+    # claire en travers du bas de l encart - le « rectangle » qu on voyait
+    # derriere les boutons, et qu on prenait pour un fond de la barre GTK. Ce
+    # n en etait pas un : le fond de la barre avait deja ete supprime, la marche
+    # etait dans l image. Meme couleur des deux cotes : un seul panneau.
+    # Plus de legende : elle vivait dans la bande de pied, supprimee (FOOT = 0).
+    # Ce qu elle disait - quel operateur, quel journal - est porte par les
+    # boutons eux-memes (« Dashboard op2 », « VTY 4247 op2 ») et par le titre
+    # de la colonne de droite.
     return img
 
 
@@ -341,12 +524,19 @@ def main():
     last_state = None
     while True:
         t = time.time()
-        data = None
-        try:
-            data = fetch("ms")
-        except Exception:
+        op_courant = operator()
+        # Le hub n a pas de /psd : l interroger ne rendrait jamais rien et
+        # l encart resterait sur le strip. Sa vue est « prete » des qu il est
+        # selectionne - c est la matrice et son journal qui font le contenu.
+        if op_courant.get("MODE") == "interstp":
+            data, ready = None, True
+        else:
             data = None
-        ready = bool(data) and "psd" in data
+            try:
+                data = fetch("ms")
+            except Exception:
+                data = None
+            ready = bool(data) and "psd" in data
         if ready != last_state:
             print(f"[fft-snap] banc {'pret : fondu vers le spectre' if ready else 'absent : retour au strip'}",
                   flush=True)
@@ -358,7 +548,8 @@ def main():
                 history.clear()
                 write(base_image())
             else:
-                live = render_live(data)
+                live = (render_interstp(op_courant)
+                        if op_courant.get("MODE") == "interstp" else render_live(data))
                 # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
                 # le strip transparaitre sous le banc. Sans strip derriere, rien
                 # a laisser voir : opacite pleine.

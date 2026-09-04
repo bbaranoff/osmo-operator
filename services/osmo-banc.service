@@ -4,11 +4,17 @@ Documentation=file:/opt/GSM/osmo-operator/README.md
 # Le banc a besoin du son systeme (osmo-pulse), des adresses privees du noeud
 # et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
 # services absent ne doit pas empecher la radio de monter.
-After=network-online.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
+# [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
+# ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
+# mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les
+# tun/veth du coeur paquet - ne sont jamais "en ligne" au sens de cette unite,
+# et qui demarre souvent sans cable. network.target suffit : les interfaces
+# sont configurees, la route par defaut peut arriver apres.
+After=network.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
 # osmo-egprs-web est TIRE par le banc : il porte PartOf=osmo-banc.service et
 # systemd l arrete donc avec lui. Ce Wants= est la contrepartie obligatoire -
 # sans lui, un cycle arret/relance laisserait le tableau de bord eteint.
-Wants=network-online.target osmo-pulse.service osmo-egprs-web.service
+Wants=osmo-pulse.service osmo-egprs-web.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-direct.sh
 # Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
 # (Requires= dans osmo-multi.service), il ne le remplace pas.
@@ -71,7 +77,11 @@ ExecStartPost=-/usr/bin/systemctl --no-block try-restart osmo-fft-snap.service
 ExecStartPost=-/usr/bin/systemctl --no-block start osmo-wallpaper.service
 # QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
 TimeoutStartSec=900
-TimeoutStopSec=180
+# [2026-09-04] 180 s -> 30 s. A l arret de la machine, systemd attend ce delai
+# AVANT de tuer ce qui reste : trois minutes d ecran noir par unite, et il y en
+# a deux. La pile s arrete en quelques secondes ; passe 30 s, elle est bloquee
+# et un SIGKILL est la bonne reponse - pas une attente de plus.
+TimeoutStopSec=30
 # A l'arret, ce que start-direct.sh --stop n'a pas demonte est termine par
 # systemd (SIGTERM puis SIGKILL sur le cgroup) : pas de reste de run precedent.
 KillMode=control-group

@@ -17,7 +17,11 @@ set -u
 # Surchargeables par l environnement (tests hors machine : OSMO_WP_OUT=... etc.).
 REPO="${OSMO_WP_REPO:-/opt/GSM/osmo-operator}"
 RENDER="$REPO/tools/wallpaper-render.py"
-TOWER="$REPO/configs/wallpaper/tower.jpg"
+# [2026-09-04] Le format du fichier n est plus fige. La photo du pylone est
+# livree TELLE QUELLE (aujourd hui un PNG en pleine definition) : imposer
+# .jpg obligerait a la re-encoder, donc a la degrader, pour satisfaire un nom.
+# On prend le premier configs/wallpaper/tower.* qui existe.
+TOWER="$(ls "$REPO"/configs/wallpaper/tower.* 2>/dev/null | head -1)"
 OUT="${OSMO_WP_OUT:-/usr/share/backgrounds/gsm-lab-wallpaper.png}"
 DATED_DIR="${OSMO_WP_DATED_DIR:-/usr/share/backgrounds/osmo-lab}"
 CACHE="${OSMO_WP_CACHE:-/var/cache/osmo-wallpaper}"

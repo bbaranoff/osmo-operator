@@ -87,8 +87,12 @@ if [ "$ISO_ROLE" = "interstp" ]; then
     cat > "$ROOTFS/etc/systemd/system/osmo-interstp.service" <<EOF
 [Unit]
 Description=osmo-operator inter-STP - hub SS7 du WAN (PC 0.0.0)
-Wants=network-online.target
-After=network-online.target systemd-networkd-wait-online.service
+# [2026-09-04] PLUS D ATTENTE RESEAU. C etait Wants/After=network-online.target
+# + systemd-networkd-wait-online.service, soit jusqu a 2 min de boot (mesure :
+# systemd-analyze blame) pour une garantie dont cette unite n a pas besoin.
+# network.target suffit : les interfaces sont configurees, la route par defaut
+# peut arriver apres - ce service le supporte (voir son ExecStart).
+After=network.target
 [Service]
 Type=forking
 PIDFile=/run/osmo-interstp.pid
@@ -141,8 +145,30 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         fi
     done
     chroot "$ROOTFS" systemctl enable osmo-banc 2>/dev/null ||         ln -sf /etc/systemd/system/osmo-banc.service                "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-banc.service"
-    chroot "$ROOTFS" systemctl disable osmo-multi 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} osmo-banc.service active au boot (standalone) · ${CYAN}osmo-multi.service${NC} pose, non active"
+    # ── LE MULTI-OPERATEUR EST UN SERVICE, LUI AUSSI ────────────────────────
+    # [2026-09-04] Il etait POSE mais desactive : le banc multi ne partait que
+    # par l icone du bureau, c est-a-dire par un pkexec sur start-multi.sh dont
+    # la sortie vit dans un terminal que personne ne relit. Quand un operateur
+    # ne demarrait pas - et c est arrive - il ne restait aucune trace : ni
+    # `systemctl status`, ni `journalctl -u`, juste des conteneurs manquants.
+    #
+    # En unite, le lancement a un journal (`journalctl -u osmo-multi`), un etat
+    # (`systemctl status osmo-multi`), un arret propre (ExecStop : les
+    # conteneurs et le hub, le natif reste a osmo-banc) et il repart au boot.
+    # Requires=osmo-banc.service : le multi RACCORDE le natif, il ne le lance
+    # pas - les deux unites sont donc actives ensemble, dans cet ordre.
+    #
+    # OSMO_ISO_MULTI=0 au build rend l ancien comportement (pose, non active) :
+    # un banc a un seul operateur n a pas besoin de monter deux conteneurs et
+    # un hub a chaque demarrage.
+    if [ "${OSMO_ISO_MULTI:-1}" = "1" ]; then
+        chroot "$ROOTFS" systemctl enable osmo-multi 2>/dev/null ||             ln -sf /etc/systemd/system/osmo-multi.service                "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-multi.service"
+        echo -e "  ${GREEN}✓${NC} osmo-banc.service (standalone) et ${CYAN}osmo-multi.service${NC} (multi-operateur) actives au boot"
+        echo -e "      ${CYAN}systemctl disable osmo-multi${NC} pour n avoir que le standalone · ${CYAN}journalctl -u osmo-multi${NC}"
+    else
+        chroot "$ROOTFS" systemctl disable osmo-multi 2>/dev/null || true
+        echo -e "  ${GREEN}✓${NC} osmo-banc.service active au boot (standalone) · ${CYAN}osmo-multi.service${NC} pose, non active (OSMO_ISO_MULTI=0)"
+    fi
 fi
 
 # ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────
@@ -197,8 +223,8 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh"
 
 cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
 #!/bin/sh
-# osmo-pulse-link.sh - rend le PulseAudio SYSTEME visible des applications qui
-# cherchent un socket par utilisateur.
+# osmo-pulse-link.sh [uid] - rend le PulseAudio SYSTEME visible des applications
+# qui cherchent un socket par utilisateur.
 #
 # En mode systeme, PulseAudio n'ecoute que sur /run/pulse/native. Les clients,
 # eux, regardent $XDG_RUNTIME_DIR/pulse/native (soit /run/user/<uid>/pulse).
@@ -207,34 +233,110 @@ cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
 #
 # Toujours exit 0 : l'audio ne doit jamais empecher la pile de monter.
 #
-# [2026-08-30] LE LIEN NE SUFFIT PAS TOUJOURS : IL Y A AUSSI LE PROPRIETAIRE.
-# Un client confine par AppArmor peut se voir autoriser le chemin avec le
-# qualificateur `owner`, qui exige proprietaire du fichier == fsuid du
-# processus. Le socket appartient a `pulse` (uid 107, le compte du demon
-# systeme) et la session tourne en root (uid 0) : deux nombres differents, et
-# la connexion est refusee alors que tout le reste marche - haut-parleurs
-# audibles, carte en RUNNING, et un navigateur muet. C'est exactement l'ecart
-# qu'on cherche pendant des heures cote « permission micro » ou « pilote son ».
+# ── APPELE DEUX FOIS, ET LES DEUX COMPTENT ─────────────────────────────────
+#   1. sans argument, par osmo-pulse.service (ExecStartPost) : les sessions
+#      DEJA ouvertes au (re)demarrage du demon.
+#   2. avec un uid, par le drop-in de user@.service (ExecStartPre=+, donc en
+#      root) : CHAQUE session qui s ouvre ensuite.
+#
+# [2026-09-04] L appel (2) N EXISTAIT PAS, et c est ce qui rendait le systeme
+# INSTALLE muet alors que la cle live avait du son. Au boot, osmo-pulse.service
+# part bien avant le premier login : /run/user/ ne contient alors QUE les
+# repertoires deja crees. Sur la cle, la session est root (autologin root) et
+# /run/user/0 est la - le lien se posait. Sur le disque, l utilisateur est
+# celui de l installeur (uid >= 1000) et son /run/user/<uid> n existe pas
+# encore : aucun lien, la session tombait sur le socket de pipewire-pulse (ou
+# sur rien du tout), et le bureau restait muet sans un message.
+#
+# ── LE PROPRIETAIRE DU SOCKET, PAS SEULEMENT LE CHEMIN ─────────────────────
+# [2026-08-30] Un client confine par AppArmor peut se voir autoriser le chemin
+# avec le qualificateur `owner`, qui exige proprietaire du fichier == fsuid du
+# processus. Le socket appartient a `pulse` (le compte du demon systeme) et la
+# session tourne sous un autre uid : deux nombres differents, et la connexion
+# est refusee alors que tout le reste marche - haut-parleurs audibles, carte en
+# RUNNING, et un navigateur muet. C'est exactement l'ecart qu'on cherche
+# pendant des heures cote « permission micro » ou « pilote son ».
 #
 # ⚠️ Une telle regle porte sur le CHEMIN REEL : le lien symbolique ci-dessous
 # ne masque rien, c'est bien /run/pulse/native qui est evalue.
 #
-# On donne donc le socket a l'uid de la session graphique. Sur cette ISO c'est
-# root (autologin root, cf. gdm3/custom.conf) ; OSMO_PULSE_UID permet d'en
-# choisir un autre. Le demon, lui, continue de tourner en `pulse` : accept()
-# ne demande pas d'etre proprietaire, et le mode srwxrwxrwx laisse tout le
-# monde se connecter. Un seul socket ne peut avoir qu'un proprietaire.
+# On donne donc le socket a l'uid de la session graphique. Un seul socket ne
+# peut avoir qu'un proprietaire : c'est la DERNIERE session humaine ouverte qui
+# l'obtient. Les comptes de service (gdm, uid < 1000) sont exclus - sans quoi
+# gdm, dont le user@.service part AVANT celui de l operateur, gardait le socket.
+# OSMO_PULSE_UID fige la valeur si une installation veut en decider autrement.
+# Le demon, lui, continue de tourner en `pulse` : accept() ne demande pas
+# d'etre proprietaire, et le mode srwxrwxrwx laisse tout le monde se connecter.
 set -u
-PUID="${OSMO_PULSE_UID:-0}"
-for d in /run/user/*; do
+
+# Le lien, pour l uid demande ou pour toutes les sessions ouvertes.
+if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
+    _dirs="/run/user/$1"
+else
+    _dirs=$(echo /run/user/*)
+fi
+for d in $_dirs; do
     [ -d "$d" ] || continue
     mkdir -p "$d/pulse" 2>/dev/null || continue
+    # -f : le socket d un pipewire-pulse qui aurait survecu doit ceder la
+    # place. Sans -f, ln echoue en silence et la session reste muette.
     ln -sfn /run/pulse/native "$d/pulse/native" 2>/dev/null || true
 done
+
+# Le proprietaire. Argument fourni : c est cette session-la, si c est un humain.
+# Sinon on cherche la session graphique active, et root en dernier recours
+# (c est le compte de la cle live).
+PUID="${OSMO_PULSE_UID:-}"
+if [ -z "$PUID" ] && [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
+    [ "$1" -ge 1000 ] 2>/dev/null && PUID="$1"
+    [ "$1" = "0" ] && PUID=0
+fi
+if [ -z "$PUID" ]; then
+    PUID=$(loginctl list-sessions --no-legend 2>/dev/null \
+           | awk '$2 == 0 || $2 >= 1000 {print $2; exit}')
+fi
+[ -n "$PUID" ] || PUID=0
 [ -S /run/pulse/native ] && chown "$PUID" /run/pulse/native 2>/dev/null || true
 exit 0
 PLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
+
+# ── LE LIEN EST POSE A CHAQUE OUVERTURE DE SESSION ──────────────────────────
+# [2026-09-04] Voir l en-tete d osmo-pulse-link.sh : au boot, osmo-pulse.service
+# ne peut PAS poser le lien d une session qui n existe pas encore. systemd-logind
+# cree /run/user/<uid> puis demarre user@<uid>.service ; ce drop-in accroche le
+# script juste apres, une fois par session.
+#
+# `ExecStartPre=+` : le `+` fait tourner la commande EN ROOT malgre le User= de
+# user@.service. Sans lui, le script tournerait sous le compte de la session et
+# le chown du socket (qui appartient a `pulse`) echouerait - c est justement la
+# moitie du correctif AppArmor de 2026-08-30.
+install -d "$ROOTFS/etc/systemd/system/user@.service.d"
+cat > "$ROOTFS/etc/systemd/system/user@.service.d/10-osmo-pulse-link.conf" <<'UAT'
+[Service]
+ExecStartPre=+/usr/local/sbin/osmo-pulse-link.sh %i
+UAT
+
+# ── ET LE SERVEUR PAR DEFAUT, POUR LES CLIENTS QUI IGNORENT LE LIEN ─────────
+# libpulse lit /etc/pulse/client.conf et son repertoire .d avant de deduire un
+# chemin depuis XDG_RUNTIME_DIR. `default-server` est donc la garantie qui ne
+# depend d aucune course, d aucun uid et d aucun ordre de demarrage : GNOME,
+# Firefox, VLC et gapk arrivent au demon systeme meme si le lien manque.
+#
+# `autospawn = no` avec : sans lui, un client qui ne trouve pas de serveur
+# lance SON PROPRE pulseaudio, lequel echoue a prendre les cartes (le demon
+# systeme les tient) et laisse la session avec un serveur vide - un deuxieme
+# faux "pas de son" par-dessus le premier.
+install -d "$ROOTFS/etc/pulse/client.conf.d"
+cat > "$ROOTFS/etc/pulse/client.conf.d/50-osmo-system-server.conf" <<'PCLIENT'
+# Pose par build-iso.sh (iso_modules/82-services.sh).
+# Le banc tourne un PulseAudio SYSTEME (osmo-pulse.service) : tous les clients,
+# quel que soit leur uid, s y connectent. Sans cette ligne, chaque session
+# cherche un serveur dans son propre /run/user/<uid> et n en trouve pas.
+default-server = unix:/run/pulse/native
+autospawn = no
+PCLIENT
+echo -e "  ${GREEN}✓${NC} audio session : ${CYAN}client.conf.d/50-osmo-system-server.conf${NC} + lien pose a chaque ouverture (user@.service)"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]

@@ -119,6 +119,49 @@ nameserver 8.8.8.8
     /etc/resolv.conf.secours > "$ROOTFS/etc/resolv.conf.secours"
 echo -e "  ${GREEN}✓${NC} DNS : /etc/resolv.conf -> stub systemd-resolved (repli /etc/resolv.conf.secours)"
 
+# ── AUCUNE ATTENTE RESEAU, NI AU DEMARRAGE NI A L ARRET ─────────────────────
+# [2026-09-04] Mesure sur une machine installee :
+#     systemd-analyze blame
+#         2min  0.188s systemd-networkd-wait-online.service
+#             5.719s NetworkManager-wait-online.service
+# Deux minutes de demarrage passees a attendre qu une carte soit "en ligne".
+# Sur un banc, la question n a pas de reponse utile : les interfaces qui
+# comptent (apn0, les tun/veth du coeur paquet) ne sont jamais "en ligne" au
+# sens de ces unites, et le cable WAN n est pas toujours branche. Rien de ce
+# que nous demarrons n exige une route par defaut AVANT de partir - les unites
+# du banc reessaient, osmo-update sort 0 hors ligne, et osmo-ip-plan est rejoue
+# par les dispatchers des qu une carte arrive.
+#
+# MASQUE, pas seulement desactive : network-online.target est tire par des
+# unites tierces (apt-daily, snapd, cloud-init) qui rallumeraient les
+# wait-online. Masquees, la cible reste atteignable - elle devient immediate.
+#
+# Fait ICI et pas dans le module du bureau : ca vaut pour TOUTES les variantes
+# (operateur, inter-STP, lite), pas seulement --desktop.
+install -d "$ROOTFS/etc/systemd/system"
+for _wo in systemd-networkd-wait-online.service NetworkManager-wait-online.service \
+           systemd-networkd-wait-online@.service; do
+    ln -sfn /dev/null "$ROOTFS/etc/systemd/system/$_wo"
+done
+unset _wo
+
+# ── ET L ARRET NE TRAINE PAS NON PLUS ───────────────────────────────────────
+# Le defaut systemd est 90 s par unite recalcitrante : une machine qui doit
+# s eteindre reste sur un ecran noir pendant qu on attend un service qui ne
+# rendra jamais la main. 30 s suffisent a un arret propre ; au-dela, le SIGKILL
+# est la bonne reponse. DefaultTimeoutStartSec suit, pour la meme raison au
+# demarrage. Un service qui a besoin de plus le declare chez lui.
+install -d "$ROOTFS/etc/systemd/system.conf.d"
+cat > "$ROOTFS/etc/systemd/system.conf.d/10-osmo-timeouts.conf" <<'SDTO'
+# Pose par build-iso.sh (iso_modules/81-cloture-systeme.sh).
+# Ni le demarrage ni l arret du banc ne doivent attendre le reseau, ni un
+# service bloque. Les wait-online sont masquees a cote de ce fichier.
+[Manager]
+DefaultTimeoutStartSec=45s
+DefaultTimeoutStopSec=30s
+SDTO
+echo -e "  ${GREEN}✓${NC} aucune attente reseau : ${CYAN}*-wait-online${NC} masquees · arret plafonne a ${CYAN}30 s${NC}"
+
 # ── Les adresses privees du noeud, posees a l'EXECUTION ─────────────────────
 # Voir network/osmo-ip-plan.sh : il choisit la carte qui fournit reellement
 # Internet, y pose 192.168.<noeud+1>.1 et .10, et retombe sur 127.0.0.66 sur lo
@@ -129,11 +172,18 @@ install -Dm755 "$DIR/network/osmo-ip-plan.sh" "$ROOTFS/usr/local/sbin/osmo-ip-pl
 cat > "$ROOTFS/etc/systemd/system/osmo-ip-plan.service" <<'IPPLAN'
 [Unit]
 Description=Adresses privees du noeud sur la carte qui fournit Internet
-# APRES networkd-wait-online : avant, aucune route par defaut n'existe encore et
-# le script conclurait "aucune carte" a chaque demarrage - le repli loopback
-# serait la regle au lieu de l'exception.
-After=network-online.target systemd-networkd.service
-Wants=network-online.target
+# [2026-09-04] PLUS D ATTENTE RESEAU. Cette unite etait ordonnee
+# After/Wants=network-online.target pour qu'une route par defaut existe deja -
+# sinon le script conclut "aucune carte" et le repli loopback devient la regle.
+# Mais network-online.target coutait DEUX MINUTES de boot
+# (systemd-networkd-wait-online, mesure : systemd-analyze blame), et le banc
+# demarre souvent sans cable. On paye donc l'inverse : le premier passage peut
+# retomber sur 127.0.0.66, et les DEUX repartiteurs ci-dessous rejouent le plan
+# des qu'une carte devient joignable - networkd-dispatcher pour les interfaces
+# de systemd-networkd, NetworkManager-dispatcher pour les cartes physiques.
+# Le repli loopback n'est plus l'exception : il est l'etat transitoire d'un
+# banc encore sans reseau, et il se corrige tout seul en une seconde.
+After=network.target systemd-networkd.service
 Before=osmo-egprs-web.service
 
 [Service]
@@ -153,6 +203,23 @@ cat > "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan" <<'IPHOOK'
 exec /usr/local/sbin/osmo-ip-plan.sh --apply
 IPHOOK
 chmod +x "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan"
+# LE MEME CROCHET, COTE NetworkManager. networkd-dispatcher ne voit que les
+# interfaces de systemd-networkd ; depuis que NetworkManager tient les cartes
+# physiques (iso_modules/80-chroot.sh), c'est LUI qui annonce le Wi-Fi ou le
+# cable qui arrive - et sans ce fichier, un banc demarre sans reseau restait sur
+# le repli 127.0.0.66 jusqu'au redemarrage suivant. Indispensable depuis qu'on
+# n'attend plus network-online.target au boot (voir l'unite ci-dessus).
+mkdir -p "$ROOTFS/etc/NetworkManager/dispatcher.d"
+cat > "$ROOTFS/etc/NetworkManager/dispatcher.d/50-osmo-ip-plan" <<'NMHOOK'
+#!/bin/sh
+# $1 = interface, $2 = action. Seules les montees de lien nous interessent.
+case "$2" in
+    up|dhcp4-change|dhcp6-change|connectivity-change) ;;
+    *) exit 0 ;;
+esac
+exec /usr/local/sbin/osmo-ip-plan.sh --apply
+NMHOOK
+chmod +x "$ROOTFS/etc/NetworkManager/dispatcher.d/50-osmo-ip-plan"
 chroot "$ROOTFS" systemctl enable osmo-ip-plan 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-ip-plan : ${CYAN}192.168.$(( ${ISO_NODE:-1} + 1 )).1/.10${NC} sur la carte Internet, repli ${CYAN}127.0.0.66${NC}"
 
@@ -375,8 +442,12 @@ chmod +x "$ROOTFS/usr/local/bin/osmo-update"
 cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
 [Unit]
 Description=osmo-operator - mise a jour des depots embarques (git, en place)
-Wants=network-online.target
-After=network-online.target systemd-networkd-wait-online.service
+# [2026-09-04] PLUS D ATTENTE RESEAU. C etait Wants/After=network-online.target
+# + systemd-networkd-wait-online.service, soit jusqu a 2 min de boot (mesure :
+# systemd-analyze blame) pour une garantie dont cette unite n a pas besoin.
+# network.target suffit : les interfaces sont configurees, la route par defaut
+# peut arriver apres - ce service le supporte (voir son ExecStart).
+After=network.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes

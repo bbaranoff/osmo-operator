@@ -632,8 +632,26 @@ FFPREF
     rm -f /etc/systemd/system/osmo-firefox-snap.service \
           /etc/systemd/system/multi-user.target.wants/osmo-firefox-snap.service \
           /usr/local/sbin/osmo-firefox-snap
-    systemctl disable snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service 2>/dev/null || true
-    systemctl mask snapd.service snapd.socket 2>/dev/null || true
+    # ── MAIS SNAPD RESTE UTILISABLE ────────────────────────────────────────
+    # [2026-09-04] Il etait DESACTIVE ET MASQUE. Consequence sur la machine
+    # installee :
+    #     # snap refresh
+    #     error: cannot communicate with server: Post "http://localhost/v2/snaps":
+    #            dial unix /run/snapd.socket: connect: no such file or directory
+    # Le paquet snapd etait la, la commande `snap` aussi, et rien ne marchait -
+    # sans qu aucun message ne dise que c est nous qui l avions coupe.
+    #
+    # Ce qu on voulait eviter, c est que l IMAGE EMBARQUE des snaps (le
+    # navigateur est un .deb) et que snapd.seeded retarde le boot en deballant
+    # une graine. Ce n est pas la meme chose que priver l operateur de snap.
+    # On garde donc le demon disponible, mais EN ACTIVATION PAR SOCKET : snapd
+    # ne demarre que si quelqu un lui parle, et un banc qui n installe aucun
+    # snap ne le voit jamais tourner. snapd.seeded reste, sans graine il rend la
+    # main tout de suite.
+    systemctl unmask snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service 2>/dev/null || true
+    systemctl enable snapd.socket snapd.apparmor.service 2>/dev/null || true
+    # snapd.service, lui, n est PAS active : la socket le reveillera au besoin.
+    systemctl disable snapd.service 2>/dev/null || true
 
     systemctl set-default graphical.target
 
@@ -645,24 +663,76 @@ FFPREF
     # Sans lui : pas de sink gsm_audio, gapk muet, "pulse" rouge sur le
     # tableau de bord. Le banc est construit autour du demon SYSTEME
     # (/run/pulse/native, cf. osmo-pulse.service) : on le remet, ce qui retire
-    # pipewire-pulse et le METAPAQUET ubuntu-desktop-minimal - pas le bureau,
-    # dont les paquets sont ensuite marques "manuels" pour qu aucun autoremove
-    # ne les emporte. La session GNOME joint le demon systeme par le lien
-    # /run/user/<uid>/pulse/native que pose osmo-pulse-link.sh.
+    # le METAPAQUET ubuntu-desktop-minimal - pas le bureau, dont les paquets
+    # sont ensuite marques "manuels" pour qu aucun autoremove ne les emporte.
+    #
+    # ── [2026-09-04, second passage] REMETTRE PULSEAUDIO NE SUFFIT PAS ──────
+    # SYMPTOME : le systeme INSTALLE n a aucun son sur le bureau. Mesure sur la
+    # machine installee, apres l installeur :
+    #     pactl -s unix:/run/pulse/native list short sinks
+    #         3  alsa_output.pci-...analog-stereo  RUNNING   <- la carte est la
+    #     sudo -u <user> wpctl status
+    #         Sinks:  *  33. Dummy Output                     <- la session n a RIEN
+    #     ps aux | grep pipewire
+    #         <user>  /usr/bin/pipewire-pulse                 <- toujours installe
+    #
+    # DEUX CAUSES, ET IL FALLAIT LES DEUX :
+    #   1. pipewire-pulse N ETAIT PAS RETIRE. Le commentaire ci-dessus
+    #      l affirmait et le message de build le repetait, mais rien ne le
+    #      verifiait : dans noble, pulseaudio 16.1 et pipewire-pulse 1.0.5 sont
+    #      CO-INSTALLABLES (aucun Conflicts entre les deux paquets), donc
+    #      `apt install pulseaudio` ne retire que le metapaquet du bureau. Les
+    #      deux serveurs tournent alors cote a cote : le demon systeme tient la
+    #      carte, pipewire-pulse tient /run/user/<uid>/pulse/native - le socket
+    #      que la session regarde.
+    #   2. wireplumber n a pas le droit de toucher ALSA (51-osmo-no-alsa.lua,
+    #      pose plus bas, et il DOIT rester : les cartes sont au demon
+    #      systeme). PipeWire n a donc AUCUN peripherique : la session voit
+    #      "Dummy Output", GNOME n affiche aucune sortie, et tout ce qu on joue
+    #      part dans le vide. Un bureau parfaitement muet, sans un message.
+    #
+    # Sur la CLE le defaut ne se voyait pas : la session s y ouvre en root
+    # (uid 0), dont /run/user/0 existe deja quand osmo-pulse demarre, si bien
+    # que le lien pose par osmo-pulse-link.sh (ExecStartPost) recouvrait le
+    # socket de pipewire-pulse. Sur le DISQUE l utilisateur est celui de
+    # l installeur (uid >= 1000) : son /run/user/<uid> n existe pas encore au
+    # boot, aucun lien n est pose, et pipewire-pulse garde la main. D ou un bug
+    # qui ne sort QU APRES INSTALLATION - exactement le symptome rapporte.
+    #
+    # On purge donc pipewire-pulse pour de bon, on masque ses unites
+    # utilisateur (le paquet peut revenir par une mise a jour du bureau), et on
+    # VERIFIE. pipewire lui-meme reste : le screencast de GNOME en depend.
+    # Le raccordement de la session au demon systeme, lui, ne repose plus sur
+    # une course au boot : /etc/pulse/client.conf.d et une unite UTILISATEUR
+    # s en chargent, tous deux poses par iso_modules/82-services.sh.
     if [ "$_S" = "noble" ]; then
         _auto=$(apt-mark showauto)
         apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils \
             || echo "  [desktop] WARN: apt n a pas pu remettre pulseaudio (conflit pipewire-pulse ?)"
         if [ -n "$_auto" ]; then apt-mark manual $_auto >/dev/null 2>&1 || true; fi
+        # LA PURGE EXPLICITE : `apt install pulseaudio` ne l entraine pas.
+        apt-get purge -y pipewire-pulse pipewire-media-session >/dev/null 2>&1 || true
         systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
+        # Ceinture et bretelles : si une mise a jour du bureau reinstallait
+        # pipewire-pulse, ses unites resteraient mortes et le socket
+        # /run/user/<uid>/pulse/native reste libre pour le lien vers le demon
+        # systeme. Un socket occupe = une session muette (voir ci-dessus).
+        systemctl --global mask pipewire-pulse.service pipewire-pulse.socket 2>/dev/null || true
         # wireplumber reste (le screencast GNOME passe par PipeWire) mais ne
         # doit pas prendre les cartes son : elles sont au demon pulseaudio.
         mkdir -p /etc/wireplumber/main.lua.d
         printf "alsa_monitor.enabled = false\n" > /etc/wireplumber/main.lua.d/51-osmo-no-alsa.lua
         if [ -x /usr/bin/pulseaudio ]; then
-            echo "  [desktop] audio : pulseaudio systeme retabli ($(dpkg-query -W -f=\${Version} pulseaudio)), pipewire-pulse retire, wireplumber sans ALSA"
+            echo "  [desktop] audio : pulseaudio systeme retabli ($(dpkg-query -W -f=\${Version} pulseaudio)), wireplumber sans ALSA"
         else
             echo "  [desktop] WARN: /usr/bin/pulseaudio toujours absent - osmo-pulse.service echouera"
+        fi
+        # LA VERIFICATION, parce que le message precedent MENTAIT : il annoncait
+        # "pipewire-pulse retire" sans jamais regarder.
+        if [ -x /usr/bin/pipewire-pulse ]; then
+            echo "  [desktop] WARN: pipewire-pulse TOUJOURS PRESENT - il prendra /run/user/<uid>/pulse/native et le bureau sera muet"
+        else
+            echo "  [desktop] audio : pipewire-pulse purge (pipewire reste pour le screencast)"
         fi
     fi
 
@@ -679,8 +749,28 @@ FFPREF
     # de ce chroot, dont le script est en quotes simples. Sans elle, les deux se
     # disputent la meme carte et c est l adresse qui saute au milieu d une
     # session M3UA.
-    systemctl unmask NetworkManager NetworkManager-wait-online 2>/dev/null || true
+    systemctl unmask NetworkManager 2>/dev/null || true
     systemctl enable NetworkManager 2>/dev/null || true
+    # ── AUCUNE ATTENTE RESEAU AU DEMARRAGE ─────────────────────────────────
+    # [2026-09-04] Mesure sur la machine installee :
+    #     systemd-analyze blame
+    #         2min  0.188s systemd-networkd-wait-online.service
+    #             5.719s NetworkManager-wait-online.service
+    # DEUX MINUTES de boot pour attendre une carte qui, sur un banc, n a
+    # souvent aucun lien : les interfaces du coeur paquet (apn0, les tun/veth)
+    # ne sont pas "en ligne" au sens de ces unites, et le cable WAN n est pas
+    # toujours branche. L attente ne rend service a personne - rien de ce que
+    # nous demarrons n exige une route par defaut AVANT de partir : les unites
+    # du banc reessaient (Restart=on-failure) et osmo-update sort 0 hors ligne.
+    #
+    # On les MASQUE (pas seulement disable) : network-online.target est tire
+    # par des unites tierces (apt-daily, snapd...) qui les rallumeraient.
+    # network-online.target reste atteignable, il devient simplement immediat.
+    # Meme raison a l arret : une unite ordonnee After=network-online.target
+    # est arretee AVANT le reseau, et un wait-online encore en vol y ajoute
+    # son propre delai d extinction.
+    systemctl disable NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
+    systemctl mask    NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
 
     # ── Autologin ──────────────────────────────────────────────────────────
     # ROOT, directement : il n y a plus de compte "osmocom" (supprime plus
@@ -748,6 +838,19 @@ GDM
     # choisi. La disposition clavier suit celle demandee au build (--kb).
     # printf et pas un heredoc : les valeurs gschema portent des apostrophes, et
     # ce chroot tourne dans un bash -c en quotes simples - d ou les \047.
+    # ── LES FLECHES DU CONKY, AU CLAVIER ────────────────────────────────
+    # [2026-09-04] Le Conky affiche « ◀ op 2/3 ▶ » mais ne recoit PAS les clics
+    # (une fenetre Conky ne prend pas le pointeur - c est toute la raison d etre
+    # de tools/osmo-panel.py, la fenetre GTK posee sur l encart). Ces fleches
+    # seraient donc decoratives sans un moyen de pousser la selection depuis le
+    # clavier. Ctrl+Alt+O : operateur suivant ; Ctrl+Alt+Maj+O : precedent.
+    # (Pas les fleches Gauche/Droite : Ctrl+Alt+Gauche/Droite change de bureau
+    # virtuel sous GNOME, et on ne prend pas un raccourci a l utilisateur.)
+    # osmo-op ecrit /run/osmo-fft/operator, que l encart, osmo-fft-snap.py et le
+    # Conky relisent a leur rythme.
+    printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/']\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname=\047osmo-operator : operateur suivant\047\ncommand=\047/usr/local/bin/osmo-op --next\047\nbinding=\047<Control><Alt>o\047\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname=\047osmo-operator : operateur precedent\047\ncommand=\047/usr/local/bin/osmo-op --prev\047\nbinding=\047<Control><Shift><Alt>o\047\n\n" \
+        > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
+
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     # ── Fond d ecran GSM LAB ────────────────────────────────────────────

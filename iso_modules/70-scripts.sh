@@ -42,6 +42,11 @@ if [ ! -x "$P/start-direct.sh" ]; then
     exit 1
 fi
 ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
+# osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
+# ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
+# iso_modules/80-chroot.sh - Ctrl+Alt+O / Ctrl+Alt+Maj+O.
+ln -sf /opt/GSM/osmo-operator/tools/osmo-op.sh "$ROOTFS/usr/local/bin/osmo-op" 2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/tools/osmo-drivers.sh "$ROOTFS/usr/local/bin/osmo-drivers" 2>/dev/null || true
 # (osmo-start-lab -> start.sh retire le 2026-09-02 : start.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then

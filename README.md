@@ -371,9 +371,9 @@ normale, ateliers retirés), desktop (la normale + le bureau). `--role=interstp`
 exception : il ne construit que `osmocom-stp` (Dockerfile.stp). Sur le disque installé par
 Calamares, les comptes sont ceux de l'écran « Utilisateurs » (+ root déverrouillé) : plus de
 compte `osmocom` du live ; le chiffrement LUKS est proposé dans les choix de partitionnement (LVM
-en partitionnement manuel, `lvm2` embarqué) ; une page « Pilotes graphiques » liste les pilotes
-NVIDIA que `ubuntu-drivers` propose (recommandé, déjà installé) quand `lspci` voit une carte, et
-les installe depuis les dépôts (réseau requis). Après coup, l'icône « Pilotes graphiques »
+en partitionnement manuel, `lvm2` embarqué) ; une page « Pilotes graphiques » propose
+`nvidia-driver-610` quand `lspci` voit une carte, et l'installe depuis les dépôts (réseau requis —
+c'est exactement `sudo apt install nvidia-driver-610`, plus d'arbitrage par `ubuntu-drivers`). Après coup, l'icône « Pilotes graphiques »
 (`tools/osmo-drivers.sh`) montre l'état et installe ou met à jour. Un Conky
 (`configs/conky/osmo-conky.conf`) affiche l'état du banc dans toute session GNOME, sur la clé
 comme sur le disque.

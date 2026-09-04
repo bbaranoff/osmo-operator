@@ -4,17 +4,33 @@ Name=multi-operator
 Name[fr]=multi-operator
 Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
-Exec=/opt/GSM/osmo-operator/start-multi.sh
+# [2026-09-04] PAR LE SERVICE, COMME LE MONO-OPERATEUR.
+# L icone lancait start-multi.sh en direct (pkexec) : le banc multi partait
+# alors hors de systemd, sa sortie vivait dans un terminal que personne ne
+# relit, et quand un operateur ne demarrait pas il n en restait aucune trace -
+# ni `systemctl status`, ni `journalctl -u`, juste des conteneurs manquants.
+# Le mono-operateur, lui, est une unite (osmo-banc.service) depuis le debut.
+# Les deux se lancent donc pareil : une unite, un journal, un etat, un arret
+# propre. osmo-multi.service porte deja l environnement du banc (HOME, venv,
+# OSMO_NO_TERM) et son ExecStop n arrete que les conteneurs et le hub - le
+# natif reste a osmo-banc.
+Exec=pkexec --disable-internal-agent /usr/bin/systemctl start osmo-multi.service
 Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
 Categories=System;Network;
 Keywords=ss7;m3ua;multi;operateur;interstp;
 
-# start-multi.sh --stop arrete les conteneurs ET delegue a run.sh --stop pour le
-# natif (cf. son en-tete). Une seule action suffit donc ici.
-Actions=Stop;
+Actions=Stop;Journal;
 
 [Desktop Action Stop]
 Name=Arreter le multi-operateur
 Name[fr]=Arreter le multi-operateur
-Exec=/opt/GSM/osmo-operator/start-multi.sh --stop
+Exec=pkexec --disable-internal-agent /usr/bin/systemctl stop osmo-multi.service
+
+# Le lancement peut durer plusieurs minutes (images, conteneurs, HLR) : sans un
+# moyen de REGARDER, l icone parait ne rien faire. C est le pendant direct du
+# passage en service - le journal existe, autant l ouvrir d un clic.
+[Desktop Action Journal]
+Name=Voir le journal (journalctl -u osmo-multi)
+Name[fr]=Voir le journal (journalctl -u osmo-multi)
+Exec=gnome-terminal -- bash -c "journalctl -u osmo-multi -f --no-pager || read -r _"

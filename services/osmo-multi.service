@@ -4,9 +4,25 @@ Documentation=file:/opt/GSM/osmo-operator/README.md
 # Le multi-operateur RACCORDE le natif, il ne le lance pas : c'est osmo-banc
 # qui le tient. Requires= : sans natif, le hub n'aurait qu'un ASP sur trois.
 Requires=osmo-banc.service
-After=osmo-banc.service docker.service network-online.target
+# [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
+# ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
+# mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les
+# tun/veth du coeur paquet - ne sont jamais "en ligne" au sens de cette unite,
+# et qui demarre souvent sans cable. network.target suffit : les interfaces
+# sont configurees, la route par defaut peut arriver apres.
+After=osmo-banc.service docker.service network.target
 Wants=docker.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-multi.sh
+# ── ET LA TOPOLOGIE DOIT EXISTER ────────────────────────────────────────────
+# [2026-09-04] Cette unite est desormais ACTIVEE au demarrage (le multi part
+# comme le mono). Sur une ISO fraiche, ce serait un echec a CHAQUE boot : ni
+# docker ni l image osmocom-run ne sont dans le squashfs - ils arrivent avec le
+# supplement SS7 (addition.sh), qui est aussi ce qui ecrit ce fichier.
+# Une condition non remplie n est PAS un echec pour systemd : l unite est
+# sautee, en silence, et `systemctl --failed` reste vide (ce que le Conky
+# affiche desormais nommement). Des que le supplement a pose la topologie, le
+# banc multi part tout seul au boot suivant.
+ConditionPathExists=/etc/osmocom/osmo-multi.conf
 # NON active par defaut (le standalone l'est) :
 #   systemctl start osmo-multi          pour une session
 #   systemctl enable osmo-multi         pour le demarrer a chaque boot
@@ -27,7 +43,11 @@ ExecStart=/bin/bash /opt/GSM/osmo-operator/start-multi.sh $OSMO_MULTI_ARGS
 # --stop n'arrete que les conteneurs et le hub : le natif reste a osmo-banc.
 ExecStop=/bin/bash /opt/GSM/osmo-operator/start-multi.sh --stop
 TimeoutStartSec=1200
-TimeoutStopSec=180
+# [2026-09-04] 180 s -> 30 s. A l arret de la machine, systemd attend ce delai
+# AVANT de tuer ce qui reste : trois minutes d ecran noir par unite, et il y en
+# a deux. La pile s arrete en quelques secondes ; passe 30 s, elle est bloquee
+# et un SIGKILL est la bonne reponse - pas une attente de plus.
+TimeoutStopSec=30
 KillMode=control-group
 StandardOutput=journal
 StandardError=journal

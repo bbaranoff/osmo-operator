@@ -706,6 +706,24 @@ verifier() {
 # affiche une page d erreur, et il faut alors recharger a la main - le
 # dashboard d un conteneur met plusieurs secondes a monter apres le demarrage.
 ouvrir_dashboards() {
+    # ── OSMO_NO_TERM=1 : AUCUNE FENETRE, PAS MEME UN ONGLET ─────────────────
+    # [2026-09-04] Le drapeau ne couvrait que le terminal ; cette fonction
+    # ouvrait quand meme Firefox sur les dashboards des conteneurs. Lance par
+    # osmo-multi.service - donc par l icone du bureau, desormais - le banc
+    # faisait surgir un navigateur au milieu de ce que l operateur etait en
+    # train de faire, plusieurs minutes apres le clic, sans que rien ne relie
+    # les deux. Un service ne s invite pas a l ecran.
+    # Les adresses restent AFFICHEES : elles sont dans le journal
+    # (`journalctl -u osmo-multi`), a copier quand on en veut une.
+    if [ "${OSMO_NO_TERM:-0}" = "1" ]; then
+        local _spec _idx _mode _ip _liste=""
+        for _spec in $MULTI_OPS; do
+            IFS=: read -r _idx _mode _ip _ <<< "$_spec"
+            [ "$_mode" = "docker" ] && [ -n "$_ip" ] && _liste="$_liste http://${_ip}:8080"
+        done
+        echo -e "  ${CYAN}i${NC} OSMO_NO_TERM=1 : aucun onglet ouvert. Dashboards :${CYAN}${_liste}${NC}"
+        return 0
+    fi
     command -v firefox >/dev/null 2>&1 || return 0
 
     local spec idx mode ip urls="" i

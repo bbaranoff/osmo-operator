@@ -4,7 +4,7 @@
 # Une fenetre GTK de type BUREAU (le meme mecanisme que les icones DING
 # d Ubuntu : sous toutes les fenetres, au-dessus du fond, et elle recoit les
 # clics - ce que Conky ne sait pas faire), posee EXACTEMENT sur le cadre Calvin
-# & Hobbes du fond d ecran (tools/wallpaper-render.py : boite 320,600-1430,1010
+# & Hobbes du fond d ecran (tools/wallpaper-render.py : boite 510,600-1410,1010
 # en 1920x1080), a l echelle de l ecran. Elle affiche /run/osmo-fft/panel.png
 # (tools/osmo-fft-snap.py : le strip du jour qui fond vers « FFT du mobile +
 # mobile.log » quand le banc est pret) et, en pied, un petit menu :
@@ -25,6 +25,7 @@ import os
 import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -57,11 +58,25 @@ DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 # 4248 - voir start-direct.sh, qui les attribue.
 VTY_PORT = int(os.environ.get("MS_VTY_PORT", "4247"))
 # La boite du strip dans le fond (1920x1080).
-BOX = (320, 600, 1110, 410)
+BOX = (510, 600, 900, 410)
 FW, FH = 1920, 1080
 
+# [2026-09-04] LA BARRE N A PLUS DE FOND. Elle posait un rectangle sombre
+# derriere les boutons, EN PLUS du pied deja peint par osmo-fft-snap.py : deux
+# fonds l un sur l autre, aux bords qui ne tombaient pas au meme endroit, et une
+# arete visible en travers du pied de l encart. Les boutons ont deja leur propre
+# fond (`.osmo-bar button`), ils se detachent tres bien seuls.
 CSS = b"""
-.osmo-bar { background-color: rgba(20, 24, 36, 0.92); border-radius: 8px; padding: 2px 6px; }
+/* [2026-09-04] `background-color: transparent` NE SUFFIT PAS, et le rectangle
+   reapparaissait. Adwaita ne peint pas seulement une couleur sur une boite : il
+   y pose un `background-image` (un degrade), plus une bordure et une ombre.
+   Neutraliser la seule couleur laisse l image - d ou le bandeau plus clair qui
+   revenait derriere les boutons, par-dessus le pied deja peint par
+   osmo-fft-snap.py. On coupe les quatre.
+   `background: none` DOIT venir avant `background-color`, sinon la propriete
+   raccourcie remet la couleur par defaut apres coup. */
+.osmo-bar { background: none; background-image: none; background-color: transparent;
+            border: none; box-shadow: none; padding: 0; margin: 0; }
 .osmo-bar button { background: #161b22; color: #e6edf3; border: 1px solid #30363d;
                    border-radius: 6px; padding: 1px 8px; font: 9pt "DejaVu Sans Mono"; min-height: 0; }
 .osmo-bar button:hover { background: #21262d; border-color: #58a6ff; }
@@ -93,8 +108,47 @@ def geometry():
 
 
 # ── LES OPERATEURS ──────────────────────────────────────────────────────────
+# [2026-09-04] LES OPERATEURS ARRETES COMPTENT AUSSI.
+# Cette fonction ne rendait que les conteneurs EN MARCHE (docker ps), et
+# update_op() ne montrait les fleches qu a partir de deux entrees. Consequence :
+# sur un banc ou op2 et op3 n avaient pas demarre, l encart n avait AUCUNE
+# fleche - donc aucun moyen de regarder l operateur qu on voulait justement
+# diagnostiquer. C est l inverse du besoin : l ecran doit pouvoir se poser sur
+# un operateur eteint, c est meme la le seul moment ou on en a besoin.
+# On rend donc TOUTE la topologie, avec l etat (up) a cote, et le pied de
+# l encart ecrit "op 3/3 arrete" au lieu de faire disparaitre le bouton.
+# EN REVANCHE, PAS DE FLECHES HORS MULTI-OPERATEUR. Sans
+# /etc/osmocom/osmo-multi.conf - donc sur un banc a un seul operateur - il n y a
+# rien vers quoi naviguer : la liste rend le seul natif, et update_op() cache
+# les fleches. On n invente pas d operateurs 2 et 3 qui n existent pas.
+# Meme liste et meme regle que tools/osmo-op.sh, qui est la version en ligne
+# de commande (et la definition de reference).
+
+
+M3UA_PORT = int(os.environ.get("MULTI_M3UA_PORT", "2908"))
+
+
+def _sctp_ecoute(port):
+    """Un socket SCTP ecoute-t-il sur ce port ? Lecture directe de
+    /proc/net/sctp/eps - aucun privilege, et `ss` peut ne pas etre installe."""
+    try:
+        with open("/proc/net/sctp/eps") as f:
+            for line in f.readlines()[1:]:
+                ch = line.split()
+                # colonne LPORT : la 4e dans le format du noyau.
+                if len(ch) > 4 and ch[4] == str(port):
+                    return True
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["ss", "-an"], capture_output=True, text=True, timeout=3).stdout
+        return any(l.startswith("sctp") and f":{port}" in l for l in out.splitlines())
+    except Exception:
+        return False
+
+
 def operators():
-    """Liste [(idx, mode, ip)] : le natif, puis les conteneurs EN MARCHE."""
+    """Liste [(idx, mode, ip, up)] : toute la topologie, marche ou pas."""
     ops = []
     try:
         with open(MULTI_CONF) as f:
@@ -103,33 +157,111 @@ def operators():
         txt = ""
     m = re.search(r'^MULTI_OPS="?([^"\n]*)"?', txt, re.M)
     specs = m.group(1).split() if m else []
+    if not specs:
+        # Pas de topologie multi-operateur : un seul operateur, le natif.
+        # update_op() cachera les fleches - il n y a nulle part ou aller.
+        specs = ["1:native:"]
+    # [2026-09-04] `docker ps` ECHOUE SOUS LE COMPTE DE LA SESSION s il n est pas
+    # dans le groupe `docker` ("permission denied ... /var/run/docker.sock"), et
+    # l encart annoncait alors « op 3/3 arrete » avec les conteneurs bien en
+    # marche. On ne confond plus « absent » et « invisible » : quand docker ne
+    # nous repond pas, on sonde le tableau de bord de l operateur, qui ne
+    # demande aucun privilege. Meme regle que tools/osmo-op.sh.
     running = set()
-    if any(":docker:" in s for s in specs):
+    docker_ok = False
+    try:
+        r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True,
+                           text=True, timeout=5)
+        docker_ok = r.returncode == 0
+        running = set(r.stdout.split())
+    except Exception:
+        docker_ok = False
+
+    def reachable(ip):
+        if not ip:
+            return False
         try:
-            out = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True,
-                                 text=True, timeout=5).stdout
-            running = set(out.split())
-        except Exception:
-            running = set()
+            with socket.create_connection((ip, DASH_PORT), timeout=0.4):
+                return True
+        except OSError:
+            return False
+
     for spec in specs:
         parts = spec.split(":")
         if len(parts) < 3:
             continue
         idx, mode, ip = parts[0], parts[1], parts[2]
-        if mode == "docker" and f"osmo-operator-{idx}" not in running:
-            continue
-        ops.append((idx, mode, ip))
+        if mode == "native":
+            up = subprocess.run(["pgrep", "-x", "osmo-bsc"], capture_output=True).returncode == 0
+        elif docker_ok:
+            up = f"osmo-operator-{idx}" in running
+        else:
+            up = reachable(ip)
+        ops.append((idx, mode, ip, up))
     if not any(o[1] == "native" for o in ops):
-        ops.insert(0, ("1", "native", ""))
+        ops.insert(0, ("1", "native", "", False))
+    # ── LE HUB EST LE DERNIER ARRET DU CYCLE ────────────────────────────────
+    # [2026-09-04] On pouvait regarder les trois operateurs, jamais le noeud qui
+    # les relie - alors que c est lui qu on interroge quand le SS7 va mal.
+    # L encart le rend par une vue SS7 (matrice de connectivite + journal du
+    # hub) et non par un spectre : un hub M3UA n a pas de radio, une FFT n y
+    # voudrait rien dire. Voir tools/osmo-fft-snap.py, render_interstp().
+    # Meme regle que tools/osmo-op.sh, la definition de reference.
+    if specs and any(o[1] == "docker" for o in ops):
+        hub_ip = ""
+        m = re.search(r'^MULTI_HUB_IP="?([^"\s#]*)', txt, re.M)
+        if m:
+            hub_ip = m.group(1)
+        hub = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
+        # [2026-09-04] LE HUB N A PAS DE TABLEAU DE BORD. Le repli `reachable()`
+        # tapait sur 172.20.0.10:8080, que l inter-STP n ecoute pas - il ne
+        # route que du M3UA : l encart affichait « inter-STP arrete » sur un hub
+        # parfaitement vivant. Sans acces docker, on regarde donc ce qu il
+        # ecoute VRAIMENT, un socket SCTP sur le port M3UA. Une sonde TCP y est
+        # muette (c est du SCTP), d ou la lecture de /proc/net/sctp.
+        up = hub in running if docker_ok else _sctp_ecoute(M3UA_PORT)
+        ops.append(("hub", "interstp", hub_ip or "172.20.0.10", up))
     return ops
 
 
+# ── LE FICHIER EST LA SOURCE PARTAGEE, PAS UNE SORTIE ───────────────────────
+# [2026-09-04] Cet encart ECRIVAIT /run/osmo-fft/operator et ne le LISAIT
+# jamais. Trois consequences, toutes vues sur le banc :
+#   - Ctrl+Alt+O (raccourci) et `osmo-op --next` changeaient bien le fichier -
+#     le Conky suivait - mais l encart, lui, restait sur son operateur : ses
+#     boutons Dashboard / tmux / VTY continuaient de viser l ancien ;
+#   - pire, des qu un conteneur changeait d etat, refresh_ops() rappelait
+#     update_op(), qui REECRIVAIT le fichier avec la selection de l encart :
+#     le choix fait au clavier etait annule quelques secondes plus tard, sans
+#     que rien ne l explique. « ctrl alt O ne marche pas » - il marchait, il
+#     etait ecrase.
+#   - et deux encarts (deux sessions) se seraient disputes le fichier.
+# L encart LIT donc maintenant, et n ECRIT que sur un clic de ses fleches.
+def read_operator():
+    """L operateur choisi, quel que soit celui qui l a choisi (fleches de
+    l encart, raccourci clavier, `osmo-op`). None si le fichier n existe pas."""
+    try:
+        with open(OP_FILE) as f:
+            for line in f:
+                if line.startswith("OP="):
+                    return line[3:].strip() or None
+    except OSError:
+        pass
+    return None
+
+
 def write_operator(op):
-    idx, mode, ip = op
+    idx, mode, ip = op[0], op[1], op[2]
+    # NAME est le nom du CONTENEUR : c est par lui que osmo-fft-snap.py et le
+    # Conky entrent (docker exec). Pour le hub ce n est pas
+    # « osmo-operator-hub » - ce conteneur n existe pas - mais osmo-inter-stp.
+    # Meme regle que tools/osmo-op.sh.
+    nom = (os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp") if mode == "interstp"
+           else f"osmo-operator-{idx}")
     os.makedirs(RUN, exist_ok=True)
     tmp = OP_FILE + ".tmp"
     with open(tmp, "w") as f:
-        f.write(f"OP={idx}\nMODE={mode}\nIP={ip}\nNAME=osmo-operator-{idx}\n"
+        f.write(f"OP={idx}\nMODE={mode}\nIP={ip}\nNAME={nom}\n"
                 f"DASH=http://{ip or '127.0.0.1'}:{DASH_PORT}\n")
     os.replace(tmp, OP_FILE)
 
@@ -191,16 +323,16 @@ class Panel(Gtk.Window):
         scale = w / BOX[2]
         bar.set_margin_end(int(18 * scale))
         bar.set_margin_bottom(int(14 * scale))
-        b_dash = Gtk.Button(label="Dashboard")
+        b_dash = self.b_dash = Gtk.Button(label="Dashboard")
         b_dash.set_tooltip_text("firefox sur le tableau de bord de l operateur choisi")
         b_dash.connect("clicked", self.on_dash)
-        b_tmux = Gtk.Button(label="tmux")
+        b_tmux = self.b_tmux = Gtk.Button(label="tmux")
         b_tmux.set_tooltip_text("terminal attache a la session du banc (Ctrl-b d pour detacher)")
         b_tmux.connect("clicked", self.on_tmux)
         # Le VTY du mobile : la console ou l on tape « show ms », « call 100102 »
         # ... C est le troisieme endroit qu on ouvre a la main dix fois par
         # seance ; il n avait pas de bouton.
-        b_vty = Gtk.Button(label="VTY 4247")
+        b_vty = self.b_vty = Gtk.Button(label=f"VTY {VTY_PORT}")
         b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} (console du mobile)")
         b_vty.connect("clicked", self.on_vty)
         self.b_prev = Gtk.Button(label="<")
@@ -220,7 +352,7 @@ class Panel(Gtk.Window):
         self.refresh_ops()
         self.refresh_image()
         GLib.timeout_add(1000, self.refresh_image)
-        GLib.timeout_add(5000, self.refresh_ops)
+        GLib.timeout_add(2000, self.refresh_ops)
         self.show_all()
         self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
         self.move(x, y)
@@ -251,21 +383,61 @@ class Panel(Gtk.Window):
     # ── les operateurs ─────────────────────────────────────────────────────
     def refresh_ops(self):
         ops = operators()
-        if ops != self.ops:
+        changed = ops != self.ops
+        if changed:
             sel = self.ops[self.cur] if self.ops and self.cur < len(self.ops) else None
             self.ops = ops
             self.cur = next((i for i, o in enumerate(ops) if sel and o[0] == sel[0]), 0)
-            self.update_op()
+        # Quelqu un d autre a-t-il choisi ? (raccourci clavier, `osmo-op`, une
+        # autre session). Si oui, on le suit - sans reecrire le fichier.
+        want = read_operator()
+        if want is not None:
+            i = next((i for i, o in enumerate(self.ops) if o[0] == want), None)
+            if i is not None and i != self.cur:
+                self.cur = i
+                changed = True
+        if changed:
+            self.update_op(write=(want is None))
         return True
 
-    def update_op(self):
+    def update_op(self, write=True):
+        # Les fleches sont TOUJOURS la des qu il y a plus d un operateur dans la
+        # topologie - qu ils tournent ou non (voir operators()). Un operateur
+        # arrete se dit dans le libelle, il ne fait pas disparaitre le bouton.
         multi = len(self.ops) > 1
         for wdg in (self.b_prev, self.b_next, self.l_op):
             wdg.set_visible(multi)
         if self.ops:
             op = self.ops[self.cur]
-            self.l_op.set_text(f"op {op[0]}/{len(self.ops)}")
-            write_operator(op)
+            etat = "" if op[3] else " arrete"
+            libelle = "inter-STP" if op[1] == "interstp" else f"op {op[0]}/{len(self.ops)}"
+            self.l_op.set_text(f"{libelle}{etat}")
+            self.l_op.set_tooltip_text(
+                "\n".join(f"op {o[0]} {o[1]} {o[2] or '(hote)'} "
+                           f"{'actif' if o[3] else 'arrete'}" for o in self.ops))
+            # Les trois boutons visent l operateur choisi : ils le DISENT.
+            # Sans ca, "Dashboard / tmux / VTY 4247" ne changeait pas d aspect
+            # quand on poussait les fleches, et rien ne disait sur quel
+            # operateur on allait tomber.
+            hub = op[1] == "interstp"
+            suff = (" hub" if hub else f" op{op[0]}") if len(self.ops) > 1 else ""
+            if hub:
+                cible = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
+            elif op[1] == "docker":
+                cible = f"osmo-operator-{op[0]}"
+            else:
+                cible = f"{op[2] or '127.0.0.1'}"
+            self.b_dash.set_label("Dashboard" + suff)
+            self.b_dash.set_tooltip_text(f"firefox http://{op[2] or '127.0.0.1'}:{DASH_PORT} ({cible})")
+            self.b_tmux.set_label("tmux" + suff)
+            self.b_tmux.set_tooltip_text(f"terminal sur la session tmux de {cible}")
+            self.b_vty.set_label(f"VTY {VTY_PORT}" + suff)
+            self.b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} dans {cible}")
+            # `write=False` quand on ne fait que SUIVRE le fichier : le
+            # reecrire a l identique est inutile, et le reecrire avec notre
+            # propre idee est ce qui annulait le choix fait au clavier.
+            if write:
+                write_operator(op)
 
     def on_prev(self, *_):
         if self.ops:
@@ -279,7 +451,7 @@ class Panel(Gtk.Window):
 
     # ── les boutons ────────────────────────────────────────────────────────
     def on_dash(self, *_):
-        op = self.ops[self.cur] if self.ops else ("1", "native", "")
+        op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
         url = f"http://{op[2] or '127.0.0.1'}:{DASH_PORT}"
         for browser in ("firefox", "chromium", "xdg-open"):
             if subprocess.run(["which", browser], capture_output=True).returncode == 0:
@@ -291,19 +463,52 @@ class Panel(Gtk.Window):
         # VTY attend un vrai terminal ligne a ligne. Le `read` final garde la
         # fenetre ouverte quand le port est ferme - sinon elle se refermerait
         # avant qu on ait lu pourquoi.
-        op = self.ops[self.cur] if self.ops else ("1", "native", "")
-        host = op[2] or "127.0.0.1"
-        cmd = (f"telnet {host} {VTY_PORT}"
-               f" || {{ echo; echo 'VTY {host}:{VTY_PORT} injoignable - banc arrete ?'; read -r _; }}")
+        #
+        # [2026-09-04] LE VTY D UN CONTENEUR EST DANS LE CONTENEUR. On faisait
+        # « telnet <ip-du-conteneur> 4247 » : ce port n est PAS publie sur le
+        # reseau docker de l operateur (start.sh ne publie que ce dont l hote a
+        # besoin), et le bouton rendait "Connection refused" sur un operateur
+        # parfaitement vivant. On entre donc dans le conteneur pour le natif du
+        # dedans, exactement comme pour tmux.
+        op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
+        if op[1] == "interstp":
+            # Le hub n a ni mobile ni VTY 4247 : sa console, c est le STP (4239).
+            c = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
+            cmd = (f"docker exec -it {c} telnet 127.0.0.1 4239"
+                   f" || {{ echo; echo 'VTY 4239 injoignable dans {c} (hub arrete ?)'; read -r _; }}")
+        elif op[1] == "docker":
+            c = f"osmo-operator-{op[0]}"
+            cmd = (f"docker exec -it {c} telnet 127.0.0.1 {VTY_PORT}"
+                   f" || {{ echo; echo 'VTY {VTY_PORT} injoignable dans {c} (operateur arrete ?)';"
+                   f" read -r _; }}")
+        else:
+            cmd = (f"telnet 127.0.0.1 {VTY_PORT}"
+                   f" || {{ echo; echo 'VTY 127.0.0.1:{VTY_PORT} injoignable - banc arrete ?'; read -r _; }}")
         terminal(cmd)
 
     def on_tmux(self, *_):
-        op = self.ops[self.cur] if self.ops else ("1", "native", "")
-        if op[1] == "docker":
-            cmd = (f"docker exec -it osmo-operator-{op[0]} tmux -S /tmp/osmocom_tmux attach -t osmocom"
-                   f" || {{ echo; echo 'pas de session tmux dans osmo-operator-{op[0]}'; read -r _; }}")
+        # [2026-09-04] LE NOM DE LA SESSION N ETAIT PAS LE BON. On attachait
+        # « tmux -S /tmp/osmocom_tmux attach -t osmocom » dans le conteneur,
+        # alors que start.sh y ouvre une session nommee « osmo » sur le socket
+        # PAR DEFAUT (voir son commentaire : "docker exec -ti osmo-operator-2
+        # tmux attach -t osmo"). Le bouton disait donc "pas de session tmux"
+        # sur un operateur qui en avait une. On essaie les deux, dans l ordre
+        # ou elles existent, avant de conclure.
+        op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
+        if op[1] == "interstp":
+            c = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
+            cmd = (f"docker exec -it {c} bash"
+                   f" || {{ echo; echo 'hub {c} injoignable'; read -r _; }}")
+        elif op[1] == "docker":
+            c = f"osmo-operator-{op[0]}"
+            cmd = (f"docker exec -it {c} tmux attach -t osmo"
+                   f" || docker exec -it {c} tmux -S /tmp/osmocom_tmux attach -t osmocom"
+                   f" || docker exec -it {c} tmux attach"
+                   f" || {{ echo; echo 'pas de session tmux dans {c} (operateur arrete ?)';"
+                   f" echo 'docker ps -a --filter name={c}'; read -r _; }}")
         else:
             cmd = (f"tmux attach -t {TMUX_SESSION}"
+                   f" || tmux -S /tmp/osmocom_tmux attach -t osmocom"
                    f" || {{ echo; echo 'pas de session tmux « {TMUX_SESSION} » - banc arrete ?'; read -r _; }}")
         terminal(cmd)
 

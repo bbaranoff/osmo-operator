@@ -1,0 +1,135 @@
+# osmo-bts.script - l animation du demarrage.
+#
+# Plymouth appelle Plymouth.SetRefreshFunction ~50 fois par seconde. Tout ce
+# qu on fait ici, c est avancer un compteur et changer l image de deux sprites :
+# la bande "burst" (24 frames, l aller-retour BTS <-> MS) et la pastille de la
+# barre d avancement. Le reste - pylone, mobile, titre - est PEINT DANS LE FOND
+# (background.png), une seule image : un initrd n a pas a porter 24 fois le
+# meme decor.
+#
+# Les coordonnees sont celles d un ecran 1920x1080 ramenees a l ecran reel :
+# Window.GetWidth()/GetHeight() donnent la taille vraie, et tout est place en
+# FRACTION - sur un 1366x768 comme sur un 4K, la rafale reste entre les deux
+# antennes. CE FICHIER EST UN GABARIT : les @@...@@ sont remplaces par
+# tools/plymouth-render.py, qui est l auteur du decor et connait sa geometrie.
+
+sw = Window.GetWidth();
+sh = Window.GetHeight();
+
+# ── LE DECOR ────────────────────────────────────────────────────────────────
+bg_image = Image("background.png");
+bg = Sprite(bg_image.Scale(sw, sh));
+bg.SetX(0);
+bg.SetY(0);
+bg.SetZ(-100);
+
+# ── LA RAFALE ENTRE LES DEUX ANTENNES ───────────────────────────────────────
+# 24 images, jouees a ~12 images/seconde (une frame toutes les 4 rafraichis).
+n_frames = 24;
+for (i = 0; i < n_frames; i++) {
+    if (i < 10) {
+        burst_image[i] = Image("burst-0" + i + ".png");
+    } else {
+        burst_image[i] = Image("burst-" + i + ".png");
+    }
+    burst_scaled[i] = burst_image[i].Scale(sw * @@BW@@, sh * @@BH@@);
+}
+# @@BX@@ / @@BY@@ / @@BW@@ / @@BH@@ : la bande entre les deux antennes, en
+# FRACTIONS de l ecran, injectees par tools/plymouth-render.py - c est lui qui
+# a place le pylone et le mobile dans background.png, donc lui seul sait ou
+# tombe l espace entre les deux. Un gabarit plutot que des nombres recopies :
+# on deplace le pylone dans le dessin, la rafale suit.
+burst = Sprite();
+burst.SetX(sw * @@BX@@);
+burst.SetY(sh * @@BY@@);
+burst.SetZ(10);
+
+# ── LA BARRE D AVANCEMENT ───────────────────────────────────────────────────
+box_image = Image("progress-box.png");
+bar_image = Image("progress-bar.png");
+box_w = sw * 0.27;
+box_h = sh * 0.008;
+box = Sprite(box_image.Scale(box_w, box_h));
+box.SetX((sw - box_w) / 2);
+box.SetY(sh * 0.90);
+box.SetZ(10);
+bar_w = box_w * 0.16;
+bar = Sprite(bar_image.Scale(bar_w, box_h));
+bar.SetY(sh * 0.90);
+bar.SetZ(11);
+
+tick = 0;
+
+fun refresh_callback() {
+    tick++;
+    # La rafale : une image toutes les 4 passes (~12 i/s).
+    frame = Math.Int(tick / 4) % n_frames;
+    burst.SetImage(burst_scaled[frame]);
+    # La pastille : un va-et-vient regulier dans la barre. Plymouth ne nous dit
+    # pas ou en est le boot en mode script sans plugin de progression - une
+    # navette honnete vaut mieux qu un pourcentage invente.
+    u = (tick % 200) / 200;
+    if (u > 0.5) {
+        u = 1 - u;
+    }
+    bar.SetX((sw - box_w) / 2 + u * 2 * (box_w - bar_w));
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# ── LA PHRASE DE PASSE LUKS ─────────────────────────────────────────────────
+# Une installation chiffree (Calamares, case "Chiffrer le systeme") demande sa
+# phrase ICI. Sans ces fonctions, l ecran reste fige sur l animation et la
+# machine parait plantee alors qu elle attend une saisie - le piege classique
+# d un theme "script" recopie sans sa partie mot de passe.
+entry_image = Image("entry.png");
+bullet_image = Image("bullet.png");
+entry = Sprite();
+entry.SetZ(20);
+prompt_sprite = Sprite();
+prompt_sprite.SetZ(20);
+
+fun display_password_callback(prompt, bullets) {
+    ew = sw * 0.32;
+    eh = sh * 0.052;
+    entry.SetImage(entry_image.Scale(ew, eh));
+    entry.SetX((sw - ew) / 2);
+    entry.SetY(sh * 0.72);
+    entry.SetOpacity(1);
+    text = Image.Text(prompt, 0.90, 0.93, 0.95);
+    prompt_sprite.SetImage(text);
+    prompt_sprite.SetX((sw - text.GetWidth()) / 2);
+    prompt_sprite.SetY(sh * 0.66);
+    prompt_sprite.SetOpacity(1);
+    for (i = 0; i < 32; i++) {
+        bullet[i].SetOpacity(0);
+    }
+    for (i = 0; i < bullets && i < 32; i++) {
+        bullet[i] = Sprite(bullet_image);
+        bullet[i].SetX((sw - ew) / 2 + sh * 0.020 + i * sh * 0.020);
+        bullet[i].SetY(sh * 0.72 + eh / 2 - sh * 0.008);
+        bullet[i].SetZ(21);
+        bullet[i].SetOpacity(1);
+    }
+}
+
+fun display_normal_callback() {
+    entry.SetOpacity(0);
+    prompt_sprite.SetOpacity(0);
+    for (i = 0; i < 32; i++) {
+        bullet[i].SetOpacity(0);
+    }
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+
+# ── LES MESSAGES (fsck, systemd) ────────────────────────────────────────────
+message_sprite = Sprite();
+message_sprite.SetZ(15);
+fun message_callback(text) {
+    img = Image.Text(text, 0.6, 0.65, 0.72);
+    message_sprite.SetImage(img);
+    message_sprite.SetX((sw - img.GetWidth()) / 2);
+    message_sprite.SetY(sh * 0.95);
+}
+Plymouth.SetMessageFunction(message_callback);

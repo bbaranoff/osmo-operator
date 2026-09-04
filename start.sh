@@ -2029,6 +2029,30 @@ start_bridge_mode() {
         # point code du gabarit, 1.1.2 pour TOUS, donc deux equipements a la
         # meme adresse SS7 et aucun ASP attache.
         # shellcheck disable=SC2086
+        # ── --security-opt apparmor=unconfined : SANS LUI, PID 1 MEURT ──────
+        # [2026-09-04] SYMPTOME : osmo-operator-2 en "Restarting (255)" a
+        # l'infini, et l'operateur 3 jamais cree. Diagnostic : le conteneur
+        # execute /scripts/entrypoint.sh, qui finit par `exec systemd`. systemd,
+        # en PID 1, commence par monter ses systemes de fichiers d'API - et
+        # celui-la echoue :
+        #     Failed to mount tmpfs (type tmpfs) on /run/lock
+        #         (MS_NOSUID|MS_NODEV|MS_NOEXEC "mode=1777,size=5242880"):
+        #         Permission denied
+        #     [!!!!!!] Failed to mount API filesystems.
+        #     Exiting PID 1...
+        # Le message ne sort JAMAIS dans `docker logs` : systemd ecrit sur
+        # /dev/console, pas sur stdout. `docker logs` s'arrete apres
+        # "Created symlink ... docker-entrypoint.service" et on ne voit qu'un
+        # code 255 sans explication. Il faut `docker run -t` pour le lire.
+        #
+        # CAP_SYS_ADMIN est deja la, et ne suffit pas : ce n'est pas seccomp qui
+        # refuse le mount, c'est APPARMOR. Le profil docker-default d'Ubuntu
+        # interdit les operations de montage quelles que soient les
+        # capabilities. Un conteneur qui fait tourner systemd doit en sortir.
+        # Verifie a la main sur ce banc : memes drapeaux + apparmor=unconfined
+        # -> "Queued start job for default target multi-user.target", conteneur
+        # Up ; sans lui -> exit 255 en boucle.
+        # shellcheck disable=SC2086
         docker run -d \
             --restart unless-stopped \
             --name "$container_name" \
@@ -2038,6 +2062,7 @@ start_bridge_mode() {
             --cap-add NET_ADMIN \
             --cap-add SYS_ADMIN \
             --cap-add NET_RAW \
+            --security-opt apparmor=unconfined \
             --ulimit rtprio=18 \
             --shm-size=8g \
             --cgroupns host \
@@ -2067,6 +2092,33 @@ start_bridge_mode() {
             sleep infinity
 
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
+
+        # ── UN OPERATEUR MORT N'EMPORTE PLUS LES SUIVANTS ───────────────────
+        # [2026-09-04] CE QUI EST ARRIVE : osmo-operator-2 repartait en boucle
+        # (systemd tue par AppArmor, voir le commentaire du docker run
+        # ci-dessus). Tout ce qui suit dans ce tour de boucle parle au conteneur
+        # par `docker exec`, qui repond "container is restarting" et sort en
+        # erreur - et start.sh tourne sous `set -eu`. Le pipeline
+        # d'alimentation du HLR (`... | docker exec -i "$c" bash`) rendait donc
+        # un statut non nul, et LE SCRIPT ENTIER s'arretait la, en silence.
+        # Resultat observe : un op2 en "Restarting (255)", AUCUN conteneur
+        # osmo-operator-3, pas meme son reseau gsm-net-op3 - et rien dans la
+        # sortie qui dise pourquoi le troisieme manque.
+        #
+        # La panne d'un operateur doit rester LA PANNE DE CET OPERATEUR. On
+        # verifie donc qu'il tourne vraiment avant de lui parler ; s'il est
+        # mort, on le DIT (avec les deux commandes qui donnent la vraie cause,
+        # celle que `docker logs` cache) et on passe au suivant.
+        _st="$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null || echo absent)"
+        if [ "$_st" != running ]; then
+            _rc="$(docker inspect -f '{{.State.ExitCode}}' "$container_name" 2>/dev/null || echo '?')"
+            echo -e "  ${RED}[!] ${container_name} n'est pas parti (etat: ${_st}, code: ${_rc}) - operateur SAUTE${NC}"
+            echo -e "      ${YELLOW}systemd ecrit son erreur sur /dev/console : elle n'est PAS dans docker logs.${NC}"
+            echo -e "      ${CYAN}docker logs ${container_name} | tail${NC}"
+            echo -e "      ${CYAN}docker run --rm -t <memes drapeaux> ${IMAGE_RUN} sleep infinity${NC}   (pour la voir)"
+            FAILED_OPS="${FAILED_OPS:-} ${container_name}"
+            continue
+        fi
 
         force_update_trees "$container_name"
 
@@ -2579,6 +2631,7 @@ start_host_mode() {
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
+        --security-opt apparmor=unconfined \
         --shm-size=8g \
         --cgroupns host \
         --device /dev/net/tun:/dev/net/tun \
@@ -2609,6 +2662,18 @@ echo "=== net-host - egprs run.sh ==="
 exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
 EOF
     chmod +x "$_hscript"
+    # ── OSMO_NO_TERM=1 : LA PILE MONTE, SANS FENETRE ────────────────────────
+    # [2026-09-04] Lance par une unite systemd (osmo-multi.service, et l icone
+    # du bureau qui passe par elle), il n y a ni ecran ni personne devant : un
+    # gnome-terminal surgirait au milieu de la session, et son contenu serait
+    # perdu a la fermeture. On lance alors run.sh detache dans le conteneur, et
+    # tout est dans le journal du conteneur (`docker logs egprs`).
+    if [ "${OSMO_NO_TERM:-0}" = "1" ]; then
+        echo -e "  ${CYAN}[*] run.sh dans egprs (OSMO_NO_TERM=1 : pas de terminal)${NC}"
+        docker exec -d egprs /bin/bash -c "/root/run.sh > /var/log/osmocom/run.sh.log 2>&1"
+        sleep 0.3
+        return 0
+    fi
     echo -e "  ${CYAN}[*] run.sh → gnome-terminal${NC}"
     sudo -u "$_du" \
         DISPLAY="$_disp" XAUTHORITY="$_xauth" \

@@ -246,10 +246,17 @@ if [ "$DO_MULTI" = "1" ]; then DO_DOCKER=1; DO_IMAGE=1; fi
 #
 # NVIDIA est le cas a part : son ICD OpenCL n est pas un paquet separe
 # installable seul, il voyage avec le pilote proprietaire (le paquet
-# libnvidia-compute-xxx, tire par nvidia-driver-xxx). On l installe donc via
-# ubuntu-drivers, qui choisit le pilote recommande pour la carte. C est un
-# pilote graphique proprietaire, sur une machine dont l ecran depend : il faut
-# le plus souvent REDEMARRER pour qu il prenne - on le dit clairement.
+# libnvidia-compute-xxx, tire par nvidia-driver-xxx). On installe donc le
+# pilote, et l ICD vient avec. C est un pilote graphique proprietaire, sur une
+# machine dont l ecran depend : il faut le plus souvent REDEMARRER pour qu il
+# prenne - on le dit clairement.
+#
+# [2026-09-04] LA VERSION EST FIGEE : nvidia-driver-610, et plus
+# `ubuntu-drivers install`. L outil interrogeait les depots et decidait seul :
+# d une machine a l autre on n installait pas le meme pilote, et sans
+# ubuntu-drivers-common il ne decidait rien. Un paquet nomme s installe, se
+# verifie et se raconte : sudo apt install nvidia-driver-610.
+# OSMO_NVIDIA_DRIVER permet d en choisir un autre.
 if [ "$DO_OPENCL" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de la pile OpenCL ..."
     export DEBIAN_FRONTEND=noninteractive
@@ -257,9 +264,14 @@ if [ "$DO_OPENCL" = "1" ]; then
     # lvm2 : PAS de l OpenCL, mais deka (installe avec ce supplement) monte ses
     # tables sur des volumes LVM - sans vgchange, deka-start.sh ne monte rien.
     # On le pose donc ici, avec deka.
-    # swig + python3-dev : compilation des modules natifs de deka (_delta.so,
-    # _libvankus.so) plus bas. build-essential est deja tire ailleurs.
-    _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd lvm2 swig python3-dev"
+    # swig4.1 + python3-dev : compilation des modules natifs de deka
+    # (_delta.so, _libvankus.so) plus bas. build-essential est deja tire
+    # ailleurs.
+    # [2026-09-04] swig4.1 ET PAS swig : le metapaquet `swig` de noble tire
+    # swig 4.2, sous lequel les interfaces de deka ne passent plus. La 4.1 est
+    # dans la distribution (noble/universe, paquet swig4.1) : on la nomme
+    # explicitement plutot que de dependre de ce que `swig` designera demain.
+    _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd lvm2 swig4.1 python3-dev"
     _vga="$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display' || true)"
     _nvidia=0
     case "$_vga" in
@@ -328,17 +340,13 @@ if [ "$DO_OPENCL" = "1" ]; then
         # linux-headers-generic en filet : garde les headers alignes sur le
         # meta-noyau pour les mises a jour de noyau suivantes.
         apt-get install -y linux-headers-generic >/dev/null 2>&1 || true
-        apt-get install -y ubuntu-drivers-common >/dev/null 2>&1 || true
-        if command -v ubuntu-drivers >/dev/null 2>&1; then
-            if ubuntu-drivers install; then
-                echo -e "  ${GREEN}✓${NC} pilote NVIDIA installe"
-            else
-                echo -e "  ${YELLOW}!${NC} ubuntu-drivers install a echoue - repli : ${BOLD}nvidia-driver + nvidia-opencl-icd${NC}"
-                apt-get install -y  nvidia-driver-610 nvidia-opencl-icd >/dev/null 2>&1 \
-                    || echo -e "  ${YELLOW}!${NC} pilote NVIDIA non installe (voir : ubuntu-drivers devices)"
-            fi
+        _nvdrv="${OSMO_NVIDIA_DRIVER:-nvidia-driver-610}"
+        echo -e "      ${CYAN}→${NC} ${BOLD}apt install ${_nvdrv}${NC}"
+        if apt-get install -y "$_nvdrv"; then
+            echo -e "  ${GREEN}✓${NC} pilote NVIDIA installe : ${BOLD}$(dpkg-query -W -f='${Version}' "$_nvdrv" 2>/dev/null)${NC}"
         else
-            echo -e "  ${YELLOW}!${NC} ubuntu-drivers absent - installez a la main : ${BOLD}sudo ubuntu-drivers install${NC}"
+            echo -e "  ${YELLOW}!${NC} ${BOLD}${_nvdrv}${NC} non installe - il est dans multiverse :"
+            echo -e "      ${BOLD}sudo add-apt-repository multiverse && sudo apt install ${_nvdrv}${NC}"
         fi
         echo -e "  ${YELLOW}!${NC} un ${BOLD}redemarrage${NC} est generalement necessaire pour que le pilote"
         echo -e "      NVIDIA (et donc son OpenCL) soit actif - ${BOLD}clinfo${NC} le confirmera ensuite."
@@ -383,16 +391,16 @@ if [ "$DO_OPENCL" = "1" ]; then
     # ── deka : compilation des modules natifs (make) ─────────────────────────
     # deka importe _delta.so et _libvankus.so, produits par SWIG + gcc depuis
     # delta.c / libvankus.c (voir son Makefile). Sans ce make, les workers
-    # importent des modules absents et deka ne calcule rien. Pre-requis : swig
+    # importent des modules absents et deka ne calcule rien. Pre-requis : swig4.1
     # et les entetes python3. Non fatal : un echec le dit, sans stopper le reste.
     if [ -f /root/deka/Makefile ]; then
         echo -e "  ${CYAN}→${NC} deka : compilation des modules natifs (make) ..."
-        apt-get install -y --no-install-recommends swig python3-dev build-essential >/dev/null 2>&1 || true
+        apt-get install -y --no-install-recommends swig4.1 python3-dev build-essential >/dev/null 2>&1 || true
         if ( cd /root/deka && make >/dev/null 2>&1 ) \
            && [ -e /root/deka/_delta.so ] && [ -e /root/deka/_libvankus.so ]; then
             echo -e "      ${GREEN}✓${NC} _delta.so + _libvankus.so construits"
         else
-            echo -e "      ${YELLOW}!${NC} make deka a echoue (swig / python3-dev ?) - voir : cd /root/deka && make"
+            echo -e "      ${YELLOW}!${NC} make deka a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka && make"
         fi
     fi
 
@@ -509,22 +517,25 @@ DEKADSK
         command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
         update-desktop-database /usr/share/applications 2>/dev/null || true
 
-        # Sur les bureaux : DING n affiche un .desktop avec son nom et son icone
-        # que s il est executable ET porteur de metadata::trusted (voir la meme
-        # mecanique dans update.sh). On le pose sous chaque bureau existant.
-        _posee=0
+        # ── PAS D ICONE DEKA SUR LE BUREAU ───────────────────────────────
+        # [2026-09-04] Ce bloc posait deka.desktop sur CHAQUE bureau (/root et
+        # tous les /home), en "trusted" pour que DING l affiche, et en 0,0 -
+        # donc par-dessus le coin ou le fond GSM LAB attend ses icones. Sur une
+        # machine fraichement installee, le supplement OpenCL ajoutait ainsi une
+        # icone que personne n avait demandee, et qu il fallait retirer a la
+        # main de deux repertoires par compte (Bureau ET Desktop).
+        # deka reste lancable : l entree /usr/share/applications/deka.desktop
+        # ci-dessus le met dans le menu des applications, et deka-start.sh
+        # s appelle directement. Ce qui disparait, c est l icone imposee.
+        #
+        # On efface aussi celles qu une execution precedente avait posees :
+        # sans ca, mettre a jour ne suffisait pas a s en debarrasser.
         for _h in /root /home/*; do
             for _dir in Bureau Desktop; do
-                [ -d "$_h/$_dir" ] || continue
-                cp -f "$_deka_desktop" "$_h/$_dir/deka.desktop" 2>/dev/null || continue
-                _trust_desktop "$_h/$_dir/deka.desktop" "$_h" "0,0"
-                touch "$_h/$_dir" 2>/dev/null || true
-                _posee=1
+                rm -f "$_h/$_dir/deka.desktop" 2>/dev/null || true
             done
         done
-        [ "$_posee" = "1" ] \
-            && echo -e "  ${GREEN}✓${NC} icone ${BOLD}deka${NC} posee sur le bureau (clic pour monter + lancer)" \
-            || echo -e "  ${GREEN}✓${NC} icone ${BOLD}deka${NC} dans le menu des applications"
+        echo -e "  ${GREEN}✓${NC} deka : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
     fi
 fi
 
@@ -777,6 +788,33 @@ CONF
     _ico_dir=/usr/share/osmo-operator/icons
     _svg="$DIR/data/osmo-multi.svg"
     _dsk="$DIR/data/desktop/osmo-multi.desktop"
+
+    # ── L UNITE D ABORD, L ICONE ENSUITE ────────────────────────────────────
+    # [2026-09-04] L icone lance desormais `systemctl start osmo-multi.service`
+    # et plus start-multi.sh : elle ne vaut donc que si l unite EXISTE. Sur une
+    # ISO elle est posee au build (iso_modules/82-services.sh) ; sur une machine
+    # ou ce depot a ete deroule a la main, non. On la pose ici, avec l icone qui
+    # en depend - les deux vont ensemble ou ne vont pas du tout.
+    #
+    # POURQUOI PLUS DE TERMINAL. start-multi.sh se RELANCE lui-meme dans un
+    # gnome-terminal quand il detecte qu il n en a pas (OSMO_MULTI_TERM) : un
+    # clic sur l icone ouvrait donc une fenetre qui vivait le temps du
+    # lancement, et dont la sortie etait perdue a la fermeture. Quand un
+    # operateur ne demarrait pas, il n en restait aucune trace. L unite, elle,
+    # pose OSMO_NO_TERM=1 : aucune fenetre, tout dans le journal
+    # (`journalctl -u osmo-multi`), un etat lisible et un arret propre - comme
+    # le mono-operateur, qui est une unite depuis le debut.
+    for _u in osmo-banc osmo-multi; do
+        [ -f "$DIR/services/$_u.service" ] || continue
+        install -m644 "$DIR/services/$_u.service" "/etc/systemd/system/$_u.service"
+    done
+    systemctl daemon-reload 2>/dev/null || true
+    if [ -f /etc/systemd/system/osmo-multi.service ]; then
+        systemctl enable osmo-multi.service >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}✓${NC} ${BOLD}osmo-multi.service${NC} installe et active au demarrage" \
+            || echo -e "  ${YELLOW}!${NC} osmo-multi.service installe, activation KO (systemctl enable osmo-multi)"
+    fi
+
     if [ -f "$_dsk" ]; then
         install -d "$_ico_dir" /usr/share/icons/hicolor/scalable/apps /usr/share/applications
         # SVG en CHEMIN ABSOLU dans Icon= (voir build-iso.sh) : un nom de theme
@@ -786,7 +824,11 @@ CONF
             install -m644 "$_svg" /usr/share/icons/hicolor/scalable/apps/osmo-multi.svg
         fi
         install -m644 "$_dsk" /usr/share/applications/osmo-multi.desktop
-        # Exec= et Icon= suivent l arbre reel ($DIR), pas /opt/GSM en dur.
+        # Icon= suit l arbre reel. Exec=, lui, ne nomme plus l arbre : il appelle
+        # `systemctl start osmo-multi.service`, et c est l UNITE qui porte le
+        # chemin (posee juste au-dessus depuis $DIR/services/). Le sed sur Exec=
+        # reste, sans effet sur la ligne actuelle, pour un .desktop ancien qui
+        # nommerait encore start-multi.sh en dur.
         sed -i -e "s|^Exec=/opt/GSM/osmo-operator/|Exec=$DIR/|" \
                -e "s|^Icon=.*|Icon=$_ico_dir/osmo-multi.svg|" \
                /usr/share/applications/osmo-multi.desktop

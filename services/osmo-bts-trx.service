@@ -1,8 +1,13 @@
 [Unit]
 Description=Osmocom GSM Base Transceiver Station (BTS)
 # S'assure que le réseau et l'interface de bouclage sont prêts
-After=network.target network-online.target
-Wants=network-online.target
+# [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
+# ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
+# mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les
+# tun/veth du coeur paquet - ne sont jamais "en ligne" au sens de cette unite,
+# et qui demarre souvent sans cable. network.target suffit : les interfaces
+# sont configurees, la route par defaut peut arriver apres.
+After=network.target
 # Si tu utilises osmo-bsc sur la même machine, décommente la ligne suivante
 # After=osmo-bsc.service
 

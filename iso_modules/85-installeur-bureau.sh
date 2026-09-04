@@ -249,26 +249,29 @@ if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
 fi
 
 # ── NVIDIA : la page "Pilotes graphiques" de l installeur suit la machine ────
-# Calamares ne sait pas griser une entree selon le materiel, et ne connait pas
-# la liste des pilotes disponibles : on ECRIT sa page de choix et le module
-# qui installe a CHAQUE lancement, d apres lspci et ubuntu-drivers :
-#   - une entree par pilote que ubuntu-drivers propose (nvidia-driver-5xx,
-#     -open, -server...), avec son etat : "recommande", "deja installe" ;
-#   - une entree "recommande par ubuntu-drivers" pre-selectionnee quand une
-#     carte est vue, "aucun" sinon ;
+# Calamares ne sait pas griser une entree selon le materiel : on ECRIT sa page
+# de choix et le module qui installe a CHAQUE lancement, d apres lspci :
+#   - carte NVIDIA vue -> l entree "nvidia-driver-610" est nommee avec la carte
+#     et pre-selectionnee ;
 #   - sans carte NVIDIA, la page le dit et tout choix reste sans effet
 #     (contextualprocess refait le test lspci dans la cible).
 # Sur le systeme installe, tools/osmo-drivers.sh (icone "Pilotes graphiques")
 # montre le meme etat et laisse installer ou mettre a jour plus tard.
+#
+# [2026-09-04] UNE SEULE VERSION, FIGEE : nvidia-driver-610. La page listait
+# auparavant tout ce que `ubuntu-drivers list` proposait, plus une entree
+# "recommande" qui deleguait le choix a `ubuntu-drivers install`. Resultat :
+# une page differente d une machine et d une semaine a l autre, et une
+# installation qui dependait d un outil absent des que le live n avait pas
+# ubuntu-drivers-common. Le banc demande nvidia-driver-610 - il est dans
+# noble-updates/multiverse et s installe comme n importe quel paquet :
+#     sudo apt install nvidia-driver-610
+# OSMO_NVIDIA_DRIVER permet d en figer un autre au build.
 _pc=/etc/calamares/modules/packagechooser-nvidia.conf
 _cp=/etc/calamares/modules/contextualprocess-nvidia.conf
+_nvdrv="${OSMO_NVIDIA_DRIVER:-nvidia-driver-610}"
 if [ -f "$_pc" ] && [ -f "$_cp" ]; then
     _nv="$(lspci -d 10de: 2>/dev/null | head -1 | cut -d: -f3- | sed 's/^ //; s/ (rev.*//')"
-    _drivers=""; _reco=""
-    if [ -n "$_nv" ] && command -v ubuntu-drivers >/dev/null 2>&1; then
-        _drivers="$(ubuntu-drivers list 2>/dev/null | awk '/^nvidia-driver-/{print $1}' | sed 's/,.*//' | sort -u)"
-        _reco="$(ubuntu-drivers devices 2>/dev/null | awk '/^driver *:/ && /recommended/{print $3; exit}')"
-    fi
     # Aucun guillemet dans cette commande : elle est posee entre apostrophes
     # (bash -c) dans une chaine YAML entre guillemets - l un comme l autre y
     # seraient une fin de chaine. /run de la cible est un tmpfs vide (mount.conf)
@@ -280,23 +283,17 @@ if [ -f "$_pc" ] && [ -f "$_cp" ]; then
         echo "method: legacy"
         echo "labels:"
         echo "    step: \"Pilotes graphiques\""
-        if [ -n "$_nv" ]; then echo "default: recommended"; else echo "default: none"; fi
+        if [ -n "$_nv" ]; then echo "default: nvidia"; else echo "default: none"; fi
         echo "items:"
         echo "    - id: none"
         echo "      name: \"Aucun pilote supplementaire\""
         if [ -n "$_nv" ]; then
+            _state=""
+            dpkg -s "$_nvdrv" >/dev/null 2>&1 && _state=" (deja installe sur la cle)"
             echo "      description: \"Carte detectee : ${_nv}. Le pilote libre (nouveau) du noyau, comme sur la cle live.\""
-            echo "    - id: recommended"
-            echo "      name: \"Pilote NVIDIA recommande (ubuntu-drivers)\""
-            echo "      description: \"Installe ${_reco:-le pilote recommande par ubuntu-drivers} depuis les depots Ubuntu (reseau requis).\""
-            for _drv in $_drivers; do
-                _state=""
-                [ "$_drv" = "$_reco" ] && _state=" - recommande"
-                dpkg -s "$_drv" >/dev/null 2>&1 && _state="$_state - deja installe sur ce systeme"
-                echo "    - id: ${_drv}"
-                echo "      name: \"${_drv}\""
-                echo "      description: \"Pilote proprietaire NVIDIA ${_drv#nvidia-driver-}${_state}. Installe depuis les depots Ubuntu (reseau requis).\""
-            done
+            echo "    - id: nvidia"
+            echo "      name: \"${_nvdrv} (proprietaire)\""
+            echo "      description: \"Carte ${_nv} : installe ${_nvdrv}${_state} depuis les depots Ubuntu (reseau requis).\""
         else
             echo "      description: \"AUCUNE carte NVIDIA detectee (lspci) : rien a installer sur cette machine.\""
         fi
@@ -308,12 +305,8 @@ if [ -f "$_pc" ] && [ -f "$_cp" ]; then
         echo "packagechooser_nvidia:"
         echo "    \"none\":"
         echo "        - \"-/bin/true\""
-        echo "    \"recommended\":"
-        echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y --no-install-recommends ubuntu-drivers-common >/dev/null 2>&1; ubuntu-drivers install || apt-get install -y ${_reco:-nvidia-driver-550}; update-initramfs -u >/dev/null 2>&1 || true'\""
-        for _drv in $_drivers; do
-            echo "    \"${_drv}\":"
-            echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y ${_drv}; update-initramfs -u >/dev/null 2>&1 || true'\""
-        done
+        echo "    \"nvidia\":"
+        echo "        - \"-/bin/bash -c '${_apt_cmd}; apt-get install -y ${_nvdrv} || echo [nvidia] ${_nvdrv} non installable - le pilote libre nouveau reste en place; update-initramfs -u >/dev/null 2>&1 || true'\""
     } > "$_cp"
     if ! _yamlok "$_pc" || ! _yamlok "$_cp"; then
         echo "NVIDIA : page generee ILLISIBLE - retour au choix minimal" >&2
@@ -324,12 +317,11 @@ if [ -f "$_pc" ] && [ -f "$_cp" ]; then
         printf '%s\n' "---" "dontChroot: false" "timeout: 1800" \
             "packagechooser_nvidia:" "    \"none\":" "        - \"-/bin/true\"" > "$_cp"
     elif [ -n "$_nv" ]; then
-        echo "NVIDIA : $_nv - pilotes proposes : $(echo ${_drivers:-(liste ubuntu-drivers vide)})${_reco:+ ; recommande : $_reco}"
+        echo "NVIDIA : $_nv - pilote propose : $_nvdrv"
     else
         echo "NVIDIA : aucune carte detectee - la page le dira, sans effet"
     fi
 fi
-
 exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"
@@ -679,7 +671,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # ne partait pas dans l image, alors que les quatre autres outils, eux,
     # partaient. Meme regle pour tous : le depot local fait foi.
     install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$DIR/tools/conky-osmo-status.sh" "$_rt/tools/"
-    install -m644 "$DIR/configs/wallpaper/tower.jpg" "$_rt/configs/wallpaper/"
+    # tower.* et non tower.jpg : la photo voyage dans son format d origine
+    # (PNG pleine definition aujourd hui), sans re-encodage.
+    for _tw in "$DIR"/configs/wallpaper/tower.*; do
+        [ -f "$_tw" ] && install -m644 "$_tw" "$_rt/configs/wallpaper/"
+    done
+    unset _tw
     install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
     # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
@@ -689,14 +686,21 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
 [Unit]
 Description=Fond d ecran du banc (image du jour : Calvin, xkcd, APOD, Bing, turnoff.us)
-Wants=network-online.target
-After=network-online.target
+# [2026-09-04] AUCUNE ATTENTE RESEAU. C etait Wants/After=network-online.target :
+# un fond d ecran faisait attendre le demarrage jusqu a 2 min
+# (systemd-networkd-wait-online) pour aller chercher un dessin. Sans reseau, le
+# script pose le fond fige de l image et sort 0 ; avec reseau, le timer
+# quotidien (osmo-wallpaper.timer) le remplacera au prochain passage.
+After=network.target
 ConditionPathExists=/opt/GSM/osmo-operator/tools/wallpaper-render.py
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/osmo-wallpaper
-TimeoutStartSec=180
+# Un telechargement qui traine ne doit pas retenir le boot NI l arret : le
+# service est tue au bout de 45 s, le fond fige reste.
+TimeoutStartSec=45
+TimeoutStopSec=10
 EOF
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.timer" <<'EOF'
 [Unit]
