@@ -417,7 +417,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         wmctrl x11-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
-        conky-all fonts-dejavu \
+        conky-all fonts-dejavu python3-pil \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
@@ -547,94 +547,76 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         fi
     done
 
-    # ── FIREFOX : LE SNAP, PAS LE DEB ──────────────────────────────────────
-    # Sur jammy, "apt install firefox" (comme "apt install chromium-browser")
-    # pose un paquet de TRANSITION vide dont le postinst appelle
-    # "snap install ...". Dans un chroot, snapd ne tourne pas : le postinst
-    # echoue, apt le signale a peine, et l image sort avec un binaire qui
-    # n existe pas. On ne compte donc pas sur apt.
-    #
-    # On ne peut pas non plus "snap install" ici - meme raison. Ce qui marche
-    # dans un chroot, c est TELECHARGER (snap download parle au magasin en
-    # direct, il n a pas besoin du demon) et laisser l installation au premier
-    # demarrage, quand snapd tourne pour de bon. Les .snap et leurs assertions
-    # voyagent dans l image : l installation se fait alors HORS LIGNE, ce qui
-    # compte pour un banc qui n a pas toujours Internet.
-    # L unite qui les pose (osmo-firefox-snap.service) est ecrite HORS de ce
-    # chroot : le script y est en quotes simples, une apostrophe de plus et
-    # tout ce qui suit change de sens.
+    # ── FIREFOX : LE DEB DE MOZILLA, PAS LE SNAP ────────────────────────────
+    # [2026-09-04] Le snap ne s installait JAMAIS sur la cle : au premier boot
+    # osmo-firefox-snap.service restait en "activating" pendant des minutes
+    # (1,5 Go de .snap a poser, snapd qui refuse tant qu un changement est en
+    # cours) et le banc tournait sans navigateur. Le paquet "firefox" des
+    # depots Ubuntu est un paquet de transition qui appelle snapd : inutilisable
+    # dans un chroot. Mozilla publie ses propres .deb (packages.mozilla.org),
+    # a jour a chaque version : on prend celui-la, epingle au-dessus de celui
+    # d Ubuntu, et apt le tient a jour sur le systeme installe. Le .desktop
+    # est firefox.desktop (le snap etait firefox_firefox.desktop) et la
+    # politique /etc/firefox/policies/policies.json est lue telle quelle.
     apt-fast purge -y firefox chromium-browser 2>/dev/null || true
-    mkdir -p /var/lib/osmo-snaps
-    _snap_ok=1
-
-    # ── LES DEPENDANCES SE LISENT DANS LE SNAP, ELLES NE SE DEVINENT PAS ────
-    # L ancienne liste etait ecrite en dur : gtk-common-themes, gnome-42-2204,
-    # et le navigateur. Elle etait FAUSSE, et l image sortait sans navigateur.
-    # firefox 15x declare "base: core24" et reclame, par ses interfaces de
-    # contenu, mesa-2404 (gpu-2404) et gnome-46-2404 - gnome-42-2204 est la
-    # plateforme du monde core22, celle d AVANT : 557 Mo embarques que rien ne
-    # monte. Sans core24 ni mesa-2404, "snap install firefox.snap" echoue hors
-    # ligne, et le lanceur repond "firefox introuvable".
-    #
-    # On lit donc "base:" et les "default-provider:" DANS le .snap telecharge,
-    # au lieu de les recopier : la prochaine bascule de base (core26...) se
-    # fera toute seule. cups est volontairement ecarte - c est un fournisseur
-    # d impression optionnel de 200 Mo, son absence ne bloque pas le demarrage.
-    ( cd /var/lib/osmo-snaps && snap download firefox --basename=firefox ) \
-        || { echo "  [desktop] WARN: snap download firefox a echoue"; _snap_ok=0; }
-
-    #
-    # Pas une seule apostrophe ici : ce bloc tourne dans un bash -c en quotes
-    # simples (voir plus haut) - les programmes awk sont donc en guillemets,
-    # avec \$2 echappe pour qu il arrive intact a awk.
-    _base=""; _providers=""
-    if [ -s /var/lib/osmo-snaps/firefox.snap ] && command -v unsquashfs >/dev/null; then
-        unsquashfs -cat /var/lib/osmo-snaps/firefox.snap meta/snap.yaml \
-            > /tmp/firefox-snap.yaml 2>/dev/null || true
-        # || true : ce chroot tourne sous set -e, et grep qui ne retient rien
-        # sort avec 1 - une liste vide ferait echouer la construction entiere.
-        _base=$(awk "/^base:[[:space:]]/{print \$2; exit}" /tmp/firefox-snap.yaml) || true
-        _providers=$(awk "/default-provider:[[:space:]]/{print \$2}" /tmp/firefox-snap.yaml \
-                     | sort -u | grep -vx cups) || true
-        rm -f /tmp/firefox-snap.yaml
+    install -d -m0755 /etc/apt/keyrings
+    _ff_ok=0
+    if curl -fsSL --retry 3 https://packages.mozilla.org/apt/repo-signing-key.gpg \
+         -o /etc/apt/keyrings/packages.mozilla.org.asc; then
+        echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+            > /etc/apt/sources.list.d/mozilla.list
+        printf "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n" \
+            > /etc/apt/preferences.d/mozilla
+        apt-get update -qq
+        if apt-fast install -y $APT_OPTS firefox; then
+            _ff_ok=1
+            # La langue de l interface suit le clavier demande au build (--kb).
+            apt-fast install -y $APT_OPTS "firefox-l10n-${OSMO_ISO_KB:-fr}" 2>/dev/null \
+                || echo "  [desktop] firefox-l10n-${OSMO_ISO_KB:-fr} indisponible - interface en anglais"
+        fi
     fi
-    [ -n "$_base" ] || _base=core24
-    [ -n "$_providers" ] || _providers="mesa-2404 gnome-46-2404 gtk-common-themes"
-    echo "  [desktop] firefox : base=$_base, contenu=$(echo $_providers)"
-
-    # snapd en tete : sur une base core2x, les snaps montent /snap/snapd et
-    # refusent de demarrer sans lui.
-    rm -f /var/lib/osmo-snaps/ordre; touch /var/lib/osmo-snaps/ordre
-    for _sn in snapd "$_base" $_providers; do
-        ( cd /var/lib/osmo-snaps && snap download "$_sn" --basename="$_sn" ) \
-            && echo "$_sn" >> /var/lib/osmo-snaps/ordre \
-            || { echo "  [desktop] WARN: snap download $_sn a echoue"; _snap_ok=0; }
-    done
-    # En dernier, et jamais en "[ ... ] && ..." : sous set -e, un test faux
-    # en fin de bloc arreterait le chroot net.
-    if [ -s /var/lib/osmo-snaps/firefox.snap ]; then
-        echo firefox >> /var/lib/osmo-snaps/ordre
-    fi
-    systemctl enable osmo-firefox-snap 2>/dev/null || true
-    if [ "$_snap_ok" = "1" ]; then
-        echo "  [desktop] Firefox : snap embarque ($(du -sh /var/lib/osmo-snaps 2>/dev/null | cut -f1)), installe au premier boot"
+    if [ "$_ff_ok" = "1" ]; then
+        echo "  [desktop] Firefox : $(dpkg-query -W -f=\${Version} firefox 2>/dev/null) (deb Mozilla, packages.mozilla.org)"
     else
-        echo "  [desktop] Firefox : snap NON embarque - installation depuis le magasin au premier boot (reseau requis)"
+        echo "  [desktop] WARN: Firefox (deb Mozilla) NON installe - packages.mozilla.org injoignable ?"
     fi
+    # Plus aucun snap : le service d installation au premier boot reste dans
+    # l image (update.sh le connait, il sort de lui-meme si le deb est la) mais
+    # n est pas active, et snapd ne demarre pas - il n a plus rien a poser et
+    # retardait le boot.
+    rm -rf /var/lib/osmo-snaps
+    systemctl disable osmo-firefox-snap 2>/dev/null || true
+    systemctl disable snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service 2>/dev/null || true
+    systemctl mask snapd.service snapd.socket 2>/dev/null || true
 
     systemctl set-default graphical.target
 
-    # ── AUDIO DE SESSION : PIPEWIRE SUR NOBLE ──────────────────────────────
-    # ubuntu-desktop-minimal de noble tire pipewire-pulse et wireplumber ; le
-    # paquet pulseaudio reste installe (verifie par simulation apt le
-    # 2026-09-03 : les deux cohabitent, rien n est retire) parce que le BANC
-    # en a besoin en mode SYSTEME (gapk -> plugin ALSA pulse -> demon systeme,
-    # unite ecrite plus bas dans ce script). Mais ses unites de SESSION
-    # disputeraient le socket utilisateur a pipewire-pulse : on les masque,
-    # la session GNOME garde PipeWire, comme sur tout noble.
+    # ── AUDIO : PULSEAUDIO SYSTEME, MEME SUR NOBLE ─────────────────────────
+    # [2026-09-04] ubuntu-desktop-minimal de noble DEPEND de pipewire-pulse, en
+    # conflit avec pulseaudio : le gros apt-get du bureau retirait pulseaudio
+    # sans le dire (apt history : "Remove: pulseaudio"), et au boot
+    # osmo-pulse.service bouclait en 203/EXEC - /usr/bin/pulseaudio absent.
+    # Sans lui : pas de sink gsm_audio, gapk muet, "pulse" rouge sur le
+    # tableau de bord. Le banc est construit autour du demon SYSTEME
+    # (/run/pulse/native, cf. osmo-pulse.service) : on le remet, ce qui retire
+    # pipewire-pulse et le METAPAQUET ubuntu-desktop-minimal - pas le bureau,
+    # dont les paquets sont ensuite marques "manuels" pour qu aucun autoremove
+    # ne les emporte. La session GNOME joint le demon systeme par le lien
+    # /run/user/<uid>/pulse/native que pose osmo-pulse-link.sh.
     if [ "$_S" = "noble" ]; then
+        _auto=$(apt-mark showauto)
+        apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils
+        if [ -n "$_auto" ]; then apt-mark manual $_auto >/dev/null 2>&1 || true; fi
         systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
-        echo "  [desktop] audio de session : pipewire-pulse (pulseaudio ne sert que le mode systeme du banc)"
+        # wireplumber reste (le screencast GNOME passe par PipeWire) mais ne
+        # doit pas prendre les cartes son : elles sont au demon pulseaudio.
+        mkdir -p /etc/wireplumber/main.lua.d
+        printf "alsa_monitor.enabled = false\n" > /etc/wireplumber/main.lua.d/51-osmo-no-alsa.lua
+        if [ -x /usr/bin/pulseaudio ]; then
+            echo "  [desktop] audio : pulseaudio systeme retabli ($(dpkg-query -W -f=\${Version} pulseaudio)), pipewire-pulse retire, wireplumber sans ALSA"
+        else
+            echo "  [desktop] WARN: /usr/bin/pulseaudio toujours absent - osmo-pulse.service echouera"
+        fi
     fi
 
     # ── NetworkManager : ACTIF ──────────────────────────────────────────────
@@ -692,10 +674,10 @@ GDM
     # systemd d annuler une condition heritee ; un "!=root" ne le ferait pas.
     # /etc/systemd/user/ vaut pour toutes les sessions, quel que soit le compte.
     #
-    # RESERVE : PipeWire en root n est pas supporte upstream. wireplumber n etant
-    # pas installe sur l image, PipeWire ne decouvre AUCUN peripherique audio et
-    # ne dispute donc pas les cartes au `pulseaudio --system` du banc. Installer
-    # wireplumber romprait cet equilibre : a ne pas faire sans le mesurer.
+    # RESERVE : PipeWire en root n est pas supporte upstream. Sur noble,
+    # wireplumber arrive avec le bureau : son moniteur ALSA est coupe plus haut
+    # (51-osmo-no-alsa.lua) pour qu il ne dispute pas les cartes au
+    # `pulseaudio --system` du banc.
     for _pwu in pipewire.socket pipewire.service; do
         mkdir -p "/etc/systemd/user/${_pwu}.d"
         # GUILLEMETS DOUBLES : ce bloc est en quotes simples. Avec des
@@ -729,8 +711,23 @@ GDM
     _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.png
     if [ -f "$_WP" ]; then
         install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.png
-        printf "\n[org.gnome.desktop.background]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" \
-            >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+        # TROIS sections : la valeur nue, puis les memes pour les "desktop
+        # overrides" [schema:ubuntu] et [schema:GNOME-Greeter] que pose
+        # 10_ubuntu-settings.gschema.override - une session ubuntu:GNOME lit
+        # celles-la de preference, et sans elles le greeter et l extension
+        # DING (icones du bureau) repartaient sur le numbat d Ubuntu.
+        for _sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
+            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
+                >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+        done
+        unset _sec
+        # Icones du bureau en haut a gauche (DING), la ou le fond leur laisse la
+        # place : la carte LAB GRGSM commence a x=320 (tools/wallpaper-render.py).
+        for _sec in "org.gnome.shell.extensions.ding" "org.gnome.shell.extensions.ding:ubuntu"; do
+            printf "\n[%s]\nstart-corner=\047top-left\047\nshow-trash=false\nshow-volumes=false\n" "$_sec" \
+                >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+        done
+        unset _sec
         echo "  [desktop] fond d ecran GSM LAB pose"
     else
         echo "  [desktop] WARN: $_WP absent -- fond d ecran GNOME par defaut"
@@ -738,24 +735,28 @@ GDM
     # ── DOCK : LES FAVORIS DU BANC ──────────────────────────────────────
     # Meme raison que le fond d ecran : sur un live sans persistance, un
     # reglage utilisateur ne survit pas au boot. C est donc le DEFAUT DE SCHEMA
-    # qu il faut poser, pas un gsettings dans une session.
+    # qu il faut poser - et AUSSI la section [org.gnome.shell:ubuntu], que
+    # 10_ubuntu-settings pose avec la liste Ubuntu (thunderbird, rhythmbox...)
+    # et que la session ubuntu:GNOME lit de preference a la valeur nue.
     #
-    # L ordre est celui du banc de reference, gauche a droite dans le dock :
-    #   firefox · fichiers · aide · osmo-launch · deka · claude · linphone ·
-    #   osmo-multi · wireshark
+    # [2026-09-04] L ordre demande, gauche a droite dans le dock :
+    #   firefox · fichiers · claude · lancer le banc · installer · tutoriel ·
+    #   supplements · multi · deka · dsp · linphone · wireshark
     #
     # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
     # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
     # et claude.desktop meme sur une image ou ils ne sont pas installes.
-    # firefox_firefox.desktop est la forme SNAP (le paquet deb serait
-    # firefox.desktop) : c est le snap qui est installe ici.
-    printf "\n[org.gnome.shell]\nfavorite-apps=[\047firefox_firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047yelp.desktop\047, \047osmo-launch.desktop\047, \047osmo-dsp.desktop\047, \047deka.desktop\047, \047claude.desktop\047, \047linphone.desktop\047, \047osmo-multi.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" \
-        >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
-    echo "  [desktop] favoris du dock poses (10 entrees)"
+    # firefox.desktop est le deb Mozilla (le snap etait firefox_firefox.desktop).
+    for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
+        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047deka.desktop\047, \047osmo-dsp.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" "$_sec" \
+            >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    done
+    unset _sec
+    echo "  [desktop] favoris du dock poses (12 entrees)"
 
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
 
-    echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox snap"
+    echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox deb Mozilla"
 fi
 
 # ── Les certificats : verification finale ───────────────────────────────────

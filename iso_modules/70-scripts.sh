@@ -180,6 +180,13 @@ LOG=/var/log/osmo-firefox-snap.log
 if [ -t 1 ]; then exec > >(tee -a "$LOG") 2>&1; else exec >>"$LOG" 2>&1; fi
 echo "=== $(date -Is) osmo-firefox-snap ==="
 
+# [2026-09-04] Firefox est le .deb de Mozilla (packages.mozilla.org) depuis
+# cette date : l ISO ne l installe plus par snap. Ce script ne sert plus qu aux
+# machines installees avant, et il se retire si le deb est la.
+if dpkg-query -W -f='${Maintainer}' firefox 2>/dev/null | grep -qi mozilla; then
+    echo "firefox est le deb Mozilla ($(dpkg-query -W -f='${Version}' firefox)) - rien a faire"
+    exit 0
+fi
 command -v snap >/dev/null 2>&1 || { echo "snapd absent - rien a faire"; exit 1; }
 
 # snapd refuse tout tant qu un changement est en cours :

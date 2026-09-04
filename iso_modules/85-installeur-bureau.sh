@@ -344,6 +344,10 @@ CONKY
         install -d "$_h/Bureau" "$_h/Desktop"
         for _d in "$DIR"/data/desktop/*.desktop; do
             [ -f "$_d" ] || continue
+            # [2026-09-04] "Pilotes graphiques" n est pas un raccourci de
+            # bureau : c est un choix de l installeur (packagechooser@nvidia).
+            # Il reste dans le menu des applications.
+            case "$(basename "$_d")" in osmo-drivers.desktop) continue ;; esac
             cp "$_d" "$_h/Bureau/"  2>/dev/null || true
             cp "$_d" "$_h/Desktop/" 2>/dev/null || true
         done

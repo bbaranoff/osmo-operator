@@ -132,6 +132,8 @@ osmo_reposer_icones
 osmo_installer_firefox() {
     [ "$(id -u)" -eq 0 ] || return 0
     command -v snap >/dev/null 2>&1 || return 0
+    # Deb Mozilla (ISO du 2026-09-04 et apres) : apt le tient a jour, rien a faire.
+    dpkg-query -W -f='${Maintainer}' firefox 2>/dev/null | grep -qi mozilla && return 0
     snap list firefox >/dev/null 2>&1 && return 0
     echo "[*] Installation de Firefox (snap)..."
     if [ -x /usr/local/sbin/osmo-firefox-snap ]; then

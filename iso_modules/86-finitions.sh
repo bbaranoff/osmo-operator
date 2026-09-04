@@ -130,11 +130,9 @@ rm -rf "$ROOTFS/var/lib/osmo-chromium" 2>/dev/null || true
 # reviennent a chaque fois, et le second est le plus trompeur : refuse une
 # fois, Firefox retient le refus et le bouton reste mort sans un mot.
 #
-# /etc/firefox/policies/policies.json est le seul chemin que le snap Firefox
-# peut lire hors de son bac a sable pour sa configuration d entreprise : il est
-# monte par le plug `etc-firefox` (interface system-files), connecte par
-# osmo-firefox-snap.service. Un fichier pose ailleurs (/usr/lib/firefox/...)
-# serait invisible du snap.
+# /etc/firefox/policies/policies.json est le chemin systeme des politiques
+# Firefox sur Linux ; le deb Mozilla (80-chroot.sh) le lit directement, sans
+# plug ni bac a sable - le snap, lui, exigeait une interface system-files.
 #
 # Le CONTENU, lui, ne peut pas etre ecrit ici : il nomme les origines
 # (https://<ip>:80) et le certificat de CETTE machine, qui n existent pas au
@@ -187,7 +185,7 @@ printf '\n'
 printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
 printf '      \033[1;32mcd /opt/GSM/osmo-operator && ./start-direct.sh\033[0m\n\n'
 printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
-printf '  \033[2mNavigateur : \033[0mfirefox\033[2m (snap, confine ; micro deja autorise sur le dashboard).\033[0m\n'
+printf '  \033[2mNavigateur : \033[0mfirefox\033[2m (deb Mozilla, a jour par apt ; micro deja autorise sur le dashboard).\033[0m\n'
 # Le squashfs monte prouve qu on tourne en live ; /run/live/medium, non - il
 # existe vide quand live-boot a monte le medium ailleurs (entree "persistant").
 if [ -e /run/live/rootfs/filesystem.squashfs ]; then
