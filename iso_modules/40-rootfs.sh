@@ -55,8 +55,12 @@ else
     # via binfmt. Sur amd64 le drapeau est vide et debootstrap fait tout d un coup.
     _DBS_FOREIGN=""
     if [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then _DBS_FOREIGN="--foreign"; fi
+    # zstd : noble met COMPRESS=zstd dans initramfs.conf, mais minbase ne pose
+    # pas le binaire. Sans lui, mkinitramfs (declenche par linux-image dans le
+    # chroot) avertit "No zstd in PATH, using gzip" et sort un initrd gzip, plus
+    # gros et plus lent a ouvrir. Il doit etre la AVANT le kernel, donc ici.
     debootstrap $DEBOOTSTRAP_CACHE_OPT --arch="$ISO_ARCH" $_DBS_FOREIGN --variant=minbase --include=\
-systemd,systemd-sysv,dbus,kmod,\
+systemd,systemd-sysv,dbus,kmod,zstd,\
 ca-certificates,curl,gnupg,\
 iproute2,iputils-ping,procps,less,nano \
         "$ISO_SUITE" "$ROOTFS" "$ISO_MIRROR"
