@@ -58,7 +58,10 @@ if [ -n "${OSMO_UBUNTU_MIRROR:-}" ]; then
     _m="${OSMO_UBUNTU_MIRROR%/}"
     for _f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
         [ -f "$_f" ] || continue
-        sed -i -E "s#https?://(archive|[a-z]{2}\.archive)\.ubuntu\.com/ubuntu/?#${_m}#g" "$_f"
+        # archive ET security : security.ubuntu.com vit sur les memes adresses
+        # Canonical qu archive (91.189.9x, 185.125.190.x) - quand l un est
+        # injoignable, l autre aussi. Tout miroir Ubuntu sert noble-security.
+        sed -i -E "s#https?://(archive|[a-z]{2}\.archive|security)\.ubuntu\.com/ubuntu/?#${_m}#g" "$_f"
     done
     echo "[apt-fast] miroir Ubuntu : $_m"
 fi

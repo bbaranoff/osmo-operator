@@ -96,14 +96,12 @@ apt-fast install -y --no-install-recommends docker.io docker-compose-v2 docker-b
 systemctl enable --now docker >/dev/null 2>&1 || true
 HAVE_COMPOSE=0
 docker compose version >/dev/null 2>&1 && HAVE_COMPOSE=1
-# LES LOGS DU BUILD DEFILENT. L affichage BuildKit par defaut (tty) replie la
-# sortie de chaque RUN sur quelques lignes qu il efface au fur et a mesure :
-# une compilation d une heure a l etape 3/64 ne montre rien. En "plain", la
-# sortie de chaque commande est ecrite telle quelle, de bout en bout - c est
-# ce qu on veut lire quand ca dure, et ce qui reste dans un fichier de log.
-# Vaut pour docker compose build ET docker build (et buildx). Surchargeable :
-#     BUILDKIT_PROGRESS=auto ./build.sh
-export BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-plain}"
+# L affichage BuildKit reste celui par defaut (tty, en bleu) : il replie la
+# sortie de chaque RUN sur quelques lignes. Pour lire TOUT ce qu une etape
+# ecrit (une compilation d une heure, un apt muet a l etape 3/64) :
+#     BUILDKIT_PROGRESS=plain ./build.sh
+# Vaut pour docker compose build ET docker build (et buildx).
+export BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-auto}"
 
 # ── Architecture cible : la meme que l hote, ou une autre par buildx ─────────
 # --arch=arm64 sur un hote x86 : docker buildx build --platform linux/arm64,
