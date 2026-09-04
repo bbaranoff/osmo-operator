@@ -36,13 +36,32 @@ export DEBIAN_FRONTEND=noninteractive
 APT_FAST_URL="${APT_FAST_URL:-https://raw.githubusercontent.com/ilikenwf/apt-fast/master/apt-fast}"
 BIN=/usr/local/sbin/apt-fast
 
+# Timeout 30 s et pas de pipelining : un miroir qui ne repond pas echoue en
+# 30 s et passe a l essai suivant, au lieu de bloquer 120 s (le defaut) fois
+# trois essais, en silence. Le pipelining HTTP n apporte rien ici (aria2
+# parallelise deja) et c est une source connue de connexions qui restent
+# pendues derriere certains equilibreurs.
 cat > /etc/apt/apt.conf.d/90osmo-operator <<'CONF'
 // osmo-operator : reglages apt communs (image docker, rootfs ISO, hote)
 Acquire::Languages "none";
 Acquire::Retries "3";
-Acquire::http::Pipeline-Depth "5";
+Acquire::http::Timeout "30";
+Acquire::http::Pipeline-Depth "0";
 Dpkg::Use-Pty "0";
 CONF
+
+# ── Le miroir Ubuntu : celui que l appelant a mesure (packaging/apt-mirror.sh)
+# OSMO_UBUNTU_MIRROR=http://... remplace archive.ubuntu.com dans les sources
+# du systeme ou l on est - l image docker (build-arg), le rootfs de l ISO.
+# Jamais sur l hote sans qu on le demande : build.sh ne l exporte pas.
+if [ -n "${OSMO_UBUNTU_MIRROR:-}" ]; then
+    _m="${OSMO_UBUNTU_MIRROR%/}"
+    for _f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+        [ -f "$_f" ] || continue
+        sed -i -E "s#https?://(archive|[a-z]{2}\.archive)\.ubuntu\.com/ubuntu/?#${_m}#g" "$_f"
+    done
+    echo "[apt-fast] miroir Ubuntu : $_m"
+fi
 
 # aria2 et curl sont les seuls paquets que l on pose encore avec apt-get :
 # apt-fast n existe pas avant eux.

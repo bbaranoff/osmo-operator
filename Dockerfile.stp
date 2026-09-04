@@ -45,6 +45,7 @@ FROM ${BASE_IMAGE} AS base
 ARG DEBIAN_FRONTEND=noninteractive
 # apt-fast : le meme installeur que Dockerfile (packaging/apt-fast-install.sh).
 # Cache apt BuildKit, le meme que Dockerfile (id osmo-apt-archives).
+ARG OSMO_UBUNTU_MIRROR=
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install

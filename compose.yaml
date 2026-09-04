@@ -43,6 +43,7 @@ services:
       dockerfile: Dockerfile
       args:
         OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
+        OSMO_UBUNTU_MIRROR: ${OSMO_UBUNTU_MIRROR:-}
     profiles: [build]
 
   run:
@@ -73,6 +74,7 @@ services:
         HUB_NODES: ${HUB_NODES:-3}
         HUB_OPS: ${HUB_OPS:-1}
         OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
+        OSMO_UBUNTU_MIRROR: ${OSMO_UBUNTU_MIRROR:-}
     profiles: [build]
 
   # ── Le banc : hub + operateur 1 ────────────────────────────────────────────

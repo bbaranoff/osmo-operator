@@ -63,6 +63,10 @@ ENV container=docker \
 # compose, ou docker-buildx : build.sh les installe) - le builder historique
 # ne connait pas --mount.
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
+# Le miroir Ubuntu mesure par build.sh (packaging/apt-mirror.sh) : vide = les
+# sources de l image de base (archive.ubuntu.com), qui peut etre inutilisable
+# depuis l hote (3 Ko/s le 2026-09-04) sans qu apt le dise.
+ARG OSMO_UBUNTU_MIRROR=
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
     && rm -rf /var/lib/apt/lists/*

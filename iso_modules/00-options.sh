@@ -139,7 +139,7 @@ export ISO_UBUNTU ISO_SUITE
 # architectures cohabitent sur le meme hote sans s ecraser), le format de
 # sortie. ISO_IMG_TAG s ajoute au nom des images : osmocom-nitb:arm64.
 case "$ISO_ARCH" in
-    amd64) ISO_MIRROR="http://archive.ubuntu.com/ubuntu";     ISO_IMG_TAG="" ;;
+    amd64) ISO_MIRROR="$(bash "$DIR/packaging/apt-mirror.sh" "$ISO_SUITE" 2>/dev/null || echo http://archive.ubuntu.com/ubuntu)"; ISO_IMG_TAG="" ;;
     arm64) ISO_MIRROR="http://ports.ubuntu.com/ubuntu-ports"; ISO_IMG_TAG=":arm64" ;;
 esac
 export ISO_ARCH ISO_MIRROR ISO_IMG_TAG

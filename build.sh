@@ -136,6 +136,15 @@ if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
     fi
     docker buildx version >/dev/null 2>&1 || { echo -e "${RED}[ERREUR] docker buildx requis pour --arch${NC}"; exit 1; }
 fi
+# ── Le miroir Ubuntu de l image : mesure, pas suppose ───────────────────────
+# archive.ubuntu.com peut repondre a 3 Ko/s depuis ici (vu le 2026-09-04 : dix
+# minutes muettes a l etape 3/64). packaging/apt-mirror.sh mesure quelques
+# miroirs et rend le plus rapide ; il part dans l image en build-arg (compose le
+# lit dans l environnement). OSMO_UBUNTU_MIRROR=http://... force un miroir.
+echo "[*] Miroir Ubuntu (packaging/apt-mirror.sh)..."
+OSMO_UBUNTU_MIRROR="$(bash "$DIR/packaging/apt-mirror.sh" noble)"
+export OSMO_UBUNTU_MIRROR
+echo -e "${GREEN}[OK] miroir : ${OSMO_UBUNTU_MIRROR}${NC}"
 IMG_NITB="osmocom-nitb${IMG_TAG}"
 IMG_LITE="osmocom-nitb:lite${IMG_TAG:+-$OSMO_ARCH}"
 IMG_STP="osmocom-stp${IMG_TAG}"
@@ -251,7 +260,7 @@ debs_from_image() {
 
 # 7. Lancement du build Docker
 echo "--- Lancement du build de l'image ${IMG_NITB} ---"
-if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
+if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR"; then
     echo -e "${GREEN}[OK] Image ${IMG_NITB} construite avec succes.${NC}"
     debs_from_image "$IMG_NITB"
 else
@@ -281,7 +290,7 @@ fi
 # 9. Image STP : le hub SS7 seul (Dockerfile.stp), avec le meme cache .deb
 if [[ "$STP" -eq 1 ]]; then
     echo "--- Lancement du build de l'image ${IMG_STP} ---"
-    if compose_build stp "$IMG_STP" Dockerfile.stp "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
+    if compose_build stp "$IMG_STP" Dockerfile.stp "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR"; then
         echo -e "${GREEN}[OK] Image ${IMG_STP} construite.${NC}"
         debs_from_image "$IMG_STP"
     else
