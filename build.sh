@@ -44,13 +44,20 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC
 NO_CACHE=""
 LITE=0
 STP=0
+OSMO_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 for arg in "$@"; do
     case "$arg" in
         --no-cache) NO_CACHE="--no-cache" ;;
         --lite)     LITE=1 ;;
         --stp)      STP=1 ;;
+        --arch=*)   OSMO_ARCH="${arg#*=}" ;;
+        --arm)      OSMO_ARCH=arm64 ;;
         -h|--help)
-            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp]"
+            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--arch=arm64|--arm]"
+            echo "  --arch=arm64 Construit les images pour arm64 (Raspberry Pi 4) sur cet hote,"
+            echo "               par docker buildx --platform linux/arm64 sous qemu-user-static."
+            echo "               Images taguees :arm64 (osmocom-nitb:arm64...). LENT au premier"
+            echo "               build (emulation) ; le cache .deb rend les suivants courts."
             echo "  --no-cache   Reconstruction complete : cache docker ignore, paquets .deb recompiles"
             echo "               et le cache /var/cache/osmo-debs reecrit."
             echo "  --lite       Construit EN PLUS osmocom-nitb:lite : la meme pile, sans les"
@@ -89,6 +96,49 @@ apt-fast install -y --no-install-recommends docker.io docker-compose-v2 docker-b
 systemctl enable --now docker >/dev/null 2>&1 || true
 HAVE_COMPOSE=0
 docker compose version >/dev/null 2>&1 && HAVE_COMPOSE=1
+# LES LOGS DU BUILD DEFILENT. L affichage BuildKit par defaut (tty) replie la
+# sortie de chaque RUN sur quelques lignes qu il efface au fur et a mesure :
+# une compilation d une heure a l etape 3/64 ne montre rien. En "plain", la
+# sortie de chaque commande est ecrite telle quelle, de bout en bout - c est
+# ce qu on veut lire quand ca dure, et ce qui reste dans un fichier de log.
+# Vaut pour docker compose build ET docker build (et buildx). Surchargeable :
+#     BUILDKIT_PROGRESS=auto ./build.sh
+export BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-plain}"
+
+# ── Architecture cible : la meme que l hote, ou une autre par buildx ─────────
+# --arch=arm64 sur un hote x86 : docker buildx build --platform linux/arm64,
+# qemu-user-static emulant l aarch64 dans les conteneurs de construction. Il
+# faut binfmt_misc avec le drapeau F (fix-binary) - sans lui le conteneur ne
+# trouve pas l emulateur. Les images sortent taguees :arm64 pour cohabiter avec
+# les images natives. Le cache .deb est deja par architecture (osmo-deb nomme
+# les paquets ..._arm64.deb).
+HOST_ARCH="$(dpkg --print-architecture)"
+BUILD_PLATFORM=""; IMG_TAG=""
+if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
+    case "$OSMO_ARCH" in
+        arm64) BUILD_PLATFORM=linux/arm64 ;;
+        amd64) BUILD_PLATFORM=linux/amd64 ;;
+        *) echo -e "${RED}[ERREUR] --arch : amd64 ou arm64 (recu : $OSMO_ARCH)${NC}"; exit 2 ;;
+    esac
+    IMG_TAG=":$OSMO_ARCH"
+    apt-fast install -y --no-install-recommends qemu-user-static binfmt-support >/dev/null 2>&1 || true
+    _bf="/proc/sys/fs/binfmt_misc/qemu-${OSMO_ARCH/arm64/aarch64}"
+    _bf="${_bf/amd64/x86_64}"
+    [ -e "$_bf" ] || update-binfmts --enable "$(basename "$_bf")" >/dev/null 2>&1 || true
+    if ! { [ -e "$_bf" ] && grep -q '^flags:.*F' "$_bf"; }; then
+        echo "[*] binfmt $(basename "$_bf") sans drapeau F : enregistrement via tonistiigi/binfmt..."
+        docker run --privileged --rm tonistiigi/binfmt --install "${OSMO_ARCH}" >/dev/null 2>&1 || true
+    fi
+    if [ -e "$_bf" ] && grep -q '^flags:.*F' "$_bf"; then
+        echo -e "${GREEN}[OK] emulation ${OSMO_ARCH} (binfmt fix-binary) - images taguees ${IMG_TAG}${NC}"
+    else
+        echo -e "${RED}[ERREUR] binfmt ${OSMO_ARCH} indisponible (qemu-user-static, binfmt-support)${NC}"; exit 1
+    fi
+    docker buildx version >/dev/null 2>&1 || { echo -e "${RED}[ERREUR] docker buildx requis pour --arch${NC}"; exit 1; }
+fi
+IMG_NITB="osmocom-nitb${IMG_TAG}"
+IMG_LITE="osmocom-nitb:lite${IMG_TAG:+-$OSMO_ARCH}"
+IMG_STP="osmocom-stp${IMG_TAG}"
 [ "$HAVE_COMPOSE" = 1 ] && echo -e "${GREEN}[OK] $(docker compose version)${NC}" \
     || echo -e "${YELLOW}[WARN] docker compose absent - repli sur docker build${NC}"
 
@@ -169,7 +219,13 @@ export OSMO_DEB_REFRESH
 #   $1 = service (nitb|run|lite|stp)   $2 = image   $3 = Dockerfile   $4.. = build-args
 compose_build() {
     local svc="$1" image="$2" dockerfile="$3"; shift 3
-    if [ "$HAVE_COMPOSE" = 1 ]; then
+    if [ -n "$BUILD_PLATFORM" ]; then
+        # Autre architecture : buildx --platform, --load pour que l image soit
+        # dans le docker local (et non seulement dans le cache de buildx).
+        local args=(); local a; for a in "$@"; do args+=(--build-arg "$a"); done
+        docker buildx build --platform "$BUILD_PLATFORM" --load $NO_CACHE \
+            "${args[@]+"${args[@]}"}" -f "$DIR/$dockerfile" -t "$image" "$DIR"
+    elif [ "$HAVE_COMPOSE" = 1 ]; then
         docker compose -f "$DIR/compose.yaml" build $NO_CACHE "$svc"
     else
         local args=(); local a; for a in "$@"; do args+=(--build-arg "$a"); done
@@ -194,10 +250,10 @@ debs_from_image() {
 }
 
 # 7. Lancement du build Docker
-echo "--- Lancement du build de l'image osmocom-nitb ---"
-if compose_build nitb osmocom-nitb Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
-    echo -e "${GREEN}[OK] Image osmocom-nitb construite avec succes.${NC}"
-    debs_from_image osmocom-nitb
+echo "--- Lancement du build de l'image ${IMG_NITB} ---"
+if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
+    echo -e "${GREEN}[OK] Image ${IMG_NITB} construite avec succes.${NC}"
+    debs_from_image "$IMG_NITB"
 else
     echo -e "${RED}[ERREUR] Le build Docker a echoue.${NC}"
     exit 1
@@ -210,10 +266,10 @@ fi
 # Dockerfile.lite les retire et aplatit le resultat (voir son entete : effacer
 # dans une couche de plus ne rend aucun espace).
 if [[ "$LITE" -eq 1 ]]; then
-    echo "--- Lancement du build de l'image osmocom-nitb:lite ---"
-    if LITE_BASE=osmocom-nitb LITE_IMAGE=osmocom-nitb:lite \
-       compose_build lite osmocom-nitb:lite Dockerfile.lite "BASE=osmocom-nitb"; then
-        echo -e "${GREEN}[OK] Image osmocom-nitb:lite construite.${NC}"
+    echo "--- Lancement du build de l'image ${IMG_LITE} ---"
+    if LITE_BASE="$IMG_NITB" LITE_IMAGE="$IMG_LITE" \
+       compose_build lite "$IMG_LITE" Dockerfile.lite "BASE=$IMG_NITB"; then
+        echo -e "${GREEN}[OK] Image ${IMG_LITE} construite.${NC}"
         docker images --format '  {{.Repository}}:{{.Tag}}\t{{.Size}}' \
             | grep -E '^\s+osmocom-nitb:(latest|lite)' || true
     else
@@ -224,10 +280,10 @@ fi
 
 # 9. Image STP : le hub SS7 seul (Dockerfile.stp), avec le meme cache .deb
 if [[ "$STP" -eq 1 ]]; then
-    echo "--- Lancement du build de l'image osmocom-stp ---"
-    if compose_build stp osmocom-stp Dockerfile.stp "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
-        echo -e "${GREEN}[OK] Image osmocom-stp construite.${NC}"
-        debs_from_image osmocom-stp
+    echo "--- Lancement du build de l'image ${IMG_STP} ---"
+    if compose_build stp "$IMG_STP" Dockerfile.stp "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH"; then
+        echo -e "${GREEN}[OK] Image ${IMG_STP} construite.${NC}"
+        debs_from_image "$IMG_STP"
     else
         echo -e "${RED}[ERREUR] Le build de l'image stp a echoue.${NC}"
         exit 1

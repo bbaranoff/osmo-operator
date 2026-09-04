@@ -786,7 +786,11 @@ RUN if [ ! -d "/opt/GSM/osmo-egprs-web/" ]; then \
 # nodesource setup_22.x (build-iso.sh). Garder les deux alignés : le dashboard
 # est le même server.js des deux côtés.
 ARG NODE_VERSION=v22.23.2
-RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
+# Le tarball suit l architecture de l image (x64 sur amd64, arm64 sur un build
+# --platform linux/arm64 pour le Raspberry Pi) : un node x64 dans une image
+# arm64 ne se lancerait pas, et le dashboard avec lui.
+RUN case "$(uname -m)" in x86_64) _na=x64 ;; aarch64) _na=arm64 ;; *) echo "arch node inconnue: $(uname -m)" >&2; exit 1 ;; esac && \
+    curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${_na}.tar.xz" \
         -o /tmp/node.tar.xz && \
     mkdir -p /opt/node && \
     tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 && \
