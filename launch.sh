@@ -117,6 +117,42 @@ if [ "$_bloc_direct" = "1" ]; then
         echo -e "  ${CYAN}→${NC} $1"
     }
 
+    # ── ET LES OPERATEURS EN CONTENEUR ─────────────────────────────────────
+    # [2026-09-04] « Arreter le banc » LAISSAIT LE BANC DEBOUT. Le natif
+    # s arretait bien, mais les operateurs docker du multi (osmo-operator-2,
+    # -3, le hub osmo-inter-stp) continuaient de tourner : chacun porte SON
+    # dashboard, SON asterisk, SON HLR et son propre gapk, dans son propre
+    # cgroup (/system.slice/docker-<id>.scope) - donc hors de portee de
+    # `systemctl stop osmo-banc`, quoi que fasse son ExecStop. Le 8080
+    # repondait encore, les abonnes restaient « rattaches », le telephone
+    # sonnait toujours : de l exterieur, l arret n avait rien arrete.
+    #
+    # osmo-multi.service porte pourtant Requires=osmo-banc.service, et systemd
+    # propage bien l arret - MAIS SEULEMENT SI CETTE UNITE EST ACTIVE. Tuee en
+    # cours de demarrage (constate : Main process exited, signal=15/TERM), elle
+    # passe « failed » : plus rien ne porte les conteneurs, aucun ExecStop ne
+    # tourne, et ils survivent a tous les arrets suivants. On arrete donc
+    # l unite quand elle existe, PUIS on balaie ce qui reste.
+    #
+    # Le balai n est pas redondant avec `start-multi.sh --stop` : celui-ci ne
+    # connait que la topologie declaree dans /etc/osmocom/osmo-multi.conf, et
+    # un conteneur d une topologie precedente lui echapperait. Le filtre est
+    # celui que start.sh applique deja en tete de course.
+    _arret_multi() {
+        local _m="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
+        if systemctl cat "$_m" >/dev/null 2>&1; then
+            timeout 200 systemctl stop "$_m" >/dev/null 2>&1 || true
+            systemctl reset-failed "$_m" 2>/dev/null || true
+        fi
+        command -v docker >/dev/null 2>&1 || return 0
+        local _c
+        _c="$(docker ps -q --filter name=osmo- 2>/dev/null)" || return 0
+        [ -n "$_c" ] || return 0
+        _note "Arret des operateurs en conteneur..."
+        # shellcheck disable=SC2086  # une liste d ID, un par ligne
+        docker rm -f $_c >/dev/null 2>&1 || true
+    }
+
     # ── LE TABLEAU DE BORD ─────────────────────────────────────────────────
     # Un clic, une page. xdg-open passe par le navigateur par defaut, donc par
     # la fenetre deja ouverte s il y en a une : un onglet de plus, pas une
@@ -204,6 +240,9 @@ if [ "$_bloc_direct" = "1" ]; then
                 systemctl stop osmo-egprs-web.service osmo-hlr.service 2>/dev/null || true
                 ;;
         esac
+        # Le natif est a terre ; les operateurs en conteneur, eux, ne
+        # dependent d aucun de ces chemins (voir _arret_multi).
+        _arret_multi
         # Sans ca l unite reste « failed » et le prochain demarrage part d un
         # etat d echec.
         systemctl reset-failed "$_svc" 2>/dev/null || true

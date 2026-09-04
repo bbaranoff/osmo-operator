@@ -119,6 +119,32 @@ start_lab() {
     bash ./start.sh
 }
 
+# ── LE NATIF AUSSI ──────────────────────────────────────────────────────────
+# [2026-09-04] `osmo-launch stop` promet « arrete tout » et balayait bien les
+# conteneurs - mais pas l operateur NATIF, qui vit dans osmo-banc.service
+# (start-direct.sh, session tmux « calypso »). On arretait donc la moitie du
+# banc : le coeur natif (osmo-stp, hlr, msc, bsc, asterisk) restait debout, et
+# c est LUI qui tient le 5060 et le 8080 que le lancement suivant reclame.
+# Symetrique de launch.sh --stop, qui arrete desormais les deux cotes.
+#
+# D ABORD LE NATIF, ENSUITE LES CONTENEURS : l unite delegue a
+# start-direct.sh --stop, qui demonte radio et coeur proprement ; le faire
+# apres un `docker rm -f` ne changerait rien pour lui, mais l ordre inverse est
+# celui de l arret propre et c est celui qu on garde partout.
+stop_natif() {
+    local u="${OSMO_BANC_SERVICE:-osmo-banc.service}"
+    command -v systemctl >/dev/null 2>&1 || return 0
+    [ -d /run/systemd/system ] || return 0
+    systemctl cat "$u" >/dev/null 2>&1 || return 0
+    echo -e "${YELLOW}[natif] Arret ${u}...${NC}"
+    timeout 200 systemctl stop "$u" >/dev/null 2>&1 || true
+    # ExecStop ne tourne pas sur une unite « failed » : le coeur, lance par
+    # run.sh dans SES PROPRES unites, resterait alors debout.
+    systemctl stop osmo-egprs-web.service osmo-hlr.service >/dev/null 2>&1 || true
+    systemctl reset-failed "$u" >/dev/null 2>&1 || true
+    echo -e "  ${GREEN}✓${NC} Natif arrete"
+}
+
 stop_lab() {
     echo -e "${YELLOW}[lab] Arret osmo-operator...${NC}"
     if [ -f "$LAB_DIR/start.sh" ]; then
@@ -243,6 +269,7 @@ case "$CMD" in
     stop)
         banner
         stop_web
+        stop_natif
         stop_lab
         echo -e "\n${GREEN}Tout arrete.${NC}"
         ;;
@@ -262,6 +289,7 @@ case "$CMD" in
     restart)
         banner
         stop_web
+        stop_natif
         stop_lab
         sleep 3
         do_start
@@ -271,7 +299,7 @@ case "$CMD" in
         echo ""
         echo "  (rien)    Lancement interactif (lab + web)"
         echo "  --auto    Lancement automatique (2 ops, 8 MS, defauts)"
-        echo "  stop      Arrete tout (lab + web + containers)"
+        echo "  stop      Arrete tout (natif + lab + web + containers)"
         echo "  restart   Redemarre tout"
         echo "  status    Etat des services"
         echo "  web-only  Lance uniquement le dashboard web"
