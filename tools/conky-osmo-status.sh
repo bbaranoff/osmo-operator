@@ -8,6 +8,14 @@ OK='${color2}●${color}'; KO='${color3}○${color}'; WARN='${color4}●${color}
 C1='${color1}'; C='${color}'; C2='${color2}'; AR='${alignr}'
 port_open() { timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# ── pgrep -x COMPARE AU NOM TRONQUE A 15 CARACTERES ─────────────────────────
+# [2026-09-04] « pgrep -x osmo-sip-connector » ne matche JAMAIS : le noyau ne
+# garde que 15 caracteres de nom (comm), soit « osmo-sip-connec ». Idem pour
+# proto-smsc-daemon (« proto-smsc-daem »). SIP et SMSC restaient rouges avec les
+# deux demons en marche. On tronque donc le motif comme le noyau tronque le nom.
+alive_x() { pgrep -x "${1:0:15}" >/dev/null 2>&1; }
+# Motif sur la ligne de commande complete (scripts python, chemins).
+alive_f() { pgrep -f "$1" >/dev/null 2>&1; }
 
 case "${1:-}" in
 role)
@@ -28,7 +36,7 @@ core)
              MGW:osmo-mgw:4243 SGSN:osmo-sgsn:4245 GGSN:osmo-ggsn:4260 PCU:osmo-pcu:4240 \
              BTS:osmo-bts-trx:4241 SIP:osmo-sip-connector:4256 SMSC:proto-smsc-daemon:0 PBX:asterisk:0; do
         IFS=: read -r name proc port <<< "$e"
-        if pgrep -x "$proc" >/dev/null 2>&1; then
+        if alive_x "$proc"; then
             if [ "$port" != 0 ] && ! port_open "$port"; then s="$WARN"; else s="$OK"; fi
         else s="$KO"; fi
         printf '%s %-5s' "$s" "$name"
@@ -41,12 +49,25 @@ radio)
     pgrep -x virtphy >/dev/null 2>&1 && phy="virtphy"
     pgrep -f 'pont.py' >/dev/null 2>&1 && phy="$phy + pont"
     echo "PHY ${C1}${phy}${C}"
-    for e in TRX:osmo-trx:f MOBILE:mobile:x TRXCON:trxcon:x QEMU:qemu-system-arm:f GAPK:gapk:x GRGSM:grgsm_decode:f; do
-        IFS=: read -r name proc mode <<< "$e"
-        if [ "$mode" = x ]; then pgrep -x "$proc" >/dev/null 2>&1 && s="$OK" || s="$KO"
-        else pgrep -f "$proc" >/dev/null 2>&1 && s="$OK" || s="$KO"; fi
-        printf '%s %-7s' "$s" "$name"
-    done; echo
+    # ── CE QUE CHAQUE PASTILLE CHERCHE VRAIMENT ──────────────────────────
+    # [2026-09-04] Le banc de l'ISO tourne en faketrx + pont : il n'y a AUCUN
+    # binaire osmo-trx, le transceiver de la BTS est pont/pont.py et celui du
+    # MS#2 fake_trx.py. gapk n'existe que sous le nom osmo-gapk, lance par
+    # gapk-start.sh le temps d'un appel ; hors appel, le veilleur
+    # (gapk-start.sh auto) EST l'etat nominal. gr-gsm est remplace par
+    # qosmo-grgsm (gsm_sniff.py) : grgsm_decode n'est pas installe. Les trois
+    # restaient rouges sur un banc en parfait etat.
+    s=""
+    { alive_f 'osmo-trx' || alive_f 'pont/pont\.py' || alive_f 'fake_trx\.py'; } && s="$s$OK TRX     " || s="$s$KO TRX     "
+    alive_x mobile                  && s="$s$OK MOBILE  " || s="$s$KO MOBILE  "
+    alive_x trxcon                  && s="$s$OK TRXCON  " || s="$s$KO TRXCON  "
+    alive_f 'qemu-system-arm'       && s="$s$OK QEMU    " || s="$s$KO QEMU    "
+    if alive_x osmo-gapk; then s="$s$OK GAPK    "
+    elif alive_f 'gapk-start\.sh'; then s="$s$OK GAPK    "
+    else s="$s$KO GAPK    "; fi
+    { alive_f 'grgsm_(decode|livemon)' || alive_f 'gsm_sniff\.py' || alive_x qosmo-grgsm; } \
+        && s="$s$OK GRGSM  " || s="$s$KO GRGSM  "
+    echo "$s"
     cfg=/etc/osmocom/osmo-bts.cfg; [ -f /etc/osmocom/osmo-bts-trx.cfg ] && cfg=/etc/osmocom/osmo-bts-trx.cfg
     arfcn="$(awk '/^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null)"
     plmn="$(awk '/network country code/{c=$4} /mobile network code/{n=$4} END{if(c) print c"-"n}' /etc/osmocom/osmo-msc.cfg 2>/dev/null)"
@@ -68,7 +89,10 @@ services)
     s=""
     port_open 8080 || port_open 8443 && s="$s$OK web " || s="$s$KO web "
     pgrep -x pulseaudio >/dev/null 2>&1 && s="$s$OK pulse " || s="$s$KO pulse "
-    n="$(tmux -S /tmp/osmocom_tmux list-sessions 2>/dev/null | wc -l)"; [ "$n" -gt 0 ] && s="$s$OK tmux($n) " || s="$s$KO tmux "
+    # run.sh (qosmo-grgsm) ouvre ses sessions sur le socket PAR DEFAUT de root ;
+    # /tmp/osmocom_tmux est celui de l'ancien start.sh. On compte les deux.
+    n=$(( $(tmux list-sessions 2>/dev/null | wc -l) + $(tmux -S /tmp/osmocom_tmux list-sessions 2>/dev/null | wc -l) ))
+    [ "$n" -gt 0 ] && s="$s$OK tmux($n) " || s="$s$KO tmux "
     if have docker; then c="$(docker ps -q 2>/dev/null | wc -l)"; [ "$c" -gt 0 ] && s="$s$OK docker($c) " || s="$s$KO docker "; fi
     have nvidia-smi && s="$s$OK nvidia "
     echo "$s"

@@ -38,6 +38,20 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
+
+# ── LE NOMBRE D'ABONNES NE PASSE PAS PAR ~/.bashrc ──────────────────────────
+# [2026-09-04] /etc/osmocom/coeur.env (N_MS, ecrit par build-iso.sh) n'etait
+# charge que par /root/.bashrc - donc SEULEMENT dans un shell interactif de
+# root. Depuis l'icone (launch.sh -> pkexec), depuis une unite systemd ou
+# depuis start-multi.sh, personne ne le lisait : run_modules/21-abonnes-hlr.sh
+# retombait sur N_MS=1, le HLR n'avait que 100101, et le second mobile se
+# faisait creer a la volee par « subscriber-create-on-demand 5 » avec un
+# MSISDN aleatoire a cinq chiffres (31804) et SANS Ki - donc injoignable et
+# rejete a l'authentification. On le charge ici, une fois pour toutes ; le
+# « := » du fichier laisse gagner un N_MS=3 pose dans l'environnement.
+if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
+    set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
+fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
 # 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).

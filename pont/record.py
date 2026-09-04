@@ -96,7 +96,14 @@ class Direction:
             self.fifo_pending = b""
 
     def write_frame(self, fn, spf, step, blen, silence):
-        if self.off or self.fh is None:
+        # LE FIFO FFT NE DEPEND PAS DU DISQUE. [2026-09-04] fh est None quand
+        # l'enregistrement fichier est coupe (moins de PONT_AIRREC_MINFREE_MB
+        # libres : le cas de toute cle live, dont l'overlay tient en RAM). Le
+        # FIFO n'etait alimente qu'ici, apres l'ecriture fichier : sans .cfile,
+        # plus de spectre I/Q dans le dashboard ni dans le Conky, et le bouton
+        # record du dashboard (qui lit CE fifo) restait muet. Le fichier reste
+        # coupe faute de place - c'est voulu - mais les trames passent au FIFO.
+        if self.off or (self.fh is None and not self.fifo_path):
             return
         with self.lock:
             slots = self.frames.pop(fn, None)
@@ -112,14 +119,21 @@ class Direction:
             frame = silence
         octets = frame.tobytes()
         self._fifo(octets)
+        self.n_frames += 1
+        if self.fh is None:
+            return
         try:
             self.fh.write(octets)
         except OSError as e:
+            # Le fichier se coupe, pas le FIFO : voir l'en-tete de la methode.
             log.warning("enregistrement %s : ecriture echouee (%s), coupe", self.name, e)
-            self.off = True
+            try:
+                self.fh.close()
+            except OSError:
+                pass
+            self.fh = None
             return
         self.bytes += len(octets)
-        self.n_frames += 1
         if self.restart or self.bytes >= self.max_bytes:
             self.restart = False
             self.fh.flush()
@@ -164,9 +178,11 @@ class Recorder(threading.Thread):
         if osr % 4:
             log.warning("enregistrement refuse : OSR=%d doit etre multiple de 4", osr)
             return
-        if not self.dl.open():
+        # Un sens dont le fichier ne s'ouvre pas (place, droits) garde son FIFO :
+        # il ne s'eteint (off) que s'il n'a pas de FIFO a servir non plus.
+        if not self.dl.open() and not self.dl.fifo_path:
             self.dl.off = True
-        if not self.ul.off and not self.ul.open():
+        if not self.ul.off and not self.ul.open() and not self.ul.fifo_path:
             self.ul.off = True
         if self.dl.off and self.ul.off:
             return
