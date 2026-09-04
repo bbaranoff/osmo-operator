@@ -6,16 +6,37 @@
 set -u
 OK='${color2}●${color}'; KO='${color3}○${color}'; WARN='${color4}●${color}'
 C1='${color1}'; C='${color}'; C2='${color2}'; AR='${alignr}'
-port_open() { timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
 # ── pgrep -x COMPARE AU NOM TRONQUE A 15 CARACTERES ─────────────────────────
 # [2026-09-04] « pgrep -x osmo-sip-connector » ne matche JAMAIS : le noyau ne
 # garde que 15 caracteres de nom (comm), soit « osmo-sip-connec ». Idem pour
 # proto-smsc-daemon (« proto-smsc-daem »). SIP et SMSC restaient rouges avec les
 # deux demons en marche. On tronque donc le motif comme le noyau tronque le nom.
-alive_x() { pgrep -x "${1:0:15}" >/dev/null 2>&1; }
+# ── L OPERATEUR CHOISI DANS L ENCART ────────────────────────────────────────
+# [2026-09-04] tools/osmo-panel.py (fleches < >) ecrit /run/osmo-fft/operator :
+# OP=, MODE=native|docker, IP=, NAME=osmo-operator-N. Sur un conteneur, chaque
+# sonde (pgrep, port, sqlite) s execute DEDANS (docker exec) : le Conky suit
+# l encart. Sans fichier ou en natif : la machine, comme avant.
+OP_FILE="${OSMO_FFT_DIR:-/run/osmo-fft}/operator"
+OP_ID=1; OP_MODE=native; OP_NAME=""
+if [ -r "$OP_FILE" ]; then
+    OP_ID="$(sed -n 's/^OP=//p' "$OP_FILE" | head -1)"; OP_ID="${OP_ID:-1}"
+    OP_MODE="$(sed -n 's/^MODE=//p' "$OP_FILE" | head -1)"; OP_MODE="${OP_MODE:-native}"
+    OP_NAME="$(sed -n 's/^NAME=//p' "$OP_FILE" | head -1)"
+fi
+# in_op CMD... : execute la commande ici, ou dans le conteneur de l operateur.
+if [ "$OP_MODE" = docker ] && [ -n "$OP_NAME" ]; then
+    in_op() { docker exec "$OP_NAME" "$@" 2>/dev/null; }
+else
+    in_op() { "$@"; }
+fi
+port_open() {
+    if [ "$OP_MODE" = docker ]; then in_op timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null
+    else timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; fi
+}
+alive_x() { in_op pgrep -x "${1:0:15}" >/dev/null 2>&1; }
 # Motif sur la ligne de commande complete (scripts python, chemins).
-alive_f() { pgrep -f "$1" >/dev/null 2>&1; }
+alive_f() { in_op pgrep -f "$1" >/dev/null 2>&1; }
 
 case "${1:-}" in
 role)
@@ -23,7 +44,8 @@ role)
     n="$(awk -F= '/^OSMO_NODE=|^NODE_ID=/{print $2}' /etc/osmo-role 2>/dev/null | head -1)"
     h="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role 2>/dev/null)"
     live=""; [ -e /run/live/rootfs/filesystem.squashfs ] && live=" \${color4}LIVE${C}"
-    echo "${r:-operateur}${n:+ noeud $n}${h:+ · hub $h}$live" ;;
+    opl=""; [ "$OP_MODE" = docker ] && opl=" \${color2}op $OP_ID${C} ($OP_NAME)"
+    echo "${r:-operateur}${n:+ noeud $n}${h:+ · hub $h}$live$opl" ;;
 net)
     ip -o -4 addr show up 2>/dev/null | awk '$2!="lo" && $2!~/^(veth|br-|docker|apn)/ {print $2, $4}' | sort -u | head -5 \
     | while read -r ifc addr; do
@@ -68,13 +90,17 @@ radio)
     { alive_f 'grgsm_(decode|livemon)' || alive_f 'gsm_sniff\.py' || alive_x qosmo-grgsm; } \
         && s="$s$OK GRGSM  " || s="$s$KO GRGSM  "
     echo "$s"
-    cfg=/etc/osmocom/osmo-bts.cfg; [ -f /etc/osmocom/osmo-bts-trx.cfg ] && cfg=/etc/osmocom/osmo-bts-trx.cfg
-    arfcn="$(awk '/^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null)"
-    plmn="$(awk '/network country code/{c=$4} /mobile network code/{n=$4} END{if(c) print c"-"n}' /etc/osmocom/osmo-msc.cfg 2>/dev/null)"
-    a5="$(awk '/encryption a5/{$1="";$2="";print; exit}' /etc/osmocom/osmo-msc.cfg 2>/dev/null | sed 's/^ *//')"
+    arfcn="$(in_op cat /etc/osmocom/osmo-bsc.cfg 2>/dev/null | awk '/^ *arfcn /{print $2; exit}')"
+    plmn="$(in_op cat /etc/osmocom/osmo-msc.cfg 2>/dev/null | awk '/network country code/{c=$4} /mobile network code/{n=$4} END{if(c) print c"-"n}')"
+    a5="$(in_op cat /etc/osmocom/osmo-msc.cfg 2>/dev/null | awk '/encryption a5/{$1="";$2="";print; exit}' | sed 's/^ *//')"
     echo "PLMN ${C1}${plmn:--}${C}  ARFCN ${C1}${arfcn:--}${C}  A5 ${C1}${a5:--}${C}" ;;
 subs)
     db=/var/lib/osmocom/hlr.db
+    # Le conteneur n a pas forcement sqlite3 : on lit sa base par une copie.
+    if [ "$OP_MODE" = docker ]; then
+        dbl="/tmp/.conky-hlr-${OP_NAME}.db"
+        docker cp "$OP_NAME:$db" "$dbl" >/dev/null 2>&1 && db="$dbl"
+    fi
     if have sqlite3 && [ -r "$db" ]; then
         tot="$(sqlite3 "$db" 'select count(*) from subscriber;' 2>/dev/null)"
         att="$(sqlite3 "$db" "select count(*) from subscriber where vlr_number is not null and vlr_number != '';" 2>/dev/null)"

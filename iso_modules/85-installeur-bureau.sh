@@ -307,7 +307,7 @@ INSTALLER
 Type=Application
 Name=Conky osmo-operator
 Comment=Tableau de bord du banc GSM (coeur, radio, abonnes, services)
-Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky-fft.conf; exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
+Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; /opt/GSM/osmo-operator/tools/osmo-panel.py >/tmp/osmo-panel.log 2>&1 & exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
 Icon=utilities-system-monitor
 Terminal=false
 NoDisplay=true
@@ -319,6 +319,7 @@ CONKY
     chmod +x "$ROOTFS/opt/GSM/osmo-operator/tools/conky-osmo-status.sh" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-drivers.sh" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-fft-snap.py" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-panel.py" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/wallpaper-render.py" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-wallpaper.sh" 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Conky du banc : autostart GNOME (live et disque), config ${CYAN}configs/conky/osmo-conky.conf${NC}"
@@ -609,9 +610,9 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # utilisent - le build ne depend pas d un push pour ces fichiers-la.
     _rt="$ROOTFS/opt/GSM/osmo-operator"
     install -d "$_rt/tools" "$_rt/configs/wallpaper" "$_rt/configs/conky"
-    install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-wallpaper.sh" "$_rt/tools/"
+    install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$_rt/tools/"
     install -m644 "$DIR/configs/wallpaper/tower.jpg" "$_rt/configs/wallpaper/"
-    install -m644 "$DIR/configs/conky/osmo-conky.conf" "$DIR/configs/conky/osmo-conky-fft.conf" "$_rt/configs/conky/"
+    install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
     # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
     # on repose ici celui de CE depot, le rendu du jour de tools/wallpaper-render.py.
@@ -646,14 +647,17 @@ EOF
     chroot "$ROOTFS" systemctl enable osmo-wallpaper.timer 2>/dev/null || true
 
     # ── 2. Les spectres I/Q dans le Conky du bas a droite ────────────────────
-    # tools/osmo-fft-snap.py trace ms.png / bts.png dans /run/osmo-fft depuis
-    # /psd du dashboard (les FFT de l onglet fft1) ; osmo-conky-fft.conf les
+    # [2026-09-04] tools/osmo-fft-snap.py trace /run/osmo-fft/panel.png : le
+    # cadre Calvin & Hobbes du fond (decoupe dans le PNG du jour) qui fond vers
+    # « FFT du mobile + mobile.log » quand /psd a un flux ; osmo-panel.py (GTK,
+    # fenetre de type bureau, cliquable : Dashboard, tmux, fleches operateur)
+    # l affiche sur le cadre, a l echelle de l ecran. Il vit avec le dashboard et
     # affiche. Le service vit avec le dashboard et se relance sans lui : sans
     # flux, l image dit "pas de flux" au lieu de figer.
     cat > "$ROOTFS/etc/systemd/system/osmo-fft-snap.service" <<'EOF'
 [Unit]
-Description=Spectres I/Q (MS, BTS) en PNG pour le Conky du bureau
-After=osmo-egprs-web.service
+Description=Encart vivant du bureau : strip du jour qui fond vers FFT du mobile + mobile.log
+After=osmo-egprs-web.service osmo-wallpaper.service
 ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 
 [Service]
