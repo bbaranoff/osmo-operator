@@ -1,0 +1,58 @@
+[Unit]
+Description=osmo-operator - banc GSM autonome (start-direct.sh, session tmux « calypso »)
+Documentation=file:/opt/GSM/osmo-operator/README.md
+# Le banc a besoin du son systeme (osmo-pulse), des adresses privees du noeud
+# et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
+# services absent ne doit pas empecher la radio de monter.
+After=network-online.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
+Wants=network-online.target osmo-pulse.service
+ConditionPathExists=/opt/GSM/osmo-operator/start-direct.sh
+# Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
+# (Requires= dans osmo-multi.service), il ne le remplace pas.
+
+[Service]
+# ── ONESHOT + RemainAfterExit : LE BANC VIT DANS TMUX, PAS DANS ExecStart ──
+# start-direct.sh passe la main a run.sh (qosmo-grgsm), qui monte tout dans
+# une session tmux puis SORT sans s'y attacher (pas de tty). Avec Type=simple,
+# systemd prendrait cette sortie pour la fin du service et tuerait le cgroup -
+# donc la pile entiere. En oneshot + RemainAfterExit, l'unite reste « active
+# (exited) » et les processus du cgroup (tmux, demons, qemu, pont) vivent
+# jusqu'a ExecStop.
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/GSM/osmo-operator
+# ── LE MEME ENVIRONNEMENT QU'UN TERMINAL DE ROOT ──────────────────────────
+# HOME : mobile.cfg vit dans /root/.osmocom/bb. PATH : le venv python
+# (/root/.env) que ~/.bashrc active, gr-gsm et les ponts en dependent ; systemd
+# ne lit pas ~/.bashrc. /etc/osmocom/coeur.env (N_MS) est charge par
+# start-direct.sh lui-meme.
+Environment=HOME=/root USER=root LOGNAME=root
+Environment=VIRTUAL_ENV=/root/.env
+Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PULSE_SERVER=unix:/var/run/pulse/native
+# Pas de menu, pas d'attache tmux, pas de couleurs : il n'y a personne devant.
+Environment=NO_MENU=1 CALYPSO_NO_ATTACH=1 NO_COLOR=1 OSMO_NO_TERM=1 OSMO_LAUNCH_APPS=0
+# Options de lancement (--dsp, --op 2, --node 3, --regen...) :
+#   - durables : OSMO_BANC_ARGS="--dsp" dans /etc/default/osmo-banc
+#   - pour une fois : launch.sh les pose via systemctl set-environment
+EnvironmentFile=-/etc/default/osmo-banc
+ExecStart=/bin/bash /opt/GSM/osmo-operator/start-direct.sh $OSMO_BANC_ARGS
+ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
+# QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
+TimeoutStartSec=900
+TimeoutStopSec=180
+# A l'arret, ce que start-direct.sh --stop n'a pas demonte est termine par
+# systemd (SIGTERM puis SIGKILL sur le cgroup) : pas de reste de run precedent.
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-banc
+
+# ── REPRENDRE LA MAIN ───────────────────────────────────────────────────────
+#   tmux attach -t calypso        (root ; Ctrl-b d pour detacher)
+#   journalctl -u osmo-banc -f    (la sortie de start-direct.sh / run.sh)
+# Le socket tmux est celui de root par defaut (/tmp/tmux-0/default) : PrivateTmp
+# n'est PAS active ici, sinon la session serait invisible hors du service.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,40 @@
+[Unit]
+Description=osmo-operator - banc multi-operateur (start-multi.sh : natif + conteneurs + inter-STP)
+Documentation=file:/opt/GSM/osmo-operator/README.md
+# Le multi-operateur RACCORDE le natif, il ne le lance pas : c'est osmo-banc
+# qui le tient. Requires= : sans natif, le hub n'aurait qu'un ASP sur trois.
+Requires=osmo-banc.service
+After=osmo-banc.service docker.service network-online.target
+Wants=docker.service
+ConditionPathExists=/opt/GSM/osmo-operator/start-multi.sh
+# NON active par defaut (le standalone l'est) :
+#   systemctl start osmo-multi          pour une session
+#   systemctl enable osmo-multi         pour le demarrer a chaque boot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/GSM/osmo-operator
+Environment=HOME=/root USER=root LOGNAME=root
+Environment=VIRTUAL_ENV=/root/.env
+Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# OSMO_NO_TERM : start-multi.sh ne doit ni ouvrir un emulateur de terminal ni
+# retenir une fenetre. OSMO_BANC_SERVICE : le natif est une unite systemd,
+# start-multi.sh le (re)lance par systemctl et non par le raccourci du bureau.
+Environment=NO_COLOR=1 OSMO_NO_TERM=1 OSMO_BANC_SERVICE=osmo-banc.service
+EnvironmentFile=-/etc/default/osmo-multi
+ExecStart=/bin/bash /opt/GSM/osmo-operator/start-multi.sh $OSMO_MULTI_ARGS
+# --stop n'arrete que les conteneurs et le hub : le natif reste a osmo-banc.
+ExecStop=/bin/bash /opt/GSM/osmo-operator/start-multi.sh --stop
+TimeoutStartSec=1200
+TimeoutStopSec=180
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-multi
+
+# Reprendre la main : tmux attach -t calypso (natif) ; docker logs -f osmo-op2
+# (conteneurs) ; journalctl -u osmo-multi -f.
+
+[Install]
+WantedBy=multi-user.target
