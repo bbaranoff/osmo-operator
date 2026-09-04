@@ -5,9 +5,9 @@ Documentation=file:/opt/GSM/osmo-operator/README.md
 # et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
 # services absent ne doit pas empecher la radio de monter.
 After=network-online.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
-# osmo-egprs-web est TIRE par le banc : ExecStop l arrete, il faut donc que le
-# demarrage le remonte, sinon un cycle arret/relance laisserait le tableau de
-# bord eteint.
+# osmo-egprs-web est TIRE par le banc : il porte PartOf=osmo-banc.service et
+# systemd l arrete donc avec lui. Ce Wants= est la contrepartie obligatoire -
+# sans lui, un cycle arret/relance laisserait le tableau de bord eteint.
 Wants=network-online.target osmo-pulse.service osmo-egprs-web.service
 ConditionPathExists=/opt/GSM/osmo-operator/start-direct.sh
 # Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
@@ -51,7 +51,12 @@ ExecStop=/bin/bash /opt/GSM/osmo-operator/start-direct.sh --stop
 # abonnes et un tableau de bord qui affiche un banc qui n existe plus.
 # `-` en tete : une unite deja arretee, ou absente, n a pas a faire echouer
 # l arret.
-ExecStop=-/usr/bin/systemctl stop osmo-egprs-web.service osmo-hlr.service
+# [2026-09-04] osmo-egprs-web n est plus nomme ici : il porte desormais
+# PartOf=osmo-banc.service et systemd l arrete tout seul, y compris sur un
+# `systemctl restart osmo-banc` que cette ligne ne couvrait pas. Un
+# `systemctl stop` lance depuis l ExecStop de l unite qu on arrete se met en
+# plus en file derriere son propre job : autant le laisser a systemd.
+ExecStop=-/usr/bin/systemctl stop osmo-hlr.service
 # L ENCART DU BUREAU SUIT LE BANC. osmo-fft-snap.py lit /psd et le mobile.log
 # du run : un banc neuf, ce sont de nouveaux chemins sous /run/user/0 et un
 # nouveau journal. On le relance donc avec le banc, sans jamais le rendre

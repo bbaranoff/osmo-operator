@@ -2,6 +2,16 @@
 Description=osmo-nitb-for-calypso Operations Console (web dashboard)
 Documentation=https://github.com/bbaranoff/osmo-egprs-web
 After=network.target
+# ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ────────────────────────────────
+# [2026-09-04] PartOf : systemd propage a CETTE unite les arrets et relances de
+# osmo-banc.service. Sans lui, le dashboard restait debout sur :8080 devant une
+# pile morte - l etat le plus trompeur qui soit, puisqu il se lit exactement
+# comme "le banc tourne". PartOf et PAS After=osmo-banc.service : osmo-banc a
+# deja Wants= et After= vers cette unite (le dashboard demarre AVANT le banc),
+# ajouter l ordre inverse ferait un cycle que systemd casserait au hasard.
+# Le geste direct (start-direct.sh --stop, le bouton du bureau, start-multi.sh)
+# est couvert de son cote, dans start-direct.sh.
+PartOf=osmo-banc.service
 
 [Service]
 Type=simple

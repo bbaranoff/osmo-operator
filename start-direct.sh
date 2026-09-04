@@ -1328,6 +1328,22 @@ case "$ACTION" in
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         purge_sessions_tmux
+        # ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ──────────────────────
+        # [2026-09-04] Il survivait a tous les arrets : ni run.sh --stop ni la
+        # purge tmux ne le connaissent, son unite est WantedBy=multi-user.target
+        # et killall_python ne voit pas un serveur node. On se retrouvait avec
+        # :8080 qui repond DEVANT UNE PILE MORTE - l etat le plus trompeur qui
+        # soit, puisqu il se lit comme "le banc tourne".
+        # PartOf=osmo-banc.service couvre `systemctl stop|restart osmo-banc` ;
+        # ceci couvre le geste direct, par lequel passent le bouton « Arreter »
+        # du bureau, launch.sh --stop et start-multi.sh --stop.
+        # --no-block : on n attend pas systemd, et surtout on ne peut pas se
+        # bloquer quand cet arret est lui-meme l ExecStop de osmo-banc.
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl --no-block stop osmo-egprs-web.service 2>/dev/null || true
+        else
+            pkill -f "osmo-egprs-web/server.js" 2>/dev/null || true
+        fi
         # Filet identique a celui de run.sh, pose ici aussi : on peut arreter par
         # ce script sans passer par l'autre, et un fake_trx.py orphelin suffit a
         # faire echouer le run suivant sur « port UDP 5720 deja pris ».

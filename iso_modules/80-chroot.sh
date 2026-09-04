@@ -221,9 +221,19 @@ apt-get update -qq
 # libcares2. Le noyau : sur noble, linux-image-generic EST la serie 6.8 (GA),
 # la meme que le HWE de jammy - pas besoin du HWE de noble (7.0). Verifie le
 # 2026-09-03 sur ubuntu:24.04 (apt-cache policy) pour chacun de ces noms.
+# ── LES EN-TETES DU NOYAU, DANS L IMAGE PAR DEFAUT ──────────────────────────
+# [2026-09-04] linux-headers-* suit linux-image-* : le METAPAQUET, pas une
+# version figee - c est lui qui garantit que les en-tetes correspondent au
+# noyau reellement installe, y compris apres une mise a jour du noyau sur le
+# systeme installe. Sans eux, tout module hors arbre (le pilote NVIDIA de
+# contextualprocess-nvidia.conf, une cle SDR, VirtualBox) echoue a la
+# compilation DKMS avec "Your kernel headers for kernel X cannot be found",
+# et ce n est reparable QUE avec du reseau - ce qu un banc n a pas toujours.
+# dkms et build-essential vont avec : des en-tetes sans compilateur ne
+# construisent rien. build-essential est deja dans la liste arm64 plus bas.
 case "$_S" in
-    noble) _KERNEL_PKG="linux-image-generic";           _T64="t64"; _CARES="libcares2" ;;
-    *)     _KERNEL_PKG="linux-image-generic-hwe-22.04"; _T64="";    _CARES="libc-ares2" ;;
+    noble) _KERNEL_PKG="linux-image-generic linux-headers-generic";           _T64="t64"; _CARES="libcares2" ;;
+    *)     _KERNEL_PKG="linux-image-generic-hwe-22.04 linux-headers-generic-hwe-22.04"; _T64="";    _CARES="libc-ares2" ;;
 esac
 # ── arm64 / Raspberry Pi 4 : ARMBIAN, pas de live-boot ──────────────────────
 # Exactement ce que le build Armbian pose pour rpi4b (config/sources/families/
@@ -242,7 +252,8 @@ esac
 # l initramfs standard (root=LABEL=armbi_root dans cmdline.txt).
 _LIVE_PKGS="live-boot live-boot-initramfs-tools"
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    _KERNEL_PKG="linux-image-current-bcm2711 linux-dtb-current-bcm2711 armbian-bsp-cli-rpi4b-current armbian-firmware
+    _KERNEL_PKG="linux-image-current-bcm2711 linux-headers-current-bcm2711 linux-dtb-current-bcm2711
+      armbian-bsp-cli-rpi4b-current armbian-firmware
       linux-firmware-raspi rpi-eeprom libraspberrypi-bin raspi-config build-essential wget"
     _LIVE_PKGS=""
 fi
@@ -251,7 +262,7 @@ fi
 # /etc/resolv.conf n a personne derriere - voir le bloc DNS de
 # 81-cloture-systeme.sh.
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved
-      $_KERNEL_PKG initramfs-tools
+      $_KERNEL_PKG initramfs-tools dkms build-essential
       $_LIVE_PKGS
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev $_CARES
       libgnutls30${_T64} libgnutls28-dev libmnl-dev libmnl0

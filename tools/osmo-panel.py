@@ -40,7 +40,16 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 IMG = os.path.join(RUN, "panel.png")
 OP_FILE = os.path.join(RUN, "operator")
-PID_FILE = os.path.join(RUN, "panel.pid")
+# [2026-09-04] LE VERROU D INSTANCE EST PAR SESSION, PAS PAR MACHINE. Il etait
+# dans /run/osmo-fft, que systemd cree root:root (RuntimeDirectory de
+# osmo-fft-snap.service). Sur la cle le bureau tourne en root et l ecriture
+# passait ; sur le systeme installe le bureau est celui du compte cree par
+# l installeur, et open(PID_FILE, "w") levait PermissionError - apport ouvrait
+# "osmo-operator a rencontre une erreur interne" a CHAQUE ouverture de session.
+# XDG_RUNTIME_DIR (/run/user/<uid>) appartient a l utilisateur, et un encart
+# par session est exactement ce qu on veut compter.
+_RUNDIR = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
+PID_FILE = os.path.join(_RUNDIR if os.path.isdir(_RUNDIR) else RUN, "osmo-panel.pid")
 MULTI_CONF = os.environ.get("MULTI_CONF", "/etc/osmocom/osmo-multi.conf")
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "calypso")
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
@@ -300,7 +309,6 @@ class Panel(Gtk.Window):
 
 
 def single_instance():
-    os.makedirs(RUN, exist_ok=True)
     try:
         old = int(open(PID_FILE).read().strip())
         if old != os.getpid():
@@ -308,8 +316,13 @@ def single_instance():
             time.sleep(0.3)
     except (OSError, ValueError):
         pass
-    with open(PID_FILE, "w") as f:
-        f.write(str(os.getpid()))
+    # Un verrou qu on ne peut pas ecrire n est pas une raison de ne pas afficher
+    # l encart : au pire deux fenetres, jamais une boite de crash.
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        print("osmo-panel : verrou %s non ecrit (%s)" % (PID_FILE, e), file=sys.stderr)
 
 
 if __name__ == "__main__":

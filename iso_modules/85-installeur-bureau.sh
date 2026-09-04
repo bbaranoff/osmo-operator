@@ -731,7 +731,16 @@ ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 [Service]
 ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 RuntimeDirectory=osmo-fft
-RuntimeDirectoryMode=0755
+# [2026-09-04] 0775 ET LE GROUPE sudo, PAS 0755 root:root. osmo-panel.py, lui,
+# tourne dans la SESSION DE BUREAU : root sur la cle, mais le compte cree par
+# l installeur sur le disque - et il ECRIT /run/osmo-fft/operator quand on
+# change d operateur avec les fleches. En 0755 root:root cette ecriture est
+# refusee. Le compte de l installeur est sudoer par construction (users.conf,
+# defaultGroups + sudoersGroup), et root l est aussi : le groupe sudo est
+# exactement "qui pilote ce banc". ExecStartPost et non Group= : l unite doit
+# rester root pour lire les conteneurs et le flux /psd.
+RuntimeDirectoryMode=0775
+ExecStartPost=-/bin/chgrp sudo /run/osmo-fft
 # [2026-09-04] SANS CECI, UNE RELANCE EFFACE L ENCART. systemd supprime le
 # RuntimeDirectory a l arret de l unite : /run/osmo-fft/panel.png disparaissait
 # le temps de la relance, et Conky affichait un trou dans le fond d ecran la ou
