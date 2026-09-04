@@ -336,92 +336,18 @@ CONKY
         install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
     done
 
-    # Sur le bureau de root, ou la session s ouvre : l icone est la premiere
-    # chose qu on cherche sur une cle live, et c est celle qu on ne trouve
-    # jamais quand elle n est que dans le menu des applications.
-    #
-    # osmo-install reste a part : il ne va sur le bureau QUE sur l image live,
-    # ou installer le systeme est la premiere chose a faire. Les autres sont les
-    # outils du banc.
-    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
-        install -d "$_h/Bureau" "$_h/Desktop"
-        for _d in "$DIR"/data/desktop/*.desktop; do
-            [ -f "$_d" ] || continue
-            # [2026-09-04] "Pilotes graphiques" n est pas un raccourci de
-            # bureau : c est un choix de l installeur (packagechooser@nvidia).
-            # Il reste dans le menu des applications.
-            case "$(basename "$_d")" in osmo-drivers.desktop) continue ;; esac
-            cp "$_d" "$_h/Bureau/"  2>/dev/null || true
-            cp "$_d" "$_h/Desktop/" 2>/dev/null || true
-        done
-        chmod +x "$_h"/Bureau/*.desktop "$_h"/Desktop/*.desktop 2>/dev/null || true
-    done
+    # ── PLUS D ICONES SUR LE BUREAU : LE DOCK SUFFIT ─────────────────────
+    # [2026-09-04] Les raccourcis ne sont plus copies dans ~/Desktop ni
+    # ~/Bureau : ils vivent dans /usr/share/applications (ci-dessus) et dans
+    # les favoris du dock (favorite-apps, iso_modules/80-chroot.sh). Cela
+    # retire aussi tout le mecanisme d approbation (metadata::trusted,
+    # osmo-trust-desktop au login) qui n existait que pour DING.
+    # Le bureau reste vide ; le fond d ecran du jour s y voit en entier.
+    rm -f "$ROOTFS/root/Desktop"/*.desktop "$ROOTFS/root/Bureau"/*.desktop \
+          "$ROOTFS/home/osmocom/Desktop"/*.desktop "$ROOTFS/home/osmocom/Bureau"/*.desktop \
+          "$ROOTFS/usr/local/bin/osmo-trust-desktop" \
+          "$ROOTFS/etc/xdg/autostart/osmo-trust-desktop.desktop" 2>/dev/null || true
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
-
-    # ── LES ICONES DU BUREAU DOIVENT ETRE "APPROUVEES" ─────────────────────
-    # Un .desktop pose sur le bureau ne s affiche avec son nom et son icone que
-    # s il est executable ET porteur de l attribut metadata::trusted. Sans lui,
-    # l extension DING d Ubuntu affiche le NOM DE FICHIER BRUT
-    # ("osmo-install.desktop") avec une pastille rouge, et le double-clic ne
-    # lance rien - l icone est la, elle ne sert a rien.
-    #
-    # Cet attribut ne vit PAS dans le fichier : il est range dans les
-    # metadonnees gvfs de chaque utilisateur (~/.local/share/gvfs-metadata),
-    # ecrites par un demon de session. On ne peut donc pas le poser ici, dans
-    # le chroot, sans session ni bus. On le pose au premier login.
-    cat > "$ROOTFS/usr/local/bin/osmo-trust-desktop" <<'TRUSTD'
-#!/bin/bash
-# Marque les raccourcis du bureau comme approuves. Lance au login (autostart).
-set -u
-for d in "$HOME/Desktop" "$HOME/Bureau"; do
-    [ -d "$d" ] || continue
-    for f in "$d"/*.desktop; do
-        [ -f "$f" ] || continue
-        chmod +x "$f" 2>/dev/null || true
-        # DING lit la chaine "true" ; Nautilus a longtemps lu "yes". On pose
-        # "true" : c est DING qui dessine le bureau sous Ubuntu.
-        gio set -t string "$f" metadata::trusted true 2>/dev/null || true
-    done
-    # POSITION FIXE : le lanceur en HAUT A GAUCHE, le tutoriel juste dessous.
-    # DING lit metadata::nautilus-icon-position ("x,y") dans les metadonnees
-    # gvfs de la SESSION. Impossible a poser au build - le chroot n a ni
-    # session ni bus - d ou ce passage au premier login, au meme endroit que
-    # l approbation. Sans lui, DING range les icones dans l ordre ou il les
-    # trouve, et le lanceur atterrit ou il veut.
-    [ -f "$d/osmo-launch.desktop" ] && \
-        gio set -t string "$d/osmo-launch.desktop" \
-            metadata::nautilus-icon-position "0,0" 2>/dev/null || true
-    [ -f "$d/osmo-multi.desktop" ] && \
-        gio set -t string "$d/osmo-multi.desktop" \
-            metadata::nautilus-icon-position "110,0" 2>/dev/null || true
-    [ -f "$d/osmo-tutorial.desktop" ] && \
-        gio set -t string "$d/osmo-tutorial.desktop" \
-            metadata::nautilus-icon-position "0,110" 2>/dev/null || true
-    [ -f "$d/osmo-addition.desktop" ] && \
-        gio set -t string "$d/osmo-addition.desktop" \
-            metadata::nautilus-icon-position "110,110" 2>/dev/null || true
-    [ -f "$d/claude.desktop" ] && \
-        gio set -t string "$d/claude.desktop" \
-            metadata::nautilus-icon-position "110,0" 2>/dev/null || true
-    # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
-    # force a rebalayer, sinon la pastille rouge reste jusqu au login suivant.
-    touch "$d" 2>/dev/null || true
-done
-TRUSTD
-    chmod +x "$ROOTFS/usr/local/bin/osmo-trust-desktop"
-
-    # /etc/xdg/autostart et pas ~/.config/autostart : l entree vaut alors pour
-    # TOUS les comptes, y compris ceux que l installeur creera sur le disque.
-    install -d "$ROOTFS/etc/xdg/autostart"
-    cat > "$ROOTFS/etc/xdg/autostart/osmo-trust-desktop.desktop" <<'TRUSTA'
-[Desktop Entry]
-Type=Application
-Name=osmo-operator - approuver les raccourcis du bureau
-Exec=/usr/local/bin/osmo-trust-desktop
-Terminal=false
-NoDisplay=true
-X-GNOME-Autostart-Phase=Applications
-TRUSTA
 
     # ── LANCEUR ET TUTORIEL : ICONES DU BUREAU ────────────────────────────
     # Icones du depot (data/*.svg) et pas des noms du theme : "call-start" est
@@ -605,20 +531,10 @@ CLA
     sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/claude.svg|" \
         "$ROOTFS/usr/share/applications/claude.desktop"
 
-    # Terminal=false pour les DEUX : launch.sh ouvre LUI-MEME son terminal et
-    # demande les privileges (pkexec). Laisser le .desktop s en charger
-    # donnerait deux fenetres, dont une sans les droits.
-    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
-        install -d "$_h/Bureau" "$_h/Desktop"
-        for _d in osmo-launch osmo-tutorial osmo-addition claude; do
-            for _dir in Bureau Desktop; do
-                cp -f "$ROOTFS/usr/share/applications/$_d.desktop" "$_h/$_dir/" 2>/dev/null || true
-                chmod +x "$_h/$_dir/$_d.desktop" 2>/dev/null || true
-            done
-        done
-    done
-    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} bureau : ${CYAN}telephone${NC} (lancer) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC} · ${CYAN}Claude${NC}"
+    # Terminal=false : launch.sh ouvre LUI-MEME son terminal et demande les
+    # privileges (pkexec). [2026-09-04] Plus de copie sur le bureau : les
+    # raccourcis sont dans le menu et les favoris du dock.
+    echo -e "  ${GREEN}✓${NC} menu/dock : ${CYAN}telephone${NC} (lancer) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC} · ${CYAN}Claude${NC}"
 
     # Le paquet calamares pose SA propre entree de menu, qui lance
     # /usr/bin/calamares directement. Elle court-circuite osmo-install : ni le
@@ -674,13 +590,7 @@ UPDGUI
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-update.desktop" "$ROOTFS/usr/share/applications/osmo-update.desktop"
 
-    for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom"; do
-        install -d "$_h/Bureau" "$_h/Desktop"
-        cp "$ROOTFS/usr/share/applications/osmo-update.desktop" "$_h/Bureau/"  2>/dev/null || true
-        cp "$ROOTFS/usr/share/applications/osmo-update.desktop" "$_h/Desktop/" 2>/dev/null || true
-        chmod +x "$_h/Bureau/osmo-update.desktop" "$_h/Desktop/osmo-update.desktop" 2>/dev/null || true
-    done
-    chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
+    # [2026-09-04] Pas de copie sur le bureau (menu + favoris du dock).
 
     echo -e "  ${GREEN}✓${NC} lanceur GTK ${CYAN}update${NC} : /usr/local/bin/osmo-update-anim (+ icone sur le bureau)"
 fi

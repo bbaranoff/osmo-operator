@@ -124,6 +124,27 @@ fi
 # bord n'aurait rien a montrer. On ne l'active pas.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
+# ── LE BANC DEMARRE EN SERVICE, SANS TERMINAL ────────────────────────────────
+# [2026-09-04] services/osmo-banc.service (standalone : start-direct.sh) et
+# services/osmo-multi.service (multi-operateur : start-multi.sh). Le standalone
+# est ACTIVE au boot ; le multi est pose mais laisse a l'operateur
+# (systemctl start|enable osmo-multi). Les deux tiennent leur pile dans tmux :
+# `tmux attach -t calypso` depuis n'importe quel terminal de root reprend la
+# main, exactement comme la fin de run.sh le faisait dans le terminal du
+# lanceur. launch.sh et start-multi.sh detectent l'unite et passent par elle.
+if [ "$ISO_ROLE" != "interstp" ]; then
+    for _u in osmo-banc osmo-multi; do
+        if [ -f "$DIR/services/$_u.service" ]; then
+            install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
+        else
+            echo -e "  ${RED}✗ services/$_u.service introuvable${NC}" >&2; exit 1
+        fi
+    done
+    chroot "$ROOTFS" systemctl enable osmo-banc 2>/dev/null ||         ln -sf /etc/systemd/system/osmo-banc.service                "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-banc.service"
+    chroot "$ROOTFS" systemctl disable osmo-multi 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} osmo-banc.service active au boot (standalone) · ${CYAN}osmo-multi.service${NC} pose, non active"
+fi
+
 # ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────
 # Chaine : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
 # → carte. system.pa autorise l'acces anonyme + prepare le sink ; le service

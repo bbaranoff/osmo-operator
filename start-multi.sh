@@ -33,6 +33,17 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
+
+# ── LES ABONNES DU NATIF VIENNENT DE coeur.env, PAS DE ~/.bashrc ────────────
+# [2026-09-04] N_MS et OPERATOR_ID (/etc/osmocom/coeur.env) n'etaient charges
+# que par /root/.bashrc : depuis l'icone ou une unite systemd, le natif lance
+# d'ici partait avec N_MS=1 et le HLR n'avait qu'un abonne (le second etait
+# cree a la volee par le HLR avec un MSISDN aleatoire et sans Ki). On le
+# charge ici comme start-direct.sh le fait desormais lui-meme ; « := » laisse
+# gagner une valeur deja posee dans l'environnement.
+if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
+    set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
+fi
 ACTION="start"
 for a in "$@"; do
     case "$a" in
@@ -69,7 +80,9 @@ _multi_besoin=0
 if [ "$_multi_readonly" = "0" ]; then
     { [ ! -t 0 ] || [ ! -t 1 ]; } && _multi_besoin=1
 fi
-if [ "$_multi_besoin" = "1" ] && [ "${OSMO_MULTI_TERM:-0}" != "1" ]; then
+# OSMO_NO_TERM=1 : lance par systemd (osmo-multi.service), il n'y a ni ecran ni
+# personne devant - on n'ouvre rien, la sortie va au journal.
+if [ "$_multi_besoin" = "1" ] && [ "${OSMO_MULTI_TERM:-0}" != "1" ] && [ "${OSMO_NO_TERM:-0}" != "1" ]; then
     export OSMO_MULTI_TERM=1
     for _t in gnome-terminal xfce4-terminal konsole xterm; do
         command -v "$_t" >/dev/null 2>&1 || continue
@@ -458,9 +471,27 @@ aligner_natif
 # On arrete le NATIF (il delegue a run.sh --stop, qui demonte proprement radio
 # et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
 # arrete l est tres bien, d ou les || true.
+# ── LE NATIF EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ────────────────────────
+# [2026-09-04] osmo-banc.service tient le natif (services/osmo-banc.service).
+# L'arreter par start-direct.sh --stop sous les pieds de systemd laisserait
+# l'unite « active (exited) » sur une pile morte ; le relancer par le
+# raccourci du bureau exige une session graphique, que le service n'a pas.
+# Quand l'unite est installee, c'est elle qu'on arrete et qu'on (re)lance.
+BANC_UNIT="${OSMO_BANC_SERVICE:-osmo-banc.service}"
+_banc_unit_present() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    [ -d /run/systemd/system ] || return 1
+    systemctl cat "$BANC_UNIT" >/dev/null 2>&1
+}
+
 tout_arreter() {
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
-    if [ -x "$DIR/start-direct.sh" ]; then
+    if _banc_unit_present; then
+        # Le natif est relance juste apres par lancer_natif_si_absent : ici on
+        # se contente d'arreter proprement (ExecStop = start-direct.sh --stop).
+        timeout 200 systemctl stop "$BANC_UNIT" >/dev/null 2>&1 || true
+        echo -e "    ${GREEN}✓${NC} pile native arretee (${BANC_UNIT})"
+    elif [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
@@ -495,6 +526,25 @@ NATIF_DESKTOP="${NATIF_DESKTOP:-/root/Desktop/osmo-launch.desktop}"
 
 lancer_natif_si_absent() {
     _est_natif osmo-bsc asterisk && return 0
+
+    if _banc_unit_present; then
+        # systemctl start bloque jusqu'a la fin de start-direct.sh (oneshot) :
+        # quand il rend la main, le coeur est deja la. Le suivi ci-dessous ne
+        # sert que si l'unite a rendu 0 sans coeur, ce qui ne devrait pas arriver.
+        echo -e "  ${YELLOW}!${NC} operateur natif a l arret - ${CYAN}systemctl start ${BANC_UNIT}${NC}"
+        if ! systemctl start "$BANC_UNIT"; then
+            echo -e "  ${RED}✗${NC} ${BANC_UNIT} n a pas demarre - journalctl -u ${BANC_UNIT%.service} -n 50"
+            return 1
+        fi
+        _est_natif osmo-bsc asterisk && { echo -e "  ${GREEN}✓${NC} natif lance (${BANC_UNIT})"; return 0; }
+        echo -n "  attente du natif "
+        for i in $(seq 1 60); do
+            _est_natif osmo-bsc asterisk && { echo -e " ${GREEN}✓${NC}"; return 0; }
+            sleep 1; echo -n "."
+        done
+        echo -e " ${YELLOW}toujours absent apres 60 s - on continue quand meme${NC}"
+        return 0
+    fi
 
     echo -e "  ${YELLOW}!${NC} operateur natif a l arret - lancement de son raccourci"
     local d="$NATIF_DESKTOP"

@@ -187,6 +187,59 @@ tile_windows() {
     place 'linphone'                                   "$qw" "$qh"
 }
 
+# ── LE BANC EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ─────────────────────────
+# [2026-09-04] services/osmo-banc.service demarre le banc au boot, sans
+# terminal, et le tient dans la session tmux « calypso ». Quand l unite est
+# installee, ce script ne lance plus start-direct.sh lui-meme : il (re)demarre
+# l unite, ouvre les applications du bureau comme avant, puis S ATTACHE a tmux
+# dans son terminal - le meme ecran qu avant, mais un seul proprietaire du
+# banc. Lancer start-direct.sh a la main par-dessus tuerait les processus du
+# service sans que systemd le sache (unite « active (exited) », pile morte).
+#
+# Les arguments (--dsp, --op 2, --regen...) passent a l unite par
+# OSMO_BANC_ARGS (systemctl set-environment : vaut jusqu au reboot, puis
+# /etc/default/osmo-banc reprend). Sans argument, on efface un reste eventuel.
+#
+# OSMO_BANC_DIRECT=1 ./launch.sh contourne l unite (debogage a la main).
+BANC_UNIT="${OSMO_BANC_SERVICE:-osmo-banc.service}"
+banc_unit_present() {
+    [ "${OSMO_BANC_DIRECT:-0}" = "1" ] && return 1
+    command -v systemctl >/dev/null 2>&1 || return 1
+    [ -d /run/systemd/system ] || return 1
+    systemctl cat "$BANC_UNIT" >/dev/null 2>&1
+}
+banc_unit_stop() {
+    echo -e "  ${CYAN}→${NC} arret de ${BANC_UNIT}"
+    timeout 200 systemctl stop "$BANC_UNIT" || true
+    echo -e "    ${GREEN}✓${NC} banc arrete"
+}
+# Suit le journal de l unite pendant le demarrage : c est la sortie de
+# start-direct.sh / run.sh qu on lisait avant dans ce meme terminal.
+banc_unit_restart() {
+    if [ $# -gt 0 ]; then
+        systemctl set-environment OSMO_BANC_ARGS="$*" 2>/dev/null || true
+        echo -e "  ${CYAN}→${NC} options : ${CYAN}$*${NC} (OSMO_BANC_ARGS, jusqu au reboot)"
+    else
+        systemctl unset-environment OSMO_BANC_ARGS 2>/dev/null || true
+    fi
+    echo -e "  ${CYAN}→${NC} redemarrage de ${BANC_UNIT} (un clic = un banc neuf)"
+    journalctl -u "${BANC_UNIT%.service}" -f -n 0 -o cat 2>/dev/null &
+    local _jpid=$!
+    systemctl restart "$BANC_UNIT"; local rc=$?
+    sleep 1; kill "$_jpid" 2>/dev/null; wait "$_jpid" 2>/dev/null
+    if [ "$rc" -ne 0 ]; then
+        echo -e "  ${RED}✗${NC} ${BANC_UNIT} en echec (rc=$rc) - journalctl -u ${BANC_UNIT%.service} -n 80"
+        systemctl status --no-pager -n 20 "$BANC_UNIT" 2>/dev/null || true
+    else
+        echo -e "  ${GREEN}✓${NC} banc demarre par ${BANC_UNIT}"
+    fi
+    return "$rc"
+}
+if [ "${1:-}" = "--stop" ] && banc_unit_present; then
+    banc_unit_stop
+    exit 0
+fi
+
 # ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
 # [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
 # deja debout ne relance presque rien : les demons Osmocom ne relisent PAS leur
@@ -199,6 +252,8 @@ tile_windows() {
 # et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
 # arrete l est tres bien, d ou les || true.
 tout_arreter() {
+    # Avec l unite, l arret est fait par `systemctl restart` plus bas.
+    banc_unit_present && return 0
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
     if [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
@@ -322,12 +377,24 @@ cd "$DIR" || exit 1
 # start.sh pose deja devant ses conteneurs.
 #
 # OSMO_LAUNCH_MENU=1 ./launch.sh redonne les questions quand on les veut.
-if [ "${OSMO_LAUNCH_MENU:-0}" = "1" ]; then
+if banc_unit_present; then
+    banc_unit_restart "$@"
+    rc=$?
+    # Le banc tourne dans tmux : on s y attache si on a un terminal, comme
+    # run.sh le faisait en fin de course. Ctrl-b d pour detacher ; le banc
+    # continue sans ce terminal.
+    if [ "$rc" -eq 0 ] && [ -t 1 ] && tmux has-session -t "${TMUX_SESSION:-calypso}" 2>/dev/null; then
+        echo -e "  ${CYAN}connexion a la session tmux « ${TMUX_SESSION:-calypso} »  (Ctrl-b d pour detacher)${NC}"
+        sleep 1
+        exec tmux attach -t "${TMUX_SESSION:-calypso}"
+    fi
+elif [ "${OSMO_LAUNCH_MENU:-0}" = "1" ]; then
     "$TARGET" "$@"
+    rc=$?
 else
     NO_MENU=1 "$TARGET" "$@"
+    rc=$?
 fi
-rc=$?
 
 echo
 if [ "$rc" -eq 0 ]; then
