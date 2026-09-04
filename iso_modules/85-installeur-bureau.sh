@@ -162,9 +162,13 @@ done
 # la page propose ceux qui repondent, du plus rapide au plus lent, le premier
 # pre-selectionne, plus "celui de la cle" (aucun changement). Le module
 # contextualprocess@mirror ecrit le choix dans la cible, apres unpackfs.
-# Aucun guillemet dans les commandes : elles sont entre apostrophes (bash -c)
-# dans une chaine YAML entre guillemets. L espace du remplacement sed est
-# echappe par une barre oblique inverse, lue par le bash de la cible.
+# [2026-09-04] AUCUN ANTISLASH DANS CES COMMANDES. Elles sont posees dans une
+# chaine YAML entre guillemets, ou seule une poignee d echappements existe :
+# \s et \S (les classes de sed) n en font pas partie et yaml-cpp refusait le
+# FICHIER ENTIER - Calamares s ouvrait sur "contextualprocess@mirror could not
+# be loaded". D ou les classes POSIX ([[:space:]], [^[:space:]]) et l expression
+# sed entre guillemets echappes (\" est, lui, un echappement YAML valide), ce
+# qui dispense aussi d echapper l espace du remplacement.
 _pm=/etc/calamares/modules/packagechooser-mirror.conf
 _cm=/etc/calamares/modules/contextualprocess-mirror.conf
 _am=/opt/GSM/osmo-operator/packaging/apt-mirror.sh
@@ -205,7 +209,7 @@ if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
             [ -n "$_url" ] || continue
             _n=$((_n + 1))
             echo "    \"m${_n}\":"
-            echo "        - \"-/bin/bash -c 'sed -i -E s,^deb\\shttps?://\\S+,deb\\ ${_url}, /etc/apt/sources.list; [ -f /etc/apt/sources.list.d/ubuntu.sources ] && sed -i -E s,^URIs:\\shttps?://\\S+,URIs:\\ ${_url}, /etc/apt/sources.list.d/ubuntu.sources; echo [mirror] ${_url}'\""
+            echo "        - \"-/bin/bash -c 'sed -i -E \\\"s,^deb[[:space:]]+https?://[^[:space:]]+,deb ${_url},\\\" /etc/apt/sources.list; [ -f /etc/apt/sources.list.d/ubuntu.sources ] && sed -i -E \\\"s,^URIs:[[:space:]]+https?://[^[:space:]]+,URIs: ${_url},\\\" /etc/apt/sources.list.d/ubuntu.sources; echo [mirror] ${_url}'\""
         done
     } > "$_cm"
     if [ -n "$_mlist" ]; then
