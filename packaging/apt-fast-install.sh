@@ -48,7 +48,71 @@ Acquire::Retries "3";
 Acquire::http::Timeout "30";
 Acquire::http::Pipeline-Depth "0";
 Dpkg::Use-Pty "0";
+// Avant CHAQUE dpkg : les .deb a installer sont decompresses de bout en bout ;
+// un fichier corrompu est supprime du cache et l installation s arrete, a
+// relancer (osmo-apt-get, sous apt-fast, relance tout seul). Voir
+// /usr/local/sbin/osmo-deb-check.
+DPkg::Pre-Install-Pkgs { "/usr/local/sbin/osmo-deb-check"; };
+DPkg::Tools::Options::/usr/local/sbin/osmo-deb-check::Version "1";
 CONF
+
+# ── Le cache apt est PERSISTANT partout ici : un .deb corrompu y reste ───────
+# [2026-09-04] "Corrupted block detected" a l installation de qemu-user-static
+# sur l hote : le fichier en cache avait la taille attendue et un mauvais
+# SHA256 - un telechargement altere sur un miroir capricieux. apt ne revérifie
+# pas un fichier deja present dans /var/cache/apt/archives, et ce cache ne
+# s efface jamais chez nous (Keep-Downloaded-Packages, montage cache du docker
+# build, cache persistant du chroot de l ISO) : le fichier pourri serait reste
+# la a chaque build. Deux pieces :
+#   osmo-deb-check   hook DPkg::Pre-Install-Pkgs : apt lui passe les chemins des
+#                    .deb qu il va installer ; chacun est decompresse en entier
+#                    (dpkg-deb --fsys-tarfile) ; les mauvais sont SUPPRIMES, un
+#                    marqueur est pose et apt s arrete avant dpkg. Le prochain
+#                    apt retelecharge ce qui manque, avec verification du hash.
+#   osmo-apt-get     le "apt-get" que lance apt-fast (_APTMGR) : si apt echoue
+#                    et que le marqueur est la, il relance une fois. Pour un
+#                    apt-get appele directement, le message dit de relancer.
+cat > /usr/local/sbin/osmo-deb-check <<'CHK'
+#!/bin/sh
+# osmo-deb-check - hook apt (DPkg::Pre-Install-Pkgs, protocole 1 : un chemin
+# de .deb par ligne sur stdin). Supprime du cache les .deb dont l archive de
+# donnees ne se decompresse pas, et refuse l installation s il y en a eu.
+MARK=/run/osmo-deb-check.bad
+rm -f "$MARK"
+bad=0; n=0
+while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    if ! dpkg-deb --fsys-tarfile "$f" >/dev/null 2>&1; then
+        echo "osmo-deb-check: CORROMPU, supprime du cache : $f" >&2
+        rm -f "$f"
+        bad=$((bad + 1))
+    fi
+done
+if [ "$bad" -gt 0 ]; then
+    echo "$bad" > "$MARK"
+    echo "osmo-deb-check: $bad paquet(s) corrompu(s) retire(s) sur $n - relancez la commande, apt les retelechargera" >&2
+    exit 1
+fi
+exit 0
+CHK
+chmod 755 /usr/local/sbin/osmo-deb-check
+cat > /usr/local/sbin/osmo-apt-get <<'OAG'
+#!/bin/sh
+# osmo-apt-get - apt-get avec UNE relance quand osmo-deb-check a retire des
+# .deb corrompus du cache (marqueur /run/osmo-deb-check.bad).
+MARK=/run/osmo-deb-check.bad
+rm -f "$MARK"
+apt-get "$@" && exit 0
+rc=$?
+if [ -f "$MARK" ]; then
+    echo "osmo-apt-get: cache apt nettoye ($(cat "$MARK") .deb corrompu(s)) - relance de : apt-get $*" >&2
+    rm -f "$MARK"
+    exec apt-get "$@"
+fi
+exit "$rc"
+OAG
+chmod 755 /usr/local/sbin/osmo-apt-get
 
 # ── Le miroir Ubuntu : celui que l appelant a mesure (packaging/apt-mirror.sh)
 # OSMO_UBUNTU_MIRROR=http://... remplace archive.ubuntu.com dans les sources
@@ -89,7 +153,7 @@ fi
 # elle est courte et c est ce qui garantit que tous les environnements se
 # ressemblent.
 cat > /etc/apt-fast.conf <<'CONF'
-_APTMGR=apt-get
+_APTMGR=/usr/local/sbin/osmo-apt-get
 DOWNLOADBEFORE=true
 _MAXNUM=16
 _MAXCONPERSRV=10
