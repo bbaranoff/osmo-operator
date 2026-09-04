@@ -631,7 +631,13 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # utilisent - le build ne depend pas d un push pour ces fichiers-la.
     _rt="$ROOTFS/opt/GSM/osmo-operator"
     install -d "$_rt/tools" "$_rt/configs/wallpaper" "$_rt/configs/conky"
-    install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$_rt/tools/"
+    # conky-osmo-status.sh est dans la liste depuis le 2026-09-04 : c est lui
+    # qui dit si le HLR tourne (il lisait sa base sqlite, qui survit au demon,
+    # et annoncait un HLR allume des heures apres l arret du banc). Sans cette
+    # ligne il ne venait QUE du clone GitHub - donc une correction non poussee
+    # ne partait pas dans l image, alors que les quatre autres outils, eux,
+    # partaient. Meme regle pour tous : le depot local fait foi.
+    install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$DIR/tools/conky-osmo-status.sh" "$_rt/tools/"
     install -m644 "$DIR/configs/wallpaper/tower.jpg" "$_rt/configs/wallpaper/"
     install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
@@ -641,7 +647,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     unset _rt
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
 [Unit]
-Description=Fond d ecran du banc (strip Calvin & Hobbes du jour)
+Description=Fond d ecran du banc (image du jour : Calvin, xkcd, APOD, Bing, turnoff.us)
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/opt/GSM/osmo-operator/tools/wallpaper-render.py

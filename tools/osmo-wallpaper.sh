@@ -193,11 +193,23 @@ done
 ls -1t "$CACHE"/calvin_*.gif 2>/dev/null | tail -n +15 | xargs -r rm -f
 
 # ── 2. le rendu ──────────────────────────────────────────────────────────────
-DATED="$DATED_DIR/gsm-lab-${DAY}.png"
+# LE NOM PORTE LA SOURCE, ET C EST CE QUI FAIT CHANGER L ECRAN.
+# [2026-09-04] Le fichier date s appelait gsm-lab-<jour>.png. Deux rendus le
+# meme jour ecrivaient donc le MEME chemin - et l URI poussee aux sessions
+# (etape 3) ne changeait pas d un poil. Or GNOME Shell ne recharge que sur
+# changement d URI : reecrire le fichier sous son ancien nom ne repeint rien.
+# Le banc pouvait tirer une nouvelle source a chaque relance, l ecran gardait
+# l image du premier demarrage jusqu au lendemain.
+# Le nom porte donc la source retenue : elle change a chaque relance (voir le
+# tirage plus haut, qui evite celle du coup precedent), donc l URI change, donc
+# l ecran suit.
+DATED="$DATED_DIR/gsm-lab-${DAY}${SRC_RETENUE:+-$SRC_RETENUE}.png"
 python3 "$RENDER" --tower "$TOWER" "${args[@]}" --out "$DATED" || exit 1
 cp -f "$DATED" "$OUT.tmp" && mv -f "$OUT.tmp" "$OUT"
 chmod 644 "$OUT" "$DATED"
-ls -1t "$DATED_DIR"/gsm-lab-*.png 2>/dev/null | tail -n +4 | xargs -r rm -f
+# On garde les trois derniers rendus. Le fichier en cours n est JAMAIS efface :
+# une session qui vient de recevoir son URI le lit encore.
+ls -1t "$DATED_DIR"/gsm-lab-*.png 2>/dev/null | tail -n +4 | grep -vxF "$DATED" | xargs -r rm -f
 
 # ── 3. les sessions ouvertes ─────────────────────────────────────────────────
 # Une session GNOME lit le schema a l ouverture ; une session deja ouverte ne
