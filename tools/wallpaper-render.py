@@ -66,32 +66,46 @@ def rounded(draw, box, r, fill=None, outline=None, width=1):
     draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=width)
 
 
-def background(tower_path):
-    """La photo en fond, cadree pour garder le pylone a droite, assombrie a
-    gauche pour la lisibilite, teintee bleu nuit."""
+def background(tower_path, sun_at=(250, 984)):
+    """La photo en fond : le pylone A GAUCHE (colonne des icones et, en
+    transparence, le bord gauche de la carte), le soleil en bas a gauche du
+    strip Calvin & Hobbes (sun_at, en pixels du fond). La photo, mise a la
+    largeur de l ecran, est decalee vers la gauche pour cela ; le vide qui
+    s ouvre a droite est comble par le ciel en miroir - c est la colonne du
+    conky, un ciel uni suffit. Assombrie au centre (les panneaux) et teintee
+    bleu nuit."""
     tower = Image.open(tower_path).convert("RGB")
     tw, th = tower.size
     scale = max(W / tw, H / th)
     tower = tower.resize((int(tw * scale) + 1, int(th * scale) + 1), Image.LANCZOS)
-    # Cadrage : la photo est presque carree ; on garde le haut (les antennes) et
-    # on decale le pylone vers la droite, hors de la zone de texte.
-    x0 = max(0, tower.width - W - 40)
-    y0 = 0
-    bg = tower.crop((x0, y0, x0 + W, y0 + H))
-    # Teinte bleu nuit + assombrissement, plus fort a gauche.
+    # Le soleil est vers (480, 600) sur la photo d origine (1170x1123).
+    sun_x, sun_y = int(480 * scale), int(600 * scale)
+    x0 = max(0, min(sun_x - sun_at[0], tower.width - 1))
+    y0 = max(0, min(sun_y - sun_at[1], tower.height - H))
+    bg = Image.new("RGB", (W, H))
+    part = tower.crop((x0, y0, min(tower.width, x0 + W), y0 + H))
+    bg.paste(part, (0, 0))
+    gap = W - part.width
+    if gap > 0:
+        # Miroir du bord droit de la photo (ciel) pour combler jusqu au bord.
+        edge = tower.crop((tower.width - gap, y0, tower.width, y0 + H)).transpose(Image.FLIP_LEFT_RIGHT)
+        bg.paste(edge, (part.width, 0))
+    # Teinte bleu nuit + assombrissement : leger a gauche (le pylone), plus
+    # marque sous les panneaux, nul a droite (le conky se detache seul).
     tint = Image.new("RGB", (W, H), (10, 18, 40))
-    bg = Image.blend(bg, tint, 0.22)
-    mask = gradient_h(W, 1, [(40, 40, 40), (100, 100, 100), (60, 60, 60), (0, 0, 0)]).resize((W, H))
+    bg = Image.blend(bg, tint, 0.18)
+    mask = gradient_h(W, 1, [(0, 0, 0), (85, 85, 85), (60, 60, 60), (0, 0, 0)]).resize((W, H))
     dark = Image.new("RGB", (W, H), (6, 10, 24))
     bg = Image.composite(dark, bg, mask.convert("L"))
     return bg
 
 
-def glass_panel(base, box, radius=26, alpha=200, fill=(13, 22, 44), border=(90, 120, 200)):
+def glass_panel(base, box, radius=26, alpha=185, fill=(13, 22, 44), border=(90, 120, 200), blur=14):
     """Panneau translucide, fond legerement flou dessous (verre depoli)."""
     x0, y0, x1, y1 = box
-    region = base.crop(box).filter(ImageFilter.GaussianBlur(14))
-    base.paste(region, (x0, y0))
+    if blur > 0:
+        region = base.crop(box).filter(ImageFilter.GaussianBlur(blur))
+        base.paste(region, (x0, y0))
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
     rounded(d, box, radius, fill=fill + (alpha,), outline=border + (110,), width=2)
@@ -112,7 +126,9 @@ def gradient_text(base, xy, text, fnt, stops):
 
 def card(base, box, arfcn="514", band="DCS 1800"):
     x0, y0, x1, y1 = box
-    glass_panel(base, box)
+    # Carte bien transparente : le pylone et le ciel restent visibles derriere
+    # le texte (le strip, lui, garde un fond opaque pour rester lisible).
+    glass_panel(base, box, alpha=38, blur=0)
     d = ImageDraw.Draw(base)
     pad = 44
     x = x0 + pad
@@ -130,8 +146,9 @@ def card(base, box, arfcn="514", band="DCS 1800"):
 
     # Titre
     y += 46
+    # Titre en violet uni (pas de degrade).
     tw, th = gradient_text(base, (x - 4, y), "LAB GRGSM", font("DejaVuSans-Bold.ttf", 86),
-                           [(70, 210, 190), (120, 130, 240), (240, 90, 150)])
+                           [(150, 100, 245), (150, 100, 245)])
     d = ImageDraw.Draw(base)
     y += th + 20
     sub = font("DejaVuSans.ttf", 22)
@@ -153,7 +170,7 @@ def card(base, box, arfcn="514", band="DCS 1800"):
            fill=(150, 170, 210))
     y += 26
     slots = [("TS0", "FCCH·SCH·BCCH"), ("TS1", "SDCCH"), ("TS2", "TCH/F"), ("TS3", "TCH/F"),
-             ("TS4", "TCH/F"), ("TS5", "TCH/F"), ("TS6", "TCH/F"), ("TS7", "PDCH")]
+             ("TS4", "TCH/F"), ("TS5", "TCH/F"), ("TS6", "PDCH"), ("TS7", "PDCH")]
     inner = (x1 - pad) - x
     gap = 10
     sw = (inner - gap * 7) // 8

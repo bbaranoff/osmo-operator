@@ -307,7 +307,7 @@ INSTALLER
 Type=Application
 Name=Conky osmo-operator
 Comment=Tableau de bord du banc GSM (coeur, radio, abonnes, services)
-Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
+Exec=sh -c 'sleep 6; pkill -x conky 2>/dev/null; conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky-fft.conf; exec conky --daemonize -c /opt/GSM/osmo-operator/configs/conky/osmo-conky.conf'
 Icon=utilities-system-monitor
 Terminal=false
 NoDisplay=true
@@ -317,7 +317,10 @@ X-GNOME-Autostart-Delay=6
 CONKY
     chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-conky.desktop"
     chmod +x "$ROOTFS/opt/GSM/osmo-operator/tools/conky-osmo-status.sh" \
-             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-drivers.sh" 2>/dev/null || true
+             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-drivers.sh" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-fft-snap.py" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/wallpaper-render.py" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-wallpaper.sh" 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Conky du banc : autostart GNOME (live et disque), config ${CYAN}configs/conky/osmo-conky.conf${NC}"
 
     # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
@@ -680,6 +683,136 @@ UPDGUI
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 
     echo -e "  ${GREEN}✓${NC} lanceur GTK ${CYAN}update${NC} : /usr/local/bin/osmo-update-anim (+ icone sur le bureau)"
+fi
+
+
+# ── LE BUREAU, SUITE : FOND DU JOUR, SPECTRES, TERMINAL, DING ───────────────
+# [2026-09-04] Tout ce bloc est HORS du chroot de 80-chroot.sh (quotes simples
+# la-bas) : ici les heredocs et les apostrophes sont libres.
+if [ "${ISO_DESKTOP:-0}" = "1" ]; then
+    # ── 1. Le fond d ecran du jour : strip Calvin & Hobbes incruste ──────────
+    # tools/osmo-wallpaper.sh va chercher le strip du jour (gocomics, comme le
+    # gist hellogist), recompose la photo + carte LAB GRGSM + strip
+    # (tools/wallpaper-render.py) et pousse le resultat dans les sessions
+    # ouvertes. Au boot (40 s, le reseau est la), chaque jour a 6h30, et
+    # toutes les 4 h en rattrapage (banc hors ligne au boot).
+    install -m755 "$DIR/tools/osmo-wallpaper.sh" "$ROOTFS/usr/local/sbin/osmo-wallpaper"
+    # L arbre /opt/GSM/osmo-operator de l image vient du clone GitHub fait dans
+    # Docker : on y pose aussi, depuis CE depot, ce que le fond et les spectres
+    # utilisent - le build ne depend pas d un push pour ces fichiers-la.
+    _rt="$ROOTFS/opt/GSM/osmo-operator"
+    install -d "$_rt/tools" "$_rt/configs/wallpaper" "$_rt/configs/conky"
+    install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-wallpaper.sh" "$_rt/tools/"
+    install -m644 "$DIR/configs/wallpaper/tower.jpg" "$_rt/configs/wallpaper/"
+    install -m644 "$DIR/configs/conky/osmo-conky.conf" "$DIR/configs/conky/osmo-conky-fft.conf" "$_rt/configs/conky/"
+    install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
+    # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
+    # on repose ici celui de CE depot, le rendu du jour de tools/wallpaper-render.py.
+    install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.png"
+    unset _rt
+    cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
+[Unit]
+Description=Fond d ecran du banc (strip Calvin & Hobbes du jour)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/GSM/osmo-operator/tools/wallpaper-render.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/osmo-wallpaper
+TimeoutStartSec=180
+EOF
+    cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.timer" <<'EOF'
+[Unit]
+Description=Fond d ecran du banc : strip du jour (boot + quotidien)
+
+[Timer]
+OnBootSec=40s
+OnCalendar=*-*-* 06:30:00
+OnUnitActiveSec=4h
+Persistent=true
+Unit=osmo-wallpaper.service
+
+[Install]
+WantedBy=timers.target
+EOF
+    chroot "$ROOTFS" systemctl enable osmo-wallpaper.timer 2>/dev/null || true
+
+    # ── 2. Les spectres I/Q dans le Conky du bas a droite ────────────────────
+    # tools/osmo-fft-snap.py trace ms.png / bts.png dans /run/osmo-fft depuis
+    # /psd du dashboard (les FFT de l onglet fft1) ; osmo-conky-fft.conf les
+    # affiche. Le service vit avec le dashboard et se relance sans lui : sans
+    # flux, l image dit "pas de flux" au lieu de figer.
+    cat > "$ROOTFS/etc/systemd/system/osmo-fft-snap.service" <<'EOF'
+[Unit]
+Description=Spectres I/Q (MS, BTS) en PNG pour le Conky du bureau
+After=osmo-egprs-web.service
+ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-fft-snap.py
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-fft-snap.py
+RuntimeDirectory=osmo-fft
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-fft-snap 2>/dev/null || true
+
+    # ── 3. Le terminal : legerement transparent, noir sur gris clair ─────────
+    # Un profil gnome-terminal est un schema RELOCALISABLE : impossible par
+    # gschema.override. C est donc une base dconf SYSTEME (/etc/dconf/db/local)
+    # lue par toute session, root sur la cle comme l utilisateur Calamares sur
+    # le disque, et que l utilisateur peut encore changer (base "user" devant).
+    # Theme "Debian" : fond noir, texte gris clair, palette Tango (celle de
+    # gnome-terminal), au lieu de l aubergine Ubuntu ; 18 % de transparence.
+    install -d "$ROOTFS/etc/dconf/profile" "$ROOTFS/etc/dconf/db/local.d"
+    printf 'user-db:user\nsystem-db:local\n' > "$ROOTFS/etc/dconf/profile/user"
+    cat > "$ROOTFS/etc/dconf/db/local.d/10-osmo-terminal" <<'EOF'
+[org/gnome/terminal/legacy/profiles:]
+list=['b1dcc9dd-5262-4d8d-a863-c897e6d979b9']
+default='b1dcc9dd-5262-4d8d-a863-c897e6d979b9'
+
+[org/gnome/terminal/legacy/profiles:/:b1dcc9dd-5262-4d8d-a863-c897e6d979b9]
+visible-name='osmo-operator'
+use-theme-colors=false
+use-theme-transparency=false
+use-transparent-background=true
+background-transparency-percent=18
+background-color='#000000'
+foreground-color='#D3D7CF'
+bold-color-same-as-fg=true
+palette=['#000000', '#CC0000', '#4E9A06', '#C4A000', '#3465A4', '#75507B', '#06989A', '#D3D7CF', '#555753', '#EF2929', '#8AE234', '#FCE94F', '#729FCF', '#AD7FA8', '#34E2E2', '#EEEEEC']
+scrollback-unlimited=true
+audible-bell=false
+EOF
+    chroot "$ROOTFS" dconf update 2>/dev/null \
+        && echo -e "  ${GREEN}✓${NC} gnome-terminal : profil ${CYAN}osmo-operator${NC} (noir, 18 % transparent) via dconf systeme" \
+        || echo -e "  ${YELLOW}!${NC} dconf update a echoue - profil terminal non compile"
+
+    # ── 4. DING relance apres l ouverture de session ─────────────────────────
+    # [2026-09-04] Mesure sur la cle : l extension "Desktop Icons NG" ouvre sa
+    # fenetre plein ecran avant que GNOME Shell ait peint le fond, et garde
+    # jusqu au bout l image du greeter (le numbat sombre d Ubuntu) par-dessus
+    # notre fond - sans DING, le fond GSM apparait. La tuer une fois la session
+    # ouverte suffit : l extension la relance en une seconde, proprement.
+    cat > "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=osmo-operator : rafraichit les icones du bureau
+Comment=Relance Desktop Icons NG une fois le fond d ecran peint
+Exec=sh -c 'sleep 12; pkill -f "extensions/ding@rastersoft.com/app/ding.js" 2>/dev/null; exit 0'
+Terminal=false
+NoDisplay=true
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=12
+EOF
+    chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop"
+    echo -e "  ${GREEN}✓${NC} bureau : fond du jour (osmo-wallpaper.timer), spectres (osmo-fft-snap), DING relance a l ouverture"
 fi
 
 

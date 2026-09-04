@@ -605,7 +605,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # /run/user/<uid>/pulse/native que pose osmo-pulse-link.sh.
     if [ "$_S" = "noble" ]; then
         _auto=$(apt-mark showauto)
-        apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils
+        apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils \
+            || echo "  [desktop] WARN: apt n a pas pu remettre pulseaudio (conflit pipewire-pulse ?)"
         if [ -n "$_auto" ]; then apt-mark manual $_auto >/dev/null 2>&1 || true; fi
         systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
         # wireplumber reste (le screencast GNOME passe par PipeWire) mais ne

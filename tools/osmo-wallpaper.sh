@@ -14,12 +14,14 @@
 #    via gsettings - une URI differente force GNOME Shell a recharger, ce
 #    qu une reecriture du meme fichier ne garantit pas.
 set -u
-REPO=/opt/GSM/osmo-operator
+# Surchargeables par l environnement (tests hors machine : OSMO_WP_OUT=... etc.).
+REPO="${OSMO_WP_REPO:-/opt/GSM/osmo-operator}"
 RENDER="$REPO/tools/wallpaper-render.py"
 TOWER="$REPO/configs/wallpaper/tower.jpg"
-OUT=/usr/share/backgrounds/gsm-lab-wallpaper.png
-DATED_DIR=/usr/share/backgrounds/osmo-lab
-CACHE=/var/cache/osmo-wallpaper
+OUT="${OSMO_WP_OUT:-/usr/share/backgrounds/gsm-lab-wallpaper.png}"
+DATED_DIR="${OSMO_WP_DATED_DIR:-/usr/share/backgrounds/osmo-lab}"
+CACHE="${OSMO_WP_CACHE:-/var/cache/osmo-wallpaper}"
+NO_SESSION="${OSMO_WP_NO_SESSION:-0}"
 DAY="$(date +%F)"
 STRIP="$CACHE/calvin_${DAY}.gif"
 UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
@@ -69,6 +71,7 @@ ls -1t "$DATED_DIR"/gsm-lab-*.png 2>/dev/null | tail -n +4 | xargs -r rm -f
 # Une session GNOME lit le schema a l ouverture ; une session deja ouverte ne
 # suit que dconf. On pousse l URI datee dans chacune (root sur la cle live,
 # l utilisateur Calamares sur le disque).
+[ "$NO_SESSION" = "1" ] && exit 0
 for bus in /run/user/*/bus; do
     [ -S "$bus" ] || continue
     uid="${bus#/run/user/}"; uid="${uid%/bus}"
@@ -76,6 +79,9 @@ for bus in /run/user/*/bus; do
     runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" XDG_RUNTIME_DIR="/run/user/$uid" \
         sh -c "gsettings set org.gnome.desktop.background picture-uri 'file://$DATED' ; \
                gsettings set org.gnome.desktop.background picture-uri-dark 'file://$DATED'" \
-        2>/dev/null && echo "[wallpaper] session de $user : $DATED"
+        2>/dev/null && echo "[wallpaper] session de $user : $DATED" && _pushed=1
 done
+# DING (icones du bureau) garde parfois l image precedente par-dessus le fond :
+# relance (l extension GNOME le redemarre aussitot).
+[ "${_pushed:-0}" = "1" ] && pkill -f "extensions/ding@rastersoft.com/app/ding.js" 2>/dev/null
 exit 0
