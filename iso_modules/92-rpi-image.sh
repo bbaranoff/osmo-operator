@@ -11,8 +11,10 @@ if [ "${ISO_ARCH:-amd64}" != "arm64" ]; then return 0; fi
 #  Etape 9 : L IMAGE SD
 # ═════════════════════════════════════════════════════════════════════════════
 # Deux partitions, table MBR (le GPU du Pi ne lit que ca) :
-#   1  FAT32  system-boot   le contenu de /boot/firmware (noyau, dtb, start4.elf)
-#   2  ext4   writable      le rootfs, persistant (pas de squashfs, pas de live)
+#   1  FAT32  RPICFG        le contenu de /boot/firmware (noyau, dtb, start4.elf)
+#   2  ext4   armbi_root    le rootfs, persistant (pas de squashfs, pas de live)
+# Les memes etiquettes, tailles (FAT de 512 Mo) et table MBR que les images
+# Armbian rpi4b : armbian-resize-filesystem etend armbi_root au premier boot.
 # RIEN N EST MONTE : mke2fs -d peuple l ext4 depuis le repertoire (proprietaires,
 # modes, liens, xattrs/capabilities compris), mcopy remplit la FAT, sfdisk ecrit
 # la table, dd assemble. Pas de loop device, pas de privilege particulier au
@@ -46,21 +48,21 @@ echo -e "  rootfs $(( _root_kb / 1024 )) Mo -> ext4 de ${ROOT_MB} Mo, FAT de ${B
 
 # ── Partition 1 : FAT32 ──────────────────────────────────────────────────────
 BOOT_IMG="$WORK/boot.img"; rm -f "$BOOT_IMG"
-mkfs.vfat -F 32 -n system-boot -C "$BOOT_IMG" $(( BOOT_MB * 1024 )) >/dev/null
+mkfs.vfat -F 32 -n RPICFG -C "$BOOT_IMG" $(( BOOT_MB * 1024 )) >/dev/null
 # mcopy -s : recursif (overlays/). Le "::" est la racine de la FAT.
 mcopy -s -i "$BOOT_IMG" "$BOOTSRC"/* :: \
     || { echo -e "${RED}mcopy vers la partition firmware a echoue${NC}" >&2; exit 1; }
-echo -e "  ${GREEN}✓${NC} system-boot : $(mdir -i "$BOOT_IMG" :: | tail -1 | sed 's/^ *//')"
+echo -e "  ${GREEN}✓${NC} RPICFG : $(mdir -i "$BOOT_IMG" :: | tail -1 | sed 's/^ *//')"
 
 # ── Partition 2 : ext4, peuplee sans montage ────────────────────────────────
 ROOT_IMG="$WORK/root.img"; rm -f "$ROOT_IMG"
 truncate -s "${ROOT_MB}M" "$ROOT_IMG"
 # -d : le contenu ; -m 1 : 1 % reserve root ; lazy_*=0 : les tables d inodes
 # sont ecrites maintenant, pas au premier montage sur une carte SD lente.
-mke2fs -q -F -t ext4 -L writable -m 1 -E lazy_itable_init=0,lazy_journal_init=0 \
+mke2fs -q -F -t ext4 -L armbi_root -m 1 -E lazy_itable_init=0,lazy_journal_init=0 \
     -d "$ROOTFS" "$ROOT_IMG" \
     || { echo -e "${RED}mke2fs -d a echoue : rootfs trop gros pour ${ROOT_MB} Mo ? (OSMO_RPI_ROOT_MB=... pour forcer)${NC}" >&2; exit 1; }
-echo -e "  ${GREEN}✓${NC} writable : ext4 ${ROOT_MB} Mo peuplee ($(e2fsck -n "$ROOT_IMG" 2>/dev/null | tail -1 | sed 's/^[^:]*: //' || true))"
+echo -e "  ${GREEN}✓${NC} armbi_root : ext4 ${ROOT_MB} Mo peuplee ($(e2fsck -n "$ROOT_IMG" 2>/dev/null | tail -1 | sed 's/^[^:]*: //' || true))"
 
 # Le contenu de /boot/firmware retourne dans le rootfs (une passe suivante, ou
 # un rootfs conserve, doit le retrouver).

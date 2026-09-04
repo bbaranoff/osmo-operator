@@ -39,10 +39,12 @@ FSTAB
 # carte SD (92-rpi-image les nomme ainsi). Le live n en a pas : live-boot lui
 # donne sa racine. Etiquettes, pas UUID : l image est fabriquee sans monter.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    sed -i -E -e '/^LABEL=writable[[:space:]]/d' -e '/^LABEL=system-boot[[:space:]]/d' "$ROOTFS/etc/fstab"
+    # Les etiquettes d Armbian (armbi_root, RPICFG) : c est ce que son
+    # armbian-resize-filesystem et sa doc attendent.
+    sed -i -E -e '/^LABEL=armbi_root[[:space:]]/d' -e '/^LABEL=RPICFG[[:space:]]/d' "$ROOTFS/etc/fstab"
     cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
-LABEL=writable      /               ext4    defaults,noatime,errors=remount-ro   0 1
-LABEL=system-boot   /boot/firmware  vfat    defaults,umask=0077                   0 2
+LABEL=armbi_root    /               ext4    defaults,noatime,commit=120,errors=remount-ro   0 1
+LABEL=RPICFG        /boot/firmware  vfat    defaults                                        0 2
 FSTAB
     install -d "$ROOTFS/boot/firmware"
 fi

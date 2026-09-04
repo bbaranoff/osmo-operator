@@ -100,6 +100,30 @@ SOURCES
 # debootstrap, dont on ne sait pas ce qu il contient.
 update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
 
+# ── arm64 : LE DEPOT ARMBIAN (noble), en plus des ports Ubuntu ──────────────
+# La base arm64 est Armbian 24.04 : le noyau bcm2711 d Armbian (rpi-6.18.y),
+# ses device-trees, le paquet BSP rpi4b (les hooks qui tiennent /boot/firmware
+# a jour, zram, resize, motd...), et son base-files (os-release Armbian). Le
+# depot porte aussi les paquets Ubuntu du Pi (linux-firmware-raspi, rpi-eeprom,
+# libraspberrypi-bin). Ecrit APRES les certificats (le depot est en https) et
+# AVANT l unique apt-get update, cle dearmee dans /usr/share/keyrings : c est
+# le format deb822 qu Armbian lui-meme utilise.
+if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
+    curl -fsSL --retry 3 https://apt.armbian.com/armbian.key | gpg --dearmor -o /usr/share/keyrings/armbian.gpg
+    cat > /etc/apt/sources.list.d/armbian.sources <<EOF
+Types: deb
+URIs: https://apt.armbian.com
+Suites: $_S
+Components: main $_S-utils $_S-desktop
+Signed-By: /usr/share/keyrings/armbian.gpg
+EOF
+    # /boot/firmware doit EXISTER avant l installation du noyau : les hooks du
+    # BSP (zzz-copy-new-files, zzz-update-initramfs, en bash -e) y copient sans
+    # le creer, et update-initramfs echouerait avec eux - donc tout ce script.
+    mkdir -p /boot/firmware
+    echo "depot Armbian : https://apt.armbian.com $_S"
+fi
+
 # ── deb-src : AVANT l unique apt-get update ─────────────────────────────────
 # Le build-dep gnuradio plus bas lit les index Sources. Ils etaient tires par
 # un DEUXIEME apt-get update, juste pour lui ; en ecrivant deb-src.list ici, le
@@ -192,20 +216,25 @@ case "$_S" in
     noble) _KERNEL_PKG="linux-image-generic";           _T64="t64"; _CARES="libcares2" ;;
     *)     _KERNEL_PKG="linux-image-generic-hwe-22.04"; _T64="";    _CARES="libc-ares2" ;;
 esac
-# ── arm64 / Raspberry Pi 4 : le noyau raspi, pas de live-boot ───────────────
-# linux-image-raspi : le noyau Canonical pour les Pi (vmlinuz, modules, et les
-# device-trees + overlays sous /lib/firmware/<ver>/device-tree). sctp et tun y
-# sont en modules. linux-firmware-raspi : start4.elf/fixup4.dat, ce que le GPU
-# du Pi charge avant le noyau. rpi-eeprom, libraspberrypi-bin (vcgencmd) :
-# l outillage du Pi. cloud-guest-utils : growpart, pour agrandir la racine a la
-# taille de la carte au premier demarrage. build-essential et wget : toast et
-# les lanceurs se compilent dans ce chroot (l hote ne sait pas produire de
-# l aarch64), et osmo-update recompile les lanceurs sur la machine.
+# ── arm64 / Raspberry Pi 4 : ARMBIAN, pas de live-boot ──────────────────────
+# Exactement ce que le build Armbian pose pour rpi4b (config/sources/families/
+# bcm2711.conf) : linux-image-current-bcm2711 (noyau rpi-6.18.y, vmlinuz dans
+# /boot, dtb + overlays sous /usr/lib/linux-image-<ver>), linux-dtb-current-
+# bcm2711, armbian-bsp-cli-rpi4b-current (les hooks /etc/kernel/postinst.d qui
+# recopient noyau, dtb et firmware dans /boot/firmware, le resize au premier
+# boot, zram, motd, armbian-config), armbian-firmware ; et les paquets Ubuntu
+# du Pi que le depot Armbian porte : linux-firmware-raspi (start4.elf,
+# fixup4.dat - le GPU les charge avant le noyau), rpi-eeprom, libraspberrypi-
+# bin (vcgencmd), raspi-config. Pas de u-boot sur le Pi 4 : le firmware charge
+# vmlinuz directement (config.txt, ecrit par 82-arm-natif). build-essential et
+# wget : toast et les lanceurs se compilent dans ce chroot (l hote ne sait pas
+# produire de l aarch64), et osmo-update recompile les lanceurs sur la machine.
 # PAS de live-boot : la racine est une ext4 sur la carte SD, montee par
-# l initramfs standard (root=LABEL=... dans cmdline.txt).
+# l initramfs standard (root=LABEL=armbi_root dans cmdline.txt).
 _LIVE_PKGS="live-boot live-boot-initramfs-tools"
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    _KERNEL_PKG="linux-image-raspi linux-firmware-raspi rpi-eeprom libraspberrypi-bin cloud-guest-utils build-essential wget"
+    _KERNEL_PKG="linux-image-current-bcm2711 linux-dtb-current-bcm2711 armbian-bsp-cli-rpi4b-current armbian-firmware
+      linux-firmware-raspi rpi-eeprom libraspberrypi-bin raspi-config build-essential wget"
     _LIVE_PKGS=""
 fi
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate

@@ -1,6 +1,15 @@
 #!/bin/bash
 # build-iso.sh - Genere une ISO bootable en utilisant build.sh et start.sh
 # Aucun docker build direct dans ce script, tout passe par les scripts existants.
+#
+#  Usage : sudo ./build-iso.sh [options]
+#    (sans option)        les quatre images amd64 : interstp, operator, lite, desktop
+#    --role=operator|interstp   --node=N   --lite   --desktop   --all
+#    --arm                image SD arm64 pour Raspberry Pi 4, base Armbian 24.04
+#                         (osmo-operator-<...>-rpi4.img) ; --lite accepte,
+#                         --desktop et --all refuses. Voir iso_modules/00-options.sh.
+#    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
+#    --wan --wan-nodes=... --wan-id=N --wan-ops=N --hub-ip=IP
 set -euo pipefail
 
 # Couleurs definies AVANT tout : sous `set -u`, la premiere ligne coloree d'un

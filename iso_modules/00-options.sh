@@ -59,9 +59,10 @@ ISO_DESKTOP=0
 ISO_ALL=0
 
 # ── ARCHITECTURE : amd64 (ISO PC) ou arm64 (image SD Raspberry Pi 4) ─────────
-# --arm : la MEME pile, construite pour arm64, livree en IMAGE SD (.img : une
-# partition FAT pour le firmware du Pi, une ext4 persistante pour le systeme),
-# pas en ISO live. Tout se fabrique sur l hote x86 : l image docker par buildx
+# --arm : la MEME pile, construite pour arm64 sur une base ARMBIAN 24.04 (le
+# noyau bcm2711 et le BSP rpi4b d Armbian, depot apt.armbian.com), livree en
+# IMAGE SD (.img : une partition FAT pour le firmware du Pi, une ext4
+# persistante pour le systeme), pas en ISO live. Tout se fabrique sur l hote x86 : l image docker par buildx
 # --platform linux/arm64 (qemu-user-static emule aarch64, c est LENT : comptez
 # une dizaine d heures au premier build, le cache .deb rend les suivants
 # courts), le rootfs par debootstrap --foreign puis chroot sous binfmt. Ni
@@ -146,7 +147,7 @@ export ISO_ARCH ISO_MIRROR ISO_IMG_TAG
 if [ "$ISO_ARCH" = "arm64" ]; then
     [ "$ISO_DESKTOP" = "1" ] && { echo -e "${RED}--arm : pas de --desktop (GNOME, calamares, grub-efi-amd64 : rien de tout cela sur le Pi)${NC}" >&2; exit 2; }
     [ "$ISO_ALL" = "1" ]     && { echo -e "${RED}--arm : pas de --all - une image a la fois (--role=operator, --lite ou --role=interstp)${NC}" >&2; exit 2; }
-    echo -e "  ${CYAN}cible : arm64 / Raspberry Pi 4 - image SD .img, miroir ${ISO_MIRROR}${NC}"
+    echo -e "  ${CYAN}cible : arm64 / Raspberry Pi 4, base Armbian ${ISO_UBUNTU} - image SD .img, miroir ${ISO_MIRROR}${NC}"
 fi
 
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }

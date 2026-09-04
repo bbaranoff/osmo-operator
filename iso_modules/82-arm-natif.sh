@@ -89,118 +89,106 @@ if [ -x "$ROOTFS/opt/GSM/osmo-operator/packaging/build-debs.sh" ]; then
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La partition firmware du Pi : /boot/firmware
+#  La partition firmware du Pi : /boot/firmware, comme Armbian la peuple
 # ═════════════════════════════════════════════════════════════════════════════
-# Le Pi 4 ne demarre pas par GRUB : son GPU lit une partition FAT (la premiere,
-# etiquette system-boot), y charge start4.elf, lit config.txt, puis le noyau et
-# l initrd designes. Ubuntu monte cette partition sur /boot/firmware et la
-# tient a jour par flash-kernel ; on fait la meme chose avec UN script, appele
-# ici pour peupler la partition, et rejoue par les hooks noyau/initramfs a
-# chaque mise a jour d apt sur la machine. Ce qu il pose :
-#   vmlinuz, initrd.img         le noyau raspi et son initramfs (/boot)
-#   bcm2711-rpi-4-b.dtb ...     les device-trees (/lib/firmware/<ver>/device-tree)
-#   overlays/                   les overlays (vc4-kms-v3d, uart, ...)
-#   start4.elf, fixup4.dat...   le firmware GPU (linux-firmware-raspi)
-#   config.txt, cmdline.txt     ecrits une fois, jamais ecrases
-# kernel=vmlinuz : le firmware du Pi sait decompresser un vmlinuz gzip arm64
-# (c est ainsi qu Ubuntu demarre depuis 22.04, sans u-boot).
-cat > "$ROOTFS/usr/local/sbin/osmo-rpi-firmware" <<'RPIFW'
-#!/bin/sh
-# osmo-rpi-firmware - peuple /boot/firmware (partition FAT lue par le GPU du Pi)
-# Rejoue par /etc/kernel/postinst.d et /etc/initramfs/post-update.d.
-set -e
-FW=/boot/firmware
-K=$(ls /boot/vmlinuz-*-raspi 2>/dev/null | sort -V | tail -1 || true)
-[ -n "$K" ] || { echo "osmo-rpi-firmware: aucun noyau raspi dans /boot" >&2; exit 0; }
-V=${K#/boot/vmlinuz-}
-mkdir -p "$FW/overlays"
-cp -f "$K" "$FW/vmlinuz"
-[ -f "/boot/initrd.img-$V" ] && cp -f "/boot/initrd.img-$V" "$FW/initrd.img"
-DT="/lib/firmware/$V/device-tree"
-if [ -d "$DT/broadcom" ]; then
-    for d in "$DT"/broadcom/bcm2711-*.dtb; do [ -f "$d" ] && cp -f "$d" "$FW/"; done
-fi
-if [ -d "$DT/overlays" ]; then cp -f "$DT"/overlays/* "$FW/overlays/" 2>/dev/null || true; fi
-for f in /usr/lib/linux-firmware-raspi/*; do [ -f "$f" ] && cp -f "$f" "$FW/"; done
-if [ ! -f "$FW/config.txt" ]; then
-cat > "$FW/config.txt" <<'CFG'
-# osmo-operator - Raspberry Pi 4 (arm64). Ecrit a la fabrication de l image,
-# jamais reecrit ensuite : modifiez librement.
+# Le Pi 4 ne demarre pas par GRUB ni par u-boot : son GPU lit une partition FAT
+# (la premiere, etiquette RPICFG), y charge start4.elf, lit config.txt, puis le
+# noyau et l initrd designes. Armbian monte cette partition sur /boot/firmware
+# et la tient a jour par trois hooks de son paquet BSP (armbian-bsp-cli-rpi4b) :
+#   /etc/kernel/postinst.d/z51-raspi-firmware   start4.elf, fixup4.dat... depuis
+#                                               /usr/lib/linux-firmware-raspi
+#   /etc/kernel/postinst.d/zzz-copy-new-files   vmlinuz, *.dtb, overlays/
+#   /etc/initramfs/post-update.d/zzz-update-initramfs   initrd.img
+# Le noyau s installe AVANT le BSP dans un meme apt : ses hooks n ont pas
+# tourne. On les rejoue ici, comme le fait le build Armbian lui-meme
+# (post_family_tweaks__populate_boot_firmware_directory), puis update-initramfs
+# pour que l initrd parte par le troisieme hook. Toute mise a jour du noyau
+# par apt sur la machine refera la meme chose, sans nous.
+_KVER="$(ls "$ROOTFS"/boot/vmlinuz-*-bcm2711 2>/dev/null | sort -V | tail -1 | sed 's|.*/vmlinuz-||' || true)"
+[ -n "$_KVER" ] || { echo -e "${RED}aucun noyau Armbian bcm2711 dans /boot du rootfs (linux-image-current-bcm2711 non installe ?)${NC}" >&2; exit 1; }
+install -d "$ROOTFS/boot/firmware"
+for _h in /etc/kernel/postinst.d/z51-raspi-firmware /etc/kernel/postinst.d/zzz-copy-new-files; do
+    [ -x "$ROOTFS$_h" ] || { echo -e "${RED}hook Armbian absent : $_h (armbian-bsp-cli-rpi4b-current non installe ?)${NC}" >&2; exit 1; }
+    _arm_chroot "$_h" "$_KVER" >>"$WORK/rpi-firmware.log" 2>&1 \
+        || { echo -e "${RED}$_h a echoue (voir $WORK/rpi-firmware.log)${NC}" >&2; tail -5 "$WORK/rpi-firmware.log" >&2; exit 1; }
+done
+_arm_chroot update-initramfs -u -k "$_KVER" >>"$WORK/rpi-firmware.log" 2>&1 \
+    || { echo -e "${RED}update-initramfs -k $_KVER a echoue (voir $WORK/rpi-firmware.log)${NC}" >&2; exit 1; }
+[ -f "$ROOTFS/boot/firmware/initrd.img" ] || cp -f "$ROOTFS/boot/initrd.img-$_KVER" "$ROOTFS/boot/firmware/initrd.img"
+
+# config.txt et cmdline.txt : ceux qu Armbian ecrit pour rpi4b (bcm2711.conf,
+# pre_umount_final_image__write_raspi_config/cmdline), a deux details pres :
+# la console serie est activee (enable_uart=1 : un banc a souvent un cable
+# serie, et l autologin root y est pose par 84-comptes), et loglevel n est pas
+# force a 1 - on veut lire ce que dit le noyau. Ecrits une fois, jamais
+# reecrits ensuite : modifiez librement sur la carte.
+cat > "$ROOTFS/boot/firmware/config.txt" <<'CFG'
+# osmo-operator sur Armbian - Raspberry Pi 4 (arm64)
+# For more options and information see http://rptl.io/configtxt
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Additional overlays and parameters are documented /boot/firmware/overlays/README
+
+# Automatically load overlays for detected cameras / DSI displays
+camera_auto_detect=1
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+disable_fw_kms_setup=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+# Console serie (serial0 -> ttyS0), autologin root (osmo-operator)
+enable_uart=1
+
+[cm4]
+otg_mode=1
+
 [all]
 kernel=vmlinuz
-cmdline=cmdline.txt
 initramfs initrd.img followkernel
 arm_64bit=1
-enable_uart=1
-dtparam=audio=on
-disable_overscan=1
-dtoverlay=vc4-kms-v3d
-disable_fw_kms_setup=1
-camera_auto_detect=0
-display_auto_detect=1
-[pi4]
-max_framebuffers=2
-arm_boost=1
 CFG
-fi
-if [ ! -f "$FW/cmdline.txt" ]; then
-    printf '%s\n' "console=serial0,115200 console=tty1 root=LABEL=writable rootfstype=ext4 rootwait fixrtc fsck.repair=yes cgroup_enable=memory cgroup_memory=1" > "$FW/cmdline.txt"
-fi
-sync
-echo "osmo-rpi-firmware: $FW a jour (noyau $V)"
-RPIFW
-chmod 755 "$ROOTFS/usr/local/sbin/osmo-rpi-firmware"
-install -d "$ROOTFS/etc/kernel/postinst.d" "$ROOTFS/etc/initramfs/post-update.d"
-for _h in "$ROOTFS/etc/kernel/postinst.d/zz-osmo-rpi-firmware" "$ROOTFS/etc/initramfs/post-update.d/zz-osmo-rpi-firmware"; do
-    printf '#!/bin/sh\n# osmo-operator : /boot/firmware suit le noyau (voir osmo-rpi-firmware)\nexec /usr/local/sbin/osmo-rpi-firmware\n' > "$_h"
-    chmod 755 "$_h"
+printf '%s\n' "console=serial0,115200 console=tty1 root=LABEL=armbi_root rootfstype=ext4 fsck.repair=yes rootwait logo.nologo cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory" \
+    > "$ROOTFS/boot/firmware/cmdline.txt"
+
+for _f in vmlinuz initrd.img start4.elf fixup4.dat bcm2711-rpi-4-b.dtb config.txt cmdline.txt overlays/vc4-kms-v3d.dtbo; do
+    [ -e "$ROOTFS/boot/firmware/$_f" ] || { echo -e "${RED}/boot/firmware/$_f absent apres les hooks Armbian (voir $WORK/rpi-firmware.log)${NC}" >&2; ls -la "$ROOTFS/boot/firmware" >&2; exit 1; }
 done
-install -d "$ROOTFS/boot/firmware"
-if _arm_chroot /usr/local/sbin/osmo-rpi-firmware >"$WORK/rpi-firmware.log" 2>&1 \
-   && [ -f "$ROOTFS/boot/firmware/vmlinuz" ] && [ -f "$ROOTFS/boot/firmware/start4.elf" ] \
-   && [ -f "$ROOTFS/boot/firmware/bcm2711-rpi-4-b.dtb" ]; then
-    echo -e "  ${GREEN}✓${NC} /boot/firmware : $(ls "$ROOTFS/boot/firmware" | wc -l) entrees, noyau $(ls "$ROOTFS"/boot/vmlinuz-*-raspi | sort -V | tail -1 | sed 's|.*/vmlinuz-||')"
-else
-    echo -e "${RED}/boot/firmware incomplet (voir $WORK/rpi-firmware.log) : vmlinuz, start4.elf ou bcm2711-rpi-4-b.dtb manquent${NC}" >&2
-    ls -la "$ROOTFS/boot/firmware" >&2 || true
-    exit 1
+echo -e "  ${GREEN}✓${NC} /boot/firmware : noyau ${CYAN}${_KVER}${NC}, $(ls "$ROOTFS/boot/firmware" | wc -l) entrees ($(du -sh "$ROOTFS/boot/firmware" | cut -f1))"
+
+# ── Les services Armbian du premier demarrage ───────────────────────────────
+# armbian-resize-filesystem : etend la partition racine a la carte et
+# resize2fs, une fois (c est lui, pas nous, qui sait le faire sur MBR ET GPT).
+# armbian-firstrun : cles ssh regenerees, reglages materiels. Le BSP enable
+# zram, hardware-optimize, led-state, monitor par son postinst ; ces deux-la
+# non (le build Armbian le fait a la fabrication de l image, comme ici).
+# armbian-ramlog (log2ram) : COUPE. Il tient /var/log dans 50 Mo de RAM et
+# synchronise sur la carte : les journaux osmocom (logrotate a 32 Mo x 3), les
+# pcap en anneau du tcpdump enveloppe (5 x 32 Mo) le rempliraient en une heure
+# et les ecritures echoueraient sans un mot. Sur un banc, /var/log sur la carte.
+chroot "$ROOTFS" systemctl enable armbian-resize-filesystem armbian-firstrun >/dev/null 2>&1 \
+    || echo -e "  ${YELLOW}!${NC} armbian-resize-filesystem / armbian-firstrun : enable a echoue" >&2
+install -d "$ROOTFS/etc/default"
+if [ -f "$ROOTFS/etc/default/armbian-ramlog" ] || [ -f "$ROOTFS/etc/default/armbian-ramlog.dpkg-dist" ]; then
+    cp -f "$ROOTFS/etc/default/armbian-ramlog.dpkg-dist" "$ROOTFS/etc/default/armbian-ramlog" 2>/dev/null || true
+    sed -i 's/^ENABLED=.*/ENABLED=false/' "$ROOTFS/etc/default/armbian-ramlog"
+    chroot "$ROOTFS" systemctl disable armbian-ramlog >/dev/null 2>&1 || true
 fi
-
-# ── La racine s etend a la carte au premier demarrage ───────────────────────
-# L image fait la taille du rootfs plus une marge ; la carte fait 16, 32, 64 Go.
-# growpart (cloud-guest-utils) pousse la partition 2 au bout du disque, resize2fs
-# suit, une fois - le marqueur empeche de rejouer.
-cat > "$ROOTFS/usr/local/sbin/osmo-grow-root" <<'GROW'
-#!/bin/sh
-# osmo-grow-root - agrandit la partition racine a toute la carte (une fois)
-MARK=/var/lib/osmo-grow-root.done
-[ -e "$MARK" ] && exit 0
-src=$(findmnt -no SOURCE / 2>/dev/null) || exit 0
-case "$src" in /dev/*) ;; *) exit 0 ;; esac
-name=$(basename "$src")
-disk=$(lsblk -no PKNAME "$src" 2>/dev/null | head -1)
-part=$(cat "/sys/class/block/$name/partition" 2>/dev/null)
-[ -n "$disk" ] && [ -n "$part" ] || exit 0
-out=$(growpart "/dev/$disk" "$part" 2>&1) && echo "osmo-grow-root: $out" || case "$out" in *NOCHANGE*) ;; *) echo "osmo-grow-root: $out" >&2 ;; esac
-resize2fs "$src" >/dev/null 2>&1 || true
-touch "$MARK"
-GROW
-chmod 755 "$ROOTFS/usr/local/sbin/osmo-grow-root"
-cat > "$ROOTFS/etc/systemd/system/osmo-grow-root.service" <<'UNIT'
-[Unit]
-Description=osmo-operator : agrandit la racine a la carte SD (premier demarrage)
-DefaultDependencies=no
-After=systemd-remount-fs.service
-Before=sysinit.target
-ConditionPathExists=!/var/lib/osmo-grow-root.done
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/osmo-grow-root
-RemainAfterExit=yes
-
-[Install]
-WantedBy=sysinit.target
-UNIT
-chroot "$ROOTFS" systemctl enable osmo-grow-root >/dev/null 2>&1 || true
-echo -e "  ${GREEN}✓${NC} osmo-grow-root.service : la racine prendra toute la carte au premier boot"
+# Pas d assistant Armbian au premier login : root:osmo est deja pose, le
+# marqueur /root/.not_logged_in_yet n existe que dans les images Armbian.
+rm -f "$ROOTFS/root/.not_logged_in_yet"
+echo -e "  ${GREEN}✓${NC} armbian-resize-filesystem et armbian-firstrun actives, armbian-ramlog coupe"

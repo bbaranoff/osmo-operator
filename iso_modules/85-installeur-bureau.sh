@@ -157,6 +157,64 @@ for _t in /tmp/calamares-root-*; do
     rmdir "$_t" 2>/dev/null || true
 done
 
+# ── MIROIR : la page "Miroir Ubuntu" de l installeur suit le reseau ─────────
+# packaging/apt-mirror.sh --list mesure les miroirs d ici (5 s max chacun) ;
+# la page propose ceux qui repondent, du plus rapide au plus lent, le premier
+# pre-selectionne, plus "celui de la cle" (aucun changement). Le module
+# contextualprocess@mirror ecrit le choix dans la cible, apres unpackfs.
+# Aucun guillemet dans les commandes : elles sont entre apostrophes (bash -c)
+# dans une chaine YAML entre guillemets. L espace du remplacement sed est
+# echappe par une barre oblique inverse, lue par le bash de la cible.
+_pm=/etc/calamares/modules/packagechooser-mirror.conf
+_cm=/etc/calamares/modules/contextualprocess-mirror.conf
+_am=/opt/GSM/osmo-operator/packaging/apt-mirror.sh
+if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
+    _cur="$(sed -nE 's|^deb (http[^ ]+) .*|\1|p' /etc/apt/sources.list 2>/dev/null | head -1)"
+    _suite="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-noble}")"
+    _mlist="$(bash "$_am" --list "$_suite" 2>/dev/null || true)"
+    _n=0
+    {
+        echo "---"
+        echo "mode: required"
+        echo "method: legacy"
+        echo "labels:"
+        echo "    step: \"Miroir Ubuntu\""
+        if [ -n "$_mlist" ]; then echo "default: m1"; else echo "default: keep"; fi
+        echo "items:"
+        echo "    - id: keep"
+        echo "      name: \"Celui de la cle live\""
+        echo "      description: \"Le systeme installe garde le miroir de la cle : ${_cur:-archive.ubuntu.com}.\""
+        printf '%s\n' "$_mlist" | while IFS="$(printf '\t')" read -r _ms _url; do
+            [ -n "$_url" ] || continue
+            _n=$((_n + 1))
+            _tag=""; [ "$_n" = 1 ] && _tag=" - le plus rapide d ici"
+            echo "    - id: m${_n}"
+            echo "      name: \"${_url#http://}\""
+            echo "      description: \"${_url} - InRelease en ${_ms} ms${_tag}.\""
+        done
+    } > "$_pm"
+    {
+        echo "---"
+        echo "dontChroot: false"
+        echo "timeout: 60"
+        echo "packagechooser_mirror:"
+        echo "    \"keep\":"
+        echo "        - \"-/bin/true\""
+        _n=0
+        printf '%s\n' "$_mlist" | while IFS="$(printf '\t')" read -r _ms _url; do
+            [ -n "$_url" ] || continue
+            _n=$((_n + 1))
+            echo "    \"m${_n}\":"
+            echo "        - \"-/bin/bash -c 'sed -i -E s,^deb\\shttps?://\\S+,deb\\ ${_url}, /etc/apt/sources.list; [ -f /etc/apt/sources.list.d/ubuntu.sources ] && sed -i -E s,^URIs:\\shttps?://\\S+,URIs:\\ ${_url}, /etc/apt/sources.list.d/ubuntu.sources; echo [mirror] ${_url}'\""
+        done
+    } > "$_cm"
+    if [ -n "$_mlist" ]; then
+        echo "Miroir Ubuntu : $(printf '%s\n' "$_mlist" | wc -l) miroirs mesures, le plus rapide : $(printf '%s\n' "$_mlist" | head -1 | cut -f2)"
+    else
+        echo "Miroir Ubuntu : aucune mesure (pas de reseau ?) - la cible garde ${_cur:-archive.ubuntu.com}"
+    fi
+fi
+
 # ── NVIDIA : la page "Pilotes graphiques" de l installeur suit la machine ────
 # Calamares ne sait pas griser une entree selon le materiel, et ne connait pas
 # la liste des pilotes disponibles : on ECRIT sa page de choix et le module

@@ -18,10 +18,10 @@ fi
 
 echo ""
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    echo -e "${GREEN}${BOLD}═══ Image SD Raspberry Pi 4 prete : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
+    echo -e "${GREEN}${BOLD}═══ Image SD Raspberry Pi 4 (Armbian ${ISO_UBUNTU}) prete : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
     echo -e "  Chemin absolu : $(readlink -f "$OUTPUT")"
     echo -e "  Gravure : ${CYAN}dd if=$(basename "$OUTPUT") of=/dev/sdX bs=4M status=progress conv=fsync${NC}"
-    echo -e "  Au premier demarrage la racine s etend a la carte ; console HDMI/serie et ssh, root:osmo."
+    echo -e "  Au premier demarrage armbian-resize-filesystem etend la racine a la carte ; console HDMI/serie et ssh, root:osmo."
 else
 echo -e "${GREEN}${BOLD}═══ ISO prete : ${OUTPUT} ($(du -sh "$OUTPUT"|cut -f1)) ═══${NC}"
 echo -e "  Chemin absolu : $(readlink -f "$OUTPUT")"
