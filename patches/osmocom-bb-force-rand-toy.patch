@@ -1,0 +1,30 @@
+diff --git a/src/host/layer23/src/common/subscriber.c b/src/host/layer23/src/common/subscriber.c
+index f6aa05d5..53645b04 100644
+--- a/src/host/layer23/src/common/subscriber.c
++++ b/src/host/layer23/src/common/subscriber.c
+@@ -16,6 +16,7 @@
+  */
+ 
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <errno.h>
+ #include <string.h>
+ #include <arpa/inet.h>
+@@ -265,6 +266,17 @@ int gsm_subscr_generate_kc(struct osmocom_ms *ms, uint8_t key_seq, const uint8_t
+ 	struct gsm_subscriber *subscr = &ms->subscr;
+ 	struct osmobb_l23_subscr_sim_auth_resp_sig_data sd;
+ 	int rc;
++	static const uint8_t forced_rand[16];
++
++	/* deka toy: force RAND=0 for the fixed COMP128v1 toy table
++	 * (see /root/deka/crack_toy.py) instead of the network's RAND.
++	 * FORCE_RAND is a presence-only switch: its value is never read, so
++	 * this can only ever force an all-zero RAND, never an arbitrary one.
++	 * Unset (default): rand is untouched, normal behavior. */
++	if (getenv("FORCE_RAND")) {
++		LOGP(DMM, LOGL_NOTICE, "FORCE_RAND set: using RAND=0 (deka toy mode)\n");
++		rand = forced_rand;
++	}
+ 
+ 	if (no_sim || subscr->sim_type == GSM_SIM_TYPE_NONE || !subscr->sim_valid) {
+ 		LOGP(DMM, LOGL_INFO, "Sending dummy authentication response\n");

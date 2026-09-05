@@ -2,8 +2,18 @@
 Description=osmo-operator - banc multi-operateur (start-multi.sh : natif + conteneurs + inter-STP)
 Documentation=file:/opt/GSM/osmo-operator/README.md
 # Le multi-operateur RACCORDE le natif, il ne le lance pas : c'est osmo-banc
-# qui le tient. Requires= : sans natif, le hub n'aurait qu'un ASP sur trois.
-Requires=osmo-banc.service
+# qui le tient.
+# [2026-09-05] Requires= -> Wants=. C'ETAIT UN SUICIDE. start-multi.sh applique
+# « un clic = un banc neuf » : il fait `systemctl stop osmo-banc` a chaque
+# lancement (tout_arreter), puis le relance (lancer_natif_si_absent). Or
+# Requires= propage l'arret EXPLICITE d'une dependance a l'unite qui en depend :
+# ce stop du natif arretait osmo-multi lui-meme, en plein ExecStart -
+# `code=killed, status=15/TERM`, l'unite en echec sans une ligne d'erreur utile.
+# Wants= tire le natif au boot dans le meme ordre (After= plus bas) mais NE
+# propage PLUS l'arret : start-multi.sh peut recycler osmo-banc sans se tuer. La
+# garantie « pas de natif = un ASP sur trois » reste tenue par start-multi.sh,
+# qui relance osmo-banc si besoin - ce n'est pas a systemd de la porter.
+Wants=osmo-banc.service
 # [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
 # ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
 # mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les

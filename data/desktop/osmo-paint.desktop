@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Peinture (overlay)
+Name[fr]=Peinture (overlay)
+Comment=Dessin au premier plan par-dessus le bureau : feutre, formes, gomme
+Comment[fr]=Dessin au premier plan par-dessus le bureau : feutre, formes, gomme
+Exec=/opt/GSM/osmo-operator/tools/overlay-draw.py
+Icon=osmo-paint
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=peinture;dessin;overlay;feutre;annoter;

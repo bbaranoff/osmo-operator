@@ -536,6 +536,69 @@ DEKADSK
             done
         done
         echo -e "  ${GREEN}✓${NC} deka : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
+
+        # ── deka toy : meme logique, banc de test COMP128v1 (RAND=0) ─────────
+        # Reutilise le clone /root/deka (crack_toy.py / toy-delta-client.py y
+        # vivent deja avec le reste du depot) : rien a cloner de plus, juste
+        # l icone + le lanceur. Meme principe que deka : rien au boot, une
+        # icone que l utilisateur clique quand il veut. Pas de pkexec ici -
+        # contrairement a deka-start.sh, ni la generation de la table toy ni
+        # le client reseau n ont besoin du root (pas de LVM/mount).
+        if [ -f /root/deka/crack_toy.py ] && [ -f /root/deka/toy-delta-client.py ]; then
+            echo -e "  ${CYAN}→${NC} deka toy : pose de l icone d application ..."
+
+            cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
+#!/bin/bash
+set -u
+DIR=/root/deka
+TABLE="$DIR/toy_table.tsv"
+CMD="cd '$DIR' && { [ -f '$TABLE' ] || python3 crack_toy.py build -o '$TABLE'; } && python3 toy-delta-client.py -t '$TABLE'"
+FULL="$CMD; echo; read -n1 -rsp 'deka toy termine - une touche pour fermer...'"
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$FULL" ;;
+        *)              exec "$term" -T "deka toy" -e bash -c "$FULL" ;;
+    esac
+done
+exec bash -c "$CMD"
+DEKATOYGUI
+            chmod 755 /usr/local/bin/osmo-deka-toy
+
+            # ICONE DEDIEE : meme mandala que deka (data/deka-toy.svg), couleurs
+            # inversees (fond blanc / trait sombre) pour distinguer les deux
+            # icones au premier coup d oeil dans le dock. Chemin absolu dans
+            # Icon=, meme raison que deka (cf. update.sh).
+            if [ -f "$DIR/data/deka-toy.svg" ]; then
+                install -m644 "$DIR/data/deka-toy.svg" /usr/share/osmo-operator/icons/deka-toy.svg
+                install -m644 "$DIR/data/deka-toy.svg" /usr/share/icons/hicolor/scalable/apps/deka-toy.svg
+            fi
+            _deka_toy_desktop=/usr/share/applications/deka-toy.desktop
+            cat > "$_deka_toy_desktop" <<'DEKATOYDSK'
+[Desktop Entry]
+Type=Application
+Name=deka toy
+Name[fr]=deka toy
+Comment=Lance deka en mode toy (banc de test, sans les tables de 4 To)
+Comment[fr]=Lance deka en mode toy (banc de test, sans les tables de 4 To)
+Exec=/usr/local/bin/osmo-deka-toy
+Icon=/usr/share/osmo-operator/icons/deka-toy.svg
+Terminal=false
+Categories=System;Utility;
+Keywords=deka;toy;comp128;banc;test;
+DEKATOYDSK
+            chmod 644 "$_deka_toy_desktop"
+            command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+            update-desktop-database /usr/share/applications 2>/dev/null || true
+
+            # meme regle que deka : pas d icone imposee sur le bureau.
+            for _h in /root /home/*; do
+                for _dir in Bureau Desktop; do
+                    rm -f "$_h/$_dir/deka-toy.desktop" 2>/dev/null || true
+                done
+            done
+            echo -e "  ${GREEN}✓${NC} deka toy : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
+        fi
     fi
 fi
 

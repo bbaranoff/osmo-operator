@@ -121,6 +121,116 @@ osmo_reposer_icones() {
 }
 osmo_reposer_icones
 
+# ── LE MULTI NE DOIT PAS SE TUER EN RECYCLANT LE NATIF ──────────────────────
+# [2026-09-05] osmo-multi.service portait `Requires=osmo-banc.service`. Or
+# start-multi.sh applique « un clic = un banc neuf » : il ARRETE osmo-banc a
+# chaque lancement, puis le relance. Requires= propage l arret explicite d une
+# dependance a l unite qui en depend -- ce stop du natif arretait osmo-multi
+# LUI-MEME en plein ExecStart (code=killed, status=15/TERM). Le correctif est
+# `Wants=` : meme ordre au boot (After=), mais plus de propagation de l arret.
+osmo_corriger_multi_natif() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local unit=/etc/systemd/system/osmo-multi.service
+    [ -f "$unit" ] || return 0
+    grep -q '^Requires=osmo-banc\.service$' "$unit" || return 0
+    sed -i 's/^Requires=osmo-banc\.service$/Wants=osmo-banc.service/' "$unit"
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+    echo "[OK] osmo-multi.service : Requires=osmo-banc -> Wants (plus de suicide au recyclage du natif)."
+    return 0
+}
+osmo_corriger_multi_natif
+
+# ── L OUTIL DE PEINTURE (overlay) SUR LES MACHINES DEJA INSTALLEES ──────────
+# [2026-09-05] tools/overlay-draw.py + son lanceur. build-iso l embarque ; ici
+# on rattrape les machines deja posees : symlink, icone, chemin absolu. Idempotent.
+osmo_poser_peinture() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local d=/opt/GSM/osmo-operator
+    local py="$d/tools/overlay-draw.py"
+    [ -f "$py" ] || return 0
+    chmod 755 "$py" 2>/dev/null || true
+    ln -sf "$py" /usr/local/bin/overlay-draw 2>/dev/null || true
+    if [ -f "$d/data/osmo-paint.svg" ]; then
+        install -d /usr/share/osmo-operator/icons \
+                   /usr/share/icons/hicolor/scalable/apps 2>/dev/null || true
+        cp -f "$d/data/osmo-paint.svg" /usr/share/osmo-operator/icons/osmo-paint.svg 2>/dev/null || true
+        cp -f "$d/data/osmo-paint.svg" /usr/share/icons/hicolor/scalable/apps/osmo-paint.svg 2>/dev/null || true
+        chmod 644 /usr/share/osmo-operator/icons/osmo-paint.svg 2>/dev/null || true
+    fi
+    if [ -f "$d/data/desktop/osmo-paint.desktop" ]; then
+        install -m644 "$d/data/desktop/osmo-paint.desktop" \
+                /usr/share/applications/osmo-paint.desktop 2>/dev/null || true
+        sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/osmo-paint.svg|" \
+            /usr/share/applications/osmo-paint.desktop 2>/dev/null || true
+    fi
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+        gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    return 0
+}
+osmo_poser_peinture
+
+
+# ── DEKA TOY : RATTRAPAGE DES MACHINES DEJA A JOUR AVEC DEKA ────────────────
+# [2026-09-05] deka toy (banc de test COMP128v1, RAND=0, voir /root/deka/
+# crack_toy.py) est arrive apres que des machines aient deja installe le
+# supplement deka via addition.sh. Ces machines ont /root/deka a jour (meme
+# depot git, crack_toy.py et toy-delta-client.py y sont deja) mais pas encore
+# l icone/le lanceur deka-toy, et ne repassent pas par addition.sh toutes
+# seules. Simple pose de fichiers - PAS de compilation ici (voir l en-tete de
+# ce script) : rien a construire, tout est deja dans le depot clone.
+osmo_reposer_deka_toy() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local dir=/root/deka
+    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/toy-delta-client.py" ] || return 0
+    [ -f /usr/share/applications/deka-toy.desktop ] && [ -x /usr/local/bin/osmo-deka-toy ] && return 0
+
+    cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
+#!/bin/bash
+set -u
+DIR=/root/deka
+TABLE="$DIR/toy_table.tsv"
+CMD="cd '$DIR' && { [ -f '$TABLE' ] || python3 crack_toy.py build -o '$TABLE'; } && python3 toy-delta-client.py -t '$TABLE'"
+FULL="$CMD; echo; read -n1 -rsp 'deka toy termine - une touche pour fermer...'"
+for term in x-terminal-emulator gnome-terminal xterm; do
+    command -v "$term" >/dev/null 2>&1 || continue
+    case "$term" in
+        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$FULL" ;;
+        *)              exec "$term" -T "deka toy" -e bash -c "$FULL" ;;
+    esac
+done
+exec bash -c "$CMD"
+DEKATOYGUI
+    chmod 755 /usr/local/bin/osmo-deka-toy
+
+    install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
+    if [ -f /opt/GSM/osmo-operator/data/deka-toy.svg ]; then
+        install -m644 /opt/GSM/osmo-operator/data/deka-toy.svg /usr/share/osmo-operator/icons/deka-toy.svg
+        install -m644 /opt/GSM/osmo-operator/data/deka-toy.svg /usr/share/icons/hicolor/scalable/apps/deka-toy.svg
+    fi
+    cat > /usr/share/applications/deka-toy.desktop <<'DEKATOYDSK'
+[Desktop Entry]
+Type=Application
+Name=deka toy
+Name[fr]=deka toy
+Comment=Lance deka en mode toy (banc de test, sans les tables de 4 To)
+Comment[fr]=Lance deka en mode toy (banc de test, sans les tables de 4 To)
+Exec=/usr/local/bin/osmo-deka-toy
+Icon=/usr/share/osmo-operator/icons/deka-toy.svg
+Terminal=false
+Categories=System;Utility;
+Keywords=deka;toy;comp128;banc;test;
+DEKATOYDSK
+    chmod 644 /usr/share/applications/deka-toy.desktop
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+        gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    return 0
+}
+osmo_reposer_deka_toy
+
 # ── FIREFOX ─────────────────────────────────────────────────────────────────
 # Le dashboard et fft-web s ouvrent dans un navigateur. Les images du
 # 2026-09-04 et apres embarquent le .deb de Mozilla : il est deja la, apt le

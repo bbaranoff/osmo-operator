@@ -891,14 +891,15 @@ GDM
     #
     # [2026-09-04] L ordre demande, gauche a droite dans le dock :
     #   firefox · fichiers · claude · lancer le banc · installer · tutoriel ·
-    #   supplements · multi · deka · dsp · linphone · wireshark
+    #   supplements · multi · deka · deka toy · dsp · linphone · wireshark
     #
     # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
-    # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
-    # et claude.desktop meme sur une image ou ils ne sont pas installes.
+    # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop,
+    # deka-toy.desktop et claude.desktop meme sur une image ou ils ne sont pas
+    # installes (deka/deka-toy sont poses par addition.sh, un supplement).
     # firefox.desktop : celui du deb Mozilla (packages.mozilla.org).
     for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
-        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" "$_sec" \
+        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047deka.desktop\047, \047deka-toy.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047]\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done
     unset _sec
