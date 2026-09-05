@@ -281,6 +281,33 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       && ldconfig; \
     fi
 
+# ── Patch osmo-bts RAND : forcer le defi d'authentification (deka toy) ────────
+# osmo-bts relaie normalement l'AUTHENTICATION REQUEST du reseau telle quelle.
+# Ce patch, dans rsl_rx_rll() (src/common/rsl.c), reecrit le RAND de cette
+# trame quand la variable d'environnement RAND est posee sur le processus BTS :
+#     RAND non defini -> rien de touche (comportement normal) ;
+#     RAND=0          -> RAND nul sur 16 octets (defi fixe du toy COMP128v1,
+#                        voir /root/deka_toy/crack_toy.py, Ki = prefixe connu
+#                        + 2 octets a retrouver) ;
+#     RAND=<hexa>     -> jusqu'a 16 octets lus en hexa, completes de zeros.
+# « seulement quand precise, mais force quand precise ». Ne touche que rsl.c,
+# donc pas de Makefile.am : autoreconf/configure quand meme, l'arbre reclone
+# arrive sans ./configure. Meme nom de paquet (osmo-bts), version 1.10.0+rand :
+# dpkg fait une mise a jour. Patch maintenu dans patches/.
+COPY patches/osmo-bts-force-rand-toy.patch /tmp/osmo-bts-force-rand-toy.patch
+RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
+      { [ -d ${ROOT}/osmo-bts ] || { cd ${ROOT} \
+          && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-bts \
+          && git -C osmo-bts checkout 1.10.0; }; } \
+      && git -C ${ROOT}/osmo-bts apply /tmp/osmo-bts-force-rand-toy.patch \
+      && cd ${ROOT}/osmo-bts \
+      && autoreconf -fi \
+      && ./configure --enable-virtual --enable-trx \
+      && make -j$(nproc) \
+      && osmo-deb pack osmo-bts 1.10.0+rand make install \
+      && ldconfig; \
+    fi
+
 # ── Patch gapk : sonde sur la sortie ALSA (GAPK_ALSA_PROBE) ──────────────────
 # Diagnostic pur, inerte tant que GAPK_ALSA_PROBE != 1. Tranche une question que
 # rien d'autre ne permet de trancher : quand l'ecouteur du MS est muet, le PCM
