@@ -357,6 +357,8 @@ sleep 6
 while :; do
     pgrep -f "$REPO/tools/osmo-panel.py" >/dev/null 2>&1 || \
         "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-moon.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-moon.py" >>/tmp/osmo-moon.log 2>&1 &
     pgrep -x conky >/dev/null 2>&1 || \
         conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
     sleep 5

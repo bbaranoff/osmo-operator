@@ -6,6 +6,7 @@ INST_REQUIRED[patches]=0
 
 _patch_target() {
     case "$(basename "$1")" in
+        osmo-bts-*)   printf '%s\n' "$GSM_ROOT/osmo-bts" ;;
         osmo-trx-*)   printf '%s\n' "$GSM_ROOT/osmo-trx" ;;
         osmocom-bb-*) printf '%s\n' "$GSM_ROOT/osmocom-bb" ;;
         grgsm-*)      printf '%s\n' "$GSM_ROOT/gr-gsm" ;;

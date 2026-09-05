@@ -1,0 +1,84 @@
+diff --git a/src/common/rsl.c b/src/common/rsl.c
+index 7931a176..f8bf39ac 100644
+--- a/src/common/rsl.c
++++ b/src/common/rsl.c
+@@ -22,6 +22,7 @@
+  */
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <errno.h>
+ #include <netdb.h>
+ #include <stdbool.h>
+@@ -3641,6 +3642,59 @@ static int rsl_reject_unknown_lchan(struct msgb *msg)
+  * selecting message
+  */
+ 
++/* deka toy : forcer le RAND d'une AUTHENTICATION REQUEST (MM) descendante.
++ *
++ * La valeur vient de la variable d'environnement RAND, lue UNE fois :
++ *   RAND non defini -> on ne touche a rien (comportement normal du reseau) ;
++ *   RAND=0          -> RAND tout a zero sur 16 octets (defi fixe du toy,
++ *                      voir /root/deka_toy/crack_toy.py) ;
++ *   RAND=<hexa>     -> jusqu'a 16 octets lus en hexa (espaces admis),
++ *                      completes a droite par des zeros.
++ * La PRESENCE de RAND est le seul interrupteur : sans elle le RAND du reseau
++ * passe intact. C'est donc « seulement quand precise, mais force quand precise ».
++ * "0" est traite a part car osmo_hexparse() refuse un nombre impair de quartets. */
++static void deka_force_auth_rand(struct msgb *msg)
++{
++	static int inited;
++	static bool forced;
++	static uint8_t rand_val[16];
++	struct gsm48_hdr *gh;
++	struct gsm48_auth_req *ar;
++
++	if (!inited) {
++		const char *env = getenv("RAND");
++		inited = 1;
++		if (env != NULL) {
++			forced = true;
++			if (env[0] == '0' && env[1] == '\0') {
++				memset(rand_val, 0, sizeof(rand_val));
++			} else if (osmo_hexparse(env, rand_val, sizeof(rand_val)) < 0) {
++				/* osmo_hexparse() a deja remis rand_val a zero ;
++				 * on force donc un RAND nul et on le signale. */
++				LOGP(DRSL, LOGL_ERROR, "deka toy : RAND=\"%s\" illisible "
++				     "(hexa <= 16 octets attendu) -> RAND=0\n", env);
++			}
++			LOGP(DRSL, LOGL_NOTICE, "deka toy : RAND force a %s dans toute "
++			     "AUTH REQ descendante\n",
++			     osmo_hexdump_nospc(rand_val, sizeof(rand_val)));
++		}
++	}
++	if (!forced)
++		return;
++
++	if (msgb_l3len(msg) < sizeof(*gh) + sizeof(*ar))
++		return;
++	gh = (struct gsm48_hdr *) msgb_l3(msg);
++	if ((gh->proto_discr & 0x0f) != GSM48_PDISC_MM)
++		return;
++	/* bit 6 (0x40) du type porte le numero de sequence MM : on l'ignore. */
++	if ((gh->msg_type & 0x3f) != GSM48_MT_MM_AUTH_REQ)
++		return;
++
++	ar = (struct gsm48_auth_req *) gh->data;
++	memcpy(ar->rand, rand_val, sizeof(ar->rand));
++}
++
+ static int rsl_rx_rll(struct gsm_bts_trx *trx, struct msgb *msg)
+ {
+ 	struct abis_rsl_rll_hdr *rh = msgb_l2(msg);
+@@ -3680,6 +3734,11 @@ static int rsl_rx_rll(struct gsm_bts_trx *trx, struct msgb *msg)
+ 
+ 	LOGPLCHAN(lchan, DRLL, LOGL_DEBUG, "Rx RLL %s Abis -> LAPDm\n", rsl_msg_name(rh->c.msg_type));
+ 
++	/* deka toy : sur une DATA REQ (L3 descendant vers le mobile), reecrire le
++	 * RAND de l'AUTH REQUEST si l'environnement RAND est pose. */
++	if (rh->c.msg_type == RSL_MT_DATA_REQ)
++		deka_force_auth_rand(msg);
++
+ 	/* make copy of RLL header, as the message will be free'd in case of erroneous return */
+ 	rh2 = *rh;
+ 	/* exception: RLL messages are _NOT_ freed as they are now

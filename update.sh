@@ -197,32 +197,31 @@ osmo_poser_peinture
 
 
 # ── DEKA TOY : RATTRAPAGE DES MACHINES DEJA A JOUR AVEC DEKA ────────────────
-# [2026-09-05] deka toy (banc de test COMP128v1, RAND=0, voir /root/deka/
-# crack_toy.py) est arrive apres que des machines aient deja installe le
-# supplement deka via addition.sh. Ces machines ont /root/deka a jour (meme
-# depot git : crack_toy.py, delta_toy_client.py, deka-toy-start.sh y sont
-# deja) mais pas encore l icone/le lanceur deka-toy, et ne repassent pas par
+# [2026-09-05] deka toy (banc de test COMP128v1, RAND=0, voir /root/deka_toy/
+# crack_toy.py) est son PROPRE depot (github.com/bbaranoff/deka_toy), clone en
+# /root/deka_toy par addition.sh. Certaines machines l ont deja clone mais pas
+# encore l icone/le lanceur deka-toy, et ne repassent pas par
 # addition.sh toutes seules. Simple pose de fichiers - PAS de compilation ici
 # (voir l en-tete de ce script) : rien a construire, tout est deja clone.
 #
-# deka-toy-start.sh est un clone de deka-start.sh (seul le dernier worker
-# change : delta_client -> toy-delta-client, et crack_toy.py build tourne
-# avant les workers) : meme flux que deka, icone -> pkexec -> le script.
+# deka-toy-start.sh est un clone de deka-start.sh SANS montage LVM (tables toy
+# locales) ; dernier worker = delta_client.py, crack_toy.py build avant les
+# workers : meme flux que deka, icone -> pkexec -> le script.
 osmo_reposer_deka_toy() {
     [ "$(id -u)" -eq 0 ] || return 0
-    local dir=/root/deka
-    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/delta_toy_client.py" ] \
+    local dir=/root/deka_toy
+    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/delta_client.py" ] \
         && [ -f "$dir/deka-toy-start.sh" ] || return 0
     # grep, pas juste -x : une machine qui a deja l ANCIEN lanceur (sans
     # pkexec, sans deka-toy-start.sh) doit se faire rattraper elle aussi.
     [ -f /usr/share/applications/deka-toy.desktop ] \
-        && grep -q 'deka-toy-start.sh' /usr/local/bin/osmo-deka-toy 2>/dev/null \
+        && grep -q '/root/deka_toy/deka-toy-start.sh' /usr/local/bin/osmo-deka-toy 2>/dev/null \
         && return 0
 
     cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
 #!/bin/bash
 set -u
-SCRIPT=/root/deka/deka-toy-start.sh
+SCRIPT=/root/deka_toy/deka-toy-start.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null

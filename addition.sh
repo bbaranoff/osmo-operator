@@ -416,6 +416,60 @@ if [ "$DO_OPENCL" = "1" ]; then
             echo -e "  ${YELLOW}!${NC} ${BOLD}${_nvdrv}${NC} non installe - il est dans multiverse :"
             echo -e "      ${BOLD}sudo add-apt-repository multiverse && sudo apt install ${_nvdrv}${NC}"
         fi
+        # ── SECURE BOOT : SIGNER LES MODULES NVIDIA (MOK) ────────────────────
+        # Sous Secure Boot, le noyau REFUSE un module non signe par une cle de
+        # confiance : nvidia.ko compile par DKMS n est signe par personne, et le
+        # pilote reste muet (nvidia-smi : "NVIDIA-SMI has failed..."). On genere
+        # une cle MOK (une fois), on SIGNE les modules nvidia*.ko du noyau courant,
+        # puis on PROPOSE la cle a l enrolement (mokutil) - a VALIDER au prochain
+        # reboot dans l ecran bleu MOK Manager. Hors Secure Boot ou sans module :
+        # on saute. Emplacement standard Ubuntu : /var/lib/shim-signed/mok.
+        if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+            echo -e "  ${CYAN}→${NC} Secure Boot actif : signature MOK des modules NVIDIA ..."
+            apt-get install -y --no-install-recommends openssl mokutil zstd xz-utils >/dev/null 2>&1 || true
+            _mokdir=/var/lib/shim-signed/mok
+            _mokkey="$_mokdir/MOK.priv"; _mokder="$_mokdir/MOK.der"
+            _mokpw="${OSMO_MOK_PASSWORD:-osmo-operator}"
+            mkdir -p "$_mokdir"
+            if [ ! -s "$_mokkey" ] || [ ! -s "$_mokder" ]; then
+                if openssl req -new -x509 -newkey rsa:2048 -nodes -days 36500 \
+                        -keyout "$_mokkey" -outform DER -out "$_mokder" \
+                        -subj "/CN=osmo-operator NVIDIA MOK/" >/dev/null 2>&1; then
+                    chmod 600 "$_mokkey"
+                    echo -e "      ${GREEN}✓${NC} cle MOK generee : $_mokder"
+                else
+                    echo -e "      ${YELLOW}!${NC} generation cle MOK echouee (openssl ?)"
+                fi
+            else
+                echo -e "      ${CYAN}→${NC} cle MOK existante reutilisee : $_mokder"
+            fi
+            _kver="$(uname -r)"
+            _signfile="/usr/src/linux-headers-${_kver}/scripts/sign-file"
+            [ -x "$_signfile" ] || _signfile="/lib/modules/${_kver}/build/scripts/sign-file"
+            if [ -x "$_signfile" ] && [ -s "$_mokkey" ] && [ -s "$_mokder" ]; then
+                _signed=0
+                while IFS= read -r _ko; do
+                    case "$_ko" in
+                        *.ko)     "$_signfile" sha256 "$_mokkey" "$_mokder" "$_ko" 2>/dev/null && _signed=$((_signed+1)) ;;
+                        *.ko.xz)  xz -d "$_ko"        && "$_signfile" sha256 "$_mokkey" "$_mokder" "${_ko%.xz}"  2>/dev/null && xz -q "${_ko%.xz}"          && _signed=$((_signed+1)) ;;
+                        *.ko.zst) zstd -q -d --rm "$_ko" && "$_signfile" sha256 "$_mokkey" "$_mokder" "${_ko%.zst}" 2>/dev/null && zstd -q --rm "${_ko%.zst}" && _signed=$((_signed+1)) ;;
+                        *.ko.gz)  gunzip "$_ko"      && "$_signfile" sha256 "$_mokkey" "$_mokder" "${_ko%.gz}"  2>/dev/null && gzip "${_ko%.gz}"           && _signed=$((_signed+1)) ;;
+                    esac
+                done < <(find "/lib/modules/${_kver}" -name 'nvidia*.ko*' 2>/dev/null)
+                depmod -a "${_kver}" 2>/dev/null || true
+                echo -e "      ${GREEN}✓${NC} ${_signed} module(s) NVIDIA signe(s) (noyau ${_kver})"
+            else
+                echo -e "      ${YELLOW}!${NC} sign-file absent (linux-headers-${_kver} ?) - modules NON signes"
+            fi
+            if mokutil --test-key "$_mokder" >/dev/null 2>&1; then
+                echo -e "      ${GREEN}✓${NC} cle MOK deja enrolee dans le firmware"
+            elif printf '%s\n%s\n' "$_mokpw" "$_mokpw" | mokutil --import "$_mokder" >/dev/null 2>&1; then
+                echo -e "  ${YELLOW}!${NC} MOK proposee a l enrolement. AU PROCHAIN REDEMARRAGE, l ecran bleu"
+                echo -e "      ${BOLD}MOK Manager${NC} : Enroll MOK -> Continue -> mot de passe = ${BOLD}${_mokpw}${NC}"
+            else
+                echo -e "      ${YELLOW}!${NC} mokutil --import echoue (deja en attente ? droits root ?)"
+            fi
+        fi
         echo -e "  ${YELLOW}!${NC} un ${BOLD}redemarrage${NC} est generalement necessaire pour que le pilote"
         echo -e "      NVIDIA (et donc son OpenCL) soit actif - ${BOLD}clinfo${NC} le confirmera ensuite."
     fi
@@ -428,13 +482,14 @@ if [ "$DO_OPENCL" = "1" ]; then
     # Clones dans /root. Idempotent : si le depot est deja la, on met a jour
     # (git pull) au lieu de recloner. Non fatal - un depot injoignable (prive,
     # reseau) n arrete pas le reste.
-    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
+    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, deka_toy, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
     # NON-INTERACTIF, SINON LA FENETRE FIGE. Sur un depot prive ou absent, git
     # reclame un identifiant sur le terminal et attend INDEFINIMENT - lance par
     # l icone, il n y a personne pour repondre. GIT_TERMINAL_PROMPT=0 le fait
     # echouer net (pas de prompt), et le message plus bas dit quoi faire.
     export GIT_TERMINAL_PROMPT=0
     for _rt in "deka=https://github.com/bbaranoff/deka" \
+               "deka_toy=https://github.com/bbaranoff/deka_toy" \
                "a51_tools=https://github.com/bbaranoff/a51_tools" \
                "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
                "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
@@ -469,6 +524,17 @@ if [ "$DO_OPENCL" = "1" ]; then
             echo -e "      ${GREEN}✓${NC} _delta.so + _libvankus.so construits"
         else
             echo -e "      ${YELLOW}!${NC} make deka a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka && make"
+        fi
+    fi
+
+    # ── deka_toy : memes modules natifs (make), depot separe ─────────────────
+    if [ -f /root/deka_toy/Makefile ]; then
+        echo -e "  ${CYAN}→${NC} deka_toy : compilation des modules natifs (make) ..."
+        apt-get install -y --no-install-recommends swig4.1 python3-dev build-essential >/dev/null 2>&1 || true
+        if ( cd /root/deka_toy && make >/dev/null 2>&1 ); then
+            echo -e "      ${GREEN}✓${NC} deka_toy : make ok"
+        else
+            echo -e "      ${YELLOW}!${NC} make deka_toy a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka_toy && make"
         fi
     fi
 
@@ -606,21 +672,21 @@ DEKADSK
         echo -e "  ${GREEN}✓${NC} deka : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
 
         # ── deka toy : meme logique, banc de test COMP128v1 (RAND=0) ─────────
-        # Reutilise le clone /root/deka (crack_toy.py / delta_toy_client.py /
-        # deka-toy-start.sh y vivent deja avec le reste du depot) : rien a
-        # cloner de plus, juste l icone + le lanceur. deka-toy-start.sh est un
+        # deka_toy est desormais son PROPRE depot (github.com/bbaranoff/deka_toy),
+        # clone en /root/deka_toy par la boucle plus haut : l icone + le lanceur
+        # pointent donc la. deka-toy-start.sh est un
         # clone de deka-start.sh - seul le dernier worker change (delta_client
         # -> toy-delta-client) et crack_toy.py build tourne avant les workers.
         # Meme flux que deka : icone -> pkexec -> deka-toy-start.sh, terminal
         # garde ouvert pour voir montages + PID.
-        if [ -f /root/deka/crack_toy.py ] && [ -f /root/deka/delta_toy_client.py ] \
-           && [ -f /root/deka/deka-toy-start.sh ]; then
+        if [ -f /root/deka_toy/crack_toy.py ] && [ -f /root/deka_toy/delta_client.py ] \
+           && [ -f /root/deka_toy/deka-toy-start.sh ]; then
             echo -e "  ${CYAN}→${NC} deka toy : pose de l icone d application ..."
 
             cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
 #!/bin/bash
 set -u
-SCRIPT=/root/deka/deka-toy-start.sh
+SCRIPT=/root/deka_toy/deka-toy-start.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null
