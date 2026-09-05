@@ -89,9 +89,15 @@ osmo_reposer_icones() {
     # Les raccourcis vivent en trois endroits (le menu, et les deux noms du
     # bureau - Bureau en francais, Desktop en anglais, DING lit celui que la
     # locale designe) ; les trois doivent porter la meme ligne.
+    # [2026-09-05] TOUS LES COMPTES, PAS « osmocom » EN DUR. La liste nommait
+    # /home/osmocom, le compte de la cle ; l installeur, lui, cree le compte que
+    # l utilisateur a choisi. Sur une machine installee, aucune de ces lignes ne
+    # designait donc son bureau, et les icones y gardaient l ancien Icon= (ou
+    # n etaient jamais reparees). Meme confusion racine/session que les blocs
+    # d addition.sh corriges le meme jour.
     local f b d
     for d in /usr/share/applications /root/Bureau /root/Desktop \
-             /home/osmocom/Bureau /home/osmocom/Desktop; do
+             /home/*/Bureau /home/*/Desktop; do
         [ -d "$d" ] || continue
         for b in osmo-launch osmo-multi osmo-tutorial; do
             f="$d/$b.desktop"
@@ -105,12 +111,29 @@ osmo_reposer_icones() {
     # executable ET porteur de metadata::trusted. Cet attribut vit dans les
     # metadonnees gvfs de la SESSION, jamais dans le fichier : il se repose
     # donc ici, sous la session, et pas a la construction.
-    for d in "$HOME/Bureau" "$HOME/Desktop" /root/Bureau /root/Desktop; do
+    # metadata::trusted vit dans les metadonnees gvfs DU PROPRIETAIRE : un `gio
+    # set` lance par root le pose pour root, jamais pour la session de
+    # l utilisateur. On repasse donc par son compte et son bus (runuser), comme
+    # _trust_desktop() d addition.sh - sans quoi les icones du compte installe
+    # restaient en pastille « fichier non fiable ».
+    local _own _uid _bus
+    for d in "$HOME/Bureau" "$HOME/Desktop" /root/Bureau /root/Desktop \
+             /home/*/Bureau /home/*/Desktop; do
         [ -d "$d" ] || continue
+        _own="$(stat -c '%U' "$d" 2>/dev/null)"; [ -n "$_own" ] || _own=root
+        _uid="$(id -u "$_own" 2>/dev/null)" || continue
+        _bus="/run/user/$_uid/bus"
         for f in "$d"/*.desktop; do
             [ -f "$f" ] || continue
+            chown "$_own" "$f" 2>/dev/null || true
             chmod +x "$f" 2>/dev/null || true
-            gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+            if [ -S "$_bus" ] && command -v runuser >/dev/null 2>&1; then
+                runuser -u "$_own" -- env XDG_RUNTIME_DIR="/run/user/$_uid" \
+                    DBUS_SESSION_BUS_ADDRESS="unix:path=$_bus" \
+                    gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+            else
+                gio set -t string "$f" metadata::trusted true 2>/dev/null || true
+            fi
         done
         # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
         # force a rebalayer, sinon la page blanche reste jusqu au login suivant.
@@ -177,31 +200,51 @@ osmo_poser_peinture
 # [2026-09-05] deka toy (banc de test COMP128v1, RAND=0, voir /root/deka/
 # crack_toy.py) est arrive apres que des machines aient deja installe le
 # supplement deka via addition.sh. Ces machines ont /root/deka a jour (meme
-# depot git, crack_toy.py et toy-delta-client.py y sont deja) mais pas encore
-# l icone/le lanceur deka-toy, et ne repassent pas par addition.sh toutes
-# seules. Simple pose de fichiers - PAS de compilation ici (voir l en-tete de
-# ce script) : rien a construire, tout est deja dans le depot clone.
+# depot git : crack_toy.py, delta_toy_client.py, deka-toy-start.sh y sont
+# deja) mais pas encore l icone/le lanceur deka-toy, et ne repassent pas par
+# addition.sh toutes seules. Simple pose de fichiers - PAS de compilation ici
+# (voir l en-tete de ce script) : rien a construire, tout est deja clone.
+#
+# deka-toy-start.sh est un clone de deka-start.sh (seul le dernier worker
+# change : delta_client -> toy-delta-client, et crack_toy.py build tourne
+# avant les workers) : meme flux que deka, icone -> pkexec -> le script.
 osmo_reposer_deka_toy() {
     [ "$(id -u)" -eq 0 ] || return 0
     local dir=/root/deka
-    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/toy-delta-client.py" ] || return 0
-    [ -f /usr/share/applications/deka-toy.desktop ] && [ -x /usr/local/bin/osmo-deka-toy ] && return 0
+    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/delta_toy_client.py" ] \
+        && [ -f "$dir/deka-toy-start.sh" ] || return 0
+    # grep, pas juste -x : une machine qui a deja l ANCIEN lanceur (sans
+    # pkexec, sans deka-toy-start.sh) doit se faire rattraper elle aussi.
+    [ -f /usr/share/applications/deka-toy.desktop ] \
+        && grep -q 'deka-toy-start.sh' /usr/local/bin/osmo-deka-toy 2>/dev/null \
+        && return 0
 
     cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
 #!/bin/bash
 set -u
-DIR=/root/deka
-TABLE="$DIR/toy_table.tsv"
-CMD="cd '$DIR' && { [ -f '$TABLE' ] || python3 crack_toy.py build -o '$TABLE'; } && python3 toy-delta-client.py -t '$TABLE'"
-FULL="$CMD; echo; read -n1 -rsp 'deka toy termine - une touche pour fermer...'"
+SCRIPT=/root/deka/deka-toy-start.sh
+if [ ! -x "$SCRIPT" ]; then
+    command -v zenity >/dev/null 2>&1 && \
+        zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null
+    exit 1
+fi
+RUNNER="$SCRIPT"
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v pkexec >/dev/null 2>&1; then
+        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
+    else
+        RUNNER="sudo -E $SCRIPT"
+    fi
+fi
+CMD="$RUNNER; echo; read -n1 -rsp 'deka toy lance - une touche pour fermer...'"
 for term in x-terminal-emulator gnome-terminal xterm; do
     command -v "$term" >/dev/null 2>&1 || continue
     case "$term" in
-        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$FULL" ;;
-        *)              exec "$term" -T "deka toy" -e bash -c "$FULL" ;;
+        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "deka toy" -e bash -c "$CMD" ;;
     esac
 done
-exec bash -c "$CMD"
+exec bash -c "$RUNNER"
 DEKATOYGUI
     chmod 755 /usr/local/bin/osmo-deka-toy
 
@@ -266,6 +309,45 @@ osmo_installer_firefox() {
     return 0
 }
 osmo_installer_firefox
+
+# ── LE COMPTE DE LA SESSION DOIT VOIR DOCKER ────────────────────────────────
+# [2026-09-05] RATTRAPAGE : le Conky (tools/conky-osmo-status.sh) et l'encart
+# (tools/osmo-panel.py) tournent sous le compte de la SESSION et sondent chaque
+# operateur en conteneur par "docker exec". Sans le groupe docker, la sonde rend
+# "permission denied while trying to connect to the docker API", que le code lit
+# comme "operateur arrete" : Conky annoncant « banc a l arret » et sections
+# Coeur GSM / Radio / Abonnes VIDES, avec les trois operateurs bien vivants.
+# Le groupe est desormais pose a l'installation (users.conf, defaultGroups) et
+# par addition.sh (_docker_groupe_session) ; ici on rattrape les machines deja
+# installees, qui ne repassent par aucun des deux.
+# Meme detection qu'addition.sh : SUDO_USER, puis PKEXEC_UID, puis le
+# proprietaire d'un bus de session actif - update.sh est lance par une icone
+# (pkexec) autant que par sudo.
+osmo_docker_groupe_session() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    getent group docker >/dev/null 2>&1 || return 0
+    local u uid bus vus=""
+    for u in "${SUDO_USER:-}" \
+             "$([ -n "${PKEXEC_UID:-}" ] && getent passwd "$PKEXEC_UID" | cut -d: -f1)"; do
+        [ -n "$u" ] && [ "$u" != root ] && getent passwd "$u" >/dev/null 2>&1 && { vus="$u"; break; }
+    done
+    if [ -z "$vus" ]; then
+        for bus in /run/user/*/bus; do
+            [ -S "$bus" ] || continue
+            uid="${bus#/run/user/}"; uid="${uid%/bus}"
+            [ "$uid" = 0 ] && continue
+            u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+            [ -n "$u" ] && vus="$vus $u"
+        done
+    fi
+    for u in $vus; do
+        id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx docker && continue
+        usermod -aG docker "$u" 2>/dev/null || continue
+        echo "[OK] $u ajoute au groupe docker (le Conky et l encart voient les conteneurs)."
+        echo "     Effectif au prochain login de $u."
+    done
+}
+osmo_docker_groupe_session
 
 case "${1:-}" in
     --quiet) exit 0 ;;

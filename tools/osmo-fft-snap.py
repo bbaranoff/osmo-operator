@@ -238,13 +238,36 @@ def base_image():
 def tail_lines(path, n, width):
     op = operator()
     if op["MODE"] == "docker":
-        # Un conteneur : son journal docker (la pile y ecrit sur la sortie).
-        try:
-            data = subprocess.run(["docker", "logs", "--tail", str(n + 5), op["NAME"]],
-                                  capture_output=True, text=True, timeout=3)
-            data = (data.stdout + data.stderr)
-        except Exception as e:
-            return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
+        # [2026-09-05] `docker logs` NE MONTRE RIEN D UN OPERATEUR, exactement
+        # comme pour le hub (voir HUB_LOGS plus bas, corrige le 2026-09-04) :
+        # la pile est lancee par `docker exec` dans un tmux et sa sortie part
+        # dans des FICHIERS, pas sur le flux standard du conteneur. Celui-ci ne
+        # porte que les deux lignes de l entrypoint ("Initialisation du
+        # peripherique TUN...", "Created symlink..."), et le cadre restait donc
+        # fige sur elles depuis le demarrage - sur un operateur dont la radio
+        # tournait parfaitement. On lit le fichier DANS le conteneur ; le chemin
+        # est celui du RUN_DIR de la pile, et `docker logs` reste en dernier
+        # recours pour une image qui lancerait l operateur autrement.
+        data = ""
+        for chemin in (path, "/tmp/osmo-nitb/logs/mobile.log"):
+            try:
+                out = subprocess.run(["docker", "exec", op["NAME"], "tail", "-n", str(n + 5), chemin],
+                                     capture_output=True, text=True, timeout=4)
+            except Exception as e:
+                return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
+            if out.returncode == 0 and out.stdout.strip():
+                data = out.stdout
+                break
+            if "permission denied" in (out.stderr or "").lower():
+                return [("journal indisponible (docker : droit refuse -", None),
+                        ("  le compte n est pas dans le groupe docker)", None)]
+        if not data:
+            try:
+                r = subprocess.run(["docker", "logs", "--tail", str(n + 5), op["NAME"]],
+                                   capture_output=True, text=True, timeout=3)
+                data = (r.stdout + r.stderr)
+            except Exception as e:
+                return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
     else:
         try:
             with open(path, "rb") as f:

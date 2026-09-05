@@ -94,6 +94,74 @@ _trust_desktop() {
     return 0
 }
 
+# ── LES BUREAUX A SERVIR : /root ET CELUI DE LA SESSION GRAPHIQUE ────────────
+# [2026-09-05] LE BUREAU DE L UTILISATEUR ETAIT MANQUE, ET TOUJOURS. Les deux
+# blocs qui posent des icones construisaient leur liste ainsi :
+#     _homes=(/root)
+#     [ -n "$SUDO_USER" ] && _homes+=("$(getent passwd "$SUDO_USER" ...)")
+# Or SUDO_USER n existe QUE sous sudo. Ces scripts sont lances par une icone,
+# donc par PKEXEC (qui pose PKEXEC_UID, pas SUDO_USER), ou par une unite
+# systemd, ou depuis un shell root - trois cas ou la variable est vide. La
+# liste restait donc (/root), tout atterrissait dans /root/Desktop, et le
+# compte cree par l installeur ouvrait sa session sur un bureau NU. C est la
+# meme confusion racine/session qui rendait les boutons de l encart inertes.
+#
+# On cherche donc le compte de la SESSION GRAPHIQUE, dans cet ordre :
+#   1. SUDO_USER   (sudo)
+#   2. PKEXEC_UID  (l icone, pkexec)
+#   3. le proprietaire d un bus de session actif (/run/user/*/bus) - systemd,
+#      shell root, autologin : c est la seule preuve qu une session existe.
+# /root reste TOUJOURS servi : la cle vive ouvre sa session en root.
+_comptes_session() {
+    local u uid bus
+    for u in "${SUDO_USER:-}" \
+             "$([ -n "${PKEXEC_UID:-}" ] && getent passwd "$PKEXEC_UID" | cut -d: -f1)"; do
+        [ -n "$u" ] && [ "$u" != root ] || continue
+        getent passwd "$u" >/dev/null 2>&1 && { printf '%s\n' "$u"; return 0; }
+    done
+    for bus in /run/user/*/bus; do
+        [ -S "$bus" ] || continue
+        uid="${bus#/run/user/}"; uid="${uid%/bus}"
+        [ "$uid" = 0 ] && continue
+        u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+        [ -n "$u" ] && printf '%s\n' "$u"
+    done
+}
+
+_bureau_homes() {
+    local homes=(/root) u uh
+    while read -r u; do
+        [ -n "$u" ] || continue
+        uh="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+        [ -n "$uh" ] && [ -d "$uh" ] && homes+=("$uh")
+    done < <(_comptes_session)
+    printf '%s\n' "${homes[@]}"
+}
+
+# ── LE COMPTE DE LA SESSION DOIT POUVOIR PARLER A DOCKER ────────────────────
+# [2026-09-05] MESURE SUR LE BANC : le Conky affichait « banc a l arret » et ses
+# sections Coeur GSM / Radio / Abonnes VIDES pendant que les trois operateurs
+# tournaient. Cause : le Conky et l encart tournent sous le compte de la
+# SESSION, qui n etait dans aucun groupe docker ; chaque sonde
+# (`docker exec ... pgrep`) rendait « permission denied while trying to connect
+# to the docker API », donc « arrete ». tools/osmo-op.sh decrit deja ce piege -
+# une sonde qui confond « absent » et « invisible » est une sonde qui ment - et
+# son commentaire affirmait que le compte etait « ajoute au groupe docker par
+# ailleurs (users.conf, addition.sh) ». Ce code n existait nulle part.
+# Le groupe ne prend qu au prochain login : on le dit plutot que de laisser
+# croire a une panne.
+_docker_groupe_session() {
+    getent group docker >/dev/null 2>&1 || return 0
+    local u
+    while read -r u; do
+        [ -n "$u" ] || continue
+        id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx docker && continue
+        usermod -aG docker "$u" 2>/dev/null || continue
+        echo -e "  ${GREEN}✓${NC} ${BOLD}$u${NC} ajoute au groupe ${BOLD}docker${NC} (le Conky et l encart voient les conteneurs)"
+        echo -e "    ${YELLOW}!${NC} effectif au prochain login de $u"
+    done < <(_comptes_session)
+}
+
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
 DO_BUILD=0
 for a in "$@"; do
@@ -538,30 +606,43 @@ DEKADSK
         echo -e "  ${GREEN}✓${NC} deka : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
 
         # ── deka toy : meme logique, banc de test COMP128v1 (RAND=0) ─────────
-        # Reutilise le clone /root/deka (crack_toy.py / toy-delta-client.py y
-        # vivent deja avec le reste du depot) : rien a cloner de plus, juste
-        # l icone + le lanceur. Meme principe que deka : rien au boot, une
-        # icone que l utilisateur clique quand il veut. Pas de pkexec ici -
-        # contrairement a deka-start.sh, ni la generation de la table toy ni
-        # le client reseau n ont besoin du root (pas de LVM/mount).
-        if [ -f /root/deka/crack_toy.py ] && [ -f /root/deka/toy-delta-client.py ]; then
+        # Reutilise le clone /root/deka (crack_toy.py / delta_toy_client.py /
+        # deka-toy-start.sh y vivent deja avec le reste du depot) : rien a
+        # cloner de plus, juste l icone + le lanceur. deka-toy-start.sh est un
+        # clone de deka-start.sh - seul le dernier worker change (delta_client
+        # -> toy-delta-client) et crack_toy.py build tourne avant les workers.
+        # Meme flux que deka : icone -> pkexec -> deka-toy-start.sh, terminal
+        # garde ouvert pour voir montages + PID.
+        if [ -f /root/deka/crack_toy.py ] && [ -f /root/deka/delta_toy_client.py ] \
+           && [ -f /root/deka/deka-toy-start.sh ]; then
             echo -e "  ${CYAN}→${NC} deka toy : pose de l icone d application ..."
 
             cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
 #!/bin/bash
 set -u
-DIR=/root/deka
-TABLE="$DIR/toy_table.tsv"
-CMD="cd '$DIR' && { [ -f '$TABLE' ] || python3 crack_toy.py build -o '$TABLE'; } && python3 toy-delta-client.py -t '$TABLE'"
-FULL="$CMD; echo; read -n1 -rsp 'deka toy termine - une touche pour fermer...'"
+SCRIPT=/root/deka/deka-toy-start.sh
+if [ ! -x "$SCRIPT" ]; then
+    command -v zenity >/dev/null 2>&1 && \
+        zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null
+    exit 1
+fi
+RUNNER="$SCRIPT"
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v pkexec >/dev/null 2>&1; then
+        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
+    else
+        RUNNER="sudo -E $SCRIPT"
+    fi
+fi
+CMD="$RUNNER; echo; read -n1 -rsp 'deka toy lance - une touche pour fermer...'"
 for term in x-terminal-emulator gnome-terminal xterm; do
     command -v "$term" >/dev/null 2>&1 || continue
     case "$term" in
-        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$FULL" ;;
-        *)              exec "$term" -T "deka toy" -e bash -c "$FULL" ;;
+        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$CMD" ;;
+        *)              exec "$term" -T "deka toy" -e bash -c "$CMD" ;;
     esac
 done
-exec bash -c "$CMD"
+exec bash -c "$RUNNER"
 DEKATOYGUI
             chmod 755 /usr/local/bin/osmo-deka-toy
 
@@ -695,11 +776,7 @@ CLA
         sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/claude.svg|" /usr/share/applications/claude.desktop
         command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
         update-desktop-database /usr/share/applications 2>/dev/null || true
-        _homes=(/root)
-        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
-            _uh="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-            [ -n "$_uh" ] && [ -d "$_uh" ] && _homes+=("$_uh")
-        fi
+        mapfile -t _homes < <(_bureau_homes)
         _cposee=0
         for _h in "${_homes[@]}"; do
             for _dir in Bureau Desktop; do
@@ -741,6 +818,7 @@ if [ "$DO_DOCKER" = "1" ]; then
     docker info >/dev/null 2>&1 \
         && echo -e "  ${GREEN}✓${NC} demon docker actif" \
         || { echo -e "  ${RED}✗ le demon docker ne repond pas${NC} - voir : systemctl status docker"; exit 1; }
+    _docker_groupe_session
 fi
 
 # ── IMAGE OPERATEUR ─────────────────────────────────────────────────────────
@@ -914,11 +992,7 @@ CONF
         # Sur les bureaux de root et de l utilisateur sudo, en Bureau/ et
         # Desktop/. metadata::trusted pour que DING l affiche sans pastille ;
         # osmo-trust-desktop (au login) la repositionne et la trust aussi.
-        _homes=(/root)
-        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
-            _uh="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-            [ -n "$_uh" ] && [ -d "$_uh" ] && _homes+=("$_uh")
-        fi
+        mapfile -t _homes < <(_bureau_homes)
         _posee=0
         for _h in "${_homes[@]}"; do
             for _dir in Bureau Desktop; do

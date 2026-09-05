@@ -707,16 +707,28 @@ osmo_vty() {
     tool="$(_osmo_vty_tool "$op")" || return 1
 
     local open="${OSMO_VTY_OPEN:-0.5}" read_s="${OSMO_VTY_READ:-2}" q="${OSMO_VTY_Q:-1}"
+    # [2026-09-05] LE CLIENT VTY EST BORNE DE FORCE, ET C'EST telnet QUI L'EXIGE.
+    # L'image docker des operateurs n'a que telnet (pas netcat-openbsd, que
+    # l'ISO installe pour le natif) : _osmo_vty_tool y retombe donc sur telnet.
+    # Or telnet, lui, N'A PAS d'equivalent du "-q" de nc : EOF sur son entree ne
+    # le fait pas raccrocher, et le VTY Osmocom ne ferme pas non plus apres
+    # "end". Resultat mesure : ss7_check.sh restait bloque pour toujours sur le
+    # premier operateur en conteneur, donc jamais de matrice de connectivite
+    # (l'encart affichait "premiere mesure en cours..." indefiniment) et le
+    # bilan de start-multi.sh ne rendait jamais la main sur op2/op3.
+    # Le "timeout" part DANS le noeud (docker exec ... timeout N telnet ...) :
+    # tuer le docker exec d'ici laisserait le telnet vivant dans le conteneur.
+    local kill_after="${OSMO_VTY_KILL:-8}"
 
     # nc/telnet ferment souvent avant d'avoir tout lu : le sous-shell producteur
     # prend alors un SIGPIPE et le tube rend 141. "|| true" garde la fonction
     # utilisable sous "set -euo pipefail".
     if [ "$tool" = nc ]; then
         { sleep "$open"; printf '%s' "$body"; sleep "$read_s"; } \
-            | _osmo_exec_in "$op" nc "-q${q}" 127.0.0.1 "$port" 2>/dev/null || true
+            | _osmo_exec_in "$op" timeout "$kill_after" nc "-q${q}" 127.0.0.1 "$port" 2>/dev/null || true
     else
         { sleep "$open"; printf '%s' "$body"; sleep "$read_s"; } \
-            | _osmo_exec_in "$op" telnet 127.0.0.1 "$port" 2>/dev/null || true
+            | _osmo_exec_in "$op" timeout "$kill_after" telnet 127.0.0.1 "$port" 2>/dev/null || true
     fi
     return 0
 }
