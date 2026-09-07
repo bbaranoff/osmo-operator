@@ -31,12 +31,45 @@ import sys
 import time
 
 import cairo
+# [2026-09-06] LA FENETRE DE BUREAU EXIGE X11, PAS WAYLAND.
+# Sous Wayland, GTK3 ignore window.move() ET Gdk.WindowTypeHint.DESKTOP : le
+# compositeur place la fenetre ou il veut (au milieu, au premier plan) - d ou
+# l encart et le dino qui « demarrent n importe ou ». Le protocole ne donne au
+# client aucun moyen de se poser a des coordonnees absolues (il faudrait
+# gtk-layer-shell, absent sur mutter). On passe donc par XWayland, ou le
+# positionnement X11 est honore, exactement comme le Conky voisin (own_window
+# type desktop) qui, lui, se cale bien. On ne force que si un DISPLAY existe :
+# sans serveur X, mieux vaut le comportement par defaut qu un echec au demarrage.
+X11_FORCE = os.environ.get("XDG_SESSION_TYPE") == "wayland" and bool(os.environ.get("DISPLAY"))
+if X11_FORCE:
+    os.environ["GDK_BACKEND"] = "x11"
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
+
+# [2026-09-06] ET ALORS LE TYPE BUREAU NE VA PLUS. Sur XWayland, une fenetre
+# _NET_WM_WINDOW_TYPE_DESKTOP est rangee par GNOME Shell dans la couche du
+# bureau, SOUS la fenetre plein ecran des icones (extension DING) - qui, elle,
+# avale tous les clics : l encart s affichait mais ses boutons ne repondaient
+# plus. On garde donc une fenetre NORMALE, simplement maintenue en dessous des
+# autres (keep_below + stick + hors barre des taches) : meme rendu, et les
+# clics arrivent. Sur X11 natif (la cle live) le type BUREAU marchait : on n y
+# touche pas.
+TYPE_HINT = Gdk.WindowTypeHint.NORMAL if X11_FORCE else Gdk.WindowTypeHint.DESKTOP
+# [2026-09-06] ... ET « EN DESSOUS » NON PLUS. Deuxieme moitie du meme piege :
+# avec _NET_WM_STATE_BELOW, GNOME Shell range la fenetre XWayland sous sa
+# propre couche de bureau (native Wayland), qui est plein ecran et prend tous
+# les clics - la fenetre restait visible mais totalement inerte. Sous XWayland
+# on renonce donc a « toujours dessous » : fenetre ordinaire, collante et hors
+# barre des taches. Elle passera au premier plan quand on clique dedans, ce qui
+# est le prix a payer pour qu on puisse justement cliquer dedans. Mettre
+# OSMO_DESKTOP_BELOW=1 pour retrouver l ancien comportement (fenetre sous tout,
+# clics perdus) ; sur X11 natif rien ne change.
+KEEP_BELOW = (not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1"
 
 RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 IMG = os.path.join(RUN, "panel.png")
@@ -80,8 +113,11 @@ CSS = b"""
 .osmo-bar button { background: #161b22; color: #e6edf3; border: 1px solid #30363d;
                    border-radius: 6px; padding: 1px 8px; font: 9pt "DejaVu Sans Mono"; min-height: 0; }
 .osmo-bar button:hover { background: #21262d; border-color: #58a6ff; }
+.osmo-bar button.arrow { font: 15pt "DejaVu Sans Mono"; font-weight: bold;
+                         padding: 0 14px; min-width: 34px; color: #3fb950; }
+.osmo-bar button.arrow:hover { border-color: #ff9a3c; color: #ff9a3c; }
 .osmo-bar label { color: #8b949e; font: 9pt "DejaVu Sans Mono"; }
-.osmo-bar label.op { color: #3fb950; font-weight: bold; }
+.osmo-bar label.op { color: #3fb950; font-weight: bold; font-size: 11pt; }
 """
 
 
@@ -290,10 +326,10 @@ class Panel(Gtk.Window):
         (x, y, w, h), (sw, sh, mode) = geometry()
         print(f"[panel] ecran {sw}x{sh} ({mode}) : encart a {x},{y} {w}x{h}", flush=True)
         self.geo = (x, y, w, h)
-        self.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
+        self.set_type_hint(TYPE_HINT)
         self.set_decorated(False)
         self.set_resizable(False)
-        self.set_keep_below(True)
+        self.set_keep_below(KEEP_BELOW)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.stick()
@@ -335,8 +371,12 @@ class Panel(Gtk.Window):
         b_vty = self.b_vty = Gtk.Button(label=f"VTY {VTY_PORT}")
         b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} (console du mobile)")
         b_vty.connect("clicked", self.on_vty)
-        self.b_prev = Gtk.Button(label="<")
-        self.b_next = Gtk.Button(label=">")
+        self.b_prev = Gtk.Button(label="◀")
+        self.b_next = Gtk.Button(label="▶")
+        self.b_prev.get_style_context().add_class("arrow")
+        self.b_next.get_style_context().add_class("arrow")
+        self.b_prev.set_tooltip_text("operateur precedent (op1, op2 ...)")
+        self.b_next.set_tooltip_text("operateur suivant (op1, op2 ...)")
         self.b_prev.connect("clicked", self.on_prev)
         self.b_next.connect("clicked", self.on_next)
         self.l_op = Gtk.Label(label="")
@@ -355,8 +395,19 @@ class Panel(Gtk.Window):
         GLib.timeout_add(2000, self.refresh_ops)
         self.show_all()
         self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
-        self.move(x, y)
+        self._pos = (x, y)
+        self._pin()
+        self.connect("map-event", self._pin)
+        GLib.timeout_add(500, self._pin)
 
+    # [2026-09-06] SE REPOSER APRES COUP. Meme sous X11, le gestionnaire de
+    # fenetres peut deplacer la fenetre au moment ou il la mappe (mutter le
+    # fait pour les fenetres non decorees qu il ne reconnait pas comme du
+    # bureau). Un seul move() avant show_all() ne tient donc pas : on recale
+    # au map-event, puis une derniere fois une demi-seconde plus tard.
+    def _pin(self, *_a):
+        self.move(*self._pos)
+        return False
     def on_draw(self, _w, cr):
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.set_source_rgba(0, 0, 0, 0)

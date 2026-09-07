@@ -1,0 +1,25 @@
+diff --git a/src/auc.c b/src/auc.c
+index 3ec0893..9fa763c 100644
+--- a/src/auc.c
++++ b/src/auc.c
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include <string.h>
++#include <stdlib.h>
+ #include <inttypes.h>
+ 
+ #include <osmocom/core/utils.h>
+@@ -110,6 +111,12 @@ int auc_compute_vectors(struct osmo_auth_vector *vec, unsigned int num_vec,
+ 			     "bytes: rc=%d\n", sizeof(rand), rc);
+ 			goto out;
+ 		}
++		/* gate RAND (getenv) - force le defi du vecteur a 0
++		 * (COMP128v1 toy) pour que SRES/Kc soient calcules sur RAND=0
++		 * cote HLR ; sinon osmo-msc envoie 0 mais le SRES attendu est
++		 * calcule sur un autre RAND -> mismatch -> LU reject. */
++		if (getenv("RAND"))
++			memset(rand, 0, sizeof(rand));
+ 		DBGP("vector [%u]: rand = %s\n", i, hexb(rand));
+ 
+ 		if (aud3g) {

@@ -14,12 +14,12 @@ index 7931a176..f8bf39ac 100644
   * selecting message
   */
  
-+/* deka toy : forcer le RAND d'une AUTHENTICATION REQUEST (MM) descendante.
++/* forcer le RAND d'une AUTHENTICATION REQUEST (MM) descendante.
 + *
 + * La valeur vient de la variable d'environnement RAND, lue UNE fois :
 + *   RAND non defini -> on ne touche a rien (comportement normal du reseau) ;
 + *   RAND=0          -> RAND tout a zero sur 16 octets (defi fixe du toy,
-+ *                      voir /root/deka_toy/crack_toy.py) ;
++ *                      defi fixe connu) ;
 + *   RAND=<hexa>     -> jusqu'a 16 octets lus en hexa (espaces admis),
 + *                      completes a droite par des zeros.
 + * La PRESENCE de RAND est le seul interrupteur : sans elle le RAND du reseau
@@ -43,10 +43,10 @@ index 7931a176..f8bf39ac 100644
 +			} else if (osmo_hexparse(env, rand_val, sizeof(rand_val)) < 0) {
 +				/* osmo_hexparse() a deja remis rand_val a zero ;
 +				 * on force donc un RAND nul et on le signale. */
-+				LOGP(DRSL, LOGL_ERROR, "deka toy : RAND=\"%s\" illisible "
++				LOGP(DRSL, LOGL_ERROR, "RAND=\"%s\" illisible "
 +				     "(hexa <= 16 octets attendu) -> RAND=0\n", env);
 +			}
-+			LOGP(DRSL, LOGL_NOTICE, "deka toy : RAND force a %s dans toute "
++			LOGP(DRSL, LOGL_NOTICE, "RAND force a %s dans toute "
 +			     "AUTH REQ descendante\n",
 +			     osmo_hexdump_nospc(rand_val, sizeof(rand_val)));
 +		}
@@ -74,7 +74,7 @@ index 7931a176..f8bf39ac 100644
  
  	LOGPLCHAN(lchan, DRLL, LOGL_DEBUG, "Rx RLL %s Abis -> LAPDm\n", rsl_msg_name(rh->c.msg_type));
  
-+	/* deka toy : sur une DATA REQ (L3 descendant vers le mobile), reecrire le
++	/* sur une DATA REQ (L3 descendant vers le mobile), reecrire le
 +	 * RAND de l'AUTH REQUEST si l'environnement RAND est pose. */
 +	if (rh->c.msg_type == RSL_MT_DATA_REQ)
 +		deka_force_auth_rand(msg);

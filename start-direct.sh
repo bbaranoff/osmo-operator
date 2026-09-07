@@ -723,6 +723,40 @@ esac
 export CALYPSO_PROFILE MODE
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
+# RAND passe en prefixe (ex. `RAND=0 ./start-direct.sh`) force le defi
+# d'authentification, via le gate getenv("RAND") des patchs osmo-hlr + osmo-msc.
+# Le RAND doit atteindre LES DEUX process : osmo-hlr le tire dans le vecteur
+# (SRES/Kc calcules sur RAND=0 -> LU acceptee) et osmo-msc l'envoie. RAND pose
+# sur osmo-msc SEUL -> mismatch -> LU reject. RAND absent -> reseau normal.
+# core_svc_start (run.sh) lance ces demons de deux facons, on couvre les deux :
+#   - enfant direct (setsid, pas de systemd) -> heritent de l'env : on exporte.
+#   - service systemd -> `systemctl start` N'herite PAS de l'env : drop-in
+#     transient /run/systemd/system/<unit>.service.d/rand.conf + daemon-reload.
+[ -n "${RAND:-}" ] && export RAND
+if command -v systemctl >/dev/null 2>&1; then
+    _rand_changed=0
+    for _u in osmo-hlr osmo-msc; do
+        systemctl cat "$_u" >/dev/null 2>&1 || continue
+        _dd="/run/systemd/system/$_u.service.d"
+        [ -f "$_dd/rand.conf" ] && _rand_changed=1
+        if [ -n "${RAND:-}" ]; then
+            mkdir -p "$_dd" 2>/dev/null \
+                && printf '[Service]\nEnvironment=RAND=%s\n' "$RAND" > "$_dd/rand.conf" \
+                && _rand_changed=1
+        else
+            rm -f "$_dd/rand.conf" 2>/dev/null || true
+        fi
+    done
+    [ "$_rand_changed" = 1 ] && systemctl daemon-reload 2>/dev/null || true
+    # rebondir seulement si le forcage change, et HLR AVANT MSC pour que le MSC
+    # reprenne des vecteurs a RAND=0 ; un run normal sans RAND ne touche a rien.
+    if [ -n "${RAND:-}" ] || [ "$_rand_changed" = 1 ]; then
+        for _u in osmo-hlr osmo-msc; do
+            systemctl is-active --quiet "$_u" 2>/dev/null && systemctl restart "$_u" 2>/dev/null || true
+        done
+    fi
+    unset _u _dd _rand_changed
+fi
 # Client de couche 2 : l'option de ligne de commande ECRASE tout, et elle est
 # EXPORTEE -- une valeur posee sans export ne traverse pas jusqu'a run.sh,
 # defaut deja paye sur ENCRYPTION (cf. generate_configs.sh).
@@ -2098,6 +2132,78 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
         say_end " OK " "$C_OK" "Fiche du noeud $_nc_node" "$_nc_out  (pour un autre noeud : --wan $(basename "$_nc_out"))"
     else
         say_end " -- " "$C_DIM" "Fiche du noeud" "non ecrite ($_nc_out)"
+    fi
+fi
+
+# ── LE RACCORD MOBILE : oFONO = LE MODEM DU BANC ────────────────────────────
+# [2026-09-06] Le telephone Android (Waydroid) est le MEME abonne que le mobile
+# du banc : 100101. Pour qu il ait une vraie pile telephonie, il lui faut un
+# RIL, et un RIL ne parle qu a un modem AT. Ce banc n a pas de dongle : le
+# modem, c est oFono - et derriere oFono, ces deux programmes.
+#
+#   tools/osmo-phonesim-banc.py   le modem AT du banc, cote oFono (TCP 12345,
+#                                 plugin phonesim). Il lit le reseau sur le VTY
+#                                 d osmo-bsc, envoie les SMS par le VTY
+#                                 d osmo-msc, passe les appels par Asterisk, et
+#                                 recoit les SMS en ESME SMPP (port 2775).
+#   tools/osmo-ril-atmodem.py     le modem AT que rild consommera, adosse a
+#                                 oFono. Il publie son pty dans
+#                                 /run/osmo-ril/at-pty.
+#
+# Rien de tout ca n est indispensable au banc : si oFono manque, on le dit et on
+# continue. Le banc doit demarrer meme sans le telephone Android.
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" = "1" ]; then
+    say_begin "Raccord mobile (oFono)"
+    _rm_detail=""
+    if ! command -v ofonod >/dev/null 2>&1; then
+        say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "ofono absent - ignore"
+    else
+        # 1. oFono doit savoir ou trouver le modem du banc.
+        if ! grep -q '^\[osmo\]' /etc/ofono/phonesim.conf 2>/dev/null; then
+            printf '\n[osmo]\nAddress=127.0.0.1\nPort=12345\n' >> /etc/ofono/phonesim.conf
+            _rm_detail="phonesim.conf pose"
+        fi
+        # 2. le compte AMI : c est par lui que le modem fait naitre les appels
+        #    (la CLI d Asterisk n a pas « channel originate » ici, le module
+        #    res_clioriginate n est pas charge - modules.conf est en autoload=no).
+        if [ -d /etc/asterisk/manager.d ] && [ ! -f /etc/asterisk/manager.d/osmo.conf ]; then
+            install -m640 "$HERE/configs/manager-osmo.conf" \
+                /etc/asterisk/manager.d/osmo.conf 2>/dev/null && \
+                { chown asterisk:asterisk /etc/asterisk/manager.d/osmo.conf 2>/dev/null || true; }
+            asterisk -rx "manager reload" >/dev/null 2>&1 || true
+            _rm_detail="${_rm_detail:+$_rm_detail, }compte AMI pose"
+        fi
+        # 3. le modem du banc, PUIS oFono (l ordre compte : ofonod cherche le
+        #    modem au demarrage et n y revient pas de lui-meme).
+        pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1 || \
+            setsid "$HERE/tools/osmo-phonesim-banc.py" >>/tmp/osmo-phonesim.log 2>&1 &
+        sleep 1
+        systemctl restart ofono >/dev/null 2>&1 || true
+        sleep 3
+        # 4. allumer le modem : oFono le laisse eteint tant qu on ne demande rien.
+        /usr/bin/python3 - <<'PYON' >/dev/null 2>&1 || true
+from gi.repository import Gio, GLib
+import time
+c = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+for prop in ("Powered", "Online"):
+    try:
+        c.call_sync("org.ofono", "/osmo", "org.ofono.Modem", "SetProperty",
+                    GLib.Variant("(sv)", (prop, GLib.Variant("b", True))),
+                    None, Gio.DBusCallFlags.NONE, 25000, None)
+    except GLib.Error:
+        pass
+    time.sleep(2)
+PYON
+        # 5. le modem AT pour le RIL d Android.
+        pgrep -f "$HERE/tools/osmo-ril-atmodem.py" >/dev/null 2>&1 || \
+            setsid "$HERE/tools/osmo-ril-atmodem.py" >>/tmp/osmo-ril.log 2>&1 &
+        sleep 1
+        if pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1; then
+            say_end " OK " "$C_OK" "Raccord mobile (oFono)" \
+                "modem /osmo${_rm_detail:+ - $_rm_detail} ; pty RIL : /run/osmo-ril/at-pty"
+        else
+            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. /tmp/osmo-phonesim.log)"
+        fi
     fi
 fi
 

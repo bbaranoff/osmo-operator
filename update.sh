@@ -195,83 +195,48 @@ osmo_poser_peinture() {
 }
 osmo_poser_peinture
 
-
-# ── DEKA TOY : RATTRAPAGE DES MACHINES DEJA A JOUR AVEC DEKA ────────────────
-# [2026-09-05] deka toy (banc de test COMP128v1, RAND=0, voir /root/deka_toy/
-# crack_toy.py) est son PROPRE depot (github.com/bbaranoff/deka_toy), clone en
-# /root/deka_toy par addition.sh. Certaines machines l ont deja clone mais pas
-# encore l icone/le lanceur deka-toy, et ne repassent pas par
-# addition.sh toutes seules. Simple pose de fichiers - PAS de compilation ici
-# (voir l en-tete de ce script) : rien a construire, tout est deja clone.
-#
-# deka-toy-start.sh est un clone de deka-start.sh SANS montage LVM (tables toy
-# locales) ; dernier worker = delta_client.py, crack_toy.py build avant les
-# workers : meme flux que deka, icone -> pkexec -> le script.
-osmo_reposer_deka_toy() {
+# ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
+# Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
+# l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes
+# (osmo-topzone.py, osmo-launcher.py, osmo-ts-probe.py) vivent dans le depot et
+# arrivent par git pull - mais une machine deja installee garde son ANCIEN
+# wrapper, qui ne les lance pas. On re-pose donc le wrapper quand il ignore
+# encore la zone haute vivante. Miroir exact de 85 (voir ce fichier).
+osmo_reposer_bureau_interactif() {
     [ "$(id -u)" -eq 0 ] || return 0
-    local dir=/root/deka_toy
-    [ -f "$dir/crack_toy.py" ] && [ -f "$dir/delta_client.py" ] \
-        && [ -f "$dir/deka-toy-start.sh" ] || return 0
-    # grep, pas juste -x : une machine qui a deja l ANCIEN lanceur (sans
-    # pkexec, sans deka-toy-start.sh) doit se faire rattraper elle aussi.
-    [ -f /usr/share/applications/deka-toy.desktop ] \
-        && grep -q '/root/deka_toy/deka-toy-start.sh' /usr/local/bin/osmo-deka-toy 2>/dev/null \
-        && return 0
-
-    cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
-#!/bin/bash
-set -u
-SCRIPT=/root/deka_toy/deka-toy-start.sh
-if [ ! -x "$SCRIPT" ]; then
-    command -v zenity >/dev/null 2>&1 && \
-        zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null
-    exit 1
-fi
-RUNNER="$SCRIPT"
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v pkexec >/dev/null 2>&1; then
-        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
-    else
-        RUNNER="sudo -E $SCRIPT"
-    fi
-fi
-CMD="$RUNNER; echo; read -n1 -rsp 'deka toy lance - une touche pour fermer...'"
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "deka toy" -e bash -c "$CMD" ;;
-    esac
+    local w=/usr/local/bin/osmo-desktop-panel
+    [ -f "$w" ] || return 0
+    grep -q 'osmo-topzone.py' "$w" 2>/dev/null && return 0
+    cat > "$w" <<'PANEL'
+#!/bin/sh
+# osmo-desktop-panel - tient l encart et Conky en vie pour toute la session.
+REPO=/opt/GSM/osmo-operator
+export OSMO_REPO="$REPO"
+export OSMO_LIVE_BANNER=1
+sleep 6
+while :; do
+    pgrep -f "$REPO/tools/osmo-panel.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-dino.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-dino.py" >>/tmp/osmo-dino.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-ts-probe.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-topzone.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-launcher.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
+    pgrep -x conky >/dev/null 2>&1 || \
+        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
+    sleep 5
 done
-exec bash -c "$RUNNER"
-DEKATOYGUI
-    chmod 755 /usr/local/bin/osmo-deka-toy
-
-    install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
-    if [ -f /opt/GSM/osmo-operator/data/deka-toy.svg ]; then
-        install -m644 /opt/GSM/osmo-operator/data/deka-toy.svg /usr/share/osmo-operator/icons/deka-toy.svg
-        install -m644 /opt/GSM/osmo-operator/data/deka-toy.svg /usr/share/icons/hicolor/scalable/apps/deka-toy.svg
-    fi
-    cat > /usr/share/applications/deka-toy.desktop <<'DEKATOYDSK'
-[Desktop Entry]
-Type=Application
-Name=deka toy
-Name[fr]=deka toy
-Comment=Lance deka en mode toy (banc de test, sans les tables de 4 To)
-Comment[fr]=Lance deka en mode toy (banc de test, sans les tables de 4 To)
-Exec=/usr/local/bin/osmo-deka-toy
-Icon=/usr/share/osmo-operator/icons/deka-toy.svg
-Terminal=false
-Categories=System;Utility;
-Keywords=deka;toy;comp128;banc;test;
-DEKATOYDSK
-    chmod 644 /usr/share/applications/deka-toy.desktop
-    command -v gtk-update-icon-cache >/dev/null 2>&1 && \
-        gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
-    update-desktop-database /usr/share/applications 2>/dev/null || true
+PANEL
+    chmod 755 "$w"
+    # relancer : tuer l ancien wrapper, l autostart (ou la boucle) reprend le neuf
+    pkill -f /usr/local/bin/osmo-desktop-panel 2>/dev/null || true
+    echo "  [bureau] wrapper osmo-desktop-panel remis a jour (zone LAB GSM vivante + barre de lancement)"
     return 0
 }
-osmo_reposer_deka_toy
+osmo_reposer_bureau_interactif
 
 # ── FIREFOX ─────────────────────────────────────────────────────────────────
 # Le dashboard et fft-web s ouvrent dans un navigateur. Les images du
@@ -347,6 +312,59 @@ osmo_docker_groupe_session() {
     done
 }
 osmo_docker_groupe_session
+
+# ── UNITES osmo-* : User=osmocom -> compte de la SESSION (rattrapage) ────────
+# Miroir d'addition.sh (_osmo_unites_user_session) pour les machines DEJA
+# installees qui ne repassent pas par addition.sh. Meme cause : les .service
+# amont (osmo-bsc/bts-trx/bts-virtual/msc) posent User=osmocom / Group=osmocom,
+# et le compte osmocom n'existe pas en natif (l'image le supprime, cf
+# iso_modules/52-qemu.sh) -> 217/USER, crash-loop Restart=always MUET, run.sh
+# abandonne ("OsmoMSC started but never ready"). On rend les unites au compte de
+# session via un drop-in /etc/systemd/system/<unit>.d/ (le .service amont reste
+# intact). Meme detection d'user qu'osmo_docker_groupe_session.
+osmo_unites_user_session() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local u uid bus grp unit base d n=0 vus=""
+    for u in "${SUDO_USER:-}" \
+             "$([ -n "${PKEXEC_UID:-}" ] && getent passwd "$PKEXEC_UID" | cut -d: -f1)"; do
+        [ -n "$u" ] && [ "$u" != root ] && getent passwd "$u" >/dev/null 2>&1 && { vus="$u"; break; }
+    done
+    if [ -z "$vus" ]; then
+        for bus in /run/user/*/bus; do
+            [ -S "$bus" ] || continue
+            uid="${bus#/run/user/}"; uid="${uid%/bus}"
+            [ "$uid" = 0 ] && continue
+            u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
+            [ -n "$u" ] && { vus="$u"; break; }
+        done
+    fi
+    [ -n "$vus" ] && getent passwd "$vus" >/dev/null 2>&1 || vus=root
+    grp="$(id -gn "$vus" 2>/dev/null || echo "$vus")"
+    for unit in /lib/systemd/system/osmo-*.service /etc/systemd/system/osmo-*.service; do
+        [ -f "$unit" ] || continue
+        grep -qE '^(User|Group)=osmocom$' "$unit" || continue
+        base="$(basename "$unit")"; d="/etc/systemd/system/$base.d"
+        mkdir -p "$d"
+        printf '[Service]\nUser=%s\nGroup=%s\n' "$vus" "$grp" > "$d/00-session-user.conf"
+        n=$((n+1))
+    done
+    [ "$n" -gt 0 ] || return 0
+    systemctl daemon-reload 2>/dev/null || true
+    # repertoires d'etat/log osmocom -> compte de session, sinon "Unable to
+    # create file /var/log/osmocom/*.log" -> parse .cfg en echec -> status=1.
+    for _d in /var/log/osmocom /var/lib/osmocom /run/osmocom; do
+        [ -e "$_d" ] && chown -R "$vus:$grp" "$_d" 2>/dev/null || true
+    done
+    for base in osmo-msc osmo-bsc osmo-bts-trx osmo-bts-virtual; do
+        systemctl cat "$base" >/dev/null 2>&1 || continue
+        systemctl reset-failed "$base" 2>/dev/null || true
+        systemctl try-restart "$base" 2>/dev/null || true
+    done
+    echo "[OK] unites osmo-* rendues au compte de session ($vus) - sinon User=osmocom -> 217/USER."
+    return 0
+}
+osmo_unites_user_session
 
 case "${1:-}" in
     --quiet) exit 0 ;;

@@ -60,16 +60,45 @@ MATRIX_LOCK="${OSMO_FFT_DIR:-/run/osmo-fft}/.ss7-matrix.lock"
 MATRIX_TTL="${OSMO_MATRIX_TTL:-300}"
 
 matrice() {
-    local age=999999
-    [ -f "$MATRIX_FILE" ] && age=$(( $(date +%s) - $(stat -c %Y "$MATRIX_FILE" 2>/dev/null || echo 0) ))
+    local now age=999999 mtime=0
+    now="$(date +%s)"
+    [ -f "$MATRIX_FILE" ] && {
+        mtime="$(stat -c %Y "$MATRIX_FILE" 2>/dev/null || echo 0)"
+        age=$(( now - mtime ))
+    }
+    # ── UNE MESURE D AVANT LE BANC N EST PAS UNE MESURE ─────────────────────
+    # [2026-09-07] « SS7 KO - 9 fail » affiche pendant cinq minutes sur un banc
+    # parfaitement monte : la mesure datait du DEMARRAGE, quand osmo-multi
+    # n avait pas encore lance osmo-operator-2/3 - les neuf tests des deux
+    # operateurs docker echouaient parce que leurs conteneurs n existaient pas
+    # encore. Le cache la gardait ensuite jusqu au bout du TTL (5 min).
+    # Le cache ne doit pas survivre a ce qu il decrit : toute mesure anterieure
+    # au dernier demarrage d osmo-banc ou d osmo-multi est perimee, quel que
+    # soit son age. `systemctl show` repond sans privilege.
+    local t u
+    for u in osmo-banc.service osmo-multi.service; do
+        t="$(systemctl show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
+        [ -n "$t" ] || continue
+        t="$(date -d "$t" +%s 2>/dev/null)" || continue
+        [ -n "$t" ] && [ "$mtime" -lt "$t" ] && age=$(( MATRIX_TTL + 1 ))
+    done
     # Perime (ou jamais mesure) : on lance la mesure DETACHEE et on rend la
     # main tout de suite. Le verrou est un mkdir : atomique, et il disparait
     # avec le repertoire meme si la mesure est tuee (trap).
+    local encours=0
     if [ "$age" -gt "$MATRIX_TTL" ]; then
         ( setsid "$0" --refresh-matrix >/dev/null 2>&1 & ) 2>/dev/null
+        encours=1
     fi
+    [ -d "$MATRIX_LOCK" ] && encours=1
     if [ -s "$MATRIX_FILE" ]; then
         cat "$MATRIX_FILE"
+        # ss7_check.sh met une bonne minute : on DIT que ce qu on lit est vieux
+        # et qu une mesure tourne, plutot que de laisser prendre un KO perime
+        # pour l etat courant.
+        if [ "$encours" = 1 ]; then
+            echo "  \${color4}mesure en cours\${color} - affiche : il y a $(( age / 60 ))m$(( age % 60 ))s"
+        fi
     else
         echo "  ${C1}matrice SS7${C} : premiere mesure en cours..."
     fi

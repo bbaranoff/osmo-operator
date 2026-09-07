@@ -458,7 +458,18 @@ def main():
     a = ap.parse_args()
 
     base = background(a.tower, a.tower_x)
-    card(base, (320, 60, 1430, 560), a.arfcn, a.band)
+    # [2026-09-06] LA CARTE LAB GSM N EST PLUS CUITE DANS LE FOND, POINT.
+    # C est tools/osmo-topzone.py (widget WebKit vivant) qui la rend, avec les
+    # timeslots qui clignotent et les valeurs ARFCN/IMSI/A5 live. La version
+    # dessinee ici etait la MEME carte, en plus grand et fixe : sur un bureau ou
+    # le widget tourne, on voyait les deux, la peinte en fond derriere la
+    # vivante. C etait pilote par OSMO_LIVE_BANNER=1, que seul le wrapper du
+    # bureau exportait - tout autre chemin de rendu (osmo-wallpaper.sh a la
+    # main, un service, une regeneration apres coup) ramenait le doublon. On
+    # inverse donc le defaut : plus rien de cuit, et OSMO_LEGACY_BANNER=1 pour
+    # qui voudrait l ancien fond autonome (un banc sans bureau vivant).
+    if os.environ.get("OSMO_LEGACY_BANNER", "0") == "1":
+        card(base, (320, 60, 1430, 560), a.arfcn, a.band)
     if a.strip and os.path.isfile(a.strip):
         try:
             strip_panel(base, (510, 600, 1410, 1010), a.strip, a.date, a.credit)

@@ -281,13 +281,13 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       && ldconfig; \
     fi
 
-# ── Patch osmo-bts RAND : forcer le defi d'authentification (deka toy) ────────
+# ── Patch osmo-bts RAND : forcer le defi d'authentification ────────────────
 # osmo-bts relaie normalement l'AUTHENTICATION REQUEST du reseau telle quelle.
 # Ce patch, dans rsl_rx_rll() (src/common/rsl.c), reecrit le RAND de cette
 # trame quand la variable d'environnement RAND est posee sur le processus BTS :
 #     RAND non defini -> rien de touche (comportement normal) ;
-#     RAND=0          -> RAND nul sur 16 octets (defi fixe du toy COMP128v1,
-#                        voir /root/deka_toy/crack_toy.py, Ki = prefixe connu
+#     RAND=0          -> RAND nul sur 16 octets (defi fixe COMP128v1,
+#                        defi fixe connu, Ki = prefixe connu
 #                        + 2 octets a retrouver) ;
 #     RAND=<hexa>     -> jusqu'a 16 octets lus en hexa, completes de zeros.
 # « seulement quand precise, mais force quand precise ». Ne touche que rsl.c,
@@ -305,6 +305,52 @@ RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
       && ./configure --enable-virtual --enable-trx \
       && make -j$(nproc) \
       && osmo-deb pack osmo-bts 1.10.0+rand make install \
+      && ldconfig; \
+    fi
+
+# ── Patch osmo-hlr RAND : forcer le RAND du vecteur d'auth ──────────────────
+# auc.c/auc_compute_vectors() : gate minimal. Si la variable d'environnement
+# RAND est posee sur le process HLR, le RAND tire pour CHAQUE vecteur est force
+# a 0 (16 octets) AVANT osmo_auth_gen_vec2 : SRES et Kc sont alors calcules sur
+# RAND=0 (le HLR a le Ki). C'est l'etage indispensable pour une LU ACCEPTEE :
+# osmo-msc envoie ce RAND et compare au SRES du meme vecteur -> match. Le seul
+# gate osmo-msc (cote tx) donnerait un mismatch -> LU reject. RAND absent ->
+# reseau normal. Ne touche pas Makefile.am ; autoreconf/configure quand meme
+# (arbre reclone sans ./configure). Meme nom de paquet (osmo-hlr), version
+# 1.9.2+rand : dpkg met a jour. Patch maintenu dans patches/.
+COPY patches/osmo-hlr-force-rand-toy.patch /tmp/osmo-hlr-force-rand-toy.patch
+RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
+      { [ -d ${ROOT}/osmo-hlr ] || { cd ${ROOT} \
+          && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-hlr \
+          && git -C osmo-hlr checkout 1.9.2; }; } \
+      && git -C ${ROOT}/osmo-hlr apply /tmp/osmo-hlr-force-rand-toy.patch \
+      && cd ${ROOT}/osmo-hlr \
+      && autoreconf -fi \
+      && ./configure \
+      && make -j$(nproc) \
+      && osmo-deb pack osmo-hlr 1.9.2+rand make install \
+      && ldconfig; \
+    fi
+
+# ── Patch osmo-msc RAND : forcer le defi d'authentification ────────────────
+# gsm48_tx_mm_auth_req() (src/libmsc/gsm_04_08.c) : gate minimal. Si la variable
+# d'environnement RAND est posee sur le processus MSC, le RAND de l'AUTH REQUEST
+# descendante est force (0 sur 16 octets dans notre cas ; changer l'initialiseur
+# forced_rand[] pour un autre RAND). RAND absent -> comportement normal du reseau.
+# Ne touche pas Makefile.am ; autoreconf/configure quand meme (arbre reclone sans
+# ./configure). Meme nom de paquet (osmo-msc), version 1.15.0+rand : dpkg met a
+# jour. Patch maintenu dans patches/. Meme gate cote BSC (openbsc gsm_04_08.c).
+COPY patches/osmo-msc-force-rand-toy.patch /tmp/osmo-msc-force-rand-toy.patch
+RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
+      { [ -d ${ROOT}/osmo-msc ] || { cd ${ROOT} \
+          && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-msc \
+          && git -C osmo-msc checkout 1.15.0; }; } \
+      && git -C ${ROOT}/osmo-msc apply /tmp/osmo-msc-force-rand-toy.patch \
+      && cd ${ROOT}/osmo-msc \
+      && autoreconf -fi \
+      && ./configure --enable-smpp \
+      && make -j$(nproc) \
+      && osmo-deb pack osmo-msc 1.15.0+rand make install \
       && ldconfig; \
     fi
 

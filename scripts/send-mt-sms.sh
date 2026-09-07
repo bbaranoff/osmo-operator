@@ -21,4 +21,9 @@ sms-encode-text "$MESSAGE" \
     | gen-sms-deliver-pdu "$FROM" \
     | proto-smsc-sendmt "$SC_ADDRESS" "$DEST_IMSI" "$SENDMT_SOCKET"
 
+# Ce MT part par GSUP vers la radio : les modems logiciels du banc ne le
+# verraient jamais (« sms-over-gsup » court-circuite le SMPP d osmo-msc). On
+# les previent, sans quoi un essai a la main n arrive que sur le mobile.
+"$(dirname "$0")/sms_notify.py" "$DEST_IMSI" "$FROM" "$MESSAGE" || true
+
 echo "MT SMS envoye → IMSI=$DEST_IMSI"

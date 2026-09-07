@@ -351,14 +351,27 @@ INSTALLER
 # osmo-desktop-panel - tient l encart et Conky en vie pour toute la session.
 # Lance par /etc/xdg/autostart/osmo-conky.desktop. Voir build-iso.sh (85).
 REPO=/opt/GSM/osmo-operator
+export OSMO_REPO="$REPO"
+# La carte LAB GSM n est plus cuite dans le fond : c est osmo-topzone.py qui la
+# rend, vivante. On le dit au rendu du fond.
+export OSMO_LIVE_BANNER=1
 # Conky doit trouver le bureau GNOME deja peint (own_window_type desktop),
 # sinon il se pose derriere le fond d ecran.
 sleep 6
 while :; do
     pgrep -f "$REPO/tools/osmo-panel.py" >/dev/null 2>&1 || \
         "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
-    pgrep -f "$REPO/tools/osmo-moon.py" >/dev/null 2>&1 || \
-        "$REPO/tools/osmo-moon.py" >>/tmp/osmo-moon.log 2>&1 &
+    pgrep -f "$REPO/tools/osmo-dino.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-dino.py" >>/tmp/osmo-dino.log 2>&1 &
+    # la sonde d activite des timeslots (conf osmo-bsc + VTY) pour la banniere
+    pgrep -f "$REPO/tools/osmo-ts-probe.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
+    # la zone haute LAB GSM vivante (timeslots clignotants + accueil d appli)
+    pgrep -f "$REPO/tools/osmo-topzone.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
+    # la barre de lancement categorisee du bas
+    pgrep -f "$REPO/tools/osmo-launcher.py" >/dev/null 2>&1 || \
+        "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
     pgrep -x conky >/dev/null 2>&1 || \
         conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
     sleep 5
@@ -673,6 +686,14 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # ne partait pas dans l image, alors que les quatre autres outils, eux,
     # partaient. Meme regle pour tous : le depot local fait foi.
     install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$DIR/tools/conky-osmo-status.sh" "$_rt/tools/"
+    # Le bureau interactif (banniere LAB GSM vivante + barre de lancement) et le
+    # dino : fichiers locaux, souvent pas encore pousses - on les pose depuis CE
+    # depot, comme les cinq ci-dessus. osmo-extras-install.sh sert au natif (80).
+    for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh \
+             osmo-waydroid.sh osmo-ofono-bridge.py; do
+        [ -f "$DIR/tools/$_f" ] && install -m755 "$DIR/tools/$_f" "$_rt/tools/"
+    done
+    unset _f
     # tower.* et non tower.jpg : la photo voyage dans son format d origine
     # (PNG pleine definition aujourd hui), sans re-encodage.
     for _tw in "$DIR"/configs/wallpaper/tower.*; do
@@ -680,6 +701,11 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     done
     unset _tw
     install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
+    # la banniere LAB GSM vivante et le html du dino (rendus par WebKit)
+    for _h in labgsm.html dino.html; do
+        [ -f "$DIR/configs/conky/$_h" ] && install -m644 "$DIR/configs/conky/$_h" "$_rt/configs/conky/"
+    done
+    unset _h
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
     # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
     # on repose ici celui de CE depot, le rendu du jour de tools/wallpaper-render.py.

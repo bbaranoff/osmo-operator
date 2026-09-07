@@ -32,6 +32,8 @@
 #   sudo ./addition.sh --build    l image operateur seule, compilee  (depannage)
 #   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
+#   sudo ./addition.sh --extras   Jeux + media (Doom, Quake, OpenRA, Kodi,
+#                                 YouTube+uBlock, Wireshark root, Linphone)
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -163,7 +165,7 @@ _docker_groupe_session() {
 }
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
-DO_BUILD=0
+DO_BUILD=0; DO_EXTRAS=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
@@ -173,7 +175,8 @@ for a in "$@"; do
         --multi-build) DO_MULTI=1; DO_BUILD=1; ANY_FLAG=1 ;;
         --opencl) DO_OPENCL=1; ANY_FLAG=1 ;;
         --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
-        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; ANY_FLAG=1 ;;
+        --extras) DO_EXTRAS=1; ANY_FLAG=1 ;;
+        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
         -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     esac
@@ -211,6 +214,51 @@ etat() {
 }
 
 [ "$STATUS_ONLY" = "1" ] && { etat; exit 0; }
+
+# ── UNITES osmo-* : User=osmocom -> compte de la SESSION ─────────────────────
+# Les .service amont (osmo-bsc/bts-trx/bts-virtual/msc) posent User=osmocom /
+# Group=osmocom. En natif post-live le compte osmocom n'existe pas (l'image le
+# supprime, cf iso_modules/52-qemu.sh) : les demons meurent en 217/USER avec
+# Restart=always -> crash-loop bloquant et MUET (rien dans leur propre journal),
+# et run.sh abandonne la sequence ("OsmoMSC started but never ready"). On rend
+# ces unites au compte de la SESSION (celui de l'installeur, meme racine/session
+# que le reste d'addition.sh) via un drop-in /etc/systemd/system/<unit>.d/ - on
+# NE touche PAS au .service amont qu'un update de paquet reecrirait. A defaut de
+# session (build en chroot) : root, comme 52-qemu.sh. Miroir : update.sh
+# (rattrapage machines deja installees) et 52-qemu.sh (image live -> root).
+_osmo_unites_user_session() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local u grp unit base d n=0
+    u="$(_comptes_session | head -1)"
+    [ -n "$u" ] && getent passwd "$u" >/dev/null 2>&1 || u=root
+    grp="$(id -gn "$u" 2>/dev/null || echo "$u")"
+    for unit in /lib/systemd/system/osmo-*.service /etc/systemd/system/osmo-*.service; do
+        [ -f "$unit" ] || continue
+        grep -qE '^(User|Group)=osmocom$' "$unit" || continue
+        base="$(basename "$unit")"; d="/etc/systemd/system/$base.d"
+        mkdir -p "$d"
+        printf '[Service]\nUser=%s\nGroup=%s\n' "$u" "$grp" > "$d/00-session-user.conf"
+        n=$((n+1))
+    done
+    [ "$n" -gt 0 ] || return 0
+    systemctl daemon-reload 2>/dev/null || true
+    # les repertoires d'etat/log osmocom appartenaient a root/osmocom : sans ce
+    # chown le demon (desormais User=$u) ne peut pas creer /var/log/osmocom/*.log
+    # -> "Unable to create file" -> parse du .cfg en echec -> status=1.
+    for _d in /var/log/osmocom /var/lib/osmocom /run/osmocom; do
+        [ -e "$_d" ] && chown -R "$u:$grp" "$_d" 2>/dev/null || true
+    done
+    # couper un crash-loop en cours : relancer les unites qui tournaient/bouclaient
+    for base in osmo-msc osmo-bsc osmo-bts-trx osmo-bts-virtual; do
+        systemctl cat "$base" >/dev/null 2>&1 || continue
+        systemctl reset-failed "$base" 2>/dev/null || true
+        systemctl try-restart "$base" 2>/dev/null || true
+    done
+    echo -e "  ${GREEN}\u2713${NC} unites osmo-* rendues au compte de session ${BOLD}$u${NC} (sinon User=osmocom introuvable -> 217/USER)"
+    return 0
+}
+_osmo_unites_user_session
 
 # ── LE CHOIX ────────────────────────────────────────────────────────────────
 # Lancee par l icone, cette fenetre est la SEULE interface : sans elle, un
@@ -255,6 +303,7 @@ if [ "$ANY_FLAG" = "0" ]; then
             TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (telechargee du hub OU compilee sur place : le choix vient ensuite), et la topologie op1 natif + op2/op3 docker + inter-STP" \
             FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
             FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
+            FALSE extras "Jeux + media - Doom (gzdoom+freedoom), Quake (quakespasm), OpenRA, Kodi, YouTube (Firefox + uBlock Origin), Wireshark (root), Linphone ; ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis l encart du bureau" \
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
@@ -280,6 +329,7 @@ if [ "$ANY_FLAG" = "0" ]; then
         fi
         case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
         case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
+        case "$_choix" in *extras*) DO_EXTRAS=1 ;; esac
     else
         # Console sans zenity : le supplement historique, celui de l icone.
         DO_MULTI=1
@@ -482,14 +532,13 @@ if [ "$DO_OPENCL" = "1" ]; then
     # Clones dans /root. Idempotent : si le depot est deja la, on met a jour
     # (git pull) au lieu de recloner. Non fatal - un depot injoignable (prive,
     # reseau) n arrete pas le reste.
-    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, deka_toy, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
+    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
     # NON-INTERACTIF, SINON LA FENETRE FIGE. Sur un depot prive ou absent, git
     # reclame un identifiant sur le terminal et attend INDEFINIMENT - lance par
     # l icone, il n y a personne pour repondre. GIT_TERMINAL_PROMPT=0 le fait
     # echouer net (pas de prompt), et le message plus bas dit quoi faire.
     export GIT_TERMINAL_PROMPT=0
     for _rt in "deka=https://github.com/bbaranoff/deka" \
-               "deka_toy=https://github.com/bbaranoff/deka_toy" \
                "a51_tools=https://github.com/bbaranoff/a51_tools" \
                "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
                "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
@@ -524,17 +573,6 @@ if [ "$DO_OPENCL" = "1" ]; then
             echo -e "      ${GREEN}✓${NC} _delta.so + _libvankus.so construits"
         else
             echo -e "      ${YELLOW}!${NC} make deka a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka && make"
-        fi
-    fi
-
-    # ── deka_toy : memes modules natifs (make), depot separe ─────────────────
-    if [ -f /root/deka_toy/Makefile ]; then
-        echo -e "  ${CYAN}→${NC} deka_toy : compilation des modules natifs (make) ..."
-        apt-get install -y --no-install-recommends swig4.1 python3-dev build-essential >/dev/null 2>&1 || true
-        if ( cd /root/deka_toy && make >/dev/null 2>&1 ); then
-            echo -e "      ${GREEN}✓${NC} deka_toy : make ok"
-        else
-            echo -e "      ${YELLOW}!${NC} make deka_toy a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka_toy && make"
         fi
     fi
 
@@ -670,82 +708,6 @@ DEKADSK
             done
         done
         echo -e "  ${GREEN}✓${NC} deka : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
-
-        # ── deka toy : meme logique, banc de test COMP128v1 (RAND=0) ─────────
-        # deka_toy est desormais son PROPRE depot (github.com/bbaranoff/deka_toy),
-        # clone en /root/deka_toy par la boucle plus haut : l icone + le lanceur
-        # pointent donc la. deka-toy-start.sh est un
-        # clone de deka-start.sh - seul le dernier worker change (delta_client
-        # -> toy-delta-client) et crack_toy.py build tourne avant les workers.
-        # Meme flux que deka : icone -> pkexec -> deka-toy-start.sh, terminal
-        # garde ouvert pour voir montages + PID.
-        if [ -f /root/deka_toy/crack_toy.py ] && [ -f /root/deka_toy/delta_client.py ] \
-           && [ -f /root/deka_toy/deka-toy-start.sh ]; then
-            echo -e "  ${CYAN}→${NC} deka toy : pose de l icone d application ..."
-
-            cat > /usr/local/bin/osmo-deka-toy <<'DEKATOYGUI'
-#!/bin/bash
-set -u
-SCRIPT=/root/deka_toy/deka-toy-start.sh
-if [ ! -x "$SCRIPT" ]; then
-    command -v zenity >/dev/null 2>&1 && \
-        zenity --error --text="deka-toy-start.sh introuvable : $SCRIPT" 2>/dev/null
-    exit 1
-fi
-RUNNER="$SCRIPT"
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v pkexec >/dev/null 2>&1; then
-        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
-    else
-        RUNNER="sudo -E $SCRIPT"
-    fi
-fi
-CMD="$RUNNER; echo; read -n1 -rsp 'deka toy lance - une touche pour fermer...'"
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="deka toy" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "deka toy" -e bash -c "$CMD" ;;
-    esac
-done
-exec bash -c "$RUNNER"
-DEKATOYGUI
-            chmod 755 /usr/local/bin/osmo-deka-toy
-
-            # ICONE DEDIEE : meme mandala que deka (data/deka-toy.svg), couleurs
-            # inversees (fond blanc / trait sombre) pour distinguer les deux
-            # icones au premier coup d oeil dans le dock. Chemin absolu dans
-            # Icon=, meme raison que deka (cf. update.sh).
-            if [ -f "$DIR/data/deka-toy.svg" ]; then
-                install -m644 "$DIR/data/deka-toy.svg" /usr/share/osmo-operator/icons/deka-toy.svg
-                install -m644 "$DIR/data/deka-toy.svg" /usr/share/icons/hicolor/scalable/apps/deka-toy.svg
-            fi
-            _deka_toy_desktop=/usr/share/applications/deka-toy.desktop
-            cat > "$_deka_toy_desktop" <<'DEKATOYDSK'
-[Desktop Entry]
-Type=Application
-Name=deka toy
-Name[fr]=deka toy
-Comment=Lance deka en mode toy (banc de test, sans les tables de 4 To)
-Comment[fr]=Lance deka en mode toy (banc de test, sans les tables de 4 To)
-Exec=/usr/local/bin/osmo-deka-toy
-Icon=/usr/share/osmo-operator/icons/deka-toy.svg
-Terminal=false
-Categories=System;Utility;
-Keywords=deka;toy;comp128;banc;test;
-DEKATOYDSK
-            chmod 644 "$_deka_toy_desktop"
-            command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
-            update-desktop-database /usr/share/applications 2>/dev/null || true
-
-            # meme regle que deka : pas d icone imposee sur le bureau.
-            for _h in /root /home/*; do
-                for _dir in Bureau Desktop; do
-                    rm -f "$_h/$_dir/deka-toy.desktop" 2>/dev/null || true
-                done
-            done
-            echo -e "  ${GREEN}✓${NC} deka toy : dans le ${BOLD}menu des applications${NC} (aucune icone posee sur le bureau)"
-        fi
     fi
 fi
 
@@ -1077,6 +1039,22 @@ CONF
     fi
 fi
 
+# ── JEUX + MEDIA (supplement independant) ────────────────────────────────────
+# Doom / Quake / OpenRA / Kodi / YouTube+uBlock / Wireshark(root) / Linphone,
+# ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis
+# l encart du bureau. La logique est partagee avec l ISO (le natif) :
+# tools/osmo-extras-install.sh, qu on source ici.
+if [ "$DO_EXTRAS" = "1" ]; then
+    echo -e "${BOLD}== Jeux + media ==${NC}"
+    if [ -f "$DIR/tools/osmo-extras-install.sh" ]; then
+        # shellcheck source=tools/osmo-extras-install.sh
+        . "$DIR/tools/osmo-extras-install.sh"
+        osmo_extras_install
+    else
+        echo -e "  ${YELLOW}!${NC} tools/osmo-extras-install.sh introuvable"
+    fi
+fi
+
 echo
 etat
 echo
@@ -1084,4 +1062,6 @@ echo
     echo -e "  ${CYAN}→${NC} lancer : ${BOLD}sudo $DIR/start-multi.sh${NC}  (ou l antenne bleue du bureau)"
 [ "$DO_OPENCL" = "1" ] && \
     echo -e "  ${CYAN}→${NC} verifier OpenCL : ${BOLD}clinfo${NC}"
+[ "$DO_EXTRAS" = "1" ] && \
+    echo -e "  ${CYAN}→${NC} jeux + media : dossiers ${BOLD}Jeux / Media / Telephone / Outils${NC} et encart du bureau"
 exit 0

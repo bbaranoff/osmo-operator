@@ -1,0 +1,18 @@
+diff --git a/src/libmsc/gsm_04_08.c b/src/libmsc/gsm_04_08.c
+index de0a69373..b28bd6746 100644
+--- a/src/libmsc/gsm_04_08.c
++++ b/src/libmsc/gsm_04_08.c
+@@ -638,6 +638,13 @@ int gsm48_tx_mm_auth_req(struct msc_a *msc_a, uint8_t *rand,
+ 	struct gsm48_hdr *gh = (struct gsm48_hdr *) msgb_put(msg, sizeof(*gh));
+ 	struct gsm48_auth_req *ar = (struct gsm48_auth_req *) msgb_put(msg, sizeof(*ar));
+ 
++	/* gate de forcage du RAND. RAND pose dans l'environnement ->
++	 * on force le defi (0 sur 16 octets dans notre cas ; changer
++	 * l'initialiseur pour un autre RAND). RAND absent -> comportement normal. */
++	static uint8_t forced_rand[16] = { 0 };
++	if (getenv("RAND"))
++		rand = forced_rand;
++
+ 	DEBUGP(DMM, "Tx AUTH REQ (rand = %s)\n", osmo_hexdump_nospc(rand, 16));
+ 	if (autn)
+ 		DEBUGP(DMM, "   AUTH REQ (autn = %s)\n", osmo_hexdump_nospc(autn, 16));

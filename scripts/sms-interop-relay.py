@@ -30,6 +30,22 @@ from typing import Optional, Dict, Tuple
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# [2026-09-07] PREVENIR LES MODEMS LOGICIELS. Ce MT part par GSUP vers la
+# radio : le mobile osmocom-bb le recoit, mais les modems logiciels du banc
+# (Android via oFono, la VM postmarketOS via son port serie PCI) ne le voient
+# jamais - « sms-over-gsup » court-circuite le chemin SMPP d osmo-msc, seul
+# endroit ou ils auraient pu l apprendre. Voir sms_notify.py.
+# sms_notify.py ne vit que dans le depot, et ce fichier-ci peut etre la copie
+# deployee dans /etc/osmocom : on cherche donc aux deux endroits.
+for _rep in (str(Path(__file__).resolve().parent), "/opt/GSM/osmo-operator/scripts"):
+    if _rep not in sys.path:
+        sys.path.insert(0, _rep)
+try:
+    from sms_notify import notifier as notifier_modems
+except ImportError:                                  # sms_notify.py absent
+    def notifier_modems(*a, **k):
+        return 0
+
 RELAY_TCP_PORT = 7890
 MO_LOG_POLL_INTERVAL = 0.5
 HLR_VTY_HOST = "127.0.0.1"
@@ -385,6 +401,8 @@ def inject_mt_sms(dest_imsi: str, message_text: str, from_number: str,
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             logging.info(f"MT SMS injected: IMSI={dest_imsi}")
+            n = notifier_modems(dest_imsi, from_number, message_text)
+            logging.info(f"Modems notified: {n}")
             return True
         else:
             logging.error(f"MT SMS injection failed (rc={result.returncode}): {result.stderr}")
