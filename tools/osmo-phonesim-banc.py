@@ -229,6 +229,21 @@ def mobile(action, essais=1):
     mobile doit donc repondre - et il n y a personne pour appuyer sur la
     touche. On le fait par son VTY.
     """
+    # [2026-09-08] ON ATTEND QUE LA JAMBE ARRIVE AVANT DE DECROCHER. Tenter
+    # « call 1 answer » toutes les demi-secondes pendant que la jambe est
+    # encore en paging faisait ecrire « % No alerting call » une dizaine de
+    # fois sur TOUS les VTY du mobile - dont celui de l utilisateur. Le mobile
+    # dit ou il en est dans « show ms » : tant que sa couche RR est « idle »,
+    # rien n est encore arrive, on se tait.
+    if action == "answer":
+        for _ in range(essais * 2):
+            out = MOB.cmd("show ms %s" % MS) or ""
+            if "radio resource layer state: idle" not in out:
+                break
+            time.sleep(0.5)
+        # Entre la reponse au paging et la sonnerie il reste une a trois
+        # secondes : on garde toutes les tentatives (essais), pas quatre -
+        # avec quatre, le mobile ne decrochait plus et la voix disparaissait.
     for _ in range(essais):
         MOB.cmd("enable")
         out = MOB.cmd("call %s %s" % (MS, action))
@@ -2012,6 +2027,14 @@ class AtHandler(socketserver.StreamRequestHandler):
             num = re.sub(r"[^0-9+*#]", "", body.split(";")[0][1:])
             if not num:
                 self.err(); return
+            if not num.startswith("*99") and ("*" in num or "#" in num):
+                # [2026-09-08] UN CODE USSD N EST PAS UN APPEL. Le composeur
+                # de Phosh envoie « *#100# » en ATD : on le lancait dans
+                # Asterisk, on descendait en 2G, et on essayait de faire
+                # decrocher le mobile pour rien. Refuse (27.007 : operation
+                # non permise) ; l USSD passe par AT+CUSD, plus bas.
+                log("ATD%s : code USSD/SS, pas un appel - refuse" % num)
+                self.err(3); return
             if num.startswith("*99"):
                 # ATD*99***<cid># : la DATA, par PPP sur ce port (voir la
                 # classe Ppp). On repond CONNECT et le port passe en mode
@@ -2115,6 +2138,19 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.csfb_fin_apres()       # plus rien en CS : retour sur la 4G
             self.ok(); return
 
+        if ub.startswith("+CUSD=1,"):
+            # USSD, un minimum : *#100# rend le numero de l abonne (comme sur
+            # le mobile osmocom-bb) ; tout autre code est « libere par le
+            # reseau » (+CUSD: 2), sans erreur ni descente en 2G.
+            m = re.search(r'"([^"]*)"', body)
+            code = m.group(1) if m else ""
+            self.ok()
+            if code.replace("*", "").replace("#", "") == "100":
+                self.out('+CUSD: 0,"Votre numero : %s",15' % MSISDN)
+            else:
+                log("USSD %s : pas de service, on libere" % code)
+                self.out("+CUSD: 2")
+            return
         if ub == "+CBC":
             self.out("+CBC: 0,80"); self.ok(); return       # alimente, 80 %
         if ub == "+CLCK=?":

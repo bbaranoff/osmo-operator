@@ -444,7 +444,12 @@ else
     run_in_tmux "bts" "osmo-bts-trx -c /etc/osmocom/osmo-bts-trx.cfg"
 
     echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
-    FAKETRX_CMD="python3 ${FAKETRX_PY} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
+    # [2026-09-08] -s 20 : ordonnancement temps reel (SCHED_RR) pour le
+    # transceiver et son horloge TDMA. En ordonnancement normal, sur un hote
+    # charge (srsRAN, QEMU, le bureau), le tic de 4,615 ms arrivait en retard
+    # de 0,3 a 2 ms des dizaines de fois par minute ; la BTS compensait
+    # (« N FN slower/faster than TRX ») et la parole perdait des trames.
+    FAKETRX_CMD="python3 ${FAKETRX_PY} -s ${FAKETRX_RR_PRIO:-20} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
     for t in $(seq 1 $((N_TRX-1))); do
         FAKETRX_CMD+=" --trx bts${t}@127.0.0.1:${BTS_PORT_BASE}/${t}"
     done

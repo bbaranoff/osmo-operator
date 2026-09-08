@@ -292,7 +292,9 @@ osmo_poser_pmos
 
 # ── WIRESHARK : UNE ICONE QUI ECOUTE DEJA LE BANC ───────────────────────────
 # [2026-09-08] tools/osmo-wireshark-root.sh : root par pkexec (invite de mot de
-# passe graphique), capture immediate LTE + SCTP + GSM. « wireshark » au
+# passe graphique), capture immediate LTE + SCTP + GSM, filtre d affichage 2G +
+# 4G + telephone (signalisation, appel, SMS, data ; les battements de coeur
+# retranches) et boutons de filtre dans le profil de root. « wireshark » au
 # clavier est un lien dessus. Le favori du dock (org.wireshark.Wireshark, le
 # Wireshark nu qui refuse de capturer) est remplace par le notre, pour chaque
 # session ouverte - les favoris sont dans le dconf de l utilisateur, pas de
@@ -308,13 +310,13 @@ osmo_poser_wireshark() {
 Type=Application
 Name=Wireshark (banc)
 GenericName=Analyseur reseau
-Comment=Wireshark en root, capture immediate du banc : LTE (S1AP, GTP, PFCP, Diameter), SCTP, GSM (GSMTAP, Abis, Gb, MGCP, SIP, RTP)
+Comment=Wireshark en root, capture immediate du banc, filtre 2G + 4G + telephone (signalisation, appel, SMS, data) sans les battements de coeur ; boutons Banc / 2G / 4G / Appel / SMS / Data / Attach
 Exec=/usr/local/bin/osmo-wireshark-root %f
 Icon=org.wireshark.Wireshark
 Terminal=false
 StartupNotify=true
 Categories=Network;Monitor;
-Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;
+Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;2g;4g;sms;appel;
 WSD
     chmod 644 /usr/share/applications/osmo-wireshark-root.desktop
     update-desktop-database /usr/share/applications 2>/dev/null || true

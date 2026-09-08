@@ -1,0 +1,23 @@
+diff --git a/src/target/trx_toolkit/clck_gen.py b/src/target/trx_toolkit/clck_gen.py
+index f769c3e9..8c253ea2 100755
+--- a/src/target/trx_toolkit/clck_gen.py
++++ b/src/target/trx_toolkit/clck_gen.py
+@@ -104,8 +104,16 @@ class CLCKGen:
+ 			t = time.monotonic_ns()
+ 			dt = (t_next - t)
+ 			if dt < 0:
+-				log.warning("CLCKGen: time overrun by %dus; resetting the clock" % (dt * ns // us))
+-				t_next = time.monotonic_ns()
++				# [osmo-operator 2026-09-08] Only rebase the clock when we are
++				# late by more than one full TDMA frame. A sub-frame overrun
++				# (0.3..2 ms on a loaded host) used to reset t_next as well,
++				# shifting the timebase by that much every time: osmo-bts-trx
++				# then logged "N FN slower/faster than TRX, compensating" all
++				# day long and the speech path lost frames (audible dropouts
++				# at TCH start). Below one frame we simply catch up.
++				if dt < -t_tick:
++					log.warning("CLCKGen: time overrun by %dus; resetting the clock" % (dt * ns // us))
++					t_next = time.monotonic_ns()
+ 				dt = 0
+ 
+ 			if self._breaker.wait(dt * ns):

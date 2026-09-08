@@ -201,7 +201,8 @@ DINO
     # WIRESHARK EN ROOT : la capture demande les privileges (l install a mis
     # setuid a false). [2026-09-08] Le lanceur est un fichier du depot,
     # tools/osmo-wireshark-root.sh : root par pkexec (invite graphique), et
-    # capture immediate avec le filtre LTE + SCTP + GSM du banc. Et
+    # capture immediate avec le filtre LTE + SCTP + GSM du banc, filtre d
+    # affichage 2G + 4G + telephone (appel, SMS, data) et boutons de filtre. Et
     # /usr/local/bin/wireshark pointe dessus : « wireshark » au clavier, c est
     # lui (le binaire reste /usr/bin/wireshark, qu il appelle).
     [ -f "$OSMO_EXTRAS_REPO/tools/osmo-wireshark-root.sh" ] \
@@ -307,13 +308,13 @@ DIND
 Type=Application
 Name=Wireshark (banc)
 GenericName=Analyseur reseau
-Comment=Wireshark en root, capture immediate du banc : LTE (S1AP, GTP, PFCP, Diameter), SCTP, GSM (GSMTAP, Abis, Gb, MGCP, SIP, RTP)
+Comment=Wireshark en root, capture immediate du banc, filtre 2G + 4G + telephone (signalisation, appel, SMS, data) sans les battements de coeur ; boutons Banc / 2G / 4G / Appel / SMS / Data / Attach
 Exec=/usr/local/bin/osmo-wireshark-root %f
 Icon=org.wireshark.Wireshark
 Terminal=false
 StartupNotify=true
 Categories=Network;Monitor;
-Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;
+Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;2g;4g;sms;appel;
 WSD
 
     cat > /usr/share/applications/osmo-ofono.desktop <<'OFD'

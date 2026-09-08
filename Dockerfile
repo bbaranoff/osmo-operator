@@ -420,9 +420,16 @@ RUN if ! osmo-deb install osmo-gapk 0.git; then \
 # Le patch reste dans patches/ a titre documentaire, il n'est plus applique.
 # L arbre ENTIER part dans le paquet (snapshot) : trx_toolkit, osmocon et les
 # binaires host sont lus dans l arbre au runtime, pas seulement dans /usr/local.
+# [2026-09-08] trx_toolkit/clck_gen.py : l horloge TDMA de fake_trx ne se
+# remet a zero que pour un retard superieur a une trame (4,615 ms). Avant, un
+# retard de 0,3 a 2 ms decalait la base de temps a chaque fois ; osmo-bts-trx
+# compensait en boucle et la parole perdait des trames. Patch maintenu dans
+# patches/, applique aussi par install_modules/40-patches.sh en natif.
+COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
 RUN if ! osmo-deb install osmocom-bb 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
+      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-clck-gen-frame-tolerance.patch && \
       cd osmocom-bb/src && \
       # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
       # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour

@@ -33,7 +33,7 @@
 #
 # Reglages : OSMO_PMOS_AT_PORT (12346), OSMO_PMOS_SINK (gsm_mic),
 # OSMO_PMOS_SOURCE (gsm_audio.monitor), OSMO_PMOS_MEM (4096),
-# OSMO_PMOS_DISPLAY (sdl), OSMO_PMOS_MODEM (1 : le modem et la voix sont
+# OSMO_PMOS_DISPLAY (sdl), OSMO_PMOS_DISK (16G), OSMO_PMOS_MODEM (1 : le modem et la voix sont
 # branches tout seuls des que la VM repond ; 0 : VM nue).
 # [2026-09-07] LE MOT DE PASSE, DEMANDE D ABORD. pmbootstrap a besoin de root
 # la ou l ancien script n en avait aucun besoin : il detache les boucles
@@ -166,27 +166,52 @@ fi
 SETUP="${OSMO_PMOS_SETUP:-/usr/local/bin/osmo-pmos-setup}"
 [ -x "$SETUP" ] || SETUP="${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos-setup.sh"
 SETUP_LOG="${XDG_RUNTIME_DIR:-/tmp}/osmo-pmos-setup.log"
+# [2026-09-08] LA PLACE, VERIFIEE A CHAQUE LANCEMENT. Le guetteur tourne
+# toujours (modem ou pas) : une fois la VM levee il regarde si la racine
+# occupe bien tout le disque. Normalement l initramfs pmOS l a deja fait au
+# boot (pmos.force-partition-resize sur la ligne du noyau) ; sinon - image
+# refaite sans ce parametre - il etend lui-meme la partition 2 puis l ext4,
+# a chaud, par SSH. Puis le modem si OSMO_PMOS_MODEM=1.
+pmos_place() {
+    # Le script cote VM voyage en base64 : trois niveaux de guillemets sinon.
+    local b64; b64="$(base64 -w0 <<'PLACE'
+set -e
+d=$(blockdev --getsize64 /dev/vda); p=$(blockdev --getsize64 /dev/vda2)
+s=$(sfdisk -d /dev/vda 2>/dev/null | sed -n 's/^.*vda2 : start= *\([0-9]*\).*/\1/p')
+# de la place derriere la partition 2 (> 64 Mio) ? on l etend, a chaud
+if [ $((d - s*512 - p)) -gt 67108864 ]; then
+    echo "partition 2 : $((p/1048576)) Mio sur un disque de $((d/1048576)) Mio - extension"
+    parted -f -s /dev/vda resizepart 2 100% >/dev/null 2>&1 \
+        || echo ", +" | sfdisk --no-reread -N2 /dev/vda >/dev/null 2>&1 || true
+    partprobe /dev/vda 2>/dev/null || true
+fi
+resize2fs /dev/vda2 2>&1 | grep -v '^resize2fs [0-9]' || true
+df -h / | tail -1 | awk '{print "place : racine " $2 ", libre " $4 " (" $5 " pris)"}'
+PLACE
+)"
+    $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S sh -c \"\$(echo $b64 | base64 -d)\"" 2>/dev/null
+}
 GUETTEUR=""
-if [ "${OSMO_PMOS_MODEM:-1}" = "1" ] && [ -x "$SETUP" ]; then
-    (
-        SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
-        for _ in $(seq 1 120); do          # 10 min : l image peut etre a refaire
-            sleep 5
-            sshpass -p "${OSMO_PMOS_PASS:-147147}" ssh -p "$SSH_PORT" -T \
-                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o ConnectTimeout=4 -o PreferredAuthentications=password \
-                "${OSMO_PMOS_USER:-user}@127.0.0.1" 'echo ok' 2>/dev/null | grep -q ok || continue
-            echo "osmo-pmos-qemu: VM levee, branchement du modem et de la voix ($SETUP)"
+(
+    for _ in $(seq 1 120); do          # 10 min : l image peut etre a refaire
+        sleep 5
+        pmos_ssh_ok || continue
+        echo "osmo-pmos-qemu: VM levee - verification de la place sur le disque"
+        pmos_place | sed 's/^/osmo-pmos-qemu: /'
+        if [ "${OSMO_PMOS_MODEM:-1}" = "1" ] && [ -x "$SETUP" ]; then
+            echo "osmo-pmos-qemu: branchement du modem et de la voix ($SETUP)"
             "$SETUP" >"$SETUP_LOG" 2>&1
             grep -E 'modem|ATTENTION|descendant|montant|Modem|DNS' "$SETUP_LOG" \
                 | sed 's/^/osmo-pmos-qemu: /'
             echo "osmo-pmos-qemu: trace complete dans $SETUP_LOG"
-            exit 0
-        done
-        echo "osmo-pmos-qemu: la VM n a pas repondu en SSH en 10 min - modem NON branche" \
-             "(relancer osmo-pmos-setup a la main)"
-    ) &
-    GUETTEUR=$!
+        fi
+        exit 0
+    done
+    echo "osmo-pmos-qemu: la VM n a pas repondu en SSH en 10 min - place non verifiee, modem NON branche" \
+         "(relancer osmo-pmos-setup a la main)"
+) &
+GUETTEUR=$!
+if [ "${OSMO_PMOS_MODEM:-1}" = "1" ] && [ -x "$SETUP" ]; then
     echo "osmo-pmos-qemu: le modem du banc sera branche des que la VM repond (OSMO_PMOS_MODEM=0 pour l eviter)"
 else
     echo "osmo-pmos-qemu: VM sans modem (OSMO_PMOS_MODEM=0 ou osmo-pmos-setup absent)"
@@ -194,14 +219,27 @@ fi
 # La VM partie, le guetteur n a plus rien a attendre.
 trap '[ -n "$GUETTEUR" ] && kill "$GUETTEUR" 2>/dev/null' EXIT
 
-# [2026-09-08] LE DISQUE : 4 Go, pas 2. L image pmbootstrap fait 2 Go par
+# [2026-09-08] LE DISQUE : 16 Go, pas 2. L image pmbootstrap fait 2 Go par
 # defaut et etait PLEINE (2,2 Go a 100 %) apres apk add/upgrade : plus rien
-# n ecrivait, ni dconf, ni NetworkManager, ni le journal. --image-size agrandit
-# le fichier, l initramfs pmOS etend la partition et le systeme de fichiers au
-# demarrage. OSMO_PMOS_DISK pour une autre taille.
+# n ecrivait, ni dconf, ni NetworkManager, ni le journal. Un premier correctif
+# a 4 Go n avait jamais ete deploye (le lanceur de /usr/local/bin datait
+# d avant) : la VM tournait toujours sur 2,8 Go pleins. --image-size est
+# passe A CHAQUE LANCEMENT : pmbootstrap ne fait qu un truncate (fichier
+# creux, ne coute que ce qui est ecrit ; il refuse seulement de RETRECIR,
+# d ou le calcul ci-dessous qui garde la taille courante si elle est plus
+# grande), l initramfs pmOS etend la partition et l ext4 au demarrage, et le
+# guetteur ci-dessus verifie le resultat. OSMO_PMOS_DISK pour une autre taille.
+DISK="${OSMO_PMOS_DISK:-16G}"
+IMG_PMB="$(ls -1 "${OSMO_PMB_WORK:-$HOME/test}"/chroot_native/home/pmos/rootfs/*.img 2>/dev/null | head -1)"
+if [ -n "$IMG_PMB" ]; then
+    cur_m=$(( ($(stat -c %s "$IMG_PMB") + 1048575) / 1048576 ))
+    case "$DISK" in *G) want_m=$(( ${DISK%G} * 1024 )) ;; *M) want_m=${DISK%M} ;; *) want_m=$cur_m ;; esac
+    [ "$want_m" -lt "$cur_m" ] && DISK="${cur_m}M"
+    echo "osmo-pmos-qemu: disque de la VM $DISK ($IMG_PMB, ${cur_m} Mio avant)"
+fi
 "$PMB" qemu \
     --memory "${OSMO_PMOS_MEM:-4096}" \
-    --image-size "${OSMO_PMOS_DISK:-4G}" \
+    --image-size "$DISK" \
     --display "${OSMO_PMOS_DISPLAY:-sdl}" \
     "$@"
 rc=$?

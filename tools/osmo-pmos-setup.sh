@@ -278,7 +278,37 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     for o in $(pactl list source-outputs short 2>/dev/null | cut -f1); do
         pactl set-source-output-mute "$o" 0 2>/dev/null
     done
-    pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null && echo "  sourdines de l hote levees"
+    # [2026-09-08] LE MICRO AUSSI. On ne levait que la sourdine du haut-parleur ;
+    # un appui sur la touche « micro coupe » du PC mettait la source a 0 % et
+    # la voix montante disparaissait sans un mot d erreur nulle part.
+    # [2026-09-08] UN ANNULEUR D ECHO ENTRE LE MICRO ET LES HAUT-PARLEURS DU
+    # PC. Avec le micro interne et les haut-parleurs, l echo du 600 se
+    # reinjectait dans le micro (mesure : micro a 2 400 crete haut-parleur
+    # coupe, 32 768 sature haut-parleur ouvert) : Larsen, voix montante
+    # inaudible, descendante brouillee. module-echo-cancel (webrtc) fabrique
+    # un micro et un haut-parleur « sans echo » ; la carte « combine » de la VM
+    # y est branchee, et ils deviennent les peripheriques par defaut.
+    MIC_HW=$(pactl get-default-source 2>/dev/null); HP_HW=$(pactl get-default-sink 2>/dev/null)
+    case "$MIC_HW" in osmo_mic_ec) MIC_HW=$(pactl list sources short | awk '$2 ~ /^alsa_input/ {print $2; exit}') ;; esac
+    case "$HP_HW" in osmo_hp_ec) HP_HW=$(pactl list sinks short | awk '$2 ~ /^alsa_output/ {print $2; exit}') ;; esac
+    if [ -n "$MIC_HW" ] && [ -n "$HP_HW" ]; then
+        pactl list modules short 2>/dev/null | grep -q module-echo-cancel \
+            || pactl load-module module-echo-cancel aec_method=webrtc source_master="$MIC_HW" sink_master="$HP_HW" \
+                   source_name=osmo_mic_ec sink_name=osmo_hp_ec \
+                   source_properties=device.description=Micro_sans_echo sink_properties=device.description=HP_sans_echo >/dev/null 2>&1 \
+            && echo "  annuleur d echo pose entre $MIC_HW et $HP_HW"
+        pactl set-default-source osmo_mic_ec 2>/dev/null; pactl set-default-sink osmo_hp_ec 2>/dev/null
+        for so in $(pactl list source-outputs 2>/dev/null | awk '/Source Output #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
+            pactl move-source-output "$so" osmo_mic_ec 2>/dev/null
+        done
+        for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
+            pactl move-sink-input "$si" osmo_hp_ec 2>/dev/null
+        done
+        pactl set-source-mute "$MIC_HW" 0 2>/dev/null; pactl set-source-volume "$MIC_HW" 100% 2>/dev/null
+        pactl set-source-volume osmo_mic_ec 80% 2>/dev/null
+    fi
+    pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null
+    pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null && echo "  sourdines de l hote levees (haut-parleur et micro)"
 
     ssh_vm '
         pci() { pactl list "$1" short 2>/dev/null | grep "pci-0000_00_$2\.0" | grep -v monitor | head -n1 | cut -f2; }
@@ -304,12 +334,16 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
             pactl set-source-mute "$c" 0 2>/dev/null
         done
         # Idempotent : on retire les bouclages precedents avant de reposer.
+        # [2026-09-08] 200 ms et pas 40 : a 40 ms PulseAudio, dans la VM,
+        # notait « Too many underruns, increasing latency » et la voix
+        # craquait (echo du 600 brouille). Une VM n a pas la regularite d une
+        # carte son ; 200 ms restent imperceptibles sur un appel.
         for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
             pactl unload-module "$m" 2>/dev/null
         done
-        pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=40 >/dev/null \
+        pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=200 >/dev/null \
             && echo "  descendant : pont -> combine (on entend)"
-        pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=40 >/dev/null \
+        pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=200 >/dev/null \
             && echo "  montant    : combine -> pont (on parle)"
     ' 2>&1 | tail -n 6
 fi
