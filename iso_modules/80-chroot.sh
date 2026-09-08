@@ -892,8 +892,12 @@ GDM
     # [2026-09-04] L ordre demande, gauche a droite dans le dock :
     #   firefox · fichiers · claude · lancer le banc · installer · tutoriel ·
     #   supplements · multi · deka · dsp · linphone · wireshark · le telephone
-    #   Android (appels et SMS de Waydroid : waydroid.org.fossify.*, poses par
-    #   tools/osmo-waydroid.sh)
+    #   du banc (osmo-pmos.desktop : la VM postmarketOS/Phosh, posee par
+    #   tools/osmo-extras-install.sh)
+    #
+    # [2026-09-07] Les deux entrees Waydroid (waydroid.org.fossify.phone /
+    # .messages) sont retirees : Android est abandonne, le telephone est la VM
+    # postmarketOS.
     #
     # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
     # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
@@ -901,7 +905,7 @@ GDM
     # installes (deka est pose par addition.sh, un supplement).
     # firefox.desktop : celui du deb Mozilla (packages.mozilla.org).
     for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
-        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047osmo-paint.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047, \047waydroid.org.fossify.phone.desktop\047, \047waydroid.org.fossify.messages.desktop\047]\n" "$_sec" \
+        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047osmo-paint.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047org.wireshark.Wireshark.desktop\047, \047osmo-pmos.desktop\047]\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done
     unset _sec

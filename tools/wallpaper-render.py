@@ -9,9 +9,9 @@
 #   +--------+------------------------------------------+-------------------+
 #   | dock + | carte LAB GSM (x 320..1430, y 60..560)  | conky (400 px,    |
 #   | icones |                                          | gap 24, y 40..660)|
-#   | bureau | strip / encart (x 510..1410, CENTRE,      |                   |
-#   | (haut  |                          y 600..1010)    |                   |
-#   | gauche)|                                          |                   |
+#   | bureau | encart (x 510..1410, CENTRE, y 220..1010) |                   |
+#   | (haut  |   haut : BD geek au hasard / spectre 4G  |                   |
+#   | gauche)|   bas  : Calvin & Hobbes  / spectre 2G   |                   |
 #   +--------+------------------------------------------+-------------------+
 #
 # Le pylone de la photo est au MILIEU (voir background/TOWER_X) : les deux
@@ -35,10 +35,20 @@
 # milieu de l ecran, seulement au milieu de la bande laissee libre.
 # La nouvelle boite (510, 600, 1410, 1010) est CENTREE sur les 1920 px
 # (510 + 900/2 = 960) et s arrete avant x=1440, ou commence la colonne du conky.
-# LES TROIS FICHIERS QUI LA CONNAISSENT DOIVENT RESTER D ACCORD :
-#   tools/wallpaper-render.py  (le cadre dessine dans le fond)
-#   tools/osmo-fft-snap.py     (l image 900x410 qu on y peint)
+# [2026-09-08] L ENCART A GRANDI VERS LE HAUT ET S EST COUPE EN DEUX. La 4G du
+# banc (srsRAN) n avait pas de place a l ecran : la boite passe a
+# (510, 220, 1410, 1010), soit 900x790, en deux cadres de 391 px separes de
+# 8 px. Le haut porte une bande dessinee geek tiree au sort (et le spectre
+# du UE srsRAN quand il tourne), le bas Calvin & Hobbes (et le spectre 2G).
+# Elle empiete sur la zone haute LAB GSM (osmo-topzone.py, y 60..~400) :
+# c est assume, la banniere reste un decor derriere.
+# LES QUATRE FICHIERS QUI LA CONNAISSENT DOIVENT RESTER D ACCORD :
+#   tools/wallpaper-render.py  (les deux cadres dessines dans le fond)
+#   tools/osmo-fft-snap.py     (l image 900x790 qu on y peint)
 #   tools/osmo-panel.py        (la fenetre GTK cliquable posee dessus)
+#   tools/osmo-launcher.py     (ou se cale une appli lancee « dans le panel »)
+BOX_HAUT = (510, 220, 1410, 611)
+BOX_BAS = (510, 619, 1410, 1010)
 import argparse
 import datetime
 import os
@@ -444,7 +454,9 @@ def strip_panel(base, box, strip_path, date_str, credit=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tower", required=True)
-    ap.add_argument("--strip", default=None)
+    ap.add_argument("--strip", default=None, help="l image du cadre du BAS (Calvin & Hobbes)")
+    ap.add_argument("--strip-haut", default=None, help="l image du cadre du HAUT (la BD geek)")
+    ap.add_argument("--credit-haut", default=None)
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     ap.add_argument("--credit", default=None,
                     help="ligne de pied sous l image (source, auteur). "
@@ -470,15 +482,25 @@ def main():
     # qui voudrait l ancien fond autonome (un banc sans bureau vivant).
     if os.environ.get("OSMO_LEGACY_BANNER", "0") == "1":
         card(base, (320, 60, 1430, 560), a.arfcn, a.band)
-    if a.strip and os.path.isfile(a.strip):
-        try:
-            strip_panel(base, (510, 600, 1410, 1010), a.strip, a.date, a.credit)
-        except Exception as e:  # GIF corrompu, page HTML au lieu d une image...
-            print(f"[wallpaper] strip ignore : {e}", file=sys.stderr)
+    # Deux cadres, deux images. Un cadre sans image reste dessine (vide) : le
+    # spectre viendra le couvrir, et vide il dit « rien a montrer ici ».
+    poses = {}
+    for nom, box, chemin, credit in (("bas", BOX_BAS, a.strip, a.credit),
+                                     ("haut", BOX_HAUT, a.strip_haut, a.credit_haut)):
+        poses[nom] = False
+        if chemin and os.path.isfile(chemin):
+            try:
+                strip_panel(base, box, chemin, a.date, credit)
+                poses[nom] = True
+            except Exception as e:  # GIF corrompu, page HTML au lieu d une image...
+                print(f"[wallpaper] image du {nom} ignoree : {e}", file=sys.stderr)
+        else:
+            glass_panel(base, box, fill=(20, 24, 36), alpha=210, border=(200, 200, 210))
     tmp = a.out + ".tmp.png"
     base.save(tmp, "PNG", optimize=True)
     os.replace(tmp, a.out)
-    print(f"[wallpaper] {a.out} ({W}x{H}, strip={'oui' if a.strip and os.path.isfile(a.strip) else 'non'})")
+    print(f"[wallpaper] {a.out} ({W}x{H}, bas={'oui' if poses['bas'] else 'non'}, "
+          f"haut={'oui' if poses['haut'] else 'non'})")
 
 
 if __name__ == "__main__":

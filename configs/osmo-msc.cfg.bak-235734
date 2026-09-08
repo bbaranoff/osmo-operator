@@ -197,8 +197,8 @@ hlr
  ipa-name VLR-SDR-OP__OPERATOR_ID__
 sgs
  local-port 29118
- local-ip 127.0.0.1
- vlr-name vlr.msc001.mnc001.mcc001.3gppnetwork.org
+ local-ip 0.0.0.0
+ vlr-name vlr.op__OPERATOR_ID__.net
 asci
  disable
  gcr

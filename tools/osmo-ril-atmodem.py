@@ -5,9 +5,8 @@
 #
 #   Android → rild → libreference-ril.so → port serie AT → CE PROGRAMME → oFono → banc
 #
-# libreference-ril.so (deja presente dans l image Waydroid, /vendor/lib64) ne
-# sait parler qu a un modem AT : elle ouvre un port serie et y envoie du 3GPP
-# 27.007 (AT+CFUN, AT+CREG?, ATD..., AT+CMGS...). oFono, lui, n est pas un
+# UN RIL Android (libreference-ril.so) n ouvre qu un port serie et y envoie du
+# 3GPP 27.007 (AT+CFUN, AT+CREG?, ATD..., AT+CMGS...). oFono, lui, n est pas un
 # modem : c est un consommateur de modem, avec une API D-Bus. Les deux ne se
 # rencontrent donc jamais - sauf si quelqu un TIENT LE ROLE DU MODEM. C est ce
 # que fait ce programme : il ouvre un pseudo-terminal, se comporte comme un
@@ -18,15 +17,15 @@
 #   ATA / ATH       <- Answer / HangupAll
 #   AT+CLCC         <- la liste des appels en cours (GetCalls)
 #   AT+CMGS         <- org.ofono.MessageManager.SendMessage
-#   +CMTI / RING    <- pousses vers le RIL quand oFono signale un SMS ou un appel
+#   +CMTI / RING    <- pousses vers le port quand oFono signale un SMS ou un appel
 #
-# CE QU IL MANQUE ENCORE, ET IL FAUT LE DIRE : l image Waydroid n embarque PAS
-# le binaire rild (verifie : rien dans /system/bin ni /vendor/bin/hw, aucun
-# service HAL radio, aucun .rc qui le lance). Ce programme est donc la moitie
-# aval de la chaine, complete et testable seule (on peut lui parler a la main
-# sur le pty), mais il faudra un rild - celui du pack Quectel, ou un rild AOSP
-# construit pour x86_64 - pour que Android s y branche. tools/osmo-waydroid.sh
-# (ril-install) pose le reste : service init, manifeste VINTF, permissions.
+# A QUOI IL SERT AUJOURD HUI. [2026-09-07] Il a ete ecrit pour donner un modem
+# au RIL d un Android en conteneur (Waydroid) ; Android est abandonne, et le
+# telephone du banc - la VM postmarketOS - se branche, lui, DIRECTEMENT sur le
+# modem du banc (tools/osmo-phonesim-banc.py --connect). Ce programme-ci reste
+# le modem AT adosse a oFono : c est par lui qu on verifie a la main, avec
+# tools/at-cmd.py sur /run/osmo-ril/at-pty, ce qu oFono repond vraiment - et
+# c est le port qu on donnerait a n importe quel logiciel attendant un modem.
 #
 # Reglages :
 #   OSMO_RIL_DIR      ou publier le lien vers le pty (defaut /run/osmo-ril)

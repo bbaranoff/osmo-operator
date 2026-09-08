@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 *.iso
 vty-debug-dump-*.txt
+
+# depot git a part (github.com/bbaranoff/dino), deploye par wrangler
+dino/

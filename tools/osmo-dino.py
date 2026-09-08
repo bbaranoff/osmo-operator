@@ -20,6 +20,7 @@
 #
 # Lance par /usr/local/bin/osmo-desktop-panel (comme osmo-panel.py + conky).
 import os
+import subprocess
 import sys
 
 # [2026-09-06] LA FENETRE DE BUREAU EXIGE X11, PAS WAYLAND.
@@ -121,6 +122,17 @@ class Dino(Gtk.Window):
         ucm.add_style_sheet(WebKit2.UserStyleSheet(
             INJECT_CSS, WebKit2.UserContentInjectedFrames.ALL_FRAMES,
             WebKit2.UserStyleLevel.USER, None, None))
+        # [2026-09-07] LE BOUTON PLEIN ECRAN DU WIDGET. Une page ne peut pas
+        # agrandir une fenetre GTK, et ce widget de 400x260 n a de toute facon
+        # rien a agrandir : c est un coin du bureau. La page se sait donc
+        # « widget » (OSMO_HOST) et, au clic, nous envoie un message WebKit -
+        # on ouvre alors le VRAI jeu, en plein ecran, dans sa propre fenetre.
+        ucm.add_script(WebKit2.UserScript(
+            "window.OSMO_HOST='widget';",
+            WebKit2.UserContentInjectedFrames.ALL_FRAMES,
+            WebKit2.UserScriptInjectionTime.START, None, None))
+        ucm.connect("script-message-received::osmo", self._on_message)
+        ucm.register_script_message_handler("osmo")
         self.view = WebKit2.WebView.new_with_user_content_manager(ucm)
         self.view.set_background_color(Gdk.RGBA(0, 0, 0, 0))
         self.add(self.view)
@@ -140,6 +152,16 @@ class Dino(Gtk.Window):
     def _pin(self, *_a):
         self.move(*self._pos)
         return False
+
+    def _on_message(self, _ucm, _result):
+        """{full:true} : le jeu en grand, dans sa fenetre a lui."""
+        for cand in ("/usr/local/bin/osmo-dino-play",):
+            if os.path.exists(cand):
+                subprocess.Popen([cand, "--fullscreen"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+                return
+        print("[dino] osmo-dino-play absent (tools/osmo-extras-install.sh le pose)", flush=True)
 
 
 def main():

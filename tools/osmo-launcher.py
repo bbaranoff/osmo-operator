@@ -51,7 +51,7 @@ KEEP_BELOW = (not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1"
 FW, FH = 1920, 1080
 # L encart FFT (tools/wallpaper-render.py) : c est la que se cale une appli
 # lancee "dans le panel". Meme boite que osmo-panel.py.
-FFT_BOX = (510, 600, 900, 410)
+FFT_BOX = (510, 220, 900, 790)
 # La zone haute LAB GSM (carte du fond) : la cible de "envoyer en haut".
 TOP_BOX = (320, 60, 1110, 500)
 
@@ -196,7 +196,14 @@ def catalogue():
     return [
         ("Banc", [
             ("run standalone", Action(term_cmd=f"{_sudo()}{REPO}/start-direct.sh; echo; read -n1 -rsp 'fin - touche...'")),
-            ("run multi",      Action(term_cmd=f"{_sudo()}{REPO}/start-multi.sh; echo; read -n1 -rsp 'fin - touche...'")),
+            # [2026-09-07] PAR L UNITE, comme l icone du bureau. Cette entree
+            # lancait start-multi.sh EN DIRECT : le banc multi partait alors
+            # hors de systemd, sans journal ni etat, et un `systemctl stop` ne
+            # le voyait pas. launch.sh --multi demarre osmo-multi.service, dit
+            # ce qui manque quand une condition de l unite n est pas remplie
+            # (topologie absente = unite sautee en silence), et on deroule le
+            # journal derriere - c est lui qui montre le demarrage.
+            ("run multi",      Action(term_cmd=f"{_sudo()}{REPO}/launch.sh --multi; echo; {_sudo()}journalctl -u osmo-multi -n 40 --no-pager 2>/dev/null; echo; read -n1 -rsp 'fin - touche...'")),
             ("run deka",       Action(term_cmd="/usr/local/bin/osmo-deka-anim || { echo 'deka non installe (supplement OpenCL)'; read -n1 -rsp 'touche...'; }")),
             ("Dashboard",      Action(argv=[browser, f"http://127.0.0.1:{dash}"])),
             ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || {{ echo 'pas de session tmux'; read -n1 -rsp 'touche...'; }}")),
@@ -218,9 +225,9 @@ def catalogue():
         ("Telephone", [
             ("Linphone", Action(argv=["sh", "-c", "linphone || linphone-desktop"])),
             ("oFono",    Action(term_cmd="/usr/local/bin/osmo-ofono")),
-            # Le raccord mobile : Android + le pont qui y porte SMS et appels
-            # du banc (tools/osmo-waydroid.sh, tools/osmo-ofono-bridge.py).
-            ("Android",  Action(term_cmd="/usr/local/bin/osmo-waydroid up; echo; read -n1 -rsp 'touche...'")),
+            # Le telephone du banc : une VM postmarketOS/Phosh, avec son
+            # ModemManager branche sur le modem du banc (tools/osmo-pmos.sh).
+            ("pmOS",     Action(term_cmd="/usr/local/bin/osmo-pmos up; echo; read -n1 -rsp 'touche...'")),
         ]),
         ("Outils", [
             ("Wireshark", Action(argv=["/usr/local/bin/osmo-wireshark-root"])),

@@ -1,54 +1,40 @@
 #!/usr/bin/env python3
-# osmo-ofono-bridge.py - LE RACCORD MOBILE : oFono (l hote) <-> Waydroid (Android).
+# osmo-ofono-bridge.py - LES APPELS ET LES SMS DU BANC, EN LIGNE DE COMMANDE.
 #
-# POURQUOI CE PONT EXISTE. Waydroid fait tourner un Android en conteneur qui,
-# tel qu il sort de l image, n a aucune pile radio : pas de service RIL, et pas
-# meme les permissions android.hardware.telephony (mesure sur le banc : sans
-# elles, « content://sms » n existe pas). Android ne sait pas parler oFono.
+# [2026-09-07] CE QUE CE PROGRAMME N EST PLUS. C etait le « raccord mobile »
+# vers Waydroid : il portait les SMS et les appels du banc jusqu a un Android
+# en conteneur (notification, insertion dans content://sms/inbox), faute d une
+# vraie pile radio de ce cote-la. Waydroid est abandonne - le telephone du banc
+# est desormais la VM postmarketOS/Phosh, qui a ModemManager et parle AT au
+# modem du banc (tools/osmo-phonesim-banc.py --connect). Tout le code Android a
+# donc ete retire ; ce qui reste, et qui servait deja, c est le pilotage d oFono
+# depuis un terminal ou une icone :
 #
-# [2026-09-06] CE N EST PAS UNE FATALITE, ET LE PONT N EST PAS LA SEULE VOIE.
-# Quectel publie un RIL Android x86_64 pour Android 13 (forums.quectel.com,
-# driver V3.6.35 : libril.so, libreference-ril.so, gps.default.so, HAL HIDL
-# IRadio@1.1) - l image Waydroid d ici est exactement Android 13 x86_64, et
-# tools/osmo-waydroid.sh sait l installer (ril-install). Avec ce RIL et un
-# modem Quectel, Android retrouve une VRAIE telephonie : composeur, Messages,
-# barres de reseau. Le pont ci-dessous reste ce qu on utilise SANS ce materiel,
-# ou avant de l avoir : il porte les EVENEMENTS telephonie du banc jusqu a
-# Android et rend les commandes disponibles dans l autre sens :
+#   osmo-sms-send <numero> <texte>   -> org.ofono.MessageManager.SendMessage
+#   osmo-call <numero>|answer|hangup -> org.ofono.VoiceCallManager
 #
-#   SMS entrant (oFono IncomingMessage) -> insere dans l inbox Android
-#                                          (content://sms/inbox) + notification
-#   Appel entrant (VoiceCallManager)    -> notification Android, decrocher /
-#                                          raccrocher depuis l hote
-#   SMS sortant                         -> osmo-sms-send <numero> <texte>
-#   Appel sortant                       -> osmo-call <numero> | osmo-call hangup
-#
-# L audio de l appel reste cote hote (oFono/le modem), PAS dans Android : le
-# conteneur n a pas de chemin voix. C est un banc de demonstration, pas un
-# telephone - on montre le trafic reel du reseau GSM dans l IHM Android.
+# Lance sans --once, il TIENT la ligne : il journalise les SMS et les appels que
+# le banc lui pousse, publie l etat dans /run/osmo-ril/state.json (l encart et
+# le Conky le lisent) et execute les commandes deposees dans la file par les
+# deux lanceurs ci-dessus.
 #
 # LA DATA. Elle n est pas encore en service sur le banc (pas de contexte PDP
-# etabli). Le chemin est neanmoins CABLE ici et dans tools/osmo-waydroid.sh :
-# --data active le contexte oFono et publie l interface obtenue pour que
-# « osmo-waydroid data-up » y route le pont waydroid0. Sans --data on ne touche
-# a rien.
+# etabli). Le chemin est neanmoins CABLE ici : --data active le contexte oFono
+# et publie l interface obtenue. Sans --data on ne touche a rien.
 #
 # Reglage par variables d environnement :
 #   OSMO_OFONO_MODEM    chemin du modem oFono   (defaut: le premier trouve)
-#   OSMO_WAYDROID       binaire waydroid        (defaut: waydroid)
 #   OSMO_BRIDGE_SPOOL   file des commandes      (defaut: /run/osmo-ril/spool)
 #   OSMO_BRIDGE_STATE   etat publie (json)      (defaut: /run/osmo-ril/state.json)
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 
 from gi.repository import Gio, GLib
 
 MODEM = os.environ.get("OSMO_OFONO_MODEM", "")
-WAYDROID = os.environ.get("OSMO_WAYDROID", "waydroid")
 RUN = os.environ.get("OSMO_RIL_DIR", "/run/osmo-ril")
 SPOOL = os.environ.get("OSMO_BRIDGE_SPOOL", os.path.join(RUN, "spool"))
 STATE = os.environ.get("OSMO_BRIDGE_STATE", os.path.join(RUN, "state.json"))
@@ -84,69 +70,9 @@ class Bus:
                                        Gio.DBusSignalFlags.NONE, cb)
 
 
-# ── ANDROID ─────────────────────────────────────────────────────────────────
-def wayd(*args, quiet=True):
-    """Une commande dans le conteneur Android. On ne remonte JAMAIS une erreur
-    ici en exception : le conteneur peut etre arrete, le banc doit continuer a
-    tourner et a journaliser les SMS quand meme."""
-    cmd = [WAYDROID, "shell", "--"] + list(args)
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-        if r.returncode != 0 and not quiet:
-            log("waydroid shell:", r.stderr.strip() or r.returncode)
-        return r.returncode == 0, (r.stdout or "") + (r.stderr or "")
-    except FileNotFoundError:
-        return False, "waydroid absent"
-    except subprocess.TimeoutExpired:
-        return False, "waydroid ne repond pas"
-
-
-def android_notify(title, body, tag):
-    ok, out = wayd("cmd", "notification", "post", "-S", "bigtext",
-                   "-t", title, tag, body)
-    if not ok:
-        log("notification non posee :", out.strip()[:120])
-
-
-_INBOX_OK = None      # None = pas encore essaye, False = pas de provider sur l image
-
-
-def android_sms_inbox(sender, text, when_ms):
-    """Insere le SMS dans la boite de reception d Android.
-
-    [2026-09-06] CE QUI DEPEND DE L IMAGE. Sur l image VANILLA de Waydroid il n
-    y a ni telephonie ni provider - la commande repond « Error while accessing
-    provider:sms / Could not find provider: sms » (mesure sur le banc). Avec les
-    GAPPS, le provider existe et l insertion aboutit : l appli Messages affiche
-    alors le SMS comme un message recu ordinaire. On tente donc l insertion, et
-    si le provider manque on le retient pour ne plus payer un aller-retour dans
-    le conteneur a chaque SMS. La notification, elle, est posee dans tous les
-    cas - c est le canal qui marche partout.
-    """
-    global _INBOX_OK
-    if _INBOX_OK is False:
-        return False
-    ok, out = wayd("content", "insert", "--uri", "content://sms/inbox",
-                   "--bind", "address:s:%s" % sender,
-                   "--bind", "body:s:%s" % text,
-                   "--bind", "date:l:%d" % when_ms,
-                   "--bind", "read:i:0",
-                   "--bind", "type:i:1")
-    if not ok and "provider" in out.lower():
-        _INBOX_OK = False
-        log("pas de provider sms dans cette image Android (VANILLA) :"
-            " on s en tient aux notifications")
-        return False
-    if not ok:
-        log("inbox Android refusee (on garde la notification) :", out.strip()[:120])
-        return False
-    _INBOX_OK = True
-    return True
-
-
 # ── L ETAT PUBLIE ───────────────────────────────────────────────────────────
 def publish(**kw):
-    """Ce que le reste du banc lit : l encart, le Conky, osmo-waydroid."""
+    """Ce que le reste du banc lit : l encart et le Conky."""
     try:
         os.makedirs(RUN, exist_ok=True)
         cur = {}
@@ -187,8 +113,6 @@ class Bridge:
         sender = info.get("Sender", "?")
         when = info.get("LocalSentTime") or info.get("SentTime") or ""
         log("SMS de %s : %s" % (sender, text))
-        android_sms_inbox(sender, text, int(time.time() * 1000))
-        android_notify("SMS %s" % sender, text, "osmo-sms-%d" % time.time())
         publish(last_sms={"from": sender, "text": text, "when": when})
 
     # -- appels
@@ -198,16 +122,12 @@ class Bridge:
         state = props.get("State", "?")
         self.calls[path] = num
         log("appel %s (%s) %s" % (num, state, path))
-        if state == "incoming":
-            android_notify("Appel entrant", "%s\nosmo-call answer / osmo-call hangup" % num,
-                           "osmo-call")
         publish(call={"number": num, "state": state})
 
     def on_call_removed(self, _c, _s, _p, _i, _sig, params):
         path = params[0]
         num = self.calls.pop(path, "?")
         log("appel termine %s" % num)
-        wayd("cmd", "notification", "post", "-t", "Appel termine", "osmo-call", str(num))
         publish(call={"number": num, "state": "ended"})
 
     # -- data (cablee, pas allumee : voir l entete)
@@ -311,7 +231,7 @@ def first_modem(bus):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="pont oFono <-> Waydroid (appels + SMS)")
+    ap = argparse.ArgumentParser(description="appels et SMS du banc par oFono")
     ap.add_argument("--data", action="store_true",
                     help="active aussi le contexte PDP (pas encore en service sur le banc)")
     ap.add_argument("--once", metavar="CMD",
@@ -348,7 +268,7 @@ def main():
     if args.data:
         br.data_up()
 
-    log("pont en place (SMS + appels ; data %s)" % ("demandee" if args.data else "non cablee"))
+    log("en ligne (SMS + appels ; data %s)" % ("demandee" if args.data else "non cablee"))
     GLib.MainLoop().run()
     return 0
 

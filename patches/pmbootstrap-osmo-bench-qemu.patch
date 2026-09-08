@@ -1,0 +1,166 @@
+diff --git a/pmb/chroot/shutdown.py b/pmb/chroot/shutdown.py
+index b49aaf7f..a3e307b8 100644
+--- a/pmb/chroot/shutdown.py
++++ b/pmb/chroot/shutdown.py
+@@ -19,6 +19,11 @@ def kill_adb() -> None:
+     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+         sock.settimeout(2)
+         if sock.connect_ex(("127.0.0.1", port)) == 0:
++            # [2026-09-07] osmo-operator: on this bench 127.0.0.1:5038 is
++            # Asterisk's AMI, not an adb server, and the native chroot has no
++            # adb - the kill would fail with 127 and abort every build.
++            if not (Chroot.native() / "usr/bin/adb").exists():
++                return
+             pmb.chroot.root(["adb", "-P", str(port), "kill-server"])
+ 
+ 
+diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
+index 72b46c60..64f71701 100644
+--- a/pmb/commands/qemu.py
++++ b/pmb/commands/qemu.py
+@@ -170,7 +170,10 @@ def command_qemu(
+         command += ["-device", "virtio-mouse-pci"]
+     command += ["-device", "virtio-keyboard-pci"]
+     command += ["-netdev", f"user,id=net,hostfwd=tcp:127.0.0.1:{port_ssh}-:22"]
+-    command += ["-device", "virtio-net-pci,netdev=net"]
++    # romfile= drops the card's PXE option ROM. With it, a freshly created
++    # NVRAM ranks "UEFI PXEv4" ahead of the disk: the firmware runs iPXE,
++    # fails to find a server, and only then boots - a detour on every start.
++    command += ["-device", "virtio-net-pci,netdev=net,romfile="]
+ 
+     # Check that arch is supported by pmb qemu
+     if arch not in [
+@@ -202,9 +205,24 @@ def command_qemu(
+ 
+     # Configure display
+     if qemu_display != "none":
++        # [2026-09-07] The screen's shape decides the phone's shape. Phosh lays
++        # itself out from the screen it is given: tall and narrow is a phone,
++        # wide is a tablet - same image, same session, two form factors. QEMU's
++        # virtio card takes that size as xres/yres, and the guest boots
++        # straight into it, so it is picked at launch and never changes under
++        # the running session. OSMO_PMOS_RES="<width>x<height>", empty or
++        # unset for whatever the card would pick on its own.
++        res = os.environ.get("OSMO_PMOS_RES", "")
++        geom = ""
++        if res:
++            try:
++                xres, yres = (int(v) for v in res.lower().split("x", 1))
++                geom = f",xres={xres},yres={yres}"
++            except ValueError:
++                logging.warning(f"WARNING: OSMO_PMOS_RES={res} is not <width>x<height>, ignored")
+         match arch:
+             case Arch.x86_64:
+-                command += ["-device", "virtio-vga-gl"]
++                command += ["-device", f"virtio-vga-gl{geom}"]
+             case Arch.aarch64 | Arch.armv7:
+                 command += ["-device", "virtio-gpu-gl"]
+             case Arch.riscv64 | Arch.ppc64le | Arch.loongarch64:
+@@ -221,10 +239,22 @@ def command_qemu(
+                 f"if=pflash,format=raw,readonly=on,file={edk2_chroot}/usr/share/AAVMF/AAVMF_CODE.fd",
+             ]
+         case Arch.x86_64:
++            # OVMF.fd on its own is read-only, so the firmware has nowhere to
++            # write its variables: it records no boot entry and drops into its
++            # setup menu instead of booting. Give it the code read-only and a
++            # writable copy of the variables, one per device.
++            ovmf = edk2_chroot / "usr/share/OVMF"
++            nvram = Chroot.native() / "home/pmos/rootfs" / f"{config.device}-ovmf-vars.fd"
++            if not nvram.exists():
++                pmb.helpers.run.root(["cp", ovmf / "OVMF_VARS.fd", nvram])
++            # QEMU runs as the local user, the copy is owned by root.
++            if not os.access(nvram, os.W_OK):
++                pmb.helpers.run.root(["chmod", "666", nvram])
+             command += [
+                 "-drive",
+-                f"if=pflash,format=raw,readonly=on,file={edk2_chroot}/usr/share/OVMF/OVMF.fd",
++                f"if=pflash,unit=0,format=raw,readonly=on,file={ovmf}/OVMF_CODE.fd",
+             ]
++            command += ["-drive", f"if=pflash,unit=1,format=raw,file={nvram}"]
+         case Arch.loongarch64:
+             command += [
+                 "-drive",
+@@ -264,9 +294,83 @@ def command_qemu(
+     if qemu_audio:
+         command += ["-audio", f"{qemu_audio},model=hda"]
+ 
++    command += osmo_bench_args(qemu_audio)
++
+     return (command, env)
+ 
+ 
++def osmo_bench_args(qemu_audio: str | None) -> list[str]:
++    """Extra devices that put the VM on the osmocom bench: the modem, and the
++    voice bridge.
++
++    The modem (tools/osmo-phonesim-banc.py) is a PCI serial port, not ISA and
++    not USB. The UEFI firmware treats an ISA serial port as a console and
++    mistakes the modem's replies for keypresses, so it never boots; usb-serial
++    would need ftdi_sio, which this kernel doesn't have. 8250_pci is built in,
++    so the port shows up on its own as /dev/ttyS1, which is what ModemManager
++    probes. QEMU only listens here - the modem connects afterwards, once the
++    firmware is done booting (see osmo-pmos-setup).
++
++    There are TWO sound cards, because QEMU cannot push audio into a guest's
++    speaker: of an emulated card, playback goes out to a host sink and capture
++    comes in from a host source. The call's downlink lives on the host, so it
++    can only enter through the guest's capture side - never through its
++    speaker. One card alone therefore gives the guest the network's point of
++    view (it hears the far end on its microphone), not a handset's.
++
++    So: the "bridge" card is wired to the bench's voice path - gsm_audio
++    carries the downlink (RTP from osmo-mgw), so its monitor feeds that card's
++    capture; gsm_mic carries the uplink, so it takes what that card plays. The
++    "handset" card stays on the host's default devices, the real speakers and
++    microphone. Crossing the two inside the guest (see osmo-pmos-setup) puts
++    the VM in the middle of the voice path for real.
++
++    The slots are pinned so the guest can tell them apart by name alone:
++    0000:00:12.0 is the bridge, 0000:00:13.0 the handset.
++
++    Beware the pa backend: it looks for PulseAudio's pidfile, which doesn't
++    exist when PipeWire provides the service - there is only the socket, so we
++    name it explicitly. And an unknown backend doesn't error out, it segfaults;
++    this qemu only knows none, alsa, pa, sdl and wav.
++    """
++    port = os.environ.get("OSMO_PMOS_AT_PORT", "12346")
++    args: list[str] = [
++        "-chardev",
++        f"socket,id=gsmchr,host=127.0.0.1,port={port},server=on,wait=off",
++        "-device",
++        "pci-serial,chardev=gsmchr",
++    ]
++
++    # --audio wins if it was asked for explicitly: it adds a card of its own.
++    if qemu_audio:
++        return args
++
++    sock = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "pulse/native"
++    if not sock.is_socket():
++        logging.warning(f"WARNING: no PulseAudio socket ({sock}), VM without sound")
++        return args
++
++    out = os.environ.get("OSMO_PMOS_SINK", "gsm_mic")
++    src = os.environ.get("OSMO_PMOS_SOURCE", "gsm_audio.monitor")
++    args += [
++        # The bridge: the call itself.
++        "-audiodev",
++        f"pa,id=gsm,server={sock},out.name={out},in.name={src}",
++        "-device",
++        "intel-hda,id=hdagsm,addr=0x12",
++        "-device",
++        "hda-duplex,bus=hdagsm.0,audiodev=gsm",
++        # The handset: the host's own speakers and microphone.
++        "-audiodev",
++        f"pa,id=combine,server={sock}",
++        "-device",
++        "intel-hda,id=hdacombine,addr=0x13",
++        "-device",
++        "hda-duplex,bus=hdacombine.0,audiodev=combine",
++    ]
++    return args
++
++
+ def resize_image(img_size_new: str, img_path: Path) -> None:
+     """
+     Truncates an image to a specific size. The value must be larger than the

@@ -4,6 +4,14 @@ Name=multi-operator
 Name[fr]=multi-operator
 Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
+# [2026-09-07] PAR launch.sh --multi, ET PLUS PAR UN systemctl NU.
+# `pkexec systemctl start osmo-multi.service` rendait 0 SANS RIEN DEMARRER
+# quand une ConditionPathExists de l unite manquait (/etc/osmocom/osmo-multi.conf,
+# ecrit par addition.sh) : systemd saute l unite, ne la marque pas en echec, et
+# le clic restait sans effet ni message. launch.sh --multi teste les conditions
+# lui-meme, nomme ce qui manque, demarre l unite et annonce le resultat par
+# notification (cf. le bloc « LE MULTI-OPERATEUR » dans launch.sh).
+#
 # [2026-09-04] PAR LE SERVICE, COMME LE MONO-OPERATEUR.
 # L icone lancait start-multi.sh en direct (pkexec) : le banc multi partait
 # alors hors de systemd, sa sortie vivait dans un terminal que personne ne
@@ -14,7 +22,7 @@ Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 # propre. osmo-multi.service porte deja l environnement du banc (HOME, venv,
 # OSMO_NO_TERM) et son ExecStop n arrete que les conteneurs et le hub - le
 # natif reste a osmo-banc.
-Exec=pkexec --disable-internal-agent /usr/bin/systemctl start osmo-multi.service
+Exec=/opt/GSM/osmo-operator/launch.sh --multi
 Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
 Categories=System;Network;
@@ -25,7 +33,7 @@ Actions=Stop;Journal;
 [Desktop Action Stop]
 Name=Arreter le multi-operateur
 Name[fr]=Arreter le multi-operateur
-Exec=pkexec --disable-internal-agent /usr/bin/systemctl stop osmo-multi.service
+Exec=/opt/GSM/osmo-operator/launch.sh --multi-stop
 
 # Le lancement peut durer plusieurs minutes (images, conteneurs, HLR) : sans un
 # moyen de REGARDER, l icone parait ne rien faire. C est le pendant direct du

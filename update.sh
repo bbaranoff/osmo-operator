@@ -195,6 +195,105 @@ osmo_poser_peinture() {
 }
 osmo_poser_peinture
 
+# ── LE TELEPHONE postmarketOS SUR LES MACHINES DEJA INSTALLEES ──────────────
+# [2026-09-07] Le telephone du banc n est plus Android (Waydroid, abandonne)
+# mais une VM postmarketOS/Phosh : tools/osmo-pmos.sh. L ISO et le supplement
+# (addition.sh, par tools/osmo-extras-install.sh) posent son lanceur et son
+# icone ; une machine deja installee, elle, ne repasse ni par l un ni par
+# l autre - d ou ce rattrapage. On enleve au passage l ancien lanceur Waydroid,
+# qui pointerait sur un script disparu du depot. Idempotent.
+osmo_poser_pmos() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local d=/opt/GSM/osmo-operator
+    [ -f "$d/tools/osmo-pmos.sh" ] || return 0
+    chmod 755 "$d/tools/osmo-pmos.sh" 2>/dev/null || true
+    cat > /usr/local/bin/osmo-pmos <<'PM'
+#!/bin/bash
+# osmo-pmos - le telephone postmarketOS du banc (voir tools/osmo-pmos.sh).
+exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos.sh" "$@"
+PM
+    chmod 755 /usr/local/bin/osmo-pmos 2>/dev/null || true
+    cat > /usr/share/applications/osmo-pmos.desktop <<'PMD'
+[Desktop Entry]
+Type=Application
+Name=Telephone (postmarketOS)
+Comment=Le telephone du banc - Phosh, ModemManager, appels et SMS reels
+Exec=/usr/local/bin/osmo-pmos up
+Icon=phone
+Terminal=true
+Categories=Network;Telephony;
+Keywords=postmarketos;phosh;telephone;sms;appel;modem;
+PMD
+    chmod 644 /usr/share/applications/osmo-pmos.desktop 2>/dev/null || true
+    # [2026-09-07] LES DEUX LANCEURS PAR pmbootstrap vivent dans le depot :
+    # tools/osmo-pmos-qemu.sh (la VM, format smartphone|tablette en argument)
+    # et tools/osmo-pmos-setup.sh (le modem et la voix, VM demarree). Le
+    # patch pmbootstrap qui va avec (port serie du modem, cartes son, taille
+    # d ecran) est patches/pmbootstrap-osmo-bench-qemu.patch - il s applique
+    # dans le pmbootstrap de l utilisateur, pas ici.
+    local s
+    for s in qemu setup; do
+        [ -f "$d/tools/osmo-pmos-$s.sh" ] \
+            && install -m 755 "$d/tools/osmo-pmos-$s.sh" "/usr/local/bin/osmo-pmos-$s" 2>/dev/null
+    done
+    # [2026-09-07] DEUX FORMATS, DEUX ICONES. Phosh se met en page d apres
+    # l ecran qu on lui donne : haut et etroit, c est un telephone ; large,
+    # c est une tablette - meme image, meme session. C est la carte graphique
+    # de QEMU qui porte cette taille (OSMO_PMOS_RES, lu par le patch
+    # pmbootstrap), et le systeme demarre dedans : le format se choisit donc
+    # AU LANCEMENT et ne change pas sous une session deja ouverte. D ou deux
+    # entrees plutot qu un reglage.
+    local f n r
+    for f in smartphone:720x1440 tablette:1280x800; do
+        n="${f%%:*}"; r="${f#*:}"
+        cat > "/usr/share/applications/osmo-pmos-$n.desktop" <<PMD
+[Desktop Entry]
+Type=Application
+Name=postmarketOS - $n (banc)
+Comment=Le telephone du banc, modem et voix branches tout seuls, en format $n ($r) - modem branche sur le banc GSM
+Exec=env OSMO_PMOS_RES=$r /usr/local/bin/osmo-pmos-qemu
+Icon=$([ "$n" = tablette ] && echo video-display || echo phone)
+Terminal=true
+Categories=Network;Telephony;System;
+Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;$n;
+Actions=Setup;SansModem;
+
+[Desktop Action Setup]
+Name=Rebrancher le modem et la voix (osmo-pmos-setup)
+Exec=/usr/local/bin/osmo-pmos-setup
+
+[Desktop Action SansModem]
+Name=Demarrer sans modem (VM nue)
+Exec=env OSMO_PMOS_RES=$r OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
+PMD
+        chmod 644 "/usr/share/applications/osmo-pmos-$n.desktop" 2>/dev/null || true
+    done
+    rm -f /usr/local/bin/osmo-waydroid /usr/share/applications/osmo-waydroid.desktop 2>/dev/null || true
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    echo "  [telephone] osmo-pmos pose (VM postmarketOS ; « osmo-pmos install » la premiere fois)"
+    echo "  [telephone] deux formats au lancement : smartphone (720x1440) et tablette (1280x800)"
+    return 0
+}
+osmo_poser_pmos
+
+# ── LES LANCEURS /usr/local/bin (osmo-dino-play, osmo-youtube...) ───────────
+# [2026-09-07] osmo-dino-play est CUIT dans /usr/local/bin par
+# tools/osmo-extras-install.sh (addition.sh et l ISO) ; quand il change dans
+# le depot - le plein ecran pilote par la page, ce jour-la - une machine deja
+# installee garde l ancien. On rejoue la seule fonction qui pose les lanceurs :
+# idempotente, sans apt, sans reseau.
+osmo_reposer_lanceurs() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local ex=/opt/GSM/osmo-operator/tools/osmo-extras-install.sh
+    [ -f "$ex" ] || return 0
+    # shellcheck source=tools/osmo-extras-install.sh
+    ( . "$ex" && _osmo_extras_lanceurs ) >/dev/null 2>&1 \
+        && echo "  [bureau] lanceurs /usr/local/bin reposes (osmo-dino-play, osmo-pmos...)" \
+        || true
+    return 0
+}
+osmo_reposer_lanceurs
+
 # ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
 # Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
 # l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes

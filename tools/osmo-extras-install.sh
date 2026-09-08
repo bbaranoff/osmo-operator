@@ -52,6 +52,7 @@ _osmo_extras_apt() {
         | debconf-set-selections 2>/dev/null || true
     local p
     for p in wmctrl xdotool \
+             qemu-system-x86 ovmf sshpass \
              gzdoom freedoom \
              quakespasm \
              openra \
@@ -168,15 +169,31 @@ class W(Gtk.Window):
         super().__init__(title="Cavalier d'ombres")
         self.set_default_size(900, 560)
         self.connect("destroy", Gtk.main_quit)
-        self.view = WebKit2.WebView()
+        # Le bouton plein ecran de la page nous parle par un message WebKit
+        # ({full:true|false}) : c est NOUS qui agrandissons la fenetre, ou
+        # la rendons - une page ne peut pas le faire seule.
+        ucm = WebKit2.UserContentManager()
+        ucm.connect("script-message-received::osmo", self.on_message)
+        ucm.register_script_message_handler("osmo")
+        self.view = WebKit2.WebView.new_with_user_content_manager(ucm)
         self.add(self.view)
         if os.path.exists(HTML):
-            self.view.load_uri(GLib.filename_to_uri(HTML, None))
+            # #full : la page part en plein ecran (le bouton de la page ramene
+            # dans la fenetre). Sans --fullscreen on est dans la fenetre, point.
+            self.view.load_uri(GLib.filename_to_uri(HTML, None) + ("#full" if full else ""))
         else:
             self.view.load_html("<h2 style='font-family:sans-serif'>dino.html introuvable</h2>", None)
         self.show_all()
         if full:
             self.fullscreen()
+    def on_message(self, _ucm, result):
+        try:
+            on = result.get_js_value().to_string().find("true") >= 0 \
+                 if not hasattr(result.get_js_value(), "object_get_property") \
+                 else result.get_js_value().object_get_property("full").to_boolean()
+        except Exception:
+            on = True
+        (self.fullscreen if on else self.unfullscreen)()
 W(); Gtk.main()
 DINO
     chmod 755 /usr/local/bin/osmo-dino-play
@@ -219,15 +236,18 @@ echo; read -n1 -rsp 'ofono - une touche pour fermer...'
 OF
     chmod 755 /usr/local/bin/osmo-ofono
 
-    # LE RACCORD MOBILE : Android (Waydroid) branche sur la telephonie du banc.
-    # tools/osmo-waydroid.sh fait le gros du travail (installation, session,
-    # pont) ; ces trois lanceurs sont les gestes d une seance.
-    cat > /usr/local/bin/osmo-waydroid <<'WD'
+    # LE TELEPHONE DU BANC : la VM postmarketOS / Phosh.
+    # [2026-09-07] C etait Android (Waydroid), abandonne : sans RIL, Android
+    # n avait pas de pile radio et tout passait par un pont qui posait des
+    # NOTIFICATIONS - une imitation d appel. postmarketOS arrive avec
+    # ModemManager, Calls et Chatty, et se branche sur le VRAI modem du banc
+    # (tools/osmo-phonesim-banc.py). tools/osmo-pmos.sh fait le reste.
+    cat > /usr/local/bin/osmo-pmos <<'PM'
 #!/bin/bash
-# osmo-waydroid - le telephone Android du banc (voir tools/osmo-waydroid.sh).
-exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-waydroid.sh" "${1:-up}"
-WD
-    chmod 755 /usr/local/bin/osmo-waydroid
+# osmo-pmos - le telephone postmarketOS du banc (voir tools/osmo-pmos.sh).
+exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos.sh" "$@"
+PM
+    chmod 755 /usr/local/bin/osmo-pmos
 
     cat > /usr/local/bin/osmo-sms-send <<'SM'
 #!/bin/bash
@@ -235,7 +255,9 @@ WD
 set -u
 [ $# -ge 2 ] || { echo "usage: osmo-sms-send <numero> <texte...>"; exit 2; }
 NUM="$1"; shift
-exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py" --once "sms $NUM $*"
+# /usr/bin/python3 en dur : sous le PATH du banc, « env python3 » tombe sur
+# le venv, qui n a pas les liaisons GObject (cf. start-direct.sh).
+exec /usr/bin/python3 "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py" --once "sms $NUM $*"
 SM
     chmod 755 /usr/local/bin/osmo-sms-send
 
@@ -244,17 +266,18 @@ SM
 # osmo-call <numero> | answer | hangup - les appels par oFono via le pont.
 set -u
 B="${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py"
+P=/usr/bin/python3        # et pas le venv : il n a pas les liaisons GObject
 case "${1:-}" in
-    answer) exec "$B" --once "answer" ;;
-    hangup) exec "$B" --once "hangup" ;;
+    answer) exec "$P" "$B" --once "answer" ;;
+    hangup) exec "$P" "$B" --once "hangup" ;;
     "")     echo "usage: osmo-call <numero> | answer | hangup"; exit 2 ;;
-    *)      exec "$B" --once "call $1" ;;
+    *)      exec "$P" "$B" --once "call $1" ;;
 esac
 CA
     chmod 755 /usr/local/bin/osmo-call
 
     _ex_ok "lanceurs poses : osmo-youtube, osmo-dino-play, osmo-wireshark-root, osmo-ofono,"
-    _ex_ok "                osmo-waydroid, osmo-sms-send, osmo-call"
+    _ex_ok "                osmo-pmos, osmo-sms-send, osmo-call"
 }
 
 # ── LES .desktop QUI MANQUENT + LES DOSSIERS « Jeux » / « Media » ────────────
@@ -312,23 +335,72 @@ Categories=Network;Telephony;
 Keywords=ofono;telephonie;modem;
 OFD
 
-    cat > /usr/share/applications/osmo-waydroid.desktop <<'WDD'
+    cat > /usr/share/applications/osmo-pmos.desktop <<'PMD'
 [Desktop Entry]
 Type=Application
-Name=Android (Waydroid)
-Comment=Le telephone Android du banc - SMS et appels portes depuis oFono
-Exec=/usr/local/bin/osmo-waydroid up
+Name=Telephone (postmarketOS)
+Comment=Le telephone du banc - Phosh, ModemManager, appels et SMS reels
+Exec=/usr/local/bin/osmo-pmos up
 Icon=phone
 Terminal=true
 Categories=Network;Telephony;
-Keywords=android;waydroid;sms;appel;telephone;
-WDD
+Keywords=postmarketos;phosh;telephone;sms;appel;modem;
+Actions=Etat;Arreter;
+
+[Desktop Action Etat]
+Name=Etat du telephone
+Exec=/usr/local/bin/osmo-pmos status
+
+[Desktop Action Arreter]
+Name=Arreter le telephone
+Exec=/usr/local/bin/osmo-pmos stop
+PMD
+
+    # [2026-09-07] Les deux lanceurs par pmbootstrap (voir update.sh,
+    # osmo_poser_pmos) : la VM et son format, puis le modem et la voix.
+    local ps
+    for ps in qemu setup; do
+        [ -f "$OSMO_EXTRAS_REPO/tools/osmo-pmos-$ps.sh" ] \
+            && install -m 755 "$OSMO_EXTRAS_REPO/tools/osmo-pmos-$ps.sh" "/usr/local/bin/osmo-pmos-$ps"
+    done
+    # [2026-09-07] DEUX FORMATS, DEUX ICONES. Phosh se met en page d apres
+    # l ecran qu on lui donne : haut et etroit, c est un telephone ; large,
+    # c est une tablette - meme image, meme session. C est la carte graphique
+    # de QEMU qui porte cette taille (OSMO_PMOS_RES, lu par le patch
+    # pmbootstrap), et le systeme demarre dedans : le format se choisit donc
+    # AU LANCEMENT et ne change pas sous une session deja ouverte. D ou deux
+    # entrees plutot qu un reglage.
+    local pf pn pr
+    for pf in smartphone:720x1440 tablette:1280x800; do
+        pn="${pf%%:*}"; pr="${pf#*:}"
+        cat > "/usr/share/applications/osmo-pmos-$pn.desktop" <<PMD
+[Desktop Entry]
+Type=Application
+Name=postmarketOS - $pn (banc)
+Comment=Le telephone du banc, modem et voix branches tout seuls, en format $pn ($pr) - modem branche sur le banc GSM
+Exec=env OSMO_PMOS_RES=$pr /usr/local/bin/osmo-pmos-qemu
+Icon=$([ "$pn" = tablette ] && echo video-display || echo phone)
+Terminal=true
+Categories=Network;Telephony;System;
+Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;$pn;
+Actions=Setup;SansModem;
+
+[Desktop Action Setup]
+Name=Rebrancher le modem et la voix (osmo-pmos-setup)
+Exec=/usr/local/bin/osmo-pmos-setup
+
+[Desktop Action SansModem]
+Name=Demarrer sans modem (VM nue)
+Exec=env OSMO_PMOS_RES=$pr OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
+PMD
+        chmod 644 "/usr/share/applications/osmo-pmos-$pn.desktop"
+    done
 
     chmod 644 /usr/share/applications/osmo-youtube.desktop \
               /usr/share/applications/osmo-dino-jeu.desktop \
               /usr/share/applications/osmo-wireshark-root.desktop \
               /usr/share/applications/osmo-ofono.desktop \
-              /usr/share/applications/osmo-waydroid.desktop
+              /usr/share/applications/osmo-pmos.desktop
 
     # ── DOSSIERS D APPLICATIONS GNOME : « Jeux » et « Media » ─────────────────
     # Un gschema override est lu a la fois par la session live (ISO) et par une
@@ -350,7 +422,7 @@ apps=['kodi.desktop', 'osmo-youtube.desktop']
 
 [org.gnome.desktop.app-folders.folders:/org/gnome/desktop/app-folders/folders/Telephone/]
 name='Telephone'
-apps=['linphone.desktop', 'org.linphone.desktop', 'osmo-ofono.desktop', 'osmo-waydroid.desktop']
+apps=['linphone.desktop', 'org.linphone.desktop', 'osmo-ofono.desktop', 'osmo-pmos.desktop']
 
 [org.gnome.desktop.app-folders.folders:/org/gnome/desktop/app-folders/folders/Outils/]
 name='Outils'

@@ -98,7 +98,7 @@ verrou_liberer() { exec 9>&- 2>/dev/null || true; }
 # demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
 # l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
 # « c est parti » sans suite.
-case "${1:-}" in --service|--stop|--dashboard|--console|--vty) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
+case "${1:-}" in --service|--stop|--dashboard|--console|--vty|--multi|--multi-stop) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
 if [ "$_bloc_direct" = "1" ]; then
     # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
     # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
@@ -153,6 +153,65 @@ if [ "$_bloc_direct" = "1" ]; then
         # shellcheck disable=SC2086  # une liste d ID, un par ligne
         docker rm -f $_c >/dev/null 2>&1 || true
     }
+
+    # ── LE MULTI-OPERATEUR : L ICONE DEMARRE L UNITE, ET LE DIT ────────────
+    # [2026-09-07] L ICONE « multi-operator » NE DEMARRAIT RIEN, SANS UN MOT.
+    # Elle appelait directement `pkexec systemctl start osmo-multi.service`, et
+    # cet appel rend 0 dans DEUX cas qu on ne distingue pas d un clic :
+    #   1. osmo-multi.service porte deux ConditionPathExists (start-multi.sh et
+    #      /etc/osmocom/osmo-multi.conf, la topologie qu ecrit addition.sh).
+    #      Une condition non remplie n est PAS un echec pour systemd : l unite
+    #      est SAUTEE, `systemctl start` sort en 0, `systemctl --failed` reste
+    #      vide. Sur une ISO fraiche - ou personne n a encore lance les
+    #      Supplements - c est le cas NORMAL : le clic ne pouvait rien faire.
+    #   2. l unite est deja active (RemainAfterExit=yes) : start ne rejoue rien.
+    # Dans les deux cas, aucune fenetre, aucune notification, rien : l icone
+    # passait pour morte. On teste donc les conditions AVANT de demarrer, on
+    # nomme ce qui manque, et on annonce le resultat par notification - comme
+    # « Demarrer le banc en service » juste au-dessus.
+    _svcm="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
+    if [ "$_action" = "--multi-stop" ]; then
+        _note "Arret du multi-operateur..."
+        _arret_multi
+        systemctl reset-failed "$_svcm" 2>/dev/null || true
+        _note "Multi-operateur arrete (le natif reste a osmo-banc)."
+        exit 0
+    fi
+    if [ "$_action" = "--multi" ]; then
+        if ! systemctl cat "$_svcm" >/dev/null 2>&1; then
+            _note "Unite $_svcm absente : lancez d abord l icone « Supplements »."
+            exit 1
+        fi
+        # Les memes chemins que les ConditionPathExists de l unite. On les lit
+        # ICI plutot que de croire le code de retour de systemctl.
+        if [ ! -f "$DIR/start-multi.sh" ]; then
+            _note "start-multi.sh introuvable dans $DIR - depot incomplet."
+            exit 1
+        fi
+        if [ ! -f /etc/osmocom/osmo-multi.conf ]; then
+            _note "Pas de topologie multi-operateur (/etc/osmocom/osmo-multi.conf) : l unite serait sautee en silence. Lancez l icone « Supplements » (addition.sh), qui installe docker, l image et cette topologie."
+            exit 1
+        fi
+        case "$(systemctl is-active "$_svcm" 2>/dev/null)" in
+            active)     _note "Le multi-operateur tourne deja. Journal : journalctl -u ${_svcm%.service} -f"; exit 0 ;;
+            activating) _note "Le multi-operateur demarre deja - journalctl -u ${_svcm%.service} -f"; exit 0 ;;
+        esac
+        systemctl reset-failed "$_svcm" 2>/dev/null || true
+        _note "Demarrage de $_svcm - comptez plusieurs minutes (images, conteneurs, HLR)."
+        # `start` et non `restart` : ExecStop demonte les conteneurs, et un
+        # restart sur une unite deja montee couterait un demontage inutile.
+        if systemctl start "$_svcm"; then
+            # Type=oneshot + conditions : un 0 ne prouve pas que ca a tourne.
+            if [ "$(systemctl is-active "$_svcm" 2>/dev/null)" = active ]; then
+                _note "Multi-operateur en service. Journal : journalctl -u ${_svcm%.service} -f"
+                exit 0
+            fi
+            _note "Unite sautee (condition non remplie) - systemctl status ${_svcm%.service}"
+            exit 1
+        fi
+        _note "Echec de $_svcm - journalctl -u ${_svcm%.service} -n 80"
+        exit 1
+    fi
 
     # ── LE TABLEAU DE BORD ─────────────────────────────────────────────────
     # Un clic, une page. xdg-open passe par le navigateur par defaut, donc par

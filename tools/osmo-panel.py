@@ -4,7 +4,7 @@
 # Une fenetre GTK de type BUREAU (le meme mecanisme que les icones DING
 # d Ubuntu : sous toutes les fenetres, au-dessus du fond, et elle recoit les
 # clics - ce que Conky ne sait pas faire), posee EXACTEMENT sur le cadre Calvin
-# & Hobbes du fond d ecran (tools/wallpaper-render.py : boite 510,600-1410,1010
+# & Hobbes du fond d ecran (tools/wallpaper-render.py : boite 510,220-1410,1010
 # en 1920x1080), a l echelle de l ecran. Elle affiche /run/osmo-fft/panel.png
 # (tools/osmo-fft-snap.py : le strip du jour qui fond vers « FFT du mobile +
 # mobile.log » quand le banc est pret) et, en pied, un petit menu :
@@ -12,6 +12,12 @@
 #   [ Dashboard ]  firefox http://<operateur>:8080
 #   [ tmux ]       un terminal attache a la session du banc
 #   [ VTY 4247 ]   un terminal sur telnet 127.0.0.1 4247 (console du mobile)
+#   [ ZMQ ]        l etat de la radio virtuelle srsRAN (ZeroMQ) : vert quand
+#                  les points d entree ecoutent, gris sinon. Un clic ouvre un
+#                  terminal sur qui ecoute et qui est connecte.
+#   IP 192.168.x.y l adresse de CETTE machine sur le reseau - celle qu il faut
+#                  ecrire dans un srsRAN qui tourne ailleurs, ou donner a un
+#                  autre noeud du banc. Un clic la copie dans le presse-papier.
 #   [ < ] op 2/3 [ > ]   SEULEMENT en multi-operateur : passe d un operateur a
 #                  l autre. Le choix est ecrit dans /run/osmo-fft/operator ; le
 #                  rendu FFT (osmo-fft-snap.py) et le Conky en haut a droite
@@ -90,8 +96,11 @@ DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 # Le VTY du client mobile (osmocom-bb « mobile »). 4247 pour MS#1 ; MS#2 est sur
 # 4248 - voir start-direct.sh, qui les attribue.
 VTY_PORT = int(os.environ.get("MS_VTY_PORT", "4247"))
-# La boite du strip dans le fond (1920x1080).
-BOX = (510, 600, 900, 410)
+# La boite de l encart dans le fond (1920x1080) : x, y, largeur, hauteur.
+# [2026-09-08] 790 de haut : deux moities (4G en haut, 2G en bas), voir
+# tools/osmo-fft-snap.py. Les quatre fichiers qui la connaissent doivent
+# rester d accord (liste dans tools/wallpaper-render.py).
+BOX = (510, 220, 900, 790)
 FW, FH = 1920, 1080
 
 # [2026-09-04] LA BARRE N A PLUS DE FOND. Elle posait un rectangle sombre
@@ -118,6 +127,11 @@ CSS = b"""
 .osmo-bar button.arrow:hover { border-color: #ff9a3c; color: #ff9a3c; }
 .osmo-bar label { color: #8b949e; font: 9pt "DejaVu Sans Mono"; }
 .osmo-bar label.op { color: #3fb950; font-weight: bold; font-size: 11pt; }
+/* La radio virtuelle : vert quand elle ecoute, gris quand elle est a terre.
+   La couleur EST l information - c est ce qu on regarde d un coup d oeil. */
+.osmo-bar button.zmq-on  { color: #3fb950; border-color: #238636; }
+.osmo-bar button.zmq-off { color: #6e7681; }
+.osmo-bar label.ip { color: #58a6ff; font-weight: bold; }
 """
 
 
@@ -163,6 +177,16 @@ def geometry():
 
 M3UA_PORT = int(os.environ.get("MULTI_M3UA_PORT", "2908"))
 
+# ── LA RADIO VIRTUELLE srsRAN (ZeroMQ) ──────────────────────────────────────
+# srsRAN sans materiel : le pilote « zmq » remplace la carte radio par deux
+# sockets ZeroMQ - l un porte les echantillons de la station vers le mobile,
+# l autre du mobile vers la station (tcp://IP:2000 et :2001 par defaut). Le
+# banc s en sert pour donner une VRAIE couche radio au telephone : srsUE
+# s attache a la station, et le modem du telephone (postmarketOS, via
+# tools/osmo-pmos.sh) parle a ce mobile-la.
+# On ne devine RIEN de l etat : on regarde qui ecoute sur ces ports.
+ZMQ_PORTS = [int(x) for x in os.environ.get("OSMO_ZMQ_PORTS", "2000,2001").split(",") if x.strip()]
+
 
 def _sctp_ecoute(port):
     """Un socket SCTP ecoute-t-il sur ce port ? Lecture directe de
@@ -181,6 +205,80 @@ def _sctp_ecoute(port):
         return any(l.startswith("sctp") and f":{port}" in l for l in out.splitlines())
     except Exception:
         return False
+
+
+def _tcp_ecoute(port):
+    """Un socket TCP ecoute-t-il sur ce port ? On lit /proc/net/tcp{,6}
+    directement : aucun privilege, et `ss` peut manquer. La 4e colonne vaut
+    « 0A » (TCP_LISTEN) et l adresse locale est « HEX:PORT »."""
+    hexport = "%04X" % port
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(f) as fh:
+                for line in fh.readlines()[1:]:
+                    ch = line.split()
+                    if len(ch) > 3 and ch[3] == "0A" and ch[1].endswith(":" + hexport):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def zmq_etat():
+    """(actif, detail) de la radio virtuelle srsRAN.
+
+    Actif = au moins un des ports ZeroMQ ecoute. Le detail nomme ceux qui
+    ecoutent : sur un banc a moitie monte (la station lancee, le mobile pas
+    encore), c est la seule facon de voir lequel des deux manque.
+    """
+    ouverts = [p for p in ZMQ_PORTS if _tcp_ecoute(p)]
+    if not ouverts:
+        return False, "aucun point d entree ZeroMQ (srsRAN arrete)"
+    manque = [p for p in ZMQ_PORTS if p not in ouverts]
+    detail = "ecoute : " + ", ".join(str(p) for p in ouverts)
+    if manque:
+        detail += " ; MANQUE : " + ", ".join(str(p) for p in manque)
+    return True, detail
+
+
+def ip_locale():
+    """L adresse de cette machine sur le reseau - celle qu on donne aux autres.
+
+    « ip route get » designe l interface qui porte la route par defaut sans
+    envoyer le moindre paquet : c est la bonne reponse meme sans reseau au
+    bout, et elle ne depend pas d un nom d interface ecrit en dur.
+    """
+    try:
+        out = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"],
+                             capture_output=True, text=True, timeout=2).stdout
+        m = re.search(r"\bsrc\s+(\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    # Pas de route par defaut (banc isole) : la premiere adresse non locale.
+    try:
+        out = subprocess.run(["ip", "-4", "-br", "addr"], capture_output=True,
+                             text=True, timeout=2).stdout
+        for ligne in out.splitlines():
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)/", ligne)
+            if m and not m.group(1).startswith("127."):
+                return m.group(1)
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def ip_toutes():
+    """Toutes les adresses, pour l infobulle : sur un banc il y en a plusieurs
+    (le reseau, les ponts docker, apn0...) et celle qui compte depend de qui
+    demande."""
+    try:
+        out = subprocess.run(["ip", "-4", "-br", "addr"], capture_output=True,
+                             text=True, timeout=2).stdout.strip()
+        return out or "aucune adresse"
+    except Exception:
+        return "adresses illisibles"
 
 
 def operators():
@@ -371,6 +469,22 @@ class Panel(Gtk.Window):
         b_vty = self.b_vty = Gtk.Button(label=f"VTY {VTY_PORT}")
         b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} (console du mobile)")
         b_vty.connect("clicked", self.on_vty)
+        # La radio virtuelle srsRAN, et l adresse de la machine. Les deux
+        # repondent a la meme question - « ou est-ce que je branche le
+        # telephone ? » - et n avaient aucune place sur le bureau : il fallait
+        # un terminal et deux commandes pour savoir si la radio ecoutait, et
+        # une troisieme pour l adresse a mettre en face.
+        b_zmq = self.b_zmq = Gtk.Button(label="ZMQ")
+        b_zmq.connect("clicked", self.on_zmq)
+        self.l_ip = Gtk.Label(label="IP —")
+        self.l_ip.get_style_context().add_class("ip")
+        # Un label ne recoit pas les clics : on l habille d une boite d evenements.
+        ip_box = Gtk.EventBox()
+        ip_box.add(self.l_ip)
+        ip_box.connect("button-press-event", self.on_ip)
+        ip_box.set_tooltip_text("l adresse de cette machine - un clic la copie")
+        self.ip_box = ip_box
+
         self.b_prev = Gtk.Button(label="◀")
         self.b_next = Gtk.Button(label="▶")
         self.b_prev.get_style_context().add_class("arrow")
@@ -381,7 +495,8 @@ class Panel(Gtk.Window):
         self.b_next.connect("clicked", self.on_next)
         self.l_op = Gtk.Label(label="")
         self.l_op.get_style_context().add_class("op")
-        for wdg in (b_dash, b_tmux, b_vty, self.b_prev, self.l_op, self.b_next):
+        for wdg in (b_dash, b_tmux, b_vty, b_zmq, ip_box,
+                    self.b_prev, self.l_op, self.b_next):
             bar.pack_start(wdg, False, False, 0)
         overlay.add_overlay(bar)
         self.add(overlay)
@@ -393,6 +508,8 @@ class Panel(Gtk.Window):
         self.refresh_image()
         GLib.timeout_add(1000, self.refresh_image)
         GLib.timeout_add(2000, self.refresh_ops)
+        self.refresh_zmq()
+        GLib.timeout_add(3000, self.refresh_zmq)
         self.show_all()
         self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
         self._pos = (x, y)
@@ -499,6 +616,42 @@ class Panel(Gtk.Window):
         if self.ops:
             self.cur = (self.cur + 1) % len(self.ops)
             self.update_op()
+
+    # ── la radio virtuelle et l adresse, rafraichies avec le reste ─────────
+    def refresh_zmq(self):
+        actif, detail = zmq_etat()
+        ctx = self.b_zmq.get_style_context()
+        ctx.remove_class("zmq-on" if not actif else "zmq-off")
+        ctx.add_class("zmq-on" if actif else "zmq-off")
+        self.b_zmq.set_label("ZMQ" if actif else "ZMQ ○")
+        self.b_zmq.set_tooltip_text("radio virtuelle srsRAN (ZeroMQ)\n%s\nun clic : qui ecoute, qui est connecte" % detail)
+        ip = ip_locale()
+        self.l_ip.set_text("IP %s" % ip)
+        self.l_ip.set_tooltip_text("adresse de cette machine (un clic la copie)\n\n%s" % ip_toutes())
+        return True
+
+    def on_zmq(self, *_):
+        ports = "|".join(str(p) for p in ZMQ_PORTS)
+        # ss d abord (il nomme le processus), netstat en repli.
+        cmd = (f"echo 'Radio virtuelle srsRAN (ZeroMQ) - ports {', '.join(str(p) for p in ZMQ_PORTS)}'; echo;"
+               f" (ss -lntp 2>/dev/null || netstat -lntp 2>/dev/null) | grep -E ':({ports})\\b' || echo 'personne n ecoute';"
+               f" echo; echo 'connexions etablies :';"
+               f" (ss -ntp 2>/dev/null || netstat -ntp 2>/dev/null) | grep -E ':({ports})\\b' || echo 'aucune';"
+               f" echo; echo 'processus srsRAN :'; pgrep -a 'srsenb|srsue|srsepc|gnb|srsran' || echo 'aucun';"
+               f" echo; read -n1 -rsp 'touche pour fermer...'")
+        terminal(cmd)
+
+    def on_ip(self, *_):
+        """Copier l adresse : c est ce qu on en fait neuf fois sur dix - la
+        recopier dans un fichier de configuration srsRAN ou sur un autre poste."""
+        ip = ip_locale()
+        try:
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(ip, -1)
+            self.l_ip.set_text("IP %s ✓" % ip)
+            GLib.timeout_add(1200, lambda: (self.l_ip.set_text("IP %s" % ip), False)[1])
+        except Exception:
+            pass
+        return True
 
     # ── les boutons ────────────────────────────────────────────────────────
     def on_dash(self, *_):

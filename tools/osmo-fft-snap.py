@@ -1,35 +1,60 @@
 #!/usr/bin/env python3
-# osmo-fft-snap.py - l ENCART VIVANT du bureau : le cadre Calvin & Hobbes du fond
-# d ecran (tools/wallpaper-render.py, boite 510,600-1410,1010 en 1920x1080) qui
-# FOND vers le banc une fois qu il est pret :
+# osmo-fft-snap.py - l ENCART VIVANT du bureau : le cadre du fond d ecran
+# (tools/wallpaper-render.py, boite 510,220-1410,1010 en 1920x1080), en DEUX
+# MOITIES, chacune FONDANT vers son banc une fois qu il est pret :
 #
 #   +-----------------------------------------------------------+
-#   |  Spectre I/Q du mobile (montant)   |  mobile.log (QEMU)   |
-#   |  spectre + chute d eau             |  dernieres lignes    |
+#   |  Spectre I/Q du UE srsRAN (montant) |  console srsUE      |   4G
+#   |  spectre + chute d eau (ZMQ 2001)   |  (tmux srsran:ue)   |
+#   +-----------------------------------------------------------+
+#   |  Spectre I/Q du mobile (montant)    |  mobile.log (QEMU)  |   2G
+#   |  spectre + chute d eau              |  dernieres lignes   |
 #   +-----------------------------------------------------------+
 #
-# Tant que le banc n est pas la (pas de flux I/Q sur /psd), l image EST le
-# strip du jour, decoupe dans le fond d ecran : le Conky qui l affiche
-# (tools/osmo-conky-panel.sh) est invisible. Des que le pont alimente la FFT,
-# l image glisse en ~3 s (Image.blend) du strip vers le banc ; si le banc
-# s arrete - /psd rend une erreur au lieu d un spectre - elle revient au strip
-# de la meme facon. Une fois le fondu fini, le banc est OPAQUE : le spectre et
-# mobile.log doivent se lire, pas se deviner par-dessus un dessin.
+# [2026-09-08] DEUX MOITIES, DEUX BANCS, DEUX IMAGES. Le cadre ne portait que
+# la 2G ; la 4G du banc (srsENB / srsUE par ZeroMQ) n avait aucune place a
+# l ecran. Le cadre a donc grandi vers le haut (410 -> 790 px) et s est coupe
+# en deux : le haut est a la 4G, le bas a la 2G. Chaque moitie a SON fondu :
+# tant que son banc n est pas la, elle montre la bande dessinee que le fond
+# d ecran porte a cet endroit (deux images : une BD geek au hasard en haut,
+# Calvin & Hobbes en bas - tools/osmo-wallpaper.sh). Un banc allume, une
+# moitie vivante ; les deux, tout l encart.
 #
-# Source FFT : le dashboard, http://127.0.0.1:8080/psd?src=ms - le meme JSON
-# que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal : le
-# mobile.log de la pile (QEMU MS#1), lu par la queue.
+# LA 4G S ECOUTE SANS RIEN LUI PRENDRE. La radio virtuelle de srsRAN est du
+# ZeroMQ en REQ/REP : celui qui recoit DEMANDE des echantillons, et celui qui
+# emet les lui REPOND - une fois. Un troisieme qui viendrait demander sur le
+# port de l UE (2001) VOLERAIT des reponses a l eNB, qui n aurait plus l
+# uplink entier : attach rate, et avec fail_on_disconnect sa radio s arrete.
+# On n ouvre donc AUCUNE socket ZeroMQ. On lit le trafic TCP de l interface
+# de bouclage en prise brute (AF_PACKET, d ou l unite en root), on suit le
+# flux du port 2001 et on y decoupe les trames ZMTP : chaque reponse de l UE
+# est [trame vide][trame longue = N echantillons complex64]. Rien n est
+# renvoye, rien n est consomme : srsue et srsenb ne peuvent pas s en
+# apercevoir. Le UE n emet que par rafales (PRACH, PUSCH...), et 11,52 MS/s
+# font 92 Mo/s sur le bouclage : on ne lit qu une fenetre de 250 ms par image
+# et on garde la CRETE de chaque case du spectre sur cette fenetre, sinon on
+# ne verrait que du silence entre deux rafales.
 #
-#   /run/osmo-fft/panel.png   900x410   (coordonnees du fond ; Conky le met a
-#                                        l echelle de l ecran)
+# Source FFT 2G : le dashboard, http://127.0.0.1:8080/psd?src=ms - le meme
+# JSON que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal :
+# le mobile.log de la pile (QEMU MS#1), lu par la queue. Cote 4G, le journal
+# est la console de srsue, capturee dans le tmux « srsran » qui le porte
+# (tools/osmo-lte.sh), et /tmp/ue.log a defaut.
+#
+#   /run/osmo-fft/panel.png   900x790   (coordonnees du fond ; osmo-panel.py
+#                                        le met a l echelle de l ecran)
 #
 # Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
-# DejaVu, presents sur l image comme sur l hote.
+# DejaVu, presents sur l image comme sur l hote ; numpy pour la FFT 4G (sans
+# lui, la moitie haute le dit et reste sur sa bande dessinee).
 import json
 import os
 import re
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -61,9 +86,18 @@ MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobil
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
 OP_FILE = os.path.join(OUT, "operator")
-# La boite du strip dans le fond d ecran (wallpaper-render.py, main()).
-BOX = (510, 600, 1410, 1010)
+# La boite de l encart dans le fond d ecran (wallpaper-render.py, main()) :
+# LES QUATRE FICHIERS QUI LA CONNAISSENT DOIVENT RESTER D ACCORD -
+# wallpaper-render.py, osmo-fft-snap.py, osmo-panel.py, osmo-launcher.py.
+BOX = (510, 220, 1410, 1010)
 W, H = BOX[2] - BOX[0], BOX[3] - BOX[1]
+# Les deux moities, en coordonnees de l image : (y haut, y bas). Le fond
+# d ecran dessine deux cadres separes par ECART px (les deux images), et
+# chaque moitie vivante recouvre exactement le sien.
+ECART = 8
+HH = (H - ECART) // 2
+HAUT = (0, HH)
+BAS = (H - HH, H)
 PAD = 18
 # [2026-09-04] FOOT = 0 : PLUS DE BANDE DE PIED.
 # Il y avait en bas de l encart un bandeau de 30 px portant « Operateur N ·
@@ -228,10 +262,16 @@ def base_image():
                 print(f"[fft-snap] fond {WALLPAPER} : {e}", file=sys.stderr, flush=True)
         if img is None:
             img = Image.new("RGB", (W, H), (20, 24, 36))
-            ImageDraw.Draw(img).rounded_rectangle((0, 0, W - 1, H - 1), radius=26,
-                                                 outline=(200, 200, 210), width=2)
+            for m in (HAUT, BAS):     # les deux cadres, comme le fond les dessine
+                ImageDraw.Draw(img).rounded_rectangle((0, m[0], W - 1, m[1] - 1), radius=26,
+                                                     outline=(200, 200, 210), width=2)
         _base.update(mtime=mt, img=img)
     return _base["img"]
+
+
+def base_moitie(m):
+    """Le morceau de fond sous une moitie de l encart (HAUT ou BAS)."""
+    return base_image().crop((0, m[0], W, m[1]))
 
 
 # ── LE JOURNAL DU MOBILE ────────────────────────────────────────────────────
@@ -367,7 +407,7 @@ def render_interstp(op):
     du hub a droite. Meme cadre, memes marges et meme pied que la vue radio -
     seul le contenu change, pour que l oeil ne perde pas ses reperes en
     passant d un operateur au hub."""
-    img = base_image().copy()
+    img = base_moitie(BAS).copy()
     d = ImageDraw.Draw(img)
     # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
     # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
@@ -383,8 +423,8 @@ def render_interstp(op):
     # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
     # Le cadre du fond reste visible quand le banc est a l arret - c est alors
     # l image du jour qu il encadre, et la il a un sens.
-    d.rounded_rectangle((0, 0, W - 1, H - 1), radius=26, fill=(8, 10, 14))
-    x0, y0, x1, y1 = PAD, PAD, W - PAD, H - PAD - FOOT
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
     split = x0 + int((x1 - x0) * 0.56)
 
@@ -432,7 +472,7 @@ def render_interstp(op):
 
 
 def render_live(data):
-    img = base_image().copy()
+    img = base_moitie(BAS).copy()
     d = ImageDraw.Draw(img)
     # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
     # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
@@ -448,8 +488,8 @@ def render_live(data):
     # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
     # Le cadre du fond reste visible quand le banc est a l arret - c est alors
     # l image du jour qu il encadre, et la il a un sens.
-    d.rounded_rectangle((0, 0, W - 1, H - 1), radius=26, fill=(8, 10, 14))
-    x0, y0, x1, y1 = PAD, PAD, W - PAD, H - PAD - FOOT
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
     split = x0 + int((x1 - x0) * 0.56)
     # Spectre
@@ -532,6 +572,265 @@ def render_live(data):
     return img
 
 
+# ── LA 4G : LE UE srsRAN, ECOUTE EN PRISE BRUTE SUR LE BOUCLAGE ─────────────
+# Voir l entete : pas de socket ZeroMQ, on lit le TCP du port de l UE tel
+# qu il passe sur lo et on y decoupe les trames ZMTP. Reglages :
+#   OSMO_LTE_TAP_PORT    le port ZMQ « tx » de srsue (2001 ; 2000 = l eNB,
+#                        donc le descendant, pour qui prefere le voir)
+#   OSMO_LTE_TAP_IFACE   l interface (lo)
+#   OSMO_LTE_TAP_WINDOW  la fenetre d ecoute par image, en s (0.25)
+#   OSMO_SRSRAN_UE_CONF  le ue.conf a lire pour l EARFCN et la cadence
+#   OSMO_SRSRAN_TMUX     le tmux (-L) qui porte srsue, fenetre « ue »
+#   OSMO_SRSRAN_UE_LOG   le journal de srsue, a defaut du tmux
+LTE_PORT = int(os.environ.get("OSMO_LTE_TAP_PORT", "2001"))
+LTE_IFACE = os.environ.get("OSMO_LTE_TAP_IFACE", "lo")
+LTE_FENETRE = float(os.environ.get("OSMO_LTE_TAP_WINDOW", "0.25"))
+LTE_NFFT = 1024
+LTE_UE_CONF = os.environ.get("OSMO_SRSRAN_UE_CONF", "/root/.config/srsran/ue.conf")
+LTE_TMUX = os.environ.get("OSMO_SRSRAN_TMUX", "srsran")
+LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/tmp/ue.log")
+# Le marqueur d une reponse ZMTP de l UE : la trame vide du REQ/REP (0x01 =
+# « il y en a une autre », taille 0), puis l en-tete d une trame longue (0x02,
+# taille sur 8 octets grand-boutiste, dont les cinq premiers sont nuls tant
+# qu elle fait moins de 2^24 octets - une trame d une seconde en ferait 92 M).
+ZMTP_MARQUE = b"\x01\x00\x02\x00\x00\x00\x00\x00"
+try:
+    import numpy as np
+except ImportError:      # la moitie 4G le dira ; la 2G n en a pas besoin
+    np = None
+
+
+def _tcp_ecoute(port):
+    """Quelqu un ecoute-t-il ce port TCP ? (lecture de /proc/net/tcp, sans privilege)"""
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(f) as fh:
+                next(fh)
+                for l in fh:
+                    c = l.split()
+                    if c[3] == "0A" and int(c[1].rsplit(":", 1)[1], 16) == port:
+                        return True
+        except (OSError, StopIteration, ValueError, IndexError):
+            pass
+    return False
+
+
+def srsran_ue_conf():
+    """{'earfcn', 'srate'} d apres ue.conf ; des defauts raisonnables sinon."""
+    conf = {"earfcn": "?", "srate": 11.52e6}
+    try:
+        section = ""
+        with open(LTE_UE_CONF) as fh:
+            for l in fh:
+                l = l.strip()
+                if l.startswith("["):
+                    section = l
+                elif l.startswith("dl_earfcn") and section == "[rat.eutra]":
+                    conf["earfcn"] = l.split("=", 1)[1].strip()
+                elif l.startswith("device_args"):
+                    m = re.search(r"base_srate=([0-9.eE+]+)", l)
+                    if m:
+                        conf["srate"] = float(m.group(1))
+    except (OSError, ValueError):
+        pass
+    return conf
+
+
+class SondeLte(threading.Thread):
+    """Ecoute la moitie 4G : etat = {psd (dB, LTE_NFFT cases, centre au milieu),
+    crete (amplitude max vue), trames, erreur, t}. Ne tourne que si le port
+    de l UE est ouvert - sinon rien a ecouter, et rien a ouvrir."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.etat = {"psd": None, "crete": 0.0, "trames": 0, "erreur": None, "t": 0.0}
+        self.hann = (np.hanning(LTE_NFFT).astype(np.float32) if np is not None else None)
+
+    def run(self):
+        while True:
+            if np is None:
+                self.etat = dict(self.etat, psd=None, erreur="numpy absent : pas de FFT 4G")
+                time.sleep(10)
+                continue
+            if not _tcp_ecoute(LTE_PORT):
+                self.etat = dict(self.etat, psd=None, trames=0, erreur=None)
+                time.sleep(PERIOD)
+                continue
+            try:
+                self.capture()
+            except PermissionError:
+                self.etat = dict(self.etat, psd=None, erreur="prise brute refusee : root (CAP_NET_RAW) requis")
+                time.sleep(10)
+            except Exception as e:
+                self.etat = dict(self.etat, psd=None, erreur=f"sonde : {type(e).__name__}: {e}")
+                time.sleep(2)
+            time.sleep(max(0.1, PERIOD - LTE_FENETRE))
+
+    def capture(self):
+        s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+        try:
+            s.bind((LTE_IFACE, 0))
+            s.settimeout(0.2)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+            buf, attendu, crete_psd, crete, trames = b"", None, None, 0.0, 0
+            fin = time.time() + LTE_FENETRE
+            while time.time() < fin:
+                try:
+                    pkt, adr = s.recvfrom(70000)
+                except socket.timeout:
+                    continue
+                # Sur lo chaque paquet passe deux fois (sortant puis entrant) :
+                # on ne garde que l entrant (pkttype 4 = PACKET_OUTGOING).
+                if adr[2] == 4 or len(pkt) < 34 or pkt[12:14] != b"\x08\x00" or pkt[23] != 6:
+                    continue
+                tcp = 14 + (pkt[14] & 0xF) * 4
+                sport, _dport, seq = struct.unpack("!HHI", pkt[tcp:tcp + 8])
+                if sport != LTE_PORT:
+                    continue
+                charge = pkt[tcp + (pkt[tcp + 12] >> 4) * 4:]
+                if not charge:
+                    continue
+                if attendu is not None and seq != attendu:
+                    buf = b""            # trou dans le flux : on resynchronise
+                attendu = (seq + len(charge)) & 0xFFFFFFFF
+                buf += charge
+                while True:
+                    i = buf.find(ZMTP_MARQUE)
+                    if i < 0:
+                        buf = buf[-len(ZMTP_MARQUE):]
+                        break
+                    taille = int.from_bytes(buf[i + 3:i + 11], "big")
+                    if taille % 8 or taille > (64 << 20):
+                        buf = buf[i + 1:]            # faux marqueur dans les donnees
+                        continue
+                    if len(buf) < i + 11 + taille:
+                        buf = buf[i:]
+                        break
+                    x = np.frombuffer(buf[i + 11:i + 11 + taille], dtype=np.complex64)
+                    buf = buf[i + 11 + taille:]
+                    n = len(x) // LTE_NFFT
+                    if n == 0:
+                        continue
+                    trames += 1
+                    blocs = x[:n * LTE_NFFT].reshape(n, LTE_NFFT) * self.hann
+                    p = np.abs(np.fft.fftshift(np.fft.fft(blocs, axis=1), axes=1)) ** 2
+                    p = p.max(axis=0) / (LTE_NFFT * LTE_NFFT)
+                    crete_psd = p if crete_psd is None else np.maximum(crete_psd, p)
+                    crete = max(crete, float(np.max(np.abs(x))))
+        finally:
+            s.close()
+        if trames == 0:
+            self.etat = dict(self.etat, psd=None, trames=0, erreur=None, t=time.time())
+        else:
+            self.etat = {"psd": (10 * np.log10(crete_psd + 1e-20)).tolist(), "crete": crete,
+                         "trames": trames, "erreur": None, "t": time.time()}
+
+
+def srsran_journal(n, width):
+    """Les dernieres lignes de la console de srsue : la fenetre « ue » du tmux
+    qui le porte, et le journal fichier a defaut."""
+    try:
+        out = subprocess.run(["tmux", "-L", LTE_TMUX, "capture-pane", "-p", "-t", f"{LTE_TMUX}:ue"],
+                             capture_output=True, text=True, timeout=2)
+        lignes = [ANSI.sub("", l).rstrip() for l in out.stdout.splitlines()]
+        lignes = [l for l in lignes if l.strip()]
+        if out.returncode == 0 and lignes:
+            return [(l[:width], None) for l in lignes[-n:]]
+    except Exception:
+        pass
+    try:
+        with open(LTE_UE_LOG, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16384))
+            data = f.read().decode("utf-8", "replace")
+        lignes = [ANSI.sub("", l).rstrip() for l in data.splitlines() if l.strip()]
+        if lignes:
+            return [(l[:width], None) for l in lignes[-n:]]
+    except OSError:
+        pass
+    return [("console srsue introuvable :", (139, 148, 158)),
+            (f"  ni tmux -L {LTE_TMUX} (fenetre ue), ni {LTE_UE_LOG}", (139, 148, 158))]
+
+
+historique_lte = []
+
+
+def render_lte(etat):
+    """La moitie haute : le spectre montant du UE srsRAN a gauche, sa console a
+    droite. Meme cadre, memes marges que la 2G : un seul encart, deux bancs."""
+    img = base_moitie(HAUT).copy()
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
+    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
+    split = x0 + int((x1 - x0) * 0.56)
+    conf = srsran_ue_conf()
+    d.text((x0, y0), "Spectre I/Q du UE srsRAN  ·  UL", font=F_TITLE, fill=(88, 166, 255))
+    tag = f"EARFCN {conf['earfcn']} · ZMQ {LTE_PORT}"
+    d.text((split - 12 - d.textlength(tag, font=F_SMALL), y0 + 2), tag, font=F_SMALL, fill=(63, 185, 80))
+    sx0, sx1 = x0, split - 12
+    sw = sx1 - sx0
+    py0 = y0 + 24
+    psd_h = 110
+    py1 = py0 + psd_h
+    d.rectangle((sx0, py0, sx1, py1), fill=(12, 16, 24))
+    for gy in range(1, 4):
+        yy = py0 + gy * psd_h // 4
+        d.line((sx0, yy, sx1, yy), fill=(24, 30, 40))
+    # L axe : la cadence, de -srate/2 a +srate/2 autour de la porteuse.
+    demi = conf["srate"] / 2e6
+    for k, frac in ((f"-{demi:.2f}", 0.0), ("0", 0.5), (f"+{demi:.2f} MHz", 1.0)):
+        tx = sx0 + int(frac * sw)
+        tx = min(max(tx - d.textlength(k, font=F_SMALL) * frac, sx0), sx1 - d.textlength(k, font=F_SMALL))
+        d.text((tx, py1 + 2), k, font=F_SMALL, fill=(90, 100, 120))
+    psd = etat.get("psd")
+    if etat.get("erreur"):
+        d.text((sx0 + 8, py0 + 8), etat["erreur"], font=F_SMALL, fill=(248, 81, 73))
+        vals = None
+    elif psd is None:
+        d.text((sx0 + 8, py0 + 8), "pas de flux (l eNB ne demande rien a l UE)", font=F_SMALL,
+               fill=(248, 81, 73))
+        vals = None
+    else:
+        # Echelle : le haut suit la crete, jamais sous -60 dB - ainsi le
+        # silence entre deux rafales reste a plat au lieu d etre etire.
+        haut = max(max(psd), -60.0)
+        vals = resample([min(1.0, max(0.0, (p - (haut - 50)) / 50)) for p in psd], sw)
+        pts = [(sx0 + x, py1 - 1 - int(v * (psd_h - 4))) for x, v in enumerate(vals)]
+        for x, y in pts:
+            d.line((x, y, x, py1 - 1), fill=(30, 70, 110))
+        d.line(pts, fill=(88, 210, 255), width=1)
+        if etat.get("crete", 0.0) < 1e-6:
+            d.text((sx0 + 8, py0 + 8), "silence : le UE n emet pas (veille)", font=F_SMALL,
+                   fill=(139, 148, 158))
+    historique_lte.insert(0, vals if vals is not None else [0.0] * sw)
+    wy0 = py1 + 18
+    wf_h = y1 - wy0
+    del historique_lte[wf_h:]
+    wf = Image.new("RGB", (sw, wf_h), (8, 10, 14))
+    px = wf.load()
+    for row, line in enumerate(historique_lte):
+        for x in range(min(sw, len(line))):
+            px[x, row] = inferno(line[x])
+    img.paste(wf, (sx0, wy0))
+    d = ImageDraw.Draw(img)
+    lx0 = split
+    d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
+    d.text((lx0, y0), "console srsUE  ·  tmux srsran:ue", font=F_TITLE, fill=(88, 166, 255))
+    line_h = 15
+    n = max(1, (y1 - (y0 + 26)) // line_h)
+    cols = max(10, int((x1 - lx0) / 7.3))
+    for i, (l, col) in enumerate(srsran_journal(n, cols)):
+        if col is None:
+            col = LOG_DEFAUT
+            if re.search(r"reject|fail|error|release|lost|timeout", l, re.I):
+                col = TANGO_VIF["31"]
+            elif re.search(r"attach|found (plmn|cell)|complete|connected|network attach", l, re.I):
+                col = TANGO_VIF["32"]
+        d.text((lx0, y0 + 26 + i * line_h), l, font=F_LOG, fill=col)
+    return img
+
+
 def write(img):
     os.makedirs(OUT, exist_ok=True)
     tmp = os.path.join(OUT, ".panel.tmp.png")
@@ -540,11 +839,14 @@ def write(img):
 
 
 def main():
-    print(f"[fft-snap] {URL} + {MOBILE_LOG} -> {OUT}/panel.png toutes les {PERIOD}s "
-          f"(fondu {FADE_S}s depuis {WALLPAPER})", flush=True)
-    alpha = 0.0
+    print(f"[fft-snap] {URL} + {MOBILE_LOG} (2G, bas) + prise brute {LTE_IFACE}:{LTE_PORT} (4G, haut)"
+          f" -> {OUT}/panel.png toutes les {PERIOD}s (fondu {FADE_S}s depuis {WALLPAPER})", flush=True)
+    sonde = SondeLte()
+    sonde.start()
+    # Un fondu par moitie : « bas » suit la 2G (ou le hub), « haut » la 4G.
+    alpha = {"bas": 0.0, "haut": 0.0}
     step = PERIOD / FADE_S if FADE_S > 0 else 1.0
-    last_state = None
+    last_state = {"bas": None, "haut": None}
     while True:
         t = time.time()
         op_courant = operator()
@@ -560,24 +862,37 @@ def main():
             except Exception:
                 data = None
             ready = bool(data) and "psd" in data
-        if ready != last_state:
-            print(f"[fft-snap] banc {'pret : fondu vers le spectre' if ready else 'absent : retour au strip'}",
-                  flush=True)
-            last_state = ready
-        target = 1.0 if ready else 0.0
-        alpha = min(target, alpha + step) if target > alpha else max(target, alpha - step)
+        # La 4G est « la » des que srsue tient son port ZMQ : le spectre peut
+        # etre vide (pas de rafale), mais l encart montre alors ce silence,
+        # avec la console de l UE a cote - ce qu on veut voir quand on attend
+        # l attach, justement.
+        prets = {"bas": ready, "haut": _tcp_ecoute(LTE_PORT)}
+        for m, nom in (("bas", "banc 2G"), ("haut", "banc 4G (srsue)")):
+            if prets[m] != last_state[m]:
+                print(f"[fft-snap] {nom} {'pret : fondu vers le spectre' if prets[m] else 'absent : retour a la bande dessinee'}",
+                      flush=True)
+                last_state[m] = prets[m]
+            target = 1.0 if prets[m] else 0.0
+            alpha[m] = (min(target, alpha[m] + step) if target > alpha[m]
+                        else max(target, alpha[m] - step))
         try:
-            if alpha <= 0.0:
+            img = base_image().copy()
+            # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
+            # le strip transparaitre sous le banc. Sans strip derriere, rien
+            # a laisser voir : opacite pleine.
+            op = OPACITY if strip_present() else 1.0
+            if alpha["bas"] <= 0.0:
                 history.clear()
-                write(base_image())
             else:
                 live = (render_interstp(op_courant)
                         if op_courant.get("MODE") == "interstp" else render_live(data))
-                # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
-                # le strip transparaitre sous le banc. Sans strip derriere, rien
-                # a laisser voir : opacite pleine.
-                op = OPACITY if strip_present() else 1.0
-                write(Image.blend(base_image(), live, alpha * op))
+                img.paste(Image.blend(base_moitie(BAS), live, alpha["bas"] * op), (0, BAS[0]))
+            if alpha["haut"] <= 0.0:
+                historique_lte.clear()
+            else:
+                live = render_lte(sonde.etat)
+                img.paste(Image.blend(base_moitie(HAUT), live, alpha["haut"] * op), (0, HAUT[0]))
+            write(img)
         except Exception as e:
             print(f"[fft-snap] rendu : {e}", file=sys.stderr, flush=True)
         time.sleep(max(0.2, PERIOD - (time.time() - t)))

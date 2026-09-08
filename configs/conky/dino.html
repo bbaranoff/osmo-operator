@@ -72,12 +72,21 @@
   .snd:hover{background:#0a0810e0}
   .snd:focus-visible{outline:2px solid var(--sun); outline-offset:2px}
   .snd[aria-pressed="true"]{color:var(--bone-dim)}
+  /* Le bouton plein ecran, a gauche du son. ON EST DANS LA FENETRE A LA BASE :
+     rien ne change tant qu on ne clique pas. En plein ecran le cadre prend tout
+     l ecran en gardant ses proportions (8/5, bandes noires s il le faut), et le
+     meme bouton ramene dans la fenetre. */
+  .fsb{ right:58px }
+  body.full{ padding:0; gap:0; background:#000; background-image:none }
+  body.full header{ display:none }
+  body.full .frame{ width:min(100vw, 160vh); height:min(100vh, 62.5vw); border:0; border-radius:0; box-shadow:none }
 
   .card{
     position:absolute; left:50%; top:34%; transform:translate(-50%,-50%);
     display:grid; justify-items:center; gap:4px; text-align:center; pointer-events:none;
     text-shadow:0 2px 18px #000, 0 0 30px #000;
   }
+  .card[hidden]{display:none}
   .card b{font-family:Rye,serif; font-weight:400; font-size:clamp(19px,2.8vw,27px); color:#f6efdd}
   .card span{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--moon)}
 
@@ -112,7 +121,7 @@
 
 <header>
   <h1>Coureur d'<em>ombres</em></h1>
-  <p>Le dino court sur l'équateur : le Soleil monte droit devant lui, passe au zénith, redescend. Les ombres sont calculées, pas dessinées — même celle du saut.</p>
+  <p>Le dino court vers le levant : le Soleil se lève droit devant lui, monte, et sort du cadre par le haut. La Lune fait le même chemin, un cinquième plus vite. Les ombres sont calculées, pas dessinées — même celle du saut.</p>
 </header>
 
 <div class="frame" id="frame">
@@ -131,27 +140,28 @@
   </div>
 
   <button class="snd" id="snd" type="button" aria-pressed="false" title="son (M)">♪</button>
+  <button class="snd fsb" id="fsb" type="button" aria-pressed="false" title="plein écran (F)">⛶</button>
 
   <div class="card" id="card" hidden>
-    <b id="cardLvl">Niveau 1 franchi</b>
-    <span>totalité — 28 jours avant la prochaine</span>
+    <b id="cardLvl"></b>
+    <span id="cardSub"></span>
   </div>
 
   <div class="veil" id="start">
     <h2>Il va tout droit</h2>
-    <p>Tant que personne ne touche aux commandes, la piste reste vide. Prends la main et le désert se remplit. La Lune rattrape le Soleil jour après jour : l'éclipse totale ferme le niveau.</p>
+    <p>Tant que personne ne touche aux commandes, la piste reste vide. Prends la main et le désert se remplit. La Lune rattrape le Soleil tous les cinq jours : l'éclipse est un spectacle. Il n'y a que des mètres à faire.</p>
     <div class="keys"><kbd>←</kbd><kbd>→</kbd><kbd>espace : saut</kbd><kbd>clic / glisser</kbd></div>
   </div>
 
   <div class="veil" id="over" hidden>
     <h2 id="overTitle">Dans les épines</h2>
-    <p class="score">niveau <b id="finalLvl">1</b> · parcouru <b id="finalDist">0</b> m · record <b id="bestDist">0</b> m</p>
+    <p class="score">parcouru <b id="finalDist">0</b> m · record <b id="bestDist">0</b> m</p>
     <div class="keys"><kbd>Entrée</kbd><kbd>clic</kbd></div>
   </div>
 </div>
 
 <footer>
-  <span>Soleil et Lune font le tour du ciel une fois par jour, entraînés par la rotation de la Terre ; la Lune traîne d'un vingt-huitième de tour.</span>
+  <span>Soleil et Lune tournent autour du dino et se lèvent devant lui ; la Lune va 1,2 fois plus vite que le Soleil, et le rattrape tous les cinq jours. L'année dure onze jours : neige, orages, aurores, arcs-en-ciel, étoiles filantes — et la dernière nuit, le père Noël passe.</span>
   <code>ombre : S = Q − l·(Qz ⁄ lz)</code>
 </footer>
 
@@ -285,66 +295,68 @@
     mode:"attract", t:0, dist:0, speed:9, px:0, tgt:0, camX:0, lean:0,
     lives:3, invuln:0, gallop:0, cacti:[], spawn:2.5, shake:0, z:0, vz:0,
     day0: 0, best: 0, flash:0, totT:0,
-    level:1, eclipsing:false, cardT:0, sky:null,
-    wx:{cloud:0,rain:0,storm:0,day:0}, boltT:0, bolt:null, glare:0, skyT:0
+    eclipsing:false, cardT:0, cardTitle:"", cardSub:"", sky:null,
+    meteors:[], santa:-1, santaSeen:false,
+    wx:{cloud:0,rain:0,snow:0,storm:0,aurora:0,day:0}, boltT:0, bolt:null, glare:0, skyT:0
   };
   try{ S.best = +(localStorage.getItem("cavalier-best")||0) || 0; }catch(e){}
 
   const DAY = 24;                       // secondes pour un jour complet
-  // Le Soleil traverse le ciel en un jour.  La Lune, elle, est 28 fois plus lente :
-  // elle met 28 jours à faire le même chemin.  Sur une nuit elle est donc presque
-  // immobile — elle ne se lève pas, elle est déjà haute quand la nuit tombe, et
-  // simplement un peu plus basse chaque nuit.  Une fois par lunaison elle
-  // redescend jusqu'à la hauteur de culmination du Soleil : c'est l'éclipse.
-  const ECL_ANG = 146*Math.PI/180;      // angle de la conjonction, Lune déjà basse
-  const ECL_DAY = 0.25 + 146/360;       // l'heure où le Soleil y est
-  const MOON_PER = 28;                  // jours pour un tour de Lune
+  // [2026-09-07] LE DINO COURT VERS LE LEVANT. Les deux astres TOURNENT autour de
+  // lui, sur le même cercle, et on ne voit que le quart qui MONTE : chacun sort
+  // de l'horizon droit devant, grimpe à vitesse constante et quitte le cadre par
+  // le haut — coupé par le bord, pas éteint. Le reste du tour (la descente,
+  // dans le dos du dino, puis le passage sous terre) est invisible. C'est ce
+  // qui met la pleine Lune EN FACE la nuit : elle est à l'opposé du Soleil, donc
+  // elle se lève devant quand lui se couche derrière.
+  //   hauteur dans le cadre = vitesse angulaire × temps (× K_SKY)
+  // Le Soleil fait un tour par jour ; la Lune va MOON_K = 1,2 fois plus vite,
+  // et le rattrape donc tous les 1/(MOON_K−1) = 5 jours : c'est la lunaison du
+  // modèle (tant pis pour les 28 jours), et le jour de la conjonction, l'éclipse.
+  // Le Soleil seul fait le jour et la nuit ; la Lune est où elle est, invisible
+  // de jour, et se révèle en fondu — déjà en mouvement — quand le ciel s'assombrit.
+  const ECL_ANG = 34*Math.PI/180;       // angle de la conjonction : bas dans le quart montant
+  const ECL_DAY = 0.25 + 34/360;        // l'heure où le Soleil y est
+  const MOON_K = 1.2;                   // vitesse angulaire de la Lune / celle du Soleil
+  const MOON_PER = 1/(MOON_K-1);        // jours entre deux conjonctions (5)
   // À l'équateur, à midi, le Soleil est à la verticale : l'amplitude du cercle
   // vaut 90°.  La déclinaison ne fait plus que 5°, de quoi que deux jours ne se
-  // ressemblent jamais tout à fait.
+  // ressemblent jamais tout à fait : ce sont les saisons.
+  // L'année du modèle dure SEASON jours ; le creux du froid tombe au bout de
+  // l'an (jour 0 ≡ jour 11), l'été au milieu — l'hiver, c'est le passage à l'an.
   const SUN_MAX = 90*Math.PI/180, SUN_DEC = 5*Math.PI/180, SEASON = 11;
-  const sunAmp = dayT => SUN_MAX - SUN_DEC*(1-Math.cos(2*Math.PI*dayT/SEASON))/2;
-  // Tout le modèle tient en DEUX ANGLES sur le MÊME cercle, qui ne tournent pas à
-  // la même vitesse : celui du Soleil fait un tour par jour, celui de la Lune un
-  // tour en 28 jours.  Rien d'autre.  Le jour et la nuit ne dépendent que du
-  // Soleil ; la Lune est où elle est.  L'angle lunaire est calé pour passer au
-  // sommet du cercle à la conjonction : le Soleil l'y rejoint au ralenti, et
-  // c'est la grande éclipse.
-  // La Lune parcourt le même cercle que le Soleil, dans le même sens, mais un tour
-  // en 14 jours : elle descend donc d'un bon cran chaque nuit.  Elle n'a pas de
-  // lever visible — elle apparaît en fondu là où elle est — donc elle n'a pas
-  // besoin d'être devant le dino pour être vue : sa hauteur suffit.
-  // La Lune fait exactement la même descente que le Soleil, à la même vitesse
-  // constante — mais sa fenêtre est celle du Soleil décalée d'un retard qui croît
-  // linéairement : un vingt-huitième de tour par jour.  Quand le retard s'annule,
-  // les deux fenêtres coïncident : c'est l'éclipse.
-  const moonAngle = dayT => (dayT-0.25)*2*Math.PI + 2*Math.PI*(dayT-ECL_DAY)/MOON_PER;
-  // L'angle ne fait qu'avancer : l'astre se lève DERRIÈRE le dino (qui court vers
-  // le couchant), passe au-dessus, et redescend DEVANT lui.  On ne voit donc que
-  // le quart descendant — jamais le lever, toujours le coucher.
-  // La hauteur ne suit pas un sinus mais une dent de scie : l'astre descend à
-  // VITESSE CONSTANTE.  Il paraît au zénith à midi, glisse tout l'après-midi et
-  // passe sous l'horizon au tout début de la nuit, du même mouvement.
+  const yearT  = dayT => ((dayT % SEASON) + SEASON) % SEASON;   // jour dans l'an [0, SEASON[
+  const froidAt= dayT => (1 + Math.cos(2*Math.PI*dayT/SEASON))/2; // 1 au creux de l'hiver
+  const sunAmp = dayT => SUN_MAX - SUN_DEC*froidAt(dayT);
+  // Deux angles sur le même cercle, deux vitesses. L'angle lunaire est celui du
+  // Soleil plus un retard qui croît de (MOON_K−1) tour par jour, nul à la
+  // conjonction : à ECL_DAY les deux angles coïncident, exactement.
+  const moonAngle = dayT => (dayT-0.25)*2*Math.PI + 2*Math.PI*(dayT-ECL_DAY)*(MOON_K-1);
+  // La hauteur ne suit pas un sinus mais une dent de scie : l'astre MONTE à
+  // vitesse constante, de l'horizon (u = 0) au zénith (u = π/2) — c'est le seul
+  // quart qu'on voit, devant le dino. Ensuite il redescend derrière lui.
   function arcDir(theta, amp){
     const TAU=2*Math.PI, u=((theta%TAU)+TAU)%TAU;
     const tri = u<=Math.PI ?  (1 - Math.abs(u-Math.PI/2)/(Math.PI/2))
                            : -(1 - Math.abs(u-3*Math.PI/2)/(Math.PI/2));
     const alt = amp*tri;
-    const front = u>Math.PI/2 && u<3*Math.PI/2;    // devant le dino
+    const front = u<Math.PI/2 || u>3*Math.PI/2;    // devant le dino : la montée
     return [0, (front?1:-1)*Math.cos(alt), Math.sin(alt)];
   }
   // Modèle géocentré : les deux astres tournent autour du dino, à une distance
   // finie.  Les ombres se calculent donc depuis leur POSITION, pas depuis une
   // direction — elles rayonnent à partir du point au sol sous l'astre.
   const R_SUN_W = 70, R_MOON_W = 95;    // mètres
-  const SKY_TOP = 48;                   // le zénith se pose sous le bandeau
   const R_SUN_PX = 26, R_MOON_PX = 29;   // même taille apparente, à un cheveu près  // la Lune est plus large : la totalité dure
-  const K_SKY = (183 - SKY_TOP)/(Math.PI/2);
-  // Retard au recalage : la Lune redescend vers le Soleil en autant de jours.
-  const LEAD = () => 2.8 + RND()*0.3;
-  // Le ciel s'ouvre sur la Lune d'aujourd'hui.  Âge lunaire réel calculé depuis la
-  // nouvelle lune de référence du 6 janvier 2000, 18 h 14 UTC, mois synodique de
-  // 29,530589 j, puis ramené au mois de 28 jours du modèle.
+  // Le cowboy voit π/3 : l'horizon (183 px, hauteur 0) est en bas du ciel, le
+  // haut du cadre est à 60° de hauteur.  Le zénith (90°) est donc bien au-dessus
+  // du cadre : l'astre sort par le haut, entier, aux deux tiers de sa montée.
+  const SKY_FOV = Math.PI/3, HZ_PX = 183;
+  const K_SKY = HZ_PX/SKY_FOV;           // px par radian de hauteur
+  // Le ciel s'ouvre sur la Lune d'aujourd'hui : pleine lune quand c'est la pleine
+  // lune, sinon la phase du jour. Âge lunaire réel calculé depuis la nouvelle
+  // lune de référence du 6 janvier 2000, 18 h 14 UTC, mois synodique de
+  // 29,530589 j, puis ramené à la lunaison du modèle.
   const SYNODIC = 29.530588853;
   function moonAgeToday(){
     const ref = Date.UTC(2000,0,6,18,14)/86400000, now = Date.now()/86400000;
@@ -364,18 +376,30 @@
 
   // ---------- météo : tirée au sort chaque jour ----------
   const wh = n => { const x=Math.sin(n*127.1+311.7)*43758.5453; return x-Math.floor(x); };
+  // Tout le temps qu'il peut faire : dégagé, nuageux, pluie ou NEIGE (la
+  // saison froide, quand le Soleil est bas, en fait de la neige plus souvent),
+  // orage avec ses éclairs, et les AURORES, par nuit claire, une fois sur trois.
   function dayWeather(n){
-    const a=wh(n), b=wh(n+0.37), c=wh(n+0.71);
-    if(a<0.34) return {cloud:0.04+0.18*b, rain:0, storm:0};       // dégagé
-    if(a<0.64) return {cloud:0.34+0.42*b, rain:0, storm:0};       // nuageux
-    if(a<0.87) return {cloud:0.62+0.30*b, rain:0.30+0.40*c, storm:0};  // pluie
-    return {cloud:0.82+0.18*b, rain:0.68+0.32*c, storm:1};        // orage
+    const a=wh(n), b=wh(n+0.37), c=wh(n+0.71), d=wh(n+0.53), e=wh(n+0.89);
+    const froid = froidAt(n);                                    // 1 au creux de la saison
+    const aurora = (a<0.64 && e>0.66) ? 0.45+0.55*b : 0;
+    // La dernière nuit de l'an, il neige — toujours — et le ciel reste assez
+    // ouvert pour qu'on voie qui passe.
+    if(Math.floor(yearT(n)) === SEASON-1) return {cloud:0.38+0.14*b, rain:0, snow:0.45+0.30*c, storm:0, aurora:0};
+    if(a<0.34) return {cloud:0.04+0.18*b, rain:0, snow:0, storm:0, aurora};       // dégagé
+    if(a<0.64) return {cloud:0.34+0.42*b, rain:0, snow:0, storm:0, aurora};       // nuageux
+    if(a<0.87){                                                                    // précipitations
+      if(d < 0.25+0.45*froid) return {cloud:0.62+0.30*b, rain:0, snow:0.35+0.45*c, storm:0, aurora:0};  // neige
+      return {cloud:0.62+0.30*b, rain:0.30+0.40*c, snow:0, storm:0, aurora:0};    // pluie
+    }
+    return {cloud:0.82+0.18*b, rain:0.68+0.32*c, snow:0, storm:1, aurora:0};      // orage
   }
   function weatherAt(dayT){                     // bascule douce en fin de journée
     const n=Math.floor(dayT), f=dayT-n;
     const A=dayWeather(n), B=dayWeather(n+1), t=clamp((f-0.80)/0.20,0,1);
     return {cloud:lerp(A.cloud,B.cloud,t), rain:lerp(A.rain,B.rain,t),
-            storm:lerp(A.storm,B.storm,t), day:n};
+            snow:lerp(A.snow,B.snow,t), storm:lerp(A.storm,B.storm,t),
+            aurora:lerp(A.aurora,B.aurora,t), day:n};
   }
   const CLOUDS=[];
   for(let i=0;i<26;i++){
@@ -386,6 +410,9 @@
   }
   const DROPS=[];
   for(let i=0;i<240;i++) DROPS.push({x:RND()*W, y:RND()*H, l:9+RND()*16, v:520+RND()*420});
+  // Les flocons : lents, et ils dérivent au lieu de tomber droit.
+  const FLAKES=[];
+  for(let i=0;i<220;i++) FLAKES.push({x:RND()*W, y:RND()*H, r:1.2+RND()*2.2, v:38+RND()*52, ph:RND()*7, sw:12+RND()*22});
 
     // ---------- le ciel (ne dépend ni du cavalier ni de la caméra) ----------
   function computeSky(){
@@ -407,13 +434,20 @@
     // Phase : la vraie, celle de la lunaison, reprise depuis la Lune d'aujourd'hui.
     // Elle ne dépend donc pas de la hauteur — elle est fixe sur une nuit entière et
     // a nettement tourné la nuit suivante.  Le terminateur, lui, est horizontal :
-    // on est à l'équateur, le Soleil est pile sous la Lune.
+    // les deux astres sont sur le même cercle, dans le plan avant/haut, et le
+    // Soleil est donc pile sous la Lune — ou pile au-dessus.
     const untilNew = ((((ECL_DAY - dayT) % MOON_PER) + MOON_PER) % MOON_PER);
     const lunation = 1 - untilNew/MOON_PER;          // 0 et 1 = nouvelle lune
     const kMoon = (1 - Math.cos(2*Math.PI*lunation))/2;
     const sepAng = altM - altS;
     const elong = 2*Math.PI*lunation;
-    const pa = Math.PI/2;                            // Soleil sous la Lune : limbe en bas
+    // Le limbe éclairé pointe vers le Soleil.  Angle Soleil-dino-Lune = 0 : la
+    // Lune est de dos, noire ; il grandit, la Lune prend de l'avance sur le
+    // cercle et le Soleil reste DERRIÈRE elle — plus bas, ou sous l'horizon
+    // derrière le dino la nuit : limbe en bas.  Passé 180° (pleine lune, Soleil
+    // à l'opposé), c'est le Soleil qui est devant, plus haut : limbe en haut,
+    // jusqu'à ce qu'il la rattrape par en dessous à la conjonction suivante.
+    const pa = elong < Math.PI ? Math.PI/2 : -Math.PI/2;
 
     // Éclipse : le Soleil ne peut atteindre la Lune qu'au jour de la conjonction,
     // et seulement au sommet de sa course, là où il est le plus lent.
@@ -471,6 +505,36 @@
     if(!aGain||!actx||muted||ducked===on) return;
     ducked=on; aGain.gain.setTargetAtTime(on?VOL*0.42:VOL, actx.currentTime, 0.35);
   }
+  // Plein écran : un bouton, et la touche F. On part dans la fenêtre ; le
+  // lanceur (osmo-dino-play --fullscreen) ouvre avec #full pour partir en
+  // grand. requestFullscreen peut être refusé (WebView sans permission) : la
+  // classe « full » suffit alors, le cadre prend toute la fenêtre.
+  const elFsb=document.getElementById("fsb");
+  // Deux hôtes possibles, et la page ne peut pas agrandir une fenêtre GTK
+  // toute seule : on le DEMANDE à l'hôte par un message WebKit (« osmo »).
+  //   - osmo-dino-play : met sa fenêtre en plein écran, ou l'en sort ;
+  //   - le widget du bureau (osmo-dino.py, 400×260) : ouvre le jeu en grand
+  //     dans une vraie fenêtre, et lui ne change pas d'aspect.
+  // Sans hôte (un navigateur), l'API Fullscreen fait l'affaire.
+  const HOST = window.OSMO_HOST || "";
+  const hote = msg => { try{ window.webkit.messageHandlers.osmo.postMessage(msg); return true; }catch(e){ return false; } };
+  function setFull(on){
+    if(HOST==="widget"){ hote({full:true}); return; }      // le widget reste le widget
+    document.body.classList.toggle("full", on);
+    elFsb.setAttribute("aria-pressed", String(on));
+    elFsb.title = on ? "revenir dans la fenêtre (F)" : "plein écran (F)";
+    if(hote({full:on})) return;
+    try{
+      if(on && !document.fullscreenElement && document.documentElement.requestFullscreen)
+        document.documentElement.requestFullscreen().catch(()=>{});
+      else if(!on && document.fullscreenElement && document.exitFullscreen)
+        document.exitFullscreen().catch(()=>{});
+    }catch(e){}
+  }
+  elFsb.addEventListener("pointerdown", e=>e.stopPropagation());
+  elFsb.addEventListener("click", e=>{ e.stopPropagation(); setFull(!document.body.classList.contains("full")); });
+  document.addEventListener("fullscreenchange", ()=>{ if(!document.fullscreenElement && document.body.classList.contains("full") && location.hash!=="#full" && !HOST) setFull(false); });
+  if(location.hash==="#full") setFull(true);
   elSnd.addEventListener("pointerdown", e=>e.stopPropagation());
   elSnd.addEventListener("click", e=>{ e.stopPropagation(); initAudio(); setMute(!muted); });
   setMute(muted);
@@ -484,6 +548,7 @@
     if(e.key===" "||e.key==="ArrowUp"||e.key==="w"||e.key==="W"){ e.preventDefault(); engage(); jump(); }
     if(e.key==="Enter" && S.mode==="over"){ initAudio(); start(); }
     if(e.key==="m"||e.key==="M"){ initAudio(); setMute(!muted); }
+    if(e.key==="f"||e.key==="F"){ setFull(!document.body.classList.contains("full")); }
   });
   addEventListener("keyup", e=>{ keys[e.key]=0; });
   const frame=document.getElementById("frame");
@@ -503,29 +568,33 @@
 
   // ---------- cycle de jeu ----------
   const elStart=document.getElementById("start"), elOver=document.getElementById("over");
+  // Chaque partie s'ouvre sur un ciel TIRÉ AU SORT : l'heure (donc où en sont
+  // le Soleil et la Lune sur leur montée), le jour (donc le temps qu'il fait et
+  // la saison) — mais pas la phase : on saute par lunaisons entières, la Lune
+  // reste celle d'aujourd'hui.
+  function tirerCiel(){ S.skyT = MOON_PER*Math.floor(RND()*40) + RND(); }
+  tirerCiel();
   function start(){
     S.mode="play"; S.dist=0; S.speed=9.5; S.lives=3; S.invuln=0; S.cacti.length=0;
-    S.spawn=1.6; S.px=0; S.tgt=0; S.flash=0; S.level=1;   // le ciel, lui, continue
+    S.spawn=1.6; S.px=0; S.tgt=0; S.flash=0;
+    tirerCiel();
     elStart.hidden=true; elOver.hidden=true; paintLives();
   }
   function gameOver(){
     S.mode="over";
     S.best=Math.max(S.best, Math.round(S.dist));
     try{ localStorage.setItem("cavalier-best", String(S.best)); }catch(e){}
-    document.getElementById("finalLvl").textContent=S.level;
     document.getElementById("finalDist").textContent=Math.round(S.dist);
     document.getElementById("bestDist").textContent=S.best;
     elOver.hidden=false;
   }
-  const elCard=document.getElementById("card"), elCardLvl=document.getElementById("cardLvl");
-  function reschedule(){                  // le ciel enchaîne sur la prochaine conjonction
-    S.eclipsing=false;
-    S.day0 += (ECL_DAY + MOON_PER - LEAD()) - S.sky.dayT;
-  }
-  function nextLevel(){
-    S.level++; S.cacti.length=0; S.spawn=1.3;
-    reschedule();
-  }
+  const elCard=document.getElementById("card"), elCardLvl=document.getElementById("cardLvl"),
+        elCardSub=document.getElementById("cardSub");
+  // [2026-09-07] PLUS DE NIVEAUX. L'éclipse ne ferme plus rien : elle reste un
+  // spectacle (le ciel ralentit, la couronne se déploie, les cactus s'arrêtent
+  // le temps de la totalité). Le ciel n'est plus recalé non plus : la
+  // conjonction revient toute seule tous les MOON_PER jours, et les phases ne
+  // sautent jamais. Il ne reste que les mètres.
   const livesEl=document.getElementById("lives");
   function paintLives(){
     [...livesEl.children].forEach((n,i)=> n.classList.toggle("off", i>=S.lives));
@@ -567,10 +636,33 @@
     }
     if(S.bolt){ S.bolt.t-=dt; if(S.bolt.t<=0) S.bolt=null; }
     if(S.glare>0) S.glare=Math.max(0, S.glare-dt*3.4);
-    const ramp = S.mode==="play" ? clamp(clamp(S.dist/2600,0,1) + (S.level-1)*0.20, 0, 1) : 0;
+    // --- étoiles filantes : par nuit claire, une de temps en temps ; la
+    // dernière nuit de l'an c'est une averse.
+    const nightU = clamp(-S.sky.altS/0.20, 0, 1);
+    const yT = yearT(S.sky.dayT), frac = S.sky.dayT - Math.floor(S.sky.dayT);
+    const lastNight = Math.floor(yT) === SEASON-1;
+    const metRate = nightU*(1-S.wx.cloud)*(lastNight ? 1.8 : 0.30);
+    if(RND() < metRate*dt){
+      const dir = RND()<0.5 ? 1 : -1, sp = 520+RND()*420, tilt = 0.35+RND()*0.6;   // en biais, vers le bas
+      S.meteors.push({x:RND()*W, y:RND()*HORIZON*0.55, vx:dir*Math.cos(tilt)*sp, vy:Math.sin(tilt)*sp*0.6,
+                      t:0, life:0.45+RND()*0.45, len:70+RND()*90, w:1+RND()*1.2});
+    }
+    for(let i=S.meteors.length-1;i>=0;i--){ const m=S.meteors[i]; m.t+=dt; if(m.t>m.life) S.meteors.splice(i,1); }
+    // --- le père Noël : la dernière nuit de l'an, une fois le Soleil couché,
+    // il traverse le ciel de droite à gauche, dans la neige.
+    const santaOn = lastNight && frac>=0.77 && frac<=0.93;
+    S.santa = santaOn ? (frac-0.77)/0.16 : -1;
+    if(santaOn && !S.santaSeen){
+      S.santaSeen = true;
+      S.cardTitle = "Joyeux Noël"; S.cardSub = `an ${Math.floor(S.sky.dayT/SEASON)+1} — la dernière nuit`;
+      S.cardT = 3.6;
+    }
+    if(!santaOn) S.santaSeen = false;
+    const ramp = S.mode==="play" ? clamp(S.dist/2600,0,1) : 0;
 
-    // L'éclipse totale clôt le niveau.  Le décompte tourne quel que soit le mode :
-    // le ciel ne se met pas en pause parce que le cavalier est tombé.
+    // L'éclipse totale est un spectacle, pas une fin de niveau. Le décompte
+    // tourne quel que soit le mode : le ciel ne se met pas en pause parce que
+    // le cavalier est tombé.
     // Chaque midi le Soleil traverse la Lune ; la GRANDE éclipse est celle qui
     // tombe au jour prévu, quand les deux disques se couvrent au plus près.
     const dEcl = Math.abs((((S.sky.dayT-ECL_DAY)%MOON_PER)+MOON_PER)%MOON_PER);
@@ -578,13 +670,13 @@
     S.totT = (S.sky.total && atEcl) ? S.totT+dt : 0;
     if(!S.eclipsing && S.totT>0.12){
       S.eclipsing=true;
-      if(S.mode==="play"){ S.cardT=3.6; S.invuln=Math.max(S.invuln,1.2); }
+      if(S.mode==="play") S.invuln=Math.max(S.invuln,1.2);
     }
-    if(S.eclipsing && S.sky.cover<0.96){ if(S.mode==="play") nextLevel(); else reschedule(); }
+    if(S.eclipsing && S.sky.cover<0.96) S.eclipsing=false;
     if(S.cardT>0) S.cardT-=dt;
 
     if(S.mode==="play"){
-      S.speed = lerp(9.5, 25, ramp) + (S.level-1)*1.5;
+      S.speed = lerp(9.5, 25, ramp);
       S.dist += S.speed*dt;
       let dir=0;
       if(keys.ArrowLeft||keys.a||keys.A) dir-=1;
@@ -640,9 +732,10 @@
     const ORB=[S.px, 0, 1.20];
     const LposS = add(ORB, mul(lS, R_SUN_W)), LposM = add(ORB, mul(lM, R_MOON_W));
 
-    // Même règle pour les deux : on ne les voit que dans leur moitié descendante.
-    // La Lune monte donc dans le dos du dino, comme le Soleil, et n'apparaît qu'une
-    // fois la descente entamée — d'où le fondu, jamais un lever.
+    // Même règle pour les deux : on ne les voit que dans leur quart MONTANT,
+    // devant le dino, de l'horizon au bord haut du cadre. Le Soleil se lève et
+    // sort par le haut ; la Lune fait pareil, 1,2 fois plus vite — mais elle
+    // n'est visible que la nuit, et c'est un fondu qui la révèle, en marche.
     const pS = skyPt(lS,hz), pM = skyPt(lM,hz);
     const rS = R_SUN_PX, rM = R_MOON_PX;
     const eclUp = clamp(altS*5,0,1);                      // l'éclipse n'assombrit que de jour
@@ -686,10 +779,37 @@
       ctx.globalAlpha=1;
     }
 
+    // --- aurores : des rideaux qui ondulent, verts en bas, violets en haut.
+    // Par nuit claire seulement ; le jour et les nuages les éteignent.
+    function drawAurora(){
+      const a = S.wx.aurora * clamp(1-dayF/0.45,0,1) * (1-S.wx.cloud);
+      if(a<0.02) return;
+      ctx.save(); ctx.globalCompositeOperation="lighter";
+      for(let k=0;k<4;k++){
+        const base = hz*(0.10+0.09*k), amp = 14+6*k, hgt = hz*(0.30+0.06*k);
+        const g=ctx.createLinearGradient(0,base-hgt,0,base+amp);
+        g.addColorStop(0,`rgba(150,80,220,0)`);
+        g.addColorStop(0.45,`rgba(110,120,230,${(0.10*a).toFixed(3)})`);
+        g.addColorStop(1,`rgba(80,255,160,${(0.22*a).toFixed(3)})`);
+        ctx.fillStyle=g; ctx.beginPath();
+        for(let x=-20;x<=W+20;x+=16){
+          const y = base + amp*Math.sin(x/(70+9*k) + S.t*(0.55+0.15*k) + k*1.7)
+                         + 6*Math.sin(x/23 - S.t*1.3 + k);
+          x===-20 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+        }
+        for(let x=W+20;x>=-20;x-=16){
+          const y = base - hgt + amp*0.6*Math.sin(x/(90+9*k) + S.t*0.4 + k*2.1);
+          ctx.lineTo(x,y);
+        }
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // --- disques nus : ni cercle d'orbite, ni rayons.  Soleil jaune, Lune blanche.
     function drawSun(){
       if(!pS) return;
-      ctx.globalAlpha = clamp((Math.PI/2 - pS[2])/0.14, 0, 1);   // fondu au passage du zénith
+      ctx.globalAlpha = 1;                                        // c'est le CADRE qui le coupe, en haut
       ctx.fillStyle=rgb(mix([255,150,44],[255,226,74], clamp((e+4)/22,0,1)));
       ctx.beginPath(); ctx.arc(pS[0],pS[1],rS,0,7); ctx.fill();
       ctx.globalAlpha=1;
@@ -749,15 +869,15 @@
       // une lueur qui grossit au lieu d'un astre qui se lève : la part sombre
       // garde sa lumière cendrée et un liseré.
       // Extinction atmosphérique : rousse et sourde à l'horizon, franche au zénith.
-      // C'est ce qui rend le lever lisible, car le limbe éclairé pointe alors vers
-      // le bas — vers le Soleil couché — donc la première chose qui sort de
-      // l'horizon est la part sombre du disque.
+      // C'est ce qui rend le lever lisible : en lune croissante le limbe éclairé
+      // pointe vers le bas — vers le Soleil couché — donc la première chose qui
+      // sort de l'horizon est la part sombre du disque.
       const low = clamp(1 - altM/0.22, 0, 1);
       ctx.fillStyle = rgb(mix([59,63,86],[96,58,44],low));
       ctx.beginPath(); ctx.arc(pM[0],pM[1],rM,0,7); ctx.fill();
       ctx.lineWidth=1.3; ctx.strokeStyle=rgb(mix([86,91,120],[142,88,62],low)); ctx.stroke();
       if(kMoon>0.02){
-        const pa = SK.pa, ct = 2*kMoon-1;
+        const pa = SK.pa, ct = 1-2*kMoon;   // +1 : rien d'éclairé (nouvelle) ; −1 : tout (pleine)
         ctx.save(); ctx.translate(pM[0],pM[1]); ctx.rotate(pa);
         ctx.beginPath();
         for(let i=0;i<=40;i++){ const a=-Math.PI/2+Math.PI*i/40; const x=Math.cos(a)*rM,y=Math.sin(a)*rM; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
@@ -787,35 +907,101 @@
       }
       ctx.globalAlpha=1;
     }
-    // L'arc-en-ciel se forme à l'opposé du Soleil : il n'apparaît donc que le
-    // matin, quand le Soleil est encore derrière le dino — pile quand on ne le
-    // voit pas.  Centre au point antisolaire, rayon 42°.
+    // L'arc-en-ciel se forme à l'opposé du Soleil : il n'apparaît donc que
+    // l'après-midi, quand le Soleil est passé derrière le dino — pile quand on
+    // ne le voit pas.  Centre au point antisolaire, rayon 42°.
     function drawRainbow(){
       const r=S.wx.rain;
-      const st = clamp(Math.min(r/0.22,(0.66-r)/0.22),0,1) * clamp(altS/0.22,0,1) * (lS[1]<0?1:0);
+      // Il suffit d'un peu de pluie et d'un Soleil dans le dos ; seuls les
+      // déluges d'orage l'effacent.
+      const st = clamp(Math.min(r/0.15,(0.82-r)/0.20),0,1) * clamp(altS/0.12,0,1) * (lS[1]<0?1:0);
       if(st<=0.02) return;
       const vx=W/2 + FOC*RGT[1]/(FWD[1]||1e-6), cy=hz + altS*K_SKY, R=0.733*K_SKY;
       const cols=[[216,70,58],[226,134,52],[228,208,78],[96,180,96],[68,140,208],[88,84,182],[134,72,170]];
       ctx.save(); ctx.globalCompositeOperation="lighter"; ctx.lineWidth=4.4;
       cols.forEach((c,i)=>{
-        ctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${(0.34*st).toFixed(3)})`;
+        ctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${(0.48*st).toFixed(3)})`;
         ctx.beginPath(); ctx.arc(vx, cy, R-i*4.4, Math.PI, 2*Math.PI); ctx.stroke();
-        ctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${(0.13*st).toFixed(3)})`;
+        ctx.strokeStyle=`rgba(${c[0]},${c[1]},${c[2]},${(0.18*st).toFixed(3)})`;
         ctx.beginPath(); ctx.arc(vx, cy, R*1.28+i*4.4, Math.PI, 2*Math.PI); ctx.stroke();  // arc secondaire
       });
       ctx.restore();
     }
+    function drawMeteors(){
+      if(!S.meteors.length) return;
+      ctx.save(); ctx.globalCompositeOperation="lighter"; ctx.lineCap="round";
+      for(const m of S.meteors){
+        const k = 1 - m.t/m.life, hx = m.x + m.vx*m.t, hy = m.y + m.vy*m.t;
+        const d = Math.hypot(m.vx,m.vy)||1, tx = hx - m.vx/d*m.len, ty = hy - m.vy/d*m.len;
+        const g = ctx.createLinearGradient(tx,ty,hx,hy);
+        g.addColorStop(0,"rgba(255,250,230,0)"); g.addColorStop(1,`rgba(255,250,230,${(0.9*k).toFixed(3)})`);
+        ctx.strokeStyle=g; ctx.lineWidth=m.w;
+        ctx.beginPath(); ctx.moveTo(tx,ty); ctx.lineTo(hx,hy); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // Le père Noël : quatre rennes au galop, le traîneau, le sac, et une
+    // traînée d'or derrière. Rudolphe ouvre la marche, le nez allumé.
+    function drawSanta(u){
+      if(u<0) return;
+      const x0 = W+180 - u*(W+420), y0 = hz*0.26 + hz*0.12*u + 10*Math.sin(u*11);
+      const gal = S.t*9;
+      ctx.save(); ctx.translate(x0,y0);
+      ctx.globalCompositeOperation="lighter";
+      for(let i=0;i<16;i++){
+        const t=i/16, tx=42+t*170, ty=4+Math.sin(u*11-t*4)*9;
+        ctx.fillStyle=`rgba(255,214,110,${(0.5*(1-t)).toFixed(2)})`;
+        ctx.beginPath(); ctx.arc(tx,ty,2+t*3.5,0,7); ctx.fill();
+      }
+      ctx.globalCompositeOperation="source-over";
+      const N=4, brun="#6b4a2f";
+      ctx.strokeStyle="#8a6a48"; ctx.lineWidth=1.1;
+      ctx.beginPath(); ctx.moveTo(-8,-4); ctx.lineTo(-40-(N-1)*40, -4-(N-1)*3); ctx.stroke();  // les rênes
+      for(let i=0;i<N;i++){
+        const rx=-40-i*40, ry=-i*3 + Math.sin(gal+i*1.3)*3;
+        ctx.fillStyle=brun; ctx.beginPath(); ctx.ellipse(rx,ry,13,6,0,0,7); ctx.fill();          // corps
+        ctx.beginPath(); ctx.ellipse(rx-15,ry-6,5,3.6,-0.3,0,7); ctx.fill();                      // tête
+        ctx.lineWidth=2.4; ctx.strokeStyle=brun; ctx.beginPath(); ctx.moveTo(rx-10,ry-2); ctx.lineTo(rx-14,ry-6); ctx.stroke();  // cou
+        ctx.lineWidth=1.2; ctx.strokeStyle="#c9a77a";                                             // bois
+        ctx.beginPath(); ctx.moveTo(rx-16,ry-9); ctx.lineTo(rx-20,ry-17); ctx.moveTo(rx-16,ry-9); ctx.lineTo(rx-12,ry-17);
+        ctx.moveTo(rx-18,ry-13); ctx.lineTo(rx-22,ry-15); ctx.moveTo(rx-14,ry-13); ctx.lineTo(rx-10,ry-15); ctx.stroke();
+        ctx.lineWidth=2; ctx.strokeStyle=brun;                                                    // pattes au galop
+        for(let k=0;k<4;k++){
+          const ph=gal+k*1.57+i, lx=rx-8+k*5.5, ang=Math.sin(ph)*0.75;
+          ctx.beginPath(); ctx.moveTo(lx,ry+3); ctx.lineTo(lx+Math.sin(ang)*8, ry+3+Math.cos(ang)*8); ctx.stroke();
+        }
+        if(i===N-1){                                                                              // Rudolphe
+          const nz=0.65+0.35*Math.sin(S.t*8);
+          ctx.fillStyle=`rgba(255,60,50,${nz.toFixed(2)})`; ctx.beginPath(); ctx.arc(rx-20,ry-6,2.4,0,7); ctx.fill();
+          ctx.globalCompositeOperation="lighter"; ctx.fillStyle=`rgba(255,60,50,${(0.28*nz).toFixed(2)})`;
+          ctx.beginPath(); ctx.arc(rx-20,ry-6,8,0,7); ctx.fill(); ctx.globalCompositeOperation="source-over";
+        }
+      }
+      ctx.fillStyle="#b2302e"; ctx.beginPath();                                                   // le traîneau
+      ctx.moveTo(-10,-8); ctx.lineTo(28,-8); ctx.lineTo(30,6); ctx.lineTo(-6,6); ctx.quadraticCurveTo(-18,6,-14,-14); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle="#e0b25a"; ctx.lineWidth=2;                                                 // le patin
+      ctx.beginPath(); ctx.moveTo(-16,10); ctx.lineTo(34,10); ctx.quadraticCurveTo(40,10,38,4); ctx.stroke();
+      ctx.fillStyle="#d9c9a5"; ctx.beginPath(); ctx.arc(20,-13,8,0,7); ctx.fill();               // le sac
+      ctx.fillStyle="#c8322f"; ctx.beginPath(); ctx.arc(6,-14,7,0,7); ctx.fill();                // le bonhomme
+      ctx.fillStyle="#f2d5b8"; ctx.beginPath(); ctx.arc(6,-24,4.2,0,7); ctx.fill();
+      ctx.fillStyle="#f6f1e8"; ctx.beginPath(); ctx.arc(6,-21,4.6,0.15,Math.PI-0.15); ctx.fill();  // la barbe
+      ctx.fillStyle="#c8322f"; ctx.beginPath(); ctx.moveTo(1,-26); ctx.lineTo(11,-26); ctx.lineTo(14,-33); ctx.closePath(); ctx.fill();
+      ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(14,-33,1.8,0,7); ctx.fill();
+      ctx.restore();
+    }
     ctx.save();                                   // rien ne déborde sous l'horizon
     ctx.beginPath(); ctx.rect(0,0,W,Math.max(0,hz)); ctx.clip();
-    // Le Soleil se couche derrière l'horizon au lieu de s'éteindre ; la Lune
-    // s'efface dans la clarté de l'aube au lieu de disparaître d'un coup.
-    // Le Soleil se lève et se couche.  La Lune, non : elle est déjà haute, et se
-    // révèle en fondu quand le ciel s'assombrit, puis s'efface à l'aube.
+    // Le Soleil se lève devant et sort par le haut du cadre. La Lune, en
+    // marche elle aussi, n'existe que la nuit : elle se révèle en fondu quand le
+    // Soleil passe sous l'horizon (voile), et s'efface en fondu à l'aube.
+    drawMeteors();
+    drawAurora();
     if(altS>-0.05) drawSun();
     if(cover>0.02){ drawCorona(); drawBite(); drawDiamond(); }   // de jour : l'intersection, en noir
     const veil = clamp(-altS/0.30, 0, 1);        // 0 au coucher, 1 par nuit noire
     if(veil>0.01) drawMoon(veil);
     drawClouds(); drawRainbow();
+    drawSanta(S.santa);
     if(S.bolt){                                  // l'éclair, dans le ciel
       ctx.strokeStyle="rgba(255,252,238,.92)"; ctx.lineWidth=2.4;
       ctx.beginPath(); ctx.moveTo(S.bolt.seg[0][0],S.bolt.seg[0][1]);
@@ -826,7 +1012,8 @@
     ctx.restore();
 
     // --- sol
-    const near=mix([88,70,52],[196,154,106],dayF), far=mix([54,47,44],[172,138,100],dayF);
+    let near=mix([88,70,52],[196,154,106],dayF), far=mix([54,47,44],[172,138,100],dayF);
+    if(S.wx.snow>0.02){ const w=S.wx.snow*0.75; near=mix(near,mix([120,124,140],[232,236,244],dayF),w); far=mix(far,mix([96,100,116],[214,220,232],dayF),w); }
     const g2=ctx.createLinearGradient(0,hz,0,H);
     g2.addColorStop(0,rgb(far)); g2.addColorStop(1,rgb(near));
     ctx.fillStyle=g2; ctx.fillRect(0,Math.max(0,hz),W,H-hz);
@@ -936,6 +1123,17 @@
       ctx.beginPath(); ctx.ellipse(p[0],p[1],s,s*0.7,0,0,7); ctx.fill();
     }
 
+    // --- neige
+    if(S.wx.snow>0.03){
+      const sn=S.wx.snow, n=Math.round(FLAKES.length*sn);
+      ctx.fillStyle=`rgba(236,242,252,${(0.45+0.45*sn).toFixed(2)})`;
+      for(let i=0;i<n;i++){
+        const f=FLAKES[i];
+        const y=((f.y + S.t*f.v)%(H+20))-10;
+        const x=((f.x + f.sw*Math.sin(S.t*0.9+f.ph) + y*0.06)%W+W)%W;
+        ctx.beginPath(); ctx.arc(x,y,f.r,0,7); ctx.fill();
+      }
+    }
     // --- pluie
     if(S.wx.rain>0.03){
       const r=S.wx.rain, n=Math.round(DROPS.length*r);
@@ -959,7 +1157,7 @@
     // --- HUD
     duck(total);
     elDist.textContent = Math.round(S.dist);
-    const dnum = Math.floor(dayT)%28 + 1, hrs=(dayT%1)*24;
+    const hrs=(dayT%1)*24;
     const edeg = elong*180/Math.PI;
     const nm = kMoon<0.03 ? "nouvelle lune" : kMoon<0.28 ? "croissant"
              : kMoon<0.58 ? "quartier" : kMoon<0.92 ? "gibbeuse" : "pleine lune";
@@ -967,12 +1165,14 @@
       : cover>0.02 ? `éclipse · ${(cover*100).toFixed(0)} %`
       : `${edeg.toFixed(0)}° — ${nm}`;
     elPhase.style.color = cover>0.02 ? "#e0653a" : "";
-    const rem = ((ECL_DAY - dayT) % 28 + 28) % 28;
-    elDay.textContent = `niveau ${S.level} · ${String(Math.floor(hrs)).padStart(2,"0")} h ${String(Math.floor(hrs%1*60)).padStart(2,"0")} · éclipse dans ${rem.toFixed(1)} j`;
+    const rem = ((ECL_DAY - dayT) % MOON_PER + MOON_PER) % MOON_PER;
+    const an = Math.floor(dayT/SEASON)+1, doy = Math.floor(yearT(dayT))+1;
+    elDay.textContent = `an ${an} · jour ${doy}/${SEASON} · ${String(Math.floor(hrs)).padStart(2,"0")} h ${String(Math.floor(hrs%1*60)).padStart(2,"0")} · éclipse dans ${rem.toFixed(1)} j`;
     if(S.cardT>0){
       elCard.hidden=false;
       elCard.style.opacity = clamp(Math.min(S.cardT, 3.6-S.cardT)*2.2, 0, 1).toFixed(2);
-      elCardLvl.textContent = `Niveau ${S.level} franchi`;
+      elCardLvl.textContent = S.cardTitle;
+      elCardSub.textContent = S.cardSub;
     } else if(!elCard.hidden) elCard.hidden=true;
 
   }

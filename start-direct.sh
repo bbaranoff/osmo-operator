@@ -409,7 +409,10 @@ fi
 #     limite de demarrages, apres quoi l encart ne revient plus du tout.
 # Le bureau n appartient pas au banc : ses python3 survivent au demontage.
 # CALYPSO_KILL_PYTHON_BUREAU=1 revient a l ancien comportement (tout tuer).
-PY_BUREAU='osmo-fft-snap\.py|osmo-panel\.py|wallpaper-render\.py'
+# [2026-09-07] pmbootstrap aussi : c est un python3, et un build de noyau
+# postmarketOS de 30 minutes (~nirvana/build-pm.sh) mourait « Killed » des
+# qu on relancait le banc a cote. Il n a rien a voir avec la radio.
+PY_BUREAU='osmo-fft-snap\.py|osmo-panel\.py|wallpaper-render\.py|pmbootstrap'
 killall_python() {
     local sig="${1:--TERM}" pid tue=0
     if [ "${CALYPSO_KILL_PYTHON_BUREAU:-0}" = "1" ]; then
@@ -2136,10 +2139,12 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
 fi
 
 # ── LE RACCORD MOBILE : oFONO = LE MODEM DU BANC ────────────────────────────
-# [2026-09-06] Le telephone Android (Waydroid) est le MEME abonne que le mobile
-# du banc : 100101. Pour qu il ait une vraie pile telephonie, il lui faut un
-# RIL, et un RIL ne parle qu a un modem AT. Ce banc n a pas de dongle : le
-# modem, c est oFono - et derriere oFono, ces deux programmes.
+# [2026-09-07] Le telephone du banc - la VM postmarketOS/Phosh - est le MEME
+# abonne que le mobile osmocom-bb : 100101. Son ModemManager ne parle qu a un
+# modem AT ; ce banc n a pas de dongle, le modem est donc ecrit ici. La VM se
+# branche directement sur osmo-phonesim-banc.py (mode --connect, cf.
+# tools/osmo-pmos.sh) ; oFono, lui, reste utile a l hote - il donne osmo-call
+# et osmo-sms-send, et un second modem AT pour la mise au point.
 #
 #   tools/osmo-phonesim-banc.py   le modem AT du banc, cote oFono (TCP 12345,
 #                                 plugin phonesim). Il lit le reseau sur le VTY
@@ -2194,9 +2199,22 @@ for prop in ("Powered", "Online"):
         pass
     time.sleep(2)
 PYON
-        # 5. le modem AT pour le RIL d Android.
+        # 5. le modem AT virtuel (le pty que consomme un RIL, ou un modem de
+        #    mise au point pour tools/at-cmd.py).
+        #    /usr/bin/python3 EN DUR, et non le shebang « env python3 ».
+        #    [2026-09-07] Releve sur le banc : ce programme ne demarrait plus
+        #    du tout depuis des heures -
+        #        File ".../osmo-ril-atmodem.py", line 43, in <module>
+        #          from gi.repository import Gio, GLib
+        #        ModuleNotFoundError: No module named 'gi'
+        #    - et le seul endroit ou ca se voyait etait /tmp/osmo-ril.log, que
+        #    personne ne lit. La cause n est pas le paquet : PyGObject est bien
+        #    la, cote SYSTEME. C est le PATH du banc, qui place le venv
+        #    (/root/.env/bin) en tete : « env python3 » y trouve un interprete
+        #    qui n a pas les liaisons GObject, et jamais celui du systeme. Meme
+        #    raison que le bloc PYON ci-dessus, qui appelle deja /usr/bin/python3.
         pgrep -f "$HERE/tools/osmo-ril-atmodem.py" >/dev/null 2>&1 || \
-            setsid "$HERE/tools/osmo-ril-atmodem.py" >>/tmp/osmo-ril.log 2>&1 &
+            setsid /usr/bin/python3 "$HERE/tools/osmo-ril-atmodem.py" >>/tmp/osmo-ril.log 2>&1 &
         sleep 1
         if pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1; then
             say_end " OK " "$C_OK" "Raccord mobile (oFono)" \

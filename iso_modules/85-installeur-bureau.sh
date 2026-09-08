@@ -690,7 +690,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # dino : fichiers locaux, souvent pas encore pousses - on les pose depuis CE
     # depot, comme les cinq ci-dessus. osmo-extras-install.sh sert au natif (80).
     for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh \
-             osmo-waydroid.sh osmo-ofono-bridge.py; do
+             osmo-pmos.sh osmo-ofono-bridge.py osmo-phonesim-banc.py \
+             osmo-ril-atmodem.py at-cmd.py; do
         [ -f "$DIR/tools/$_f" ] && install -m755 "$DIR/tools/$_f" "$_rt/tools/"
     done
     unset _f

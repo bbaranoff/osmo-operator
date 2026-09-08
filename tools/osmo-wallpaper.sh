@@ -1,5 +1,6 @@
 #!/bin/bash
-# osmo-wallpaper.sh - pose le fond d ecran du banc avec le strip Calvin & Hobbes
+# osmo-wallpaper.sh - pose le fond d ecran du banc avec ses deux bandes dessinees
+# (Calvin & Hobbes en bas, une BD geek au hasard en haut)
 # du jour incruste. Appele par osmo-wallpaper.service (timer quotidien + boot),
 # par l autostart GNOME, et a la main :
 #     sudo /usr/local/sbin/osmo-wallpaper
@@ -54,8 +55,20 @@ mkdir -p "$CACHE" "$DATED_DIR"
 # Une source differente a chaque lancement : le fond change meme quand le strip
 # du jour n a pas bouge. OSMO_WP_SOURCE=xkcd en force une ; OSMO_WP_SOURCES
 # restreint la liste.
-SOURCES="${OSMO_WP_SOURCES:-calvin xkcd apod bing turnoff}"
-[ -n "${OSMO_WP_SOURCE:-}" ] && SOURCES="$OSMO_WP_SOURCE"
+# [2026-09-08] DEUX IMAGES, DEUX CADRES. L encart du fond s est coupe en deux
+# (tools/wallpaper-render.py) : le BAS reste a Calvin & Hobbes, c est le cadre
+# du banc 2G ; le HAUT, celui du banc 4G, porte une bande dessinee GEEK tiree
+# au sort a chaque lancement - un xkcd pris au hasard dans toute la
+# collection, ou le dernier turnoff.us. Chaque cadre a sa liste de sources et
+# son tirage ; a defaut de reseau, chacun reprend sa derniere image en cache.
+#   OSMO_WP_SOURCES_BAS   (calvin)                    OSMO_WP_SOURCE_BAS  en force une
+#   OSMO_WP_SOURCES_HAUT  (xkcd_alea turnoff xkcd)    OSMO_WP_SOURCE_HAUT en force une
+# OSMO_WP_SOURCES / OSMO_WP_SOURCE (l ancien reglage, une seule image) valent
+# desormais pour le HAUT.
+SOURCES_BAS="${OSMO_WP_SOURCES_BAS:-calvin}"
+SOURCES_HAUT="${OSMO_WP_SOURCES_HAUT:-${OSMO_WP_SOURCES:-xkcd_alea turnoff xkcd}}"
+[ -n "${OSMO_WP_SOURCE_BAS:-}" ] && SOURCES_BAS="$OSMO_WP_SOURCE_BAS"
+[ -n "${OSMO_WP_SOURCE_HAUT:-${OSMO_WP_SOURCE:-}}" ] && SOURCES_HAUT="${OSMO_WP_SOURCE_HAUT:-$OSMO_WP_SOURCE}"
 
 _get() { curl -sL --max-time 30 -A "$UA" "$@" 2>/dev/null; }
 # Une image, et pas une page d erreur deguisee : `file` regarde le contenu.
@@ -67,7 +80,10 @@ _pose_image() {   # url fichier referer
     rm -f "$2.tmp"; return 1
 }
 
-# Chaque source ecrit l image dans $1 et sa ligne de credit dans $2.
+# Chaque source ecrit l image dans $1 et sa ligne de credit dans $2. Une source
+# qui tire au sort pose dans NOM_RETENU un nom qui porte le tirage (« xkcd-1234 »)
+# : le fichier de cache et l URI du fond en heritent, donc l ecran change.
+NOM_RETENU=""
 src_calvin() {
     local page url
     page="$(_get "${H[@]}" "https://www.gocomics.com/calvinandhobbes/$(date +%Y/%m/%d)")"
@@ -86,15 +102,26 @@ src_calvin() {
     _pose_image "$url" "$1" "https://www.gocomics.com/" || return 1
     printf 'Calvin & Hobbes  ·  Bill Watterson  ·  %s  ·  gocomics.com\n' "$DAY" > "$2"
 }
-src_xkcd() {
-    local j url num titre
-    j="$(_get https://xkcd.com/info.0.json)"
-    url="$(printf '%s' "$j" | grep -oP '"img":\s*"\K[^"]+')"
+_xkcd_json() {   # json -> image + credit ($1 json, $2 fichier, $3 credit)
+    local url num titre
+    url="$(printf '%s' "$1" | grep -oP '"img":\s*"\K[^"]+')"
     [ -n "$url" ] || return 1
-    num="$(printf '%s' "$j" | grep -oP '"num":\s*\K[0-9]+')"
-    titre="$(printf '%s' "$j" | grep -oP '"safe_title":\s*"\K[^"]+')"
-    _pose_image "$url" "$1" "https://xkcd.com/" || return 1
-    printf 'xkcd #%s  ·  %s  ·  Randall Munroe  ·  xkcd.com\n' "$num" "$titre" > "$2"
+    num="$(printf '%s' "$1" | grep -oP '"num":\s*\K[0-9]+')"
+    titre="$(printf '%s' "$1" | grep -oP '"safe_title":\s*"\K[^"]+')"
+    _pose_image "$url" "$2" "https://xkcd.com/" || return 1
+    printf 'xkcd #%s  ·  %s  ·  Randall Munroe  ·  xkcd.com\n' "$num" "$titre" > "$3"
+    NOM_RETENU="xkcd-$num"
+}
+src_xkcd() { _xkcd_json "$(_get https://xkcd.com/info.0.json)" "$1" "$2"; }
+# Un xkcd AU HASARD dans toute la collection : le dernier numero dit combien il
+# y en a, et on en tire un. Le 404 n existe pas (c est une blague de l auteur).
+src_xkcd_alea() {
+    local dernier num
+    dernier="$(_get https://xkcd.com/info.0.json | grep -oP '"num":\s*\K[0-9]+')"
+    [ -n "$dernier" ] && [ "$dernier" -gt 1 ] || return 1
+    num=$(( (RANDOM * 32768 + RANDOM) % dernier + 1 ))
+    [ "$num" -eq 404 ] && num=405
+    _xkcd_json "$(_get "https://xkcd.com/$num/info.0.json")" "$1" "$2"
 }
 src_apod() {
     local page src
@@ -126,71 +153,129 @@ src_turnoff() {
 # Ordre aleatoire : `shuf` s il est la, un melange maison sinon (busybox, image
 # elaguee). Sans cela on interrogerait toujours la meme source en premier, et
 # « une source differente a chaque lancement » n aurait aucun sens.
-# La source du coup precedent passe en DERNIER : sans cela, un tirage sur cinq
-# retombait sur elle et le fond ne changeait pas - alors que c est justement a
-# ca qu on voit qu un nouveau banc a demarre. Si elle est la seule disponible,
-# elle ressort quand meme (elle est en queue, pas exclue).
-DERNIERE="$(awk -F= '/^SOURCE=/{print $2}' "$CACHE/strip.state" 2>/dev/null)"
-_CANDIDATES=""
-for _s in $SOURCES; do [ "$_s" = "$DERNIERE" ] || _CANDIDATES="$_CANDIDATES $_s"; done
-[ -n "$_CANDIDATES" ] || _CANDIDATES="$SOURCES"
+# La source du coup precedent ($2) passe en DERNIER : sans cela, un tirage sur
+# cinq retombait sur elle et le fond ne changeait pas - alors que c est
+# justement a ca qu on voit qu un nouveau banc a demarre. Si elle est la seule
+# disponible, elle ressort quand meme (elle est en queue, pas exclue).
+_melange() {   # "sources" derniere -> l ordre, sur une ligne
+    local cand="" s ordre=""
+    for s in $1; do [ "$s" = "$2" ] || cand="$cand $s"; done
+    [ -n "$cand" ] || cand="$1"
+    if command -v shuf >/dev/null 2>&1; then
+        ordre="$(printf '%s\n' $cand | shuf | tr '\n' ' ')"
+    else
+        for s in $cand; do
+            if [ $((RANDOM % 2)) -eq 0 ]; then ordre="$s $ordre"; else ordre="$ordre $s"; fi
+        done
+    fi
+    [ -n "$2" ] && ordre="$ordre $2"
+    printf '%s' "$ordre"
+}
 
-if command -v shuf >/dev/null 2>&1; then
-    ORDRE="$(printf '%s\n' $_CANDIDATES | shuf | tr '\n' ' ')"
-    [ -n "$DERNIERE" ] && ORDRE="$ORDRE $DERNIERE"
-else
-    ORDRE=""
-    for _s in $_CANDIDATES; do
-        if [ $((RANDOM % 2)) -eq 0 ]; then ORDRE="$_s $ORDRE"; else ORDRE="$ORDRE $_s"; fi
+# Le tirage d un cadre : la premiere source de la liste ($1) qui repond, en
+# evitant celle du coup precedent ($2). Resultat dans R_STRIP / R_CREDIT /
+# R_SRC ; 1 si aucune ne repond.
+tirer() {
+    local s f c
+    R_STRIP=""; R_CREDIT=""; R_SRC=""
+    for s in $(_melange "$1" "$2"); do
+        f="$CACHE/strip_${DAY}_${s}.img"; c="$CACHE/strip_${DAY}_${s}.credit"
+        # Deja telecharge aujourd hui : on ne redemande pas au site. Pas pour
+        # un tirage au sort (xkcd_alea) : la, c est un nouveau numero a chaque fois.
+        case "$s" in
+            *_alea) ;;
+            *) if [ -s "$f" ]; then
+                   R_STRIP="$f"; R_CREDIT="$(cat "$c" 2>/dev/null || true)"; R_SRC="$s"
+                   echo "[wallpaper] image du $DAY : source ${s} (deja en cache)"; return 0
+               fi ;;
+        esac
+        NOM_RETENU=""
+        if declare -F "src_$s" >/dev/null && "src_$s" "$f" "$c"; then
+            if [ -n "$NOM_RETENU" ] && [ "$NOM_RETENU" != "$s" ]; then
+                mv -f "$f" "$CACHE/strip_${DAY}_${NOM_RETENU}.img"
+                mv -f "$c" "$CACHE/strip_${DAY}_${NOM_RETENU}.credit" 2>/dev/null
+                f="$CACHE/strip_${DAY}_${NOM_RETENU}.img"; c="$CACHE/strip_${DAY}_${NOM_RETENU}.credit"
+                s="$NOM_RETENU"
+            fi
+            R_STRIP="$f"; R_CREDIT="$(cat "$c" 2>/dev/null || true)"; R_SRC="$s"
+            echo "[wallpaper] image du $DAY : source ${s}"; return 0
+        fi
     done
-    [ -n "$DERNIERE" ] && ORDRE="$ORDRE $DERNIERE"
+    return 1
+}
+# Repli : la derniere image en cache dont le nom repond au motif ($1), en
+# ecartant un fichier ($2, l image de l autre cadre). Vide s il n y en a pas.
+_dernier_cache() {
+    local f
+    for f in $(ls -1t $CACHE/$1 2>/dev/null); do
+        [ -s "$f" ] && [ "$f" != "$2" ] && { printf '%s' "$f"; return 0; }
+    done
+    return 1
+}
+
+DERNIERE_BAS="$(awk -F= '/^SOURCE=/{print $2}' "$CACHE/strip.state" 2>/dev/null)"
+DERNIERE_HAUT="$(awk -F= '/^SOURCE_HAUT=/{print $2}' "$CACHE/strip.state" 2>/dev/null)"
+
+# ── LE BAS : Calvin & Hobbes ────────────────────────────────────────────────
+STRIP_BAS=""; CREDIT_BAS=""; SRC_BAS=""
+if tirer "$SOURCES_BAS" "$DERNIERE_BAS"; then
+    STRIP_BAS="$R_STRIP"; CREDIT_BAS="$R_CREDIT"; SRC_BAS="$R_SRC"
+else
+    # gocomics derriere son bouclier : le dernier Calvin en cache, quelle que
+    # soit sa date (calvin_*.gif : le nom d avant le tirage au sort).
+    STRIP_BAS="$(_dernier_cache 'strip_*_calvin.img' '' || _dernier_cache 'calvin_*.gif' '' || true)"
+    if [ -n "$STRIP_BAS" ]; then
+        CREDIT_BAS="$(cat "${STRIP_BAS%.img}.credit" 2>/dev/null || true)"; SRC_BAS="calvin"
+        echo "[wallpaper] bas : calvin ne repond pas - dernier Calvin en cache : ${STRIP_BAS##*/}"
+    elif tirer "apod bing" ""; then
+        STRIP_BAS="$R_STRIP"; CREDIT_BAS="$R_CREDIT"; SRC_BAS="$R_SRC"
+        echo "[wallpaper] bas : aucun Calvin, ni en ligne ni en cache - image du jour a la place"
+    else
+        STRIP_BAS="$(_dernier_cache 'strip_*.img' '' || true)"
+        [ -n "$STRIP_BAS" ] && CREDIT_BAS="$(cat "${STRIP_BAS%.img}.credit" 2>/dev/null || true)"
+    fi
 fi
 
-STRIP=""; CREDIT=""; SRC_RETENUE=""
-for _s in $ORDRE; do
-    _f="$CACHE/strip_${DAY}_${_s}.img"; _c="$CACHE/strip_${DAY}_${_s}.credit"
-    # Deja telechargee aujourd hui : on ne redemande pas au site.
-    if [ -s "$_f" ]; then
-        STRIP="$_f"; CREDIT="$(cat "$_c" 2>/dev/null || true)"; SRC_RETENUE="$_s"
-        echo "[wallpaper] image du $DAY : source ${_s} (deja en cache)"
-        break
-    fi
-    if declare -F "src_$_s" >/dev/null && "src_$_s" "$_f" "$_c"; then
-        STRIP="$_f"; CREDIT="$(cat "$_c" 2>/dev/null || true)"; SRC_RETENUE="$_s"
-        echo "[wallpaper] image du $DAY : source ${_s}"
-        break
-    fi
-done
-
-# Repli : la derniere image en cache, quelle que soit sa date ou sa source.
-# (calvin_*.gif : le nom d avant le tirage au sort, garde pour les caches deja
-# poses sur les machines en service.)
-if [ -z "$STRIP" ]; then
-    STRIP="$(ls -1t "$CACHE"/strip_*.img "$CACHE"/calvin_*.gif 2>/dev/null | head -1 || true)"
-    if [ -n "$STRIP" ]; then
-        CREDIT="$(cat "${STRIP%.img}.credit" 2>/dev/null || true)"
-        echo "[wallpaper] aucune source ne repond - derniere image en cache : ${STRIP##*/}"
+# ── LE HAUT : la BD geek, au hasard ─────────────────────────────────────────
+STRIP_HAUT=""; CREDIT_HAUT=""; SRC_HAUT=""
+if tirer "$SOURCES_HAUT" "$DERNIERE_HAUT"; then
+    STRIP_HAUT="$R_STRIP"; CREDIT_HAUT="$R_CREDIT"; SRC_HAUT="$R_SRC"
+else
+    STRIP_HAUT="$(_dernier_cache 'strip_*_xkcd*.img' "$STRIP_BAS" || _dernier_cache 'strip_*_turnoff.img' "$STRIP_BAS" \
+                  || _dernier_cache 'strip_*.img' "$STRIP_BAS" || true)"
+    if [ -n "$STRIP_HAUT" ]; then
+        CREDIT_HAUT="$(cat "${STRIP_HAUT%.img}.credit" 2>/dev/null || true)"
+        SRC_HAUT="$(basename "$STRIP_HAUT" .img | sed 's/^strip_[0-9-]*_//')"
+        echo "[wallpaper] haut : aucune source ne repond - derniere BD en cache : ${STRIP_HAUT##*/}"
     else
-        echo "[wallpaper] aucune source ne repond et le cache est vide - fond sans image."
+        echo "[wallpaper] haut : aucune source ne repond et le cache est vide - cadre sans image."
         echo "[wallpaper] Deposez n importe quelle image dans $CACHE/strip_${DAY}_local.img et relancez."
     fi
 fi
+STRIP="$STRIP_BAS"; SRC_RETENUE="$SRC_BAS"
 
 args=()
-if [ -n "$STRIP" ] && [ -s "$STRIP" ]; then
-    args=(--strip "$STRIP" --date "$DAY")
-    [ -n "$CREDIT" ] && args+=(--credit "$CREDIT")
+if [ -n "$STRIP_BAS" ] && [ -s "$STRIP_BAS" ]; then
+    args+=(--strip "$STRIP_BAS")
+    [ -n "$CREDIT_BAS" ] && args+=(--credit "$CREDIT_BAS")
 fi
+if [ -n "$STRIP_HAUT" ] && [ -s "$STRIP_HAUT" ]; then
+    args+=(--strip-haut "$STRIP_HAUT")
+    [ -n "$CREDIT_HAUT" ] && args+=(--credit-haut "$CREDIT_HAUT")
+fi
+args+=(--date "$DAY")
 # ── CE QUE L ENCART DOIT SAVOIR ─────────────────────────────────────────────
 # [2026-09-04] Sans image, le fond n a rien a montrer a cet endroit : le cadre
 # est vide. L encart (tools/osmo-fft-snap.py) compose le banc EN TRANSPARENCE
 # par-dessus ce cadre - il laissait donc transparaitre du vide, et le spectre
 # comme le mobile.log y perdaient en lisibilite pour rien. On lui dit ce qu il
 # y a derriere lui ; sans image, il passe en opacite pleine.
-printf 'STRIP=%s\nDATE=%s\nSOURCE=%s\n' \
-    "$([ -n "$STRIP" ] && [ -s "$STRIP" ] && echo oui || echo non)" "$DAY" "${SRC_RETENUE:-}" \
+# STRIP/SOURCE = le bas (le nom historique), STRIP_HAUT/SOURCE_HAUT = le haut.
+printf 'STRIP=%s\nDATE=%s\nSOURCE=%s\nSTRIP_HAUT=%s\nSOURCE_HAUT=%s\n' \
+    "$([ -n "$STRIP_BAS" ] && [ -s "$STRIP_BAS" ] && echo oui || echo non)" "$DAY" "${SRC_BAS:-}" \
+    "$([ -n "$STRIP_HAUT" ] && [ -s "$STRIP_HAUT" ] && echo oui || echo non)" "${SRC_HAUT:-}" \
     > "$CACHE/strip.state"
-# Le cache ne garde que les 14 dernieres images.
+# Le cache ne garde que les 14 dernieres images (deux par lancement).
 ls -1t "$CACHE"/strip_*.img 2>/dev/null | tail -n +15 | while read -r _old; do
     rm -f "$_old" "${_old%.img}.credit"
 done
@@ -207,7 +292,7 @@ ls -1t "$CACHE"/calvin_*.gif 2>/dev/null | tail -n +15 | xargs -r rm -f
 # Le nom porte donc la source retenue : elle change a chaque relance (voir le
 # tirage plus haut, qui evite celle du coup precedent), donc l URI change, donc
 # l ecran suit.
-DATED="$DATED_DIR/gsm-lab-${DAY}${SRC_RETENUE:+-$SRC_RETENUE}.png"
+DATED="$DATED_DIR/gsm-lab-${DAY}${SRC_BAS:+-$SRC_BAS}${SRC_HAUT:+-$SRC_HAUT}.png"
 python3 "$RENDER" --tower "$TOWER" "${args[@]}" --out "$DATED" || exit 1
 cp -f "$DATED" "$OUT.tmp" && mv -f "$OUT.tmp" "$OUT"
 chmod 644 "$OUT" "$DATED"
