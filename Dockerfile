@@ -947,14 +947,32 @@ RUN bash /opt/GSM/osmo-egprs-web/install-web-service.sh || true
 # le cache .deb les rend a `osmo-deb install` ci-dessous - rien n est alors
 # compile. Cache vide : on compile depuis les sources, par le MEME script que
 # le natif (tools/osmo-lte-install.sh --build, OSMO_DEB=1 -> osmo-deb pack).
-# libzmq vient d Ubuntu (libzmq3-dev, dans la liste apt plus haut) : le
+# libzmq vient d Ubuntu (libzmq3-dev, pose par `--deps` ci-dessous) : le
 # /opt/LTE/libzmq compile a la main n a de raison d etre que sur le natif.
 # Open5GS : prefixe /opt/LTE/open5gs/install (bin, etc/open5gs, var/log) - pas
 # /root. Les configs (configs/srsran, configs/open5gs) sont posees dans l ISO
 # par iso_modules/88-lte-pmos.sh, pas ici : l image docker n a pas de HOME de
 # session a servir.
+#
+# ⚠️ `--deps` D ABORD, TOUJOURS (pas seulement quand on compile).
+# [2026-09-09] Le commentaire ci-dessus affirmait que libzmq3-dev etait « dans
+# la liste apt plus haut » : il n y etait pas, ni lui ni libmbedtls-dev,
+# libboost-program-options-dev, libconfig++-dev, meson, flex, bison, libmongoc.
+# Le build tombait donc net des le cmake de srsRAN :
+#     Could NOT find MbedTLS (missing: MBEDTLS_LIBRARIES MBEDTLS_INCLUDE_DIRS)
+# La liste apt du haut de ce fichier est celle de la pile Osmocom (et elle est
+# RELUE par install_modules/10-deps.sh pour le natif) : la 4G a la sienne,
+# tenue dans tools/osmo-lte-install.sh (lte_deps), une seule fois pour les
+# trois chemins. On l appelle, on ne la recopie pas.
+# Inconditionnel parce que ces paquets sont aussi le RUNTIME : les .deb du
+# cache ne portent que les binaires (osmo-deb pack = un tar), pas leurs
+# dependances - srsenb sorti du cache reclame quand meme libmbedtls, libzmq5,
+# libconfig++ et boost_program_options. `--deps` tire aussi mongodb-org (base
+# d abonnes du HSS/PCRF) et n est fatal sur aucun paquet.
 COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
-RUN chmod 755 /usr/local/sbin/osmo-lte-install && \
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    chmod 755 /usr/local/sbin/osmo-lte-install && \
+    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
     { osmo-deb install libzmq 4.3.5+git || true; } && \
     if ! osmo-deb install srsran 25.10+zmq; then \
         OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build srsRAN"; exit 1; }; \

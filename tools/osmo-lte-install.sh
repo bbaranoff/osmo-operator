@@ -203,7 +203,7 @@ lte_launchers() {
 }
 
 osmo_lte_install() {
-    local deps=0 debs=0 configs=0 launchers=0 build=0 all=0 force=0 a
+    local deps=0 debs=0 configs=0 launchers=0 build=0 all=0 force=0 a rc=0
     for a in "$@"; do case "$a" in
         --deps) deps=1 ;; --debs) debs=1 ;; --configs) configs=1 ;; --launchers) launchers=1 ;;
         --build) build=1 ;; --all) all=1 ;; --force) force=1 ;;
@@ -214,11 +214,18 @@ osmo_lte_install() {
     [ "$deps" = 1 ] && lte_deps
     [ "$debs" = 1 ] && lte_debs
     if [ "$build" = 1 ] || { [ "$all" = 1 ] && { ! command -v srsenb >/dev/null 2>&1 || [ ! -x "$O5GS_PREFIX/bin/open5gs-mmed" ]; }; }; then
-        lte_build || true
+        # [2026-09-09] Le `|| true` d ici MENTAIT au Dockerfile : la compilation
+        # tombait (MbedTLS absent), osmo-lte-install sortait 0, le « ECHEC build
+        # srsRAN » n etait jamais imprime et l image n echouait que 200 lignes
+        # plus bas sur le `test -x`. On garde la suite (configs, lanceurs : le
+        # banc doit rester utilisable sans la 4G) mais le code de retour dit
+        # desormais la verite. Les appelants encadrent deja (`|| true`,
+        # `|| inst_hint`) : addition.sh, update.sh, install_modules/50-build.sh.
+        lte_build || rc=1
     fi
     [ "$configs" = 1 ] && lte_configs "$force"
     [ "$launchers" = 1 ] && lte_launchers
-    return 0
+    return $rc
 }
 
 # Source (addition.sh, update.sh) ou execute (ISO, ligne de commande).

@@ -20,6 +20,10 @@
 #     Ils sont produits soit par packaging/snapshot-lte-debs.sh (le natif,
 #     photographie), soit par le Dockerfile (compiles depuis les sources) -
 #     le noyau pmOS n a que le premier chemin (pmbootstrap, hors docker).
+#     CACHE VIDE : srsRAN et Open5GS sont COMPILES ICI, dans le chroot, par le
+#     meme tools/osmo-lte-install.sh --build (voir le bloc plus bas), et les
+#     .deb produits repartent dans le cache de l hote. OSMO_ISO_LTE_BUILD=0
+#     refuse ce rattrapage.
 #   - LES PAQUETS apt (runtime) sont dans PKGS de 80-chroot.sh, et le depot
 #     MongoDB y est ajoute avant l unique apt-get update.
 #   - LES CONFIGS ET LANCEURS sont ceux du depot : tools/osmo-lte-install.sh
@@ -87,9 +91,52 @@ done
 unset _c
 
 # Le depot MongoDB de 80-chroot.sh est deja la : --deps ne fait ici que les
-# paquets qui manqueraient encore (et enable mongod). Puis configs, lanceurs.
+# paquets qui manqueraient encore (et enable mongod). Puis les .deb du cache.
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_REPO=/opt/GSM/osmo-operator \
-    bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --deps --debs --configs --launchers 2>&1 | sed 's/^/  /'
+    bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --deps --debs 2>&1 | sed 's/^/  /'
+
+# ── PAS DE .deb : ON COMPILE DANS LE CHROOT ─────────────────────────────────
+# [2026-09-09] L ISO n avait qu UN chemin vers ses binaires 4G : les .deb du
+# build docker (ou du snapshot natif). Le jour ou le Dockerfile est tombe -
+# cmake de srsRAN, « Could NOT find MbedTLS », deps apt absentes de l image -
+# le cache est reste vide et l ISO est sortie SANS srsRAN ni Open5GS, avec
+# pour seule trace le « ! absent du rootfs » ci-dessus. Une ISO muette sur sa
+# 4G, c est un banc qu on decouvre casse a l usage.
+#
+# Le chroot a tout ce qu il faut pour compiler : les -dev sont dans PKGS de
+# 80-chroot.sh (libmbedtls-dev, libzmq3-dev, libconfig++-dev, boost, meson,
+# flex, bison, libmongoc-dev...), --deps vient de repasser, et /proc /sys /dev
+# et le resolv.conf de l hote y sont montes (git clone possible). On rejoue
+# donc le MEME script que le Dockerfile et que le natif : --build.
+#
+# OSMO_DEB=1 : la compilation sort en .deb, qu on RAMENE dans le cache de
+# l hote - la prochaine ISO (et le prochain docker) ne recompileront pas.
+# OSMO_ISO_LTE_BUILD=0 pour refuser ce rattrapage (build court, ISO sans 4G).
+if [ ! -x "$ROOTFS/usr/local/bin/srsenb" ] || [ ! -x "$ROOTFS/opt/LTE/open5gs/install/bin/open5gs-mmed" ]; then
+    if [ "${OSMO_ISO_LTE_BUILD:-1}" = "1" ]; then
+        echo -e "  ${YELLOW}!${NC} 4G absente du cache .deb : compilation dans le chroot (long)"
+        install -d "$ROOTFS/var/cache/osmo-debs"
+        [ -f "$DIR/packaging/osmo-deb.sh" ] && install -m755 "$DIR/packaging/osmo-deb.sh" "$ROOTFS/usr/local/sbin/osmo-deb"
+        chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator \
+            bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --build 2>&1 | sed 's/^/  /' \
+            || echo -e "  ${YELLOW}!${NC} compilation 4G echouee dans le chroot - ISO sans srsRAN/Open5GS"
+        # Les .deb fraichement produits repartent dans le cache de l hote.
+        _dc="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
+        install -d "$_dc"
+        for _d in "$ROOTFS"/var/cache/osmo-debs/osmo-build-*.deb; do
+            [ -f "$_d" ] || continue
+            [ -f "$_dc/$(basename "$_d")" ] || { cp -f "$_d" "$_dc/" && echo -e "  ${GREEN}✓${NC} $(basename "$_d") remis dans $_dc"; }
+        done
+        [ "${ISO_EMBED_DEBS:-0}" = "1" ] || rm -f "$ROOTFS"/var/cache/osmo-debs/osmo-build-*.deb
+        unset _d _dc
+    else
+        echo -e "  ${YELLOW}!${NC} 4G absente et OSMO_ISO_LTE_BUILD=0 : ISO sans srsRAN/Open5GS"
+    fi
+fi
+
+# Les configs Open5GS ne se posent que si le prefixe existe : APRES le build.
+chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
+    bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --configs --launchers 2>&1 | sed 's/^/  /'
 chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-pmos-install.sh 2>&1 | sed 's/^/  /'
 
