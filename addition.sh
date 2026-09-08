@@ -1055,6 +1055,30 @@ if [ "$DO_EXTRAS" = "1" ]; then
     fi
 fi
 
+# ── LA 4G (srsRAN ZeroMQ + Open5GS) ET L UI SMARTPHONE (postmarketOS) ────────
+# [2026-09-08] Miroir aux trois chemins (addition.sh, update.sh, le build ISO :
+# iso_modules/88-lte-pmos.sh). Tout est ecrit une fois dans
+# tools/osmo-lte-install.sh (paquets, .deb du cache, configs du depot,
+# lanceurs osmo-lte / osmo-epc ; --all compile dans /opt/LTE si les binaires
+# manquent et qu aucun .deb n est la) et tools/osmo-pmos-install.sh
+# (/opt/user_interface/pmos : scripts, pmbootstrap patche, gabarit ; kernel/ :
+# le .deb du noyau PPP, de /var/cache/osmo-debs ou de GitHub). Non fatal.
+echo -e "${BOLD}== La 4G et le telephone ==${NC}"
+if [ -f "$DIR/tools/osmo-lte-install.sh" ]; then
+    # shellcheck source=tools/osmo-lte-install.sh
+    . "$DIR/tools/osmo-lte-install.sh"
+    osmo_lte_install --all || true
+else
+    echo -e "  ${YELLOW}!${NC} tools/osmo-lte-install.sh introuvable"
+fi
+if [ -f "$DIR/tools/osmo-pmos-install.sh" ]; then
+    # shellcheck source=tools/osmo-pmos-install.sh
+    . "$DIR/tools/osmo-pmos-install.sh"
+    osmo_pmos_install || true
+else
+    echo -e "  ${YELLOW}!${NC} tools/osmo-pmos-install.sh introuvable"
+fi
+
 echo
 etat
 echo

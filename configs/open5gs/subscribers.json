@@ -1,0 +1,79 @@
+[
+ {
+  "ambr": {
+   "downlink": {
+    "value": 1,
+    "unit": 3
+   },
+   "uplink": {
+    "value": 1,
+    "unit": 3
+   }
+  },
+  "schema_version": 1,
+  "msisdn": [],
+  "imeisv": "3589250042736753",
+  "mme_host": "mme.localdomain",
+  "mme_realm": "localdomain",
+  "purge_flag": false,
+  "access_restriction_data": 32,
+  "subscriber_status": 0,
+  "operator_determined_barring": 0,
+  "network_access_mode": 0,
+  "subscribed_rau_tau_timer": 12,
+  "imsi": "001010001000001",
+  "security": {
+   "k": "00112233445566778899aabbccdd0101",
+   "amf": "8000",
+   "op": null,
+   "opc": "63BFA50EE6523365FF14C1F45F88737D",
+   "sqn": {
+    "high": 0,
+    "low": 1152,
+    "unsigned": false
+   }
+  },
+  "slice": [
+   {
+    "_id": "6a9f17d9436b8b2e35f39745",
+    "sst": 1,
+    "default_indicator": true,
+    "session": [
+     {
+      "qos": {
+       "arp": {
+        "priority_level": 8,
+        "pre_emption_capability": 1,
+        "pre_emption_vulnerability": 1
+       },
+       "index": 9
+      },
+      "ambr": {
+       "downlink": {
+        "value": 1,
+        "unit": 3
+       },
+       "uplink": {
+        "value": 1,
+        "unit": 3
+       }
+      },
+      "_id": "6a9f17d9436b8b2e35f39746",
+      "name": "srsapn",
+      "type": 1,
+      "pcc_rule": [],
+      "ue": {
+       "ipv4": "10.45.0.2"
+      }
+     }
+    ]
+   }
+  ],
+  "__v": 0,
+  "mme_timestamp": {
+   "high": 416507,
+   "low": -2117099773,
+   "unsigned": false
+  }
+ }
+]

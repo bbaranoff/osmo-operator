@@ -44,6 +44,15 @@ inst_build_run() {
             inst_hint "toast non compile (reseau ou quut.com injoignable) - suite sans lui"
         fi
     fi
+    # ── La 4G : srsRAN (ZeroMQ) et Open5GS dans /opt/LTE ──────────────────
+    # [2026-09-08] Le meme script que le Dockerfile et addition.sh
+    # (tools/osmo-lte-install.sh) : .deb du cache s ils sont la, compilation
+    # sinon. Non fatal : la 2G n en depend pas.
+    inst_say "=== la 4G (srsRAN ZeroMQ + Open5GS) ==="
+    if [ -f "$INST_TREE/tools/osmo-lte-install.sh" ]; then
+        OSMO_REPO="$INST_TREE" bash "$INST_TREE/tools/osmo-lte-install.sh" --all \
+            || inst_hint "4G non installee (voir ci-dessus) - « osmo-lte-install --build » plus tard"
+    fi
     inst_ok
 }
 inst_build_verify() {

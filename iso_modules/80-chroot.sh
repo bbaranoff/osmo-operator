@@ -166,6 +166,24 @@ if ! command -v node >/dev/null 2>&1; then
     fi
 fi
 
+# ── MongoDB (Open5GS : HSS et PCRF y lisent les abonnes) : AVANT l apt update ─
+# [2026-09-08] mongodb-org n est pas dans Ubuntu : depot repo.mongodb.org
+# (noble/8.0), cle dearmee dans /usr/share/keyrings - le meme fichier que
+# tools/osmo-lte-install.sh pose sur une machine installee. Sans cle (pas de
+# reseau vers mongodb.org), pas de depot : osmo-epc le dira au premier start.
+MONGO_VIA_APT=0
+if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
+    if curl -fsSL --retry 3 https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | gpg --dearmor --yes -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null; then
+        echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
+            > /etc/apt/sources.list.d/mongodb-org-8.0.list
+        MONGO_VIA_APT=1
+    else
+        echo "  WARN: cle MongoDB non telechargee - Open5GS sans base d abonnes (osmo-lte-install --deps plus tard)"
+        rm -f /usr/share/keyrings/mongodb-server-8.0.gpg
+    fi
+fi
+
 # ── UN SEUL apt update, puis apt-fast pour tout le reste ───────────────────
 # [2026-09-02] Il y en avait trois dans ce chroot : celui-ci, un pour les
 # deb-src du build-dep, un dans le script NodeSource. Tout ce qui ajoute une
@@ -287,6 +305,21 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       binutils-arm-none-eabi gdb-multiarch
       asterisk
       ffmpeg"
+    # ── La 4G : srsRAN (ZeroMQ) et Open5GS, ce que ldd reclame ────────────
+    # [2026-09-08] Les binaires arrivent par les .deb du build (osmo-build-
+    # srsran, osmo-build-open5gs, osmo-build-libzmq : 50-injection-image.sh),
+    # leurs bibliotheques systeme par cette liste - elle fait autorite, comme
+    # celle du Dockerfile. Les -dev restent : /opt/LTE est un atelier (cmake,
+    # meson) et tools/osmo-lte-install.sh --build doit pouvoir y recompiler.
+    # mongodb-org : le depot MongoDB pose plus haut ; mongosh et les outils
+    # (mongodump/mongorestore) pour la base des abonnes du depot.
+    PKGS="$PKGS
+      libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev libfftw3-dev cmake
+      meson ninja-build flex bison libgnutls28-dev libgcrypt20-dev libssl-dev libidn-dev
+      libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev
+      libtins-dev libtalloc-dev libc-ares-dev
+      zstd rsync"
+    [ "$MONGO_VIA_APT" = "1" ] && PKGS="$PKGS mongodb-org mongodb-mongosh mongodb-database-tools"
 
     # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
     # L image normale embarque /opt/GSM/qosmo-grgsm avec son .git ET son build/ :

@@ -290,6 +290,28 @@ PMD
 }
 osmo_poser_pmos
 
+# ── LA 4G ET L UI SMARTPHONE : le rattrapage ─────────────────────────────────
+# [2026-09-08] Meme source que addition.sh et l ISO (tools/osmo-lte-install.sh,
+# tools/osmo-pmos-install.sh). Ici on ne compile rien : les configs du depot
+# (sans ecraser celles qui existent), les lanceurs osmo-lte / osmo-epc /
+# open5gs-epc.sh, le layout /opt/user_interface/pmos et son noyau PPP (du
+# cache .deb ou de GitHub). Les binaires, s ils manquent, viennent des .deb
+# du cache ; sinon « osmo-lte-install --build ».
+osmo_poser_lte() {
+    local d=/opt/GSM/osmo-operator
+    if [ -f "$d/tools/osmo-lte-install.sh" ]; then
+        # shellcheck source=tools/osmo-lte-install.sh
+        DIR="$d" . "$d/tools/osmo-lte-install.sh"
+        osmo_lte_install --debs --configs --launchers 2>&1 | sed 's/^/  [4G]/'
+    fi
+    if [ -f "$d/tools/osmo-pmos-install.sh" ]; then
+        # shellcheck source=tools/osmo-pmos-install.sh
+        DIR="$d" . "$d/tools/osmo-pmos-install.sh"
+        osmo_pmos_install 2>&1 | sed 's/^/  [telephone]/'
+    fi
+}
+osmo_poser_lte
+
 # ── WIRESHARK : UNE ICONE QUI ECOUTE DEJA LE BANC ───────────────────────────
 # [2026-09-08] tools/osmo-wireshark-root.sh : root par pkexec (invite de mot de
 # passe graphique), capture immediate LTE + SCTP + GSM, filtre d affichage 2G +

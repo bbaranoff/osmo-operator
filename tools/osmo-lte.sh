@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# osmo-lte.sh - LA 4G DU BANC : srsEPC, srsENB et srsUE sur la radio ZeroMQ,
-# lances DANS L ORDRE ET DANS LES TEMPS.
+# osmo-lte.sh - LA 4G DU BANC : Open5GS (le coeur), srsENB et srsUE sur la
+# radio ZeroMQ, lances DANS L ORDRE ET DANS LES TEMPS.
 #
 # [2026-09-07] POURQUOI UN LANCEUR, alors que trois lignes de commande
 # suffisent. Parce que les trois lignes ont deux pieges, et qu on est tombe
@@ -10,11 +10,11 @@
 #   1. « fail_on_disconnect=true » sur l eNB. C est l argument de la doc, et il
 #      fait ce qu il dit : quand l eNB ne recoit AUCUN echantillon de l UE
 #      pendant 2000 ms (ZMQ_TIMEOUT_MS, rf_zmq_imp_trx.h), sa radio S ARRETE.
-#      Le processus reste, le S1 vers l EPC reste, mais plus rien ne sort sur
-#      ZeroMQ - on l a mesure : une centaine d octets par sens, la poignee de
-#      main ZMTP et rien d autre. Un srsUE lance UNE MINUTE apres l eNB trouve
-#      donc une radio morte : « Attaching UE... » et jamais « Found Cell ».
-#      Ici l UE part une demi-seconde apres l eNB.
+#      Le processus reste, le S1 vers le coeur reste, mais plus rien ne sort
+#      sur ZeroMQ - on l a mesure : une centaine d octets par sens, la poignee
+#      de main ZMTP et rien d autre. Un srsUE lance UNE MINUTE apres l eNB
+#      trouve donc une radio morte : « Attaching UE... » et jamais « Found
+#      Cell ». Ici l UE part une demi-seconde apres l eNB.
 #
 #   2. Le SIB3. sib.conf programme les SIB emis par « si_mapping_info » ; en
 #      y mettant [ 7 ] (le SIB7, la liste GERAN du CSFB) A LA PLACE de [ 3 ],
@@ -23,25 +23,39 @@
 #      « Failed to configure serving cell », T3410 expire, cinq essais, rien.
 #      Il faut [ 3, 7 ] - on le verifie avant de lancer.
 #
-# La 2G du banc n est pas touchee : ce lanceur ne connait que les trois srs*.
-# Les fichiers de configuration sont ceux de srsRAN (~/.config/srsran de root,
-# ou OSMO_SRSRAN_DIR) ; on ne les recopie pas, on les lit.
+# [2026-09-08] LE COEUR EST OPEN5GS, plus srsepc (tools/osmo-epc.sh : mongod,
+# ogstun, les huit demons, le SGs vers OsmoMSC pour le CSFB). Le MME ecoute
+# le S1 sur 127.0.0.2 - c est ce que dit enb.conf (mme_addr). Et le netns
+# « ue1 » de l UE vit dans /run : il disparait au reboot, on le recree ici.
 #
-#   osmo-lte start      EPC, puis eNB, puis UE (refuse si l un tourne deja)
-#   osmo-lte stop       arrete les trois (y compris ceux lances a la main)
+# LES CONFIGS SONT CELLES DU DEPOT (configs/srsran/*.conf, user_db.csv),
+# posees dans ~/.config/srsran de root par tools/osmo-lte-install.sh. Elles
+# portent la radio ZeroMQ (device_name / device_args : ports 2000/2001,
+# base_srate 11.52e6) : on ne les redit PAS sur la ligne de commande, sauf
+# OSMO_LTE_SRATE pour forcer une autre cadence. Les srs* sont lances DEPUIS
+# ce repertoire : sib.conf / rr.conf / rb.conf y sont resolus, et le .ctxt
+# (le contexte NAS que srsue sauve dans son cwd) y vit aussi.
+#
+#   osmo-lte start      coeur (osmo-epc), puis eNB, puis UE (refuse si l un tourne deja)
+#   osmo-lte stop       arrete eNB et UE (le coeur reste : « osmo-epc stop »)
 #   osmo-lte restart    stop puis start
 #   osmo-lte status     processus, S1, debit ZeroMQ, adresse de l UE
-#   osmo-lte log        les trois journaux, en direct
+#   osmo-lte log        les journaux, en direct
+#   osmo-lte install    pose les configs et les lanceurs (tools/osmo-lte-install.sh)
 # =============================================================================
 set -u
 
+REPO="${OSMO_REPO:-/opt/GSM/osmo-operator}"
 SRS_DIR="${OSMO_SRSRAN_DIR:-/root/.config/srsran}"
 NETNS="${OSMO_LTE_NETNS:-ue1}"
 ZMQ_ENB="${OSMO_ZMQ_PORT:-2000}"
 ZMQ_UE="${OSMO_ZMQ_PORT_UE:-2001}"
-SRATE="${OSMO_LTE_SRATE:-23.04e6}"
+SRATE="${OSMO_LTE_SRATE:-}"           # vide = ce que disent enb.conf / ue.conf
 LOGDIR="${OSMO_LTE_LOGDIR:-/tmp}"
 BUILD="${OSMO_SRSRAN_BUILD:-/opt/LTE/srsRAN_4G/build}"
+EPC="${OSMO_EPC:-/usr/local/bin/osmo-epc}"
+[ -x "$EPC" ] || EPC="$REPO/tools/osmo-epc.sh"
+MME_S1="${OSMO_LTE_MME:-127.0.0.2}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 _say()  { echo -e "  ${CYAN}→${NC} $*"; }
@@ -55,7 +69,7 @@ _root() { [ "$(id -u)" -eq 0 ] && return 0; _err "il faut root (netns, tun, SCTP
 _bin() {
     local n="$1"
     command -v "$n" 2>/dev/null && return 0
-    for f in "$BUILD/srs$n/src/$n" "$BUILD/$n/src/$n"; do [ -x "$f" ] && { echo "$f"; return 0; }; done
+    for f in "$BUILD/srs${n#srs}/src/$n" "$BUILD/$n/src/$n"; do [ -x "$f" ] && { echo "$f"; return 0; }; done
     return 1
 }
 
@@ -72,36 +86,51 @@ _verifier_sib() {
     _ok "sib.conf : $map"
 }
 
+# Les configs : celles de ~/.config/srsran, sinon celles du depot, posees.
+_configs() {
+    [ -f "$SRS_DIR/enb.conf" ] && [ -f "$SRS_DIR/ue.conf" ] && return 0
+    [ -d "$REPO/configs/srsran" ] || { _err "pas de configs srsRAN ($SRS_DIR, ni $REPO/configs/srsran)"; return 1; }
+    mkdir -p "$SRS_DIR"
+    cp -n "$REPO/configs/srsran/"* "$SRS_DIR/"
+    _ok "configs srsRAN posees depuis le depot dans $SRS_DIR"
+}
+
 lte_tourne() { pgrep -x "$1" >/dev/null 2>&1; }
 
 lte_start() {
     _root start || return 1
-    local epc enb ue
-    epc="$(_bin srsepc)" || { _err "srsepc introuvable"; return 1; }
-    enb="$(_bin srsenb)" || { _err "srsenb introuvable"; return 1; }
+    local enb ue
+    enb="$(_bin srsenb)" || { _err "srsenb introuvable (dpkg -i osmo-build-srsran, ou osmo-lte-install --build)"; return 1; }
     ue="$(_bin srsue)"   || { _err "srsue introuvable"; return 1; }
-    for p in srsepc srsenb srsue; do
+    for p in srsenb srsue; do
         lte_tourne "$p" && { _err "$p tourne deja (pid $(pgrep -x "$p" | head -1)) - « $0 restart » pour repartir propre"; return 1; }
     done
+    _configs || return 1
     _verifier_sib || return 1
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && _ok "espace reseau $NETNS cree"; }
+
+    # Le coeur : Open5GS, par osmo-epc (idempotent : ce qui tourne deja reste).
+    "$EPC" start | sed 's/^/  /'
+    for _ in $(seq 1 20); do ss -Sln 2>/dev/null | grep -q "$MME_S1:36412 " && break; sleep 0.25; done
+    ss -Sln 2>/dev/null | grep -q "$MME_S1:36412 " && _ok "MME : S1 en ecoute sur $MME_S1" \
+        || _warn "MME : le S1 n ecoute pas sur $MME_S1 (voir « osmo-epc status », osmo-epc log mme)"
+
     export HOME=/root                      # srs* lisent ~/.config/srsran : celui de root
-    cd "$BUILD" 2>/dev/null || cd /        # .ctxt (le contexte NAS sauve) vit dans le cwd
-    rm -f .ctxt                            # un vieux contexte fait echouer l attach apres un redemarrage d EPC
+    cd "$SRS_DIR" || return 1              # sib.conf & co. relatifs, et le .ctxt de srsue
+    rm -f .ctxt                            # un vieux contexte fait echouer l attach apres un redemarrage du coeur
 
-    setsid "$epc" --log.filename="$LOGDIR/osmo-lte-epc.log" >"$LOGDIR/osmo-lte-epc.console" 2>&1 </dev/null &
-    for _ in $(seq 1 20); do ss -Sln 2>/dev/null | grep -q ":36412 " && break; sleep 0.25; done
-    ss -Sln 2>/dev/null | grep -q ":36412 " && _ok "srsEPC : S1 en ecoute" || _warn "srsEPC : le S1 n ecoute pas encore"
-
+    local -a enb_rf=() ue_rf=()
+    if [ -n "$SRATE" ]; then
+        enb_rf=(--rf.device_name=zmq --rf.device_args="fail_on_disconnect=true,tx_port=tcp://*:$ZMQ_ENB,rx_port=tcp://localhost:$ZMQ_UE,id=enb,base_srate=$SRATE")
+        ue_rf=(--rf.device_name=zmq --rf.device_args="tx_port=tcp://*:$ZMQ_UE,rx_port=tcp://localhost:$ZMQ_ENB,id=ue,base_srate=$SRATE")
+    fi
     # L eNB, et l UE tout de suite derriere : voir le piege n° 1.
-    setsid "$enb" --rf.device_name=zmq \
-        --rf.device_args="fail_on_disconnect=true,tx_port=tcp://*:$ZMQ_ENB,rx_port=tcp://localhost:$ZMQ_UE,id=enb,base_srate=$SRATE" \
+    setsid "$enb" "$SRS_DIR/enb.conf" "${enb_rf[@]}" \
         --log.filename="$LOGDIR/osmo-lte-enb.log" >"$LOGDIR/osmo-lte-enb.console" 2>&1 </dev/null &
     sleep 0.5
-    setsid "$ue" --rf.device_name=zmq \
-        --rf.device_args="tx_port=tcp://*:$ZMQ_UE,rx_port=tcp://localhost:$ZMQ_ENB,id=ue,base_srate=$SRATE" \
+    setsid "$ue" "$SRS_DIR/ue.conf" "${ue_rf[@]}" \
         --gw.netns="$NETNS" --log.filename="$LOGDIR/osmo-lte-ue.log" >"$LOGDIR/osmo-lte-ue.console" 2>&1 </dev/null &
-    _ok "srsENB puis srsUE lances (ZeroMQ $ZMQ_ENB/$ZMQ_UE, UE dans $NETNS)"
+    _ok "srsENB puis srsUE lances (ZeroMQ $ZMQ_ENB/$ZMQ_UE, UE dans $NETNS${SRATE:+, base_srate $SRATE})"
 
     _say "attente de l attach (30 s max)..."
     local i ip
@@ -114,7 +143,7 @@ lte_start() {
         _ok "UE attache : $ip (tun_srsue dans $NETNS) en $((i / 2)) s"
     else
         _err "pas d attach en 30 s - voir $LOGDIR/osmo-lte-ue.console et « $0 status »"
-        grep -E "Found|Attach|fail" "$LOGDIR/osmo-lte-ue.console" | tail -4 | sed 's/^/      /'
+        grep -E "Found|Attach|fail|Reject" "$LOGDIR/osmo-lte-ue.console" | tail -4 | sed 's/^/      /'
         return 1
     fi
 }
@@ -122,23 +151,23 @@ lte_start() {
 lte_stop() {
     _root stop || return 1
     local p n=0
-    for p in srsue srsenb srsepc; do
+    for p in srsue srsenb; do
         if lte_tourne "$p"; then pkill -x "$p"; n=$((n + 1)); fi
     done
     sleep 2
-    for p in srsue srsenb srsepc; do lte_tourne "$p" && pkill -9 -x "$p"; done
+    for p in srsue srsenb; do lte_tourne "$p" && pkill -9 -x "$p"; done
     [ "$n" -gt 0 ] && _ok "$n processus srs* arrete(s)" || _say "rien ne tournait"
-    # Le S1 met un instant a se refermer cote SCTP ; l EPC suivant en a besoin.
+    # Le S1 met un instant a se refermer cote SCTP ; l eNB suivant en a besoin.
     sleep 1
 }
 
 lte_status() {
-    echo -e "\033[1msrsRAN sur ZeroMQ - la 4G du banc\033[0m"
+    echo -e "\033[1msrsRAN sur ZeroMQ + Open5GS - la 4G du banc\033[0m"
     local p
-    for p in srsepc srsenb srsue; do
+    for p in open5gs-mmed srsenb srsue; do
         lte_tourne "$p" && _ok "$p : pid $(pgrep -x "$p" | head -1)" || _warn "$p : arrete"
     done
-    ss -San 2>/dev/null | grep -q "ESTAB.*:36412" && _ok "S1 : eNB associe a l EPC" || _warn "S1 : pas d association eNB-EPC"
+    ss -San 2>/dev/null | grep -q "ESTAB.*:36412" && _ok "S1 : eNB associe au MME" || _warn "S1 : pas d association eNB-MME"
     # Les echantillons eNB -> UE partent de la douille locale :$ZMQ_ENB de
     # l eNB (bytes_sent) ; ce qu elle RECOIT n est que les requetes de l UE.
     local a b
@@ -162,6 +191,7 @@ case "${1:-status}" in
     stop)    lte_stop ;;
     restart) lte_stop; lte_start ;;
     status)  lte_status ;;
-    log)     exec tail -F "$LOGDIR"/osmo-lte-{epc,enb,ue}.console ;;
-    *)       sed -n '/^#   osmo-lte start/,/^#   osmo-lte log/p' "$0" | sed 's/^# \{0,2\}//'; exit 2 ;;
+    log)     exec tail -F "$LOGDIR"/osmo-lte-{enb,ue}.console ;;
+    install) shift; exec bash "$REPO/tools/osmo-lte-install.sh" "$@" ;;
+    *)       sed -n '/^#   osmo-lte start/,/^#   osmo-lte install/p' "$0" | sed 's/^# \{0,2\}//'; exit 2 ;;
 esac

@@ -940,6 +940,50 @@ RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund ||
 # demarrage ne fait plus que lancer osmo-egprs-web.service.
 RUN bash /opt/GSM/osmo-egprs-web/install-web-service.sh || true
 
+# ── LA 4G DU BANC : srsRAN_4G (ZeroMQ) et Open5GS, dans /opt/LTE ─────────────
+# [2026-09-08] DEUX CHEMINS VERS LES MEMES PAQUETS (voir packaging/
+# snapshot-lte-debs.sh) : le raccourci photographie le natif de la machine de
+# reference en osmo-build-libzmq / osmo-build-srsran / osmo-build-open5gs, et
+# le cache .deb les rend a `osmo-deb install` ci-dessous - rien n est alors
+# compile. Cache vide : on compile depuis les sources, par le MEME script que
+# le natif (tools/osmo-lte-install.sh --build, OSMO_DEB=1 -> osmo-deb pack).
+# libzmq vient d Ubuntu (libzmq3-dev, dans la liste apt plus haut) : le
+# /opt/LTE/libzmq compile a la main n a de raison d etre que sur le natif.
+# Open5GS : prefixe /opt/LTE/open5gs/install (bin, etc/open5gs, var/log) - pas
+# /root. Les configs (configs/srsran, configs/open5gs) sont posees dans l ISO
+# par iso_modules/88-lte-pmos.sh, pas ici : l image docker n a pas de HOME de
+# session a servir.
+COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
+RUN chmod 755 /usr/local/sbin/osmo-lte-install && \
+    { osmo-deb install libzmq 4.3.5+git || true; } && \
+    if ! osmo-deb install srsran 25.10+zmq; then \
+        OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build srsRAN"; exit 1; }; \
+    fi && \
+    if ! osmo-deb install open5gs 2.8.0+git; then \
+        OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build Open5GS"; exit 1; }; \
+    fi && \
+    ldconfig && test -x /usr/local/bin/srsenb && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed
+
+# ── L UI SMARTPHONE : pmbootstrap PATCHE, dans /opt/user_interface/pmos ───────
+# Le telephone du banc est une VM postmarketOS lancee par pmbootstrap (patche
+# pour le modem serie PCI, le son du banc, la taille d ecran, et le port 5038
+# qui n est pas un adb : patches/pmbootstrap-osmo-bench-qemu.patch). Le clone
+# et le patch sont faits ici, une fois, et sortent en osmo-build-pmbootstrap :
+# l ISO (50-injection-image.sh) le pose tel quel, tools/osmo-pmos-install.sh
+# le trouve en place et n a plus rien a cloner. Le NOYAU PPP, lui, ne se
+# construit pas ici (pmbootstrap, non root, montages de boucle) : il arrive
+# par osmo-build-pmos-kernel (packaging/build-pmos-kernel-deb.sh, ou GitHub
+# bbaranoff/pmos_ppp_kernel), pose par 88-lte-pmos.sh.
+COPY patches/pmbootstrap-osmo-bench-qemu.patch /tmp/pmbootstrap-osmo-bench-qemu.patch
+RUN if ! osmo-deb install pmbootstrap 0.git; then \
+        mkdir -p /opt/user_interface/pmos && \
+        git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /opt/user_interface/pmos/pmbootstrap && \
+        cd /opt/user_interface/pmos/pmbootstrap && \
+        git apply /tmp/pmbootstrap-osmo-bench-qemu.patch && \
+        grep -q osmo_bench_args pmb/commands/qemu.py && \
+        osmo-deb snapshot pmbootstrap 0.git /opt/user_interface/pmos/pmbootstrap; \
+    fi && test -f /opt/user_interface/pmos/pmbootstrap/pmbootstrap.py
+
 # --- Metadonnees de l'image ---------------------------------------------------
 # Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape
 # de construction. SIGRTMIN+3 est le signal d'arret propre de systemd.

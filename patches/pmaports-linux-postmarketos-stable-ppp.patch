@@ -1,0 +1,30 @@
+diff --git a/device/main/linux-postmarketos-stable/APKBUILD b/device/main/linux-postmarketos-stable/APKBUILD
+index 4ae7783d82..4146fa5a7b 100644
+--- a/device/main/linux-postmarketos-stable/APKBUILD
++++ b/device/main/linux-postmarketos-stable/APKBUILD
+@@ -133,5 +133,5 @@ a4fa95d30c48aeca7e082e1a65a7cb296f1d4561d5ef41d6ff22008d30cb7db0f513be3bc9fa8229
+ e44dd245093beb04c3242273440b20bd5d1a43ee6b1cb74231f7cbd6daa942c573e130816dd5cf645c0ecc6186ee9d13048ebe7c1e43d15e0f21ea3f95239bfc  config-stable.ppc64le
+ 25dc70e3cddf21d95e3267a8fb59804d77eb90f3eac55b81a5a267e9300edf12ca6603a5ac57a7f1b35780275dac23851e003a0ebfda7c2ce5de448819c2ba3f  config-stable.riscv64
+ 85b208a8c6d40080f050bb5fdfc63c20b0aa3beabad3166f82aed57441afee58996aa36793cb662bf669eac71efd6f2e91f29433faf3dfa642dab4c50e6a40a9  config-stable.x86
+-e50bea8bcefd1d25d64f662376799c50f6553a7c4881b041751c48d71756494a4506713aca92d1dd08645a69c296a1889784355424be2486be1089181b90aed0  config-stable.x86_64
++1335c280137718cd2b38f6e588efbf7f2af55c1b7efc82ec603372fa950863e0a78dce855ba3d210a2594ee80db9cba0076e964d94239386f04417a9aea7e5cd  config-stable.x86_64
+ "
+diff --git a/device/main/linux-postmarketos-stable/config-stable.x86_64 b/device/main/linux-postmarketos-stable/config-stable.x86_64
+index 653356b9de..ca0c576c81 100644
+--- a/device/main/linux-postmarketos-stable/config-stable.x86_64
++++ b/device/main/linux-postmarketos-stable/config-stable.x86_64
+@@ -2841,7 +2841,13 @@ CONFIG_ACPI_MDIO=y
+ # CONFIG_PCS_XPCS is not set
+ # end of PCS device drivers
+ 
+-# CONFIG_PPP is not set
++CONFIG_PPP=m
++CONFIG_PPP_BSDCOMP=m
++CONFIG_PPP_DEFLATE=m
++CONFIG_PPP_FILTER=y
++CONFIG_PPP_MULTILINK=y
++CONFIG_PPP_ASYNC=m
++CONFIG_PPP_SYNC_TTY=m
+ # CONFIG_SLIP is not set
+ CONFIG_USB_NET_DRIVERS=y
+ # CONFIG_USB_CATC is not set

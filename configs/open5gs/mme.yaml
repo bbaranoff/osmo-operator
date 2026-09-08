@@ -1,11 +1,11 @@
-# mme.yaml - le MME open5gs du banc (Open5GS v2.8.0, /root/open5gs/install).
+# mme.yaml - le MME open5gs du banc (Open5GS v2.8.0, /opt/LTE/open5gs/install).
 #
 # [2026-09-08] REECRIT A PLAT. Le fichier livre par open5gs fait 360 lignes
 # dont 300 d exemples commentes (roaming, DNS, SGSN, IPv6...) qui n ont rien
 # a voir avec ce banc : on ne gardait plus que les 60 lignes utiles, noyees.
 # Ici, seulement ce qui tourne, et pourquoi. La source est dans le depot,
 # configs/open5gs/mme.yaml ; la copie en service est
-# /root/open5gs/install/etc/open5gs/mme.yaml (cp, puis relancer open5gs-mmed).
+# /opt/LTE/open5gs/install/etc/open5gs/mme.yaml (cp, puis relancer open5gs-mmed).
 #
 # LE PLAN D ADRESSES : tout le coeur 4G vit sur la boucle locale, une adresse
 # par fonction, pour que les ports 2123/2152/8805 ne se marchent pas dessus :
@@ -24,14 +24,14 @@
 
 logger:
   file:
-    path: /root/open5gs/install/var/log/open5gs/mme.log
+    path: /opt/LTE/open5gs/install/var/log/open5gs/mme.log
 
 global:
   max:
     ue: 1024          # largement assez : un srsUE et le telephone du banc
 
 mme:
-  freeDiameter: /root/open5gs/install/etc/freeDiameter/mme.conf   # S6a vers le HSS (127.0.0.8)
+  freeDiameter: /opt/LTE/open5gs/install/etc/freeDiameter/mme.conf   # S6a vers le HSS (127.0.0.8)
 
   # S1AP : ce qu ecoute le MME pour les eNB. srsENB s y connecte en SCTP.
   s1ap:
