@@ -435,7 +435,7 @@ CONKY
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
               "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
-    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint; do
+    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte; do
         [ -f "$DIR/data/$_ic.svg" ] || continue
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"

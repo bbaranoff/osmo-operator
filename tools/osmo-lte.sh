@@ -41,6 +41,10 @@
 #   osmo-lte restart    stop puis start
 #   osmo-lte status     processus, S1, debit ZeroMQ, adresse de l UE
 #   osmo-lte log        les journaux, en direct
+#   osmo-lte toggle     L ICONE : le service osmo-lte (systemd) - le demarre s il
+#                       est arrete, l arrete s il tourne (pkexec hors root)
+#   osmo-lte up|down    le service, explicitement (Actions du clic droit)
+#   osmo-lte journal    journalctl -u osmo-lte -f
 #   osmo-lte install    pose les configs et les lanceurs (tools/osmo-lte-install.sh)
 # =============================================================================
 set -u
@@ -64,6 +68,31 @@ _warn() { echo -e "  ${YELLOW}!${NC} $*"; }
 _err()  { echo -e "  ${RED}✗${NC} $*" >&2; }
 
 _root() { [ "$(id -u)" -eq 0 ] && return 0; _err "il faut root (netns, tun, SCTP) : sudo $0 $*"; return 1; }
+
+# [2026-09-08] LE GESTE DE L ICONE. La 4G vit dans services/osmo-lte.service
+# (Open5GS + eNB + UE) ; l icone du bureau (data/desktop/osmo-lte.desktop)
+# appelle « osmo-lte toggle » : un clic demarre, le suivant arrete. Depuis
+# une session sans root, pkexec ouvre la fenetre de mot de passe (repli
+# sudo) ; le resultat part en notification, il n y a pas de terminal.
+SVC="${OSMO_LTE_SERVICE:-osmo-lte.service}"
+ICONE=/usr/share/osmo-operator/icons/osmo-lte.svg
+_notif() { command -v notify-send >/dev/null 2>&1 && notify-send -i "$ICONE" "4G du banc" "$1" 2>/dev/null || true; _say "$1"; }
+_svc() {
+    local act="$1" rc
+    if [ "$act" = toggle ]; then
+        case "$(systemctl is-active "$SVC" 2>/dev/null)" in active|activating) act=stop ;; *) act=start ;; esac
+    fi
+    [ "$act" = start ] && _notif "demarrage de la 4G (Open5GS, eNB, UE)... une trentaine de secondes"
+    if [ "$(id -u)" -eq 0 ]; then systemctl "$act" "$SVC"; rc=$?
+    elif command -v pkexec >/dev/null 2>&1; then pkexec systemctl "$act" "$SVC"; rc=$?
+    else sudo systemctl "$act" "$SVC"; rc=$?; fi
+    if [ "$rc" -eq 0 ]; then
+        [ "$act" = start ] && _notif "4G en marche : UE attache dans $NETNS (osmo-lte status)" || _notif "4G arretee (eNB, UE et coeur)"
+    else
+        _notif "echec ($act, code $rc) - journalctl -u $SVC"
+    fi
+    return "$rc"
+}
 
 # Le binaire installe d abord, la compilation locale sinon.
 _bin() {
@@ -192,6 +221,10 @@ case "${1:-status}" in
     restart) lte_stop; lte_start ;;
     status)  lte_status ;;
     log)     exec tail -F "$LOGDIR"/osmo-lte-{enb,ue}.console ;;
+    toggle|bascule) _svc toggle ;;
+    up)      _svc start ;;
+    down)    _svc stop ;;
+    journal) exec journalctl -u "$SVC" -f --no-pager ;;
     install) shift; exec bash "$REPO/tools/osmo-lte-install.sh" "$@" ;;
     *)       sed -n '/^#   osmo-lte start/,/^#   osmo-lte install/p' "$0" | sed 's/^# \{0,2\}//'; exit 2 ;;
 esac

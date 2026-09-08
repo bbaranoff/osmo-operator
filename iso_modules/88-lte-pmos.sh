@@ -93,7 +93,28 @@ chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_REPO=/opt/GSM/osmo-oper
 chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-pmos-install.sh 2>&1 | sed 's/^/  /'
 
-# L image de la VM, si on la donne (voir l en-tete).
+# [2026-09-08] L IMAGE DE REFERENCE, PAR DEFAUT. Le build du soir avait ete
+# lance sans OSMO_ISO_PMOS_IMAGE : l ISO avait srsRAN, Open5GS, le noyau PPP
+# et pmbootstrap, mais PAS le telephone - le premier osmo-pmos retombait sur
+# un « pmbootstrap install » complet (long, reseau). La machine de reference
+# porte pourtant l image prete a l endroit meme ou osmo-pmos-build la cherche
+# (/opt/user_interface/pmos/image). Si la variable n est pas donnee, on prend
+# donc celle de l hote : l ISO devient ce qu est le disque. Le .zst pret est
+# prefere ; a defaut l image brute de pmbootstrap, compressee au passage.
+# OSMO_ISO_PMOS_IMAGE=none pour ne rien embarquer.
+if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
+    for _cand in /opt/user_interface/pmos/image/qemu-amd64.img.zst \
+                 "${OSMO_PMB_WORK:-/root/test}"/chroot_native/home/pmos/rootfs/qemu-amd64.img \
+                 /home/*/test/chroot_native/home/pmos/rootfs/qemu-amd64.img; do
+        [ -f "$_cand" ] || continue
+        OSMO_ISO_PMOS_IMAGE="$_cand"
+        echo -e "  ${CYAN}·${NC} image de la VM de reference trouvee sur l hote : $_cand"
+        break
+    done
+    unset _cand
+fi
+[ "${OSMO_ISO_PMOS_IMAGE:-}" = "none" ] && OSMO_ISO_PMOS_IMAGE=""
+# L image de la VM : celle donnee, ou celle de l hote (voir ci-dessus).
 if [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     if [ -f "$OSMO_ISO_PMOS_IMAGE" ]; then
         install -d "$ROOTFS/opt/user_interface/pmos/image"

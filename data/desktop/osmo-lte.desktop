@@ -1,0 +1,37 @@
+[Desktop Entry]
+Type=Application
+Name=4G du banc (srsRAN + Open5GS)
+Name[fr]=4G du banc (srsRAN + Open5GS)
+Comment=Un clic demarre la 4G (coeur Open5GS, eNB, UE), un second l arrete - osmo-lte toggle
+Comment[fr]=Un clic demarre la 4G (coeur Open5GS, eNB, UE), un second l arrete - osmo-lte toggle
+# [2026-09-08] LA 4G PAR L ICONE. Le service est services/osmo-lte.service ;
+# l icone ne connait qu une commande, « osmo-lte toggle » (tools/osmo-lte.sh),
+# qui demande root par pkexec et repond en notification. Pas de terminal :
+# les Actions Etat et Journal en ouvrent un quand il faut lire.
+Exec=/usr/local/bin/osmo-lte toggle
+Icon=/usr/share/osmo-operator/icons/osmo-lte.svg
+Terminal=false
+Categories=System;Network;
+Keywords=4g;lte;srsran;open5gs;epc;enb;ue;
+
+Actions=Start;Stop;Status;Journal;
+
+[Desktop Action Start]
+Name=Demarrer la 4G
+Name[fr]=Demarrer la 4G
+Exec=/usr/local/bin/osmo-lte up
+
+[Desktop Action Stop]
+Name=Arreter la 4G
+Name[fr]=Arreter la 4G
+Exec=/usr/local/bin/osmo-lte down
+
+[Desktop Action Status]
+Name=Etat (osmo-lte status, osmo-epc status)
+Name[fr]=Etat (osmo-lte status, osmo-epc status)
+Exec=gnome-terminal -- bash -c "sudo /usr/local/bin/osmo-lte status; sudo /usr/local/bin/osmo-epc status; read -r -p 'Entree pour fermer ' _"
+
+[Desktop Action Journal]
+Name=Voir le journal (journalctl -u osmo-lte)
+Name[fr]=Voir le journal (journalctl -u osmo-lte)
+Exec=gnome-terminal -- bash -c "journalctl -u osmo-lte -f --no-pager || read -r _"

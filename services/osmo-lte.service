@@ -1,0 +1,48 @@
+[Unit]
+Description=osmo-operator - la 4G du banc (Open5GS + srsENB + srsUE ZeroMQ, via osmo-lte)
+Documentation=file:/opt/GSM/osmo-operator/tools/osmo-lte.sh
+# [2026-09-08] LA 4G EN SERVICE, LANCEE PAR L ICONE. Jusqu ici la 4G ne se
+# lancait qu a la main (« sudo osmo-lte start ») ; la voici en unite, comme
+# osmo-banc : un etat, un journal, un arret propre, et une icone du bureau
+# (data/desktop/osmo-lte.desktop -> « osmo-lte toggle ») qui la bascule.
+# ExecStart = osmo-lte start : le coeur Open5GS (osmo-epc, abonnes restaures
+# s il le faut), puis srsENB, puis srsUE dans le netns ue1 - le PPP du
+# telephone pmOS y aboutit (osmo-pmos-setup).
+# Le coeur a besoin de MongoDB (abonnes) : on le tire, sans l exiger.
+After=network.target mongod.service
+Wants=mongod.service
+ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-lte.sh
+# Pas de srsRAN (hub interstp, arm64) : l unite est sautee, pas en echec.
+ConditionPathExists=/usr/local/bin/srsenb
+# POSEE, PAS ACTIVEE (meme regle que osmo-banc) :
+#   systemctl start osmo-lte            une session (ou l icone)
+#   systemctl enable --now osmo-lte     a chaque boot
+# Au build : OSMO_ISO_LTE=1 active l unite dans l image.
+
+[Service]
+# oneshot + RemainAfterExit : osmo-lte start lance eNB/UE en setsid et les
+# demons Open5GS en -D, puis SORT. En Type=simple systemd prendrait cette
+# sortie pour la fin du service et tuerait le cgroup - toute la 4G.
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/GSM/osmo-operator
+Environment=HOME=/root USER=root LOGNAME=root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Reglages durables (OSMO_LTE_SRATE, OSMO_LTE_NETNS, SRS_WAN...) :
+EnvironmentFile=-/etc/default/osmo-lte
+ExecStart=/bin/bash /opt/GSM/osmo-operator/tools/osmo-lte.sh start
+# L arret eteint TOUT : eNB et UE (osmo-lte stop), puis le coeur (osmo-epc
+# stop) - a la main, « osmo-lte stop » laisse le coeur, pas le service.
+ExecStop=-/bin/bash /opt/GSM/osmo-operator/tools/osmo-lte.sh stop
+ExecStop=-/bin/bash /opt/GSM/osmo-operator/tools/osmo-epc.sh stop
+# L attach de l UE est attendu 30 s par osmo-lte start ; le coeur avant.
+TimeoutStartSec=120
+TimeoutStopSec=30
+# Ce que les deux stop n ont pas demonte est termine par systemd.
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-lte
+
+[Install]
+WantedBy=multi-user.target

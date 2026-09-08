@@ -68,6 +68,50 @@ mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
     -no-progress
 echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
 
+# ── Relecture du squashfs : chaque fichier de paquet contre son md5 dpkg ────
+# [2026-09-09] Le build du 8 au soir a livre une ISO ou ~440 fichiers
+# differaient d UN bit (le bit 0 tombe a zero, jusque dans des noms de
+# fichiers : « __pyc`che__ », « usr.share ») de ce que dpkg avait pose :
+# libgjs, libmozjs, Xwayland, firefox, mesa, libwireshark... Resultat : GNOME
+# Shell segfaultait dans libmozjs a chaque lancement, « Oh no! Something has
+# gone wrong » au premier boot (VirtualBox comme QEMU). Les .deb sont
+# verifies par leur CRC xz a l extraction : l alteration s est faite APRES,
+# sur l hote (RAM ou disque, entre dpkg et mksquashfs) - une machine qui
+# flanche sous la charge du build. Aucun maillon de la chaine ne le voit ;
+# on relit donc le squashfs ecrit et l on compare les fichiers des paquets
+# a leur md5. Ce que le build modifie lui-meme est ecarte : /opt et /root
+# (sources et venv), /usr/local, MongoDB, les unites osmo-* (recopiees du
+# docker), calamares.desktop (NoDisplay), live-boot (toram), os-release ;
+# les fichiers supprimes (docs, locales) ne comptent pas. 40 s environ.
+# OSMO_ISO_NO_VERIFY=1 pour passer outre, en connaissance de cause.
+if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
+    _vfy_mnt="$WORK/sqfs-verify"
+    _vfy_out="/var/tmp/osmo-iso-verify.failed"
+    mkdir -p "$_vfy_mnt"
+    if mount -t squashfs -o loop,ro "$ISOROOT/live/filesystem.squashfs" "$_vfy_mnt" 2>/dev/null; then
+        ( cd "$_vfy_mnt" && cat var/lib/dpkg/info/*.md5sums 2>/dev/null \
+            | grep -vE '^[0-9a-f]{32}  (opt/|root/|usr/local/|mongodb|usr/lib/systemd/system/osmo-|usr/share/applications/calamares\.desktop$|lib/live/boot/|usr/lib/os-release$)' \
+            | md5sum -c --quiet 2>/dev/null | grep -v 'open or read' ) > "$_vfy_out" || true
+        umount "$_vfy_mnt" 2>/dev/null || true
+        _vfy_n=$(wc -l < "$_vfy_out")
+        if [ "$_vfy_n" -eq 0 ]; then
+            echo -e "  ${GREEN}✓${NC} squashfs relu : les fichiers des paquets sont conformes a dpkg"
+        else
+            echo -e "  ${RED}✗ squashfs ALTERE : ${_vfy_n} fichier(s) ne correspondent plus a leur paquet${NC}"
+            sed 's/: FAILED$//' "$_vfy_out" | head -8 | sed 's/^/      /'
+            [ "$_vfy_n" -gt 8 ] && echo "      ... (liste complete : $_vfy_out)"
+            echo -e "  ${YELLOW}Ce n est pas le build : des bits changent sur l hote entre dpkg et mksquashfs.${NC}"
+            echo -e "  ${YELLOW}Verifier la machine (memtest86+, temperatures, disque) puis relancer.${NC}"
+            echo -e "  ${YELLOW}OSMO_ISO_NO_VERIFY=1 pour livrer quand meme (l ISO plantera).${NC}"
+            exit 1
+        fi
+    else
+        echo -e "  ${YELLOW}!${NC} squashfs non relu (mount loop impossible) : integrite non verifiee"
+    fi
+    rmdir "$_vfy_mnt" 2>/dev/null || true
+    unset _vfy_mnt _vfy_out _vfy_n
+fi
+
 cp "$VMLINUZ" "$ISOROOT/boot/vmlinuz"
 cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 
@@ -132,6 +176,15 @@ menuentry "osmo-operator - persistant (ecrit sur le medium)" {
 # Les variantes verbose ne servent qu au diagnostic : elles sont les memes
 # lignes de commande sans "quiet". Elles restent atteignables, mais elles ne
 # tiennent plus la moitie du menu.
+# [2026-09-08] SANS ACCELERATION GRAPHIQUE. Un GPU que le noyau 6.8 de l ISO
+# ne sait pas (AMD RDNA recent sans son firmware, NVIDIA sans nouveau) donne
+# un ecran noir ou un plantage a l amorcage : nomodeset laisse le framebuffer
+# du firmware, le bureau tourne en logiciel, et l on peut au moins installer.
+menuentry "osmo-operator - sans acceleration graphique (nomodeset : ecran noir, plantage AMD/NVIDIA)" {
+    linux  /boot/vmlinuz boot=live nomodeset quiet
+    initrd /boot/initrd.img
+}
+
 submenu "Options (demarrage verbeux)" {
     menuentry "osmo-operator - verbose" {
         linux  /boot/vmlinuz boot=live
@@ -139,6 +192,10 @@ submenu "Options (demarrage verbeux)" {
     }
     menuentry "osmo-operator - persistant verbose" {
         linux  /boot/vmlinuz boot=live persistence persistence-encryption=none
+        initrd /boot/initrd.img
+    }
+    menuentry "osmo-operator - persistant, sans acceleration graphique (nomodeset)" {
+        linux  /boot/vmlinuz boot=live persistence persistence-encryption=none nomodeset
         initrd /boot/initrd.img
     }
 }

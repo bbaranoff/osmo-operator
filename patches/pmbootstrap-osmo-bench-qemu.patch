@@ -15,10 +15,45 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..60da1db8 100644
+index 72b46c60..2f284ffa 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
-@@ -169,8 +169,23 @@ def command_qemu(
+@@ -61,6 +61,34 @@ def which_qemu(arch: Arch) -> str:
+         )
+ 
+ 
++def _host_gpu_vendors() -> set[str]:
++    """PCI vendor ids of the host's DRM cards ("0x1002" = AMD, "0x10de" = NVIDIA)."""
++    vendors: set[str] = set()
++    drm = "/sys/class/drm"
++    try:
++        for card in os.listdir(drm):
++            vp = os.path.join(drm, card, "device", "vendor")
++            if card.startswith("card") and os.path.isfile(vp):
++                with open(vp) as fh:
++                    vendors.add(fh.read().strip().lower())
++    except OSError:
++        pass
++    return vendors
++
++
++def _host_cpu_has_virt() -> bool:
++    """True when the CPU exposes VT-x (vmx) or AMD-V (svm) - i.e. it is enabled in the firmware."""
++    try:
++        with open("/proc/cpuinfo") as fh:
++            for line in fh:
++                if line.startswith("flags"):
++                    flags = line.split(":", 1)[1].split()
++                    return "vmx" in flags or "svm" in flags
++    except OSError:
++        pass
++    return False
++
++
+ def command_qemu(
+     config: Config,
+     arch: Arch,
+@@ -169,8 +197,23 @@ def command_qemu(
      else:
          command += ["-device", "virtio-mouse-pci"]
      command += ["-device", "virtio-keyboard-pci"]
@@ -44,8 +79,30 @@ index 72b46c60..60da1db8 100644
  
      # Check that arch is supported by pmb qemu
      if arch not in [
-@@ -202,9 +217,24 @@ def command_qemu(
+@@ -200,13 +243,48 @@ def command_qemu(
+         case _:
+             pass
  
++    # [2026-09-08] OPENGL ONLY WHEN IT CAN WORK. virtio-vga-gl + gl=on hands the
++    # guest's rendering to the host's Mesa as seen from this musl chroot. On an
++    # NVIDIA host there is no driver: EGL fails, QEMU falls back to software
++    # rendering and only warns. On an AMD host Mesa DOES find radeonsi, virgl
++    # engages for real against a libdrm/LLVM that do not match the host, and
++    # QEMU aborts or segfaults at launch - the usual "crashes on AMD".
++    # OSMO_PMOS_GL=0 turns GL off (virtio-vga, gl=off) ; unset, it is off on
++    # AMD hosts and on hosts without /dev/dri ; OSMO_PMOS_GL=1 forces it on.
++    gl_env = os.environ.get("OSMO_PMOS_GL", "")
++    if gl_env == "0":
++        use_qemu_gl = False
++    elif gl_env != "1" and use_qemu_gl:
++        vendors = _host_gpu_vendors()
++        if "0x1002" in vendors:
++            logging.info("osmo: AMD GPU on the host - QEMU without OpenGL (OSMO_PMOS_GL=1 to force it)")
++            use_qemu_gl = False
++        elif not os.path.exists("/dev/dri"):
++            logging.info("osmo: no /dev/dri on the host - QEMU without OpenGL")
++            use_qemu_gl = False
++
      # Configure display
      if qemu_display != "none":
 +        # [2026-09-07] The screen's shape decides the phone's shape. Phosh lays
@@ -66,11 +123,14 @@ index 72b46c60..60da1db8 100644
          match arch:
              case Arch.x86_64:
 -                command += ["-device", "virtio-vga-gl"]
-+                command += ["-device", f"virtio-vga-gl{geom}"]
++                command += ["-device", f"{'virtio-vga-gl' if use_qemu_gl else 'virtio-vga'}{geom}"]
              case Arch.aarch64 | Arch.armv7:
-                 command += ["-device", "virtio-gpu-gl"]
+-                command += ["-device", "virtio-gpu-gl"]
++                command += ["-device", "virtio-gpu-gl" if use_qemu_gl else "virtio-gpu-pci"]
              case Arch.riscv64 | Arch.ppc64le | Arch.loongarch64:
-@@ -221,10 +251,22 @@ def command_qemu(
+                 command += ["-device", "virtio-gpu-pci"]
+             case _:
+@@ -221,10 +299,22 @@ def command_qemu(
                  f"if=pflash,format=raw,readonly=on,file={edk2_chroot}/usr/share/AAVMF/AAVMF_CODE.fd",
              ]
          case Arch.x86_64:
@@ -94,7 +154,38 @@ index 72b46c60..60da1db8 100644
          case Arch.loongarch64:
              command += [
                  "-drive",
-@@ -264,9 +306,106 @@ def command_qemu(
+@@ -243,11 +333,29 @@ def command_qemu(
+ 
+     # Kernel Virtual Machine (KVM) support
+     native = pmb.parse.deviceinfo().arch.is_native()
+-    if use_qemu_kvm and native and os.path.exists("/dev/kvm"):
++    # [2026-09-08] KVM ONLY WHEN IT REALLY WORKS. /dev/kvm can exist while the
++    # CPU's virtualisation is off in the firmware (SVM on AMD boards ships off
++    # more often than not) or the node is not writable by this user : QEMU then
++    # dies at once ("Could not access KVM kernel module", "failed to initialize
++    # kvm: Operation not supported"). We check the flag and the access first,
++    # and fall back to TCG with -cpu max (the guest still boots, slower).
++    # OSMO_PMOS_KVM=0 forces TCG.
++    kvm_ok = (
++        use_qemu_kvm
++        and native
++        and os.environ.get("OSMO_PMOS_KVM", "1") != "0"
++        and os.access("/dev/kvm", os.R_OK | os.W_OK)
++        and _host_cpu_has_virt()
++    )
++    if kvm_ok:
+         command += ["-enable-kvm"]
+         command += ["-cpu", "host"]
+     else:
++        if use_qemu_kvm and native and os.path.exists("/dev/kvm"):
++            logging.info("osmo: /dev/kvm is there but unusable (virtualisation off in the firmware ? not writable ?) - TCG")
+         logging.info("WARNING: QEMU is not using KVM and will run slower!")
++        if arch == Arch.x86_64 and not qemu_cpu:
++            command += ["-cpu", "max"]
+ 
+     if qemu_cpu:
+         command += ["-cpu", qemu_cpu]
+@@ -264,9 +372,106 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  

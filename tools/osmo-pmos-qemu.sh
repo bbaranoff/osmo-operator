@@ -127,9 +127,20 @@ pmos_stop() {
 # Depuis une icone (Terminal=true), la fenetre se fermerait avant qu on ait
 # lu : on la garde quelques secondes quand on est sur un vrai terminal.
 pmos_fin() { local rc=$1; [ -t 0 ] && read -r -t 8 -p "Entree pour fermer (8 s) " _; exit "$rc"; }
+# [2026-09-08] BASCULE : un seul geste sur l icone. VM en marche -> on l eteint
+# (pmos_stop) ; VM arretee -> on la lance, exactement comme sans argument.
+# C est ce que fait l icone (osmo-pmos toggle -> ici) : plus besoin du clic
+# droit, peu visible sous Phosh, pour arreter le telephone.
 case "${1:-}" in
     stop|arret|arreter|off|down) pmos_stop; pmos_fin $? ;;
     status|etat)                 pmos_status; pmos_fin $? ;;
+    toggle|bascule)
+        if [ -n "$(pmos_qemu_pids)" ]; then
+            echo "osmo-pmos-qemu: le telephone tourne - on l eteint"
+            pmos_stop; pmos_fin $?
+        fi
+        echo "osmo-pmos-qemu: le telephone est arrete - on le lance"
+        shift ;;
 esac
 
 case "${1:-}" in
@@ -237,11 +248,33 @@ if [ -n "$IMG_PMB" ]; then
     [ "$want_m" -lt "$cur_m" ] && DISK="${cur_m}M"
     echo "osmo-pmos-qemu: disque de la VM $DISK ($IMG_PMB, ${cur_m} Mio avant)"
 fi
-"$PMB" qemu \
-    --memory "${OSMO_PMOS_MEM:-4096}" \
-    --image-size "$DISK" \
-    --display "${OSMO_PMOS_DISPLAY:-sdl}" \
-    "$@"
-rc=$?
+# [2026-09-08] ROBUSTE AUX HOTES RECALCITRANTS (AMD en tete). Le patch
+# pmbootstrap coupe deja l OpenGL sur un GPU AMD et le KVM sans SVM ; mais
+# une VM qui MEURT AUSSITOT (moins de 25 s, code non nul) sur un hote qu on
+# n avait pas prevu, on ne la laisse pas mourir : on relance sans OpenGL,
+# puis sans KVM, puis en fenetre GTK (SDL + Wayland pur). Chaque essai est
+# annonce ; le dernier code d erreur est celui qu on garde. Une VM qui a
+# tourne plus de 25 s puis s est arretee n est pas relancee : c est un arret.
+_lance() {
+    "$PMB" qemu \
+        --memory "${OSMO_PMOS_MEM:-4096}" \
+        --image-size "$DISK" \
+        --display "${OSMO_PMOS_DISPLAY:-sdl}" \
+        "$@"
+}
+_mort_tot() { [ "$1" -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 25 ]; }
+t0=$(date +%s); _lance "$@"; rc=$?
+if _mort_tot "$rc" && [ "${OSMO_PMOS_GL:-}" != 0 ]; then
+    echo "osmo-pmos-qemu: QEMU est mort aussitot ($rc) - relance SANS OpenGL (OSMO_PMOS_GL=0)"
+    export OSMO_PMOS_GL=0; t0=$(date +%s); _lance "$@"; rc=$?
+fi
+if _mort_tot "$rc" && [ "${OSMO_PMOS_KVM:-}" != 0 ]; then
+    echo "osmo-pmos-qemu: encore mort ($rc) - relance SANS KVM (OSMO_PMOS_KVM=0, emulation : lent mais il demarre)"
+    export OSMO_PMOS_KVM=0; t0=$(date +%s); _lance "$@"; rc=$?
+fi
+if _mort_tot "$rc" && [ "${OSMO_PMOS_DISPLAY:-sdl}" = sdl ]; then
+    echo "osmo-pmos-qemu: encore mort ($rc) - relance en fenetre GTK (OSMO_PMOS_DISPLAY=gtk)"
+    export OSMO_PMOS_DISPLAY=gtk; t0=$(date +%s); _lance "$@"; rc=$?
+fi
 [ "$rc" -eq 0 ] || read -r -p "pmbootstrap a echoue ($rc). Entree pour fermer " _
 exit "$rc"

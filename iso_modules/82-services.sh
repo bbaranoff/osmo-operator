@@ -149,8 +149,11 @@ fi
 #   systemctl enable --now osmo-banc   pour qu'il reparte a chaque demarrage
 # Au build : OSMO_ISO_BANC=1 (ou --banc) et OSMO_ISO_MULTI=1 (ou --multi)
 # rendent l'activation au boot, image par image.
+# [2026-09-08] osmo-lte (services/osmo-lte.service : Open5GS + srsENB + srsUE,
+# l icone « 4G du banc ») suit la meme regle : posee, OSMO_ISO_LTE=1 pour
+# l activer au boot. Sans srsenb (interstp, arm64) sa Condition la saute.
 if [ "$ISO_ROLE" != "interstp" ]; then
-    for _u in osmo-banc osmo-multi; do
+    for _u in osmo-banc osmo-multi osmo-lte; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
         else
@@ -165,7 +168,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     # `disable` fait - le symetrique exact du `ln -sf` qui sert de repli a
     # l'`enable` dans l'autre branche.
     mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
-    for _u in osmo-banc osmo-multi; do
+    for _u in osmo-banc osmo-multi osmo-lte; do
         # osmo-banc -> OSMO_ISO_BANC, osmo-multi -> OSMO_ISO_MULTI ; ${!_var}
         # est l'expansion indirecte de bash (la valeur de la variable NOMMEE
         # par $_var), pas un eval.

@@ -35,6 +35,7 @@
 #   osmo-pmos fetch      telecharge (ou reprend) l image et verifie son sha256
 #   osmo-pmos provision  mot de passe, sshd, et la regle ModemManager du port AT
 #   osmo-pmos start      demarre la VM ET le modem du banc qui va avec
+#   osmo-pmos toggle     bascule : eteint la VM si elle tourne, la lance sinon (l icone)
 #   osmo-pmos stop       arrete les deux
 #   osmo-pmos status     ou en est chaque morceau
 #   osmo-pmos shell      un shell dans la VM (ssh)
@@ -396,6 +397,7 @@ QEMU_LANCEUR="${OSMO_PMOS_QEMU:-/usr/local/bin/osmo-pmos-qemu}"
 if [ -x "$QEMU_LANCEUR" ]; then
     case "${1:-status}" in
         up|start)  shift; exec "$QEMU_LANCEUR" "$@" ;;
+        toggle|bascule) shift; exec "$QEMU_LANCEUR" toggle "$@" ;;
         stop|down) exec "$QEMU_LANCEUR" stop ;;
         status)    exec "$QEMU_LANCEUR" status ;;
     esac
