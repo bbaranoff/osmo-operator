@@ -51,6 +51,87 @@
 #   osmo-pmos-qemu smartphone      720x1440   (le defaut)
 #   osmo-pmos-qemu tablette        1280x800
 #   osmo-pmos-qemu 1024x768        n importe quelle taille <largeur>x<hauteur>
+# [2026-09-08] STOP, ET UNE SEULE VM A LA FOIS. Il n y avait pas de moyen
+# d arreter le telephone autrement qu en fermant sa fenetre, et relancer
+# l icone pendant qu il tourne finissait en « pmbootstrap a echoue (1) » :
+# QEMU refuse l image deja ouverte et les ports 2222 / 12346 deja pris, et
+# son message part sur la console, pas dans le journal. Donc :
+#   osmo-pmos-qemu stop     eteint proprement (poweroff par SSH, 30 s), sinon
+#                           SIGTERM puis SIGKILL sur QEMU ; debranche le modem
+#                           du banc (osmo-phonesim-banc.py --connect), que
+#                           osmo-pmos-setup rebranche au prochain demarrage.
+#   osmo-pmos-qemu status   dit si la VM tourne (pid) et si son SSH repond.
+# Et au lancement, si une VM tourne deja, on le dit et on s arrete la.
+PMOS_SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
+PMOS_SSH="sshpass -p ${OSMO_PMOS_PASS:-147147} ssh -p $PMOS_SSH_PORT -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4 -o PreferredAuthentications=password ${OSMO_PMOS_USER:-user}@127.0.0.1"
+# Le vrai QEMU (pas le « sh -c » qui l enveloppe) : celui qui tient l image.
+pmos_qemu_pids() {
+    pgrep -f '^[^ ]*ld-musl[^ ]* .*qemu-system-x86_64 .*rootfs/qemu-amd64\.img' 2>/dev/null
+    pgrep -f '^[^ ]*qemu-system-x86_64 .*rootfs/qemu-amd64\.img' 2>/dev/null
+}
+pmos_ssh_ok() { $PMOS_SSH 'echo ok' 2>/dev/null | grep -q ok; }
+pmos_status() {
+    local pids; pids="$(pmos_qemu_pids | sort -u | tr '\n' ' ')"
+    if [ -z "$pids" ]; then echo "osmo-pmos-qemu: aucune VM postmarketOS ne tourne"; return 1; fi
+    echo "osmo-pmos-qemu: VM postmarketOS en marche (QEMU pid $pids)"
+    pmos_ssh_ok && echo "osmo-pmos-qemu: SSH repond sur le port $PMOS_SSH_PORT" \
+                || echo "osmo-pmos-qemu: SSH ne repond pas encore (port $PMOS_SSH_PORT)"
+    pgrep -f '[o]smo-phonesim-banc.py --connect' >/dev/null && echo "osmo-pmos-qemu: modem du banc branche" \
+                                                             || echo "osmo-pmos-qemu: modem du banc NON branche"
+    return 0
+}
+pmos_stop() {
+    local pids i
+    pids="$(pmos_qemu_pids | sort -u | tr '\n' ' ')"
+    if [ -z "$pids" ]; then
+        echo "osmo-pmos-qemu: aucune VM postmarketOS a arreter"
+    else
+        if pmos_ssh_ok; then
+            echo "osmo-pmos-qemu: extinction propre par SSH (poweroff)..."
+            $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S poweroff" >/dev/null 2>&1
+            for i in $(seq 1 30); do
+                sleep 1
+                [ -z "$(pmos_qemu_pids)" ] && break
+            done
+        fi
+        if [ -n "$(pmos_qemu_pids)" ]; then
+            echo "osmo-pmos-qemu: QEMU encore la, SIGTERM (pid $pids)"
+            # shellcheck disable=SC2086
+            kill -TERM $pids 2>/dev/null
+            for i in $(seq 1 5); do sleep 1; [ -z "$(pmos_qemu_pids)" ] && break; done
+        fi
+        if [ -n "$(pmos_qemu_pids)" ]; then
+            echo "osmo-pmos-qemu: QEMU ne meurt pas, SIGKILL"
+            # shellcheck disable=SC2086
+            kill -KILL $(pmos_qemu_pids) 2>/dev/null
+            sleep 1
+        fi
+        [ -z "$(pmos_qemu_pids)" ] && echo "osmo-pmos-qemu: VM arretee" \
+                                   || { echo "osmo-pmos-qemu: la VM tourne toujours (droits ? relancer en root)"; return 1; }
+    fi
+    # Le modem du banc etait branche sur le port serie de CETTE VM : on le
+    # debranche, osmo-pmos-setup le rebranchera au prochain demarrage.
+    # Le banc tourne en root depuis osmo-pmos-setup (le tun PPP l exige) :
+    # sous le compte de session, pkill ne peut pas, sudo -n si le mot de
+    # passe est encore en cache.
+    if pkill -f '[o]smo-phonesim-banc.py --connect' 2>/dev/null \
+       || sudo -n pkill -f '[o]smo-phonesim-banc.py --connect' 2>/dev/null; then
+        echo "osmo-pmos-qemu: modem du banc debranche"
+    fi
+    # Un « pmbootstrap qemu » orphelin (VM tuee sous lui) ne sert plus a rien.
+    # Motif ancre sur l interpreteur : un « pkill -f » large tuerait aussi le
+    # terminal de quiconque a ces mots dans sa ligne de commande.
+    pkill -f '^[^ ]*python[0-9.]* [^ ]*pmbootstrap qemu' 2>/dev/null || true
+    return 0
+}
+# Depuis une icone (Terminal=true), la fenetre se fermerait avant qu on ait
+# lu : on la garde quelques secondes quand on est sur un vrai terminal.
+pmos_fin() { local rc=$1; [ -t 0 ] && read -r -t 8 -p "Entree pour fermer (8 s) " _; exit "$rc"; }
+case "${1:-}" in
+    stop|arret|arreter|off|down) pmos_stop; pmos_fin $? ;;
+    status|etat)                 pmos_status; pmos_fin $? ;;
+esac
+
 case "${1:-}" in
     smartphone|telephone|phone) export OSMO_PMOS_RES=720x1440; shift ;;
     tablette|tablet)            export OSMO_PMOS_RES=1280x800; shift ;;
@@ -58,6 +139,12 @@ case "${1:-}" in
 esac
 export OSMO_PMOS_RES="${OSMO_PMOS_RES:-720x1440}"
 echo "osmo-pmos-qemu: format ${OSMO_PMOS_RES} ($([ "$OSMO_PMOS_RES" = 1280x800 ] && echo tablette || echo smartphone))"
+if [ -n "$(pmos_qemu_pids)" ]; then
+    pmos_status
+    echo "osmo-pmos-qemu: une seule VM a la fois - « osmo-pmos-qemu stop » pour l arreter, puis relancer"
+    read -r -p "Entree pour fermer " _
+    exit 1
+fi
 
 PMB="$(command -v pmbootstrap || echo "$HOME/.local/bin/pmbootstrap")"
 if ! sudo -v; then
@@ -107,8 +194,14 @@ fi
 # La VM partie, le guetteur n a plus rien a attendre.
 trap '[ -n "$GUETTEUR" ] && kill "$GUETTEUR" 2>/dev/null' EXIT
 
+# [2026-09-08] LE DISQUE : 4 Go, pas 2. L image pmbootstrap fait 2 Go par
+# defaut et etait PLEINE (2,2 Go a 100 %) apres apk add/upgrade : plus rien
+# n ecrivait, ni dconf, ni NetworkManager, ni le journal. --image-size agrandit
+# le fichier, l initramfs pmOS etend la partition et le systeme de fichiers au
+# demarrage. OSMO_PMOS_DISK pour une autre taille.
 "$PMB" qemu \
     --memory "${OSMO_PMOS_MEM:-4096}" \
+    --image-size "${OSMO_PMOS_DISK:-4G}" \
     --display "${OSMO_PMOS_DISPLAY:-sdl}" \
     "$@"
 rc=$?

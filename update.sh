@@ -223,6 +223,15 @@ Icon=phone
 Terminal=true
 Categories=Network;Telephony;
 Keywords=postmarketos;phosh;telephone;sms;appel;modem;
+Actions=Etat;Arreter;
+
+[Desktop Action Etat]
+Name=Etat du telephone
+Exec=/usr/local/bin/osmo-pmos status
+
+[Desktop Action Arreter]
+Name=Arreter le telephone
+Exec=/usr/local/bin/osmo-pmos stop
 PMD
     chmod 644 /usr/share/applications/osmo-pmos.desktop 2>/dev/null || true
     # [2026-09-07] LES DEUX LANCEURS PAR pmbootstrap vivent dans le depot :
@@ -256,7 +265,11 @@ Icon=$([ "$n" = tablette ] && echo video-display || echo phone)
 Terminal=true
 Categories=Network;Telephony;System;
 Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;$n;
-Actions=Setup;SansModem;
+Actions=Arreter;Setup;SansModem;
+
+[Desktop Action Arreter]
+Name=Arreter le telephone (osmo-pmos-qemu stop)
+Exec=/usr/local/bin/osmo-pmos-qemu stop
 
 [Desktop Action Setup]
 Name=Rebrancher le modem et la voix (osmo-pmos-setup)
@@ -272,9 +285,60 @@ PMD
     update-desktop-database /usr/share/applications 2>/dev/null || true
     echo "  [telephone] osmo-pmos pose (VM postmarketOS ; « osmo-pmos install » la premiere fois)"
     echo "  [telephone] deux formats au lancement : smartphone (720x1440) et tablette (1280x800)"
+    echo "  [telephone] « osmo-pmos-qemu stop » (ou le clic droit de l icone) arrete la VM et debranche le modem"
     return 0
 }
 osmo_poser_pmos
+
+# ── WIRESHARK : UNE ICONE QUI ECOUTE DEJA LE BANC ───────────────────────────
+# [2026-09-08] tools/osmo-wireshark-root.sh : root par pkexec (invite de mot de
+# passe graphique), capture immediate LTE + SCTP + GSM. « wireshark » au
+# clavier est un lien dessus. Le favori du dock (org.wireshark.Wireshark, le
+# Wireshark nu qui refuse de capturer) est remplace par le notre, pour chaque
+# session ouverte - les favoris sont dans le dconf de l utilisateur, pas de
+# root (voir la famille root / session). L ISO fait pareil dans 80-chroot.
+osmo_poser_wireshark() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local d=/opt/GSM/osmo-operator
+    [ -f "$d/tools/osmo-wireshark-root.sh" ] || return 0
+    install -m 755 "$d/tools/osmo-wireshark-root.sh" /usr/local/bin/osmo-wireshark-root
+    ln -sfn /usr/local/bin/osmo-wireshark-root /usr/local/bin/wireshark
+    cat > /usr/share/applications/osmo-wireshark-root.desktop <<'WSD'
+[Desktop Entry]
+Type=Application
+Name=Wireshark (banc)
+GenericName=Analyseur reseau
+Comment=Wireshark en root, capture immediate du banc : LTE (S1AP, GTP, PFCP, Diameter), SCTP, GSM (GSMTAP, Abis, Gb, MGCP, SIP, RTP)
+Exec=/usr/local/bin/osmo-wireshark-root %f
+Icon=org.wireshark.Wireshark
+Terminal=false
+StartupNotify=true
+Categories=Network;Monitor;
+Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;
+WSD
+    chmod 644 /usr/share/applications/osmo-wireshark-root.desktop
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    # Le favori, dans chaque session GNOME ouverte.
+    local u uid bus
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        bus="/run/user/$uid/bus"; [ -S "$bus" ] || continue
+        sudo -u "$u" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" python3 - <<'PY' 2>/dev/null || true
+import subprocess, ast
+g = ["gsettings", "get", "org.gnome.shell", "favorite-apps"]
+cur = ast.literal_eval(subprocess.run(g, capture_output=True, text=True).stdout.strip() or "[]")
+neu = [a for a in cur if a not in ("org.wireshark.Wireshark.desktop", "wireshark.desktop", "wireshark-root.desktop")]
+if "osmo-wireshark-root.desktop" not in neu:
+    i = next((k for k, a in enumerate(cur) if a in ("org.wireshark.Wireshark.desktop", "wireshark.desktop")), len(neu))
+    neu.insert(min(i, len(neu)), "osmo-wireshark-root.desktop")
+if neu != cur:
+    subprocess.run(["gsettings", "set", "org.gnome.shell", "favorite-apps", repr(neu)], check=False)
+PY
+    done
+    echo "  [wireshark] osmo-wireshark-root pose (LTE + SCTP + GSM, root par pkexec) ; « wireshark » y mene ; favori du dock remplace"
+    return 0
+}
+osmo_poser_wireshark
 
 # ── LES LANCEURS /usr/local/bin (osmo-dino-play, osmo-youtube...) ───────────
 # [2026-09-07] osmo-dino-play est CUIT dans /usr/local/bin par

@@ -199,23 +199,14 @@ DINO
     chmod 755 /usr/local/bin/osmo-dino-play
 
     # WIRESHARK EN ROOT : la capture demande les privileges (l install a mis
-    # setuid a false). pkexec garde l affichage ; sudo -E en repli.
-    cat > /usr/local/bin/osmo-wireshark-root <<'WS'
-#!/bin/bash
-# osmo-wireshark-root - Wireshark lance en root (capture sur toutes les ifaces).
-set -u
-WSBIN="$(command -v wireshark || true)"
-[ -n "$WSBIN" ] || { command -v zenity >/dev/null 2>&1 && \
-    zenity --error --text="Wireshark introuvable" 2>/dev/null; exit 1; }
-if [ "$(id -u)" -eq 0 ]; then
-    exec "$WSBIN" "$@"
-elif command -v pkexec >/dev/null 2>&1; then
-    exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" "$WSBIN" "$@"
-else
-    exec sudo -E "$WSBIN" "$@"
-fi
-WS
-    chmod 755 /usr/local/bin/osmo-wireshark-root
+    # setuid a false). [2026-09-08] Le lanceur est un fichier du depot,
+    # tools/osmo-wireshark-root.sh : root par pkexec (invite graphique), et
+    # capture immediate avec le filtre LTE + SCTP + GSM du banc. Et
+    # /usr/local/bin/wireshark pointe dessus : « wireshark » au clavier, c est
+    # lui (le binaire reste /usr/bin/wireshark, qu il appelle).
+    [ -f "$OSMO_EXTRAS_REPO/tools/osmo-wireshark-root.sh" ] \
+        && install -m 755 "$OSMO_EXTRAS_REPO/tools/osmo-wireshark-root.sh" /usr/local/bin/osmo-wireshark-root
+    ln -sfn /usr/local/bin/osmo-wireshark-root /usr/local/bin/wireshark
 
     # OFONO : pile telephonie. Pas d IHM native ; on ouvre un terminal qui
     # s assure que le daemon tourne (root) et liste les modems.
@@ -314,13 +305,15 @@ DIND
     cat > /usr/share/applications/osmo-wireshark-root.desktop <<'WSD'
 [Desktop Entry]
 Type=Application
-Name=Wireshark (root)
-Comment=Wireshark lance en root (capture toutes interfaces)
-Exec=/usr/local/bin/osmo-wireshark-root
-Icon=wireshark
+Name=Wireshark (banc)
+GenericName=Analyseur reseau
+Comment=Wireshark en root, capture immediate du banc : LTE (S1AP, GTP, PFCP, Diameter), SCTP, GSM (GSMTAP, Abis, Gb, MGCP, SIP, RTP)
+Exec=/usr/local/bin/osmo-wireshark-root %f
+Icon=org.wireshark.Wireshark
 Terminal=false
+StartupNotify=true
 Categories=Network;Monitor;
-Keywords=wireshark;capture;pcap;reseau;
+Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;
 WSD
 
     cat > /usr/share/applications/osmo-ofono.desktop <<'OFD'

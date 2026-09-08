@@ -15,14 +15,28 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..64f71701 100644
+index 72b46c60..60da1db8 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
-@@ -170,7 +170,10 @@ def command_qemu(
+@@ -169,8 +169,23 @@ def command_qemu(
+     else:
          command += ["-device", "virtio-mouse-pci"]
      command += ["-device", "virtio-keyboard-pci"]
-     command += ["-netdev", f"user,id=net,hostfwd=tcp:127.0.0.1:{port_ssh}-:22"]
+-    command += ["-netdev", f"user,id=net,hostfwd=tcp:127.0.0.1:{port_ssh}-:22"]
 -    command += ["-device", "virtio-net-pci,netdev=net"]
++    command += [
++        "-netdev",
++        # Plan d'adressage explicite du reseau utilisateur (slirp). Sans ces
++        # options QEMU prend des valeurs implicites et l'invite peut se
++        # retrouver sans bail DHCP : plus d'Internet ET plus de SSH, car le
++        # hostfwd n'a alors aucune IP invite ou livrer le trafic.
++        #   net=       le sous-reseau vu par l'invite
++        #   host=      la passerelle (QEMU lui-meme)
++        #   dhcpstart= la premiere IP distribuee -> l'invite est toujours .15
++        #   dns=       le resolveur interne de QEMU, qui relaie vers l'hote
++        f"user,id=net,net=10.0.2.0/24,host=10.0.2.2,dhcpstart=10.0.2.15,"
++        f"dns=10.0.2.3,hostfwd=tcp:127.0.0.1:{port_ssh}-:22",
++    ]
 +    # romfile= drops the card's PXE option ROM. With it, a freshly created
 +    # NVRAM ranks "UEFI PXEv4" ahead of the disk: the firmware runs iPXE,
 +    # fails to find a server, and only then boots - a detour on every start.
@@ -30,7 +44,7 @@ index 72b46c60..64f71701 100644
  
      # Check that arch is supported by pmb qemu
      if arch not in [
-@@ -202,9 +205,24 @@ def command_qemu(
+@@ -202,9 +217,24 @@ def command_qemu(
  
      # Configure display
      if qemu_display != "none":
@@ -56,7 +70,7 @@ index 72b46c60..64f71701 100644
              case Arch.aarch64 | Arch.armv7:
                  command += ["-device", "virtio-gpu-gl"]
              case Arch.riscv64 | Arch.ppc64le | Arch.loongarch64:
-@@ -221,10 +239,22 @@ def command_qemu(
+@@ -221,10 +251,22 @@ def command_qemu(
                  f"if=pflash,format=raw,readonly=on,file={edk2_chroot}/usr/share/AAVMF/AAVMF_CODE.fd",
              ]
          case Arch.x86_64:
@@ -80,7 +94,7 @@ index 72b46c60..64f71701 100644
          case Arch.loongarch64:
              command += [
                  "-drive",
-@@ -264,9 +294,83 @@ def command_qemu(
+@@ -264,9 +306,106 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  
@@ -127,9 +141,32 @@ index 72b46c60..64f71701 100644
 +    args: list[str] = [
 +        "-chardev",
 +        f"socket,id=gsmchr,host=127.0.0.1,port={port},server=on,wait=off",
-+        "-device",
-+        "pci-serial,chardev=gsmchr",
 +    ]
++    # [2026-09-08] virtio-serial, not a 16550. QEMU paces its emulated 16550
++    # at the programmed baud rate (115200 -> ~11 KB/s each way), so PPP data
++    # over the modem port crawled and every page filled a minute of queue.
++    # A virtconsole port has no baud rate: it shows up as /dev/hvc0 in the
++    # guest, a tty like any other, and ModemManager probes it thanks to the
++    # udev rule osmo-pmos-setup installs. OSMO_PMOS_SERIAL=pci brings the
++    # 16550 (ttyS1) back.
++    if os.environ.get("OSMO_PMOS_SERIAL", "virtio") == "pci":
++        args += ["-device", "pci-serial,chardev=gsmchr"]
++    else:
++        # Two ports, like a real modem: hvc0 is the command port (AT, URCs,
++        # calls, SMS), hvc1 the data port where ModemManager dials ATD*99 and
++        # runs PPP - so the phone keeps an AT channel while data is up. The
++        # data port listens on OSMO_PMOS_AT_PORT + 1 (12347 by default).
++        port_data = int(port) + 1
++        args += [
++            "-chardev",
++            f"socket,id=gsmdata,host=127.0.0.1,port={port_data},server=on,wait=off",
++            "-device",
++            "virtio-serial-pci,id=osmovser",
++            "-device",
++            "virtconsole,chardev=gsmchr,name=osmo.modem",
++            "-device",
++            "virtconsole,chardev=gsmdata,name=osmo.data",
++        ]
 +
 +    # --audio wins if it was asked for explicitly: it adds a card of its own.
 +    if qemu_audio:

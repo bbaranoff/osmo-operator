@@ -14,6 +14,14 @@ PASS="${OSMO_PMOS_PASS:-147147}"
 USER_VM="${OSMO_PMOS_USER:-user}"
 ssh_vm() { sshpass -p "$PASS" ssh -p "$PORT" -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=8 -o PreferredAuthentications=password "$USER_VM@127.0.0.1" "$@"; }
+# [2026-09-08] ON ATTEND LE SSH. Lance a la main pendant que la VM demarre
+# encore, tout echouait (« n a pas acces ») : on patiente jusqu a 90 s.
+for _ in $(seq 1 45); do
+    ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break
+    [ "$_" -eq 1 ] && echo "  la VM ne repond pas encore en SSH (port $PORT), on attend..."
+    sleep 2
+done
+ssh_vm 'echo ok' 2>/dev/null | grep -q ok || { echo "  ATTENTION : pas de SSH sur le port $PORT - la VM est-elle lancee ?"; exit 1; }
 
 ssh_vm "echo $PASS | sudo -S sh -c '
     mkdir -p /etc/systemd/resolved.conf.d
@@ -27,17 +35,48 @@ ssh_vm "echo $PASS | sudo -S sh -c '
     # il n y a donc aucun module a charger (ftdi_sio, lui, n existe pas ici).
 
     mkdir -p /etc/udev/rules.d
-    printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"ttyS[1-9]\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_TTY_BAUDRATE}=\\\"115200\\\"\n\" \
-        > /etc/udev/rules.d/99-osmo-modem.rules
+    # [2026-09-08] DEUX PORTS, UN SEUL MODEM. hvc0 = commande, hvc1 = donnees
+    # (ID_MM_PORT_TYPE_AT_PPP : c est la que ModemManager compose ATD*99), et
+    # le meme ID_MM_PHYSDEV_UID pour que MM les regroupe en un modem au lieu
+    # d en voir deux. ttyS[1-9] : le 16550 de OSMO_PMOS_SERIAL=pci.
+    {
+      printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"hvc0\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_PHYSDEV_UID}=\\\"osmo-banc\\\", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}=\\\"1\\\"\n\"
+      printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"hvc1\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_PHYSDEV_UID}=\\\"osmo-banc\\\", ENV{ID_MM_PORT_TYPE_AT_PPP}=\\\"1\\\"\n\"
+      printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"ttyS[1-9]\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_TTY_BAUDRATE}=\\\"115200\\\"\n\"
+    } > /etc/udev/rules.d/99-osmo-modem.rules
     udevadm control --reload 2>/dev/null
     udevadm trigger --subsystem-match=tty 2>/dev/null
+    # [2026-09-08] Le port modem est un virtconsole (/dev/hvc0) : le
+    # generateur getty de systemd ouvre une invite de login sur la premiere
+    # console de virtualisation, et c est elle qui repondait au modem
+    # (« pmos-gsm login: ATE0 »). On la masque, le port est au modem seul.
+    systemctl mask --now serial-getty@hvc0.service getty@hvc0.service serial-getty@hvc1.service getty@hvc1.service >/dev/null 2>&1
 
     # [2026-09-07] LA DATA : pppd et le greffon PPP de NetworkManager. Sans
     # eux, ATD*99 aboutit a CONNECT puis NO CARRIER une seconde plus tard
     # (« PPP failed to start: libnm-ppp-plugin.so is not installed »). Le
     # noyau doit avoir PPP (build-pm.sh) ; les modules se chargent au boot.
+    # [2026-09-08] Le filaire n a plus de route par defaut (voir le bloc
+    # suivant) : pour apk, on la lui rend le temps de ce bloc, avec le DNS
+    # de QEMU, et le service osmo-filaire la retire juste apres.
+    ip route replace default via 10.0.2.2 dev eth0 2>/dev/null
+    resolvectl dns eth0 10.0.2.3 2>/dev/null; resolvectl default-route eth0 yes 2>/dev/null
     apk info -e ppp networkmanager-ppp >/dev/null 2>&1 \
         || apk add ppp networkmanager-ppp 2>&1 | tail -n 1
+    # networkmanager et networkmanager-ppp DOIVENT etre de la meme version :
+    # NM cherche le greffon dans /usr/lib/NetworkManager/<sa version>/. apk add
+    # du greffon avait pris 1.58 sur le depot alors que l image portait NM
+    # 1.56 : « libnm-ppp-plugin.so is not installed », et pas de PPP.
+    NMV=\$(apk info -v 2>/dev/null | grep -oE \"^networkmanager-[0-9.]+\" | head -n1 | sed \"s/^networkmanager-//\")
+    NMP=\$(apk info -v 2>/dev/null | grep -oE \"^networkmanager-ppp-[0-9.]+\" | head -n1 | sed \"s/^networkmanager-ppp-//\")
+    # TOUS les sous-paquets networkmanager-* (wwan, ppp, ...) : chacun pose son
+    # greffon dans le repertoire de SA version ; un seul en retard, et NM ne
+    # voit plus le modem (wwan) ou ne lance plus pppd (ppp).
+    [ \"\$NMV\" = \"\$NMP\" ] || apk upgrade \$(apk info 2>/dev/null | grep -E \"^networkmanager\") ppp 2>&1 | tail -n 1
+    # Le journal bornait a rien : 168 Mo sur un disque de 2 Go, plein.
+    mkdir -p /etc/systemd/journald.conf.d
+    printf \"[Journal]\nSystemMaxUse=48M\n\" > /etc/systemd/journald.conf.d/osmo.conf
+    journalctl --vacuum-size=40M >/dev/null 2>&1; rm -rf /var/cache/apk/*
     printf \"ppp_generic\nppp_async\n\" > /etc/modules-load.d/osmo-ppp.conf
     modprobe ppp_async 2>/dev/null
 
@@ -46,22 +85,157 @@ ssh_vm "echo $PASS | sudo -S sh -c '
     mmcli --scan-modems 2>/dev/null | tail -n 1
 '" 2>&1 | tail -n 4
 
+# [2026-09-08] LA DATA PAR NOTRE 4G SEULEMENT. La carte virtio de QEMU (le
+# « filaire ») donnait au telephone une route par defaut et un DNS par le
+# NAT de QEMU : Phosh affichait une prise reseau et tout passait par la, la
+# 4G ne servait a rien. On ne peut pas retirer la carte de QEMU : c est par
+# elle (hostfwd 2222) que ce script parle a la VM. On la rend donc INVISIBLE
+# au telephone : NetworkManager ne la gere plus (driver virtio_net non gere),
+# un petit service lui laisse juste son adresse de gestion 10.0.2.15 sans
+# route par defaut ni DNS, resolved ne pointe plus sur le DNS de QEMU. Le
+# telephone n a plus qu une sortie : la connexion mobile (APN srsapn, creee
+# ici si elle manque, automatique), donc le PPP du banc, donc la radio.
+# OSMO_PMOS_FILAIRE=1 remet le filaire (gere par NM, DNS de QEMU).
+# Le basculement coupe une seconde l adresse par laquelle on est connecte :
+# il tourne detache dans la VM, et on attend le retour du SSH.
+FILAIRE="${OSMO_PMOS_FILAIRE:-0}"
+{ echo "$PASS"; echo "FILAIRE=$FILAIRE"; cat <<'GUEST'
+set -u
+CONF=/etc/NetworkManager/conf.d/90-osmo-filaire.conf
+SVC=/etc/systemd/system/osmo-filaire.service
+BIN=/usr/local/bin/osmo-filaire
+mkdir -p /etc/NetworkManager/conf.d /etc/systemd/resolved.conf.d
+if [ "$FILAIRE" = 0 ]; then
+    printf '[keyfile]\nunmanaged-devices=driver:virtio_net\n' > "$CONF"
+    cat > "$BIN" <<'EOB'
+#!/bin/sh
+# osmo-filaire - la carte virtio de QEMU garde son adresse de gestion (SSH
+# depuis l hote par hostfwd), sans route par defaut ni DNS : la data du
+# telephone passe par la connexion mobile, donc par le PPP du banc.
+for d in /sys/class/net/*; do
+    n=${d##*/}
+    drv=$(basename "$(readlink "$d/device/driver" 2>/dev/null)" 2>/dev/null)
+    [ "$drv" = virtio_net ] || continue
+    ip link set "$n" up
+    ip addr replace 10.0.2.15/24 dev "$n"
+    ip route del default dev "$n" 2>/dev/null
+    resolvectl revert "$n" 2>/dev/null     # plus de DNS de QEMU par ce lien
+done
+exit 0
+EOB
+    chmod 755 "$BIN"
+    cat > "$SVC" <<'EOS'
+[Unit]
+Description=osmo-filaire - carte virtio en adresse de gestion seule (data par la 4G)
+After=NetworkManager.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/osmo-filaire
+[Install]
+WantedBy=multi-user.target
+EOS
+    systemctl daemon-reload; systemctl enable osmo-filaire >/dev/null 2>&1
+    printf '[Resolve]\nDNSSEC=no\nDNSOverTLS=no\n' > /etc/systemd/resolved.conf.d/osmo.conf
+    # Un seul profil mobile : celui que l utilisateur a deja cree (srsapn)
+    # sert tel quel, sinon on en cree un.
+    GSM=$(nmcli -t -f NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "gsm" {print $1; exit}')
+    if [ -z "$GSM" ]; then
+        nmcli con add type gsm ifname '*' con-name 'Osmocom 4G' apn srsapn \
+            connection.autoconnect yes ipv4.route-metric 50 >/dev/null 2>&1 && GSM='Osmocom 4G'
+    fi
+    # NetworkManager est REDEMARRE : apk vient parfois de le mettre a jour avec
+    # le greffon PPP, et le daemon encore en memoire cherche le greffon de SON
+    # numero de version (« libnm-ppp-plugin.so is not installed » alors qu il
+    # est la, dans le repertoire de la version neuve). Le fichier de
+    # configuration etant pose, il repart avec le filaire non gere.
+    # Detache par systemd-run : un simple « setsid ... & » meurt avec la
+    # session SSH (logind de la VM tue les processus de l utilisateur a la
+    # deconnexion), et rien ne se passait.
+    systemd-run --quiet --collect --unit "osmo-filaire-bascule-$$" sh -c "
+        sleep 1
+        systemctl restart NetworkManager
+        sleep 2
+        /usr/local/bin/osmo-filaire
+        systemctl restart systemd-resolved
+        [ -n '$GSM' ] && nmcli con up '$GSM' >/dev/null 2>&1
+        exit 0
+    "
+    echo "  filaire cache au telephone : adresse de gestion seule, data par la connexion mobile (APN srsapn)"
+else
+    rm -f "$CONF" "$BIN" "$SVC"; systemctl daemon-reload
+    printf '[Resolve]\nDNS=10.0.2.3 1.1.1.1\nFallbackDNS=8.8.8.8\nDNSSEC=no\nDNSOverTLS=no\n' > /etc/systemd/resolved.conf.d/osmo.conf
+    systemd-run --quiet --collect --unit "osmo-filaire-bascule-$$" sh -c '
+        sleep 1
+        systemctl restart NetworkManager
+        systemctl restart systemd-resolved
+    '
+    echo "  filaire rendu au telephone (OSMO_PMOS_FILAIRE=1)"
+fi
+GUEST
+} | ssh_vm "sudo -S sh -s" 2>/dev/null | tail -n 2
+for _ in $(seq 1 20); do
+    sleep 1
+    ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break
+done
+ssh_vm 'echo ok' 2>/dev/null | grep -q ok || echo "  ATTENTION : la VM ne repond plus en SSH apres le basculement reseau"
+
 # Le modem du banc vient maintenant se brancher sur le port que QEMU tient
 # ouvert. On ne le fait qu ICI, systeme demarre : branche des le debut, le
 # firmware UEFI prend ses reponses pour des touches et n amorce jamais (voir
 # l entete de osmo-pmos-qemu).
 PORT_AT="${OSMO_PMOS_AT_PORT:-12346}"
 REPO="${OSMO_REPO:-/opt/GSM/osmo-operator}"
+# [2026-09-08] LE MODEM EN ROOT : la data du telephone est un lien PPP dont le
+# banc fait un tun (/dev/net/tun + TUNSETIFF), qu il pose dans l espace reseau
+# de srsUE avec un NAT vers tun_srsue. Tout cela exige root ; lance sous le
+# compte de session, le banc repondait CONNECT mais « la data n a pas de
+# sortie radio ». osmo-pmos-qemu a deja fait sudo -v dans ce terminal ; sinon
+# on demande si on a un terminal, et on se rabat sur l utilisateur en le disant.
+BANC_LOG="/tmp/osmo-phonesim-vm-$(id -un).log"
+BANC_SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    if sudo -n true 2>/dev/null || { [ -t 0 ] && sudo -v; }; then
+        BANC_SUDO="sudo -n"
+    else
+        echo "  ATTENTION : pas de root pour le modem - la data PPP n aura pas de sortie radio"
+    fi
+fi
 if pgrep -f "[o]smo-phonesim-banc.py --connect" >/dev/null 2>&1; then
     echo "  modem deja branche sur la VM"
 else
-    setsid nohup "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$PORT_AT" \
-        >>"/tmp/osmo-phonesim-vm-$(id -un).log" 2>&1 </dev/null &
+    # La trace AT de CE modem dans son propre fichier : en root, les deux
+    # instances du banc ecrivaient dans /var/log/osmo-at-ofono.log et leurs
+    # dialogues se melangeaient (le sondage +CLCC de l hote au milieu des RING
+    # de la VM).
+    # sudo AVANT setsid : le cache du mot de passe est attache au terminal,
+    # et setsid s en detache - « sudo » lance sous setsid redemandait le mot
+    # de passe (« a terminal is required ») et le modem ne partait pas.
+    # --data : le port de donnees (hvc1, chardev QEMU sur PORT_AT+1), voir le
+    # modem a deux ports dans osmo-phonesim-banc.py.
+    $BANC_SUDO setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
+        "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$PORT_AT" --data "127.0.0.1:$((PORT_AT + 1))" \
+        >>"$BANC_LOG" 2>&1 </dev/null &
     sleep 3
     pgrep -f "[o]smo-phonesim-banc.py --connect" >/dev/null 2>&1 \
         && echo "  modem du banc branche sur la VM (port $PORT_AT)" \
-        || echo "  ATTENTION : le modem ne s est pas branche (cf. /tmp/osmo-phonesim-vm-$(id -un).log)"
+        || echo "  ATTENTION : le modem ne s est pas branche (cf. $BANC_LOG)"
 fi
+# [2026-09-08] MODEMMANAGER SONDE APRES LE BRANCHEMENT. Le redemarrage de MM
+# plus haut a lieu AVANT que le banc soit sur le port : la sonde de hvc0 tombe
+# dans le vide, MM raye le port et ne le ressonde plus (« No modems were
+# found » pour de bon). Un second redemarrage, le modem branche, et il le voit.
+# Et NetworkManager APRES ModemManager : relance (par la bascule reseau plus
+# haut) pendant que MM etait absent, NM notait « error creating ModemManager
+# client » et ne voyait jamais le modem ensuite - pas de device gsm, pas de
+# PPP, modem « disabled ». Detache par systemd-run : la relance de NM coupe
+# la session SSH qui la demande.
+ssh_vm "echo $PASS | sudo -S systemd-run --quiet --collect --unit osmo-mm-puis-nm sh -c 'systemctl restart ModemManager; sleep 6; systemctl restart NetworkManager'" >/dev/null 2>&1
+for _ in $(seq 1 20); do
+    sleep 1
+    ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break
+done
+sleep 8
 
 # [2026-09-07] LA VOIX, ET POURQUOI IL FAUT DEUX CARTES SON. QEMU ne sait pas
 # pousser du son dans le haut-parleur d un invite : d une carte emulee, la
@@ -141,4 +315,11 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
 fi
 
 echo "--- etat"
-ssh_vm 'ls /dev/ttyS[1-9] 2>/dev/null | head -n 3; getent hosts alpinelinux.org >/dev/null 2>&1 && echo "DNS OK" || echo "DNS KO"; mmcli -L 2>/dev/null | tail -n 2' 2>&1 | tail -n 5
+# ModemManager vient d etre relance : il sonde le port pendant quelques
+# secondes, et « No modems were found » lu trop tot faisait croire a une
+# panne. On lui laisse jusqu a 40 s.
+ssh_vm 'for i in $(seq 1 20); do mmcli -L 2>/dev/null | grep -q Modem/ && break; sleep 2; done
+ls /dev/hvc0 /dev/hvc1 /dev/ttyS[1-9] 2>/dev/null | head -n 4
+getent hosts alpinelinux.org >/dev/null 2>&1 && echo "DNS OK" || echo "DNS KO"
+mmcli -L 2>/dev/null | tail -n 1
+mmcli -m any 2>/dev/null | grep -E "state:|access tech|primary port|ports" | sed "s/^ *|//"' 2>&1 | tail -n 8

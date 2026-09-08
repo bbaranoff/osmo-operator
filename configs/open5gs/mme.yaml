@@ -1,0 +1,105 @@
+# mme.yaml - le MME open5gs du banc (Open5GS v2.8.0, /root/open5gs/install).
+#
+# [2026-09-08] REECRIT A PLAT. Le fichier livre par open5gs fait 360 lignes
+# dont 300 d exemples commentes (roaming, DNS, SGSN, IPv6...) qui n ont rien
+# a voir avec ce banc : on ne gardait plus que les 60 lignes utiles, noyees.
+# Ici, seulement ce qui tourne, et pourquoi. La source est dans le depot,
+# configs/open5gs/mme.yaml ; la copie en service est
+# /root/open5gs/install/etc/open5gs/mme.yaml (cp, puis relancer open5gs-mmed).
+#
+# LE PLAN D ADRESSES : tout le coeur 4G vit sur la boucle locale, une adresse
+# par fonction, pour que les ports 2123/2152/8805 ne se marchent pas dessus :
+#   127.0.0.2  MME (S1AP sctp 36412, GTP-C 2123, Diameter S6a, SGs vers le MSC)
+#   127.0.0.3  SGW-C     127.0.0.4  SMF (= PGW-C)     127.0.0.6  SGW-U
+#   127.0.0.7  UPF       127.0.0.8  HSS               127.0.0.9  PCRF
+#   127.0.0.1  osmo-msc (SGs 29118), osmo-stp, osmo-sgsn - la 2G d osmocom.
+# srsENB (ZeroMQ, 127.0.1.1) vient sur le S1AP de 127.0.0.2 (enb.conf : mme_addr).
+#
+# PIEGE VU LE 2026-09-08 : le PGW n est PAS choisi que par gtpc.client.smf.
+# Si la souscription HSS (MongoDB, open5gs.subscribers, slice[].session[].smf)
+# porte une adresse, elle l emporte - le WebUI y met 127.0.0.200 par defaut,
+# et le SGW-C attendait un Create Session Response de personne (GTP Timeout,
+# RRC Release, « Attach failed (attempt N/5) » cote srsUE). Laisser ce champ
+# vide dans la base.
+
+logger:
+  file:
+    path: /root/open5gs/install/var/log/open5gs/mme.log
+
+global:
+  max:
+    ue: 1024          # largement assez : un srsUE et le telephone du banc
+
+mme:
+  freeDiameter: /root/open5gs/install/etc/freeDiameter/mme.conf   # S6a vers le HSS (127.0.0.8)
+
+  # S1AP : ce qu ecoute le MME pour les eNB. srsENB s y connecte en SCTP.
+  s1ap:
+    server:
+      - address: 127.0.0.2
+
+  # GTP-C (S11 vers le SGW-C, S5 vers le SMF quand le HSS ne dit rien).
+  gtpc:
+    server:
+      - address: 127.0.0.2
+    client:
+      sgwc:
+        - address: 127.0.0.3
+      smf:
+        - address: 127.0.0.4
+
+  metrics:
+    server:
+      - address: 127.0.0.2
+        port: 9090
+
+  # SGs : LE LIEN AVEC LA 2G. C est par lui que l UE pose sur la 4G est aussi
+  # inscrit au VLR d osmo-msc (attach combine EPS + IMSI), et que le CSFB
+  # marche : appel ou SMS, l UE redescend sur la BTS ; entre-temps le MSC
+  # sait ou le joindre (paging par le MME). osmo-msc ecoute en SCTP sur
+  # 127.0.0.1:29118 (osmo-msc.cfg, section « sgs »). La table « map » traduit
+  # la zone 4G (TAI : PLMN 001-01, TAC 7 - celui de rr.conf de srsENB) en zone
+  # 2G (LAI : PLMN 001-01, LAC 1 - location_area_code 0x0001 dans osmo-bsc.cfg) :
+  # le VLR classe l abonne dans la LAC 1 alors qu il est sur la LTE.
+  sgsap:
+    client:
+      - address: 127.0.0.1
+        local_address: 127.0.0.2
+        map:
+          tai:
+            plmn_id:
+              mcc: 001
+              mnc: 01
+            tac: 7
+          lai:
+            plmn_id:
+              mcc: 001
+              mnc: 01
+            lac: 1
+
+  # L identite du MME (GUMMEI) : c est ce que porte le GUTI donne a l UE.
+  gummei:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      mme_gid: 2
+      mme_code: 1
+
+  # Les zones servies : une seule, celle qu annonce srsENB.
+  tai:
+    - plmn_id:
+        mcc: 001
+        mnc: 01
+      tac: 7
+
+  # Securite NAS : integrite obligatoire (EIA2 d abord), chiffrement nul
+  # (EEA0) en tete - on veut LIRE le NAS dans Wireshark sur ce banc.
+  security:
+    integrity_order : [ EIA2, EIA1, EIA0 ]
+    ciphering_order : [ EEA0, EEA1, EEA2 ]
+
+  # Le nom que le telephone affiche pour la 4G (EMM Information).
+  network_name:
+    full: OsmoDirect
+    short: OsmoDirect
+  mme_name: open5gs-mme0

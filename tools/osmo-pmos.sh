@@ -29,7 +29,8 @@
 # une fois le systeme leve - c est le mode --connect du modem, qui attend que le
 # port SSH de la VM reponde avant de se brancher.
 #
-#   osmo-pmos up         le geste de l icone : installe si besoin, puis allume
+#   osmo-pmos up         le geste de l icone : la VM pmbootstrap (osmo-pmos-qemu),
+#                        format smartphone|tablette en argument ; stop et status y vont aussi
 #   osmo-pmos install    paquets qemu + l image postmarketOS + la preparation
 #   osmo-pmos fetch      telecharge (ou reprend) l image et verifie son sha256
 #   osmo-pmos provision  mot de passe, sshd, et la regle ModemManager du port AT
@@ -381,6 +382,24 @@ pmos_install() {
     _say "mot de passe : ${BOLD}$PMOS_PASS${NC}"
 }
 
+# [2026-09-08] LE GESTE DE L ICONE VA A pmbootstrap. L icone du dock
+# (osmo-pmos.desktop) et osmo-launcher.py appellent « osmo-pmos up » ; or la
+# VM du banc est desormais celle de pmbootstrap (tools/osmo-pmos-qemu.sh :
+# modem sur port serie PCI, cartes son du pont voix, format d ecran), pas
+# l image telechargee ici dans /var/lib/osmo-pmos. « up » finissait donc sur
+# « il faut d abord poser l image... cette commande demande root », fenetre
+# fermee aussitot. up/start, stop/down et status vont au lanceur pmbootstrap
+# des qu il est la ; le reste (fetch, provision, shell, mm, at, log) garde
+# son sens ici.
+QEMU_LANCEUR="${OSMO_PMOS_QEMU:-/usr/local/bin/osmo-pmos-qemu}"
+[ -x "$QEMU_LANCEUR" ] || QEMU_LANCEUR="$REPO/tools/osmo-pmos-qemu.sh"
+if [ -x "$QEMU_LANCEUR" ]; then
+    case "${1:-status}" in
+        up|start)  shift; exec "$QEMU_LANCEUR" "$@" ;;
+        stop|down) exec "$QEMU_LANCEUR" stop ;;
+        status)    exec "$QEMU_LANCEUR" status ;;
+    esac
+fi
 case "${1:-status}" in
     install)   pmos_install ;;
     # « up » = le geste de l icone : on installe si l image manque, puis on

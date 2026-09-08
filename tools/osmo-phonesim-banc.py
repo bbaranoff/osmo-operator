@@ -427,17 +427,70 @@ class Lte:
             essais.append(["ip", "-n", LTE_NETNS, "-4", "-o", "addr", "show"])
         essais.append(["ip", "-4", "-o", "addr", "show"])
         vu_quelque_part = False
+        ns_ferme = False
         for cmd in essais:
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
             except (OSError, subprocess.TimeoutExpired):
                 continue
             if r.returncode != 0:
+                # [2026-09-08] « ip -n ue1 » refuse sans root (Operation not
+                # permitted) alors que l espace existe : le tun peut y etre
+                # sans qu on le voie. Ne pas conclure « pas attache » sur la
+                # seule vue de l hote.
+                if "-n" in cmd and LTE_NETNS and os.path.exists("/run/netns/" + LTE_NETNS):
+                    ns_ferme = True
                 continue
             vu_quelque_part = True
             if re.search(r'\b%s\b.*\binet\b' % re.escape(LTE_TUN), r.stdout):
                 return True
+        if ns_ferme:
+            # Sans root, on regarde par les fils de srsue : le fil GW a fait
+            # setns() dans l espace, et /proc/<pid>/task/<tid>/net/ se lit
+            # par tout le monde. fib_trie y liste les adresses locales : le
+            # tun y est avec son adresse des que l attach a abouti.
+            vu = self._ue_attache_par_proc()
+            if vu is not None:
+                return vu
+            return None
         return False if vu_quelque_part else None
+
+    def _ue_attache_par_proc(self):
+        """True/False d apres /proc/<pid srsue>/task/*/net, None si pas de
+        srsue ou rien de lisible."""
+        try:
+            r = subprocess.run(["pgrep", "-x", "srsue"], capture_output=True, text=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        pids = r.stdout.split()
+        if not pids:
+            return False
+        lu = False
+        for pid in pids:
+            try:
+                tids = os.listdir("/proc/%s/task" % pid)
+            except OSError:
+                continue
+            for tid in tids:
+                base = "/proc/%s/task/%s/net/" % (pid, tid)
+                try:
+                    with open(base + "dev") as f:
+                        dev = f.read()
+                except OSError:
+                    continue
+                lu = True
+                if LTE_TUN + ":" not in dev:
+                    continue
+                try:
+                    with open(base + "fib_trie") as f:
+                        trie = f.read()
+                except OSError:
+                    continue
+                # Une adresse LOCAL autre que 127.x dans l espace du tun :
+                # srsue l a recue de l EPC.
+                if re.search(r'^\s+\|--\s+(?!127\.)\d+\.\d+\.\d+\.\d+\n\s+/32 host LOCAL', trie, re.M):
+                    return True
+        return False if lu else None
 
     def state(self):
         if time.time() - self._t < 1.0:
@@ -695,11 +748,31 @@ import fcntl
 import random
 import struct
 
-PPP_LOCAL = os.environ.get("OSMO_PPP_LOCAL", "10.45.0.1")      # nous, le reseau
-PPP_PEER = os.environ.get("OSMO_PPP_PEER", "10.45.0.2")        # le telephone
+# [2026-09-08] Les adresses du lien PPP ne doivent PAS etre celles que l EPC
+# donne a l UE. Avec open5gs, srsUE recoit 10.45.0.2 ; le lien PPP en
+# 10.45.0.1/.2 mettait alors l adresse du telephone en LOCAL sur tun_srsue,
+# dans le meme espace reseau : le retour du NAT etait livre a l hote au lieu
+# de repartir vers le telephone. Un /30 a part, que rien d autre n emploie.
+PPP_LOCAL = os.environ.get("OSMO_PPP_LOCAL", "10.99.0.1")      # nous, le reseau
+PPP_PEER = os.environ.get("OSMO_PPP_PEER", "10.99.0.2")        # le telephone
 PPP_DNS = [d.strip() for d in os.environ.get("OSMO_PPP_DNS", "8.8.8.8,8.8.4.4").split(",") if d.strip()]
 PPP_IF = os.environ.get("OSMO_PPP_IF", "ppp-pmos")
-PPP_SGI_NET = os.environ.get("OSMO_LTE_SGI_NET", "172.16.0.0/24")
+
+
+def _sgi_net_defaut():
+    """Le sous-reseau des UE, pour la sortie SGi -> Internet de l hote :
+    celui de smf.yaml avec open5gs (10.45.0.0/16), 172.16.0.0/24 avec srsEPC."""
+    for f in ("/root/open5gs/install/etc/open5gs/smf.yaml", "/etc/open5gs/smf.yaml"):
+        try:
+            m = re.search(r'^\s*-\s*subnet:\s*(\d+\.\d+\.\d+\.\d+/\d+)', open(f).read(), re.M)
+        except OSError:
+            continue
+        if m:
+            return m.group(1)
+    return "172.16.0.0/24"
+
+
+PPP_SGI_NET = os.environ.get("OSMO_LTE_SGI_NET") or _sgi_net_defaut()
 
 _FCS_TAB = []
 for _b in range(256):
@@ -744,6 +817,20 @@ class Ppp:
         self.fini = False
         self.lock = threading.Lock()
         self.octets = [0, 0]                 # montant, descendant
+        self._motif_fin = None               # pose par terminer()
+
+    def terminer(self, motif):
+        """C est NOUS qui fermons la session : Terminate-Request a pppd, qui
+        repond Terminate-Ack et s arrete ; s il ne repond pas dans la seconde,
+        on ferme quand meme. fin() dira NO CARRIER au port, ModemManager
+        reprend alors la main en mode commande."""
+        if self.fini or self._motif_fin:
+            return
+        self._motif_fin = motif
+        self._paquet(self.LCP, self.TERM_REQ, self._prochain(), b"")
+        t = threading.Timer(1.0, lambda: self.fin(motif))
+        t.daemon = True
+        t.start()
 
     # -- la couche HDLC
     def feed(self, data):
@@ -873,6 +960,9 @@ class Ppp:
         elif code == self.TERM_REQ:
             self._paquet(self.LCP, self.TERM_ACK, ident, body)
             self.fin("le telephone a termine la session PPP")
+            return
+        elif code == self.TERM_ACK and self._motif_fin:
+            self.fin(self._motif_fin)
             return
         elif code == self.ECHO_REQ:
             self._paquet(self.LCP, self.ECHO_REP, ident, self.magic + body[4:])
@@ -1030,10 +1120,15 @@ class Ppp:
 class AtHandler(socketserver.StreamRequestHandler):
     """Un modem par connexion : oFono en ouvre une seule."""
 
+    role = "commande"             # « commande » (hvc0) ou « data » (hvc1, voir DATA)
+
     def setup(self):
         super().setup()
-        global CURRENT
-        CURRENT = self            # oFono n ouvre qu une connexion : c est celle-ci
+        global CURRENT, DATA
+        if self.role == "data":
+            DATA = self
+        else:
+            CURRENT = self        # oFono n ouvre qu une connexion : c est celle-ci
         self.echo = True          # un vrai modem demarre en echo
         self.cmee = 1
         self.creg_mode = 0
@@ -1060,8 +1155,12 @@ class AtHandler(socketserver.StreamRequestHandler):
         self._rat_annonce = None
         self.data_cid = 0           # le contexte PDP « connecte » par +GTRNDIS (0 = aucun)
         self.ppp = None             # la session PPP en cours (ATD*99), voir la classe Ppp
-        log("oFono s est connecte depuis %s" % (self.client_address,))
-        threading.Thread(target=self._veille, daemon=True).start()
+        self._urc_attente = []      # les URC retenus pendant la data (voir out)
+        self._urc_lock = threading.Lock()
+        self.port_commande = True   # False entre NO CARRIER et la commande AT suivante
+        log("oFono s est connecte depuis %s (port de %s)" % (self.client_address, self.role))
+        if self.role != "data":
+            threading.Thread(target=self._veille, daemon=True).start()
 
     def finish(self):
         """Le lien est tombe : ce modem n est plus « le » modem.
@@ -1073,11 +1172,27 @@ class AtHandler(socketserver.StreamRequestHandler):
         annonce comme remis a personne. Meme piege pour les RING d AmiEcoute.
         La boite, elle, garde le message : il ressortira au prochain AT+CMGL.
         """
-        global CURRENT
+        global CURRENT, DATA
         if CURRENT is self:
             CURRENT = None
+        if DATA is self:
+            DATA = None
         if self.ppp is not None:
             self.ppp.fin("lien AT ferme")
+        # [2026-09-08] LES APPELS MEURENT AVEC LE LIEN. Un appel arrive sur ce
+        # gestionnaire, la VM redemarre : le lien tombe, un nouveau
+        # gestionnaire nait, et l AMI ne parle qu a CURRENT - le raccroche
+        # n arrivait donc jamais ici. La boucle _sonne tournait pour toujours
+        # (RING toutes les 3 s dans le journal, vers une douille fermee) et le
+        # correspondant restait pendu. On raccroche cote Asterisk et on vide.
+        for c in list(self.calls):
+            log("lien ferme : appel %s abandonne, raccroche cote Asterisk"
+                % (c.get("channel") or c.get("num") or "?"))
+            ami_hangup(c.get("channel"))
+        self.calls.clear()
+        t, self._retour = self._retour, None
+        if t:
+            t.cancel()
         try:
             super().finish()
         except OSError:
@@ -1089,22 +1204,70 @@ class AtHandler(socketserver.StreamRequestHandler):
         sonde et le porteur passe « deconnecte »."""
         self.ppp = None
         self.data_cid = 0
-        self.out("NO CARRIER")
+        # NO CARRIER part tel quel : c est lui qui rend le port. Ensuite, tant
+        # que le telephone n a pas envoye sa premiere commande AT, le port est
+        # encore a pppd qui s arrete : ce qu on emettrait partirait dans le
+        # vide (les +CREG du retour 4G, un +CMTI). On retient (voir out).
+        self.port_commande = False
+        atlog(">", "NO CARRIER")
+        try:
+            self.wfile.write(b"\r\nNO CARRIER\r\n")
+            self.wfile.flush()
+        except OSError:
+            pass
+
+    def _tag(self, sens):
+        return sens if self.role != "data" else sens + "d"      # « >d » : port de donnees
 
     def out(self, text):
-        atlog(">", text)
+        # [2026-09-08] UN SEUL PORT, DONC PAS D URC PENDANT LE PPP. Le modem du
+        # banc n a qu un port serie : une fois ATD*99 passe, tout ce qu on y
+        # ecrit entre dans le flux PPP, et pppd jette RING, +CLIP, +CMTI comme
+        # du bruit. Le telephone ne voyait donc ni appel ni SMS entrant des
+        # que la data etait montee. Ce qui doit etre annonce pendant la data
+        # attend ici, et part des que le port est revenu en mode commande
+        # (voir _urc_liberer, appele apres la premiere commande AT qui suit).
+        # csfb_debut() coupe la data pour cela : sur un vrai reseau aussi, le
+        # CSFB suspend la data le temps du service CS.
+        if self.ppp is not None or not self.port_commande:
+            with self._urc_lock:
+                if text not in self._urc_attente:
+                    self._urc_attente.append(text)
+            atlog(self._tag("~"), text + "   (retenu : port en mode donnees)")
+            return
+        atlog(self._tag(">"), text)
         try:
             self.wfile.write(("\r\n%s\r\n" % text).encode())
             self.wfile.flush()
         except OSError:
             pass
 
+    def _urc_liberer(self):
+        """Le port est en mode commande : on emet ce qui attendait."""
+        with self._urc_lock:
+            attente, self._urc_attente = self._urc_attente, []
+        for text in attente:
+            self.out(text)
+
     # -- la technologie d acces : 4G au repos, 2G le temps d un service CS
+    def _modem(self):
+        """L etat du telephone vit sur le port de commande : le port de
+        donnees s y reporte."""
+        if self.role == "data" and CURRENT is not None:
+            return CURRENT
+        return self
+
     def cs_actif(self):
-        return bool(self.calls) or self.sms_target is not None or self._cs_hold
+        m = self._modem()
+        return bool(m.calls) or m.sms_target is not None or m._cs_hold
+
+    def appel_en_cours(self):
+        return bool(self._modem().calls)
 
     def rat(self):
         """« lte » ou « gsm » : ou le telephone est pose en ce moment."""
+        if self.role == "data" and CURRENT is not None:
+            return CURRENT.rat()
         if self.ws46 == 12:                   # le systeme a demande GSM seule
             return "gsm"
         if not LTE.state()["ok"]:
@@ -1142,6 +1305,8 @@ class AtHandler(socketserver.StreamRequestHandler):
         que le systeme a demandes (AT+CREG=2 etc.). L ordre compte : c est la
         DERNIERE annonce qui donne l AcT que ModemManager retient, on finit
         donc par celle qui porte la technologie du moment."""
+        if self.role == "data":
+            return                            # les URC vont sur le port de commande
         rat = self.rat()
         prev, self._rat_annonce = self._rat_annonce, rat
         if prev == rat:
@@ -1169,9 +1334,11 @@ class AtHandler(socketserver.StreamRequestHandler):
                 log("veille 4G : %s" % e)
             time.sleep(2)
 
-    def csfb_debut(self, motif):
+    def csfb_debut(self, motif, couper_data=True):
         """Un service CS commence : on descend sur la 2G, tout de suite, et on
-        annule un retour 4G qui serait en route."""
+        annule un retour 4G qui serait en route. couper_data : la session PPP
+        est fermee (un appel : la 2G n a pas de data pendant la voix ; un SMS
+        en port unique : il faut rendre le port aux URC)."""
         t, self._retour = self._retour, None
         if t:
             t.cancel()
@@ -1180,6 +1347,14 @@ class AtHandler(socketserver.StreamRequestHandler):
             st = BANC.state()
             log("CSFB : %s - on quitte la 4G pour la 2G (ARFCN %s, LAC %d, CI %d)"
                 % (motif, st["arfcn"] or "?", st["lac"], st["cid"]))
+        # La data est suspendue le temps du service CS - et c est surtout le
+        # seul moyen de rendre le port aux URC (voir out). NetworkManager
+        # relancera ATD*99 de lui-meme une fois l UE revenu sur la 4G.
+        if couper_data:
+            for m in (self, DATA):
+                if m is not None and m.ppp is not None:
+                    log("CSFB : data suspendue (fin de la session PPP) le temps du service CS")
+                    m.ppp.terminer("CSFB : data suspendue le temps du service CS")
         self.annonce_rat()
 
     def csfb_fin_apres(self, delai=2.0):
@@ -1236,7 +1411,15 @@ class AtHandler(socketserver.StreamRequestHandler):
                 line, buf = buf[:m.start()], buf[m.end():]
                 text = line.decode(errors="replace").strip()
                 if text:
-                    atlog("<", text)
+                    atlog(self._tag("<"), text)
+                if text:
+                    self.port_commande = True     # le telephone parle AT : le port est a nous
+                    # Les URC retenus partent AVANT la commande : si c est
+                    # ATD*99, le port repasse en data juste apres, et un
+                    # +CEREG « retour 4G » retenu resterait enferme derriere
+                    # le PPP - Phosh gardait la 2G a l ecran.
+                    if self.ppp is None and self._urc_attente:
+                        self._urc_liberer()
                 if self.sms_target is not None and m.group() == b"\x1a":
                     self.sms(text)
                 elif text:
@@ -1285,8 +1468,10 @@ class AtHandler(socketserver.StreamRequestHandler):
             return
         c = {"num": num, "state": "incoming", "channel": chan}
         # Le paging arrive par la 4G (SGs), la sonnerie se joue sur la 2G :
-        # on descend AVANT le premier RING.
-        self.csfb_debut("appel entrant de %s" % (num or "inconnu"))
+        # on descend AVANT le premier RING. Avec un port de donnees a part, la
+        # data reste : refuser ATD*99 pendant la sonnerie faisait passer
+        # NetworkManager en repli (4 echecs, puis 5 min sans reessayer).
+        self.csfb_debut("appel entrant de %s" % (num or "inconnu"), couper_data=(DATA is None))
         self.calls.append(c)
         log("appel entrant de %s (%s)" % (num or "inconnu", chan))
         threading.Thread(target=self._sonne, args=(c,), daemon=True).start()
@@ -1295,7 +1480,7 @@ class AtHandler(socketserver.StreamRequestHandler):
         """RING toutes les trois secondes, et +CLIP juste derriere pour donner
         le numero - c est ce que ModemManager attend pour presenter l appel
         (AT+CLIP=1 fait partie des reglages qu on accepte)."""
-        while c in self.calls and c["state"] == "incoming":
+        while c in self.calls and c["state"] == "incoming" and CURRENT is self:
             self.out("RING")
             if c["num"]:
                 self.out('+CLIP: "%s",129,,,,0' % c["num"])
@@ -1326,7 +1511,9 @@ class AtHandler(socketserver.StreamRequestHandler):
         idx = inbox_ranger(sender, text, pdu)
         # Un SMS est un service CS sur ce banc (il vient du MSC) : on descend
         # sur la 2G le temps de le recevoir, on remonte trois secondes apres.
-        self.csfb_debut("SMS entrant de %s" % (sender or "inconnu"))
+        # Avec un port de donnees a part, la data reste montee : les URC ont
+        # leur port. En port unique, il faut couper pour que +CMTI passe.
+        self.csfb_debut("SMS entrant de %s" % (sender or "inconnu"), couper_data=(DATA is None))
         self.csfb_fin_apres(3.0)
         if self.cnmi_mt == 2:
             tpdu_len = len(pdu) // 2 - 1      # sans l octet de SMSC en tete
@@ -1357,7 +1544,7 @@ class AtHandler(socketserver.StreamRequestHandler):
                 log("PDU illisible (%s) : %s" % (e, text[:60]))
                 self.err()
                 return
-        self.csfb_debut("SMS vers %s" % num)
+        self.csfb_debut("SMS vers %s" % num, couper_data=(DATA is None))
         out = MSC.cmd('subscriber msisdn %s sms sender msisdn %s send %s'
                       % (num, MSISDN, text))
         self.csfb_fin_apres(3.0)
@@ -1837,18 +2024,30 @@ class AtHandler(socketserver.StreamRequestHandler):
                     log("data : ATD%s refuse, aucun reseau" % num)
                     self.err(30)                 # 30 = pas de service reseau
                     return
+                # [2026-09-08] PAS DE DATA PENDANT UN SERVICE CS. Sur la 2G,
+                # un mobile en appel n a pas de data (classe B) ; et ici, avec
+                # UN SEUL port, accepter ATD*99 en plein appel remettait le
+                # port en mode donnees : le NO CARRIER du correspondant qui
+                # raccroche et le +CEREG du retour sur la 4G restaient retenus
+                # derriere le PPP - ecran d appel fige, telephone bloque en
+                # 2G. NetworkManager reessaie de lui-meme apres le service.
+                if DATA is None and self.cs_actif():
+                    log("data : ATD%s refuse le temps du service CS (CSFB)" % num)
+                    self.out("NO CARRIER")
+                    return
                 m = re.search(r"\*\*\*(\d+)#", num)
                 self.data_cid = int(m.group(1)) if m else 1
                 log("data : ATD%s -> CONNECT, PPP sur le port AT (cid %d, APN %s), par %s"
                     % (num, self.data_cid, LTE.state()["apn"],
                        "la 4G (srsUE)" if self.rat() == "lte" else "la 2G"))
                 self.out("CONNECT")
+                self.port_commande = False
                 self.ppp = Ppp(self)
                 self.ppp.demarrer()
                 return
             # CSFB : l appel se fait sur la 2G. On descend AVANT de composer,
             # comme un vrai UE quitte la LTE sur l Extended Service Request.
-            self.csfb_debut("appel vers %s" % num)
+            self.csfb_debut("appel vers %s" % num, couper_data=(DATA is None))
             # « origine » = le nom de DEMANDE du canal Local (« Local/600@internal »),
             # qu Asterisk decline en « ...-0000000b;1 » et « ;2 ». C est par lui
             # qu on reconnait nos propres jambes dans les evenements AMI
@@ -2003,16 +2202,31 @@ INBOX_LOCK = threading.Lock()
 INBOX_MAX = 20                 # ce que +CPMS annonce comme capacite
 
 
+INBOX_DERNIER = [0]            # le dernier index attribue (voir inbox_ranger)
+
+
 def inbox_ranger(sender, text, pdu):
-    """Range un SMS et rend son index, comme une memoire « SM »."""
+    """Range un SMS et rend son index, comme une memoire « SM ».
+
+    [2026-09-08] LES INDEX TOURNENT. On reprenait l index 1 des que le
+    telephone l avait efface (AT+CMGD=1) ; or ModemManager garde parfois ce
+    message dans SA liste - son effacement a echoue chez lui (« SMS storage
+    currently locked, try again later ») bien que le modem ait dit OK - et un
+    +CMTI sur un index qu il croit deja connu est ignore : le SMS suivant
+    passait a la trappe, une fois sur deux ou trois. On prend donc toujours
+    l index libre SUIVANT, en tournant sur les 20 : un index n est repris
+    qu apres 19 autres."""
     with INBOX_LOCK:
-        libres = [i for i in range(1, INBOX_MAX + 1)
-                  if all(m["idx"] != i for m in INBOX)]
-        if not libres:
+        pris = {m["idx"] for m in INBOX}
+        if len(pris) >= INBOX_MAX:
             INBOX.pop(0)       # boite pleine : le plus ancien cede la place
-            libres = [i for i in range(1, INBOX_MAX + 1)
-                      if all(m["idx"] != i for m in INBOX)]
-        idx = libres[0]
+            pris = {m["idx"] for m in INBOX}
+        idx = INBOX_DERNIER[0]
+        for _ in range(INBOX_MAX):
+            idx = idx % INBOX_MAX + 1
+            if idx not in pris:
+                break
+        INBOX_DERNIER[0] = idx
         INBOX.append({"idx": idx, "pdu": pdu, "sender": sender, "text": text,
                       "lu": False, "ts": time.strftime("%y/%m/%d,%H:%M:%S+08")})
         INBOX.sort(key=lambda m: m["idx"])
@@ -2226,6 +2440,17 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 CURRENT = None                 # le modem actuellement ouvert par oFono
+# [2026-09-08] LE MODEM A DEUX PORTS. Sur un seul port, une fois ATD*99
+# passe, plus rien ne circule en AT : le telephone ne peut ni appeler ni
+# envoyer un SMS tant que la data est montee (« No AT port available »), et
+# les entrants n arrivent qu en coupant le PPP. Un vrai modem a un port de
+# commande et un port de donnees. Ici aussi, desormais : CURRENT tient le
+# port de commande (hvc0, URC, appels, SMS) ; DATA tient le port de donnees
+# (hvc1, celui que ModemManager marque ID_MM_PORT_TYPE_AT_PPP et sur lequel il
+# compose ATD*99). Les deux sont des AtHandler sur le meme etat du banc ; le
+# port de donnees renvoie sur CURRENT pour ce qui est l etat du telephone
+# (technologie, appel en cours). Sans --data, on reste en port unique.
+DATA = None                    # le port de donnees, s il y en a un
 
 
 def on_smpp_sms(sender, text):
@@ -2326,9 +2551,10 @@ class ClientHandler(AtHandler):
     une fois le systeme charge.
     """
 
-    def __init__(self, sock, addr):
+    def __init__(self, sock, addr, role="commande"):
         # StreamRequestHandler.setup() attend self.request et fabrique lui-meme
         # connection/rfile/wfile : on lui donne juste la douille.
+        self.role = role
         self.request = sock
         self.client_address = addr
         self.server = None
@@ -2358,10 +2584,11 @@ def vm_prete(port):
         return False
 
 
-def connect_to(dest):
+def connect_to(dest, role="commande"):
     """dest = « hote:port » : on se connecte et on tient le modem sur ce lien."""
     host, _, port = dest.rpartition(":")
     temoin = int(os.environ.get("OSMO_VM_READY_PORT", "2222"))
+    deja_dit = False
     while True:
         if temoin and not vm_prete(temoin):
             log("la VM n est pas prete (port %d ferme) - on patiente" % temoin)
@@ -2371,9 +2598,13 @@ def connect_to(dest):
         try:
             s = socket.create_connection((host or "127.0.0.1", int(port)), timeout=10)
         except OSError as e:
-            log("connexion a %s impossible (%s) - nouvel essai dans 5 s" % (dest, e))
+            if not deja_dit:
+                log("connexion a %s (port de %s) impossible (%s) - on reessaie toutes les 5 s"
+                    % (dest, role, e))
+                deja_dit = True
             time.sleep(5)
             continue
+        deja_dit = False
         # [2026-09-07] LE DELAI SERT A SE CONNECTER, PAS A TENIR LE LIEN.
         # create_connection(timeout=10) laisse ce delai SUR la douille : la
         # lecture suivante levait socket.timeout apres dix secondes de silence,
@@ -2383,9 +2614,9 @@ def connect_to(dest):
         # ronde « oFono s est deconnecte / lien ferme » dans ce journal. On
         # repasse donc en bloquant, comme le lien SMPP plus haut.
         s.settimeout(None)
-        log("connecte a %s" % dest)
+        log("connecte a %s (port de %s)" % (dest, role))
         try:
-            ClientHandler(s, (host, int(port)))
+            ClientHandler(s, (host, int(port)), role)
         except OSError as e:
             log("lien rompu : %s" % e)
         finally:
@@ -2402,9 +2633,15 @@ def main():
     if SMPP_ON:
         Smpp(on_smpp_sms).start()
     AmiEcoute().start()
+    data = None
+    for i, a in enumerate(sys.argv):
+        if a == "--data" and i + 1 < len(sys.argv):
+            data = sys.argv[i + 1]
     for i, a in enumerate(sys.argv):
         if a == "--connect" and i + 1 < len(sys.argv):
             boite_entree(SMS_IN_CONNECT)
+            if data:
+                threading.Thread(target=connect_to, args=(data, "data"), daemon=True).start()
             return connect_to(sys.argv[i + 1])
     boite_entree(SMS_IN_LISTEN)
     srv = Server((HOST, PORT), AtHandler)
