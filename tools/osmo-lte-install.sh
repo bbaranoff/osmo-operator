@@ -189,7 +189,16 @@ lte_configs() {
         install -m644 "$f" "$dst"
     done
     _l_ok "srsRAN : configs dans $SRS_DIR ($(ls "$SRS_DIR" | grep -c '\.conf$') .conf, user_db.csv)"
-    if [ -d "$O5GS_PREFIX/etc/open5gs" ] || [ "$force" = "1" ]; then
+    # [2026-09-09] LA CONDITION TESTAIT LE MAUVAIS OBJET. Elle demandait que
+    # $PREFIX/etc/open5gs EXISTE DEJA - c est a dire que le `ninja install`
+    # d Open5GS ait pose ses yaml d exemple. Un Open5GS venu du .deb du cache,
+    # ou une installation dont le etc/ a ete nettoye (l ISO lite fait le
+    # menage dans /opt/LTE), avait donc ses binaires mais jamais nos configs :
+    #     ! Open5GS pas installe (...) : ses configs seront posees apres --build
+    # alors qu open5gs-mmed etait la, juste a cote. On teste desormais LE
+    # BINAIRE - la seule chose qui dise si Open5GS est installe - et on cree
+    # le etc/ nous-memes (le mkdir juste en dessous le faisait deja).
+    if [ -x "$O5GS_PREFIX/bin/open5gs-mmed" ] || [ -d "$O5GS_PREFIX/etc/open5gs" ] || [ "$force" = "1" ]; then
         mkdir -p "$O5GS_PREFIX/etc/open5gs" "$O5GS_PREFIX/var/log/open5gs"
         for f in "$REPO"/configs/open5gs/*.yaml; do
             [ -f "$f" ] || continue
@@ -202,7 +211,7 @@ lte_configs() {
         done
         _l_ok "Open5GS : configs dans $O5GS_PREFIX/etc/open5gs"
     else
-        _l_warn "Open5GS pas installe ($O5GS_PREFIX) : ses configs seront posees apres --build / --debs"
+        _l_warn "Open5GS pas installe (pas de $O5GS_PREFIX/bin/open5gs-mmed) : ses configs seront posees apres --build / --debs"
     fi
 }
 
