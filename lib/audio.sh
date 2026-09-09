@@ -153,22 +153,37 @@ audio_mic_source() {
     audio_hw_source
 }
 
-# [2026-09-09] ON RECONNAIT LA VM A SON PROCESSUS, PAS A SES FLUX AUDIO.
-# Chercher un flux « combine » ne marchait qu une fois la VM DEMARREE : entre
-# le lancement de QEMU et la fin du boot de postmarketOS (30 a 90 s), et de
-# nouveau chaque fois que l invite suspend ses cartes (module-suspend-on-idle
-# du Pulse de la VM : QEMU ferme alors ses flux cote hote), la fonction
-# repondait « pas de VM ». ensure_local_loopback / ensure_local_mic reposaient
-# donc les bouclages DIRECTS, et quand l audio de la VM revenait la voix
-# arrivait DEUX fois - en direct, puis par la VM 400 ms plus tard. C est le
-# « avec pmOS le son est pourri, sans il est bon » : mesure du jour, retard de
-# 32 ms entre le micro et gsm_mic alors que la VM en impose 400, et les deux
-# bouclages directs (modules 30 et 31) vivants pendant que QEMU tournait.
-# Le processus, lui, existe des la premiere seconde et jusqu a l arret.
+# ── QUI PORTE LA VOIX : L HOTE, OU LA VM ? ──────────────────────────────────
+# [2026-09-09] PAR DEFAUT, L HOTE. Le telephone postmarketOS est l INTERFACE du
+# banc (composer, decrocher, les SMS) ; il n a pas besoin de porter les
+# echantillons. Le faire coutait cher et s entendait : micro -> QEMU -> Pulse
+# de la VM -> module-loopback 400 ms -> QEMU -> gsm_mic, et autant au retour,
+# soit ~800 ms d aller-retour, deux rythmes d horloge emules, et le
+# rechantillonnage de deux cartes HDA a 44,1 kHz pour un signal telephonique a
+# 8 kHz. Mesure et verdict de l operateur : « le son est bon sans pmOS ».
+#
+# Donc : la voix reste sur l hote (gsm_audio -> haut-parleurs, micro ->
+# gsm_mic, 40 ms), et la VM garde ses cartes pour ce qui la regarde - sonnerie,
+# notifications, l application Appels. Elle reste dans le trajet de la
+# SIGNALISATION, qui est son vrai role.
+#
+# Pour remettre la voix DANS la VM (l ancien montage croise, si l on veut
+# vraiment l entendre traverser le telephone) : OSMO_PMOS_VOIX_VM=1 au
+# lancement d osmo-pmos-setup. Il pose alors les deux bouclages dans la VM et
+# depose ce marqueur ; les fonctions ci-dessous retirent alors les bouclages
+# directs de l hote, sans quoi la voix arriverait DEUX fois - en direct, puis
+# par la VM 400 ms plus tard, ce qui etait le defaut du 09/09.
+PMOS_VOIX_VM_MARQUEUR="${PMOS_VOIX_VM_MARQUEUR:-/run/osmo-pmos-voix-vm}"
+
+# Vrai seulement si la VM porte VRAIMENT la voix : le marqueur ET le processus.
+# Un marqueur oublie par une VM tuee sans menagement ne doit pas priver l hote
+# de ses haut-parleurs.
 pmos_vm_audio_present() {
+    [ -f "$PMOS_VOIX_VM_MARQUEUR" ] || return 1
     pgrep -f 'qemu-system.*hdac[o]mbine' >/dev/null 2>&1 && return 0
     pactl list sink-inputs 2>/dev/null | grep -q 'media.name = "combine"'
 }
+
 
 remove_direct_loopbacks() {
     local m n=0

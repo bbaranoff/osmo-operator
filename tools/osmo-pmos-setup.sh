@@ -59,9 +59,22 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     # QEMU « combine » vont sur lui - audio_hp_sink / audio_mic_source.
     HP_SINK=""; MIC_SRC=""
     if [ -n "$AUDIO_LIB" ]; then
-        remove_direct_loopbacks
         ensure_echo_cancel
         ensure_record_mix
+        # [2026-09-09] LA VOIX RESTE SUR L HOTE (cf. lib/audio.sh, « QUI PORTE
+        # LA VOIX »). OSMO_PMOS_VOIX_VM=1 la fait passer par la VM : on depose
+        # alors le marqueur AVANT d appeler les fonctions, pour qu elles
+        # retirent les bouclages directs au lieu de les reposer.
+        if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
+            : > "$PMOS_VOIX_VM_MARQUEUR" 2>/dev/null
+            remove_direct_loopbacks
+            echo "  la voix passe PAR LA VM (OSMO_PMOS_VOIX_VM=1) - ~800 ms d aller-retour"
+        else
+            rm -f "$PMOS_VOIX_VM_MARQUEUR" 2>/dev/null
+            ensure_local_loopback
+            ensure_local_mic
+            echo "  la voix reste sur l hote (40 ms) - OSMO_PMOS_VOIX_VM=1 pour la faire passer par la VM"
+        fi
         HP_SINK="$(audio_hp_sink)"; MIC_SRC="$(audio_mic_source)"
         echo "  haut-parleurs de l operateur : ${HP_SINK:-aucun} ; micro : ${MIC_SRC:-aucun}"
     else
@@ -106,7 +119,7 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /application.name = "speech-dispatcher/{print id}' | tr -d '#'); do
         pactl move-sink-input "$si" osmo_tts_off 2>/dev/null && echo "  flux speech-dispatcher detourne des haut-parleurs (osmo_tts_off)"
     done
-    ssh_vm '
+    ssh_vm "VOIX_VM='${OSMO_PMOS_VOIX_VM:-0}'; "'
         pci() { pactl list "$1" short 2>/dev/null | grep "pci-0000_00_$2\.0" | grep -v monitor | head -n1 | cut -f2; }
         PONT_OUT=$(pci sinks 12);  PONT_IN=$(pci sources 12)
         COMB_OUT=$(pci sinks 13);  COMB_IN=$(pci sources 13)
@@ -151,6 +164,20 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         for m in $(pactl list modules short 2>/dev/null | grep module-suspend-on-idle | cut -f1); do
             pactl unload-module "$m" 2>/dev/null && echo "  mise en veille des cartes desactivee (module-suspend-on-idle)"
         done
+        # [2026-09-09] LE CROISEMENT DES DEUX CARTES N EST PLUS LE DEFAUT.
+        # Sans lui, la VM ne porte plus la voix : elle garde ses cartes pour la
+        # sonnerie, les notifications et l application Appels, et l operateur
+        # entend l appel par l hote (40 ms au lieu de ~800). On RETIRE donc les
+        # bouclages qu une mise en service precedente aurait laisses, et on ne
+        # repose que si l hote l a demande (OSMO_PMOS_VOIX_VM=1, passe ici par
+        # la variable VOIX_VM).
+        for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
+            pactl unload-module "$m" 2>/dev/null
+        done
+        if [ "${VOIX_VM:-0}" != "1" ]; then
+            echo "  cartes non croisees : la voix reste sur l hote"
+            exit 0
+        fi
         # Idempotent : on retire les bouclages precedents avant de reposer.
         # [2026-09-08] 200 ms et pas 40 : a 40 ms PulseAudio, dans la VM,
         # notait « Too many underruns, increasing latency » et la voix

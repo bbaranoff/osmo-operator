@@ -317,7 +317,17 @@ fi
 # et on donne les noms au patch pmbootstrap : la carte nait au bon endroit.
 if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     ensure_echo_cancel 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
-    remove_direct_loopbacks 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
+    # [2026-09-09] ON NE COUPE PLUS L ECOUTE DE L HOTE AU LANCEMENT. La voix
+    # ne traverse plus la VM par defaut (cf. lib/audio.sh, « QUI PORTE LA
+    # VOIX ») : les bouclages directs SONT le trajet, et les retirer ici
+    # rendait le banc muet pendant tout le demarrage du telephone.
+    # OSMO_PMOS_VOIX_VM=1 : c est osmo-pmos-setup qui pose alors le marqueur
+    # et retire ces bouclages, une fois la VM prete a les remplacer.
+    if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
+        remove_direct_loopbacks 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
+    else
+        { ensure_local_loopback; ensure_local_mic; } 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
+    fi
     _hp="$(audio_hp_sink)"; _mic="$(audio_mic_source)"
     [ -n "$_hp" ]  && export OSMO_PMOS_HP="${OSMO_PMOS_HP:-$_hp}"
     [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
