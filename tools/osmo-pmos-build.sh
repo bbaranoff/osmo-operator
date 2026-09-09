@@ -105,18 +105,45 @@ fi
 
 # ── 1. pmaports, AU COMMIT DU NOYAU, avec le patch PPP ──────────────────────
 _commit="$(cat "$KD/pmaports.commit" 2>/dev/null || true)"
-# [2026-09-09] Un clone interrompu (reseau coupe, fenetre fermee) laisse un
-# .git SANS commit : on passait le clone, et on mourait plus bas sur « config
-# noyau introuvable ». Un depot sans HEAD est un depot absent : on le refait.
-if [ -d "$PMAPORTS/.git" ] && ! git -C "$PMAPORTS" rev-parse --verify HEAD >/dev/null 2>&1; then
+# [2026-09-09] UN SEUL osmo-pmos-build A LA FOIS. Deux lancements (l icone
+# cliquee pendant qu un premier clone tourne) se marchaient dessus : le second
+# voyait un .git sans commit - celui du clone EN COURS - et l effacait
+# (« fatal: could not open .../tmp_pack_... » chez le premier). Verrou sur le
+# dossier de travail, et on ne touche jamais a un clone qui a encore son git.
+exec 9>"$WORK/.osmo-pmos-build.lock"
+flock -n 9 || die "un autre osmo-pmos-build tourne deja (verrou $WORK/.osmo-pmos-build.lock) : attends-le, ou ferme-le"
+# Un clone interrompu (reseau coupe, fenetre fermee) laisse un .git SANS
+# commit : on passait le clone, et on mourait plus bas sur « config noyau
+# introuvable ». Un depot sans HEAD, et sans git dessus, est un depot absent.
+if [ -d "$PMAPORTS/.git" ] && ! git -C "$PMAPORTS" rev-parse --verify HEAD >/dev/null 2>&1 \
+   && ! pgrep -f "git(-remote-https)? .*$PMAPORTS" >/dev/null 2>&1; then
     warn "pmaports : clone vide ou interrompu, on le refait ($PMAPORTS)"
     rm -rf "$PMAPORTS"
 fi
+# [2026-09-09] PMAPORTS SANS GITLAB QUAND C EST POSSIBLE. Le clone complet
+# (des centaines de Mo, GitLab lent) a echoue deux fois sur trois depuis le
+# live : git efface alors tout et le telephone ne s allume jamais. Dans
+# l ordre : la copie posee par l ISO (88-lte-pmos.sh : $PM/pmaports, au commit
+# du noyau, sans reseau) ; sinon UN SEUL commit recupere par fetch --depth 1
+# (quelques dizaines de Mo) ; le clone complet seulement si le commit est
+# inconnu.
 if [ ! -d "$PMAPORTS/.git" ]; then
-    say "clone de pmaports ($PMAPORTS)..."
     mkdir -p "$(dirname "$PMAPORTS")"
-    git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS" || die "clone pmaports"
-    [ -n "$_commit" ] && [ "$_commit" != inconnu ] && git -C "$PMAPORTS" checkout -q "$_commit" && ok "pmaports au commit $_commit (celui du noyau)"
+    if [ -d "$PM/pmaports/.git" ] && git -C "$PM/pmaports" rev-parse --verify HEAD >/dev/null 2>&1; then
+        say "pmaports : copie de celui de l ISO ($PM/pmaports -> $PMAPORTS)..."
+        cp -a "$PM/pmaports" "$PMAPORTS" || die "copie de pmaports"
+        ok "pmaports au commit $(git -C "$PMAPORTS" rev-parse --short HEAD) (celui de l ISO)"
+    elif [ -n "$_commit" ] && [ "$_commit" != inconnu ]; then
+        say "pmaports : le commit $_commit du noyau, seul (fetch --depth 1)..."
+        ( git init -q "$PMAPORTS" && cd "$PMAPORTS" \
+          && git remote add origin https://gitlab.postmarketos.org/postmarketOS/pmaports.git \
+          && git fetch -q --depth 1 origin "$_commit" && git checkout -q FETCH_HEAD ) \
+          || { rm -rf "$PMAPORTS"; die "pmaports : fetch du commit $_commit impossible (reseau ?) - relance quand GitLab repond"; }
+        ok "pmaports au commit $_commit (celui du noyau)"
+    else
+        say "clone de pmaports ($PMAPORTS)..."
+        git clone https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS" || die "clone pmaports"
+    fi
 fi
 [ -f "$KCFG" ] || die "config noyau introuvable : $KCFG"
 if grep -q '^CONFIG_PPP_ASYNC=m' "$KCFG"; then

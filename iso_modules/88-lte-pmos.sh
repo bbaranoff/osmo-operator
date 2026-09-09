@@ -198,6 +198,36 @@ else
     echo -e "  ${CYAN}·${NC} image de la VM non embarquee (OSMO_ISO_PMOS_IMAGE=... pour l ajouter) : osmo-pmos-build la fera"
 fi
 
+# ── PMAPORTS DANS L ISO, AU COMMIT DU NOYAU ─────────────────────────────────
+# [2026-09-09] Le premier clic sur le telephone clonait pmaports EN ENTIER
+# depuis GitLab (des centaines de Mo) ; depuis le live, deux essais sur trois
+# ont echoue, et git efface tout a l echec : « ca me clone a chaque fois et
+# ca boot pas ». On pose donc ici le SEUL commit qu il faut - celui du noyau
+# PPP (kernel/pmos/pmaports.commit), fetch --depth 1, quelques dizaines de
+# Mo - dans /opt/user_interface/pmos/pmaports ; osmo-pmos-build le COPIE dans
+# le dossier de travail du compte au lieu de cloner. Garde dans le cache de
+# l hote (OSMO_DEB_CACHE) pour les ISO suivantes. OSMO_ISO_PMAPORTS=0 pour
+# s en passer.
+_pc="$(cat "$ROOTFS/opt/user_interface/kernel/pmos/pmaports.commit" 2>/dev/null || true)"
+if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ] && [ -n "$_pc" ] && [ "$_pc" != inconnu ]; then
+    _pcache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/pmaports-$_pc"
+    if ! git -C "$_pcache" rev-parse --verify HEAD >/dev/null 2>&1; then
+        echo -e "  ${CYAN}·${NC} pmaports : fetch du commit $_pc (GitLab, --depth 1)..."
+        rm -rf "$_pcache"
+        ( git init -q "$_pcache" && cd "$_pcache" \
+          && git remote add origin https://gitlab.postmarketos.org/postmarketOS/pmaports.git \
+          && git fetch -q --depth 1 origin "$_pc" && git checkout -q FETCH_HEAD ) \
+          || { rm -rf "$_pcache"; echo -e "  ${YELLOW}!${NC} pmaports : fetch impossible (reseau ?) - le premier clic ira le chercher"; }
+    fi
+    if git -C "$_pcache" rev-parse --verify HEAD >/dev/null 2>&1; then
+        rm -rf "$ROOTFS/opt/user_interface/pmos/pmaports"
+        cp -a "$_pcache" "$ROOTFS/opt/user_interface/pmos/pmaports"
+        echo -e "  ${GREEN}✓${NC} pmaports au commit ${_pc:0:10} dans /opt/user_interface/pmos/pmaports ($(du -sh "$_pcache" | cut -f1))"
+    fi
+    unset _pcache
+fi
+unset _pc
+
 # Le compte de session lancera pmbootstrap : /opt/user_interface doit lui
 # etre lisible, et le gabarit de config est pose dans /etc/skel pour qu un
 # compte cree par Calamares le trouve (shellprocess-osmo.conf y met les
@@ -289,6 +319,9 @@ if [ -d "$ROOTFS/home/osmocom" ]; then
 fi
 _chk "pmOS lanceurs en root (--as-root dans osmo-pmos-qemu)" grep -q 'as-root' /opt/user_interface/pmos/bin/osmo-pmos-qemu.sh
 _chk "pmOS kpartx + losetup + git (pmbootstrap les exige)"   bash -c 'command -v kpartx && command -v losetup && command -v git'
+if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ]; then
+    _chk "pmOS pmaports au commit du noyau (pas de clone au premier clic)" bash -c 'test -f /opt/user_interface/pmos/pmaports/device/main/linux-postmarketos-stable/config-stable.x86_64'
+fi
 if [ "$_ko" -gt 0 ]; then
     if [ "${OSMO_ISO_LTE_REQUIRED:-1}" = "1" ]; then
         echo -e "  ${RED}✗ $_ko maillon(s) manquant(s) : cette ISO ne serait PAS prete a l emploi (2G + 4G + telephone).${NC}" >&2
