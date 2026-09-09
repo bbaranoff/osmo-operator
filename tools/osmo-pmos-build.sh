@@ -105,6 +105,13 @@ fi
 
 # ── 1. pmaports, AU COMMIT DU NOYAU, avec le patch PPP ──────────────────────
 _commit="$(cat "$KD/pmaports.commit" 2>/dev/null || true)"
+# [2026-09-09] Un clone interrompu (reseau coupe, fenetre fermee) laisse un
+# .git SANS commit : on passait le clone, et on mourait plus bas sur « config
+# noyau introuvable ». Un depot sans HEAD est un depot absent : on le refait.
+if [ -d "$PMAPORTS/.git" ] && ! git -C "$PMAPORTS" rev-parse --verify HEAD >/dev/null 2>&1; then
+    warn "pmaports : clone vide ou interrompu, on le refait ($PMAPORTS)"
+    rm -rf "$PMAPORTS"
+fi
 if [ ! -d "$PMAPORTS/.git" ]; then
     say "clone de pmaports ($PMAPORTS)..."
     mkdir -p "$(dirname "$PMAPORTS")"
