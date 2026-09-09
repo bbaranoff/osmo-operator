@@ -767,6 +767,25 @@ if [ -n "${L2_CLIENT_CHOISI:-}" ]; then
     CALYPSO_L2_CLIENT="$L2_CLIENT_CHOISI"
 fi
 export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
+# ── LE TAMPON DU GREFFON ALSA-PULSEAUDIO DU `mobile` ────────────────────────
+# [2026-09-09] 240 ms, PAS 80. Le mecanisme est celui deja documente dans
+# qosmo-dsp/run_modules/70-l2.sh (« DESCENDANT MUET ») : le `mobile` ecrit une
+# trame GSM (160 echantillons, 20 ms) par `snd_pcm_writei`, et si le tampon du
+# greffon est trop court chaque ecriture rend -EPIPE ; pq_alsa.c y repond par
+# un `snd_pcm_prepare()` muet, qui DEMONTE ET REMONTE le flux PulseAudio.
+# Le 80 ms retenu a l epoque ne tient plus des qu un consommateur lit
+# gsm_audio.monitor (notre bouclage vers les haut-parleurs) : la latence
+# minimale du sink monte a 26 ms et les remontages reviennent. Mesure du jour,
+# ecrivain cadence a 20 ms comme le mobile, 10 s, sur ce banc :
+#     80 ms -> 16 remontages   120 -> 19   160 -> 1   200 -> 0   240 -> 0
+# Pendant un vrai appel c etait 50 remontages par seconde : flux detruit a
+# chaque trame, « voix saturee et pas belle ». 240 ms = 12 trames GSM, le
+# premier palier stable (200) avec de la marge pour la gigue sous charge.
+# La variable est exportee ICI parce que update.sh re-fetch qosmo-grgsm et
+# qosmo-dsp : leur defaut interne peut repartir a 80, celui-ci gagne (`:=`).
+# JUGE, pendant un appel etabli : l index du sink-input du mobile doit rester
+# FIXE (`pactl list short sink-inputs`, deux releves a 1 s d intervalle).
+export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-240}"
 export LOG_DIR RUN_DIR
 # --- 3. validation des chemins critiques --------------------------------------
 say_begin "Validation des chemins"

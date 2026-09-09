@@ -368,7 +368,8 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
 # (il tranche encore la question amont/aval quand l'ecouteur est muet) mais ne
 # plus le poser sur le gapk construit — un `git apply` dans le build casse
 # l'image des que pq_alsa.c bouge en amont, et la sonde n'est plus la question
-# du jour (descendant muet resolu par CALYPSO_PULSE_LATENCY_MSEC=80).
+# du jour (descendant muet resolu par CALYPSO_PULSE_LATENCY_MSEC, 240 depuis
+# le 2026-09-09 : cf. start-direct.sh, le tampon du greffon ALSA-PulseAudio).
 # POUR LE REMETTRE, deux gestes, dans cet ordre :
 #   1. decommenter la ligne COPY ci-dessous ;
 #   2. reinserer dans le RUN, entre le `git clone` et le `cd osmo-gapk` :
