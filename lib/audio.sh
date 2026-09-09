@@ -153,7 +153,20 @@ audio_mic_source() {
     audio_hw_source
 }
 
+# [2026-09-09] ON RECONNAIT LA VM A SON PROCESSUS, PAS A SES FLUX AUDIO.
+# Chercher un flux « combine » ne marchait qu une fois la VM DEMARREE : entre
+# le lancement de QEMU et la fin du boot de postmarketOS (30 a 90 s), et de
+# nouveau chaque fois que l invite suspend ses cartes (module-suspend-on-idle
+# du Pulse de la VM : QEMU ferme alors ses flux cote hote), la fonction
+# repondait « pas de VM ». ensure_local_loopback / ensure_local_mic reposaient
+# donc les bouclages DIRECTS, et quand l audio de la VM revenait la voix
+# arrivait DEUX fois - en direct, puis par la VM 400 ms plus tard. C est le
+# « avec pmOS le son est pourri, sans il est bon » : mesure du jour, retard de
+# 32 ms entre le micro et gsm_mic alors que la VM en impose 400, et les deux
+# bouclages directs (modules 30 et 31) vivants pendant que QEMU tournait.
+# Le processus, lui, existe des la premiere seconde et jusqu a l arret.
 pmos_vm_audio_present() {
+    pgrep -f 'qemu-system.*hdac[o]mbine' >/dev/null 2>&1 && return 0
     pactl list sink-inputs 2>/dev/null | grep -q 'media.name = "combine"'
 }
 

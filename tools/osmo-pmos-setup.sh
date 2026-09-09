@@ -140,6 +140,17 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
             echo "  bouclages deja en place et epingles - inchanges"
             exit 0
         fi
+        # [2026-09-09] LE PULSE DE LA VM NE DOIT PLUS SUSPENDRE SES CARTES.
+        # module-suspend-on-idle endort un sink des que plus personne ne joue :
+        # QEMU FERME alors ses flux cote hote. Deux degats. Un, l hote ne voit
+        # plus le telephone (il le reconnait desormais a son processus, cf.
+        # lib/audio.sh) ; deux, chaque reveil renegocie la latence des deux
+        # cartes emulees, et c est la que la voix casse - « ca marche les deux
+        # premieres fois et apres non ». Nos bouclages tiennent les cartes
+        # eveillees, mais pas avant qu ils soient poses : on retire le module.
+        for m in $(pactl list modules short 2>/dev/null | grep module-suspend-on-idle | cut -f1); do
+            pactl unload-module "$m" 2>/dev/null && echo "  mise en veille des cartes desactivee (module-suspend-on-idle)"
+        done
         # Idempotent : on retire les bouclages precedents avant de reposer.
         # [2026-09-08] 200 ms et pas 40 : a 40 ms PulseAudio, dans la VM,
         # notait « Too many underruns, increasing latency » et la voix
