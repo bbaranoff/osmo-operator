@@ -121,6 +121,23 @@ lte_build() {
     mkdir -p "$LTE"
     local pack=""
     [ "${OSMO_DEB:-0}" = "1" ] && command -v osmo-deb >/dev/null 2>&1 && pack=1
+    # ── LES VERSIONS DES .deb : UNE SEULE ECRITURE, POUR TOUT LE MONDE ───────
+    # [2026-09-09] Elles etaient calculees a l arrache dans les deux appels a
+    # `osmo-deb pack` ci-dessous, et les deux etaient FAUSSES :
+    #   srsran  : "${SRS_REF#release_}+zmq" donnait 25_10+zmq - un souligne,
+    #             que osmo-deb refuse (^[0-9][A-Za-z0-9.+~-]*$) : « version
+    #             invalide : '25_10+zmq' ». Et comme `pack` meurt AVANT de
+    #             lancer la commande qu on lui confie, le `make install`
+    #             n avait jamais lieu : srsRAN compilait 3 minutes pour rien.
+    #   open5gs : "${O5GS_REF#v}" donnait 2.8.0, sans le +git - le .deb sortait
+    #             sous un nom que le `osmo-deb install open5gs 2.8.0+git` du
+    #             Dockerfile ne retrouvait jamais : recompilation a chaque build.
+    # Les noms qui font foi sont ceux du Dockerfile et de packaging/
+    # snapshot-lte-debs.sh : osmo-build-srsran_25.10+zmq, osmo-build-open5gs_
+    # 2.8.0+git. On les derive ici des memes refs git, en points.
+    local srs_ver o5gs_ver
+    srs_ver="${SRS_REF#release_}"; srs_ver="${srs_ver//_/.}+zmq"   # release_25_10 -> 25.10+zmq
+    o5gs_ver="${O5GS_REF#v}+git"                                    # v2.8.0       -> 2.8.0+git
     if ! command -v srsenb >/dev/null 2>&1; then
         _l_say "srsRAN_4G $SRS_REF (ZeroMQ) -> $SRS"
         if [ ! -d "$SRS/.git" ]; then
@@ -130,7 +147,7 @@ lte_build() {
           && cmake -DENABLE_ZEROMQ=ON -DENABLE_GUI=OFF -DENABLE_UHD=OFF -DENABLE_BLADERF=OFF -DENABLE_SOAPYSDR=OFF \
                    -DCMAKE_BUILD_TYPE=Release .. >/dev/null \
           && make -j"$JOBS" >/dev/null \
-          && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$SRS" osmo-deb pack srsran "${SRS_REF#release_}+zmq" make install
+          && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$SRS" osmo-deb pack srsran "$srs_ver" make install
              else make install >/dev/null; fi ) \
           && { ldconfig; _l_ok "srsRAN : $(command -v srsenb)"; } || { _l_err "srsRAN : compilation echouee"; return 1; }
     else
@@ -144,7 +161,7 @@ lte_build() {
         ( cd "$O5GS" \
           && { [ -f build/build.ninja ] || meson setup build --prefix="$O5GS_PREFIX" >/dev/null; } \
           && ninja -C build -j"$JOBS" >/dev/null \
-          && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$O5GS" osmo-deb pack open5gs "${O5GS_REF#v}" ninja -C build install
+          && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$O5GS" osmo-deb pack open5gs "$o5gs_ver" ninja -C build install
              else ninja -C build install >/dev/null; fi ) \
           && { ldconfig; _l_ok "Open5GS : $O5GS_PREFIX/bin"; } || { _l_err "Open5GS : compilation echouee"; return 1; }
     else
