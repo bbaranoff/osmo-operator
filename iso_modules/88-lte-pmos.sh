@@ -56,6 +56,11 @@
 #     Les lanceurs passent --as-root en root, le cfg est ecrit dans /root et
 #     /home/osmocom ici, et osmo-pmos-qemu enchaine osmo-pmos-build quand
 #     l image n est pas encore la.
+#   - pmbootstrap exige kpartx, absent de l ISO (PKGS de 80-chroot.sh).
+#   - le premier clic clonait pmaports en entier depuis GitLab, et le clone
+#     echouait presque a chaque fois : le commit du noyau est pose ICI dans
+#     /opt/user_interface/pmos/pmaports (fetch --depth 1, 110 Mo), et
+#     osmo-pmos-build le copie au lieu de cloner.
 #
 # Le hub (interstp) n a pas de 4G. --arm non plus (srsRAN et Open5GS ne sont
 # pas compiles pour arm64, pmbootstrap y ferait une VM x86 emulee).
