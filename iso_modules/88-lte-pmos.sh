@@ -193,6 +193,53 @@ if [ "$ISO_LITE" = "1" ]; then
 fi
 unset _rt _before
 
+# ── LE CONTROLE FINAL : L ISO DOIT ETRE PRETE A L EMPLOI, 2G + 4G + TELEPHONE ─
+# [2026-09-09] Jusqu ici ce module ne faisait que DIRE ce qui manquait (les
+# « ! absent du rootfs » plus haut) et l ISO sortait quand meme - une ISO ou
+# l icone « 4G du banc » ne lancait rien, ou Open5GS n avait pas de mme.yaml
+# (donc pas de SGs, donc pas de CSFB), ou mongod manquait (le HSS meurt a
+# l init, l attach echoue). Or ce qu on attend d elle est simple : l
+# operateur clique « Lancer le banc GSM », puis « 4G du banc », puis « le
+# telephone pmOS », et ca marche. On verifie donc ICI, dans le rootfs, chaque
+# maillon de ces trois gestes, et on ARRETE le build s il en manque un :
+# mieux vaut une heure de build perdue qu une cle qui ment.
+# OSMO_ISO_LTE_REQUIRED=0 pour ne faire que l inventaire (ISO sans 4G assumee).
+echo -e "  ${CYAN}·${NC} controle final : 2G + 4G + telephone dans le rootfs"
+_ko=0
+_chk() {  # _chk <libelle> <test chroot...>
+    local l="$1"; shift
+    if chroot "$ROOTFS" "$@" >/dev/null 2>&1; then echo -e "      ${GREEN}✓${NC} $l"
+    else echo -e "      ${RED}✗${NC} $l"; _ko=$((_ko + 1)); fi
+}
+# La 2G : le banc, son unite, et le SGs d osmo-msc (l attach combine, le CSFB)
+_chk "2G  launch.sh (icone « Lancer le banc GSM »)"       test -x /opt/GSM/osmo-operator/launch.sh
+_chk "2G  osmo-banc.service"                               test -s /etc/systemd/system/osmo-banc.service
+_chk "2G  osmo-msc.cfg : section sgs (CSFB)"               grep -q '^sgs' /etc/osmocom/osmo-msc.cfg
+# La 4G : binaires, configs (dont le SGs cote MME), lanceurs, unite, MongoDB
+_chk "4G  srsenb / srsue"                                  bash -c 'test -x /usr/local/bin/srsenb && test -x /usr/local/bin/srsue'
+_chk "4G  open5gs-mmed / open5gs-hssd"                     bash -c 'test -x /opt/LTE/open5gs/install/bin/open5gs-mmed && test -x /opt/LTE/open5gs/install/bin/open5gs-hssd'
+_chk "4G  mme.yaml du depot avec sgsap (CSFB)"             grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml
+_chk "4G  configs srsRAN (/root/.config/srsran)"           bash -c 'test -s /root/.config/srsran/enb.conf && test -s /root/.config/srsran/ue.conf && test -s /root/.config/srsran/user_db.csv'
+_chk "4G  osmo-lte / osmo-epc"                             bash -c 'test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc'
+_chk "4G  osmo-lte.service + osmo-lte.desktop"             bash -c 'test -s /etc/systemd/system/osmo-lte.service && test -s /usr/share/applications/osmo-lte.desktop'
+_chk "4G  mongod + mongosh + mongorestore (abonnes HSS)"   bash -c 'command -v mongod && command -v mongosh && command -v mongorestore'
+_chk "4G  abonnes du depot (dump mongo + subscribers.json)" bash -c 'test -s /opt/GSM/osmo-operator/configs/open5gs/dump/open5gs/subscribers.bson && test -s /opt/GSM/osmo-operator/configs/open5gs/subscribers.json'
+# Le telephone : pmbootstrap patche, le noyau PPP, le lanceur et son icone
+_chk "pmOS pmbootstrap (/opt/user_interface/pmos)"         test -s /opt/user_interface/pmos/pmbootstrap/pmbootstrap.py
+_chk "pmOS noyau PPP (APKINDEX)"                           test -s /opt/user_interface/kernel/pmos/APKINDEX.tar.gz
+_chk "pmOS osmo-pmos + osmo-pmos.desktop"                  bash -c 'test -x /usr/local/bin/osmo-pmos && test -s /usr/share/applications/osmo-pmos.desktop'
+if [ "$_ko" -gt 0 ]; then
+    if [ "${OSMO_ISO_LTE_REQUIRED:-1}" = "1" ]; then
+        echo -e "  ${RED}✗ $_ko maillon(s) manquant(s) : cette ISO ne serait PAS prete a l emploi (2G + 4G + telephone).${NC}" >&2
+        echo -e "    Corrige ci-dessus, ou OSMO_ISO_LTE_REQUIRED=0 pour sortir l ISO quand meme." >&2
+        exit 1
+    fi
+    echo -e "  ${YELLOW}!${NC} $_ko maillon(s) manquant(s), ISO sortie quand meme (OSMO_ISO_LTE_REQUIRED=0)"
+else
+    echo -e "  ${GREEN}✓${NC} prete a l emploi : banc 2G, 4G et telephone au complet"
+fi
+unset _ko; unset -f _chk
+
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux

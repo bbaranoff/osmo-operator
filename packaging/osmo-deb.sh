@@ -127,10 +127,18 @@ cmd_pack() {
     # paquet : les sources restent dans /opt/GSM meme quand le cache dispense
     # de cloner et de compiler. Voir l en-tete.
     local src="${OSMO_DEB_SRC:-$PWD}"
-    if [ "${OSMO_DEB_NO_SRC:-0}" != "1" ] && [ -d "$src" ] && [ ! -e "$stage$src" ] \
+    if [ "${OSMO_DEB_NO_SRC:-0}" != "1" ] && [ -d "$src" ] \
        && case "$src" in "$SRC_ROOT"/?*) true ;; *) false ;; esac; then
         mkdir -p "$stage$(dirname "$src")"
-        cp -a "$src" "$stage$(dirname "$src")/"
+        # [2026-09-09] `cp -an`, et plus de `[ ! -e "$stage$src" ]` : le prefixe
+        # d installation peut vivre SOUS l arbre de sources (Open5GS :
+        # /opt/LTE/open5gs/install), auquel cas il est DEJA dans le staging.
+        # L ancien test sautait alors tout l arbre, et osmo-build-open5gs
+        # sortait sans une seule source (13 Mo : bin/ et lib/, rien d autre) -
+        # sur l ISO, /opt/LTE/open5gs n avait que install/, et un --build y
+        # reclonait. On complete autour de ce qui est deja la (-n : jamais
+        # par-dessus ce que la commande d installation vient de poser).
+        cp -an "$src" "$stage$(dirname "$src")/"
         log "$name : arbre de sources $src inclus dans le paquet"
     fi
     make_deb "$stage" "$name" "$ver"

@@ -950,9 +950,21 @@ RUN bash /opt/GSM/osmo-egprs-web/install-web-service.sh || true
 # libzmq vient d Ubuntu (libzmq3-dev, pose par `--deps` ci-dessous) : le
 # /opt/LTE/libzmq compile a la main n a de raison d etre que sur le natif.
 # Open5GS : prefixe /opt/LTE/open5gs/install (bin, etc/open5gs, var/log) - pas
-# /root. Les configs (configs/srsran, configs/open5gs) sont posees dans l ISO
-# par iso_modules/88-lte-pmos.sh, pas ici : l image docker n a pas de HOME de
-# session a servir.
+# /root.
+#
+# LES CONFIGS ET LES LANCEURS AUSSI (`--configs --launchers`, en fin de RUN).
+# [2026-09-09] Ils n etaient poses que dans l ISO (88-lte-pmos.sh) et en natif
+# (addition.sh), « pas ici : l image docker n a pas de HOME de session a
+# servir ». Faux pour le conteneur : il tourne en root, et /root/.config/srsran
+# EST le HOME que srsenb/srsue lisent. L image sortait donc avec les binaires
+# 4G mais sans mme.yaml (donc sans SGs, donc sans CSFB), sans enb.conf, et
+# sans la commande osmo-lte : une 4G qu on ne pouvait pas lancer. Et le .deb
+# Open5GS n apporte AUCUN yaml (ninja install sous DESTDIR ne pose pas les
+# exemples : 128 fichiers, tous dans bin/ et lib/) - les configs du depot
+# sont la seule source. Elles viennent du clone GitHub de /opt/GSM/
+# osmo-operator (ligne « git clone » plus haut) : ce qui est pousse est ce que
+# le conteneur voit. Les abonnes (configs/open5gs/dump, subscribers.json) ne
+# sont pas poses au build : osmo-epc start les restaure dans MongoDB.
 #
 # ⚠️ `--deps` D ABORD, TOUJOURS (pas seulement quand on compile).
 # [2026-09-09] Le commentaire ci-dessus affirmait que libzmq3-dev etait « dans
@@ -980,7 +992,10 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     if ! osmo-deb install open5gs 2.8.0+git; then \
         OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build Open5GS"; exit 1; }; \
     fi && \
-    ldconfig && test -x /usr/local/bin/srsenb && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed
+    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
+    ldconfig && test -x /usr/local/bin/srsenb && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed \
+    && test -s /opt/LTE/open5gs/install/etc/open5gs/mme.yaml && grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml \
+    && test -s /root/.config/srsran/enb.conf && test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc
 
 # ── L UI SMARTPHONE : pmbootstrap PATCHE, dans /opt/user_interface/pmos ───────
 # Le telephone du banc est une VM postmarketOS lancee par pmbootstrap (patche
