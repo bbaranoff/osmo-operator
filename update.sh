@@ -553,6 +553,147 @@ osmo_unites_user_session() {
 }
 osmo_unites_user_session
 
+# ── LE 600 QU ON ENTEND MAL : LE SUPERVISEUR GAPK ────────────────────────────
+# [2026-09-09] scripts/gapk-start.sh (mode auto) lancait, a chaque appel, un
+# osmo-gapk qui encodait le micro (gsm_in) et l ENVOYAIT au pair de la premiere
+# connexion MGW - le port RTP d osmo-bts (127.0.0.1:16384). Le BTS recevait deux
+# flux RTP entremeles sur un seul jitter-buffer : son hache, double, le micro
+# renvoye en direct dans l oreille. Le mobile (io-handler gapk) porte deja le
+# montant par la radio ; cette patte etait un doublon. Le correctif est dans le
+# depot (git pull), mais lib/audio.sh prefere /etc/osmocom/gapk-start.sh - une
+# COPIE posee par le Dockerfile/l ISO, que git pull ne touche pas. On la repose
+# ici, on tue un eventuel emetteur qui trainerait, et on relance le superviseur
+# (session tmux « gapk ») pour qu il lise la nouvelle version : sans cela le
+# doublon survivait a la mise a jour jusqu au prochain redemarrage.
+osmo_poser_correctif_audio() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local d=/opt/GSM/osmo-operator src="$d/scripts/gapk-start.sh" dst=/etc/osmocom/gapk-start.sh
+    [ -f "$src" ] || return 0
+    if [ -d /etc/osmocom ] && ! cmp -s "$src" "$dst"; then
+        install -m 755 "$src" "$dst" && echo "[OK] $dst repose depuis scripts/ (emetteur RTP en doublon retire)"
+    fi
+    # Un osmo-gapk en cours = l ancien TX (le mobile n en lance jamais) : on l arrete.
+    pkill -x osmo-gapk 2>/dev/null && echo "[OK] osmo-gapk en doublon arrete"
+    rm -f /var/run/gapk-tx.pid /var/run/gapk-rx.pid
+    # Le superviseur ne se relance que s il tourne deja : hors banc, rien a faire.
+    if tmux has-session -t gapk 2>/dev/null; then
+        local log_dir; log_dir="$(tmux list-panes -t gapk -F '#{pane_start_command}' 2>/dev/null \
+                                 | grep -oE 'tee [^ ]+/gapk-auto.log' | awk '{print $2}' | xargs -r dirname)"
+        [ -n "$log_dir" ] || log_dir="${LOG_DIR:-/run/user/0/osmo-nitb/logs}"
+        local sock="${PULSE_SOCK:-/var/run/pulse/native}"
+        tmux kill-session -t gapk 2>/dev/null || true
+        rm -f /var/run/gapk-auto.lock
+        [ -x "$dst" ] || dst="$src"
+        tmux new-session -d -s gapk \
+            "GAPK_ALSA_DEV=gsm_out GAPK_ALSA_DEV_IN=gsm_in PULSE_SERVER=unix:${sock} bash '$dst' auto gsm gsm_out gsm_in 2>&1 | tee ${log_dir}/gapk-auto.log" \
+            && echo "[OK] superviseur gapk relance (tmux gapk, journal ${log_dir}/gapk-auto.log)"
+    fi
+    # ── Le 600 depuis le telephone : pas d annonce avant l echo ──
+    # [2026-09-09] Deuxieme cause du son mauvais « pendant une partie de
+    # l appel » : avec l enregistrement (sub-record) sur la jambe Local du banc,
+    # le passage Playback(demo-echotest) -> Echo faisait lacher a Asterisk une
+    # rafale de milliers de paquets RTP de silence vers le BTS. Le gabarit
+    # configs/extensions.conf saute l annonce quand ECHO_NO_PROMPT=1 (pose par
+    # osmo-phonesim-banc.py) ; la copie vivante /etc/asterisk/extensions.conf
+    # n est regeneree qu au demarrage : on la retouche ici et on recharge.
+    local ext=/etc/asterisk/extensions.conf
+    if [ -f "$ext" ] && ! grep -q 'ECHO_NO_PROMPT' "$ext"; then
+        sed -i '/^exten => 600,1,NoOp(=== ECHO TEST/,/^ same => n,Hangup()/{
+            s|^ same => n,Playback(demo-echotest)$| same => n,GotoIf($["${ECHO_NO_PROMPT}" = "1"]?echo)\n same => n,Playback(demo-echotest)|
+            s|^ same => n,Echo()$| same => n(echo),Echo()|
+        }' "$ext" && echo "[OK] $ext : le 600 saute son annonce pour le banc (ECHO_NO_PROMPT)"
+    fi
+    # L annonce de l echo test, rejouee sur la patte du mobile (Dial ...rT${DIAL_OPTS},
+    # le banc pose DIAL_OPTS=A(demo-echotest) pour le 600) : contexte [internal] seulement.
+    if [ -f "$ext" ] && ! grep -q 'rT\${DIAL_OPTS}' "$ext"; then
+        sed -i '/^\[internal\]/,/^\[/{s|^ same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)$| same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT${DIAL_OPTS})|}' "$ext" \
+            && echo "[OK] $ext : annonce de l echo test sur la patte du mobile (DIAL_OPTS)"
+    fi
+    command -v asterisk >/dev/null 2>&1 && asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
+    # Le modem du banc (osmo-phonesim-banc.py --connect) tourne depuis le depot
+    # mais ne relit pas son code : on le relance tel qu osmo-pmos-setup.sh l a
+    # lance, sinon il continue d originer sans ECHO_NO_PROMPT et de marteler
+    # « call 1 answer » (29 x « % No alerting call » par appel).
+    local bpid
+    bpid="$(pgrep -f '[o]smo-phonesim-banc.py --connect' | head -1)"
+    if [ -n "$bpid" ]; then
+        local bargs; bargs="$(tr '\0' ' ' <"/proc/$bpid/cmdline" 2>/dev/null | sed 's/.*osmo-phonesim-banc.py //')"
+        kill "$bpid" 2>/dev/null; sleep 1
+        setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
+            "$d/tools/osmo-phonesim-banc.py" $bargs >>/tmp/osmo-phonesim-vm-root.log 2>&1 </dev/null &
+        sleep 3
+        pgrep -f '[o]smo-phonesim-banc.py --connect' >/dev/null 2>&1 \
+            && echo "[OK] modem du banc relance ($bargs) - journal /tmp/osmo-phonesim-vm-root.log" \
+            || echo "[!!] le modem du banc ne s est pas relance : osmo-pmos-setup pour le rebrancher"
+    fi
+    # ── Micro « sature, grave » : l AGC analogique de l annuleur d echo ──
+    # [2026-09-09] module-echo-cancel (webrtc) pilotait le gain du micro et
+    # le faisait pomper entre 0 et 100 % (voir tools/osmo-pmos-setup.sh). Si
+    # l annuleur tourne encore sans aec_args, on le recharge a l identique
+    # avec l AGC analogique coupe, et on rebranche les flux de la VM dessus.
+    export PULSE_SERVER="${PULSE_SERVER:-unix:/var/run/pulse/native}"
+    if command -v pactl >/dev/null 2>&1 && pactl list short modules 2>/dev/null | grep -q module-echo-cancel \
+       && ! pactl list short modules 2>/dev/null | grep module-echo-cancel | grep -q analog_gain_control=0; then
+        local ecm mic hp so si
+        ecm="$(pactl list short modules | awk '/module-echo-cancel/ {print $1; exit}')"
+        mic="$(pactl list short modules | grep module-echo-cancel | grep -oE 'source_master=[^ ]+' | cut -d= -f2)"
+        hp="$(pactl list short modules | grep module-echo-cancel | grep -oE 'sink_master=[^ ]+' | cut -d= -f2)"
+        if [ -n "$mic" ] && [ -n "$hp" ]; then
+            pactl unload-module "$ecm" 2>/dev/null
+            pactl load-module module-echo-cancel aec_method=webrtc source_master="$mic" sink_master="$hp" \
+                source_name=osmo_mic_ec sink_name=osmo_hp_ec \
+                'aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"' \
+                source_properties=device.description=Micro_sans_echo sink_properties=device.description=HP_sans_echo >/dev/null 2>&1 \
+                && echo "[OK] annuleur d echo recharge sans AGC analogique (micro fixe a 25 %)"
+            pactl set-default-source osmo_mic_ec 2>/dev/null; pactl set-default-sink osmo_hp_ec 2>/dev/null
+            for so in $(pactl list source-outputs 2>/dev/null | awk '/Source Output #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
+                pactl move-source-output "$so" osmo_mic_ec 2>/dev/null; done
+            for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
+                pactl move-sink-input "$si" osmo_hp_ec 2>/dev/null; done
+            pactl set-source-mute "$mic" 0 2>/dev/null; pactl set-source-volume "$mic" 25% 2>/dev/null
+            pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec 25% 2>/dev/null
+        fi
+    fi
+    # ── Le message factice de speech-dispatcher dans les haut-parleurs ──
+    # [2026-09-09] Voir lib/audio.sh (osmo_tts_off) : on cree le sink poubelle
+    # s il manque et on y envoie tout flux speech-dispatcher deja ouvert.
+    if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+        pactl list short sinks 2>/dev/null | grep -qw osmo_tts_off \
+            || pactl load-module module-null-sink sink_name=osmo_tts_off format=s16le rate=8000 channels=1 sink_properties=device.description=TTS_off >/dev/null 2>&1
+        for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /application.name = "speech-dispatcher/{print id}' | tr -d '#'); do
+            pactl move-sink-input "$si" osmo_tts_off 2>/dev/null && echo "[OK] flux speech-dispatcher detourne des haut-parleurs (osmo_tts_off)"
+        done
+    fi
+    return 0
+}
+osmo_poser_correctif_audio
+
+# ── LA CONSOLE srsUE DU BUREAU : DES JOURNAUX 4G ─────────────────────────────
+# [2026-09-09] L encart (tools/osmo-fft-snap.py) cherchait /tmp/ue.log, jamais
+# ecrit : osmo-lte.sh impose --log.filename=/tmp/osmo-lte-ue.log et met la
+# console dans /tmp/osmo-lte-ue.console. Le depot est corrige (git pull) ; ici on
+# porte le NAS en info (sans hexa) dans le ue.conf DEJA pose (osmo-lte-install --configs ne
+# l ecrase pas sans --force) et on relance l encart, qui lit ses chemins au
+# demarrage. Le UE lui-meme n est pas relance : les niveaux valent au prochain
+# « osmo-lte restart ».
+osmo_poser_journaux_lte() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local f
+    for f in /root/.config/srsran/ue.conf /home/*/.config/srsran/ue.conf; do
+        [ -f "$f" ] || continue
+        grep -q '^nas_hex_limit *= *0' "$f" && continue
+        sed -i -e '/^rrc_level *= *info$/d' -e '/^nas_level *= *info$/d' \
+               -e '/^\[log\]/,/^\[/{s/^\(all_level *= *warning\)$/\1\nnas_level = info\nnas_hex_limit = 0/}' \
+               -e 's|^filename *= */tmp/ue\.log$|filename = /tmp/osmo-lte-ue.log|' "$f" \
+            && echo "[OK] $f : NAS en info (console srsUE du bureau)"
+    done
+    if systemctl is-active --quiet osmo-fft-snap 2>/dev/null; then
+        systemctl try-restart osmo-fft-snap 2>/dev/null && echo "[OK] encart osmo-fft-snap relance (console srsUE)"
+    fi
+    return 0
+}
+osmo_poser_journaux_lte
+
 case "${1:-}" in
     --quiet) exit 0 ;;
 esac

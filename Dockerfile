@@ -621,6 +621,8 @@ RUN set -eux; \
       || echo 'load-module module-null-sink sink_name=gsm_audio format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Audio' >> /etc/pulse/system.pa; \
     grep -q 'sink_name=gsm_mic' /etc/pulse/system.pa \
       || echo 'load-module module-null-sink sink_name=gsm_mic format=s16le rate=8000 channels=1 sink_properties=device.description=GSM_Mic' >> /etc/pulse/system.pa; \
+    grep -q 'sink_name=osmo_tts_off' /etc/pulse/system.pa \
+      || echo 'load-module module-null-sink sink_name=osmo_tts_off format=s16le rate=8000 channels=1 sink_properties=device.description=TTS_off' >> /etc/pulse/system.pa; \
     sed -i 's|^load-module module-suspend-on-idle|#load-module module-suspend-on-idle|' /etc/pulse/system.pa; \
     mkdir -p /var/run/pulse && chown -R pulse:pulse /var/run/pulse
 

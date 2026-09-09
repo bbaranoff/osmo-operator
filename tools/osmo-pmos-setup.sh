@@ -12,8 +12,18 @@ set -u
 PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 PASS="${OSMO_PMOS_PASS:-147147}"
 USER_VM="${OSMO_PMOS_USER:-user}"
-ssh_vm() { sshpass -p "$PASS" ssh -p "$PORT" -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+ssh_vm() { sshpass -p "$PASS" ssh -p "$PORT" -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     -o ConnectTimeout=8 -o PreferredAuthentications=password "$USER_VM@127.0.0.1" "$@"; }
+# [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro de
+# l hote (annuleur d echo, bouclages directs) - une seule source de verite,
+# partagee avec audio-chain.sh (boot), start-direct et osmo-pmos-qemu.
+AUDIO_LIB="${OSMO_REPO:-/opt/GSM/osmo-operator}/lib/audio.sh"
+if [ -f "$AUDIO_LIB" ]; then
+    # shellcheck source=../lib/audio.sh
+    . "$AUDIO_LIB"
+else
+    AUDIO_LIB=""
+fi
 # [2026-09-09] LA VOIX EN FONCTION, ET SEULE SI ON VEUT (osmo-pmos-setup --voix).
 # Sans modem (OSMO_PMOS_MODEM=0) rien ne basculait la VM sur sa carte
 # « combine » : la sortie par defaut restait le PONT (0x12), dont la lecture
@@ -42,10 +52,20 @@ voix() {
 # OSMO_PMOS_RELAI=0 pour ne pas toucher a l audio.
 if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     echo "--- voix"
-    for m in $(pactl list modules short 2>/dev/null \
-               | grep -E 'source=gsm_audio\.monitor|sink=gsm_mic' | cut -f1); do
-        pactl unload-module "$m" 2>/dev/null && echo "  bouclage direct $m retire"
-    done
+    # [2026-09-09] L AFFECTATION DES HP ET DU MICRO VIENT DE lib/audio.sh, seule
+    # source de verite (voir « L AFFECTATION DES HAUT-PARLEURS » la-bas) : les
+    # bouclages directs de l hote sont retires, l annuleur d echo pose (ou deja
+    # la, osmo-pmos-qemu le charge avant QEMU) et devient le defaut, et les flux
+    # QEMU « combine » vont sur lui - audio_hp_sink / audio_mic_source.
+    HP_SINK=""; MIC_SRC=""
+    if [ -n "$AUDIO_LIB" ]; then
+        remove_direct_loopbacks
+        ensure_echo_cancel
+        HP_SINK="$(audio_hp_sink)"; MIC_SRC="$(audio_mic_source)"
+        echo "  haut-parleurs de l operateur : ${HP_SINK:-aucun} ; micro : ${MIC_SRC:-aucun}"
+    else
+        echo "  ATTENTION : lib/audio.sh introuvable (OSMO_REPO ?) - l audio de l hote n est pas regle"
+    fi
 
     # [2026-09-07] LES SOURDINES QUI REVIENNENT. Le descendant traverse quatre
     # potentiometres, et il suffit d UN sur muet pour que la voix disparaisse
@@ -61,38 +81,30 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     for o in $(pactl list source-outputs short 2>/dev/null | cut -f1); do
         pactl set-source-output-mute "$o" 0 2>/dev/null
     done
-    # [2026-09-08] LE MICRO AUSSI. On ne levait que la sourdine du haut-parleur ;
-    # un appui sur la touche « micro coupe » du PC mettait la source a 0 % et
-    # la voix montante disparaissait sans un mot d erreur nulle part.
-    # [2026-09-08] UN ANNULEUR D ECHO ENTRE LE MICRO ET LES HAUT-PARLEURS DU
-    # PC. Avec le micro interne et les haut-parleurs, l echo du 600 se
-    # reinjectait dans le micro (mesure : micro a 2 400 crete haut-parleur
-    # coupe, 32 768 sature haut-parleur ouvert) : Larsen, voix montante
-    # inaudible, descendante brouillee. module-echo-cancel (webrtc) fabrique
-    # un micro et un haut-parleur « sans echo » ; la carte « combine » de la VM
-    # y est branchee, et ils deviennent les peripheriques par defaut.
-    MIC_HW=$(pactl get-default-source 2>/dev/null); HP_HW=$(pactl get-default-sink 2>/dev/null)
-    case "$MIC_HW" in osmo_mic_ec) MIC_HW=$(pactl list sources short | awk '$2 ~ /^alsa_input/ {print $2; exit}') ;; esac
-    case "$HP_HW" in osmo_hp_ec) HP_HW=$(pactl list sinks short | awk '$2 ~ /^alsa_output/ {print $2; exit}') ;; esac
-    if [ -n "$MIC_HW" ] && [ -n "$HP_HW" ]; then
-        pactl list modules short 2>/dev/null | grep -q module-echo-cancel \
-            || pactl load-module module-echo-cancel aec_method=webrtc source_master="$MIC_HW" sink_master="$HP_HW" \
-                   source_name=osmo_mic_ec sink_name=osmo_hp_ec \
-                   source_properties=device.description=Micro_sans_echo sink_properties=device.description=HP_sans_echo >/dev/null 2>&1 \
-            && echo "  annuleur d echo pose entre $MIC_HW et $HP_HW"
-        pactl set-default-source osmo_mic_ec 2>/dev/null; pactl set-default-sink osmo_hp_ec 2>/dev/null
+    # Les flux QEMU de la carte « combine » (media.name=combine) sur les HP et
+    # le micro de l operateur - ils y sont deja quand osmo-pmos-qemu les a
+    # nommes au lancement (OSMO_PMOS_HP / OSMO_PMOS_MIC), sinon on les y met.
+    if [ -n "$MIC_SRC" ]; then
         for so in $(pactl list source-outputs 2>/dev/null | awk '/Source Output #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
-            pactl move-source-output "$so" osmo_mic_ec 2>/dev/null
+            pactl move-source-output "$so" "$MIC_SRC" 2>/dev/null
         done
+    fi
+    if [ -n "$HP_SINK" ]; then
         for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
-            pactl move-sink-input "$si" osmo_hp_ec 2>/dev/null
+            pactl move-sink-input "$si" "$HP_SINK" 2>/dev/null
         done
-        pactl set-source-mute "$MIC_HW" 0 2>/dev/null; pactl set-source-volume "$MIC_HW" 100% 2>/dev/null
-        pactl set-source-volume osmo_mic_ec 80% 2>/dev/null
     fi
     pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null
     pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null && echo "  sourdines de l hote levees (haut-parleur et micro)"
-
+    # [2026-09-09] speech-dispatcher (module dummy) joue un message factice grave
+    # et fort dans les haut-parleurs quand une appli demande une synthese vocale :
+    # on l envoie dans le sink poubelle osmo_tts_off (cf. lib/audio.sh) ; stream-
+    # restore s en souviendra pour les flux suivants.
+    pactl list short sinks 2>/dev/null | grep -qw osmo_tts_off \
+        || pactl load-module module-null-sink sink_name=osmo_tts_off format=s16le rate=8000 channels=1 sink_properties=device.description=TTS_off >/dev/null 2>&1
+    for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /application.name = "speech-dispatcher/{print id}' | tr -d '#'); do
+        pactl move-sink-input "$si" osmo_tts_off 2>/dev/null && echo "  flux speech-dispatcher detourne des haut-parleurs (osmo_tts_off)"
+    done
     ssh_vm '
         pci() { pactl list "$1" short 2>/dev/null | grep "pci-0000_00_$2\.0" | grep -v monitor | head -n1 | cut -f2; }
         PONT_OUT=$(pci sinks 12);  PONT_IN=$(pci sources 12)
@@ -116,17 +128,40 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         for c in "$PONT_IN" "$COMB_IN"; do
             pactl set-source-mute "$c" 0 2>/dev/null
         done
+        # [2026-09-09] IDEMPOTENT POUR DE VRAI. On rechargeait les deux
+        # bouclages a chaque passage : relancer osmo-pmos-setup pendant un
+        # appel coupait la voix une demi-seconde. Si les deux sont deja la,
+        # epingles, avec les bons bouts, on n y touche pas.
+        deja=$(pactl list short modules 2>/dev/null | grep -c "module-loopback.*sink_dont_move=true")
+        if [ "$deja" = "2" ] \
+           && pactl list short modules 2>/dev/null | grep -q "source=$PONT_IN.*sink=$COMB_OUT" \
+           && pactl list short modules 2>/dev/null | grep -q "source=$COMB_IN.*sink=$PONT_OUT"; then
+            echo "  bouclages deja en place et epingles - inchanges"
+            exit 0
+        fi
         # Idempotent : on retire les bouclages precedents avant de reposer.
         # [2026-09-08] 200 ms et pas 40 : a 40 ms PulseAudio, dans la VM,
         # notait « Too many underruns, increasing latency » et la voix
         # craquait (echo du 600 brouille). Une VM n a pas la regularite d une
         # carte son ; 200 ms restent imperceptibles sur un appel.
+        # [2026-09-09] adjust_time=0 ET 400 ms. Le mobile ecrit son audio par
+        # trames de 20 ms au rythme du L1 : avec l ajustement de cadence par
+        # defaut (adjust_time=10), module-loopback re-echantillonnait sans
+        # cesse pour tenir ses 200 ms - mesure sur l hote : sauts de retard de
+        # 46 ms en pleine parole, correlation de forme d onde 0,29 en appel
+        # contre 0,87 en injection directe ; a l oreille « deux flux qui se
+        # superposent », voix pourrie. Cadence fixe + 400 ms de tampon :
+        # correlation 1,00 sur tout l appel, retard stable a 497 ms.
         for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
             pactl unload-module "$m" 2>/dev/null
         done
-        pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=200 >/dev/null \
+        # [2026-09-09] EPINGLES (dont_move) : callaudiod / Phosh changent le
+        # peripherique par defaut A CHAQUE APPEL (journal : « card has no voice
+        # profile and no usable sink ») et PulseAudio deplace alors tout flux
+        # non epingle - les deux bouclages partaient ailleurs des le decroche.
+        pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
             && echo "  descendant : pont -> combine (on entend)"
-        pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=200 >/dev/null \
+        pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
             && echo "  montant    : combine -> pont (on parle)"
     ' 2>&1 | tail -n 6
 fi
@@ -142,7 +177,7 @@ done
 ssh_vm 'echo ok' 2>/dev/null | grep -q ok || { echo "  ATTENTION : pas de SSH sur le port $PORT - la VM est-elle lancee ?"; exit 1; }
 if [ "${1:-}" = "--voix" ] || [ "${1:-}" = "voix" ]; then voix; exit 0; fi
 
-ssh_vm "echo $PASS | sudo -S sh -c '
+ssh_vm "echo $PASS | sudo -S -p '' sh -c '
     mkdir -p /etc/systemd/resolved.conf.d
     # DNSSEC=no : le DNS interne de QEMU (10.0.2.3) ne signe pas ses reponses,
     # et resolved refusait tout - « DNSSEC validation failed: no-signature ».
@@ -292,7 +327,7 @@ else
     echo "  filaire rendu au telephone (OSMO_PMOS_FILAIRE=1)"
 fi
 GUEST
-} | ssh_vm "sudo -S sh -s" 2>/dev/null | tail -n 2
+} | ssh_vm "sudo -S -p '' sh -s" 2>/dev/null | tail -n 2
 for _ in $(seq 1 20); do
     sleep 1
     ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break
@@ -349,7 +384,7 @@ fi
 # client » et ne voyait jamais le modem ensuite - pas de device gsm, pas de
 # PPP, modem « disabled ». Detache par systemd-run : la relance de NM coupe
 # la session SSH qui la demande.
-ssh_vm "echo $PASS | sudo -S systemd-run --quiet --collect --unit osmo-mm-puis-nm sh -c 'systemctl restart ModemManager; sleep 6; systemctl restart NetworkManager'" >/dev/null 2>&1
+ssh_vm "echo $PASS | sudo -S -p '' systemd-run --quiet --collect --unit osmo-mm-puis-nm sh -c 'systemctl restart ModemManager; sleep 6; systemctl restart NetworkManager'" >/dev/null 2>&1
 for _ in $(seq 1 20); do
     sleep 1
     ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break

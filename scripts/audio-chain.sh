@@ -94,5 +94,9 @@ for s in gsm_audio gsm_mic; do
     fi
 done
 
+# [2026-09-09] L annuleur d echo d abord : les HP de l operateur sont
+# osmo_hp_ec des le boot, comme avec la VM (lib/audio.sh, « L AFFECTATION DES
+# HAUT-PARLEURS »). Sans VM, le bouclage direct suit ; avec, il est retire.
+ensure_echo_cancel
 ensure_local_loopback
 exit 0

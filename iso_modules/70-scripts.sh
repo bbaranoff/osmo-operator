@@ -56,6 +56,17 @@ if [ -f "$DIR/launch/osmo-launch.sh" ]; then
 fi
 echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo-operator${NC} (arbre unique, avec .git)"
 
+# [2026-09-09] /etc/osmocom/gapk-start.sh vient de l image Docker (COPY scripts/.)
+# et lib/audio.sh le PREFERE a scripts/gapk-start.sh. Une image en cache, batie
+# avant le correctif du superviseur (emetteur RTP en doublon vers le BTS : le
+# « 600 qu on entend mal »), embarquerait l ancien. On aligne la copie du rootfs
+# sur le depot, toujours - c est idempotent et c est le depot qui fait foi.
+if [ -f "$P/scripts/gapk-start.sh" ]; then
+    install -d "$ROOTFS/etc/osmocom"
+    install -m 755 "$P/scripts/gapk-start.sh" "$ROOTFS/etc/osmocom/gapk-start.sh"
+    echo -e "  ${GREEN}✓${NC} /etc/osmocom/gapk-start.sh aligne sur scripts/ (superviseur gapk sans emetteur en doublon)"
+fi
+
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
     echo -e "${GREEN}[7b/9] WAN - table des noeuds embarquee...${NC}"

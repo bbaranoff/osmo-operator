@@ -79,12 +79,14 @@ pmos_layout() {
         # jour (bootindex=0 du disque, sinon OVMF passe par PXE). Sur un
         # clone git, on repart des fichiers d origine et on applique LE
         # patch courant - idempotent ; sans git, on se fie aux marqueurs.
-        if [ -d "$PM/pmbootstrap/.git" ] && ! grep -q 'bootindex=0' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null \
+        # Marqueur du patch le plus recent : OSMO_PMOS_HP (2026-09-09, la carte
+        # « combine » nommee) ; avant lui bootindex=0 (2026-09-09 matin).
+        if [ -d "$PM/pmbootstrap/.git" ] && ! grep -q 'OSMO_PMOS_HP' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null \
            && git -C "$PM/pmbootstrap" checkout -q -- pmb 2>/dev/null \
            && git -C "$PM/pmbootstrap" apply "$PM/patches/pmbootstrap-osmo-bench-qemu.patch" 2>/dev/null; then
-            _p_ok "pmbootstrap : patch du banc remis a jour (bootindex du disque, modem serie PCI, son du banc)"
+            _p_ok "pmbootstrap : patch du banc remis a jour (carte combine nommee, bootindex du disque, modem serie PCI, son du banc)"
         elif grep -q 'osmo_bench_args' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null; then
-            _p_ok "pmbootstrap deja patche (osmo_bench_args$(grep -q 'bootindex=0' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null && echo ', bootindex'))"
+            _p_ok "pmbootstrap deja patche (osmo_bench_args$(grep -q 'OSMO_PMOS_HP' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null && echo ', carte combine nommee'))"
         elif git -C "$PM/pmbootstrap" apply --check "$PM/patches/pmbootstrap-osmo-bench-qemu.patch" 2>/dev/null; then
             git -C "$PM/pmbootstrap" apply "$PM/patches/pmbootstrap-osmo-bench-qemu.patch" && _p_ok "pmbootstrap patche (modem serie PCI, son du banc, ecran, port 5038)"
         else

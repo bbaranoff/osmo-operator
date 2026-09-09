@@ -63,7 +63,20 @@
 #   osmo-pmos-qemu status   dit si la VM tourne (pid) et si son SSH repond.
 # Et au lancement, si une VM tourne deja, on le dit et on s arrete la.
 PMOS_SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
-PMOS_SSH="sshpass -p ${OSMO_PMOS_PASS:-147147} ssh -p $PMOS_SSH_PORT -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=4 -o PreferredAuthentications=password ${OSMO_PMOS_USER:-user}@127.0.0.1"
+PMOS_SSH="sshpass -p ${OSMO_PMOS_PASS:-147147} ssh -p $PMOS_SSH_PORT -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=4 -o PreferredAuthentications=password ${OSMO_PMOS_USER:-user}@127.0.0.1"
+# [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro (une
+# seule source de verite, voir « L AFFECTATION DES HAUT-PARLEURS » la-bas).
+# Ici : l annuleur d echo est charge AVANT QEMU, pour que la carte « combine »
+# de la VM naisse directement sur lui (OSMO_PMOS_HP / OSMO_PMOS_MIC, lus par
+# le patch pmbootstrap) ; les bouclages directs de l hote sont retires quand
+# la VM part (la voix passe par elle) et REPOSES quand elle s arrete.
+AUDIO_LIB="${OSMO_REPO:-/opt/GSM/osmo-operator}/lib/audio.sh"
+if [ -f "$AUDIO_LIB" ]; then
+    # shellcheck source=../lib/audio.sh
+    . "$AUDIO_LIB"
+else
+    AUDIO_LIB=""
+fi
 # Le vrai QEMU (pas le « sh -c » qui l enveloppe) : celui qui tient l image.
 pmos_qemu_pids() {
     pgrep -f '^[^ ]*ld-musl[^ ]* .*qemu-system-x86_64 .*rootfs/qemu-amd64\.img' 2>/dev/null
@@ -88,7 +101,7 @@ pmos_stop() {
     else
         if pmos_ssh_ok; then
             echo "osmo-pmos-qemu: extinction propre par SSH (poweroff)..."
-            $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S poweroff" >/dev/null 2>&1
+            $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S -p '' poweroff" >/dev/null 2>&1
             for i in $(seq 1 30); do
                 sleep 1
                 [ -z "$(pmos_qemu_pids)" ] && break
@@ -122,6 +135,8 @@ pmos_stop() {
     # Motif ancre sur l interpreteur : un « pkill -f » large tuerait aussi le
     # terminal de quiconque a ces mots dans sa ligne de commande.
     pkill -f '^[^ ]*python[0-9.]* [^ ]*pmbootstrap qemu' 2>/dev/null || true
+    # La VM partie, l hote reprend son ecoute directe (gsm_audio -> ses HP).
+    [ -n "$AUDIO_LIB" ] && { ensure_local_loopback; ensure_local_mic; }
     return 0
 }
 # Depuis une icone (Terminal=true), la fenetre se fermerait avant qu on ait
@@ -229,7 +244,7 @@ resize2fs /dev/vda2 2>&1 | grep -v '^resize2fs [0-9]' || true
 df -h / | tail -1 | awk '{print "place : racine " $2 ", libre " $4 " (" $5 " pris)"}'
 PLACE
 )"
-    $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S sh -c \"\$(echo $b64 | base64 -d)\"" 2>/dev/null
+    $PMOS_SSH "echo ${OSMO_PMOS_PASS:-147147} | sudo -S -p '' sh -c \"\$(echo $b64 | base64 -d)\"" 2>/dev/null
 }
 GUETTEUR=""
 (
@@ -292,6 +307,22 @@ fi
 # puis sans KVM, puis en fenetre GTK (SDL + Wayland pur). Chaque essai est
 # annonce ; le dernier code d erreur est celui qu on garde. Une VM qui a
 # tourne plus de 25 s puis s est arretee n est pas relancee : c est un arret.
+# [2026-09-09] LES HAUT-PARLEURS DE LA VM, NOMMES AVANT SON DEPART. La carte
+# « combine » (osmo_bench_args) prenait « les peripheriques par defaut » de
+# l hote au moment ou QEMU se connectait - la carte brute, sans annuleur
+# d echo, puisque celui-ci n arrivait qu avec osmo-pmos-setup, 30 a 90 s plus
+# tard ; et le defaut memorise (osmo_hp_ec) n existait pas encore. Le flux
+# tournait donc d abord sur les HP bruts, puis etait deplace. On charge
+# l annuleur ICI, on retire les bouclages directs (la voix passe par la VM),
+# et on donne les noms au patch pmbootstrap : la carte nait au bon endroit.
+if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
+    ensure_echo_cancel 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
+    remove_direct_loopbacks 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
+    _hp="$(audio_hp_sink)"; _mic="$(audio_mic_source)"
+    [ -n "$_hp" ]  && export OSMO_PMOS_HP="${OSMO_PMOS_HP:-$_hp}"
+    [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
+    echo "osmo-pmos-qemu: carte « combine » de la VM -> HP ${OSMO_PMOS_HP:-defaut}, micro ${OSMO_PMOS_MIC:-defaut}"
+fi
 _lance() {
     "$PMB" "${PMB_OPTS[@]}" qemu \
         --memory "${OSMO_PMOS_MEM:-4096}" \
@@ -313,5 +344,8 @@ if _mort_tot "$rc" && [ "${OSMO_PMOS_DISPLAY:-sdl}" = sdl ]; then
     echo "osmo-pmos-qemu: encore mort ($rc) - relance en fenetre GTK (OSMO_PMOS_DISPLAY=gtk)"
     export OSMO_PMOS_DISPLAY=gtk; t0=$(date +%s); _lance "$@"; rc=$?
 fi
+# La VM s est arretee (fenetre fermee, extinction depuis Phosh, echec) : le
+# bouclage direct de l hote revient - sans lui, plus personne n ecoute gsm_audio.
+[ -n "$AUDIO_LIB" ] && { ensure_local_loopback; ensure_local_mic; } 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
 [ "$rc" -eq 0 ] || read -r -p "pmbootstrap a echoue ($rc). Entree pour fermer " _
 exit "$rc"

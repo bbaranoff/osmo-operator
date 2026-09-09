@@ -23,6 +23,14 @@ RR_IMMEDIATE_ASSIGNMENT_EXT = 0x39
 SI_TYPES = frozenset((0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e))
 CCCH_TYPES = frozenset((0x3f, 0x39, 0x3a, 0x21, 0x22, 0x24))
 
+
+def is_empty_paging(l2):
+    """PAGING REQUEST TYPE 1 sans identite : le bloc de remplissage qu osmo-bts
+    emet sur chaque bloc PCH libre (Mobile Identity de longueur 1, type 0 =
+    « no identity »). Rien a en faire cote mobile."""
+    return (len(l2) >= 6 and l2[1] == 0x06 and l2[2] == 0x21
+            and l2[4] == 0x01 and (l2[5] & 0x07) == 0x00)
+
 TSC7 = bytes((1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0))
 RACH_SYNC = bytes(int(c) for c in "01001011011111111001100110101010001111000")
 RACH_SLOTS_51 = frozenset([4, 5] + list(range(14, 37)) + [45, 46])

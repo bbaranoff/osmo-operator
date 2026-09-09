@@ -588,7 +588,15 @@ LTE_FENETRE = float(os.environ.get("OSMO_LTE_TAP_WINDOW", "0.25"))
 LTE_NFFT = 1024
 LTE_UE_CONF = os.environ.get("OSMO_SRSRAN_UE_CONF", "/root/.config/srsran/ue.conf")
 LTE_TMUX = os.environ.get("OSMO_SRSRAN_TMUX", "srsran")
-LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/tmp/ue.log")
+# [2026-09-09] tools/osmo-lte.sh lance srsue avec --log.filename=/tmp/osmo-lte-ue.log
+# (qui prime sur le « filename = /tmp/ue.log » du ue.conf) et sa SORTIE STANDARD
+# dans /tmp/osmo-lte-ue.console - c est la que sont « Found PLMN », « RRC
+# Connected », « Network attach successful ». Le tmux -L srsran n existe que
+# si on l a ouvert a la main. Chercher /tmp/ue.log donnait donc toujours
+# « console srsue introuvable » alors que le UE etait attache.
+LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/tmp/osmo-lte-ue.log")
+LTE_UE_CONSOLE = os.environ.get("OSMO_SRSRAN_UE_CONSOLE", "/tmp/osmo-lte-ue.console")
+LTE_UE_SOURCES = [LTE_UE_CONSOLE, LTE_UE_LOG, "/tmp/ue.log"]
 # Le marqueur d une reponse ZMTP de l UE : la trame vide du REQ/REP (0x01 =
 # « il y en a une autre », taille 0), puis l en-tete d une trame longue (0x02,
 # taille sur 8 octets grand-boutiste, dont les cinq premiers sont nuls tant
@@ -726,9 +734,31 @@ class SondeLte(threading.Thread):
                          "trames": trames, "erreur": None, "t": time.time()}
 
 
+def _queue_fichier(chemin, n):
+    """Les n dernieres lignes non vides d un fichier texte, sans couleurs ANSI ;
+    [] s il est absent ou vide."""
+    try:
+        with open(chemin, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144))
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    # Les mesures RRC (« MEAS: New measurement serving cell ») tombent toutes
+    # les 20 ms : elles noieraient l attach. On ne garde que les evenements.
+    # Derniere ligne encore en cours d ecriture : on ne la montre pas tronquee.
+    if data and not data.endswith("\n"):
+        data = data[:data.rfind("\n") + 1]
+    # srsue ecrit ses barres de progression au \r : seul le dernier segment compte.
+    lignes = [ANSI.sub("", l.split("\r")[-1]).rstrip() for l in data.splitlines()]
+    return [l for l in lignes if l.strip() and " MEAS:" not in l][-n:]
+
+
 def srsran_journal(n, width):
     """Les dernieres lignes de la console de srsue : la fenetre « ue » du tmux
-    qui le porte, et le journal fichier a defaut."""
+    qui le porte si elle existe, sinon sa sortie standard (osmo-lte-ue.console :
+    PLMN trouve, RRC, attach) COMPLETEE par son journal (osmo-lte-ue.log :
+    RRC/NAS au niveau info, cf. configs/srsran/ue.conf)."""
     try:
         out = subprocess.run(["tmux", "-L", LTE_TMUX, "capture-pane", "-p", "-t", f"{LTE_TMUX}:ue"],
                              capture_output=True, text=True, timeout=2)
@@ -738,18 +768,18 @@ def srsran_journal(n, width):
             return [(l[:width], None) for l in lignes[-n:]]
     except Exception:
         pass
-    try:
-        with open(LTE_UE_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 16384))
-            data = f.read().decode("utf-8", "replace")
-        lignes = [ANSI.sub("", l).rstrip() for l in data.splitlines() if l.strip()]
-        if lignes:
-            return [(l[:width], None) for l in lignes[-n:]]
-    except OSError:
-        pass
+    # Console d abord (l essentiel tient en quelques lignes), le journal prend
+    # le reste de la place : les deux tronques par le bas, les plus recents.
+    console = _queue_fichier(LTE_UE_CONSOLE, max(1, n // 3))
+    journal = _queue_fichier(LTE_UE_LOG, n)
+    if not console and not journal:
+        journal = _queue_fichier("/tmp/ue.log", n)
+    if console or journal:
+        lignes = console + journal[-max(0, n - len(console)):] if journal else console
+        return [(l[:width], None) for l in lignes[-n:]]
     return [("console srsue introuvable :", (139, 148, 158)),
-            (f"  ni tmux -L {LTE_TMUX} (fenetre ue), ni {LTE_UE_LOG}", (139, 148, 158))]
+            (f"  ni tmux -L {LTE_TMUX} (fenetre ue), ni " + ", ni ".join(LTE_UE_SOURCES),
+             (139, 148, 158))]
 
 
 historique_lte = []
@@ -816,7 +846,7 @@ def render_lte(etat):
     d = ImageDraw.Draw(img)
     lx0 = split
     d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
-    d.text((lx0, y0), "console srsUE  ·  tmux srsran:ue", font=F_TITLE, fill=(88, 166, 255))
+    d.text((lx0, y0), "console srsUE  ·  osmo-lte-ue.console + .log", font=F_TITLE, fill=(88, 166, 255))
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)
     cols = max(10, int((x1 - lx0) / 7.3))

@@ -19,9 +19,9 @@ class Feeder:
         self.stats = stats
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    def l2(self, fn, chan, l2, tn=0, uplink=False):
+    def l2(self, fn, chan, l2, tn=0, uplink=False, to_qemu=True):
         pkt = gsm.gsmtap_header(self.cfg.arfcn, fn, chan, tn, uplink) + bytes(l2)
-        if not uplink:
+        if not uplink and to_qemu:
             self.sock.sendto(pkt, (GSMTAP_HOST, self.cfg.gsmtap_port))
         if self.cfg.tap:
             self.sock.sendto(pkt, (GSMTAP_HOST, self.cfg.tap_port))
@@ -147,7 +147,18 @@ class Downlink:
         if mt in gsm.SI_TYPES:
             self.feed.l2(fn0, gsm.GSMTAP_BCCH, l2, tn)
         elif mt in gsm.CCCH_TYPES:
-            self.feed.l2(fn0, gsm.GSMTAP_CCCH, l2, tn)
+            # [2026-09-09] LES PAGINGS VIDES NE VONT PLUS AU L1 QEMU. Le L1
+            # (calypso_l1_grgsm.c, feed_agch) ne garde QU UN bloc CCCH - le
+            # dernier recu, 100 trames de validite. osmo-bts remplit chaque
+            # bloc PCH libre d un PAGING REQUEST 1 sans identite : le vrai
+            # paging (TMSI du mobile) etait ecrase ~50 ms plus tard, et le
+            # firmware ne le voyait que si sa lecture de son groupe de paging
+            # tombait dans la fenetre. Mesure sur le banc : 4 appels sur 5
+            # rejetes en DEST_OOO (paging expire au bout de 10 s, BSC ayant
+            # emis 19 tentatives), le mobile campe et n ayant journalise
+            # AUCUN « PAGING REQUEST 1 ». Le tap Wireshark, lui, garde tout.
+            self.feed.l2(fn0, gsm.GSMTAP_CCCH, l2, tn,
+                         to_qemu=not gsm.is_empty_paging(l2))
 
     def _clear(self, bursts):
         return [gsm.coded_from_burst(b) for _, b in bursts]

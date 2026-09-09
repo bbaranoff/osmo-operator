@@ -15,7 +15,7 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..08f1efd7 100644
+index 72b46c60..a5fb10a4 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
 @@ -61,6 +61,34 @@ def which_qemu(arch: Arch) -> str:
@@ -199,7 +199,7 @@ index 72b46c60..08f1efd7 100644
  
      if qemu_cpu:
          command += ["-cpu", qemu_cpu]
-@@ -264,9 +377,106 @@ def command_qemu(
+@@ -264,9 +377,119 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  
@@ -284,6 +284,19 @@ index 72b46c60..08f1efd7 100644
 +
 +    out = os.environ.get("OSMO_PMOS_SINK", "gsm_mic")
 +    src = os.environ.get("OSMO_PMOS_SOURCE", "gsm_audio.monitor")
++    # [2026-09-09] The handset card is NAMED too, when the launcher says so:
++    # left to "the host's defaults", it landed on whatever was default when
++    # QEMU connected - the raw card, since the echo canceller (osmo_hp_ec /
++    # osmo_mic_ec) only came later with osmo-pmos-setup - and then had to be
++    # moved. osmo-pmos-qemu now loads the canceller first and passes its
++    # names here (OSMO_PMOS_HP / OSMO_PMOS_MIC); unset, the defaults apply.
++    combine = f"pa,id=combine,server={sock}"
++    hp = os.environ.get("OSMO_PMOS_HP", "")
++    mic = os.environ.get("OSMO_PMOS_MIC", "")
++    if hp:
++        combine += f",out.name={hp}"
++    if mic:
++        combine += f",in.name={mic}"
 +    args += [
 +        # The bridge: the call itself.
 +        "-audiodev",
@@ -294,7 +307,7 @@ index 72b46c60..08f1efd7 100644
 +        "hda-duplex,bus=hdagsm.0,audiodev=gsm",
 +        # The handset: the host's own speakers and microphone.
 +        "-audiodev",
-+        f"pa,id=combine,server={sock}",
++        combine,
 +        "-device",
 +        "intel-hda,id=hdacombine,addr=0x13",
 +        "-device",

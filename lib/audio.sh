@@ -45,7 +45,14 @@ RED='' GREEN='' YELLOW='' CYAN='' NC='' BOLD=''
 #
 # Les deux sinks sont desormais SOLIDAIRES - ici, dans system.pa et dans le
 # Dockerfile. Aucun ordre de script ne peut plus en perdre un.
-GSM_SINKS="gsm_audio:GSM_Audio gsm_mic:GSM_Mic"
+# [2026-09-09] osmo_tts_off : un sink poubelle pour speech-dispatcher. Sur le
+# banc, une appli du bureau declenche parfois la synthese vocale ; sans voix
+# installee, le module « dummy » de speech-dispatcher joue son message factice
+# (dummy-message.wav : 29 s, voix grave, 83 % de l energie sous 300 Hz, niveau
+# 100 %) dans les haut-parleurs - par-dessus l appel en cours. Mesure : « voix
+# saturee, grave », par intermittence, sur le 600. Une fois le flux deplace ici,
+# module-stream-restore le renvoie ici a chaque apparition.
+GSM_SINKS="gsm_audio:GSM_Audio gsm_mic:GSM_Mic osmo_tts_off:TTS_off"
 
 load_gsm_sinks() {
     local entry name desc
@@ -76,6 +83,127 @@ load_gsm_sinks() {
 # explicitement les deux null-sinks et on ne garde qu'une sortie materielle.
 LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-20}"
 
+# ── L AFFECTATION DES HAUT-PARLEURS ET DU MICRO : UN SEUL ENDROIT ───────────
+# [2026-09-09] TROIS SCRIPTS SE DISPUTAIENT LES MEMES ROUTES. Le son du banc a
+# deux modes : SANS telephone postmarketOS, l hote ecoute le descendant par un
+# module-loopback direct (gsm_audio.monitor -> haut-parleurs) ; AVEC la VM, la
+# voix doit passer PAR ELLE (carte « pont » 0x12 <-> carte « combine » 0x13,
+# tools/osmo-pmos-setup.sh) et ce bouclage direct doit disparaitre, sinon on
+# entend deux fois - le direct, puis la VM 500 ms plus tard - « voix pourrie ».
+# Or scripts/audio-chain.sh (au boot, ExecStartPost de pulseaudio) et
+# ensure_pulse (start-direct) reposaient le bouclage direct sans regarder si
+# la VM etait la, pendant qu osmo-pmos-setup le retirait : le dernier passe
+# gagnait. Et chacun choisissait « les haut-parleurs » a sa facon (sink par
+# defaut, premiere carte alsa, osmo_hp_ec...), alors que le sink par defaut
+# MEMORISE (osmo_hp_ec) n existe pas au boot - l annuleur d echo n arrivait
+# qu avec la VM - et que les flux QEMU « combine » se posaient donc sur la
+# carte brute, sans annuleur, le temps que le setup les deplace.
+#
+# Desormais :
+#   audio_hw_sink / audio_hw_source   la carte son materielle (defaut si c en
+#                                     est une, sinon la premiere alsa_*, HDMI
+#                                     exclu) ;
+#   audio_hp_sink / audio_mic_source  CE QUE L OPERATEUR ENTEND / DIT : l
+#                                     annuleur d echo (osmo_hp_ec / osmo_mic_ec)
+#                                     s il est charge, sinon le materiel ;
+#   ensure_echo_cancel                charge cet annuleur (webrtc, sans AGC
+#                                     analogique, micro a 25 %) et en fait le
+#                                     defaut - au boot comme avec la VM ;
+#   pmos_vm_audio_present             la VM postmarketOS a ses cartes son ici
+#                                     (flux QEMU media.name=combine) ;
+#   remove_direct_loopbacks           retire les bouclages directs ;
+#   ensure_local_loopback / _mic      ne posent le direct QUE sans VM, vers
+#                                     audio_hp_sink / depuis audio_mic_source,
+#                                     et remplacent un bouclage pose vers une
+#                                     autre sortie (la carte brute d avant l
+#                                     annuleur, par exemple).
+# osmo-pmos-qemu charge l annuleur AVANT de lancer QEMU et nomme ses sorties
+# a la carte « combine » (OSMO_PMOS_HP / OSMO_PMOS_MIC, patch pmbootstrap) ;
+# osmo-pmos-setup et l arret de la VM (pmos_stop) passent par ces fonctions.
+# AUDIO_ECHO_CANCEL=0 pour se passer de l annuleur (les HP = la carte brute).
+EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"'
+: "${EC_MIC_VOLUME:=25%}"
+
+audio_hw_sink() {
+    local d; d="$(pactl get-default-sink 2>/dev/null || true)"
+    case "$d" in alsa_output.*) echo "$d"; return 0 ;; esac
+    pactl list short sinks 2>/dev/null \
+        | awk '$2 ~ /^alsa_output/ && $2 !~ /hdmi/ { print $2; exit }'
+}
+audio_hw_source() {
+    local d; d="$(pactl get-default-source 2>/dev/null || true)"
+    case "$d" in alsa_input.*) echo "$d"; return 0 ;; esac
+    pactl list short sources 2>/dev/null \
+        | awk '$2 ~ /^alsa_input/ && $2 !~ /\.monitor$/ { print $2; exit }'
+}
+audio_hp_sink() {
+    pactl list short sinks 2>/dev/null | awk '$2 == "osmo_hp_ec" { f=1 } END { exit !f }' \
+        && { echo osmo_hp_ec; return 0; }
+    audio_hw_sink
+}
+audio_mic_source() {
+    pactl list short sources 2>/dev/null | awk '$2 == "osmo_mic_ec" { f=1 } END { exit !f }' \
+        && { echo osmo_mic_ec; return 0; }
+    audio_hw_source
+}
+
+pmos_vm_audio_present() {
+    pactl list sink-inputs 2>/dev/null | grep -q 'media.name = "combine"'
+}
+
+remove_direct_loopbacks() {
+    local m n=0
+    for m in $(pactl list short modules 2>/dev/null \
+               | awk '/module-loopback/ && (/source=gsm_audio\.monitor/ || /sink=gsm_mic([ \t]|$)/) { print $1 }'); do
+        pactl unload-module "$m" >/dev/null 2>&1 && n=$(( n + 1 ))
+    done
+    [ "$n" -gt 0 ] && echo -e "  ${YELLOW}[audio] ${n} bouclage(s) direct(s) retire(s)${NC}"
+    return 0
+}
+
+# [2026-09-08/09] L ANNULEUR D ECHO ENTRE LE MICRO ET LES HAUT-PARLEURS.
+# Micro interne + haut-parleurs : l echo du 600 se reinjectait dans le micro
+# (2 400 de crete HP coupe, 32 768 sature HP ouvert) : Larsen. Et l AGC
+# analogique de webrtc, laisse par defaut, promenait le gain du micro de 100 %
+# a 0 % d une minute a l autre (voix ecrasee, 93 % de l energie sous 300 Hz a
+# l entree du GSM). Donc : webrtc sans AGC analogique, micro fixe a 25 % (il
+# sature des 45 %), et un demutage explicite - module-device-restore rend
+# parfois le module muet. Le volume d osmo_mic_ec est PARTAGE avec le micro
+# materiel : meme valeur pour les deux.
+ensure_echo_cancel() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    [ "${AUDIO_ECHO_CANCEL:-1}" = "1" ] || {
+        echo -e "  ${YELLOW}[audio] annuleur d echo desactive (AUDIO_ECHO_CANCEL=0)${NC}"; return 0; }
+    pactl info >/dev/null 2>&1 || return 0
+    local mic hp
+    mic="$(audio_hw_source)"; hp="$(audio_hw_sink)"
+    if [ -z "$mic" ] || [ -z "$hp" ]; then
+        echo -e "  ${YELLOW}[audio] pas de micro ou de haut-parleur materiel - annuleur d echo ignore${NC}"; return 0
+    fi
+    # Le defaut (osmo_hp_ec / osmo_mic_ec) n est pose qu au CHARGEMENT : le
+    # rejouer a chaque passage renvoyait vers l annuleur les flux que l
+    # operateur venait de mettre ailleurs. Tout ce qui compte pour la chaine
+    # GSM est epingle par nom - le defaut n est plus qu une affaire de bureau.
+    if pactl list short modules 2>/dev/null | grep -q 'module-echo-cancel'; then
+        echo -e "  ${GREEN}[audio] annuleur d echo deja en place (osmo_hp_ec / osmo_mic_ec)${NC}"
+        return 0
+    elif pactl load-module module-echo-cancel aec_method=webrtc \
+            source_master="$mic" sink_master="$hp" \
+            source_name=osmo_mic_ec sink_name=osmo_hp_ec "$EC_AEC_ARGS" \
+            source_properties=device.description=Micro_sans_echo \
+            sink_properties=device.description=HP_sans_echo >/dev/null 2>&1; then
+        echo -e "  ${GREEN}[audio] annuleur d echo pose entre ${mic} et ${hp} (sans AGC analogique)${NC}"
+    else
+        echo -e "  ${YELLOW}[audio] echec de l annuleur d echo - les HP restent ${hp}${NC}"; return 0
+    fi
+    pactl set-default-sink osmo_hp_ec >/dev/null 2>&1
+    pactl set-default-source osmo_mic_ec >/dev/null 2>&1
+    pactl set-sink-mute "$hp" 0 2>/dev/null;       pactl set-sink-mute osmo_hp_ec 0 2>/dev/null
+    pactl set-source-mute "$mic" 0 2>/dev/null;    pactl set-source-volume "$mic" "$EC_MIC_VOLUME" 2>/dev/null
+    pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec "$EC_MIC_VOLUME" 2>/dev/null
+    return 0
+}
+
 ensure_local_loopback() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     [ "${AUDIO_LOCAL_LOOPBACK:-1}" = "1" ] || {
@@ -85,26 +213,41 @@ ensure_local_loopback() {
     pactl list short sources 2>/dev/null | grep -qw 'gsm_audio.monitor' || {
         echo -e "  ${YELLOW}[audio] gsm_audio.monitor absent - loopback local ignore${NC}"; return 0; }
 
-    # Sortie materielle = le sink par defaut, SAUF si c'est un de nos null-sinks.
-    local sink
-    sink="$(pactl get-default-sink 2>/dev/null || true)"
-    case "$sink" in
-        ''|gsm_audio|gsm_mic|@*)
-            sink="$(pactl list short sinks 2>/dev/null \
-                    | awk '$2 != "gsm_audio" && $2 != "gsm_mic" { print $2; exit }')" ;;
-    esac
-    [ -n "$sink" ] || {
-        echo -e "  ${YELLOW}[audio] aucune sortie materielle - loopback local ignore${NC}"; return 0; }
-
-    # Idempotent : ne pas empiler un 2e loopback (voix doublee + echo).
-    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
-         | grep -F 'source=gsm_audio.monitor' | grep -qF "sink=${sink}"; then
-        echo -e "  ${GREEN}[audio] loopback local deja en place → ${sink}${NC}"
+    # Avec le telephone postmarketOS, la voix passe par la VM : pas de direct.
+    if pmos_vm_audio_present; then
+        echo -e "  ${GREEN}[audio] telephone postmarketOS en place - l ecoute passe par la VM, pas de bouclage direct${NC}"
+        remove_direct_loopbacks
         return 0
     fi
 
+    local sink
+    sink="$(audio_hp_sink)"
+    [ -n "$sink" ] || {
+        echo -e "  ${YELLOW}[audio] aucune sortie materielle - loopback local ignore${NC}"; return 0; }
+
+    # Idempotent : ne pas empiler un 2e loopback (voix doublee + echo)...
+    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
+         | grep -F 'source=gsm_audio.monitor' | grep -F "sink=${sink}" | grep -qF 'sink_dont_move=true'; then
+        echo -e "  ${GREEN}[audio] loopback local deja en place → ${sink}${NC}"
+        return 0
+    fi
+    # ...et ne pas en garder un vers une AUTRE sortie (la carte brute posee
+    # avant l annuleur d echo, par exemple).
+    local m
+    for m in $(pactl list short modules 2>/dev/null \
+               | awk '/module-loopback/ && /source=gsm_audio\.monitor/ { print $1 }'); do
+        pactl unload-module "$m" >/dev/null 2>&1
+    done
+
+    # [2026-09-09] EPINGLE. PulseAudio 16 deplace tout flux non epingle vers le
+    # nouveau peripherique par defaut (set-default-sink / GNOME « Sortie ») :
+    # mesure - un clic dans les reglages son et ce bouclage lisait le MICRO
+    # (source par defaut) pour le jouer dans la carte brute (sink par defaut).
+    # Larsen, plus rien sur gsm_audio, « son pourri ». dont_move le rend sourd
+    # aux changements de defaut : il ne bouge que si on le decharge.
     if pactl load-module module-loopback \
             source=gsm_audio.monitor sink="$sink" \
+            sink_dont_move=true source_dont_move=true \
             latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1; then
         echo -e "  ${GREEN}[audio] loopback local charge : gsm_audio.monitor → ${sink} (${LOOPBACK_LATENCY_MSEC} ms)${NC}"
     else
@@ -146,28 +289,36 @@ ensure_local_mic() {
     pactl list short sinks 2>/dev/null | grep -qw 'gsm_mic' || {
         echo -e "  ${YELLOW}[audio] sink gsm_mic absent - micro local ignore${NC}"; return 0; }
 
-    # Entree materielle = la source par defaut, SAUF si c'est un moniteur de
-    # null-sink (voir l'avertissement ci-dessus). Repli : la premiere source
-    # qui n'est pas un .monitor.
-    local src
-    src="$(pactl get-default-source 2>/dev/null || true)"
-    case "$src" in
-        ''|*.monitor|@*)
-            src="$(pactl list short sources 2>/dev/null \
-                    | awk '$2 !~ /\.monitor$/ { print $2; exit }')" ;;
-    esac
-    [ -n "$src" ] || {
-        echo -e "  ${YELLOW}[audio] aucune entree materielle - micro local ignore${NC}"; return 0; }
-
-    # Idempotent : un 2e loopback doublerait la voix montante.
-    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
-         | grep -F "source=${src}" | grep -qF 'sink=gsm_mic'; then
-        echo -e "  ${GREEN}[audio] micro local deja en place : ${src} → gsm_mic${NC}"
+    # Avec le telephone postmarketOS, c est la VM qui alimente gsm_mic.
+    if pmos_vm_audio_present; then
+        echo -e "  ${GREEN}[audio] telephone postmarketOS en place - le micro passe par la VM, pas de bouclage direct${NC}"
+        remove_direct_loopbacks
         return 0
     fi
 
+    # Entree = le micro de l operateur (annuleur d echo s il est la, sinon le
+    # materiel) - jamais un .monitor (voir l avertissement ci-dessus).
+    local src
+    src="$(audio_mic_source)"
+    [ -n "$src" ] || {
+        echo -e "  ${YELLOW}[audio] aucune entree materielle - micro local ignore${NC}"; return 0; }
+
+    # Idempotent : un 2e loopback doublerait la voix montante...
+    if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
+         | grep -F "source=${src}" | grep -F 'sink=gsm_mic' | grep -qF 'sink_dont_move=true'; then
+        echo -e "  ${GREEN}[audio] micro local deja en place : ${src} → gsm_mic${NC}"
+        return 0
+    fi
+    # ...et pas un depuis une AUTRE entree.
+    local m
+    for m in $(pactl list short modules 2>/dev/null \
+               | awk '/module-loopback/ && /sink=gsm_mic([ \t]|$)/ { print $1 }'); do
+        pactl unload-module "$m" >/dev/null 2>&1
+    done
+
     if pactl load-module module-loopback \
             source="$src" sink=gsm_mic \
+            sink_dont_move=true source_dont_move=true \
             latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1; then
         echo -e "  ${GREEN}[audio] micro local charge : ${src} → gsm_mic (${LOOPBACK_LATENCY_MSEC} ms)${NC}"
         echo -e "  ${CYAN}       → la console web n'est plus necessaire pour parler.${NC}"

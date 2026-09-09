@@ -244,10 +244,18 @@ def mobile(action, essais=1):
         # Entre la reponse au paging et la sonnerie il reste une a trois
         # secondes : on garde toutes les tentatives (essais), pas quatre -
         # avec quatre, le mobile ne decrochait plus et la voix disparaissait.
+    # [2026-09-09] LE DECROCHE REUSSI ETAIT PRIS POUR UN ECHEC. Le mobile
+    # confirme par « % (MS 1) % Call is connected » - un message qui commence
+    # par « % », comme ses erreurs. Le test « pas de % » ne voyait donc jamais
+    # le succes : les 30 tentatives etaient jouees jusqu au bout, soit 29 x
+    # « % No alerting call » sur tous les VTY du mobile (dont celui de
+    # l utilisateur) pendant 15 s, a CHAQUE appel. Seul « No alerting call »
+    # (rien a decrocher encore) justifie de reessayer ; « connected » ou une
+    # reponse sans erreur, c est gagne.
     for _ in range(essais):
         MOB.cmd("enable")
         out = MOB.cmd("call %s %s" % (MS, action))
-        if out is not None and "%" not in out:
+        if out is not None and "No alerting call" not in out and "No call" not in out:
             return True
         time.sleep(0.5)
     return False
@@ -612,13 +620,24 @@ def ami_originate(num):
     et une fois decroche il est mis en relation avec notre propre numero - donc
     avec le mobile de l abonne. Rend (ok, canal ou raison)."""
     chan = "Local/%s@%s" % (num, CTX)
+    # [2026-09-09] ECHO_NO_PROMPT=1 : le 600 d Asterisk saute son annonce
+    # (demo-echotest) et passe droit a Echo. Avec l enregistrement de la
+    # jambe ;1 (sub-record), l enchainement Playback -> Echo faisait lacher a
+    # Asterisk une rafale de milliers de paquets RTP de silence en 60 ms vers
+    # le BTS - « une partie de l appel avec un sale son ». Voir le commentaire
+    # du 600 dans configs/extensions.conf ; sans effet sur les autres numeros.
+    # L annonce de l echo test est rejouee sur la patte du mobile (option A()
+    # du Dial, via DIAL_OPTS) : la, elle ne declenche pas la rafale.
+    extra = "Variable: DIAL_OPTS=A(demo-echotest)\r\n" if num == "600" else ""
     act = ("Action: Originate\r\n"
            "Channel: %s\r\n"
            "Context: %s\r\n"
            "Exten: %s\r\n"
            "Priority: 1\r\n"
            "CallerID: %s\r\n"
-           "Async: true\r\n\r\n" % (chan, CTX, MSISDN, MSISDN))
+           "Variable: ECHO_NO_PROMPT=1\r\n"
+           "%s"
+           "Async: true\r\n\r\n" % (chan, CTX, MSISDN, MSISDN, extra))
     out, err = _ami([act], wait=5.0)
     if out is None:
         return False, err

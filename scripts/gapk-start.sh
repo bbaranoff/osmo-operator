@@ -141,13 +141,21 @@ check_alsa() {
 
 # ── Detection du mode audio mobile ────────────────────────────────────────────
 detect_audio_mode() {
-    # Verifie si le mobile.cfg utilise l1phy
-    local cfg="/root/.osmocom/bb/mobile.cfg"
-    if [ -f "$cfg" ] && grep -q "io-handler l1phy" "$cfg" 2>/dev/null; then
-        echo "l1phy"
-    else
-        echo "gapk"
-    fi
+    # [2026-09-09] Le mobile porte SA PROPRE chaine audio des qu'un io-handler
+    # (gapk ou l1phy) est declare dans un de ses cfg : c'est lui qui lit gsm_in
+    # et ecrit gsm_out. Avant, seul /root/.osmocom/bb/mobile.cfg etait regarde -
+    # un fichier qui n'existe plus (mobile_group1.cfg, mobile_faketrx_bts1.cfg) -
+    # d'ou un "gapk" par defaut qui ne voulait rien dire.
+    #   mobile  : le process mobile fait l'audio (io-handler gapk|l1phy)
+    #   l1phy   : idem, conserve pour les appelants historiques
+    #   gapk    : aucun mobile n'a d'audio -> chemin 2 (bridge RTP<->ALSA)
+    local cfg
+    for cfg in "${OSMOCOM_HOME:-/root/.osmocom}"/bb/mobile*.cfg /root/.osmocom/bb/mobile*.cfg; do
+        [ -f "$cfg" ] || continue
+        grep -q "io-handler l1phy" "$cfg" 2>/dev/null && { echo "l1phy"; return 0; }
+        grep -q "io-handler gapk"  "$cfg" 2>/dev/null && { echo "mobile"; return 0; }
+    done
+    echo "gapk"
 }
 
 # ── Adressage RTP ─────────────────────────────────────────────────────────────
@@ -434,18 +442,43 @@ mode_auto() {
                 # depuis le 10/08 un fichier par sens : *-ul.wav / *-dl.wav.
                 log_auto "RX non lancee : ${rx_port} appartient a OsmoMGW (voir le commentaire)"
                 log_auto "  ecoute reseau -> enregistrements MixMonitor (*-ul.wav / *-dl.wav)"
-                # TX : ALSA capture → PCM → codec fr (encode) → RTP (FR)
-                run_bg "$GAPK_PID_TX" "$log_tx" \
-                    -a "$dev_in"                     -f rawpcm-s16le \
-                    -O "$(rtp_hostport "$tx_dest")"  -g "$fmt" -P "$GAPK_RTP_PT"
+
+                # ── PATTE TX : MEME VERDICT QUE LA RX, ON NE LA LANCE PLUS ──
+                # [2026-09-09] CAUSE DU « 600 qu'on entend mal ». $tx_dest est le
+                # PAIR DISTANT de la premiere connexion MGW - en pratique le port
+                # RTP d'osmo-bts (127.0.0.1:16384, cf. osmo-mgw.log « Got media
+                # info via SDP: port:16384 ... 3=GSM » sur rtpbridge/2). Cette
+                # patte encodait donc le micro (gsm_in) en GSM-FR et l'ENVOYAIT
+                # AU BTS, sur le meme port que le flux legitime du MGW (la voix
+                # qui revient d'Asterisk). Le BTS recevait DEUX flux RTP entre-
+                # meles - deux SSRC, deux horloges - dans un seul jitter-buffer
+                # de 100 ms : trames jetees, ordre casse, et en prime le micro
+                # renvoye en direct dans l'oreille du mobile. Son hache, double,
+                # inintelligible ; aucun compteur d'erreur ne bronchait puisque
+                # chaque paquet etait valide.
+                # Le mobile (io-handler gapk, alsa gsm_in/gsm_out) fait deja
+                # l'aller-retour micro <-> TCH par la radio : cette patte etait
+                # un DOUBLON par construction, pas un reglage a affiner.
+                # GAPK_AUTO_TX=1 la reactive pour le seul chemin 2 (aucun mobile
+                # avec audio) ; par defaut le superviseur ne fait qu'observer.
+                if [ "${GAPK_AUTO_TX:-0}" = "1" ] && [ "$audio_mode" = "gapk" ]; then
+                    # TX : ALSA capture → PCM → codec fr (encode) → RTP (FR)
+                    run_bg "$GAPK_PID_TX" "$log_tx" \
+                        -a "$dev_in"                     -f rawpcm-s16le \
+                        -O "$(rtp_hostport "$tx_dest")"  -g "$fmt" -P "$GAPK_RTP_PT"
+                    log_auto "Audio actif (PID RX=$(cat $GAPK_PID_RX 2>/dev/null) TX=$(cat $GAPK_PID_TX 2>/dev/null))"
+                else
+                    log_auto "TX non lancee : ${tx_dest} est le pair du MGW (BTS/Asterisk), pas une entree libre"
+                    log_auto "  le montant est porte par le mobile (mode ${audio_mode}) - GAPK_AUTO_TX=1 pour forcer"
+                fi
 
                 prev_rx_port="$rx_port"
-                log_auto "Audio actif (PID RX=$(cat $GAPK_PID_RX 2>/dev/null) TX=$(cat $GAPK_PID_TX 2>/dev/null))"
             fi
 
-            # On ne surveille QUE la patte TX : la RX n'est plus lancee (cf.
-            # ci-dessus). L'exiger relancait le couple sans fin.
-            if ! is_running "$GAPK_PID_TX"; then
+            # On ne surveille QUE la patte TX, et seulement si elle a ete
+            # lancee : la RX n'est plus lancee (cf. ci-dessus). L'exiger
+            # relancait le couple sans fin.
+            if [ -f "$GAPK_PID_TX" ] && ! is_running "$GAPK_PID_TX"; then
                 log_warn "Processus gapk mort - restart"
                 stop_pid "$GAPK_PID_RX"; stop_pid "$GAPK_PID_TX"
                 prev_rx_port=""
