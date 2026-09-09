@@ -322,7 +322,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     [ "$MONGO_VIA_APT" = "1" ] && PKGS="$PKGS mongodb-org mongodb-mongosh mongodb-database-tools"
     # [2026-09-09] kpartx : pmbootstrap le compte parmi ses programmes requis
     # (pmb/config/__init__.py, required_programs) et refuse de demarrer sans -
-    # « Can't find all programs required to run pmbootstrap: kpartx ». Le live
+    # « Cant find all programs required to run pmbootstrap: kpartx ». Le live
     # du 3953233 ne l avait pas : le telephone ne pouvait pas s allumer.
 
     # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
