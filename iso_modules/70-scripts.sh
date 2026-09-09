@@ -67,6 +67,29 @@ if [ -f "$P/scripts/gapk-start.sh" ]; then
     echo -e "  ${GREEN}✓${NC} /etc/osmocom/gapk-start.sh aligne sur scripts/ (superviseur gapk sans emetteur en doublon)"
 fi
 
+# ── LA VOIX DANS L IMAGE : io-tch-format ET LE TAMPON DU MOBILE ─────────────
+# [2026-09-09] MEME CORRECTIF QUE update.sh, applique ici au ROOTFS - et par
+# le MEME script, scripts/voix-forks.sh, qui porte le pourquoi en entier. Ces deux reglages ne vivent pas dans osmo-operator mais dans
+# qosmo-grgsm et qosmo-dsp, que 50-injection-image.sh recopie tels quels
+# depuis l image de reference : une image batie sur une machine dont les forks
+# n ont pas le correctif l embarquerait sans, et l ISO sortirait avec la voix
+# robotisee sans qu aucun compteur ne bronche.
+#
+#   io-tch-format rtp : sans lui, le mobile lit et ecrit ses trames TCH dans
+#   la disposition Texas Instruments des vrais Calypso, alors que pont.py les
+#   code avec libosmocoding, en disposition RTP/RFC3551. C est le gabarit
+#   cfgs/mobile_group1.cfg qui compte : run_modules/20-mobile-cfg.sh le
+#   RECOPIE par-dessus ~/.osmocom/bb/ a chaque demarrage.
+#
+#   CALYPSO_PULSE_LATENCY_MSEC : le mobile ecrit une trame GSM (20 ms) par
+#   snd_pcm_writei ; un tampon trop court fait rendre -EPIPE a chaque
+#   ecriture, et pq_alsa.c y repond par un snd_pcm_prepare() muet qui demonte
+#   et remonte le flux PulseAudio - 50 fois par seconde pendant un appel.
+#   Mesure du 09/09 : 80 ms -> 16 remontages en 10 s, 200 -> 0. On pose 320.
+if [ -x "$P/scripts/voix-forks.sh" ]; then
+    "$P/scripts/voix-forks.sh" "$ROOTFS" | sed "s|^  \[voix\]|  ${GREEN}\xe2\x9c\x93${NC}|"
+fi
+
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
     echo -e "${GREEN}[7b/9] WAN - table des noeuds embarquee...${NC}"

@@ -413,6 +413,16 @@ fi
 # (/usr/local/bin/<fork>, celui que 40-qemu.sh appelle) est recompile sur place.
 # C pur, libc seule, quelques secondes ; sans gcc on le dit et on laisse
 # l'ancien binaire, qui reste valide (40-qemu.sh retombe sinon sur QEMU_BIN).
+# [2026-09-09] LA VOIX, REPOSEE APRES CHAQUE FETCH. « git reset --hard
+# FETCH_HEAD » ci-dessus efface deux reglages vitaux des forks :
+# « io-tch-format rtp » dans cfgs/mobile_group1.cfg (sans lui le mobile parle
+# la disposition Texas Instruments quand le pont code en RTP : voix robotisee)
+# et CALYPSO_PULSE_LATENCY_MSEC (un tampon trop court fait remonter le flux
+# PulseAudio du mobile 50 fois par seconde). Le pourquoi complet et le comment
+# sont dans osmo-operator/scripts/voix-forks.sh - ici on ne fait que l appeler.
+[ -x /opt/GSM/osmo-operator/scripts/voix-forks.sh ] \
+    && /opt/GSM/osmo-operator/scripts/voix-forks.sh
+
 for f in $forks_moved; do
     src="/opt/GSM/$f/tools/qosmo-launch"
     [ -f "$src/qosmo-launch.c" ] || continue

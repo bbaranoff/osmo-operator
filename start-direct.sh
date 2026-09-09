@@ -785,7 +785,7 @@ export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
 # qosmo-dsp : leur defaut interne peut repartir a 80, celui-ci gagne (`:=`).
 # JUGE, pendant un appel etabli : l index du sink-input du mobile doit rester
 # FIXE (`pactl list short sink-inputs`, deux releves a 1 s d intervalle).
-export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-240}"
+export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-320}"
 export LOG_DIR RUN_DIR
 # --- 3. validation des chemins critiques --------------------------------------
 say_begin "Validation des chemins"
@@ -887,6 +887,63 @@ ms 1
 !
 EOF
     fi
+    _ms_cfg_garantir_tch "$dest" "$aout" "$ain"
+}
+
+# ── LE BLOC tch-voice, GARANTI, QUEL QUE SOIT LE GABARIT ────────────────────
+# [2026-09-09] MS#2 SORTAIT SANS « io-tch-format rtp ». Le gabarit retenu par
+# la boucle ci-dessus est le PREMIER trouve, et c'est presque toujours
+# qosmo-grgsm/cfgs/mobile_group1.cfg - un fichier d'un autre depot, que
+# update.sh refetche, et qui ne porte pas cette ligne. Le sed de generation ne
+# fait que SUBSTITUER : ce qui manque au gabarit manque au resultat. MS#1
+# l'avait (son fichier est ecrit ailleurs, 3192 octets), MS#2 non (2423).
+#
+# Sans cette ligne, le mobile lit et ecrit ses trames TCH dans la disposition
+# Texas Instruments des vrais Calypso, alors que pont.py les code avec
+# libosmocoding, c'est-a-dire en disposition RTP/RFC3551 (33 octets ouverts
+# par la signature 0xD). Les deux bouts ne se comprennent alors DANS AUCUN
+# SENS, aucun compteur ne bronche, et le son sort robotise (cf. le commentaire
+# de configs/mobile.cfg, mesure du 27/08 : anneau descendant « d2 2c fd a2 »
+# contre anneau montant « 83 00 05 e1 ... ff ff ff ff », une trame a champs).
+#
+# On ne corrige donc pas le gabarit - il ne nous appartient pas - on garantit
+# le resultat : les quatre reglages de tch-voice sont poses ici, et le bloc
+# entier est cree s'il manque (le gabarit de secours ci-dessus n'en a aucun).
+# MS_TCH_FORMAT pour un banc qui voudrait autre chose que « rtp ».
+_ms_cfg_garantir_tch() {
+    local dest="$1" aout="${2:-gsm_out}" ain="${3:-gsm_in}" fmt="${MS_TCH_FORMAT:-rtp}"
+    [ -f "$dest" ] || return 0
+    awk -v aout="$aout" -v ain="$ain" -v fmt="$fmt" '
+        BEGIN { vu = 0; dedans = 0 }
+        # Le bloc existe : on pose nos quatre reglages en tete, une seule fois.
+        /^[[:space:]]*tch-voice[[:space:]]*$/ && !vu {
+            vu = 1; dedans = 1
+            print " tch-voice"
+            print "  io-handler gapk"
+            print "  io-tch-format " fmt
+            print "  alsa-output-dev " aout
+            print "  alsa-input-dev " ain
+            next
+        }
+        # Dans le bloc : on retire les anciennes copies de CES quatre lignes,
+        # on garde tout le reste - les autres reglages comme les commentaires,
+        # qui portent ici la mesure du 27/08 et valent mieux que le code.
+        dedans {
+            if ($0 ~ /^[[:space:]][[:space:]]+(io-handler|io-tch-format|alsa-output-dev|alsa-input-dev)([[:space:]]|$)/) next
+            if ($0 ~ /^[[:space:]][[:space:]]+[a-z]/ || $0 ~ /^[!#]/) { print; next }
+            dedans = 0
+        }
+        # Pas de bloc du tout : on le pose juste avant « no shutdown ».
+        /^[[:space:]]*no shutdown[[:space:]]*$/ && !vu {
+            vu = 1
+            print " tch-voice"
+            print "  io-handler gapk"
+            print "  io-tch-format " fmt
+            print "  alsa-output-dev " aout
+            print "  alsa-input-dev " ain
+        }
+        { print }
+    ' "$dest" > "${dest}.tch" 2>/dev/null && mv -f "${dest}.tch" "$dest" || rm -f "${dest}.tch"
 }
 # ⚠️ [2026-08-08, resolu le 26/08] LE RUN N'UTILISE PAS mobile.cfg POUR MS#1.
 # Le mobile Calypso tourne avec

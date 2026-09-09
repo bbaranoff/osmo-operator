@@ -694,6 +694,48 @@ osmo_poser_journaux_lte() {
 }
 osmo_poser_journaux_lte
 
+# ── LE FORMAT DE TRAME TCH ET LE TAMPON DU MOBILE, DANS LES FORKS ───────────
+# [2026-09-09] DEUX REGLAGES VITAUX VIVENT DANS DES DEPOTS QU ON REFETCHE.
+# La voix du banc depend de deux lignes qui ne sont PAS dans osmo-operator :
+#
+#  1. « io-tch-format rtp » dans cfgs/mobile_group1.cfg des forks. C est le
+#     gabarit que run.sh (run_modules/20-mobile-cfg.sh) RECOPIE par-dessus
+#     ~/.osmocom/bb/mobile_group1.cfg a chaque demarrage, ecrasant ce que
+#     start-direct.sh avait genere. Sans cette ligne, le mobile lit et ecrit
+#     ses trames TCH dans la disposition Texas Instruments des vrais Calypso,
+#     alors que pont.py les code avec libosmocoding, en disposition
+#     RTP/RFC3551. Les deux bouts ne se comprennent DANS AUCUN SENS, aucun
+#     compteur ne bronche, et la voix sort robotisee. Constate le 09/09 : les
+#     TROIS configurations du banc tournaient sans cette ligne.
+#
+#  2. CALYPSO_PULSE_LATENCY_MSEC dans run_modules/70-l2.sh et
+#     68-sidecar-mobile.sh. Le mobile ecrit une trame GSM (20 ms) par
+#     snd_pcm_writei ; si le tampon du greffon ALSA-PulseAudio est trop court,
+#     chaque ecriture rend -EPIPE et pq_alsa.c y repond par un snd_pcm_prepare()
+#     muet, qui DEMONTE ET REMONTE le flux PulseAudio - 50 fois par seconde
+#     pendant un appel. Mesure du 09/09, ecrivain cadence a 20 ms sur 10 s :
+#     80 ms -> 16 remontages, 120 -> 19, 160 -> 1, 200 -> 0, 240 -> 0.
+#     start-direct.sh exporte 320, ce qui suffit ; on aligne quand meme le
+#     defaut des forks, pour qui lance run.sh directement.
+#
+# git pull sur osmo-operator ne peut rien pour ces fichiers-la : ils
+# appartiennent a qosmo-grgsm et qosmo-dsp, que la mise a jour resynchronise
+# (« git reset --hard FETCH_HEAD »). Le COMMENT est dans scripts/voix-forks.sh,
+# seul a savoir poser ces deux reglages ; ici on ne fait que l appeler, comme
+# le service osmo-update (juste apres son fetch) et iso_modules/70-scripts.sh
+# (sur le ROOTFS). Un seul endroit a corriger le jour ou ca rebouge.
+# JUGE : `grep io-tch-format ~/.osmocom/bb/mobile_group1.cfg` apres un
+# demarrage, et l index du sink-input du mobile qui doit rester FIXE pendant
+# un appel (`pactl list short sink-inputs`, deux releves a 1 s).
+osmo_poser_voix_forks() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local s=/opt/GSM/osmo-operator/scripts/voix-forks.sh
+    [ -x "$s" ] || return 0
+    "$s" | sed 's/^  \[voix\]/[OK]/'
+    return 0
+}
+osmo_poser_voix_forks
+
 case "${1:-}" in
     --quiet) exit 0 ;;
 esac

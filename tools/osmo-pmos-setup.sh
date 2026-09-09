@@ -61,6 +61,7 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     if [ -n "$AUDIO_LIB" ]; then
         remove_direct_loopbacks
         ensure_echo_cancel
+        ensure_record_mix
         HP_SINK="$(audio_hp_sink)"; MIC_SRC="$(audio_mic_source)"
         echo "  haut-parleurs de l operateur : ${HP_SINK:-aucun} ; micro : ${MIC_SRC:-aucun}"
     else

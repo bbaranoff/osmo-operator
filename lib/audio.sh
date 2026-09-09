@@ -81,7 +81,13 @@ load_gsm_sinks() {
 # recree la boucle fermee du 08/08 (cf. ensure_gapk : "les mobiles ecrivent
 # dans gsm_out, on les rejouerait dans leur propre uplink"). On exclut donc
 # explicitement les deux null-sinks et on ne garde qu'une sortie materielle.
-LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-20}"
+# [2026-09-09] 40 ms et pas 20. PulseAudio repondait « Configured latency of
+# 20.00 ms is smaller than minimum latency, using minimum instead » puis
+# « Doing resync » a repetition : la latence minimale de ces sinks est de
+# 26 ms, un bouclage qui en demande 20 se resynchronise sans arret et jette
+# des echantillons (journal : « drop sink », « drop source »). 40 ms passe
+# au-dessus du plancher, et 20 ms de plus sont inaudibles sur un appel.
+LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 
 # ── L AFFECTATION DES HAUT-PARLEURS ET DU MICRO : UN SEUL ENDROIT ───────────
 # [2026-09-09] TROIS SCRIPTS SE DISPUTAIENT LES MEMES ROUTES. Le son du banc a
@@ -201,6 +207,56 @@ ensure_echo_cancel() {
     pactl set-sink-mute "$hp" 0 2>/dev/null;       pactl set-sink-mute osmo_hp_ec 0 2>/dev/null
     pactl set-source-mute "$mic" 0 2>/dev/null;    pactl set-source-volume "$mic" "$EC_MIC_VOLUME" 2>/dev/null
     pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec "$EC_MIC_VOLUME" 2>/dev/null
+    return 0
+}
+
+# ── La source d ENREGISTREMENT : ce qu on entend + ce qu on dit ─────────────
+# [2026-09-09] « pourquoi j ai pas l enregistrement ». L enregistreur d ecran
+# (extension EasyScreenCast, menu « audio source ») ne sait capter qu une
+# SOURCE PulseAudio. Or un appel ne vit pas sur une source : le descendant va
+# dans des sinks (gsm_audio, puis les haut-parleurs), et seul le micro est une
+# source. Resultat : « No audio source » enregistre le silence, et choisir le
+# micro n enregistre que la voix de l operateur, jamais le correspondant.
+#
+# On fabrique donc UN sink poubelle, osmo_rec, alimente par les deux cotes :
+#   - le moniteur des haut-parleurs de l operateur (tout ce qu il ENTEND, que
+#     la voix vienne du bouclage direct ou du telephone postmarketOS) ;
+#   - son micro (tout ce qu il DIT).
+# Son moniteur, osmo_rec.monitor, apparait alors dans le menu de l enregistreur
+# sous « Enregistrement_appel » : un seul choix, et l appel entier est dedans.
+# 48 kHz stereo : c est une piste video, pas du GSM ; PulseAudio reechantillonne
+# les 8 kHz une fois pour toutes, ici, hors du chemin de la voix.
+# AUDIO_RECORD_MIX=0 pour ne pas la creer.
+ensure_record_mix() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    [ "${AUDIO_RECORD_MIX:-1}" = "1" ] || return 0
+    pactl info >/dev/null 2>&1 || return 0
+
+    pactl list short sinks 2>/dev/null | grep -qw osmo_rec \
+        || pactl load-module module-null-sink sink_name=osmo_rec \
+               format=s16le rate=48000 channels=2 \
+               sink_properties=device.description=Enregistrement_appel >/dev/null 2>&1 \
+        || { echo -e "  ${YELLOW}[audio] sink osmo_rec impossible - enregistrement non prepare${NC}"; return 0; }
+
+    local hp mic src
+    hp="$(audio_hp_sink)"; mic="$(audio_mic_source)"
+    for src in ${hp:+${hp}.monitor} ${mic:-}; do
+        # Idempotent, et epingle comme les autres (cf. le bloc dont_move).
+        pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
+            | grep -F "source=${src}" | grep -qF 'sink=osmo_rec' && continue
+        pactl load-module module-loopback source="$src" sink=osmo_rec \
+            sink_dont_move=true source_dont_move=true \
+            latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1
+    done
+    echo -e "  ${GREEN}[audio] source d enregistrement prete : osmo_rec.monitor (Enregistrement_appel)${NC}"
+    # L enregistreur d ecran s en souvient par son nom d application
+    # (module-stream-restore) : on le deplace une fois, il y revient ensuite.
+    local so
+    for so in $(pactl list source-outputs 2>/dev/null \
+                | awk '/Source Output #/{id=$3} /application.name = ".*[Ss]creen[Cc]ast|.*Shell.Screencast/{print id}' | tr -d '#'); do
+        pactl move-source-output "$so" osmo_rec.monitor 2>/dev/null \
+            && echo -e "  ${GREEN}[audio] enregistreur d ecran bascule sur osmo_rec.monitor${NC}"
+    done
     return 0
 }
 
@@ -391,6 +447,7 @@ ensure_pulse() {
         assert_audio_devices || true
         ensure_local_loopback
         ensure_local_mic
+        ensure_record_mix
         return 0
     fi
 
@@ -452,6 +509,7 @@ ensure_pulse() {
         assert_audio_devices || true
         ensure_local_loopback
         ensure_local_mic
+        ensure_record_mix
     else
         echo -e "  ${YELLOW}[audio] PulseAudio injoignable - audio degrade${NC}"
         echo -e "  ${YELLOW}        → voir ${LOG_DIR}/pulse-system.log${NC}"

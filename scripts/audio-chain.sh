@@ -99,4 +99,6 @@ done
 # HAUT-PARLEURS »). Sans VM, le bouclage direct suit ; avec, il est retire.
 ensure_echo_cancel
 ensure_local_loopback
+ensure_local_mic
+ensure_record_mix
 exit 0
