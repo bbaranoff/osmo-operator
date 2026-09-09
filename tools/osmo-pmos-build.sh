@@ -81,7 +81,11 @@ ok()   { echo -e "${GREEN}✓${NC} $*"; }
 warn() { echo -e "${YELLOW}!${NC} $*"; }
 die()  { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
-[ "$(id -u)" -ne 0 ] || die "pas en root : pmbootstrap refuse. Lance-le sous le compte de session."
+# [2026-09-09] ROOT ACCEPTE. La session de l ISO EST root (voir osmo-pmos-
+# qemu) : refuser root, c etait refuser l icone. pmbootstrap accepte
+# --as-root ; sous un compte, rien ne change.
+PMB_OPTS=(); [ "$(id -u)" -eq 0 ] && { PMB_OPTS=(--as-root); warn "en root : pmbootstrap --as-root (dossier de travail de root)"; }
+pmb() { "$PMB" "${PMB_OPTS[@]}" "$@"; }
 [ -n "$PMB" ] && [ -x "$PMB" ] || die "pmbootstrap introuvable ($PM/pmbootstrap manquant : osmo-pmos-install)"
 
 # ── 0. LA CONFIG pmbootstrap DU COMPTE ──────────────────────────────────────
@@ -147,12 +151,12 @@ else
 fi
 
 # ── 2. LES REGLAGES pmbootstrap : Phosh, pas la console ─────────────────────
-ui="$("$PMB" config ui 2>/dev/null | tail -1)"
+ui="$(pmb config ui 2>/dev/null | tail -1)"
 if [ "$ui" != "phosh" ]; then
     warn "pmbootstrap config ui = « $ui » : un install ferait une VM sans bureau"
-    "$PMB" config ui phosh || die "impossible de poser ui=phosh"
+    pmb config ui phosh || die "impossible de poser ui=phosh"
 fi
-ok "ui = phosh, device = $("$PMB" config device 2>/dev/null | tail -1), jobs = $JOBS, work = $WORK"
+ok "ui = phosh, device = $(pmb config device 2>/dev/null | tail -1), jobs = $JOBS, work = $WORK"
 
 # ── 3. LE NOYAU : LE RACCOURCI D ABORD ──────────────────────────────────────
 # L apk du .deb osmo-build-pmos-kernel, copie dans le depot local de
@@ -179,7 +183,7 @@ else
     [ "$INIT_ONLY" = 1 ] && { warn "pas d apk PPP ; --init ne compile pas (relancer sans --init)"; exit 0; }
     sudo -v || die "sudo refuse"
     say "build du noyau (long : compter 15 a 40 min)..."
-    "$PMB" -y -j "$JOBS" build --force linux-postmarketos-stable \
+    pmb -y -j "$JOBS" build --force linux-postmarketos-stable \
         || die "build echoue - voir $WORK/log.txt (pmbootstrap log)"
     apk="$(find "$WORK/packages" -name 'linux-postmarketos-stable-[0-9]*.apk' -newer "$KCFG" 2>/dev/null | head -1)"
     [ -n "$apk" ] || die "aucun .apk du noyau dans $WORK/packages"
@@ -205,7 +209,7 @@ if [ "${OSMO_PMOS_FRESH:-0}" != 1 ] && [ ! -f "$IMG" ] && [ -f "$PM/image/qemu-a
 fi
 if [ ! -f "$IMG" ] || [ "${OSMO_PMOS_FRESH:-0}" = 1 ]; then
     say "installation de l image (nouvelle VM, mot de passe $PASS)..."
-    "$PMB" -y install --password "$PASS" || die "install echoue - voir $WORK/log.txt"
+    pmb -y install --password "$PASS" || die "install echoue - voir $WORK/log.txt"
     ok "image prete : $IMG"
 fi
 [ "$LAUNCH" = 1 ] || { ok "fini (--no-launch) - « osmo-pmos-qemu $FORMAT » branche VM, modem et voix"; exit 0; }
@@ -214,4 +218,5 @@ fi
 # osmo-pmos-qemu garde la main (fenetre SDL) et son guetteur branche le modem
 # et la voix tout seul (osmo-pmos-setup) des que le SSH de la VM repond.
 QEMU="$(command -v osmo-pmos-qemu 2>/dev/null || echo "$PM/bin/osmo-pmos-qemu.sh")"
+export OSMO_PMOS_FROM_BUILD=1     # osmo-pmos-qemu ne doit pas nous rappeler
 exec "$QEMU" "$FORMAT"

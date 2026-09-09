@@ -37,6 +37,26 @@
 #     /opt/user_interface/pmos/image/, et osmo-pmos-build la decompresse au
 #     lieu de faire « pmbootstrap install ».
 #
+# [2026-09-09] CE QUE LE LIVE A APPRIS - l ISO du 3953233 avait TOUT (binaires,
+# lanceurs, pmbootstrap, noyau PPP, image de reference), et ni la 4G ni le
+# telephone ne marchaient :
+#   - open5gs-mmed (et hssd, pcrfd, smfd) mourait a l init : PAS de
+#     etc/freeDiameter/*.conf ni de etc/open5gs/tls/. Open5GS les pose par un
+#     script meson qui ne fait RIEN sous DESTDIR, et osmo-deb pack installe
+#     sous DESTDIR : le .deb n a que bin/ et lib/. Les yaml, osmo-lte-install
+#     les reposait ; freeDiameter, personne. Sans MME, pas de S1AP : srsUE
+#     recevait ConnectionReject, jamais d attach. Les .conf sont maintenant
+#     dans le depot (configs/open5gs/freeDiameter), poses avec des certificats
+#     par osmo-lte-install --configs ; le controle final les exige ET fait
+#     demarrer open5gs-mmed 3 s dans le chroot.
+#   - l icone du telephone lancait « pmbootstrap qemu » en root (la session
+#     de l ISO est root) : « Do not run pmbootstrap as root! ». Et aucun
+#     compte n avait de ~/.config/pmbootstrap_v3.cfg : le gabarit n etait
+#     que dans /etc/skel, rempli APRES la creation des comptes (84-comptes).
+#     Les lanceurs passent --as-root en root, le cfg est ecrit dans /root et
+#     /home/osmocom ici, et osmo-pmos-qemu enchaine osmo-pmos-build quand
+#     l image n est pas encore la.
+#
 # Le hub (interstp) n a pas de 4G. --arm non plus (srsRAN et Open5GS ne sont
 # pas compiles pour arm64, pmbootstrap y ferait une VM x86 emulee).
 if [ "$ISO_ROLE" = "interstp" ] || [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
@@ -52,6 +72,8 @@ done
 install -m644 "$DIR"/configs/srsran/* "$_rt/configs/srsran/"
 install -m644 "$DIR"/configs/open5gs/*.yaml "$DIR"/configs/open5gs/*.json "$_rt/configs/open5gs/" 2>/dev/null || true
 [ -d "$DIR/configs/open5gs/dump" ] && cp -a "$DIR/configs/open5gs/dump" "$_rt/configs/open5gs/"
+# [2026-09-09] freeDiameter : les .conf du depot (le .deb n en a pas, voir mme.conf).
+[ -d "$DIR/configs/open5gs/freeDiameter" ] && cp -a "$DIR/configs/open5gs/freeDiameter" "$_rt/configs/open5gs/"
 install -m644 "$DIR"/configs/pmos/* "$_rt/configs/pmos/"
 for _f in pmbootstrap-osmo-bench-qemu.patch pmaports-linux-postmarketos-stable-ppp.patch; do
     [ -f "$DIR/patches/$_f" ] && install -m644 "$DIR/patches/$_f" "$_rt/patches/"
@@ -183,6 +205,21 @@ fi
 chroot "$ROOTFS" chmod -R a+rX /opt/user_interface 2>/dev/null || true
 install -d "$ROOTFS/etc/skel/.config"
 install -m644 "$DIR/configs/pmos/pmbootstrap_v3.cfg" "$ROOTFS/etc/skel/.config/pmbootstrap_v3.cfg.osmo"
+# [2026-09-09] ET DANS LES COMPTES QUI EXISTENT DEJA. /etc/skel ne sert qu aux
+# comptes crees APRES : root et osmocom le sont par 84-comptes.sh, avant ce
+# module - sur l ISO aucun des deux n avait de ~/.config/pmbootstrap_v3.cfg,
+# et la session s ouvre sur root. Meme substitution que shellprocess-osmo.conf
+# (dossier de travail ~/.local/var/pmbootstrap).
+for _h in /root /home/osmocom; do
+    [ -d "$ROOTFS$_h" ] || continue
+    [ -s "$ROOTFS$_h/.config/pmbootstrap_v3.cfg" ] && continue
+    install -d "$ROOTFS$_h/.config"
+    sed "s#@WORK@#$_h/.local/var/pmbootstrap#g; s#@APORTS@#$_h/.local/var/pmbootstrap/cache_git/pmaports#g" \
+        "$DIR/configs/pmos/pmbootstrap_v3.cfg" > "$ROOTFS$_h/.config/pmbootstrap_v3.cfg"
+done
+chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom/.config 2>/dev/null || true
+unset _h
+echo -e "  ${GREEN}✓${NC} pmbootstrap_v3.cfg : /root, /home/osmocom, /etc/skel"
 
 # Lite : les objets de compilation de /opt/LTE ne servent pas a tourner.
 if [ "$ISO_LITE" = "1" ]; then
@@ -219,6 +256,24 @@ _chk "2G  osmo-msc.cfg : section sgs (CSFB)"               grep -q '^sgs' /etc/o
 _chk "4G  srsenb / srsue"                                  bash -c 'test -x /usr/local/bin/srsenb && test -x /usr/local/bin/srsue'
 _chk "4G  open5gs-mmed / open5gs-hssd"                     bash -c 'test -x /opt/LTE/open5gs/install/bin/open5gs-mmed && test -x /opt/LTE/open5gs/install/bin/open5gs-hssd'
 _chk "4G  mme.yaml du depot avec sgsap (CSFB)"             grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml
+_chk "4G  freeDiameter mme/hss/pcrf/smf.conf (S6a, Gx)"   bash -c 'for n in mme hss pcrf smf; do test -s /opt/LTE/open5gs/install/etc/freeDiameter/$n.conf || exit 1; done'
+_chk "4G  TLS freeDiameter (ca + mme/hss/pcrf/smf)"       bash -c 'for n in ca mme hss pcrf smf; do test -s /opt/LTE/open5gs/install/etc/open5gs/tls/$n.crt || exit 1; done'
+# Et le MME DEMARRE-T-IL ? 3 s au premier plan dans le chroot : une config
+# absente ou une lib manquante se voient LA, pas au premier clic (c est
+# exactement la panne du live du 2026-09-09). Un port deja pris sur l hote
+# (sa propre 4G tourne) n est pas une faute de l ISO : on le dit, sans juger.
+_o="$(chroot "$ROOTFS" timeout 3 /opt/LTE/open5gs/install/bin/open5gs-mmed -c /opt/LTE/open5gs/install/etc/open5gs/mme.yaml 2>&1 || true)"
+rm -f "$ROOTFS/opt/LTE/open5gs/install/var/log/open5gs/mme.log"
+if echo "$_o" | grep -aq 'Address already in use'; then
+    echo -e "      ${CYAN}·${NC} 4G  open5gs-mmed : port deja pris sur l hote (sa 4G tourne ?) - demarrage non teste"
+elif echo "$_o" | grep -aqE 'FATAL|error while loading shared'; then
+    echo -e "      ${RED}✗${NC} 4G  open5gs-mmed demarre (3 s au premier plan)"
+    echo "$_o" | grep -aE 'FATAL|error while loading' | grep -v backtrace | head -2 | sed 's/^/          /'
+    _ko=$((_ko + 1))
+else
+    echo -e "      ${GREEN}✓${NC} 4G  open5gs-mmed demarre (3 s au premier plan)"
+fi
+unset _o
 _chk "4G  configs srsRAN (/root/.config/srsran)"           bash -c 'test -s /root/.config/srsran/enb.conf && test -s /root/.config/srsran/ue.conf && test -s /root/.config/srsran/user_db.csv'
 _chk "4G  osmo-lte / osmo-epc"                             bash -c 'test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc'
 _chk "4G  osmo-lte.service + osmo-lte.desktop"             bash -c 'test -s /etc/systemd/system/osmo-lte.service && test -s /usr/share/applications/osmo-lte.desktop'
@@ -228,6 +283,12 @@ _chk "4G  abonnes du depot (dump mongo + subscribers.json)" bash -c 'test -s /op
 _chk "pmOS pmbootstrap (/opt/user_interface/pmos)"         test -s /opt/user_interface/pmos/pmbootstrap/pmbootstrap.py
 _chk "pmOS noyau PPP (APKINDEX)"                           test -s /opt/user_interface/kernel/pmos/APKINDEX.tar.gz
 _chk "pmOS osmo-pmos + osmo-pmos.desktop"                  bash -c 'test -x /usr/local/bin/osmo-pmos && test -s /usr/share/applications/osmo-pmos.desktop'
+_chk "pmOS pmbootstrap_v3.cfg de root (la session de l ISO)" test -s /root/.config/pmbootstrap_v3.cfg
+if [ -d "$ROOTFS/home/osmocom" ]; then
+    _chk "pmOS pmbootstrap_v3.cfg d osmocom"                bash -c 'test -s /home/osmocom/.config/pmbootstrap_v3.cfg && ! grep -q @WORK@ /home/osmocom/.config/pmbootstrap_v3.cfg'
+fi
+_chk "pmOS lanceurs en root (--as-root dans osmo-pmos-qemu)" grep -q 'as-root' /opt/user_interface/pmos/bin/osmo-pmos-qemu.sh
+_chk "pmOS kpartx + losetup + git (pmbootstrap les exige)"   bash -c 'command -v kpartx && command -v losetup && command -v git'
 if [ "$_ko" -gt 0 ]; then
     if [ "${OSMO_ISO_LTE_REQUIRED:-1}" = "1" ]; then
         echo -e "  ${RED}✗ $_ko maillon(s) manquant(s) : cette ISO ne serait PAS prete a l emploi (2G + 4G + telephone).${NC}" >&2

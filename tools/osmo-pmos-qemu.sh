@@ -163,6 +163,35 @@ if ! sudo -v; then
     read -r -p "Entree pour fermer " _
     exit 1
 fi
+# [2026-09-09] EN ROOT AUSSI. La session de l ISO s ouvre sur root (gdm3,
+# iso_modules/84-comptes.sh) : l icone lancait « pmbootstrap qemu » en root,
+# qui repond « Do not run pmbootstrap as root! » et s arrete - l ISO avait le
+# telephone (pmbootstrap patche, noyau PPP, image de reference) et ne pouvait
+# pas l allumer. pmbootstrap accepte --as-root : on le passe quand on est
+# root, et le dossier de travail est alors celui de root.
+PMB_OPTS=(); [ "$(id -u)" -eq 0 ] && PMB_OPTS=(--as-root)
+# [2026-09-09] LE DOSSIER DE TRAVAIL EST CELUI DE LA CONFIG, plus ~/test en
+# dur (celui de la machine de reference) : sur l ISO c est
+# ~/.local/var/pmbootstrap (gabarit pose par 88-lte-pmos.sh dans /root et
+# /home/osmocom, instancie par osmo-pmos-build). ~/test reste accepte.
+PMB_WORK="${OSMO_PMB_WORK:-$(sed -n 's/^work *= *//p' "$HOME/.config/pmbootstrap_v3.cfg" 2>/dev/null | head -1)}"
+[ -n "$PMB_WORK" ] || PMB_WORK="$HOME/.local/var/pmbootstrap"
+[ -d "$PMB_WORK/chroot_native" ] || [ ! -d "$HOME/test/chroot_native" ] || PMB_WORK="$HOME/test"
+IMG_PMB="$(ls -1 "$PMB_WORK"/chroot_native/home/pmos/rootfs/*.img 2>/dev/null | head -1)"
+# [2026-09-09] PAS D IMAGE : ON LA FABRIQUE, ICI. Le premier clic sur l icone
+# de l ISO tombait sur « pmbootstrap qemu » sans config, sans dossier de
+# travail, avec l image de reference encore en .zst dans /opt/user_interface/
+# pmos/image : echec, fenetre fermee. osmo-pmos-build fait tout cela (config
+# depuis le gabarit, pmaports, noyau PPP, image decompressee) puis REVIENT ici
+# (exec osmo-pmos-qemu, OSMO_PMOS_FROM_BUILD=1 pour ne pas boucler).
+if [ -z "$IMG_PMB" ] && [ "${OSMO_PMOS_FROM_BUILD:-0}" != 1 ]; then
+    BUILD="$(command -v osmo-pmos-build 2>/dev/null || echo /opt/user_interface/pmos/bin/osmo-pmos-build.sh)"
+    if [ -x "$BUILD" ]; then
+        echo "osmo-pmos-qemu: pas d image postmarketOS dans $PMB_WORK - premiere fois : osmo-pmos-build (long, reseau)"
+        exec "$BUILD" "$([ "$OSMO_PMOS_RES" = 1280x800 ] && echo tablette || echo smartphone)"
+    fi
+    echo "osmo-pmos-qemu: pas d image postmarketOS dans $PMB_WORK, et pas d osmo-pmos-build : « pmbootstrap install » a la main" >&2
+fi
 
 # [2026-09-08] LE MODEM, PAR DEFAUT. Le telephone sans modem n est qu une VM :
 # pas d appel, pas de SMS, pas de data - et le noyau a ete rebati EXPRES pour
@@ -241,7 +270,7 @@ trap '[ -n "$GUETTEUR" ] && kill "$GUETTEUR" 2>/dev/null' EXIT
 # grande), l initramfs pmOS etend la partition et l ext4 au demarrage, et le
 # guetteur ci-dessus verifie le resultat. OSMO_PMOS_DISK pour une autre taille.
 DISK="${OSMO_PMOS_DISK:-16G}"
-IMG_PMB="$(ls -1 "${OSMO_PMB_WORK:-$HOME/test}"/chroot_native/home/pmos/rootfs/*.img 2>/dev/null | head -1)"
+# IMG_PMB : resolu plus haut, depuis le dossier de travail de la config.
 if [ -n "$IMG_PMB" ]; then
     cur_m=$(( ($(stat -c %s "$IMG_PMB") + 1048575) / 1048576 ))
     case "$DISK" in *G) want_m=$(( ${DISK%G} * 1024 )) ;; *M) want_m=${DISK%M} ;; *) want_m=$cur_m ;; esac
@@ -256,7 +285,7 @@ fi
 # annonce ; le dernier code d erreur est celui qu on garde. Une VM qui a
 # tourne plus de 25 s puis s est arretee n est pas relancee : c est un arret.
 _lance() {
-    "$PMB" qemu \
+    "$PMB" "${PMB_OPTS[@]}" qemu \
         --memory "${OSMO_PMOS_MEM:-4096}" \
         --image-size "$DISK" \
         --display "${OSMO_PMOS_DISPLAY:-sdl}" \

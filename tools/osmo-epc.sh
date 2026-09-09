@@ -132,15 +132,36 @@ epc_start() {
     epc_subscribers >/dev/null 2>&1 || true
     mkdir -p "$LOG"
     setup_tun
-    local d
+    local d y
     for d in $DAEMONS; do
         if pgrep -x "$d" >/dev/null; then _ok "$d deja en cours"; continue; fi
         # -D : demon. La config est celle de $ETC (le prefixe), posee depuis
-        # le depot par osmo-lte-install.sh.
-        if "$BIN/$d" -D -c "$ETC/${d#open5gs-}.yaml" 2>/dev/null; then :; else
+        # le depot par osmo-lte-install.sh. [2026-09-09] open5gs-nrfd lit
+        # nrf.yaml, pas nrfd.yaml : le -c echouait TOUJOURS et c est le
+        # repli sans -c (le chemin compile dans le binaire) qui demarrait
+        # tout - meme prefixe, donc meme fichier, mais un OPEN5GS_PREFIX
+        # different n aurait jamais lu ses configs.
+        # Et stdout AUSSI vers /dev/null : -D ne detache pas les descripteurs,
+        # le demon gardait le tube « osmo-epc start | sed » d osmo-lte.sh
+        # ouvert, et sed n en voyait jamais la fin.
+        y="${d#open5gs-}"; y="$ETC/${y%d}.yaml"
+        if "$BIN/$d" -D -c "$y" >/dev/null 2>&1; then :; else
             "$BIN/$d" -D >/dev/null 2>&1
-        fi && _ok "$d demarre" || _err "ECHEC $d (voir $LOG/${d#open5gs-}.log)"
+        fi || _err "ECHEC $d (voir $LOG/$(basename "$y" .yaml).log)"
         sleep 0.5
+        # [2026-09-09] « demarre » NE SUFFISAIT PAS : -D rend la main avant que
+        # le demon ait lu sa config. Sur l ISO, un MME sans freeDiameter/
+        # mme.conf (rien de freeDiameter dans le .deb : voir configs/open5gs/
+        # freeDiameter/mme.conf) donnait « ✓ open5gs-mmed demarre » puis
+        # mourait aussitot - le S1 n ecoutait pas, srsUE recevait
+        # ConnectionReject, et personne ne disait pourquoi. On regarde donc
+        # s il est TOUJOURS la ; sinon on le rejoue 3 s au premier plan pour
+        # rapporter la raison (ses lignes FATAL / ERROR).
+        if pgrep -x "$d" >/dev/null; then _ok "$d demarre"
+        else
+            _err "$d est mort a l init :"
+            timeout 3 "$BIN/$d" -c "$y" 2>&1 | grep -aE 'FATAL|ERROR' | grep -v backtrace | head -3 | sed 's/^/      /'
+        fi
     done
     sleep 1
     ss -np 2>/dev/null | grep -q 29118 && _ok "SGs : association vers OsmoMSC etablie" \

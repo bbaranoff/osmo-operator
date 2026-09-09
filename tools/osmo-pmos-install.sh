@@ -96,7 +96,7 @@ du banc (tools/osmo-phonesim-banc.py). Pose par osmo-pmos-install
   image/                (optionnel) qemu-amd64.img.zst, la VM de reference
   ../kernel/            le .deb du noyau PPP, et kernel/pmos/ son contenu
 
-Premiere fois, SOUS LE COMPTE DE SESSION (pas root) :
+Premiere fois (l icone le fait toute seule ; root accepte : --as-root est passe) :
   osmo-pmos-build            noyau (raccourci : l apk de ../kernel/pmos), image, VM
   osmo-pmos-qemu smartphone  ensuite : la VM, le modem et la voix
 Mot de passe de la VM : 147147.

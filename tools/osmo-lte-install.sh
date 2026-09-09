@@ -169,6 +169,31 @@ lte_build() {
     fi
 }
 
+# ── LES CERTIFICATS freeDiameter ─────────────────────────────────────────────
+# [2026-09-09] Les pairs Diameter du banc sont en No_TLS, mais freeDiameter
+# charge TLS_Cred / TLS_CA a l init et refuse de demarrer sans. Open5GS livre
+# les siens (configs/open5gs/tls de son depot) par le meme install_conf qui
+# ne fait rien sous DESTDIR (voir lte_configs) : on fabrique donc les notres,
+# une fois (CA auto-signee + un certificat par demon), sans toucher a ceux
+# qui existent.
+lte_tls() {
+    local t="$O5GS_PREFIX/etc/open5gs/tls" n
+    command -v openssl >/dev/null 2>&1 || { _l_warn "openssl absent : pas de certificats freeDiameter (apt install openssl)"; return 0; }
+    mkdir -p "$t"
+    if [ ! -s "$t/ca.crt" ] || [ ! -s "$t/ca.key" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=ca.localdomain" \
+            -keyout "$t/ca.key" -out "$t/ca.crt" >/dev/null 2>&1 || { _l_warn "CA freeDiameter : openssl a echoue"; return 0; }
+    fi
+    for n in mme hss pcrf smf; do
+        [ -s "$t/$n.crt" ] && [ -s "$t/$n.key" ] && continue
+        openssl req -newkey rsa:2048 -nodes -subj "/CN=$n.localdomain" -keyout "$t/$n.key" -out "$t/$n.csr" >/dev/null 2>&1 \
+        && openssl x509 -req -in "$t/$n.csr" -CA "$t/ca.crt" -CAkey "$t/ca.key" -CAcreateserial -days 3650 -out "$t/$n.crt" >/dev/null 2>&1 \
+        || _l_warn "certificat freeDiameter $n : openssl a echoue"
+        rm -f "$t/$n.csr"
+    done
+    chmod 600 "$t"/*.key 2>/dev/null || true
+}
+
 # ── LES CONFIGS ──────────────────────────────────────────────────────────────
 # Celles du depot, telles qu elles tournent sur le banc de reference :
 #   configs/srsran/*   -> /root/.config/srsran   (eNB 0x19B, TAC 7, EARFCN 3350,
@@ -210,6 +235,26 @@ lte_configs() {
             sed "s#/opt/LTE/open5gs/install#$O5GS_PREFIX#g" "$f" > "$dst"
         done
         _l_ok "Open5GS : configs dans $O5GS_PREFIX/etc/open5gs"
+        # [2026-09-09] freeDiameter ET les certificats TLS : ce que « ninja
+        # install » ne pose PAS sous DESTDIR (install_conf de meson.build :
+        # rien si DESTDIR est defini), donc jamais dans le .deb osmo-build-
+        # open5gs - et le MME, le HSS, le PCRF et le SMF mouraient a l init
+        # sur l ISO (« Unable to open configuration file … freeDiameter/
+        # mme.conf ») : pas de S1AP, ConnectionReject, pas d attach. Voir
+        # configs/open5gs/freeDiameter/mme.conf. Le dossier des .fdx depend
+        # du triplet (lib/x86_64-linux-gnu sur amd64) : substitue aussi.
+        local fdd fdlib
+        fdd="$O5GS_PREFIX/etc/freeDiameter"; mkdir -p "$fdd"
+        fdlib="$(ls -d "$O5GS_PREFIX"/lib/*/freeDiameter "$O5GS_PREFIX"/lib/freeDiameter 2>/dev/null | head -1)"
+        for f in "$REPO"/configs/open5gs/freeDiameter/*.conf; do
+            [ -f "$f" ] || continue
+            dst="$fdd/$(basename "$f")"
+            if [ -f "$dst" ] && [ "$force" != "1" ] && grep -q 'osmo-operator' "$dst" 2>/dev/null; then continue; fi
+            [ -f "$dst" ] && ! cmp -s "$f" "$dst" && cp -a "$dst" "$dst.bak-osmo"
+            sed "s#/opt/LTE/open5gs/install/lib/x86_64-linux-gnu/freeDiameter#${fdlib:-$O5GS_PREFIX/lib/x86_64-linux-gnu/freeDiameter}#g; s#/opt/LTE/open5gs/install#$O5GS_PREFIX#g" "$f" > "$dst"
+        done
+        lte_tls
+        _l_ok "freeDiameter : $(ls "$fdd" 2>/dev/null | grep -c '\.conf$') .conf dans $fdd, TLS dans $O5GS_PREFIX/etc/open5gs/tls"
     else
         _l_warn "Open5GS pas installe (pas de $O5GS_PREFIX/bin/open5gs-mmed) : ses configs seront posees apres --build / --debs"
     fi

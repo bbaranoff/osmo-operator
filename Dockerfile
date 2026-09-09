@@ -995,6 +995,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
     ldconfig && test -x /usr/local/bin/srsenb && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed \
     && test -s /opt/LTE/open5gs/install/etc/open5gs/mme.yaml && grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml \
+    && test -s /opt/LTE/open5gs/install/etc/freeDiameter/mme.conf && test -s /opt/LTE/open5gs/install/etc/open5gs/tls/mme.crt \
     && test -s /root/.config/srsran/enb.conf && test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc
 
 # ── L UI SMARTPHONE : pmbootstrap PATCHE, dans /opt/user_interface/pmos ───────
