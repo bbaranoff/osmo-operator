@@ -94,8 +94,17 @@ CTX = os.environ.get("OSMO_CALL_CONTEXT", "internal")
 # On accepte donc TOUS les contextes par lesquels un appel peut nous arriver.
 # Le filtre qui compte reste DestExten == notre MSISDN : la seconde jambe de
 # nos propres appels sortants compose le numero DISTANT, jamais le notre.
+# [2026-09-09] « zadarma_in » AJOUTE - SANS LUI, PAS D APPEL DE L EXTERIEUR SUR
+# LE TELEPHONE. Un appel venu de l operateur Zadarma entre par le trunk
+# [zadarma] / [zadarma_pbx] (pjsip.conf), dont le context est « zadarma_in » :
+# le DialBegin porte « Context: zadarma_in / DestExten: 100101 ». Ce contexte ne
+# figurait pas dans la liste, entrant() n etait donc jamais appele et AUCUN RING
+# ne partait vers ModemManager. Exactement le meme symptome que pour l inter-op
+# le 07/09 : le mobile osmocom-bb etait bien pagine (la radio s allume) mais le
+# combine restait muet, personne ne decrochait, et l appelant exterieur
+# entendait la tonalite jusqu au relachement du MSC.
 IN_CTX = {c.strip() for c in os.environ.get(
-    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal").split(",") if c.strip()}
+    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,zadarma_in").split(",") if c.strip()}
 # [2026-09-06] L APPEL PASSE PAR L AMI, PAS PAR LA CLI. « channel originate »
 # vient du module res_clioriginate, absent de cette installation (modules.conf
 # est en autoload = no) : la CLI repondait « No such command ». L AMI, lui, est

@@ -2196,41 +2196,6 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     fi
 fi
 
-# ── LE TABLEAU DE BORD REDEMARRE AVEC LE BANC ────────────────────────────────
-# [2026-09-09] GESTE SYMETRIQUE DE CELUI DE `stop)` (voir plus haut, ~l.1455).
-# Depuis le 04/09 le chemin d arret coupe osmo-egprs-web.service, pour ne plus
-# laisser un :8080 qui repond devant une pile morte. Mais RIEN ne le rallumait :
-# l unite est PartOf=osmo-banc.service, or le lancement direct ne passe pas par
-# osmo-banc. Consequence mesuree le 09/09 : apres un --stop suivi d un
-# demarrage direct, le dashboard restait eteint pour de bon.
-# Ce n est pas qu un tableau de bord qui manque : c est LUI qui sert /psd, donc
-# tools/osmo-fft-snap.py interrogeait en boucle un port muet et la FFT du fond
-# d ecran ne se mettait plus a jour. Le symptome ne designait pas sa cause.
-# (fft-web/fft_web.py, lui, sert le 8081 : c est un autre serveur, il n est pas
-# concerne par ce bloc.)
-# --no-block, comme a l arret : on ne se bloque pas sur systemd. `restart` et
-# pas `start` : si une instance survit d un run precedent, on la reprend au lieu
-# de la laisser servir l etat d avant.
-# CALYPSO_NO_DASHBOARD=1 desactive ce demarrage.
-if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${CALYPSO_NO_DASHBOARD:-0}" != 1 ]; then
-    say_begin "Tableau de bord (:8080)"
-    if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
-        if systemctl --no-block restart osmo-egprs-web.service 2>/dev/null; then
-            say_end " OK " "$C_OK" "Tableau de bord (:8080)" "osmo-egprs-web.service"
-        else
-            say_end " -- " "$C_KO" "Tableau de bord (:8080)" "unite absente ou refusee"
-        fi
-    elif [ -r /opt/GSM/osmo-egprs-web/server.js ] && command -v node >/dev/null 2>&1; then
-        # Hors systemd (conteneur) : lancement direct, comme le fait osmo-launch.sh.
-        pkill -f "osmo-egprs-web/server.js" 2>/dev/null || true
-        ( cd /opt/GSM/osmo-egprs-web && setsid node server.js \
-            >>"${LOG_DIR:-/tmp}/web-dashboard.log" 2>&1 </dev/null & )
-        say_end " OK " "$C_OK" "Tableau de bord (:8080)" "node server.js"
-    else
-        say_end " -- " "$C_KO" "Tableau de bord (:8080)" "ni systemd ni node/server.js"
-    fi
-fi
-
 # ── LA FICHE DU NOEUD : LE RESULTAT DU RUN ───────────────────────────────────
 # [2026-09-04] /etc/osmocom/mynode<N>.conf (network/node-conf.sh) : ce qu'un
 # autre noeud doit savoir pour joindre celui-ci (--wan mynode<N>.conf). Ecrite
