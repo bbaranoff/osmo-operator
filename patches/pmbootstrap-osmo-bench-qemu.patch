@@ -15,7 +15,7 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..2f284ffa 100644
+index 72b46c60..08f1efd7 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
 @@ -61,6 +61,34 @@ def which_qemu(arch: Arch) -> str:
@@ -53,7 +53,21 @@ index 72b46c60..2f284ffa 100644
  def command_qemu(
      config: Config,
      arch: Arch,
-@@ -169,8 +197,23 @@ def command_qemu(
+@@ -160,7 +188,12 @@ def command_qemu(
+     else:
+         command += ["stdio"]
+ 
+-    command += ["-drive", f"file={img_path},format=raw,if=virtio"]
++    # [2026-09-09] bootindex=0 on the root disk: with a fresh NVRAM, OVMF still
++    # ranks its own "UEFI PXEv4" (built-in network stack, no option ROM needed)
++    # ahead of the disk and spends a while in PXE before booting. QEMU's
++    # fw_cfg boot order, which OVMF honours, puts the disk first.
++    command += ["-drive", f"file={img_path},format=raw,if=none,id=osmo-root"]
++    command += ["-device", "virtio-blk-pci,drive=osmo-root,bootindex=0"]
+     if img_path_2nd:
+         command += ["-drive", f"file={img_path_2nd}" + ",format=raw,if=virtio"]
+ 
+@@ -169,8 +202,23 @@ def command_qemu(
      else:
          command += ["-device", "virtio-mouse-pci"]
      command += ["-device", "virtio-keyboard-pci"]
@@ -79,7 +93,7 @@ index 72b46c60..2f284ffa 100644
  
      # Check that arch is supported by pmb qemu
      if arch not in [
-@@ -200,13 +243,48 @@ def command_qemu(
+@@ -200,13 +248,48 @@ def command_qemu(
          case _:
              pass
  
@@ -130,7 +144,7 @@ index 72b46c60..2f284ffa 100644
              case Arch.riscv64 | Arch.ppc64le | Arch.loongarch64:
                  command += ["-device", "virtio-gpu-pci"]
              case _:
-@@ -221,10 +299,22 @@ def command_qemu(
+@@ -221,10 +304,22 @@ def command_qemu(
                  f"if=pflash,format=raw,readonly=on,file={edk2_chroot}/usr/share/AAVMF/AAVMF_CODE.fd",
              ]
          case Arch.x86_64:
@@ -154,7 +168,7 @@ index 72b46c60..2f284ffa 100644
          case Arch.loongarch64:
              command += [
                  "-drive",
-@@ -243,11 +333,29 @@ def command_qemu(
+@@ -243,11 +338,29 @@ def command_qemu(
  
      # Kernel Virtual Machine (KVM) support
      native = pmb.parse.deviceinfo().arch.is_native()
@@ -185,7 +199,7 @@ index 72b46c60..2f284ffa 100644
  
      if qemu_cpu:
          command += ["-cpu", qemu_cpu]
-@@ -264,9 +372,106 @@ def command_qemu(
+@@ -264,9 +377,106 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  

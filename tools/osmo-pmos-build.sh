@@ -132,12 +132,16 @@ if [ ! -d "$PMAPORTS/.git" ]; then
     if [ -d "$PM/pmaports/.git" ] && git -C "$PM/pmaports" rev-parse --verify HEAD >/dev/null 2>&1; then
         say "pmaports : copie de celui de l ISO ($PM/pmaports -> $PMAPORTS)..."
         cp -a "$PM/pmaports" "$PMAPORTS" || die "copie de pmaports"
+        # pmbootstrap lit channels.cfg dans origin/main : la ref doit exister.
+        git -C "$PMAPORTS" rev-parse -q --verify origin/main >/dev/null 2>&1 \
+            || git -C "$PMAPORTS" update-ref refs/remotes/origin/main HEAD
         ok "pmaports au commit $(git -C "$PMAPORTS" rev-parse --short HEAD) (celui de l ISO)"
     elif [ -n "$_commit" ] && [ "$_commit" != inconnu ]; then
         say "pmaports : le commit $_commit du noyau, seul (fetch --depth 1)..."
         ( git init -q "$PMAPORTS" && cd "$PMAPORTS" \
           && git remote add origin https://gitlab.postmarketos.org/postmarketOS/pmaports.git \
-          && git fetch -q --depth 1 origin "$_commit" && git checkout -q FETCH_HEAD ) \
+          && git fetch -q --depth 1 origin "$_commit" && git checkout -q -B main FETCH_HEAD \
+          && git update-ref refs/remotes/origin/main FETCH_HEAD ) \
           || { rm -rf "$PMAPORTS"; die "pmaports : fetch du commit $_commit impossible (reseau ?) - relance quand GitLab repond"; }
         ok "pmaports au commit $_commit (celui du noyau)"
     else

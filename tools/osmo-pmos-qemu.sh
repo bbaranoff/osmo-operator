@@ -244,6 +244,14 @@ GUETTEUR=""
             grep -E 'modem|ATTENTION|descendant|montant|Modem|DNS' "$SETUP_LOG" \
                 | sed 's/^/osmo-pmos-qemu: /'
             echo "osmo-pmos-qemu: trace complete dans $SETUP_LOG"
+        elif [ -x "$SETUP" ]; then
+            # [2026-09-09] SANS MODEM, LE SON QUAND MEME. La VM nue sortait
+            # son audio sur la carte PONT (0x12 -> gsm_mic) : muette pour
+            # l operateur. --voix ne fait que la partie son (combine par
+            # defaut, bouclages, sourdines).
+            echo "osmo-pmos-qemu: VM sans modem - le son seul ($SETUP --voix)"
+            "$SETUP" --voix >"$SETUP_LOG" 2>&1
+            grep -E 'ATTENTION|descendant|montant|sourdines' "$SETUP_LOG" | sed 's/^/osmo-pmos-qemu: /'
         fi
         exit 0
     done

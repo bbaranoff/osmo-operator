@@ -61,6 +61,9 @@
 #     echouait presque a chaque fois : le commit du noyau est pose ICI dans
 #     /opt/user_interface/pmos/pmaports (fetch --depth 1, 110 Mo), et
 #     osmo-pmos-build le copie au lieu de cloner.
+#   - le son : la VM nue (sans modem) sortait sur la carte PONT, inaudible ;
+#     osmo-pmos-qemu appelle osmo-pmos-setup --voix des que le SSH repond,
+#     et le disque est bootindex=0 (patch pmbootstrap) - plus de detour PXE.
 #
 # Le hub (interstp) n a pas de 4G. --arm non plus (srsRAN et Open5GS ne sont
 # pas compiles pour arm64, pmbootstrap y ferait une VM x86 emulee).
@@ -209,7 +212,8 @@ fi
 # ont echoue, et git efface tout a l echec : « ca me clone a chaque fois et
 # ca boot pas ». On pose donc ici le SEUL commit qu il faut - celui du noyau
 # PPP (kernel/pmos/pmaports.commit), fetch --depth 1, quelques dizaines de
-# Mo - dans /opt/user_interface/pmos/pmaports ; osmo-pmos-build le COPIE dans
+# Mo, avec la ref origin/main que pmbootstrap exige pour lire channels.cfg -
+# dans /opt/user_interface/pmos/pmaports ; osmo-pmos-build le COPIE dans
 # le dossier de travail du compte au lieu de cloner. Garde dans le cache de
 # l hote (OSMO_DEB_CACHE) pour les ISO suivantes. OSMO_ISO_PMAPORTS=0 pour
 # s en passer.
@@ -221,7 +225,8 @@ if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ] && [ -n "$_pc" ] && [ "$_pc" != inconnu ]
         rm -rf "$_pcache"
         ( git init -q "$_pcache" && cd "$_pcache" \
           && git remote add origin https://gitlab.postmarketos.org/postmarketOS/pmaports.git \
-          && git fetch -q --depth 1 origin "$_pc" && git checkout -q FETCH_HEAD ) \
+          && git fetch -q --depth 1 origin "$_pc" && git checkout -q -B main FETCH_HEAD \
+          && git update-ref refs/remotes/origin/main FETCH_HEAD ) \
           || { rm -rf "$_pcache"; echo -e "  ${YELLOW}!${NC} pmaports : fetch impossible (reseau ?) - le premier clic ira le chercher"; }
     fi
     if git -C "$_pcache" rev-parse --verify HEAD >/dev/null 2>&1; then
