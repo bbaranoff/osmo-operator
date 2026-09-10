@@ -11,6 +11,7 @@
 #      tout cela en paquets, tels quels (osmo-deb snapshot : rien n est
 #      recompile, rien n est reinstalle) :
 #          osmo-build-libzmq_4.3.5+git~noble_amd64.deb
+#          osmo-build-srsgui_0.1+git~noble_amd64.deb        (avant srsran : il s y lie)
 #          osmo-build-srsran_25.10+zmq~noble_amd64.deb
 #          osmo-build-open5gs_2.8.0+git~noble_amd64.deb
 #          osmo-build-pmos-kernel_7.2.3.0+ppp~noble_amd64.deb   (packaging/build-pmos-kernel-deb.sh)
@@ -50,6 +51,22 @@ else
     warn "pas de /usr/local/lib/libzmq.so.5 : libzmq d Ubuntu (libzmq5) suffira"
 fi
 
+# ── srsGUI : les traces temps reel, AVANT srsRAN (qui s y lie) ───────────────
+# [2026-09-10] srsRAN_4G est desormais compile avec ENABLE_GUI=ON : srsenb et
+# srsue se LIENT a libsrsgui. Un .deb de srsRAN sans celui-la donnerait des
+# binaires qui ne demarrent pas (« libsrsgui.so: cannot open shared object
+# file »). Il passe donc avant, dans ce fichier comme dans le cache.
+if [ -e /usr/local/lib/libsrsgui.so ] || [ -e /usr/local/lib/libsrsgui.a ]; then
+    say "srsGUI (traces srsenb / srsue)"
+    _g=( /usr/local/lib/libsrsgui.* )
+    [ -d /usr/local/include/srsgui ] && _g+=( /usr/local/include/srsgui )
+    [ -e /usr/local/lib/pkgconfig/srsgui.pc ] && _g+=( /usr/local/lib/pkgconfig/srsgui.pc )
+    [ -d "$LTE/srsGUI" ] && _g+=( "$LTE/srsGUI" )
+    bash "$OSMODEB" snapshot srsgui "${OSMO_SRSGUI_VER:-0.1+git}" "${_g[@]}" && ok "srsgui"
+else
+    warn "pas de /usr/local/lib/libsrsgui : srsGUI non empaquete (srsRAN sera sans traces)"
+fi
+
 # ── srsRAN_4G : l arbre (sources + build) et ce que make install a pose ──────
 if [ -f "$LTE/srsRAN_4G/build/install_manifest.txt" ]; then
     say "srsRAN_4G (ZeroMQ)"
@@ -77,4 +94,4 @@ if [ "$PMOS" = 1 ]; then
     say "noyau postmarketOS (PPP)"
     bash "$REPO/packaging/build-pmos-kernel-deb.sh" "${OSMO_PMB_WORK:-}" || warn "noyau pmOS non empaquete (voir ci-dessus)"
 fi
-echo; bash "$OSMODEB" list 2>/dev/null | grep -E 'libzmq|srsran|open5gs|pmos-kernel' || true
+echo; bash "$OSMODEB" list 2>/dev/null | grep -E 'libzmq|srsgui|srsran|open5gs|pmos-kernel' || true

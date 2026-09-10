@@ -1,0 +1,50 @@
+[Unit]
+# =============================================================================
+#  open5gs-webui.service - LA CONSOLE DES ABONNES 4G (Open5GS WebUI), sur :9999
+# =============================================================================
+#  [2026-09-10] Le banc portait la 4G complete (tools/osmo-lte.sh : Open5GS,
+#  srsENB, srsUE) mais AUCUNE console : provisionner un abonne LTE se faisait a
+#  la main dans MongoDB, ou par « osmo-epc subscribers » qui rejoue le JSON du
+#  depot. Le WebUI d Open5GS est fait pour ca, il vit dans les sources
+#  (webui/ du depot open5gs) et c est un Next.js : node server/index.js.
+#
+#  ELLE NE LIT PAS LES DEMONS, ELLE LIT MONGODB - la meme base que le HSS et le
+#  PCRF (DB_URI). D ou After=mongod : sans base, le WebUI demarre et sert des
+#  pages vides. Il ne DEPEND pas d Open5GS lui-meme : on provisionne des
+#  abonnes coeur eteint, c est meme le moment habituel.
+#
+#  CONDITION, PAS DEPENDANCE. L unite est ACTIVEE par defaut (ISO et natif),
+#  mais le WebUI n est pas toujours construit : les .deb du banc
+#  (osmo-build-open5gs) n embarquent que le prefixe d installation, pas les
+#  sources ni node_modules. Sans server/index.js, systemd saute l unite au lieu
+#  de la marquer en echec - un service rouge sur un banc en parfait etat est
+#  une fausse alarme, et le Conky les compte. « osmo-lte-install --webui » le
+#  construit.
+Description=Open5GS WebUI - console des abonnes 4G (:9999)
+Documentation=https://open5gs.org/open5gs/docs/
+After=network.target mongod.service
+Wants=mongod.service
+ConditionPathExists=/opt/LTE/open5gs/webui/server/index.js
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/LTE/open5gs/webui
+Environment=NODE_ENV=production
+# 0.0.0.0 : la console se regarde depuis le poste de l operateur, pas seulement
+# depuis la machine du banc.
+Environment=HOSTNAME=0.0.0.0
+Environment=PORT=9999
+# LA MEME base que hss.yaml et pcrf.yaml (configs/open5gs/) : une console qui
+# ecrirait ailleurs provisionnerait des abonnes que le HSS ne verrait jamais.
+Environment=DB_URI=mongodb://localhost/open5gs
+# node vit en /usr/local/bin sur le banc (image) et en /usr/bin sur un systeme
+# apt : env le trouve dans les deux cas, ExecStart exige un chemin absolu.
+ExecStart=/usr/bin/env node server/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=open5gs-webui
+
+[Install]
+WantedBy=multi-user.target

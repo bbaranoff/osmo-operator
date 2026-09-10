@@ -15,6 +15,7 @@
 #
 #      osmo-op                 l operateur courant
 #      osmo-op --list          les operateurs et leur etat
+#      osmo-op --list-vue      les arrets VISIBLES (ce qui tourne) et leur etat
 #      osmo-op --next / --prev l operateur suivant / precedent  (les fleches)
 #      osmo-op --set N         l operateur N
 #
@@ -68,6 +69,24 @@ liste() {
         # Pas de topologie : un seul operateur, le natif. Rien a parcourir.
         echo "1 native "
     fi
+    # ── ET LA 4G, SI ELLE EST INSTALLEE SUR CETTE MACHINE ───────────────────
+    # [2026-09-10] Le banc porte une 4G complete (tools/osmo-lte.sh : Open5GS,
+    # srsENB et srsUE sur ZeroMQ) et l ecran n avait aucun moyen de la
+    # regarder : le cycle des fleches s arretait au hub. Elle devient le
+    # dernier arret - apres les operateurs 2G et le hub - et le Conky lui rend
+    # une vue a elle (les demons du coeur EPC, l eNB, l UE, le S1, la cellule).
+    # Son « index » est « lte », comme celui du hub est « hub » : il ne
+    # numerote pas un operateur 2G. Pas de conteneur, pas de FFT : tout est
+    # natif sur l hote.
+    lte_installee && echo "lte lte "
+}
+
+# La 4G est-elle posee ici ? Les binaires, la ou tools/osmo-lte-install.sh les
+# met (ou la compilation locale de srsRAN).
+lte_installee() {
+    [ -x /usr/local/bin/srsenb ] && return 0
+    [ -x "${OPEN5GS_PREFIX:-/opt/LTE/open5gs/install}/bin/open5gs-mmed" ] && return 0
+    [ -x "${OSMO_SRSRAN_BUILD:-/opt/LTE/srsRAN_4G/build}/srsenb/src/srsenb" ]
 }
 
 # actif IDX MODE [IP] : l operateur tourne-t-il ?
@@ -89,7 +108,11 @@ liste() {
 # `docker` par ailleurs (installer/calamares/modules/users.conf, addition.sh) ;
 # ce repli couvre la session deja ouverte, ou le groupe n a pas encore pris.
 actif() {
-    if [ "$2" = interstp ]; then
+    if [ "$2" = lte ]; then
+        # La 4G tourne des que le coeur ou la radio tourne (osmo-lte status).
+        pgrep -x open5gs-mmed >/dev/null 2>&1 || pgrep -x srsenb >/dev/null 2>&1 \
+            || pgrep -x srsue >/dev/null 2>&1
+    elif [ "$2" = interstp ]; then
         if docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
             docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${HUB_NAME}"
         else
@@ -113,19 +136,69 @@ courant() { sed -n 's/^OP=//p' "$OP_FILE" 2>/dev/null | head -1; }
 
 ecrire() {
     local idx="$1" mode="$2" ip="$3"
-    mkdir -p "$RUN" 2>/dev/null || true
+    # ── LE REPERTOIRE APPARTIENT AU BANC, PAS A CELUI QUI ARRIVE EN PREMIER ──
+    # [2026-09-10] /run/osmo-fft est normalement cree par osmo-fft-snap.service
+    # (RuntimeDirectory, 0775, groupe sudo) : l encart et les sondes tournent
+    # sous le compte de la SESSION et doivent pouvoir y ecrire. Mais ce
+    # `mkdir -p` pouvait le creer AVANT lui, sous root, en 0755 root:root - et
+    # a partir de la, plus une seule sonde de la session ne pouvait y ecrire.
+    # C est ce qui a coute la banniere des timeslots (osmo-ts-probe.py). On
+    # pose donc les memes droits que l unite ; en session (non root) le chgrp
+    # echoue sans consequence, le repertoire est deja au bon compte.
+    if [ ! -d "$RUN" ]; then
+        mkdir -p "$RUN" 2>/dev/null || true
+        chmod 0775 "$RUN" 2>/dev/null || true
+        chgrp sudo "$RUN" 2>/dev/null || true
+    fi
     local nom="osmo-operator-$idx"
     [ "$mode" = interstp ] && nom="$HUB_NAME"
+    [ "$mode" = lte ] && nom="osmo-lte"
     printf 'OP=%s\nMODE=%s\nIP=%s\nNAME=%s\nDASH=http://%s:%s\n' \
         "$idx" "$mode" "$ip" "$nom" "${ip:-127.0.0.1}" "$DASH_PORT" > "$OP_FILE.tmp" \
         && mv -f "$OP_FILE.tmp" "$OP_FILE"
+}
+
+# ── LES ARRETS VISIBLES : CE QUI TOURNE VRAIMENT SUR CETTE MACHINE ─────────
+# [2026-09-10] Sur un banc ou seul op1 est monte, l ecran gardait op2, op3 et
+# le hub dans le cycle : trois arrets ou il n y a RIEN a regarder, et trois
+# quarts de tour de fleche pour revenir chez soi. On ne montre donc que ce qui
+# tourne - un seul `docker ps` le dit pour les trois.
+#
+# Ce que ca coute, et qui etait le motif du 2026-09-04 (« LES OPERATEURS
+# ARRETES COMPTENT AUSSI ») : on ne peut plus arriver AUX FLECHES sur un
+# operateur eteint pour voir pourquoi il ne demarre pas. `osmo-op --set 2` y
+# va toujours, et `osmo-op --list` continue de TOUS les afficher avec leur
+# etat - c est la qu on lit « op2 arrete ».
+#
+# Deux exceptions, qui ne sont pas des operateurs docker : le premier arret
+# (l operateur natif, CETTE machine - son banc peut etre a l arret sans
+# disparaitre) et la 4G (installee ici, arretee ou non : c est justement la
+# vue qui dit comment la demarrer).
+liste_vue() {
+    local premier=1 noms="" docker_ok=0
+    if noms="$(docker ps --format '{{.Names}}' 2>/dev/null)"; then docker_ok=1; fi
+    while read -r idx mode ip; do
+        if [ "$premier" = 1 ] || [ "$mode" = lte ]; then
+            echo "$idx $mode $ip"
+        elif [ "$docker_ok" = 0 ]; then
+            # docker ne nous repond pas (pas dans le groupe) : on ne SAIT pas,
+            # et une sonde qui confond « absent » et « invisible » ment. On
+            # garde l arret plutot que de le faire disparaitre a tort.
+            echo "$idx $mode $ip"
+        elif [ "$mode" = interstp ]; then
+            printf '%s\n' "$noms" | grep -qx "$HUB_NAME" && echo "$idx $mode $ip"
+        else
+            printf '%s\n' "$noms" | grep -qx "osmo-operator-$idx" && echo "$idx $mode $ip"
+        fi
+        premier=0
+    done < <(liste)
 }
 
 # decale +1 / -1 dans la liste, en boucle.
 decale() {
     local pas="$1" cur n i=0 sel=0
     cur="$(courant)"; cur="${cur:-1}"
-    mapfile -t L < <(liste)
+    mapfile -t L < <(liste_vue)
     n="${#L[@]}"; [ "$n" -gt 0 ] || return 1
     for i in "${!L[@]}"; do
         [ "${L[$i]%% *}" = "$cur" ] && sel="$i"
@@ -144,6 +217,16 @@ case "${1:-}" in
             [ "$idx" = "$(courant)" ] && e="$e  <- ecran"
             printf '  op %-2s %-7s %-13s %s\n' "$idx" "$mode" "${ip:-(hote)}" "$e"
         done < <(liste) ;;
+    --list-vue)
+        # « idx mode ip etat » - LA liste sur laquelle le Conky construit son
+        # selecteur, pour qu ecran et fleches s arretent aux memes endroits.
+        while read -r idx mode ip; do
+            if actif "$idx" "$mode" "$ip"; then e=actif; else e=arrete; fi
+            # L IP peut etre vide (l hote) : un tiret la remplace, sinon la
+            # ligne n a plus que trois champs et le lecteur prend l etat pour
+            # une adresse.
+            echo "$idx $mode ${ip:--} $e"
+        done < <(liste_vue) ;;
     --next|-n) decale 1 ;;
     --prev|-p) decale -1 ;;
     --set|-s)

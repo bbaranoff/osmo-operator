@@ -1,6 +1,6 @@
 #!/bin/bash
 # conky-osmo-status.sh - les lignes du Conky du banc (configs/conky/osmo-conky.conf)
-#   role | net | core | radio | subs | services
+#   role | vue | net | hub | core | radio | lte | subs | services
 # Chaque sortie est du texte conky (execpi) : ${color2} vert, ${color3} rouge,
 # ${color4} jaune. Rapide et sans dependance dure : ce qui manque s affiche "-".
 set -u
@@ -174,7 +174,9 @@ core)
         else s="$KO"; fi
         printf '%s %-5s' "$s" "$name"
         i=$((${i:-0}+1)); [ $((i % 4)) -eq 0 ] && echo
-    done; echo ;;
+    done
+    # Pas de ligne vide en trop quand les douze pastilles tombent juste.
+    [ $((i % 4)) -eq 0 ] || echo ;;
 radio)
     banc_debout || exit 0
     phy="-"
@@ -235,33 +237,95 @@ subs)
     else
         echo "HLR ${KO} base introuvable (${db})"
     fi ;;
-ops)
-    # ── LES OPERATEURS DU BANC, ET CELUI QUE L ECRAN REGARDE ────────────────
-    # [2026-09-04] Le Conky ne parlait que de l operateur SELECTIONNE : sur un
-    # banc multi, les deux autres et le hub inter-STP n existaient nulle part a
-    # l ecran - il fallait taper `docker ps` pour savoir s ils tournaient.
+vue)
+    # ── LE SELECTEUR : ◀ ARRET ▶ , ET LA VUE QU IL COMMANDE ────────────────
+    # [2026-09-10] Le Conky montrait TOUJOURS le meme operateur - celui du
+    # fichier - et empilait ses sections 2G les unes sous les autres, sans
+    # jamais parler ni du hub inter-STP (sauf trois lignes sous Reseau) ni de
+    # la 4G. Il porte maintenant UN selecteur et UNE vue : les arrets sont
+    # ceux de « osmo-op --list-vue » (op1, les operateurs docker qui TOURNENT,
+    # le hub s il tourne, la 4G si elle est installee) et la vue change avec
+    # l arret - sections 2G pour un operateur, matrice SS7 pour le hub, coeur
+    # EPC et radio LTE pour la 4G.
     #
-    # Les fleches ◀ ▶ marquent l operateur courant. Conky ne recoit PAS les
-    # clics (c est toute la raison d etre de tools/osmo-panel.py, une fenetre
-    # GTK posee sur l encart) : elles se poussent avec les fleches de l encart,
-    # avec Ctrl+Alt+Gauche/Droite (raccourci pose par l ISO), ou en ligne de
-    # commande - `osmo-op --next` / `--prev`. Cette ligne dit ou on en est.
-    #
-    # Rien de tout ca sur un banc a un seul operateur : sans
-    # /etc/osmocom/osmo-multi.conf, osmo-op ne rend que le natif et on n affiche
-    # que le hub s il tourne.
+    # Conky ne recoit PAS les clics (c est toute la raison d etre de
+    # tools/osmo-panel.py) : les fleches ◀ ▶ se poussent avec celles de
+    # l encart, avec Ctrl+AltGr+Gauche/Droite (raccourci pose par l ISO,
+    # iso_modules/80-chroot.sh), ou en ligne de commande - « osmo-op --next »
+    # et « --prev ».
     _op="${DIR:-/opt/GSM/osmo-operator}/tools/osmo-op.sh"
     [ -x "$_op" ] || _op="/opt/GSM/osmo-operator/tools/osmo-op.sh"
-    if [ -x "$_op" ]; then
-        n=0; line=""
-        while read -r idx mode ip etat _; do
-            n=$((n+1))
-            if [ "$etat" = actif ]; then p="$OK"; else p="$KO"; fi
-            if [ "$idx" = "$OP_ID" ]; then line="$line \${color4}◀\${color}$p${C2}op$idx${C}\${color4}▶\${color}"
-            else line="$line $p op$idx"; fi
-        done < <("$_op" --list 2>/dev/null | awk '{print $2, $3, $4, $5}')
-        [ "$n" -gt 1 ] && echo "${line# }"
+    [ -x "$_op" ] || { echo "${WARN} osmo-op.sh introuvable"; exit 0; }
+    mapfile -t VUES < <("$_op" --list-vue 2>/dev/null)
+    [ "${#VUES[@]}" -gt 0 ] || { echo "${WARN} aucun arret (osmo-op --list-vue)"; exit 0; }
+    # ── L ARRET REGARDE A PU DISPARAITRE SOUS L ECRAN ───────────────────────
+    # On regardait op2, quelqu un a arrete son conteneur : l arret n existe
+    # plus, et le Conky afficherait la vue d un operateur absent. On revient
+    # au premier arret - et on l ECRIT, pour que l encart et les fleches
+    # suivent au lieu de rester sur un fantome.
+    _cur="$OP_ID"; _mode="$OP_MODE"; _connu=0
+    for l in "${VUES[@]}"; do
+        set -- $l
+        [ "$1" = "$_cur" ] && { _connu=1; _mode="$2"; }
+    done
+    if [ "$_connu" = 0 ]; then
+        set -- ${VUES[0]}
+        _cur="$1"; _mode="$2"
+        "$_op" --set "$_cur" >/dev/null 2>&1 || true
     fi
+    # Le selecteur - seulement s il y a plus d un endroit ou aller.
+    if [ "${#VUES[@]}" -gt 1 ]; then
+        sel=""
+        for l in "${VUES[@]}"; do
+            set -- $l
+            idx="$1"; mode="$2"; etat="${4:-arrete}"   # $3 = l IP, ou « - »
+            case "$mode" in
+                interstp) nom="hub" ;;
+                lte)      nom="4G" ;;
+                *)        nom="op$idx" ;;
+            esac
+            [ "$etat" = actif ] && p="$OK" || p="$KO"
+            if [ "$idx" = "$_cur" ]; then
+                sel="$sel \${color4}◀\${color}$p${C2}$nom${C}\${color4}▶\${color}"
+            else
+                sel="$sel $p$nom"
+            fi
+        done
+        echo "${sel# }${AR}\${color4}Ctrl+AltGr+◀▶\${color}"
+    fi
+    # La vue.
+    T='${font DejaVu Sans:bold:size=10}${color1}'; TF='${font}${color}'
+    case "$_mode" in
+        interstp)
+            echo "${T}Hub inter-STP${TF}"
+            "$0" hub ;;
+        lte)
+            echo "${T}4G / LTE\${color4} Open5GS + srsRAN${TF}"
+            "$0" lte ;;
+        *)
+            # ── PAS DE TITRE SANS RIEN DESSOUS ──────────────────────────────
+            # Ces trois sections ne rendent RIEN quand la pile est a terre
+            # (banc_debout, plus haut) : les titres restaient alors seuls,
+            # trois lignes qui se lisent comme un Conky casse. On ne les
+            # imprime que s il y a quelque chose a mettre dessous, et le cas
+            # « rien du tout » se dit en une ligne - celle qui sert.
+            _vide=1
+            for e in "Coeur GSM:core" "Radio / MS:radio" "Abonnes (HLR):subs"; do
+                _out="$("$0" "${e##*:}" 2>/dev/null)"
+                [ -n "$_out" ] || continue
+                _vide=0
+                echo "${T}${e%%:*}${TF}"
+                echo "$_out"
+            done
+            [ "$_vide" = 0 ] || echo "${C1}banc a l arret${C} - ${C2}./start-direct.sh${C}" ;;
+    esac
+    ;;
+ops|hub)
+    # ── LE HUB INTER-STP, ET LA MATRICE DE CONNECTIVITE ─────────────────────
+    # [2026-09-10] Le carrousel des operateurs (◀ op1 op2 ▶) qui ouvrait cette
+    # sous-commande est devenu LE SELECTEUR de la vue - voir « vue » ci-dessus.
+    # Il ne reste ici que ce qui parle du hub, et c est la vue « hub ».
+    # (« ops » reste accepte : une ISO plus ancienne l appelle encore.)
     # Le hub inter-STP : present seulement s il tourne (banc multi uniquement).
     if have docker && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx osmo-inter-stp; then
         _pc="$(awk -F= '/^MULTI_HUB_PC=/{print $2}' /etc/osmocom/osmo-multi.conf 2>/dev/null)"
@@ -283,6 +347,102 @@ ops)
         # sans importance pour une topologie qui ne bouge pas.
         matrice
     fi ;;
+lte)
+    # ── LA 4G DU BANC : Open5GS (le coeur EPC) + srsRAN sur ZeroMQ ───────────
+    # [2026-09-10] Le Conky ne disait RIEN de la 4G, alors que le banc la porte
+    # depuis tools/osmo-lte.sh : les huit demons Open5GS (+ mongod, sans qui le
+    # HSS et le PCRF meurent a l init), l eNB et l UE srsRAN relies par ZeroMQ,
+    # le S1 sur 36412 et ogstun pour le plan usager. Il fallait ouvrir un
+    # terminal et taper « osmo-lte status » pour savoir si la 4G etait debout.
+    #
+    # Les sondes sont celles de tools/osmo-epc.sh et tools/osmo-lte.sh - LES
+    # sources - mais SANS leur mesure de debit ZeroMQ : celle-la dort une
+    # seconde entre deux lectures de compteur, et un execpi qui dort FIGE le
+    # Conky entier (meme raison que le cache de la matrice SS7 plus haut).
+    # Tout est natif ici : Open5GS n est pas conteneurise, donc pas de in_op.
+    _o5gs=""
+    for p in "${OPEN5GS_PREFIX:-}" /opt/LTE/open5gs/install /root/open5gs/install; do
+        [ -n "$p" ] && [ -x "$p/bin/open5gs-mmed" ] && { _o5gs="$p"; break; }
+    done
+    _srs=""
+    for b in /usr/local/bin/srsenb "${OSMO_SRSRAN_BUILD:-/opt/LTE/srsRAN_4G/build}/srsenb/src/srsenb"; do
+        [ -x "$b" ] && { _srs="$b"; break; }
+    done
+    have srsenb && _srs="${_srs:-srsenb}"
+    if [ -z "$_o5gs" ] && [ -z "$_srs" ]; then
+        echo "${C1}4G non installee${C} - ${C2}osmo-lte-install --build${C}"; exit 0
+    fi
+    # ── UNE 4G A L ARRET NE MERITE PAS TREIZE PASTILLES ROUGES ──────────────
+    # Meme regle que banc_debout pour la 2G : quand rien ne tourne, une ligne
+    # qui dit quoi taper vaut mieux qu un mur d alarmes.
+    _debout=0
+    for d in open5gs-mmed srsenb srsue; do
+        pgrep -x "$d" >/dev/null 2>&1 && _debout=1
+    done
+    if [ "$_debout" = 0 ]; then
+        # La console des abonnes, elle, vit sa vie : elle ne lit que MongoDB et
+        # sert justement a provisionner coeur eteint. Si elle ecoute, on le dit.
+        _w=""
+        ss -tanH state listening "( sport = :9999 )" 2>/dev/null | grep -q . \
+            && _w="  ${AR}${OK} console ${C1}:9999${C}"
+        echo "${C1}4G a l arret${C} - ${C2}osmo-lte start${C}${_w}"; exit 0
+    fi
+    # Le coeur : les huit demons dans l ordre de demarrage d osmo-epc.sh,
+    # mongod - le HSS et le PCRF y lisent les abonnes et MEURENT sans lui (le
+    # MME repond alors 3002 sur S6a et rejette tout attach) - et la console des
+    # abonnes (open5gs-webui.service, :9999), qui lit la meme base.
+    i=0
+    for e in MME:open5gs-mmed HSS:open5gs-hssd SGWC:open5gs-sgwcd SGWU:open5gs-sgwud \
+             SMF:open5gs-smfd UPF:open5gs-upfd PCRF:open5gs-pcrfd NRF:open5gs-nrfd \
+             MONGO:mongod WEBUI:@9999; do
+        IFS=: read -r name proc <<< "$e"
+        # « @port » : une console, pas un demon - le WebUI d Open5GS est un
+        # node, son nom de processus ne dit rien. On regarde ce qu il ECOUTE.
+        case "$proc" in
+            @*) ss -tanH state listening "( sport = :${proc#@} )" 2>/dev/null | grep -q . \
+                    && s="$OK" || s="$KO" ;;
+            *)  pgrep -x "$proc" >/dev/null 2>&1 && s="$OK" || s="$KO" ;;
+        esac
+        # %-6s et pas %-5s : « MONGO » fait cinq caracteres et collait a la
+        # pastille suivante.
+        printf '%s %-6s' "$s" "$name"
+        i=$((i+1)); [ $((i % 5)) -eq 0 ] && echo
+    done
+    [ $((i % 5)) -eq 0 ] || echo
+    # La radio et les liens : eNB, UE, S1 (SCTP 36412), ZeroMQ, ogstun.
+    s=""
+    pgrep -x srsenb >/dev/null 2>&1 && s="$s$OK eNB   " || s="$s$KO eNB   "
+    pgrep -x srsue  >/dev/null 2>&1 && s="$s$OK UE    " || s="$s$KO UE    "
+    ss -San 2>/dev/null | grep -q "ESTAB.*:36412" && s="$s$OK S1    " || s="$s$KO S1    "
+    _zp="${OSMO_ZMQ_PORT:-2000}"
+    ss -tanH state established "( sport = :$_zp or dport = :$_zp )" 2>/dev/null | grep -q . \
+        && s="$s$OK ZMQ   " || s="$s$KO ZMQ   "
+    ip -br link show ogstun >/dev/null 2>&1 && s="$s$OK TUN" || s="$s$KO TUN"
+    echo "$s"
+    # La cellule, telle que la declare enb.conf - celui qui a servi si on peut
+    # le lire (root), celui du depot sinon : c est la source de la copie.
+    _cfg=""
+    for f in "${OSMO_SRSRAN_DIR:-/root/.config/srsran}/enb.conf" \
+             "${DIR:-/opt/GSM/osmo-operator}/configs/srsran/enb.conf" \
+             /opt/GSM/osmo-operator/configs/srsran/enb.conf; do
+        [ -r "$f" ] && { _cfg="$f"; break; }
+    done
+    mcc=""; mnc=""; earfcn=""; prb=""
+    if [ -n "$_cfg" ]; then
+        eval "$(awk -F= '
+            /^[[:space:]]*mcc[[:space:]]*=/       {gsub(/[[:space:]]/,"",$2); print "mcc="$2}
+            /^[[:space:]]*mnc[[:space:]]*=/       {gsub(/[[:space:]]/,"",$2); print "mnc="$2}
+            /^[[:space:]]*dl_earfcn[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print "earfcn="$2}
+            /^[[:space:]]*n_prb[[:space:]]*=/     {gsub(/[[:space:]]/,"",$2); print "prb="$2}' "$_cfg")"
+    fi
+    # Le nombre de PRB EST la largeur de canal : on affiche celle qu on lit.
+    case "$prb" in 6) bw=1.4;; 15) bw=3;; 25) bw=5;; 50) bw=10;; 75) bw=15;; 100) bw=20;; *) bw="";; esac
+    # L adresse de l UE vit dans un netns : « ip -n » demande le privilege.
+    # Sous la session (uid non root) on ne l a pas - on ne dit rien plutot
+    # que de laisser croire que l UE n est pas attache.
+    ue="$(ip -n "${OSMO_LTE_NETNS:-ue1}" -4 -o addr show 2>/dev/null | awk '/tun_srsue/{print $4; exit}')"
+    echo "PLMN ${C1}${mcc:--}-${mnc:--}${C}  EARFCN ${C1}${earfcn:--}${C}${bw:+  ${C1}${bw}${C} MHz}${ue:+ ${AR}UE ${C1}${ue}${C}}"
+    ;;
 services)
     # Banc a terre : une seule ligne, celle qui sert - les unites en echec.
     # Le reste (web, pulse, tmux, docker) ne dit rien d autre que « rien ne
@@ -332,5 +492,5 @@ services)
          | sed 's/\.service$//' | paste -sd' ' -)"
     [ -n "$f" ] && echo "${WARN} en echec : ${C1}${f}${C}" || echo "${OK} systemd sans echec"
     ;;
-*) echo "usage: $0 role|ops|net|core|radio|subs|services" >&2; exit 2 ;;
+*) echo "usage: $0 role|vue|net|hub|core|radio|lte|subs|services" >&2; exit 2 ;;
 esac

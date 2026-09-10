@@ -311,10 +311,16 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     # leurs bibliotheques systeme par cette liste - elle fait autorite, comme
     # celle du Dockerfile. Les -dev restent : /opt/LTE est un atelier (cmake,
     # meson) et tools/osmo-lte-install.sh --build doit pouvoir y recompiler.
+    # [2026-09-10] qtbase5 / qwt / boost : srsGUI, compile AVANT srsRAN pour
+    # que celui-ci arme ses traces temps reel (constellation, spectre) - voir
+    # lte_build dans tools/osmo-lte-install.sh. Ce sont aussi les biblioteques
+    # que srsenb et srsue reclameront a l execution une fois lies a srsgui.
     # mongodb-org : le depot MongoDB pose plus haut ; mongosh et les outils
     # (mongodump/mongorestore) pour la base des abonnes du depot.
     PKGS="$PKGS
       libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev libfftw3-dev cmake
+      qtbase5-dev libqt5opengl5-dev libqwt-qt5-dev libboost-system-dev libboost-thread-dev libboost-test-dev
+      libpcsclite-dev
       meson ninja-build flex bison libgnutls28-dev libgcrypt20-dev libssl-dev libidn-dev
       libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev
       libtins-dev libtalloc-dev libc-ares-dev
@@ -880,12 +886,18 @@ GDM
     # (une fenetre Conky ne prend pas le pointeur - c est toute la raison d etre
     # de tools/osmo-panel.py, la fenetre GTK posee sur l encart). Ces fleches
     # seraient donc decoratives sans un moyen de pousser la selection depuis le
-    # clavier. Ctrl+Alt+O : operateur suivant ; Ctrl+Alt+Maj+O : precedent.
-    # (Pas les fleches Gauche/Droite : Ctrl+Alt+Gauche/Droite change de bureau
-    # virtuel sous GNOME, et on ne prend pas un raccourci a l utilisateur.)
+    # clavier. Ctrl+AltGr+Droite : arret suivant ; Ctrl+AltGr+Gauche : precedent.
+    #
+    # [2026-09-10] C ETAIT Ctrl+Alt+O / Ctrl+Alt+Maj+O - une lettre, parce que
+    # Ctrl+Alt+Gauche/Droite change de bureau virtuel sous GNOME et qu on ne
+    # prend pas un raccourci a l utilisateur. Ce sont maintenant les FLECHES,
+    # celles-la memes que le Conky dessine, avec AltGr au lieu d Alt : GNOME ne
+    # met rien sur Ctrl+AltGr, les bureaux virtuels gardent leur Ctrl+Alt, et
+    # le raccourci se lit enfin sur l ecran (◀ ▶). AltGr, c est ISO_Level3_Shift,
+    # soit <Mod5> dans la syntaxe des accelerateurs GTK.
     # osmo-op ecrit /run/osmo-fft/operator, que l encart, osmo-fft-snap.py et le
     # Conky relisent a leur rythme.
-    printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=[\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/\047,\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/\047]\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname=\047osmo-operator : operateur suivant\047\ncommand=\047/usr/local/bin/osmo-op --next\047\nbinding=\047<Control><Alt>o\047\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname=\047osmo-operator : operateur precedent\047\ncommand=\047/usr/local/bin/osmo-op --prev\047\nbinding=\047<Control><Shift><Alt>o\047\n\n" \
+    printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=[\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/\047,\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/\047]\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname=\047osmo-operator : arret suivant (Conky)\047\ncommand=\047/usr/local/bin/osmo-op --next\047\nbinding=\047<Control><Mod5>Right\047\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname=\047osmo-operator : arret precedent (Conky)\047\ncommand=\047/usr/local/bin/osmo-op --prev\047\nbinding=\047<Control><Mod5>Left\047\n\n" \
         > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
 
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \

@@ -14,8 +14,12 @@
 #      osmo-build-open5gs, poses par 50-injection-image.sh)
 #
 # OU VIVENT LES CHOSES :
-#   /opt/LTE/srsRAN_4G          les sources et le build srsRAN (ZeroMQ), binaires
-#                               dans /usr/local/bin (srsenb, srsue, srsepc)
+#   /opt/LTE/srsGUI             srsGUI (Qt5 + Qwt) : les traces temps reel de
+#                               srsenb / srsue. COMPILE AVANT srsRAN - son cmake
+#                               le cherche a sa configuration - et installe en
+#                               /usr/local/lib/libsrsgui
+#   /opt/LTE/srsRAN_4G          les sources et le build srsRAN (ZeroMQ, GUI),
+#                               binaires dans /usr/local/bin (srsenb, srsue, srsepc)
 #   /opt/LTE/open5gs            les sources Open5GS ; prefixe d installation
 #                               /opt/LTE/open5gs/install (bin, etc/open5gs, var/log)
 #   /root/.config/srsran        enb.conf ue.conf sib.conf rr.conf rb.conf user_db.csv
@@ -30,6 +34,8 @@
 #   osmo-lte-install --debs          pose les .deb du cache (/var/cache/osmo-debs)
 #   osmo-lte-install --configs       pose les configs du depot
 #   osmo-lte-install --launchers     osmo-lte, osmo-epc dans /usr/local/bin
+#                                    (+ l unite open5gs-webui, activee)
+#   osmo-lte-install --webui         construit le WebUI Open5GS (console :9999)
 #   osmo-lte-install --force         (avec --configs) ecrase les configs existantes
 #
 # Idempotent, non fatal paquet par paquet. Utilisable en session ET dans le
@@ -42,9 +48,15 @@ LTE="${OSMO_LTE_ROOT:-/opt/LTE}"
 O5GS="$LTE/open5gs"
 O5GS_PREFIX="${OPEN5GS_PREFIX:-$O5GS/install}"
 SRS="$LTE/srsRAN_4G"
+SRSGUI="$LTE/srsGUI"
 SRS_DIR="${OSMO_SRSRAN_DIR:-/root/.config/srsran}"
 DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 SRS_REF="${OSMO_SRSRAN_REF:-release_25_10}"
+# srsGUI n a ni tag ni release : c est master. La version du .deb est donc
+# nommee ici, une fois, et les trois chemins la reprennent (Dockerfile,
+# packaging/snapshot-lte-debs.sh, lte_debs).
+SRSGUI_REF="${OSMO_SRSGUI_REF:-master}"
+SRSGUI_VER="${OSMO_SRSGUI_VER:-0.1+git}"
 O5GS_REF="${OSMO_OPEN5GS_REF:-v2.8.0}"
 JOBS="${JOBS:-$(nproc)}"
 
@@ -79,7 +91,19 @@ lte_deps() {
     _lte_apt_mongo_source || true
     apt-get update -y >/dev/null 2>&1 || true
     local p
+    # qtbase5/qwt/boost : srsGUI (les traces temps reel de srsenb et srsue).
+    # Sans eux le cmake de srsGUI echoue et srsRAN se compile sans traces - ca
+    # n arrete rien, mais on ne verrait jamais la constellation.
+    # [2026-09-10] libpcsclite-dev : srsUE lit une VRAIE carte SIM par PC/SC
+    # (srsue/hdr/stack/upper/pcsc_usim.h -> winscard.h). Il n etait dans aucune
+    # liste : la machine de reference l avait, l arbre srsRAN livre par
+    # osmo-build-srsran porte donc un CMakeCache ou PCSC est ACTIF, et toute
+    # recompilation ailleurs tombait net -
+    #     pcsc_usim.h:29:10: fatal error: winscard.h: No such file or directory
+    # C est exactement ce qui est arrive en recompilant pour srsGUI.
     for p in libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev libfftw3-dev libsctp-dev lksctp-tools cmake \
+             qtbase5-dev libqt5opengl5-dev libqwt-qt5-dev libboost-system-dev libboost-thread-dev libboost-test-dev \
+             libpcsclite-dev \
              meson ninja-build flex bison libgnutls28-dev libgcrypt20-dev libssl-dev libidn-dev libmongoc-dev libbson-dev \
              libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libtins-dev libtalloc-dev libc-ares-dev \
              mongodb-org mongodb-mongosh mongodb-database-tools; do
@@ -99,9 +123,12 @@ lte_deps() {
 lte_debs() {
     local n deb suite
     suite="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-noble}")"
-    for n in libzmq srsran open5gs; do
+    # srsgui AVANT srsran : c est la bibliotheque des traces, et srsRAN la
+    # cherche a SA configuration (voir lte_build).
+    for n in libzmq srsgui srsran open5gs; do
         case "$n" in
             libzmq)  [ -e /usr/local/lib/libzmq.so.5 ] || [ -e /usr/lib/x86_64-linux-gnu/libzmq.so.5 ] && continue ;;
+            srsgui)  [ -e /usr/local/lib/libsrsgui.so ] || [ -e /usr/local/lib/libsrsgui.a ] && continue ;;
             srsran)  command -v srsenb >/dev/null 2>&1 && continue ;;
             open5gs) [ -x "$O5GS_PREFIX/bin/open5gs-mmed" ] && continue ;;
         esac
@@ -138,20 +165,79 @@ lte_build() {
     local srs_ver o5gs_ver
     srs_ver="${SRS_REF#release_}"; srs_ver="${srs_ver//_/.}+zmq"   # release_25_10 -> 25.10+zmq
     o5gs_ver="${O5GS_REF#v}+git"                                    # v2.8.0       -> 2.8.0+git
-    if ! command -v srsenb >/dev/null 2>&1; then
-        _l_say "srsRAN_4G $SRS_REF (ZeroMQ) -> $SRS"
+    # ── srsGUI D ABORD : C EST srsRAN QUI LE CHERCHE ────────────────────────
+    # [2026-09-10] srsRAN_4G etait configure avec -DENABLE_GUI=OFF : ni srsenb
+    # ni srsue n avaient leurs traces temps reel (constellation, spectre,
+    # PDSCH), celles que montre la doc srsRAN. Elles viennent de srsGUI
+    # (github.com/srsran/srsGUI, Qt5 + Qwt), une bibliotheque A PART - et le
+    # cmake de srsRAN la cherche AU MOMENT DE SA PROPRE CONFIGURATION. Posee
+    # apres, elle n aurait servi a rien : elle se construit donc ICI, juste
+    # avant, et srsRAN passe a ENABLE_GUI=ON dessous.
+    #
+    # NON FATAL, ET C EST VOLONTAIRE : sans Qt, sans reseau, ou si le cmake de
+    # srsGUI tombe, on previent et on continue. ENABLE_GUI=ON ne casse alors
+    # rien - le cmake de srsRAN constate l absence et n arme pas les traces.
+    # Un banc sans fenetre de constellation reste un banc ; un banc qui ne
+    # compile plus, non.
+    if [ ! -e /usr/local/lib/libsrsgui.so ] && [ ! -e /usr/local/lib/libsrsgui.a ]; then
+        _l_say "srsGUI $SRSGUI_REF -> $SRSGUI (les traces de srsenb / srsue)"
+        if [ ! -d "$SRSGUI/.git" ]; then
+            git clone --depth 1 -b "$SRSGUI_REF" https://github.com/srsran/srsGUI "$SRSGUI" >/dev/null 2>&1 \
+              || git clone --depth 1 https://github.com/srsran/srsGUI "$SRSGUI" >/dev/null 2>&1 \
+              || _l_warn "srsGUI : clone impossible - srsRAN se compilera sans traces"
+        fi
+        if [ -d "$SRSGUI" ]; then
+            # ── -DBOOST_TIMER_ENABLE_DEPRECATED : SANS LUI, RIEN NE SORT ────
+            # [2026-09-10] srsGUI ne compile pas sur Boost 1.83 (noble) :
+            #     /usr/include/boost/progress.hpp:23:3: error: #error This
+            #     header is deprecated and will be removed.
+            # Ce sont ses TESTS (test/cxx/*_test.cpp) qui incluent
+            # boost/progress.hpp et boost/timer.hpp, pas la bibliotheque - mais
+            # `make install` passe par la cible `all`, tests compris : un test
+            # qui ne compile pas, et c est l installation entiere qui n a pas
+            # lieu. Boost dit lui-meme quoi faire (« You can define
+            # BOOST_TIMER_ENABLE_DEPRECATED to suppress this error ») : on le
+            # definit, plutot que de retirer des cibles du projet amont.
+            ( cd "$SRSGUI" && mkdir -p build && cd build \
+              && cmake -DCMAKE_BUILD_TYPE=Release \
+                       -DCMAKE_CXX_FLAGS=-DBOOST_TIMER_ENABLE_DEPRECATED .. >/dev/null 2>&1 \
+              && make -j"$JOBS" >/dev/null 2>&1 \
+              && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$SRSGUI" osmo-deb pack srsgui "$SRSGUI_VER" make install
+                 else make install >/dev/null 2>&1; fi ) \
+              && { ldconfig; _l_ok "srsGUI : /usr/local/lib/libsrsgui"; } \
+              || _l_warn "srsGUI : compilation echouee - srsRAN se compilera sans traces"
+        fi
+    else
+        _l_ok "srsGUI deja la (/usr/local/lib/libsrsgui)"
+    fi
+    # ── UN srsenb SANS TRACES NE SE CORRIGE PAS TOUT SEUL ───────────────────
+    # [2026-09-10] La condition etait « srsenb existe-t-il ? ». Une machine qui
+    # avait deja srsRAN - compile avant aujourd hui, ou pose par osmo-build-
+    # srsran - gardait donc pour toujours des binaires sans traces, meme avec
+    # libsrsgui fraichement installee dix lignes plus haut : on n en aurait rien
+    # vu, et la seule facon de s en sortir aurait ete d effacer srsenb a la
+    # main. On regarde ce a quoi le binaire est LIE, pas seulement s il existe.
+    _srs_lie_gui() {
+        local b; b="$(command -v srsenb 2>/dev/null)" || return 1
+        [ -n "$b" ] && ldd "$b" 2>/dev/null | grep -q libsrsgui
+    }
+    if ! command -v srsenb >/dev/null 2>&1 \
+       || { [ -e /usr/local/lib/libsrsgui.so ] && ! _srs_lie_gui; }; then
+        command -v srsenb >/dev/null 2>&1 \
+            && _l_say "srsRAN_4G : recompilation, srsenb n est pas lie a srsGUI" \
+            || _l_say "srsRAN_4G $SRS_REF (ZeroMQ) -> $SRS"
         if [ ! -d "$SRS/.git" ]; then
             git clone --depth 1 -b "$SRS_REF" https://github.com/srsran/srsRAN_4G "$SRS" || { _l_err "clone srsRAN_4G"; return 1; }
         fi
         ( cd "$SRS" && mkdir -p build && cd build \
-          && cmake -DENABLE_ZEROMQ=ON -DENABLE_GUI=OFF -DENABLE_UHD=OFF -DENABLE_BLADERF=OFF -DENABLE_SOAPYSDR=OFF \
+          && cmake -DENABLE_ZEROMQ=ON -DENABLE_GUI=ON -DENABLE_UHD=OFF -DENABLE_BLADERF=OFF -DENABLE_SOAPYSDR=OFF \
                    -DCMAKE_BUILD_TYPE=Release .. >/dev/null \
           && make -j"$JOBS" >/dev/null \
           && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$SRS" osmo-deb pack srsran "$srs_ver" make install
              else make install >/dev/null; fi ) \
           && { ldconfig; _l_ok "srsRAN : $(command -v srsenb)"; } || { _l_err "srsRAN : compilation echouee"; return 1; }
     else
-        _l_ok "srsRAN deja la ($(command -v srsenb))"
+        _l_ok "srsRAN deja la ($(command -v srsenb))$(_srs_lie_gui && echo ' + traces srsGUI')"
     fi
     if [ ! -x "$O5GS_PREFIX/bin/open5gs-mmed" ]; then
         _l_say "Open5GS $O5GS_REF -> $O5GS (prefixe $O5GS_PREFIX)"
@@ -271,16 +357,68 @@ lte_launchers() {
     # L ancien nom du coeur, garde : les habitudes et les notes du banc.
     ln -sfn "$REPO/tools/osmo-epc.sh" /usr/local/bin/open5gs-epc.sh
     _l_ok "lanceurs : /usr/local/bin/osmo-lte, osmo-epc (alias open5gs-epc.sh)"
+    # ── LA CONSOLE DES ABONNES 4G : POSEE ET ACTIVEE PAR DEFAUT ─────────────
+    # [2026-09-10] Comme le tableau de bord 2G (osmo-egprs-web). L unite ne
+    # demarre pas pour autant tant que le WebUI n est pas construit : son
+    # ConditionPathExists la saute, sans echec. « --webui » le construit.
+    # Une unite MASQUEE est laissee tranquille : c est le moyen de dire non.
+    if [ -f "$REPO/services/open5gs-webui.service" ]; then
+        install -m644 "$REPO/services/open5gs-webui.service" \
+                /etc/systemd/system/open5gs-webui.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        if [ "$(systemctl is-enabled open5gs-webui 2>/dev/null)" != masked ]; then
+            systemctl enable open5gs-webui >/dev/null 2>&1 || true
+        fi
+        _l_ok "console 4G : open5gs-webui.service posee et activee (:9999)"
+    fi
+}
+
+# ── LE WEBUI D OPEN5GS : LA CONSOLE DES ABONNES 4G ───────────────────────────
+# [2026-09-10] Provisionner un abonne LTE se faisait a la main dans MongoDB (ou
+# par « osmo-epc subscribers », qui rejoue le JSON du depot). Le WebUI est fait
+# pour ca et vit dans les SOURCES d Open5GS (webui/), pas dans le prefixe
+# d installation : une machine posee depuis les .deb du banc
+# (osmo-build-open5gs) ne l a donc PAS. On le recupere en sparse checkout - le
+# depot open5gs entier pour un repertoire de Next.js serait absurde - et on le
+# construit sur place. C est du npm : ca demande le reseau, et ca prend
+# quelques minutes. D ou une sous-commande a part, hors du chemin par defaut.
+lte_webui() {
+    local dir="$O5GS/webui" tmp="$LTE/.open5gs-webui-src"
+    command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
+        || { _l_warn "WebUI Open5GS : node/npm absents - rien a construire"; return 1; }
+    if [ ! -f "$dir/package.json" ]; then
+        _l_say "WebUI Open5GS $O5GS_REF -> $dir"
+        rm -rf "$tmp"
+        # sparse : on ne tire que webui/ (et les blobs a la demande).
+        if git clone --depth 1 --filter=blob:none --sparse -b "$O5GS_REF" \
+               https://github.com/open5gs/open5gs "$tmp" >/dev/null 2>&1 \
+           && ( cd "$tmp" && git sparse-checkout set webui >/dev/null 2>&1 ) \
+           && [ -d "$tmp/webui" ]; then
+            mkdir -p "$O5GS"
+            rm -rf "$dir"; mv "$tmp/webui" "$dir"; rm -rf "$tmp"
+        else
+            rm -rf "$tmp"; _l_err "WebUI Open5GS : recuperation des sources echouee"; return 1
+        fi
+    fi
+    # `npm install` et pas `npm ci --omit=dev` : Next.js compile AVEC ses
+    # dependances de developpement, et le depot ne livre pas toujours un
+    # package-lock a jour.
+    ( cd "$dir" && npm install --no-audit --no-fund >/dev/null 2>&1 \
+      && npm run build >/dev/null 2>&1 ) \
+        || { _l_err "WebUI Open5GS : npm install / build echoue (voir $dir)"; return 1; }
+    [ -f "$dir/server/index.js" ] || { _l_err "WebUI Open5GS : pas de server/index.js apres build"; return 1; }
+    _l_ok "WebUI Open5GS construit ($dir) - console des abonnes sur :9999"
+    systemctl restart open5gs-webui >/dev/null 2>&1 || true
 }
 
 osmo_lte_install() {
-    local deps=0 debs=0 configs=0 launchers=0 build=0 all=0 force=0 a rc=0
+    local deps=0 debs=0 configs=0 launchers=0 build=0 all=0 force=0 webui=0 a rc=0
     for a in "$@"; do case "$a" in
         --deps) deps=1 ;; --debs) debs=1 ;; --configs) configs=1 ;; --launchers) launchers=1 ;;
-        --build) build=1 ;; --all) all=1 ;; --force) force=1 ;;
+        --build) build=1 ;; --all) all=1 ;; --force) force=1 ;; --webui) webui=1 ;;
         *) echo "osmo-lte-install : option inconnue $a" >&2; return 2 ;;
     esac; done
-    if [ $((deps + debs + configs + launchers + build + all)) -eq 0 ]; then deps=1; debs=1; configs=1; launchers=1; fi
+    if [ $((deps + debs + configs + launchers + build + all + webui)) -eq 0 ]; then deps=1; debs=1; configs=1; launchers=1; fi
     if [ "$all" = 1 ]; then deps=1; debs=1; configs=1; launchers=1; fi
     [ "$deps" = 1 ] && lte_deps
     [ "$debs" = 1 ] && lte_debs
@@ -296,6 +434,10 @@ osmo_lte_install() {
     fi
     [ "$configs" = 1 ] && lte_configs "$force"
     [ "$launchers" = 1 ] && lte_launchers
+    # Le WebUI passe par npm et par le reseau : jamais dans le chemin par
+    # defaut, seulement quand on le demande (ou avec --all, qui est deja le
+    # chemin long).
+    if [ "$webui" = 1 ] || [ "$all" = 1 ]; then lte_webui || rc=1; fi
     return $rc
 }
 

@@ -37,6 +37,10 @@
 # (le contexte NAS que srsue sauve dans son cwd) y vit aussi.
 #
 #   osmo-lte start      coeur (osmo-epc), puis eNB, puis UE (refuse si l un tourne deja)
+#   osmo-lte start-gui  LE MEME LANCEMENT, AVEC LES TRACES srsGUI a l ecran
+#                       (constellation, spectre, PDSCH) : --gui.enable sur l eNB
+#                       et l UE, et un DISPLAY. Jamais par systemd - une unite
+#                       systeme n a pas d ecran ; c est un lancement direct.
 #   osmo-lte stop       arrete eNB et UE (le coeur reste : « osmo-epc stop »)
 #   osmo-lte restart    stop puis start
 #   osmo-lte status     processus, S1, debit ZeroMQ, adresse de l UE
@@ -94,6 +98,77 @@ _svc() {
     return "$rc"
 }
 
+# ── LE MODE « AVEC TRACES » (srsGUI) ────────────────────────────────────────
+# [2026-09-10] srsRAN est desormais compile avec ENABLE_GUI=ON (srsGUI, pose
+# avant lui par tools/osmo-lte-install.sh) : srsenb et srsue SAVENT tracer leur
+# constellation, leur spectre et leur PDSCH en temps reel. Ils ne le FONT que
+# si on le demande - « [gui] enable » de enb.conf/ue.conf vaut false, et on ne
+# le change pas : la 4G du banc demarre normalement par un service systemd, qui
+# n a pas d ecran, et une fenetre Qt qui ne peut pas s ouvrir ferait echouer un
+# demarrage qui marchait.
+#
+# D ou DEUX modes, et le mode normal reste EXACTEMENT ce qu il etait :
+#     « start »      ce que fait le service, sans rien a l ecran
+#     « start-gui »  le meme lancement + --gui.enable=1 sur les deux
+#   (ces deux libelles ne commencent pas par « osmo-lte start » a dessein :
+#    l aide du bas de fichier est un `sed` de plage sur ce motif, et une
+#    seconde occurrence lui faisait recracher le script entier.)
+# La seule difference dans lte_start est un tableau vide quand GUI=0.
+GUI=0
+
+# Qt a besoin d un serveur X et d un cookie. Le mode traces est lance depuis le
+# bureau (icone, terminal de session) mais TOURNE EN ROOT : DISPLAY et
+# XAUTHORITY ne suivent pas toujours (pkexec nettoie l environnement, sudo
+# aussi selon env_reset). On les retrouve : le socket X du serveur en marche, et
+# le cookie de la session graphique ACTIVE.
+_display_ou_rien() {
+    if [ -z "${DISPLAY:-}" ]; then
+        local s n=""
+        for s in /tmp/.X11-unix/X*; do
+            [ -S "$s" ] || continue
+            n="${s##*/X}"; break
+        done
+        [ -n "$n" ] || { _err "aucun serveur X (/tmp/.X11-unix vide) : le mode traces demande un ecran - « $0 start » sans traces"; return 1; }
+        export DISPLAY=":$n"
+        _say "DISPLAY absent : on prend $DISPLAY"
+    fi
+    if [ -z "${XAUTHORITY:-}" ] || [ ! -r "${XAUTHORITY:-}" ]; then
+        local uid f
+        uid="$(loginctl list-sessions --no-legend 2>/dev/null | awk '$0 ~ / active / {print $2; exit}')"
+        [ -n "$uid" ] || uid="$(loginctl list-sessions --no-legend 2>/dev/null | awk 'NR==1{print $2}')"
+        for f in "/run/user/$uid/gdm/Xauthority" "/run/user/$uid/.Xauthority" \
+                 "$(getent passwd "${uid:-0}" | cut -d: -f6)/.Xauthority"; do
+            [ -n "$uid" ] || break
+            [ -r "$f" ] && { export XAUTHORITY="$f"; break; }
+        done
+    fi
+    # Qt suivrait WAYLAND_DISPLAY s il traine dans l environnement, et echouerait
+    # en root sur le socket wayland de l utilisateur : on impose xcb.
+    export QT_QPA_PLATFORM=xcb
+    # Un srsenb qui n est pas lie a srsGUI accepte --gui.enable sans rien
+    # afficher : on le dit plutot que de laisser chercher.
+    local b
+    b="$(_bin srsenb 2>/dev/null)"
+    if [ -n "$b" ] && ! ldd "$b" 2>/dev/null | grep -q libsrsgui; then
+        _warn "srsenb n est pas lie a srsGUI : aucune trace ne s affichera - « osmo-lte-install --build »"
+    fi
+    return 0
+}
+
+# Le mode traces se lance depuis la session, pas depuis systemd : c est donc
+# LUI qui va chercher root, en emportant l ecran (meme geste que l icone du
+# banc, launch/osmo-launch.sh : pkexec env DISPLAY=... XAUTHORITY=...).
+_root_avec_display() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    _display_ou_rien || return 1
+    _say "elevation (pkexec) en gardant $DISPLAY"
+    if command -v pkexec >/dev/null 2>&1; then
+        exec pkexec /usr/bin/env DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" \
+             QT_QPA_PLATFORM=xcb "$0" start-gui
+    fi
+    exec sudo DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" QT_QPA_PLATFORM=xcb "$0" start-gui
+}
+
 # Le binaire installe d abord, la compilation locale sinon.
 _bin() {
     local n="$1"
@@ -148,18 +223,21 @@ lte_start() {
     cd "$SRS_DIR" || return 1              # sib.conf & co. relatifs, et le .ctxt de srsue
     rm -f .ctxt                            # un vieux contexte fait echouer l attach apres un redemarrage du coeur
 
+    # Les traces : rien du tout quand GUI=0 - le mode normal est intact.
+    local -a gui_opt=()
+    [ "$GUI" = 1 ] && gui_opt=(--gui.enable=1)
     local -a enb_rf=() ue_rf=()
     if [ -n "$SRATE" ]; then
         enb_rf=(--rf.device_name=zmq --rf.device_args="fail_on_disconnect=true,tx_port=tcp://*:$ZMQ_ENB,rx_port=tcp://localhost:$ZMQ_UE,id=enb,base_srate=$SRATE")
         ue_rf=(--rf.device_name=zmq --rf.device_args="tx_port=tcp://*:$ZMQ_UE,rx_port=tcp://localhost:$ZMQ_ENB,id=ue,base_srate=$SRATE")
     fi
     # L eNB, et l UE tout de suite derriere : voir le piege n° 1.
-    setsid "$enb" "$SRS_DIR/enb.conf" "${enb_rf[@]}" \
+    setsid "$enb" "$SRS_DIR/enb.conf" "${enb_rf[@]}" "${gui_opt[@]}" \
         --log.filename="$LOGDIR/osmo-lte-enb.log" >"$LOGDIR/osmo-lte-enb.console" 2>&1 </dev/null &
     sleep 0.5
-    setsid "$ue" "$SRS_DIR/ue.conf" "${ue_rf[@]}" \
+    setsid "$ue" "$SRS_DIR/ue.conf" "${ue_rf[@]}" "${gui_opt[@]}" \
         --gw.netns="$NETNS" --log.filename="$LOGDIR/osmo-lte-ue.log" >"$LOGDIR/osmo-lte-ue.console" 2>&1 </dev/null &
-    _ok "srsENB puis srsUE lances (ZeroMQ $ZMQ_ENB/$ZMQ_UE, UE dans $NETNS${SRATE:+, base_srate $SRATE})"
+    _ok "srsENB puis srsUE lances (ZeroMQ $ZMQ_ENB/$ZMQ_UE, UE dans $NETNS${SRATE:+, base_srate $SRATE})${gui_opt:+ ${GREEN}avec les traces srsGUI sur $DISPLAY${NC}}"
 
     _say "attente de l attach (30 s max)..."
     local i ip
@@ -217,6 +295,12 @@ lte_status() {
 
 case "${1:-status}" in
     start)   lte_start ;;
+    start-gui|gui|start-display)
+        # Le mode traces : root AVEC l ecran, puis le lancement normal + GUI=1.
+        _root_avec_display || exit 1
+        _display_ou_rien || exit 1
+        GUI=1
+        lte_start ;;
     stop)    lte_stop ;;
     restart) lte_stop; lte_start ;;
     status)  lte_status ;;

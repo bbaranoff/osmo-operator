@@ -128,6 +128,25 @@ fi
 # bord n'aurait rien a montrer. On ne l'active pas.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
+# ── LA CONSOLE DES ABONNES 4G (Open5GS WebUI, :9999) ────────────────────────
+# [2026-09-10] Meme regle que le tableau de bord 2G : posee ET activee par
+# defaut. Elle ne demarre pas pour autant sur une image sans WebUI construit -
+# son ConditionPathExists (services/open5gs-webui.service) la saute alors, sans
+# echec ni service rouge. Le hub n a pas de coeur 4G : on ne l active pas.
+if [ "$ISO_ROLE" != "interstp" ]; then
+    if [ -f "$DIR/services/open5gs-webui.service" ]; then
+        install -m644 "$DIR/services/open5gs-webui.service" \
+                "$ROOTFS/etc/systemd/system/open5gs-webui.service"
+        mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+        chroot "$ROOTFS" systemctl enable open5gs-webui 2>/dev/null || \
+            ln -sf /etc/systemd/system/open5gs-webui.service \
+                   "$ROOTFS/etc/systemd/system/multi-user.target.wants/open5gs-webui.service"
+        echo -e "  ${GREEN}✓${NC} ${CYAN}open5gs-webui.service${NC} pose et active au boot (console abonnes 4G, :9999)"
+    else
+        echo -e "  ${RED}✗ services/open5gs-webui.service introuvable${NC}" >&2; exit 1
+    fi
+fi
+
 # ── LE BANC EST POSE EN SERVICE, MAIS NE PART PAS TOUT SEUL ─────────────────
 # [2026-09-04] services/osmo-banc.service (standalone : start-direct.sh) et
 # services/osmo-multi.service (multi-operateur : start-multi.sh). Les deux

@@ -330,17 +330,23 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     inner = (x1 - pad) - x
     gap = 10
     sw = (inner - gap * 7) // 8
-    sh = 58
+    # [2026-09-10] EN HAUTEUR, PAS EN LARGEUR - meme geste que dans la banniere
+    # vivante (configs/conky/labgsm.html) : le chronogramme du normal burst est
+    # parti, et ce sont les huit cases qui reprennent ses ~100 px. La largeur
+    # (sw, calculee sur la carte) ne bouge pas ; seul sh grandit, et le texte
+    # garde sa taille, centre verticalement dans la case.
+    sh = 148
     for i, (name, use) in enumerate(slots):
         sx = x + i * (sw + gap)
         active = i == 0
-        rounded(d, (sx, y, sx + sw, y + sh), 8,
+        rounded(d, (sx, y, sx + sw, y + sh), 10,
                 fill=(58, 62, 150) if active else (24, 34, 70),
                 outline=(120, 130, 240) if active else (60, 75, 130), width=2)
         nf = font("DejaVuSansMono-Bold.ttf", 16)
         uf = font("DejaVuSansMono.ttf", 11)
-        d.text((sx + (sw - d.textlength(name, font=nf)) / 2, y + 12), name, font=nf, fill=(235, 240, 255))
-        d.text((sx + (sw - d.textlength(use, font=uf)) / 2, y + 38), use, font=uf,
+        cy = y + sh / 2
+        d.text((sx + (sw - d.textlength(name, font=nf)) / 2, cy - 24), name, font=nf, fill=(235, 240, 255))
+        d.text((sx + (sw - d.textlength(use, font=uf)) / 2, cy + 2), use, font=uf,
                fill=(120, 230, 210) if active else (140, 160, 200))
     y += sh + 8
     d.text((x, y), "0 µs", font=font("DejaVuSansMono.ttf", 12), fill=(120, 140, 180))
@@ -351,26 +357,12 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     d.text((x1 - pad - d.textlength(end, font=font("DejaVuSansMono.ttf", 12)), y), end,
            font=font("DejaVuSansMono.ttf", 12), fill=(120, 140, 180))
 
-    # Normal burst
-    y += 24
-    d.text((x, y), "NORMAL BURST  ·  156,25 BITS", font=font("DejaVuSansMono.ttf", 14), fill=(150, 170, 210))
-    y += 24
-    parts = [(3, "tail", (70, 80, 120)), (57, "data", (52, 205, 180)), (1, "", (240, 90, 120)),
-             (26, "training", (120, 110, 240)), (1, "", (240, 90, 120)), (57, "data", (52, 205, 180)),
-             (3, "tail", (70, 80, 120)), (8.25, "guard", (90, 100, 140))]
-    total = sum(p[0] for p in parts)
-    bx = x
-    bh = 40
-    for bits, name, col in parts:
-        bw = inner * bits / total
-        d.rectangle((bx, y, bx + bw, y + bh), fill=col)
-        if name and bw > 40:
-            lf = font("DejaVuSansMono-Bold.ttf", 12)
-            lbl = f"{bits:g}"
-            d.text((bx + (bw - d.textlength(lbl, font=lf)) / 2, y + 6), lbl, font=lf, fill=(10, 20, 40))
-            d.text((bx + (bw - d.textlength(name, font=lf)) / 2, y + 22), name, font=lf, fill=(10, 20, 40))
-        bx += bw
-    y += bh + 12
+    # [2026-09-10] Le chronogramme du normal burst (3 tail | 57 data | 26
+    # training | 57 data | 8,25 guard) etait dessine ici. Retire : c est un
+    # schema de cours, fixe, qui ne dit rien de l etat du banc - alors que les
+    # timeslots au-dessus, eux, montrent le plan de canaux reel. Sa hauteur est
+    # passee aux cases des timeslots (sh, plus haut).
+    y += 22
 
     # Puces en bas
     chips = [("IMSI 001-01", (150, 170, 210)), ("A5/1 ✓", (120, 230, 210)), ("COMP128v1 ✓", (120, 230, 210)),

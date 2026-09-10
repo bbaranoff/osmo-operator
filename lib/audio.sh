@@ -221,7 +221,19 @@ ensure_echo_cancel() {
     if pactl list short modules 2>/dev/null | grep -q 'module-echo-cancel'; then
         echo -e "  ${GREEN}[audio] annuleur d echo deja en place (osmo_hp_ec / osmo_mic_ec)${NC}"
         return 0
+    # [2026-09-09] 8000 Hz MONO, COMME TOUT LE RESTE DU BANC. Sans « rate », le
+    # module se charge a 32000 Hz : c est ce que montrait « pactl list short
+    # sinks » (osmo_hp_ec en float32le 1ch 32000Hz) alors que gsm_audio, gsm_mic
+    # et osmo_tts_off sont tous en s16le 1ch 8000Hz. Chaque traversee de
+    # l annuleur coutait donc deux reechantillonnages - 8000 -> 32000 a l entree,
+    # 32000 -> 8000 a la sortie - visibles dans les flux :
+    #     Loopback from Micro_sans_echo ... 1ch 32005Hz  -> sink gsm_mic (8000)
+    # Le signal est de toute facon borne a 4 kHz par le GSM : les 32 kHz ne
+    # portaient rien de plus. L annuleur webrtc accepte 8000/16000/32000/48000 ;
+    # 8000 verifie a la main avant d etre pose ici (module charge, sinks lus en
+    # « float32le 1ch 8000Hz », module decharge).
     elif pactl load-module module-echo-cancel aec_method=webrtc \
+            rate=8000 channels=1 \
             source_master="$mic" sink_master="$hp" \
             source_name=osmo_mic_ec sink_name=osmo_hp_ec "$EC_AEC_ARGS" \
             source_properties=device.description=Micro_sans_echo \

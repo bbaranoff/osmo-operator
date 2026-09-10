@@ -294,6 +294,20 @@ _chk "2G  osmo-banc.service"                               test -s /etc/systemd/
 _chk "2G  osmo-msc.cfg : section sgs (CSFB)"               grep -q '^sgs' /etc/osmocom/osmo-msc.cfg
 # La 4G : binaires, configs (dont le SGs cote MME), lanceurs, unite, MongoDB
 _chk "4G  srsenb / srsue"                                  bash -c 'test -x /usr/local/bin/srsenb && test -x /usr/local/bin/srsue'
+# ── ET LEURS BIBLIOTHEQUES SONT-ELLES TOUTES LA ? ───────────────────────────
+# [2026-09-10] srsRAN est desormais compile avec ENABLE_GUI=ON : srsenb et
+# srsue se LIENT a libsrsgui (srsGUI, /usr/local/lib), posee avant eux par
+# osmo-build-srsgui. Une image qui aurait les binaires SANS la bibliotheque
+# donnerait « error while loading shared libraries: libsrsgui.so » au premier
+# clic sur l icone 4G - et rien avant. Le `ldd` couvre srsgui comme le reste.
+_chk "4G  srsenb / srsue : bibliotheques toutes resolues" \
+    bash -c 'for b in srsenb srsue; do ldd /usr/local/bin/$b 2>/dev/null | grep -q "not found" && exit 1; done; exit 0'
+# Les traces temps reel sont un bonus, pas une condition : on les ANNONCE.
+if chroot "$ROOTFS" bash -c 'ldd /usr/local/bin/srsenb 2>/dev/null | grep -q libsrsgui' 2>/dev/null; then
+    echo -e "      ${GREEN}✓${NC} 4G  srsGUI : traces temps reel armees (srsenb lie a libsrsgui)"
+else
+    echo -e "      ${CYAN}·${NC} 4G  srsGUI absent : srsenb sans traces temps reel (« osmo-lte-install --build »)"
+fi
 _chk "4G  open5gs-mmed / open5gs-hssd"                     bash -c 'test -x /opt/LTE/open5gs/install/bin/open5gs-mmed && test -x /opt/LTE/open5gs/install/bin/open5gs-hssd'
 _chk "4G  mme.yaml du depot avec sgsap (CSFB)"             grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml
 _chk "4G  freeDiameter mme/hss/pcrf/smf.conf (S6a, Gx)"   bash -c 'for n in mme hss pcrf smf; do test -s /opt/LTE/open5gs/install/etc/freeDiameter/$n.conf || exit 1; done'

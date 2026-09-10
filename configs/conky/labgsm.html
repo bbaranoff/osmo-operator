@@ -25,13 +25,32 @@
   .lede{color:#d8cfbf;font-size:2vh;line-height:1.35;max-width:70%}
   .lede b{color:#fff}
   .meta{color:var(--dim);letter-spacing:.12em;font-size:1.4vh;margin-top:.4vh}
-  /* la rangee des timeslots */
-  #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.7vw}
-  .ts{border:1px solid rgba(169,183,222,.28);border-radius:8px;padding:1vh .4vw;
+  /* la rangee des timeslots - elle PREND toute la place laissee libre.
+     [2026-09-10] Le chronogramme du normal burst (57 data | 26 training |
+     57 data | 8,25 guard) est parti d ici : il ne montrait rien de VIVANT,
+     c etait un schema fixe de cours, et il mangeait le tiers de la carte.
+     Les timeslots, eux, clignotent avec l activite reelle (osmo-ts-probe).
+     LA CARTE GARDE SA TAILLE : les ~7,8vh liberes (titre 1,7 + gap 1,1 +
+     chronogramme 5) sont REPRIS par la rangee, EN HAUTEUR - elle passe de
+     5,5 a 16,4vh, et les huit colonnes gardent exactement leur largeur.
+     La valeur n est pas devinee : rendu avant / apres a 1110x500, la carte
+     fait la MEME hauteur a 2 px pres (271 px).
+     min-height, pas seulement flex:1 : osmo-topzone.py injecte
+     « #card{bottom:auto;height:auto} » et rabat la fenetre sur la hauteur
+     mesuree - dans une carte a hauteur AUTO, flex-grow n a rien a distribuer
+     et la rangee retomberait a la taille de son texte. */
+  #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.9vw;flex:1;min-height:16.4vh}
+  .ts{border:1px solid rgba(169,183,222,.28);border-radius:12px;padding:1.2vh .5vw;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8vh;
     text-align:center;background:rgba(28,24,34,.5);position:relative;
     transition:box-shadow .18s,border-color .18s,background .18s}
-  .ts .n{font-weight:700;font-size:2vh}
-  .ts .k{color:var(--dim);font-size:1.15vh;margin-top:.3vh;letter-spacing:.04em}
+  /* EN HAUTEUR, PAS EN LARGEUR : les huit colonnes sont des 1fr, leur largeur
+     ne bouge pas d un pixel. Ce qui grandit, c est la HAUTEUR des cases (le
+     min-height ci-dessus) ; le texte, lui, reste a peu pres a sa taille -
+     l agrandir le pousserait vers les bords des cases, ce qui est justement
+     l inverse de ce qu on veut. */
+  .ts .n{font-weight:700;font-size:2.6vh;line-height:1}
+  .ts .k{color:var(--dim);font-size:1.35vh;letter-spacing:.05em}
   .ts.bcch{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
   /* clignotement orange quand le timeslot porte des bursts */
   .ts.on{border-color:var(--orange);
@@ -40,20 +59,6 @@
     animation:blink .9s steps(2,end) infinite}
   @keyframes blink{50%{box-shadow:0 0 4px rgba(255,154,60,.2),0 0 0 1px rgba(255,154,60,.4) inset;
     background:rgba(255,154,60,.05)}}
-  /* le burst : 8.25 guard | 3 tail | 57 data | 1 | 26 training | 1 | 57 data | 3 tail */
-  .brow{color:var(--dim);font-size:1.3vh;letter-spacing:.1em;margin-top:.4vh}
-  #burst{display:flex;height:5vh;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
-  #burst .seg{display:flex;align-items:center;justify-content:center;font-size:1.2vh;color:#0b0b0b}
-  #burst .data{background:var(--teal)}
-  #burst .train{background:var(--violet)}
-  #burst .tail{background:#2a2536}
-  #burst .guard{background:#3a3442;color:var(--dim)}
-  #burst .flag{background:var(--pink);width:.5%}
-  /* les bits qui defilent, superposes en overlay quand actif */
-  #bits{position:absolute;left:0;right:0;pointer-events:none;display:flex;gap:1px;
-    opacity:0;transition:opacity .3s}
-  #bits.on{opacity:.9}
-  #bits .b{flex:1;background:var(--orange);opacity:.15}
   .tags{display:flex;gap:.6vw;flex-wrap:wrap;margin-top:.3vh}
   .tag{border:1px solid var(--line);border-radius:8px;padding:.5vh .9vw;color:var(--dim);font-size:1.3vh}
   .tag b{color:var(--bone)}
@@ -71,20 +76,6 @@
     cœur <b>Osmocom</b>, de la synchro radio à l'appel voix chiffré en <b>A5/1</b> · couche 1 <b>gr-gsm</b> (SDR)</div>
   <div class="meta">TRAME TDMA · 8 TIMESLOTS · 4,615 MS</div>
   <div id="ts"></div>
-  <div class="brow">NORMAL BURST · 156,25 BITS</div>
-  <div style="position:relative">
-    <div id="burst">
-      <div class="seg tail" style="flex:3">3</div>
-      <div class="seg data" style="flex:57">57 data</div>
-      <div class="seg flag"></div>
-      <div class="seg train" style="flex:26">26 training</div>
-      <div class="seg flag"></div>
-      <div class="seg data" style="flex:57">57 data</div>
-      <div class="seg tail" style="flex:3">3</div>
-      <div class="seg guard" style="flex:8.25">8.25 guard</div>
-    </div>
-    <div id="bits"></div>
-  </div>
   <div class="tags" id="tags">
     <div class="tag">IMSI <b id="imsi">001-01</b></div>
     <div class="tag" id="a5tag">A5/1 <b>✓</b></div>
@@ -117,14 +108,6 @@ function drawTS(){
     box.appendChild(d);
   });
 }
-// grille de bits pour l overlay du burst
-(function(){const b=document.getElementById('bits');for(let i=0;i<148;i++){const s=document.createElement('div');s.className='b';b.appendChild(s);}})();
-function tickBits(active){
-  const bits=document.getElementById('bits');
-  bits.classList.toggle('on',active);
-  if(!active) return;
-  bits.querySelectorAll('.b').forEach(x=>{x.style.opacity=(Math.random()<0.5?0.85:0.12);});
-}
 // osmoUpdate({ts:[{n,type,active,voice}], bsc:true, arfcn:"..."}) - appele par osmo-topzone.py
 window.osmoUpdate=function(state){
   try{
@@ -133,13 +116,12 @@ window.osmoUpdate=function(state){
     if(state.arfcn) document.getElementById('arfcn').textContent=state.arfcn;
     if(state.imsi) document.getElementById('imsi').textContent=state.imsi;
     if(state.a5) document.getElementById('a5tag').innerHTML='A5/'+state.a5+' <b>✓</b>';
-    let anyVoice=false;
     (state.ts||[]).forEach(t=>{
       const el=document.querySelector('.ts[data-n="'+t.n+'"]'); if(!el) return;
-      el.classList.toggle('on', !!t.active);
-      if(t.voice) anyVoice=true;
+      // .on = ce timeslot porte des bursts (voix comprise) : c est le SEUL
+      // clignotement de la carte depuis que le chronogramme est parti.
+      el.classList.toggle('on', !!t.active || !!t.voice);
     });
-    tickBits(anyVoice || (state.ts||[]).some(t=>t.active));
   }catch(e){}
 };
 // fondu : osmo-topzone.py bascule .faded pour laisser place a une appli
@@ -149,7 +131,6 @@ drawTS();
 let demo=setInterval(()=>{ if(window.__osmoLive) return clearInterval(demo);
   TS.forEach(t=>{const el=document.querySelector('.ts[data-n="'+t.n+'"]');
     if(el) el.classList.toggle('on', (t.type||'').indexOf('TCH')>=0 && Math.random()<0.25);});
-  tickBits(Math.random()<0.5);
 },700);
 </script>
 </body></html>

@@ -14,12 +14,23 @@ Terminal=false
 Categories=System;Network;
 Keywords=4g;lte;srsran;open5gs;epc;enb;ue;
 
-Actions=Start;Stop;Status;Journal;
+Actions=Start;StartGui;Stop;Status;Journal;
 
 [Desktop Action Start]
 Name=Demarrer la 4G
 Name[fr]=Demarrer la 4G
 Exec=/usr/local/bin/osmo-lte up
+
+# [2026-09-10] LE SECOND MODE : LA 4G AVEC SES TRACES. srsRAN est compile avec
+# srsGUI ; « osmo-lte start-gui » ajoute --gui.enable sur l eNB et l UE et leur
+# porte un DISPLAY (pkexec env DISPLAY=... XAUTHORITY=...). Ce n est PAS le
+# service : une unite systeme n a pas d ecran. Dans un terminal, parce que le
+# lancement parle pendant trente secondes (attente de l attach) et qu une
+# fenetre Qt qui ne s ouvre pas doit pouvoir se lire.
+[Desktop Action StartGui]
+Name=Demarrer la 4G avec les traces (srsGUI)
+Name[fr]=Demarrer la 4G avec les traces (srsGUI)
+Exec=gnome-terminal -- bash -c "/usr/local/bin/osmo-lte start-gui; read -r -p 'Entree pour fermer ' _"
 
 [Desktop Action Stop]
 Name=Arreter la 4G

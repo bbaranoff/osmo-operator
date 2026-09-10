@@ -44,7 +44,7 @@ fi
 ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
 # osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
 # ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
-# iso_modules/80-chroot.sh - Ctrl+Alt+O / Ctrl+Alt+Maj+O.
+# iso_modules/80-chroot.sh - Ctrl+AltGr+Droite / Ctrl+AltGr+Gauche.
 ln -sf /opt/GSM/osmo-operator/tools/osmo-op.sh "$ROOTFS/usr/local/bin/osmo-op" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-drivers.sh "$ROOTFS/usr/local/bin/osmo-drivers" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overlay-draw" 2>/dev/null || true

@@ -73,7 +73,22 @@ INJECT_CSS = "#card{bottom:auto!important;height:auto!important}"
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 HTML = os.environ.get("OSMO_LABGSM_HTML", os.path.join(REPO, "configs/conky/labgsm.html"))
 FFT_RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
-TS_JSON = os.path.join(FFT_RUN if os.path.isdir(FFT_RUN) else "/tmp", "timeslots.json")
+
+
+# ── OU LIRE : LA MEME REGLE QUE LA SONDE, ET RELUE A CHAQUE TOUR ────────────
+# [2026-09-10] Ce chemin etait fige au demarrage, et sa regle n etait pas tout
+# a fait celle de l ecrivain (tools/osmo-ts-probe.py, run_dir()) : la sonde se
+# repliait sur $XDG_RUNTIME_DIR, jamais regarde ici. Deux regles pour un seul
+# fichier, et la banniere restait en demonstration devant un banc qui portait
+# des appels, sans une ligne d erreur nulle part. C est la MEME regle des deux
+# cotes, mot pour mot : le premier repertoire qui existe et ou l on peut
+# ecrire, entre $OSMO_FFT_DIR et /tmp - relue a chaque lecture, parce que
+# /run/osmo-fft est un RuntimeDirectory qui va et vient avec son service.
+def ts_json():
+    for d in (FFT_RUN, "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return os.path.join(d, "timeslots.json")
+    return "/tmp/timeslots.json"
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 CMD_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-topzone.cmd")
 
@@ -239,15 +254,16 @@ class TopZone(Gtk.Window):
 
     # ── au repos : pousser l etat des timeslots dans la page ─────────────────
     def push_state(self):
+        chemin = ts_json()
         try:
-            mt = os.stat(TS_JSON).st_mtime
+            mt = (chemin, os.stat(chemin).st_mtime)
         except OSError:
             mt = None
         if mt is not None and mt == self._ts_mtime:
             return True                      # rien de neuf depuis le dernier tour
         self._ts_mtime = mt
         try:
-            with open(TS_JSON) as f:
+            with open(chemin) as f:
                 state = f.read().strip()
         except OSError:
             state = ""

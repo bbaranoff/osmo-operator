@@ -115,6 +115,37 @@ AMI_PORT = int(os.environ.get("OSMO_AMI_PORT", "5038"))
 AMI_USER = os.environ.get("OSMO_AMI_USER", "osmo")
 AMI_PASS = os.environ.get("OSMO_AMI_PASSWORD", "osmocom1")
 
+def clip(num):
+    """Le numero de l appelant tel qu il doit etre PRESENTE, et son type 27.007.
+
+    [2026-09-09] LE NUMERO S AFFICHAIT SANS SON « + » SUR LE TELEPHONE. Un appel
+    venu de l exterieur par Zadarma arrive avec un appelant en E.164, mais le
+    dialplan retire le « + » avant de passer l appel au MSC ([zadarma_in] :
+    Set(CALLERID(num)=${FILTER(0-9,...)})), parce que la signalisation GSM ne
+    sait pas le porter jusqu au combine. L AMI nous donne donc « 33656678074 »,
+    et Phosh affichait ca tel quel : ni reconnu comme un numero francais, ni
+    rapproche d un contact du carnet d adresses.
+
+    Le « + » se REMET ici, au moment de la presentation, parce que 27.007 a un
+    champ pour ca : le type de numero. 145 = international (le « + » est
+    implicite et le telephone le reaffiche), 129 = inconnu/national. On rend
+    donc les deux, et l appelant retrouve sa forme +33656678074.
+
+    Regle : un numero deja prefixe d un « + » est international. Sinon, dix
+    chiffres ou plus SANS zero de tete l est aussi - les numeros du banc font
+    six chiffres (100101) et un national francais commence par 0, donc ni l un
+    ni l autre ne peut etre pris pour un international par erreur.
+    """
+    n = (num or "").strip()
+    if not n:
+        return "", 129
+    if n.startswith("+"):
+        return n, 145
+    if len(n) >= 10 and n.isdigit() and not n.startswith("0"):
+        return "+" + n, 145
+    return n, 129
+
+
 _PROMPT = re.compile(rb'[\r\n][A-Za-z0-9_.\-]+(?:\([^)]*\))?[>#]\s*$')
 
 
@@ -1526,7 +1557,8 @@ class AtHandler(socketserver.StreamRequestHandler):
         while c in self.calls and c["state"] == "incoming" and CURRENT is self:
             self.out("RING")
             if c["num"]:
-                self.out('+CLIP: "%s",129,,,,0' % c["num"])
+                _n, _t = clip(c["num"])
+                self.out('+CLIP: "%s",%d,,,,0' % (_n, _t))
             time.sleep(3)
 
     def fin_appel(self, chan):
@@ -2020,8 +2052,9 @@ class AtHandler(socketserver.StreamRequestHandler):
                 # 2 = en cours d appel, 4 = entrant qui sonne.
                 sens = 1 if c["state"] == "incoming" else 0
                 etat = {"active": 0, "incoming": 4}.get(c["state"], 2)
-                self.out('+CLCC: %d,%d,%d,0,0,"%s",129'
-                         % (i, sens, etat, c["num"]))
+                _n, _t = clip(c["num"])
+                self.out('+CLCC: %d,%d,%d,0,0,"%s",%d'
+                         % (i, sens, etat, _n, _t))
             self.ok(); return
 
         if ub.startswith("+CMGS="):

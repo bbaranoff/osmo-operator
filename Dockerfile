@@ -989,6 +989,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     chmod 755 /usr/local/sbin/osmo-lte-install && \
     OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
     { osmo-deb install libzmq 4.3.5+git || true; } && \
+    { osmo-deb install srsgui 0.1+git || true; } && \
     if ! osmo-deb install srsran 25.10+zmq; then \
         OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build srsRAN"; exit 1; }; \
     fi && \

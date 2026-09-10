@@ -13,7 +13,8 @@
 #      etabli = de la voix -> le timeslot clignote. Pas de VTY (banc arrete) ->
 #      bsc=false, la banniere passe en demonstration.
 #
-# Sortie : $OSMO_FFT_DIR/timeslots.json (defaut /run/osmo-fft), reecrit chaque
+# Sortie : $OSMO_FFT_DIR/timeslots.json (defaut /run/osmo-fft, /tmp en repli
+# - voir run_dir(), la MEME regle que le lecteur), reecrit chaque
 # seconde, de forme :
 #   {"bsc":true,"arfcn":"ARFCN 514 · DCS 1800",
 #    "ts":[{"n":0,"type":"CCCH+SDCCH4","active":false,"voice":false}, ...]}
@@ -25,10 +26,32 @@ import sys
 import time
 
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
-RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
-if not os.path.isdir(RUN):
-    RUN = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-OUT = os.path.join(RUN, "timeslots.json")
+# ── OU ECRIRE : LA MEME REGLE QUE LE LECTEUR, ET RELUE A CHAQUE TOUR ────────
+# [2026-09-10] Le repli etait « $XDG_RUNTIME_DIR sinon /tmp », alors que le
+# lecteur (tools/osmo-topzone.py) ne regarde QUE $OSMO_FFT_DIR puis /tmp : sans
+# /run/osmo-fft, la sonde ecrivait dans /run/user/1001 un fichier que PERSONNE
+# n allait lire, et la banniere restait en demonstration sans qu aucune erreur
+# ne le dise. Deux chemins pour un seul fichier, c est un de trop : la regle
+# est ici et dans osmo-topzone.py, mot pour mot - le premier repertoire qui
+# EXISTE ET OU L ON PEUT ECRIRE, entre $OSMO_FFT_DIR et /tmp.
+#
+# « ou l on peut ecrire » et pas seulement « qui existe » : /run/osmo-fft est
+# cree par osmo-fft-snap.service (RuntimeDirectory, 0775, groupe sudo) mais
+# tools/osmo-op.sh a longtemps pu le creer avant lui, en 0755 root:root - la
+# sonde de la session ne pouvait alors plus jamais y ecrire.
+#
+# Et la regle est REEVALUEE A CHAQUE ECRITURE : ce repertoire est un
+# RuntimeDirectory, il disparait quand l unite s arrete et revient quand elle
+# repart. Une sonde qui aurait resolu son chemin une fois pour toutes ecrirait
+# ensuite dans le vide jusqu au prochain redemarrage.
+RUN_PREFERE = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
+
+
+def run_dir():
+    for d in (RUN_PREFERE, "/tmp"):
+        if os.path.isdir(d) and os.access(d, os.W_OK):
+            return d
+    return "/tmp"
 VTY_HOST = os.environ.get("OSMO_BSC_VTY_HOST", "127.0.0.1")
 VTY_PORT = int(os.environ.get("OSMO_BSC_VTY_PORT", "4242"))
 # [2026-09-06] LA BANNIERE SUIT UNE BTS PRECISE, ET UNE SEULE. Les huit cases
@@ -285,16 +308,46 @@ def main():
     # suite » a l oeil, assez long pour ne pas marteler le VTY d osmo-bsc (4
     # « show lchan summary » par seconde sur une connexion deja ouverte).
     period = float(os.environ.get("OSMO_TS_PERIOD", "0.25"))
-    os.makedirs(RUN, exist_ok=True)
+    try:
+        os.makedirs(RUN_PREFERE, exist_ok=True)
+    except OSError:
+        pass                                  # run_dir() se rabattra sur /tmp
+    tmp = None
+    dernier = (None, 0.0)                     # (message, quand) - voir plus bas
     while True:
         try:
             out = build()
-            tmp = OUT + ".tmp"
+            dest = os.path.join(run_dir(), "timeslots.json")
+            # ── UN TEMPORAIRE PAR PROCESSUS ─────────────────────────────────
+            # [2026-09-10] Deux sondes ont tourne en meme temps - un widget
+            # rescape d une session X precedente, que le gardien du bureau
+            # comptait pour vivant (cf. osmo-desktop-panel, osmo_vivant) - et
+            # elles partageaient « timeslots.json.tmp » : chacune renommait le
+            # temporaire de l autre, d ou un journal rempli de
+            # « [Errno 2] ... .tmp -> ... .json » quatre fois par seconde. Le
+            # PID dans le nom rend l ecriture atomique meme a plusieurs.
+            tmp = "%s.%d.tmp" % (dest, os.getpid())
             with open(tmp, "w") as f:
                 json.dump(out, f)
-            os.replace(tmp, OUT)
+            os.replace(tmp, dest)
+            tmp = None
         except Exception as e:  # noqa: BLE001 - une sonde ne doit jamais mourir
-            print("[ts-probe] %s" % e, file=sys.stderr, flush=True)
+            # Un temporaire orphelin ne doit pas rester dans /run.
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                tmp = None
+            # ── LE MEME DEFAUT NE SE DIT PAS QUATRE FOIS PAR SECONDE ────────
+            # Une panne durable (repertoire non accessible) noyait le journal
+            # sous des milliers de lignes identiques. On dit la premiere, puis
+            # une par minute tant que rien ne change.
+            msg = "%s (destination %s)" % (e, run_dir())
+            now = time.time()
+            if msg != dernier[0] or now - dernier[1] > 60:
+                print("[ts-probe] %s" % msg, file=sys.stderr, flush=True)
+                dernier = (msg, now)
         time.sleep(period)
 
 
