@@ -34,6 +34,10 @@ on:
         description: "Build osmo-operator-lite.iso as well"
         type: boolean
         default: true
+      pmos_image:
+        description: "Embed the postmarketOS VM image (~1.7 GB per ISO, from the pmos-image release)"
+        type: boolean
+        default: false
 
 jobs:
   build-iso:
@@ -83,9 +87,21 @@ jobs:
           df -h /
           NO_CACHE="--no-cache"
           [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
-          sudo ./build-iso.sh $NO_CACHE --kb=us --all
+          # L'image de la VM postmarketOS (qemu-amd64.img.zst, 1,7 Go) n'existe
+          # pas sur un runner : 88-lte-pmos.sh la telecharge depuis l'asset de
+          # Release quand on lui donne l'URL. UNE fois telechargee, elle est
+          # embarquee dans CHAQUE ISO (operator, lite, desktop) - +5 Go de
+          # disque et d'artefacts, d'ou le defaut a false. Sans elle, le premier
+          # clic sur le telephone fait un "pmbootstrap install" complet.
+          # sudo env ... : sur un runner, sudoers est en env_reset sans SETENV,
+          # « sudo -E » et « sudo VAR=x » peuvent etre refuses ; env(1) lance en
+          # root, lui, passe toujours.
+          sudo env OSMO_PMOS_IMAGE_URL="$OSMO_PMOS_IMAGE_URL" \
+               ./build-iso.sh $NO_CACHE --kb=us --all
           ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
           df -h /
+        env:
+          OSMO_PMOS_IMAGE_URL: ${{ github.event.inputs.pmos_image == 'true' && (vars.PMOS_IMAGE_URL || 'https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst') || '' }}
 
       - name: Checksums
         run: |

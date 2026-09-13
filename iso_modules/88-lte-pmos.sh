@@ -181,6 +181,7 @@ chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
 # OSMO_ISO_PMOS_IMAGE=none pour ne rien embarquer.
 if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     for _cand in /opt/user_interface/pmos/image/qemu-amd64.img.zst \
+                 "${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst" \
                  "${OSMO_PMB_WORK:-/root/test}"/chroot_native/home/pmos/rootfs/qemu-amd64.img \
                  /home/*/test/chroot_native/home/pmos/rootfs/qemu-amd64.img; do
         [ -f "$_cand" ] || continue
@@ -189,6 +190,39 @@ if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
         break
     done
     unset _cand
+fi
+
+# [2026-09-13] ET SUR UN RUNNER GITHUB ? Aucune machine de reference : pas de
+# /opt/user_interface/pmos/image, pas de dossier de travail pmbootstrap - la
+# boucle ci-dessus ne trouve rien et l ISO de la CI sort sans telephone pret.
+# Meme remede que pour le noyau (plus haut), mais PAS par Git LFS : 1,7 Go
+# creveraient le quota LFS (1 Go de stockage et 1 Go de trafic par mois). Un
+# ASSET DE RELEASE n a pas de quota de trafic et plafonne a 2 Gio par fichier -
+# l image y tient. Publier une fois, depuis la machine de reference :
+#
+#   gh release create pmos-image --repo bbaranoff/osmo-operator \
+#       --title "postmarketOS - VM de reference (noyau PPP)" --notes "..." \
+#       /opt/user_interface/pmos/image/qemu-amd64.img.zst
+#
+# puis OSMO_PMOS_IMAGE_URL=<url de l asset> au build (le workflow le passe).
+# Vide = on ne telecharge rien : c est le defaut, l image pese trois fois son
+# poids dans un build --all (operator, lite, desktop).
+if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
+    _icache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst"
+    echo -e "  ${CYAN}·${NC} image de la VM : telechargement depuis $OSMO_PMOS_IMAGE_URL"
+    install -d "$(dirname "$_icache")"
+    # zstd -t : un 404 ou une coupure donnent un fichier bien forme pour curl et
+    # illisible pour zstd - c est ici qu on veut le savoir, pas dans l ISO.
+    if curl -fsSL --retry 3 --retry-delay 5 -o "$_icache.part" "$OSMO_PMOS_IMAGE_URL" \
+       && zstd -t "$_icache.part" >/dev/null 2>&1; then
+        mv -f "$_icache.part" "$_icache"
+        OSMO_ISO_PMOS_IMAGE="$_icache"
+        echo -e "  ${GREEN}✓${NC} image recuperee ($(du -h "$_icache" | cut -f1)) - gardee dans $(dirname "$_icache") pour les ISO suivantes"
+    else
+        rm -f "$_icache.part"
+        echo -e "  ${YELLOW}!${NC} image de la VM : telechargement impossible - ISO sans telephone pret (osmo-pmos-build le fera sur la machine)"
+    fi
+    unset _icache
 fi
 [ "${OSMO_ISO_PMOS_IMAGE:-}" = "none" ] && OSMO_ISO_PMOS_IMAGE=""
 # L image de la VM : celle donnee, ou celle de l hote (voir ci-dessus).
