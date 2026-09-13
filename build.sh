@@ -134,8 +134,14 @@ apt-fast update -qq || true
 # rendant compose inconditionnel. On ne complete donc que ce qui MANQUE, et
 # on accepte les deux nommages : docker-compose-v2 / docker-buildx (Ubuntu)
 # et docker-compose-plugin / docker-buildx-plugin (depot Docker).
+# OSMO_HOST_DOCKER=0 : ne RIEN demander a apt pour docker. Un runner GitHub
+# arrive avec docker, compose v2 et buildx tout faits (paquets moby-*) ; lui
+# laisser tenter quoi que ce soit, c est parier sur un nommage de paquets qu on
+# ne maitrise pas, pour un gain nul. Le workflow pose donc cette variable.
 echo "[*] Docker + docker compose v2 + buildx..."
-if command -v docker >/dev/null 2>&1; then
+if [ "${OSMO_HOST_DOCKER:-1}" = 0 ]; then
+    echo -e "${GREEN}[OK] docker : installation sautee (OSMO_HOST_DOCKER=0) - $(docker --version 2>/dev/null || echo 'docker introuvable, la suite dira si c est un probleme')${NC}"
+elif command -v docker >/dev/null 2>&1; then
     echo -e "${GREEN}[OK] docker deja installe ($(docker --version 2>/dev/null || echo version inconnue)) - pas touche${NC}"
     docker info >/dev/null 2>&1 || systemctl start docker >/dev/null 2>&1 || true
     docker compose version >/dev/null 2>&1 \
@@ -150,7 +156,10 @@ else
     apt-fast install -y --no-install-recommends docker.io docker-compose-v2 docker-buildx \
         || apt-fast install -y --no-install-recommends docker.io docker-compose-v2 \
         || apt-fast install -y --no-install-recommends docker.io \
-        || { echo -e "${RED}[ERREUR] docker / docker-compose-v2 non installables.${NC}"; exit 1; }
+        || command -v docker >/dev/null 2>&1 \
+        || { echo -e "${RED}[ERREUR] docker / docker-compose-v2 non installables.${NC}"; \
+             echo -e "${RED}        (docker absent du PATH : $PATH)${NC}"; \
+             echo -e "${RED}        OSMO_HOST_DOCKER=0 pour sauter cette etape si docker est pose autrement.${NC}"; exit 1; }
 fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 HAVE_COMPOSE=0

@@ -97,11 +97,16 @@ jobs:
           # « sudo -E » et « sudo VAR=x » peuvent etre refuses ; env(1) lance en
           # root, lui, passe toujours.
           sudo env OSMO_PMOS_IMAGE_URL="$OSMO_PMOS_IMAGE_URL" \
+                   OSMO_HOST_DOCKER="$OSMO_HOST_DOCKER" \
                ./build-iso.sh $NO_CACHE --kb=us --all
           ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
           df -h /
         env:
           OSMO_PMOS_IMAGE_URL: ${{ github.event.inputs.pmos_image == 'true' && (vars.PMOS_IMAGE_URL || 'https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst') || '' }}
+          # Le runner a deja docker, compose v2 et buildx (paquets moby-*), et
+          # docker.io entre en conflit avec eux : apt repond « pkgProblemResolver
+          # generated breaks » et build.sh s'arretait la. Rien a installer ici.
+          OSMO_HOST_DOCKER: "0"
 
       - name: Checksums
         run: |
