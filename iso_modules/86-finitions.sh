@@ -177,7 +177,18 @@ _PLY_DST="$ROOTFS/usr/share/plymouth/themes/osmo-bts"
 # type "script" : sans le greffon script.so, plymouthd ignore le theme et
 # retombe sur le mode texte - un ecran noir avec des points, et personne pour
 # dire pourquoi. On verifie les deux.
-_PLY_SO="$(ls "$ROOTFS"/usr/lib/*/plymouth/script.so 2>/dev/null | head -1)"
+# [2026-09-13] PAS de `$(ls ... | head -1)` ici. build-iso.sh tourne sous
+# `set -euo pipefail` : quand le glob ne correspond a rien (rootfs sans
+# plymouth - le hub interstp), bash passe le motif litteral a ls, ls sort en
+# statut 2, et pipefail rend ce 2 pour toute la pipeline. L affectation
+# echoue donc, set -e arrete le build - APRES la derniere ligne affichee
+# (« Chromium retire »), et sans un mot : le 2>/dev/null avale aussi le
+# message de ls. Symptome observe en CI : « Echec de interstp.iso » sans
+# aucune cause visible. nullglob + tableau ne lance aucun processus et ne
+# peut pas echouer ; le tableau vide donne la chaine vide, que le test
+# -n plus bas attendait deja.
+shopt -s nullglob; _PLY_SOS=("$ROOTFS"/usr/lib/*/plymouth/script.so); shopt -u nullglob
+_PLY_SO="${_PLY_SOS[0]-}"
 if [ -d "$_PLY_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" ]; then
     install -d "$_PLY_DST"
     install -m644 "$_PLY_SRC/osmo-bts.plymouth" "$_PLY_SRC/osmo-bts.script" "$_PLY_DST/"
