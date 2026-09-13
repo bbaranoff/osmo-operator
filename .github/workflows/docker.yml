@@ -185,9 +185,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/osmo-debs
-          # cle roulante : toujours unique a l'ecriture (donc toujours
-          # sauvegardee), la plus recente reprise a la lecture.
-          key: osmo-debs-noble-${{ github.run_id }}-base
+          # CLE = L'EMPREINTE DU CONTEXTE, pas le numero du run.
+          # [2026-09-13] C'etait `${{ github.run_id }}`, donc une entree NEUVE a
+          # chaque passage. A 2-4 Go l'entree et 10 Go de quota par depot,
+          # l'eviction LRU detruisait le cache au bout de trois runs - et tous
+          # les autres caches du depot avec. Avec l'empreinte : contexte
+          # inchange, la cle est deja la, rien n'est reecrit ; contexte change,
+          # une seule entree s'ajoute. Le prefixe reprend la plus recente.
+          key: osmo-debs-noble-${{ steps.key.outputs.key }}
           restore-keys: |
             osmo-debs-noble-
 

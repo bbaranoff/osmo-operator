@@ -67,6 +67,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      # L'EMPREINTE DU CONTEXTE. La meme commande que docker.yml (job `base`) :
+      # elle nomme l'image de base publiee sur GHCR, et elle sert de cle au
+      # cache .deb. Calculee ici, une seule fois, parce que les deux en ont
+      # besoin et qu'elles doivent parler de la meme chose.
+      - name: Empreinte du contexte
+        id: key
+        run: |
+          KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
+                                helpers opt-gsm tools patches \
+                | sort | xargs sha256sum | sha256sum | cut -c1-16)
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Empreinte du contexte : $KEY"
+
       # Les trois ISO plus les images Docker intermediaires tiennent tout juste
       # dans un runner : on fait la place avant, pas apres l'echec.
       - name: Free disk space
@@ -132,20 +145,35 @@ jobs:
       # Le dossier appartient a root (build.sh tourne sous sudo) : il faut le
       # creer AVANT que actions/cache y ecrive, et le rendre au runner APRES
       # le build pour que le post-step puisse le relire.
+      # SUR /mnt, PAS SUR /. Ce job est le seul des deux ou / est la partition
+      # serree : le rootfs decompresse, le squashfs et les quatre ISO y tiennent
+      # tout juste. Les 2-4 Go du cache .deb iraient s'ajouter a ca, alors que
+      # /mnt en a 68 de libres. build.sh, build-iso.sh et 50-injection-image.sh
+      # lisent tous OSMO_DEB_CACHE : il suffit de le leur dire.
+      # Repli sur / si le deplacement de docker plus haut a renonce a /mnt.
       - name: Preparer le cache .deb
         run: |
-          sudo mkdir -p /var/cache/osmo-debs
-          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs
+          # Pas de repli conditionnel : `path:` du step suivant est statique,
+          # un chemin qui divergerait ici ne serait pas celui qu'on sauvegarde.
+          # /mnt existe sur tout runner heberge ; ailleurs, mkdir -p le cree sur
+          # / et on retombe simplement sur l'ancien comportement.
+          CACHE=/mnt/osmo-debs
+          sudo mkdir -p "$CACHE"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE"
+          echo "OSMO_DEB_CACHE=$CACHE" >> "$GITHUB_ENV"
+          echo "cache .deb : $CACHE"
 
       - name: Cache .deb (osmo-deb)
         uses: actions/cache@v4
         with:
-          path: /var/cache/osmo-debs
-          # cle roulante : toujours unique a l'ecriture (donc toujours
-          # sauvegardee), la plus recente reprise a la lecture. Les .deb portent
-          # leur nom et leur version, osmo-deb.sh trie : un cache d'hier reste
-          # valable pour tout ce qui n'a pas bouge.
-          key: osmo-debs-noble-${{ github.run_id }}
+          path: /mnt/osmo-debs
+          # CLE = L'EMPREINTE DU CONTEXTE, pas le numero du run.
+          # [2026-09-13] C'etait `${{ github.run_id }}`, donc une entree NEUVE a
+          # chaque passage. A 2-4 Go l'entree et 10 Go de quota par depot,
+          # l'eviction LRU detruisait le cache au bout de trois runs. Les .deb
+          # portent leur nom et leur version, osmo-deb.sh trie : le prefixe
+          # reprend la plus recente, et ce qui n'a pas bouge reste valable.
+          key: osmo-debs-noble-${{ steps.key.outputs.key }}
           restore-keys: |
             osmo-debs-noble-
 
@@ -175,12 +203,9 @@ jobs:
             echo "::notice::--build-docker demande : l'image de base sera construite ici."
             exit 0
           fi
-          KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
-                                helpers opt-gsm tools patches \
-                | sort | xargs sha256sum | sha256sum | cut -c1-16)
+          KEY='${{ steps.key.outputs.key }}'
           REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
           REF="ghcr.io/${REPO}/osmocom-nitb:base-${KEY}"
-          echo "Empreinte du contexte : $KEY"
           if docker manifest inspect "$REF" >/dev/null 2>&1; then
             docker pull "$REF"
             echo "ISO_DOCKER_SRC=--skip-build=$REF" >> "$GITHUB_ENV"
@@ -193,9 +218,9 @@ jobs:
             cid=$(docker create "$REF" /bin/true)
             docker cp "$cid:/var/cache/osmo-debs/." /tmp/debs-out/ 2>/dev/null || true
             docker rm "$cid" >/dev/null
-            cp -f /tmp/debs-out/osmo-build-*.deb /var/cache/osmo-debs/ 2>/dev/null || true
+            cp -f /tmp/debs-out/osmo-build-*.deb "$OSMO_DEB_CACHE/" 2>/dev/null || true
             rm -rf /tmp/debs-out
-            echo "cache .deb : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets"
+            echo "cache .deb : $(find "$OSMO_DEB_CACHE" -name 'osmo-build-*.deb' | wc -l) paquets"
           else
             echo "ISO_DOCKER_SRC=" >> "$GITHUB_ENV"
             echo "::notice::Pas de base publiee pour l'empreinte $KEY - construction locale."
@@ -237,6 +262,7 @@ jobs:
           # root, lui, passe toujours.
           sudo env OSMO_PMOS_IMAGE_URL="$OSMO_PMOS_IMAGE_URL" \
                    OSMO_HOST_DOCKER="$OSMO_HOST_DOCKER" \
+                   OSMO_DEB_CACHE="$OSMO_DEB_CACHE" \
                ./build-iso.sh $NO_CACHE $ISO_DOCKER_SRC --kb=us --all
           ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
           df -h /
@@ -253,8 +279,9 @@ jobs:
       - name: Rendre le cache .deb au runner
         if: always()
         run: |
-          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs 2>/dev/null || true
-          echo "$(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh /var/cache/osmo-debs | cut -f1)"
+          CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE" 2>/dev/null || true
+          echo "$(find "$CACHE" -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh "$CACHE" | cut -f1)"
 
       # Apres le build, tue ou non : les dernieres mesures avant la fin.
       - name: Temoin - dernieres mesures

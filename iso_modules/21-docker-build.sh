@@ -48,7 +48,7 @@ iso_docker_build() {
             # arm64 : buildx --platform, image taguee :arm64, cache .deb de l hote
             # dans le contexte comme le fait build.sh (osmo-deb y lit les paquets
             # de SON architecture, les amd64 qui y trainent ne le derangent pas).
-            mkdir -p "$DIR/.deb-cache"; cp -f /var/cache/osmo-debs/osmo-build-*_arm64.deb "$DIR/.deb-cache/" 2>/dev/null || true
+            mkdir -p "$DIR/.deb-cache"; cp -f "${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"/osmo-build-*_arm64.deb "$DIR/.deb-cache/" 2>/dev/null || true
             docker buildx build --platform linux/arm64 --load $NO_CACHE \
                 --build-arg "OSMO_DEB_REFRESH=$([ -n "$NO_CACHE" ] && echo 1 || echo 0)" \
                 -f "$DIR/Dockerfile.stp" -t "osmocom-stp${ISO_IMG_TAG}" "$DIR" \
