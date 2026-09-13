@@ -77,7 +77,43 @@ jobs:
           sudo apt-get autoremove -y
           sudo apt-get clean
           sudo docker image prune -af || true
-          df -h /
+          df -h / /mnt
+
+      # [2026-09-13] Le job mourait en « exporting layers » sur exit 143 : pas
+      # une erreur de docker (il n'ecrit rien), un SIGTERM recu de l'exterieur -
+      # la partition / du runner arrivait a saturation et le runner lui-meme
+      # tombait. Trois gros consommateurs partageaient / :
+      #   /var/lib/docker    base ~11 Go, et on en construit QUATRE variantes
+      #   /var/tmp/iso-build-$$   le rootfs decompresse (build-iso.sh:33)
+      #   le workspace       les quatre .iso
+      # Le runner a un SECOND disque, /mnt, ~70 Go, inutilise. On y met le store
+      # docker : le rootfs et les ISO gardent / pour eux seuls.
+      - name: Docker data-root sur /mnt
+        run: |
+          sudo systemctl stop docker docker.socket containerd || true
+          # Deplacer, pas recopier : le store contient deja les images de base
+          # tirees par le runner. Si /mnt/docker existe (re-run sur le meme
+          # runner), on le garde plutot que d'ecraser un store valide.
+          [ -d /mnt/docker ] || sudo mv /var/lib/docker /mnt/docker
+          echo '{ "data-root": "/mnt/docker" }' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker info 2>/dev/null | grep -i 'docker root dir'
+          df -h / /mnt
+
+      # Un exit 143 ne dit rien de ce qui manquait. Ce temoin ecrit disque et
+      # memoire toutes les 30 s dans un fichier relu en fin de job (if: always),
+      # y compris quand l'etape de build est tuee sans un mot.
+      - name: Temoin disque/memoire
+        run: |
+          nohup bash -c 'while true; do
+            printf "[%s] / %s  /mnt %s  mem %s\n" \
+              "$(date -u +%H:%M:%S)" \
+              "$(df -h --output=avail / | tail -1 | tr -d " ")" \
+              "$(df -h --output=avail /mnt | tail -1 | tr -d " ")" \
+              "$(free -m | awk "/^Mem:/{print \$3\"/\"\$2\" Mo\"}")"
+            sleep 30
+          done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
+          echo "temoin demarre -> $RUNNER_TEMP/watchdog.log"
 
       # Les paquets hote (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
       # sont installes par build-iso.sh lui-meme.
@@ -117,6 +153,11 @@ jobs:
           # docker.io entre en conflit avec eux : apt repond « pkgProblemResolver
           # generated breaks » et build.sh s'arretait la. Rien a installer ici.
           OSMO_HOST_DOCKER: "0"
+
+      # Apres le build, tue ou non : les dernieres mesures avant la fin.
+      - name: Temoin - dernieres mesures
+        if: always()
+        run: tail -40 "$RUNNER_TEMP/watchdog.log" 2>/dev/null || echo "(pas de temoin)"
 
       - name: Checksums
         run: |
