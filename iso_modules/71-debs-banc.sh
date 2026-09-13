@@ -17,7 +17,9 @@
 # --arm : build-debs.sh compile le lanceur C et lit les binaires par ldd - sur
 # l hote ce serait du x86 etiquete arm64. Il tourne DANS le chroot, apres l apt
 # de l etape 8 (82-arm-natif).
-if [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then
+if [ "${ISO_WITH_DEBS:-1}" = "0" ]; then
+    echo -e "  ${CYAN}·${NC} --without-debs : aucun paquet .deb embarque dans l'image"
+elif [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then
     echo -e "  ${CYAN}·${NC} paquets .deb du banc : fabriques dans le chroot ${ISO_ARCH} plus loin"
 elif [ -x "$DIR/packaging/build-debs.sh" ] && command -v dpkg-deb >/dev/null 2>&1; then
     echo -e "${GREEN}[7c/9] Paquets .deb du banc...${NC}"

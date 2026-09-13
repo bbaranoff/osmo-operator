@@ -30,6 +30,10 @@ on:
         description: "Rebuild Docker images without cache (--no-cache)"
         type: boolean
         default: true
+      build_docker:
+        description: "Construire l'image de base ici, au lieu de la tirer de GHCR (--build-docker)"
+        type: boolean
+        default: false
       lite:
         description: "Build osmo-operator-lite.iso as well"
         type: boolean
@@ -145,6 +149,59 @@ jobs:
           restore-keys: |
             osmo-debs-noble-
 
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── L'image de base vient de GHCR quand elle y est deja ───────────────
+      # Le workflow Docker (docker.yml) publie osmocom-nitb:base-<empreinte>,
+      # l'empreinte etant le SHA de tout ce que le Dockerfile prend dans le
+      # contexte. MEME COMMANDE ici, au caractere pres : si elle donne la meme
+      # valeur, l'image publiee correspond exactement a ce commit, et il n'y a
+      # aucune raison de recompiler 1h23 pour la refabriquer a l'identique.
+      # build-iso.sh la tague osmocom-nitb et la chaine continue sans rien
+      # savoir de sa provenance (--skip-build, iso_modules/21-docker-build.sh).
+      #
+      # Le pull se fait ICI, sous le compte runner qui porte les identifiants
+      # GHCR - build-iso.sh tourne sous sudo, et le ~/.docker de root n'en a
+      # pas. L'image etant alors locale, le module ne retire rien.
+      - name: Image de base depuis GHCR
+        run: |
+          if [ "${{ github.event.inputs.build_docker }}" = "true" ]; then
+            echo "ISO_DOCKER_SRC=--build-docker" >> "$GITHUB_ENV"
+            echo "::notice::--build-docker demande : l'image de base sera construite ici."
+            exit 0
+          fi
+          KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
+                                helpers opt-gsm tools patches \
+                | sort | xargs sha256sum | sha256sum | cut -c1-16)
+          REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          REF="ghcr.io/${REPO}/osmocom-nitb:base-${KEY}"
+          echo "Empreinte du contexte : $KEY"
+          if docker manifest inspect "$REF" >/dev/null 2>&1; then
+            docker pull "$REF"
+            echo "ISO_DOCKER_SRC=--skip-build=$REF" >> "$GITHUB_ENV"
+            echo "::notice::Base tiree de GHCR : $REF - pas de compilation."
+            # Les .deb de l'image rejoignent le cache de l'hote : c'est la que
+            # 50-injection-image.sh va les chercher pour poser la pile dans le
+            # rootfs (il sait retomber sur l'image, mais un dpkg vaut mieux
+            # qu'un docker cp integral).
+            mkdir -p /tmp/debs-out
+            cid=$(docker create "$REF" /bin/true)
+            docker cp "$cid:/var/cache/osmo-debs/." /tmp/debs-out/ 2>/dev/null || true
+            docker rm "$cid" >/dev/null
+            cp -f /tmp/debs-out/osmo-build-*.deb /var/cache/osmo-debs/ 2>/dev/null || true
+            rm -rf /tmp/debs-out
+            echo "cache .deb : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets"
+          else
+            echo "ISO_DOCKER_SRC=" >> "$GITHUB_ENV"
+            echo "::notice::Pas de base publiee pour l'empreinte $KEY - construction locale."
+          fi
+          df -h / /mnt
+
       # Les paquets hote (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
       # sont installes par build-iso.sh lui-meme.
 
@@ -180,7 +237,7 @@ jobs:
           # root, lui, passe toujours.
           sudo env OSMO_PMOS_IMAGE_URL="$OSMO_PMOS_IMAGE_URL" \
                    OSMO_HOST_DOCKER="$OSMO_HOST_DOCKER" \
-               ./build-iso.sh $NO_CACHE --kb=us --all
+               ./build-iso.sh $NO_CACHE $ISO_DOCKER_SRC --kb=us --all
           ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
           df -h /
         env:

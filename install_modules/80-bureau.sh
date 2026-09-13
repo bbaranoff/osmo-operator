@@ -33,7 +33,7 @@ INST_DEPS[bureau]="configs"
 INST_REQUIRED[bureau]=0
 
 _BUREAU_ICONS=/usr/share/osmo-operator/icons
-_BUREAU_ENTRIES="osmo-launch"
+_BUREAU_ENTRIES="osmo-launch osmo-dino"
 
 _bureau_homes() {
     local h

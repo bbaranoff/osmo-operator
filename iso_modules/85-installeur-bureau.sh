@@ -423,8 +423,11 @@ sleep 6
 while osmo_display_vivant; do
     osmo_vivant -f "$REPO/tools/osmo-panel.py" || \
         "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
-    osmo_vivant -f "$REPO/tools/osmo-dino.py" || \
-        "$REPO/tools/osmo-dino.py" >>/tmp/osmo-dino.log 2>&1 &
+    # [2026-09-13] LE DINO N'EST PLUS SUR LE BUREAU. Il etait relance ici en
+    # boucle, en fenetre de type BUREAU collee sous le Conky. Il est maintenant
+    # une APPLICATION : data/desktop/osmo-dino.desktop, dans le menu, qui lance
+    # osmo-dino.py --app (fenetre ordinaire, page entiere, plein ecran par son
+    # propre bouton). Le bureau ne porte plus que le Conky et ses encarts.
     # la sonde d activite des timeslots (conf osmo-bsc + VTY) pour la banniere
     osmo_vivant -f "$REPO/tools/osmo-ts-probe.py" || \
         "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
@@ -455,7 +458,8 @@ X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=6
 CONKY
     chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-conky.desktop"
-    chmod +x "$ROOTFS/opt/GSM/osmo-operator/tools/conky-osmo-status.sh" \
+    chmod +x "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-dino.py" \
+             "$ROOTFS/opt/GSM/osmo-operator/tools/conky-osmo-status.sh" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-drivers.sh" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-fft-snap.py" \
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-panel.py" \
@@ -497,7 +501,7 @@ CONKY
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
               "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
-    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte; do
+    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte osmo-dino; do
         [ -f "$DIR/data/$_ic.svg" ] || continue
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"

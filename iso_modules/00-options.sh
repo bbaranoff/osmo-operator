@@ -63,6 +63,23 @@ ISO_ALL=0
 # Sert a la CI et a une machine qui n a ni le temps ni le cache .deb du build.
 ISO_SKIP_BUILD=0
 ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}"
+# --build-docker : l INVERSE de --skip-build, et il gagne. Sert quand quelque
+# chose en amont pousse un --skip-build qu on ne veut pas ici : la CI qui tire
+# l image de base depuis GHCR, un OSMO_ISO_PULL_IMAGE qui traine dans
+# l environnement, un alias. Avec lui, l image est construite localement par
+# build.sh, point. Equivalent en variable : OSMO_ISO_BUILD_DOCKER=1.
+ISO_FORCE_BUILD="${OSMO_ISO_BUILD_DOCKER:-0}"
+# --without-debs : aucune .deb NE VOYAGE dans l image. Par defaut l etape 7c
+# (71-debs-banc.sh) fabrique les paquets du banc - osmo-operator, pont,
+# qemu-calypso, calypso-firmware - et les range dans /var/cache/osmo-debs du
+# rootfs, pour qu une machine installee puisse refaire le banc sans docker ni
+# git. C est du poids mort pour qui n en fera jamais rien, et une ISO live tient
+# en RAM. Cette option les supprime, et force ISO_EMBED_DEBS=0 pour que les
+# paquets du build docker (etape 5) ne restent pas non plus : ils servent
+# toujours a POSER la pile dans le rootfs, ils n y sejournent plus.
+# Equivalent en variable : OSMO_ISO_WITHOUT_DEBS=1.
+ISO_WITH_DEBS=1
+[ "${OSMO_ISO_WITHOUT_DEBS:-0}" = "1" ] && ISO_WITH_DEBS=0
 
 # ── ARCHITECTURE : amd64 (ISO PC) ou arm64 (image SD Raspberry Pi 4) ─────────
 # --arm : la MEME pile, construite pour arm64 sur une base ARMBIAN 24.04 (le
@@ -93,7 +110,89 @@ ISO_HUB_IP="172.20.0.10"
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
 ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
 OUTPUT_SET=0
+
+# ── --help ──────────────────────────────────────────────────────────────────
+# Place AVANT le test root (plus bas dans ce module) : demander l'aide ne
+# demande pas d'etre root. Les valeurs entre crochets sont les defauts reels,
+# lus dans les variables ci-dessus - pas une copie qui derivera.
+iso_usage() {
+    # ATTENTION : les couleurs du depot (BOLD='\033[1m'...) sont faites pour
+    # `echo -e`. Un heredoc passe par `cat`, qui ne traduit rien : elles
+    # sortaient telles quelles, "\033[1mbuild-iso.sh\033[0m" en toutes lettres.
+    # $'...' (quoting ANSI-C) produit le vrai octet d'echappement des
+    # l'affectation, et le heredoc n'a plus rien a traduire.
+    local B=$'\033[1m' C=$'\033[36m' D=$'\033[2m' N=$'\033[0m'
+    cat <<EOF
+${B}build-iso.sh${N} - fabrique une ISO bootable (ou une image SD arm64) a partir
+de l'image docker osmocom-nitb. Tout passe par build.sh et start.sh.
+
+  ${B}Usage${N} : sudo ./build-iso.sh [options]
+  Sans option : les quatre images amd64 - interstp, operator, lite, desktop.
+
+${B}QUELLES IMAGES${N}
+  ${C}--role=operator|interstp${N}  le noeud complet, ou le hub SS7 seul   ${D}[${ISO_ROLE:-operator}]${N}
+  ${C}--lite${N}                    l'ISO allegee : sans les arbres de sources de /opt/GSM
+  ${C}--desktop${N}                 l'ISO avec bureau GNOME et installateur (~2,5 Go de plus)
+  ${C}--all${N}                     les quatre d'un coup (operator + lite + desktop + interstp)
+  ${C}--node=N${N}                  numero du noeud dans le plan de numerotation    ${D}[${ISO_NODE:-1}]${N}
+  ${C}--output=FICHIER${N}          nom du fichier de sortie                        ${D}[${OUTPUT:-osmo-operator-<version>.iso}]${N}
+
+${B}L'IMAGE DOCKER SOURCE${N}
+  ${C}--skip-build[=IMAGE]${N}      ne rien construire : prendre une image publiee et la
+                            taguer osmocom-nitb. Docker Hub par defaut, mais
+                            n'importe quel registre convient - GHCR compris :
+                              --skip-build=ghcr.io/<depot>/osmocom-nitb:base-<empreinte>
+                            Une image deja presente localement n'est pas retiree.
+                            ${D}[${ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}]${N}
+  ${C}--build-docker${N}            l'inverse, et il gagne sur --skip-build d'ou qu'il
+                            vienne : l'image est construite ici par build.sh.
+  ${C}--no-cache${N}                tout recompiler : cache docker ignore, .deb refaits.
+                            Sur un runner, c'est 1h23 - voir .github/workflows/.
+
+${B}CE QUI VOYAGE DANS L'IMAGE${N}
+  ${C}--without-debs${N}            aucun .deb embarque : ni les paquets du banc
+                            (osmo-operator, pont, qemu-calypso, calypso-firmware),
+                            ni ceux du build docker. Ils posent toujours la pile
+                            dans le rootfs, ils n'y restent plus.
+  ${C}--with-debs${N}               le defaut : les paquets du banc sont dans
+                            /var/cache/osmo-debs de l'image, pour un
+                            \`dpkg -i\` sans docker ni git.
+
+${B}AU DEMARRAGE DE L'IMAGE${N}
+  ${C}--banc / --no-banc${N}        activer (ou non) osmo-banc.service au boot   ${D}[${OSMO_ISO_BANC:-0}]${N}
+  ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-0}]${N}
+  ${C}--kb=LANG${N}                 disposition clavier                          ${D}[${OSMO_ISO_KB:-fr}]${N}
+
+${B}LE LIEN ENTRE NOEUDS (WAN)${N}
+  ${C}--wan${N}                     active la table WAN
+  ${C}--wan-nodes=LISTE${N}         <noeud>:<IP>:<indicatif>, separes par des espaces
+                            ${D}[${ISO_WAN_NODES_DEFAULT:-}]${N}
+  ${C}--wan-id=N${N}                numero de CE noeud dans la table
+  ${C}--wan-ops=N${N}               nombre d'operateurs sur ce noeud
+  ${C}--hub-ip=IP${N}               adresse du hub SS7
+
+${B}LA BASE${N}
+  ${C}--version=22.04|24.04${N}     suite Ubuntu du rootfs                       ${D}[${ISO_UBUNTU:-24.04}]${N}
+  --arm, --arch=arm64       image SD arm64 pour Raspberry Pi 4 (base Armbian).
+                            Ni --desktop ni --all sur cette cible. Le premier
+                            build emule aarch64 : comptez une dizaine d'heures.
+  ${C}--arch=amd64${N}              le defaut.
+
+  ${C}-h, --help${N}                ceci.
+
+${B}Equivalents en variables${N} (pour la CI, ou un environnement sans ligne de commande) :
+  OSMO_ISO_BUILD_DOCKER=1   comme --build-docker
+  OSMO_ISO_WITHOUT_DEBS=1   comme --without-debs
+  OSMO_ISO_PULL_IMAGE=REF   l'image de --skip-build
+  OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1 / OSMO_ISO_KB=fr / OSMO_ISO_VERSION=...
+  OSMO_ISO_WORK=/chemin     repertoire de travail (defaut /var/tmp, PAS /tmp qui
+                            est souvent un tmpfs : le rootfs n'y tient pas)
+  OSMO_DEB_CACHE=/chemin    cache des .deb de l'hote   ${D}[/var/cache/osmo-debs]${N}
+EOF
+}
+
 for arg in "$@"; do case "$arg" in
+    -h|--help)      iso_usage; exit 0 ;;
     --output=*)     OUTPUT="${arg#*=}"; OUTPUT_SET=1 ;;
     --no-cache)     NO_CACHE="--no-cache" ;;
     --wan)          ISO_WAN=1 ;;
@@ -129,10 +228,25 @@ for arg in "$@"; do case "$arg" in
     --all)          ISO_ALL=1 ;;
     --skip-build)   ISO_SKIP_BUILD=1 ;;
     --skip-build=*) ISO_SKIP_BUILD=1; ISO_PULL_IMAGE="${arg#*=}" ;;
+    --build-docker) ISO_FORCE_BUILD=1 ;;
+    --without-debs) ISO_WITH_DEBS=0 ;;
+    --with-debs)    ISO_WITH_DEBS=1 ;;
     --arm|--arch=arm64) ISO_ARCH=arm64 ;;
     --arch=amd64)   ISO_ARCH=amd64 ;;
     --arch=*)       echo -e "${RED}--arch : amd64 ou arm64 (recu : ${arg#*=})${NC}" >&2; exit 2 ;;
 esac; done
+
+# Arbitrage APRES la boucle, pour que l ordre des options sur la ligne de
+# commande ne decide de rien : --build-docker l emporte sur --skip-build, d ou
+# qu il vienne (ligne de commande ou variable).
+if [ "$ISO_FORCE_BUILD" = "1" ] && [ "$ISO_SKIP_BUILD" = "1" ]; then
+    echo -e "${YELLOW}--build-docker : --skip-build ignore, l image sera construite localement${NC}"
+    ISO_SKIP_BUILD=0
+fi
+# Sans .deb embarquees, celles du build docker ne restent pas non plus dans le
+# rootfs (50-injection-image.sh les efface sauf ISO_EMBED_DEBS=1).
+[ "$ISO_WITH_DEBS" = "0" ] && ISO_EMBED_DEBS=0
+export ISO_FORCE_BUILD ISO_WITH_DEBS
 
 # ── BASE UBUNTU : 22.04 (jammy) ou 24.04 (noble) ──────────────────────────────
 # Le nom de suite etait ecrit EN DUR a quatre endroits (debootstrap, les trois

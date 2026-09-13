@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Dino (Coureur d'ombres)
+Name[fr]=Dino (Coureur d'ombres)
+Comment=Le jeu du dino : Soleil, Lune et ombres calculees
+Comment[fr]=Le jeu du dino : Soleil, Lune et ombres calculees
+Exec=/opt/GSM/osmo-operator/tools/osmo-dino.py --app
+Icon=osmo-dino
+Terminal=false
+Categories=Game;ArcadeGame;
+Keywords=dino;jeu;game;coureur;ombres;

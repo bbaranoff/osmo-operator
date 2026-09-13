@@ -22,11 +22,20 @@ iso_docker_build() {
     # 31-image-source et la suite n y voient aucune difference. Le hub seul
     # (interstp) prend AUSSI cette image : osmocom-nitb porte osmo-stp, et
     # OSMO_ISO_SRC_IMAGE empeche une osmocom-stp locale de s inviter.
-    if [ "${ISO_SKIP_BUILD:-0}" = "1" ]; then
+    if [ "${ISO_SKIP_BUILD:-0}" = "1" ] && [ "${ISO_FORCE_BUILD:-0}" != "1" ]; then
         local _local="osmocom-nitb${ISO_IMG_TAG}"
-        echo -e "${GREEN}[1/9] --skip-build : pull de ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} (Docker Hub) -> ${CYAN}${_local}${NC}"
-        docker pull --platform "linux/${ISO_ARCH:-amd64}" "$ISO_PULL_IMAGE" \
-            || { echo -e "${RED}Echec du pull de ${ISO_PULL_IMAGE}${NC}" >&2; exit 1; }
+        # DEJA LA ? On ne tire pas. Le registre n est pas toujours joignable par
+        # celui qui execute : sur un runner, docker/login-action ecrit les
+        # identifiants dans le ~/.docker du compte runner, et build-iso.sh
+        # tourne sous sudo - un pull GHCR y repartirait sans jeton. L image
+        # ayant ete tiree en amont, il n y a rien a aller chercher.
+        if docker image inspect "$ISO_PULL_IMAGE" >/dev/null 2>&1; then
+            echo -e "${GREEN}[1/9] --skip-build : ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} deja presente localement -> ${CYAN}${_local}${NC}"
+        else
+            echo -e "${GREEN}[1/9] --skip-build : pull de ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} -> ${CYAN}${_local}${NC}"
+            docker pull --platform "linux/${ISO_ARCH:-amd64}" "$ISO_PULL_IMAGE" \
+                || { echo -e "${RED}Echec du pull de ${ISO_PULL_IMAGE}${NC}" >&2; exit 1; }
+        fi
         docker tag "$ISO_PULL_IMAGE" "$_local"
         export OSMO_ISO_SRC_IMAGE="$_local"
         echo -e "  ${GREEN}✓${NC} image ${_local} prete ($(docker image inspect "$_local" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"

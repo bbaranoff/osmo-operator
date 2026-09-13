@@ -16,7 +16,16 @@
 #                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
 #    --skip-build[=image:tag]   pas de build : pull bastienbaranoff/norf_gsm:latest
-#                         depuis Docker Hub, tague osmocom-nitb:latest, et continue
+#                         depuis Docker Hub (ou l'image donnee - GHCR compris),
+#                         tague osmocom-nitb:latest, et continue. Une image deja
+#                         presente localement n'est pas retiree.
+#    --build-docker       l'inverse, et il gagne : l'image est construite par
+#                         build.sh meme si un --skip-build traine par ailleurs.
+#                         Variable : OSMO_ISO_BUILD_DOCKER=1.
+#    --without-debs       aucun .deb ne voyage dans l'image : ni les paquets du
+#                         banc (etape 7c), ni ceux du build docker. Ils servent
+#                         toujours a poser la pile dans le rootfs, ils n'y
+#                         restent plus. Variable : OSMO_ISO_WITHOUT_DEBS=1.
 #    --wan --wan-nodes=... --wan-id=N --wan-ops=N --hub-ip=IP
 set -euo pipefail
 

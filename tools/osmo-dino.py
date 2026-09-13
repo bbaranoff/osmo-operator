@@ -51,7 +51,17 @@ from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 # autres (keep_below + stick + hors barre des taches) : meme rendu, et les
 # clics arrivent. Sur X11 natif (la cle live) le type BUREAU marchait : on n y
 # touche pas.
-TYPE_HINT = Gdk.WindowTypeHint.NORMAL if X11_FORCE else Gdk.WindowTypeHint.DESKTOP
+# [2026-09-13] MODE APPLICATION (--app, ou OSMO_DINO_APP=1).
+# Le dino n'est plus pose sur le bureau : il est dans le MENU DES APPLICATIONS
+# (data/desktop/osmo-dino.desktop), et s'ouvre comme n'importe quel programme.
+# Ce qui change, et c'est tout : une fenetre ORDINAIRE - decoree, redimension-
+# nable, dans la barre des taches, centree, ni collante ni maintenue dessous -
+# et la page rendue telle quelle, sans la feuille de style qui rognait le cadre
+# pour tenir dans un coin de 400x260. Le bouton plein ecran de la page, lui,
+# n'a plus a deleguer a osmo-dino-play : cette fenetre-ci PEUT s'agrandir.
+APP_MODE = os.environ.get("OSMO_DINO_APP") == "1" or "--app" in sys.argv[1:]
+
+TYPE_HINT = Gdk.WindowTypeHint.NORMAL if (X11_FORCE or APP_MODE) else Gdk.WindowTypeHint.DESKTOP
 # [2026-09-06] ... ET « EN DESSOUS » NON PLUS. Deuxieme moitie du meme piege :
 # avec _NET_WM_STATE_BELOW, GNOME Shell range la fenetre XWayland sous sa
 # propre couche de bureau (native Wayland), qui est plein ecran et prend tous
@@ -61,12 +71,12 @@ TYPE_HINT = Gdk.WindowTypeHint.NORMAL if X11_FORCE else Gdk.WindowTypeHint.DESKT
 # est le prix a payer pour qu on puisse justement cliquer dedans. Mettre
 # OSMO_DESKTOP_BELOW=1 pour retrouver l ancien comportement (fenetre sous tout,
 # clics perdus) ; sur X11 natif rien ne change.
-KEEP_BELOW = (not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1"
+KEEP_BELOW = (not APP_MODE) and ((not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1")
 
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 HTML = os.environ.get("OSMO_DINO_HTML", os.path.join(REPO, "configs/conky/dino.html"))
-WIN_W = int(os.environ.get("OSMO_DINO_W", "400"))     # meme largeur que le Conky
-WIN_H = int(os.environ.get("OSMO_DINO_H", "260"))
+WIN_W = int(os.environ.get("OSMO_DINO_W", "880" if APP_MODE else "400"))  # widget : la largeur du Conky
+WIN_H = int(os.environ.get("OSMO_DINO_H", "560" if APP_MODE else "260"))
 GAP_X = int(os.environ.get("OSMO_DINO_GAP_X", "24"))  # meme gap_x que le Conky
 GAP_Y = int(os.environ.get("OSMO_DINO_GAP_Y", "720"))  # sous le Conky, qui descend jusque vers 700
 
@@ -88,26 +98,39 @@ class Dino(Gtk.Window):
             print(f"[dino] html introuvable: {HTML}", file=sys.stderr)
             sys.exit(1)
         self.w, self.h = WIN_W, WIN_H
+        self._plein = False
 
-        # colonne haut-droite du moniteur primaire, comme le Conky (top_right)
-        disp = Gdk.Display.get_default()
-        mon = disp.get_primary_monitor() or disp.get_monitor(0)
-        g = mon.get_geometry()
-        self.x = g.x + g.width - GAP_X - self.w
-        self.y = g.y + GAP_Y
-        print(f"[dino] {self.w}x{self.h} @ {self.x},{self.y} ({HTML})", flush=True)
+        if APP_MODE:
+            # Une fenetre comme les autres : le gestionnaire de fenetres la
+            # place, la redimensionne et la range dans la barre des taches.
+            # Pas de move(), donc pas de _pin non plus - rien ne cherche a la
+            # remettre a un coin qu'elle n'a plus.
+            self.x = self.y = 0
+            print(f"[dino] application {self.w}x{self.h} ({HTML})", flush=True)
+            self.set_type_hint(TYPE_HINT)
+            self.set_default_size(self.w, self.h)
+            self.set_position(Gtk.WindowPosition.CENTER)
+            self.set_icon_name("osmo-dino")
+        else:
+            # colonne haut-droite du moniteur primaire, comme le Conky (top_right)
+            disp = Gdk.Display.get_default()
+            mon = disp.get_primary_monitor() or disp.get_monitor(0)
+            g = mon.get_geometry()
+            self.x = g.x + g.width - GAP_X - self.w
+            self.y = g.y + GAP_Y
+            print(f"[dino] {self.w}x{self.h} @ {self.x},{self.y} ({HTML})", flush=True)
 
-        # fenetre de type BUREAU (cf. osmo-panel.py / osmo-moon.py)
-        self.set_type_hint(TYPE_HINT)
-        self.set_decorated(False)
-        self.set_resizable(False)
-        self.set_keep_below(KEEP_BELOW)
-        self.set_skip_taskbar_hint(True)
-        self.set_skip_pager_hint(True)
-        self.stick()
-        self.set_default_size(self.w, self.h)
-        self.set_size_request(self.w, self.h)
-        self.move(self.x, self.y)
+            # fenetre de type BUREAU (cf. osmo-panel.py / osmo-moon.py)
+            self.set_type_hint(TYPE_HINT)
+            self.set_decorated(False)
+            self.set_resizable(False)
+            self.set_keep_below(KEEP_BELOW)
+            self.set_skip_taskbar_hint(True)
+            self.set_skip_pager_hint(True)
+            self.stick()
+            self.set_default_size(self.w, self.h)
+            self.set_size_request(self.w, self.h)
+            self.move(self.x, self.y)
 
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
@@ -119,16 +142,23 @@ class Dino(Gtk.Window):
         # WebView : feuille de style injectee (masque header/footer) + fond
         # transparent (le corps de la page reste sombre, c'est voulu).
         ucm = WebKit2.UserContentManager()
-        ucm.add_style_sheet(WebKit2.UserStyleSheet(
-            INJECT_CSS, WebKit2.UserContentInjectedFrames.ALL_FRAMES,
-            WebKit2.UserStyleLevel.USER, None, None))
+        # La feuille de style ne sert qu'au widget : elle masque header et pied
+        # de page pour ne garder que le cadre du jeu dans 400x260. En
+        # application, la page s'affiche entiere, comme dans un navigateur.
+        if not APP_MODE:
+            ucm.add_style_sheet(WebKit2.UserStyleSheet(
+                INJECT_CSS, WebKit2.UserContentInjectedFrames.ALL_FRAMES,
+                WebKit2.UserStyleLevel.USER, None, None))
         # [2026-09-07] LE BOUTON PLEIN ECRAN DU WIDGET. Une page ne peut pas
         # agrandir une fenetre GTK, et ce widget de 400x260 n a de toute facon
         # rien a agrandir : c est un coin du bureau. La page se sait donc
         # « widget » (OSMO_HOST) et, au clic, nous envoie un message WebKit -
         # on ouvre alors le VRAI jeu, en plein ecran, dans sa propre fenetre.
+        # 'widget' fait deleguer le plein ecran (la page le sait : dino.html
+        # l.519). En application, l'hote PEUT s'agrandir : on annonce 'app', et
+        # le message {full:...} est traite plus bas par _on_message.
         ucm.add_script(WebKit2.UserScript(
-            "window.OSMO_HOST='widget';",
+            "window.OSMO_HOST='app';" if APP_MODE else "window.OSMO_HOST='widget';",
             WebKit2.UserContentInjectedFrames.ALL_FRAMES,
             WebKit2.UserScriptInjectionTime.START, None, None))
         ucm.connect("script-message-received::osmo", self._on_message)
@@ -140,9 +170,10 @@ class Dino(Gtk.Window):
 
         self.show_all()
         self._pos = (self.x, self.y)
-        self._pin()
-        self.connect("map-event", self._pin)
-        GLib.timeout_add(500, self._pin)
+        if not APP_MODE:
+            self._pin()
+            self.connect("map-event", self._pin)
+            GLib.timeout_add(500, self._pin)
 
     # [2026-09-06] SE REPOSER APRES COUP. Meme sous X11, le gestionnaire de
     # fenetres peut deplacer la fenetre au moment ou il la mappe (mutter le
@@ -153,8 +184,18 @@ class Dino(Gtk.Window):
         self.move(*self._pos)
         return False
 
-    def _on_message(self, _ucm, _result):
-        """{full:true} : le jeu en grand, dans sa fenetre a lui."""
+    def _on_message(self, _ucm, result):
+        """{full:...} : en application, CETTE fenetre ; en widget, celle du jeu."""
+        if APP_MODE:
+            # La page envoie {full:true} ou {full:false} - on suit.
+            try:
+                val = result.get_js_value()
+                plein = bool(val.object_get_property("full").to_boolean())
+            except Exception:
+                plein = not self._plein
+            self._plein = plein
+            self.fullscreen() if plein else self.unfullscreen()
+            return
         for cand in ("/usr/local/bin/osmo-dino-play",):
             if os.path.exists(cand):
                 subprocess.Popen([cand, "--fullscreen"], stdin=subprocess.DEVNULL,

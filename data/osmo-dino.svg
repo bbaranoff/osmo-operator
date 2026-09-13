@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- osmo-dino.svg - le coureur, en pixels de 4 px sur une grille de 16.
+       Gris #535353 : le meme sur un menu clair et sur un dock sombre, sans
+       avoir a fournir deux variantes. Le cadre reste transparent. -->
+  <g fill="#535353" shape-rendering="crispEdges">
+    <!-- tete et museau -->
+    <rect x="36" y="8"  width="20" height="16"/>
+    <rect x="52" y="20" width="8"  height="4"/>
+    <!-- cou -->
+    <rect x="36" y="24" width="12" height="8"/>
+    <!-- corps -->
+    <rect x="16" y="28" width="32" height="16"/>
+    <!-- queue -->
+    <rect x="8"  y="24" width="12" height="8"/>
+    <rect x="4"  y="28" width="8"  height="4"/>
+    <!-- bras -->
+    <rect x="32" y="36" width="8"  height="4"/>
+    <!-- pattes : l'une posee, l'autre levee - il court -->
+    <rect x="20" y="44" width="8"  height="12"/>
+    <rect x="16" y="52" width="12" height="4"/>
+    <rect x="36" y="44" width="8"  height="8"/>
+  </g>
+  <!-- l'oeil : un trou dans la tete, pas un point clair pose dessus -->
+  <rect x="48" y="12" width="4" height="4" fill="#fff"/>
+</svg>
