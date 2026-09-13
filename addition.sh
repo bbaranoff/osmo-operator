@@ -22,14 +22,18 @@
 #                                 (exclusif). osmocom-run est derivee dans la
 #                                 foulee : start-multi.sh demarre juste apres.
 #   sudo ./addition.sh --multi    le meme, sans la fenetre : image TELECHARGEE
-#                                 (docker pull bastienbaranoff/norf_gsm, taguee
-#                                 osmocom-nitb)
+#                                 (docker pull ghcr.io/<depot>/osmocom-nitb,
+#                                 taguee osmocom-nitb)
 #   sudo ./addition.sh --multi-build
-#                                 le meme, image COMPILEE sur place (build.sh,
-#                                 plusieurs dizaines de minutes)
+#                                 le meme. [2026-09-13] Ce drapeau ne COMPILE
+#                                 plus : il tire lui aussi l image du depot,
+#                                 que la CI publie a partir du meme Dockerfile.
+#                                 Pour compiler vraiment (Dockerfile modifie,
+#                                 rien de publie) :
+#                                   OSMO_ADDITION_BUILD_LOCAL=1 ... --multi-build
 #   sudo ./addition.sh --docker   le moteur de conteneurs seul   (depannage)
 #   sudo ./addition.sh --image    l image operateur seule, telechargee (depannage)
-#   sudo ./addition.sh --build    l image operateur seule, compilee  (depannage)
+#   sudo ./addition.sh --build    l image operateur seule, du depot   (depannage)
 #   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --extras   Jeux + media (Doom, Quake, OpenRA, Kodi,
@@ -52,13 +56,19 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 # IMAGE DE BASE ET SON ORIGINE. osmocom-nitb est ce que build.sh COMPILE
-# (~40 min) ; la meme pile est publiee sur le hub sous bastienbaranoff/norf_gsm.
-# Par defaut on la TIRE et on la tague osmocom-nitb : start.sh en derive ensuite
-# osmocom-run via Dockerfile.run exactement comme apres un build local.
-# Les deux chemins sont EXCLUSIFS et choisis explicitement (fenetre ou
-# drapeau) : pas de repli silencieux de l un vers l autre.
+# (~40 min sur une bonne machine, 1h23 sur un runner). On la TIRE et on la tague
+# osmocom-nitb : start.sh en derive ensuite osmocom-run via Dockerfile.run
+# exactement comme apres un build local.
+#
+# [2026-09-13] LA SOURCE EST GHCR, PLUS DOCKER HUB. .github/workflows/docker.yml
+# publie l'image a chaque push sur ghcr.io/<depot>/osmocom-nitb - c'est la MEME
+# pile, construite par la CI a partir du MEME Dockerfile, et elle suit le depot
+# au lieu de dependre d'un compte Hub tenu a la main. bastienbaranoff/norf_gsm
+# reste joignable en posant HUB_IMAGE.
+#   :latest      la derniere publiee (defaut)
+#   :base-<sha>  une empreinte de contexte precise, si on veut figer
 BASE_IMAGE="${BASE_IMAGE:-osmocom-nitb}"
-HUB_IMAGE="${HUB_IMAGE:-bastienbaranoff/norf_gsm}"
+HUB_IMAGE="${HUB_IMAGE:-ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest}"
 
 # ── _trust_desktop : rendre un raccourci du bureau VISIBLE par DING ──────────
 # DING n affiche un .desktop avec son nom et son icone que s il est executable,
@@ -308,9 +318,9 @@ if [ "$ANY_FLAG" = "0" ]; then
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
         # L ORIGINE DE L IMAGE : une seconde fenetre, en BOUTONS RADIO.
-        # Telecharger et compiler sont exclusifs par construction - un radiolist
-        # ne rend qu une valeur, il n y a pas de "les deux" a rattraper apres
-        # coup comme avec des cases a cocher.
+        # Deux sources exclusives par construction - un radiolist ne rend qu une
+        # valeur, il n y a pas de "les deux" a rattraper apres coup comme avec
+        # des cases a cocher.
         if [ "$DO_MULTI" = "1" ]; then
             _orig=$(zenity --list --radiolist --width=680 --height=260 \
                 --title="osmo-operator - image operateur" \
@@ -318,11 +328,17 @@ if [ "$ANY_FLAG" = "0" ]; then
                 --ok-label="Continuer" --cancel-label="Fermer" \
                 --column="" --column="cle" --column="Origine" \
                 --hide-column=2 --print-column=2 \
-                TRUE  dl    "TELECHARGER - docker pull ${HUB_IMAGE} (quelques minutes selon le debit)" \
-                FALSE build "COMPILER sur place - build.sh, compilation Osmocom (plusieurs dizaines de minutes)" \
+                TRUE  dl    "LE DEPOT (GHCR) - ${HUB_IMAGE}, publiee par la CI a chaque push" \
+                FALSE hub   "DOCKER HUB - bastienbaranoff/norf_gsm, la pile publiee a la main" \
                 2>/dev/null) || { echo "Annule."; exit 0; }
+            # [2026-09-13] LES DEUX CHOIX SONT DEUX SOURCES, PLUS « TIRER OU
+            # COMPILER ». Compiler sur place refaisait, en dizaines de minutes,
+            # exactement ce que la CI publie a partir du meme Dockerfile : ce
+            # n'etait pas une origine, c'etait une attente. Le build local
+            # existe toujours, mais il se demande explicitement
+            # (OSMO_ADDITION_BUILD_LOCAL=1), pas par un bouton radio.
             case "$_orig" in
-                build) DO_BUILD=1 ;;
+                hub)   DO_BUILD=0; HUB_IMAGE="bastienbaranoff/norf_gsm" ;;
                 dl)    DO_BUILD=0 ;;
                 *)     echo "Aucune origine choisie."; exit 0 ;;
             esac
@@ -860,7 +876,23 @@ fi
 #      gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
 #      github casse de libosmocore) et les rejouait a l identique - un build
 #      deja casse restait casse a chaque passage. On force la reconstruction.
+# [2026-09-13] COMPILER, C EST DESORMAIS TIRER DE GHCR.
+# --build / --multi-build compilaient sur place : plusieurs dizaines de minutes
+# de pile Osmocom, sur la machine de l operateur, pour obtenir exactement ce
+# que la CI vient de publier a partir du meme Dockerfile. Le resultat est le
+# meme a l octet pres quand le depot n a pas bouge ; le temps, non. Ces deux
+# drapeaux font donc le pull, et gardent leur sens : « prends l image de CE
+# depot », par opposition a une image du Hub.
+# Le vrai build local reste accessible - il le faut, c est le seul chemin quand
+# on a MODIFIE le Dockerfile et qu'aucune CI n a encore publie :
+#     sudo OSMO_ADDITION_BUILD_LOCAL=1 ./addition.sh --multi-build
 _build_image() {
+    if [ "${OSMO_ADDITION_BUILD_LOCAL:-0}" != "1" ]; then
+        echo -e "  ${CYAN}→${NC} image du depot : ${BOLD}docker pull ${HUB_IMAGE}${NC}"
+        echo -e "      (build local : ${BOLD}OSMO_ADDITION_BUILD_LOCAL=1${NC}, plusieurs dizaines de minutes)"
+        _pull_image
+        return $?
+    fi
     [ -x "$DIR/build.sh" ] || { echo -e "  ${RED}✗ build.sh introuvable dans $DIR${NC}"; return 1; }
     echo -e "  ${CYAN}→${NC} construction de l image : ${BOLD}${DIR}/build.sh --no-cache${NC}"
     echo -e "      compilation Osmocom - comptez plusieurs dizaines de minutes."
@@ -869,11 +901,21 @@ _build_image() {
 }
 _pull_image() {
     echo -e "  ${CYAN}→${NC} telechargement de l image : ${BOLD}docker pull ${HUB_IMAGE}${NC}"
-    echo -e "      ~11 Go depuis le hub - selon le debit, quelques minutes a une heure."
-    docker pull "$HUB_IMAGE" || { echo -e "  ${RED}✗ docker pull ${HUB_IMAGE} a echoue${NC} - reseau, ou image absente du hub"
-                                  echo -e "    Alternative : compiler sur place avec ${BOLD}$0 --multi-build${NC}"; return 1; }
+    echo -e "      ~11 Go - selon le debit, quelques minutes a une heure."
+    # GHCR sert les images PUBLIQUES sans authentification. Si le paquet du
+    # depot est prive, il faut un jeton : docker login ghcr.io -u <compte>
+    # (jeton classique avec read:packages). Le message le dit plutot que de
+    # laisser l operateur devant un "denied" sans explication.
+    docker pull "$HUB_IMAGE" || {
+        echo -e "  ${RED}✗ docker pull ${HUB_IMAGE} a echoue${NC} - reseau, image absente, ou paquet prive."
+        case "$HUB_IMAGE" in ghcr.io/*)
+            echo -e "    Paquet prive ? ${BOLD}docker login ghcr.io -u <compte>${NC} (jeton avec read:packages)" ;;
+        esac
+        echo -e "    Autre image : ${BOLD}HUB_IMAGE=<ref> $0 --multi${NC}"
+        echo -e "    Compiler sur place : ${BOLD}OSMO_ADDITION_BUILD_LOCAL=1 $0 --multi-build${NC}"
+        return 1; }
     docker tag "$HUB_IMAGE" "$BASE_IMAGE" || { echo -e "  ${RED}✗ docker tag ${HUB_IMAGE} ${BASE_IMAGE} a echoue${NC}"; return 1; }
-    echo -e "  ${GREEN}✓${NC} image operateur tiree du hub et taguee ${BASE_IMAGE}"
+    echo -e "  ${GREEN}✓${NC} image operateur tiree et taguee ${BASE_IMAGE}"
 }
 # L IMAGE QUE LE MULTI-OPERATEUR LANCE EST osmocom-run, PAS osmocom-nitb.
 # Ni le pull ni build.sh ne la produisent : c est Dockerfile.run (FROM

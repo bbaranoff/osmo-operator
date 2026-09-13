@@ -109,6 +109,25 @@ ISO_HUB_IP="172.20.0.10"
 # sans terminal - la CI - s'arretait a l'etape 7b sur une question que personne
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
 ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
+
+# ── LE MULTI-OPERATEUR EST ACTIF PAR DEFAUT ─────────────────────────────────
+# [2026-09-13] osmo-multi.service est desormais ACTIVE au boot des l'ISO, sans
+# avoir a passer --multi. Ce que cela change, exactement : plus rien a faire
+# apres addition.sh. L'unite est la, activee ; le jour ou l'operateur installe
+# le supplement multi-operateur (docker, l'image, et la topologie
+# /etc/osmocom/osmo-multi.conf qu'ecrit addition.sh), le banc multi repart a
+# CHAQUE demarrage au lieu de demander un `systemctl enable` de plus.
+# Ce que cela ne change pas : sans cette topologie, l'unite a une Condition qui
+# la fait SAUTER - proprement, sans echec et sans message d'erreur au boot
+# (cf. data/desktop/osmo-multi.desktop et launch.sh l.192). Activer par defaut
+# ne demarre donc rien tant que le supplement n'est pas la : ca supprime un
+# geste, ca n'en impose aucun.
+# osmo-banc, lui, garde son defaut a 0 : un banc se demarre, c'est le geste de
+# l'operateur (82-services.sh l.165).
+# --no-multi (ou OSMO_ISO_MULTI=0) revient a l'ancien comportement.
+OSMO_ISO_MULTI="${OSMO_ISO_MULTI:-1}"
+export OSMO_ISO_MULTI
+
 OUTPUT_SET=0
 
 # ── --help ──────────────────────────────────────────────────────────────────
@@ -160,7 +179,7 @@ ${B}CE QUI VOYAGE DANS L'IMAGE${N}
 
 ${B}AU DEMARRAGE DE L'IMAGE${N}
   ${C}--banc / --no-banc${N}        activer (ou non) osmo-banc.service au boot   ${D}[${OSMO_ISO_BANC:-0}]${N}
-  ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-0}]${N}
+  ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-1}]${N}
   ${C}--kb=LANG${N}                 disposition clavier                          ${D}[${OSMO_ISO_KB:-fr}]${N}
 
 ${B}LE LIEN ENTRE NOEUDS (WAN)${N}
