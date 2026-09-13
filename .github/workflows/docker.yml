@@ -96,7 +96,47 @@ jobs:
           sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
             'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
           sudo apt-get autoremove -y && sudo apt-get clean
-          df -h /
+          # le runner arrive avec plusieurs images deja tirees : autant de Go
+          # occupes dans /var/lib/docker dont ce build n'a aucun usage.
+          docker system prune -af --volumes
+          df -h / /mnt
+
+      # LA correction du exit 143. /var/lib/docker vit sur / , qui n'offre
+      # qu'une trentaine de Go libres. A "exporting layers" buildkit detient en
+      # meme temps ses 75 snapshots ET ecrit l'image finale : deux fois 11 Go.
+      # Le disque sature, le runner part avant dockerd, et l'etape recoit un
+      # SIGTERM au lieu d'un "no space left on device". /mnt est un second
+      # disque d'environ 70 Go quasiment vide - c'est la que docker doit vivre.
+      - name: Move docker data-root to /mnt
+        run: |
+          # si le runner n'expose pas de disque ephemere, on ne deplace rien :
+          # mieux vaut le build d'avant que docker sur un /mnt qui est en fait /.
+          AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
+          if [ "${AVAIL:-0}" -lt 40 ]; then
+            echo "/mnt indisponible ou trop petit (${AVAIL:-0} Go) - on reste sur /"
+            df -h /; exit 0
+          fi
+          sudo systemctl stop docker.service docker.socket
+          sudo mkdir -p /mnt/docker
+          sudo mv /var/lib/docker/* /mnt/docker/ 2>/dev/null || true
+          # daemon.json existe deja sur le runner : on ajoute la cle, on ne
+          # remplace pas le fichier.
+          sudo jq '. + {"data-root":"/mnt/docker"}' /etc/docker/daemon.json \
+            > /tmp/daemon.json 2>/dev/null \
+            || echo '{"data-root":"/mnt/docker"}' > /tmp/daemon.json
+          sudo mv /tmp/daemon.json /etc/docker/daemon.json
+          sudo systemctl start docker.service
+          docker info -f 'data-root = {{.DockerRootDir}}'
+          df -h / /mnt
+
+      # Trace de l'occupation disque pendant toute la duree du job : si un jour
+      # ca retombe, la ligne d'avant le SIGTERM dira si c'etait encore le disque.
+      - name: Disk watchdog
+        run: |
+          nohup bash -c 'while true; do
+            echo "$(date +%T)  / $(df -h --output=avail / | tail -1)  /mnt $(df -h --output=avail /mnt | tail -1)  mem $(free -m | awk "/Mem:/{print \$7}")M"
+            sleep 30
+          done' > /tmp/disk.log 2>&1 &
 
       - name: Image name
         id: img
@@ -114,12 +154,37 @@ jobs:
       - name: Build osmocom-nitb (base)
         run: |
           docker build -t osmocom-nitb .
-          df -h /
+          # les snapshots buildkit font double emploi avec l'image maintenant
+          # exportee ; les etages suivants partent de l'image, pas du cache.
+          docker builder prune -af
+          df -h / /mnt
 
       - name: Build osmo-operator
         run: |
           docker build -f Dockerfile.run -t osmo-operator:ci .
+          docker builder prune -af
           docker images --format '  {{.Repository}}:{{.Tag}} {{.Size}}' | head -5
+          df -h / /mnt
+
+      # osmo-operator part vers GHCR tout de suite : garder trois images
+      # completes en meme temps sur le disque n'a aucun interet, et l'image
+      # lite qui suit a besoin de la place (FROM scratch + COPY / = une copie
+      # entiere de plus).
+      - name: Push osmo-operator
+        if: github.event_name != 'pull_request'
+        env:
+          BASE: ${{ env.REGISTRY }}/${{ steps.img.outputs.repo }}
+        run: |
+          TAGS="sha-${GITHUB_SHA::7}"
+          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS="$TAGS ${GITHUB_REF_NAME}"
+          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS="$TAGS latest"
+          for t in $TAGS; do
+            docker tag osmo-operator:ci "$BASE/osmo-operator:$t"
+            docker push "$BASE/osmo-operator:$t"
+            docker image rm "$BASE/osmo-operator:$t"
+          done
+          docker image rm osmo-operator:ci || true
+          df -h / /mnt
 
       # L'image lite se deduit de la base : Dockerfile.lite elague /opt/GSM puis
       # aplatit le resultat (effacer dans une couche de plus ne rend rien).
@@ -130,8 +195,9 @@ jobs:
           echo "--- tailles comparees ---"
           docker images --format '  {{.Repository}}:{{.Tag}}\t{{.Size}}' \
             | grep -E 'osmocom-nitb|osmo-operator' || true
+          df -h / /mnt
 
-      - name: Push osmo-operator and osmo-operator-lite
+      - name: Push osmo-operator-lite
         if: github.event_name != 'pull_request'
         env:
           BASE: ${{ env.REGISTRY }}/${{ steps.img.outputs.repo }}
@@ -139,9 +205,14 @@ jobs:
           TAGS="sha-${GITHUB_SHA::7}"
           [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS="$TAGS ${GITHUB_REF_NAME}"
           [ "${GITHUB_REF_NAME}" = "main" ] && TAGS="$TAGS latest"
-          for name in osmo-operator osmo-operator-lite; do
-            for t in $TAGS; do
-              docker tag "${name}:ci" "$BASE/${name}:$t"
-              docker push "$BASE/${name}:$t"
-            done
+          for t in $TAGS; do
+            docker tag osmo-operator-lite:ci "$BASE/osmo-operator-lite:$t"
+            docker push "$BASE/osmo-operator-lite:$t"
           done
+
+      # Meme quand le job tombe - surtout quand il tombe.
+      - name: Disk report
+        if: always()
+        run: |
+          tail -40 /tmp/disk.log || true
+          df -h / /mnt || true
