@@ -41,7 +41,17 @@ on:
 
 jobs:
   build-iso:
-    runs-on: ubuntu-22.04
+    # [2026-09-13] noble, PAS jammy. L'ISO et le Dockerfile sont en 24.04
+    # (ISO_UBUNTU par defaut dans iso_modules/00-options.sh, FROM ubuntu:24.04),
+    # mais le runner etait en 22.04 : l'hote du build etait donc d'une suite
+    # differente de ce qu'il construit. Deux consequences concretes -
+    #   - le debootstrap de jammy ne connait pas « noble » : 40-rootfs.sh s'en
+    #     tire en liant le script gutsy, mais c'est un contournement ;
+    #   - packaging/osmo-deb.sh lit VERSION_CODENAME de l'HOTE pour nommer les
+    #     .deb : tout ce qui se compile cote hote sortait en « ~jammy », et un
+    #     .deb jammy n'est jamais pose sur un rootfs noble (osmo-deb.sh:43).
+    # Un runner noble aligne les trois.
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
       contents: write
