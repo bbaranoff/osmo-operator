@@ -122,10 +122,36 @@ apt-fast update -qq || true
 # 3. Docker, docker compose v2 et buildx : TOUJOURS dans les dependances.
 #    (Avant, compose n etait pose qu avec docker, quand docker manquait : un
 #    hote qui avait deja docker.io ne l obtenait jamais.)
+#
+# [2026-09-13] MAIS JAMAIS docker.io SI DOCKER EST DEJA LA. Sur un runner
+# GitHub - et sur tout hote qui suit le depot Docker - docker vient de
+# docker-ce + containerd.io ; docker.io entre en conflit avec les deux, apt
+# repond « pkgProblemResolver::Resolve generated breaks », les DEUX lignes de
+# repli contenaient docker.io, et le job mourait sur « docker /
+# docker-compose-v2 non installables » alors que docker ET compose v2
+# marchaient parfaitement. iso_modules/20-hote.sh a toujours eu cette garde
+# (iso_host_docker, « UNIQUEMENT SI ABSENT ») ; build.sh l avait perdue en
+# rendant compose inconditionnel. On ne complete donc que ce qui MANQUE, et
+# on accepte les deux nommages : docker-compose-v2 / docker-buildx (Ubuntu)
+# et docker-compose-plugin / docker-buildx-plugin (depot Docker).
 echo "[*] Docker + docker compose v2 + buildx..."
-apt-fast install -y --no-install-recommends docker.io docker-compose-v2 docker-buildx \
-    || apt-fast install -y --no-install-recommends docker.io docker-compose-v2 \
-    || { echo -e "${RED}[ERREUR] docker / docker-compose-v2 non installables.${NC}"; exit 1; }
+if command -v docker >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK] docker deja installe ($(docker --version 2>/dev/null || echo version inconnue)) - pas touche${NC}"
+    docker info >/dev/null 2>&1 || systemctl start docker >/dev/null 2>&1 || true
+    docker compose version >/dev/null 2>&1 \
+        || apt-fast install -y --no-install-recommends docker-compose-v2 \
+        || apt-fast install -y --no-install-recommends docker-compose-plugin \
+        || echo -e "${YELLOW}[WARN] docker present mais pas de compose v2 : compose.sh basculera sur docker build${NC}"
+    docker buildx version >/dev/null 2>&1 \
+        || apt-fast install -y --no-install-recommends docker-buildx \
+        || apt-fast install -y --no-install-recommends docker-buildx-plugin \
+        || echo -e "${YELLOW}[WARN] buildx absent : --arch=arm64 ne marchera pas sur cet hote${NC}"
+else
+    apt-fast install -y --no-install-recommends docker.io docker-compose-v2 docker-buildx \
+        || apt-fast install -y --no-install-recommends docker.io docker-compose-v2 \
+        || apt-fast install -y --no-install-recommends docker.io \
+        || { echo -e "${RED}[ERREUR] docker / docker-compose-v2 non installables.${NC}"; exit 1; }
+fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 HAVE_COMPOSE=0
 docker compose version >/dev/null 2>&1 && HAVE_COMPOSE=1
