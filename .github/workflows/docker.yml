@@ -138,6 +138,28 @@ jobs:
             sleep 30
           done' > /tmp/disk.log 2>&1 &
 
+      # ── Le cache .deb entre deux runs ───────────────────────────────────
+      # Ce que le Dockerfile compile sort en paquet .deb dans
+      # /var/cache/osmo-debs (packaging/osmo-deb.sh), et il le relit par
+      # `COPY .deb-cache/ /var/cache/osmo-debs/`. Sur l'hote, build.sh fait la
+      # navette entre les deux ; ici on n'appelle pas build.sh, donc on la fait
+      # a la main : semer .deb-cache/ avant le build, recolter apres. C'est ce
+      # qui transforme les 51 RUN de compilation en autant de `dpkg -i`.
+      # OSMO_DEB_REFRESH n'est pas passe : sa valeur par defaut (Dockerfile:166)
+      # est 0, donc le cache est utilise. Ne pas y toucher ici.
+      - name: Preparer le cache .deb
+        run: |
+          sudo mkdir -p /var/cache/osmo-debs
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs
+
+      - name: Cache .deb (osmo-deb)
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/osmo-debs
+          key: osmo-debs-noble-${{ github.run_id }}-operator
+          restore-keys: |
+            osmo-debs-noble-
+
       - name: Image name
         id: img
         run: echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
@@ -150,10 +172,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # L'etage du bas : toute la compilation. C'est lui qui prend les heures.
+      # L'etage du bas : toute la compilation. C'est lui qui prend les heures -
+      # la premiere fois. Ensuite, le cache .deb rend la plupart des etapes a
+      # une pose de paquet.
       - name: Build osmocom-nitb (base)
         run: |
+          mkdir -p .deb-cache
+          cp -f /var/cache/osmo-debs/osmo-build-*.deb .deb-cache/ 2>/dev/null || true
+          echo "cache .deb en entree : $(find .deb-cache -name 'osmo-build-*.deb' | wc -l) paquets"
           docker build -t osmocom-nitb .
+          # Recolte : les paquets que l'image vient de produire repartent dans
+          # le cache du runner, que actions/cache sauvegardera en fin de job.
+          # Equivalent de debs_from_image() (build.sh:309).
+          mkdir -p /tmp/debs-out
+          cid=$(docker create osmocom-nitb /bin/true)
+          docker cp "$cid:/var/cache/osmo-debs/." /tmp/debs-out/ 2>/dev/null || true
+          docker rm "$cid" >/dev/null
+          cp -f /tmp/debs-out/osmo-build-*.deb /var/cache/osmo-debs/ 2>/dev/null || true
+          rm -rf /tmp/debs-out .deb-cache/*.deb
+          echo "cache .deb en sortie : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh /var/cache/osmo-debs | cut -f1)"
           # les snapshots buildkit font double emploi avec l'image maintenant
           # exportee ; les etages suivants partent de l'image, pas du cache.
           docker builder prune -af

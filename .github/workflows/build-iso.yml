@@ -115,6 +115,36 @@ jobs:
           done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
           echo "temoin demarre -> $RUNNER_TEMP/watchdog.log"
 
+      # ── Le cache .deb entre deux runs ───────────────────────────────────
+      # Ce que le Dockerfile compile (libosmocore, osmo-*, gnuradio, gr-gsm,
+      # QEMU, osmocom-bb, pmbootstrap...) sort en paquet .deb dans
+      # /var/cache/osmo-debs (packaging/osmo-deb.sh). build.sh recopie ce
+      # dossier dans .deb-cache/ AVANT le build - le Dockerfile le prend par
+      # `COPY .deb-cache/ /var/cache/osmo-debs/` - et y remet APRES les paquets
+      # que l'image vient de produire (debs_from_image). Sur l'hote c'est ce
+      # qui fait passer un rebuild de 1h23 a quelques minutes ; un runner,
+      # lui, repart vierge a chaque fois. On lui rend la memoire.
+      #
+      # Le dossier appartient a root (build.sh tourne sous sudo) : il faut le
+      # creer AVANT que actions/cache y ecrive, et le rendre au runner APRES
+      # le build pour que le post-step puisse le relire.
+      - name: Preparer le cache .deb
+        run: |
+          sudo mkdir -p /var/cache/osmo-debs
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs
+
+      - name: Cache .deb (osmo-deb)
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/osmo-debs
+          # cle roulante : toujours unique a l'ecriture (donc toujours
+          # sauvegardee), la plus recente reprise a la lecture. Les .deb portent
+          # leur nom et leur version, osmo-deb.sh trie : un cache d'hier reste
+          # valable pour tout ce qui n'a pas bouge.
+          key: osmo-debs-noble-${{ github.run_id }}
+          restore-keys: |
+            osmo-debs-noble-
+
       # Les paquets hote (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
       # sont installes par build-iso.sh lui-meme.
 
@@ -129,10 +159,16 @@ jobs:
       - name: Build all ISOs (--all)
         run: |
           chmod +x build-iso.sh
-          sudo docker builder prune -af || true
           df -h /
-          NO_CACHE="--no-cache"
-          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
+          # [2026-09-13] DEFAUT INVERSE. C'etait NO_CACHE="--no-cache" avec un
+          # repli sur "" quand l'entree valait "false" - mais sur un push les
+          # entrees de workflow_dispatch sont VIDES, jamais "false" : chaque
+          # push forcait donc --no-cache, donc OSMO_DEB_REFRESH=1, donc les 51
+          # RUN de compilation refaits integralement. 1h23 a chaque fois, pour
+          # des sources qui n'avaient pas bouge. Le plein rebuild reste
+          # accessible, mais il se demande.
+          NO_CACHE=""
+          [ "${{ github.event.inputs.no_cache }}" = "true" ] && NO_CACHE="--no-cache"
           # L'image de la VM postmarketOS (qemu-amd64.img.zst, 1,7 Go) n'existe
           # pas sur un runner : 88-lte-pmos.sh la telecharge depuis l'asset de
           # Release quand on lui donne l'URL. UNE fois telechargee, elle est
@@ -153,6 +189,15 @@ jobs:
           # docker.io entre en conflit avec eux : apt repond « pkgProblemResolver
           # generated breaks » et build.sh s'arretait la. Rien a installer ici.
           OSMO_HOST_DOCKER: "0"
+
+      # build.sh a tourne sous sudo : les .deb qu'il vient de deposer sont a
+      # root, et le post-step d'actions/cache tourne en runner. Sans ce chown,
+      # la sauvegarde du cache echoue en silence et le run suivant recompile.
+      - name: Rendre le cache .deb au runner
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs 2>/dev/null || true
+          echo "$(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh /var/cache/osmo-debs | cut -f1)"
 
       # Apres le build, tue ou non : les dernieres mesures avant la fin.
       - name: Temoin - dernieres mesures
