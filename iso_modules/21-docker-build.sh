@@ -73,9 +73,12 @@ iso_docker_build() {
     else
         echo -e "${YELLOW}build.sh introuvable, construction manuelle de l'image osmocom-nitb...${NC}"
         if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-            docker buildx build --platform linux/arm64 --load $NO_CACHE -t "osmocom-nitb${ISO_IMG_TAG}" "$DIR"
+            # --target : Dockerfile finit par l etape `debs` (cache .deb pour
+            # la CI), pas par osmocom-nitb. Sans lui, image vide.
+            docker buildx build --platform linux/arm64 --load $NO_CACHE \
+                --target osmocom-nitb -t "osmocom-nitb${ISO_IMG_TAG}" "$DIR"
         else
-            docker build $NO_CACHE -t osmocom-nitb "$DIR"
+            docker build $NO_CACHE --target osmocom-nitb -t osmocom-nitb "$DIR"
         fi
     fi
     echo -e "  ${GREEN}✓${NC} image osmocom-nitb${ISO_IMG_TAG} prete"

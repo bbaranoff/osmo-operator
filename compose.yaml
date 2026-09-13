@@ -41,6 +41,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # OBLIGATOIRE : Dockerfile se termine par l'etape `debs` (le cache .deb
+      # seul, pour la CI), qui serait la cible par defaut. Sans ce target,
+      # `docker compose build nitb` sort une image vide.
+      target: osmocom-nitb
       args:
         OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
         OSMO_UBUNTU_MIRROR: ${OSMO_UBUNTU_MIRROR:-}

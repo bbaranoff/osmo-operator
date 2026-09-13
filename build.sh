@@ -287,17 +287,26 @@ export OSMO_DEB_REFRESH
 #   $1 = service (nitb|run|lite|stp)   $2 = image   $3 = Dockerfile   $4.. = build-args
 compose_build() {
     local svc="$1" image="$2" dockerfile="$3"; shift 3
+    # Dockerfile (nitb) ne se termine PLUS par l etape osmocom-nitb : l etape
+    # `debs` la suit, qui n exporte que le cache .deb pour la CI. Sans --target
+    # docker batirait celle-la. Les autres Dockerfile n ont qu une cible utile,
+    # qui est deja la derniere - rien a leur passer. compose.yaml porte le meme
+    # target sur son service nitb, pour la branche compose ci-dessous.
+    local target=()
+    [ "$svc" = nitb ] && target=(--target osmocom-nitb)
     if [ -n "$BUILD_PLATFORM" ]; then
         # Autre architecture : buildx --platform, --load pour que l image soit
         # dans le docker local (et non seulement dans le cache de buildx).
         local args=(); local a; for a in "$@"; do args+=(--build-arg "$a"); done
         docker buildx build --platform "$BUILD_PLATFORM" --load $NO_CACHE \
+            "${target[@]+"${target[@]}"}" \
             "${args[@]+"${args[@]}"}" -f "$DIR/$dockerfile" -t "$image" "$DIR"
     elif [ "$HAVE_COMPOSE" = 1 ]; then
         docker compose -f "$DIR/compose.yaml" build $NO_CACHE "$svc"
     else
         local args=(); local a; for a in "$@"; do args+=(--build-arg "$a"); done
-        docker build $NO_CACHE "${args[@]+"${args[@]}"}" -f "$DIR/$dockerfile" -t "$image" "$DIR"
+        docker build $NO_CACHE "${target[@]+"${target[@]}"}" \
+            "${args[@]+"${args[@]}"}" -f "$DIR/$dockerfile" -t "$image" "$DIR"
     fi
 }
 

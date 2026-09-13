@@ -42,7 +42,7 @@ if ! docker image inspect "$IMAGE_NITB" >/dev/null 2>&1; then
     echo -e "Ce script ne la construit pas volontairement : le build integre de"
     echo -e "start.sh utilise ${YELLOW}Dockerfile.run${NC} et ecraserait l'image nitb."
     echo -e "Construire d'abord, depuis ${CYAN}${HERE}${NC} :"
-    echo -e "  ${CYAN}docker build -f Dockerfile -t ${IMAGE_NITB} .${NC}"
+    echo -e "  ${CYAN}docker build -f Dockerfile --target osmocom-nitb -t ${IMAGE_NITB} .${NC}"
     exit 1
 fi
 

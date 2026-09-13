@@ -22,13 +22,30 @@ name: Docker (GHCR)
 #      contexte. Si ghcr.io/<depot>/osmocom-nitb:base-<empreinte> existe deja,
 #      il ne construit RIEN et se contente de la publier comme reference.
 #   2. Sinon il construit, avec deux caches : les couches de la derniere base
-#      publiee (--cache-from + BUILDKIT_INLINE_CACHE) et les .deb deja compiles
-#      (actions/cache sur /var/cache/osmo-debs, le mecanisme de
+#      publiee (--cache-from registry + --cache-to inline) et les .deb deja
+#      compiles (actions/cache sur /var/cache/osmo-debs, le mecanisme de
 #      packaging/osmo-deb.sh). Un changement en fin de Dockerfile ne recompile
 #      plus que sa queue.
-#   3. `operator` et `lite` partent de cette image TIREE de GHCR, en parallele,
-#      chacun sur son runner - donc chacun avec un disque propre, ce qui est
-#      l'autre moitie du correctif de l'exit 143.
+#   3. `operator` et `lite` partent de cette image, en parallele, chacun sur
+#      son runner - donc chacun avec un disque propre.
+#
+# ── Et pourquoi buildx --push partout ──────────────────────────────────────
+# [2026-09-13] Les trois jobs poussent leur image SANS jamais la charger dans
+# le docker du runner. `docker build -t X . && docker push X` demande a
+# buildkit d'exporter l'image dans le store local : il detient alors ses
+# snapshots ET ecrit par-dessus les archives de couches, soit deux fois 11 Go.
+# C'est la, en « exporting layers » - build reussi, 75 etapes sur 75 - que le
+# runner saturait et se faisait tuer (exit 143). Avec
+# `docker buildx build --push`, les couches sont compressees et poussees au
+# fil de l'eau ; il ne reste sur le disque que le cache du builder.
+#
+# Consequence a ne pas perdre de vue : plus aucune image locale apres le
+# build, donc plus de `docker create` + `docker cp` pour recuperer les .deb
+# compiles. C'est le role de l'etape `debs` du Dockerfile (une seconde passe
+# `--target debs --output type=local`, tout en cache). Et parce que `debs` est
+# desormais la DERNIERE etape du Dockerfile, tout build de la base doit dire
+# `--target osmocom-nitb` : ici, dans build.sh, dans compose.yaml et dans
+# iso_modules/21-docker-build.sh.
 #
 # Dockerfile.run et Dockerfile.lite ont un `ARG BASE` : en local ils valent
 # toujours `osmocom-nitb` (l'image du docker de l'hote), en CI ils recoivent la
@@ -123,46 +140,20 @@ jobs:
 
       # ── A partir d'ici, uniquement quand il faut vraiment construire ───────
 
-      # osmocom-nitb pese ~11 Go : sans ce menage, le runner sature en plein
-      # build et l'erreur ne parle que d'une couche qu'il n'a pas pu ecrire.
-      - name: Free disk space
+      # Menage du runner + /var/lib/docker sur /mnt, avec verification et
+      # echec immediat s'il n'y a la place nulle part. Trois jobs en ont
+      # besoin, d'ou l'action locale plutot qu'un bloc recopie trois fois.
+      - name: Disque pour docker
         if: steps.probe.outputs.hit != 'true'
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
-            /opt/ghc /opt/hostedtoolcache/CodeQL \
-            /usr/local/share/boost /usr/share/swift \
-            /usr/local/graalvm /usr/local/share/chromium \
-            /usr/local/lib/node_modules
-          sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
-            'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
-          sudo apt-get autoremove -y && sudo apt-get clean
-          # le runner arrive avec plusieurs images deja tirees : autant de Go
-          # occupes dans /var/lib/docker dont ce build n'a aucun usage.
-          docker system prune -af --volumes
-          df -h / /mnt
+        uses: ./.github/actions/docker-disk
 
-      # /var/lib/docker vit sur / , qui n'offre qu'une trentaine de Go libres.
-      # A « exporting layers » buildkit detient en meme temps ses snapshots ET
-      # ecrit l'image finale : deux fois 11 Go. /mnt est un second disque
-      # d'environ 70 Go quasiment vide - c'est la que docker doit vivre.
-      - name: Docker data-root sur /mnt
+      # buildx/docker-container : le driver qui sait ecrire AILLEURS que dans
+      # le store d'images local - voir le step de build. Apres le deplacement
+      # du data-root, jamais avant : le redemarrage du demon laisserait le
+      # conteneur du builder orphelin.
+      - name: Buildx
         if: steps.probe.outputs.hit != 'true'
-        run: |
-          AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
-          if [ "${AVAIL:-0}" -lt 40 ]; then
-            echo "/mnt indisponible ou trop petit (${AVAIL:-0} Go) - on reste sur /"
-            df -h /; exit 0
-          fi
-          sudo systemctl stop docker.service docker.socket
-          sudo mkdir -p /mnt/docker
-          sudo mv /var/lib/docker/* /mnt/docker/ 2>/dev/null || true
-          sudo jq '. + {"data-root":"/mnt/docker"}' /etc/docker/daemon.json \
-            > /tmp/daemon.json 2>/dev/null \
-            || echo '{"data-root":"/mnt/docker"}' > /tmp/daemon.json
-          sudo mv /tmp/daemon.json /etc/docker/daemon.json
-          sudo systemctl start docker.service
-          docker info -f 'data-root = {{.DockerRootDir}}'
-          df -h / /mnt
+        uses: docker/setup-buildx-action@v3
 
       # ── Le cache .deb entre deux runs ─────────────────────────────────────
       # Ce que le Dockerfile compile sort en paquet .deb dans
@@ -205,11 +196,25 @@ jobs:
           done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
           echo "temoin -> $RUNNER_TEMP/watchdog.log"
 
-      - name: Build osmocom-nitb (base)
+      # ── LE BUILD. Vers GHCR directement, jamais dans le docker local ──────
+      # [2026-09-13] C'etait `docker build -t ... .` puis `docker push`. Le
+      # `-t` impose a buildkit d'EXPORTER l'image dans le store local : a ce
+      # moment il detient ses snapshots (11 Go) et ecrit par-dessus les
+      # archives de couches (11 Go de plus). C'est exactement la, en
+      # « exporting layers », que le runner saturait et se faisait tuer -
+      # exit 143, apres 1h20 de compilation reussie.
+      #
+      # `--push` (soit --output type=image,push=true) supprime cette moitie-la
+      # du probleme : les couches sont compressees et poussees au fil de l'eau,
+      # rien n'atterrit dans le store local. Il ne reste que le cache du
+      # builder. Corollaire : plus aucune image `osmocom-nitb` sur le runner
+      # apres le build - d'ou l'etape `debs` du Dockerfile pour la recolte.
+      - name: Build et push osmocom-nitb (base)
         if: steps.probe.outputs.hit != 'true'
         env:
           IMAGE: ${{ steps.key.outputs.image }}
           CACHE: ${{ steps.key.outputs.cache }}
+          PR: ${{ github.event_name == 'pull_request' }}
         run: |
           # Semer le contexte avec les .deb du cache : chaque etape qui les
           # trouve pose le paquet au lieu de cloner et compiler.
@@ -217,42 +222,49 @@ jobs:
           cp -f /var/cache/osmo-debs/osmo-build-*.deb .deb-cache/ 2>/dev/null || true
           echo "cache .deb en entree : $(find .deb-cache -name 'osmo-build-*.deb' | wc -l) paquets"
 
-          # --cache-from : les couches de la derniere base publiee. Marche avec
-          # le driver docker (pas de buildx a installer) parce que l'image a ete
-          # poussee avec BUILDKIT_INLINE_CACHE=1, qui embarque les metadonnees
-          # de cache dans le manifeste. Absente au premier run : || true.
-          docker pull "$CACHE" 2>/dev/null || true
+          # base-<empreinte> est ce que les jobs derives tirent ; :cache et
+          # :latest sont les deux commodites - l'un pour le --cache-from du
+          # prochain build, l'autre pour qui veut « la derniere ». Les trois
+          # noms sortent d'UN push : memes digests, les couches ne montent
+          # qu'une fois.
+          # Sur une pull_request rien n'est publie (le GITHUB_TOKEN d'un fork
+          # n'a pas packages:write) : on batit pour valider le Dockerfile et on
+          # garde le resultat dans le cache du builder, sans export ni nom.
+          if [ "$PR" = true ]; then
+            TAGS=(); OUT=(--output type=cacheonly)
+          else
+            BASE_REPO="${CACHE%:cache}"
+            TAGS=(-t "$IMAGE" -t "$CACHE")
+            [ "$GITHUB_REF_NAME" = "main" ] && TAGS+=(-t "$BASE_REPO:latest")
+            OUT=(--push)
+          fi
 
-          docker build \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            --cache-from "$CACHE" \
-            -t osmocom-nitb -t "$IMAGE" .
+          # --target : Dockerfile finit par l'etape `debs`, pas par osmocom-nitb.
+          # --cache-to inline : les metadonnees de cache voyagent DANS le
+          # manifeste pousse, ce qui rend le --cache-from du prochain run
+          # possible sans second depot de cache a gerer.
+          docker buildx build \
+            --target osmocom-nitb \
+            --cache-from "type=registry,ref=$CACHE" \
+            --cache-to   type=inline \
+            "${TAGS[@]+"${TAGS[@]}"}" "${OUT[@]}" \
+            -f Dockerfile .
 
-          # Recolte : les paquets que l'image vient de produire repartent dans
-          # le cache du runner, qu'actions/cache sauvegardera en fin de job.
-          # Equivalent de debs_from_image() (build.sh:309).
-          mkdir -p /tmp/debs-out
-          cid=$(docker create osmocom-nitb /bin/true)
-          docker cp "$cid:/var/cache/osmo-debs/." /tmp/debs-out/ 2>/dev/null || true
-          docker rm "$cid" >/dev/null
+          # Recolte des .deb : seconde passe sur l'etape `debs`. Le CONTEXTE
+          # N'A PAS BOUGE (on ne vide .deb-cache/ qu'apres) donc les 75 etapes
+          # sont toutes en cache dans le builder ; seul le COPY final tourne,
+          # et n'ecrit sur le disque que les paquets. Equivalent sans image
+          # locale de debs_from_image() (build.sh:306).
+          rm -rf /tmp/debs-out && mkdir -p /tmp/debs-out
+          docker buildx build \
+            --target debs \
+            --cache-from "type=registry,ref=$CACHE" \
+            --output "type=local,dest=/tmp/debs-out" \
+            -f Dockerfile .
           cp -f /tmp/debs-out/osmo-build-*.deb /var/cache/osmo-debs/ 2>/dev/null || true
           rm -rf /tmp/debs-out .deb-cache/*.deb
           echo "cache .deb en sortie : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh /var/cache/osmo-debs | cut -f1)"
           df -h / /mnt
-
-      # base-<empreinte> est ce que les jobs derives tirent ; :cache et :latest
-      # sont les deux commodites - l'un pour le --cache-from du prochain build,
-      # l'autre pour qui veut « la derniere ».
-      - name: Push osmocom-nitb
-        if: steps.probe.outputs.hit != 'true' && github.event_name != 'pull_request'
-        env:
-          IMAGE: ${{ steps.key.outputs.image }}
-          CACHE: ${{ steps.key.outputs.cache }}
-        run: |
-          docker push "$IMAGE"
-          docker tag osmocom-nitb "$CACHE"        && docker push "$CACHE"
-          BASE_REPO="${CACHE%:cache}"
-          docker tag osmocom-nitb "$BASE_REPO:latest" && docker push "$BASE_REPO:latest"
 
       - name: Temoin - dernieres mesures
         if: always()
@@ -316,12 +328,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /usr/share/swift /usr/local/graalvm
-          docker system prune -af --volumes
-          df -h /
+      - name: Disque pour docker
+        uses: ./.github/actions/docker-disk
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -330,23 +341,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Meme principe que la base : buildx pousse les couches vers GHCR sans
+      # jamais materialiser l'image dans le store local. Le `docker pull` du
+      # BASE disparait avec, buildkit ne tire que ce dont le build a besoin ;
+      # et les couches heritees de la base sont MONTEES d'un depot a l'autre
+      # (cross-repo blob mount, meme registre), donc la poussee ne renvoie que
+      # les couches propres a Dockerfile.run.
       - name: Build et push osmo-operator
         env:
           BASE_IMAGE: ${{ needs.base.outputs.image }}
           IMG: ${{ env.REGISTRY }}/${{ needs.base.outputs.repo }}/osmo-operator
         run: |
-          docker pull "$BASE_IMAGE"
-          docker build -f Dockerfile.run --build-arg BASE="$BASE_IMAGE" \
-                       -t osmo-operator:ci .
-          docker images --format '  {{.Repository}}:{{.Tag}} {{.Size}}' | head -5
-          TAGS="sha-${GITHUB_SHA::7}"
-          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS="$TAGS ${GITHUB_REF_NAME}"
-          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS="$TAGS latest"
-          for t in $TAGS; do
-            docker tag osmo-operator:ci "$IMG:$t"
-            docker push "$IMG:$t"
-          done
-          df -h /
+          TAGS=(-t "$IMG:sha-${GITHUB_SHA::7}")
+          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS+=(-t "$IMG:${GITHUB_REF_NAME}")
+          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS+=(-t "$IMG:latest")
+          docker buildx build -f Dockerfile.run \
+            --build-arg BASE="$BASE_IMAGE" \
+            "${TAGS[@]}" --push .
+          docker buildx imagetools inspect "$IMG:sha-${GITHUB_SHA::7}" \
+            --format '{{.Manifest.Config.Digest}}  {{len .Manifest.Layers}} couches' || true
+          df -h / /mnt
 
   # L'image lite se deduit de la BASE, pas de osmo-operator : Dockerfile.lite
   # elague /opt/GSM puis aplatit le resultat (FROM scratch + COPY / - effacer
@@ -364,31 +378,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /usr/share/swift /usr/local/graalvm
-          docker system prune -af --volumes
-          df -h /
+      - name: Disque pour docker
+        uses: ./.github/actions/docker-disk
 
-      # L'aplatissement materialise une copie entiere de l'image : il faut de la
-      # place, meme si ce job ne compile rien.
-      - name: Docker data-root sur /mnt
-        run: |
-          AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
-          if [ "${AVAIL:-0}" -lt 40 ]; then
-            echo "/mnt indisponible ou trop petit (${AVAIL:-0} Go) - on reste sur /"
-            df -h /; exit 0
-          fi
-          sudo systemctl stop docker.service docker.socket
-          sudo mkdir -p /mnt/docker
-          sudo mv /var/lib/docker/* /mnt/docker/ 2>/dev/null || true
-          sudo jq '. + {"data-root":"/mnt/docker"}' /etc/docker/daemon.json \
-            > /tmp/daemon.json 2>/dev/null \
-            || echo '{"data-root":"/mnt/docker"}' > /tmp/daemon.json
-          sudo mv /tmp/daemon.json /etc/docker/daemon.json
-          sudo systemctl start docker.service
-          df -h / /mnt
+      - name: Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -397,22 +391,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # L'aplatissement (FROM scratch + COPY /) recopie la racine entiere :
+      # c'est le job qui a le plus a ecrire, pour un job qui ne compile rien.
+      # Raison de plus pour que la sortie parte au registre et non dans le
+      # store local.
       - name: Build et push osmo-operator-lite
         env:
           BASE_IMAGE: ${{ needs.base.outputs.image }}
           IMG: ${{ env.REGISTRY }}/${{ needs.base.outputs.repo }}/osmo-operator-lite
         run: |
-          docker pull "$BASE_IMAGE"
-          docker build -f Dockerfile.lite --build-arg BASE="$BASE_IMAGE" \
-                       -t osmo-operator-lite:ci .
-          echo "--- tailles comparees ---"
-          docker images --format '  {{.Repository}}:{{.Tag}}\t{{.Size}}' \
-            | grep -E 'osmocom-nitb|osmo-operator' || true
-          TAGS="sha-${GITHUB_SHA::7}"
-          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS="$TAGS ${GITHUB_REF_NAME}"
-          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS="$TAGS latest"
-          for t in $TAGS; do
-            docker tag osmo-operator-lite:ci "$IMG:$t"
-            docker push "$IMG:$t"
-          done
+          TAGS=(-t "$IMG:sha-${GITHUB_SHA::7}")
+          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS+=(-t "$IMG:${GITHUB_REF_NAME}")
+          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS+=(-t "$IMG:latest")
+          docker buildx build -f Dockerfile.lite \
+            --build-arg BASE="$BASE_IMAGE" \
+            "${TAGS[@]}" --push .
+          echo "--- taille publiee ---"
+          docker buildx imagetools inspect "$IMG:sha-${GITHUB_SHA::7}" || true
           df -h / /mnt

@@ -1028,3 +1028,26 @@ RUN if ! osmo-deb install pmbootstrap 0.git; then \
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
 CMD ["/bin/bash"]
+
+# ── L'ETAPE `debs` : le cache .deb seul, rien d'autre ────────────────────────
+# ATTENTION - `osmocom-nitb` N'EST PLUS LA DERNIERE ETAPE de ce fichier. Tout
+# ce qui construit l'image doit donc dire `--target osmocom-nitb` : build.sh
+# (compose_build), compose.yaml (build.target du service nitb),
+# iso_modules/21-docker-build.sh, .github/workflows/docker.yml. Sans ce
+# --target, docker batit `debs` et sort une image VIDE de 2 Go de paquets.
+#
+# Pourquoi cette etape existe. En CI, l'image de base n'est plus chargee dans
+# le docker du runner : elle part directement vers GHCR (buildx --push), parce
+# que la materialiser localement demandait de tenir DEUX fois 11 Go et tuait le
+# job en « exporting layers » (exit 143). Mais le workflow doit quand meme
+# recuperer les .deb que le build vient de compiler, pour les rendre a
+# actions/cache - et sans image locale, plus de `docker create` ni de
+# `docker cp` (l'equivalent de debs_from_image, build.sh:306).
+#
+# D'ou cette etape : une seconde passe `--target debs --output type=local`
+# reutilise INTEGRALEMENT le cache de la premiere (meme builder, memes couches,
+# tout en hit) et n'ecrit sur le disque du runner que /var/cache/osmo-debs -
+# quelques Go de .deb au lieu de l'image entiere. Sur l'hote, build.sh continue
+# de passer par debs_from_image : il a l'image sous la main, lui.
+FROM scratch AS debs
+COPY --from=osmocom-nitb /var/cache/osmo-debs/ /

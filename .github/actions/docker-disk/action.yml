@@ -1,0 +1,74 @@
+name: "Disque pour docker"
+description: >
+  Fait de la place sur le runner, puis installe /var/lib/docker sur le plus
+  grand disque disponible. A utiliser dans tout job qui manipule une image
+  osmocom-nitb (11 Go).
+
+inputs:
+  need:
+    description: "Go libres exiges pour /var/lib/docker"
+    required: false
+    default: "40"
+
+runs:
+  using: composite
+  steps:
+    # Le runner arrive avec ~14 Go d'outils dont aucun build de ce depot n'a
+    # l'usage, et plusieurs images deja tirees dans /var/lib/docker.
+    - name: Menage du runner
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+          /opt/ghc /opt/hostedtoolcache/CodeQL \
+          /usr/local/share/boost /usr/share/swift \
+          /usr/local/graalvm /usr/local/share/chromium \
+          /usr/local/lib/node_modules
+        sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
+          'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
+        sudo apt-get autoremove -y && sudo apt-get clean
+        docker system prune -af --volumes
+        df -h / /mnt || true
+
+    # / n'offre qu'une trentaine de Go libres. /mnt est un second disque
+    # d'environ 70 Go quasiment vide : c'est la que docker doit vivre.
+    #
+    # [2026-09-13] Le repli silencieux « on reste sur / » est SUPPRIME. Sur /,
+    # le build va au bout de ses 75 etapes puis meurt en « exporting layers »,
+    # SIGTERM du runner a court d'espace : exit 143, une heure et demie perdue,
+    # et pour seule trace une ligne noyee ici. S'il n'y a nulle part la place,
+    # l'echec est certain : autant le dire en trois secondes, avec son motif.
+    - name: Docker data-root sur /mnt
+      shell: bash
+      env:
+        NEED: ${{ inputs.need }}
+      run: |
+        AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
+        ROOT_AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+        if [ "${AVAIL:-0}" -lt "$NEED" ]; then
+          if [ "${ROOT_AVAIL:-0}" -ge "$NEED" ]; then
+            echo "::warning::/mnt inutilisable (${AVAIL:-0} Go) mais / offre ${ROOT_AVAIL} Go - on reste sur /."
+            df -h /; exit 0
+          fi
+          echo "::error::Aucun disque de ${NEED} Go pour /var/lib/docker (/mnt ${AVAIL:-0} Go, / ${ROOT_AVAIL:-0} Go). L'image de base en pese 11 : ce job echouerait en exit 143 apres plus d'une heure."
+          df -h / /mnt || true
+          exit 1
+        fi
+        sudo systemctl stop docker.service docker.socket
+        sudo mkdir -p /mnt/docker
+        sudo mv /var/lib/docker/* /mnt/docker/ 2>/dev/null || true
+        sudo jq '. + {"data-root":"/mnt/docker"}' /etc/docker/daemon.json \
+          > /tmp/daemon.json 2>/dev/null \
+          || echo '{"data-root":"/mnt/docker"}' > /tmp/daemon.json
+        sudo mv /tmp/daemon.json /etc/docker/daemon.json
+        sudo systemctl start docker.service
+        # Le demon a pu redemarrer sur l'ancienne racine (daemon.json refuse,
+        # mv partiel) : sans cette verification on ne l'apprendrait qu'a
+        # l'export, sous la forme d'un 143 muet.
+        for _ in $(seq 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+        DR=$(docker info -f '{{.DockerRootDir}}')
+        if [ "$DR" != "/mnt/docker" ]; then
+          echo "::error::docker a redemarre sur ${DR}, pas /mnt/docker."
+          exit 1
+        fi
+        echo "data-root = $DR"
+        df -h / /mnt
