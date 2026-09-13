@@ -17,7 +17,14 @@
 # au lieu de rebatir l'image de base. Cote Dockerfile, les memes COPY restent en
 # place parce que l'image osmocom-nitb doit rester autonome (start-nitb.sh la
 # lance seule, avec son propre ENTRYPOINT).
-FROM osmocom-nitb AS osmocom-run
+# [2026-09-13] BASE parametrable. L'image de base ne se rebatit plus a chaque
+# push : la CI la publie une fois sur GHCR (osmocom-nitb:base-<empreinte du
+# contexte>) et passe sa reference ici. En local, le defaut reste l'image du
+# docker de l'hote, donc `docker build -f Dockerfile.run .` et build.sh ne
+# changent pas d'un iota. Meme mecanique que Dockerfile.lite, qui a son ARG
+# BASE depuis toujours.
+ARG BASE=osmocom-nitb
+FROM ${BASE} AS osmocom-run
 
 # ── Scripts ───────────────────────────────────────────────────────────────────
 # Deux destinations, deux usages :
