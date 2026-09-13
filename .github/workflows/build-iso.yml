@@ -1,0 +1,200 @@
+name: Build ISO
+
+# Trois images, une seule chaine :
+#   interstp.iso            le hub SS7 (PC 0.0.0), aucun operateur
+#   osmo-operator.iso       un noeud - UNE image pour les 9 : le numero se
+#                           choisit au demarrage (start-direct.sh --node N)
+#   osmo-operator-lite.iso  le meme noeud, construit depuis l'image d'execution
+#                           elaguee (Dockerfile.lite) : les ateliers de
+#                           compilation de /opt/GSM ne partent pas dans le
+#                           squashfs. Ce qui tourne est identique.
+#
+# Les trois dans UN SEUL job, et dans cet ordre : la lite se greffe sur l'image
+# osmocom-run que la passe operateur vient de construire. Dans un job separe, le
+# runner repartirait de zero - deux heures de compilation pour le meme resultat.
+#
+# --kb=us : build-iso.sh pose sa question du clavier AU DEBUT. Sans terminal il
+# prend deja son defaut sans attendre - le job ne peut pas se bloquer dessus -
+# mais on l'ecrit pour que l'image de CI ne dependent pas de ce defaut.
+
+on:
+  push:
+    tags: ["v*.*.*", "iso-*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create GitHub Release"
+        type: boolean
+        default: true
+      no_cache:
+        description: "Rebuild Docker images without cache (--no-cache)"
+        type: boolean
+        default: true
+      lite:
+        description: "Build osmo-operator-lite.iso as well"
+        type: boolean
+        default: true
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Les trois ISO plus les images Docker intermediaires tiennent tout juste
+      # dans un runner : on fait la place avant, pas apres l'echec.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift \
+            /usr/local/graalvm /usr/local/share/chromium \
+            /usr/local/lib/node_modules
+          sudo apt-get remove -y '^dotnet-.*' 'php.*' 'mongodb.*' \
+            'mysql.*' azure-cli google-cloud-cli 2>/dev/null || true
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          sudo docker image prune -af || true
+          df -h /
+
+      # Les paquets hote (squashfs-tools, xorriso, grub*, mtools, debootstrap...)
+      # sont installes par build-iso.sh lui-meme.
+
+      # Le hub d'abord : il ne depend ni de build.sh ni de l'image osmocom-run,
+      # donc un echec de son cote se voit en minutes plutot qu'en heures.
+      # --all : interstp + operator + operator-lite + operator-desktop en UNE
+      # passe. build-iso.sh greffe lite et desktop sur l'image osmocom-run que la
+      # passe operateur vient de produire, et retire --no-cache pour ces passes
+      # greffees : inutile de separer en plusieurs etapes. On rend le cache buildx
+      # avant - QUATRE ISO plus les images intermediaires, le disque du runner
+      # decide si le job passe.
+      - name: Build all ISOs (--all)
+        run: |
+          chmod +x build-iso.sh
+          sudo docker builder prune -af || true
+          df -h /
+          NO_CACHE="--no-cache"
+          [ "${{ github.event.inputs.no_cache }}" = "false" ] && NO_CACHE=""
+          sudo ./build-iso.sh $NO_CACHE --kb=us --all
+          ls -lh interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso 2>/dev/null
+          df -h /
+
+      - name: Checksums
+        run: |
+          ISOS="interstp.iso osmo-operator.iso"
+          [ -f osmo-operator-lite.iso ] && ISOS="$ISOS osmo-operator-lite.iso"
+          [ -f osmo-operator-desktop.iso ] && ISOS="$ISOS osmo-operator-desktop.iso"
+          sha256sum $ISOS > SHA256SUMS
+          md5sum    $ISOS > MD5SUMS
+          cat SHA256SUMS
+
+      # Une Release GitHub refuse tout fichier de plus de 2 Gio. On ne decoupe
+      # QUE ce qui depasse : decouper une image de 1,3 Go obligerait a la
+      # recombiner pour rien. Les sommes ci-dessus portent sur les ISO ENTIERES,
+      # elles restent donc verifiables apres recombinaison.
+      - name: Split ISOs over 2 GiB
+        run: |
+          LIMIT=$((2 * 1024 * 1024 * 1024))
+          for iso in interstp.iso osmo-operator.iso osmo-operator-lite.iso osmo-operator-desktop.iso; do
+            [ -f "$iso" ] || continue
+            size=$(stat -c%s "$iso")
+            if [ "$size" -gt "$LIMIT" ]; then
+              echo "$iso : $size octets > 2 Gio -> decoupe"
+              split -b 1900M -d -a 2 "$iso" "${iso}.part-"
+              sha256sum "${iso}".part-* >> PARTS.sha256
+              rm -f "$iso"          # seules les parties sont publiees
+            else
+              echo "$iso : $size octets -> publie tel quel"
+            fi
+          done
+          touch PARTS.sha256
+          ls -lh interstp.iso* osmo-operator.iso* osmo-operator-lite.iso* osmo-operator-desktop.iso* 2>/dev/null
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: osmo_egprs-iso
+          path: |
+            interstp.iso*
+            osmo-operator.iso*
+            osmo-operator-lite.iso*
+            osmo-operator-desktop.iso*
+            SHA256SUMS
+            MD5SUMS
+          retention-days: 14
+          compression-level: 0
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || format('iso-{0}', github.sha) }}
+          name: "osmo_egprs ISO — ${{ github.ref_name || github.sha }}"
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          body: |
+            ## osmo_egprs — images Live x86_64
+
+            | Image | Role |
+            |---|---|
+            | `interstp.iso` | Le hub SS7 du WAN : PC `0.0.0`, aucun operateur. Il ne fait que router du M3UA entre les noeuds. |
+            | `osmo-operator.iso` | Un noeud : coeur GSM complet (BSC / MSC / HLR / SGSN / GGSN). **Une seule image pour les 9 noeuds** — le numero se choisit au demarrage. |
+            | `osmo-operator-lite.iso` | Le meme noeud, sans les ateliers de compilation de `/opt/GSM` (gnuradio, gr-gsm, libosmo*, objets de qemu). Ce qui tourne est identique : memes binaires, memes configs, meme emulation Calypso. Les depots gardent leur `.git`, donc `osmo-update` y fonctionne aussi. |
+            | `osmo-operator-desktop.iso` | Le meme noeud avec un bureau GNOME (wireshark en fenetre, linphone-desktop) et le fond d'ecran GSM LAB. ~2,5 Go de plus : pour ce qui ne se pilote pas au VTY. |
+
+            ### Demarrer
+
+            ```bash
+            # Le hub
+            sudo ./start-interstp.sh --ip <IP du hub>
+
+            # Un noeud : N de 1 a 9, les point codes en decoulent (1.<N>1.x)
+            sudo ./start-direct.sh --node N
+            ```
+
+            L'adressage SS7 se pose avec `set_stp_ip.sh`, qui ecrit d'un coup
+            osmo-stp, osmo-msc, osmo-bsc et la table WAN :
+
+            ```bash
+            sudo ./set_stp_ip.sh --inter    --ip <hub> --ips "<n1> <n2> <n3>"
+            sudo ./set_stp_ip.sh --operator --node N --ip <son IP> --hub-ip <hub>
+            ```
+
+            Verifier l'interconnexion : `checks/diag-interstp.sh` cote hub,
+            `checks/diag-stp-operator.sh` cote noeud.
+
+            ### Fichiers volumineux
+
+            Une Release GitHub plafonne a 2 Gio par fichier : les images plus
+            grosses sont decoupees. Recombiner puis verifier :
+
+            ```bash
+            cat osmo-operator.iso.part-* > osmo-operator.iso
+            sha256sum -c SHA256SUMS
+            ```
+
+            ### Essayer
+
+            ```bash
+            qemu-system-x86_64 -cdrom osmo-operator.iso -m 8G -enable-kvm \
+              -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080
+            ```
+
+            La racine du live est un tmpfs : prevoir la RAM (~6 Go en `toram`).
+            Journaux et captures y sont bornes, et purges a chaque demarrage.
+          files: |
+            interstp.iso*
+            osmo-operator.iso*
+            osmo-operator-lite.iso*
+            osmo-operator-desktop.iso*
+            SHA256SUMS
+            MD5SUMS
+            PARTS.sha256
