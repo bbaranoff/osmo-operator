@@ -179,9 +179,20 @@ jobs:
           # l'eviction LRU detruisait le cache au bout de trois runs. Les .deb
           # portent leur nom et leur version, osmo-deb.sh trie : le prefixe
           # reprend la plus recente, et ce qui n'a pas bouge reste valable.
-          key: osmo-debs-noble-${{ steps.key.outputs.key }}
+          # [2026-09-14] LA GENERATION (-g2-) EXISTE POUR JETER UN CACHE DEVENU
+          # FAUX. `restore-keys` repeche la derniere entree du prefixe meme
+          # quand la cle exacte a change : un osmo-build-srsran compile en
+          # -march=native AVANT le 14/09 revenait donc a chaque run, passait le
+          # `osmo-deb install srsran`, et l ISO repartait avec un srsenb qui
+          # fait « Illegal instruction » ailleurs - jusqu a ce que le controle
+          # objdump de iso_modules/88-lte-pmos.sh l ecarte et recompile une
+          # heure, A CHAQUE FOIS. La version des .deb porte desormais son ISA
+          # (tools/osmo-lte-install.sh, srs_deb_version), ce qui empeche la
+          # confusion pour de bon ; ce marqueur coupe en plus le lien avec les
+          # entrees d avant. L INCREMENTER quand un cache doit etre abandonne.
+          key: osmo-debs-noble-g2-${{ steps.key.outputs.key }}
           restore-keys: |
-            osmo-debs-noble-
+            osmo-debs-noble-g2-
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

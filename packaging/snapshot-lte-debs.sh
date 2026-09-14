@@ -12,7 +12,7 @@
 #      recompile, rien n est reinstalle) :
 #          osmo-build-libzmq_4.3.5+git~noble_amd64.deb
 #          osmo-build-srsgui_0.1+git~noble_amd64.deb        (avant srsran : il s y lie)
-#          osmo-build-srsran_25.10+zmq~noble_amd64.deb
+#          osmo-build-srsran_25.10+zmq+x86-64-v2~noble_amd64.deb  (ISA comprise)
 #          osmo-build-open5gs_2.8.0+git~noble_amd64.deb
 #          osmo-build-pmos-kernel_7.2.3.0+ppp~noble_amd64.deb   (packaging/build-pmos-kernel-deb.sh)
 #      dans /var/cache/osmo-debs : le build ISO (50-injection-image.sh) les
@@ -72,7 +72,23 @@ if [ -f "$LTE/srsRAN_4G/build/install_manifest.txt" ]; then
     say "srsRAN_4G (ZeroMQ)"
     mapfile -t _s < <(grep -v '^$' "$LTE/srsRAN_4G/build/install_manifest.txt" | while read -r f; do [ -e "$f" ] && echo "$f"; done)
     _sv="$(git -C "$LTE/srsRAN_4G" describe --tags 2>/dev/null | sed 's/^release_//; s/-.*//; s/_/./g')"
-    bash "$OSMODEB" snapshot srsran "${_sv:-25.10}+zmq" "$LTE/srsRAN_4G" "${_s[@]}" && ok "srsran (${#_s[@]} fichiers installes + l arbre)"
+    # ── L ISA VA DANS LA VERSION, ET ELLE EST CONSTATEE, PAS SUPPOSEE ───────
+    # [2026-09-14] Ce script PHOTOGRAPHIE des binaires deja compiles : rien ne
+    # dit ici avec quel -march ils l ont ete. Tant que le .deb s appelait
+    # « 25.10+zmq », un srsenb natif de la machine de reference satisfaisait le
+    # « osmo-deb install srsran » du Dockerfile, partait dans l image et dans
+    # l ISO, et faisait « Illegal instruction » chez l operateur (voir
+    # SRS_ARCH dans tools/osmo-lte-install.sh). On regarde donc ce que le
+    # binaire CONTIENT - une instruction %ymm/%zmm et il est natif - et on le
+    # dit dans son nom. Sans objdump on ne tranche pas : +inconnu, qui ne sera
+    # jamais confondu avec le portable non plus.
+    _sisa=inconnu
+    if command -v objdump >/dev/null 2>&1 && [ -x /usr/local/bin/srsenb ]; then
+        if objdump -d /usr/local/bin/srsenb 2>/dev/null | grep -qE '%[yz]mm[0-9]'; then _sisa=native
+        else _sisa="$(printf '%s' "${OSMO_SRSRAN_ARCH:-x86-64-v2}" | tr -c 'A-Za-z0-9.' '-')"; fi
+    fi
+    [ "$_sisa" = native ] && warn "srsenb porte de l AVX : paquete en +native (il ne tournera que sur CETTE machine)"
+    bash "$OSMODEB" snapshot srsran "${_sv:-25.10}+zmq+${_sisa}" "$LTE/srsRAN_4G" "${_s[@]}" && ok "srsran ${_sv:-25.10}+zmq+${_sisa} (${#_s[@]} fichiers installes + l arbre)"
 else
     warn "pas de $LTE/srsRAN_4G/build/install_manifest.txt : srsRAN non empaquete"
 fi

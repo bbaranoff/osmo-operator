@@ -990,7 +990,8 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
     { osmo-deb install libzmq 4.3.5+git || true; } && \
     { osmo-deb install srsgui 0.1+git || true; } && \
-    if ! osmo-deb install srsran 25.10+zmq; then \
+    SRS_DEB_VER="$(osmo-lte-install --srs-deb-version)" && \
+    if ! osmo-deb install srsran "$SRS_DEB_VER"; then \
         OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --build || { echo "ECHEC build srsRAN"; exit 1; }; \
     fi && \
     if ! osmo-deb install open5gs 2.8.0+git; then \

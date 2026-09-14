@@ -84,6 +84,28 @@ JOBS="${JOBS:-$(nproc)}"
 # on retombe alors sur la base x86-64 du compilateur, portable elle aussi.
 SRS_ARCH="${OSMO_SRSRAN_ARCH:-x86-64-v2}"
 
+# ── LA VERSION DU .deb srsRAN PORTE SON ISA ─────────────────────────────────
+# [2026-09-14] LE .deb EMPOISONNE QUI REVENAIT A CHAQUE BUILD. La version
+# etait « 25.10+zmq » : rien n y disait POUR QUEL PROCESSEUR le binaire avait
+# ete compile. Un osmo-build-srsran_25.10+zmq~noble_amd64.deb fabrique avant
+# le 14/09 (donc en -march=native, sur un runner de CI ou sur la machine de
+# reference) satisfaisait donc « osmo-deb install srsran 25.10+zmq », et
+# l image repartait avec un srsenb plein d AVX. L ISO ne s en apercevait qu au
+# controle objdump de iso_modules/88-lte-pmos.sh, qui l ecartait et relancait
+# une compilation d une heure dans le chroot - A CHAQUE BUILD, parce que le
+# .deb fautif revenait du cache (sur GitHub : restore-keys « osmo-debs-noble- »
+# de .github/workflows/build-iso.yml, qui repeche la derniere entree meme
+# quand la cle exacte a change).
+# L ISA fait maintenant partie de la version : un binaire natif ne peut plus
+# etre confondu avec un binaire portable, le cache garde les deux sans qu ils
+# se marchent dessus, et rien ne se recompile une fois le bon .deb la.
+srs_deb_version() {
+    local v a
+    v="${SRS_REF#release_}"; v="${v//_/.}"
+    a="$(printf '%s' "$SRS_ARCH" | tr -c 'A-Za-z0-9.' '-')"   # osmo-deb : ^[0-9][A-Za-z0-9.+~-]*$
+    printf '%s+zmq+%s\n' "$v" "$a"
+}
+
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${CYAN:=}"; : "${RED:=}"; : "${BOLD:=}"; : "${NC:=}"
 _l_say()  { echo -e "  ${CYAN}→${NC} $*"; }
 _l_ok()   { echo -e "      ${GREEN}✓${NC} $*"; }
@@ -204,7 +226,7 @@ lte_build() {
     # snapshot-lte-debs.sh : osmo-build-srsran_25.10+zmq, osmo-build-open5gs_
     # 2.8.0+git. On les derive ici des memes refs git, en points.
     local srs_ver o5gs_ver
-    srs_ver="${SRS_REF#release_}"; srs_ver="${srs_ver//_/.}+zmq"   # release_25_10 -> 25.10+zmq
+    srs_ver="$(srs_deb_version)"                                    # release_25_10 -> 25.10+zmq+x86-64-v2
     o5gs_ver="${O5GS_REF#v}+git"                                    # v2.8.0       -> 2.8.0+git
     # ── srsGUI D ABORD : C EST srsRAN QUI LE CHERCHE ────────────────────────
     # [2026-09-10] srsRAN_4G etait configure avec -DENABLE_GUI=OFF : ni srsenb
@@ -479,6 +501,9 @@ osmo_lte_install() {
     for a in "$@"; do case "$a" in
         --deps) deps=1 ;; --debs) debs=1 ;; --configs) configs=1 ;; --launchers) launchers=1 ;;
         --build) build=1 ;; --all) all=1 ;; --force) force=1 ;; --webui) webui=1 ;;
+        # Le Dockerfile demande le nom au lieu de le recopier : une seule
+        # ecriture, et changer OSMO_SRSRAN_ARCH suffit a changer les deux.
+        --srs-deb-version) srs_deb_version; return 0 ;;
         *) echo "osmo-lte-install : option inconnue $a" >&2; return 2 ;;
     esac; done
     if [ $((deps + debs + configs + launchers + build + all + webui)) -eq 0 ]; then deps=1; debs=1; configs=1; launchers=1; fi
