@@ -184,9 +184,11 @@ ${B}QUELLES IMAGES${N}
 
 ${B}L'IMAGE DOCKER SOURCE${N}
   ${D}Par defaut, en amd64, l'image est TIREE et non construite. Dans l'ordre :
-  ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis l'image Docker
-  Hub. Si rien ne convient, build.sh prend le relais (1h23). En arm64 rien
-  n'est publie : la compilation reste le defaut.${N}
+  ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis le :latest du
+  meme depot, puis l'image Docker Hub. Seule la premiere correspond a l'arbre
+  de travail ; pour les deux autres le script previent avant de s'en servir.
+  Si aucune ne repond, build.sh prend le relais (1h23). En arm64 rien n'est
+  publie : la compilation reste le defaut.${N}
   ${C}--skip-build[=IMAGE]${N}      le pull devient OBLIGATOIRE : pas de repli sur
                             build.sh, et =IMAGE impose la reference au lieu de
                             la deduire de l'empreinte. N'importe quel registre :

@@ -17,10 +17,12 @@
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
 #    (defaut, amd64)      L'IMAGE DOCKER EST TIREE, PAS CONSTRUITE. Dans l'ordre :
 #                         ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>,
-#                         puis l'image Docker Hub. build.sh ne tourne que si
-#                         aucune ne repond. L'empreinte est celle des workflows :
-#                         quand elle correspond, l'image publiee a ete batie sur
-#                         exactement cet arbre de travail. En arm64 rien n'est
+#                         puis le :latest du meme depot, puis l'image Docker Hub.
+#                         build.sh ne tourne que si aucune ne repond. L'empreinte
+#                         est celle des workflows : quand elle correspond, l'image
+#                         publiee a ete batie sur exactement cet arbre de travail ;
+#                         les deux autres references ne le garantissent pas, et le
+#                         script le dit avant de s'en servir. En arm64 rien n'est
 #                         publie : la compilation reste le defaut.
 #    --skip-build[=image:tag]   rend le pull obligatoire (pas de repli sur
 #                         build.sh) et, avec =image, impose la reference au lieu

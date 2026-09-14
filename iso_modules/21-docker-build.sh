@@ -26,8 +26,14 @@
 #   1. la reference EXPLICITE de --skip-build=REF - elle ne se discute pas ;
 #   2. ghcr.io/<depot>/osmocom-nitb:base-<empreinte> - celle qui correspond
 #      au commit, publiee par docker.yml ;
-#   3. l image Docker Hub, qui ne suit PAS le commit : dernier recours, et
-#      iso_docker_build previent avant de s en servir.
+#   3. ghcr.io/<depot>/osmocom-nitb:latest - la derniere publiee par le meme
+#      workflow, sur le meme registre. Elle ne suit pas le commit, mais elle
+#      est a jour et elle est PUBLIQUE : verifie le 14-09, le registre repond
+#      sans jeton et porte base-89a36ab9ba1d941d, base-e68ecc7ee98f41e0,
+#      cache et latest ;
+#   4. l image Docker Hub, dernier recours.
+# Seule la 2 garantit que l image correspond a l arbre de travail : pour les
+# deux suivantes, iso_docker_build previent avant de s en servir.
 iso_pull_refs() {
     if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ]; then echo "$ISO_PULL_IMAGE"; return 0; fi
     local _key _repo
@@ -54,8 +60,10 @@ iso_pull_refs() {
     # local), et on n en ferait qu une reference GHCR imaginaire.
     case "$_repo" in *[:@\ ]*|*/*/*) _repo="" ;; */*) ;; *) _repo="" ;; esac
     [ -n "$_repo" ] || _repo="bbaranoff/osmo-operator"
-    # L empreinte est vide hors depot git : pas de reference GHCR a proposer.
+    # L empreinte est vide hors depot git : pas de reference d empreinte a
+    # proposer, mais le latest du meme depot reste valable.
     [ -n "$_key" ] && echo "ghcr.io/${_repo,,}/osmocom-nitb:base-${_key}"
+    echo "ghcr.io/${_repo,,}/osmocom-nitb:latest"
     echo "$ISO_PULL_IMAGE"
 }
 
@@ -108,14 +116,16 @@ iso_docker_build() {
             echo -e "  ${YELLOW}!${NC} ${_ref} : indisponible"
         done
         if [ -n "$_got" ]; then
-            # Le dernier recours ne suit pas le commit : on ne le laisse pas
-            # passer en silence. Une ISO batie sur cette image peut porter une
+            # TOUT CE QUI N EST PAS UNE IMAGE D EMPREINTE ne suit pas le
+            # commit : on ne le laisse pas passer en silence, ni pour le latest
+            # de GHCR ni pour Docker Hub. Une ISO batie dessus peut porter une
             # pile differente de l arbre de travail - ce qui s explique cinq
-            # minutes apres le build, et jamais trois semaines apres.
+            # minutes apres le build, et jamais trois semaines apres. Le motif
+            # `:base-` est la signature des seules images qui, elles, collent.
             # `if`, et pas « [ ... ] && [ ... ] && echo » : une chaine && dont
             # le premier test est faux rend 1, et ce depot s est deja fait
             # arreter par une ligne de cette forme sous set -e.
-            if [ "$_got" = "$ISO_PULL_IMAGE" ] && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
+            if [ "${_got}" = "${_got#*:base-}" ] && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
                 echo -e "  ${YELLOW}!${NC} aucune image ne correspond a l'empreinte du depot : ${CYAN}${_got}${NC} ne suit pas ce commit (${CYAN}--build-docker${NC} pour compiler l'arbre de travail)"
             fi
             docker tag "$_got" "$_local"
