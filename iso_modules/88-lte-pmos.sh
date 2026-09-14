@@ -70,6 +70,49 @@
 if [ "$ISO_ROLE" = "interstp" ] || [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
 echo -e "${GREEN}[8d/9] La 4G (srsRAN ZeroMQ + Open5GS) et l UI smartphone (postmarketOS)...${NC}"
+
+# ── /proc /sys /dev : REMONTES POUR LA DUREE DE CE MODULE ───────────────────
+# [2026-09-14] 86-finitions.sh se termine par « umount $ROOTFS/{dev/pts,proc,
+# sys,dev} » : c etait la fin du chroot, du temps ou ce module n existait pas.
+# Or TOUT ce qui suit tourne DANS le chroot - dpkg du noyau pmOS, apt (--deps),
+# la compilation srsRAN / Open5GS, systemctl enable, et les verifications
+# finales. Le cmake de srsRAN le disait a chaque configuration :
+#     Problem opening /proc/cpuinfo
+#     Problem opening /proc/meminfo
+# il ne voyait ni CPU ni memoire, et sans /dev un maintainer-script ou un
+# binaire qui lit /dev/urandom (open5gs-mmed du test de 3 s) tombe sans raison
+# lisible. On remonte donc ici ce qu il faut, et on le DEMONTE a la fin du
+# module : 90-iso.sh fait le squashfs, rien ne doit rester monte sous $ROOTFS.
+# Idempotent dans les deux sens - si un jour 86 ne demonte plus, mountpoint le
+# voit et on ne monte pas deux fois ; on ne demonte que ce qu on a monte.
+_iso88_mnt=()
+_iso88_up() {   # _iso88_up <source hote> <point de montage, relatif au rootfs>
+    local _t="$ROOTFS$2"
+    [ -d "$_t" ] || install -d "$_t" 2>/dev/null || return 0
+    mountpoint -q "$_t" 2>/dev/null && return 0
+    mount --bind "$1" "$_t" 2>/dev/null && _iso88_mnt=("$_t" "${_iso88_mnt[@]}")
+    return 0
+}
+_iso88_down() {  # ordre inverse du montage (/dev/pts avant /dev)
+    local _m
+    for _m in "${_iso88_mnt[@]}"; do umount -l "$_m" 2>/dev/null || true; done
+    _iso88_mnt=()
+}
+_iso88_up /proc    /proc
+_iso88_up /sys     /sys
+_iso88_up /dev     /dev
+_iso88_up /dev/pts /dev/pts
+
+# Le DNS du chroot, pour les clones git de --build. 81-cloture-systeme.sh a
+# remplace /etc/resolv.conf par le lien vers /run/systemd/resolve/stub-resolv.conf
+# - ce qu il faut dans l ISO, mais ici il ne designe rien. On peuple la cible :
+# /run est un tmpfs au demarrage, ce fichier ne survit pas au premier boot.
+install -d "$ROOTFS/run/systemd/resolve"
+[ -s "$ROOTFS/run/systemd/resolve/stub-resolv.conf" ] || {
+    grep '^nameserver' /etc/resolv.conf 2>/dev/null | grep -v '^nameserver 127\.' \
+      || printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n'
+} > "$ROOTFS/run/systemd/resolve/stub-resolv.conf"
+
 _rt="$ROOTFS/opt/GSM/osmo-operator"
 install -d "$_rt/tools" "$_rt/configs/srsran" "$_rt/configs/open5gs" "$_rt/configs/pmos" "$_rt/patches" "$_rt/packaging"
 # Le depot local fait foi (meme regle que 85-installeur-bureau.sh).
@@ -442,6 +485,7 @@ if [ "$_ko" -gt 0 ]; then
     if [ "${OSMO_ISO_LTE_REQUIRED:-1}" = "1" ]; then
         echo -e "  ${RED}✗ $_ko maillon(s) manquant(s) : cette ISO ne serait PAS prete a l emploi (2G + 4G + telephone).${NC}" >&2
         echo -e "    Corrige ci-dessus, ou OSMO_ISO_LTE_REQUIRED=0 pour sortir l ISO quand meme." >&2
+        _iso88_down
         exit 1
     fi
     echo -e "  ${YELLOW}!${NC} $_ko maillon(s) manquant(s), ISO sortie quand meme (OSMO_ISO_LTE_REQUIRED=0)"
@@ -449,6 +493,10 @@ else
     echo -e "  ${GREEN}✓${NC} prete a l emploi : banc 2G, 4G et telephone au complet"
 fi
 unset _ko; unset -f _chk
+
+# Fin du chroot de ce module : ce qu on a monte plus haut repart, sinon le
+# squashfs de 90-iso.sh embarquerait /proc et /sys de l hote.
+_iso88_down; unset _iso88_mnt; unset -f _iso88_up _iso88_down
 
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
