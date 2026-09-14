@@ -57,11 +57,27 @@ ISO_DESKTOP=0
 # change rien au comportement par defaut - la desktop pese ~2,5 Go de plus et
 # n a pas a s imposer a qui ne l a pas demandee.
 ISO_ALL=0
-# --skip-build : pas de docker build. On PULL l image publiee sur Docker Hub
-# (bastienbaranoff/norf_gsm:latest, ou --skip-build=<image:tag>), on la tague
-# osmocom-nitb:latest et la chaine continue exactement comme apres build.sh.
-# Sert a la CI et a une machine qui n a ni le temps ni le cache .deb du build.
-ISO_SKIP_BUILD=0
+# ── LE PULL EST LE DEFAUT (amd64) ───────────────────────────────────────────
+# [2026-09-14] ISO_SKIP_BUILD valait 0 : toute ISO partait d un build.sh local,
+# soit 1h23 de compilation pour refabriquer a l identique une image deja
+# publiee. Le defaut est desormais l inverse - on TIRE l image, et build.sh ne
+# tourne que si aucune image publiee ne convient (voir iso_docker_build dans
+# 21-docker-build.sh, qui essaie les references dans l ordre).
+#
+# amd64 SEULEMENT : rien n est publie en arm64, une passe --arm compile donc
+# toujours. Un --skip-build explicite reste honore sur les deux architectures.
+#
+# --skip-build[=REF] garde son sens : il rend le pull OBLIGATOIRE (plus de
+# repli sur build.sh, un echec est une erreur) et, avec =REF, impose la
+# reference au lieu de la laisser deduire de l empreinte du depot.
+ISO_SKIP_BUILD="${OSMO_ISO_SKIP_BUILD:-1}"
+# Donne sur la ligne de commande, ou seulement le defaut ? Cette distinction
+# decide de ce qui arrive quand le pull echoue : demande, c est fatal ; par
+# defaut, on retombe sur la construction locale.
+ISO_SKIP_BUILD_GIVEN=0
+# Le dernier recours, quand l empreinte du depot ne correspond a aucune image
+# publiee : l image Docker Hub. Elle ne suit PAS le commit - iso_docker_build
+# le dit en clair avant de s en servir.
 ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}"
 # --build-docker : l INVERSE de --skip-build, et il gagne. Sert quand quelque
 # chose en amont pousse un --skip-build qu on ne veut pas ici : la CI qui tire
@@ -167,9 +183,13 @@ ${B}QUELLES IMAGES${N}
   ${C}--output=FICHIER${N}          nom du fichier de sortie                        ${D}[${OUTPUT:-osmo-operator-<version>.iso}]${N}
 
 ${B}L'IMAGE DOCKER SOURCE${N}
-  ${C}--skip-build[=IMAGE]${N}      ne rien construire : prendre une image publiee et la
-                            taguer osmocom-nitb. Docker Hub par defaut, mais
-                            n'importe quel registre convient - GHCR compris :
+  ${D}Par defaut, en amd64, l'image est TIREE et non construite. Dans l'ordre :
+  ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis l'image Docker
+  Hub. Si rien ne convient, build.sh prend le relais (1h23). En arm64 rien
+  n'est publie : la compilation reste le defaut.${N}
+  ${C}--skip-build[=IMAGE]${N}      le pull devient OBLIGATOIRE : pas de repli sur
+                            build.sh, et =IMAGE impose la reference au lieu de
+                            la deduire de l'empreinte. N'importe quel registre :
                               --skip-build=ghcr.io/<depot>/osmocom-nitb:base-<empreinte>
                             Une image deja presente localement n'est pas retiree.
                             ${D}[${ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}]${N}
@@ -211,6 +231,7 @@ ${B}LA BASE${N}
 
 ${B}Equivalents en variables${N} (pour la CI, ou un environnement sans ligne de commande) :
   OSMO_ISO_BUILD_DOCKER=1   comme --build-docker
+  OSMO_ISO_SKIP_BUILD=0     ne pas tirer d'image : construire, comme avant 09-2026
   OSMO_ISO_WITHOUT_DEBS=1   comme --without-debs
   OSMO_ISO_PULL_IMAGE=REF   l'image de --skip-build
   OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1 / OSMO_ISO_KB=fr / OSMO_ISO_VERSION=...
@@ -255,8 +276,8 @@ for arg in "$@"; do case "$arg" in
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
-    --skip-build)   ISO_SKIP_BUILD=1 ;;
-    --skip-build=*) ISO_SKIP_BUILD=1; ISO_PULL_IMAGE="${arg#*=}" ;;
+    --skip-build)   ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1 ;;
+    --skip-build=*) ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1; ISO_PULL_IMAGE="${arg#*=}" ;;
     --build-docker) ISO_FORCE_BUILD=1 ;;
     --without-debs) ISO_WITH_DEBS=0 ;;
     --with-debs)    ISO_WITH_DEBS=1 ;;
@@ -269,7 +290,11 @@ esac; done
 # commande ne decide de rien : --build-docker l emporte sur --skip-build, d ou
 # qu il vienne (ligne de commande ou variable).
 if [ "$ISO_FORCE_BUILD" = "1" ] && [ "$ISO_SKIP_BUILD" = "1" ]; then
-    echo -e "${YELLOW}--build-docker : --skip-build ignore, l image sera construite localement${NC}"
+    # Le message ne se justifie que si un --skip-build a VRAIMENT ete demande :
+    # depuis que le pull est le defaut, l annoncer a chaque --build-docker
+    # ferait parler le script d une option que personne n a ecrite.
+    [ "$ISO_SKIP_BUILD_GIVEN" = "1" ] && \
+        echo -e "${YELLOW}--build-docker : --skip-build ignore, l image sera construite localement${NC}"
     ISO_SKIP_BUILD=0
 fi
 # Sans .deb embarquees, celles du build docker ne restent pas non plus dans le

@@ -12,34 +12,123 @@
 # Seule exception : --role=interstp demande SEUL. Le hub n a besoin que
 # d osmo-stp et de trois bibliotheques : Dockerfile.stp, et on ne va pas au
 # bout de la pile.
+# ── LES IMAGES CANDIDATES, DANS L ORDRE ─────────────────────────────────────
+# [2026-09-14] L EMPREINTE EST CELLE DE LA CI : la meme commande que
+# .github/workflows/docker.yml (job `base`) et build-iso.yml (« Empreinte du
+# contexte »), aux redirections pres, qui ne changent pas le calcul. C est tout l interet - si elle donne la meme
+# valeur ici que sur le runner, l image publiee sous ce nom a ete construite a
+# partir EXACTEMENT de ce qui est dans l arbre de travail, et la recompiler ne
+# produirait rien d autre. Toucher a cette liste de chemins sans la toucher
+# dans les deux workflows fait diverger les empreintes, et plus rien ne se
+# tire : les trois doivent bouger ensemble.
+#
+# L ordre :
+#   1. la reference EXPLICITE de --skip-build=REF - elle ne se discute pas ;
+#   2. ghcr.io/<depot>/osmocom-nitb:base-<empreinte> - celle qui correspond
+#      au commit, publiee par docker.yml ;
+#   3. l image Docker Hub, qui ne suit PAS le commit : dernier recours, et
+#      iso_docker_build previent avant de s en servir.
+iso_pull_refs() {
+    if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ]; then echo "$ISO_PULL_IMAGE"; return 0; fi
+    local _key _repo
+    # EN CONDITION DE `if`, et ce n est pas du style : build-iso.sh tourne sous
+    # `set -euo pipefail`, et une affectation depuis une pipeline qui echoue
+    # (hors depot git, git ls-files sort en 128) arreterait tout le script sans
+    # un mot - exactement le piege qui a coute le build du 13-09 dans
+    # 86-finitions.sh. En condition, set -e laisse passer et _key reste vide.
+    # Le 2>/dev/null est SUR git, pas sur le `if` : dans une commande simple les
+    # expansions precedent les redirections, une redirection posee au bout ne
+    # couvre donc pas la substitution - « fatal: not a git repository » sortait
+    # quand meme, au milieu du build.
+    if ! _key="$(cd "$DIR" && git ls-files -- Dockerfile packaging configs scripts services \
+                              helpers opt-gsm tools patches 2>/dev/null \
+                 | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -c1-16)"; then
+        _key=""
+    fi
+    # Le depot vient de origin ; hors clone git (une archive deployee a la
+    # main), on retombe sur le depot amont plutot que de ne rien proposer.
+    _repo="$(cd "$DIR" && git config --get remote.origin.url 2>/dev/null || true)"
+    _repo="${_repo%.git}"; _repo="${_repo##*github.com[:/]}"
+    # Un `owner/nom` et rien d autre : une origin qui n est pas sur github.com
+    # ressort telle quelle du decoupage ci-dessus (ssh, gitlab, un chemin
+    # local), et on n en ferait qu une reference GHCR imaginaire.
+    case "$_repo" in *[:@\ ]*|*/*/*) _repo="" ;; */*) ;; *) _repo="" ;; esac
+    [ -n "$_repo" ] || _repo="bbaranoff/osmo-operator"
+    # L empreinte est vide hors depot git : pas de reference GHCR a proposer.
+    [ -n "$_key" ] && echo "ghcr.io/${_repo,,}/osmocom-nitb:base-${_key}"
+    echo "$ISO_PULL_IMAGE"
+}
+
 iso_docker_build() {
     local role="$1"
     if [ "${OSMO_ISO_IMAGE_READY:-0}" = "1" ]; then
         echo -e "${GREEN}[1/9] Image docker : deja construite par la passe parente${NC}"; return 0
     fi
-    # --skip-build : l image vient de Docker Hub, taguee du nom que build.sh
-    # aurait produit (osmocom-nitb, ou osmocom-nitb:arm64 en --arm) pour que
-    # 31-image-source et la suite n y voient aucune difference. Le hub seul
-    # (interstp) prend AUSSI cette image : osmocom-nitb porte osmo-stp, et
-    # OSMO_ISO_SRC_IMAGE empeche une osmocom-stp locale de s inviter.
+    # ── TIRER PLUTOT QUE CONSTRUIRE ─────────────────────────────────────
+    # L image tiree est taguee du nom que build.sh aurait produit (osmocom-nitb,
+    # ou osmocom-nitb:arm64 en --arm) pour que 31-image-source et toute la
+    # suite n y voient aucune difference ; OSMO_ISO_SRC_IMAGE empeche en plus
+    # une image locale du meme nom de s inviter.
+    #
+    # DEUX GARDES avant meme d essayer, et elles ne valent que pour le DEFAUT :
+    # un --skip-build ecrit a la main passe outre les deux.
+    #   arm64    rien n est publie pour cette architecture ; un pull amd64 sur
+    #            une cible arm64 donnerait un rootfs inutilisable.
+    #   interstp le hub seul se construit en MINUTES depuis Dockerfile.stp
+    #            (osmo-stp et trois bibliotheques). Lui faire tirer les ~11 Go
+    #            de l image de base pour en extraire quatre binaires serait
+    #            plus long que de la compiler.
+    local _try_pull=0
     if [ "${ISO_SKIP_BUILD:-0}" = "1" ] && [ "${ISO_FORCE_BUILD:-0}" != "1" ]; then
-        local _local="osmocom-nitb${ISO_IMG_TAG}"
-        # DEJA LA ? On ne tire pas. Le registre n est pas toujours joignable par
-        # celui qui execute : sur un runner, docker/login-action ecrit les
-        # identifiants dans le ~/.docker du compte runner, et build-iso.sh
-        # tourne sous sudo - un pull GHCR y repartirait sans jeton. L image
-        # ayant ete tiree en amont, il n y a rien a aller chercher.
-        if docker image inspect "$ISO_PULL_IMAGE" >/dev/null 2>&1; then
-            echo -e "${GREEN}[1/9] --skip-build : ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} deja presente localement -> ${CYAN}${_local}${NC}"
-        else
-            echo -e "${GREEN}[1/9] --skip-build : pull de ${CYAN}${ISO_PULL_IMAGE}${NC}${GREEN} -> ${CYAN}${_local}${NC}"
-            docker pull --platform "linux/${ISO_ARCH:-amd64}" "$ISO_PULL_IMAGE" \
-                || { echo -e "${RED}Echec du pull de ${ISO_PULL_IMAGE}${NC}" >&2; exit 1; }
+        if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ]; then _try_pull=1
+        elif [ "${ISO_ARCH:-amd64}" = "amd64" ] && [ "$role" != "interstp" ]; then _try_pull=1
         fi
-        docker tag "$ISO_PULL_IMAGE" "$_local"
-        export OSMO_ISO_SRC_IMAGE="$_local"
-        echo -e "  ${GREEN}✓${NC} image ${_local} prete ($(docker image inspect "$_local" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
-        return 0
+    fi
+    if [ "$_try_pull" = "1" ]; then
+        local _local="osmocom-nitb${ISO_IMG_TAG}" _ref _got=""
+        echo -e "${GREEN}[1/9] Image docker : on TIRE avant de construire${NC}"
+        for _ref in $(iso_pull_refs); do
+            # DEJA LA ? On ne tire pas. Le registre n est pas toujours joignable
+            # par celui qui execute : sur un runner, docker/login-action ecrit
+            # les identifiants dans le ~/.docker du compte runner, et
+            # build-iso.sh tourne sous sudo - un pull GHCR y repartirait sans
+            # jeton. L image ayant ete tiree en amont, il n y a rien a chercher.
+            if docker image inspect "$_ref" >/dev/null 2>&1; then
+                echo -e "  ${GREEN}✓${NC} ${CYAN}${_ref}${NC} deja presente localement"
+                _got="$_ref"; break
+            fi
+            # manifest inspect AVANT le pull : il coute un aller-retour HTTP la
+            # ou un pull rate peut passer des minutes a recommencer des couches.
+            if docker manifest inspect "$_ref" >/dev/null 2>&1; then
+                echo -e "  ${CYAN}pull${NC} ${_ref} (linux/${ISO_ARCH:-amd64})..."
+                if docker pull --platform "linux/${ISO_ARCH:-amd64}" "$_ref"; then
+                    _got="$_ref"; break
+                fi
+            fi
+            echo -e "  ${YELLOW}!${NC} ${_ref} : indisponible"
+        done
+        if [ -n "$_got" ]; then
+            # Le dernier recours ne suit pas le commit : on ne le laisse pas
+            # passer en silence. Une ISO batie sur cette image peut porter une
+            # pile differente de l arbre de travail - ce qui s explique cinq
+            # minutes apres le build, et jamais trois semaines apres.
+            # `if`, et pas « [ ... ] && [ ... ] && echo » : une chaine && dont
+            # le premier test est faux rend 1, et ce depot s est deja fait
+            # arreter par une ligne de cette forme sous set -e.
+            if [ "$_got" = "$ISO_PULL_IMAGE" ] && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
+                echo -e "  ${YELLOW}!${NC} aucune image ne correspond a l'empreinte du depot : ${CYAN}${_got}${NC} ne suit pas ce commit (${CYAN}--build-docker${NC} pour compiler l'arbre de travail)"
+            fi
+            docker tag "$_got" "$_local"
+            export OSMO_ISO_SRC_IMAGE="$_local"
+            echo -e "  ${GREEN}✓${NC} image ${_local} prete ($(docker image inspect "$_local" --format '{{.Size}}' 2>/dev/null | awk '{printf "%.0f Mo", $1/1048576}'))"
+            return 0
+        fi
+        # Demande a la main, le pull etait la consigne : ne pas y arriver est
+        # une erreur. Par defaut, ce n etait qu un raccourci - on compile.
+        if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ]; then
+            echo -e "${RED}--skip-build : aucune image joignable (${ISO_PULL_IMAGE})${NC}" >&2; exit 1
+        fi
+        echo -e "  ${YELLOW}!${NC} aucune image publiee joignable - construction locale"
     fi
     if [ "$role" = "interstp" ]; then
         echo -e "${GREEN}[1/9] Hub seul : construction de ${CYAN}osmocom-stp${NC}${GREEN} (Dockerfile.stp)...${NC}"

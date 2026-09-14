@@ -15,10 +15,18 @@
 #                         systemctl start osmo-banc). Equivalents en variables :
 #                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
-#    --skip-build[=image:tag]   pas de build : pull bastienbaranoff/norf_gsm:latest
-#                         depuis Docker Hub (ou l'image donnee - GHCR compris),
-#                         tague osmocom-nitb:latest, et continue. Une image deja
-#                         presente localement n'est pas retiree.
+#    (defaut, amd64)      L'IMAGE DOCKER EST TIREE, PAS CONSTRUITE. Dans l'ordre :
+#                         ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>,
+#                         puis l'image Docker Hub. build.sh ne tourne que si
+#                         aucune ne repond. L'empreinte est celle des workflows :
+#                         quand elle correspond, l'image publiee a ete batie sur
+#                         exactement cet arbre de travail. En arm64 rien n'est
+#                         publie : la compilation reste le defaut.
+#    --skip-build[=image:tag]   rend le pull obligatoire (pas de repli sur
+#                         build.sh) et, avec =image, impose la reference au lieu
+#                         de la deduire. Une image deja presente localement
+#                         n'est pas retiree. Variable : OSMO_ISO_SKIP_BUILD=0
+#                         pour l'inverse - ne jamais tirer.
 #    --build-docker       l'inverse, et il gagne : l'image est construite par
 #                         build.sh meme si un --skip-build traine par ailleurs.
 #                         Variable : OSMO_ISO_BUILD_DOCKER=1.
