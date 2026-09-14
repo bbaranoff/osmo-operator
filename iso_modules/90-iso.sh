@@ -62,13 +62,7 @@ fi
 # vmlinuz ni initrd : grub-mkconfig n ecrivait aucune entree Linux et la
 # machine ne demarrait plus apres « installation reussie ». Les ~100 Mo de
 # plus sont deja compresses (le noyau l est), ils ne pesent presque rien ici.
-mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
-    "${SQUASH_COMP[@]}" -b 1M \
-    -e 'var/cache/apt' -e 'var/lib/apt/lists' \
-    -no-progress
-echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
-
-# ── Relecture du squashfs : chaque fichier de paquet contre son md5 dpkg ────
+# ── Controle d integrite : les fichiers des paquets contre leurs md5 dpkg ───
 # [2026-09-09] Le build du 8 au soir a livre une ISO ou ~440 fichiers
 # differaient d UN bit (le bit 0 tombe a zero, jusque dans des noms de
 # fichiers : « __pyc`che__ », « usr.share ») de ce que dpkg avait pose :
@@ -76,56 +70,131 @@ echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs
 # Shell segfaultait dans libmozjs a chaque lancement, « Oh no! Something has
 # gone wrong » au premier boot (VirtualBox comme QEMU). Les .deb sont
 # verifies par leur CRC xz a l extraction : l alteration s est faite APRES,
-# sur l hote (RAM ou disque, entre dpkg et mksquashfs) - une machine qui
-# flanche sous la charge du build. Aucun maillon de la chaine ne le voit ;
-# on relit donc le squashfs ecrit et l on compare les fichiers des paquets
-# a leur md5. Ce que le build modifie lui-meme est ecarte : /opt et /root
-# (sources et venv), /usr/local, MongoDB, les unites osmo-* (recopiees du
-# docker), calamares.desktop (NoDisplay), live-boot (toram), os-release ;
-# les fichiers supprimes (docs, locales) ne comptent pas ; ni les libs de la
-# cloture ldd de l etape 8b, qui remplacent CELLES D APT a dessein
-# ($WORK/closure.list). Un echec court et REPRODUCTIBLE (les memes 4 ou 5
-# fichiers a chaque build, en CI comme ici) n est pas de la RAM qui flanche :
-# c est une etape du build qui ecrit par-dessus un paquet sans etre ecartee
-# ici. 40 s environ.
-# OSMO_ISO_NO_VERIFY=1 pour passer outre, en connaissance de cause.
+# sur l hote (RAM ou disque) - une machine qui flanche sous la charge du
+# build. Aucun maillon de la chaine ne le voit ; on compare donc les fichiers
+# des paquets a leur md5 dpkg.
+#
+# [2026-09-14] Le controle ne se faisait qu APRES coup, sur le squashfs relu :
+# il englobait tout le trajet, de l ecriture par dpkg jusqu a la relecture, et
+# ne savait donc pas dire OU le bit avait bascule. On controle desormais DEUX
+# FOIS, avec exactement le meme filtre - sans quoi comparer les deux listes
+# n aurait aucun sens :
+#
+#   rootfs altere            -> c est ANTERIEUR a la compression (dpkg, ou une
+#                               etape du build qui reecrit par-dessus un paquet)
+#   rootfs sain + sqfs altere-> c est mksquashfs ou la relecture
+#
+# Ce que le build modifie lui-meme est ecarte : /opt et /root (sources et
+# venv), /usr/local, MongoDB, les unites osmo-* (recopiees du docker),
+# calamares.desktop (NoDisplay), live-boot (toram), os-release ; les fichiers
+# supprimes (docs, locales) ne comptent pas ; ni les libs de la cloture ldd de
+# l etape 8b, qui remplacent CELLES D APT a dessein ($WORK/closure.list).
+#
+# Et les listes sont desormais HORODATEES. Le critere qui tranche - « les
+# memes fichiers a chaque build » (une etape du build les reecrit) contre « un
+# tirage different a chaque fois » (l hote qui flanche) - etait inverifiable
+# tant qu un fichier unique etait ecrase a chaque build : le rapport le pose
+# maintenant tout seul, en comparant au build precedent.
+# Environ 40 s par passe. OSMO_ISO_NO_VERIFY=1 pour passer outre.
+_vfy_stamp="$(date +%Y%m%d-%H%M%S)"
+
+# Le controle, applique a une racine quelconque. Pose _vfy_out (les chemins en
+# echec, sans le « : FAILED » - on compare ces listes d un build a l autre),
+# _vfy_n (leur nombre) et _vfy_prev (la liste du build precedent de meme
+# etiquette, vide au premier build).
+_vfy_paquets() {   # $1 = etiquette (rootfs|squashfs), $2 = racine a controler
+    local _k="$1" _r="$2" _skip="$WORK/closure.list"
+    [ -s "$_skip" ] || _skip=/dev/null
+    _vfy_out="/var/tmp/osmo-iso-verify-${_vfy_stamp}-${_k}.failed"
+    ( cd "$_r" && cat var/lib/dpkg/info/*.md5sums 2>/dev/null \
+        | grep -vE '^[0-9a-f]{32}  (opt/|root/|usr/local/|mongodb|usr/lib/systemd/system/osmo-|usr/share/applications/calamares\.desktop$|lib/live/boot/|usr/lib/os-release$)' \
+        | awk -v skip="$_skip" 'BEGIN{while((getline l < skip)>0) s[l]=1} !(substr($0,35) in s)' \
+        | md5sum -c --quiet 2>/dev/null | grep -v 'open or read' \
+        | sed 's/: FAILED$//' ) > "$_vfy_out" || true
+    _vfy_n=$(wc -l < "$_vfy_out")
+    # Le chemin historique reste valable : il pointe sur la derniere passe.
+    ln -sf "$_vfy_out" /var/tmp/osmo-iso-verify.failed
+    _vfy_prev=$(ls -1t /var/tmp/osmo-iso-verify-*-"${_k}".failed 2>/dev/null \
+        | grep -vF "$_vfy_stamp" | head -1) || true
+    # Les 20 dernieres : de quoi juger la stabilite, pas de quoi remplir /var/tmp.
+    ls -1t /var/tmp/osmo-iso-verify-*-"${_k}".failed 2>/dev/null \
+        | tail -n +21 | xargs -r rm -f || true
+}
+
+# Le verdict, une fois qu une liste n est pas vide. C est la comparaison au
+# build precedent qui porte le diagnostic, pas le nombre de fichiers.
+_vfy_verdict() {
+    local _c
+    head -8 "$_vfy_out" | sed 's/^/      /'
+    if [ "$_vfy_n" -gt 8 ]; then echo "      ... (liste complete : $_vfy_out)"; fi
+    if [ -n "$_vfy_prev" ]; then
+        _c=$(grep -cxF -f "$_vfy_out" "$_vfy_prev" 2>/dev/null) || _c=0
+        if [ "${_c:-0}" -gt 0 ]; then
+            echo -e "  ${YELLOW}${_c} de ces fichiers echouaient DEJA au build precedent${NC}"
+            echo -e "  ${YELLOW}($(basename "$_vfy_prev")) : la liste est STABLE. Ce n est pas de la${NC}"
+            echo -e "  ${YELLOW}RAM qui flanche - c est une etape du build qui reecrit ces fichiers${NC}"
+            echo -e "  ${YELLOW}par-dessus leur paquet sans etre ecartee du filtre ci-dessus.${NC}"
+        else
+            echo -e "  ${YELLOW}Aucun de ces fichiers n echouait au build precedent${NC}"
+            echo -e "  ${YELLOW}($(basename "$_vfy_prev")) : le tirage CHANGE a chaque fois. Aucune${NC}"
+            echo -e "  ${YELLOW}etape du build ne vise des fichiers au hasard : c est l hote.${NC}"
+            echo -e "  ${YELLOW}RAM non-ECC (rien ne sera jamais signale), chauffe, disque.${NC}"
+            echo -e "  ${YELLOW}memtest86+ plusieurs passes, temperatures sous charge.${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}Pas de build precedent a comparer. Relancer tel quel : meme liste =${NC}"
+        echo -e "  ${YELLOW}une etape du build reecrit ces fichiers ; liste differente = l hote.${NC}"
+    fi
+}
+
+# Passe 1 : le rootfs tel que dpkg et le build l ont laisse. Avant les 20 Go
+# de compression - inutile de les payer pour retrouver l alteration a la sortie.
+if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
+    _vfy_paquets rootfs "$ROOTFS"
+    if [ "$_vfy_n" -eq 0 ]; then
+        echo -e "  ${GREEN}✓${NC} rootfs conforme a dpkg avant compression"
+    else
+        echo -e "  ${RED}✗ rootfs ALTERE AVANT compression : ${_vfy_n} fichier(s)${NC}"
+        _vfy_verdict
+        echo -e "  ${YELLOW}L alteration est ANTERIEURE a mksquashfs : la compression et sa${NC}"
+        echo -e "  ${YELLOW}relecture sont hors de cause, ne pas les chercher.${NC}"
+        echo -e "  ${YELLOW}OSMO_ISO_NO_VERIFY=1 pour livrer quand meme (l ISO plantera).${NC}"
+        exit 1
+    fi
+fi
+
+mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
+    "${SQUASH_COMP[@]}" -b 1M \
+    -e 'var/cache/apt' -e 'var/lib/apt/lists' \
+    -no-progress
+echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
+
+# ── Passe 2 : le squashfs relu, contre les memes md5 dpkg ──────────────────
+# La passe 1 (avant mksquashfs) a dit que le rootfs etait sain ; ce qui
+# echoue ici n a donc pu etre altere que par la compression elle-meme, son
+# ecriture, ou cette relecture. Voir le pave de la passe 1 pour le filtre.
 if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     _vfy_mnt="$WORK/sqfs-verify"
-    _vfy_out="/var/tmp/osmo-iso-verify.failed"
     mkdir -p "$_vfy_mnt"
     if mount -t squashfs -o loop,ro "$ISOROOT/live/filesystem.squashfs" "$_vfy_mnt" 2>/dev/null; then
-        # La cloture ldd de l etape 8b ECRASE des libs d apt par celles de
-        # l image docker (c est son role). 81-cloture-systeme.sh en laisse la
-        # liste : ces chemins-la sortent du controle, sinon ils remontent en
-        # « ALTERE » des que l image et le rootfs n ont pas la meme mise a
-        # jour de securite - 4 fichiers (libz, libzstd, libpcre2, libmd) tous
-        # les builds de CI, pour une machine parfaitement saine.
-        _vfy_skip="$WORK/closure.list"; [ -s "$_vfy_skip" ] || _vfy_skip=/dev/null
-        ( cd "$_vfy_mnt" && cat var/lib/dpkg/info/*.md5sums 2>/dev/null \
-            | grep -vE '^[0-9a-f]{32}  (opt/|root/|usr/local/|mongodb|usr/lib/systemd/system/osmo-|usr/share/applications/calamares\.desktop$|lib/live/boot/|usr/lib/os-release$)' \
-            | awk -v skip="$_vfy_skip" 'BEGIN{while((getline l < skip)>0) s[l]=1} !(substr($0,35) in s)' \
-            | md5sum -c --quiet 2>/dev/null | grep -v 'open or read' ) > "$_vfy_out" || true
+        _vfy_paquets squashfs "$_vfy_mnt"
         umount "$_vfy_mnt" 2>/dev/null || true
-        _vfy_n=$(wc -l < "$_vfy_out")
         if [ "$_vfy_n" -eq 0 ]; then
             echo -e "  ${GREEN}✓${NC} squashfs relu : les fichiers des paquets sont conformes a dpkg"
         else
             echo -e "  ${RED}✗ squashfs ALTERE : ${_vfy_n} fichier(s) ne correspondent plus a leur paquet${NC}"
-            sed 's/: FAILED$//' "$_vfy_out" | head -8 | sed 's/^/      /'
-            [ "$_vfy_n" -gt 8 ] && echo "      ... (liste complete : $_vfy_out)"
-            echo -e "  ${YELLOW}Ce que le build ecrase lui-meme est deja ecarte (cloture 8b comprise) :${NC}"
-            echo -e "  ${YELLOW}des bits changent sur l hote entre dpkg et mksquashfs. Si la liste est${NC}"
-            echo -e "  ${YELLOW}longue et les ecarts d un bit, verifier la machine (memtest86+,${NC}"
-            echo -e "  ${YELLOW}temperatures, disque) puis relancer ; si elle est courte et stable d un${NC}"
-            echo -e "  ${YELLOW}build a l autre, chercher QUI a reecrit ces fichiers.${NC}"
+            _vfy_verdict
+            echo -e "  ${YELLOW}Le rootfs, lui, etait conforme juste avant (passe 1) : les memes${NC}"
+            echo -e "  ${YELLOW}octets sont devenus faux EN PASSANT par mksquashfs. Compression a${NC}"
+            echo -e "  ${YELLOW}tous les coeurs = le moment ou l hote chauffe le plus du build.${NC}"
             echo -e "  ${YELLOW}OSMO_ISO_NO_VERIFY=1 pour livrer quand meme (l ISO plantera).${NC}"
             exit 1
         fi
     else
-        echo -e "  ${YELLOW}!${NC} squashfs non relu (mount loop impossible) : integrite non verifiee"
+        echo -e "  ${YELLOW}!${NC} squashfs non relu (mount loop impossible) : seule la passe 1 a parle"
     fi
     rmdir "$_vfy_mnt" 2>/dev/null || true
-    unset _vfy_mnt _vfy_out _vfy_n _vfy_skip
+    unset _vfy_mnt _vfy_out _vfy_n _vfy_prev _vfy_stamp
 fi
 
 cp "$VMLINUZ" "$ISOROOT/boot/vmlinuz"
