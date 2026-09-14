@@ -161,8 +161,22 @@ iso_host_packages() {
 # qemu-user-static l enregistre avec F depuis jammy ; si ce n est pas le cas
 # ici, on passe par l image binfmt de Docker (tonistiigi/binfmt), qui fait
 # exactement cet enregistrement - c est un telechargement, il est dit.
+#
+# [2026-09-14] SUR UN HOTE arm64, IL N Y A RIEN A EMULER. Cette fonction
+# s arretait en erreur fatale sur une machine aarch64 (un Pi, un Ampere, le
+# runner ubuntu-24.04-arm de GitHub) : /proc/sys/fs/binfmt_misc/qemu-aarch64
+# n y existe pas - et n a aucune raison d exister -, update-binfmts n a rien a
+# activer, et tonistiigi/binfmt --install arm64 n installe pas un handler pour
+# l architecture native. On sortait donc en « binfmt qemu-aarch64
+# indisponible » sur la seule machine qui n en a pas besoin. Meme regle que
+# build.sh (l.183) et 40-rootfs.sh (l.57) : on compare a l architecture de
+# l hote, et on ne parle d emulation que si les deux different.
 iso_arm_binfmt() {
     [ "${ISO_ARCH:-amd64}" = "arm64" ] || return 0
+    if [ "${ISO_ARCH}" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ]; then
+        echo -e "  ${GREEN}✓${NC} hote deja en ${ISO_ARCH} : ni qemu-user ni binfmt, tout est natif"
+        return 0
+    fi
     local f=/proc/sys/fs/binfmt_misc/qemu-aarch64
     [ -d /proc/sys/fs/binfmt_misc ] || mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
     [ -e "$f" ] || update-binfmts --enable qemu-aarch64 >/dev/null 2>&1 || true

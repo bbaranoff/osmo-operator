@@ -1,0 +1,328 @@
+name: Build image SD (arm64 / Raspberry Pi 4)
+
+# La MEME pile que les ISO x86, construite pour arm64 et livree en IMAGE SD
+# (.img : une FAT32 pour le firmware du Pi, une ext4 persistante pour le
+# systeme), pas en ISO live. C'est le chemin --arm de build-iso.sh
+# (iso_modules/92-rpi-image.sh) ; rien ici ne lui est propre.
+#
+# ── POURQUOI UN RUNNER arm64 ET PAS L'EMULATION ────────────────────────────
+# build-iso.sh sait faire une image arm64 depuis un hote x86 : docker buildx
+# --platform linux/arm64 et debootstrap --foreign, le tout sous qemu-user-static.
+# Ca marche, et le commentaire de iso_modules/00-options.sh l'annonce
+# honnetement : « comptez une dizaine d'heures au premier build ». Or un job
+# GitHub heberge est TUE a 6 heures (360 min, le maximum). Ce chemin-la ne peut
+# donc pas finir ici : il sortirait un run rouge sans image, toutes les fois.
+#
+# Les runners arm64 heberges (ubuntu-24.04-arm) compilent l'aarch64 NATIVEMENT :
+# plus de qemu-user, plus de buildx --platform, plus de debootstrap --foreign -
+# build.sh (l.183) et iso_modules/40-rootfs.sh (l.57) comparent tous deux la
+# cible a l'architecture de l'hote et prennent d'eux-memes le chemin court.
+# C'est le defaut de ce workflow. L'entree `runner` permet quand meme de
+# demander un hote x86 : pour verifier que le chemin emule n'est pas casse,
+# en sachant qu'il sera coupe a 6 heures.
+#
+# ── CE QUE L'IMAGE ARM N'A PAS ──────────────────────────────────────────────
+# Pas de --desktop ni de --all : build-iso.sh les refuse pour arm64 (GNOME,
+# calamares et grub-efi-amd64 n'ont rien a faire sur un Pi, et une image a la
+# fois). Pas de 4G non plus : iso_modules/88-lte-pmos.sh sort en tete sur
+# arm64 - srsRAN et Open5GS ne sont pas compiles pour aarch64, et pmbootstrap
+# y ferait une VM x86 emulee. D'ou l'absence d'entree `pmos_image`, qui n'a de
+# sens que pour les ISO x86.
+
+on:
+  push:
+    tags: ["rpi-*", "arm-*"]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Quelle image (une seule : --all est refuse en arm64)"
+        type: choice
+        default: operator
+        options:
+          - operator   # le noeud complet    -> osmo-operator-rpi4.img
+          - lite       # le noeud sans les ateliers de compilation
+          - stp        # le hub SS7          -> interstp-rpi4.img
+      runner:
+        description: "Hote de construction"
+        type: choice
+        default: ubuntu-24.04-arm
+        options:
+          - ubuntu-24.04-arm   # natif aarch64 : le seul qui tienne dans les 6 h
+          - ubuntu-24.04       # x86 + qemu-user : lent, sera coupe a 6 h
+      release:
+        description: "Create GitHub Release"
+        type: boolean
+        default: true
+      no_cache:
+        description: "Rebuild Docker images without cache (--no-cache)"
+        type: boolean
+        default: false
+
+# Le tag ne declenche qu'une image : deux runs concurrents sur le meme tag se
+# disputeraient le cache .deb, et le second ecraserait la Release du premier.
+concurrency:
+  group: build-arm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-rpi:
+    # Sur un push de tag les entrees de workflow_dispatch sont VIDES : le `||`
+    # rend alors le natif, c'est-a-dire le seul chemin qui puisse aboutir.
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # L'hote est-il bien celui qu'on croit ? Un `runs-on` qui retomberait sur
+      # x86 (label indisponible sur le depot, runner maison mal etiquete) ne se
+      # verrait autrement qu'a la sixieme heure, quand le job est tue. Ce n'est
+      # pas une erreur - le chemin emule EXISTE - mais ca se dit tout de suite.
+      - name: Architecture de l'hote
+        run: |
+          HOST=$(dpkg --print-architecture)
+          echo "hote : $HOST  ($(uname -m), $(nproc) coeurs, $(free -g | awk '/^Mem:/{print $2}') Go)"
+          if [ "$HOST" = "arm64" ]; then
+            echo "::notice::Hote aarch64 : construction NATIVE (ni qemu-user, ni buildx --platform, ni debootstrap --foreign)."
+          else
+            echo "::warning::Hote $HOST : l'aarch64 sera EMULE (qemu-user-static). Comptez une dizaine d'heures - ce job est coupe a 6."
+          fi
+
+      # L'EMPREINTE DU CONTEXTE : la meme commande que build-iso.yml et
+      # docker.yml, au caractere pres. Elle ne sert ici qu'a nommer le cache
+      # .deb - aucune image arm64 n'est publiee sur GHCR (docker.yml ne
+      # construit que de l'amd64), donc pas de --skip-build possible : l'image
+      # de base est batie ici, et c'est l'essentiel du temps du job.
+      - name: Empreinte du contexte
+        id: key
+        run: |
+          KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
+                                helpers opt-gsm tools patches \
+                | sort | xargs sha256sum | sha256sum | cut -c1-16)
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Empreinte du contexte : $KEY"
+
+      # Menage + /var/lib/docker sur le plus grand disque. L'action dit
+      # elle-meme pourquoi, et sait retomber sur / quand /mnt manque : les
+      # runners arm64 n'ont pas forcement la meme carte des disques que les x86.
+      - uses: ./.github/actions/docker-disk
+        with:
+          need: "40"
+
+      # Un exit 143 ne dit rien de ce qui manquait. Meme temoin que build-iso.yml.
+      - name: Temoin disque/memoire
+        run: |
+          nohup bash -c 'while true; do
+            printf "[%s] / %s  /mnt %s  mem %s\n" \
+              "$(date -u +%H:%M:%S)" \
+              "$(df -h --output=avail / | tail -1 | tr -d " ")" \
+              "$(df -h --output=avail /mnt 2>/dev/null | tail -1 | tr -d " ")" \
+              "$(free -m | awk "/^Mem:/{print \$3\"/\"\$2\" Mo\"}")"
+            sleep 30
+          done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
+          echo "temoin demarre -> $RUNNER_TEMP/watchdog.log"
+
+      # ── Le cache .deb entre deux runs ───────────────────────────────────
+      # Ce que le Dockerfile compile sort en .deb (packaging/osmo-deb.sh), et
+      # osmo-deb NOMME ses paquets avec l'architecture (..._arm64.deb) : les
+      # deux architectures pourraient partager une entree sans se marcher
+      # dessus. On les separe quand meme - une entree de cache plafonne, et
+      # melanger doublerait sa taille pour ne jamais servir qu'a moitie.
+      # Sur /mnt, pas sur / : c'est / qui porte le rootfs et l'image SD.
+      - name: Preparer le cache .deb
+        run: |
+          CACHE=/mnt/osmo-debs
+          sudo mkdir -p "$CACHE"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE"
+          echo "OSMO_DEB_CACHE=$CACHE" >> "$GITHUB_ENV"
+          echo "cache .deb : $CACHE"
+
+      - name: Cache .deb (osmo-deb, arm64)
+        uses: actions/cache@v4
+        with:
+          path: /mnt/osmo-debs
+          key: osmo-debs-noble-arm64-${{ steps.key.outputs.key }}
+          restore-keys: |
+            osmo-debs-noble-arm64-
+
+      - name: Build image SD
+        run: |
+          chmod +x build-iso.sh
+          df -h / /mnt || true
+          # --all et --desktop sont refuses par build-iso.sh en arm64 : une
+          # image a la fois. --output= fige le nom pour que les etapes
+          # suivantes (checksums, artefacts, Release) ne devinent rien - sans
+          # lui le nom porte la version (osmo-operator-main-rpi4.img).
+          case "${{ github.event.inputs.mode }}" in
+            ""|operator) ISO_ARGS="--arm --role=operator --output=osmo-operator-rpi4.img" ;;
+            lite)        ISO_ARGS="--arm --role=operator --lite --output=osmo-operator-lite-rpi4.img" ;;
+            stp)         ISO_ARGS="--arm --role=interstp --output=interstp-rpi4.img" ;;
+            *) echo "::error::mode inconnu : ${{ github.event.inputs.mode }}"; exit 2 ;;
+          esac
+          echo "::notice::mode ${{ github.event.inputs.mode || 'operator' }} -> build-iso.sh $ISO_ARGS"
+          # Meme defaut que build-iso.yml : sur un push les entrees sont VIDES,
+          # jamais "false" - un `[ ... ] && NO_CACHE=--no-cache` mal tourne
+          # refait les 51 RUN de compilation a chaque tag.
+          NO_CACHE=""
+          [ "${{ github.event.inputs.no_cache }}" = "true" ] && NO_CACHE="--no-cache"
+          # sudo env ... : sudoers est en env_reset sans SETENV sur un runner,
+          # « sudo -E » et « sudo VAR=x » peuvent etre refuses ; env(1) lance en
+          # root passe toujours.
+          sudo env OSMO_HOST_DOCKER="$OSMO_HOST_DOCKER" \
+                   OSMO_DEB_CACHE="$OSMO_DEB_CACHE" \
+               ./build-iso.sh $NO_CACHE --kb=us $ISO_ARGS
+          ls -lh ./*-rpi4.img 2>/dev/null || true
+          df -h / /mnt || true
+        env:
+          # Le runner a deja docker, compose v2 et buildx (paquets moby-*), et
+          # docker.io entre en conflit avec eux. Rien a installer ici. Note :
+          # ce drapeau ne touche QUE docker - l'installation de qemu-user-static
+          # pour le chemin emule reste faite par build.sh (l.191).
+          OSMO_HOST_DOCKER: "0"
+
+      # build.sh a tourne sous sudo : les .deb sont a root, et le post-step
+      # d'actions/cache tourne en runner. Sans ce chown la sauvegarde echoue en
+      # silence et le run suivant recompile tout.
+      - name: Rendre le cache .deb au runner
+        if: always()
+        run: |
+          CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
+          sudo chown -R "$(id -u):$(id -g)" "$CACHE" 2>/dev/null || true
+          echo "$(find "$CACHE" -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh "$CACHE" | cut -f1)"
+
+      - name: Temoin - dernieres mesures
+        if: always()
+        run: tail -40 "$RUNNER_TEMP/watchdog.log" 2>/dev/null || echo "(pas de temoin)"
+
+      # Les sommes portent sur l'image BRUTE : c'est elle qu'on grave, et c'est
+      # donc elle qu'on doit pouvoir verifier apres decompression.
+      - name: Checksums
+        run: |
+          IMGS=""
+          for img in osmo-operator-rpi4.img osmo-operator-lite-rpi4.img interstp-rpi4.img; do
+              [ -f "$img" ] && IMGS="$IMGS $img"
+          done
+          [ -n "$IMGS" ] || { echo "::error::aucune image produite"; exit 1; }
+          sudo chown "$(id -u):$(id -g)" $IMGS
+          sha256sum $IMGS > SHA256SUMS
+          md5sum    $IMGS > MD5SUMS
+          cat SHA256SUMS
+
+      # ── L'IMAGE EST CREUSE : ON LA COMPRESSE AVANT DE LA TRANSPORTER ────
+      # 92-rpi-image.sh assemble par `truncate` + `dd conv=sparse` : le fichier
+      # fait la taille de la carte (plusieurs Go APPARENTS) pour bien moins
+      # d'occupation reelle. upload-artifact et une Release, eux, transportent
+      # l'apparent. zstd --sparse rend les trous a la compression et les
+      # restitue a la decompression : c'est le meme format que celui deja
+      # employe pour l'image de la VM pmOS (88-lte-pmos.sh).
+      - name: Compresser (zstd, creux preserve)
+        run: |
+          for img in ./*-rpi4.img; do
+            [ -f "$img" ] || continue
+            echo "$img : $(du -h --apparent-size "$img" | cut -f1) apparents, $(du -h "$img" | cut -f1) occupes"
+            zstd -T0 -9 --sparse --rm -q -o "$img.zst" "$img"
+            echo "  -> $(du -h "$img.zst" | cut -f1)"
+          done
+          ls -lh ./*-rpi4.img.zst
+
+      # Une Release GitHub refuse tout fichier de plus de 2 Gio. On ne decoupe
+      # QUE ce qui depasse. SHA256SUMS porte sur l'image brute, donc reste
+      # verifiable apres decompression ; PARTS.sha256 couvre les morceaux.
+      - name: Split over 2 GiB
+        run: |
+          LIMIT=$((2 * 1024 * 1024 * 1024))
+          for z in ./*-rpi4.img.zst; do
+            [ -f "$z" ] || continue
+            size=$(stat -c%s "$z")
+            if [ "$size" -gt "$LIMIT" ]; then
+              echo "$z : $size octets > 2 Gio -> decoupe"
+              split -b 1900M -d -a 2 "$z" "${z}.part-"
+              sha256sum "${z}".part-* >> PARTS.sha256
+              rm -f "$z"          # seules les parties sont publiees
+            else
+              echo "$z : $size octets -> publie tel quel"
+            fi
+          done
+          touch PARTS.sha256
+          ls -lh ./*-rpi4.img.zst* 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: osmo_egprs-rpi4
+          path: |
+            *-rpi4.img.zst*
+            SHA256SUMS
+            MD5SUMS
+            PARTS.sha256
+          retention-days: 14
+          # Deja en zstd : un second passage ne gagnerait rien et couterait
+          # plusieurs minutes sur des fichiers de cette taille.
+          compression-level: 0
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || format('rpi-{0}', github.sha) }}
+          name: "osmo_egprs — image SD Raspberry Pi 4 (arm64) — ${{ github.ref_name || github.sha }}"
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          body: |
+            ## osmo_egprs — image SD arm64 (Raspberry Pi 4)
+
+            La meme pile que les ISO x86, construite pour aarch64 sur une base
+            Armbian 24.04 (noyau bcm2711, BSP rpi4b). Ce n'est pas une ISO live :
+            c'est une image de carte SD, **persistante**, en deux partitions —
+            une FAT32 `RPICFG` pour le firmware du Pi, une ext4 `armbi_root`
+            pour le systeme.
+
+            | Image | Role |
+            |---|---|
+            | `osmo-operator-rpi4.img.zst` | Un noeud : coeur GSM complet (BSC / MSC / HLR / SGSN / GGSN). Une seule image pour les 9 noeuds — le numero se choisit au demarrage. |
+            | `osmo-operator-lite-rpi4.img.zst` | Le meme noeud, sans les ateliers de compilation de `/opt/GSM`. Ce qui tourne est identique. |
+            | `interstp-rpi4.img.zst` | Le hub SS7 : PC `0.0.0`, aucun operateur, il ne fait que router du M3UA entre les noeuds. |
+
+            ### Graver
+
+            ```bash
+            zstd -dc osmo-operator-rpi4.img.zst \
+              | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+            ```
+
+            Au premier demarrage `armbian-resize-filesystem` etend la racine a
+            la taille de la carte. Console HDMI ou serie, et ssh : `root:osmo`.
+
+            ### Verifier
+
+            `SHA256SUMS` porte sur l'image **brute**, pas sur le `.zst` :
+
+            ```bash
+            zstd -d osmo-operator-rpi4.img.zst
+            sha256sum -c SHA256SUMS
+            ```
+
+            Une Release plafonne a 2 Gio par fichier ; ce qui depasse est
+            decoupe (`PARTS.sha256` couvre les morceaux) :
+
+            ```bash
+            cat osmo-operator-rpi4.img.zst.part-* > osmo-operator-rpi4.img.zst
+            ```
+
+            ### Ce que cette image n'a pas
+
+            Pas de bureau (`--desktop` est refuse en arm64 : GNOME, calamares
+            et grub-efi-amd64 n'ont rien a faire sur un Pi) et **pas de 4G** —
+            srsRAN et Open5GS ne sont pas compiles pour aarch64, et pmbootstrap
+            y ferait une VM x86 emulee. La 2G/EDGE, elle, est entiere.
+          files: |
+            *-rpi4.img.zst*
+            SHA256SUMS
+            MD5SUMS
+            PARTS.sha256

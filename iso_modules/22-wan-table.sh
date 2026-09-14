@@ -48,7 +48,16 @@ iso_host_packages
 
 # Docker n'est pas auto-installe ici (paquet docker-ce hors apt standard).
 _ISO_TOOLS="docker mksquashfs xorriso grub-mkrescue debootstrap git"
-[ "${ISO_ARCH:-amd64}" = "arm64" ] && _ISO_TOOLS="docker debootstrap git qemu-aarch64-static mke2fs mkfs.vfat mcopy sfdisk truncate"
+# [2026-09-14] qemu-aarch64-static n est exige que pour EMULER : sur un hote
+# deja aarch64 (un runner ubuntu-24.04-arm, un Pi, un Ampere) le paquet n a
+# aucune raison d etre la, et le job mourait sur « Manquant: qemu-aarch64-static »
+# avant la premiere etape. Meme regle que 40-rootfs.sh (l.57), qui decide de
+# --foreign en comparant a l architecture de l hote.
+if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
+    _ISO_TOOLS="docker debootstrap git mke2fs mkfs.vfat mcopy sfdisk truncate"
+    [ "$ISO_ARCH" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ] \
+        || _ISO_TOOLS="$_ISO_TOOLS qemu-aarch64-static"
+fi
 for t in $_ISO_TOOLS; do
     command -v "$t" &>/dev/null || { echo -e "${RED}Manquant: $t${NC}"; exit 1; }
 done

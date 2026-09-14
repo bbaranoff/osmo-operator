@@ -304,6 +304,15 @@ case "$ISO_ARCH" in
     amd64) ISO_MIRROR="$(bash "$DIR/packaging/apt-mirror.sh" "$ISO_SUITE" 2>/dev/null || echo http://archive.ubuntu.com/ubuntu)"; ISO_IMG_TAG="" ;;
     arm64) ISO_MIRROR="http://ports.ubuntu.com/ubuntu-ports"; ISO_IMG_TAG=":arm64" ;;
 esac
+# [2026-09-14] LE SUFFIXE N EXISTE QUE POUR LA COHABITATION. Il est la pour
+# qu une image arm64 construite sur un hote x86 n ecrase pas l image native du
+# meme nom - c est exactement la regle de build.sh, qui ne pose IMG_TAG que
+# lorsque « $OSMO_ARCH != $HOST_ARCH » (l.183). Sur un hote DEJA aarch64 il n y
+# a rien a faire cohabiter : build.sh y tague osmocom-nitb tout court, tandis
+# qu ici on cherchait osmocom-nitb:arm64 - une image que personne n avait
+# construite, et 31-image-source.sh ne trouvait plus sa source. Les deux cotes
+# doivent repondre pareil a la meme question.
+[ "$ISO_ARCH" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ] && ISO_IMG_TAG=""
 export ISO_ARCH ISO_MIRROR ISO_IMG_TAG
 if [ "$ISO_ARCH" = "arm64" ]; then
     [ "$ISO_DESKTOP" = "1" ] && { echo -e "${RED}--arm : pas de --desktop (GNOME, calamares, grub-efi-amd64 : rien de tout cela sur le Pi)${NC}" >&2; exit 2; }
