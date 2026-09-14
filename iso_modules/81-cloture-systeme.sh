@@ -28,7 +28,15 @@ docker run --rm --entrypoint bash \
 ' > "$WORK/closure.tar.gz" || true
 if [ -s "$WORK/closure.tar.gz" ]; then
     tar -xzf "$WORK/closure.tar.gz" -C "$ROOTFS" 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} $(tar -tzf "$WORK/closure.tar.gz" 2>/dev/null | wc -l) libs injectees (Docker)"
+    # La LISTE de ce qui vient d etre ecrase, pour 90-iso.sh. Ces libs
+    # remplacent volontairement celles d apt : leur md5 dpkg ne correspond
+    # donc plus, et sans cette liste la relecture du squashfs les compte
+    # comme des fichiers ALTERES (build vert sur la machine, rouge en CI,
+    # selon que l image docker et le rootfs ont la meme mise a jour de
+    # securite). Chemins relatifs, comme dans les .md5sums.
+    tar -tzf "$WORK/closure.tar.gz" 2>/dev/null \
+        | sed 's#^\./##; s#^/##' | sort -u > "$WORK/closure.list" || true
+    echo -e "  ${GREEN}✓${NC} $(wc -l < "$WORK/closure.list") libs injectees (Docker)"
 else
     echo -e "  ${YELLOW}cloture vide - on garde les libs apt${NC}"
 fi
