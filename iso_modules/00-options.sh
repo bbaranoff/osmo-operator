@@ -98,7 +98,7 @@ ISO_ARCH=amd64
 ISO_HUB_IP="172.20.0.10"
 # ── Table WAN par defaut : le banc ──────────────────────────────────────────
 # [2026-09-03] Table remise a jour. Format : <noeud>:<IP>:<indicatif>
-#   noeud 1  192.168.1.2  la VM (cette ISO)   indicatif 11
+#   noeud 1  192.168.1.123  la VM (cette ISO)   indicatif 11
 #   noeud 2  172.20.0.12  osmo-operator-2     indicatif 22   (conteneur)
 #   noeud 3  172.20.0.13  osmo-operator-3     indicatif 33   (conteneur)
 #   hub      172.20.0.10  osmo-inter-stp                     (hors table)
@@ -108,24 +108,34 @@ ISO_HUB_IP="172.20.0.10"
 # Elle sert quand --wan-nodes n'est pas donne. Sans defaut, une construction
 # sans terminal - la CI - s'arretait a l'etape 7b sur une question que personne
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
-ISO_WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
+# [2026-09-14] Le noeud 1 passe de 192.168.1.2 a 192.168.1.123 : c'est
+# l'adresse de la VM du banc sur le LAN. La MEME valeur est reprise dans
+# start-interstp.sh (WAN_NODES_DEFAULT) et start.sh - une table lue d'un cote
+# doit ressembler a celle qu'on ecrit de l'autre, sinon les point codes ne
+# correspondent plus aux AS declares. Changer l'un sans les autres se paie au
+# moment ou le SS7 traverse.
+ISO_WAN_NODES_DEFAULT="1:192.168.1.123:11 2:172.20.0.12:22 3:172.20.0.13:33"
 
-# ── LE MULTI-OPERATEUR EST ACTIF PAR DEFAUT ─────────────────────────────────
-# [2026-09-13] osmo-multi.service est desormais ACTIVE au boot des l'ISO, sans
-# avoir a passer --multi. Ce que cela change, exactement : plus rien a faire
-# apres addition.sh. L'unite est la, activee ; le jour ou l'operateur installe
-# le supplement multi-operateur (docker, l'image, et la topologie
-# /etc/osmocom/osmo-multi.conf qu'ecrit addition.sh), le banc multi repart a
-# CHAQUE demarrage au lieu de demander un `systemctl enable` de plus.
-# Ce que cela ne change pas : sans cette topologie, l'unite a une Condition qui
-# la fait SAUTER - proprement, sans echec et sans message d'erreur au boot
-# (cf. data/desktop/osmo-multi.desktop et launch.sh l.192). Activer par defaut
-# ne demarre donc rien tant que le supplement n'est pas la : ca supprime un
-# geste, ca n'en impose aucun.
-# osmo-banc, lui, garde son defaut a 0 : un banc se demarre, c'est le geste de
-# l'operateur (82-services.sh l.165).
-# --no-multi (ou OSMO_ISO_MULTI=0) revient a l'ancien comportement.
-OSMO_ISO_MULTI="${OSMO_ISO_MULTI:-1}"
+# ── AUCUNE 2G NE PART AU DEMARRAGE ──────────────────────────────────────────
+# [2026-09-13] osmo-multi.service avait ete ACTIVE par defaut, pour n'avoir
+# plus rien a faire apres addition.sh : l'unite etant Conditionnee a la
+# topologie /etc/osmocom/osmo-multi.conf, on la croyait sans consequence tant
+# que le supplement multi-operateur n'etait pas installe.
+#
+# [2026-09-14] ON REVIENT A 0, ET C'EST LA REGLE POUR TOUTE LA 2G. Des que
+# cette topologie existe - et addition.sh l'ecrit - le banc multi-operateur
+# entier montait AU BOOT : la pile radio, les conteneurs, plusieurs minutes,
+# avant meme que l'operateur ait vu son bureau, et sur une configuration qu'il
+# n'avait pas choisie. C'est exactement ce qu'on avait deja refuse pour
+# osmo-banc le 2026-09-05 (82-services.sh l.158) ; il n'y a pas de raison que
+# le multi y echappe. Un banc 2G se DEMARRE : c'est le geste de l'operateur,
+# pas un effet de bord du demarrage.
+#   systemctl start osmo-multi          une session (ou l'icone du bureau)
+#   systemctl enable --now osmo-multi   pour qu'il reparte a chaque demarrage
+# --multi (ou OSMO_ISO_MULTI=1) au build pour une image qui l'active, comme
+# --banc le fait pour osmo-banc. Les deux unites restent POSEES dans l'image :
+# rien a installer, seulement a lancer.
+OSMO_ISO_MULTI="${OSMO_ISO_MULTI:-0}"
 export OSMO_ISO_MULTI
 
 OUTPUT_SET=0
@@ -179,7 +189,7 @@ ${B}CE QUI VOYAGE DANS L'IMAGE${N}
 
 ${B}AU DEMARRAGE DE L'IMAGE${N}
   ${C}--banc / --no-banc${N}        activer (ou non) osmo-banc.service au boot   ${D}[${OSMO_ISO_BANC:-0}]${N}
-  ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-1}]${N}
+  ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-0}]${N}
   ${C}--kb=LANG${N}                 disposition clavier                          ${D}[${OSMO_ISO_KB:-fr}]${N}
 
 ${B}LE LIEN ENTRE NOEUDS (WAN)${N}

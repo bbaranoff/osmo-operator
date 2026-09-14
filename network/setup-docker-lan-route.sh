@@ -38,7 +38,7 @@
 #
 # Usage :
 #   sudo network/setup-docker-lan-route.sh              applique sur l'hote
-#   sudo network/setup-docker-lan-route.sh --push "192.168.1.2 192.168.1.49"
+#   sudo network/setup-docker-lan-route.sh --push "192.168.1.123 192.168.1.49"
 #                                                       + pose la route sur ces VM
 #   sudo network/setup-docker-lan-route.sh --status     etat, sans rien changer
 #   sudo network/setup-docker-lan-route.sh --undo       retire ce que le script a pose

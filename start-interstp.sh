@@ -63,12 +63,12 @@ HUB_IP="172.20.0.10"
 # [2026-09-03] Table remise a jour - la meme que build-iso.sh : une table lue
 # ici doit ressembler a celle qu'il ecrit, sinon les point codes d'un cote ne
 # correspondent plus aux AS declares de l'autre.
-#   noeud 1  192.168.1.2  la VM              indicatif 11
+#   noeud 1  192.168.1.123  la VM              indicatif 11
 #   noeud 2  172.20.0.12  osmo-operator-2    indicatif 22   (conteneur)
 #   noeud 3  172.20.0.13  osmo-operator-3    indicatif 33   (conteneur)
 #   hub      172.20.0.10  osmo-inter-stp
 # MSISDN = <noeud>00<op><ms> (100101 = noeud 1, op 1, MS 1).
-WAN_NODES_DEFAULT="1:192.168.1.2:11 2:172.20.0.12:22 3:172.20.0.13:33"
+WAN_NODES_DEFAULT="1:192.168.1.123:11 2:172.20.0.12:22 3:172.20.0.13:33"
 
 # L'adresse par defaut du noeud i, lue dans cette table.
 _default_node_ip() {

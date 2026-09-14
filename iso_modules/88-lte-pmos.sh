@@ -142,12 +142,49 @@ chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_REPO=/opt/GSM/osmo-oper
 # OSMO_DEB=1 : la compilation sort en .deb, qu on RAMENE dans le cache de
 # l hote - la prochaine ISO (et le prochain docker) ne recompileront pas.
 # OSMO_ISO_LTE_BUILD=0 pour refuser ce rattrapage (build court, ISO sans 4G).
+#
+# [2026-09-14] ET SI LE .deb DU CACHE EST TAILLE POUR UNE AUTRE MACHINE ?
+# La condition ci-dessous etait « les binaires sont-ils la ? ». Un
+# osmo-build-srsran fabrique sur la machine de reference (ou par un runner de
+# CI) l est avec -march=native : son srsenb portait 19 353 instructions %ymm
+# (AVX/AVX2) et 417 FMA. Pose tel quel dans le rootfs il passe tous les
+# controles - il EXISTE, ses bibliotheques sont resolues, --help repond - et
+# l ISO sort. C est a l usage, sur la machine de l operateur, que ca tombe :
+#     /usr/local/bin/osmo-lte: line 204: ... Illegal instruction (core dumped) ... srsenb
+#     /usr/local/bin/osmo-lte: line 244: ... Illegal instruction (core dumped) ... srsue
+# Une ISO passe d une machine a l autre : ses binaires doivent etre portables.
+# On regarde donc ce que celui du cache CONTIENT, et on le refuse s il porte
+# de l AVX - la compilation ci-dessous le remplace par un binaire de base
+# commune (voir SRS_ARCH dans tools/osmo-lte-install.sh).
+_iso_srs_avx() {   # 0 = ce binaire ne tournera pas partout
+    [ -x "$ROOTFS/usr/local/bin/srsenb" ] || return 1
+    command -v objdump >/dev/null 2>&1 || return 1
+    objdump -d "$ROOTFS/usr/local/bin/srsenb" 2>/dev/null | grep -qE '%[yz]mm[0-9]'
+}
+if _iso_srs_avx; then
+    echo -e "  ${YELLOW}!${NC} srsenb du cache .deb taille pour le CPU du build (AVX) : il ferait « Illegal instruction » ailleurs"
+    rm -f "$ROOTFS"/usr/local/bin/srsenb "$ROOTFS"/usr/local/bin/srsue "$ROOTFS"/usr/local/bin/srsepc
+    # Le .deb fautif est ecarte du cache de l hote (renomme, pas efface : le
+    # glob de recuperation plus bas ne prend que *.deb, et l operateur garde
+    # de quoi comprendre). Sans ca, la prochaine ISO le reposerait.
+    for _sd in "${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"/osmo-build-srsran_*.deb; do
+        [ -f "$_sd" ] || continue
+        mv -f "$_sd" "$_sd.avx-natif" && echo -e "    ${CYAN}·${NC} $(basename "$_sd") ecarte -> $(basename "$_sd").avx-natif"
+    done
+    unset _sd
+fi
+unset -f _iso_srs_avx
 if [ ! -x "$ROOTFS/usr/local/bin/srsenb" ] || [ ! -x "$ROOTFS/opt/LTE/open5gs/install/bin/open5gs-mmed" ]; then
     if [ "${OSMO_ISO_LTE_BUILD:-1}" = "1" ]; then
         echo -e "  ${YELLOW}!${NC} 4G absente du cache .deb : compilation dans le chroot (long)"
         install -d "$ROOTFS/var/cache/osmo-debs"
         [ -f "$DIR/packaging/osmo-deb.sh" ] && install -m755 "$DIR/packaging/osmo-deb.sh" "$ROOTFS/usr/local/sbin/osmo-deb"
+        # OSMO_SRSRAN_ARCH : la base ISA des binaires de l ISO. Le defaut du
+        # script (x86-64-v2) est ce qu il faut ici - une ISO doit tourner
+        # ailleurs que sur la machine qui l a construite ; on le passe quand
+        # meme explicitement pour qu un build particulier puisse le changer.
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator \
+            OSMO_SRSRAN_ARCH="${OSMO_SRSRAN_ARCH:-x86-64-v2}" \
             bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --build 2>&1 | sed 's/^/  /' \
             || echo -e "  ${YELLOW}!${NC} compilation 4G echouee dans le chroot - ISO sans srsRAN/Open5GS"
         # Les .deb fraichement produits repartent dans le cache de l hote.
@@ -336,6 +373,27 @@ _chk "4G  srsenb / srsue"                                  bash -c 'test -x /usr
 # clic sur l icone 4G - et rien avant. Le `ldd` couvre srsgui comme le reste.
 _chk "4G  srsenb / srsue : bibliotheques toutes resolues" \
     bash -c 'for b in srsenb srsue; do ldd /usr/local/bin/$b 2>/dev/null | grep -q "not found" && exit 1; done; exit 0'
+# ── ET TOURNERONT-ILS SUR LA MACHINE DE L OPERATEUR ? ───────────────────────
+# [2026-09-14] Le controle le plus discret et le plus couteux : des binaires
+# presents, lies, qui repondent a --help, et qui meurent en « Illegal
+# instruction » des le premier vrai lancement parce qu ils ont ete compiles
+# avec -march=native sur une autre machine. C est exactement ce qu a vecu
+# l operateur. Une instruction AVX (%ymm) ou AVX512 (%zmm) dans srsenb ou
+# srsue condamne l ISO hors du CPU qui l a construite : ici, c est une faute.
+# Le test se fait depuis l hote (objdump du rootfs), l ISO n embarque pas
+# binutils. Sans objdump sur l hote on ne juge pas : on le dit.
+if command -v objdump >/dev/null 2>&1; then
+    if objdump -d "$ROOTFS/usr/local/bin/srsenb" 2>/dev/null | grep -qE '%[yz]mm[0-9]' \
+       || objdump -d "$ROOTFS/usr/local/bin/srsue" 2>/dev/null | grep -qE '%[yz]mm[0-9]'; then
+        echo -e "      ${RED}✗${NC} 4G  srsenb / srsue portables (pas d AVX du CPU du build)"
+        echo -e "          recompiler : OSMO_SRSRAN_ARCH=x86-64-v2, cf. tools/osmo-lte-install.sh"
+        _ko=$((_ko + 1))
+    else
+        echo -e "      ${GREEN}✓${NC} 4G  srsenb / srsue portables (pas d AVX du CPU du build)"
+    fi
+else
+    echo -e "      ${CYAN}·${NC} 4G  objdump absent de l hote : portabilite ISA de srsenb non verifiee"
+fi
 # Les traces temps reel sont un bonus, pas une condition : on les ANNONCE.
 if chroot "$ROOTFS" bash -c 'ldd /usr/local/bin/srsenb 2>/dev/null | grep -q libsrsgui' 2>/dev/null; then
     echo -e "      ${GREEN}✓${NC} 4G  srsGUI : traces temps reel armees (srsenb lie a libsrsgui)"

@@ -1255,7 +1255,7 @@ wan_menu_table() {
     # Les autres : eux seuls ont besoin d'une reponse.
     for k in $(seq $(( cont + 1 )) "$total"); do
         # Defaut : la VM du banc, seul noeud distant du montage courant.
-        _defip=""; [ "$k" = 3 ] && _defip="192.168.1.2"
+        _defip=""; [ "$k" = 3 ] && _defip="192.168.1.123"
         ip=$(wt_input "Operateur distant ${k}/${total}" \
              "Adresse du noeud ${k} (une VM, une autre machine) :" "$_defip") || return 0
         [ -n "$ip" ] || { wt_msg "Adresse vide : noeud ${k} ignore."; continue; }
@@ -2795,7 +2795,7 @@ Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
                           lance pour lui - c'est ainsi qu'une VM deja demarree
                           entre dans la table SMS et le dialplan. Les conteneurs
                           restent gouvernes par le nombre d'operateurs demande.
-                            --operator 192.168.1.2:11   (la VM, deja lancee)
+                            --operator 192.168.1.123:11   (la VM, deja lancee)
                             --operator 172.20.0.11:22   (un conteneur d'ici)
                           UN SEUL noeud du WAN doit le porter.
   --build-stp             construit l'image legere osmocom-stp (Dockerfile.stp)
@@ -2874,7 +2874,7 @@ if [ "${#OPERATOR_DECLS[@]}" -gt 0 ]; then
     for _d in "${OPERATOR_DECLS[@]}"; do
         _ip="${_d%%:*}"; _ind="${_d##*:}"
         if [ -z "$_ip" ] || [ "$_ip" = "$_d" ] || [ -z "$_ind" ]; then
-            echo -e "\033[0;31m--operator : attendu IP:PREFIXE (ex: 192.168.1.2:11), recu '$_d'\033[0m" >&2
+            echo -e "\033[0;31m--operator : attendu IP:PREFIXE (ex: 192.168.1.123:11), recu '$_d'\033[0m" >&2
             exit 2
         fi
         _n=$(( _n + 1 ))

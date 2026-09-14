@@ -59,12 +59,53 @@ SRSGUI_REF="${OSMO_SRSGUI_REF:-master}"
 SRSGUI_VER="${OSMO_SRSGUI_VER:-0.1+git}"
 O5GS_REF="${OSMO_OPEN5GS_REF:-v2.8.0}"
 JOBS="${JOBS:-$(nproc)}"
+# ── L ISA DE srsRAN : PORTABLE, PAS « native » ───────────────────────────────
+# [2026-09-14] LA PANNE : sur une machine autre que celle du build, le lanceur
+# mourait aussitot, deux fois de suite, sans un mot dans ses logs :
+#     /usr/local/bin/osmo-lte: line 204: 14521 Illegal instruction (core dumped) ... srsenb
+#     /usr/local/bin/osmo-lte: line 244: 14661 Illegal instruction (core dumped) ... srsue
+# Ce n est ni une config ni une dependance : c est le CPU. Le CMakeLists de
+# srsRAN_4G met GCC_ARCH a « native » par defaut (l.110-116), et son
+# cmake/modules/FindSSE.cmake decide de -mavx/-mavx2/-mfma/-mavx512 par des
+# check_c_source_runs - c est-a-dire en EXECUTANT le test sur la machine qui
+# compile. Les binaires sortent donc tailles pour ce processeur-la : le srsenb
+# de l ISO portait 19 353 instructions %ymm (AVX/AVX2) et 417 FMA. Sur un CPU
+# sans AVX2 - une VM qui n expose pas le jeu complet, un portable plus ancien,
+# un runner de CI different - la premiere de ces instructions fait SIGILL.
+# Une ISO se promene par definition d une machine a l autre : elle ne peut pas
+# etre compilee « pour la machine du build ».
+# On fige donc une base commune (SSE4.1/SSE4.2, tout x86_64 depuis 2009 - et
+# srsRAN exige de toute facon SSE4.1, cf. son « no SIMD instructions found »)
+# et on coupe les detections AVX/AVX2/FMA/AVX512, qui ne mesurent que l hote.
+# OSMO_SRSRAN_ARCH=native pour retrouver l ancien comportement (binaires plus
+# rapides, valables sur CETTE machine seulement) ; toute autre valeur est
+# passee telle quelle a -march= (x86-64, nehalem, haswell...). Un -march que
+# le gcc local ne connait pas est ignore par ADD_C_COMPILER_FLAG_IF_AVAILABLE :
+# on retombe alors sur la base x86-64 du compilateur, portable elle aussi.
+SRS_ARCH="${OSMO_SRSRAN_ARCH:-x86-64-v2}"
 
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${CYAN:=}"; : "${RED:=}"; : "${BOLD:=}"; : "${NC:=}"
 _l_say()  { echo -e "  ${CYAN}→${NC} $*"; }
 _l_ok()   { echo -e "      ${GREEN}✓${NC} $*"; }
 _l_warn() { echo -e "      ${YELLOW}!${NC} $*"; }
 _l_err()  { echo -e "      ${RED}✗${NC} $*" >&2; }
+
+# ── CE srsenb-LA TOURNERA-T-IL AILLEURS QU ICI ? ─────────────────────────────
+# [2026-09-14] Un srsenb deja pose - compile avant aujourd hui, ou venu d un
+# .deb du cache fabrique sur une AUTRE machine - reste taille pour le CPU qui
+# l a compile, et rien ne le trahit : il existe, ses bibliotheques sont
+# resolues, --help repond. On ne l apprend qu au premier vrai lancement, par
+# un « Illegal instruction (core dumped) » sans une ligne de log (voir
+# SRS_ARCH en tete). On regarde donc ce que le binaire CONTIENT : une seule
+# instruction %ymm (AVX/AVX2) ou %zmm (AVX512) le condamne hors de sa machine
+# d origine. Sans objdump (binutils absent) on ne juge pas : on garde ce qui
+# est la, et on ne declenche pas une recompilation d une heure sur un doute.
+_srs_isa_portable() {
+    local b; b="$(command -v srsenb 2>/dev/null)" || return 0
+    [ -n "$b" ] || return 0
+    command -v objdump >/dev/null 2>&1 || return 0
+    ! objdump -d "$b" 2>/dev/null | grep -qE '%[yz]mm[0-9]'
+}
 
 # ── LES PAQUETS ──────────────────────────────────────────────────────────────
 # Runtime (ce que ldd de srsenb et d open5gs-mmed reclame) ET build : l ISO
@@ -222,15 +263,37 @@ lte_build() {
         [ -n "$b" ] && ldd "$b" 2>/dev/null | grep -q libsrsgui
     }
     if ! command -v srsenb >/dev/null 2>&1 \
-       || { [ -e /usr/local/lib/libsrsgui.so ] && ! _srs_lie_gui; }; then
-        command -v srsenb >/dev/null 2>&1 \
-            && _l_say "srsRAN_4G : recompilation, srsenb n est pas lie a srsGUI" \
-            || _l_say "srsRAN_4G $SRS_REF (ZeroMQ) -> $SRS"
+       || { [ -e /usr/local/lib/libsrsgui.so ] && ! _srs_lie_gui; } \
+       || { [ "$SRS_ARCH" != native ] && ! _srs_isa_portable; }; then
+        if command -v srsenb >/dev/null 2>&1; then
+            if [ "$SRS_ARCH" != native ] && ! _srs_isa_portable; then
+                _l_say "srsRAN_4G : recompilation, srsenb porte de l AVX (taille pour le CPU du build, SIGILL ailleurs)"
+            else
+                _l_say "srsRAN_4G : recompilation, srsenb n est pas lie a srsGUI"
+            fi
+        else
+            _l_say "srsRAN_4G $SRS_REF (ZeroMQ, -march=$SRS_ARCH) -> $SRS"
+        fi
         if [ ! -d "$SRS/.git" ]; then
             git clone --depth 1 -b "$SRS_REF" https://github.com/srsran/srsRAN_4G "$SRS" || { _l_err "clone srsRAN_4G"; return 1; }
         fi
+        # ── LE CACHE CMAKE MENT SUR L ISA ──────────────────────────────────
+        # HAVE_AVX2, HAVE_FMA, HAVE_AVX512 sont des variables de CACHE posees
+        # par les check_c_source_runs de FindSSE.cmake. -DENABLE_AVX2=OFF
+        # empeche le TEST de tourner, il n efface pas sa reponse d hier : sur
+        # un arbre deja configure, le `if (HAVE_AVX2)` du CMakeLists relirait
+        # le cache et remettrait -mavx2. On repart donc d un build vide - de
+        # toute facon les drapeaux changent, tous les objets sont a refaire.
+        rm -rf "$SRS/build"
+        # -DGCC_ARCH : la base commune (voir SRS_ARCH en tete). Les quatre
+        # ENABLE_* coupent les detections qui ne mesurent que l hote ; SSE4.1
+        # reste actif (ENABLE_SSE=ON par defaut), sans quoi le cmake s arrete
+        # sur « no SIMD instructions found » et srsRAN perd son -Ofast.
+        _srs_isa=(-DGCC_ARCH="$SRS_ARCH" -DENABLE_AVX=OFF -DENABLE_AVX2=OFF -DENABLE_FMA=OFF -DENABLE_AVX512=OFF)
+        [ "$SRS_ARCH" = native ] && _srs_isa=(-DGCC_ARCH=native)
         ( cd "$SRS" && mkdir -p build && cd build \
           && cmake -DENABLE_ZEROMQ=ON -DENABLE_GUI=ON -DENABLE_UHD=OFF -DENABLE_BLADERF=OFF -DENABLE_SOAPYSDR=OFF \
+                   "${_srs_isa[@]}" \
                    -DCMAKE_BUILD_TYPE=Release .. >/dev/null \
           && make -j"$JOBS" >/dev/null \
           && if [ -n "$pack" ]; then OSMO_DEB_SRC_ROOT="$LTE" OSMO_DEB_SRC="$SRS" osmo-deb pack srsran "$srs_ver" make install
@@ -422,7 +485,14 @@ osmo_lte_install() {
     if [ "$all" = 1 ]; then deps=1; debs=1; configs=1; launchers=1; fi
     [ "$deps" = 1 ] && lte_deps
     [ "$debs" = 1 ] && lte_debs
-    if [ "$build" = 1 ] || { [ "$all" = 1 ] && { ! command -v srsenb >/dev/null 2>&1 || [ ! -x "$O5GS_PREFIX/bin/open5gs-mmed" ]; }; }; then
+    # [2026-09-14] « ! command -v srsenb » ne suffit pas a decider de compiler :
+    # un srsenb PRESENT mais taille pour le CPU d une autre machine passait au
+    # travers de --all (donc d addition.sh et d update.sh), et la 4G mourait en
+    # « Illegal instruction » chez l operateur. La meme question qu ailleurs :
+    # ce binaire tournera-t-il ICI ?
+    if [ "$build" = 1 ] || { [ "$all" = 1 ] && { ! command -v srsenb >/dev/null 2>&1 \
+            || { [ "$SRS_ARCH" != native ] && ! _srs_isa_portable; } \
+            || [ ! -x "$O5GS_PREFIX/bin/open5gs-mmed" ]; }; }; then
         # [2026-09-09] Le `|| true` d ici MENTAIT au Dockerfile : la compilation
         # tombait (MbedTLS absent), osmo-lte-install sortait 0, le « ECHEC build
         # srsRAN » n etait jamais imprime et l image n echouait que 200 lignes
