@@ -87,7 +87,20 @@ fi
 #   et remonte le flux PulseAudio - 50 fois par seconde pendant un appel.
 #   Mesure du 09/09 : 80 ms -> 16 remontages en 10 s, 200 -> 0. On pose 320.
 if [ -x "$P/scripts/voix-forks.sh" ]; then
-    "$P/scripts/voix-forks.sh" "$ROOTFS" | sed "s|^  \[voix\]|  ${GREEN}\xe2\x9c\x93${NC}|"
+    # [2026-09-14] PAS DE COULEUR DANS UN REMPLACEMENT sed. Cette ligne etait
+    #     ... | sed "s|^  \[voix\]|  ${GREEN}\xe2\x9c\x93${NC}|"
+    # or GREEN vaut '\033[0;32m' - une chaine faite pour `echo -e`, pas pour
+    # sed : dans le remplacement, GNU sed lit \0 comme « toute la chaine
+    # trouvee » (synonyme de &). Chaque ligne ressortait donc
+    #     [voix]33[0;32m✓  [voix]33[0m /opt/GSM/... : io-tch-format rtp repose
+    # - le [voix] reinjecte deux fois et l echappement en clair. On relit les
+    # lignes et on les reecrit avec echo -e, comme partout ailleurs ici.
+    "$P/scripts/voix-forks.sh" "$ROOTFS" | while IFS= read -r _l; do
+        case "$_l" in
+            "  [voix]"*) echo -e "  ${GREEN}✓${NC}${_l#"  [voix]"}" ;;
+            *)           echo "$_l" ;;
+        esac
+    done
 fi
 
 # ── WAN : table des noeuds figee dans l'image ────────────────────────────────

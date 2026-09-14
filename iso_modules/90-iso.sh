@@ -138,8 +138,22 @@ _vfy_verdict() {
             echo -e "  ${YELLOW}Aucun de ces fichiers n echouait au build precedent${NC}"
             echo -e "  ${YELLOW}($(basename "$_vfy_prev")) : le tirage CHANGE a chaque fois. Aucune${NC}"
             echo -e "  ${YELLOW}etape du build ne vise des fichiers au hasard : c est l hote.${NC}"
-            echo -e "  ${YELLOW}RAM non-ECC (rien ne sera jamais signale), chauffe, disque.${NC}"
-            echo -e "  ${YELLOW}memtest86+ plusieurs passes, temperatures sous charge.${NC}"
+            echo -e "  ${YELLOW}RAM non-ECC : rien ne sera jamais signale (ni EDAC, ni dmesg).${NC}"
+            # [2026-09-14] MESURE, sur le rootfs du build de 11h59. Le meme
+            # pipeline que la passe 1, rejoue sur le MEME rootfs intact :
+            #   juste apres 2 x 160 s de zstd -19 sur 32 coeurs (94-95 C) -> 18 echecs
+            #   la machine refroidie (78 C au depart)                     ->  0, deux fois
+            # et les fichiers incrimines, relus un par un cache vide, rendent
+            # exactement le md5 de dpkg. Les octets du disque sont BONS : ce
+            # qui se corrompt, c est la lecture sous charge. D ou le conseil.
+            echo -e "  ${YELLOW}La faute n apparait que SOUS CHARGE SOUTENUE sur tous les coeurs :${NC}"
+            echo -e "  ${YELLOW}memtest86+ peut passer une nuit entiere sans rien voir (il ne${NC}"
+            echo -e "  ${YELLOW}chauffe pas le CPU). Refaire plutot ce build a froid, et le${NC}"
+            echo -e "  ${YELLOW}refaire avec OSMO_ISO_SQUASH_JOBS=4 : si les echecs disparaissent${NC}"
+            echo -e "  ${YELLOW}a 4 coeurs et reviennent a 32, c est l alimentation/le CPU sous${NC}"
+            echo -e "  ${YELLOW}charge, pas une barrette morte (un i9-14900HX est concerne par${NC}"
+            echo -e "  ${YELLOW}l instabilite Raptor Lake : microcode a jour = degradation${NC}"
+            echo -e "  ${YELLOW}arretee, pas reparee). Sinon : memtest86+, et temperatures.${NC}"
         fi
     else
         echo -e "  ${YELLOW}Pas de build precedent a comparer. Relancer tel quel : meme liste =${NC}"
@@ -163,8 +177,22 @@ if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     fi
 fi
 
+# ── OSMO_ISO_SQUASH_JOBS : brider la compression ────────────────────────────
+# [2026-09-14] mksquashfs prend TOUS les coeurs par defaut. Sur cet hote (32
+# threads, zstd -19) c est le seul moment du build ou la machine tire sa
+# puissance maximale pendant trois minutes d affilee, et c est exactement la
+# que le controle d integrite ci-dessous trouve des octets faux - jamais a
+# froid (mesure : 18 echecs juste apres, 0 sur la meme ISO une fois refroidie).
+# Cette variable sert deux fois : a TRANCHER (les echecs disparaissent-ils a 4
+# coeurs ?) et, si oui, a livrer quand meme - plus lentement, mais juste.
+# Vide par defaut : mksquashfs garde son comportement d origine.
+SQUASH_JOBS=()
+if [ -n "${OSMO_ISO_SQUASH_JOBS:-}" ]; then
+    SQUASH_JOBS=(-processors "$OSMO_ISO_SQUASH_JOBS")
+    echo -e "  ${CYAN}compression bridee a ${OSMO_ISO_SQUASH_JOBS} coeur(s) (OSMO_ISO_SQUASH_JOBS)${NC}"
+fi
 mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
-    "${SQUASH_COMP[@]}" -b 1M \
+    "${SQUASH_COMP[@]}" "${SQUASH_JOBS[@]}" -b 1M \
     -e 'var/cache/apt' -e 'var/lib/apt/lists' \
     -no-progress
 echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
@@ -184,9 +212,13 @@ if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
         else
             echo -e "  ${RED}✗ squashfs ALTERE : ${_vfy_n} fichier(s) ne correspondent plus a leur paquet${NC}"
             _vfy_verdict
-            echo -e "  ${YELLOW}Le rootfs, lui, etait conforme juste avant (passe 1) : les memes${NC}"
-            echo -e "  ${YELLOW}octets sont devenus faux EN PASSANT par mksquashfs. Compression a${NC}"
-            echo -e "  ${YELLOW}tous les coeurs = le moment ou l hote chauffe le plus du build.${NC}"
+            echo -e "  ${YELLOW}Le rootfs, lui, etait conforme juste avant (passe 1). NE PAS${NC}"
+            echo -e "  ${YELLOW}chercher un bug de mksquashfs : il est deterministe, il donnerait${NC}"
+            echo -e "  ${YELLOW}les MEMES fichiers a chaque fois. Ce qu il compresse, ce sont les${NC}"
+            echo -e "  ${YELLOW}pages que la lecture du rootfs vient de remplir - 20 Go lus a${NC}"
+            echo -e "  ${YELLOW}pleine charge - et c est LA que les octets basculent. Il les${NC}"
+            echo -e "  ${YELLOW}compresse fidelement ensuite. Compression a tous les coeurs = le${NC}"
+            echo -e "  ${YELLOW}moment ou l hote chauffe et consomme le plus de tout le build.${NC}"
             echo -e "  ${YELLOW}OSMO_ISO_NO_VERIFY=1 pour livrer quand meme (l ISO plantera).${NC}"
             exit 1
         fi
