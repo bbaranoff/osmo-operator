@@ -19,7 +19,8 @@ UE (QEMU Calypso / fake_trx / SDR) ─ BTS ─ BSC ─ STP ─ MSC ─ HLR
 
 | Je veux… | Lire |
 |---|---|
-| démarrer en dix minutes | [Démarrage rapide](#démarrage-rapide) |
+| démarrer sans rien compiler (**méthode conseillée**) | [wiki/Home.md](wiki/Home.md) — l'ISO desktop de la release |
+| démarrer en Docker ou en natif | [Démarrage rapide](#démarrage-rapide) |
 | construire l'image, l'ISO, les `.deb` | [wiki/Build.md](wiki/Build.md) |
 | comprendre ce que fait `start-direct.sh`, étape par étape | [wiki/Start-direct.md](wiki/Start-direct.md) |
 | savoir quelle variable gagne, et pourquoi QEMU ne voit pas la mienne | [wiki/Environnement.md](wiki/Environnement.md) |
@@ -53,12 +54,20 @@ sudo ./install.sh                # deps, sources, build, binaires, configs, bure
 sudo ./start-direct.sh           # ou l'icône « Lancer le banc GSM »
 ```
 
-### C. ISO bootable
+### C. ISO bootable — la méthode conseillée
+
+La [release](https://github.com/bbaranoff/osmo-operator/releases/latest) livre
+`osmo-operator-desktop.iso` en quatre morceaux (limite GitHub 2 Gio) :
 
 ```bash
-sudo ./build-iso.sh              # les quatre images amd64
-sudo ./build-iso.sh --desktop    # bureau GNOME + Conky + icônes
+cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
+sha256sum -c SHA256SUMS
+qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080
 ```
+
+8 Go / 4 cœurs, virtualisation imbriquée en VM. VirtualBox, VMware, clé USB,
+lanceurs du dock et mots de passe : [wiki/Home.md](wiki/Home.md). Pour la
+construire soi-même : `sudo ./build-iso.sh --desktop`.
 
 Au boot, la machine arrive sur son bureau ; le banc **n'est pas** lancé tout
 seul. Icône « Lancer le banc GSM », ou `systemctl start osmo-banc`.
@@ -303,7 +312,7 @@ Scripts prêts : `checks/check_all.sh`, `checks/ss7_check.sh`,
 | `iso_modules/`, `install_modules/` | étapes de `build-iso.sh` et `install.sh` |
 | `fft-web/` | les deux spectres I/Q (MS + BTS) sur une page, port 8081 |
 | `configs/`, `data/`, `patches/` | gabarits Osmocom/Asterisk, bureau et icônes, patches |
-| `wiki/` | [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
+| `wiki/` | [Home](wiki/Home.md) · [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
 
 Documentation complète des 312 variables Calypso :
 `hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md` dans le fork QEMU.
