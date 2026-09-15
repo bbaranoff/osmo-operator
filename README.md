@@ -1,3 +1,8 @@
+# Release ISO Bootable
+
+https://github.com/bbaranoff/osmo-operator/releases/tag/v0.1-3
+
+
 # osmo-operator — banc GSM/LTE pédagogique, multi-PLMN, sans matériel
 
 Un réseau mobile complet sur une seule machine : couche radio visible (spectres
