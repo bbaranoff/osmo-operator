@@ -1,661 +1,313 @@
-# osmo-nitb-for-calypso — Architecture Multi-PLMN SS7/IP
+# osmo-operator — banc GSM/LTE pédagogique, multi-PLMN, sans matériel
 
-Standalone mode (no interstp)
+Un réseau mobile complet sur une seule machine : couche radio visible (spectres
+I/Q), signalisation lisible (SS7/M3UA, GSUP, Abis), services qui marchent au
+bout (appel, SMS, data 2G/4G, CSFB). Le mobile est un **vrai firmware OsmocomBB
+sur un baseband TI Calypso émulé dans QEMU** (ARM7 + DSP C54x) ; le cœur est la
+pile Osmocom ; la 4G est Open5GS + srsRAN en ZeroMQ. Tout tient dans une image
+Docker, une ISO bootable, ou une installation native Ubuntu 24.04.
+
+De 1 à 9 opérateurs interconnectés par un inter-STP central, configuration SS7
+générée automatiquement — un « DHCP pour SS7 ».
+
+```
+UE (QEMU Calypso / fake_trx / SDR) ─ BTS ─ BSC ─ STP ─ MSC ─ HLR
+                                                 │      ├─ MGW (RTP)
+                                                 │      └─ Asterisk (voix, SIP, trunks)
+                                            inter-STP ─ autres opérateurs
+```
+
+| Je veux… | Lire |
+|---|---|
+| démarrer en dix minutes | [Démarrage rapide](#démarrage-rapide) |
+| construire l'image, l'ISO, les `.deb` | [wiki/Build.md](wiki/Build.md) |
+| comprendre ce que fait `start-direct.sh`, étape par étape | [wiki/Start-direct.md](wiki/Start-direct.md) |
+| savoir quelle variable gagne, et pourquoi QEMU ne voit pas la mienne | [wiki/Environnement.md](wiki/Environnement.md) |
+| interconnecter N opérateurs (SS7, SMS, voix) | [§ Architecture](#architecture-multi-plmn) |
+| savoir si mon banc est sain | [§ État du banc](#état-du-banc--checkscheck_allsh-en-natif) |
+| diagnostiquer un PROHIB, un CRC, un mobile qui ne campe pas | [§ Diagnostic](#diagnostic) et [`pont/README.md`](pont/README.md) |
+
+---
+
+## Démarrage rapide
+
+### A. Image Docker publiée (le plus court)
+
 ```bash
 sudo docker pull bastienbaranoff/norf_gsm
 sudo docker tag bastienbaranoff/norf_gsm osmocom-nitb
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
-sudo ./start.sh
-```
-To go in container
-```bash
+sudo ./start.sh                  # mode single, ou bridge : N opérateurs
 sudo docker exec -ti osmo-operator-1 bash
-``` 
-
-then in docker container
-```bash
 cd /opt/GSM/osmo-operator
-./start-direct.sh --regen
+./start-direct.sh --regen        # première fois : génère les configs
 ./start-direct.sh --stop
 ./start-direct.sh
 ```
 
+### B. Installation native (Ubuntu 24.04, sans Docker)
 
-Documentation d'architecture du projet **osmo-nitb-for-calypso** : simulation multi-opérateur GSM complète avec interconnexion SS7 sur IP, entièrement conteneurisée via Docker.
+```bash
+sudo ./install.sh                # deps, sources, build, binaires, configs, bureau
+sudo ./start-direct.sh           # ou l'icône « Lancer le banc GSM »
+```
 
-Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisation complète d'une configuration SS7 inter-opérateurs habituellement réalisée à la main, reproductible d'un simple `tools/make-docker-image.sh && start.sh`.
+### C. ISO bootable
 
-**Support N opérateurs** : le démarrage en mode bridge accepte de 1 à 9 opérateurs sans modifier aucune configuration. Tous les fichiers (pjsip, dialplan, SMS routing, inter-STP) sont générés dynamiquement selon N.
+```bash
+sudo ./build-iso.sh              # les quatre images amd64
+sudo ./build-iso.sh --desktop    # bureau GNOME + Conky + icônes
+```
 
-### Documents voisins
+Au boot, la machine arrive sur son bureau ; le banc **n'est pas** lancé tout
+seul. Icône « Lancer le banc GSM », ou `systemctl start osmo-banc`.
 
-| document | sujet |
+---
+
+## État du banc — `checks/check_all.sh` en natif
+
+Résultat de référence d'un nœud natif seul (Ubuntu 24.04, profil `faketrx-qemu`,
+sans inter-STP), 2026-09-15 :
+
+| Check | Résultat | Lecture |
+|---|---|---|
+| `global` | **OK** — 29 pass, 0 fail, 1 warn, 1 skip | tous les démons en cours ; STP 2 ASP / 2 AS actifs, aucun PROHIB ; HLR : VLR + SMSC en GSUP ; MSC et BSC `ASP_ACTIVE`, SSN 254 enregistrés ; BTS 0 Enabled/OK, OML + RSL connectés ; PCU sur BTS ; SGSN 1 NS entity ; SIP connector, MNCC, relay SMS `:7890`, Asterisk |
+| `ss7` | **OK** — 7 pass, 1 warn, 3 skip | `as-inter : AS_DOWN` et route par défaut ignorée : attendu, aucun hub |
+| `interstp` | ignoré | aucun inter-STP interrogeable ici |
+| `operator` | **ECHEC — INTERCO SS7 : DOWN** | `asp-to-inter` en `shutdown`, `remote-ip 127.0.0.1` ≠ hub `172.20.0.10`, pas de SCTP : **normal sans hub** |
+| `wan`, `annuaire`, `dump`, `resume` | ignorés | pas de plan WAN, pas d'annuaire, `--dump` non demandé |
+
+**Verdict : c'est bon.** Un nœud natif seul est fonctionnel de bout en bout ; le
+seul échec est l'interconnexion, qui ne peut pas être montée puisqu'il n'y a pas
+d'inter-STP — le diagnostic le dit lui-même (« hub distant 172.20.0.10 : VTY 4239
+non joignable, lancez `./start-interstp.sh --status` sur le hub »). Il passe
+au vert dès qu'un hub existe et que le nœud est lancé avec `--hub-ip` (ou
+`--node`), qui réécrit `remote-ip` et sort l'ASP de `shutdown`.
+
+Le seul point à regarder est le **WARN GGSN : 0 APN configuré**. Sans APN, la
+data 2G (GPRS/EDGE par SGSN → GGSN) n'aboutit pas ; la data 4G, elle, passe par
+Open5GS (`ogstun`) et n'est pas concernée. Poser `APN=internet` dans
+`globals.conf` (c'est le défaut du gabarit) puis `./start-direct.sh --regen`.
+
+```bash
+bash ./checks/check_all.sh                       # tout, ~2 min
+./checks/check_all.sh --only=operator --verbose  # un seul check, en détail
+./checks/check_all.sh --dump                     # + vty-debug-dump et operator_summary
+```
+
+Le journal complet est écrit dans `/tmp/osmo-check-all-<date>.txt`.
+
+---
+
+## `start-direct.sh` — le lanceur
+
+`start-direct.sh` ne démarre aucun démon lui-même. C'est un **préparateur** : il
+charge l'environnement, détecte les binaires et le fork Calypso, choisit un
+profil, génère les `mobile_*.cfg`, exporte ce qu'il faut et **exécute `run.sh`**
+du fork choisi (`qosmo-grgsm` par défaut, `qosmo-dsp` avec `--dsp`). Toute la
+logique GSM vit ensuite dans ce `run.sh` et ses `run_modules/`, dans un tmux
+nommé `calypso`.
+
+Le profil par défaut est `faketrx-qemu` (alias `hybrid`) : le cœur, une BTS#0
+servie par le Calypso QEMU et une BTS#1 servie par `fake_trx` + `trxcon` — donc
+un mobile émulé « réel » et un mobile logiciel, dans la même cellule voisine.
+`faketrx` seul se passe de QEMU, `qemu` ne lance que le pipeline Calypso,
+`core`/`noproc` ne lance que le cœur.
+
+La règle qui gouverne tout le script : **la ligne de commande gagne toujours**.
+`VAR=x ./start-direct.sh` passe devant `environment/load.env`, qui passe devant
+les profils, qui passent devant les défauts par domaine. Une seule exception,
+documentée : `globals.conf` fait autorité **sur les 26 variables réseau qu'il
+déclare** (MCC, MNC, ARFCN, ENCRYPTION…) et sur elles seules ; tout le reste
+(`CALYPSO_*`, `MODE`, `LOG_DIR`…) le traverse intact et arrive jusqu'à QEMU.
+Le détail, les idiomes de gate et le manifeste : [wiki/Environnement.md](wiki/Environnement.md).
+
+```bash
+./start-direct.sh --list                  # le plan, sans rien lancer
+./start-direct.sh --dry-run --verbose     # déroule sans effet de bord
+./start-direct.sh --menu                  # pose les questions au lieu de deviner
+./start-direct.sh --dsp                   # fork qosmo-dsp : le vrai DSP C54x décode
+./start-direct.sh --wan --node 2          # ce nœud = 2 d'un WAN à N nœuds
+./start-direct.sh --stop | --status
+CALYPSO_BRIDGE=none ./start-direct.sh     # QEMU + BTS, sans pont
+CALYPSO_NO_ATTACH=1 ./start-direct.sh     # ce que pose osmo-banc.service
+```
+
+Étape par étape, avec ce que chaque phase écrit et où : [wiki/Start-direct.md](wiki/Start-direct.md).
+
+### Les autres portes d'entrée
+
+| Script | Rôle |
 |---|---|
-| [`pont/README.md`](pont/README.md) | **Chiffrement A5, Kc et SACCH** — compte rendu de mesure. À lire avant de chercher une panne radio dans un compteur de CRC : les causes documentées là (Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant) se présentent **toutes** comme « le pont a des CRC ». |
-| [`environment/README.md`](environment/README.md) | variables d'environnement et résolution des chemins |
-| [`services/README.md`](services/README.md) | unités systemd livrées |
-| [`navigation/QUICKSTART.md`](navigation/QUICKSTART.md) | prise en main |
+| `launch.sh` | le double-clic : wireshark (GSMTAP 4729), Linphone, Firefox sur le dashboard, puis `start-direct.sh` au premier plan, via pkexec |
+| `start.sh` | Docker : single ou bridge N opérateurs, crée les réseaux, l'inter-STP, les conteneurs |
+| `start-multi.sh` | le banc multi-opérateur (`osmo-multi.service`, `Requires=osmo-banc`) |
+| `start-interstp.sh` | l'inter-STP seul (image `osmocom-stp`, arm64 possible) |
+| `compose.sh` | `build | up [--ms N] [--phy faketrx] | down | ps | logs | shell | debs` |
+| `tools/osmo-lte.sh` | la 4G : Open5GS + srsENB + srsUE (netns `ue1`), `osmo-lte.service`, icône « osmo-lte toggle » |
 
 ---
 
-## 1. Architecture d'un PLMN (Osmocom)
+## Architecture multi-PLMN
 
-Chaque opérateur simulé repose sur la stack Osmocom standard, tous les composants dans un seul conteneur Docker.
+Chaque opérateur N est un conteneur avec la pile complète, tout en `127.0.0.1`
+(le STP écoute avant que l'interface Docker soit attachée — c'est le fix de la
+race condition). Seul le lien STP↔inter-STP traverse le réseau Docker.
 
-```mermaid
-flowchart LR
-    UE --> BTS
-    BTS -->|Abis/IP| BSC
-    BSC -->|SCCP via STP| MSC
-    MSC -->|GSUP| HLR
-    MSC -->|MGCP| MGW
-    MSC -->|MNCC| Asterisk
-```
+| Réseau | Plage | Rôle |
+|---|---|---|
+| `gsm-inter` | `172.20.0.0/24` | backbone M3UA ; inter-STP en `.10`, opérateur N en `.(10+N)` |
+| `gsm-net-opN` | `172.20.N.0/24` | privé opérateur N (GSMTAP, GPRS) ; conteneur en `172.20.N.10` |
 
-Tous ces composants tournent dans le même conteneur et communiquent via `127.0.0.1`. Le STP local sert de hub de signalisation intra-PLMN.
+### Point codes et routing contexts (ITU 14 bits, `zone.network.node`)
 
----
+| Nœud | PC | RCTX |
+|---|---|---|
+| inter-STP | `0.23.0` | — |
+| MSC OpN | `N.23.1` | `N×100+10` |
+| STP OpN | `N.23.2` | `N×100+20` (registration), **`N×100+50` vers l'inter-STP** |
+| BSC OpN | `N.23.3` | `N×100+30` |
 
-## 2. Interconnexion Multi-PLMN
+L'inter-STP n'a **pas de routing-key** : un AS `as-opN` en `traffic-mode override`
+par opérateur, et le routage se fait sur le DPC (`route N.23.x → as-opN`). Le
+RCTX inter (`N×100+50`) doit être identique dans `osmo-stp.cfg` de l'opérateur et
+dans `osmo-stp-interop.cfg` — c'est la première chose à vérifier sur un PROHIB.
 
-L'architecture centrale du projet. N opérateurs distincts, chacun avec son core network dans un conteneur dédié, reliés par un Inter-STP central qui route la signalisation M3UA/SCCP entre eux.
+Chemin d'un message : `MSC Op1 → STP Op1 (127.0.0.1:2905) → catch-all as-inter →
+inter-STP 172.20.0.10:2908 → DPC 2.23.x → as-op2 → STP Op2 → route dynamique → MSC Op2`.
 
-```mermaid
-flowchart LR
-    subgraph "Conteneur osmo-operator-1"
-        BSC_A["BSC (1.23.3)"]
-        MSC_A["MSC (1.23.1)"]
-        STP_A["STP (1.23.2)"]
-        BSC_A -->|127.0.0.1:2905| STP_A
-        MSC_A -->|127.0.0.1:2905| STP_A
-    end
+### Génération dynamique
 
-    subgraph "Conteneur osmo-operator-2"
-        BSC_B["BSC (2.23.3)"]
-        MSC_B["MSC (2.23.1)"]
-        STP_B["STP (2.23.2)"]
-        BSC_B -->|127.0.0.1:2905| STP_B
-        MSC_B -->|127.0.0.1:2905| STP_B
-    end
+Aucun fichier ne contient de valeur figée pour un nombre d'opérateurs. Au
+démarrage, `apply_config_templates()` résout en un seul `sed` :
 
-    subgraph "Conteneur osmo-operator-N"
-        BSC_N["BSC (N.23.3)"]
-        MSC_N["MSC (N.23.1)"]
-        STP_N["STP (N.23.2)"]
-    end
-
-    subgraph "Conteneur osmo-inter-stp"
-        INTER["Inter-STP (0.23.0)"]
-    end
-
-    STP_A <-->|"RCTX 150 / :2908"| INTER
-    STP_B <-->|"RCTX 250 / :2908"| INTER
-    STP_N <-->|"RCTX N×50 / :2908"| INTER
-```
-
----
-
-## 3. Topologie réseau Docker
-
-### 3.1 Réseaux
-
-| Réseau Docker | Plage | Rôle |
-|---------------|-------|------|
-| `gsm-inter` | `172.20.0.0/24` | Backbone interop (M3UA inter-STP) |
-| `gsm-net-opN` | `172.20.N.0/24` | Réseau privé opérateur N (GSMTAP, GPRS) |
-
-### 3.2 Adresses IP
-
-| Composant | IP backbone (`gsm-inter`) | IP privée (`gsm-net-opN`) |
-|-----------|--------------------------|--------------------------|
-| Inter-STP | `172.20.0.10` | — |
-| Conteneur OpN | `172.20.0.(10+N)` | `172.20.N.10` |
-
-**Formule générale** : opérateur N → backbone `172.20.0.(10+N)`, privé `172.20.N.10`
-
-### 3.3 Communication intra-conteneur
-
-Tous les composants communiquent via `127.0.0.1` (fix de la race condition Docker) :
-
-```
-BSC ──(127.0.0.1:2905)──► STP local
-MSC ──(127.0.0.1:2905)──► STP local
-MSC ──(127.0.0.2:4222)──► HLR
-MSC ──(127.0.0.1:2427)──► MGW
-```
-
-Le STP écoute sur `127.0.0.1:2905` immédiatement, sans dépendre de l'interface réseau Docker (attachée après démarrage du container via `docker network connect`).
-
-### 3.4 Communication inter-conteneur
-
-Uniquement le lien STP↔Inter-STP traverse le réseau Docker :
-
-```
-STP OpN (172.20.0.(10+N)) ──SCTP──► Inter-STP (172.20.0.10:2908)
-```
-
----
-
-## 4. Signalisation SS7
-
-### 4.1 Point codes
-
-Format ITU 14-bit (3.8.3 : `zone.network.node`)
-
-| Nœud | Point Code | Formule |
-|------|-----------|---------|
-| Inter-STP | `0.23.0` | fixe |
-| MSC OpN | `N.23.1` | zone=N |
-| STP OpN | `N.23.2` | zone=N |
-| BSC OpN | `N.23.3` | zone=N |
-
-### 4.2 Routing Contexts (RCTX)
-
-| RCTX | Formule | Usage |
-|------|---------|-------|
-| `N×100+10` | `rctx_msc` | MSC OpN → STP OpN |
-| `N×100+20` | `rctx_stp` | STP OpN (registration) |
-| `N×100+30` | `rctx_bsc` | BSC OpN → STP OpN |
-| **`N×100+50`** | **`rctx_inter`** | **STP OpN → Inter-STP** |
-
-Le RCTX inter (`N×100+50`) est le plus critique : il doit correspondre dans `osmo-stp.cfg` (STP opérateur) et être cohérent avec la connexion vers l'inter-STP.
-
-### 4.3 Configuration inter-STP (générée)
-
-L'inter-STP utilise des **AS sans routing-key** (catch-all par opérateur). Le routage se fait uniquement sur le DPC :
-
-```
-cs7 instance 0
- point-code 0.23.0
- listen m3ua 2908
-  accept-asp-connections dynamic-permitted
-
- as as-opN m3ua
-  traffic-mode override     ← PAS de routing-key
-
- route-table system
-  update route N.23.1 7.255.7 linkset as-opN
-  update route N.23.2 7.255.7 linkset as-opN
-  update route N.23.3 7.255.7 linkset as-opN
-```
-
-### 4.4 Chemin complet d'un message SS7
-
-```mermaid
-flowchart LR
-    MSC_A["MSC Op1\n1.23.1"] -->|"SCTP 127.0.0.1:2905"| STP_A["STP Op1\n1.23.2"]
-    STP_A -->|"catch-all → as-inter\n172.20.0.10:2908"| INTER["Inter-STP\n0.23.0"]
-    INTER -->|"DPC 2.23.x → as-op2"| STP_B["STP Op2\n2.23.2"]
-    STP_B -->|"DPC 2.23.1 → dyn\n127.0.0.1"| MSC_B["MSC Op2\n2.23.1"]
-```
-
----
-
-## 5. Génération dynamique — N opérateurs
-
-Toutes les configurations dépendant de N sont **générées au démarrage**. Aucun fichier template ne contient de valeur hardcodée pour un nombre spécifique d'opérateurs.
-
-### 5.1 Template engine (placeholders)
-
-`apply_config_templates()` dans `start.sh` résout en **1 seul passage `sed`** :
-
-| Placeholder | Formule | Exemple N=2 |
-|------------|---------|-------------|
-| `__PC_MSC__` | `N.23.1` | `2.23.1` |
-| `__PC_STP__` | `N.23.2` | `2.23.2` |
-| `__PC_BSC__` | `N.23.3` | `2.23.3` |
-| `__RCTX_MSC__` | `N×100+10` | `210` |
-| `__RCTX_BSC__` | `N×100+30` | `230` |
-| `__RCTX_INTER__` | `N×100+50` | `250` |
+| Placeholder | Formule | N=2 |
+|---|---|---|
+| `__PC_MSC__` / `__PC_STP__` / `__PC_BSC__` | `N.23.1` / `.2` / `.3` | `2.23.1`… |
+| `__RCTX_MSC__` / `__RCTX_BSC__` / `__RCTX_INTER__` | `N×100+10` / `+30` / `+50` | `210` / `230` / `250` |
 | `__ARFCN__` | `512+N×2` | `516` |
-| `__INTER_LOCAL_IP__` | `172.20.0.(10+N)` | `172.20.0.12` |
-| `__CONTAINER_IP__` | `172.20.N.10` | `172.20.2.10` |
+| `__INTER_LOCAL_IP__` / `__CONTAINER_IP__` | `172.20.0.(10+N)` / `172.20.N.10` | `172.20.0.12` / `172.20.2.10` |
 
-### 5.2 Sections générées (dépendent de N total)
+puis appende, selon N total : les N−1 trunks PJSIP `[interop_trunk_opX]`, le
+contexte `[interop_out]` du dialplan, `sms-routing.conf`, et `osmo-stp-interop.cfg`
+(N AS, N×3 routes). L'inter-STP doit écouter sur `:2908` **avant** les opérateurs.
 
-Après la substitution sed, `start.sh` **appende** à chaque opérateur :
+### SMS
 
-| Section | Fichier | Contenu |
-|---------|---------|---------|
-| Trunks PJSIP | `pjsip.conf` | N-1 blocs `[interop_trunk_opX]` |
-| Dialplan sortant | `extensions.conf` | Contexte `[interop_out]` avec N-1 extensions |
-| Routage SMS | `sms-routing.conf` | Table complète pour N opérateurs |
-| Config inter-STP | `osmo-stp-interop.cfg` | N AS + N×3 routes SS7 |
+Intra-opérateur : `MS → MSC (sms-over-gsup) → HLR → proto-smsc-daemon → HLR → MSC → MS`.
+Inter-opérateur : `sms-interop-relay.py` lit le log MO du SMSC, parse le TPDU
+GSM 03.40, fait un longest-prefix match dans `sms-routing.conf` et pousse un JSON
+`{dest, text, from}` en TCP `:7890` au relay de l'opérateur cible, qui résout
+MSISDN→IMSI par la VTY du HLR et injecte via `proto-smsc-sendmt`.
 
-### 5.3 Séquence de démarrage
+### Voix
 
-```
-./start.sh  [bridge mode]
- ├── Saisie N opérateurs + MCC/MNC/nom par opérateur
- ├── Création réseau gsm-inter (172.20.0.0/24)
- ├── create_interop.sh N → osmo-stp-interop.cfg
- ├── Lancement osmo-inter-stp (doit écouter :2908 AVANT les opérateurs)
- └── Pour chaque opérateur N :
-      ├── apply_config_templates (sed + génération sections dynamiques)
-      ├── docker run sur gsm-inter @ 172.20.0.(10+N)
-      ├── docker network connect gsm-net-opN @ 172.20.N.10
-      └── Services via run.sh + tmux
-```
-
-L'ordre est critique : l'Inter-STP doit écouter avant que les STPs opérateurs tentent de s'y connecter.
-
----
-
-## 6. SMS
-
-### 6.1 SMS intra-opérateur
-
-```mermaid
-sequenceDiagram
-    participant MS_A as MS (expéditeur)
-    participant MSC as MSC (sms-over-gsup)
-    participant HLR as HLR
-    participant SMSC as proto-smsc-daemon
-    participant MS_B as MS (destinataire)
-
-    MS_A->>MSC: SMS MO
-    MSC->>HLR: GSUP MO-forwardSM
-    HLR->>SMSC: GSUP MO-forwardSM
-    SMSC->>HLR: GSUP MT-forwardSM
-    HLR->>MSC: GSUP MT-forwardSM
-    MSC->>MS_B: SMS MT
-```
-
-### 6.2 SMS inter-opérateur
-
-`sms-interop-relay.py` surveille le log MO de `proto-smsc-daemon`, parse le TPDU GSM 03.40, consulte `sms-routing.conf` (longest-prefix match), et transfère via TCP port 7890 au relay de l'opérateur cible.
-
-```mermaid
-sequenceDiagram
-    participant SMSC_A as proto-smsc Op1
-    participant RELAY_A as relay Op1
-    participant RELAY_B as relay Op2
-    participant SMSC_B as proto-smsc Op2
-
-    SMSC_A->>RELAY_A: MO log file
-    RELAY_A->>RELAY_A: Parse TPDU, lookup sms-routing.conf
-    RELAY_A->>RELAY_B: TCP:7890 JSON {dest, text, from}
-    RELAY_B->>RELAY_B: HLR VTY MSISDN→IMSI
-    RELAY_B->>SMSC_B: proto-smsc-sendmt
-```
-
----
-
-## 7. Voix
-
-### 7.1 Intra-opérateur
-
-```
-MS → BTS → BSC → MSC → MNCC → Asterisk → MNCC → MSC → BSC → BTS → MS
-                              ↕ MGCP
-                            OsmoMGW (RTP)
-```
-
-### 7.2 Inter-opérateur
-
-```
-MS(OpX) → MSC(OpX) → MNCC → Asterisk(OpX)
-              ─── SIP trunk 172.20.0.(10+X) ↔ 172.20.0.(10+Y) ───
-                               Asterisk(OpY) → MNCC → MSC(OpY) → MS(OpY)
-```
-
-Le dialplan `[interop_out]` route automatiquement sur le premier chiffre du numéro composé (convention : chiffre N = opérateur N). Pour 3 opérateurs, Op1 a des trunks vers Op2 et Op3, etc.
-
----
-
-## 8. Utilisation du lab
-
-### 8.0 Installation native (sans Docker)
-
-Le dépôt s'installe aussi directement sur une machine Ubuntu 24.04 (noble, la base du Dockerfile depuis le 2026-09-03), sans conteneur :
-
-```bash
-sudo ./install.sh                  # toutes les étapes (deps, sources, build, binaires, configs, bureau)
-./install.sh --list                # les étapes, sans rien faire
-./install.sh --check               # ce qui est déjà en place
-sudo ./install.sh --reinstall      # rejoue tout : sources mises à jour, configs et raccourcis réécrits
-sudo ./install.sh --only bureau    # seulement les icônes et raccourcis du bureau
-```
-
-L'étape `bureau` pose les mêmes fichiers que l'ISO (`data/desktop/*.desktop`, `data/*.svg`) :
-« Lancer le banc GSM » (`launch.sh`) et « multi-operator » (`start-multi.sh`), dans le menu
-et sur le bureau de root et de l'utilisateur `sudo`. Le lancement natif reste `./start-direct.sh`,
-qui délègue à `/opt/GSM/qosmo-grgsm/run.sh`.
-
-Un paquet `.deb` par composant, pour installer sans git :
-
-```bash
-./packaging/build-debs.sh          # osmo-operator, pont, qemu-calypso, calypso-firmware -> packaging/dist/
-sudo dpkg -i packaging/dist/*.deb  # refuse de s'installer par-dessus un clone git au même chemin
-```
-
-Les ISO construites par `build-iso.sh` embarquent ces paquets dans `/var/cache/osmo-debs`.
-
-### 8.0b Le cache `.deb` des composants compilés
-
-Tout ce que l'image Docker compile (libosmocore, osmo-*, gapk, QEMU et son arbre,
-osmocom-bb, le venv gr-gsm, le firmware) sort en paquet `.deb` via `packaging/osmo-deb.sh`
-et reste **sur l'hôte**, dans `/var/cache/osmo-debs` (`OSMO_DEB_CACHE` pour déplacer) :
-
-```bash
-sudo ./build.sh              # 1er build : tout compile, les .deb partent dans le cache
-sudo ./build.sh              # rebuild : dpkg -i des .deb, aucune compilation
-sudo ./build.sh --no-cache   # tout recompiler et réécrire le cache
-./compose.sh debs            # le contenu du cache
-```
-
-`build-iso.sh` pose ces mêmes paquets dans le rootfs de l'ISO par `dpkg` avant de
-recopier le reste de l'image (`ISO_EMBED_DEBS=1` pour les embarquer aussi dans l'ISO).
-
-### 8.1 Démarrage et arrêt
-
-```bash
-sudo ./build.sh          # Build l'image Docker (apt-fast, docker compose v2, cache .deb)
-sudo ./start.sh          # Lance tout (choisir bridge, saisir N opérateurs)
-sudo ./start.sh stop     # Arrête tous les containers
-```
-
-Avec docker compose v2 (installé par `build.sh` avec `docker-buildx`), `compose.yaml`
-décrit les images (`nitb`, `run`, `lite`, `stp`) et le banc minimal hub + un opérateur :
-
-```bash
-sudo ./compose.sh build [--no-cache] [--lite] [--stp]   # = build.sh
-sudo ./compose.sh up [--ms 2] [--phy faketrx]            # hub + osmo-operator-1, HLR alimenté
-sudo ./compose.sh down | ps | logs | shell
-```
-
-Les ISO (`sudo ./build-iso.sh`, les quatre images) ne font **qu'un seul build docker**
-(`osmocom-nitb`), puis dérivent chaque rootfs : interstp, normal (de zéro), lite (copie de la
-normale, ateliers retirés), desktop (la normale + le bureau). `--role=interstp` seul est la seule
-exception : il ne construit que `osmocom-stp` (Dockerfile.stp). Sur le disque installé par
-Calamares, les comptes sont ceux de l'écran « Utilisateurs » (+ root déverrouillé) : plus de
-compte `osmocom` du live ; le chiffrement LUKS est proposé dans les choix de partitionnement (LVM
-en partitionnement manuel, `lvm2` embarqué) ; une page « Pilotes graphiques » propose
-`nvidia-driver-610` quand `lspci` voit une carte, et l'installe depuis les dépôts (réseau requis —
-c'est exactement `sudo apt install nvidia-driver-610`, plus d'arbitrage par `ubuntu-drivers`). Après coup, l'icône « Pilotes graphiques »
-(`tools/osmo-drivers.sh`) montre l'état et installe ou met à jour. Un Conky
-(`configs/conky/osmo-conky.conf`) affiche l'état du banc dans toute session GNOME, sur la clé
-comme sur le disque.
-
-```bash
-
-sudo ./provision_hlr.sh  # Provisionne les abonnés de test dans les HLR
-```
-
-Trois modes PHY pour le côté MS, sélectionnés via `PHY_MODE` à l'intérieur du
-container avant d'invoquer `run.sh` :
-
-| `PHY_MODE` | Pile | Usage |
-|------------|------|-------|
-| `faketrx` (défaut) | `fake_trx` → `trxcon` → `mobile` | Multi-MS, rapide, pas de DSP |
-| `virtphy` | `osmo-bts-virtual` ↔ `virtphy` ↔ `mobile` | Multi-MS via multicast UDP |
-| `qemu` | `osmo-bts-trx` ↔ `bridge.py` ↔ QEMU Calypso ↔ `mobile` | Baseband émulé (ARM7+DSP), 1 MS |
-
-Voir §11 pour le mode QEMU.
-
-### 8.2 Accès aux containers
-
-```bash
-# Opérateur N — tmux avec STP/MSC/HLR/BSC/BTS/SMSC
-sudo docker exec -ti osmo-operator-1 tmux attach
-sudo docker exec -ti osmo-operator-2 tmux attach
-sudo docker exec -ti osmo-operator-N tmux attach
-
-# Inter-STP
-sudo docker exec -ti osmo-inter-stp tmux attach -t stp
-```
-
-### 8.3 Navigation tmux
-
-| Raccourci | Fenêtre |
-|-----------|---------|
-| `Ctrl-b 0` | faketrx |
-| `Ctrl-b 1` | MS1 (trxcon + mobile) |
-| `Ctrl-b 2` | Asterisk |
-| `Ctrl-b 3` | SMSC (proto-smsc-daemon + relay) |
-| `Ctrl-b w` | Liste toutes les fenêtres |
-| `Ctrl-b d` | Détacher |
-
-### 8.4 Interfaces VTY (telnet depuis le container)
-
-| Port | Composant |
-|------|-----------|
-| `4239` | OsmoSTP |
-| `4242` | OsmoBSC |
-| `4243` | OsmoMGW |
-| `4254` | OsmoMSC |
-| `4258` | OsmoHLR |
-
-### 8.5 Commandes VTY essentielles
-
-```
-# Sur STP (4239) — diagnostic SS7
-OsmoSTP> show cs7 instance 0 asp          # État ASP (ACTIVE/DOWN)
-OsmoSTP> show cs7 instance 0 as all       # État AS
-OsmoSTP> show cs7 instance 0 route        # Table de routage — PROHIB ?
-
-# Sortie saine STP OpN :
-# N.23.1/14   as-dyn-…  avail  avail  dyn   ← MSC (dynamique)
-# N.23.3/14   as-dyn-…  avail  avail  dyn   ← BSC (dynamique)
-# 0.0.0/0     as-inter  avail  avail        ← catch-all inter-STP
-
-# Sur MSC (4254)
-OsmoMSC# subscriber msisdn 10001 sms sender msisdn 10002 send Bonjour
-OsmoMSC# show subscriber all
-
-# Sur HLR (4258)
-OsmoHLR# subscriber imsi 001010000000001 show
-OsmoHLR# show gsup-clients
-```
-
-### 8.6 Wireshark
-
-Lancé automatiquement sur le bridge Docker avec filtre `sctp or udp port 4729`.
-
-```
-m3ua                      # Trafic M3UA uniquement
-sccp                      # Messages SCCP
-gsm_map                   # Messages MAP
-gsmtap                    # Trafic radio (Um)
-sctp.srcport == 2908      # Trafic vers/depuis l'inter-STP
-```
-
----
-
-## 9. Diagnostic — Résoudre les PROHIB
-
-```bash
-# 1. L'inter-STP tourne-t-il ?
-sudo docker ps | grep inter-stp
-
-# 2. L'ASP vers l'inter-STP est-il ACTIVE ?
-sudo docker exec osmo-operator-1 sh -c \
-  'echo "show cs7 instance 0 asp" | telnet 127.0.0.1 4239 2>/dev/null'
-
-# 3. L'inter-STP voit-il les opérateurs ?
-sudo docker exec osmo-inter-stp sh -c \
-  'echo "show cs7 instance 0 asp" | telnet 127.0.0.1 4239 2>/dev/null'
-
-# 4. Les routes locales (BSC/MSC) existent-elles ?
-sudo docker exec osmo-operator-1 sh -c \
-  'echo "show cs7 instance 0 route" | telnet 127.0.0.1 4239 2>/dev/null'
-
-# 5. Connectivité backbone
-sudo docker exec osmo-operator-1 ping -c1 172.20.0.10
-
-# 6. Race condition → redémarrer l'opérateur
-sudo docker restart osmo-operator-1
-```
-
-| Symptôme | Cause probable | Fix |
-|----------|---------------|-----|
-| Route 0.0.0/0 PROHIB | Inter-STP pas démarré ou IP incorrecte | Vérifier `INTER_STP_IP` et backbone IP |
-| Pas de routes dynamiques | MSC/BSC ne se connectent pas au STP | Vérifier que les ASP pointent sur `127.0.0.1` |
-| ASP DOWN sur inter-STP | Race condition Docker | `docker restart` de l'opérateur |
-
----
-
-## 10. Plan de numérotation
-
-Convention par défaut (modifiable) :
+Intra : `MS → BTS → BSC → MSC → MNCC → Asterisk → MNCC → MSC → … → MS`, RTP par OsmoMGW (MGCP).
+Inter : trunk SIP `172.20.0.(10+X) ↔ 172.20.0.(10+Y)` entre les Asterisk. Le
+dialplan route sur le **premier chiffre** du numéro : chiffre N = opérateur N.
 
 | Numéro | Usage |
-|--------|-------|
-| `N0001`…`N9999` | Abonnés GSM opérateur N |
-| `100` | Linphone A (softphone local) |
-| `200` | Linphone B (softphone local) |
-| `600` | Echo test |
-| `9XXXXX` | Sortie inter-op depuis softphone (9 + numéro complet) |
-
-Le premier chiffre d'un numéro NXXXX identifie l'opérateur. Le dialplan `[gsm_in]` détecte automatiquement si la destination est locale ou inter-op.
+|---|---|
+| `N0001`…`N9999` | abonnés GSM de l'opérateur N |
+| `100` / `200` | Linphone A / B (softphones locaux) |
+| `600` | echo test |
+| `9XXXXX` | sortie inter-op depuis un softphone |
 
 ---
 
-## 11. RAN virtuel QEMU (PHY_MODE=qemu)
+## Le mobile : trois PHY
 
-Le projet intègre [bbaranoff/qosmo-grgsm](https://github.com/bbaranoff/qosmo-grgsm) — un fork
-de QEMU avec une machine `calypso` qui émule le SoC GSM TI Calypso (ARM7TDMI +
-DSP TMS320C54x). Cela permet d'exécuter le **vrai firmware** OsmocomBB
-`layer1.highram.elf` au-dessus d'un baseband virtualisé, sans aucun hardware.
+| `PHY_MODE` / profil | Pile | Usage |
+|---|---|---|
+| `faketrx` | `fake_trx → trxcon → mobile` | multi-MS, rapide, pas de DSP |
+| `virtphy` | `osmo-bts-virtual ↔ virtphy ↔ mobile` | multi-MS par multicast UDP |
+| `qemu` (`calypso`) | `osmo-bts-trx ↔ pont ↔ QEMU Calypso ↔ mobile` | baseband émulé ARM7 + DSP, 1 MS par conteneur |
 
-### 11.1 Architecture
+En mode QEMU, la machine `calypso` exécute le vrai `layer1.highram.elf`
+(compilé dans l'image avec `gcc-arm-none-eabi`) ; le DSP charge `calypso_dsp.txt`,
+la mask-ROM dumpée d'un téléphone ; `mobile` se connecte au socket L1CTL
+`/tmp/osmocom_l2` publié par la PTY série du firmware (sercomm DLCI 5). QEMU est
+maître d'horloge TDMA (ticks UDP 6700) ; le pont synthétise les `IND CLOCK` pour
+le BTS et relaie les bursts entre TRX (5700-5702) et BSP (6702).
 
-```mermaid
-flowchart LR
-    mobile["mobile (layer23)"] -->|"L1CTL\n/tmp/osmocom_l2"| QEMU
-    subgraph QEMU["QEMU calypso"]
-        ARM["ARM7\nlayer1.highram.elf"]
-        DSP["DSP C54x\ncalypso_dsp.txt"]
-        BSP["BSP DMA\nUDP 6702"]
-        ARM <-->|"API RAM"| DSP
-        DSP --> BSP
-    end
-    QEMU -->|"CLK UDP 6700"| BRIDGE
-    BRIDGE["bridge.py"] <-->|"TRX 5700-5702"| BTS
-    BTS["osmo-bts-trx"] -->|"Abis/IP"| BSC
-    BSC --> CORE[Core PLMN]
-```
+Deux forks, même interface `run.sh` :
 
-- **ARM7** exécute le firmware osmocom-bb compilé dans le conteneur.
-- **DSP C54x** charge le ROM Calypso réel (`calypso_dsp.txt`, dumpé d'un téléphone).
-- **`bridge.py`** (Python) relaie les bursts entre `osmo-bts-trx` (UDP 5700-5702)
-  et la BSP du DSP (UDP 6702). QEMU est maître d'horloge TDMA et envoie des
-  ticks sur UDP 6700 ; bridge synthétise des `IND CLOCK` à cadence wall-clock
-  pour le BTS, en piochant le FN de QEMU.
-- **`mobile`** se connecte au socket L1CTL `/tmp/osmocom_l2` publié par QEMU
-  via la PTY série du firmware (sercomm DLCI 5).
+- **`qosmo-grgsm`** (défaut) — couche 1 gr-gsm, sans C54x. Va de bout en bout :
+  camping, LU, COMP128v1, A5/1, SMS, appel voix. C'est la démo.
+- **`qosmo-dsp`** (`--dsp`) — le DSP C54x émulé exécute la mask-ROM TI et
+  décode lui-même. Le FB est acquis, le décodage SCH ne passe pas encore
+  (`a_sch[0]=0x8100`, CRC faux) : **le mobile ne campe pas**. C'est le banc de
+  travail. Pas de pont par défaut (`CALYPSO_BRIDGE=none`) : son transceiver est
+  `osmo-trx-ipc`.
 
-### 11.2 Composants ajoutés au conteneur
-
-| Composant | Path container | Source |
-|-----------|---------------|--------|
-| `qemu-system-arm` (machine `calypso`) | `${OQC_ROOT}/build/qemu-system-arm` | bbaranoff/qosmo-grgsm / qosmo-dsp |
-| `qosmo-grgsm`, `qosmo-dsp` (lanceurs C de QEMU, voir 11.4) | `/usr/local/bin/` | `<fork>/tools/qosmo-launch` |
-| Firmware Calypso layer1 | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | osmocom-bb (build container) |
-| ROM DSP | `${GSM_ROOT}/calypso_dsp.txt` | bbaranoff/qosmo-grgsm (symlink) |
-| Bridge BTS↔BSP | `${OQC_ROOT}/bridge.py` | bbaranoff/qosmo-grgsm |
-| `transceiver` (BTS soft-SDR Calypso) | `/usr/local/bin/transceiver` | osmocom-bb branche jolly/testing |
-| `ccch_scan`, `bcch_scan`, `cell_log` | `/usr/local/bin/` | osmocom-bb branche fixeria/burst_ind |
-
-Le Dockerfile installe le toolchain ARM (`gcc-arm-none-eabi`) avant la build
-osmocom-bb pour produire le `.elf`. La build complète prend ~15-20 min selon
-la machine.
-
-### 11.3 Lancement
-
-```bash
-sudo ./tools/make-docker-image.sh
-sudo ./start.sh        # mode opérateur unique (single)
-docker exec -ti osmo-operator-1 bash
-# dans le container :
-PHY_MODE=qemu /root/run.sh
-```
-
-`run.sh` orchestre la séquence : `osmo-bts-trx` → QEMU (PTY+monitor) →
-attente du socket `/tmp/osmocom_l2` → `bridge.py` → attente des ticks QEMU
-sur UDP 6700 → `mobile`. Tout est lancé dans des fenêtres tmux distinctes.
-
-| Variable | Défaut | Rôle |
-|----------|--------|------|
-| `QEMU_BIN` | `${GSM_ROOT}/qemu/build/qemu-system-arm` | Binaire QEMU |
-| `QEMU_FW` | `${GSM_ROOT}/firmware/board/compal_e88/layer1.highram.elf` | Firmware ARM |
-| `QEMU_DSP_ROM` | `${GSM_ROOT}/calypso_dsp.txt` | ROM DSP C54x |
-| `QEMU_BRIDGE` | `${OQC_ROOT}/bridge.py` | Script bridge BTS↔BSP |
-| `QEMU_L1CTL_SOCK` | `/tmp/osmocom_l2` | Socket L1CTL publié par QEMU |
-| `QEMU_MON_SOCK` | `/tmp/qemu-calypso-mon.sock` | Monitor QEMU (HMP) |
-| `QOSMO_LAUNCHER` | `/usr/local/bin/${CALYPSO_FORK}` | Lanceur C appelé par `40-qemu.sh` à la place de `qemu-system-arm` |
-
-### 11.4 Lanceurs `qosmo-grgsm` / `qosmo-dsp`
-
-Depuis le 2026-09-03, `40-qemu.sh` n'appelle plus `qemu-system-arm` directement :
-chaque fork porte un lanceur C, `tools/qosmo-launch/qosmo-launch.c`, **compilé dans
-son propre dossier** et installé sous le nom du fork :
-
-```bash
-make -C /opt/GSM/qosmo-grgsm/tools/qosmo-launch install   # -> /usr/local/bin/qosmo-grgsm
-make -C /opt/GSM/qosmo-dsp/tools/qosmo-launch   install   # -> /usr/local/bin/qosmo-dsp
-```
-
-Les défauts sont ceux qui marchent déjà (`-M calypso` + ROMs DSP, `-cpu arm946`,
-`-gdb tcp::1234`, `-serial pty -serial pty`, moniteur unix, L1CTL `/tmp/osmocom_l2`,
-TRXDv0 `0.0.0.0:6702`, IQ tee `127.0.0.1:6703`) ; chacun se choisit par une option.
-Le lanceur lit `l1s`/`last_rach` dans l'ELF (plus besoin de `nm`), relaie la sortie
-de QEMU telle quelle et publie des liens stables vers les pty :
-
-```bash
-qosmo-grgsm -k /opt/GSM/firmware/board/compal_e88/layer1.highram.elf
-qosmo-dsp   -k /opt/GSM/firmware/board/compal_e88/layer1.highram.elf -dsp /opt/GSM
-#   -> /tmp/qosmo-dsp/modem.pty, /tmp/qosmo-dsp/irda.pty, /tmp/qosmo-dsp/qemu-monitor.sock
-osmocon -m romload -i 100 -p /tmp/qosmo-dsp/modem.pty -s /tmp/osmocom_l2 layer1.highram.bin
-qosmo-dsp -k .../layer1.highram.elf -dsp /opt/GSM -o        # lance osmocon lui-même
-qosmo-dsp ... --bind eth0 --trx-port 6712 --gdb lo:2345 --l1ctl /tmp/ms2_l2 --rundir /run/ms2
-qosmo-dsp --help
-```
-
-`start-direct.sh` résout le lanceur (`--launcher <bin>` ou `QOSMO_LAUNCHER`), le
-compile s'il manque et que la source est là, et le transmet à `run.sh`. Sans
-lanceur, `40-qemu.sh` retombe sur la ligne `qemu-system-arm` historique.
-
-`PHY_MODE=qemu` force `N_MS=1` : le bridge utilise des ports UDP fixes (un seul
-Calypso émulé par conteneur). Pour faire tourner plusieurs MS virtuels, lancer
-plusieurs conteneurs (un par opérateur, chacun avec son bridge).
-
-### 11.4 Diagnostic
-
-```bash
-# tmux : fenêtres qemu / bridge / bts / ue_g1
-docker exec -ti osmo-operator-1 tmux -S /tmp/osmocom_tmux attach -t osmocom
-
-# Monitor QEMU (HMP)
-docker exec -ti osmo-operator-1 socat - unix-connect:/tmp/qemu-calypso-mon.sock
-
-# Logs
-/var/log/osmocom/qemu.log     # Émulation ARM/DSP, BSP, MVPD, IRQ
-/var/log/osmocom/bridge.log   # Ticks QEMU, IND CLOCK, DL/UL bursts
-/var/log/osmocom/run.sh.log   # Orchestration
-```
-
-| Symptôme | Cause probable | Diagnostic |
-|----------|---------------|------------|
-| `bridge: timeout — vérifier que QEMU émet sur UDP 6700` | QEMU n'a pas démarré le TPU/DSP | `grep TINT0 /var/log/osmocom/qemu.log` |
-| Mobile `FBSB result=255` (no cell) | DSP ne détecte pas le FB — voir `qemu/SESSION_STATUS.md` (bug IMR=0x0000 connu) | `grep "IMR change" /var/log/osmocom/qemu.log \| wc -l` |
-| `osmo-bts-trx: PC clock skew too high` | bridge cesse d'envoyer `IND CLOCK` | redémarrer bridge.py |
-| Socket `/tmp/osmocom_l2` jamais créé | Firmware ne boote pas | `head -50 /var/log/osmocom/qemu.log` (chercher MVPD/PROM0) |
-
-L'intégration QEMU est en développement actif côté DSP (voir
-`bbaranoff/qosmo-grgsm/CLAUDE.md` pour le statut courant des bugs C54x).
+Depuis le 2026-09-03, QEMU n'est plus appelé directement mais par un lanceur C
+compilé dans chaque fork (`tools/qosmo-launch`, installé en
+`/usr/local/bin/qosmo-grgsm` ou `qosmo-dsp`) : mêmes défauts (`-M calypso`,
+`-cpu arm946`, `-gdb tcp::1234`, deux `-serial pty`, moniteur unix, L1CTL,
+TRXDv0 `0.0.0.0:6702`, IQ tee `127.0.0.1:6703`), lecture de `l1s`/`last_rach`
+dans l'ELF, liens stables vers les pty sous `<RUN_DIR>/modem.pty`, et `-o` pour
+lancer `osmocon` lui-même.
 
 ---
 
-## 12. Autres extensions
+## Accès et diagnostic
 
-**srsRAN (LTE)** — coexistence 2G/4G avec eNodeB virtuel, HLR/HSS partagé.
+```bash
+tmux attach -t calypso                               # natif / ISO
+sudo docker exec -ti osmo-operator-1 tmux attach     # Docker ; inter-STP : -t stp
+journalctl -u osmo-banc -f
+./ss7-console.py                                     # schéma SS7 navigable, VTY intégrées
+```
 
-**VoWiFi / IMS** — passerelle SIP via Asterisk pour l'accès WiFi, pont vers le core GSM.
+| VTY | Port | | tmux | Fenêtre |
+|---|---|---|---|---|
+| OsmoSTP | 4239 | | `Ctrl-b 0` | faketrx |
+| OsmoBSC | 4242 | | `Ctrl-b 1` | MS1 |
+| OsmoMGW | 4243 | | `Ctrl-b 2` | Asterisk |
+| OsmoMSC | 4254 | | `Ctrl-b 3` | SMSC + relay |
+| OsmoHLR | 4258 | | `Ctrl-b w` / `d` | liste / détacher |
 
-**Monitoring** — Prometheus/Grafana pour métriques M3UA, dashboards MAP, visualisation SCCP.
+Wireshark démarre sur `sctp or udp port 4729` ; filtres utiles : `m3ua`, `sccp`,
+`gsm_map`, `gsmtap`, `sctp.srcport == 2908`.
+
+### Diagnostic
+
+| Symptôme | Cause probable | Vérifier |
+|---|---|---|
+| route `0.0.0/0` PROHIB | inter-STP absent, ou `INTER_STP_IP`/backbone faux | `docker ps \| grep inter-stp` ; `show cs7 instance 0 asp` sur 4239 des deux côtés |
+| pas de routes dynamiques | MSC/BSC ne joignent pas le STP | ASP pointent bien sur `127.0.0.1` ? |
+| ASP DOWN sur l'inter-STP | race Docker | `docker restart osmo-operator-N` |
+| `bridge: timeout … UDP 6700` | QEMU n'a pas démarré TPU/DSP | `grep TINT0 /var/log/osmocom/qemu.log` |
+| `FBSB result=255` | le DSP ne voit pas le FB | `grep "IMR change" qemu.log \| wc -l` ; `qemu/SESSION_STATUS.md` |
+| `PC clock skew too high` | plus d'`IND CLOCK` | relancer le pont |
+| `/tmp/osmocom_l2` jamais créé | le firmware ne boote pas | `head -50 qemu.log` (MVPD / PROM0) |
+| « le pont a des CRC » | Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant | [`pont/README.md`](pont/README.md) **avant** de chercher dans un compteur |
+
+Scripts prêts : `checks/check_all.sh`, `checks/ss7_check.sh`,
+`checks/diag-stp-operator.sh`, `scripts/call-diag.sh`, `scripts/audio-diag.sh`.
 
 ---
 
-*Projet osmo-nitb-for-calypso — plateforme pédagogique télécom multi-PLMN, entièrement conteneurisée, support N opérateurs.*
+## Arborescence
+
+| Dossier | Contenu |
+|---|---|
+| `environment/` | la configuration par domaine, `load.env` en tête — [README](environment/README.md) |
+| `pont/` | le transceiver-pont TRX-UDP (Python) : `pont.py`, `airmesh.py`, `cipher.py` — [README](pont/README.md) |
+| `navigation/` | la console SS7 (`ss7-console.py`, TUI, VTY, MAP) — [QUICKSTART](navigation/QUICKSTART.md) |
+| `scripts/` | `run.sh`, `entrypoint.sh`, relay SMS, diag audio/appel |
+| `checks/` | vérifications SS7 / opérateur / inter-STP |
+| `services/` | unités systemd, **posées mais non activées** — [README](services/README.md) |
+| `packaging/` | `.deb` par composant, cache `/var/cache/osmo-debs`, apt-fast |
+| `iso_modules/`, `install_modules/` | étapes de `build-iso.sh` et `install.sh` |
+| `fft-web/` | les deux spectres I/Q (MS + BTS) sur une page, port 8081 |
+| `configs/`, `data/`, `patches/` | gabarits Osmocom/Asterisk, bureau et icônes, patches |
+| `wiki/` | [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
+
+Documentation complète des 312 variables Calypso :
+`hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md` dans le fork QEMU.
+
+---
+
+*osmo-operator — plateforme pédagogique télécom multi-PLMN. Ubuntu 24.04, Docker ou natif, amd64 et arm64 (Raspberry Pi 4 pour l'inter-STP / lite).*
