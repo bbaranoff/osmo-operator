@@ -25,7 +25,7 @@ UE (QEMU Calypso / fake_trx / SDR) ─ BTS ─ BSC ─ STP ─ MSC ─ HLR
 | comprendre ce que fait `start-direct.sh`, étape par étape | [wiki/Start-direct.md](wiki/Start-direct.md) |
 | savoir quelle variable gagne, et pourquoi QEMU ne voit pas la mienne | [wiki/Environnement.md](wiki/Environnement.md) |
 | interconnecter N opérateurs (SS7, SMS, voix) | [§ Architecture](#architecture-multi-plmn) |
-| savoir si mon banc est sain | [§ État du banc](#état-du-banc--checkscheck_allsh-en-natif) |
+| savoir si mon banc est sain | [§ État du banc](#état-du-banc--checkscheck_allsh-en-natif) et [wiki/Resultats.md](wiki/Resultats.md) |
 | diagnostiquer un PROHIB, un CRC, un mobile qui ne campe pas | [§ Diagnostic](#diagnostic) et [`pont/README.md`](pont/README.md) |
 
 ---
@@ -76,36 +76,24 @@ seul. Icône « Lancer le banc GSM », ou `systemctl start osmo-banc`.
 
 ## État du banc — `checks/check_all.sh` en natif
 
-Résultat de référence d'un nœud natif seul (Ubuntu 24.04, profil `faketrx-qemu`,
-sans inter-STP), 2026-09-15 :
+Deux runs de référence le 2026-09-15, détail et lecture dans
+[wiki/Resultats.md](wiki/Resultats.md) :
 
-| Check | Résultat | Lecture |
-|---|---|---|
-| `global` | **OK** — 29 pass, 0 fail, 1 warn, 1 skip | tous les démons en cours ; STP 2 ASP / 2 AS actifs, aucun PROHIB ; HLR : VLR + SMSC en GSUP ; MSC et BSC `ASP_ACTIVE`, SSN 254 enregistrés ; BTS 0 Enabled/OK, OML + RSL connectés ; PCU sur BTS ; SGSN 1 NS entity ; SIP connector, MNCC, relay SMS `:7890`, Asterisk |
-| `ss7` | **OK** — 7 pass, 1 warn, 3 skip | `as-inter : AS_DOWN` et route par défaut ignorée : attendu, aucun hub |
-| `interstp` | ignoré | aucun inter-STP interrogeable ici |
-| `operator` | **ECHEC — INTERCO SS7 : DOWN** | `asp-to-inter` en `shutdown`, `remote-ip 127.0.0.1` ≠ hub `172.20.0.10`, pas de SCTP : **normal sans hub** |
-| `wan`, `annuaire`, `dump`, `resume` | ignorés | pas de plan WAN, pas d'annuaire, `--dump` non demandé |
+| Topologie | global | ss7 | interco | Verdict |
+|---|---|---|---|---|
+| 1 opérateur natif, sans hub | 29 pass / 0 fail / 1 warn | OK | `operator` ECHEC : pas d'inter-STP, **attendu** | **sain** |
+| 3 opérateurs (Op1 natif, Op2/Op3 conteneurs) + inter-STP | 88 pass / 0 fail / 5 warn | **31 pass / 0 warn**, matrice 3×3 complète, `as-inter` ACTIVE partout | `interstp` ECHEC « aucun AS actif » : **faux négatif** du script (il lit la VTY d'Op1 au lieu du hub en topologie hybride) | **sain, interco UP** |
 
-**Verdict : c'est bon.** Un nœud natif seul est fonctionnel de bout en bout ; le
-seul échec est l'interconnexion, qui ne peut pas être montée puisqu'il n'y a pas
-d'inter-STP — le diagnostic le dit lui-même (« hub distant 172.20.0.10 : VTY 4239
-non joignable, lancez `./start-interstp.sh --status` sur le hub »). Il passe
-au vert dès qu'un hub existe et que le nœud est lancé avec `--hub-ip` (ou
-`--node`), qui réécrit `remote-ip` et sort l'ASP de `shutdown`.
-
-Le seul point à regarder est le **WARN GGSN : 0 APN configuré**. Sans APN, la
-data 2G (GPRS/EDGE par SGSN → GGSN) n'aboutit pas ; la data 4G, elle, passe par
-Open5GS (`ogstun`) et n'est pas concernée. Poser `APN=internet` dans
-`globals.conf` (c'est le défaut du gabarit) puis `./start-direct.sh --regen`.
+Ce qui reste à traiter, dans les deux cas : **GGSN 0 APN** (bloque la data 2G
+uniquement — `APN=internet` dans `globals.conf`, puis `--regen`) et, à trois
+opérateurs, **SGSN 0 NS entity** sur Op2/Op3 (leur PCU n'a pas ouvert de NS-VC).
+Le warn « abonnés sans fiche » est cosmétique (banc relancé sans `start.sh`).
 
 ```bash
-bash ./checks/check_all.sh                       # tout, ~2 min
-./checks/check_all.sh --only=operator --verbose  # un seul check, en détail
+bash ./checks/check_all.sh                       # tout
+./checks/check_all.sh --only=interstp --verbose  # un seul check, en détail
 ./checks/check_all.sh --dump                     # + vty-debug-dump et operator_summary
 ```
-
-Le journal complet est écrit dans `/tmp/osmo-check-all-<date>.txt`.
 
 ---
 
@@ -312,7 +300,7 @@ Scripts prêts : `checks/check_all.sh`, `checks/ss7_check.sh`,
 | `iso_modules/`, `install_modules/` | étapes de `build-iso.sh` et `install.sh` |
 | `fft-web/` | les deux spectres I/Q (MS + BTS) sur une page, port 8081 |
 | `configs/`, `data/`, `patches/` | gabarits Osmocom/Asterisk, bureau et icônes, patches |
-| `wiki/` | [Home](wiki/Home.md) · [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
+| `wiki/` | [Home](wiki/Home.md) · [Resultats](wiki/Resultats.md) · [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
 
 Documentation complète des 312 variables Calypso :
 `hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md` dans le fork QEMU.
