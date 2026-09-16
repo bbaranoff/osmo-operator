@@ -1,68 +1,69 @@
-# Release ISO Bootable
+# Bootable ISO release
 
 https://github.com/bbaranoff/osmo-operator/releases/tag/v0.1-3
 
 
-# osmo-operator — banc GSM/LTE pédagogique, multi-PLMN, sans matériel
+# osmo-operator — a teaching GSM/LTE bench, multi-PLMN, no hardware required
 
-Un réseau mobile complet sur une seule machine : couche radio visible (spectres
-I/Q), signalisation lisible (SS7/M3UA, GSUP, Abis), services qui marchent au
-bout (appel, SMS, data 2G/4G, CSFB). Le mobile est un **vrai firmware OsmocomBB
-sur un baseband TI Calypso émulé dans QEMU** (ARM7 + DSP C54x) ; le cœur est la
-pile Osmocom ; la 4G est Open5GS + srsRAN en ZeroMQ. Tout tient dans une image
-Docker, une ISO bootable, ou une installation native Ubuntu 24.04.
+A complete mobile network on a single machine: the radio layer is visible (I/Q
+spectra), the signalling is readable (SS7/M3UA, GSUP, Abis), and the services
+actually work end to end (calls, SMS, 2G/4G data, CSFB). The handset is **real
+OsmocomBB firmware running on a TI Calypso baseband emulated in QEMU** (ARM7 +
+C54x DSP); the core is the Osmocom stack; 4G is Open5GS + srsRAN over ZeroMQ.
+Everything fits in a Docker image, a bootable ISO, or a native Ubuntu 24.04
+install.
 
-De 1 à 9 opérateurs interconnectés par un inter-STP central, configuration SS7
-générée automatiquement — un « DHCP pour SS7 ».
+From 1 to 9 operators, interconnected through a central inter-STP, with the SS7
+configuration generated automatically — think of it as "DHCP for SS7".
 
 ```
 UE (QEMU Calypso / fake_trx / SDR) ─ BTS ─ BSC ─ STP ─ MSC ─ HLR
                                                  │      ├─ MGW (RTP)
-                                                 │      └─ Asterisk (voix, SIP, trunks)
-                                            inter-STP ─ autres opérateurs
+                                                 │      └─ Asterisk (voice, SIP, trunks)
+                                            inter-STP ─ other operators
 ```
 
-| Je veux… | Lire |
+| I want to… | Read |
 |---|---|
-| démarrer sans rien compiler (**méthode conseillée**) | [wiki/Home.md](wiki/Home.md) — l'ISO desktop de la release |
-| démarrer en Docker ou en natif | [Démarrage rapide](#démarrage-rapide) |
-| construire l'image, l'ISO, les `.deb` | [wiki/Build.md](wiki/Build.md) |
-| comprendre ce que fait `start-direct.sh`, étape par étape | [wiki/Start-direct.md](wiki/Start-direct.md) |
-| savoir quelle variable gagne, et pourquoi QEMU ne voit pas la mienne | [wiki/Environnement.md](wiki/Environnement.md) |
-| interconnecter N opérateurs (SS7, SMS, voix) | [§ Architecture](#architecture-multi-plmn) |
-| savoir si mon banc est sain | [§ État du banc](#état-du-banc--checkscheck_allsh-en-natif) et [wiki/Resultats.md](wiki/Resultats.md) |
-| diagnostiquer un PROHIB, un CRC, un mobile qui ne campe pas | [§ Diagnostic](#diagnostic) et [`pont/README.md`](pont/README.md) |
+| get started without compiling anything (**recommended**) | [wiki/Home.md](wiki/Home.md) — the desktop ISO from the release |
+| get started with Docker or natively | [Quick start](#quick-start) |
+| build the image, the ISO, the `.deb` packages | [wiki/Build.md](wiki/Build.md) |
+| understand what `start-direct.sh` does, step by step | [wiki/Start-direct.md](wiki/Start-direct.md) |
+| know which variable wins, and why QEMU can't see mine | [wiki/Environnement.md](wiki/Environnement.md) |
+| interconnect N operators (SS7, SMS, voice) | [§ Architecture](#multi-plmn-architecture) |
+| check whether my bench is healthy | [§ Bench status](#bench-status--checkscheck_allsh-native) and [wiki/Resultats.md](wiki/Resultats.md) |
+| diagnose a PROHIB, a CRC error, a mobile that won't camp | [§ Troubleshooting](#troubleshooting) and [`pont/README.md`](pont/README.md) |
 
 ---
 
-## Démarrage rapide
+## Quick start
 
-### A. Image Docker publiée (le plus court)
+### A. Published Docker image (the shortest path)
 
 ```bash
 sudo docker pull bastienbaranoff/norf_gsm
 sudo docker tag bastienbaranoff/norf_gsm osmocom-nitb
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
-sudo ./start.sh                  # mode single, ou bridge : N opérateurs
+sudo ./start.sh                  # single mode, or bridge: N operators
 sudo docker exec -ti osmo-operator-1 bash
 cd /opt/GSM/osmo-operator
-./start-direct.sh --regen        # première fois : génère les configs
+./start-direct.sh --regen        # first run: generates the configs
 ./start-direct.sh --stop
 ./start-direct.sh
 ```
 
-### B. Installation native (Ubuntu 24.04, sans Docker)
+### B. Native install (Ubuntu 24.04, no Docker)
 
 ```bash
-sudo ./install.sh                # deps, sources, build, binaires, configs, bureau
-sudo ./start-direct.sh           # ou l'icône « Lancer le banc GSM »
+sudo ./install.sh                # deps, sources, build, binaries, configs, desktop
+sudo ./start-direct.sh           # or the "Launch the GSM bench" icon
 ```
 
-### C. ISO bootable — la méthode conseillée
+### C. Bootable ISO — the recommended way
 
-La [release](https://github.com/bbaranoff/osmo-operator/releases/latest) livre
-`osmo-operator-desktop.iso` en quatre morceaux (limite GitHub 2 Gio) :
+The [release](https://github.com/bbaranoff/osmo-operator/releases/latest) ships
+`osmo-operator-desktop.iso` in four pieces (GitHub's 2 GiB limit):
 
 ```bash
 cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
@@ -70,246 +71,252 @@ sha256sum -c SHA256SUMS
 qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080
 ```
 
-8 Go / 4 cœurs, virtualisation imbriquée en VM. VirtualBox, VMware, clé USB,
-lanceurs du dock et mots de passe : [wiki/Home.md](wiki/Home.md). Pour la
-construire soi-même : `sudo ./build-iso.sh --desktop`.
+8 GB / 4 cores, with nested virtualization when running inside a VM.
+VirtualBox, VMware, USB stick, dock launchers and passwords: see
+[wiki/Home.md](wiki/Home.md). To build it yourself: `sudo ./build-iso.sh --desktop`.
 
-Au boot, la machine arrive sur son bureau ; le banc **n'est pas** lancé tout
-seul. Icône « Lancer le banc GSM », ou `systemctl start osmo-banc`.
+On boot, the machine lands on its desktop; the bench is **not** started
+automatically. Use the "Launch the GSM bench" icon, or `systemctl start osmo-banc`.
 
 ---
 
-## État du banc — `checks/check_all.sh` en natif
+## Bench status — `checks/check_all.sh` (native)
 
-Deux runs de référence le 2026-09-15, détail et lecture dans
-[wiki/Resultats.md](wiki/Resultats.md) :
+Two reference runs on 2026-09-15; full detail and interpretation in
+[wiki/Resultats.md](wiki/Resultats.md):
 
-| Topologie | global | ss7 | interco | Verdict |
+| Topology | global | ss7 | interco | Verdict |
 |---|---|---|---|---|
-| 1 opérateur natif, sans hub | 29 pass / 0 fail / 1 warn | OK | `operator` ECHEC : pas d'inter-STP, **attendu** | **sain** |
-| 3 opérateurs (Op1 natif, Op2/Op3 conteneurs) + inter-STP | 88 pass / 0 fail / 5 warn | **31 pass / 0 warn**, matrice 3×3 complète, `as-inter` ACTIVE partout | `interstp` ECHEC « aucun AS actif » : **faux négatif** du script (il lit la VTY d'Op1 au lieu du hub en topologie hybride) | **sain, interco UP** |
+| 1 native operator, no hub | 29 pass / 0 fail / 1 warn | OK | `operator` FAIL: no inter-STP, **expected** | **healthy** |
+| 3 operators (Op1 native, Op2/Op3 in containers) + inter-STP | 88 pass / 0 fail / 5 warn | **31 pass / 0 warn**, full 3×3 matrix, `as-inter` ACTIVE everywhere | `interstp` FAIL "no active AS": a **false negative** from the script (it reads Op1's VTY instead of the hub's in a hybrid topology) | **healthy, interconnect UP** |
 
-Ce qui reste à traiter, dans les deux cas : **GGSN 0 APN** (bloque la data 2G
-uniquement — `APN=internet` dans `globals.conf`, puis `--regen`) et, à trois
-opérateurs, **SGSN 0 NS entity** sur Op2/Op3 (leur PCU n'a pas ouvert de NS-VC).
-Le warn « abonnés sans fiche » est cosmétique (banc relancé sans `start.sh`).
+What still needs attention, in both cases: **GGSN 0 APN** (blocks 2G data only —
+set `APN=internet` in `globals.conf`, then `--regen`) and, with three operators,
+**SGSN 0 NS entity** on Op2/Op3 (their PCU hasn't opened an NS-VC). The
+"subscribers without a record" warning is cosmetic (bench restarted without
+`start.sh`).
 
 ```bash
-bash ./checks/check_all.sh                       # tout
-./checks/check_all.sh --only=interstp --verbose  # un seul check, en détail
-./checks/check_all.sh --dump                     # + vty-debug-dump et operator_summary
+bash ./checks/check_all.sh                       # everything
+./checks/check_all.sh --only=interstp --verbose  # a single check, in detail
+./checks/check_all.sh --dump                     # + vty-debug-dump and operator_summary
 ```
 
 ---
 
-## `start-direct.sh` — le lanceur
+## `start-direct.sh` — the launcher
 
-`start-direct.sh` ne démarre aucun démon lui-même. C'est un **préparateur** : il
-charge l'environnement, détecte les binaires et le fork Calypso, choisit un
-profil, génère les `mobile_*.cfg`, exporte ce qu'il faut et **exécute `run.sh`**
-du fork choisi (`qosmo-grgsm` par défaut, `qosmo-dsp` avec `--dsp`). Toute la
-logique GSM vit ensuite dans ce `run.sh` et ses `run_modules/`, dans un tmux
-nommé `calypso`.
+`start-direct.sh` doesn't start any daemon itself. It is a **preparer**: it
+loads the environment, detects the binaries and the Calypso fork, picks a
+profile, generates the `mobile_*.cfg` files, exports what's needed and
+**executes the `run.sh`** of the chosen fork (`qosmo-grgsm` by default,
+`qosmo-dsp` with `--dsp`). From there on, all the GSM logic lives in that
+`run.sh` and its `run_modules/`, inside a tmux session named `calypso`.
 
-Le profil par défaut est `faketrx-qemu` (alias `hybrid`) : le cœur, une BTS#0
-servie par le Calypso QEMU et une BTS#1 servie par `fake_trx` + `trxcon` — donc
-un mobile émulé « réel » et un mobile logiciel, dans la même cellule voisine.
-`faketrx` seul se passe de QEMU, `qemu` ne lance que le pipeline Calypso,
-`core`/`noproc` ne lance que le cœur.
+The default profile is `faketrx-qemu` (alias `hybrid`): the core, a BTS#0 served
+by the QEMU Calypso and a BTS#1 served by `fake_trx` + `trxcon` — one "real"
+emulated handset and one software handset, in the same neighbouring cell.
+`faketrx` alone does without QEMU, `qemu` starts only the Calypso pipeline,
+`core`/`noproc` start only the core.
 
-La règle qui gouverne tout le script : **la ligne de commande gagne toujours**.
-`VAR=x ./start-direct.sh` passe devant `environment/load.env`, qui passe devant
-les profils, qui passent devant les défauts par domaine. Une seule exception,
-documentée : `globals.conf` fait autorité **sur les 26 variables réseau qu'il
-déclare** (MCC, MNC, ARFCN, ENCRYPTION…) et sur elles seules ; tout le reste
-(`CALYPSO_*`, `MODE`, `LOG_DIR`…) le traverse intact et arrive jusqu'à QEMU.
-Le détail, les idiomes de gate et le manifeste : [wiki/Environnement.md](wiki/Environnement.md).
+One rule governs the whole script: **the command line always wins**.
+`VAR=x ./start-direct.sh` overrides `environment/load.env`, which overrides the
+profiles, which override the per-domain defaults. There is a single, documented
+exception: `globals.conf` is authoritative **for the 26 network variables it
+declares** (MCC, MNC, ARFCN, ENCRYPTION…) and for those alone; everything else
+(`CALYPSO_*`, `MODE`, `LOG_DIR`…) passes through untouched and reaches QEMU.
+Details, gate idioms and the manifest: [wiki/Environnement.md](wiki/Environnement.md).
 
 ```bash
-./start-direct.sh --list                  # le plan, sans rien lancer
-./start-direct.sh --dry-run --verbose     # déroule sans effet de bord
-./start-direct.sh --menu                  # pose les questions au lieu de deviner
-./start-direct.sh --dsp                   # fork qosmo-dsp : le vrai DSP C54x décode
-./start-direct.sh --wan --node 2          # ce nœud = 2 d'un WAN à N nœuds
+./start-direct.sh --list                  # the plan, without launching anything
+./start-direct.sh --dry-run --verbose     # walk through it, no side effects
+./start-direct.sh --menu                  # ask instead of guessing
+./start-direct.sh --dsp                   # qosmo-dsp fork: the real C54x DSP decodes
+./start-direct.sh --wan --node 2          # this node = node 2 of an N-node WAN
 ./start-direct.sh --stop | --status
-CALYPSO_BRIDGE=none ./start-direct.sh     # QEMU + BTS, sans pont
-CALYPSO_NO_ATTACH=1 ./start-direct.sh     # ce que pose osmo-banc.service
+CALYPSO_BRIDGE=none ./start-direct.sh     # QEMU + BTS, no bridge
+CALYPSO_NO_ATTACH=1 ./start-direct.sh     # what osmo-banc.service sets
 ```
 
-Étape par étape, avec ce que chaque phase écrit et où : [wiki/Start-direct.md](wiki/Start-direct.md).
+Step by step, with what each phase writes and where: [wiki/Start-direct.md](wiki/Start-direct.md).
 
-### Les autres portes d'entrée
+### The other entry points
 
-| Script | Rôle |
+| Script | Role |
 |---|---|
-| `launch.sh` | le double-clic : wireshark (GSMTAP 4729), Linphone, Firefox sur le dashboard, puis `start-direct.sh` au premier plan, via pkexec |
-| `start.sh` | Docker : single ou bridge N opérateurs, crée les réseaux, l'inter-STP, les conteneurs |
-| `start-multi.sh` | le banc multi-opérateur (`osmo-multi.service`, `Requires=osmo-banc`) |
-| `start-interstp.sh` | l'inter-STP seul (image `osmocom-stp`, arm64 possible) |
+| `launch.sh` | the double-click: Wireshark (GSMTAP 4729), Linphone, Firefox on the dashboard, then `start-direct.sh` in the foreground, via pkexec |
+| `start.sh` | Docker: single or N-operator bridge; creates the networks, the inter-STP and the containers |
+| `start-multi.sh` | the multi-operator bench (`osmo-multi.service`, `Requires=osmo-banc`) |
+| `start-interstp.sh` | the inter-STP on its own (`osmocom-stp` image, arm64 possible) |
 | `compose.sh` | `build | up [--ms N] [--phy faketrx] | down | ps | logs | shell | debs` |
-| `tools/osmo-lte.sh` | la 4G : Open5GS + srsENB + srsUE (netns `ue1`), `osmo-lte.service`, icône « osmo-lte toggle » |
+| `tools/osmo-lte.sh` | 4G: Open5GS + srsENB + srsUE (netns `ue1`), `osmo-lte.service`, "osmo-lte toggle" icon |
 
 ---
 
-## Architecture multi-PLMN
+## Multi-PLMN architecture
 
-Chaque opérateur N est un conteneur avec la pile complète, tout en `127.0.0.1`
-(le STP écoute avant que l'interface Docker soit attachée — c'est le fix de la
-race condition). Seul le lien STP↔inter-STP traverse le réseau Docker.
+Each operator N is a container running the full stack, entirely on `127.0.0.1`
+(the STP starts listening before the Docker interface is attached — that is
+the fix for the race condition). Only the STP↔inter-STP link crosses the Docker
+network.
 
-| Réseau | Plage | Rôle |
+| Network | Range | Role |
 |---|---|---|
-| `gsm-inter` | `172.20.0.0/24` | backbone M3UA ; inter-STP en `.10`, opérateur N en `.(10+N)` |
-| `gsm-net-opN` | `172.20.N.0/24` | privé opérateur N (GSMTAP, GPRS) ; conteneur en `172.20.N.10` |
+| `gsm-inter` | `172.20.0.0/24` | M3UA backbone; inter-STP at `.10`, operator N at `.(10+N)` |
+| `gsm-net-opN` | `172.20.N.0/24` | operator N's private network (GSMTAP, GPRS); container at `172.20.N.10` |
 
-### Point codes et routing contexts (ITU 14 bits, `zone.network.node`)
+### Point codes and routing contexts (ITU 14-bit, `zone.network.node`)
 
-| Nœud | PC | RCTX |
+| Node | PC | RCTX |
 |---|---|---|
 | inter-STP | `0.23.0` | — |
 | MSC OpN | `N.23.1` | `N×100+10` |
-| STP OpN | `N.23.2` | `N×100+20` (registration), **`N×100+50` vers l'inter-STP** |
+| STP OpN | `N.23.2` | `N×100+20` (registration), **`N×100+50` towards the inter-STP** |
 | BSC OpN | `N.23.3` | `N×100+30` |
 
-L'inter-STP n'a **pas de routing-key** : un AS `as-opN` en `traffic-mode override`
-par opérateur, et le routage se fait sur le DPC (`route N.23.x → as-opN`). Le
-RCTX inter (`N×100+50`) doit être identique dans `osmo-stp.cfg` de l'opérateur et
-dans `osmo-stp-interop.cfg` — c'est la première chose à vérifier sur un PROHIB.
+The inter-STP has **no routing key**: one `as-opN` AS in `traffic-mode override`
+per operator, and routing is done on the DPC (`route N.23.x → as-opN`). The
+inter RCTX (`N×100+50`) must be identical in the operator's `osmo-stp.cfg` and
+in `osmo-stp-interop.cfg` — the first thing to check on a PROHIB.
 
-Chemin d'un message : `MSC Op1 → STP Op1 (127.0.0.1:2905) → catch-all as-inter →
-inter-STP 172.20.0.10:2908 → DPC 2.23.x → as-op2 → STP Op2 → route dynamique → MSC Op2`.
+Path of a message: `MSC Op1 → STP Op1 (127.0.0.1:2905) → catch-all as-inter →
+inter-STP 172.20.0.10:2908 → DPC 2.23.x → as-op2 → STP Op2 → dynamic route → MSC Op2`.
 
-### Génération dynamique
+### Dynamic generation
 
-Aucun fichier ne contient de valeur figée pour un nombre d'opérateurs. Au
-démarrage, `apply_config_templates()` résout en un seul `sed` :
+No file contains a value hard-coded for a given number of operators. At
+startup, `apply_config_templates()` resolves everything in a single `sed`:
 
-| Placeholder | Formule | N=2 |
+| Placeholder | Formula | N=2 |
 |---|---|---|
 | `__PC_MSC__` / `__PC_STP__` / `__PC_BSC__` | `N.23.1` / `.2` / `.3` | `2.23.1`… |
 | `__RCTX_MSC__` / `__RCTX_BSC__` / `__RCTX_INTER__` | `N×100+10` / `+30` / `+50` | `210` / `230` / `250` |
 | `__ARFCN__` | `512+N×2` | `516` |
 | `__INTER_LOCAL_IP__` / `__CONTAINER_IP__` | `172.20.0.(10+N)` / `172.20.N.10` | `172.20.0.12` / `172.20.2.10` |
 
-puis appende, selon N total : les N−1 trunks PJSIP `[interop_trunk_opX]`, le
-contexte `[interop_out]` du dialplan, `sms-routing.conf`, et `osmo-stp-interop.cfg`
-(N AS, N×3 routes). L'inter-STP doit écouter sur `:2908` **avant** les opérateurs.
+then appends, according to the total N: the N−1 PJSIP trunks
+`[interop_trunk_opX]`, the `[interop_out]` dialplan context, `sms-routing.conf`,
+and `osmo-stp-interop.cfg` (N AS, N×3 routes). The inter-STP must be listening
+on `:2908` **before** the operators come up.
 
 ### SMS
 
-Intra-opérateur : `MS → MSC (sms-over-gsup) → HLR → proto-smsc-daemon → HLR → MSC → MS`.
-Inter-opérateur : `sms-interop-relay.py` lit le log MO du SMSC, parse le TPDU
-GSM 03.40, fait un longest-prefix match dans `sms-routing.conf` et pousse un JSON
-`{dest, text, from}` en TCP `:7890` au relay de l'opérateur cible, qui résout
-MSISDN→IMSI par la VTY du HLR et injecte via `proto-smsc-sendmt`.
+Intra-operator: `MS → MSC (sms-over-gsup) → HLR → proto-smsc-daemon → HLR → MSC → MS`.
+Inter-operator: `sms-interop-relay.py` reads the SMSC's MO log, parses the
+GSM 03.40 TPDU, does a longest-prefix match in `sms-routing.conf` and pushes a
+`{dest, text, from}` JSON over TCP `:7890` to the target operator's relay, which
+resolves MSISDN→IMSI through the HLR's VTY and injects it via `proto-smsc-sendmt`.
 
-### Voix
+### Voice
 
-Intra : `MS → BTS → BSC → MSC → MNCC → Asterisk → MNCC → MSC → … → MS`, RTP par OsmoMGW (MGCP).
-Inter : trunk SIP `172.20.0.(10+X) ↔ 172.20.0.(10+Y)` entre les Asterisk. Le
-dialplan route sur le **premier chiffre** du numéro : chiffre N = opérateur N.
+Intra: `MS → BTS → BSC → MSC → MNCC → Asterisk → MNCC → MSC → … → MS`, with RTP
+handled by OsmoMGW (MGCP).
+Inter: a SIP trunk `172.20.0.(10+X) ↔ 172.20.0.(10+Y)` between the Asterisk
+instances. The dialplan routes on the **first digit** of the number: digit N =
+operator N.
 
-| Numéro | Usage |
+| Number | Use |
 |---|---|
-| `N0001`…`N9999` | abonnés GSM de l'opérateur N |
-| `100` / `200` | Linphone A / B (softphones locaux) |
+| `N0001`…`N9999` | GSM subscribers of operator N |
+| `100` / `200` | Linphone A / B (local softphones) |
 | `600` | echo test |
-| `9XXXXX` | sortie inter-op depuis un softphone |
+| `9XXXXX` | inter-operator outbound from a softphone |
 
 ---
 
-## Le mobile : trois PHY
+## The handset: three PHYs
 
-| `PHY_MODE` / profil | Pile | Usage |
+| `PHY_MODE` / profile | Stack | Use |
 |---|---|---|
-| `faketrx` | `fake_trx → trxcon → mobile` | multi-MS, rapide, pas de DSP |
-| `virtphy` | `osmo-bts-virtual ↔ virtphy ↔ mobile` | multi-MS par multicast UDP |
-| `qemu` (`calypso`) | `osmo-bts-trx ↔ pont ↔ QEMU Calypso ↔ mobile` | baseband émulé ARM7 + DSP, 1 MS par conteneur |
+| `faketrx` | `fake_trx → trxcon → mobile` | multi-MS, fast, no DSP |
+| `virtphy` | `osmo-bts-virtual ↔ virtphy ↔ mobile` | multi-MS over UDP multicast |
+| `qemu` (`calypso`) | `osmo-bts-trx ↔ bridge ↔ QEMU Calypso ↔ mobile` | emulated ARM7 + DSP baseband, 1 MS per container |
 
-En mode QEMU, la machine `calypso` exécute le vrai `layer1.highram.elf`
-(compilé dans l'image avec `gcc-arm-none-eabi`) ; le DSP charge `calypso_dsp.txt`,
-la mask-ROM dumpée d'un téléphone ; `mobile` se connecte au socket L1CTL
-`/tmp/osmocom_l2` publié par la PTY série du firmware (sercomm DLCI 5). QEMU est
-maître d'horloge TDMA (ticks UDP 6700) ; le pont synthétise les `IND CLOCK` pour
-le BTS et relaie les bursts entre TRX (5700-5702) et BSP (6702).
+In QEMU mode, the `calypso` machine runs the real `layer1.highram.elf`
+(compiled in the image with `gcc-arm-none-eabi`); the DSP loads
+`calypso_dsp.txt`, the mask ROM dumped from a phone; `mobile` connects to the
+L1CTL socket `/tmp/osmocom_l2` exposed by the firmware's serial PTY (sercomm
+DLCI 5). QEMU is the TDMA clock master (UDP ticks on 6700); the bridge
+synthesizes the `IND CLOCK` messages for the BTS and relays bursts between the
+TRX (5700-5702) and the BSP (6702).
 
-Deux forks, même interface `run.sh` :
+Two forks, one `run.sh` interface:
 
-- **`qosmo-grgsm`** (défaut) — couche 1 gr-gsm, sans C54x. Va de bout en bout :
-  camping, LU, COMP128v1, A5/1, SMS, appel voix. C'est la démo.
-- **`qosmo-dsp`** (`--dsp`) — le DSP C54x émulé exécute la mask-ROM TI et
-  décode lui-même. Le FB est acquis, le décodage SCH ne passe pas encore
-  (`a_sch[0]=0x8100`, CRC faux) : **le mobile ne campe pas**. C'est le banc de
-  travail. Pas de pont par défaut (`CALYPSO_BRIDGE=none`) : son transceiver est
+- **`qosmo-grgsm`** (default) — gr-gsm layer 1, no C54x. Goes all the way:
+  camping, LU, COMP128v1, A5/1, SMS, voice call. This is the demo.
+- **`qosmo-dsp`** (`--dsp`) — the emulated C54x DSP runs the TI mask ROM and
+  decodes on its own. The FB is acquired, but SCH decoding doesn't succeed yet
+  (`a_sch[0]=0x8100`, bad CRC): **the mobile doesn't camp**. This is the
+  workbench. No bridge by default (`CALYPSO_BRIDGE=none`): its transceiver is
   `osmo-trx-ipc`.
 
-Depuis le 2026-09-03, QEMU n'est plus appelé directement mais par un lanceur C
-compilé dans chaque fork (`tools/qosmo-launch`, installé en
-`/usr/local/bin/qosmo-grgsm` ou `qosmo-dsp`) : mêmes défauts (`-M calypso`,
-`-cpu arm946`, `-gdb tcp::1234`, deux `-serial pty`, moniteur unix, L1CTL,
-TRXDv0 `0.0.0.0:6702`, IQ tee `127.0.0.1:6703`), lecture de `l1s`/`last_rach`
-dans l'ELF, liens stables vers les pty sous `<RUN_DIR>/modem.pty`, et `-o` pour
-lancer `osmocon` lui-même.
+Since 2026-09-03, QEMU is no longer invoked directly but through a C launcher
+compiled in each fork (`tools/qosmo-launch`, installed as
+`/usr/local/bin/qosmo-grgsm` or `qosmo-dsp`): same defaults (`-M calypso`,
+`-cpu arm946`, `-gdb tcp::1234`, two `-serial pty`, unix monitor, L1CTL,
+TRXDv0 `0.0.0.0:6702`, IQ tee `127.0.0.1:6703`), reads `l1s`/`last_rach` from
+the ELF, provides stable links to the PTYs under `<RUN_DIR>/modem.pty`, and
+`-o` to start `osmocon` itself.
 
 ---
 
-## Accès et diagnostic
+## Access and troubleshooting
 
 ```bash
-tmux attach -t calypso                               # natif / ISO
-sudo docker exec -ti osmo-operator-1 tmux attach     # Docker ; inter-STP : -t stp
+tmux attach -t calypso                               # native / ISO
+sudo docker exec -ti osmo-operator-1 tmux attach     # Docker; inter-STP: -t stp
 journalctl -u osmo-banc -f
-./ss7-console.py                                     # schéma SS7 navigable, VTY intégrées
+./ss7-console.py                                     # browsable SS7 diagram, built-in VTYs
 ```
 
-| VTY | Port | | tmux | Fenêtre |
+| VTY | Port | | tmux | Window |
 |---|---|---|---|---|
 | OsmoSTP | 4239 | | `Ctrl-b 0` | faketrx |
 | OsmoBSC | 4242 | | `Ctrl-b 1` | MS1 |
 | OsmoMGW | 4243 | | `Ctrl-b 2` | Asterisk |
 | OsmoMSC | 4254 | | `Ctrl-b 3` | SMSC + relay |
-| OsmoHLR | 4258 | | `Ctrl-b w` / `d` | liste / détacher |
+| OsmoHLR | 4258 | | `Ctrl-b w` / `d` | list / detach |
 
-Wireshark démarre sur `sctp or udp port 4729` ; filtres utiles : `m3ua`, `sccp`,
+Wireshark starts on `sctp or udp port 4729`; useful filters: `m3ua`, `sccp`,
 `gsm_map`, `gsmtap`, `sctp.srcport == 2908`.
 
-### Diagnostic
+### Troubleshooting
 
-| Symptôme | Cause probable | Vérifier |
+| Symptom | Likely cause | Check |
 |---|---|---|
-| route `0.0.0/0` PROHIB | inter-STP absent, ou `INTER_STP_IP`/backbone faux | `docker ps \| grep inter-stp` ; `show cs7 instance 0 asp` sur 4239 des deux côtés |
-| pas de routes dynamiques | MSC/BSC ne joignent pas le STP | ASP pointent bien sur `127.0.0.1` ? |
-| ASP DOWN sur l'inter-STP | race Docker | `docker restart osmo-operator-N` |
-| `bridge: timeout … UDP 6700` | QEMU n'a pas démarré TPU/DSP | `grep TINT0 /var/log/osmocom/qemu.log` |
-| `FBSB result=255` | le DSP ne voit pas le FB | `grep "IMR change" qemu.log \| wc -l` ; `qemu/SESSION_STATUS.md` |
-| `PC clock skew too high` | plus d'`IND CLOCK` | relancer le pont |
-| `/tmp/osmocom_l2` jamais créé | le firmware ne boote pas | `head -50 qemu.log` (MVPD / PROM0) |
-| « le pont a des CRC » | Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant | [`pont/README.md`](pont/README.md) **avant** de chercher dans un compteur |
+| route `0.0.0/0` PROHIB | inter-STP missing, or wrong `INTER_STP_IP`/backbone | `docker ps \| grep inter-stp`; `show cs7 instance 0 asp` on 4239, on both sides |
+| no dynamic routes | MSC/BSC can't reach the STP | do the ASPs really point at `127.0.0.1`? |
+| ASP DOWN on the inter-STP | Docker race | `docker restart osmo-operator-N` |
+| `bridge: timeout … UDP 6700` | QEMU didn't start the TPU/DSP | `grep TINT0 /var/log/osmocom/qemu.log` |
+| `FBSB result=255` | the DSP doesn't see the FB | `grep "IMR change" qemu.log \| wc -l`; `qemu/SESSION_STATUS.md` |
+| `PC clock skew too high` | no more `IND CLOCK` | restart the bridge |
+| `/tmp/osmocom_l2` never created | the firmware doesn't boot | `head -50 qemu.log` (MVPD / PROM0) |
+| "the bridge has CRC errors" | overwritten Kc, SACCH L1 header, C0 filling, `CALYPSO_CANNED` not taking effect | [`pont/README.md`](pont/README.md) **before** digging through a counter |
 
-Scripts prêts : `checks/check_all.sh`, `checks/ss7_check.sh`,
+Ready-made scripts: `checks/check_all.sh`, `checks/ss7_check.sh`,
 `checks/diag-stp-operator.sh`, `scripts/call-diag.sh`, `scripts/audio-diag.sh`.
 
 ---
 
-## Arborescence
+## Repository layout
 
-| Dossier | Contenu |
+| Directory | Contents |
 |---|---|
-| `environment/` | la configuration par domaine, `load.env` en tête — [README](environment/README.md) |
-| `pont/` | le transceiver-pont TRX-UDP (Python) : `pont.py`, `airmesh.py`, `cipher.py` — [README](pont/README.md) |
-| `navigation/` | la console SS7 (`ss7-console.py`, TUI, VTY, MAP) — [QUICKSTART](navigation/QUICKSTART.md) |
-| `scripts/` | `run.sh`, `entrypoint.sh`, relay SMS, diag audio/appel |
-| `checks/` | vérifications SS7 / opérateur / inter-STP |
-| `services/` | unités systemd, **posées mais non activées** — [README](services/README.md) |
-| `packaging/` | `.deb` par composant, cache `/var/cache/osmo-debs`, apt-fast |
-| `iso_modules/`, `install_modules/` | étapes de `build-iso.sh` et `install.sh` |
-| `fft-web/` | les deux spectres I/Q (MS + BTS) sur une page, port 8081 |
-| `configs/`, `data/`, `patches/` | gabarits Osmocom/Asterisk, bureau et icônes, patches |
+| `environment/` | per-domain configuration, `load.env` first — [README](environment/README.md) |
+| `pont/` | the TRX-UDP transceiver bridge (Python): `pont.py`, `airmesh.py`, `cipher.py` — [README](pont/README.md) |
+| `navigation/` | the SS7 console (`ss7-console.py`, TUI, VTY, MAP) — [QUICKSTART](navigation/QUICKSTART.md) |
+| `scripts/` | `run.sh`, `entrypoint.sh`, SMS relay, audio/call diagnostics |
+| `checks/` | SS7 / operator / inter-STP checks |
+| `services/` | systemd units, **installed but not enabled** — [README](services/README.md) |
+| `packaging/` | one `.deb` per component, `/var/cache/osmo-debs` cache, apt-fast |
+| `iso_modules/`, `install_modules/` | the steps of `build-iso.sh` and `install.sh` |
+| `fft-web/` | both I/Q spectra (MS + BTS) on one page, port 8081 |
+| `configs/`, `data/`, `patches/` | Osmocom/Asterisk templates, desktop and icons, patches |
 | `wiki/` | [Home](wiki/Home.md) · [Resultats](wiki/Resultats.md) · [Build](wiki/Build.md) · [Start-direct](wiki/Start-direct.md) · [Environnement](wiki/Environnement.md) |
 
-Documentation complète des 312 variables Calypso :
-`hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md` dans le fork QEMU.
+Full documentation of the 312 Calypso variables:
+`hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md` in the QEMU fork.
 
 ---
 
-*osmo-operator — plateforme pédagogique télécom multi-PLMN. Ubuntu 24.04, Docker ou natif, amd64 et arm64 (Raspberry Pi 4 pour l'inter-STP / lite).*
+*osmo-operator — a multi-PLMN telecom teaching platform. Ubuntu 24.04, Docker or native, amd64 and arm64 (Raspberry Pi 4 for the inter-STP / lite).*
