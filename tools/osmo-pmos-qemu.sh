@@ -185,6 +185,29 @@ fi
 # pas l allumer. pmbootstrap accepte --as-root : on le passe quand on est
 # root, et le dossier de travail est alors celui de root.
 PMB_OPTS=(); [ "$(id -u)" -eq 0 ] && PMB_OPTS=(--as-root)
+# [2026-09-16] LA DATA DU TELEPHONE SORT VRAIMENT, A CHAQUE LANCEMENT. Le PPP
+# montait (10.99.0.2), la passerelle repondait, et rien au-dela : docker pose
+# la politique FORWARD a DROP sur l hote, et le paquet de l UE (ogstun, apres
+# NAT) etait jete sans trace - NetworkManager restait « connecte (local) ».
+# osmo-epc.sh (setup_forward) pose la regle au demarrage du coeur 4G ; on la
+# repose ici, avant la VM, pour le cas ou le coeur est parti avant ce script
+# ou ou docker a recree ses chaines entre-temps. DOCKER-USER : consultee
+# avant les regles de docker, jamais reecrite par lui.
+pmos_forward() {
+    local su=(); [ "$(id -u)" -eq 0 ] || su=(sudo -n)
+    "${su[@]}" iptables -N DOCKER-USER 2>/dev/null || true
+    local spec
+    for spec in "-i ogstun" "-o ogstun"; do
+        # shellcheck disable=SC2086
+        "${su[@]}" iptables -C DOCKER-USER $spec -j ACCEPT 2>/dev/null \
+            || "${su[@]}" iptables -I DOCKER-USER 1 $spec -j ACCEPT 2>/dev/null \
+            || { echo "osmo-pmos-qemu: FORWARD ($spec) refuse - la data du telephone s arretera a l hote" >&2; return 0; }
+    done
+    "${su[@]}" iptables -C FORWARD -j DOCKER-USER 2>/dev/null \
+        || "${su[@]}" iptables -I FORWARD 1 -j DOCKER-USER 2>/dev/null || true
+    echo "osmo-pmos-qemu: FORWARD ogstun autorise (DOCKER-USER) - la data du telephone sort vers Internet"
+}
+pmos_forward
 # [2026-09-09] LE DOSSIER DE TRAVAIL EST CELUI DE LA CONFIG, plus ~/test en
 # dur (celui de la machine de reference) : sur l ISO c est
 # ~/.local/var/pmbootstrap (gabarit pose par 88-lte-pmos.sh dans /root et

@@ -124,6 +124,31 @@ setup_tun() {
     else
         _warn "ogstun $TUNADDR, pas de route par defaut : pas de NAT (SRS_WAN=<iface>)"
     fi
+    setup_forward
+}
+
+# [2026-09-16] LE FORWARD, SANS QUOI LE NAT NE SERT A RIEN. Docker pose une
+# politique FORWARD a DROP sur l hote : un paquet de l UE (10.45.0.2, via
+# ogstun) vers Internet etait NATe puis jete, sans refus ni trace. Vu depuis
+# le telephone pmOS : PPP monte, 10.99.0.2 attribuee, ping de la passerelle
+# OK, et rien au-dela - NetworkManager restait « connecte (local) ». Meme
+# constat que start.sh pour le WAN : DOCKER-USER est consultee avant les
+# regles de docker et il ne la reecrit pas ; on y autorise tout ce qui entre
+# ou sort par ogstun. Rejoue a chaque « osmo-epc start » (donc a chaque
+# « osmo-lte start »), et par osmo-pmos-qemu a chaque lancement de la VM.
+setup_forward() {
+    local spec
+    iptables -N DOCKER-USER 2>/dev/null || true
+    for spec in "-i ogstun" "-o ogstun"; do
+        # shellcheck disable=SC2086
+        iptables -C DOCKER-USER $spec -j ACCEPT 2>/dev/null \
+            || iptables -I DOCKER-USER 1 $spec -j ACCEPT 2>/dev/null \
+            || { _warn "FORWARD ($spec) : iptables refuse - la data des UE n ira pas plus loin que l hote"; return 0; }
+    done
+    # Les regles DOCKER-USER ne comptent que si FORWARD y passe : docker le
+    # fait (-A FORWARD -j DOCKER-USER) ; sans docker, on saute l etape.
+    iptables -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -I FORWARD 1 -j DOCKER-USER 2>/dev/null || true
+    _ok "FORWARD ogstun <-> $WAN autorise (DOCKER-USER)"
 }
 
 epc_start() {

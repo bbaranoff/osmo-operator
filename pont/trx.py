@@ -79,7 +79,15 @@ class Trx:
                 continue
             tn = data[0] & 0x07
             fn = struct.unpack_from(">L", data, 1)[0]
-            on_burst(tn, fn, gsm.normalize_bits(data[6:154]))
+            bits = gsm.normalize_bits(data[6:154])
+            if self.cfg.dsp_port:
+                # [2026-09-17] Le meme burst, tel que le BSP du DSP l'attend
+                # (calypso_bsp.c bsp_trxd_readable) : 8 octets d'en-tete
+                # [tn, fn BE32, attenuation, 0, 0] puis 148 bits 0/1. Le BSP les
+                # convertit lui-meme en I/Q (table cos) et les depose en DARAM.
+                hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([data[5] if len(data) > 5 else 0, 0, 0])
+                self.sk_data.sendto(hdr + bytes(1 if b else 0 for b in bits), ("127.0.0.1", self.cfg.dsp_port))
+            on_burst(tn, fn, bits)
 
     def send_ul(self, tn, fn, burst, cipher):
         if self.bts_data is None:

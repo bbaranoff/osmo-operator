@@ -1,0 +1,38 @@
+# /etc/default/crypthome - second disque chiffre porte /home
+#
+# LE MODELE. Le disque systeme n'est PAS chiffre : tout ce qui est systeme est
+# lisible - l'OS, /etc, et /root qui est le compte de TRAVAIL du banc. Ce qui
+# est chiffre, c'est le second disque, monte sur /home : les profils, les
+# donnees personnelles, et TOUT CE QUI TIENT AU KEYRING.
+#
+# Ecrit par init-crypthome.sh. CRYPTHOME_UUID est vide tant que le disque n'a
+# pas ete initialise ; unlock-home ne fait alors rien et le boot n'en souffre
+# pas.
+
+# UUID du conteneur LUKS (= UUID vu par blkid sur la partition chiffree).
+CRYPTHOME_UUID=""
+
+# Nom du mapping dans /dev/mapper et point de montage.
+CRYPTHOME_NAME="crypthome"
+CRYPTHOME_MOUNT="/home"
+
+# Le compte dont le home vit sur le disque chiffre : c'est LUI qui porte le
+# keyring et fait tourner les applications a secrets (voir run-as-owner).
+CRYPTHOME_OWNER="__OWNER__"
+
+# Boot : nombre d'essais de phrase de passe, et delai (s) au bout duquel une
+# question sans reponse vaut "non". Le boot n'est JAMAIS bloque : au pire on
+# demarre sans /home.
+CRYPTHOME_TRIES=3
+CRYPTHOME_TIMEOUT=60
+
+# Repertoires de root qui ne doivent pas exister en clair sur le disque
+# systeme : init-crypthome.sh les remplace par des liens vers le disque
+# chiffre. Disque non dechiffre = lien mort = rien ne s'ecrit en clair.
+CRYPTHOME_ROOT_LINKS=".local/share/keyrings"
+
+# Les applications qui portent des secrets : leurs lanceurs sont rediriges
+# vers run-as-owner par refresh-owner-apps. Noms de fichiers .desktop, sans
+# l'extension ; ceux qui ne sont pas installes sont ignores en silence.
+# Relancer « refresh-owner-apps » apres en avoir ajoute.
+CRYPTHOME_OWNER_APPS="firefox firefox-esr thunderbird chromium chromium-browser google-chrome keepassxc seahorse org.gnome.seahorse.Application signal-desktop element-desktop telegramdesktop org.gnome.Geary org.gnome.Evolution evolution nextcloud org.keepassxc.KeePassXC"

@@ -1,0 +1,112 @@
+#!/bin/bash
+# run-as-owner <commande> [arguments...]
+#
+# Lance une application sous le compte dont le home vit sur le disque chiffre
+# (CRYPTHOME_OWNER) QUAND ce disque est dechiffre ; sinon la lance telle quelle,
+# sous le compte courant.
+#
+# POURQUOI. La session s'ouvre sur root : c'est le compte de travail du banc,
+# et tout y est lisible. Mais un navigateur, un trousseau, un client de
+# messagerie ecrivent des SECRETS - cookies, jetons, mots de passe. Ceux-la
+# n'ont rien a faire sur le disque systeme en clair : ils appartiennent au
+# compte proprietaire, dont tout le home est chiffre.
+#
+# Disque non dechiffre = pas de home chiffre = l'application demarre quand meme,
+# en root, sur un profil neuf du disque systeme. On prefere une application qui
+# s'ouvre sans secrets a une application qui refuse de s'ouvrir.
+set -u
+
+CONF=/etc/default/crypthome
+[ -r "$CONF" ] && . "$CONF"
+OWNER="${CRYPTHOME_OWNER:-}"
+MOUNT="${CRYPTHOME_MOUNT:-/home}"
+
+[ "$#" -ge 1 ] || { echo "usage: run-as-owner <commande> [args...]" >&2; exit 2; }
+
+# Deja sous un compte ordinaire : rien a basculer.
+if [ "$(id -u)" -ne 0 ] || [ -z "$OWNER" ] || ! id -u "$OWNER" >/dev/null 2>&1; then
+    exec "$@"
+fi
+
+OWNER_UID="$(id -u "$OWNER")"
+OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
+OWNER_SHELL="$(getent passwd "$OWNER" | cut -d: -f7)"
+[ -n "$OWNER_SHELL" ] || OWNER_SHELL=/bin/bash
+
+# Le disque doit etre monte ET le home exister dessus. Les deux : un /home
+# monte mais vide (disque fraichement initialise) ne doit pas faire demarrer
+# une application sur un home inexistant.
+if ! mountpoint -q "$MOUNT" || [ ! -d "$OWNER_HOME" ]; then
+    logger -t run-as-owner -p user.notice \
+        "$1 lance sous root : $MOUNT n'est pas dechiffre, pas de profil $OWNER."
+    exec "$@"
+fi
+
+# ── L'ACCES A L'AFFICHAGE ───────────────────────────────────────────────────
+# Le serveur X appartient a root. SI:localuser autorise le compte par ses
+# credentials locaux, sans partager le cookie de root : on N'EXPORTE PAS
+# XAUTHORITY, qui pointe vers un fichier que le compte ne peut pas lire et
+# ferait echouer les bibliotheques qui le lisent avant de se rabattre.
+if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
+    xhost "+SI:localuser:$OWNER" >/dev/null 2>&1 || true
+fi
+
+# ── LA SESSION UTILISATEUR DU COMPTE ────────────────────────────────────────
+# lingering : logind cree /run/user/<uid> et demarre user@<uid>.service sans
+# qu'une session soit ouverte - or personne ne se connecte jamais sous ce
+# compte, les applications sont lancees depuis la session de root.
+if [ ! -d "/run/user/$OWNER_UID" ]; then
+    loginctl enable-linger "$OWNER" >/dev/null 2>&1 || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [ -d "/run/user/$OWNER_UID" ] && break
+        sleep 0.3
+    done
+fi
+if [ ! -d "/run/user/$OWNER_UID" ]; then
+    install -d -m 0700 -o "$OWNER" -g "$(id -gn "$OWNER")" "/run/user/$OWNER_UID"
+fi
+
+RUNTIME="/run/user/$OWNER_UID"
+BUS="unix:path=$RUNTIME/bus"
+[ -S "$RUNTIME/bus" ] || BUS=""
+
+# ── LE SON ──────────────────────────────────────────────────────────────────
+# PulseAudio tourne en mode SYSTEME : un seul socket, /run/pulse/native, et un
+# seul proprietaire - celui de la derniere session humaine ouverte, donc root
+# ici. Or c'est le navigateur qui porte le micro du tableau de bord, et il
+# tourne desormais sous le compte proprietaire : sans ce rappel, il obtient
+# « NotFoundError » sur getUserMedia pendant que pactl liste les peripheriques
+# en RUNNING - l'ecart qu'on cherche des heures du cote « permission micro ».
+# osmo-pulse-link.sh pose le lien dans /run/user/<uid> ET donne le socket a cet
+# uid. La session root n'a pas de navigateur : elle n'en perd rien.
+if [ -x /usr/local/sbin/osmo-pulse-link.sh ]; then
+    /usr/local/sbin/osmo-pulse-link.sh "$OWNER_UID" >/dev/null 2>&1 || true
+fi
+# Et l'adresse en clair, plutot que de s'en remettre au seul lien : c'est ce
+# que fait deja le wrapper vlc de l'etape 8e. Deux chemins valent mieux qu'un
+# quand le symptome d'un echec est un navigateur muet sans message.
+PULSE=""
+[ -S /run/pulse/native ] && PULSE="unix:/run/pulse/native"
+
+# ── LE TROUSSEAU ────────────────────────────────────────────────────────────
+# Demarre sous le compte proprietaire, donc AVEC son home chiffre : c'est la
+# seule facon d'avoir un service Secrets dont le magasin n'est pas sur le
+# disque en clair. Deja lance = ne fait rien.
+runuser -u "$OWNER" -- env -i \
+    HOME="$OWNER_HOME" USER="$OWNER" LOGNAME="$OWNER" \
+    XDG_RUNTIME_DIR="$RUNTIME" ${BUS:+DBUS_SESSION_BUS_ADDRESS="$BUS"} \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    gnome-keyring-daemon --start --components=secrets,ssh >/dev/null 2>&1 || true
+
+exec runuser -u "$OWNER" -- env -i \
+    HOME="$OWNER_HOME" USER="$OWNER" LOGNAME="$OWNER" SHELL="$OWNER_SHELL" \
+    PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
+    DISPLAY="${DISPLAY:-:0}" \
+    XDG_RUNTIME_DIR="$RUNTIME" \
+    ${BUS:+DBUS_SESSION_BUS_ADDRESS="$BUS"} \
+    XDG_SESSION_TYPE=x11 \
+    ${PULSE:+PULSE_SERVER="$PULSE"} \
+    XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-ubuntu:GNOME}" \
+    XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" \
+    LANG="${LANG:-fr_FR.UTF-8}" LANGUAGE="${LANGUAGE:-}" \
+    "$@"

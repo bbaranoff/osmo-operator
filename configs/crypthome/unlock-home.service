@@ -1,0 +1,25 @@
+[Unit]
+Description=Dechiffrement optionnel de /home (second disque, LUKS)
+Documentation=file:/etc/default/crypthome
+ConditionPathExists=/etc/default/crypthome
+# APRES les systemes de fichiers locaux et udev (le lien /dev/disk/by-uuid
+# doit exister), et APRES plymouth, qui porte l'agent de saisie.
+After=local-fs.target systemd-udev-settle.service plymouth-start.service
+Wants=systemd-udev-settle.service
+# AVANT tout ce qui ouvre une session : GDM ne doit pas demarrer sur un /home
+# vide alors que l'operateur vient de repondre "oui".
+Before=systemd-user-sessions.service display-manager.service multi-user.target graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/unlock-home --boot
+# La question et la saisie passent par systemd-ask-password, pas par stdin.
+StandardInput=null
+StandardOutput=journal+console
+StandardError=journal+console
+# Large, mais borne : unlock-home applique deja son propre delai par question.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -279,6 +279,12 @@ fi
 # le minbase de debootstrap. Sans lui, le stub 127.0.0.53 que designe
 # /etc/resolv.conf n a personne derriere - voir le bloc DNS de
 # 81-cloture-systeme.sh.
+#
+# cryptsetup et rsync sont dans la liste de BASE, pas dans le bloc bureau qui
+# les demande deja : le second disque chiffre sur /home (etape 8i) vaut aussi
+# pour une image sans bureau - unlock-home ouvre le volume au demarrage, et
+# init-crypthome.sh recopie le home avec rsync -aHAX. Sans eux, le dispositif
+# echoue au pire moment : au premier demarrage apres chiffrement.
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved
       $_KERNEL_PKG initramfs-tools dkms build-essential
       $_LIVE_PKGS
@@ -294,6 +300,7 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd
       lsb-release openssh-server sudo
       console-setup keyboard-configuration locales
       psmisc
+      cryptsetup rsync
       python3 python3-venv python3-scapy
       tshark wireshark-common"
 [ "$NODE_VIA_APT" = "1" ] && PKGS="$PKGS nodejs"
@@ -477,10 +484,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # snap (le navigateur est un .deb Mozilla, voir plus bas). Il arrive encore
     # comme recommandation d ubuntu-desktop-minimal - c est pourquoi il est
     # desactive et masque en fin de bloc plutot que simplement absent.
+    # x11-xserver-utils : xhost, dont run-as-owner (etape 8i) a besoin pour
+    # autoriser le compte au home chiffre sur le serveur X de la session root.
     apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop \
         vlc \
-        wmctrl x11-utils zenity librsvg2-common \
+        wmctrl x11-utils x11-xserver-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
         conky-all fonts-dejavu python3-pil python3-gi gir1.2-gtk-3.0 \

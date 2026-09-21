@@ -1,0 +1,68 @@
+#!/bin/bash
+# refresh-owner-apps - redirige les lanceurs des applications a secrets vers
+# run-as-owner.
+#
+# Pour chaque .desktop de CRYPTHOME_OWNER_APPS trouve dans /usr/share/
+# applications, ecrit une COPIE dans /usr/local/share/applications dont chaque
+# ligne Exec= (celle du lanceur ET celles des [Desktop Action ...]) est
+# prefixee de run-as-owner. /usr/local/share precede /usr/share dans
+# XDG_DATA_DIRS : la copie masque l'original sans le modifier, et un
+# "apt upgrade" ne defait rien.
+#
+# A relancer apres avoir installe une application ou allonge la liste.
+set -u
+
+CONF=/etc/default/crypthome
+[ -r "$CONF" ] && . "$CONF"
+APPS="${CRYPTHOME_OWNER_APPS:-}"
+DEST=/usr/local/share/applications
+SRCDIRS="/usr/share/applications /var/lib/flatpak/exports/share/applications"
+
+install -d "$DEST"
+
+# Menage : les copies posees par ce script et dont la source a disparu, ou qui
+# ne sont plus dans la liste. Le marqueur X-Crypthome-Generated distingue nos
+# fichiers de ceux que l'operateur aurait mis la lui-meme - on ne touche
+# jamais a ceux-la.
+for f in "$DEST"/*.desktop; do
+    [ -e "$f" ] || continue
+    grep -q '^X-Crypthome-Generated=true' "$f" 2>/dev/null || continue
+    nom="$(basename "$f" .desktop)"
+    case " $APPS " in
+        *" $nom "*) ;;
+        *) rm -f "$f"; echo "  - $nom (retire de la liste)" ;;
+    esac
+done
+
+poses=0
+for app in $APPS; do
+    src=""
+    for d in $SRCDIRS; do
+        [ -f "$d/$app.desktop" ] && { src="$d/$app.desktop"; break; }
+    done
+    [ -n "$src" ] || continue
+
+    dst="$DEST/$app.desktop"
+    # sed sur Exec= uniquement, et idempotent : une ligne deja prefixee n'est
+    # pas prefixee deux fois (relancer le script ne doit rien empiler).
+    sed -E 's#^Exec=(/usr/local/bin/run-as-owner )?#Exec=/usr/local/bin/run-as-owner #' "$src" > "$dst.tmp"
+    # Le marqueur en fin de groupe [Desktop Entry] : une cle inconnue prefixee
+    # X- est ignoree par les menus, c'est la convention de la specification.
+    if ! grep -q '^X-Crypthome-Generated=true' "$dst.tmp"; then
+        awk '
+            /^\[/ && n++ == 1 { print "X-Crypthome-Generated=true"; print "" }
+            { print }
+            END { if (n < 2) print "X-Crypthome-Generated=true" }
+        ' "$dst.tmp" > "$dst.tmp2" && mv "$dst.tmp2" "$dst.tmp"
+    fi
+    mv "$dst.tmp" "$dst"
+    chmod 0644 "$dst"
+    poses=$((poses + 1))
+    echo "  + $app -> run-as-owner"
+done
+
+command -v update-desktop-database >/dev/null 2>&1 && \
+    update-desktop-database "$DEST" >/dev/null 2>&1 || true
+
+echo "refresh-owner-apps: $poses lanceur(s) redirige(s) vers ${CRYPTHOME_OWNER:-<aucun>}."
+exit 0

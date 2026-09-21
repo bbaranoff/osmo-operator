@@ -44,6 +44,10 @@ class Dedicated:
         self._value = None if b[4] == DCCH_RELEASED else (b[4] & 1, b[5] & 7, b[6] & 7)
         return self._value
 
+    def refresh(self):
+        """Forcer la prochaine lecture : le fichier vient peut-etre de changer."""
+        self._next = 0.0
+
     def plan(self):
         v = self.read()
         if v is None:

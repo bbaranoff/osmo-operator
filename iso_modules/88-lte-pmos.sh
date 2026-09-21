@@ -465,6 +465,11 @@ fi
 unset _o
 _chk "4G  configs srsRAN (/root/.config/srsran)"           bash -c 'test -s /root/.config/srsran/enb.conf && test -s /root/.config/srsran/ue.conf && test -s /root/.config/srsran/user_db.csv'
 _chk "4G  osmo-lte / osmo-epc"                             bash -c 'test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc'
+# [2026-09-16] La data du telephone : docker met FORWARD a DROP, et sans la
+# regle DOCKER-USER posee par osmo-epc (setup_forward), osmo-pmos-qemu
+# (pmos_forward) et le modem du banc (session PPP), le PPP monte mais rien ne
+# sort de l hote. L ISO ne part pas sans ces trois-la.
+_chk "4G  FORWARD ogstun : osmo-epc, osmo-pmos-qemu, phonesim" bash -c 'grep -q "^setup_forward()" /opt/GSM/osmo-operator/tools/osmo-epc.sh && grep -q "^pmos_forward()" /opt/GSM/osmo-operator/tools/osmo-pmos-qemu.sh && grep -q "DOCKER-USER" /opt/GSM/osmo-operator/tools/osmo-phonesim-banc.py'
 _chk "4G  osmo-lte.service + osmo-lte.desktop"             bash -c 'test -s /etc/systemd/system/osmo-lte.service && test -s /usr/share/applications/osmo-lte.desktop'
 _chk "4G  mongod + mongosh + mongorestore (abonnes HSS)"   bash -c 'command -v mongod && command -v mongosh && command -v mongorestore'
 _chk "4G  abonnes du depot (dump mongo + subscribers.json)" bash -c 'test -s /opt/GSM/osmo-operator/configs/open5gs/dump/open5gs/subscribers.bson && test -s /opt/GSM/osmo-operator/configs/open5gs/subscribers.json'

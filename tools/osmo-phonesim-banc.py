@@ -836,7 +836,12 @@ PPP_IF = os.environ.get("OSMO_PPP_IF", "ppp-pmos")
 def _sgi_net_defaut():
     """Le sous-reseau des UE, pour la sortie SGi -> Internet de l hote :
     celui de smf.yaml avec open5gs (10.45.0.0/16), 172.16.0.0/24 avec srsEPC."""
-    for f in ("/root/open5gs/install/etc/open5gs/smf.yaml", "/etc/open5gs/smf.yaml"):
+    # [2026-09-16] Le prefixe du banc (/opt/LTE/open5gs/install, celui d
+    # osmo-epc.sh) manquait : on retombait sur 172.16.0.0/24 et la MASQUERADE
+    # posee ici ne couvrait pas les UE open5gs (10.45.0.0/16).
+    for f in ([os.path.join(os.environ["OPEN5GS_PREFIX"], "etc/open5gs/smf.yaml")] if os.environ.get("OPEN5GS_PREFIX") else []) + [
+            "/opt/LTE/open5gs/install/etc/open5gs/smf.yaml",
+            "/root/open5gs/install/etc/open5gs/smf.yaml", "/etc/open5gs/smf.yaml"]:
         try:
             m = re.search(r'^\s*-\s*subnet:\s*(\d+\.\d+\.\d+\.\d+/\d+)', open(f).read(), re.M)
         except OSError:
@@ -1137,6 +1142,19 @@ class Ppp:
                 rc, _ = _sh("iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_SGI_NET, "-o", up, "-j", "MASQUERADE")
                 if rc != 0:
                     _sh("iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_SGI_NET, "-o", up, "-j", "MASQUERADE")
+                # [2026-09-16] Et le FORWARD : docker met la politique a DROP,
+                # et le paquet NATe etait jete sur l hote (PPP monte, ping de
+                # 10.99.0.1 OK, rien au-dela). Meme regle qu osmo-epc.sh
+                # (setup_forward), rejouee ici a chaque session PPP, dans
+                # DOCKER-USER que docker ne reecrit pas.
+                _sh("iptables", "-w", "-N", "DOCKER-USER")
+                for spec in (("-s", PPP_SGI_NET), ("-d", PPP_SGI_NET)):
+                    rc, _ = _sh("iptables", "-w", "-C", "DOCKER-USER", *spec, "-j", "ACCEPT")
+                    if rc != 0:
+                        _sh("iptables", "-w", "-I", "DOCKER-USER", "1", *spec, "-j", "ACCEPT")
+                rc, _ = _sh("iptables", "-w", "-C", "FORWARD", "-j", "DOCKER-USER")
+                if rc != 0:
+                    _sh("iptables", "-w", "-I", "FORWARD", "1", "-j", "DOCKER-USER")
             log("PPP : IPCP ouvert, %s a %s ; %s monte %s, la data passe par %s%s"
                 % (PPP_PEER, "le telephone", PPP_IF,
                    "dans l espace %s" % self.ns if self.ns else "sur l hote",

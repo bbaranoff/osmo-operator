@@ -15,6 +15,7 @@ def _flag(name, default):
 class Config:
     trx_bind: str
     trx_base: int
+    dsp_port: int          # [2026-09-17] >0 : copie chaque burst DL vers le DSP (BSP UDP, 6702)
     arfcn: int
     bsic: int
     ul_fn_advance: int
@@ -44,6 +45,8 @@ def parse(argv=None):
     p.add_argument("--bsic", type=int, default=int(_env("PONT_BSIC", "7")))
     p.add_argument("--trx-bind", default=_env("PONT_TRX_BIND", "127.0.0.1"))
     p.add_argument("--trx-base", type=int, default=int(_env("PONT_TRX_BASE", "5700")))
+    p.add_argument("--dsp-port", type=int, default=int(_env("PONT_DSP_PORT", "0")),
+                   help="port UDP du BSP du DSP C54x (c54x_exe --arm / qosmo-dsp) : 6702 ; 0 = coupe")
     p.add_argument("--bsc-cfg", default=_env("PONT_BSC_CFG", "/etc/osmocom/osmo-bsc.cfg"))
     p.add_argument("--no-tap", action="store_true", default=not _flag("PONT_TAP", "1"))
     p.add_argument("--no-record", action="store_true", default=not _flag("PONT_AIRREC", "1"))
@@ -51,6 +54,7 @@ def parse(argv=None):
     return Config(
         trx_bind=a.trx_bind,
         trx_base=a.trx_base,
+        dsp_port=a.dsp_port,
         arfcn=a.arfcn,
         bsic=a.bsic,
         ul_fn_advance=int(_env("PONT_UL_FN_ADVANCE", "3")),

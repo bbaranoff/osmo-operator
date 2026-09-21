@@ -1,0 +1,139 @@
+#!/bin/bash
+# unlock-home - dechiffre et monte /home depuis le second disque (LUKS).
+#
+#   unlock-home --boot   pose la question au demarrage, via systemd-ask-password
+#   unlock-home          la meme chose depuis un terminal, apres coup
+#
+# CE SCRIPT NE RATE JAMAIS LE BOOT. Quelle que soit la reponse, l'absence du
+# disque, une phrase de passe fausse trois fois ou un montage impossible, il
+# sort 0 et la machine demarre - sur un /home vide. C'est le point du "non" :
+# le systeme reste utilisable en root, dont le home (/root) est sur le disque
+# systeme en clair.
+set -u
+
+CONF=/etc/default/crypthome
+[ -r "$CONF" ] || { echo "unlock-home: $CONF introuvable" >&2; exit 0; }
+. "$CONF"
+
+MAPPER="${CRYPTHOME_NAME:-crypthome}"
+MOUNT="${CRYPTHOME_MOUNT:-/home}"
+TRIES="${CRYPTHOME_TRIES:-3}"
+TIMEOUT="${CRYPTHOME_TIMEOUT:-60}"
+OWNER="${CRYPTHOME_OWNER:-}"
+
+BOOT=0
+[ "${1:-}" = "--boot" ] && BOOT=1
+
+log() { echo "unlock-home: $*" >&2; }
+
+# Deja monte (2e appel, ou dechiffrement manuel apres un "non") : rien a faire.
+if mountpoint -q "$MOUNT"; then
+    log "$MOUNT est deja monte."
+    exit 0
+fi
+
+if [ -z "${CRYPTHOME_UUID:-}" ]; then
+    log "aucun disque chiffre configure (CRYPTHOME_UUID vide dans $CONF)."
+    exit 0
+fi
+
+# ── L ANCIEN /home EN CLAIR N A PLUS LIEU D ETRE ────────────────────────────
+# Ce qui reste sous le point de montage devient invisible une fois le disque
+# monte : invisible, mais toujours la - place occupee sur le disque systeme et,
+# ce qui compte ici, ANCIENS TROUSSEAUX EN CLAIR. On l'evacue AVANT de monter.
+#
+# C est fait ICI et pas par init-crypthome.sh parce que c est le seul moment ou
+# personne ne tient /home : au demarrage, avant la premiere session. Un
+# init-crypthome.sh lance depuis un bureau, lui, travaille sur un /home que sa
+# propre session occupe.
+#
+# Inconditionnel, et non "seulement si on repond oui" : des lors qu un disque
+# chiffre est configure, le /home en clair a cesse d etre le bon. Repondre non
+# doit laisser un /home VIDE, pas l ancien, sinon le "non" rendrait justement
+# les secrets qu on voulait mettre a l abri.
+if [ -d "$MOUNT" ] && [ -n "$(ls -A "$MOUNT" 2>/dev/null)" ]; then
+    _sauve="/var/backups/home-avant-chiffrement-$(date +%Y%m%d-%H%M%S)"
+    if install -d -m 0700 "$_sauve" 2>/dev/null; then
+        ( shopt -s dotglob nullglob
+          _reste=("$MOUNT"/*)
+          [ "${#_reste[@]}" -gt 0 ] && mv "${_reste[@]}" "$_sauve"/ ) 2>/dev/null
+        log "ancien contenu de $MOUNT mis de cote dans $_sauve."
+    else
+        log "ATTENTION : $MOUNT n est pas vide et n a pas pu etre evacue."
+    fi
+fi
+
+DEV="/dev/disk/by-uuid/$CRYPTHOME_UUID"
+if [ ! -e "$DEV" ]; then
+    log "disque chiffre absent (UUID=$CRYPTHOME_UUID) - $MOUNT reste vide."
+    exit 0
+fi
+
+# ── 1. LA QUESTION ──────────────────────────────────────────────────────────
+# --echo=yes : c'est un oui/non, pas un secret ; le masquer n'aurait aucun sens
+# et laisse l'operateur sans retour visuel. Le delai qui expire vaut "non" :
+# une machine qui redemarre seule finit son boot au lieu d'attendre indefiniment.
+if [ "$BOOT" = 1 ]; then
+    reponse="$(systemd-ask-password --echo=yes --timeout="$TIMEOUT" \
+                   --id="crypthome:question" \
+                   "Dechiffrer $MOUNT ? [o/N]" 2>/dev/null)" || reponse=""
+else
+    read -r -t "$TIMEOUT" -p "Dechiffrer $MOUNT ? [o/N] " reponse || reponse=""
+    echo
+fi
+
+case "${reponse,,}" in
+    o|oui|y|yes) ;;
+    *)  log "reponse \"non\" - demarrage sans $MOUNT (« unlock-home » pour le faire plus tard)."
+        exit 0 ;;
+esac
+
+# ── 2. LA PHRASE DE PASSE ───────────────────────────────────────────────────
+# --key-file=- et non un argument ni un fichier : la phrase ne passe ni par la
+# ligne de commande (visible dans ps) ni par le disque, seulement par un tube.
+ouvert=0
+essai=0
+while [ "$essai" -lt "$TRIES" ]; do
+    essai=$((essai + 1))
+    if [ "$BOOT" = 1 ]; then
+        passe="$(systemd-ask-password --timeout="$TIMEOUT" \
+                     --id="crypthome:passphrase" \
+                     "Phrase de passe pour $MOUNT ($essai/$TRIES) :" 2>/dev/null)" || passe=""
+    else
+        read -r -s -t "$TIMEOUT" -p "Phrase de passe pour $MOUNT ($essai/$TRIES) : " passe || passe=""
+        echo
+    fi
+    if [ -n "$passe" ] && printf '%s' "$passe" | cryptsetup open --key-file=- "$DEV" "$MAPPER"; then
+        passe=""; unset passe
+        ouvert=1
+        break
+    fi
+    passe=""; unset passe
+    log "phrase de passe refusee."
+done
+
+if [ "$ouvert" != 1 ]; then
+    log "abandon apres $TRIES essais - demarrage sans $MOUNT."
+    exit 0
+fi
+
+# ── 3. LE MONTAGE ───────────────────────────────────────────────────────────
+# La ligne /home de /etc/fstab porte "noauto" : c'est ce script qui monte, et
+# lui seul. Si le montage echoue, on REFERME le mapping - laisser un volume
+# dechiffre ouvert et non monte serait le pire des deux etats.
+if ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; then
+    log "montage de $MOUNT impossible - le volume est referme."
+    cryptsetup close "$MAPPER" 2>/dev/null || true
+    exit 0
+fi
+
+# Le compte proprietaire peut ouvrir une session utilisateur des maintenant :
+# son home existe enfin. Sans lingering, /run/user/<uid> et son bus ne sont
+# crees qu'a la premiere connexion - or run-as-owner lance ses applications
+# depuis la session de root, sans jamais connecter ce compte.
+if [ -n "$OWNER" ] && id -u "$OWNER" >/dev/null 2>&1; then
+    loginctl enable-linger "$OWNER" >/dev/null 2>&1 || true
+fi
+
+log "$MOUNT dechiffre et monte."
+exit 0

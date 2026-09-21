@@ -1,0 +1,25 @@
+#!/bin/bash
+# crypthome-session-setup - lance au demarrage de la session (root) de GDM.
+#
+# Prepare la bascule vers le compte proprietaire AVANT qu'on en ait besoin :
+# autorisation sur le serveur X et session utilisateur demarree. Sans cela, le
+# premier lancement de Firefox paie l'attente de logind, plusieurs secondes,
+# et donne l'impression que rien ne se passe.
+#
+# Quand /home n'est pas dechiffre, ce script ne fait rien : c'est le mode
+# degrade normal, les applications s'ouvriront sous root, sans secrets.
+set -u
+CONF=/etc/default/crypthome
+[ -r "$CONF" ] && . "$CONF"
+OWNER="${CRYPTHOME_OWNER:-}"
+MOUNT="${CRYPTHOME_MOUNT:-/home}"
+
+[ -n "$OWNER" ] || exit 0
+id -u "$OWNER" >/dev/null 2>&1 || exit 0
+mountpoint -q "$MOUNT" || exit 0
+[ -d "$(getent passwd "$OWNER" | cut -d: -f6)" ] || exit 0
+
+[ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1 && \
+    xhost "+SI:localuser:$OWNER" >/dev/null 2>&1 || true
+loginctl enable-linger "$OWNER" >/dev/null 2>&1 || true
+exit 0

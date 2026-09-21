@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Preparation du compte chiffre
+Comment=Autorise le compte proprietaire sur l'affichage et demarre sa session utilisateur, quand /home est dechiffre
+Exec=/usr/local/bin/crypthome-session-setup
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-Crypthome-Generated=true

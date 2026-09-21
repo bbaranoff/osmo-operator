@@ -1,0 +1,39 @@
+#!/bin/bash
+# lock-home - demonte /home et referme le volume chiffre, en cours de session.
+#
+# A utiliser quand on veut rendre les secrets illisibles sans redemarrer. Les
+# processus du compte proprietaire tiennent le point de montage : on les
+# termine d'abord, sinon le demontage echoue avec "target is busy" et le
+# volume reste ouvert - exactement ce qu'on cherchait a eviter.
+set -u
+
+CONF=/etc/default/crypthome
+[ -r "$CONF" ] || { echo "lock-home: $CONF introuvable" >&2; exit 1; }
+. "$CONF"
+
+MAPPER="${CRYPTHOME_NAME:-crypthome}"
+MOUNT="${CRYPTHOME_MOUNT:-/home}"
+OWNER="${CRYPTHOME_OWNER:-}"
+
+if ! mountpoint -q "$MOUNT" && [ ! -e "/dev/mapper/$MAPPER" ]; then
+    echo "lock-home: $MOUNT n'est pas dechiffre."
+    exit 0
+fi
+
+if [ -n "$OWNER" ] && id -u "$OWNER" >/dev/null 2>&1; then
+    loginctl disable-linger "$OWNER" >/dev/null 2>&1 || true
+    loginctl terminate-user "$OWNER"  >/dev/null 2>&1 || true
+    pkill -u "$OWNER" >/dev/null 2>&1 || true
+    sleep 2
+    pkill -KILL -u "$OWNER" >/dev/null 2>&1 || true
+fi
+
+if mountpoint -q "$MOUNT" && ! umount "$MOUNT"; then
+    echo "lock-home: $MOUNT occupe - processus restants :" >&2
+    fuser -vm "$MOUNT" 2>&1 | head -20 >&2
+    exit 1
+fi
+
+cryptsetup close "$MAPPER" 2>/dev/null || true
+echo "lock-home: $MOUNT demonte, volume referme."
+exit 0
