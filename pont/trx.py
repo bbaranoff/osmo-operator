@@ -38,9 +38,27 @@ log = logging.getLogger("pont")
 # PONT_HORLOGE=0 revient a l'horloge murale ; le fichier absent (montage sans
 # DSP, couche 1 gr-gsm) laisse aussi l'horloge libre, sans rien a configurer.
 HORLOGE = "/dev/shm/calypso_horloge"
-HORLOGE_PERIODE = 0.25      # entre deux mesures de la cadence du DSP
-HORLOGE_KP = 1.0            # correction de phase, en trames de periode par trame d'ecart
-HORLOGE_PHASE_N = 400.0     # l'ecart de phase est rattrape en ~N trames
+#
+# [2026-09-22] REGLAGE DE LA BOUCLE. Les premieres valeurs (periode 0,25 s,
+# rattrapage en 400 trames) donnaient une boucle a ~0,07 Hz, SOUS la cadence a
+# laquelle la vitesse du DSP elle-meme bouge. L'asservissement n'arrivait plus
+# a suivre : la phase partait en cycle limite de +/- 100 trames, et a chaque
+# demi-tour ou l'ecart passait negatif le pont se retrouvait DERRIERE la trame
+# reclamee -- 12000 trames entierement sautees sur 120201 ticks, 10 %. Les
+# trames perdues ainsi ne sont comptees NULLE PART (ni « tard », ni
+# « manques » cote BSP) : c'est ce silence qui m'a fait accuser la
+# demodulation du DSP. Mesurer plus souvent et rattraper plus vite remonte la
+# boucle a ~1,3 Hz, au-dessus de la perturbation.
+# Ne PAS « corriger » ca en augmentant PONT_HORLOGE_AVANCE : ca masque le
+# cycle limite derriere une marge, sans le supprimer, et ca retarde tout le
+# montant d'autant.
+# [2026-09-22, 16:10] REGLABLES PAR L'ENVIRONNEMENT. J'ai change ces valeurs a
+# l'aveugle une fois de trop : la premiere mesure apres coup a donne
+# manques=2000 sur 10490 ticks (19 %), PIRE que les 10 % d'avant. On les sort
+# donc pour pouvoir balayer sans recompiler et choisir sur mesure.
+HORLOGE_PERIODE = float(os.environ.get("PONT_HORLOGE_PERIODE", "0.05"))
+HORLOGE_KP = float(os.environ.get("PONT_HORLOGE_KP", "1.0"))
+HORLOGE_PHASE_N = float(os.environ.get("PONT_HORLOGE_PHASE_N", "100.0"))
 
 
 class Clock:
@@ -138,12 +156,14 @@ def _udp(bind_host, port):
 
 
 class Trx:
-    def __init__(self, cfg, clock, stats, cipher, record):
+    def __init__(self, cfg, clock, stats, cipher, record, dedicated=None, tch=None):
         self.cfg = cfg
         self.clock = clock
         self.stats = stats
         self.cipher = cipher
         self.record = record
+        self.dedicated = dedicated
+        self.tch = tch
         self.sk_clck = _udp(cfg.trx_bind, cfg.trx_base)
         self.sk_ctrl = _udp(cfg.trx_bind, cfg.trx_base + 1)
         self.sk_data = _udp(cfg.trx_bind, cfg.trx_base + 2)
@@ -186,9 +206,64 @@ class Trx:
                 # (calypso_bsp.c bsp_trxd_readable) : 8 octets d'en-tete
                 # [tn, fn BE32, attenuation, 0, 0] puis 148 bits 0/1. Le BSP les
                 # convertit lui-meme en I/Q (table cos) et les depose en DARAM.
+                #
+                # [2026-09-22] LE DESCENDANT DU CANAL DEDIE EST DECHIFFRE ICI.
+                # Asymetrie constatee : send_ul() CHIFFRE le montant (le pont
+                # tient la place de la voie d'emission du DSP), mais le
+                # descendant partait brut vers le DSP. Or il n'y a aucun A5
+                # dans le modele Calypso -- `d_a5mode` n'existe que dans
+                # l1-grgsm/, rien dans l1-dsp/ : personne ne dechiffre.
+                # Mesure du 2026-09-22 (ENCRYPTION="a5 1") : la transaction
+                # allait plus loin que jamais -- SABM/UA, IDENTITY, puis
+                # AUTHENTICATION REQUEST/RESPONSE, tout en clair -- et la
+                # tempete de « Dropping frame with 96 bit errors » commencait
+                # a la ligne EXACTE du `CIPHERING MODE COMPLETE`, pour ne plus
+                # s'arreter. En « a5 0 » la meme transaction va au bout.
+                # A5 est symetrique : appliquer le flux descendant dechiffre.
+                # SEULEMENT sur l'intervalle dedie : la BCCH et la CCCH ne sont
+                # jamais chiffrees, les toucher detruirait le campement.
+                bits_dsp = bits
+                if self.cipher.dl_active and self._burst_dedie(tn, fn):
+                    bits_dsp = self.cipher.apply(bits, fn, False)
                 hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([data[5] if len(data) > 5 else 0, 0, 0])
-                self.sk_data.sendto(hdr + bytes(1 if b else 0 for b in bits), ("127.0.0.1", self.cfg.dsp_port))
+                self.sk_data.sendto(hdr + bytes(1 if b else 0 for b in bits_dsp), ("127.0.0.1", self.cfg.dsp_port))
             on_burst(tn, fn, bits)
+
+    def _burst_dedie(self, tn, fn):
+        """Vrai si CE burst appartient au canal dedie du mobile.
+
+        [2026-09-22] Le test portait sur le seul intervalle (`tn == tn_dedie`).
+        En CCCH+SDCCH/4 le canal dedie vit sur TS0, celui qui porte AUSSI la
+        FCCH, la SCH, la BCCH et la CCCH -- jamais chiffrees, par definition :
+        le mobile doit pouvoir les lire avant d'avoir une cle. Des que A5
+        s'activait, tout TS0 partait donc XORe vers le DSP et le campement se
+        defaisait sous les pieds de la transaction en cours. En SDCCH/8 sur un
+        intervalle a lui le defaut ne se voyait pas, d'ou son age.
+        On refait ici le meme tri que Downlink._signalling : le bloc doit etre
+        celui du sous-canal `ss` du mobile, SDCCH ou SACCH.
+        Lecture mise en cache par Dedicated (DCCH_TTL), donc appelable a chaque
+        burst."""
+        if self.tch is not None and self.tch.is_open():
+            # Sur un TCH assigne tout l'intervalle est a la transaction (trafic,
+            # FACCH et SACCH) : pas de sous-canal a trier.
+            if tn == self.tch.active_tn():
+                return True
+        if self.dedicated is None:
+            return False
+        ded = self.dedicated.plan()
+        if ded is None:
+            return False
+        plan, ss, tn_ded = ded
+        if tn != tn_ded:
+            return False
+        m51 = fn % 51
+        base = next((b for b in plan.ded_bases if b <= m51 <= b + 3), None)
+        if base is None:
+            return False
+        ss %= plan.n_sub
+        if base in plan.sdcch_dl:
+            return base == plan.sdcch_dl[ss]
+        return (fn - (m51 - base)) % 102 == plan.sacch_dl102[ss]
 
     def send_ul(self, tn, fn, burst, cipher):
         if self.bts_data is None:
@@ -213,11 +288,11 @@ class Transmitter(threading.Thread):
         self.heap = []
         self.seq = 0
 
-    def schedule(self, tn, fn_air, burst, cipher):
+    def schedule(self, tn, fn_air, burst, cipher, essais=0):
         post = self.clock.time_of((fn_air - self.cfg.ul_fn_advance) % gsm.HYPERFRAME)
         with self.cond:
             self.seq += 1
-            heapq.heappush(self.heap, (post, self.seq, tn, fn_air, burst, cipher))
+            heapq.heappush(self.heap, (post, self.seq, tn, fn_air, burst, cipher, essais))
             self.cond.notify()
 
     def run(self):
@@ -230,10 +305,30 @@ class Transmitter(threading.Thread):
                 if dt > 0:
                     self.cond.wait(dt)
                     continue
-                _, _, tn, fn_air, burst, cipher = heapq.heappop(self.heap)
+                _, _, tn, fn_air, burst, cipher, essais = heapq.heappop(self.heap)
             cur = self.clock.fn()
             off = (fn_air - (cur + self.cfg.ul_fn_advance) + gsm.HYPERFRAME // 2) % gsm.HYPERFRAME - gsm.HYPERFRAME // 2
-            if abs(off) > self.cfg.window_tol:
+            # [2026-09-22] TROP TOT N'EST PAS TROP TARD.
+            # `post` est calcule a la mise en file, a partir de la cadence de
+            # l'horloge A CE MOMENT-LA. Depuis que celle-ci suit le DSP (voir
+            # Clock plus haut), elle n'avance plus au rythme du mur : le DSP
+            # marque le pas, l'horloge avec lui, et le reveil tombe avant que la
+            # trame visee ne soit arrivee. Le burst etait alors compte « en
+            # retard » et JETE, alors qu'il etait en avance.
+            # Mesure du 2026-09-22 : « UL bursts=116 tard=18 », 13 % des bursts
+            # montants perdus. Un bloc en demande quatre : ~40 % des blocs
+            # montants n'arrivaient pas entiers a la BTS. C'est exactement ce
+            # qu'on voyait en bout de chaine -- TMSI REALLOCATION COMPLETE et
+            # CP-ACK jamais recus, SABM retransmis par T200.
+            # On re-attend donc, avec un `post` recalcule sur l'horloge
+            # courante ; seul un burst VRAIMENT en retard est perdu.
+            if off > self.cfg.window_tol:
+                if essais < self.cfg.window_essais:
+                    self.schedule(tn, fn_air, burst, cipher, essais + 1)
+                else:
+                    self.stats.ul_late += 1
+                continue
+            if off < -self.cfg.window_tol:
                 self.stats.ul_late += 1
                 continue
             self.trx.send_ul(tn, fn_air, burst, cipher)

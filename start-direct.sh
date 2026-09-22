@@ -95,10 +95,11 @@ Usage : ./start-direct.sh [options] [mode]
                         (/opt/GSM/c54x_exe, mask-ROM TI) et decode lui-meme
                         FCCH/SCH/BCCH ; aucun decodeur gr-gsm n'est lance.
                         Le mobile campe (SI1-4, lai=001-01-1) et fait sa mise
-                        a jour de localisation. Delegue a c54x_exe/run.sh,
-                        pas au fork qosmo-dsp (mort) ; run_real.sh a cote
-                        lance la meme chaine et rend un verdict chiffre.
-                        CALYPSO_FORK=qosmo-dsp pour l'ancien fork.
+                        a jour de localisation. La pile monte comme en mode
+                        grgsm (meme profil hybride, coeur, BTS, side-car) ;
+                        seuls les modules qemu,pty,osmocon,l2 sont retires et
+                        repris par c54x_exe/run.sh. BANC_DSP=none pour n'avoir
+                        que la pile.
     --grgsm             force le fork qosmo-grgsm (defaut)
     --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/<fork>,
                         soit qosmo-grgsm ou qosmo-dsp). Ces lanceurs remplacent
@@ -197,12 +198,14 @@ while [ $# -gt 0 ]; do
         --gen-conf)    ACTION=genconf
                        if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then GEN_CONF_OUT="$2"; shift; fi ;;
         --gen-conf=*)  ACTION=genconf; GEN_CONF_OUT="${1#*=}" ;;
-        # [2026-09-22] --dsp ne pointe PLUS sur le fork qosmo-dsp. La chaine
-        # vivante, c'est /opt/GSM/c54x_exe (le C54x hors QEMU, sur le fork
-        # /opt/GSM/qosmo) ; qosmo-dsp n'a plus ete construit depuis le 17/09 et
-        # son run.sh monte osmo-trx-ipc + calypso-ipc-device, remplaces par
-        # c54x_exe --arm + pont.py. CALYPSO_FORK pose par l'operateur gagne.
-        --dsp)         : "${CALYPSO_FORK:=qosmo}"; export CALYPSO_FORK; DSP_MODE=1 ;;
+        # [2026-09-22] --dsp ne change NI de fork NI de profil : la pile monte
+        # exactement comme en mode grgsm (coeur, BTS, side-car, tmux), et seuls
+        # les quatre modules de la chaine Calypso (qemu, pty, osmocon, l2) sont
+        # remis a /opt/GSM/c54x_exe, ou le C54x tourne hors QEMU sur la mask-ROM
+        # TI. qosmo-dsp n'a plus ete construit depuis le 17/09 et son
+        # osmo-trx-ipc + calypso-ipc-device sont remplaces par c54x_exe --arm +
+        # pont.py ; CALYPSO_FORK pose par l'operateur reste respecte.
+        --dsp)         DSP_MODE=1 ;;
         --grgsm)       CALYPSO_FORK=qosmo-grgsm; export CALYPSO_FORK ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
@@ -253,23 +256,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --- --dsp implique le profil « qemu » ----------------------------------------
-# Le defaut `faketrx-qemu` (hybrid) monte un SIDE-CAR : fake_trx + un second
-# osmo-bts-trx + un second mobile, pour que MS#2 puisse appeler MS#1. C'est
-# utile a la demo gr-gsm, ca n'a rien a voir avec le DSP — et c'est REQUIS
-# (MOD_REQUIRED=1 sur sidecar-faketrx et sidecar-bts), donc sa moindre panne
-# AVORTE toute la sequence avant meme que QEMU demarre. Un banc DSP n'a pas a
-# dependre d'une seconde station de base.
-#
-# Un profil nomme explicitement (--profile, ou le mode en positionnel) gagne
-# toujours : on ne decide qu'a la place de personne.
-if [ "${DSP_MODE:-0}" = 1 ] && [ "$PROFILE_CHOISI" = 0 ]; then
-    PROFILE=qemu
-    printf '%s--dsp : profil « qemu » (pipeline Calypso seul, pas de side-car).%s\n' \
-        "${C_DIM:-}" "${C_Z:-}"
-    printf '%s        --dsp faketrx-qemu pour garder le side-car MS#2.%s\n' \
-        "${C_DIM:-}" "${C_Z:-}"
-fi
+# --- --dsp garde le profil par defaut ----------------------------------------
+# [2026-09-22] --dsp forcait le profil `qemu` (pipeline Calypso seul, sans
+# side-car), au motif qu'un banc DSP n'a pas a dependre d'une seconde station
+# de base. Retire : le banc DSP doit monter la MEME pile que le mode grgsm,
+# side-car compris, et c'est l'hybride qui est le defaut. Un profil nomme
+# explicitement gagne toujours, comme avant.
 
 # --- ou tourne-t-on ? ---------------------------------------------------------
 # La question n'est pas cosmetique : le plan d'adressage EN DEPEND.
@@ -459,10 +451,37 @@ banner() {
 # --- 1. configuration ---------------------------------------------------------
 # [2026-08-03] globals.conf - les reglages reseau (MCC/MNC/ARFCN/KI/IMSI/A5...).
 # Genere par ./generate_configs.sh cote hote ; ici on se contente de le lire.
-# L'idiome ":=" qu'il utilise laisse gagner toute variable deja posee, donc
-#     ARFCN=520 ./start-direct.sh
-# surcharge sans toucher au fichier.
-[ -r "$HERE/globals.conf" ] && { set -a; . "$HERE/globals.conf"; set +a; }
+# [2026-09-22] « ARFCN=520 ./start-direct.sh surcharge sans toucher au
+# fichier » : c'etait ecrit ici, et c'etait FAUX. globals.conf n'utilise pas
+# l'idiome ":=" mais l'affectation simple (`ENCRYPTION="a5 1"`), et il est
+# source avec `set -a` : il ECRASE l'environnement. Son propre en-tete
+# l'annonce d'ailleurs (« il est lu en dernier, les 26 reglages ci-dessous
+# ecrasent leur homonyme dans l'environnement »), en contradiction avec ce
+# commentaire-ci. Constate sur le banc :
+#     ENCRYPTION="a5 0" ./start-direct.sh --dsp   ->   chiffrement a5 1
+# Deux contrats opposes dans le meme depot, et c'est le silencieux qui gagnait.
+#
+# On tranche du cote de la ligne de commande, qui est la regle partout ailleurs
+# dans ce script : on releve les variables de globals.conf que l'appelant a
+# DEJA posees et non vides, on lit le fichier, puis on les repose. globals.conf
+# reste la reference pour tout ce qui n'a pas ete dit ; un vide continue de
+# signifier « valeur calculee », donc ne surcharge rien.
+if [ -r "$HERE/globals.conf" ]; then
+    _gc_forcees=()
+    while IFS= read -r _gc_v; do
+        [ -n "${!_gc_v:-}" ] && _gc_forcees+=("$_gc_v=${!_gc_v}")
+    done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$HERE/globals.conf")
+    set -a
+    . "$HERE/globals.conf"
+    for _gc_kv in "${_gc_forcees[@]}"; do
+        eval "${_gc_kv%%=*}=\${_gc_kv#*=}"
+    done
+    set +a
+    [ ${#_gc_forcees[@]} -gt 0 ] && \
+        printf '  %sglobals.conf%s surcharge par l environnement : %s\n' \
+            "${C_DIM:-}" "${C_Z:-}" "${_gc_forcees[*]}"
+    unset _gc_v _gc_kv
+fi
 
 say_begin "Chargement de l'environnement"
 if [ -f "$HERE/environment/load.env" ]; then
@@ -552,19 +571,21 @@ say_begin "Resolution de run.sh"
 # contredisait le contrat annonce en tete de fichier ("la ligne de commande
 # gagne toujours") : RUN_SH etait la seule variable non surchargeable.
 # Ordre : RUN_SH explicite > OQC_ROOT resolu > chemin historique.
-# [2026-09-22] LE BANC DSP A SON PROPRE run.sh, HORS DES FORKS.
-# /opt/GSM/qosmo n'a pas de run.sh : le banc DSP est pilote par
-# /opt/GSM/c54x_exe/run.sh, qui monte ses cinq etapes lui-meme (c54x_exe --arm,
-# QEMU CALYPSO_DSP_EXTERN=1, osmocon, mobile, pont.py). Il ne connait ni
-# --profile ni --list ni --check-paths : DSP_BANC=1 dit aux points de
-# delegation plus bas de lui parler dans SA langue.
-# BANC_DSP=<chemin> pour en designer un autre ; --dsp avec un CALYPSO_FORK
-# explicite (qosmo-dsp) retombe sur le chemin historique.
+# [2026-09-22] LE BANC DSP S'AJOUTE AU PIPELINE, IL NE LE REMPLACE PAS.
+# Premiere version : --dsp mettait RUN_SH = c54x_exe/run.sh. La pile osmocom ne
+# montait alors plus du tout -- le coeur, la BTS, le side-car et tmux sont dans
+# les run_modules du fork, que ce run.sh-la ne connait pas. Rapport du banc :
+# « il faut lancer la pile osmo aussi comme mode=grgsm ».
+# Donc : RUN_SH reste celui du fork, il monte tout comme d'habitude, et on lui
+# retire seulement les quatre modules de la chaine Calypso que c54x_exe assure
+# (qemu, pty, osmocon, l2 — soit les etapes 2, 3 et 4 de son run.sh). Le banc
+# DSP est lance juste apres, avec ses cinq etapes.
+# BANC_DSP=<chemin> pour en designer un autre ; BANC_DSP=none le desactive.
 DSP_BANC=0
+DSP_MODULES_RETIRES="qemu,pty,osmocon,l2"
 : "${BANC_DSP:=$GSM_ROOT/c54x_exe/run.sh}"
-if [ "${DSP_MODE:-0}" = 1 ] && [ "${CALYPSO_FORK:-}" = qosmo ] && [ -x "$BANC_DSP" ]; then
-    RUN_SH="${RUN_SH:-$BANC_DSP}"
-    [ "$RUN_SH" = "$BANC_DSP" ] && DSP_BANC=1
+if [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ] && [ -x "$BANC_DSP" ]; then
+    DSP_BANC=1
 fi
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
 : "${RUN_SH:=$GSM_ROOT/${CALYPSO_FORK:-qosmo-grgsm}/run.sh}"
@@ -577,32 +598,33 @@ fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
 RUN_ROOT="$(dirname "$RUN_SH")"
 
-# ── LE BANC DSP : SON VOCABULAIRE, ET LE COEUR RESEAU QU'IL SUPPOSE ────────
+# ── LE BANC DSP : SON VOCABULAIRE ──────────────────────────────────────────
 # c54x_exe/run.sh ne prend que --stop | --status | --logs | --step N, et rien
-# d'autre : lui passer --profile le fait sortir sur « option inconnue ». Ces
-# deux fonctions traduisent, et ne servent QUE si DSP_BANC=1.
+# d'autre : lui passer --profile le fait sortir sur « option inconnue ».
+# Le coeur reseau, la BTS et le side-car restent montes par le plan du fork ;
+# ce banc-ci n'assure que la chaine Calypso (ses cinq etapes).
+# [2026-09-22] L'ARRET NE DEMANDE PAS --dsp.
+# `./start-direct.sh --stop` sans --dsp laissait c54x_exe, QEMU, osmocon, le
+# mobile et pont.py debout : DSP_BANC vaut 0 quand --dsp n'est pas retape, et
+# la pile paraissait arretee alors que cinq processus tenaient encore les ports
+# 5700-5702 et /tmp/calypso_dsp.sock -- de quoi faire echouer le demarrage
+# suivant sur un etat qu'on croit propre. On arrete donc le banc des qu'il
+# existe ; son --stop ne fait rien de mal quand il ne tourne pas.
 #
-# Il suppose aussi un coeur reseau debout et un osmo-bts-trx frais : ses etapes
-# 1 a 5 ne montent que le cote MOBILE. C'est la meme amorce que run_real.sh a
-# cote, qui reste l'outil de MESURE (il observe N secondes et rend un verdict
-# LAI / SI / IMM ASS / LU ACCEPT) ; ici on se contente de lancer.
-banc_dsp_arreter() {
-    bash "$RUN_SH" --stop "$@"
+# ⚠️ MODE=dsp EXPLICITE A CHAQUE APPEL. start-direct exporte son propre MODE
+# (le profil : « faketrx-qemu »), et c54x_exe/run.sh lit la MEME variable pour
+# choisir dsp|grgsm. Sans cela il sort sur
+#     [run] ECHEC : MODE=faketrx-qemu inconnu (dsp|grgsm)
+# et l'arret du banc ne se fait pas -- silencieusement, puisque l'appelant
+# ignore son code de retour. Deux scripts, deux sens pour le meme nom : on ne
+# renomme pas celui du banc (run_real.sh et les habitudes s'en servent), on
+# pose la valeur a chaque fois.
+banc_dsp() {
+    MODE=dsp bash "$BANC_DSP" "$@"
 }
-banc_dsp_coeur() {
-    command -v systemctl >/dev/null 2>&1 || return 0
-    [ -d /run/systemd/system ] || return 0
-    local u
-    say_begin "Coeur reseau (banc DSP)"
-    for u in osmo-hlr osmo-stp osmo-msc osmo-mgw osmo-bsc; do
-        systemctl is-active --quiet "$u" || systemctl start "$u" 2>/dev/null || true
-    done
-    # La BTS est redemarree a chaque run : pont.py reprend les ports 5700-5702
-    # et osmo-bts-trx doit refaire son POWERON dessus, sinon il reste accroche
-    # au transceiver du run precedent et n'emet plus rien.
-    systemctl restart osmo-bts-trx 2>/dev/null || true
-    sleep 3
-    say_end " OK " "$C_OK" "Coeur reseau (banc DSP)" "hlr/stp/msc/mgw/bsc + osmo-bts-trx"
+banc_dsp_arreter() {
+    [ -x "$BANC_DSP" ] || return 0
+    banc_dsp --stop "$@"
 }
 
 # --- 2b. lanceur C de QEMU (qosmo-grgsm / qosmo-dsp) ---------------------------
@@ -1332,6 +1354,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
           sleep 1
           pkill -f "$_PONT" 2>/dev/null; sleep 1
           exec setsid python3 -u "$_PONT" ) >/dev/shm/pont.log 2>&1 &
+        disown $! 2>/dev/null || true
         printf '  %spont: journal%s /dev/shm/pont.log (hors LOG_DIR, efface par le teardown)\n' "${C_DIM:-}" "${C_Z:-}"
     else
         printf '  pont introuvable (%s)\n' "$_PONT"
@@ -1412,7 +1435,21 @@ else
     printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun - identite SS7 inchangee"
 fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
-printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)" "$MS_ARFCN1"
+# [2026-09-22] EN --dsp, MS#1 N'EST PAS LE FICHIER GENERE.
+# Le module `l2` du fork est retire du plan : /root/.osmocom/bb/mobile.cfg
+# n'est ouvert par personne, et le mobile qui tourne est celui du banc DSP
+# (mobile_pont.cfg, VTY 4347). Le resume annoncait le mauvais fichier ET le
+# mauvais port -- on allait se connecter a une VTY qui n'existe pas.
+if [ "$DSP_BANC" = 1 ]; then
+    _ms1_cfg="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
+    _ms1_vty="$(sed -n 's/^ *bind 127.0.0.1 \([0-9]*\).*/\1/p' "$_ms1_cfg" 2>/dev/null | head -1)"
+    printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY %s  %s(banc DSP)%s\n' \
+        "$C_DIM" "$C_Z" "$_ms1_cfg" "$(ms_imsi 1)" "$MS_ARFCN1" "${_ms1_vty:-?}" "$C_DIM" "$C_Z"
+    printf '  %s           %s non lance (module l2 retire du plan)%s\n' \
+        "$C_DIM" "$MS1_CFG" "$C_Z"
+else
+    printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)" "$MS_ARFCN1"
+fi
 printf '  %sMS#2%s       %s  IMSI %s  ARFCN %s  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)" "$MS_ARFCN2"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
@@ -1468,7 +1505,10 @@ purge_sessions_tmux() {
 
 case "$ACTION" in
     list)
-        [ "$DSP_BANC" = 1 ] && exec bash "$RUN_SH" --help
+        if [ "$DSP_BANC" = 1 ]; then
+            printf '  %sbanc DSP%s   %s retire du plan : %s ; %s les reprend (5 etapes)\n' \
+                "$C_DIM" "$C_Z" "$RUN_SH" "$DSP_MODULES_RETIRES" "$BANC_DSP"
+        fi
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
         ;;
     genconf)
@@ -1495,8 +1535,8 @@ case "$ACTION" in
         ;;
     stop)
         say_begin "Arret de la pile via run.sh"
-        if [ "$DSP_BANC" = 1 ]; then banc_dsp_arreter
-        else bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"; fi
+        banc_dsp_arreter          # QEMU, osmocon, mobile, pont : a lui
+        bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         purge_sessions_tmux
         # ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ──────────────────────
@@ -1530,7 +1570,11 @@ case "$ACTION" in
         exit 0
         ;;
     status)
-        [ "$DSP_BANC" = 1 ] && exec bash "$RUN_SH" --status
+        if [ "$DSP_BANC" = 1 ]; then
+            printf '\n  %sbanc DSP%s  %s\n' "$C_DIM" "$C_Z" "$BANC_DSP"
+            banc_dsp --status
+            printf '\n'
+        fi
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --status --profile "$CALYPSO_PROFILE"
         ;;
     checkpaths)
@@ -1538,14 +1582,14 @@ case "$ACTION" in
         # chacune son binaire et sortent en nommant ce qui manque. On montre
         # donc ce qu'elles vont chercher, plutot que d'inventer une reponse.
         if [ "$DSP_BANC" = 1 ]; then
-            printf '  %sbanc DSP%s   %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
-            for f in "$RUN_ROOT/c54x_exe" "$GSM_ROOT/qosmo/build/qemu-system-arm" \
+            printf '  %sbanc DSP%s   %s\n' "$C_DIM" "$C_Z" "$BANC_DSP"
+            for f in "$(dirname "$BANC_DSP")/c54x_exe" "$GSM_ROOT/qosmo/build/qemu-system-arm" \
                      "$GSM_ROOT/firmware/board/compal_e88/layer1.highram.elf" \
                      "$GSM_ROOT/osmocom-bb/src/host/osmocon/osmocon" \
-                     "$GSM_ROOT/osmo-operator/pont/pont.py"; do
+                     "$HERE/pont/pont.py"; do
                 [ -e "$f" ] && printf '   OK   %s\n' "$f" || printf '   KO   %s (absent)\n' "$f"
             done
-            exit 0
+            printf '\n'
         fi
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
@@ -1791,8 +1835,8 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     # Un --regen arrete donc la pile, puis regenere : l'etat est sans ambiguite.
     if [ -x "$RUN_SH" ] || [ -r "$RUN_SH" ]; then
         say_begin "Arret de la pile avant regeneration"
-        if [ "$DSP_BANC" = 1 ]; then banc_dsp_arreter >/dev/null 2>&1 || true
-        else bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true; fi
+        banc_dsp_arreter >/dev/null 2>&1 || true
+        bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
         say_end " OK " "$C_OK" "Arret de la pile avant regeneration"
         declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
         # Meme filet qu'au --stop : un python3 orphelin (pont, fake_trx, trxcon)
@@ -2234,8 +2278,8 @@ PCAPWRAP
 # CALYPSO_NO_AUTOSTOP=1 desactive ce comportement.
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
-    if [ "$DSP_BANC" = 1 ]; then banc_dsp_arreter >/dev/null 2>&1 || true
-    else bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true; fi
+    banc_dsp_arreter >/dev/null 2>&1 || true
+    bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
         killall_python -TERM || true
@@ -2366,7 +2410,27 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # 3. le modem du banc, PUIS oFono (l ordre compte : ofonod cherche le
         #    modem au demarrage et n y revient pas de lui-meme).
         pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1 || \
-            setsid "$HERE/tools/osmo-phonesim-banc.py" >>/tmp/osmo-phonesim.log 2>&1 &
+        # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
+        # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
+        # sa table et annoncait leur mort par un
+        #     ./start-direct.sh: line NNNN: <pid> Killed setsid ...
+        # asynchrone, qui tombait par-dessus le prompt apres un --stop
+        # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
+        # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que
+        # LUI comme job, il rend la main tout de suite avec 0, et le petit-fils
+        # est adopte par init -- plus personne ne le surveille ni ne le signale.
+        # `</dev/null` en prime : aucune de ces aides ne lit le terminal, et
+        # sans cela elles restent rattachees a son entree.
+        # [2026-09-22] LA VTY DU MOBILE N'EST PAS TOUJOURS 4247.
+        # osmo-phonesim-banc.py retombe sur OSMO_MOB_VTY_PORT=4247, la valeur de
+        # /root/.osmocom/bb/mobile.cfg. En --dsp le mobile qui tourne est celui
+        # du banc (mobile_pont.cfg, VTY 4347) : le modem parlait a un port que
+        # personne n'ecoute, donc pas de reseau, pas d'appel, pas de SMS par
+        # oFono -- sans la moindre erreur, il se contentait de ne jamais voir le
+        # mobile. On lui passe le port reellement lie, lu dans le fichier.
+            ( setsid env OSMO_MOB_VTY_PORT="${_ms1_vty:-4247}" \
+                  "$HERE/tools/osmo-phonesim-banc.py" \
+                  </dev/null >>/tmp/osmo-phonesim.log 2>&1 & )
         sleep 1
         systemctl restart ofono >/dev/null 2>&1 || true
         sleep 3
@@ -2399,7 +2463,19 @@ PYON
         #    qui n a pas les liaisons GObject, et jamais celui du systeme. Meme
         #    raison que le bloc PYON ci-dessus, qui appelle deja /usr/bin/python3.
         pgrep -f "$HERE/tools/osmo-ril-atmodem.py" >/dev/null 2>&1 || \
-            setsid /usr/bin/python3 "$HERE/tools/osmo-ril-atmodem.py" >>/tmp/osmo-ril.log 2>&1 &
+        # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
+        # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
+        # sa table et annoncait leur mort par un
+        #     ./start-direct.sh: line NNNN: <pid> Killed setsid ...
+        # asynchrone, qui tombait par-dessus le prompt apres un --stop
+        # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
+        # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que
+        # LUI comme job, il rend la main tout de suite avec 0, et le petit-fils
+        # est adopte par init -- plus personne ne le surveille ni ne le signale.
+        # `</dev/null` en prime : aucune de ces aides ne lit le terminal, et
+        # sans cela elles restent rattachees a son entree.
+            ( setsid /usr/bin/python3 "$HERE/tools/osmo-ril-atmodem.py" \
+                  </dev/null >>/tmp/osmo-ril.log 2>&1 & )
         sleep 1
         if pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1; then
             say_end " OK " "$C_OK" "Raccord mobile (oFono)" \
@@ -2423,25 +2499,56 @@ fi
 #                            SB, pas de BCCH, pas de SI
 # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
 if [ "$DSP_BANC" = 1 ]; then
+    # ── LE FORK MONTE TOUT, MOINS LA CHAINE CALYPSO ────────────────────────
+    # [2026-09-22] Deux versions ratees avant celle-ci, toutes deux pour la
+    # meme raison -- avoir voulu remplacer le pipeline au lieu de s'y inserer :
+    #   1. RUN_SH = c54x_exe/run.sh : la pile osmocom ne montait plus du tout
+    #      (coeur, BTS, side-car, tmux sont des run_modules du fork) ;
+    #   2. delegation a c54x_exe/run_real.sh : meme probleme, plus un verdict
+    #      « ECHEC : aucun SI lu » imprime apres zero seconde d'observation.
+    # Ici le fork joue son plan habituel, on lui retire seulement les quatre
+    # modules que c54x_exe assure (qemu, pty, osmocon, l2), et le banc DSP est
+    # lance ensuite avec ses cinq etapes. --no-attach est indispensable : sans
+    # lui le fork s'attache a tmux et on ne reprend jamais la main.
+    #
+    # Les reglages du banc viennent du banc, pas d'un choix de style
+    # (c54x_exe/run_real.sh les porte depuis le 2026-09-21) :
+    #   INSNS=60000              cadence du C54x la plus proche du temps reel
+    #   LOCKSTEP=1               QEMU n'avance la trame que quand le DSP a fini
+    #                            la precedente ; sans lui il saute 3 trames sur 4
+    #   IQ=none                  pas de cellule synthetique : les bursts
+    #                            viennent de la vraie BTS, par pont.py
+    #   CALYPSO_BSP_STREAM=1     un burst TS0 par trame, dans l'ordre des FN
+    #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie :
+    #                            pas de SB, pas de BCCH, pas de SI
+    # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
     export MODE=dsp PONT=1
     : "${IQ:=none}";        export IQ
     : "${INSNS:=60000}";    export INSNS
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM
     : "${CALYPSO_RHEA_DMA_XFER:=1}"; export CALYPSO_RHEA_DMA_XFER
-    say_begin "Transmission au banc DSP"
+    RUN_ARGS+=(--skip "$DSP_MODULES_RETIRES" --no-attach)
     if [ $DRY -eq 1 ]; then
-        say_end " -- " "$C_DIM" "Transmission au banc DSP" "dry-run"
-        printf '  commande : MODE=dsp PONT=1 IQ=%s INSNS=%s LOCKSTEP=%s bash %s\n' \
-            "$IQ" "$INSNS" "$LOCKSTEP" "$RUN_SH"
+        say_begin "Transmission a run.sh puis au banc DSP"
+        say_end " -- " "$C_DIM" "Transmission a run.sh puis au banc DSP" "dry-run"
+        printf '  1. CALYPSO_PROFILE=%s bash %s %s\n' "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
+        printf '  2. MODE=dsp PONT=1 IQ=%s INSNS=%s LOCKSTEP=%s bash %s\n' \
+            "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_DSP"
         exit 0
     fi
-    say_end " OK " "$C_OK" "Transmission au banc DSP" \
-        "INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ"
-    banc_dsp_coeur
+    say_begin "Transmission a run.sh (sans $DSP_MODULES_RETIRES)"
+    if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then
+        say_end " KO " "$C_KO" "Transmission a run.sh" "le plan du fork a echoue, banc DSP non lance"
+        exit 1
+    fi
+    say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE, chaine Calypso laissee au banc DSP"
+    say_begin "Banc DSP C54x"
+    say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ)"
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
-    # il rend la main ; les journaux restent dans /tmp/c54x-pont).
-    exec bash "$RUN_SH"
+    # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
+    # deja exporte juste au-dessus, il ecrase celui du profil.
+    exec bash "$BANC_DSP"
 fi
 
 say_begin "Transmission a run.sh"

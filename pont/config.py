@@ -20,6 +20,7 @@ class Config:
     bsic: int
     ul_fn_advance: int
     window_tol: int
+    window_essais: int
     rssi: int
     gsmtap_port: int
     sch_port: int
@@ -59,6 +60,9 @@ def parse(argv=None):
         bsic=a.bsic,
         ul_fn_advance=int(_env("PONT_UL_FN_ADVANCE", "3")),
         window_tol=int(_env("PONT_WINDOW_TOL", "1")),
+        # Combien de fois re-attendre un burst montant reveille trop tot
+        # (horloge asservie au DSP, cf. trx.py Transmitter.run).
+        window_essais=int(_env("PONT_WINDOW_ESSAIS", "12")),
         rssi=int(_env("PONT_RSSI", "60")),
         gsmtap_port=4730,
         sch_port=4731,
