@@ -108,7 +108,7 @@ log_auto()  { echo -e "${CYAN}[gapk-auto]${NC} $(date '+%H:%M:%S') $*"; }
 # retiree sur « Endpoint disparu ». En tache de fond, pour ne pas retarder la
 # scrutation. Voir scripts/audio-chain.sh --appel.
 _audio_appel() {
-    [ "${AUDIO_PENDANT_APPEL:-1}" = "1" ] || return 0
+    [ "${AUDIO_PENDANT_APPEL:-0}" = "1" ] || return 0
     local chaine="${OSMO_OPERATOR_DIR:-/opt/GSM/osmo-operator}/scripts/audio-chain.sh"
     [ -f "$chaine" ] || return 0
     bash "$chaine" --appel "$1" 3 >>"${GAPK_LOG_DIR:-/tmp}/audio-appel.log" 2>&1 &

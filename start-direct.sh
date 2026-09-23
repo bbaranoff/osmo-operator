@@ -113,6 +113,11 @@ Usage : ./start-direct.sh [options] [mode]
     --status            interroge l'etat (delegue a run.sh --status)
     --force             relance meme les modules deja demarres
     --verbose           montre la sortie des modules
+    --assembly-logs     trace asm de l'ARM emule (= ASSEMBLY_LOGS=1) : QEMU
+                        -d in_asm,exec,nochain -D /tmp/c54x-pont/qemu-asm.log ;
+                        ASSEMBLY_LOGS_FLAGS change les -d, ASSEMBLY_LOGS_FILTRE
+                        pose un -dfilter (ex. 0x00820000+0x40000). Tres volumineux,
+                        et le banc ne tient plus le temps reel.
     --no-attach         ne s'attache pas a tmux a la fin (= CALYPSO_NO_ATTACH=1 ;
                         c'est ce que pose osmo-banc.service : personne devant)
     --check-paths       verifie les dependances declarees
@@ -184,6 +189,7 @@ while [ $# -gt 0 ]; do
         --status)      ACTION=status ;;
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
+        --assembly-logs) ASSEMBLY_LOGS=1 ;;
         # [2026-09-04] Equivalent de CALYPSO_NO_ATTACH=1, en option de ligne de
         # commande pour que l'unite systemd le dise sur son ExecStart. Avant, cette
         # option n'existait pas : posee sur ExecStart elle tombait dans « option
@@ -2539,6 +2545,8 @@ if [ "$DSP_BANC" = 1 ]; then
     #                            pas de SB, pas de BCCH, pas de SI
     # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
     export MODE=dsp PONT=1
+    # [2026-09-23] Trace asm de l'ARM, lue par c54x_exe/run.sh (etape 2, QEMU -d).
+    export ASSEMBLY_LOGS="${ASSEMBLY_LOGS:-0}" ASSEMBLY_LOGS_FLAGS ASSEMBLY_LOGS_FILTRE
     : "${IQ:=none}";        export IQ
     # [2026-09-23] 60000 -> 200000, puis 120000 (TCH mesure jusqu a 87000 insn/trame). Le budget n'est qu'un plafond (le DSP
     # s'arrete a son IDLE, c54x_exe/src/pont.c jouer_trame) ; a 60000 le

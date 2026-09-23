@@ -111,7 +111,7 @@ done
 # osmo_hp_ec des le boot, comme avec la VM (lib/audio.sh, « L AFFECTATION DES
 # HAUT-PARLEURS »). Sans VM, le bouclage direct suit ; avec, il est retire.
 alleger_audio
-if [ "${AUDIO_PENDANT_APPEL:-1}" = "1" ] && ! pmos_vm_audio_present; then
+if [ "${AUDIO_PENDANT_APPEL:-0}" = "1" ] && ! pmos_vm_audio_present; then
     case "$APPEL" in
     debut) ;;                                  # on pose la chaine, plus bas
     fin)   reinit_audio; echo "[audio] fin d appel : chaine retiree"; exit 0 ;;

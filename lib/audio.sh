@@ -128,10 +128,9 @@ LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 # osmo-pmos-setup et l arret de la VM (pmos_stop) passent par ces fonctions.
 # AUDIO_ECHO_CANCEL=0 pour se passer de l annuleur (les HP = la carte brute).
 EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"'
-: "${AUDIO_AEC_METHOD:=speex}"
+: "${AUDIO_AEC_METHOD:=webrtc}"
 audio_aec_method() { echo "$AUDIO_AEC_METHOD"; }
-# Les aec_args ne valent que pour webrtc ; speex n en prend aucun ici.
-audio_aec_args() { [ "$AUDIO_AEC_METHOD" = "webrtc" ] && echo "$EC_AEC_ARGS"; }
+# Les aec_args ne valent que pour webrtc (voir ensure_echo_cancel, aec_opts).
 : "${EC_MIC_VOLUME:=25%}"
 
 audio_hw_sink() {
@@ -213,7 +212,8 @@ ensure_echo_cancel() {
     [ "${AUDIO_ECHO_CANCEL:-1}" = "1" ] || {
         echo -e "  ${YELLOW}[audio] annuleur d echo desactive (AUDIO_ECHO_CANCEL=0)${NC}"; return 0; }
     pactl info >/dev/null 2>&1 || return 0
-    local mic hp
+    local mic hp aec_opts=()
+    [ "$AUDIO_AEC_METHOD" = "webrtc" ] && aec_opts=("$EC_AEC_ARGS")
     mic="$(audio_hw_source)"; hp="$(audio_hw_sink)"
     if [ -z "$mic" ] || [ -z "$hp" ]; then
         echo -e "  ${YELLOW}[audio] pas de micro ou de haut-parleur materiel - annuleur d echo ignore${NC}"; return 0
@@ -241,10 +241,13 @@ ensure_echo_cancel() {
     # pas. speex annule l echo pour une fraction de ce prix ; il n a pas l AGC
     # analogique qui faisait pomper le micro (voir plus haut), rien a couper.
     # AUDIO_AEC_METHOD=webrtc retablit l ancien annuleur et ses aec_args.
+    # aec_args est UN argument (guillemets compris) : un $(...) non cite le
+    # coupait en morceaux, pactl ignorait analog_gain_control=0 et l AGC de
+    # webrtc descendait le micro a 0 % (micro muet en appel, 2026-09-23).
     elif pactl load-module module-echo-cancel aec_method="$(audio_aec_method)" \
             rate=8000 channels=1 \
             source_master="$mic" sink_master="$hp" \
-            source_name=osmo_mic_ec sink_name=osmo_hp_ec $(audio_aec_args) \
+            source_name=osmo_mic_ec sink_name=osmo_hp_ec "${aec_opts[@]}" \
             source_properties=device.description=Micro_sans_echo \
             sink_properties=device.description=HP_sans_echo >/dev/null 2>&1; then
         echo -e "  ${GREEN}[audio] annuleur d echo ${AUDIO_AEC_METHOD} pose entre ${mic} et ${hp}${NC}"
@@ -295,6 +298,17 @@ alleger_audio() {
         echo -e "  ${GREEN}[audio] speech-dispatcher arrete (flux 44,1 kHz permanent vers les HP)${NC}"
     fi
     pactl info >/dev/null 2>&1 || return 0
+    # [2026-09-23] module-stream-restore SANS restore_device : il renvoyait le
+    # `mobile` (ALSA « default ») sur la carte brute ou il avait joue une fois,
+    # hors de l annuleur -- echo test : le HP repart dans le micro, Larsen qui
+    # monte au fil de l appel. Les volumes restent memorises, pas le peripherique.
+    local sr
+    sr="$(pactl list short modules 2>/dev/null | awk '$2 == "module-stream-restore" && $0 !~ /restore_device=false/ {print $1; exit}')"
+    if [ -n "$sr" ]; then
+        pactl unload-module "$sr" >/dev/null 2>&1 \
+            && pactl load-module module-stream-restore restore_device=false >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}[audio] module-stream-restore sans restauration de peripherique${NC}"
+    fi
     local m refaire=0
     m="$(pactl list short modules 2>/dev/null | awk '/module-echo-cancel/ && /aec_method=webrtc/ {print $1; exit}')"
     if [ -n "$m" ] && [ "$AUDIO_AEC_METHOD" != "webrtc" ]; then
