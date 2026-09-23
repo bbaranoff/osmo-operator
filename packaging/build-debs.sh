@@ -176,7 +176,7 @@ if wanted pont; then
     mkdir -p "$D" "$P/DEBIAN"
     install -m644 "$OSMO_OPERATOR_SRC"/pont/*.py "$D/"
     install -m644 "$OSMO_OPERATOR_SRC/pont/README.md" "$D/" 2>/dev/null || true
-    chmod 755 "$D/pont.py" "$D/pont_uncipher.py"
+    chmod 755 "$D/pont.py" "$D/pont_dsp.py"
     write_preinst_guard "$P/DEBIAN" /opt/GSM/osmo-operator
     write_control "$P/DEBIAN" <<CTL
 Package: pont

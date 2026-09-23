@@ -183,7 +183,7 @@ radio)
     pgrep -f 'qemu-system-arm' >/dev/null 2>&1 && phy="qemu (Calypso emule)"
     pgrep -f 'fake_trx.py' >/dev/null 2>&1 && phy="faketrx"
     pgrep -x virtphy >/dev/null 2>&1 && phy="virtphy"
-    pgrep -f 'pont/pont(_uncipher)?\.py' >/dev/null 2>&1 && phy="$phy + pont"
+    pgrep -f 'pont/pont(_dsp)?\.py' >/dev/null 2>&1 && phy="$phy + pont"
     echo "PHY ${C1}${phy}${C}"
     # ── CE QUE CHAQUE PASTILLE CHERCHE VRAIMENT ──────────────────────────
     # [2026-09-04] Le banc de l'ISO tourne en faketrx + pont : il n'y a AUCUN
@@ -194,7 +194,7 @@ radio)
     # qosmo-grgsm (gsm_sniff.py) : grgsm_decode n'est pas installe. Les trois
     # restaient rouges sur un banc en parfait etat.
     s=""
-    { alive_f 'osmo-trx' || alive_f 'pont/pont(_uncipher)?\.py' || alive_f 'fake_trx\.py'; } && s="$s$OK TRX     " || s="$s$KO TRX     "
+    { alive_f 'osmo-trx' || alive_f 'pont/pont(_dsp)?\.py' || alive_f 'fake_trx\.py'; } && s="$s$OK TRX     " || s="$s$KO TRX     "
     alive_x mobile                  && s="$s$OK MOBILE  " || s="$s$KO MOBILE  "
     alive_x trxcon                  && s="$s$OK TRXCON  " || s="$s$KO TRXCON  "
     alive_f 'qemu-system-arm'       && s="$s$OK QEMU    " || s="$s$KO QEMU    "

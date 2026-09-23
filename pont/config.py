@@ -66,7 +66,7 @@ def parse(argv=None):
         window_essais=int(_env("PONT_WINDOW_ESSAIS", "12")),
         # Retard maximal (trames) d'un burst montant encore envoye a la BTS,
         # cf. trx.py Transmitter.run. 0 = jeter tout burst en retard (defaut du
-        # paquet ; pont.py, le point d'entree DSP, pose 26).
+        # paquet ; pont_dsp.py, le point d'entree DSP, pose 26).
         ul_retard_max=int(_env("PONT_UL_RETARD_MAX", "0")),
         rssi=int(_env("PONT_RSSI", "60")),
         gsmtap_port=4730,
