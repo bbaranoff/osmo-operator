@@ -1252,7 +1252,9 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # encore : on y trouve une COPIE, et on retombe mot pour mot dans la panne
     # decrite ci-dessus - un pont hors depot qui derive sans que rien ne le dise.
     # $HERE est le repertoire de CE script : le pont voyage avec lui, toujours.
-    _PONT="${PONT_PY:-$HERE/pont/pont.py}"
+    # [2026-09-23] Montage grgsm : son pont est pont_uncipher.py (pont.py est
+    # celui du montage DSP, lance par c54x_exe/run.sh). Voir pont/pont_uncipher.py.
+    _PONT="${PONT_PY:-$HERE/pont/pont_uncipher.py}"
 
     # ── LE PONT DOIT SAVOIR SUR QUELLE CELLULE IL TRAVAILLE ─────────────────
     # pont.py fait le codage/decodage de canal entre le Calypso de QEMU et la
@@ -1310,7 +1312,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
             killall_python -9 || true
         fi
         sleep 1
-        printf '  %spont TRX%s : transceiver TRX-UDP d osmo-bts-trx (pont/pont.py)\n' "${C_DIM:-}" "${C_Z:-}"
+        printf '  %spont TRX%s : transceiver TRX-UDP d osmo-bts-trx (pont/pont_uncipher.py)\n' "${C_DIM:-}" "${C_Z:-}"
         # LANCEMENT DIFFERE : run.sh fait d'abord son teardown (qui verifie que
         # 5700-5702 sont LIBRES). On ne binde donc qu'apres, sinon on se
         # bloque nous-memes. 25 s = teardown + demarrage des modules.

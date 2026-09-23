@@ -61,6 +61,15 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 
 URL = os.environ.get("OSMO_FFT_URL", "http://127.0.0.1:8080/psd")
+# [2026-09-23] LE DESCENDANT EN FOND, LE MONTANT PAR-DESSUS. Le montant seul
+# (src=ms) n a de signal que quand le mobile emet (RACH, canal dedie) : entre
+# deux, l encart montrait un plancher plat, et la FFT paraissait sporadique. Le
+# descendant (src=bts, /tmp/iq_fft.fifo que pont.py remplit) porte en continu
+# la BCCH, la CCCH et donc le paging. On le trace en permanence, et le montant
+# se superpose en orange des qu il porte une rafale.
+# OSMO_FFT_2G=ms retablit l ancien affichage (montant seul).
+FFT_2G = os.environ.get("OSMO_FFT_2G", "bts+ms")
+UL_ACTIF_DB = float(os.environ.get("OSMO_FFT_UL_ACTIF_DB", "20"))
 OUT = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 PERIOD = float(os.environ.get("OSMO_FFT_PERIOD", "1"))
 FADE_S = float(os.environ.get("OSMO_FFT_FADE", "3"))
@@ -471,7 +480,7 @@ def render_interstp(op):
     return img
 
 
-def render_live(data):
+def render_live(data, data_ul=None):
     img = base_moitie(BAS).copy()
     d = ImageDraw.Draw(img)
     # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
@@ -493,7 +502,9 @@ def render_live(data):
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
     split = x0 + int((x1 - x0) * 0.56)
     # Spectre
-    d.text((x0, y0), "Spectre I/Q du mobile  ·  montant (UL)", font=F_TITLE, fill=(88, 166, 255))
+    titre = ("Spectre I/Q du mobile  ·  montant (UL)" if FFT_2G == "ms"
+             else "Spectre I/Q  ·  DL + UL")
+    d.text((x0, y0), titre, font=F_TITLE, fill=(88, 166, 255))
     arfcn = data.get("arfcn", "?") if data else "?"
     tag = f"ARFCN {arfcn}"
     d.text((split - 12 - d.textlength(tag, font=F_SMALL), y0 + 2), tag, font=F_SMALL, fill=(63, 185, 80))
@@ -512,6 +523,14 @@ def render_live(data):
         for x, y in pts:
             d.line((x, y, x, py1 - 1), fill=(30, 70, 110))
         d.line(pts, fill=(88, 210, 255), width=1)
+        ul = data_ul.get("psd") if data_ul else None
+        if ul and max(ul) - min(ul) >= UL_ACTIF_DB:
+            # Rafale montante : sa courbe par-dessus, et dans la chute d eau le
+            # max des deux, pour qu un RACH ou un bloc SDCCH y laisse sa trace.
+            vul = resample(normalize(ul, data_ul.get("dr", 40)), sw)
+            d.line([(sx0 + x, py1 - 1 - int(v * (psd_h - 4))) for x, v in enumerate(vul)],
+                   fill=(255, 166, 60), width=1)
+            vals = [max(a, b) for a, b in zip(vals, vul)]
         history.insert(0, vals)
     else:
         d.text((sx0 + 8, py0 + 8), "pas de flux", font=F_SMALL, fill=(248, 81, 73))
@@ -884,13 +903,21 @@ def main():
         # l encart resterait sur le strip. Sa vue est « prete » des qu il est
         # selectionne - c est la matrice et son journal qui font le contenu.
         if op_courant.get("MODE") == "interstp":
-            data, ready = None, True
+            data, data_ul, ready = None, None, True
         else:
-            data = None
+            data = data_ul = None
             try:
-                data = fetch("ms")
+                data = fetch("ms" if FFT_2G == "ms" else "bts")
             except Exception:
                 data = None
+            if FFT_2G != "ms":
+                try:
+                    data_ul = fetch("ms")
+                except Exception:
+                    data_ul = None
+                # Pas de descendant (pont sans FIFO DL) : le montant seul, comme avant.
+                if not (data and "psd" in data) and data_ul and "psd" in data_ul:
+                    data, data_ul = data_ul, None
             ready = bool(data) and "psd" in data
         # La 4G est « la » des que srsue tient son port ZMQ : le spectre peut
         # etre vide (pas de rafale), mais l encart montre alors ce silence,
@@ -915,7 +942,7 @@ def main():
                 history.clear()
             else:
                 live = (render_interstp(op_courant)
-                        if op_courant.get("MODE") == "interstp" else render_live(data))
+                        if op_courant.get("MODE") == "interstp" else render_live(data, data_ul))
                 img.paste(Image.blend(base_moitie(BAS), live, alpha["bas"] * op), (0, BAS[0]))
             if alpha["haut"] <= 0.0:
                 historique_lte.clear()

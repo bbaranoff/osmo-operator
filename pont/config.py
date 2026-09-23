@@ -21,6 +21,7 @@ class Config:
     ul_fn_advance: int
     window_tol: int
     window_essais: int
+    ul_retard_max: int
     rssi: int
     gsmtap_port: int
     sch_port: int
@@ -63,6 +64,10 @@ def parse(argv=None):
         # Combien de fois re-attendre un burst montant reveille trop tot
         # (horloge asservie au DSP, cf. trx.py Transmitter.run).
         window_essais=int(_env("PONT_WINDOW_ESSAIS", "12")),
+        # Retard maximal (trames) d'un burst montant encore envoye a la BTS,
+        # cf. trx.py Transmitter.run. 0 = jeter tout burst en retard (defaut du
+        # paquet ; pont.py, le point d'entree DSP, pose 26).
+        ul_retard_max=int(_env("PONT_UL_RETARD_MAX", "0")),
         rssi=int(_env("PONT_RSSI", "60")),
         gsmtap_port=4730,
         sch_port=4731,

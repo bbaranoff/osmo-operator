@@ -329,6 +329,20 @@ class Transmitter(threading.Thread):
                     self.stats.ul_late += 1
                 continue
             if off < -self.cfg.window_tol:
+                # [2026-09-23] EN RETARD N'EST PAS PERDU. osmo-bts-trx range un
+                # burst montant par SON fn, compare au dernier fn traite du meme
+                # canal logique (scheduler.c, trx_sched_route_burst_ind) ; l'heure
+                # d'arrivee n'y entre pas -- un vrai transceiver livre toujours le
+                # montant apres coup. Le jeter ici ne protegeait donc rien, et
+                # coutait cher : 141 bursts emis pour 314 jetes (69 %) sur le run
+                # de 11:04, chaque trame LAPDm retransmise 2 a 5 fois par T200,
+                # le SMS MT a 12 s au lieu de 2. Le retard vient du reveil du
+                # thread (GIL partage avec l'enregistrement I/Q) et des variations
+                # de l'horloge asservie au DSP, pas du BTS.
+                # On l'envoie tant qu'il reste dans la multitrame (la BTS refuse
+                # au-dela de mf_period, « Too many contiguous TDMA frames »).
+                # PONT_UL_RETARD_MAX=0 retablit l'ancien comportement (jeter).
                 self.stats.ul_late += 1
-                continue
+                if -off > self.cfg.ul_retard_max:
+                    continue
             self.trx.send_ul(tn, fn_air, burst, cipher)

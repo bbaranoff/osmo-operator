@@ -194,7 +194,23 @@ class Uplink(threading.Thread):
         # Le second partait sur les trames SDCCH montantes, et la SACCH
         # montante restait vide : le BTS ne voyait plus rien sur sa liaison
         # lente et lachait le canal quelques secondes apres l'etablissement.
+        #
+        # [2026-09-23] Et le SAPI 3 ? Son adresse LAPDm est 0x0d / 0x0f, et une
+        # trame SAPI 3 sans information (UA, SABM, RR, DISC) porte en position 2
+        # un indicateur de longueur L=0, soit 0x01 -- exactement ce que le test
+        # ci-dessus prenait pour l'adresse SAPI 0 d'un bloc SACCH. Releve du
+        # banc, MT SMS vers le mobile du pont :
+        #   0f 73 01 2b 2b ...     -> UA SAPI 3 (reponse au SABM du BTS)
+        # parti sur la SACCH montante : le BTS le decodait en « Unknown (SS) »,
+        # n'etablissait jamais le SAPI 3, et le CP-DATA du SMS ne partait pas
+        # (MSC : WAIT_CP_ACK puis abandon au bout de 7 s, a chaque essai).
+        # Octet 0 = 0x0d / 0x0f est ambigu (puissance 13 / 15 d'un en-tete
+        # SACCH) : on ne tranche SACCH que si la lecture SACCH tient debout --
+        # TA <= 63 (6 bits) et un vrai champ de controle LAPDm en position 3,
+        # pas le bourrage 0x2b qui suit une trame SAPI 3 vide.
         sacch = l2[0] not in (0x01, 0x03) and l2[2] in (0x01, 0x03)
+        if sacch and l2[0] in (0x0d, 0x0f):
+            sacch = l2[1] <= 63 and l2[3] != 0x2b
         if sacch:
             base = (plan.sacch_dl102[ss % plan.n_sub] + 15) % 102
             fn0 = self._next_fn(4, lambda f: f % 102 == base)
@@ -213,10 +229,34 @@ class Uplink(threading.Thread):
             self.tch_epoch = -1
             return
         if self.tch_epoch != self.tch.seq:
+            # [2026-09-22] NE PLUS JETER LA PREMIERE FACCH APRES L'ARMEMENT.
+            #
+            # `skip_pending()` avance le curseur sur TOUT ce qui est deja ecrit
+            # dans la bande laterale, et le `return` sortait sans rien traiter.
+            # Or `tch.seq` est incremente par `tch.arm()`, appele quand le pont
+            # decode l'ASSIGNMENT COMMAND descendante -- et l'ASSIGNMENT
+            # COMPLETE est justement LA PREMIERE chose que le mobile emet sur le
+            # nouveau TCH. Elle tombait donc exactement dans cette fenetre et
+            # etait marquee « deja vue ».
+            #
+            # Mesure du 2026-09-22, appel vers 600 : le mobile emet bien
+            # « ASSIGNMENT COMPLETE (cause #0) » (gsm48_rr.c:4720, 18:55:47),
+            # le pont journalise « FACCH montante » SANS le suffixe
+            # « , ASSIGNMENT COMPLETE » -- donc ce n'etait pas elle -- et le BSC
+            # conclut « Assignment failed in state WAIT_RR_ASS_COMPLETE, cause
+            # EQUIPMENT FAILURE: Timeout » (assignment_fsm.c:1057).
+            #
+            # On garde le saut pour la SACCH (un rapport de mesure perime ne
+            # sert a rien) mais on TRAITE la FACCH en attente. Le risque
+            # residuel -- rejouer une FACCH de la session precedente -- est
+            # borne a un bloc et LAPDm le rejettera, la ou perdre l'ASSIGNMENT
+            # COMPLETE fait echouer l'appel a tous les coups.
+            # PONT_FACCH_SKIP=1 retablit l'ancien comportement.
             self.tch_epoch = self.tch.seq
-            self.sb_facch.skip_pending()
             self.sb_sacch.skip_pending()
-            return
+            if os.environ.get("PONT_FACCH_SKIP", "0") == "1":
+                self.sb_facch.skip_pending()
+                return
         b = self.sb_facch.new_record()
         if b is None:
             return
