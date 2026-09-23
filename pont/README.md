@@ -523,7 +523,44 @@ pont. Ce qui change :
   DSP attend la BTS : l'avance tombait au plancher, le SDCCH DL se trouait, l'UA
   se perdait et le mobile répétait son SABM. Une ligne « marge DL réelle … min
   … moy » toutes les 10 s dans `pont.log` : c'est elle qui doit rester > 0.
-  `PONT_MARGE_DL=0` revient à l'avance fixe de `Clock`.
+  `PONT_MARGE_DL=0` revient à l'avance fixe de `Clock`. Correctif **confirmé
+  au run du 2026-09-23 20:22** : aucun « SABM frame with information not
+  allowed » au BSC, marge DL réelle moyenne +22.3 à +38.9.
+
+### État au 2026-09-23 — runs du banc DSP de 20:22 et 20:32
+
+Mobile DSP = MSISDN 100101, l'autre = 100102. Constaté :
+
+* appel 100101 → 600 (écho Asterisk), ACTIVE 20:22:55 → DISCONNECT 20:23:27,
+  parole audible dans les deux sens ; TCH dl=1607 ul=1601 trames, perdus=11 ;
+* appel mobile à mobile 100102 → 100101 via osmo-sip-connector, ACTIVE
+  20:24:28, release normal 20:24:32 ;
+* SMS MO/MT dans les deux sens (20:23:49-55, 20:24:05-09), acquittés ;
+* A5/1 sur les **cinq** établissements (« chiffrement descendant confirmé »
+  à 20:22:45, 20:22:53, 20:23:53, 20:24:04, 20:24:24), Kc retenu sans casse
+  jusqu'à l'IMMEDIATE ASSIGNMENT suivante.
+
+Ouvert, par ordre d'importance :
+
+1. **B_BFI** sur toutes les trames de parole : 40/40 états `a_dd` à 20:22,
+   `vues=2200 bfi=2200` à 20:32 ; `err` = 0 sur les 19 c214 du début
+   d'appel, 15 à 93 ensuite. Trames réellement dégradées, FR intelligible
+   malgré tout ; signal ou cœur C54x, non tranché.
+2. **LOS à 20:32:45** : premier appel du run 20:32 (ACTIVE 20:32:30), 408
+   blocs jetés jusqu'au LOS, dont 32 SACCH : SACCH du TCH perdu en entier,
+   `LOSS counter for ACCH` 31 → 0. L'appel suivant (20:33:39 → 20:34:06) est
+   propre.
+3. SACCH descendant du SDCCH/8 : 30 blocs jetés par le mobile à 20:22, dont
+   18 SACCH (« LOSS counter for ACCH »).
+4. UI SAPI 0 sur le TCH (BSC 20:22:54, « unimplemented Abis RLL message »),
+   non bloquante.
+5. Horloge : avance visée au plafond de 40 cinq fois (avance BTS −25 à −29),
+   marge DL réelle min +0 à la première mesure de chaque run.
+
+**Pas une anomalie** : les échecs CRC du moniteur TCH descendant du pont (30
+sur les 32 premières trames de l'appel 600, 103 en fin d'appel) ; la BTS n'a
+rien à mettre sur le TCH tant que le RTP ne coule pas. Décodage du pont,
+indépendant du DSP. Détail : `navigation/STATUS.md` § 0.
 
 ---
 
