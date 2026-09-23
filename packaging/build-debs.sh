@@ -175,6 +175,9 @@ if wanted pont; then
     P="$WORK/pont"; D="$P/opt/GSM/osmo-operator/pont"
     mkdir -p "$D" "$P/DEBIAN"
     install -m644 "$OSMO_OPERATOR_SRC"/pont/*.py "$D/"
+    # [2026-09-23] Le pont DSP (pont_dsp.py -> pont.dsp.main).
+    mkdir -p "$D/dsp"
+    install -m644 "$OSMO_OPERATOR_SRC"/pont/dsp/*.py "$D/dsp/"
     install -m644 "$OSMO_OPERATOR_SRC/pont/README.md" "$D/" 2>/dev/null || true
     chmod 755 "$D/pont.py" "$D/pont_dsp.py"
     write_preinst_guard "$P/DEBIAN" /opt/GSM/osmo-operator

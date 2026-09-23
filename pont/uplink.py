@@ -144,18 +144,27 @@ class Uplink(threading.Thread):
         self.tx.schedule(0, self._next_fn(4, lambda f: f % 51 in gsm.RACH_SLOTS_51), burst, False)
         self.stats.rach += 1
 
+    def _route_sdcch(self, l2):
+        """Vrai si le bloc SDCCH montant part en FACCH (consomme ici).
+
+        [2026-09-23] Extrait tel quel de _poll_sdcch pour que le pont DSP
+        (pont/dsp/uplink.py) le surcharge ; le montage grgsm garde ce code."""
+        tn_tch = self.tch.active_tn()
+        if tn_tch is not None and not self.tch.is_open():
+            if gsm.rr_message_type(l2)[1] == gsm.RR_ASSIGNMENT_COMPLETE:
+                self.tch.prove("ASSIGNMENT COMPLETE")
+                self._queue_facch(l2)
+                return True
+        elif self.tch.is_open():
+            self._queue_facch(l2)
+            return True
+        return False
+
     def _poll_sdcch(self):
         b = self.sb_sdcch.new_record()
         if b is not None:
             l2 = b[16:39]
-            tn_tch = self.tch.active_tn()
-            if tn_tch is not None and not self.tch.is_open():
-                if gsm.rr_message_type(l2)[1] == gsm.RR_ASSIGNMENT_COMPLETE:
-                    self.tch.prove("ASSIGNMENT COMPLETE")
-                    self._queue_facch(l2)
-                    return
-            elif self.tch.is_open():
-                self._queue_facch(l2)
+            if self._route_sdcch(l2):
                 return
             # [2026-09-21] Le bloc ATTEND que le canal soit connu, il n'est
             # plus jete. La couche 1 publie le SABM au moment meme ou elle
