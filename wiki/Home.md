@@ -142,7 +142,7 @@ NAS en clair, SGs, M3UA).
 - VM x86_64, noyau patché (`CONFIG_PPP`, absent du `linux-postmarketos-stable` amont) fourni prébuilt (Git LFS) dans `/opt/user_interface/kernel/pmos/`.
 - Data 4G : NetworkManager → pppd (`ATD*99***1#`) → virtio-console `osmo.data` → `osmo-phonesim-banc.py` → netns UE → srsUE → srsENB → UPF → Internet.
 - Voix/SMS 2G : seconde virtio-console `osmo.modem`, `osmo-phonesim-banc.py` joue le modem AT 27.007 (état lu sur les VTY de bsc, msc et mobile), oFono pilote.
-- Audio : deux chaînes PulseAudio duplex (intel-hda) — pont GAPK vers le mobile osmocom-bb, et une chaîne avec annulation d'écho.
+- Audio : deux chaînes PulseAudio duplex (intel-hda) — pont GAPK vers le mobile osmocom-bb, et une chaîne avec annulation d'écho. Allégée à chaque start (speech-dispatcher arrêté, `osmo_rec` en 8 kHz mono, stream-restore sans restauration de périphérique). Annuleur webrtc par défaut, son `aec_args` passé en un seul argument — sans cela l'AGC coupait le micro ; `AUDIO_AEC_METHOD=speex` reste possible.
 
 ### Ports et accès
 
@@ -181,7 +181,7 @@ journalctl -u osmo-banc -f      # si lancée en service
 | `./start-direct.sh --list` | le plan, sans lancer |
 | `./start-direct.sh --menu` | pose les questions au lieu de deviner |
 | `./start-direct.sh --regen` | régénère les configs depuis les gabarits |
-| `./start-direct.sh --dsp` | fork qosmo-dsp : le vrai DSP C54x (le mobile ne campe pas encore) |
+| `./start-direct.sh --dsp` | banc DSP C54x (c54x_exe, mask-ROM TI) : le mobile campe et fait son LU ; même pile que grgsm |
 | `./start-direct.sh --node 2 --hub-ip IP` | ce nœud = 2 d'un WAN, ASP vers l'inter-STP |
 | `./start-direct.sh --wan` | WAN à N nœuds, questions interactives |
 | `./generate_configs.sh ARFCN=520` | change une valeur de `globals.conf` |
@@ -192,10 +192,11 @@ journalctl -u osmo-banc -f      # si lancée en service
 
 | Fichier | Rôle |
 |---|---|
-| `globals.conf` | la configuration réseau, fait autorité sur ses 26 variables |
+| `globals.conf` | la configuration réseau ; une variable posée non vide sur la ligne de commande la surcharge (depuis le 2026-09-22) |
 | `environment/load.env` | l'ordre de chargement des profils et défauts |
 | `/etc/osmocom/coeur.env` | `N_MS`, écrit par l'ISO |
 | `/etc/osmo-wan.conf`, `/etc/osmo-role` | table WAN, rôle du nœud |
 | `/etc/default/osmo-banc` | `OSMO_BANC_ARGS="--dsp"` pour le service |
 | `/var/log/osmocom/{qemu,bridge,run.sh}.log` | QEMU, pont, orchestration |
+| `/tmp/c54x-pont/`, `/dev/shm/pont.log` | banc DSP : liens vers ses journaux (vrais fichiers aux chemins du panneau), journal du pont |
 | `pont/README.md` | à lire **avant** de chercher une panne radio dans un compteur de CRC |

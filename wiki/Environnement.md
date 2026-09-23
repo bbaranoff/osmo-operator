@@ -15,7 +15,7 @@ où elle est lue, par qui, et comment vérifier ce que QEMU a **réellement** vu
 1. ligne de commande      VAR=x ./start-direct.sh          gagne toujours (sauf § 2)
 2. /etc/osmocom/coeur.env N_MS                             `:=`, ne peut rien écraser
 3. options                --profile --dsp --node --wan …
-4. globals.conf           26 variables réseau              `=` : FAIT AUTORITÉ sur elles
+4. globals.conf           26 variables réseau              `=`, mais l'appelant non vide gagne (§ 2)
 5. environment/load.env
      modes.env            le profil                        `:=`
      paths.env            où sont les choses               `:=`
@@ -36,9 +36,15 @@ ligne de commande.
 déclare — identité (MCC, MNC, OP_NAME), sécurité (ENCRYPTION, SIM_ALGO, KI, IMSI,
 IMEI), radio (ARFCN, BAND, BSIC, LAC, CELL_ID, IPA_UNIT_ID, MS_MAX_POWER,
 RXLEV_ACCESS_MIN, CELL_RESEL_HYST), GPRS (BVCI, NSEI, NSVCI, APN), SMS_SC,
-MS_COUNT, N_OPERATORS, HOST_IP — **il écrase l'environnement, ligne de commande
-comprise**. C'est voulu : la configuration du réseau vit en un seul endroit, et
-`ARFCN=520 ./start-direct.sh` ne doit pas créer une cellule fantôme.
+MS_COUNT, N_OPERATORS, HOST_IP — il écraserait l'environnement s'il était
+sourcé seul.
+Depuis le 2026-09-22, `start-direct.sh` met de côté celles de ces variables que
+l'appelant a posées **non vides**, source le fichier (`set -a`), puis les repose,
+et imprime « globals.conf surchargé par l'environnement : … ». La ligne de
+commande gagne donc aussi sur ces 26 variables ; un vide signifie toujours
+« calculé » et ne surcharge rien. Seul `start-direct.sh` applique cette règle,
+et l'en-tête de `globals.conf` dit encore l'inverse (« écrasent leur homonyme
+dans l'environnement »).
 
 Tout ce qu'il ne déclare pas (`CALYPSO_*`, `MODE`, `LOG_DIR`, `QEMU_*`…) le
 traverse intact. Pour changer une de ses 26 valeurs :
@@ -53,10 +59,10 @@ Un champ vide = calculé (souvent depuis le numéro d'opérateur). Ne figez les
 champs `[auto/opérateur]` que si `N_OPERATORS=1`, sinon les opérateurs se
 marchent dessus.
 
-Cas concret : `ENCRYPTION`. `start-direct.sh` pose `: "${ENCRYPTION:=a5 1}"`,
-mais `globals.conf` est lu **avant** et fait autorité — la valeur qui s'applique
-vient de là. Le `:=` du script n'est qu'un repli pour l'ISO nue ou un conteneur
-sans `globals.conf`.
+Cas concret : `ENCRYPTION`. `ENCRYPTION="a5 0" ./start-direct.sh --dsp` donne
+a5 0 ; avant le 2026-09-22 il donnait a5 1, en silence. Sans rien sur la ligne de
+commande, la valeur vient de `globals.conf` ; le `: "${ENCRYPTION:=a5 1}"` du
+script n'est qu'un repli pour l'ISO nue ou un conteneur sans `globals.conf`.
 
 ## 3. `:=` contre `=` dans vos propres fichiers
 
@@ -108,11 +114,11 @@ elle a été reposée quelque part entre 1 et 8 — remontez la chaîne du § 1.
 | Variable | Défaut | Lu par | Rôle |
 |---|---|---|---|
 | `CALYPSO_PROFILE` / `MODE` | `faketrx-qemu` (script), `core` (modes.env) | modes.env, run.sh | le profil ; `MODE` gagne s'il est posé |
-| `CALYPSO_FORK` | `qosmo-grgsm` | paths.env, start-direct | `qosmo-dsp` = `--dsp` |
+| `CALYPSO_FORK` | `qosmo-grgsm` | paths.env, start-direct | `--dsp` ne le change plus ; qosmo-dsp n'est plus construit depuis le 17/09, reste accessible à la main (`CALYPSO_FORK=qosmo-dsp`) |
 | `OQC_ROOT` | `../<fork>` sinon `$GSM_ROOT/<fork>` | start-direct | l'arbre du fork ; `OQC_ROOT=/chemin ./start-direct.sh` |
 | `RUN_SH` | `$OQC_ROOT/run.sh` | start-direct | le `run.sh` exécuté (surchargeable depuis le 2026-08-08) |
 | `QOSMO_LAUNCHER` | `/usr/local/bin/<fork>` | 40-qemu.sh | le lanceur C ; absent → `qemu-system-arm` historique |
-| `CALYPSO_BRIDGE` | `pont` (`none` avec `--dsp`) | run.sh | `none` = QEMU + BTS seuls ; **jamais `ipc`** sur qosmo-dsp (veut dire MS#1 via osmo-trx-ms-ipc, firmware non lancé) |
+| `CALYPSO_BRIDGE` | `pont` (`none` avec `--dsp`) | run.sh | `none` = QEMU + BTS seuls ; avec `--dsp`, c'est `c54x_exe/run.sh` qui lance `pont_dsp.py` ; **jamais `ipc`** sur qosmo-dsp (veut dire MS#1 via osmo-trx-ms-ipc, firmware non lancé) |
 | `CALYPSO_NO_ATTACH` | | start-direct | `1` = ne pas s'attacher au tmux (`osmo-banc.service`) |
 | `CALYPSO_LANG` | | run.sh | langue des messages |
 | `CALYPSO_FIXES` | | QEMU (fixes.env) | le sas des correctifs en attente de validation |
@@ -128,6 +134,18 @@ elle a été reposée quelque part entre 1 et 8 — remontez la chaîne du § 1.
 | `MS_COUNT` | `2` | start-direct, globals | mobiles lancés |
 | `PHY_MODE` | `faketrx` | run.sh (Docker) | `faketrx` / `virtphy` / `qemu` ; `qemu` force `N_MS=1` |
 | `OSMO_STP`, `OSMO_MSC`, … | nom nu (PATH) | paths.env | binaires Osmocom ; vide = paquets |
+
+Banc DSP (`--dsp`) : ces variables sont lues par **c54x_exe** et son `run.sh`,
+pas par QEMU — elles n'apparaissent donc pas dans le manifeste `calypso`.
+
+| Variable | Défaut | Lu par | Rôle |
+|---|---|---|---|
+| `BANC_DSP` | `$GSM_ROOT/c54x_exe/run.sh` | start-direct | le banc lancé après le plan du fork ; `none` pour le couper |
+| `INSNS` | `120000` (start-direct), `80000` (c54x_exe/run.sh seul) | c54x_exe (`--insns`) | plafond d'instructions DSP par trame |
+| `LOCKSTEP` | `1` | c54x_exe/run.sh | QEMU n'avance la trame que quand le DSP a fini la précédente |
+| `IQ` | `none` | c54x_exe/run.sh | pas de cellule synthétique : les bursts viennent de la BTS |
+| `CALYPSO_BSP_STREAM` | `1` | c54x_exe (`src/pont.c`) | un burst TS0 par trame, dans l'ordre des FN |
+| `CALYPSO_RHEA_DMA_XFER` | `1` | c54x_exe (`src/pont.c`) | sans lui la page API n'est jamais remplie |
 
 Les domaines fins (`bsp.env`, `dsp.env`, `fbsb.env`, `shunt.env`, `rf.env`,
 `armdsp.env`, `opcodes.env`) portent 311 variables dont **116 béquilles** :

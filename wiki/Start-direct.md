@@ -40,10 +40,14 @@ Dans cet ordre, et **l'ordre décide de qui gagne** (détail : [Environnement.md
    100101 et le second mobile se faisait créer à la volée sans Ki, injoignable.
    Le fichier utilise `:=` : un `N_MS=3` posé dans l'environnement gagne.
 2. **Options de la ligne de commande** (`--profile`, `--dsp`, `--node`…).
-3. **`globals.conf`** — **fait autorité sur ses 26 variables réseau** (MCC,
-   MNC, OP_NAME, ENCRYPTION, ARFCN, BAND, LAC, APN, MS_COUNT, N_OPERATORS,
-   HOST_IP…) : elles écrasent leur homonyme de l'environnement. Tout le reste
-   passe intact. Champ vide = calculé (souvent depuis le numéro d'opérateur).
+3. **`globals.conf`** — référence pour ses 26 variables réseau (MCC, MNC,
+   OP_NAME, ENCRYPTION, ARFCN, BAND, LAC, APN, MS_COUNT, N_OPERATORS,
+   HOST_IP…), **sauf celles que l'appelant a déjà posées et non vides**
+   (depuis le 2026-09-22) : `start-direct.sh` les relève, lit le fichier, puis
+   les repose, et imprime « globals.conf surchargé par l'environnement : … ».
+   `ENCRYPTION="a5 0" ./start-direct.sh --dsp` donne bien a5 0. Une valeur
+   vide ne surcharge rien (vide = calculé, souvent depuis le numéro
+   d'opérateur). Tout le reste passe intact.
    Modifier : `vim globals.conf` ou `./generate_configs.sh ARFCN=520`.
 4. **`environment/load.env`** — `modes.env` (le profil), `paths.env` (où sont
    les choses), puis les fichiers par domaine. Tout en `:=` : le premier qui
@@ -60,7 +64,8 @@ Dans cet ordre, et **l'ordre décide de qui gagne** (détail : [Environnement.md
 Défaut : **`faketrx-qemu`** (alias `hybrid`) — cœur + BTS#0 QEMU + BTS#1 faketrx.
 `--profile <nom>` ou le mode en positionnel le fixe ; `CALYPSO_PROFILE` ou
 l'historique `MODE` le fixent depuis l'environnement (`MODE` gagne s'il est posé).
-`--dsp` ne choisit `qemu` que si personne n'a choisi avant lui.
+`--dsp` ne touche plus au profil (depuis le 2026-09-22) : il garde le défaut
+`faketrx-qemu`, side-car compris. Un profil nommé explicitement gagne toujours.
 
 | Profil | Ce qui tourne |
 |---|---|
@@ -167,7 +172,15 @@ démarrés au lieu de les sauter.
    spectres I/Q sur `:8081` (`fft-web/fft_web.py`).
 3. **Raccord mobile oFono** — le téléphone physique (postmarketOS, PPP) ou le
    QEMU Android voit le banc comme un modem.
-4. **Transmission à `run.sh`** : `exec`, avec le profil et tout l'environnement.
+4. **Audio (PulseAudio allégé)** — lance `scripts/audio-chain.sh 5` (journal
+   `/tmp/osmo-audio-chain.log`) : arrête speech-dispatcher, passe `osmo_rec` en
+   8 kHz mono, pose `module-stream-restore` sans `restore_device`.
+   `AUDIO_ALLEGER=0` : ne pas alléger (la chaîne est posée quand même). `AUDIO_AEC_METHOD` : `webrtc` par défaut
+   (`speex` possible). `AUDIO_PENDANT_APPEL=1` : la chaîne lourde n'est posée
+   qu'entre « Endpoint actif » et « Endpoint disparu » de gapk-auto (défaut 0).
+   `audio-chain.sh --reinit` : repartir d'une chaîne propre sans relancer
+   PulseAudio.
+5. **Transmission à `run.sh`** : `exec`, avec le profil et tout l'environnement.
    Toute variable `CALYPSO_*` passée en préfixe arrive **intacte** jusqu'à
    `run.sh`, ses `run_modules/` et QEMU (`CALYPSO_LANG=en`, `CALYPSO_NO_ATTACH=1`,
    `CALYPSO_BRIDGE=none`…).
@@ -176,6 +189,33 @@ démarrés au lieu de les sauter.
 attente de `/tmp/osmocom_l2` → pont → attente des ticks UDP 6700 → `mobile`, puis
 le cœur, Asterisk, SMSC. Sauf `--no-attach` / `CALYPSO_NO_ATTACH=1` (ce que pose
 `osmo-banc.service` : personne devant), le script s'attache au tmux.
+
+### 8-dsp. Le banc DSP
+
+Avec `--dsp`, `RUN_SH` reste celui du fork et reçoit
+`--skip qemu,pty,osmocon,l2 --no-attach`. Ensuite `exec c54x_exe/run.sh`
+(`BANC_DSP`, s'il est exécutable) prend le relais avec `MODE=dsp PONT=1`, `IQ=none`, `INSNS=120000`,
+`LOCKSTEP=1`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1` — en `:=`, donc
+surchargeables. Les cinq étapes :
+
+1. `c54x_exe --arm` — le DSP : socket `/tmp/calypso_dsp.sock`, API RAM partagée,
+   bursts DL en `udp/6702` ;
+2. `qemu-system-arm` de `/opt/GSM/qosmo` (`CALYPSO_DSP_EXTERN=1`) — l'ARM seul ;
+3. `osmocon` ;
+4. `mobile` (`mobile_pont.cfg`, VTY **4347**) ;
+5. `pont/pont_dsp.py`.
+
+`CALYPSO_BRIDGE` vaut `none` : ce n'est pas `start-direct.sh` qui lance le pont.
+`--stop`, `--regen` et l'arrêt avant démarrage arrêtent aussi le banc DSP, même
+sans `--dsp` ; `--status` et `--check-paths` le montrent (avec `--dsp`). Le
+résumé et oFono visent la VTY 4347 (`OSMO_MOB_VTY_PORT`). `BANC_DSP=none` : la
+pile seule.
+
+Journaux : les vrais fichiers sont aux chemins du panneau
+(`/run/user/0/osmo-nitb/logs/{qemu,osmocon,mobile}.log`, `/dev/shm/pont.log`),
+avec des liens dans `/tmp/c54x-pont`. `--assembly-logs` (`ASSEMBLY_LOGS=1`,
+`ASSEMBLY_LOGS_FLAGS`, `ASSEMBLY_LOGS_FILTRE`) écrit
+`/tmp/c54x-pont/qemu-asm.log`, mais le banc perd alors le temps réel.
 
 ---
 
@@ -187,7 +227,12 @@ le cœur, Asterisk, SMSC. Sauf `--no-attach` / `CALYPSO_NO_ATTACH=1` (ce que pos
 Modes : faketrx-qemu (défaut) | faketrx | qemu | noproc | core | hybrid
 
 Choix de la pile
-  --dsp                fork qosmo-dsp : le DSP C54x décode lui-même (le mobile ne campe pas encore)
+  --dsp                banc DSP C54x : le C54x tourne hors QEMU (/opt/GSM/c54x_exe, mask-ROM TI)
+                       et décode FCCH/SCH/BCCH lui-même ; le mobile campe (SI1-4, lai=001-01-1)
+                       et fait sa mise à jour de localisation. Même profil et même pile qu'en
+                       grgsm, seuls qemu,pty,osmocon,l2 passent à c54x_exe/run.sh
+                       (BANC_DSP=none : la pile seule)
+  --assembly-logs      trace asm de l'ARM (/tmp/c54x-pont/qemu-asm.log) ; plus de temps réel
   --grgsm              fork qosmo-grgsm (défaut)
   --launcher <bin>     lanceur C de QEMU (défaut /usr/local/bin/<fork>)
   --profile <nom>      force le profil

@@ -11,6 +11,21 @@ les redécouvrir.
 
 ---
 
+## 0. Deux montages, deux points d'entrée
+
+Depuis le 2026-09-01, le pont est un **paquet** (`trx`, `downlink`, `uplink`,
+`cipher`, `state`, `gsm`, `record`, `stats`, `config`, `airmesh`). Depuis le 2026-09-23, il a deux
+points d'entrée sur ce paquet :
+
+| point d'entrée | montage | défauts posés avant l'import |
+|---|---|---|
+| `pont.py` | grgsm (L1 gr-gsm dans QEMU, GSMTAP 4730/4731) | `PONT_UL_RETARD_MAX=0` ; refuse `--dsp-port` |
+| `pont_dsp.py` → `pont.dsp.main` | DSP (`c54x_exe --arm`) ; `--dsp-port 6702` (ou `PONT_DSP_PORT`) obligatoire | `PONT_UL_RETARD_MAX=26`, `PONT_KC_RETENTION=1` |
+
+Les numéros de ligne cités aux §1 à 3ter (`pont.py:941-942`…) et les noms
+`ul_facch_from_sideband`, `_tn_epoque`, `tch_desarme` renvoient à l'**ancien**
+`pont.py` monolithique. Le montage DSP est décrit au § 8.
+
 ## 1. Le Kc — trois écrivains, aucun arbitrage
 
 ### Le symptôme
@@ -474,6 +489,44 @@ Conservées pour ne pas être réexplorées.
 
 ---
 
+## 8. Montage DSP (`pont_dsp.py`, sous-paquet `pont/dsp/`)
+
+Mêmes briques qu'en grgsm, mais l'état dédié suit le DSP au lieu du décodage du
+pont. Ce qui change :
+
+* **A5 descendant : fait par le DSP.** La mask-ROM programme le coprocesseur XIO
+  du Calypso (ports `0x2800..0x2818`, modélisé dans `qosmo/hw/arm/calypso/l1-dsp/calypso_a5.c`,
+  compilé dans c54x_exe) avec
+  `a_kc` et `a_a5fn`. Le pont n'applique donc plus le flux au DL : le faire en
+  plus renverrait le burst chiffré au décodeur. `PONT_DSP_DECHIFFRE=1` rétablit
+  l'ancien comportement, et va avec `CALYPSO_A5=0` sur c54x_exe. Le **montant**
+  reste chiffré par le pont.
+* **`TchDsp` — l'ASSIGNMENT COMMAND est une annonce.** `/dev/shm/calypso_tch_cfg`
+  est écrit comme avant, mais c54x_exe ne bascule le BSP qu'à la première tâche
+  TCHT/TCHA/TCHD posée par le firmware. Basculer à l'heure de la BTS remplaçait
+  les trames pas encore jouées — l'ASSIGNMENT COMMAND comprise. `abandon()`
+  écrit `seq+1, tn=0` : retour au SDCCH **sans lâcher le Kc**.
+* **`UplinkDsp`** — un bloc de `calypso_sdcch_ul` n'est **jamais** une FACCH (le
+  TCH passe par `calypso_tch_facch_ul`) ; une ASSIGNMENT FAILURE, ou un bloc
+  SDCCH alors que le mobile était sur le TCH, retire l'annonce. Le Kc est gardé
+  après la libération jusqu'à la prochaine IMMEDIATE ASSIGNMENT : la libération
+  se lit à l'heure du DSP, et la BTS chiffre encore.
+* **`DedicatedDsp`** — genres 2/3 = TCH/F et TCH/H dans `calypso_dcch_cfg` ;
+  `plan()` rend toujours le dernier SDCCH tant que la connexion vit, seul `0xFF`
+  la termine.
+* **`TrxDsp`** — le TS du TCH compte comme dédié **dès l'annonce** (osmo-bts
+  chiffre le TCH dès l'activation), toujours sous la garde de `cipher.dl_active`.
+* **`ClockDsp` — horloge en boucle fermée.** avance = `PONT_MARGE_DL` (16) − creux
+  de l'avance BTS sur `PONT_MARGE_FENETRE` (3 s), bornée à [`PONT_AVANCE_MIN` 10,
+  `PONT_AVANCE_MAX` 40]. Depuis le correctif qui suit le relevé de 19:06 (2026-09-23), l'avance BTS se mesure sur le
+  point visé (DSP + avance) et non sur l'horloge réelle, qui traîne dès que le
+  DSP attend la BTS : l'avance tombait au plancher, le SDCCH DL se trouait, l'UA
+  se perdait et le mobile répétait son SABM. Une ligne « marge DL réelle … min
+  … moy » toutes les 10 s dans `pont.log` : c'est elle qui doit rester > 0.
+  `PONT_MARGE_DL=0` revient à l'avance fixe de `Clock`.
+
+---
+
 ## Rejouer une experience
 
 `scripts/banc-repro.sh` fige toute la sequence : demarrage detache
@@ -496,9 +549,17 @@ appels suffisent, et deux runs successifs donnent `ECHEC/OK/ECHEC` puis
 
 | variable | effet |
 |---|---|
-| `PONT_TCH_TRACE=1` | une ligne par bloc TCH/F en échec : `fn/m26/idx/acc` (alignement), `A5` (déchiffrement et clé), `rc/ne/nb` (décodeur), et l'**histogramme des octets** de la fenêtre |
-| `PONT_KC_RETENTION=0` | désactive la rétention, pour comparer |
-| `PONT_A5=1..3` | force l'algorithme au lieu de suivre celui du Kc |
+| `PONT_TCH_TRACE=1` | *ancien pont, absent du paquet actuel* — une ligne par bloc TCH/F en échec : `fn/m26/idx/acc` (alignement), `A5` (déchiffrement et clé), `rc/ne/nb` (décodeur), et l'**histogramme des octets** de la fenêtre |
+| `PONT_KC_RETENTION=0` | désactive la rétention, pour comparer (défaut 1) |
+| `PONT_A5=1..3` | *ancien pont, absent du paquet actuel* — forçait l'algorithme au lieu de suivre celui du Kc |
+| `PONT_DSP_DECHIFFRE=1` | DSP : le pont déchiffre le DL (avec `CALYPSO_A5=0` sur c54x_exe) |
+| `PONT_UL_RETARD_MAX` | retard maximal (trames) d'un burst montant encore envoyé ; 0 = jeter (grgsm), 26 (DSP) |
+| `PONT_WINDOW_ESSAIS` | re-attentes d'un burst montant réveillé trop tôt (12) |
+| `PONT_HORLOGE=0` | horloge murale au lieu de l'horloge asservie au DSP |
+| `PONT_HORLOGE_AVANCE` / `_PERIODE` / `_KP` / `_PHASE_N` | asservissement : avance fixe (12), période (0.05 s), gain (1.0), phase (100) |
+| `PONT_MARGE_DL`, `PONT_AVANCE_MIN/MAX`, `PONT_MARGE_FENETRE` | `ClockDsp` (§ 8) : 16, 10/40, 3 s |
+| `PONT_FACCH_SKIP=1` | saute aussi la FACCH en attente au passage sur le TCH (ancien comportement) |
+| `PONT_AIRREC=0` | coupe l'enregistrement I/Q (`--no-record`), donc la FFT du panneau |
 | `CALYPSO_CANNED=NONE` | rien de canné, tout réel |
 
 Lecture des compteurs : `ne` est le nombre d'erreurs binaires, `nb` le nombre

@@ -37,7 +37,10 @@ systemctl start osmo-multi        # ajoute les conteneurs + inter-STP (docker re
 
 Options durables : `OSMO_BANC_ARGS="--dsp"` dans `/etc/default/osmo-banc`
 (`OSMO_MULTI_ARGS` dans `/etc/default/osmo-multi`). `launch.sh --dsp` les pose
-pour la session via `systemctl set-environment`.
+pour la session via `systemctl set-environment`. Avec `--dsp`, osmo-banc lance
+aussi `c54x_exe/run.sh` après le plan du fork (hand-off par `exec`) ;
+`systemctl stop` / `./start-direct.sh --stop` arrêtent le banc DSP même sans
+`--dsp`. Le mobile a alors sa VTY sur le port **4347**, et non 4247.
 
 Les unités sous `contrib/systemd/` appartiennent à QEMU en amont et ne relèvent
 pas de ce dossier.

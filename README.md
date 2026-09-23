@@ -32,7 +32,8 @@ Ce projet réalise ce qui s'apparente à un « DHCP pour SS7 » — l'automatisa
 
 | document | sujet |
 |---|---|
-| [`pont/README.md`](pont/README.md) | **Chiffrement A5, Kc et SACCH** — compte rendu de mesure. À lire avant de chercher une panne radio dans un compteur de CRC : les causes documentées là (Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant) se présentent **toutes** comme « le pont a des CRC ». |
+| [`pont/README.md`](pont/README.md) | **Chiffrement A5, Kc et SACCH** — compte rendu de mesure. À lire avant de chercher une panne radio dans un compteur de CRC : les causes documentées là (Kc écrasé, en-tête L1 du SACCH, remplissage de C0, `CALYPSO_CANNED` inopérant) se présentent **toutes** comme « le pont a des CRC ». Le pont a deux points d'entrée : `pont/pont.py` (grgsm, déchiffre A5 pour la L1 gr-gsm) et `pont/pont_dsp.py` (banc DSP, sous-paquet `pont/dsp/`). |
+| [`wiki/`](wiki/Home.md) | Home, Build, Environnement, Start-direct, Resultats — l'utilisation courante du banc |
 | [`environment/README.md`](environment/README.md) | variables d'environnement et résolution des chemins |
 | [`services/README.md`](services/README.md) | unités systemd livrées |
 | [`navigation/QUICKSTART.md`](navigation/QUICKSTART.md) | prise en main |
@@ -621,7 +622,25 @@ lanceur, `40-qemu.sh` retombe sur la ligne `qemu-system-arm` historique.
 Calypso émulé par conteneur). Pour faire tourner plusieurs MS virtuels, lancer
 plusieurs conteneurs (un par opérateur, chacun avec son bridge).
 
-### 11.4 Diagnostic
+### 11.5 Banc DSP (`c54x_exe`)
+
+Depuis le 2026-09-22, le C54x tourne **hors de QEMU** : `c54x_exe --arm`
+(`/opt/GSM/c54x_exe`, mask-ROM TI) partage l'API RAM avec l'ARM
+(`/dev/shm/calypso_api_ram`, socket `/tmp/calypso_dsp.sock`) et reçoit les
+bursts DL sur la BSP (`udp/6702`). QEMU (`/opt/GSM/qosmo`, `CALYPSO_DSP_EXTERN=1`)
+ne fait plus que l'ARM. Le pont du montage est `pont/pont_dsp.py`.
+
+```bash
+./start-direct.sh --dsp                   # la pile du fork (sans qemu,pty,osmocon,l2), puis le banc DSP
+MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh  # la seule chaîne mobile : c54x_exe, QEMU, osmocon, mobile, pont
+```
+
+État : camp (SI1-4, lai=001-01-1) et mise à jour de localisation OK ; appels TCH
+en cours de validation. `qosmo-dsp` (osmo-trx-ipc + calypso-ipc-device) n'est
+plus construit depuis le 17/09. Détail des étapes et des variables :
+[`wiki/Start-direct.md`](wiki/Start-direct.md) § 8-dsp.
+
+### 11.6 Diagnostic
 
 ```bash
 # tmux : fenêtres qemu / bridge / bts / ue_g1

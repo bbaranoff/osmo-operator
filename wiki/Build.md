@@ -152,6 +152,9 @@ après coup. `/etc/osmocom/coeur.env` (écrit par l'ISO) porte `N_MS`.
 sudo dpkg -i packaging/dist/*.deb  # refuse de s'installer par-dessus un clone git au même chemin
 ```
 
+Le paquet `pont` embarque `pont.py` et `pont_dsp.py` (exécutables) et le
+sous-paquet `pont/dsp/` depuis le 2026-09-23.
+
 `packaging/snapshot-lte-debs.sh` fige Open5GS / srsRAN ; `build-pmos-kernel-deb.sh`
 le noyau postmarketOS du téléphone (PPP vers le netns `ue1`).
 

@@ -1,6 +1,54 @@
 # Etat des lieux et reste a faire
 
-Derniere mise a jour : 2026-08-26, lab a l'arret (conteneurs `Exited (127)`).
+Derniere mise a jour : 2026-09-23 (HEAD `00e6502`). Les sections 1 a 3 (SS7,
+numerotation) sont inchangees depuis le 2026-08-26 (lab alors a l'arret,
+conteneurs `Exited (127)`), sauf le point 4 des bloquants. Nouvelle section 0
+pour le banc radio.
+
+## 0. Banc radio — etat au 2026-09-23
+
+| montage | etat |
+|---|---|
+| grgsm (defaut) | montage de reference (L1 gr-gsm dans QEMU) ; etat du TCH : `pont/README.md` |
+| `--dsp` (c54x_exe) | FB/SB/BCCH decodes par la mask-ROM, camp SI1-4 lai=001-01-1, LU ACCEPT (MSC `timer geran X1 30`, 23/09) ; A5 descendant par le coprocesseur XIO modelise ; appels TCH **en validation** |
+
+`--dsp` a change de nature entre le 22 et le 23/09 : il ne choisit plus de fork.
+Le fork monte toute la pile en profil hybride avec
+`--skip qemu,pty,osmocon,l2 --no-attach`, puis `exec c54x_exe/run.sh` lance les
+cinq etapes du banc DSP : `c54x_exe --arm`, QEMU `/opt/GSM/qosmo`, osmocon, le
+mobile (`mobile_pont.cfg`, VTY 4347) et `pont/pont_dsp.py`.
+
+Le pont a deux points d'entree : `pont.py` (grgsm) et `pont_dsp.py`
+(`pont.dsp.main`). `pont_uncipher.py` a ete ajoute puis retire le meme jour. En
+DSP, le pont ne dechiffre le DL que si `PONT_DSP_DECHIFFRE=1` ; le TCH n'est plus
+qu'une annonce, le BSP suit la tache du firmware ; l'horloge est asservie en
+boucle fermee (`PONT_MARGE_DL` 16, `PONT_AVANCE_MIN` 10). Detail :
+`pont/README.md` § 0 et § 8.
+
+Appels TCH en `--dsp` : bascule suivie par la tache firmware ; crash SP
+(`RPT *(lk)`, `c54x_exec.c`) et pointeur SACCH `0x3d89` (MVKD/MVDK, garde
+`[garde-3d89]` dans `c54x_mem.c`) corriges dans le coeur C54x
+(`qosmo/hw/arm/calypso/l1-dsp`, compile dans c54x_exe),
+**a confirmer sur le banc** ; UA perdu / SABM repetes corriges dans
+`pont/dsp/clock.py` apres le releve de 19:06, **pas encore revalides**.
+
+Audio : PulseAudio allege a chaque start ; le passage a speex a ete annule,
+webrtc reste le defaut, `AUDIO_PENDANT_APPEL` vaut 0.
+
+Incoherences du code, hors doc, non corrigees :
+
+- l'en-tete de `globals.conf` dit encore qu'il ecrase l'environnement ;
+- le commentaire d'`audio_start` dans `start-direct.sh` et celui de
+  `lib/audio.sh:239` (« SPEEX PAR DEFAUT ») annoncent speex, alors que
+  `lib/audio.sh:131` pose `AUDIO_AEC_METHOD:=webrtc` ;
+- `INSNS` vaut 120000 dans `start-direct.sh`, son bloc de commentaires dit
+  200000, le defaut de `c54x_exe/run.sh` est 80000 (son en-tete dit 200000).
+
+A faire :
+
+- [ ] rejouer un appel en `--dsp` : lire « marge DL reelle » dans `pont.log`
+      (moyenne >= ~10) et « [garde-3d89] » dans `dsp.log` (attendu : aucune) ;
+- [ ] aligner `INSNS` entre `start-direct.sh` (120000) et `c54x_exe/run.sh` (80000).
 
 ## 1. Ce qui est fait et verifie
 
@@ -62,8 +110,12 @@ ci-dessus. Les 9 autres, par ordre d'urgence :
 3. **`--node-per-op` : l'operateur 2 d'un noeud distant est injoignable** — ses
    MSISDN sont `600201` mais le maillage ne genere que `_<ind>6001XX`.
    `network/setup-wan-mesh.sh:602,763` vs `start.sh:1678`.
-4. **`globals.conf` ecrase l'environnement** au lieu de le completer :
-   `ARFCN=520 ./start-direct.sh` est remis a vide. `globals.conf:23-45`.
+4. ~~**`globals.conf` ecrase l'environnement**~~ — **corrige cote
+   `start-direct.sh` le 2026-09-22** : les variables posees non vides par
+   l'appelant sont reposees apres la lecture de `globals.conf`, qui n'a pas ete
+   modifie. Reste : l'en-tete de `globals.conf` dit toujours « ecrasent leur
+   homonyme », et `generate_configs.sh` n'est pas concerne.
+   `start-direct.sh:457-490`, `globals.conf:8-11`.
 5. **ARFCN / BSIC / LAC / CI ne dependent que de l'operateur** — deux noeuds
    diffusent `ARFCN 514 / BSIC 7 / LAC 0x0001 / CI 6001`. `generate_configs.sh:287-306`.
 6. **Le garde-fou `_gc_warn_perop` ne tourne jamais** sur le chemin reel (mode
@@ -101,8 +153,9 @@ ci-dessus. Les 9 autres, par ordre d'urgence :
       est le seul discriminant et verifier CHAQUE chemin qui le retire ;
 - [ ] `build-iso.sh` : deriver MCC/MNC/op_id du `--node`, comme `start.sh` ;
 - [ ] `generate_configs.sh` : indexer ARFCN / BSIC / LAC / CI par noeud ;
-- [ ] `globals.conf` : passer aux affectations `${VAR:=...}` pour tenir la
-      promesse du commentaire, ou corriger le commentaire ;
+- [x] `globals.conf` : l'environnement non vide gagne, cote `start-direct.sh`
+      (2026-09-22) ;
+- [ ] corriger l'en-tete de `globals.conf`, qui dit encore l'inverse ;
 - [ ] `network/wan-nodes.sh` : ne poser `WAN_NOPS` que si le champ existe.
 
 ### Priorite 3 — outillage
