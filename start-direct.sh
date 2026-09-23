@@ -2491,7 +2491,7 @@ fi
 # ── LE BANC DSP : REGLAGES MESURES, PUIS PASSAGE DE MAIN ───────────────────
 # Les valeurs viennent du banc, pas d'un choix de style (c54x_exe/run_real.sh
 # les porte depuis le 2026-09-21, run.sh les documente une a une) :
-#   INSNS=60000              cadence du C54x la plus proche du temps reel
+#   INSNS=200000             plafond d'instructions par trame (voir plus bas)
 #   LOCKSTEP=1               QEMU n'avance la trame que quand le DSP a fini la
 #                            precedente ; sans lui QEMU saute 3 trames sur 4
 #   IQ=none                  aucune cellule synthetique : les bursts viennent
@@ -2515,7 +2515,7 @@ if [ "$DSP_BANC" = 1 ]; then
     #
     # Les reglages du banc viennent du banc, pas d'un choix de style
     # (c54x_exe/run_real.sh les porte depuis le 2026-09-21) :
-    #   INSNS=60000              cadence du C54x la plus proche du temps reel
+    #   INSNS=200000             plafond d'instructions par trame (voir plus bas)
     #   LOCKSTEP=1               QEMU n'avance la trame que quand le DSP a fini
     #                            la precedente ; sans lui il saute 3 trames sur 4
     #   IQ=none                  pas de cellule synthetique : les bursts
@@ -2526,7 +2526,14 @@ if [ "$DSP_BANC" = 1 ]; then
     # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
     export MODE=dsp PONT=1
     : "${IQ:=none}";        export IQ
-    : "${INSNS:=60000}";    export INSNS
+    # [2026-09-23] 60000 -> 200000, puis 120000 (TCH mesure jusqu a 87000 insn/trame). Le budget n'est qu'un plafond (le DSP
+    # s'arrete a son IDLE, c54x_exe/src/pont.c jouer_trame) ; a 60000 le
+    # decodage TCH debordait sur la trame suivante (« insn=58524 occupe »), le
+    # Viterbi de la parole (0x9a7c, ST TRN,*AR6+ jusqu'a 0x2d23) passait sur
+    # data[0x2d0d] apres sa reinitialisation par 0xe68a, et le CALLD 0xea0c
+    # ecrasait SP (« SP-CORRUPT pc=0xeac9 »). Le vrai C54x a ~480000 cycles par
+    # trame. Capture gdb du 2026-09-23 15:07.
+    : "${INSNS:=120000}";   export INSNS
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM
     : "${CALYPSO_RHEA_DMA_XFER:=1}"; export CALYPSO_RHEA_DMA_XFER

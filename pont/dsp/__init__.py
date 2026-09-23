@@ -29,11 +29,11 @@ from .. import config as _config
 from ..cipher import Cipher
 from ..gsm import load_timeslots, plan_for
 from ..record import Recorder
-from ..state import Dedicated
 from ..stats import Reporter, Stats
 from ..trx import Transmitter
 from ..uplink import TchScheduler
 from .clock import ClockDsp
+from .dedicated import DedicatedDsp
 from .downlink import DownlinkDsp, FeederDsp
 from .tch import TchDsp
 from .trx import TrxDsp
@@ -55,7 +55,7 @@ def main(argv=None):
     stats = Stats()
     clock = ClockDsp()
     cipher = Cipher(cfg.kc_retention, stats)
-    dedicated = Dedicated()
+    dedicated = DedicatedDsp()     # [2026-09-23] genres TCH du tap, voir dsp/dedicated.py
     tch = TchDsp(stats)
     record = Recorder(cfg, clock) if cfg.record else None
     trx = TrxDsp(cfg, clock, stats, cipher, record, dedicated, tch)
