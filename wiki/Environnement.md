@@ -144,8 +144,8 @@ pas par QEMU — elles n'apparaissent donc pas dans le manifeste `calypso`.
 | `INSNS` | `120000` (start-direct), `80000` (c54x_exe/run.sh seul) | c54x_exe (`--insns`) | plafond d'instructions DSP par trame |
 | `LOCKSTEP` | `1` | c54x_exe/run.sh | QEMU n'avance la trame que quand le DSP a fini la précédente |
 | `IQ` | `none` | c54x_exe/run.sh | pas de cellule synthétique : les bursts viennent de la BTS |
-| `CALYPSO_BSP_STREAM` | `1` | c54x_exe (`src/pont.c`) | un burst TS0 par trame, dans l'ordre des FN |
-| `CALYPSO_RHEA_DMA_XFER` | `1` | c54x_exe (`src/pont.c`) | sans lui la page API n'est jamais remplie |
+| `CALYPSO_BSP_STREAM` | `1` (start-direct ; non posé par `c54x_exe/run.sh` seul) | c54x_exe (`calypso_bsp.c` de `qosmo/hw/arm/calypso/l1-dsp`, compilé dedans ; `src/pont.c` ne fait que l'afficher) | un burst TS0 par trame, dans l'ordre des FN |
+| `CALYPSO_RHEA_DMA_XFER` | `1` (start-direct) | **plus personne** | porte retirée du cœur le 2026-09-18 (qosmo `cf34ab6`) : le transfert DMA2 est inconditionnel ; `src/pont.c` n'imprime plus que la variable dans son bilan. La vraie porte est `CALYPSO_RHEA_DMA` (défaut 1, `0` = ancien stub muet) |
 
 Les domaines fins (`bsp.env`, `dsp.env`, `fbsb.env`, `shunt.env`, `rf.env`,
 `armdsp.env`, `opcodes.env`) portent 311 variables dont **116 béquilles** :

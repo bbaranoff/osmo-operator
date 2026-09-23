@@ -624,7 +624,8 @@ plusieurs conteneurs (un par opérateur, chacun avec son bridge).
 
 ### 11.5 Banc DSP (`c54x_exe`)
 
-Depuis le 2026-09-22, le C54x tourne **hors de QEMU** : `c54x_exe --arm`
+Le C54x tourne **hors de QEMU** (`c54x_exe`, depuis le 2026-09-17 ; branché
+sur `start-direct.sh --dsp` depuis le 2026-09-22) : `c54x_exe --arm`
 (`/opt/GSM/c54x_exe`, mask-ROM TI) partage l'API RAM avec l'ARM
 (`/dev/shm/calypso_api_ram`, socket `/tmp/calypso_dsp.sock`) et reçoit les
 bursts DL sur la BSP (`udp/6702`). QEMU (`/opt/GSM/qosmo`, `CALYPSO_DSP_EXTERN=1`)
@@ -636,8 +637,9 @@ MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh  # la seule chaîne mobile : c54x_exe, 
 ```
 
 État : camp (SI1-4, lai=001-01-1) et mise à jour de localisation OK ; appels TCH
-en cours de validation. `qosmo-dsp` (osmo-trx-ipc + calypso-ipc-device) n'est
-plus construit depuis le 17/09. Détail des étapes et des variables :
+en cours de validation. Le fork `qosmo-dsp` (osmo-trx-ipc + calypso-ipc-device) n'est
+plus construit depuis le 17/09 ; ne pas le confondre avec la commande
+`/usr/local/bin/qosmo-dsp`, qui lance aujourd'hui `c54x_exe/run.sh` (`MODE=dsp`). Détail des étapes et des variables :
 [`wiki/Start-direct.md`](wiki/Start-direct.md) § 8-dsp.
 
 ### 11.6 Diagnostic

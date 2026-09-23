@@ -195,7 +195,8 @@ le cœur, Asterisk, SMSC. Sauf `--no-attach` / `CALYPSO_NO_ATTACH=1` (ce que pos
 Avec `--dsp`, `RUN_SH` reste celui du fork et reçoit
 `--skip qemu,pty,osmocon,l2 --no-attach`. Ensuite `exec c54x_exe/run.sh`
 (`BANC_DSP`, s'il est exécutable) prend le relais avec `MODE=dsp PONT=1`, `IQ=none`, `INSNS=120000`,
-`LOCKSTEP=1`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1` — en `:=`, donc
+`LOCKSTEP=1`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1` (celle-ci n'est plus lue
+par le cœur, cf. [Environnement.md](Environnement.md)) — en `:=`, donc
 surchargeables. Les cinq étapes :
 
 1. `c54x_exe --arm` — le DSP : socket `/tmp/calypso_dsp.sock`, API RAM partagée,
