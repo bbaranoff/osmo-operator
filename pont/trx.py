@@ -223,11 +223,15 @@ class Trx:
                 # SEULEMENT sur l'intervalle dedie : la BCCH et la CCCH ne sont
                 # jamais chiffrees, les toucher detruirait le campement.
                 bits_dsp = bits
-                if self.cipher.dl_active and self._burst_dedie(tn, fn):
+                if self.dechiffre_dl and self.cipher.dl_active and self._burst_dedie(tn, fn):
                     bits_dsp = self.cipher.apply(bits, fn, False)
                 hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([data[5] if len(data) > 5 else 0, 0, 0])
                 self.sk_data.sendto(hdr + bytes(1 if b else 0 for b in bits_dsp), ("127.0.0.1", self.cfg.dsp_port))
             on_burst(tn, fn, bits)
+
+    # Dechiffrer le descendant avant de le passer au BSP : oui pour le shunt
+    # gr-gsm, non en montage DSP (TrxDsp) ou la ROM le fait elle-meme.
+    dechiffre_dl = True
 
     def _burst_dedie(self, tn, fn):
         """Vrai si CE burst appartient au canal dedie du mobile.

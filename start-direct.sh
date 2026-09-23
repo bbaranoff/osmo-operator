@@ -619,6 +619,20 @@ RUN_ROOT="$(dirname "$RUN_SH")"
 # ignore son code de retour. Deux scripts, deux sens pour le meme nom : on ne
 # renomme pas celui du banc (run_real.sh et les habitudes s'en servent), on
 # pose la valeur a chaque fois.
+# [2026-09-23] PulseAudio allege a chaque start : speech-dispatcher arrete,
+# annuleur speex au lieu de webrtc, osmo_rec en 8 kHz mono (lib/audio.sh,
+# alleger_audio). audio-chain.sh est idempotent ; AUDIO_ALLEGER=0 pour ne
+# rien toucher, AUDIO_AEC_METHOD=webrtc pour garder l ancien annuleur.
+audio_start() {
+    [ -f "$HERE/scripts/audio-chain.sh" ] || return 0
+    say_begin "Audio (PulseAudio allege)"
+    if bash "$HERE/scripts/audio-chain.sh" 5 >/tmp/osmo-audio-chain.log 2>&1; then
+        say_end " OK " "$C_OK" "Audio (PulseAudio allege)" "journal /tmp/osmo-audio-chain.log"
+    else
+        say_end " !! " "$C_KO" "Audio (PulseAudio allege)" "voir /tmp/osmo-audio-chain.log"
+    fi
+}
+
 banc_dsp() {
     MODE=dsp bash "$BANC_DSP" "$@"
 }
@@ -2546,6 +2560,7 @@ if [ "$DSP_BANC" = 1 ]; then
             "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_DSP"
         exit 0
     fi
+    audio_start
     say_begin "Transmission a run.sh (sans $DSP_MODULES_RETIRES)"
     if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then
         say_end " KO " "$C_KO" "Transmission a run.sh" "le plan du fork a echoue, banc DSP non lance"
@@ -2560,6 +2575,7 @@ if [ "$DSP_BANC" = 1 ]; then
     exec bash "$BANC_DSP"
 fi
 
+[ $DRY -eq 1 ] || audio_start
 say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
     say_end " -- " "$C_DIM" "Transmission a run.sh" "dry-run"

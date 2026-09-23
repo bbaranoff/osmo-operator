@@ -27,6 +27,18 @@
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
+# [2026-09-23] --reinit : decharge annuleur, boucles et osmo_rec, puis repose
+# la chaine (lib/audio.sh, reinit_audio). Le reste des arguments : inchange
+# (delai d attente de PulseAudio, 30 s par defaut).
+REINIT=0
+if [ "${1:-}" = "--reinit" ]; then REINIT=1; shift; fi
+# [2026-09-23] --appel debut|fin : la chaine lourde (annuleur, boucles,
+# osmo_rec) seulement pendant un appel. Appele par gapk-start.sh (mode auto)
+# sur « Endpoint actif » / « Endpoint disparu ». AUDIO_PENDANT_APPEL=0 : la
+# chaine reste posee en permanence, comme avant.
+APPEL=""
+if [ "${1:-}" = "--appel" ]; then APPEL="${2:-}"; shift 2 2>/dev/null || shift; fi
+
 HERE="${HERE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 export HERE
 : "${PULSE_SOCK:=/var/run/pulse/native}"
@@ -85,6 +97,7 @@ done
 # ── 3. Les DEUX null-sinks, puis le loopback ─────────────────────────────────
 # load_gsm_sinks() boucle sur GSM_SINKS = gsm_audio + gsm_mic : c'est ce qui
 # rattrape un system.pa qui n'en declarerait qu'un.
+[ "$REINIT" = 1 ] && reinit_audio
 load_gsm_sinks
 for s in gsm_audio gsm_mic; do
     if pactl list short sinks 2>/dev/null | grep -qw "$s"; then
@@ -97,6 +110,18 @@ done
 # [2026-09-09] L annuleur d echo d abord : les HP de l operateur sont
 # osmo_hp_ec des le boot, comme avec la VM (lib/audio.sh, « L AFFECTATION DES
 # HAUT-PARLEURS »). Sans VM, le bouclage direct suit ; avec, il est retire.
+alleger_audio
+if [ "${AUDIO_PENDANT_APPEL:-1}" = "1" ] && ! pmos_vm_audio_present; then
+    case "$APPEL" in
+    debut) ;;                                  # on pose la chaine, plus bas
+    fin)   reinit_audio; echo "[audio] fin d appel : chaine retiree"; exit 0 ;;
+    *)     # au start / au boot : un banc neuf n a pas d appel en cours ; le
+           # premier « Endpoint actif » de gapk-auto posera la chaine.
+           reinit_audio
+           echo "[audio] chaine posee a la demande, au premier appel (AUDIO_PENDANT_APPEL=0 pour la garder)"
+           exit 0 ;;
+    esac
+fi
 ensure_echo_cancel
 ensure_local_loopback
 ensure_local_mic

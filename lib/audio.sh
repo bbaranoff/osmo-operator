@@ -128,6 +128,10 @@ LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 # osmo-pmos-setup et l arret de la VM (pmos_stop) passent par ces fonctions.
 # AUDIO_ECHO_CANCEL=0 pour se passer de l annuleur (les HP = la carte brute).
 EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"'
+: "${AUDIO_AEC_METHOD:=speex}"
+audio_aec_method() { echo "$AUDIO_AEC_METHOD"; }
+# Les aec_args ne valent que pour webrtc ; speex n en prend aucun ici.
+audio_aec_args() { [ "$AUDIO_AEC_METHOD" = "webrtc" ] && echo "$EC_AEC_ARGS"; }
 : "${EC_MIC_VOLUME:=25%}"
 
 audio_hw_sink() {
@@ -232,13 +236,18 @@ ensure_echo_cancel() {
     # portaient rien de plus. L annuleur webrtc accepte 8000/16000/32000/48000 ;
     # 8000 verifie a la main avant d etre pose ici (module charge, sinks lus en
     # « float32le 1ch 8000Hz », module decharge).
-    elif pactl load-module module-echo-cancel aec_method=webrtc \
+    # [2026-09-23] SPEEX PAR DEFAUT. webrtc (annulation + reduction de bruit +
+    # passe-haut) coutait a PulseAudio 7 a 17 % d un coeur en continu, appel ou
+    # pas. speex annule l echo pour une fraction de ce prix ; il n a pas l AGC
+    # analogique qui faisait pomper le micro (voir plus haut), rien a couper.
+    # AUDIO_AEC_METHOD=webrtc retablit l ancien annuleur et ses aec_args.
+    elif pactl load-module module-echo-cancel aec_method="$(audio_aec_method)" \
             rate=8000 channels=1 \
             source_master="$mic" sink_master="$hp" \
-            source_name=osmo_mic_ec sink_name=osmo_hp_ec "$EC_AEC_ARGS" \
+            source_name=osmo_mic_ec sink_name=osmo_hp_ec $(audio_aec_args) \
             source_properties=device.description=Micro_sans_echo \
             sink_properties=device.description=HP_sans_echo >/dev/null 2>&1; then
-        echo -e "  ${GREEN}[audio] annuleur d echo pose entre ${mic} et ${hp} (sans AGC analogique)${NC}"
+        echo -e "  ${GREEN}[audio] annuleur d echo ${AUDIO_AEC_METHOD} pose entre ${mic} et ${hp}${NC}"
     else
         echo -e "  ${YELLOW}[audio] echec de l annuleur d echo - les HP restent ${hp}${NC}"; return 0
     fi
@@ -267,6 +276,70 @@ ensure_echo_cancel() {
 # 48 kHz stereo : c est une piste video, pas du GSM ; PulseAudio reechantillonne
 # les 8 kHz une fois pour toutes, ici, hors du chemin de la voix.
 # AUDIO_RECORD_MIX=0 pour ne pas la creer.
+# ── ALLEGER PULSEAUDIO ───────────────────────────────────────────────────
+# [2026-09-23] Mesure : PulseAudio a 7-17 % d un coeur en permanence, pour
+#   - speech-dispatcher (sd_dummy) : un flux 44100 Hz jamais suspendu vers la
+#     carte son, donc un reechantillonnage 44,1 -> 48 kHz continu pour rien ;
+#     il est lance a la demande par le bureau (« -s -t 0 » : ne s arrete jamais) ;
+#   - l annuleur webrtc (voir ensure_echo_cancel) ;
+#   - osmo_rec en 48 kHz stereo, alimente par deux boucles 8 kHz mono.
+# Ici on arrete le premier et on MIGRE un banc deja monte vers speex / 8 kHz :
+# decharger l annuleur fait tomber les boucles epinglees dessus, on les repose.
+# AUDIO_ALLEGER=0 pour ne rien toucher.
+alleger_audio() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    [ "${AUDIO_ALLEGER:-1}" = "1" ] || return 0
+    if pgrep -x speech-dispatch >/dev/null 2>&1 || pgrep -f '[/]usr/bin/speech-dispatcher' >/dev/null 2>&1; then
+        pkill -f '[/]usr/bin/speech-dispatcher' 2>/dev/null
+        pkill -f '[/]usr/lib/speech-dispatcher-modules/' 2>/dev/null
+        echo -e "  ${GREEN}[audio] speech-dispatcher arrete (flux 44,1 kHz permanent vers les HP)${NC}"
+    fi
+    pactl info >/dev/null 2>&1 || return 0
+    local m refaire=0
+    m="$(pactl list short modules 2>/dev/null | awk '/module-echo-cancel/ && /aec_method=webrtc/ {print $1; exit}')"
+    if [ -n "$m" ] && [ "$AUDIO_AEC_METHOD" != "webrtc" ]; then
+        pactl unload-module "$m" >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}[audio] annuleur webrtc decharge -> ${AUDIO_AEC_METHOD}${NC}"
+        refaire=1
+    fi
+    if pactl list short sinks 2>/dev/null | awk '$2 == "osmo_rec"' | grep -q 48000Hz; then
+        for m in $(pactl list short modules 2>/dev/null | awk '/module-loopback/ && /sink=osmo_rec([ \t]|$)/ {print $1}') \
+                 $(pactl list short modules 2>/dev/null | awk '/module-null-sink/ && /sink_name=osmo_rec([ \t]|$)/ {print $1}'); do
+            pactl unload-module "$m" >/dev/null 2>&1
+        done
+        echo -e "  ${GREEN}[audio] osmo_rec 48 kHz stereo retire -> 8 kHz mono${NC}"
+        refaire=1
+    fi
+    if [ "$refaire" = 1 ]; then
+        ensure_echo_cancel
+        ensure_local_loopback
+        ensure_local_mic
+        ensure_record_mix
+    fi
+    return 0
+}
+
+# ── REINIT : repartir d une chaine propre sans relancer PulseAudio ─────────
+# [2026-09-23] scripts/audio-chain.sh --reinit. Decharge ce que la chaine a
+# pose PAR-DESSUS les sinks GSM -- annuleur d echo, toutes les boucles,
+# osmo_rec -- et arrete speech-dispatcher ; audio-chain.sh repose ensuite le
+# tout comme au boot. gsm_audio, gsm_mic et osmo_tts_off restent : le
+# `mobile` et gapk y sont branches (PCM ALSA gsm_out/gsm_in), les decharger
+# couperait un appel pour de bon au lieu d une seconde.
+reinit_audio() {
+    [ "${AUDIO:-1}" = "1" ] || return 0
+    pactl info >/dev/null 2>&1 || return 0
+    pkill -f '[/]usr/bin/speech-dispatcher' 2>/dev/null
+    pkill -f '[/]usr/lib/speech-dispatcher-modules/' 2>/dev/null
+    local m n=0
+    for m in $(pactl list short modules 2>/dev/null | awk '/module-loopback/ {print $1}') \
+             $(pactl list short modules 2>/dev/null | awk '/module-echo-cancel/ {print $1}') \
+             $(pactl list short modules 2>/dev/null | awk '/module-null-sink/ && /sink_name=osmo_rec([ \t]|$)/ {print $1}'); do
+        pactl unload-module "$m" >/dev/null 2>&1 && n=$((n + 1))
+    done
+    echo -e "  ${GREEN}[audio] ${n} module(s) de la chaine decharge(s)${NC}"
+}
+
 ensure_record_mix() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     [ "${AUDIO_RECORD_MIX:-1}" = "1" ] || return 0
@@ -274,7 +347,7 @@ ensure_record_mix() {
 
     pactl list short sinks 2>/dev/null | grep -qw osmo_rec \
         || pactl load-module module-null-sink sink_name=osmo_rec \
-               format=s16le rate=48000 channels=2 \
+               format=s16le rate=8000 channels=1 \
                sink_properties=device.description=Enregistrement_appel >/dev/null 2>&1 \
         || { echo -e "  ${YELLOW}[audio] sink osmo_rec impossible - enregistrement non prepare${NC}"; return 0; }
 
@@ -485,6 +558,7 @@ ensure_pulse() {
         done
         echo -e "  ${GREEN}[audio] PulseAudio deja actif (sinks gsm_audio + gsm_mic uniques assures)${NC}"
         assert_audio_devices || true
+        alleger_audio
         ensure_local_loopback
         ensure_local_mic
         ensure_record_mix

@@ -103,6 +103,16 @@ log_info()  { echo -e "${GREEN}[gapk]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[gapk]${NC} $*"; }
 log_error() { echo -e "${RED}[gapk ERROR]${NC} $*" >&2; }
 log_auto()  { echo -e "${CYAN}[gapk-auto]${NC} $(date '+%H:%M:%S') $*"; }
+# [2026-09-23] La chaine audio lourde de l hote (annuleur d echo, boucles,
+# enregistrement) ne tourne que pendant un appel : posee sur « Endpoint actif »,
+# retiree sur « Endpoint disparu ». En tache de fond, pour ne pas retarder la
+# scrutation. Voir scripts/audio-chain.sh --appel.
+_audio_appel() {
+    [ "${AUDIO_PENDANT_APPEL:-1}" = "1" ] || return 0
+    local chaine="${OSMO_OPERATOR_DIR:-/opt/GSM/osmo-operator}/scripts/audio-chain.sh"
+    [ -f "$chaine" ] || return 0
+    bash "$chaine" --appel "$1" 3 >>"${GAPK_LOG_DIR:-/tmp}/audio-appel.log" 2>&1 &
+}
 
 # ── Verifications ──────────────────────────────────────────────────────────────
 check_gapk() {
@@ -420,6 +430,7 @@ mode_auto() {
                 fi
 
                 log_auto "Endpoint actif : RX=${rx_port}  TX=${tx_dest}"
+                [ -z "$prev_rx_port" ] && _audio_appel debut
 
                 local log_rx="${GAPK_LOG_DIR}/gapk-rx.log"
                 local log_tx="${GAPK_LOG_DIR}/gapk-tx.log"
@@ -486,6 +497,7 @@ mode_auto() {
         else
             if [ -n "$prev_rx_port" ]; then
                 log_auto "Endpoint disparu - arret gapk"
+                _audio_appel fin
                 stop_pid "$GAPK_PID_RX"; stop_pid "$GAPK_PID_TX"
                 prev_rx_port=""
             fi

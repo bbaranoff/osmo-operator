@@ -743,7 +743,9 @@ osmo_poser_correctif_audio() {
     # l annuleur tourne encore sans aec_args, on le recharge a l identique
     # avec l AGC analogique coupe, et on rebranche les flux de la VM dessus.
     export PULSE_SERVER="${PULSE_SERVER:-unix:/var/run/pulse/native}"
-    if command -v pactl >/dev/null 2>&1 && pactl list short modules 2>/dev/null | grep -q module-echo-cancel \
+    # [2026-09-23] Seulement un annuleur WEBRTC sans aec_args : speex (le defaut
+    # desormais, lib/audio.sh) n en a pas et ne doit pas etre ramene a webrtc.
+    if command -v pactl >/dev/null 2>&1 && pactl list short modules 2>/dev/null | grep module-echo-cancel | grep -q aec_method=webrtc \
        && ! pactl list short modules 2>/dev/null | grep module-echo-cancel | grep -q analog_gain_control=0; then
         local ecm mic hp so si
         ecm="$(pactl list short modules | awk '/module-echo-cancel/ {print $1; exit}')"
