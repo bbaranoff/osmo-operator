@@ -26,6 +26,19 @@
 # Defaut 16 : 8 a d'abord ete essaye (run de 13:48) et a DOUBLE les trames sans
 # burst (6 % contre 1,6 % avec l'avance fixe 12 + fn-advance 2, soit ~14) --
 # l'echantillonnage toutes les 50 ms ne voit pas les pires creux de la BTS.
+#
+# [2026-09-23 19:06] L'AVANCE BTS SE MESURE SUR LE POINT VISE, PAS SUR L'HORLOGE.
+# Mesuree contre l'horloge reelle (derniere recue - horloge), elle supposait
+# horloge == DSP + avance. Faux des que le DSP attend la BTS
+# (CALYPSO_BSP_ATTENTE_MS) : le DSP colle alors a la derniere trame recue,
+# l'horloge traine ~15 trames derriere son but, l'« avance BTS » lue monte a
+# +12 et l'avance visee tombe au plancher (4). Marge reelle min -3 moy +1.2,
+# une attente de 40 ms echue sur six, trame du banc a 11,5 ms au lieu de 4,6,
+# SDCCH descendant troue : UA perdu, le mobile repete son SABM (« SABM frame
+# with information not allowed in this state » au BSC, « Dropping frame with
+# ~96 bit errors » au mobile). On mesure donc derniere recue - (DSP + avance) :
+# la marge reelle, moins l'avance deja demandee -- boucle fermee sur ce qu'on
+# veut tenir. Plancher releve a 10 (l'avance fixe 12 tenait a 1,6 %).
 import collections
 import logging
 import os
@@ -37,7 +50,7 @@ from ..trx import Clock
 log = logging.getLogger("pont")
 
 MARGE_DL = int(os.environ.get("PONT_MARGE_DL", "16"))
-AVANCE_MIN = int(os.environ.get("PONT_AVANCE_MIN", "4"))
+AVANCE_MIN = int(os.environ.get("PONT_AVANCE_MIN", "10"))
 AVANCE_MAX = int(os.environ.get("PONT_AVANCE_MAX", "40"))
 FENETRE_S = float(os.environ.get("PONT_MARGE_FENETRE", "3.0"))
 
@@ -57,9 +70,13 @@ class ClockDsp(Clock):
             self._fn_dl = fn
 
     def _reguler(self, now):
-        if MARGE_DL > 0 and now >= self._echeance and self._fn_dl is not None:
-            horloge = int((now - self.t0) / self.dur) % gsm.HYPERFRAME
-            avance_bts = (self._fn_dl - horloge) % gsm.HYPERFRAME
+        du = now >= self._echeance
+        super()._reguler(now)                   # rafraichit _dsp_prec (trame reclamee)
+        dsp = self._dsp_prec
+        if MARGE_DL > 0 and du and dsp is not None and self._fn_dl is not None:
+            # Avance de la BTS sur le point VISE (DSP + avance), pas sur
+            # l'horloge reelle -- voir l'en-tete, releve du 2026-09-23 19:06.
+            avance_bts = (self._fn_dl - dsp - self._avance) % gsm.HYPERFRAME
             if avance_bts > gsm.HYPERFRAME // 2:
                 avance_bts -= gsm.HYPERFRAME
             m = self._mesures
@@ -75,7 +92,6 @@ class ClockDsp(Clock):
                     log.info("horloge : avance BTS mesuree %+d trames (creux sur %.0f s), "
                              "avance visee %d pour une marge DL >= %d",
                              creux, FENETRE_S, avance, MARGE_DL)
-        super()._reguler(now)
         self._mesurer_marge(now)
 
     def _mesurer_marge(self, now):
