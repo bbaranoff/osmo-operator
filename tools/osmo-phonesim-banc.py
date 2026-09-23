@@ -45,8 +45,20 @@ MSC_VTY = (os.environ.get("OSMO_MSC_VTY_HOST", "127.0.0.1"),
            int(os.environ.get("OSMO_MSC_VTY_PORT", "4254")))
 # Le mobile osmocom-bb. C est LUI l abonne 100101, et c est son pont audio
 # (gsm_audio / gsm_mic) que la VM relaie : sans lui, pas de voix.
-MOB_VTY = (os.environ.get("OSMO_MOB_VTY_HOST", "127.0.0.1"),
-           int(os.environ.get("OSMO_MOB_VTY_PORT", "4247")))
+#
+# [2026-09-23] LE PORT PAR DEFAUT N'EST PLUS UNE VALEUR, C'EST UNE LISTE.
+# Le mobile du fork QEMU (mobile.cfg) lie 4247, celui du banc DSP
+# (c54x_exe/mobile_pont.cfg) lie 4347. start-direct.sh passe le bon port
+# depuis le 22/09, mais osmo-pmos-setup lance l'instance --connect (le modem de
+# la VM) sans OSMO_MOB_VTY_PORT : en --dsp elle parlait a 4247, ou personne
+# n'ecoute, et le telephone restait sans reseau et sans appel, sans une
+# erreur. Sans la variable, on essaie donc 4247 puis 4347 a chaque connexion ;
+# la variable, si elle est posee, reste la seule adresse essayee.
+_MOB_HOST = os.environ.get("OSMO_MOB_VTY_HOST", "127.0.0.1")
+if os.environ.get("OSMO_MOB_VTY_PORT"):
+    MOB_VTY = (_MOB_HOST, int(os.environ["OSMO_MOB_VTY_PORT"]))
+else:
+    MOB_VTY = [(_MOB_HOST, 4247), (_MOB_HOST, 4347)]
 MS = os.environ.get("OSMO_MS_NAME", "1")
 # L abonne que ce modem INCARNE : celui du telephone Android. Sur le banc c est
 # 100101 (IMSI 001010001000001), releve par « show subscriber msisdn 100101 »
@@ -198,19 +210,23 @@ class Vty:
     tools/osmo-ts-probe.py : on lit jusqu au prompt, on ne dort pas)."""
 
     def __init__(self, addr):
-        self.addr = addr
+        # Une adresse, ou une liste essayee dans l'ordre (voir MOB_VTY).
+        self.addrs = addr if isinstance(addr, list) else [addr]
+        self.addr = self.addrs[0]
         self.s = None
         self.lock = threading.Lock()
 
     def _connect(self):
-        try:
-            self.s = socket.create_connection(self.addr, timeout=1.0)
-            self.s.settimeout(1.0)
-            self._read()
-            return True
-        except OSError:
-            self.s = None
-            return False
+        for addr in self.addrs:
+            try:
+                self.s = socket.create_connection(addr, timeout=1.0)
+                self.s.settimeout(1.0)
+                self.addr = addr
+                self._read()
+                return True
+            except OSError:
+                self.s = None
+        return False
 
     def _read(self, limit=262144):
         buf = b""
