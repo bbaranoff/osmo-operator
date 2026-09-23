@@ -240,6 +240,12 @@ class Downlink:
         if rc == gsm.FR_BYTES:
             self.stats.tch_dl += 1
             self.ring.publish(fr, fn)
+            # [2026-09-23] REFERENCE POUR LA PAROLE DU DSP. Chaque trame FR que
+            # le pont decode lui-meme des bursts de la BTS, avec son fn BTS :
+            # tools/comparer_parole.py la met en regard de ce que la ROM livre
+            # dans a_dd (/dev/shm/calypso_add_dl.bin, montant.c) pour compter
+            # les bits faux par classe. 4000 trames au plus par session.
+            self._noter_parole(fn, fr)
         elif rc == gsm.MACBLOCK_LEN:
             self.stats.tch_facch_dl += 1
             l2 = fr[:gsm.MACBLOCK_LEN]
@@ -248,6 +254,18 @@ class Downlink:
                 self.tch.release_requested("CHANNEL RELEASE (FACCH)")
         else:
             self.stats.tch_crc += 1
+
+    def _noter_parole(self, fn, fr):
+        n = getattr(self, "_parole_n", 0)
+        if n >= 4000:
+            return
+        try:
+            mode = "ab" if n else "wb"
+            with open("/dev/shm/pont_tch_dl.bin", mode) as f:
+                f.write(struct.pack("<I", fn & 0xffffffff) + bytes(fr[:gsm.FR_BYTES]))
+        except OSError:
+            return
+        self._parole_n = n + 1
 
     def _tch_sacch(self, tn, fn, burst):
         start = gsm.sacch_tf_block_base(tn)

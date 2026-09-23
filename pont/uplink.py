@@ -129,7 +129,30 @@ class Uplink(threading.Thread):
                 return fn
         return start % gsm.HYPERFRAME
 
-    def _queue_facch(self, l2):
+    def _queue_facch(self, l2, ouverture=False):
+        # [2026-09-23] UNE UI SAPI 0 SUR LE TCH : UN BLOC QUI N'EST PAS UNE FACCH.
+        # Le BSC signale « SAPI=0 UNIT DATA INDICATION: unimplemented » (RLL
+        # 0x0b) sur lchan TCH_F, a l'ouverture du TCH (19:12:08, 20:22:54,
+        # 20:32:29, 20:35:28, 21:00:40 -- avant meme le SABM du mobile). Ce
+        # n'est pas le bourrage 01 03 01 2b : lapd_core.c:1127 jette une UI de
+        # longueur 0. C'est lapdm.c:995 : un premier octet au bit EA a 0 n'est
+        # pas une adresse, la trame est prise pour un en-tete court (Bter) et
+        # remonte TELLE QUELLE en UNIT DATA IND. C'est la forme d'un bloc SACCH
+        # montant : en-tete L1 d'abord (puissance, TA) -- 08 00 01 03 49 ... a
+        # la puissance 8, alors qu'a la puissance 7 (07 ...) il passe pour du
+        # SAPI 1 et disparait sans bruit, d'ou l'intermittence.
+        # Une FACCH est toujours au format B et SAPI 0 : adresse 0x01 ou 0x03.
+        # Tout autre bloc est ecarte ici, octets journalises pour en trouver
+        # la source. PONT_FACCH_TOUT=1 retablit l'envoi sans tri.
+        if l2[0] not in (0x01, 0x03) and os.environ.get("PONT_FACCH_TOUT", "0") != "1":
+            log.info("FACCH montante ECARTEE (pas une adresse SAPI 0) : %s",
+                     bytes(l2[:gsm.MACBLOCK_LEN]).hex(" "))
+            return
+        # Les trames non-I (SABM, RR, REJ, DISC...) sont rares : on les garde
+        # au journal, comme la premiere FACCH de chaque TCH.
+        if (l2[1] & 0x01) or ouverture:
+            log.info("FACCH montante %s : %s", "non-I" if l2[1] & 0x01 else "I (ouverture)",
+                     bytes(l2[:gsm.MACBLOCK_LEN]).hex(" "))
         with self.q_lock:
             self.q_facch.append(bytes(l2[:gsm.MACBLOCK_LEN]))
         self.stats.facch_ul += 1
@@ -270,8 +293,13 @@ class Uplink(threading.Thread):
         if b is None:
             return
         l2 = b[16:39]
+        # Un bloc qui n'est pas une FACCH (voir _queue_facch) n'ouvre pas le TCH.
+        if l2[0] not in (0x01, 0x03) and os.environ.get("PONT_FACCH_TOUT", "0") != "1":
+            self._queue_facch(l2)
+            return
+        ouverture = not self.tch.is_open()
         self.tch.prove("FACCH montante%s" % (", ASSIGNMENT COMPLETE" if gsm.rr_message_type(l2)[1] == gsm.RR_ASSIGNMENT_COMPLETE else ""))
-        self._queue_facch(l2)
+        self._queue_facch(l2, ouverture)
 
     def _poll_sacch(self):
         b = self.sb_sacch.new_record()
