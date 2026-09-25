@@ -9,6 +9,12 @@
 # sort 0 et la machine demarre - sur un /home vide. C'est le point du "non" :
 # le systeme reste utilisable en root, dont le home (/root) est sur le disque
 # systeme en clair.
+#
+# ET LE BUREAU S OUVRE SUR ROOT. [2026-09-25] Sur un disque installe, le compte
+# de session a son home SUR le volume chiffre : sans /home, GDM l ouvrirait sur
+# un home inexistant. Quand /home reste ferme au demarrage (non, delai, phrase
+# refusee, disque absent), GDM ouvre donc une session ROOT, pour ce demarrage
+# seulement - voir session_root plus bas.
 set -u
 
 CONF=/etc/default/crypthome
@@ -26,9 +32,143 @@ BOOT=0
 
 log() { echo "unlock-home: $*" >&2; }
 
+# ── LE MONTAGE DOIT VENIR DU VOLUME CHIFFRE ─────────────────────────────────
+# "monte" ne suffit pas. /home peut etre une partition ORDINAIRE - une machine
+# installee avec un /home separe, ou init-crypthome.sh n a jamais tourne. Traiter
+# ce montage-la comme le disque chiffre ecrirait les secrets EN CLAIR sous le
+# compte proprietaire tout en annoncant le contraire : le pire des etats, parce
+# qu il a l air correct. On exige donc que la source du montage soit le mapping
+# dechiffre lui-meme, et pas seulement qu il y ait quelque chose sur /home.
+crypthome_monte() {
+    local _src
+    mountpoint -q "$MOUNT" || return 1
+    _src="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
+    [ -n "$_src" ] || return 1
+    [ "$(readlink -f "$_src")" = "$(readlink -f "/dev/mapper/$MAPPER")" ]
+}
+
+# ── LA SESSION ROOT QUAND /home RESTE FERME ─────────────────────────────────
+# GDM n a pas de configuration "pour ce demarrage" : il lit custom.conf. On le
+# modifie donc AVANT lui (unlock-home.service porte Before=display-manager), en
+# mettant de cote les fichiers d origine dans $ETAT_GDM. Chaque demarrage
+# commence par les remettre (session_normale) : la session root ne dure qu un
+# demarrage, et une coupure de courant ne la rend pas permanente.
+#
+# Deux fichiers, parce que la cle live l a appris (80-chroot.sh) : GDM refuse
+# l uid 0 non dans custom.conf mais dans PAM, par la regle
+# "pam_succeed_if.so user != root". On ne la neutralise QUE dans gdm-autologin :
+# l ecran de connexion avec mot de passe, lui, continue de refuser root.
+#
+# Sans danger ajoute : la racine est en clair par construction (partition.conf),
+# qui a la machine en main la lit deja depuis une cle live. Ce qui est protege,
+# c est /home - et c est justement lui qui n est pas monte.
+GDM_CONF=/etc/gdm3/custom.conf
+GDM_PAM=/etc/pam.d/gdm-autologin
+ETAT_GDM=/var/lib/crypthome/gdm-avant-session-root
+
+session_normale() {
+    [ -d "$ETAT_GDM" ] || return 0
+    if [ -f "$ETAT_GDM/custom.conf" ]; then
+        cp -p "$ETAT_GDM/custom.conf" "$GDM_CONF"
+    elif [ -f "$ETAT_GDM/custom.conf.absent" ]; then
+        rm -f "$GDM_CONF"
+    fi
+    [ -f "$ETAT_GDM/gdm-autologin" ] && cp -p "$ETAT_GDM/gdm-autologin" "$GDM_PAM"
+    rm -rf "$ETAT_GDM"
+    log "GDM : configuration du compte de session retablie."
+}
+
+session_root() {
+    [ "$BOOT" = 1 ] || return 0
+    [ -d /etc/gdm3 ] || return 0
+    # Deja fait (deux appels dans le meme demarrage) : ne pas ecraser la
+    # sauvegarde des originaux par la version deja modifiee.
+    if [ ! -d "$ETAT_GDM" ]; then
+        install -d -m 0700 "$ETAT_GDM" || return 0
+        if [ -f "$GDM_CONF" ]; then
+            cp -p "$GDM_CONF" "$ETAT_GDM/custom.conf"
+        else
+            : > "$ETAT_GDM/custom.conf.absent"
+        fi
+        [ -f "$GDM_PAM" ] && cp -p "$GDM_PAM" "$ETAT_GDM/gdm-autologin"
+    fi
+    # Les deux cles, et elles seules, dans [daemon] : le reste (WaylandEnable,
+    # le TimedLogin eventuel) est la configuration de la machine.
+    awk '
+        /^[[:space:]]*AutomaticLogin(Enable)?[[:space:]]*=/ { next }
+        { print }
+        /^[[:space:]]*\[daemon\][[:space:]]*$/ && !fait {
+            print "AutomaticLoginEnable=true"; print "AutomaticLogin=root"; fait = 1
+        }
+        END { if (!fait) { print "[daemon]"; print "AutomaticLoginEnable=true"; print "AutomaticLogin=root" } }
+    ' "${GDM_CONF}" 2>/dev/null > "$GDM_CONF.crypthome" \
+        && mv "$GDM_CONF.crypthome" "$GDM_CONF"
+    [ -f "$GDM_PAM" ] && \
+        sed -i '/^[[:space:]]*auth.*pam_succeed_if.so user != root quiet_success/s/^/#/' "$GDM_PAM"
+    log "GDM : session root pour ce demarrage ($MOUNT ferme)."
+    root_dans_tmp
+}
+
+# ── CE QUE LA SESSION ROOT ECRIT RESTE DANS /tmp ────────────────────────────
+# Sans /home, la session root ne doit rien laisser sur le disque : ce qu elle
+# ecrit dans son home (/root) - profils, historique, fichiers - vit dans
+# $RAM_ROOT, un tmpfs sous /tmp, et disparait a l arret. /root est recouvert
+# par un overlay : son contenu reste LISIBLE (lanceurs, scripts du banc,
+# init-crypthome.sh), seules les ecritures partent dans /tmp.
+#
+# tmpfs et pas un simple repertoire de /tmp : sur Ubuntu /tmp est sur le disque
+# racine, en clair ; en RAM, rien ne touche jamais un disque.
+#
+# Le trousseau : le lien /root/.local/share/keyrings pointe vers le volume
+# ferme. Il est remplace, DANS l overlay seulement, par un vrai repertoire : la
+# session a un trousseau qui marche, et qui s evapore avec elle.
+RAM_ROOT=/tmp/crypthome-root
+
+root_dans_tmp() {
+    local lien
+    mountpoint -q /root && return 0          # deja fait ce demarrage
+    install -d -m 0700 "$RAM_ROOT" || return 0
+    if ! mount -t tmpfs -o mode=0700,size=50% tmpfs "$RAM_ROOT"; then
+        log "ATTENTION : tmpfs $RAM_ROOT impossible - la session root ecrira sur le disque."
+        return 0
+    fi
+    install -d -m 0700 "$RAM_ROOT/upper" "$RAM_ROOT/work"
+    if ! mount -t overlay overlay \
+            -o "lowerdir=/root,upperdir=$RAM_ROOT/upper,workdir=$RAM_ROOT/work" /root; then
+        umount "$RAM_ROOT" 2>/dev/null
+        log "ATTENTION : overlay sur /root impossible - la session root ecrira sur le disque."
+        return 0
+    fi
+    # systemd-tmpfiles-clean nettoie /tmp par age : il ne doit pas vider le
+    # home d une session en cours.
+    install -d /run/tmpfiles.d
+    echo "x $RAM_ROOT" > /run/tmpfiles.d/crypthome-root.conf
+    for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
+        if [ -L "/root/$lien" ]; then
+            rm -f "/root/$lien"
+            install -d -m 0700 "/root/$lien"
+        fi
+    done
+    log "session root : les ecritures dans /root restent dans $RAM_ROOT (RAM)."
+}
+
+# Chaque demarrage repart de la configuration du compte de session.
+[ "$BOOT" = 1 ] && session_normale
+
 # Deja monte (2e appel, ou dechiffrement manuel apres un "non") : rien a faire.
+#
+# Et si c est un AUTRE montage - un /home separe en clair - on sort aussi, sans
+# rien deplacer : evacuer le contenu d une partition que l operateur n a pas
+# demande a chiffrer serait une surprise, et la monter par-dessus, impossible.
+# Le message dit laquelle, parce que le symptome sinon est "il ne demande
+# jamais la phrase de passe" sans aucune explication.
 if mountpoint -q "$MOUNT"; then
-    log "$MOUNT est deja monte."
+    if crypthome_monte; then
+        log "$MOUNT est deja monte depuis le volume chiffre."
+    else
+        log "$MOUNT est deja monte, mais pas depuis /dev/mapper/$MAPPER" \
+            "($(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)) - rien n a ete touche."
+    fi
     exit 0
 fi
 
@@ -66,6 +206,7 @@ fi
 DEV="/dev/disk/by-uuid/$CRYPTHOME_UUID"
 if [ ! -e "$DEV" ]; then
     log "disque chiffre absent (UUID=$CRYPTHOME_UUID) - $MOUNT reste vide."
+    session_root
     exit 0
 fi
 
@@ -85,6 +226,7 @@ fi
 case "${reponse,,}" in
     o|oui|y|yes) ;;
     *)  log "reponse \"non\" - demarrage sans $MOUNT (« unlock-home » pour le faire plus tard)."
+        session_root
         exit 0 ;;
 esac
 
@@ -114,6 +256,7 @@ done
 
 if [ "$ouvert" != 1 ]; then
     log "abandon apres $TRIES essais - demarrage sans $MOUNT."
+    session_root
     exit 0
 fi
 
@@ -124,6 +267,7 @@ fi
 if ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; then
     log "montage de $MOUNT impossible - le volume est referme."
     cryptsetup close "$MAPPER" 2>/dev/null || true
+    session_root
     exit 0
 fi
 
@@ -134,6 +278,11 @@ fi
 if [ -n "$OWNER" ] && id -u "$OWNER" >/dev/null 2>&1; then
     loginctl enable-linger "$OWNER" >/dev/null 2>&1 || true
 fi
+
+# /home ouvert : la session est celle du compte, persistante sur le volume
+# chiffre. Utile aussi hors demarrage - « unlock-home » tape depuis la session
+# root remet GDM sur le compte pour la prochaine connexion.
+session_normale
 
 log "$MOUNT dechiffre et monte."
 exit 0

@@ -5,19 +5,41 @@
 # est chiffre, c'est le second disque, monte sur /home : les profils, les
 # donnees personnelles, et TOUT CE QUI TIENT AU KEYRING.
 #
-# Ecrit par init-crypthome.sh. CRYPTHOME_UUID est vide tant que le disque n'a
-# pas ete initialise ; unlock-home ne fait alors rien et le boot n'en souffre
-# pas.
+# QUI REMPLIT CE FICHIER. Deux ecrivains, pour deux chemins :
+#   - crypthome-postinstall, a l INSTALLATION, quand Calamares vient de chiffrer
+#     la partition /home (le cas normal) ;
+#   - init-crypthome.sh, apres coup, quand on chiffre un SECOND disque ajoute a
+#     une machine deja installee.
+# CRYPTHOME_UUID est vide tant qu aucun des deux n'est passe ; unlock-home ne
+# fait alors rien et le boot n'en souffre pas.
 
 # UUID du conteneur LUKS (= UUID vu par blkid sur la partition chiffree).
 CRYPTHOME_UUID=""
 
 # Nom du mapping dans /dev/mapper et point de montage.
+#
+# "crypthome" est le nom que choisit init-crypthome.sh. Une installation par
+# Calamares, elle, herite du nom que kpmcore a forge - "luks-<uuid>" - et
+# crypthome-postinstall ecrit CELUI-LA ici. Les deux conviennent : tout le
+# dispositif lit ce reglage au lieu de supposer un nom.
 CRYPTHOME_NAME="crypthome"
 CRYPTHOME_MOUNT="/home"
 
 # Le compte dont le home vit sur le disque chiffre : c'est LUI qui porte le
 # keyring et fait tourner les applications a secrets (voir run-as-owner).
+#
+# Sur la cle live, c est osmocom, et la session tourne sous root. Sur un disque
+# installe, osmocom n existe plus (shellprocess-osmo.conf le supprime) et
+# crypthome-postinstall met ici le compte choisi a l installation - qui est
+# aussi celui de la session. run-as-owner n a alors plus rien a basculer et
+# lance l application telle quelle : c est le bon comportement, le home de ce
+# compte EST deja sur le volume chiffre.
+#
+# DEUX SESSIONS, SELON LA REPONSE AU DEMARRAGE (unlock-home) :
+#   oui -> le compte ci-dessus, PERSISTANT : son home est sur le volume chiffre ;
+#   non -> ROOT, EPHEMERE : GDM s ouvre sur root pour ce demarrage, et tout ce
+#          que la session ecrit dans /root reste dans /tmp/crypthome-root (tmpfs,
+#          en RAM) - rien ne survit a l arret.
 CRYPTHOME_OWNER="__OWNER__"
 
 # Boot : nombre d'essais de phrase de passe, et delai (s) au bout duquel une

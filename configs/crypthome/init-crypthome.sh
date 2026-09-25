@@ -3,6 +3,16 @@
 #
 #   sudo /root/init-crypthome.sh [/dev/partition]
 #
+# CE N EST PLUS LE CHEMIN NORMAL. [2026-09-25] Sur une machine installee depuis
+# l ISO, /home est chiffre PAR L INSTALLEUR : partition.conf decoupe le disque
+# en racine + /home et ne chiffre que /home, crypthome-postinstall raccorde le
+# tout. Rien a lancer apres coup, et pas de basculement etale sur deux
+# demarrages.
+#
+# Ce script sert au cas que Calamares ne couvre pas : chiffrer un SECOND DISQUE
+# ajoute a une machine deja installee. Il refuse d ailleurs toute partition du
+# disque de la racine.
+#
 # Sans argument, la partition candidate est deduite - et il doit n'y en avoir
 # qu'une, sinon le script s'arrete et les affiche.
 #

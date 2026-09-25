@@ -1,0 +1,210 @@
+#!/bin/bash
+# crypthome-postinstall <compte-de-session>
+#
+# Lance UNE FOIS, par Calamares (shellprocess@osmo), DANS la cible montee, juste
+# apres que l installeur a ecrit /etc/fstab et /etc/crypttab. Il ne chiffre
+# rien : le chiffrement est deja fait, par Calamares, sur la partition /home
+# (partition.conf : la racine porte noEncrypt, /home non). Ce script ne fait que
+# RACCORDER ce que l installeur a produit au dispositif crypthome.
+#
+# POURQUOI UN RACCORD, ET PAS LE CABLAGE DE CALAMARES TEL QUEL. Calamares ecrit
+# une ligne crypttab ordinaire pour /home. Avec une racine EN CLAIR, le module
+# fstab y met le mot de passe "none" (il ne cree de /crypto_keyfile.bin que pour
+# une racine chiffree) : systemd demande donc la phrase de passe au demarrage et
+# ATTEND. C est exactement ce que ce banc ne veut pas - il redemarre dix fois
+# par jour, souvent sans personne devant l ecran.
+#
+# On repasse donc crypttab et fstab en "noauto" et on remplit
+# /etc/default/crypthome. C est alors unlock-home.service qui pose la question
+# « Dechiffrer /home ? [o/N] », avant le gestionnaire de connexion, avec un
+# delai au bout duquel l absence de reponse vaut non - et le demarrage se
+# termine dans tous les cas.
+#
+# LE PROPRIETAIRE, C EST LE COMPTE DE SESSION. Sur la cle live, le home chiffre
+# appartenait a osmocom pendant que la session tournait sous root. Sur le disque
+# installe, shellprocess-osmo.conf SUPPRIME osmocom et la session s ouvre sous le
+# compte choisi a l installation. Laisser CRYPTHOME_OWNER=osmocom y designerait
+# un compte qui n existe plus : run-as-owner, lock-home et
+# crypthome-session-setup viseraient dans le vide, sans une erreur.
+set -u
+
+OWNER="${1:-}"
+CONF=/etc/default/crypthome
+MOUNT=/home
+
+log() { echo "crypthome-postinstall: $*"; }
+
+[ -r "$CONF" ] || { log "$CONF absent - rien a raccorder."; exit 0; }
+
+# ── CE QUE CALAMARES A MIS SOUS /home ───────────────────────────────────────
+# /etc/fstab fait foi : c est lui que le systeme installe lira. Le module fstab
+# de Calamares ecrit "/dev/mapper/<nom>" quand la partition est chiffree, et un
+# "UUID=..." quand elle ne l est pas. L absence de ligne /home (pas de partition
+# separee) se lit de la meme facon : pas de volume chiffre.
+SRC="$(awk '$1 !~ /^#/ && $2 == "'"$MOUNT"'" { print $1; exit }' /etc/fstab 2>/dev/null)"
+
+MAPPER=""
+UUID=""
+case "$SRC" in
+    /dev/mapper/*)
+        MAPPER="${SRC#/dev/mapper/}"
+        # L UUID du CONTENEUR LUKS, pas celui du systeme de fichiers interne :
+        # c est lui que cryptsetup ouvre, et c est ce que porte crypttab.
+        UUID="$(awk -v m="$MAPPER" '$1 !~ /^#/ && $1 == m { sub(/^UUID=/, "", $2); print $2; exit }' \
+                /etc/crypttab 2>/dev/null)"
+        ;;
+esac
+
+# ── LE COMPTE PROPRIETAIRE ──────────────────────────────────────────────────
+# Vide ou inconnu : on ne l ecrit pas, plutot que d ecrire un nom faux. Un
+# CRYPTHOME_OWNER vide met simplement run-as-owner en retrait (l application
+# demarre sous le compte courant), ce qui est le bon repli.
+if [ -n "$OWNER" ] && ! id -u "$OWNER" >/dev/null 2>&1; then
+    log "compte « $OWNER » inconnu dans la cible - CRYPTHOME_OWNER laisse tel quel."
+    OWNER=""
+fi
+
+ecrire_conf() {
+    # sed sur les trois cles, sans reecrire le fichier : les commentaires de
+    # /etc/default/crypthome sont la documentation du dispositif sur la machine.
+    local cle valeur
+    for cle in CRYPTHOME_UUID CRYPTHOME_NAME CRYPTHOME_OWNER; do
+        case "$cle" in
+            CRYPTHOME_UUID)  valeur="$UUID" ;;
+            CRYPTHOME_NAME)  valeur="$MAPPER" ;;
+            CRYPTHOME_OWNER) valeur="$OWNER" ;;
+        esac
+        [ -n "$valeur" ] || continue
+        if grep -q "^$cle=" "$CONF"; then
+            sed -i "s|^$cle=.*|$cle=\"$valeur\"|" "$CONF"
+        else
+            printf '%s="%s"\n' "$cle" "$valeur" >> "$CONF"
+        fi
+    done
+}
+
+# ── LE TROUSSEAU DE ROOT ────────────────────────────────────────────────────
+# /root/.local/share/keyrings est un LIEN vers le disque chiffre, pose dans le
+# rootfs par l etape 8i. Deux cas, et ils sont opposes :
+#
+#   /home chiffre  -> on cree la cible du lien sur le volume. Disque non
+#                     dechiffre = lien mort = gnome-keyring n ecrit rien en
+#                     clair, ce qui est precisement le but.
+#   /home en clair -> le lien n a plus rien a proteger, et un lien mort casse
+#                     le trousseau de root sans le dire. On remet un vrai
+#                     repertoire.
+raccorder_trousseau_root() {
+    local chiffre="$1" lien cible
+    for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
+        # "root-" : le nom que posent deja l etape 8i et init-crypthome.sh
+        # (/home/.crypthome/root-keyrings). Le prefixe dit a qui appartient le
+        # repertoire, sur un volume qui porte aussi les homes des comptes.
+        cible="$MOUNT/.crypthome/root-$(basename "$lien")"
+        if [ "$chiffre" = 1 ]; then
+            install -d -m 0700 "$MOUNT/.crypthome"
+            install -d -m 0700 "$cible"
+            chown -R root:root "$MOUNT/.crypthome"
+            install -d -m 0700 "/root/$(dirname "$lien")"
+            # UN VRAI REPERTOIRE A CET ENDROIT N EST PAS UN OBSTACLE A POUSSER.
+            # Le lien pose par l etape 8i est mort tant que rien n est monte, et
+            # c est le cas normal ici. Mais si un repertoire REEL s y trouve, il
+            # contient un trousseau - « rm -rf » le perdrait sans un mot. On
+            # deplace son contenu sur le volume, puis on remplace.
+            if [ -d "/root/$lien" ] && [ ! -L "/root/$lien" ]; then
+                ( shopt -s dotglob nullglob
+                  _restes=("/root/$lien"/*)
+                  [ "${#_restes[@]}" -gt 0 ] && mv -n "${_restes[@]}" "$cible"/ ) 2>/dev/null
+                rmdir "/root/$lien" 2>/dev/null \
+                    || { log "ATTENTION : /root/$lien non vide, laisse EN CLAIR."; continue; }
+            else
+                rm -f "/root/$lien"
+            fi
+            ln -sfn "$cible" "/root/$lien"
+        elif [ -L "/root/$lien" ]; then
+            rm -f "/root/$lien"
+            install -d -m 0700 "/root/$lien"
+        fi
+    done
+}
+
+# shellcheck disable=SC1090
+. "$CONF" 2>/dev/null || true
+
+if [ -z "$MAPPER" ] || [ -z "$UUID" ]; then
+    # ── PAS DE VOLUME CHIFFRE ───────────────────────────────────────────────
+    # L operateur n a pas coche « chiffrer », ou le disque etait trop petit pour
+    # que la partition /home de partition.conf tienne. On le DIT : le symptome
+    # silencieux serait un banc qu on croit chiffre et qui ne l est pas.
+    UUID=""
+    MAPPER=""
+    ecrire_conf          # n ecrit que CRYPTHOME_OWNER : les deux autres sont vides
+    raccorder_trousseau_root 0
+    log "ATTENTION : $MOUNT n est PAS chiffre sur ce disque."
+    log "  Les profils, cookies et trousseaux y seront lisibles."
+    log "  Pour chiffrer un SECOND disque apres coup : /root/init-crypthome.sh"
+    exit 0
+fi
+
+# ── LE VOLUME DOIT ETRE MONTE LA, MAINTENANT ────────────────────────────────
+# Calamares monte la cible avant d y deverser le squashfs : a cet instant,
+# /home DOIT etre le volume dechiffre. S il ne l est pas, ce qu on s apprete a
+# ecrire dedans (le trousseau de root) irait sur le repertoire /home de la
+# RACINE, en clair, et disparaitrait sous le montage au premier demarrage.
+# On le dit et on continue : crypttab, fstab et la configuration, eux, restent
+# justes - c est seulement le trousseau qu on ne pose pas.
+_monte=1
+if command -v findmnt >/dev/null 2>&1; then
+    _src_reel="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
+    if [ "$(readlink -f "${_src_reel:-/nonexistent}")" != "$(readlink -f "/dev/mapper/$MAPPER")" ]; then
+        _monte=0
+        log "ATTENTION : $MOUNT n est pas monte depuis /dev/mapper/$MAPPER"
+        log "  (source vue : ${_src_reel:-aucune}) - trousseau de root non pose."
+    fi
+fi
+
+# ── CRYPTTAB : "noauto" ─────────────────────────────────────────────────────
+# systemd ne doit RIEN demander de lui-meme : c est unlock-home qui pose la
+# question, avec son delai et son repli. La ligne reste, parce qu elle documente
+# le volume et sert a « cryptdisks_start » a la main.
+if grep -q "^$MAPPER[[:space:]]" /etc/crypttab 2>/dev/null; then
+    sed -i "\|^$MAPPER[[:space:]]|d" /etc/crypttab
+fi
+printf '%-22s %-40s %-10s %s\n' "$MAPPER" "UUID=$UUID" "none" "luks,noauto" >> /etc/crypttab
+
+# ── FSTAB : "noauto,nofail" ─────────────────────────────────────────────────
+# noauto pour la meme raison, nofail en ceinture : une entree /home qui echoue
+# au demarrage ne doit pas basculer la machine en mode secours. On CONSERVE les
+# options ecrites par Calamares (noatime, discard sur SSD) au lieu de les
+# remplacer par "defaults" - elles ont ete choisies d apres le disque reel.
+awk -v m="$MOUNT" '
+    $1 ~ /^#/ || $2 != m { print; next }
+    {
+        opts = $4
+        if (opts !~ /(^|,)noauto(,|$)/) opts = opts ",noauto"
+        if (opts !~ /(^|,)nofail(,|$)/) opts = opts ",nofail"
+        # Le passe fsck a 2 : la racine seule vaut 1, et 0 desactiverait la
+        # verification du volume chiffre.
+        printf "%-42s %-14s %-7s %s %s %s\n", $1, $2, $3, opts, ($5 == "" ? "0" : $5), "2"
+    }
+' /etc/fstab > /etc/fstab.crypthome && mv /etc/fstab.crypthome /etc/fstab
+
+ecrire_conf
+[ "$_monte" = 1 ] && raccorder_trousseau_root 1
+
+# ── LE SERVICE ──────────────────────────────────────────────────────────────
+# Deja active dans l image (etape 8i) ; on le reactive ici pour le cas d un
+# rootfs ou systemctl avait echoue au build. Sans lui, /home reste ferme et
+# personne ne saurait pourquoi.
+systemctl enable unlock-home.service >/dev/null 2>&1 || true
+
+# Les lanceurs a secrets pointent vers le compte proprietaire, qui vient de
+# changer de nom : la liste doit etre refaite avec le bon.
+[ -x /usr/local/sbin/refresh-owner-apps ] && \
+    /usr/local/sbin/refresh-owner-apps >/dev/null 2>&1 || true
+
+log "$MOUNT chiffre (LUKS $UUID, mapping $MAPPER), proprietaire ${OWNER:-<aucun>}."
+log "  Au demarrage : « Dechiffrer $MOUNT ? [o/N] » - non, ou pas de reponse,"
+log "  oui : session ${OWNER:-du compte}, persistante sur $MOUNT chiffre ;"
+log "  non, ou pas de reponse : session root ephemere (ecritures dans /tmp),"
+log "  sans $MOUNT - le demarrage ne bloque jamais."
+exit 0

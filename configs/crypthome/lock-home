@@ -15,7 +15,24 @@ MAPPER="${CRYPTHOME_NAME:-crypthome}"
 MOUNT="${CRYPTHOME_MOUNT:-/home}"
 OWNER="${CRYPTHOME_OWNER:-}"
 
-if ! mountpoint -q "$MOUNT" && [ ! -e "/dev/mapper/$MAPPER" ]; then
+# ── LE MONTAGE DOIT VENIR DU VOLUME CHIFFRE ─────────────────────────────────
+# "monte" ne suffit pas. /home peut etre une partition ORDINAIRE - une machine
+# installee avec un /home separe, ou init-crypthome.sh n a jamais tourne. Traiter
+# ce montage-la comme le disque chiffre ecrirait les secrets EN CLAIR sous le
+# compte proprietaire tout en annoncant le contraire : le pire des etats, parce
+# qu il a l air correct. On exige donc que la source du montage soit le mapping
+# dechiffre lui-meme, et pas seulement qu il y ait quelque chose sur /home.
+crypthome_monte() {
+    local _src
+    mountpoint -q "$MOUNT" || return 1
+    _src="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
+    [ -n "$_src" ] || return 1
+    [ "$(readlink -f "$_src")" = "$(readlink -f "/dev/mapper/$MAPPER")" ]
+}
+
+# Rien a fermer, ET rien a demonter qui nous appartienne : un /home ordinaire
+# n est pas de notre ressort - le demonter tuerait des sessions pour rien.
+if ! crypthome_monte && [ ! -e "/dev/mapper/$MAPPER" ]; then
     echo "lock-home: $MOUNT n'est pas dechiffre."
     exit 0
 fi
@@ -28,7 +45,7 @@ if [ -n "$OWNER" ] && id -u "$OWNER" >/dev/null 2>&1; then
     pkill -KILL -u "$OWNER" >/dev/null 2>&1 || true
 fi
 
-if mountpoint -q "$MOUNT" && ! umount "$MOUNT"; then
+if crypthome_monte && ! umount "$MOUNT"; then
     echo "lock-home: $MOUNT occupe - processus restants :" >&2
     fuser -vm "$MOUNT" 2>&1 | head -20 >&2
     exit 1

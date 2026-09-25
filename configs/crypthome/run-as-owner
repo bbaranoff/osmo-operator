@@ -20,6 +20,23 @@ CONF=/etc/default/crypthome
 [ -r "$CONF" ] && . "$CONF"
 OWNER="${CRYPTHOME_OWNER:-}"
 MOUNT="${CRYPTHOME_MOUNT:-/home}"
+MAPPER="${CRYPTHOME_NAME:-crypthome}"
+
+# ── LE MONTAGE DOIT VENIR DU VOLUME CHIFFRE ─────────────────────────────────
+# "monte" ne suffit pas. /home peut etre une partition ORDINAIRE - une machine
+# installee avec un /home separe, ou init-crypthome.sh n a jamais tourne. Traiter
+# ce montage-la comme le disque chiffre ecrirait les secrets EN CLAIR sous le
+# compte proprietaire tout en annoncant le contraire : le pire des etats, parce
+# qu il a l air correct. On exige donc que la source du montage soit le mapping
+# dechiffre lui-meme, et pas seulement qu il y ait quelque chose sur /home.
+crypthome_monte() {
+    local _src
+    mountpoint -q "$MOUNT" || return 1
+    _src="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
+    [ -n "$_src" ] || return 1
+    [ "$(readlink -f "$_src")" = "$(readlink -f "/dev/mapper/$MAPPER")" ]
+}
+
 
 [ "$#" -ge 1 ] || { echo "usage: run-as-owner <commande> [args...]" >&2; exit 2; }
 
@@ -33,12 +50,12 @@ OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
 OWNER_SHELL="$(getent passwd "$OWNER" | cut -d: -f7)"
 [ -n "$OWNER_SHELL" ] || OWNER_SHELL=/bin/bash
 
-# Le disque doit etre monte ET le home exister dessus. Les deux : un /home
-# monte mais vide (disque fraichement initialise) ne doit pas faire demarrer
-# une application sur un home inexistant.
-if ! mountpoint -q "$MOUNT" || [ ! -d "$OWNER_HOME" ]; then
+# Le volume chiffre doit etre monte ET le home exister dessus. Les deux : un
+# /home monte mais vide (disque fraichement initialise) ne doit pas faire
+# demarrer une application sur un home inexistant.
+if ! crypthome_monte || [ ! -d "$OWNER_HOME" ]; then
     logger -t run-as-owner -p user.notice \
-        "$1 lance sous root : $MOUNT n'est pas dechiffre, pas de profil $OWNER."
+        "$1 lance sous root : $MOUNT n'est pas le volume chiffre dechiffre, ou pas de profil $OWNER."
     exec "$@"
 fi
 

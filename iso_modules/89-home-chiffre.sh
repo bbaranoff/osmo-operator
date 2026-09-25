@@ -27,12 +27,31 @@
 # demarrent sans secrets. C est ce qui rend le dispositif utilisable sur un
 # banc qu on redemarre dix fois par jour.
 #
-# RIEN N EST CHIFFRE PAR CE MODULE. Il pose les outils ; c est l operateur qui
-# lance init-crypthome.sh sur le systeme installe, quand il a un second disque
-# et une phrase de passe. Tant que CRYPTHOME_UUID est vide dans
-# /etc/default/crypthome, unlock-home constate qu il n y a rien a faire et
-# sort - la cle live et une machine sans second disque ne voient aucune
-# difference.
+# OU SE FAIT LE CHIFFREMENT, DESORMAIS : DANS CALAMARES.
+# [2026-09-25] Le chiffrement n est plus une operation d apres-coup lancee
+# depuis une session de bureau. Il se fait A L INSTALLATION :
+#   - installer/calamares/modules/partition.conf decoupe le disque en DEUX,
+#     racine + /home, et marque la racine "noEncrypt". Cocher « chiffrer le
+#     systeme » ne chiffre donc que /home, en LUKS2 ;
+#   - crypthome-postinstall, lance par shellprocess@osmo dans la cible,
+#     raccorde ce que l installeur a produit : crypttab et fstab en "noauto",
+#     /etc/default/crypthome rempli (UUID, mapping, ET le compte de session
+#     comme proprietaire), trousseau de root pose sur le volume.
+#
+# POURQUOI PAS DANS LA SESSION. init-crypthome.sh recopie /home pendant que la
+# session qui l a lance tient ce meme /home : la copie est prise a chaud,
+# l ancien contenu doit etre evacue au redemarrage suivant, et le basculement
+# s etale sur deux demarrages. A l installation, le disque est vierge et
+# personne ne tient rien - il n y a ni copie, ni evacuation, ni deuxieme temps.
+#
+# CE MODULE, LUI, NE CHIFFRE TOUJOURS RIEN. Il pose les outils dans le rootfs,
+# pour la cle live et pour la cible. Sur la cle live, et sur une machine
+# installee sans avoir coche la case, CRYPTHOME_UUID reste vide : unlock-home
+# constate qu il n y a rien a faire et sort.
+#
+# init-crypthome.sh RESTE, pour le cas qu il a toujours servi et que Calamares
+# ne couvre pas : chiffrer un SECOND disque ajoute apres coup a une machine
+# deja installee.
 # ── "CE WRAPPER AVAIT ETE RETIRE" : NON, PAS CELUI-LA ───────────────────────
 # L etape 8f (86-finitions.sh) raconte la suppression de ~180 lignes de
 # plomberie qui relancaient CHROMIUM sous osmocom par runuser et xhost. Elle a
@@ -79,6 +98,10 @@ install -m 0755 "$_CH_SRC/refresh-owner-apps"     "$ROOTFS/usr/local/sbin/refres
 install -m 0755 "$_CH_SRC/run-as-owner"           "$ROOTFS/usr/local/bin/run-as-owner"
 install -m 0755 "$_CH_SRC/crypthome-session-setup" "$ROOTFS/usr/local/bin/crypthome-session-setup"
 install -m 0700 "$_CH_SRC/init-crypthome.sh"      "$ROOTFS/root/init-crypthome.sh"
+# Lance par Calamares dans la cible (shellprocess@osmo) : il raccorde le /home
+# que l installeur vient de chiffrer. En sbin parce qu il touche crypttab,
+# fstab et /etc/default/crypthome.
+install -m 0755 "$_CH_SRC/crypthome-postinstall"  "$ROOTFS/usr/local/sbin/crypthome-postinstall"
 install -m 0644 "$_CH_SRC/unlock-home.service"    "$ROOTFS/etc/systemd/system/unlock-home.service"
 
 # La configuration : __OWNER__ est le seul reglage qui change d une image a
@@ -145,8 +168,9 @@ for _p in cryptsetup rsync xhost; do
         echo -e "  ${YELLOW}!${NC} ${CYAN}$_p${NC} absent du rootfs - requis par le dispositif de chiffrement"
 done
 
-echo -e "  ${GREEN}✓${NC} outils poses : ${CYAN}init-crypthome.sh${NC} (a lancer sur la machine), ${CYAN}unlock-home${NC}, ${CYAN}lock-home${NC}"
-echo -e "  ${GREEN}✓${NC} demarrage : rien ne change tant qu aucun disque n est chiffre"
+echo -e "  ${GREEN}✓${NC} outils poses : ${CYAN}unlock-home${NC}, ${CYAN}lock-home${NC}, ${CYAN}crypthome-postinstall${NC} (Calamares), ${CYAN}init-crypthome.sh${NC} (second disque)"
+echo -e "  ${GREEN}✓${NC} a l installation : cocher ${CYAN}« chiffrer »${NC} chiffre ${CYAN}/home${NC} seul, la racine reste lisible"
+echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« Dechiffrer /home ? [o/N] »${NC} - le boot aboutit quelle que soit la reponse"
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
