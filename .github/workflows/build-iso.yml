@@ -397,60 +397,14 @@ jobs:
           # le tag - et un release qui ne disait pas quelle version il portait.
           # Un push de tag garde son propre tag ; tout le reste sort sous la
           # version ci-dessous, a changer ici quand elle avance.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-3' }}
-          name: "osmo_egprs ISO — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-3' }}"
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-4' }}
+          # [2026-09-25] Le nom et le texte sont ceux des releases publiees a la
+          # main (« Osmo-Operator v0.1-3 ») : le texte vit dans
+          # .github/release-notes.md, qui se modifie sans toucher au workflow.
+          name: "Osmo-Operator ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-4' }}"
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-          body: |
-            ## osmo_egprs — images Live x86_64
-
-            | Image | Role |
-            |---|---|
-            | `interstp.iso` | Le hub SS7 du WAN : PC `0.0.0`, aucun operateur. Il ne fait que router du M3UA entre les noeuds. |
-            | `osmo-operator.iso` | Un noeud : coeur GSM complet (BSC / MSC / HLR / SGSN / GGSN). **Une seule image pour les 9 noeuds** — le numero se choisit au demarrage. |
-            | `osmo-operator-lite.iso` | Le meme noeud, sans les ateliers de compilation de `/opt/GSM` (gnuradio, gr-gsm, libosmo*, objets de qemu). Ce qui tourne est identique : memes binaires, memes configs, meme emulation Calypso. Les depots gardent leur `.git`, donc `osmo-update` y fonctionne aussi. |
-            | `osmo-operator-desktop.iso` | Le meme noeud avec un bureau GNOME (wireshark en fenetre, linphone-desktop) et le fond d'ecran GSM LAB. ~2,5 Go de plus : pour ce qui ne se pilote pas au VTY. |
-
-            ### Demarrer
-
-            ```bash
-            # Le hub
-            sudo ./start-interstp.sh --ip <IP du hub>
-
-            # Un noeud : N de 1 a 9, les point codes en decoulent (1.<N>1.x)
-            sudo ./start-direct.sh --node N
-            ```
-
-            L'adressage SS7 se pose avec `set_stp_ip.sh`, qui ecrit d'un coup
-            osmo-stp, osmo-msc, osmo-bsc et la table WAN :
-
-            ```bash
-            sudo ./set_stp_ip.sh --inter    --ip <hub> --ips "<n1> <n2> <n3>"
-            sudo ./set_stp_ip.sh --operator --node N --ip <son IP> --hub-ip <hub>
-            ```
-
-            Verifier l'interconnexion : `checks/diag-interstp.sh` cote hub,
-            `checks/diag-stp-operator.sh` cote noeud.
-
-            ### Fichiers volumineux
-
-            Une Release GitHub plafonne a 2 Gio par fichier : les images plus
-            grosses sont decoupees. Recombiner puis verifier :
-
-            ```bash
-            cat osmo-operator.iso.part-* > osmo-operator.iso
-            sha256sum -c SHA256SUMS
-            ```
-
-            ### Essayer
-
-            ```bash
-            qemu-system-x86_64 -cdrom osmo-operator.iso -m 8G -enable-kvm \
-              -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080
-            ```
-
-            La racine du live est un tmpfs : prevoir la RAM (~6 Go en `toram`).
-            Journaux et captures y sont bornes, et purges a chaque demarrage.
+          body_path: .github/release-notes.md
           files: |
             interstp.iso*
             osmo-operator.iso*
