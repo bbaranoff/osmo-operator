@@ -26,7 +26,7 @@
 #
 # L'iteration quotidienne se fait dans Dockerfile.run, qui repart de cette image
 # (`FROM osmocom-nitb`) et n'y rafraichit que les scripts, les configs, le pont
-# et les arbres git qosmo-grgsm / osmo-operator — en secondes, pas en 40 minutes.
+# et les arbres git qosmo / osmo-operator — en secondes, pas en 40 minutes.
 #
 # Cette image reste AUTONOME : elle a son propre ENTRYPOINT et start-nitb.sh la
 # lance seule. Ne pas retirer ses COPY de configs/scripts sous pretexte que
@@ -132,7 +132,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     gcc-9 g++-9 gcc-11 g++-11 \
     # log4cpp : etait installe a part avec le build-dep gnuradio (gr-gsm).
     liblog4cpp5-dev \
-    # QEMU Calypso (fork bbaranoff/qosmo-grgsm) : venv + numpy/scipy pour l'outillage
+    # QEMU Calypso (bbaranoff/qosmO) : venv + numpy/scipy pour l'outillage
     # DSP, glib/pixman/slirp pour la cible arm-softmmu, ninja pour meson, socat
     # pour les PTY de scripts/run.sh. (Ex-bloc apt-get juste avant le build QEMU.)
     python3-venv python3-pip python3-numpy python3-scipy \
@@ -647,95 +647,60 @@ RUN set -eux; \
 #  a ete fusionne dans la liste apt-fast en tete de fichier : une seule liste,
 #  un seul endroit ou la faire evoluer. Aucun paquet perdu.)
 
-# Build QEMU fork bbaranoff/qosmo-grgsm (cible arm-softmmu, machine "calypso")
-# Snapshot de l arbre ENTIER, build/ compris : Dockerfile.run y refait `ninja`
-# apres son git pull, et QEMU lit build/qemu-bundle pour se relocaliser (voir
-# Dockerfile.lite). C est le plus gros paquet du cache (~1,5 Go d objets, bien
-# moins une fois en zstd) - et c est aussi la compilation la plus longue.
-RUN if ! osmo-deb install qosmo-grgsm 0.git; then \
-      cd /opt/GSM \
-      && git clone https://github.com/bbaranoff/qosmo-grgsm /opt/GSM/qosmo-grgsm \
-      && cd /opt/GSM/qosmo-grgsm \
+# ─────────────────────────────────────────────────────────────────────────────
+# [2026-09-25] qosmo + c54x_exe + grgsm_exe — remplacent qosmo-grgsm et qosmo-dsp
+# ─────────────────────────────────────────────────────────────────────────────
+# Les deux forks QEMU sont retires (cf. start-direct.sh, environment/paths.env) :
+#   /opt/GSM/qosmo      UN seul arbre QEMU (bbaranoff/qosmO), --enable-l1-grgsm.
+#                       Il porte run.sh, run_modules, cfgs. Le meme binaire sert
+#                       au mode --dsp : CALYPSO_DSP_EXTERN=1 y coupe la L1 gr-gsm.
+#                       `ninja install` pose aussi le lanceur C `qosmo`.
+#   /opt/GSM/c54x_exe   le C54x HORS de QEMU (mask-ROM TI, sa ROM dans rom/).
+#                       Il compile les sources de /opt/GSM/qosmo : APRES qosmo.
+#   /opt/GSM/grgsm_exe  la couche 1 gr-gsm hors QEMU, memes sources qosmo.
+# Snapshot de l arbre qosmo ENTIER, build/ compris : QEMU_BIN pointe sur
+# $OQC_ROOT/build/qemu-system-arm, et QEMU lit build/qemu-bundle pour se
+# relocaliser (voir Dockerfile.lite).
+# L ancien RUN « /opt/GSM/qemu/{build,*.py} » et calypso-ipc-device disparaissent
+# avec qosmo-grgsm : plus rien ne les lit.
+RUN if ! osmo-deb install qosmo 0.git; then \
+      git clone https://github.com/bbaranoff/qosmO /opt/GSM/qosmo \
+      && cd /opt/GSM/qosmo \
       && python3 -m venv /root/.venv-qemu \
       && . /root/.venv-qemu/bin/activate \
       && pip install --no-cache-dir tomli \
-      && mkdir build && cd build \
-      && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-install --disable-werror \
+      && mkdir -p build && cd build \
+      && ../configure --target-list=arm-softmmu --enable-l1-grgsm \
+             --prefix=/opt/GSM/qemu-install --disable-werror --disable-docs \
       && make -j$(nproc) \
       && make install \
       && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm \
-      && osmo-deb snapshot qosmo-grgsm 0.git /opt/GSM/qosmo-grgsm /opt/GSM/qemu-install \
-             /root/.venv-qemu /usr/local/bin/qemu-system-arm; \
+      && cp /opt/GSM/qemu-install/bin/qosmo /usr/local/bin/qosmo \
+      && osmo-deb snapshot qosmo 0.git /opt/GSM/qosmo /opt/GSM/qemu-install \
+             /root/.venv-qemu /usr/local/bin/qemu-system-arm /usr/local/bin/qosmo; \
     fi
 
-# Layout stable attendu par scripts/run.sh : /opt/GSM/qemu/{build,bridge.py,sercomm_udp.py,...}
-RUN mkdir -p /opt/GSM/qemu/build \
-    && cp /opt/GSM/qosmo-grgsm/*.py /opt/GSM/qemu/ 2>/dev/null || true \
-    && ln -sf /usr/local/bin/qemu-system-arm /opt/GSM/qemu/build/qemu-system-arm \
-    && ln -sf /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp.txt
-
-# [2026-08-30] ETAPE SUPPRIMEE — « ROM DSP binaire, derivee du .txt ».
-#   RUN python3 /opt/GSM/qosmo-grgsm/tools/dsp_txt2bin.py \
-#       /opt/GSM/qosmo-grgsm/calypso_dsp.txt /opt/GSM/calypso_dsp
-# L'amont bbaranoff/qosmo-grgsm a fusionne la PR #1 « sans-dsp » (merge a547b01),
-# qui SUPPRIME tools/dsp_txt2bin.py — le seul generateur des sept
-# calypso_dsp.{PROM0..3,DROM,PDROM,Registers}.bin. Le build mourait donc a cette
-# etape sur « can't open file ... [Errno 2] », apres ~40 etapes.
-# Rien dans ce depot ne consomme /opt/GSM/calypso_dsp (le binaire produit ici) :
-# le runtime lit les DSP_PROM* de environnement/paths.env, et les gardes qui les
-# exigeaient ont ete levees (run.sh --check-paths, run_modules/00-prereqs.sh,
-# run_modules/40-qemu.sh, start-direct.sh). Le .txt reste symlinke juste au-dessus
-# pour les outils d'analyse (tools/tic54x-dis.py, tests/test_calypso_milestones.py).
-
-# Build le DEVICE IPC calypso-ipc-device (tools/) — le Dockerfile ne le buildait
-# PAS → binaire potentiellement absent/périmé au runtime. CRITIQUE : le 4 SPS
-# dépend de info_cnf compilé avec CALYPSO_TRX_OSR=4 (sinon il s'annonce 1 SPS →
-# osmo-trx alloue buffer_size=1250 → troncature → OML BTS meurt → pas de camping).
-# NON BLOQUANT pour la meme raison que la ROM DSP ci-dessus : si l'amont ne
-# fournit pas le repertoire, on log et on continue au lieu de casser le build.
-RUN if [ -d /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device ]; then \
-        cd /opt/GSM/qosmo-grgsm/tools/calypso-ipc-device \
-        && make clean && make -j"$(nproc)"; \
-    else \
-        echo "[skip] calypso-ipc-device absent de qosmo-grgsm/tools"; \
-    fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-# qosmo-dsp — le SECOND fork QEMU : le vrai DSP C54x emule (start-direct.sh --dsp)
-# ─────────────────────────────────────────────────────────────────────────────
-# [2026-09-03] Il manquait a l image : build-iso.sh le reprenait de l HOTE
-# (/opt/GSM/qosmo-dsp) et start-direct.sh --dsp echouait sur toute machine ou il
-# n avait pas ete clone a la main. Meme recette que qosmo-grgsm : clone, venv
-# partage (/root/.venv-qemu, tomli pour meson), cible arm-softmmu, puis :
-#   - les 7 ROM du DSP (calypso_dsp.{PROM0..3,DROM,PDROM,Registers}.bin) dans
-#     /opt/GSM, decoupees depuis calypso_dsp.txt par tools/dsp_txt2bin.py -
-#     c est la que environnement/paths.env (DSP_ROM_DIR) les cherche ;
-#   - le device IPC de CE fork (tools/calypso-ipc-device), distinct de celui
-#     de qosmo-grgsm.
-# Le prefix d installation est propre au fork (/opt/GSM/qemu-dsp-install) : les
-# deux QEMU ne se marchent pas dessus, le lanceur qosmo-dsp prend
-# build/qemu-system-arm de son arbre. Non fatal si le depot n est pas
-# joignable : l image reste utilisable, seul --dsp manque.
-RUN if ! osmo-deb install qosmo-dsp 0.git; then \
-      if git clone https://github.com/bbaranoff/qosmo-dsp /opt/GSM/qosmo-dsp; then \
-        cd /opt/GSM/qosmo-dsp \
-        && . /root/.venv-qemu/bin/activate \
-        && mkdir -p build && cd build \
-        && ../configure --target-list=arm-softmmu --prefix=/opt/GSM/qemu-dsp-install --disable-werror \
-        && make -j$(nproc) \
-        && make install \
-        && cd /opt/GSM/qosmo-dsp \
-        && for s in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do \
-             python3 tools/dsp_txt2bin.py calypso_dsp.txt "/opt/GSM/calypso_dsp.$s.bin" --section "$s" || exit 1; \
-           done \
-        && { [ ! -d tools/calypso-ipc-device ] || { make -C tools/calypso-ipc-device clean && make -C tools/calypso-ipc-device -j"$(nproc)"; }; } \
-        && osmo-deb snapshot qosmo-dsp 0.git /opt/GSM/qosmo-dsp /opt/GSM/qemu-dsp-install \
+# c54x_exe : le Makefile met -march=native dans CFLAGS - dans une image qui
+# tourne sur d autres CPU que celui du build, c est un SIGILL au demarrage. On
+# garde ses drapeaux, sans celui-la. La ROM est aussi posee en
+# /opt/GSM/calypso_dsp.*.bin, le --rom-dir par defaut de c54x_exe.
+RUN if ! osmo-deb install c54x-exe 0.git; then \
+      git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
+      && cd /opt/GSM/c54x_exe \
+      && make QOSMO=/opt/GSM/qosmo \
+             CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
+      && cp rom/calypso_dsp.*.bin rom/calypso_dsp.txt /opt/GSM/ \
+      && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
              /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
              /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
-             /opt/GSM/calypso_dsp.Registers.bin; \
-      else \
-        echo "[warn] qosmo-dsp non clonable - l image n aura pas le mode --dsp"; \
-      fi; \
+             /opt/GSM/calypso_dsp.Registers.bin /opt/GSM/calypso_dsp.txt; \
+    fi
+
+RUN if ! osmo-deb install grgsm-exe 0.git; then \
+      git clone https://github.com/bbaranoff/grgsm_exE /opt/GSM/grgsm_exe \
+      && cd /opt/GSM/grgsm_exe \
+      && make QOSMO=/opt/GSM/qosmo \
+      && osmo-deb snapshot grgsm-exe 0.git /opt/GSM/grgsm_exe; \
     fi
 
 # ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
@@ -775,7 +740,7 @@ RUN if ! osmo-deb install grgsm-venv 0.git; then \
 # root active le venv.
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 
-# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qosmo-grgsm/run.sh casse) :
+# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qosmo/run.sh casse) :
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
 COPY opt-gsm/. /opt/GSM/

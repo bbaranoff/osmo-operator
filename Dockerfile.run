@@ -5,7 +5,7 @@
 # bouge a chaque iteration du lab :
 #   - les scripts et les configs du depot (COPY, quelques secondes) ;
 #   - le pont TRX pont/pont.py, source iteree a chaud au meme titre ;
-#   - les arbres git qosmo-grgsm et osmo-operator (git pull + rebuild).
+#   - les arbres git qosmo, c54x_exe, grgsm_exe et osmo-operator (git pull + rebuild).
 #
 # Tout le reste vit desormais dans Dockerfile : paquets apt, Node/dashboard web,
 # firmware Calypso, config PulseAudio, prompt, repertoires, units systemd,
@@ -119,7 +119,7 @@ RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
 # mais AUCUN `ARG QEMU_CACHE_BUST` n'existait : docker repondait « unused build
 # argument » et servait les deux `git pull` ci-dessous DEPUIS LE CACHE — les
 # deux RUN qu'on garde justement pour la fraicheur ne rafraichissaient rien, et
-# l'image run pouvait embarquer un qosmo-grgsm et un osmo-operator perimes sans que
+# l'image run pouvait embarquer un qosmo et un osmo-operator perimes sans que
 # rien ne le signale. L'ARG est declare ici, JUSTE AVANT les pulls (un ARG
 # invalide le cache a son PREMIER USAGE, pas a sa declaration : d'ou le
 # `: "${QEMU_CACHE_BUST:-}"` en tete de chaque RUN, qui le consomme reellement).
@@ -155,38 +155,25 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
     && (GIT_TERMINAL_PROMPT=0 git pull --ff-only \
         || echo "[warn] git pull osmo-operator impossible (reseau du build) - on garde l arbre du clone de base")
 
-# ── Rebuild QEMU (pull latest from GitHub + rebuild) ─────────────────────────
-# [2026-08-12] `ninja` NE SUFFIT PAS APRES CE PULL.
-# Le pull rapatrie tout l'arbre qosmo-grgsm, mais deux binaires distincts en
-# sortent et meson/ninja n'en connait qu'un :
-#   - qemu-system-arm            -> build/ (ninja)
-#   - calypso-ipc-device         -> tools/calypso-ipc-device/ (Makefile a part)
-# Le second n'etait construit QUE dans l'image de base (Dockerfile:289). Un
-# `git push` touchant `tools/calypso-ipc-device/qemu_wrap.c` — c'est-a-dire tout
-# le montant : RACH, SDCCH, TCH, chiffrement A5, offsets de TOA — n'arrivait
-# donc JAMAIS dans l'image run : on tournait avec le device de l'image de base,
-# sans rien qui le signale. On refait les deux ici, dans le meme layer que le
-# pull pour qu'ils ne puissent pas se desynchroniser via le cache docker.
-# (start.sh l.492-497 refait le pull et le `ninja` au demarrage du conteneur,
-#  mais PAS calypso-ipc-device : ce RUN est le seul endroit qui les garde
-#  synchronises. Ne pas le decouper en plusieurs RUN.)
-# (Le rebuild du device est NON BLOQUANT : si l'amont ne fournit plus
-#  tools/calypso-ipc-device, on garde celui de l'image de base au lieu de
-#  casser le build de l'image run.)
-# Meme garde que pour osmo-operator ci-dessus : le pull rafraichit, il ne
-# conditionne pas. Sans le `|| echo`, un reseau de build capricieux emportait
-# la reconstruction de QEMU qui suit - laquelle marche parfaitement sur
-# l'arbre deja present.
-RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/qosmo-grgsm \
-    && (GIT_TERMINAL_PROMPT=0 git pull --ff-only \
-        || echo "[warn] git pull qosmo-grgsm impossible - on rebatit sur l arbre present") && \
-    (cd build && ninja) && \
-    if [ -d tools/calypso-ipc-device ]; then \
-        make -C tools/calypso-ipc-device clean && \
-        make -C tools/calypso-ipc-device -j"$(nproc)"; \
-    else \
-        echo "[skip] calypso-ipc-device absent de qosmo-grgsm/tools"; \
-    fi
+# ── Rebuild qosmo + c54x_exe + grgsm_exe (pull + rebuild) ────────────────────
+# [2026-09-25] qosmo-grgsm/qosmo-dsp sont retires : un seul arbre QEMU
+# (/opt/GSM/qosmo) et deux couches 1 hors QEMU, c54x_exe et grgsm_exe, qui
+# compilent les sources de /opt/GSM/qosmo (hw/arm/calypso, contrib/hors-qemu).
+# Les trois sont donc rafraichis DANS LE MEME RUN : un c54x_exe recompile sur
+# un qosmo perime (ou l inverse) donnerait un DSP et un ARM qui ne parlent pas
+# du meme protocole de pont, sans rien qui le signale. Ne pas decouper.
+# Le pull rafraichit, il ne conditionne pas (cf. osmo-operator ci-dessus).
+# c54x_exe : CFLAGS sans -march=native, comme dans le Dockerfile de base.
+RUN : "${QEMU_CACHE_BUST:-}" && \
+    for d in qosmo c54x_exe grgsm_exe; do \
+        (cd /opt/GSM/$d && GIT_TERMINAL_PROMPT=0 git pull --ff-only) \
+            || echo "[warn] git pull $d impossible - on rebatit sur l arbre present"; \
+    done && \
+    (cd /opt/GSM/qosmo/build && ninja) && \
+    make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
+        CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" && \
+    cp /opt/GSM/c54x_exe/rom/calypso_dsp.*.bin /opt/GSM/ && \
+    make -C /opt/GSM/grgsm_exe QOSMO=/opt/GSM/qosmo clean all
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]
