@@ -9,9 +9,15 @@
 # paquet absent du miroir apt ne doit pas arreter le reste.
 #
 # Ce qu il pose :
-#   - les MOTEURS LIBRES de jeu : gzdoom + freedoom (Doom), quakespasm (Quake),
-#     openra (a la place d Unreal : pas d Unreal libre, OpenRA est le plus
-#     proche jouable sans donnees proprietaires) ;
+#   - [addition.sh seulement, pas l ISO : OSMO_EXTRAS_JEUX=0 les saute, ~470 Mo]
+#     deux jeux LIBRES, donnees comprises, verifies sur Ubuntu noble (conteneur
+#     + Xvfb, 2026-09-25) :
+#       Doom  : freedoom (WAD libres) + chocolate-doom (moteur que le lanceur
+#               freedoom2 sait trouver ; dsda-doom, lui, n est pas reconnu) ;
+#       Quake : openarena (moteur ioquake3, Quake III, ~410 Mo de donnees).
+#     Retires : gzdoom et openra (absents de noble), quakespasm (sans le
+#     pak0.pak proprietaire il s arrete au demarrage), Unreal (aucune version
+#     libre) ;
 #   - kodi (mediacenter) ;
 #   - wmctrl : l encart (osmo-panel.py) en a besoin pour CALER la fenetre lancee
 #     sur le cadre FFT ;
@@ -53,9 +59,6 @@ _osmo_extras_apt() {
     local p
     for p in wmctrl xdotool \
              qemu-system-x86 ovmf sshpass kpartx \
-             gzdoom freedoom \
-             quakespasm \
-             openra \
              kodi \
              wireshark \
              gir1.2-webkit2-4.1; do
@@ -85,6 +88,23 @@ _osmo_extras_apt() {
     else
         _ex_warn "ofono indisponible (apt) - ignore"
     fi
+}
+
+# ── LES JEUX : SUPPLEMENT SEULEMENT ──────────────────────────────────────────
+# [2026-09-25] Hors de l ISO : ~470 Mo pour deux jeux. addition.sh --extras les
+# pose (OSMO_EXTRAS_JEUX=1, le defaut) ; iso_modules/80-chroot.sh passe 0.
+_osmo_extras_jeux() {
+    export DEBIAN_FRONTEND=noninteractive
+    local p
+    for p in freedoom chocolate-doom openarena; do
+        if dpkg -s "$p" >/dev/null 2>&1; then
+            _ex_ok "$p deja present"
+        elif apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1; then
+            _ex_ok "$p installe"
+        else
+            _ex_warn "$p indisponible (apt) - ignore"
+        fi
+    done
 }
 
 # ── YOUTUBE : uBLOCK ORIGIN FORCE PAR POLITIQUE FIREFOX ──────────────────────
@@ -273,8 +293,8 @@ CA
 }
 
 # ── LES .desktop QUI MANQUENT + LES DOSSIERS « Jeux » / « Media » ────────────
-# Les moteurs de jeu et kodi posent DEJA leur .desktop (freedoom.desktop,
-# org.quakespasm..., openra.desktop, kodi.desktop). On n ajoute que ceux qui
+# Les jeux et kodi posent DEJA leur .desktop (io.github.freedoom.Phase1/2,
+# openarena.desktop, kodi.desktop). On n ajoute que ceux qui
 # manquent (youtube, dino-jeu), puis on RANGE tout dans deux dossiers GNOME.
 _osmo_extras_desktops() {
     install -d /usr/share/applications
@@ -408,7 +428,7 @@ folder-children=['Jeux', 'Media', 'Telephone', 'Outils']
 
 [org.gnome.desktop.app-folders.folders:/org/gnome/desktop/app-folders/folders/Jeux/]
 name='Jeux'
-apps=['freedoom.desktop', 'org.zdoom.gzdoom.desktop', 'gzdoom.desktop', 'quakespasm.desktop', 'org.quakespasm.QuakeSpasm.desktop', 'openra.desktop', 'net.openra.OpenRA.desktop', 'osmo-dino-jeu.desktop']
+apps=['io.github.freedoom.Phase2.desktop', 'io.github.freedoom.Phase1.desktop', 'openarena.desktop', 'osmo-dino-jeu.desktop']
 
 [org.gnome.desktop.app-folders.folders:/org/gnome/desktop/app-folders/folders/Media/]
 name='Media'
@@ -433,8 +453,13 @@ OVR
 # ── L ENTREE ──────────────────────────────────────────────────────────────────
 osmo_extras_install() {
     [ "$(id -u)" -eq 0 ] || { _ex_warn "osmo_extras_install demande root"; return 0; }
-    _ex_say "jeux + media (Doom, Quake, OpenRA, Kodi, YouTube, dino) ..."
+    if [ "${OSMO_EXTRAS_JEUX:-1}" = "1" ]; then
+        _ex_say "jeux + media (Doom, Quake III, Kodi, YouTube, dino) ..."
+    else
+        _ex_say "media (Kodi, YouTube, dino) - jeux Doom/Quake sautes (OSMO_EXTRAS_JEUX=0) ..."
+    fi
     _osmo_extras_apt
+    [ "${OSMO_EXTRAS_JEUX:-1}" = "1" ] && _osmo_extras_jeux
     _osmo_extras_firefox_ublock
     _osmo_extras_lanceurs
     _osmo_extras_desktops

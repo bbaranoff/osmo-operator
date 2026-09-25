@@ -6,9 +6,9 @@
 #      osmo-operator     ce depot, tel quel, en /opt/GSM/osmo-operator
 #                        (+ menu, icones, /usr/bin/osmo-start-direct)
 #      pont              pont/ - le transceiver Python (pont/pont.py)
-#      qemu-calypso      qosmo-grgsm : qemu-system-arm (machine calypso),
+#      qemu-calypso      qosmo : qemu-system-arm (machine calypso),
 #                        run.sh + run_modules + environnement + cfgs +
-#                        tmux_modules + keymaps, en /opt/GSM/qosmo-grgsm
+#                        tmux_modules + keymaps, en /opt/GSM/qosmo
 #      calypso-firmware  /opt/GSM/firmware/board/compal_e88/layer1.highram.*
 #
 #  Les chemins d installation sont CEUX du banc (/opt/GSM/...) : tout le depot
@@ -29,14 +29,14 @@
 #
 #  Sources, surchargeables par l environnement :
 #      OSMO_OPERATOR_SRC  (defaut : le depot qui contient ce script)
-#      QOSMO_SRC          (defaut : /opt/GSM/qosmo-grgsm)
+#      QOSMO_SRC          (defaut : /opt/GSM/qosmo)
 #      FIRMWARE_SRC       (defaut : /opt/GSM/firmware)
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${OSMO_OPERATOR_SRC:=$(cd "$HERE/.." && pwd)}"
-: "${QOSMO_SRC:=/opt/GSM/qosmo-grgsm}"
+: "${QOSMO_SRC:=/opt/GSM/qosmo}"
 : "${FIRMWARE_SRC:=/opt/GSM/firmware}"
 OUT="$HERE/dist"
 ONLY=""
@@ -160,7 +160,7 @@ Recommends: pulseaudio, pulseaudio-utils, asterisk, wireshark
 Homepage: https://github.com/bbaranoff/osmo-operator
 Description: banc GSM/EGPRS Osmocom - lanceur, configurations, outils
  Le depot osmo-operator installe en /opt/GSM/osmo-operator : start-direct.sh
- (lanceur natif, qui delegue a qosmo-grgsm/run.sh), les gabarits de
+ (lanceur natif, qui delegue a qosmo/run.sh), les gabarits de
  configuration Osmocom et Asterisk, les scripts reseau/WAN/SS7, les checks, le
  menu et les icones du bureau. Les demons Osmocom eux-memes (osmo-stp, hlr,
  msc, bsc, bts...) ne sont pas dans ce paquet : ils viennent du depot Osmocom
@@ -191,7 +191,7 @@ Maintainer: $MAINT
 Depends: python3 (>= 3.10), python3-numpy
 Enhances: osmo-operator
 Homepage: https://github.com/bbaranoff/osmo-operator
-Description: pont TRX entre osmo-bts-trx et le Calypso emule (qosmo-grgsm)
+Description: pont TRX entre osmo-bts-trx et le Calypso emule (qosmo)
  Transceiver TRX-UDP en Python : se presente a osmo-bts-trx sur 5700-5702,
  decode le descendant vers GSMTAP 4730/4731 (lu par le modele QEMU) et encode
  le montant depuis les sidebands /dev/shm/calypso_*. Installe en
@@ -205,9 +205,9 @@ fi
 # ── qemu-calypso ────────────────────────────────────────────────────────────
 if wanted qemu-calypso; then
     BIN="$QOSMO_SRC/build/qemu-system-arm"
-    [ -x "$BIN" ] || { echo "qemu-system-arm absent : $BIN (construisez qosmo-grgsm d abord)" >&2; exit 1; }
+    [ -x "$BIN" ] || { echo "qemu-system-arm absent : $BIN (construisez qosmo d abord)" >&2; exit 1; }
     V="$(tree_version "$QOSMO_SRC")"
-    P="$WORK/qemu-calypso"; D="$P/opt/GSM/qosmo-grgsm"
+    P="$WORK/qemu-calypso"; D="$P/opt/GSM/qosmo"
     mkdir -p "$D/build" "$D/share/qemu" "$P/DEBIAN"
     for d in run_modules environnement cfgs tmux_modules opt-gsm-scripts; do
         [ -d "$QOSMO_SRC/$d" ] || continue
@@ -222,15 +222,15 @@ if wanted qemu-calypso; then
     if [ "$STRIP" = 1 ] && command -v strip >/dev/null 2>&1; then
         strip --strip-unneeded "$D/build/qemu-system-arm" || true
     fi
-    # Lanceur C qosmo-grgsm (tools/qosmo-launch) : c'est lui que 40-qemu.sh
+    # Lanceur C qosmo (tools/qosmo-launch) : c'est lui que 40-qemu.sh
     # appelle a la place de qemu-system-arm. Compile dans son dossier, livre
-    # dans /usr/local/bin sous le nom du fork ; la source part avec l'arbre.
+    # dans /usr/local/bin/qosmo ; la source part avec l'arbre.
     if [ -f "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" ]; then
         mkdir -p "$D/tools/qosmo-launch" "$P/usr/local/bin"
         install -m644 "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" "$QOSMO_SRC/tools/qosmo-launch/Makefile" "$D/tools/qosmo-launch/"
-        make -s -C "$QOSMO_SRC/tools/qosmo-launch" qosmo-grgsm >/dev/null \
-            || { echo "compilation du lanceur qosmo-grgsm echouee ($QOSMO_SRC/tools/qosmo-launch)" >&2; exit 1; }
-        install -m755 "$QOSMO_SRC/tools/qosmo-launch/qosmo-grgsm" "$P/usr/local/bin/qosmo-grgsm"
+        make -s -C "$QOSMO_SRC/tools/qosmo-launch" ALIAS=qosmo TREE=/opt/GSM/qosmo qosmo >/dev/null \
+            || { echo "compilation du lanceur qosmo echouee ($QOSMO_SRC/tools/qosmo-launch)" >&2; exit 1; }
+        install -m755 "$QOSMO_SRC/tools/qosmo-launch/qosmo" "$P/usr/local/bin/qosmo"
     fi
     # Console gdb en telnet (run_modules/44-gdb-telnet.sh) : le serveur, le
     # generateur du panneau et le panneau genere. gdb-multiarch et telnet
@@ -248,7 +248,7 @@ if wanted qemu-calypso; then
     [ -n "$km" ] || { echo "keymaps QEMU introuvables (en-us)" >&2; exit 1; }
     cp -a "$km" "$D/share/qemu/keymaps"
     DEPS="$(shlib_depends "$D/build/qemu-system-arm")"
-    write_preinst_guard "$P/DEBIAN" /opt/GSM/qosmo-grgsm
+    write_preinst_guard "$P/DEBIAN" /opt/GSM/qosmo
     write_control "$P/DEBIAN" <<CTL
 Package: qemu-calypso
 Version: $V
@@ -258,13 +258,13 @@ Architecture: $ARCH_HOST
 Maintainer: $MAINT
 Depends: ${DEPS:+$DEPS, }bash, socat, tmux, tcpdump, procps, psmisc, gawk, python3, iproute2, gdb-multiarch, telnet
 Recommends: osmo-operator, calypso-firmware
-Homepage: https://github.com/bbaranoff/qosmo-grgsm
+Homepage: https://github.com/bbaranoff/qosmO
 Description: QEMU avec la machine calypso (telephone Osmocom-BB emule) et son lanceur
- qemu-system-arm construit depuis qosmo-grgsm, avec le modele de SoC Calypso
+ qemu-system-arm construit depuis qosmo, avec le modele de SoC Calypso
  (ARM946, TPU/TSP, SIM, couche 1 gr-gsm), le lanceur run.sh et ses modules
  (run_modules/), l environnement du banc (environnement/bench.env), les
  configurations du mobile (cfgs/) et les dispositions tmux. Installe en
- /opt/GSM/qosmo-grgsm, sans les sources ni l arbre de construction.
+ /opt/GSM/qosmo, sans les sources ni l arbre de construction.
 CTL
     build_pkg "$P" qemu-calypso "$V" "$ARCH_HOST"
 fi

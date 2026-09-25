@@ -72,6 +72,23 @@ else
     fi
 fi
 
+# ── Les anciens forks quittent le rootfs ────────────────────────────────────
+# [2026-09-25] L'image docker clone encore qosmo-grgsm et qosmo-dsp (Dockerfile),
+# et 50-injection-image.sh recopie tout /opt/GSM et /usr/local/bin de l'image :
+# les deux arbres (~1,6 Go avec build/), le prefixe qemu-dsp-install et leurs
+# lanceurs arrivaient donc dans l'ISO sans que plus rien ne les lise. Le lien
+# /opt/GSM/calypso_dsp.txt de l'image pointait dans qosmo-grgsm ; il est repose
+# plus bas sur c54x_exe/rom.
+for _old in qosmo-grgsm qosmo-dsp qemu-dsp-install; do
+    [ -e "$ROOTFS/opt/GSM/$_old" ] || continue
+    rm -rf "$ROOTFS/opt/GSM/$_old"
+    echo -e "  ${GREEN}✓${NC} ancien arbre ${CYAN}/opt/GSM/$_old${NC} retire du rootfs"
+done
+rm -f "$ROOTFS"/usr/local/bin/qosmo-grgsm "$ROOTFS"/usr/local/bin/qosmo-dsp \
+      "$ROOTFS"/usr/local/bin/qosmo-grgsm-launch "$ROOTFS"/usr/local/bin/qosmo-dsp-launch
+[ -L "$ROOTFS/opt/GSM/calypso_dsp.txt" ] && [ ! -e "$ROOTFS/opt/GSM/calypso_dsp.txt" ] \
+    && rm -f "$ROOTFS/opt/GSM/calypso_dsp.txt"
+
 # ── c54x_exe et grgsm_exe : les deux couches 1 hors QEMU ────────────────────
 # [2026-09-25] Les forks qosmo-dsp et qosmo-grgsm sont remplaces par UN arbre
 # QEMU, /opt/GSM/qosmo (run.sh, run_modules, cfgs, environnement y ont ete
@@ -349,7 +366,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
                 echo -e "  ${CYAN}·${NC} lanceur $fork : compile dans le chroot ${ISO_ARCH} plus loin"
             fi
         elif [ -n "$lsrc" ] && command -v gcc >/dev/null 2>&1 \
-           && make -s -C "$lsrc" ALIAS="$fork" "$fork" >/dev/null 2>&1 && [ -x "$lsrc/$fork" ]; then
+           && make -s -C "$lsrc" ALIAS="$fork" TREE="/opt/GSM/$fork" "$fork" >/dev/null 2>&1 && [ -x "$lsrc/$fork" ]; then
             install -Dm755 "$lsrc/$fork" "$ROOTFS/usr/local/bin/$fork"
             echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} (compile depuis $lsrc)"
         elif [ -x "/usr/local/bin/$fork" ]; then

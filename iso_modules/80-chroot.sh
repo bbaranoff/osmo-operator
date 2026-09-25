@@ -912,20 +912,23 @@ GDM
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     # ── Fond d ecran GSM LAB ────────────────────────────────────────────
-    # PNG 1920x1080 fige au build (configs/gsm-lab-wallpaper.png, rendu depuis
-    # la page bbaranoff.github.io), pose comme fond GNOME par DEFAUT de session
+    # [2026-09-25] L illustration « communication tower landscape »
+    # (configs/gsm-lab-wallpaper.jpg, 7800x6030), TELLE QUELLE : ni recadree,
+    # ni teintee, ni cadres incrustes (osmo-wallpaper.timer n est plus active,
+    # cf. 85-installeur-bureau.sh). Posee comme fond GNOME par DEFAUT de session
     # (live sans persistance : il faut le defaut de schema, pas un reglage
-    # utilisateur). zoom : l image est en 16:9, elle remplit sans deformer.
-    _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.png
+    # utilisateur). zoom : GNOME remplit l ecran sans deformer (l image est en
+    # 4:3, le haut et le bas debordent un peu sur un ecran 16:9).
+    _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.jpg
     if [ -f "$_WP" ]; then
-        install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.png
+        install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.jpg
         # TROIS sections : la valeur nue, puis les memes pour les "desktop
         # overrides" [schema:ubuntu] et [schema:GNOME-Greeter] que pose
         # 10_ubuntu-settings.gschema.override - une session ubuntu:GNOME lit
         # celles-la de preference, et sans elles le greeter et l extension
         # DING (icones du bureau) repartaient sur le numbat d Ubuntu.
         for _sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
-            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.png\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
+            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.jpg\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.jpg\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
@@ -971,14 +974,16 @@ GDM
 
     # ── JEUX + MEDIA DANS LE NATIF ───────────────────────────────────────
     # Meme lot que le supplement addition.sh, meme code source
-    # (tools/osmo-extras-install.sh) : Doom / Quake / OpenRA / Kodi / YouTube+
+    # (tools/osmo-extras-install.sh) : Kodi / YouTube+
     # uBlock / Wireshark(root) / Linphone, ranges en dossiers Jeux / Media /
     # Telephone / Outils. Non fatal : un paquet absent du miroir ne casse pas le
     # build. On est root dans le chroot, avec le depot a /opt/GSM/osmo-operator.
     _EXTRAS=/opt/GSM/osmo-operator/tools/osmo-extras-install.sh
     if [ -f "$_EXTRAS" ]; then
         echo "  [desktop] jeux + media (natif) : $_EXTRAS"
-        REPO=/opt/GSM/osmo-operator . "$_EXTRAS" && osmo_extras_install || \
+        # [2026-09-25] SANS les jeux (Doom/Quake III, ~470 Mo) : ils ne se posent
+        # qu avec addition.sh --extras, sur une machine deja installee.
+        OSMO_EXTRAS_JEUX=0 REPO=/opt/GSM/osmo-operator . "$_EXTRAS" && OSMO_EXTRAS_JEUX=0 osmo_extras_install || \
             echo "  [desktop] WARN: osmo_extras_install a echoue (non fatal)"
     else
         echo "  [desktop] WARN: $_EXTRAS absent -- pas de jeux/media dans l image"

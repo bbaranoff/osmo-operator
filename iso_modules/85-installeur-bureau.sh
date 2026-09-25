@@ -778,6 +778,10 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
     # on repose ici celui de CE depot, le rendu du jour de tools/wallpaper-render.py.
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.png"
+    # [2026-09-25] Le fond par DEFAUT est l illustration brute (80-chroot.sh) ;
+    # le rendu compose ci-dessus reste pose pour osmo-wallpaper lance a la main.
+    install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$_rt/configs/gsm-lab-wallpaper.jpg"
+    install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.jpg"
     unset _rt
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
 [Unit]
@@ -812,7 +816,10 @@ Unit=osmo-wallpaper.service
 [Install]
 WantedBy=timers.target
 EOF
-    chroot "$ROOTFS" systemctl enable osmo-wallpaper.timer 2>/dev/null || true
+    # [2026-09-25] Timer NON active : il remplacait, 40 s apres le boot, le fond
+    # brut par le rendu compose (teinte + cadres BD). L unite reste posee :
+    #     systemctl enable --now osmo-wallpaper.timer   pour revenir au fond du jour
+    chroot "$ROOTFS" systemctl disable osmo-wallpaper.timer 2>/dev/null || true
 
     # ── 2. Les spectres I/Q dans le Conky du bas a droite ────────────────────
     # [2026-09-04] tools/osmo-fft-snap.py trace /run/osmo-fft/panel.png : le
@@ -906,7 +913,7 @@ X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=12
 EOF
     chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop"
-    echo -e "  ${GREEN}✓${NC} bureau : fond du jour (osmo-wallpaper.timer), spectres (osmo-fft-snap), DING relance a l ouverture"
+    echo -e "  ${GREEN}✓${NC} bureau : fond brut (gsm-lab-wallpaper.jpg), spectres (osmo-fft-snap), DING relance a l ouverture"
 
     # ── 5. VLC DEPUIS UNE SESSION ROOT ───────────────────────────────────────
     # [2026-09-04] La session de la cle s ouvre sous root, et VLC refuse de

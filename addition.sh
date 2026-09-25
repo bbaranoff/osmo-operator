@@ -36,7 +36,7 @@
 #   sudo ./addition.sh --build    l image operateur seule, du depot   (depannage)
 #   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
-#   sudo ./addition.sh --extras   Jeux + media (Doom, Quake, OpenRA, Kodi,
+#   sudo ./addition.sh --extras   Jeux + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
@@ -313,7 +313,7 @@ if [ "$ANY_FLAG" = "0" ]; then
             TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (telechargee du hub OU compilee sur place : le choix vient ensuite), et la topologie op1 natif + op2/op3 docker + inter-STP" \
             FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
             FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
-            FALSE extras "Jeux + media - Doom (gzdoom+freedoom), Quake (quakespasm), OpenRA, Kodi, YouTube (Firefox + uBlock Origin), Wireshark (root), Linphone ; ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis l encart du bureau" \
+            FALSE extras "Jeux + media - Doom (freedoom + chocolate-doom), Quake III (OpenArena), Kodi, YouTube (Firefox + uBlock Origin), Wireshark (root), Linphone ; ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis l encart du bureau" \
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
@@ -1082,7 +1082,7 @@ CONF
 fi
 
 # ── JEUX + MEDIA (supplement independant) ────────────────────────────────────
-# Doom / Quake / OpenRA / Kodi / YouTube+uBlock / Wireshark(root) / Linphone,
+# Doom / Quake III / Kodi / YouTube+uBlock / Wireshark(root) / Linphone,
 # ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis
 # l encart du bureau. La logique est partagee avec l ISO (le natif) :
 # tools/osmo-extras-install.sh, qu on source ici.

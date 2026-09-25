@@ -90,7 +90,7 @@ OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "1.0"))))
 # ne fait que ternir le spectre et le journal. Dans ce cas l encart passe en
 # opacite pleine : pas de png, mais le mobile.log et la FFT restent nets.
 STRIP_STATE = os.environ.get("OSMO_WP_STATE", "/var/cache/osmo-wallpaper/strip.state")
-WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.png")
+WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
 MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.

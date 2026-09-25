@@ -42,6 +42,11 @@ if [ ! -x "$P/start-direct.sh" ]; then
     exit 1
 fi
 ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
+# [2026-09-25] Le fond par defaut (80-chroot.sh le lit dans CET arbre, qui vient
+# du clone GitHub) : pose depuis le depot de construction, pour qu une image non
+# encore poussee parte quand meme avec son fond.
+[ -f "$DIR/configs/gsm-lab-wallpaper.jpg" ] \
+    && install -Dm644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$P/configs/gsm-lab-wallpaper.jpg"
 # osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
 # ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
 # iso_modules/80-chroot.sh - Ctrl+AltGr+Droite / Ctrl+AltGr+Gauche.

@@ -8,7 +8,7 @@
 # qu on lance depuis le bureau du banc :
 #
 #   Banc      : run standalone · run multi · run deka · Dashboard · tmux · VTY
-#   Jeux      : Doom · Quake · OpenRA · Dino
+#   Jeux      : Doom (freedoom) · Quake (OpenArena) · Dino
 #   Media     : Kodi · YouTube
 #   Telephone : Linphone
 #   Outils    : Wireshark (root)
@@ -209,14 +209,16 @@ def catalogue():
             ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || {{ echo 'pas de session tmux'; read -n1 -rsp 'touche...'; }}")),
             (f"VTY {vty}",     Action(term_cmd=f"telnet 127.0.0.1 {vty} || {{ echo; echo 'VTY injoignable'; read -n1 -rsp 'touche...'; }}")),
         ]),
-        ("Jeux", [
-            ("Doom",   Action(argv=["sh", "-c", "gzdoom -iwad /usr/share/games/doom/freedoom2.wad 2>/dev/null || gzdoom || freedoom2 || freedoom"],
-                              fs_argv=["sh", "-c", "gzdoom -fullscreen -iwad /usr/share/games/doom/freedoom2.wad 2>/dev/null || gzdoom -fullscreen || freedoom2"])),
-            ("Quake",  Action(argv=["quakespasm"], fs_argv=["quakespasm", "-fullscreen"])),
-            ("OpenRA", Action(argv=["openra"])),
+        # Doom et Quake ne sont poses que par addition.sh --extras (pas dans
+        # l ISO) : une entree n apparait que si son binaire est la.
+        ("Jeux", [j for j in [
+            ("Doom",   Action(argv=["/usr/games/chocolate-doom", "-iwad", "/usr/share/games/doom/freedoom2.wad", "-window"],
+                              fs_argv=["/usr/games/chocolate-doom", "-iwad", "/usr/share/games/doom/freedoom2.wad", "-fullscreen"])),
+            ("Quake",  Action(argv=["/usr/games/openarena", "+set", "r_fullscreen", "0"],
+                              fs_argv=["/usr/games/openarena", "+set", "r_fullscreen", "1"])),
             ("Dino",   Action(argv=["/usr/local/bin/osmo-dino-play"],
                               fs_argv=["/usr/local/bin/osmo-dino-play", "--fullscreen"])),
-        ]),
+        ] if not j[1].argv[0].startswith("/usr/games/") or os.path.exists(j[1].argv[0])]),
         ("Media", [
             ("Kodi",    Action(argv=["kodi"], fs_argv=["kodi", "--fullscreen"])),
             ("YouTube", Action(argv=["/usr/local/bin/osmo-youtube"],
