@@ -5,7 +5,7 @@
 #
 #  [2026-09-09] POURQUOI CE SCRIPT EXISTE.
 #  La voix du banc depend de deux lignes qui ne sont PAS dans osmo-operator :
-#  elles sont dans qosmo-grgsm et qosmo-dsp, deux depots que la mise a jour
+#  elles sont dans qosmo (run_modules, cfgs), un depot que la mise a jour
 #  resynchronise par « git reset --hard FETCH_HEAD ». Tout correctif pose a la
 #  main dans ces arbres disparait au prochain demarrage. On les repose donc,
 #  apres chaque fetch, depuis ici - et ce fichier est le SEUL a savoir comment.
@@ -49,8 +49,7 @@ VOIX_TCH_FORMAT="${MS_TCH_FORMAT:-rtp}"
 
 voix_forks_poser() {
     local f n fait=0
-    for f in "$ROOT/opt/GSM/qosmo-grgsm/cfgs/mobile_group1.cfg" \
-             "$ROOT/opt/GSM/qosmo-dsp/cfgs/mobile_group1.cfg"; do
+    for f in "$ROOT/opt/GSM/qosmo/cfgs/mobile_group1.cfg"; do
         [ -f "$f" ] || continue
         grep -q '^[[:space:]]*io-tch-format' "$f" && continue
         # Juste apres « io-handler », dans le bloc tch-voice, meme indentation.
@@ -61,10 +60,8 @@ voix_forks_poser() {
             echo "  [voix] ${f#"$ROOT"} : io-tch-format NON pose - a regarder a la main" >&2
         fi
     done
-    for f in "$ROOT/opt/GSM/qosmo-grgsm/run_modules/70-l2.sh" \
-             "$ROOT/opt/GSM/qosmo-grgsm/run_modules/68-sidecar-mobile.sh" \
-             "$ROOT/opt/GSM/qosmo-dsp/run_modules/70-l2.sh" \
-             "$ROOT/opt/GSM/qosmo-dsp/run_modules/68-sidecar-mobile.sh"; do
+    for f in "$ROOT/opt/GSM/qosmo/run_modules/70-l2.sh" \
+             "$ROOT/opt/GSM/qosmo/run_modules/68-sidecar-mobile.sh"; do
         [ -f "$f" ] || continue
         n="$(sed -n 's/^: "${CALYPSO_PULSE_LATENCY_MSEC:=\([0-9]*\)}"/\1/p' "$f" | head -1)"
         [ -n "$n" ] || continue

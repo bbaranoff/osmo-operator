@@ -8,10 +8,11 @@
 # [2026-09-03] Plus de Dockerfile.lite ici : on retire du rootfs ce que
 # Dockerfile.lite retirait de l image, avec les memes regles (voir son en-tete
 # pour le pourquoi de chaque exception). Ce qui reste dans /opt/GSM :
-#   qosmo-grgsm/          l arbre entier, build/ reduit a qemu-system-arm et
+#   qosmo/                l arbre entier, build/ reduit a qemu-system-arm et
 #                         qemu-bundle (QEMU se relocalise par lui)
 #   osmocom-bb/           osmocon (le chargeur) et trx_toolkit (fake_trx.py)
-#   firmware/ qemu-install/ osmo-operator/ pont/ osmo-egprs-web/ qemu/ qosmo-dsp/
+#   firmware/ qemu-install/ osmo-operator/ pont/ osmo-egprs-web/ qemu/
+#   c54x_exe/ grgsm_exe/   les deux couches 1 hors QEMU (+ c54x_exe/rom)
 #   *.bin *.py *.txt      ROM DSP, scripts de pont, calypso_dsp.txt
 if [ "$ISO_LITE" = "1" ]; then
     echo -e "${GREEN}[8c/9] Elagage lite : les ateliers de compilation quittent le rootfs...${NC}"
@@ -31,7 +32,7 @@ if [ "$ISO_LITE" = "1" ]; then
         cp -a "$_G/osmocom-bb/src/target/trx_toolkit"   "$_k/src/target/"      2>/dev/null || true
         rm -rf "$_G/osmocom-bb"; mv "$_k" "$_G/osmocom-bb"
     fi
-    for _q in qosmo-grgsm qosmo-dsp; do
+    for _q in qosmo; do
         [ -d "$_G/$_q/build" ] || continue
         _k="$WORK/keep-qbuild"; rm -rf "$_k"; mkdir -p "$_k"
         cp -a "$_G/$_q/build/qemu-system-arm" "$_k/" 2>/dev/null || true

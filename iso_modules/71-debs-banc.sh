@@ -11,7 +11,7 @@
 # depuis l ISO, ou n importe quelle autre, peut alors faire
 #     dpkg -i /var/cache/osmo-debs/*.deb
 # et obtenir le banc sans Docker ni git. L ISO elle-meme continue de tourner
-# sur les arbres complets (le depot et qosmo-grgsm avec leur .git : c est un
+# sur les arbres complets (le depot et qosmo avec leur .git : c est un
 # atelier) - les paquets ne les remplacent pas, ils voyagent avec.
 # Non fatal : sans dpkg-deb ou sans qemu construit, l image sort sans eux.
 # --arm : build-debs.sh compile le lanceur C et lit les binaires par ldd - sur
@@ -24,7 +24,7 @@ elif [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then
 elif [ -x "$DIR/packaging/build-debs.sh" ] && command -v dpkg-deb >/dev/null 2>&1; then
     echo -e "${GREEN}[7c/9] Paquets .deb du banc...${NC}"
     _DEBS="$WORK/debs"
-    if OSMO_OPERATOR_SRC="$DIR" QOSMO_SRC="$ROOTFS/opt/GSM/qosmo-grgsm" \
+    if OSMO_OPERATOR_SRC="$DIR" QOSMO_SRC="$ROOTFS/opt/GSM/qosmo" \
        FIRMWARE_SRC="$ROOTFS/opt/GSM/firmware" \
        "$DIR/packaging/build-debs.sh" --out "$_DEBS" >"$WORK/build-debs.log" 2>&1; then
         install -d "$ROOTFS/var/cache/osmo-debs"

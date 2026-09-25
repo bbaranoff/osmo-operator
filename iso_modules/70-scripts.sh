@@ -70,7 +70,7 @@ fi
 # ── LA VOIX DANS L IMAGE : io-tch-format ET LE TAMPON DU MOBILE ─────────────
 # [2026-09-09] MEME CORRECTIF QUE update.sh, applique ici au ROOTFS - et par
 # le MEME script, scripts/voix-forks.sh, qui porte le pourquoi en entier. Ces deux reglages ne vivent pas dans osmo-operator mais dans
-# qosmo-grgsm et qosmo-dsp, que 50-injection-image.sh recopie tels quels
+# qosmo (run_modules, cfgs), que 50-injection-image.sh recopie tels quels
 # depuis l image de reference : une image batie sur une machine dont les forks
 # n ont pas le correctif l embarquerait sans, et l ISO sortirait avec la voix
 # robotisee sans qu aucun compteur ne bronche.

@@ -59,19 +59,19 @@ docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/usr/local/sbin/." "$ROOTFS/usr/local/sbin/" 2>/dev/null||true
 # /opt/GSM : tout, SAUF les arbres que les paquets viennent de poser (osmocom-bb,
-# qosmo-grgsm, qemu-install, firmware) - et rien du tout pour le hub, qui n en
+# qosmo, qemu-install, firmware) - et rien du tout pour le hub, qui n en
 # lit pas une ligne (le depot lui-meme est clone a l etape 5a).
 if [ "$ISO_ROLE" != "interstp" ]; then
     _excl=()
     if [ "$ISO_DEBS_USED" = "1" ]; then
-        for _t in osmocom-bb qosmo-grgsm qosmo-dsp qemu-install qemu-dsp-install firmware; do
+        for _t in osmocom-bb qosmo c54x_exe grgsm_exe qemu-install firmware; do
             [ -d "$ROOTFS/opt/GSM/$_t" ] && _excl+=("--exclude=GSM/$_t" "--exclude=GSM/$_t/*")
         done
     fi
     mkdir -p "$ROOTFS/opt"
     docker cp "$CID:/opt/GSM" - 2>/dev/null | tar -x -C "$ROOTFS/opt" "${_excl[@]+"${_excl[@]}"}" 2>/dev/null || true
 fi
-# venv python (gr-gsm + bridges) attendu par /opt/GSM/qosmo-grgsm/start-clean.sh
+# venv python (gr-gsm + bridges) attendu par le pont (grgsm_exe, pont/*.py)
 # - en paquet (grgsm-venv) quand le cache l a, depuis l image sinon.
 [ -d "$ROOTFS/root/.env" ] || docker cp "$CID:/root/.env" "$ROOTFS/root/" 2>/dev/null||true
 [ -d "$ROOTFS/root/.venv-qemu" ] || docker cp "$CID:/root/.venv-qemu" "$ROOTFS/root/" 2>/dev/null||true

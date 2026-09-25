@@ -11,7 +11,7 @@ if [ "${ISO_ARCH:-amd64}" = "amd64" ]; then return 0; fi
 #  Etape 8e : COMPILATION NATIVE DANS LE CHROOT arm64
 # ═════════════════════════════════════════════════════════════════════════════
 # Trois choses que l ISO amd64 fabrique SUR L HOTE avec le gcc de l hote :
-# toast (codec GSM 06.10), les lanceurs C qosmo-grgsm/qosmo-dsp, et les .deb du
+# toast (codec GSM 06.10), le lanceur C qosmo, c54x_exe/grgsm_exe, et les .deb du
 # banc (build-debs.sh compile le lanceur et lit les binaires par ldd). Sur un
 # hote x86 ca donnerait du x86 dans un rootfs arm64 - silencieusement, puisque
 # aucune de ces etapes n est fatale. Ici tout tourne DANS le chroot, sous
@@ -46,13 +46,13 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     fi
 fi
 
-# ── Lanceurs C qosmo-grgsm / qosmo-dsp ──────────────────────────────────────
+# ── Lanceur C qosmo ─────────────────────────────────────────────────────────
 if [ "$ISO_ROLE" != "interstp" ]; then
-    for fork in qosmo-grgsm qosmo-dsp; do
+    for fork in qosmo; do
         if [ -x "$ROOTFS/usr/local/bin/$fork" ]; then
             echo -e "  ${GREEN}✓${NC} lanceur $fork deja present (image)"
         elif [ -f "$ROOTFS/opt/GSM/$fork/tools/qosmo-launch/qosmo-launch.c" ]; then
-            if _arm_chroot make -s -C "/opt/GSM/$fork/tools/qosmo-launch" "$fork" >"$WORK/launch-$fork.log" 2>&1 \
+            if _arm_chroot make -s -C "/opt/GSM/$fork/tools/qosmo-launch" ALIAS="$fork" "$fork" >"$WORK/launch-$fork.log" 2>&1 \
                && _arm_chroot install -Dm755 "/opt/GSM/$fork/tools/qosmo-launch/$fork" "/usr/local/bin/$fork"; then
                 echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} compile dans le chroot"
             else
@@ -60,6 +60,16 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             fi
         else
             echo -e "  ${YELLOW}!${NC} lanceur $fork : pas de source dans le rootfs" >&2
+        fi
+    done
+    # [2026-09-25] c54x_exe et grgsm_exe : les binaires venus de l hote sont du
+    # x86 ; on les recompile ici, sur les sources de /opt/GSM/qosmo du rootfs.
+    for _e in c54x_exe grgsm_exe; do
+        [ -f "$ROOTFS/opt/GSM/$_e/Makefile" ] || continue
+        if _arm_chroot make -s -B -C "/opt/GSM/$_e" >"$WORK/make-$_e.log" 2>&1; then
+            echo -e "  ${GREEN}✓${NC} ${CYAN}/opt/GSM/$_e/$_e${NC} compile dans le chroot"
+        else
+            echo -e "  ${YELLOW}!${NC} $_e : compilation echouee (voir $WORK/make-$_e.log)" >&2
         fi
     done
     # Le binaire arm64 doit etre executable ici, sous qemu-user : c est le test
@@ -78,7 +88,7 @@ fi
 # ── Les .deb du banc (etape 7c), fabriques dans le chroot ───────────────────
 if [ -x "$ROOTFS/opt/GSM/osmo-operator/packaging/build-debs.sh" ]; then
     install -d "$ROOTFS/var/cache/osmo-debs"
-    if _arm_chroot env OSMO_OPERATOR_SRC=/opt/GSM/osmo-operator QOSMO_SRC=/opt/GSM/qosmo-grgsm \
+    if _arm_chroot env OSMO_OPERATOR_SRC=/opt/GSM/osmo-operator QOSMO_SRC=/opt/GSM/qosmo \
          FIRMWARE_SRC=/opt/GSM/firmware TMPDIR=/var/tmp \
          bash /opt/GSM/osmo-operator/packaging/build-debs.sh --out /var/cache/osmo-debs \
          >"$WORK/build-debs.log" 2>&1; then

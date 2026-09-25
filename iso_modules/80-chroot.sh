@@ -339,7 +339,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     # du 3953233 ne l avait pas : le telephone ne pouvait pas s allumer.
 
     # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
-    # L image normale embarque /opt/GSM/qosmo-grgsm avec son .git ET son build/ :
+    # L image normale embarque /opt/GSM/qosmo avec son .git ET son build/ :
     # c est un atelier, on y developpe l emulation Calypso et on doit pouvoir
     # relancer "make -C build qemu-system-arm" sur la machine. Or les runtimes
     # seuls (liburing2, libslirp0, libpixman-1-0) ne suffisent pas : ninja
@@ -374,7 +374,7 @@ echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
 
 # -- venv /root/.env : il doit EXISTER et porter tomli --------------------
-# /root/.env est le venv que start-clean.sh (qosmo-grgsm) et le profil de root
+# /root/.env est le venv que le pont (grgsm_exe) et le profil de root
 # activent : le .bashrc pose plus bas fait
 #     [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 # Il arrive ici par un docker cp du CID vers /root/, suivi de || true : si

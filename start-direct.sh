@@ -31,7 +31,7 @@ set -uo pipefail
 #
 # CE QU'ON PERD, et c'etait sa raison d'etre (constat du 12/08) : lance par
 # erreur sur un HOTE qui a Docker, ce script repart sur un environnement a
-# moitie construit - /opt/GSM/qosmo-grgsm n'y existe pas, mais /tmp/osmo-nitb/logs,
+# moitie construit - /opt/GSM/qosmo n'y existe pas, mais /tmp/osmo-nitb/logs,
 # lui, se cree tout seul - et meurt sur un "run.sh introuvable" qui ne designe
 # pas la vraie cause. Si ce symptome reapparait sur une machine avec Docker,
 # c'est ca : la-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
@@ -100,12 +100,12 @@ Usage : ./start-direct.sh [options] [mode]
                         seuls les modules qemu,pty,osmocon,l2 sont retires et
                         repris par c54x_exe/run.sh. BANC_DSP=none pour n'avoir
                         que la pile.
-    --grgsm             force le fork qosmo-grgsm (defaut)
-    --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/<fork>,
-                        soit qosmo-grgsm ou qosmo-dsp). Ces lanceurs remplacent
-                        l'appel direct a qemu-system-arm : memes defauts, sockets
-                        et pty publies (<RUN_DIR>/modem.pty), osmocon direct.
-                        Se compilent dans <fork>/tools/qosmo-launch (make install).
+    --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe (defaut)
+    --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/qosmo).
+                        Il remplace l'appel direct a qemu-system-arm : memes
+                        defauts, sockets et pty publies (<RUN_DIR>/modem.pty),
+                        osmocon direct. Se compile dans
+                        /opt/GSM/qosmo/tools/qosmo-launch (make ALIAS=qosmo install).
     --list              affiche le plan (delegue a run.sh --list)
     --dry-run           deroule sans effet de bord
     --profile <nom>     force le profil
@@ -208,11 +208,11 @@ while [ $# -gt 0 ]; do
         # exactement comme en mode grgsm (coeur, BTS, side-car, tmux), et seuls
         # les quatre modules de la chaine Calypso (qemu, pty, osmocon, l2) sont
         # remis a /opt/GSM/c54x_exe, ou le C54x tourne hors QEMU sur la mask-ROM
-        # TI. qosmo-dsp n'a plus ete construit depuis le 17/09 et son
-        # osmo-trx-ipc + calypso-ipc-device sont remplaces par c54x_exe --arm +
-        # pont.py ; CALYPSO_FORK pose par l'operateur reste respecte.
+        # TI. [2026-09-25] Les forks qosmo-dsp/qosmo-grgsm sont retires : un
+        # seul arbre QEMU, /opt/GSM/qosmo (run.sh et run_modules y sont), et la
+        # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
-        --grgsm)       CALYPSO_FORK=qosmo-grgsm; export CALYPSO_FORK ;;
+        --grgsm)       DSP_MODE=0 ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -500,10 +500,10 @@ else
     # Fallback minimal (chemins typiques du depot)
     : "${GSM_ROOT:=/opt/GSM}"
     : "${NITB_TREE:=$HERE}"
-    # Meme selection de fork qu'environment/paths.env, repliquee pour le cas ou
-    # load.env est absent (ISO, conteneur nu). Defaut : qosmo-grgsm ; --dsp a
-    # deja pose CALYPSO_FORK=qosmo-dsp plus haut si l'operateur l'a demande.
-    : "${CALYPSO_FORK:=qosmo-grgsm}"
+    # Meme selection d'arbre qu'environment/paths.env, repliquee pour le cas ou
+    # load.env est absent (ISO, conteneur nu). Un seul arbre QEMU : qosmo ; --dsp
+    # ne change pas d'arbre, il passe la couche 1 a c54x_exe.
+    : "${CALYPSO_FORK:=qosmo}"
     if [ -x "$HERE/../$CALYPSO_FORK/run.sh" ]; then
         : "${OQC_ROOT:=$(cd "$HERE/../$CALYPSO_FORK" && pwd)}"
     else
@@ -532,12 +532,12 @@ fi
 #   CALYPSO_BRIDGE=none ./start-direct.sh   -> pas de pont (QEMU + BTS seuls)
 #
 # [2026-09-22] DEUX CHAINES, SELECTIONNEES PAR --dsp. Le DEFAUT reste
-# qosmo-grgsm : la couche 1 est un decodeur gr-gsm dans QEMU, et c'est la pile
-# qui va de bout en bout jusqu'a l'appel voix.
+# gr-gsm (qosmo + grgsm_exe) : la couche 1 est un decodeur gr-gsm dans QEMU, et
+# c'est la pile qui va de bout en bout jusqu'a l'appel voix.
 #
 # `--dsp` ne designe PLUS un fork de QEMU. Le C54x tourne maintenant HORS de
 # QEMU, dans /opt/GSM/c54x_exe (mask-ROM TI, coeur emule par l1-dsp), et QEMU
-# n'est plus que l'ARM, lance avec CALYPSO_DSP_EXTERN=1 depuis le fork vivant
+# n'est plus que l'ARM, lance avec CALYPSO_DSP_EXTERN=1 depuis l'arbre
 # /opt/GSM/qosmo. Les cinq etapes sont dans c54x_exe/run.sh :
 #   1. c54x_exe --arm        le DSP, socket /tmp/calypso_dsp.sock + API RAM
 #                            partagee, bursts DL en UDP 6702
@@ -548,19 +548,19 @@ fi
 #                            le DSP, montant par les side-bands /dev/shm
 # Ce qu'il fait : le mobile acquiert FB et SB, decode SI1-4 (lai=001-01-1),
 # campe, et mene sa mise a jour de localisation. L'ancienne note « le decodage
-# SCH ne passe pas, le mobile ne campe pas » datait du fork qosmo-dsp et n'est
-# plus vraie de cette chaine-la.
+# SCH ne passe pas, le mobile ne campe pas » datait de l'ancien fork qosmo-dsp
+# et n'est plus vraie de cette chaine-la.
 #
-# Les anciens forks restent atteignables a la main
-# (CALYPSO_FORK=qosmo-dsp ./start-direct.sh --dsp), mais qosmo-dsp n'a plus ete
-# construit depuis le 17/09 : son osmo-trx-ipc + calypso-ipc-device sont
-# remplaces par c54x_exe --arm + pont.py.
+# [2026-09-25] Les anciens forks qosmo-dsp et qosmo-grgsm ne sont plus
+# references : run.sh, run_modules, cfgs et environnement ont ete repris dans
+# /opt/GSM/qosmo, la ROM DSP est dans /opt/GSM/c54x_exe/rom (et en
+# /opt/GSM/calypso_dsp.*.bin, ou c54x_exe la lit par defaut).
 #
 # --dsp : PAS DE PONT LANCE PAR CE SCRIPT. c54x_exe/run.sh lance le sien
 # (etape 5) sur 5700-5702 ; un second pont sur les memes ports mourrait sur
 # « Address already in use » et laisserait un cadavre a chaque demarrage.
-# `none` = rien a lancer ici. Ne PAS mettre `ipc` : dans qosmo-dsp cette valeur
-# veut dire « MS#1 via osmo-trx-ms-ipc, firmware QEMU non lance ».
+# `none` = rien a lancer ici. Ne PAS mettre `ipc` : dans l'ancien qosmo-dsp
+# cette valeur voulait dire « MS#1 via osmo-trx-ms-ipc, firmware QEMU non lance ».
 # Une valeur posee par l'operateur reste respectee.
 if [ "${DSP_MODE:-0}" = 1 ]; then
     : "${CALYPSO_BRIDGE:=none}"
@@ -594,11 +594,11 @@ if [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ] && [ -x "$BANC_DSP" ]; th
     DSP_BANC=1
 fi
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
-: "${RUN_SH:=$GSM_ROOT/${CALYPSO_FORK:-qosmo-grgsm}/run.sh}"
+: "${RUN_SH:=$GSM_ROOT/${CALYPSO_FORK:-qosmo}/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
     say_end "FAIL" "$C_KO" "Resolution de run.sh" "$RUN_SH introuvable ou non executable"
     printf '       %s→ Verifiez que %s existe et est executable%s\n' "$C_DIM" "$RUN_SH" "$C_Z"
-    printf '       %s→ Fork DSP : %s --dsp%s\n' "$C_DIM" "$0" "$C_Z"
+    printf '       %s→ run.sh vit dans /opt/GSM/qosmo (repris de l ancien qosmo-grgsm)%s\n' "$C_DIM" "$C_Z"
     exit 1
 fi
 say_end " OK " "$C_OK" "Resolution de run.sh" "$RUN_SH"
@@ -647,18 +647,17 @@ banc_dsp_arreter() {
     banc_dsp --stop "$@"
 }
 
-# --- 2b. lanceur C de QEMU (qosmo-grgsm / qosmo-dsp) ---------------------------
-# [2026-09-03] QEMU n'est plus appele directement par 40-qemu.sh : chaque fork
-# porte un lanceur C, tools/qosmo-launch, installe dans /usr/local/bin sous le
-# nom du fork. Il fixe les defauts qui marchent (machine calypso + ROMs DSP,
+# --- 2b. lanceur C de QEMU (qosmo) --------------------------------------------
+# [2026-09-03] QEMU n'est plus appele directement par 40-qemu.sh : l'arbre qosmo
+# porte un lanceur C, tools/qosmo-launch, installe dans /usr/local/bin/qosmo. Il fixe les defauts qui marchent (machine calypso + ROMs DSP,
 # -cpu arm946, -gdb tcp::1234, -serial pty x2, -monitor unix:$RUN_DIR/...),
 # lit l1s/last_rach dans l'ELF, et publie des liens stables vers les pty
 # ($RUN_DIR/modem.pty pour osmocon, $RUN_DIR/irda.pty). Options : --bind,
-# --trx-port, --iq-tee, --l1ctl, --monitor, --gdb (voir `qosmo-dsp --help`).
+# --trx-port, --iq-tee, --l1ctl, --monitor, --gdb (voir `qosmo --help`).
 # Le nom est passe a run.sh par QOSMO_LAUNCHER ; s'il manque, 40-qemu.sh
 # retombe sur la ligne qemu-system-arm historique - on le dit, sans bloquer.
 say_begin "Lanceur QEMU"
-: "${QOSMO_LAUNCHER:=/usr/local/bin/${CALYPSO_FORK:-qosmo-grgsm}}"
+: "${QOSMO_LAUNCHER:=/usr/local/bin/${CALYPSO_FORK:-qosmo}}"
 export QOSMO_LAUNCHER
 if [ -x "$QOSMO_LAUNCHER" ]; then
     say_end " OK " "$C_OK" "Lanceur QEMU" "$QOSMO_LAUNCHER ($("$QOSMO_LAUNCHER" -V 2>/dev/null | head -1))"
@@ -755,13 +754,12 @@ menu_interactif() {
     # ── 1. QUI FAIT LA COUCHE 1 ──────────────────────────────────────────────
     # Le premier choix, parce qu il commande le second : le DSP n a que faire
     # d une seconde station de base.
-    CALYPSO_FORK="$(_menu "Couche 1" \
+    _L1="$(_menu "Couche 1" \
         "Qui demodule ?\n\n  gr-gsm  la pile va jusqu a l appel voix. Le DSP ne tourne pas.\n  DSP     le C54x execute la mask-ROM TI et decode lui-meme.\n          Banc de travail : le SCH ne passe pas encore, pas de camp." \
-        "${CALYPSO_FORK:-qosmo-grgsm}" \
-        qosmo-grgsm "couche 1 gr-gsm (pile complete)" \
-        qosmo-dsp   "DSP C54x natif (travail en cours)")"
-    export CALYPSO_FORK
-    [ "$CALYPSO_FORK" = qosmo-dsp ] && DSP_MODE=1
+        "$([ "${DSP_MODE:-0}" = 1 ] && echo c54x_exe || echo grgsm_exe)" \
+        grgsm_exe "couche 1 gr-gsm dans qosmo (pile complete)" \
+        c54x_exe  "DSP C54x hors QEMU, mask-ROM TI")"
+    case "$_L1" in c54x_exe) DSP_MODE=1 ;; *) DSP_MODE=0 ;; esac
 
     # ── 2. TOPOLOGIE : SEUL OU HYBRIDE ───────────────────────────────────────
     # Meme axe que CALYPSO_PROFILE, dit dans les termes du banc :
@@ -867,7 +865,7 @@ fi
 export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
 # ── LE TAMPON DU GREFFON ALSA-PULSEAUDIO DU `mobile` ────────────────────────
 # [2026-09-09] 240 ms, PAS 80. Le mecanisme est celui deja documente dans
-# qosmo-dsp/run_modules/70-l2.sh (« DESCENDANT MUET ») : le `mobile` ecrit une
+# qosmo/run_modules/70-l2.sh (« DESCENDANT MUET ») : le `mobile` ecrit une
 # trame GSM (160 echantillons, 20 ms) par `snd_pcm_writei`, et si le tampon du
 # greffon est trop court chaque ecriture rend -EPIPE ; pq_alsa.c y repond par
 # un `snd_pcm_prepare()` muet, qui DEMONTE ET REMONTE le flux PulseAudio.
@@ -879,8 +877,8 @@ export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
 # Pendant un vrai appel c etait 50 remontages par seconde : flux detruit a
 # chaque trame, « voix saturee et pas belle ». 240 ms = 12 trames GSM, le
 # premier palier stable (200) avec de la marge pour la gigue sous charge.
-# La variable est exportee ICI parce que update.sh re-fetch qosmo-grgsm et
-# qosmo-dsp : leur defaut interne peut repartir a 80, celui-ci gagne (`:=`).
+# La variable est exportee ICI parce que update.sh re-fetch qosmo :
+# son defaut interne peut repartir a 80, celui-ci gagne (`:=`).
 # JUGE, pendant un appel etabli : l index du sink-input du mobile doit rester
 # FIXE (`pactl list short sink-inputs`, deux releves a 1 s d intervalle).
 export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-320}"
@@ -902,7 +900,7 @@ _check() {
 }
 # Variables optionnelles selon le profil ; on ne bloque que si presentes et cassees
 # (DSP_PROM0 retire : ROM plus generee depuis le merge `sans-dsp` de
-#  qosmo-grgsm — cf. run.sh --check-paths et run_modules/00-prereqs.sh.)
+#  qosmo — cf. run.sh --check-paths et run_modules/00-prereqs.sh.)
 for v in QEMU_BIN FIRMWARE_ELF OSMOCON; do
     # `[ -n x ] && _check || true` avalait le verdict : _check pouvait poser
     # path_ok=0 sans que la boucle ne le laisse remonter. Forme explicite.
@@ -991,7 +989,7 @@ EOF
 # ── LE BLOC tch-voice, GARANTI, QUEL QUE SOIT LE GABARIT ────────────────────
 # [2026-09-09] MS#2 SORTAIT SANS « io-tch-format rtp ». Le gabarit retenu par
 # la boucle ci-dessus est le PREMIER trouve, et c'est presque toujours
-# qosmo-grgsm/cfgs/mobile_group1.cfg - un fichier d'un autre depot, que
+# qosmo/cfgs/mobile_group1.cfg - un fichier d'un autre depot, que
 # update.sh refetche, et qui ne porte pas cette ligne. Le sed de generation ne
 # fait que SUBSTITUER : ce qui manque au gabarit manque au resultat. MS#1
 # l'avait (son fichier est ecrit ailleurs, 3192 octets), MS#2 non (2423).
@@ -1047,7 +1045,7 @@ _ms_cfg_garantir_tch() {
 # Le mobile Calypso tourne avec
 #     mobile -c /root/.osmocom/bb/mobile_group1.cfg
 # alors qu'on ne generait ici que mobile.cfg. mobile_group1.cfg, lui, est COPIE
-# tel quel par qosmo-grgsm (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
+# tel quel par qosmo (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
 # un fichier statique, jamais derive de l'operateur. Il porte donc l'identite de
 # l'operateur 1 - IMSI 001010001000001, ARFCN 514 - quel que soit l'operateur.
 #
@@ -1102,7 +1100,7 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 
 # ── LE QUATRIEME PROVISIONNEUR ──────────────────────────────────────────────
 # run.sh embarque son propre module d'abonnes (run_modules/21-abonnes-hlr.sh,
-# dans qosmo-grgsm). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
+# dans qosmo). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
 # formule que nous - mais lit MCC et MNC dans /etc/osmocom/osmo-msc.cfg via un
 # chemin qui n'aboutit pas toujours ; il retombe alors sur ses defauts, 001 et
 # 01. Sur l'operateur 2 il fabriquait donc 001010002000001 : un abonne que
@@ -1112,7 +1110,7 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 # Il honore MCC et MNC depuis l'environnement. En les posant, son IMSI devient
 # exactement celui que start.sh a deja provisionne - et son propre controle
 # d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
-# On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo-grgsm.
+# On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo.
 export MCC="${MCC:-$MS_MCC}"
 export MNC="${MNC:-$MS_MNC}"
 
@@ -1144,9 +1142,9 @@ MS_ARFCN1="${PLAN_ARFCN:-}"
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1=$(( 512 + MS_OP_ID * 2 ))
 
 # MS#2 suit le side-car. Celui-la, c'est NOUS qui le decidons : le module
-# 13-sidecar-cfg.sh de qosmo-grgsm lit SC_ARFCN et SC_UNIT_ID dans
+# 13-sidecar-cfg.sh de qosmo lit SC_ARFCN et SC_UNIT_ID dans
 # l'environnement (run_modules/_lib/radio.sh : « : "${SC_ARFCN:=516}" »).
-# Les poser ici evite de modifier qosmo-grgsm, et garde une seule source par
+# Les poser ici evite de modifier qosmo, et garde une seule source par
 # valeur - les memes formules que generate_configs.sh.
 export SC_ARFCN="${SC_ARFCN:-${PLAN_ARFCN_BTS1:-$(( 612 + MS_OP_ID * 2 ))}}"
 export SC_UNIT_ID="${SC_UNIT_ID:-${PLAN_UNIT_ID_BTS1:-$(( 6000 + MS_OP_ID * 10 + 2 ))}}"
@@ -1187,18 +1185,18 @@ generate_mobile_cfg "$MS1_CFG" \
     "$(ms_ki 1)"
 # La copie que le lanceur ouvre reellement. On la REGENERE plutot que de la
 # copier : generate_mobile_cfg fixe aussi le port VTY, les sockets et l'ARFCN,
-# et un simple cp propagerait le fichier statique de qosmo-grgsm.
+# et un simple cp propagerait le fichier statique de qosmo.
 # ── ET ON EMPECHE QU'IL SOIT ECRASE ─────────────────────────────────────
 # Ecrire ce fichier ne suffit pas : run.sh le REECRIT juste apres. Son module
 # 20-mobile-cfg.sh copie MOBILE_CFG_SRC par-dessus, et ce chemin vaut par
-# defaut $QEMU_TREE/cfgs/mobile_group1.cfg - le fichier statique de qosmo-grgsm,
+# defaut $QEMU_TREE/cfgs/mobile_group1.cfg - le fichier statique de qosmo,
 # fige sur l'operateur 1. Mesure sur le banc :
 #     mobile.cfg          18:22:22  imsi=002010002000001 arfcn=516
 #     mobile_group1.cfg   18:22:27  imsi=001010001000001 arfcn=514
 # Cinq secondes d'ecart, et c'est le second que le mobile ouvre.
 # On designe donc NOTRE fichier comme source : le module recopie alors le bon
 # contenu, et son controle d'idempotence (cmp -s src dest) passe puisque les
-# deux sont identiques. Aucune modification de qosmo-grgsm.
+# deux sont identiques. Aucune modification de qosmo.
 export MOBILE_CFG_SRC="$MS1_CFG"
 
 MS1_GROUP_CFG="$BB_DIR/mobile_group1.cfg"
@@ -1233,7 +1231,7 @@ say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 # (001010000000001), inconnu du HLR provisionne avec le plan. Elle n'etait
 # exportee nulle part.
 # (MOBILE_CFG_MS1/MS2 et CALYPSO_MS2_CFG, exportes ici jusqu'au 2026-09-02,
-#  n'avaient aucun lecteur dans qosmo-grgsm ; le side-car MS#2 lit
+#  n'avaient aucun lecteur dans qosmo ; le side-car MS#2 lit
 #  SC_MOBILE_CFG / le fichier lui-meme.)
 export CALYPSO_SIM_CFG="$MS1_CFG"
 
@@ -1241,7 +1239,7 @@ export CALYPSO_SIM_CFG="$MS1_CFG"
 # Le pont (pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
 # (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 vers le
 # modele QEMU, et encode l'UL depuis les sidebands /dev/shm/calypso_* -> TRXD
-# -> BTS. Il a BESOIN d'osmo-bts-trx en face : c'est qosmo-grgsm/60-bts.sh qui
+# -> BTS. Il a BESOIN d'osmo-bts-trx en face : c'est qosmo/60-bts.sh qui
 # le lance, et la barriere plus bas attend son retour avant de lancer le pont.
 if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     export CALYPSO_BRIDGE
@@ -1264,7 +1262,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
     # qui veut essayer une variante, mais c est alors un choix explicite.
     #
     # [2026-08-30] NITB_ROOT RETIRE DE CE CHEMIN. Le defaut passait par lui, et
-    # NITB_ROOT n appartient pas a ce depot : qosmo-grgsm/environnement/paths.env
+    # NITB_ROOT n appartient pas a ce depot : qosmo/environnement/paths.env
     # le pose a "$GSM_ROOT/osmo_egprs" - l ANCIEN nom de cet arbre. Le pont etait
     # donc cherche dans /opt/GSM/osmo_egprs/pont/pont.py, d ou
     # "pont introuvable (/opt/GSM/osmo_egprs/pont/pont.py)" sur un banc ou le
@@ -1390,7 +1388,7 @@ fi
 # Ici c'est le burst qui traverse : pont/airmesh.py prend ce qui passe sur le
 # fake_trx local et l'echange avec les pairs. Voir l'en-tete d'airmesh.py pour
 # le detail - notamment pourquoi il faut DEUX emplacements de transceiver, et
-# comment on les obtient sans modifier une ligne de qosmo-grgsm.
+# comment on les obtient sans modifier une ligne de qosmo.
 if [ "${AIR_MESH:-0}" = "1" ]; then
     _AIRMESH="${AIRMESH_PY:-${HERE}/pont/airmesh.py}"
     [ -f "$_AIRMESH" ] || _AIRMESH=/opt/GSM/osmo-operator/pont/airmesh.py
@@ -2172,14 +2170,14 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
 fi
 
 # --- 7quinquies. Le wrapper tcpdump ------------------------------------------
-# La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qosmo-grgsm : un
+# La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qosmo : un
 # autre depot, qu'on ne modifie pas. Elle ecrit un pcap NON BORNE, et la racine
 # du live etant un tmpfs, une capture un peu chargee finit par remplir la RAM.
 #
 # Le wrapper y substitue un anneau. Il est aussi pose par build-iso.sh, mais une
 # ISO deja gravee ne le connait pas, et un live sans persistance le perd a chaque
 # reboot : le reposer ICI, a chaque demarrage de la pile, est ce qui le rend
-# effectif sans reconstruire ni toucher a qosmo-grgsm.
+# effectif sans reconstruire ni toucher a qosmo.
 #
 # DEUX PIEGES, DEUX PARADES - c'est tout l'objet de ce script :
 #   -Z root : avec -C/-W, tcpdump cree les membres suivants de l'anneau APRES

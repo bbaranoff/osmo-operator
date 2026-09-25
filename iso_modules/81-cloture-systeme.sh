@@ -245,12 +245,12 @@ EOF
 # ── Animation SMS a l'ouverture de session ─────────────────────────────────
 # [2026-08-27] Ce qui vivait ici : osmo-update.service, qui a CHAQUE demarrage
 # telechargeait update.sh depuis GitHub et l'executait - lequel effacait puis
-# reclonait osmo-operator et osmo-egprs-web, resynchronisait qosmo-grgsm et installait
+# reclonait osmo-operator et osmo-egprs-web, resynchronisait qosmo (ex-qosmo-grgsm) et installait
 # socat a coups d'apt. Le contenu de la machine etait donc decide au boot par le
 # reseau, et sans reseau il ne restait rien des arbres effaces.
 #
 # Tout cela se fait ICI, une fois, a la construction : les trois depots partent
-# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qosmo-grgsm avec son
+# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qosmo avec son
 # build/ compile, les paquets sont installes dans le rootfs (etape 5), et le
 # service du dashboard est pose plus bas. Du update.sh il ne reste que ce qui
 # exige un terminal et quelqu'un devant : l'animation SMS.
@@ -296,7 +296,7 @@ cat > "$ROOTFS/usr/local/bin/osmo-update" <<'OSMOUPD'
 # osmo-update - met a jour, en place, les depots embarques dans l'image.
 #
 #   osmo-update              les trois depots
-#   osmo-update qosmo-grgsm  un seul (osmo-operator | osmo-egprs-web | qosmo-grgsm | qosmo-dsp)
+#   osmo-update qosmo        un seul (osmo-operator | osmo-egprs-web | qosmo | c54x_exe | grgsm_exe)
 #   osmo-update --check      dit ce qui est en retard, n'ecrit rien
 #   osmo-update --quiet      sans couleurs ni fioritures (journal, cron)
 #   osmo-update --boot       mode demarrage : --quiet, journalise, sort toujours 0
@@ -334,8 +334,9 @@ fi
 # environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
 REPOS="osmo-operator|/opt/GSM/osmo-operator
 osmo-egprs-web|/opt/GSM/osmo-egprs-web
-qosmo-grgsm|/opt/GSM/qosmo-grgsm
-qosmo-dsp|/opt/GSM/qosmo-dsp"
+qosmo|/opt/GSM/qosmo
+c54x_exe|/opt/GSM/c54x_exe
+grgsm_exe|/opt/GSM/grgsm_exe"
 
 WANT="${1:-}"
 rc=0; web_moved=0; forks_moved=""
@@ -391,14 +392,14 @@ while IFS='|' read -r name dir; do
         # 1. Avance rapide : on est en retard sur la meme branche.
         printf "    ${G}✓${N} %s\n" "$(git -C "$dir" log -1 --format='%h %s')"
         [ "$name" = "osmo-egprs-web" ] && web_moved=1
-        case "$name" in qosmo-*) forks_moved="$forks_moved $name" ;; esac
+        case "$name" in qosmo) forks_moved="$forks_moved $name" ;; esac
     elif [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
         # 2. Pas d'ancetre commun (depot greffe par --depth 1) mais arbre propre :
         #    il n'y a rien a perdre, on aligne sur le serveur.
         if git -C "$dir" reset --hard FETCH_HEAD >/dev/null 2>&1; then
             printf "    ${G}✓${N} aligne sur origin/%s - %s\n" "$br" "$(git -C "$dir" log -1 --format='%h %s')"
             [ "$name" = "osmo-egprs-web" ] && web_moved=1
-            case "$name" in qosmo-*) forks_moved="$forks_moved $name" ;; esac
+            case "$name" in qosmo) forks_moved="$forks_moved $name" ;; esac
         else
             printf "    ${Y}⚠${N} alignement impossible - arbre inchange\n"; rc=1
         fi
@@ -413,7 +414,7 @@ $REPOS
 REPOEOF
 
 if [ -z "${found:-}" ]; then
-    echo "depot inconnu : $WANT  (osmo-operator | osmo-egprs-web | qosmo-grgsm | qosmo-dsp)" >&2
+    echo "depot inconnu : $WANT  (osmo-operator | osmo-egprs-web | qosmo | c54x_exe | grgsm_exe)" >&2
     exit 2
 fi
 
@@ -434,7 +435,7 @@ fi
 for f in $forks_moved; do
     src="/opt/GSM/$f/tools/qosmo-launch"
     [ -f "$src/qosmo-launch.c" ] || continue
-    if command -v gcc >/dev/null 2>&1 && make -s -C "$src" install >/dev/null 2>&1; then
+    if command -v gcc >/dev/null 2>&1 && make -s -C "$src" ALIAS="$f" install >/dev/null 2>&1; then
         printf "  ${G}✓${N} lanceur %s recompile (/usr/local/bin/%s)\n" "$f" "$f"
     else
         printf "  ${Y}⚠${N} lanceur %s non recompile (gcc/make ?) - l'ancien reste en place\n" "$f"
@@ -476,13 +477,13 @@ EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage : git fetch, jamais de reclone)"
 
-# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qosmo-grgsm ──
+# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qosmo ──
 # [2026-08-27] Deux decisions justes, prises separement, se contredisent :
 #
-# L'arbre qosmo-grgsm part maintenant entier - .git et build/ compris - donc
+# L'arbre qosmo part maintenant entier - .git et build/ compris - donc
 # QEMU_BIN est resolu des la gravure, et ce service n'a rien a faire. Il est la
 # pour le seul cas ou l'arbre perdrait son build/ : quelqu'un qui le reclone a
-# la main, ou qui remplace /opt/GSM/qosmo-grgsm par un checkout frais. Sans build/,
+# la main, ou qui remplace /opt/GSM/qosmo par un checkout frais. Sans build/,
 # environnement/paths.env resout QEMU_BIN a un chemin inexistant et la pile
 # s'arrete des le premier module :
 #     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
@@ -495,11 +496,11 @@ echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage 
 # clone frais le ferait, et ce service repasse a chaque demarrage.
 cat > "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh" <<'QLINK'
 #!/bin/bash
-# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qosmo-grgsm.
+# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qosmo.
 # Voir build-iso.sh, etape [6/9], pour le pourquoi.
 set -u
 SRC="${OSMO_QEMU_BIN:-/usr/local/bin/qemu-system-arm}"
-TREE="${OSMO_QEMU_SRC:-/opt/GSM/qosmo-grgsm}"
+TREE="${OSMO_QEMU_SRC:-/opt/GSM/qosmo}"
 LNK="$TREE/build/qemu-system-arm"
 
 # Pas de binaire (image inter-STP) ou pas d'arbre (reclone impossible, reseau
@@ -520,29 +521,31 @@ echo "osmo-qemu-link: $LNK -> $SRC"
 
 # ── Lanceurs C (tools/qosmo-launch) : ce que 40-qemu.sh appelle ─────────────
 # [2026-09-03] /usr/local/bin/<fork> est recompile s'il manque ou si la source
-# de l'arbre est plus recente (reclone, osmo-update). Le fork qosmo-dsp n'a
-# pas de lien possible : son QEMU porte le modele C54x, il doit etre dans son
-# propre build/ ; on le dit si ce n'est pas le cas.
-for fork in qosmo-grgsm qosmo-dsp; do
+# de l'arbre est plus recente (reclone, osmo-update). [2026-09-25] Un seul
+# arbre, qosmo ; le DSP (--dsp) est c54x_exe, hors QEMU : on dit s'il manque.
+for fork in qosmo; do
     src="/opt/GSM/$fork/tools/qosmo-launch"
     [ -f "$src/qosmo-launch.c" ] || continue
     if [ ! -x "/usr/local/bin/$fork" ] || [ "$src/qosmo-launch.c" -nt "/usr/local/bin/$fork" ]; then
-        if command -v gcc >/dev/null 2>&1 && make -s -C "$src" install >/dev/null 2>&1; then
+        if command -v gcc >/dev/null 2>&1 && make -s -C "$src" ALIAS="$fork" install >/dev/null 2>&1; then
             echo "osmo-qemu-link: lanceur /usr/local/bin/$fork (re)compile"
         else
             echo "osmo-qemu-link: lanceur $fork non compile (gcc/make absents ?) - 40-qemu.sh retombe sur QEMU_BIN"
         fi
     fi
 done
-if [ -d /opt/GSM/qosmo-dsp ] && [ ! -x /opt/GSM/qosmo-dsp/build/qemu-system-arm ]; then
-    echo "osmo-qemu-link: qosmo-dsp sans build/qemu-system-arm - --dsp indisponible (ninja -C /opt/GSM/qosmo-dsp/build qemu-system-arm)"
+if [ -d /opt/GSM/c54x_exe ] && [ ! -x /opt/GSM/c54x_exe/c54x_exe ]; then
+    echo "osmo-qemu-link: c54x_exe non compile - --dsp indisponible (make -C /opt/GSM/c54x_exe)"
+fi
+if [ ! -f /opt/GSM/calypso_dsp.PROM0.bin ]; then
+    echo "osmo-qemu-link: ROM DSP absente de /opt/GSM - --dsp indisponible (copie dans /opt/GSM/c54x_exe/rom)"
 fi
 QLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"
 
 cat > "$ROOTFS/etc/systemd/system/osmo-qemu-link.service" <<'EOF'
 [Unit]
-Description=osmo-operator - QEMU_BIN dans l'arbre qosmo-grgsm + lanceurs qosmo-grgsm/qosmo-dsp
+Description=osmo-operator - QEMU_BIN dans l'arbre qosmo + lanceur qosmo
 After=local-fs.target
 [Service]
 Type=oneshot
@@ -552,7 +555,7 @@ ExecStart=/usr/local/sbin/osmo-qemu-link.sh
 WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-qemu-link 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo-grgsm ; lanceurs qosmo-grgsm/qosmo-dsp recompiles si besoin)"
+echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de qosmo ; lanceur qosmo recompile si besoin)"
 
 
 

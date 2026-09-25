@@ -58,7 +58,7 @@ fi
 # a chaque boot (wipe=1), aujourd'hui "osmo-update" fait un git fetch, dont le
 # reset --hard emporte de la meme facon ce qui n'est pas suivi. N_MS retombait
 # a 1, MS#2 restait inconnu du HLR, et start-direct.sh le lancait quand meme.
-# /opt/GSM/qosmo-grgsm/environment, lui, n'a jamais existe : ce depot-la nomme son
+# /opt/GSM/qosmo/environment, lui, n'existe pas : ce depot-la nomme son
 # repertoire "environnement".
 # /etc/osmocom n'appartient a aucun depot : ce qui y est ecrit reste.
 mkdir -p "$ROOTFS/etc/osmocom"
