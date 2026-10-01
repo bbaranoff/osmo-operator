@@ -138,7 +138,7 @@ echo -e "${BOLD}Initialisation du disque chiffre${NC}"
 echo -e "  partition      : ${CYAN}$DEV${NC} ($taille)"
 echo -e "  deviendra      : ${CYAN}$MOUNT${NC} (LUKS2 + ext4, mappe sur /dev/mapper/$MAPPER)"
 echo -e "  compte a home  : ${CYAN}$OWNER${NC}"
-echo -e "  au demarrage   : question ${CYAN}\"Dechiffrer $MOUNT ? [o/N]\"${NC}, \"non\" n'empeche pas de demarrer"
+echo -e "  au demarrage   : ${CYAN}\"Phrase de passe pour $MOUNT (Entree = root sans $MOUNT)\"${NC}, Entree a vide n'empeche pas de demarrer"
 echo -e "  ${YELLOW}le contenu actuel de $MOUNT sera recopie dessus ; l original reste en place${NC}"
 echo -e "  ${YELLOW}et part dans /var/backups/ au redemarrage, avant le montage${NC}"
 echo
@@ -269,10 +269,10 @@ cryptsetup close "$MAPPER"
 
 echo
 echo -e "${GREEN}${BOLD}Termine.${NC}"
-echo -e "  Au prochain demarrage : ${CYAN}\"Dechiffrer $MOUNT ? [o/N]\"${NC}"
-echo -e "  Repondre ${CYAN}o${NC} puis la phrase de passe monte $MOUNT et donne a $OWNER son"
-echo -e "  trousseau ; Firefox et les applications a secrets tourneront sous lui."
-echo -e "  Repondre ${CYAN}n${NC} (ou attendre ${CRYPTHOME_TIMEOUT:-60} s) demarre sans : la session root"
+echo -e "  Au prochain demarrage : ${CYAN}\"Phrase de passe pour $MOUNT (Entree = root sans $MOUNT)\"${NC}"
+echo -e "  Taper la phrase (affichee en ${CYAN}****${NC}) monte $MOUNT et ouvre la session de $OWNER,"
+echo -e "  avec son trousseau ; Firefox et les applications a secrets tourneront sous lui."
+echo -e "  ${CYAN}Entree${NC} a vide (ou attendre ${CRYPTHOME_TIMEOUT:-60} s) demarre sans : la session root"
 echo -e "  s'ouvre normalement, les memes applications tournent sans secrets."
 echo
 echo -e "  Apres coup, dans un terminal : ${CYAN}unlock-home${NC} / ${CYAN}lock-home${NC}"

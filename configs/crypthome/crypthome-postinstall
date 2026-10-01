@@ -15,10 +15,10 @@
 # par jour, souvent sans personne devant l ecran.
 #
 # On repasse donc crypttab et fstab en "noauto" et on remplit
-# /etc/default/crypthome. C est alors unlock-home.service qui pose la question
-# « Dechiffrer /home ? [o/N] », avant le gestionnaire de connexion, avec un
-# delai au bout duquel l absence de reponse vaut non - et le demarrage se
-# termine dans tous les cas.
+# /etc/default/crypthome. C est alors unlock-home.service qui demande la phrase
+# de passe, avant le gestionnaire de connexion : la taper ouvre /home et la
+# session du compte ; Entree a vide (ou le delai qui expire) demarre en root
+# sans /home - et le demarrage se termine dans tous les cas.
 #
 # LE PROPRIETAIRE, C EST LE COMPTE DE SESSION. Sur la cle live, le home chiffre
 # appartenait a osmocom pendant que la session tournait sous root. Sur le disque
@@ -203,8 +203,8 @@ systemctl enable unlock-home.service >/dev/null 2>&1 || true
     /usr/local/sbin/refresh-owner-apps >/dev/null 2>&1 || true
 
 log "$MOUNT chiffre (LUKS $UUID, mapping $MAPPER), proprietaire ${OWNER:-<aucun>}."
-log "  Au demarrage : « Dechiffrer $MOUNT ? [o/N] » - non, ou pas de reponse,"
-log "  oui : session ${OWNER:-du compte}, persistante sur $MOUNT chiffre ;"
-log "  non, ou pas de reponse : session root ephemere (ecritures dans /tmp),"
+log "  Au demarrage : « Phrase de passe pour $MOUNT (Entree = root sans $MOUNT) »"
+log "  phrase tapee : session ${OWNER:-du compte}, persistante sur $MOUNT chiffre ;"
+log "  Entree a vide, ou pas de reponse : session root ephemere (ecritures dans /tmp),"
 log "  sans $MOUNT - le demarrage ne bloque jamais."
 exit 0

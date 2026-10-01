@@ -60,11 +60,11 @@ bar.SetZ(11);
 
 tick = 0;
 
-# ── LA SAISIE : LA QUESTION « Dechiffrer /home ? [o/N] » ET LA PHRASE LUKS ──
-# [2026-10-01] Les deux passent par systemd-ask-password, donc par la MEME
-# fonction de ce theme (l agent plymouth de systemd ne connait qu un type de
-# requete : le mot de passe ; --echo=yes n y change rien). Avant : un champ
-# vide et des pastilles rondes, sans rien qui dise « j attends que tu tapes ».
+# ── LA SAISIE : LA PHRASE DE PASSE LUKS DE /home ────────────────────────────
+# [2026-10-01] Une seule invite, posee par unlock-home via systemd-ask-password :
+# la phrase ouvre /home, Entree a vide demarre en root sans /home. Avant : un
+# champ vide et des pastilles rondes, sans rien qui dise « j attends que tu
+# tapes ».
 # Maintenant : un CURSEUR QUI CLIGNOTE dans le champ des que la question est
 # posee, et chaque caractere tape s affiche en « * » - la saisie d un terminal,
 # celle qu on reconnait, sur l ecran graphique.

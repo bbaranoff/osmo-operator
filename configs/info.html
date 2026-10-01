@@ -127,8 +127,8 @@ journalctl -u osmo-lte -f</code></pre>
 <tr><td>Paint</td><td><code>overlay-draw.py</code></td><td>Draw over the desktop (<span class="file">tools/overlay-draw.py</span>).</td></tr>
 <tr><td>Claude</td><td><code>claude</code></td><td>Installs itself on first click (<code>addition.sh --claude</code>).</td></tr>
 </table>
-<p>At boot an encrypted <code>/home</code> asks <code>Decrypt /home? [o/N]</code> (<span class="file">configs/crypthome/unlock-home</span>): answering no,
-or not answering, opens an ephemeral root session; the boot never blocks.</p>
+<p>At boot an encrypted <code>/home</code> asks for its passphrase, echoed as <code>****</code> (<span class="file">configs/crypthome/unlock-home</span>): typing it opens the user session,
+pressing Enter on an empty line, or not answering, opens an ephemeral root session; the boot never blocks.</p>
 </div>
 
 <h2>The launcher bar and the desktop widgets</h2>

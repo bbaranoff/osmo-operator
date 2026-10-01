@@ -1,18 +1,18 @@
 #!/bin/bash
 # unlock-home - dechiffre et monte /home depuis le second disque (LUKS).
 #
-#   unlock-home --boot   pose la question au demarrage, via systemd-ask-password
+#   unlock-home --boot   demande la phrase au demarrage, via systemd-ask-password
 #   unlock-home          la meme chose depuis un terminal, apres coup
 #
-# CE SCRIPT NE RATE JAMAIS LE BOOT. Quelle que soit la reponse, l'absence du
+# CE SCRIPT NE RATE JAMAIS LE BOOT. Entree a vide, l absence du
 # disque, une phrase de passe fausse trois fois ou un montage impossible, il
-# sort 0 et la machine demarre - sur un /home vide. C'est le point du "non" :
+# sort 0 et la machine demarre - sur un /home vide. C est le point d Entree a vide :
 # le systeme reste utilisable en root, dont le home (/root) est sur le disque
 # systeme en clair.
 #
 # ET LE BUREAU S OUVRE SUR ROOT. [2026-09-25] Sur un disque installe, le compte
 # de session a son home SUR le volume chiffre : sans /home, GDM l ouvrirait sur
-# un home inexistant. Quand /home reste ferme au demarrage (non, delai, phrase
+# un home inexistant. Quand /home reste ferme au demarrage (Entree, delai, phrase
 # refusee, disque absent), GDM ouvre donc une session ROOT, pour ce demarrage
 # seulement - voir session_root plus bas.
 set -u
@@ -210,42 +210,70 @@ if [ ! -e "$DEV" ]; then
     exit 0
 fi
 
-# ── 1. LA QUESTION ──────────────────────────────────────────────────────────
-# --echo=yes : c'est un oui/non, pas un secret ; le masquer n'aurait aucun sens
-# et laisse l'operateur sans retour visuel. Le delai qui expire vaut "non" :
-# une machine qui redemarre seule finit son boot au lieu d'attendre indefiniment.
-if [ "$BOOT" = 1 ]; then
-    reponse="$(systemd-ask-password --echo=yes --timeout="$TIMEOUT" \
-                   --id="crypthome:question" \
-                   "Dechiffrer $MOUNT ? [o/N]" 2>/dev/null)" || reponse=""
-else
-    read -r -t "$TIMEOUT" -p "Dechiffrer $MOUNT ? [o/N] " reponse || reponse=""
-    echo
-fi
-
-case "${reponse,,}" in
-    o|oui|y|yes) ;;
-    *)  log "reponse \"non\" - demarrage sans $MOUNT (« unlock-home » pour le faire plus tard)."
-        session_root
-        exit 0 ;;
-esac
-
-# ── 2. LA PHRASE DE PASSE ───────────────────────────────────────────────────
+# ── LA SEULE QUESTION : LA PHRASE DE PASSE ──────────────────────────────────
+# [2026-10-01] Plus de « Dechiffrer /home ? [o/N] » suivi d une seconde invite.
+# Une seule saisie, qui vaut reponse ET phrase de passe :
+#   - ENTREE a vide (ou le delai qui expire)  : on demarre en ROOT, sans /home ;
+#   - une phrase                               : on ouvre le volume, et la
+#     session est celle du compte proprietaire.
+# Une phrase refusee repose la question, $TRIES fois ; a tout moment, Entree a
+# vide sort en root. Le delai qui expire vaut Entree : une machine qui
+# redemarre seule finit son boot au lieu d attendre indefiniment.
+#
+# Ce qu on tape s affiche en « * » : au demarrage c est systemd-ask-password
+# qui le fait (son echo par defaut est "masked" : une etoile par caractere sur
+# la console, et le theme plymouth en fait autant) ; dans un terminal, c est
+# lire_masquee ci-dessous - « read -s » n afficherait rien du tout, et
+# l operateur ne saurait pas si sa frappe est prise.
+#
 # --key-file=- et non un argument ni un fichier : la phrase ne passe ni par la
 # ligne de commande (visible dans ps) ni par le disque, seulement par un tube.
+lire_masquee() {
+    # lire_masquee VARIABLE INVITE : lit une ligne au clavier, un « * » par
+    # caractere, Retour arriere pris en compte. Retourne 1 si le delai expire
+    # (la variable est alors vide).
+    local _var="$1" _invite="$2" _c _s="" _rc
+    printf '%s' "$_invite" >&2
+    while :; do
+        IFS= read -r -s -n1 -t "$TIMEOUT" _c; _rc=$?
+        if [ "$_rc" -gt 128 ]; then
+            echo >&2; printf -v "$_var" '%s' ""; return 1
+        fi
+        [ "$_rc" -ne 0 ] && break            # fin d entree
+        [ -z "$_c" ] && break                # Entree
+        if [ "$_c" = $'\x7f' ] || [ "$_c" = $'\b' ]; then
+            if [ -n "$_s" ]; then _s="${_s%?}"; printf '\b \b' >&2; fi
+            continue
+        fi
+        _s+="$_c"; printf '*' >&2
+    done
+    echo >&2
+    printf -v "$_var" '%s' "$_s"
+    return 0
+}
+
 ouvert=0
 essai=0
 while [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
+    if [ "$essai" -eq 1 ]; then
+        invite="Phrase de passe pour $MOUNT (Entree = root sans $MOUNT) :"
+    else
+        invite="Phrase refusee - $MOUNT ($essai/$TRIES, Entree = root sans $MOUNT) :"
+    fi
     if [ "$BOOT" = 1 ]; then
         passe="$(systemd-ask-password --timeout="$TIMEOUT" \
-                     --id="crypthome:passphrase" \
-                     "Phrase de passe pour $MOUNT ($essai/$TRIES) :" 2>/dev/null)" || passe=""
+                     --id="crypthome:passphrase" "$invite" 2>/dev/null)" || passe=""
     else
-        read -r -s -t "$TIMEOUT" -p "Phrase de passe pour $MOUNT ($essai/$TRIES) : " passe || passe=""
-        echo
+        lire_masquee passe "$invite " || passe=""
     fi
-    if [ -n "$passe" ] && printf '%s' "$passe" | cryptsetup open --key-file=- "$DEV" "$MAPPER"; then
+    if [ -z "$passe" ]; then
+        unset passe
+        log "Entree sans phrase - demarrage en root sans $MOUNT (« unlock-home » pour le faire plus tard)."
+        session_root
+        exit 0
+    fi
+    if printf '%s' "$passe" | cryptsetup open --key-file=- "$DEV" "$MAPPER"; then
         passe=""; unset passe
         ouvert=1
         break
@@ -255,7 +283,7 @@ while [ "$essai" -lt "$TRIES" ]; do
 done
 
 if [ "$ouvert" != 1 ]; then
-    log "abandon apres $TRIES essais - demarrage sans $MOUNT."
+    log "abandon apres $TRIES essais - demarrage en root sans $MOUNT."
     session_root
     exit 0
 fi
