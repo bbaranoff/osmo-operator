@@ -360,7 +360,10 @@ done
 # OP_ID_BASE=2 : les conteneurs prennent les rangs 2 et 3, le 1 reste au natif.
 # OSMO_NO_ATTACH=1 : ne pas finir bloque dans le tmux d un conteneur - le script
 # doit rendre la main pour enchainer verifier().
-CMD=(env "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
+# WAN_NODE_ID : le numero de noeud (MCC). Sans lui start.sh le trouvait a 0 en
+# mode non interactif et affichait « numero de noeud (MCC) vaut 0 - ramene a 1 »
+# a chaque lancement ; la topologie le connait (MULTI_NODE, 1 sur une machine).
+CMD=(env "WAN_NODE_ID=${MULTI_NODE:-1}" "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
      "OP_ID_BASE=2" "OSMO_NO_ATTACH=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 

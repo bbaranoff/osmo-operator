@@ -857,6 +857,11 @@ if [ "$DO_DOCKER" = "1" ]; then
         apt-get install -y docker.io || { echo -e "  ${RED}✗ installation de docker.io echouee${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} docker.io installe"
     fi
+    # docker compose build passe par Bake et avertit si buildx manque. Non fatal.
+    if ! docker buildx version >/dev/null 2>&1; then
+        apt-get install -y docker-buildx >/dev/null 2>&1 \
+            || apt-get install -y docker-buildx-plugin >/dev/null 2>&1 || true
+    fi
     systemctl enable --now docker 2>/dev/null || true
     # Le socket met un instant a repondre apres un premier demarrage : sans
     # cette attente, le `docker info` suivant echoue et l on croit

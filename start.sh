@@ -1527,7 +1527,7 @@ start_bridge_mode() {
         # table et un nombre de conteneurs qui ne se correspondent plus.
         if [ -n "${OPERATOR_COUNT_HINT:-}" ]; then
             n_operators="$OPERATOR_COUNT_HINT"
-            echo -e "  ${CYAN}Conteneurs a lancer : ${n_operators} (choisis dans le menu WAN)${NC}"
+            echo -e "  ${CYAN}Conteneurs a lancer : ${n_operators} (--operators / menu WAN)${NC}"
         else
             # 3 par defaut : c'est la taille du banc (deux conteneurs et une
             # VM). Un defaut qui correspond au montage courant evite la moitie

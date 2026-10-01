@@ -163,11 +163,17 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
 # un qosmo perime (ou l inverse) donnerait un DSP et un ARM qui ne parlent pas
 # du meme protocole de pont, sans rien qui le signale. Ne pas decouper.
 # Le pull rafraichit, il ne conditionne pas (cf. osmo-operator ci-dessus).
+# [2026-10-01] fetch + reset --hard, PAS `pull --ff-only`. Les arbres de la base
+# portent des fichiers suivis modifies (__pycache__/*.pyc dans qosmo, le binaire
+# c54x_exe versionne) : le pull refusait de fusionner, le `|| echo` avalait
+# l echec et l image se reconstruisait sur du code perime. Ces arbres sont des
+# sources a jour, pas un espace de travail : on les aligne sur origin.
 # c54x_exe : CFLAGS sans -march=native, comme dans le Dockerfile de base.
 RUN : "${QEMU_CACHE_BUST:-}" && \
     for d in qosmo c54x_exe grgsm_exe; do \
-        (cd /opt/GSM/$d && GIT_TERMINAL_PROMPT=0 git pull --ff-only) \
-            || echo "[warn] git pull $d impossible - on rebatit sur l arbre present"; \
+        (cd /opt/GSM/$d && GIT_TERMINAL_PROMPT=0 git fetch origin \
+            && git reset --hard "origin/$(git rev-parse --abbrev-ref HEAD)") \
+            || echo "[warn] mise a jour de $d impossible (reseau ?) - on rebatit sur l arbre present"; \
     done && \
     (cd /opt/GSM/qosmo/build && ninja) && \
     make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
