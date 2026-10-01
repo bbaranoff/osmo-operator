@@ -91,6 +91,23 @@ OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "1.0"))))
 # opacite pleine : pas de png, mais le mobile.log et la FFT restent nets.
 STRIP_STATE = os.environ.get("OSMO_WP_STATE", "/var/cache/osmo-wallpaper/strip.state")
 WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
+# ── CE QU IL Y A SOUS L ENCART : L ILLUSTRATION ENTIERE ─────────────────────
+# [2026-10-01] L encart DECOUPAIT sa boite (510,220 .. 1410,1010) dans le fond
+# d ecran, parce que le fond ETAIT le rendu compose (tools/wallpaper-render.py)
+# avec ses deux cadres BD exactement la. Depuis le 2026-09-25 le fond par
+# defaut est une image sans cadre, et le bureau GNOME porte ce que l operateur
+# y met (configs/gsm-lab-fond.jpg) : decouper une boite dedans donnait un
+# morceau de ciel et de colline agrandi, sans aucun sens. L encart montre donc
+# l illustration du banc ENTIERE (pylones, soleil, colline), ajustee dans sa
+# boite - le haut et le bas que le format laisse libres sont remplis par la
+# meme image, floutee et assombrie, pour ne pas peindre deux bandes noires.
+#
+# Le rendu compose garde son chemin : quand osmo-wallpaper.sh a tourne et
+# ecrit FOND= dans strip.state, c est CE fichier qu on decoupe, comme avant -
+# ses cadres sont bien la ou la boite les attend. OSMO_FFT_FOND=decoupe force
+# l ancien comportement sur $OSMO_WP_FILE.
+ILLUSTRATION = os.environ.get("OSMO_FFT_IMAGE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
+FOND_MODE = os.environ.get("OSMO_FFT_FOND", "entier")
 MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
@@ -226,55 +243,99 @@ def resample(vals, n):
     return out
 
 
-_strip = {"mtime": None, "present": True}
+_strip = {"mtime": None, "present": True, "fond": ""}
+
+
+def _lire_strip_state():
+    """Relit strip.state (osmo-wallpaper.sh) quand il change : STRIP= et FOND=."""
+    try:
+        mt = os.stat(STRIP_STATE).st_mtime
+    except OSError:
+        _strip.update(mtime=None, present=True, fond="")
+        return
+    if mt == _strip["mtime"]:
+        return
+    present, fond = True, ""
+    try:
+        with open(STRIP_STATE) as fh:
+            for line in fh:
+                k, _, v = line.strip().partition("=")
+                if k == "STRIP":
+                    present = v.strip().lower() != "non"
+                elif k == "FOND":
+                    fond = v.strip()
+    except OSError:
+        pass
+    _strip.update(mtime=mt, present=present, fond=fond)
 
 
 def strip_present():
     """Le fond du jour porte-t-il un strip ? (defaut : oui, on ne devine pas)"""
-    try:
-        mt = os.stat(STRIP_STATE).st_mtime
-    except OSError:
-        return True
-    if mt != _strip["mtime"]:
-        val = True
-        try:
-            with open(STRIP_STATE) as fh:
-                for line in fh:
-                    k, _, v = line.strip().partition("=")
-                    if k == "STRIP":
-                        val = v.strip().lower() != "non"
-        except OSError:
-            pass
-        _strip.update(mtime=mt, present=val)
+    _lire_strip_state()
     return _strip["present"]
 
 
-# ── LE STRIP : DECOUPE DANS LE FOND D ECRAN, RELU QUAND IL CHANGE ───────────
-# Le fond est refait chaque jour (osmo-wallpaper.timer) : on suit son mtime.
-_base = {"mtime": None, "img": None}
+def _source_fond():
+    """(fichier, mode) : le rendu compose a DECOUPER, ou l illustration a AJUSTER."""
+    _lire_strip_state()
+    f = _strip["fond"]
+    if _strip["present"] and f and os.path.isfile(f):
+        return f, "decoupe"
+    if FOND_MODE == "decoupe":
+        return WALLPAPER, "decoupe"
+    return (ILLUSTRATION if os.path.isfile(ILLUSTRATION) else WALLPAPER), "entier"
+
+
+def _ajuster(im):
+    """L image ENTIERE dans W x H : ajustee et centree ; le reste de la boite est
+    la meme image qui la remplit, floutee et assombrie (pas de bandes noires)."""
+    from PIL import ImageEnhance, ImageFilter
+    im.thumbnail((2 * W, 2 * H), Image.LANCZOS)       # 7800x6030 -> de quoi travailler vite
+    sw, sh = im.size
+    s = max(W / sw, H / sh)
+    fond = im.resize((max(W, int(sw * s + 0.5)), max(H, int(sh * s + 0.5))), Image.LANCZOS)
+    x0, y0 = (fond.width - W) // 2, (fond.height - H) // 2
+    fond = fond.crop((x0, y0, x0 + W, y0 + H)).filter(ImageFilter.GaussianBlur(18))
+    fond = ImageEnhance.Brightness(fond).enhance(0.5)
+    s = min(W / sw, H / sh)
+    dev = im.resize((max(1, int(sw * s)), max(1, int(sh * s))), Image.LANCZOS)
+    fond.paste(dev, ((W - dev.width) // 2, (H - dev.height) // 2))
+    return fond
+
+
+# ── LE FOND DE L ENCART, RELU QUAND IL CHANGE ───────────────────────────────
+# On suit le mtime du fichier retenu (et le fichier lui-meme : osmo-wallpaper.sh
+# peut en changer le jour ou il tourne).
+_base = {"cle": None, "img": None}
 
 
 def base_image():
+    src, mode = _source_fond()
     try:
-        mt = os.stat(WALLPAPER).st_mtime
+        mt = os.stat(src).st_mtime
     except OSError:
         mt = None
-    if mt != _base["mtime"] or _base["img"] is None:
+    cle = (src, mode, mt)
+    if cle != _base["cle"] or _base["img"] is None:
         img = None
         if mt is not None:
             try:
-                wp = Image.open(WALLPAPER).convert("RGB")
-                if wp.size != (1920, 1080):
-                    wp = wp.resize((1920, 1080), Image.LANCZOS)
-                img = wp.crop(BOX)
+                wp = Image.open(src).convert("RGB")
+                if mode == "decoupe":
+                    if wp.size != (1920, 1080):
+                        wp = wp.resize((1920, 1080), Image.LANCZOS)
+                    img = wp.crop(BOX)
+                else:
+                    img = _ajuster(wp)
+                print(f"[fft-snap] fond de l encart : {src} ({mode})", flush=True)
             except Exception as e:  # fond illisible : cadre sombre, sans strip
-                print(f"[fft-snap] fond {WALLPAPER} : {e}", file=sys.stderr, flush=True)
+                print(f"[fft-snap] fond {src} : {e}", file=sys.stderr, flush=True)
         if img is None:
             img = Image.new("RGB", (W, H), (20, 24, 36))
             for m in (HAUT, BAS):     # les deux cadres, comme le fond les dessine
                 ImageDraw.Draw(img).rounded_rectangle((0, m[0], W - 1, m[1] - 1), radius=26,
                                                      outline=(200, 200, 210), width=2)
-        _base.update(mtime=mt, img=img)
+        _base.update(cle=cle, img=img)
     return _base["img"]
 
 

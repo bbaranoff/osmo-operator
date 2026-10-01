@@ -21,11 +21,24 @@
 #                         commande que osmo-topzone.py lit pour faire le fondu de
 #                         la banniere et accueillir la fenetre.
 #
+# ── LES « run » N OUVRENT PLUS DE TERMINAL ───────────────────────────────────
+# [2026-10-01] run standalone / run multi / run deka ouvraient un gnome-terminal
+# qui vivait le temps du lancement et dont la sortie partait avec lui. Ils
+# tournent maintenant EN FOND, sans fenetre : leur sortie va dans un fichier
+# ($XDG_RUNTIME_DIR/osmo-launcher/<nom>.log), et la barre se DEPLIE (bouton
+# « ▴ journal », ou automatiquement au clic sur un run) pour montrer ce
+# journal, en direct, au-dessus des boutons. Un bouton par run deja lance
+# permet de passer de l un a l autre ; « ▾ » replie. Les privileges passent
+# par pkexec (fenetre de mot de passe du bureau), comme launch.sh le fait
+# deja pour les actions sans terminal.
+#
 # Le placement se fait en reperant la NOUVELLE fenetre apparue apres le
 # lancement (diff des ids wmctrl) : robuste meme pour les applis qui forkent
 # (firefox, kodi). Lance par /usr/local/bin/osmo-desktop-panel.
 import os
+import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -56,23 +69,46 @@ FFT_BOX = (510, 220, 900, 790)
 TOP_BOX = (320, 60, 1110, 500)
 
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
-PID_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-launcher.pid")
+RUN = RUN if os.path.isdir(RUN) else "/tmp"
+PID_FILE = os.path.join(RUN, "osmo-launcher.pid")
 # Le canal vers osmo-topzone.py : une ligne "HOST <winid>" ou "HOST FS <winid>".
-TOPZONE_CMD = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-topzone.cmd")
+TOPZONE_CMD = os.path.join(RUN, "osmo-topzone.cmd")
+# Les journaux des « run » : un fichier par action, ecrase a chaque lancement.
+LOG_DIR = os.path.join(RUN, "osmo-launcher")
+LOG_H = 300                     # hauteur du journal deplie, en px
+LOG_W_MAX = 1240
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
+INFO_PAGE = "file:///usr/share/osmo-operator/info.html"
+if not os.path.exists("/usr/share/osmo-operator/info.html"):
+    INFO_PAGE = "file://" + os.path.join(REPO, "configs/info.html")
 
 CSS = b"""
 .osmo-launch { background: none; background-color: transparent; border: none;
                box-shadow: none; padding: 0; margin: 0; }
 .osmo-cat { background: rgba(19,16,24,0.42); border: 1px solid rgba(239,230,210,0.18);
             border-radius: 10px; padding: 4px 8px; margin: 0 4px; }
-.osmo-cat > label.title { color: #a9b7de; font: 8pt "DejaVu Sans Mono"; }
+.osmo-cat > label.title { color: #a9b7de; font: 8pt "Ubuntu"; }
 .osmo-app button { background: rgba(22,27,34,0.55); color: #e6edf3;
                    border: 1px solid rgba(88,166,255,0.25); border-radius: 6px;
-                   padding: 1px 8px; font: 9pt "DejaVu Sans Mono"; min-height: 0; }
+                   padding: 1px 8px; font: 9pt "Ubuntu"; min-height: 0; }
 .osmo-app button:hover { background: rgba(33,38,45,0.85); border-color: #58a6ff; }
-.osmo-app button.mini { padding: 1px 5px; color: #a9b7de; font: 8pt "DejaVu Sans Mono"; }
+.osmo-app button.mini { padding: 1px 5px; color: #a9b7de; font: 8pt "Ubuntu"; }
+.osmo-app button.journal { color: #58a6ff; }
+.osmo-help { background: #d62828; color: #ffffff; border: 2px solid #ff6b6b; border-radius: 999px;
+             font: bold 22pt "Ubuntu"; min-width: 46px; min-height: 46px; padding: 0; margin: 0 6px; }
+.osmo-help:hover { background: #ef3b3b; }
+.osmo-log { background: rgba(10,12,18,0.93); border: 1px solid rgba(88,166,255,0.35);
+            border-radius: 10px; padding: 6px 8px; margin: 0 0 6px 0; }
+.osmo-log label.title { color: #58a6ff; font: bold 9pt "Ubuntu"; }
+.osmo-log label.state { color: #8b949e; font: 8pt "Ubuntu"; }
+.osmo-log button { background: rgba(22,27,34,0.7); color: #e6edf3;
+                   border: 1px solid rgba(88,166,255,0.25); border-radius: 6px;
+                   padding: 0 7px; font: 8pt "Ubuntu"; min-height: 0; }
+.osmo-log button.actif { border-color: #58a6ff; color: #58a6ff; }
+.osmo-log textview, .osmo-log textview text { background-color: transparent; color: #d8e0ea;
+                   font-family: "Ubuntu Mono"; font-size: 9pt; }
 """
 
 
@@ -131,22 +167,44 @@ def _terminal_argv(cmd):
     """argv d un emulateur de terminal executant `cmd` (chaine shell)."""
     for term, opt in (("gnome-terminal", "--"), ("xfce4-terminal", "-e"),
                       ("konsole", "-e"), ("x-terminal-emulator", "-e"), ("xterm", "-e")):
-        if subprocess.run(["which", term], capture_output=True).returncode == 0:
+        if shutil.which(term):
             if term == "gnome-terminal":
                 return [term, "--", "bash", "-lc", cmd]
             return [term, opt, "bash -lc " + shlex.quote(cmd)]
     return ["xterm", "-e", "bash -lc " + shlex.quote(cmd)]
 
 
+def _root_prefix():
+    """Prefixe argv pour executer en root SANS terminal : rien si on l est deja,
+    pkexec (fenetre de mot de passe du bureau) sinon, sudo -n en dernier recours
+    (il ne peut pas demander : sans NOPASSWD il echoue net, et le journal le dit)."""
+    if os.geteuid() == 0:
+        return []
+    if shutil.which("pkexec") and os.environ.get("DISPLAY"):
+        return ["pkexec", "env", "DISPLAY=" + os.environ.get("DISPLAY", ""),
+                "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""), "NO_COLOR=1", "TERM=dumb"]
+    return ["sudo", "-n", "-E"]
+
+
+LAUNCHER = None     # la fenetre, pour que les Action puissent lui confier un journal
+
+
 class Action:
-    """Une appli : comment la lancer, et si c est un terminal."""
-    def __init__(self, argv=None, term_cmd=None, fs_argv=None):
+    """Une appli : comment la lancer - fenetre, terminal, ou run en fond avec journal."""
+    def __init__(self, argv=None, term_cmd=None, fs_argv=None, log_cmd=None, root=False, slug=None):
         self.argv = argv          # fenetre graphique normale
         self.term_cmd = term_cmd  # commande a ouvrir dans un terminal
         self.fs_argv = fs_argv    # variante plein ecran si l appli la gere
+        self.log_cmd = log_cmd    # commande shell en fond, sortie dans un journal (pas de terminal)
+        self.root = root          # log_cmd : en root (pkexec)
+        self.slug = slug          # nom du journal
 
     def launch(self, mode):
         """mode: 'frame' (cale sur l encart) | 'full' (plein ecran) | 'top'."""
+        if self.log_cmd is not None:
+            if LAUNCHER is not None:
+                LAUNCHER.run_logged(self)
+            return
         before = _wmctrl_ids()
         if self.term_cmd is not None:
             spawn(_terminal_argv(self.term_cmd))
@@ -190,21 +248,29 @@ def catalogue():
     dash = os.environ.get("DASH_PORT", "8080")
     browser = "firefox"
     for b in ("firefox", "chromium", "xdg-open"):
-        if subprocess.run(["which", b], capture_output=True).returncode == 0:
+        if shutil.which(b):
             browser = b
             break
+    # Les trois « run » : en fond, journal dans la barre (voir l en-tete).
+    #   standalone : launch.sh --service demarre osmo-banc.service et le DIT
+    #                (notification) ; on deroule ensuite le journal de l unite.
+    #   multi      : launch.sh --multi (osmo-multi.service, plusieurs minutes)
+    #                EN PARALLELE du journal de l unite, qui montre les
+    #                conteneurs monter - lance en sequence, le journal n aurait
+    #                commence qu a la fin du demarrage.
+    #   deka       : deka-start.sh (pose par addition.sh --opencl), qui tee deja
+    #                dans /var/log/deka.log.
+    run_standalone = (f"{REPO}/launch.sh --service; echo; "
+                      "exec journalctl -u osmo-banc -f -n 40 --no-pager -o cat")
+    run_multi = (f"{REPO}/launch.sh --multi & "
+                 "journalctl -u osmo-multi -f -n 20 --no-pager -o cat & wait")
+    run_deka = ("if [ -x /root/deka/deka-start.sh ]; then exec /root/deka/deka-start.sh; "
+                "else echo 'deka non installe : icone « Supplements » (addition.sh --opencl)'; fi")
     return [
         ("Banc", [
-            ("run standalone", Action(term_cmd=f"{_sudo()}{REPO}/start-direct.sh; echo; read -n1 -rsp 'fin - touche...'")),
-            # [2026-09-07] PAR L UNITE, comme l icone du bureau. Cette entree
-            # lancait start-multi.sh EN DIRECT : le banc multi partait alors
-            # hors de systemd, sans journal ni etat, et un `systemctl stop` ne
-            # le voyait pas. launch.sh --multi demarre osmo-multi.service, dit
-            # ce qui manque quand une condition de l unite n est pas remplie
-            # (topologie absente = unite sautee en silence), et on deroule le
-            # journal derriere - c est lui qui montre le demarrage.
-            ("run multi",      Action(term_cmd=f"{_sudo()}{REPO}/launch.sh --multi; echo; {_sudo()}journalctl -u osmo-multi -n 40 --no-pager 2>/dev/null; echo; read -n1 -rsp 'fin - touche...'")),
-            ("run deka",       Action(term_cmd="/usr/local/bin/osmo-deka-anim || { echo 'deka non installe (supplement OpenCL)'; read -n1 -rsp 'touche...'; }")),
+            ("run standalone", Action(log_cmd=run_standalone, root=True, slug="standalone")),
+            ("run multi",      Action(log_cmd=run_multi, root=True, slug="multi")),
+            ("run deka",       Action(log_cmd=run_deka, root=True, slug="deka")),
             ("Dashboard",      Action(argv=[browser, f"http://127.0.0.1:{dash}"])),
             ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || {{ echo 'pas de session tmux'; read -n1 -rsp 'touche...'; }}")),
             (f"VTY {vty}",     Action(term_cmd=f"telnet 127.0.0.1 {vty} || {{ echo; echo 'VTY injoignable'; read -n1 -rsp 'touche...'; }}")),
@@ -241,6 +307,7 @@ class Launcher(Gtk.Window):
     def __init__(self):
         super().__init__(title="osmo-launcher")
         (gx, gy, sw, sh), _ = screen_geom()
+        self.geo = (gx, gy, sw, sh)
         self.set_type_hint(TYPE_HINT)
         self.set_decorated(False)
         self.set_resizable(False)
@@ -254,27 +321,55 @@ class Launcher(Gtk.Window):
             self.set_visual(visual)
         self.set_app_paintable(True)
         self.connect("draw", self._draw)
-        self.connect("destroy", Gtk.main_quit)
+        self.connect("destroy", self._quit)
 
         prov = Gtk.CssProvider()
         prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
+        # ── les journaux des run ───────────────────────────────────────────
+        self.runs = {}          # slug -> {"proc": Popen|None, "titre": str, "log": chemin, "bouton": Gtk.Button}
+        self.cur = None         # slug affiche
+        self._shown = ""        # dernier texte pousse dans la vue
+        self.deplie = False
+        os.makedirs(LOG_DIR, exist_ok=True)
+
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        col.get_style_context().add_class("osmo-launch")
+        col.set_valign(Gtk.Align.END)
+        self.revealer = Gtk.Revealer()
+        self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
+        self.revealer.set_transition_duration(180)
+        self.revealer.add(self._log_box(sw))
+        col.pack_start(self.revealer, False, False, 0)
+
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        row.get_style_context().add_class("osmo-launch")
         row.set_halign(Gtk.Align.CENTER)
         row.set_valign(Gtk.Align.END)
         for cat, apps in catalogue():
             row.pack_start(self._cat_box(cat, apps), False, False, 0)
-        self.add(row)
+        # Le grand « ? » rouge : la page Info (chaque module, icone / barre / CLI).
+        aide = Gtk.Button(label="?")
+        aide.get_style_context().add_class("osmo-help")
+        aide.set_valign(Gtk.Align.CENTER)
+        aide.set_tooltip_text("Info : comment lancer chaque module (icone, barre, CLI)")
+        aide.connect("clicked", lambda *_a: spawn(["xdg-open", INFO_PAGE]))
+        row.pack_end(aide, False, False, 0)
+        col.pack_start(row, False, False, 0)
+        self.add(col)
 
-        # bande basse, pleine largeur, ~72 px
+        # bande basse, pleine largeur, ~72 px ; depliee : + le journal
         self.h = 74
-        self.set_default_size(sw, self.h)
-        self.set_size_request(sw, self.h)
-        self.move(gx, gy + sh - self.h)
+        self._taille(self.h)
         self.show_all()
-        self.move(gx, gy + sh - self.h)
+        self._taille(self.h)
+        GLib.timeout_add(700, self._refresh_log)
+
+    def _taille(self, h):
+        gx, gy, sw, sh = self.geo
+        self.set_size_request(sw, h)
+        self.resize(sw, h)
+        self.move(gx, gy + sh - h)
 
     def _draw(self, _w, cr):
         import cairo
@@ -283,6 +378,155 @@ class Launcher(Gtk.Window):
         cr.paint()
         return False
 
+    def _quit(self, *_a):
+        self.stop_runs()
+        Gtk.main_quit()
+
+    # ── le journal : la boite au-dessus des boutons ────────────────────────
+    def _log_box(self, sw):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.get_style_context().add_class("osmo-log")
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_size_request(min(sw - 60, LOG_W_MAX), LOG_H)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.lbl_titre = Gtk.Label(label="journal")
+        self.lbl_titre.get_style_context().add_class("title")
+        self.lbl_etat = Gtk.Label(label="")
+        self.lbl_etat.get_style_context().add_class("state")
+        head.pack_start(self.lbl_titre, False, False, 0)
+        head.pack_start(self.lbl_etat, False, False, 0)
+        self.onglets = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        head.pack_end(self._bouton("▾ replier", self.replier), False, False, 0)
+        b_stop = self._bouton("■ stop", self._stop_courant)
+        b_stop.set_tooltip_text("arrete la commande en cours (pas le banc : launch.sh --stop)")
+        head.pack_end(b_stop, False, False, 0)
+        head.pack_end(self.onglets, False, False, 0)
+        box.pack_start(head, False, False, 0)
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.tv = Gtk.TextView()
+        self.tv.set_editable(False)
+        self.tv.set_cursor_visible(False)
+        self.tv.set_monospace(True)
+        self.tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.tv.set_left_margin(6)
+        self.tv.set_right_margin(6)
+        sc.add(self.tv)
+        box.pack_start(sc, True, True, 0)
+        return box
+
+    @staticmethod
+    def _bouton(label, cb):
+        b = Gtk.Button(label=label)
+        b.connect("clicked", lambda *_a: cb())
+        return b
+
+    def deplier(self, slug=None):
+        if slug:
+            self.cur = slug
+            for s, r in self.runs.items():
+                ctx = r["bouton"].get_style_context()
+                (ctx.add_class if s == slug else ctx.remove_class)("actif")
+            self.lbl_titre.set_text("journal : " + self.runs[slug]["titre"])
+            self._shown = ""
+        if not self.deplie:
+            self.deplie = True
+            self._taille(self.h + LOG_H + 10)
+            self.revealer.set_reveal_child(True)
+        self._refresh_log()
+
+    def replier(self):
+        if not self.deplie:
+            return
+        self.deplie = False
+        self.revealer.set_reveal_child(False)
+        GLib.timeout_add(200, lambda: (self._taille(self.h), False)[1])
+
+    def basculer(self):
+        if self.deplie:
+            self.replier()
+        elif self.runs:
+            self.deplier(self.cur or next(iter(self.runs)))
+        else:
+            self.lbl_titre.set_text("journal : aucun run lance")
+            self.deplier()
+
+    # ── lancer un run en fond ──────────────────────────────────────────────
+    def run_logged(self, action):
+        slug = action.slug or re.sub(r"\W+", "-", action.log_cmd)[:24]
+        log = os.path.join(LOG_DIR, slug + ".log")
+        r = self.runs.get(slug)
+        if r is None:
+            b = self._bouton(slug, lambda s=slug: self.deplier(s))
+            self.onglets.pack_start(b, False, False, 0)
+            b.show()
+            r = self.runs[slug] = {"proc": None, "titre": slug, "log": log, "bouton": b}
+        self._stop(r)
+        argv = (_root_prefix() if action.root else []) + ["bash", "-lc", action.log_cmd]
+        env = dict(os.environ, NO_COLOR="1", TERM="dumb")
+        try:
+            fh = open(log, "w")
+            fh.write("$ %s\n" % action.log_cmd)
+            fh.flush()
+            r["proc"] = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                                         start_new_session=True, env=env)
+            fh.close()
+        except OSError as e:
+            with open(log, "a") as fh:
+                fh.write("lancement impossible : %s\n" % e)
+        self.deplier(slug)
+
+    @staticmethod
+    def _stop(r):
+        p = r.get("proc")
+        if p is None or p.poll() is not None:
+            r["proc"] = None
+            return
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        r["proc"] = None
+
+    def _stop_courant(self):
+        if self.cur and self.cur in self.runs:
+            self._stop(self.runs[self.cur])
+            with open(self.runs[self.cur]["log"], "a") as fh:
+                fh.write("\n[stop]\n")
+
+    def stop_runs(self):
+        for r in self.runs.values():
+            self._stop(r)
+
+    def _refresh_log(self):
+        if not self.deplie or not self.cur or self.cur not in self.runs:
+            return True
+        r = self.runs[self.cur]
+        p = r.get("proc")
+        if p is not None and p.poll() is not None:
+            self.lbl_etat.set_text("termine (statut %d)" % p.returncode)
+        elif p is not None:
+            self.lbl_etat.set_text("en cours ...")
+        else:
+            self.lbl_etat.set_text("")
+        try:
+            with open(r["log"], "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                taille = fh.tell()
+                fh.seek(max(0, taille - 48 * 1024))
+                data = fh.read().decode("utf-8", "replace")
+        except OSError:
+            data = ""
+        data = ANSI.sub("", data)
+        if data != self._shown:
+            self._shown = data
+            buf = self.tv.get_buffer()
+            buf.set_text(data)
+            fin = buf.get_end_iter()
+            self.tv.scroll_to_iter(fin, 0.0, False, 0.0, 1.0)
+        return True
+
+    # ── les boutons ────────────────────────────────────────────────────────
     def _cat_box(self, cat, apps):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.get_style_context().add_class("osmo-cat")
@@ -293,6 +537,15 @@ class Launcher(Gtk.Window):
         approw = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         for name, action in apps:
             approw.pack_start(self._app_widget(name, action), False, False, 0)
+        if cat == "Banc":
+            wrap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            wrap.get_style_context().add_class("osmo-app")
+            bj = Gtk.Button(label="▴ journal")
+            bj.get_style_context().add_class("journal")
+            bj.set_tooltip_text("deplie / replie le journal des run")
+            bj.connect("clicked", lambda *_a: self.basculer())
+            wrap.pack_start(bj, False, False, 0)
+            approw.pack_start(wrap, False, False, 0)
         box.pack_start(approw, False, False, 0)
         return box
 
@@ -300,9 +553,13 @@ class Launcher(Gtk.Window):
         wrap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         wrap.get_style_context().add_class("osmo-app")
         b = Gtk.Button(label=name)
-        b.set_tooltip_text(f"{name} - clic: cale sur le cadre")
         b.connect("clicked", lambda *_a: action.launch("frame"))
         wrap.pack_start(b, False, False, 0)
+        if action.log_cmd is not None:
+            # un run n a pas de fenetre a caler ni a envoyer en haut : un seul bouton
+            b.set_tooltip_text(f"{name} - en fond, journal dans la barre")
+            return wrap
+        b.set_tooltip_text(f"{name} - clic: cale sur le cadre")
         # ⛶ plein ecran
         bf = Gtk.Button(label="⛶")
         bf.get_style_context().add_class("mini")
@@ -335,5 +592,8 @@ def single_instance():
 
 if __name__ == "__main__":
     single_instance()
-    Launcher()
+    LAUNCHER = Launcher()
+    # SIGTERM (relance par le gardien du bureau, single_instance) : les
+    # journalctl -f lances en fond ne doivent pas survivre a la barre.
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *_a: (LAUNCHER._quit(), False)[1])
     Gtk.main()

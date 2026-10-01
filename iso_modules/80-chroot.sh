@@ -492,7 +492,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         wmctrl x11-utils x11-xserver-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
-        conky-all fonts-dejavu python3-pil python3-gi gir1.2-gtk-3.0 \
+        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi gir1.2-gtk-3.0 \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
@@ -911,6 +911,17 @@ GDM
 
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    # ── MODE SOMBRE, YARU BLEU ──────────────────────────────────────────
+    # [2026-10-01] Comme sur le banc installe : theme sombre et accent bleu
+    # (Yaru-blue-dark, icones Yaru-blue), le bleu du Conky et des encarts.
+    # Les sections :ubuntu doublent la section nue, pour la meme raison que le
+    # fond (10_ubuntu-settings.gschema.override pose gtk-theme=Yaru dans
+    # [org.gnome.desktop.interface:ubuntu], que la session ubuntu lit d abord).
+    for _sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu"; do
+        printf "\n[%s]\ncolor-scheme=\047prefer-dark\047\ngtk-theme=\047Yaru-blue-dark\047\nicon-theme=\047Yaru-blue\047\ncursor-theme=\047Yaru\047\n" "$_sec" \
+            >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    done
+    unset _sec
     # ── Fond d ecran GSM LAB ────────────────────────────────────────────
     # [2026-09-25] L illustration « communication tower landscape »
     # (configs/gsm-lab-wallpaper.jpg, 7800x6030), TELLE QUELLE : ni recadree,
@@ -919,16 +930,29 @@ GDM
     # (live sans persistance : il faut le defaut de schema, pas un reglage
     # utilisateur). zoom : GNOME remplit l ecran sans deformer (l image est en
     # 4:3, le haut et le bas debordent un peu sur un ecran 16:9).
+    # [2026-10-01] DEUX IMAGES, DEUX ROLES. Le fond GNOME est desormais
+    # configs/gsm-lab-fond.jpg (le paysage numerique bleu, choisi sur le banc) ;
+    # l illustration aux pylones (gsm-lab-wallpaper.jpg) reste posee pour
+    # l ENCART du bureau, qui la montre entiere au milieu (osmo-fft-snap.py).
+    # Les deux fichiers sont reposes par 85-installeur-bureau.sh depuis le depot
+    # local - ici on prend ce que le clone porte, et le schema nomme le fond
+    # quoi qu il arrive (85 garantit le fichier).
     _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.jpg
-    if [ -f "$_WP" ]; then
-        install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.jpg
+    _FOND=/opt/GSM/osmo-operator/configs/gsm-lab-fond.jpg
+    [ -f "$_WP" ] && install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.jpg
+    if [ -f "$_FOND" ]; then
+        install -Dm644 "$_FOND" /usr/share/backgrounds/gsm-lab-fond.jpg
+    elif [ -f "$_WP" ]; then
+        install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-fond.jpg
+    fi
+    if [ -f "$_WP" ] || [ -f "$_FOND" ]; then
         # TROIS sections : la valeur nue, puis les memes pour les "desktop
         # overrides" [schema:ubuntu] et [schema:GNOME-Greeter] que pose
         # 10_ubuntu-settings.gschema.override - une session ubuntu:GNOME lit
         # celles-la de preference, et sans elles le greeter et l extension
         # DING (icones du bureau) repartaient sur le numbat d Ubuntu.
         for _sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
-            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.jpg\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-wallpaper.jpg\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
+            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-fond.jpg\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-fond.jpg\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
@@ -966,7 +990,7 @@ GDM
     # installes (deka est pose par addition.sh, un supplement).
     # firefox.desktop : celui du deb Mozilla (packages.mozilla.org).
     for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
-        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047osmo-paint.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047osmo-wireshark-root.desktop\047, \047osmo-pmos.desktop\047, \047osmo-lte.desktop\047]\n" "$_sec" \
+        printf "\n[%s]\nfavorite-apps=[\047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-info.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047osmo-paint.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047osmo-wireshark-root.desktop\047, \047osmo-pmos.desktop\047, \047osmo-lte.desktop\047]\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done
     unset _sec

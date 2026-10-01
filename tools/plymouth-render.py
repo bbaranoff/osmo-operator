@@ -17,8 +17,8 @@
 #
 #   Un pylone a gauche, un mobile a droite, et une rafale GSM qui fait
 #   l aller-retour entre les deux - c est litteralement ce que la machine
-#   s apprete a faire tourner. Trois arcs pulsent a l antenne au rythme des
-#   51 multitrames. En bas, le nom du banc et la barre d avancement.
+#   s apprete a faire tourner. Des anneaux concentriques « 3D » (ellipses en
+#   perspective, neon cyan) s ouvrent depuis le pylone et depuis le mobile. En bas, le nom du banc et la barre d avancement.
 #
 # Ne depend que de Pillow et des polices DejaVu, comme wallpaper-render.py.
 import argparse
@@ -31,6 +31,7 @@ W, H = 1920, 1080
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 BG_TOP, BG_BOT = (8, 12, 26), (16, 26, 52)
 CYAN, GREEN, VIOLET, GREY = (88, 166, 255), (63, 185, 80), (166, 122, 255), (139, 148, 158)
+NEON = (64, 224, 255)            # le cyan des anneaux : vif, comme un neon
 FRAMES = 24
 
 
@@ -94,18 +95,27 @@ def handset(d, cx, cy, hh=210, col=GREY):
     return (cx + hw / 2 + 4, cy - hh / 2 - 46)
 
 
-def arcs(d, at, phase, direction=1, n=3):
-    """Trois arcs concentriques qui s ouvrent depuis une antenne. `phase` les
-    fait respirer ; ils s effacent en s eloignant."""
+def ripples(d, at, phase, rmax=300, n=4, col=NEON, aspect=0.32, cone=0.30):
+    """Les ondes « 3D » : des anneaux concentriques POSES A PLAT, vus en
+    perspective (ellipses, rapport `aspect`), qui s ouvrent depuis l antenne
+    et s effacent en s eloignant. Les grands anneaux descendent un peu
+    (`cone`) : empiles, ils dessinent un cone de rayonnement, comme les
+    cercles d un radar ou d une balise - c est l image demandee le
+    2026-10-01, a la place des trois arcs plats d avant. Chaque anneau porte
+    un halo (trait large et pale) sous son trait net : c est lui qui donne
+    le « neon » cyan."""
     x, y = at
     for k in range(n):
         t = ((phase + k / n) % 1.0)
-        r = 26 + t * 96
-        a = int(210 * (1 - t))
-        col = (CYAN[0], CYAN[1], CYAN[2], a)
-        box = [x - r, y - r, x + r, y + r]
-        start, end = (-58, 58) if direction > 0 else (122, 238)
-        d.arc(box, start, end, fill=col, width=4)
+        rx = 28 + t * rmax
+        ry = rx * aspect
+        cy = y + t * rmax * cone
+        a = int(255 * (1 - t) ** 0.9)
+        box = [x - rx, cy - ry, x + rx, cy + ry]
+        d.ellipse(box, outline=(col[0], col[1], col[2], a // 3), width=13)   # halo
+        d.ellipse(box, outline=(col[0], col[1], col[2], a), width=5)         # trait
+        d.ellipse([x - rx + 1, cy - ry + 1, x + rx - 1, cy + ry - 1],
+                  outline=(235, 252, 255, int(a * 0.8)), width=2)            # coeur clair
 
 
 def burst(d, x, y, t):
@@ -142,24 +152,33 @@ def main():
     # Les frames : seulement la BANDE entre les deux antennes, en RGBA. Plymouth
     # les pose par-dessus le fond - une image par frame plutot qu un fond
     # complet redessine 24 fois (24 x 1,3 Mo tiendrait mal dans un initrd).
-    bx0, bx1 = ant[0] + 60, ms[0] - 40
-    strip_y, strip_h = ant[1] - 70, 260
+    # La bande part SOUS la pointe du pylone et englobe les anneaux (qui
+    # debordent de part et d autre des deux antennes) : les ellipses ne sont
+    # jamais coupees par le bord de la bande.
+    bx0, bx1 = ant[0] - 360, ms[0] + 220
+    strip_y, strip_h = ant[1] - 110, 300
+    tip = (ant[0] - bx0, ant[1] - strip_y)                 # la pointe du pylone, dans la bande
+    ms_top = (ms[0] - bx0, ms[1] - 95 - strip_y)            # le haut du mobile, dans la bande
     for i in range(FRAMES):
         t = i / FRAMES
         im = Image.new("RGBA", (int(bx1 - bx0), strip_h), (0, 0, 0, 0))
         dd = ImageDraw.Draw(im)
-        arcs(dd, (0, 70), t, direction=1)
-        arcs(dd, (im.width, 70), (t + 0.5) % 1.0, direction=-1)
+        # Les ondes : grands anneaux depuis le pylone (descendant), petits
+        # anneaux depuis le mobile (montant), decales d une demi-periode.
+        ripples(dd, tip, t, rmax=340, n=4)
+        ripples(dd, ms_top, (t + 0.5) % 1.0, rmax=190, n=3, aspect=0.36)
         # Aller (montant) puis retour (descendant) : une periode complete.
         u = (t * 2) % 1.0
+        xa, xb = tip[0] + 90, ms_top[0] - 90
+        ya = tip[1] + 40
         if t < 0.5:
-            burst(dd, 40 + u * (im.width - 80), 70, t * 4)
+            burst(dd, xa + u * (xb - xa), ya, t * 4)
         else:
-            burst(dd, im.width - 40 - u * (im.width - 80), 150, t * 4)
+            burst(dd, xb - u * (xb - xa), ya + 80, t * 4)
         # Le sens, ecrit : UL en haut, DL en bas - c est un banc, pas un ecran
         # de veille.
-        dd.text((6, 44), "DL", font=font("DejaVuSansMono.ttf", 18), fill=CYAN + (150,))
-        dd.text((im.width - 34, 124), "UL", font=font("DejaVuSansMono.ttf", 18), fill=GREEN + (150,))
+        dd.text((xa - 34, ya - 26), "DL", font=font("DejaVuSansMono.ttf", 18), fill=CYAN + (150,))
+        dd.text((xb + 10, ya + 54), "UL", font=font("DejaVuSansMono.ttf", 18), fill=GREEN + (150,))
         im.save(os.path.join(a.out, "burst-%02d.png" % i), "PNG", optimize=True)
 
     # La barre d avancement : un fond et une pastille qui court dessus.

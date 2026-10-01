@@ -271,9 +271,13 @@ args+=(--date "$DAY")
 # comme le mobile.log y perdaient en lisibilite pour rien. On lui dit ce qu il
 # y a derriere lui ; sans image, il passe en opacite pleine.
 # STRIP/SOURCE = le bas (le nom historique), STRIP_HAUT/SOURCE_HAUT = le haut.
-printf 'STRIP=%s\nDATE=%s\nSOURCE=%s\nSTRIP_HAUT=%s\nSOURCE_HAUT=%s\n' \
+# FOND = le rendu compose : c est LUI que l encart decoupe quand il existe ;
+# sans cette ligne (fond brut, timer inactif) l encart montre l illustration
+# du banc entiere. [2026-10-01]
+printf 'STRIP=%s\nDATE=%s\nSOURCE=%s\nSTRIP_HAUT=%s\nSOURCE_HAUT=%s\nFOND=%s\n' \
     "$([ -n "$STRIP_BAS" ] && [ -s "$STRIP_BAS" ] && echo oui || echo non)" "$DAY" "${SRC_BAS:-}" \
     "$([ -n "$STRIP_HAUT" ] && [ -s "$STRIP_HAUT" ] && echo oui || echo non)" "${SRC_HAUT:-}" \
+    "$OUT" \
     > "$CACHE/strip.state"
 # Le cache ne garde que les 14 dernieres images (deux par lancement).
 ls -1t "$CACHE"/strip_*.img 2>/dev/null | tail -n +15 | while read -r _old; do

@@ -20,7 +20,10 @@
 #                                 multioperator", puis une seconde fenetre en
 #                                 boutons radio : image TELECHARGEE ou COMPILEE
 #                                 (exclusif). osmocom-run est derivee dans la
-#                                 foulee : start-multi.sh demarre juste apres.
+#                                 foulee, puis osmo-multi.service DEMARRE : en
+#                                 sortant, osmo-operator-2, -3 et le hub
+#                                 tournent (OSMO_MULTI_START=0 : poser sans
+#                                 lancer).
 #   sudo ./addition.sh --multi    le meme, sans la fenetre : image TELECHARGEE
 #                                 (docker pull ghcr.io/<depot>/osmocom-nitb,
 #                                 taguee osmocom-nitb)
@@ -1078,6 +1081,40 @@ CONF
         [ "$_posee" = "1" ] \
             && echo -e "  ${GREEN}✓${NC} icone ${BOLD}multi-operator${NC} (antenne) posee sur le bureau" \
             || echo -e "  ${GREEN}✓${NC} icone ${BOLD}multi-operator${NC} dans le menu des applications"
+    fi
+
+    # ── LE BANC MULTI DEMARRE MAINTENANT : LES CONTENEURS EXISTENT EN SORTANT ──
+    # [2026-10-01] L en-tete promettait « start-multi.sh demarre juste apres »
+    # et RIEN ne le faisait : le supplement sortait avec une topologie, une
+    # unite et une icone, mais aucun conteneur - osmo-operator-2 et -3
+    # n existaient qu au premier clic sur l antenne, et un operateur qui venait
+    # d « installer le multi » ne voyait rien dans docker ps. On termine donc
+    # par UNE session du banc multi : `systemctl start`, pas `enable` -
+    # l activation a chaque demarrage reste le geste de l operateur
+    # (00-options.sh, 2026-09-14). OSMO_MULTI_START=0 pour poser sans lancer.
+    # Le journal de l unite defile ici pendant le demarrage : c est lui qui
+    # montre les conteneurs qui montent, et l erreur s il y en a une.
+    if [ "${OSMO_MULTI_START:-1}" = "1" ] && [ -f /etc/systemd/system/osmo-multi.service ]; then
+        echo -e "  ${CYAN}→${NC} demarrage du banc multi-operateur (${BOLD}osmo-multi.service${NC}) - comptez plusieurs minutes ..."
+        systemctl reset-failed osmo-multi.service 2>/dev/null || true
+        if systemctl start --no-block osmo-multi.service 2>/dev/null; then
+            journalctl -u osmo-multi -f -n 0 --no-pager -o cat 2>/dev/null &
+            _jpid=$!
+            sleep 2
+            while [ "$(systemctl show -p ActiveState --value osmo-multi.service 2>/dev/null)" = activating ]; do
+                sleep 2
+            done
+            sleep 1; kill "$_jpid" 2>/dev/null; wait "$_jpid" 2>/dev/null
+            if [ "$(systemctl is-active osmo-multi.service 2>/dev/null)" = active ]; then
+                echo -e "  ${GREEN}✓${NC} banc multi-operateur en service - conteneurs :"
+                docker ps --format '      {{.Names}}  {{.Status}}' 2>/dev/null | grep -E 'osmo-operator-|osmo-inter-stp' \
+                    || echo -e "      ${YELLOW}!${NC} aucun conteneur osmo-operator-N visible (docker ps)"
+            else
+                echo -e "  ${RED}✗${NC} osmo-multi.service n a pas abouti - ${BOLD}journalctl -u osmo-multi -n 80${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}!${NC} systemctl start osmo-multi a echoue - ${BOLD}sudo $DIR/start-multi.sh${NC} a la main"
+        fi
     fi
 fi
 

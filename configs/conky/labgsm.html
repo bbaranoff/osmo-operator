@@ -1,56 +1,50 @@
 <!doctype html><html><head><meta charset="utf-8">
 <title>LAB GSM</title>
 <style>
+  /* [2026-10-01] LISIBLE, EN UBUNTU, ET VIVANTE.
+     - Les tailles sont en vw (largeur de la zone, 1110 px de reference), plus en
+       vh : la fenetre est rabattue sur la hauteur du contenu (osmo-topzone.py,
+       INJECT_CSS), et des polices en vh de 500 px donnaient 7 a 10 px de texte.
+     - Tailles calees pour que la carte (TOP_BOX y=60) S ARRETE AU-DESSUS de
+       l encart (y=220) : sans titre, elle tient en ~160 px de reference.
+     - Police Ubuntu partout (fonts-ubuntu est dans l image, 80-chroot.sh).
+     - Une rangee « banc en temps reel » sous les timeslots : coeur, radio,
+       abonnes, appels, depuis quand - poussee par osmo-ts-probe.py dans
+       timeslots.json (core / radio / phy / subs / calls / up). */
   :root{
-    --ink:#131018; --ink2:#1c1822; --card:rgba(20,17,26,.42);
-    --bone:#efe6d2; --dim:#a99f8d; --violet:#8b7bd8; --violet2:#6f5fc0;
-    --teal:#3fd0a8; --moon:#a9b7de; --orange:#ff9a3c; --pink:#ff4d6d;
-    --line:rgba(239,230,210,.16);
+    --ink:#131018; --ink2:#1c1822; --card:rgba(13,11,20,.68);
+    --bone:#f4eddc; --dim:#c9bfab; --violet:#9d8cf0; --violet2:#6f5fc0;
+    --teal:#4fe0b6; --moon:#b4c2ea; --orange:#ff9a3c; --pink:#ff4d6d;
+    --ok:#3fb950; --ko:#f85149;
+    --line:rgba(244,237,220,.18);
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:transparent;color:var(--bone);
-    font-family:"IBM Plex Mono","DejaVu Sans Mono",monospace;overflow:hidden}
+    font-family:"Ubuntu","Ubuntu Sans",sans-serif;overflow:hidden}
   #card{position:absolute;inset:0;border:1px solid var(--line);border-radius:18px;
-    background:var(--card);backdrop-filter:blur(2px);padding:2.2vw 2.4vw;
-    display:flex;flex-direction:column;gap:1.1vh;transition:opacity .6s ease}
+    background:var(--card);backdrop-filter:blur(3px);padding:1vw 1.8vw .9vw;
+    display:flex;flex-direction:column;gap:.45vw;transition:opacity .6s ease}
   #card.faded{opacity:0;pointer-events:none}
   .eyebrow{display:flex;justify-content:space-between;align-items:center;
-    color:var(--dim);letter-spacing:.18em;font-size:1.35vh}
+    color:var(--dim);letter-spacing:.16em;font-size:.9vw;font-weight:500}
   .eyebrow .dot{color:var(--teal)}
-  .pill{border:1px solid rgba(63,208,168,.5);border-radius:8px;padding:.4vh 1vw;color:var(--teal)}
-  h1{margin:0;font-family:"Rye","IBM Plex Mono",serif;font-weight:800;
-    font-size:8.5vh;line-height:.95;letter-spacing:.02em;
-    background:linear-gradient(92deg,var(--violet),#b9a9ff 60%,var(--moon));
+  .pill{border:1px solid rgba(79,224,182,.55);border-radius:.8vw;padding:.3vw .9vw;color:var(--teal);
+    font-family:"Ubuntu Mono",monospace;letter-spacing:.06em;font-size:.95vw}
+  h1{margin:0;font-family:"Ubuntu","Ubuntu Sans",sans-serif;font-weight:700;
+    font-size:5vw;line-height:1;letter-spacing:.01em;
+    background:linear-gradient(92deg,var(--violet),#c4b6ff 60%,var(--moon));
     -webkit-background-clip:text;background-clip:text;color:transparent}
-  .lede{color:#d8cfbf;font-size:2vh;line-height:1.35;max-width:70%}
-  .lede b{color:#fff}
-  .meta{color:var(--dim);letter-spacing:.12em;font-size:1.4vh;margin-top:.4vh}
-  /* la rangee des timeslots - elle PREND toute la place laissee libre.
-     [2026-09-10] Le chronogramme du normal burst (57 data | 26 training |
-     57 data | 8,25 guard) est parti d ici : il ne montrait rien de VIVANT,
-     c etait un schema fixe de cours, et il mangeait le tiers de la carte.
-     Les timeslots, eux, clignotent avec l activite reelle (osmo-ts-probe).
-     LA CARTE GARDE SA TAILLE : les ~7,8vh liberes (titre 1,7 + gap 1,1 +
-     chronogramme 5) sont REPRIS par la rangee, EN HAUTEUR - elle passe de
-     5,5 a 16,4vh, et les huit colonnes gardent exactement leur largeur.
-     La valeur n est pas devinee : rendu avant / apres a 1110x500, la carte
-     fait la MEME hauteur a 2 px pres (271 px).
-     min-height, pas seulement flex:1 : osmo-topzone.py injecte
-     « #card{bottom:auto;height:auto} » et rabat la fenetre sur la hauteur
-     mesuree - dans une carte a hauteur AUTO, flex-grow n a rien a distribuer
-     et la rangee retomberait a la taille de son texte. */
-  #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.9vw;flex:1;min-height:16.4vh}
-  .ts{border:1px solid rgba(169,183,222,.28);border-radius:12px;padding:1.2vh .5vw;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8vh;
-    text-align:center;background:rgba(28,24,34,.5);position:relative;
+  .lede{color:#e6ddcb;font-size:1.35vw;line-height:1.4;max-width:78%}
+  .lede b{color:#fff;font-weight:500}
+  .meta{color:var(--dim);letter-spacing:.12em;font-size:.85vw;font-weight:500}
+  /* la rangee des timeslots : huit colonnes de meme largeur, hautes */
+  #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.7vw;min-height:4.2vw}
+  .ts{border:1px solid rgba(180,194,234,.3);border-radius:.8vw;padding:.5vw .4vw;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5vw;
+    text-align:center;background:rgba(28,24,34,.55);position:relative;gap:.3vw;
     transition:box-shadow .18s,border-color .18s,background .18s}
-  /* EN HAUTEUR, PAS EN LARGEUR : les huit colonnes sont des 1fr, leur largeur
-     ne bouge pas d un pixel. Ce qui grandit, c est la HAUTEUR des cases (le
-     min-height ci-dessus) ; le texte, lui, reste a peu pres a sa taille -
-     l agrandir le pousserait vers les bords des cases, ce qui est justement
-     l inverse de ce qu on veut. */
-  .ts .n{font-weight:700;font-size:2.6vh;line-height:1}
-  .ts .k{color:var(--dim);font-size:1.35vh;letter-spacing:.05em}
+  .ts .n{font-weight:700;font-size:1.5vw;line-height:1}
+  .ts .k{color:var(--dim);font-size:.9vw;letter-spacing:.04em;font-family:"Ubuntu Mono",monospace}
   .ts.bcch{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
   /* clignotement orange quand le timeslot porte des bursts */
   .ts.on{border-color:var(--orange);
@@ -59,11 +53,22 @@
     animation:blink .9s steps(2,end) infinite}
   @keyframes blink{50%{box-shadow:0 0 4px rgba(255,154,60,.2),0 0 0 1px rgba(255,154,60,.4) inset;
     background:rgba(255,154,60,.05)}}
-  .tags{display:flex;gap:.6vw;flex-wrap:wrap;margin-top:.3vh}
-  .tag{border:1px solid var(--line);border-radius:8px;padding:.5vh .9vw;color:var(--dim);font-size:1.3vh}
-  .tag b{color:var(--bone)}
-  .foot{position:absolute;right:2.4vw;bottom:1.4vh;color:var(--dim);font-size:1.3vh}
-  #noconf{color:var(--orange);font-size:1.3vh;margin-top:.3vh;opacity:.85}
+  /* ── LE BANC EN TEMPS REEL ──────────────────────────────────────────── */
+  #live{display:flex;gap:.6vw;flex-wrap:wrap;align-items:center;
+    border-top:1px solid var(--line);padding-top:.45vw}
+  .grp{display:flex;align-items:center;gap:.35vw;border:1px solid var(--line);
+    border-radius:.8vw;padding:.2vw .6vw;background:rgba(28,24,34,.45);font-size:.95vw}
+  .grp .lab{color:var(--dim);letter-spacing:.08em;font-size:.9vw;margin-right:.2vw;font-weight:500}
+  .grp .d{font-family:"Ubuntu Mono",monospace;font-size:.95vw;color:var(--dim)}
+  .grp .d.ok{color:var(--ok)} .grp .d.ko{color:var(--ko)}
+  .grp b{font-weight:500;color:var(--bone)}
+  .grp.warn{border-color:rgba(255,154,60,.6);color:var(--orange)}
+  .grp.call{border-color:rgba(79,224,182,.7);color:var(--teal)}
+  .tags{display:flex;gap:.5vw;flex-wrap:wrap;align-items:center}
+  .tag{border:1px solid var(--line);border-radius:.8vw;padding:.2vw .7vw;color:var(--dim);font-size:.9vw}
+  .tag b{color:var(--bone);font-weight:500}
+  .foot{margin-left:auto;color:var(--dim);font-size:.85vw}
+  #noconf{color:var(--orange);opacity:.9}
 </style></head>
 <body>
 <div id="card">
@@ -71,20 +76,20 @@
     <div><span class="dot">●</span> SOFTWARE DEFINED RADIO · UM INTERFACE · GR-GSM</div>
     <div class="pill" id="arfcn">ARFCN 514 · DCS 1800</div>
   </div>
-  <h1>LAB GSM</h1>
-  <div class="lede">Un réseau 2G complet, <b>sans matériel</b> — baseband <b>Calypso</b> émulé,
-    cœur <b>Osmocom</b>, de la synchro radio à l'appel voix chiffré en <b>A5/1</b> · couche 1 <b>gr-gsm</b> (SDR)</div>
+  <!-- [2026-10-01] Plus de titre « LAB GSM » ni de paragraphe de presentation :
+       la banniere ne porte que le vivant - timeslots, banc, tags. -->
   <div class="meta">TRAME TDMA · 8 TIMESLOTS · 4,615 MS</div>
   <div id="ts"></div>
+  <div id="live"></div>
   <div class="tags" id="tags">
     <div class="tag">IMSI <b id="imsi">001-01</b></div>
     <div class="tag" id="a5tag">A5/1 <b>✓</b></div>
     <div class="tag">COMP128v1 <b>✓</b></div>
     <div class="tag">TCH/F · GAPK fr</div>
     <div class="tag">gr-gsm · trxcon · osmo-bts-trx</div>
+    <div id="noconf" class="tag" hidden>osmo-bsc non détecté — animation de démonstration</div>
+    <div class="foot">bbaranoff.github.io</div>
   </div>
-  <div id="noconf" hidden>osmo-bsc non détecté — animation de démonstration</div>
-  <div class="foot">bbaranoff.github.io</div>
 </div>
 
 <script>
@@ -108,7 +113,39 @@ function drawTS(){
     box.appendChild(d);
   });
 }
-// osmoUpdate({ts:[{n,type,active,voice}], bsc:true, arfcn:"..."}) - appele par osmo-topzone.py
+// ── LA RANGEE « BANC » ───────────────────────────────────────────────────────
+// Ordre fixe : on lit toujours les pastilles au meme endroit.
+const CORE=["HLR","MSC","BSC","STP","MGW","BTS","SIP","SMSC","PBX"];
+const RADIO=["TRX","MOBILE","TRXCON","QEMU","GAPK"];
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function dots(names,etat){
+  return names.map(n=>{const v=etat&&etat[n];
+    return '<span class="d '+(v===undefined?'':(v?'ok':'ko'))+'">'+(v===undefined?'○':'●')+'</span>'+esc(n);
+  }).join(' ');
+}
+function duree(s){
+  s=Math.max(0,s|0); if(s<60) return s+' s';
+  const m=Math.floor(s/60)%60, h=Math.floor(s/3600);
+  return h?h+' h '+String(m).padStart(2,'0'):m+' min';
+}
+function drawLive(state){
+  const box=document.getElementById('live'); if(!box) return;
+  if(!state || !state.bsc){
+    box.innerHTML='<div class="grp warn"><span class="lab">BANC</span> à l\'arrêt — <b>./start-direct.sh</b> ou le bouton <b>run standalone</b></div>';
+    return;
+  }
+  const s=state.subs||{}; const calls=state.calls|0;
+  let h='';
+  h+='<div class="grp"><span class="lab">CŒUR</span>'+dots(CORE,state.core)+'</div>';
+  h+='<div class="grp"><span class="lab">RADIO</span>'+dots(RADIO,state.radio)+(state.phy?' <b>· '+esc(state.phy)+'</b>':'')+'</div>';
+  h+='<div class="grp"><span class="lab">ABONNÉS</span><b>'+(s.total===undefined?'—':s.total)+'</b>'
+     +(s.attached!==undefined?' · <span class="d ok">●</span> '+s.attached+' rattaché'+(s.attached>1?'s':''):'')+'</div>';
+  h+='<div class="grp'+(calls?' call':'')+'"><span class="lab">APPELS</span><b>'+calls+'</b>'+(calls?' TCH en voix':'')+'</div>';
+  if(state.up) h+='<div class="grp"><span class="lab">DEBOUT</span><b>'+duree(state.up)+'</b></div>';
+  box.innerHTML=h;
+}
+// osmoUpdate({ts:[{n,type,active,voice}], bsc:true, arfcn:"...", core:{}, radio:{}, subs:{}, calls:n, up:s})
+// - appele par osmo-topzone.py
 window.osmoUpdate=function(state){
   try{
     if(state.ts && state.ts.length){ TS=state.ts; drawTS(); }
@@ -122,11 +159,12 @@ window.osmoUpdate=function(state){
       // clignotement de la carte depuis que le chronogramme est parti.
       el.classList.toggle('on', !!t.active || !!t.voice);
     });
+    drawLive(state);
   }catch(e){}
 };
 // fondu : osmo-topzone.py bascule .faded pour laisser place a une appli
 window.osmoFade=function(on){document.getElementById('card').classList.toggle('faded',!!on);};
-drawTS();
+drawTS(); drawLive(null);
 // demo si personne ne pousse d etat (osmo-topzone absent) : un timeslot au hasard
 let demo=setInterval(()=>{ if(window.__osmoLive) return clearInterval(demo);
   TS.forEach(t=>{const el=document.querySelector('.ts[data-n="'+t.n+'"]');

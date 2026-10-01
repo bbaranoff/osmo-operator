@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Info - how to run the bench
+Comment=Every bench module: icon, launcher bar and CLI, with the code behind it
+Exec=xdg-open file:///usr/share/osmo-operator/info.html
+Icon=/usr/share/osmo-operator/icons/osmo-info.svg
+Terminal=false
+Categories=Utility;

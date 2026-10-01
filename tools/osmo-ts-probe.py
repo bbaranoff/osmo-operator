@@ -300,7 +300,99 @@ def build():
         out["imsi"] = "%s-%s" % (str(ident["mcc"]).zfill(3), str(ident["mnc"]).zfill(2))
     if ident.get("a5"):
         out["a5"] = str(ident["a5"])
+    out.update(live_info(ts))
     return out
+
+
+# ── LE BANC EN TEMPS REEL, POUR LA BANNIERE ─────────────────────────────────
+# [2026-10-01] La banniere ne montrait que les timeslots. Elle recoit
+# maintenant le banc entier - les demons du coeur, la radio, les abonnes du
+# HLR, les appels en cours, depuis quand la pile est debout - lus a bas cout
+# (/proc, la base sqlite du HLR en lecture seule) toutes les 2 s : le reste de
+# la sonde tourne quatre fois par seconde, et des demons qui vivent des heures
+# n ont pas besoin d etre recomptes a ce rythme. Les noms sont ceux que le
+# noyau garde (comm, 15 caracteres) - « osmo-sip-connector » s y lit
+# « osmo-sip-connec », comme dans tools/conky-osmo-status.sh.
+COEUR = (("HLR", "osmo-hlr"), ("MSC", "osmo-msc"), ("BSC", "osmo-bsc"), ("STP", "osmo-stp"),
+         ("MGW", "osmo-mgw"), ("BTS", "osmo-bts-trx"), ("SIP", "osmo-sip-connector"),
+         ("SMSC", "proto-smsc-daemon"), ("PBX", "asterisk"))
+RADIO = (("MOBILE", "mobile"), ("TRXCON", "trxcon"), ("QEMU", "qemu-system-arm"),
+         ("GAPK", "osmo-gapk"))
+HLR_DB = os.environ.get("OSMO_HLR_DB", "/var/lib/osmocom/hlr.db")
+_live = {"quand": 0.0, "val": {}}
+
+
+def _procs():
+    """(noms comm, lignes de commande, {comm: pid}) de tous les processus."""
+    comms, cmds, pids = set(), [], {}
+    for p in os.listdir("/proc"):
+        if not p.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % p) as f:
+                c = f.read().strip()
+            with open("/proc/%s/cmdline" % p, "rb") as f:
+                cmds.append(f.read(300).replace(b"\0", b" ").decode(errors="replace"))
+        except OSError:
+            continue
+        comms.add(c)
+        pids.setdefault(c, int(p))
+    return comms, cmds, pids
+
+
+def _depuis(pid):
+    """Depuis combien de secondes ce processus tourne (0 si illisible)."""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            champs = f.read().rsplit(")", 1)[1].split()
+        start = int(champs[19]) / os.sysconf("SC_CLK_TCK")
+        with open("/proc/uptime") as f:
+            up = float(f.read().split()[0])
+        return max(0, int(up - start))
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def live_info(ts):
+    now = time.time()
+    if now - _live["quand"] < 2.0:
+        return _live["val"]
+    val = {}
+    try:
+        comms, cmds, pids = _procs()
+        core = {n: (c[:15] in comms) for n, c in COEUR}
+        radio = {n: (c[:15] in comms) for n, c in RADIO}
+        phy = ""
+        if any("qemu-system-arm" in c for c in cmds):
+            phy = "Calypso émulé (QEMU)"
+        if any("fake_trx.py" in c for c in cmds):
+            phy = "faketrx"
+        if any(re.search(r"pont/pont(_dsp)?\.py", c) for c in cmds):
+            phy = (phy + " + pont") if phy else "pont"
+        radio["TRX"] = bool(phy) or any("osmo-trx" in c for c in cmds)
+        subs = {}
+        if core["HLR"] and os.path.exists(HLR_DB):
+            try:
+                import sqlite3
+                con = sqlite3.connect("file:%s?mode=ro" % HLR_DB, uri=True, timeout=0.2)
+                tot = con.execute("select count(*) from subscriber").fetchone()[0]
+                att = con.execute("select count(*) from subscriber where vlr_number is not null "
+                                  "and vlr_number != ''").fetchone()[0]
+                con.close()
+                subs = {"total": tot, "attached": att}
+            except Exception:  # noqa: BLE001 - base verrouillee, illisible : pas d abonnes
+                subs = {}
+        depuis = 0
+        for c in ("osmo-bsc", "osmo-stp", "osmo-msc"):
+            if c in pids:
+                depuis = _depuis(pids[c])
+                break
+        val = {"core": core, "radio": radio, "phy": phy, "subs": subs,
+               "calls": sum(1 for t in ts if t.get("voice")), "up": depuis}
+    except Exception as e:  # noqa: BLE001 - la banniere vit sans ces infos
+        print("[ts-probe] infos banc : %s" % e, file=sys.stderr, flush=True)
+    _live.update(quand=now, val=val)
+    return val
 
 
 def main():

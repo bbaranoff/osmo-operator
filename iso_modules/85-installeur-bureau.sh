@@ -629,6 +629,13 @@ ADDGUI
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-tutorial.desktop" "$ROOTFS/usr/share/applications/osmo-tutorial.desktop"
+    # [2026-10-01] La page Info (anglais) : chaque module du banc, par icone,
+    # barre de lancement ou CLI, avec le code derriere. Icone dans les favoris.
+    install -d "$ROOTFS/usr/share/osmo-operator"
+    install -m644 "$DIR/configs/info.html" "$ROOTFS/usr/share/osmo-operator/info.html"
+    install -d "$ROOTFS/usr/share/osmo-operator/icons"
+    install -m644 "$DIR/data/osmo-info.svg" "$ROOTFS/usr/share/osmo-operator/icons/osmo-info.svg"
+    install -m644 "$DIR/data/desktop/osmo-info.desktop" "$ROOTFS/usr/share/applications/osmo-info.desktop"
 
     # ── CLAUDE : lanceur + entree de menu ─────────────────────────────────
     # Claude Code n est PAS dans l ISO (il s installe via le supplement) : le
@@ -782,6 +789,16 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # le rendu compose ci-dessus reste pose pour osmo-wallpaper lance a la main.
     install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$_rt/configs/gsm-lab-wallpaper.jpg"
     install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.jpg"
+    # [2026-10-01] Le fond GNOME par defaut est configs/gsm-lab-fond.jpg (le
+    # schema de 80-chroot.sh le nomme) ; l illustration ci-dessus reste pour
+    # l encart, qui la montre entiere au milieu. Depuis CE depot, comme le reste.
+    if [ -f "$DIR/configs/gsm-lab-fond.jpg" ]; then
+        install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$_rt/configs/gsm-lab-fond.jpg"
+        install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-fond.jpg"
+    else
+        echo -e "  ${YELLOW}!${NC} configs/gsm-lab-fond.jpg absent - le fond GNOME retombe sur l illustration"
+        install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-fond.jpg"
+    fi
     unset _rt
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
 [Unit]
@@ -868,8 +885,13 @@ EOF
     # gschema.override. C est donc une base dconf SYSTEME (/etc/dconf/db/local)
     # lue par toute session, root sur la cle comme l utilisateur Calamares sur
     # le disque, et que l utilisateur peut encore changer (base "user" devant).
-    # Theme "Debian" : fond noir, texte gris clair, palette Tango (celle de
-    # gnome-terminal), au lieu de l aubergine Ubuntu ; 18 % de transparence.
+    # [2026-10-01] TERMINAL AMBRE. Texte jaune ambre (#FFB000) sur fond presque
+    # noir et chaud, curseur bloc ambre qui clignote, gras jaune clair, palette
+    # entiere ramenee dans les ambres/ors (le rouge et le vert restent
+    # distincts pour les erreurs et les ✓), Ubuntu Mono 12 ; 18 % de
+    # transparence. C est le terminal « sketchy jaune » du banc, par defaut
+    # sur l ISO comme sur le natif (le meme fichier est charge dans la base
+    # utilisateur par update.sh / a la main : dconf load).
     install -d "$ROOTFS/etc/dconf/profile" "$ROOTFS/etc/dconf/db/local.d"
     printf 'user-db:user\nsystem-db:local\n' > "$ROOTFS/etc/dconf/profile/user"
     cat > "$ROOTFS/etc/dconf/db/local.d/10-osmo-terminal" <<'EOF'
@@ -883,10 +905,21 @@ use-theme-colors=false
 use-theme-transparency=false
 use-transparent-background=true
 background-transparency-percent=18
-background-color='#000000'
-foreground-color='#D3D7CF'
-bold-color-same-as-fg=true
-palette=['#000000', '#CC0000', '#4E9A06', '#C4A000', '#3465A4', '#75507B', '#06989A', '#D3D7CF', '#555753', '#EF2929', '#8AE234', '#FCE94F', '#729FCF', '#AD7FA8', '#34E2E2', '#EEEEEC']
+background-color='#0B0A05'
+foreground-color='#FFB000'
+bold-color-same-as-fg=false
+bold-color='#FFD75F'
+cursor-colors-set=true
+cursor-background-color='#FFB000'
+cursor-foreground-color='#0B0A05'
+cursor-shape='block'
+cursor-blink-mode='on'
+highlight-colors-set=true
+highlight-background-color='#FFB000'
+highlight-foreground-color='#0B0A05'
+palette=['#1C1A10', '#FF5555', '#50FA7B', '#FFD75F', '#57A6FF', '#FF79C6', '#4FE0D4', '#FFD98A', '#5C5230', '#FF6E6E', '#69FF94', '#FFE28A', '#7CC0FF', '#FF92DF', '#7FF2E6', '#FFF3C8']
+use-system-font=false
+font='Ubuntu Mono 12'
 scrollback-unlimited=true
 audible-bell=false
 EOF

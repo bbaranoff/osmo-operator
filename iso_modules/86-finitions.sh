@@ -230,35 +230,33 @@ fi
 
 cat > "$ROOTFS/usr/local/bin/osmo-banner" <<'BANNER'
 #!/bin/bash
-# Banniere d ouverture de terminal : animation SMS puis la commande du banc.
-# Reprise telle quelle de update.sh, qui la joue a l ouverture de session.
+# Banniere d ouverture de terminal : screenfetch avec le logo du banc, puis
+# une phrase. [2026-10-01] Plus d animation SMS, plus de mode d emploi : le
+# terminal s ouvre sur le fetch (configs/screenfetch/osmo-lab.sh : pylone,
+# rafale, mobile - pas le logo Ubuntu) et une ligne, c est tout.
 set -u
 [ -t 1 ] || exit 0
 
-printf '\033[?25l'
-trap 'printf "\033[?25h"' EXIT
-
-ph='\033[1;33m☎\033[0m'
-bars=('\033[2m▁▁▁\033[0m' '\033[1;32m▃\033[0m\033[2m▁▁\033[0m' '\033[1;32m▃▅\033[0m\033[2m▁\033[0m' '\033[1;32m▃▅▇\033[0m')
-for b in "${bars[@]}"; do
-    printf '\r  %b %b  \033[36mscanning ARFCN...\033[0m   ' "$ph" "$b"
-    sleep 0.12
-done
-for ((p=0; p<=20; p++)); do
-    printf '\r\033[K  %b %*s\033[1;36m✉\033[0m%*s %b' "$ph" "$p" '' "$((20-p))" '' "$ph"
-    sleep 0.04
-done
-printf '\r\033[K  %b%21s%b  \033[1;32m✓ SMS delivered - MT end-to-end Message : Bastien phone home\033[0m\n' "$ph" '' "$ph"
-
-printf '\n'
-printf '  \033[1;36mPour demarrer le banc :\033[0m\n'
-printf '      \033[1;32mcd /opt/GSM/osmo-operator && ./start-direct.sh\033[0m\n\n'
-printf '  \033[2mcompte courant : \033[0m%s\033[2m   ·   osmocom (non privilegie, sudoer) : \033[0msu - osmocom\n' "$(id -un)"
-printf '  \033[2mNavigateur : \033[0mfirefox\033[2m (deb Mozilla, a jour par apt ; micro deja autorise sur le dashboard).\033[0m\n'
-# Le squashfs monte prouve qu on tourne en live ; /run/live/medium, non - il
-# existe vide quand live-boot a monte le medium ailleurs (entree "persistant").
-if [ -e /run/live/rootfs/filesystem.squashfs ]; then
-    printf '  \033[2mSysteme live : \033[0mosmo-install\033[2m pour l installer sur le disque.\033[0m\n'
+ART=/opt/GSM/osmo-operator/configs/screenfetch/osmo-lab.sh
+# Les couleurs des infos : utilisateur jaune et hote vert - ROOT en rouge et
+# l hote en jaune. Un filtre sur la sortie : screenfetch fige ses lignes avant
+# de lire le fichier du logo, on ne peut donc pas les teinter de l interieur.
+# Les etiquettes (OS:, Kernel:...) tournent sur six couleurs.
+_filtre() {
+    command -v perl >/dev/null 2>&1 || { cat; return; }
+    if [ "$(id -u)" = 0 ]; then _cu='1;31'; _ch='1;33'; else _cu='1;33'; _ch='1;32'; fi
+    CU="$_cu" CH="$_ch" perl -pe '
+        BEGIN { @p = ("1;32","1;36","1;35","1;34","1;33","1;31"); $i = 0; }
+        if    (/^(.*\e\[0m  )(.*)$/s) { $a = $1; $b = $2; }
+        elsif (/^( {30,})(.*)$/s)     { $a = $1; $b = $2; }
+        else                          { next; }
+        $b =~ s/\e\[[0-9;]*m//g;
+        if ($b =~ s/^\s*(\S+?)@(\S+)/\e[$ENV{CU}m$1\e[0m@\e[$ENV{CH}m$2\e[0m/) { }
+        elsif ($b =~ s/^\s*([A-Za-z][A-Za-z ]*:)/"\e[".$p[$i++ % 6]."m$1\e[0m"/e) { }
+        $_ = $a . $b;'
+}
+if command -v screenfetch >/dev/null 2>&1; then
+    if [ -f "$ART" ]; then screenfetch -E -a "$ART" | _filtre; else screenfetch -E | _filtre; fi
 fi
 
 # ── LA LIGNE DU BAS ─────────────────────────────────────────────────────────
@@ -286,10 +284,17 @@ _q=(
   "Un LLM et un BTS ont ceci en commun : tous deux hallucinent hors couverture."
   "Ecrit par une machine, relu par une machine, debogue par vous. Bon courage."
 )
-printf '\n  \033[2;3m« %s »\033[0m\n' "${_q[$RANDOM % ${#_q[@]}]}"
-printf '\n'
+printf '  \033[2;3m« %s »\033[0m\n\n' "${_q[$RANDOM % ${#_q[@]}]}"
 BANNER
 chmod +x "$ROOTFS/usr/local/bin/osmo-banner"
+# ── screenfetch : SANS SON EASTER-EGG ───────────────────────────────────────
+# [2026-10-01] screenfetch tire un nombre au hasard A CHAQUE LIGNE et, sur
+# cinq valeurs sur mille, MELANGE l ordre des lignes du logo et des infos
+# (« case $(awk ... rand ...) in 411|188|15|166|609) »). Avec dix-sept lignes,
+# un terminal sur douze s ouvrait sur un pylone en vrac. On neutralise les
+# cinq valeurs ; le reste du script est intact.
+[ -f "$ROOTFS/usr/bin/screenfetch" ] && \
+    sed -i 's/^\([[:space:]]*\)411|188|15|166|609)/\1--jamais--)/' "$ROOTFS/usr/bin/screenfetch"
 
 # Pose dans le .bashrc des DEUX comptes, et dans /etc/skel pour ceux que
 # l installeur creera. On APPEND, sans jamais reecrire le fichier : le .bashrc
@@ -307,10 +312,19 @@ if [[ $- == *i* ]] && [ -t 1 ] && [ -z "${OSMO_BANNER:-}" ] && [ -x /usr/local/b
     export OSMO_BANNER=1
     /usr/local/bin/osmo-banner
 fi
+# L invite du banc : utilisateur jaune, hote vert, chemin bleu - ROOT en rouge,
+# hote en jaune.
+if [[ $- == *i* ]]; then
+    if [ "$EUID" = 0 ]; then
+        PS1='\[\e[1;31m\]\u\[\e[0m\]@\[\e[1;33m\]\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+    else
+        PS1='\[\e[1;33m\]\u\[\e[0m\]@\[\e[1;32m\]\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+    fi
+fi
 BASHRC
 done
 chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} banniere de terminal : animation + ${CYAN}cd /opt/GSM/osmo-operator && ./start-direct.sh${NC}"
+echo -e "  ${GREEN}✓${NC} banniere de terminal : ${CYAN}screenfetch${NC} (logo pixel art du banc) + une phrase"
 
 umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true

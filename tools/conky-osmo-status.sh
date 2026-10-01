@@ -294,7 +294,7 @@ vue)
         echo "${sel# }${AR}\${color4}Ctrl+AltGr+◀▶\${color}"
     fi
     # La vue.
-    T='${font DejaVu Sans:bold:size=10}${color1}'; TF='${font}${color}'
+    T='${font Ubuntu:bold:size=10}${color1}'; TF='${font}${color}'
     case "$_mode" in
         interstp)
             echo "${T}Hub inter-STP${TF}"
