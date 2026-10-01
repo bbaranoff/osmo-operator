@@ -18,6 +18,9 @@ d'un vrai terminal, au niveau du modem. Ni SDR, ni téléphone physique.
 
 ## Méthode conseillée : l'ISO desktop (release)
 
+> Tout ce que l'ISO contient, comment elle se construit et s'installe, et
+> chacune de ses capacités : voir [ISO](ISO.md).
+
 C'est le chemin qui marche sans rien compiler ni configurer : la
 [dernière release](https://github.com/bbaranoff/osmo-operator/releases/latest)
 livre `osmo-operator-desktop.iso`, un live GNOME avec Wireshark, Linphone,
