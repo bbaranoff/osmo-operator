@@ -116,7 +116,7 @@ function drawTS(){
 // ── LA RANGEE « BANC » ───────────────────────────────────────────────────────
 // Ordre fixe : on lit toujours les pastilles au meme endroit.
 const CORE=["HLR","MSC","BSC","STP","MGW","BTS","SIP","SMSC","PBX"];
-const RADIO=["TRX","MOBILE","TRXCON","QEMU","GAPK"];
+const RADIO=["FAKETRX","PONT","MOBILE","TRXCON","QEMU","GAPK"];
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function dots(names,etat){
   return names.map(n=>{const v=etat&&etat[n];

@@ -369,7 +369,13 @@ def live_info(ts):
             phy = "faketrx"
         if any(re.search(r"pont/pont(_dsp)?\.py", c) for c in cmds):
             phy = (phy + " + pont") if phy else "pont"
-        radio["TRX"] = bool(phy) or any("osmo-trx" in c for c in cmds)
+        # Le banc de l ISO n a PAS d osmo-trx : le transceiver est faketrx
+        # (fake_trx.py) et pont (pont.py / pont_dsp.py) - on les montre tels
+        # quels. GAPK : le binaire osmo-gapk n existe que le temps d un appel ;
+        # hors appel le veilleur gapk-start.sh EST l etat nominal.
+        radio["FAKETRX"] = any("fake_trx.py" in c for c in cmds)
+        radio["PONT"] = any(re.search(r"pont/pont(_dsp)?\.py", c) for c in cmds)
+        radio["GAPK"] = radio.get("GAPK", False) or any("gapk-start.sh" in c for c in cmds)
         subs = {}
         if core["HLR"] and os.path.exists(HLR_DB):
             try:
