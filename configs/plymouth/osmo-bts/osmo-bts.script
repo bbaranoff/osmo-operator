@@ -2,10 +2,12 @@
 #
 # Plymouth appelle Plymouth.SetRefreshFunction ~50 fois par seconde. Tout ce
 # qu on fait ici, c est avancer un compteur et changer l image de deux sprites :
-# la bande "burst" (24 frames, l aller-retour BTS <-> MS) et la pastille de la
+# la bande des ondes (24 frames : les anneaux qui s ouvrent depuis le pylone
+# et depuis le mobile - juste les ronds, rien d autre) et la pastille de la
 # barre d avancement. Le reste - pylone, mobile, titre - est PEINT DANS LE FOND
 # (background.png), une seule image : un initrd n a pas a porter 24 fois le
-# meme decor.
+# meme decor. Apercu anime : wiki/plymouth-osmo-bts.gif (plymouth-render.py
+# --gif).
 #
 # Les coordonnees sont celles d un ecran 1920x1080 ramenees a l ecran reel :
 # Window.GetWidth()/GetHeight() donnent la taille vraie, et tout est place en
@@ -23,8 +25,9 @@ bg.SetX(0);
 bg.SetY(0);
 bg.SetZ(-100);
 
-# ── LA RAFALE ENTRE LES DEUX ANTENNES ───────────────────────────────────────
+# ── LES ONDES ENTRE LES DEUX ANTENNES ───────────────────────────────────────
 # 24 images, jouees a ~12 images/seconde (une frame toutes les 4 rafraichis).
+# Les fichiers gardent leur nom historique (burst-NN.png).
 n_frames = 24;
 for (i = 0; i < n_frames; i++) {
     if (i < 10) {
@@ -38,7 +41,7 @@ for (i = 0; i < n_frames; i++) {
 # FRACTIONS de l ecran, injectees par tools/plymouth-render.py - c est lui qui
 # a place le pylone et le mobile dans background.png, donc lui seul sait ou
 # tombe l espace entre les deux. Un gabarit plutot que des nombres recopies :
-# on deplace le pylone dans le dessin, la rafale suit.
+# on deplace le pylone dans le dessin, les ondes suivent.
 burst = Sprite();
 burst.SetX(sw * @@BX@@);
 burst.SetY(sh * @@BY@@);
@@ -61,10 +64,17 @@ bar.SetZ(11);
 tick = 0;
 
 # ── LA SAISIE : LA PHRASE DE PASSE LUKS DE /home ────────────────────────────
-# [2026-10-01] Une seule invite, posee par unlock-home via systemd-ask-password :
-# la phrase ouvre /home, Entree a vide demarre en root sans /home. Avant : un
+# [2026-10-01] Une seule invite, « decrypt /home -passphrase- or Enter » : la
+# phrase ouvre /home, Entree a vide demarre en root sans /home. Avant : un
 # champ vide et des pastilles rondes, sans rien qui dise « j attends que tu
 # tapes ».
+#
+# CE CHAMP N EST PLUS LE CHEMIN PAR DEFAUT. unlock-home pose sa question sur
+# la console texte, apres avoir quitte plymouth : sur un portable Intel +
+# NVIDIA, le clavier de plymouth etait muet (curseur qui clignote, aucune
+# touche prise, delai qui expire). Il ne sert que si /etc/default/crypthome
+# dit CRYPTHOME_PROMPT=plymouth - alors unlock-home passe par
+# systemd-ask-password, dont l agent plymouth appelle ce qui suit.
 # Maintenant : un CURSEUR QUI CLIGNOTE dans le champ des que la question est
 # posee, et chaque caractere tape s affiche en « * » - la saisie d un terminal,
 # celle qu on reconnait, sur l ecran graphique.
@@ -88,7 +98,7 @@ saisie_visible = 0;
 
 fun refresh_callback() {
     tick++;
-    # La rafale : une image toutes les 4 passes (~12 i/s).
+    # Les ondes : une image toutes les 4 passes (~12 i/s).
     frame = Math.Int(tick / 4) % n_frames;
     burst.SetImage(burst_scaled[frame]);
     # La pastille : un va-et-vient regulier dans la barre. Plymouth ne nous dit
@@ -158,13 +168,8 @@ fun display_normal_callback() {
 Plymouth.SetDisplayPasswordFunction(display_password_callback);
 Plymouth.SetDisplayNormalFunction(display_normal_callback);
 
-# ── LES MESSAGES (fsck, systemd) ────────────────────────────────────────────
-message_sprite = Sprite();
-message_sprite.SetZ(15);
-fun message_callback(text) {
-    img = Image.Text(text, 0.6, 0.65, 0.72);
-    message_sprite.SetImage(img);
-    message_sprite.SetX((sw - img.GetWidth()) / 2);
-    message_sprite.SetY(sh * 0.95);
-}
-Plymouth.SetMessageFunction(message_callback);
+# ── PAS DE MESSAGES ─────────────────────────────────────────────────────────
+# [2026-10-01] Les messages que systemd et fsck envoient a plymouth ne sont
+# plus affiches : juste les ondes. Ils restent dans le journal (journalctl -b),
+# et un demarrage qui a vraiment besoin de parler le fait sur la console texte
+# - c est ce que fait unlock-home pour la phrase de passe.

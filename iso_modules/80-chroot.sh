@@ -492,7 +492,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         wmctrl x11-utils x11-xserver-utils zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
-        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi gir1.2-gtk-3.0 \
+        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi gir1.2-gtk-3.0 gir1.2-vte-2.91 \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls

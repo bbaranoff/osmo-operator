@@ -3,9 +3,10 @@ Description=Dechiffrement optionnel de /home (second disque, LUKS)
 Documentation=file:/etc/default/crypthome
 ConditionPathExists=/etc/default/crypthome
 # APRES les systemes de fichiers locaux et udev (le lien /dev/disk/by-uuid
-# doit exister), APRES plymouth, qui porte l'agent de saisie, et APRES la mise
-# en place du clavier : la disposition annoncee dans l'invite ([clavier fr])
-# doit etre celle qui est chargee quand on tape la phrase.
+# doit exister), APRES plymouth (unlock-home le quitte avant de poser la
+# question sur la console - il doit donc etre deja la, pas en train de
+# demarrer), et APRES la mise en place du clavier : la disposition de
+# /etc/default/keyboard doit etre celle qui est chargee quand on tape la phrase.
 After=local-fs.target systemd-udev-settle.service plymouth-start.service
 After=keyboard-setup.service console-setup.service
 Wants=systemd-udev-settle.service
@@ -17,7 +18,8 @@ Before=systemd-user-sessions.service display-manager.service multi-user.target g
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/unlock-home --boot
-# La question et la saisie passent par systemd-ask-password, pas par stdin.
+# La question et la saisie passent par /dev/console (ou, CRYPTHOME_PROMPT=
+# plymouth, par systemd-ask-password), jamais par stdin.
 StandardInput=null
 StandardOutput=journal+console
 StandardError=journal+console

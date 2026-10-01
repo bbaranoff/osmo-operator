@@ -1,7 +1,7 @@
 #!/bin/bash
 # unlock-home - dechiffre et monte /home depuis le second disque (LUKS).
 #
-#   unlock-home --boot   demande la phrase au demarrage, via systemd-ask-password
+#   unlock-home --boot   demande la phrase au demarrage, sur la console texte
 #   unlock-home          la meme chose depuis un terminal, apres coup
 #
 # CE SCRIPT NE RATE JAMAIS LE BOOT. Entree a vide, l absence du
@@ -220,14 +220,30 @@ fi
 # vide sort en root. Le delai qui expire vaut Entree : une machine qui
 # redemarre seule finit son boot au lieu d attendre indefiniment.
 #
-# Ce qu on tape s affiche en « * » : au demarrage c est systemd-ask-password
-# qui le fait (son echo par defaut est "masked" : une etoile par caractere sur
-# la console, et le theme plymouth en fait autant) ; dans un terminal, c est
-# lire_masquee ci-dessous - « read -s » n afficherait rien du tout, et
-# l operateur ne saurait pas si sa frappe est prise.
+# L invite tient en une ligne, la meme partout : « decrypt /home -passphrase-
+# or Enter ». Ce qu on tape s affiche en « * » (lire_masquee ci-dessous -
+# « read -s » n afficherait rien du tout, et l operateur ne saurait pas si sa
+# frappe est prise).
 #
-# --key-file=- et non un argument ni un fichier : la phrase ne passe ni par la
-# ligne de commande (visible dans ps) ni par le disque, seulement par un tube.
+# OU ELLE EST POSEE : SUR LA CONSOLE TEXTE, PAS DANS PLYMOUTH. [2026-10-01]
+# Sur un disque installe par Calamares (« quiet splash »), la question passait
+# par systemd-ask-password, donc par l agent plymouth de systemd et le theme
+# osmo-bts : l invite s affichait, le curseur clignotait, et AUCUNE touche
+# n arrivait - le delai expirait et la session root s ouvrait. plymouth
+# 24.004.60 lit le clavier par son propre chemin (le tty qu il tient, ou
+# evdev + xkb), et sur ce materiel (portable Intel + NVIDIA, pilote
+# proprietaire charge apres l initrd) ce chemin est mort quand unlock-home
+# tourne. On ne depend plus de lui : si plymouth tourne, on le QUITTE (le
+# decor a fait son office), la console texte revient, et on lit la phrase
+# NOUS-MEMES sur /dev/console - ni agent, ni condition d unite, ni clavier de
+# plymouth. GDM demarre ensuite comme d habitude (son « plymouth quit
+# --retain-splash » ne trouve plus personne et s en passe).
+#
+# CRYPTHOME_PROMPT=plymouth dans /etc/default/crypthome remet l ancien chemin
+# (systemd-ask-password -> agent plymouth -> theme osmo-bts), pour une machine
+# ou le clavier de plymouth repond. --key-file=- dans les deux cas : la phrase
+# ne passe ni par la ligne de commande (visible dans ps) ni par le disque,
+# seulement par un tube.
 lire_masquee() {
     # lire_masquee VARIABLE INVITE : lit une ligne au clavier, un « * » par
     # caractere, Retour arriere pris en compte. Retourne 1 si le delai expire
@@ -252,14 +268,31 @@ lire_masquee() {
     return 0
 }
 
-# ── LE CLAVIER, DIT DANS L INVITE ───────────────────────────────────────────
+# La console ou l on pose la question au demarrage. /dev/console suit le
+# « console= » du noyau (tty0 = la console virtuelle active, ou un port serie
+# si c est lui qui a ete demande) ; a defaut, tty1.
+CONSOLE=/dev/console
+[ -c "$CONSOLE" ] || CONSOLE=/dev/tty1
+
+demander_console() {
+    # demander_console VARIABLE INVITE : la question sur la console texte, au
+    # demarrage. plymouth, s il tourne, est quitte d abord : l ecran repasse en
+    # texte et le clavier revient au tty.
+    if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
+        plymouth quit 2>/dev/null || true
+        log "plymouth quitte - la question passe sur la console ($CONSOLE)."
+    fi
+    lire_masquee "$1" "$2" < "$CONSOLE" 2> "$CONSOLE"
+}
+
+# ── LE CLAVIER, DIT DANS LE JOURNAL ─────────────────────────────────────────
 # Une phrase refusee trois fois, c est le plus souvent un clavier qui n est
 # pas celui qu on croit : une image construite en « fr » tapee comme un QWERTY,
 # ou l inverse. La console a ce moment-la a la disposition de
 # /etc/default/keyboard (ecrite par build-iso, etape 10-clavier, puis par
-# Calamares a l installation) - on la lit et on l affiche entre crochets, pour
-# que l operateur sache AVANT de taper. A defaut : /etc/vconsole.conf, puis
-# « ? » plutot qu une invite muette.
+# Calamares a l installation) - on la note dans le journal, pour que
+# « phrase refusee » se lise avec la disposition en face. A defaut :
+# /etc/vconsole.conf, puis « ? ».
 clavier_console() {
     local _l _v
     _l="$(awk -F'"' '/^XKBLAYOUT=/{print $2}' /etc/default/keyboard 2>/dev/null)"
@@ -273,22 +306,22 @@ clavier_console() {
     [ -n "$_v" ] && _l="$_l-$_v"
     echo "$_l"
 }
-CLAVIER="$(clavier_console)"
+log "clavier de la console : $(clavier_console)."
 
+PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
 essai=0
 while [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
-    if [ "$essai" -eq 1 ]; then
-        invite="Phrase de passe pour $MOUNT [clavier $CLAVIER] (Entree = root sans $MOUNT) :"
-    else
-        invite="Phrase refusee - $MOUNT ($essai/$TRIES) [clavier $CLAVIER] (Entree = root sans $MOUNT) :"
-    fi
-    if [ "$BOOT" = 1 ]; then
+    invite="decrypt $MOUNT -passphrase- or Enter"
+    [ "$essai" -gt 1 ] && invite="$invite ($essai/$TRIES)"
+    if [ "$BOOT" = 1 ] && [ "$PROMPT_MODE" = plymouth ]; then
         passe="$(systemd-ask-password --timeout="$TIMEOUT" \
                      --id="crypthome:passphrase" "$invite" 2>/dev/null)" || passe=""
+    elif [ "$BOOT" = 1 ]; then
+        demander_console passe "$invite : " || passe=""
     else
-        lire_masquee passe "$invite " || passe=""
+        lire_masquee passe "$invite : " || passe=""
     fi
     if [ -z "$passe" ]; then
         unset passe

@@ -21,7 +21,9 @@
 # l etape 8d cree non privilegie - y a son home, et les applications a secrets
 # tournent SOUS LUI depuis la session de root (run-as-owner).
 #
-# AU DEMARRAGE la machine demande la phrase de passe de /home (tapee en ****).
+# AU DEMARRAGE la machine demande « decrypt /home -passphrase- or Enter », sur
+# la console texte (plymouth est quitte juste avant : son clavier n est pas
+# fiable, voir unlock-home), la phrase tapee en ****.
 # Entree a vide, se tromper de phrase ou ne rien repondre ne bloque JAMAIS le boot :
 # la session root s ouvre, /home reste vide, et les memes applications
 # demarrent sans secrets. C est ce qui rend le dispositif utilisable sur un
@@ -170,7 +172,7 @@ done
 
 echo -e "  ${GREEN}✓${NC} outils poses : ${CYAN}unlock-home${NC}, ${CYAN}lock-home${NC}, ${CYAN}crypthome-postinstall${NC} (Calamares), ${CYAN}init-crypthome.sh${NC} (second disque)"
 echo -e "  ${GREEN}✓${NC} a l installation : cocher ${CYAN}« chiffrer »${NC} chiffre ${CYAN}/home${NC} seul, la racine reste lisible"
-echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« Phrase de passe pour /home [clavier xx] (Entree = root sans /home) »${NC} - le boot aboutit quelle que soit la reponse"
+echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« decrypt /home -passphrase- or Enter »${NC} sur la console - le boot aboutit quelle que soit la reponse"
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux

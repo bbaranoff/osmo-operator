@@ -202,11 +202,19 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 etat() {
-    local ok_d=0 ok_r=0 ok_i=0 ok_m=0
+    local ok_d=0 ok_r=0 ok_i=0 ok_m=0 ok_u=0 ok_k=0
     command -v docker >/dev/null 2>&1 && ok_d=1
     [ "$ok_d" = "1" ] && docker info >/dev/null 2>&1 && ok_r=1
     [ "$ok_r" = "1" ] && docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 && ok_i=1
     [ -f "$MULTI_CONF" ] && ok_m=1
+    # [2026-10-01] CE QUE L ICONE EXIGE, L ETAT LE MONTRE. launch.sh --multi
+    # refuse de demarrer sans l unite osmo-multi.service, sans start-multi.sh
+    # et sans la topologie - et le dit par notification. Avant, cet etat ne
+    # regardait que docker, l image et la topologie : « tout est vert » ici et
+    # « unite absente » au clic, sur la meme machine (depot deroule a la main,
+    # unite jamais posee). Les memes conditions, lues au meme endroit.
+    systemctl cat osmo-multi.service >/dev/null 2>&1 && ok_u=1
+    [ -f /usr/share/applications/osmo-multi.desktop ] && ok_k=1
     local ok_cl=0
     # clinfo qui rend au moins une plateforme : c est la seule preuve qu une
     # pile OpenCL est UTILISABLE. Les paquets poses ne prouvent rien - un ICD
@@ -222,6 +230,9 @@ etat() {
     [ "$ok_r" = "1" ] && echo -e "  demon actif          : ${GREEN}oui${NC}"      || echo -e "  demon actif          : ${YELLOW}non${NC}"
     [ "$ok_i" = "1" ] && echo -e "  image operateur      : ${GREEN}presente${NC}" || echo -e "  image operateur      : ${YELLOW}absente${NC}"
     [ "$ok_m" = "1" ] && echo -e "  topologie SS7        : ${GREEN}posee${NC}"    || echo -e "  topologie SS7        : ${YELLOW}absente${NC}"
+    [ "$ok_u" = "1" ] && echo -e "  osmo-multi.service   : ${GREEN}pose${NC} ($(systemctl is-active osmo-multi.service 2>/dev/null || echo inactive))" || echo -e "  osmo-multi.service   : ${YELLOW}absent${NC}"
+    [ "$ok_k" = "1" ] && echo -e "  icone multi-operator : ${GREEN}posee${NC}"    || echo -e "  icone multi-operator : ${YELLOW}absente${NC}"
+    [ -x "$DIR/start-multi.sh" ] || echo -e "  start-multi.sh       : ${YELLOW}absent de $DIR${NC}"
     [ "$ok_cl" = "1" ] && echo -e "  OpenCL               : ${GREEN}operationnel${NC}" || echo -e "  OpenCL               : ${YELLOW}absent${NC}"
     [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
 }
@@ -656,29 +667,15 @@ DEKASTART
         cat > /usr/local/bin/osmo-deka-anim <<'DEKAGUI'
 #!/bin/bash
 set -u
+# osmo-deka-anim - deka dans une fenetre GTK du banc (terminal VTE dedans),
+# en root par pkexec. [2026-10-01] Plus de gnome-terminal.
 SCRIPT=/root/deka/deka-start.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="deka-start.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-RUNNER="$SCRIPT"
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v pkexec >/dev/null 2>&1; then
-        RUNNER="pkexec env DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-} $SCRIPT"
-    else
-        RUNNER="sudo -E $SCRIPT"
-    fi
-fi
-CMD="$RUNNER; echo; read -n1 -rsp 'deka lance - une touche pour fermer...'"
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="deka" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "deka" -e bash -c "$CMD" ;;
-    esac
-done
-exec bash -c "$RUNNER"
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --root --title "deka" -- "$SCRIPT" "$@"
 DEKAGUI
         chmod 755 /usr/local/bin/osmo-deka-anim
 
@@ -796,7 +793,12 @@ if [ "$DO_CLAUDE" = "1" ]; then
     fi
     cat > /usr/local/bin/osmo-claude-anim <<'CLA'
 #!/bin/bash
+# osmo-claude-anim - Claude Code dans une fenetre GTK du banc (terminal VTE :
+# claude est interactif de bout en bout). Pas dans l ISO : le premier clic
+# l installe (addition.sh --claude, en root) puis l ouvre, dans la meme
+# fenetre. [2026-10-01] Plus de gnome-terminal.
 set -u
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Claude" -- bash -lc '
 if ! command -v claude >/dev/null 2>&1; then
     ADD=/opt/GSM/osmo-operator/addition.sh
     if [ -x "$ADD" ]; then
@@ -807,15 +809,11 @@ if ! command -v claude >/dev/null 2>&1; then
         fi
     fi
 fi
-CMD='if command -v claude >/dev/null 2>&1; then claude; else echo "Claude non installe - lancez le supplement (--claude)."; fi; echo; read -n1 -rsp "Une touche pour fermer..."'
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="Claude" -- bash -lc "$CMD" ;;
-        *)              exec "$term" -T "Claude" -e bash -lc "$CMD" ;;
-    esac
-done
-exec bash -lc "$CMD"
+if command -v claude >/dev/null 2>&1; then exec claude; fi
+echo "Claude non installe - lancez le supplement (addition.sh --claude)."
+exit 1'
+
+
 CLA
     chmod 755 /usr/local/bin/osmo-claude-anim
     if [ -f "$DIR/data/desktop/claude.desktop" ]; then
@@ -1099,26 +1097,32 @@ CONF
     # (00-options.sh, 2026-09-14). OSMO_MULTI_START=0 pour poser sans lancer.
     # Le journal de l unite defile ici pendant le demarrage : c est lui qui
     # montre les conteneurs qui montent, et l erreur s il y en a une.
+    #
+    # [2026-10-01] PAR launch.sh --multi, LE MEME CHEMIN QUE L ICONE. Ce bloc
+    # faisait son propre `systemctl start --no-block` : un deuxieme lanceur,
+    # avec ses propres tests - et pas ceux de l icone. launch.sh --multi
+    # verifie l unite, start-multi.sh et la topologie, nomme ce qui manque,
+    # refuse un banc deja en route, demarre l unite (start, pas restart) et
+    # annonce le resultat ; c est aussi ce que fait « run multi » de l encart
+    # du bureau (tools/osmo-launcher.py). Ce que le supplement vient de poser
+    # est donc teste par ce qui s en servira. Le natif que start-multi.sh
+    # lance au passage (osmo-banc) part en DSP : c est le defaut de
+    # start-direct.sh depuis ce jour.
     if [ "${OSMO_MULTI_START:-1}" = "1" ] && [ -f /etc/systemd/system/osmo-multi.service ]; then
-        echo -e "  ${CYAN}→${NC} demarrage du banc multi-operateur (${BOLD}osmo-multi.service${NC}) - comptez plusieurs minutes ..."
-        systemctl reset-failed osmo-multi.service 2>/dev/null || true
-        if systemctl start --no-block osmo-multi.service 2>/dev/null; then
-            journalctl -u osmo-multi -f -n 0 --no-pager -o cat 2>/dev/null &
-            _jpid=$!
-            sleep 2
-            while [ "$(systemctl show -p ActiveState --value osmo-multi.service 2>/dev/null)" = activating ]; do
-                sleep 2
-            done
+        echo -e "  ${CYAN}→${NC} demarrage du banc multi-operateur (${BOLD}launch.sh --multi${NC}, comme l icone) - comptez plusieurs minutes ..."
+        journalctl -u osmo-multi -f -n 0 --no-pager -o cat 2>/dev/null &
+        _jpid=$!
+        # OSMO_LAUNCH_NO_SERVICE n a pas de sens ici (--multi est traite en
+        # tete de launch.sh) ; on garde le terminal courant pour sa sortie.
+        if "$DIR/launch.sh" --multi; then
             sleep 1; kill "$_jpid" 2>/dev/null; wait "$_jpid" 2>/dev/null
-            if [ "$(systemctl is-active osmo-multi.service 2>/dev/null)" = active ]; then
-                echo -e "  ${GREEN}✓${NC} banc multi-operateur en service - conteneurs :"
-                docker ps --format '      {{.Names}}  {{.Status}}' 2>/dev/null | grep -E 'osmo-operator-|osmo-inter-stp' \
-                    || echo -e "      ${YELLOW}!${NC} aucun conteneur osmo-operator-N visible (docker ps)"
-            else
-                echo -e "  ${RED}✗${NC} osmo-multi.service n a pas abouti - ${BOLD}journalctl -u osmo-multi -n 80${NC}"
-            fi
+            echo -e "  ${GREEN}✓${NC} banc multi-operateur en service - conteneurs :"
+            docker ps --format '      {{.Names}}  {{.Status}}' 2>/dev/null | grep -E 'osmo-operator-|osmo-inter-stp' \
+                || echo -e "      ${YELLOW}!${NC} aucun conteneur osmo-operator-N visible (docker ps)"
         else
-            echo -e "  ${YELLOW}!${NC} systemctl start osmo-multi a echoue - ${BOLD}sudo $DIR/start-multi.sh${NC} a la main"
+            sleep 1; kill "$_jpid" 2>/dev/null; wait "$_jpid" 2>/dev/null
+            echo -e "  ${RED}✗${NC} launch.sh --multi n a pas abouti - ${BOLD}journalctl -u osmo-multi -n 80${NC}"
+            echo -e "      a la main : ${BOLD}$DIR/launch.sh --multi${NC} (ou l icone multi-operator)"
         fi
     fi
 fi

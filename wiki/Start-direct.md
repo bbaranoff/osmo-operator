@@ -228,13 +228,13 @@ avec des liens dans `/tmp/c54x-pont`. `--assembly-logs` (`ASSEMBLY_LOGS=1`,
 Modes : faketrx-qemu (défaut) | faketrx | qemu | noproc | core | hybrid
 
 Choix de la pile
-  --dsp                banc DSP C54x : le C54x tourne hors QEMU (/opt/GSM/c54x_exe, mask-ROM TI)
+  --dsp                (défaut depuis le 2026-10-01) banc DSP C54x : le C54x tourne hors QEMU (/opt/GSM/c54x_exe, mask-ROM TI)
                        et décode FCCH/SCH/BCCH lui-même ; le mobile campe (SI1-4, lai=001-01-1)
                        et fait sa mise à jour de localisation. Même profil et même pile qu'en
                        grgsm, seuls qemu,pty,osmocon,l2 passent à c54x_exe/run.sh
                        (BANC_DSP=none : la pile seule)
   --assembly-logs      trace asm de l'ARM (/tmp/c54x-pont/qemu-asm.log) ; plus de temps réel
-  --grgsm              fork qosmo-grgsm (défaut)
+  --grgsm              couche 1 gr-gsm dans qosmo (l'ancien défaut)
   --launcher <bin>     lanceur C de QEMU (défaut /usr/local/bin/<fork>)
   --profile <nom>      force le profil
   --mobile | --ccch_scan | --bcch_scan | --cell_log   client de couche 2 (exclusifs)

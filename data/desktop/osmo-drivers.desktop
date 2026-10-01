@@ -4,8 +4,10 @@ Name=Pilotes graphiques
 Name[fr]=Pilotes graphiques
 Comment=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
 Comment[fr]=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
-Exec=/opt/GSM/osmo-operator/tools/osmo-drivers.sh
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --root --title "Pilotes graphiques" -- /opt/GSM/osmo-operator/tools/osmo-drivers.sh
 Icon=preferences-desktop-display
-Terminal=true
+# [2026-10-01] Le menu whiptail vit dans un terminal VTE DANS une fenetre GTK
+# du banc (osmo-gtk-run --tty) : aucun favori n ouvre de terminal.
+Terminal=false
 Categories=System;Settings;HardwareSettings;
 Keywords=nvidia;pilote;driver;ubuntu-drivers;

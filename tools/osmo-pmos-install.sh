@@ -29,6 +29,8 @@
 #   osmo-pmos-install --launchers    /usr/local/bin/osmo-pmos*, pmbootstrap, .desktop
 #   osmo-pmos-install --kernel       dpkg -i du .deb du noyau (kernel/ ou /var/cache/osmo-debs)
 #   osmo-pmos-install --image <img>  range une image de VM (compressee en zstd) dans pmos/image/
+#   osmo-pmos-install --image telecharger   la prend sur la release GitHub pmos-image (aussi
+#                                    le repli automatique si <img> manque ou est corrompue)
 #
 # Idempotent ; utilisable en session ET dans le chroot de l ISO (aucun
 # systemctl, aucun reseau requis si pmbootstrap est deja la).
@@ -124,6 +126,9 @@ pmos_launchers() {
         [ -f "$PM/bin/$f.sh" ] && ln -sfn "$PM/bin/$f.sh" "/usr/local/bin/$f"
     done
     [ -f "$PM/pmbootstrap/pmbootstrap.py" ] && ln -sfn "$PM/pmbootstrap/pmbootstrap.py" /usr/local/bin/pmbootstrap
+    # [2026-10-01] Terminal=false partout : chaque Exec passe par
+    # tools/osmo-gtk-run.py (fenetre GTK du banc, terminal VTE dedans quand la
+    # commande parle ou pose des questions) - aucun favori n ouvre de terminal.
     # Les icones : la VM aux deux formats, l arret, le rebranchement du modem
     # (memes .desktop que update.sh / osmo-extras-install.sh, une source ici).
     install -d /usr/share/applications
@@ -132,21 +137,21 @@ pmos_launchers() {
 Type=Application
 Name=Le telephone du banc (postmarketOS)
 Comment=Une VM postmarketOS/Phosh branchee sur le modem du banc - osmo-pmos up
-Exec=/usr/local/bin/osmo-pmos up
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --root --title "Telephone (postmarketOS)" -- /usr/local/bin/osmo-pmos up
 Icon=phone
-Terminal=true
+Terminal=false
 Categories=Network;Telephony;
 Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;
 Actions=status;stop;build;
 [Desktop Action status]
 Name=Etat du telephone (osmo-pmos status)
-Exec=/usr/local/bin/osmo-pmos status
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
 [Desktop Action stop]
 Name=Arreter le telephone (osmo-pmos stop)
-Exec=/usr/local/bin/osmo-pmos stop
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --close-on-exit --title "Arret du telephone" -- /usr/local/bin/osmo-pmos stop
 [Desktop Action build]
 Name=Construire l image (noyau PPP + pmbootstrap install)
-Exec=/usr/local/bin/osmo-pmos-build --no-launch
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Image postmarketOS (build)" -- /usr/local/bin/osmo-pmos-build --no-launch
 PMD
     for n in smartphone tablette; do
         local r=720x1440 ic=phone; [ "$n" = tablette ] && { r=1280x800; ic=tablet; }
@@ -155,21 +160,21 @@ PMD
 Type=Application
 Name=Telephone du banc - $n
 Comment=La VM postmarketOS au format $n ($r), le modem et la voix branches tout seuls
-Exec=env OSMO_PMOS_RES=$r /usr/local/bin/osmo-pmos-qemu
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$r /usr/local/bin/osmo-pmos-qemu
 Icon=$ic
-Terminal=true
+Terminal=false
 Categories=Network;Telephony;
 Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;$n;
 Actions=stop;setup;nomodem;
 [Desktop Action stop]
 Name=Arreter le telephone (osmo-pmos-qemu stop)
-Exec=/usr/local/bin/osmo-pmos-qemu stop
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --close-on-exit --title "Arret du telephone" -- /usr/local/bin/osmo-pmos-qemu stop
 [Desktop Action setup]
 Name=Rebrancher le modem et la voix (osmo-pmos-setup)
-Exec=/usr/local/bin/osmo-pmos-setup
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Modem et voix du telephone" -- /usr/local/bin/osmo-pmos-setup
 [Desktop Action nomodem]
 Name=VM seule, sans modem
-Exec=env OSMO_PMOS_RES=$r OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$r OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
 PMD
     done
     chmod 644 /usr/share/applications/osmo-pmos*.desktop
@@ -202,12 +207,45 @@ pmos_kernel() {
     [ -f "$KDIR/$(basename "$deb")" ] || cp -f "$deb" "$KDIR/"
 }
 
+# [2026-10-01] L IMAGE PEUT VENIR DU RESEAU. --image sans fichier derriere
+# (absent), ou un .zst corrompu (zstd -t), ou --image telecharger : on prend
+# la release GitHub « pmos-image », la meme que l ISO embarque. Reprise
+# possible, archive testee avant d etre mise en place.
+PMOS_IMAGE_URL="${OSMO_PMOS_IMAGE_URL-https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst}"
+pmos_image_telecharger() {
+    local dst="$1"
+    [ -n "$PMOS_IMAGE_URL" ] || { _p_warn "pas d URL d image (OSMO_PMOS_IMAGE_URL vide)"; return 1; }
+    command -v curl >/dev/null 2>&1 || { _p_warn "curl absent - image non telechargee"; return 1; }
+    command -v zstd >/dev/null 2>&1 || { _p_warn "zstd absent - image non verifiee, non telechargee"; return 1; }
+    install -d "$(dirname "$dst")"
+    _p_say "telechargement de l image de reference (1,7 Go, reprise possible) : $PMOS_IMAGE_URL"
+    if curl -fL -C - --retry 3 --retry-delay 5 -o "$dst.part" "$PMOS_IMAGE_URL" \
+       && zstd -t "$dst.part" >/dev/null 2>&1; then
+        mv -f "$dst.part" "$dst"
+        return 0
+    fi
+    rm -f "$dst.part"
+    _p_warn "telechargement impossible ou archive invalide ($PMOS_IMAGE_URL)"
+    return 1
+}
+
 pmos_image() {
     local src="$1" dst="$PM/image/qemu-amd64.img.zst"
-    [ -f "$src" ] || { _p_warn "image introuvable : $src"; return 1; }
     install -d "$PM/image"
+    if [ "$src" = telecharger ] || [ ! -f "$src" ]; then
+        [ "$src" = telecharger ] || _p_warn "image introuvable : $src - telechargement a la place"
+        pmos_image_telecharger "$dst" || return 1
+        chmod a+r "$dst"
+        _p_ok "image de reference : $dst ($(du -h "$dst" | cut -f1))"
+        return 0
+    fi
     case "$src" in
-        *.zst) cp -f "$src" "$dst" ;;
+        *.zst) if command -v zstd >/dev/null 2>&1 && ! zstd -t "$src" >/dev/null 2>&1; then
+                   _p_warn "image corrompue : $src (zstd -t) - telechargement a la place"
+                   pmos_image_telecharger "$dst" || return 1
+               elif [ "$(readlink -f "$src")" != "$(readlink -f "$dst")" ]; then
+                   cp -f "$src" "$dst"
+               fi ;;
         *) command -v zstd >/dev/null 2>&1 || { _p_warn "zstd absent"; return 1; }
            _p_say "compression de $src (fichier creux : seuls les blocs ecrits comptent)..."
            zstd -T0 -3 --sparse -f -o "$dst" "$src" || return 1 ;;

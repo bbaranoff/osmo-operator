@@ -7,10 +7,10 @@ componentName: osmo
 strings:
     productName:         osmo-operator
     shortProductName:    osmo-operator
-    version:             0.1
-    shortVersion:        0.1
-    versionedName:       osmo-operator 0.1 - banc GSM/EGPRS
-    shortVersionedName:  osmo-operator 0.1
+    version:             0.1-6
+    shortVersion:        0.1-6
+    versionedName:       osmo-operator v0.1-6 - banc GSM/EGPRS
+    shortVersionedName:  osmo-operator v0.1-6
     bootloaderEntryName: osmo-operator
     productUrl:          ""
     supportUrl:          ""

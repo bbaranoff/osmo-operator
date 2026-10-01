@@ -48,6 +48,17 @@ CRYPTHOME_OWNER="__OWNER__"
 CRYPTHOME_TRIES=3
 CRYPTHOME_TIMEOUT=60
 
+# Ou la question « decrypt /home -passphrase- or Enter » est posee au boot :
+#   console  (defaut) sur la console texte, lue par unlock-home lui-meme ;
+#            plymouth, s'il tourne, est quitte juste avant. C'est le chemin
+#            qui marche partout : il ne depend ni d'un agent systemd ni du
+#            clavier de plymouth (muet sur certaines machines, portable
+#            Intel + NVIDIA en tete).
+#   plymouth dans le theme de demarrage (osmo-bts), via systemd-ask-password :
+#            plus joli, a reserver a une machine ou l'on a VERIFIE que la
+#            frappe y est prise.
+CRYPTHOME_PROMPT="console"
+
 # Repertoires de root qui ne doivent pas exister en clair sur le disque
 # systeme : init-crypthome.sh les remplace par des liens vers le disque
 # chiffre. Disque non dechiffre = lien mort = rien ne s'ecrit en clair.

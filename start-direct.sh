@@ -80,6 +80,14 @@ HUB_IP=""
 REGEN_GABARITS=0
 # --menu : demande les choix au lieu de les deviner. Voir le bloc « Menu » plus bas.
 MENU_MODE=0
+# ── LA COUCHE 1 PAR DEFAUT : LE DSP ──────────────────────────────────────────
+# [2026-10-01] Le banc demarre en DSP (c54x_exe, mask-ROM TI) sans qu on le
+# demande : c est le banc qu on veut voir au premier clic, en service comme en
+# terminal, en standalone comme sous osmo-multi (qui lance le natif par
+# osmo-banc.service, donc par ce defaut). --grgsm remet la couche 1 gr-gsm.
+# L environnement gagne (DSP_MODE=0 ./start-direct.sh), comme pour le reste.
+# Si c54x_exe n est pas la, le banc retombe sur gr-gsm et le dit (plus bas).
+: "${DSP_MODE:=1}"
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -91,7 +99,7 @@ Usage : ./start-direct.sh [options] [mode]
     core           alias noproc
     hybrid         alias faketrx-qemu
   Options :
-    --dsp               banc DSP C54x : le TMS320C54x tourne hors QEMU
+    --dsp               (defaut) banc DSP C54x : le TMS320C54x tourne hors QEMU
                         (/opt/GSM/c54x_exe, mask-ROM TI) et decode lui-meme
                         FCCH/SCH/BCCH ; aucun decodeur gr-gsm n'est lance.
                         Le mobile campe (SI1-4, lai=001-01-1) et fait sa mise
@@ -100,7 +108,8 @@ Usage : ./start-direct.sh [options] [mode]
                         seuls les modules qemu,pty,osmocon,l2 sont retires et
                         repris par c54x_exe/run.sh. BANC_DSP=none pour n'avoir
                         que la pile.
-    --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe (defaut)
+    --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
+                        (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/qosmo).
                         Il remplace l'appel direct a qemu-system-arm : memes
                         defauts, sockets et pty publies (<RUN_DIR>/modem.pty),
@@ -531,9 +540,10 @@ fi
 # travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
 #   CALYPSO_BRIDGE=none ./start-direct.sh   -> pas de pont (QEMU + BTS seuls)
 #
-# [2026-09-22] DEUX CHAINES, SELECTIONNEES PAR --dsp. Le DEFAUT reste
-# gr-gsm (qosmo + grgsm_exe) : la couche 1 est un decodeur gr-gsm dans QEMU, et
-# c'est la pile qui va de bout en bout jusqu'a l'appel voix.
+# [2026-09-22] DEUX CHAINES, SELECTIONNEES PAR --dsp / --grgsm. [2026-10-01]
+# LE DEFAUT EST LE DSP (DSP_MODE=1 en tete de fichier). gr-gsm (qosmo +
+# grgsm_exe) reste a un --grgsm : la couche 1 est alors un decodeur gr-gsm
+# dans QEMU, et c'est la pile qui va de bout en bout jusqu'a l'appel voix.
 #
 # `--dsp` ne designe PLUS un fork de QEMU. Le C54x tourne maintenant HORS de
 # QEMU, dans /opt/GSM/c54x_exe (mask-ROM TI, coeur emule par l1-dsp), et QEMU
@@ -562,10 +572,11 @@ fi
 # `none` = rien a lancer ici. Ne PAS mettre `ipc` : dans l'ancien qosmo-dsp
 # cette valeur voulait dire « MS#1 via osmo-trx-ms-ipc, firmware QEMU non lance ».
 # Une valeur posee par l'operateur reste respectee.
-if [ "${DSP_MODE:-0}" = 1 ]; then
-    : "${CALYPSO_BRIDGE:=none}"
-fi
-: "${CALYPSO_BRIDGE:=pont}"
+#
+# [2026-10-01] Le DSP etant le defaut, `none` ne vaut que si le banc DSP est
+# VRAIMENT lance (DSP_BANC=1, decide juste en dessous) : un c54x_exe absent
+# fait retomber sur gr-gsm, qui a besoin de son pont. Sinon la chaine gr-gsm
+# montait sans pont, et personne ne campait.
 
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
@@ -592,7 +603,15 @@ DSP_MODULES_RETIRES="qemu,pty,osmocon,l2"
 : "${BANC_DSP:=$GSM_ROOT/c54x_exe/run.sh}"
 if [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ] && [ -x "$BANC_DSP" ]; then
     DSP_BANC=1
+elif [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ]; then
+    # Le defaut est le DSP, mais sans son banc : on le dit, et la chaine gr-gsm
+    # prend le relais (CALYPSO_BRIDGE reste `pont`).
+    printf '  %s!%s banc DSP absent (%s) - couche 1 gr-gsm a la place\n' "${C_KO:-}" "${C_Z:-}" "$BANC_DSP" >&2
 fi
+if [ "$DSP_BANC" = 1 ]; then
+    : "${CALYPSO_BRIDGE:=none}"
+fi
+: "${CALYPSO_BRIDGE:=pont}"
 : "${RUN_SH:=${OQC_ROOT:+$OQC_ROOT/run.sh}}"
 : "${RUN_SH:=$GSM_ROOT/${CALYPSO_FORK:-qosmo}/run.sh}"
 if [ ! -x "$RUN_SH" ]; then
@@ -755,10 +774,10 @@ menu_interactif() {
     # Le premier choix, parce qu il commande le second : le DSP n a que faire
     # d une seconde station de base.
     _L1="$(_menu "Couche 1" \
-        "Qui demodule ?\n\n  gr-gsm  la pile va jusqu a l appel voix. Le DSP ne tourne pas.\n  DSP     le C54x execute la mask-ROM TI et decode lui-meme.\n          Banc de travail : le SCH ne passe pas encore, pas de camp." \
+        "Qui demodule ?\n\n  DSP     (defaut) le C54x execute la mask-ROM TI et decode lui-meme :\n          le mobile campe (SI1-4) et fait sa mise a jour de localisation.\n  gr-gsm  la pile va jusqu a l appel voix. Le DSP ne tourne pas." \
         "$([ "${DSP_MODE:-0}" = 1 ] && echo c54x_exe || echo grgsm_exe)" \
-        grgsm_exe "couche 1 gr-gsm dans qosmo (pile complete)" \
-        c54x_exe  "DSP C54x hors QEMU, mask-ROM TI")"
+        c54x_exe  "DSP C54x hors QEMU, mask-ROM TI (defaut)" \
+        grgsm_exe "couche 1 gr-gsm dans qosmo (pile complete)")"
     case "$_L1" in c54x_exe) DSP_MODE=1 ;; *) DSP_MODE=0 ;; esac
 
     # ── 2. TOPOLOGIE : SEUL OU HYBRIDE ───────────────────────────────────────

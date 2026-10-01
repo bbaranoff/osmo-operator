@@ -561,8 +561,9 @@ TUTO
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
     # le MEME.
     install -m644 "$DIR/data/desktop/osmo-launch.desktop" "$ROOTFS/usr/share/applications/osmo-launch.desktop"
-    # [2026-09-04] Plus d'icone DSP a part : le clic droit du telephone
-    # (osmo-launch.desktop, action « Lancer en mode DSP ») suffit.
+    # [2026-09-04] Plus d'icone DSP a part. [2026-10-01] Le DSP est le defaut
+    # du banc ; le clic droit du telephone propose l'autre chaine (« Lancer en
+    # mode gr-gsm »).
     rm -f "$ROOTFS/usr/share/applications/osmo-dsp.desktop"
 
     # osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI. Son lanceur
@@ -573,50 +574,29 @@ TUTO
     # ci-dessus) pour que cette pose differee y trouve l image.
 
     # ── SUPPLEMENTS : LA FENETRE A COCHER ─────────────────────────────────
-    # Meme facture que osmo-update-anim : un terminal, et la main rendue
-    # seulement quand on a lu la fin. addition.sh ouvre lui-meme sa liste a
-    # cocher (zenity) quand DISPLAY est la ; le terminal reste utile pour la
-    # suite, qui est longue et bavarde (apt, puis compilation Osmocom).
+    # [2026-10-01] Meme facture que osmo-update-anim : une fenetre GTK du banc
+    # avec un terminal VTE dedans (tools/osmo-gtk-run.py --tty), et la main
+    # rendue seulement quand on a lu la fin. addition.sh ouvre lui-meme sa
+    # liste a cocher (zenity) quand DISPLAY est la ; le terminal reste utile
+    # pour la suite, longue et bavarde (apt, puis compilation Osmocom). Aucun
+    # favori du dock n ouvre plus de gnome-terminal.
     cat > "$ROOTFS/usr/local/bin/osmo-addition-anim" <<'ADDGUI'
 #!/bin/bash
+# osmo-addition-anim - les supplements (addition.sh) dans une fenetre GTK du
+# banc : un terminal VTE dedans, pour la liste a cocher puis la suite, longue
+# et bavarde (apt, compilation) ; la fenetre reste ouverte a la fin, avec le
+# statut. Root par pkexec, DISPLAY/XAUTHORITY et le proxy de la session
+# reportes (osmo-gtk-run --root). [2026-10-01] Plus de gnome-terminal.
 set -u
-SCRIPT=/opt/GSM/osmo-operator/addition.sh
+REPO=/opt/GSM/osmo-operator
+SCRIPT=$REPO/addition.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="addition.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-# pkexec : les supplements installent des paquets et demarrent un demon. Sans
-# elevation, apt-get echoue a la premiere ligne et la fenetre se ferme sur un
-# "Permission denied" qui ne dit pas qu il fallait etre root.
-RUNNER="$SCRIPT"
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v pkexec >/dev/null 2>&1; then
-        # pkexec NETTOIE l environnement : sans ce report, root perd le proxy
-        # HTTP de la session, et les git clone du supplement (deka, a51_tools,
-        # dst80_reversing, tea1-cracker) echouent alors qu ils marchent en
-        # shell. On transmet DISPLAY/XAUTHORITY et les variables de proxy qui
-        # SONT definies (indirection ${!v} - le lanceur est en bash).
-        _fwd="DISPLAY=${DISPLAY:-} XAUTHORITY=${XAUTHORITY:-}"
-        for _v in http_proxy https_proxy ftp_proxy no_proxy \
-                  HTTP_PROXY HTTPS_PROXY FTP_PROXY NO_PROXY; do
-            _val="${!_v-}"
-            [ -n "$_val" ] && _fwd="$_fwd $_v=$_val"
-        done
-        RUNNER="pkexec env $_fwd $SCRIPT"
-    else
-        RUNNER="sudo -E $SCRIPT"
-    fi
-fi
-CMD="$RUNNER; echo; read -n1 -rsp 'Termine - une touche pour fermer...'"
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="osmo-operator supplements" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "osmo-operator supplements" -e bash -c "$CMD" ;;
-    esac
-done
-exec bash -c "$RUNNER"
+exec python3 "$REPO/tools/osmo-gtk-run.py" --tty --root --title "osmo-operator - supplements" -- "$SCRIPT" "$@"
+
 ADDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-addition-anim"
 
@@ -644,7 +624,12 @@ ADDGUI
     # ne ment pas - elle sait s installer elle-meme.
     cat > "$ROOTFS/usr/local/bin/osmo-claude-anim" <<'CLA'
 #!/bin/bash
+# osmo-claude-anim - Claude Code dans une fenetre GTK du banc (terminal VTE :
+# claude est interactif de bout en bout). Pas dans l ISO : le premier clic
+# l installe (addition.sh --claude, en root) puis l ouvre, dans la meme
+# fenetre. [2026-10-01] Plus de gnome-terminal.
 set -u
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Claude" -- bash -lc '
 if ! command -v claude >/dev/null 2>&1; then
     ADD=/opt/GSM/osmo-operator/addition.sh
     if [ -x "$ADD" ]; then
@@ -655,15 +640,10 @@ if ! command -v claude >/dev/null 2>&1; then
         fi
     fi
 fi
-CMD='if command -v claude >/dev/null 2>&1; then claude; else echo "Claude non installe - lancez le supplement (--claude)."; fi; echo; read -n1 -rsp "Une touche pour fermer..."'
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="Claude" -- bash -lc "$CMD" ;;
-        *)              exec "$term" -T "Claude" -e bash -lc "$CMD" ;;
-    esac
-done
-exec bash -lc "$CMD"
+if command -v claude >/dev/null 2>&1; then exec claude; fi
+echo "Claude non installe - lancez le supplement (addition.sh --claude)."
+exit 1'
+
 CLA
     chmod +x "$ROOTFS/usr/local/bin/osmo-claude-anim"
     # Le fichier vit dans le depot (data/desktop/) ; Icon= en chemin absolu.
@@ -721,13 +701,17 @@ fi
 # fichier SUIVI dans le depot osmo-operator (/opt/GSM/osmo-operator/update.sh).
 # update.sh est une animation de TERMINAL : sa premiere ligne utile est
 # "[ -t 1 ] || exit 0", donc lance sans tty (depuis une icone GTK) il sort
-# aussitot sans rien montrer. Le lanceur l'ouvre DONC dans un emulateur de
-# terminal - gnome-terminal est tire par ubuntu-desktop-minimal - et laisse la
-# fenetre ouverte a la fin pour qu'on lise le resultat.
+# aussitot sans rien montrer. [2026-10-01] Le lanceur l'ouvre DONC dans un
+# terminal VTE pose DANS une fenetre GTK du banc (tools/osmo-gtk-run.py
+# --tty), qui reste ouverte a la fin pour qu'on lise le resultat - plus de
+# gnome-terminal.
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > "$ROOTFS/usr/local/bin/osmo-update-anim" <<'UPDGUI'
 #!/bin/bash
-# Rejoue l animation update.sh du depot osmo-operator, dans une fenetre terminal.
+# osmo-update-anim - rejoue update.sh du depot dans une fenetre GTK du banc.
+# update.sh est une animation de TERMINAL ([ -t 1 ] || exit 0) : --tty, un
+# terminal VTE dans la fenetre, qui reste ouverte sur la derniere ligne
+# (« SMS delivered ») avec le statut. [2026-10-01] Plus de gnome-terminal.
 set -u
 SCRIPT=/opt/GSM/osmo-operator/update.sh
 if [ ! -x "$SCRIPT" ]; then
@@ -735,18 +719,8 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="update.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-# read a la fin : sans lui, la fenetre se fermerait avant qu on lise la ligne
-# "SMS delivered". -e pour la plupart des emulateurs, "--" pour gnome-terminal.
-CMD="\"$SCRIPT\"; echo; read -n1 -rsp 'Termine - une touche pour fermer...'"
-for term in x-terminal-emulator gnome-terminal xterm; do
-    command -v "$term" >/dev/null 2>&1 || continue
-    case "$term" in
-        gnome-terminal) exec "$term" --title="osmo-operator update" -- bash -c "$CMD" ;;
-        *)              exec "$term" -T "osmo-operator update" -e bash -c "$CMD" ;;
-    esac
-done
-# Aucun emulateur : dernier recours, on joue directement (utile en tty).
-exec "$SCRIPT"
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "osmo-operator - update" -- "$SCRIPT" "$@"
+
 UPDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-update-anim"
 

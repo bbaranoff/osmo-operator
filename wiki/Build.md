@@ -118,7 +118,7 @@ bureau. C'est l'opérateur qui lance (icône, `launch.sh`, `systemctl start osmo
 | | `OSMO_ISO_LTE=1` | active `osmo-lte` |
 
 Sur une machine déjà installée : `OSMO_MULTI_ENABLE=1 ./addition.sh`. Options
-durables du service : `OSMO_BANC_ARGS="--dsp"` dans `/etc/default/osmo-banc`.
+durables du service : `OSMO_BANC_ARGS="--grgsm"` dans `/etc/default/osmo-banc` (le DSP est le défaut depuis le 2026-10-01).
 
 ### WAN dans l'ISO
 

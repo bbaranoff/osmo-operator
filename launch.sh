@@ -238,15 +238,12 @@ if [ "$_bloc_direct" = "1" ]; then
     # quand le port est ferme.
     if [ "$_action" = "--vty" ]; then
         _p="${OSMO_MS_VTY_PORT:-4247}"
-        for _t in gnome-terminal xfce4-terminal konsole xterm; do
-            command -v "$_t" >/dev/null 2>&1 || continue
-            _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; read -r _; }"
-            case "$_t" in
-                gnome-terminal) exec "$_t" -- bash -c "$_c" ;;
-                *)              exec "$_t" -e "bash -c \"$_c\"" ;;
-            esac
-        done
-        _note "Aucun emulateur de terminal - tapez : telnet 127.0.0.1 $_p"
+        # [2026-10-01] Dans une fenetre GTK du banc (terminal VTE dedans), plus
+        # dans un gnome-terminal : aucun favori n ouvre de terminal.
+        _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; }"
+        exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
+             --title "Console du mobile (VTY $_p)" -- bash -c "$_c"
+        _note "Aucune fenetre possible - tapez : telnet 127.0.0.1 $_p"
         exit 1
     fi
 
@@ -260,14 +257,11 @@ if [ "$_bloc_direct" = "1" ]; then
             _note "Pas de session « $_sess » : le banc ne tourne pas."
             exit 1
         fi
-        for _t in gnome-terminal xfce4-terminal konsole xterm; do
-            command -v "$_t" >/dev/null 2>&1 || continue
-            case "$_t" in
-                gnome-terminal) exec "$_t" -- tmux attach -t "$_sess" ;;
-                *)              exec "$_t" -e "tmux attach -t $_sess" ;;
-            esac
-        done
-        _note "Aucun emulateur de terminal - tapez : tmux attach -t $_sess"
+        # [2026-10-01] Le terminal VTE vit dans une fenetre GTK du banc
+        # (tools/osmo-gtk-run.py) : aucun favori n ouvre de terminal.
+        exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
+             --title "Console du banc (tmux $_sess)" -- tmux attach -t "$_sess"
+        _note "Aucune fenetre possible - tapez : tmux attach -t $_sess"
         exit 1
     fi
 
@@ -396,13 +390,10 @@ _lt_besoin=0
 if [ "$_lt_besoin" = "1" ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
     export OSMO_LAUNCH_TERM=1
     unset OSMO_TERM_TAKEN            # la fenetre qu on ouvre ici EST la notre
-    for _t in gnome-terminal xfce4-terminal konsole xterm; do
-        command -v "$_t" >/dev/null 2>&1 || continue
-        case "$_t" in
-            gnome-terminal) exec "$_t" -- "$0" "$@" ;;
-            *)              exec "$_t" -e "$0" "$@" ;;
-        esac
-    done
+    # [2026-10-01] La fenetre est celle du banc (GTK + terminal VTE,
+    # tools/osmo-gtk-run.py), plus un gnome-terminal.
+    exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
+         --title "Banc GSM" -- "$0" "$@"
     # AUCUN emulateur installe. On ne reprend pas le terminal de l appelant -
     # ce serait refaire exactement la panne que cette garde empeche. On se
     # detache, et la sortie va dans un journal plutot que dans le vide.

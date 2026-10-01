@@ -38,7 +38,9 @@ Exec=/opt/GSM/osmo-operator/launch.sh --multi-stop
 # Le lancement peut durer plusieurs minutes (images, conteneurs, HLR) : sans un
 # moyen de REGARDER, l icone parait ne rien faire. C est le pendant direct du
 # passage en service - le journal existe, autant l ouvrir d un clic.
+# [2026-10-01] Dans une fenetre GTK du banc (tools/osmo-gtk-run.py), plus dans
+# un gnome-terminal : aucun favori n ouvre de terminal.
 [Desktop Action Journal]
 Name=Voir le journal (journalctl -u osmo-multi)
 Name[fr]=Voir le journal (journalctl -u osmo-multi)
-Exec=gnome-terminal -- bash -c "journalctl -u osmo-multi -f --no-pager || read -r _"
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "journal osmo-multi" -- journalctl -u osmo-multi -f -n 200 --no-pager -o cat

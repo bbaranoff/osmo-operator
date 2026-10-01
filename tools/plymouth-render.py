@@ -12,13 +12,20 @@
 # CE QU ON VOIT AU DEMARRAGE :
 #
 #     ((( ▲ )))                                     ▄▄▄
-#      pylone   ---- burst ---->                   |o o|   <- le mobile
-#      (BTS)    <--- burst -----                   |___|
+#      pylone    ( ( (  ondes  ) ) )               |o o|   <- le mobile
+#      (BTS)                                       |___|
 #
-#   Un pylone a gauche, un mobile a droite, et une rafale GSM qui fait
-#   l aller-retour entre les deux - c est litteralement ce que la machine
-#   s apprete a faire tourner. Des anneaux concentriques « 3D » (ellipses en
-#   perspective, neon cyan) s ouvrent depuis le pylone et depuis le mobile. En bas, le nom du banc et la barre d avancement.
+#   Un pylone a gauche, un mobile a droite, et des ondes entre les deux :
+#   des anneaux concentriques « 3D » (ellipses en perspective, neon cyan) qui
+#   s ouvrent depuis le pylone et depuis le mobile - c est litteralement ce
+#   que la machine s apprete a faire tourner. En bas, le nom du banc et la
+#   barre d avancement. [2026-10-01] RIEN D AUTRE dans l animation : plus de
+#   rafale a huit creneaux (les rectangles) ni d etiquettes DL/UL - juste les
+#   ronds, c est ce qui a ete demande.
+#
+# --gif FICHIER sort en plus un apercu anime (fond + 24 frames, reduit), pour
+# le wiki ou pour juger le rendu sans redemarrer. Il ne va PAS dans --out :
+# tout ce qui est dans le dossier du theme part dans l initrd.
 #
 # Ne depend que de Pillow et des polices DejaVu, comme wallpaper-render.py.
 import argparse
@@ -118,24 +125,15 @@ def ripples(d, at, phase, rmax=300, n=4, col=NEON, aspect=0.32, cone=0.30):
                   outline=(235, 252, 255, int(a * 0.8)), width=2)            # coeur clair
 
 
-def burst(d, x, y, t):
-    """La rafale qui traverse : huit creneaux (les 8 intervalles de la trame),
-    celui qui est « allume » se deplace avec le temps."""
-    slot_w, gap, hgt = 16, 5, 30
-    total = 8 * slot_w + 7 * gap
-    x0 = x - total / 2
-    lit = int(t * 8) % 8
-    for i in range(8):
-        sx = x0 + i * (slot_w + gap)
-        col = VIOLET if i == lit else (52, 64, 98)
-        d.rectangle([sx, y - hgt / 2, sx + slot_w, y + hgt / 2], fill=col)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--template", default=None,
                     help="le gabarit osmo-bts.script (defaut : celui du depot)")
+    ap.add_argument("--gif", default=None,
+                    help="ecrit aussi un apercu anime (GIF) a ce chemin")
+    ap.add_argument("--gif-width", type=int, default=960,
+                    help="largeur de l apercu GIF (defaut 960)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -159,27 +157,35 @@ def main():
     strip_y, strip_h = ant[1] - 110, 300
     tip = (ant[0] - bx0, ant[1] - strip_y)                 # la pointe du pylone, dans la bande
     ms_top = (ms[0] - bx0, ms[1] - 95 - strip_y)            # le haut du mobile, dans la bande
+    frames = []
     for i in range(FRAMES):
         t = i / FRAMES
         im = Image.new("RGBA", (int(bx1 - bx0), strip_h), (0, 0, 0, 0))
         dd = ImageDraw.Draw(im)
-        # Les ondes : grands anneaux depuis le pylone (descendant), petits
-        # anneaux depuis le mobile (montant), decales d une demi-periode.
+        # Les ondes, et rien d autre : grands anneaux depuis le pylone
+        # (descendant), petits anneaux depuis le mobile (montant), decales
+        # d une demi-periode.
         ripples(dd, tip, t, rmax=340, n=4)
         ripples(dd, ms_top, (t + 0.5) % 1.0, rmax=190, n=3, aspect=0.36)
-        # Aller (montant) puis retour (descendant) : une periode complete.
-        u = (t * 2) % 1.0
-        xa, xb = tip[0] + 90, ms_top[0] - 90
-        ya = tip[1] + 40
-        if t < 0.5:
-            burst(dd, xa + u * (xb - xa), ya, t * 4)
-        else:
-            burst(dd, xb - u * (xb - xa), ya + 80, t * 4)
-        # Le sens, ecrit : UL en haut, DL en bas - c est un banc, pas un ecran
-        # de veille.
-        dd.text((xa - 34, ya - 26), "DL", font=font("DejaVuSansMono.ttf", 18), fill=CYAN + (150,))
-        dd.text((xb + 10, ya + 54), "UL", font=font("DejaVuSansMono.ttf", 18), fill=GREEN + (150,))
         im.save(os.path.join(a.out, "burst-%02d.png" % i), "PNG", optimize=True)
+        frames.append(im)
+
+    # L apercu anime : le fond, la bande posee dessus a sa place, une image par
+    # frame, a ~12 i/s comme dans le theme (une frame toutes les 4 passes a
+    # 50 Hz). Reduit : un GIF 1920x1080 de 24 images pese plusieurs Mo pour
+    # rien.
+    if a.gif:
+        gw = max(160, a.gif_width)
+        gh = int(H * gw / W)
+        seq = []
+        for im in frames:
+            full = bg.convert("RGBA")
+            full.alpha_composite(im, (int(bx0), int(strip_y)))
+            seq.append(full.convert("RGB").resize((gw, gh), Image.LANCZOS)
+                       .quantize(colors=128, method=Image.Quantize.MEDIANCUT))
+        seq[0].save(a.gif, save_all=True, append_images=seq[1:], loop=0,
+                    duration=int(1000 * 4 / 50), optimize=True)
+        print("[plymouth] apercu : %s (%dx%d, %d images)" % (a.gif, gw, gh, FRAMES))
 
     # La barre d avancement : un fond et une pastille qui court dessus.
     bar = Image.new("RGBA", (520, 8), (255, 255, 255, 0))

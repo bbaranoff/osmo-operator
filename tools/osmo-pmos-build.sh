@@ -239,7 +239,31 @@ if pgrep -f "qemu-system-x86_64.*$(basename "$IMG")" >/dev/null 2>&1; then
     die "la VM tourne encore sur $IMG : arrete-la (osmo-pmos-qemu stop) puis relance"
 fi
 sudo -v || die "sudo refuse"
-if [ "${OSMO_PMOS_FRESH:-0}" != 1 ] && [ ! -f "$IMG" ] && [ -f "$PM/image/qemu-amd64.img.zst" ] && command -v zstd >/dev/null 2>&1; then
+# ── L IMAGE DE REFERENCE : LA, OU TELECHARGEE ───────────────────────────────
+# [2026-10-01] Si le .zst manque (ISO construite sans) ou est CORROMPU (zstd -t
+# le dit : une copie coupee, un 404 enregistre tel quel, une cle retiree trop
+# tot), on le reprend sur la release GitHub « pmos-image » - celle que le
+# workflow embarque dans l ISO. 1,7 Go, reprise possible (curl -C -), teste
+# avant d etre mis en place. OSMO_PMOS_IMAGE_URL pour une autre adresse, vide
+# pour ne rien telecharger (on retombe alors sur pmbootstrap install).
+ZST="$PM/image/qemu-amd64.img.zst"
+: "${OSMO_PMOS_IMAGE_URL=https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst}"
+pmos_zst_ok() { [ -f "$ZST" ] && zstd -t "$ZST" >/dev/null 2>&1; }
+if [ "${OSMO_PMOS_FRESH:-0}" != 1 ] && [ ! -f "$IMG" ] && command -v zstd >/dev/null 2>&1 \
+   && ! pmos_zst_ok && [ -n "$OSMO_PMOS_IMAGE_URL" ] && command -v curl >/dev/null 2>&1; then
+    [ -f "$ZST" ] && warn "image de reference illisible ($ZST) - retelechargee"
+    say "telechargement de l image de reference (1,7 Go, reprise possible) : $OSMO_PMOS_IMAGE_URL"
+    sudo install -d "$(dirname "$ZST")"
+    if sudo curl -fL -C - --retry 3 --retry-delay 5 -o "$ZST.part" "$OSMO_PMOS_IMAGE_URL" \
+       && zstd -t "$ZST.part" >/dev/null 2>&1; then
+        sudo mv -f "$ZST.part" "$ZST" && sudo chmod a+r "$ZST"
+        ok "image de reference recuperee : $ZST ($(du -h "$ZST" | cut -f1))"
+    else
+        sudo rm -f "$ZST.part" "$ZST"
+        warn "telechargement impossible ou archive invalide - install classique (pmbootstrap install)"
+    fi
+fi
+if [ "${OSMO_PMOS_FRESH:-0}" != 1 ] && [ ! -f "$IMG" ] && pmos_zst_ok; then
     say "image de reference decompressee ($PM/image/qemu-amd64.img.zst -> $IMG)..."
     mkdir -p "$(dirname "$IMG")"
     zstd -d --sparse -o "$IMG" "$PM/image/qemu-amd64.img.zst" && ok "image prete : $IMG (VM de reference)" \

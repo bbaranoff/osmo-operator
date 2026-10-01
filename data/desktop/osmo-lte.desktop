@@ -30,7 +30,7 @@ Exec=/usr/local/bin/osmo-lte up
 [Desktop Action StartGui]
 Name=Demarrer la 4G avec les traces (srsGUI)
 Name[fr]=Demarrer la 4G avec les traces (srsGUI)
-Exec=gnome-terminal -- bash -c "/usr/local/bin/osmo-lte start-gui; read -r -p 'Entree pour fermer ' _"
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "4G du banc (srsGUI)" -- /usr/local/bin/osmo-lte start-gui
 
 [Desktop Action Stop]
 Name=Arreter la 4G
@@ -40,9 +40,9 @@ Exec=/usr/local/bin/osmo-lte down
 [Desktop Action Status]
 Name=Etat (osmo-lte status, osmo-epc status)
 Name[fr]=Etat (osmo-lte status, osmo-epc status)
-Exec=gnome-terminal -- bash -c "sudo /usr/local/bin/osmo-lte status; sudo /usr/local/bin/osmo-epc status; read -r -p 'Entree pour fermer ' _"
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat 4G" -- bash -c "/usr/local/bin/osmo-lte status; /usr/local/bin/osmo-epc status"
 
 [Desktop Action Journal]
 Name=Voir le journal (journalctl -u osmo-lte)
 Name[fr]=Voir le journal (journalctl -u osmo-lte)
-Exec=gnome-terminal -- bash -c "journalctl -u osmo-lte -f --no-pager || read -r _"
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "journal osmo-lte" -- journalctl -u osmo-lte -f -n 200 --no-pager -o cat

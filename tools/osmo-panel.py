@@ -405,17 +405,13 @@ def spawn(argv):
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def terminal(cmd):
-    """Ouvre `cmd` (chaine shell) dans un emulateur de terminal."""
+def terminal(cmd, titre="osmo-panel"):
+    """Ouvre `cmd` (chaine shell) dans un terminal VTE pose DANS une fenetre GTK
+    du banc (tools/osmo-gtk-run.py --tty). [2026-10-01] Plus d emulateur de
+    terminal : aucune entree de l encart n en ouvre."""
     root = "" if os.geteuid() == 0 else "sudo -E "
-    for term, opt in (("gnome-terminal", "--"), ("xfce4-terminal", "-e"), ("konsole", "-e"), ("xterm", "-e")):
-        if subprocess.run(["which", term], capture_output=True).returncode == 0:
-            if term == "gnome-terminal":
-                spawn([term, "--", "bash", "-c", root + cmd])
-            else:
-                spawn([term, opt, "bash -c " + shlex.quote(root + cmd)])
-            return
-    print("[panel] aucun emulateur de terminal", file=sys.stderr, flush=True)
+    gtk_run = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-gtk-run.py")
+    spawn([sys.executable, gtk_run, "--tty", "--title", titre, "--", "bash", "-c", root + cmd])
 
 
 class Panel(Gtk.Window):

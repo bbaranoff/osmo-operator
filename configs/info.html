@@ -53,7 +53,8 @@ terminal and streams its journal in the bar (click <b>journal</b> to expand).</p
 <tr><td>Dashboard</td><td><code>firefox http://127.0.0.1:8080</code></td><td><span class="file">launch.sh --dashboard</span></td></tr>
 <tr><td>Bench console (tmux)</td><td><code>sudo tmux attach -t calypso</code></td><td><span class="file">launch.sh --console</span></td></tr>
 <tr><td>Mobile console (VTY)</td><td><code>telnet 127.0.0.1 4247</code></td><td><span class="file">launch.sh --vty</span></td></tr>
-<tr><td>DSP mode</td><td><code>sudo ./start-direct.sh --dsp</code></td><td><span class="file">launch.sh --dsp</span></td></tr>
+<tr><td>DSP mode (defaut)</td><td><code>sudo ./start-direct.sh</code></td><td><span class="file">launch.sh</span></td></tr>
+<tr><td>gr-gsm mode</td><td><code>sudo ./start-direct.sh --grgsm</code></td><td><span class="file">launch.sh --grgsm</span></td></tr>
 <tr><td>Stop</td><td><code>systemctl stop osmo-banc</code></td><td><span class="file">launch.sh --stop</span></td></tr>
 </table>
 <pre><code>cd /opt/GSM/osmo-operator &amp;&amp; sudo ./start-direct.sh          # foreground

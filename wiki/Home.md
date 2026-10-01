@@ -181,7 +181,8 @@ journalctl -u osmo-banc -f      # si lancée en service
 | `./start-direct.sh --list` | le plan, sans lancer |
 | `./start-direct.sh --menu` | pose les questions au lieu de deviner |
 | `./start-direct.sh --regen` | régénère les configs depuis les gabarits |
-| `./start-direct.sh --dsp` | banc DSP C54x (c54x_exe, mask-ROM TI) : le mobile campe et fait son LU ; même pile que grgsm |
+| `./start-direct.sh` | banc DSP C54x (c54x_exe, mask-ROM TI), **le défaut** depuis le 2026-10-01 : le mobile campe et fait son LU |
+| `./start-direct.sh --grgsm` | couche 1 gr-gsm dans QEMU (l'ancien défaut) : la pile va jusqu'à l'appel voix |
 | `./start-direct.sh --node 2 --hub-ip IP` | ce nœud = 2 d'un WAN, ASP vers l'inter-STP |
 | `./start-direct.sh --wan` | WAN à N nœuds, questions interactives |
 | `./generate_configs.sh ARFCN=520` | change une valeur de `globals.conf` |
@@ -196,7 +197,7 @@ journalctl -u osmo-banc -f      # si lancée en service
 | `environment/load.env` | l'ordre de chargement des profils et défauts |
 | `/etc/osmocom/coeur.env` | `N_MS`, écrit par l'ISO |
 | `/etc/osmo-wan.conf`, `/etc/osmo-role` | table WAN, rôle du nœud |
-| `/etc/default/osmo-banc` | `OSMO_BANC_ARGS="--dsp"` pour le service |
+| `/etc/default/osmo-banc` | `OSMO_BANC_ARGS="--grgsm"` pour que le service parte en gr-gsm (DSP sinon) |
 | `/var/log/osmocom/{qemu,bridge,run.sh}.log` | QEMU, pont, orchestration |
 | `/tmp/c54x-pont/`, `/dev/shm/pont.log` | banc DSP : liens vers ses journaux (vrais fichiers aux chemins du panneau), journal du pont |
 | `pont/README.md` | à lire **avant** de chercher une panne radio dans un compteur de CRC |

@@ -138,7 +138,7 @@ echo -e "${BOLD}Initialisation du disque chiffre${NC}"
 echo -e "  partition      : ${CYAN}$DEV${NC} ($taille)"
 echo -e "  deviendra      : ${CYAN}$MOUNT${NC} (LUKS2 + ext4, mappe sur /dev/mapper/$MAPPER)"
 echo -e "  compte a home  : ${CYAN}$OWNER${NC}"
-echo -e "  au demarrage   : ${CYAN}\"Phrase de passe pour $MOUNT [clavier xx] (Entree = root sans $MOUNT)\"${NC}, Entree a vide n'empeche pas de demarrer"
+echo -e "  au demarrage   : ${CYAN}\"decrypt $MOUNT -passphrase- or Enter\"${NC}, Entree a vide n'empeche pas de demarrer"
 echo -e "  ${YELLOW}le contenu actuel de $MOUNT sera recopie dessus ; l original reste en place${NC}"
 echo -e "  ${YELLOW}et part dans /var/backups/ au redemarrage, avant le montage${NC}"
 echo
@@ -260,16 +260,16 @@ echo -e "${GREEN}[7/7]${NC} Activation du service de demarrage."
 systemctl daemon-reload
 systemctl enable unlock-home.service >/dev/null
 /usr/local/sbin/refresh-owner-apps >/dev/null
-# "splash" cache la question du demarrage : plymouth prend l'ecran et une
-# question en clair y est illisible. On garde "quiet", le boot reste sobre.
-sed -i -E "s/(GRUB_CMDLINE_LINUX_DEFAULT=['\"][^'\"]*)[[:space:]]*splash/\\1/" /etc/default/grub
-update-grub >/dev/null 2>&1 || true
+# [2026-10-01] On ne retire plus "splash" de la ligne de commande du noyau :
+# unlock-home quitte plymouth lui-meme juste avant de poser la question sur la
+# console. Le decor de demarrage reste, la question est lisible, et une
+# installation Calamares et un disque ajoute apres coup se comportent pareil.
 
 cryptsetup close "$MAPPER"
 
 echo
 echo -e "${GREEN}${BOLD}Termine.${NC}"
-echo -e "  Au prochain demarrage : ${CYAN}\"Phrase de passe pour $MOUNT [clavier xx] (Entree = root sans $MOUNT)\"${NC}"
+echo -e "  Au prochain demarrage : ${CYAN}\"decrypt $MOUNT -passphrase- or Enter\"${NC}"
 echo -e "  Taper la phrase (affichee en ${CYAN}****${NC}) monte $MOUNT et ouvre la session de $OWNER,"
 echo -e "  avec son trousseau ; Firefox et les applications a secrets tourneront sous lui."
 echo -e "  ${CYAN}Entree${NC} a vide (ou attendre ${CRYPTHOME_TIMEOUT:-60} s) demarre sans : la session root"

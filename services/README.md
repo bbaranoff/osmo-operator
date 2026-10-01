@@ -35,7 +35,7 @@ systemctl restart osmo-banc       # un banc neuf ; launch.sh (icône) fait parei
 systemctl start osmo-multi        # ajoute les conteneurs + inter-STP (docker requis)
 ```
 
-Options durables : `OSMO_BANC_ARGS="--dsp"` dans `/etc/default/osmo-banc`
+Le DSP est le défaut (start-direct.sh, 2026-10-01). Options durables : `OSMO_BANC_ARGS="--grgsm"` dans `/etc/default/osmo-banc`
 (`OSMO_MULTI_ARGS` dans `/etc/default/osmo-multi`). `launch.sh --dsp` les pose
 pour la session via `systemctl set-environment`. Avec `--dsp`, osmo-banc lance
 aussi `c54x_exe/run.sh` après le plan du fork (hand-off par `exec`) ;

@@ -73,7 +73,7 @@ This is the one choice that matters on the standalone bench. Both run the same
 core network, the same BTS and the same `mobile`; they differ in **who
 demodulates the air interface**.
 
-| | **`--grgsm`** (default) | **`--dsp`** |
+| | **`--grgsm`** | **`--dsp`** (default since 2026-10-01) |
 |---|---|---|
 | Layer 1 | gr-gsm inside QEMU + `grgsm_exe` bridge | real TI mask-ROM C54x, **outside** QEMU |
 | QEMU's job | ARM7 + gr-gsm layer 1 | ARM7 only (`CALYPSO_DSP_EXTERN=1`) |
@@ -82,9 +82,9 @@ demodulates the air interface**.
 | Use it for | getting work done | studying the real DSP |
 
 ```bash
-./start-direct.sh             # gr-gsm layer 1 (default)
-./start-direct.sh --grgsm     # the same, explicitly
-./start-direct.sh --dsp       # real C54x mask ROM
+./start-direct.sh             # real C54x mask ROM (default)
+./start-direct.sh --dsp       # the same, explicitly
+./start-direct.sh --grgsm     # gr-gsm layer 1 (the former default)
 ```
 
 ### 2.1 Three trees, one QEMU

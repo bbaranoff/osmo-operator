@@ -19,7 +19,7 @@ Keywords=gsm;osmocom;banc;lancer;
 # Les noms des groupes doivent correspondre EXACTEMENT aux jetons de `Actions=`,
 # a la casse pres inclus : une entree qui ne correspond a rien est ignoree en
 # silence, et le clic droit affiche simplement une action de moins.
-Actions=Service;Dashboard;Console;Vty;Dsp;Stop;
+Actions=Service;Dashboard;Console;Vty;Grgsm;Stop;
 
 # « Comme un service » : systemctl, pas de terminal, et le banc survit a la
 # fermeture de la session. C est launch.sh --service qui parle a systemd -
@@ -50,10 +50,12 @@ Name[fr]=Console du mobile (telnet 4247)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --vty
 
-[Desktop Action Dsp]
-Name=Lancer en mode DSP (C54x)
-Name[fr]=Lancer en mode DSP (C54x)
-Exec=/opt/GSM/osmo-operator/launch.sh --dsp
+# [2026-10-01] Le DSP (C54x) est le defaut de start-direct.sh : un clic simple
+# le lance. L action du clic droit est donc l AUTRE chaine, gr-gsm.
+[Desktop Action Grgsm]
+Name=Lancer en mode gr-gsm (sans DSP)
+Name[fr]=Lancer en mode gr-gsm (sans DSP)
+Exec=/opt/GSM/osmo-operator/launch.sh --grgsm
 
 [Desktop Action Stop]
 Name=Arreter le banc

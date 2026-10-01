@@ -163,15 +163,14 @@ def spawn(argv):
                             stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def _terminal_argv(cmd):
-    """argv d un emulateur de terminal executant `cmd` (chaine shell)."""
-    for term, opt in (("gnome-terminal", "--"), ("xfce4-terminal", "-e"),
-                      ("konsole", "-e"), ("x-terminal-emulator", "-e"), ("xterm", "-e")):
-        if shutil.which(term):
-            if term == "gnome-terminal":
-                return [term, "--", "bash", "-lc", cmd]
-            return [term, opt, "bash -lc " + shlex.quote(cmd)]
-    return ["xterm", "-e", "bash -lc " + shlex.quote(cmd)]
+GTK_RUN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-gtk-run.py")
+
+
+def _terminal_argv(cmd, titre="Banc GSM"):
+    """argv qui ouvre `cmd` (chaine shell) dans un terminal VTE pose DANS une
+    fenetre GTK du banc (osmo-gtk-run.py --tty). [2026-10-01] Plus
+    d emulateur de terminal : aucune entree de la barre n en ouvre."""
+    return [sys.executable, GTK_RUN, "--tty", "--title", titre, "--", "bash", "-lc", cmd]
 
 
 def _root_prefix():
@@ -198,6 +197,7 @@ class Action:
         self.log_cmd = log_cmd    # commande shell en fond, sortie dans un journal (pas de terminal)
         self.root = root          # log_cmd : en root (pkexec)
         self.slug = slug          # nom du journal
+        self.nom = slug or ""     # le libelle du bouton (titre de la fenetre tty)
 
     def launch(self, mode):
         """mode: 'frame' (cale sur l encart) | 'full' (plein ecran) | 'top'."""
@@ -207,7 +207,7 @@ class Action:
             return
         before = _wmctrl_ids()
         if self.term_cmd is not None:
-            spawn(_terminal_argv(self.term_cmd))
+            spawn(_terminal_argv(self.term_cmd, self.nom or "Banc GSM"))
         elif mode == "full" and self.fs_argv:
             spawn(self.fs_argv)
         else:
@@ -272,8 +272,10 @@ def catalogue():
             ("run multi",      Action(log_cmd=run_multi, root=True, slug="multi")),
             ("run deka",       Action(log_cmd=run_deka, root=True, slug="deka")),
             ("Dashboard",      Action(argv=[browser, f"http://127.0.0.1:{dash}"])),
-            ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || {{ echo 'pas de session tmux'; read -n1 -rsp 'touche...'; }}")),
-            (f"VTY {vty}",     Action(term_cmd=f"telnet 127.0.0.1 {vty} || {{ echo; echo 'VTY injoignable'; read -n1 -rsp 'touche...'; }}")),
+            # tmux, VTY, oFono, pmOS : interactifs, donc un terminal - VTE, dans
+            # une fenetre GTK du banc, qui reste ouverte a la fin (plus de read).
+            ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || echo 'pas de session tmux'")),
+            (f"VTY {vty}",     Action(term_cmd=f"telnet 127.0.0.1 {vty} || {{ echo; echo 'VTY injoignable'; }}")),
         ]),
         # Doom et Quake ne sont poses que par addition.sh --extras (pas dans
         # l ISO) : une entree n apparait que si son binaire est la.
@@ -295,7 +297,7 @@ def catalogue():
             ("oFono",    Action(term_cmd="/usr/local/bin/osmo-ofono")),
             # Le telephone du banc : une VM postmarketOS/Phosh, avec son
             # ModemManager branche sur le modem du banc (tools/osmo-pmos.sh).
-            ("pmOS",     Action(term_cmd="/usr/local/bin/osmo-pmos up; echo; read -n1 -rsp 'touche...'")),
+            ("pmOS",     Action(term_cmd="/usr/local/bin/osmo-pmos up")),
         ]),
         ("Outils", [
             ("Wireshark", Action(argv=["/usr/local/bin/osmo-wireshark-root"])),
@@ -553,6 +555,7 @@ class Launcher(Gtk.Window):
         wrap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         wrap.get_style_context().add_class("osmo-app")
         b = Gtk.Button(label=name)
+        action.nom = name
         b.connect("clicked", lambda *_a: action.launch("frame"))
         wrap.pack_start(b, False, False, 0)
         if action.log_cmd is not None:
