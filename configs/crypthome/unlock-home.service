@@ -3,8 +3,11 @@ Description=Dechiffrement optionnel de /home (second disque, LUKS)
 Documentation=file:/etc/default/crypthome
 ConditionPathExists=/etc/default/crypthome
 # APRES les systemes de fichiers locaux et udev (le lien /dev/disk/by-uuid
-# doit exister), et APRES plymouth, qui porte l'agent de saisie.
+# doit exister), APRES plymouth, qui porte l'agent de saisie, et APRES la mise
+# en place du clavier : la disposition annoncee dans l'invite ([clavier fr])
+# doit etre celle qui est chargee quand on tape la phrase.
 After=local-fs.target systemd-udev-settle.service plymouth-start.service
+After=keyboard-setup.service console-setup.service
 Wants=systemd-udev-settle.service
 # AVANT tout ce qui ouvre une session : GDM ne doit pas demarrer sur un /home
 # vide alors que l'operateur vient de repondre "oui".

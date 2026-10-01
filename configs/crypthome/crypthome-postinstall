@@ -203,7 +203,7 @@ systemctl enable unlock-home.service >/dev/null 2>&1 || true
     /usr/local/sbin/refresh-owner-apps >/dev/null 2>&1 || true
 
 log "$MOUNT chiffre (LUKS $UUID, mapping $MAPPER), proprietaire ${OWNER:-<aucun>}."
-log "  Au demarrage : « Phrase de passe pour $MOUNT (Entree = root sans $MOUNT) »"
+log "  Au demarrage : « Phrase de passe pour $MOUNT [clavier xx] (Entree = root sans $MOUNT) »"
 log "  phrase tapee : session ${OWNER:-du compte}, persistante sur $MOUNT chiffre ;"
 log "  Entree a vide, ou pas de reponse : session root ephemere (ecritures dans /tmp),"
 log "  sans $MOUNT - le demarrage ne bloque jamais."

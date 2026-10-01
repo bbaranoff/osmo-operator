@@ -252,14 +252,37 @@ lire_masquee() {
     return 0
 }
 
+# ── LE CLAVIER, DIT DANS L INVITE ───────────────────────────────────────────
+# Une phrase refusee trois fois, c est le plus souvent un clavier qui n est
+# pas celui qu on croit : une image construite en « fr » tapee comme un QWERTY,
+# ou l inverse. La console a ce moment-la a la disposition de
+# /etc/default/keyboard (ecrite par build-iso, etape 10-clavier, puis par
+# Calamares a l installation) - on la lit et on l affiche entre crochets, pour
+# que l operateur sache AVANT de taper. A defaut : /etc/vconsole.conf, puis
+# « ? » plutot qu une invite muette.
+clavier_console() {
+    local _l _v
+    _l="$(awk -F'"' '/^XKBLAYOUT=/{print $2}' /etc/default/keyboard 2>/dev/null)"
+    _v="$(awk -F'"' '/^XKBVARIANT=/{print $2}' /etc/default/keyboard 2>/dev/null)"
+    if [ -z "$_l" ]; then
+        _l="$(awk -F= '/^KEYMAP=/{print $2}' /etc/vconsole.conf 2>/dev/null | tr -d '"')"
+        _v=""
+    fi
+    [ -n "$_l" ] || { echo "?"; return 0; }
+    _l="${_l%%,*}"; _v="${_v%%,*}"
+    [ -n "$_v" ] && _l="$_l-$_v"
+    echo "$_l"
+}
+CLAVIER="$(clavier_console)"
+
 ouvert=0
 essai=0
 while [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
     if [ "$essai" -eq 1 ]; then
-        invite="Phrase de passe pour $MOUNT (Entree = root sans $MOUNT) :"
+        invite="Phrase de passe pour $MOUNT [clavier $CLAVIER] (Entree = root sans $MOUNT) :"
     else
-        invite="Phrase refusee - $MOUNT ($essai/$TRIES, Entree = root sans $MOUNT) :"
+        invite="Phrase refusee - $MOUNT ($essai/$TRIES) [clavier $CLAVIER] (Entree = root sans $MOUNT) :"
     fi
     if [ "$BOOT" = 1 ]; then
         passe="$(systemd-ask-password --timeout="$TIMEOUT" \

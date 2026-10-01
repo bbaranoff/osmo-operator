@@ -170,7 +170,7 @@ done
 
 echo -e "  ${GREEN}✓${NC} outils poses : ${CYAN}unlock-home${NC}, ${CYAN}lock-home${NC}, ${CYAN}crypthome-postinstall${NC} (Calamares), ${CYAN}init-crypthome.sh${NC} (second disque)"
 echo -e "  ${GREEN}✓${NC} a l installation : cocher ${CYAN}« chiffrer »${NC} chiffre ${CYAN}/home${NC} seul, la racine reste lisible"
-echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« Phrase de passe pour /home (Entree = root sans /home) »${NC} - le boot aboutit quelle que soit la reponse"
+echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« Phrase de passe pour /home [clavier xx] (Entree = root sans /home) »${NC} - le boot aboutit quelle que soit la reponse"
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
