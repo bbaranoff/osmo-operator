@@ -46,6 +46,32 @@ else
     fi
 fi
 
+# ── tests : /opt/GSM/tests depuis GitHub (bbaranoff), AVEC son .git ───────────
+# Meme logique que osmo-operator : clone a cote puis bascule, pour qu un reseau
+# absent laisse l arbre existant de l image en place (jamais une ISO sans tests
+# si l image en avait deja).
+TESTS_BRANCH="${OSMO_TESTS_BRANCH:-main}"
+TESTS_REPO="${OSMO_TESTS_REPO:-https://github.com/bbaranoff/tests}"
+TESTS_TREE="$ROOTFS/opt/GSM/tests"
+TESTS_TMP="$WORK/tests-clone"
+echo -e "${GREEN}[5a/9] Clone de tests (branche ${TESTS_BRANCH})...${NC}"
+rm -rf "$TESTS_TMP"
+if [ "$OSMO_ISO_INHERITED" = "1" ] && [ -d "$TESTS_TREE/.git" ]; then
+    echo -e "  ${GREEN}✓${NC} tests : arbre du rootfs herite conserve"
+elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$TESTS_BRANCH" "$TESTS_REPO" "$TESTS_TMP" >/dev/null 2>&1; then
+    rm -rf "$TESTS_TREE"
+    mkdir -p "$ROOTFS/opt/GSM"
+    mv "$TESTS_TMP" "$TESTS_TREE"
+    echo -e "  ${GREEN}✓${NC} tests clone (${TESTS_BRANCH}, .git conserve) - $(git -C "$TESTS_TREE" log -1 --format='%h %s')"
+else
+    rm -rf "$TESTS_TMP"
+    if [ -d "$TESTS_TREE" ]; then
+        echo -e "  ${YELLOW}⚠${NC} tests : clone impossible (reseau ?) - arbre de l'image conserve" >&2
+    else
+        echo -e "  ${YELLOW}⚠${NC} tests : clone impossible ET absent de l'image" >&2
+    fi
+fi
+
 # ── Feed HLR : aligner N_MS sur le nombre de MS embarques ────────────────────
 # run_modules/21-abonnes-hlr.sh retombe sur ": "${N_MS:=1}"" : sans ce fichier
 # un SEUL abonne etait provisionne alors que l'ISO en declare ISO_N_MS, et les
