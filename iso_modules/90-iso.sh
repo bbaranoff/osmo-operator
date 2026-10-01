@@ -89,6 +89,9 @@ fi
 # calamares.desktop (NoDisplay), live-boot (toram), os-release ; les fichiers
 # supprimes (docs, locales) ne comptent pas ; ni les libs de la cloture ldd de
 # l etape 8b, qui remplacent CELLES D APT a dessein ($WORK/closure.list).
+# [2026-10-01] Et usr/bin/screenfetch : 86-finitions.sh y neutralise au sed
+# l easter-egg qui melange les lignes du logo (cinq valeurs sur mille). Le
+# fichier differe donc de son paquet A DESSEIN, sur toutes les images.
 #
 # Et les listes sont desormais HORODATEES. Le critere qui tranche - « les
 # memes fichiers a chaque build » (une etape du build les reecrit) contre « un
@@ -107,7 +110,7 @@ _vfy_paquets() {   # $1 = etiquette (rootfs|squashfs), $2 = racine a controler
     [ -s "$_skip" ] || _skip=/dev/null
     _vfy_out="/var/tmp/osmo-iso-verify-${_vfy_stamp}-${_k}.failed"
     ( cd "$_r" && cat var/lib/dpkg/info/*.md5sums 2>/dev/null \
-        | grep -vE '^[0-9a-f]{32}  (opt/|root/|usr/local/|mongodb|usr/lib/systemd/system/osmo-|usr/share/applications/calamares\.desktop$|lib/live/boot/|usr/lib/os-release$)' \
+        | grep -vE '^[0-9a-f]{32}  (opt/|root/|usr/local/|mongodb|usr/lib/systemd/system/osmo-|usr/share/applications/calamares\.desktop$|lib/live/boot/|usr/lib/os-release$|usr/bin/screenfetch$)' \
         | awk -v skip="$_skip" 'BEGIN{while((getline l < skip)>0) s[l]=1} !(substr($0,35) in s)' \
         | md5sum -c --quiet 2>/dev/null | grep -v 'open or read' \
         | sed 's/: FAILED$//' ) > "$_vfy_out" || true

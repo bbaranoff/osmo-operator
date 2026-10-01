@@ -691,6 +691,31 @@ elif [ "${ISO_DESKTOP:-0}" = "1" ]; then
     echo -e "  ${YELLOW}!${NC} $_CAL_SRC absent - pas d installeur dans cette image"
 fi
 
+# ── SANS --desktop : LES RACCOURCIS ET LEURS ICONES QUAND MEME ──────────────
+# [2026-10-01] Le controle 4G de 88-lte-pmos.sh exige osmo-lte.desktop sur
+# TOUTE image operateur, et l ISO de base (osmo-operator.iso, sans GNOME) ne le
+# posait pas : le bloc ci-dessus est conditionne par --desktop. En CI, la passe
+# --all tombait donc sur « ✗ 4G osmo-lte.service + osmo-lte.desktop » des la
+# deuxieme image. On pose ici, hors bureau, ce que l install native
+# (install_modules/80-bureau.sh) pose de toute facon : les .desktop du depot et
+# leurs SVG. Quelques Ko, et un bureau installe apres coup (apt install
+# ubuntu-desktop) trouve ses entrees de menu toutes pretes.
+if [ "${ISO_DESKTOP:-0}" != "1" ]; then
+    install -d "$ROOTFS/usr/share/applications" \
+              "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
+              "$ROOTFS/usr/share/osmo-operator/icons"
+    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte osmo-dino osmo-info; do
+        [ -f "$DIR/data/$_ic.svg" ] || continue
+        install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
+        install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
+    done
+    for _d in "$DIR"/data/desktop/*.desktop; do
+        [ -f "$_d" ] || continue
+        install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
+    done
+    echo -e "  ${GREEN}✓${NC} raccourcis du depot (data/desktop/) + icones poses, sans bureau"
+fi
+
 # ── LE LANCEUR GTK "UPDATE" -> update.sh DU DEPOT ───────────────────────────
 # Independant de Calamares : c'est une icone de bureau qui rejoue update.sh, le
 # fichier SUIVI dans le depot osmo-operator (/opt/GSM/osmo-operator/update.sh).

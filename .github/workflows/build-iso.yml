@@ -19,7 +19,9 @@ name: Build ISO
 
 on:
   push:
-    tags: ["v*.*.*", "iso-*"]
+    # [2026-10-01] "v*" et pas "v*.*.*" : les versions du depot s ecrivent
+    # v0.1-6 (UN point) - l ancien motif ne declenchait jamais sur leur push.
+    tags: ["v*", "iso-*"]
   workflow_dispatch:
     inputs:
       release:
@@ -397,11 +399,11 @@ jobs:
           # le tag - et un release qui ne disait pas quelle version il portait.
           # Un push de tag garde son propre tag ; tout le reste sort sous la
           # version ci-dessous, a changer ici quand elle avance.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-4' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-6' }}
           # [2026-09-25] Le nom et le texte sont ceux des releases publiees a la
           # main (« Osmo-Operator v0.1-3 ») : le texte vit dans
           # .github/release-notes.md, qui se modifie sans toucher au workflow.
-          name: "Osmo-Operator ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-4' }}"
+          name: "Osmo-Operator ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-6' }}"
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           body_path: .github/release-notes.md
