@@ -168,6 +168,11 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
 # c54x_exe versionne) : le pull refusait de fusionner, le `|| echo` avalait
 # l echec et l image se reconstruisait sur du code perime. Ces arbres sont des
 # sources a jour, pas un espace de travail : on les aligne sur origin.
+# gcc-13 pour ninja : build/ de qosmo vient d un snapshot configure avec gcc-13
+# (meson y a memorise -ftrivial-auto-var-init, absent de gcc-11, le `cc` par
+# defaut de l image). Avec un arbre inchange ninja ne recompilait rien et la
+# difference ne se voyait pas ; des sources a jour imposent de recompiler, et
+# gcc-11 echouait des la premiere unite. Un PATH local suffit (update-alternatives ne connait pas gcc-13) ; le defaut reste gcc-11.
 # c54x_exe : CFLAGS sans -march=native, comme dans le Dockerfile de base.
 RUN : "${QEMU_CACHE_BUST:-}" && \
     for d in qosmo c54x_exe grgsm_exe; do \
@@ -175,7 +180,9 @@ RUN : "${QEMU_CACHE_BUST:-}" && \
             && git reset --hard "origin/$(git rev-parse --abbrev-ref HEAD)") \
             || echo "[warn] mise a jour de $d impossible (reseau ?) - on rebatit sur l arbre present"; \
     done && \
-    (cd /opt/GSM/qosmo/build && ninja) && \
+    mkdir -p /tmp/cc13 && ln -sf /usr/bin/gcc-13 /tmp/cc13/cc && ln -sf /usr/bin/gcc-13 /tmp/cc13/gcc \
+    && ln -sf /usr/bin/g++-13 /tmp/cc13/c++ && ln -sf /usr/bin/g++-13 /tmp/cc13/g++ && \
+    (cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja) && rm -rf /tmp/cc13 && \
     make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
         CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" && \
     cp /opt/GSM/c54x_exe/rom/calypso_dsp.*.bin /opt/GSM/ && \
