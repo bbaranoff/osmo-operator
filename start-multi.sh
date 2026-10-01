@@ -249,17 +249,30 @@ etat() {
     fi
 }
 
+# ── ARRETER LE MULTI : CONTENEURS OPERATEURS PUIS HUB ───────────────────────
+# Les conteneurs de la topologie, plus tout osmo-operator-N restant d un
+# lancement precedent (une topologie plus large, un start.sh a la main) : un
+# conteneur oublie garde son ASP sur le hub et ses processus visibles de l hote.
+arreter_multi() {
+    local spec idx mode c
+    for spec in $MULTI_OPS; do
+        IFS=: read -r idx mode _ <<< "$spec"
+        [ "$mode" = "docker" ] || continue
+        docker rm -f "osmo-operator-${idx}" >/dev/null 2>&1 \
+            && echo -e "    ${GREEN}✓${NC} osmo-operator-${idx} arrete"
+    done
+    for c in $(docker ps -aq --filter name='^osmo-operator-[0-9]+$' 2>/dev/null); do
+        docker rm -f "$c" >/dev/null 2>&1 && echo -e "    ${GREEN}✓${NC} conteneur operateur residuel ${c} arrete"
+    done
+    docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
+        && echo -e "    ${GREEN}✓${NC} hub arrete"
+    return 0
+}
+
 case "$ACTION" in
   status) etat; exit 0 ;;
   stop)
-        for spec in $MULTI_OPS; do
-            IFS=: read -r idx mode _ <<< "$spec"
-            [ "$mode" = "docker" ] || continue
-            docker rm -f "osmo-operator-${idx}" >/dev/null 2>&1 \
-                && echo -e "  ${GREEN}✓${NC} osmo-operator-${idx} arrete"
-        done
-        docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
-            && echo -e "  ${GREEN}✓${NC} hub arrete"
+        arreter_multi
         echo -e "  ${CYAN}i${NC} l operateur NATIF n est pas touche - ${BOLD}sudo ${DIR}/start-direct.sh stop${NC} pour lui."
         exit 0 ;;
 esac
@@ -488,7 +501,15 @@ _banc_unit_present() {
 }
 
 tout_arreter() {
-    echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
+    # [2026-10-01] L ORDRE : LE MULTI D ABORD, LE NATIF ENSUITE, PUIS ON RELANCE
+    # LE NATIF ET ENFIN LES CONTENEURS. Les conteneurs n etaient retires que par
+    # start.sh, APRES la relance du natif : celui-ci remontait pendant que
+    # l ancien hub et les anciens operateurs tournaient encore (ASP sur le hub,
+    # gapk-start.sh et demons visibles de l hote, que les sondes du natif
+    # prenaient pour les siens - voir run_modules/25-audio.sh).
+    echo -e "  ${CYAN}→${NC} arret du multi en place (conteneurs operateurs, hub)"
+    arreter_multi
+    echo -e "  ${CYAN}→${NC} arret du banc natif (un clic = un banc neuf)"
     if _banc_unit_present; then
         # Le natif est relance juste apres par lancer_natif_si_absent : ici on
         # se contente d'arreter proprement (ExecStop = start-direct.sh --stop).
@@ -497,6 +518,15 @@ tout_arreter() {
     elif [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
+    fi
+    # Un natif lance HORS de l unite (a la main, par un terminal, par une unite
+    # transitoire) survit a « systemctl stop » : on l arrete par son propre
+    # script s il reste un demon du coeur cote hote.
+    if _est_natif osmo-bsc osmo-msc osmo-stp asterisk && [ -x "$DIR/start-direct.sh" ]; then
+        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
+        _est_natif osmo-bsc osmo-msc osmo-stp \
+            && echo -e "    ${YELLOW}!${NC} des demons natifs tournent encore apres l arret" \
+            || echo -e "    ${GREEN}✓${NC} natif lance hors unite arrete aussi"
     fi
     # Les conteneurs ne sont PAS touches ici : start.sh fait deja
     # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.

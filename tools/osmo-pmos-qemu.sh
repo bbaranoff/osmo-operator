@@ -61,7 +61,7 @@
 #                           du banc (osmo-phonesim-banc.py --connect), que
 #                           osmo-pmos-setup rebranche au prochain demarrage.
 #   osmo-pmos-qemu status   dit si la VM tourne (pid) et si son SSH repond.
-# Et au lancement, si une VM tourne deja, on le dit et on s arrete la.
+# Et au lancement, si une VM tourne deja, on l arrete puis on relance (2026-10-01).
 PMOS_SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 PMOS_SSH="sshpass -p ${OSMO_PMOS_PASS:-147147} ssh -p $PMOS_SSH_PORT -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=4 -o PreferredAuthentications=password ${OSMO_PMOS_USER:-user}@127.0.0.1"
 # [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro (une
@@ -165,11 +165,13 @@ case "${1:-}" in
 esac
 export OSMO_PMOS_RES="${OSMO_PMOS_RES:-720x1440}"
 echo "osmo-pmos-qemu: format ${OSMO_PMOS_RES} ($([ "$OSMO_PMOS_RES" = 1280x800 ] && echo tablette || echo smartphone))"
+# [2026-10-01] UN LANCEMENT = UN TELEPHONE NEUF. Une VM deja en marche faisait
+# refuser le lancement ; on l eteint proprement (pmos_stop : poweroff par SSH,
+# puis SIGTERM/SIGKILL, modem debranche) et on relance. La bascule (toggle,
+# l icone) garde son sens : elle eteint une VM qui tourne, sans relancer.
 if [ -n "$(pmos_qemu_pids)" ]; then
-    pmos_status
-    echo "osmo-pmos-qemu: une seule VM a la fois - « osmo-pmos-qemu stop » pour l arreter, puis relancer"
-    read -r -p "Entree pour fermer " _
-    exit 1
+    echo "osmo-pmos-qemu: une VM tourne deja - on l arrete avant de relancer"
+    pmos_stop || { echo "osmo-pmos-qemu: impossible d arreter la VM en place" >&2; read -r -t 15 -p "Entree pour fermer " _; exit 1; }
 fi
 
 PMB="$(command -v pmbootstrap || echo "$HOME/.local/bin/pmbootstrap")"
@@ -356,15 +358,45 @@ if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
     echo "osmo-pmos-qemu: carte « combine » de la VM -> HP ${OSMO_PMOS_HP:-defaut}, micro ${OSMO_PMOS_MIC:-defaut}"
 fi
+# [2026-10-01] LE QEMU DE L HOTE QUAND IL SAIT FAIRE DE L OPENGL. Celui du
+# chroot est lie a musl et a SON Mesa : sur une NVIDIA (pilote proprietaire)
+# il n a aucun pilote - « failed to load driver: nvidia-drm », « pci id ...
+# driver (null) » - et virgl tourne en llvmpipe ; sans GL, c est Phoc dans
+# la VM qui dessine en kms_swrast. Dans les deux cas l ecran est laid et lent.
+# Le QEMU de Debian/Ubuntu passe par libglvnd, donc par le pilote EGL de la
+# vraie carte : virgl s engage pour de bon (« features: +virgl » dans la VM).
+# pmbootstrap le sait deja (--host-qemu) ; il faut juste les modules GL du
+# paquet (qemu-system-gui + qemu-system-modules-opengl, poses par
+# osmo-extras-install et l ISO). OSMO_PMOS_HOST_QEMU=0 garde celui du chroot,
+# =1 force celui de l hote ; s il meurt aussitot, on repasse au chroot.
+QMOD=/usr/lib/x86_64-linux-gnu/qemu
+_host_qemu_gl() {
+    command -v qemu-system-x86_64 >/dev/null 2>&1 \
+        && [ -f "$QMOD/hw-display-virtio-vga-gl.so" ] && [ -f "$QMOD/ui-opengl.so" ] \
+        && [ -f "$QMOD/ui-${OSMO_PMOS_DISPLAY:-sdl}.so" ]
+}
+case "${OSMO_PMOS_HOST_QEMU:-}" in
+    0) ;;
+    1) export OSMO_PMOS_HOST_QEMU=1 ;;
+    *) _host_qemu_gl && export OSMO_PMOS_HOST_QEMU=1 \
+           || echo "osmo-pmos-qemu: QEMU de l hote sans modules OpenGL (qemu-system-gui, qemu-system-modules-opengl) - celui du chroot, rendu logiciel" ;;
+esac
 _lance() {
+    local hq=(); [ "${OSMO_PMOS_HOST_QEMU:-0}" = 1 ] && hq=(--host-qemu)
+    [ "${#hq[@]}" -gt 0 ] && echo "osmo-pmos-qemu: QEMU de l hote ($(command -v qemu-system-x86_64)), OpenGL par le pilote de la carte"
     "$PMB" "${PMB_OPTS[@]}" qemu \
         --memory "${OSMO_PMOS_MEM:-4096}" \
         --image-size "$DISK" \
         --display "${OSMO_PMOS_DISPLAY:-sdl}" \
+        "${hq[@]}" \
         "$@"
 }
 _mort_tot() { [ "$1" -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 25 ]; }
 t0=$(date +%s); _lance "$@"; rc=$?
+if _mort_tot "$rc" && [ "${OSMO_PMOS_HOST_QEMU:-0}" = 1 ]; then
+    echo "osmo-pmos-qemu: le QEMU de l hote est mort aussitot ($rc) - relance avec celui du chroot (OSMO_PMOS_HOST_QEMU=0)"
+    export OSMO_PMOS_HOST_QEMU=0; t0=$(date +%s); _lance "$@"; rc=$?
+fi
 if _mort_tot "$rc" && [ "${OSMO_PMOS_GL:-}" != 0 ]; then
     echo "osmo-pmos-qemu: QEMU est mort aussitot ($rc) - relance SANS OpenGL (OSMO_PMOS_GL=0)"
     export OSMO_PMOS_GL=0; t0=$(date +%s); _lance "$@"; rc=$?

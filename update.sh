@@ -664,6 +664,15 @@ osmo_unites_user_session() {
 }
 osmo_unites_user_session
 
+# [2026-10-01] /run/user/0 doit survivre aux sessions root : le banc y ecrit ses
+# journaux (osmo-nitb/logs) et Pulse son socket. Sans linger, la fin d un ssh
+# root demontait tout sous le banc en marche (meme retouche que l ISO, 84-comptes).
+if [ "$(id -u)" -eq 0 ] && [ ! -e /var/lib/systemd/linger/root ]; then
+    loginctl enable-linger root 2>/dev/null \
+        || { mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/root; }
+    echo "[OK] linger root : /run/user/0 permanent (journaux du banc)"
+fi
+
 # ── LE 600 QU ON ENTEND MAL : LE SUPERVISEUR GAPK ────────────────────────────
 # [2026-09-09] scripts/gapk-start.sh (mode auto) lancait, a chaque appel, un
 # osmo-gapk qui encodait le micro (gsm_in) et l ENVOYAIT au pair de la premiere
@@ -686,6 +695,14 @@ osmo_poser_correctif_audio() {
     # Un osmo-gapk en cours = l ancien TX (le mobile n en lance jamais) : on l arrete.
     pkill -x osmo-gapk 2>/dev/null && echo "[OK] osmo-gapk en doublon arrete"
     rm -f /var/run/gapk-tx.pid /var/run/gapk-rx.pid
+    # [2026-10-01] qosmo 25-audio comptait les gapk-start.sh des CONTENEURS du
+    # multi-operateur : « already running », veilleur natif jamais lance, voyant
+    # GAPK rouge. Meme retouche que l ISO (iso_modules/52-qemu.sh).
+    local qa=/opt/GSM/qosmo/run_modules/25-audio.sh
+    if [ -f "$qa" ] && grep -q 'pgrep -f "gapk-start.sh"' "$qa"; then
+        sed -i 's|pgrep -f "gapk-start.sh"|pgrep --ns $$ --nslist mnt -f "[g]apk-start\\.sh auto"|' "$qa" \
+            && echo "[OK] qosmo 25-audio : veilleur gapk compte sur l hote seul"
+    fi
     # Le superviseur ne se relance que s il tourne deja : hors banc, rien a faire.
     if tmux has-session -t gapk 2>/dev/null; then
         local log_dir; log_dir="$(tmux list-panes -t gapk -F '#{pane_start_command}' 2>/dev/null \

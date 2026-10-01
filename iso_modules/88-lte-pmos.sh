@@ -483,6 +483,7 @@ if [ -d "$ROOTFS/home/osmocom" ]; then
 fi
 _chk "pmOS lanceurs en root (--as-root dans osmo-pmos-qemu)" grep -q 'as-root' /opt/user_interface/pmos/bin/osmo-pmos-qemu.sh
 _chk "pmOS kpartx + losetup + git (pmbootstrap les exige)"   bash -c 'command -v kpartx && command -v losetup && command -v git'
+_chk "pmOS QEMU de l hote avec OpenGL (virgl sur NVIDIA : qemu-system-gui + modules-opengl)" bash -c 'command -v qemu-system-x86_64 && test -f /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-vga-gl.so && test -f /usr/lib/x86_64-linux-gnu/qemu/ui-sdl.so'
 if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ]; then
     _chk "pmOS pmaports au commit du noyau (pas de clone au premier clic)" bash -c 'test -f /opt/user_interface/pmos/pmaports/device/main/linux-postmarketos-stable/config-stable.x86_64'
 fi

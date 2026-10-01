@@ -609,6 +609,13 @@ elif [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ]; then
     printf '  %s!%s banc DSP absent (%s) - couche 1 gr-gsm a la place\n' "${C_KO:-}" "${C_Z:-}" "$BANC_DSP" >&2
 fi
 if [ "$DSP_BANC" = 1 ]; then
+    # [2026-10-01] En DSP le pont est celui du banc (pont_dsp.py, lance par
+    # c54x_exe/run.sh). Un CALYPSO_BRIDGE=pont herite de l appelant ajoutait
+    # pont.py, le pont gr-gsm, qui prenait la place : MS#1 sans cellule.
+    if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
+        printf '  %s!%s CALYPSO_BRIDGE=pont ignore : en DSP le pont est pont_dsp.py (banc DSP)\n' "${C_KO:-}" "${C_Z:-}" >&2
+        CALYPSO_BRIDGE=none
+    fi
     : "${CALYPSO_BRIDGE:=none}"
 fi
 : "${CALYPSO_BRIDGE:=pont}"
@@ -659,7 +666,14 @@ audio_start() {
 }
 
 banc_dsp() {
-    MODE=dsp bash "$BANC_DSP" "$@"
+    # [2026-10-01] PONT_PY NE TRAVERSE PAS. L image docker pose
+    # ENV PONT_PY=.../pont/pont.py (Dockerfile.run) pour le pont gr-gsm ; le
+    # banc DSP lit la MEME variable pour son pont et prenait donc pont.py au
+    # lieu de pont_dsp.py : « pont.py ne s est pas annonce », MS#1 sans cellule
+    # dans tous les conteneurs du multi (vu sur la 1.91). DSP_PONT_PY pour en
+    # imposer un autre au banc DSP.
+    env -u PONT_PY ${DSP_PONT_PY:+PONT_PY="$DSP_PONT_PY"} \
+        ${DSP_MOBILE_CFG:+MOBILE_CFG="$DSP_MOBILE_CFG"} MODE=dsp bash "$BANC_DSP" "$@"
 }
 banc_dsp_arreter() {
     [ -x "$BANC_DSP" ] || return 0
@@ -1254,6 +1268,42 @@ say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 #  SC_MOBILE_CFG / le fichier lui-meme.)
 export CALYPSO_SIM_CFG="$MS1_CFG"
 
+# ── LE MOBILE DU BANC DSP PORTE L IDENTITE DE CE NOEUD ─────────────────────
+# [2026-10-01] En DSP, le MS#1 qui tourne est celui de c54x_exe/run.sh, et il
+# ouvrait toujours c54x_exe/mobile_pont.cfg : un fichier FIXE, fige sur
+# l operateur 1 (IMSI 001010001000001, rplmn 001 01, stick 514). Le natif
+# tombait juste par coincidence ; dans les conteneurs du multi-operateur, le
+# BTS de l operateur 2 emet sur 516, le mobile restait colle a 514 avec
+# l identite de l operateur 1 : « FBSB RESP result=255 », « no cell
+# available », MS#1 jamais attache (vu sur la 1.91). On derive donc une copie
+# du gabarit DSP (ses reglages propres - VTY 4347, tch-data, sockets - sont
+# gardes) en y reportant les quatre lignes d identite du MS#1 genere ci-dessus,
+# et on la donne au banc DSP - a LUI SEUL : MOBILE_CFG exporte ici, run.sh de
+# qosmo le prenait pour la destination de sa propre config mobile et ecrasait
+# la copie DSP (VTY 4247 au lieu de 4347). DSP_MOBILE_CFG, puis MOBILE_CFG pour
+# le seul banc DSP (banc_dsp et l exec final). MOBILE_CFG impose garde la main.
+DSP_MOBILE_CFG="${MOBILE_CFG:-}"
+if [ "${DSP_BANC:-0}" = 1 ] && [ -z "${MOBILE_CFG:-}" ]; then
+    _dsp_tpl="$(dirname "$BANC_DSP")/mobile_pont.cfg"
+    _dsp_cfg="$BB_DIR/mobile_pont.cfg"
+    if [ -r "$_dsp_tpl" ] && [ -r "$MS1_CFG" ]; then
+        _id() { sed -n "s/^[[:space:]]*$1[[:space:]]\{1,\}//p" "$MS1_CFG" | head -1; }
+        _imsi="$(_id imsi)"; _ki="$(_id 'ki comp128')"; _rplmn="$(_id rplmn)"; _stick="$(_id stick)"
+        awk -v imsi="$_imsi" -v ki="$_ki" -v rplmn="$_rplmn" -v stick="$_stick" '
+            function ind(l) { match(l, /^[[:space:]]*/); return substr(l, 1, RLENGTH) }
+            imsi  != "" && /^[[:space:]]*imsi[[:space:]]/        { print ind($0) "imsi " imsi; next }
+            ki    != "" && /^[[:space:]]*ki comp128[[:space:]]/  { print ind($0) "ki comp128 " ki; next }
+            rplmn != "" && /^[[:space:]]*rplmn[[:space:]]/       { print ind($0) "rplmn " rplmn; next }
+            stick != "" && /^[[:space:]]*stick[[:space:]]/       { print ind($0) "stick " stick; next }
+            { print }' "$_dsp_tpl" > "$_dsp_cfg.tmp" && mv -f "$_dsp_cfg.tmp" "$_dsp_cfg"
+        DSP_MOBILE_CFG="$_dsp_cfg"
+        printf '  %sMS#1 DSP%s   %s  (imsi %s, rplmn %s, stick %s)\n' \
+            "${C_DIM:-}" "${C_Z:-}" "$_dsp_cfg" "${_imsi:-?}" "${_rplmn:-?}" "${_stick:-?}"
+        unset -f _id; unset _imsi _ki _rplmn _stick
+    fi
+    unset _dsp_tpl _dsp_cfg
+fi
+
 # --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison est le transceiver --
 # Le pont (pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
 # (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 vers le
@@ -1480,7 +1530,7 @@ printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 # (mobile_pont.cfg, VTY 4347). Le resume annoncait le mauvais fichier ET le
 # mauvais port -- on allait se connecter a une VTY qui n'existe pas.
 if [ "$DSP_BANC" = 1 ]; then
-    _ms1_cfg="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
+    _ms1_cfg="${DSP_MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
     _ms1_vty="$(sed -n 's/^ *bind 127.0.0.1 \([0-9]*\).*/\1/p' "$_ms1_cfg" 2>/dev/null | head -1)"
     printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY %s  %s(banc DSP)%s\n' \
         "$C_DIM" "$C_Z" "$_ms1_cfg" "$(ms_imsi 1)" "$MS_ARFCN1" "${_ms1_vty:-?}" "$C_DIM" "$C_Z"
@@ -2597,7 +2647,10 @@ if [ "$DSP_BANC" = 1 ]; then
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
     # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
     # deja exporte juste au-dessus, il ecrase celui du profil.
-    exec bash "$BANC_DSP"
+    # [2026-10-01] Meme regle que banc_dsp() : ni le PONT_PY de l image docker
+    # (pont gr-gsm), ni un MOBILE_CFG autre que la copie DSP de ce noeud.
+    exec env -u PONT_PY ${DSP_PONT_PY:+PONT_PY="$DSP_PONT_PY"} \
+        ${DSP_MOBILE_CFG:+MOBILE_CFG="$DSP_MOBILE_CFG"} bash "$BANC_DSP"
 fi
 
 [ $DRY -eq 1 ] || audio_start

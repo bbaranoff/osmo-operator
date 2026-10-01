@@ -460,6 +460,21 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     fi
 fi
 
+# ── qosmo 25-audio : le veilleur gapk de l HOTE, pas celui d un conteneur ───
+# [2026-10-01] mod_audio_status cherchait « pgrep -f gapk-start.sh » sur toute
+# la machine. Le multi-operateur arrete puis relance le banc natif pendant que
+# ses conteneurs font tourner LEUR gapk-start.sh auto - visible de l hote. Le
+# module concluait « already running », ne lancait rien, et le voyant GAPK de
+# la banniere restait rouge sur un banc sans voix (vu sur la 1.91). On ne
+# compte plus que les processus du meme espace de montage que run.sh, et le
+# motif [g]apk ne se reconnait pas dans la ligne de commande de pgrep.
+_qa="$QSRC/run_modules/25-audio.sh"
+if [ -f "$_qa" ] && grep -q 'pgrep -f "gapk-start.sh"' "$_qa"; then
+    sed -i 's|pgrep -f "gapk-start.sh"|pgrep --ns $$ --nslist mnt -f "[g]apk-start\\.sh auto"|' "$_qa"
+    echo -e "  ${GREEN}✓${NC} qosmo 25-audio : veilleur gapk compte sur l hote seul (plus ceux des conteneurs)"
+fi
+unset _qa
+
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 

@@ -1919,6 +1919,15 @@ start_bridge_mode() {
         #
         # Avec --node-per-op, le conteneur i devient le noeud (base + i - 1),
         # porte l'operateur 1 de ce noeud, et son point code suit : 1.<n>1.<role>.
+        # [2026-10-01] OSMO_NO_STP_IP=1 : l identite SS7 du conteneur vient
+        # d etre calculee ICI. Sur une machine installee par l ISO, l hote porte
+        # OSMO_ROLE=operator (/etc/osmo-role) : generate_configs.sh rejouait
+        # alors set-node-id.sh --native sur la config du CONTENEUR, et prenait
+        # pour source de l ASP la route de l HOTE vers le hub - 172.20.0.1,
+        # la passerelle du bridge. L ASP de l operateur 2 ne pouvait pas se lier
+        # (as-inter AS_DOWN), Op2 et Op3 ne joignaient personne (vu sur la 1.91).
+        # Le conteneur, lui, rejoue ce rattrapage chez lui, avec SES routes.
+        OSMO_NO_STP_IP=1 \
         RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
             "$container_ip" "$gateway" \
@@ -2509,7 +2518,13 @@ start_bridge_mode() {
             # pas : elle ne traversait pas ce handoff-ci.
             [ "${OSMO_NO_ATTACH:-0}" = "1" ] && _cmd="$_cmd CALYPSO_NO_ATTACH=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
-            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
+            # [2026-10-01] PAS DE CALYPSO_BRIDGE ICI. Impose a « pont », il
+            # lancait pont/pont.py (le pont du montage gr-gsm) dans des conteneurs
+            # dont la couche 1 est le banc DSP (DSP_MODE=1 par defaut) : le
+            # c54x_exe tournait sans son pont_dsp.py, le MS#1 ne voyait aucune
+            # cellule. start-direct.sh choisit lui-meme : none en DSP (le banc
+            # lance pont_dsp.py), pont en gr-gsm.
+            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-direct.sh ${_na} --force"
             printf '%s' "$_cmd"
