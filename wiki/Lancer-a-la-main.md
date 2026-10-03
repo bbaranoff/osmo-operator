@@ -199,6 +199,10 @@ grep -a "CTRL " /tmp/c54x-pont/pont.log | head      # commandes TRXC de la BTS (
 
 puis des lignes `STATS fn=… | DL bursts=N` avec N qui croît (`LAUNCH.md:157-158`).
 
+> **Bruit (optionnel)** : pour dégrader le descendant, lancer `c54x_exe` avec `CALYPSO_BSP_PORT=16702`
+> et `python3 /opt/GSM/qosmo/tools/injecteur_bruit.py --cible dsp --mode ber --ber 0.01` **avant** ce
+> pont (il prend 6702) ; `run.sh` le fait avec `BRUIT_MODE=…` (étape b). Voir [Injecteur-bruit](Injecteur-bruit.md).
+
 ---
 
 ## Étape 6 — vérifier le service

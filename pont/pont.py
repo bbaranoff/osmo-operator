@@ -18,6 +18,16 @@ import sys
 # (le montage DSP l'envoie, cf. trx.py Transmitter.run).
 os.environ.setdefault("PONT_UL_RETARD_MAX", "0")
 
+# [2026-10-03] INJECTEUR DE BRUIT (qosmo/tools/injecteur_bruit.py, cible grgsm).
+# La L1 gr-gsm de QEMU ecoute GSMTAP sur 4730 en dur : pour intercaler
+# l'injecteur, c'est le pont qui vise ailleurs. BRUIT_MODE=ber ou relais (les
+# seuls modes qui aient un sens sur des blocs L2 deja decodes) fait viser
+# BRUIT_PORT_GRGSM (14730), ou l'injecteur ecoute (qosmo/run_modules/38-bruit.sh,
+# c54x_exe/run.sh). Sans BRUIT_MODE, rien ne change. PONT_GSMTAP_PORT pose par
+# l'operateur (ou par c54x_exe/run.sh) gagne.
+if os.environ.get("BRUIT_MODE", "") in ("ber", "relais"):
+    os.environ.setdefault("PONT_GSMTAP_PORT", os.environ.get("BRUIT_PORT_GRGSM", "14730"))
+
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from pont import main
 

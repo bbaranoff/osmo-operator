@@ -15,6 +15,7 @@ d'un vrai terminal, au niveau du modem. Ni SDR, ni téléphone physique.
 | [README](../README.md) | architecture multi-PLMN, SS7, SMS, voix, diagnostic |
 | [Telephone-emule](Telephone-emule.md) | brancher **seulement** le téléphone émulé (qosmo, c54x_exe, grgsm_exe) sur **sa propre** pile Osmocom |
 | [Lancer-a-la-main](Lancer-a-la-main.md) | le téléphone lancé processus par processus, sans script, avec les preuves à chaque étape |
+| [Injecteur-bruit](Injecteur-bruit.md) | dégrader le descendant entre le pont et la couche 1 (bits inversés, rafales, AWGN, I/Q) : `BRUIT_MODE=…`, inactif par défaut |
 | [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | notebook : le Dockerfile rejoué étape par étape en natif, de apt jusqu'à un appel en DSP |
 
 ---
