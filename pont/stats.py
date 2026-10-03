@@ -26,6 +26,12 @@ class Stats:
         self.sacch_ul = 0
         self.a5_dl = 0
         self.a5_ul = 0
+        # [2026-10-03] blocs xCCH montants (SDCCH/SACCH du SDCCH) : bursts de la ROM DSP
+        # (0x3f8a, pont/dsp/uplink.py) ou codes par l'hote (gsm.xcch_encode) ; rom_ko = bursts ROM
+        # presents mais qui ne redecodent pas en ce L2.
+        self.xcch_ul_rom = 0
+        self.xcch_ul_hote = 0
+        self.xcch_ul_rom_ko = 0
         self.by_base = {}
 
     def block(self, tn, base, ok):
@@ -48,10 +54,11 @@ class Reporter(threading.Thread):
             time.sleep(self.period)
             log.info("STATS fn=%u | DL bursts=%d blocs=%d crc=%d dummy=%d hors_voie=%d | UL bursts=%d tard=%d rach=%d"
                      " | TCH dl=%d facch=%d sacch=%d crc=%d ul=%d bursts=%d perdus=%d | FACCH ul=%d SACCH ul=%d"
-                     " | A5 dl=%d ul=%d%s",
+                     " | A5 dl=%d ul=%d | xCCH ul rom=%d hote=%d rom_ko=%d%s",
                      self.clock.fn(), s.dl_bursts, s.dl_blocks, s.dl_crc_fail, s.dl_dummy, s.dl_skipped,
                      s.ul_sent, s.ul_late, s.rach, s.tch_dl, s.tch_facch_dl, s.tch_sacch_dl, s.tch_crc,
                      s.tch_ul, s.tch_ul_bursts, s.tch_ul_dropped, s.facch_ul, s.sacch_ul, s.a5_dl, s.a5_ul,
+                     s.xcch_ul_rom, s.xcch_ul_hote, s.xcch_ul_rom_ko,
                      self.record.summary() if self.record else "")
             ded = self.dedicated.plan()
             if ded:
