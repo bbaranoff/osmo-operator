@@ -13,6 +13,9 @@ d'un vrai terminal, au niveau du modem. Ni SDR, ni téléphone physique.
 | [Build](Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
 | [Environnement](Environnement.md) | qui gagne entre variables, ce qui arrive jusqu'à QEMU |
 | [README](../README.md) | architecture multi-PLMN, SS7, SMS, voix, diagnostic |
+| [Telephone-emule](Telephone-emule.md) | brancher **seulement** le téléphone émulé (qosmo, c54x_exe, grgsm_exe) sur **sa propre** pile Osmocom |
+| [Lancer-a-la-main](Lancer-a-la-main.md) | le téléphone lancé processus par processus, sans script, avec les preuves à chaque étape |
+| [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | notebook : le Dockerfile rejoué étape par étape en natif, de apt jusqu'à un appel en DSP |
 
 ---
 
