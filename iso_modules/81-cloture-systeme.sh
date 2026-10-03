@@ -535,10 +535,10 @@ for fork in qosmo; do
     fi
 done
 if [ -d /opt/GSM/c54x_exe ] && [ ! -x /opt/GSM/c54x_exe/c54x_exe ]; then
-    echo "osmo-qemu-link: c54x_exe non compile - --dsp indisponible (make -C /opt/GSM/c54x_exe)"
+    echo "osmo-qemu-link: c54x_exe non compile - --dsp indisponible (/opt/GSM/c54x_exe/install.sh)"
 fi
 if [ ! -f /opt/GSM/calypso_dsp.PROM0.bin ]; then
-    echo "osmo-qemu-link: ROM DSP absente de /opt/GSM - --dsp indisponible (copie dans /opt/GSM/c54x_exe/rom)"
+    echo "osmo-qemu-link: ROM DSP absente de /opt/GSM - --dsp indisponible (/opt/GSM/c54x_exe/install.sh --only rom)"
 fi
 QLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh"

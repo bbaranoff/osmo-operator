@@ -29,6 +29,7 @@ declare -A INST_DEPS=()      # etapes prerequises
 declare -A INST_REQUIRED=()  # 1 = un echec arrete tout
 declare -A INST_ROOT=()      # 1 = exige les droits root
 declare -A INST_TIMEOUT=()   # secondes, pour les etapes longues
+declare -A INST_GROUP=()     # groupe, designable par --only/--skip (ex. calypso)
 
 INST_REGISTER() {
     local slug="$1" desc="$2"
@@ -38,6 +39,7 @@ INST_REGISTER() {
     INST_REQUIRED[$slug]=1
     INST_ROOT[$slug]=1
     INST_TIMEOUT[$slug]=1800
+    INST_GROUP[$slug]=""
 }
 
 inst_prefix() { printf 'inst_%s' "${1//-/_}"; }

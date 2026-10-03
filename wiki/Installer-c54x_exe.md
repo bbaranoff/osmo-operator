@@ -1,6 +1,11 @@
 # Installer c54x_exe (le DSP Calypso, mask-ROM TI) et le pont DSP
 
 > Version du 2026-10-03. Retour : [Telephone-emule](Telephone-emule.md). Prérequis : [qosmo](Installer-qosmo.md).
+> Le dépôt porte son installeur, `c54x_exe/install.sh` : c'est lui qu'appellent aussi le
+> `Dockerfile` (stage `l1`), `Dockerfile.run`, `start.sh`, l'ISO et `install.sh --telephone`.
+> Les commandes manuelles plus bas sont **ce que fait le script**, étape par étape.
+> Les numéros `Dockerfile:N` renvoient au Dockerfile du commit `4266c8b`, quand il portait
+> encore ces commandes.
 
 `c54x_exe` (`https://github.com/bbaranoff/c54x_exe`) exécute la **ROM masquée d'origine du
 TMS320C54x** des basebands Calypso, comme un processus Linux. En montage DSP, le firmware
@@ -8,7 +13,43 @@ osmocom-bb sous QEMU lui parle par la vraie API RAM partagée, trame par trame
 (`c54x_exe/README.md:1-9`). Il ne contient pas le cœur C54x : il **compile les sources de qosmo**
 (`Makefile:1-7`, `README.md:57-61`).
 
-## Prérequis
+## Avec l'installeur
+
+```bash
+git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe
+cd /opt/GSM/c54x_exe
+./install.sh --check      # qosmo cloné ? libosmocoding vu de pkg-config ? ROM ? — ne modifie RIEN
+sudo ./install.sh         # make, ROM en /opt/GSM et rom/, puis c54x_exe --trames 200
+```
+
+| étape | fait | ligne du Dockerfile | déjà fait si |
+|---|---|---|---|
+| `build` | `make QOSMO=…` (avec `--portable` : `CFLAGS` sans `-march=native`) ; contrôle `ldd` | 733-735 | — (le Makefile recompile à chaque appel, `Makefile:46-52`) |
+| `rom` | recopie une ROM **déjà vérifiée** trouvée sur la machine, sinon `rom/fetch-rom.sh --dest …` (téléchargement, conversion, somme) | 736 | les 6 ROM + `Registers` présentes et conformes à `rom/SHA256SUMS.3606` dans chaque destination |
+| `verify` | `c54x_exe --rom-dir … --trames 200` : « N sections chargees » puis « bilan sur 200 trames » | — | — |
+
+Options (et variable) : `--qosmo DIR` (`QOSMO`, défaut `$GSM_ROOT/qosmo`), `--rom-dir DIR`
+répétable (`ROM_DIR`, défaut `$GSM_ROOT` **et** `rom/` du dépôt, comme `Dockerfile:736`),
+`--portable` (`PORTABLE=1`, les `CFLAGS` de `Dockerfile:735`), `--dest DIR` (copie le dépôt sans
+`.git` ni binaires dans `DIR` et y construit : **le binaire en service n'est pas réécrit**),
+`--only`, `--skip`, `--reinstall`, `--with-deps`, `-v`. Journaux : `/tmp/c54x_exe-install/<étape>.log`.
+
+Sans root : `ROM_DIR=$HOME/calypso-rom ./install.sh`, puis lancer `c54x_exe --rom-dir $HOME/calypso-rom`
+(le défaut du binaire est `/opt/GSM`, `src/main.c:79`).
+
+Le contrôle `--trames 200` tourne sans `--arm` : API RAM **privée**, ni `/dev/shm`, ni socket, ni
+`/tmp/c54x-pont` (vérifié dans un espace de montage privé) — il ne dérange pas un banc en marche.
+
+Échec typique, explicite :
+
+```
+[FAIL] Compilation de c54x_exe (sources de qosmo) (manque : libosmocoding + libosmocore vus de pkg-config)
+       → export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig  (libosmocore est en /usr/local, Dockerfile:92-94)
+```
+
+## Ce que fait le script, à la main
+
+### Prérequis
 
 - qosmo cloné (défaut `/opt/GSM/qosmo`) — [Installer-qosmo](Installer-qosmo.md).
 - gcc, make, pkg-config, **libosmocore + libosmocoding** visibles de pkg-config (`Makefile:14`).
@@ -21,7 +62,7 @@ osmocom-bb sous QEMU lui parle par la vraie API RAM partagée, trame par trame
 - Pour le pont : python3, `python3-numpy` (`pont/record.py:6`), `libosmocoding.so` et `libosmogsm.so`
   chargées par ctypes (`pont/gsm.py:50,59`) — donc `ldconfig` à jour si libosmocore est en `/usr/local`.
 
-## Compiler
+### Compiler (étape `build`)
 
 ```bash
 git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe
@@ -40,7 +81,7 @@ make QOSMO=/opt/GSM/qosmo \
 `make` recompile **à chaque appel** (une seule commande cc, pas de `.o`) : c'est voulu, les sources
 viennent d'un autre dépôt (`Makefile:42-52`).
 
-## La ROM du DSP
+### La ROM du DSP (étape `rom`)
 
 Pas dans le dépôt. `rom/fetch-rom.sh` télécharge le dump FreeCalypso 3606, le convertit
 (`tools/dsp_txt2bin.py`) et vérifie `rom/SHA256SUMS.3606` (`README.md:113-119`). Le binaire la lit
@@ -60,9 +101,11 @@ ROM DSP 3606 ecrite dans /opt/GSM/c54x_exe/rom
 ```
 
 Relancé, il dit `ROM DSP 3606 deja en place et verifiee`. Options : `--version 3311` (D-Sample),
-`--force`, miroir par `FREECALYPSO_URL=` (`fetch-rom.sh:2-15,30`).
+`--force`, miroir par `FREECALYPSO_URL=` (`fetch-rom.sh:2-15,30`). L'installeur recopie d'abord
+une ROM déjà vérifiée trouvée sur la machine (ce que faisait `cp c54x_exe/rom/*.bin /opt/GSM/` dans
+`Dockerfile.run`) : pas de réseau si elle est là.
 
-## Vérifier le DSP seul
+### Vérifier le DSP seul (étape `verify`)
 
 ```bash
 ./c54x_exe --trames 200    # la ROM seule, sans ARM : boote-t-elle ? (README.md:66)
@@ -126,8 +169,9 @@ Variante tout-en-un pour une pile **systemd** : `./run_real.sh [--secondes N]` (
 | Symptôme | Cause / remède | Source |
 |---|---|---|
 | link échoue sur `gsm0503_*` | pkg-config ne trouve pas libosmocoding (erreur masquée) | `Makefile:14` |
-| `Illegal instruction` au lancement | binaire `-march=native` venu d'une autre machine : recompiler ici | `Dockerfile:726-728`, `iso_modules/52-qemu.sh:101-102` |
-| `c54x_exe n'a pas ouvert /tmp/calypso_dsp.sock` | ROM absente de `--rom-dir` ? lancer `rom/fetch-rom.sh --dest /opt/GSM` ; voir dsp.log | `run.sh:104` |
+| `Illegal instruction` au lancement | binaire `-march=native` venu d'une autre machine : recompiler ici (`./install.sh`), ou `--portable` pour un binaire qui voyage | `Dockerfile:726-728`, `iso_modules/52-qemu.sh` |
+| `c54x_exe n'a pas ouvert /tmp/calypso_dsp.sock` | ROM absente de `--rom-dir` ? `./install.sh --only rom` (ou `rom/fetch-rom.sh --dest /opt/GSM`) ; voir dsp.log | `run.sh:104` |
+| reconstruire sans toucher au binaire d'un banc qui tourne | `./install.sh --dest /tmp/c54x-neuf` puis comparer / remplacer à l'arrêt | `install.sh --dest` |
 | `somme de controle differente` | dump modifié ou mauvaise version | `fetch-rom.sh:55-56` |
 | `QEMU n'a pas rejoint le DSP` | QEMU sans `CALYPSO_DSP_EXTERN=1`, ou DSP pas encore prêt | `run.sh:144-145` |
 | `pont.py ne s'est pas annonce` | `PONT_PY` hérité pointant sur `pont.py` (gr-gsm) : `env -u PONT_PY` | `run.sh:206`, `start-direct.sh` `banc_dsp()` |
@@ -139,8 +183,9 @@ Variante tout-en-un pour une pile **systemd** : `./run_real.sh [--secondes N]` (
 
 ## À CONFIRMER
 
-- `GDB_TELNET_PY` pointe sur `/opt/GSM/qosmo-dsp/tools/gdb-telnet.py` (`run.sh:48`, dépôt disparu) : la
-  console `telnet 0 44444` ne démarre pas sans `GDB_TELNET_PY=/opt/GSM/qosmo/tools/gdb-telnet.py`.
+- (corrigé le 2026-10-03) `GDB_TELNET_PY` pointait sur `/opt/GSM/qosmo-dsp/tools/gdb-telnet.py`
+  (dépôt disparu) : `run.sh:48` prend désormais `$QOSMO/tools/gdb-telnet.py`, la console
+  `telnet 0 44444` démarre avec l'étape 2 (`GDB=0` pour s'en passer).
 - `mobile_pont.cfg` envoie le GSMTAP vers `172.20.0.1` (passerelle docker du banc) : à remplacer par
   `127.0.0.1` hors conteneur.
 - Valeur `INSNS` à retenir (16000 / 60000 / 80000 / 120000 selon la source).

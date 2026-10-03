@@ -1,6 +1,9 @@
 # Installer grgsm_exe — et le montage gr-gsm
 
 > Version du 2026-10-03. Retour : [Telephone-emule](Telephone-emule.md).
+> Le dépôt porte son installeur, `grgsm_exe/install.sh` (appelé aussi par le `Dockerfile`, stage
+> `l1`, `Dockerfile.run`, `start.sh`, l'ISO et `install.sh --telephone`). Les numéros
+> `Dockerfile:N` renvoient au Dockerfile du commit `4266c8b`.
 
 ## D'abord : trois choses portent ce nom
 
@@ -18,10 +21,31 @@ qosmo + firmware + osmocom-bb (déjà faits sur [Installer-qosmo](Installer-qosm
 
 Prérequis : qosmo cloné (sources), gcc. Aucune bibliothèque Osmocom (`Makefile:12` : `-lpthread -lm -lrt`).
 
+Avec l'installeur :
+
 ```bash
 git clone https://github.com/bbaranoff/grgsm_exE /opt/GSM/grgsm_exe
 cd /opt/GSM/grgsm_exe
-make                         # QOSMO=/chemin/vers/qosmo make   (README.md:41-42, Dockerfile:743-747)
+./install.sh --check         # sources qosmo, cc, make — ne modifie RIEN
+./install.sh                 # make -B, puis grgsm_exe --trames 50 « à l'abri »
+```
+
+| étape | fait | ligne du Dockerfile |
+|---|---|---|
+| `build` | `make -B QOSMO=…` — `-B` parce que le binaire est **suivi par git** : au clone il est plus récent que les sources de qosmo et `make` seul concluait « à jour » (`Dockerfile.run:189` faisait `clean all`) | 745-746 |
+| `verify` | `grgsm_exe --trames 50` → « bilan sur 50 trames » | — |
+
+Le contrôle ne dérange pas un banc qui tourne : grgsm_exe prend UDP 4730/4731 en
+`SO_REUSEADDR` et ouvre `/dev/shm/calypso_*` en `O_CREAT` + `ftruncate` (`calypso_l1_grgsm.c`) ;
+en root il tourne donc dans des espaces de montage et réseau **privés** (`unshare`, `/dev/shm`
+neuf) ; sinon, si un banc est visible, l'exécution est sautée et le dit. Options : `--qosmo DIR`
+(`QOSMO`), `--dest DIR` (construire une copie), `--only`, `--skip`, `-v` ; journaux dans
+`/tmp/grgsm_exe-install/`.
+
+À la main (ce que fait le script) :
+
+```bash
+make -B                      # QOSMO=/chemin/vers/qosmo make -B   (README.md:41-42)
 ./grgsm_exe --trames 5000    # README.md:6-10
 ./grgsm_exe --verbeux
 ```

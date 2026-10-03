@@ -910,21 +910,22 @@ force_update_trees() {
     # recompile. Sans la recompilation, le pull ne change RIEN a ce qui tourne ;
     # ninja et make sont incrementaux : ils ne rebatissent que ce qui a bouge.
     # gcc-13 : meme PATH local que Dockerfile.run (build/ configure avec gcc-13).
-    echo -e "  ${GREEN}[*] Recompilation qosmo (ninja) + c54x_exe + grgsm_exe...${NC}"
-    if docker exec "$c" bash -c 'mkdir -p /tmp/cc13 && ln -sf /usr/bin/gcc-13 /tmp/cc13/cc && ln -sf /usr/bin/gcc-13 /tmp/cc13/gcc \
-            && ln -sf /usr/bin/g++-13 /tmp/cc13/c++ && ln -sf /usr/bin/g++-13 /tmp/cc13/g++ \
-            && (cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja) \
-            && make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
-                 CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
-            && cp /opt/GSM/c54x_exe/rom/calypso_dsp.*.bin /opt/GSM/ \
-            && make -C /opt/GSM/grgsm_exe QOSMO=/opt/GSM/qosmo' >/dev/null 2>&1; then
+    # [2026-10-03] Les commandes sont celles des installeurs des depots
+    # (qosmo/install.sh, c54x_exe/install.sh, grgsm_exe/install.sh), avec les
+    # MEMES options que Dockerfile.run : une seule liste par composant.
+    echo -e "  ${GREEN}[*] Recompilation qosmo + c54x_exe + grgsm_exe (leurs install.sh)...${NC}"
+    local _out
+    if _out="$(docker exec "$c" bash -c 'bash /opt/GSM/qosmo/install.sh --only build --cc gcc-13 \
+            && bash /opt/GSM/c54x_exe/install.sh --portable --qosmo /opt/GSM/qosmo --skip verify \
+                   --rom-dir /opt/GSM --rom-dir /opt/GSM/c54x_exe/rom \
+            && bash /opt/GSM/grgsm_exe/install.sh --qosmo /opt/GSM/qosmo --skip verify' 2>&1)"; then
         local f
         for f in qosmo/build/qemu-system-arm c54x_exe/c54x_exe grgsm_exe/grgsm_exe; do
             echo -e "    ${GREEN}${f##*/} relie${NC} ($(docker exec "$c" stat -L -c %y "/opt/GSM/$f" 2>/dev/null | cut -c1-19))"
         done
     else
         echo -e "    ${RED}compilation KO - le run utilisera les binaires de l'image${NC}"
-        docker exec "$c" bash -c 'cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja 2>&1 | tail -15' | sed 's/^/      /'
+        printf '%s\n' "$_out" | tail -20 | sed 's/^/      /'
     fi
 }
 

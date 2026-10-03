@@ -688,19 +688,23 @@ ARG OSMO_DEB_REFRESH=0
 # relocaliser (voir Dockerfile.lite).
 # L ancien RUN « /opt/GSM/qemu/{build,*.py} » et calypso-ipc-device disparaissent
 # avec qosmo-grgsm : plus rien ne les lit.
+# [2026-10-03] LES COMMANDES DE BUILD VIVENT DANS qosmo/install.sh : venv
+# /root/.venv-qemu + pip install tomli, mkdir build && ../configure
+# --target-list=arm-softmmu --enable-l1-grgsm --prefix=/opt/GSM/qemu-install
+# --disable-werror --disable-docs, make -j$(nproc), make install, cp de
+# qemu-system-arm et qosmo dans /usr/local/bin, puis -M help doit lister
+# calypso (couche 1 : grgsm). C est la meme liste que l installation native
+# (install_modules/45-calypso.sh), Dockerfile.run, start.sh et l ISO. Les
+# options ci-dessous sont SES defauts, ecrites pour qu on lise d ici ou
+# atterrit chaque chose : memes chemins qu avant, meme snapshot.
+# L installeur arrive AVEC le clone : il doit etre pousse sur bbaranoff/qosmO
+# avant de construire - le test le dit en clair plutot qu un « No such file ».
 RUN if ! osmo-deb install qosmo 0.git; then \
       git clone https://github.com/bbaranoff/qosmO /opt/GSM/qosmo \
-      && cd /opt/GSM/qosmo \
-      && python3 -m venv /root/.venv-qemu \
-      && . /root/.venv-qemu/bin/activate \
-      && pip install --no-cache-dir tomli \
-      && mkdir -p build && cd build \
-      && ../configure --target-list=arm-softmmu --enable-l1-grgsm \
-             --prefix=/opt/GSM/qemu-install --disable-werror --disable-docs \
-      && make -j$(nproc) \
-      && make install \
-      && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm \
-      && cp /opt/GSM/qemu-install/bin/qosmo /usr/local/bin/qosmo \
+      && { [ -f /opt/GSM/qosmo/install.sh ] \
+           || { echo "qosmo/install.sh absent du clone : poussez l installeur sur bbaranoff/qosmO" >&2; false; }; } \
+      && bash /opt/GSM/qosmo/install.sh --verbose \
+             --prefix /opt/GSM/qemu-install --venv /root/.venv-qemu --bin-dir /usr/local/bin \
       && osmo-deb snapshot qosmo 0.git /opt/GSM/qosmo /opt/GSM/qemu-install \
              /root/.venv-qemu /usr/local/bin/qemu-system-arm /usr/local/bin/qosmo; \
     fi
@@ -728,22 +732,32 @@ RUN ldconfig
 # garde ses drapeaux, sans celui-la. La ROM n'est PAS dans le depot : rom/fetch-rom.sh la telecharge
 # chez FreeCalypso (dump 3606), la convertit en calypso_dsp.*.bin (somme verifiee) et la
 # pose en /opt/GSM, le --rom-dir par defaut de c54x_exe.
+# [2026-10-03] Tout cela est c54x_exe/install.sh : --portable = make
+# QOSMO=/opt/GSM/qosmo CFLAGS="-O3 -g -Wall ... sans -march=native", la ROM
+# par rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom, puis
+# c54x_exe --trames 200 (la ROM seule doit booter). Meme liste que le natif
+# (install_modules/45-calypso.sh), Dockerfile.run, start.sh et l ISO ; installeur
+# a pousser sur bbaranoff/c54x_exe avant de construire.
 RUN if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
-      && cd /opt/GSM/c54x_exe \
-      && make QOSMO=/opt/GSM/qosmo \
-             CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
-      && bash rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom \
+      && { [ -f /opt/GSM/c54x_exe/install.sh ] \
+           || { echo "c54x_exe/install.sh absent du clone : poussez l installeur sur bbaranoff/c54x_exe" >&2; false; }; } \
+      && bash /opt/GSM/c54x_exe/install.sh --verbose --portable --qosmo /opt/GSM/qosmo \
+             --rom-dir /opt/GSM --rom-dir /opt/GSM/c54x_exe/rom \
       && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
              /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
              /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
              /opt/GSM/calypso_dsp.Registers.bin; \
     fi
 
+# grgsm_exe/install.sh : make -B QOSMO=/opt/GSM/qosmo (-B : le binaire est
+# suivi par git et plus recent que les sources au clone, `make` seul le
+# gardait sans compiler), puis grgsm_exe --trames 50.
 RUN if ! osmo-deb install grgsm-exe 0.git; then \
       git clone https://github.com/bbaranoff/grgsm_exE /opt/GSM/grgsm_exe \
-      && cd /opt/GSM/grgsm_exe \
-      && make QOSMO=/opt/GSM/qosmo \
+      && { [ -f /opt/GSM/grgsm_exe/install.sh ] \
+           || { echo "grgsm_exe/install.sh absent du clone : poussez l installeur sur bbaranoff/grgsm_exE" >&2; false; }; } \
+      && bash /opt/GSM/grgsm_exe/install.sh --verbose --qosmo /opt/GSM/qosmo \
       && osmo-deb snapshot grgsm-exe 0.git /opt/GSM/grgsm_exe; \
     fi
 

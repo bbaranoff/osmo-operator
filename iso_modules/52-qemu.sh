@@ -99,31 +99,51 @@ rm -f "$ROOTFS"/usr/local/bin/qosmo-grgsm "$ROOTFS"/usr/local/bin/qosmo-dsp \
 # OSMO_C54X_SRC / OSMO_GRGSM_EXE_SRC forcent un arbre local, comme
 # OSMO_QEMU_SRC pour qosmo. Non fatal : sans c54x_exe, seul --dsp manque.
 # ⚠️ c54x_exe se compile en -march=native : le binaire de l'hote peut ne pas
-# tourner sur la machine qui boote l'ISO (make -C /opt/GSM/c54x_exe la-bas).
+# tourner sur la machine qui boote l'ISO.
+# [2026-10-03] D ou : un arbre repris de l HOTE (force ou repli) est recompile
+# DANS le rootfs par son propre installeur (<depot>/install.sh --only build
+# --portable, sur les sources qosmo du rootfs) - les memes commandes que le
+# Dockerfile, sans -march=native. Echec non fatal : le binaire de l hote reste.
+# L arbre venu de l image n est pas touche : le Dockerfile l a deja construit.
 for _e in c54x_exe grgsm_exe; do
     case "$_e" in
         c54x_exe)  _esrc="${OSMO_C54X_SRC:-}" ;;
         grgsm_exe) _esrc="${OSMO_GRGSM_EXE_SRC:-}" ;;
     esac
     _edst="$ROOTFS/opt/GSM/$_e"
+    _ehote=0
     if [ -n "$_esrc" ] && [ -d "$_esrc" ]; then
         rm -rf "$_edst"; mkdir -p "$ROOTFS/opt/GSM"
-        cp -a "$_esrc" "$_edst"
+        cp -a "$_esrc" "$_edst"; _ehote=1
         echo -e "  ${GREEN}✓${NC} $_e FORCE depuis ${CYAN}${_esrc}${NC} ($(du -sh "$_edst" | cut -f1))"
     elif [ -d "$_edst" ]; then
         echo -e "  ${GREEN}✓${NC} $_e : arbre de l image conserve ($(du -sh "$_edst" | cut -f1))"
     elif [ -d "/opt/GSM/$_e" ]; then
         mkdir -p "$ROOTFS/opt/GSM"
-        cp -a "/opt/GSM/$_e" "$_edst"
+        cp -a "/opt/GSM/$_e" "$_edst"; _ehote=1
         echo -e "  ${GREEN}✓${NC} $_e repris de l hote ${CYAN}/opt/GSM/$_e${NC} ($(du -sh "$_edst" | cut -f1))"
     else
         echo -e "  ${YELLOW}!${NC} $_e introuvable (ni image, ni hote)" >&2
         continue
     fi
+    # Arbre de l hote, ISO de la meme architecture : recompile portable dans
+    # le rootfs (en --arm, c est 82-arm-natif qui recompile, dans le chroot).
+    if [ "$_ehote" = 1 ] && [ "${ISO_ARCH:-amd64}" = "$(dpkg --print-architecture)" ]; then
+        if [ -f "$_edst/install.sh" ] && [ -d "$ROOTFS/opt/GSM/qosmo/hw/arm/calypso" ]; then
+            if bash "$_edst/install.sh" --only build --portable --qosmo "$ROOTFS/opt/GSM/qosmo" \
+                   >"$WORK/install-$_e.log" 2>&1; then
+                echo -e "  ${GREEN}✓${NC} $_e recompile dans le rootfs par ${CYAN}$_e/install.sh --portable${NC} (sans -march=native)"
+            else
+                echo -e "  ${YELLOW}!${NC} $_e : recompilation portable echouee (voir $WORK/install-$_e.log) - binaire de l hote garde" >&2
+            fi
+        else
+            echo -e "  ${YELLOW}!${NC} $_e : pas d installeur ($_e/install.sh) ou pas de sources qosmo dans le rootfs - binaire de l hote garde tel quel" >&2
+        fi
+    fi
     if [ -x "$_edst/$_e" ]; then
         echo -e "  ${GREEN}✓${NC} $_e : binaire ${CYAN}/opt/GSM/$_e/$_e${NC} present"
     else
-        echo -e "  ${YELLOW}!${NC} $_e : binaire ABSENT - make -C /opt/GSM/$_e avant de graver" >&2
+        echo -e "  ${YELLOW}!${NC} $_e : binaire ABSENT - /opt/GSM/$_e/install.sh avant de graver" >&2
     fi
     # Les petits lanceurs /usr/local/bin/<exe> (bash) de l'hote.
     if [ -x "/usr/local/bin/$_e" ] && [ ! -e "$ROOTFS/usr/local/bin/$_e" ]; then
@@ -142,18 +162,19 @@ _ROM_SRC="${OSMO_DSP_ROM_DIR:-/opt/GSM}"
 _ROM_SECOURS=/opt/GSM/c54x_exe/rom
 # [2026-10-03] La ROM n'est plus dans le depot c54x_exe : si elle manque a l'hote
 # comme dans l'image, on la telecharge chez FreeCalypso (dump 3606) et on la
-# convertit en .bin (c54x_exe/rom/fetch-rom.sh, somme de controle verifiee).
+# convertit en .bin. C est l etape `rom` de c54x_exe/install.sh (rom/fetch-rom.sh,
+# somme de controle verifiee) : la meme que le Dockerfile, pas une copie d elle.
 _rom_presente=1
 for _r in PROM0 PROM1 PROM2 PROM3 DROM PDROM; do
     [ -f "$_ROM_SRC/calypso_dsp.$_r.bin" ] || [ -f "$_ROM_SECOURS/calypso_dsp.$_r.bin" ] \
         || [ -f "$ROOTFS/opt/GSM/calypso_dsp.$_r.bin" ] || _rom_presente=0
 done
 if [ "$_rom_presente" = 0 ]; then
-    _fetch="$ROOTFS/opt/GSM/c54x_exe/rom/fetch-rom.sh"; [ -f "$_fetch" ] || _fetch="$_ROM_SECOURS/fetch-rom.sh"
-    if [ -f "$_fetch" ] && bash "$_fetch" --dest "$ROOTFS/opt/GSM"; then
-        echo -e "  ${GREEN}✓${NC} ROM DSP telechargee (FreeCalypso 3606) et convertie en .bin"
+    _c54i="$ROOTFS/opt/GSM/c54x_exe/install.sh"; [ -f "$_c54i" ] || _c54i=/opt/GSM/c54x_exe/install.sh
+    if [ -f "$_c54i" ] && bash "$_c54i" --only rom --rom-dir "$ROOTFS/opt/GSM"; then
+        echo -e "  ${GREEN}✓${NC} ROM DSP telechargee (FreeCalypso 3606) et convertie en .bin (c54x_exe/install.sh --only rom)"
     else
-        echo -e "  ${YELLOW}!${NC} ROM DSP : telechargement impossible (reseau ?) - voir c54x_exe/rom/fetch-rom.sh" >&2
+        echo -e "  ${YELLOW}!${NC} ROM DSP : telechargement impossible (reseau ? installeur absent ?) - voir c54x_exe/install.sh --only rom" >&2
     fi
 fi
 _rom_ok=0; _rom_miss=""
@@ -344,8 +365,13 @@ elif [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     qpfx="$(sed -n 's/^prefix=//p' "$QEMU_BUILD_LOCAL/config-host.mak" 2>/dev/null)"
     qpfx="${qpfx:-/usr/local}"
 
-    if DESTDIR="$ROOTFS" ninja -C "$QEMU_BUILD_LOCAL" install >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} qemu installe dans ${ROOTFS}${qpfx} (ninja install, pas de sources)"
+    # [2026-10-03] L etape `install` de qosmo/install.sh (make install, DESTDIR
+    # = le rootfs) : la meme que le Dockerfile. L installeur est celui de
+    # l arbre du build (son parent), sinon on tombe dans le repli manuel.
+    _qinst="$(dirname "$QEMU_BUILD_LOCAL")/install.sh"
+    if [ -f "$_qinst" ] && bash "$_qinst" --only install --build-dir "$QEMU_BUILD_LOCAL" \
+           --prefix "$qpfx" --destdir "$ROOTFS" >"$WORK/qosmo-install.log" 2>&1; then
+        echo -e "  ${GREEN}✓${NC} qemu installe dans ${ROOTFS}${qpfx} (qosmo/install.sh --only install, pas de sources)"
     else
         # repli : binaire + firmwares/keymaps strictement necessaires
         install -Dm755 "$QEMU_BUILD_LOCAL/qemu-system-arm" "$ROOTFS$qpfx/bin/qemu-system-arm"

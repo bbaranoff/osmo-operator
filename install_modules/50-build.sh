@@ -49,7 +49,10 @@ inst_build_run() {
     # (tools/osmo-lte-install.sh) : .deb du cache s ils sont la, compilation
     # sinon. Non fatal : la 2G n en depend pas.
     inst_say "=== la 4G (srsRAN ZeroMQ + Open5GS) ==="
-    if [ -f "$INST_TREE/tools/osmo-lte-install.sh" ]; then
+    # [2026-10-03] --telephone : le telephone emule n a rien a faire de la 4G.
+    if [ "${INST_PROFILE:-}" = telephone ]; then
+        inst_say "4G sautee (profil --telephone)"
+    elif [ -f "$INST_TREE/tools/osmo-lte-install.sh" ]; then
         OSMO_REPO="$INST_TREE" bash "$INST_TREE/tools/osmo-lte-install.sh" --all \
             || inst_hint "4G non installee (voir ci-dessus) - « osmo-lte-install --build » plus tard"
     fi

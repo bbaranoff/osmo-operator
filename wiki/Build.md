@@ -176,4 +176,10 @@ Les étapes vivent dans `install_modules/`. `bureau` pose les mêmes fichiers qu
 l'ISO (`data/desktop/*.desktop`, `data/*.svg`) dans le menu et sur le bureau de
 root et de l'utilisateur `sudo`. L'installation native **n'active pas** les
 unités systemd. Le lancement reste `./start-direct.sh`, qui délègue à
-`/opt/GSM/qosmo-grgsm/run.sh`.
+`/opt/GSM/qosmo/run.sh`.
+
+Le téléphone émulé (étapes `firmware`, `qosmo`, `c54x`, `grgsm-exe` — groupe `calypso`,
+`install_modules/45-calypso.sh`) passe par l'installeur de chaque dépôt (`qosmo/install.sh`,
+`c54x_exe/install.sh`, `grgsm_exe/install.sh`, ceux qu'appellent aussi le Dockerfile et l'ISO) ;
+`sudo ./install.sh --telephone` l'installe seul sur votre propre pile Osmocom — voir
+[Telephone-emule](Telephone-emule.md).

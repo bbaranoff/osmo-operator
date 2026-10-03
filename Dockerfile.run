@@ -174,19 +174,33 @@ RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
 # difference ne se voyait pas ; des sources a jour imposent de recompiler, et
 # gcc-11 echouait des la premiere unite. Un PATH local suffit (update-alternatives ne connait pas gcc-13) ; le defaut reste gcc-11.
 # c54x_exe : CFLAGS sans -march=native, comme dans le Dockerfile de base.
+# [2026-10-03] Les commandes sont celles des installeurs des depots, les MEMES
+# que le Dockerfile de base et l installation native :
+#   qosmo/install.sh --only build --cc gcc-13   = le PATH /tmp/cc13 + ninja d avant
+#                                                 (make dans build/ mene ninja)
+#   c54x_exe/install.sh --portable --skip verify = make CFLAGS sans -march=native,
+#                                                 puis la ROM : la copie verifiee de
+#                                                 c54x_exe/rom vers /opt/GSM (l ancien
+#                                                 cp), sans reseau si elle est la
+#   grgsm_exe/install.sh --skip verify          = make -B (l ancien clean all)
+# Pas de controle d execution ici (--skip verify) : comme avant, ce RUN
+# rafraichit ; le Dockerfile de base, lui, controle.
+# Les installeurs arrivent par le fetch ci-dessus : sans eux (depot pas encore
+# pousse, ou fetch rate sur une base d avant le 2026-10-03), on le dit.
 RUN : "${QEMU_CACHE_BUST:-}" && \
     for d in qosmo c54x_exe grgsm_exe; do \
         (cd /opt/GSM/$d && GIT_TERMINAL_PROMPT=0 git fetch origin \
             && git reset --hard "origin/$(git rev-parse --abbrev-ref HEAD)") \
             || echo "[warn] mise a jour de $d impossible (reseau ?) - on rebatit sur l arbre present"; \
     done && \
-    mkdir -p /tmp/cc13 && ln -sf /usr/bin/gcc-13 /tmp/cc13/cc && ln -sf /usr/bin/gcc-13 /tmp/cc13/gcc \
-    && ln -sf /usr/bin/g++-13 /tmp/cc13/c++ && ln -sf /usr/bin/g++-13 /tmp/cc13/g++ && \
-    (cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja) && rm -rf /tmp/cc13 && \
-    make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
-        CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" && \
-    cp /opt/GSM/c54x_exe/rom/calypso_dsp.*.bin /opt/GSM/ && \
-    make -C /opt/GSM/grgsm_exe QOSMO=/opt/GSM/qosmo clean all
+    for d in qosmo c54x_exe grgsm_exe; do \
+        [ -f /opt/GSM/$d/install.sh ] \
+            || { echo "[ERREUR] /opt/GSM/$d/install.sh absent : poussez l installeur du depot $d (ou le fetch a echoue)" >&2; exit 1; }; \
+    done && \
+    bash /opt/GSM/qosmo/install.sh --verbose --only build --cc gcc-13 && \
+    bash /opt/GSM/c54x_exe/install.sh --verbose --portable --qosmo /opt/GSM/qosmo --skip verify \
+        --rom-dir /opt/GSM --rom-dir /opt/GSM/c54x_exe/rom && \
+    bash /opt/GSM/grgsm_exe/install.sh --verbose --qosmo /opt/GSM/qosmo --skip verify
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 ENTRYPOINT ["/scripts/entrypoint.sh"]

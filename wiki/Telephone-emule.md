@@ -2,6 +2,8 @@
 
 > Version du 2026-10-03. Chaque commande vient d'un script ou d'un README des dépôts, la
 > source est citée. Ce qui n'a pas pu être vérifié est marqué **À CONFIRMER**.
+> Les numéros `Dockerfile:N` renvoient au Dockerfile du commit `4266c8b` (avant qu'il n'appelle
+> les installeurs des dépôts).
 
 Cette page s'adresse à qui a **déjà** un réseau Osmocom (osmo-bsc, osmo-msc, osmo-hlr,
 osmo-stp, osmo-mgw, installés par paquets ou depuis les sources) et veut y brancher un
@@ -74,18 +76,55 @@ TCP 1234 (gdbstub QEMU), TCP 44444 (console gdb), `/tmp/osmocom_l2`, `/tmp/osmoc
 ## Ordre d'installation
 
 Tout se fait sous une racine commune, `/opt/GSM` par défaut (chemins codés dans les Makefiles et
-`run.sh`, tous surchargeables : `QOSMO=`, `FIRMWARE_ELF=`, `OSMOCON=`…).
+`run.sh`, tous surchargeables : `GSM_ROOT=`, `QOSMO=`, `FIRMWARE_ELF=`, `OSMOCON=`…).
 
-1. **Dépendances système** — sous-ensemble de la liste du Dockerfile (`osmo-operator/Dockerfile:156-205`)
-   utile au téléphone ; voir chaque page.
+**Chaque dépôt porte son installeur** (`install.sh`, depuis le 2026-10-03), au même contrat que
+`osmo-operator/install_modules/_lib/inst.sh` : `--check` (prérequis, ne modifie rien), `--list`,
+`--deps` / `--print-deps` (paquets apt, repris de la liste du Dockerfile), `--only` / `--skip`,
+un journal par étape, un contrôle après coup. Ce sont **les mêmes scripts** que le Dockerfile
+(stages `qemu` et `l1`), `Dockerfile.run`, `start.sh` et l'ISO appellent : une seule liste de
+commandes par composant.
+
+### En une passe, depuis osmo-operator
+
+```bash
+git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
+cd /opt/GSM/osmo-operator
+./install.sh --list --telephone       # ce qui sera fait
+sudo ./install.sh --telephone         # firmware, qosmo, c54x_exe, grgsm_exe, osmocom-bb (mobile, osmocon)
+./install.sh --check --telephone
+```
+
+`--telephone` = les étapes `prereqs, sources, calypso, build, binaires, verify` : ni la liste apt
+globale (chaque composant Calypso installe ses propres paquets), ni les patchs du cœur
+(`40-patches` vise osmo-bts/msc/hlr/trx), ni `/etc/osmocom`, ni le bureau, ni la 4G ; `verify`
+(`OSMO_CORE=externe`) ne cherche plus les démons du cœur, seulement **votre** `osmo-bts-trx` et la
+chaîne Calypso (qemu-system-arm, c54x_exe, ROM, firmware, osmocon, mobile). Les dépendances de compilation d'osmocom-bb / osmo-gapk (libosmocore-dev, libtalloc-dev,
+libasound2-dev…) sont supposées présentes — sinon `sudo ./install.sh --only deps` (la liste
+complète du Dockerfile). Le groupe Calypso seul : `sudo ./install.sh --only calypso`
+(`install_modules/45-calypso.sh`).
+
+### Composant par composant
+
+1. **Dépendances système** — chaque installeur a sa liste : `./install.sh --print-deps`,
+   `sudo ./install.sh --deps` (sous-ensembles de `osmo-operator/Dockerfile:156-205`).
 2. **libosmocore** (avec libosmocoding) — vous l'avez déjà si votre pile est compilée ; sinon paquets
    `libosmocore-dev` du dépôt Osmocom (**À CONFIRMER** : versions ; le banc utilise 1.12.1, `Dockerfile:261`).
+   `c54x_exe/install.sh --check` dit tout de suite si pkg-config la voit.
 3. **osmo-gapk** puis **osmocom-bb** (osmocon, mobile) et le **firmware** prébuilt — voir [Installer-qosmo](Installer-qosmo.md#firmware-et-osmocom-bb).
-4. **qosmo** — [Installer-qosmo](Installer-qosmo.md).
-5. **c54x_exe + ROM DSP + pont** — [Installer-c54x_exe](Installer-c54x_exe.md).
-6. (optionnel) **montage gr-gsm / grgsm_exe** — [Installer-grgsm_exe](Installer-grgsm_exe.md).
+4. **qosmo** — `qosmo/install.sh`, [Installer-qosmo](Installer-qosmo.md).
+5. **c54x_exe + ROM DSP + pont** — `c54x_exe/install.sh`, [Installer-c54x_exe](Installer-c54x_exe.md).
+6. (optionnel) **montage gr-gsm / grgsm_exe** — `grgsm_exe/install.sh`, [Installer-grgsm_exe](Installer-grgsm_exe.md).
 7. **Lancer** : `PONT=1 ./run.sh` dans `c54x_exe` (`c54x_exe/README.md:76-78`) ou à la main,
    [Lancer-a-la-main](Lancer-a-la-main.md).
+
+```bash
+cd /opt/GSM
+git clone https://github.com/bbaranoff/qosmO    qosmo     && sudo qosmo/install.sh --with-deps
+git clone https://github.com/bbaranoff/c54x_exe c54x_exe  && sudo c54x_exe/install.sh --with-deps
+git clone https://github.com/bbaranoff/grgsm_exE grgsm_exe && grgsm_exe/install.sh      # optionnel
+git clone --depth 1 https://github.com/bbaranoff/firmware firmware
+```
 
 ## La preuve que ça marche
 
