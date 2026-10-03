@@ -140,6 +140,22 @@ done
 # git, avec calypso_dsp.txt). Non fatal.
 _ROM_SRC="${OSMO_DSP_ROM_DIR:-/opt/GSM}"
 _ROM_SECOURS=/opt/GSM/c54x_exe/rom
+# [2026-10-03] La ROM n'est plus dans le depot c54x_exe : si elle manque a l'hote
+# comme dans l'image, on la telecharge chez FreeCalypso (dump 3606) et on la
+# convertit en .bin (c54x_exe/rom/fetch-rom.sh, somme de controle verifiee).
+_rom_presente=1
+for _r in PROM0 PROM1 PROM2 PROM3 DROM PDROM; do
+    [ -f "$_ROM_SRC/calypso_dsp.$_r.bin" ] || [ -f "$_ROM_SECOURS/calypso_dsp.$_r.bin" ] \
+        || [ -f "$ROOTFS/opt/GSM/calypso_dsp.$_r.bin" ] || _rom_presente=0
+done
+if [ "$_rom_presente" = 0 ]; then
+    _fetch="$ROOTFS/opt/GSM/c54x_exe/rom/fetch-rom.sh"; [ -f "$_fetch" ] || _fetch="$_ROM_SECOURS/fetch-rom.sh"
+    if [ -f "$_fetch" ] && bash "$_fetch" --dest "$ROOTFS/opt/GSM"; then
+        echo -e "  ${GREEN}✓${NC} ROM DSP telechargee (FreeCalypso 3606) et convertie en .bin"
+    else
+        echo -e "  ${YELLOW}!${NC} ROM DSP : telechargement impossible (reseau ?) - voir c54x_exe/rom/fetch-rom.sh" >&2
+    fi
+fi
 _rom_ok=0; _rom_miss=""
 for _r in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do
     if [ -f "$_ROM_SRC/calypso_dsp.$_r.bin" ]; then
