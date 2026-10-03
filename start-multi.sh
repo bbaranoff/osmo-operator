@@ -25,6 +25,9 @@
 #   sudo ./start-multi.sh --status     etat des conteneurs et du hub
 #   sudo ./start-multi.sh --stop       arrete les conteneurs (le natif reste)
 #   sudo ./start-multi.sh --dry-run    affiche la commande sans la lancer
+#   sudo ./start-multi.sh --align      aligne l identite du natif (PC, OPERATOR_ID) et sort
+#   sudo ./start-multi.sh --rebuild    reconstruit l image (Dockerfile.run) ; sinon JAMAIS reconstruite
+#   OSMO_KEEP_NATIF=1 ./start-multi.sh ne touche pas au natif : pas d arret, pas de relance
 # =============================================================================
 set -uo pipefail
 
@@ -44,12 +47,14 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
     set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
 fi
-ACTION="start"
+ACTION="start"; REBUILD=0
 for a in "$@"; do
     case "$a" in
         --status)  ACTION="status" ;;
         --stop)    ACTION="stop" ;;
         --dry-run) ACTION="dry" ;;
+        --align)   ACTION="align" ;;
+        --rebuild) REBUILD=1 ;;
         -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     esac
 done
@@ -290,15 +295,19 @@ esac
 # au lieu de la compiler ; osmocom-run en decoule par Dockerfile.run en
 # quelques secondes. Refuser de demarrer pour ca et renvoyer vers addition.sh
 # - qui aurait repondu "image deja presente" - etait une boucle sans issue.
-if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
-    if docker image inspect osmocom-nitb >/dev/null 2>&1; then
-        echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente, base osmocom-nitb presente : derivation (Dockerfile.run)"
-        ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
-                           -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
-            || manque "derivation de l image '$MULTI_IMAGE' echouee"
-    else
-        manque "image '$MULTI_IMAGE' absente"
-    fi
+# [2026-10-03] L IMAGE N EST RECONSTRUITE QUE SUR DEMANDE (--rebuild). Sans lui,
+# une image presente est utilisee telle quelle et une image absente est une
+# erreur nette, pas un build lance a l insu de l appelant (start.sh en ferait
+# un de son cote : on sort donc avant).
+if [ "$REBUILD" = 1 ]; then
+    docker image inspect osmocom-nitb >/dev/null 2>&1 \
+        || manque "--rebuild : base osmocom-nitb absente (addition.sh)"
+    echo -e "  ${CYAN}→${NC} --rebuild : image '$MULTI_IMAGE' reconstruite (Dockerfile.run)"
+    ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
+                       -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
+        || manque "reconstruction de l image '$MULTI_IMAGE' echouee"
+elif ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+    manque "image '$MULTI_IMAGE' absente - relancer avec --rebuild"
 fi
 
 # ── LE RACCORD DU NATIF AU HUB ──────────────────────────────────────────────
@@ -377,7 +386,7 @@ done
 # mode non interactif et affichait « numero de noeud (MCC) vaut 0 - ramene a 1 »
 # a chaque lancement ; la topologie le connait (MULTI_NODE, 1 sur une machine).
 CMD=(env "WAN_NODE_ID=${MULTI_NODE:-1}" "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
-     "OP_ID_BASE=2" "OSMO_NO_ATTACH=1"
+     "OP_ID_BASE=2" "OSMO_NO_ATTACH=1" "OSMO_SKIP_BUILD=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
@@ -475,6 +484,7 @@ aligner_natif() {
     done
 }
 aligner_natif
+[ "$ACTION" = "align" ] && exit 0
 
 # ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
 # [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
@@ -509,6 +519,13 @@ tout_arreter() {
     # prenaient pour les siens - voir run_modules/25-audio.sh).
     echo -e "  ${CYAN}→${NC} arret du multi en place (conteneurs operateurs, hub)"
     arreter_multi
+    # OSMO_KEEP_NATIF=1 : l appelant (banc-max.sh) a deja aligne le natif AVANT
+    # de le lancer ; l arreter ici pour le relancer est du temps perdu.
+    if [ "${OSMO_KEEP_NATIF:-0}" = 1 ]; then
+        echo -e "  ${CYAN}i${NC} natif conserve (OSMO_KEEP_NATIF=1)"
+        pkill -f 'paplay --server=tcp:' 2>/dev/null || true
+        return 0
+    fi
     echo -e "  ${CYAN}→${NC} arret du banc natif (un clic = un banc neuf)"
     if _banc_unit_present; then
         # Le natif est relance juste apres par lancer_natif_si_absent : ici on

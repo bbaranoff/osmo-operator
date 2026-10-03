@@ -867,7 +867,7 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
-    for repo in /opt/GSM/qosmo-grgsm /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
+    for repo in /opt/GSM/qosmo /opt/GSM/c54x_exe /opt/GSM/grgsm_exe /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
             echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
@@ -903,14 +903,28 @@ force_update_trees() {
             echo -e "    ${RED}$repo : pull KO (divergence ou reseau) - le run part sur $before${NC}"
         fi
     done
-    # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
-    # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
-    echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
-    if docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja' >/dev/null 2>&1; then
-        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo-grgsm/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
+    # [2026-10-03] MEMES ARBRES ET MEME BUILD QUE L'ISO ET Dockerfile.run :
+    # qosmo (QEMU), c54x_exe (DSP) et grgsm_exe. qosmo-grgsm est retire depuis
+    # le 2026-09-25 ; le garder ici faisait relier, et afficher, un binaire
+    # mort (21/09) pendant que le vrai QEMU (/opt/GSM/qosmo) n'etait jamais
+    # recompile. Sans la recompilation, le pull ne change RIEN a ce qui tourne ;
+    # ninja et make sont incrementaux : ils ne rebatissent que ce qui a bouge.
+    # gcc-13 : meme PATH local que Dockerfile.run (build/ configure avec gcc-13).
+    echo -e "  ${GREEN}[*] Recompilation qosmo (ninja) + c54x_exe + grgsm_exe...${NC}"
+    if docker exec "$c" bash -c 'mkdir -p /tmp/cc13 && ln -sf /usr/bin/gcc-13 /tmp/cc13/cc && ln -sf /usr/bin/gcc-13 /tmp/cc13/gcc \
+            && ln -sf /usr/bin/g++-13 /tmp/cc13/c++ && ln -sf /usr/bin/g++-13 /tmp/cc13/g++ \
+            && (cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja) \
+            && make -C /opt/GSM/c54x_exe QOSMO=/opt/GSM/qosmo \
+                 CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
+            && cp /opt/GSM/c54x_exe/rom/calypso_dsp.*.bin /opt/GSM/ \
+            && make -C /opt/GSM/grgsm_exe QOSMO=/opt/GSM/qosmo' >/dev/null 2>&1; then
+        local f
+        for f in qosmo/build/qemu-system-arm c54x_exe/c54x_exe grgsm_exe/grgsm_exe; do
+            echo -e "    ${GREEN}${f##*/} relie${NC} ($(docker exec "$c" stat -L -c %y "/opt/GSM/$f" 2>/dev/null | cut -c1-19))"
+        done
     else
-        echo -e "    ${RED}ninja KO - le run utilisera le binaire de l'image${NC}"
-        docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
+        echo -e "    ${RED}compilation KO - le run utilisera les binaires de l'image${NC}"
+        docker exec "$c" bash -c 'cd /opt/GSM/qosmo/build && PATH=/tmp/cc13:$PATH ninja 2>&1 | tail -15' | sed 's/^/      /'
     fi
 }
 
@@ -2943,7 +2957,11 @@ esac
 echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
 
 ./helpers/prepare_host.sh
-build_run_image
+# OSMO_SKIP_BUILD=1 (pose par start-multi.sh) : pas de rebuild systematique de
+# l'image run. QEMU_CACHE_BUST change a chaque appel et recompilait QEMU
+# (qosmo, c54x_exe, grgsm_exe) a tous les lancements ; check_image construit
+# encore l'image si elle est absente.
+[ "${OSMO_SKIP_BUILD:-0}" = "1" ] || build_run_image
 check_image
 
 case "$NETWORK_MODE" in

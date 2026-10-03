@@ -163,7 +163,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     # Audio, Radio & SIP
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     # Python & Outils système
-    python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
+    python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv dbus-x11 bash-completion \
     # Debug — gdb-multiarch pour attacher au gdb-stub QEMU (ARM Calypso)
     gdb-multiarch \
     # ALSA — requis par osmo-gapk pour l'I/O audio matériel

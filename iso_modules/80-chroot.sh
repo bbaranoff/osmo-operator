@@ -296,12 +296,12 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd
       libsofia-sip-ua-glib3${_T64}
       liburing2 libslirp0
       iproute2 iptables net-tools lksctp-tools
-      tmux telnet expect whiptail
+      tmux telnet expect whiptail dbus-x11 bash-completion
       lsb-release openssh-server sudo
       console-setup keyboard-configuration locales
       psmisc
       cryptsetup rsync
-      python3 python3-venv python3-scapy
+      python3 python3-venv python3-scapy python3-pytest
       tshark wireshark-common"
 [ "$NODE_VIA_APT" = "1" ] && PKGS="$PKGS nodejs"
 
@@ -394,8 +394,8 @@ ldconfig
 # le venv en depend donc explicitement - et le garde sur noble (3.12), ou il
 # ne coute rien : le code importe tomli, pas tomllib.
 python3 -m venv /root/.env
-/root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli \
-    || echo "WARN: pip a echoue pour tomli dans /root/.env"
+/root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli pytest \
+    || echo "WARN: pip a echoue pour tomli/pytest dans /root/.env"
 if /root/.env/bin/python3 -c "import tomli" 2>/dev/null; then
     echo "  /root/.env : venv pret, tomli importable"
 else
