@@ -17,7 +17,7 @@ RR_ASSIGNMENT_FAILURE = 0x2f
 
 # [2026-10-03] Bursts xCCH montants emis par la ROM DSP, publies par c54x_exe (src/pont.c,
 # tx_rom_publier) : la ROM copie chaque burst du tampon entrelace 0x4280 vers data[0x3f8a] a sa
-# trame d'emission. Anneau : en-tete w(u32, nombre ecrit) n(u32, cases) ; case de 512 octets :
+# trame d'emission. Anneau : en-tete w(u32, nombre ecrit) n(u32, cases) ; case de 1024 octets :
 # seq(u32) fn_burst0(u32) l2(23) .(1), 4 x 116 ubits (57 donnees, hl, hu, 57 donnees), puis 4 x 116
 # ubits du flux de cle A5 montant que la ROM XORe sur la rafale en mode chiffre (data[0x3f9b],
 # calypso_a5.c). La ROM chiffre a l'heure du DSP (12 a ~200 trames apres la BTS) : on defait son XOR et
