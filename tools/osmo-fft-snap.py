@@ -47,6 +47,7 @@
 # Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
 # DejaVu, presents sur l image comme sur l hote ; numpy pour la FFT 4G (sans
 # lui, la moitie haute le dit et reste sur sa bande dessinee).
+import glob
 import json
 import os
 import re
@@ -388,6 +389,23 @@ def tail_lines(path, n, width):
             except Exception as e:
                 return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
     else:
+        # [2026-10-04] LE JOURNAL LE PLUS FRAIS, AUSSI EN NATIF. L encart tourne
+        # en root (/run/user/0) alors que la pile qosmo est lancee par un autre
+        # compte (/run/user/1001) : le chemin par defaut pointait sur un fichier
+        # vide, laisse par un ancien lancement, et le cadre disait « journal
+        # vide » sur une pile bavarde. On prend le fichier non vide le plus
+        # recemment ecrit parmi le chemin demande et les /run/user/*.
+        cands = [path] + glob.glob("/run/user/*/osmo-nitb/logs/mobile.log")
+        vivants = []
+        for c in cands:
+            try:
+                st = os.stat(c)
+                if st.st_size > 0:
+                    vivants.append((st.st_mtime, c))
+            except OSError:
+                pass
+        if vivants:
+            path = max(vivants)[1]
         try:
             with open(path, "rb") as f:
                 f.seek(0, 2)
