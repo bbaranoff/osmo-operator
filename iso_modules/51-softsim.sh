@@ -38,6 +38,26 @@ if [ -d "$SOFTSIM_LOCAL" ] && [ "$SOFTSIM_LOCAL" != "$SOFTSIM_TREE" ]; then
         || echo -e "  ${YELLOW}⚠${NC} softSIM : copie locale incomplete" >&2
 fi
 
+# COMP128v1 pour la SIM (Ki du HLR) : lib/comp128.rb + patch de simos_server.rb.
+# Le patch n est applique qu une fois (un arbre local deja patche le garde).
+if [ -d "$SOFTSIM_TREE/src" ] && [ -f "$DIR/tools/softsim/comp128.rb" ]; then
+    install -Dm644 "$DIR/tools/softsim/comp128.rb" "$SOFTSIM_TREE/src/lib/comp128.rb"
+    if git -C "$SOFTSIM_TREE" apply --check -R "$DIR/tools/softsim/0001-simos-comp128v1-a38.patch" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} softSIM : patch COMP128v1 deja present"
+    elif git -C "$SOFTSIM_TREE" apply "$DIR/tools/softsim/0001-simos-comp128v1-a38.patch" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} softSIM : patch COMP128v1 applique (simos_server.rb)"
+    else
+        echo -e "  ${YELLOW}⚠${NC} softSIM : patch COMP128v1 ne s applique pas" >&2
+    fi
+    # SIM de l abonne du HLR (IMSI 001010001000001) : le Ki vient de SOFTSIM_KI
+    if python3 "$DIR/tools/softsim/make_sim_op1.py" "$SOFTSIM_TREE/src/sim.xml" \
+            "$SOFTSIM_TREE/src/sim-op1.xml" --imsi "${OSMO_SIM_IMSI:-001010001000001}" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} softSIM : sim-op1.xml (IMSI ${OSMO_SIM_IMSI:-001010001000001})"
+    else
+        echo -e "  ${YELLOW}⚠${NC} softSIM : sim-op1.xml non genere" >&2
+    fi
+fi
+
 # Shim Ruby 3.2+ : depuis le depot de construction
 if [ -f "$DIR/tools/softsim/ruby_compat.rb" ]; then
     install -Dm644 "$DIR/tools/softsim/ruby_compat.rb" "$ROOTFS/usr/local/share/softsim/ruby_compat.rb"

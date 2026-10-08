@@ -2606,7 +2606,11 @@ start_sap() {
     [ "${SAP_MODE:-0}" = 1 ] || return 0
     local sdir="${SOFTSIM_DIR:-/opt/GSM/softsim}"
     local sock="${SAP_SOCK:-/tmp/osmocom_sap}"
-    local file="${SAP_FILE:-$sdir/src/sim.xml}"
+    # SIM de l abonne du HLR (IMSI 001010001000001, COMP128v1) : son Ki est celui
+    # du plan de start.sh (00112233445566778899aabbccdd<ms><op>), donc 0101.
+    local file="${SAP_FILE:-$sdir/src/sim-op1.xml}"
+    [ -f "$file" ] || file="$sdir/src/sim.xml"
+    export SOFTSIM_KI="${SOFTSIM_KI:-00112233445566778899aabbccdd0101}"
     local log="${SAP_LOG:-/tmp/osmo-sap.log}"
     local shim=/usr/local/share/softsim/ruby_compat.rb
     [ -f "$shim" ] || shim="$HERE/tools/softsim/ruby_compat.rb"
