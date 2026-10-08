@@ -7,3 +7,5 @@ class File
 end
 Fixnum = Integer unless defined?(Fixnum)
 Bignum = Integer unless defined?(Bignum)
+$stdout.sync = true
+$stderr.sync = true
