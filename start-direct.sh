@@ -113,6 +113,8 @@ Usage : ./start-direct.sh [options] [mode]
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
+    --sap               SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
+                        /tmp/osmocom_sap, lance avant la baseband (avec --shannon)
                         (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
                         chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
                         C54x<->Shannon (taches FB/SB) est encore en retro.
@@ -229,6 +231,7 @@ while [ $# -gt 0 ]; do
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
         --shannon)     SHANNON_MODE=1; DSP_MODE=0; export SHANNON_MODE ;;
+        --sap)         SAP_MODE=1; export SAP_MODE ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -2595,6 +2598,43 @@ fi
 #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie : pas de
 #                            SB, pas de BCCH, pas de SI
 # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
+# ── SAP (softSIM) : la SIM servie sur le socket SAP, pour la baseband ───────
+# Serveur demo_server.rb (type sim) du depot softSIM, charge avec le shim Ruby
+# 3.2+ (File.exists?, Fixnum). Variables : SOFTSIM_DIR, SAP_SOCK, SAP_FILE,
+# SAP_LOG. Ne fait rien sans --sap.
+start_sap() {
+    [ "${SAP_MODE:-0}" = 1 ] || return 0
+    local sdir="${SOFTSIM_DIR:-/opt/GSM/softsim}"
+    local sock="${SAP_SOCK:-/tmp/osmocom_sap}"
+    # SIM de l abonne du HLR (IMSI 001010001000001, COMP128v1) : son Ki est celui
+    # du plan de start.sh (00112233445566778899aabbccdd<ms><op>), donc 0101.
+    local file="${SAP_FILE:-$sdir/src/sim-op1.xml}"
+    [ -f "$file" ] || file="$sdir/src/sim.xml"
+    export SOFTSIM_KI="${SOFTSIM_KI:-00112233445566778899aabbccdd0101}"
+    local log="${SAP_LOG:-/tmp/osmo-sap.log}"
+    local shim=/usr/local/share/softsim/ruby_compat.rb
+    [ -f "$shim" ] || shim="$HERE/tools/softsim/ruby_compat.rb"
+    say_begin "SIM via SAP (softSIM)"
+    if [ ! -f "$sdir/src/demo_server.rb" ]; then
+        say_end " KO " "$C_KO" "SIM via SAP (softSIM)" "$sdir absent : lancer iso/softsim ou git clone softsim"
+        return 1
+    fi
+    if [ $DRY -eq 1 ]; then
+        say_end " -- " "$C_DIM" "SIM via SAP (softSIM)" "dry-run : ruby -r$shim demo_server.rb --unix $sock --file $file"
+        return 0
+    fi
+    rm -f "$sock"
+    ( cd "$sdir/src" && nohup ruby -r"$shim" demo_server.rb --type sim --socket unix \
+        --unix "$sock" --file "$file" --verbosity 1 >"$log" 2>&1 & )
+    for _ in $(seq 1 50); do [ -S "$sock" ] && break; sleep 0.2; done
+    if [ -S "$sock" ]; then
+        say_end " OK " "$C_OK" "SIM via SAP (softSIM)" "socket $sock, SIM $file, journal $log"
+    else
+        say_end " KO " "$C_KO" "SIM via SAP (softSIM)" "pas de socket $sock : voir $log"
+        return 1
+    fi
+}
+
 if [ "${SHANNON_MODE:-0}" = 1 ]; then
     # ── MODE SHANNON (v1) ────────────────────────────────────────
     # Le fork monte coeur + BTS + side-car (comme --dsp), moins la chaine
@@ -2622,6 +2662,7 @@ if [ "${SHANNON_MODE:-0}" = 1 ]; then
         exit 1
     fi
     say_end " OK " "$C_OK" "Transmission a run.sh" "coeur+BTS montes, baseband laissee a FirmWire/Shannon"
+    start_sap || { echo "SAP demande (--sap) mais non lance" >&2; exit 1; }
     SHANNON_LAUNCH="${SHANNON_LAUNCH:-$GSM_ROOT/FirmWire/.v1/run_shannon_pmos.sh}"
     say_begin "Baseband Shannon (FirmWire + pont DSP)"
     if [ ! -x "$SHANNON_LAUNCH" ]; then

@@ -1,0 +1,32 @@
+diff --git a/src/demo_server.rb b/src/demo_server.rb
+index e89b69d..a6d9da8 100755
+--- a/src/demo_server.rb
++++ b/src/demo_server.rb
+@@ -116,7 +116,7 @@ when "pcsc"
+   server = PCSCServer.new(io)
+ when "sim"
+   require_relative 'simos_server'
+-  server = SIMServer.new(io)
++  server = SIMServer.new(io, @file)
+ else
+   raise "unkown server type"
+ end
+diff --git a/src/simos_server.rb b/src/simos_server.rb
+index 3c7a52a..3f6e2a7 100644
+--- a/src/simos_server.rb
++++ b/src/simos_server.rb
+@@ -205,6 +205,14 @@ class SIMServer < Server
+         if tuple then
+           @response = tuple["sres"].hex2arr+tuple["kc"].hex2arr
+           sw = [0x9f,@response.length]
++        elsif ENV["SOFTSIM_KI"] && ENV["SOFTSIM_KI"].length == 32
++          # COMP128v1 avec le Ki de la SIM (patch local, lib/comp128.rb) : repond a
++          # n importe quel RAND du HLR, pas seulement aux triplets enregistres.
++          require_relative 'lib/comp128'
++          ki = [ENV["SOFTSIM_KI"]].pack("H*")
++          sres, kc = Comp128.v1(ki, request[5,16].pack("C*"))
++          @response = sres.unpack("C*") + kc.unpack("C*")
++          sw = [0x9f,@response.length]
+         else
+           # memory problem
+           sw = [0x92,0x40]

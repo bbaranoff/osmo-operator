@@ -217,6 +217,7 @@ ${B}AU DEMARRAGE DE L'IMAGE${N}
 ${B}LA CIBLE SHANNON${N}
   ${C}--shannon / --no-shannon${N}  FirmWire + baseband Shannon + traducteur DSP,
                             shannon_ghidra_proj et c54x_exe dans l image   ${D}[${OSMO_ISO_SHANNON:-1}]${N}
+  ${C}--softsim / --no-softsim${N}  softSIM (SIM via SAP, Ruby) dans /opt/GSM/softsim   ${D}[${OSMO_ISO_SOFTSIM:-1}]${N}
 
 ${B}LE LIEN ENTRE NOEUDS (WAN)${N}
   ${C}--wan${N}                     active la table WAN
@@ -283,6 +284,8 @@ for arg in "$@"; do case "$arg" in
     # shannon_ghidra_proj et c54x_exe dans l image. Par defaut incluse (1).
     --shannon)      OSMO_ISO_SHANNON=1 ;;
     --no-shannon)   OSMO_ISO_SHANNON=0 ;;
+    --softsim)      OSMO_ISO_SOFTSIM=1 ;;
+    --no-softsim)   OSMO_ISO_SOFTSIM=0 ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
