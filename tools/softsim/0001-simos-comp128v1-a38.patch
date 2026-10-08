@@ -1,8 +1,8 @@
 diff --git a/src/demo_server.rb b/src/demo_server.rb
-index e89b69d..cdaf3a4 100755
+index e89b69d..4bbe12d 100755
 --- a/src/demo_server.rb
 +++ b/src/demo_server.rb
-@@ -107,23 +107,27 @@ when "unix"
+@@ -107,23 +107,30 @@ when "unix"
  else
    raise "please defined which socket to use"
  end
@@ -12,7 +12,9 @@ index e89b69d..cdaf3a4 100755
 +# not need a server restart after the previous one disconnected
 +loop do
 +  # wait for a client to connect
++  puts "[sap] en attente d une connexion sur #{@unix || @port}"
 +  io = socket.accept
++  puts "[sap] client connecte"
  
 -case @type
 -when "pcsc"
@@ -46,6 +48,7 @@ index e89b69d..cdaf3a4 100755
 +  # close IO when finished
 +  io.close
 +  server.close
++  puts "[sap] device disconnected : pret pour une reconnexion"
 +end
 diff --git a/src/simos_server.rb b/src/simos_server.rb
 index 3c7a52a..80f6691 100644
