@@ -1,21 +1,89 @@
 diff --git a/src/demo_server.rb b/src/demo_server.rb
-index e89b69d..a6d9da8 100755
+index e89b69d..cdaf3a4 100755
 --- a/src/demo_server.rb
 +++ b/src/demo_server.rb
-@@ -116,7 +116,7 @@ when "pcsc"
-   server = PCSCServer.new(io)
- when "sim"
-   require_relative 'simos_server'
--  server = SIMServer.new(io)
-+  server = SIMServer.new(io, @file)
+@@ -107,23 +107,27 @@ when "unix"
  else
-   raise "unkown server type"
+   raise "please defined which socket to use"
  end
+-# wait for a client to connect
+-io = socket.accept
++# serve clients one after the other: a new connection (mobile "sim sap") must
++# not need a server restart after the previous one disconnected
++loop do
++  # wait for a client to connect
++  io = socket.accept
+ 
+-case @type
+-when "pcsc"
+-  require_relative 'pcsc_server'
+-  server = PCSCServer.new(io)
+-when "sim"
+-  require_relative 'simos_server'
+-  server = SIMServer.new(io)
+-else
+-  raise "unkown server type"
+-end
++  case @type
++  when "pcsc"
++    require_relative 'pcsc_server'
++    server = PCSCServer.new(io)
++  when "sim"
++    require_relative 'simos_server'
++    server = SIMServer.new(io, @file)
++  else
++    raise "unkown server type"
++  end
+ 
+-# starting the server
+-server.start
++  # starting the server
++  server.start
+ 
+-# close IO when finished
+-io.close
+-server.close
++  # close IO when finished
++  io.close
++  server.close
++end
 diff --git a/src/simos_server.rb b/src/simos_server.rb
-index 3c7a52a..3f6e2a7 100644
+index 3c7a52a..80f6691 100644
 --- a/src/simos_server.rb
 +++ b/src/simos_server.rb
-@@ -205,6 +205,14 @@ class SIMServer < Server
+@@ -165,6 +165,31 @@ class SIMServer < Server
+           sw = [0x90,0x00]
+         end
+       end
++    when 0xb2 # READ RECORD
++      # P1 = numero d enregistrement, P2 = 0x04 (absolu, P1 valide), P3 = longueur
++      # (Le) de l enregistrement, pour un EF lineaire fixe (ou cyclique) seulement.
++      type = file_info
++      if type[:type]!="EF" then
++        # no EF selected
++        sw = [0x94,0x00]
++      elsif !["linear fixed","cyclic"].include?(type[:structure]) then
++        # file is inconsitent with the command
++        sw = [0x94,0x08]
++      elsif request[3]!=0x04 then
++        # incorrect parameter P2 (seul le mode absolu est gere)
++        sw = [0x6b,0x00]
++      else
++        body = @selected.find_first("./body").content.hex2arr
++        record = request[2]
++        length = request[4]
++        if length==0 or record==0 or (record-1)*length+length>body.length then
++          # record not found / out of range
++          sw = [0x94,0x02]
++        else
++          data = body[(record-1)*length,length]
++          sw = [0x90,0x00]
++        end
++      end
+     when 0xd6 # UPDATE BINARY
+       # is an transparent ef selected ?
+       type = file_info
+@@ -205,6 +230,14 @@ class SIMServer < Server
          if tuple then
            @response = tuple["sres"].hex2arr+tuple["kc"].hex2arr
            sw = [0x9f,@response.length]
