@@ -596,6 +596,7 @@ n'a rien à faire sort par `return` (c'est ainsi que `--arm` saute une étape).
 | `40-rootfs.sh` | `debootstrap --variant=minbase` (cache `~/.cache/osmo-iso-debs`), ou rootfs hérité |
 | `50-injection-image.sh` | `.deb` du build par `dpkg -i`, copie de `/usr/local`, `/opt/GSM`, venv, node, unités |
 | `51-depot.sh` | clone de osmo-operator et des tests, `coeur.env` |
+| `51-shannon.sh` | clone de `bbaranoff/firmwire` (`/opt/GSM/FirmWire`) et `bbaranoff/shannon_ghidra_proj` (`/opt/GSM/shannon_ghidra_proj`) |
 | `52-qemu.sh` | qosmo, c54x_exe, grgsm_exe, ROMs DSP, firmware, qemu-system-arm, lanceur `qosmo`, toast/untoast |
 | `60-dashboard.sh` | osmo-egprs-web (natif, sans docker), tutoriel, unité activée |
 | `70-scripts.sh` | liens `/usr/local/bin`, `osmo-wan.conf`, NetworkManager |
