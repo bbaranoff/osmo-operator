@@ -333,7 +333,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       libtins-dev libtalloc-dev libc-ares-dev
       zstd rsync kpartx
       qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf
-      ruby ruby-libxml"
+      ruby ruby-libxml ruby-dev build-essential pcscd libpcsclite1 libpcsclite-dev"
     # [2026-10-08] QEMU de l hote avec OpenGL (virgl) : le controle final de 88
     # exige qemu-system-x86_64 + hw-display-virtio-vga-gl.so + ui-sdl.so DANS le
     # rootfs. Sans ces paquets l ISO sortait en echec (« pmOS QEMU ... ✗ »).
@@ -367,6 +367,10 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
 fi
 
 apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
+# softSIM en lecteur (pcsc_server.rb) : le gem smartcard n est pas dans apt.
+# Installe dans le rootfs apres pcscd et les headers ruby (PKGS ci-dessus).
+chroot "$ROOTFS" bash -c 'gem list -i smartcard >/dev/null 2>&1 || gem install smartcard --no-document' || \
+    echo -e "${YELLOW}!${NC} gem smartcard non installe (softSIM pcsc indisponible)" >&2
 
 # build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
 # log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
