@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Claude
+Name[fr]=Claude
+Comment=Claude Code - l assistant IA en terminal
+Comment[fr]=Claude Code - l assistant IA en terminal
+Exec=/usr/local/bin/osmo-claude-anim
+Icon=/usr/share/osmo-operator/icons/claude.svg
+Terminal=false
+Categories=Development;Utility;
+Keywords=claude;ia;ai;assistant;code;anthropic;
