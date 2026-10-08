@@ -54,6 +54,8 @@ if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
 fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
+# SAP (softSIM) par defaut : la SIM du mobile vient du serveur SAP. --no-sap pour revenir a sim test.
+: "${SAP_MODE:=1}"
 # 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
 # Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
 PROFILE_CHOISI=0
@@ -113,7 +115,8 @@ Usage : ./start-direct.sh [options] [mode]
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
-    --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
+    --no-sap            pas de SIM via SAP (la SIM de test du mobile)
+    --sap, --softsim    SIM via SAP (defaut) : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la baseband (avec --shannon)
                         (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
                         chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
@@ -232,6 +235,7 @@ while [ $# -gt 0 ]; do
         --grgsm)       DSP_MODE=0 ;;
         --shannon)     SHANNON_MODE=1; DSP_MODE=0; export SHANNON_MODE ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
+        --no-sap)      SAP_MODE=0; export SAP_MODE ;;
         --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
