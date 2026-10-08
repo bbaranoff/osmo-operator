@@ -1,3 +1,16 @@
+diff --git a/src/demo_server.rb b/src/demo_server.rb
+index e89b69d..a6d9da8 100755
+--- a/src/demo_server.rb
++++ b/src/demo_server.rb
+@@ -116,7 +116,7 @@ when "pcsc"
+   server = PCSCServer.new(io)
+ when "sim"
+   require_relative 'simos_server'
+-  server = SIMServer.new(io)
++  server = SIMServer.new(io, @file)
+ else
+   raise "unkown server type"
+ end
 diff --git a/src/simos_server.rb b/src/simos_server.rb
 index 3c7a52a..3f6e2a7 100644
 --- a/src/simos_server.rb
