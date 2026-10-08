@@ -113,7 +113,7 @@ Usage : ./start-direct.sh [options] [mode]
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
-    --sap               SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
+    --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la baseband (avec --shannon)
                         (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
                         chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
@@ -232,6 +232,7 @@ while [ $# -gt 0 ]; do
         --grgsm)       DSP_MODE=0 ;;
         --shannon)     SHANNON_MODE=1; DSP_MODE=0; export SHANNON_MODE ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
+        --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -2634,6 +2635,12 @@ start_sap() {
         return 1
     fi
 }
+
+# --sap / --softsim sans --shannon : la SIM SAP est servie, la pile suit son plan.
+# En mode --shannon elle est lancee plus bas, juste avant la baseband.
+if [ "${SHANNON_MODE:-0}" != 1 ]; then
+    start_sap || { echo "SAP demande (--sap/--softsim) mais non lance" >&2; exit 1; }
+fi
 
 if [ "${SHANNON_MODE:-0}" = 1 ]; then
     # ── MODE SHANNON (v1) ────────────────────────────────────────
