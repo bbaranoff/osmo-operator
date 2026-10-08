@@ -2380,6 +2380,16 @@ PCAPWRAP
 # 27/08. Le killall couvre les processus Python que le registre ne connait pas.
 #
 # CALYPSO_NO_AUTOSTOP=1 desactive ce comportement.
+# softSIM : arrete les serveurs SAP lances par start_sap (processus demo_server.rb)
+# et supprime le socket SAP. Le motif [d] evite de se trouver soi-meme.
+kill_softsim() {
+    local p sock="${SAP_SOCK:-/tmp/osmocom_sap}"
+    for p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do
+        kill -TERM "$p" 2>/dev/null || true
+    done
+    rm -f "$sock" 2>/dev/null || true
+}
+
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
     banc_dsp_arreter >/dev/null 2>&1 || true
@@ -2387,6 +2397,10 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
         killall_python -TERM || true
+    fi
+    # softSIM : les serveurs SAP (demo_server.rb) et leur socket. CALYPSO_STOP_KILL_SOFTSIM=0 le desactive.
+    if [ "${CALYPSO_STOP_KILL_SOFTSIM:-1}" != 0 ]; then
+        kill_softsim || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi
