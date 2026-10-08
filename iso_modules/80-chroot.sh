@@ -332,7 +332,8 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev
       libtins-dev libtalloc-dev libc-ares-dev
       zstd rsync kpartx
-      qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf"
+      qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf
+      ruby ruby-libxml"
     # [2026-10-08] QEMU de l hote avec OpenGL (virgl) : le controle final de 88
     # exige qemu-system-x86_64 + hw-display-virtio-vga-gl.so + ui-sdl.so DANS le
     # rootfs. Sans ces paquets l ISO sortait en echec (« pmOS QEMU ... ✗ »).
