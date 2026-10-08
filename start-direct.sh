@@ -2644,7 +2644,7 @@ start_sap() {
     fi
     rm -f "$sock"
     ( cd "$sdir/src" && nohup ruby -r"$shim" demo_server.rb --type sim --socket unix \
-        --unix "$sock" --file "$file" --verbosity 1 >"$log" 2>&1 & )
+        --unix "$sock" --file "$file" --verbosity "${SAP_VERBOSITY:-3}" >"$log" 2>&1 & )
     for _ in $(seq 1 50); do [ -S "$sock" ] && break; sleep 0.2; done
     if [ -S "$sock" ]; then
         say_end " OK " "$C_OK" "SIM via SAP (softSIM)" "socket $sock, SIM $file, journal $log"
