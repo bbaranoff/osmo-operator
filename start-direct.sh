@@ -54,8 +54,8 @@ if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
 fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
-# SAP (softSIM) par defaut : la SIM du mobile vient du serveur SAP. --no-sap pour revenir a sim test.
-: "${SAP_MODE:=1}"
+# SAP (softSIM) desactive par defaut : la SIM du mobile est la SIM de test. --sap / --softsim pour le serveur SAP.
+: "${SAP_MODE:=0}"
 # 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
 # Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
 PROFILE_CHOISI=0
@@ -115,8 +115,8 @@ Usage : ./start-direct.sh [options] [mode]
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
-    --no-sap            pas de SIM via SAP (la SIM de test du mobile)
-    --sap, --softsim    SIM via SAP (defaut) : serveur softSIM (Ruby, /opt/GSM/softsim) sur
+    --no-sap            pas de SIM via SAP (la SIM de test du mobile), par defaut
+    --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la baseband (avec --shannon)
                         (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
                         chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
@@ -994,10 +994,16 @@ generate_mobile_cfg() {
         tpl=""
     fi
     if [ -n "$tpl" ]; then
+        # sans --sap : la SIM du mobile reste la SIM de test (sim test), pas sim sap
+        local _sim_sed=()
+        if [ "${SAP_MODE:-0}" != 1 ]; then
+            _sim_sed=(-e 's|^\([[:space:]]*\)sim sap$|\1sim test|')
+        fi
         sed \
             -e "s|bind 127.0.0.1 424[0-9]|bind 127.0.0.1 ${vty_port}|" \
             -e "s|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket ${l2sock}|" \
             -e "s|sap-socket /tmp/osmocom_sap[_0-9]*|sap-socket ${sapsock}|" \
+            "${_sim_sed[@]}" \
             -e "s|stick [0-9]*|stick ${arfcn}|" \
             -e "s|^\([[:space:]]*\)imsi .*|\1imsi ${imsi}|" \
             -e "s|^\([[:space:]]*\)imei .*|\1imei $(rand_imei) 0|" \
