@@ -88,8 +88,6 @@ MENU_MODE=0
 # L environnement gagne (DSP_MODE=0 ./start-direct.sh), comme pour le reste.
 # Si c54x_exe n est pas la, le banc retombe sur gr-gsm et le dit (plus bas).
 : "${DSP_MODE:=1}"
-# [shannon] baseband = modem Samsung Shannon sous FirmWire (au lieu du Calypso).
-: "${SHANNON_MODE:=0}"
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -112,10 +110,6 @@ Usage : ./start-direct.sh [options] [mode]
                         que la pile.
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
-    --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
-                        (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
-                        chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
-                        C54x<->Shannon (taches FB/SB) est encore en retro.
     --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/qosmo).
                         Il remplace l'appel direct a qemu-system-arm : memes
                         defauts, sockets et pty publies (<RUN_DIR>/modem.pty),
@@ -228,7 +222,6 @@ while [ $# -gt 0 ]; do
         # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
-        --shannon)     SHANNON_MODE=1; DSP_MODE=0; export SHANNON_MODE ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -2524,10 +2517,9 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # personne n'ecoute, donc pas de reseau, pas d'appel, pas de SMS par
         # oFono -- sans la moindre erreur, il se contentait de ne jamais voir le
         # mobile. On lui passe le port reellement lie, lu dans le fichier.
-            _phonesim_log="${OSMO_PHONESIM_LOG:-/tmp/osmo-phonesim-$(id -un).log}"
             ( setsid env OSMO_MOB_VTY_PORT="${_ms1_vty:-4247}" \
                   "$HERE/tools/osmo-phonesim-banc.py" \
-                  </dev/null >>"$_phonesim_log" 2>&1 & )
+                  </dev/null >>/tmp/osmo-phonesim.log 2>&1 & )
         sleep 1
         systemctl restart ofono >/dev/null 2>&1 || true
         sleep 3
@@ -2578,7 +2570,7 @@ PYON
             say_end " OK " "$C_OK" "Raccord mobile (oFono)" \
                 "modem /osmo${_rm_detail:+ - $_rm_detail} ; pty RIL : /run/osmo-ril/at-pty"
         else
-            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. ${_phonesim_log:-${OSMO_PHONESIM_LOG:-/tmp/osmo-phonesim-$(id -un).log}})"
+            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. /tmp/osmo-phonesim.log)"
         fi
     fi
 fi
@@ -2595,44 +2587,6 @@ fi
 #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie : pas de
 #                            SB, pas de BCCH, pas de SI
 # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
-if [ "${SHANNON_MODE:-0}" = 1 ]; then
-    # ── MODE SHANNON (v1) ────────────────────────────────────────
-    # Le fork monte coeur + BTS + side-car (comme --dsp), moins la chaine
-    # Calypso (qemu, pty, osmocon, l2). La baseband est le modem Samsung Shannon
-    # sous FirmWire avec le traducteur DSP (BridgeDSPPeripheral, CALYPSO_BRIDGE=1),
-    # lance par FirmWire/bridge_v1.sh. --no-attach : sinon le fork prend tmux.
-    #
-    # v1 : ce qui PASSE = coeur+BTS osmo + boot du Shannon + pont DSP (client
-    # BSP C54x udp/6702). TODO (gate retro DSP) = traduire les taches FB/SB du
-    # Shannon <-> API TI du C54x, et forcer le Shannon en 2G (UE_RAT_MODE_CAPA
-    # / AT+COPS). Tant que ce lien n'est pas pose, la LU ne se fait pas encore.
-    export MODE=shannon
-    RUN_ARGS+=(--skip "$DSP_MODULES_RETIRES" --no-attach)
-    if [ $DRY -eq 1 ]; then
-        say_begin "Transmission a run.sh puis baseband Shannon"
-        say_end " -- " "$C_DIM" "Transmission a run.sh puis baseband Shannon" "dry-run"
-        printf '  1. CALYPSO_PROFILE=%s bash %s %s\n' "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
-        printf '  2. bash %s\n' "${SHANNON_LAUNCH:-$GSM_ROOT/FirmWire/.v1/run_shannon_pmos.sh}"
-        exit 0
-    fi
-    audio_start
-    say_begin "Transmission a run.sh (coeur+BTS, sans $DSP_MODULES_RETIRES)"
-    if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then
-        say_end " KO " "$C_KO" "Transmission a run.sh" "le plan du fork a echoue, Shannon non lance"
-        exit 1
-    fi
-    say_end " OK " "$C_OK" "Transmission a run.sh" "coeur+BTS montes, baseband laissee a FirmWire/Shannon"
-    SHANNON_LAUNCH="${SHANNON_LAUNCH:-$GSM_ROOT/FirmWire/.v1/run_shannon_pmos.sh}"
-    say_begin "Baseband Shannon (FirmWire + pont DSP)"
-    if [ ! -x "$SHANNON_LAUNCH" ]; then
-        say_end " KO " "$C_KO" "Baseband Shannon" "$SHANNON_LAUNCH introuvable/non executable"
-        exit 1
-    fi
-    say_end " OK " "$C_OK" "Baseband Shannon" "$SHANNON_LAUNCH (traducteur FB/SB : TODO - gate retro DSP)"
-    # Hand-off : ce processus devient le lanceur Shannon (FirmWire + bridge).
-    exec bash "$SHANNON_LAUNCH"
-fi
-
 if [ "$DSP_BANC" = 1 ]; then
     # ── LE FORK MONTE TOUT, MOINS LA CHAINE CALYPSO ────────────────────────
     # [2026-09-22] Deux versions ratees avant celle-ci, toutes deux pour la

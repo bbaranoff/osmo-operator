@@ -3,13 +3,14 @@
 # Les bandes laterales sont celles de c54x_exe (src/montant.c), memes chemins
 # et meme format qu'en grgsm. Deux regles changent, parce qu'en DSP on sait
 # d'ou vient chaque bloc et que la liberation se lit a l'heure du DSP.
+import collections
 import logging
 import os
 import struct
 import time
 
 from .. import gsm
-from ..uplink import RELEASE_FALLBACK, Uplink
+from ..uplink import POLL, RELEASE_FALLBACK, Uplink
 
 log = logging.getLogger("pont")
 
@@ -27,6 +28,81 @@ ROM_SLOT = 1024
 # Les bursts de la ROM sortent 1 a ~5 trames apres la publication du L2 par montant.c (codage
 # puis une trame par burst). Au-dela, le bloc part code par l'hote. PONT_UL_ROM=0 : toujours l'hote.
 ROM_ATTENTE = float(os.environ.get("PONT_UL_ROM_ATTENTE", "0.12"))
+
+# [2026-10-04] LE TUYAU UNIQUE : LES BURSTS MONTANTS FINAUX DE LA ROM, TELS QUELS, A SON NUMERO DE TRAME.
+#
+# c54x_exe (src/tsp_tx.c, pont.c tx_tsp_publier) publie dans calypso_tx_rom chaque burst que la ROM
+# a fini de construire dans son script TSP pour l'ABB : sequence d'apprentissage, queues, inversion
+# I/Q et chiffrement A5 deja appliques par la ROM, 148 bits, avec le numero de trame que l'ARM lui a
+# donne pour ce burst (= celui du chiffrement : dsp_tester tx-sdcch-a5, 24/24). Avec PONT_UL_RAW=1 le
+# pont les envoie a la BTS tels quels, a ce fn, sans codage ni A5 cote hote : RACH sur TS0, bursts
+# normaux sur le TN du canal dedie (TCH si ouvert, sinon le SDCCH annonce). La BTS accepte un burst
+# montant quel que soit son retard (osmo-bts trx_sched_ul_burst ne rejette pas sur le fn) ; le
+# chemin hote classique continue de tourner pour les journaux, les stats et l'etat (GSMTAP), mais
+# ses bursts vont dans un puits (Transmitter remplace par TransmitterPuits). PONT_UL_RAW_DECAL=<n>
+# ajoute n trames au fn de la ROM (0 par defaut : la ROM chiffre a ce fn, la BTS dechiffre a ce fn).
+SB_TX_ROM = "/dev/shm/calypso_tx_rom"
+TX_ROM_SLOT = 160
+UL_RAW = os.environ.get("PONT_UL_RAW", "0") == "1"
+UL_RAW_DECAL = int(os.environ.get("PONT_UL_RAW_DECAL", "0"))
+# [2026-10-04 soir] LE TCH RESTE A L'HOTE. Avec montant.c qui laisse B_BLUD a la ROM, la ROM emet bien
+# le SABM FACCH et la SACCH/T sur le TS2 (appel de 19:18 : SABM recu par la BTS, connect ack), mais
+# AUCUN burst de parole (rejeu : 1290 trames a_du consommees, zero burst hl=hu=0 ; le serialiseur
+# `cc 0x8900,tc` de 0x8726 n'est jamais appele pour la parole). Envoyer le TCH de la ROM, c'est donc
+# couper la voix montante ; melanger bursts ROM et hote sur le meme TCH casse la FACCH (osmo-bts
+# decode au bid 3 de chaque burst recu et decale son tampon a chaque bid 0). Tant que la ROM n'emet
+# pas la parole : RACH et SDCCH/SACCH par la ROM, le TCH entier (FACCH, SACCH/T, parole) par l'hote.
+# PONT_UL_RAW_TCH=1 : tout par la ROM (voix montante coupee).
+UL_RAW_TCH = os.environ.get("PONT_UL_RAW_TCH", "0") == "1"
+
+
+class RomTxRing:
+    """Lecteur de calypso_tx_rom : (seq, fn, type, tsc, bits[148]) dans l'ordre d'ecriture."""
+    def __init__(self):
+        self.fd = None
+        self.seq = 0            # dernier seq consomme
+
+    def nouveaux(self):
+        try:
+            if self.fd is None:
+                self.fd = os.open(SB_TX_ROM, os.O_RDONLY)
+            hdr = os.pread(self.fd, 8, 0)
+        except OSError:
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+            return []
+        if len(hdr) < 8:
+            return []
+        w, n = struct.unpack("<II", hdr)
+        if w <= self.seq:
+            return []
+        debut = max(self.seq + 1, w - n + 1)
+        out = []
+        for seq in range(debut, w + 1):
+            case = os.pread(self.fd, TX_ROM_SLOT, 8 + ((seq - 1) % n) * TX_ROM_SLOT)
+            if len(case) < TX_ROM_SLOT or struct.unpack_from("<I", case, 0)[0] != seq:
+                continue
+            fn, typ, tsc = struct.unpack_from("<IBB", case, 4)
+            out.append((seq, fn, typ, tsc, bytes(case[12:12 + 148])))
+        self.seq = w
+        return out
+
+
+class TransmitterPuits:
+    """Puits pour les bursts codes par l'hote quand PONT_UL_RAW=1 : rien ne part, sauf ceux du TCH
+    (PONT_UL_RAW_TCH=0, voir UL_RAW_TCH), qui vont au vrai Transmitter."""
+    def __init__(self, stats, vrai=None, tch=None):
+        self.stats = stats
+        self.vrai = vrai
+        self.tch = tch
+        self.n = 0
+
+    def schedule(self, tn, fn_air, burst, cipher, essais=0):
+        if not UL_RAW_TCH and self.vrai is not None and self.tch is not None and tn == self.tch.active_tn():
+            return self.vrai.schedule(tn, fn_air, burst, cipher, essais)
+        self.n += 1
+
 
 
 class RomXcchRing:
@@ -156,3 +232,96 @@ class UplinkDsp(Uplink):
         self.ded_active = active
         self.tch.close(reason)
         log.info("%s : Kc garde jusqu'a la prochaine IMMEDIATE ASSIGNMENT (la BTS chiffre encore)", reason)
+
+    def run(self):
+        """[2026-10-04] PONT_UL_RAW=1 : voir RomTxRing. Les _poll_* continuent (journaux, stats, etat),
+        leurs bursts vont au puits ; ceux de la ROM partent par self.tx_rom.trx.send_ul, TOUT DE SUITE :
+        leur fn est definitif (c'est celui du chiffrement de la ROM), la BTS les range par fn quel que
+        soit leur retard (osmo-bts trx_sched_ul_burst), et la fenetre du Transmitter (PONT_UL_RETARD_MAX,
+        26 trames) en jetait une partie des que l'avance BTS depassait ~23 trames (run de 17:36 : tard=702
+        sur 2000). Le canal dedie est relu de force (refresh) quand un burst normal arrive sans TN connu
+        -- le cache de 100 ms faisait perdre les premiers bursts du SDCCH, donc le SABM -- et les bursts
+        attendent jusqu'a 0,3 s que le TN soit connu."""
+        if not UL_RAW:
+            return Uplink.run(self)
+        ring = RomTxRing()
+        n = {0: 0, 1: 0, 2: 0}
+        attente = collections.deque()
+        perdus = 0
+        log.info("PONT_UL_RAW=1 : bursts montants = ceux de la ROM (%s), emis a son fn%s, sans codage ni A5 cote hote",
+                 SB_TX_ROM, (" %+d" % UL_RAW_DECAL) if UL_RAW_DECAL else "")
+
+        def tn_dedie():
+            # [2026-10-04, run de 18:19] Le TN est celui ou le FIRMWARE est, d'apres le tap QEMU
+            # (calypso_dcch_cfg) : des l'ASSIGNMENT COMMAND il passe sur le TCH et y envoie le SABM
+            # FACCH, l'ASSIGNMENT COMPLETE, la parole ; plan() garde le SDCCH « pour un retour » et
+            # tch.is_open() n'est vrai qu'apres la preuve cote pont -- les premiers bursts du TCH
+            # partaient donc sur le TS du SDCCH et l'assignation echouait (ASSIGNMENT FAILURE cause 1).
+            tchf = self.dedicated.tch()
+            if tchf is None:
+                self.dedicated.refresh()
+                tchf = self.dedicated.tch()
+            if tchf is not None:
+                return tchf[2]
+            if self.tch.is_open() and self.tch.active_tn() is not None:
+                return self.tch.active_tn()
+            ded = self.dedicated.plan()
+            if ded is None:
+                self.dedicated.refresh()
+                ded = self.dedicated.plan()
+            return ded[2] if ded else None
+
+        tch_dit = set()
+        tch_rom = [0]
+
+        def envoyer(seq, fn, typ, tsc, bits, tn):
+            if typ != 1 and not UL_RAW_TCH and tn == self.tch.active_tn():
+                tch_rom[0] += 1          # voir UL_RAW_TCH : le TCH est code et emis par l'hote
+                if tch_rom[0] == 1:
+                    log.info("bursts ROM du TCH TS%d non emis : FACCH, SACCH/T et parole restent codes par l'hote "
+                             "(PONT_UL_RAW_TCH=0), la ROM n'emet pas encore la parole montante", tn)
+                return
+            self.tx_rom.trx.send_ul(tn, (fn + UL_RAW_DECAL) % gsm.HYPERFRAME, list(bits), False)
+            if typ != 1 and self.dedicated.tch() is not None and tn not in tch_dit:
+                tch_dit.add(tn)
+                log.info("bursts ROM sur le TCH TS%d : parole, FACCH et SACCH montants codes et chiffres par la ROM", tn)
+            k = typ if typ in n else 0
+            n[k] += 1
+            total = n[0] + n[1] + n[2]
+            if total <= 5 or (typ == 1 and n[1] <= 5) or total % 1000 == 0:
+                log.info("burst ROM #%d %s fn=%u TS%d%s (RACH %d, NB %d, ? %d, attendus %d, perdus %d)", seq,
+                         "RACH" if typ == 1 else "NB" if typ == 2 else "?", fn, tn,
+                         (" TSC%d" % tsc) if typ == 2 else "", n[1], n[2], n[0], len(attente), perdus)
+
+        while True:
+            self._poll_release()
+            self._poll_rach()
+            self._poll_sdcch()
+            self._poll_facch()
+            self._poll_sacch()
+            self._poll_voice()
+            if attente:
+                tn = tn_dedie()
+                now = time.monotonic()
+                while attente:
+                    seq, fn, typ, tsc, bits, t0 = attente[0]
+                    if tn is not None:
+                        attente.popleft()
+                        envoyer(seq, fn, typ, tsc, bits, tn)
+                    elif now - t0 > 0.3:
+                        attente.popleft()
+                        perdus += 1
+                        if perdus <= 5:
+                            log.info("burst ROM #%d fn=%u (TSC %d) : aucun canal dedie connu apres 300 ms, perdu", seq, fn, tsc)
+                    else:
+                        break
+            for seq, fn, typ, tsc, bits in ring.nouveaux():
+                if typ == 1:
+                    envoyer(seq, fn, typ, tsc, bits, 0)
+                    continue
+                tn = tn_dedie()
+                if tn is None:
+                    attente.append((seq, fn, typ, tsc, bits, time.monotonic()))
+                    continue
+                envoyer(seq, fn, typ, tsc, bits, tn)
+            time.sleep(POLL)

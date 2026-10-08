@@ -20,6 +20,7 @@
 # sous-paquet.
 import gc
 import logging
+import os
 import signal
 import sys
 import time
@@ -65,6 +66,14 @@ def main(argv=None):
     downlink = DownlinkDsp(cfg, stats, cipher, dedicated, tch, feeder, record, timeslots)
     uplink = UplinkDsp(cfg, clock, stats, dedicated, tch, transmitter, feeder, cipher)
     scheduler = TchScheduler(cfg, clock, stats, tch, uplink, transmitter)
+    if os.environ.get("PONT_UL_RAW", "0") == "1":
+        # [2026-10-04] tuyau unique : les bursts de la ROM partent par `transmitter`, ceux que l'hote
+        # code encore (RACH, SDCCH, FACCH, SACCH, parole) vont au puits. Voir dsp/uplink.py RomTxRing.
+        from .uplink import TransmitterPuits
+        uplink.tx_rom = transmitter
+        uplink.tx = TransmitterPuits(stats, transmitter, tch)   # le TCH passe au vrai Transmitter (UL_RAW_TCH)
+        scheduler.tx = uplink.tx
+        log.info("PONT_UL_RAW=1 : montant = bursts finaux de la ROM (calypso_tx_rom) ; codage et A5 hote inactifs")
 
     log.info("pont TRX : ports %d/%d/%d, ARFCN %d, BSIC %d, avance UL %d trames",
              cfg.trx_base, cfg.trx_base + 1, cfg.trx_base + 2, cfg.arfcn, cfg.bsic, cfg.ul_fn_advance)
