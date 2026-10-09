@@ -123,6 +123,25 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     && rm -rf /var/lib/apt/lists/*
 ENV DEBIAN_FRONTEND=noninteractive
 
+# [2026-10-09] jobs-for-ram : nombre de jobs `make` BORNE PAR LA RAM dispo
+# (~2 Go par job), plafonne par nproc, plancher 1. Pourquoi : buildkit batit
+# plusieurs stages EN PARALLELE, et grgsm-venv compile GNU Radio - des unites
+# de traduction enormes. Avec `make -j$(nproc)` sur un runner arm64 (beaucoup
+# de coeurs, RAM limitee), des dizaines de g++ concurrents epuisent la memoire
+# et le runner tue le build : SIGTERM, exit 143 (constate sur build-rpi, run
+# 37928910981, en plein `make` de gr-gsm). Tous les stages derivent de `base`,
+# donc le helper est partout. Pur shell (grep/tr/nproc), pas d awk requis.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'n=$(nproc 2>/dev/null || echo 1)' \
+    'm=$(grep -m1 MemAvailable /proc/meminfo 2>/dev/null | tr -dc 0-9)' \
+    '[ -n "$m" ] || m=$(grep -m1 MemTotal /proc/meminfo 2>/dev/null | tr -dc 0-9)' \
+    '[ -n "$m" ] || { echo "$n"; exit 0; }' \
+    'j=$(( m / 2097152 ))' \
+    '[ "$j" -lt 1 ] && j=1' \
+    '[ "$j" -lt "$n" ] && echo "$j" || echo "$n"' \
+    > /usr/local/bin/jobs-for-ram && chmod 755 /usr/local/bin/jobs-for-ram
+
 # 1. Dépendances système — TOUTES ici, y compris celles qu'installait
 #    Dockerfile.run. Une seule liste, un seul endroit où la faire évoluer :
 #    l'image d'exécution n'a plus à connaître apt du tout.
@@ -302,7 +321,7 @@ RUN for repo in \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
     ./configure $EXTRA_FLAGS && \
-    make -j$(nproc) && \
+    make -j"$(jobs-for-ram)" && \
     # make install sous DESTDIR -> .deb dans le cache -> dpkg -i dans la racine
     osmo-deb pack "$name" "$version" make install && \
     ldconfig \
@@ -337,7 +356,7 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       && cd ${ROOT}/osmo-trx \
       && autoreconf -fi \
       && ./configure --with-ipc \
-      && make -j$(nproc) \
+      && make -j"$(jobs-for-ram)" \
       && osmo-deb pack osmo-trx 1.7.2+ipc make install \
       && ldconfig; \
     fi
@@ -364,7 +383,7 @@ RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
       && cd ${ROOT}/osmo-bts \
       && autoreconf -fi \
       && ./configure --enable-virtual --enable-trx \
-      && make -j$(nproc) \
+      && make -j"$(jobs-for-ram)" \
       && osmo-deb pack osmo-bts 1.10.0+rand make install \
       && ldconfig; \
     fi
@@ -388,7 +407,7 @@ RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
       && cd ${ROOT}/osmo-hlr \
       && autoreconf -fi \
       && ./configure \
-      && make -j$(nproc) \
+      && make -j"$(jobs-for-ram)" \
       && osmo-deb pack osmo-hlr 1.9.2+rand make install \
       && ldconfig; \
     fi
@@ -410,7 +429,7 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
       && cd ${ROOT}/osmo-msc \
       && autoreconf -fi \
       && ./configure --enable-smpp \
-      && make -j$(nproc) \
+      && make -j"$(jobs-for-ram)" \
       && osmo-deb pack osmo-msc 1.15.0+rand make install \
       && ldconfig; \
     fi
@@ -448,7 +467,7 @@ RUN if ! osmo-deb install osmo-gapk 0.git; then \
       cd osmo-gapk && \
       autoreconf -fi && \
       ./configure --enable-alsa && \
-      make -j$(nproc) && \
+      make -j"$(jobs-for-ram)" && \
       osmo-deb pack osmo-gapk 0.git make install && \
       ldconfig; \
     fi
@@ -467,7 +486,7 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
       git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
       cd gsup-smsc-proto && \
       ./configure --with-osmo=/usr/local && \
-      make -j$(nproc) && \
+      make -j"$(jobs-for-ram)" && \
       osmo-deb pack gsup-smsc-proto 0.git \
         sh -c 'for i in daemon sendmt; do make -C "$i" DESTDIR="$DESTDIR" install || exit 1; done' && \
       ldconfig; \
@@ -485,7 +504,7 @@ RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       tar xf sms-coding-utils-latest.tar.bz2 && \
       cd sms-coding-utils-r1 && \
       ./configure && \
-      make -j$(nproc) && \
+      make -j"$(jobs-for-ram)" && \
       osmo-deb pack sms-coding-utils 0.r1 \
         sh -c 'mkdir -p "$DESTDIR/usr/local/bin" && make install DESTDIR="$DESTDIR"'; \
     fi
@@ -497,7 +516,7 @@ RUN if ! osmo-deb install libosmo-dsp 0.git; then \
       && cd libosmo-dsp \
       && autoreconf -fi \
       && ./configure \
-      && make -j$(nproc) \
+      && make -j"$(jobs-for-ram)" \
       && osmo-deb pack libosmo-dsp 0.git make install \
       && ldconfig; \
     fi
@@ -615,7 +634,7 @@ RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-transceiver \
       && cd /opt/GSM/osmocom-bb-transceiver/src \
-      && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
+      && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j"$(jobs-for-ram)" \
       && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \
          /usr/local/bin/transceiver \
       && osmo-deb snapshot osmocom-bb-transceiver 0.git /usr/local/bin/transceiver \
@@ -628,7 +647,7 @@ RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-burst_ind \
       && cd /opt/GSM/osmocom-bb-burst_ind/src \
-      && make nofirmware -j$(nproc) \
+      && make nofirmware -j"$(jobs-for-ram)" \
       && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/ccch_scan \
          /usr/local/bin/ccch_scan \
       && { cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/bcch_scan \
@@ -797,11 +816,15 @@ ARG OSMO_DEB_REFRESH=0
 # arbres /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} ne sont pas dans le paquet - rien
 # ne les lit au runtime (le venv porte ses .so avec un RPATH sur /root/.env).
 COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
+# [2026-10-09] build_gnuradio.sh est VENDORISE dans le depot (scripts/), plus de
+# `curl | bash` d un gist externe : il est versionne avec le reste et borne
+# deja chaque `cmake --build` par jobs-for-ram (anti-OOM sur arm64).
+COPY scripts/build_gnuradio.sh /tmp/build_gnuradio.sh
 RUN if ! osmo-deb install grgsm-venv 0.git; then \
-      curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
+      bash /tmp/build_gnuradio.sh \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
-      && make -j"$(nproc)" \
+      && make -j"$(jobs-for-ram)" \
       && make install \
       && . ~/.env/bin/activate && pip install matplotlib \
       && osmo-deb snapshot grgsm-venv 0.git /root/.env /etc/ld.so.conf.d/gnuradio.conf; \
