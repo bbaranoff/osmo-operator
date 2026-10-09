@@ -25,6 +25,21 @@ def imsi_body(imsi):
     return "08" + "".join("%02x" % b for b in out)
 
 
+def iccid_body(imsi, mcc, mnc):
+    """ICCID de 20 chiffres (89 + MCC + MNC + fin de l IMSI + 00 + cle de Luhn),
+    en BCD a quartets inverses comme TS 51.011 : le sim.xml de demonstration porte
+    un ICCID aux quartets invalides (e, a) que le mobile affichait en > et :."""
+    d = [int(c) for c in "89" + mcc + mnc + imsi[5:] + "00"]
+    tot = 0
+    for k, v in enumerate(reversed(d)):  # le chiffre de controle s ajoute apres
+        if k % 2 == 0:
+            v *= 2
+            v = v - 9 if v > 9 else v
+        tot += v
+    d.append((10 - tot % 10) % 10)
+    return "".join("%x%x" % (d[k + 1], d[k]) for k in range(0, 20, 2))
+
+
 def plmn_bcd(mcc, mnc):
     """PLMN sur 3 octets (TS 31.102) : MCC1 MCC2 / MNC3 MCC3 / MNC2 MNC1."""
     m = [int(c) for c in mcc]
@@ -72,6 +87,8 @@ def main(argv):
     mcc = imsi[:3]
     mnc = imsi[3:5]  # MNC a 2 chiffres, comme l IMSI du plan
     s = set_plmn(s, mcc, mnc)
+    # EF_ICCID (2fe2) : 10 octets, valide en BCD
+    s = set_file_body(s, "2fe2", lambda b: iccid_body(imsi, mcc, mnc))
     open(dst, "w", encoding="utf-8").write(s)
     print("EF_IMSI %s -> %s (%d occurrence(s))" % (imsi, body, n))
 

@@ -2648,6 +2648,12 @@ start_sap() {
         say_end " -- " "$C_DIM" "SIM via SAP (softSIM)" "dry-run : ruby -r$shim demo_server.rb --unix $sock --file $file"
         return 0
     fi
+    # sim-op1.xml est regenere a chaque lancement : le serveur le reecrit a chaque
+    # deconnexion du client, et un fichier ancien garderait l ICCID / le PLMN d avant.
+    if [ -z "${SAP_FILE:-}" ] && [ -f "$sdir/src/sim.xml" ] && [ -f "$HERE/tools/softsim/make_sim_op1.py" ]; then
+        python3 "$HERE/tools/softsim/make_sim_op1.py" "$sdir/src/sim.xml" "$sdir/src/sim-op1.xml" \
+            --imsi "${OSMO_SIM_IMSI:-001010001000001}" >/dev/null 2>&1 || true
+    fi
     rm -f "$sock"
     ( cd "$sdir/src" && nohup ruby -r"$shim" demo_server.rb --type sim --socket unix \
         --unix "$sock" --file "$file" --verbosity "${SAP_VERBOSITY:-3}" >"$log" 2>&1 & )

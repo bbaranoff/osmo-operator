@@ -545,11 +545,18 @@ ARG OSMO_DEB_REFRESH=0
 # retard de 0,3 a 2 ms decalait la base de temps a chaque fois ; osmo-bts-trx
 # compensait en boucle et la parole perdait des trames. Patch maintenu dans
 # patches/, applique aussi par install_modules/40-patches.sh en natif.
+# mobile : une SIM reinseree sans RPLMN (reconnexion SAP) restait en A6 et la
+# recherche de PLMN finissait « unhandled » (patches/osmocom-bb-plmn-a6-reinsert.patch).
 COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
+COPY patches/osmocom-bb-plmn-a6-reinsert.patch /tmp/osmocom-bb-plmn-a6-reinsert.patch
+# PLMNsel / FPLMN lus avec osmo_plmn_to_bcd (ecriture) au lieu de from_bcd : 000-00.
+COPY patches/osmocom-bb-sim-plmn-from-bcd.patch /tmp/osmocom-bb-sim-plmn-from-bcd.patch
 RUN if ! osmo-deb install osmocom-bb 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-clck-gen-frame-tolerance.patch && \
+      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-plmn-a6-reinsert.patch && \
+      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-sim-plmn-from-bcd.patch && \
       cd osmocom-bb/src && \
       # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
       # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
