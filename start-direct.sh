@@ -1029,7 +1029,7 @@ line vty
 ms 1
  layer2-socket ${l2sock}
  sap-socket ${sapsock}
- sim reader
+ sim $([ "${SAP_MODE:-0}" = 1 ] && echo sap || echo test)
  imsi ${imsi}
  ki comp128 ${ki}
  network-selection-mode auto
