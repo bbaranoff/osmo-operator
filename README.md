@@ -1,5 +1,7 @@
 [![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
 
+https://github.com/bbaranoff/osmo-operator/releases/tag/v0.1-6
+
 # osmo-operator-desktop.iso
 
 A complete GSM + LTE operator on a single live image, with a GNOME desktop for everything that can't be driven from the VTY. **No SDR and no physical phone**: the radio is emulated end to end, all the way down to the baseband.
