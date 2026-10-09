@@ -47,7 +47,7 @@ on:
           - lite      # le noeud sans les ateliers (osmo-operator-lite.iso)
           - desktop   # le noeud avec GNOME (osmo-operator-desktop.iso)
       pmos_image:
-        description: "Embed the postmarketOS VM image (~1.7 GB per ISO, from the pmos-image release)"
+        description: "Embed the postmarketOS VM image in the DESKTOP ISO only (~1.7 GB, from the pmos-image release)"
         type: boolean
         default: false
 
@@ -299,10 +299,10 @@ jobs:
           [ "${{ github.event.inputs.no_cache }}" = "true" ] && NO_CACHE="--no-cache"
           # L'image de la VM postmarketOS (qemu-amd64.img.zst, 1,7 Go) n'existe
           # pas sur un runner : 88-lte-pmos.sh la telecharge depuis l'asset de
-          # Release quand on lui donne l'URL. UNE fois telechargee, elle est
-          # embarquee dans CHAQUE ISO (operator, lite, desktop) - +5 Go de
-          # disque et d'artefacts, d'ou le defaut a false. Sans elle, le premier
-          # clic sur le telephone fait un "pmbootstrap install" complet.
+          # Release quand on lui donne l'URL. [2026-10-09] Elle n'est embarquee
+          # que dans l'ISO desktop (88-lte-pmos.sh gate sur ISO_DESKTOP), pas
+          # dans interstp, operator ni lite. Sans elle, le premier clic sur le
+          # telephone fait un "pmbootstrap install" complet.
           # sudo env ... : sur un runner, sudoers est en env_reset sans SETENV,
           # « sudo -E » et « sudo VAR=x » peuvent etre refuses ; env(1) lance en
           # root, lui, passe toujours.

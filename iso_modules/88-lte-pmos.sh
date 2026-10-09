@@ -287,7 +287,9 @@ fi
 # puis OSMO_PMOS_IMAGE_URL=<url de l asset> au build (le workflow le passe).
 # Vide = on ne telecharge rien : c est le defaut, l image pese trois fois son
 # poids dans un build --all (operator, lite, desktop).
-if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
+# [2026-10-09] Desktop seul : interstp, operator et lite n embarquent plus la VM
+# (ils ne lancent pas le telephone en local, et l image pese 1,7 Go de plus).
+if [ "$ISO_DESKTOP" = "1" ] && [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
     _icache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst"
     echo -e "  ${CYAN}·${NC} image de la VM : telechargement depuis $OSMO_PMOS_IMAGE_URL"
     install -d "$(dirname "$_icache")"
@@ -306,7 +308,7 @@ if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
 fi
 [ "${OSMO_ISO_PMOS_IMAGE:-}" = "none" ] && OSMO_ISO_PMOS_IMAGE=""
 # L image de la VM : celle donnee, ou celle de l hote (voir ci-dessus).
-if [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
+if [ "$ISO_DESKTOP" = "1" ] && [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     if [ -f "$OSMO_ISO_PMOS_IMAGE" ]; then
         install -d "$ROOTFS/opt/user_interface/pmos/image"
         case "$OSMO_ISO_PMOS_IMAGE" in
