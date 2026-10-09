@@ -65,7 +65,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── EN AMONT : l'image Docker arm64, construite et publiee a part ───────────
+  # Voir docker-arm.yml. Base inchangee (meme empreinte) = rien a compiler ; le
+  # job build-rpi n'a plus qu'a la tirer au lieu de tout recompiler.
+  docker-arm:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-arm.yml
+    with:
+      rebuild: false
+      no_cache: ${{ github.event.inputs.no_cache == 'true' }}
+
   build-rpi:
+    needs: docker-arm
     # Sur un push de tag les entrees de workflow_dispatch sont VIDES : le `||`
     # rend alors le natif, c'est-a-dire le seul chemin qui puisse aboutir.
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-24.04-arm' }}
@@ -96,9 +109,8 @@ jobs:
 
       # L'EMPREINTE DU CONTEXTE : la meme commande que build-iso.yml et
       # docker.yml, au caractere pres. Elle ne sert ici qu'a nommer le cache
-      # .deb - aucune image arm64 n'est publiee sur GHCR (docker.yml ne
-      # construit que de l'amd64), donc pas de --skip-build possible : l'image
-      # de base est batie ici, et c'est l'essentiel du temps du job.
+      # .deb. La base arm64 est desormais publiee par docker-arm.yml (job
+      # amont) et tiree plus bas avec --skip-build : le job ne la compile plus.
       - name: Empreinte du contexte
         id: key
         run: |
@@ -176,6 +188,31 @@ jobs:
           echo "swap +${SWAP_GB} Go sur $BASE (libre ${FREE_GB} Go avant)"
           free -h | sed -n '1p;/Swap/p'
 
+      # ── La base arm64 vient de GHCR (job docker-arm, en amont) ──────────
+      # Tiree ICI, sous le compte runner qui porte les identifiants GHCR :
+      # build-iso.sh tourne sous sudo et n'en a pas. Le hub (stp) se construit
+      # seul en minutes depuis Dockerfile.stp : il ne tire pas les 11 Go.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image de base arm64 depuis GHCR
+        if: github.event.inputs.mode != 'stp'
+        run: |
+          REF='${{ needs.docker-arm.outputs.image }}'
+          docker pull --platform linux/arm64 "$REF"
+          echo "ISO_DOCKER_SRC=--skip-build=$REF" >> "$GITHUB_ENV"
+          echo "::notice::Base arm64 tiree de GHCR : $REF - pas de compilation ici."
+          mkdir -p /tmp/debs-out
+          cid=$(docker create "$REF" /bin/true)
+          docker cp "$cid:/var/cache/osmo-debs/." /tmp/debs-out/ 2>/dev/null || true
+          docker rm "$cid" >/dev/null
+          cp -f /tmp/debs-out/osmo-build-*.deb "$OSMO_DEB_CACHE/" 2>/dev/null || true
+          rm -rf /tmp/debs-out
+
       - name: Build image SD
         run: |
           chmod +x build-iso.sh
@@ -201,7 +238,7 @@ jobs:
           # root passe toujours.
           sudo env OSMO_HOST_DOCKER="$OSMO_HOST_DOCKER" \
                    OSMO_DEB_CACHE="$OSMO_DEB_CACHE" \
-               ./build-iso.sh $NO_CACHE --kb=us $ISO_ARGS
+               ./build-iso.sh $NO_CACHE ${ISO_DOCKER_SRC:-} --kb=us $ISO_ARGS
           ls -lh ./*-rpi4.img 2>/dev/null || true
           df -h / /mnt || true
         env:

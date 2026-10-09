@@ -1,0 +1,191 @@
+name: Docker arm64 (GHCR)
+
+# L'image de BASE (Dockerfile -> osmocom-nitb) construite NATIVEMENT en aarch64
+# et publiee sur GHCR sous osmocom-nitb:base-arm64-<empreinte>. C'est le pendant
+# arm64 du job `base` de docker.yml (qui ne fait que de l'amd64).
+#
+# Pourquoi un workflow a part, en amont de build-arm.yml : jusqu'ici l'image SD
+# compilait toute la pile DANS son propre job (« rien n'est publie en arm64 »,
+# donc pas de --skip-build) - c'etait l'essentiel des 6 h. Ici la compilation
+# sort dans un job dedie, avec ses caches (couches via :cache-arm64, .deb via
+# actions/cache), et build-arm.yml n'a plus qu'a TIRER l'image. Une base
+# inchangee (meme empreinte) n'est pas reconstruite.
+#
+# L'empreinte est la MEME commande que docker.yml / build-iso.yml : memes
+# fichiers, donc memes contenus. Le prefixe `base-arm64-` evite qu'elle
+# collisionne avec la base amd64 du meme commit.
+
+on:
+  workflow_call:
+    inputs:
+      rebuild:
+        description: "Reconstruire meme si l'empreinte existe deja"
+        type: boolean
+        default: false
+      no_cache:
+        description: "Sans cache de couches (--no-cache)"
+        type: boolean
+        default: false
+    outputs:
+      image:
+        description: "Reference GHCR de la base arm64"
+        value: ${{ jobs.base-arm64.outputs.image }}
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Reconstruire meme si l'empreinte existe deja"
+        type: boolean
+        default: false
+      no_cache:
+        description: "Sans cache de couches (--no-cache)"
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  base-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.key.outputs.image }}
+      hit:   ${{ steps.probe.outputs.hit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Empreinte du contexte
+        id: key
+        run: |
+          REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
+                                helpers opt-gsm tools patches \
+                | sort | xargs sha256sum | sha256sum | cut -c1-16)
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${REPO}/osmocom-nitb:base-arm64-${KEY}" >> "$GITHUB_OUTPUT"
+          echo "cache=${REGISTRY}/${REPO}/osmocom-nitb:cache-arm64"       >> "$GITHUB_OUTPUT"
+          echo "Empreinte du contexte : $KEY"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: La base arm64 existe-t-elle deja ?
+        id: probe
+        run: |
+          HIT=false
+          if [ "${{ inputs.rebuild }}" != "true" ] \
+             && docker manifest inspect '${{ steps.key.outputs.image }}' >/dev/null 2>&1; then
+            HIT=true
+          fi
+          echo "hit=$HIT" >> "$GITHUB_OUTPUT"
+          if [ "$HIT" = true ]; then
+            echo "::notice::Base arm64 inchangee, deja publiee : ${{ steps.key.outputs.image }}"
+          else
+            echo "::notice::Base arm64 absente ou forcee : construction native."
+          fi
+
+      - name: Disque pour docker
+        if: steps.probe.outputs.hit != 'true'
+        uses: ./.github/actions/docker-disk
+        with:
+          need: "40"
+
+      - name: Buildx
+        if: steps.probe.outputs.hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Preparer le cache .deb
+        if: steps.probe.outputs.hit != 'true'
+        run: |
+          sudo mkdir -p /var/cache/osmo-debs
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/osmo-debs
+
+      # Cle distincte de celle de build-arm.yml (osmo-debs-noble-arm64-) : meme
+      # contenu, mais ce job est desormais celui qui l'alimente.
+      - name: Cache .deb (osmo-deb, arm64)
+        if: steps.probe.outputs.hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/osmo-debs
+          key: osmo-debs-noble-arm64-${{ steps.key.outputs.key }}
+          restore-keys: |
+            osmo-debs-noble-arm64-
+
+      # Meme filet anti-OOM que build-arm.yml : buildkit batit plusieurs stages
+      # a la fois, le pic cumule depasse la RAM du runner arm64.
+      - name: Swap anti-OOM
+        if: steps.probe.outputs.hit != 'true'
+        run: |
+          pick() { df -P "$1" 2>/dev/null | awk 'NR==2{print $4}'; }
+          AV_ROOT=$(pick /); AV_MNT=$(pick /mnt)
+          BASE=/; [ -n "$AV_MNT" ] && [ "${AV_MNT:-0}" -gt "${AV_ROOT:-0}" ] && BASE=/mnt
+          FREE_GB=$(( $(pick "$BASE") / 1024 / 1024 ))
+          SWAP_GB=12; THIRD=$(( FREE_GB / 3 ))
+          [ "$SWAP_GB" -gt "$THIRD" ] && SWAP_GB=$THIRD
+          [ "$SWAP_GB" -lt 2 ] && SWAP_GB=2
+          SF="$BASE/osmo-swapfile"
+          sudo swapoff "$SF" 2>/dev/null || true; sudo rm -f "$SF"
+          sudo fallocate -l ${SWAP_GB}G "$SF" 2>/dev/null \
+            || sudo dd if=/dev/zero of="$SF" bs=1M count=$((SWAP_GB*1024)) status=none
+          sudo chmod 600 "$SF"; sudo mkswap "$SF" >/dev/null; sudo swapon "$SF"
+          echo "swap +${SWAP_GB} Go sur $BASE"
+
+      - name: Temoin disque/memoire
+        if: steps.probe.outputs.hit != 'true'
+        run: |
+          nohup bash -c 'while true; do
+            echo "$(date -u +%H:%M:%S)  / $(df -h --output=avail / | tail -1 | tr -d " ")  /mnt $(df -h --output=avail /mnt 2>/dev/null | tail -1 | tr -d " ")  mem $(free -m | awk "/^Mem:/{print \$7}")Mo"
+            sleep 30
+          done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
+
+      # Hote aarch64 : buildx construit pour la plateforme native, sans
+      # --platform ni qemu. --push comme docker.yml : rien dans le store local.
+      - name: Build et push osmocom-nitb (base arm64)
+        if: steps.probe.outputs.hit != 'true'
+        env:
+          IMAGE: ${{ steps.key.outputs.image }}
+          CACHE: ${{ steps.key.outputs.cache }}
+          NO_CACHE: ${{ inputs.no_cache }}
+        run: |
+          mkdir -p .deb-cache
+          cp -f /var/cache/osmo-debs/osmo-build-*_arm64.deb .deb-cache/ 2>/dev/null || true
+          echo "cache .deb en entree : $(find .deb-cache -name 'osmo-build-*.deb' | wc -l) paquets"
+
+          CACHE_ARGS=(--cache-from "type=registry,ref=$CACHE")
+          REFRESH=0
+          if [ "$NO_CACHE" = true ]; then CACHE_ARGS=(--no-cache); REFRESH=1; fi
+
+          docker buildx build \
+            --platform linux/arm64 \
+            --target osmocom-nitb \
+            --build-arg "OSMO_DEB_REFRESH=$REFRESH" \
+            "${CACHE_ARGS[@]}" \
+            --cache-to type=inline \
+            -t "$IMAGE" -t "$CACHE" --push \
+            -f Dockerfile .
+
+          # Recolte des .deb : seconde passe sur `debs`, tout en cache.
+          rm -rf /tmp/debs-out && mkdir -p /tmp/debs-out
+          docker buildx build \
+            --platform linux/arm64 \
+            --target debs \
+            --build-arg "OSMO_DEB_REFRESH=$REFRESH" \
+            --cache-from "type=registry,ref=$CACHE" \
+            --output "type=local,dest=/tmp/debs-out" \
+            -f Dockerfile .
+          cp -f /tmp/debs-out/osmo-build-*.deb /var/cache/osmo-debs/ 2>/dev/null || true
+          rm -rf /tmp/debs-out .deb-cache/*.deb
+          echo "cache .deb en sortie : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets"
+          df -h / /mnt || true
+
+      - name: Temoin - dernieres mesures
+        if: always()
+        run: tail -40 "$RUNNER_TEMP/watchdog.log" 2>/dev/null || echo "(pas de temoin)"
