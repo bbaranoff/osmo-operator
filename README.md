@@ -2,6 +2,9 @@
 
 Osmo-Operator v0.1-60
 
+https://github.com/bbaranoff/osmo-operator/releases/tag/v0.1-60
+
+
 <html><head></head><body><p><a href="https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml"><img src="https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&amp;event=workflow_dispatch" alt="Build ISO"></a></p>
 <h2>osmo-operator-desktop.iso</h2>
 <p>The pmOS phone password is <code>147147</code>, the live ISO is <code>osmo</code>.</p>
