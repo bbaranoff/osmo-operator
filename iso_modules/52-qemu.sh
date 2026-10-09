@@ -15,6 +15,17 @@ QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qosmo}/build}"
 # --arm : un build QEMU de l hote est un binaire x86, il n a rien a faire dans
 # un rootfs arm64. Seul le binaire venu de l image (arm64) compte.
 [ "${ISO_ARCH:-amd64}" = "amd64" ] || QEMU_BUILD_LOCAL="/nonexistent/arm64-pas-de-build-hote"
+# [2026-10-09] Le hub inter-STP n emule aucun MS : pas de QEMU, pas de DSP, pas
+# de firmware Calypso, pas de toast ni de firmware audio. 50-injection-image.sh
+# saute deja tout son /opt/GSM. Sans ce retour, la construction du hub tentait
+# quand meme le telechargement de la ROM DSP, la compilation de toast et le
+# firmware audio TAS2781 - et crachait une volee d avertissements « introuvable »
+# sur des artefacts qu il ne lit jamais. Les gardes ISO_ROLE != interstp
+# disseminees plus bas deviennent du coup redondantes, mais on les laisse.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    echo -e "${CYAN}[5b/9] Role inter-STP : pas de QEMU/DSP/firmware (hub M3UA, aucun MS a emuler)${NC}"
+    return 0
+fi
 echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
 # L'elagage est HORS de la condition, et l'absence du binaire est FATALE. Avant,
 # les deux etaient dans la branche "binaire present" : sur une machine ou QEMU
@@ -67,8 +78,34 @@ else
         mkdir -p "$ROOTFS/opt/GSM"
         cp -a "$QSRC_HOST" "$QSRC"
         echo -e "  ${GREEN}✓${NC} qosmo repris de l'hote ${CYAN}${QSRC_HOST}${NC} ($(du -sh "$QSRC" | cut -f1))"
+    # [2026-10-09] DERNIER RECOURS : ni l'image (deb osmo-build-qosmo), ni
+    # l'hote. On clone bbaranoff/qosmO - la meme source que le Dockerfile. En
+    # regle generale on NE DEVRAIT PAS en arriver la : l'image porte l'arbre et
+    # son build/, et 50-injection-image.sh les pose. Un clone ici arrive SANS
+    # build/, donc il faut recompiler QEMU (lourd) ; on le fait seulement si
+    # l'arch de l'hote = l'arch cible, et on repointe QEMU_BUILD_LOCAL sur le
+    # build frais pour que l'installation dans le rootfs, plus bas, emprunte le
+    # chemin deja eprouve (install.sh --only install --destdir). Non fatal : le
+    # test bloquant plus bas garde son role si QEMU manque toujours.
+    elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
+             "${OSMO_QEMU_REPO:-https://github.com/bbaranoff/qosmO}" "$QSRC" \
+             >"$WORK/clone-qosmo.log" 2>&1; then
+        echo -e "  ${GREEN}✓${NC} qosmo clone GitHub (dernier recours ; arbre source, sans build/)"
+        if [ "${ISO_ARCH:-amd64}" = "$(dpkg --print-architecture)" ] && [ -f "$QSRC/install.sh" ]; then
+            if bash "$QSRC/install.sh" --only build --prefix /usr/local \
+                   --venv "$WORK/venv-qemu-clone" >"$WORK/qosmo-clone-build.log" 2>&1 \
+               && [ -x "$QSRC/build/qemu-system-arm" ]; then
+                QEMU_BUILD_LOCAL="$QSRC/build"
+                echo -e "  ${GREEN}✓${NC} qosmo : QEMU compile depuis le clone (install.sh --only build ; QEMU_BUILD_LOCAL -> rootfs)"
+            else
+                echo -e "  ${YELLOW}!${NC} qosmo : compilation QEMU depuis le clone echouee (voir $WORK/qosmo-clone-build.log)" >&2
+            fi
+        else
+            echo -e "  ${YELLOW}!${NC} qosmo : clone sans build/ et pas de recompilation (arch hote != cible, ou install.sh absent) - QEMU a fournir autrement" >&2
+        fi
     else
-        echo -e "  ${YELLOW}!${NC} qosmo introuvable (ni image, ni hote) - l'ISO n'aura pas le mode qemu" >&2
+        rm -rf "$QSRC"
+        echo -e "  ${YELLOW}!${NC} qosmo introuvable (ni image, ni hote, ni clone GitHub, voir $WORK/clone-qosmo.log) - l'ISO n'aura pas le mode qemu" >&2
     fi
 fi
 
@@ -123,8 +160,25 @@ for _e in c54x_exe grgsm_exe; do
         cp -a "/opt/GSM/$_e" "$_edst"; _ehote=1
         echo -e "  ${GREEN}✓${NC} $_e repris de l hote ${CYAN}/opt/GSM/$_e${NC} ($(du -sh "$_edst" | cut -f1))"
     else
-        echo -e "  ${YELLOW}!${NC} $_e introuvable (ni image, ni hote)" >&2
-        continue
+        # [2026-10-09] DERNIER RECOURS : ni l'image (deb osmo-build-$_e), ni
+        # l'hote. On clone la meme source que le Dockerfile ; _ehote=1 fait
+        # recompiler le binaire par le bloc portable ci-dessous, contre les
+        # sources qosmo du rootfs. En regle generale l'image le porte deja -
+        # on NE DEVRAIT PAS en arriver la.
+        case "$_e" in
+            c54x_exe)  _erepo="${OSMO_C54X_REPO:-https://github.com/bbaranoff/c54x_exe}" ;;
+            grgsm_exe) _erepo="${OSMO_GRGSM_EXE_REPO:-https://github.com/bbaranoff/grgsm_exE}" ;;
+        esac
+        mkdir -p "$ROOTFS/opt/GSM"
+        if GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$_erepo" "$_edst" \
+               >"$WORK/clone-$_e.log" 2>&1; then
+            _ehote=1
+            echo -e "  ${GREEN}✓${NC} $_e clone GitHub (dernier recours : ${CYAN}${_erepo}${NC}) - recompile portable plus bas"
+        else
+            rm -rf "$_edst"
+            echo -e "  ${YELLOW}!${NC} $_e introuvable (ni image, ni hote, ni clone GitHub, voir $WORK/clone-$_e.log)" >&2
+            continue
+        fi
     fi
     # Arbre de l hote, ISO de la meme architecture : recompile portable dans
     # le rootfs (en --arm, c est 82-arm-natif qui recompile, dans le chroot).

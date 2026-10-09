@@ -369,8 +369,17 @@ fi
 apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
 # softSIM en lecteur (pcsc_server.rb) : le gem smartcard n est pas dans apt.
 # Installe dans le rootfs apres pcscd et les headers ruby (PKGS ci-dessus).
-chroot "$ROOTFS" bash -c 'gem list -i smartcard >/dev/null 2>&1 || gem install smartcard --no-document' || \
-    echo -e "${YELLOW}!${NC} gem smartcard non installe (softSIM pcsc indisponible)" >&2
+# [2026-10-09] On est DEJA dans le chroot : ce bloc EST le corps du
+# bash -c en quotes simples ouvert en tete de module (d ou les \047 ailleurs,
+# jamais de quote simple brute). Un "chroot $ROOTFS bash -c ..." imbrique ici,
+# ecrit avec des quotes simples BRUTES, fermait ce bash -c en plein milieu : le
+# corps se coupait en deux, et tout ce qui suivait (venv, bureau, nettoyage
+# apt) partait en ARGUMENT d un gem install smartcard lance sur l HOTE. D ou la
+# trace rubygems (handle_options / invoke_with_build_args) et le message
+# « Echec de interstp.iso ». Donc : pas de chroot imbrique, pas de quote simple
+# brute - une commande du corps, comme les WARN plus bas. Non fatal.
+gem list -i smartcard >/dev/null 2>&1 || gem install smartcard --no-document || \
+    echo "  WARN: gem smartcard non installe (softSIM pcsc indisponible)"
 
 # build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
 # log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
@@ -403,13 +412,21 @@ ldconfig
 # nom tomllib, mais ABSENT de la 3.10 de jammy. Ce qui lit un TOML depuis
 # le venv en depend donc explicitement - et le garde sur noble (3.12), ou il
 # ne coute rien : le code importe tomli, pas tomllib.
-python3 -m venv /root/.env
-/root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli pytest \
-    || echo "WARN: pip a echoue pour tomli/pytest dans /root/.env"
-if /root/.env/bin/python3 -c "import tomli" 2>/dev/null; then
-    echo "  /root/.env : venv pret, tomli importable"
+# [2026-10-09] Le venv arrive deja de l image (docker cp /root/.env) : s il
+# porte tomli+pytest et que son interpreteur tourne, on ne refait NI le
+# python3 -m venv reparateur NI le pip (plus de pip en double a chaque build).
+# L import qui reussit prouve que bin/ est sain ; sinon on repare comme avant.
+if /root/.env/bin/python3 -c "import tomli, pytest" 2>/dev/null; then
+    echo "  /root/.env : venv de l image conserve, tomli+pytest deja la (pas de pip)"
 else
-    echo "WARN: /root/.env sans tomli utilisable"
+    python3 -m venv /root/.env
+    /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli pytest \
+        || echo "WARN: pip a echoue pour tomli/pytest dans /root/.env"
+    if /root/.env/bin/python3 -c "import tomli" 2>/dev/null; then
+        echo "  /root/.env : venv pret, tomli importable"
+    else
+        echo "WARN: /root/.env sans tomli utilisable"
+    fi
 fi
 
 # Docker NON installe dans le ISO (natif) : le lab tourne via start-direct.sh et le
@@ -423,7 +440,12 @@ if ! command -v node >/dev/null 2>&1; then
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
 
-if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
+# [2026-10-09] npm seulement si node_modules MANQUE. L arbre de l image (docker
+# cp) et le node_modules versionne du depot l ont deja : pas de npm install en
+# double a chaque build. install-web-service.sh plus bas reste joue dans tous
+# les cas - c est lui qui pose l unite systemd et le runtime node, que le
+# docker cp ne rapatrie pas (seules les unites osmo-* sont copiees en etape 5).
+if [ -f /opt/GSM/osmo-egprs-web/package.json ] && [ ! -d /opt/GSM/osmo-egprs-web/node_modules ]; then
     cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null || true
 fi
 

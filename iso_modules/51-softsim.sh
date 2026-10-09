@@ -13,6 +13,13 @@ if [ "${OSMO_ISO_SOFTSIM:-1}" != "1" ]; then
     return 0
 fi
 
+# [2026-10-09] Le hub inter-STP n a pas de SIM a emuler (aucun MS) : 50-injection
+# saute deja son /opt/GSM. On ne clone donc pas softsim pour lui.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    echo -e "${CYAN}[5a/9] Role inter-STP : pas de softSIM (hub M3UA)${NC}"
+    return 0
+fi
+
 SOFTSIM_REPO="${OSMO_SOFTSIM_REPO:-https://gitea.osmocom.org/sim-card/softsim.git}"
 SOFTSIM_LOCAL="${OSMO_SOFTSIM_LOCAL:-/opt/GSM/softsim}"
 SOFTSIM_TREE="$ROOTFS/opt/GSM/softsim"

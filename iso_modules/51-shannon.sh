@@ -24,6 +24,16 @@ if [ "${OSMO_ISO_SHANNON:-1}" != "1" ]; then
     return 0
 fi
 
+# [2026-10-09] Le hub inter-STP ne route que du M3UA : ni modem Shannon, ni
+# analyse Ghidra. 50-injection-image.sh saute deja tout /opt/GSM pour lui ; sans
+# ce garde-fou on clonait quand meme FirmWire + shannon_ghidra_proj et on
+# TELECHARGEAIT la base Ghidra (~1,1 Go) dans une image qui n en lit jamais une
+# ligne - le gros du "en double inutilement" de la construction du hub.
+if [ "$ISO_ROLE" = "interstp" ]; then
+    echo -e "${CYAN}[5a/9] Role inter-STP : pas de Shannon/Ghidra (hub M3UA)${NC}"
+    return 0
+fi
+
 # ── FirmWire (fork bbaranoff) ────────────────────────────────────────────────
 FIRMWIRE_REPO="${OSMO_FIRMWIRE_REPO:-https://github.com/bbaranoff/firmwire}"
 FIRMWIRE_TREE="$ROOTFS/opt/GSM/FirmWire"

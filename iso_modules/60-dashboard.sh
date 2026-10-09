@@ -21,6 +21,13 @@ mkdir -p "$WEB/web"
 # EXPLICITE : OSMO_WEB_LOCAL=/chemin ./build-iso.sh. Sinon -> git.
 # Le patch natif plus bas est idempotent (skip si server.js est deja en mode natif).
 LOCAL_WEB="${OSMO_WEB_LOCAL:-}"
+# [2026-10-09] Par defaut on GARDE le dashboard deja pose+bati par l'image
+# (docker cp de 50-injection : server.js, .git ET node_modules) : pas de
+# reclone ni de rebuild npm (80-chroot saute aussi son npm quand node_modules
+# est la). C'est le choix explicite de ne plus refaire en double ce que l'image
+# porte deja. OSMO_WEB_FRESH=1 retablit le clone frais de la branche. Sans
+# FRESH, l'ISO embarque le dashboard de l'IMAGE, pas forcement le dernier main.
+WEB_FRESH="${OSMO_WEB_FRESH:-0}"
 if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     cp "$LOCAL_WEB/server.js" "$WEB/server.js"
     [ -f "$LOCAL_WEB/package.json" ] && cp "$LOCAL_WEB/package.json" "$WEB/package.json"
@@ -30,6 +37,8 @@ if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     # Le depot suit les fichiers : c'est lui qui evite le reclone au demarrage.
     [ -d "$LOCAL_WEB/.git" ]         && cp -a "$LOCAL_WEB/.git"     "$WEB/"
     echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
+elif [ "$WEB_FRESH" != "1" ] && [ -f "$WEB/server.js" ] && [ -d "$WEB/.git" ]; then
+    echo -e "  ${GREEN}✓${NC} osmo-egprs-web : arbre de l'image conserve, pas de reclone (OSMO_WEB_FRESH=1 pour forcer ${WEB_BRANCH})"
 else
     WEB_TMP="$WORK/osmo-egprs-web"
     GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
