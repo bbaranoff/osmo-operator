@@ -47,7 +47,6 @@
 # Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
 # DejaVu, presents sur l image comme sur l hote ; numpy pour la FFT 4G (sans
 # lui, la moitie haute le dit et reste sur sa bande dessinee).
-import glob
 import json
 import os
 import re
@@ -359,28 +358,19 @@ def tail_lines(path, n, width):
         # tournait parfaitement. On lit le fichier DANS le conteneur ; le chemin
         # est celui du RUN_DIR de la pile, et `docker logs` reste en dernier
         # recours pour une image qui lancerait l operateur autrement.
-        # [2026-10-01] LE JOURNAL LE PLUS FRAIS, PAS LE PREMIER QUI EXISTE. En DSP
-        # (le defaut), le mobile du conteneur ecrit dans /tmp/c54x-pont/mobile.log
-        # (RUN_DIR de c54x_exe/run.sh) ; /tmp/osmo-nitb/logs/mobile.log y existe
-        # mais reste VIDE, et l encart retombait sur `docker logs` : pas de
-        # journal du mobile pour op2/op3 (vu sur la 1.91). Sur le natif, le
-        # premier est un lien vers le second ; dans un conteneur, non. On prend
-        # donc, en UN docker exec, le fichier non vide le plus recemment ecrit.
         data = ""
-        cands = " ".join(f"'{c}'" for c in (path, "/tmp/c54x-pont/mobile.log",
-                                             "/tmp/osmo-nitb/logs/mobile.log", "/root/mobile.log"))
-        script = (f"for f in {cands}; do [ -s \"$f\" ] && echo \"$(stat -L -c %Y \"$f\") $f\"; done"
-                  f" | sort -rn | head -1 | cut -d' ' -f2- | xargs -r tail -n {n + 5}")
-        try:
-            out = subprocess.run(["docker", "exec", op["NAME"], "sh", "-c", script],
-                                 capture_output=True, text=True, timeout=4)
-        except Exception as e:
-            return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
-        if out.returncode == 0 and out.stdout.strip():
-            data = out.stdout
-        elif "permission denied" in (out.stderr or "").lower():
-            return [("journal indisponible (docker : droit refuse -", None),
-                    ("  le compte n est pas dans le groupe docker)", None)]
+        for chemin in (path, "/tmp/osmo-nitb/logs/mobile.log"):
+            try:
+                out = subprocess.run(["docker", "exec", op["NAME"], "tail", "-n", str(n + 5), chemin],
+                                     capture_output=True, text=True, timeout=4)
+            except Exception as e:
+                return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
+            if out.returncode == 0 and out.stdout.strip():
+                data = out.stdout
+                break
+            if "permission denied" in (out.stderr or "").lower():
+                return [("journal indisponible (docker : droit refuse -", None),
+                        ("  le compte n est pas dans le groupe docker)", None)]
         if not data:
             try:
                 r = subprocess.run(["docker", "logs", "--tail", str(n + 5), op["NAME"]],
@@ -389,23 +379,6 @@ def tail_lines(path, n, width):
             except Exception as e:
                 return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
     else:
-        # [2026-10-04] LE JOURNAL LE PLUS FRAIS, AUSSI EN NATIF. L encart tourne
-        # en root (/run/user/0) alors que la pile qosmo est lancee par un autre
-        # compte (/run/user/1001) : le chemin par defaut pointait sur un fichier
-        # vide, laisse par un ancien lancement, et le cadre disait « journal
-        # vide » sur une pile bavarde. On prend le fichier non vide le plus
-        # recemment ecrit parmi le chemin demande et les /run/user/*.
-        cands = [path] + glob.glob("/run/user/*/osmo-nitb/logs/mobile.log")
-        vivants = []
-        for c in cands:
-            try:
-                st = os.stat(c)
-                if st.st_size > 0:
-                    vivants.append((st.st_mtime, c))
-            except OSError:
-                pass
-        if vivants:
-            path = max(vivants)[1]
         try:
             with open(path, "rb") as f:
                 f.seek(0, 2)

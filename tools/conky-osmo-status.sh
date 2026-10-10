@@ -105,16 +105,6 @@ matrice() {
 }
 
 refresh_matrice() {
-    # [2026-10-01] UN VERROU ORPHELIN NE BLOQUE PLUS LA MATRICE. Une mesure tuee
-    # sans passer par son trap (SIGKILL, fin de session, /run/user demonte)
-    # laissait le repertoire : plus aucune mesure, et le Conky affichait sans
-    # fin « mesure en cours » sur la vieille matrice - tout en FAIL pendant
-    # plus d une heure sur un banc a 31/31 (vu sur la 1.91). Une mesure dure au
-    # plus 240 s (timeout de ss7_check) : au-dela, le verrou est perime.
-    if [ -d "$MATRIX_LOCK" ]; then
-        local lage=$(( $(date +%s) - $(stat -c %Y "$MATRIX_LOCK" 2>/dev/null || echo 0) ))
-        [ "$lage" -gt 300 ] && rmdir "$MATRIX_LOCK" 2>/dev/null
-    fi
     mkdir "$MATRIX_LOCK" 2>/dev/null || return 0     # une mesure suffit
     trap 'rmdir "$MATRIX_LOCK" 2>/dev/null' EXIT
     local dir out

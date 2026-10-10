@@ -287,9 +287,7 @@ fi
 # puis OSMO_PMOS_IMAGE_URL=<url de l asset> au build (le workflow le passe).
 # Vide = on ne telecharge rien : c est le defaut, l image pese trois fois son
 # poids dans un build --all (operator, lite, desktop).
-# [2026-10-09] Desktop seul : interstp, operator et lite n embarquent plus la VM
-# (ils ne lancent pas le telephone en local, et l image pese 1,7 Go de plus).
-if [ "$ISO_DESKTOP" = "1" ] && [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
+if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
     _icache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst"
     echo -e "  ${CYAN}·${NC} image de la VM : telechargement depuis $OSMO_PMOS_IMAGE_URL"
     install -d "$(dirname "$_icache")"
@@ -308,7 +306,7 @@ if [ "$ISO_DESKTOP" = "1" ] && [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO
 fi
 [ "${OSMO_ISO_PMOS_IMAGE:-}" = "none" ] && OSMO_ISO_PMOS_IMAGE=""
 # L image de la VM : celle donnee, ou celle de l hote (voir ci-dessus).
-if [ "$ISO_DESKTOP" = "1" ] && [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
+if [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     if [ -f "$OSMO_ISO_PMOS_IMAGE" ]; then
         install -d "$ROOTFS/opt/user_interface/pmos/image"
         case "$OSMO_ISO_PMOS_IMAGE" in
@@ -485,7 +483,6 @@ if [ -d "$ROOTFS/home/osmocom" ]; then
 fi
 _chk "pmOS lanceurs en root (--as-root dans osmo-pmos-qemu)" grep -q 'as-root' /opt/user_interface/pmos/bin/osmo-pmos-qemu.sh
 _chk "pmOS kpartx + losetup + git (pmbootstrap les exige)"   bash -c 'command -v kpartx && command -v losetup && command -v git'
-_chk "pmOS QEMU de l hote avec OpenGL (virgl sur NVIDIA : qemu-system-gui + modules-opengl)" bash -c 'command -v qemu-system-x86_64 && test -f /usr/lib/x86_64-linux-gnu/qemu/hw-display-virtio-vga-gl.so && test -f /usr/lib/x86_64-linux-gnu/qemu/ui-sdl.so'
 if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ]; then
     _chk "pmOS pmaports au commit du noyau (pas de clone au premier clic)" bash -c 'test -f /opt/user_interface/pmos/pmaports/device/main/linux-postmarketos-stable/config-stable.x86_64'
 fi

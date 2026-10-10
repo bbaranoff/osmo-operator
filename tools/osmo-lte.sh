@@ -87,12 +87,9 @@ _svc() {
         case "$(systemctl is-active "$SVC" 2>/dev/null)" in active|activating) act=stop ;; *) act=start ;; esac
     fi
     [ "$act" = start ] && _notif "demarrage de la 4G (Open5GS, eNB, UE)... une trentaine de secondes"
-    # [2026-10-01] « Demarrer » relance : systemctl start ne fait RIEN sur une
-    # unite deja active, et le clic laissait la 4G d avant en place.
-    local sact="$act"; [ "$act" = start ] && sact=restart
-    if [ "$(id -u)" -eq 0 ]; then systemctl "$sact" "$SVC"; rc=$?
-    elif command -v pkexec >/dev/null 2>&1; then pkexec systemctl "$sact" "$SVC"; rc=$?
-    else sudo systemctl "$sact" "$SVC"; rc=$?; fi
+    if [ "$(id -u)" -eq 0 ]; then systemctl "$act" "$SVC"; rc=$?
+    elif command -v pkexec >/dev/null 2>&1; then pkexec systemctl "$act" "$SVC"; rc=$?
+    else sudo systemctl "$act" "$SVC"; rc=$?; fi
     if [ "$rc" -eq 0 ]; then
         [ "$act" = start ] && _notif "4G en marche : UE attache dans $NETNS (osmo-lte status)" || _notif "4G arretee (eNB, UE et coeur)"
     else
@@ -209,14 +206,9 @@ lte_start() {
     local enb ue
     enb="$(_bin srsenb)" || { _err "srsenb introuvable (dpkg -i osmo-build-srsran, ou osmo-lte-install --build)"; return 1; }
     ue="$(_bin srsue)"   || { _err "srsue introuvable"; return 1; }
-    # [2026-10-01] UN LANCEMENT = UNE 4G NEUVE. Une eNB ou un UE deja en marche
-    # faisait refuser le demarrage (« tourne deja ») : on arrete d abord ce qui
-    # tourne de CE mode (srsENB, srsUE), puis on relance. Le coeur Open5GS n est
-    # pas touche (osmo-epc start est idempotent, et la data de pmOS s y appuie).
-    if lte_tourne srsenb || lte_tourne srsue; then
-        _say "4G deja en marche : arret de l eNB et de l UE avant la relance"
-        lte_stop
-    fi
+    for p in srsenb srsue; do
+        lte_tourne "$p" && { _err "$p tourne deja (pid $(pgrep -x "$p" | head -1)) - « $0 restart » pour repartir propre"; return 1; }
+    done
     _configs || return 1
     _verifier_sib || return 1
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && _ok "espace reseau $NETNS cree"; }

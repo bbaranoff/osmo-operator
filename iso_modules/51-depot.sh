@@ -29,18 +29,9 @@ echo -e "${GREEN}[5a/9] Clone de osmo-operator (branche ${EGPRS_BRANCH})...${NC}
 # reste en place. Effacer d abord donnerait une ISO sans depot du tout.
 EGPRS_TREE="$ROOTFS/opt/GSM/osmo-operator"
 EGPRS_TMP="$WORK/osmo-operator-clone"
-# [2026-10-09] Par defaut on GARDE l'arbre deja pose par l'image (docker cp de
-# 50-injection) : pas de reclone. C'est le choix explicite de ne plus refaire
-# en double ce que l'image porte deja. OSMO_DEPOT_FRESH=1 retablit l'ancien
-# comportement - avancer sur la branche main par un clone frais. ATTENTION :
-# sans FRESH, l'ISO embarque l'osmo-operator de l'IMAGE (donc du dernier build
-# docker), pas forcement le dernier main - voir la note ci-dessus.
-EGPRS_FRESH="${OSMO_DEPOT_FRESH:-0}"
 rm -rf "$EGPRS_TMP"
 if [ "$OSMO_ISO_INHERITED" = "1" ] && [ -d "$EGPRS_TREE/.git" ]; then
     echo -e "  ${GREEN}✓${NC} osmo-operator : arbre du rootfs herite conserve"
-elif [ "$EGPRS_FRESH" != "1" ] && [ -d "$EGPRS_TREE/.git" ]; then
-    echo -e "  ${GREEN}✓${NC} osmo-operator : arbre de l'image conserve, pas de reclone (OSMO_DEPOT_FRESH=1 pour forcer ${EGPRS_BRANCH}) - $(git -C "$EGPRS_TREE" log -1 --format='%h %s' 2>/dev/null)"
 elif GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$EGPRS_BRANCH" "$EGPRS_REPO" "$EGPRS_TMP" >/dev/null 2>&1; then
     rm -rf "$EGPRS_TREE"
     mkdir -p "$ROOTFS/opt/GSM"

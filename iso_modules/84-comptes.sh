@@ -116,18 +116,6 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -f "$DIR/configs/linphonerc" ]; then
 fi
 
 
-# ── /run/user/0 PERMANENT : LE LINGER DE ROOT ───────────────────────────────
-# [2026-10-01] Le banc (osmo-banc, osmo-multi : des services SYSTEME) ecrit ses
-# journaux dans /run/user/0/osmo-nitb/logs, et Pulse y a son socket. Or ce
-# repertoire n existe que tant qu une SESSION root est ouverte : a la fermeture
-# de la derniere (un ssh, un su), systemd arrete user-runtime-dir@0 et demonte
-# le tmpfs. Les journaux disparaissaient sous le banc en marche - mobile.log de
-# l operateur 1 introuvable pour le tableau de bord, liens de /tmp/c54x-pont
-# dans le vide (vu sur la 1.91). Le linger garde /run/user/0 de bout en bout.
-mkdir -p "$ROOTFS/var/lib/systemd/linger"
-touch "$ROOTFS/var/lib/systemd/linger/root"
-echo -e "  ${GREEN}✓${NC} linger root : /run/user/0 (journaux du banc, socket Pulse) survit aux sessions"
-
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
 # ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.

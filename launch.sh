@@ -192,19 +192,14 @@ if [ "$_bloc_direct" = "1" ]; then
             _note "Pas de topologie multi-operateur (/etc/osmocom/osmo-multi.conf) : l unite serait sautee en silence. Lancez l icone « Supplements » (addition.sh), qui installe docker, l image et cette topologie."
             exit 1
         fi
-        # [2026-10-01] UN CLIC = UN MULTI NEUF. Actif, il etait laisse tel quel
-        # (« tourne deja ») : on l arrete d abord (ExecStop demonte conteneurs
-        # et hub), puis le start ci-dessous refait tout - start-multi.sh arrete
-        # aussi le standalone et le relance avant ses conteneurs. En cours de
-        # demarrage, on ne double pas le lancement.
         case "$(systemctl is-active "$_svcm" 2>/dev/null)" in
-            active)     _note "Multi-operateur deja en marche : arret avant la relance..."
-                        timeout 200 systemctl stop "$_svcm" >/dev/null 2>&1 || true ;;
+            active)     _note "Le multi-operateur tourne deja. Journal : journalctl -u ${_svcm%.service} -f"; exit 0 ;;
             activating) _note "Le multi-operateur demarre deja - journalctl -u ${_svcm%.service} -f"; exit 0 ;;
         esac
         systemctl reset-failed "$_svcm" 2>/dev/null || true
         _note "Demarrage de $_svcm - comptez plusieurs minutes (images, conteneurs, HLR)."
-        # `start` : l unite active vient d etre arretee juste au-dessus.
+        # `start` et non `restart` : ExecStop demonte les conteneurs, et un
+        # restart sur une unite deja montee couterait un demontage inutile.
         if systemctl start "$_svcm"; then
             # Type=oneshot + conditions : un 0 ne prouve pas que ca a tourne.
             if [ "$(systemctl is-active "$_svcm" 2>/dev/null)" = active ]; then

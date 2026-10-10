@@ -54,8 +54,6 @@ if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
 fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
-# SAP (softSIM) desactive par defaut : la SIM du mobile est la SIM de test. --sap / --softsim pour le serveur SAP.
-: "${SAP_MODE:=0}"
 # 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
 # Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
 PROFILE_CHOISI=0
@@ -90,8 +88,6 @@ MENU_MODE=0
 # L environnement gagne (DSP_MODE=0 ./start-direct.sh), comme pour le reste.
 # Si c54x_exe n est pas la, le banc retombe sur gr-gsm et le dit (plus bas).
 : "${DSP_MODE:=1}"
-# [shannon] baseband = modem Samsung Shannon sous FirmWire (au lieu du Calypso).
-: "${SHANNON_MODE:=0}"
 usage() {
     cat <<'USAGE'
 Usage : ./start-direct.sh [options] [mode]
@@ -114,13 +110,6 @@ Usage : ./start-direct.sh [options] [mode]
                         que la pile.
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
-    --shannon           baseband Shannon (Samsung) sous FirmWire + traducteur DSP
-    --no-sap            pas de SIM via SAP (la SIM de test du mobile), par defaut
-    --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
-                        /tmp/osmocom_sap, lance avant la baseband (avec --shannon)
-                        (BridgeDSPPeripheral). v1 : monte coeur+BTS (sans la
-                        chaine Calypso) puis lance FirmWire/bridge_v1.sh. Le lien
-                        C54x<->Shannon (taches FB/SB) est encore en retro.
     --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/qosmo).
                         Il remplace l'appel direct a qemu-system-arm : memes
                         defauts, sockets et pty publies (<RUN_DIR>/modem.pty),
@@ -233,10 +222,6 @@ while [ $# -gt 0 ]; do
         # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
-        --shannon)     SHANNON_MODE=1; DSP_MODE=0; export SHANNON_MODE ;;
-        --sap)         SAP_MODE=1; export SAP_MODE ;;
-        --no-sap)      SAP_MODE=0; export SAP_MODE ;;
-        --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -624,13 +609,6 @@ elif [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ]; then
     printf '  %s!%s banc DSP absent (%s) - couche 1 gr-gsm a la place\n' "${C_KO:-}" "${C_Z:-}" "$BANC_DSP" >&2
 fi
 if [ "$DSP_BANC" = 1 ]; then
-    # [2026-10-01] En DSP le pont est celui du banc (pont_dsp.py, lance par
-    # c54x_exe/run.sh). Un CALYPSO_BRIDGE=pont herite de l appelant ajoutait
-    # pont.py, le pont gr-gsm, qui prenait la place : MS#1 sans cellule.
-    if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
-        printf '  %s!%s CALYPSO_BRIDGE=pont ignore : en DSP le pont est pont_dsp.py (banc DSP)\n' "${C_KO:-}" "${C_Z:-}" >&2
-        CALYPSO_BRIDGE=none
-    fi
     : "${CALYPSO_BRIDGE:=none}"
 fi
 : "${CALYPSO_BRIDGE:=pont}"
@@ -681,14 +659,7 @@ audio_start() {
 }
 
 banc_dsp() {
-    # [2026-10-01] PONT_PY NE TRAVERSE PAS. L image docker pose
-    # ENV PONT_PY=.../pont/pont.py (Dockerfile.run) pour le pont gr-gsm ; le
-    # banc DSP lit la MEME variable pour son pont et prenait donc pont.py au
-    # lieu de pont_dsp.py : « pont.py ne s est pas annonce », MS#1 sans cellule
-    # dans tous les conteneurs du multi (vu sur la 1.91). DSP_PONT_PY pour en
-    # imposer un autre au banc DSP.
-    env -u PONT_PY ${DSP_PONT_PY:+PONT_PY="$DSP_PONT_PY"} \
-        ${DSP_MOBILE_CFG:+MOBILE_CFG="$DSP_MOBILE_CFG"} MODE=dsp bash "$BANC_DSP" "$@"
+    MODE=dsp bash "$BANC_DSP" "$@"
 }
 banc_dsp_arreter() {
     [ -x "$BANC_DSP" ] || return 0
@@ -994,16 +965,10 @@ generate_mobile_cfg() {
         tpl=""
     fi
     if [ -n "$tpl" ]; then
-        # sans --sap : la SIM du mobile reste la SIM de test (sim test), pas sim sap
-        local _sim_sed=()
-        if [ "${SAP_MODE:-0}" != 1 ]; then
-            _sim_sed=(-e 's|^\([[:space:]]*\)sim sap$|\1sim test|')
-        fi
         sed \
             -e "s|bind 127.0.0.1 424[0-9]|bind 127.0.0.1 ${vty_port}|" \
             -e "s|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket ${l2sock}|" \
             -e "s|sap-socket /tmp/osmocom_sap[_0-9]*|sap-socket ${sapsock}|" \
-            "${_sim_sed[@]}" \
             -e "s|stick [0-9]*|stick ${arfcn}|" \
             -e "s|^\([[:space:]]*\)imsi .*|\1imsi ${imsi}|" \
             -e "s|^\([[:space:]]*\)imei .*|\1imei $(rand_imei) 0|" \
@@ -1029,7 +994,7 @@ line vty
 ms 1
  layer2-socket ${l2sock}
  sap-socket ${sapsock}
- sim $([ "${SAP_MODE:-0}" = 1 ] && echo sap || echo test)
+ sim reader
  imsi ${imsi}
  ki comp128 ${ki}
  network-selection-mode auto
@@ -1289,42 +1254,6 @@ say_end " OK " "$C_OK" "Generation mobile MS#2 (faketrx)" "$MS2_CFG"
 #  SC_MOBILE_CFG / le fichier lui-meme.)
 export CALYPSO_SIM_CFG="$MS1_CFG"
 
-# ── LE MOBILE DU BANC DSP PORTE L IDENTITE DE CE NOEUD ─────────────────────
-# [2026-10-01] En DSP, le MS#1 qui tourne est celui de c54x_exe/run.sh, et il
-# ouvrait toujours c54x_exe/mobile_pont.cfg : un fichier FIXE, fige sur
-# l operateur 1 (IMSI 001010001000001, rplmn 001 01, stick 514). Le natif
-# tombait juste par coincidence ; dans les conteneurs du multi-operateur, le
-# BTS de l operateur 2 emet sur 516, le mobile restait colle a 514 avec
-# l identite de l operateur 1 : « FBSB RESP result=255 », « no cell
-# available », MS#1 jamais attache (vu sur la 1.91). On derive donc une copie
-# du gabarit DSP (ses reglages propres - VTY 4347, tch-data, sockets - sont
-# gardes) en y reportant les quatre lignes d identite du MS#1 genere ci-dessus,
-# et on la donne au banc DSP - a LUI SEUL : MOBILE_CFG exporte ici, run.sh de
-# qosmo le prenait pour la destination de sa propre config mobile et ecrasait
-# la copie DSP (VTY 4247 au lieu de 4347). DSP_MOBILE_CFG, puis MOBILE_CFG pour
-# le seul banc DSP (banc_dsp et l exec final). MOBILE_CFG impose garde la main.
-DSP_MOBILE_CFG="${MOBILE_CFG:-}"
-if [ "${DSP_BANC:-0}" = 1 ] && [ -z "${MOBILE_CFG:-}" ]; then
-    _dsp_tpl="$(dirname "$BANC_DSP")/mobile_pont.cfg"
-    _dsp_cfg="$BB_DIR/mobile_pont.cfg"
-    if [ -r "$_dsp_tpl" ] && [ -r "$MS1_CFG" ]; then
-        _id() { sed -n "s/^[[:space:]]*$1[[:space:]]\{1,\}//p" "$MS1_CFG" | head -1; }
-        _imsi="$(_id imsi)"; _ki="$(_id 'ki comp128')"; _rplmn="$(_id rplmn)"; _stick="$(_id stick)"
-        awk -v imsi="$_imsi" -v ki="$_ki" -v rplmn="$_rplmn" -v stick="$_stick" '
-            function ind(l) { match(l, /^[[:space:]]*/); return substr(l, 1, RLENGTH) }
-            imsi  != "" && /^[[:space:]]*imsi[[:space:]]/        { print ind($0) "imsi " imsi; next }
-            ki    != "" && /^[[:space:]]*ki comp128[[:space:]]/  { print ind($0) "ki comp128 " ki; next }
-            rplmn != "" && /^[[:space:]]*rplmn[[:space:]]/       { print ind($0) "rplmn " rplmn; next }
-            stick != "" && /^[[:space:]]*stick[[:space:]]/       { print ind($0) "stick " stick; next }
-            { print }' "$_dsp_tpl" > "$_dsp_cfg.tmp" && mv -f "$_dsp_cfg.tmp" "$_dsp_cfg"
-        DSP_MOBILE_CFG="$_dsp_cfg"
-        printf '  %sMS#1 DSP%s   %s  (imsi %s, rplmn %s, stick %s)\n' \
-            "${C_DIM:-}" "${C_Z:-}" "$_dsp_cfg" "${_imsi:-?}" "${_rplmn:-?}" "${_stick:-?}"
-        unset -f _id; unset _imsi _ki _rplmn _stick
-    fi
-    unset _dsp_tpl _dsp_cfg
-fi
-
 # --- Mode PONT TRX (CALYPSO_BRIDGE=pont) : le pont maison est le transceiver --
 # Le pont (pont/pont.py) se presente comme transceiver TRX-UDP a osmo-bts-trx
 # (5700/5701/5702), decode les bursts DL en L2 -> GSMTAP 4730/4731 vers le
@@ -1551,7 +1480,7 @@ printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 # (mobile_pont.cfg, VTY 4347). Le resume annoncait le mauvais fichier ET le
 # mauvais port -- on allait se connecter a une VTY qui n'existe pas.
 if [ "$DSP_BANC" = 1 ]; then
-    _ms1_cfg="${DSP_MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
+    _ms1_cfg="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
     _ms1_vty="$(sed -n 's/^ *bind 127.0.0.1 \([0-9]*\).*/\1/p' "$_ms1_cfg" 2>/dev/null | head -1)"
     printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY %s  %s(banc DSP)%s\n' \
         "$C_DIM" "$C_Z" "$_ms1_cfg" "$(ms_imsi 1)" "$MS_ARFCN1" "${_ms1_vty:-?}" "$C_DIM" "$C_Z"
@@ -2386,16 +2315,6 @@ PCAPWRAP
 # 27/08. Le killall couvre les processus Python que le registre ne connait pas.
 #
 # CALYPSO_NO_AUTOSTOP=1 desactive ce comportement.
-# softSIM : arrete les serveurs SAP lances par start_sap (processus demo_server.rb)
-# et supprime le socket SAP. Le motif [d] evite de se trouver soi-meme.
-kill_softsim() {
-    local p sock="${SAP_SOCK:-/tmp/osmocom_sap}"
-    for p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do
-        kill -TERM "$p" 2>/dev/null || true
-    done
-    rm -f "$sock" 2>/dev/null || true
-}
-
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
     banc_dsp_arreter >/dev/null 2>&1 || true
@@ -2403,10 +2322,6 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
         killall_python -TERM || true
-    fi
-    # softSIM : les serveurs SAP (demo_server.rb) et leur socket. CALYPSO_STOP_KILL_SOFTSIM=0 le desactive.
-    if [ "${CALYPSO_STOP_KILL_SOFTSIM:-1}" != 0 ]; then
-        kill_softsim || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi
@@ -2552,10 +2467,9 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # personne n'ecoute, donc pas de reseau, pas d'appel, pas de SMS par
         # oFono -- sans la moindre erreur, il se contentait de ne jamais voir le
         # mobile. On lui passe le port reellement lie, lu dans le fichier.
-            _phonesim_log="${OSMO_PHONESIM_LOG:-/tmp/osmo-phonesim-$(id -un).log}"
             ( setsid env OSMO_MOB_VTY_PORT="${_ms1_vty:-4247}" \
                   "$HERE/tools/osmo-phonesim-banc.py" \
-                  </dev/null >>"$_phonesim_log" 2>&1 & )
+                  </dev/null >>/tmp/osmo-phonesim.log 2>&1 & )
         sleep 1
         systemctl restart ofono >/dev/null 2>&1 || true
         sleep 3
@@ -2606,7 +2520,7 @@ PYON
             say_end " OK " "$C_OK" "Raccord mobile (oFono)" \
                 "modem /osmo${_rm_detail:+ - $_rm_detail} ; pty RIL : /run/osmo-ril/at-pty"
         else
-            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. ${_phonesim_log:-${OSMO_PHONESIM_LOG:-/tmp/osmo-phonesim-$(id -un).log}})"
+            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. /tmp/osmo-phonesim.log)"
         fi
     fi
 fi
@@ -2623,94 +2537,6 @@ fi
 #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie : pas de
 #                            SB, pas de BCCH, pas de SI
 # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
-# ── SAP (softSIM) : la SIM servie sur le socket SAP, pour la baseband ───────
-# Serveur demo_server.rb (type sim) du depot softSIM, charge avec le shim Ruby
-# 3.2+ (File.exists?, Fixnum). Variables : SOFTSIM_DIR, SAP_SOCK, SAP_FILE,
-# SAP_LOG. Ne fait rien sans --sap.
-start_sap() {
-    [ "${SAP_MODE:-0}" = 1 ] || return 0
-    local sdir="${SOFTSIM_DIR:-/opt/GSM/softsim}"
-    local sock="${SAP_SOCK:-/tmp/osmocom_sap}"
-    # SIM de l abonne du HLR (IMSI 001010001000001, COMP128v1) : son Ki est celui
-    # du plan de start.sh (00112233445566778899aabbccdd<ms><op>), donc 0101.
-    local file="${SAP_FILE:-$sdir/src/sim-op1.xml}"
-    [ -f "$file" ] || file="$sdir/src/sim.xml"
-    export SOFTSIM_KI="${SOFTSIM_KI:-00112233445566778899aabbccdd0101}"
-    local log="${SAP_LOG:-/tmp/osmo-sap.log}"
-    local shim=/usr/local/share/softsim/ruby_compat.rb
-    [ -f "$shim" ] || shim="$HERE/tools/softsim/ruby_compat.rb"
-    say_begin "SIM via SAP (softSIM)"
-    if [ ! -f "$sdir/src/demo_server.rb" ]; then
-        say_end " KO " "$C_KO" "SIM via SAP (softSIM)" "$sdir absent : lancer iso/softsim ou git clone softsim"
-        return 1
-    fi
-    if [ $DRY -eq 1 ]; then
-        say_end " -- " "$C_DIM" "SIM via SAP (softSIM)" "dry-run : ruby -r$shim demo_server.rb --unix $sock --file $file"
-        return 0
-    fi
-    # sim-op1.xml est regenere a chaque lancement : le serveur le reecrit a chaque
-    # deconnexion du client, et un fichier ancien garderait l ICCID / le PLMN d avant.
-    if [ -z "${SAP_FILE:-}" ] && [ -f "$sdir/src/sim.xml" ] && [ -f "$HERE/tools/softsim/make_sim_op1.py" ]; then
-        python3 "$HERE/tools/softsim/make_sim_op1.py" "$sdir/src/sim.xml" "$sdir/src/sim-op1.xml" \
-            --imsi "${OSMO_SIM_IMSI:-001010001000001}" >/dev/null 2>&1 || true
-    fi
-    rm -f "$sock"
-    ( cd "$sdir/src" && nohup ruby -r"$shim" demo_server.rb --type sim --socket unix \
-        --unix "$sock" --file "$file" --verbosity "${SAP_VERBOSITY:-3}" >"$log" 2>&1 & )
-    for _ in $(seq 1 50); do [ -S "$sock" ] && break; sleep 0.2; done
-    if [ -S "$sock" ]; then
-        say_end " OK " "$C_OK" "SIM via SAP (softSIM)" "socket $sock, SIM $file, journal $log"
-    else
-        say_end " KO " "$C_KO" "SIM via SAP (softSIM)" "pas de socket $sock : voir $log"
-        return 1
-    fi
-}
-
-# --sap / --softsim sans --shannon : la SIM SAP est servie, la pile suit son plan.
-# En mode --shannon elle est lancee plus bas, juste avant la baseband.
-if [ "${SHANNON_MODE:-0}" != 1 ]; then
-    start_sap || { echo "SAP demande (--sap/--softsim) mais non lance" >&2; exit 1; }
-fi
-
-if [ "${SHANNON_MODE:-0}" = 1 ]; then
-    # ── MODE SHANNON (v1) ────────────────────────────────────────
-    # Le fork monte coeur + BTS + side-car (comme --dsp), moins la chaine
-    # Calypso (qemu, pty, osmocon, l2). La baseband est le modem Samsung Shannon
-    # sous FirmWire avec le traducteur DSP (BridgeDSPPeripheral, CALYPSO_BRIDGE=1),
-    # lance par FirmWire/bridge_v1.sh. --no-attach : sinon le fork prend tmux.
-    #
-    # v1 : ce qui PASSE = coeur+BTS osmo + boot du Shannon + pont DSP (client
-    # BSP C54x udp/6702). TODO (gate retro DSP) = traduire les taches FB/SB du
-    # Shannon <-> API TI du C54x, et forcer le Shannon en 2G (UE_RAT_MODE_CAPA
-    # / AT+COPS). Tant que ce lien n'est pas pose, la LU ne se fait pas encore.
-    export MODE=shannon
-    RUN_ARGS+=(--skip "$DSP_MODULES_RETIRES" --no-attach)
-    if [ $DRY -eq 1 ]; then
-        say_begin "Transmission a run.sh puis baseband Shannon"
-        say_end " -- " "$C_DIM" "Transmission a run.sh puis baseband Shannon" "dry-run"
-        printf '  1. CALYPSO_PROFILE=%s bash %s %s\n' "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
-        printf '  2. bash %s\n' "${SHANNON_LAUNCH:-$GSM_ROOT/FirmWire/.v1/run_shannon_pmos.sh}"
-        exit 0
-    fi
-    audio_start
-    say_begin "Transmission a run.sh (coeur+BTS, sans $DSP_MODULES_RETIRES)"
-    if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then
-        say_end " KO " "$C_KO" "Transmission a run.sh" "le plan du fork a echoue, Shannon non lance"
-        exit 1
-    fi
-    say_end " OK " "$C_OK" "Transmission a run.sh" "coeur+BTS montes, baseband laissee a FirmWire/Shannon"
-    start_sap || { echo "SAP demande (--sap) mais non lance" >&2; exit 1; }
-    SHANNON_LAUNCH="${SHANNON_LAUNCH:-$GSM_ROOT/FirmWire/.v1/run_shannon_pmos.sh}"
-    say_begin "Baseband Shannon (FirmWire + pont DSP)"
-    if [ ! -x "$SHANNON_LAUNCH" ]; then
-        say_end " KO " "$C_KO" "Baseband Shannon" "$SHANNON_LAUNCH introuvable/non executable"
-        exit 1
-    fi
-    say_end " OK " "$C_OK" "Baseband Shannon" "$SHANNON_LAUNCH (traducteur FB/SB : TODO - gate retro DSP)"
-    # Hand-off : ce processus devient le lanceur Shannon (FirmWire + bridge).
-    exec bash "$SHANNON_LAUNCH"
-fi
-
 if [ "$DSP_BANC" = 1 ]; then
     # ── LE FORK MONTE TOUT, MOINS LA CHAINE CALYPSO ────────────────────────
     # [2026-09-22] Deux versions ratees avant celle-ci, toutes deux pour la
@@ -2771,10 +2597,7 @@ if [ "$DSP_BANC" = 1 ]; then
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
     # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
     # deja exporte juste au-dessus, il ecrase celui du profil.
-    # [2026-10-01] Meme regle que banc_dsp() : ni le PONT_PY de l image docker
-    # (pont gr-gsm), ni un MOBILE_CFG autre que la copie DSP de ce noeud.
-    exec env -u PONT_PY ${DSP_PONT_PY:+PONT_PY="$DSP_PONT_PY"} \
-        ${DSP_MOBILE_CFG:+MOBILE_CFG="$DSP_MOBILE_CFG"} bash "$BANC_DSP"
+    exec bash "$BANC_DSP"
 fi
 
 [ $DRY -eq 1 ] || audio_start

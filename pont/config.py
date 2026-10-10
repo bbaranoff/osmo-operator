@@ -69,11 +69,7 @@ def parse(argv=None):
         # paquet ; pont_dsp.py, le point d'entree DSP, pose 26).
         ul_retard_max=int(_env("PONT_UL_RETARD_MAX", "0")),
         rssi=int(_env("PONT_RSSI", "60")),
-        # [2026-10-03] 4730 reste la cible : c'est le port, fige, de la L1 gr-gsm de
-        # QEMU (calypso_l1_grgsm.c). PONT_GSMTAP_PORT permet d'intercaler
-        # qosmo/tools/injecteur_bruit.py (cible grgsm, 14730 -> 4730) ; pont.py le
-        # pose seul quand BRUIT_MODE vaut ber ou relais.
-        gsmtap_port=int(_env("PONT_GSMTAP_PORT", "4730")),
+        gsmtap_port=4730,
         sch_port=4731,
         tap=not a.no_tap,
         tap_port=int(_env("PONT_TAP_PORT", "4729")),

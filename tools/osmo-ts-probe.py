@@ -322,29 +322,11 @@ HLR_DB = os.environ.get("OSMO_HLR_DB", "/var/lib/osmocom/hlr.db")
 _live = {"quand": 0.0, "val": {}}
 
 
-def _en_conteneur(p):
-    """Vrai si le processus vit dans un conteneur (docker, containerd, podman).
-
-    [2026-10-01] L hote voit les processus des conteneurs du multi-operateur :
-    leur gapk-start.sh, leur osmo-msc, leur mobile allumaient les voyants du
-    banc NATIF, meme quand celui-ci etait arrete. Le cgroup se lit sans droit
-    particulier (contrairement a /proc/<pid>/ns/mnt pour un processus root).
-    """
-    try:
-        with open("/proc/%s/cgroup" % p) as f:
-            cg = f.read()
-    except OSError:
-        return False
-    return "docker" in cg or "containerd" in cg or "libpod" in cg
-
-
 def _procs():
-    """(noms comm, lignes de commande, {comm: pid}) des processus de l hote."""
+    """(noms comm, lignes de commande, {comm: pid}) de tous les processus."""
     comms, cmds, pids = set(), [], {}
     for p in os.listdir("/proc"):
         if not p.isdigit():
-            continue
-        if _en_conteneur(p):
             continue
         try:
             with open("/proc/%s/comm" % p) as f:

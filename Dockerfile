@@ -123,25 +123,6 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     && rm -rf /var/lib/apt/lists/*
 ENV DEBIAN_FRONTEND=noninteractive
 
-# [2026-10-09] jobs-for-ram : nombre de jobs `make` BORNE PAR LA RAM dispo
-# (~2 Go par job), plafonne par nproc, plancher 1. Pourquoi : buildkit batit
-# plusieurs stages EN PARALLELE, et grgsm-venv compile GNU Radio - des unites
-# de traduction enormes. Avec `make -j$(nproc)` sur un runner arm64 (beaucoup
-# de coeurs, RAM limitee), des dizaines de g++ concurrents epuisent la memoire
-# et le runner tue le build : SIGTERM, exit 143 (constate sur build-rpi, run
-# 37928910981, en plein `make` de gr-gsm). Tous les stages derivent de `base`,
-# donc le helper est partout. Pur shell (grep/tr/nproc), pas d awk requis.
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'n=$(nproc 2>/dev/null || echo 1)' \
-    'm=$(grep -m1 MemAvailable /proc/meminfo 2>/dev/null | tr -dc 0-9)' \
-    '[ -n "$m" ] || m=$(grep -m1 MemTotal /proc/meminfo 2>/dev/null | tr -dc 0-9)' \
-    '[ -n "$m" ] || { echo "$n"; exit 0; }' \
-    'j=$(( m / 2097152 ))' \
-    '[ "$j" -lt 1 ] && j=1' \
-    '[ "$j" -lt "$n" ] && echo "$j" || echo "$n"' \
-    > /usr/local/bin/jobs-for-ram && chmod 755 /usr/local/bin/jobs-for-ram
-
 # 1. Dépendances système — TOUTES ici, y compris celles qu'installait
 #    Dockerfile.run. Une seule liste, un seul endroit où la faire évoluer :
 #    l'image d'exécution n'a plus à connaître apt du tout.
@@ -182,7 +163,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     # Audio, Radio & SIP
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
     # Python & Outils système
-    python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv dbus-x11 bash-completion \
+    python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
     # Debug — gdb-multiarch pour attacher au gdb-stub QEMU (ARM Calypso)
     gdb-multiarch \
     # ALSA — requis par osmo-gapk pour l'I/O audio matériel
@@ -321,7 +302,7 @@ RUN for repo in \
     if [ "$name" = "osmo-ggsn" ]; then EXTRA_FLAGS="--enable-gtp-linux"; fi && \
     \
     ./configure $EXTRA_FLAGS && \
-    make -j"$(jobs-for-ram)" && \
+    make -j$(nproc) && \
     # make install sous DESTDIR -> .deb dans le cache -> dpkg -i dans la racine
     osmo-deb pack "$name" "$version" make install && \
     ldconfig \
@@ -356,7 +337,7 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       && cd ${ROOT}/osmo-trx \
       && autoreconf -fi \
       && ./configure --with-ipc \
-      && make -j"$(jobs-for-ram)" \
+      && make -j$(nproc) \
       && osmo-deb pack osmo-trx 1.7.2+ipc make install \
       && ldconfig; \
     fi
@@ -383,7 +364,7 @@ RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
       && cd ${ROOT}/osmo-bts \
       && autoreconf -fi \
       && ./configure --enable-virtual --enable-trx \
-      && make -j"$(jobs-for-ram)" \
+      && make -j$(nproc) \
       && osmo-deb pack osmo-bts 1.10.0+rand make install \
       && ldconfig; \
     fi
@@ -407,7 +388,7 @@ RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
       && cd ${ROOT}/osmo-hlr \
       && autoreconf -fi \
       && ./configure \
-      && make -j"$(jobs-for-ram)" \
+      && make -j$(nproc) \
       && osmo-deb pack osmo-hlr 1.9.2+rand make install \
       && ldconfig; \
     fi
@@ -429,7 +410,7 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
       && cd ${ROOT}/osmo-msc \
       && autoreconf -fi \
       && ./configure --enable-smpp \
-      && make -j"$(jobs-for-ram)" \
+      && make -j$(nproc) \
       && osmo-deb pack osmo-msc 1.15.0+rand make install \
       && ldconfig; \
     fi
@@ -467,7 +448,7 @@ RUN if ! osmo-deb install osmo-gapk 0.git; then \
       cd osmo-gapk && \
       autoreconf -fi && \
       ./configure --enable-alsa && \
-      make -j"$(jobs-for-ram)" && \
+      make -j$(nproc) && \
       osmo-deb pack osmo-gapk 0.git make install && \
       ldconfig; \
     fi
@@ -486,7 +467,7 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
       git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
       cd gsup-smsc-proto && \
       ./configure --with-osmo=/usr/local && \
-      make -j"$(jobs-for-ram)" && \
+      make -j$(nproc) && \
       osmo-deb pack gsup-smsc-proto 0.git \
         sh -c 'for i in daemon sendmt; do make -C "$i" DESTDIR="$DESTDIR" install || exit 1; done' && \
       ldconfig; \
@@ -504,7 +485,7 @@ RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       tar xf sms-coding-utils-latest.tar.bz2 && \
       cd sms-coding-utils-r1 && \
       ./configure && \
-      make -j"$(jobs-for-ram)" && \
+      make -j$(nproc) && \
       osmo-deb pack sms-coding-utils 0.r1 \
         sh -c 'mkdir -p "$DESTDIR/usr/local/bin" && make install DESTDIR="$DESTDIR"'; \
     fi
@@ -516,7 +497,7 @@ RUN if ! osmo-deb install libosmo-dsp 0.git; then \
       && cd libosmo-dsp \
       && autoreconf -fi \
       && ./configure \
-      && make -j"$(jobs-for-ram)" \
+      && make -j$(nproc) \
       && osmo-deb pack libosmo-dsp 0.git make install \
       && ldconfig; \
     fi
@@ -564,18 +545,11 @@ ARG OSMO_DEB_REFRESH=0
 # retard de 0,3 a 2 ms decalait la base de temps a chaque fois ; osmo-bts-trx
 # compensait en boucle et la parole perdait des trames. Patch maintenu dans
 # patches/, applique aussi par install_modules/40-patches.sh en natif.
-# mobile : une SIM reinseree sans RPLMN (reconnexion SAP) restait en A6 et la
-# recherche de PLMN finissait « unhandled » (patches/osmocom-bb-plmn-a6-reinsert.patch).
 COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
-COPY patches/osmocom-bb-plmn-a6-reinsert.patch /tmp/osmocom-bb-plmn-a6-reinsert.patch
-# PLMNsel / FPLMN lus avec osmo_plmn_to_bcd (ecriture) au lieu de from_bcd : 000-00.
-COPY patches/osmocom-bb-sim-plmn-from-bcd.patch /tmp/osmocom-bb-sim-plmn-from-bcd.patch
 RUN if ! osmo-deb install osmocom-bb 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-clck-gen-frame-tolerance.patch && \
-      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-plmn-a6-reinsert.patch && \
-      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-sim-plmn-from-bcd.patch && \
       cd osmocom-bb/src && \
       # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
       # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
@@ -641,7 +615,7 @@ RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-transceiver \
       && cd /opt/GSM/osmocom-bb-transceiver/src \
-      && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j"$(jobs-for-ram)" \
+      && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
       && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \
          /usr/local/bin/transceiver \
       && osmo-deb snapshot osmocom-bb-transceiver 0.git /usr/local/bin/transceiver \
@@ -654,7 +628,7 @@ RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-burst_ind \
       && cd /opt/GSM/osmocom-bb-burst_ind/src \
-      && make nofirmware -j"$(jobs-for-ram)" \
+      && make nofirmware -j$(nproc) \
       && cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/ccch_scan \
          /usr/local/bin/ccch_scan \
       && { cp /opt/GSM/osmocom-bb-burst_ind/src/host/layer23/src/misc/bcch_scan \
@@ -714,23 +688,19 @@ ARG OSMO_DEB_REFRESH=0
 # relocaliser (voir Dockerfile.lite).
 # L ancien RUN « /opt/GSM/qemu/{build,*.py} » et calypso-ipc-device disparaissent
 # avec qosmo-grgsm : plus rien ne les lit.
-# [2026-10-03] LES COMMANDES DE BUILD VIVENT DANS qosmo/install.sh : venv
-# /root/.venv-qemu + pip install tomli, mkdir build && ../configure
-# --target-list=arm-softmmu --enable-l1-grgsm --prefix=/opt/GSM/qemu-install
-# --disable-werror --disable-docs, make -j$(nproc), make install, cp de
-# qemu-system-arm et qosmo dans /usr/local/bin, puis -M help doit lister
-# calypso (couche 1 : grgsm). C est la meme liste que l installation native
-# (install_modules/45-calypso.sh), Dockerfile.run, start.sh et l ISO. Les
-# options ci-dessous sont SES defauts, ecrites pour qu on lise d ici ou
-# atterrit chaque chose : memes chemins qu avant, meme snapshot.
-# L installeur arrive AVEC le clone : il doit etre pousse sur bbaranoff/qosmO
-# avant de construire - le test le dit en clair plutot qu un « No such file ».
 RUN if ! osmo-deb install qosmo 0.git; then \
       git clone https://github.com/bbaranoff/qosmO /opt/GSM/qosmo \
-      && { [ -f /opt/GSM/qosmo/install.sh ] \
-           || { echo "qosmo/install.sh absent du clone : poussez l installeur sur bbaranoff/qosmO" >&2; false; }; } \
-      && bash /opt/GSM/qosmo/install.sh --verbose \
-             --prefix /opt/GSM/qemu-install --venv /root/.venv-qemu --bin-dir /usr/local/bin \
+      && cd /opt/GSM/qosmo \
+      && python3 -m venv /root/.venv-qemu \
+      && . /root/.venv-qemu/bin/activate \
+      && pip install --no-cache-dir tomli \
+      && mkdir -p build && cd build \
+      && ../configure --target-list=arm-softmmu --enable-l1-grgsm \
+             --prefix=/opt/GSM/qemu-install --disable-werror --disable-docs \
+      && make -j$(nproc) \
+      && make install \
+      && cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm \
+      && cp /opt/GSM/qemu-install/bin/qosmo /usr/local/bin/qosmo \
       && osmo-deb snapshot qosmo 0.git /opt/GSM/qosmo /opt/GSM/qemu-install \
              /root/.venv-qemu /usr/local/bin/qemu-system-arm /usr/local/bin/qosmo; \
     fi
@@ -755,35 +725,24 @@ RUN ldconfig
 
 # c54x_exe : le Makefile met -march=native dans CFLAGS - dans une image qui
 # tourne sur d autres CPU que celui du build, c est un SIGILL au demarrage. On
-# garde ses drapeaux, sans celui-la. La ROM n'est PAS dans le depot : rom/fetch-rom.sh la telecharge
-# chez FreeCalypso (dump 3606), la convertit en calypso_dsp.*.bin (somme verifiee) et la
-# pose en /opt/GSM, le --rom-dir par defaut de c54x_exe.
-# [2026-10-03] Tout cela est c54x_exe/install.sh : --portable = make
-# QOSMO=/opt/GSM/qosmo CFLAGS="-O3 -g -Wall ... sans -march=native", la ROM
-# par rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom, puis
-# c54x_exe --trames 200 (la ROM seule doit booter). Meme liste que le natif
-# (install_modules/45-calypso.sh), Dockerfile.run, start.sh et l ISO ; installeur
-# a pousser sur bbaranoff/c54x_exe avant de construire.
+# garde ses drapeaux, sans celui-la. La ROM est aussi posee en
+# /opt/GSM/calypso_dsp.*.bin, le --rom-dir par defaut de c54x_exe.
 RUN if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
-      && { [ -f /opt/GSM/c54x_exe/install.sh ] \
-           || { echo "c54x_exe/install.sh absent du clone : poussez l installeur sur bbaranoff/c54x_exe" >&2; false; }; } \
-      && bash /opt/GSM/c54x_exe/install.sh --verbose --portable --qosmo /opt/GSM/qosmo \
-             --rom-dir /opt/GSM --rom-dir /opt/GSM/c54x_exe/rom \
+      && cd /opt/GSM/c54x_exe \
+      && make QOSMO=/opt/GSM/qosmo \
+             CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
+      && cp rom/calypso_dsp.*.bin rom/calypso_dsp.txt /opt/GSM/ \
       && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
              /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
              /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
-             /opt/GSM/calypso_dsp.Registers.bin; \
+             /opt/GSM/calypso_dsp.Registers.bin /opt/GSM/calypso_dsp.txt; \
     fi
 
-# grgsm_exe/install.sh : make -B QOSMO=/opt/GSM/qosmo (-B : le binaire est
-# suivi par git et plus recent que les sources au clone, `make` seul le
-# gardait sans compiler), puis grgsm_exe --trames 50.
 RUN if ! osmo-deb install grgsm-exe 0.git; then \
       git clone https://github.com/bbaranoff/grgsm_exE /opt/GSM/grgsm_exe \
-      && { [ -f /opt/GSM/grgsm_exe/install.sh ] \
-           || { echo "grgsm_exe/install.sh absent du clone : poussez l installeur sur bbaranoff/grgsm_exE" >&2; false; }; } \
-      && bash /opt/GSM/grgsm_exe/install.sh --verbose --qosmo /opt/GSM/qosmo \
+      && cd /opt/GSM/grgsm_exe \
+      && make QOSMO=/opt/GSM/qosmo \
       && osmo-deb snapshot grgsm-exe 0.git /opt/GSM/grgsm_exe; \
     fi
 
@@ -823,15 +782,11 @@ ARG OSMO_DEB_REFRESH=0
 # arbres /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} ne sont pas dans le paquet - rien
 # ne les lit au runtime (le venv porte ses .so avec un RPATH sur /root/.env).
 COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
-# [2026-10-09] build_gnuradio.sh est VENDORISE dans le depot (scripts/), plus de
-# `curl | bash` d un gist externe : il est versionne avec le reste et borne
-# deja chaque `cmake --build` par jobs-for-ram (anti-OOM sur arm64).
-COPY scripts/build_gnuradio.sh /tmp/build_gnuradio.sh
 RUN if ! osmo-deb install grgsm-venv 0.git; then \
-      bash /tmp/build_gnuradio.sh \
+      curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
-      && make -j"$(jobs-for-ram)" \
+      && make -j"$(nproc)" \
       && make install \
       && . ~/.env/bin/activate && pip install matplotlib \
       && osmo-deb snapshot grgsm-venv 0.git /root/.env /etc/ld.so.conf.d/gnuradio.conf; \

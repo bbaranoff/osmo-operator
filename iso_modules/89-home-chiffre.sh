@@ -165,12 +165,7 @@ fi
 # cryptsetup pour ouvrir le volume, rsync pour la recopie du home par
 # init-crypthome.sh, x11-xserver-utils pour xhost. Absents, tout le dispositif
 # echoue au pire moment : au premier demarrage apres chiffrement.
-# xhost n'est pose que par la variante desktop (80-chroot.sh) : sans serveur X
-# il ne sert a rien, et l exiger ici donnait un faux avertissement sur les
-# images operator/lite/arm.
-_NEED="cryptsetup rsync"
-if [ -d "$ROOTFS/etc/gdm3" ] || [ "${ISO_DESKTOP:-0}" = "1" ]; then _NEED="$_NEED xhost"; fi
-for _p in $_NEED; do
+for _p in cryptsetup rsync xhost; do
     chroot "$ROOTFS" bash -c "command -v $_p >/dev/null 2>&1" || \
         echo -e "  ${YELLOW}!${NC} ${CYAN}$_p${NC} absent du rootfs - requis par le dispositif de chiffrement"
 done

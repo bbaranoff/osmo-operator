@@ -16,12 +16,6 @@
 #      sudo ./install.sh --reinstall    rejoue TOUT, meme ce qui est deja la
 #                                       (sources mises a jour, configs et
 #                                       raccourcis reecrits, binaires refaits)
-#      sudo ./install.sh --only calypso le telephone emule seul : firmware, qosmo,
-#                                       c54x_exe, grgsm_exe (install_modules/45-calypso.sh)
-#      sudo ./install.sh --telephone    le telephone emule sur VOTRE pile Osmocom :
-#                                       ni deps globales, ni patchs du coeur, ni
-#                                       /etc/osmocom, ni bureau, ni 4G ; verify ne
-#                                       cherche que votre osmo-bts-trx (OSMO_CORE=externe)
 #
 #  Ou : GSM_ROOT (defaut /opt/GSM) recoit sources et binaires.
 #  Le bureau (icones, raccourcis "Lancer le banc GSM" et "multi-operator") est
@@ -42,7 +36,7 @@ MODDIR="$INST_TREE/install_modules"
 : "${OSMOCOM_HOME:=$HOME/.osmocom}"
 export INST_TREE GSM_ROOT OSMOCOM_HOME
 
-DRY=0 ONLY="" SKIP="" ACTION=install REINSTALL=0 TELEPHONE=0
+DRY=0 ONLY="" SKIP="" ACTION=install REINSTALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --list)    ACTION=list ;;
@@ -51,26 +45,11 @@ while [ $# -gt 0 ]; do
         --reinstall) REINSTALL=1 ;;
         --only)    ONLY="${2:-}"; shift ;;
         --skip)    SKIP="${2:-}"; shift ;;
-        --telephone) TELEPHONE=1 ;;
-        -h|--help) sed -n '3,30p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,24p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit 0 ;;
         *) printf 'option inconnue : %s\n' "$1" >&2; exit 2 ;;
     esac
     shift
 done
-
-# --telephone [2026-10-03] : le telephone emule branche sur la pile Osmocom de
-# l utilisateur (paquets ou sources, installee a sa facon). On ne touche ni a
-# son coeur (pas de 40-patches : ils visent osmo-bts/msc/hlr/trx), ni a sa
-# configuration (/etc/osmocom), ni a son bureau ; chaque composant Calypso
-# installe ses propres paquets (--with-deps). 90-verify lit OSMO_CORE=externe
-# et 50-build saute la 4G (INST_PROFILE=telephone). --only l emporte.
-: "${INST_PROFILE:=}"
-if [ "$TELEPHONE" = 1 ]; then
-    : "${OSMO_CORE:=externe}"
-    INST_PROFILE=telephone
-    [ -n "$ONLY" ] || ONLY="prereqs,sources,calypso,build,binaires,verify"
-fi
-export OSMO_CORE INST_PROFILE
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     TTY=1; C_OK=$'\033[32m'; C_KO=$'\033[31m'; C_SK=$'\033[33m'; C_DIM=$'\033[2m'; C_Z=$'\033[0m'
@@ -90,12 +69,10 @@ shopt -s nullglob; for f in "$MODDIR"/[0-9][0-9]-*.sh; do . "$f"; done; shopt -u
 [ ${#INST_ORDER[@]} -eq 0 ] && { printf 'aucun module d installation\n' >&2; exit 2; }
 
 in_csv() { case ",$1," in *",$2,"*) return 0;; esac; return 1; }
-# une etape est designee par son nom ou par son groupe (INST_GROUP : calypso)
-designe() { in_csv "$1" "$2" || { [ -n "${INST_GROUP[$2]:-}" ] && in_csv "$1" "${INST_GROUP[$2]}"; }; }
 selected=()
 for s in "${INST_ORDER[@]}"; do
-    [ -n "$ONLY" ] && { designe "$ONLY" "$s" || continue; }
-    [ -n "$SKIP" ] && { designe "$SKIP" "$s" && continue; }
+    [ -n "$ONLY" ] && { in_csv "$ONLY" "$s" || continue; }
+    [ -n "$SKIP" ] && { in_csv "$SKIP" "$s" && continue; }
     selected+=("$s")
 done
 
@@ -208,14 +185,8 @@ done
 
 printf '\n%d ok · %d ignores · %d echecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
 if [ $nb_fail -eq 0 ] && [ $DRY -eq 0 ]; then
-    if [ "$TELEPHONE" = 1 ]; then
-        printf '\n  %sverifier%s   ./install.sh --check --telephone\n' "$C_DIM" "$C_Z"
-        printf '  %slancer%s     cd %s/c54x_exe && PONT=1 PONT_BSC_CFG=/etc/osmocom/osmo-bsc.cfg ./run.sh\n' "$C_DIM" "$C_Z" "$GSM_ROOT"
-        printf '             (wiki/Telephone-emule.md : ce que votre reseau doit fournir)\n\n'
-    else
-        printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
-        printf '  %slancer%s     ./start-direct.sh --list   puis   sudo ./start-direct.sh\n\n' "$C_DIM" "$C_Z"
-    fi
+    printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
+    printf '  %slancer%s     ./start-direct.sh --list   puis   sudo ./start-direct.sh\n\n' "$C_DIM" "$C_Z"
 fi
 [ $nb_fail -gt 0 ] && exit 1
 exit 0

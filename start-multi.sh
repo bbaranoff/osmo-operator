@@ -25,9 +25,6 @@
 #   sudo ./start-multi.sh --status     etat des conteneurs et du hub
 #   sudo ./start-multi.sh --stop       arrete les conteneurs (le natif reste)
 #   sudo ./start-multi.sh --dry-run    affiche la commande sans la lancer
-#   sudo ./start-multi.sh --align      aligne l identite du natif (PC, OPERATOR_ID) et sort
-#   sudo ./start-multi.sh --rebuild    reconstruit l image (Dockerfile.run) ; sinon JAMAIS reconstruite
-#   OSMO_KEEP_NATIF=1 ./start-multi.sh ne touche pas au natif : pas d arret, pas de relance
 # =============================================================================
 set -uo pipefail
 
@@ -47,14 +44,12 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
     set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
 fi
-ACTION="start"; REBUILD=0
+ACTION="start"
 for a in "$@"; do
     case "$a" in
         --status)  ACTION="status" ;;
         --stop)    ACTION="stop" ;;
         --dry-run) ACTION="dry" ;;
-        --align)   ACTION="align" ;;
-        --rebuild) REBUILD=1 ;;
         -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     esac
 done
@@ -254,30 +249,17 @@ etat() {
     fi
 }
 
-# ── ARRETER LE MULTI : CONTENEURS OPERATEURS PUIS HUB ───────────────────────
-# Les conteneurs de la topologie, plus tout osmo-operator-N restant d un
-# lancement precedent (une topologie plus large, un start.sh a la main) : un
-# conteneur oublie garde son ASP sur le hub et ses processus visibles de l hote.
-arreter_multi() {
-    local spec idx mode c
-    for spec in $MULTI_OPS; do
-        IFS=: read -r idx mode _ <<< "$spec"
-        [ "$mode" = "docker" ] || continue
-        docker rm -f "osmo-operator-${idx}" >/dev/null 2>&1 \
-            && echo -e "    ${GREEN}✓${NC} osmo-operator-${idx} arrete"
-    done
-    for c in $(docker ps -aq --filter name='^osmo-operator-[0-9]+$' 2>/dev/null); do
-        docker rm -f "$c" >/dev/null 2>&1 && echo -e "    ${GREEN}✓${NC} conteneur operateur residuel ${c} arrete"
-    done
-    docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
-        && echo -e "    ${GREEN}✓${NC} hub arrete"
-    return 0
-}
-
 case "$ACTION" in
   status) etat; exit 0 ;;
   stop)
-        arreter_multi
+        for spec in $MULTI_OPS; do
+            IFS=: read -r idx mode _ <<< "$spec"
+            [ "$mode" = "docker" ] || continue
+            docker rm -f "osmo-operator-${idx}" >/dev/null 2>&1 \
+                && echo -e "  ${GREEN}✓${NC} osmo-operator-${idx} arrete"
+        done
+        docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
+            && echo -e "  ${GREEN}✓${NC} hub arrete"
         echo -e "  ${CYAN}i${NC} l operateur NATIF n est pas touche - ${BOLD}sudo ${DIR}/start-direct.sh stop${NC} pour lui."
         exit 0 ;;
 esac
@@ -295,19 +277,15 @@ esac
 # au lieu de la compiler ; osmocom-run en decoule par Dockerfile.run en
 # quelques secondes. Refuser de demarrer pour ca et renvoyer vers addition.sh
 # - qui aurait repondu "image deja presente" - etait une boucle sans issue.
-# [2026-10-03] L IMAGE N EST RECONSTRUITE QUE SUR DEMANDE (--rebuild). Sans lui,
-# une image presente est utilisee telle quelle et une image absente est une
-# erreur nette, pas un build lance a l insu de l appelant (start.sh en ferait
-# un de son cote : on sort donc avant).
-if [ "$REBUILD" = 1 ]; then
-    docker image inspect osmocom-nitb >/dev/null 2>&1 \
-        || manque "--rebuild : base osmocom-nitb absente (addition.sh)"
-    echo -e "  ${CYAN}→${NC} --rebuild : image '$MULTI_IMAGE' reconstruite (Dockerfile.run)"
-    ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
-                       -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
-        || manque "reconstruction de l image '$MULTI_IMAGE' echouee"
-elif ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
-    manque "image '$MULTI_IMAGE' absente - relancer avec --rebuild"
+if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+    if docker image inspect osmocom-nitb >/dev/null 2>&1; then
+        echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente, base osmocom-nitb presente : derivation (Dockerfile.run)"
+        ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
+                           -f Dockerfile.run -t "$MULTI_IMAGE" . ) \
+            || manque "derivation de l image '$MULTI_IMAGE' echouee"
+    else
+        manque "image '$MULTI_IMAGE' absente"
+    fi
 fi
 
 # ── LE RACCORD DU NATIF AU HUB ──────────────────────────────────────────────
@@ -386,7 +364,7 @@ done
 # mode non interactif et affichait « numero de noeud (MCC) vaut 0 - ramene a 1 »
 # a chaque lancement ; la topologie le connait (MULTI_NODE, 1 sur une machine).
 CMD=(env "WAN_NODE_ID=${MULTI_NODE:-1}" "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
-     "OP_ID_BASE=2" "OSMO_NO_ATTACH=1" "OSMO_SKIP_BUILD=1"
+     "OP_ID_BASE=2" "OSMO_NO_ATTACH=1"
      "$DIR/start.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
@@ -484,7 +462,6 @@ aligner_natif() {
     done
 }
 aligner_natif
-[ "$ACTION" = "align" ] && exit 0
 
 # ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
 # [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
@@ -511,22 +488,7 @@ _banc_unit_present() {
 }
 
 tout_arreter() {
-    # [2026-10-01] L ORDRE : LE MULTI D ABORD, LE NATIF ENSUITE, PUIS ON RELANCE
-    # LE NATIF ET ENFIN LES CONTENEURS. Les conteneurs n etaient retires que par
-    # start.sh, APRES la relance du natif : celui-ci remontait pendant que
-    # l ancien hub et les anciens operateurs tournaient encore (ASP sur le hub,
-    # gapk-start.sh et demons visibles de l hote, que les sondes du natif
-    # prenaient pour les siens - voir run_modules/25-audio.sh).
-    echo -e "  ${CYAN}→${NC} arret du multi en place (conteneurs operateurs, hub)"
-    arreter_multi
-    # OSMO_KEEP_NATIF=1 : l appelant (banc-max.sh) a deja aligne le natif AVANT
-    # de le lancer ; l arreter ici pour le relancer est du temps perdu.
-    if [ "${OSMO_KEEP_NATIF:-0}" = 1 ]; then
-        echo -e "  ${CYAN}i${NC} natif conserve (OSMO_KEEP_NATIF=1)"
-        pkill -f 'paplay --server=tcp:' 2>/dev/null || true
-        return 0
-    fi
-    echo -e "  ${CYAN}→${NC} arret du banc natif (un clic = un banc neuf)"
+    echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
     if _banc_unit_present; then
         # Le natif est relance juste apres par lancer_natif_si_absent : ici on
         # se contente d'arreter proprement (ExecStop = start-direct.sh --stop).
@@ -535,15 +497,6 @@ tout_arreter() {
     elif [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
-    fi
-    # Un natif lance HORS de l unite (a la main, par un terminal, par une unite
-    # transitoire) survit a « systemctl stop » : on l arrete par son propre
-    # script s il reste un demon du coeur cote hote.
-    if _est_natif osmo-bsc osmo-msc osmo-stp asterisk && [ -x "$DIR/start-direct.sh" ]; then
-        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
-        _est_natif osmo-bsc osmo-msc osmo-stp \
-            && echo -e "    ${YELLOW}!${NC} des demons natifs tournent encore apres l arret" \
-            || echo -e "    ${GREEN}✓${NC} natif lance hors unite arrete aussi"
     fi
     # Les conteneurs ne sont PAS touches ici : start.sh fait deja
     # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.

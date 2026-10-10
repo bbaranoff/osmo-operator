@@ -64,18 +64,10 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     done
     # [2026-09-25] c54x_exe et grgsm_exe : les binaires venus de l hote sont du
     # x86 ; on les recompile ici, sur les sources de /opt/GSM/qosmo du rootfs.
-    # [2026-10-03] Par leur installeur (<depot>/install.sh --only build
-    # --portable) : les memes commandes que le Dockerfile, -B compris pour
-    # grgsm_exe, et sans -march=native (qemu-user ne decrit pas le CPU cible).
     for _e in c54x_exe grgsm_exe; do
         [ -f "$ROOTFS/opt/GSM/$_e/Makefile" ] || continue
-        if [ ! -f "$ROOTFS/opt/GSM/$_e/install.sh" ]; then
-            echo -e "  ${YELLOW}!${NC} $_e : /opt/GSM/$_e/install.sh absent (arbre d avant le 2026-10-03 : cache .deb ?) - binaire non recompile" >&2
-            continue
-        fi
-        if _arm_chroot bash "/opt/GSM/$_e/install.sh" --only build --portable --qosmo /opt/GSM/qosmo \
-               >"$WORK/make-$_e.log" 2>&1; then
-            echo -e "  ${GREEN}✓${NC} ${CYAN}/opt/GSM/$_e/$_e${NC} compile dans le chroot ($_e/install.sh)"
+        if _arm_chroot make -s -B -C "/opt/GSM/$_e" >"$WORK/make-$_e.log" 2>&1; then
+            echo -e "  ${GREEN}✓${NC} ${CYAN}/opt/GSM/$_e/$_e${NC} compile dans le chroot"
         else
             echo -e "  ${YELLOW}!${NC} $_e : compilation echouee (voir $WORK/make-$_e.log)" >&2
         fi

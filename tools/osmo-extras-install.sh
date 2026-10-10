@@ -58,7 +58,7 @@ _osmo_extras_apt() {
         | debconf-set-selections 2>/dev/null || true
     local p
     for p in wmctrl xdotool \
-             qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf sshpass kpartx \
+             qemu-system-x86 ovmf sshpass kpartx \
              kodi \
              wireshark \
              gir1.2-webkit2-4.1; do

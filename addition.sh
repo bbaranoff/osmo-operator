@@ -41,7 +41,6 @@
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --extras   Jeux + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
-#   sudo ./addition.sh --shannon  FirmWire + firmware Shannon (download_shannon.sh)
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -179,7 +178,7 @@ _docker_groupe_session() {
 }
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
-DO_BUILD=0; DO_EXTRAS=0; DO_SHANNON=0
+DO_BUILD=0; DO_EXTRAS=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
@@ -190,8 +189,7 @@ for a in "$@"; do
         --opencl) DO_OPENCL=1; ANY_FLAG=1 ;;
         --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
         --extras) DO_EXTRAS=1; ANY_FLAG=1 ;;
-        --shannon) DO_SHANNON=1; ANY_FLAG=1 ;;
-        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; DO_SHANNON=1; ANY_FLAG=1 ;;
+        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
         -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     esac
@@ -330,7 +328,6 @@ if [ "$ANY_FLAG" = "0" ]; then
             FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
             FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
             FALSE extras "Jeux + media - Doom (freedoom + chocolate-doom), Quake III (OpenArena), Kodi, YouTube (Firefox + uBlock Origin), Wireshark (root), Linphone ; ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis l encart du bureau" \
-            FALSE shannon "Baseband Shannon (Samsung) - FirmWire clone dans /opt/GSM/FirmWire, verification du firmware shannon_main.bin (download_shannon.sh)" \
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
@@ -363,7 +360,6 @@ if [ "$ANY_FLAG" = "0" ]; then
         case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
         case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
         case "$_choix" in *extras*) DO_EXTRAS=1 ;; esac
-        case "$_choix" in *shannon*) DO_SHANNON=1 ;; esac
     else
         # Console sans zenity : le supplement historique, celui de l icone.
         DO_MULTI=1
@@ -1136,17 +1132,6 @@ fi
 # ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis
 # l encart du bureau. La logique est partagee avec l ISO (le natif) :
 # tools/osmo-extras-install.sh, qu on source ici.
-if [ "$DO_SHANNON" = "1" ]; then
-    echo -e "${BOLD}== Baseband Shannon ==${NC}"
-    if [ -f "$DIR/download_shannon.sh" ]; then
-        # shellcheck source=download_shannon.sh
-        . "$DIR/download_shannon.sh"
-        osmo_shannon_download || true
-    else
-        echo -e "  ${YELLOW}!${NC} download_shannon.sh introuvable"
-    fi
-fi
-
 if [ "$DO_EXTRAS" = "1" ]; then
     echo -e "${BOLD}== Jeux + media ==${NC}"
     if [ -f "$DIR/tools/osmo-extras-install.sh" ]; then
@@ -1191,6 +1176,4 @@ echo
     echo -e "  ${CYAN}→${NC} verifier OpenCL : ${BOLD}clinfo${NC}"
 [ "$DO_EXTRAS" = "1" ] && \
     echo -e "  ${CYAN}→${NC} jeux + media : dossiers ${BOLD}Jeux / Media / Telephone / Outils${NC} et encart du bureau"
-[ "$DO_SHANNON" = "1" ] && \
-    echo -e "  ${CYAN}→${NC} Shannon : ${BOLD}$DIR/download_shannon.sh${NC} (relancer apres avoir depose le firmware)"
 exit 0

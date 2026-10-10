@@ -47,10 +47,6 @@ ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-
 # encore poussee parte quand meme avec son fond.
 [ -f "$DIR/configs/gsm-lab-wallpaper.jpg" ] \
     && install -Dm644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$P/configs/gsm-lab-wallpaper.jpg"
-# La bande Calvin & Hobbes (snapshot du 2026-09-04) : tools/osmo-wallpaper.sh la
-# telecharge chaque jour, mais l image garde son fond meme hors ligne.
-[ -f "$DIR/calvin_2026-09-04.gif" ] \
-    && install -Dm644 "$DIR/calvin_2026-09-04.gif" "$P/calvin_2026-09-04.gif"
 # osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
 # ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
 # iso_modules/80-chroot.sh - Ctrl+AltGr+Droite / Ctrl+AltGr+Gauche.

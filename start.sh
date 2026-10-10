@@ -867,7 +867,7 @@ _GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
-    for repo in /opt/GSM/qosmo /opt/GSM/c54x_exe /opt/GSM/grgsm_exe /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
+    for repo in /opt/GSM/qosmo-grgsm /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
             echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
@@ -903,29 +903,14 @@ force_update_trees() {
             echo -e "    ${RED}$repo : pull KO (divergence ou reseau) - le run part sur $before${NC}"
         fi
     done
-    # [2026-10-03] MEMES ARBRES ET MEME BUILD QUE L'ISO ET Dockerfile.run :
-    # qosmo (QEMU), c54x_exe (DSP) et grgsm_exe. qosmo-grgsm est retire depuis
-    # le 2026-09-25 ; le garder ici faisait relier, et afficher, un binaire
-    # mort (21/09) pendant que le vrai QEMU (/opt/GSM/qosmo) n'etait jamais
-    # recompile. Sans la recompilation, le pull ne change RIEN a ce qui tourne ;
-    # ninja et make sont incrementaux : ils ne rebatissent que ce qui a bouge.
-    # gcc-13 : meme PATH local que Dockerfile.run (build/ configure avec gcc-13).
-    # [2026-10-03] Les commandes sont celles des installeurs des depots
-    # (qosmo/install.sh, c54x_exe/install.sh, grgsm_exe/install.sh), avec les
-    # MEMES options que Dockerfile.run : une seule liste par composant.
-    echo -e "  ${GREEN}[*] Recompilation qosmo + c54x_exe + grgsm_exe (leurs install.sh)...${NC}"
-    local _out
-    if _out="$(docker exec "$c" bash -c 'bash /opt/GSM/qosmo/install.sh --only build --cc gcc-13 \
-            && bash /opt/GSM/c54x_exe/install.sh --portable --qosmo /opt/GSM/qosmo --skip verify \
-                   --rom-dir /opt/GSM --rom-dir /opt/GSM/c54x_exe/rom \
-            && bash /opt/GSM/grgsm_exe/install.sh --qosmo /opt/GSM/qosmo --skip verify' 2>&1)"; then
-        local f
-        for f in qosmo/build/qemu-system-arm c54x_exe/c54x_exe grgsm_exe/grgsm_exe; do
-            echo -e "    ${GREEN}${f##*/} relie${NC} ($(docker exec "$c" stat -L -c %y "/opt/GSM/$f" 2>/dev/null | cut -c1-19))"
-        done
+    # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
+    # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
+    echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
+    if docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja' >/dev/null 2>&1; then
+        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo-grgsm/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
     else
-        echo -e "    ${RED}compilation KO - le run utilisera les binaires de l'image${NC}"
-        printf '%s\n' "$_out" | tail -20 | sed 's/^/      /'
+        echo -e "    ${RED}ninja KO - le run utilisera le binaire de l'image${NC}"
+        docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
     fi
 }
 
@@ -1934,15 +1919,6 @@ start_bridge_mode() {
         #
         # Avec --node-per-op, le conteneur i devient le noeud (base + i - 1),
         # porte l'operateur 1 de ce noeud, et son point code suit : 1.<n>1.<role>.
-        # [2026-10-01] OSMO_NO_STP_IP=1 : l identite SS7 du conteneur vient
-        # d etre calculee ICI. Sur une machine installee par l ISO, l hote porte
-        # OSMO_ROLE=operator (/etc/osmo-role) : generate_configs.sh rejouait
-        # alors set-node-id.sh --native sur la config du CONTENEUR, et prenait
-        # pour source de l ASP la route de l HOTE vers le hub - 172.20.0.1,
-        # la passerelle du bridge. L ASP de l operateur 2 ne pouvait pas se lier
-        # (as-inter AS_DOWN), Op2 et Op3 ne joignaient personne (vu sur la 1.91).
-        # Le conteneur, lui, rejoue ce rattrapage chez lui, avec SES routes.
-        OSMO_NO_STP_IP=1 \
         RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
             "$container_ip" "$gateway" \
@@ -2533,13 +2509,7 @@ start_bridge_mode() {
             # pas : elle ne traversait pas ce handoff-ci.
             [ "${OSMO_NO_ATTACH:-0}" = "1" ] && _cmd="$_cmd CALYPSO_NO_ATTACH=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
-            # [2026-10-01] PAS DE CALYPSO_BRIDGE ICI. Impose a « pont », il
-            # lancait pont/pont.py (le pont du montage gr-gsm) dans des conteneurs
-            # dont la couche 1 est le banc DSP (DSP_MODE=1 par defaut) : le
-            # c54x_exe tournait sans son pont_dsp.py, le MS#1 ne voyait aucune
-            # cellule. start-direct.sh choisit lui-meme : none en DSP (le banc
-            # lance pont_dsp.py), pont en gr-gsm.
-            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_MODE=shunt_legit"
+            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-direct.sh ${_na} --force"
             printf '%s' "$_cmd"
@@ -2958,11 +2928,7 @@ esac
 echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
 
 ./helpers/prepare_host.sh
-# OSMO_SKIP_BUILD=1 (pose par start-multi.sh) : pas de rebuild systematique de
-# l'image run. QEMU_CACHE_BUST change a chaque appel et recompilait QEMU
-# (qosmo, c54x_exe, grgsm_exe) a tous les lancements ; check_image construit
-# encore l'image si elle est absente.
-[ "${OSMO_SKIP_BUILD:-0}" = "1" ] || build_run_image
+build_run_image
 check_image
 
 case "$NETWORK_MODE" in

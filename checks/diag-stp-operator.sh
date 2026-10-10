@@ -118,7 +118,7 @@ if [ -z "$ASP" ]; then
   printf '  %s VTY injoignable -- osmo-stp est-il lance ?\n' "$KO"; PROB=$((PROB+1))
   r_state=""; r_rem=""
 else
-  line="$(printf '%s\n' "$ASP" | grep -E 'asp-to-inter' | sed -n 1p)"
+  line="$(printf '%s\n' "$ASP" | grep -E 'asp-to-inter' | head -1)"
   r_state="$(printf '%s' "$line" | awk '{print $3}')"
   r_rem="$(printf '%s' "$line" | awk '{print $8}')"
   printf '  asp-to-inter  etat=%s%s%s  remote=%s\n' "$C" "${r_state:-absent}" "$Z" "${r_rem:-?}"

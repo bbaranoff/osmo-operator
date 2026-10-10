@@ -214,11 +214,6 @@ ${B}AU DEMARRAGE DE L'IMAGE${N}
   ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-0}]${N}
   ${C}--kb=LANG${N}                 disposition clavier                          ${D}[${OSMO_ISO_KB:-fr}]${N}
 
-${B}LA CIBLE SHANNON${N}
-  ${C}--shannon / --no-shannon${N}  FirmWire + baseband Shannon + traducteur DSP,
-                            shannon_ghidra_proj et c54x_exe dans l image   ${D}[${OSMO_ISO_SHANNON:-1}]${N}
-  ${C}--softsim / --no-softsim${N}  softSIM (SIM via SAP, Ruby) dans /opt/GSM/softsim   ${D}[${OSMO_ISO_SOFTSIM:-1}]${N}
-
 ${B}LE LIEN ENTRE NOEUDS (WAN)${N}
   ${C}--wan${N}                     active la table WAN
   ${C}--wan-nodes=LISTE${N}         <noeud>:<IP>:<indicatif>, separes par des espaces
@@ -280,12 +275,6 @@ for arg in "$@"; do case "$arg" in
     --no-banc)      OSMO_ISO_BANC=0 ;;
     --multi)        OSMO_ISO_MULTI=1 ;;
     --no-multi)     OSMO_ISO_MULTI=0 ;;
-    # Cible shannon : FirmWire (+ .v1/, shannon_main.bin, traducteur dsp_xlate),
-    # shannon_ghidra_proj et c54x_exe dans l image. Par defaut incluse (1).
-    --shannon)      OSMO_ISO_SHANNON=1 ;;
-    --no-shannon)   OSMO_ISO_SHANNON=0 ;;
-    --softsim)      OSMO_ISO_SOFTSIM=1 ;;
-    --no-softsim)   OSMO_ISO_SOFTSIM=0 ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
