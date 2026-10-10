@@ -40,8 +40,7 @@ down to the baseband.
 > files at 2 GiB, so the image ships in pieces.
 
 ```sh
-TAG=v0.1-60
-URL=https://github.com/bbaranoff/osmo-operator/releases/download/$TAG
+URL=https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7
 
 for f in osmo-operator-desktop.iso.part-0{0,1,2,3} SHA256SUMS; do
   wget "$URL/$f"
