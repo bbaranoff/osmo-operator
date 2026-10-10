@@ -17,6 +17,10 @@ A complete GSM + LTE operator on a single live image, with a GNOME desktop for e
 **Download every `.part-NN` file**, not just the first one. GitHub caps release files at 2 GiB, so the image ships in pieces. Reassemble, then verify:
 
 ```sh
+wget https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-6/osmo-operator-desktop.iso.part-00
+wget https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-6/osmo-operator-desktop.iso.part-01
+wget https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-6/osmo-operator-desktop.iso.part-02
+wget https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-6/osmo-operator-desktop.iso.part-03
 cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c SHA256SUMS
 ```
