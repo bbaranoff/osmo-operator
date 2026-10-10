@@ -1,9 +1,11 @@
 # osmo-operator-desktop.iso
 
 [![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
-  
+
+Full desktop ISO :  
 [Google Drive link](https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1)  
-  
+
+Four Part Github desktop ISO :  
 [Github link Desktop Part 00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-00)  
 [Github link Desktop Part 01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-01)  
 [Github link Desktop Part 02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-02)  
