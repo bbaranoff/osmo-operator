@@ -18,8 +18,7 @@ do not need it to get a phone on the air.
 ### 1.1 From the published image
 
 ```bash
-sudo docker pull bastienbaranoff/norf_gsm
-sudo docker tag  bastienbaranoff/norf_gsm osmocom-nitb
+sudo  docker pull ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
 sudo ./start.sh
