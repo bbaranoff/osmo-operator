@@ -128,7 +128,10 @@ iso_docker_build() {
             # `if`, et pas « [ ... ] && [ ... ] && echo » : une chaine && dont
             # le premier test est faux rend 1, et ce depot s est deja fait
             # arreter par une ligne de cette forme sous set -e.
-            if [ "${_got}" = "${_got#*:base-}" ] && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
+            # [2026-10-10] Sauf l image Docker Hub : elle passe en tete PAR
+            # CHOIX, l avertir a chaque build ne dirait plus rien.
+            if [ "${_got}" = "${_got#*:base-}" ] && [ "${_got}" != "${ISO_PULL_IMAGE}" ] \
+               && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
                 echo -e "  ${YELLOW}!${NC} aucune image ne correspond a l'empreinte du depot : ${CYAN}${_got}${NC} ne suit pas ce commit (${CYAN}--build-docker${NC} pour compiler l'arbre de travail)"
             fi
             docker tag "$_got" "$_local"
