@@ -18,8 +18,6 @@
 cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c --ignore-missing SHA256SUMS
 ```
-
-
 A complete **GSM + LTE operator on a single live image**, with a GNOME desktop for
 everything that can't be driven from the VTY.
 **No SDR and no physical phone**: the radio is emulated end to end, all the way
@@ -33,10 +31,6 @@ down to the baseband.
 | **postmarketOS phone password** | `147147` |
 | **Minimum host** | x86_64, 8 GB RAM, 4 cores, nested virtualization in a VM |
 | **Image identity** | `IMAGE_VERSION="OSMO_EGPRS_V2"` · `OSMO_ROLE=operator` · `OSMO_LITE=0` |
-
-> [!WARNING]
-> **Known issue:** the cell repeatedly loses coverage. A fix is in progress — you
-> may work around it by pulling and rebuilding `qosmo` and `c54x_exe`.
 
 **Contents**
 
