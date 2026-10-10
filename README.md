@@ -1,9 +1,24 @@
-wait few hours ! I Hope
-[![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
-
-dont want to wait ? https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1
-
 # osmo-operator-desktop.iso
+
+[![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
+  
+[Lien Google Drive](https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1)  
+  
+[Lien Github Desktop Part 00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-00)  
+[Lien Github Desktop Part 01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-01)  
+[Lien Github Desktop Part 02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-02)  
+[Lien Github Desktop Part 03](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-03)  
+[Lien Github Sha256](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/SHA256SUMS)
+  
+> [!IMPORTANT]
+> Download **every** `.part-NN` file, not just the first one. GitHub caps release
+> files at 2 GiB, so the image ships in pieces.
+
+```bash
+cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
 
 A complete **GSM + LTE operator on a single live image**, with a GNOME desktop for
 everything that can't be driven from the VTY.
@@ -32,26 +47,7 @@ down to the baseband.
 - [Building and running from source](#osmo-operator--a-full-gsm-network-on-one-machine)
 
 ---
-
-## Download
-
-> [!IMPORTANT]
-> Download **every** `.part-NN` file, not just the first one. GitHub caps release
-> files at 2 GiB, so the image ships in pieces.
-
-```sh
-URL=https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7
-
-for f in osmo-operator-desktop.iso.part-0{0,1,2,3} SHA256SUMS; do
-  wget "$URL/$f"
-done
-
-cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
-sha256sum -c --ignore-missing SHA256SUMS
-```
-
----
-
+  
 ## Run the image
 
 The live root is a tmpfs (~6 GB in `toram` mode); logs and captures are bounded
