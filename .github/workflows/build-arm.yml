@@ -340,8 +340,8 @@ jobs:
           # le tag - et un release qui ne disait pas quelle version il portait.
           # Un push de tag garde son propre tag ; tout le reste sort sous la
           # version ci-dessous, a changer ici quand elle avance.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-60' }}
-          name: "osmo_egprs — image SD Raspberry Pi 4 (arm64) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-60' }}"
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-7' }}
+          name: "osmo_egprs — image SD Raspberry Pi 4 (arm64) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-7' }}"
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           body: |
