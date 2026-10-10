@@ -75,9 +75,9 @@ ISO_SKIP_BUILD="${OSMO_ISO_SKIP_BUILD:-1}"
 # decide de ce qui arrive quand le pull echoue : demande, c est fatal ; par
 # defaut, on retombe sur la construction locale.
 ISO_SKIP_BUILD_GIVEN=0
-# Le dernier recours, quand l empreinte du depot ne correspond a aucune image
-# publiee : l image Docker Hub. Elle ne suit PAS le commit - iso_docker_build
-# le dit en clair avant de s en servir.
+# [2026-10-10] La PREMIERE image essayee : l image Docker Hub, taguee
+# osmocom-nitb. Elle ne suit PAS le commit - iso_docker_build le dit en clair
+# avant de s en servir ; GHCR (empreinte, puis :latest) ne vient qu apres.
 ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}"
 # --build-docker : l INVERSE de --skip-build, et il gagne. Sert quand quelque
 # chose en amont pousse un --skip-build qu on ne veut pas ici : la CI qui tire
@@ -183,10 +183,11 @@ ${B}QUELLES IMAGES${N}
   ${C}--output=FICHIER${N}          nom du fichier de sortie                        ${D}[${OUTPUT:-osmo-operator-<version>.iso}]${N}
 
 ${B}L'IMAGE DOCKER SOURCE${N}
-  ${D}Par defaut, en amd64, l'image est TIREE et non construite. Dans l'ordre :
-  ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis le :latest du
-  meme depot, puis l'image Docker Hub. Seule la premiere correspond a l'arbre
-  de travail ; pour les deux autres le script previent avant de s'en servir.
+  ${D}Par defaut, en amd64, l'image est TIREE et non construite, puis taguee
+  osmocom-nitb. Dans l'ordre : l'image Docker Hub (bastienbaranoff/norf_gsm:latest),
+  puis ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis le :latest
+  de GHCR. Seule l'image d'empreinte correspond a l'arbre de travail ; pour les
+  autres le script previent avant de s'en servir.
   Si aucune ne repond, build.sh prend le relais (1h23). En arm64 rien n'est
   publie : la compilation reste le defaut.${N}
   ${C}--skip-build[=IMAGE]${N}      le pull devient OBLIGATOIRE : pas de repli sur

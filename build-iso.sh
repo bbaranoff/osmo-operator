@@ -15,9 +15,10 @@
 #                         systemctl start osmo-banc). Equivalents en variables :
 #                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
 #    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
-#    (defaut, amd64)      L'IMAGE DOCKER EST TIREE, PAS CONSTRUITE. Dans l'ordre :
-#                         ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>,
-#                         puis le :latest du meme depot, puis l'image Docker Hub.
+#    (defaut, amd64)      L'IMAGE DOCKER EST TIREE, PAS CONSTRUITE, et taguee
+#                         osmocom-nitb. Dans l'ordre : bastienbaranoff/norf_gsm:latest
+#                         (Docker Hub), puis ghcr.io/<depot>/osmocom-nitb:base-<empreinte>,
+#                         puis le :latest de GHCR.
 #                         build.sh ne tourne que si aucune ne repond. L'empreinte
 #                         est celle des workflows : quand elle correspond, l'image
 #                         publiee a ete batie sur exactement cet arbre de travail ;

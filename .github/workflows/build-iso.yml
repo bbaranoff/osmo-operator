@@ -215,7 +215,7 @@ jobs:
       # Le pull se fait ICI, sous le compte runner qui porte les identifiants
       # GHCR - build-iso.sh tourne sous sudo, et le ~/.docker de root n'en a
       # pas. L'image etant alors locale, le module ne retire rien.
-      - name: Image de base depuis GHCR
+      - name: Image de base (Docker Hub, puis GHCR)
         run: |
           if [ "${{ github.event.inputs.build_docker }}" = "true" ]; then
             echo "ISO_DOCKER_SRC=--build-docker" >> "$GITHUB_ENV"
@@ -224,11 +224,22 @@ jobs:
           fi
           KEY='${{ steps.key.outputs.key }}'
           REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
-          REF="ghcr.io/${REPO}/osmocom-nitb:base-${KEY}"
-          if docker manifest inspect "$REF" >/dev/null 2>&1; then
-            docker pull "$REF"
+          # [2026-10-10] ORDRE : Docker Hub (bastienbaranoff/norf_gsm:latest)
+          # d'abord, l'image GHCR de l'empreinte ensuite, la compilation en
+          # dernier. L'image retenue est taguee osmocom-nitb.
+          HUB="bastienbaranoff/norf_gsm:latest"
+          GHCR="ghcr.io/${REPO}/osmocom-nitb:base-${KEY}"
+          REF=""
+          if docker pull "$HUB"; then
+            REF="$HUB"
+            echo "::notice::Base tiree de Docker Hub : $HUB - ne suit pas forcement ce commit."
+          elif docker manifest inspect "$GHCR" >/dev/null 2>&1 && docker pull "$GHCR"; then
+            REF="$GHCR"
+            echo "::notice::Docker Hub indisponible, base tiree de GHCR : $GHCR - pas de compilation."
+          fi
+          if [ -n "$REF" ]; then
+            docker tag "$REF" osmocom-nitb
             echo "ISO_DOCKER_SRC=--skip-build=$REF" >> "$GITHUB_ENV"
-            echo "::notice::Base tiree de GHCR : $REF - pas de compilation."
             # Les .deb de l'image rejoignent le cache de l'hote : c'est la que
             # 50-injection-image.sh va les chercher pour poser la pile dans le
             # rootfs (il sait retomber sur l'image, mais un dpkg vaut mieux
@@ -248,7 +259,7 @@ jobs:
             # ce commit, sans que rien ne le dise. Quand l'empreinte n'a pas
             # d'image, la seule reponse juste est de compiler.
             echo "ISO_DOCKER_SRC=--build-docker" >> "$GITHUB_ENV"
-            echo "::notice::Pas de base publiee pour l'empreinte $KEY - construction locale."
+            echo "::notice::Ni Docker Hub ni base GHCR pour l'empreinte $KEY - construction locale."
           fi
           df -h / /mnt
 

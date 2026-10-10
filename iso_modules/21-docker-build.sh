@@ -22,8 +22,10 @@
 # dans les deux workflows fait diverger les empreintes, et plus rien ne se
 # tire : les trois doivent bouger ensemble.
 #
-# L ordre :
+# L ordre (depuis le 2026-10-10, Docker Hub passe devant GHCR) :
 #   1. la reference EXPLICITE de --skip-build=REF - elle ne se discute pas ;
+#   1b. l image Docker Hub ($ISO_PULL_IMAGE, bastienbaranoff/norf_gsm:latest),
+#      taguee osmocom-nitb comme les autres ;
 #   2. ghcr.io/<depot>/osmocom-nitb:base-<empreinte> - celle qui correspond
 #      au commit, publiee par docker.yml ;
 #   3. ghcr.io/<depot>/osmocom-nitb:latest - la derniere publiee par le meme
@@ -31,7 +33,6 @@
 #      est a jour et elle est PUBLIQUE : verifie le 14-09, le registre repond
 #      sans jeton et porte base-89a36ab9ba1d941d, base-e68ecc7ee98f41e0,
 #      cache et latest ;
-#   4. l image Docker Hub, dernier recours.
 # Seule la 2 garantit que l image correspond a l arbre de travail : pour les
 # deux suivantes, iso_docker_build previent avant de s en servir.
 iso_pull_refs() {
@@ -62,9 +63,11 @@ iso_pull_refs() {
     [ -n "$_repo" ] || _repo="bbaranoff/osmo-operator"
     # L empreinte est vide hors depot git : pas de reference d empreinte a
     # proposer, mais le latest du meme depot reste valable.
+    # [2026-10-10] Docker Hub EN TETE : bastienbaranoff/norf_gsm:latest est la
+    # pile de reference du banc ; GHCR ne sert plus que de repli.
+    echo "$ISO_PULL_IMAGE"
     [ -n "$_key" ] && echo "ghcr.io/${_repo,,}/osmocom-nitb:base-${_key}"
     echo "ghcr.io/${_repo,,}/osmocom-nitb:latest"
-    echo "$ISO_PULL_IMAGE"
 }
 
 iso_docker_build() {

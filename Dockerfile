@@ -727,12 +727,20 @@ RUN ldconfig
 # tourne sur d autres CPU que celui du build, c est un SIGILL au demarrage. On
 # garde ses drapeaux, sans celui-la. La ROM est aussi posee en
 # /opt/GSM/calypso_dsp.*.bin, le --rom-dir par defaut de c54x_exe.
+# [2026-10-10] La ROM n est plus dans le depot c54x_exe : le `cp rom/...`
+# tombait sur « cannot stat rom/calypso_dsp.txt ». rom/fetch-rom.sh telecharge
+# le dump FreeCalypso 3606, le convertit en .bin et verifie SHA256SUMS.3606 ;
+# calypso_dsp.txt, c est le dump brut lui-meme, qu il ne garde pas : on le
+# telecharge a part.
+ARG FREECALYPSO_URL=ftp://ftp.freecalypso.org/pub/GSM/Calypso
 RUN if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
       && cd /opt/GSM/c54x_exe \
       && make QOSMO=/opt/GSM/qosmo \
              CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
-      && cp rom/calypso_dsp.*.bin rom/calypso_dsp.txt /opt/GSM/ \
+      && FREECALYPSO_URL="$FREECALYPSO_URL" bash rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom \
+      && curl -fsS --retry 2 -o /opt/GSM/calypso_dsp.txt "$FREECALYPSO_URL/dsp-rom-3606-dump.txt" \
+      && cp /opt/GSM/calypso_dsp.txt rom/calypso_dsp.txt \
       && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
              /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
              /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
