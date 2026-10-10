@@ -2,13 +2,13 @@
 
 [![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
   
-[Lien Google Drive](https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1)  
+[Google Drive link](https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1)  
   
-[Lien Github Desktop Part 00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-00)  
-[Lien Github Desktop Part 01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-01)  
-[Lien Github Desktop Part 02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-02)  
-[Lien Github Desktop Part 03](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-03)  
-[Lien Github Sha256](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/SHA256SUMS)
+[Github link Desktop Part 00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-00)  
+[Github link Desktop Part 01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-01)  
+[Github link Desktop Part 02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-02)  
+[Github link Desktop Part 03](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-03)  
+[Github link Sha256](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/SHA256SUMS)
   
 > [!IMPORTANT]
 > Download **every** `.part-NN` file, not just the first one. GitHub caps release
