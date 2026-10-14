@@ -245,6 +245,44 @@ wan_detect_local_ip() {
 wan_local_ip()  { printf '%s' "${WAN_IP[${WAN_NODE_ID}]:-}"; }
 wan_local_ind() { printf '%s' "${WAN_IND[${WAN_NODE_ID}]:-}"; }
 
+# ── Mise a jour de CE noeud dans la table, sans question ────────────────────
+# --node N dit quel noeud est cette machine. Son adresse dans la table peut
+# etre perimee (une table copiee d'une autre machine) : on la remplace par
+# l'adresse LOCALE reelle - celle qui route vers le hub si on le connait, sinon
+# wan_detect_local_ip - puis on reecrit /etc/osmo-wan.conf. Les autres noeuds
+# gardent leur entree : ce script ne sait pas ou ils sont.
+#   $1 = numero du noeud (1-9)   $2 = hub (facultatif)
+wan_self_refresh() {
+    local id="$1" hub="${2:-}" ip="" ind
+
+    [[ "$id" =~ ^[1-9]$ ]] || { _wan_err "wan_self_refresh : noeud '$id' invalide"; return 1; }
+    WAN_NODE_ID="$id"
+
+    if [ -n "$hub" ]; then
+        ip="$(ip route get "$hub" 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+    fi
+    [ -n "$ip" ] || ip="$(wan_detect_local_ip 2>/dev/null || true)"
+    if [ -z "$ip" ]; then
+        _wan_err "noeud $id : aucune adresse locale detectee - table non reecrite"
+        return 1
+    fi
+
+    ind="${WAN_IND[$id]:-$(wan_default_ind "$id")}"
+    WAN_IP[$id]="$ip"
+    WAN_IND[$id]="$ind"
+    WAN_NOPS[$id]="${WAN_NOPS[$id]:-1}"
+    case " ${WAN_NODE_LIST[*]:-} " in
+        *" $id "*) ;;
+        *) WAN_NODE_LIST+=("$id") ;;
+    esac
+    WAN_NODE_COUNT="${#WAN_NODE_LIST[@]}"
+
+    wan_nodes_save "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" || return 1
+    printf '  \033[0;36mWAN\033[0m        noeud %s = %s (table reecrite : %s)\n' \
+        "$id" "$ip" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
+    return 0
+}
+
 # ── Saisie ───────────────────────────────────────────────────────────────────
 # whiptail quand on en a un ET un terminal ; sinon `read`. Le mode "ni l'un ni
 # l'autre" (cron, CI, docker exec -d) n'invente rien : il echoue en nommant

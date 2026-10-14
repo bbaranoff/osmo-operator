@@ -70,6 +70,11 @@ PROFILE_CHOISI=0
 # WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
+# Inter-STP (hub SS7) lance en standalone a cote du WAN : auto = seulement si le
+# hub n'existe pas encore sur le reseau (ni adresse locale, ni reponse ping).
+# --interstp force, --no-interstp passe. Un seul hub pour tout le WAN : sur le
+# noeud qui ne le porte pas, le hub distant est reconnu et laisse en place.
+INTERSTP=auto
 # --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
 WAN_IMPORT_FILES=()
 # --payload-ism : le TEXTE des SMS part par radio ISM, le reste (signalisation,
@@ -191,7 +196,9 @@ Usage : ./start-direct.sh [options] [mode]
                         pointe son ASP sur l'inter-STP. Une seule ISO suffit
                         alors pour les neuf noeuds - le numero se choisit ici.
     --op N              operateur porte par ce noeud (defaut 1)
-    --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM)
+    --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM ; natif : 192.168.1.49)
+    --interstp          lance le inter-STP en standalone sur ce noeud (force)
+    --no-interstp       ne lance pas le inter-STP (defaut : auto, avec --wan)
     --air-mesh[=PORT]   maillage de BURSTS entre noeuds : le milieu radio
                         devient commun et un mobile peut entendre - et choisir -
                         la BTS d'un autre noeud. Les pairs viennent de la table
@@ -284,6 +291,8 @@ while [ $# -gt 0 ]; do
         --op=*)         NODE_OP="${1#*=}" ;;
         --hub-ip)       HUB_IP="${2:-}"; shift ;;
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
+        --interstp)     INTERSTP=1 ;;
+        --no-interstp)  INTERSTP=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
                        # run_modules/70-l2.sh gere deja les quatre clients via
                        # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
@@ -1852,7 +1861,11 @@ regen_configs_natif() {
     # Le routing context suit la meme regle : c'est lui que le hub lit pour
     # distinguer les AS, et la formule locale (op*100+50) rend la meme valeur
     # sur tous les noeuds.
-    local mid="${node}${op}"
+    # Plan WAN seulement s'il y a un WAN (--wan, --wan-nodes). Un hote seul garde
+    # le plan LOCAL 1.<op>.<role>, comme set-node-id.sh --local au demarrage :
+    # sinon la regeneration reecrit 1.<noeud><op> a chaque relance, meme sans WAN.
+    local mid="${node}${op}" wan_plan=0
+    if [ "${WAN_MESH:-0}" = "1" ] || [ -n "${WAN_NODES:-}" ]; then wan_plan=1; else mid="$op"; fi
     local pc_msc="1.${mid}.1" pc_stp="1.${mid}.2" pc_bsc="1.${mid}.3"
     local shut="shutdown"
     [ -n "$hub" ] && shut="no shutdown"
@@ -1905,7 +1918,11 @@ regen_configs_natif() {
         # que build-iso.sh pose pour un noeud de WAN. 0.0.0.0 parce que
         # l'adresse du noeud vient du DHCP et n'est pas forcement montee quand
         # osmo-stp demarre - se lier a une adresse absente echoue au lancement.
-        export RCTX_INTER_OVERRIDE=$(( node * 1000 + op * 100 + 50 ))
+        if [ "$wan_plan" = "1" ]; then
+            export RCTX_INTER_OVERRIDE=$(( node * 1000 + op * 100 + 50 ))
+        else
+            export RCTX_INTER_OVERRIDE=$(( op * 100 + 50 ))
+        fi
         export INTER_LOCAL_IP_OVERRIDE="0.0.0.0"
         # _apply_node_ss7_addressing (appele en fin de apply_config_templates)
         # ne rejoue set-node-id.sh que s'il sait QUI il sert, et il ne le lit
@@ -2262,6 +2279,11 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         if [ "${WAN_NODE_COUNT:-0}" -lt 1 ] || [ "${WAN_NODE_ID:-0}" = "0" ]; then
             wan_nodes_prompt || exit 1
         fi
+        # --node N : cette machine EST le noeud N. Sa ligne dans la table est
+        # remise a l'adresse reelle, et la table reecrite - sans question.
+        if [ -n "$NODE_ID" ] && [ "$WAN_MESH" -eq 1 ]; then
+            wan_self_refresh "$NODE_ID" "${HUB_IP:-${OSMO_HUB_IP:-}}" || exit 1
+        fi
     fi
     wan_nodes_validate || exit 1
     printf '\n'
@@ -2278,6 +2300,36 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
             say_end " OK " "$C_OK" "WAN - noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"
         else
             say_end " KO " "$C_KO" "WAN" "voir ${LOG_DIR:-/tmp}/wan-mesh.log"
+        fi
+    fi
+
+    # --- 7quinquies. Inter-STP standalone (hub SS7 du WAN) --------------------
+    # Le hub est le seul point ou les noeuds se rejoignent en SS7 ; sans lui,
+    # l'ASP de chaque STP reste en shutdown. Standalone : un osmo-stp a part,
+    # avec sa propre config (start-interstp.sh), pas une pile du banc.
+    INTERSTP_SH="$HERE/start-interstp.sh"
+    [ -n "${HUB_IP:-}" ] || HUB_IP="192.168.1.49"
+    if [ "$INTERSTP" != "0" ] && [ -r "$INTERSTP_SH" ]; then
+        hub_local=0; hub_up=0
+        ip -br addr 2>/dev/null | grep -qw "$HUB_IP" && hub_local=1
+        ping -c1 -W1 "$HUB_IP" >/dev/null 2>&1 && hub_up=1
+        if [ "$INTERSTP" = "1" ] || [ "$hub_local" = 1 ] || [ "$hub_up" = 0 ]; then
+            ips=""
+            for id in "${WAN_NODE_LIST[@]}"; do ips="${ips}${WAN_IP[$id]} "; done
+            if [ "$DRY" -eq 1 ]; then
+                printf '  [dry-run] %s --nodes %s --ops 1 --ip %s --ips "%s"\n' \
+                    "$INTERSTP_SH" "$WAN_NODE_COUNT" "$HUB_IP" "$ips"
+            else
+                say_begin "Inter-STP standalone ($HUB_IP)"
+                if bash "$INTERSTP_SH" --nodes "$WAN_NODE_COUNT" --ops 1 \
+                        --ip "$HUB_IP" --ips "$ips" > "${LOG_DIR:-/tmp}/interstp.log" 2>&1; then
+                    say_end " OK " "$C_OK" "Inter-STP" "hub $HUB_IP:2908, $WAN_NODE_COUNT noeud(s)"
+                else
+                    say_end " KO " "$C_KO" "Inter-STP" "voir ${LOG_DIR:-/tmp}/interstp.log"
+                fi
+            fi
+        else
+            say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP deja present sur le reseau - non relance"
         fi
     fi
 

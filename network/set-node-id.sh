@@ -283,7 +283,9 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
     ' "$f" > "$tmp"
 
     if [ "$DRY" = "1" ]; then
-        echo "  [dry-run] $f"; diff -u "$f" "$tmp" | sed -n '4,30p' | sed 's/^/    /'; rm -f "$tmp"
+        # diff renvoie 1 quand les fichiers different : c'est le cas normal ici,
+        # et pipefail ferait tomber le script des la premiere reecriture.
+        echo "  [dry-run] $f"; { diff -u "$f" "$tmp" || true; } | sed -n '4,30p' | sed 's/^/    /'; rm -f "$tmp"
     else
         # cat plutot que mv : sur l'ISO comme dans un conteneur, ces fichiers
         # peuvent etre des points de montage, et rename() y echoue.

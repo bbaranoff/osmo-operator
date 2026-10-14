@@ -122,6 +122,15 @@ stp_pid() {
     pgrep -f 'osmo-stp .*osmo-stp-interop\.cfg' | head -1
 }
 
+# Port VTY du hub. Le 4239 par defaut est celui du STP local du noeud : sur une
+# machine qui porte deja un osmo-stp, le hub ne peut pas le prendre. On lit le
+# port ecrit dans la config (bind 127.0.0.1 N), sinon 4239.
+vty_port() {
+    local p
+    p="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
+    echo "${p:-4239}"
+}
+
 # ── status ───────────────────────────────────────────────────────────────────
 if [ "$ACTION" = "status" ]; then
     banner
@@ -135,13 +144,16 @@ if [ "$ACTION" = "status" ]; then
     # Le VTY est la seule source de verite sur QUI est attache : un ASP peut
     # avoir ouvert sa SCTP sans jamais passer ASP-ACTIVE, et rien d'autre ne le
     # montre. Le port ouvert, lui, ne prouve que l'ecoute.
+    VTY_PORT="$(vty_port)"
     if command -v nc >/dev/null 2>&1; then
         echo -e "  ${BOLD}ASP attaches :${NC}"
-        printf 'enable\nshow cs7 instance 0 asp\nshow cs7 instance 0 as all\nexit\n' \
-            | nc -q2 127.0.0.1 4239 2>/dev/null | sed 's/^/    /' | grep -vE '^\s*$' | head -40 \
-            || echo -e "    ${YELLOW}VTY 4239 muet${NC}"
+        # Pauses entre les commandes : le VTY ne lit pas un bloc d'un coup.
+        { sleep 1; printf 'enable\n'; sleep 0.5; printf 'show cs7 instance 0 asp\n'; sleep 0.5
+          printf 'show cs7 instance 0 as all\n'; sleep 0.5; printf 'exit\n'; sleep 1; } \
+            | nc -q2 127.0.0.1 "$VTY_PORT" 2>/dev/null | tr -d '\r' | sed 's/^/    /' | grep -vE '^\s*$' | tail -30 \
+            || echo -e "    ${YELLOW}VTY ${VTY_PORT} muet${NC}"
     else
-        echo -e "  ${YELLOW}nc absent : ${CYAN}telnet 127.0.0.1 4239${NC} puis "show cs7 instance 0 asp""
+        echo -e "  ${YELLOW}nc absent : ${CYAN}telnet 127.0.0.1 ${VTY_PORT}${NC} puis "show cs7 instance 0 asp""
     fi
     exit 0
 fi
@@ -291,6 +303,16 @@ fi
 bash "$HERE/helpers/create_interop.sh" --listen-ip "$HUB_IP" \
      --wan "$NODES" "$OPS" "$CFG" || exit 1
 [ "$PORT" = "2908" ] || sed -i "s/^ listen m3ua 2908/ listen m3ua ${PORT}/" "$CFG"
+# VTY du hub : un port libre, hors du 4239 du STP local (voir vty_port).
+if ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CFG"; then
+    VTY_PORT="${VTY_PORT:-}"
+    if [ -z "$VTY_PORT" ]; then
+        for p in $(seq 4300 4399); do
+            ss -lnt 2>/dev/null | grep -q ":${p} " || { VTY_PORT=$p; break; }
+        done
+    fi
+    sed -i "s/^line vty$/line vty\n bind 127.0.0.1 ${VTY_PORT:-4300}/" "$CFG"
+fi
 echo ""
 
 # ── Lancement ────────────────────────────────────────────────────────────────
@@ -317,7 +339,7 @@ osmo-stp -c "$CFG" >> "$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 sleep 2
 if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo -e "  ${GREEN}✓ inter-STP lance${NC} - M3UA ${CYAN}${HUB_IP}:${PORT}${NC}, VTY 4239"
+    echo -e "  ${GREEN}✓ inter-STP lance${NC} - M3UA ${CYAN}${HUB_IP}:${PORT}${NC}, VTY $(vty_port)"
     echo -e "  Journal : ${CYAN}${LOG}${NC}"
     echo ""
     echo -e "  ${BOLD}Cote noeuds :${NC} leur osmo-stp doit viser ${CYAN}${HUB_IP}${NC}"

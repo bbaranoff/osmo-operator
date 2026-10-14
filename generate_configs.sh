@@ -815,18 +815,27 @@ apply_native_post_patches() {
     # ce qui envoie chercher un probleme de hub ou de filtrage alors que la
     # patte locale n'a jamais pu s'ouvrir. Constate le 31/08 sur le banc natif.
     #
-    # 127.0.0.1 : la seule adresse dont on soit certain sur un hote, quelle que
-    # soit sa topologie reseau. Le remote-ip, lui, est deja resolu par le
-    # gabarit (__INTER_STP_IP__) et n'est pas touche ici.
+    # Le local-ip vaut l'adresse qui ROUTE vers le hub (ip route get), pas
+    # 127.0.0.1 : un hub distant (LAN) est injoignable depuis la boucle locale
+    # (Network is unreachable, l'ASP ne monte jamais). Sans hub distant, on
+    # garde 127.0.0.1. Le remote-ip, lui, est deja resolu par le gabarit.
     #
     # awk et pas sed : il faut ne modifier QUE le local-ip qui suit
     # « asp asp-to-inter », pas ceux du bloc d'ecoute juste au-dessus
     # (local-ip 127.0.0.1 / 127.0.0.2), qui sont corrects.
     if [ -f "$cfg/osmo-stp.cfg" ]; then
-        awk '
+        _asp_remote="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$cfg/osmo-stp.cfg")"
+        _asp_src=127.0.0.1
+        case "$_asp_remote" in
+            "" | 127.* | __*) ;;
+            *) _asp_src="$(ip route get "$_asp_remote" 2>/dev/null \
+                           | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+               _asp_src="${_asp_src:-0.0.0.0}" ;;
+        esac
+        awk -v src="$_asp_src" '
             /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { in_asp = 1; print; next }
             in_asp && /^[[:space:]]*local-ip[[:space:]]/ {
-                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); in_asp = 0; print; next
+                sub(/local-ip[[:space:]]+.*/, "local-ip " src); in_asp = 0; print; next
             }
             /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { in_asp = 0 }
             { print }

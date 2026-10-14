@@ -304,16 +304,26 @@ _GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 _gab_fixups_natifs() {
     local src="$1" f
 
-    # 1. osmo-stp.cfg : le local-ip de l ASP vers l inter-STP. 127.0.0.1 est la
-    #    seule adresse dont on soit certain sur un hote. On ne touche QUE le
-    #    local-ip qui suit « asp asp-to-inter » : ceux du bloc d ecoute
-    #    au-dessus (127.0.0.1 / 127.0.0.2) sont corrects.
+    # 1. osmo-stp.cfg : le local-ip de l ASP vers l inter-STP = l adresse qui
+    #    ROUTE vers le hub (ip route get), pas 127.0.0.1 : un hub sur le LAN
+    #    est injoignable depuis la boucle locale. Sans hub distant, 127.0.0.1.
+    #    On ne touche QUE le local-ip qui suit « asp asp-to-inter » : ceux du
+    #    bloc d ecoute au-dessus (127.0.0.1 / 127.0.0.2) sont corrects.
     f="$src/osmocom/osmo-stp.cfg"
     if [ -f "$f" ]; then
-        awk '
+        local _asp_remote _asp_src
+        _asp_remote="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$f")"
+        _asp_src=127.0.0.1
+        case "$_asp_remote" in
+            "" | 127.* | __*) ;;
+            *) _asp_src="$(ip route get "$_asp_remote" 2>/dev/null \
+                           | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+               _asp_src="${_asp_src:-0.0.0.0}" ;;
+        esac
+        awk -v src="$_asp_src" '
             /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { a = 1; print; next }
             a && /^[[:space:]]*local-ip[[:space:]]/ {
-                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); a = 0; print; next
+                sub(/local-ip[[:space:]]+.*/, "local-ip " src); a = 0; print; next
             }
             /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { a = 0 }
             { print }
