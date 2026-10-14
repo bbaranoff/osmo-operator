@@ -2554,6 +2554,20 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi
 
+# --- 7sexies. Socket PCU (BTS <-> osmo-pcu) ------------------------------------
+# Les sockets d'un run precedent restent sur le disque ; le PCU, lui, doit
+# trouver le socket du BTS principal (/tmp/pcu_bts). Le harnais supprime les
+# orphelins avant le lancement et affiche l'etat, pour qu'un GPRS muet se lise.
+PCU_SOCK_SH="$HERE/network/pcu-socket.sh"
+if [ "$DRY" -eq 0 ] && [ -r "$PCU_SOCK_SH" ]; then
+    say_begin "Socket PCU"
+    if bash "$PCU_SOCK_SH" --fix > "${LOG_DIR:-/tmp}/pcu-socket.log" 2>&1; then
+        say_end " OK " "$C_OK" "Socket PCU" "voir ${LOG_DIR:-/tmp}/pcu-socket.log"
+    else
+        say_end " KO " "$C_KO" "Socket PCU" "suppression d'un orphelin impossible - voir ${LOG_DIR:-/tmp}/pcu-socket.log"
+    fi
+fi
+
 # --- 8. lancement : exec run.sh -----------------------------------------------
 # ── LES ADRESSES QUE LES CONFIGS RECLAMENT DOIVENT EXISTER ──────────────────
 # Un demon qui se lie a une adresse absente ne demarre pas, et il le dit dans
