@@ -293,6 +293,10 @@ while [ $# -gt 0 ]; do
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
         --interstp)     INTERSTP=1 ;;
         --no-interstp)  INTERSTP=0 ;;
+        # MS GPRS (modem osmocom-bb) en second MS du fake_trx du side-car, avec
+        # son PCU (/tmp/pcu_bts2) : qosmo run_modules/{58,61,69,71}. Actif par defaut.
+        --gprs-modem)    MODEM_GPRS=1 ;;
+        --no-gprs-modem) MODEM_GPRS=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
                        # run_modules/70-l2.sh gere deja les quatre clients via
                        # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
@@ -317,6 +321,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
+# MODEM_GPRS dans l'environnement de run.sh : exporte ici, 1 sauf --no-gprs-modem.
+export MODEM_GPRS="${MODEM_GPRS:-1}"
 
 # --- --dsp garde le profil par defaut ----------------------------------------
 # [2026-09-22] --dsp forcait le profil `qemu` (pipeline Calypso seul, sans
@@ -2565,6 +2573,17 @@ if [ "$DRY" -eq 0 ] && [ -r "$PCU_SOCK_SH" ]; then
         say_end " OK " "$C_OK" "Socket PCU" "voir ${LOG_DIR:-/tmp}/pcu-socket.log"
     else
         say_end " KO " "$C_KO" "Socket PCU" "suppression d'un orphelin impossible - voir ${LOG_DIR:-/tmp}/pcu-socket.log"
+    fi
+fi
+
+# --- 7septies. Sortie Internet de l'APN (NAT apn0 -> carte qui route) ----------
+APN_NAT_SH="$HERE/network/apn-nat.sh"
+if [ "$DRY" -eq 0 ] && [ -r "$APN_NAT_SH" ]; then
+    say_begin "Sortie Internet APN (NAT)"
+    if bash "$APN_NAT_SH" > "${LOG_DIR:-/tmp}/apn-nat.log" 2>&1; then
+        say_end " OK " "$C_OK" "Sortie Internet APN" "voir ${LOG_DIR:-/tmp}/apn-nat.log"
+    else
+        say_end " KO " "$C_KO" "Sortie Internet APN" "voir ${LOG_DIR:-/tmp}/apn-nat.log"
     fi
 fi
 
