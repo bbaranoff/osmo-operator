@@ -178,7 +178,7 @@ _docker_groupe_session() {
 }
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
-DO_BUILD=0; DO_EXTRAS=0
+DO_BUILD=0; DO_EXTRAS=0; DO_SIM=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
@@ -189,7 +189,8 @@ for a in "$@"; do
         --opencl) DO_OPENCL=1; ANY_FLAG=1 ;;
         --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
         --extras) DO_EXTRAS=1; ANY_FLAG=1 ;;
-        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; ANY_FLAG=1 ;;
+        --sim)    DO_SIM=1;    ANY_FLAG=1 ;;
+        --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; DO_SIM=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
         -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     esac
@@ -675,7 +676,7 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="deka-start.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --root --title "deka" -- "$SCRIPT" "$@"
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "deka" -- "$SCRIPT" "$@"
 DEKAGUI
         chmod 755 /usr/local/bin/osmo-deka-anim
 
@@ -1124,6 +1125,21 @@ CONF
             echo -e "  ${RED}✗${NC} launch.sh --multi n a pas abouti - ${BOLD}journalctl -u osmo-multi -n 80${NC}"
             echo -e "      a la main : ${BOLD}$DIR/launch.sh --multi${NC} (ou l icone multi-operator)"
         fi
+    fi
+fi
+
+# ── LA SIM DU BANC (supplement independant) ──────────────────────────────────
+# Lecteur PC/SC (pcscd, CCID : HID Omnikey), softSIM (le serveur SAP, Ruby) et
+# pySim (lire / programmer une sysmoISIM). Meme code que l ISO (80-chroot.sh) :
+# tools/osmo-sim-install.sh, qu on source ici. Ensuite : tools/osmo-sim.sh.
+if [ "$DO_SIM" = "1" ]; then
+    echo -e "${BOLD}== SIM : lecteur PC/SC, softSIM, pySim ==${NC}"
+    if [ -f "$DIR/tools/osmo-sim-install.sh" ]; then
+        # shellcheck source=tools/osmo-sim-install.sh
+        . "$DIR/tools/osmo-sim-install.sh"
+        REPO="$DIR" osmo_sim_install
+    else
+        echo -e "  ${YELLOW}!${NC} tools/osmo-sim-install.sh introuvable"
     fi
 fi
 

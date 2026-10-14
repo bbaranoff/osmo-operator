@@ -41,12 +41,30 @@
 #                       (constellation, spectre, PDSCH) : --gui.enable sur l eNB
 #                       et l UE, et un DISPLAY. Jamais par systemd - une unite
 #                       systeme n a pas d ecran ; c est un lancement direct.
+#   osmo-lte traces     LES TRACES SEULES : relance eNB et UE avec srsGUI, SANS
+#                       toucher au coeur Open5GS (qui reste debout, abonnes
+#                       compris). srsGUI n est pas une appli a part : ce sont
+#                       des fenetres Qt ouvertes par srsenb/srsue eux-memes
+#                       (--gui.enable), on ne peut pas les accrocher a un eNB
+#                       deja lance - d ou la relance de la radio, et d elle seule.
+#                       Rien ne tourne ? C est alors un start-gui complet.
 #   osmo-lte stop       arrete eNB et UE (le coeur reste : « osmo-epc stop »)
 #   osmo-lte restart    stop puis start
+#                       [2026-10-12] start / stop / restart hors root : le
+#                       script SE RELANCE par pkexec (repli sudo) au lieu de
+#                       refuser - « osmo-lte stop » tape dans un terminal de
+#                       session arrete bien la 4G.
 #   osmo-lte status     processus, S1, debit ZeroMQ, adresse de l UE
 #   osmo-lte log        les journaux, en direct
 #   osmo-lte toggle     L ICONE : le service osmo-lte (systemd) - le demarre s il
-#                       est arrete, l arrete s il tourne (pkexec hors root)
+#                       est arrete, l arrete s il tourne (pkexec hors root).
+#                       [2026-10-12] « tourne » = le service actif OU les demons
+#                       (srsenb, srsue, open5gs-mmed) debout : une 4G partie par
+#                       « sudo osmo-lte start » ou start-gui, que l unite ne
+#                       connait pas, s arrete aussi par l icone - avant, le
+#                       clic faisait « systemctl stop » d une unite inactive,
+#                       rendait 0 et annoncait « 4G arretee » devant une 4G
+#                       bien vivante. L arret eteint TOUT (eNB, UE, coeur).
 #   osmo-lte up|down    le service, explicitement (Actions du clic droit)
 #   osmo-lte journal    journalctl -u osmo-lte -f
 #   osmo-lte install    pose les configs et les lanceurs (tools/osmo-lte-install.sh)
@@ -81,21 +99,62 @@ _root() { [ "$(id -u)" -eq 0 ] && return 0; _err "il faut root (netns, tun, SCTP
 SVC="${OSMO_LTE_SERVICE:-osmo-lte.service}"
 ICONE=/usr/share/osmo-operator/icons/osmo-lte.svg
 _notif() { command -v notify-send >/dev/null 2>&1 && notify-send -i "$ICONE" "4G du banc" "$1" 2>/dev/null || true; _say "$1"; }
+_lte_debout() {
+    case "$(systemctl is-active "$SVC" 2>/dev/null)" in active|activating) return 0 ;; esac
+    local d
+    for d in srsenb srsue open5gs-mmed; do pgrep -x "$d" >/dev/null 2>&1 && return 0; done
+    return 1
+}
+# Ce que _svc fait EN ROOT, en un seul passage (une seule fenetre de mot de
+# passe) : l unite, puis ce qu elle ne portait pas.
+_svc_root() {
+    local act="$1" rc=0
+    case "$act" in
+        start)
+            # le journal de l unite defile pendant le demarrage : c est lui
+            # que la fenetre de lancement lit (reperes [n/4] de lte_start)
+            journalctl -u "$SVC" -f -n 0 -o cat 2>/dev/null & local _j=$!
+            systemctl start "$SVC"; rc=$?
+            sleep 1; kill "$_j" 2>/dev/null; wait "$_j" 2>/dev/null ;;
+        stop)
+            case "$(systemctl is-active "$SVC" 2>/dev/null)" in
+                active|activating) systemctl stop "$SVC"; rc=$? ;;
+            esac
+            # une 4G lancee hors unite (sudo osmo-lte start, start-gui) : on
+            # l eteint de meme - eNB, UE, puis le coeur
+            if _lte_debout; then
+                lte_stop || rc=1
+                "$EPC" stop || rc=1
+            fi ;;
+    esac
+    return "$rc"
+}
 _svc() {
     local act="$1" rc
     if [ "$act" = toggle ]; then
-        case "$(systemctl is-active "$SVC" 2>/dev/null)" in active|activating) act=stop ;; *) act=start ;; esac
+        if _lte_debout; then act=stop; else act=start; fi
     fi
     [ "$act" = start ] && _notif "demarrage de la 4G (Open5GS, eNB, UE)... une trentaine de secondes"
-    if [ "$(id -u)" -eq 0 ]; then systemctl "$act" "$SVC"; rc=$?
-    elif command -v pkexec >/dev/null 2>&1; then pkexec systemctl "$act" "$SVC"; rc=$?
-    else sudo systemctl "$act" "$SVC"; rc=$?; fi
+    if [ "$(id -u)" -eq 0 ]; then _svc_root "$act"; rc=$?
+    elif command -v pkexec >/dev/null 2>&1; then pkexec /bin/bash "$0" _svc-root "$act"; rc=$?
+    else sudo /bin/bash "$0" _svc-root "$act"; rc=$?; fi
     if [ "$rc" -eq 0 ]; then
         [ "$act" = start ] && _notif "4G en marche : UE attache dans $NETNS (osmo-lte status)" || _notif "4G arretee (eNB, UE et coeur)"
     else
         _notif "echec ($act, code $rc) - journalctl -u $SVC"
     fi
     return "$rc"
+}
+
+# [2026-10-12] start / stop / restart SANS root : se relancer eleve, DISPLAY
+# conserve (pkexec le nettoie, et l icone/ le terminal de session en ont un).
+_eleve() {
+    [ "$(id -u)" -eq 0 ] && return 0
+    _say "elevation (pkexec) pour « $* »"
+    if command -v pkexec >/dev/null 2>&1; then
+        exec pkexec /usr/bin/env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" /bin/bash "$0" "$@"
+    fi
+    exec sudo /bin/bash "$0" "$@"
 }
 
 # ── LE MODE « AVEC TRACES » (srsGUI) ────────────────────────────────────────
@@ -159,14 +218,15 @@ _display_ou_rien() {
 # LUI qui va chercher root, en emportant l ecran (meme geste que l icone du
 # banc, launch/osmo-launch.sh : pkexec env DISPLAY=... XAUTHORITY=...).
 _root_avec_display() {
+    local act="${1:-start-gui}"
     [ "$(id -u)" -eq 0 ] && return 0
     _display_ou_rien || return 1
     _say "elevation (pkexec) en gardant $DISPLAY"
     if command -v pkexec >/dev/null 2>&1; then
         exec pkexec /usr/bin/env DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" \
-             QT_QPA_PLATFORM=xcb "$0" start-gui
+             QT_QPA_PLATFORM=xcb "$0" "$act"
     fi
-    exec sudo DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" QT_QPA_PLATFORM=xcb "$0" start-gui
+    exec sudo DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" QT_QPA_PLATFORM=xcb "$0" "$act"
 }
 
 # Le binaire installe d abord, la compilation locale sinon.
@@ -211,8 +271,15 @@ lte_start() {
     done
     _configs || return 1
     _verifier_sib || return 1
+    # [2026-10-12] le bureau suit : l antenne se dresse dans le fond d ecran
+    # (tools/osmo-fond.py se relance sous l utilisateur du bureau ; le retour
+    # a la ville, a l arret, est le fait de osmo-panel.py quand plus rien ne tourne)
+    [ -x "$REPO/tools/osmo-fond.py" ] && ("$REPO/tools/osmo-fond.py" antenne >/dev/null 2>&1 &)
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && _ok "espace reseau $NETNS cree"; }
 
+    # [2026-10-12] Les reperes « [n/4] » : la fenetre de lancement du bureau
+    # (tools/osmo-gtk-run.py --progress) en fait sa barre de progression.
+    echo "[1/4] coeur Open5GS"
     # Le coeur : Open5GS, par osmo-epc (idempotent : ce qui tourne deja reste).
     "$EPC" start | sed 's/^/  /'
     for _ in $(seq 1 20); do ss -Sln 2>/dev/null | grep -q "$MME_S1:36412 " && break; sleep 0.25; done
@@ -231,14 +298,17 @@ lte_start() {
         enb_rf=(--rf.device_name=zmq --rf.device_args="fail_on_disconnect=true,tx_port=tcp://*:$ZMQ_ENB,rx_port=tcp://localhost:$ZMQ_UE,id=enb,base_srate=$SRATE")
         ue_rf=(--rf.device_name=zmq --rf.device_args="tx_port=tcp://*:$ZMQ_UE,rx_port=tcp://localhost:$ZMQ_ENB,id=ue,base_srate=$SRATE")
     fi
+    echo "[2/4] station de base srsENB"
     # L eNB, et l UE tout de suite derriere : voir le piege n° 1.
     setsid "$enb" "$SRS_DIR/enb.conf" "${enb_rf[@]}" "${gui_opt[@]}" \
         --log.filename="$LOGDIR/osmo-lte-enb.log" >"$LOGDIR/osmo-lte-enb.console" 2>&1 </dev/null &
     sleep 0.5
+    echo "[3/4] mobile srsUE"
     setsid "$ue" "$SRS_DIR/ue.conf" "${ue_rf[@]}" "${gui_opt[@]}" \
         --gw.netns="$NETNS" --log.filename="$LOGDIR/osmo-lte-ue.log" >"$LOGDIR/osmo-lte-ue.console" 2>&1 </dev/null &
     _ok "srsENB puis srsUE lances (ZeroMQ $ZMQ_ENB/$ZMQ_UE, UE dans $NETNS${SRATE:+, base_srate $SRATE})${gui_opt:+ ${GREEN}avec les traces srsGUI sur $DISPLAY${NC}}"
 
+    echo "[4/4] attach du mobile"
     _say "attente de l attach (30 s max)..."
     local i ip
     for i in $(seq 1 60); do
@@ -294,6 +364,9 @@ lte_status() {
 }
 
 case "${1:-status}" in
+    start|stop|restart) _eleve "$@" ;;      # hors root : on repasse ici en root
+esac
+case "${1:-status}" in
     start)   lte_start ;;
     start-gui|gui|start-display)
         # Le mode traces : root AVEC l ecran, puis le lancement normal + GUI=1.
@@ -301,11 +374,25 @@ case "${1:-status}" in
         _display_ou_rien || exit 1
         GUI=1
         lte_start ;;
+    traces|gui-seul)
+        # [2026-10-12] Les traces sans relancer toute la 4G : la radio seule
+        # repart avec srsGUI ; lte_start laisse le coeur tel quel (osmo-epc
+        # start est idempotent). Lance hors unite : « osmo-lte down » / l icone
+        # savent arreter une radio partie ainsi (_svc_root).
+        _root_avec_display traces || exit 1
+        _display_ou_rien || exit 1
+        GUI=1
+        if lte_tourne srsenb || lte_tourne srsue; then
+            _say "radio relancee avec les traces srsGUI - le coeur Open5GS reste debout"
+            lte_stop
+        fi
+        lte_start ;;
     stop)    lte_stop ;;
     restart) lte_stop; lte_start ;;
     status)  lte_status ;;
     log)     exec tail -F "$LOGDIR"/osmo-lte-{enb,ue}.console ;;
     toggle|bascule) _svc toggle ;;
+    _svc-root) _root _svc-root || exit 1; _svc_root "$2" ;;
     up)      _svc start ;;
     down)    _svc stop ;;
     journal) exec journalctl -u "$SVC" -f --no-pager ;;

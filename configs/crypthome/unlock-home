@@ -116,6 +116,15 @@ session_root() {
 # par un overlay : son contenu reste LISIBLE (lanceurs, scripts du banc,
 # init-crypthome.sh), seules les ecritures partent dans /tmp.
 #
+# ET /opt/GSM AVEC LUI. [2026-10-14] Le banc entier vit dans /opt/GSM : depot,
+# configs, hlr.db, journaux, captures. En session root (/home ferme), tout ce
+# que le banc y ecrit part de la meme facon dans la RAM : /opt/GSM est "live",
+# non persistant, et retrouve son etat du disque au redemarrage. La liste des
+# repertoires ainsi recouverts est CRYPTHOME_RAM_DIRS (/etc/default/crypthome) ;
+# /root en fait toujours partie. Un repertoire absent est ignore ; un
+# repertoire qui est lui-meme un point de montage (second disque sur /opt/GSM,
+# via fstab) se recouvre comme un autre : local-fs.target est passe.
+#
 # tmpfs et pas un simple repertoire de /tmp : sur Ubuntu /tmp est sur le disque
 # racine, en clair ; en RAM, rien ne touche jamais un disque.
 #
@@ -123,33 +132,58 @@ session_root() {
 # ferme. Il est remplace, DANS l overlay seulement, par un vrai repertoire : la
 # session a un trousseau qui marche, et qui s evapore avec elle.
 RAM_ROOT=/tmp/crypthome-root
+RAM_DIRS="${CRYPTHOME_RAM_DIRS-/opt/GSM}"
+
+# en_ram REPERTOIRE : recouvre REPERTOIRE d un overlay dont upper et work
+# vivent dans $RAM_ROOT. Mode et proprietaire de l upper = ceux du repertoire :
+# la racine d un overlay prend les attributs de son upper, et un /opt/GSM passe
+# en 0700 couperait asterisk (osmo-banc) et le compte de session de leur
+# repertoire de travail.
+en_ram() {
+    local dir="$1" nom
+    [ -d "$dir" ] || return 1
+    [ "$(findmnt -fno FSTYPE "$dir" 2>/dev/null)" = overlay ] && return 0   # deja fait ce demarrage
+    nom="$(printf '%s' "$dir" | sed 's#^/##; s#/#_#g')"
+    install -d -m "$(stat -c %a "$dir")" -o "$(stat -c %u "$dir")" -g "$(stat -c %g "$dir")" \
+            "$RAM_ROOT/$nom/upper" || return 1
+    install -d -m 0700 "$RAM_ROOT/$nom/work" || return 1
+    mount -t overlay overlay \
+          -o "lowerdir=$dir,upperdir=$RAM_ROOT/$nom/upper,workdir=$RAM_ROOT/$nom/work" "$dir"
+}
 
 root_dans_tmp() {
-    local lien
-    mountpoint -q /root && return 0          # deja fait ce demarrage
-    install -d -m 0700 "$RAM_ROOT" || return 0
-    if ! mount -t tmpfs -o mode=0700,size=50% tmpfs "$RAM_ROOT"; then
-        log "ATTENTION : tmpfs $RAM_ROOT impossible - la session root ecrira sur le disque."
-        return 0
+    local lien d
+    if ! mountpoint -q "$RAM_ROOT"; then
+        install -d -m 0700 "$RAM_ROOT" || return 0
+        if ! mount -t tmpfs -o mode=0700,size=50% tmpfs "$RAM_ROOT"; then
+            log "ATTENTION : tmpfs $RAM_ROOT impossible - la session root ecrira sur le disque."
+            return 0
+        fi
+        # systemd-tmpfiles-clean nettoie /tmp par age : il ne doit pas vider le
+        # home d une session en cours.
+        install -d /run/tmpfiles.d
+        echo "x $RAM_ROOT" > /run/tmpfiles.d/crypthome-root.conf
     fi
-    install -d -m 0700 "$RAM_ROOT/upper" "$RAM_ROOT/work"
-    if ! mount -t overlay overlay \
-            -o "lowerdir=/root,upperdir=$RAM_ROOT/upper,workdir=$RAM_ROOT/work" /root; then
-        umount "$RAM_ROOT" 2>/dev/null
+    if en_ram /root; then
+        for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
+            if [ -L "/root/$lien" ]; then
+                rm -f "/root/$lien"
+                install -d -m 0700 "/root/$lien"
+            fi
+        done
+        log "session root : les ecritures dans /root restent dans $RAM_ROOT (RAM)."
+    else
         log "ATTENTION : overlay sur /root impossible - la session root ecrira sur le disque."
-        return 0
     fi
-    # systemd-tmpfiles-clean nettoie /tmp par age : il ne doit pas vider le
-    # home d une session en cours.
-    install -d /run/tmpfiles.d
-    echo "x $RAM_ROOT" > /run/tmpfiles.d/crypthome-root.conf
-    for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
-        if [ -L "/root/$lien" ]; then
-            rm -f "/root/$lien"
-            install -d -m 0700 "/root/$lien"
+    for d in $RAM_DIRS; do
+        [ "$d" = /root ] && continue
+        [ -d "$d" ] || continue
+        if en_ram "$d"; then
+            log "session root : les ecritures dans $d restent dans $RAM_ROOT (RAM)."
+        else
+            log "ATTENTION : overlay sur $d impossible - $d ecrira sur le disque."
         fi
     done
-    log "session root : les ecritures dans /root restent dans $RAM_ROOT (RAM)."
 }
 
 # Chaque demarrage repart de la configuration du compte de session.

@@ -1,4 +1,6 @@
 #!/bin/bash
+# [2026-10-12] le port VTY du mobile : 4247, ou 4347 en --dsp (publie par start-direct.sh)
+BB_VTY="$(tr -dc 0-9 < /run/osmo-banc/ms1-vty 2>/dev/null)"; BB_VTY="${BB_VTY:-4247}"
 
 # Sauvegarde de la configuration actuelle du terminal
 OLD_SETTINGS=$(stty -g)
@@ -60,7 +62,7 @@ menu_services() {
         CHOICE=$(whiptail --title " OPERATOR CONTROL : $OP " --menu "" 20 62 9 \
             "1" "MSC (4254)" "2" "BSC (4242)" "3" "HLR (4258)" \
             "4" "MGW (4243)" "5" "GGSN (4260)" "6" "SGSN (4245)" \
-            "7" "STP (4239)" "8" "BASEBAND (4247)" \
+            "7" "STP (4239)" "8" "BASEBAND ($BB_VTY)" \
             "T" "TMUX - la pile en direct (session osmo)" \
             "R" "<< BACK" 3>&1 1>&2 2>&3)
 
@@ -109,7 +111,7 @@ menu_services() {
                 if [[ -n "$GRP_IP" ]]; then
                     # On passe l'IP du groupe au script expect
                     tput cnorm
-                    expect ./tools/vty-connect.exp "$OP" 4247 "bb" "$GRP_IP"
+                    expect ./tools/vty-connect.exp "$OP" "$BB_VTY" "bb" "$GRP_IP"
                 fi
                 ;;
         esac

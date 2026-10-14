@@ -106,8 +106,22 @@ WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallp
 # ecrit FOND= dans strip.state, c est CE fichier qu on decoupe, comme avant -
 # ses cadres sont bien la ou la boite les attend. OSMO_FFT_FOND=decoupe force
 # l ancien comportement sur $OSMO_WP_FILE.
+# [2026-10-11] UNE SEULE SCENE. L illustration et le fond GNOME sortent du meme
+# dessin (tools/paysage-render.py) : le fond est le paysage nu, l illustration
+# est la decoupe de BOX dans ce paysage AVEC les pylones. Elle a donc deja le
+# format W x H (900/790) : « entier » l ajuste sans bande, et les antennes
+# semblent plantees dans le bureau par l encart. Les fichiers livres sont une
+# version retouchee de ce rendu, choisie sur le banc.
 ILLUSTRATION = os.environ.get("OSMO_FFT_IMAGE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
-FOND_MODE = os.environ.get("OSMO_FFT_FOND", "entier")
+# [2026-10-11] PLUS D IMAGE AU CENTRE. Par defaut (« aucun ») le fond de l encart
+# est TRANSPARENT : banc a l arret, on voit le bureau ; banc allume, les deux
+# panneaux (spectre, journal) se posent dessus, a PANEL_ALPHA d opacite - pas
+# moins, un spectre sur un paysage clair ne se lit pas. panel.png est en RGBA,
+# osmo-panel.py l affiche sur une fenetre elle-meme transparente.
+# OSMO_FFT_FOND=entier (l illustration) ou decoupe rendent les anciens fonds.
+FOND_MODE = os.environ.get("OSMO_FFT_FOND", "aucun")
+PANEL_ALPHA = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_PANEL_ALPHA", "0.8"))))
+PANEL = (8, 10, 14, int(round(255 * PANEL_ALPHA)))
 MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
@@ -283,6 +297,8 @@ def _source_fond():
         return f, "decoupe"
     if FOND_MODE == "decoupe":
         return WALLPAPER, "decoupe"
+    if FOND_MODE == "aucun":
+        return None, "aucun"
     return (ILLUSTRATION if os.path.isfile(ILLUSTRATION) else WALLPAPER), "entier"
 
 
@@ -290,7 +306,7 @@ def _ajuster(im):
     """L image ENTIERE dans W x H : ajustee et centree ; le reste de la boite est
     la meme image qui la remplit, floutee et assombrie (pas de bandes noires)."""
     from PIL import ImageEnhance, ImageFilter
-    im.thumbnail((2 * W, 2 * H), Image.LANCZOS)       # 7800x6030 -> de quoi travailler vite
+    im.thumbnail((2 * W, 2 * H), Image.LANCZOS)       # 1800x1580 (ou plus) -> de quoi travailler vite
     sw, sh = im.size
     s = max(W / sw, H / sh)
     fond = im.resize((max(W, int(sw * s + 0.5)), max(H, int(sh * s + 0.5))), Image.LANCZOS)
@@ -312,7 +328,7 @@ _base = {"cle": None, "img": None}
 def base_image():
     src, mode = _source_fond()
     try:
-        mt = os.stat(src).st_mtime
+        mt = os.stat(src).st_mtime if src else None
     except OSError:
         mt = None
     cle = (src, mode, mt)
@@ -330,12 +346,14 @@ def base_image():
                 print(f"[fft-snap] fond de l encart : {src} ({mode})", flush=True)
             except Exception as e:  # fond illisible : cadre sombre, sans strip
                 print(f"[fft-snap] fond {src} : {e}", file=sys.stderr, flush=True)
-        if img is None:
+        if img is None and mode == "aucun":
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))     # rien : le bureau
+        elif img is None:
             img = Image.new("RGB", (W, H), (20, 24, 36))
             for m in (HAUT, BAS):     # les deux cadres, comme le fond les dessine
                 ImageDraw.Draw(img).rounded_rectangle((0, m[0], W - 1, m[1] - 1), radius=26,
                                                      outline=(200, 200, 210), width=2)
-        _base.update(cle=cle, img=img)
+        _base.update(cle=cle, img=img.convert("RGBA"))
     return _base["img"]
 
 
@@ -493,9 +511,9 @@ def render_interstp(op):
     # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
     # Le cadre du fond reste visible quand le banc est a l arret - c est alors
     # l image du jour qu il encadre, et la il a un sens.
-    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
     x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
-    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
+    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=PANEL)
     split = x0 + int((x1 - x0) * 0.56)
 
     d.text((x0, y0), "Matrice de connectivite  ·  via inter-STP", font=F_TITLE, fill=(88, 166, 255))
@@ -558,9 +576,9 @@ def render_live(data, data_ul=None):
     # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
     # Le cadre du fond reste visible quand le banc est a l arret - c est alors
     # l image du jour qu il encadre, et la il a un sens.
-    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
     x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
-    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
+    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=PANEL)
     split = x0 + int((x1 - x0) * 0.56)
     # Spectre
     titre = ("Spectre I/Q du mobile  ·  montant (UL)" if FFT_2G == "ms"
@@ -870,9 +888,9 @@ def render_lte(etat):
     droite. Meme cadre, memes marges que la 2G : un seul encart, deux bancs."""
     img = base_moitie(HAUT).copy()
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=(8, 10, 14))
+    d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
     x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
-    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=(8, 10, 14))
+    d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=PANEL)
     split = x0 + int((x1 - x0) * 0.56)
     conf = srsran_ue_conf()
     d.text((x0, y0), "Spectre I/Q du UE srsRAN  ·  UL", font=F_TITLE, fill=(88, 166, 255))

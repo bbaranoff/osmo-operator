@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # osmo-gtk-run.py - UNE COMMANDE, UNE FENETRE GTK : le terminal devient un journal.
 #
-#     osmo-gtk-run.py [--title T] [--icon FICHIER] [--root] [--tty]
+#     osmo-gtk-run.py [--title T] [--icon FICHIER] [--root] [--tty] [--progress]
 #                     [--close-on-exit] [--cwd DIR] -- COMMANDE [ARGS...]
 #
 # [2026-10-01] AUCUN FAVORI N OUVRE PLUS DE TERMINAL. Les icones du dock et du
@@ -25,6 +25,19 @@
 #     terminal, mais DANS le GTK, avec le meme bandeau d etat ; sans
 #     gir1.2-vte-2.91, on retombe sur le journal et on le dit.
 #
+# --progress : LA BARRE DE PROGRESSION, PAS LE SHELL. [2026-10-12] Pour les
+#   lancements (2G, multi, 4G, telephone pmOS) on ne veut pas lire un defile
+#   de shell : une petite fenetre avec une barre, le nom de l etape en cours,
+#   la derniere ligne - et un bouton « console » qui DEPLIE la sortie complete
+#   (un vrai terminal VTE, ou le journal sans VTE) pour qui veut voir. La
+#   commande tourne dans un pseudo-terminal tenu ici : elle se croit dans un
+#   terminal (couleurs, questions, pkexec), ce qu elle ecrit est lu au passage
+#   pour la barre et transmis a la console. L avancement vient des reperes
+#   « [n/m] » que les scripts du banc impriment deja (run.sh : [3/10] Core
+#   Osmocom ; osmo-lte, osmo-pmos : poses le 2026-10-12) ; sans repere, la
+#   barre pulse et montre la derniere ligne. Fin : barre pleine (vert) ou
+#   rouge avec le statut.
+#
 # --root : la commande tourne en root. Deja root : rien a faire. Sinon pkexec
 # (la fenetre de mot de passe du bureau) avec DISPLAY, XAUTHORITY et les
 # variables de proxy de la session - pkexec nettoie l environnement, et sans
@@ -37,13 +50,16 @@
 # barres GTK du bureau (osmo-launcher.py, osmo-panel.py) pour leurs entrees
 # interactives.
 import argparse
+import fcntl
 import os
 import re
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import threading
 
 
@@ -73,6 +89,8 @@ def _parse():
     ap.add_argument("--icon", default=None, help="fichier d icone (PNG/SVG)")
     ap.add_argument("--root", action="store_true", help="en root (pkexec, ou sudo)")
     ap.add_argument("--tty", action="store_true", help="un terminal (VTE) plutot qu un journal")
+    ap.add_argument("--progress", action="store_true",
+                    help="une barre de progression, la console repliee derriere un bouton")
     ap.add_argument("--close-on-exit", action="store_true", help="ferme la fenetre si la commande sort en 0")
     ap.add_argument("--cwd", default=None)
     ap.add_argument("--width", type=int, default=980)
@@ -132,7 +150,17 @@ CSS = b"""
 .osmo-run textview, .osmo-run textview text { background-color: #0b0e14; color: #d8e0ea;
                    font-family: "Ubuntu Mono"; font-size: 10pt; }
 .osmo-run .cmd { color: #6e7681; font: 8pt "Ubuntu Mono"; }
+.osmo-run progressbar trough { background: rgba(22,27,34,0.95); border: 1px solid rgba(88,166,255,0.25);
+                   border-radius: 6px; min-height: 14px; }
+.osmo-run progressbar progress { background: linear-gradient(90deg, #58a6ff, #3fe08a); border-radius: 6px;
+                   min-height: 14px; }
+.osmo-run progressbar.ko progress { background: #f85149; }
+.osmo-run progressbar text { color: #e6edf3; font: bold 9pt "Ubuntu"; }
+.osmo-run label.etape { color: #e6edf3; font: 10pt "Ubuntu"; }
+.osmo-run label.derniere { color: #8b949e; font: 9pt "Ubuntu Mono"; }
 """
+ETAPE = re.compile(r"\[\s*(\d+)\s*/\s*(\d+)\s*\]")
+COMPACT = (640, 190)
 
 
 class Run(Gtk.Window):
@@ -142,7 +170,11 @@ class Run(Gtk.Window):
         self.proc = None            # journal : Popen
         self.child_pid = None       # tty : pid du fils VTE
         self.fini = False
-        self.set_default_size(a.width, a.height)
+        self.progress = bool(a.progress)
+        self.master = None          # progress : le pty de la commande
+        self.fraction = None        # progress : None tant qu aucun repere [n/m]
+        self._lbuf = ""
+        self.set_default_size(*(COMPACT if self.progress else (a.width, a.height)))
         if a.icon and os.path.exists(a.icon):
             try:
                 self.set_icon_from_file(a.icon)
@@ -184,7 +216,37 @@ class Run(Gtk.Window):
         cmdl.set_ellipsize(3)       # Pango.EllipsizeMode.END
         col.pack_start(cmdl, False, False, 0)
 
-        self.tty = bool(a.tty and Vte is not None)
+        # progress : la barre, l etape, la derniere ligne, puis la console
+        # REPLIEE (Gtk.Revealer) derriere le bouton « console »
+        if self.progress:
+            self.bar = Gtk.ProgressBar()
+            self.bar.set_show_text(True)
+            self.bar.set_text("demarrage...")
+            col.pack_start(self.bar, False, False, 2)
+            self.l_etape = Gtk.Label(label="")
+            self.l_etape.get_style_context().add_class("etape")
+            self.l_etape.set_halign(Gtk.Align.START)
+            self.l_etape.set_ellipsize(3)
+            col.pack_start(self.l_etape, False, False, 0)
+            self.l_der = Gtk.Label(label="")
+            self.l_der.get_style_context().add_class("derniere")
+            self.l_der.set_halign(Gtk.Align.START)
+            self.l_der.set_ellipsize(3)
+            col.pack_start(self.l_der, False, False, 0)
+            self.b_console = Gtk.ToggleButton(label="▾ console")
+            self.b_console.set_tooltip_text("montre / cache la sortie complete de la commande")
+            self.b_console.set_halign(Gtk.Align.START)
+            self.b_console.connect("toggled", self._toggle_console)
+            col.pack_start(self.b_console, False, False, 0)
+            self.rev = Gtk.Revealer()
+            self.rev.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+            self.rev.set_reveal_child(False)
+            col.pack_start(self.rev, True, True, 0)
+            GLib.timeout_add(120, self._pulse)
+
+        # en progress, le terminal VTE sert de console des qu il existe (la
+        # commande est dans un pty de toute facon) ; sinon le journal
+        self.tty = bool((a.tty or self.progress) and Vte is not None)
         if self.tty:
             self.term = Vte.Terminal()
             self.term.set_scrollback_lines(20000)
@@ -199,11 +261,16 @@ class Run(Gtk.Window):
             fg.parse("#d8e0ea")
             bg.parse("#0b0e14")
             self.term.set_colors(fg, bg, None)
-            self.term.connect("child-exited", self._tty_exit)
+            if self.progress:
+                # ce qu on tape dans la console part au pty de la commande
+                self.term.connect("commit", self._tty_commit)
+                self.term.connect("size-allocate", self._tty_resize)
+            else:
+                self.term.connect("child-exited", self._tty_exit)
             sc = Gtk.ScrolledWindow()
             sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             sc.add(self.term)
-            col.pack_start(sc, True, True, 0)
+            (self.rev if self.progress else col).add(sc) if self.progress else col.pack_start(sc, True, True, 0)
         else:
             sc = Gtk.ScrolledWindow()
             sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -216,7 +283,10 @@ class Run(Gtk.Window):
             self.tv.set_right_margin(6)
             sc.add(self.tv)
             self.sc = sc
-            col.pack_start(sc, True, True, 0)
+            if self.progress:
+                self.rev.add(sc)
+            else:
+                col.pack_start(sc, True, True, 0)
         self.add(col)
         self.show_all()
         if a.tty and Vte is None:
@@ -231,6 +301,8 @@ class Run(Gtk.Window):
     def _start(self):
         argv = self._argv()
         cwd = self.a.cwd or None
+        if self.progress:
+            return self._start_pty(argv, cwd)
         if self.tty:
             env = dict(os.environ)
             env.setdefault("TERM", "xterm-256color")
@@ -255,6 +327,107 @@ class Run(Gtk.Window):
             return False
         threading.Thread(target=self._pump, daemon=True).start()
         return False
+
+    # ── progress : la commande dans un pty tenu ici ────────────────────────
+    def _start_pty(self, argv, cwd):
+        env = dict(os.environ)
+        env.setdefault("TERM", "xterm-256color")
+        try:
+            master, slave = os.openpty()
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+
+            def enfant():
+                # son propre groupe + le pty comme terminal de controle
+                os.setsid()
+                try:
+                    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+                except OSError:
+                    pass
+            self.proc = subprocess.Popen(argv, cwd=cwd, stdin=slave, stdout=slave, stderr=slave,
+                                         preexec_fn=enfant, env=env, close_fds=True)
+            os.close(slave)
+            self.master = master
+        except OSError as e:
+            self._append("lancement impossible : %s\n" % e)
+            self._done(127)
+            return False
+        threading.Thread(target=self._pump_pty, daemon=True).start()
+        return False
+
+    def _pump_pty(self):
+        while True:
+            try:
+                data = os.read(self.master, 4096)
+            except OSError:            # EIO : la commande a ferme son cote
+                break
+            if not data:
+                break
+            GLib.idle_add(self._feed_pty, data)
+        rc = self.proc.wait()
+        GLib.idle_add(self._done, rc)
+
+    def _feed_pty(self, data):
+        text = data.decode("utf-8", "replace")
+        if self.tty:
+            self.term.feed(data)       # VTE lit l ANSI lui-meme
+        else:
+            self._append(text)
+        # les reperes d avancement, ligne par ligne
+        self._lbuf += ANSI.sub("", text)
+        while "\n" in self._lbuf:
+            line, self._lbuf = self._lbuf.split("\n", 1)
+            self._ligne(line)
+        return False
+
+    def _ligne(self, line):
+        line = line.strip()
+        if not line:
+            return
+        m = ETAPE.search(line)
+        if m:
+            n, t = int(m.group(1)), int(m.group(2))
+            if t > 0:
+                self.fraction = min(1.0, max(0.0, n / t))
+                self.bar.set_fraction(self.fraction)
+                self.bar.set_text("%d / %d" % (n, t))
+            etape = (line[:m.start()] + line[m.end():]).strip(" =:-·.")
+            self.l_etape.set_text(etape or line)
+        else:
+            self.l_der.set_text(line[:200])
+
+    def _pulse(self):
+        if self.fini:
+            return False
+        if self.fraction is None:
+            self.bar.pulse()
+        return True
+
+    def _tty_commit(self, _term, text, _size):
+        if self.master is not None:
+            try:
+                os.write(self.master, text.encode("utf-8", "replace"))
+            except OSError:
+                pass
+
+    def _tty_resize(self, term, _alloc):
+        if self.master is None:
+            return
+        try:
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", max(1, term.get_row_count()), max(1, term.get_column_count()), 0, 0))
+        except OSError:
+            pass
+
+    def _toggle_console(self, b):
+        on = b.get_active()
+        b.set_label("▴ console" if on else "▾ console")
+        self.rev.set_reveal_child(on)
+        if on:
+            self.resize(self.a.width, self.a.height)
+            if self.tty:
+                self.term.grab_focus()
+        else:
+            GLib.timeout_add(300, lambda: (self.resize(*COMPACT), False)[1])
 
     def _tty_spawned(self, _term, pid, error, *_a):
         if error is not None or not pid or pid < 0:
@@ -304,6 +477,25 @@ class Run(Gtk.Window):
         else:
             self.state.set_text("termine (statut %d)" % rc)
             ctx.add_class("ko")
+        if self.progress:
+            if self._lbuf.strip():
+                self._ligne(self._lbuf)
+            if rc == 0:
+                self.bar.set_fraction(1.0)
+                self.bar.set_text("termine")
+            else:
+                self.bar.set_fraction(self.fraction if self.fraction is not None else 1.0)
+                self.bar.set_text("echec (statut %d)" % rc)
+                self.bar.get_style_context().add_class("ko")
+                # l echec se lit dans la console : on la deplie
+                if not self.b_console.get_active():
+                    self.b_console.set_active(True)
+            if self.master is not None:
+                try:
+                    os.close(self.master)
+                except OSError:
+                    pass
+                self.master = None
         self.b_stop.set_sensitive(False)
         if self.a.close_on_exit and rc == 0:
             GLib.timeout_add(1200, lambda: (self.destroy(), False)[1])
@@ -316,7 +508,7 @@ class Run(Gtk.Window):
 
     # ── arreter ───────────────────────────────────────────────────────────
     def stop(self):
-        if self.tty:
+        if self.tty and not self.progress:
             if self.child_pid:
                 try:
                     os.killpg(os.getpgid(self.child_pid), signal.SIGTERM)

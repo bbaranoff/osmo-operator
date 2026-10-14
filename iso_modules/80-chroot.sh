@@ -43,7 +43,8 @@ chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbi
                    LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE= \
                    ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
                    ISO_ARCH="$ISO_ARCH" ISO_MIRROR="$ISO_MIRROR" \
-                   ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" bash -c '
+                   ISO_DESKTOP="$ISO_DESKTOP" OSMO_ISO_KB="$OSMO_ISO_KB" \
+                   OSMO_ISO_SOFTSIM="${OSMO_ISO_SOFTSIM:-1}" bash -c '
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
 
@@ -362,6 +363,27 @@ fi
 
 apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
 
+# ── LA SIM : lecteur PC/SC (HID Omnikey), softSIM en lecteur, pySim ─────────
+# [2026-10-14] Meme code que le supplement addition.sh --sim :
+# tools/osmo-sim-install.sh (dans le rootfs, pose par 50-injection). Il pose
+# pcscd + libccid + pcsc-tools + opensc + pyscard + ruby/ruby-libxml (apt), le
+# gem smartcard (softSIM en mode pcsc : la carte du lecteur servie par SAP) et
+# pySim (Osmocom, depuis son git) dans /opt/GSM/pysim-venv. softSIM lui-meme
+# est deja la (51-softsim.sh, cote hote) : OSMO_SIM_SOFTSIM=0. Non fatal.
+# Le hub inter-STP n a pas de mobile : rien. --no-softsim (OSMO_ISO_SOFTSIM=0)
+# le retire aussi.
+# On est DEJA dans le chroot, dans un bash -c en quotes simples : pas de quote
+# simple brute ici (voir la note du gem smartcard, 2026-10-09, plus bas).
+if [ "$ISO_ROLE" != "interstp" ] && [ "${OSMO_ISO_SOFTSIM:-1}" = "1" ]; then
+    _SIMI=/opt/GSM/osmo-operator/tools/osmo-sim-install.sh
+    if [ -f "$_SIMI" ]; then
+        ( . "$_SIMI" && OSMO_SIM_SOFTSIM=0 REPO=/opt/GSM/osmo-operator osmo_sim_install ) \
+            || echo "  WARN: osmo_sim_install a echoue (SIM par lecteur / pySim non poses, non fatal)"
+    else
+        echo "  WARN: $_SIMI absent -- pas de pcscd/pySim dans l image"
+    fi
+fi
+
 # build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
 # log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
 # index Sources sont deja la : deb-src.list a ete ecrit avant l unique
@@ -489,7 +511,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop \
         vlc \
-        wmctrl x11-utils x11-xserver-utils zenity librsvg2-common \
+        wmctrl x11-utils x11-xserver-utils xdotool zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
         conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi gir1.2-gtk-3.0 gir1.2-vte-2.91 \
@@ -934,25 +956,52 @@ GDM
     # configs/gsm-lab-fond.jpg (le paysage numerique bleu, choisi sur le banc) ;
     # l illustration aux pylones (gsm-lab-wallpaper.jpg) reste posee pour
     # l ENCART du bureau, qui la montre entiere au milieu (osmo-fft-snap.py).
+    # [2026-10-11] LES DEUX SORTENT DU MEME DESSIN (tools/paysage-render.py) :
+    # gsm-lab-fond.jpg est le paysage low-poly nu (16:9, zoom),
+    # gsm-lab-wallpaper.jpg la decoupe de la boite de l encart dans ce meme
+    # paysage, pylones en plus. Posees cote a cote, elles ne font qu une.
+    # Les fichiers du depot sont une version retouchee de ce rendu (choisie
+    # sur le banc le 2026-10-11) ; le generateur reste la pour en refaire.
+    # [2026-10-12] L ENCART NE MONTRE PLUS D ILLUSTRATION (osmo-fft-snap.py,
+    # FOND_MODE=aucun) et n est a l ecran que si un banc tourne
+    # (osmo-panel.py) : le fond GNOME par defaut est donc gsm-lab-fond.jpg
+    # tel que le depot le porte - c est LUI le bureau au repos. Meme fond pose
+    # par l install native (install_modules/80-bureau.sh).
     # Les deux fichiers sont reposes par 85-installeur-bureau.sh depuis le depot
     # local - ici on prend ce que le clone porte, et le schema nomme le fond
     # quoi qu il arrive (85 garantit le fichier).
+    # [2026-10-12] LE FOND SUIT LE BANC. Deux images d une meme scene :
+    # gsm-lab-ville.jpg (la ville au bord de l eau, sans antenne) est le fond
+    # au REPOS et le defaut de schema ; gsm-lab-antenne.jpg (la meme ville, le
+    # pylone 2G/4G dresse devant) est posee en fondu par tools/osmo-fond.py
+    # quand une 2G ou une 4G demarre (osmo-launcher.py au clic, osmo-panel.py
+    # quand il voit le banc debout), et la ville revient a l arret. Le paysage
+    # low-poly (gsm-lab-fond.jpg) reste pose, sans etre le defaut.
     _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.jpg
     _FOND=/opt/GSM/osmo-operator/configs/gsm-lab-fond.jpg
+    _VILLE=/opt/GSM/osmo-operator/configs/gsm-lab-ville.jpg
     [ -f "$_WP" ] && install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-wallpaper.jpg
+    [ -f "${_VILLE%ville.jpg}antenne.jpg" ] \
+        && install -Dm644 "${_VILLE%ville.jpg}antenne.jpg" /usr/share/backgrounds/gsm-lab-antenne.jpg
     if [ -f "$_FOND" ]; then
         install -Dm644 "$_FOND" /usr/share/backgrounds/gsm-lab-fond.jpg
     elif [ -f "$_WP" ]; then
         install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-fond.jpg
     fi
-    if [ -f "$_WP" ] || [ -f "$_FOND" ]; then
+    if [ -f "$_VILLE" ]; then
+        install -Dm644 "$_VILLE" /usr/share/backgrounds/gsm-lab-ville.jpg
+        _DEFAUT=/usr/share/backgrounds/gsm-lab-ville.jpg
+    else
+        _DEFAUT=/usr/share/backgrounds/gsm-lab-fond.jpg
+    fi
+    if [ -f "$_WP" ] || [ -f "$_FOND" ] || [ -f "$_VILLE" ]; then
         # TROIS sections : la valeur nue, puis les memes pour les "desktop
         # overrides" [schema:ubuntu] et [schema:GNOME-Greeter] que pose
         # 10_ubuntu-settings.gschema.override - une session ubuntu:GNOME lit
         # celles-la de preference, et sans elles le greeter et l extension
         # DING (icones du bureau) repartaient sur le numbat d Ubuntu.
         for _sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
-            printf "\n[%s]\npicture-uri=\047file:///usr/share/backgrounds/gsm-lab-fond.jpg\047\npicture-uri-dark=\047file:///usr/share/backgrounds/gsm-lab-fond.jpg\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" \
+            printf "\n[%s]\npicture-uri=\047file://%s\047\npicture-uri-dark=\047file://%s\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" "$_DEFAUT" "$_DEFAUT" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
@@ -963,7 +1012,7 @@ GDM
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
-        echo "  [desktop] fond d ecran GSM LAB pose"
+        echo "  [desktop] fond d ecran GSM LAB pose : $_DEFAUT"
     else
         echo "  [desktop] WARN: $_WP absent -- fond d ecran GNOME par defaut"
     fi

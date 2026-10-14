@@ -87,10 +87,12 @@ if not os.path.exists("/usr/share/osmo-operator/info.html"):
 CSS = b"""
 .osmo-launch { background: none; background-color: transparent; border: none;
                box-shadow: none; padding: 0; margin: 0; }
-.osmo-cat { background: rgba(19,16,24,0.42); border: 1px solid rgba(239,230,210,0.18);
+/* [2026-10-11] TRANSPARENCE TOTALE : les cadres de categorie n ont plus de fond ;
+   textes et boutons portent une ombre pour rester lisibles sur le paysage. */
+.osmo-cat { background: rgba(0,0,0,0); border: 1px solid rgba(239,230,210,0.18);
             border-radius: 10px; padding: 4px 8px; margin: 0 4px; }
-.osmo-cat > label.title { color: #a9b7de; font: 8pt "Ubuntu"; }
-.osmo-app button { background: rgba(22,27,34,0.55); color: #e6edf3;
+.osmo-cat > label.title { color: #c9d4ee; font: 8pt "Ubuntu"; text-shadow: 0 1px 2px rgba(0,0,0,0.9); }
+.osmo-app button { background: rgba(22,27,34,0.35); color: #e6edf3; text-shadow: 0 1px 2px rgba(0,0,0,0.9);
                    border: 1px solid rgba(88,166,255,0.25); border-radius: 6px;
                    padding: 1px 8px; font: 9pt "Ubuntu"; min-height: 0; }
 .osmo-app button:hover { background: rgba(33,38,45,0.85); border-color: #58a6ff; }
@@ -244,7 +246,12 @@ def _sudo():
 
 def catalogue():
     tmux = os.environ.get("TMUX_SESSION", "calypso")
-    vty = os.environ.get("MS_VTY_PORT", "4247")
+    vty = os.environ.get("MS_VTY_PORT", "")
+    if not vty:
+        try:                      # 4347 en --dsp : start-direct.sh publie le port
+            vty = open("/run/osmo-banc/ms1-vty").read().strip() or "4247"
+        except OSError:
+            vty = "4247"
     dash = os.environ.get("DASH_PORT", "8080")
     browser = "firefox"
     for b in ("firefox", "chromium", "xdg-open"):
@@ -464,6 +471,13 @@ class Launcher(Gtk.Window):
             b.show()
             r = self.runs[slug] = {"proc": None, "titre": slug, "log": log, "bouton": b}
         self._stop(r)
+        # [2026-10-12] 2G (standalone) ou 4G (multi) : l antenne se dresse dans
+        # le fond d ecran des le clic (tools/osmo-fond.py, fondu) - osmo-panel.py
+        # fera de meme quand il verra le banc debout, sans effet s il l est deja.
+        if slug in ("standalone", "multi"):
+            fond = os.path.join(REPO, "tools", "osmo-fond.py")
+            if os.path.exists(fond):
+                spawn([sys.executable, fond, "antenne"])
         argv = (_root_prefix() if action.root else []) + ["bash", "-lc", action.log_cmd]
         env = dict(os.environ, NO_COLOR="1", TERM="dumb")
         try:

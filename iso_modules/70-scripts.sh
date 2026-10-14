@@ -47,6 +47,17 @@ ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-
 # encore poussee parte quand meme avec son fond.
 [ -f "$DIR/configs/gsm-lab-wallpaper.jpg" ] \
     && install -Dm644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$P/configs/gsm-lab-wallpaper.jpg"
+# [2026-10-11] Le fond nu va avec (meme scene que l encart, cf. tools/paysage-render.py).
+[ -f "$DIR/configs/gsm-lab-fond.jpg" ] \
+    && install -Dm644 "$DIR/configs/gsm-lab-fond.jpg" "$P/configs/gsm-lab-fond.jpg"
+# [2026-10-12] Le fond en DEUX ETATS (tools/osmo-fond.py) : la ville seule au
+# repos (gsm-lab-ville.jpg, le defaut de schema), la ville avec l antenne quand
+# un banc tourne (gsm-lab-antenne.jpg) - fondu de l un a l autre.
+for _bg in gsm-lab-ville.jpg gsm-lab-antenne.jpg; do
+    [ -f "$DIR/configs/$_bg" ] && install -Dm644 "$DIR/configs/$_bg" "$P/configs/$_bg"
+done
+unset _bg
+ln -sf /opt/GSM/osmo-operator/tools/osmo-fond.py "$ROOTFS/usr/local/bin/osmo-fond" 2>/dev/null || true
 # osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
 # ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
 # iso_modules/80-chroot.sh - Ctrl+AltGr+Droite / Ctrl+AltGr+Gauche.

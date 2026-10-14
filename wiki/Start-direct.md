@@ -235,6 +235,10 @@ Choix de la pile
                        (BANC_DSP=none : la pile seule)
   --assembly-logs      trace asm de l'ARM (/tmp/c54x-pont/qemu-asm.log) ; plus de temps réel
   --grgsm              couche 1 gr-gsm dans qosmo (l'ancien défaut)
+  --sap, --softsim     SIM servie par SAP (softSIM) : la carte du lecteur PC/SC
+                       (HID Omnikey) si une carte y est, sinon la SIM logicielle ;
+                       --sap=pcsc / --sap=sim forcent, --no-sap (défaut) : SIM de test.
+                       Voir [SIM](SIM.md).
   --launcher <bin>     lanceur C de QEMU (défaut /usr/local/bin/<fork>)
   --profile <nom>      force le profil
   --mobile | --ccch_scan | --bcch_scan | --cell_log   client de couche 2 (exclusifs)

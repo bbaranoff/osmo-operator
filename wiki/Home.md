@@ -15,6 +15,8 @@ d'un vrai terminal, au niveau du modem. Ni SDR, ni téléphone physique.
 | [README](../README.md) | architecture multi-PLMN, SS7, SMS, voix, diagnostic |
 | [Telephone-emule](Telephone-emule.md) | brancher **seulement** le téléphone émulé (qosmo, c54x_exe, grgsm_exe) sur **sa propre** pile Osmocom |
 | [Lancer-a-la-main](Lancer-a-la-main.md) | le téléphone lancé processus par processus, sans script, avec les preuves à chaque étape |
+| [SIM](SIM.md) | la carte du banc dans un lecteur HID Omnikey (sysmoISIM programmée par pySim) ou softSIM, servie au mobile par SAP : `start-direct.sh --sap`, `tools/osmo-sim.sh` |
+| [Payload-ISM](Payload-ISM.md) | le **texte** des SMS entre deux nœuds par une liaison radio en bande ISM, le reste (SS7, SIP, adresses) par IP : `start-direct.sh --wan --payload-ism`, `network/setup-payload-ism.sh` |
 | [Injecteur-bruit](Injecteur-bruit.md) | dégrader le descendant entre le pont et la couche 1 (bits inversés, rafales, AWGN, I/Q) : `BRUIT_MODE=…`, inactif par défaut |
 | [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | notebook : le Dockerfile rejoué étape par étape en natif, de apt jusqu'à un appel en DSP |
 

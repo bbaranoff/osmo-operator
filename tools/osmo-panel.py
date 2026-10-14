@@ -27,13 +27,23 @@
 # conteneur osmo-operator-N en marche (docker ps). Sans ca : pas de fleches.
 #
 # Lance par l autostart osmo-conky.desktop (avec le Conky osmo-conky.conf).
+#
+# [2026-10-12] L ENCART N EST LA QUE SI UN BANC TOURNE. Banc a l arret, la
+# fenetre est CACHEE (pas seulement transparente : la barre de boutons
+# restait posee au milieu d un bureau vide). Elle apparait des qu une 2G
+# (natif osmo-bsc, un conteneur osmo-operator-N, le hub) ou une 4G
+# (open5gs-mmed, srsenb, srsue) est debout, et repart quand tout s eteint.
+# Le processus, lui, reste : osmo-desktop-panel le compte pour vivant et ne
+# le double pas. OSMO_PANEL_TOUJOURS=1 la garde a l ecran quoi qu il arrive.
 import os
 import re
 import shlex
 import signal
 import socket
+import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import cairo
@@ -90,12 +100,26 @@ OP_FILE = os.path.join(RUN, "operator")
 # par session est exactement ce qu on veut compter.
 _RUNDIR = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 PID_FILE = os.path.join(_RUNDIR if os.path.isdir(_RUNDIR) else RUN, "osmo-panel.pid")
+ETAT_FILE = os.path.join(_RUNDIR if os.path.isdir(_RUNDIR) else RUN, "osmo-banc.etat")
+REPO_DIR = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 MULTI_CONF = os.environ.get("MULTI_CONF", "/etc/osmocom/osmo-multi.conf")
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "calypso")
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 # Le VTY du client mobile (osmocom-bb « mobile »). 4247 pour MS#1 ; MS#2 est sur
 # 4248 - voir start-direct.sh, qui les attribue.
-VTY_PORT = int(os.environ.get("MS_VTY_PORT", "4247"))
+# [2026-10-12] 4247, ou 4347 en --dsp : start-direct.sh publie le port reel dans
+# /run/osmo-banc/ms1-vty. MS_VTY_PORT force ; sinon le fichier ; sinon 4247.
+def vty_port():
+    if os.environ.get("MS_VTY_PORT"):
+        return int(os.environ["MS_VTY_PORT"])
+    try:
+        with open("/run/osmo-banc/ms1-vty") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 4247
+
+
+VTY_PORT = vty_port()
 # La boite de l encart dans le fond (1920x1080) : x, y, largeur, hauteur.
 # [2026-09-08] 790 de haut : deux moities (4G en haut, 2G en bas), voir
 # tools/osmo-fft-snap.py. Les quatre fichiers qui la connaissent doivent
@@ -358,6 +382,39 @@ def operators():
     return ops
 
 
+# ── Y A-T-IL UN BANC A MONTRER ? ────────────────────────────────────────────
+# 2G : un operateur de la topologie en marche (natif, conteneur ou hub - la
+# liste de operators(), qui sait deja le dire). 4G : l un des demons que le
+# Conky regarde pour dire « 4G debout » (tools/conky-osmo-status.sh, lte) -
+# memes noms, meme regle. `pgrep -x` : le NOM exact, pas la ligne de commande
+# (un `tail -F srsue.log` ou cet encart lui-meme ne comptent pas).
+LTE_DEMONS = os.environ.get("OSMO_LTE_DEMONS", "open5gs-mmed|srsenb|srsue")
+PANEL_TOUJOURS = os.environ.get("OSMO_PANEL_TOUJOURS") == "1"
+
+
+def lte_actif():
+    try:
+        out = subprocess.run(["pgrep", "-x", LTE_DEMONS], capture_output=True,
+                             text=True, timeout=5).stdout.split()
+    except Exception:
+        return False
+    # pgrep liste aussi les ZOMBIES (un srsue plante, pas encore recolte par
+    # son parent) : un mort ne tient pas de banc, on ne le compte pas.
+    for pid in out:
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                if f.read().rsplit(")", 1)[1].split()[0] != "Z":
+                    return True
+        except (OSError, IndexError):
+            return True       # illisible : on le croit vivant plutot que de cacher un banc
+    return False
+
+
+def banc_actif(ops):
+    """Vrai si une 2G (un operateur ou le hub en marche) ou une 4G tourne."""
+    return PANEL_TOUJOURS or any(o[3] for o in ops) or lte_actif()
+
+
 # ── LE FICHIER EST LA SOURCE PARTAGEE, PAS UNE SORTIE ───────────────────────
 # [2026-09-04] Cet encart ECRIVAIT /run/osmo-fft/operator et ne le LISAIT
 # jamais. Trois consequences, toutes vues sur le banc :
@@ -500,18 +557,162 @@ class Panel(Gtk.Window):
         self.ops = []
         self.cur = 0
         self.mtime = None
+        self._pos = (x, y)
+        self.connect("map-event", self._pin)
+        # Les enfants sont montres, la FENETRE ne l est que si un banc tourne
+        # (refresh_ops, ci-dessous) : un show_all() ici l aurait fait passer
+        # a l ecran une seconde avant de la cacher.
+        overlay.show_all()
+        self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
+        # None : etat inconnu - le premier refresh_ops ecrit l etat du banc
+        # (fond d ecran, fichier d etat) meme s il est « a l arret ».
+        self._visible = None
         self.refresh_ops()
         self.refresh_image()
         GLib.timeout_add(1000, self.refresh_image)
         GLib.timeout_add(2000, self.refresh_ops)
         self.refresh_zmq()
         GLib.timeout_add(3000, self.refresh_zmq)
-        self.show_all()
-        self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
-        self._pos = (x, y)
-        self._pin()
-        self.connect("map-event", self._pin)
-        GLib.timeout_add(500, self._pin)
+
+    # ── montrer / cacher selon le banc ─────────────────────────────────────
+    def montrer(self, actif):
+        if actif == self._visible:
+            return
+        self._visible = actif
+        self._etat_banc(actif)
+        if actif:
+            print("[panel] un banc tourne : encart a l ecran", flush=True)
+            self.show()
+            self._pin()
+            GLib.timeout_add(500, self._pin)
+        else:
+            print("[panel] plus de banc : encart cache", flush=True)
+            self.hide()
+
+    # [2026-10-12] LE BUREAU SUIT LE BANC, PAS SEULEMENT L ENCART. Au meme
+    # moment : (1) le fond d ecran passe en fondu de la ville seule a la ville
+    # avec l antenne (tools/osmo-fond.py), et retour a l arret ; (2) l etat est
+    # ecrit dans $XDG_RUNTIME_DIR/osmo-banc.etat ("1"/"0"), que osmo-topzone.py
+    # lit pour fondre le titre « Telecom Operator » vers la banniere LAB GSM.
+    # osmo-launcher.py lance aussi le fond des le CLIC sur un run (plus tot
+    # que la detection d ici) ; osmo-fond est idempotent, les deux cohabitent.
+    def _etat_banc(self, actif):
+        try:
+            with open(ETAT_FILE + ".tmp", "w") as f:
+                f.write("1\n" if actif else "0\n")
+            os.replace(ETAT_FILE + ".tmp", ETAT_FILE)
+        except OSError as e:
+            print("[panel] etat du banc non ecrit : %s" % e, flush=True)
+        fond = os.path.join(REPO_DIR, "tools", "osmo-fond.py")
+        if os.path.exists(fond):
+            spawn([sys.executable, fond, "antenne" if actif else "ville"])
+        self._conky_fondu(actif)
+
+    # [2026-10-12] LE CONKY SUIT AUSSI, EN FONDU. Banc a l arret, le tableau de
+    # bord n a rien a dire (« banc a l arret - ./start-direct.sh » deux fois) :
+    # on le fait disparaitre, et revenir avec le banc. Pas de kill : le gardien
+    # osmo-desktop-panel relancerait un conky dans les cinq secondes. On agit
+    # sur sa FENETRE X11 : opacite (_NET_WM_WINDOW_OPACITY, que mutter honore)
+    # qui descend en une douzaine de pas, puis unmap (xdotool) ; au retour, map
+    # puis l opacite remonte. Sans xdotool, l opacite 0 suffit a le cacher.
+    # Le conky peut etre relance entre-temps (nouvelle fenetre) : _conky_veille
+    # remet la fenetre dans l etat voulu a chaque tour de refresh_ops.
+    def _conky_fenetre(self):
+        try:
+            out = subprocess.run(["xdotool", "search", "--classname", "^conky$"],
+                                 capture_output=True, text=True, timeout=3).stdout.split()
+        except (OSError, subprocess.TimeoutExpired):
+            out = []
+        if not out:
+            try:
+                for l in subprocess.run(["wmctrl", "-lx"], capture_output=True, text=True, timeout=3).stdout.splitlines():
+                    f = l.split()
+                    if len(f) > 2 and f[2].lower().startswith("conky."):
+                        out.append(str(int(f[0], 16)))
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                pass
+        return out[0] if out else None
+
+    @staticmethod
+    def _conky_opacite(win, v):
+        subprocess.run(["xprop", "-id", win, "-f", "_NET_WM_WINDOW_OPACITY", "32c",
+                        "-set", "_NET_WM_WINDOW_OPACITY", str(int(max(0.0, min(1.0, v)) * 0xFFFFFFFF))],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+
+    def _conky_fondu(self, actif, pas=12, duree=1.2):
+        if os.environ.get("OSMO_CONKY_TOUJOURS") == "1":
+            return
+        win = self._conky_fenetre()
+        self._conky_voulu = actif
+        if not win:
+            return
+        xdo = shutil.which("xdotool")
+
+        def anim():
+            try:
+                if actif:
+                    self._conky_opacite(win, 0.0)
+                    if xdo:
+                        subprocess.run([xdo, "windowmap", win], timeout=3)
+                    for i in range(1, pas + 1):
+                        self._conky_opacite(win, i / pas)
+                        time.sleep(duree / pas)
+                    subprocess.run(["xprop", "-id", win, "-remove", "_NET_WM_WINDOW_OPACITY"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+                else:
+                    for i in range(pas - 1, -1, -1):
+                        self._conky_opacite(win, i / pas)
+                        time.sleep(duree / pas)
+                    if xdo:
+                        subprocess.run([xdo, "windowunmap", win], timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            self._conky_win = win
+        threading.Thread(target=anim, daemon=True).start()
+
+    # [2026-10-12] UN FONDU TUE EN VOL (kill -9 : start-direct.sh --stop, avant
+    # que osmo-fond.py soit dans sa liste d epargnes) laissait le fond sur une
+    # image intermediaire. Toutes les 10 s, on relit l URI du fond : si ce
+    # n est pas le fichier attendu pour l etat courant, on relance osmo-fond
+    # (idempotent, il repart de l image ou il en etait).
+    def _fond_veille(self):
+        if self._visible is None or os.environ.get("OSMO_FOND_TOUJOURS") == "1":
+            return
+        t = time.monotonic()
+        if t - getattr(self, "_fond_t", 0) < 10:
+            return
+        self._fond_t = t
+        attendu = "gsm-lab-antenne.jpg" if self._visible else "gsm-lab-ville.jpg"
+        try:
+            uri = subprocess.run(["gsettings", "get", "org.gnome.desktop.background", "picture-uri"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip().strip("'")
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if uri.endswith("/" + attendu) or "/osmo-fond/" not in uri and "gsm-lab-" not in uri:
+            return          # en place, ou un fond choisi par l utilisateur : on ne touche pas
+        fond = os.path.join(REPO_DIR, "tools", "osmo-fond.py")
+        if os.path.exists(fond):
+            print("[panel] fond d ecran a reprendre : %s" % os.path.basename(uri), flush=True)
+            spawn([sys.executable, fond, "antenne" if self._visible else "ville"])
+
+    def _conky_veille(self):
+        # un conky relance (autre fenetre) alors que le banc est a l arret : on
+        # le cache aussitot ; et s il a disparu puis reparu au retour, on le montre
+        voulu = getattr(self, "_conky_voulu", None)
+        if voulu is None or voulu or os.environ.get("OSMO_CONKY_TOUJOURS") == "1":
+            return
+        win = self._conky_fenetre()
+        if not win:
+            return
+        # l id X peut etre REUTILISE par un conky relance : on regarde l etat
+        # reel de la fenetre, pas seulement son numero
+        try:
+            mappee = "IsViewable" in subprocess.run(["xwininfo", "-id", win], capture_output=True,
+                                                   text=True, timeout=3).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            mappee = False
+        if win != getattr(self, "_conky_win", None) or (mappee and shutil.which("xdotool")):
+            self._conky_fondu(False, pas=1, duree=0)
 
     # [2026-09-06] SE REPOSER APRES COUP. Meme sous X11, le gestionnaire de
     # fenetres peut deplacer la fenetre au moment ou il la mappe (mutter le
@@ -562,9 +763,13 @@ class Panel(Gtk.Window):
                 changed = True
         if changed:
             self.update_op(write=(want is None))
+        self.montrer(banc_actif(self.ops))
+        self._conky_veille()
+        self._fond_veille()
         return True
 
     def update_op(self, write=True):
+        global VTY_PORT
         # Les fleches sont TOUJOURS la des qu il y a plus d un operateur dans la
         # topologie - qu ils tournent ou non (voir operators()). Un operateur
         # arrete se dit dans le libelle, il ne fait pas disparaitre le bouton.
@@ -595,6 +800,7 @@ class Panel(Gtk.Window):
             self.b_dash.set_tooltip_text(f"firefox http://{op[2] or '127.0.0.1'}:{DASH_PORT} ({cible})")
             self.b_tmux.set_label("tmux" + suff)
             self.b_tmux.set_tooltip_text(f"terminal sur la session tmux de {cible}")
+            VTY_PORT = vty_port()
             self.b_vty.set_label(f"VTY {VTY_PORT}" + suff)
             self.b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} dans {cible}")
             # `write=False` quand on ne fait que SUIVRE le fichier : le
@@ -670,6 +876,7 @@ class Panel(Gtk.Window):
         # besoin), et le bouton rendait "Connection refused" sur un operateur
         # parfaitement vivant. On entre donc dans le conteneur pour le natif du
         # dedans, exactement comme pour tmux.
+        VTY_PORT = vty_port()
         op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
         if op[1] == "interstp":
             # Le hub n a ni mobile ni VTY 4247 : sa console, c est le STP (4239).

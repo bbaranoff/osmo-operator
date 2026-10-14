@@ -1,0 +1,29 @@
+diff --git a/src/pcsc_server.rb b/src/pcsc_server.rb
+index ab3820d..082381d 100644
+--- a/src/pcsc_server.rb
++++ b/src/pcsc_server.rb
+@@ -104,9 +104,22 @@ class PCSCServer < Server
+   end
+   
+   # release card and context
++  # Called twice per client: on DISCONNECT_REQ (sap/server.rb) and again by
++  # demo_server.rb (server.close) once the socket is gone. The second call hit
++  # the smartcard gem with a nil handle (TypeError) and killed the server, so the
++  # mobile could never reconnect. Idempotent now, and a lost reader is not fatal.
+   def disconnect
+-    @card.disconnect
+-    @context.release
++    begin
++      @card.disconnect(:leave) if @card
++    rescue Exception => e
++      $stderr.puts "pcsc: disconnect ignored (#{e.class}: #{e.message})"
++    end
++    @card = nil
++    begin
++      @context.release if @context
++    rescue Exception
++    end
++    @context = nil
+   end
+ 
+   # get ATR

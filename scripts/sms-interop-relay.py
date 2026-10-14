@@ -59,6 +59,48 @@ RELAY_SEND_RETRIES = 3
 RELAY_SEND_DELAY = 3.0
 RELAY_CONNECT_TIMEOUT = 10
 
+# ─── PAYLOAD ISM (option start-direct.sh --payload-ism) ────────────────────────
+# Quand c'est actif, le TCP inter-noeud NE PORTE PLUS le texte du SMS : il porte
+# un JETON. Le texte part sur la liaison radio ISM (scripts/ism_payload.py),
+# estampille du meme jeton, et le noeud d'arrivee le recupere par la radio avant
+# d'injecter le MT. Tout le reste (adresses, MSISDN, IMSI, SC-address) reste IP.
+# Active par l'env PAYLOAD_ISM=1 ou la section [payload] de sms-routing.conf.
+PAYLOAD_ISM_RECV_TIMEOUT = float(os.environ.get("ISM_RECV_TIMEOUT", "30"))
+_PAYLOAD_LINK = None
+_PAYLOAD_LINK_LOCK = threading.Lock()
+_PAYLOAD_CFG: Dict[str, str] = {}
+
+
+def payload_ism_enabled() -> bool:
+    if os.environ.get("PAYLOAD_ISM", "0") == "1":
+        return True
+    return _PAYLOAD_CFG.get("mode", "").lower() == "ism"
+
+
+def get_payload_link():
+    """La liaison payload ISM, construite une seule fois (ou None si indisponible)."""
+    global _PAYLOAD_LINK
+    if not payload_ism_enabled():
+        return None
+    with _PAYLOAD_LINK_LOCK:
+        if _PAYLOAD_LINK is None:
+            try:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+                import ism_payload
+                _PAYLOAD_LINK = ism_payload.PayloadLink(cfg=dict(_PAYLOAD_CFG))
+                logging.info("Payload ISM actif (liaison %s)",
+                             _PAYLOAD_CFG.get("link")
+                             or os.environ.get("ISM_LINK") or "loopback")
+            except Exception as e:
+                logging.error("Payload ISM indisponible, repli sur IP : %s", e)
+                _PAYLOAD_LINK = False  # marqueur « echec », on ne retente pas
+    return _PAYLOAD_LINK or None
+
+
+def payload_new_token() -> str:
+    import ism_payload
+    return ism_payload.new_token()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [RELAY-OP%(operator_id)s] %(levelname)s %(message)s',
@@ -253,6 +295,11 @@ class RoutingTable:
                             self.retry_count = int(val)
                         elif key == 'retry_delay':
                             self.retry_delay = int(val)
+                    elif section == 'payload':
+                        # [payload] mode=ism, link=fifo|serial|exec|loopback,
+                        # tx=/chemin, rx=/chemin, serial=/dev/ttyUSB0,
+                        # tx_cmd=..., rx_cmd=..., recv_timeout=30
+                        _PAYLOAD_CFG[key] = val
 
             self.routes.sort(key=lambda x: len(x[0]), reverse=True)
         except FileNotFoundError:
@@ -471,6 +518,26 @@ class RelayServer(threading.Thread):
         from_number = msg.get("from_number", "")
         message_text = msg.get("message_text", "")
 
+        # Payload ISM : le texte n'etait pas dans le TCP, il arrive par la radio.
+        # On attend le jeton sur la liaison avant d'injecter le MT.
+        if msg.get("payload_via") == "ism":
+            token = msg.get("payload_token", "")
+            link = get_payload_link()
+            if link is None:
+                response = {"status": "error",
+                            "reason": "payload annonce ISM mais liaison radio absente ici"}
+                conn.sendall((json.dumps(response) + '\n').encode())
+                return
+            payload = link.recv(token, timeout=PAYLOAD_ISM_RECV_TIMEOUT)
+            if payload is None:
+                logging.error("Payload ISM : jeton %s jamais recu par radio", token)
+                response = {"status": "error",
+                            "reason": f"payload ISM (jeton {token}) non recu par radio"}
+                conn.sendall((json.dumps(response) + '\n').encode())
+                return
+            message_text = payload.decode("utf-8", "replace")
+            logging.info("Payload ISM : texte recu par radio (jeton %s)", token)
+
         logging.info(f"Incoming interop MT: {from_number} → {dest_msisdn}")
 
         # Resolve with retries
@@ -514,6 +581,20 @@ def send_interop_mt(target_ip: str, target_port: int, dest_msisdn: str,
         "sc_address": sc_address,
         "sender_imsi": sender_imsi,
     }
+
+    # Payload ISM : le texte part par la radio, le TCP ne garde qu'un jeton.
+    link = get_payload_link()
+    if link is not None:
+        try:
+            token = payload_new_token()
+            link.send(token, message_text.encode("utf-8"))
+            msg["payload_via"] = "ism"
+            msg["payload_token"] = token
+            msg["message_text"] = ""   # le texte ne passe pas par IP
+            logging.info("Payload ISM : texte emis par radio (jeton %s)", token)
+        except Exception as e:
+            # La radio a echoue : on ne laisse pas le SMS muet, on retombe sur IP.
+            logging.error("Payload ISM echoue, repli IP pour ce SMS : %s", e)
 
     for attempt in range(retries):
         try:
@@ -817,6 +898,17 @@ def main():
     logging.info(f"  Operators  : {routing.operators}")
     logging.info(f"  Routes     : {len(routing.routes)} entries")
     logging.info(f"  Retry      : {routing.retry_count}x, delay={routing.retry_delay}s, timeout={routing.connect_timeout}s")
+
+    # Payload ISM : si demande, on monte la liaison radio MAINTENANT pour que le
+    # recepteur (RX) tourne avant le premier SMS, et on le dit clairement.
+    if payload_ism_enabled():
+        link = get_payload_link()
+        if link is not None:
+            logging.info("  Payload    : ISM (texte par radio, signalisation par IP)")
+        else:
+            logging.warning("  Payload    : ISM demande mais liaison indisponible — repli IP")
+    else:
+        logging.info("  Payload    : IP (texte dans le relais TCP)")
 
     server = RelayServer(port=args.port, operator_id=op_id, sc_address=sc_address)
     server.start()

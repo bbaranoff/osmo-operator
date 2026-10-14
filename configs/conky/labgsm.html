@@ -12,19 +12,36 @@
        abonnes, appels, depuis quand - poussee par osmo-ts-probe.py dans
        timeslots.json (core / radio / phy / subs / calls / up). */
   :root{
-    --ink:#131018; --ink2:#1c1822; --card:rgba(13,11,20,.68);
+    --ink:#131018; --ink2:#1c1822; --card:rgba(13,11,20,0);
     --bone:#f4eddc; --dim:#c9bfab; --violet:#9d8cf0; --violet2:#6f5fc0;
     --teal:#4fe0b6; --moon:#b4c2ea; --orange:#ff9a3c; --pink:#ff4d6d;
     --ok:#3fb950; --ko:#f85149;
     --line:rgba(244,237,220,.18);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:transparent;color:var(--bone);
+  html,body{margin:0;height:100%;background:transparent;color:var(--bone);text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.7);
     font-family:"Ubuntu","Ubuntu Sans",sans-serif;overflow:hidden}
   #card{position:absolute;inset:0;border:1px solid var(--line);border-radius:18px;
     background:var(--card);backdrop-filter:blur(3px);padding:1vw 1.8vw .9vw;
     display:flex;flex-direction:column;gap:.45vw;transition:opacity .6s ease}
   #card.faded{opacity:0;pointer-events:none}
+  /* [2026-10-12] AU REPOS, PAS DE BANNIERE : LE TITRE. Tant qu aucun banc ne
+     tourne (osmo-panel.py ecrit 0 dans $XDG_RUNTIME_DIR/osmo-banc.etat, que
+     osmo-topzone.py relaie par osmoBanc(false)), la carte est invisible et la
+     zone porte seulement « Telecom Operator », en grand. Au lancement de la 2G
+     (ou de la 4G), le titre s efface en fondu pendant que la carte apparait -
+     les deux a la fois, meme duree. body.instant : sans animation (premier
+     etat pousse au chargement de la page, pour ne pas voir le titre clignoter
+     devant un banc deja debout). */
+  #titre{position:absolute;inset:0;display:flex;align-items:center;padding:0 1.8vw;
+    font-weight:700;font-size:5.4vw;line-height:1;letter-spacing:.02em;
+    background:linear-gradient(92deg,#ffffff,#dfe8ff 55%,var(--moon));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.75)) drop-shadow(0 0 14px rgba(0,0,0,.45));
+    opacity:0;pointer-events:none;transition:opacity 1.4s ease}
+  body.repos #titre{opacity:1}
+  body.repos #card{opacity:0;pointer-events:none;transition:opacity 1.4s ease}
+  body.instant #titre,body.instant #card{transition:none!important}
   .eyebrow{display:flex;justify-content:space-between;align-items:center;
     color:var(--dim);letter-spacing:.16em;font-size:.9vw;font-weight:500}
   .eyebrow .dot{color:var(--teal)}
@@ -41,7 +58,7 @@
   #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.7vw;min-height:4.2vw}
   .ts{border:1px solid rgba(180,194,234,.3);border-radius:.8vw;padding:.5vw .4vw;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5vw;
-    text-align:center;background:rgba(28,24,34,.55);position:relative;gap:.3vw;
+    text-align:center;background:rgba(28,24,34,.3);position:relative;gap:.3vw;
     transition:box-shadow .18s,border-color .18s,background .18s}
   .ts .n{font-weight:700;font-size:1.5vw;line-height:1}
   .ts .k{color:var(--dim);font-size:.9vw;letter-spacing:.04em;font-family:"Ubuntu Mono",monospace}
@@ -57,7 +74,7 @@
   #live{display:flex;gap:.6vw;flex-wrap:wrap;align-items:center;
     border-top:1px solid var(--line);padding-top:.45vw}
   .grp{display:flex;align-items:center;gap:.35vw;border:1px solid var(--line);
-    border-radius:.8vw;padding:.2vw .6vw;background:rgba(28,24,34,.45);font-size:.95vw}
+    border-radius:.8vw;padding:.2vw .6vw;background:rgba(28,24,34,.25);font-size:.95vw}
   .grp .lab{color:var(--dim);letter-spacing:.08em;font-size:.9vw;margin-right:.2vw;font-weight:500}
   .grp .d{font-family:"Ubuntu Mono",monospace;font-size:.95vw;color:var(--dim)}
   .grp .d.ok{color:var(--ok)} .grp .d.ko{color:var(--ko)}
@@ -70,7 +87,8 @@
   .foot{margin-left:auto;color:var(--dim);font-size:.85vw}
   #noconf{color:var(--orange);opacity:.9}
 </style></head>
-<body>
+<body class="repos">
+<div id="titre">Telecom Operator</div>
 <div id="card">
   <div class="eyebrow">
     <div><span class="dot">●</span> SOFTWARE DEFINED RADIO · UM INTERFACE · GR-GSM</div>
@@ -164,6 +182,12 @@ window.osmoUpdate=function(state){
 };
 // fondu : osmo-topzone.py bascule .faded pour laisser place a une appli
 window.osmoFade=function(on){document.getElementById('card').classList.toggle('faded',!!on);};
+// banc debout (on=true) : la carte ; a l arret : le titre « Telecom Operator ».
+// instant=true : sans fondu (etat initial, au chargement).
+window.osmoBanc=function(on,instant){const b=document.body;
+  if(instant){b.classList.add('instant');void b.offsetWidth;}
+  b.classList.toggle('repos',!on);
+  if(instant){void b.offsetWidth;b.classList.remove('instant');}};
 drawTS(); drawLive(null);
 // demo si personne ne pousse d etat (osmo-topzone absent) : un timeslot au hasard
 let demo=setInterval(()=>{ if(window.__osmoLive) return clearInterval(demo);

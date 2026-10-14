@@ -22,7 +22,9 @@ Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 # propre. osmo-multi.service porte deja l environnement du banc (HOME, venv,
 # OSMO_NO_TERM) et son ExecStop n arrete que les conteneurs et le hub - le
 # natif reste a osmo-banc.
-Exec=/opt/GSM/osmo-operator/launch.sh --multi
+# [2026-10-12] En fenetre de progression (barre, etape, console repliee) : le
+# journal de osmo-multi.service defile dedans (launch.sh --multi-suivi).
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Multi-operateur" --icon /usr/share/osmo-operator/icons/osmo-multi.svg -- /opt/GSM/osmo-operator/launch.sh --multi-suivi
 Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
 Categories=System;Network;

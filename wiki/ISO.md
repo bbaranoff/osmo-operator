@@ -260,7 +260,9 @@ dans une fenêtre GTK du banc) installe ce qui manque.
   docker, l'image, la topologie, l'unité et l'icône.
 - Lancer ensuite : icône antenne, barre **run multi**, `systemctl start osmo-multi`,
   `sudo ./start-multi.sh` (`--status`, `--stop`, `--dry-run`). Le natif est
-  tenu par `osmo-banc` et relancé au besoin par `start-multi.sh`.
+  tenu par `osmo-banc` : `start-multi.sh` le **garde** s'il tourne déjà et le
+  **lance** s'il est à l'arrêt (il ne le relance que si son point code vient
+  d'être réaligné, ou avec `--restart-natif`).
 - **`--opencl`** : pile OpenCL (ocl-icd, clinfo, pocl, pilote Intel/Mesa/NVIDIA
   détecté) et les outils clonés dans `/root` : **deka**, a51_tools,
   dst80_reversing, tea1-cracker. Icône **deka**, barre **run deka**.
@@ -315,20 +317,43 @@ dans une fenêtre GTK du banc) installe ce qui manque.
 - **GNOME** minimal, session root, dock avec les favoris : Firefox, Fichiers,
   Claude, Lancer le banc, Installer, Tutoriel, Info, Supplements,
   multi-operator, Update, Paint, deka, Linphone, Wireshark, Téléphone, 4G.
-- **Aucun favori n'ouvre de terminal.** Tout passe par `tools/osmo-gtk-run.py` :
-  une fenêtre GTK du banc qui montre la sortie de la commande (journal
-  copiable) ou, pour ce qui est interactif ou anime la ligne, un terminal VTE
-  dans la fenêtre. Elle dit quand c'est fini et avec quel statut.
-- **Barre du bas** (`tools/osmo-launcher.py`) : groupes Banc (run standalone,
-  run multi, run deka, Dashboard, tmux, VTY), Jeux, Media, Telephone, Outils ;
-  les « run » tournent en fond avec leur journal déplié dans la barre ; le
-  grand **?** rouge ouvre la page Info.
+  L'icône **multi-operator** n'est posée que par les Suppléments
+  (`addition.sh --multi`) : avant, elle n'existe pas et le dock ne la montre pas.
+- **Aucun favori n'ouvre de terminal, ni de shell.** Tout passe par
+  `tools/osmo-gtk-run.py`. Depuis le 2026-10-12, les lancements (2G, multi,
+  4G, Suppléments, Update, deka, téléphone pmOS, pilotes) s'ouvrent en mode
+  `--progress` : une petite fenêtre avec une **barre de progression** (les
+  repères `[n/m]` que les scripts impriment : `run.sh` [n/10], `osmo-lte`
+  [n/4], `osmo-pmos` [n/3] ; sinon la barre pulse), l'étape en cours, la
+  dernière ligne, et un bouton **« console »** qui déplie la sortie complète
+  (terminal VTE, la commande tourne dans un pseudo-terminal). Un échec déplie
+  la console tout seul. Seuls Claude et oFono, interactifs, gardent un
+  terminal dans la fenêtre. Le journal de l'unité systemd défile dans la
+  fenêtre pour la 2G et le multi (`launch.sh --service-suivi`, `--multi-suivi`)
+  et la 4G (`osmo-lte up|toggle`).
+- **Port VTY du mobile** : 4247, ou **4347 en `--dsp`**. `start-direct.sh`
+  publie le port réel dans `/run/osmo-banc/ms1-vty` et dans l'environnement
+  systemd (`OSMO_BB1_VTY_PORT`, lu par le tableau de bord `osmo-egprs-web` au
+  redémarrage) ; `launch.sh --vty`, l'encart et `vty-menu.sh` le lisent.
+- **Barre du bas** (`tools/osmo-launcher.py`) : **retirée du bureau** le
+  2026-10-12 (choix du banc). Le fichier reste ; `OSMO_LAUNCHER=1` dans
+  l'environnement de session la remet (groupes Banc, Jeux, Media, Telephone,
+  Outils, journaux des « run »).
 - **Encart** (`tools/osmo-panel.py`, `osmo-fft-snap.py`) : l'illustration
   devient le spectre I/Q et le `mobile.log` quand le banc tourne ; bandeau
   haut (`osmo-topzone.py`, `configs/conky/labgsm.html`) alimenté par
   `osmo-ts-probe.py` : 8 timeslots, démons, abonnés, appels, uptime.
 - **Conky** d'état en haut à droite (machine, opérateur sélectionné,
-  `Ctrl+AltGr+←/→` ou `osmo-op --next`).
+  `Ctrl+AltGr+←/→` ou `osmo-op --next`). Refait le 2026-10-12 : plaque sombre
+  translucide aux coins arrondis (`configs/conky/osmo-conky.lua`, Cairo),
+  police Ubuntu partout, couleurs par nature d'information, pastilles ● et un
+  smiley par arrêt du banc (☺ vert s'il tourne, ☹ gris sinon). Il **n'est à
+  l'écran que si un banc tourne** : `osmo-panel.py` le fait apparaître et
+  disparaître en fondu (opacité de la fenêtre X11, xdotool) avec l'encart.
+- **Encart central** (`tools/osmo-panel.py`, spectre + journal, boutons
+  Dashboard / tmux / VTY / ZMQ) : **n'apparaît que si un banc tourne** - une
+  2G (natif, conteneur, hub) ou une 4G (Open5GS, srsENB, srsUE). Banc à l'arrêt,
+  le bureau ne montre que le fond. `OSMO_PANEL_TOUJOURS=1` le garde à l'écran.
 - **Tableau de bord web** :8080 (`osmo-egprs-web.service`, HTTPS auto-signé
   sur :80, capture GSMTAP/SCTP), **tutoriel** (`osmo-tutorial`), **page Info**
   (`osmo-info`, `configs/info.html`), spectres I/Q `fft-web` :8081.
@@ -339,8 +364,17 @@ dans une fenêtre GTK du banc) installe ce qui manque.
 - **Plymouth** `osmo-bts` : pylône, mobile et ondes (anneaux), rien d'autre
   (aperçu : `wiki/plymouth-osmo-bts.gif`). Généré au build par
   `tools/plymouth-render.py` (`86-finitions.sh`).
-- Fond d'écran : `/usr/share/backgrounds/gsm-lab-wallpaper.jpg`
-  (`tools/wallpaper-render.py`).
+- Fond d'écran **en deux états** (`tools/osmo-fond.py`, `osmo-fond ville|antenne`) :
+  au repos `/usr/share/backgrounds/gsm-lab-ville.jpg` (la ville au bord de l'eau,
+  sans antenne — le défaut de schéma) ; dès qu'une 2G ou une 4G démarre, fondu
+  (~2,4 s, images intermédiaires Pillow + fondu croisé de GNOME Shell) vers
+  `gsm-lab-antenne.jpg` (la même ville, le pylône dressé), et retour à l'arrêt.
+  Déclenché par `osmo-panel.py` quand il voit le banc monter ou tomber, par
+  `osmo-lte start` et, si la barre du bas est active, au clic sur *run standalone*. De même, la zone haute
+  ne porte que le titre **Telecom Operator** tant que rien ne tourne, et fond vers
+  la bannière LAB GSM au lancement (`$XDG_RUNTIME_DIR/osmo-banc.etat`, lu par
+  `osmo-topzone.py`). Le paysage low-poly `gsm-lab-fond.jpg` et
+  `gsm-lab-wallpaper.jpg` (`tools/paysage-render.py`) restent posés, sans être le défaut.
 
 ### 5.9 Audio
 

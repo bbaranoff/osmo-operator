@@ -215,6 +215,10 @@ ${B}AU DEMARRAGE DE L'IMAGE${N}
   ${C}--multi / --no-multi${N}      activer (ou non) osmo-multi.service au boot  ${D}[${OSMO_ISO_MULTI:-0}]${N}
   ${C}--kb=LANG${N}                 disposition clavier                          ${D}[${OSMO_ISO_KB:-fr}]${N}
 
+${B}LA SIM${N}
+  ${C}--softsim / --no-softsim${N}  softSIM (SIM via SAP, Ruby) dans /opt/GSM/softsim, pySim et
+                            pcscd/CCID pour la carte d un lecteur HID Omnikey    ${D}[${OSMO_ISO_SOFTSIM:-1}]${N}
+
 ${B}LE LIEN ENTRE NOEUDS (WAN)${N}
   ${C}--wan${N}                     active la table WAN
   ${C}--wan-nodes=LISTE${N}         <noeud>:<IP>:<indicatif>, separes par des espaces
@@ -238,6 +242,7 @@ ${B}Equivalents en variables${N} (pour la CI, ou un environnement sans ligne de 
   OSMO_ISO_WITHOUT_DEBS=1   comme --without-debs
   OSMO_ISO_PULL_IMAGE=REF   l'image de --skip-build
   OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1 / OSMO_ISO_KB=fr / OSMO_ISO_VERSION=...
+  OSMO_ISO_SOFTSIM=0        comme --no-softsim
   OSMO_ISO_WORK=/chemin     repertoire de travail (defaut /var/tmp, PAS /tmp qui
                             est souvent un tmpfs : le rootfs n'y tient pas)
   OSMO_DEB_CACHE=/chemin    cache des .deb de l'hote   ${D}[/var/cache/osmo-debs]${N}
@@ -276,6 +281,8 @@ for arg in "$@"; do case "$arg" in
     --no-banc)      OSMO_ISO_BANC=0 ;;
     --multi)        OSMO_ISO_MULTI=1 ;;
     --no-multi)     OSMO_ISO_MULTI=0 ;;
+    --softsim)      OSMO_ISO_SOFTSIM=1 ;;
+    --no-softsim)   OSMO_ISO_SOFTSIM=0 ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;

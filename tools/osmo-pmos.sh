@@ -257,6 +257,7 @@ UDEV
 
 # ── DEMARRER ─────────────────────────────────────────────────────────────────
 pmos_start() {
+    echo "[2/3] machine virtuelle"
     _root start || return 1
     [ -f "$IMG" ] || { _err "pas d image : osmo-pmos install d abord"; return 1; }
     install -d "$RUNDIR"
@@ -302,6 +303,7 @@ pmos_start() {
 # Le modem du banc, cote hote. Mode --connect : il attend que le SSH de la VM
 # reponde, puis se branche sur le port serie que QEMU tient ouvert.
 pmos_modem_start() {
+    echo "[3/3] modem du banc"
     if pgrep -f "osmo-phonesim-banc.py --connect 127.0.0.1:$AT_PORT" >/dev/null 2>&1; then
         _ok "le modem du banc est deja branche sur le port $AT_PORT"
         return 0
@@ -374,6 +376,7 @@ pmos_mm() {
 }
 
 pmos_install() {
+    echo "[1/3] image postmarketOS"
     _root install || return 1
     _pmos_paquets
     pmos_fetch     || return 1
@@ -410,6 +413,8 @@ case "${1:-status}" in
     # lancement est donc long, une fois. Les paquets, eux, sont deja dans
     # l image (tools/osmo-extras-install.sh les pose au build).
     up)
+        # Les reperes « [n/3] » imprimes par les fonctions font la barre de
+        # progression de la fenetre de lancement (osmo-gtk-run.py --progress).
         if [ ! -f "$IMG" ]; then
             _say "premier lancement : il faut d abord poser l image postmarketOS"
             pmos_install || exit 1

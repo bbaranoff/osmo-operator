@@ -25,6 +25,10 @@
 #   sudo ./start-multi.sh --status     etat des conteneurs et du hub
 #   sudo ./start-multi.sh --stop       arrete les conteneurs (le natif reste)
 #   sudo ./start-multi.sh --dry-run    affiche la commande sans la lancer
+#   sudo ./start-multi.sh --restart-natif
+#                                      arrete et relance aussi la 2G native
+#                                      (par defaut on la GARDE si elle tourne,
+#                                      on la LANCE si elle est a l arret)
 # =============================================================================
 set -uo pipefail
 
@@ -45,12 +49,17 @@ if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
     set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
 fi
 ACTION="start"
+# [2026-10-12] La 2G native n est plus relancee a chaque clic : on la garde
+# si elle tourne, on la lance si elle manque. --restart-natif (ou
+# OSMO_MULTI_RESTART_NATIF=1) retablit l arret + relance.
+RESTART_NATIF="${OSMO_MULTI_RESTART_NATIF:-0}"
 for a in "$@"; do
     case "$a" in
         --status)  ACTION="status" ;;
         --stop)    ACTION="stop" ;;
         --dry-run) ACTION="dry" ;;
-        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+        --restart-natif) RESTART_NATIF=1 ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     esac
 done
 
@@ -429,6 +438,9 @@ _aligner_coeur_env() {
     fi
 }
 
+# Mis a 1 quand le point code du natif vient d etre change : ses demons
+# gardent l ancien en memoire et DOIVENT repartir (voir tout_arreter).
+NATIF_REALIGNE=0
 aligner_natif() {
     local idx pc spec reel
     for spec in $MULTI_OPS; do
@@ -453,7 +465,8 @@ aligner_natif() {
                     --local --hub-ip 127.0.0.1 >/dev/null 2>&1; then
                 echo -e "  ${GREEN}✓${NC} natif realigne : PC $(natif_pc)"
                 echo -e "  ${YELLOW}!${NC} les demons natifs gardent l ancienne identite en memoire :"
-                echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC} pour qu ils la relisent."
+                echo -e "    ils seront arretes et relances pour qu ils la relisent."
+                NATIF_REALIGNE=1
             else
                 echo -e "  ${RED}✗${NC} realignement du natif echoue - voir network/set-node-id.sh"
             fi
@@ -463,16 +476,24 @@ aligner_natif() {
 }
 aligner_natif
 
-# ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
-# [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
-# deja debout ne relance presque rien : les demons Osmocom ne relisent PAS leur
-# configuration a chaud. On l a paye plusieurs fois - un osmo-stp realigne sur
-# le bon point code gardait l ancien en memoire, et `kill -HUP` n y change rien
+# ── LA 2G NATIVE RESTE DEBOUT ; LES CONTENEURS REPARTENT A NEUF ─────────────
+# [2026-08-31] Un clic = un banc NEUF, parce que les demons Osmocom ne
+# relisent PAS leur configuration a chaud : un osmo-stp realigne sur le bon
+# point code gardait l ancien en memoire, et `kill -HUP` n y change rien
 # (verifie : config a jour sur le disque, ASP toujours ASP_DOWN sur l ancienne
 # adresse). Le seul geste qui compte est l arret complet.
 #
-# On arrete le NATIF (il delegue a run.sh --stop, qui demonte proprement radio
-# et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
+# [2026-10-12] MAIS PAS LE NATIF, SAUF SI SA CONFIG A CHANGE. On arretait la
+# 2G native a chaque lancement du multi, pour la relancer aussitot : deux
+# minutes de demontage et de remontage, les abonnes detaches, le mobile a
+# refaire son attach - pour une pile qui n avait pas bouge. Desormais :
+#   - natif en marche et deja aligne  -> on le GARDE tel quel ;
+#   - natif a l arret                 -> lancer_natif_si_absent le LANCE ;
+#   - natif realigne (aligner_natif)  -> arret + relance, il n y a pas le choix ;
+#   - --restart-natif                 -> arret + relance, a la demande.
+#
+# Quand on l arrete, il delegue a run.sh --stop, qui demonte proprement radio
+# et coeur. Rien ici ne doit faire echouer le lancement : ce qui est deja
 # arrete l est tres bien, d ou les || true.
 # ── LE NATIF EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ────────────────────────
 # [2026-09-04] osmo-banc.service tient le natif (services/osmo-banc.service).
@@ -487,8 +508,7 @@ _banc_unit_present() {
     systemctl cat "$BANC_UNIT" >/dev/null 2>&1
 }
 
-tout_arreter() {
-    echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
+arreter_natif() {
     if _banc_unit_present; then
         # Le natif est relance juste apres par lancer_natif_si_absent : ici on
         # se contente d'arreter proprement (ExecStop = start-direct.sh --stop).
@@ -497,6 +517,22 @@ tout_arreter() {
     elif [ -x "$DIR/start-direct.sh" ]; then
         timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
+    fi
+}
+
+tout_arreter() {
+    if _est_natif osmo-bsc asterisk; then
+        if [ "$NATIF_REALIGNE" = 1 ]; then
+            echo -e "  ${CYAN}→${NC} natif realigne : arret de la pile native pour qu elle relise sa config"
+            arreter_natif
+        elif [ "$RESTART_NATIF" = 1 ]; then
+            echo -e "  ${CYAN}→${NC} --restart-natif : arret de la pile native"
+            arreter_natif
+        else
+            echo -e "  ${GREEN}✓${NC} operateur natif (2G) deja en marche : on le garde tel quel"
+        fi
+    else
+        echo -e "  ${CYAN}i${NC} operateur natif (2G) a l arret : il sera lance avant les conteneurs"
     fi
     # Les conteneurs ne sont PAS touches ici : start.sh fait deja
     # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.

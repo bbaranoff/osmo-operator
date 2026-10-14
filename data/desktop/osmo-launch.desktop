@@ -28,7 +28,7 @@ Actions=Service;Dashboard;Console;Vty;Grgsm;Stop;
 Name=Demarrer le banc en service
 Name[fr]=Demarrer le banc en service (sans terminal)
 
-Exec=/opt/GSM/osmo-operator/launch.sh --service
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Banc GSM 2G" --icon /usr/share/osmo-operator/icons/osmo-launch.svg -- /opt/GSM/osmo-operator/launch.sh --service-suivi
 
 [Desktop Action Dashboard]
 Name=Tableau de bord (127.0.0.1:8080)
@@ -45,8 +45,8 @@ Name[fr]=Console du banc (tmux attach)
 Exec=/opt/GSM/osmo-operator/launch.sh --console
 
 [Desktop Action Vty]
-Name=Console du mobile (telnet 4247)
-Name[fr]=Console du mobile (telnet 4247)
+Name=Console du mobile (VTY 4247, 4347 en DSP)
+Name[fr]=Console du mobile (VTY 4247, 4347 en DSP)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --vty
 

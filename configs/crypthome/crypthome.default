@@ -38,8 +38,9 @@ CRYPTHOME_MOUNT="/home"
 # DEUX SESSIONS, SELON LA REPONSE AU DEMARRAGE (unlock-home) :
 #   oui -> le compte ci-dessus, PERSISTANT : son home est sur le volume chiffre ;
 #   non -> ROOT, EPHEMERE : GDM s ouvre sur root pour ce demarrage, et tout ce
-#          que la session ecrit dans /root reste dans /tmp/crypthome-root (tmpfs,
-#          en RAM) - rien ne survit a l arret.
+#          que la session ecrit dans /root - et dans /opt/GSM, voir
+#          CRYPTHOME_RAM_DIRS - reste dans /tmp/crypthome-root (tmpfs, en RAM) :
+#          rien ne survit a l arret.
 CRYPTHOME_OWNER="__OWNER__"
 
 # Boot : nombre d'essais de phrase de passe, et delai (s) au bout duquel une
@@ -58,6 +59,14 @@ CRYPTHOME_TIMEOUT=60
 #            plus joli, a reserver a une machine ou l'on a VERIFIE que la
 #            frappe y est prise.
 CRYPTHOME_PROMPT="console"
+
+# Repertoires recouverts d un overlay en RAM pendant une session ROOT (/home
+# ferme), EN PLUS de /root qui l est toujours. Le banc entier vit dans /opt/GSM
+# (depot, configs, hlr.db, journaux) : en session root il est "live" - tout ce
+# qui s y ecrit s evapore a l arret, et le disque garde l etat d avant. Le
+# contenu reste lisible et executable ; seules les ecritures partent en RAM.
+# Separes par des espaces ; un repertoire absent est ignore. Vide = /root seul.
+CRYPTHOME_RAM_DIRS="/opt/GSM"
 
 # Repertoires de root qui ne doivent pas exister en clair sur le disque
 # systeme : init-crypthome.sh les remplace par des liens vers le disque

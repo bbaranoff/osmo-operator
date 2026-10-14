@@ -91,6 +91,18 @@ def ts_json():
     return "/tmp/timeslots.json"
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 CMD_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-topzone.cmd")
+# [2026-10-12] L ETAT DU BANC, ECRIT PAR osmo-panel.py ("1" : une 2G ou une 4G
+# tourne, "0" : rien). Banc a l arret, la banniere s efface et la zone ne porte
+# que le titre « Telecom Operator » ; au lancement de la 2G, le titre fond vers
+# la banniere (labgsm.html, osmoBanc). Fichier absent : au repos.
+ETAT_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-banc.etat")
+
+
+def banc_etat():
+    try:
+        return open(ETAT_FILE).read().strip() == "1"
+    except OSError:
+        return False
 
 
 def screen_geom():
@@ -145,8 +157,8 @@ class Strip(Gtk.Window):
         self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self.set_accept_focus(False)
         prov = Gtk.CssProvider()
-        prov.load_from_data(b".strip{background:rgba(19,16,24,.85);border-radius:8px}"
-                            b".strip button{color:#efe6d2;background:rgba(40,34,52,.9);"
+        prov.load_from_data(b".strip{background:rgba(19,16,24,0);border-radius:8px}"
+                            b".strip button{color:#efe6d2;background:rgba(40,34,52,.5);text-shadow:0 1px 2px rgba(0,0,0,.9);"
                             b"border:1px solid rgba(239,230,210,.25);border-radius:6px;"
                             b"margin:2px;padding:0 8px;font:11pt 'DejaVu Sans Mono'}"
                             b".strip button:hover{border-color:#ff9a3c}")
@@ -212,6 +224,8 @@ class TopZone(Gtk.Window):
         self.strip = Strip(self.on_close, self.on_toggle)
 
         self._cmd_mtime = None
+        self._etat_mtime = None
+        self._etat = False           # ce que la page montre : False = le titre
         self.show_all()
         self.move(x, y)
         # [2026-09-06] LE TEMPS REEL SE PERD AUSSI ICI. On poussait l etat une
@@ -227,6 +241,8 @@ class TopZone(Gtk.Window):
     def on_load(self, _view, event):
         if event != WebKit2.LoadEvent.FINISHED:
             return
+        # l etat du banc tel qu il est, SANS fondu (la page part « au repos »)
+        self._banc(banc_etat(), instant=True)
         # Un cheveu de marge sous le cadre, sinon la bordure du bas rase le
         # bord de la fenetre.
         self.view.run_javascript(
@@ -282,8 +298,32 @@ class TopZone(Gtk.Window):
         except Exception:
             pass
 
+    # ── titre « Telecom Operator » (repos) <-> banniere (banc debout) ──────────
+    def _banc(self, on, instant=False):
+        self._etat = on
+        try:
+            self.view.run_javascript("if(window.osmoBanc)osmoBanc(%s,%s);"
+                                     % ("true" if on else "false", "true" if instant else "false"),
+                                     None, None, None)
+        except Exception:
+            pass
+
+    def poll_etat(self):
+        try:
+            mt = os.stat(ETAT_FILE).st_mtime
+        except OSError:
+            mt = None
+        if mt == self._etat_mtime:
+            return
+        self._etat_mtime = mt
+        on = banc_etat()
+        if on != self._etat:
+            print("[topzone] %s" % ("un banc tourne : banniere" if on else "banc a l arret : titre"), flush=True)
+            self._banc(on)
+
     # ── hebergement : lire le canal osmo-launcher -> osmo-topzone ────────────
     def poll_cmd(self):
+        self.poll_etat()
         try:
             mt = os.stat(CMD_FILE).st_mtime
         except OSError:

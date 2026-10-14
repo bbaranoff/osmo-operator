@@ -354,7 +354,7 @@ OFD
 Type=Application
 Name=Telephone (postmarketOS)
 Comment=Le telephone du banc - Phosh, ModemManager, appels et SMS reels
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --root --title "Telephone (postmarketOS)" -- /usr/local/bin/osmo-pmos up
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Telephone (postmarketOS)" -- /usr/local/bin/osmo-pmos up
 Icon=phone
 Terminal=false
 Categories=Network;Telephony;
@@ -392,7 +392,7 @@ PMD
 Type=Application
 Name=postmarketOS - $pn (banc)
 Comment=Le telephone du banc, modem et voix branches tout seuls, en format $pn ($pr) - modem branche sur le banc GSM
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$pr /usr/local/bin/osmo-pmos-qemu
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$pr /usr/local/bin/osmo-pmos-qemu
 Icon=$([ "$pn" = tablette ] && echo video-display || echo phone)
 Terminal=false
 Categories=Network;Telephony;System;
@@ -401,11 +401,11 @@ Actions=Setup;SansModem;
 
 [Desktop Action Setup]
 Name=Rebrancher le modem et la voix (osmo-pmos-setup)
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Modem et voix du telephone" -- /usr/local/bin/osmo-pmos-setup
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "Modem et voix du telephone" -- /usr/local/bin/osmo-pmos-setup
 
 [Desktop Action SansModem]
 Name=Demarrer sans modem (VM nue)
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$pr OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "Telephone du banc (VM)" -- env OSMO_PMOS_RES=$pr OSMO_PMOS_MODEM=0 /usr/local/bin/osmo-pmos-qemu
 PMD
         chmod 644 "/usr/share/applications/osmo-pmos-$pn.desktop"
     done

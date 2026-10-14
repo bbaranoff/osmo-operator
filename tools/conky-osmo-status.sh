@@ -4,7 +4,22 @@
 # Chaque sortie est du texte conky (execpi) : ${color2} vert, ${color3} rouge,
 # ${color4} jaune. Rapide et sans dependance dure : ce qui manque s affiche "-".
 set -u
-OK='${color2}●${color}'; KO='${color3}○${color}'; WARN='${color4}●${color}'
+# [2026-10-12] LES GLYPHES EN DEJAVU SANS, LE TEXTE EN UBUNTU. Le Conky est
+# tout en Ubuntu (osmo-conky.conf), qui n a ni ● ○ ni ↓ ↑ ◀ ▶ ☺ : rendus en
+# carres. Chaque glyphe est donc enveloppe d un passage en DejaVu Sans (FS)
+# puis d un retour a la police par defaut (FU = ${font}, donc Ubuntu).
+# A LA MEME TAILLE (9) que la police par defaut, et ce n est pas un detail :
+# Conky calcule la hauteur de sa fenetre avec la police par defaut, mais
+# DESSINE chaque ligne a la hauteur de la plus haute police rencontree. Avec
+# DejaVu en 8 (ou 7, ou Mono), chaque ligne a pastilles se dessinait 6 px plus
+# bas que prevu : au bout de vingt lignes, le bas du Conky sortait de la
+# fenetre (teste : 21 px par ligne pour 15 calcules). En 9, memes metriques,
+# la fenetre tombe juste.
+FS="\${font ${OSMO_CONKY_FS:-DejaVu Sans:size=9}}"; FU='${font}'
+OK="${FS}\${color2}●\${color}${FU}"; KO="${FS}\${color3}○\${color}${FU}"; WARN="${FS}\${color4}●\${color}${FU}"
+# un smiley pour CHAQUE arret du banc (op1, op2, op3, hub, 4G) : il sourit en
+# vert quand l arret tourne, fait la tete en gris quand il est a l arret
+SMILE="${FS}\${color2}☺\${color}${FU}"; SAD="${FS}\${color5}☹\${color}${FU}"
 C1='${color1}'; C='${color}'; C2='${color2}'; AR='${alignr}'
 have() { command -v "$1" >/dev/null 2>&1; }
 # ── pgrep -x COMPARE AU NOM TRONQUE A 15 CARACTERES ─────────────────────────
@@ -149,7 +164,8 @@ role)
 net)
     ip -o -4 addr show up 2>/dev/null | awk '$2!="lo" && $2!~/^(veth|br-|docker|apn)/ {print $2, $4}' | sort -u | head -5 \
     | while read -r ifc addr; do
-        printf '%s ${alignr}${downspeedf %s} K/s ↓  ${upspeedf %s} K/s ↑\n%-8s ${color1}%s${color}\n' "$ifc" "$ifc" "$ifc" "" "$addr"
+        printf '${color6}%s${color} ${alignr}${color2}${downspeedf %s}${color} K/s %s  ${color4}${upspeedf %s}${color} K/s %s\n%-8s ${color1}%s${color}\n' \
+            "$ifc" "$ifc" "${FS}\${color2}↓\${color}${FU}" "$ifc" "${FS}\${color4}↑\${color}${FU}" "" "$addr"
       done
     # Cette section ne se replie JAMAIS (voir banc_debout) : quand le banc est a
     # l arret, c est elle qu on lit. Si le filtre ci-dessus n a rien laisse
@@ -284,14 +300,16 @@ vue)
                 lte)      nom="4G" ;;
                 *)        nom="op$idx" ;;
             esac
-            [ "$etat" = actif ] && p="$OK" || p="$KO"
+            # [2026-10-12] un smiley devant chaque arret : sourire vert s il
+            # tourne, mine grise sinon ; l arret choisi entre ◀ ▶
+            [ "$etat" = actif ] && p="$SMILE" || p="$SAD"
             if [ "$idx" = "$_cur" ]; then
-                sel="$sel \${color4}◀\${color}$p${C2}$nom${C}\${color4}▶\${color}"
+                sel="$sel ${FS}\${color4}◀\${color}${FU}$p${C2}$nom${C}${FS}\${color4}▶\${color}${FU}"
             else
-                sel="$sel $p$nom"
+                sel="$sel $p${C1}$nom${C}"
             fi
         done
-        echo "${sel# }${AR}\${color4}Ctrl+AltGr+◀▶\${color}"
+        echo "${sel# }${AR}\${color5}Ctrl+AltGr+${FS}\${color4}◀▶\${color}${FU}"
     fi
     # La vue.
     T='${font Ubuntu:bold:size=10}${color1}'; TF='${font}${color}'

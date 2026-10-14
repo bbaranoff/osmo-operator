@@ -1,0 +1,15 @@
+diff --git a/src/sap/common.rb b/src/sap/common.rb
+index 9054e9f..a1d3862 100644
+--- a/src/sap/common.rb
++++ b/src/sap/common.rb
+@@ -183,7 +183,9 @@ class SAP
+       rescue EOFError
+         $stderr.puts "device disconnected"
+         @io.close
+-        exit 0
++        # return, not exit: demo_server.rb serves the next client (the mobile
++        # reconnects after every baseband restart)
++        return
+       end
+       # parse the message from @buffer_in to @messages_in
+       parse_messages

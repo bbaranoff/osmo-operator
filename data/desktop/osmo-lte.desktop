@@ -8,18 +8,20 @@ Comment[fr]=Un clic demarre la 4G (coeur Open5GS, eNB, UE), un second l arrete -
 # l icone ne connait qu une commande, « osmo-lte toggle » (tools/osmo-lte.sh),
 # qui demande root par pkexec et repond en notification. Pas de terminal :
 # les Actions Etat et Journal en ouvrent un quand il faut lire.
-Exec=/usr/local/bin/osmo-lte toggle
+# [2026-10-12] Tout passe par la fenetre de progression du banc (osmo-gtk-run.py
+# --progress) : barre [n/4], etape, console repliee derriere un bouton. Zero shell.
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "4G du banc" --icon /usr/share/osmo-operator/icons/osmo-lte.svg -- /usr/local/bin/osmo-lte toggle
 Icon=/usr/share/osmo-operator/icons/osmo-lte.svg
 Terminal=false
 Categories=System;Network;
 Keywords=4g;lte;srsran;open5gs;epc;enb;ue;
 
-Actions=Start;StartGui;Stop;Status;Journal;
+Actions=Start;StartGui;Traces;Stop;Status;Journal;
 
 [Desktop Action Start]
 Name=Demarrer la 4G
 Name[fr]=Demarrer la 4G
-Exec=/usr/local/bin/osmo-lte up
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "4G du banc" --icon /usr/share/osmo-operator/icons/osmo-lte.svg -- /usr/local/bin/osmo-lte up
 
 # [2026-09-10] LE SECOND MODE : LA 4G AVEC SES TRACES. srsRAN est compile avec
 # srsGUI ; « osmo-lte start-gui » ajoute --gui.enable sur l eNB et l UE et leur
@@ -30,12 +32,19 @@ Exec=/usr/local/bin/osmo-lte up
 [Desktop Action StartGui]
 Name=Demarrer la 4G avec les traces (srsGUI)
 Name[fr]=Demarrer la 4G avec les traces (srsGUI)
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "4G du banc (srsGUI)" -- /usr/local/bin/osmo-lte start-gui
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "4G du banc (srsGUI)" -- /usr/local/bin/osmo-lte start-gui
+
+# [2026-10-12] Les traces SEULES : srsGUI vit dans srsenb/srsue (--gui.enable),
+# donc relancer la radio est inevitable - mais le coeur Open5GS, lui, reste.
+[Desktop Action Traces]
+Name=Traces srsGUI seules (relance eNB et UE, garde le coeur)
+Name[fr]=Traces srsGUI seules (relance eNB et UE, garde le coeur)
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "Traces srsGUI" -- /usr/local/bin/osmo-lte traces
 
 [Desktop Action Stop]
 Name=Arreter la 4G
 Name[fr]=Arreter la 4G
-Exec=/usr/local/bin/osmo-lte down
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --close-on-exit --title "Arret de la 4G" --icon /usr/share/osmo-operator/icons/osmo-lte.svg -- /usr/local/bin/osmo-lte down
 
 [Desktop Action Status]
 Name=Etat (osmo-lte status, osmo-epc status)

@@ -434,9 +434,13 @@ while osmo_display_vivant; do
     # la zone haute LAB GSM vivante (timeslots clignotants + accueil d appli)
     osmo_vivant -f "$REPO/tools/osmo-topzone.py" || \
         "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
-    # la barre de lancement categorisee du bas
-    osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
-        "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
+    # [2026-10-12] LA BARRE DU BAS N EST PLUS SUR LE BUREAU (choix du banc :
+    # « enleve les choix en bas »). Le 2G/4G se lancent par les icones et
+    # launch.sh ; OSMO_LAUNCHER=1 dans l environnement de session la remet.
+    if [ "${OSMO_LAUNCHER:-0}" = 1 ]; then
+        osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
+            "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
+    fi
     osmo_vivant -x conky || \
         conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
     sleep 5
@@ -475,8 +479,15 @@ CONKY
     # par le .deb, mais PAS dans l ISO : la cle live n avait qu une icone sur
     # neuf, et les huit autres n existaient meme pas dans le menu des
     # applications — donc le dock ne pouvait pas les afficher non plus.
+    # [2026-10-12] SAUF L ICONE multi-operator : elle n a de sens qu une fois
+    # les Supplements poses (docker, l image operateur, osmo-multi.conf), et
+    # c est addition.sh --multi qui la pose a ce moment-la. Copiee ici, elle
+    # etait au dock des le premier boot et son clic finissait en « il manque
+    # ... » (launch.sh --multi). Le dock la montre quand elle existe
+    # (favorite-apps la nomme deja, iso_modules/80-chroot.sh).
     for _d in "$DIR"/data/desktop/*.desktop; do
         [ -f "$_d" ] || continue
+        [ "$(basename "$_d")" = osmo-multi.desktop ] && continue
         install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
     done
 
@@ -595,7 +606,8 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="addition.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-exec python3 "$REPO/tools/osmo-gtk-run.py" --tty --root --title "osmo-operator - supplements" -- "$SCRIPT" "$@"
+# [2026-10-12] --progress : barre + etape, la console (VTE) repliee derriere « console »
+exec python3 "$REPO/tools/osmo-gtk-run.py" --progress --root --title "osmo-operator - supplements" -- "$SCRIPT" "$@"
 
 ADDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-addition-anim"
@@ -689,8 +701,15 @@ if [ "${ISO_DESKTOP:-0}" != "1" ]; then
         install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
         install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
     done
+    # [2026-10-12] SAUF L ICONE multi-operator : elle n a de sens qu une fois
+    # les Supplements poses (docker, l image operateur, osmo-multi.conf), et
+    # c est addition.sh --multi qui la pose a ce moment-la. Copiee ici, elle
+    # etait au dock des le premier boot et son clic finissait en « il manque
+    # ... » (launch.sh --multi). Le dock la montre quand elle existe
+    # (favorite-apps la nomme deja, iso_modules/80-chroot.sh).
     for _d in "$DIR"/data/desktop/*.desktop; do
         [ -f "$_d" ] || continue
+        [ "$(basename "$_d")" = osmo-multi.desktop ] && continue
         install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
     done
     echo -e "  ${GREEN}✓${NC} raccourcis du depot (data/desktop/) + icones poses, sans bureau"
@@ -719,7 +738,8 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="update.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "osmo-operator - update" -- "$SCRIPT" "$@"
+# [2026-10-12] --progress : barre + etape, la console (VTE) repliee derriere « console »
+exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "osmo-operator - update" -- "$SCRIPT" "$@"
 
 UPDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-update-anim"
@@ -761,7 +781,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # Le bureau interactif (banniere LAB GSM vivante + barre de lancement) et le
     # dino : fichiers locaux, souvent pas encore pousses - on les pose depuis CE
     # depot, comme les cinq ci-dessus. osmo-extras-install.sh sert au natif (80).
-    for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh \
+    for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh osmo-fond.py \
              osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh osmo-wireshark-root.sh \
              osmo-ofono-bridge.py osmo-phonesim-banc.py \
              osmo-ril-atmodem.py at-cmd.py; do
@@ -775,6 +795,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     done
     unset _tw
     install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
+    # [2026-10-12] la plaque du conky (Cairo), chargee par osmo-conky.conf
+    [ -f "$DIR/configs/conky/osmo-conky.lua" ] && install -m644 "$DIR/configs/conky/osmo-conky.lua" "$_rt/configs/conky/"
     # la banniere LAB GSM vivante et le html du dino (rendus par WebKit)
     for _h in labgsm.html dino.html; do
         [ -f "$DIR/configs/conky/$_h" ] && install -m644 "$DIR/configs/conky/$_h" "$_rt/configs/conky/"
@@ -791,6 +813,9 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # [2026-10-01] Le fond GNOME par defaut est configs/gsm-lab-fond.jpg (le
     # schema de 80-chroot.sh le nomme) ; l illustration ci-dessus reste pour
     # l encart, qui la montre entiere au milieu. Depuis CE depot, comme le reste.
+    # [2026-10-11] Les deux fichiers sont rendus ensemble par
+    # tools/paysage-render.py (meme scene : fond nu, encart avec les pylones),
+    # puis retouches a la main : le depot porte la version choisie sur le banc.
     if [ -f "$DIR/configs/gsm-lab-fond.jpg" ]; then
         install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$_rt/configs/gsm-lab-fond.jpg"
         install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-fond.jpg"

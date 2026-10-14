@@ -1,0 +1,14 @@
+--- a/src/host/layer23/src/mobile/gsm322.c
++++ b/src/host/layer23/src/mobile/gsm322.c
+@@ -1373,6 +1373,11 @@
+ 
+ 	memset(&plmn->plmn, 0, sizeof(plmn->plmn));
+ 
++	/* back to the switched-on state: PLMN_SEARCH_END is only handled in A0.
++	 * Left in A6 (SIM re-inserted without RPLMN, e.g. SAP reconnect) the
++	 * search ends unhandled and the MS stays in PLMN search forever. */
++	new_a_state(plmn, GSM322_A0_NULL);
++
+ 	/* initiate search at cell selection */
+ 	LOGP(DSUM, LOGL_INFO, "Search for network\n");
+ 	LOGP(DPLMN, LOGL_INFO, "Switch on, no RPLMN, start PLMN search "

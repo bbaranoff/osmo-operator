@@ -54,6 +54,15 @@ if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
 fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
+# [2026-10-14] SAP desactive par defaut : la SIM du mobile est la SIM de test.
+# --sap : la SIM est SERVIE au mobile (sim sap) par le serveur SAP de softSIM,
+# lance ici avant la pile. SAP_TYPE : pcsc = la carte du lecteur PC/SC (HID
+# Omnikey, sysmoISIM programmee par tools/osmo-sim.sh), sim = la SIM logicielle
+# sim-op1.xml (IMSI du MS#1, COMP128v1, Ki du HLR), auto = pcsc si une carte
+# est dans un lecteur, sinon sim. SAP_SOCK : le socket (celui de MS#1).
+: "${SAP_MODE:=0}"
+: "${SAP_TYPE:=auto}"
+: "${SAP_SOCK:=/tmp/osmocom_sap}"
 # 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
 # Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
 PROFILE_CHOISI=0
@@ -63,6 +72,10 @@ PROFILE_CHOISI=0
 WAN_MESH=0
 # --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
 WAN_IMPORT_FILES=()
+# --payload-ism : le TEXTE des SMS part par radio ISM, le reste (signalisation,
+# SS7, SIP) par IP comme --wan. PAYLOAD_ISM_LINK = backend si donne (--payload-ism=serial).
+PAYLOAD_ISM=0
+PAYLOAD_ISM_LINK=""
 GEN_CONF_OUT=""
 # --virtualbox : monte le segment et les VM avant le WAN. Refuse si l'on tourne
 # DANS une VM - c'est l'hote qui pilote VirtualBox (le script le verifie).
@@ -110,6 +123,15 @@ Usage : ./start-direct.sh [options] [mode]
                         que la pile.
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
+    --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
+                        /tmp/osmocom_sap, lance avant la pile ; le MS#1 passe en
+                        « sim sap ». Sert la carte du lecteur PC/SC (HID Omnikey,
+                        sysmoISIM : tools/osmo-sim.sh programmer) si une carte y
+                        est, sinon la SIM logicielle sim-op1.xml (IMSI du MS#1).
+    --sap=pcsc          SIM via SAP : la carte du lecteur, obligatoirement
+                        (--omnikey, --sim-reader : pareil)
+    --sap=sim           SIM via SAP : la SIM logicielle, meme avec une carte
+    --no-sap            pas de SIM via SAP (la SIM de test du mobile), par defaut
     --launcher <bin>    lanceur C de QEMU a utiliser (defaut : /usr/local/bin/qosmo).
                         Il remplace l'appel direct a qemu-system-arm : memes
                         defauts, sockets et pty publies (<RUN_DIR>/modem.pty),
@@ -144,6 +166,15 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-nodes "1:IP:IND ..."   meme chose sans question (scriptable)
     --wan-id N          numero du noeud local (sinon deduit des IP locales)
     --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
+    --payload-ism[=BACKEND]
+                        le TEXTE des SMS entre noeuds part par une liaison RADIO
+                        en bande ISM ; tout le reste (signalisation, SS7, SIP)
+                        reste sur IP, comme --wan (a combiner avec --wan). Le
+                        relais met un jeton dans le TCP et le texte sur la radio.
+                        BACKEND = serial|exec|fifo|loopback. Sans BACKEND, lit la
+                        section [payload] deja ecrite par network/setup-payload-ism.sh.
+                        Peripherique/commandes par l'env : ISM_SERIAL, ISM_TX,
+                        ISM_RX, ISM_TX_CMD, ISM_RX_CMD. Voir wiki/Payload-ISM.md.
     --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
     --menu              demande les choix au lieu de les deviner : profil,
                         noeud, operateur, inter-STP, WAN, regeneration des
@@ -222,6 +253,11 @@ while [ $# -gt 0 ]; do
         # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
+        --sap)         SAP_MODE=1; export SAP_MODE ;;
+        --sap=*)       SAP_MODE=1; SAP_TYPE="${1#*=}"; export SAP_MODE SAP_TYPE ;;
+        --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
+        --omnikey|--sim-reader) SAP_MODE=1; SAP_TYPE=pcsc; export SAP_MODE SAP_TYPE ;;
+        --no-sap)      SAP_MODE=0; export SAP_MODE ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
         --launcher=*)  QOSMO_LAUNCHER="${1#*=}"; export QOSMO_LAUNCHER ;;
         --wan=*)       WAN_MESH=1
@@ -232,6 +268,8 @@ while [ $# -gt 0 ]; do
         --wan-id=*)    WAN_MESH=1; WAN_NODE_ID="${1#*=}" ;;
         --wan-conf)    WAN_CONF_FILE="${2:-}"; shift ;;
         --wan-conf=*)  WAN_CONF_FILE="${1#*=}" ;;
+        --payload-ism)   PAYLOAD_ISM=1; export PAYLOAD_ISM ;;
+        --payload-ism=*) PAYLOAD_ISM=1; PAYLOAD_ISM_LINK="${1#*=}"; export PAYLOAD_ISM ;;
         --virtualbox)   WAN_MESH=1; VBOX_INTERCO=1 ;;
         --virtualbox=*) WAN_MESH=1; VBOX_INTERCO=1; VBOX_NODES="${1#*=}" ;;
         --vbox-node)    VBOX_HOST_NODE="${2:-1}"; shift ;;
@@ -412,32 +450,28 @@ else
     TTY=0
     C_OK=""; C_KO=""; C_SK=""; C_DIM=""; C_CYAN=""; C_BOLD=""; C_Z=""
 fi
-# ── TUER LES PYTHON DU BANC, PAS CEUX DU BUREAU ─────────────────────────────
+# ── TUER LES PYTHON DU BANC, ET SEULEMENT EUX ───────────────────────────────
 # [2026-09-04] Le demontage faisait `killall -9 python3` : TOUS les python3 de
-# la machine. Le pont, fake_trx et trxcon devaient partir - mais l encart vivant
-# du bureau (tools/osmo-fft-snap.py) est un python3 lui aussi, et il partait
-# avec. Deux consequences a l ecran, qu on n allait evidemment pas chercher dans
-# un teardown radio :
-#   - l encart DISPARAISSAIT au lieu de revenir au strip Calvin & Hobbes : son
-#     unite a RuntimeDirectory=osmo-fft, que systemd EFFACE a chaque relance -
-#     donc plus de panel.png, donc un trou dans le fond d ecran ;
-#   - Restart=always + un arret par run relance l unite en boucle, jusqu a la
-#     limite de demarrages, apres quoi l encart ne revient plus du tout.
-# Le bureau n appartient pas au banc : ses python3 survivent au demontage.
-# CALYPSO_KILL_PYTHON_BUREAU=1 revient a l ancien comportement (tout tuer).
-# [2026-09-07] pmbootstrap aussi : c est un python3, et un build de noyau
-# postmarketOS de 30 minutes (~nirvana/build-pm.sh) mourait « Killed » des
-# qu on relancait le banc a cote. Il n a rien a voir avec la radio.
-PY_BUREAU='osmo-fft-snap\.py|osmo-panel\.py|wallpaper-render\.py|pmbootstrap'
+# la machine, encart du bureau compris. On a d abord EPARGNE une liste de
+# python du bureau (osmo-fft-snap, osmo-panel...) - liste toujours en retard
+# d un outil : le 2026-10-12, le fondu du fond d ecran (tools/osmo-fond.py), la
+# zone haute et la sonde des timeslots mouraient encore a chaque --stop.
+# [2026-10-12] ON INVERSE : plus de killall, plus de liste d epargnes. On ne
+# tue que les python3 DU BANC, nommes un par un par leur ligne de commande :
+#   - fake_trx.py et le reste du trx_toolkit d osmocom-bb (radio virtuelle) ;
+#   - pont/pont.py (le pont TRX-UDP) et pont/airmesh.py ;
+#   - le relais SMS inter-operateurs (scripts/smsc-start.sh) ;
+#   - tools/osmo-ril-atmodem.py (le modem AT du telephone).
+# Tout autre python3 (bureau, pmbootstrap, un build a cote) n est pas concerne.
+# CALYPSO_PY_BANC_EXTRA='motif|motif' ajoute des motifs (regex ERE) sans
+# toucher au script.
+PY_BANC='fake_trx\.py|trx_toolkit/|pont/pont\.py|pont/airmesh\.py|sms-interop|osmo-ril-atmodem\.py'
+[ -n "${CALYPSO_PY_BANC_EXTRA:-}" ] && PY_BANC="$PY_BANC|$CALYPSO_PY_BANC_EXTRA"
 killall_python() {
     local sig="${1:--TERM}" pid tue=0
-    if [ "${CALYPSO_KILL_PYTHON_BUREAU:-0}" = "1" ]; then
-        killall "$sig" python3 2>/dev/null && return 0
-        return 1
-    fi
     for pid in $(pgrep -x python3 2>/dev/null); do
         [ "$pid" = "$$" ] && continue
-        tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq "$PY_BUREAU" && continue
+        tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq "$PY_BANC" || continue
         kill "$sig" "$pid" 2>/dev/null && tue=1
     done
     [ "$tue" = 1 ]
@@ -902,6 +936,31 @@ export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
 # FIXE (`pactl list short sink-inputs`, deux releves a 1 s d intervalle).
 export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-320}"
 export LOG_DIR RUN_DIR
+# --- 2c. firmware ARM : FIRMWARE_SRC ----------------------------------------
+# Les deux lanceurs (qosmo/run.sh via bench.env, c54x_exe/run.sh) lisent
+# FIRMWARE_ELF / FIRMWARE_BIN dans l environnement. FIRMWARE_SRC est le nom
+# que les scripts de packaging emploient (build-debs.sh, 71-debs-banc.sh) ;
+# on l accepte ici aussi pour qu un appel
+#     FIRMWARE_SRC=/chemin/layer1.xxx.elf ./start-direct.sh
+# charge ce firmware-la dans QEMU. Un fichier = l ELF lui-meme ; un dossier =
+# l arborescence firmware/ (FIRMWARE_DIR, board/<carte>/ en dessous).
+# FIRMWARE_ELF explicite garde la main.
+if [ -n "${FIRMWARE_SRC:-}" ]; then
+    if [ -f "$FIRMWARE_SRC" ]; then
+        : "${FIRMWARE_ELF:=$FIRMWARE_SRC}"
+    elif [ -d "$FIRMWARE_SRC" ]; then
+        : "${FIRMWARE_DIR:=$FIRMWARE_SRC}"
+        export FIRMWARE_DIR
+    else
+        printf '  %sFIRMWARE_SRC introuvable : %s%s\n' "$C_SK" "$FIRMWARE_SRC" "$C_Z" >&2
+    fi
+fi
+if [ -n "${FIRMWARE_ELF:-}" ]; then
+    # Le .bin a cote de l ELF s il existe (qosmo --bin, c54x_exe) ; sinon on
+    # laisse les lanceurs appliquer leur propre defaut.
+    [ -n "${FIRMWARE_BIN:-}" ] || [ ! -r "${FIRMWARE_ELF%.elf}.bin" ] || FIRMWARE_BIN="${FIRMWARE_ELF%.elf}.bin"
+    export FIRMWARE_ELF FIRMWARE_BIN
+fi
 # --- 3. validation des chemins critiques --------------------------------------
 say_begin "Validation des chemins"
 path_ok=1
@@ -946,6 +1005,11 @@ for t in \
 do
     if [ -f "$t" ]; then MS_TEMPLATE="$t"; break; fi
 done
+# La SIM du MS : « sap » pour le MS#1 quand --sap est demande (son socket est
+# celui du serveur SAP, SAP_SOCK), « test » (la SIM de test du gabarit) sinon.
+ms_sim_mode() {
+    if [ "${SAP_MODE:-0}" = 1 ] && [ "$1" = "${SAP_SOCK:-/tmp/osmocom_sap}" ]; then echo sap; else echo test; fi
+}
 generate_mobile_cfg() {
     local dest="$1" vty_port="$2" l2sock="$3" sapsock="$4" arfcn="$5" imsi="$6" ki="$7"
     # [2026-08-08] Peripheriques ALSA PAR MOBILE. Le template porte
@@ -965,10 +1029,14 @@ generate_mobile_cfg() {
         tpl=""
     fi
     if [ -n "$tpl" ]; then
+        # le gabarit porte « sim sap » : seul le MS#1 de --sap le garde
+        # (delimiteur # : le | de s|..| casserait l alternance \| de sed)
+        local _sim_sed=(-e "s#^\([[:space:]]*\)sim \(sap\|test\|reader\)\$#\1sim $(ms_sim_mode "$sapsock")#")
         sed \
             -e "s|bind 127.0.0.1 424[0-9]|bind 127.0.0.1 ${vty_port}|" \
             -e "s|layer2-socket /tmp/osmocom_l2[_0-9]*|layer2-socket ${l2sock}|" \
             -e "s|sap-socket /tmp/osmocom_sap[_0-9]*|sap-socket ${sapsock}|" \
+            "${_sim_sed[@]}" \
             -e "s|stick [0-9]*|stick ${arfcn}|" \
             -e "s|^\([[:space:]]*\)imsi .*|\1imsi ${imsi}|" \
             -e "s|^\([[:space:]]*\)imei .*|\1imei $(rand_imei) 0|" \
@@ -994,7 +1062,7 @@ line vty
 ms 1
  layer2-socket ${l2sock}
  sap-socket ${sapsock}
- sim reader
+ sim $(ms_sim_mode "$sapsock")
  imsi ${imsi}
  ki comp128 ${ki}
  network-selection-mode auto
@@ -1198,7 +1266,7 @@ MS1_CFG="${MOBILE_CFG_MS1_PATH:-$BB_DIR/mobile.cfg}"
 generate_mobile_cfg "$MS1_CFG" \
     4247 \
     /tmp/osmocom_l2 \
-    /tmp/osmocom_sap_1 \
+    "${SAP_SOCK:-/tmp/osmocom_sap}" \
     "$MS_ARFCN1" \
     "$(ms_imsi 1)" \
     "$(ms_ki 1)"
@@ -1223,7 +1291,7 @@ if [ "$MS1_GROUP_CFG" != "$MS1_CFG" ]; then
     generate_mobile_cfg "$MS1_GROUP_CFG" \
         4247 \
         /tmp/osmocom_l2 \
-        /tmp/osmocom_sap_1 \
+        "${SAP_SOCK:-/tmp/osmocom_sap}" \
         "$MS_ARFCN1" \
         "$(ms_imsi 1)" \
         "$(ms_ki 1)"
@@ -1345,7 +1413,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # module de run.sh, ou il tuerait le filtre d'horodatage du run en cours.
         # CALYPSO_NO_KILLALL=1 pour s'en passer.
         if [ "${CALYPSO_NO_KILLALL:-0}" != "1" ]; then
-            printf '  %spont TRX%s : python3 du banc termines (emporte aussi fake_trx / sms-interop-relay ; l encart du bureau est epargne)\n' "${C_DIM:-}" "${C_Z:-}"
+            printf '  %spont TRX%s : python3 du banc termines (fake_trx, pont, airmesh, relais SMS, modem AT)\n' "${C_DIM:-}" "${C_Z:-}"
             killall_python -9 || true
         fi
         sleep 1
@@ -1474,6 +1542,8 @@ else
     printf '  %snoeud%s      %s\n' "$C_DIM" "$C_Z" "aucun - identite SS7 inchangee"
 fi
 printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
+[ -z "${FIRMWARE_ELF:-}" ] || printf '  %sfirmware%s   %s%s\n' "$C_DIM" "$C_Z" "$FIRMWARE_ELF" \
+    "${FIRMWARE_SRC:+ (FIRMWARE_SRC)}"
 # [2026-09-22] EN --dsp, MS#1 N'EST PAS LE FICHIER GENERE.
 # Le module `l2` du fork est retire du plan : /root/.osmocom/bb/mobile.cfg
 # n'est ouvert par personne, et le mobile qui tourne est celui du banc DSP
@@ -1488,6 +1558,20 @@ if [ "$DSP_BANC" = 1 ]; then
         "$C_DIM" "$MS1_CFG" "$C_Z"
 else
     printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY 4247\n' "$C_DIM" "$C_Z" "$MS1_CFG" "$(ms_imsi 1)" "$MS_ARFCN1"
+fi
+# [2026-10-12] LE PORT VTY DU MOBILE EST PUBLIE, PAS DEVINE. En --dsp le
+# mobile ecoute sur 4347 (mobile_pont.cfg), sinon sur 4247 - et tout ce qui
+# ouvre « la console du mobile » (launch.sh --vty, l encart osmo-panel.py, le
+# tableau de bord osmo-egprs-web pour le Kc et la VTY bb1) tapait 4247 en
+# dur : en DSP, connexion refusee. Le port est ecrit dans
+# /run/osmo-banc/ms1-vty (lu par les outils de session) et pousse dans
+# l environnement de systemd (OSMO_BB1_VTY_PORT, lu par server.js au
+# redemarrage du tableau de bord, plus bas). Efface a l arret.
+MS1_VTY_PORT="${_ms1_vty:-4247}"
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
+    mkdir -p /run/osmo-banc 2>/dev/null && chmod 755 /run/osmo-banc 2>/dev/null
+    printf '%s\n' "$MS1_VTY_PORT" > /run/osmo-banc/ms1-vty 2>/dev/null && chmod 644 /run/osmo-banc/ms1-vty 2>/dev/null
+    command -v systemctl >/dev/null 2>&1 && systemctl set-environment "OSMO_BB1_VTY_PORT=$MS1_VTY_PORT" 2>/dev/null || true
 fi
 printf '  %sMS#2%s       %s  IMSI %s  ARFCN %s  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)" "$MS_ARFCN2"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
@@ -1573,9 +1657,14 @@ case "$ACTION" in
         say_end " KO " "$C_KO" "Fiche du noeud" "ecriture impossible : $_gc_out"; exit 1
         ;;
     stop)
+        rm -f /run/osmo-banc/ms1-vty 2>/dev/null
+        command -v systemctl >/dev/null 2>&1 && systemctl unset-environment OSMO_BB1_VTY_PORT 2>/dev/null || true
         say_begin "Arret de la pile via run.sh"
         banc_dsp_arreter          # QEMU, osmocon, mobile, pont : a lui
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
+        # les serveurs SAP de softSIM (--sap) et leur socket
+        for _p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do kill -TERM "$_p" 2>/dev/null || true; done
+        rm -f "${SAP_SOCK:-/tmp/osmocom_sap}" 2>/dev/null; unset _p
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         purge_sessions_tmux
         # ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ──────────────────────
@@ -1599,11 +1688,11 @@ case "$ACTION" in
         # faire echouer le run suivant sur « port UDP 5720 deja pris ».
         # run.sh le fait deja de son cote ; le repeter ne coute rien et couvre le
         # cas ou RUN_SH est introuvable ou sort en erreur.
-        # PORTEE : tous les python3 SAUF ceux du bureau (voir killall_python).
+        # PORTEE : les python3 DU BANC seulement (voir killall_python).
         # CALYPSO_STOP_KILL_PYTHON=0 le desactive.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
             if killall_python -9; then
-                say_end " OK " "$C_OK" "python3 restants termines (hors encart du bureau)"
+                say_end " OK " "$C_OK" "python3 du banc termines"
             fi
         fi
         exit 0
@@ -1623,7 +1712,7 @@ case "$ACTION" in
         if [ "$DSP_BANC" = 1 ]; then
             printf '  %sbanc DSP%s   %s\n' "$C_DIM" "$C_Z" "$BANC_DSP"
             for f in "$(dirname "$BANC_DSP")/c54x_exe" "$GSM_ROOT/qosmo/build/qemu-system-arm" \
-                     "$GSM_ROOT/firmware/board/compal_e88/layer1.highram.elf" \
+                     "${FIRMWARE_ELF:-$GSM_ROOT/firmware/board/compal_e88/layer1.highram.elf}" \
                      "$GSM_ROOT/osmocom-bb/src/host/osmocon/osmocon" \
                      "$HERE/pont/pont_dsp.py"; do
                 [ -e "$f" ] && printf '   OK   %s\n' "$f" || printf '   KO   %s (absent)\n' "$f"
@@ -1880,10 +1969,10 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
         declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
         # Meme filet qu'au --stop : un python3 orphelin (pont, fake_trx, trxcon)
         # garde son port et fait echouer le demarrage suivant sur « port UDP
-        # 5720 deja pris ». PORTEE : tous les python3 sauf ceux du bureau.
+        # 5720 deja pris ». PORTEE : les python3 du banc seulement.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
             killall_python -TERM && \
-                say_end " OK " "$C_OK" "python3 restants termines (hors encart du bureau)"
+                say_end " OK " "$C_OK" "python3 du banc termines"
         fi
     fi
 
@@ -2070,6 +2159,48 @@ if [ -r "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" ] && [ "$WAN_MESH" -eq 0 ]; then
         WAN_MESH=1
         printf '  %sWAN%s        table figee dans %s (WAN_AUTO=1)\n' \
             "$C_DIM" "$C_Z" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
+    fi
+fi
+
+# ── PAYLOAD ISM : le texte des SMS par radio, le reste par IP ─────────────────
+# [2026-10-14] N'intervient qu'au demarrage. Ecrit (si un backend est donne) la
+# section [payload] des sms-routing.conf via network/setup-payload-ism.sh, puis
+# exporte PAYLOAD_ISM : le relais SMS (scripts/sms-interop-relay.py) met alors un
+# jeton dans le TCP inter-noeud et fait voyager le texte sur la radio ISM. Sans
+# backend, on reutilise la section deja ecrite par setup-payload-ism.sh.
+if [ "${PAYLOAD_ISM:-0}" -eq 1 ] && [ "$ACTION" = "start" ]; then
+    PISM_SH="$HERE/network/setup-payload-ism.sh"
+    export PAYLOAD_ISM=1
+    if [ "$DRY" -eq 1 ]; then
+        say_begin "Payload ISM"
+        if [ -n "$PAYLOAD_ISM_LINK" ]; then
+            printf '  [dry-run] %s --%s%s\n' "$PISM_SH" "$PAYLOAD_ISM_LINK" \
+                "$([ "$PAYLOAD_ISM_LINK" = serial ] && echo " ${ISM_SERIAL:-/dev/ttyUSB0}")"
+        else
+            printf '  [dry-run] section [payload] deja en place (sms-routing.conf)\n'
+        fi
+        say_end " -- " "$C_DIM" "Payload ISM" "dry-run"
+    elif [ -n "$PAYLOAD_ISM_LINK" ]; then
+        say_begin "Payload ISM ($PAYLOAD_ISM_LINK)"
+        pism_args=("--$PAYLOAD_ISM_LINK")
+        case "$PAYLOAD_ISM_LINK" in
+            serial) pism_args=(--serial "${ISM_SERIAL:-/dev/ttyUSB0}" --baud "${ISM_SERIAL_BAUD:-9600}") ;;
+            fifo)   pism_args=(--fifo --tx "${ISM_TX:-/tmp/osmo_ism_tx}" --rx "${ISM_RX:-/tmp/osmo_ism_rx}") ;;
+            exec)   pism_args=(--exec ${ISM_TX_CMD:+--tx-cmd "$ISM_TX_CMD"} ${ISM_RX_CMD:+--rx-cmd "$ISM_RX_CMD"}) ;;
+        esac
+        if [ -r "$PISM_SH" ] && bash "$PISM_SH" "${pism_args[@]}" \
+                > "${LOG_DIR:-/tmp}/payload-ism.log" 2>&1; then
+            say_end " OK " "$C_OK" "Payload ISM" "texte des SMS par radio ($PAYLOAD_ISM_LINK), signalisation par IP"
+        else
+            say_end " KO " "$C_KO" "Payload ISM" "voir ${LOG_DIR:-/tmp}/payload-ism.log ; le relais retombera sur IP"
+        fi
+    else
+        say_begin "Payload ISM"
+        if grep -rqs '^\[payload\]' /etc/osmocom/sms-routing.conf 2>/dev/null; then
+            say_end " OK " "$C_OK" "Payload ISM" "section [payload] en place (sms-routing.conf)"
+        else
+            say_end " -- " "$C_DIM" "Payload ISM" "aucune section [payload] : lance d'abord $PISM_SH --serial|--exec|..."
+        fi
     fi
 fi
 
@@ -2315,6 +2446,16 @@ PCAPWRAP
 # 27/08. Le killall couvre les processus Python que le registre ne connait pas.
 #
 # CALYPSO_NO_AUTOSTOP=1 desactive ce comportement.
+# SAP : arrete les serveurs lances par start_sap (processus demo_server.rb de
+# softSIM) et supprime le socket SAP. Le motif [d] evite de se trouver soi-meme.
+kill_softsim() {
+    local p sock="${SAP_SOCK:-/tmp/osmocom_sap}"
+    for p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do
+        kill -TERM "$p" 2>/dev/null || true
+    done
+    rm -f "$sock" 2>/dev/null || true
+}
+
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
     banc_dsp_arreter >/dev/null 2>&1 || true
@@ -2322,6 +2463,10 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
         killall_python -TERM || true
+    fi
+    # SAP : les serveurs softSIM (demo_server.rb) et leur socket. CALYPSO_STOP_KILL_SOFTSIM=0 le desactive.
+    if [ "${CALYPSO_STOP_KILL_SOFTSIM:-1}" != 0 ]; then
+        kill_softsim || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi
@@ -2537,6 +2682,122 @@ fi
 #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie : pas de
 #                            SB, pas de BCCH, pas de SI
 # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
+
+# ── SAP : LA SIM SERVIE AU MOBILE SUR LE SOCKET SAP (--sap) ─────────────────
+# Serveur demo_server.rb du depot softSIM (/opt/GSM/softsim, shim Ruby 3.2+ :
+# File.exists?, Fixnum), lance AVANT la pile : le mobile (sim sap) s y connecte
+# au demarrage et y reste (patch 0002 : le serveur sert le client suivant apres
+# une deconnexion, donc un redemarrage de la baseband ne demande rien).
+#   type pcsc : la carte du lecteur PC/SC (HID Omnikey 6121, sysmoISIM-SJA5 ;
+#               gem smartcard). La carte doit porter l IMSI/Ki du MS#1 (ou son
+#               abonne doit etre dans le HLR) : tools/osmo-sim.sh verifier.
+#   type sim  : la SIM logicielle sim-op1.xml, regeneree a chaque lancement
+#               (IMSI du MS#1 ; COMP128v1 avec SOFTSIM_KI = Ki du MS#1, patch 0001).
+# En DSP, le MS#1 qui tourne est celui de c54x_exe (mobile_pont.cfg, sim test) :
+# on en derive $BB_DIR/mobile_pont_sap.cfg (sim sap, sap-socket) et le banc le
+# recoit par MOBILE_CFG (SAP_DSP_MOBILE_CFG, a lui seul). Variables :
+# SOFTSIM_DIR, SAP_SOCK, SAP_TYPE, SAP_FILE, SAP_LOG, SAP_VERBOSITY, SOFTSIM_KI.
+# le python qui a pyscard : celui du venv pySim (le PATH de root commence par
+# /root/.env, le venv du pont, sans pyscard), sinon celui du systeme
+sap_python() {
+    local p="${PYSIM_VENV:-/opt/GSM/pysim-venv}/bin/python3"
+    [ -x "$p" ] || p=/usr/bin/python3
+    printf '%s' "$p"
+}
+sap_carte_presente() {
+    "$(sap_python)" - <<'PYSC' 2>/dev/null
+import sys
+try:
+    from smartcard.System import readers
+except Exception:
+    sys.exit(2)
+for r in readers():
+    try:
+        c = r.createConnection(); c.connect(); c.disconnect(); sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)
+PYSC
+}
+sap_lecteur() {
+    "$(sap_python)" -c 'from smartcard.System import readers; print(str(readers()[0]))' 2>/dev/null | sed "s/ \[.*//"
+}
+SAP_DSP_MOBILE_CFG=""
+start_sap() {
+    [ "${SAP_MODE:-0}" = 1 ] || return 0
+    local sdir="${SOFTSIM_DIR:-/opt/GSM/softsim}" sock="${SAP_SOCK:-/tmp/osmocom_sap}"
+    local log="${SAP_LOG:-/tmp/osmo-sap.log}" type="${SAP_TYPE:-auto}" file="" detail=""
+    local shim=/usr/local/share/softsim/ruby_compat.rb
+    [ -f "$shim" ] || shim="$HERE/tools/softsim/ruby_compat.rb"
+    say_begin "SIM via SAP"
+    if [ ! -f "$sdir/src/demo_server.rb" ] || ! command -v ruby >/dev/null 2>&1; then
+        say_end " KO " "$C_KO" "SIM via SAP" "softSIM ou ruby absent ($sdir) : sudo $HERE/tools/osmo-sim-install.sh"
+        return 1
+    fi
+    if [ "$type" = auto ]; then
+        if sap_carte_presente; then type=pcsc; else type=sim; fi
+    fi
+    case "$type" in
+        pcsc)
+            if ! sap_carte_presente; then
+                say_end " KO " "$C_KO" "SIM via SAP" "aucune carte dans un lecteur PC/SC (pcscd actif ? Omnikey branche ? tools/osmo-sim.sh lecteur)"
+                return 1
+            fi
+            if ! ruby -e 'require "smartcard"' >/dev/null 2>&1; then
+                say_end " KO " "$C_KO" "SIM via SAP" "gem smartcard absent : sudo $HERE/tools/osmo-sim-install.sh"
+                return 1
+            fi
+            detail="carte du lecteur $(sap_lecteur)" ;;
+        sim)
+            file="${SAP_FILE:-$sdir/src/sim-op1.xml}"
+            # le Ki du MS#1, celui que 21-abonnes-hlr met dans le HLR (COMP128v1)
+            export SOFTSIM_KI="${SOFTSIM_KI:-$(ms_ki 1 | tr -d ' ')}"
+            detail="SIM logicielle $file (IMSI $(ms_imsi 1))" ;;
+        *)
+            say_end " KO " "$C_KO" "SIM via SAP" "SAP_TYPE=$type inconnu (pcsc, sim, auto)"
+            return 1 ;;
+    esac
+    # En DSP : la copie de mobile_pont.cfg en « sim sap », pour le banc seul.
+    if [ "${DSP_BANC:-0}" = 1 ]; then
+        local _src="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}" _dst="$BB_DIR/mobile_pont_sap.cfg"
+        if [ -r "$_src" ]; then
+            sed -e "s#^\([[:space:]]*\)sim \(test\|reader\)\$#\1sim sap#" \
+                -e "s|^\([[:space:]]*\)sap-socket .*|\1sap-socket $sock|" "$_src" > "$_dst.tmp" \
+                && mv -f "$_dst.tmp" "$_dst"
+            grep -q "^[[:space:]]*sap-socket " "$_dst" \
+                || sed -i "s|^\([[:space:]]*\)layer2-socket .*|&\n\1sap-socket $sock|" "$_dst"
+            SAP_DSP_MOBILE_CFG="$_dst"
+            detail="$detail ; MS#1 $_dst"
+        else
+            say_end " KO " "$C_KO" "SIM via SAP" "config du MS#1 du banc DSP illisible : $_src"
+            return 1
+        fi
+    fi
+    if [ $DRY -eq 1 ]; then
+        say_end " -- " "$C_DIM" "SIM via SAP" "dry-run : type $type, ruby -r$shim demo_server.rb --unix $sock${file:+ --file $file} ($detail)"
+        return 0
+    fi
+    # sim-op1.xml est regenere a chaque lancement : le serveur le reecrit a chaque
+    # deconnexion du client, et un fichier ancien garderait l ICCID / le PLMN d avant.
+    if [ "$type" = sim ] && [ -z "${SAP_FILE:-}" ] && [ -f "$sdir/src/sim.xml" ] && [ -f "$HERE/tools/softsim/make_sim_op1.py" ]; then
+        python3 "$HERE/tools/softsim/make_sim_op1.py" "$sdir/src/sim.xml" "$sdir/src/sim-op1.xml" \
+            --imsi "$(ms_imsi 1)" >/dev/null 2>&1 || true
+        [ -f "$file" ] || file="$sdir/src/sim.xml"
+    fi
+    rm -f "$sock"
+    local args=(--type "$type" --socket unix --unix "$sock" --verbosity "${SAP_VERBOSITY:-3}")
+    [ "$type" = sim ] && args+=(--file "$file")
+    ( cd "$sdir/src" && nohup ruby -r"$shim" demo_server.rb "${args[@]}" >"$log" 2>&1 & )
+    for _ in $(seq 1 50); do [ -S "$sock" ] && break; sleep 0.2; done
+    if [ -S "$sock" ]; then
+        say_end " OK " "$C_OK" "SIM via SAP" "type $type : $detail ; socket $sock, journal $log"
+    else
+        say_end " KO " "$C_KO" "SIM via SAP" "pas de socket $sock : voir $log"
+        return 1
+    fi
+}
+start_sap || { echo "SAP demande (--sap) mais non lance" >&2; exit 1; }
+
 if [ "$DSP_BANC" = 1 ]; then
     # ── LE FORK MONTE TOUT, MOINS LA CHAINE CALYPSO ────────────────────────
     # [2026-09-22] Deux versions ratees avant celle-ci, toutes deux pour la
@@ -2597,7 +2858,8 @@ if [ "$DSP_BANC" = 1 ]; then
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
     # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
     # deja exporte juste au-dessus, il ecrase celui du profil.
-    exec bash "$BANC_DSP"
+    # [2026-10-14] --sap : la copie « sim sap » de mobile_pont.cfg, au banc seul.
+    exec env ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
 fi
 
 [ $DRY -eq 1 ] || audio_start

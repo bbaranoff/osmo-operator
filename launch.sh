@@ -98,7 +98,7 @@ verrou_liberer() { exec 9>&- 2>/dev/null || true; }
 # demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
 # l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
 # « c est parti » sans suite.
-case "${1:-}" in --service|--stop|--dashboard|--console|--vty|--multi|--multi-stop) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
+case "${1:-}" in --service|--service-suivi|--stop|--dashboard|--console|--vty|--multi|--multi-suivi|--multi-stop) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
 if [ "$_bloc_direct" = "1" ]; then
     # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
     # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
@@ -170,6 +170,19 @@ if [ "$_bloc_direct" = "1" ]; then
     # nomme ce qui manque, et on annonce le resultat par notification - comme
     # « Demarrer le banc en service » juste au-dessus.
     _svcm="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
+    # ── LE LANCEMENT SUIVI : L ACTION, ET LE JOURNAL DE L UNITE QUI DEFILE ──
+    # [2026-10-12] Ce que la fenetre de lancement du bureau (osmo-gtk-run.py
+    # --progress) execute : « systemctl start » ne montre rien, le banc ecrit
+    # dans le journal de son unite. On le suit en parallele, et la fenetre y
+    # lit les reperes « [n/10] » de run.sh pour sa barre. Le verrou, les
+    # notifications, le code de retour : ceux de --service / --multi.
+    if [ "$_action" = "--service-suivi" ] || [ "$_action" = "--multi-suivi" ]; then
+        if [ "$_action" = "--service-suivi" ]; then _u="$_svc"; _sub=--service; else _u="$_svcm"; _sub=--multi; fi
+        journalctl -u "$_u" -f -n 0 -o cat 2>/dev/null & _j=$!
+        "$0" "$_sub" "$@"; _rc=$?
+        sleep 1; kill "$_j" 2>/dev/null; wait "$_j" 2>/dev/null
+        exit "$_rc"
+    fi
     if [ "$_action" = "--multi-stop" ]; then
         _note "Arret du multi-operateur..."
         _arret_multi
@@ -237,7 +250,14 @@ if [ "$_bloc_direct" = "1" ]; then
     # ligne a ligne. Le `read` final garde la fenetre le temps de lire l erreur
     # quand le port est ferme.
     if [ "$_action" = "--vty" ]; then
-        _p="${OSMO_MS_VTY_PORT:-4247}"
+        # [2026-10-12] 4247, ou 4347 en --dsp : start-direct.sh publie le port
+        # reel dans /run/osmo-banc/ms1-vty ; sans le fichier, on regarde qui
+        # ecoute (4347 d abord, puis 4247).
+        _p="${OSMO_MS_VTY_PORT:-}"
+        [ -z "$_p" ] && [ -r /run/osmo-banc/ms1-vty ] && _p="$(tr -dc 0-9 < /run/osmo-banc/ms1-vty)"
+        if [ -z "$_p" ]; then
+            if ss -ltnH "( sport = :4347 )" 2>/dev/null | grep -q .; then _p=4347; else _p=4247; fi
+        fi
         # [2026-10-01] Dans une fenetre GTK du banc (terminal VTE dedans), plus
         # dans un gnome-terminal : aucun favori n ouvre de terminal.
         _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; }"
@@ -354,6 +374,19 @@ if { [ ! -t 0 ] || [ ! -t 1 ]; } \
    && [ "${OSMO_LAUNCH_NO_SERVICE:-0}" != "1" ] \
    && systemctl cat "${OSMO_BANC_SERVICE:-osmo-banc.service}" >/dev/null 2>&1; then
     if lancement_possible; then
+        # [2026-10-12] AVEC UNE FENETRE, SANS SHELL : depuis le bureau, le
+        # lancement s affiche dans la fenetre de progression du banc
+        # (tools/osmo-gtk-run.py --progress : barre, etape, console repliee).
+        # OSMO_LAUNCH_GTK=0 revient aux seules notifications.
+        _gtk="$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py"
+        if [ "${OSMO_LAUNCH_GTK:-1}" != 0 ] && [ -n "${DISPLAY:-}" ] && [ -x "$_gtk" ]; then
+            # le verrou est rendu ICI : c est le --service lance dans la
+            # fenetre (en root) qui le reprend ; garde par la fenetre, il
+            # ferait refuser ce lancement meme
+            verrou_liberer
+            exec python3 "$_gtk" --progress --root --title "Banc GSM 2G" \
+                 --icon /usr/share/osmo-operator/icons/osmo-launch.svg -- "$0" --service-suivi "$@"
+        fi
         # Le verrou pris ici survit a l exec : c est le meme processus qui va
         # tenir le demarrage, sous son autre nom.
         exec "$0" --service "$@"

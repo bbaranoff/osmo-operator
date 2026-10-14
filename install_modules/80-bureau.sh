@@ -23,6 +23,13 @@
 #  ne peut pas etre pose ici (il vit dans les metadonnees gvfs de la session) :
 #  update.sh le pose au login, et un double-clic + "Autoriser" suffit sinon.
 #
+#  [2026-10-12] LE FOND D ECRAN AUSSI. L ISO pose configs/gsm-lab-fond.jpg
+#  comme fond GNOME par defaut (iso_modules/80-chroot.sh, override de schema) ;
+#  l install native ne le faisait pas, et le bureau restait sur le numbat
+#  d Ubuntu. On pose le meme fichier (/usr/share/backgrounds/gsm-lab-fond.jpg)
+#  et le meme override (99-osmo-fond.gschema.override) : un DEFAUT de schema,
+#  pas un reglage d utilisateur - qui a choisi un autre fond le garde.
+#
 #  Ni osmo-tutorial, ni osmo-addition, ni osmo-update : leurs lanceurs sont
 #  des enrobages ecrits par build-iso.sh pour l image (terminal + pkexec) et
 #  dependent du bureau GNOME de l ISO. Sur une machine deja installee, launch.sh
@@ -34,6 +41,40 @@ INST_REQUIRED[bureau]=0
 
 _BUREAU_ICONS=/usr/share/osmo-operator/icons
 _BUREAU_ENTRIES="osmo-launch osmo-dino"
+# [2026-10-12] Le fond au repos est la ville SANS antenne (gsm-lab-ville.jpg) ;
+# gsm-lab-antenne.jpg (la meme ville, le pylone dresse) est posee en fondu par
+# tools/osmo-fond.py quand une 2G/4G tourne. Les deux sont copiees ; le
+# paysage low-poly (gsm-lab-fond.jpg) aussi, sans etre le defaut.
+_BUREAU_FOND=/usr/share/backgrounds/gsm-lab-ville.jpg
+_BUREAU_FONDS="gsm-lab-antenne.jpg gsm-lab-fond.jpg"
+_BUREAU_SCHEMA=/usr/share/glib-2.0/schemas/99-osmo-fond.gschema.override
+
+# Le fond par defaut : meme fichier et memes trois sections que l ISO
+# (org.gnome.desktop.background, :ubuntu, :GNOME-Greeter - une session
+# ubuntu:GNOME lit les secondes de preference). Sans glib-compile-schemas
+# (pas de GNOME ici), on pose le fichier et on s arrete la.
+_bureau_fond() {
+    local src="$INST_TREE/configs/gsm-lab-ville.jpg" sec f
+    for f in $_BUREAU_FONDS; do
+        [ -f "$INST_TREE/configs/$f" ] && install -Dm644 "$INST_TREE/configs/$f" "/usr/share/backgrounds/$f"
+    done
+    ln -sf "$INST_TREE/tools/osmo-fond.py" /usr/local/bin/osmo-fond
+    [ -f "$src" ] || { inst_hint "configs/gsm-lab-ville.jpg absent : fond GNOME inchange"; return 0; }
+    install -Dm644 "$src" "$_BUREAU_FOND" || { inst_hint "fond non pose : $_BUREAU_FOND"; return 0; }
+    [ -d /usr/share/glib-2.0/schemas ] || { inst_say "fond : $_BUREAU_FOND (pas de schemas GNOME ici)"; return 0; }
+    : > "$_BUREAU_SCHEMA"
+    for sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
+        printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" \
+            "$sec" "$_BUREAU_FOND" "$_BUREAU_FOND" >> "$_BUREAU_SCHEMA"
+    done
+    if command -v glib-compile-schemas >/dev/null 2>&1; then
+        glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null \
+            && inst_say "fond GNOME par defaut : $_BUREAU_FOND" \
+            || inst_hint "glib-compile-schemas a echoue : fond pose, defaut non compile"
+    else
+        inst_say "fond : $_BUREAU_FOND (glib-compile-schemas absent, defaut non compile)"
+    fi
+}
 
 _bureau_homes() {
     local h
@@ -93,6 +134,7 @@ inst_bureau_run() {
 
     command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null
+    _bureau_fond
     inst_ok
 }
 
