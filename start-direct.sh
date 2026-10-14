@@ -2303,6 +2303,22 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         fi
     fi
 
+    # SCTP et non TCP : M3UA parle SCTP. Un TCP refuse ne dit rien du hub.
+    hub_sctp_open() {
+        python3 - "$1" "$2" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_SCTP)
+s.settimeout(3)
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+    }
+
     # --- 7quinquies. Inter-STP standalone (hub SS7 du WAN) --------------------
     # Le hub est le seul point ou les noeuds se rejoignent en SS7 ; sans lui,
     # l'ASP de chaque STP reste en shutdown. Standalone : un osmo-stp a part,
@@ -2310,10 +2326,20 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     INTERSTP_SH="$HERE/start-interstp.sh"
     [ -n "${HUB_IP:-}" ] || HUB_IP="192.168.1.49"
     if [ "$INTERSTP" != "0" ] && [ -r "$INTERSTP_SH" ]; then
-        hub_local=0; hub_up=0
+        # hub_up = le SERVICE M3UA repond (SCTP 2908), pas seulement une machine
+        # qui repond au ping : une autre machine peut tenir l'adresse sans hub.
+        # hub_owned = l'adresse est tenue par une AUTRE machine (ping, pas SCTP) :
+        # la poser ici ferait un conflit d'IP sur le LAN, on ne la pose pas.
+        hub_local=0; hub_up=0; hub_owned=0
         ip -br addr 2>/dev/null | grep -qw "$HUB_IP" && hub_local=1
-        ping -c1 -W1 "$HUB_IP" >/dev/null 2>&1 && hub_up=1
-        if [ "$INTERSTP" = "1" ] || [ "$hub_local" = 1 ] || [ "$hub_up" = 0 ]; then
+        hub_sctp_open "$HUB_IP" 2908 && hub_up=1
+        if [ "$hub_up" = 0 ] && [ "$hub_local" = 0 ] && ping -c1 -W1 "$HUB_IP" >/dev/null 2>&1; then
+            hub_owned=1
+        fi
+        # Le hub vit sur le NOEUD 1 uniquement : les autres noeuds ne le lancent
+        # jamais en automatique (--interstp force reste possible).
+        if [ "$INTERSTP" = "1" ] || { [ "${WAN_NODE_ID:-0}" = "1" ] && [ "$hub_up" = 0 ] \
+                && { [ "$hub_local" = 1 ] || [ "$hub_owned" = 0 ]; }; }; then
             ips=""
             for id in "${WAN_NODE_LIST[@]}"; do ips="${ips}${WAN_IP[$id]} "; done
             if [ "$DRY" -eq 1 ]; then
@@ -2328,8 +2354,13 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
                     say_end " KO " "$C_KO" "Inter-STP" "voir ${LOG_DIR:-/tmp}/interstp.log"
                 fi
             fi
+        elif [ "$hub_up" = 1 ]; then
+            say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP deja en service (SCTP 2908) - non relance"
+        elif [ "${WAN_NODE_ID:-0}" != "1" ]; then
+            say_end " -- " "$C_DIM" "Inter-STP" "hub porte par le noeud 1, pas par ce noeud ($WAN_NODE_ID)"
         else
-            say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP deja present sur le reseau - non relance"
+            # Adresse tenue par une autre machine, sans hub : on ne peut pas la lancer d'ici.
+            say_end " KO " "$C_KO" "Inter-STP" "$HUB_IP repond au ping mais pas en SCTP 2908 : lancer start-interstp.sh SUR cette machine-la"
         fi
     fi
 
