@@ -45,8 +45,8 @@ Name[fr]=Console du banc (tmux attach)
 Exec=/opt/GSM/osmo-operator/launch.sh --console
 
 [Desktop Action Vty]
-Name=Console du mobile (VTY 4247, 4347 en DSP)
-Name[fr]=Console du mobile (VTY 4247, 4347 en DSP)
+Name=Console du mobile (VTY 4247)
+Name[fr]=Console du mobile (VTY 4247)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --vty
 

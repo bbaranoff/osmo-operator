@@ -34,7 +34,9 @@
 #   --port N      port M3UA (defaut 2908)
 #   --menu        pose les questions meme si une table existe deja
 #   --defaut      applique la table du banc, en ignorant celle deja posee
-#   --ips "a b c" les IP des noeuds operateurs, dans l'ordre (sans question)
+#   --ips "a b c" les IP des noeuds operateurs, dans l'ordre (sans question) ;
+#                 « id:ip » garde le numero du noeud (table 1,3 -> noeuds 1 et 3)
+#   --no-save     ne reecrit pas /etc/osmo-wan.conf (appel depuis start-direct.sh)
 #   --no-ip       ne touche pas a la configuration reseau
 #   --foreground  reste au premier plan (journal a l'ecran)
 # =============================================================================
@@ -54,6 +56,7 @@ OPS=1
 MENU=0
 USE_DEFAULTS=0
 IPS=""
+SAVE_TABLE=1
 # Le hub du banc : le conteneur osmo-inter-stp, sur le backbone docker
 # (INTER_STP_IP de start.sh). L'ancien defaut (192.168.56.1, host-only
 # VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
@@ -98,6 +101,7 @@ while [ $# -gt 0 ]; do
         --ips)        IPS="${2:-}"; shift ;;
         --ips=*)      IPS="${1#*=}" ;;
         --no-ip)      SET_IP=0 ;;
+        --no-save)    SAVE_TABLE=0 ;;
         --foreground) FOREGROUND=1 ;;
         --status)     ACTION=status ;;
         --stop)       ACTION=stop ;;
@@ -122,6 +126,15 @@ stp_pid() {
     pgrep -f 'osmo-stp .*osmo-stp-interop\.cfg' | head -1
 }
 
+# Port VTY du hub. Le 4239 par defaut est celui du STP local du noeud : sur une
+# machine qui porte deja un osmo-stp, le hub ne peut pas le prendre. On lit le
+# port ecrit dans la config (bind 127.0.0.1 N), sinon 4239.
+vty_port() {
+    local p
+    p="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
+    echo "${p:-4239}"
+}
+
 # ── status ───────────────────────────────────────────────────────────────────
 if [ "$ACTION" = "status" ]; then
     banner
@@ -135,13 +148,16 @@ if [ "$ACTION" = "status" ]; then
     # Le VTY est la seule source de verite sur QUI est attache : un ASP peut
     # avoir ouvert sa SCTP sans jamais passer ASP-ACTIVE, et rien d'autre ne le
     # montre. Le port ouvert, lui, ne prouve que l'ecoute.
+    VTY_PORT="$(vty_port)"
     if command -v nc >/dev/null 2>&1; then
         echo -e "  ${BOLD}ASP attaches :${NC}"
-        printf 'enable\nshow cs7 instance 0 asp\nshow cs7 instance 0 as all\nexit\n' \
-            | nc -q2 127.0.0.1 4239 2>/dev/null | sed 's/^/    /' | grep -vE '^\s*$' | head -40 \
-            || echo -e "    ${YELLOW}VTY 4239 muet${NC}"
+        # Pauses entre les commandes : le VTY ne lit pas un bloc d'un coup.
+        { sleep 1; printf 'enable\n'; sleep 0.5; printf 'show cs7 instance 0 asp\n'; sleep 0.5
+          printf 'show cs7 instance 0 as all\n'; sleep 0.5; printf 'exit\n'; sleep 1; } \
+            | nc -q2 127.0.0.1 "$VTY_PORT" 2>/dev/null | tr -d '\r' | sed 's/^/    /' | grep -vE '^\s*$' | tail -30 \
+            || echo -e "    ${YELLOW}VTY ${VTY_PORT} muet${NC}"
     else
-        echo -e "  ${YELLOW}nc absent : ${CYAN}telnet 127.0.0.1 4239${NC} puis "show cs7 instance 0 asp""
+        echo -e "  ${YELLOW}nc absent : ${CYAN}telnet 127.0.0.1 ${VTY_PORT}${NC} puis "show cs7 instance 0 asp""
     fi
     exit 0
 fi
@@ -219,10 +235,15 @@ fi
 
 if [ -n "$IPS" ]; then
     # Forme scriptable : --ips "10.0.0.11 10.0.0.12 10.0.0.13"
+    # [2026-10-15, revue] « id:ip » garde le numero du noeud : une table 1,3
+    # (permise par wan_nodes_validate) etait renumerotee 1,2 par position, et le
+    # noeud 3 s'attachait a un AS absent du hub. Une IP seule : numero = rang.
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=(); i=0
-    for ip in $IPS; do
+    for tok in $IPS; do
         i=$((i+1))
-        WAN_IP[$i]="$ip"; WAN_IND[$i]="$(wan_default_ind "$i")"; WAN_NODE_LIST+=("$i")
+        case "$tok" in *:*) id="${tok%%:*}"; ip="${tok#*:}" ;; *) id="$i"; ip="$tok" ;; esac
+        [[ "$id" =~ ^[1-9]$ ]] || { echo -e "${RED}--ips : numero de noeud '$id' invalide (1-9)${NC}" >&2; exit 2; }
+        WAN_IP[$id]="$ip"; WAN_IND[$id]="$(wan_default_ind "$id")"; WAN_NODE_LIST+=("$id")
     done
     WAN_NODE_COUNT="$i"; NODES="$i"; WAN_NODE_ID=0; WAN_OPS="$OPS"
 elif [ "$MENU" = "1" ] || { [ -z "$NODES" ] && [ ! -r "$WAN_CONF_FILE" ]; }; then
@@ -244,11 +265,18 @@ fi
 [[ "$OPS"   =~ ^[1-9]$ ]] || { echo -e "${RED}--ops : 1 a 9${NC}" >&2; exit 2; }
 
 # Table connue : on la persiste et on ouvre le pare-feu pour ces adresses.
-if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[1]:-}" ]; then
+if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[${WAN_NODE_LIST[0]}]:-}" ]; then
     echo ""
     wan_nodes_summary 2>/dev/null || true
-    WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE" \
-        && echo -e "  ${GREEN}✓${NC} table ecrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
+    # [2026-10-15, revue] --no-save : appele par start-direct.sh, dont la table
+    # (WAN_AUTO=1, numero du noeud, indicatifs) vient d'etre ecrite - la
+    # reecrire ici en WAN_AUTO=0 / noeud 0 coupait le WAN au reboot suivant.
+    if [ "$SAVE_TABLE" = 1 ]; then
+        WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE" \
+            && echo -e "  ${GREEN}✓${NC} table ecrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
+    else
+        echo -e "  ${CYAN}--no-save${NC} : ${WAN_CONF_FILE} laisse tel quel"
+    fi
     if [ -x "$HERE/network/firewall-wan.sh" ] || [ -r "$HERE/network/firewall-wan.sh" ]; then
         for i in "${WAN_NODE_LIST[@]}"; do
             bash "$HERE/network/firewall-wan.sh" "${WAN_IP[$i]}" "$OPS" >/dev/null 2>&1 || true
@@ -285,12 +313,36 @@ mkdir -p "$CONF_DIR" "$(dirname "$LOG")"
 if [ ! -x "$HERE/helpers/create_interop.sh" ] && [ ! -r "$HERE/helpers/create_interop.sh" ]; then
     echo -e "${RED}helpers/create_interop.sh introuvable${NC}" >&2; exit 1
 fi
+# [2026-10-15, revue] Le port VTY du hub precedent, relu AVANT la regeneration :
+# le nouveau hub reprend le meme (le scan d'un port libre, fait pendant que
+# l'ancien tournait encore, le faisait deriver de 1 a chaque relance).
+VTY_PREC="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
 # --listen-ip : le hub se lie a SON adresse, pas a 0.0.0.0. Sans elle, SCTP
 # annonce toutes les adresses de la machine dans son INIT et les noeuds tentent
 # des chemins morts - l'ASP monte puis retombe, en boucle.
-bash "$HERE/helpers/create_interop.sh" --listen-ip "$HUB_IP" \
+WAN_NODE_IDS="${WAN_NODE_LIST[*]:-}" bash "$HERE/helpers/create_interop.sh" --listen-ip "$HUB_IP" \
      --wan "$NODES" "$OPS" "$CFG" || exit 1
 [ "$PORT" = "2908" ] || sed -i "s/^ listen m3ua 2908/ listen m3ua ${PORT}/" "$CFG"
+# VTY du hub. [2026-10-15, revue] 4239 tant qu'il est libre : c'est le port
+# que lisent checks/diag-interstp.sh et vty-debug-dump.sh, et sur un hub dedie
+# (pas d'osmo-stp local) rien ne le prend. Sinon le port du hub precedent,
+# sinon le premier libre de 4300 a 4399 (vty_port le relit dans la config).
+if ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CFG"; then
+    VTY_PORT="${VTY_PORT:-}"
+    hub_pid="$(stp_pid)"
+    _port_pris() {   # pris par un autre que le hub qu'on va remplacer
+        local who; who="$(ss -lntpH "( sport = :$1 )" 2>/dev/null)"
+        [ -n "$who" ] && ! { [ -n "$hub_pid" ] && printf '%s' "$who" | grep -q "pid=$hub_pid,"; }
+    }
+    if [ -z "$VTY_PORT" ]; then
+        if ! _port_pris 4239; then VTY_PORT=4239
+        elif [ -n "$VTY_PREC" ] && ! _port_pris "$VTY_PREC"; then VTY_PORT="$VTY_PREC"
+        else
+            for p in $(seq 4300 4399); do _port_pris "$p" || { VTY_PORT=$p; break; }; done
+        fi
+    fi
+    [ "${VTY_PORT:-4239}" = 4239 ] || sed -i "s/^line vty$/line vty\n bind 127.0.0.1 ${VTY_PORT}/" "$CFG"
+fi
 echo ""
 
 # ── Lancement ────────────────────────────────────────────────────────────────
@@ -300,7 +352,7 @@ if pid="$(stp_pid)" && [ -n "$pid" ]; then
 fi
 
 echo -e "  ${BOLD}Noeuds desservis :${NC} ${NODES} × ${OPS} operateur(s)"
-for n in $(seq 1 "$NODES"); do
+for n in ${WAN_NODE_LIST[*]:-$(seq 1 "$NODES")}; do
     for o in $(seq 1 "$OPS"); do
         printf '    noeud %s op %s → STP %s  MSC %s  BSC %s  (rctx %s)\n' \
             "$n" "$o" "1.${n}${o}.2" "1.${n}${o}.1" "1.${n}${o}.3" "$(( n*1000 + o*100 + 50 ))"
@@ -317,7 +369,7 @@ osmo-stp -c "$CFG" >> "$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 sleep 2
 if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo -e "  ${GREEN}✓ inter-STP lance${NC} - M3UA ${CYAN}${HUB_IP}:${PORT}${NC}, VTY 4239"
+    echo -e "  ${GREEN}✓ inter-STP lance${NC} - M3UA ${CYAN}${HUB_IP}:${PORT}${NC}, VTY $(vty_port)"
     echo -e "  Journal : ${CYAN}${LOG}${NC}"
     echo ""
     echo -e "  ${BOLD}Cote noeuds :${NC} leur osmo-stp doit viser ${CYAN}${HUB_IP}${NC}"

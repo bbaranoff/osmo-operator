@@ -99,7 +99,7 @@ _root() {
 _pmos_paquets() {
     export DEBIAN_FRONTEND=noninteractive
     local p manque=()
-    for p in qemu-system-x86 ovmf xz-utils curl sshpass; do
+    for p in qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf xz-utils curl sshpass; do
         dpkg -s "$p" >/dev/null 2>&1 || manque+=("$p")
     done
     [ "${#manque[@]}" -eq 0 ] && { _ok "paquets deja la (qemu, ovmf, xz, curl, sshpass)"; return 0; }

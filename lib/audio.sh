@@ -128,7 +128,7 @@ LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 # osmo-pmos-setup et l arret de la VM (pmos_stop) passent par ces fonctions.
 # AUDIO_ECHO_CANCEL=0 pour se passer de l annuleur (les HP = la carte brute).
 EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"'
-: "${AUDIO_AEC_METHOD:=webrtc}"
+: "${AUDIO_AEC_METHOD:=speex}"
 audio_aec_method() { echo "$AUDIO_AEC_METHOD"; }
 # Les aec_args ne valent que pour webrtc (voir ensure_echo_cancel, aec_opts).
 : "${EC_MIC_VOLUME:=25%}"

@@ -208,8 +208,11 @@ class Uplink(threading.Thread):
                          SDCCH_ATTENTE)
                 self.sdcch_attente = None
             return
-        self.sdcch_attente = None
         plan, ss, tn = ded
+        bursts = self._bursts_xcch(l2)
+        if bursts is None:
+            return          # le montage DSP attend encore les bursts de la ROM (pont/dsp/uplink.py)
+        self.sdcch_attente = None
 
         # [2026-09-21] SDCCH ou SACCH ? La couche 1 ne peut pas le dire : le
         # firmware pose les deux dans le MEME tampon a_cu avec le MEME mot de
@@ -252,8 +255,15 @@ class Uplink(threading.Thread):
             base = plan.ul_base(ss)
             fn0 = self._next_fn(4, lambda f: f % 51 == base)
             self.feed.l2(self.clock.fn(), gsm.GSMTAP_SDCCH4, l2, tn, True)
-        for j, burst in enumerate(gsm.xcch_encode(l2)):
+        for j, burst in enumerate(bursts):
             self.tx.schedule(tn, (fn0 + j) % gsm.HYPERFRAME, burst, True)
+
+    def _bursts_xcch(self, l2):
+        """Les 4 bursts d'un bloc SDCCH/SACCH montant. Ici codes par l'hote ; le pont DSP
+        (pont/dsp/uplink.py) prend ceux de la ROM. None = pas encore prets, le bloc reste
+        en attente et _poll_sdcch le represente au tour suivant."""
+        self.stats.xcch_ul_hote += 1
+        return gsm.xcch_encode(l2)
 
     def _poll_facch(self):
         tn = self.tch.active_tn()

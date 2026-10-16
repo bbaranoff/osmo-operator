@@ -822,11 +822,25 @@ apply_native_post_patches() {
     # awk et pas sed : il faut ne modifier QUE le local-ip qui suit
     # « asp asp-to-inter », pas ceux du bloc d'ecoute juste au-dessus
     # (local-ip 127.0.0.1 / 127.0.0.2), qui sont corrects.
+    # [2026-10-15] 127.0.0.1 NE VAUT QUE POUR UN HUB EN 127.0.0.1. Vers un hub
+    # sur une adresse reseau - meme celle de CETTE machine (192.168.1.31) - une
+    # association SCTP liee a 127.0.0.1 est refusee par le noyau : « Network is
+    # unreachable » toutes les 5 s, as-inter AS_DOWN, barreau ss7 en echec. On
+    # prend donc l adresse source que le noyau choisit pour joindre le hub
+    # (ip route get), et 127.0.0.1 seulement si le hub est en boucle locale ou
+    # si aucune route ne mene a lui.
     if [ -f "$cfg/osmo-stp.cfg" ]; then
-        awk '
+        local inter_rip inter_lip=127.0.0.1
+        inter_rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{f=1;next} f&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} f&&/^ (asp|as) /{exit}' "$cfg/osmo-stp.cfg")"
+        case "$inter_rip" in
+            ""|127.*) ;;
+            *) inter_lip="$(ip -4 route get "$inter_rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
+               [ -n "$inter_lip" ] || inter_lip=127.0.0.1 ;;
+        esac
+        awk -v lip="$inter_lip" '
             /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { in_asp = 1; print; next }
             in_asp && /^[[:space:]]*local-ip[[:space:]]/ {
-                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); in_asp = 0; print; next
+                sub(/local-ip[[:space:]]+.*/, "local-ip " lip); in_asp = 0; print; next
             }
             /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { in_asp = 0 }
             { print }

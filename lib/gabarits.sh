@@ -308,12 +308,23 @@ _gab_fixups_natifs() {
     #    seule adresse dont on soit certain sur un hote. On ne touche QUE le
     #    local-ip qui suit « asp asp-to-inter » : ceux du bloc d ecoute
     #    au-dessus (127.0.0.1 / 127.0.0.2) sont corrects.
+    #    [2026-10-15] SAUF si le hub est sur une adresse reseau, meme la notre :
+    #    une SCTP liee a 127.0.0.1 vers 192.168.1.31 est refusee (« Network is
+    #    unreachable »), as-inter reste AS_DOWN. On prend l adresse source que
+    #    le noyau choisit vers le hub (meme regle que generate_configs.sh).
     f="$src/osmocom/osmo-stp.cfg"
     if [ -f "$f" ]; then
-        awk '
+        local rip lip=127.0.0.1
+        rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{x=1;next} x&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} x&&/^ (asp|as) /{exit}' "$f")"
+        case "$rip" in
+            ""|127.*) ;;
+            *) lip="$(ip -4 route get "$rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
+               [ -n "$lip" ] || lip=127.0.0.1 ;;
+        esac
+        awk -v lip="$lip" '
             /^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/ { a = 1; print; next }
             a && /^[[:space:]]*local-ip[[:space:]]/ {
-                sub(/local-ip[[:space:]]+.*/, "local-ip 127.0.0.1"); a = 0; print; next
+                sub(/local-ip[[:space:]]+.*/, "local-ip " lip); a = 0; print; next
             }
             /^[[:space:]]*(as|asp|cs7|listen)[[:space:]]/ && !/asp-to-inter/ { a = 0 }
             { print }

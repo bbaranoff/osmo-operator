@@ -500,12 +500,23 @@ pont. Ce qui change :
   `a_kc` et `a_a5fn`. Le pont n'applique donc plus le flux au DL : le faire en
   plus renverrait le burst chiffré au décodeur. `PONT_DSP_DECHIFFRE=1` rétablit
   l'ancien comportement, et va avec `CALYPSO_A5=0` sur c54x_exe. Le **montant**
-  reste chiffré par le pont.
+  reste chiffré par le pont (au fn de l'air).
 * **`TchDsp` — l'ASSIGNMENT COMMAND est une annonce.** `/dev/shm/calypso_tch_cfg`
   est écrit comme avant, mais c54x_exe ne bascule le BSP qu'à la première tâche
   TCHT/TCHA/TCHD posée par le firmware. Basculer à l'heure de la BTS remplaçait
   les trames pas encore jouées — l'ASSIGNMENT COMMAND comprise. `abandon()`
   écrit `seq+1, tn=0` : retour au SDCCH **sans lâcher le Kc**.
+* **`UplinkDsp` — bursts SDCCH/SACCH montants de la ROM** (2026-10-03). Les 4
+  bursts d'un bloc ne sont plus codés par `gsm.xcch_encode` mais pris dans
+  `/dev/shm/calypso_xcch_ul_rom`, que c54x_exe remplit avec ce que la ROM émet
+  (`data[0x3f8a]`, un burst par trame) et le flux A5 montant qu'elle y XORe en
+  chiffré. Anneau : en-tête `w`(u32) `n`(u32), cases de 1024 octets
+  `seq fn l2[23] . bits[4×116] flux[4×116]`. Le pont redécode, défait le XOR de la
+  ROM si besoin (elle chiffre à l'heure du DSP), compare au L2 de
+  `calypso_sdcch_ul`, puis émet et rechiffre au fn de l'air comme avant. Sans
+  bursts ROM après `PONT_UL_ROM_ATTENTE` (0,12 s) : codage hôte. STATS :
+  `xCCH ul rom= hote= rom_ko=`. Le hook est `Uplink._bursts_xcch` (hôte par
+  défaut, montage grgsm inchangé).
 * **`UplinkDsp`** — un bloc de `calypso_sdcch_ul` n'est **jamais** une FACCH (le
   TCH passe par `calypso_tch_facch_ul`) ; une ASSIGNMENT FAILURE, ou un bloc
   SDCCH alors que le mobile était sur le TCH, retire l'annonce. Le Kc est gardé
@@ -542,7 +553,8 @@ Mobile DSP = MSISDN 100101, l'autre = 100102. Constaté :
 
 Ouvert, par ordre d'importance :
 
-1. **B_BFI** sur toutes les trames de parole : 40/40 états `a_dd` à 20:22,
+1. **B_BFI** *(mise à jour 2026-10-03 : `err` = 0 partout désormais, BFI=1 dès
+   le 1er bloc incomplet ; voir c54x_exe docs/README.fr.md)* sur toutes les trames de parole : 40/40 états `a_dd` à 20:22,
    `vues=2200 bfi=2200` à 20:32 ; `err` = 0 sur les 19 c214 du début
    d'appel, 15 à 93 ensuite. Trames réellement dégradées, FR intelligible
    malgré tout ; signal ou cœur C54x, non tranché.
@@ -590,6 +602,8 @@ appels suffisent, et deux runs successifs donnent `ECHEC/OK/ECHEC` puis
 | `PONT_KC_RETENTION=0` | désactive la rétention, pour comparer (défaut 1) |
 | `PONT_A5=1..3` | *ancien pont, absent du paquet actuel* — forçait l'algorithme au lieu de suivre celui du Kc |
 | `PONT_DSP_DECHIFFRE=1` | DSP : le pont déchiffre le DL (avec `CALYPSO_A5=0` sur c54x_exe) |
+| `PONT_UL_ROM=0` | DSP : bursts SDCCH/SACCH montants codés par le pont au lieu de ceux de la ROM |
+| `PONT_UL_ROM_ATTENTE` | DSP : attente maximale des bursts ROM d'un bloc avant repli hôte (0.12 s) |
 | `PONT_UL_RETARD_MAX` | retard maximal (trames) d'un burst montant encore envoyé ; 0 = jeter (grgsm), 26 (DSP) |
 | `PONT_WINDOW_ESSAIS` | re-attentes d'un burst montant réveillé trop tôt (12) |
 | `PONT_HORLOGE=0` | horloge murale au lieu de l'horloge asservie au DSP |

@@ -19,6 +19,7 @@ set -e
 
 # ── Mode WAN ─────────────────────────────────────────────────────────────────
 #   create_interop.sh --wan <n_noeuds> <ops_par_noeud> <outfile>
+#   WAN_NODE_IDS="1 3" : les numeros des noeuds (defaut 1..n), table non contigue
 #
 # Le hub d'origine ne dessert qu'UNE machine : ses point codes 1.<op>.<role> se
 # recalculent a l'identique sur chaque noeud d'un WAN, donc trois noeuds relies
@@ -116,7 +117,7 @@ EOFCONFIG
 sed -i "s|__LISTEN_IP__|${HUB_LISTEN_IP}|" "$outfile"
 
 if [ "$WAN_MODE" = "1" ]; then
-    for n in $(seq 1 "$n_nodes"); do
+    for n in ${WAN_NODE_IDS:-$(seq 1 "$n_nodes")}; do
         for o in $(seq 1 "$ops_per_node"); do
             rctx_inter=$(( n * 1000 + o * 100 + 50 ))
             pc_stp="1.${n}${o}.2"
@@ -156,7 +157,7 @@ cat >> "$outfile" <<'EOFROUTES'
 EOFROUTES
 
 if [ "$WAN_MODE" = "1" ]; then
-    for n in $(seq 1 "$n_nodes"); do
+    for n in ${WAN_NODE_IDS:-$(seq 1 "$n_nodes")}; do
         for o in $(seq 1 "$ops_per_node"); do
             cat >> "$outfile" <<EOF
   update route 1.${n}${o}.1 7.255.7 linkset as-n${n}op${o}

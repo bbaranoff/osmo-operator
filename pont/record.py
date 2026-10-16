@@ -34,11 +34,21 @@ class Direction:
         self.n_frames = 0
         self.n_bursts = 0
         self.n_fifo_drop = 0
+        self.last_fn = None
 
     def feed(self, fn, tn, burst):
         if self.off:
             return
         with self.lock:
+            # [2026-10-15] UN BURST EN RETARD VA A LA PROCHAINE TRAME ECRITE.
+            # Les bursts montants de la ROM (PONT_UL_RAW, pont/dsp/uplink.py)
+            # partent a SON fn, 12 a ~200 trames derriere l horloge du pont :
+            # ranges sous une trame deja ecrite, ils n etaient jamais relus
+            # (86 bursts enregistres sur 18 000 emis, spectre montant vide en
+            # data). Pour le spectre, l instant d arrivee compte, pas le fn.
+            last = self.last_fn
+            if last is not None and 0 <= (last - fn) % 2715648 < 1357824:
+                fn = (last + 1) % 2715648
             self.frames.setdefault(fn, {})[tn] = burst
 
     def open(self):
@@ -107,6 +117,7 @@ class Direction:
             return
         with self.lock:
             slots = self.frames.pop(fn, None)
+            self.last_fn = fn
             if len(self.frames) > 512:
                 self.frames.clear()
         if slots:

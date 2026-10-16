@@ -1,0 +1,22 @@
+[Unit]
+Description=osmo-operator - workflow « la ROM fait le maximum » : profil ROM max, banc DSP, echelle de tests, bilan ROM/hote
+Documentation=file:/opt/GSM/osmo-operator/scripts/dsp-rom-max.sh
+After=network.target
+ConditionPathExists=/opt/GSM/osmo-operator/scripts/dsp-rom-max.sh
+
+[Service]
+# A la demande (systemctl start) : une campagne de tests n a rien a faire au
+# boot. Le profil ROM max, lui, vit dans /etc/default/osmo-banc et s applique a
+# chaque demarrage d osmo-banc.
+Type=oneshot
+WorkingDirectory=/opt/GSM/osmo-operator
+Environment=HOME=/root NO_COLOR=1
+EnvironmentFile=-/etc/default/osmo-dsp-rom-max
+ExecStart=/bin/bash /opt/GSM/osmo-operator/scripts/dsp-rom-max.sh run $DSP_ROM_MAX_ARGS
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-dsp-rom-max
+
+[Install]
+WantedBy=multi-user.target

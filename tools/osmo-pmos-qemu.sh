@@ -356,26 +356,56 @@ if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
     echo "osmo-pmos-qemu: carte « combine » de la VM -> HP ${OSMO_PMOS_HP:-defaut}, micro ${OSMO_PMOS_MIC:-defaut}"
 fi
+# [2026-10-15] LE QEMU DE L HOTE, PAS CELUI DU CHROOT. Le QEMU de pmbootstrap
+# tourne dans un chroot musl qui n a pas les pilotes NVIDIA de la machine :
+# meme avec virtio-vga-gl et gl=on, son EGL echoue et le rendu retombe en
+# logiciel - l affichage casse. Celui de l hote (Ubuntu, glibc) charge
+# libEGL_nvidia : verifie le 15/10 (SDL + gl=on, aucune erreur EGL). Il lui
+# faut qemu-system-gui et qemu-system-modules-opengl (ui-sdl, ui-opengl,
+# virtio-vga-gl). OSMO_PMOS_HOST_QEMU=0 revient au QEMU du chroot.
+QEMU_MODDIR=/usr/lib/x86_64-linux-gnu/qemu
+if [ -z "${OSMO_PMOS_HOST_QEMU:-}" ]; then
+    if [ -e "$QEMU_MODDIR/ui-opengl.so" ] && [ -e "$QEMU_MODDIR/ui-sdl.so" ] && [ -e "$QEMU_MODDIR/hw-display-virtio-vga-gl.so" ]; then
+        OSMO_PMOS_HOST_QEMU=1
+    else
+        OSMO_PMOS_HOST_QEMU=0
+        echo "osmo-pmos-qemu: QEMU de l hote sans modules OpenGL (apt install qemu-system-gui qemu-system-modules-opengl) - QEMU du chroot"
+    fi
+fi
+HOST_QEMU_OPT=(); [ "$OSMO_PMOS_HOST_QEMU" = 1 ] && HOST_QEMU_OPT=(--host-qemu)
 _lance() {
     "$PMB" "${PMB_OPTS[@]}" qemu \
+        "${HOST_QEMU_OPT[@]}" \
         --memory "${OSMO_PMOS_MEM:-4096}" \
         --image-size "$DISK" \
         --display "${OSMO_PMOS_DISPLAY:-sdl}" \
         "$@"
 }
 _mort_tot() { [ "$1" -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 25 ]; }
+# [2026-10-15] L OPENGL D ABORD, ET JUSQU AU BOUT. Le premier repli etait
+# « sans OpenGL » (virtio-vga en rendu logiciel) : c est exactement l affichage
+# en paves, « tout moche », et il partait des que QEMU mourait dans les 25 s,
+# quelle qu en soit la cause (sudo, image verrouillee, port pris). On essaie
+# donc d abord GTK puis sans KVM, TOUJOURS avec OpenGL ; le rendu logiciel ne
+# vient qu en dernier, et il le dit. OSMO_PMOS_GL=1 est pose d office (hote
+# NVIDIA : pmbootstrap le couperait sinon dans certains cas).
+export OSMO_PMOS_GL="${OSMO_PMOS_GL:-1}"
 t0=$(date +%s); _lance "$@"; rc=$?
-if _mort_tot "$rc" && [ "${OSMO_PMOS_GL:-}" != 0 ]; then
-    echo "osmo-pmos-qemu: QEMU est mort aussitot ($rc) - relance SANS OpenGL (OSMO_PMOS_GL=0)"
-    export OSMO_PMOS_GL=0; t0=$(date +%s); _lance "$@"; rc=$?
-fi
-if _mort_tot "$rc" && [ "${OSMO_PMOS_KVM:-}" != 0 ]; then
-    echo "osmo-pmos-qemu: encore mort ($rc) - relance SANS KVM (OSMO_PMOS_KVM=0, emulation : lent mais il demarre)"
-    export OSMO_PMOS_KVM=0; t0=$(date +%s); _lance "$@"; rc=$?
+if _mort_tot "$rc" && [ "$OSMO_PMOS_HOST_QEMU" = 1 ]; then
+    echo "osmo-pmos-qemu: le QEMU de l hote est mort aussitot ($rc) - relance avec celui du chroot (OSMO_PMOS_HOST_QEMU=0)"
+    OSMO_PMOS_HOST_QEMU=0; HOST_QEMU_OPT=(); t0=$(date +%s); _lance "$@"; rc=$?
 fi
 if _mort_tot "$rc" && [ "${OSMO_PMOS_DISPLAY:-sdl}" = sdl ]; then
-    echo "osmo-pmos-qemu: encore mort ($rc) - relance en fenetre GTK (OSMO_PMOS_DISPLAY=gtk)"
+    echo "osmo-pmos-qemu: QEMU est mort aussitot ($rc) - relance en fenetre GTK, OpenGL garde (OSMO_PMOS_DISPLAY=gtk)"
     export OSMO_PMOS_DISPLAY=gtk; t0=$(date +%s); _lance "$@"; rc=$?
+fi
+if _mort_tot "$rc" && [ "${OSMO_PMOS_KVM:-}" != 0 ]; then
+    echo "osmo-pmos-qemu: encore mort ($rc) - relance SANS KVM, OpenGL garde (OSMO_PMOS_KVM=0, lent)"
+    export OSMO_PMOS_KVM=0; t0=$(date +%s); _lance "$@"; rc=$?
+fi
+if _mort_tot "$rc" && [ "$OSMO_PMOS_GL" != 0 ]; then
+    echo "osmo-pmos-qemu: encore mort ($rc) - DERNIER RECOURS : sans OpenGL (OSMO_PMOS_GL=0) - l affichage sera en paves"
+    export OSMO_PMOS_GL=0; t0=$(date +%s); _lance "$@"; rc=$?
 fi
 # La VM s est arretee (fenetre fermee, extinction depuis Phosh, echec) : le
 # bouclage direct de l hote revient - sans lui, plus personne n ecoute gsm_audio.

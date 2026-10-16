@@ -70,6 +70,11 @@ PROFILE_CHOISI=0
 # WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
+# Inter-STP (hub SS7) lance en standalone a cote du WAN : auto = seulement si le
+# hub n'existe pas encore sur le reseau (ni adresse locale, ni reponse ping).
+# --interstp force, --no-interstp passe. Un seul hub pour tout le WAN : sur le
+# noeud qui ne le porte pas, le hub distant est reconnu et laisse en place.
+INTERSTP=auto
 # --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
 WAN_IMPORT_FILES=()
 # --payload-ism : le TEXTE des SMS part par radio ISM, le reste (signalisation,
@@ -191,7 +196,9 @@ Usage : ./start-direct.sh [options] [mode]
                         pointe son ASP sur l'inter-STP. Une seule ISO suffit
                         alors pour les neuf noeuds - le numero se choisit ici.
     --op N              operateur porte par ce noeud (defaut 1)
-    --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM)
+    --hub-ip ADRESSE    inter-STP a joindre (defaut : selon docker ou VM ; natif : 192.168.1.49)
+    --interstp          lance le inter-STP en standalone sur ce noeud (force)
+    --no-interstp       ne lance pas le inter-STP (defaut : auto, avec --wan)
     --air-mesh[=PORT]   maillage de BURSTS entre noeuds : le milieu radio
                         devient commun et un mobile peut entendre - et choisir -
                         la BTS d'un autre noeud. Les pairs viennent de la table
@@ -284,6 +291,8 @@ while [ $# -gt 0 ]; do
         --op=*)         NODE_OP="${1#*=}" ;;
         --hub-ip)       HUB_IP="${2:-}"; shift ;;
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
+        --interstp)     INTERSTP=1 ;;
+        --no-interstp)  INTERSTP=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
                        # run_modules/70-l2.sh gere deja les quatre clients via
                        # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
@@ -2204,6 +2213,11 @@ if [ "${PAYLOAD_ISM:-0}" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
 fi
 
+# [2026-10-15, revue] --interstp ne vaut que dans le WAN : sans --wan, il
+# etait ignore sans un mot.
+if [ "$INTERSTP" = "1" ] && [ "$WAN_MESH" -ne 1 ] && [ "$ACTION" = "start" ]; then
+    printf '  %s!%s --interstp sans --wan : pas de WAN, pas de hub lance (./start-direct.sh --wan --interstp)\n' "${C_KO:-}" "${C_Z:-}" >&2
+fi
 if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     WAN_LIB="$HERE/network/wan-nodes.sh"
     WAN_MESH_SH="$HERE/network/setup-wan-mesh.sh"
@@ -2281,7 +2295,68 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         fi
     fi
 
-    # --- 7quater. Adressage SS7 du noeud (set_stp_ip.sh) ----------------------
+    # --- 7quater. Inter-STP standalone (hub SS7 du WAN) -----------------------
+    # Le hub est le seul point ou les noeuds se rejoignent en SS7 ; sans lui,
+    # l'ASP de chaque STP reste en shutdown. Standalone : un osmo-stp a part,
+    # avec sa propre config (start-interstp.sh), pas une pile du banc.
+    # [2026-10-15, revue] Qui le lance, sans en lancer deux :
+    #   --interstp       ce noeud, toujours ;
+    #   auto (defaut)    seulement si l'adresse du hub est DEJA locale, ou si ce
+    #                    noeud est le noeud 1 et que personne ne repond en M3UA
+    #                    sur HUB_IP:2908. Deux noeuds qui demarrent ensemble ne
+    #                    posent plus chacun l'adresse du hub (IP en double).
+    #   --no-interstp    jamais.
+    # « Present » se lit sur le port M3UA (SCTP 2908), pas au ping : un hote
+    # quelconque a cette adresse, ou un hub arrete, repondaient au ping.
+    INTERSTP_SH="$HERE/start-interstp.sh"
+    if [ -z "${HUB_IP:-}" ]; then
+        HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
+        # Le defaut LAN ne vaut que pour un noeud natif ; en conteneur le hub est
+        # sur le backbone docker (/etc/osmo-role, ou start-interstp.sh).
+        [ -n "$HUB_IP" ] || { [ "$NODE_MODE" = native ] && HUB_IP="192.168.1.49"; }
+    fi
+    _m3ua_ecoute() {   # $1 IP : un hub repond-il en M3UA (SCTP) sur le port 2908 ?
+        python3 -c 'import socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM,132); s.settimeout(2)
+try: s.connect((sys.argv[1],2908)); sys.exit(0)
+except Exception: sys.exit(1)' "$1" 2>/dev/null
+    }
+    if [ "$INTERSTP" != "0" ] && [ -n "${HUB_IP:-}" ] && [ -r "$INTERSTP_SH" ]; then
+        hub_local=0; hub_up=0
+        ip -4 -o addr show 2>/dev/null | awk '{split($4,a,"/"); print a[1]}' | grep -qxF "$HUB_IP" && hub_local=1
+        _m3ua_ecoute "$HUB_IP" && hub_up=1
+        lancer=0
+        if [ "$INTERSTP" = "1" ]; then lancer=1
+        elif [ "$hub_up" = 1 ] && [ "$hub_local" = 0 ]; then lancer=0
+        elif [ "$hub_local" = 1 ]; then lancer=1
+        elif [ "${WAN_NODE_ID:-0}" = "1" ]; then lancer=1
+        fi
+        if [ "$lancer" = 1 ]; then
+            # Les noeuds avec LEUR numero (id:ip) : une table 1,3 reste 1,3 sur le hub.
+            ips=""
+            for id in "${WAN_NODE_LIST[@]}"; do ips="${ips}${id}:${WAN_IP[$id]} "; done
+            if [ "$DRY" -eq 1 ]; then
+                printf '  [dry-run] %s --no-save --ops 1 --ip %s --ips "%s"\n' "$INTERSTP_SH" "$HUB_IP" "$ips"
+            else
+                say_begin "Inter-STP standalone ($HUB_IP)"
+                # --no-save : la table WAN de CE noeud (WAN_AUTO=1, son numero,
+                # ses indicatifs) vient d'etre ecrite par setup-wan-mesh.sh ;
+                # le hub ne la reecrit pas.
+                if bash "$INTERSTP_SH" --no-save --ops 1 \
+                        --ip "$HUB_IP" --ips "$ips" > "${LOG_DIR:-/tmp}/interstp.log" 2>&1; then
+                    say_end " OK " "$C_OK" "Inter-STP" "hub $HUB_IP:2908, $WAN_NODE_COUNT noeud(s)"
+                else
+                    say_end " KO " "$C_KO" "Inter-STP" "voir ${LOG_DIR:-/tmp}/interstp.log"
+                fi
+            fi
+        elif [ "$hub_up" = 1 ]; then
+            say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP deja en service (M3UA 2908) - non relance"
+        else
+            say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP muet, non lance ici (noeud ${WAN_NODE_ID:-?}, pas le 1) - --interstp pour le forcer"
+        fi
+    fi
+
+    # --- 7quinquies. Adressage SS7 du noeud (set_stp_ip.sh) -------------------
     # setup-wan-mesh.sh monte la VOIX et les SMS entre noeuds ; il ne touche pas
     # au SS7. Sans ce qui suit, --wan donnait un WAN ou les appels passaient mais
     # ou l'ASP inter-STP visait encore 127.0.0.1, en shutdown : l'interco SS7 ne
@@ -2319,7 +2394,42 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
 fi
 
-# --- 7quinquies. Le wrapper tcpdump ------------------------------------------
+# --- 7quater-bis. Hub SS7 local (banc autonome) -----------------------------
+# [2026-10-15] LE RESTART POSE LE SS7. Hors WAN, le STP local garde un ASP
+# « asp-to-inter » vers un inter-STP que personne ne lancait : as-inter
+# AS_DOWN, barreau ss7 en echec a chaque restart. Si l'adresse de ce hub
+# (remote-ip de asp-to-inter) est portee par CETTE machine et que rien n'y
+# repond en M3UA (SCTP 2908), on le lance ici, avant run.sh : l'ASP du STP
+# s'y attache des son demarrage. Noeud et operateur viennent de la
+# routing-key de as-inter (rctx = noeud*1000 + op*100 + 50). Un hub distant ou
+# deja en service n'est jamais touche ; --no-interstp coupe, --no-save garde
+# la table WAN. Meme logique que tests/modules/33-ss7.sh.
+if [ "$ACTION" = "start" ] && [ "$WAN_MESH" -ne 1 ] && [ "$INTERSTP" != "0" ]; then
+    _stp_cfg="${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg"
+    _hub="$(awk '/^ *asp asp-to-inter /{f=1;next} f&&/^ *remote-ip /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
+    _rctx="$(awk '/^ *as as-inter /{f=1;next} f&&/^ *routing-key /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
+    if [ -n "$_hub" ] && [[ "$_rctx" =~ ^[0-9]+$ ]] && [ -r "$HERE/start-interstp.sh" ] \
+       && ip -4 -o addr show 2>/dev/null | awk '{split($4,a,"/"); print a[1]}' | grep -qxF "$_hub"; then
+        _noeud=$(( _rctx / 1000 )); _op=$(( (_rctx / 100) % 10 ))
+        if python3 -c 'import socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM,132); s.settimeout(2)
+s.connect((sys.argv[1],2908))' "$_hub" 2>/dev/null; then
+            say_end " -- " "$C_DIM" "Hub SS7 local" "$_hub:2908 deja en service"
+        elif [ "$DRY" -eq 1 ]; then
+            printf '  [dry-run] start-interstp.sh --ip %s --ops %s --ips "%s:%s" --no-save\n' "$_hub" "$_op" "$_noeud" "$_hub"
+        elif [ "$_noeud" -ge 1 ] && [ "$_noeud" -le 9 ] && [ "$_op" -ge 1 ]; then
+            say_begin "Hub SS7 local ($_hub)"
+            if bash "$HERE/start-interstp.sh" --ip "$_hub" --ops "$_op" --ips "$_noeud:$_hub" --no-save \
+                    > "${LOG_DIR:-/tmp}/interstp.log" 2>&1 < /dev/null; then
+                say_end " OK " "$C_OK" "Hub SS7 local" "$_hub:2908, noeud $_noeud op $_op (rctx $_rctx)"
+            else
+                say_end " KO " "$C_KO" "Hub SS7 local" "voir ${LOG_DIR:-/tmp}/interstp.log"
+            fi
+        fi
+    fi
+fi
+
+# --- 7sexies. Le wrapper tcpdump ---------------------------------------------
 # La capture GSMTAP est lancee par run_modules/75-gsmtap.sh, dans qosmo : un
 # autre depot, qu'on ne modifie pas. Elle ecrit un pcap NON BORNE, et la racine
 # du live etant un tmpfs, une capture un peu chargee finit par remplir la RAM.
@@ -2495,6 +2605,26 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
                   bash "$IPPLAN" --apply 2>&1)" || true
         say_end " OK " "$C_OK" "Adresses privees du noeud" \
             "$(printf '%s' "$_ipout" | tail -1 | sed 's/^osmo-ip-plan : //')"
+    fi
+fi
+
+# ── NAT DU POOL GGSN ─────────────────────────────────────────────────────────
+# [2026-10-15] Sans elle, un PDP pingue le GGSN mais pas Internet (banc-max
+# « data » : GGSN 5/5, Internet 0/5). Seuls start.sh (docker) et le pont PPP
+# (osmo-phonesim-banc.py) posaient une MASQUERADE ; le natif, rien.
+# Le pool est relu dans osmo-ggsn.cfg (ip prefix dynamic). « ! -o apn0 » : la
+# sortie (wifi ou filaire) peut changer sans toucher a la regle. Idempotent.
+if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
+    _pool="$(awk '/ip prefix dynamic/{print $4; exit}' "${OSMOCOM_CFG:-/etc/osmocom}/osmo-ggsn.cfg" 2>/dev/null)"
+    if [ -n "$_pool" ] && command -v iptables >/dev/null 2>&1; then
+        say_begin "NAT du pool GGSN"
+        sysctl -qw net.ipv4.ip_forward=1 2>/dev/null || true
+        if iptables -w -t nat -C POSTROUTING -s "$_pool" ! -o apn0 -j MASQUERADE 2>/dev/null \
+           || iptables -w -t nat -A POSTROUTING -s "$_pool" ! -o apn0 -j MASQUERADE 2>/dev/null; then
+            say_end " OK " "$C_OK" "NAT du pool GGSN" "$_pool -> sortie de l'hote (MASQUERADE)"
+        else
+            say_end "SKIP" "$C_SK" "NAT du pool GGSN" "iptables a refuse la regle ($_pool)"
+        fi
     fi
 fi
 

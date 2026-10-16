@@ -411,6 +411,45 @@ LTE_ON = os.environ.get("OSMO_LTE", "1") == "1"
 # reseau ; on en donne un, distinct de celui de la 2G (« Osmocom », lu sur
 # osmo-bsc), pour que la liste des reseaux montre bien DEUX entrees.
 LTE_NAME = os.environ.get("OSMO_LTE_NAME", "Osmocom 4G")
+# [2026-10-15] LA DATA EN 2G : LE MODEM GPRS SUR LE CALYPSO (QEMU + ROM TI).
+# Sans 4G, la data du telephone sort par tun_modem, le tunnel du `modem`
+# osmocom-bb (contexte PDP, netns msgprs), NATe derriere son adresse ; le GGSN
+# rend le tout sur apn0, NATe vers Internet comme le SGi de la 4G. Le Calypso
+# n a qu UN client de couche 2 : scripts/calypso-mode.sh le donne au modem
+# (ATD*99, data) ou au mobile (appel, SMS : voix). OSMO_GPRS_DATA=0 : coupe.
+GPRS_DATA = os.environ.get("OSMO_GPRS_DATA", "1") == "1"
+GPRS_NETNS = os.environ.get("OSMO_GPRS_NETNS", "msgprs")
+GPRS_TUN = os.environ.get("OSMO_GPRS_TUN", "tun_modem")
+GPRS_NET = os.environ.get("OSMO_GPRS_NET", "176.16.32.0/24")
+CALYPSO_MODE = os.environ.get("OSMO_CALYPSO_MODE",
+                              os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "calypso-mode.sh"))
+CALYPSO_MODE_F = "/run/osmo-banc/calypso-mode"
+
+
+def calypso_mode():
+    """voix | data : a qui est le Calypso (scripts/calypso-mode.sh)."""
+    try:
+        with open(CALYPSO_MODE_F) as f:
+            return f.read().strip() or "voix"
+    except OSError:
+        return "voix"
+
+
+def calypso(mode, attendre):
+    """Donne le Calypso au mobile (voix) ou au modem GPRS (data). attendre :
+    jusqu au mobile en service / au PDP actif (bloquant, 2 a 4 min max)."""
+    if not os.path.exists(CALYPSO_MODE):
+        log("calypso : %s absent, pas de bascule %s" % (CALYPSO_MODE, mode))
+        return False
+    cmd = ["bash", CALYPSO_MODE, mode] + (["--wait"] if attendre else [])
+    if not attendre:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        log("calypso : bascule en %s lancee" % mode)
+        return True
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    for l in (r.stdout or "").splitlines():
+        log("calypso : %s" % l)
+    return r.returncode == 0
 # Le constructeur annonce a AT+CGMI : il decide du greffon ModemManager, donc
 # de la facon de faire la data (voir la reponse a +CGMI et a +GTRNDIS).
 VENDOR = os.environ.get("OSMO_MODEM_VENDOR", "Fibocom")
@@ -1124,62 +1163,91 @@ class Ppp:
             log("PPP : impossible de creer %s (%s) - il faut root ; la session reste sans IP" % (PPP_IF, e))
             return
         self.tun = fd
-        rc, _ = _sh("ip", "-n", LTE_NETNS, "-4", "-o", "addr", "show", LTE_TUN) if LTE_NETNS else (1, "")
-        self.ns = LTE_NETNS if rc == 0 and "inet" in _ else None
+        self.ns = None
+        _sh("ip", "addr", "replace", PPP_LOCAL, "peer", PPP_PEER + "/32", "dev", PPP_IF)
+        _sh("ip", "link", "set", PPP_IF, "up", "mtu", "1500")
+        if not self._radio_brancher():
+            if GPRS_DATA:
+                log("PPP : IPCP ouvert, %s au telephone ; sortie radio en attente du PDP GPRS (%s dans %s)"
+                    % (PPP_PEER, GPRS_TUN, GPRS_NETNS))
+                threading.Thread(target=self._attendre_radio, daemon=True).start()
+            else:
+                log("PPP : IPCP ouvert, %s au telephone, mais pas de %s : la data n a pas de sortie radio"
+                    % (PPP_PEER, LTE_TUN))
+        threading.Thread(target=self._depuis_tun, daemon=True).start()
+
+    def _radio_choix(self):
+        """(netns ou None, tun, reseau a NATer vers Internet) : la 4G si srsUE a
+        son tun, sinon le PDP GPRS du modem sur le Calypso, sinon None."""
+        if LTE_NETNS:
+            rc, o = _sh("ip", "-n", LTE_NETNS, "-4", "-o", "addr", "show", LTE_TUN)
+            if rc == 0 and "inet" in o:
+                return LTE_NETNS, LTE_TUN, PPP_SGI_NET
+        rc, o = _sh("ip", "-4", "-o", "addr", "show", LTE_TUN)
+        if rc == 0 and "inet" in o:
+            return None, LTE_TUN, PPP_SGI_NET
+        if GPRS_DATA and GPRS_NETNS:
+            rc, o = _sh("ip", "-n", GPRS_NETNS, "-4", "-o", "addr", "show", GPRS_TUN)
+            if rc == 0 and "inet" in o:
+                return GPRS_NETNS, GPRS_TUN, GPRS_NET
+        return None
+
+    def _radio_brancher(self):
+        """Branche PPP_IF sur la sortie radio disponible. False si aucune."""
+        choix = self._radio_choix()
+        if choix is None or self.tun is None:
+            return False
+        ns, tun, sgi = choix
+        if ns != self.ns:
+            cur = ["ip", "-n", self.ns] if self.ns else ["ip"]
+            _sh(*cur, "link", "set", PPP_IF, "netns", ns if ns else "1")
+            self.ns = ns
         ip = ["ip", "-n", self.ns] if self.ns else ["ip"]
         ex = ["ip", "netns", "exec", self.ns] if self.ns else []
-        if self.ns:
-            _sh("ip", "link", "set", PPP_IF, "netns", self.ns)
         _sh(*ip, "addr", "replace", PPP_LOCAL, "peer", PPP_PEER + "/32", "dev", PPP_IF)
         _sh(*ip, "link", "set", PPP_IF, "up", "mtu", "1500")
         _sh(*ex, "sysctl", "-qw", "net.ipv4.ip_forward=1")
         _sh(*ex, "sysctl", "-qw", "net.ipv4.conf.%s.rp_filter=0" % PPP_IF)
-        rc, _ = _sh(*ip, "-4", "-o", "addr", "show", LTE_TUN)
-        radio = rc == 0 and "inet" in _
-        if radio:
-            # Tout ce qui vient du telephone sort par la radio (tun_srsue), en
-            # NAT derriere l adresse de l UE. Dans l espace de srsUE c est la
-            # route par defaut ; sur l hote, une table a part (fwmark inutile :
-            # on route par l adresse source).
-            if self.ns:
-                _sh(*ip, "route", "replace", "default", "dev", LTE_TUN)
-            else:
-                _sh("ip", "route", "replace", "default", "dev", LTE_TUN, "table", "45")
-                rc, _ = _sh("ip", "rule", "show")
-                if PPP_PEER not in _:
-                    _sh("ip", "rule", "add", "from", PPP_PEER, "lookup", "45", "priority", "4500")
-            rc, _ = _sh(*ex, "iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_PEER, "-o", LTE_TUN, "-j", "MASQUERADE")
-            if rc != 0:
-                _sh(*ex, "iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_PEER, "-o", LTE_TUN, "-j", "MASQUERADE")
-            # Et la sortie du SGi vers Internet, que srsEPC ne pose pas.
-            rc, up = _sh("sh", "-c", "ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1); exit}'")
-            if up:
-                _sh("sysctl", "-qw", "net.ipv4.ip_forward=1")
-                rc, _ = _sh("iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_SGI_NET, "-o", up, "-j", "MASQUERADE")
-                if rc != 0:
-                    _sh("iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_SGI_NET, "-o", up, "-j", "MASQUERADE")
-                # [2026-09-16] Et le FORWARD : docker met la politique a DROP,
-                # et le paquet NATe etait jete sur l hote (PPP monte, ping de
-                # 10.99.0.1 OK, rien au-dela). Meme regle qu osmo-epc.sh
-                # (setup_forward), rejouee ici a chaque session PPP, dans
-                # DOCKER-USER que docker ne reecrit pas.
-                _sh("iptables", "-w", "-N", "DOCKER-USER")
-                for spec in (("-s", PPP_SGI_NET), ("-d", PPP_SGI_NET)):
-                    rc, _ = _sh("iptables", "-w", "-C", "DOCKER-USER", *spec, "-j", "ACCEPT")
-                    if rc != 0:
-                        _sh("iptables", "-w", "-I", "DOCKER-USER", "1", *spec, "-j", "ACCEPT")
-                rc, _ = _sh("iptables", "-w", "-C", "FORWARD", "-j", "DOCKER-USER")
-                if rc != 0:
-                    _sh("iptables", "-w", "-I", "FORWARD", "1", "-j", "DOCKER-USER")
-            log("PPP : IPCP ouvert, %s a %s ; %s monte %s, la data passe par %s%s"
-                % (PPP_PEER, "le telephone", PPP_IF,
-                   "dans l espace %s" % self.ns if self.ns else "sur l hote",
-                   LTE_TUN,
-                   "" if self.ns else " (retour en raccourci local : srsue sans --gw.netns)"))
+        if self.ns:
+            _sh(*ip, "route", "replace", "default", "dev", tun)
         else:
-            log("PPP : IPCP ouvert, %s au telephone, mais pas de %s : la data n a pas de sortie radio"
-                % (PPP_PEER, LTE_TUN))
-        threading.Thread(target=self._depuis_tun, daemon=True).start()
+            _sh("ip", "route", "replace", "default", "dev", tun, "table", "45")
+            rc, o = _sh("ip", "rule", "show")
+            if PPP_PEER not in o:
+                _sh("ip", "rule", "add", "from", PPP_PEER, "lookup", "45", "priority", "4500")
+        rc, _ = _sh(*ex, "iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_PEER, "-o", tun, "-j", "MASQUERADE")
+        if rc != 0:
+            _sh(*ex, "iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_PEER, "-o", tun, "-j", "MASQUERADE")
+        # La sortie vers Internet du reseau de l UE (SGi 4G ou pool du GGSN)
+        rc, up = _sh("sh", "-c", "ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1); exit}'")
+        if up:
+            _sh("sysctl", "-qw", "net.ipv4.ip_forward=1")
+            rc, _ = _sh("iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", sgi, "-o", up, "-j", "MASQUERADE")
+            if rc != 0:
+                _sh("iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", sgi, "-o", up, "-j", "MASQUERADE")
+            _sh("iptables", "-w", "-N", "DOCKER-USER")
+            for spec in (("-s", sgi), ("-d", sgi)):
+                rc, _ = _sh("iptables", "-w", "-C", "DOCKER-USER", *spec, "-j", "ACCEPT")
+                if rc != 0:
+                    _sh("iptables", "-w", "-I", "DOCKER-USER", "1", *spec, "-j", "ACCEPT")
+            rc, _ = _sh("iptables", "-w", "-C", "FORWARD", "-j", "DOCKER-USER")
+            if rc != 0:
+                _sh("iptables", "-w", "-I", "FORWARD", "1", "-j", "DOCKER-USER")
+        log("PPP : IPCP ouvert, %s au telephone ; %s %s, la data passe par %s (%s)"
+            % (PPP_PEER, PPP_IF, "dans l espace %s" % self.ns if self.ns else "sur l hote",
+               tun, "GPRS, Calypso + ROM TI" if tun == GPRS_TUN else "4G, srsUE"))
+        return True
+
+    def _attendre_radio(self):
+        """Le PDP du modem GPRS arrive 30 a 120 s apres ATD*99 (bascule du
+        Calypso, attach, PDP) : on branche la sortie des qu il est la."""
+        t0 = time.time()
+        while not self.fini and self.tun is not None and time.time() - t0 < 300:
+            if self._radio_brancher():
+                return
+            time.sleep(2)
+        if not self.fini and self.tun is not None:
+            log("PPP : toujours pas de PDP GPRS apres 300 s (scripts/calypso-mode.sh etat)")
 
     def _vers_tun(self, pkt):
         if self.tun is None:
@@ -1451,6 +1519,15 @@ class AtHandler(socketserver.StreamRequestHandler):
         if t:
             t.cancel()
         self._cs_hold = True
+        if GPRS_DATA and calypso_mode() == "data":
+            # [2026-10-15] Classe B : la data GPRS du Calypso laisse la place a
+            # la voix. Le mobile revient (meme ligne que c54x_exe/run.sh) et on
+            # attend qu il soit en service avant de laisser partir l appel.
+            log("calypso : %s - le Calypso repasse au mobile (voix)" % motif)
+            for m in (self, DATA):
+                if m is not None and m.ppp is not None:
+                    m.ppp.terminer("voix : le Calypso quitte le GPRS")
+            calypso("voix", attendre=True)
         if self._rat_annonce == "lte":
             st = BANC.state()
             log("CSFB : %s - on quitte la 4G pour la 2G (ARFCN %s, LAC %d, CI %d)"
@@ -2158,6 +2235,20 @@ class AtHandler(socketserver.StreamRequestHandler):
                 log("data : ATD%s -> CONNECT, PPP sur le port AT (cid %d, APN %s), par %s"
                     % (num, self.data_cid, LTE.state()["apn"],
                        "la 4G (srsUE)" if self.rat() == "lte" else "la 2G"))
+                # [2026-10-15] CONNECT APRES LE PDP, comme un vrai modem. Repondre
+                # CONNECT tout de suite laissait la session PPP du telephone sans
+                # sortie pendant l attach + PDP (1 a 3 min sur le Calypso) : elle
+                # abandonnait (300 s) et il fallait relancer la data a la main.
+                # Ici le port de donnees attend la bascule et le PDP ; en cas
+                # d echec, NO CARRIER, et NetworkManager redemande de lui-meme.
+                if GPRS_DATA and self.rat() == "gsm":
+                    pdp = _sh("ip", "-n", GPRS_NETNS, "-4", "-o", "addr", "show", GPRS_TUN)
+                    if not (pdp[0] == 0 and "inet" in pdp[1]):
+                        log("data : ATD%s - le Calypso passe au GPRS, CONNECT a l arrivee du PDP" % num)
+                        if not calypso("data", attendre=True):
+                            log("data : pas de PDP GPRS, NO CARRIER (le telephone redemandera)")
+                            self.out("NO CARRIER")
+                            return
                 self.out("CONNECT")
                 self.port_commande = False
                 self.ppp = Ppp(self)
