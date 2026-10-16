@@ -2659,26 +2659,6 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     fi
 fi
 
-# ── NAT DU POOL GGSN ─────────────────────────────────────────────────────────
-# [2026-10-15] Sans elle, un PDP pingue le GGSN mais pas Internet (banc-max
-# « data » : GGSN 5/5, Internet 0/5). Seuls start.sh (docker) et le pont PPP
-# (osmo-phonesim-banc.py) posaient une MASQUERADE ; le natif, rien.
-# Le pool est relu dans osmo-ggsn.cfg (ip prefix dynamic). « ! -o apn0 » : la
-# sortie (wifi ou filaire) peut changer sans toucher a la regle. Idempotent.
-if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
-    _pool="$(awk '/ip prefix dynamic/{print $4; exit}' "${OSMOCOM_CFG:-/etc/osmocom}/osmo-ggsn.cfg" 2>/dev/null)"
-    if [ -n "$_pool" ] && command -v iptables >/dev/null 2>&1; then
-        say_begin "NAT du pool GGSN"
-        sysctl -qw net.ipv4.ip_forward=1 2>/dev/null || true
-        if iptables -w -t nat -C POSTROUTING -s "$_pool" ! -o apn0 -j MASQUERADE 2>/dev/null \
-           || iptables -w -t nat -A POSTROUTING -s "$_pool" ! -o apn0 -j MASQUERADE 2>/dev/null; then
-            say_end " OK " "$C_OK" "NAT du pool GGSN" "$_pool -> sortie de l'hote (MASQUERADE)"
-        else
-            say_end "SKIP" "$C_SK" "NAT du pool GGSN" "iptables a refuse la regle ($_pool)"
-        fi
-    fi
-fi
-
 # ── LE TABLEAU DE BORD REDEMARRE AVEC LE BANC ────────────────────────────────
 # [2026-09-09] GESTE SYMETRIQUE DE CELUI DE `stop)` (voir plus haut, ~l.1455).
 # Depuis le 04/09 le chemin d arret coupe osmo-egprs-web.service, pour ne plus
