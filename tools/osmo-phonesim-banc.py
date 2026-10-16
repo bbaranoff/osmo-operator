@@ -1171,10 +1171,37 @@ class Ppp:
                 log("PPP : IPCP ouvert, %s au telephone ; sortie radio en attente du PDP GPRS (%s dans %s)"
                     % (PPP_PEER, GPRS_TUN, GPRS_NETNS))
                 threading.Thread(target=self._attendre_radio, daemon=True).start()
-            else:
+            elif not self._raccourci_test():
                 log("PPP : IPCP ouvert, %s au telephone, mais pas de %s : la data n a pas de sortie radio"
                     % (PPP_PEER, LTE_TUN))
         threading.Thread(target=self._depuis_tun, daemon=True).start()
+
+    def _raccourci_test(self):
+        """RACCOURCI DE TEST (sans radio, sans GGSN), OSMO_PPP_SHORTCUT=1 : le
+        telephone sort par la carte par defaut de l hote, en NAT derriere son
+        adresse, comme le SGi de srsEPC le ferait. Le vrai EGPRS passe par le
+        SGSN/GGSN ; ce chemin ne sert qu a valider DNS, NAT et pile IP du
+        telephone. (repris d origin/main, fusion du 2026-10-16)"""
+        if os.environ.get("OSMO_PPP_SHORTCUT", "0") != "1":
+            return False
+        rc, up = _sh("sh", "-c", "ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1); exit}'")
+        if not up:
+            return False
+        _sh("sysctl", "-qw", "net.ipv4.ip_forward=1")
+        rc, _ = _sh("iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_PEER, "-o", up, "-j", "MASQUERADE")
+        if rc != 0:
+            _sh("iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_PEER, "-o", up, "-j", "MASQUERADE")
+        _sh("iptables", "-w", "-N", "DOCKER-USER")
+        for spec in (("-s", PPP_PEER), ("-d", PPP_PEER)):
+            rc, _ = _sh("iptables", "-w", "-C", "DOCKER-USER", *spec, "-j", "ACCEPT")
+            if rc != 0:
+                _sh("iptables", "-w", "-I", "DOCKER-USER", "1", *spec, "-j", "ACCEPT")
+        rc, _ = _sh("iptables", "-w", "-C", "FORWARD", "-j", "DOCKER-USER")
+        if rc != 0:
+            _sh("iptables", "-w", "-I", "FORWARD", "1", "-j", "DOCKER-USER")
+        log("PPP : IPCP ouvert, %s au telephone - RACCOURCI DE TEST : sortie directe par %s (sans GGSN)"
+            % (PPP_PEER, up))
+        return True
 
     def _radio_choix(self):
         """(netns ou None, tun, reseau a NATer vers Internet) : la 4G si srsUE a

@@ -317,7 +317,7 @@ _gab_fixups_natifs() {
         local rip lip=127.0.0.1
         rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{x=1;next} x&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} x&&/^ (asp|as) /{exit}' "$f")"
         case "$rip" in
-            ""|127.*) ;;
+            ""|127.*|__*) ;;   # __* : gabarit pas encore substitue
             *) lip="$(ip -4 route get "$rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
                [ -n "$lip" ] || lip=127.0.0.1 ;;
         esac

@@ -293,6 +293,10 @@ while [ $# -gt 0 ]; do
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
         --interstp)     INTERSTP=1 ;;
         --no-interstp)  INTERSTP=0 ;;
+        # MS GPRS (modem osmocom-bb) en second MS du fake_trx du side-car, avec
+        # son PCU (/tmp/pcu_bts2) : qosmo run_modules/{58,61,69,71}. Actif par defaut.
+        --gprs-modem)    MODEM_GPRS=1 ;;
+        --no-gprs-modem) MODEM_GPRS=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
                        # run_modules/70-l2.sh gere deja les quatre clients via
                        # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
@@ -317,6 +321,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
+# MODEM_GPRS dans l'environnement de run.sh : exporte ici, 1 sauf --no-gprs-modem.
+export MODEM_GPRS="${MODEM_GPRS:-1}"
 
 # --- --dsp garde le profil par defaut ----------------------------------------
 # [2026-09-22] --dsp forcait le profil `qemu` (pipeline Calypso seul, sans
@@ -1861,7 +1869,11 @@ regen_configs_natif() {
     # Le routing context suit la meme regle : c'est lui que le hub lit pour
     # distinguer les AS, et la formule locale (op*100+50) rend la meme valeur
     # sur tous les noeuds.
-    local mid="${node}${op}"
+    # Plan WAN seulement s'il y a un WAN (--wan, --wan-nodes). Un hote seul garde
+    # le plan LOCAL 1.<op>.<role>, comme set-node-id.sh --local au demarrage :
+    # sinon la regeneration reecrit 1.<noeud><op> a chaque relance, meme sans WAN.
+    local mid="${node}${op}" wan_plan=0
+    if [ "${WAN_MESH:-0}" = "1" ] || [ -n "${WAN_NODES:-}" ]; then wan_plan=1; else mid="$op"; fi
     local pc_msc="1.${mid}.1" pc_stp="1.${mid}.2" pc_bsc="1.${mid}.3"
     local shut="shutdown"
     [ -n "$hub" ] && shut="no shutdown"
@@ -1914,7 +1926,11 @@ regen_configs_natif() {
         # que build-iso.sh pose pour un noeud de WAN. 0.0.0.0 parce que
         # l'adresse du noeud vient du DHCP et n'est pas forcement montee quand
         # osmo-stp demarre - se lier a une adresse absente echoue au lancement.
-        export RCTX_INTER_OVERRIDE=$(( node * 1000 + op * 100 + 50 ))
+        if [ "$wan_plan" = "1" ]; then
+            export RCTX_INTER_OVERRIDE=$(( node * 1000 + op * 100 + 50 ))
+        else
+            export RCTX_INTER_OVERRIDE=$(( op * 100 + 50 ))
+        fi
         export INTER_LOCAL_IP_OVERRIDE="0.0.0.0"
         # _apply_node_ss7_addressing (appele en fin de apply_config_templates)
         # ne rejoue set-node-id.sh que s'il sait QUI il sert, et il ne le lit
@@ -2276,6 +2292,11 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
         if [ "${WAN_NODE_COUNT:-0}" -lt 1 ] || [ "${WAN_NODE_ID:-0}" = "0" ]; then
             wan_nodes_prompt || exit 1
         fi
+        # --node N : cette machine EST le noeud N. Sa ligne dans la table est
+        # remise a l'adresse reelle, et la table reecrite - sans question.
+        if [ -n "$NODE_ID" ] && [ "$WAN_MESH" -eq 1 ]; then
+            wan_self_refresh "$NODE_ID" "${HUB_IP:-${OSMO_HUB_IP:-}}" || exit 1
+        fi
     fi
     wan_nodes_validate || exit 1
     printf '\n'
@@ -2322,14 +2343,17 @@ try: s.connect((sys.argv[1],2908)); sys.exit(0)
 except Exception: sys.exit(1)' "$1" 2>/dev/null
     }
     if [ "$INTERSTP" != "0" ] && [ -n "${HUB_IP:-}" ] && [ -r "$INTERSTP_SH" ]; then
-        hub_local=0; hub_up=0
+        hub_local=0; hub_up=0; hub_owned=0
         ip -4 -o addr show 2>/dev/null | awk '{split($4,a,"/"); print a[1]}' | grep -qxF "$HUB_IP" && hub_local=1
         _m3ua_ecoute "$HUB_IP" && hub_up=1
+        # hub_owned : l'adresse repond au ping mais pas en M3UA, et n'est pas a nous -- une AUTRE
+        # machine la tient ; la poser ici ferait un conflit d'IP sur le LAN (repris d'origin/main).
+        if [ "$hub_up" = 0 ] && [ "$hub_local" = 0 ] && ping -c1 -W1 "$HUB_IP" >/dev/null 2>&1; then hub_owned=1; fi
         lancer=0
         if [ "$INTERSTP" = "1" ]; then lancer=1
         elif [ "$hub_up" = 1 ] && [ "$hub_local" = 0 ]; then lancer=0
         elif [ "$hub_local" = 1 ]; then lancer=1
-        elif [ "${WAN_NODE_ID:-0}" = "1" ]; then lancer=1
+        elif [ "${WAN_NODE_ID:-0}" = "1" ] && [ "$hub_owned" = 0 ]; then lancer=1
         fi
         if [ "$lancer" = 1 ]; then
             # Les noeuds avec LEUR numero (id:ip) : une table 1,3 reste 1,3 sur le hub.
@@ -2351,6 +2375,8 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null
             fi
         elif [ "$hub_up" = 1 ]; then
             say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP deja en service (M3UA 2908) - non relance"
+        elif [ "$hub_owned" = 1 ]; then
+            say_end " KO " "$C_KO" "Inter-STP" "$HUB_IP repond au ping mais pas en SCTP 2908 : lancer start-interstp.sh SUR cette machine-la"
         else
             say_end " -- " "$C_DIM" "Inter-STP" "hub $HUB_IP muet, non lance ici (noeud ${WAN_NODE_ID:-?}, pas le 1) - --interstp pour le forcer"
         fi
@@ -2579,6 +2605,31 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
         kill_softsim || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
+fi
+
+# --- 7sexies. Socket PCU (BTS <-> osmo-pcu) ------------------------------------
+# Les sockets d'un run precedent restent sur le disque ; le PCU, lui, doit
+# trouver le socket du BTS principal (/tmp/pcu_bts). Le harnais supprime les
+# orphelins avant le lancement et affiche l'etat, pour qu'un GPRS muet se lise.
+PCU_SOCK_SH="$HERE/network/pcu-socket.sh"
+if [ "$DRY" -eq 0 ] && [ -r "$PCU_SOCK_SH" ]; then
+    say_begin "Socket PCU"
+    if bash "$PCU_SOCK_SH" --fix > "${LOG_DIR:-/tmp}/pcu-socket.log" 2>&1; then
+        say_end " OK " "$C_OK" "Socket PCU" "voir ${LOG_DIR:-/tmp}/pcu-socket.log"
+    else
+        say_end " KO " "$C_KO" "Socket PCU" "suppression d'un orphelin impossible - voir ${LOG_DIR:-/tmp}/pcu-socket.log"
+    fi
+fi
+
+# --- 7septies. Sortie Internet de l'APN (NAT apn0 -> carte qui route) ----------
+APN_NAT_SH="$HERE/network/apn-nat.sh"
+if [ "$DRY" -eq 0 ] && [ -r "$APN_NAT_SH" ]; then
+    say_begin "Sortie Internet APN (NAT)"
+    if bash "$APN_NAT_SH" > "${LOG_DIR:-/tmp}/apn-nat.log" 2>&1; then
+        say_end " OK " "$C_OK" "Sortie Internet APN" "voir ${LOG_DIR:-/tmp}/apn-nat.log"
+    else
+        say_end " KO " "$C_KO" "Sortie Internet APN" "voir ${LOG_DIR:-/tmp}/apn-nat.log"
+    fi
 fi
 
 # --- 8. lancement : exec run.sh -----------------------------------------------

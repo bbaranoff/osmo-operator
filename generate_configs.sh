@@ -815,9 +815,10 @@ apply_native_post_patches() {
     # ce qui envoie chercher un probleme de hub ou de filtrage alors que la
     # patte locale n'a jamais pu s'ouvrir. Constate le 31/08 sur le banc natif.
     #
-    # 127.0.0.1 : la seule adresse dont on soit certain sur un hote, quelle que
-    # soit sa topologie reseau. Le remote-ip, lui, est deja resolu par le
-    # gabarit (__INTER_STP_IP__) et n'est pas touche ici.
+    # Le local-ip vaut l'adresse qui ROUTE vers le hub (ip route get), pas
+    # 127.0.0.1 : un hub distant (LAN) est injoignable depuis la boucle locale
+    # (Network is unreachable, l'ASP ne monte jamais). Sans hub distant, on
+    # garde 127.0.0.1. Le remote-ip, lui, est deja resolu par le gabarit.
     #
     # awk et pas sed : il faut ne modifier QUE le local-ip qui suit
     # « asp asp-to-inter », pas ceux du bloc d'ecoute juste au-dessus
@@ -833,7 +834,7 @@ apply_native_post_patches() {
         local inter_rip inter_lip=127.0.0.1
         inter_rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{f=1;next} f&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} f&&/^ (asp|as) /{exit}' "$cfg/osmo-stp.cfg")"
         case "$inter_rip" in
-            ""|127.*) ;;
+            ""|127.*|__*) ;;   # __* : gabarit pas encore substitue
             *) inter_lip="$(ip -4 route get "$inter_rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
                [ -n "$inter_lip" ] || inter_lip=127.0.0.1 ;;
         esac

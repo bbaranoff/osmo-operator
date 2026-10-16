@@ -465,9 +465,17 @@ fi
 need_ipv4 "$HUB_IP" "IP de l'inter-STP"
 
 if [ "$SELF_IP" = "$HUB_IP" ]; then
-    echo -e "${RED}Ce noeud et l'inter-STP portent la meme adresse (${SELF_IP}).${NC}" >&2
-    echo -e "${RED}L'ASP s'attacherait a lui-meme - corrigez l'une des deux.${NC}" >&2
-    exit 2
+    # Hub co-localise : le noeud 1 porte l'inter-STP sur sa propre adresse.
+    # C'est valide tant que le hub ECOUTE (port 2908) et que l'ASP part d'un
+    # autre port (2910) - le noeud ne s'attache pas a lui-meme, il s'attache
+    # a un processus voisin. On ne refuse que si personne n'ecoute au hub.
+    if pgrep -f 'osmo-stp -c /etc/osmocom/osmo-stp-interop\.cfg' >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠${NC} inter-STP co-localise sur ${SELF_IP} (hub en service) - ASP vers le voisin, pas vers soi"
+    else
+        echo -e "${RED}Ce noeud et l'inter-STP portent la meme adresse (${SELF_IP}).${NC}" >&2
+        echo -e "${RED}Aucun inter-STP n'ecoute ici : lancez start-interstp.sh, ou corrigez l'adresse.${NC}" >&2
+        exit 2
+    fi
 fi
 if [ "${SELF_IP%.*}" != "${HUB_IP%.*}" ]; then
     echo -e "  ${YELLOW}⚠${NC} ${SELF_IP} et ${HUB_IP} ne sont pas sur le meme /24 -"
