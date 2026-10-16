@@ -294,7 +294,9 @@ while [ $# -gt 0 ]; do
         --interstp)     INTERSTP=1 ;;
         --no-interstp)  INTERSTP=0 ;;
         # MS GPRS (modem osmocom-bb) en second MS du fake_trx du side-car, avec
-        # son PCU (/tmp/pcu_bts2) : qosmo run_modules/{58,61,69,71}. Actif par defaut.
+        # son PCU (/tmp/pcu_bts2) : qosmo run_modules/{58,61,69,71}.
+        # [2026-10-16] INACTIF par defaut : le banc demarre sans data (full ROM
+        # DSP seul, voix/SMS). --gprs-modem remonte le lot data a la demande.
         --gprs-modem)    MODEM_GPRS=1 ;;
         --no-gprs-modem) MODEM_GPRS=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
@@ -323,8 +325,9 @@ while [ $# -gt 0 ]; do
 done
 
 # Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
-# MODEM_GPRS dans l'environnement de run.sh : exporte ici, 1 sauf --no-gprs-modem.
-export MODEM_GPRS="${MODEM_GPRS:-1}"
+# MODEM_GPRS dans l'environnement de run.sh : exporte ici, 0 (sans data) par
+# defaut, 1 avec --gprs-modem. L'environnement gagne (MODEM_GPRS=1 ./start-direct.sh).
+export MODEM_GPRS="${MODEM_GPRS:-0}"
 
 # --- --dsp garde le profil par defaut ----------------------------------------
 # [2026-09-22] --dsp forcait le profil `qemu` (pipeline Calypso seul, sans
@@ -2450,6 +2453,42 @@ s.connect((sys.argv[1],2908))' "$_hub" 2>/dev/null; then
                 say_end " OK " "$C_OK" "Hub SS7 local" "$_hub:2908, noeud $_noeud op $_op (rctx $_rctx)"
             else
                 say_end " KO " "$C_KO" "Hub SS7 local" "voir ${LOG_DIR:-/tmp}/interstp.log"
+            fi
+        fi
+    fi
+fi
+
+# --- 7quater-ter. La local-ip de l'ASP suit l'adresse du jour ---------------
+# [2026-10-16] L'ASP asp-to-inter part d'une local-ip ecrite en dur dans
+# osmo-stp.cfg. Un bail DHCP qui change l'adresse du noeud, et ce bind echoue
+# en silence : as-inter reste AS_DOWN, l'interco SS7 ne monte pas et rien ne le
+# dit. A CHAQUE start on recalcule l'adresse locale (STP_LOCAL_IP) et on la
+# reecrit si elle a bouge, avant que run.sh ne demarre la pile. En WAN c'est
+# set_stp_ip.sh qui s'en charge (7quinquies) ; ici, le cas autonome.
+#   STP_LOCAL_IP = la patte locale qui route vers le hub (remote-ip de l'ASP) ;
+#   au besoin (hub injoignable) l'OSMO_NODE_IP du mynode<N>.conf (N = noeud de
+#   la routing-key, rctx = noeud*1000 + op*100 + 50).
+if [ "$ACTION" = "start" ] && [ "$WAN_MESH" -ne 1 ]; then
+    _stp_cfg="${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg"
+    if [ -w "$_stp_cfg" ]; then
+        _hub="$(awk '/^ *asp asp-to-inter /{f=1;next} f&&/^ *remote-ip /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
+        _lo_now="$(awk '/^ *asp asp-to-inter /{f=1;next} f&&/^ *local-ip /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
+        _rctx="$(awk '/^ *as as-inter /{f=1;next} f&&/^ *routing-key /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
+        STP_LOCAL_IP=""
+        [ -n "$_hub" ] && STP_LOCAL_IP="$(ip route get "$_hub" 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+        if [ -z "$STP_LOCAL_IP" ] && [[ "$_rctx" =~ ^[0-9]+$ ]]; then
+            _nconf="${OSMOCOM_CFG:-/etc/osmocom}/mynode$(( _rctx / 1000 )).conf"
+            [ -r "$_nconf" ] && STP_LOCAL_IP="$(awk -F= '/^OSMO_NODE_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$_nconf" 2>/dev/null)"
+        fi
+        if [ -n "$STP_LOCAL_IP" ] && [ "$STP_LOCAL_IP" != "$_lo_now" ]; then
+            if [ "$DRY" -eq 1 ]; then
+                printf '  [dry-run] osmo-stp.cfg local-ip %s -> %s\n' "${_lo_now:-?}" "$STP_LOCAL_IP"
+            else
+                say_begin "Adresse SS7 locale"
+                # Borne au bloc asp-to-inter : les local-ip 127.0.0.x du listener
+                # local ne sont pas touchees.
+                sed -i "/^ *asp asp-to-inter /,/^ *as /{s/^\( *local-ip *\).*/\1$STP_LOCAL_IP/}" "$_stp_cfg"
+                say_end " OK " "$C_OK" "Adresse SS7 locale" "local-ip ${_lo_now:-?} -> $STP_LOCAL_IP"
             fi
         fi
     fi
