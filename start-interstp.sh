@@ -334,9 +334,22 @@ if ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CFG"; then
         local who; who="$(ss -lntpH "( sport = :$1 )" 2>/dev/null)"
         [ -n "$who" ] && ! { [ -n "$hub_pid" ] && printf '%s' "$who" | grep -q "pid=$hub_pid,"; }
     }
+    # [2026-10-16] Hub co-localise avec un STP operateur. L'operateur prend le
+    # VTY 4239 (son defaut) quand run.sh le lance, APRES ce hub. Si le hub
+    # prenait 4239 maintenant - libre, l'operateur pas encore demarre - run.sh
+    # verrait 4239 ecouter, croirait OsmoSTP deja debout (run_modules/10-stp.sh,
+    # mod_stp_status teste core_vty_listen 4239) et sauterait le STP operateur :
+    # le MSC se retrouve sans STP (SCTP 2905 jamais ouvert), [FAIL] a chaque
+    # --wan sur le noeud 1. On reserve donc 4239 a l'operateur des qu'un
+    # osmo-stp.cfg operateur (VTY 4239 par defaut) est present ici.
+    _op_stp_4239=0
+    if [ -r "$CONF_DIR/osmo-stp.cfg" ] && [ "$CONF_DIR/osmo-stp.cfg" != "$CFG" ] \
+       && ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CONF_DIR/osmo-stp.cfg"; then
+        _op_stp_4239=1
+    fi
     if [ -z "$VTY_PORT" ]; then
-        if ! _port_pris 4239; then VTY_PORT=4239
-        elif [ -n "$VTY_PREC" ] && ! _port_pris "$VTY_PREC"; then VTY_PORT="$VTY_PREC"
+        if [ "$_op_stp_4239" = 0 ] && ! _port_pris 4239; then VTY_PORT=4239
+        elif [ -n "$VTY_PREC" ] && [ "$VTY_PREC" != 4239 ] && ! _port_pris "$VTY_PREC"; then VTY_PORT="$VTY_PREC"
         else
             for p in $(seq 4300 4399); do _port_pris "$p" || { VTY_PORT=$p; break; }; done
         fi

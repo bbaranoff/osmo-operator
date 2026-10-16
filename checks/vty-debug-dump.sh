@@ -256,9 +256,16 @@ show logging level|\
 show stats|\
 show talloc-context all brief"
 
-register_istp_vty 4239 "OsmoSTP-hub" "$ISTP_SHOW_CMDS"
+# Le hub peut avoir ete pousse hors de 4239 (co-localise avec le STP
+# operateur, cf. start-interstp.sh) : relire son VTY dans sa config. En
+# docker le hub reste a 4239 (interroge par docker exec) et le fichier
+# hote est absent : sed rend vide, on garde 4239.
+ISTP_HUB_VTY=4239
+_hubp="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' /etc/osmocom/osmo-stp-interop.cfg 2>/dev/null | head -1)"
+[ -n "$_hubp" ] && ISTP_HUB_VTY="$_hubp"
+register_istp_vty "$ISTP_HUB_VTY" "OsmoSTP-hub" "$ISTP_SHOW_CMDS"
 
-ISTP_VTY_PORTS=(4239)
+ISTP_VTY_PORTS=("$ISTP_HUB_VTY")
 
 # ── Inventaire des noeuds - docker ou natif ────────────────────────────────────
 MODE="$(osmo_mode)"

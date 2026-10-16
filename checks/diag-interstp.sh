@@ -27,7 +27,11 @@ set -uo pipefail
 ROLE_FILE=/etc/osmo-role
 WAN_FILE=/etc/osmo-wan.conf
 CFG=/etc/osmocom/osmo-stp-interop.cfg
+# Le hub peut avoir ete pousse hors de 4239 (co-localise avec le STP
+# operateur, cf. start-interstp.sh) : relire son VTY dans sa config.
 VTY_PORT=4239
+_hubp="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
+[ -n "$_hubp" ] && VTY_PORT="$_hubp"
 M3UA_PORT=2908
 WATCH=0; USE_COLOR=1
 
