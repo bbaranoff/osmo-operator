@@ -106,6 +106,12 @@ P
 }
 etape_profil() {
     titre "1. profil ROM max dans $DEFAULTS"
+    # [2026-10-18] acer (10.99.0.2) n a pas de layer1.highram.gprs.elf : le profil
+    # l imposait quand meme et le banc refusait de partir. Firmware d origine alors.
+    if [ "$FWGPRS" = 1 ] && { [ ! -r "$FW_GPRS" ] || [ ! -r "${FW_GPRS%.elf}.bin" ]; }; then
+        warn "$FW_GPRS absent : firmware d origine (compiler le layer1 GPRS pour --fw-gprs)"
+        FWGPRS=0
+    fi
     touch "$DEFAULTS"
     # retirer une ancienne version du bloc, puis le reposer
     sed -i '/profil « la ROM fait le maximum »/,/^# ── fin profil ROM max/d' "$DEFAULTS"
