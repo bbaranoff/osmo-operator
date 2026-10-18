@@ -1,267 +1,269 @@
-# `start-direct.sh` — étape par étape
+# `start-direct.sh` — step by step
 
-`start-direct.sh` prépare, `run.sh` exécute. Ce document suit le script phase par
-phase : ce qu'il lit, ce qu'il décide, ce qu'il écrit, et à quel moment votre
-variable est prise en compte — ou écrasée.
+`start-direct.sh` prepares, `run.sh` executes. This document follows the script phase by
+phase: what it reads, what it decides, what it writes, and at what point your
+variable is taken into account — or overwritten.
 
 ```
-ligne de commande ─► coeur.env ─► globals.conf ─► environment/load.env ─► profil
-        │                                                                     │
-        └──────── résolution run.sh / fork / lanceur QEMU ◄───────────────────┘
+command line ─► coeur.env ─► globals.conf ─► environment/load.env ─► profile
+        │                                                                 │
+        └──────── resolve run.sh / fork / QEMU launcher ◄─────────────────┘
                               │
-                   génération mobile_*.cfg
+                   generate mobile_*.cfg
                               │
-            --stop / --status / --list ? ─── délégué à run.sh, fin
+            --stop / --status / --list ? ─── delegated to run.sh, done
                               │
-              --regen / --node / --wan / --menu (identité SS7, table WAN)
+              --regen / --node / --wan / --menu (SS7 identity, WAN table)
                               │
-                  arrêt systématique de la pile
+                  stack always stopped first
                               │
-             dashboard :8080, raccord oFono, exec run.sh ─► tmux « calypso »
+             dashboard :8080, oFono hookup, exec run.sh ─► tmux « calypso »
 ```
 
 ---
 
-## 0. Où on est, et un garde-fou retiré
+## 0. Where we are, and a removed safeguard
 
-Le script se place dans son propre répertoire (`HERE`). Il ne vérifie **plus**
-qu'il tourne dans Docker (garde retirée le 2026-08-14 : sur l'ISO il n'y a pas de
-Docker et c'était le seul lanceur utilisable). Conséquence connue : lancé par
-erreur sur un hôte Docker, il meurt sur « `run.sh` introuvable », qui ne désigne
-pas la vraie cause. Sur un hôte avec Docker, le lanceur est `./start.sh`.
+The script moves into its own directory (`HERE`). It **no longer** checks
+that it runs inside Docker (check removed on 2026-08-14: the ISO has no
+Docker and this was the only usable launcher). Known consequence: started by
+mistake on a Docker host, it dies on « `run.sh` introuvable » (run.sh not found), which does not point
+to the real cause. On a host with Docker, the launcher is `./start.sh`.
 
-## 1. Chargement de l'environnement
+## 1. Loading the environment
 
-Dans cet ordre, et **l'ordre décide de qui gagne** (détail : [Environnement.md](Environnement.md)) :
+In this order, and **the order decides who wins** (details: [Environnement.md](Environnement.md)):
 
-1. **`/etc/osmocom/coeur.env`** (`OSMOCOM_CFG` pour déplacer) — écrit par
-   `build-iso.sh`, porte `N_MS`. Chargé ici et pas par `~/.bashrc`, sinon
-   l'icône, systemd et `start-multi.sh` ne le voyaient pas : le HLR n'avait que
-   100101 et le second mobile se faisait créer à la volée sans Ki, injoignable.
-   Le fichier utilise `:=` : un `N_MS=3` posé dans l'environnement gagne.
-2. **Options de la ligne de commande** (`--profile`, `--dsp`, `--node`…).
-3. **`globals.conf`** — référence pour ses 26 variables réseau (MCC, MNC,
+1. **`/etc/osmocom/coeur.env`** (`OSMOCOM_CFG` to move it) — written by
+   `build-iso.sh`, carries `N_MS`. Loaded here and not by `~/.bashrc`, otherwise
+   the icon, systemd and `start-multi.sh` did not see it: the HLR only had
+   100101 and the second mobile got created on the fly without a Ki, unreachable.
+   The file uses `:=`: an `N_MS=3` set in the environment wins.
+2. **Command-line options** (`--profile`, `--dsp`, `--node`…).
+3. **`globals.conf`** — the reference for its 26 network variables (MCC, MNC,
    OP_NAME, ENCRYPTION, ARFCN, BAND, LAC, APN, MS_COUNT, N_OPERATORS,
-   HOST_IP…), **sauf celles que l'appelant a déjà posées et non vides**
-   (depuis le 2026-09-22) : `start-direct.sh` les relève, lit le fichier, puis
-   les repose, et imprime « globals.conf surchargé par l'environnement : … ».
-   `ENCRYPTION="a5 0" ./start-direct.sh --dsp` donne bien a5 0. Une valeur
-   vide ne surcharge rien (vide = calculé, souvent depuis le numéro
-   d'opérateur). Tout le reste passe intact.
-   Modifier : `vim globals.conf` ou `./generate_configs.sh ARFCN=520`.
-4. **`environment/load.env`** — `modes.env` (le profil), `paths.env` (où sont
-   les choses), puis les fichiers par domaine. Tout en `:=` : le premier qui
-   pose une valeur gagne, donc la ligne de commande.
-5. Repli minimal si `load.env` manque (ISO nue, conteneur nu) : `GSM_ROOT=/opt/GSM`,
-   `CALYPSO_FORK=qosmo-grgsm`, résolution d'`OQC_ROOT`.
-6. Défauts restants : `RUN_DIR=/run/osmo-direct`, `LOG_DIR=$RUN_DIR/logs`
-   (tmpfs — le défilement tmux en dépend), `ENCRYPTION="a5 1"` (repli : la
-   valeur réelle vient de `globals.conf`), `CALYPSO_BRIDGE=pont` (`none` avec
+   HOST_IP…), **except those the caller has already set to a non-empty value**
+   (since 2026-09-22): `start-direct.sh` records them, reads the file, then
+   sets them again, and prints « globals.conf surchargé par l'environnement : … » (globals.conf overridden by the environment).
+   `ENCRYPTION="a5 0" ./start-direct.sh --dsp` does give a5 0. An empty
+   value overrides nothing (empty = computed, often from the operator
+   number). Everything else passes through untouched.
+   To change: `vim globals.conf` or `./generate_configs.sh ARFCN=520`.
+4. **`environment/load.env`** — `modes.env` (the profile), `paths.env` (where
+   things are), then the per-domain files. All with `:=`: the first one to
+   set a value wins, hence the command line.
+5. Minimal fallback if `load.env` is missing (bare ISO, bare container): `GSM_ROOT=/opt/GSM`,
+   `CALYPSO_FORK=qosmo-grgsm`, resolution of `OQC_ROOT`.
+6. Remaining defaults: `RUN_DIR=/run/osmo-direct`, `LOG_DIR=$RUN_DIR/logs`
+   (tmpfs — tmux scrollback depends on it), `ENCRYPTION="a5 1"` (fallback: the
+   real value comes from `globals.conf`), `CALYPSO_BRIDGE=pont` (`none` with
    `--dsp`), `MS_COUNT=2`, `HOST_IP=127.0.0.1`.
 
-## 2. Profil
+## 2. Profile
 
-Défaut : **`faketrx-qemu`** (alias `hybrid`) — cœur + BTS#0 QEMU + BTS#1 faketrx.
-`--profile <nom>` ou le mode en positionnel le fixe ; `CALYPSO_PROFILE` ou
-l'historique `MODE` le fixent depuis l'environnement (`MODE` gagne s'il est posé).
-`--dsp` ne touche plus au profil (depuis le 2026-09-22) : il garde le défaut
-`faketrx-qemu`, side-car compris. Un profil nommé explicitement gagne toujours.
+Default: **`faketrx-qemu`** (alias `hybrid`) — core + BTS#0 QEMU + BTS#1 faketrx.
+`--profile <nom>` or the positional mode sets it; `CALYPSO_PROFILE` or
+the legacy `MODE` set it from the environment (`MODE` wins if set).
+`--dsp` no longer touches the profile (since 2026-09-22): it keeps the default
+`faketrx-qemu`, side-car included. An explicitly named profile always wins.
 
-| Profil | Ce qui tourne |
+| Profile | What runs |
 |---|---|
-| `faketrx-qemu` / `hybrid` | cœur + osmo-bts-trx ← QEMU Calypso + fake_trx/trxcon/mobile |
-| `faketrx` | cœur + fake_trx + trxcon + mobile ; pas de QEMU |
-| `virtphy` | cœur + osmo-bts-virtual + virtphy + mobile |
-| `qemu` / `calypso` | le pipeline Calypso seul, cœur en no-process |
-| `core` / `noproc` | STP + HLR + MSC + MGW + BSC (+ Asterisk), aucune radio |
-| `hw` | SDR physique |
-| `virtual` | multi-opérateurs SS7 par `ip netns` (`N_OPERATORS`) |
+| `faketrx-qemu` / `hybrid` | core + osmo-bts-trx ← QEMU Calypso + fake_trx/trxcon/mobile |
+| `faketrx` | core + fake_trx + trxcon + mobile; no QEMU |
+| `virtphy` | core + osmo-bts-virtual + virtphy + mobile |
+| `qemu` / `calypso` | the Calypso pipeline alone, core in no-process |
+| `core` / `noproc` | STP + HLR + MSC + MGW + BSC (+ Asterisk), no radio |
+| `hw` | physical SDR |
+| `virtual` | SS7 multi-operator via `ip netns` (`N_OPERATORS`) |
 
-## 3. Résolution de `run.sh` et du lanceur QEMU
+## 3. Resolving `run.sh` and the QEMU launcher
 
-Ordre : `RUN_SH` explicite > `OQC_ROOT` résolu > `$GSM_ROOT/<fork>/run.sh`.
-`OQC_ROOT` est cherché **à côté du dépôt** (`../qosmo-grgsm`) puis sous
-`/opt/GSM`. Si `run.sh` n'est pas exécutable : FAIL, avec le chemin testé.
+Order: explicit `RUN_SH` > resolved `OQC_ROOT` > `$GSM_ROOT/<fork>/run.sh`.
+`OQC_ROOT` is looked up **next to the repository** (`../qosmo-grgsm`) then under
+`/opt/GSM`. If `run.sh` is not executable: FAIL, with the path tried.
 
-Le lanceur C (`--launcher <bin>`, `QOSMO_LAUNCHER`, défaut `/usr/local/bin/<fork>`)
-est compilé s'il manque et que `<fork>/tools/qosmo-launch` est là. Sans lanceur,
-`40-qemu.sh` retombe sur la ligne `qemu-system-arm` historique.
+The C launcher (`--launcher <bin>`, `QOSMO_LAUNCHER`, default `/usr/local/bin/<fork>`)
+is compiled if missing and `<fork>/tools/qosmo-launch` is present. Without a launcher,
+`40-qemu.sh` falls back to the legacy `qemu-system-arm` command line.
 
-## 4. Validation des chemins
+## 4. Path validation
 
-`--check-paths` s'arrête ici après avoir vérifié chaque dépendance déclarée
-(binaires Osmocom, firmware `layer1.highram.elf`, ROM `calypso_dsp.txt`, pont).
+`--check-paths` stops here after checking every declared dependency
+(Osmocom binaries, `layer1.highram.elf` firmware, `calypso_dsp.txt` ROM, bridge).
 
-## 5. Génération des `mobile_*.cfg`
+## 5. Generating `mobile_*.cfg`
 
-`mobile_group1.cfg` (MS#1, derrière QEMU) et le MS#2 (faketrx) sont écrits dans
-`$OQC_ROOT/cfgs/` depuis les gabarits, avec IMSI/Ki/IMEI de `globals.conf` (ou
-calculés par opérateur). Le client de couche 2 est `mobile` par défaut ;
-`--ccch_scan`, `--bcch_scan`, `--cell_log` le **remplacent** (ils prennent sa
-socket L1CTL et sa VTY — exclusifs).
+`mobile_group1.cfg` (MS#1, behind QEMU) and MS#2 (faketrx) are written to
+`$OQC_ROOT/cfgs/` from the templates, with IMSI/Ki/IMEI from `globals.conf` (or
+computed per operator). The layer 2 client is `mobile` by default;
+`--ccch_scan`, `--bcch_scan`, `--cell_log` **replace** it (they take its
+L1CTL socket and its VTY — mutually exclusive).
 
-## 6. Résumé
+## 6. Summary
 
-Le plan est imprimé : profil, fork, `run.sh`, lanceur, pont, nombre de MS,
-chiffrement, ARFCN. `--list` s'arrête là (délégué à `run.sh --list`) ;
-`--dry-run` continue sans effet de bord.
+The plan is printed: profile, fork, `run.sh`, launcher, bridge, number of MSs,
+ciphering, ARFCN. `--list` stops there (delegated to `run.sh --list`);
+`--dry-run` continues without side effects.
 
-## 7. Actions déléguées
+## 7. Delegated actions
 
-`--stop` et `--status` sont transmis à `run.sh` et le script sort.
+`--stop` and `--status` are passed to `run.sh` and the script exits.
 
 ### 7-menu. `--menu`
 
-Pose **une fois** les choix que le script aurait devinés : profil, nœud,
-opérateur, inter-STP, WAN, régénération. Les valeurs proposées sont celles du
-lancement automatique : valider sans rien changer = ne pas passer l'option.
-Sans terminal, ignoré.
+Asks **once** for the choices the script would otherwise have guessed: profile, node,
+operator, inter-STP, WAN, regeneration. The proposed values are those of the
+automatic launch: accepting without changing anything = not passing the option.
+Ignored without a terminal.
 
 ### 7-regen. `--regen`
 
-Par défaut les configs en place sont **conservées** : `run.sh` les régénérerait
-au démarrage et effacerait l'identité SS7 posée juste avant. `--regen` arrête la
-pile, puis réécrit tout depuis les gabarits (nœud et opérateur courants).
+By default the existing configs are **kept**: `run.sh` would regenerate them
+at startup and erase the SS7 identity set just before. `--regen` stops the
+stack, then rewrites everything from the templates (current node and operator).
 
 ### 7-node. `--node N` / `--op N` / `--hub-ip`
 
-Le numéro de nœud (1 à 9) se **déduit** : environnement, puis `/etc/osmo-role`,
-puis la table WAN comparée aux adresses locales. `--node` force. Le script réécrit
-l'identité SS7 (point codes `1.<nœud><op>.<rôle>`, routing contexts) et pointe
-l'ASP sur l'inter-STP (`--hub-ip`, sinon déduit : docker ou VM). C'est ce qui
-permet une ISO unique pour les neuf nœuds.
+The node number (1 to 9) is **deduced**: environment, then `/etc/osmo-role`,
+then the WAN table compared against the local addresses. `--node` forces it. The script rewrites
+the SS7 identity (point codes `1.<nœud><op>.<rôle>`, routing contexts) and points
+the ASP at the inter-STP (`--hub-ip`, otherwise deduced: docker or VM). This is what
+makes a single ISO possible for all nine nodes.
 
 ### 7-wan. `--wan`
 
-Jamais par défaut (`WAN_AUTO=1` dans `/etc/osmo-wan.conf`, posé par une ISO
-`--wan`, l'active). Trois formes :
+Never on by default (`WAN_AUTO=1` in `/etc/osmo-wan.conf`, set by a `--wan`
+ISO, enables it). Three forms:
 
 ```bash
-./start-direct.sh --wan                                  # questions : nœuds, IP, indicatifs, mon numéro
+./start-direct.sh --wan                                  # questions: nodes, IPs, prefixes, my number
 ./start-direct.sh --wan-nodes "1:IP:IND 2:IP:IND" --wan-id 2   # scriptable
-./start-direct.sh --wan mynode1.conf --wan mynode3.conf  # depuis les fiches des autres nœuds
-./start-direct.sh --gen-conf [FICHIER]                   # écrit MA fiche, ne lance rien
+./start-direct.sh --wan mynode1.conf --wan mynode3.conf  # from the other nodes' sheets
+./start-direct.sh --gen-conf [FICHIER]                   # writes MY sheet, launches nothing
 ```
 
-La table (`--wan-conf`, défaut `/etc/osmo-wan.conf`) est appliquée, l'adressage
-SS7 vers l'inter-STP posé, le maillage SIP + SMS généré. Composer
-`<indicatif><numéro>` joint ce numéro sur le nœud correspondant. Le profil reste
+`--regen-conf` rebuilds the table from scratch (the old one is backed up next to it): use it when a powered-off peer leaves a PROHIB route on the STP. Full procedure for two nodes, LAN or Internet: [WAN](WAN.md).
+
+The table (`--wan-conf`, default `/etc/osmo-wan.conf`) is applied, the SS7
+addressing towards the inter-STP set up, the SIP + SMS mesh generated. Dialing
+`<indicatif><numéro>` reaches that number on the matching node. The profile stays
 `faketrx-qemu`.
 
-`--air-mesh[=PORT]` maille en plus les **bursts** : le milieu radio devient
-commun, un mobile peut entendre et choisir la BTS d'un autre nœud (pairs de la
-table WAN, portée dans `data/air-mesh.txt`, deux mobiles de plus — `pont/airmesh.py`).
+`--air-mesh[=PORT]` additionally meshes the **bursts**: the radio medium becomes
+shared, a mobile can hear and pick another node's BTS (peers from the
+WAN table, range in `data/air-mesh.txt`, two extra mobiles — `pont/airmesh.py`).
 
-`--virtualbox[=N]` monte le segment et N−1 VM avant le WAN ; refuse de tourner
-**dans** une VM (`--vbox-node N` = numéro de cette machine).
+`--virtualbox[=N]` sets up the segment and N−1 VMs before the WAN; refuses to run
+**inside** a VM (`--vbox-node N` = this machine's number).
 
 ### 7-tcpdump
 
-Un wrapper tcpdump est posé pour les captures GSMTAP (`udp/4729`) et M3UA.
+A tcpdump wrapper is installed for GSMTAP (`udp/4729`) and M3UA captures.
 
-### 7-arrêt
+### 7-stop
 
-**Arrêt systématique de la pile avant démarrage** (`run.sh --stop`). Il n'y a
-pas de « relance à chaud » : `--force` relance seulement les modules déjà
-démarrés au lieu de les sauter.
+**The stack is always stopped before starting** (`run.sh --stop`). There is
+no « hot restart »: `--force` only restarts modules that are already
+running instead of skipping them.
 
-## 8. Lancement
+## 8. Launch
 
-1. Adresses privées du nœud imprimées.
-2. **Tableau de bord** sur `:8080` (Firefox l'ouvre depuis `launch.sh`) ; les
-   spectres I/Q sur `:8081` (`fft-web/fft_web.py`).
-3. **Raccord mobile oFono** — le téléphone physique (postmarketOS, PPP) ou le
-   QEMU Android voit le banc comme un modem.
-4. **Audio (PulseAudio allégé)** — lance `scripts/audio-chain.sh 5` (journal
-   `/tmp/osmo-audio-chain.log`) : arrête speech-dispatcher, passe `osmo_rec` en
-   8 kHz mono, pose `module-stream-restore` sans `restore_device`.
-   `AUDIO_ALLEGER=0` : ne pas alléger (la chaîne est posée quand même). `AUDIO_AEC_METHOD` : `webrtc` par défaut
-   (`speex` possible). `AUDIO_PENDANT_APPEL=1` : la chaîne lourde n'est posée
-   qu'entre « Endpoint actif » et « Endpoint disparu » de gapk-auto (défaut 0).
-   `audio-chain.sh --reinit` : repartir d'une chaîne propre sans relancer
+1. The node's private addresses are printed.
+2. **Dashboard** on `:8080` (Firefox opens it from `launch.sh`); the
+   I/Q spectra on `:8081` (`fft-web/fft_web.py`).
+3. **oFono mobile hookup** — the physical phone (postmarketOS, PPP) or the
+   Android QEMU sees the bench as a modem.
+4. **Audio (slimmed-down PulseAudio)** — runs `scripts/audio-chain.sh 5` (log
+   `/tmp/osmo-audio-chain.log`): stops speech-dispatcher, switches `osmo_rec` to
+   8 kHz mono, loads `module-stream-restore` without `restore_device`.
+   `AUDIO_ALLEGER=0`: don't slim down (the chain is set up anyway). `AUDIO_AEC_METHOD`: `webrtc` by default
+   (`speex` possible). `AUDIO_PENDANT_APPEL=1`: the heavy chain is only set up
+   between gapk-auto's « Endpoint actif » and « Endpoint disparu » (endpoint active / gone) (default 0).
+   `audio-chain.sh --reinit`: start again from a clean chain without restarting
    PulseAudio.
-5. **Transmission à `run.sh`** : `exec`, avec le profil et tout l'environnement.
-   Toute variable `CALYPSO_*` passée en préfixe arrive **intacte** jusqu'à
-   `run.sh`, ses `run_modules/` et QEMU (`CALYPSO_LANG=en`, `CALYPSO_NO_ATTACH=1`,
+5. **Hand-off to `run.sh`**: `exec`, with the profile and the whole environment.
+   Any `CALYPSO_*` variable passed as a prefix reaches `run.sh`, its `run_modules/`
+   and QEMU **untouched** (`CALYPSO_LANG=en`, `CALYPSO_NO_ATTACH=1`,
    `CALYPSO_BRIDGE=none`…).
 
-`run.sh` ouvre le tmux `calypso` : `osmo-bts-trx` → QEMU (PTY + moniteur) →
-attente de `/tmp/osmocom_l2` → pont → attente des ticks UDP 6700 → `mobile`, puis
-le cœur, Asterisk, SMSC. Sauf `--no-attach` / `CALYPSO_NO_ATTACH=1` (ce que pose
-`osmo-banc.service` : personne devant), le script s'attache au tmux.
+`run.sh` opens the `calypso` tmux: `osmo-bts-trx` → QEMU (PTY + monitor) →
+wait for `/tmp/osmocom_l2` → bridge → wait for UDP 6700 ticks → `mobile`, then
+the core, Asterisk, SMSC. Unless `--no-attach` / `CALYPSO_NO_ATTACH=1` (which
+`osmo-banc.service` sets: nobody is sitting in front of it), the script attaches to the tmux.
 
-### 8-dsp. Le banc DSP
+### 8-dsp. The DSP bench
 
-Avec `--dsp`, `RUN_SH` reste celui du fork et reçoit
-`--skip qemu,pty,osmocon,l2 --no-attach`. Ensuite `exec c54x_exe/run.sh`
-(`BANC_DSP`, s'il est exécutable) prend le relais avec `MODE=dsp PONT=1`, `IQ=none`, `INSNS=120000`,
-`LOCKSTEP=1`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1` (celle-ci n'est plus lue
-par le cœur, cf. [Environnement.md](Environnement.md)) — en `:=`, donc
-surchargeables. Les cinq étapes :
+With `--dsp`, `RUN_SH` stays the fork's one and receives
+`--skip qemu,pty,osmocon,l2 --no-attach`. Then `exec c54x_exe/run.sh`
+(`BANC_DSP`, if executable) takes over with `MODE=dsp PONT=1`, `IQ=none`, `INSNS=120000`,
+`LOCKSTEP=1`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1` (the latter is no longer read
+by the core, see [Environnement.md](Environnement.md)) — set with `:=`, so they can be
+overridden. The five steps:
 
-1. `c54x_exe --arm` — le DSP : socket `/tmp/calypso_dsp.sock`, API RAM partagée,
-   bursts DL en `udp/6702` ;
-2. `qemu-system-arm` de `/opt/GSM/qosmo` (`CALYPSO_DSP_EXTERN=1`) — l'ARM seul ;
-3. `osmocon` ;
-4. `mobile` (`mobile_pont.cfg`, VTY **4347**) ;
+1. `c54x_exe --arm` — the DSP: socket `/tmp/calypso_dsp.sock`, shared RAM API,
+   DL bursts on `udp/6702`;
+2. `qemu-system-arm` from `/opt/GSM/qosmo` (`CALYPSO_DSP_EXTERN=1`) — the ARM alone;
+3. `osmocon`;
+4. `mobile` (`mobile_pont.cfg`, VTY **4347**);
 5. `pont/pont_dsp.py`.
 
-`CALYPSO_BRIDGE` vaut `none` : ce n'est pas `start-direct.sh` qui lance le pont.
-`--stop`, `--regen` et l'arrêt avant démarrage arrêtent aussi le banc DSP, même
-sans `--dsp` ; `--status` et `--check-paths` le montrent (avec `--dsp`). Le
-résumé et oFono visent la VTY 4347 (`OSMO_MOB_VTY_PORT`). `BANC_DSP=none` : la
-pile seule.
+`CALYPSO_BRIDGE` is `none`: it is not `start-direct.sh` that starts the bridge.
+`--stop`, `--regen` and the stop before starting also stop the DSP bench, even
+without `--dsp`; `--status` and `--check-paths` show it (with `--dsp`). The
+summary and oFono target VTY 4347 (`OSMO_MOB_VTY_PORT`). `BANC_DSP=none`: the
+stack alone.
 
-Journaux : les vrais fichiers sont aux chemins du panneau
+Logs: the real files are at the dashboard paths
 (`/run/user/0/osmo-nitb/logs/{qemu,osmocon,mobile}.log`, `/dev/shm/pont.log`),
-avec des liens dans `/tmp/c54x-pont`. `--assembly-logs` (`ASSEMBLY_LOGS=1`,
-`ASSEMBLY_LOGS_FLAGS`, `ASSEMBLY_LOGS_FILTRE`) écrit
-`/tmp/c54x-pont/qemu-asm.log`, mais le banc perd alors le temps réel.
+with links in `/tmp/c54x-pont`. `--assembly-logs` (`ASSEMBLY_LOGS=1`,
+`ASSEMBLY_LOGS_FLAGS`, `ASSEMBLY_LOGS_FILTRE`) writes
+`/tmp/c54x-pont/qemu-asm.log`, but the bench then loses real time.
 
 ---
 
-## Manuel court
+## Short manual
 
 ```
 ./start-direct.sh [options] [mode]
 
-Modes : faketrx-qemu (défaut) | faketrx | qemu | noproc | core | hybrid
+Modes: faketrx-qemu (default) | faketrx | qemu | noproc | core | hybrid
 
-Choix de la pile
-  --dsp                (défaut depuis le 2026-10-01) banc DSP C54x : le C54x tourne hors QEMU (/opt/GSM/c54x_exe, mask-ROM TI)
-                       et décode FCCH/SCH/BCCH lui-même ; le mobile campe (SI1-4, lai=001-01-1)
-                       et fait sa mise à jour de localisation. Même profil et même pile qu'en
-                       grgsm, seuls qemu,pty,osmocon,l2 passent à c54x_exe/run.sh
-                       (BANC_DSP=none : la pile seule)
-  --assembly-logs      trace asm de l'ARM (/tmp/c54x-pont/qemu-asm.log) ; plus de temps réel
-  --grgsm              couche 1 gr-gsm dans qosmo (l'ancien défaut)
-  --sap, --softsim     SIM servie par SAP (softSIM) : la carte du lecteur PC/SC
-                       (HID Omnikey) si une carte y est, sinon la SIM logicielle ;
-                       --sap=pcsc / --sap=sim forcent, --no-sap (défaut) : SIM de test.
-                       Voir [SIM](SIM.md).
-  --launcher <bin>     lanceur C de QEMU (défaut /usr/local/bin/<fork>)
-  --profile <nom>      force le profil
-  --mobile | --ccch_scan | --bcch_scan | --cell_log   client de couche 2 (exclusifs)
+Stack selection
+  --dsp                (default since 2026-10-01) C54x DSP bench: the C54x runs outside QEMU (/opt/GSM/c54x_exe, TI mask ROM)
+                       and decodes FCCH/SCH/BCCH itself; the mobile camps (SI1-4, lai=001-01-1)
+                       and does its location update. Same profile and same stack as
+                       grgsm, only qemu,pty,osmocon,l2 move to c54x_exe/run.sh
+                       (BANC_DSP=none: the stack alone)
+  --assembly-logs      ARM asm trace (/tmp/c54x-pont/qemu-asm.log); no more real time
+  --grgsm              gr-gsm layer 1 inside qosmo (the old default)
+  --sap, --softsim     SIM served over SAP (softSIM): the card in the PC/SC reader
+                       (HID Omnikey) if one is inserted, otherwise the software SIM;
+                       --sap=pcsc / --sap=sim force it, --no-sap (default): test SIM.
+                       See [SIM](SIM.md).
+  --launcher <bin>     QEMU C launcher (default /usr/local/bin/<fork>)
+  --profile <nom>      forces the profile
+  --mobile | --ccch_scan | --bcch_scan | --cell_log   layer 2 client (mutually exclusive)
 
-Cycle de vie
+Lifecycle
   --list  --dry-run  --stop  --status  --force  --verbose  --no-attach  --check-paths
-  --regen              régénère les configs depuis les gabarits (sinon conservées)
-  --menu               pose les questions au lieu de deviner
+  --regen              regenerates the configs from the templates (kept otherwise)
+  --menu               asks the questions instead of guessing
 
-Topologie
+Topology
   --node N  --op N  --hub-ip IP
   --wan | --wan FICHE… | --wan-nodes "…" | --wan-id N | --wan-conf FICHIER | --gen-conf [F]
   --air-mesh[=PORT]  --virtualbox[=N]  --vbox-node N
 ```
 
-Reprendre la main :
+Getting back in:
 
 ```bash
-tmux attach -t calypso         # Ctrl-b d détache, le banc continue
-journalctl -u osmo-banc -f     # si lancé en service
+tmux attach -t calypso         # Ctrl-b d detaches, the bench keeps running
+journalctl -u osmo-banc -f     # if started as a service
 ./start-direct.sh --status
 ./start-direct.sh --stop
 ```
 
-Logs : `$LOG_DIR` (`/run/osmo-direct/logs`, tmpfs) ; QEMU : `/var/log/osmocom/qemu.log`,
-pont : `/var/log/osmocom/bridge.log`, orchestration : `/var/log/osmocom/run.sh.log`.
+Logs: `$LOG_DIR` (`/run/osmo-direct/logs`, tmpfs); QEMU: `/var/log/osmocom/qemu.log`,
+bridge: `/var/log/osmocom/bridge.log`, orchestration: `/var/log/osmocom/run.sh.log`.

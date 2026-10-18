@@ -1,85 +1,86 @@
-# Résultats de référence — `checks/check_all.sh`
+# Reference results — `checks/check_all.sh`
 
-Deux exécutions sur la même machine (Ubuntu 24.04, natif, hostname `operator`),
-le 2026-09-15. Elles servent d'étalon : un banc sain donne ces lignes-là, et les
-écarts commentés ici sont connus.
+Two runs on the same machine (Ubuntu 24.04, native, hostname `operator`),
+on 2026-09-15. They serve as a baseline: a healthy bench produces these lines, and the
+deviations commented here are known.
 
 | | Run 1 — 17:57 | Run 2 — 18:12 |
 |---|---|---|
-| Topologie | 1 opérateur natif, **sans** inter-STP | 3 opérateurs (Op1 natif + Op2/Op3 conteneurs) + inter-STP local |
+| Topology | 1 native operator, **without** inter-STP | 3 operators (Op1 native + Op2/Op3 containers) + local inter-STP |
 | `global` | OK — 29 pass / 0 fail / 1 warn / 1 skip (85 s) | OK — 88 pass / 0 fail / 5 warn / 0 skip (217 s) |
-| `ss7` | OK — 7 pass / 1 warn / 3 skip | OK — **31 pass / 0 warn / 0 skip**, matrice 3×3 complète |
-| `interstp` | ignoré (aucun hub) | **ECHEC** « aucun AS actif » — faux négatif, voir § 2.3 |
-| `operator` | ECHEC « INTERCO SS7 : DOWN » — attendu sans hub | ignoré (ce nœud est le hub) |
-| `annuaire` | ignoré (pas de fiche) | OK — 4 abonnés/op, 2 warn |
-| `wan`, `dump`, `resume` | ignorés | ignorés |
-| **Verdict** | **sain** pour un nœud seul | **sain**, interco opérationnelle ; 1 bug de diag, 2 warn à traiter |
+| `ss7` | OK — 7 pass / 1 warn / 3 skip | OK — **31 pass / 0 warn / 0 skip**, full 3×3 matrix |
+| `interstp` | skipped (no hub) | **ECHEC** (FAIL) "aucun AS actif" (no active AS) — false negative, see § 2.3 |
+| `operator` | ECHEC (FAIL) "INTERCO SS7 : DOWN" — expected without a hub | skipped (this node is the hub) |
+| `annuaire` | skipped (no directory entry) | OK — 4 subscribers/op, 2 warn |
+| `wan`, `dump`, `resume` | skipped | skipped |
+| **Verdict** | **healthy** for a single node | **healthy**, interconnect operational; 1 diag bug, 2 warn to address |
 
 ---
 
-## 1. Run 1 — nœud natif seul
+## 1. Run 1 — single native node
 
-Tout le cœur est vert : STP 2 ASP / 2 AS, aucun PROHIB ; HLR avec VLR et SMSC
-en GSUP ; MSC et BSC `ASP_ACTIVE`, SSN 254 ; BTS 0 Enabled/OK, OML + RSL ; PCU
-sur BTS ; SGSN 1 NS entity ; SIP connector, MNCC, relay SMS `:7890`, Asterisk ;
-les sept démons en cours.
+The whole core is green: STP 2 ASP / 2 AS, no PROHIB; HLR with VLR and SMSC
+over GSUP; MSC and BSC `ASP_ACTIVE`, SSN 254; BTS 0 Enabled/OK, OML + RSL; PCU
+on BTS; SGSN 1 NS entity; SIP connector, MNCC, SMS relay `:7890`, Asterisk;
+the seven daemons running.
 
-`diag-stp-operator.sh` conclut « INTERCO SS7 : DOWN » avec trois causes :
-`asp-to-inter` en `shutdown`, `remote-ip 127.0.0.1` ≠ hub `172.20.0.10`, pas de
-SCTP. Les trois sont la **même** cause : il n'y a pas d'inter-STP. L'échec est
-attendu et disparaît au run 2.
+`diag-stp-operator.sh` concludes "INTERCO SS7 : DOWN" with three causes:
+`asp-to-inter` in `shutdown`, `remote-ip 127.0.0.1` ≠ hub `172.20.0.10`, no
+SCTP. All three are the **same** cause: there is no inter-STP. The failure is
+expected and disappears at run 2.
 
-Un seul warn réel : **GGSN, 0 APN**.
+Only one real warn: **GGSN, 0 APN**.
 
-## 2. Run 2 — trois opérateurs + inter-STP
+## 2. Run 2 — three operators + inter-STP
 
-### 2.1 Ce qui prouve que l'interco marche
+### 2.1 What proves the interconnect works
 
-- Chaque STP a **3 ASP / 3 AS** actifs (le troisième est `as-inter`) et une route
-  par défaut vers l'inter-STP « présente et avail ».
-- `ss7_check.sh` : hub `0.0.0` joignable, 3 AS / 3 ASP, aucun PROHIB ; sur les
-  trois opérateurs `as-inter → hub : ACTIVE` ; matrice de connectivité
-  Op1/Op2/Op3 toute en `via`, 31 pass, 0 warn.
-- `annuaire.sh` : opérateurs 2 et 3 à **3/3 AS actifs**, point codes
-  `1.2.x` / `1.3.x`, RCTX 250 / 350, hub 172.20.0.10 — conforme aux formules
-  du README.
+- Each STP has **3 ASP / 3 AS** active (the third is `as-inter`) and a default
+  route to the inter-STP "présente et avail" (present and avail).
+- `ss7_check.sh`: hub `0.0.0` reachable, 3 AS / 3 ASP, no PROHIB; on all
+  three operators `as-inter → hub : ACTIVE`; connectivity matrix
+  Op1/Op2/Op3 all `via`, 31 pass, 0 warn.
+- `annuaire.sh`: operators 2 and 3 at **3/3 AS active**, point codes
+  `1.2.x` / `1.3.x`, RCTX 250 / 350, hub 172.20.0.10 — matching the README's
+  formulas.
 
-### 2.2 Les warn
+### 2.2 The warnings
 
-| Warn | Où | Lecture |
+| Warn | Where | Interpretation |
 |---|---|---|
-| GGSN : 0 APN configuré | Op1, Op2, Op3 | même point qu'au run 1 : la data 2G (SGSN → GGSN) ne monte pas de PDP sans APN. `APN=internet` dans `globals.conf` puis `--regen`. La 4G (Open5GS/ogstun) n'est pas concernée |
-| SGSN : 0 NS entity | Op2, Op3 | le PCU des conteneurs n'a pas ouvert son NS-VC vers le SGSN (Op1, natif, en a 1). Sans effet sur voix/SMS/SS7 ; à regarder avec le point précédent si la data 2G est voulue sur ces opérateurs |
-| 2 abonnés sans fiche | Op2, Op3 | le HLR connaît `00101000N000001/2` (provisionnés par l'ancien schéma d'IMSI) en plus des `0010N000N000001/2` qui ont une fiche. Le script le dit : banc relancé sans `start.sh`. Cosmétique |
+| GGSN: 0 APN configured | Op1, Op2, Op3 | same point as run 1: 2G data (SGSN → GGSN) does not bring up a PDP without an APN. `APN=internet` in `globals.conf` then `--regen`. 4G (Open5GS/ogstun) is not affected |
+| SGSN: 0 NS entity | Op2, Op3 | the containers' PCU did not open its NS-VC to the SGSN (Op1, native, has 1). No effect on voice/SMS/SS7; to look at together with the previous point if 2G data is wanted on these operators |
+| 2 subscribers without a directory entry | Op2, Op3 | the HLR knows `00101000N000001/2` (provisioned by the old IMSI scheme) in addition to the `0010N000N000001/2` that have an entry. The script says so: bench restarted without `start.sh`. Cosmetic |
 
-### 2.3 Le faux négatif de `diag-interstp.sh`
+### 2.3 The false negative of `diag-interstp.sh`
 
-Le bilan affiche `interstp ECHEC — INTERCO SS7 : DOWN - aucun AS actif`, alors
-que le même script vient d'écrire trois lignes `[ OK ] … AS_ACTIVE` et que
-`ss7_check.sh` valide l'interco de bout en bout. Deux indices dans sa sortie :
+The report shows `interstp ECHEC — INTERCO SS7 : DOWN - aucun AS actif`
+(FAIL — SS7 INTERCO: DOWN - no active AS), even though the same script has just
+written three `[ OK ] … AS_ACTIVE` lines and `ss7_check.sh` validates the
+interconnect end to end. Two clues in its output:
 
-- `[FAIL] service inactif (inactive)` : il interroge `systemctl` pour l'unité
-  du hub, qui n'existe pas quand l'inter-STP est lancé par `start-multi.sh`
-  (conteneur `osmo-inter-stp`) et non par `osmo-interstp.service`.
-- `== ASP ATTACHES ==` liste `asp-to-inter` (client vers `127.0.0.1:2908`),
-  `as-rkm-110` et `as-rkm-130` : ce sont les AS **du STP de l'opérateur 1**
-  (RCTX 110 = MSC, 130 = BSC), pas ceux du hub. Le script a lu la VTY
-  `127.0.0.1:4239`, qui sur un nœud hybride natif + Docker est celle d'Op1,
-  et n'a trouvé aucun `as-opN` — d'où « aucun AS actif ».
+- `[FAIL] service inactif (inactive)` (service inactive): it queries `systemctl`
+  for the hub's unit, which does not exist when the inter-STP is launched by
+  `start-multi.sh` (the `osmo-inter-stp` container) and not by `osmo-interstp.service`.
+- `== ASP ATTACHES ==` lists `asp-to-inter` (client to `127.0.0.1:2908`),
+  `as-rkm-110` and `as-rkm-130`: these are the AS **of operator 1's STP**
+  (RCTX 110 = MSC, 130 = BSC), not the hub's. The script read the VTY
+  `127.0.0.1:4239`, which on a hybrid native + Docker node is Op1's,
+  and found no `as-opN` — hence "aucun AS actif".
 
-Conclusion : **l'interco est UP**, le verdict est un défaut du script en
-topologie hybride (hub en conteneur, opérateur 1 natif sur le même hôte). À
-corriger dans `checks/diag-interstp.sh` : viser la VTY du conteneur
-`osmo-inter-stp` (ou `--hub-vty`) quand `OSMO_ROLE=operator` et que le hub est
-« interrogeable ici », et ne pas compter `systemctl` comme un FAIL quand le hub
-est un conteneur.
+Conclusion: **the interconnect is UP**, the verdict is a defect in the script in
+a hybrid topology (hub in a container, operator 1 native on the same host). To
+fix in `checks/diag-interstp.sh`: target the VTY of the `osmo-inter-stp`
+container (or `--hub-vty`) when `OSMO_ROLE=operator` and the hub is
+"queryable here", and not count `systemctl` as a FAIL when the hub
+is a container.
 
-## 3. Rejouer
+## 3. Replay
 
 ```bash
-bash ./checks/check_all.sh                         # ~2 min seul, ~6 min à trois opérateurs
-./checks/check_all.sh --only=interstp --verbose    # le check en détail
-./checks/check_all.sh --dump                       # + vty-debug-dump et operator_summary
+bash ./checks/check_all.sh                         # ~2 min alone, ~6 min with three operators
+./checks/check_all.sh --only=interstp --verbose    # the check in detail
+./checks/check_all.sh --dump                       # + vty-debug-dump and operator_summary
 ```
 
-Journal complet : `/tmp/osmo-check-all-<date>.txt`.
+Full log: `/tmp/osmo-check-all-<date>.txt`.

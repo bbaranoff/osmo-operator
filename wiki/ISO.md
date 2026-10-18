@@ -1,697 +1,697 @@
-# L'ISO osmo-operator — description complète, build, installation, capacités
+# The osmo-operator ISO — full description, build, installation, capabilities
 
-Cette page décrit **tout ce que l'ISO est** : ce qu'elle contient, comment elle
-se fabrique (`build-iso.sh` et ses modules), comment elle démarre, comment elle
-s'installe sur un disque, et tout ce qu'elle sait faire une fois démarrée.
-Elle renvoie aux fichiers du dépôt pour chaque point ; les pages
-[Build](Build.md), [Start-direct](Start-direct.md) et [Environnement](Environnement.md)
-détaillent les scripts eux-mêmes.
+This page describes **everything the ISO is**: what it contains, how it is
+built (`build-iso.sh` and its modules), how it boots, how it installs to a
+disk, and everything it can do once booted.
+It points to the repository files for each item; the
+[Build](Build.md), [Start-direct](Start-direct.md) and [Environnement](Environnement.md)
+pages detail the scripts themselves.
 
-État de référence : **osmo-operator-desktop.iso v0.1-6** (tag `v0.1-6`, commit
-`869f830`), plus les changements du 2026-10-01 décrits plus bas (DSP par défaut,
-question LUKS sur la console, lanceurs GTK).
+Reference state: **osmo-operator-desktop.iso v0.1-6** (tag `v0.1-6`, commit
+`869f830`), plus the 2026-10-01 changes described below (DSP by default,
+LUKS question on the console, GTK launchers).
 
 ---
 
-## 1. En bref
+## 1. At a glance
 
-| Élément | Valeur |
+| Item | Value |
 |---|---|
-| Base | Ubuntu 24.04 (noble), noyau `linux-image-generic` 6.8.0-146 |
-| Taille (desktop) | ISO 6,5 Go · squashfs 6,3 Go (zstd -19, 41 % de 15,9 Go) · 314 178 fichiers |
-| Boot | ISO hybride (dd sur clé, UEFI ou BIOS), Secure Boot shim → grub → noyau, entrée `toram` (9 Go de RAM) |
-| Comptes live | `root` autologin (mdp `osmo`) · `osmocom` sudoer (mdp `osmo`) · téléphone pmOS `147147` |
-| Build | `sudo ./build-iso.sh --desktop`, ~2 h 15 sur 16 cœurs ; image Docker tirée de ghcr.io sans recompilation ; debootstrap minimal + les `.deb` du build (~41) ; ~1 650 paquets en chroot ; contrôle d'intégrité dpkg avant et après squashfs |
-| 2G | Banc complet (`launch.sh`, `osmo-banc`), 2 MS, A5/1, SMS inter-opérateurs, MSC avec SGs (CSFB) |
-| Baseband émulé | QEMU `qosmo` (ARM7 + DSP C54x), 7 ROMs DSP, firmware layer1 pour 10 cartes, gdb/telnet, `c54x_exe`, `grgsm_exe` |
-| 4G | srsENB/srsUE portables + srsGUI, Open5GS, freeDiameter TLS, MME SGsAP, console HSS `:9999`, abonnés dans Mongo |
-| Téléphone | VM postmarketOS 1,7 Go (noyau PPP), pmbootstrap patché, pmaports `9479a409e3` |
-| Bureau | GNOME minimal, Firefox (deb Mozilla, fr, uBlock), Wireshark, Linphone (poste 100), Kodi, dino, oFono, Conky, Plymouth `osmo-bts`, tableau de bord web + tutoriel |
-| Audio | PulseAudio système, PipeWire pour le screencast seul, PCM `gsm_out`/`gsm_in` |
-| Retiré | avahi, Chromium, sssd masqué, pipewire-pulse |
-| Installation | Calamares (`osmo-install`), `/home` chiffré LUKS2 optionnel, `osmo-update` au boot |
-| Services posés, non activés | `osmo-banc`, `osmo-multi`, `osmo-lte` (`--banc`, `--multi`, `OSMO_ISO_LTE=1` au build pour les activer) |
+| Base | Ubuntu 24.04 (noble), kernel `linux-image-generic` 6.8.0-146 |
+| Size (desktop) | ISO 6.5 GB · squashfs 6.3 GB (zstd -19, 41 % of 15.9 GB) · 314,178 files |
+| Boot | hybrid ISO (dd to a USB stick, UEFI or BIOS), Secure Boot shim → grub → kernel, `toram` entry (9 GB RAM) |
+| Live accounts | `root` autologin (pw `osmo`) · `osmocom` sudoer (pw `osmo`) · pmOS phone `147147` |
+| Build | `sudo ./build-iso.sh --desktop`, ~2 h 15 on 16 cores; Docker image pulled from ghcr.io, no recompilation; minimal debootstrap + the build's `.deb`s (~41); ~1,650 packages in the chroot; dpkg integrity check before and after squashfs |
+| 2G | Full bench (`launch.sh`, `osmo-banc`), 2 MS, A5/1, inter-operator SMS, MSC with SGs (CSFB) |
+| Emulated baseband | QEMU `qosmo` (ARM7 + C54x DSP), 7 DSP ROMs, layer1 firmware for 10 boards, gdb/telnet, `c54x_exe`, `grgsm_exe` |
+| 4G | portable srsENB/srsUE + srsGUI, Open5GS, freeDiameter TLS, MME SGsAP, HSS console `:9999`, subscribers in Mongo |
+| Phone | postmarketOS VM 1.7 GB (PPP kernel), patched pmbootstrap, pmaports `9479a409e3` |
+| Desktop | minimal GNOME, Firefox (Mozilla deb, fr, uBlock), Wireshark, Linphone (extension 100), Kodi, dino, oFono, Conky, Plymouth `osmo-bts`, web dashboard + tutorial |
+| Audio | system-wide PulseAudio, PipeWire for screencast only, PCM `gsm_out`/`gsm_in` |
+| Removed | avahi, Chromium, sssd masked, pipewire-pulse |
+| Installation | Calamares (`osmo-install`), optional LUKS2-encrypted `/home`, `osmo-update` at boot |
+| Services installed, not enabled | `osmo-banc`, `osmo-multi`, `osmo-lte` (`--banc`, `--multi`, `OSMO_ISO_LTE=1` at build time to enable them) |
 
 ---
 
-## 2. Les images produites
+## 2. Images produced
 
-Une même chaîne (`build-iso.sh` + `iso_modules/`) produit cinq images. Sans
-option, les quatre images amd64 sont construites à la suite (`--all`).
+A single chain (`build-iso.sh` + `iso_modules/`) produces five images. With no
+option, the four amd64 images are built back to back (`--all`).
 
-| Image | Fichier | Rôle | Contenu |
+| Image | File | Role | Contents |
 |---|---|---|---|
-| Hub SS7 | `interstp.iso` | `--role=interstp` : l'inter-STP seul (PC 0.0.0), aucun opérateur ; refuse `--lite` et `--desktop` | image `osmocom-stp` (Dockerfile.stp), libosmocore/netif/sigtran seulement, `osmo-interstp.service` au boot |
-| Opérateur | `osmo-operator.iso` | `--role=operator` (défaut) : le banc complet, sans bureau | pile 2G, baseband émulé, 4G, dashboard, outils ; console texte |
-| Lite | `osmo-operator-lite.iso` | `--lite` : le même moins les ateliers de compilation | `/opt/GSM` élagué des arbres de sources (`iso_modules/87-lite.sh`, mêmes règles que `Dockerfile.lite`) |
-| Desktop | `osmo-operator-desktop.iso` | `--desktop` : + GNOME, Wireshark, Linphone, VLC, Calamares, Conky, Firefox (~2,5 Go de plus) | c'est l'image publiée en release |
-| Raspberry Pi 4 | `osmo-operator-…-rpi4.img` | `--arm` : image SD arm64 sur base Armbian 24.04 | pas de squashfs ni de GRUB, compilation native dans le chroot émulé (`82-arm-natif.sh`), une dizaine d'heures la première fois |
+| SS7 hub | `interstp.iso` | `--role=interstp`: the inter-STP alone (PC 0.0.0), no operator; rejects `--lite` and `--desktop` | `osmocom-stp` image (Dockerfile.stp), libosmocore/netif/sigtran only, `osmo-interstp.service` at boot |
+| Operator | `osmo-operator.iso` | `--role=operator` (default): the full bench, no desktop | 2G stack, emulated baseband, 4G, dashboard, tools; text console |
+| Lite | `osmo-operator-lite.iso` | `--lite`: the same minus the build workshops | `/opt/GSM` stripped of source trees (`iso_modules/87-lite.sh`, same rules as `Dockerfile.lite`) |
+| Desktop | `osmo-operator-desktop.iso` | `--desktop`: + GNOME, Wireshark, Linphone, VLC, Calamares, Conky, Firefox (~2.5 GB more) | this is the image published in releases |
+| Raspberry Pi 4 | `osmo-operator-…-rpi4.img` | `--arm`: arm64 SD image on an Armbian 24.04 base | no squashfs or GRUB, native compilation in the emulated chroot (`82-arm-natif.sh`), about ten hours the first time |
 
-Avec `--node=N` (1 à 9), le nom devient `osmo-operator-N[-lite][-desktop].iso`
-et l'image porte l'identité SS7 du nœud N. `--output=FICHIER` force le nom.
+With `--node=N` (1 to 9), the name becomes `osmo-operator-N[-lite][-desktop].iso`
+and the image carries the SS7 identity of node N. `--output=FILE` forces the name.
 
 ---
 
-## 3. Obtenir, démarrer, se repérer
+## 3. Getting it, booting, finding your way
 
-### 3.1 Télécharger
+### 3.1 Download
 
-La [dernière release](https://github.com/bbaranoff/osmo-operator/releases/latest)
-livre l'ISO desktop **en morceaux de 1 900 Mo** (GitHub plafonne un fichier de
-release à 2 Gio) :
+The [latest release](https://github.com/bbaranoff/osmo-operator/releases/latest)
+ships the desktop ISO **in 1,900 MB parts** (GitHub caps a release file
+at 2 GiB):
 
 ```bash
 cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c SHA256SUMS
 ```
 
-### 3.2 Prérequis machine
+### 3.2 Machine requirements
 
-x86_64, **8 Go de RAM et 4 cœurs minimum**. Le banc fait tourner deux QEMU (le
-Calypso et la VM postmarketOS) : en machine virtuelle, activer la
-virtualisation imbriquée. Sur matériel réel, KVM est là directement.
+x86_64, **8 GB of RAM and 4 cores minimum**. The bench runs two QEMUs (the
+Calypso and the postmarketOS VM): in a virtual machine, enable nested
+virtualization. On real hardware, KVM is available directly.
 
-### 3.3 Démarrer
+### 3.3 Booting
 
-- **QEMU** : `qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080`
-- **VirtualBox** : VM Linux/Ubuntu 64 bits, 8 Go, 4 CPU, 3D désactivée, *VT-x/AMD-V imbriqué* coché, NAT avec redirection 8080 → 8080.
-- **VMware** : VM depuis l'ISO, *Virtualize Intel VT-x/EPT* coché, ignorer l'installation facile.
-- **Clé USB** : `sudo dd if=osmo-operator-desktop.iso of=/dev/sdX bs=4M status=progress conv=fsync` (Rufus en mode *Image DD* sous Windows). UEFI ou BIOS, au choix.
+- **QEMU**: `qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080`
+- **VirtualBox**: Linux/Ubuntu 64-bit VM, 8 GB, 4 CPUs, 3D disabled, *nested VT-x/AMD-V* checked, NAT with port forwarding 8080 → 8080.
+- **VMware**: VM from the ISO, *Virtualize Intel VT-x/EPT* checked, skip Easy Install.
+- **USB stick**: `sudo dd if=osmo-operator-desktop.iso of=/dev/sdX bs=4M status=progress conv=fsync` (Rufus in *DD Image* mode on Windows). UEFI or BIOS, either works.
 
-### 3.4 Le menu GRUB (`iso_modules/90-iso.sh`)
+### 3.4 The GRUB menu (`iso_modules/90-iso.sh`)
 
-| Entrée | Ligne du noyau | Usage |
+| Entry | Kernel line | Use |
 |---|---|---|
-| Lecture depuis le médium (défaut) | `boot=live quiet` | la clé reste branchée, racine en overlay tmpfs |
-| En RAM | `boot=live toram=filesystem.squashfs` | copie le squashfs seul en RAM (annoncé : 9 Go), la clé peut être retirée |
-| Persistance | `boot=live persistence persistence-encryption=none quiet` | partition `persistence` sur la clé pour garder les changements |
+| Run from medium (default) | `boot=live quiet` | the stick stays plugged in, root on a tmpfs overlay |
+| In RAM | `boot=live toram=filesystem.squashfs` | copies only the squashfs to RAM (stated: 9 GB), the stick can be removed |
+| Persistence | `boot=live persistence persistence-encryption=none quiet` | `persistence` partition on the stick to keep changes |
 
-La clé live démarre **sans** `splash` : Plymouth ne s'y montre pas. Le thème
-`osmo-bts` (pylône, mobile et ondes) apparaît sur un disque installé, où GRUB
-démarre en `quiet splash`.
+The live stick boots **without** `splash`: Plymouth does not show there. The
+`osmo-bts` theme (mast, handset and waves) appears on an installed disk, where
+GRUB boots with `quiet splash`.
 
 ### 3.5 Secure Boot (`iso_modules/91-secure-boot.sh`)
 
-L'ISO est assemblée par xorriso avec le **shim signé Canonical** et le GRUB
-signé (`shim-signed`, `grub-efi-amd64-signed`), plus un `/.disk/info` pour que
-le GRUB signé retrouve le médium. La chaîne shim → grub → noyau Ubuntu est
-complète : l'image démarre Secure Boot actif. Sans ces paquets sur l'hôte de
-build, l'ISO sort non signée et le build le dit.
+The ISO is assembled by xorriso with the **Canonical-signed shim** and the
+signed GRUB (`shim-signed`, `grub-efi-amd64-signed`), plus a `/.disk/info` so
+the signed GRUB can find the medium. The shim → grub → Ubuntu kernel chain is
+complete: the image boots with Secure Boot on. Without these packages on the
+build host, the ISO comes out unsigned and the build says so.
 
-### 3.6 Le live : espace, journaux, réseau (`83-espace-ram.sh`, `81-cloture-systeme.sh`)
+### 3.6 The live system: space, logs, network (`83-espace-ram.sh`, `81-cloture-systeme.sh`)
 
-- `/dev/shm` et `/tmp` sont bornés en pourcentage de la RAM ; les cfiles I/Q,
-  journaux et captures y vivent et sont purgés à chaque démarrage. Un wrapper
-  `tcpdump` écrit en anneau de pcap.
-- Aucune attente réseau au boot : les unités `*-wait-online` sont masquées,
-  l'arrêt est plafonné à 30 s. DNS par le stub `systemd-resolved` avec un
-  `resolv.conf` de secours. NetworkManager ignore `apn*`, `tun*`, `veth*`,
-  `docker*`.
-- `osmo-ip-plan.service` dérive les adresses privées du nœud ; `osmo-qemu-link`
-  relie `QEMU_BIN` et recompile le lanceur `qosmo` si besoin.
-- `osmo-update.service` fait un `git fetch` à avance rapide des dépôts
-  embarqués à chaque démarrage (jamais de reclone, jamais d'apt), journal dans
+- `/dev/shm` and `/tmp` are capped as a percentage of RAM; I/Q cfiles, logs
+  and captures live there and are purged at every boot. A `tcpdump` wrapper
+  writes a pcap ring buffer.
+- No network wait at boot: the `*-wait-online` units are masked, shutdown is
+  capped at 30 s. DNS through the `systemd-resolved` stub with a fallback
+  `resolv.conf`. NetworkManager ignores `apn*`, `tun*`, `veth*`, `docker*`.
+- `osmo-ip-plan.service` derives the node's private addresses; `osmo-qemu-link`
+  links `QEMU_BIN` and rebuilds the `qosmo` launcher if needed.
+- `osmo-update.service` does a fast-forward `git fetch` of the embedded
+  repositories at every boot (never a reclone, never apt), log in
   `/var/log/osmo-update.log`.
-- À l'ouverture d'un shell interactif, une animation « SMS delivered » tourne
-  une fois (`/usr/local/sbin/osmo-sms.sh`, l'ancien `update.sh`) et repose les
-  icônes.
+- When an interactive shell opens, an "SMS delivered" animation runs once
+  (`/usr/local/sbin/osmo-sms.sh`, formerly `update.sh`) and reinstalls the
+  icons.
 
-### 3.7 Comptes et sessions (`84-comptes.sh`)
+### 3.7 Accounts and sessions (`84-comptes.sh`)
 
-| Compte | Mot de passe | Rôle |
+| Account | Password | Role |
 |---|---|---|
-| `root` | `osmo` | compte de travail du banc : autologin sur tty1, ttyS0 (ttyAMA0 sur Pi) et dans GDM |
-| `osmocom` | `osmo` | non privilégié, sudoer (sudo, adm, dialout, audio, video, pulse-access, docker) ; session au choix après déconnexion |
-| `linphone_A` | — | compte SIP pré-provisionné : poste **100**, UDP vers 127.0.0.1:5060 |
-| pmOS `user` | `147147` | écran Phosh, compte et ssh de la VM postmarketOS |
+| `root` | `osmo` | the bench's working account: autologin on tty1, ttyS0 (ttyAMA0 on Pi) and in GDM |
+| `osmocom` | `osmo` | unprivileged, sudoer (sudo, adm, dialout, audio, video, pulse-access, docker); session selectable after logout |
+| `linphone_A` | — | pre-provisioned SIP account: extension **100**, UDP to 127.0.0.1:5060 |
+| pmOS `user` | `147147` | Phosh screen, account and ssh of the postmarketOS VM |
 
-Le banc tourne en root. Les icônes élèvent par `pkexec`, la ligne de commande
-par `sudo`.
+The bench runs as root. Icons elevate via `pkexec`, the command line via
+`sudo`.
 
 ---
 
-## 4. Ce que contient l'image
+## 4. What the image contains
 
-### 4.1 Arborescence utile
+### 4.1 Useful tree
 
-| Chemin | Contenu |
+| Path | Contents |
 |---|---|
-| `/opt/GSM/osmo-operator` | **le dépôt complet, avec son `.git`** (clone de la branche `main` au build, `51-depot.sh`) : scripts, configs, services, outils, wiki |
-| `/opt/GSM/qosmo` | QEMU fork Calypso (`run.sh`, `run_modules/`), lanceur C `tools/qosmo-launch` |
-| `/opt/GSM/c54x_exe` | le DSP TMS320C54x hors QEMU, mask-ROM TI dans `rom/`, son `run.sh` (5 étapes) |
-| `/opt/GSM/grgsm_exe` | la couche 1 gr-gsm hors QEMU |
-| `/opt/GSM/firmware/board/compal_e88/` | firmware OsmocomBB `layer1.highram.elf` et les dix cartes |
+| `/opt/GSM/osmo-operator` | **the full repository, with its `.git`** (clone of the `main` branch at build time, `51-depot.sh`): scripts, configs, services, tools, wiki |
+| `/opt/GSM/qosmo` | Calypso QEMU fork (`run.sh`, `run_modules/`), C launcher `tools/qosmo-launch` |
+| `/opt/GSM/c54x_exe` | the TMS320C54x DSP outside QEMU, TI mask ROM in `rom/`, its `run.sh` (5 steps) |
+| `/opt/GSM/grgsm_exe` | the gr-gsm layer 1 outside QEMU |
+| `/opt/GSM/firmware/board/compal_e88/` | OsmocomBB firmware `layer1.highram.elf` and the ten boards |
 | `/opt/GSM/osmocom-bb` | osmocon, mobile, trxcon |
-| `/opt/user_interface/pmos/` | pmbootstrap patché, noyau PPP, image de la VM `image/qemu-amd64.img.zst` (si embarquée), lanceurs `bin/` |
-| `/etc/osmocom/` | configs Osmocom générées (PLMN 001-01, A5/1, 2 MS), `coeur.env` (`N_MS`, `OPERATOR_ID`), `osmo-multi.conf` après les suppléments |
-| `/etc/asterisk/`, `/etc/asound.conf` | PBX voix, PCM `gsm_out`/`gsm_in` |
-| `/var/cache/osmo-debs/` | les `.deb` du banc (osmo-operator, pont, qemu-calypso, calypso-firmware) pour une installation sans git |
-| `/usr/share/osmo-operator/` | `info.html` (page Info), icônes SVG |
+| `/opt/user_interface/pmos/` | patched pmbootstrap, PPP kernel, VM image `image/qemu-amd64.img.zst` (if embedded), `bin/` launchers |
+| `/etc/osmocom/` | generated Osmocom configs (PLMN 001-01, A5/1, 2 MS), `coeur.env` (`N_MS`, `OPERATOR_ID`), `osmo-multi.conf` after the add-ons |
+| `/etc/asterisk/`, `/etc/asound.conf` | voice PBX, PCM `gsm_out`/`gsm_in` |
+| `/var/cache/osmo-debs/` | the bench `.deb`s (osmo-operator, bridge, qemu-calypso, calypso-firmware) for a git-less install |
+| `/usr/share/osmo-operator/` | `info.html` (Info page), SVG icons |
 | `/var/log/osmocom/` | `qemu.log`, `bridge.log`, `run.sh.log` |
 
-### 4.2 Paquets et chaîne logicielle (`80-chroot.sh`, `50-injection-image.sh`, `81-cloture-systeme.sh`)
+### 4.2 Packages and software chain (`80-chroot.sh`, `50-injection-image.sh`, `81-cloture-systeme.sh`)
 
-- Base : `debootstrap --variant=minbase` noble, systemd, dbus, kmod, zstd,
-  curl, iproute2, `live-boot`, noyau generic, libs Osmocom, tshark, openssh,
+- Base: `debootstrap --variant=minbase` noble, systemd, dbus, kmod, zstd,
+  curl, iproute2, `live-boot`, generic kernel, Osmocom libs, tshark, openssh,
   cryptsetup.
-- Banc : asterisk, pulseaudio, ffmpeg, MongoDB 8.0, NodeSource (dashboard),
-  dépendances srsRAN et Open5GS, `build-dep gnuradio`, venv `/root/.env`.
-- **Les binaires compilés viennent de l'image Docker `osmocom-nitb`** sous
-  forme de `.deb` (`osmo-build-*~noble_amd64.deb`) installés par `dpkg -i`,
-  puis `/usr/local/*`, `/opt/GSM`, `/root/.env`, `/opt/node`, `/etc/osmocom`,
-  `/etc/asterisk` et les unités `osmo-*.service` sont copiés du conteneur.
-- **Clôture `ldd`** : chaque `.so` utilisé dans l'image Docker est copié dans
-  le rootfs ; `/usr/local/lib` passe en tête de `ldconfig`. L'environnement qui
-  marche est celui de l'image, pas une version apt différente.
-- Desktop : `ubuntu-desktop-minimal`, wireshark, linphone-desktop, vlc,
+- Bench: asterisk, pulseaudio, ffmpeg, MongoDB 8.0, NodeSource (dashboard),
+  srsRAN and Open5GS dependencies, `build-dep gnuradio`, venv `/root/.env`.
+- **The compiled binaries come from the `osmocom-nitb` Docker image** as
+  `.deb`s (`osmo-build-*~noble_amd64.deb`) installed with `dpkg -i`,
+  then `/usr/local/*`, `/opt/GSM`, `/root/.env`, `/opt/node`, `/etc/osmocom`,
+  `/etc/asterisk` and the `osmo-*.service` units are copied from the container.
+- **`ldd` closure**: every `.so` used in the Docker image is copied into the
+  rootfs; `/usr/local/lib` goes first in `ldconfig`. The environment that
+  works is the image's, not a different apt version.
+- Desktop: `ubuntu-desktop-minimal`, wireshark, linphone-desktop, vlc,
   calamares, conky, `python3-gi`, `gir1.2-gtk-3.0`, `gir1.2-vte-2.91`, Firefox
-  depuis packages.mozilla.org, GDM en autologin root sans Wayland.
-- Contrôle d'intégrité : le rootfs est vérifié contre dpkg **avant** la
-  compression, puis le squashfs est relu et revérifié (`90-iso.sh`).
+  from packages.mozilla.org, GDM with root autologin, no Wayland.
+- Integrity check: the rootfs is verified against dpkg **before**
+  compression, then the squashfs is read back and re-verified (`90-iso.sh`).
 
 ---
 
-## 5. Les capacités, une par une
+## 5. Capabilities, one by one
 
-Règle générale : **rien en 2G/4G ne démarre tout seul au boot**. Démarrer est
-le geste de l'opérateur, par l'icône, la barre du bas, la ligne de commande ou
-`systemctl`. Les unités sont posées et prêtes.
+General rule: **nothing 2G/4G starts by itself at boot**. Starting is the
+operator's call, via the icon, the bottom bar, the command line or
+`systemctl`. The units are installed and ready.
 
-### 5.1 Le banc 2G autonome
+### 5.1 The standalone 2G bench
 
-Pile Osmocom complète en natif, un opérateur (PLMN 001/01), deux cellules
-DCS1800 (ARFCN 514, LAC 1 ; BTS0 Cell ID 6001 BSIC 7, BTS1 Cell ID 6012 BSIC 8),
-abonnés `100101` et `100102`.
+Full native Osmocom stack, one operator (PLMN 001/01), two DCS1800 cells
+(ARFCN 514, LAC 1; BTS0 Cell ID 6001 BSIC 7, BTS1 Cell ID 6012 BSIC 8),
+subscribers `100101` and `100102`.
 
-- Composants : osmo-stp, osmo-bsc, osmo-msc, osmo-hlr, osmo-sgsn, osmo-ggsn
-  (GTPv1), osmo-pcu (GPRS/EDGE), osmo-mgw, Asterisk (voix MNCC via
-  osmo-sip-connector, SIP :5060), SMSC (SMS-over-GSUP, SMPP :2775, relais
-  inter-opérateurs :7890). Auth A3A8 à RAND déterministe. GSMTAP :4729 en
-  direct pour Wireshark.
-- Lancer : icône rouge **« Lancer le banc GSM »** (`launch.sh`, qui démarre
-  `osmo-banc.service` et le dit par notification) ; barre du bas, groupe
-  **Banc**, **run standalone** ; `sudo ./start-direct.sh` en premier plan ;
-  `systemctl start osmo-banc`. La pile vit dans tmux : `tmux attach -t calypso`.
-- Arrêter : clic droit **Arrêter le banc**, `./start-direct.sh --stop`
-  (démonte aussi le banc DSP, sans retaper `--dsp`), `systemctl stop osmo-banc`.
-- Sources : `start-direct.sh` (délègue à `/opt/GSM/qosmo/run.sh`),
+- Components: osmo-stp, osmo-bsc, osmo-msc, osmo-hlr, osmo-sgsn, osmo-ggsn
+  (GTPv1), osmo-pcu (GPRS/EDGE), osmo-mgw, Asterisk (MNCC voice via
+  osmo-sip-connector, SIP :5060), SMSC (SMS-over-GSUP, SMPP :2775,
+  inter-operator relay :7890). A3A8 auth with deterministic RAND. Live GSMTAP
+  :4729 for Wireshark.
+- Start: red icon **"Lancer le banc GSM"** (Start the GSM bench; `launch.sh`,
+  which starts `osmo-banc.service` and reports it by notification); bottom bar,
+  **Banc** group, **run standalone**; `sudo ./start-direct.sh` in the
+  foreground; `systemctl start osmo-banc`. The stack lives in tmux:
+  `tmux attach -t calypso`.
+- Stop: right-click **Arrêter le banc** (Stop the bench), `./start-direct.sh --stop`
+  (also tears down the DSP bench, no need to repeat `--dsp`), `systemctl stop osmo-banc`.
+- Sources: `start-direct.sh` (delegates to `/opt/GSM/qosmo/run.sh`),
   `launch.sh`, `services/osmo-banc.service`, `configs/*.cfg`,
   `generate_configs.sh`.
 
-### 5.2 Deux chaînes de couche 1 : DSP (défaut) et gr-gsm
+### 5.2 Two layer-1 chains: DSP (default) and gr-gsm
 
-| | **DSP** `--dsp` (défaut depuis le 2026-10-01) | **gr-gsm** `--grgsm` |
+| | **DSP** `--dsp` (default since 2026-10-01) | **gr-gsm** `--grgsm` |
 |---|---|---|
-| Qui démodule | le vrai TMS320C54x sur la mask-ROM TI, **hors** QEMU (`/opt/GSM/c54x_exe`) | un décodeur gr-gsm dans QEMU + pont `grgsm_exe` |
-| QEMU | ARM7 seul (`CALYPSO_DSP_EXTERN=1`) | ARM7 + couche 1 gr-gsm |
-| Pont TRX | `pont/pont_dsp.py` lancé par `c54x_exe/run.sh` (TRXD 5700-5702, bursts DL UDP 6702) | `pont/pont.py` |
-| Résultat | le mobile acquiert FB/SB, décode SI1-4, campe, fait sa mise à jour de localisation ; VTY mobile :4347 | de bout en bout : camp, LU, auth, A5/1, SMS, appel voix ; VTY :4247 |
+| Who demodulates | the real TMS320C54x on the TI mask ROM, **outside** QEMU (`/opt/GSM/c54x_exe`) | a gr-gsm decoder in QEMU + `grgsm_exe` bridge |
+| QEMU | ARM7 only (`CALYPSO_DSP_EXTERN=1`) | ARM7 + gr-gsm layer 1 |
+| TRX bridge | `pont/pont_dsp.py` started by `c54x_exe/run.sh` (TRXD 5700-5702, DL bursts UDP 6702) | `pont/pont.py` |
+| Result | the mobile acquires FB/SB, decodes SI1-4, camps, does its location update; mobile VTY :4347 | end to end: camp, LU, auth, A5/1, SMS, voice call; VTY :4247 |
 
-Le défaut vit en tête de `start-direct.sh` (`DSP_MODE=1`) et vaut pour tout
-ce qui lance le banc (icône, service, barre, natif du multi). Si `c54x_exe`
-manque, le banc le dit et retombe sur gr-gsm avec son pont. Clic droit de
-l'icône : **« Lancer en mode gr-gsm »**. Durable : `OSMO_BANC_ARGS="--grgsm"`
-dans `/etc/default/osmo-banc`.
+The default lives at the top of `start-direct.sh` (`DSP_MODE=1`) and applies to
+everything that starts the bench (icon, service, bar, multi's native operator).
+If `c54x_exe` is missing, the bench says so and falls back to gr-gsm with its
+bridge. Icon right-click: **"Lancer en mode gr-gsm"** (Start in gr-gsm mode).
+Persistent: `OSMO_BANC_ARGS="--grgsm"` in `/etc/default/osmo-banc`.
 
-### 5.3 Le baseband émulé Calypso
+### 5.3 The emulated Calypso baseband
 
-- QEMU fork **qosmo** (`-M calypso`, ARM7TDMI/arm946) exécute le firmware
-  OsmocomBB réel `layer1.highram.elf`, chargé par osmocon comme sur un C123.
-  Sept ROMs DSP, firmware pour dix cartes compal.
-- Lanceur C `qosmo` (`/usr/local/bin/qosmo`) : `-gdb tcp::1234`, `-serial pty`
-  publié en `<RUN_DIR>/modem.pty`, monitor unix, L1CTL `/tmp/osmocom_l2`.
-- Debug : gdb sur :1234 (`target remote :1234` sur l'ELF layer1),
+- QEMU fork **qosmo** (`-M calypso`, ARM7TDMI/arm946) runs the real OsmocomBB
+  firmware `layer1.highram.elf`, loaded by osmocon as on a C123.
+  Seven DSP ROMs, firmware for ten compal boards.
+- C launcher `qosmo` (`/usr/local/bin/qosmo`): `-gdb tcp::1234`, `-serial pty`
+  published as `<RUN_DIR>/modem.pty`, unix monitor, L1CTL `/tmp/osmocom_l2`.
+- Debug: gdb on :1234 (`target remote :1234` against the layer1 ELF),
   monitor `socat - unix-connect:/tmp/qemu-calypso-mon.sock`,
-  `--assembly-logs` pour la trace asm de l'ARM.
-- Manuel : `qosmo -k …/layer1.highram.elf`, `MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh`.
+  `--assembly-logs` for the ARM asm trace.
+- Manual: `qosmo -k …/layer1.highram.elf`, `MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh`.
 
-### 5.4 Profils et options de `start-direct.sh`
+### 5.4 `start-direct.sh` profiles and options
 
-- Profils : `faketrx-qemu` (défaut, alias `hybrid` : cœur + BTS0 QEMU + BTS1
-  fake_trx + MS#2), `faketrx`, `qemu` (Calypso seul), `noproc`/`core` (cœur seul).
-- `--menu` pose les questions (couche 1, topologie seul/hybride, profil, nœud,
-  WAN, régénération) au lieu de deviner.
-- `--node N` (1-9) : l'identité SS7 du nœud (point codes `1.<nœud><op>.<rôle>`,
-  routing contexts), ASP vers l'inter-STP ; `--op N`, `--hub-ip ADR`.
-- `--wan`, `--wan FICHIER`, `--wan-nodes "1:IP:IND …"`, `--wan-id`,
-  `--gen-conf`, `--air-mesh[=PORT]` (milieu radio commun inter-nœuds) :
-  maillage de 1 à 9 nœuds. `--virtualbox[=N]` monte le WAN entre l'hôte et
-  N-1 VM VirtualBox (`tools/vbox-wan-lab.sh`).
+- Profiles: `faketrx-qemu` (default, alias `hybrid`: core + BTS0 QEMU + BTS1
+  fake_trx + MS#2), `faketrx`, `qemu` (Calypso only), `noproc`/`core` (core only).
+- `--menu` asks the questions (layer 1, standalone/hybrid topology, profile,
+  node, WAN, regeneration) instead of guessing.
+- `--node N` (1-9): the node's SS7 identity (point codes `1.<node><op>.<role>`,
+  routing contexts), ASP towards the inter-STP; `--op N`, `--hub-ip ADDR`.
+- `--wan`, `--wan FILE`, `--wan-nodes "1:IP:IND …"`, `--wan-id`,
+  `--gen-conf`, `--air-mesh[=PORT]` (shared inter-node radio medium):
+  mesh of 1 to 9 nodes. `--virtualbox[=N]` sets up the WAN between the host
+  and N-1 VirtualBox VMs (`tools/vbox-wan-lab.sh`).
 - `--regen`, `--list`, `--dry-run`, `--status`, `--check-paths`, `--force`,
-  `--verbose`, `--launcher <bin>`, clients L2 exclusifs `--mobile`,
+  `--verbose`, `--launcher <bin>`, exclusive L2 clients `--mobile`,
   `--ccch_scan`, `--bcch_scan`, `--cell_log`.
-- Variables : `ENCRYPTION="a5 1"`, `MS_COUNT=2`, `CALYPSO_BRIDGE`,
-  `BANC_DSP`, et toute variable de `globals.conf` posée non vide sur la ligne
-  de commande (voir [Environnement](Environnement.md)).
+- Variables: `ENCRYPTION="a5 1"`, `MS_COUNT=2`, `CALYPSO_BRIDGE`,
+  `BANC_DSP`, and any `globals.conf` variable set non-empty on the command
+  line (see [Environnement](Environnement.md)).
 
-### 5.5 Le multi-opérateur SS7 (Docker) et les suppléments
+### 5.5 SS7 multi-operator (Docker) and the add-ons
 
-Pas dans l'ISO : l'icône **« Supplements »** (`addition.sh`, fenêtre à cocher,
-dans une fenêtre GTK du banc) installe ce qui manque.
+Not in the ISO: the **"Supplements"** icon (`addition.sh`, checkbox window,
+inside a bench GTK window) installs what is missing.
 
-- **`--multi`** : docker.io, l'image opérateur tirée de
-  `ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest` puis dérivée en
-  `osmocom-run` (Dockerfile.run), la topologie `/etc/osmocom/osmo-multi.conf`
-  (op1 **natif** PC 1.1.2 + op2/op3 **docker** 172.20.0.12/.13 PC 1.2.2/1.3.2 +
-  hub `osmo-inter-stp` 172.20.0.10, M3UA :2908), `osmo-multi.service` et
-  l'icône antenne **« multi-operator »**. Il termine par une session du banc
-  multi via `launch.sh --multi`, le même chemin que l'icône
-  (`OSMO_MULTI_START=0` pour poser sans lancer). `addition.sh --status` montre
-  docker, l'image, la topologie, l'unité et l'icône.
-- Lancer ensuite : icône antenne, barre **run multi**, `systemctl start osmo-multi`,
-  `sudo ./start-multi.sh` (`--status`, `--stop`, `--dry-run`). Le natif est
-  tenu par `osmo-banc` : `start-multi.sh` le **garde** s'il tourne déjà et le
-  **lance** s'il est à l'arrêt (il ne le relance que si son point code vient
-  d'être réaligné, ou avec `--restart-natif`).
-- **`--opencl`** : pile OpenCL (ocl-icd, clinfo, pocl, pilote Intel/Mesa/NVIDIA
-  détecté) et les outils clonés dans `/root` : **deka**, a51_tools,
-  dst80_reversing, tea1-cracker. Icône **deka**, barre **run deka**.
-- **`--claude`** : Claude Code (installeur natif, binaire autonome). L'icône
-  **Claude** s'auto-installe au premier clic.
-- **`--extras`** : Doom (freedoom), Quake III (OpenArena), Kodi, YouTube
-  (Firefox + uBlock), Wireshark root, Linphone, rangés dans les dossiers Jeux,
-  Media, Telephone, Outils de la barre.
+- **`--multi`**: docker.io, the operator image pulled from
+  `ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest` then derived into
+  `osmocom-run` (Dockerfile.run), the topology `/etc/osmocom/osmo-multi.conf`
+  (op1 **native** PC 1.1.2 + op2/op3 **docker** 172.20.0.12/.13 PC 1.2.2/1.3.2 +
+  hub `osmo-inter-stp` 172.20.0.10, M3UA :2908), `osmo-multi.service` and the
+  antenna icon **"multi-operator"**. It ends by starting a multi bench session
+  via `launch.sh --multi`, the same path as the icon (`OSMO_MULTI_START=0` to
+  install without starting). `addition.sh --status` shows docker, the image,
+  the topology, the unit and the icon.
+- Then start: antenna icon, bar **run multi**, `systemctl start osmo-multi`,
+  `sudo ./start-multi.sh` (`--status`, `--stop`, `--dry-run`). The native
+  operator is held by `osmo-banc`: `start-multi.sh` **keeps** it if already
+  running and **starts** it if stopped (it only restarts it if its point code
+  was just realigned, or with `--restart-natif`).
+- **`--opencl`**: OpenCL stack (ocl-icd, clinfo, pocl, detected Intel/Mesa/NVIDIA
+  driver) and the tools cloned into `/root`: **deka**, a51_tools,
+  dst80_reversing, tea1-cracker. **deka** icon, bar **run deka**.
+- **`--claude`**: Claude Code (native installer, standalone binary). The
+  **Claude** icon self-installs on first click.
+- **`--extras`**: Doom (freedoom), Quake III (OpenArena), Kodi, YouTube
+  (Firefox + uBlock), Wireshark as root, Linphone, filed in the bar's Jeux,
+  Media, Telephone, Outils folders.
 
-### 5.6 La 4G (srsRAN + Open5GS) et le CSFB
+### 5.6 4G (srsRAN + Open5GS) and CSFB
 
-- Cœur **Open5GS** complet sur loopbacks (MME, SGW-C/U, SMF, UPF, PCRF, HSS,
-  NRF…), MongoDB derrière le HSS, **freeDiameter** avec certificats TLS posés,
-  Prometheus :9090, **WebUI :9999** (`open5gs-webui.service`, Next.js) pour les
-  abonnés.
-- Radio **srsENB** (10 MHz, EARFCN 3350, bande 7) et **srsUE** reliés en
-  **ZeroMQ** (:2000/:2001), binaires portables (sans AVX du CPU de build),
-  **srsGUI** pour les traces temps réel (`osmo-lte start-gui`). Abonné milenage
-  IMSI 001010001000001, UE dans un netns `ue1`, data par `ogstun`
-  (10.45.0.0/16) avec NAT vers Internet.
-- **CSFB** : interface SGs entre osmo-msc et le MME (:29118), table
+- Full **Open5GS** core on loopbacks (MME, SGW-C/U, SMF, UPF, PCRF, HSS,
+  NRF…), MongoDB behind the HSS, **freeDiameter** with TLS certificates installed,
+  Prometheus :9090, **WebUI :9999** (`open5gs-webui.service`, Next.js) for
+  subscribers.
+- **srsENB** radio (10 MHz, EARFCN 3350, band 7) and **srsUE** linked over
+  **ZeroMQ** (:2000/:2001), portable binaries (no build-CPU AVX),
+  **srsGUI** for real-time traces (`osmo-lte start-gui`). Milenage subscriber
+  IMSI 001010001000001, UE in a `ue1` netns, data via `ogstun`
+  (10.45.0.0/16) with NAT to the Internet.
+- **CSFB**: SGs interface between osmo-msc and the MME (:29118), mapping
   TAI (001-01, TAC 7) → LAI (001-01, LAC 1).
-- Lancer : icône **« 4G du banc »** (`osmo-lte toggle` → `osmo-lte.service`) ;
-  `osmo-lte start|stop|status|up|down|log|journal|start-gui` ; cœur seul
-  `osmo-epc start|stop|status`. Journal et état dans des fenêtres GTK du banc.
-- Sources : `tools/osmo-lte.sh`, `tools/osmo-epc.sh`, `tools/osmo-lte-install.sh`,
+- Start: **"4G du banc"** icon (Bench 4G; `osmo-lte toggle` → `osmo-lte.service`);
+  `osmo-lte start|stop|status|up|down|log|journal|start-gui`; core only
+  `osmo-epc start|stop|status`. Log and status in bench GTK windows.
+- Sources: `tools/osmo-lte.sh`, `tools/osmo-epc.sh`, `tools/osmo-lte-install.sh`,
   `configs/srsran/`, `configs/open5gs/`, `services/osmo-lte.service`,
   `iso_modules/88-lte-pmos.sh`.
 
-### 5.7 Le téléphone postmarketOS
+### 5.7 The postmarketOS phone
 
-- VM x86_64 postmarketOS/Phosh (1,7 Go compressés), noyau patché avec PPP,
-  pmbootstrap patché (port série du modem, cartes son, taille d'écran).
-- **Data 4G** : NetworkManager → pppd (`ATD*99***1#`) → virtio-console
-  `osmo.data` → `osmo-phonesim-banc.py` → netns UE → srsUE → srsENB → UPF →
-  Internet. **Voix et SMS 2G** : virtio-console `osmo.modem`, le modem AT
-  27.007 est joué par `osmo-phonesim-banc.py` d'après les VTY bsc/msc/mobile ;
-  oFono le pilote côté VM.
-- Lancer : icône **Téléphone** (`osmo-pmos up`), formats **smartphone**
-  (720x1440) et **tablette** (1280x800) (`osmo-pmos-qemu`), actions état,
-  arrêt, rebrancher le modem (`osmo-pmos-setup`), VM seule sans modem.
-- **L'image** : `osmo-pmos-build` décompresse
-  `/opt/user_interface/pmos/image/qemu-amd64.img.zst` au premier lancement. Si
-  elle manque ou est corrompue (`zstd -t`), elle est reprise sur la release
-  GitHub `pmos-image` (reprise possible, archive vérifiée) ; sinon
-  `pmbootstrap install` la construit. `OSMO_PMOS_IMAGE_URL` change l'adresse.
-- Sources : `tools/osmo-pmos*.sh`, `tools/osmo-phonesim-banc.py`,
+- x86_64 postmarketOS/Phosh VM (1.7 GB compressed), kernel patched with PPP,
+  patched pmbootstrap (modem serial port, sound cards, screen size).
+- **4G data**: NetworkManager → pppd (`ATD*99***1#`) → virtio-console
+  `osmo.data` → `osmo-phonesim-banc.py` → UE netns → srsUE → srsENB → UPF →
+  Internet. **2G voice and SMS**: virtio-console `osmo.modem`, the 27.007 AT
+  modem is played by `osmo-phonesim-banc.py` based on the bsc/msc/mobile VTYs;
+  oFono drives it on the VM side.
+- Start: **Téléphone** icon (`osmo-pmos up`), **smartphone** (720x1440) and
+  **tablet** (1280x800) formats (`osmo-pmos-qemu`), status, stop and
+  reconnect-modem actions (`osmo-pmos-setup`), VM alone without modem.
+- **The image**: `osmo-pmos-build` decompresses
+  `/opt/user_interface/pmos/image/qemu-amd64.img.zst` on first launch. If it
+  is missing or corrupt (`zstd -t`), it is fetched from the GitHub release
+  `pmos-image` (resumable, archive verified); otherwise
+  `pmbootstrap install` builds it. `OSMO_PMOS_IMAGE_URL` changes the URL.
+- Sources: `tools/osmo-pmos*.sh`, `tools/osmo-phonesim-banc.py`,
   `tools/osmo-ofono-bridge.py`, `iso_modules/88-lte-pmos.sh`.
 
-### 5.8 Le bureau
+### 5.8 The desktop
 
-- **GNOME** minimal, session root, dock avec les favoris : Firefox, Fichiers,
+- Minimal **GNOME**, root session, dock with the favorites: Firefox, Files,
   Claude, Lancer le banc, Installer, Tutoriel, Info, Supplements,
   multi-operator, Update, Paint, deka, Linphone, Wireshark, Téléphone, 4G.
-  L'icône **multi-operator** n'est posée que par les Suppléments
-  (`addition.sh --multi`) : avant, elle n'existe pas et le dock ne la montre pas.
-- **Aucun favori n'ouvre de terminal, ni de shell.** Tout passe par
-  `tools/osmo-gtk-run.py`. Depuis le 2026-10-12, les lancements (2G, multi,
-  4G, Suppléments, Update, deka, téléphone pmOS, pilotes) s'ouvrent en mode
-  `--progress` : une petite fenêtre avec une **barre de progression** (les
-  repères `[n/m]` que les scripts impriment : `run.sh` [n/10], `osmo-lte`
-  [n/4], `osmo-pmos` [n/3] ; sinon la barre pulse), l'étape en cours, la
-  dernière ligne, et un bouton **« console »** qui déplie la sortie complète
-  (terminal VTE, la commande tourne dans un pseudo-terminal). Un échec déplie
-  la console tout seul. Seuls Claude et oFono, interactifs, gardent un
-  terminal dans la fenêtre. Le journal de l'unité systemd défile dans la
-  fenêtre pour la 2G et le multi (`launch.sh --service-suivi`, `--multi-suivi`)
-  et la 4G (`osmo-lte up|toggle`).
-- **Port VTY du mobile** : 4247, ou **4347 en `--dsp`**. `start-direct.sh`
-  publie le port réel dans `/run/osmo-banc/ms1-vty` et dans l'environnement
-  systemd (`OSMO_BB1_VTY_PORT`, lu par le tableau de bord `osmo-egprs-web` au
-  redémarrage) ; `launch.sh --vty`, l'encart et `vty-menu.sh` le lisent.
-- **Barre du bas** (`tools/osmo-launcher.py`) : **retirée du bureau** le
-  2026-10-12 (choix du banc). Le fichier reste ; `OSMO_LAUNCHER=1` dans
-  l'environnement de session la remet (groupes Banc, Jeux, Media, Telephone,
-  Outils, journaux des « run »).
-- **Encart** (`tools/osmo-panel.py`, `osmo-fft-snap.py`) : l'illustration
-  devient le spectre I/Q et le `mobile.log` quand le banc tourne ; bandeau
-  haut (`osmo-topzone.py`, `configs/conky/labgsm.html`) alimenté par
-  `osmo-ts-probe.py` : 8 timeslots, démons, abonnés, appels, uptime.
-- **Conky** d'état en haut à droite (machine, opérateur sélectionné,
-  `Ctrl+AltGr+←/→` ou `osmo-op --next`). Refait le 2026-10-12 : plaque sombre
-  translucide aux coins arrondis (`configs/conky/osmo-conky.lua`, Cairo),
-  police Ubuntu partout, couleurs par nature d'information, pastilles ● et un
-  smiley par arrêt du banc (☺ vert s'il tourne, ☹ gris sinon). Il **n'est à
-  l'écran que si un banc tourne** : `osmo-panel.py` le fait apparaître et
-  disparaître en fondu (opacité de la fenêtre X11, xdotool) avec l'encart.
-- **Encart central** (`tools/osmo-panel.py`, spectre + journal, boutons
-  Dashboard / tmux / VTY / ZMQ) : **n'apparaît que si un banc tourne** - une
-  2G (natif, conteneur, hub) ou une 4G (Open5GS, srsENB, srsUE). Banc à l'arrêt,
-  le bureau ne montre que le fond. `OSMO_PANEL_TOUJOURS=1` le garde à l'écran.
-- **Tableau de bord web** :8080 (`osmo-egprs-web.service`, HTTPS auto-signé
-  sur :80, capture GSMTAP/SCTP), **tutoriel** (`osmo-tutorial`), **page Info**
-  (`osmo-info`, `configs/info.html`), spectres I/Q `fft-web` :8081.
-- Applications : Firefox (seul navigateur, politique micro et certificat posée
-  au boot), **Wireshark en root** (`osmo-wireshark-root`, filtres 2G/4G/appel/
-  SMS/data), **Linphone** poste 100, Kodi, dino, oFono, Paint (overlay),
-  Pilotes graphiques (`tools/osmo-drivers.sh`, NVIDIA par `ubuntu-drivers`).
-- **Plymouth** `osmo-bts` : pylône, mobile et ondes (anneaux), rien d'autre
-  (aperçu : `wiki/plymouth-osmo-bts.gif`). Généré au build par
+  The **multi-operator** icon is installed only by the add-ons
+  (`addition.sh --multi`): before that, it does not exist and the dock does not show it.
+- **No favorite opens a terminal or a shell.** Everything goes through
+  `tools/osmo-gtk-run.py`. Since 2026-10-12, launches (2G, multi, 4G, add-ons,
+  Update, deka, pmOS phone, drivers) open in `--progress` mode: a small window
+  with a **progress bar** (driven by the `[n/m]` markers the scripts print:
+  `run.sh` [n/10], `osmo-lte` [n/4], `osmo-pmos` [n/3]; otherwise the bar
+  pulses), the current step, the last line, and a **"console"** button that
+  expands the full output (VTE terminal, the command runs in a
+  pseudo-terminal). A failure expands the console automatically. Only Claude
+  and oFono, being interactive, keep a terminal in the window. The systemd
+  unit's journal scrolls in the window for 2G and multi
+  (`launch.sh --service-suivi`, `--multi-suivi`) and 4G (`osmo-lte up|toggle`).
+- **Mobile VTY port**: 4247, or **4347 with `--dsp`**. `start-direct.sh`
+  publishes the actual port in `/run/osmo-banc/ms1-vty` and in the systemd
+  environment (`OSMO_BB1_VTY_PORT`, read by the `osmo-egprs-web` dashboard on
+  restart); `launch.sh --vty`, the panel and `vty-menu.sh` read it.
+- **Bottom bar** (`tools/osmo-launcher.py`): **removed from the desktop** on
+  2026-10-12 (bench decision). The file remains; `OSMO_LAUNCHER=1` in the
+  session environment brings it back (Banc, Jeux, Media, Telephone, Outils
+  groups, "run" logs).
+- **Panel** (`tools/osmo-panel.py`, `osmo-fft-snap.py`): the illustration
+  becomes the I/Q spectrum and `mobile.log` while the bench runs; top banner
+  (`osmo-topzone.py`, `configs/conky/labgsm.html`) fed by
+  `osmo-ts-probe.py`: 8 timeslots, daemons, subscribers, calls, uptime.
+- Status **Conky** at the top right (machine, selected operator,
+  `Ctrl+AltGr+←/→` or `osmo-op --next`). Redone on 2026-10-12: dark
+  translucent plate with rounded corners (`configs/conky/osmo-conky.lua`, Cairo),
+  Ubuntu font throughout, colors by kind of information, ● dots and a smiley
+  per bench state (green ☺ if running, grey ☹ otherwise). It is **on screen
+  only while a bench runs**: `osmo-panel.py` fades it in and out (X11 window
+  opacity, xdotool) together with the panel.
+- **Central panel** (`tools/osmo-panel.py`, spectrum + log, Dashboard /
+  tmux / VTY / ZMQ buttons): **appears only while a bench runs** - a 2G
+  (native, container, hub) or a 4G (Open5GS, srsENB, srsUE). With the bench
+  stopped, the desktop shows only the background. `OSMO_PANEL_TOUJOURS=1`
+  keeps it on screen.
+- **Web dashboard** :8080 (`osmo-egprs-web.service`, self-signed HTTPS
+  on :80, GSMTAP/SCTP capture), **tutorial** (`osmo-tutorial`), **Info page**
+  (`osmo-info`, `configs/info.html`), I/Q spectra `fft-web` :8081.
+- Applications: Firefox (only browser, microphone and certificate policy set
+  at boot), **Wireshark as root** (`osmo-wireshark-root`, 2G/4G/call/SMS/data
+  filters), **Linphone** extension 100, Kodi, dino, oFono, Paint (overlay),
+  graphics drivers (`tools/osmo-drivers.sh`, NVIDIA via `ubuntu-drivers`).
+- **Plymouth** `osmo-bts`: mast, handset and waves (rings), nothing else
+  (preview: `wiki/plymouth-osmo-bts.gif`). Generated at build time by
   `tools/plymouth-render.py` (`86-finitions.sh`).
-- Fond d'écran **en deux états** (`tools/osmo-fond.py`, `osmo-fond ville|antenne`) :
-  au repos `/usr/share/backgrounds/gsm-lab-ville.jpg` (la ville au bord de l'eau,
-  sans antenne — le défaut de schéma) ; dès qu'une 2G ou une 4G démarre, fondu
-  (~2,4 s, images intermédiaires Pillow + fondu croisé de GNOME Shell) vers
-  `gsm-lab-antenne.jpg` (la même ville, le pylône dressé), et retour à l'arrêt.
-  Déclenché par `osmo-panel.py` quand il voit le banc monter ou tomber, par
-  `osmo-lte start` et, si la barre du bas est active, au clic sur *run standalone*. De même, la zone haute
-  ne porte que le titre **Telecom Operator** tant que rien ne tourne, et fond vers
-  la bannière LAB GSM au lancement (`$XDG_RUNTIME_DIR/osmo-banc.etat`, lu par
-  `osmo-topzone.py`). Le paysage low-poly `gsm-lab-fond.jpg` et
-  `gsm-lab-wallpaper.jpg` (`tools/paysage-render.py`) restent posés, sans être le défaut.
+- **Two-state** wallpaper (`tools/osmo-fond.py`, `osmo-fond ville|antenne`):
+  at rest `/usr/share/backgrounds/gsm-lab-ville.jpg` (the waterfront city,
+  no antenna — the schema default); as soon as a 2G or 4G starts, a fade
+  (~2.4 s, Pillow intermediate frames + GNOME Shell cross-fade) to
+  `gsm-lab-antenne.jpg` (the same city, mast raised), and back on stop.
+  Triggered by `osmo-panel.py` when it sees the bench come up or go down, by
+  `osmo-lte start` and, if the bottom bar is active, on clicking *run standalone*.
+  Likewise, the top zone carries only the **Telecom Operator** title while
+  nothing runs, and fades to the LAB GSM banner on launch
+  (`$XDG_RUNTIME_DIR/osmo-banc.etat`, read by `osmo-topzone.py`). The low-poly
+  landscape `gsm-lab-fond.jpg` and `gsm-lab-wallpaper.jpg`
+  (`tools/paysage-render.py`) remain installed, but are not the default.
 
 ### 5.9 Audio
 
-- **PulseAudio système** (`osmo-pulse.service`, socket `/run/pulse/native`,
-  sink `gsm_audio`) : osmo-gapk → ALSA `gsm_out` → sink null → monitor →
-  loopback ; PCM `gsm_out`/`gsm_in` dans `/etc/asound.conf`, que `mobile`
-  ouvre. Deux chaînes duplex pour le téléphone pmOS (pont GAPK, annulation
-  d'écho).
-- **PipeWire** gardé **pour le screencast GNOME seulement** ;
-  `pipewire-pulse` purgé et masqué.
-- Sources : `iso_modules/82-services.sh`, `scripts/pulse-gsm-setup.sh`,
-  `scripts/audio-chain.sh` (PulseAudio allégé à chaque start).
+- **System-wide PulseAudio** (`osmo-pulse.service`, socket `/run/pulse/native`,
+  sink `gsm_audio`): osmo-gapk → ALSA `gsm_out` → null sink → monitor →
+  loopback; PCM `gsm_out`/`gsm_in` in `/etc/asound.conf`, which `mobile`
+  opens. Two duplex chains for the pmOS phone (GAPK bridge, echo
+  cancellation).
+- **PipeWire** kept **for GNOME screencast only**;
+  `pipewire-pulse` purged and masked.
+- Sources: `iso_modules/82-services.sh`, `scripts/pulse-gsm-setup.sh`,
+  `scripts/audio-chain.sh` (slimmed-down PulseAudio on every start).
 
 ### 5.10 Diagnostics
 
-`bash ./checks/check_all.sh` lance tout et rend un verdict (journal dans
-`/tmp`) : `global_check.sh` (STP/HLR/MSC/BSC par opérateur), `ss7_check.sh`
-(matrice inter-STP), `diag-stp-operator.sh`, `diag-interstp.sh`,
-`wan_ss7_check.sh`, `annuaire.sh` (abonnés), `operator_summary.sh`,
-`vty-debug-dump.sh`. `./ss7-console.py` : schéma SS7 navigable avec les VTY
-intégrées. `./start-direct.sh --status` dit ce qui tourne.
+`bash ./checks/check_all.sh` runs everything and gives a verdict (log in
+`/tmp`): `global_check.sh` (STP/HLR/MSC/BSC per operator), `ss7_check.sh`
+(inter-STP matrix), `diag-stp-operator.sh`, `diag-interstp.sh`,
+`wan_ss7_check.sh`, `annuaire.sh` (subscribers), `operator_summary.sh`,
+`vty-debug-dump.sh`. `./ss7-console.py`: navigable SS7 diagram with
+built-in VTYs. `./start-direct.sh --status` tells what is running.
 
-### 5.11 Ports, VTY, réseau
+### 5.11 Ports, VTY, network
 
 | Port | Service | | Port | Service |
 |---|---|---|---|---|
-| 4239 | VTY osmo-stp | | 8080 | tableau de bord du banc |
-| 4242 | VTY osmo-bsc | | 8081 | spectres I/Q (fft-web) |
+| 4239 | VTY osmo-stp | | 8080 | bench dashboard |
+| 4242 | VTY osmo-bsc | | 8081 | I/Q spectra (fft-web) |
 | 4243 | VTY osmo-mgw | | 9090 | Prometheus Open5GS |
 | 4245 | VTY osmo-sgsn | | 9999 | WebUI Open5GS (HSS) |
 | 4254 | VTY osmo-msc | | 5060 | Asterisk SIP |
 | 4258 | VTY osmo-hlr | | 2775 | SMPP |
-| 4260 | VTY osmo-ggsn | | 7890 | relais SMS inter-op |
+| 4260 | VTY osmo-ggsn | | 7890 | inter-op SMS relay |
 | 4247 / 4248 | VTY mobile 1 / 2 (gr-gsm) | | 29118 | SGs (MSC ↔ MME) |
-| 4347 | VTY mobile (banc DSP) | | 2905 / 2908 | M3UA local / inter-STP |
-| 4729 | GSMTAP (Wireshark) | | 5700-5702 | TRXD (pont ↔ osmo-bts-trx) |
-| 4730 / 4731 | SI / SCH décodés | | 6702 | bursts DL vers le DSP |
+| 4347 | VTY mobile (DSP bench) | | 2905 / 2908 | M3UA local / inter-STP |
+| 4729 | GSMTAP (Wireshark) | | 5700-5702 | TRXD (bridge ↔ osmo-bts-trx) |
+| 4730 / 4731 | decoded SI / SCH | | 6702 | DL bursts to the DSP |
 | 1234 | gdb QEMU | | 2000 / 2001 | ZeroMQ srsENB ↔ srsUE |
 
-Réseau : interco docker `gsm-inter` 172.20.0.0/24 et `gsm-net-opN`
-172.20.N.0/24 ; IP privée du nœud `192.168.<N+1>.10` ; LTE `ogstun`
-10.45.0.0/16. Plan de numérotation : `100101`/`100102` (les deux abonnés),
-`N0001`…`N9999` (opérateur N en multi), `100`/`200` (Linphone), `600` (écho),
-`9XXXXX` (sortie inter-op).
+Network: docker interconnect `gsm-inter` 172.20.0.0/24 and `gsm-net-opN`
+172.20.N.0/24; node private IP `192.168.<N+1>.10`; LTE `ogstun`
+10.45.0.0/16. Numbering plan: `100101`/`100102` (the two subscribers),
+`N0001`…`N9999` (operator N in multi), `100`/`200` (Linphone), `600` (echo),
+`9XXXXX` (inter-op outgoing).
 
-### 5.12 Ce qui a été retiré, et pourquoi
+### 5.12 What was removed, and why
 
-| Retiré | Raison | Source |
+| Removed | Reason | Source |
 |---|---|---|
-| avahi (daemon, utils, autoipd, libnss-mdns) | pas de mDNS sur un banc ; purgé et masqué | `80-chroot.sh` |
-| Chromium | Firefox seul navigateur, démarre en root sans intermédiaire | `86-finitions.sh` |
-| sssd | masqué, pas désinstallé (aucun domaine) : `systemctl unmask sssd` le rend | `86-finitions.sh` |
-| pipewire-pulse | PulseAudio système à la place ; pipewire gardé pour le screencast | `80-chroot.sh` |
-| icône `osmo-dsp` | le DSP est le défaut, le clic droit propose gr-gsm | `85-installeur-bureau.sh` |
-| `osmo-trust-desktop` et les icônes sur le bureau | les lanceurs sont dans le dock et le menu | `85-installeur-bureau.sh` |
+| avahi (daemon, utils, autoipd, libnss-mdns) | no mDNS on a bench; purged and masked | `80-chroot.sh` |
+| Chromium | Firefox is the only browser, starts as root with no wrapper | `86-finitions.sh` |
+| sssd | masked, not uninstalled (no domain): `systemctl unmask sssd` restores it | `86-finitions.sh` |
+| pipewire-pulse | system-wide PulseAudio instead; pipewire kept for screencast | `80-chroot.sh` |
+| `osmo-dsp` icon | DSP is the default, right-click offers gr-gsm | `85-installeur-bureau.sh` |
+| `osmo-trust-desktop` and the desktop icons | launchers are in the dock and the menu | `85-installeur-bureau.sh` |
 
 ---
 
-## 6. Installer sur un disque
+## 6. Installing to a disk
 
-### 6.1 Lancer l'installateur
+### 6.1 Starting the installer
 
-Icône **« Installer »** du dock, ou `osmo-install` (`/usr/local/bin`, écrit
-par `85-installeur-bureau.sh`). Il repasse root par `pkexec`, retrouve le
-squashfs quel que soit le mode de boot (médium, `toram`, loop) et le monte à un
-chemin stable (`/run/osmo-install-src/live/filesystem.squashfs`), démonte une
-cible restée montée d'un essai précédent, régénère la page des miroirs apt
-classés par rapidité (`packaging/apt-mirror.sh --list`), puis ouvre Calamares
-avec la configuration du dépôt (`installer/calamares/`, copiée dans
-`/etc/calamares` au build).
+The dock's **"Installer"** icon, or `osmo-install` (`/usr/local/bin`, written
+by `85-installeur-bureau.sh`). It re-elevates to root via `pkexec`, finds the
+squashfs whatever the boot mode (medium, `toram`, loop) and mounts it at a
+stable path (`/run/osmo-install-src/live/filesystem.squashfs`), unmounts a
+target left mounted by a previous attempt, regenerates the apt mirror page
+ranked by speed (`packaging/apt-mirror.sh --list`), then opens Calamares
+with the repository's configuration (`installer/calamares/`, copied to
+`/etc/calamares` at build time).
 
-### 6.2 Les écrans (`installer/calamares/settings.conf`)
+### 6.2 The screens (`installer/calamares/settings.conf`)
 
-Bienvenue (20 Go, 2 Go de RAM, root obligatoire) → Emplacement
-(Europe/Paris) → Clavier (pc105) → Partitions → Utilisateurs → Pilotes
-graphiques → Miroir Ubuntu → Résumé → Installer → Terminer. Le diaporama
-pendant la copie reprend la fiche de l'image (`branding/osmo/show.qml`).
+Welcome (20 GB, 2 GB RAM, root required) → Location
+(Europe/Paris) → Keyboard (pc105) → Partitions → Users → Graphics
+drivers → Ubuntu mirror → Summary → Install → Finish. The slideshow
+during the copy reproduces the image's spec sheet (`branding/osmo/show.qml`).
 
-### 6.3 Partitionnement (`modules/partition.conf`)
+### 6.3 Partitioning (`modules/partition.conf`)
 
-- Table **GPT**, ext4, ESP de 300 Mio sur `/boot/efi`, pas de swap par
-  défaut (`swapfile` au choix).
-- Disposition automatique : **« osmo-egprs » sur `/`** (50 %, 25 Gio
-  minimum, **jamais chiffrée**) et **« crypthome » sur `/home`** (le reste,
-  5 Gio minimum).
-- **Cocher « chiffrer » chiffre `/home` seul**, en LUKS2 : la racine reste
-  lisible, les secrets (profils, trousseaux, cookies) sont sur le volume
-  chiffré. Partitionnement manuel autorisé.
+- **GPT** table, ext4, 300 MiB ESP on `/boot/efi`, no swap by
+  default (`swapfile` optional).
+- Automatic layout: **"osmo-egprs" on `/`** (50 %, 25 GiB
+  minimum, **never encrypted**) and **"crypthome" on `/home`** (the rest,
+  5 GiB minimum).
+- **Ticking "encrypt" encrypts `/home` only**, with LUKS2: the root stays
+  readable, secrets (profiles, keyrings, cookies) live on the encrypted
+  volume. Manual partitioning allowed.
 
-### 6.4 Comptes et pilotes
+### 6.4 Accounts and drivers
 
-- Utilisateurs : le compte créé est sudoer (sudo, adm, dialout, audio, video,
-  pulse-access, docker…), en autologin GDM ; le mot de passe root est demandé
-  (`setRootPassword`), aucune exigence de complexité ; le nom `root` est
-  interdit.
-- Pilotes graphiques : défaut nouveau (libre) ; option **NVIDIA 610
-  propriétaire**, installée dans la cible seulement si `lspci` voit une carte
-  10de et si le réseau répond (`apt-get install nvidia-driver-610`, puis
+- Users: the created account is a sudoer (sudo, adm, dialout, audio, video,
+  pulse-access, docker…), with GDM autologin; the root password is asked for
+  (`setRootPassword`), no complexity requirement; the name `root` is
+  forbidden.
+- Graphics drivers: nouveau (free) by default; option **NVIDIA 610
+  proprietary**, installed in the target only if `lspci` sees a 10de card
+  and the network responds (`apt-get install nvidia-driver-610`, then
   `update-initramfs`).
-- Miroir : celui de la clé live ou un miroir mesuré.
+- Mirror: the live stick's one or a measured mirror.
 
-### 6.5 Ce que l'installateur fait dans la cible (`modules/shellprocess-osmo.conf`)
+### 6.5 What the installer does in the target (`modules/shellprocess-osmo.conf`)
 
-1. Déverrouille root (`passwd -u root`).
-2. Supprime le compte `osmocom` de la clé live (sauf si c'est le nom choisi).
-3. `crypthome-postinstall <utilisateur>` : raccorde le `/home` chiffré (voir 6.7).
-4. Retire les autologin root de tty1 et ttyS0.
-5. GDM : `AutomaticLogin=<utilisateur>` ; la règle PAM qui refuse root à
-   l'écran de connexion est rétablie.
-6. Copie les lanceurs de `/etc/skel` sur le bureau de l'utilisateur.
-7. Pose et active `osmo-egprs-web.service`.
-8. Retire les icônes `osmo-install` et `calamares` du menu.
-9. Génère `~/.config/pmbootstrap_v3.cfg` pour l'utilisateur.
-10. Purge `live-boot`, refait l'initramfs.
+1. Unlocks root (`passwd -u root`).
+2. Deletes the live stick's `osmocom` account (unless it is the chosen name).
+3. `crypthome-postinstall <user>`: wires up the encrypted `/home` (see 6.7).
+4. Removes the root autologins on tty1 and ttyS0.
+5. GDM: `AutomaticLogin=<user>`; the PAM rule refusing root at the login
+   screen is restored.
+6. Copies the launchers from `/etc/skel` to the user's desktop.
+7. Installs and enables `osmo-egprs-web.service`.
+8. Removes the `osmo-install` and `calamares` icons from the menu.
+9. Generates `~/.config/pmbootstrap_v3.cfg` for the user.
+10. Purges `live-boot`, rebuilds the initramfs.
 
-GRUB : `/EFI/ubuntu` (prefixe compilé dans le GRUB signé), `GRUB_TIMEOUT 5`,
-os-prober actif, `GRUB_ENABLE_CRYPTODISK=y`, ligne du noyau héritée de la clé
-(`quiet splash`). fstab : `noatime`, `discard` sur SSD.
+GRUB: `/EFI/ubuntu` (prefix compiled into the signed GRUB), `GRUB_TIMEOUT 5`,
+os-prober enabled, `GRUB_ENABLE_CRYPTODISK=y`, kernel line inherited from the
+stick (`quiet splash`). fstab: `noatime`, `discard` on SSD.
 
-### 6.6 Après installation : comptes et services
+### 6.6 After installation: accounts and services
 
-| | Clé live | Disque installé |
+| | Live stick | Installed disk |
 |---|---|---|
-| Session GDM | root, automatique | l'utilisateur créé, automatique |
-| root | mdp `osmo` | mdp choisi à l'installation, déverrouillé |
-| `osmocom` | sudoer, mdp `osmo` | supprimé |
-| `osmo-egprs-web` | actif | actif |
-| `osmo-banc`, `osmo-multi`, `osmo-lte` | posés, non activés | posés, non activés |
+| GDM session | root, automatic | the created user, automatic |
+| root | pw `osmo` | pw chosen at install, unlocked |
+| `osmocom` | sudoer, pw `osmo` | deleted |
+| `osmo-egprs-web` | active | active |
+| `osmo-banc`, `osmo-multi`, `osmo-lte` | installed, not enabled | installed, not enabled |
 
-Activer un banc à chaque démarrage : `systemctl enable --now osmo-banc`
-(ou `osmo-multi`, `osmo-lte`). Au build : `--banc`, `--multi`,
-`OSMO_ISO_LTE=1`. Sur disque pour le multi : `OSMO_MULTI_ENABLE=1 ./addition.sh`.
+Enable a bench at every boot: `systemctl enable --now osmo-banc`
+(or `osmo-multi`, `osmo-lte`). At build time: `--banc`, `--multi`,
+`OSMO_ISO_LTE=1`. On disk for multi: `OSMO_MULTI_ENABLE=1 ./addition.sh`.
 
-### 6.7 Le `/home` chiffré au quotidien (`configs/crypthome/`)
+### 6.7 Living with the encrypted `/home` (`configs/crypthome/`)
 
-- **Au démarrage**, `unlock-home.service` pose une seule question, sur la
-  console texte, après avoir quitté Plymouth :
-  `decrypt /home -passphrase- or Enter`. La phrase (tapée en `*`) ouvre le
-  volume et la session de l'utilisateur. **Entrée à vide, délai de 60 s,
-  trois phrases refusées, disque absent ou montage raté : la machine démarre
-  quand même**, sur une session **root éphémère** (GDM passe sur root pour ce
-  démarrage seul ; `/root` est recouvert d'un overlay dont les écritures vont
-  dans un tmpfs). Le boot n'est jamais bloqué.
-- `CRYPTHOME_PROMPT=plymouth` dans `/etc/default/crypthome` remet la question
-  dans le thème Plymouth (à réserver aux machines où son clavier répond ; sur
-  un portable Intel + NVIDIA il ne prenait aucune touche).
-- Après coup : `unlock-home` / `lock-home` dans un terminal ; les
-  applications à secrets (Firefox, Thunderbird, KeePassXC…) tournent sous le
-  propriétaire du volume par `run-as-owner` quand il est ouvert, sous root
-  sinon (`refresh-owner-apps` redirige les lanceurs).
-- Second disque ajouté plus tard : `/root/init-crypthome.sh` (LUKS2,
-  recopie `rsync`, crypttab/fstab en `noauto`, service activé, l'ancien
-  `/home` mis de côté dans `/var/backups/home-avant-chiffrement-*` au
-  redémarrage suivant).
+- **At boot**, `unlock-home.service` asks a single question, on the text
+  console, after leaving Plymouth:
+  `decrypt /home -passphrase- or Enter`. The passphrase (echoed as `*`) opens
+  the volume and the user's session. **Empty Enter, 60 s timeout, three
+  rejected passphrases, missing disk or failed mount: the machine boots
+  anyway**, into an **ephemeral root** session (GDM switches to root for this
+  boot only; `/root` is covered by an overlay whose writes go to a tmpfs).
+  Boot is never blocked.
+- `CRYPTHOME_PROMPT=plymouth` in `/etc/default/crypthome` puts the question
+  back in the Plymouth theme (only for machines where its keyboard input
+  works; on an Intel + NVIDIA laptop it took no keystrokes).
+- Afterwards: `unlock-home` / `lock-home` in a terminal; apps holding
+  secrets (Firefox, Thunderbird, KeePassXC…) run as the volume owner via
+  `run-as-owner` when it is open, as root otherwise (`refresh-owner-apps`
+  redirects the launchers).
+- Second disk added later: `/root/init-crypthome.sh` (LUKS2, `rsync` copy,
+  crypttab/fstab with `noauto`, service enabled, the old `/home` set aside in
+  `/var/backups/home-avant-chiffrement-*` at the next reboot).
 
-### 6.8 Mettre à jour une machine installée
+### 6.8 Updating an installed machine
 
-- `osmo-update` (au boot, ou à la main) : `git fetch` à avance rapide de
-  `/opt/GSM/osmo-operator` et des dépôts embarqués. Pas de paquets.
-- Ce qui est posé **hors** du dépôt par le build (unités dans
-  `/etc/systemd/system`, `unlock-home` dans `/usr/local/sbin`, lanceurs
-  `osmo-*-anim`) se repose à la main depuis `services/` et
-  `configs/crypthome/`, ou par une réinstallation.
-- `addition.sh` et `update.sh` réécrivent les `.desktop` qu'ils possèdent.
+- `osmo-update` (at boot, or by hand): fast-forward `git fetch` of
+  `/opt/GSM/osmo-operator` and the embedded repositories. No packages.
+- What the build installs **outside** the repository (units in
+  `/etc/systemd/system`, `unlock-home` in `/usr/local/sbin`, `osmo-*-anim`
+  launchers) is reinstalled by hand from `services/` and
+  `configs/crypthome/`, or by reinstalling.
+- `addition.sh` and `update.sh` rewrite the `.desktop` files they own.
 
 ---
 
-## 7. Construire l'ISO
+## 7. Building the ISO
 
-### 7.1 D'où viennent les morceaux
+### 7.1 Where the pieces come from
 
 ```
-image Docker osmocom-nitb (compilée par build.sh, ou TIRÉE de ghcr.io)
+Docker image osmocom-nitb (compiled by build.sh, or PULLED from ghcr.io)
         │  .deb osmo-build-*  +  /usr/local, /opt/GSM, venv, configs
         ▼
-debootstrap minbase noble ──► rootfs ──► chroot (paquets apt, bureau, 4G, pmOS…)
+debootstrap minbase noble ──► rootfs ──► chroot (apt packages, desktop, 4G, pmOS…)
         │                                   │
-        │   clone GitHub de osmo-operator ──┘  (51-depot.sh : branche main)
+        │   GitHub clone of osmo-operator ──┘  (51-depot.sh: main branch)
         ▼
-squashfs zstd -19 ──► ISO hybride xorriso + shim/grub signés (ou image SD arm64)
+squashfs zstd -19 ──► hybrid xorriso ISO + signed shim/grub (or arm64 SD image)
 ```
 
-- **L'image Docker n'est pas reconstruite par défaut** (amd64). Ordre du
-  pull : `ghcr.io/<dépôt>/osmocom-nitb:base-<empreinte>` (l'empreinte est le
-  sha256 des fichiers suivis dans Dockerfile, packaging, configs, scripts,
-  services, helpers, opt-gsm, tools, patches : quand elle correspond, l'image
-  publiée a été bâtie sur exactement cet arbre), puis `:latest` du dépôt, puis
-  l'image Docker Hub. `build.sh` ne tourne que si aucune ne répond,
-  ou avec `--build-docker`.
-- **Le dépôt gravé dans l'ISO est un clone de la branche `main` sur GitHub**,
-  pas l'arbre local : il faut pousser avant de graver. Pour graver l'arbre
-  local, `OSMO_EGPRS_REPO=/chemin/du/depot OSMO_EGPRS_BRANCH=<branche>`.
-- **Les modules `iso_modules/` et `build-iso.sh`, eux, sont lus depuis
-  l'arbre local** au moment du build.
+- **The Docker image is not rebuilt by default** (amd64). Pull order:
+  `ghcr.io/<repo>/osmocom-nitb:base-<fingerprint>` (the fingerprint is the
+  sha256 of the tracked files in Dockerfile, packaging, configs, scripts,
+  services, helpers, opt-gsm, tools, patches: when it matches, the published
+  image was built from exactly this tree), then the repo's `:latest`, then
+  the Docker Hub image. `build.sh` runs only if none responds,
+  or with `--build-docker`.
+- **The repository burned into the ISO is a clone of the `main` branch on
+  GitHub**, not the local tree: push before burning. To burn the local tree,
+  `OSMO_EGPRS_REPO=/chemin/du/depot OSMO_EGPRS_BRANCH=<branche>`.
+- **The `iso_modules/` modules and `build-iso.sh`, however, are read from the
+  local tree** at build time.
 
-### 7.2 Prérequis hôte (`iso_modules/20-hote.sh`)
+### 7.2 Host requirements (`iso_modules/20-hote.sh`)
 
-Ubuntu 24.04 en root, docker (installé s'il manque), et les paquets posés par
-le module : debootstrap, git, rsync, zstd, xz, cpio, gcc, make, python3-pil,
-python3-yaml, kpartx, dosfstools, mtools ; en amd64 squashfs-tools, xorriso,
-grub-pc-bin, grub-efi-amd64-bin et -signed, shim-signed, isolinux,
-syslinux-utils ; en arm64 qemu-user-static, binfmt-support, docker-buildx.
-`OSMO_ISO_HOST_READY=1` saute cette étape. Aucun contrôle d'espace disque
-n'est fait : prévoir large dans `/var/tmp` (le répertoire de travail est
-`/var/tmp/iso-build-<pid>`, jamais `/tmp`, souvent un tmpfs : rootfs, squashfs
-et ISO y tiennent ensemble) et pour le store docker (image de base ~11 Go).
+Ubuntu 24.04 as root, docker (installed if missing), and the packages the
+module installs: debootstrap, git, rsync, zstd, xz, cpio, gcc, make, python3-pil,
+python3-yaml, kpartx, dosfstools, mtools; on amd64 squashfs-tools, xorriso,
+grub-pc-bin, grub-efi-amd64-bin and -signed, shim-signed, isolinux,
+syslinux-utils; on arm64 qemu-user-static, binfmt-support, docker-buildx.
+`OSMO_ISO_HOST_READY=1` skips this step. No disk space check is done: leave
+plenty of room in `/var/tmp` (the work directory is
+`/var/tmp/iso-build-<pid>`, never `/tmp`, often a tmpfs: rootfs, squashfs
+and ISO must fit there together) and for the docker store (base image ~11 GB).
 
-### 7.3 La commande
+### 7.3 The command
 
 ```bash
-sudo ./build-iso.sh --desktop                 # l'image publiée
-sudo ./build-iso.sh                           # les quatre images amd64
-sudo ./build-iso.sh --role=operator --node=2  # l'opérateur du nœud 2
-sudo ./build-iso.sh --arm --lite              # image SD Raspberry Pi 4
+sudo ./build-iso.sh --desktop                 # the published image
+sudo ./build-iso.sh                           # the four amd64 images
+sudo ./build-iso.sh --role=operator --node=2  # the operator for node 2
+sudo ./build-iso.sh --arm --lite              # Raspberry Pi 4 SD image
 ```
 
-| Option | Variable | Effet |
+| Option | Variable | Effect |
 |---|---|---|
-| `--role=operator\|interstp` | `ISO_ROLE` | banc ou hub SS7 |
-| `--node=N` | `ISO_NODE`, `ISO_WAN_ID` | identité du nœud 1-9, nom `osmo-operator-N` |
-| `--lite`, `--desktop`, `--all` | `ISO_LITE`, `ISO_DESKTOP`, `ISO_ALL` | voir §2 |
+| `--role=operator\|interstp` | `ISO_ROLE` | bench or SS7 hub |
+| `--node=N` | `ISO_NODE`, `ISO_WAN_ID` | node identity 1-9, name `osmo-operator-N` |
+| `--lite`, `--desktop`, `--all` | `ISO_LITE`, `ISO_DESKTOP`, `ISO_ALL` | see §2 |
 | `--arm` / `--arch=arm64` | `ISO_ARCH` | Raspberry Pi 4 (Armbian, ports.ubuntu.com) |
-| `--banc`, `--multi` | `OSMO_ISO_BANC`, `OSMO_ISO_MULTI` | activer l'unité au boot de l'image |
-| `--version=24.04\|22.04` | `ISO_UBUNTU`, `ISO_SUITE` | noble (défaut) ou jammy |
-| `--kb=fr` | `OSMO_ISO_KB` | disposition clavier (demandée au terminal sinon) |
-| `--output=FICHIER` | `OUTPUT` | nom de sortie |
-| `--no-cache` | `NO_CACHE` | recompilation complète, `.deb` refaits |
-| `--skip-build[=image:tag]` | `ISO_SKIP_BUILD`, `ISO_PULL_IMAGE` | pull obligatoire, sans repli sur build.sh |
-| `--build-docker` | `ISO_FORCE_BUILD` | construire l'image localement |
-| `--without-debs` | `ISO_WITH_DEBS` | pas de `.deb` du banc dans l'image |
-| `--wan`, `--wan-nodes=`, `--wan-id=`, `--wan-ops=`, `--hub-ip=` | `ISO_WAN*`, `ISO_HUB_IP` | table WAN gravée dans `/etc/osmo-wan.conf` |
+| `--banc`, `--multi` | `OSMO_ISO_BANC`, `OSMO_ISO_MULTI` | enable the unit at the image's boot |
+| `--version=24.04\|22.04` | `ISO_UBUNTU`, `ISO_SUITE` | noble (default) or jammy |
+| `--kb=fr` | `OSMO_ISO_KB` | keyboard layout (asked in the terminal otherwise) |
+| `--output=FILE` | `OUTPUT` | output name |
+| `--no-cache` | `NO_CACHE` | full recompilation, `.deb`s rebuilt |
+| `--skip-build[=image:tag]` | `ISO_SKIP_BUILD`, `ISO_PULL_IMAGE` | pull required, no fallback to build.sh |
+| `--build-docker` | `ISO_FORCE_BUILD` | build the image locally |
+| `--without-debs` | `ISO_WITH_DEBS` | no bench `.deb`s in the image |
+| `--wan`, `--wan-nodes=`, `--wan-id=`, `--wan-ops=`, `--hub-ip=` | `ISO_WAN*`, `ISO_HUB_IP` | WAN table burned into `/etc/osmo-wan.conf` |
 
-Autres variables : `OSMO_ISO_WORK` (répertoire de travail), `OSMO_DEB_CACHE`
+Other variables: `OSMO_ISO_WORK` (work directory), `OSMO_DEB_CACHE`
 (`/var/cache/osmo-debs`), `OSMO_ISO_LTE=1`, `OSMO_ISO_PMOS_IMAGE`
-(`/chemin/qemu-amd64.img.zst` ou `none`), `OSMO_PMOS_IMAGE_URL`,
-`OSMO_ISO_LTE_BUILD=0` (pas de compilation 4G si les `.deb` manquent),
+(`/chemin/qemu-amd64.img.zst` or `none`), `OSMO_PMOS_IMAGE_URL`,
+`OSMO_ISO_LTE_BUILD=0` (no 4G compilation if the `.deb`s are missing),
 `OSMO_EGPRS_REPO`/`OSMO_EGPRS_BRANCH`, `OSMO_WEB_REPO` (dashboard).
 
-### 7.4 La chaîne des modules (`iso_modules/`)
+### 7.4 The module chain (`iso_modules/`)
 
-Tous sont sourcés dans le même shell, dans l'ordre numérique ; un module qui
-n'a rien à faire sort par `return` (c'est ainsi que `--arm` saute une étape).
+All are sourced in the same shell, in numeric order; a module with nothing
+to do exits via `return` (that is how `--arm` skips a step).
 
-| Module | Ce qu'il fait |
+| Module | What it does |
 |---|---|
-| `00-options.sh` | options, aide, suite, miroir, contrôle root |
-| `10-clavier.sh` | disposition clavier (menu si terminal, sinon `fr`) |
-| `20-hote.sh` | paquets de l'hôte, docker, outils, binfmt arm64 |
-| `21-docker-build.sh` | pull ou build de l'image Docker, passes filles de `--all`, noms de sortie |
-| `22-wan-table.sh` | table WAN, `trap cleanup`, vérification des outils |
-| `30-image-configs.sh` | configs Osmocom générées depuis les gabarits (`start.sh`), patches natifs |
-| `31-image-source.sh` | image source, contrôle de suite, injection de `/etc/osmocom` et `/etc/asterisk` |
-| `40-rootfs.sh` | `debootstrap --variant=minbase` (cache `~/.cache/osmo-iso-debs`), ou rootfs hérité |
-| `50-injection-image.sh` | `.deb` du build par `dpkg -i`, copie de `/usr/local`, `/opt/GSM`, venv, node, unités |
-| `51-depot.sh` | clone de osmo-operator et des tests, `coeur.env` |
-| `51-shannon.sh` | clone de `bbaranoff/firmwire` (`/opt/GSM/FirmWire`) et `bbaranoff/shannon_ghidra_proj` (`/opt/GSM/shannon_ghidra_proj`) |
-| `52-qemu.sh` | qosmo, c54x_exe, grgsm_exe, ROMs DSP, firmware, qemu-system-arm, lanceur `qosmo`, toast/untoast |
-| `60-dashboard.sh` | osmo-egprs-web (natif, sans docker), tutoriel, unité activée |
-| `70-scripts.sh` | liens `/usr/local/bin`, `osmo-wan.conf`, NetworkManager |
-| `71-debs-banc.sh` | `packaging/build-debs.sh` → `/var/cache/osmo-debs` du rootfs |
-| `80-chroot.sh` | dépôts apt (NodeSource, MongoDB, Armbian), noyau, paquets, venv, bureau, Firefox, GDM, gsettings, `update-initramfs` |
-| `81-cloture-systeme.sh` | clôture `ldd` depuis l'image, réseau sans attente, DNS, `osmo-ip-plan`, `osmo-qemu-link`, `osmo-update`, animation SMS |
-| `82-arm-natif.sh` | `--arm` : compilation native dans le chroot arm64 |
-| `82-services.sh` | marqueur de rôle, os-release, Asterisk, audio (PulseAudio système, `asound.conf`), unités posées non activées, WebUI Open5GS |
-| `83-espace-ram.sh` | fstab, `/tmp` et `/dev/shm` en % de RAM, journal, logrotate, tcpdump en anneau, ssh, purge |
-| `84-comptes.sh` | root et osmocom, autologin console et GDM, compte Linphone |
-| `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icônes, lanceurs GTK (`osmo-*-anim`), page Info |
-| `86-finitions.sh` | live-boot `toram` corrigé, sssd masqué, Chromium retiré, micro Firefox, bannière screenfetch, Plymouth `osmo-bts` |
-| `87-lite.sh` | élagage `--lite` de `/opt/GSM` |
-| `88-lte-pmos.sh` | srsRAN + Open5GS (depuis les `.deb`, sinon compilation), freeDiameter, pmbootstrap, noyau PPP, image de la VM, contrôle final 2G + 4G + téléphone |
-| `89-home-chiffre.sh` | outils crypthome, `unlock-home.service`, trousseau de root sur le volume chiffré, lanceurs sous `run-as-owner` |
-| `90-iso.sh` | contrôle dpkg, squashfs zstd -19, noyau, menu GRUB, `/.disk/info`, relecture du squashfs |
-| `91-secure-boot.sh` | ISO xorriso avec shim et GRUB signés (ou `grub-mkrescue` non signé) |
-| `92-rpi-image.sh` | `--arm` : image SD (partition boot + ext4 Armbian) |
-| `99-fin.sh` | rootfs transmis à la passe suivante (`--all`), résumé |
+| `00-options.sh` | options, help, suite, mirror, root check |
+| `10-clavier.sh` | keyboard layout (menu if terminal, otherwise `fr`) |
+| `20-hote.sh` | host packages, docker, tools, arm64 binfmt |
+| `21-docker-build.sh` | pull or build of the Docker image, child passes of `--all`, output names |
+| `22-wan-table.sh` | WAN table, `trap cleanup`, tool checks |
+| `30-image-configs.sh` | Osmocom configs generated from templates (`start.sh`), native patches |
+| `31-image-source.sh` | source image, suite check, injection of `/etc/osmocom` and `/etc/asterisk` |
+| `40-rootfs.sh` | `debootstrap --variant=minbase` (cache `~/.cache/osmo-iso-debs`), or inherited rootfs |
+| `50-injection-image.sh` | build `.deb`s via `dpkg -i`, copy of `/usr/local`, `/opt/GSM`, venv, node, units |
+| `51-depot.sh` | clone of osmo-operator and the tests, `coeur.env` |
+| `51-shannon.sh` | clone of `bbaranoff/firmwire` (`/opt/GSM/FirmWire`) and `bbaranoff/shannon_ghidra_proj` (`/opt/GSM/shannon_ghidra_proj`) |
+| `52-qemu.sh` | qosmo, c54x_exe, grgsm_exe, DSP ROMs, firmware, qemu-system-arm, `qosmo` launcher, toast/untoast |
+| `60-dashboard.sh` | osmo-egprs-web (native, no docker), tutorial, unit enabled |
+| `70-scripts.sh` | `/usr/local/bin` links, `osmo-wan.conf`, NetworkManager |
+| `71-debs-banc.sh` | `packaging/build-debs.sh` → rootfs `/var/cache/osmo-debs` |
+| `80-chroot.sh` | apt repos (NodeSource, MongoDB, Armbian), kernel, packages, venv, desktop, Firefox, GDM, gsettings, `update-initramfs` |
+| `81-cloture-systeme.sh` | `ldd` closure from the image, no-wait network, DNS, `osmo-ip-plan`, `osmo-qemu-link`, `osmo-update`, SMS animation |
+| `82-arm-natif.sh` | `--arm`: native compilation in the arm64 chroot |
+| `82-services.sh` | role marker, os-release, Asterisk, audio (system-wide PulseAudio, `asound.conf`), units installed not enabled, Open5GS WebUI |
+| `83-espace-ram.sh` | fstab, `/tmp` and `/dev/shm` as % of RAM, journal, logrotate, ring-buffer tcpdump, ssh, purge |
+| `84-comptes.sh` | root and osmocom, console and GDM autologin, Linphone account |
+| `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icons, GTK launchers (`osmo-*-anim`), Info page |
+| `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, screenfetch banner, Plymouth `osmo-bts` |
+| `87-lite.sh` | `--lite` pruning of `/opt/GSM` |
+| `88-lte-pmos.sh` | srsRAN + Open5GS (from the `.deb`s, otherwise compiled), freeDiameter, pmbootstrap, PPP kernel, VM image, final 2G + 4G + phone check |
+| `89-home-chiffre.sh` | crypthome tools, `unlock-home.service`, root keyring on the encrypted volume, launchers under `run-as-owner` |
+| `90-iso.sh` | dpkg check, squashfs zstd -19, kernel, GRUB menu, `/.disk/info`, squashfs read-back |
+| `91-secure-boot.sh` | xorriso ISO with signed shim and GRUB (or unsigned `grub-mkrescue`) |
+| `92-rpi-image.sh` | `--arm`: SD image (boot partition + Armbian ext4) |
+| `99-fin.sh` | rootfs handed to the next pass (`--all`), summary |
 
-### 7.5 La CI (`.github/workflows/build-iso.yml`)
+### 7.5 CI (`.github/workflows/build-iso.yml`)
 
-- Déclencheurs : push d'un tag `v*` ou `iso-*`, ou lancement manuel avec
-  les entrées `release`, `no_cache`, `build_docker`, `mode`
-  (all, stp, base, lite, desktop) et `pmos_image` (embarque la VM
-  postmarketOS, +1,7 Go par ISO).
-- Un seul job sur `ubuntu-24.04` (6 h maximum) : nettoyage du runner, docker
-  déplacé sur `/mnt`, cache des `.deb` par empreinte
-  (`osmo-debs-noble-g2-<empreinte>`). Si `ghcr.io/…/osmocom-nitb:base-<empreinte>`
-  existe, elle est tirée (`--skip-build=REF`) ; sinon `--build-docker`.
-- Sorties : `SHA256SUMS`, `MD5SUMS`, découpage des fichiers de plus de
-  2 Gio en `*.iso.part-NN` (1 900 Mo) avec `PARTS.sha256`, artefact 14 jours,
-  release GitHub (`softprops/action-gh-release`) avec les notes de
-  `.github/release-notes.md`, pré-release sauf sur un tag `v*`.
+- Triggers: push of a `v*` or `iso-*` tag, or manual dispatch with the
+  inputs `release`, `no_cache`, `build_docker`, `mode`
+  (all, stp, base, lite, desktop) and `pmos_image` (embeds the postmarketOS
+  VM, +1.7 GB per ISO).
+- A single job on `ubuntu-24.04` (6 h max): runner cleanup, docker moved to
+  `/mnt`, `.deb` cache keyed by fingerprint
+  (`osmo-debs-noble-g2-<empreinte>`). If `ghcr.io/…/osmocom-nitb:base-<empreinte>`
+  exists, it is pulled (`--skip-build=REF`); otherwise `--build-docker`.
+- Outputs: `SHA256SUMS`, `MD5SUMS`, files over 2 GiB split into
+  `*.iso.part-NN` (1,900 MB) with `PARTS.sha256`, 14-day artifact,
+  GitHub release (`softprops/action-gh-release`) with the notes from
+  `.github/release-notes.md`, pre-release except on a `v*` tag.
 
-### 7.6 Durées et tailles
+### 7.6 Durations and sizes
 
 | | |
 |---|---|
-| Build desktop, image Docker tirée | ~2 h 15 sur 16 cœurs |
-| Compilation Docker complète (`--build-docker`) | 1 h 23 en CI (`wiki/Build.md` annonce 15-20 min sur une machine de référence) |
-| ISO desktop | 6,5 Go (4 morceaux en release) |
-| Desktop vs operator | +2,5 Go |
-| Image Docker de base | ~11 Go |
-| `--arm` première fois | une dizaine d'heures (émulation) |
+| Desktop build, Docker image pulled | ~2 h 15 on 16 cores |
+| Full Docker compilation (`--build-docker`) | 1 h 23 in CI (`wiki/Build.md` states 15-20 min on a reference machine) |
+| Desktop ISO | 6.5 GB (4 parts in the release) |
+| Desktop vs operator | +2.5 GB |
+| Base Docker image | ~11 GB |
+| `--arm` first time | about ten hours (emulation) |
 
 ---
 
-## 8. Fichiers à connaître
+## 8. Files to know
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| `build-iso.sh`, `iso_modules/` | la chaîne de build |
-| `installer/calamares/` | l'installateur (modules, habillage, diaporama) |
-| `configs/crypthome/` | `/home` chiffré : `unlock-home`, `crypthome-postinstall`, `init-crypthome.sh`, `run-as-owner` |
-| `configs/plymouth/osmo-bts/`, `tools/plymouth-render.py` | le thème de démarrage, généré |
+| `build-iso.sh`, `iso_modules/` | the build chain |
+| `installer/calamares/` | the installer (modules, branding, slideshow) |
+| `configs/crypthome/` | encrypted `/home`: `unlock-home`, `crypthome-postinstall`, `init-crypthome.sh`, `run-as-owner` |
+| `configs/plymouth/osmo-bts/`, `tools/plymouth-render.py` | the boot theme, generated |
 | `services/*.service` | `osmo-banc`, `osmo-multi`, `osmo-lte`, `osmo-egprs-web`, `open5gs-webui` |
-| `data/desktop/*.desktop` | les icônes du dock ; `tools/osmo-gtk-run.py` les fenêtres |
-| `/etc/default/osmo-banc`, `/etc/default/osmo-multi`, `/etc/default/osmo-lte` | options durables des services |
-| `/etc/default/crypthome` | UUID, propriétaire, délai, `CRYPTHOME_PROMPT` |
-| `/etc/osmocom/coeur.env`, `/etc/osmo-wan.conf`, `/etc/osmo-role` | nœud, WAN, rôle de l'image |
-| `/var/log/osmocom/`, `journalctl -u osmo-banc` | journaux du banc |
-| `addition.sh` | les suppléments (docker/multi, OpenCL/deka, Claude, extras) |
+| `data/desktop/*.desktop` | the dock icons; `tools/osmo-gtk-run.py` the windows |
+| `/etc/default/osmo-banc`, `/etc/default/osmo-multi`, `/etc/default/osmo-lte` | persistent service options |
+| `/etc/default/crypthome` | UUID, owner, timeout, `CRYPTHOME_PROMPT` |
+| `/etc/osmocom/coeur.env`, `/etc/osmo-wan.conf`, `/etc/osmo-role` | node, WAN, image role |
+| `/var/log/osmocom/`, `journalctl -u osmo-banc` | bench logs |
+| `addition.sh` | the add-ons (docker/multi, OpenCL/deka, Claude, extras) |
 | `checks/check_all.sh`, `ss7-console.py` | diagnostics |

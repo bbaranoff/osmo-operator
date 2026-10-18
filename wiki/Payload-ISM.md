@@ -1,114 +1,114 @@
-# Payload SMS par radio ISM, le reste par IP (`--payload-ism`)
+# SMS payload over ISM radio, the rest over IP (`--payload-ism`)
 
-Entre deux machines qui font tourner osmo-operator, `--wan` fait déjà passer par
-IP toute la liaison inter-nœud : signalisation SS7, voix SIP, et le relais SMS
-(`scripts/sms-interop-relay.py`) qui porte le texte des messages dans un JSON sur
-TCP. L'option `--payload-ism` garde tout cela sur IP **sauf le contenu du SMS** :
-le texte voyage sur une **liaison radio en bande ISM** (433 / 868 / 915 MHz,
-2,4 GHz, sans licence), les deux relais se coordonnant toujours par TCP.
+Between two machines running osmo-operator, `--wan` already carries the whole
+inter-node link over IP: SS7 signaling, SIP voice, and the SMS relay
+(`scripts/sms-interop-relay.py`) which carries the message text in a JSON over
+TCP. The `--payload-ism` option keeps all of that over IP **except the SMS content**:
+the text travels over an **ISM-band radio link** (433 / 868 / 915 MHz,
+2.4 GHz, license-free), while the two relays still coordinate over TCP.
 
 ```
-         IP (--wan) : SS7, SIP, adresses, MSISDN, IMSI, SC-address, + un JETON
+         IP (--wan): SS7, SIP, addresses, MSISDN, IMSI, SC-address, + a TOKEN
    ┌────────────────────────────────────────────────────────────────┐
-Nœud 1                                                             Nœud 2
-   │   texte du SMS ────────────── radio ISM ──────────────▶ texte du SMS
+Node 1                                                             Node 2
+   │   SMS text ──────────────── ISM radio ──────────────────▶ SMS text
    └────────────────────────────────────────────────────────────────┘
 ```
 
-## Comment ça marche
+## How it works
 
-Le relais SMS extrait déjà le texte du TPDU d'un SMS mobile-originé pour le
-réinjecter en mobile-terminé sur l'autre nœud. Avec `--payload-ism` :
+The SMS relay already extracts the text from the TPDU of a mobile-originated SMS to
+reinject it as mobile-terminated on the other node. With `--payload-ism`:
 
-1. **Émission.** Le relais tire un jeton de corrélation, émet le texte sur la
-   radio ISM estampillé de ce jeton, et n'envoie sur TCP que le jeton (plus les
-   adresses). Le champ texte du TCP part vide.
-2. **Réception.** L'autre relais reçoit le JSON TCP, voit `payload_via=ism`, et
-   attend sur la liaison radio le texte portant ce jeton avant d'injecter le MT.
+1. **Transmission.** The relay draws a correlation token, transmits the text over the
+   ISM radio stamped with that token, and sends over TCP only the token (plus the
+   addresses). The TCP text field goes out empty.
+2. **Reception.** The other relay receives the TCP JSON, sees `payload_via=ism`, and
+   waits on the radio link for the text carrying that token before injecting the MT.
 
-Si la radio échoue à l'émission, le relais retombe sur IP pour ce SMS (il ne
-reste jamais muet). Si le texte n'arrive pas par radio dans le délai
-(`recv_timeout`, 30 s par défaut), la réception répond en erreur.
+If the radio fails on transmission, the relay falls back to IP for that SMS (it never
+stays silent). If the text does not arrive over radio within the timeout
+(`recv_timeout`, 30 s by default), reception answers with an error.
 
-La liaison radio est découplée du matériel : `scripts/ism_payload.py` parle à
-l'**interface de données** de ta radio, trame le texte en une ligne JSON avec
-CRC32 (une trame tronquée ou corrompue est ignorée), et corrèle par jeton.
+The radio link is decoupled from the hardware: `scripts/ism_payload.py` talks to
+the **data interface** of your radio, frames the text into a single JSON line with
+a CRC32 (a truncated or corrupted frame is ignored), and correlates by token.
 
-## Les backends
+## The backends
 
-On choisit le backend avec `network/setup-payload-ism.sh`, qui écrit la section
-`[payload]` de `sms-routing.conf` (lue par le relais).
+You choose the backend with `network/setup-payload-ism.sh`, which writes the
+`[payload]` section of `sms-routing.conf` (read by the relay).
 
-| backend | pour quoi | mise en place |
+| backend | for what | setup |
 |---|---|---|
-| `serial` | un module ISM en UART (LoRa, RFM69, CC1101, HC-12…) sur `/dev/tty*` | `sudo ./network/setup-payload-ism.sh --serial /dev/ttyUSB0 --baud 9600` |
-| `exec` | un pipeline SDR que tu fournis (HackRF/LimeSDR/USRP + GNU Radio, rtl_433…) | `sudo ./network/setup-payload-ism.sh --exec --tx-cmd … --rx-cmd …` |
-| `fifo` | deux tubes nommés, pour brancher ta radio autrement (`socat`…) | `sudo ./network/setup-payload-ism.sh --fifo --tx /tmp/ism_tx --rx /tmp/ism_rx` |
-| `loopback` | essayer la chaîne SMS **sans radio**, sur une seule machine | `sudo ./network/setup-payload-ism.sh --loopback` |
+| `serial` | an ISM module on UART (LoRa, RFM69, CC1101, HC-12…) on `/dev/tty*` | `sudo ./network/setup-payload-ism.sh --serial /dev/ttyUSB0 --baud 9600` |
+| `exec` | an SDR pipeline you provide (HackRF/LimeSDR/USRP + GNU Radio, rtl_433…) | `sudo ./network/setup-payload-ism.sh --exec --tx-cmd … --rx-cmd …` |
+| `fifo` | two named pipes, to hook up your radio some other way (`socat`…) | `sudo ./network/setup-payload-ism.sh --fifo --tx /tmp/ism_tx --rx /tmp/ism_rx` |
+| `loopback` | try the SMS chain **without radio**, on a single machine | `sudo ./network/setup-payload-ism.sh --loopback` |
 
-Pour le backend `exec`, `setup-payload-ism.sh --exemples` dépose deux gabarits
-`/opt/GSM/ism/ism_tx.sh` et `ism_rx.sh` : `ism_tx.sh` reçoit une trame (ligne
-JSON) sur son entrée standard et doit l'émettre ; `ism_rx.sh` doit écrire sur sa
-sortie standard chaque trame reçue. Tant qu'ils ne sont pas remplis avec ta
-chaîne radio, le texte ne traverse pas.
+For the `exec` backend, `setup-payload-ism.sh --exemples` drops two templates
+`/opt/GSM/ism/ism_tx.sh` and `ism_rx.sh`: `ism_tx.sh` receives a frame (a JSON
+line) on its standard input and must transmit it; `ism_rx.sh` must write each
+received frame to its standard output. Until they are filled in with your
+radio chain, the text does not get through.
 
-## Lancer
+## Launch
 
-Sur **chaque** nœud, avec le WAN déjà en place :
+On **each** node, with the WAN already in place:
 
 ```bash
-# 1. poser la liaison radio (une fois, ou refait par start-direct)
+# 1. set up the radio link (once, or redone by start-direct)
 sudo ./network/setup-payload-ism.sh --serial /dev/ttyUSB0 --baud 9600
 
-# 2. lancer le banc : WAN par IP + payload par ISM
+# 2. launch the bench: WAN over IP + payload over ISM
 sudo ./start-direct.sh --wan --payload-ism
 ```
 
-`--payload-ism=serial` (ou `=exec`, `=fifo`, `=loopback`) écrit en plus la
-section `[payload]` au lancement, avec le périphérique/les commandes pris dans
-l'environnement : `ISM_SERIAL`, `ISM_SERIAL_BAUD`, `ISM_TX`, `ISM_RX`,
-`ISM_TX_CMD`, `ISM_RX_CMD`. Sans backend, `--payload-ism` réutilise la section
-déjà écrite.
+`--payload-ism=serial` (or `=exec`, `=fifo`, `=loopback`) additionally writes the
+`[payload]` section at launch, with the device/commands taken from the
+environment: `ISM_SERIAL`, `ISM_SERIAL_BAUD`, `ISM_TX`, `ISM_RX`,
+`ISM_TX_CMD`, `ISM_RX_CMD`. Without a backend, `--payload-ism` reuses the section
+already written.
 
-Pour revenir au texte par IP : `sudo ./network/setup-payload-ism.sh --off`.
+To go back to text over IP: `sudo ./network/setup-payload-ism.sh --off`.
 
-## Vérifier sans radio
+## Verify without radio
 
 ```bash
-python3 scripts/ism_payload.py --selftest                 # boucle mémoire
+python3 scripts/ism_payload.py --selftest                 # in-memory loop
 python3 scripts/ism_payload.py --selftest --link fifo \
-        --tx /tmp/ism_a --rx /tmp/ism_b                   # boucle par tubes
-sudo ./network/setup-payload-ism.sh --loopback            # chaîne SMS complète, un nœud
+        --tx /tmp/ism_a --rx /tmp/ism_b                   # loop over pipes
+sudo ./network/setup-payload-ism.sh --loopback            # full SMS chain, one node
 ```
 
-L'autotest envoie trois textes (dont 140 octets et des accents) et vérifie le
-rejet d'une trame à CRC faux.
+The self-test sends three texts (including 140 bytes and accented characters) and checks the
+rejection of a frame with a bad CRC.
 
-## La section `[payload]` de `sms-routing.conf`
+## The `[payload]` section of `sms-routing.conf`
 
 ```ini
 [payload]
-mode = ism                 ; ism = texte par radio ; absent/autre = texte par IP
+mode = ism                 ; ism = text over radio; absent/other = text over IP
 link = serial              ; serial | exec | fifo | loopback
-serial = /dev/ttyUSB0      ; (serial) le périphérique UART
-; tx = /tmp/osmo_ism_tx    ; (fifo) tube d'émission
-; rx = /tmp/osmo_ism_rx    ; (fifo) tube de réception
-; tx_cmd = /opt/GSM/ism/ism_tx.sh   ; (exec) commande d'émission
-; rx_cmd = /opt/GSM/ism/ism_rx.sh   ; (exec) commande de réception
-recv_timeout = 30          ; attente du texte par radio avant échec (s)
+serial = /dev/ttyUSB0      ; (serial) the UART device
+; tx = /tmp/osmo_ism_tx    ; (fifo) transmit pipe
+; rx = /tmp/osmo_ism_rx    ; (fifo) receive pipe
+; tx_cmd = /opt/GSM/ism/ism_tx.sh   ; (exec) transmit command
+; rx_cmd = /opt/GSM/ism/ism_rx.sh   ; (exec) receive command
+recv_timeout = 30          ; wait for the text over radio before failing (s)
 ```
 
-## Réglementaire
+## Regulatory
 
-N'émets que sur une bande et une puissance ISM autorisées là où tu es (433 et
-868 MHz en Europe, 902-928 MHz en région 2, 2,4 GHz), ou en charge/cage de
-Faraday. C'est ta responsabilité d'opérateur du banc.
+Only transmit on an ISM band and power allowed where you are (433 and
+868 MHz in Europe, 902-928 MHz in region 2, 2.4 GHz), or into a dummy load / Faraday
+cage. It is your responsibility as the bench's operator.
 
-## Fichiers
+## Files
 
-| fichier | rôle |
+| file | role |
 |---|---|
-| `scripts/ism_payload.py` | la liaison payload ISM : backends, trame + CRC, corrélation par jeton, autotest |
-| `scripts/sms-interop-relay.py` | relais SMS : jeton sur TCP, texte sur la radio quand `[payload] mode=ism` |
-| `network/setup-payload-ism.sh` | écrit `[payload]`, pose le débit série, dépose les gabarits SDR, autotest |
-| `start-direct.sh` | l'option `--payload-ism[=backend]` |
+| `scripts/ism_payload.py` | the ISM payload link: backends, frame + CRC, correlation by token, self-test |
+| `scripts/sms-interop-relay.py` | SMS relay: token over TCP, text over radio when `[payload] mode=ism` |
+| `network/setup-payload-ism.sh` | writes `[payload]`, sets the serial baud rate, drops the SDR templates, self-test |
+| `start-direct.sh` | the `--payload-ism[=backend]` option |

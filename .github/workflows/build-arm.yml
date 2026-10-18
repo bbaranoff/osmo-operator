@@ -34,6 +34,13 @@ on:
     tags: ["rpi-*", "arm-*"]
   workflow_dispatch:
     inputs:
+      # [2026-10-18] Version de la release, en entree : on la choisit au lancement
+      # au lieu de modifier le workflow. v0.1-8 est gardee en reserve : on passe
+      # directement de v0.1-7 a v0.1-9 (la saisir ici si besoin).
+      version:
+        description: "Release tag (v0.1-8 kept in reserve)"
+        type: string
+        default: "v0.1-9"
       mode:
         description: "Quelle image (une seule : --all est refuse en arm64)"
         type: choice
@@ -339,11 +346,11 @@ jobs:
           # chaque commande - il ne sait plus si « main » designe la branche ou
           # le tag - et un release qui ne disait pas quelle version il portait.
           # Un push de tag garde son propre tag ; tout le reste sort sous la
-          # version ci-dessous, a changer ici quand elle avance.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-7' }}
-          name: "osmo_egprs — image SD Raspberry Pi 4 (arm64) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.1-7' }}"
+          # version saisie au lancement (entree version, defaut ci-dessous).
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.1-9' }}
+          name: "osmo_egprs — image SD Raspberry Pi 4 (arm64) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.1-9' }}"
           draft: false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          prerelease: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
           body: |
             ## osmo_egprs — image SD arm64 (Raspberry Pi 4)
 

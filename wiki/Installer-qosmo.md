@@ -1,62 +1,62 @@
-# Installer qosmo (QEMU Calypso) — et le firmware osmocom-bb
+# Installing qosmo (QEMU Calypso) — and the osmocom-bb firmware
 
-> Version du 2026-10-03. Retour : [Telephone-emule](Telephone-emule.md).
-> Le dépôt porte son installeur, `qosmo/install.sh` : c'est lui qu'appellent aussi le
-> `Dockerfile` (stage `qemu`), `Dockerfile.run`, `start.sh` et `install.sh --telephone`.
-> Les commandes manuelles plus bas sont **ce que fait le script**, étape par étape.
-> Les numéros `Dockerfile:N` renvoient au Dockerfile du commit `4266c8b`, quand il portait
-> encore ces commandes (il appelle désormais l'installeur).
+> Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md).
+> The repository ships its own installer, `qosmo/install.sh`: it is also what the
+> `Dockerfile` (stage `qemu`), `Dockerfile.run`, `start.sh` and `install.sh --telephone` call.
+> The manual commands below are **what the script does**, step by step.
+> `Dockerfile:N` numbers refer to the Dockerfile at commit `4266c8b`, back when it still
+> carried these commands (it now calls the installer).
 
-**qosmo** (`https://github.com/bbaranoff/qosmO`) est un fork de QEMU qui ajoute la machine
-`calypso` : le SoC TI Calypso (ARM946) sur lequel le **firmware osmocom-bb d'origine,
-non patché**, boote (`qosmo/README.md:1-5`). Le même binaire sert aux deux montages : compilé
-avec `--enable-l1-grgsm`, il embarque la couche 1 gr-gsm ; lancé avec `CALYPSO_DSP_EXTERN=1`, il
-la coupe et délègue au DSP externe `c54x_exe` (`osmo-operator/Dockerfile:679-682`).
+**qosmo** (`https://github.com/bbaranoff/qosmO`) is a QEMU fork that adds the `calypso`
+machine: the TI Calypso SoC (ARM946) on which the **original, unpatched osmocom-bb
+firmware** boots (`qosmo/README.md:1-5`). The same binary serves both setups: built
+with `--enable-l1-grgsm`, it embeds the gr-gsm layer 1; started with `CALYPSO_DSP_EXTERN=1`, it
+cuts it out and delegates to the external DSP `c54x_exe` (`osmo-operator/Dockerfile:679-682`).
 
-Il contient aussi les **sources** que compilent `c54x_exe` et `grgsm_exe`
-(`hw/arm/calypso/l1-dsp/`, `l1-grgsm/`, `contrib/hors-qemu/`) : installez-le en premier.
+It also contains the **sources** that `c54x_exe` and `grgsm_exe` compile
+(`hw/arm/calypso/l1-dsp/`, `l1-grgsm/`, `contrib/hors-qemu/`): install it first.
 
-## Avec l'installeur
+## With the installer
 
 ```bash
 git clone https://github.com/bbaranoff/qosmO /opt/GSM/qosmo
 cd /opt/GSM/qosmo
-./install.sh --check          # prérequis et état de chaque étape — ne modifie RIEN
-sudo ./install.sh --deps      # paquets apt manquants (la liste : ./install.sh --print-deps)
-sudo ./install.sh             # venv, configure, make, make install, /usr/local/bin, contrôle
+./install.sh --check          # prerequisites and state of each step — changes NOTHING
+sudo ./install.sh --deps      # missing apt packages (the list: ./install.sh --print-deps)
+sudo ./install.sh             # venv, configure, make, make install, /usr/local/bin, check
 ```
 
-Étapes (`./install.sh --list`), chacune avec un « déjà fait ? », ses prérequis, le travail et un
-contrôle après coup — le contrat de `osmo-operator/install_modules/_lib/inst.sh` :
+Steps (`./install.sh --list`), each with an "already done?" test, its prerequisites, the work
+and an after-the-fact check — the contract of `osmo-operator/install_modules/_lib/inst.sh`:
 
-| étape | fait | ligne du Dockerfile | déjà fait si |
+| step | does | Dockerfile line | already done if |
 |---|---|---|---|
-| `venv` | `python3 -m venv ~/.venv-qemu` + `pip install tomli` | 694-696 | `tomli` importable dans le venv |
-| `configure` | `mkdir -p build && cd build && ../configure --target-list=arm-softmmu --enable-l1-grgsm --prefix=… --disable-werror --disable-docs` | 697-699 | `build/config.log` porte **les mêmes** options |
-| `build` | `make -j$(nproc)` dans `build/` (incrémental) | 700 | — (toujours rejoué, ne refait que ce qui a bougé) |
-| `install` | `make install` (prefix `/opt/GSM/qemu-install`) | 701 | binaire installé identique à `build/` |
-| `bin` | copie `qemu-system-arm` et `qosmo` dans `/usr/local/bin` | 702-703 | copies identiques ; *sans objet* si le dossier n'est pas inscriptible |
-| `verify` | `build/qemu-system-arm -M help` doit lister `calypso … (couche 1 : grgsm)` | — | — |
+| `venv` | `python3 -m venv ~/.venv-qemu` + `pip install tomli` | 694-696 | `tomli` importable in the venv |
+| `configure` | `mkdir -p build && cd build && ../configure --target-list=arm-softmmu --enable-l1-grgsm --prefix=… --disable-werror --disable-docs` | 697-699 | `build/config.log` has **the same** options |
+| `build` | `make -j$(nproc)` in `build/` (incremental) | 700 | — (always rerun, only rebuilds what changed) |
+| `install` | `make install` (prefix `/opt/GSM/qemu-install`) | 701 | installed binary identical to `build/` |
+| `bin` | copies `qemu-system-arm` and `qosmo` into `/usr/local/bin` | 702-703 | identical copies; *not applicable* if the directory is not writable |
+| `verify` | `build/qemu-system-arm -M help` must list `calypso … (couche 1 : grgsm)` | — | — |
 
-Options (et variable équivalente) : `--prefix DIR` (`PREFIX`, défaut `$GSM_ROOT/qemu-install`),
-`--build-dir DIR` (`BUILD_DIR`, construire hors de l'arbre — jamais l'arbre source lui-même :
-`configure` lancé depuis la racine efface un `build/` qu'il a créé, `configure:16-45`),
-`--venv DIR|none` (`VENV`, défaut `~/.venv-qemu`), `--bin-dir DIR|none` (`BIN_DIR`, défaut
-`/usr/local/bin`), `--destdir DIR` (installer sous une autre racine, comme l'ISO), `--cc gcc-13`
-(compilateur imposé : le `build/` d'une image a été configuré avec gcc-13, `Dockerfile.run`),
-`-j N`, `--only ÉTAPES`, `--skip ÉTAPES`, `--reinstall`, `--with-deps`, `-v` (sortie à l'écran ;
-sinon un journal par étape dans `/tmp/qosmo-install/`, dont la fin s'affiche en cas d'échec).
-`GSM_ROOT` (défaut `/opt/GSM`) fixe le préfixe par défaut.
+Options (and equivalent variable): `--prefix DIR` (`PREFIX`, default `$GSM_ROOT/qemu-install`),
+`--build-dir DIR` (`BUILD_DIR`, build out of tree — never in the source tree itself:
+`configure` run from the root wipes a `build/` it created, `configure:16-45`),
+`--venv DIR|none` (`VENV`, default `~/.venv-qemu`), `--bin-dir DIR|none` (`BIN_DIR`, default
+`/usr/local/bin`), `--destdir DIR` (install under another root, like the ISO), `--cc gcc-13`
+(forced compiler: an image's `build/` was configured with gcc-13, `Dockerfile.run`),
+`-j N`, `--only STEPS`, `--skip STEPS`, `--reinstall`, `--with-deps`, `-v` (output on screen;
+otherwise one log per step in `/tmp/qosmo-install/`, whose tail is shown on failure).
+`GSM_ROOT` (default `/opt/GSM`) sets the default prefix.
 
-Sans root : `./install.sh` marche si `/opt/GSM` vous appartient ; l'étape `bin` est alors
-*sans objet* (binaires laissés dans `$PREFIX/bin`), ou `--prefix ~/qemu-calypso --bin-dir none`.
+Without root: `./install.sh` works if you own `/opt/GSM`; the `bin` step is then
+*not applicable* (binaries left in `$PREFIX/bin`), or use `--prefix ~/qemu-calypso --bin-dir none`.
 
-## Ce que fait le script, à la main
+## What the script does, by hand
 
-### Prérequis
+### Prerequisites
 
-Ubuntu 24.04 (base du banc, `Dockerfile:11-15`). Paquets (`./install.sh --print-deps`, extraits
-de `Dockerfile:159,166,189-190`) :
+Ubuntu 24.04 (the bench base, `Dockerfile:11-15`). Packages (`./install.sh --print-deps`, taken
+from `Dockerfile:159,166,189-190`):
 
 ```bash
 sudo apt-get install -y --no-install-recommends \
@@ -64,14 +64,14 @@ sudo apt-get install -y --no-install-recommends \
   libglib2.0-dev libpixman-1-dev libslirp-dev ninja-build socat
 ```
 
-`socat` sert à interroger le moniteur QEMU (`qosmo/run_modules/40-qemu.sh:91-96`).
-`./install.sh --check` contrôle ce qui compte vraiment au `configure` (cc, make, ninja,
-pkg-config, `glib-2.0` et `pixman-1` vus de pkg-config, module `venv`/`ensurepip`) : un paquet
-absent mais installé autrement n'est qu'une note.
+`socat` is used to query the QEMU monitor (`qosmo/run_modules/40-qemu.sh:91-96`).
+`./install.sh --check` checks what really matters for `configure` (cc, make, ninja,
+pkg-config, `glib-2.0` and `pixman-1` as seen by pkg-config, the `venv`/`ensurepip` module): a
+missing package that is installed some other way is only a note.
 
-### Compiler
+### Build
 
-Repris de `osmo-operator/Dockerfile:691-705` :
+Taken from `osmo-operator/Dockerfile:691-705`:
 
 ```bash
 sudo mkdir -p /opt/GSM && sudo chown "$USER" /opt/GSM
@@ -86,35 +86,35 @@ make -j"$(nproc)"
 make install
 ```
 
-Le script (étape `bin`) copie ensuite les binaires dans le PATH (`Dockerfile:702-703`) :
+The script (`bin` step) then copies the binaries into the PATH (`Dockerfile:702-703`):
 
 ```bash
 sudo cp /opt/GSM/qemu-install/bin/qemu-system-arm /usr/local/bin/qemu-system-arm
 sudo cp /opt/GSM/qemu-install/bin/qosmo           /usr/local/bin/qosmo
 ```
 
-> **Gardez l'arbre et `build/`.** Les lanceurs utilisent `/opt/GSM/qosmo/build/qemu-system-arm`
-> (`c54x_exe/run.sh:28`, `qosmo/environnement/bench.env:4`), et c54x_exe/grgsm_exe compilent les
-> sources de cet arbre. Le Dockerfile emporte l'arbre entier, build/ compris (`Dockerfile:686-688`).
+> **Keep the tree and `build/`.** The launchers use `/opt/GSM/qosmo/build/qemu-system-arm`
+> (`c54x_exe/run.sh:28`, `qosmo/environnement/bench.env:4`), and c54x_exe/grgsm_exe compile the
+> sources from this tree. The Dockerfile carries the whole tree, build/ included (`Dockerfile:686-688`).
 
-Variantes de configure documentées (`qosmo/README.md:9-13`) : sans option (plateforme nue),
-`--enable-l1-dsp` (C54x **dans** QEMU, non utilisé par le banc actuel). Le banc n'utilise que
+Documented configure variants (`qosmo/README.md:9-13`): no option (bare platform),
+`--enable-l1-dsp` (C54x **inside** QEMU, not used by the current bench). The bench only uses
 `--enable-l1-grgsm`.
 
-### Vérifier
+### Check
 
 ```bash
-./install.sh --only verify    # -M help doit lister « calypso … (couche 1 : grgsm) »
+./install.sh --only verify    # -M help must list « calypso … (couche 1 : grgsm) »
 ls -la /opt/GSM/qosmo/build/qemu-system-arm
 /opt/GSM/qosmo/build/qemu-system-arm -M help | grep calypso
-qosmo -V          # lanceur C : « qosmo <version> (<arbre>) » (tools/qosmo/qosmo.c, option -V)
+qosmo -V          # C launcher: « qosmo <version> (<tree>) » (tools/qosmo/qosmo.c, option -V)
 ```
 
-La description de la machine dit quelle couche 1 est compilée
-(`hw/arm/calypso/calypso_mb.c:111`) : `couche 1 : grgsm` attendu.
+The machine description says which layer 1 is compiled in
+(`hw/arm/calypso/calypso_mb.c:111`): `couche 1 : grgsm` ("layer 1: grgsm") expected.
 
-Démarrage de la machine (nécessite le firmware, section suivante) — commande de
-`c54x_exe/LAUNCH.md:75-79`, montage grgsm (sans `CALYPSO_DSP_EXTERN`) :
+Starting the machine (needs the firmware, next section) — command from
+`c54x_exe/LAUNCH.md:75-79`, grgsm setup (without `CALYPSO_DSP_EXTERN`):
 
 ```bash
 /opt/GSM/qosmo/build/qemu-system-arm -M calypso -cpu arm946 \
@@ -123,78 +123,78 @@ Démarrage de la machine (nécessite le firmware, section suivante) — commande
   -kernel /opt/GSM/firmware/board/compal_e88/layer1.highram.elf
 ```
 
-Attendu sur stderr (`LAUNCH.md:89-96`) :
+Expected on stderr (`LAUNCH.md:89-96`):
 
 ```
 char device redirected to /dev/pts/N (label serial0)
 [l1] backend gr-gsm : GSMTAP udp/4730, SCH udp/4731
 ```
 
-et `printf 'info status\n' | socat - UNIX-CONNECT:/tmp/qemu-monitor-pont.sock` → `VM status: running`
-(`40-qemu.sh:93-95`). Arrêter avec Ctrl-C.
+and `printf 'info status\n' | socat - UNIX-CONNECT:/tmp/qemu-monitor-pont.sock` → `VM status: running`
+(`40-qemu.sh:93-95`). Stop with Ctrl-C.
 
-## Firmware et osmocom-bb
+## Firmware and osmocom-bb
 
-QEMU exécute `layer1.highram.elf` ; osmocon charge `layer1.highram.bin` par romload ; le mobile
-parle L1CTL via osmocon. Ces trois pièces viennent d'osmocom-bb.
+QEMU runs `layer1.highram.elf`; osmocon loads `layer1.highram.bin` via romload; the mobile
+speaks L1CTL through osmocon. All three pieces come from osmocom-bb.
 
-**Firmware prébuilt** (`Dockerfile:585-588` ; c'est « le seul endroit consulté », `Dockerfile:590-598`) —
-un clone, rien à compiler. Depuis osmo-operator : `sudo ./install.sh --only firmware`
-(`install_modules/45-calypso.sh`) ; à la main :
+**Prebuilt firmware** (`Dockerfile:585-588`; it is "the only place looked at", `Dockerfile:590-598`) —
+a clone, nothing to compile. From osmo-operator: `sudo ./install.sh --only firmware`
+(`install_modules/45-calypso.sh`); by hand:
 
 ```bash
 git clone --depth 1 https://github.com/bbaranoff/firmware /opt/GSM/firmware
 ls /opt/GSM/firmware/board/compal_e88/layer1.highram.{elf,bin}
 ```
 
-**osmo-gapk, avant osmocom-bb** (le mobile du banc utilise `tch-voice io-handler gapk`,
-`c54x_exe/mobile_pont.cfg`) — `Dockerfile:445-452` :
+**osmo-gapk, before osmocom-bb** (the bench mobile uses `tch-voice io-handler gapk`,
+`c54x_exe/mobile_pont.cfg`) — `Dockerfile:445-452`:
 
 ```bash
 cd /opt/GSM && git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk
 cd osmo-gapk && autoreconf -fi && ./configure --enable-alsa && make -j"$(nproc)" && sudo make install && sudo ldconfig
 ```
 
-(paquet `libasound2-dev` requis, `Dockerfile:169`.)
+(package `libasound2-dev` required, `Dockerfile:169`.)
 
-**osmocom-bb, outils hôte seulement** (`Dockerfile:548-558`) — exige libosmocore installé :
+**osmocom-bb, host tools only** (`Dockerfile:548-558`) — requires libosmocore installed:
 
 ```bash
 cd /opt/GSM && git clone https://gitea.osmocom.org/phone-side/osmocom-bb
-git -C osmocom-bb apply /opt/GSM/osmo-operator/patches/osmocom-bb-clck-gen-frame-tolerance.patch   # optionnel : ne touche que fake_trx (Dockerfile:541-547)
+git -C osmocom-bb apply /opt/GSM/osmo-operator/patches/osmocom-bb-clck-gen-frame-tolerance.patch   # optional: only touches fake_trx (Dockerfile:541-547)
 cd osmocom-bb/src && make nofirmware
 sudo install -m755 host/layer23/src/mobile/mobile /usr/local/bin/mobile    # Dockerfile:1145-1149
 ```
 
-`osmocon` reste dans l'arbre : `/opt/GSM/osmocom-bb/src/host/osmocon/osmocon` (chemin attendu par
-`c54x_exe/run.sh:31` et `qosmo/environnement/bench.env:10`).
+`osmocon` stays in the tree: `/opt/GSM/osmocom-bb/src/host/osmocon/osmocon` (path expected by
+`c54x_exe/run.sh:31` and `qosmo/environnement/bench.env:10`).
 
-Vérifier : `ls /opt/GSM/osmocom-bb/src/host/osmocon/osmocon && mobile --version` (**À CONFIRMER** :
-option `--version` de mobile).
+Check: `ls /opt/GSM/osmocom-bb/src/host/osmocon/osmocon && mobile --version` (**TO BE CONFIRMED**:
+mobile's `--version` option).
 
-## Variables utiles
+## Useful variables
 
-| Variable | Défaut | Rôle | Source |
+| Variable | Default | Role | Source |
 |---|---|---|---|
-| `CALYPSO_DSP_EXTERN=1` | absent | coupe la L1 gr-gsm, partage l'API RAM avec `c54x_exe` | `LAUNCH.md:84-86` |
-| `CALYPSO_PONT_LOCKSTEP=1` | posé par run.sh si `LOCKSTEP=1` | QEMU attend le DSP à chaque trame | `c54x_exe/run.sh:56-57` |
-| `CALYPSO_PONT_RETRY_DIV` | 64 (run.sh) | cadence de relance vers le DSP | `run.sh:130-133` |
-| `CALYPSO_GDB_PORT` | 1234 | gdbstub ARM (`off` pour couper) | `40-qemu.sh:59` |
+| `CALYPSO_DSP_EXTERN=1` | unset | cuts out the gr-gsm L1, shares the API RAM with `c54x_exe` | `LAUNCH.md:84-86` |
+| `CALYPSO_PONT_LOCKSTEP=1` | set by run.sh if `LOCKSTEP=1` | QEMU waits for the DSP on every frame | `c54x_exe/run.sh:56-57` |
+| `CALYPSO_PONT_RETRY_DIV` | 64 (run.sh) | retry rate towards the DSP | `run.sh:130-133` |
+| `CALYPSO_GDB_PORT` | 1234 | ARM gdbstub (`off` to disable) | `40-qemu.sh:59` |
 
-Les ~300 variables `CALYPSO_*` sont décrites dans `qosmo/hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md`
-(`qosmo/environnement/README.md:42-45`) ; le manifeste réellement appliqué est imprimé par QEMU
+The ~300 `CALYPSO_*` variables are described in `qosmo/hw/arm/calypso/doc/VARIABLES_ENVIRONNEMENT.md`
+(`qosmo/environnement/README.md:42-45`); the manifest actually applied is printed by QEMU
 (`grep calypso-manifest qemu.log`).
 
-## Dépannage
+## Troubleshooting
 
-| Symptôme | Cause / remède | Source |
+| Symptom | Cause / fix | Source |
 |---|---|---|
-| CPU à 0, plantage en `0x840000`, osmocon ne charge rien | `-kernel` manquant | `LAUNCH.md:82-83` |
-| `QEMU a démarré puis s'est arrêté` | machine ou firmware invalide ; voir la fin de `qemu.log` | `40-qemu.sh:102-106` |
-| fenêtre SDL « parallel0 » qui prend le clavier | oublier `-display none -parallel none` | `40-qemu.sh:60-67` |
-| `binaire QEMU absent` | build non fait ; `./install.sh --only build` (ou `ninja -C build qemu-system-arm`) | `40-qemu.sh:10-11` |
-| `[FAIL] configure … manque : glib-2.0 vu de pkg-config` | paquet `-dev` absent : `sudo ./install.sh --deps` | `install.sh --check` |
-| `[SKIP] qemu-system-arm et qosmo dans le PATH (… non inscriptible)` | pas root : binaires dans `$PREFIX/bin`, ou `--bin-dir DIR` | `install.sh`, étape `bin` |
-| ninja échoue dès la première unité dans un `build/` venu d'une image | `build/` configuré avec gcc-13, `cc` = gcc-11 : `./install.sh --only build --cc gcc-13` | `Dockerfile.run:171-175` |
-| `/usr/local/bin/qosmo-grgsm` au lieu de `qosmo` | repli `make -C tools/qosmo-launch install` de `start-direct.sh` (dossier non versionné) ; utiliser `make install` dans `build/` | `start-direct.sh:692-694` |
-| `osmocon` bloqué à mi-téléchargement | un osmocon tué en plein romload laisse le stub UART à mi-bloc : relancer QEMU puis osmocon | `LAUNCH.md:120-121` |
+| CPU at 0, crash at `0x840000`, osmocon loads nothing | missing `-kernel` | `LAUNCH.md:82-83` |
+| `QEMU a démarré puis s'est arrêté` ("QEMU started then stopped") | invalid machine or firmware; see the tail of `qemu.log` | `40-qemu.sh:102-106` |
+| SDL "parallel0" window grabbing the keyboard | forgot `-display none -parallel none` | `40-qemu.sh:60-67` |
+| `binaire QEMU absent` ("QEMU binary missing") | build not done; `./install.sh --only build` (or `ninja -C build qemu-system-arm`) | `40-qemu.sh:10-11` |
+| `[FAIL] configure … manque : glib-2.0 vu de pkg-config` | missing `-dev` package: `sudo ./install.sh --deps` | `install.sh --check` |
+| `[SKIP] qemu-system-arm et qosmo dans le PATH (… non inscriptible)` | not root: binaries in `$PREFIX/bin`, or `--bin-dir DIR` | `install.sh`, `bin` step |
+| ninja fails on the very first unit in a `build/` that came from an image | `build/` configured with gcc-13, `cc` = gcc-11: `./install.sh --only build --cc gcc-13` | `Dockerfile.run:171-175` |
+| `/usr/local/bin/qosmo-grgsm` instead of `qosmo` | `make -C tools/qosmo-launch install` fallback in `start-direct.sh` (unversioned directory); use `make install` in `build/` | `start-direct.sh:692-694` |
+| `osmocon` stuck mid-download | an osmocon killed during romload leaves the UART stub mid-block: restart QEMU, then osmocon | `LAUNCH.md:120-121` |

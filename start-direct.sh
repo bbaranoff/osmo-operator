@@ -77,6 +77,12 @@ WAN_MESH=0
 INTERSTP=auto
 # --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
 WAN_IMPORT_FILES=()
+# --regen-conf : la table WAN est reconstruite DE ZERO. La table en place
+# (/etc/osmo-wan.conf) survit aux relances et garde les noeuds qu'on y a vus un
+# jour ; un pair eteint y laisse une route qui passe PROHIB au STP. On met la
+# table de cote (sauvegarde horodatee) et on repart de ce que la ligne donne
+# (--wan-nodes), des fiches (--wan FICHIER) ou de la question interactive.
+REGEN_WAN_CONF=0
 # --payload-ism : le TEXTE des SMS part par radio ISM, le reste (signalisation,
 # SS7, SIP) par IP comme --wan. PAYLOAD_ISM_LINK = backend si donne (--payload-ism=serial).
 PAYLOAD_ISM=0
@@ -171,6 +177,10 @@ Usage : ./start-direct.sh [options] [mode]
     --wan-nodes "1:IP:IND ..."   meme chose sans question (scriptable)
     --wan-id N          numero du noeud local (sinon deduit des IP locales)
     --wan-conf FICHIER  table a lire/ecrire (defaut /etc/osmo-wan.conf)
+    --regen-conf        reconstruit la table WAN DE ZERO (implique --wan) : la
+                        table en place est sauvegardee puis effacee, on repart
+                        de --wan-nodes / des fiches / de la question. A utiliser
+                        quand un pair eteint laisse une route PROHIB au STP.
     --payload-ism[=BACKEND]
                         le TEXTE des SMS entre noeuds part par une liaison RADIO
                         en bande ISM ; tout le reste (signalisation, SS7, SIP)
@@ -286,6 +296,7 @@ while [ $# -gt 0 ]; do
         --air-mesh)     AIR_MESH=1 ;;
         --air-mesh=*)   AIR_MESH=1; AIRMESH_PORT="${1#*=}" ;;
         --regen)        REGEN_GABARITS=1 ;;
+        --regen-conf)   WAN_MESH=1; REGEN_WAN_CONF=1 ;;
         --menu)         MENU_MODE=1 ;;
         --op)           NODE_OP="${2:-1}"; shift ;;
         --op=*)         NODE_OP="${1#*=}" ;;
@@ -2246,6 +2257,30 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
     # shellcheck source=network/wan-nodes.sh
     . "$WAN_LIB"
+    # --regen-conf : on repart de zero. La table en place est mise de cote
+    # (jamais perdue en silence) puis effacee, AVANT le moindre wan_nodes_load :
+    # la suite du bloc la reconstruit depuis --wan-nodes, les fiches ou la
+    # question, sans trainer les pairs eteints d'hier (routes PROHIB au STP).
+    if [ "$REGEN_WAN_CONF" -eq 1 ]; then
+        _wc="${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
+        # La sauvegarde reste A COTE de la table : /tmp (LOG_DIR par defaut)
+        # ne survit pas a un redemarrage, encore moins sur l'ISO en RAM.
+        _sav="${_wc}.avant-regen-$(date +%Y%m%d-%H%M%S)"
+        if [ "$DRY" -eq 1 ]; then
+            [ -f "$_wc" ] && printf '  [dry-run] cp -p %s %s && rm -f %s\n' "$_wc" "$_sav" "$_wc"
+        elif [ -f "$_wc" ]; then
+            # Pas de sauvegarde, pas d'effacement : la table n'est jamais perdue en silence.
+            if cp -p "$_wc" "$_sav" 2>/dev/null; then
+                printf '  %sWAN%s        table mise de cote : %s\n' "$C_DIM" "$C_Z" "$_sav"
+                rm -f "$_wc"
+            else
+                say_end " KO " "$C_KO" "WAN" "--regen-conf : sauvegarde impossible ($_sav), table laissee en place"
+                exit 1
+            fi
+        fi
+        printf '  %sWAN%s        table reconstruite de zero (--regen-conf)\n' "$C_DIM" "$C_Z"
+        unset _wc _sav
+    fi
     # --virtualbox : segment host-only + VM + table, avant tout le reste.
     if [ "$VBOX_INTERCO" -eq 1 ] && [ -z "${WAN_NODES:-}" ]; then
         VB="$HERE/network/setup-vbox-interco.sh"

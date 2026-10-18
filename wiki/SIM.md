@@ -1,143 +1,144 @@
-# SIM : la carte du banc dans un lecteur HID Omnikey, et softSIM
+# SIM: the bench's card in an Omnikey HID reader, and softSIM
 
-Le mobile du banc (`mobile`, osmocom-bb) n'a pas de lecteur de carte : sa SIM est
-soit la **SIM de test** du fichier de configuration (`sim test`, IMSI et Ki écrits
-en clair, le défaut), soit une SIM **servie sur un socket** par le protocole SAP
-(*SIM Access Profile*, `sim sap`). C'est ce second chemin que `start-direct.sh --sap`
-monte, avec le serveur SAP de [softSIM](https://gitea.osmocom.org/sim-card/softsim)
-(Ruby), qui sait servir deux choses :
+The bench mobile (`mobile`, osmocom-bb) has no card reader: its SIM is
+either the **test SIM** from the config file (`sim test`, IMSI and Ki written
+in the clear, the default), or a SIM **served over a socket** by the SAP
+protocol (*SIM Access Profile*, `sim sap`). It is this second path that
+`start-direct.sh --sap` sets up, with the SAP server from
+[softSIM](https://gitea.osmocom.org/sim-card/softsim)
+(Ruby), which can serve two things:
 
-| type | ce que le mobile voit | quand |
+| type | what the mobile sees | when |
 |---|---|---|
-| **pcsc** | la **vraie carte** du lecteur PC/SC : une sysmoISIM-SJA5 dans un HID OMNIKEY 6121 | une carte est dans le lecteur |
-| **sim** | la **SIM logicielle** `sim-op1.xml` (IMSI du MS#1, COMP128v1 avec le Ki du HLR) | pas de carte |
+| **pcsc** | the **real card** in the PC/SC reader: a sysmoISIM-SJA5 in a HID OMNIKEY 6121 | a card is in the reader |
+| **sim** | the **software SIM** `sim-op1.xml` (IMSI of MS#1, COMP128v1 with the HLR Ki) | no card |
 
-`--sap` choisit tout seul (pcsc si une carte est présente, sinon sim) ; `--sap=pcsc`
-(`--omnikey`) et `--sap=sim` forcent. Sans `--sap`, rien ne change : SIM de test.
+`--sap` chooses on its own (pcsc if a card is present, otherwise sim); `--sap=pcsc`
+(`--omnikey`) and `--sap=sim` force it. Without `--sap`, nothing changes: test SIM.
 
-## 1. Installer
-
-```bash
-sudo tools/osmo-sim-install.sh        # ou : sudo ./addition.sh --sim
-```
-
-Pose, sans rien casser si c'est déjà là : `pcscd` + `libccid` (le démon PC/SC et le
-pilote CCID de l'Omnikey), `pcsc-tools`/`opensc` (voir le lecteur et l'ATR), Ruby +
-`ruby-libxml` + le gem `smartcard` (softSIM en lecteur), **pySim** d'Osmocom dans
-`/opt/GSM/pysim-venv` (depuis son git : le « pySim » de PyPI est un autre projet),
-et softSIM lui-même dans `/opt/GSM/softsim` avec les patches de `tools/softsim/`.
-L'ISO fait la même chose (`iso_modules/51-softsim.sh` + `80-chroot.sh`,
-`--no-softsim` pour s'en passer).
-
-Vérifié le 2026-10-14 : OMNIKEY 6121 (USB `076b:6632`), sysmoISIM-SJA5, ATR
-`3b9f96801f878031e073fe211b674a357530350265f8`, Ruby 3.2.3, gem smartcard 0.5.6, sysmo-usim-tool 190c95b.
-
-## 2. Voir la carte
+## 1. Install
 
 ```bash
-tools/osmo-sim.sh lecteur     # les lecteurs, l'ATR, le type de carte, ICCID, IMSI
-tools/osmo-sim.sh lire        # tout (pySim-read) : PLMN, SMSP, ACC, services…
-tools/osmo-sim.sh shell       # pySim-shell interactif (ADM1 passée si connue)
+sudo tools/osmo-sim-install.sh        # or: sudo ./addition.sh --sim
 ```
 
-## 3. Programmer la carte au plan du banc
+Installs, without breaking anything already present: `pcscd` + `libccid` (the PC/SC daemon and the
+Omnikey's CCID driver), `pcsc-tools`/`opensc` (to see the reader and the ATR), Ruby +
+`ruby-libxml` + the `smartcard` gem (softSIM as a reader), Osmocom's **pySim** in
+`/opt/GSM/pysim-venv` (from its git: the "pySim" on PyPI is a different project),
+and softSIM itself in `/opt/GSM/softsim` with the patches from `tools/softsim/`.
+The ISO does the same (`iso_modules/51-softsim.sh` + `80-chroot.sh`,
+`--no-softsim` to skip it).
 
-Le banc provisionne ses abonnés dans osmo-hlr avec un plan fixe
-(`qosmo/run_modules/21-abonnes-hlr.sh`, `start-direct.sh` section `ms_imsi`) :
+Verified on 2026-10-14: OMNIKEY 6121 (USB `076b:6632`), sysmoISIM-SJA5, ATR
+`3b9f96801f878031e073fe211b674a357530350265f8`, Ruby 3.2.3, smartcard gem 0.5.6, sysmo-usim-tool 190c95b.
 
-| | MS#1 de l'opérateur 1 |
+## 2. View the card
+
+```bash
+tools/osmo-sim.sh lecteur     # the readers, the ATR, the card type, ICCID, IMSI
+tools/osmo-sim.sh lire        # everything (pySim-read): PLMN, SMSP, ACC, services…
+tools/osmo-sim.sh shell       # interactive pySim-shell (ADM1 passed if known)
+```
+
+## 3. Program the card to the bench's plan
+
+The bench provisions its subscribers in osmo-hlr with a fixed plan
+(`qosmo/run_modules/21-abonnes-hlr.sh`, `start-direct.sh` section `ms_imsi`):
+
+| | MS#1 of operator 1 |
 |---|---|
 | IMSI | `001 01 0001 000001` → `001010001000001` |
-| Ki | `00112233445566778899aabbccdd` + MS + opérateur → `…dd0101` |
-| algorithme | COMP128v1 (`aud2g comp128v1`) |
-| MSISDN | nœud×100000 + opérateur×100 + MS → `100101` |
+| Ki | `00112233445566778899aabbccdd` + MS + operator → `…dd0101` |
+| algorithm | COMP128v1 (`aud2g comp128v1`) |
+| MSISDN | node×100000 + operator×100 + MS → `100101` |
 
-Pour que la carte s'enregistre, elle doit porter **exactement** cette identité :
+For the card to register, it must carry **exactly** this identity:
 
 ```bash
-tools/osmo-sim.sh programmer --dry-run          # montre, n'écrit rien
-tools/osmo-sim.sh programmer --adm1 12345678    # écrit (demande confirmation)
-tools/osmo-sim.sh programmer --ms 2 --op 1      # un autre MS du plan
-tools/osmo-sim.sh verifier                      # carte = plan ? HLR ? prête pour --sap ?
+tools/osmo-sim.sh programmer --dry-run          # shows, writes nothing
+tools/osmo-sim.sh programmer --adm1 12345678    # writes (asks for confirmation)
+tools/osmo-sim.sh programmer --ms 2 --op 1      # another MS of the plan
+tools/osmo-sim.sh verifier                      # card = plan? HLR? ready for --sap?
 ```
 
-Ce qu'il écrit passe par l'outil de sysmocom, **sysmo-usim-tool**
-(`/opt/GSM/sysmo-usim-tool/sysmo-isim-tool.sja5.py`, posé par l'installeur) : IMSI,
-longueur du MNC, Ki (2G/3G/4G5G), **algorithme 2G COMP128v1** (3G Milenage), OPc ;
-puis il relit algorithme et Ki (`-t -k`). C'est lui qui sait poser l'algorithme :
-`pySim-prog` n'écrit que le Ki et la carte resterait en Milenage, le HLR répondrait
-*authentication failed*. Sans l'outil (ou `OSMO_SIM_PYSIM_PROG=1`), repli sur
-`pySim-prog` (ICCID conservé, IMSI, PLMN, nom, SMSP, MSISDN, Ki) puis `pySim-shell`
-pour l'octet d'algorithme `0x11` dans `DF.SYSTEM/EF.SIM_AUTH_KEY` (6f20) et
+What it writes goes through sysmocom's tool, **sysmo-usim-tool**
+(`/opt/GSM/sysmo-usim-tool/sysmo-isim-tool.sja5.py`, installed by the installer): IMSI,
+MNC length, Ki (2G/3G/4G5G), **2G algorithm COMP128v1** (3G Milenage), OPc;
+then it reads back the algorithm and Ki (`-t -k`). It is the one that knows how to set the
+algorithm: `pySim-prog` writes only the Ki and the card would stay in Milenage, the HLR would answer
+*authentication failed*. Without the tool (or `OSMO_SIM_PYSIM_PROG=1`), it falls back to
+`pySim-prog` (ICCID kept, IMSI, PLMN, name, SMSP, MSISDN, Ki) then `pySim-shell`
+for the algorithm byte `0x11` in `DF.SYSTEM/EF.SIM_AUTH_KEY` (6f20) and
 `ADF.USIM/EF.USIM_AUTH_KEY_2G` (af22).
 
-Fait le 2026-10-14 sur la carte 8949440000001549193 : `verifier` dit « prête ».
+Done on 2026-10-14 on card 8949440000001549193: `verifier` says "prête" (ready).
 
-### La clé ADM1
+### The ADM1 key
 
-Écrire sur une sysmoISIM demande la clé **ADM1 de cette carte** (8 chiffres), que
-sysmocom fournit avec la carte (fichier de données de la commande). **Trois essais
-faux bloquent la carte pour de bon** : le script ne devine jamais, il refuse sans
-clé. Où la mettre, dans l'ordre où elle est cherchée :
+Writing to a sysmoISIM requires the **ADM1 key of that card** (8 digits), which
+sysmocom provides with the card (data file of the order). **Three wrong tries
+block the card for good**: the script never guesses, it refuses without a
+key. Where to put it, in the order it is looked for:
 
-1. `--adm1 K` sur la ligne de commande ;
-2. `OSMO_SIM_ADM1=K` dans l'environnement ;
-3. `/etc/osmocom/sim-adm1` (`chmod 600`) : une ligne, ou `ICCID clé` par ligne
-   pour plusieurs cartes ;
+1. `--adm1 K` on the command line;
+2. `OSMO_SIM_ADM1=K` in the environment;
+3. `/etc/osmocom/sim-adm1` (`chmod 600`): one line, or `ICCID key` per line
+   for several cards;
 4. `~/.config/osmo/sim-adm1`.
 
-### Une carte qu'on ne veut pas reprogrammer
+### A card you don't want to reprogram
 
-Elle garde son IMSI et son Ki : il faut alors les déclarer au HLR.
-
-```bash
-tools/osmo-sim.sh hlr --creer --ki <Ki de la carte>     # abonné créé par le VTY (4258)
-```
-
-(`hlr` sans `--creer` dit seulement si le HLR connaît l'IMSI lu sur la carte.)
-
-## 4. Lancer
+It keeps its IMSI and Ki: you must then declare them to the HLR.
 
 ```bash
-./start-direct.sh --sap            # carte présente → pcsc ; sinon SIM logicielle
-./start-direct.sh --sap=pcsc       # la carte, obligatoirement
-./start-direct.sh --dry-run --sap  # ce qui serait fait, sans rien lancer
+tools/osmo-sim.sh hlr --creer --ki <card's Ki>     # subscriber created via the VTY (4258)
 ```
 
-`start_sap` tourne **avant** la pile : il lance `demo_server.rb` (softSIM) sur
-`/tmp/osmocom_sap` (`SAP_SOCK`), journal `/tmp/osmo-sap.log` (`SAP_LOG`,
-`SAP_VERBOSITY=3` : connexion, carte prête, chaque APDU horodatée), et le mobile
-s'y connecte au démarrage. Le serveur sert le client suivant après une déconnexion
-(patch `0002`) : un redémarrage de la baseband ne demande rien.
+(`hlr` without `--creer` only says whether the HLR knows the IMSI read on the card.)
 
-En mode DSP (le défaut), le MS#1 qui tourne est celui de c54x_exe
-(`mobile_pont.cfg`, `sim test`) : `--sap` en dérive
-`/root/.osmocom/bb/mobile_pont_sap.cfg` (`sim sap`, `sap-socket`) et le passe au
-banc par `MOBILE_CFG`. En mode grgsm, c'est `mobile.cfg` généré depuis
-`configs/mobile.cfg` (`sim sap` dans le gabarit, remis en `sim test` sans `--sap`)
-qui le porte ; le MS#2 reste en SIM de test.
-
-`./start-direct.sh --stop` arrête aussi le serveur SAP ; un démarrage le relance
-toujours à neuf (il est tué avec le reste dans « Arrêt de la pile avant démarrage »).
-
-Servir la carte à la main, sans la pile (pour voir les APDU) :
+## 4. Launch
 
 ```bash
-tools/osmo-sim.sh sap              # premier plan, Ctrl-C pour arrêter
+./start-direct.sh --sap            # card present → pcsc; otherwise software SIM
+./start-direct.sh --sap=pcsc       # the card, mandatory
+./start-direct.sh --dry-run --sap  # what would be done, without launching anything
 ```
 
-## 5. Ce que les patches corrigent
+`start_sap` runs **before** the stack: it launches `demo_server.rb` (softSIM) on
+`/tmp/osmocom_sap` (`SAP_SOCK`), with log `/tmp/osmo-sap.log` (`SAP_LOG`,
+`SAP_VERBOSITY=3`: connection, card ready, each timestamped APDU), and the mobile
+connects to it at startup. The server serves the next client after a disconnect
+(patch `0002`): a baseband restart requires nothing.
 
-| fichier | quoi |
+In DSP mode (the default), the MS#1 that runs is the one from c54x_exe
+(`mobile_pont.cfg`, `sim test`): `--sap` derives
+`/root/.osmocom/bb/mobile_pont_sap.cfg` from it (`sim sap`, `sap-socket`) and passes it to the
+bench via `MOBILE_CFG`. In grgsm mode, it is `mobile.cfg` generated from
+`configs/mobile.cfg` (`sim sap` in the template, reset to `sim test` without `--sap`)
+that carries it; MS#2 stays on the test SIM.
+
+`./start-direct.sh --stop` also stops the SAP server; a startup always relaunches it fresh
+(it is killed with the rest in "Arrêt de la pile avant démarrage" — stopping the stack before startup).
+
+Serve the card by hand, without the stack (to watch the APDUs):
+
+```bash
+tools/osmo-sim.sh sap              # foreground, Ctrl-C to stop
+```
+
+## 5. What the patches fix
+
+| file | what |
 |---|---|
-| `tools/softsim/0001-simos-comp128v1-a38.patch` | SIM logicielle : COMP128v1 avec `SOFTSIM_KI` (n'importe quel RAND du HLR), READ RECORD, `--file` transmis, boucle d'acceptation |
-| `tools/softsim/0002-sap-serve-next-client.patch` | le serveur sert le client suivant au lieu de sortir |
-| `tools/softsim/0003-sap-log-timestamps.patch` | APDU nommées et horodatées (ms) dans le journal |
-| `tools/softsim/0004-pcsc-disconnect-idempotent.patch` | mode pcsc : `disconnect` appelé deux fois par client (DISCONNECT_REQ puis fermeture du socket) plantait le serveur sur un handle nul, le mobile ne pouvait plus se reconnecter |
-| `tools/softsim/ruby_compat.rb` | Ruby ≥ 3.2 : `File.exists?`, `Fixnum` |
-| `tools/softsim/make_sim_op1.py` | `sim-op1.xml` : IMSI, ICCID valide, PLMN, SPN depuis le `sim.xml` de démonstration |
-| `patches/osmocom-bb-plmn-a6-reinsert.patch` | mobile : SIM réinsérée sans RPLMN (reconnexion SAP), la recherche de PLMN finissait « unhandled » |
-| `patches/osmocom-bb-sim-plmn-from-bcd.patch` | mobile : PLMNsel/FPLMN de la SIM lus avec la bonne fonction (000-00 avant) |
+| `tools/softsim/0001-simos-comp128v1-a38.patch` | software SIM: COMP128v1 with `SOFTSIM_KI` (any RAND from the HLR), READ RECORD, `--file` passed through, acceptance loop |
+| `tools/softsim/0002-sap-serve-next-client.patch` | the server serves the next client instead of exiting |
+| `tools/softsim/0003-sap-log-timestamps.patch` | APDUs named and timestamped (ms) in the log |
+| `tools/softsim/0004-pcsc-disconnect-idempotent.patch` | pcsc mode: `disconnect` called twice per client (DISCONNECT_REQ then socket close) crashed the server on a null handle, the mobile could no longer reconnect |
+| `tools/softsim/ruby_compat.rb` | Ruby ≥ 3.2: `File.exists?`, `Fixnum` |
+| `tools/softsim/make_sim_op1.py` | `sim-op1.xml`: IMSI, valid ICCID, PLMN, SPN from the demo `sim.xml` |
+| `patches/osmocom-bb-plmn-a6-reinsert.patch` | mobile: SIM reinserted without RPLMN (SAP reconnection), the PLMN search ended "unhandled" |
+| `patches/osmocom-bb-sim-plmn-from-bcd.patch` | mobile: SIM PLMNsel/FPLMN read with the right function (000-00 before) |
 
-Les deux patches osmocom-bb sont appliqués par `install_modules/40-patches.sh`
-(natif) et le `Dockerfile` ; `mobile` doit être recompilé après.
+The two osmocom-bb patches are applied by `install_modules/40-patches.sh`
+(native) and the `Dockerfile`; `mobile` must be recompiled afterwards.
