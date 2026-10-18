@@ -8,19 +8,30 @@ container and on the ISO.
 
 ## Install
 
+**The complete native path is the notebook**
+[`wiki/installer-osmo-jusquau-dsp.ipynb`](../wiki/installer-osmo-jusquau-dsp.ipynb):
+on a fresh Ubuntu 24.04 it builds everything (apt dependencies, Osmocom core,
+SMSC, osmocom-bb, firmware, qosmo, c54x_exe, runtime setup) and ends with a
+verified call on the DSP. Open it with Jupyter in a venv, after `sudo -v`
+(instructions in its first cell).
+
+`install.sh` covers only part of it: apt dependencies (extracted from the
+Dockerfile), the `osmocom` account, osmocom-bb, gapk, libosmo-dsp, toast, the 4G,
+configs and desktop icons. It does **not** build the Osmocom core, qosmo,
+c54x_exe or the firmware, so on a stock 24.04 its last step fails with
+"demons absents". The notebook reuses its `deps`, `user` and `configs` steps.
+
 ```bash
-sudo ./install.sh                  # everything: deps, sources, build, binaries, configs, desktop
+sudo ./install.sh                  # its steps: deps, sources, build, binaries, configs, desktop
 ./install.sh --list                # show the steps, do nothing
 ./install.sh --check               # what is already in place
-sudo ./install.sh --reinstall      # replay everything
+sudo ./install.sh --only deps      # one step
 sudo ./install.sh --only bureau    # desktop icons and shortcuts only
 ```
 
 To install the pieces one by one instead: [wiki/Installer-qosmo](../wiki/Installer-qosmo.md),
 [wiki/Installer-grgsm_exe](../wiki/Installer-grgsm_exe.md),
-[wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md), or the
-[notebook](../wiki/installer-osmo-jusquau-dsp.ipynb) that replays the Dockerfile
-natively.
+[wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md).
 
 ## Start and stop
 
