@@ -3,7 +3,7 @@ name: Build ISO
 # Trois images, une seule chaine :
 #   interstp.iso            le hub SS7 (PC 0.0.0), aucun operateur
 #   osmo-operator.iso       un noeud - UNE image pour les 9 : le numero se
-#                           choisit au demarrage (start-direct.sh --node N)
+#                           choisit au demarrage (start-native.sh --node N)
 #   osmo-operator-lite.iso  le meme noeud, construit depuis l'image d'execution
 #                           elaguee (Dockerfile.lite) : les ateliers de
 #                           compilation de /opt/GSM ne partent pas dans le

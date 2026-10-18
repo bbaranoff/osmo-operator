@@ -19,7 +19,7 @@ flowchart TD
     R --> TST["README-tests"]
     ISO --> W_ISO["wiki/ISO"]
     DOC --> W_BUILD["wiki/Build"]
-    NAT --> W_SD["wiki/Start-direct"]
+    NAT --> W_SD["wiki/Start-native"]
     NAT --> W_ENV["wiki/Environnement"]
     GR --> W_GR["wiki/Installer-grgsm_exe<br/>wiki/Installer-qosmo"]
     DSP --> W_DSP["wiki/Installer-c54x_exe<br/>notebook"]
@@ -36,7 +36,7 @@ flowchart TD
 | [README](../README.md) | entry point, quick start, index |
 | [README-iso](README-iso.md) | the live ISO: download, run, launchers, contents |
 | [README-docker](README-docker.md) | Docker images, build graph, `.deb` cache, Compose, PHY modes |
-| [README-native](README-native.md) | `install.sh`, `start-direct.sh`, profiles, `qosmo` launcher |
+| [README-native](README-native.md) | `install.sh`, `start-native.sh`, profiles, `qosmo` launcher |
 | [README-arm](README-arm.md) | arm64 / Raspberry Pi 4 SD image |
 | [README-architecture](README-architecture.md) | how the pieces fit, LU / SMS / call flows, code map |
 | [README-grgsm](README-grgsm.md) | the gr-gsm layer 1 chain, radio diagnostics |
@@ -52,17 +52,17 @@ flowchart TD
 |---|---|
 | [Home](../wiki/Home.md) | quick start and reference card |
 | [Reference](../wiki/Reference.md) | the former full README |
-| [Start-direct](../wiki/Start-direct.md) | `start-direct.sh` step by step, option manual |
+| [Start-native](../wiki/Start-native.md) | `start-native.sh` step by step, option manual |
 | [Build](../wiki/Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
 | [ISO](../wiki/ISO.md) | ISO contents, build, install |
 | [Environnement](../wiki/Environnement.md) | variable precedence, what reaches QEMU |
 | [Resultats](../wiki/Resultats.md) | reference `check_all.sh` runs |
 | [Telephone-emule](../wiki/Telephone-emule.md) | the emulated phone on your own Osmocom stack |
-| [Lancer-a-la-main](../wiki/Lancer-a-la-main.md) | the phone process by process |
+| [Lancer-a-la-main](../wiki/Lancer-a-la-main.md) · [lancer-pas-a-pas.ipynb](../wiki/lancer-pas-a-pas.ipynb) | the bench process by process (page, and runnable notebook) |
 | [Installer-qosmo](../wiki/Installer-qosmo.md) | build the QEMU fork |
 | [Installer-grgsm_exe](../wiki/Installer-grgsm_exe.md) | build the gr-gsm layer 1 |
 | [Installer-c54x_exe](../wiki/Installer-c54x_exe.md) | build the DSP emulator |
-| [installer-osmo-jusquau-dsp.ipynb](../wiki/installer-osmo-jusquau-dsp.ipynb) | notebook: Dockerfile replayed natively |
+| [README-notebook](../wiki/README-notebook.md) · [installer-osmo-jusquau-dsp.ipynb](../wiki/installer-osmo-jusquau-dsp.ipynb) | the install notebook and how to run it |
 | [SIM](../wiki/SIM.md) | real SIM in an Omnikey reader, or softSIM, over SAP |
 | [WAN](../wiki/WAN.md) | linking two nodes, LAN or Internet |
 | [Payload-ISM](../wiki/Payload-ISM.md) | SMS text over an ISM radio link |

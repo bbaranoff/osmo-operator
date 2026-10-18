@@ -6,13 +6,13 @@ routes M3UA/SCCP between them, on one host (Docker) or across machines (WAN).
 No configuration file is edited by hand: pjsip, dialplan, SMS routing and the
 inter-STP config are all generated from N.
 
-← [README](../README.md) · Details: [wiki/WAN](../wiki/WAN.md), [wiki/Payload-ISM](../wiki/Payload-ISM.md), [wiki/Start-direct §7-wan](../wiki/Start-direct.md), [wiki/Reference §9](../wiki/Reference.md#9-multi-operator-and-ss7)
+← [README](../README.md) · Details: [wiki/WAN](../wiki/WAN.md), [wiki/Payload-ISM](../wiki/Payload-ISM.md), [wiki/Start-native §7-wan](../wiki/Start-native.md), [wiki/Reference §9](../wiki/Reference.md#9-multi-operator-and-ss7)
 
 ## On one host (Docker)
 
 ```bash
-sudo ./start.sh          # choose bridge mode, enter N operators
-sudo ./start.sh stop
+sudo ./launch/start-docker.sh          # choose bridge mode, enter N operators
+sudo ./launch/start-docker.sh stop
 ```
 
 ```mermaid
@@ -78,14 +78,14 @@ Numbering on the WAN works like a country code. Node N has prefix `NN` (11,
 ## Across machines (WAN)
 
 ```bash
-./start-direct.sh --wan                                       # interactive
-./start-direct.sh --wan-nodes "1:IP:11 2:IP:22" --wan-id 1    # scriptable
-./start-direct.sh --wan mynode2.conf                          # from another node's card
-./start-direct.sh --gen-conf                                  # write this node's card, start nothing
-./start-direct.sh --regen-conf …                              # rebuild the WAN table from scratch
-./start-direct.sh --virtualbox=3                              # mesh with VirtualBox VMs
-./start-direct.sh --air-mesh                                  # mesh the BURSTS: a shared radio medium
-./start-direct.sh --payload-ism                               # SMS text over an ISM radio link
+./start-native.sh --wan                                       # interactive
+./start-native.sh --wan-nodes "1:IP:11 2:IP:22" --wan-id 1    # scriptable
+./start-native.sh --wan mynode2.conf                          # from another node's card
+./start-native.sh --gen-conf                                  # write this node's card, start nothing
+./start-native.sh --regen-conf …                              # rebuild the WAN table from scratch
+./start-native.sh --virtualbox=3                              # mesh with VirtualBox VMs
+./start-native.sh --air-mesh                                  # mesh the BURSTS: a shared radio medium
+./start-native.sh --payload-ism                               # SMS text over an ISM radio link
 ```
 
 `--node N` picks the node number **at launch**, so one ISO serves all nine

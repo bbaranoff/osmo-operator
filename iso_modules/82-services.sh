@@ -5,7 +5,7 @@
 # module = "rien a faire ici" (c est ainsi que --arm saute une etape).
 
 # ── Marqueur de role : ce que CETTE image est ───────────────────────────────
-# Lu par start-direct.sh et par la banniere. Sans lui, deux ISO issues de la
+# Lu par start-native.sh et par la banniere. Sans lui, deux ISO issues de la
 # meme chaine sont indiscernables une fois demarrees - et on lance le mauvais
 # script sur la mauvaise machine.
 {
@@ -96,8 +96,8 @@ After=network.target
 [Service]
 Type=forking
 PIDFile=/run/osmo-interstp.pid
-ExecStart=/opt/GSM/osmo-operator/start-interstp.sh --ip ${ISO_HUB_IP}
-ExecStop=/opt/GSM/osmo-operator/start-interstp.sh --stop
+ExecStart=/opt/GSM/osmo-operator/launch/start-interstp.sh --ip ${ISO_HUB_IP}
+ExecStop=/opt/GSM/osmo-operator/launch/start-interstp.sh --stop
 Restart=on-failure
 RestartSec=5
 [Install]
@@ -148,7 +148,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
 fi
 
 # ── LE BANC EST POSE EN SERVICE, MAIS NE PART PAS TOUT SEUL ─────────────────
-# [2026-09-04] services/osmo-banc.service (standalone : start-direct.sh) et
+# [2026-09-04] services/osmo-banc.service (standalone : start-native.sh) et
 # services/osmo-multi.service (multi-operateur : start-multi.sh). Les deux
 # tiennent leur pile dans tmux : `tmux attach -t calypso` depuis n'importe quel
 # terminal de root reprend la main, exactement comme la fin de run.sh le
@@ -208,7 +208,7 @@ fi
 # ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────
 # Chaine : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
 # → carte. system.pa autorise l'acces anonyme + prepare le sink ; le service
-# lance le demon au boot (ensure_pulse de start-direct.sh devient un no-op).
+# lance le demon au boot (ensure_pulse de start-native.sh devient un no-op).
 if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
     sed -i 's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' \
         "$ROOTFS/etc/pulse/system.pa"
@@ -468,7 +468,7 @@ EOF
 # bashrc pour root
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
 # Active par defaut l'environnement python (gr-gsm + bridges) utilise par
-# /opt/GSM/osmo-operator/start-direct.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+# /opt/GSM/osmo-operator/start-native.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
 # coeur.env est pose dans /etc/osmocom pour survivre au reclone de boot, mais
@@ -476,8 +476,8 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 # de l'arbre, personne ne le lit. On le charge donc ici, ou les deux arbres en
 # heritent - l'arbre fige /opt/GSM/osmo-operator, qui n'embarque pas environment/, et
 # l'arbre reclone /opt/GSM/osmo-operator, ou il ne survivrait pas. set -a : sans
-# export, la valeur ne franchirait pas le fork vers start-direct.sh. L'idiome
-# ":=" du fichier laisse gagner N_MS=3 ./start-direct.sh.
+# export, la valeur ne franchirait pas le fork vers start-native.sh. L'idiome
+# ":=" du fichier laisse gagner N_MS=3 ./start-native.sh.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
 # Trois annonces designaient trois arbres differents. Le MOTD et le message de
 # login pointent /opt/GSM/osmo-operator (l'arbre fige, present meme sans reseau) ;
@@ -485,7 +485,7 @@ if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a;
 # fonctionnent, mais un utilisateur qui suit l'un puis l'autre ne travaille pas
 # au meme endroit. On prend le premier chemin qui existe, dans l'ordre ou ils
 # sont les plus complets.
-alias osmo-lab='cd /opt/GSM/osmo-operator; ./start-direct.sh'
+alias osmo-lab='cd /opt/GSM/osmo-operator; ./start-native.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
 alias osmo-status='/etc/osmocom/status.sh status'
 export PATH="$HOME/.local/bin:$PATH"
@@ -519,7 +519,7 @@ LOGO
   # osmo-update.service effacait et reclonait au demarrage : sans reseau au boot,
   # la premiere chose que lisait l'utilisateur designait un arbre qui pouvait ne
   # pas etre la. Le reclone a disparu, l'arbre fige reste - il ne depend de rien.
-  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo-operator/start-direct.sh"
+  printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo-operator/start-native.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "FFT spectres   ->  http://<vm-ip>:8081"

@@ -7,7 +7,7 @@
 #  start-direct.sh.legacy (L566-722). Aucune ligne n'a ete retouchee.
 #
 #  POURQUOI LES PRESERVER.
-#  Le mode `qemu` de start-direct.sh appelait ensure_gapk JUSTE AVANT de passer
+#  Le mode `qemu` de start-native.sh appelait ensure_gapk JUSTE AVANT de passer
 #  la main a qosmo-grgsm/start-clean.sh (legacy L1077). C'est ce qui branche le RTP
 #  du MGW sur le sink `gsm_audio` : sans lui, la pile monte, l'appel s'etablit,
 #  et personne n'entend rien. Le chemin `qemu` devant continuer a marcher a
@@ -69,7 +69,7 @@ load_gsm_sinks() {
 # [2026-08-14] CE MAILLON N'EXISTAIT NULLE PART. Le commentaire de ensure_pulse
 # ("en local l'hote entend via le module-loopback vers ses enceintes") le
 # SUPPOSE deja present, mais aucun chemin du depot ne le chargeait :
-#   - enable_user_loopback() de start.sh n'est appelee par personne ;
+#   - enable_user_loopback() de start-docker.sh n'est appelee par personne ;
 #   - network/loopback.sh n'est lance que sciemment, a la main.
 # Resultat mesure dans la VM osmo-egprs : gsm_audio RUNNING (mobile ecrit
 # dedans), gsm_audio.monitor IDLE (personne ne lit), sortie ALSA SUSPENDED,
@@ -97,7 +97,7 @@ LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 # tools/osmo-pmos-setup.sh) et ce bouclage direct doit disparaitre, sinon on
 # entend deux fois - le direct, puis la VM 500 ms plus tard - « voix pourrie ».
 # Or scripts/audio-chain.sh (au boot, ExecStartPost de pulseaudio) et
-# ensure_pulse (start-direct) reposaient le bouclage direct sans regarder si
+# ensure_pulse (start-native) reposaient le bouclage direct sans regarder si
 # la VM etait la, pendant qu osmo-pmos-setup le retirait : le dernier passe
 # gagnait. Et chacun choisissait « les haut-parleurs » a sa facon (sink par
 # defaut, premiere carte alsa, osmo_hp_ec...), alors que le sink par defaut
@@ -656,7 +656,7 @@ ensure_pulse() {
 # run.sh (no-process) tente ce pont AVANT que PulseAudio soit pret (course →
 # "PulseAudio injoignable apres 30s" → pont jamais lance → VOIX MUETTE dans docker).
 # On le (re)lance ICI, apres ensure_pulse (sink gsm_audio garanti up). Idempotent,
-# gated sur HOST_AUDIO_RELAY (pose par start.sh = tcp:<gw>:4713).
+# gated sur HOST_AUDIO_RELAY (pose par start-docker.sh = tcp:<gw>:4713).
 ensure_host_audio() {
     local relay="${HOST_AUDIO_RELAY:-}"
     [ -n "$relay" ] || return 0

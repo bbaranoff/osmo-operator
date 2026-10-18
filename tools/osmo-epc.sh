@@ -132,7 +132,7 @@ setup_tun() {
 # ogstun) vers Internet etait NATe puis jete, sans refus ni trace. Vu depuis
 # le telephone pmOS : PPP monte, 10.99.0.2 attribuee, ping de la passerelle
 # OK, et rien au-dela - NetworkManager restait « connecte (local) ». Meme
-# constat que start.sh pour le WAN : DOCKER-USER est consultee avant les
+# constat que start-docker.sh pour le WAN : DOCKER-USER est consultee avant les
 # regles de docker et il ne la reecrit pas ; on y autorise tout ce qui entre
 # ou sort par ogstun. Rejoue a chaque « osmo-epc start » (donc a chaque
 # « osmo-lte start »), et par osmo-pmos-qemu a chaque lancement de la VM.

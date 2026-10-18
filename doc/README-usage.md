@@ -2,7 +2,7 @@
 
 Day-to-day handling of a running bench: tmux, VTY, numbers, ports, Wireshark.
 
-← [README](../README.md) · Details: [wiki/Home](../wiki/Home.md), [wiki/Start-direct](../wiki/Start-direct.md), [README-architecture](README-architecture.md)
+← [README](../README.md) · Details: [wiki/Home](../wiki/Home.md), [wiki/Start-native](../wiki/Start-native.md), [README-architecture](README-architecture.md)
 
 ## tmux
 

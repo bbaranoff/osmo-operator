@@ -50,7 +50,7 @@ echo -e "  ${GREEN}✓${NC} clavier de l'image : ${CYAN}${OSMO_ISO_KB}${NC}"
 # deux, par deux passes completes.
 #
 # UNE SEULE image d'operateur suffit pour les neuf noeuds : le numero se choisit
-# au demarrage (`start-direct.sh --node N`), qui reecrit les point codes. C'est
+# au demarrage (`start-native.sh --node N`), qui reecrit les point codes. C'est
 # la raison pour laquelle on ne fabrique pas osmo-operator-1..9.
 #
 # ══════════════════════════════════════════════════════════════════════════════

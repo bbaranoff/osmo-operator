@@ -110,25 +110,25 @@ stop_web() {
 start_lab() {
     echo -e "${GREEN}[lab] Demarrage osmo-operator...${NC}"
 
-    if [ ! -f "$LAB_DIR/start.sh" ]; then
-        echo -e "  ${RED}✗${NC} $LAB_DIR/start.sh introuvable"
+    if [ ! -f "$LAB_DIR/launch/start-docker.sh" ]; then
+        echo -e "  ${RED}✗${NC} $LAB_DIR/launch/start-docker.sh introuvable"
         return 1
     fi
 
     cd "$LAB_DIR"
-    bash ./start.sh
+    bash ./launch/start-docker.sh
 }
 
 # ── LE NATIF AUSSI ──────────────────────────────────────────────────────────
 # [2026-09-04] `osmo-launch stop` promet « arrete tout » et balayait bien les
 # conteneurs - mais pas l operateur NATIF, qui vit dans osmo-banc.service
-# (start-direct.sh, session tmux « calypso »). On arretait donc la moitie du
+# (start-native.sh, session tmux « calypso »). On arretait donc la moitie du
 # banc : le coeur natif (osmo-stp, hlr, msc, bsc, asterisk) restait debout, et
 # c est LUI qui tient le 5060 et le 8080 que le lancement suivant reclame.
 # Symetrique de launch.sh --stop, qui arrete desormais les deux cotes.
 #
 # D ABORD LE NATIF, ENSUITE LES CONTENEURS : l unite delegue a
-# start-direct.sh --stop, qui demonte radio et coeur proprement ; le faire
+# start-native.sh --stop, qui demonte radio et coeur proprement ; le faire
 # apres un `docker rm -f` ne changerait rien pour lui, mais l ordre inverse est
 # celui de l arret propre et c est celui qu on garde partout.
 stop_natif() {
@@ -147,11 +147,11 @@ stop_natif() {
 
 stop_lab() {
     echo -e "${YELLOW}[lab] Arret osmo-operator...${NC}"
-    if [ -f "$LAB_DIR/start.sh" ]; then
+    if [ -f "$LAB_DIR/launch/start-docker.sh" ]; then
         cd "$LAB_DIR"
-        bash ./start.sh stop
+        bash ./launch/start-docker.sh stop
     fi
-    # Nettoyage complet si start.sh stop ne suffit pas
+    # Nettoyage complet si start-docker.sh stop ne suffit pas
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Lab arrete"
 }
@@ -240,7 +240,7 @@ do_auto() {
     systemctl start docker 2>/dev/null || true
     wait_docker || exit 1
 
-    # Lancer start.sh en mode non-interactif avec des defauts
+    # Lancer start-docker.sh en mode non-interactif avec des defauts
     # On pipe les reponses au script interactif
     cd "$LAB_DIR"
     {
@@ -251,7 +251,7 @@ do_auto() {
         echo "N"       # pas de WAN
         echo "1"       # faketrx
         echo "0"       # A5/0
-    } | bash ./start.sh
+    } | bash ./launch/start-docker.sh
 
     wait_operators 180 || true
     start_web || true

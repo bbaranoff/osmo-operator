@@ -2,7 +2,7 @@
 
 > Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md). Prerequisite: [qosmo](Installer-qosmo.md).
 > The repository ships its own installer, `c54x_exe/install.sh`: it is also what the
-> `Dockerfile` (stage `l1`), `Dockerfile.run`, `start.sh`, the ISO and `install.sh --telephone` call.
+> `Dockerfile` (stage `l1`), `Dockerfile.run`, `start-docker.sh`, the ISO and `install.sh --telephone` call.
 > The manual commands below are **what the script does**, step by step.
 > `Dockerfile:N` numbers refer to the Dockerfile at commit `4266c8b`, back when it still
 > carried these commands.
@@ -142,7 +142,7 @@ PONT=1 INSNS=120000 CALYPSO_BSP_STREAM=1 CALYPSO_RHEA_DMA_XFER=1 \
 ```
 
 - `PONT=1`: without it, no bridge, no burst arrives (`run.sh:197-198`).
-- `INSNS=120000`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1`: what `start-direct.sh` sets
+- `INSNS=120000`, `CALYPSO_BSP_STREAM=1`, `CALYPSO_RHEA_DMA_XFER=1`: what `start-native.sh` sets
   before handing over to this `run.sh` (block « LE BANC DSP : RÉGLAGES MESURÉS », "DSP bench:
   measured settings"); the default in `run.sh:49` is 16000, "TCH measured up to 87000 insn/frame".
   `CALYPSO_RHEA_DMA_XFER`: "without it the API page is never filled: no SB, no BCCH, no SI".
@@ -177,7 +177,7 @@ All-in-one variant for a **systemd** stack: `./run_real.sh [--secondes N]` (star
 | rebuild without touching the binary of a running bench | `./install.sh --dest /tmp/c54x-neuf` then compare / replace once stopped | `install.sh --dest` |
 | `somme de controle differente` ("checksum mismatch") | modified dump or wrong version | `fetch-rom.sh:55-56` |
 | `QEMU n'a pas rejoint le DSP` ("QEMU did not join the DSP") | QEMU without `CALYPSO_DSP_EXTERN=1`, or DSP not ready yet | `run.sh:144-145` |
-| `pont.py ne s'est pas annonce` ("pont.py did not announce itself") | inherited `PONT_PY` pointing at `pont.py` (gr-gsm): `env -u PONT_PY` | `run.sh:206`, `start-direct.sh` `banc_dsp()` |
+| `pont.py ne s'est pas annonce` ("pont.py did not announce itself") | inherited `PONT_PY` pointing at `pont.py` (gr-gsm): `env -u PONT_PY` | `run.sh:206`, `start-native.sh` `banc_dsp()` |
 | `FBSB RESP: result=255` in a loop | no bridge or no BTS: normal without a network | `LAUNCH.md:138` |
 | `DL bursts=0` | no BTS is transmitting to 5700-5702: check the `phy` section of your osmo-bts-trx | `LAUNCH.md:157-158` |
 | SB decoded only one time in three to five | known limitation; `L23_SYNC_RETRIES_SELECTION=8` set by run.sh | `README.md:17-19`, `run.sh:183-189` |

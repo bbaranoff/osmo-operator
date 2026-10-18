@@ -5,7 +5,7 @@
 #  DEUX PROFILS, DEUX USAGES.
 #
 #  build   : les quatre images, chacune par son Dockerfile. C est ce que
-#            build.sh (et derriere lui build-iso.sh, start.sh) appelle :
+#            build.sh (et derriere lui build-iso.sh, start-docker.sh) appelle :
 #                docker compose build nitb          Dockerfile      osmocom-nitb
 #                docker compose build run           Dockerfile.run  osmocom-run
 #                docker compose build lite          Dockerfile.lite osmocom-run:lite
@@ -18,11 +18,11 @@
 #
 #  bench   : le banc minimal - le hub SS7 (osmo-inter-stp) et UN operateur
 #            (osmo-operator-1), avec les memes capacites, reseaux, montages et
-#            variables que le `docker run` de start.sh. Les configs sont
+#            variables que le `docker run` de start-docker.sh. Les configs sont
 #            GENEREES par ./compose.sh up (apply_config_templates de ce depot,
 #            create_interop.sh) dans data/compose/ ; le fichier .env qui va
 #            avec porte les adresses calculees. Pour N operateurs, le WAN, les
-#            ports SIP publies : start.sh reste l orchestrateur.
+#            ports SIP publies : start-docker.sh reste l orchestrateur.
 #                ./compose.sh up      ./compose.sh down     ./compose.sh ps
 #
 #  Variables (data/compose/.env, ecrit par compose.sh ; defauts ici) :
@@ -93,7 +93,7 @@ services:
       gsm-inter:
         ipv4_address: 172.20.0.10
     # 2908 sur la boucle locale, en SCTP : le raccord de l operateur NATIF
-    # (start-direct.sh), voir start.sh start_inter_stp.
+    # (start-native.sh), voir start-docker.sh start_inter_stp.
     ports:
       - "127.0.0.1:2908:2908/sctp"
     volumes:
@@ -156,7 +156,7 @@ services:
     profiles: [bench]
 
 networks:
-  # Le backbone SS7 : hub en .10, operateur N en .(10+N) - INTER_NET de start.sh.
+  # Le backbone SS7 : hub en .10, operateur N en .(10+N) - INTER_NET de start-docker.sh.
   gsm-inter:
     name: gsm-inter
     driver: bridge
@@ -164,7 +164,7 @@ networks:
       config:
         - subnet: 172.20.0.0/24
           gateway: 172.20.0.1
-  # Le reseau prive de l operateur 1 - gsm-net-op1 de start.sh (op_private_*).
+  # Le reseau prive de l operateur 1 - gsm-net-op1 de start-docker.sh (op_private_*).
   gsm-net-op1:
     name: gsm-net-op1
     driver: bridge

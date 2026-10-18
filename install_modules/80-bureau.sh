@@ -10,7 +10,7 @@
 #  start-multi.sh suppose le supplement SS7 (docker + image + topologie), qui
 #  n existe qu apres addition.sh. C est addition.sh qui pose l antenne, a la fin
 #  d une install SS7 reussie - pas avant, ou elle ne ferait rien au clic.
-#  et le lien /usr/local/bin/osmo-start-direct -> start-direct.sh.
+#  et le lien /usr/local/bin/osmo-start-direct -> start-native.sh.
 #
 #  Icon= est reecrit en CHEMIN ABSOLU (/usr/share/osmo-operator/icons/*.svg) :
 #  un nom de theme passe par icon-theme.cache, qui ne connait pas une icone
@@ -118,7 +118,10 @@ inst_bureau_run() {
                -e "s|^Icon=.*|Icon=$_BUREAU_ICONS/$e.svg|" "/usr/share/applications/$e.desktop"
         inst_say "menu : /usr/share/applications/$e.desktop"
     done
-    ln -sf "$INST_TREE/start-direct.sh" /usr/local/bin/osmo-start-direct
+    # osmo-start-native : le nom du lanceur depuis le 2026-10-18 ; osmo-start-direct
+    # garde l ancien nom pour les habitudes et les scripts deja ecrits.
+    ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-native
+    ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-direct
 
     while read -r h; do
         for d in Bureau Desktop; do

@@ -330,7 +330,7 @@ fi
 
 [ "$(id -u)" -eq 0 ] || { echo "Root requis." >&2; exit 1; }
 
-# nom|chemin - les chemins que cherchent deja start-direct.sh, le dashboard et
+# nom|chemin - les chemins que cherchent deja start-native.sh, le dashboard et
 # environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
 REPOS="osmo-operator|/opt/GSM/osmo-operator
 osmo-egprs-web|/opt/GSM/osmo-egprs-web

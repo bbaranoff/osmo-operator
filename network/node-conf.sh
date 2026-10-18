@@ -2,9 +2,9 @@
 # network/node-conf.sh - LA FICHE D'UN NOEUD, produite par le run, lue par les
 # autres ISO : « mynode<N>.conf ».
 #
-#   noeud 1 :  ./start-direct.sh              -> ecrit /etc/osmocom/mynode1.conf
-#              ./start-direct.sh --gen-conf   -> la meme fiche, sans lancer
-#   noeud 2 :  ./start-direct.sh --wan mynode1.conf [mynode3.conf ...]
+#   noeud 1 :  ./start-native.sh              -> ecrit /etc/osmocom/mynode1.conf
+#              ./start-native.sh --gen-conf   -> la meme fiche, sans lancer
+#   noeud 2 :  ./start-native.sh --wan mynode1.conf [mynode3.conf ...]
 #              -> table WAN = ce noeud + les fiches, puis le maillage habituel
 #                 (network/setup-wan-mesh.sh : trunks SIP, dialplan, routes SMS)
 #
@@ -15,7 +15,7 @@
 # ecrite au format shell KEY=valeur, comme /etc/osmo-wan.conf, pour se lire
 # d'un `.` et se relire a l'oeil.
 #
-# Cette bibliotheque se SOURCE (start-direct.sh, start-multi.sh). Elle suppose
+# Cette bibliotheque se SOURCE (start-native.sh, start-multi.sh). Elle suppose
 # network/wan-nodes.sh deja chargee (WAN_IP/WAN_IND/WAN_NOPS/WAN_NODE_LIST,
 # wan_default_ind, wan_detect_local_ip).
 : "${OSMOCOM_CFG:=/etc/osmocom}"
@@ -86,8 +86,8 @@ node_conf_write() {
     if [ "$nops" = 1 ]; then sip=5060; sms=7890; else sip="5080+(j-1)*2"; sms="7890+j-1"; fi
     mkdir -p "$(dirname "$out")" || return 1
     cat > "$out.tmp" <<EOF
-# mynode${node}.conf - fiche du noeud ${node}, ecrite par start-direct.sh le $(date '+%F %T')
-# A copier sur un autre noeud et a lui donner :  ./start-direct.sh --wan $(basename "$out")
+# mynode${node}.conf - fiche du noeud ${node}, ecrite par start-native.sh le $(date '+%F %T')
+# A copier sur un autre noeud et a lui donner :  ./start-native.sh --wan $(basename "$out")
 # Format shell (KEY=valeur). Les champs OSMO_NODE_ID/IP/IND/NOPS suffisent au
 # maillage (table WAN "id:ip:indicatif:operateurs") ; le reste documente le noeud.
 OSMO_NODE_CONF_VERSION=1

@@ -186,7 +186,7 @@ done
 printf '\n%d ok · %d ignores · %d echecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
 if [ $nb_fail -eq 0 ] && [ $DRY -eq 0 ]; then
     printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"
-    printf '  %slancer%s     ./start-direct.sh --list   puis   sudo ./start-direct.sh\n\n' "$C_DIM" "$C_Z"
+    printf '  %slancer%s     ./start-native.sh --list   puis   sudo ./start-native.sh\n\n' "$C_DIM" "$C_Z"
 fi
 [ $nb_fail -gt 0 ] && exit 1
 exit 0

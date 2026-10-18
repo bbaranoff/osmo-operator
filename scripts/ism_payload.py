@@ -2,7 +2,7 @@
 """
 ism_payload.py — le PAYLOAD des SMS sur une liaison radio ISM, le reste par IP.
 
-Idee (option start-direct.sh --payload-ism, cf. wiki/Payload-ISM.md) : entre deux
+Idee (option start-native.sh --payload-ism, cf. wiki/Payload-ISM.md) : entre deux
 noeuds osmo-operator, la SIGNALISATION (adresses, MSISDN, IMSI, SC-address, SS7,
 SIP) continue de passer par IP comme avec --wan. SEUL le contenu du message (le
 texte du SMS, extrait du TPDU) voyage sur une liaison radio en bande ISM (433 /

@@ -1,5 +1,5 @@
 #!/bin/bash
-# iso_modules/30-image-configs.sh - etape 1 (build docker) et 2 (configs via start.sh)
+# iso_modules/30-image-configs.sh - etape 1 (build docker) et 2 (configs via start-docker.sh)
 # Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
 # variables, memes fonctions. Ne s execute pas seul. `return` en tete de
 # module = "rien a faire ici" (c est ainsi que --arm saute une etape).
@@ -8,7 +8,7 @@
 iso_docker_build "$ISO_ROLE"
 
 load_start_lib() {
-    local src="$DIR/start.sh"
+    local src="$DIR/launch/start-docker.sh"
     local lib="$WORK/start.lib.sh"
 
     awk '
@@ -23,14 +23,14 @@ load_start_lib() {
     ' "$src" > "$lib"
 
     # La lib vit dans $WORK, pas dans le depot : sans ca, la resolution par
-    # BASH_SOURCE de start.sh chercherait generate_configs.sh a cote de la copie.
+    # BASH_SOURCE de start-docker.sh chercherait generate_configs.sh a cote de la copie.
     export OSMO_REPO_DIR="$DIR"
 
     # shellcheck disable=SC1090
     source "$lib"
 }
 
-# ── Etape 2 : la bibliotheque de start.sh (apply_config_templates) ───────────
+# ── Etape 2 : la bibliotheque de start-docker.sh (apply_config_templates) ───────────
 # [2026-09-03] Plus de build_run_image ni de Dockerfile.lite ici : une seule
 # image docker (etape 1), les configs viennent de ce depot, l elagage lite se
 # fait sur le rootfs (etape 8c). load_start_lib reste necessaire : c est lui qui
@@ -93,7 +93,7 @@ GATEWAY_IP="127.0.0.1"     # gw  : __GATEWAY_IP__  - log gsmtap + dns 0 du ggsn
 HLR_IP="127.0.0.2"
 
 # ── Le segment prive de ce noeud : 192.168.<noeud+1>.x ──────────────────────
-# Meme plan que le cote docker (start.sh : op_private_*), pour qu'une VM et un
+# Meme plan que le cote docker (start-docker.sh : op_private_*), pour qu'une VM et un
 # conteneur du meme rang se decrivent pareil. Le +1 laisse 192.168.1.0/24 au
 # LAN du banc - un noeud qui s'y poserait entrerait en collision avec les VM et
 # le hub SS7.
@@ -166,7 +166,7 @@ fi
 # Cette recette vivait ICI, en deux morceaux (le sms-routing juste apres la
 # substitution, les sed du SGSN et du MSC trois cents lignes plus bas), et
 # NULLE PART ailleurs. Une ISO en sortait juste ; une machine qui regenerait
-# ses configs ensuite - ./start-direct.sh --regen - en sortait fausse, sans
+# ses configs ensuite - ./start-native.sh --regen - en sortait fausse, sans
 # qu'un seul message ne le dise. Elle est desormais dans generate_configs.sh,
 # une fois, et les deux chemins l'appellent (voir apply_native_post_patches).
 # La table WAN telle que cette ISO l'embarquera : c'est elle qui donne a

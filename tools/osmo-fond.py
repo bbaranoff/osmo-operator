@@ -33,7 +33,7 @@
 # sont gardees (tmpfs, quelques Mo) : le fondu inverse les relit a l envers.
 #
 # UTILISATEUR. gsettings parle au bus de SESSION : l outil doit tourner comme
-# l utilisateur du bureau. Lance en root (start.sh, un service), il se relance
+# l utilisateur du bureau. Lance en root (start-docker.sh, un service), il se relance
 # lui-meme sous le compte qui a un gnome-shell et un /run/user/<uid>/bus.
 import argparse
 import fcntl
@@ -140,7 +140,7 @@ def chemin_de(uri):
 
 def etat_courant():
     """(etat, chemin) : ville / antenne / « <cible> en cours » (image d un fondu
-    interrompu - un osmo-fond tue en plein vol, cf. start-direct.sh
+    interrompu - un osmo-fond tue en plein vol, cf. start-native.sh
     killall_python) / autre."""
     p = chemin_de(gs_get("picture-uri")) or ""
     for nom, (f, _) in ETATS.items():

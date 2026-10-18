@@ -177,7 +177,7 @@ if [ "$N_OPS" -eq 0 ]; then
     # docker sans conteneur en cours. On le dit, plutot que de laisser croire a
     # une panne des services.
     echo -e "${RED}Aucun operateur trouve (mode ${MODE})${NC}"
-    [ "$MODE" = docker ] && echo -e "     ${CYAN}aucun conteneur osmo-operator-N en cours - sudo ./start.sh${NC}"
+    [ "$MODE" = docker ] && echo -e "     ${CYAN}aucun conteneur osmo-operator-N en cours - sudo ./launch/start-docker.sh${NC}"
     exit 1
 fi
 

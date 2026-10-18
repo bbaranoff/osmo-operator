@@ -89,7 +89,11 @@ FROM ubuntu:24.04 AS base
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
 
+# OSMO_IMAGE=1 : « image de ce depot, son reseau est pose par start-docker.sh /
+# compose » - network/osmo-ip-plan.sh ne touche alors a aucune adresse. Un
+# conteneur quelconque (ubuntu:24.04 nu) ne l a pas et s adresse comme un natif.
 ENV container=docker \
+    OSMO_IMAGE=1 \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib \
     GIT_TERMINAL_PROMPT=0
@@ -190,7 +194,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build \
     # Ex-Dockerfile.run — outillage d'exploitation du conteneur :
     #   telnet   -> repli VTY (run_modules/21-abonnes-hlr.sh) + transport dashboard
-    #   whiptail -> menus de tools/vty-menu.sh et de start.sh
+    #   whiptail -> menus de tools/vty-menu.sh et de start-docker.sh
     #   xz-utils -> `tar -xJf` du tarball Node 22 (bloc dashboard, en fin de fichier)
     #   libasound2-plugins -> greffon ALSA->PulseAudio, EXIGE par configs/asound.conf
     #        (`type pulse` sur gsm_out, gsm_in ET pcm.!default) : sans lui, toute
@@ -236,7 +240,7 @@ COPY configs/*conf /etc/asterisk/
 # ~/.asoundrc). Sans ce second exemplaire, `aplay -D gsm_out` repond
 #     ALSA lib pcm.c: (snd_pcm_open_noupdate) Unknown PCM gsm_out
 # et le mobile du conteneur est MUET, sans qu aucun log ne parle d audio.
-# start.sh l.469 monte bien celui de l hote (-v ...:/etc/asound.conf), mais un
+# start-docker.sh l.469 monte bien celui de l hote (-v ...:/etc/asound.conf), mais un
 # conteneur lance autrement - docker run a la main, diagnostic - n a rien.
 COPY configs/asound.conf /etc/asound.conf
 
@@ -430,7 +434,7 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
 # plus le poser sur le gapk construit — un `git apply` dans le build casse
 # l'image des que pq_alsa.c bouge en amont, et la sonde n'est plus la question
 # du jour (descendant muet resolu par CALYPSO_PULSE_LATENCY_MSEC, 240 depuis
-# le 2026-09-09 : cf. start-direct.sh, le tampon du greffon ALSA-PulseAudio).
+# le 2026-09-09 : cf. start-native.sh, le tampon du greffon ALSA-PulseAudio).
 # POUR LE REMETTRE, deux gestes, dans cet ordre :
 #   1. decommenter la ligne COPY ci-dessous ;
 #   2. reinserer dans le RUN, entre le `git clone` et le `cd osmo-gapk` :
@@ -683,7 +687,7 @@ ARG OSMO_DEB_REFRESH=0
 # ─────────────────────────────────────────────────────────────────────────────
 # [2026-09-25] qosmo + c54x_exe + grgsm_exe — remplacent qosmo-grgsm et qosmo-dsp
 # ─────────────────────────────────────────────────────────────────────────────
-# Les deux forks QEMU sont retires (cf. start-direct.sh, environment/paths.env) :
+# Les deux forks QEMU sont retires (cf. start-native.sh, environment/paths.env) :
 #   /opt/GSM/qosmo      UN seul arbre QEMU (bbaranoff/qosmO), --enable-l1-grgsm.
 #                       Il porte run.sh, run_modules, cfgs. Le meme binaire sert
 #                       au mode --dsp : CALYPSO_DSP_EXTERN=1 y coupe la L1 gr-gsm.
@@ -836,7 +840,7 @@ RUN if [ ! -d "/opt/GSM/osmo-egprs-web/" ]; then \
 # ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
 # Le dashboard /opt/GSM/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
 # local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
-# start-direct.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
+# start-native.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
 # qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
 #
 # Node 22 (LTS « Jod ») — même famille majeure que l'ISO, qui installe
@@ -857,7 +861,7 @@ RUN case "$(uname -m)" in x86_64) _na=x64 ;; aarch64) _na=arm64 ;; *) echo "arch
     ln -sf /opt/node/bin/npx  /usr/local/bin/npx && \
     node --version
 # Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
-# Le START reste géré par start-direct.sh (`systemctl restart osmo-egprs-web`).
+# Le START reste géré par start-native.sh (`systemctl restart osmo-egprs-web`).
 COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
@@ -1064,7 +1068,7 @@ RUN ln -sf /opt/node/bin/node /usr/local/bin/node \
 
 # Chemin EXPLICITE. Sans lui, ce clone heritait du WORKDIR /etc/osmocom (pose
 # beaucoup plus haut, jamais remis a ${ROOT}) et atterrissait dans
-# /etc/osmocom/osmo-operator — masque au runtime par le montage de start.sh l.505,
+# /etc/osmocom/osmo-operator — masque au runtime par le montage de start-docker.sh l.505,
 # et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
 # HEAD, un seul utilise. /opt/GSM/osmo-operator est le chemin nominal, teste en
 # premier par build-iso.sh l.964 et update.sh l.329.
@@ -1170,7 +1174,7 @@ RUN mkdir -p /root/.osmocom/bb/ \
 # ce serait sans effet — le fichier est lu a l'ouverture d'une session.
 RUN echo "alias faketrx='python3 ${ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc
 # Prompt : root(rouge)@(bleu)<nom-container=\h>(jaune)☎️<dossier courant>(vert)#
-# \h = nom du container grâce à `docker run --hostname "$container_name"` (start.sh).
+# \h = nom du container grâce à `docker run --hostname "$container_name"` (start-docker.sh).
 # [refactor] LE PS1 ETAIT DEFINI DEUX FOIS, avec deux formats DIFFERENTS : ici
 # et dans Dockerfile.run. Bash lit ~/.bashrc de haut en bas -> c'est celui de
 # Dockerfile.run qui gagnait, et le prompt reellement affiche etait
@@ -1199,7 +1203,7 @@ RUN mkdir -p /var/log/osmocom /var/run/smsc \
 #  place ici, tard, pour ne pas invalider le cache des ~200 lignes de compilation.)
 # Cause racine du warning "[audio] PulseAudio injoignable — audio dégradé" :
 # le démon system-mode lancé au runtime tournait SANS auth-anonymous (le patch
-# de start-direct.sh arrivait après son démarrage) → 'pactl' renvoyait
+# de start-native.sh arrivait après son démarrage) → 'pactl' renvoyait
 # "Access denied", et un 2e démon ne pouvait pas démarrer ("Daemon already
 # running"). On bake ici la config pour que TOUT démon soit joignable dès son
 # lancement : socket anonyme + null-sinks gsm_audio/gsm_mic + root dans

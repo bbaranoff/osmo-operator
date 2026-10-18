@@ -7,7 +7,7 @@
 #              → gsm_audio.monitor → parec → WebSocket → navigateur
 #
 # Appele par run.sh avant le lancement d'OsmocomBB/gapk.
-# Requiert : PULSE_SERVER defini + socket monte par start.sh
+# Requiert : PULSE_SERVER defini + socket monte par start-docker.sh
 
 set -u
 

@@ -291,7 +291,7 @@ for i in "${OP_IDS[@]}"; do
     mesh_set_context "$i"
     if [ "$MODE" = "docker" ]; then
         docker ps --format '{{.Names}}' | qgrep "^$(op_container "$i")$" \
-            || { echo -e "  ${RED}✗ $(op_container "$i") absent - lancez start.sh d'abord${NC}"; exit 1; }
+            || { echo -e "  ${RED}✗ $(op_container "$i") absent - lancez start-docker.sh d'abord${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} $(op_container "$i")"
     else
         [ -d "${NATIVE_ROOT}/etc/asterisk" ] || { echo -e "  ${RED}✗ ${NATIVE_ROOT}/etc/asterisk absent${NC}"; exit 1; }
@@ -803,7 +803,9 @@ fi
 
 # ── Sauvegarde + resume ──────────────────────────────────────────────────────
 if [ "$DRY" -eq 0 ]; then
-    WAN_AUTO="${WAN_AUTO:-1}" wan_nodes_save "${CONF:-$WAN_CONF_FILE}"
+    # Defaut 0 : appliquer une table une fois ne doit pas la rendre permanente.
+    # Seule une ISO construite avec --wan fige WAN_AUTO=1 (iso_modules/70-scripts.sh).
+    WAN_AUTO="${WAN_AUTO:-0}" wan_nodes_save "${CONF:-$WAN_CONF_FILE}"
 fi
 
 echo ""

@@ -98,7 +98,7 @@ for i in $(seq 1 "$N_OPS"); do
     cname=$(op_container "$i")
     if ! docker ps --format '{{.Names}}' | grep -q "^${cname}$"; then
         echo -e "  ${RED}✗ ${cname} non trouve${NC}"
-        echo -e "  ${YELLOW}Lancez start.sh d'abord.${NC}"
+        echo -e "  ${YELLOW}Lancez start-docker.sh d'abord.${NC}"
         exit 1
     fi
     echo -e "  ${GREEN}✓${NC} ${cname} actif"

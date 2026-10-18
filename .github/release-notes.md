@@ -24,7 +24,7 @@ sha256sum -c SHA256SUMS
 </ul>
 <p><strong>The DSP — the Calypso's TMS320C54x, running TI's real mask ROM</strong></p>
 <ul>
-<li>By default the handset's layer 1 is demodulated by gr-gsm (<a href="https://github.com/bbaranoff/grgsm_exE">grgsm_exe</a>). With <code>./start-direct.sh --dsp</code>, it is done instead by the baseband's own DSP: a TMS320C54x core emulated outside QEMU (<a href="https://github.com/bbaranoff/c54x_exe">c54x_exe</a>), executing the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM, <code>/opt/GSM/calypso_dsp.*.bin</code>).</li>
+<li>By default the handset's layer 1 is demodulated by gr-gsm (<a href="https://github.com/bbaranoff/grgsm_exE">grgsm_exe</a>). With <code>./start-native.sh --dsp</code>, it is done instead by the baseband's own DSP: a TMS320C54x core emulated outside QEMU (<a href="https://github.com/bbaranoff/c54x_exe">c54x_exe</a>), executing the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM, <code>/opt/GSM/calypso_dsp.*.bin</code>).</li>
 <li>The ARM (QEMU) and the DSP share the API RAM through <code>/dev/shm/calypso_api_ram</code> and run in lockstep, one TDMA frame at a time, over <code>/tmp/calypso_dsp.sock</code>; downlink bursts from osmo-bts-trx reach the DSP's serial port (BSP) over UDP 6702 via <code>pont_dsp.py</code>. The rest of the stack (core, BTS, second mobile) is unchanged.</li>
 <li>What the ROM does by itself (bench runs of 2026-09-23): FCCH/SCH acquisition, BCCH decoding (SI1-4), camping, location update, SMS MO and MT, MO and MT calls with A5/1 and speech audible both ways (TCH/F channel decoding by the ROM, FR codec on the host).</li>
 <li>Still a work bench, not the demo path: every TCH/F frame is flagged bad (BFI) by the ROM even though the speech stays intelligible, the SACCH occasionally drops a call (LOS), the SB window is rarely armed by the ROM, and the DSP needs 4.3–4.6 ms of host time for a 4.62 ms frame. Details in the <a href="https://github.com/bbaranoff/c54x_exe">c54x_exe README</a>.</li>
@@ -84,5 +84,5 @@ sha256sum -c SHA256SUMS
 
 
 <p>The 2G and 4G icons are SVGs from the repo (<code>data/</code>), hand-drawn rather than taken from the theme: <code>call-start</code> is green in Adwaita with no red variant, and a missing theme icon is silently replaced by a grey rectangle. An embedded SVG can't go missing.</p>
-<p>To run the 2G handset on the DSP instead of gr-gsm, from a terminal: <code>cd /opt/GSM/osmo-operator &amp;&amp; sudo ./start-direct.sh --dsp</code> (the <code>--menu</code> option asks the same question interactively: layer 1 <code>grgsm_exe</code> or <code>c54x_exe</code>).</p>
+<p>To run the 2G handset on the DSP instead of gr-gsm, from a terminal: <code>cd /opt/GSM/osmo-operator &amp;&amp; sudo ./start-native.sh --dsp</code> (the <code>--menu</code> option asks the same question interactively: layer 1 <code>grgsm_exe</code> or <code>c54x_exe</code>).</p>
 <p>Check that everything is in place: <code>checks/diag-stp-operator.sh</code>.</p></body></html>

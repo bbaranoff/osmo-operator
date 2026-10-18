@@ -31,7 +31,7 @@
 #                                      [--build-iso] [--no-vms] [--indicatifs "11 22"]
 #
 # Ecrit la table dans /etc/osmo-wan.conf, prete pour --wan.
-# Appele automatiquement par : start.sh --virtualbox  /  start-direct.sh --virtualbox
+# Appele automatiquement par : start-docker.sh --virtualbox  /  start-native.sh --virtualbox
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -92,7 +92,7 @@ if command -v systemd-detect-virt >/dev/null 2>&1; then
         oracle|kvm|qemu|vmware|microsoft)
             echo -e "${RED}Vous etes DANS une machine virtuelle (${_virt}).${NC}" >&2
             echo -e "  L'interconnexion VirtualBox se monte depuis l'HOTE." >&2
-            echo -e "  Ici, le WAN se configure normalement : ${CYAN}./start-direct.sh --wan${NC}" >&2
+            echo -e "  Ici, le WAN se configure normalement : ${CYAN}./start-native.sh --wan${NC}" >&2
             exit 1 ;;
     esac
 fi
@@ -115,7 +115,7 @@ fi
 # ── Combien de noeuds ────────────────────────────────────────────────────────
 if [ -z "$NODES" ]; then
     if [ -t 0 ]; then
-        # Meme question que ./start.sh --wan, meme bornes.
+        # Meme question que ./launch/start-docker.sh --wan, meme bornes.
         NODES=$(_wan_ask "WAN VirtualBox" "Nombre de noeuds au total, cette machine comprise (1-9) :" "3") || exit 1
     else
         NODES=3
@@ -166,12 +166,12 @@ else
 fi
 
 # ── Table persistee ──────────────────────────────────────────────────────────
-# WAN_AUTO=0 cote hote : ici c'est start.sh / start-direct.sh qui decide quand
+# WAN_AUTO=0 cote hote : ici c'est start-docker.sh / start-native.sh qui decide quand
 # monter le WAN. Les ISO des VM, elles, sont construites avec WAN_AUTO=1.
 WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE"
 echo -e "  ${GREEN}✓${NC} table ecrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
 echo ""
 echo -e "  ${BOLD}Ensuite, sur cette machine :${NC}"
-echo -e "    ${CYAN}sudo ./start.sh --wan${NC}          (le lab docker devient le noeud ${HOST_NODE})"
+echo -e "    ${CYAN}sudo ./launch/start-docker.sh --wan${NC}          (le lab docker devient le noeud ${HOST_NODE})"
 echo -e "    ${CYAN}tools/vbox-wan-lab.sh start${NC}    (demarre les VM)"
 echo ""

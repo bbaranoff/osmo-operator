@@ -9,8 +9,8 @@ After=network.target
 # comme "le banc tourne". PartOf et PAS After=osmo-banc.service : osmo-banc a
 # deja Wants= et After= vers cette unite (le dashboard demarre AVANT le banc),
 # ajouter l ordre inverse ferait un cycle que systemd casserait au hasard.
-# Le geste direct (start-direct.sh --stop, le bouton du bureau, start-multi.sh)
-# est couvert de son cote, dans start-direct.sh.
+# Le geste direct (start-native.sh --stop, le bouton du bureau, start-multi.sh)
+# est couvert de son cote, dans start-native.sh.
 PartOf=osmo-banc.service
 
 [Service]

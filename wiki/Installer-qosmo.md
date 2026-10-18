@@ -2,7 +2,7 @@
 
 > Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md).
 > The repository ships its own installer, `qosmo/install.sh`: it is also what the
-> `Dockerfile` (stage `qemu`), `Dockerfile.run`, `start.sh` and `install.sh --telephone` call.
+> `Dockerfile` (stage `qemu`), `Dockerfile.run`, `start-docker.sh` and `install.sh --telephone` call.
 > The manual commands below are **what the script does**, step by step.
 > `Dockerfile:N` numbers refer to the Dockerfile at commit `4266c8b`, back when it still
 > carried these commands (it now calls the installer).
@@ -196,5 +196,5 @@ The ~300 `CALYPSO_*` variables are described in `qosmo/hw/arm/calypso/doc/VARIAB
 | `[FAIL] configure … manque : glib-2.0 vu de pkg-config` | missing `-dev` package: `sudo ./install.sh --deps` | `install.sh --check` |
 | `[SKIP] qemu-system-arm et qosmo dans le PATH (… non inscriptible)` | not root: binaries in `$PREFIX/bin`, or `--bin-dir DIR` | `install.sh`, `bin` step |
 | ninja fails on the very first unit in a `build/` that came from an image | `build/` configured with gcc-13, `cc` = gcc-11: `./install.sh --only build --cc gcc-13` | `Dockerfile.run:171-175` |
-| `/usr/local/bin/qosmo-grgsm` instead of `qosmo` | `make -C tools/qosmo-launch install` fallback in `start-direct.sh` (unversioned directory); use `make install` in `build/` | `start-direct.sh:692-694` |
+| `/usr/local/bin/qosmo-grgsm` instead of `qosmo` | `make -C tools/qosmo-launch install` fallback in `start-native.sh` (unversioned directory); use `make install` in `build/` | `start-native.sh:692-694` |
 | `osmocon` stuck mid-download | an osmocon killed during romload leaves the UART stub mid-block: restart QEMU, then osmocon | `LAUNCH.md:120-121` |

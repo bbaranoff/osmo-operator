@@ -24,8 +24,8 @@
 #     RCTX = noeud*1000 + op*100 + 50
 #
 # Usage :
-#   sudo ./start-interstp.sh [--nodes 3] [--ops 1] [--ip 192.168.1.49]
-#   sudo ./start-interstp.sh --status | --stop
+#   sudo ./launch/start-interstp.sh [--nodes 3] [--ops 1] [--ip 192.168.1.49]
+#   sudo ./launch/start-interstp.sh --status | --stop
 #
 #   --nodes N     nombre de noeuds desservis (1-9, defaut : lu dans /etc/osmo-wan.conf)
 #   --ops K       operateurs par noeud (1-9, defaut 1)
@@ -36,7 +36,7 @@
 #   --defaut      applique la table du banc, en ignorant celle deja posee
 #   --ips "a b c" les IP des noeuds operateurs, dans l'ordre (sans question) ;
 #                 « id:ip » garde le numero du noeud (table 1,3 -> noeuds 1 et 3)
-#   --no-save     ne reecrit pas /etc/osmo-wan.conf (appel depuis start-direct.sh)
+#   --no-save     ne reecrit pas /etc/osmo-wan.conf (appel depuis start-native.sh)
 #   --no-ip       ne touche pas a la configuration reseau
 #   --foreground  reste au premier plan (journal a l'ecran)
 # =============================================================================
@@ -45,7 +45,8 @@ set -uo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Racine du depot : ce script vit dans launch/ depuis le 2026-10-18.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 CONF_DIR="${CONF_DIR:-/etc/osmocom}"
 CFG="${CONF_DIR}/osmo-stp-interop.cfg"
 LOG="${LOG:-/var/log/osmocom/osmo-stp-interop.log}"
@@ -58,7 +59,7 @@ USE_DEFAULTS=0
 IPS=""
 SAVE_TABLE=1
 # Le hub du banc : le conteneur osmo-inter-stp, sur le backbone docker
-# (INTER_STP_IP de start.sh). L'ancien defaut (192.168.56.1, host-only
+# (INTER_STP_IP de start-docker.sh). L'ancien defaut (192.168.56.1, host-only
 # VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
 # s'y liait sans que personne ne puisse l'atteindre.
 HUB_IP="172.20.0.10"
@@ -268,7 +269,7 @@ fi
 if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[${WAN_NODE_LIST[0]}]:-}" ]; then
     echo ""
     wan_nodes_summary 2>/dev/null || true
-    # [2026-10-15, revue] --no-save : appele par start-direct.sh, dont la table
+    # [2026-10-15, revue] --no-save : appele par start-native.sh, dont la table
     # (WAN_AUTO=1, numero du noeud, indicatifs) vient d'etre ecrite - la
     # reecrire ici en WAN_AUTO=0 / noeud 0 coupait le WAN au reboot suivant.
     if [ "$SAVE_TABLE" = 1 ]; then
@@ -387,7 +388,7 @@ if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo ""
     echo -e "  ${BOLD}Cote noeuds :${NC} leur osmo-stp doit viser ${CYAN}${HUB_IP}${NC}"
     echo -e "    ISO construite avec ${CYAN}--role operator --node N${NC} : deja fait."
-    echo -e "  ${BOLD}Verifier qui est attache :${NC} ${CYAN}./start-interstp.sh --status${NC}"
+    echo -e "  ${BOLD}Verifier qui est attache :${NC} ${CYAN}./launch/start-interstp.sh --status${NC}"
 else
     echo -e "  ${RED}✗ osmo-stp n'a pas demarre${NC} - ${CYAN}tail -30 ${LOG}${NC}"
     tail -15 "$LOG" 2>/dev/null | sed 's/^/    /'

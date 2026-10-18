@@ -4,7 +4,7 @@ This page describes **everything the ISO is**: what it contains, how it is
 built (`build-iso.sh` and its modules), how it boots, how it installs to a
 disk, and everything it can do once booted.
 It points to the repository files for each item; the
-[Build](Build.md), [Start-direct](Start-direct.md) and [Environnement](Environnement.md)
+[Build](Build.md), [Start-native](Start-native.md) and [Environnement](Environnement.md)
 pages detail the scripts themselves.
 
 Reference state: **osmo-operator-desktop.iso v0.1-6** (tag `v0.1-6`, commit
@@ -189,12 +189,12 @@ subscribers `100101` and `100102`.
   :4729 for Wireshark.
 - Start: red icon **"Lancer le banc GSM"** (Start the GSM bench; `launch.sh`,
   which starts `osmo-banc.service` and reports it by notification); bottom bar,
-  **Banc** group, **run standalone**; `sudo ./start-direct.sh` in the
+  **Banc** group, **run standalone**; `sudo ./start-native.sh` in the
   foreground; `systemctl start osmo-banc`. The stack lives in tmux:
   `tmux attach -t calypso`.
-- Stop: right-click **Arrêter le banc** (Stop the bench), `./start-direct.sh --stop`
+- Stop: right-click **Arrêter le banc** (Stop the bench), `./start-native.sh --stop`
   (also tears down the DSP bench, no need to repeat `--dsp`), `systemctl stop osmo-banc`.
-- Sources: `start-direct.sh` (delegates to `/opt/GSM/qosmo/run.sh`),
+- Sources: `start-native.sh` (delegates to `/opt/GSM/qosmo/run.sh`),
   `launch.sh`, `services/osmo-banc.service`, `configs/*.cfg`,
   `generate_configs.sh`.
 
@@ -207,7 +207,7 @@ subscribers `100101` and `100102`.
 | TRX bridge | `pont/pont_dsp.py` started by `c54x_exe/run.sh` (TRXD 5700-5702, DL bursts UDP 6702) | `pont/pont.py` |
 | Result | the mobile acquires FB/SB, decodes SI1-4, camps, does its location update; mobile VTY :4347 | end to end: camp, LU, auth, A5/1, SMS, voice call; VTY :4247 |
 
-The default lives at the top of `start-direct.sh` (`DSP_MODE=1`) and applies to
+The default lives at the top of `start-native.sh` (`DSP_MODE=1`) and applies to
 everything that starts the bench (icon, service, bar, multi's native operator).
 If `c54x_exe` is missing, the bench says so and falls back to gr-gsm with its
 bridge. Icon right-click: **"Lancer en mode gr-gsm"** (Start in gr-gsm mode).
@@ -225,7 +225,7 @@ Persistent: `OSMO_BANC_ARGS="--grgsm"` in `/etc/default/osmo-banc`.
   `--assembly-logs` for the ARM asm trace.
 - Manual: `qosmo -k …/layer1.highram.elf`, `MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh`.
 
-### 5.4 `start-direct.sh` profiles and options
+### 5.4 `start-native.sh` profiles and options
 
 - Profiles: `faketrx-qemu` (default, alias `hybrid`: core + BTS0 QEMU + BTS1
   fake_trx + MS#2), `faketrx`, `qemu` (Calypso only), `noproc`/`core` (core only).
@@ -259,7 +259,7 @@ inside a bench GTK window) installs what is missing.
   install without starting). `addition.sh --status` shows docker, the image,
   the topology, the unit and the icon.
 - Then start: antenna icon, bar **run multi**, `systemctl start osmo-multi`,
-  `sudo ./start-multi.sh` (`--status`, `--stop`, `--dry-run`). The native
+  `sudo ./launch/start-multi.sh` (`--status`, `--stop`, `--dry-run`). The native
   operator is held by `osmo-banc`: `start-multi.sh` **keeps** it if already
   running and **starts** it if stopped (it only restarts it if its point code
   was just realigned, or with `--restart-natif`).
@@ -330,7 +330,7 @@ inside a bench GTK window) installs what is missing.
   and oFono, being interactive, keep a terminal in the window. The systemd
   unit's journal scrolls in the window for 2G and multi
   (`launch.sh --service-suivi`, `--multi-suivi`) and 4G (`osmo-lte up|toggle`).
-- **Mobile VTY port**: 4247, or **4347 with `--dsp`**. `start-direct.sh`
+- **Mobile VTY port**: 4247, or **4347 with `--dsp`**. `start-native.sh`
   publishes the actual port in `/run/osmo-banc/ms1-vty` and in the systemd
   environment (`OSMO_BB1_VTY_PORT`, read by the `osmo-egprs-web` dashboard on
   restart); `launch.sh --vty`, the panel and `vty-menu.sh` read it.
@@ -396,7 +396,7 @@ inside a bench GTK window) installs what is missing.
 (inter-STP matrix), `diag-stp-operator.sh`, `diag-interstp.sh`,
 `wan_ss7_check.sh`, `annuaire.sh` (subscribers), `operator_summary.sh`,
 `vty-debug-dump.sh`. `./ss7-console.py`: navigable SS7 diagram with
-built-in VTYs. `./start-direct.sh --status` tells what is running.
+built-in VTYs. `./start-native.sh --status` tells what is running.
 
 ### 5.11 Ports, VTY, network
 
@@ -625,7 +625,7 @@ to do exits via `return` (that is how `--arm` skips a step).
 | `20-hote.sh` | host packages, docker, tools, arm64 binfmt |
 | `21-docker-build.sh` | pull or build of the Docker image, child passes of `--all`, output names |
 | `22-wan-table.sh` | WAN table, `trap cleanup`, tool checks |
-| `30-image-configs.sh` | Osmocom configs generated from templates (`start.sh`), native patches |
+| `30-image-configs.sh` | Osmocom configs generated from templates (`start-docker.sh`), native patches |
 | `31-image-source.sh` | source image, suite check, injection of `/etc/osmocom` and `/etc/asterisk` |
 | `40-rootfs.sh` | `debootstrap --variant=minbase` (cache `~/.cache/osmo-iso-debs`), or inherited rootfs |
 | `50-injection-image.sh` | build `.deb`s via `dpkg -i`, copy of `/usr/local`, `/opt/GSM`, venv, node, units |

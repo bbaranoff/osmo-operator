@@ -7,7 +7,7 @@
 NO_CACHE=""
 # ── WAN : jamais par defaut. Avec --wan, l'ISO EST un noeud du WAN ───────────
 # La table est figee dans /etc/osmo-wan.conf de l'image ; au demarrage
-# start-direct.sh la voit (WAN_AUTO=1) et l'applique sans qu'on repasse --wan.
+# start-native.sh la voit (WAN_AUTO=1) et l'applique sans qu'on repasse --wan.
 #
 # UNE SEULE ISO pour les N machines : chacune se reconnait a son IP dans la
 # table (wan_nodes_detect_self). --wan-id ne sert qu'a forcer un noeud quand
@@ -108,7 +108,7 @@ ISO_WITH_DEBS=1
 # bureau (--desktop), ni installateur, ni passe --all sur cette cible.
 ISO_ARCH=amd64
 # Defaut : le hub du banc = le conteneur osmo-inter-stp, sur le backbone docker
-# (INTER_STP_IP de start.sh). Les VM le joignent par la route LAN -> docker
+# (INTER_STP_IP de start-docker.sh). Les VM le joignent par la route LAN -> docker
 # (network/setup-docker-lan-route.sh). Le host-only VirtualBox (192.168.56.1)
 # reste possible, mais via --hub-ip.
 ISO_HUB_IP="172.20.0.10"
@@ -126,7 +126,7 @@ ISO_HUB_IP="172.20.0.10"
 # ne lisait : "pas de terminal : renseignez WAN_NODES / WAN_NODE_ID / WAN_OPS".
 # [2026-09-14] Le noeud 1 passe de 192.168.1.2 a 192.168.1.123 : c'est
 # l'adresse de la VM du banc sur le LAN. La MEME valeur est reprise dans
-# start-interstp.sh (WAN_NODES_DEFAULT) et start.sh - une table lue d'un cote
+# start-interstp.sh (WAN_NODES_DEFAULT) et start-docker.sh - une table lue d'un cote
 # doit ressembler a celle qu'on ecrit de l'autre, sinon les point codes ne
 # correspondent plus aux AS declares. Changer l'un sans les autres se paie au
 # moment ou le SS7 traverse.
@@ -169,7 +169,7 @@ iso_usage() {
     local B=$'\033[1m' C=$'\033[36m' D=$'\033[2m' N=$'\033[0m'
     cat <<EOF
 ${B}build-iso.sh${N} - fabrique une ISO bootable (ou une image SD arm64) a partir
-de l'image docker osmocom-nitb. Tout passe par build.sh et start.sh.
+de l'image docker osmocom-nitb. Tout passe par build.sh et start-docker.sh.
 
   ${B}Usage${N} : sudo ./build-iso.sh [options]
   Sans option : les quatre images amd64 - interstp, operator, lite, desktop.

@@ -59,7 +59,7 @@ RELAY_SEND_RETRIES = 3
 RELAY_SEND_DELAY = 3.0
 RELAY_CONNECT_TIMEOUT = 10
 
-# ─── PAYLOAD ISM (option start-direct.sh --payload-ism) ────────────────────────
+# ─── PAYLOAD ISM (option start-native.sh --payload-ism) ────────────────────────
 # Quand c'est actif, le TCP inter-noeud NE PORTE PLUS le texte du SMS : il porte
 # un JETON. Le texte part sur la liaison radio ISM (scripts/ism_payload.py),
 # estampille du meme jeton, et le noeud d'arrivee le recupere par la radio avant

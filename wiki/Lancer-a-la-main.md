@@ -1,9 +1,10 @@
 # Launching the emulated phone by hand, process by process
 
-> Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md).
+> Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md). Runnable version, network included:
+> [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb).
 >
 > Each command is the one **built** by `c54x_exe/run.sh` (DSP setup, called by
-> `osmo-operator/start-direct.sh`), with variables **expanded** to the values `start-direct.sh`
+> `osmo-operator/start-native.sh`), with variables **expanded** to the values `start-native.sh`
 > sets in DSP mode. Line numbers cited are as of 2026-10-03. Based on `c54x_exe/LAUNCH.md`.
 
 Convention: one terminal per process (or `&` + redirection as below). Logs go to
@@ -15,7 +16,7 @@ mkdir -p /tmp/c54x-pont
 
 ## Common variables (DSP setup)
 
-`start-direct.sh` exports them before handing over to `c54x_exe/run.sh` (block « LE BANC DSP :
+`start-native.sh` exports them before handing over to `c54x_exe/run.sh` (block « LE BANC DSP :
 RÉGLAGES MESURÉS, PUIS PASSAGE DE MAIN », i.e. "DSP bench: measured settings, then hand-over");
 `run.sh:57` derives `CALYPSO_PONT_LOCKSTEP=1` from them. They are inherited by **all** the
 following processes:
@@ -62,7 +63,7 @@ Clean up first (`run.sh:96-99`):
 rm -f /dev/shm/calypso_api_ram /tmp/calypso_dsp.sock /dev/shm/calypso_tch_cfg
 ```
 
-Command (`run.sh:102`, with `INSNS=120000` from start-direct.sh, `IQ=none`, `AMP=30000`, `VERB=-v`):
+Command (`run.sh:102`, with `INSNS=120000` from start-native.sh, `IQ=none`, `AMP=30000`, `VERB=-v`):
 
 ```bash
 cd /opt/GSM/c54x_exe
@@ -251,22 +252,22 @@ Same steps **without step 1** and without the three `export`s at the top (`run.s
   `io-tch-format rtp` (see [Installer-grgsm_exe](Installer-grgsm_exe.md), **TO BE CONFIRMED**).
 - **Step 5**: `cd /opt/GSM/osmo-operator && python3 pont/pont.py > /tmp/c54x-pont/pont.log 2>&1 &`
   (`run.sh:37-38,201-204`; rejects `--dsp-port`, `pont.py:25-26`). In the full bench,
-  `start-direct.sh` waits until osmo-bts-trx is (re)seen, then runs `setsid python3 -u pont/pont.py`
+  `start-native.sh` waits until osmo-bts-trx is (re)seen, then runs `setsid python3 -u pont/pont.py`
   to `/dev/shm/pont.log`.
 - Expected on the bridge side: `pont TRX : ports 5700/5701/5702, ARFCN 514, BSIC 7`, then
   `STATS fn=… | DL bursts=N`.
 
 ## Mapping to the scripts
 
-| Step | `c54x_exe/run.sh` | `qosmo/run_modules` (gr-gsm setup via start-direct.sh) |
+| Step | `c54x_exe/run.sh` | `qosmo/run_modules` (gr-gsm setup via start-native.sh) |
 |---|---|---|
 | DSP | `etape1` `:92-106` | — |
 | QEMU | `etape2` `:108-153` | `40-qemu.sh:44-89` (via the `/usr/local/bin/qosmo` launcher if present) |
 | osmocon | `etape3` `:155-170` | `50-osmocon.sh:36-42` (plus `-d tr`) |
 | mobile | `etape4` `:172-195` | `70-l2.sh:65` (`mobile -c $cfg -d $CALYPSO_MOBILE_DEBUG`) |
-| pont | `etape5` `:197-208` | `start-direct.sh` block `CALYPSO_BRIDGE=pont` |
+| pont | `etape5` `:197-208` | `start-native.sh` block `CALYPSO_BRIDGE=pont` |
 | BTS | — (your network) | `60-bts.sh:49` |
 
-In DSP mode, `start-direct.sh` plays qosmo's plan **without** `qemu,pty,osmocon,l2`
-(`DSP_MODULES_RETIRES`, `start-direct.sh:602`) then `exec`s `c54x_exe/run.sh`: that is exactly
+In DSP mode, `start-native.sh` plays qosmo's plan **without** `qemu,pty,osmocon,l2`
+(`DSP_MODULES_RETIRES`, `start-native.sh:602`) then `exec`s `c54x_exe/run.sh`: that is exactly
 step 0 (qosmo's plan brings up the network and the BTS) followed by steps 1 to 5.

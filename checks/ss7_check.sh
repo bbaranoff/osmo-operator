@@ -143,7 +143,7 @@ else
 fi
 
 # HUB_REMOTE_IP - adresse du hub quand il ne tourne PAS ici : WAN docker
-# (start.sh --wan/--hub-ip injecte OSMO_HUB_IP dans les conteneurs), ou noeud
+# (start-docker.sh --wan/--hub-ip injecte OSMO_HUB_IP dans les conteneurs), ou noeud
 # operateur natif. Vide si le hub est local, ou si aucune adresse n'est connue.
 HUB_REMOTE_IP="$(osmo_hub_is_remote 2>/dev/null || true)"
 
@@ -207,7 +207,7 @@ fi
 if [ "$HAS_INTER_STP" -eq 1 ]; then
     # [2026-08-31] Le point code etait ecrit en dur "0.23.0", comme celui des
     # operateurs l etait en "${op_id}.23.2". Le hub est en 0.0.0 (c est ce que
-    # start.sh annonce au lancement, et ce que porte osmo-multi.conf) : le
+    # start-docker.sh annonce au lancement, et ce que porte osmo-multi.conf) : le
     # bandeau affichait donc une adresse qui n est celle de personne.
     banner "INTER-STP (hub SS7) - $(osmo_hub_pc 2>/dev/null || echo 0.0.0)"
 

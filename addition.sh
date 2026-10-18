@@ -52,7 +52,7 @@ DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # NOM DE L IMAGE : osmocom-run, PAS "osmo-operator".
 # build.sh produit osmocom-nitb (Dockerfile, ~11 Go) puis Dockerfile.run en
-# derive osmocom-run, et c est CELLE-LA que start.sh lance - verifie sur le
+# derive osmocom-run, et c est CELLE-LA que start-docker.sh lance - verifie sur le
 # banc : `docker inspect osmo-operator-1 --format {{.Config.Image}}` rend
 # osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
 # rendait la sonde toujours negative : "image absente" en permanence, et une
@@ -60,7 +60,7 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
 # IMAGE DE BASE ET SON ORIGINE. osmocom-nitb est ce que build.sh COMPILE
 # (~40 min sur une bonne machine, 1h23 sur un runner). On la TIRE et on la tague
-# osmocom-nitb : start.sh en derive ensuite osmocom-run via Dockerfile.run
+# osmocom-nitb : start-docker.sh en derive ensuite osmocom-run via Dockerfile.run
 # exactement comme apres un build local.
 #
 # [2026-09-13] LA SOURCE EST GHCR, PLUS DOCKER HUB. .github/workflows/docker.yml
@@ -233,7 +233,7 @@ etat() {
     [ "$ok_m" = "1" ] && echo -e "  topologie SS7        : ${GREEN}posee${NC}"    || echo -e "  topologie SS7        : ${YELLOW}absente${NC}"
     [ "$ok_u" = "1" ] && echo -e "  osmo-multi.service   : ${GREEN}pose${NC} ($(systemctl is-active osmo-multi.service 2>/dev/null || echo inactive))" || echo -e "  osmo-multi.service   : ${YELLOW}absent${NC}"
     [ "$ok_k" = "1" ] && echo -e "  icone multi-operator : ${GREEN}posee${NC}"    || echo -e "  icone multi-operator : ${YELLOW}absente${NC}"
-    [ -x "$DIR/start-multi.sh" ] || echo -e "  start-multi.sh       : ${YELLOW}absent de $DIR${NC}"
+    [ -x "$DIR/launch/start-multi.sh" ] || echo -e "  start-multi.sh       : ${YELLOW}absent de $DIR${NC}"
     [ "$ok_cl" = "1" ] && echo -e "  OpenCL               : ${GREEN}operationnel${NC}" || echo -e "  OpenCL               : ${YELLOW}absent${NC}"
     [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
 }
@@ -877,7 +877,7 @@ fi
 #   1. docker pull ${HUB_IMAGE} && docker tag ... osmocom-nitb  (defaut)
 #      La pile Osmocom deja compilee, publiee sur le hub : le telechargement
 #      remplace 40 minutes de compilation. Le tag donne au resultat le nom que
-#      start.sh (Dockerfile.run : FROM osmocom-nitb) et start-nitb.sh attendent.
+#      start-docker.sh (Dockerfile.run : FROM osmocom-nitb) et start-nitb.sh attendent.
 #   2. build.sh --no-cache  (--build / --multi-build / case "compiler")
 #      --no-cache : le supplement rebatit l image PROPRE. Le cache docker
 #      gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
@@ -929,7 +929,7 @@ _pull_image() {
 # osmocom-nitb) qui la derive, en quelques secondes. start-multi.sh sonde
 # osmocom-run et renvoie ici si elle manque : sans cette derivation, un
 # supplement "reussi" laissait le multi-operateur incapable de demarrer.
-# Meme commande que start.sh (build_run_image, mode quick).
+# Meme commande que start-docker.sh (build_run_image, mode quick).
 _derive_run_image() {
     echo -e "  ${CYAN}→${NC} derivation de l image d execution : ${BOLD}docker build -f Dockerfile.run -t ${MULTI_IMAGE}${NC}"
     ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
@@ -955,7 +955,7 @@ fi
 # ── TOPOLOGIE MULTI-OPERATEUR ───────────────────────────────────────────────
 # Ecrite ICI, une fois, et relue par start-multi.sh. Elle n est pas recalculee
 # des deux cotes : deux formules jumelles finissent toujours par diverger, et le
-# depot en porte deja la trace (start.sh et lib/gabarits.sh tiennent les MEMES
+# depot en porte deja la trace (start-docker.sh et lib/gabarits.sh tiennent les MEMES
 # fonctions en double).
 #
 # LE PLAN SS7, tel que start-interstp.sh le definit :
@@ -963,15 +963,15 @@ fi
 #     RCTX = noeud*1000 + op*100 + 50
 # Sur une seule machine le noeud vaut 1, donc PC = 1.<op>.<role>.
 #
-#   op 1  NATIF   - PC 1.1.2, celui de start-direct.sh, laisse tel quel
+#   op 1  NATIF   - PC 1.1.2, celui de start-native.sh, laisse tel quel
 #   op 2  DOCKER  - PC 1.2.2, backbone 172.20.0.12
 #   op 3  DOCKER  - PC 1.3.2, backbone 172.20.0.13
 #
 # ⚠️ LES CONTENEURS COMMENCENT A 2, ET CELA SE PILOTE.
-# start.sh numerotait ses conteneurs 1..N en dur : avec --operators 2 il creait
+# start-docker.sh numerotait ses conteneurs 1..N en dur : avec --operators 2 il creait
 # osmo-operator-1 en point code 1.1.2, celui du natif. Deux equipements a la
 # meme adresse SS7 - "pas un conflit de nom, du routage faux"
-# (checks/wan_ss7_check.sh). OP_ID_BASE=2 (start.sh) fait demarrer les
+# (checks/wan_ss7_check.sh). OP_ID_BASE=2 (start-docker.sh) fait demarrer les
 # conteneurs au rang 2 et laisse le 1 au natif ; nom, backbone, point code,
 # RCTX, segment prive et ports publies en decoulent tous.
 # Le natif joint le hub par la passerelle du bridge : l hote atteint
@@ -1108,7 +1108,7 @@ CONF
     # du bureau (tools/osmo-launcher.py). Ce que le supplement vient de poser
     # est donc teste par ce qui s en servira. Le natif que start-multi.sh
     # lance au passage (osmo-banc) part en DSP : c est le defaut de
-    # start-direct.sh depuis ce jour.
+    # start-native.sh depuis ce jour.
     if [ "${OSMO_MULTI_START:-1}" = "1" ] && [ -f /etc/systemd/system/osmo-multi.service ]; then
         echo -e "  ${CYAN}→${NC} demarrage du banc multi-operateur (${BOLD}launch.sh --multi${NC}, comme l icone) - comptez plusieurs minutes ..."
         journalctl -u osmo-multi -f -n 0 --no-pager -o cat 2>/dev/null &
@@ -1187,7 +1187,7 @@ echo
 etat
 echo
 [ "$DO_MULTI" = "1" ] && \
-    echo -e "  ${CYAN}→${NC} lancer : ${BOLD}sudo $DIR/start-multi.sh${NC}  (ou l antenne bleue du bureau)"
+    echo -e "  ${CYAN}→${NC} lancer : ${BOLD}sudo $DIR/launch/start-multi.sh${NC}  (ou l antenne bleue du bureau)"
 [ "$DO_OPENCL" = "1" ] && \
     echo -e "  ${CYAN}→${NC} verifier OpenCL : ${BOLD}clinfo${NC}"
 [ "$DO_EXTRAS" = "1" ] && \

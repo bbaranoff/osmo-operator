@@ -22,7 +22,7 @@ Wants=osmo-banc.service
 # sont configurees, la route par defaut peut arriver apres.
 After=osmo-banc.service docker.service network.target
 Wants=docker.service
-ConditionPathExists=/opt/GSM/osmo-operator/start-multi.sh
+ConditionPathExists=/opt/GSM/osmo-operator/launch/start-multi.sh
 # ── ET LA TOPOLOGIE DOIT EXISTER ────────────────────────────────────────────
 # [2026-09-04] Sur une ISO fraiche, un demarrage de cette unite serait un echec :
 # ni docker ni l image osmocom-run ne sont dans le squashfs - ils arrivent avec
@@ -53,9 +53,9 @@ Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bi
 # start-multi.sh le (re)lance par systemctl et non par le raccourci du bureau.
 Environment=NO_COLOR=1 OSMO_NO_TERM=1 OSMO_BANC_SERVICE=osmo-banc.service
 EnvironmentFile=-/etc/default/osmo-multi
-ExecStart=/bin/bash /opt/GSM/osmo-operator/start-multi.sh $OSMO_MULTI_ARGS
+ExecStart=/bin/bash /opt/GSM/osmo-operator/launch/start-multi.sh $OSMO_MULTI_ARGS
 # --stop n'arrete que les conteneurs et le hub : le natif reste a osmo-banc.
-ExecStop=/bin/bash /opt/GSM/osmo-operator/start-multi.sh --stop
+ExecStop=/bin/bash /opt/GSM/osmo-operator/launch/start-multi.sh --stop
 TimeoutStartSec=1200
 # [2026-09-04] 180 s -> 30 s. A l arret de la machine, systemd attend ce delai
 # AVANT de tuer ce qui reste : trois minutes d ecran noir par unite, et il y en

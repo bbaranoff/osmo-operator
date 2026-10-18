@@ -20,7 +20,7 @@
 #  Ou est le depot : OQC_ROOT, sinon les emplacements habituels sont essayes.
 #      OQC_ROOT=~/src/qosmo-grgsm ./launch/start-oqc.sh
 #
-#  A ne pas confondre avec start-direct.sh, qui orchestre TOUTE la pile
+#  A ne pas confondre avec start-native.sh, qui orchestre TOUTE la pile
 #  (coeur Osmocom + radio) et dont le mode "qemu" aboutit egalement ici.
 # -----------------------------------------------------------------------------
 set -euo pipefail

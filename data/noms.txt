@@ -1,6 +1,6 @@
 # noms.txt - etat civil des abonnes du banc. Un "Prenom Nom" par ligne.
 # Tout est faux : ces gens n'existent pas, ils servent a mettre un visage sur
-# un IMSI dans un journal. start.sh en pioche un au hasard par abonne.
+# un IMSI dans un journal. start-docker.sh en pioche un au hasard par abonne.
 # Lignes vides et lignes commencant par # ignorees.
 Aline Boulanger
 Bastien Carpentier

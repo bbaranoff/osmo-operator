@@ -68,7 +68,7 @@ fi
 
 if ! wan_nodes_load "$CONF" 2>/dev/null; then
     fail "$CONF illisible - aucun WAN configure sur ce noeud"
-    echo -e "     ${CYAN}sudo ./start.sh --wan${NC}  ou  ${CYAN}sudo ./start-direct.sh --wan${NC}"
+    echo -e "     ${CYAN}sudo ./launch/start-docker.sh --wan${NC}  ou  ${CYAN}sudo ./start-native.sh --wan${NC}"
     exit 1
 fi
 [ "${WAN_NODE_ID:-0}" = "0" ] && wan_nodes_detect_self 2>/dev/null
@@ -80,7 +80,7 @@ LOCAL_IND="$(wan_local_ind)"
 REMOTES=(); for id in "${WAN_NODE_LIST[@]}"; do [ "$id" = "${WAN_NODE_ID:-0}" ] || REMOTES+=("$id"); done
 if [ "${#REMOTES[@]}" -eq 0 ]; then
     warn "table a un seul noeud : aucun pair, rien a verifier cote WAN"
-    echo -e "     ${CYAN}Ajoutez des noeuds : sudo ./start.sh --wan${NC}"
+    echo -e "     ${CYAN}Ajoutez des noeuds : sudo ./launch/start-docker.sh --wan${NC}"
     exit 0
 fi
 
@@ -216,7 +216,7 @@ echo ""
 HUB_IP=""
 [ -r /etc/osmo-role ] && HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role)"
 # En docker, /etc/osmo-role n'existe pas sur l'hote : l'adresse du hub est
-# injectee dans les conteneurs par start.sh (-e OSMO_HUB_IP, cf. --hub-ip).
+# injectee dans les conteneurs par start-docker.sh (-e OSMO_HUB_IP, cf. --hub-ip).
 # Sans ce repli, un hub WAN parfaitement declare passait pour "un lien non
 # maitrise" faute d'etre reconnu comme LE hub.
 if [ -z "$HUB_IP" ]; then
@@ -248,7 +248,7 @@ for i in $(seq 1 "$N_OPS"); do
             ok "op${i} : association SCTP etablie vers le hub ${remote}:2908"
         elif inside "$i" "ss -an --sctp" | grep -q .; then
             fail "op${i} : aucune association SCTP vers ${remote}:2908 - l'ASP est DOWN"
-            echo -e "     ${CYAN}Sur le noeud inter-STP : ./start-interstp.sh --status${NC}"
+            echo -e "     ${CYAN}Sur le noeud inter-STP : ./launch/start-interstp.sh --status${NC}"
         else
             skip "op${i} : ss --sctp indisponible - lien vers ${remote}:2908 non verifiable"
         fi

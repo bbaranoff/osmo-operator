@@ -71,7 +71,7 @@ VM_PREFIX="osmo-wan-"
 
 # intnet  : les VM se parlent, l'hote NE VOIT RIEN du segment.
 # hostonly: l'hote a une patte dessus - indispensable quand l'hote est lui-meme
-#           un noeud du WAN (start.sh --virtualbox). VirtualBox n'autorise alors
+#           un noeud du WAN (start-docker.sh --virtualbox). VirtualBox n'autorise alors
 #           que 192.168.56.0/21, sauf /etc/vbox/networks.conf.
 # Numero du noeud porte par l'HOTE lui-meme (vide = aucun, les N noeuds sont
 # des VM). Des qu'il est pose, le segment doit etre host-only : l'hote a besoin
@@ -329,7 +329,7 @@ do_create() {
             echo -e "${RED}Aucune ISO. Passez --iso chemin.iso, ou --build-iso.${NC}" >&2; exit 1; }
         echo -e "${GREEN}[1/4] ISO : ${CYAN}${ISO}${NC}"
         echo -e "  ${YELLOW}Verifiez qu'elle a ete construite avec --wan et CETTE table,${NC}"
-        echo -e "  ${YELLOW}sinon les VM demarreront sans WAN (start-direct.sh --wan a la main).${NC}"
+        echo -e "  ${YELLOW}sinon les VM demarreront sans WAN (start-native.sh --wan a la main).${NC}"
     else
         echo -e "${GREEN}[1/4] ISO : ${CYAN}${ISO}${NC}"
     fi
@@ -463,9 +463,9 @@ do_hint() {
     echo -e "  ${BOLD}Demarrer :${NC} ${CYAN}$0 start${NC}"
     echo ""
     echo -e "  ${BOLD}Dans chaque VM (autologin root) :${NC}"
-    echo -e "    ${CYAN}/opt/GSM/osmo-operator/start-direct.sh${NC}"
+    echo -e "    ${CYAN}/opt/GSM/osmo-operator/start-native.sh${NC}"
     echo -e "    → la table WAN figee dans l'ISO est appliquee toute seule (WAN_AUTO=1)."
-    echo -e "    → sans ISO --wan : ${CYAN}/opt/GSM/osmo-operator/start-direct.sh --wan${NC}"
+    echo -e "    → sans ISO --wan : ${CYAN}/opt/GSM/osmo-operator/start-native.sh --wan${NC}"
     echo ""
     echo -e "  ${BOLD}Appeler d'un noeud a l'autre :${NC}"
     local a b

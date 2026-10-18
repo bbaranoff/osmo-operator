@@ -2,7 +2,7 @@
 
 > Version of 2026-10-03. Back: [Telephone-emule](Telephone-emule.md).
 > The repo carries its own installer, `grgsm_exe/install.sh` (also called by the `Dockerfile`, stage
-> `l1`, `Dockerfile.run`, `start.sh`, the ISO and `install.sh --telephone`). The
+> `l1`, `Dockerfile.run`, `start-docker.sh`, the ISO and `install.sh --telephone`). The
 > `Dockerfile:N` numbers refer to the Dockerfile at commit `4266c8b`.
 
 ## First: three things carry this name
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | the **`grgsm_exe`** repo (`https://github.com/bbaranoff/grgsm_exE`) | qosmo's gr-gsm layer 1 (`calypso_l1_grgsm.c`) compiled **outside QEMU**, 118 KB, no ARM and no firmware: "the L1 writes into the void" | **no** — a bench and replay tool | `grgsm_exe/README.md:1-42` |
 | the `/usr/local/bin/grgsm_exe` command | wrapper = `python3 pont/pont_dsp.py --no-record --dsp-port 6702`; `PONT_DSP_PORT=0 grgsm_exe` = `pont/pont.py` | it is the **bridge** | `c54x_exe/LAUNCH.md:142-158`; **outside the repo**, absent from a fresh install |
-| "grgsm_exe bridge" / the `--grgsm` setup | gr-gsm L1 **inside** QEMU (qosmo `--enable-l1-grgsm`) + `pont/pont.py` | **yes** (the historical chain) | `osmo-operator/environment/paths.env:24-27`, `start-direct.sh:111` |
+| "grgsm_exe bridge" / the `--grgsm` setup | gr-gsm L1 **inside** QEMU (qosmo `--enable-l1-grgsm`) + `pont/pont.py` | **yes** (the historical chain) | `osmo-operator/environment/paths.env:24-27`, `start-native.sh:111` |
 
 To connect a phone to your network with the gr-gsm setup, you need the **third** one:
 qosmo + firmware + osmocom-bb (already done in [Installer-qosmo](Installer-qosmo.md)) and the
@@ -102,4 +102,4 @@ contains `__…__` templates filled in by `generate_configs.sh`; it must then be
 | `la couche 1 gr-gsm ne s'est pas annoncee` (the gr-gsm layer 1 did not announce itself) | QEMU compiled without `--enable-l1-grgsm`, or launched with `CALYPSO_DSP_EXTERN=1` | `run.sh:147`, `Dockerfile:698` |
 | `pont.py est le pont du montage grgsm : pour le DSP, lancer pont/pont_dsp.py` (pont.py is the grgsm-setup bridge: for the DSP, launch pont/pont_dsp.py) | `--dsp-port` passed to pont.py | `pont/pont.py:25-26` |
 | `grgsm_exe` command not found | the wrapper is versioned nowhere (`LAUNCH.md:28`); launch `python3 pont/pont.py` directly | — |
-| 79% CRC KO, LU failing | bridge from outside the repo (an old copy); always launch the one from the osmo-operator tree | `start-direct.sh`, block "LE PONT VIENT DU DEPOT" (the bridge comes from the repo) |
+| 79% CRC KO, LU failing | bridge from outside the repo (an old copy); always launch the one from the osmo-operator tree | `start-native.sh`, block "LE PONT VIENT DU DEPOT" (the bridge comes from the repo) |

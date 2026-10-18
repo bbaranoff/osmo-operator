@@ -426,15 +426,15 @@ if [ "$ROLE" = "interstp" ]; then
 
     if [ "$RESTART" = "1" ] && [ "$DRY" != "1" ]; then
         echo ""
-        if [ -x "$HERE/start-interstp.sh" ]; then
-            "$HERE/start-interstp.sh" --ip "$SELF_IP" --nodes "$NODES" --ops "$OPS" --port "$PORT" --no-ip
+        if [ -x "$HERE/launch/start-interstp.sh" ]; then
+            "$HERE/launch/start-interstp.sh" --ip "$SELF_IP" --nodes "$NODES" --ops "$OPS" --port "$PORT" --no-ip
         else
             systemctl restart osmo-interstp 2>/dev/null \
                 && echo -e "  ${GREEN}✓${NC} osmo-interstp relance" \
-                || echo -e "  ${YELLOW}⚠${NC} relancez le hub a la main : ${CYAN}./start-interstp.sh${NC}"
+                || echo -e "  ${YELLOW}⚠${NC} relancez le hub a la main : ${CYAN}./launch/start-interstp.sh${NC}"
         fi
     else
-        echo -e "  ${YELLOW}Le hub deja lance garde l'ancienne adresse :${NC} ${CYAN}./start-interstp.sh${NC}"
+        echo -e "  ${YELLOW}Le hub deja lance garde l'ancienne adresse :${NC} ${CYAN}./launch/start-interstp.sh${NC}"
     fi
     exit 0
 fi
@@ -532,14 +532,14 @@ write_role operator "$HUB_IP" "$NODE"
 
 echo ""
 if [ "$RESTART" = "1" ] && [ "$DRY" != "1" ]; then
-    if [ -x "$HERE/start-direct.sh" ]; then
+    if [ -x "$HERE/start-native.sh" ]; then
         echo -e "  Relance de la pile..."
-        "$HERE/start-direct.sh" --node "$NODE" || true
+        "$HERE/start-native.sh" --node "$NODE" || true
     else
-        echo -e "  ${YELLOW}⚠${NC} start-direct.sh absent - relancez la pile a la main."
+        echo -e "  ${YELLOW}⚠${NC} start-native.sh absent - relancez la pile a la main."
     fi
 else
     echo -e "  ${YELLOW}Les demons deja lances gardent l'ancienne adresse :${NC} relancez la pile"
-    echo -e "    ${CYAN}sudo ./start-direct.sh --node ${NODE}${NC}"
+    echo -e "    ${CYAN}sudo ./start-native.sh --node ${NODE}${NC}"
 fi
-echo -e "  ${BOLD}Verifier l'attachement, cote hub :${NC} ${CYAN}./start-interstp.sh --status${NC}"
+echo -e "  ${BOLD}Verifier l'attachement, cote hub :${NC} ${CYAN}./launch/start-interstp.sh --status${NC}"

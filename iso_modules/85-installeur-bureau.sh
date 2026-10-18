@@ -340,7 +340,7 @@ INSTALLER
     # osmo-panel.py est la fenetre qui AFFICHE /run/osmo-fft/panel.png : sans
     # elle, l encart n existe pas a l ecran, quoi que fabrique osmo-fft-snap.
     # Or c est un python3 - et le demontage du banc tuait tous les python3 (voir
-    # killall_python dans start-direct.sh). Un seul arret du banc, et l encart
+    # killall_python dans start-native.sh). Un seul arret du banc, et l encart
     # disparaissait de l ecran POUR LE RESTE DE LA SESSION : plus de FFT, plus
     # de mobile.log, et rien dans aucun journal pour le dire.
     # Le teardown les epargne desormais, mais un plantage, un OOM ou un kill a

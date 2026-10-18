@@ -67,19 +67,31 @@ inst_deps_check() {
     have_file "$INST_TREE/Dockerfile" || { inst_fail "Dockerfile introuvable - c'est lui qui porte la liste des paquets"; return $INST_RC_FAIL; }
     inst_ok
 }
+# [2026-10-18] « Deja installe » se jugeait sur trois paquets temoins : un
+# systeme partiellement equipe (les binaires sans les -dev) passait pour complet,
+# l etape etait sautee, et osmo-hlr echouait trois etapes plus loin sur
+# « Package requirements (sqlite3) were not met ». On verifie donc TOUTE la
+# liste. Un motif (asterisk-moh*) compte comme present si l un des paquets qu il
+# designe est installe.
+_deps_missing() {
+    local p
+    for p in $(_deps_list); do
+        dpkg-query -W -f='${db:Status-Status}\n' "$p" 2>/dev/null | grep -qx installed || printf '%s\n' "$p"
+    done
+}
 inst_deps_done() {
-    local p; for p in build-essential libtalloc-dev libsctp-dev; do have_pkg "$p" || return 1; done
-    return 0
+    [ -n "$(_deps_list)" ] && [ -z "$(_deps_missing)" ]
 }
 inst_deps_run() {
     local pkgs; pkgs="$(_deps_list)"
     [ -z "${pkgs// }" ] && { inst_fail "liste de paquets vide - le format du Dockerfile a change"; return $INST_RC_FAIL; }
-    inst_say "paquets : $(echo $pkgs | wc -w)"
+    inst_say "paquets : $(echo $pkgs | wc -w), dont manquants : $(_deps_missing | wc -l)"
+    # La liste COMPLETE, pas seulement les manquants : apt-get install est
+    # idempotent, et un motif comme asterisk-moh* ne se resout bien que par apt.
     apt-get update -qq && apt-get install -y --no-install-recommends $pkgs
 }
 inst_deps_verify() {
-    local missing="" p
-    for p in build-essential libtalloc-dev libsctp-dev libdbi-dev; do have_pkg "$p" || missing="$missing $p"; done
-    [ -n "$missing" ] && { inst_fail "paquets absents apres installation :$missing"; return $INST_RC_FAIL; }
+    local missing; missing="$(_deps_missing | tr '\n' ' ')"
+    [ -n "${missing// }" ] && { inst_fail "paquets absents apres installation : $missing"; return $INST_RC_FAIL; }
     inst_ok
 }

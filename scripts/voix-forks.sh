@@ -13,7 +13,7 @@
 #  1. « io-tch-format rtp » dans cfgs/mobile_group1.cfg.
 #     C est le gabarit que run.sh (run_modules/20-mobile-cfg.sh) RECOPIE
 #     par-dessus ~/.osmocom/bb/mobile_group1.cfg a chaque demarrage - il
-#     ecrase donc ce que start-direct.sh a genere. Sans cette ligne, le mobile
+#     ecrase donc ce que start-native.sh a genere. Sans cette ligne, le mobile
 #     lit et ecrit ses trames TCH dans la disposition Texas Instruments des
 #     vrais Calypso, alors que pont.py les code avec libosmocoding, c est-a-dire
 #     en disposition RTP/RFC3551 (33 octets ouverts par la signature 0xD). Les
@@ -28,7 +28,7 @@
 #     snd_pcm_prepare() muet qui DEMONTE ET REMONTE le flux PulseAudio.
 #     Mesure du 09/09, ecrivain cadence a 20 ms comme le mobile, 10 s :
 #         80 ms -> 16 remontages   120 -> 19   160 -> 1   200 -> 0   240 -> 0
-#     Pendant un appel reel : 50 par seconde. start-direct.sh exporte 320, ce
+#     Pendant un appel reel : 50 par seconde. start-native.sh exporte 320, ce
 #     qui suffit ; on aligne le defaut des forks pour qui lance run.sh seul.
 #
 #  Appelants : update.sh (osmo_poser_voix_forks), le service osmo-update

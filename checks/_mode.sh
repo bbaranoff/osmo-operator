@@ -39,9 +39,9 @@
 #     tube : sous "set -o pipefail" ces deux formes rendent 141 ;
 #   • compatible "set -euo pipefail" chez l'appelant.
 #
-#  DEUX QUESTIONS DIFFERENTES - POURQUOI start-direct.sh GARDE SA DETECTION
+#  DEUX QUESTIONS DIFFERENTES - POURQUOI start-native.sh GARDE SA DETECTION
 #  ----------------------------------------------------------------------
-#  start-direct.sh:159 a sa propre detect_runtime_env(), et elle N'EST PAS un
+#  start-native.sh:159 a sa propre detect_runtime_env(), et elle N'EST PAS un
 #  doublon de osmo_mode() : les deux fonctions repondent a deux questions qui
 #  n'ont pas la meme reponse.
 #
@@ -62,9 +62,9 @@
 #  quand le socket est monte. Un script qui prendrait l'une pour l'autre
 #  s'enverrait des commandes a lui-meme par le demon docker.
 #
-#  Ce qui EST partage, en revanche, c'est la convention aval : start-direct.sh
+#  Ce qui EST partage, en revanche, c'est la convention aval : start-native.sh
 #  transmet "--$NODE_MODE" (--docker / --native) a network/setup-wan-mesh.sh
-#  (start-direct.sh:756), et c'est exactement ce que consomme osmo_mode_force().
+#  (start-native.sh:756), et c'est exactement ce que consomme osmo_mode_force().
 #  Les deux vocabulaires coincident ; seules les fonctions restent distinctes.
 #
 #  DESIGNER UN NOEUD - <op>
@@ -125,7 +125,7 @@ declare -gA _OSMO_VTY_TOOL 2>/dev/null || declare -A _OSMO_VTY_TOOL
 # osmo_in_container - tourne-t-on DANS un conteneur DE CE DEPOT ?
 # /.dockerenv seul serait vrai dans n'importe quel conteneur ; on exige aussi
 # /etc/docker-entrypoint-cmd, depose par scripts/entrypoint.sh. C'est le couple
-# qu'emploient start.sh:20 et start-direct.sh:159.
+# qu'emploient start-docker.sh:20 et start-native.sh:159.
 osmo_in_container() {
     [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]
 }
@@ -134,7 +134,7 @@ osmo_in_container() {
 _osmo_mode_detect() {
     # Dans un conteneur du depot, on EST le noeud : "docker exec" vers
     # soi-meme n'a pas de sens, meme si le socket docker est monte (c'est le cas
-    # du conteneur du dashboard). C'est la regle de start-direct.sh:237.
+    # du conteneur du dashboard). C'est la regle de start-native.sh:237.
     if osmo_in_container; then printf 'native\n'; return 0; fi
 
     # OSMO_NATIVE=1 est deja pose par l'ISO (services/osmo-egprs-web.service).
@@ -368,7 +368,7 @@ osmo_hub() {
 
 # _osmo_hub_ip_probe - demande aux noeuds operateur ou est leur hub. Deux
 # sources, dans cet ordre :
-#   1. OSMO_HUB_IP, injecte dans chaque conteneur par start.sh (-e OSMO_HUB_IP)
+#   1. OSMO_HUB_IP, injecte dans chaque conteneur par start-docker.sh (-e OSMO_HUB_IP)
 #      des que --hub-ip / --wan designe un inter-STP hors dorsale docker ;
 #   2. le "remote-ip" de l'asp asp-to-inter dans /etc/osmocom/osmo-stp.cfg, qui
 #      reste vrai meme sans environnement (conteneur relance a la main, ISO).
@@ -467,7 +467,7 @@ osmo_hub_hint() {
     local ip
     ip="$(osmo_hub_ip 2>/dev/null || true)"
     if [ -n "$ip" ]; then
-        printf 'hub distant %s : VTY 4239 non joignable depuis ce noeud - lancez ./start-interstp.sh --status sur le hub\n' "$ip"
+        printf 'hub distant %s : VTY 4239 non joignable depuis ce noeud - lancez ./launch/start-interstp.sh --status sur le hub\n' "$ip"
     else
         printf 'aucun inter-STP local, et aucune adresse de hub connue ici (OSMO_HUB_IP, --hub-ip) - hub non interrogeable\n'
     fi
@@ -790,12 +790,12 @@ osmo_vty_target() {
 #  Certains scripts ne se convertissent pas : ils PILOTENT docker par nature -
 #  ils construisent une image, creent un reseau 172.20.N.0/24, lancent un
 #  conteneur. En natif il n'y a ni image, ni reseau a creer, ni conteneur : le
-#  noeud, c'est la machine. Les convertir reviendrait a reecrire start-direct.sh
+#  noeud, c'est la machine. Les convertir reviendrait a reecrire start-native.sh
 #  et start-interstp.sh, qui existent deja - le depot a deja paye ce prix
 #  ailleurs (cf. l'en-tete de start-nitb.sh : 4 copies divergentes de
 #  si_bridge.py, 3 de gapk-start.sh).
 #
-#  Ce qui leur manque, c'est un REFUS. build-iso.sh embarque start.sh,
+#  Ce qui leur manque, c'est un REFUS. build-iso.sh embarque start-docker.sh,
 #  build.sh et launch/osmo-launch.sh sur une ISO ou build-iso.sh:707 garantit
 #  qu'il n'y a PAS de docker : aujourd'hui ces scripts y meurent en 127 sur
 #  "docker: command not found", apres avoir deja touche l'hote, sans nommer
@@ -839,8 +839,8 @@ osmo_require_docker() {
         if [ $# -gt 0 ]; then
             local _l; for _l in "$@"; do printf '  %s\n' "$_l"; done
         else
-            printf '  %s\n' "./start-direct.sh     - la pile complete de CE noeud (un operateur)"
-            printf '  %s\n' "./start-interstp.sh   - le hub SS7 inter-operateurs"
+            printf '  %s\n' "./start-native.sh     - la pile complete de CE noeud (un operateur)"
+            printf '  %s\n' "./launch/start-interstp.sh   - le hub SS7 inter-operateurs"
         fi
         printf '\n%s\n' "Sur l'ISO ces deux-la sont deja dans le PATH : osmo-start-direct."
         printf '%s\n\n' "Pour verifier l'etat sans rien demarrer : ./checks/global_check.sh"

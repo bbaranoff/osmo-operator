@@ -106,8 +106,8 @@ MULTI_CONF = os.environ.get("MULTI_CONF", "/etc/osmocom/osmo-multi.conf")
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "calypso")
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
 # Le VTY du client mobile (osmocom-bb « mobile »). 4247 pour MS#1 ; MS#2 est sur
-# 4248 - voir start-direct.sh, qui les attribue.
-# [2026-10-12] 4247, ou 4347 en --dsp : start-direct.sh publie le port reel dans
+# 4248 - voir start-native.sh, qui les attribue.
+# [2026-10-12] 4247, ou 4347 en --dsp : start-native.sh publie le port reel dans
 # /run/osmo-banc/ms1-vty. MS_VTY_PORT force ; sinon le fichier ; sinon 4247.
 def vty_port():
     if os.environ.get("MS_VTY_PORT"):
@@ -609,7 +609,7 @@ class Panel(Gtk.Window):
         self._conky_fondu(actif)
 
     # [2026-10-12] LE CONKY SUIT AUSSI, EN FONDU. Banc a l arret, le tableau de
-    # bord n a rien a dire (« banc a l arret - ./start-direct.sh » deux fois) :
+    # bord n a rien a dire (« banc a l arret - ./start-native.sh » deux fois) :
     # on le fait disparaitre, et revenir avec le banc. Pas de kill : le gardien
     # osmo-desktop-panel relancerait un conky dans les cinq secondes. On agit
     # sur sa FENETRE X11 : opacite (_NET_WM_WINDOW_OPACITY, que mutter honore)
@@ -670,7 +670,7 @@ class Panel(Gtk.Window):
             self._conky_win = win
         threading.Thread(target=anim, daemon=True).start()
 
-    # [2026-10-12] UN FONDU TUE EN VOL (kill -9 : start-direct.sh --stop, avant
+    # [2026-10-12] UN FONDU TUE EN VOL (kill -9 : start-native.sh --stop, avant
     # que osmo-fond.py soit dans sa liste d epargnes) laissait le fond sur une
     # image intermediaire. Toutes les 10 s, on relit l URI du fond : si ce
     # n est pas le fichier attendu pour l etat courant, on relance osmo-fond
@@ -872,7 +872,7 @@ class Panel(Gtk.Window):
         #
         # [2026-09-04] LE VTY D UN CONTENEUR EST DANS LE CONTENEUR. On faisait
         # « telnet <ip-du-conteneur> 4247 » : ce port n est PAS publie sur le
-        # reseau docker de l operateur (start.sh ne publie que ce dont l hote a
+        # reseau docker de l operateur (start-docker.sh ne publie que ce dont l hote a
         # besoin), et le bouton rendait "Connection refused" sur un operateur
         # parfaitement vivant. On entre donc dans le conteneur pour le natif du
         # dedans, exactement comme pour tmux.
@@ -896,7 +896,7 @@ class Panel(Gtk.Window):
     def on_tmux(self, *_):
         # [2026-09-04] LE NOM DE LA SESSION N ETAIT PAS LE BON. On attachait
         # « tmux -S /tmp/osmocom_tmux attach -t osmocom » dans le conteneur,
-        # alors que start.sh y ouvre une session nommee « osmo » sur le socket
+        # alors que start-docker.sh y ouvre une session nommee « osmo » sur le socket
         # PAR DEFAUT (voir son commentaire : "docker exec -ti osmo-operator-2
         # tmux attach -t osmo"). Le bouton disait donc "pas de session tmux"
         # sur un operateur qui en avait une. On essaie les deux, dans l ordre

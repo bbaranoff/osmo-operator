@@ -382,6 +382,21 @@ osmo_reposer_lanceurs() {
 }
 osmo_reposer_lanceurs
 
+# ── start-direct.sh DEVENU start-native.sh (2026-10-18) ──────────────────────
+# Le lien /usr/local/bin/osmo-start-direct d une machine deja installee vise
+# encore start-direct.sh, que git pull vient de faire disparaitre. On le
+# repointe, et on pose le nouveau nom a cote. Idempotent.
+osmo_reposer_lien_start_native() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local t=/opt/GSM/osmo-operator/start-native.sh l
+    [ -f "$t" ] || return 0
+    for l in /usr/local/bin/osmo-start-native /usr/local/bin/osmo-start-direct; do
+        [ "$(readlink "$l" 2>/dev/null)" = "$t" ] || ln -sf "$t" "$l"
+    done
+    return 0
+}
+osmo_reposer_lien_start_native
+
 # ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
 # Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
 # l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes
@@ -814,7 +829,7 @@ osmo_poser_journaux_lte
 #  1. « io-tch-format rtp » dans cfgs/mobile_group1.cfg des forks. C est le
 #     gabarit que run.sh (run_modules/20-mobile-cfg.sh) RECOPIE par-dessus
 #     ~/.osmocom/bb/mobile_group1.cfg a chaque demarrage, ecrasant ce que
-#     start-direct.sh avait genere. Sans cette ligne, le mobile lit et ecrit
+#     start-native.sh avait genere. Sans cette ligne, le mobile lit et ecrit
 #     ses trames TCH dans la disposition Texas Instruments des vrais Calypso,
 #     alors que pont.py les code avec libosmocoding, en disposition
 #     RTP/RFC3551. Les deux bouts ne se comprennent DANS AUCUN SENS, aucun
@@ -828,7 +843,7 @@ osmo_poser_journaux_lte
 #     muet, qui DEMONTE ET REMONTE le flux PulseAudio - 50 fois par seconde
 #     pendant un appel. Mesure du 09/09, ecrivain cadence a 20 ms sur 10 s :
 #     80 ms -> 16 remontages, 120 -> 19, 160 -> 1, 200 -> 0, 240 -> 0.
-#     start-direct.sh exporte 320, ce qui suffit ; on aligne quand meme le
+#     start-native.sh exporte 320, ce qui suffit ; on aligne quand meme le
 #     defaut des forks, pour qui lance run.sh directement.
 #
 # git pull sur osmo-operator ne peut rien pour ces fichiers-la : ils

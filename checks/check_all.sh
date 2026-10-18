@@ -156,7 +156,7 @@ OPS="$(osmo_ops 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
 N_OPS="$(printf '%s\n' "$OPS" | wc -w | tr -d ' ')"
 
 # Les fiches d'abonnes ne sont pas au meme endroit selon d'ou l'on regarde :
-# start.sh les ecrit sur l'HOTE dans /var/tmp et en pose une copie dans
+# start-docker.sh les ecrit sur l'HOTE dans /var/tmp et en pose une copie dans
 # /etc/osmocom de chaque conteneur. Meme regle que checks/annuaire.sh.
 ANNU_FOUND=0
 for f in "${OSMO_ANNUAIRE:-}" /var/tmp/osmo-annuaire.csv /etc/osmocom/annuaire.csv; do

@@ -5,7 +5,7 @@
 # La carte (sysmoISIM-SJA5 de sysmocom, dans un OMNIKEY 6121) est lue et
 # programmee avec pySim (Osmocom, venv /opt/GSM/pysim-venv), puis SERVIE au
 # mobile osmocom-bb par le serveur SAP de softSIM en mode pcsc : c est ce que
-# fait start-direct.sh --sap quand une carte est dans le lecteur.
+# fait start-native.sh --sap quand une carte est dans le lecteur.
 #
 #   tools/osmo-sim.sh lecteur                 les lecteurs PC/SC, l ATR, le type de carte
 #   tools/osmo-sim.sh lire                    tout ce que la carte dit (pySim-read)
@@ -14,11 +14,11 @@
 #                                             le HLR la connait-il : prete pour --sap ?
 #   tools/osmo-sim.sh hlr [--creer] [options] l abonne de la carte dans le HLR
 #   tools/osmo-sim.sh sap [--socket S]        sert la carte par SAP (premier plan),
-#                                             ce que start-direct.sh --sap fait tout seul
+#                                             ce que start-native.sh --sap fait tout seul
 #   tools/osmo-sim.sh shell                   pySim-shell sur la carte (ADM1 si connue)
 #
 # L IDENTITE DU BANC (meme plan que qosmo/run_modules/21-abonnes-hlr.sh et
-# start-direct.sh, section "ms_imsi / ms_ki") :
+# start-native.sh, section "ms_imsi / ms_ki") :
 #   IMSI   = MCC MNC <operateur sur 4> <MS sur 6>        001 01 0001 000001
 #   Ki     = 00112233445566778899aabbccdd <MS> <operateur>   ...dd 01 01
 #   MSISDN = noeud*100000 + operateur*100 + MS                 100101
@@ -298,7 +298,7 @@ cmd_hlr() {
         return 0
     fi
     if [ "$imsi" = "$(plan_imsi)" ]; then
-        warn "HLR : $imsi inconnu pour l instant - c est l IMSI du MS#$MS, start-direct.sh le cree au lancement (21-abonnes-hlr)"
+        warn "HLR : $imsi inconnu pour l instant - c est l IMSI du MS#$MS, start-native.sh le cree au lancement (21-abonnes-hlr)"
     else
         warn "HLR : $imsi inconnu - tools/osmo-sim.sh hlr --creer --ki <Ki de la carte> (ou programmer la carte au plan du banc)"
     fi
@@ -317,7 +317,7 @@ cmd_verifier() {
     if [ -f "$SOFTSIM_DIR/src/demo_server.rb" ] && ruby -e 'require "smartcard"' >/dev/null 2>&1; then
         ok "softSIM pcsc : $SOFTSIM_DIR, gem smartcard present"
     else warn "softSIM pcsc indisponible : sudo $HERE/tools/osmo-sim-install.sh"; rc=1; fi
-    if [ $rc -eq 0 ]; then ok "prete : ./start-direct.sh --sap (la carte est servie par SAP au mobile)"
+    if [ $rc -eq 0 ]; then ok "prete : ./start-native.sh --sap (la carte est servie par SAP au mobile)"
     else warn "pas encore prete pour --sap"; fi
     return $rc
 }

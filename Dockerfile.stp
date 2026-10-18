@@ -114,7 +114,7 @@ RUN set -eux; \
 
 # Config par défaut du hub, produite par le script du dépôt : une seule source
 # de vérité pour le plan de point codes 1.<nœud><op>.<rôle>, partagée avec l'ISO
-# et avec start.sh. Remplaçable par un montage au lancement.
+# et avec start-docker.sh. Remplaçable par un montage au lancement.
 ARG HUB_NODES=3
 ARG HUB_OPS=1
 COPY helpers/create_interop.sh /build/create_interop.sh

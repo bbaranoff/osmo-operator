@@ -7,7 +7,7 @@ dans les conteneurs et dans les configurations du depot.
 ## 1. En trente secondes
 
     cd /home/nirvana/osmo-operator
-    sudo ./start.sh --wan --operators 2 --hub-ip 192.168.1.49   # le lab
+    sudo ./launch/start-docker.sh --wan --operators 2 --hub-ip 192.168.1.49   # le lab
     ./ss7-console.py                                            # le schema
 
 Le schema s'ouvre. On circule **aux fleches**, on ouvre avec **Entree**, on
@@ -150,7 +150,7 @@ d'echecs.
 
 | Symptome | Cause probable |
 |---|---|
-| `aucun inter-STP connu` | lab arrete, ou `--hub-ip` jamais donne a `start.sh` |
+| `aucun inter-STP connu` | lab arrete, ou `--hub-ip` jamais donne a `start-docker.sh` |
 | `le conteneur ... ne tourne pas` | `docker ps` ne le voit plus |
 | `VTY ... injoignable` | le demon n'est pas lance dans ce conteneur |
 | `Aucune reponse` a un MAP | personne n'ecoute ce SSN : lancez `serve` |

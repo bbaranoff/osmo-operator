@@ -374,7 +374,7 @@ if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
     case "$_hub" in
         127.*|0.0.0.0|"")
             echo -e "  ${YELLOW}⚠${NC} ASP : remote-ip=${_hub:-vide} - ce n'est pas un hub."
-            echo -e "     L'identite SS7 n'a pas ete appliquee : ${CYAN}./start-direct.sh --node N --hub-ip <hub>${NC}"
+            echo -e "     L'identite SS7 n'a pas ete appliquee : ${CYAN}./start-native.sh --node N --hub-ip <hub>${NC}"
             _hub="" ;;
     esac
     if [ -n "$_hub" ]; then

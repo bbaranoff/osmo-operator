@@ -28,7 +28,7 @@
 #                                morceaux (le binaire, pc-bios, tools, le
 #                                firmware compal_e88). Il manquait ce qui LANCE :
 #                                run.sh, run_modules/, environnement/, cfgs/,
-#                                scripts/. start-direct.sh delegue a
+#                                scripts/. start-native.sh delegue a
 #                                $OQC_ROOT/run.sh - absent, l'image lite savait
 #                                emuler un Calypso mais pas le demarrer.
 #                                build/ ne garde que qemu-system-arm : 1,5 Go de
@@ -76,7 +76,7 @@ RUN set -eux; \
     #
     #     qemu-system-arm: could not read keymap file: 'en-us'
     #
-    # QEMU mourait AVANT d'allouer ses PTY, et start-direct.sh s'arretait sur
+    # QEMU mourait AVANT d'allouer ses PTY, et start-native.sh s'arretait sur
     #     [FAIL] Emulator serial PTY (... s'est arrete avant d'allouer son PTY)
     # c'est-a-dire une image, et une ISO, sans MS. Le fichier existait pourtant
     # en trois exemplaires sur la machine - a un chemin que QEMU ne consulte
@@ -133,6 +133,7 @@ COPY --from=prune / /
 # l'identique de l'image d'origine, sinon l'image lite ne demarre pas pareil.
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     container=docker \
+    OSMO_IMAGE=1 \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib \
     DEBIAN_FRONTEND=noninteractive

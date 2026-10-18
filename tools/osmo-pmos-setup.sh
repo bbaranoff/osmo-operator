@@ -16,7 +16,7 @@ ssh_vm() { sshpass -p "$PASS" ssh -p "$PORT" -T -o StrictHostKeyChecking=no -o U
     -o ConnectTimeout=8 -o PreferredAuthentications=password "$USER_VM@127.0.0.1" "$@"; }
 # [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro de
 # l hote (annuleur d echo, bouclages directs) - une seule source de verite,
-# partagee avec audio-chain.sh (boot), start-direct et osmo-pmos-qemu.
+# partagee avec audio-chain.sh (boot), start-native et osmo-pmos-qemu.
 AUDIO_LIB="${OSMO_REPO:-/opt/GSM/osmo-operator}/lib/audio.sh"
 if [ -f "$AUDIO_LIB" ]; then
     # shellcheck source=../lib/audio.sh

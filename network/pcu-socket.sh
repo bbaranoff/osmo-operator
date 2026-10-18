@@ -16,7 +16,7 @@
 #   network/pcu-socket.sh          etat (defaut)
 #   network/pcu-socket.sh --fix    supprime les sockets orphelins /tmp/pcu_bts*
 #
-# Appele par start-direct.sh juste avant le lancement de run.sh (--fix).
+# Appele par start-native.sh juste avant le lancement de run.sh (--fix).
 # =============================================================================
 set -u
 

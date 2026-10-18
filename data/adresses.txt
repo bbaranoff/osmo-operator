@@ -1,4 +1,4 @@
-# adresses.txt - "rue, ville" par ligne. start.sh prefixe un numero tire au
+# adresses.txt - "rue, ville" par ligne. start-docker.sh prefixe un numero tire au
 # hasard. Rien de tout cela n'existe non plus.
 rue des Ondes Courtes, Fontaine-sur-Onde
 impasse du Burst, Val-de-Trame

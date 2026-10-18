@@ -9,7 +9,7 @@ inst_configs_run() {
         || { inst_fail "impossible de creer les repertoires de configuration"; return $INST_RC_FAIL; }
     if [ "${REINSTALL:-0}" = 1 ]; then
         # On ecrase, mais jamais sans copie : /etc/osmocom.<date> garde l etat
-        # d avant, comme le fait --regen dans start-direct.sh.
+        # d avant, comme le fait --regen dans start-native.sh.
         local sav="/etc/osmocom.$(date +%Y%m%d-%H%M%S)"
         cp -a /etc/osmocom "$sav" 2>/dev/null && inst_say "sauvegarde : $sav"
         cp -f "$INST_TREE"/configs/*.cfg /etc/osmocom/ 2>/dev/null

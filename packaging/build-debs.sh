@@ -12,7 +12,7 @@
 #      calypso-firmware  /opt/GSM/firmware/board/compal_e88/layer1.highram.*
 #
 #  Les chemins d installation sont CEUX du banc (/opt/GSM/...) : tout le depot
-#  les nomme en dur (bench.env, start-direct.sh, les unites systemd), et c est
+#  les nomme en dur (bench.env, start-native.sh, les unites systemd), et c est
 #  ce qui permet a une machine installee par paquets de tourner exactement
 #  comme l ISO. Le prix : un paquet refuse de s installer par-dessus un clone
 #  git au meme endroit (preinst) - on ne melange pas un arbre gere par git et
@@ -131,7 +131,8 @@ if wanted osmo-operator; then
         --exclude=.git --exclude=./pont --exclude=./packaging/dist \
         --exclude='__pycache__' --exclude='*.iso' --exclude='vty-debug-dump-*' \
         -cf - . | tar -C "$D" -xf -
-    ln -s /opt/GSM/osmo-operator/start-direct.sh "$P/usr/bin/osmo-start-direct"
+    ln -s /opt/GSM/osmo-operator/start-native.sh "$P/usr/bin/osmo-start-native"
+    ln -s /opt/GSM/osmo-operator/start-native.sh "$P/usr/bin/osmo-start-direct"   # ancien nom
     for e in osmo-launch osmo-multi; do
         install -m644 "$OSMO_OPERATOR_SRC/data/desktop/$e.desktop" "$P/usr/share/applications/$e.desktop"
         install -m644 "$OSMO_OPERATOR_SRC/data/$e.svg" "$P/usr/share/osmo-operator/icons/$e.svg"
@@ -159,7 +160,7 @@ Depends: bash, python3, socat, netcat-openbsd, tcpdump, tmux, expect, whiptail, 
 Recommends: pulseaudio, pulseaudio-utils, asterisk, wireshark
 Homepage: https://github.com/bbaranoff/osmo-operator
 Description: banc GSM/EGPRS Osmocom - lanceur, configurations, outils
- Le depot osmo-operator installe en /opt/GSM/osmo-operator : start-direct.sh
+ Le depot osmo-operator installe en /opt/GSM/osmo-operator : start-native.sh
  (lanceur natif, qui delegue a qosmo/run.sh), les gabarits de
  configuration Osmocom et Asterisk, les scripts reseau/WAN/SS7, les checks, le
  menu et les icones du bureau. Les demons Osmocom eux-memes (osmo-stp, hlr,
@@ -195,7 +196,7 @@ Description: pont TRX entre osmo-bts-trx et le Calypso emule (qosmo)
  Transceiver TRX-UDP en Python : se presente a osmo-bts-trx sur 5700-5702,
  decode le descendant vers GSMTAP 4730/4731 (lu par le modele QEMU) et encode
  le montant depuis les sidebands /dev/shm/calypso_*. Installe en
- /opt/GSM/osmo-operator/pont, la ou start-direct.sh l attend (PONT_PY).
+ /opt/GSM/osmo-operator/pont, la ou start-native.sh l attend (PONT_PY).
  Requiert libosmocoding (libosmocore) accessible par ld.so - fournie par la
  pile Osmocom, pas par un paquet Debian.
 CTL

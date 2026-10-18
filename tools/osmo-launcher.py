@@ -248,7 +248,7 @@ def catalogue():
     tmux = os.environ.get("TMUX_SESSION", "calypso")
     vty = os.environ.get("MS_VTY_PORT", "")
     if not vty:
-        try:                      # 4347 en --dsp : start-direct.sh publie le port
+        try:                      # 4347 en --dsp : start-native.sh publie le port
             vty = open("/run/osmo-banc/ms1-vty").read().strip() or "4247"
         except OSError:
             vty = "4247"

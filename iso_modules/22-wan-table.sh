@@ -64,7 +64,7 @@ done
 iso_arm_binfmt
 mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 
-echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start.sh) ══${NC}"
+echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start-docker.sh) ══${NC}"
 
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et

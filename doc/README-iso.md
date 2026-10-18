@@ -82,7 +82,7 @@ in any order. **Launch the smartphone last**, once both networks are up.
 From a terminal, the same 2G bench, on the Calypso DSP instead of gr-gsm:
 
 ```sh
-cd /opt/GSM/osmo-operator && sudo ./start-direct.sh --dsp
+cd /opt/GSM/osmo-operator && sudo ./start-native.sh --dsp
 ```
 
 `--menu` asks interactively (layer 1 `grgsm_exe` or `c54x_exe`). Check that

@@ -36,7 +36,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # wan_detect_local_ip vit ici : c'est la meme regle de choix d'adresse que celle
-# qu'appliquent start.sh et start-direct.sh. La dupliquer, c'est se garantir
+# qu'appliquent start-docker.sh et start-native.sh. La dupliquer, c'est se garantir
 # qu'un jour les deux ne designeront plus la meme carte.
 # shellcheck source=network/wan-nodes.sh
 . "$SCRIPT_DIR/wan-nodes.sh"
@@ -299,7 +299,7 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
 # TOUT traitement du bloc asp-to-inter. C etait vrai tant que "plan local"
 # voulait dire "machine isolee, aucun hub". Ce n est plus le cas : le banc
 # multi-operateur porte son inter-STP dans un CONTENEUR, sur la meme machine,
-# joignable en 127.0.0.1:2908 (port SCTP publie par start.sh). Le plan des
+# joignable en 127.0.0.1:2908 (port SCTP publie par start-docker.sh). Le plan des
 # point codes y est bien local - 1.<op>.<role> - ET il y a un hub.
 # Consequence du couplage : `--local --hub-ip 127.0.0.1` affichait
 # "plan LOCAL : cette machine ne peut pas partager un hub avec une autre" et

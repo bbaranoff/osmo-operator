@@ -22,7 +22,7 @@ OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
 # RUN_NO_PROCESS=1 : prepare/genere uniquement les configs (MS, TRX, handover)
 # et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
-# mobile/asterisk/smsc). Utilise par le mode QEMU de start.sh qui veut juste
+# mobile/asterisk/smsc). Utilise par le mode QEMU de start-docker.sh qui veut juste
 # les configs en place avant de lancer ${OQC_ROOT}/run.sh.
 RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
@@ -248,7 +248,7 @@ setup_pulse_sinks() {
 # ET en mode no-process (qemu) - c'est CE bridge qui manquait en qemu (run.sh
 # sortait avant [6c] → gsm_audio muet → "pas d'audio en qemu").
 #
-# Sortie : si le pulse de l'HOTE est joignable en TCP (relai ouvert par start.sh,
+# Sortie : si le pulse de l'HOTE est joignable en TCP (relai ouvert par start-docker.sh,
 # = WSLg→Windows en WSL, = pulse de session en Linux natif), on fait un pont
 # direct parec|paplay (1 seule horloge, pas de derive → pas de son "pete").
 # Sinon, fallback loopback local vers le sink par defaut du conteneur (carte).
@@ -265,7 +265,7 @@ audio_bridge() {
     fi
 
     # Sortie vers le pulse de l'hote si le relai TCP est ouvert (HOST_AUDIO_RELAY
-    # est positionne par start.sh quand le relai a ete active : tcp:<gw>:4713).
+    # est positionne par start-docker.sh quand le relai a ete active : tcp:<gw>:4713).
     local relay="${HOST_AUDIO_RELAY:-}"
     if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
         # ── UN SEUL PONT POUR TOUT LE BANC ──────────────────────────────
@@ -328,7 +328,7 @@ audio_bridge() {
 # ══════════════════════════════════════════════════════════════════════════════
 
 # RUN_NO_PROCESS=1 : on prepare tmux + configs + core Osmocom (osmo-start :
-# STP/HLR/MGW/MSC/BSC... → le HLR est up et peut etre alimente par start.sh),
+# STP/HLR/MGW/MSC/BSC... → le HLR est up et peut etre alimente par start-docker.sh),
 # mais on NE lance PAS les process radio/mobile/asterisk/smsc dans le tmux.
 [ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lances ===${NC}"
 
@@ -368,7 +368,7 @@ echo ""
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
-# Mode no-process : le core tourne (HLR alimentable par start.sh), on
+# Mode no-process : le core tourne (HLR alimentable par start-docker.sh), on
 # s'arrete ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
 # configure tout de meme PulseAudio (sink gsm_audio) car le pipeline lance
 # ensuite (ex. ${OQC_ROOT}/run.sh) en a besoin pour l'audio gapk.

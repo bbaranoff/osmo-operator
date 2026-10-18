@@ -1,4 +1,4 @@
-# op.txt - noms d'operateur, un par ligne. start.sh en tire un au hasard par
+# op.txt - noms d'operateur, un par ligne. start-docker.sh en tire un au hasard par
 # operateur au lancement.
 # PAS D'ESPACE dans un nom : la commande VTY "short name" d'osmo-msc prend UN
 # mot, et un nom coupe en deux y passe pour un argument surnumeraire - osmo-msc

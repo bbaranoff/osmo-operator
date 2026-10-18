@@ -195,7 +195,7 @@ if [ "$ISO_ALL" = "1" ] || { [ "${ISO_ARCH:-amd64}" = "amd64" ] && [ "$ISO_ROLE_
     echo -e "${CYAN}${BOLD}══ Construction des ${_N} images ══${NC}"
     echo -e "  1. ${CYAN}interstp.iso${NC}               le hub SS7 (PC 0.0.0)"
     echo -e "  2. ${CYAN}osmo-operator.iso${NC}          un noeud - son numero se choisit au demarrage :"
-    echo -e "     ${CYAN}./start-direct.sh --node N${NC}   (N de 1 a 9)"
+    echo -e "     ${CYAN}./start-native.sh --node N${NC}   (N de 1 a 9)"
     echo -e "  3. ${CYAN}osmo-operator-lite.iso${NC}     le meme noeud, sans les ateliers de compilation"
     echo -e "  4. ${CYAN}osmo-operator-desktop.iso${NC}  le meme noeud, avec GNOME, wireshark et linphone"
     echo ""

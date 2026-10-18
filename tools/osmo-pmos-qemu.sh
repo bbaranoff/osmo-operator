@@ -24,7 +24,7 @@
 # QEMU ne fait qu ECOUTER sur le port du modem : c est osmo-phonesim-banc.py
 # qui vient s y brancher, et seulement une fois le firmware passe - sinon il
 # n amorce pas. C est le role d osmo-pmos-setup, a relancer apres chaque
-# redemarrage du banc : start-direct.sh tue le modem de la VM au passage.
+# redemarrage du banc : start-native.sh tue le modem de la VM au passage.
 #
 # L affichage reste SDL, mais celui que pmbootstrap monte : virtio-vga-gl et
 # « sdl,gl=on ». Ce n est pas SDL qui donnait les paves, c est le virtio-vga

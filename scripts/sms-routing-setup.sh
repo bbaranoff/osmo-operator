@@ -1,7 +1,7 @@
 #!/bin/bash
 # sms-routing-setup.sh - Gestion complete du routage SMS inter-operateur
 #
-# Fonctions exportables appelees depuis start.sh :
+# Fonctions exportables appelees depuis start-docker.sh :
 #   sms_routing_generate  <op_id> <n_ops> <destdir> [op1_nms op2_nms ...]
 #   sms_routing_validate  <conf_file>
 #   sms_routing_summary   <n_ops>         [op1_nms op2_nms ...]
@@ -190,7 +190,7 @@ ROUTES_FOOTER
 # sms_routing_generate_all
 #
 # Genere les configs pour TOUS les operateurs en une seule passe.
-# Appele depuis start.sh en mode bridge.
+# Appele depuis start-docker.sh en mode bridge.
 #
 # Usage :
 #   sms_routing_generate_all <n_ops> <destdir> [ms_counts...]
@@ -439,7 +439,7 @@ sms_routing_summary() {
 # sms_routing_mount_args
 #
 # Retourne les arguments -v Docker pour monter la config SMS du bon operateur.
-# Utilise dans start_operator() de start.sh.
+# Utilise dans start_operator() de start-docker.sh.
 #
 # Usage :
 #   vol_args+=$(sms_routing_mount_args <op_id> <destdir>)

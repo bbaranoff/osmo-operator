@@ -214,7 +214,7 @@ echo
 say "Fait. Relance le relais SMS pour qu'il prenne la liaison :"
 echo "     - natif  : sudo systemctl restart osmo-smsc  (ou scripts/smsc-start.sh)"
 echo "     - docker : sudo docker restart \$(docker ps --format '{{.Names}}' | grep osmo-operator-)"
-echo "   ou simplement : ./start-direct.sh --wan --payload-ism (il fait tout)."
+echo "   ou simplement : ./start-native.sh --wan --payload-ism (il fait tout)."
 if [ "$LINK" = exec ]; then
     warn "backend exec : remplis /opt/GSM/ism/ism_tx.sh et ism_rx.sh (ta radio)."
 fi

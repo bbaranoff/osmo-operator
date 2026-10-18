@@ -7,7 +7,7 @@ it to get work done. To study the real DSP instead, see [README-dsp](README-dsp.
 ← [README](../README.md) · Details: [wiki/Installer-grgsm_exe](../wiki/Installer-grgsm_exe.md), [wiki/Installer-qosmo](../wiki/Installer-qosmo.md), [wiki/Lancer-a-la-main](../wiki/Lancer-a-la-main.md), [`pont/README.md`](../pont/README.md)
 
 ```bash
-./start-direct.sh --grgsm
+./start-native.sh --grgsm
 ```
 
 ## The two layer-1 chains
@@ -79,8 +79,8 @@ header, C0 filling, an inert `CALYPSO_CANNED`) *all* show up as "the bridge
 has CRC errors".
 
 ```bash
-./start-direct.sh --check-paths     # verify the declared dependencies
-./start-direct.sh --verbose         # show the modules' output
+./start-native.sh --check-paths     # verify the declared dependencies
+./start-native.sh --verbose         # show the modules' output
 ```
 
 | log | contents |
@@ -95,7 +95,7 @@ has CRC errors".
 | `FBSB result=255` (no cell) | layer 1 does not detect the FB | `grep "IMR change" /var/log/osmocom/qemu.log \| wc -l` |
 | `osmo-bts-trx: PC clock skew too high` | the bridge stopped sending `IND CLOCK` | restart the bridge |
 | `/tmp/osmocom_l2` never created | the firmware does not boot | `head -50 /var/log/osmocom/qemu.log` |
-| *Address already in use* on 5700 | two bridges: a `--dsp` run left one behind | `./start-direct.sh --stop` |
+| *Address already in use* on 5700 | two bridges: a `--dsp` run left one behind | `./start-native.sh --stop` |
 
 QEMU monitor: `socat - unix-connect:/tmp/qemu-calypso-mon.sock`.
 `--assembly-logs` gives an instruction trace of the emulated ARM

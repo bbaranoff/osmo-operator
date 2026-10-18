@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# start-direct.sh - Prepare l'environnement Calypso puis lance run.sh
+# start-native.sh - Prepare l'environnement Calypso puis lance run.sh
 # =============================================================================
 #
 # Ce script ne demarre aucun demon.
@@ -16,7 +16,7 @@
 # Toute la logique GSM vit ensuite dans run.sh (et run_modules/).
 #
 # CHAINE DE CONFIGURATION - NE PAS LA CASSER
-#     VAR=x ./start-direct.sh   ← la ligne de commande gagne toujours
+#     VAR=x ./start-native.sh   ← la ligne de commande gagne toujours
 #       -> environment/load.env
 #          -> paths / modes / domaines
 #     puis exec run.sh avec le profil choisi.
@@ -34,7 +34,7 @@ set -uo pipefail
 # moitie construit - /opt/GSM/qosmo n'y existe pas, mais /tmp/osmo-nitb/logs,
 # lui, se cree tout seul - et meurt sur un "run.sh introuvable" qui ne designe
 # pas la vraie cause. Si ce symptome reapparait sur une machine avec Docker,
-# c'est ca : la-bas le lanceur est ./start.sh (ou ./start-nitb.sh), pas celui-ci.
+# c'est ca : la-bas le lanceur est ./launch/start-docker.sh (ou ./launch/start-nitb.sh), pas celui-ci.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
@@ -70,6 +70,10 @@ PROFILE_CHOISI=0
 # WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
 # pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
 WAN_MESH=0
+# Ce que la table retiendra (WAN_AUTO_SAVE, network/wan-nodes.sh) : 1 seulement
+# si c'est WAN_AUTO=1 qui monte le WAN ; un --wan sur la ligne vaut pour CE
+# lancement et laisse WAN_AUTO=0, pour que le suivant demarre sans WAN.
+WAN_AUTO_KEEP=0
 # Inter-STP (hub SS7) lance en standalone a cote du WAN : auto = seulement si le
 # hub n'existe pas encore sur le reseau (ni adresse locale, ni reponse ping).
 # --interstp force, --no-interstp passe. Un seul hub pour tout le WAN : sur le
@@ -109,12 +113,12 @@ MENU_MODE=0
 # demande : c est le banc qu on veut voir au premier clic, en service comme en
 # terminal, en standalone comme sous osmo-multi (qui lance le natif par
 # osmo-banc.service, donc par ce defaut). --grgsm remet la couche 1 gr-gsm.
-# L environnement gagne (DSP_MODE=0 ./start-direct.sh), comme pour le reste.
+# L environnement gagne (DSP_MODE=0 ./start-native.sh), comme pour le reste.
 # Si c54x_exe n est pas la, le banc retombe sur gr-gsm et le dit (plus bas).
 : "${DSP_MODE:=1}"
 usage() {
     cat <<'USAGE'
-Usage : ./start-direct.sh [options] [mode]
+Usage : ./start-native.sh [options] [mode]
   Modes (profils) :
     faketrx-qemu   coeur + BTS#0 QEMU + BTS#1 faketrx (defaut)
     faketrx        coeur + fake_trx + trxcon + mobile
@@ -230,7 +234,7 @@ Usage : ./start-direct.sh [options] [mode]
   1 faketrx + 1 QEMU Calypso), qui est deja le defaut de ce script.
   Composer <indicatif><numero> joint ce numero sur le noeud correspondant.
 Toute variable CALYPSO_* passee en prefixe est transmise a run.sh / QEMU :
-  CALYPSO_LANG=en ./start-direct.sh       CALYPSO_NO_ATTACH=1 ./start-direct.sh
+  CALYPSO_LANG=en ./start-native.sh       CALYPSO_NO_ATTACH=1 ./start-native.sh
 USAGE
 }
 while [ $# -gt 0 ]; do
@@ -337,7 +341,7 @@ done
 
 # Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
 # MODEM_GPRS dans l'environnement de run.sh : exporte ici, 0 (sans data) par
-# defaut, 1 avec --gprs-modem. L'environnement gagne (MODEM_GPRS=1 ./start-direct.sh).
+# defaut, 1 avec --gprs-modem. L'environnement gagne (MODEM_GPRS=1 ./start-native.sh).
 export MODEM_GPRS="${MODEM_GPRS:-0}"
 
 # --- --dsp garde le profil par defaut ----------------------------------------
@@ -391,7 +395,7 @@ RUNTIME_ENV="${RUNTIME_ENV:-$(detect_runtime_env)}"
 #
 # Ordre, du plus explicite au plus deduit. Le premier qui repond gagne :
 #   1. --node passe en ligne de commande
-#   2. l'environnement - c'est ainsi que start.sh le transmet au conteneur
+#   2. l'environnement - c'est ainsi que start-docker.sh le transmet au conteneur
 #   3. /etc/osmo-role, fige dans l'image par build-iso.sh --node N
 #   4. la table WAN : l'adresse de ce noeud y figure, et nous l'avons
 #   5. rien - on ne touche alors PAS a l'identite SS7, plutot que d'en inventer une
@@ -438,7 +442,7 @@ else
     [ -n "$NODE_ID" ] && NODE_ID_SRC="${_detected#*|}"
     unset _detected
 fi
-# L'adresse du hub arrive par le MEME chemin que le noeud : start.sh la pose
+# L'adresse du hub arrive par le MEME chemin que le noeud : start-docker.sh la pose
 # dans l'environnement du conteneur (OSMO_HUB_IP, et INTER_STP_IP pour les
 # scripts plus anciens). Sans ce repli, HUB_IP restait vide alors que la
 # reponse etait deja la : un conteneur lance par docker exec -d n'a pas de
@@ -467,6 +471,11 @@ if [ -z "$HUB_IP" ] && [ -r "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" ]; then
     HUB_IP="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{a=1; next}
                    a && /^[[:space:]]*remote-ip[[:space:]]/{print $2; exit}' \
               "${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg" 2>/dev/null)"
+    # [2026-10-18] Une config jamais regeneree (installation fraiche : gabarit
+    # copie tel quel) porte le MARQUEUR __INTER_STP_IP__, pas une adresse. Le
+    # prendre pour le hub le passait a set-node-id.sh --hub-ip, qui le refusait,
+    # et --regen echouait des le premier lancement. Seule une IPv4 compte.
+    [[ "$HUB_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || HUB_IP=""
     [ -n "$HUB_IP" ] && echo "  hub        deduit du remote-ip de l ASP : $HUB_IP" >&2
 fi
 # Pour les scripts qui ne connaissent que deux mondes : docker, ou tout le reste.
@@ -531,14 +540,14 @@ banner() {
 # --- 1. configuration ---------------------------------------------------------
 # [2026-08-03] globals.conf - les reglages reseau (MCC/MNC/ARFCN/KI/IMSI/A5...).
 # Genere par ./generate_configs.sh cote hote ; ici on se contente de le lire.
-# [2026-09-22] « ARFCN=520 ./start-direct.sh surcharge sans toucher au
+# [2026-09-22] « ARFCN=520 ./start-native.sh surcharge sans toucher au
 # fichier » : c'etait ecrit ici, et c'etait FAUX. globals.conf n'utilise pas
 # l'idiome ":=" mais l'affectation simple (`ENCRYPTION="a5 1"`), et il est
 # source avec `set -a` : il ECRASE l'environnement. Son propre en-tete
 # l'annonce d'ailleurs (« il est lu en dernier, les 26 reglages ci-dessous
 # ecrasent leur homonyme dans l'environnement »), en contradiction avec ce
 # commentaire-ci. Constate sur le banc :
-#     ENCRYPTION="a5 0" ./start-direct.sh --dsp   ->   chiffrement a5 1
+#     ENCRYPTION="a5 0" ./start-native.sh --dsp   ->   chiffrement a5 1
 # Deux contrats opposes dans le meme depot, et c'est le silencieux qui gagnait.
 #
 # On tranche du cote de la ligne de commande, qui est la regle partout ailleurs
@@ -590,9 +599,9 @@ fi
 # le defilement tmux en depend - cf. environment/paths.env.
 : "${LOG_DIR:=$RUN_DIR/logs}"
 # A5/1 par defaut : c'est le chiffrement que la maquette valide de bout en bout
-# (Calypso ↔ BTS), et ce que start.sh impose deja dans son hand-off vers ce
+# (Calypso ↔ BTS), et ce que start-docker.sh impose deja dans son hand-off vers ce
 # script. Un defaut a "a5 0" faisait diverger le lancement direct du lancement
-# par start.sh - meme stack, deux chiffrements, selon la porte d'entree.
+# par start-docker.sh - meme stack, deux chiffrements, selon la porte d'entree.
 #
 # ATTENTION : globals.conf est lu AVANT et fait autorite sur cette variable (son
 # en-tete le dit). Ce ":=" n'est donc qu'un repli quand globals.conf est absent
@@ -603,7 +612,7 @@ fi
 # a osmo-bts-trx en TRX-UDP, decode le DL vers GSMTAP 4730/4731 et encode l'UL.
 # CALYPSO_BRIDGE n'est pas declare dans globals.conf (les CALYPSO_* "passent au
 # travers, intact" d'apres son en-tete) : l'environnement gagne donc vraiment.
-#   CALYPSO_BRIDGE=none ./start-direct.sh   -> pas de pont (QEMU + BTS seuls)
+#   CALYPSO_BRIDGE=none ./start-native.sh   -> pas de pont (QEMU + BTS seuls)
 #
 # [2026-09-22] DEUX CHAINES, SELECTIONNEES PAR --dsp / --grgsm. [2026-10-01]
 # LE DEFAUT EST LE DSP (DSP_MODE=1 en tete de fichier). gr-gsm (qosmo +
@@ -694,14 +703,14 @@ RUN_ROOT="$(dirname "$RUN_SH")"
 # Le coeur reseau, la BTS et le side-car restent montes par le plan du fork ;
 # ce banc-ci n'assure que la chaine Calypso (ses cinq etapes).
 # [2026-09-22] L'ARRET NE DEMANDE PAS --dsp.
-# `./start-direct.sh --stop` sans --dsp laissait c54x_exe, QEMU, osmocon, le
+# `./start-native.sh --stop` sans --dsp laissait c54x_exe, QEMU, osmocon, le
 # mobile et pont.py debout : DSP_BANC vaut 0 quand --dsp n'est pas retape, et
 # la pile paraissait arretee alors que cinq processus tenaient encore les ports
 # 5700-5702 et /tmp/calypso_dsp.sock -- de quoi faire echouer le demarrage
 # suivant sur un etat qu'on croit propre. On arrete donc le banc des qu'il
 # existe ; son --stop ne fait rien de mal quand il ne tourne pas.
 #
-# ⚠️ MODE=dsp EXPLICITE A CHAQUE APPEL. start-direct exporte son propre MODE
+# ⚠️ MODE=dsp EXPLICITE A CHAQUE APPEL. start-native exporte son propre MODE
 # (le profil : « faketrx-qemu »), et c54x_exe/run.sh lit la MEME variable pour
 # choisir dsp|grgsm. Sans cela il sort sur
 #     [run] ECHEC : MODE=faketrx-qemu inconnu (dsp|grgsm)
@@ -763,7 +772,7 @@ fi
 # Valider tout sans rien toucher donne donc exactement le lancement par defaut.
 #
 # Il s'efface de lui-meme quand personne ne peut repondre (pas de terminal,
-# --dry-run, NO_MENU=1 que start.sh pose devant un conteneur) : une question
+# --dry-run, NO_MENU=1 que start-docker.sh pose devant un conteneur) : une question
 # sans lecteur, c'est un lancement qui se fige sans le dire.
 menu_interactif() {
     [ "${MENU_MODE:-0}" -eq 1 ] || return 0
@@ -906,7 +915,7 @@ esac
 export CALYPSO_PROFILE MODE
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
-# RAND passe en prefixe (ex. `RAND=0 ./start-direct.sh`) force le defi
+# RAND passe en prefixe (ex. `RAND=0 ./start-native.sh`) force le defi
 # d'authentification, via le gate getenv("RAND") des patchs osmo-hlr + osmo-msc.
 # Le RAND doit atteindre LES DEUX process : osmo-hlr le tire dans le vecteur
 # (SRES/Kc calcules sur RAND=0 -> LU acceptee) et osmo-msc l'envoie. RAND pose
@@ -972,7 +981,7 @@ export LOG_DIR RUN_DIR
 # FIRMWARE_ELF / FIRMWARE_BIN dans l environnement. FIRMWARE_SRC est le nom
 # que les scripts de packaging emploient (build-debs.sh, 71-debs-banc.sh) ;
 # on l accepte ici aussi pour qu un appel
-#     FIRMWARE_SRC=/chemin/layer1.xxx.elf ./start-direct.sh
+#     FIRMWARE_SRC=/chemin/layer1.xxx.elf ./start-native.sh
 # charge ce firmware-la dans QEMU. Un fichier = l ELF lui-meme ; un dossier =
 # l arborescence firmware/ (FIRMWARE_DIR, board/<carte>/ en dessous).
 # FIRMWARE_ELF explicite garde la main.
@@ -1079,7 +1088,7 @@ generate_mobile_cfg() {
         # Template minimal de secours
         cat > "$dest" <<EOF
 !
-! mobile.cfg genere par start-direct.sh (secours)
+! mobile.cfg genere par start-native.sh (secours)
 !
 log stderr
  logging color 1
@@ -1187,7 +1196,7 @@ _ms_cfg_garantir_tch() {
 # MCC, le mobile presentait donc l'IMSI d'un abonne d'un autre pays : ni le MSC
 # ni le HLR n'ont de fiche a ce numero, le Location Updating reste sans reponse,
 # et l'on cherche la panne dans la BTS alors que la pile entiere est debout.
-# Le plan est celui de start.sh (section "HLR subscribers") :
+# Le plan est celui de start-docker.sh (section "HLR subscribers") :
 #     IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6 chiffres>
 #     Ki   = 00112233445566778899aabbccdd <index du MS> <operateur>
 # MCC et MNC sont relus dans la configuration REELLEMENT deployee - c'est elle
@@ -1212,6 +1221,13 @@ MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /et
 #
 # Le plan reel, verifie dans /var/tmp/osmo-annuaire.csv :
 #   op 1 -> 001|01   op 2 -> 001|02   op 3 -> 001|03
+# [2026-10-18] Au premier lancement d'une installation fraiche, osmo-bsc.cfg est
+# encore le gabarit : on y lit les MARQUEURS __MCC__ / __MNC__, que la suite
+# ecrivait tels quels dans les mobile_*.cfg (« imsi __MCC____MNC__0001000002 »,
+# refuse par mobile : MS#2 ne demarrait pas) et exportait a run.sh. Seuls des
+# chiffres comptent ; sinon, le repli ci-dessous.
+[[ "$MS_MCC" =~ ^[0-9]{3}$ ]] || MS_MCC=""
+[[ "$MS_MNC" =~ ^[0-9]{2,3}$ ]] || MS_MNC=""
 [ -n "$MS_MCC" ] || MS_MCC="001"
 [ -n "$MS_MNC" ] || MS_MNC="$(printf '%02d' "$MS_OP_ID")"
 ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
@@ -1226,7 +1242,7 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 # RETIENT ce numero et empeche le bon abonne de le recuperer.
 #
 # Il honore MCC et MNC depuis l'environnement. En les posant, son IMSI devient
-# exactement celui que start.sh a deja provisionne - et son propre controle
+# exactement celui que start-docker.sh a deja provisionne - et son propre controle
 # d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
 # On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo.
 export MCC="${MCC:-$MS_MCC}"
@@ -1257,6 +1273,8 @@ fi
 # par OML, donc c'est la qu'est la verite.
 MS_ARFCN1="${PLAN_ARFCN:-}"
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1="$(awk '/^ bts 0$/{b=1} b && /^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
+# Meme garde que pour MCC/MNC : un gabarit pas encore regenere donne __ARFCN__.
+[[ "$MS_ARFCN1" =~ ^[0-9]+$ ]] || MS_ARFCN1=""
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1=$(( 512 + MS_OP_ID * 2 ))
 
 # MS#2 suit le side-car. Celui-la, c'est NOUS qui le decidons : le module
@@ -1455,7 +1473,7 @@ if [ "${CALYPSO_BRIDGE:-}" = pont ]; then
         # LOG HORS LOG_DIR : run.sh archive/efface LOG_DIR pendant son teardown ;
         # un pont.log ouvert avant se retrouve sur un inode SUPPRIME (sortie
         # invisible, "(deleted)" dans /proc/<pid>/fd/1). /dev/shm survit.
-        # setsid : le pont doit survivre a la fin du shell de start-direct.
+        # setsid : le pont doit survivre a la fin du shell de start-native.
         # [2026-08-16] LE `sleep 25` ETAIT UNE COURSE, PAS UNE BARRIERE.
         # 25 s etait un pari sur la duree du teardown de run.sh. Des que
         # celui-ci archive de gros journaux (mesure : 62 Mo -> ~40 s), le pont
@@ -1663,7 +1681,12 @@ case "$ACTION" in
             printf '  %sbanc DSP%s   %s retire du plan : %s ; %s les reprend (5 etapes)\n' \
                 "$C_DIM" "$C_Z" "$RUN_SH" "$DSP_MODULES_RETIRES" "$BANC_DSP"
         fi
-        exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${RUN_ARGS[@]}"
+        # [2026-10-18] Sans --restart : run.sh garde la DERNIERE action lue, et
+        # RUN_ARGS finit par --restart. `--list` arretait donc la pile en cours
+        # et la relancait au lieu d'afficher le plan.
+        _list_args=()
+        for _a in "${RUN_ARGS[@]}"; do [ "$_a" = "--restart" ] || _list_args+=("$_a"); done
+        exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${_list_args[@]}"
         ;;
     genconf)
         # ── LA FICHE DU NOEUD, SANS LANCER ──────────────────────────────
@@ -1682,7 +1705,7 @@ case "$ACTION" in
         _gc_out="${GEN_CONF_OUT:-$(node_conf_path "$_gc_node")}"
         if node_conf_write "$_gc_out" "$_gc_node" "${NODE_OP:-1}" "$_gc_hub"; then
             say_end " OK " "$C_OK" "Fiche du noeud $_gc_node" "$_gc_out"
-            printf '  %ssur un autre noeud :%s  ./start-direct.sh --wan %s\n' "${C_DIM:-}" "${C_Z:-}" "$(basename "$_gc_out")"
+            printf '  %ssur un autre noeud :%s  ./start-native.sh --wan %s\n' "${C_DIM:-}" "${C_Z:-}" "$(basename "$_gc_out")"
             exit 0
         fi
         say_end " KO " "$C_KO" "Fiche du noeud" "ecriture impossible : $_gc_out"; exit 1
@@ -1756,7 +1779,7 @@ esac
 # --- 7bis-menu. Ce qui manque, demande UNE fois, avec le cache en defaut ------
 # Les trois valeurs qui decident de l'identite SS7 - numero de noeud, operateur,
 # adresse du hub - se deduisent la plupart du temps : environnement transmis par
-# start.sh, /etc/osmo-role fige dans l'image, table WAN. Quand la deduction ne
+# start-docker.sh, /etc/osmo-role fige dans l'image, table WAN. Quand la deduction ne
 # donne rien, la pile demarrait quand meme et gardait les point codes du
 # gabarit : 1.1.2 partout, ASP vers 127.0.0.1, interco morte sans un mot.
 #
@@ -1764,11 +1787,11 @@ esac
 # cache sait deja. Sans terminal, rien n'est demande : les defauts s'appliquent,
 # une ISO qui demarre seule ne peut pas rester bloquee sur une question.
 ask_node_identity() {
-    # NO_MENU=1 est ce que start.sh pose devant le lanceur quand les choix ont
+    # NO_MENU=1 est ce que start-docker.sh pose devant le lanceur quand les choix ont
     # deja ete faits sur l'hote. Aujourd'hui la garde tty juste en dessous
-    # suffit (start.sh lance par docker exec -d, sans terminal) : ce test ne
+    # suffit (start-docker.sh lance par docker exec -d, sans terminal) : ce test ne
     # repare donc aucune panne observable, il aligne l'identite SS7 sur la
-    # meme convention que les menus de pile de start.sh, pour le jour ou le
+    # meme convention que les menus de pile de start-docker.sh, pour le jour ou le
     # lanceur automatique aura un terminal.
     [ "${NO_MENU:-0}" = "1" ] && return 0
     [ -t 0 ] || return 0
@@ -1777,12 +1800,12 @@ ask_node_identity() {
     local cached_node cached_src cached_hub
     IFS='|' read -r cached_node cached_src <<< "$(detect_node_id)"
 
-    # L'ENVIRONNEMENT NE SE DEMANDE PAS. C'est ainsi que start.sh transmet le
+    # L'ENVIRONNEMENT NE SE DEMANDE PAS. C'est ainsi que start-docker.sh transmet le
     # noeud a un conteneur : la reponse est deja connue, et la question n'a pas
     # de sens - pire, dans un conteneur ou personne ne lit le terminal, elle
     # repart vide. L'identite n'etait alors PAS appliquee, la pile regenerait
     # ses configs par defaut (point-code 1.1.2, ASP vers le hub docker, en
-    # shutdown) et ecrasait celle que start.sh venait d'ecrire. Le fichier
+    # shutdown) et ecrasait celle que start-docker.sh venait d'ecrire. Le fichier
     # portait les bonnes valeurs juste avant, les mauvaises juste apres.
     # Le rattrapage qui se trouvait ici ne servait plus a rien : il exigeait un
     # NODE_ID vide, alors que la resolution du noeud, bien plus haut, l'a deja
@@ -1825,7 +1848,7 @@ ask_node_identity
 # un octet de /etc/osmocom ne changeait. Le seul effet reel de l'option etait
 # d'arreter le banc.
 #
-# CE QU'IL FAIT MAINTENANT : la meme chose que start.sh cote docker, et que
+# CE QU'IL FAIT MAINTENANT : la meme chose que start-docker.sh cote docker, et que
 # build-iso.sh a la construction - c'est-a-dire la sequence complete :
 #
 #   1. apply_config_templates      substitue configs/*.cfg et *.conf dans un
@@ -1985,7 +2008,7 @@ regen_configs_natif() {
 }
 
 # ── Les gabarits : conserves, sauf --regen ──────────────────────────────────
-# Par defaut on ne touche a rien : dans un conteneur, ce que start.sh vient
+# Par defaut on ne touche a rien : dans un conteneur, ce que start-docker.sh vient
 # d'ecrire - point codes du noeud, inter-STP, ASP actif - ne doit pas etre
 # remplace par les valeurs des gabarits, sans quoi l'identite SS7 est juste
 # puis fausse 80 secondes plus tard, sans que rien ne l'annonce.
@@ -2082,7 +2105,7 @@ if [ "${REGEN_GABARITS:-0}" -eq 1 ]; then
     export OSMO_WAN_NODE="$NODE_ID"
     [ -n "$HUB_IP" ] && export OSMO_HUB_IP="$HUB_IP"
 elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then
-    # DANS UN CONTENEUR seulement. Les configs y sont deja ecrites par start.sh,
+    # DANS UN CONTENEUR seulement. Les configs y sont deja ecrites par start-docker.sh,
     # avec l'identite du noeud : les regenerer les remplace par les valeurs des
     # gabarits, et l'interco meurt.
     export OSMO_NO_REGEN=1
@@ -2103,7 +2126,7 @@ fi
 # AVANT le WAN et avant run.sh : les point codes sont lus par osmo-stp, osmo-msc
 # et osmo-bsc a leur demarrage. Les changer apres ne servirait a rien.
 #
-# UNE SEULE SOURCE DE VERITE. start.sh calcule deja l'identite d'un conteneur et
+# UNE SEULE SOURCE DE VERITE. start-docker.sh calcule deja l'identite d'un conteneur et
 # la lui passe par l'environnement ; la recalculer ici en donnerait deux, et
 # c'est la mauvaise qui gagnait. On reprend donc la sienne quand elle existe.
 if [ -z "$NODE_ID" ] && [ -n "${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}" ]; then
@@ -2196,6 +2219,7 @@ if [ -r "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" ] && [ "$WAN_MESH" -eq 0 ]; then
     # "ce systeme EST un noeud", on n'oblige pas a retaper l'option.
     if grep -q '^WAN_AUTO=1' "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" 2>/dev/null; then
         WAN_MESH=1
+        WAN_AUTO_KEEP=1
         printf '  %sWAN%s        table figee dans %s (WAN_AUTO=1)\n' \
             "$C_DIM" "$C_Z" "${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
     fi
@@ -2246,7 +2270,7 @@ fi
 # [2026-10-15, revue] --interstp ne vaut que dans le WAN : sans --wan, il
 # etait ignore sans un mot.
 if [ "$INTERSTP" = "1" ] && [ "$WAN_MESH" -ne 1 ] && [ "$ACTION" = "start" ]; then
-    printf '  %s!%s --interstp sans --wan : pas de WAN, pas de hub lance (./start-direct.sh --wan --interstp)\n' "${C_KO:-}" "${C_Z:-}" >&2
+    printf '  %s!%s --interstp sans --wan : pas de WAN, pas de hub lance (./start-native.sh --wan --interstp)\n' "${C_KO:-}" "${C_Z:-}" >&2
 fi
 if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     WAN_LIB="$HERE/network/wan-nodes.sh"
@@ -2257,6 +2281,7 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     fi
     # shellcheck source=network/wan-nodes.sh
     . "$WAN_LIB"
+    export WAN_AUTO_SAVE="$WAN_AUTO_KEEP"
     # --regen-conf : on repart de zero. La table en place est mise de cote
     # (jamais perdue en silence) puis effacee, AVANT le moindre wan_nodes_load :
     # la suite du bloc la reconstruit depuis --wan-nodes, les fiches ou la
@@ -2345,7 +2370,7 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     else
         say_begin "WAN - application de la table"
         # --native / --docker : meme distinction que pour les point codes.
-        if WAN_AUTO=1 bash "$WAN_MESH_SH" "--$NODE_MODE" --id "$WAN_NODE_ID" \
+        if bash "$WAN_MESH_SH" "--$NODE_MODE" --id "$WAN_NODE_ID" \
                 --nodes "$(wan_nodes_spec)" --ops 1 \
                 --config "${WAN_CONF_FILE:-/etc/osmo-wan.conf}" > "${LOG_DIR:-/tmp}/wan-mesh.log" 2>&1; then
             say_end " OK " "$C_OK" "WAN - noeud $WAN_NODE_ID, indicatif $(wan_local_ind)"
@@ -2367,7 +2392,7 @@ if [ "$WAN_MESH" -eq 1 ] && [ "$ACTION" = "start" ]; then
     #   --no-interstp    jamais.
     # « Present » se lit sur le port M3UA (SCTP 2908), pas au ping : un hote
     # quelconque a cette adresse, ou un hub arrete, repondaient au ping.
-    INTERSTP_SH="$HERE/start-interstp.sh"
+    INTERSTP_SH="$HERE/launch/start-interstp.sh"
     if [ -z "${HUB_IP:-}" ]; then
         HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
         # Le defaut LAN ne vaut que pour un noeud natif ; en conteneur le hub est
@@ -2465,25 +2490,40 @@ fi
 # (remote-ip de asp-to-inter) est portee par CETTE machine et que rien n'y
 # repond en M3UA (SCTP 2908), on le lance ici, avant run.sh : l'ASP du STP
 # s'y attache des son demarrage. Noeud et operateur viennent de la
-# routing-key de as-inter (rctx = noeud*1000 + op*100 + 50). Un hub distant ou
-# deja en service n'est jamais touche ; --no-interstp coupe, --no-save garde
+# routing-key de as-inter (rctx = noeud*1000 + op*100 + 50). Un hub distant n'est
+# jamais touche ; un hub local deja en service ne l'est que s'il porte encore
+# les noeuds d'un WAN precedent (voir plus bas) ; --no-interstp coupe, --no-save garde
 # la table WAN. Meme logique que tests/modules/33-ss7.sh.
 if [ "$ACTION" = "start" ] && [ "$WAN_MESH" -ne 1 ] && [ "$INTERSTP" != "0" ]; then
     _stp_cfg="${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp.cfg"
     _hub="$(awk '/^ *asp asp-to-inter /{f=1;next} f&&/^ *remote-ip /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
     _rctx="$(awk '/^ *as as-inter /{f=1;next} f&&/^ *routing-key /{print $2; exit} f&&/^ (asp|as) /{exit}' "$_stp_cfg" 2>/dev/null)"
-    if [ -n "$_hub" ] && [[ "$_rctx" =~ ^[0-9]+$ ]] && [ -r "$HERE/start-interstp.sh" ] \
+    if [ -n "$_hub" ] && [[ "$_rctx" =~ ^[0-9]+$ ]] && [ -r "$HERE/launch/start-interstp.sh" ] \
        && ip -4 -o addr show 2>/dev/null | awk '{split($4,a,"/"); print a[1]}' | grep -qxF "$_hub"; then
         _noeud=$(( _rctx / 1000 )); _op=$(( (_rctx / 100) % 10 ))
+        # [2026-10-18] Un hub DEJA en service n'etait jamais touche - y compris
+        # quand il tournait encore avec la table d'un WAN precedent : il declarait
+        # les AS des autres noeuds (as-n2op1, rctx 2150...), sans ASP puisque ces
+        # noeuds ne s'y attachent plus, et les annoncait PROHIB a notre STP
+        # (route « 1.21.2 ... PROHIB dyn », global_check en echec). Vider les
+        # tables du STP n'y peut rien : la route est dynamique, le hub la
+        # re-annonce. Hors WAN, un hub local qui porte d'autres routing-keys que
+        # la notre est donc relance avec notre seul noeud.
+        _hub_cfg="${OSMOCOM_CFG:-/etc/osmocom}/osmo-stp-interop.cfg"
+        _hub_autres="$(awk -v k="$_rctx" '/^ *routing-key /{ if ($2 != k) print $2 }' "$_hub_cfg" 2>/dev/null | tr '\n' ' ')"
         if python3 -c 'import socket,sys
 s=socket.socket(socket.AF_INET,socket.SOCK_STREAM,132); s.settimeout(2)
-s.connect((sys.argv[1],2908))' "$_hub" 2>/dev/null; then
+s.connect((sys.argv[1],2908))' "$_hub" 2>/dev/null && [ -z "${_hub_autres// }" ]; then
             say_end " -- " "$C_DIM" "Hub SS7 local" "$_hub:2908 deja en service"
         elif [ "$DRY" -eq 1 ]; then
             printf '  [dry-run] start-interstp.sh --ip %s --ops %s --ips "%s:%s" --no-save\n' "$_hub" "$_op" "$_noeud" "$_hub"
         elif [ "$_noeud" -ge 1 ] && [ "$_noeud" -le 9 ] && [ "$_op" -ge 1 ]; then
-            say_begin "Hub SS7 local ($_hub)"
-            if bash "$HERE/start-interstp.sh" --ip "$_hub" --ops "$_op" --ips "$_noeud:$_hub" --no-save \
+            if [ -n "${_hub_autres// }" ]; then
+                say_begin "Hub SS7 local ($_hub) - table perimee (rctx ${_hub_autres% }), relance avec le noeud $_noeud seul"
+            else
+                say_begin "Hub SS7 local ($_hub)"
+            fi
+            if bash "$HERE/launch/start-interstp.sh" --ip "$_hub" --ops "$_op" --ips "$_noeud:$_hub" --no-save \
                     > "${LOG_DIR:-/tmp}/interstp.log" 2>&1 < /dev/null; then
                 say_end " OK " "$C_OK" "Hub SS7 local" "$_hub:2908, noeud $_noeud op $_op (rctx $_rctx)"
             else
@@ -2568,7 +2608,7 @@ install_pcap_wrapper() {
     cat > "$tmp" <<'PCAPWRAP'
 #!/bin/sh
 # tcpdump - wrapper osmo-operator : impose un anneau aux captures sur fichier.
-# Pose par start-direct.sh et par build-iso.sh. Voir leurs commentaires.
+# Pose par start-native.sh et par build-iso.sh. Voir leurs commentaires.
 # Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
 REAL=/usr/bin/tcpdump
 [ -x "$REAL" ] || REAL=/usr/sbin/tcpdump
@@ -2720,7 +2760,8 @@ fi
 # osmo-ip-plan.sh les EXTRAIT des configs plutot que de les recalculer (le plan
 # peut venir d'un autre generateur que le notre), choisit la carte qui fournit
 # reellement Internet, et retombe sur la boucle locale quand aucune ne mene
-# nulle part. Il ne fait rien dans un conteneur : la, c'est docker qui adresse.
+# nulle part. Il ne fait rien dans une image de ce depot (OSMO_IMAGE=1) : la,
+# c'est start-docker.sh / compose qui adresse. Un conteneur quelconque est traite en natif.
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     IPPLAN="$HERE/network/osmo-ip-plan.sh"
     if [ -r "$IPPLAN" ]; then
@@ -2832,7 +2873,7 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
         # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
         # sa table et annoncait leur mort par un
-        #     ./start-direct.sh: line NNNN: <pid> Killed setsid ...
+        #     ./start-native.sh: line NNNN: <pid> Killed setsid ...
         # asynchrone, qui tombait par-dessus le prompt apres un --stop
         # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
         # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que
@@ -2885,7 +2926,7 @@ PYON
         # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
         # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
         # sa table et annoncait leur mort par un
-        #     ./start-direct.sh: line NNNN: <pid> Killed setsid ...
+        #     ./start-native.sh: line NNNN: <pid> Killed setsid ...
         # asynchrone, qui tombait par-dessus le prompt apres un --stop
         # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
         # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que

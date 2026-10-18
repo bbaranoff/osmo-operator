@@ -45,7 +45,7 @@ detect_gw() {
 # /run/user/0/pulse/native n'existe quasiment jamais - on partait alors chercher
 # un pulse inexistant au lieu de celui, bien vivant, de la session graphique.
 # On balaye donc /run/user/* en dernier recours. Meme logique que
-# session_pulse_user() de start.sh.
+# session_pulse_user() de start-docker.sh.
 session_user() {
     local u uid sock
     for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "$(id -un)"; do

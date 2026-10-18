@@ -6,7 +6,7 @@
 
 # ── osmo-operator : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
 # La copie docker cp ci-dessus peut etre perimee ; on avance la branche main du
-# depot (start-direct.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
+# depot (start-native.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo-operator}"
 echo -e "${GREEN}[5a/9] Clone de osmo-operator (branche ${EGPRS_BRANCH})...${NC}"
@@ -83,7 +83,7 @@ fi
 # minute de plus - a l'epoque osmo-update.service effacait et reclonait l'arbre
 # a chaque boot (wipe=1), aujourd'hui "osmo-update" fait un git fetch, dont le
 # reset --hard emporte de la meme facon ce qui n'est pas suivi. N_MS retombait
-# a 1, MS#2 restait inconnu du HLR, et start-direct.sh le lancait quand meme.
+# a 1, MS#2 restait inconnu du HLR, et start-native.sh le lancait quand meme.
 # /opt/GSM/qosmo/environment, lui, n'existe pas : ce depot-la nomme son
 # repertoire "environnement".
 # /etc/osmocom n'appartient a aucun depot : ce qui y est ecrit reste.

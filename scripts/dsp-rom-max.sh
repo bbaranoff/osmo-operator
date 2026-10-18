@@ -117,7 +117,7 @@ etape_profil() {
       printf '# ── fin profil ROM max ──\n'; } >> "$DEFAULTS"
     # [2026-10-15] PAS de OSMO_BANC_ARGS="--dsp" ici : dans l unite, EnvironmentFile=
     # l emporte sur `systemctl set-environment` (launch.sh --grgsm) et le banc
-    # partait en DSP quoi qu on demande. Le DSP est le defaut de start-direct.sh.
+    # partait en DSP quoi qu on demande. Le DSP est le defaut de start-native.sh.
     sed -i '/^OSMO_BANC_ARGS=/d' "$DEFAULTS"
     ok "profil pose ($(profil_lignes | grep -c .) commutateurs)"; grep -E '^[A-Z_]+=' "$DEFAULTS" | sed 's/^/      /'
 }

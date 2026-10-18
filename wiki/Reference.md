@@ -99,7 +99,7 @@ in any order; **launch the smartphone last**, once both networks are up.
 Run the 2G handset on the Calypso DSP instead of gr-gsm:
 
 ```sh
-cd /opt/GSM/osmo-operator && sudo ./start-direct.sh --dsp
+cd /opt/GSM/osmo-operator && sudo ./start-native.sh --dsp
 ```
 
 `--menu` asks interactively (layer 1 `grgsm_exe` or `c54x_exe`).
@@ -126,7 +126,7 @@ Check that everything is in place with `checks/diag-stp-operator.sh`.
 <details>
 <summary><b>The DSP — the Calypso's TMS320C54x on TI's real mask ROM</b></summary>
 
-- Default demodulator: gr-gsm ([grgsm_exe](https://github.com/bbaranoff/grgsm_exE)). With `./start-direct.sh --dsp`, the baseband's own DSP takes over: a C54x core emulated outside QEMU ([c54x_exe](https://github.com/bbaranoff/c54x_exe)), running the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM).
+- Default demodulator: gr-gsm ([grgsm_exe](https://github.com/bbaranoff/grgsm_exE)). With `./start-native.sh --dsp`, the baseband's own DSP takes over: a C54x core emulated outside QEMU ([c54x_exe](https://github.com/bbaranoff/c54x_exe)), running the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM).
 - ARM (QEMU) and DSP share the API RAM through `/dev/shm/calypso_api_ram` and run in lockstep, one TDMA frame at a time, over `/tmp/calypso_dsp.sock`. Downlink bursts reach the DSP's serial port (BSP) over UDP 6702 via `pont_dsp.py`.
 - What the ROM does by itself (bench runs of 2026-09-23): FCCH/SCH acquisition, BCCH decoding (SI1-4), camping, location update, SMS MO/MT, MO/MT calls with A5/1 and speech audible both ways.
 - **Still a work bench, not the demo path**: every TCH/F frame is flagged BFI even though speech stays intelligible, SACCH occasionally drops a call, the SB window is rarely armed, and the DSP needs 4.3–4.6 ms of host time per 4.62 ms frame. Details in the [c54x_exe README](https://github.com/bbaranoff/c54x_exe).
@@ -187,7 +187,7 @@ do not need it to get a phone on the air.
 sudo  docker pull ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
-sudo ./start.sh
+sudo ./launch/start-docker.sh
 ```
 
 Then enter the container and bring the stack up:
@@ -196,12 +196,12 @@ Then enter the container and bring the stack up:
 sudo docker exec -ti osmo-operator-1 bash
 
 cd /opt/GSM/osmo-operator
-./start-direct.sh --regen     # regenerate configs from the templates (first run)
-./start-direct.sh --stop      # make sure nothing is left over
-./start-direct.sh             # start the bench
+./start-native.sh --regen     # regenerate configs from the templates (first run)
+./start-native.sh --stop      # make sure nothing is left over
+./start-native.sh             # start the bench
 ```
 
-`start-direct.sh` attaches to tmux at the end. You are looking at a live GSM
+`start-native.sh` attaches to tmux at the end. You are looking at a live GSM
 network with a mobile camped on it.
 
 ### 1.2 Native, without Docker
@@ -217,14 +217,14 @@ sudo ./install.sh --reinstall      # replay everything
 sudo ./install.sh --only bureau    # desktop icons and shortcuts only
 ```
 
-The launcher is the same `./start-direct.sh`, which delegates to
+The launcher is the same `./start-native.sh`, which delegates to
 `/opt/GSM/qosmo/run.sh`.
 
 ### 1.3 Stopping
 
 ```bash
-./start-direct.sh --stop      # stops the stack AND the DSP bench, with or without --dsp
-./start-direct.sh --status    # what is running
+./start-native.sh --stop      # stops the stack AND the DSP bench, with or without --dsp
+./start-native.sh --status    # what is running
 ```
 
 `--stop` never needs `--dsp` to be repeated: it tears down the C54x bench too,
@@ -247,9 +247,9 @@ demodulates the air interface**.
 | Use it for | getting work done | studying the real DSP |
 
 ```bash
-./start-direct.sh             # real C54x mask ROM (default)
-./start-direct.sh --dsp       # the same, explicitly
-./start-direct.sh --grgsm     # gr-gsm layer 1 (the former default)
+./start-native.sh             # real C54x mask ROM (default)
+./start-native.sh --dsp       # the same, explicitly
+./start-native.sh --grgsm     # gr-gsm layer 1 (the former default)
 ```
 
 ### 2.1 Three trees, one QEMU
@@ -308,16 +308,16 @@ five steps of its own:
 ```
 
 ```bash
-./start-direct.sh --dsp                   # the full stack, then the DSP bench
+./start-native.sh --dsp                   # the full stack, then the DSP bench
 MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh  # the mobile chain alone, no network
-BANC_DSP=none ./start-direct.sh --dsp     # the stack only, no DSP bench
+BANC_DSP=none ./start-native.sh --dsp     # the stack only, no DSP bench
 ```
 
 `--dsp` starts **no bridge of its own**: `c54x_exe/run.sh` runs its own on
 5700-5702 (step 5). A second one on the same ports would die on *Address already
 in use* and leave a corpse behind at every start.
 
-Step details and variables: [`wiki/Start-direct.md`](Start-direct.md) § 8-dsp.
+Step details and variables: [`wiki/Start-native.md`](Start-native.md) § 8-dsp.
 
 ### 2.4 Profiles
 
@@ -332,10 +332,10 @@ base stations come up and how:
 | `noproc` | core only — also `core` |
 
 ```bash
-./start-direct.sh faketrx
-./start-direct.sh --profile qemu
-./start-direct.sh --list        # show the plan without running it
-./start-direct.sh --dry-run     # walk through it with no side effects
+./start-native.sh faketrx
+./start-native.sh --profile qemu
+./start-native.sh --list        # show the plan without running it
+./start-native.sh --dry-run     # walk through it with no side effects
 ```
 
 ---
@@ -496,8 +496,8 @@ C0 filling, an inert `CALYPSO_CANNED` — *all* present themselves as "the bridg
 has CRC errors".
 
 ```bash
-./start-direct.sh --check-paths     # verify the declared dependencies
-./start-direct.sh --verbose         # show the modules' output
+./start-native.sh --check-paths     # verify the declared dependencies
+./start-native.sh --verbose         # show the modules' output
 ```
 
 Logs:
@@ -514,7 +514,7 @@ Logs:
 | `FBSB result=255` (no cell) | layer 1 is not detecting the FB | `grep "IMR change" /var/log/osmocom/qemu.log \| wc -l` |
 | `osmo-bts-trx: PC clock skew too high` | the bridge stopped sending `IND CLOCK` | restart the bridge |
 | `/tmp/osmocom_l2` never created | the firmware is not booting | `head -50 /var/log/osmocom/qemu.log` |
-| *Address already in use* on 5700 | two bridges — a `--dsp` run left one behind | `./start-direct.sh --stop` |
+| *Address already in use* on 5700 | two bridges — a `--dsp` run left one behind | `./start-native.sh --stop` |
 
 QEMU monitor:
 
@@ -547,7 +547,7 @@ Defaults are the ones that already work: `-M calypso`, `-cpu arm946`,
 ELF (no `nm` needed), relays QEMU's output unchanged, and publishes stable links
 to the ptys under `<RUN_DIR>/`.
 
-`start-direct.sh` resolves it (`--launcher <bin>`, or `QOSMO_LAUNCHER`), builds it
+`start-native.sh` resolves it (`--launcher <bin>`, or `QOSMO_LAUNCHER`), builds it
 if the source is there and the binary is not, and passes it to `run.sh`. Without a
 launcher, `40-qemu.sh` falls back to the historical `qemu-system-arm` command line.
 
@@ -636,8 +636,8 @@ that routes M3UA/SCCP between them. No configuration file is edited by hand: pjs
 dialplan, SMS routing and the inter-STP config are all generated from N.
 
 ```bash
-sudo ./start.sh          # choose bridge mode, enter N operators
-sudo ./start.sh stop
+sudo ./launch/start-docker.sh          # choose bridge mode, enter N operators
+sudo ./launch/start-docker.sh stop
 ```
 
 This is essentially a *DHCP for SS7* — the inter-operator SS7 setup normally done
@@ -707,7 +707,7 @@ flowchart LR
 
 ### 9.5 Generated configuration
 
-`apply_config_templates()` in `start.sh` resolves every N-dependent placeholder in
+`apply_config_templates()` in `start-docker.sh` resolves every N-dependent placeholder in
 a **single `sed` pass** (`__PC_MSC__`, `__RCTX_INTER__`, `__ARFCN__` = `512+N×2`,
 `__CONTAINER_IP__`, …), then appends the sections that depend on the *total* number
 of operators: N-1 PJSIP trunks, the `[interop_out]` dialplan, the SMS routing
@@ -752,15 +752,15 @@ N.23.3/14   as-dyn-…  avail  avail  dyn   ← BSC (dynamic)
 
 ### 9.8 WAN, mesh and multi-machine
 
-Beyond a single host, `start-direct.sh` also meshes several machines:
+Beyond a single host, `start-native.sh` also meshes several machines:
 
 ```bash
-./start-direct.sh --wan                   # interactive: N nodes, IPs, prefixes
-./start-direct.sh --wan mynode1.conf       # from other nodes' cards
-./start-direct.sh --wan-nodes "1:IP:IND …" # scriptable
-./start-direct.sh --gen-conf               # write this node's card, start nothing
-./start-direct.sh --virtualbox=3           # mesh with VirtualBox VMs
-./start-direct.sh --air-mesh               # mesh the BURSTS: a shared radio medium,
+./start-native.sh --wan                   # interactive: N nodes, IPs, prefixes
+./start-native.sh --wan mynode1.conf       # from other nodes' cards
+./start-native.sh --wan-nodes "1:IP:IND …" # scriptable
+./start-native.sh --gen-conf               # write this node's card, start nothing
+./start-native.sh --virtualbox=3           # mesh with VirtualBox VMs
+./start-native.sh --air-mesh               # mesh the BURSTS: a shared radio medium,
                                            # a mobile can hear and pick another node's BTS
 ```
 
@@ -786,7 +786,7 @@ serves all nine nodes.
 | document | subject |
 |---|---|
 | [`pont/README.md`](../pont/README.md) | **A5 ciphering, Kc and SACCH** — a measurement report. Read it before chasing a radio fault through a CRC counter. |
-| [`wiki/`](Home.md) | Home, Build, Environment, Start-direct, Results — using the bench day to day |
+| [`wiki/`](Home.md) | Home, Build, Environment, Start-native, Results — using the bench day to day |
 | [`environment/README.md`](../environment/README.md) | environment variables and path resolution |
 | [`services/README.md`](../services/README.md) | the systemd units shipped |
 | [`navigation/QUICKSTART.md`](../navigation/QUICKSTART.md) | getting started |

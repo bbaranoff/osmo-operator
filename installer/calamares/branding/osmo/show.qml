@@ -133,7 +133,7 @@ Presentation {
             font.pixelSize: 20
             color: "#13293d"
             text: "Pour demarrer le banc\n\n" +
-                  "    sudo -i\n    ./start-direct.sh\n\n" +
+                  "    sudo -i\n    ./start-native.sh\n\n" +
                   "Le tableau de bord web ecoute deja sur cette machine."
         }
     }

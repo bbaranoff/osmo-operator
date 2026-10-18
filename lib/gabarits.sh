@@ -8,12 +8,12 @@
 #  un gabarit change, on veut pouvoir comparer ligne a ligne avec l'ancien.
 #
 #  POURQUOI LES SORTIR DU POINT D'ENTREE.
-#  Elles sont la SEULE chose que start-direct.sh faisait et que personne
+#  Elles sont la SEULE chose que start-native.sh faisait et que personne
 #  d'autre ne fait : substituer __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ ...
 #  dans configs/*.cfg puis les deposer dans /etc/osmocom, /etc/asterisk et
 #  ~/.osmocom/bb. Sans elles, les demons du coeur demarrent sur les fichiers
 #  qu'un run precedent a laisses - et `ENCRYPTION=a5 0` n'a aucun effet, en
-#  silence. Le reste de start-direct.sh (lancer vingt processus) est repris
+#  silence. Le reste de start-native.sh (lancer vingt processus) est repris
 #  par le moteur ; ceci ne l'est pas, donc on le preserve a l'identique et on
 #  le rend appelable depuis un module.
 #
@@ -31,7 +31,7 @@
 : "${ALSA_OUTPUT:=default}"
 : "${ALSA_INPUT:=default}"
 
-# Ces fonctions ont une JUMELLE dans start.sh : elles doivent dire la meme
+# Ces fonctions ont une JUMELLE dans start-docker.sh : elles doivent dire la meme
 # chose. C'est CETTE copie que lit une machine qui reclone le depot a chaque
 # demarrage - donc celle qui compte sur une ISO. Tant qu'elle a garde l'ancien
 # plan prive (172.20.<op>.x), les configs regenerees au boot liaient
@@ -57,13 +57,13 @@ op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 # TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
 # 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
 # voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
-# La bascule est ici, une fois, et les deux jumelles (start.sh, lib/gabarits.sh)
+# La bascule est ici, une fois, et les deux jumelles (start-docker.sh, lib/gabarits.sh)
 # en heritent.
 _osmo_priv_index() {
     local op="${1:-1}"
     # [2026-08-31] L ORCHESTRATEUR N EST PAS DANS LE CONTENEUR QU IL CREE.
     # La detection ci-dessous demande "suis-je DANS un conteneur ?" et c est la
-    # bonne question pour du code qui tourne a l interieur. Mais start.sh, lui,
+    # bonne question pour du code qui tourne a l interieur. Mais start-docker.sh, lui,
     # provisionne les conteneurs DEPUIS L HOTE : il prenait donc la branche
     # VM/natif et rendait l index du NOEUD - 1 - pour tous les operateurs.
     # Les deux reseaux prives se retrouvaient sur 192.168.2.0/24, docker
@@ -75,7 +75,7 @@ _osmo_priv_index() {
     # OSMO_PRIV_BY_OP=1 dit "je provisionne par operateur" ; start_bridge_mode
     # la pose. C est la seule chose que la detection ne pouvait pas deviner.
     [ "${OSMO_PRIV_BY_OP:-0}" = "1" ] && { printf '%s' "$op"; return; }
-    # Meme detection que start-direct.sh : le couple /.dockerenv +
+    # Meme detection que start-native.sh : le couple /.dockerenv +
     # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
     # sert de repli pour un conteneur quelconque.
     if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
@@ -118,7 +118,7 @@ linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
 # [2026-08-31] Les boucles de ce fichier enumeraient 1..N en dur, comme celles
-# de start.sh avant leur decalage. Avec OP_ID_BASE=2 - les conteneurs prenant
+# de start-docker.sh avant leur decalage. Avec OP_ID_BASE=2 - les conteneurs prenant
 # les rangs 2 et 3, le 1 restant au natif - l operateur 2 se fabriquait donc un
 # trunk vers l "operateur 1" a 172.20.0.11, une adresse de dorsale que PERSONNE
 # ne porte (le natif est sur l hote), et AUCUN trunk vers l operateur 3.
@@ -277,7 +277,7 @@ _generate_sms_routing_conf_fallback() {
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
 # [2026-08-03] apply_config_templates() a demenage dans generate_configs.sh :
-# ce fichier en portait une copie, start.sh une autre. Une seule desormais, et
+# ce fichier en portait une copie, start-docker.sh une autre. Une seule desormais, et
 # ses valeurs (ARFCN, BSIC, KI, IMSI...) sont exposees dans globals.conf au lieu
 # d'etre des formules enfouies dans la substitution.
 _GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -290,7 +290,7 @@ _GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # bridge docker (172.20.0.1). Sur l hote, aucune des deux n existe.
 #
 # Ces corrections vivaient dans apply_native_post_patches (generate_configs.sh),
-# que start-direct.sh appelle. Mais qosmo-grgsm/run_modules/08-gabarits.sh, lui,
+# que start-native.sh appelle. Mais qosmo-grgsm/run_modules/08-gabarits.sh, lui,
 # n appelle QUE apply_config_templates + install_configs_native, et ne source
 # meme pas generate_configs.sh : il reappliquait donc les gabarits bruts a
 # chaque demarrage du natif et REMETTAIT les adresses de conteneur. Le symptome
@@ -373,7 +373,7 @@ _gab_fixups_natifs() {
     #    POURQUOI CE FICHIER ETAIT FAUX. apply_native_post_patches
     #    (generate_configs.sh) sait deja ecrire cette table - son propre
     #    commentaire decrit exactement le defaut. Mais elle n est appelee que
-    #    par start-direct.sh --regen et build-iso.sh ; le demarrage ordinaire du
+    #    par start-native.sh --regen et build-iso.sh ; le demarrage ordinaire du
     #    natif passe par 08-gabarits.sh, qui ne fait qu appliquer les gabarits
     #    bruts. Le fichier repartait donc a chaque fois sur le fallback ecrit
     #    POUR UN CONTENEUR - le meme piege que les points 1 a 3 ci-dessus, d ou

@@ -15,7 +15,7 @@
 echo -e "${GREEN}[8d/9] Comptes, session et installeur...${NC}"
 
 # ── LE MODELE DE COMPTES ────────────────────────────────────────────────────
-# root est le compte de TRAVAIL : le banc se pilote en root (start-direct.sh,
+# root est le compte de TRAVAIL : le banc se pilote en root (start-native.sh,
 # les VTY, tcpdump, les netns), et tout le depot le suppose. La session s ouvre
 # donc sur root, et les terminaux qu on y ouvre sont root sans rien demander.
 #

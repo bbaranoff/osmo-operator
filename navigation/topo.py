@@ -5,7 +5,7 @@
 #
 #   1. "docker ps"                      -> quels noeuds tournent ici ;
 #   2. l'environnement du conteneur     -> OSMO_HUB_IP, WAN_NODE_ID (poses par
-#                                          start.sh, cf. --hub-ip / --wan) ;
+#                                          start-docker.sh, cf. --hub-ip / --wan) ;
 #   3. /etc/osmocom/*.cfg DANS le noeud -> point code, routing keys, listeners
 #                                          M3UA, adresses SCCP, liens vers le
 #                                          hub. C'est la configuration REELLE,

@@ -1,5 +1,5 @@
 #!/bin/bash
-# build-iso.sh - Genere une ISO bootable en utilisant build.sh et start.sh
+# build-iso.sh - Genere une ISO bootable en utilisant build.sh et start-docker.sh
 # Aucun docker build direct dans ce script, tout passe par les scripts existants.
 #
 #  Usage : sudo ./build-iso.sh [options]

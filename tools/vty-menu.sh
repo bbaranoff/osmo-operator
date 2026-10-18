@@ -1,5 +1,5 @@
 #!/bin/bash
-# [2026-10-12] le port VTY du mobile : 4247, ou 4347 en --dsp (publie par start-direct.sh)
+# [2026-10-12] le port VTY du mobile : 4247, ou 4347 en --dsp (publie par start-native.sh)
 BB_VTY="$(tr -dc 0-9 < /run/osmo-banc/ms1-vty 2>/dev/null)"; BB_VTY="${BB_VTY:-4247}"
 
 # Sauvegarde de la configuration actuelle du terminal
@@ -77,7 +77,7 @@ menu_services() {
             6) connect_vty "$OP" "SGSN" 4245 "sg" ;;
             7) connect_vty "$OP" "STP" 4239 "stp" ;;
             T|t)
-                # La session que start.sh ouvre dans chaque conteneur operateur.
+                # La session que start-docker.sh ouvre dans chaque conteneur operateur.
                 # Le terminal de lancement est pris par osmo-operator-1 ; c'est
                 # par ici qu'on rejoint les autres, sans avoir a retenir la
                 # commande docker.
@@ -139,7 +139,7 @@ while true; do
         OPS=$(docker ps --format "{{.Names}}" | grep "osmo-operator" | sort)
         
         if [[ -z "$OPS" ]]; then
-            whiptail --msgbox "Aucun operateur detecte ! Verifiez start.sh" 10 50
+            whiptail --msgbox "Aucun operateur detecte ! Verifiez start-docker.sh" 10 50
             continue
         fi
 

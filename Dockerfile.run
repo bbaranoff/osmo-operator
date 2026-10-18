@@ -46,7 +46,7 @@ COPY scripts/entrypoint.sh /scripts/
 
 # ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
 # Toutes les configs sont copiées ; les valeurs réelles sont injectées
-# au démarrage via start.sh (apply_config_templates) et montées en volume.
+# au démarrage via start-docker.sh (apply_config_templates) et montées en volume.
 COPY configs/*.conf /etc/asterisk/
 COPY configs/*.cfg configs/sms-routing.conf /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
@@ -55,10 +55,10 @@ COPY configs/asound.conf /etc/
 # ── Pont TRX burst-level (CALYPSO_BRIDGE=pont) ────────────────────────────────
 # AVANT : le pont n'etait NULLE PART dans cette image. Il n'existait dans le
 # conteneur que parce qu'on l'y avait depose a la main ; une reconstruction de
-# l'image le faisait disparaitre, et start-direct.sh tombait sur sa branche
+# l'image le faisait disparaitre, et start-native.sh tombait sur sa branche
 # « pont introuvable (...) » en degradant silencieusement le mode.
 # Le chemin est desormais EXPLICITE et unique : /opt/GSM/pont/pont.py, expose
-# par PONT_PY que start-direct.sh consomme (`_PONT="${PONT_PY:-...}"`).
+# par PONT_PY que start-native.sh consomme (`_PONT="${PONT_PY:-...}"`).
 # ⚠️ La source qui part dans l'image est pont/pont.py DU CONTEXTE DE BUILD
 # (/opt/GSM/osmo-operator/pont/). Apres avoir modifie /opt/GSM/pont/pont.py a
 # chaud, la recopier ici avant de reconstruire, sinon l'image reste en arriere.
@@ -75,7 +75,7 @@ COPY configs/asound.conf /etc/
 # PONT_PY la rendait souveraine. Le 27/08 cette copie etait restee a une
 # version sans plan SDCCH/8 : deux heures de LU en echec, SMS rejete et
 # appel impossible, sans un message. Le depot est desormais la seule source ;
-# start-direct.sh resout $NITB_ROOT/pont/pont.py.
+# start-native.sh resout $NITB_ROOT/pont/pont.py.
 ENV PONT_PY=/opt/GSM/osmo-operator/pont/pont.py
 
 # Bits d'execution + chemins uniques. DOIT rester APRES toutes les COPY ci-dessus.
@@ -94,7 +94,7 @@ RUN chmod +x /etc/osmocom/*.sh
 # le source depuis .bashrc, garde par [ -t 1 ] et OSMO_DISCLAIMER_SHOWN :
 #   - [ -t 1 ]                : uniquement quand un humain a un terminal ;
 #   - OSMO_DISCLAIMER_SHOWN   : une seule fois par session, pas a chaque sous-shell.
-# Les `bash -c "..."` de start.sh (lancement des piles) sont NON-interactifs :
+# Les `bash -c "..."` de start-docker.sh (lancement des piles) sont NON-interactifs :
 # bash n'y lit pas .bashrc, le disclaimer ne pollue donc pas le defilement des
 # [ OK ]. Le fichier n'est pas interpole au build : $(hostname) n'est evalue
 # qu'a l'ouverture du shell, il nomme donc le conteneur courant.
@@ -114,7 +114,7 @@ RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
         '### end osmo-disclaimer ###' >> /root/.bashrc; }
 
 # ── Mise a jour des arbres git ────────────────────────────────────────────────
-# [refactor] start.sh l.323 et l.326 lancent
+# [refactor] start-docker.sh l.323 et l.326 lancent
 #   `docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run`
 # mais AUCUN `ARG QEMU_CACHE_BUST` n'existait : docker repondait « unused build
 # argument » et servait les deux `git pull` ci-dessous DEPUIS LE CACHE — les

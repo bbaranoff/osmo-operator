@@ -7,7 +7,7 @@
 # ── qosmo : arbre ELAGUE + binaire installe ──────────────────────────────
 # Deux choses distinctes, et l'ISO a besoin des DEUX :
 #   - l'arbre qosmo (run.sh, run_modules/, environnement/) :
-#     c'est LUI le mode qemu de start-direct.sh. Il reste dans l'image, prive de
+#     c'est LUI le mode qemu de start-native.sh. Il reste dans l'image, prive de
 #     .git et de build/ (voir plus bas).
 #   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
 #     l'arbre sous le nom que paths.env cherche (build/qemu-system-arm).
@@ -93,7 +93,7 @@ rm -f "$ROOTFS"/usr/local/bin/qosmo-grgsm "$ROOTFS"/usr/local/bin/qosmo-dsp \
 # [2026-09-25] Les forks qosmo-dsp et qosmo-grgsm sont remplaces par UN arbre
 # QEMU, /opt/GSM/qosmo (run.sh, run_modules, cfgs, environnement y ont ete
 # repris), et deux executables qui compilent les sources de qosmo :
-#   c54x_exe   le DSP TMS320C54x sur la mask-ROM TI (start-direct.sh --dsp,
+#   c54x_exe   le DSP TMS320C54x sur la mask-ROM TI (start-native.sh --dsp,
 #              BANC_DSP = /opt/GSM/c54x_exe/run.sh)
 #   grgsm_exe  la couche 1 gr-gsm hors QEMU (pont : /usr/local/bin/grgsm_exe)
 # OSMO_C54X_SRC / OSMO_GRGSM_EXE_SRC forcent un arbre local, comme
@@ -429,7 +429,7 @@ fi
 # firmware : l'interface graphique les lit a l'initialisation, machine Calypso
 # comprise. Sans $prefix/share/qemu/keymaps, qemu-system-arm ecrit
 #     qemu-system-arm: could not read keymap file: 'en-us'
-# et s'arrete AVANT le premier cycle. Vu de start-direct.sh, ca donne
+# et s'arrete AVANT le premier cycle. Vu de start-native.sh, ca donne
 #     [FAIL] Calypso emulator (QEMU) (started but never ready)
 # c'est-a-dire une ISO sans MS - la panne exacte que le bloc precedent veut
 # eviter. On copie donc les keymaps SEULES : 917 ko, pas 303 Mo.

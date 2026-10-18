@@ -16,3 +16,6 @@ vty-debug-dump.txt
 navigation/logs/
 mynode*.conf
 .claude/
+
+# Jupyter
+.ipynb_checkpoints/

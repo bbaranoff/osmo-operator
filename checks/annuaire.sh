@@ -32,7 +32,7 @@ set -uo pipefail
 
 ONLY_OP=""; WANT_ABO=1; WANT_SS7=1; USE_COLOR=1
 
-# Les fiches ne sont pas au meme endroit selon d'ou l'on regarde : start.sh les
+# Les fiches ne sont pas au meme endroit selon d'ou l'on regarde : start-docker.sh les
 # ecrit sur l'HOTE dans /var/tmp, et en pose une copie dans /etc/osmocom de
 # chaque conteneur (elle voyage avec la pile). Lance depuis un conteneur, ce
 # script ne trouvait donc rien et annoncait "pas de fiches" sur un banc qui en
@@ -77,7 +77,7 @@ fi
 ct(){ [ "$MODE" = docker ] && echo "osmo-operator-$1" || echo local; }
 
 # ── Les fiches, lues une fois ───────────────────────────────────────────────
-# Absent n'est pas une erreur : l'annuaire nait au lancement de start.sh, et un
+# Absent n'est pas une erreur : l'annuaire nait au lancement de start-docker.sh, et un
 # banc monte a la main n'en a pas. On le dit et on continue - la partie HLR et
 # la partie SS7 restent lisibles sans lui.
 if [ -r "$ANNU" ]; then
@@ -154,7 +154,7 @@ for op in $OPS; do
     printf '         accusant la carte SIM. Reprovisionner : %ssubscriber imsi X update aud2g comp128v1 ki ...%s\n' "$C" "$Z"
   fi
   [ "$n_sans_fiche" -gt 0 ] && \
-    printf '  %s %s abonne(s) sans fiche : le HLR les connait, l annuaire non (banc relance sans start.sh ?)\n' "$WARN" "$n_sans_fiche"
+    printf '  %s %s abonne(s) sans fiche : le HLR les connait, l annuaire non (banc relance sans start-docker.sh ?)\n' "$WARN" "$n_sans_fiche"
 
   # Le mobile presente-t-il un IMSI que le HLR connait ? C'est la question que
   # personne ne pose, et la reponse est non plus souvent qu'on ne croit : les

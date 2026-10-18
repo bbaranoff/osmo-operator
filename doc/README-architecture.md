@@ -120,8 +120,8 @@ BSSGP/NS from the PCU to osmo-sgsn, then PDP contexts through osmo-ggsn
 
 | path | role |
 |---|---|
-| `start-direct.sh` | the launcher (native, container, ISO) |
-| `start.sh`, `compose.sh` | Docker, multi-operator |
+| `start-native.sh` | the launcher (native, container, ISO) |
+| `start-docker.sh`, `compose.sh` | Docker, multi-operator |
 | `start-interstp.sh`, `set_stp_ip.sh` | the SS7 hub and node addressing |
 | `network/` | WAN table, mesh, firewall, VirtualBox, ISM |
 | `lib/gabarits.sh`, `configs/`, `generate_configs.sh` | config templates |

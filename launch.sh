@@ -6,27 +6,27 @@
 #     1. wireshark    sur udp/4729 (GSMTAP)        - root
 #     2. linphone     le softphone SIP             - utilisateur de la session
 #     3. firefox      sur http://127.0.0.1:8080    - des que le dashboard repond
-#     4. start-direct.sh                           - le banc, au PREMIER PLAN
+#     4. start-native.sh                           - le banc, au PREMIER PLAN
 #
 # Les trois premiers partent en arriere-plan et ne peuvent pas faire echouer le
-# lancement : un outil absent se signale et on continue. start-direct.sh, lui,
+# lancement : un outil absent se signale et on continue. start-native.sh, lui,
 # tient le terminal - c est sa sortie qu on veut lire.
 #
 # Trois choses separent un script qui marche au terminal d un script qui marche
 # au double-clic, et elles sont traitees en tete :
-#   1. PAS DE TERMINAL. Un .desktop lance sans tty : start-direct.sh ecrirait
+#   1. PAS DE TERMINAL. Un .desktop lance sans tty : start-native.sh ecrirait
 #      dans le vide. On se relance dans un emulateur de terminal.
 #   2. PAS DE ROOT. Le banc a besoin des privileges (netns, systemd, captures).
 #      Depuis une icone : pkexec (fenetre graphique), repli sudo.
 #   3. LA FENETRE SE FERME AVANT QU ON LISE L ERREUR. On la retient a la fin.
 #
 # Usage au terminal (aucun de ces detours ne s applique) :
-#     sudo ./launch.sh [arguments passes a start-direct.sh]
+#     sudo ./launch.sh [arguments passes a start-native.sh]
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-TARGET="$DIR/start-direct.sh"
+TARGET="$DIR/start-native.sh"
 GSMTAP_PORT="${GSMTAP_PORT:-4729}"
 DASH_URL="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
 DASH_PORT="${DASH_URL##*:}"
@@ -38,7 +38,7 @@ TUTO_URL="${OSMO_TUTORIAL_URL:-${DASH_URL%/}/tutorial.html}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
 
-[ -x "$TARGET" ] || { echo -e "${RED}start-direct.sh introuvable ou non executable dans $DIR${NC}" >&2; exit 1; }
+[ -x "$TARGET" ] || { echo -e "${RED}start-native.sh introuvable ou non executable dans $DIR${NC}" >&2; exit 1; }
 
 # ── UN SEUL LANCEMENT A LA FOIS ─────────────────────────────────────────────
 # [2026-09-04] Un double-clic sur le telephone rouge, c est DEUX lancements. Le
@@ -50,7 +50,7 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC
 #
 # DEUX FACONS D ETRE DEJA EN TRAIN DE DEMARRER, DEUX TESTS :
 #   1. un autre launch.sh tient le verrou. C est un flock non bloquant sur un
-#      descripteur qui SURVIT a l exec de start-direct.sh : il couvre donc tout
+#      descripteur qui SURVIT a l exec de start-native.sh : il couvre donc tout
 #      le demarrage, et le noyau le libere quand le processus meurt, meme tue -
 #      rien a nettoyer, et surtout aucun verrou fantome apres une coupure.
 #   2. l unite osmo-banc est « activating ». Un banc lance par systemd
@@ -138,7 +138,7 @@ if [ "$_bloc_direct" = "1" ]; then
     # Le balai n est pas redondant avec `start-multi.sh --stop` : celui-ci ne
     # connait que la topologie declaree dans /etc/osmocom/osmo-multi.conf, et
     # un conteneur d une topologie precedente lui echapperait. Le filtre est
-    # celui que start.sh applique deja en tete de course.
+    # celui que start-docker.sh applique deja en tete de course.
     _arret_multi() {
         local _m="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
         if systemctl cat "$_m" >/dev/null 2>&1; then
@@ -197,7 +197,7 @@ if [ "$_bloc_direct" = "1" ]; then
         fi
         # Les memes chemins que les ConditionPathExists de l unite. On les lit
         # ICI plutot que de croire le code de retour de systemctl.
-        if [ ! -f "$DIR/start-multi.sh" ]; then
+        if [ ! -f "$DIR/launch/start-multi.sh" ]; then
             _note "start-multi.sh introuvable dans $DIR - depot incomplet."
             exit 1
         fi
@@ -250,7 +250,7 @@ if [ "$_bloc_direct" = "1" ]; then
     # ligne a ligne. Le `read` final garde la fenetre le temps de lire l erreur
     # quand le port est ferme.
     if [ "$_action" = "--vty" ]; then
-        # [2026-10-12] 4247, ou 4347 en --dsp : start-direct.sh publie le port
+        # [2026-10-12] 4247, ou 4347 en --dsp : start-native.sh publie le port
         # reel dans /run/osmo-banc/ms1-vty ; sans le fichier, on regarde qui
         # ecoute (4347 d abord, puis 4247).
         _p="${OSMO_MS_VTY_PORT:-}"
@@ -298,7 +298,7 @@ if [ "$_bloc_direct" = "1" ]; then
             timeout 200 systemctl stop "$_svc" || true
         fi
         # ExecStop ne tourne QUE si l unite etait active ou en cours de
-        # demarrage. Quand elle est « failed » (start-direct.sh sorti en
+        # demarrage. Quand elle est « failed » (start-native.sh sorti en
         # erreur), systemd a deja tue son cgroup - mais le coeur (osmo-stp,
         # hlr, msc, bsc...) vit dans SES PROPRES unites, que run.sh a
         # demarrees par systemctl : elles restent debout, le telephone du
@@ -411,7 +411,7 @@ fi
 #   1. stdin SEUL. `./launch.sh < fichier` depuis un vrai terminal se croyait
 #      lance par une icone et ouvrait une fenetre en trop, dont la sortie
 #      n allait pas a l appelant. On teste donc stdin ET stdout.
-#   2. UN TTY HERITE N EST PAS LE NOTRE. start-direct.sh TIENT le terminal
+#   2. UN TTY HERITE N EST PAS LE NOTRE. start-native.sh TIENT le terminal
 #      jusqu a la fin (cf. l en-tete de ce fichier). Appele par un autre
 #      lanceur — start-multi.sh, qui monte le natif AVANT ses conteneurs — il
 #      heritait du terminal de celui-ci, ecrivait par-dessus sa sortie et ne
@@ -436,7 +436,7 @@ if [ "$_lt_besoin" = "1" ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
 fi
 
 # Le drapeau a joue son role. On le RETIRE de l environnement : exporte, il
-# descendait dans start-direct.sh et tout ce qui suit, ou il ferait croire a
+# descendait dans start-native.sh et tout ce qui suit, ou il ferait croire a
 # n importe quel descendant rappelant ce script qu il est deja dans sa fenetre
 # - et plus aucune ne s ouvrirait. La valeur reste ici, dans une variable de
 # shell, la ou on en a besoin (retenir la fenetre a la fin).
@@ -458,7 +458,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ── L UTILISATEUR DE LA SESSION GRAPHIQUE ───────────────────────────────────
-# Meme critere que helpers/prepare_host.sh et start.sh : le NOM du compte ne
+# Meme critere que helpers/prepare_host.sh et start-docker.sh : le NOM du compte ne
 # dit rien, la presence de son socket pulse si. Sur l ISO --desktop la session
 # est ouverte sous root (gdm3 AutomaticLogin=root) - « root » est donc ici une
 # reponse valide, pas une erreur.
@@ -500,7 +500,7 @@ gui_run() {
 #
 #        +---------------------+---------------------+
 #        |  terminal du banc   |  firefox / dashboard|
-#        |  (start-direct.sh)  |  127.0.0.1:8080     |
+#        |  (start-native.sh)  |  127.0.0.1:8080     |
 #        +---------------------+---------------------+
 #        |  wireshark          |  linphone           |
 #        |  udp/4729 GSMTAP    |  postes 100 / 200   |
@@ -550,10 +550,10 @@ tile_windows() {
 # tient dans la session tmux « calypso ». (Elle est POSEE mais plus activee au
 # boot depuis le 2026-09-05 : c est ce script, ou l icone, qui la demarre.)
 # Quand l unite est
-# installee, ce script ne lance plus start-direct.sh lui-meme : il (re)demarre
+# installee, ce script ne lance plus start-native.sh lui-meme : il (re)demarre
 # l unite, ouvre les applications du bureau comme avant, puis S ATTACHE a tmux
 # dans son terminal - le meme ecran qu avant, mais un seul proprietaire du
-# banc. Lancer start-direct.sh a la main par-dessus tuerait les processus du
+# banc. Lancer start-native.sh a la main par-dessus tuerait les processus du
 # service sans que systemd le sache (unite « active (exited) », pile morte).
 #
 # Les arguments (--dsp, --op 2, --regen...) passent a l unite par
@@ -571,7 +571,7 @@ banc_unit_present() {
 # L arret vit en tete de fichier (bloc « ARRETER »), avant toute fenetre :
 # `launch.sh --stop` n arrive donc jamais jusqu ici.
 # Suit le journal de l unite pendant le demarrage : c est la sortie de
-# start-direct.sh / run.sh qu on lisait avant dans ce meme terminal.
+# start-native.sh / run.sh qu on lisait avant dans ce meme terminal.
 banc_unit_restart() {
     if [ $# -gt 0 ]; then
         systemctl set-environment OSMO_BANC_ARGS="$*" 2>/dev/null || true
@@ -637,11 +637,11 @@ tout_arreter() {
     # Avec l unite, l arret est fait par `systemctl restart` plus bas.
     banc_unit_present && return 0
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
-    if [ -x "$DIR/start-direct.sh" ]; then
-        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
+    if [ -x "$DIR/start-native.sh" ]; then
+        timeout 120 "$DIR/start-native.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
-    # Les conteneurs ne sont PAS touches ici : start.sh fait deja
+    # Les conteneurs ne sont PAS touches ici : start-docker.sh fait deja
     # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.
     # Le refaire serait redondant, et surtout destructeur depuis launch.sh -
     # un clic sur le telephone rouge, qui ne monte que le natif, balayerait
@@ -752,7 +752,7 @@ echo
 cd "$DIR" || exit 1
 
 # ── AUCUNE SAISIE ───────────────────────────────────────────────────────────
-# [2026-08-31] start-direct.sh ouvre menu_interactif() : Profil, Noeud SS7,
+# [2026-08-31] start-native.sh ouvre menu_interactif() : Profil, Noeud SS7,
 # Operateur, Inter-STP - quatre questions whiptail avant que quoi que ce soit
 # ne demarre. Il les saute quand PERSONNE ne peut repondre, et il teste ca sur
 # la presence d un terminal ([ -t 0 ]) - or launch.sh vient justement d en
@@ -760,10 +760,10 @@ cd "$DIR" || exit 1
 # ici, et un double-clic sur le telephone rouge s arretait sur un formulaire
 # au lieu de lancer le banc.
 #
-# NO_MENU=1 est le drapeau prevu pour ca (start-direct.sh l.460 et l.1263) :
+# NO_MENU=1 est le drapeau prevu pour ca (start-native.sh l.460 et l.1263) :
 # les menus rendent la main sans rien demander et les valeurs par defaut
 # s appliquent - noeud 1, operateur 1, hub local. C est exactement ce que
-# start.sh pose deja devant ses conteneurs.
+# start-docker.sh pose deja devant ses conteneurs.
 #
 # OSMO_LAUNCH_MENU=1 ./launch.sh redonne les questions quand on les veut.
 if banc_unit_present; then
@@ -790,9 +790,9 @@ verrou_liberer
 
 echo
 if [ "$rc" -eq 0 ]; then
-    echo -e "${GREEN}=== start-direct.sh termine (code 0) ===${NC}"
+    echo -e "${GREEN}=== start-native.sh termine (code 0) ===${NC}"
 else
-    echo -e "${RED}=== start-direct.sh a ECHOUE (code $rc) ===${NC}"
+    echo -e "${RED}=== start-native.sh a ECHOUE (code $rc) ===${NC}"
 fi
 # Uniquement dans une fenetre ouverte par nos soins : au terminal, rendre la
 # main tout de suite est le comportement attendu.

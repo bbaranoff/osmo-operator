@@ -8,7 +8,7 @@ Two families of tests:
 - **`checks/`** in this repository is a set of read-only diagnostics of a running
   stack (daemons, SS7, interconnect, WAN, directory).
 
-← [README](../README.md) · Details: [wiki/Resultats](../wiki/Resultats.md), [wiki/Start-direct](../wiki/Start-direct.md)
+← [README](../README.md) · Details: [wiki/Resultats](../wiki/Resultats.md), [wiki/Start-native](../wiki/Start-native.md)
 
 ## Reference run: `tout-en-un-20261016-164539.qmd`
 
@@ -30,7 +30,7 @@ The 2026-10-16 ladder, rung by rung (quoted from `verdict.txt` in the report):
 
 | # | rung | result | evidence |
 |---|---|---|---|
-| 1 | demarrage | OK | full stop, then `start-direct.sh --dsp`: core up in 16 s |
+| 1 | demarrage | OK | full stop, then `start-native.sh --dsp`: core up in 16 s |
 | 2 | coeur | OK | processes + VTY 4258 4239 4254 4242 4243 |
 | 3 | bts | OK | osmo-bts-trx, VTY 4241 |
 | 4 | services | OK | asterisk 5060, sip-connector, `/tmp/sendmt_socket` |
@@ -87,7 +87,9 @@ made at test time, with MSC counters taken as deltas.
 
 ```bash
 cd /opt/GSM/tests
-./banc-max.sh                       # default: campaign, grgsm then dsp (each restarted, up to voice) + PDF
+./banc-max.sh                       # default: = --dsp --restart --continue, ROM vocoder (io-handler l1phy)
+BANC_VOCODEUR=hote ./banc-max.sh    # same, with gapk on the host instead of the ROM vocoder
+./banc-max.sh --campagne            # grgsm then dsp (each restarted, up to voice) + PDF
 ./banc-max.sh --dsp --restart       # one mode, restart the stack in it
 ./banc-max.sh --grgsm               # one mode, on the running stack
 ./banc-max.sh --full                # both layer 1s, 4G and inter-operator, up to voice

@@ -14,7 +14,7 @@
 #                   (fragment configs/gprs/osmo-bsc-bts2-egprs.frag, re-pose
 #                   apres chaque --regen), osmo-bts-virtual-gprs.cfg,
 #                   osmo-pcu-gprs.cfg, modem-gprs.cfg.
-#   3. banc         osmo-banc.service (start-direct.sh --dsp : coeur, BTS 0 sur
+#   3. banc         osmo-banc.service (start-native.sh --dsp : coeur, BTS 0 sur
 #                   le C54x + ROM TI, SGSN/GGSN/PCU de la BTS 0).
 #   4. abonne       l IMSI du modem dans le HLR (comp128v1), idempotent.
 #   5. cellule      osmo-bts-virtual (BTS 2, Um multicast sur lo) + osmo-pcu
@@ -129,7 +129,7 @@ etape_preflight() {
     fi
     [ -n "$MODEM_BIN" ] && ok "modem : $MODEM_BIN" || { ko "modem (osmocom-bb layer23) absent : make -C $BB/src/host/layer23"; rc=1; }
 
-    # La chaine DSP : ROM TI + c54x_exe (le banc par defaut de start-direct.sh)
+    # La chaine DSP : ROM TI + c54x_exe (le banc par defaut de start-native.sh)
     local n=0 r
     for r in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do [ -f "$ROM_DIR/calypso_dsp.$r.bin" ] && n=$((n+1)); done
     [ "$n" -eq 7 ] && ok "ROM DSP TI : $n/7 dans $ROM_DIR" || warn "ROM DSP : $n/7 dans $ROM_DIR - --dsp ne demarrera pas (c54x_exe/rom/fetch-rom.sh)"
@@ -184,7 +184,7 @@ etape_configs() {
     # --regen regenere ce fichier depuis configs/osmo-bsc.cfg (2 BTS) : on
     # verifie a chaque start, on re-insere si besoin.
     local bsc="$ETC/osmo-bsc.cfg"
-    if [ ! -f "$bsc" ]; then ko "$bsc absent (start-direct.sh --regen)"; rc=1
+    if [ ! -f "$bsc" ]; then ko "$bsc absent (start-native.sh --regen)"; rc=1
     elif grep -q '^ bts 2$' "$bsc"; then ok "BTS 2 EGPRS deja dans osmo-bsc.cfg"
     elif ! grep -q '^msc 0$' "$bsc"; then ko "pas de « msc 0 » dans $bsc : je ne sais pas ou inserer la BTS 2"; rc=1
     else
@@ -213,7 +213,7 @@ etape_banc() {
             systemctl restart osmo-bsc
         fi
     else
-        say "systemctl start osmo-banc (start-direct.sh --no-attach, DSP par defaut) - plusieurs minutes"
+        say "systemctl start osmo-banc (start-native.sh --no-attach, DSP par defaut) - plusieurs minutes"
         systemctl start osmo-banc || { ko "osmo-banc : journalctl -u osmo-banc -n 50"; bilan banc KO; return 1; }
     fi
     wait_until 120 "VTY OsmoBSC :$VTY_BSC"  port_open "$VTY_BSC"  || { bilan banc KO; return 1; }
@@ -260,7 +260,7 @@ etape_modem() {
     if [ "$L1" = dsp ]; then
         # QEMU + ROM TI : le modem prend la place de `mobile` SUR LA MEME socket
         # L1CTL (/tmp/osmocom_l2, osmocon du banc DSP). On ne passe pas par
-        # MOBILE=/MOBILE_CFG= dans /etc/default/osmo-banc : start-direct.sh
+        # MOBILE=/MOBILE_CFG= dans /etc/default/osmo-banc : start-native.sh
         # reecrit le fichier designe par MOBILE_CFG avec son gabarit `mobile`
         # (gps device...), que `modem` refuse. On arrete donc le mobile du banc
         # DSP et on lance modem nous-memes, en unite transitoire.

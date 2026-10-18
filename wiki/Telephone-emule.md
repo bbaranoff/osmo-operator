@@ -82,7 +82,7 @@ Everything goes under a common root, `/opt/GSM` by default (paths hard-coded in 
 `osmo-operator/install_modules/_lib/inst.sh`: `--check` (prerequisites, changes nothing), `--list`,
 `--deps` / `--print-deps` (apt packages, taken from the Dockerfile's list), `--only` / `--skip`,
 a log per step, a post-check. These are **the same scripts** the Dockerfile
-(stages `qemu` and `l1`), `Dockerfile.run`, `start.sh` and the ISO call: a single list of
+(stages `qemu` and `l1`), `Dockerfile.run`, `start-docker.sh` and the ISO call: a single list of
 commands per component.
 
 ### In one pass, from osmo-operator

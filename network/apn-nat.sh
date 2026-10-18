@@ -44,7 +44,7 @@ check_or_add() {   # $1 = table (nat|filter), $2 = chaine, reste = regle
 echo "apn-nat : $SUBNET via $APN_IF -> $OUT_IF"
 rc=0
 # [2026-10-16] sans forward, MASQUERADE et FORWARD ne servent a rien (repris du bloc
-# « NAT du pool GGSN » de start-direct.sh, retire au profit de ce script).
+# « NAT du pool GGSN » de start-native.sh, retire au profit de ce script).
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = 1 ]; then ok "net.ipv4.ip_forward" "deja 1"
 elif [ "$MODE" = status ]; then ok "net.ipv4.ip_forward" "0 (ABSENT)"
 elif sysctl -qw net.ipv4.ip_forward=1 2>/dev/null; then ok "net.ipv4.ip_forward" "mis a 1"

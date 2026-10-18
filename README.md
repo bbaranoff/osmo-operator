@@ -38,9 +38,9 @@ qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm -cpu host 
 Quickest path, from a clone (native or inside the container):
 
 ```bash
-./start-direct.sh --regen     # first run: generate configs from the templates
-./start-direct.sh             # start the bench, attaches to tmux
-./start-direct.sh --stop
+./start-native.sh --regen     # first run: generate configs from the templates
+./start-native.sh             # start the bench, attaches to tmux
+./start-native.sh --stop
 ```
 
 ## Wiki
@@ -52,17 +52,17 @@ into it.
 |---|---|
 | [Home](wiki/Home.md) | quick start, launching, reference card |
 | [Reference](wiki/Reference.md) | the former full README: architecture, layer-1 chains, build graph, multi-PLMN SS7, diagnostics |
-| [Start-direct](wiki/Start-direct.md) | `start-direct.sh` step by step, option manual |
+| [Start-native](wiki/Start-native.md) | `start-native.sh` step by step, option manual |
 | [Build](wiki/Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
 | [ISO](wiki/ISO.md) | what the ISO contains, how it is built and installed |
 | [Environnement](wiki/Environnement.md) | which variables win, what reaches QEMU |
 | [Resultats](wiki/Resultats.md) | reference `check_all.sh` runs and how to read the deviations |
 | [Telephone-emule](wiki/Telephone-emule.md) | plug **only** the emulated phone into your own Osmocom stack |
-| [Lancer-a-la-main](wiki/Lancer-a-la-main.md) | the phone started process by process, with proof at each step |
+| [Lancer-a-la-main](wiki/Lancer-a-la-main.md) · [lancer-pas-a-pas.ipynb](wiki/lancer-pas-a-pas.ipynb) | the phone started process by process, with proof at each step (page, and the same as a runnable notebook: network, then phone, then camp/LU/call) |
 | [Installer-qosmo](wiki/Installer-qosmo.md) | build the QEMU fork (`-M calypso`) |
 | [Installer-grgsm_exe](wiki/Installer-grgsm_exe.md) | build the gr-gsm layer 1 outside QEMU |
 | [Installer-c54x_exe](wiki/Installer-c54x_exe.md) | build the C54x DSP emulator |
-| [installer-osmo-jusquau-dsp.ipynb](wiki/installer-osmo-jusquau-dsp.ipynb) | notebook: the Dockerfile replayed natively, from apt to a call on the DSP |
+| [README-notebook](wiki/README-notebook.md) · [installer-osmo-jusquau-dsp.ipynb](wiki/installer-osmo-jusquau-dsp.ipynb) | the install notebook: fresh Ubuntu 24.04 to a call on the DSP, step by step; how to run it (disposable container, unattended) |
 | [SIM](wiki/SIM.md) | a real sysmoISIM in an Omnikey reader, or a softSIM, served over SAP |
 | [WAN](wiki/WAN.md) | link two nodes over a LAN or the Internet (WireGuard) |
 | [Payload-ISM](wiki/Payload-ISM.md) | SMS text between nodes over an ISM radio link |

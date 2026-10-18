@@ -8,7 +8,7 @@
 # briques, mais l'etat dedie suit le DSP au lieu du decodage du pont (voir
 # pont/dsp/__init__.py). pont/__init__.py et pont.py n'en dependent pas.
 # Lance par c54x_exe/run.sh en MODE=dsp (PONT_PY par defaut), donc aussi par
-# start-direct.sh --dsp.
+# start-native.sh --dsp.
 import os
 import sys
 

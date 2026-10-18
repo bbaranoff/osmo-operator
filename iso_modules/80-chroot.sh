@@ -424,7 +424,7 @@ else
     echo "WARN: /root/.env sans tomli utilisable"
 fi
 
-# Docker NON installe dans le ISO (natif) : le lab tourne via start-direct.sh et le
+# Docker NON installe dans le ISO (natif) : le lab tourne via start-native.sh et le
 # dashboard web via node natif. Le build sur le HOTE utilise le docker du HOTE pour
 # extraire binaires/configs, mais le ISO final nembarque pas docker.
 

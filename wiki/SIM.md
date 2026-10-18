@@ -4,7 +4,7 @@ The bench mobile (`mobile`, osmocom-bb) has no card reader: its SIM is
 either the **test SIM** from the config file (`sim test`, IMSI and Ki written
 in the clear, the default), or a SIM **served over a socket** by the SAP
 protocol (*SIM Access Profile*, `sim sap`). It is this second path that
-`start-direct.sh --sap` sets up, with the SAP server from
+`start-native.sh --sap` sets up, with the SAP server from
 [softSIM](https://gitea.osmocom.org/sim-card/softsim)
 (Ruby), which can serve two things:
 
@@ -44,7 +44,7 @@ tools/osmo-sim.sh shell       # interactive pySim-shell (ADM1 passed if known)
 ## 3. Program the card to the bench's plan
 
 The bench provisions its subscribers in osmo-hlr with a fixed plan
-(`qosmo/run_modules/21-abonnes-hlr.sh`, `start-direct.sh` section `ms_imsi`):
+(`qosmo/run_modules/21-abonnes-hlr.sh`, `start-native.sh` section `ms_imsi`):
 
 | | MS#1 of operator 1 |
 |---|---|
@@ -100,9 +100,9 @@ tools/osmo-sim.sh hlr --creer --ki <card's Ki>     # subscriber created via the 
 ## 4. Launch
 
 ```bash
-./start-direct.sh --sap            # card present → pcsc; otherwise software SIM
-./start-direct.sh --sap=pcsc       # the card, mandatory
-./start-direct.sh --dry-run --sap  # what would be done, without launching anything
+./start-native.sh --sap            # card present → pcsc; otherwise software SIM
+./start-native.sh --sap=pcsc       # the card, mandatory
+./start-native.sh --dry-run --sap  # what would be done, without launching anything
 ```
 
 `start_sap` runs **before** the stack: it launches `demo_server.rb` (softSIM) on
@@ -118,7 +118,7 @@ bench via `MOBILE_CFG`. In grgsm mode, it is `mobile.cfg` generated from
 `configs/mobile.cfg` (`sim sap` in the template, reset to `sim test` without `--sap`)
 that carries it; MS#2 stays on the test SIM.
 
-`./start-direct.sh --stop` also stops the SAP server; a startup always relaunches it fresh
+`./start-native.sh --stop` also stops the SAP server; a startup always relaunches it fresh
 (it is killed with the rest in "Arrêt de la pile avant démarrage" — stopping the stack before startup).
 
 Serve the card by hand, without the stack (to watch the APDUs):

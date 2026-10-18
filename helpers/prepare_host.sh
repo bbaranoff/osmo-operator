@@ -41,7 +41,7 @@ need systemctl
 # Ce bloc exigeait SUDO_USER non vide ET different de root, et sortait en [FAIL]
 # sinon. Deux situations parfaitement legitimes tombaient dedans :
 #
-#   1. `sudo -i` puis ./start.sh - le shell est deja root, sudo n a plus rien a
+#   1. `sudo -i` puis ./launch/start-docker.sh - le shell est deja root, sudo n a plus rien a
 #      transmettre et SUDO_USER est VIDE. C est le mode de travail courant sur
 #      ce banc.
 #   2. L ISO --desktop : la session graphique EST root. build-iso.sh ecrit
@@ -52,7 +52,7 @@ need systemctl
 #
 # Le bon critere n est pas le NOM du compte mais la PRESENCE de sa session,
 # c est-a-dire de son socket pulse. Meme logique que session_pulse_user() dans
-# start.sh, a laquelle ce fichier ne faisait qu ajouter une divergence.
+# start-docker.sh, a laquelle ce fichier ne faisait qu ajouter une divergence.
 resolve_session_user() {
   local u uid sock
   for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)"; do

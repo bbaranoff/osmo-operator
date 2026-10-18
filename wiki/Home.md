@@ -8,18 +8,18 @@ CSFB, at the modem level. No SDR, no physical phone.
 | Page | Contents |
 |---|---|
 | **Home** (here) | recommended quick start (the ISO), launching, reference |
-| [Start-direct](Start-direct.md) | `start-direct.sh` step by step, options manual |
+| [Start-native](Start-native.md) | `start-native.sh` step by step, options manual |
 | [Resultats](Resultats.md) | reference `check_all.sh` runs, 1 and 3 operators, and how to read the deviations |
 | [Build](Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
 | [Environnement](Environnement.md) | which variable wins, what makes it all the way to QEMU |
 | [Reference](Reference.md) | the old full README (in English): multi-PLMN architecture, SS7, SMS, voice, diagnostics |
 | [Telephone-emule](Telephone-emule.md) | plug **only** the emulated phone (qosmo, c54x_exe, grgsm_exe) into **your own** Osmocom stack |
-| [Lancer-a-la-main](Lancer-a-la-main.md) | the phone launched process by process, no script, with proof at every step |
-| [SIM](SIM.md) | the bench's card in an Omnikey HID reader (sysmoISIM programmed by pySim) or softSIM, served to the mobile over SAP: `start-direct.sh --sap`, `tools/osmo-sim.sh` |
+| [Lancer-a-la-main](Lancer-a-la-main.md) · [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb) | the phone launched process by process, no script, with proof at every step |
+| [SIM](SIM.md) | the bench's card in an Omnikey HID reader (sysmoISIM programmed by pySim) or softSIM, served to the mobile over SAP: `start-native.sh --sap`, `tools/osmo-sim.sh` |
 | [WAN](WAN.md) | linking two nodes (LAN or Internet via WireGuard): ports, SS7 hub, `--wan-nodes`, layer-by-layer checks, failures |
-| [Payload-ISM](Payload-ISM.md) | SMS **text** between two nodes over an ISM-band radio link, everything else (SS7, SIP, addresses) over IP: `start-direct.sh --wan --payload-ism`, `network/setup-payload-ism.sh` |
+| [Payload-ISM](Payload-ISM.md) | SMS **text** between two nodes over an ISM-band radio link, everything else (SS7, SIP, addresses) over IP: `start-native.sh --wan --payload-ism`, `network/setup-payload-ism.sh` |
 | [Injecteur-bruit](Injecteur-bruit.md) | degrade the downlink between the bridge and layer 1 (bit flips, bursts, AWGN, I/Q): `BRUIT_MODE=…`, off by default |
-| [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | notebook: the Dockerfile replayed step by step natively, from apt to a call on the DSP |
+| [README-notebook](README-notebook.md) · [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | the install notebook: fresh Ubuntu 24.04 to a call on the DSP, step by step, and how to run it |
 
 ---
 
@@ -110,8 +110,8 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 | Path | When | See |
 |---|---|---|
-| **Docker** — `docker pull bastienbaranoff/norf_gsm`, `sudo ./start.sh` | N operators interconnected through an inter-STP, on an existing host | [README-docker](../doc/README-docker.md) |
-| **Native** — `sudo ./install.sh` then `./start-direct.sh` | a dedicated Ubuntu 24.04 machine, no container | [Build § install.sh](Build.md#4-installsh--native-ubuntu-2404-noble) |
+| **Docker** — `docker pull bastienbaranoff/norf_gsm`, `sudo ./launch/start-docker.sh` | N operators interconnected through an inter-STP, on an existing host | [README-docker](../doc/README-docker.md) |
+| **Native** — `sudo ./install.sh` then `./start-native.sh` | a dedicated Ubuntu 24.04 machine, no container | [Build § install.sh](Build.md#4-installsh--native-ubuntu-2404-noble) |
 | **Build the ISO yourself** — `sudo ./build-iso.sh` | modify the image, pre-wired WAN, arm64 for the hub | [Build § build-iso.sh](Build.md#2-build-isosh--bootable-iso--sd-image) |
 | **Install to disk** — Calamares from the live system | keep the bench, LUKS, NVIDIA drivers | [Build](Build.md) |
 
@@ -169,7 +169,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 ```bash
 tmux attach -t calypso          # the 2G stack; Ctrl-b d detaches
 journalctl -u osmo-banc -f      # if started as a service
-./start-direct.sh --status | --stop
+./start-native.sh --status | --stop
 ./ss7-console.py                # browsable SS7 diagram, built-in VTYs
 ```
 
@@ -187,13 +187,13 @@ journalctl -u osmo-banc -f      # if started as a service
 
 | Command | Effect |
 |---|---|
-| `./start-direct.sh --list` | the plan, without launching |
-| `./start-direct.sh --menu` | asks the questions instead of guessing |
-| `./start-direct.sh --regen` | regenerates the configs from the templates |
-| `./start-direct.sh` | C54x DSP bench (c54x_exe, TI mask ROM), **the default** since 2026-10-01: the mobile camps and does its LU |
-| `./start-direct.sh --grgsm` | gr-gsm layer 1 inside QEMU (the old default): the stack goes all the way to a voice call |
-| `./start-direct.sh --node 2 --hub-ip IP` | this node = node 2 of a WAN, ASP towards the inter-STP |
-| `./start-direct.sh --wan` | N-node WAN, interactive questions |
+| `./start-native.sh --list` | the plan, without launching |
+| `./start-native.sh --menu` | asks the questions instead of guessing |
+| `./start-native.sh --regen` | regenerates the configs from the templates |
+| `./start-native.sh` | C54x DSP bench (c54x_exe, TI mask ROM), **the default** since 2026-10-01: the mobile camps and does its LU |
+| `./start-native.sh --grgsm` | gr-gsm layer 1 inside QEMU (the old default): the stack goes all the way to a voice call |
+| `./start-native.sh --node 2 --hub-ip IP` | this node = node 2 of a WAN, ASP towards the inter-STP |
+| `./start-native.sh --wan` | N-node WAN, interactive questions |
 | `./generate_configs.sh ARFCN=520` | changes a value in `globals.conf` |
 | `sudo ./build-iso.sh --desktop` | rebuild the desktop ISO |
 | `bash ./checks/check_all.sh` | full check, log in `/tmp` |

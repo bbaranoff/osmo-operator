@@ -440,7 +440,7 @@ rendrait méconnaissable.
 `shunt_parse_canned()` attend une **liste de jetons** :
 `FBDET,TOA,PM,SNR,ANGLE,CRC | FULL | ALL | NONE`.
 
-`start-direct.sh` posait `CALYPSO_CANNED=1` depuis toujours. `1` n'est aucun de
+`start-native.sh` posait `CALYPSO_CANNED=1` depuis toujours. `1` n'est aucun de
 ces jetons : il tombait dans le `else`, sortait un `token inconnu '1' ignore`
 noyé dans le démarrage, et le masque restait **vide** :
 
@@ -451,7 +451,7 @@ CALYPSO_CANNED (dette fabriquée EXPLICITE) : FBDET=0 TOA=0 PM=0 SNR=0 ANGLE=0 C
 Le banc tournait avec **rien de canné** pendant que sa configuration affichait
 l'inverse.
 
-Corrigé des deux côtés — et les deux comptent : `start-direct.sh` pose désormais
+Corrigé des deux côtés — et les deux comptent : `start-native.sh` pose désormais
 `FULL`, **et** le parseur accepte `1/ON/YES/TRUE` et `0/OFF/NO/FALSE`. Une
 variable booléenne qui veut dire « rien » au lieu de « tout » est un piège ;
 changer la valeur sans changer le parseur l'aurait laissé armé.

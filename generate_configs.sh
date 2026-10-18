@@ -9,7 +9,7 @@
 #  La mecanique est inchangee : les fichiers de `configs/` contiennent des
 #  marqueurs `__MCC__`, `__ARFCN__`, `__KI__`... qu'une fonction remplace au
 #  demarrage. Ce qui change, c'est qu'il n'y a plus DEUX implementations de
-#  cette fonction - `start.sh` en portait une copie de 132 lignes et
+#  cette fonction - `start-docker.sh` en portait une copie de 132 lignes et
 #  `lib/gabarits.sh` une autre de 70, identiques au formatage pres, qui
 #  derivaient donc en silence. Elles vivent ici, une fois.
 #
@@ -28,12 +28,12 @@
 #
 #    . ./generate_configs.sh
 #         charge globals.conf et definit apply_config_templates().
-#         C'est ce que font start.sh (hote) et lib/gabarits.sh.
+#         C'est ce que font start-docker.sh (hote) et lib/gabarits.sh.
 #
 #  QUI APPELLE QUOI
 #  ----------------
-#    start.sh          -> execute ce script (genere globals.conf) puis le source
-#    start-direct.sh   -> source globals.conf (docker : la conf est deja la)
+#    start-docker.sh          -> execute ce script (genere globals.conf) puis le source
+#    start-native.sh   -> source globals.conf (docker : la conf est deja la)
 #    lib/gabarits.sh   -> source ce script pour apply_config_templates()
 #
 #  MULTI-OPERATEUR
@@ -257,8 +257,8 @@ rand_imei() {
 #
 # CE QUI NE CHANGE PAS, ET C'EST VOULU : l'IMSI (MCC MNC <op sur 4> <ms sur 6>)
 # et le Ki (00 11 ... dd <ms> <op>). Ces deux-la sont derives a l'IDENTIQUE dans
-# quatre endroits - ici pour mobile.cfg, start-direct.sh pour les mobiles,
-# run_modules/21-abonnes-hlr.sh et start.sh pour le HLR - et ils doivent rester
+# quatre endroits - ici pour mobile.cfg, start-native.sh pour les mobiles,
+# run_modules/21-abonnes-hlr.sh et start-docker.sh pour le HLR - et ils doivent rester
 # d'accord au bit pres, sans quoi l'authentification echoue sur un Kc different
 # des deux cotes, sans autre trace qu'un rejet de CIPHER MODE. On ne touche donc
 # qu'au MSISDN, qui n'entre dans aucun calcul de securite.
@@ -266,7 +266,7 @@ osmo_msisdn_pfx() { printf '%s00' "${1:-1}"; }                       # <noeud>00
 osmo_msisdn()     { printf '%d' "$(( ${1:-1} * 100000 + ${2:-1} * 100 + ${3:-1} ))"; }
 
 # Le noeud tel que le voit la generation : l'environnement d'abord (c'est ce que
-# start.sh passe a un conteneur et ce que start-direct.sh exporte avant un
+# start-docker.sh passe a un conteneur et ce que start-native.sh exporte avant un
 # --regen), /etc/osmo-role ensuite, 1 par defaut. JAMAIS vide : un plan de
 # numerotation sans noeud, c'est le plan de tout le monde.
 osmo_node_id() {
@@ -290,19 +290,19 @@ apply_config_templates() {
     # ── OSMO_NO_REGEN : ne pas refaire ce qui vient d'etre fait ─────────────
     # run.sh (qosmo-grgsm) peut rejouer cette fonction au demarrage. Dans un
     # conteneur, c'est une REGRESSION : les configs viennent d'etre generees par
-    # start.sh, avec l'identite du noeud, ses point codes et son inter-STP. Les
+    # start-docker.sh, avec l'identite du noeud, ses point codes et son inter-STP. Les
     # regenerer depuis les gabarits les remplace par les valeurs par defaut -
     # 1.1.2 pour tout le monde, ASP vers le hub docker, en shutdown - et
     # l'interco meurt sans un mot.
     #
     # Ce commentaire nommait run_modules/08-gabarits.sh comme cet appelant. Ce
-    # module N'EXISTE PAS - start-direct.sh le constate deja. Les appelants
-    # reels sont start.sh (deux fois : la boucle des operateurs et le mode
+    # module N'EXISTE PAS - start-native.sh le constate deja. Les appelants
+    # reels sont start-docker.sh (deux fois : la boucle des operateurs et le mode
     # net-host) et build-iso.sh, qui construit l'arbre de l'image. Decrire un
     # module imaginaire a fait regler plus bas une option sur une configuration
     # que personne ne pose.
     #
-    # start-direct.sh pose donc cette variable par defaut, et --regen la leve
+    # start-native.sh pose donc cette variable par defaut, et --regen la leve
     # pour qui veut vraiment repartir des gabarits.
     if [ "${OSMO_NO_REGEN:-0}" = "1" ]; then
         echo "  gabarits : conserves (OSMO_NO_REGEN=1 ; --regen pour regenerer)"
@@ -345,7 +345,7 @@ apply_config_templates() {
         bn=$(basename "$f"); [ "$bn" = "sms-routing.conf" ] && continue
         cp "$f" "$dest/asterisk/"
     done
-    # scripts/ en entier : c'est le comportement de start.sh, le plus permissif
+    # scripts/ en entier : c'est le comportement de start-docker.sh, le plus permissif
     # des deux qui coexistaient. lib/gabarits.sh en copiait une liste blanche,
     # qui omettait silencieusement tout script ajoute depuis.
     cp scripts/* "$dest/osmocom/" 2>/dev/null || true
@@ -407,7 +407,7 @@ apply_config_templates() {
     local bvci="${BVCI:-$(( op_id * 10 + 2 ))}"
     local nsei="${NSEI:-$(( op_id * 10 ))}"
     local nsvci="${NSVCI:-$(( op_id * 10 ))}"
-    # Meme plan d'abonne que le HLR (start.sh, section "HLR subscribers") :
+    # Meme plan d'abonne que le HLR (start-docker.sh, section "HLR subscribers") :
     #    IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6>
     # Ce gabarit sert le MS #1. L'ancien %010d donnait 0000000002 la ou le HLR
     # provisionne 0002000001 : la fiche existait, l'IMSI presente ne la visait
@@ -436,7 +436,7 @@ apply_config_templates() {
 
     # ── Le plan radio, ECRIT, a cote des configurations ─────────────────────
     # ARFCN, unit-id, PLMN etaient recalcules ailleurs a partir des memes
-    # formules - dans start-direct.sh pour les mobiles, dans un module de
+    # formules - dans start-native.sh pour les mobiles, dans un module de
     # qosmo-grgsm pour le side-car. Trois copies d'une meme regle, et la serie de
     # pannes qui va avec : un unit-id 6002 fige, un ARFCN 516 fige, des IMSI
     # sur le PLMN de l'operateur 1. Chaque fois, les valeurs concordaient pour
@@ -446,7 +446,7 @@ apply_config_templates() {
     {
         printf '# radio-plan.env - ecrit par generate_configs.sh. Ne pas editer.\n'
         printf '# Le plan radio et le PLMN de CET operateur, tels qu ils viennent\n'
-        printf '# d etre poses dans les configurations voisines. start-direct.sh le\n'
+        printf '# d etre poses dans les configurations voisines. start-native.sh le\n'
         printf '# lit pour accorder les mobiles et pour piloter le side-car.\n'
         printf 'OPERATOR_ID=%s\n'      "$op_id"
         printf 'PLAN_NODE=%s\n'        "$node"
@@ -464,14 +464,14 @@ apply_config_templates() {
     } > "$dest/osmocom/radio-plan.env"
 
     # extensions.conf porte un #include "annuaire.conf" (les fiches d'abonnes,
-    # ecrites par start.sh pour que le nom de l'appelant arrive au combine).
+    # ecrites par start-docker.sh pour que le nom de l'appelant arrive au combine).
     # Asterisk avertit a chaque chargement quand un include manque, et un banc
-    # monte sans start.sh - une VM, start-direct.sh seul - n'en a pas. On pose
+    # monte sans start-docker.sh - une VM, start-native.sh seul - n'en a pas. On pose
     # donc toujours un fichier, quitte a ce qu'il soit vide : le repli _X. de
     # extensions.conf fait le reste, et l'avertissement disparait.
     if [ ! -f "$dest/asterisk/annuaire.conf" ]; then
         {
-            printf '; annuaire.conf - fiches d abonnes, ecrites par start.sh.\n'
+            printf '; annuaire.conf - fiches d abonnes, ecrites par start-docker.sh.\n'
             printf '; Vide ici : ce banc a ete monte sans annuaire. Les appels\n'
             printf '; passent, ils affichent le numero au lieu du nom.\n'
             printf '[sub-annuaire]\n'
@@ -562,13 +562,13 @@ _apply_node_ss7_addressing() {
     # ── L'ENVIRONNEMENT D'ABORD, le fichier de role ensuite ─────────────────
     # Cette fonction s'execute AUSSI dans un conteneur : run.sh (qosmo-grgsm) peut
     # y rejouer apply_config_templates, ce qui regenere tout /etc/osmocom a
-    # partir des gabarits - et efface l'identite SS7 que start.sh venait
+    # partir des gabarits - et efface l'identite SS7 que start-docker.sh venait
     # d'ecrire. Le conteneur repartait alors avec le plan du gabarit :
     # point-code 1.1.2 pour TOUS les operateurs, donc deux equipements a la meme
     # adresse SS7 et aucun ASP attache.
     #
     # Or le conteneur n'a pas de /etc/osmo-role - il a des VARIABLES, que
-    # start.sh lui passe (OSMO_WAN_NODE, OSMO_HUB_IP). On les lit en premier :
+    # start-docker.sh lui passe (OSMO_WAN_NODE, OSMO_HUB_IP). On les lit en premier :
     # c'est la seule source disponible la ou le probleme se produit.
     local role node hub
     node="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
@@ -581,7 +581,7 @@ _apply_node_ss7_addressing() {
     fi
     # UN ROLE EXPLICITE, ET RIEN D'AUTRE.
     # Deduire "operateur" de la simple presence d'un numero de noeud etait faux
-    # sur l'hote : start.sh y porte WAN_NODE_ID = le noeud de la MACHINE, alors
+    # sur l'hote : start-docker.sh y porte WAN_NODE_ID = le noeud de la MACHINE, alors
     # qu'il genere les configs de CONTENEURS qui sont, eux, d'autres noeuds. Le
     # hook reappliquait donc le noeud de l'hote a chaque operateur : tous se
     # retrouvaient avec le meme point code, et deux equipements a la meme
@@ -589,11 +589,11 @@ _apply_node_ss7_addressing() {
     #
     # Ce rattrapage ne vaut donc QUE pour une machine qui se declare operateur
     # dans /etc/osmo-role (une VM, un noeud natif) ou via OSMO_ROLE. Quand
-    # start.sh calcule lui-meme l'identite de chaque conteneur, il n'a besoin
+    # start-docker.sh calcule lui-meme l'identite de chaque conteneur, il n'a besoin
     # de personne.
 
     # OSMO_WAN_NODE pose dans l'ENVIRONNEMENT vaut declaration lui aussi :
-    # c'est ce que start.sh passe au conteneur (-e OSMO_WAN_NODE), et un
+    # c'est ce que start-docker.sh passe au conteneur (-e OSMO_WAN_NODE), et un
     # conteneur n'a pas de /etc/osmo-role, donc pas de OSMO_ROLE. Avec le seul
     # test sur le role, le rattrapage sortait ici sans un mot la ou il est
     # justement necessaire, et le conteneur gardait le point-code du gabarit.
@@ -616,7 +616,7 @@ _apply_node_ss7_addressing() {
     # porte qu'un ici. OPS_PER_NODE, lue jusqu'ici, n'est posee nulle part dans
     # le depot - elle valait donc toujours 1, mais par accident, et le jour ou
     # quelqu'un l'aurait exportee l'identite du noeud aurait change sans raison.
-    # Ne pas y mettre l'identifiant d'operateur : dans start.sh il vaut l'indice
+    # Ne pas y mettre l'identifiant d'operateur : dans start-docker.sh il vaut l'indice
     # du CONTENEUR, et le noeud 2 passerait de 1.21.2 a 1.22.2.
     local args=(--node "$node" --op 1 --native --conf-dir "$dest/osmocom")
     [ -n "$hub" ] && args+=(--hub-ip "$hub")
@@ -743,7 +743,7 @@ _write_sms_routing_native() {
 # relais SMS visait le plan docker - et rien ne le disait avant le demarrage
 # suivant. Elle est donc appelee des DEUX cotes, sur la meme arborescence :
 #   build-iso.sh        sur $TEMP_CONFIG puis sur $ROOTFS/etc (construction)
-#   start-direct.sh     sur le repertoire temporaire d'un --regen (execution)
+#   start-native.sh     sur le repertoire temporaire d'un --regen (execution)
 # Idempotente : la rejouer sur un arbre deja retouche ne change rien.
 #
 #   $1  racine qui porte osmocom/ : $TEMP_CONFIG, $ROOTFS/etc, /etc

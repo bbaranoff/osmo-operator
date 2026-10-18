@@ -11,7 +11,7 @@ several operators run side by side on one host ([README-ss7](README-ss7.md)).
 sudo docker pull ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
-sudo ./start.sh
+sudo ./launch/start-docker.sh
 ```
 
 Then enter the container and bring the stack up:
@@ -20,19 +20,19 @@ Then enter the container and bring the stack up:
 sudo docker exec -ti osmo-operator-1 bash
 
 cd /opt/GSM/osmo-operator
-./start-direct.sh --regen     # regenerate configs from the templates (first run)
-./start-direct.sh --stop      # make sure nothing is left over
-./start-direct.sh             # start the bench
+./start-native.sh --regen     # regenerate configs from the templates (first run)
+./start-native.sh --stop      # make sure nothing is left over
+./start-native.sh             # start the bench
 ```
 
-`start-direct.sh` attaches to tmux at the end: you are looking at a live GSM
+`start-native.sh` attaches to tmux at the end: you are looking at a live GSM
 network with a mobile camped on it. Re-attach later with:
 
 ```bash
 docker exec -ti osmo-operator-1 tmux -S /tmp/osmocom_tmux attach -t osmocom
 ```
 
-Everything `start-direct.sh` does is the same as in native mode:
+Everything `start-native.sh` does is the same as in native mode:
 [README-native](README-native.md).
 
 ## Build the images
@@ -109,7 +109,7 @@ containers.
 
 ## Several operators
 
-`sudo ./start.sh` asks for a bridge mode and N operators (1 to 9), each in its
+`sudo ./launch/start-docker.sh` asks for a bridge mode and N operators (1 to 9), each in its
 own container, joined by an inter-STP container. See [README-ss7](README-ss7.md).
 
 ## CI images

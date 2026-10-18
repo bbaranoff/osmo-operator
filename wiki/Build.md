@@ -6,7 +6,7 @@ out as a `.deb` package and stays **on the host**, in `/var/cache/osmo-debs`. Th
 build compiles everything; later ones only compile what is missing.
 
 ```
-build.sh ──► image osmocom-nitb ──► start.sh / compose.sh      (Docker)
+build.sh ──► image osmocom-nitb ──► start-docker.sh / compose.sh      (Docker)
      │              │
      │              └──► build-iso.sh ──► ISO amd64 / .img arm64   (bootable)
      └──► /var/cache/osmo-debs ──► packaging/build-debs.sh ──► dpkg -i   (no git)
@@ -73,7 +73,7 @@ alone builds only `osmocom-stp`.
 | Option | Effect |
 |---|---|
 | `--role=operator\|interstp` | a single image |
-| `--node=N` | ISO pre-assigned to node N (otherwise the node is chosen at launch, `start-direct.sh --node`) |
+| `--node=N` | ISO pre-assigned to node N (otherwise the node is chosen at launch, `start-native.sh --node`) |
 | `--lite` | image without workshops |
 | `--desktop` | GNOME, bench status Conky, icons « Lancer le banc GSM », « multi-operator », « osmo-lte », « Pilotes graphiques » |
 | `--all` | everything |
@@ -128,7 +128,7 @@ sudo ./build-iso.sh --wan --wan-nodes="1:IP:IND 2:IP:IND …" --wan-id=N --wan-o
 
 Sets `WAN_AUTO=1` in `/etc/osmo-wan.conf`: the bench brings up the WAN without asking.
 Without `--node`, **a single ISO serves all nine nodes** — the number is deduced
-from the local IPs or passed with `start-direct.sh --node N`.
+from the local IPs or passed with `start-native.sh --node N`.
 
 ### Miscellaneous
 
@@ -175,7 +175,7 @@ sudo ./install.sh --skip build     # all but one
 The steps live in `install_modules/`. `bureau` installs the same files as
 the ISO (`data/desktop/*.desktop`, `data/*.svg`) in the menu and on the desktop of
 root and of the `sudo` user. The native install **does not enable** the
-systemd units. Launching is still `./start-direct.sh`, which delegates to
+systemd units. Launching is still `./start-native.sh`, which delegates to
 `/opt/GSM/qosmo/run.sh`.
 
 The emulated phone (steps `firmware`, `qosmo`, `c54x`, `grgsm-exe` — group `calypso`,

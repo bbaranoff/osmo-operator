@@ -69,10 +69,10 @@ vty() {
 # Sans ca le script resterait bloque sur une session interactive.
 if [ "$RESTART" = 1 ]; then
     say "arret de la pile en cours"
-    ( cd "$HERE" && CALYPSO_NO_ATTACH=1 ./start-direct.sh --stop ) >"$OUT/stop.log" 2>&1
+    ( cd "$HERE" && CALYPSO_NO_ATTACH=1 ./start-native.sh --stop ) >"$OUT/stop.log" 2>&1
     sleep 3
     say "demarrage detache (CALYPSO_NO_ATTACH=1)"
-    ( cd "$HERE" && CALYPSO_NO_ATTACH=1 setsid ./start-direct.sh ) >"$OUT/start.log" 2>&1 &
+    ( cd "$HERE" && CALYPSO_NO_ATTACH=1 setsid ./start-native.sh ) >"$OUT/start.log" 2>&1 &
 else
     say "pile en cours reutilisee (--no-restart)"
 fi

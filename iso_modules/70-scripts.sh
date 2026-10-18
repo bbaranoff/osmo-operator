@@ -4,7 +4,7 @@
 # variables, memes fonctions. Ne s execute pas seul. `return` en tete de
 # module = "rien a faire ici" (c est ainsi que --arm saute une etape).
 
-# ── Etape 7 : Injection des scripts projet et installation du lanceur start-direct.sh ──
+# ── Etape 7 : Injection des scripts projet et installation du lanceur start-native.sh ──
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 # ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo-operator ────────────────────────────
 # Ici vivait la fabrication d'un SECOND arbre, /opt/GSM/osmo-operator : une copie
@@ -28,7 +28,7 @@ echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
 # on le remplit depuis le depot de construction, et il n'y a toujours qu'un
 # seul chemin.
 P="$ROOTFS/opt/GSM/osmo-operator"
-if [ ! -x "$P/start-direct.sh" ]; then
+if [ ! -x "$P/start-native.sh" ]; then
     echo -e "  ${YELLOW}!${NC} /opt/GSM/osmo-operator sans lanceur (image perimee, clone impossible)"
     echo -e "    -> remplissage depuis le depot de construction ${CYAN}${DIR}${NC}"
     mkdir -p "$P"
@@ -37,11 +37,12 @@ if [ ! -x "$P/start-direct.sh" ]; then
     tar -C "$DIR" --exclude=.git --exclude='*.iso' -cf - . | tar -C "$P" -xf -
     find "$P" -name "*.sh" -exec chmod +x {} \;
 fi
-if [ ! -x "$P/start-direct.sh" ]; then
-    echo -e "  ${RED}✗${NC} start-direct.sh introuvable - l'ISO n'aura pas de lanceur" >&2
+if [ ! -x "$P/start-native.sh" ]; then
+    echo -e "  ${RED}✗${NC} start-native.sh introuvable - l'ISO n'aura pas de lanceur" >&2
     exit 1
 fi
-ln -sf /opt/GSM/osmo-operator/start-direct.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/start-native.sh "$ROOTFS/usr/local/bin/osmo-start-native" 2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/start-native.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true   # ancien nom
 # [2026-09-25] Le fond par defaut (80-chroot.sh le lit dans CET arbre, qui vient
 # du clone GitHub) : pose depuis le depot de construction, pour qu une image non
 # encore poussee parte quand meme avec son fond.
@@ -64,7 +65,7 @@ ln -sf /opt/GSM/osmo-operator/tools/osmo-fond.py "$ROOTFS/usr/local/bin/osmo-fon
 ln -sf /opt/GSM/osmo-operator/tools/osmo-op.sh "$ROOTFS/usr/local/bin/osmo-op" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-drivers.sh "$ROOTFS/usr/local/bin/osmo-drivers" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overlay-draw" 2>/dev/null || true
-# (osmo-start-lab -> start.sh retire le 2026-09-02 : start.sh est le lanceur
+# (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then
     cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
@@ -129,7 +130,7 @@ if [ "$ISO_WAN" = "1" ]; then
         wan_nodes_parse "$ISO_WAN_NODES" || exit 1
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
     else
-        # Construction interactive : memes questions que ./start.sh --wan.
+        # Construction interactive : memes questions que ./launch/start-docker.sh --wan.
         # Le numero du noeud demande ici n'est qu'un defaut : chaque machine
         # qui demarre l'ISO se re-reconnait a son IP.
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
@@ -139,7 +140,7 @@ if [ "$ISO_WAN" = "1" ]; then
     WAN_AUTO=1 WAN_CONF_FILE="$ROOTFS/etc/osmo-wan.conf" wan_nodes_save
     wan_nodes_summary
     echo -e "  ${GREEN}✓${NC} /etc/osmo-wan.conf fige dans l'ISO (WAN_AUTO=1)"
-    echo -e "  ${CYAN}Au boot :${NC} start-direct.sh applique le WAN tout seul ;"
+    echo -e "  ${CYAN}Au boot :${NC} start-native.sh applique le WAN tout seul ;"
     echo -e "  ${CYAN}sans --wan a la construction, l'ISO n'a AUCUN WAN.${NC}"
 else
     echo -e "  ${CYAN}[7b/9] WAN non embarque (--wan absent) - ISO autonome${NC}"
@@ -149,7 +150,7 @@ fi
 # L'ancien load-osmocom-image.service chargeait osmocom-run.tar.gz via 'docker
 # load' au boot ; son ExecStartPre 'while ! docker info' bloquait indefiniment la
 # file systemd en natif (docker jamais up) → boot fige. Le lab tourne desormais
-# en natif (start-direct.sh) : pas d'image Docker a charger, pas de ce service.
+# en natif (start-native.sh) : pas d'image Docker a charger, pas de ce service.
 
 # ── Etape 9 : Configuration chroot (paquets) ───────────────────────────────
 # ── Ce que le chroot ne peut pas ecrire lui-meme ────────────────────────────

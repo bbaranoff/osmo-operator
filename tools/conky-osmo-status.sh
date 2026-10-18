@@ -335,7 +335,7 @@ vue)
                 echo "${T}${e%%:*}${TF}"
                 echo "$_out"
             done
-            [ "$_vide" = 0 ] || echo "${C1}banc a l arret${C} - ${C2}./start-direct.sh${C}" ;;
+            [ "$_vide" = 0 ] || echo "${C1}banc a l arret${C} - ${C2}./start-native.sh${C}" ;;
     esac
     ;;
 ops|hub)
@@ -468,7 +468,7 @@ services)
     if ! banc_debout; then
         f="$(systemctl --failed --no-legend 2>/dev/null | wc -l)"
         [ "$f" -gt 0 ] && echo "${WARN} ${f} service(s) systemd en echec" \
-                       || echo "${C1}banc a l arret${C} - ${C2}./start-direct.sh${C}"
+                       || echo "${C1}banc a l arret${C} - ${C2}./start-native.sh${C}"
         exit 0
     fi
     s=""

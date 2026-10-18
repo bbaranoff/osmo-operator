@@ -126,8 +126,8 @@ check_gapk() {
 # [2026-08-12] Cette fonction jugeait sur la PRESENCE DE /dev/snd. Or aucun PCM
 # de cette chaine n'est une carte : gsm_out et gsm_in sont `type pulse`
 # (/etc/asound.conf) et sortent dans des null-sinks. Sur une machine sans carte
-# son - un serveur, exactement la cible du projet - start.sh ne passe pas
-# `--device /dev/snd` (start.sh:191), check_alsa echouait, et mode_loopback
+# son - un serveur, exactement la cible du projet - start-docker.sh ne passe pas
+# `--device /dev/snd` (start-docker.sh:191), check_alsa echouait, et mode_loopback
 # faisait `exit 1 : ALSA requis` alors que toute la chaine pulse etait
 # fonctionnelle. On teste donc CE QU'ON VA UTILISER : le PCM s'ouvre-t-il ?
 # Meme geste que assert_audio_devices() de lib/audio.sh - une seconde de

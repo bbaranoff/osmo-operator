@@ -48,7 +48,7 @@ MSC_VTY = (os.environ.get("OSMO_MSC_VTY_HOST", "127.0.0.1"),
 #
 # [2026-09-23] LE PORT PAR DEFAUT N'EST PLUS UNE VALEUR, C'EST UNE LISTE.
 # Le mobile du fork QEMU (mobile.cfg) lie 4247, celui du banc DSP
-# (c54x_exe/mobile_pont.cfg) lie 4347. start-direct.sh passe le bon port
+# (c54x_exe/mobile_pont.cfg) lie 4347. start-native.sh passe le bon port
 # depuis le 22/09, mais osmo-pmos-setup lance l'instance --connect (le modem de
 # la VM) sans OSMO_MOB_VTY_PORT : en --dsp elle parlait a 4247, ou personne
 # n'ecoute, et le telephone restait sans reseau et sans appel, sans une
@@ -121,7 +121,7 @@ IN_CTX = {c.strip() for c in os.environ.get(
 # vient du module res_clioriginate, absent de cette installation (modules.conf
 # est en autoload = no) : la CLI repondait « No such command ». L AMI, lui, est
 # deja actif dans manager.conf ; il n y manquait qu un compte, pose par
-# start-direct.sh depuis configs/manager-osmo.conf.
+# start-native.sh depuis configs/manager-osmo.conf.
 AMI_HOST = os.environ.get("OSMO_AMI_HOST", "127.0.0.1")
 AMI_PORT = int(os.environ.get("OSMO_AMI_PORT", "5038"))
 AMI_USER = os.environ.get("OSMO_AMI_USER", "osmo")

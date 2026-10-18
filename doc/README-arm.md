@@ -24,7 +24,7 @@ sudo dd if=osmo-operator-<…>-rpi4.img of=/dev/sdX bs=4M status=progress conv=f
 ```
 
 At first boot the root partition grows to fill the card (`osmo-grow-root`).
-Then use the bench as in [README-native](README-native.md): `./start-direct.sh`.
+Then use the bench as in [README-native](README-native.md): `./start-native.sh`.
 
 ## Build it
 

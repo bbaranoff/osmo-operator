@@ -334,13 +334,13 @@ chroot "$ROOTFS" dpkg-reconfigure -f noninteractive keyboard-configuration 2>/de
 
 # Ce qui reste au login : le rappel, qui n'attend rien.
 # La commande DEPEND du role : le hub n'a pas de coeur GSM a demarrer, et
-# start-direct.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
-# Lui dicter start-direct.sh, c'est envoyer droit dans une erreur.
+# start-native.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
+# Lui dicter start-native.sh, c'est envoyer droit dans une erreur.
 if [ "$ISO_ROLE" = "interstp" ]; then
-    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo-operator/start-interstp.sh'
-    OSMO_START_HINT2='  (etat des noeuds attaches : ./start-interstp.sh --status)'
+    OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo-operator/launch/start-interstp.sh'
+    OSMO_START_HINT2='  (etat des noeuds attaches : ./launch/start-interstp.sh --status)'
 else
-    OSMO_START_HINT='Pour demarrer la stack : /opt/GSM/osmo-operator/start-direct.sh --node N'
+    OSMO_START_HINT='Pour demarrer la stack : /opt/GSM/osmo-operator/start-native.sh --node N'
     OSMO_START_HINT2='  (N de 1 a 9 : il fixe les point codes 1.<N>1.x du noeud)'
 fi
 cat > "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh" <<KBSCRIPT

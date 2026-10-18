@@ -705,7 +705,7 @@ class App(object):
                 "  - l'etat des AS et ASP vus du cote operateur (VTY du STP local) ;",
                 "  - l'audit DAUD d'un point code a travers le hub.",
                 "",
-                "Sur le noeud du hub : ./start-interstp.sh --status",
+                "Sur le noeud du hub : ./launch/start-interstp.sh --status",
             ])
 
     def stp_menu(self, box):

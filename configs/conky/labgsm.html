@@ -149,7 +149,7 @@ function duree(s){
 function drawLive(state){
   const box=document.getElementById('live'); if(!box) return;
   if(!state || !state.bsc){
-    box.innerHTML='<div class="grp warn"><span class="lab">BANC</span> à l\'arrêt — <b>./start-direct.sh</b> ou le bouton <b>run standalone</b></div>';
+    box.innerHTML='<div class="grp warn"><span class="lab">BANC</span> à l\'arrêt — <b>./start-native.sh</b> ou le bouton <b>run standalone</b></div>';
     return;
   }
   const s=state.subs||{}; const calls=state.calls|0;

@@ -143,7 +143,7 @@ ISSUES=0
 
 if [ ! -d /dev/snd ]; then
     fail "BLOQUANT: /dev/snd absent → pas d'audio possible"
-    echo "       Fix: dans start.sh, verifier que --device /dev/snd est dans le docker run"
+    echo "       Fix: dans start-docker.sh, verifier que --device /dev/snd est dans le docker run"
     ISSUES=$((ISSUES+1))
 fi
 
@@ -155,7 +155,7 @@ if [ -z "${PULSE_SERVER:-}" ] && [ -d /dev/snd ]; then
     echo "         -e PULSE_SERVER=unix:/run/user/1000/pulse/native"
     echo "       Fix 2: utiliser un device ALSA direct (bypass PulseAudio) :"
     echo "         Trouver le device: aplay -l"
-    echo "         Puis: ALSA_OUTPUT=hw:0,0 ALSA_INPUT=hw:0,0 dans start.sh"
+    echo "         Puis: ALSA_OUTPUT=hw:0,0 ALSA_INPUT=hw:0,0 dans start-docker.sh"
     ISSUES=$((ISSUES+1))
 fi
 

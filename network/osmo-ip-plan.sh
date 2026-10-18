@@ -40,9 +40,9 @@
 #           c'est docker qui adresse.
 #   natif   l'adresse vient du DHCP, elle peut manquer au lancement, et le
 #           segment prive du noeud est 192.168.<noeud+1>.x.
-# La detection reprend celle de start-direct.sh, au mot pres : /.dockerenv ET
-# /etc/docker-entrypoint-cmd (le couple qui identifie un conteneur DE CE DEPOT),
-# puis le cgroup en repli.
+# « docker » = une image DE CE DEPOT : OSMO_IMAGE=1 (pose par le Dockerfile), ou
+# en repli /.dockerenv ET /etc/docker-entrypoint-cmd. Tout autre conteneur
+# (ubuntu:24.04 nu) est adresse comme une machine native (voir detect_runtime_env).
 #
 # Usage :   osmo-ip-plan.sh [--apply|--show] [--node N]
 # -----------------------------------------------------------------------------
@@ -65,11 +65,18 @@ done
 LOOPBACK_FALLBACK="${OSMO_PRIV_FALLBACK:-127.0.0.66}"
 
 # ── docker ou natif ─────────────────────────────────────────────────────────
+# [2026-10-18] « docker » veut dire ICI : une image de CE depot, dont le
+# reseau est pose par start-docker.sh / compose (backbone 172.20.0.x). Le Dockerfile
+# pose ENV OSMO_IMAGE=1 ; en repli (variable perdue sous sudo, ou dans une
+# unite systemd qui n herite pas de l environnement du conteneur), le couple
+# /.dockerenv + /etc/docker-entrypoint-cmd ecrit par scripts/entrypoint.sh.
+# Plus de repli sur le seul /.dockerenv ni sur le cgroup : un ubuntu:24.04 nu
+# (le conteneur jetable du notebook d installation) passait pour « docker »,
+# personne n y posait 192.168.2.10, et osmo-ggsn / osmo-sgsn refusaient de
+# demarrer. Tout autre conteneur est donc traite comme une machine native.
 detect_runtime_env() {
+    if [ "${OSMO_IMAGE:-0}" = 1 ]; then echo docker; return; fi
     if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then echo docker; return; fi
-    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
-        echo docker; return
-    fi
     echo native
 }
 

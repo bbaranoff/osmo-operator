@@ -310,7 +310,7 @@ pmos_modem_start() {
     fi
     # /usr/bin/python3 et non le shebang : lance depuis le banc, le PATH place
     # le venv en tete et l interprete qu on y trouve n a pas les liaisons dont
-    # ces outils ont besoin (meme piege que dans start-direct.sh).
+    # ces outils ont besoin (meme piege que dans start-native.sh).
     OSMO_VM_READY_PORT="$SSH_PORT" setsid /usr/bin/python3 \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$AT_PORT" \
         >>/tmp/osmo-phonesim-vm.log 2>&1 &

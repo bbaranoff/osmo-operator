@@ -5,13 +5,13 @@ outside QEMU ([c54x_exe](https://github.com/bbaranoff/c54x_exe)) and runs the
 mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM). This has been the
 default since 2026-10-01.
 
-← [README](../README.md) · Details: [wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md), [wiki/Start-direct §8-dsp](../wiki/Start-direct.md), [notebook](../wiki/installer-osmo-jusquau-dsp.ipynb), [c54x_exe README](https://github.com/bbaranoff/c54x_exe)
+← [README](../README.md) · Details: [wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md), [wiki/Start-native §8-dsp](../wiki/Start-native.md), [install notebook](../wiki/README-notebook.md), [c54x_exe README](https://github.com/bbaranoff/c54x_exe)
 
 ```bash
-./start-direct.sh                         # real C54x mask ROM (default)
-./start-direct.sh --dsp                   # the same, explicitly
+./start-native.sh                         # real C54x mask ROM (default)
+./start-native.sh --dsp                   # the same, explicitly
 MODE=dsp PONT=1 /opt/GSM/c54x_exe/run.sh  # the mobile chain alone, no network
-BANC_DSP=none ./start-direct.sh --dsp     # the stack only, no DSP bench
+BANC_DSP=none ./start-native.sh --dsp     # the stack only, no DSP bench
 ```
 
 ## How it fits together
@@ -50,7 +50,7 @@ The five steps of `c54x_exe/run.sh`:
 
 `--dsp` starts **no bridge of its own**: `c54x_exe/run.sh` runs one on
 5700-5702 (step 5). A second one on the same ports would die on *Address
-already in use*. `./start-direct.sh --stop` tears down the DSP bench too,
+already in use*. `./start-native.sh --stop` tears down the DSP bench too,
 without repeating `--dsp`.
 
 ## What the ROM does today

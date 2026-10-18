@@ -57,11 +57,11 @@ radio chain, the text does not get through.
 On **each** node, with the WAN already in place:
 
 ```bash
-# 1. set up the radio link (once, or redone by start-direct)
+# 1. set up the radio link (once, or redone by start-native)
 sudo ./network/setup-payload-ism.sh --serial /dev/ttyUSB0 --baud 9600
 
 # 2. launch the bench: WAN over IP + payload over ISM
-sudo ./start-direct.sh --wan --payload-ism
+sudo ./start-native.sh --wan --payload-ism
 ```
 
 `--payload-ism=serial` (or `=exec`, `=fifo`, `=loopback`) additionally writes the
@@ -111,4 +111,4 @@ cage. It is your responsibility as the bench's operator.
 | `scripts/ism_payload.py` | the ISM payload link: backends, frame + CRC, correlation by token, self-test |
 | `scripts/sms-interop-relay.py` | SMS relay: token over TCP, text over radio when `[payload] mode=ism` |
 | `network/setup-payload-ism.sh` | writes `[payload]`, sets the serial baud rate, drops the SDR templates, self-test |
-| `start-direct.sh` | the `--payload-ism[=backend]` option |
+| `start-native.sh` | the `--payload-ism[=backend]` option |

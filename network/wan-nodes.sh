@@ -4,8 +4,8 @@
 # =============================================================================
 #
 # Ce fichier ne definit que des fonctions et des variables : il est SOURCE par
-#   start.sh          (hote docker, N operateurs par noeud)
-#   start-direct.sh   (natif / ISO, 1 operateur par noeud)
+#   start-docker.sh          (hote docker, N operateurs par noeud)
+#   start-native.sh   (natif / ISO, 1 operateur par noeud)
 #   build-iso.sh      (fige la table dans l'ISO)
 #   network/setup-wan-mesh.sh  (l'applique a Asterisk / iptables / SMS)
 #
@@ -360,6 +360,12 @@ wan_nodes_save() {
     if [ -z "$host" ] && [ -r "$f" ]; then
         host="$(sed -n 's/^WAN_DOCKER_HOST=//p' "$f" | tr -d "\"' " | tail -1)"
     fi
+    # [2026-10-18] WAN_AUTO_SAVE, s'il est pose, l'emporte sur WAN_AUTO : relire
+    # la table (wan_nodes_load la source) remettait WAN_AUTO=1 dans le shell, et
+    # chaque sauvegarde suivante le reecrivait - un seul --wan, et le WAN
+    # remontait a chaque demarrage. start-native.sh le pose : 1 seulement si
+    # c'est WAN_AUTO=1 lui-meme qui a monte le WAN (noeud d'ISO construite avec
+    # --wan), 0 pour un --wan tape a la main.
     cat > "$f" <<EOF
 # /etc/osmo-wan.conf - table des noeuds WAN (genere par network/wan-nodes.sh)
 # Format : WAN_NODES="id:ip:indicatif[:operateurs] ..."  (operateurs : defaut 1)
@@ -368,7 +374,7 @@ WAN_NODE_COUNT=${WAN_NODE_COUNT}
 WAN_NODE_ID=${WAN_NODE_ID}
 WAN_OPS=${WAN_OPS}
 # WAN_AUTO=1 : les lanceurs appliquent le WAN sans qu'on repasse --wan.
-WAN_AUTO=${WAN_AUTO:-0}
+WAN_AUTO=${WAN_AUTO_SAVE:-${WAN_AUTO:-0}}
 EOF
     # Ecrite seulement si on la connait : une ligne vide serait lue comme une
     # passerelle, et une passerelle vide ne se distingue pas d'une passerelle

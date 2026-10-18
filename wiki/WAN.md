@@ -1,6 +1,6 @@
 # WAN — linking two nodes
 
-Two machines, each running its own stack (`start-direct.sh`, one operator per
+Two machines, each running its own stack (`start-native.sh`, one operator per
 node), linked so that the mobile on node 1 can call and text the mobile on node
 2. The method works the same on a LAN and over the Internet. Over the Internet
 it goes through a **WireGuard** tunnel (§2), which is the only part that changes.
@@ -130,7 +130,7 @@ detection, and it is better than node cards for a first setup (see §7).
 **A — node 1, runs the hub**:
 
 ```bash
-sudo ./start-direct.sh --regen-conf \
+sudo ./start-native.sh --regen-conf \
      --wan-nodes "1:10.99.0.1:11 2:10.99.0.2:22" --wan-id 1 --node 1 \
      --hub-ip 10.99.0.1 --interstp
 ```
@@ -138,11 +138,14 @@ sudo ./start-direct.sh --regen-conf \
 **B — node 2**, once A shows `Inter-STP … OK`:
 
 ```bash
-sudo ./start-direct.sh --regen-conf \
+sudo ./start-native.sh --regen-conf \
      --wan-nodes "1:10.99.0.1:11 2:10.99.0.2:22" --wan-id 2 --node 2 \
      --hub-ip 10.99.0.1 --no-interstp
 ```
 
+- `--wan-nodes` applies the WAN **for this run only**: the next plain
+  `./start-native.sh` starts without it. Pass the same options again (or set
+  `WAN_AUTO=1` in `/etc/osmo-wan.conf`) for the node to mesh at every start.
 - `--regen-conf` starts from an empty table. The old one is saved as
   `/etc/osmo-wan.conf.avant-regen-<date>`. Without this option, a peer seen
   once and then switched off stays in the table and leaves a **PROHIB** route
@@ -153,7 +156,7 @@ sudo ./start-direct.sh --regen-conf \
   neighbouring hub on 2908. There is no extra address to add and no
   `AllowedIPs` to widen.
 - Order matters. If B starts before the hub, its ASP waits and
-  `start-direct.sh` prints `hub 10.99.0.1 muet` (hub silent). Restart B once
+  `start-native.sh` prints `hub 10.99.0.1 muet` (hub silent). Restart B once
   the hub is up.
 
 What each start does, in order: write `/etc/osmo-wan.conf` →
@@ -197,8 +200,8 @@ Each step's logs are in `$LOG_DIR` (default `/tmp`): `wan-mesh.log`,
 cards are exchanged, and each node imports the other's:
 
 ```bash
-sudo ./start-direct.sh --gen-conf mynode2.conf      # on B
-sudo ./start-direct.sh --wan mynode2.conf --node 1 --hub-ip 10.99.0.1   # on A
+sudo ./start-native.sh --gen-conf mynode2.conf      # on B
+sudo ./start-native.sh --wan mynode2.conf --node 1 --hub-ip 10.99.0.1   # on A
 ```
 
 Before sending a card, check its `OSMO_NODE_IP` line. On a machine with no
@@ -223,7 +226,7 @@ node must reach every other: either a full WireGuard mesh, or
 |---|---|---|
 | PROHIB route at the STP towards a node that is off | old entry in `/etc/osmo-wan.conf` | restart with `--regen-conf` **on the node that runs the hub**: a hub already running elsewhere is not rebuilt |
 | `aucune IP locale dans la table - passez --wan-id N` (no local IP in the table) | the table address is not on any interface (public IP, tunnel down) | `--wan-id N --node N`, check `wg show` |
-| `… repond au ping mais pas en SCTP 2908` (answers ping but not SCTP 2908) | the hub is not running on the machine that holds the address | start A first, or `sudo ./start-interstp.sh --ip 10.99.0.1` on A |
+| `… repond au ping mais pas en SCTP 2908` (answers ping but not SCTP 2908) | the hub is not running on the machine that holds the address | start A first, or `sudo ./launch/start-interstp.sh --ip 10.99.0.1` on A |
 | ASP going up and down (flapping in `diag-interstp.sh`) | firewall on 2908, or two hubs | §4; only one node with `--interstp`, the others `--no-interstp` |
 | SIP trunk `Unavail` | 5060 filtered (ufw), or wrong port targeted | §4; `pjsip show endpoints`, `tcpdump -ni wg0 port 5060` |
 | The call rings but there is no audio | RTP filtered, or SDP with an address the peer cannot reach | open 20000–20499; the table address must be the tunnel's |

@@ -1,12 +1,15 @@
 #!/bin/bash
-# start.sh - Lance la stack Osmocom GSM multi-operateurs
+# start-docker.sh - Lance la stack Osmocom GSM multi-operateurs
 #
 # Modes : net-host (1 operateur, SDR physique) | bridge (N operateurs SS7 inter-op)
 set -eu
+# Racine du depot : ce script vit dans launch/ depuis le 2026-10-18 (ex start.sh a la
+# racine). Les anciens chemins en « dirname $0 » visaient en fait le depot.
+START_REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 # ── Ce script est le lanceur de l'HOTE. Refus net s'il tourne DANS le conteneur ──
-# [2026-08-12] start.sh pilote docker (build, reseaux, `docker run`, volumes) ;
-# start-direct.sh, lui, prepare l'environnement Calypso et lance run.sh A
+# [2026-08-12] start-docker.sh pilote docker (build, reseaux, `docker run`, volumes) ;
+# start-native.sh, lui, prepare l'environnement Calypso et lance run.sh A
 # L'INTERIEUR. Les confondre ne donne pas une erreur lisible : `docker` n'existe
 # pas dans l'image, donc on part sur une cascade de "command not found" apres
 # avoir deja cree des fichiers et touche des configs. Mieux vaut s'arreter avant
@@ -18,9 +21,9 @@ set -eu
 # seul serait vrai dans n'importe quel conteneur, y compris un ou ce script
 # aurait legitimement sa place.
 if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
-    printf '\033[1;31mVous etes dans le docker ! Utilisez start-direct.sh\033[0m\n' >&2
-    printf '\n  \033[0;36m/opt/GSM/osmo-operator/start-direct.sh\033[0m   (ou ./start-direct.sh depuis le depot)\n' >&2
-    printf '\n  start.sh est le lanceur de l'"'"'HOTE : il construit l'"'"'image, cree les\n' >&2
+    printf '\033[1;31mVous etes dans le docker ! Utilisez start-native.sh\033[0m\n' >&2
+    printf '\n  \033[0;36m/opt/GSM/osmo-operator/start-native.sh\033[0m   (ou ./start-native.sh depuis le depot)\n' >&2
+    printf '\n  start-docker.sh est le lanceur de l'"'"'HOTE : il construit l'"'"'image, cree les\n' >&2
     printf '  reseaux et fait le "docker run". Rien de tout ca n'"'"'a de sens ici.\n' >&2
     exit 1
 fi
@@ -37,7 +40,7 @@ IMAGE_BASE="osmocom-nitb"
 # start-nitb.sh, qui relance exactement ce script avec IMAGE_RUN=osmocom-nitb.
 # Idiome `:=` du projet : une valeur posee explicitement en amont gagne, le
 # defaut ne s'applique qu'a vide. NE PAS remettre en dur : start-nitb.sh
-# deviendrait silencieusement un alias de start.sh, ce qui est indiscernable
+# deviendrait silencieusement un alias de start-docker.sh, ce qui est indiscernable
 # d'un lanceur qui marche.
 IMAGE_RUN="${IMAGE_RUN:-osmocom-run}"
 
@@ -69,8 +72,8 @@ WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
 OPERATOR_DECLS=()
 # [2026-08-31] On HERITE de l environnement au lieu de l ecraser.
 # Cette ligne valait OPERATOR_COUNT_HINT="" sec : un appelant qui posait
-# la variable (env OPERATOR_COUNT_HINT=2 ./start.sh ...) la voyait effacee
-# ici, bien avant sa lecture l.1421 - et start.sh reposait la question
+# la variable (env OPERATOR_COUNT_HINT=2 ./launch/start-docker.sh ...) la voyait effacee
+# ici, bien avant sa lecture l.1421 - et start-docker.sh reposait la question
 # « Nombre d'operateurs (1-36) » qu on croyait justement avoir evitee.
 # Silencieux de bout en bout : la variable etait bien passee, bien nommee,
 # et simplement remise a zero en chemin.
@@ -91,7 +94,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
 
 # ── SMS Routing ────────────────────────────────────────────────────────────────
-SMS_ROUTING_SCRIPT="$(dirname "$0")/scripts/sms-routing-setup.sh"
+SMS_ROUTING_SCRIPT="$START_REPO/scripts/sms-routing-setup.sh"
 if [ -f "$SMS_ROUTING_SCRIPT" ]; then
     source "$SMS_ROUTING_SCRIPT"
 fi
@@ -119,7 +122,7 @@ VBOX_NODES=""
 VBOX_HOST_NODE=1
 BUILD_STP=0
 # shellcheck source=network/wan-nodes.sh
-. "$(dirname "$0")/network/wan-nodes.sh"
+. "$START_REPO/network/wan-nodes.sh"
 
 WAN_ENABLED="false"
 WAN_LOCAL_IP=""
@@ -130,7 +133,7 @@ WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
-# Choix passes au start-direct.sh DANS le conteneur via le handoff (NO_MENU=1),
+# Choix passes au start-native.sh DANS le conteneur via le handoff (NO_MENU=1),
 # pour eviter les menus whiptail laggy en docker exec -ti. Fixes sur l'HOTE.
 # Retenu AVANT le defaut : "l'appelant a-t-il impose le mode ?". C'est ce qui
 # permet a --wan de basculer en hybride sans ecraser un HANDOFF_MODE=... explicite.
@@ -154,7 +157,7 @@ HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 # hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
 # 192.168.2.0/24.
 # ── LE RANG DU PREMIER CONTENEUR ────────────────────────────────────────────
-# [2026-08-31] start.sh numerotait SES operateurs 1..N, en dur. C est juste
+# [2026-08-31] start-docker.sh numerotait SES operateurs 1..N, en dur. C est juste
 # quand la machine ne porte que des conteneurs ; ca ne l est plus des qu un
 # operateur NATIF tourne a cote, car il occupe deja un rang - et deux
 # equipements au meme point code, ce n est pas un conflit de nom, c est du
@@ -179,13 +182,13 @@ op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
 # TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
 # 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
 # voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
-# La bascule est ici, une fois, et les deux jumelles (start.sh, lib/gabarits.sh)
+# La bascule est ici, une fois, et les deux jumelles (start-docker.sh, lib/gabarits.sh)
 # en heritent.
 _osmo_priv_index() {
     local op="${1:-1}"
     # [2026-08-31] L ORCHESTRATEUR N EST PAS DANS LE CONTENEUR QU IL CREE.
     # La detection ci-dessous demande "suis-je DANS un conteneur ?" et c est la
-    # bonne question pour du code qui tourne a l interieur. Mais start.sh, lui,
+    # bonne question pour du code qui tourne a l interieur. Mais start-docker.sh, lui,
     # provisionne les conteneurs DEPUIS L HOTE : il prenait donc la branche
     # VM/natif et rendait l index du NOEUD - 1 - pour tous les operateurs.
     # Les deux reseaux prives se retrouvaient sur 192.168.2.0/24, docker
@@ -197,7 +200,7 @@ _osmo_priv_index() {
     # OSMO_PRIV_BY_OP=1 dit "je provisionne par operateur" ; start_bridge_mode
     # la pose. C est la seule chose que la detection ne pouvait pas deviner.
     [ "${OSMO_PRIV_BY_OP:-0}" = "1" ] && { printf '%s' "$op"; return; }
-    # Meme detection que start-direct.sh : le couple /.dockerenv +
+    # Meme detection que start-native.sh : le couple /.dockerenv +
     # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
     # sert de repli pour un conteneur quelconque.
     if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
@@ -225,7 +228,7 @@ op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
 # l'etaient - retombait sur un PLMN plausible mais etranger : le mobile de
 # l'operateur 2 presentait 001-01, son reseau diffusait 001-02, et le Location
 # Updating restait sans reponse, pile entiere debout.
-# Le noeud, c'est ce que --node passe a start-direct.sh. Avec --node-per-op
+# Le noeud, c'est ce que --node passe a start-native.sh. Avec --node-per-op
 # chaque conteneur est son propre noeud, donc son propre pays, et le MNC
 # retombe a 01 ; sans lui, les conteneurs sont N operateurs d'un meme pays.
 op_plmn_node()  { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo $(( ${WAN_NODE_ID:-1} + $1 - 1 )); else echo "${WAN_NODE_ID:-1}"; fi; }
@@ -253,7 +256,7 @@ op_mnc()        { printf '%02d' "$(_plmn_borne "$(op_plmn_index "$1")" 1 "rang d
 # On les MELANGE au chargement - c'est la le tirage au hasard - puis on les
 # fige pour toute la duree du lancement : un operateur qui changerait de nom ou
 # de pays entre deux lignes du journal ne serait plus le meme reseau.
-OSMO_DATA_DIR="${OSMO_DATA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/data}"
+OSMO_DATA_DIR="${OSMO_DATA_DIR:-$START_REPO/data}"
 
 # $1 = nom du tableau a remplir, $2 = fichier, le reste = valeurs de secours.
 # Le depot peut etre incomplet (une ISO n'embarque pas toujours data/) : sans
@@ -345,7 +348,7 @@ check_whiptail() {
 # ── MODE NON INTERACTIF : LE QUESTIONNAIRE REPOND TOUT SEUL ─────────────────
 # [2026-08-31] Chaque wt_* ouvre une boite whiptail et ATTEND. C est parfait au
 # terminal, et fatal partout ailleurs : lance par une icone du bureau, par
-# start-multi.sh ou par un script, start.sh s arretait sur « Nombre
+# start-multi.sh ou par un script, start-docker.sh s arretait sur « Nombre
 # d'operateurs (1-36) » - un dialogue que personne ne voit et que personne ne
 # valide. Le lancement paraissait bloque ou mort, alors qu il attendait une
 # reponse.
@@ -428,7 +431,7 @@ session_pulse_user() {
 # Le script de loopback vit dans le depot, pas dans un $HOME.
 find_loopback_script() {
     local d c
-    d="$(cd "$(dirname "$0")" && pwd)"
+    d="$START_REPO"
     for c in "$d/network/loopback.sh" "$d/loopback.sh"; do
         [ -x "$c" ] && { echo "$c"; return 0; }
     done
@@ -475,7 +478,7 @@ disable_user_loopback() {
 
 build_alsa_args() {
     local alsa_args=""
-    local src_asound="$(dirname "$0")/configs/asound.conf"
+    local src_asound="$START_REPO/configs/asound.conf"
     local host_asound="/tmp/osmocom-alsa/asound.conf"
     mkdir -p /tmp/osmocom-alsa
     # Docker cree un REPERTOIRE quand la source d'un bind -v n'existe pas :
@@ -553,7 +556,7 @@ build_alsa_args() {
 ensure_host_audio_relay() {
     [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0
     HOST_AUDIO_RELAY_DONE=1
-    local bridge="$(dirname "$0")/scripts/wslg-audio-bridge.sh"
+    local bridge="$START_REPO/scripts/wslg-audio-bridge.sh"
     [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
     if "$bridge" host-relay; then
         # [2026-08-31] ON VERIFIE QUE LE PORT REPOND, on ne se fie plus au seul
@@ -606,7 +609,7 @@ ensure_host_audio_relay() {
 # ══════════════════════════════════════════════════════════════════════════════
 # [2026-08-31] QUICK PAR DEFAUT, et sans poser la question.
 # Le defaut etait 0 - "normal (--no-cache)" - et, faute de choix explicite,
-# start.sh ouvrait une boite whiptail (l.2578, choose_build_mode) pour la
+# start-docker.sh ouvrait une boite whiptail (l.2578, choose_build_mode) pour la
 # demander. Deux consequences :
 #   - la recompilation Osmocom complete, ~40 minutes, etait ce qu on obtenait
 #     en repondant trop vite, alors que l image ne change quasiment jamais ;
@@ -616,8 +619,8 @@ ensure_host_audio_relay() {
 # reconstruit a neuf que quand on le DEMANDE.
 #
 # Comment forcer une reconstruction complete, les deux marchent :
-#     ./start.sh normal ...        (argument positionnel)
-#     OSMO_QUICK=0 ./start.sh ...  (variable d environnement)
+#     ./launch/start-docker.sh normal ...        (argument positionnel)
+#     OSMO_QUICK=0 ./launch/start-docker.sh ...  (variable d environnement)
 QUICK="${OSMO_QUICK:-1}"
 # EXPLICIT a 1 meme sans demande : c est ce qui supprime le dialogue. Le passer
 # a 0 ici ferait revenir la question a chaque lancement non interactif.
@@ -628,7 +631,7 @@ build_run_image() {
     # la - c est lui qui porte les build-args et le nom d image - et docker
     # build tel quel sinon. Le resultat est le meme : osmocom-run depuis
     # Dockerfile.run, par-dessus osmocom-nitb.
-    local _dir; _dir="$(dirname "${OSMO_REPO_DIR:-$0}")"; [ -n "${OSMO_REPO_DIR:-}" ] && _dir="$OSMO_REPO_DIR"
+    local _dir; _dir="${OSMO_REPO_DIR:-$START_REPO}"
     local _nc=""; [ "${QUICK:-0}" = "1" ] || _nc="--no-cache"
     if [ "${QUICK:-0}" = "1" ]; then
         echo -e "${GREEN}Build de l'image run...${NC} ${YELLOW}(quick - cache docker reutilise)${NC}"
@@ -830,14 +833,14 @@ _generate_sms_routing_conf_fallback() {
 # l'ecrase JAMAIS ensuite. Tes reglages survivent donc a tous les runs. Pour
 # repartir des valeurs d'usine : ./generate_configs.sh --force
 # ─────────────────────────────────────────────────────────────────────────────
-# start.sh n'a pas de variable de repertoire (il travaille en chemins relatifs
+# start-docker.sh n'a pas de variable de repertoire (il travaille en chemins relatifs
 # depuis la racine du depot) : on resout ici, sans rien supposer.
 #
 # BASH_SOURCE ne suffit pas : build-iso.sh extrait ce fichier en bibliotheque
 # ($WORK/start.lib.sh) puis la source, et BASH_SOURCE designe alors la COPIE,
 # dans un repertoire de travail ou generate_configs.sh n'existe pas.
 # OSMO_REPO_DIR laisse l'appelant nommer la vraie racine du depot.
-_GC_SH="${OSMO_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/generate_configs.sh"
+_GC_SH="${OSMO_REPO_DIR:-$START_REPO}/generate_configs.sh"
 "$_GC_SH" >/dev/null || true
 . "$_GC_SH"
 
@@ -977,7 +980,7 @@ start_inter_stp() {
     local stp_image="$IMAGE_RUN"
     if [ "${BUILD_STP:-0}" = "1" ] && ! docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
         echo -e "  ${GREEN}Construction de ${IMAGE_STP} (Dockerfile.stp)...${NC}"
-        docker build -f "$(dirname "$0")/Dockerfile.stp" -t "$IMAGE_STP" "$(dirname "$0")" \
+        docker build -f "$START_REPO/Dockerfile.stp" -t "$IMAGE_STP" "$START_REPO" \
             || echo -e "  ${YELLOW}⚠ echec - on restera sur ${IMAGE_RUN}${NC}"
     fi
     if docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
@@ -997,7 +1000,7 @@ start_inter_stp() {
     # ci-dessus tient deja le role de --rm : aucun reliquat du lancement d'avant.
     # ── 2908 PUBLIE SUR LA BOUCLE LOCALE : LE RACCORD DE L OPERATEUR NATIF ──
     # [2026-08-31] Sans cette ligne, un operateur NATIF (celui de
-    # start-direct.sh, hors conteneur) ne pouvait PAS s attacher au hub.
+    # start-native.sh, hors conteneur) ne pouvait PAS s attacher au hub.
     # Son /etc/osmocom/osmo-stp.cfg declare
     #       asp asp-to-inter 2908 2910 m3ua
     #        remote-ip 127.0.0.1
@@ -1024,7 +1027,7 @@ start_inter_stp() {
     # 172.20.0.10 avec local-ip 172.20.0.1. Ecartee : ces deux adresses
     # n existent que TANT QUE le bridge docker est monte, et elles disparaissent
     # avec les conteneurs - on aurait remplace une adresse absente par deux
-    # adresses intermittentes, dans une config que start-direct.sh regenere.
+    # adresses intermittentes, dans une config que start-native.sh regenere.
     docker run -d \
         --restart unless-stopped \
         --name "$INTER_STP_CONTAINER" \
@@ -1117,7 +1120,7 @@ setup_wan_interop() {
     local n_local=$1
     local n_remote=$2
     local script_path
-    script_path="$(dirname "$0")/setup-wan-interop.sh"
+    script_path="$START_REPO/network/setup-wan-interop.sh"
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}[WAN] network/setup-wan-interop.sh introuvable${NC}"
         return 1
@@ -1151,7 +1154,7 @@ wan_mesh_configure() {
     # reste, puis relus comme n'importe quelle table. Le WAN qui suit ne sait
     # pas - et n'a pas a savoir - que ses pairs sont des VM.
     if [ "${VBOX_INTERCO:-0}" = "1" ] && [ -z "${WAN_NODES:-}" ]; then
-        local _vb=("$(dirname "$0")/network/setup-vbox-interco.sh"
+        local _vb=("$START_REPO/network/setup-vbox-interco.sh"
                    --host-node "$VBOX_HOST_NODE" --conf "$WAN_CONF_FILE")
         [ -n "${VBOX_NODES:-}" ] && _vb+=(--nodes "$VBOX_NODES")
         bash "${_vb[@]}" || { echo -e "${RED}[WAN] interconnexion VirtualBox echouee${NC}" >&2; exit 1; }
@@ -1315,7 +1318,7 @@ Non : ce sont les operateurs du noeud ${WAN_NODE_ID}."; then
 # Applique la table (Asterisk, iptables, SMS) une fois les containers debout.
 wan_mesh_apply() {
     local n_operators=$1
-    local script_path="$(dirname "$0")/network/setup-wan-mesh.sh"
+    local script_path="$START_REPO/network/setup-wan-mesh.sh"
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
     fi
@@ -1366,7 +1369,7 @@ wan_mesh_apply() {
 # network/setup-docker-lan-route.sh pose donc un RETURN en tete de POSTROUTING.
 #
 # POURQUOI LE REJOUER ICI
-# Docker REINSERE ses MASQUERADE en tete a chaque reseau cree - et start.sh en
+# Docker REINSERE ses MASQUERADE en tete a chaque reseau cree - et start-docker.sh en
 # cree un par operateur. Le RETURN se retrouve alors DERRIERE eux et ne sert
 # plus a rien : "iptables -L" le montre toujours, et pourtant le hub revoit
 # l'adresse de l'hote. On le remet donc en premiere position une fois TOUS les
@@ -1844,7 +1847,7 @@ start_bridge_mode() {
             # Le numero de noeud vit dans 1..9 : au-dela, le point code ecrit
             # ici (1.<noeud><op>.<role>) sort du format ITU 3-8-3, aucun AS
             # correspondant n'existe au hub (helpers/create_interop.sh borne a
-            # 9 noeuds), et network/set-node-id.sh comme start-direct.sh
+            # 9 noeuds), et network/set-node-id.sh comme start-native.sh
             # refusent l'argument. Mieux vaut le dire ici, avant de fabriquer
             # une identite SS7 que personne ne connaitra.
             if [ "$_node_i" -gt 9 ] || [ "$_node_i" -lt 1 ]; then
@@ -1938,7 +1941,7 @@ start_bridge_mode() {
         # contexte sub-annuaire (voir configs/extensions.conf). L'appel arrive
         # alors sur le combine avec un nom, et non avec cinq chiffres.
         {
-            printf '; annuaire.conf - genere par start.sh, ne pas editer a la main.\n'
+            printf '; annuaire.conf - genere par start-docker.sh, ne pas editer a la main.\n'
             printf '; Une fiche par abonne du banc. Le repli _X. est dans extensions.conf.\n'
             printf '[sub-annuaire]\n'
             awk -F';' 'NR>1 && $2 != "" {
@@ -2098,7 +2101,7 @@ start_bridge_mode() {
         # (systemd tue par AppArmor, voir le commentaire du docker run
         # ci-dessus). Tout ce qui suit dans ce tour de boucle parle au conteneur
         # par `docker exec`, qui repond "container is restarting" et sort en
-        # erreur - et start.sh tourne sous `set -eu`. Le pipeline
+        # erreur - et start-docker.sh tourne sous `set -eu`. Le pipeline
         # d'alimentation du HLR (`... | docker exec -i "$c" bash`) rendait donc
         # un statut non nul, et LE SCRIPT ENTIER s'arretait la, en silence.
         # Resultat observe : un op2 en "Restarting (255)", AUCUN conteneur
@@ -2126,7 +2129,7 @@ start_bridge_mode() {
         # [2026-08-31] NO-ATTACH, PLUS NO-PROCESS.
         # no-process arretait run.sh au coeur : STP, HLR, MSC, BSC, MGW, GGSN,
         # SGSN, PCU montaient, puis plus rien - ni PHY, ni mobile, ni Asterisk,
-        # ni SMSC. Il fallait lancer start-direct.sh A LA MAIN derriere, et en
+        # ni SMSC. Il fallait lancer start-native.sh A LA MAIN derriere, et en
         # attendant le conteneur affichait
         #     [no-process] mobile non lance - attente 4247 sautee
         # c est-a-dire un operateur sans radio ni abonne joignable, alors que
@@ -2138,7 +2141,7 @@ start_bridge_mode() {
         # (scripts/run.sh, "Attach : tmux -S ... attach"). Le pipeline QEMU
         # delegue, lui, prend CALYPSO_NO_ATTACH=1 (qosmo-grgsm/run.sh l.36).
         #
-        # BRIDGE_NO_PROCESS=1 ./start.sh retablit l ancien comportement quand on
+        # BRIDGE_NO_PROCESS=1 ./launch/start-docker.sh retablit l ancien comportement quand on
         # veut vraiment le coeur seul.
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} CALYPSO_NO_ATTACH=1 /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
@@ -2159,7 +2162,7 @@ start_bridge_mode() {
         # un incident survenu hors session serait perdu. Repli sans tmux pour
         # une image qui n'en aurait pas - le comportement d'avant, a l'identique.
         # UN SEUL chemin de demarrage par conteneur.
-        # En mode QEMU, chaque conteneur est demarre par start-direct.sh - le
+        # En mode QEMU, chaque conteneur est demarre par start-native.sh - le
         # premier dans le terminal courant, les autres en session tmux. Lancer
         # run.sh EN PLUS donnait deux piles concurrentes dans le meme
         # conteneur : la seconde commencait par "--stop" et coupait ce que la
@@ -2171,7 +2174,7 @@ start_bridge_mode() {
         # "Attente HLR" pour un demarrage prevu plus tard.
         #
         # Les conteneurs qui doivent porter la pile COMPLETE la relancent
-        # ensuite via start-direct.sh, une fois les abonnes en base : la base
+        # ensuite via start-native.sh, une fois les abonnes en base : la base
         # HLR survit au redemarrage, le travail n'est pas perdu.
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
@@ -2384,7 +2387,7 @@ start_bridge_mode() {
     # hub et les operateurs locaux sont debout - un noeud qui monte avant le hub
     # voit sa SCTP refusee.
     if [ "${VBOX_INTERCO:-0}" = "1" ]; then
-        local _lab="$(dirname "$0")/tools/vbox-wan-lab.sh"
+        local _lab="$START_REPO/tools/vbox-wan-lab.sh"
         if [ -x "$_lab" ] || [ -r "$_lab" ]; then
             echo ""
             echo -e "${GREEN}[*] Demarrage des VM du WAN...${NC}"
@@ -2412,15 +2415,15 @@ start_bridge_mode() {
 
     echo -e "\n${GREEN}${BOLD}Stack prete !${NC}"
 
-    # ── Mode QEMU : handoff vers start-direct.sh ──────────────────────────────
+    # ── Mode QEMU : handoff vers start-native.sh ──────────────────────────────
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
         echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hote, NO_MENU)${NC}"
 
-        # Le start-direct lance DANS le conteneur doit connaitre son noeud : il
+        # Le start-native lance DANS le conteneur doit connaitre son noeud : il
         # reverifie (et corrige) l'identite SS7 avant de demarrer la pile, au
-        # lieu de dependre de ce que start.sh a ecrit dans les configs.
+        # lieu de dependre de ce que start-docker.sh a ecrit dans les configs.
         # Ces arguments sont fabriques par la fonction _node_args() plus bas,
         # une par conteneur. La variable `_node_args` qui vivait ici n'etait
         # LUE nulle part : une seconde version, figee sur "--op 1", du meme
@@ -2438,7 +2441,7 @@ start_bridge_mode() {
         # ── LANCEMENT DE LA PILE RADIO ──────────────────────────────────────
         # Les conteneurs se sont arretes au COEUR (no-process) : STP, HLR, MSC,
         # BSC, MGW, GGSN, SGSN, PCU sont debout, mais ni PHY, ni mobile, ni
-        # Asterisk, ni SMSC. start.sh enchaine maintenant start-direct.sh sur
+        # Asterisk, ni SMSC. start-docker.sh enchaine maintenant start-native.sh sur
         # chaque conteneur pour monter la pile radio - la sortie [ OK ] defile
         # dans le terminal courant, on voit ce qui se passe.
         #
@@ -2447,7 +2450,7 @@ start_bridge_mode() {
         #   - plusieurs : on lance chacun en NO-ATTACH, les [ OK ] defilent.
         #
         # Les commandes executees ne sont pas indicatives : ce sont EXACTEMENT
-        # celles que start.sh imprimait auparavant a recopier a la main - meme
+        # celles que start-docker.sh imprimait auparavant a recopier a la main - meme
         # identite de noeud, meme hub, meme table WAN.
 
         # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
@@ -2466,15 +2469,15 @@ start_bridge_mode() {
                 _n="${WAN_NODE_ID:-1}"; _op="$1"
             fi
             # Repli sur le noeud 1, TOUJOURS. Deux trous se referment ici :
-            #   - sans WAN (`./start.sh` sans argument), la fonction n'imprimait
-            #     RIEN : start-direct.sh partait sans identite et montait la
+            #   - sans WAN (`./launch/start-docker.sh` sans argument), la fonction n'imprimait
+            #     RIEN : start-native.sh partait sans identite et montait la
             #     pile sur les point codes du gabarit (1.1.2), les memes pour
             #     tout le monde ;
             #   - avec WAN mais WAN_NODE_ID vide, elle imprimait `--node --op 1`
-            #     — bash recolle les mots, start-direct.sh lisait "--op" comme
+            #     — bash recolle les mots, start-native.sh lisait "--op" comme
             #     numero de noeud et sortait sur
             #     « [ KO ] --node (un chiffre de 1 a 9) ».
-            # Un noeud unique EST le noeud 1 : c'est deja ce que start.sh se
+            # Un noeud unique EST le noeud 1 : c'est deja ce que start-docker.sh se
             # donne lui-meme (WAN_NODE_ID="${WAN_NODE_ID:-1}" plus haut), on
             # transmet donc la meme reponse au conteneur au lieu de rien.
             [[ "$_n"  =~ ^[1-9]$ ]] || _n=1
@@ -2489,14 +2492,14 @@ start_bridge_mode() {
 
         echo ""
 
-        # La commande start-direct.sh d'un conteneur : identite de noeud + hub
+        # La commande start-native.sh d'un conteneur : identite de noeud + hub
         # + table WAN. Rien d'indicatif ici, ce sont EXACTEMENT les arguments
-        # que start.sh executait quand il imprimait les lignes a recopier.
+        # que start-docker.sh executait quand il imprimait les lignes a recopier.
         _hcmd() {                      # $1=indice du conteneur -> imprime la commande
             local _na; _na="$(_node_args "$1")"
             local _cmd="cd /opt/GSM/osmo-operator && NO_MENU=1"
             # [2026-08-31] CALYPSO_NO_ATTACH SUIT LE HANDOFF.
-            # L attache ne venait ni d ici ni de start-direct.sh, mais du
+            # L attache ne venait ni d ici ni de start-native.sh, mais du
             # qosmo-grgsm/run.sh qu il appelle en bout de chaine :
             #     NO_ATTACH="${CALYPSO_NO_ATTACH:-0}"      (run.sh l.36)
             #     [ $TTY -eq 1 ] && [ "$NO_ATTACH" != 1 ] && exec tmux attach
@@ -2511,7 +2514,7 @@ start_bridge_mode() {
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
             _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
-            _cmd="$_cmd ./start-direct.sh ${_na} --force"
+            _cmd="$_cmd ./start-native.sh ${_na} --force"
             printf '%s' "$_cmd"
         }
 
@@ -2529,8 +2532,8 @@ start_bridge_mode() {
             # finissait sur les panneaux de osmo-operator-1.
             # OSMO_NO_ATTACH=1 saute l attache ; la pile reste debout dans sa
             # session calypso, on s y rattache a la main quand on veut.
-            # start.sh lance lui-meme la pile radio, dans le terminal courant :
-            # les [ OK ] de start-direct.sh puis de run.sh defilent sous les
+            # start-docker.sh lance lui-meme la pile radio, dans le terminal courant :
+            # les [ OK ] de start-native.sh puis de run.sh defilent sous les
             # yeux, et une fois le coeur monte on S'ATTACHE a la session tmux
             # "calypso" du conteneur - on reste dedans, on regarde la pile
             # vivre. Ctrl-b puis d pour se detacher sans rien arreter.
@@ -2758,12 +2761,12 @@ choose_network_mode() {
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
 # ── Options longues, extraites AVANT le mode positionnel ──────────────────────
-# start.sh a toujours pris son mode en $1 (qemu|virtual|hw|stop) et son build en
+# start-docker.sh a toujours pris son mode en $1 (qemu|virtual|hw|stop) et son build en
 # quick|normal. On garde ca intact : la pre-passe ne retire que les --wan* et
 # rend la main avec les positionnels d'origine.
 usage_wan() {
     cat <<'USAGE'
-Usage : sudo ./start.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
+Usage : sudo ./launch/start-docker.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
 
   --wan                   active le WAN a N noeuds (1 a 9) et pose les questions :
                             • nombre de noeuds

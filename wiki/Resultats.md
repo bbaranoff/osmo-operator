@@ -50,7 +50,7 @@ Only one real warn: **GGSN, 0 APN**.
 |---|---|---|
 | GGSN: 0 APN configured | Op1, Op2, Op3 | same point as run 1: 2G data (SGSN → GGSN) does not bring up a PDP without an APN. `APN=internet` in `globals.conf` then `--regen`. 4G (Open5GS/ogstun) is not affected |
 | SGSN: 0 NS entity | Op2, Op3 | the containers' PCU did not open its NS-VC to the SGSN (Op1, native, has 1). No effect on voice/SMS/SS7; to look at together with the previous point if 2G data is wanted on these operators |
-| 2 subscribers without a directory entry | Op2, Op3 | the HLR knows `00101000N000001/2` (provisioned by the old IMSI scheme) in addition to the `0010N000N000001/2` that have an entry. The script says so: bench restarted without `start.sh`. Cosmetic |
+| 2 subscribers without a directory entry | Op2, Op3 | the HLR knows `00101000N000001/2` (provisioned by the old IMSI scheme) in addition to the `0010N000N000001/2` that have an entry. The script says so: bench restarted without `start-docker.sh`. Cosmetic |
 
 ### 2.3 The false negative of `diag-interstp.sh`
 

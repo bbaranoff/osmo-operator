@@ -268,7 +268,7 @@ set -u
 [ $# -ge 2 ] || { echo "usage: osmo-sms-send <numero> <texte...>"; exit 2; }
 NUM="$1"; shift
 # /usr/bin/python3 en dur : sous le PATH du banc, « env python3 » tombe sur
-# le venv, qui n a pas les liaisons GObject (cf. start-direct.sh).
+# le venv, qui n a pas les liaisons GObject (cf. start-native.sh).
 exec /usr/bin/python3 "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py" --once "sms $NUM $*"
 SM
     chmod 755 /usr/local/bin/osmo-sms-send

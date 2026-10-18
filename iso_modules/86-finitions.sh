@@ -142,7 +142,7 @@ echo -e "  ${GREEN}✓${NC} Chromium retire ; ${CYAN}Firefox${NC} seul navigateu
 
 # ── LA BANNIERE DES TERMINAUX ───────────────────────────────────────────────
 # Ce que quelqu un cherche en ouvrant un terminal sur ce banc, c est la commande
-# qui le demarre. Elle est dans le README, dans l aide de start-direct.sh, et
+# qui le demarre. Elle est dans le README, dans l aide de start-native.sh, et
 # nulle part la ou on la cherche. On la met donc sous les yeux, avec la meme
 # animation SMS que l ouverture de session - c est la signature de l image, et
 # elle dit en une seconde que la pile est bien celle-la.

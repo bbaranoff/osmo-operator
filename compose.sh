@@ -9,18 +9,18 @@
 #    sudo ./compose.sh ps | logs [service] | shell
 #    sudo ./compose.sh debs          le cache .deb de l hote (/var/cache/osmo-debs)
 #
-#  `up` fait ce que start.sh fait pour UN operateur, avec compose.yaml comme
+#  `up` fait ce que start-docker.sh fait pour UN operateur, avec compose.yaml comme
 #  description du banc :
 #    1. les configs (apply_config_templates de generate_configs.sh, la config
 #       du hub par helpers/create_interop.sh) dans data/compose/ ;
 #    2. data/compose/.env : les adresses calculees par les memes fonctions que
-#       start.sh (op_backbone_ip, op_private_*), les choix (N_MS, PHY_MODE) ;
+#       start-docker.sh (op_backbone_ip, op_private_*), les choix (N_MS, PHY_MODE) ;
 #    3. data/compose/compose.audio.yaml : le socket PulseAudio de l hote et
 #       /dev/snd, quand ils existent (compose ne sait pas les rendre optionnels) ;
 #    4. docker compose --profile bench up -d ;
 #    5. run.sh dans le conteneur, attente du HLR, abonnes de test dans le HLR
-#       (memes IMSI / MSISDN <noeud>00<op><ms> / Ki que start.sh).
-#  Pour N operateurs, le WAN, les ports publies : start.sh.
+#       (memes IMSI / MSISDN <noeud>00<op><ms> / Ki que start-docker.sh).
+#  Pour N operateurs, le WAN, les ports publies : start-docker.sh.
 # =============================================================================
 set -euo pipefail
 
@@ -40,7 +40,7 @@ need_compose() {
         || die "docker compose v2 absent : sudo ./build.sh l installe (docker-compose-v2 + docker-buildx)."
 }
 
-# La bibliotheque de start.sh : ses fonctions (op_*, apply_config_templates...)
+# La bibliotheque de start-docker.sh : ses fonctions (op_*, apply_config_templates...)
 # sans son execution - meme decoupe que build-iso.sh (load_start_lib).
 load_start_lib() {
     local lib; lib="$(mktemp)"
@@ -52,7 +52,7 @@ load_start_lib() {
         /^\.\//                                   { exit }
         /^case "\$NETWORK_MODE" in[[:space:]]*$/  { exit }
         { print }
-    ' "$DIR/start.sh" > "$lib"
+    ' "$DIR/launch/start-docker.sh" > "$lib"
     export OSMO_REPO_DIR="$DIR"
     # shellcheck disable=SC1090
     source "$lib"
@@ -86,7 +86,7 @@ cmd_up() {
 
     for img in "${IMAGE_RUN:-osmocom-run}" "${IMAGE_STP:-osmocom-stp}"; do
         docker image inspect "$img" >/dev/null 2>&1 \
-            || die "image $img absente : sudo ./compose.sh build --stp (ou ./build.sh --stp, puis ./start.sh une fois pour osmocom-run)"
+            || die "image $img absente : sudo ./compose.sh build --stp (ou ./build.sh --stp, puis ./launch/start-docker.sh une fois pour osmocom-run)"
     done
 
     load_start_lib

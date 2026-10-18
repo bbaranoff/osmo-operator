@@ -2,18 +2,18 @@
 # =============================================================================
 # start-multi.sh - LE BANC MULTI-OPERATEUR : natif + docker, relies en SS7
 #
-#   op 1  NATIF   deja en place (start-direct.sh)   PC 1.1.2
+#   op 1  NATIF   deja en place (start-native.sh)   PC 1.1.2
 #   op 2  DOCKER  conteneur                          PC 1.2.2   172.20.0.12
 #   op 3  DOCKER  conteneur                          PC 1.3.2   172.20.0.13
 #   hub   DOCKER  inter-STP                          PC 0.0.0   172.20.0.10
 #                                                    M3UA/SCTP 2908
 #
-# CE SCRIPT NE REIMPLEMENTE RIEN. start.sh sait deja lancer des operateurs en
+# CE SCRIPT NE REIMPLEMENTE RIEN. start-docker.sh sait deja lancer des operateurs en
 # conteneur, poser le hub (--hub-ip) et DECLARER un operateur sans lui lancer de
 # conteneur (--operator IP:PREFIXE) - ce dernier point est exactement le cas du
 # natif, qui tourne deja et qu on veut seulement raccorder. Refaire ce travail
 # ici donnerait une seconde formule a maintenir, et le depot montre deja ou cela
-# mene : start.sh et lib/gabarits.sh portent les MEMES fonctions en double.
+# mene : start-docker.sh et lib/gabarits.sh portent les MEMES fonctions en double.
 # start-multi.sh se contente donc de trois choses : verifier, traduire la
 # topologie en options, et deleguer.
 #
@@ -21,11 +21,11 @@
 # Un seul endroit la calcule.
 #
 # Usage :
-#   sudo ./start-multi.sh              monte le banc multi-operateur
-#   sudo ./start-multi.sh --status     etat des conteneurs et du hub
-#   sudo ./start-multi.sh --stop       arrete les conteneurs (le natif reste)
-#   sudo ./start-multi.sh --dry-run    affiche la commande sans la lancer
-#   sudo ./start-multi.sh --restart-natif
+#   sudo ./launch/start-multi.sh              monte le banc multi-operateur
+#   sudo ./launch/start-multi.sh --status     etat des conteneurs et du hub
+#   sudo ./launch/start-multi.sh --stop       arrete les conteneurs (le natif reste)
+#   sudo ./launch/start-multi.sh --dry-run    affiche la commande sans la lancer
+#   sudo ./launch/start-multi.sh --restart-natif
 #                                      arrete et relance aussi la 2G native
 #                                      (par defaut on la GARDE si elle tourne,
 #                                      on la LANCE si elle est a l arret)
@@ -35,7 +35,8 @@ set -uo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# Racine du depot : ce script vit dans launch/ depuis le 2026-10-18.
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 
 # ── LES ABONNES DU NATIF VIENNENT DE coeur.env, PAS DE ~/.bashrc ────────────
@@ -43,7 +44,7 @@ MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 # que par /root/.bashrc : depuis l'icone ou une unite systemd, le natif lance
 # d'ici partait avec N_MS=1 et le HLR n'avait qu'un abonne (le second etait
 # cree a la volee par le HLR avec un MSISDN aleatoire et sans Ki). On le
-# charge ici comme start-direct.sh le fait desormais lui-meme ; « := » laisse
+# charge ici comme start-native.sh le fait desormais lui-meme ; « := » laisse
 # gagner une valeur deja posee dans l'environnement.
 if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
     set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
@@ -83,7 +84,7 @@ case " $* " in
 esac
 
 # [2026-08-31] stdin ET stdout : `[ ! -t 0 ]` seul prenait un
-# `./start-multi.sh < fichier` lance depuis un vrai terminal pour un
+# `./launch/start-multi.sh < fichier` lance depuis un vrai terminal pour un
 # double-clic, et ouvrait une fenetre dont la sortie n allait pas a l appelant.
 _multi_besoin=0
 if [ "$_multi_readonly" = "0" ]; then
@@ -103,7 +104,7 @@ if [ "$_multi_besoin" = "1" ] && [ "${OSMO_MULTI_TERM:-0}" != "1" ] && [ "${OSMO
 fi
 
 # Le drapeau ne sert qu a ne pas boucler sur la relance. On le RETIRE de
-# l environnement : exporte, il descendait dans start.sh, dans le raccourci du
+# l environnement : exporte, il descendait dans start-docker.sh, dans le raccourci du
 # natif et jusqu a launch.sh, ou il n a aucun sens. La valeur reste ici, dans
 # une variable de shell : c est elle qui decide de retenir la fenetre a la fin.
 _multi_own_window=0
@@ -269,14 +270,14 @@ case "$ACTION" in
         done
         docker rm -f "${MULTI_HUB_NAME:-osmo-inter-stp}" >/dev/null 2>&1 \
             && echo -e "  ${GREEN}✓${NC} hub arrete"
-        echo -e "  ${CYAN}i${NC} l operateur NATIF n est pas touche - ${BOLD}sudo ${DIR}/start-direct.sh stop${NC} pour lui."
+        echo -e "  ${CYAN}i${NC} l operateur NATIF n est pas touche - ${BOLD}sudo ${DIR}/start-native.sh stop${NC} pour lui."
         exit 0 ;;
 esac
 
 # ── L IMAGE ─────────────────────────────────────────────────────────────────
 # NOM DE L IMAGE : osmocom-run, PAS "osmo-operator".
 # build.sh produit osmocom-nitb (Dockerfile, ~11 Go) puis Dockerfile.run en
-# derive osmocom-run, et c est CELLE-LA que start.sh lance - verifie sur le
+# derive osmocom-run, et c est CELLE-LA que start-docker.sh lance - verifie sur le
 # banc : `docker inspect osmo-operator-1 --format {{.Config.Image}}` rend
 # osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
 # rendait la sonde toujours negative : "image absente" en permanence, et une
@@ -298,7 +299,7 @@ if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
 fi
 
 # ── LE RACCORD DU NATIF AU HUB ──────────────────────────────────────────────
-# [2026-08-31] RESOLU, dans start.sh, au lancement du hub.
+# [2026-08-31] RESOLU, dans start-docker.sh, au lancement du hub.
 # /etc/osmocom/osmo-stp.cfg (natif) declare
 #       asp asp-to-inter 2908 2910 m3ua
 #        remote-ip 127.0.0.1
@@ -328,7 +329,7 @@ for spec in $MULTI_OPS; do
 done
 [ "$N_DOCKER" -ge 1 ] || { echo -e "  ${RED}✗ aucun operateur docker dans la topologie${NC}"; exit 1; }
 
-# OPERATOR_COUNT_HINT : start.sh l utilise pour NE PAS reposer la question du
+# OPERATOR_COUNT_HINT : start-docker.sh l utilise pour NE PAS reposer la question du
 # nombre de conteneurs (voir start_bridge_mode). Sans elle, le script s arrete
 # sur une boite de dialogue - fatal pour un lancement par icone.
 # [2026-08-31] PAS DE --wan ICI, ET C EST LE POINT IMPORTANT.
@@ -341,40 +342,40 @@ done
 # Sur UNE machine, c est l inverse qu on veut - et c est deja le defaut :
 # checks/wan_ss7_check.sh le dit noir sur blanc, "sans WAN l ASP de chaque
 # operateur pointe sur 172.20.0.10", le hub local, avec un catch-all
-# "route 0.0.0 0.0.0 → as-inter". Il n y a donc rien a demander a start.sh
+# "route 0.0.0 0.0.0 → as-inter". Il n y a donc rien a demander a start-docker.sh
 # au-dela du nombre de conteneurs.
 #
-# OPERATOR_COUNT_HINT : start.sh l utilise pour NE PAS reposer la question du
+# OPERATOR_COUNT_HINT : start-docker.sh l utilise pour NE PAS reposer la question du
 # nombre de conteneurs (voir start_bridge_mode). Sans elle, le script s arrete
 # sur une boite de dialogue - fatal pour un lancement par icone.
-# OSMO_QUICK=1 : reutiliser le cache docker. Sans elle start.sh partait en
+# OSMO_QUICK=1 : reutiliser le cache docker. Sans elle start-docker.sh partait en
 # "Build : normal (--no-cache)", soit une recompilation Osmocom complete de ~40
 # minutes A CHAQUE lancement du multi-operateur - alors que l image est deja la
 # (addition.sh s en charge, et le prealable plus haut le verifie).
-# OSMO_NONINTERACTIVE=1 : les boites whiptail de start.sh rendent leur valeur
+# OSMO_NONINTERACTIVE=1 : les boites whiptail de start-docker.sh rendent leur valeur
 # par defaut au lieu d attendre. Sans elle, le lancement s arretait sur
 # « Nombre d'operateurs (1-36) » - un dialogue que personne ne voit quand on a
 # clique sur une icone, et le banc paraissait mort.
-# --operators : le drapeau EXPLICITE de start.sh (l.2552), et non la seule
-# variable d environnement. start.sh remettait OPERATOR_COUNT_HINT a vide des
+# --operators : le drapeau EXPLICITE de start-docker.sh (l.2552), et non la seule
+# variable d environnement. start-docker.sh remettait OPERATOR_COUNT_HINT a vide des
 # sa ligne 70 - corrige depuis, mais l argument reste la voie sure : il est
 # analyse apres, il prime, et il documente l intention dans la ligne de
 # commande qu on affiche.
 # HANDOFF_MODE=faketrx-qemu : la radio MIXTE, un faketrx + un QEMU Calypso par
-# operateur - le meme montage que le natif. start.sh ne la choisissait seul
+# operateur - le meme montage que le natif. start-docker.sh ne la choisissait seul
 # qu en mode WAN ; impose ici, elle vaut aussi pour ce banc a une machine.
-# OSMO_SKIP_CHECKS=1 : start.sh joue desormais ss7_check et operator_summary en
+# OSMO_SKIP_CHECKS=1 : start-docker.sh joue desormais ss7_check et operator_summary en
 # fin de lancement. Ici on enchaine verifier(), qui rejoue ss7_check avec en
 # plus la lecture de la topologie - inutile de le passer deux fois de suite.
 # OP_ID_BASE=2 : les conteneurs prennent les rangs 2 et 3, le 1 reste au natif.
 # OSMO_NO_ATTACH=1 : ne pas finir bloque dans le tmux d un conteneur - le script
 # doit rendre la main pour enchainer verifier().
-# WAN_NODE_ID : le numero de noeud (MCC). Sans lui start.sh le trouvait a 0 en
+# WAN_NODE_ID : le numero de noeud (MCC). Sans lui start-docker.sh le trouvait a 0 en
 # mode non interactif et affichait « numero de noeud (MCC) vaut 0 - ramene a 1 »
 # a chaque lancement ; la topologie le connait (MULTI_NODE, 1 sur une machine).
 CMD=(env "WAN_NODE_ID=${MULTI_NODE:-1}" "OSMO_QUICK=1" "OSMO_NONINTERACTIVE=1" "HANDOFF_MODE=faketrx-qemu" "OSMO_SKIP_CHECKS=1"
      "OP_ID_BASE=2" "OSMO_NO_ATTACH=1"
-     "$DIR/start.sh" virtual --operators "$N_DOCKER")
+     "$DIR/launch/start-docker.sh" virtual --operators "$N_DOCKER")
 
 echo -e "  ${BOLD}Topologie${NC} : ${N_DOCKER} conteneur(s) + 1 natif + hub ${MULTI_HUB_IP}"
 echo -e "  ${CYAN}→${NC} ${CMD[*]}"
@@ -387,19 +388,19 @@ fi
 
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis : sudo $0${NC}"; exit 1; }
 
-# ── SE PLACER DANS LE DEPOT AVANT D APPELER start.sh ────────────────────────
-# [2026-08-31] start.sh appelle ses aides en chemin RELATIF - ligne 2595 :
+# ── SE PLACER DANS LE DEPOT AVANT D APPELER start-docker.sh ────────────────────────
+# [2026-08-31] start-docker.sh appelle ses aides en chemin RELATIF - ligne 2595 :
 #     ./helpers/prepare_host.sh
 # Lance depuis ailleurs (une icone du bureau demarre dans $HOME), il sortait
 # donc sur
-#     start.sh: line 2595: ./helpers/prepare_host.sh: No such file or directory
+#     start-docker.sh: line 2595: ./helpers/prepare_host.sh: No such file or directory
 # et abandonnait AVANT de creer le moindre conteneur. Le bilan affichait
 # ensuite "conteneur absent" trois fois, ce qui faisait chercher un probleme
 # de docker alors que le script n avait jamais atteint le docker run.
 cd "$DIR" || { echo -e "${RED}Impossible d entrer dans $DIR${NC}"; exit 1; }
 
 # ── ALIGNER L IDENTITE SS7 DU NATIF, AVANT DE LANCER ────────────────────────
-# start.sh numerote SES conteneurs 1..N sans decalage possible : avec 2
+# start-docker.sh numerote SES conteneurs 1..N sans decalage possible : avec 2
 # conteneurs il produit les point codes 1.1.2 et 1.2.2. Un natif laisse a son
 # defaut porte 1.1.2 lui aussi - deux equipements a la meme adresse SS7, ce que
 # ce depot decrit comme "pas un conflit de nom, du routage faux".
@@ -414,7 +415,7 @@ cd "$DIR" || { echo -e "${RED}Impossible d entrer dans $DIR${NC}"; exit 1; }
 #             association SCTP vers 192.168.1.49:2908" des premiers essais.
 # ── L IDENTITE DU NATIF NE TIENT PAS QU AU POINT CODE ───────────────────────
 # [2026-08-31] set-node-id.sh repointe les point codes, et rien d autre. Or
-# start-direct.sh derive TOUT le reste de son operateur depuis OPERATOR_ID
+# start-native.sh derive TOUT le reste de son operateur depuis OPERATOR_ID
 # (/etc/osmocom/coeur.env) :
 #     MS_OP_ID  = OPERATOR_ID
 #     ms_imsi() = MCC MNC <op sur 4> <ms sur 6>      -> l IMSI
@@ -422,7 +423,7 @@ cd "$DIR" || { echo -e "${RED}Impossible d entrer dans $DIR${NC}"; exit 1; }
 #     MS_ARFCN1 = 512 + MS_OP_ID * 2                 -> la FREQUENCE
 # Un natif realigne en operateur 3 mais laisse a OPERATOR_ID=1 gardait donc les
 # abonnes de l operateur 1 - MSISDN 100101, IMSI 001010001000001 - exactement
-# ceux que start.sh donne a son conteneur osmo-operator-1. Deux abonnes avec le
+# ceux que start-docker.sh donne a son conteneur osmo-operator-1. Deux abonnes avec le
 # meme MSISDN dans deux HLR, et deux cellules sur le MEME ARFCN : rien ne
 # proteste au demarrage, et c est a l appel que ca part de travers.
 _aligner_coeur_env() {
@@ -497,7 +498,7 @@ aligner_natif
 # arrete l est tres bien, d ou les || true.
 # ── LE NATIF EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ────────────────────────
 # [2026-09-04] osmo-banc.service tient le natif (services/osmo-banc.service).
-# L'arreter par start-direct.sh --stop sous les pieds de systemd laisserait
+# L'arreter par start-native.sh --stop sous les pieds de systemd laisserait
 # l'unite « active (exited) » sur une pile morte ; le relancer par le
 # raccourci du bureau exige une session graphique, que le service n'a pas.
 # Quand l'unite est installee, c'est elle qu'on arrete et qu'on (re)lance.
@@ -511,11 +512,11 @@ _banc_unit_present() {
 arreter_natif() {
     if _banc_unit_present; then
         # Le natif est relance juste apres par lancer_natif_si_absent : ici on
-        # se contente d'arreter proprement (ExecStop = start-direct.sh --stop).
+        # se contente d'arreter proprement (ExecStop = start-native.sh --stop).
         timeout 200 systemctl stop "$BANC_UNIT" >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee (${BANC_UNIT})"
-    elif [ -x "$DIR/start-direct.sh" ]; then
-        timeout 120 "$DIR/start-direct.sh" --stop >/dev/null 2>&1 || true
+    elif [ -x "$DIR/start-native.sh" ]; then
+        timeout 120 "$DIR/start-native.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
 }
@@ -534,7 +535,7 @@ tout_arreter() {
     else
         echo -e "  ${CYAN}i${NC} operateur natif (2G) a l arret : il sera lance avant les conteneurs"
     fi
-    # Les conteneurs ne sont PAS touches ici : start.sh fait deja
+    # Les conteneurs ne sont PAS touches ici : start-docker.sh fait deja
     # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.
     # Le refaire serait redondant, et surtout destructeur depuis launch.sh -
     # un clic sur le telephone rouge, qui ne monte que le natif, balayerait
@@ -548,13 +549,13 @@ tout_arreter
 
 # ── SI LE NATIF EST A TERRE, ON LANCE SON RACCOURCI ─────────────────────────
 # Le natif n est PAS lance par ce script : il a le sien (le telephone rouge du
-# bureau -> launch.sh -> start-direct.sh). Mais monter les conteneurs sans lui,
+# bureau -> launch.sh -> start-native.sh). Mais monter les conteneurs sans lui,
 # c est monter un banc a trois operateurs dont le premier manque : le hub
 # n aura qu un ASP sur les trois attendus, et le bilan de fin sortira en
 # DEGRADE pour une raison qui n a rien a voir avec ce qu on vient de lancer.
 #
 # On declenche donc son raccourci, et AVANT les conteneurs : l ordre compte,
-# start-direct.sh a besoin de poser ses configs et son coeur pendant que le
+# start-native.sh a besoin de poser ses configs et son coeur pendant que le
 # plan d adressage est encore libre.
 #
 # Pourquoi le .desktop et pas launch.sh en direct : c est le meme chemin que le
@@ -567,7 +568,7 @@ lancer_natif_si_absent() {
     _est_natif osmo-bsc asterisk && return 0
 
     if _banc_unit_present; then
-        # systemctl start bloque jusqu'a la fin de start-direct.sh (oneshot) :
+        # systemctl start bloque jusqu'a la fin de start-native.sh (oneshot) :
         # quand il rend la main, le coeur est deja la. Le suivi ci-dessous ne
         # sert que si l'unite a rendu 0 sans coeur, ce qui ne devrait pas arriver.
         echo -e "  ${YELLOW}!${NC} operateur natif a l arret - ${CYAN}systemctl start ${BANC_UNIT}${NC}"
@@ -593,7 +594,7 @@ lancer_natif_si_absent() {
     done
     if [ ! -f "$d" ]; then
         echo -e "  ${RED}✗${NC} raccourci introuvable ($NATIF_DESKTOP)"
-        echo -e "    ${CYAN}sudo ${DIR}/start-direct.sh${NC}"
+        echo -e "    ${CYAN}sudo ${DIR}/start-native.sh${NC}"
         return 1
     fi
 
@@ -607,7 +608,7 @@ lancer_natif_si_absent() {
     # les dashboards). Sans ce drapeau, launch.sh les rouvrait une seconde fois.
     export OSMO_LAUNCH_APPS=0
     # (a) LE NATIF PREND SA PROPRE FENETRE. Sans ce marqueur, launch.sh voyait
-    # un tty - LE NOTRE - le prenait pour le sien, et start-direct.sh le tenait
+    # un tty - LE NOTRE - le prenait pour le sien, et start-native.sh le tenait
     # jusqu au bout : notre sortie ecrasee, et la main rendue seulement a la fin
     # du natif. Voir launch.sh, garde « 1. Un terminal ».
     export OSMO_TERM_TAKEN=1
@@ -646,7 +647,7 @@ lancer_natif_si_absent
 rc=$?
 
 # ── LE CHECK DE FIN ─────────────────────────────────────────────────────────
-# start.sh peut rendre 0 alors que le SS7 n est pas monte : son code de retour
+# start-docker.sh peut rendre 0 alors que le SS7 n est pas monte : son code de retour
 # dit que les conteneurs ont DEMARRE, pas que les ASP se sont associes. C est
 # la distinction que le depot documente ailleurs sous le nom de sonde
 # mensongere - un superviseur vivant au-dessus d un pont qui n a jamais
@@ -668,11 +669,11 @@ verifier() {
             fi
         else
             if ! _est_natif osmo-bsc asterisk; then
-                echo -e "    ${RED}✗${NC} operateur natif arrete - ${CYAN}sudo ${DIR}/start-direct.sh --op ${idx}${NC}"; ko=1
+                echo -e "    ${RED}✗${NC} operateur natif arrete - ${CYAN}sudo ${DIR}/start-native.sh --op ${idx}${NC}"; ko=1
             else
                 # ── LE POINT CODE DU NATIF DOIT CORRESPONDRE A SON RANG ──
                 # Un natif lance sans --op tourne en operateur 1, donc en
-                # PC 1.1.2 - le meme que le PREMIER CONTENEUR, que start.sh
+                # PC 1.1.2 - le meme que le PREMIER CONTENEUR, que start-docker.sh
                 # numerote toujours a partir de 1. La pile demarre des deux
                 # cotes, tout parait vert, et c est le ROUTAGE SS7 qui est faux :
                 # deux equipements a la meme adresse. On le verifie donc au lieu
@@ -685,7 +686,7 @@ verifier() {
                 else
                     echo -e "    ${RED}✗${NC} operateur natif en PC ${_pc_reel}, attendu ${pc}"
                     echo -e "      il tourne en operateur $(echo "$_pc_reel" | cut -d. -f2), rang deja pris par un CONTENEUR"
-                    echo -e "      ${CYAN}sudo ${DIR}/start-direct.sh --op ${idx}${NC}  (puis relancer ce script)"
+                    echo -e "      ${CYAN}sudo ${DIR}/start-native.sh --op ${idx}${NC}  (puis relancer ce script)"
                     ko=1
                 fi
             fi
@@ -832,8 +833,8 @@ verifier || rc=1
 # [2026-09-04] Le natif l'a ecrite avec un seul operateur ; les conteneurs
 # sont la maintenant : on la reecrit (network/node-conf.sh compte les
 # osmo-operator-N en marche). C'est cette fiche qu'un autre noeud importe.
-if [ "$ACTION" = "start" ] && [ -x "$DIR/start-direct.sh" ]; then
-    NO_MENU=1 "$DIR/start-direct.sh" --gen-conf 2>/dev/null | grep -E "Fiche|mynode" || true
+if [ "$ACTION" = "start" ] && [ -x "$DIR/start-native.sh" ]; then
+    NO_MENU=1 "$DIR/start-native.sh" --gen-conf 2>/dev/null | grep -E "Fiche|mynode" || true
 fi
 # Ouverte par nos soins : on la retient, sinon le bilan disparait avec elle.
 if [ "$_multi_own_window" = "1" ]; then
