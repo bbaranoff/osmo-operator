@@ -14,18 +14,18 @@ needed: the radio is emulated end to end, down to the baseband.
 
 | I want to… | Read |
 |---|---|
-| Boot a ready-made live image (fastest path, nothing to build) | [README-iso](doc/README-iso.md) |
-| Run the bench in Docker, or build the images | [README-docker](doc/README-docker.md) |
-| Install and run on Ubuntu 24.04 without Docker | [README-native](doc/README-native.md) |
-| Run on a Raspberry Pi 4 / arm64 | [README-arm](doc/README-arm.md) |
-| Use the gr-gsm layer 1 (the chain that works end to end) | [README-grgsm](doc/README-grgsm.md) |
-| Study the real TI C54x DSP on the mask ROM (`--dsp`) | [README-dsp](doc/README-dsp.md) |
-| Add 4G, CSFB and the postmarketOS phone | [README-lte](doc/README-lte.md) |
-| Run several operators, SS7 interconnect, link machines over a WAN | [README-ss7](doc/README-ss7.md) |
-| Drive the bench day to day: tmux, VTY, ports, Wireshark, call flows | [README-usage](doc/README-usage.md) |
-| Check that the bench is healthy, reproduce a fault | [README-tests](doc/README-tests.md) |
-| Understand how the pieces fit (diagrams, call flows, code map) | [README-architecture](doc/README-architecture.md) |
-| See every document and where to start | [README-docs](doc/README-docs.md) |
+| Boot a ready-made live image (fastest path, nothing to build) | [iso](doc/README-iso.md) |
+| Run the bench in Docker, or build the images | [docker](doc/README-docker.md) |
+| Install and run on Ubuntu 24.04 without Docker | [native](doc/README-native.md) |
+| Run on a Raspberry Pi 4 / arm64 | [arm](doc/README-arm.md) |
+| Use the gr-gsm layer 1 (the chain that works end to end) | [grgsm](doc/README-grgsm.md) |
+| Study the real TI C54x DSP on the mask ROM (`--dsp`) | [dsp](doc/README-dsp.md) |
+| Add 4G, CSFB and the postmarketOS phone | [4G lte](doc/README-lte.md) |
+| Run several operators, SS7 interconnect, link machines over a WAN | [ss7](doc/README-ss7.md) |
+| Drive the bench day to day: tmux, VTY, ports, Wireshark, call flows | [usage](doc/README-usage.md) |
+| Check that the bench is healthy, reproduce a fault | [tests](doc/README-tests.md) |
+| Understand how the pieces fit (diagrams, call flows, code map) | [architecture](doc/README-architecture.md) |
+| See every document and where to start | [docs](doc/README-docs.md) |
 
 Quickest path, from the ISO (password `osmo`):
 
