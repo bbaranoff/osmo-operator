@@ -3113,13 +3113,30 @@ if [ "$DSP_BANC" = 1 ]; then
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM
     : "${CALYPSO_RHEA_DMA_XFER:=1}"; export CALYPSO_RHEA_DMA_XFER
+    # [2026-10-18] TCH-VOICE EN l1phy, PLUS EN gapk. Le profil ROM de
+    # /etc/default/osmo-banc (scripts/dsp-rom-max.sh : BANC_VOCODEUR=rom,
+    # CALYPSO_VSP=1 et les drapeaux d'emulateur du vocodeur) n'etait lu que par
+    # osmo-banc.service. Lance a la main, start-native.sh passait run.sh sans
+    # BANC_VOCODEUR, et le mobile tournait sur mobile_pont.cfg brut, en gapk.
+    # On charge donc le profil ici - l'environnement gagne toujours - puis
+    # l1phy par defaut : run.sh en derive mobile_pont_rom.cfg (config_vocodeur_rom).
+    # BANC_VOCODEUR=hote pour revenir a gapk.
+    if [ -r /etc/default/osmo-banc ]; then
+        while IFS='=' read -r _k _v; do
+            case "$_k" in ''|\#*|*[!A-Za-z0-9_]*) continue ;; esac
+            [ -n "${!_k+x}" ] || export "$_k=$_v"
+        done < /etc/default/osmo-banc
+        unset _k _v
+    fi
+    : "${BANC_VOCODEUR:=rom}"; export BANC_VOCODEUR
+    : "${CALYPSO_VSP:=1}";     export CALYPSO_VSP
     RUN_ARGS+=(--skip "$DSP_MODULES_RETIRES" --no-attach)
     if [ $DRY -eq 1 ]; then
         say_begin "Transmission a run.sh puis au banc DSP"
         say_end " -- " "$C_DIM" "Transmission a run.sh puis au banc DSP" "dry-run"
         printf '  1. CALYPSO_PROFILE=%s bash %s %s\n' "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
-        printf '  2. MODE=dsp PONT=1 IQ=%s INSNS=%s LOCKSTEP=%s bash %s\n' \
-            "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_DSP"
+        printf '  2. MODE=dsp PONT=1 IQ=%s INSNS=%s LOCKSTEP=%s BANC_VOCODEUR=%s bash %s\n' \
+            "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_VOCODEUR" "$BANC_DSP"
         exit 0
     fi
     audio_start
