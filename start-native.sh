@@ -3130,6 +3130,21 @@ if [ "$DSP_BANC" = 1 ]; then
     fi
     : "${BANC_VOCODEUR:=rom}"; export BANC_VOCODEUR
     : "${CALYPSO_VSP:=1}";     export CALYPSO_VSP
+    # [2026-10-18] ET LE RESTE DU PROFIL --vocodeur-rom, MEME SANS
+    # /etc/default/osmo-banc. Sur acer (10.99.0.2) le fichier n'existait pas :
+    # BANC_VOCODEUR=rom et CALYPSO_VSP=1 venaient d'ici, mais pas les drapeaux
+    # d'emulateur du codec FR ni PONT_UL_RAW_TCH. La ROM recevait bien le micro
+    # (crete UL 2200 sur le port VSP) et codait... la trame de silence
+    # (pont : « TCH ul rom P=0 »), l'echo test du 600 restait muet. Memes
+    # valeurs que scripts/dsp-rom-max.sh profile --vocodeur-rom (le defaut).
+    if [ "$BANC_VOCODEUR" = rom ]; then
+        for _kv in CALYPSO_NORM_TC=0 CALYPSO_C54X_BCTC_NORM=1 PONT_UL_RAW_TCH=1 \
+                   CALYPSO_C54X_BCD_CARRY=1 CALYPSO_C54X_OVM_LOGIQUE=1 CALYPSO_MAC=1 \
+                   CALYPSO_C54X_BCD_TC=1 CALYPSO_C54X_BCTC_COMBO=1; do
+            _k="${_kv%%=*}"; [ -n "${!_k+x}" ] || export "$_kv"
+        done
+        unset _kv _k
+    fi
     RUN_ARGS+=(--skip "$DSP_MODULES_RETIRES" --no-attach)
     if [ $DRY -eq 1 ]; then
         say_begin "Transmission a run.sh puis au banc DSP"

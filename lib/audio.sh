@@ -132,6 +132,9 @@ EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppre
 audio_aec_method() { echo "$AUDIO_AEC_METHOD"; }
 # Les aec_args ne valent que pour webrtc (voir ensure_echo_cancel, aec_opts).
 : "${EC_MIC_VOLUME:=25%}"
+# [2026-10-18] Le micro PDM de l Acer ne sature pas a 100 % (bruit de piece
+# ~70 rms) et n est plus qu un murmure a 25-50 % (~6 rms) : son volume a lui.
+: "${EC_MIC_VOLUME_PDM:=100%}"
 
 audio_hw_sink() {
     local d; d="$(pactl get-default-sink 2>/dev/null || true)"
@@ -139,7 +142,23 @@ audio_hw_sink() {
     pactl list short sinks 2>/dev/null \
         | awk '$2 ~ /^alsa_output/ && $2 !~ /hdmi/ { print $2; exit }'
 }
+# [2026-10-18] LE MICRO NUMERIQUE INTERNE (PDM/DMIC) AVANT LA PRISE JACK.
+# Sur l Acer (acer, 10.99.0.2), la source par defaut etait l entree jack
+# analogique (alsa_input.pci-0000_04_00.6.analog-stereo) : rien de branche,
+# zero absolu (pas meme du bruit), et l annuleur d echo s y accrochait. Le
+# micro interne est la source acp_pdm_mach, laissee SUSPENDED. Resultat :
+# gsm_mic muet, la ROM codait la trame de silence et l echo test (600) ne
+# renvoyait rien. Le port jack y est en « availability unknown » : pas de
+# detection de prise sur laquelle s appuyer, donc on prefere par nom le micro
+# numerique interne. AUDIO_MIC_SOURCE=<source> force un autre micro (casque).
 audio_hw_source() {
+    if [ -n "${AUDIO_MIC_SOURCE:-}" ] && pactl list short sources 2>/dev/null \
+            | awk -v s="$AUDIO_MIC_SOURCE" '$2 == s { f=1 } END { exit !f }'; then
+        echo "$AUDIO_MIC_SOURCE"; return 0
+    fi
+    local p; p="$(pactl list short sources 2>/dev/null \
+        | awk '$2 ~ /^alsa_input/ && $2 ~ /pdm|dmic/ && $2 !~ /\.monitor$/ { print $2; exit }')"
+    [ -n "$p" ] && { echo "$p"; return 0; }
     local d; d="$(pactl get-default-source 2>/dev/null || true)"
     case "$d" in alsa_input.*) echo "$d"; return 0 ;; esac
     pactl list short sources 2>/dev/null \
@@ -257,8 +276,10 @@ ensure_echo_cancel() {
     pactl set-default-sink osmo_hp_ec >/dev/null 2>&1
     pactl set-default-source osmo_mic_ec >/dev/null 2>&1
     pactl set-sink-mute "$hp" 0 2>/dev/null;       pactl set-sink-mute osmo_hp_ec 0 2>/dev/null
-    pactl set-source-mute "$mic" 0 2>/dev/null;    pactl set-source-volume "$mic" "$EC_MIC_VOLUME" 2>/dev/null
-    pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec "$EC_MIC_VOLUME" 2>/dev/null
+    local vol="$EC_MIC_VOLUME"
+    case "$mic" in *pdm*|*dmic*) vol="$EC_MIC_VOLUME_PDM" ;; esac
+    pactl set-source-mute "$mic" 0 2>/dev/null;    pactl set-source-volume "$mic" "$vol" 2>/dev/null
+    pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec "$vol" 2>/dev/null
     return 0
 }
 

@@ -32,7 +32,7 @@
 #   --parole-rom   [2026-10-15] TCH montant (parole, FACCH, SACCH/T) emis par la ROM :
 #                  CALYPSO_NORM_TC=0 + CALYPSO_C54X_BCTC_NORM=1 (emulateur : le marqueur
 #                  de trame de parole de PROM0 0x90a0 n'etait jamais pose) + PONT_UL_RAW_TCH=1.
-#                  A VALIDER (banc-max « voix ») ; --parole-hote (defaut) revient en arriere.
+#                  DEFAUT depuis le 18/10 ; --parole-hote revient en arriere (et coupe --vocodeur-rom).
 #   --vocodeur-rom [2026-10-15] le codec FR de la ROM vocode (port voix SP0 modelise,
 #                  calypso_vsp.c) : BANC_VOCODEUR=rom (mobile en l1phy, sans GAPK) +
 #                  CALYPSO_VSP=1 (pont/vsp_audio.py <-> PulseAudio). Implique --parole-rom.
@@ -46,7 +46,7 @@
 #                  et CALYPSO_C54X_BCTC_COMBO=1 (BC tc,nc,bio : conditions ET-ees, isa 28). Avec ces
 #                  drapeaux et le decalage ASM de ADD/SUB src,ASM (corrige par defaut le 16/10), le
 #                  codeur FR de la ROM est bit-exact avec libgsm sur ~99 % des trames au rejeu.
-#                  A VALIDER (banc-max « voix ») ; --vocodeur-hote (defaut) revient a GAPK.
+#                  DEFAUT depuis le 18/10 (valide banc 16/10) ; --vocodeur-hote revient a GAPK.
 #   --fw-gprs      firmware layer1 avec PDCH (layer1.highram.gprs.elf) : le DEFAUT depuis le 15/10 ;
 #   --fw-stock     le firmware d origine (sans GPRS)
 #
@@ -59,7 +59,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULTS=/etc/default/osmo-banc
 TESTS=/opt/GSM/tests
 FW_GPRS=/opt/GSM/firmware/board/compal_e88/layer1.highram.gprs.elf
-RESTART=1; ONLY=""; FWGPRS=1; PAROLE_ROM=0; VOCODEUR_ROM=0; ACTION=run
+# [2026-10-18] --vocodeur-rom (donc --parole-rom) PAR DEFAUT. Valide au banc le
+# 16/10 (27/27, voix 1 kHz 100 %, tout ROM). Sans lui, une machine sans
+# /etc/default/osmo-banc (acer, 10.99.0.2) tournait le codec FR de la ROM sans
+# ses correctifs d emulateur : trames de silence au montant, echo test muet.
+RESTART=1; ONLY=""; FWGPRS=1; PAROLE_ROM=1; VOCODEUR_ROM=1; ACTION=run
 MOB_VTY=4247
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then C_OK=$'\033[32m'; C_KO=$'\033[31m'; C_WA=$'\033[33m'; C_DIM=$'\033[2m'; C_B=$'\033[1m'; C_Z=$'\033[0m'
@@ -108,10 +112,10 @@ etape_profil() {
     while IFS= read -r l; do [ -n "$l" ] && sed -i "/^${l%%=*}=/d" "$DEFAULTS"; done < <(profil_lignes)
     sed -i '/^FIRMWARE_ELF=/d;/^FIRMWARE_BIN=/d;/^CALYPSO_NORM_TC=/d;/^CALYPSO_C54X_BCTC_NORM=/d;/^PONT_UL_RAW_TCH=/d;/^# parole montante ROM/d;/^BANC_VOCODEUR=/d;/^CALYPSO_VSP=/d;/^CALYPSO_C54X_BCD_CARRY=/d;/^CALYPSO_C54X_OVM_LOGIQUE=/d;/^CALYPSO_MAC=/d;/^CALYPSO_C54X_BCD_TC=/d;/^CALYPSO_C54X_BCTC_COMBO=/d;/^# vocodeur ROM/d' "$DEFAULTS"
     { profil_doc; profil_lignes
-      if [ "$PAROLE_ROM" = 1 ]; then printf '# parole montante ROM (--parole-rom, a valider)\nCALYPSO_NORM_TC=0\nCALYPSO_C54X_BCTC_NORM=1\nPONT_UL_RAW_TCH=1\n'
-      else printf '# parole montante ROM : dsp-rom-max.sh profile --parole-rom (a valider)\n'; fi
-      if [ "$VOCODEUR_ROM" = 1 ]; then printf '# vocodeur ROM (--vocodeur-rom, a valider)\nBANC_VOCODEUR=rom\nCALYPSO_VSP=1\nCALYPSO_C54X_BCD_CARRY=1\nCALYPSO_C54X_OVM_LOGIQUE=1\nCALYPSO_MAC=1\nCALYPSO_C54X_BCD_TC=1\nCALYPSO_C54X_BCTC_COMBO=1\n'
-      else printf '# vocodeur ROM : dsp-rom-max.sh profile --vocodeur-rom (a valider)\n'; fi
+      if [ "$PAROLE_ROM" = 1 ]; then printf '# parole montante ROM (--parole-rom, defaut)\nCALYPSO_NORM_TC=0\nCALYPSO_C54X_BCTC_NORM=1\nPONT_UL_RAW_TCH=1\n'
+      else printf '# parole montante hote (--parole-hote)\n'; fi
+      if [ "$VOCODEUR_ROM" = 1 ]; then printf '# vocodeur ROM (--vocodeur-rom, defaut)\nBANC_VOCODEUR=rom\nCALYPSO_VSP=1\nCALYPSO_C54X_BCD_CARRY=1\nCALYPSO_C54X_OVM_LOGIQUE=1\nCALYPSO_MAC=1\nCALYPSO_C54X_BCD_TC=1\nCALYPSO_C54X_BCTC_COMBO=1\n'
+      else printf '# vocodeur hote, GAPK (--vocodeur-hote)\n'; fi
       if [ "$FWGPRS" = 1 ]; then printf 'FIRMWARE_ELF=%s\nFIRMWARE_BIN=%s\n' "$FW_GPRS" "${FW_GPRS%.elf}.bin"
       else printf '# FIRMWARE_ELF=%s   # --fw-gprs : layer1 avec PDCH (L1CTL_GPRS_*)\n' "$FW_GPRS"; fi
       printf '# ── fin profil ROM max ──\n'; } >> "$DEFAULTS"
@@ -201,7 +205,7 @@ while [ $# -gt 0 ]; do
         --fw-gprs) FWGPRS=1 ;;
         --fw-stock) FWGPRS=0 ;;
         --parole-rom) PAROLE_ROM=1 ;;
-        --parole-hote) PAROLE_ROM=0 ;;
+        --parole-hote) PAROLE_ROM=0; VOCODEUR_ROM=0 ;;
         --vocodeur-rom) VOCODEUR_ROM=1; PAROLE_ROM=1 ;;
         --vocodeur-hote) VOCODEUR_ROM=0 ;;
         -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
