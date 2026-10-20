@@ -354,6 +354,7 @@ comes up unchanged.
 ```
 ./start-native.sh --bts               # [2026-10-20] alias of --osmo-trx ; implies --dsp ; c54x_exe/run.sh runs with OSMO_TRX=1
 ./start-native.sh --bts --ms          # the BTS radio, then the second phone over the air (INSTANCE=2, see 2.7)
+./start-native.sh --bts --ms --ts 2   # [2026-10-20] one Calypso TRX per timeslot: TS1 (TCH/F) served by a 3rd QEMU (OSMO_TRX_TS1=1, transceiver -2) ; --ts 1 = TS0 only
 ```
 (`--ms` alone, or no option, is the usual mobile + bridge setup.)
 
@@ -454,6 +455,44 @@ in `/tmp/c54x-pont/dsp.log`). Four things had to change to get there:
 * `BTS_RX_LAG` (prim_bts.c) is 3 instead of 2 and the BSP delta -2: one frame
   of margin for the air's latency, without which three bursts out of four of
   each uplink block arrived after their window.
+
+**2026-10-20, 21:08 — first call**: `call 1 600` from the mobile's VTY (4347)
+reaches CALL PROCEEDING, CONNECT and CONNECT ACKNOWLEDGE, the echo test
+answers, and speech comes back (240 000 PCM samples from the DSP in 30 s).
+What made it work, after the second-phone attempt below was abandoned: **one
+phone serving TS0 and TS1** (`OSMO_TRX_TCH=1`, masks `0x03`): the patched
+firmware fills every slot of its TX window and reports a second uplink slot
+(`rx[2]`, `data[72]`) with `tn = rx_start + 1`; `c54x_exe` publishes the
+downlink bursts of both slots from the extension page (`tx_page_publier`,
+`CALYPSO_TRX_TX_SLOTS=2`) instead of capturing the ROM's single TSP burst, and
+writes the mobile's TS1 bursts into the page (`prothese montante TS1`); the host
+attaches every masked timeslot to phone 1; the mobile's c54x_exe tags its
+bursts with the timeslot it transmits on (bits 4-6 of the ring's `src` byte,
+`montant_tn_dedie()`), which the air relays as the TRXD `tn`; the air decodes
+the ASSIGNMENT COMMAND on the TS0 SDCCH/4 and announces the TCH through
+`calypso_tch_cfg`. The result page is now chosen by **frame-number parity**,
+self-calibrated by voting on the extcode's own energy detections: the former
+`d_dsp_page`-based choice flipped from one boot to the next, which is why the
+location update "worked one time in two". The uplink margin is two frames
+(`BTS_RX_LAG 4`, delta -3). The VSP audio bridge (`pont.vsp_audio`) is now also
+started by the air step (5b): without it the call was established but silent.
+
+The second-phone attempt (kept, off by default, `OSMO_TRX_TS1=1`): TS0 only carries CCCH and
+SDCCH/4, and the firmware opens a single RX window per frame, so the upstream
+design is followed: a **second phone** serves TS1 (`transceiver -2`, upstream
+hard-coded to `/tmp/osmocom_l2.2`, now `-L PATH`). `OSMO_TRX_TS1=1` on
+instance 1 starts a third chain (`INSTANCE=3`, `OSMO_TRX_PHONE=2`: DSP, QEMU
+with `trx.highram.elf`, osmocon on `/tmp/osmocom_l2_3`, no transceiver) before
+step 4, and the transceiver gets `-2 -L /tmp/osmocom_l2_3` (phone 2: TX and RX
+mask `0x02`, which the patched `prim_bts.c` maps to SLOT 0 / tn 1). Phone 2
+emits no SB, so its BSP takes a fixed frame offset (`CALYPSO_BSP_TRX_OFFSET=-1`,
+the value measured on phone 1) instead of the SB calibration. `pont/air.py`
+grows a third endpoint (`--c-ring`, `--c-port`): phone 2's bursts go to the
+mobile tagged tn 1, and the mobile's bursts go to phone 2 once the air has
+decoded the ASSIGNMENT COMMAND on the TS0 SDCCH/4 (`pont.gsm.xcch_decode`) and
+announced the TCH to the mobile's c54x_exe through `calypso_tch_cfg` (the same
+16-byte record the bridge used to write); a RACH from the mobile hands the
+uplink back to phone 1. BSC: TS1 is `TCH/F`.
 
 Still open: `DSP Error Status: 24` printed every frame by the trx firmware
 (DMA_PROG|DMA_TASK, known since 2026-09-22, harmless so far), and the C54x

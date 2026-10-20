@@ -143,8 +143,17 @@ Usage : ./start-native.sh [options] [mode]
                         (osmocom-bb-transceiver, appli « trx ») + appli hote
                         `transceiver` (L1CTL -> TRXD 5700-5702) a la place de
                         mobile et du pont ; osmo-bts-trx s'y branche comme sur le
-                        pont. Implique --dsp (c54x_exe/run.sh, OSMO_TRX=1). Un seul
-                        timeslot : OSMO_TRX_TS_MASK=0x01 (TS0, BCCH + SDCCH/4).
+                        pont. Implique --dsp (c54x_exe/run.sh, OSMO_TRX=1). Par
+                        defaut UN Calypso sert TS0 et TS1 (OSMO_TRX_TCH=1, masques
+                        0x03) ; voir --ts.
+    --ts N              [2026-10-20] intervalles de temps du TRX Calypso (implique --bts) :
+                            --ts 1   TS0 seul (CCCH + SDCCH/4, pas d'appel) : OSMO_TRX_TCH=0
+                            --ts 2   TS0 + TS1, UN CALYPSO PAR INTERVALLE : le TS1 (TCH/F,
+                                     les appels) est servi par un deuxieme telephone TRX
+                                     (c54x_exe/run.sh OSMO_TRX_TS1=1, instance 3,
+                                     transceiver -2 -L /tmp/osmocom_l2_3) ; le premier
+                                     garde le TS0 seul (OSMO_TRX_TCH=0).
+                        Sans --ts : comme --ts 2 (defaut de run.sh depuis le 20/10 23:10).
     --ms                [2026-10-20] le telephone emule est un MOBILE. Seul (ou sans
                         option) : le montage habituel, mobile + pont vers osmo-bts-trx.
                         AVEC --bts : un DEUXIEME Calypso (c54x_exe/run.sh INSTANCE=2,
@@ -315,6 +324,16 @@ while [ $# -gt 0 ]; do
         # [2026-10-19] --osmo-trx : le banc DSP lance trx.highram.elf et l appli
         # hote transceiver (voir c54x_exe/run.sh, OSMO_TRX=1) ; implique --dsp.
         --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
+        # [2026-10-20] --ts N : 1 = TS0 seul ; 2 = TS0 + TS1, un Calypso TRX par intervalle
+        # (OSMO_TRX_TS1=1 : instance 3 pour le TS1). Implique --bts. Exporte plus bas (export_trx_ts).
+        --ts)          if [ $# -lt 2 ] || ! [[ "${2:-}" =~ ^[12]$ ]]; then
+                           printf '%s\n\n' "--ts attend 1 (TS0 seul) ou 2 (TS0 + TS1, un Calypso par intervalle)" >&2
+                           usage >&2; exit 2
+                       fi
+                       OSMO_TRX_TS="$2"; DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; shift ;;
+        --ts=*)        OSMO_TRX_TS="${1#*=}"
+                       [[ "$OSMO_TRX_TS" =~ ^[12]$ ]] || { printf '%s\n\n' "--ts attend 1 ou 2 (recu : $OSMO_TRX_TS)" >&2; usage >&2; exit 2; }
+                       DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
         # [2026-10-20] --ms : sans --bts c'est le defaut (mobile + pont) ; avec --bts, l'instance 2 par l'air
         --ms)          MS_AIR=1 ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
@@ -381,6 +400,25 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# [2026-10-20] --ts N -> variables de c54x_exe/run.sh (OSMO_TRX=1). Sans --ts, run.sh garde son defaut
+# (OSMO_TRX_TCH=1 : un Calypso, TS0 + TS1, masques 0x03). trx_ts_desc : le libelle des resumes.
+export_trx_ts() {
+    case "${OSMO_TRX_TS:-}" in
+        1) export OSMO_TRX_TCH=0 OSMO_TRX_TS1=0 ;;
+        2|"") export OSMO_TRX_TCH=0 OSMO_TRX_TS1=1 ;;
+    esac
+}
+trx_ts_desc() {
+    if [ "${OSMO_TRX_TS1:-0}" = 1 ]; then
+        printf 'TS0 + TS1 par un 2e Calypso (--ts 2 : OSMO_TRX_TS1=1, instance %s, transceiver -2)' "${OSMO_TRX_TS1_INSTANCE:-3}"
+    elif [ "${OSMO_TRX_TCH:-0}" = 0 ]; then
+        printf 'TS0 seul (--ts 1 : OSMO_TRX_TCH=0, masque 0x01)'
+    else
+        printf 'TS0 + TS1 par un seul Calypso (OSMO_TRX_TCH=1, masques 0x03)'
+    fi
+}
+export_trx_ts
 
 # Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
 # MODEM_GPRS dans l'environnement de run.sh : exporte ici, 0 (sans data) par
@@ -548,7 +586,9 @@ fi
 # Tout autre python3 (bureau, pmbootstrap, un build a cote) n est pas concerne.
 # CALYPSO_PY_BANC_EXTRA='motif|motif' ajoute des motifs (regex ERE) sans
 # toucher au script.
-PY_BANC='fake_trx\.py|trx_toolkit/|pont/pont\.py|pont/airmesh\.py|sms-interop|osmo-ril-atmodem\.py'
+# [2026-10-20 22:35] + l'air, le pont DSP, le pont audio VSP et les passerelles gdb des instances Calypso :
+# un air.py de 22:12 survivait a deux relances et lisait un anneau supprime (plus de LU).
+PY_BANC='fake_trx\.py|trx_toolkit/|pont/pont\.py|pont/airmesh\.py|sms-interop|osmo-ril-atmodem\.py|pont/air\.py|pont/pont_dsp\.py|pont\.vsp_audio|gdb-telnet\.py'
 [ -n "${CALYPSO_PY_BANC_EXTRA:-}" ] && PY_BANC="$PY_BANC|$CALYPSO_PY_BANC_EXTRA"
 killall_python() {
     local sig="${1:--TERM}" pid tue=0
@@ -781,6 +821,25 @@ banc_dsp() {
 banc_dsp_arreter() {
     [ -x "$BANC_DSP" ] || return 0
     banc_dsp --stop "$@"
+}
+# [2026-10-20 22:35] TOUTES les instances Calypso (INSTANCE=N : /tmp/c54x-pontN, le mobile par l'air = 2,
+# le telephone 2 du TRX = 3, les essais = 4...). run.sh --stop (instance 1) entraine deja 2 et 3 ; ceci
+# ramasse le reste, puis les orphelins par leur nom (c54x_exe, QEMU Calypso, transceiver) : un c54x_exe
+# de l'instance 2 vieux de 19 minutes etait encore la apres deux relances.
+banc_dsp_arreter_instances() {
+    local d n
+    for d in /tmp/c54x-pont[0-9]*; do
+        [ -d "$d" ] || continue
+        n="${d#/tmp/c54x-pont}"
+        ls "$d"/*.pid >/dev/null 2>&1 || continue
+        [ -x "$BANC_DSP" ] && INSTANCE="$n" AIR=1 OSMO_TRX=0 MODE=dsp bash "$BANC_DSP" --stop >/dev/null 2>&1 || true
+        rm -f "$d"/*.pid
+    done
+    pkill -f 'c54x_exe --arm' 2>/dev/null || true
+    pkill -f 'qemu-system-arm -M calypso' 2>/dev/null || true
+    pkill -f 'transceiver -l /tmp/osmocom_l2' 2>/dev/null || true
+    rm -f /tmp/calypso_keys[0-9]*.sock /tmp/osmocom_l2_[0-9]* 2>/dev/null
+    return 0
 }
 
 # --- 2b. lanceur C de QEMU (qosmo) --------------------------------------------
@@ -1700,8 +1759,8 @@ printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 # (mobile_pont.cfg, VTY 4347). Le resume annoncait le mauvais fichier ET le
 # mauvais port -- on allait se connecter a une VTY qui n'existe pas.
 if [ "$DSP_BANC" = 1 ] && [ "${OSMO_TRX:-0}" = 1 ]; then
-    printf '  %sMS#1%s       non lance : le Calypso de QEMU est le TRX de la BTS#0 (--osmo-trx : trx.highram.elf + transceiver, timeslots %s)\n' \
-        "$C_DIM" "$C_Z" "${OSMO_TRX_TS_MASK:-0x01}"
+    printf '  %sMS#1%s       non lance : le Calypso de QEMU est le TRX de la BTS#0 (--osmo-trx : trx.highram.elf + transceiver, %s)\n' \
+        "$C_DIM" "$C_Z" "$(trx_ts_desc)"
 elif [ "$DSP_BANC" = 1 ]; then
     _ms1_cfg="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
     _ms1_vty="$(sed -n 's/^ *bind 127.0.0.1 \([0-9]*\).*/\1/p' "$_ms1_cfg" 2>/dev/null | head -1)"
@@ -1846,6 +1905,7 @@ case "$ACTION" in
         command -v systemctl >/dev/null 2>&1 && systemctl unset-environment OSMO_BB1_VTY_PORT OSMO_MOBILE_LOG 2>/dev/null || true
         say_begin "Arret de la pile via run.sh"
         banc_dsp_arreter          # QEMU, osmocon, mobile, pont : a lui
+        banc_dsp_arreter_instances
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
         # les serveurs SAP de softSIM (--sap) et leur socket
         for _p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do kill -TERM "$_p" 2>/dev/null || true; done
@@ -2840,6 +2900,7 @@ kill_softsim() {
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
     banc_dsp_arreter >/dev/null 2>&1 || true
+    banc_dsp_arreter_instances
     bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
     declare -F purge_sessions_tmux >/dev/null && purge_sessions_tmux
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
@@ -3288,7 +3349,8 @@ if [ "$DSP_BANC" = 1 ]; then
             "$PONT" "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_VOCODEUR" \
             "${QEMU_ICOUNT:+ QEMU_ICOUNT=$QEMU_ICOUNT}" \
             "$([ "${ASSEMBLY_LOGS:-0}" = 1 ] && echo " ASSEMBLY_LOGS=1")" "$BANC_DSP"
-        [ "${OSMO_TRX:-0}" = 1 ] && printf '     OSMO_TRX=1 : trx.highram.elf + transceiver --no-sync --ts-mask %s (pas de mobile, pas de pont)\n' "${OSMO_TRX_TS_MASK:-0x01}"
+        [ "${OSMO_TRX:-0}" = 1 ] && printf '     OSMO_TRX=1 : trx.highram.elf + transceiver --no-sync (pas de mobile, pas de pont) ; %s\n' "$(trx_ts_desc)"
+        [ "${OSMO_TRX_TS1:-0}" = 1 ] && printf '     OSMO_TRX_TS1=1 : INSTANCE=3 OSMO_TRX_PHONE=2 bash %s   (le 2e Calypso TRX, TS1, avant le transceiver)\n' "$BANC_DSP"
         [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp bash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "$BANC_DSP"
         exit 0
     fi
@@ -3300,7 +3362,7 @@ if [ "$DSP_BANC" = 1 ]; then
     fi
     say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE, chaine Calypso laissee au banc DSP"
     say_begin "Banc DSP C54x"
-    say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ$([ "${OSMO_TRX:-0}" = 1 ] && echo " OSMO_TRX=1 : trx.highram.elf + transceiver, TS ${OSMO_TRX_TS_MASK:-0x01}"))"
+    say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ$([ "${OSMO_TRX:-0}" = 1 ] && echo " OSMO_TRX=1 : trx.highram.elf + transceiver, $(trx_ts_desc)"))"
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
     # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
     # deja exporte juste au-dessus, il ecrase celui du profil.
@@ -3322,7 +3384,12 @@ if [ "$DSP_BANC" = 1 ]; then
             say_end " !! " "$C_KO" "Mobile par l'air (instance 2)" "le firmware trx n'est pas en mode BTS (osmo-bts-trx absente ?) ; on lance quand meme"
         fi
         sleep 10
-        exec env INSTANCE=2 AIR=1 ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
+        # [2026-10-20 21:20] OSMO_TRX=0 explicite : OSMO_TRX=1 est exporte (le TRX, c'est l'instance 1) et
+        # l'instance 2 en heritait -> firmware trx + second transceiver, « port UDP 5700 deja pris ».
+        # Le mobile par l'air est le layer1 d'origine (FIRMWARE_ELF du profil retire : c'est le
+        # layer1.highram.elf qui a fait le LU et l'appel du 20/10 21:08 ; FIRMWARE_SRC explicite garde la main).
+        exec env -u FIRMWARE_ELF -u FIRMWARE_BIN ${FIRMWARE_SRC:+FIRMWARE_ELF="$FIRMWARE_ELF"} \
+            INSTANCE=2 AIR=1 OSMO_TRX=0 ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
     fi
     exec env ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
 fi

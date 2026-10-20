@@ -11,9 +11,18 @@ index 7b8e25c..ce70d5c 100644
  
  
 diff --git a/src/host/layer23/src/transceiver/l1ctl.c b/src/host/layer23/src/transceiver/l1ctl.c
-index 5bcabe3..0a5fa49 100644
+index 5bcabe3..da99988 100644
 --- a/src/host/layer23/src/transceiver/l1ctl.c
 +++ b/src/host/layer23/src/transceiver/l1ctl.c
+@@ -200,7 +200,7 @@ _l1ctl_rx_bts_burst_nb_ind(struct l1ctl_link *l1l, struct msgb *msg)
+ 
+ 	fn = ntohl(bi->fn);
+ 
+-	LOGP(DL1C, LOGL_INFO, "Normal Burst Indication (fn=%d)\n", fn);
++	LOGP(DL1C, LOGL_INFO, "Normal Burst Indication (fn=%d tn=%d)\n", fn, bi->tn);
+ 
+ 	toa = bi->toa * 1.0F;
+ 
 @@ -380,6 +380,16 @@ l1ctl_recv(void *data, struct msgb *msg)
  
  	case L1CTL_RESET_IND:
@@ -32,10 +41,10 @@ index 5bcabe3..0a5fa49 100644
  		l1l->sync = 0;
  		l1ctl_tx_fbsb_req(l1l, l1l->as->arfcn_sync, L1CTL_FBSB_F_FB01SB, 100, 0, CCCH_MODE_NONE);
 diff --git a/src/host/layer23/src/transceiver/main.c b/src/host/layer23/src/transceiver/main.c
-index a895ffc..8bacce9 100644
+index a895ffc..2e02273 100644
 --- a/src/host/layer23/src/transceiver/main.c
 +++ b/src/host/layer23/src/transceiver/main.c
-@@ -46,6 +46,21 @@ static int arfcn_sync = 0;
+@@ -46,6 +46,23 @@ static int arfcn_sync = 0;
  static int daemonize = 0;
  static int rt_prio = -1;
  static int second_phone = 0;
@@ -51,13 +60,15 @@ index a895ffc..8bacce9 100644
 +static int no_sync = 0;
 +static int ts_mask = -1;
 +static int tx_mask_opt = -1;
++/* [2026-10-20] second telephone (TS1, --second-phone) : son socket L1CTL (banc QEMU : /tmp/osmocom_l2_3) */
++static const char *l1ctl2_path = "/tmp/osmocom_l2.2";
 +static const char *l1ctl_path = "/tmp/osmocom_l2";
 +static int base_port = 5700;
 +static int bsic_opt = -1;
  
  static void print_help(char *argv[])
  {
-@@ -61,6 +76,12 @@ static void print_help(char *argv[])
+@@ -61,6 +78,13 @@ static void print_help(char *argv[])
  		"  -p   --arfcn-sync-pcs   The ARFCN above is PCS\n"
  		"  -2   --second-phone     Use second phone for TS 1\n"
  		"  -r	--realtime PRIO	   Set realtime scheduler with given prio\n"
@@ -65,12 +76,13 @@ index a895ffc..8bacce9 100644
 +		"  -m   --ts-mask MASK     RX timeslot mask of phone 1 (default 0x01 = TS0 only)\n"
 +		"  -M   --tx-mask MASK     TX timeslot mask of phone 1 (default 0xe3 = TS 5,6,7,0,1 : tx_start 5 serves TS0)\n"
 +		"  -l   --l1ctl PATH       L1CTL socket of phone 1 (default /tmp/osmocom_l2)\n"
++		"  -L   --l1ctl2 PATH      L1CTL socket of phone 2, TS1 (default /tmp/osmocom_l2.2, with -2)\n"
 +		"  -P   --base-port PORT   TRX UDP base port (default 5700)\n"
 +		"  -b   --bsic BSIC        BSIC of the cell (osmo-bts-trx sends SETTSC, not SETBSIC: NCC<<3|BCC)\n"
  		);
  }
  
-@@ -78,9 +99,16 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+@@ -78,9 +102,17 @@ static void handle_options(int argc, char **argv, struct app_state *as)
  			{ "arfcn-sync-pcs", 0, 0, 'p' },
  			{ "second-phone", 0, 0, '2' },
  			{ "realtime", 1, 0, 'r' },
@@ -78,17 +90,18 @@ index a895ffc..8bacce9 100644
 +			{ "ts-mask", 1, 0, 'm' },
 +			{ "tx-mask", 1, 0, 'M' },
 +			{ "l1ctl", 1, 0, 'l' },
++			{ "l1ctl2", 1, 0, 'L' },
 +			{ "base-port", 1, 0, 'P' },
 +			{ "bsic", 1, 0, 'b' },
 +			{ NULL, 0, 0, 0 },
  		};
  
 -		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:",
-+		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:nm:M:l:P:b:",
++		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:nm:M:l:L:P:b:",
  			long_options, &option_idx);
  
  		if (c == -1)
-@@ -116,6 +144,24 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+@@ -116,6 +148,27 @@ static void handle_options(int argc, char **argv, struct app_state *as)
  		case 'r':
  			rt_prio = atoi(optarg);
  			break;
@@ -104,6 +117,9 @@ index a895ffc..8bacce9 100644
 +		case 'l':
 +			l1ctl_path = optarg;
 +			break;
++		case 'L':
++			l1ctl2_path = optarg;
++			break;
 +		case 'P':
 +			base_port = atoi(optarg);
 +			break;
@@ -113,7 +129,7 @@ index a895ffc..8bacce9 100644
  		default:
  			fprintf(stderr, "Unknow option %s\n", optarg);
  			exit(0);
-@@ -148,10 +194,11 @@ int main(int argc, char *argv[])
+@@ -148,10 +201,11 @@ int main(int argc, char *argv[])
  		return -1;
  	}
  	handle_options(argc, argv, as);
@@ -127,7 +143,7 @@ index a895ffc..8bacce9 100644
  
  	/* App state init */
  	printf("%d\n", as->arfcn_sync);
-@@ -168,19 +215,28 @@ int main(int argc, char *argv[])
+@@ -168,34 +222,55 @@ int main(int argc, char *argv[])
  		exit(-1);
  
  	/* TRX interface with OpenBTS */
@@ -153,12 +169,42 @@ index a895ffc..8bacce9 100644
 +	if (tx_mask_opt >= 0)
 +		as->l1l[0].tx_mask = tx_mask_opt;
  	as->trx[0]->l1l[0] = &as->l1l[0];
++	/* [2026-10-20] banc QEMU : le telephone 1 sert TOUS les intervalles de ses masques (TS0 et TS1
++	 * avec 0x03) : les bursts de la BTS pour ces TS lui sont transmis et ses indications tn=1 acceptees */
++	if (!second_phone) {
++		int tn;
++		for (tn = 1; tn < 8; tn++)
++			if ((as->l1l[0].tx_mask | as->l1l[0].rx_mask) & (1 << tn))
++				as->trx[0]->l1l[tn] = &as->l1l[0];
++	}
 +	printf("transceiver: l1ctl %s, TRXD base port %d, tx_mask 0x%02x rx_mask 0x%02x%s\n",
 +		l1ctl_path, base_port, as->l1l[0].tx_mask, as->l1l[0].rx_mask,
 +		no_sync ? ", no-sync (BTS mode at reset)" : "");
  
  	/* Reset phone */
  	l1ctl_tx_reset_req(&as->l1l[0], L1CTL_RES_T_FULL);
+ 
+ 	if (second_phone) {
+ 		/* Establish l1ctl link */
+-		rv = l1l_open(&as->l1l[1], "/tmp/osmocom_l2.2", l1ctl_recv, &as->l1l[1]);
++		rv = l1l_open(&as->l1l[1], l1ctl2_path, l1ctl_recv, &as->l1l[1]);
+ 		if (rv)
+ 			exit(-1);
+ 		as->l1l[1].trx = as->trx[0];
+ 		as->l1l[1].as = as;
+ 		as->l1l[1].tx_mask = 0x02; /* TS 1 */
+ 		as->l1l[1].rx_mask = 0x02; /* TS 1 */
+-		as->l1l[0].tx_mask = 0xe1; /* TS 5,6,7,0 */
+-		as->l1l[0].rx_mask = 0x01; /* TS 0 */
++		/* [2026-10-20] le telephone 1 garde -M / -m s'ils ont ete donnes (banc QEMU : 0x01 / 0x01) */
++		if (tx_mask_opt < 0)
++			as->l1l[0].tx_mask = 0xe1; /* TS 5,6,7,0 */
++		if (ts_mask < 0)
++			as->l1l[0].rx_mask = 0x01; /* TS 0 */
++		printf("transceiver: second phone (TS1) on l1ctl %s\n", l1ctl2_path);
+ 		as->trx[0]->l1l[1] = &as->l1l[1];
+ 
+ 		/* Reset phone */
 diff --git a/src/host/layer23/src/transceiver/trx.c b/src/host/layer23/src/transceiver/trx.c
 index 3f51928..eb38b2a 100644
 --- a/src/host/layer23/src/transceiver/trx.c
@@ -326,7 +372,7 @@ index 6841f80..9cc87f1 100644
  		"TX %d..%d RX %d..%d\n", l1s.bts.bsic, l1s.bts.arfcn,
  		bm->type[0], bm->type[1], bm->type[2], bm->type[3],
 diff --git a/src/target/firmware/layer1/prim_bts.c b/src/target/firmware/layer1/prim_bts.c
-index 91b18dc..1457bd3 100644
+index 91b18dc..02acc7d 100644
 --- a/src/target/firmware/layer1/prim_bts.c
 +++ b/src/target/firmware/layer1/prim_bts.c
 @@ -139,7 +139,13 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
@@ -339,7 +385,7 @@ index 91b18dc..1457bd3 100644
 +	 * fenetre RX de sa trame s'ouvre : 3 bursts sur 4 d'un bloc SDCCH manquaient. On lit donc le
 +	 * burst de la trame X une trame plus tard et on le marque X (le BSP de c54x_exe le joue a
 +	 * tick(X) + 1 : CALYPSO_BSP_TRX_DELTA = -2). Silicium : remettre 2. */
-+#define BTS_RX_LAG 3
++#define BTS_RX_LAG 4   /* [2026-10-20 soir] 4 : deux trames de marge (delta -3 cote c54x_exe) */
 +	gsm_fn2gsmtime(&rx_time, l1s.current_time.fn - BTS_RX_LAG);
  		/* We're shifted in time since we RX in the 'next' frame */
  
@@ -358,7 +404,56 @@ index 91b18dc..1457bd3 100644
  		for (i=0,j=(db->rx[1].cmd)<<1; i<2*88; i++,j++)
  			bi->iq[i] = iq[j] >> 8;
  
-@@ -289,6 +297,11 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+@@ -261,6 +269,48 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 		}
+ 	}
+ 
++	/* [2026-10-20] banc QEMU : le deuxieme intervalle (rx_start + 1), resultat pose par c54x_exe
++	 * dans rx[2] / data[72..] (meme format que d[] ci-dessus : toa, pm, -, energie, -, bits) */
++	if (l1s.bts.rx_num > 1 && db->rx[2].cmd == DSP_EXT_RX_CMD_NB)
++	{
++		uint16_t *d = &db->data[72];
++		int rssi = agc_inp_dbm8_by_pm(d[1] >> 3) / 8;
++		int16_t toa = (int16_t)d[0] - 3;
++
++		db->rx[2].cmd = 0;
++		if (d[3] > 0x1000) {
++			struct msgb *msg;
++			struct l1ctl_bts_burst_nb_ind *bi;
++			int i;
++
++			msg = l1ctl_msgb_alloc(L1CTL_BTS_BURST_NB_IND);
++			if (!msg)
++				goto exit;
++
++			bi = (struct l1ctl_bts_burst_nb_ind *) msgb_put(msg, sizeof(*bi));
++			bi->fn = htonl(rx_time.fn);
++			bi->tn = (l1s.bts.rx_start + 1) & 7;
++			if (toa > -32 && toa < 32)
++				bi->toa = toa;
++			if (rssi < -110)
++				bi->rssi = -110;
++			else if (rssi < 0)
++				bi->rssi = rssi;
++			memset(bi->data, 0x00, sizeof(bi->data));
++			for (i=0; i<116; i++)
++			{
++				int sbit = 0x0008 << ((3 - (i & 3)) << 2);
++				int sword = i >> 2;
++				int dbit = 1 << (7 - (i & 7));
++				int dbyte = i >> 3;
++
++				if (d[5+sword] & sbit)
++					bi->data[dbyte] |= dbit;
++			}
++			l1_queue_for_l2(msg);
++		}
++	}
++
+ exit:
+ 	/* We're done with this */
+ 	dsp_api.r_page_used = 1;
+@@ -289,6 +339,15 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
  
  	db->rx[0].cmd = 0;
  	db->rx[0].data = 0x000;
@@ -367,36 +462,136 @@ index 91b18dc..1457bd3 100644
 +	 * tant que le DSP n'y a rien ecrit, et l1s_bts_resp indexait data[] avec. */
 +	db->rx[1].cmd = 0;
 +	db->rx[1].data = 0x000;
++	/* [2026-10-20] banc QEMU : rx[2] est le resultat du DEUXIEME intervalle (rx_start + 1, le TCH),
++	 * pose par c54x_exe (prothese montante TS1) dans data[72..] ; remis a zero a chaque trame */
++	db->rx[2].cmd = 0;
++	db->rx[2].data = 0x000;
  
  	t3 = l1s.next_time.t3;
  
-@@ -366,14 +379,20 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+@@ -365,64 +424,69 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+ 	/* TX side */
  	/* ------- */
  
- 	// FIXME put that in a loop over all TX bursts
-+	/* [2026-10-20] La fenetre TX (l1s_tx_*_win_ctrl) s'ouvre au slot TPU
-+	 * (tx_start + 5) & 7 ; le burst en position SLOT de la fenetre part au
-+	 * slot TPU (tx_start + 5 + SLOT) & 7, soit le TS descendant
-+	 * (tx_start + SLOT) & 7 (le TX du Calypso est en avance de 3 slots).
-+	 * L'ancien code ne servait le TS0 (BCCH) que pour tx_start == 5
-+	 * (fenetre multiple 5,6,7,0,1 : SLOT 3) et mettait tn = 1 sinon : avec
-+	 * tx_mask 0x01 (une seule fenetre, celle que le banc c54x_exe sait jouer)
-+	 * le TS0 restait un dummy burst a chaque trame. On vise toujours le TS0 :
-+	 * SLOT = (8 - tx_start) & 7 si la fenetre le contient, sinon le premier. */
- 	static uint8_t SLOT, tn;
+-	// FIXME put that in a loop over all TX bursts
+-	static uint8_t SLOT, tn;
 -	if (l1s.bts.tx_start == 5) {
 -		SLOT = 3;
 -		tn = 0;
 -	} else {
-+	SLOT = (8 - l1s.bts.tx_start) & 7;
-+	if (SLOT >= l1s.bts.tx_num)
- 		SLOT = 0;
+-		SLOT = 0;
 -		tn = 1;
 -	}
-+	tn = (l1s.bts.tx_start + SLOT) & 7;
++	/* [2026-10-20] Tous les slots de la fenetre TX, pas un seul : le slot p de la fenetre ouverte
++	 * au slot TPU (tx_start + 5) & 7 part sur le TS descendant (tx_start + p) & 7 (le TX du Calypso
++	 * est en avance de 3 slots). Sur le banc QEMU c54x_exe ne joue pas la fenetre multiple de la
++	 * ROM : il publie lui-meme les bursts a partir de tx[p] (cmd + donnees) de cette page.
++	 * Les donnees NB du slot p sont dans data[8 p .. 8 p + 7]. */
++	{
++	int p, nslots = l1s.bts.tx_num ? l1s.bts.tx_num : 1;
++	if (nslots > 8) nslots = 8;
  
  	/* Reset all commands to dummy burst */
  	for (i=0; i<8; i++)
+ 		db->tx[i].cmd = DSP_EXT_TX_CMD_DUMMY;
+ 
+-	/* Get the next burst */
+-	type = trx_get_burst(l1s.next_time.fn, tn, data);
+-
+-	/* Program the TX commands */
+-	if (t3 == 2 && (l1s.bts.type[tn] >> 1) != 2) {
+-		// FIXME use dummy until TSC will be set individually
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-	} else
+-	switch (type) {
+-	case BURST_FB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_FB;
+-		break;
+-
+-	case BURST_SB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_SB;
+-
+-		sb = sb_build(
+-			l1s.bts.bsic,                   /* BSIC */
+-			l1s.next_time.t1,               /* T1   */
+-			l1s.next_time.t2,               /* T2   */
+-			(l1s.next_time.t3 - 1) / 10     /* T3'  */
+-		);
+-
+-		db->sch[0] = sb;
+-		db->sch[1] = sb >> 16;
+-
+-		break;
+-
+-	case BURST_DUMMY:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-		break;
+-
+-	case BURST_NB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_NB;
+-		db->tx[SLOT].data = sizeof(struct dsp_ext_db) / sizeof(uint16_t);
+-
+-		for (i=0; i<7; i++)
+-			db->data[i] = (data[i<<1] << 8) | data[(i<<1)+1];
+-		db->data[7] = data[14] << 8;
+-		break;
+-
+-	default:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-		break;
++	for (p = 0; p < nslots; p++) {
++		uint8_t tn = (l1s.bts.tx_start + p) & 7;
++
++		/* Get the next burst */
++		type = trx_get_burst(l1s.next_time.fn, tn, data);
++
++		/* Program the TX commands */
++		if (t3 == 2 && (l1s.bts.type[tn] >> 1) != 2) {
++			// FIXME use dummy until TSC will be set individually
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			continue;
++		}
++		switch (type) {
++		case BURST_FB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_FB;
++			break;
++
++		case BURST_SB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_SB;
++
++			sb = sb_build(
++				l1s.bts.bsic,                   /* BSIC */
++				l1s.next_time.t1,               /* T1   */
++				l1s.next_time.t2,               /* T2   */
++				(l1s.next_time.t3 - 1) / 10     /* T3'  */
++			);
++
++			db->sch[0] = sb;
++			db->sch[1] = sb >> 16;
++
++			break;
++
++		case BURST_DUMMY:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			break;
++
++		case BURST_NB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_NB;
++			db->tx[p].data = sizeof(struct dsp_ext_db) / sizeof(uint16_t) + 8 * p;
++
++			for (i=0; i<7; i++)
++				db->data[8 * p + i] = (data[i<<1] << 8) | data[(i<<1)+1];
++			db->data[8 * p + 7] = data[14] << 8;
++			break;
++
++		default:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			break;
++		}
++	}
+ 	}
+ 
+ 	/* Enable the task */
 diff --git a/src/target/firmware/layer1/prim_bts_sync.c b/src/target/firmware/layer1/prim_bts_sync.c
 index 60cb157..3ea69e5 100644
 --- a/src/target/firmware/layer1/prim_bts_sync.c
