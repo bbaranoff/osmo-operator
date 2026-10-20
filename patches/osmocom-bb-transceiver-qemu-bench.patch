@@ -1,0 +1,471 @@
+diff --git a/src/host/layer23/src/transceiver/app.h b/src/host/layer23/src/transceiver/app.h
+index 7b8e25c..ce70d5c 100644
+--- a/src/host/layer23/src/transceiver/app.h
++++ b/src/host/layer23/src/transceiver/app.h
+@@ -52,6 +52,7 @@ struct app_state
+ 
+ 	/* Options */
+ 	uint16_t arfcn_sync;
++	int no_sync;	/* [2026-10-19] mode BTS sans synchro sur une cellule (QEMU, pas d'air) */
+ };
+ 
+ 
+diff --git a/src/host/layer23/src/transceiver/l1ctl.c b/src/host/layer23/src/transceiver/l1ctl.c
+index 5bcabe3..0a5fa49 100644
+--- a/src/host/layer23/src/transceiver/l1ctl.c
++++ b/src/host/layer23/src/transceiver/l1ctl.c
+@@ -380,6 +380,16 @@ l1ctl_recv(void *data, struct msgb *msg)
+ 
+ 	case L1CTL_RESET_IND:
+ 	case L1CTL_RESET_CONF:
++		if (l1l->as->no_sync) {
++			/* [2026-10-19] pas de cellule a ecouter : le compteur de trames
++			 * du telephone fait foi, mode BTS des que la BTS a dit POWERON */
++			LOGP(DAPP, LOGL_INFO, "Reset received: --no-sync, BTS mode without cell sync.\n");
++			l1l->sync = 1;
++			if (l1l->trx->power)
++				l1ctl_tx_bts_mode(l1l, 1, l1l->trx->type, l1l->trx->bsic, l1l->trx->arfcn, l1l->trx->gain, l1l->tx_mask, l1l->rx_mask, l1l->trx->handover);
++			msgb_free(msg);
++			break;
++		}
+ 		LOGP(DAPP, LOGL_INFO, "Reset received: Starting sync.\n");
+ 		l1l->sync = 0;
+ 		l1ctl_tx_fbsb_req(l1l, l1l->as->arfcn_sync, L1CTL_FBSB_F_FB01SB, 100, 0, CCCH_MODE_NONE);
+diff --git a/src/host/layer23/src/transceiver/main.c b/src/host/layer23/src/transceiver/main.c
+index a895ffc..8bacce9 100644
+--- a/src/host/layer23/src/transceiver/main.c
++++ b/src/host/layer23/src/transceiver/main.c
+@@ -46,6 +46,21 @@ static int arfcn_sync = 0;
+ static int daemonize = 0;
+ static int rt_prio = -1;
+ static int second_phone = 0;
++/* [2026-10-19] Banc QEMU (osmo-operator, start-native.sh --osmo-trx) : le
++ * telephone emule n'a aucune cellule sur laquelle se caler (FBSB), on passe
++ * en mode BTS des le reset ; un seul timeslot pour commencer (--ts-mask 0x01).
++ * [2026-10-20] --ts-mask ne touche que le masque RX : le masque TX reste 0xe3
++ * (TS 5,6,7,0,1), car prim_bts.c (l1s_bts_cmd) ne sert le TS0 BCCH que si
++ * tx_start == 5 (la fenetre TX du Calypso est decalee de 3 slots : SLOT 3 de
++ * la fenetre multiple ouverte en 5 tombe sur le TS0). Avec tx_mask 0x01,
++ * tx_start valait 0 et le firmware emettait tn 1 -> dummy burst a chaque trame
++ * (c54x_exe : « DUMMY 18000, FB 0, SB 0 »). --tx-mask pour le forcer quand meme. */
++static int no_sync = 0;
++static int ts_mask = -1;
++static int tx_mask_opt = -1;
++static const char *l1ctl_path = "/tmp/osmocom_l2";
++static int base_port = 5700;
++static int bsic_opt = -1;
+ 
+ static void print_help(char *argv[])
+ {
+@@ -61,6 +76,12 @@ static void print_help(char *argv[])
+ 		"  -p   --arfcn-sync-pcs   The ARFCN above is PCS\n"
+ 		"  -2   --second-phone     Use second phone for TS 1\n"
+ 		"  -r	--realtime PRIO	   Set realtime scheduler with given prio\n"
++		"  -n   --no-sync          No cell sync (FBSB): BTS mode right after the phone reset (QEMU bench)\n"
++		"  -m   --ts-mask MASK     RX timeslot mask of phone 1 (default 0x01 = TS0 only)\n"
++		"  -M   --tx-mask MASK     TX timeslot mask of phone 1 (default 0xe3 = TS 5,6,7,0,1 : tx_start 5 serves TS0)\n"
++		"  -l   --l1ctl PATH       L1CTL socket of phone 1 (default /tmp/osmocom_l2)\n"
++		"  -P   --base-port PORT   TRX UDP base port (default 5700)\n"
++		"  -b   --bsic BSIC        BSIC of the cell (osmo-bts-trx sends SETTSC, not SETBSIC: NCC<<3|BCC)\n"
+ 		);
+ }
+ 
+@@ -78,9 +99,16 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+ 			{ "arfcn-sync-pcs", 0, 0, 'p' },
+ 			{ "second-phone", 0, 0, '2' },
+ 			{ "realtime", 1, 0, 'r' },
++			{ "no-sync", 0, 0, 'n' },
++			{ "ts-mask", 1, 0, 'm' },
++			{ "tx-mask", 1, 0, 'M' },
++			{ "l1ctl", 1, 0, 'l' },
++			{ "base-port", 1, 0, 'P' },
++			{ "bsic", 1, 0, 'b' },
++			{ NULL, 0, 0, 0 },
+ 		};
+ 
+-		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:",
++		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:nm:M:l:P:b:",
+ 			long_options, &option_idx);
+ 
+ 		if (c == -1)
+@@ -116,6 +144,24 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+ 		case 'r':
+ 			rt_prio = atoi(optarg);
+ 			break;
++		case 'n':
++			no_sync = 1;
++			break;
++		case 'm':
++			ts_mask = strtol(optarg, NULL, 0) & 0xff;
++			break;
++		case 'M':
++			tx_mask_opt = strtol(optarg, NULL, 0) & 0xff;
++			break;
++		case 'l':
++			l1ctl_path = optarg;
++			break;
++		case 'P':
++			base_port = atoi(optarg);
++			break;
++		case 'b':
++			bsic_opt = atoi(optarg) & 0x3f;
++			break;
+ 		default:
+ 			fprintf(stderr, "Unknow option %s\n", optarg);
+ 			exit(0);
+@@ -148,10 +194,11 @@ int main(int argc, char *argv[])
+ 		return -1;
+ 	}
+ 	handle_options(argc, argv, as);
+-	if (!arfcn_sync) {
+-		fprintf(stderr, "Use --arfcn-sync <ARFCN>\n");
++	if (!arfcn_sync && !no_sync) {
++		fprintf(stderr, "Use --arfcn-sync <ARFCN> (or --no-sync)\n");
+ 		exit(0);
+ 	}
++	as->no_sync = no_sync;
+ 
+ 	/* App state init */
+ 	printf("%d\n", as->arfcn_sync);
+@@ -168,19 +215,28 @@ int main(int argc, char *argv[])
+ 		exit(-1);
+ 
+ 	/* TRX interface with OpenBTS */
+-	as->trx[0] = trx_alloc("127.0.0.1", 5700, as, 1);
+-	if (!as->trx)
++	as->trx[0] = trx_alloc("127.0.0.1", base_port, as, 1);
++	if (!as->trx[0])
+ 		exit(-1);
++	if (bsic_opt >= 0)
++		as->trx[0]->bsic = bsic_opt;
+ 
+ 	/* Establish l1ctl link */
+-	rv = l1l_open(&as->l1l[0], "/tmp/osmocom_l2", l1ctl_recv, &as->l1l[0]);
++	rv = l1l_open(&as->l1l[0], l1ctl_path, l1ctl_recv, &as->l1l[0]);
+ 	if (rv)
+ 		exit(-1);
+ 	as->l1l[0].trx = as->trx[0];
+ 	as->l1l[0].as = as;
+ 	as->l1l[0].tx_mask = 0xe3; /* TS 5,6,7,0,1 */
+ 	as->l1l[0].rx_mask = 0x01; /* TS 0 */
++	if (ts_mask >= 0)
++		as->l1l[0].rx_mask = ts_mask;
++	if (tx_mask_opt >= 0)
++		as->l1l[0].tx_mask = tx_mask_opt;
+ 	as->trx[0]->l1l[0] = &as->l1l[0];
++	printf("transceiver: l1ctl %s, TRXD base port %d, tx_mask 0x%02x rx_mask 0x%02x%s\n",
++		l1ctl_path, base_port, as->l1l[0].tx_mask, as->l1l[0].rx_mask,
++		no_sync ? ", no-sync (BTS mode at reset)" : "");
+ 
+ 	/* Reset phone */
+ 	l1ctl_tx_reset_req(&as->l1l[0], L1CTL_RES_T_FULL);
+diff --git a/src/host/layer23/src/transceiver/trx.c b/src/host/layer23/src/transceiver/trx.c
+index 3f51928..eb38b2a 100644
+--- a/src/host/layer23/src/transceiver/trx.c
++++ b/src/host/layer23/src/transceiver/trx.c
+@@ -265,11 +265,51 @@ _trx_ctrl_cmd_poweron(struct trx *trx, const char *cmd, const char *args)
+ static int
+ _trx_ctrl_cmd_settsc(struct trx *trx, const char *cmd, const char *args)
+ {
+-	LOGP(DTRX, LOGL_ERROR,
+-		"TRX received SETTSC command ! "
+-		"OpenBTS should be configured to send SETBSIC command !\n");
++	/* [2026-10-19] osmo-bts-trx envoie SETTSC (critique) puis SETBSIC ; le TSC
++	 * est le BCC du BSIC, le firmware le derive lui-meme : on acquiesce. */
++	int tsc = atoi(args);
+ 
+-	return _trx_ctrl_send_resp(trx, cmd, "%d", -1);
++	if (tsc < 0 || tsc > 7)
++		return _trx_ctrl_send_resp(trx, cmd, "%d", -1);
++
++	/* osmo-bts-trx n'envoie SETBSIC qu'en mode legacy : sans --bsic, on prend
++	 * NCC 0 et BCC = TSC, sinon on verifie que le BCC donne suit le TSC. */
++	if (trx->bsic == BSIC_INVAL) {
++		trx->bsic = tsc;
++		LOGP(DTRX, LOGL_NOTICE, "SETTSC %d: no BSIC known, assuming NCC 0 -> BSIC %d (use --bsic)\n", tsc, trx->bsic);
++	} else if ((trx->bsic & 7) != tsc) {
++		LOGP(DTRX, LOGL_ERROR, "SETTSC %d does not match BCC of BSIC %d\n", tsc, trx->bsic);
++		return _trx_ctrl_send_resp(trx, cmd, "%d", -1);
++	} else
++		LOGP(DTRX, LOGL_INFO, "SETTSC %d accepted (BSIC %d)\n", tsc, trx->bsic);
++	return _trx_ctrl_send_resp(trx, cmd, "%d", 0);
++}
++
++/* [2026-10-19] Deux commandes d'osmo-bts-trx (>= 1.3) inconnues d'OpenBTS 2013 :
++ *  - SETFORMAT <ver> : negociation du format TRXD. Nous ne parlons que la v0 ;
++ *    reponse « RSP SETFORMAT 0 <ver> » (statut = version retenue, params =
++ *    la requete, ce que cmd_matches_rsp() d'osmo-bts compare) ;
++ *  - NOMTXPOWER (critique) : puissance nominale, « RSP NOMTXPOWER 0 <dBm> ». */
++#define TRX_NOM_TX_POWER_DBM	23
++
++static int
++_trx_ctrl_cmd_setformat(struct trx *trx, const char *cmd, const char *args)
++{
++	LOGP(DTRX, LOGL_INFO, "SETFORMAT %s requested, answering TRXD version 0\n", args);
++	return _trx_ctrl_send_resp(trx, cmd, "%d %s", 0, args);
++}
++
++static int
++_trx_ctrl_cmd_nomtxpower(struct trx *trx, const char *cmd, const char *args)
++{
++	return _trx_ctrl_send_resp(trx, cmd, "%d %d", 0, TRX_NOM_TX_POWER_DBM);
++}
++
++static int
++_trx_ctrl_cmd_rfmute(struct trx *trx, const char *cmd, const char *args)
++{
++	/* RFMUTE 0|1 (non critique) : rien a couper dans QEMU, on acquiesce */
++	return _trx_ctrl_send_resp(trx, cmd, "%d", 0);
+ }
+ 
+ static int
+@@ -441,6 +481,9 @@ static const struct trx_cmd_handler trx_handlers[] = {
+ 	{ "POWEROFF",	_trx_ctrl_cmd_poweroff },
+ 	{ "POWERON",	_trx_ctrl_cmd_poweron },
+ 	{ "SETTSC",	_trx_ctrl_cmd_settsc },
++	{ "SETFORMAT",	_trx_ctrl_cmd_setformat },
++	{ "NOMTXPOWER",	_trx_ctrl_cmd_nomtxpower },
++	{ "RFMUTE",	_trx_ctrl_cmd_rfmute },
+ 	{ "SETBSIC",	_trx_ctrl_cmd_setbsic },
+ 	{ "SETPOWER",	_trx_ctrl_cmd_setpower },
+ 	{ "SETRXGAIN",	_trx_ctrl_cmd_setrxgain },
+diff --git a/src/target/firmware/Makefile.inc b/src/target/firmware/Makefile.inc
+index 9049898..47524dc 100644
+--- a/src/target/firmware/Makefile.inc
++++ b/src/target/firmware/Makefile.inc
+@@ -1,17 +1,17 @@
+ 
+ #### TOOLCHAIN CONFIGURATION ####
+ 
+-CROSS_COMPILE?=arm-elf-
++CROSS_COMPILE?=arm-none-eabi-
+ 
+ CC=gcc
+-LD=ld
++LD=gcc
+ AR=ar
+ SIZE=size
+ OBJCOPY=objcopy
+ 
+ DEBUGF=dwarf-2
+ 
+-CFLAGS=-mcpu=arm7tdmi $(INCLUDES)
++CFLAGS=-mcpu=arm7tdmi -fcommon $(INCLUDES)
+ CFLAGS += -Wall -Wextra -Wcast-align -Wimplicit -Wunused
+ CFLAGS += -Wswitch -Wredundant-decls -Wreturn-type -Wshadow -Wnested-externs
+ CFLAGS += -Wbad-function-cast -Wsign-compare -Waggregate-return
+@@ -22,7 +22,7 @@ CFLAGS += -g$(DEBUGF)
+ #ASFLAGS=--g$(DEBUGF) $(INCLUDES) -D__ASSEMBLY__
+ ASFLAGS=$(INCLUDES) -D__ASSEMBLY__
+ 
+-LDFLAGS = -nostartfiles -nostdlib -nodefaultlibs --gc-sections --cref
++LDFLAGS = -nostartfiles -nostdlib -nodefaultlibs -Wl,--gc-sections -Wl,--cref
+ 
+ #### QUIET OUTPUT ####
+ 
+@@ -95,8 +95,8 @@ $(1)_$(2)_$(3)_OBJS+=board/$(2)/$(1).$(3).manifest.o
+ # define compilation rule, also generates map file
+ board/$(2)/$(1).$(3).elf board/$(2)/$(1).$(3).map: $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) $$(ENV_$(3)_LDS)
+ 	$$(Q_LD)$(CROSS_COMPILE)$(LD) $(LDFLAGS) -T $$(ENV_$(3)_LDS) -Bstatic \
+-		-Map board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
+-		--start-group $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) --end-group
++		-Wl,-Map,board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
++		-Wl,--start-group $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) -Wl,--end-group
+ 
+ # define size rule
+ board/$(2)/$(1).$(3).size: board/$(2)/$(1).$(3).elf
+diff --git a/src/target/firmware/include/stdint.h b/src/target/firmware/include/stdint.h
+index 627403f..5997f43 100644
+--- a/src/target/firmware/include/stdint.h
++++ b/src/target/firmware/include/stdint.h
+@@ -19,7 +19,7 @@
+ #include_next <stdint.h>
+ #endif
+ 
+-#ifndef __int8_t_defined
++#if (!defined(__int8_t_defined) && !defined(INT8_MAX))
+ typedef signed char int8_t;
+ typedef unsigned char uint8_t;
+ 
+diff --git a/src/target/firmware/layer1/l23_api.c b/src/target/firmware/layer1/l23_api.c
+index 6841f80..9cc87f1 100644
+--- a/src/target/firmware/layer1/l23_api.c
++++ b/src/target/firmware/layer1/l23_api.c
+@@ -603,12 +603,22 @@ static int l1ctl_bts_mode(struct msgb *msg)
+ 
+ 	l1s.tx_power = ms_pwr_ctl_lvl(gsm_arfcn2band(l1s.bts.arfcn), 15);
+ 
+-	l1a_mftask_set(0);
++	/* [2026-10-20] BTS_MODE est RENVOYE par l'appli hote a chaque SETRXGAIN, SETSLOT,
++	 * HANDOVER/NOHANDOVER (trx.c) : osmo-bts-trx en envoie un juste apres le RACH
++	 * (activation du canal). Refaire l1a_mftask_set(0) + mframe_enable() en pleine
++	 * marche cassait la tache de synchro (prim_bts_sync.c) : plus de DATA_IND, donc plus
++	 * d'IND CLOCK, et osmo-bts-trx sortait (« No more clock from transceiver »). Deja en
++	 * mode BTS : on met a jour les parametres sans toucher aux taches. */
++	static int bts_actif;
++	if (!(bm->enabled && bts_actif))
++		l1a_mftask_set(0);
+ 	if (bm->enabled) {
+ 		int i;
+ 
+-		mframe_enable(MF_TASK_BTS_SYNC);
+-		mframe_enable(MF_TASK_BTS);
++		if (!bts_actif || !(l1s.mframe_sched.tasks_tgt & (1 << MF_TASK_BTS))) {
++			mframe_enable(MF_TASK_BTS_SYNC);
++			mframe_enable(MF_TASK_BTS);
++		}
+ 		for (i = 0; i < 8; i++) {
+ 			l1s.bts.type[i] = bm->type[i];
+ 			l1s.bts.handover[i] = bm->handover[i];
+@@ -648,6 +658,7 @@ static int l1ctl_bts_mode(struct msgb *msg)
+ 		mframe_enable(MF_TASK_BCCH_NORM);
+ 	}
+ 
++	bts_actif = bm->enabled ? 1 : 0;
+ 	printf("BTS MODE: %u %u {%u,%u,%u,%u,%u,%u,%u,%u} "
+ 		"TX %d..%d RX %d..%d\n", l1s.bts.bsic, l1s.bts.arfcn,
+ 		bm->type[0], bm->type[1], bm->type[2], bm->type[3],
+diff --git a/src/target/firmware/layer1/prim_bts.c b/src/target/firmware/layer1/prim_bts.c
+index 91b18dc..1457bd3 100644
+--- a/src/target/firmware/layer1/prim_bts.c
++++ b/src/target/firmware/layer1/prim_bts.c
+@@ -139,7 +139,13 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 	struct gsm_time rx_time;
+ 
+ 	/* Time of the command */
+-	gsm_fn2gsmtime(&rx_time, l1s.current_time.fn - 2);
++	/* [2026-10-20] Banc QEMU : BTS_RX_LAG = 3 au lieu de 2. Le burst montant du mobile emule
++	 * traverse l'air (anneau -> air.py -> UDP -> BSP) et arrive ~1 trame apres l'instant ou la
++	 * fenetre RX de sa trame s'ouvre : 3 bursts sur 4 d'un bloc SDCCH manquaient. On lit donc le
++	 * burst de la trame X une trame plus tard et on le marque X (le BSP de c54x_exe le joue a
++	 * tick(X) + 1 : CALYPSO_BSP_TRX_DELTA = -2). Silicium : remettre 2. */
++#define BTS_RX_LAG 3
++	gsm_fn2gsmtime(&rx_time, l1s.current_time.fn - BTS_RX_LAG);
+ 		/* We're shifted in time since we RX in the 'next' frame */
+ 
+ 
+@@ -165,9 +171,11 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 		bi->tn = l1s.bts.rx_start;
+ 
+ 		/* Data (cut to 8 bits */
+-		bi->toa = db->rx[1].cmd;
+-		if (bi->toa > 68)
++		/* [2026-10-19] la garde testait bi->toa, tronque a 8 bits : 0x7719 passait
++		 * (0x19 = 25) et j = 0xee32 sortait de la fenetre API (data abort). */
++		if (db->rx[1].cmd > 68)
+ 			goto exit;
++		bi->toa = db->rx[1].cmd;
+ 		for (i=0,j=(db->rx[1].cmd)<<1; i<2*88; i++,j++)
+ 			bi->iq[i] = iq[j] >> 8;
+ 
+@@ -289,6 +297,11 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+ 
+ 	db->rx[0].cmd = 0;
+ 	db->rx[0].data = 0x000;
++	/* [2026-10-19] rx[1] (offset du burst dans data[]) n'etait jamais remis a
++	 * zero : sur le banc QEMU (c54x_exe) la page garde une copie de code ROM
++	 * tant que le DSP n'y a rien ecrit, et l1s_bts_resp indexait data[] avec. */
++	db->rx[1].cmd = 0;
++	db->rx[1].data = 0x000;
+ 
+ 	t3 = l1s.next_time.t3;
+ 
+@@ -366,14 +379,20 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+ 	/* ------- */
+ 
+ 	// FIXME put that in a loop over all TX bursts
++	/* [2026-10-20] La fenetre TX (l1s_tx_*_win_ctrl) s'ouvre au slot TPU
++	 * (tx_start + 5) & 7 ; le burst en position SLOT de la fenetre part au
++	 * slot TPU (tx_start + 5 + SLOT) & 7, soit le TS descendant
++	 * (tx_start + SLOT) & 7 (le TX du Calypso est en avance de 3 slots).
++	 * L'ancien code ne servait le TS0 (BCCH) que pour tx_start == 5
++	 * (fenetre multiple 5,6,7,0,1 : SLOT 3) et mettait tn = 1 sinon : avec
++	 * tx_mask 0x01 (une seule fenetre, celle que le banc c54x_exe sait jouer)
++	 * le TS0 restait un dummy burst a chaque trame. On vise toujours le TS0 :
++	 * SLOT = (8 - tx_start) & 7 si la fenetre le contient, sinon le premier. */
+ 	static uint8_t SLOT, tn;
+-	if (l1s.bts.tx_start == 5) {
+-		SLOT = 3;
+-		tn = 0;
+-	} else {
++	SLOT = (8 - l1s.bts.tx_start) & 7;
++	if (SLOT >= l1s.bts.tx_num)
+ 		SLOT = 0;
+-		tn = 1;
+-	}
++	tn = (l1s.bts.tx_start + SLOT) & 7;
+ 
+ 	/* Reset all commands to dummy burst */
+ 	for (i=0; i<8; i++)
+diff --git a/src/target/firmware/layer1/prim_bts_sync.c b/src/target/firmware/layer1/prim_bts_sync.c
+index 60cb157..3ea69e5 100644
+--- a/src/target/firmware/layer1/prim_bts_sync.c
++++ b/src/target/firmware/layer1/prim_bts_sync.c
+@@ -166,17 +166,17 @@ static int l1s_nb_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
+ 	rxnb.meas[0].snr = dsp_api.db_r->a_serv_demod[D_SNR];
+ 
+ 	/* feed computed frequency error into AFC loop */
+-	if (rxnb.meas[0].snr > AFC_SNR_THRESHOLD)
+-		afc_input(rxnb.meas[0].freq_err, rf_arfcn, 1);
+-	else
+-		afc_input(rxnb.meas[0].freq_err, rf_arfcn, 0);
++	/* [2026-10-20] banc QEMU (c54x_exe) : NI AFC NI boucle de TA. Pas de cellule a suivre
++	 * (transceiver --no-sync) ; quand un burst du mobile tombait dans cette fenetre TS0
++	 * (freq_err=3967 mesure) les deux boucles decalaient frequence et TPU, la tache de
++	 * synchro ne rendait plus rien, plus de DATA_IND donc plus d IND CLOCK et osmo-bts-trx
++	 * sortait (« No more clock from transceiver »). On garde la mesure et le DATA_IND. */
+ 
+ 	/* feed computed TOA into TA loop */
+ 	printf("TOA=%d snr=%d (thres %d) freq_err=%d pm=%d\n",
+ 		rxnb.meas[0].toa_qbit, rxnb.meas[0].snr, 2560,
+ 		rxnb.meas[0].freq_err, rxnb.meas[0].pm_dbm8 / 8);
+-	for (i = 0; i < 10; i++)
+-		toa_input(rxnb.meas[0].toa_qbit << 2, rxnb.meas[0].snr);
++	(void)i;
+ 
+ 	/* Tell the RF frontend to set the gain appropriately */
+ 	rffe_compute_gain(rxnb.meas[0].pm_dbm8/8, CAL_DSP_TGT_BB_LVL);
+@@ -225,18 +225,18 @@ static int l1s_nb_resp(__unused uint8_t p1, __unused uint8_t p2, uint16_t p3)
+ 	rxnb.meas[0].snr = d[D_SNR];
+ 
+ 	/* feed computed frequency error into AFC loop */
+-	if (rxnb.meas[0].snr > AFC_SNR_THRESHOLD)
+-		afc_input(rxnb.meas[0].freq_err, rf_arfcn, 1);
+-	else
+-		afc_input(rxnb.meas[0].freq_err, rf_arfcn, 0);
++	/* [2026-10-20] banc QEMU (c54x_exe) : NI AFC NI boucle de TA. Pas de cellule a suivre
++	 * (transceiver --no-sync) ; quand un burst du mobile tombait dans cette fenetre TS0
++	 * (freq_err=3967 mesure) les deux boucles decalaient frequence et TPU, la tache de
++	 * synchro ne rendait plus rien, plus de DATA_IND donc plus d IND CLOCK et osmo-bts-trx
++	 * sortait (« No more clock from transceiver »). On garde la mesure et le DATA_IND. */
+ 
+ 	/* feed computed TOA into TA loop */
+ 	printf("arfcn=%d tn=%d TOA=%d snr=%d (thres %d) freq_err=%d pm=%d\n",
+ 		rf_arfcn, tn,
+ 		rxnb.meas[0].toa_qbit, rxnb.meas[0].snr, 2560,
+ 		rxnb.meas[0].freq_err, rxnb.meas[0].pm_dbm8 / 8);
+-	for (i = 0; i < 10; i++)
+-		toa_input(rxnb.meas[0].toa_qbit << 2, rxnb.meas[0].snr);
++	(void)i;
+ 
+ 	/* Tell the RF frontend to set the gain appropriately */
+ 	rffe_compute_gain(rxnb.meas[0].pm_dbm8/8, CAL_DSP_TGT_BB_LVL);
+diff --git a/src/target/firmware/solve_envs.py b/src/target/firmware/solve_envs.py
+index d6414d6..da1b0e1 100755
+--- a/src/target/firmware/solve_envs.py
++++ b/src/target/firmware/solve_envs.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ 
+ import sys
+ 
+@@ -34,7 +34,7 @@ def main(name, board_envs, app_envs):
+ 	envs = solve(board_envs, app_envs)
+ 
+ 	# Result
+-	print ' '.join(envs)
++	print(' '.join(envs))
+ 
+ 
+ if __name__ == '__main__':

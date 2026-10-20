@@ -47,6 +47,7 @@
 # Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
 # DejaVu, presents sur l image comme sur l hote ; numpy pour la FFT 4G (sans
 # lui, la moitie haute le dit et reste sur sa bande dessinee).
+import glob
 import json
 import os
 import re
@@ -122,7 +123,44 @@ ILLUSTRATION = os.environ.get("OSMO_FFT_IMAGE", "/usr/share/backgrounds/gsm-lab-
 FOND_MODE = os.environ.get("OSMO_FFT_FOND", "aucun")
 PANEL_ALPHA = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_PANEL_ALPHA", "0.8"))))
 PANEL = (8, 10, 14, int(round(255 * PANEL_ALPHA)))
-MOBILE_LOG = os.environ.get("OSMO_MOBILE_LOG", "/run/user/0/osmo-nitb/logs/mobile.log")
+# ── OU EST LE JOURNAL DU MOBILE ─────────────────────────────────────────────
+# [2026-10-19] UN SEUL CHEMIN, PUBLIE PAR start-native.sh. mobile.log vit sous
+# LOG_DIR (= RUN_DIR/logs : /run/user/<uid>/osmo-nitb/logs, ou /tmp/osmo-nitb
+# sans XDG_RUNTIME_DIR - environment/paths.env), et en --dsp sous le RUNDIR de
+# c54x_exe (/tmp/c54x-pont). L encart tapait /run/user/0 en dur : banc lance
+# par un autre uid, et le cadre restait sur « pas encore de journal ».
+# start-native.sh ecrit le chemin reel dans /run/osmo-banc/mobile-log (comme
+# ms1-vty pour le port VTY) et dans l environnement systemd (OSMO_MOBILE_LOG).
+# Ordre : OSMO_MOBILE_LOG force ; le fichier publie ; sinon le plus recent des
+# emplacements connus ; sinon l ancien defaut. Resolu a chaque rendu : le
+# journal apparait APRES le lancement de l encart.
+MOBILE_LOG_CANDIDATS = ("/run/user/*/osmo-nitb/logs/mobile.log",
+                        "/tmp/osmo-nitb/logs/mobile.log",
+                        "/tmp/c54x-pont/mobile.log")
+MOBILE_LOG_DEFAUT = "/run/user/0/osmo-nitb/logs/mobile.log"
+
+
+def mobile_log_path():
+    force = os.environ.get("OSMO_MOBILE_LOG")
+    if force:
+        return force
+    try:
+        with open("/run/osmo-banc/mobile-log") as f:
+            publie = f.read().strip()
+        if publie:
+            return publie
+    except OSError:
+        pass
+    vus = []
+    for motif in MOBILE_LOG_CANDIDATS:
+        for p in glob.glob(motif):
+            try:
+                vus.append((os.stat(p).st_mtime, p))
+            except OSError:
+                pass
+    return max(vus)[1] if vus else MOBILE_LOG_DEFAUT
+
+
 # L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
 # IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
 OP_FILE = os.path.join(OUT, "operator")
@@ -633,7 +671,7 @@ def render_live(data, data_ul=None):
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)
     cols = max(10, int((x1 - lx0) / 7.3))
-    for i, (l, col) in enumerate(tail_lines(MOBILE_LOG, n, cols)):
+    for i, (l, col) in enumerate(tail_lines(mobile_log_path(), n, cols)):
         if col is None:
             # Journal sans couleurs (docker logs, redirection qui les a
             # mangees) : on retombe sur la lecture par mots-cles.
@@ -967,7 +1005,7 @@ def write(img):
 
 
 def main():
-    print(f"[fft-snap] {URL} + {MOBILE_LOG} (2G, bas) + prise brute {LTE_IFACE}:{LTE_PORT} (4G, haut)"
+    print(f"[fft-snap] {URL} + {mobile_log_path()} (2G, bas) + prise brute {LTE_IFACE}:{LTE_PORT} (4G, haut)"
           f" -> {OUT}/panel.png toutes les {PERIOD}s (fondu {FADE_S}s depuis {WALLPAPER})", flush=True)
     sonde = SondeLte()
     sonde.start()

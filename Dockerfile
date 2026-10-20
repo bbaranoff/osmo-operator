@@ -622,10 +622,18 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
 # Le binaire ET l arbre partent dans le paquet : les sources restent dans
 # /opt/GSM au rebuild depuis le cache (voir l en-tete, CACHE .deb).
+# [2026-10-19] patches/osmocom-bb-transceiver-qemu-bench.patch : l appli hote
+# `transceiver` sert le Calypso EMULE (start-native.sh --osmo-trx, c54x_exe/run.sh
+# OSMO_TRX=1) : --no-sync (pas de cellule a ecouter, mode BTS des le reset),
+# --ts-mask (un seul timeslot), --l1ctl/--base-port, et SETTSC/SETFORMAT/
+# NOMTXPOWER acquiesces (osmo-bts-trx >= 1.3 les tient pour critiques).
+# Applique aussi par install_modules/40-patches.sh en natif.
+COPY patches/osmocom-bb-transceiver-qemu-bench.patch /tmp/osmocom-bb-transceiver-qemu-bench.patch
 RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
       git clone --branch jolly/testing --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-transceiver \
+      && git -C /opt/GSM/osmocom-bb-transceiver apply /tmp/osmocom-bb-transceiver-qemu-bench.patch \
       && cd /opt/GSM/osmocom-bb-transceiver/src \
       && make HOST_layer23_CONFARGS=--enable-transceiver nofirmware -j$(nproc) \
       && cp /opt/GSM/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver \

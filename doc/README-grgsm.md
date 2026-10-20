@@ -98,9 +98,12 @@ has CRC errors".
 | *Address already in use* on 5700 | two bridges: a `--dsp` run left one behind | `./start-native.sh --stop` |
 
 QEMU monitor: `socat - unix-connect:/tmp/qemu-calypso-mon.sock`.
-`--assembly-logs` gives an instruction trace of the emulated ARM
-(`-d in_asm,exec,nochain`). It is very large and the bench no longer runs in
-real time, so use it only to chase the firmware.
+`--assembly-logs` gives a trace of the emulated ARM (`-d in_asm`: each block
+once, when translated). `ASSEMBLY_LOGS_FLAGS=in_asm,exec,nochain` also logs every
+execution: the ARM becomes ~150 times slower. The bridge clock follows the DSP
+down to `PONT_HORLOGE_MAX` times real time (16 with `ASSEMBLY_LOGS=1`, 4
+otherwise; the trace goes to `/var/tmp/c54x-pont`), but the wall-clock timers of mobile and of the core network still
+run, so use that only to chase the firmware.
 
 Test it: `cd /opt/GSM/tests && ./banc-max.sh --grgsm --restart`
 ([README-tests](README-tests.md)).

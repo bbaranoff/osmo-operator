@@ -138,6 +138,20 @@ Usage : ./start-native.sh [options] [mode]
                         que la pile.
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
+    --bts               [2026-10-20] (alias : --osmo-trx) le Calypso de QEMU est le
+                        TRANSCEIVER de la BTS#0 : firmware trx.highram.elf
+                        (osmocom-bb-transceiver, appli « trx ») + appli hote
+                        `transceiver` (L1CTL -> TRXD 5700-5702) a la place de
+                        mobile et du pont ; osmo-bts-trx s'y branche comme sur le
+                        pont. Implique --dsp (c54x_exe/run.sh, OSMO_TRX=1). Un seul
+                        timeslot : OSMO_TRX_TS_MASK=0x01 (TS0, BCCH + SDCCH/4).
+    --ms                [2026-10-20] le telephone emule est un MOBILE. Seul (ou sans
+                        option) : le montage habituel, mobile + pont vers osmo-bts-trx.
+                        AVEC --bts : un DEUXIEME Calypso (c54x_exe/run.sh INSTANCE=2,
+                        alias banc-mobile) campe sur le premier par l'air (pont/air.py) ;
+                        il est lance quand le firmware trx est en mode BTS.
+                            ./start-native.sh --bts          la radio de la BTS seule
+                            ./start-native.sh --bts --ms     la BTS et le mobile, par l'air
     --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la pile ; le MS#1 passe en
                         « sim sap ». Sert la carte du lecteur PC/SC (HID Omnikey,
@@ -160,10 +174,32 @@ Usage : ./start-native.sh [options] [mode]
     --force             relance meme les modules deja demarres
     --verbose           montre la sortie des modules
     --assembly-logs     trace asm de l'ARM emule (= ASSEMBLY_LOGS=1) : QEMU
-                        -d in_asm,exec,nochain -D /tmp/c54x-pont/qemu-asm.log ;
-                        ASSEMBLY_LOGS_FLAGS change les -d, ASSEMBLY_LOGS_FILTRE
-                        pose un -dfilter (ex. 0x00820000+0x40000). Tres volumineux,
-                        et le banc ne tient plus le temps reel.
+                        -d in_asm -D /var/tmp/c54x-pont/qemu-asm.log (lien
+                        /tmp/c54x-pont/qemu-asm.log ; ASSEMBLY_LOGS_DIR change le
+                        dossier, sur le disque : /tmp est un tmpfs de 4,7 Go),
+                        chaque bloc une fois, a sa traduction, PLUS l'anneau des
+                        blocs executes (plugin TCG qosmo/tools/qosmo-tbring) :
+                        64 Gio creux dans le meme dossier (qemu-tbring), le PC de
+                        chaque bloc execute, chaines compris, relu a chaud par
+                        tbring-dump -n 500 -e <elf> -a qemu-asm.log. Rien de texte
+                        dans la boucle : l'ARM garde son rythme. ASSEMBLY_LOGS_RING=0
+                        coupe l'anneau. ASSEMBLY_LOGS_FLAGS
+                        change les -d, ASSEMBLY_LOGS_FILTRE pose un -dfilter (ex.
+                        0x00820000+0x40000). ASSEMBLY_LOGS_FLAGS=in_asm,exec,nochain
+                        journalise aussi chaque execution en texte (150 Mo/s,
+                        20 Go en 130 s ; QEMU_LOG_BUFFERED=4 Mio vide a chaque
+                        arret de la VM) ; avant la correction de cpu_idle_park
+                        du 2026-10-19 (qosmo calypso_trx.c) :
+                        l'ARM passe de 0,4 a 62 ms par trame, le DSP en pas-a-pas
+                        suit, l'horloge du pont (pont/trx.py) descend jusqu'a
+                        PONT_HORLOGE_MAX x le temps reel (16 avec ASSEMBLY_LOGS=1,
+                        4 sinon) et les IND CLOCK attendent la reprise de la BTS
+                        (osmo-bts-trx s'arrete au-dela de 50 trames de pause).
+                        Les temporisateurs de mobile (T3210 20 s) et du reseau
+                        (T3101) restent muraux : a 14 x, l'attach peut encore
+                        buter dessus. Runs du 2026-10-19 02:06 et 02:20.
+    --icount[=SPEC]     QEMU avec -icount SPEC (defaut : auto ; = QEMU_ICOUNT),
+                        en --dsp (c54x_exe) comme en --grgsm (run_modules/40-qemu).
     --no-attach         ne s'attache pas a tmux a la fin (= CALYPSO_NO_ATTACH=1 ;
                         c'est ce que pose osmo-banc.service : personne devant)
     --check-paths       verifie les dependances declarees
@@ -251,6 +287,8 @@ while [ $# -gt 0 ]; do
         --force)       FORCE=1 ;;
         --verbose)     VERBOSE=1 ;;
         --assembly-logs) ASSEMBLY_LOGS=1 ;;
+        --icount)      QEMU_ICOUNT=auto; export QEMU_ICOUNT ;;
+        --icount=*)    QEMU_ICOUNT="${1#*=}"; export QEMU_ICOUNT ;;
         # [2026-09-04] Equivalent de CALYPSO_NO_ATTACH=1, en option de ligne de
         # commande pour que l'unite systemd le dise sur son ExecStart. Avant, cette
         # option n'existait pas : posee sur ExecStart elle tombait dans « option
@@ -274,6 +312,11 @@ while [ $# -gt 0 ]; do
         # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
+        # [2026-10-19] --osmo-trx : le banc DSP lance trx.highram.elf et l appli
+        # hote transceiver (voir c54x_exe/run.sh, OSMO_TRX=1) ; implique --dsp.
+        --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
+        # [2026-10-20] --ms : sans --bts c'est le defaut (mobile + pont) ; avec --bts, l'instance 2 par l'air
+        --ms)          MS_AIR=1 ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
         --sap=*)       SAP_MODE=1; SAP_TYPE="${1#*=}"; export SAP_MODE SAP_TYPE ;;
         --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
@@ -1111,6 +1154,7 @@ ms 1
 EOF
     fi
     _ms_cfg_garantir_tch "$dest" "$aout" "$ain"
+    _ms_cfg_garantir_log "$dest"
 }
 
 # ── LE BLOC tch-voice, GARANTI, QUEL QUE SOIT LE GABARIT ────────────────────
@@ -1167,6 +1211,63 @@ _ms_cfg_garantir_tch() {
         }
         { print }
     ' "$dest" > "${dest}.tch" 2>/dev/null && mv -f "${dest}.tch" "$dest" || rm -f "${dest}.tch"
+}
+# ── LE BLOC log stderr, GARANTI, DE LA MEME FORME PARTOUT ───────────────────
+# [2026-10-19] LE JOURNAL DU MOBILE N'AVAIT PAS LA MEME FORME SELON LE GABARIT.
+# qosmo/cfgs/mobile_group1.cfg et c54x_exe/mobile_pont.cfg portent un « log
+# stderr » (couleur, horodatage, categorie) ; configs/mobile.cfg n'en porte
+# AUCUN - seul le « log gsmtap ». Le fichier pose dans /root/.osmocom/bb
+# dependait donc du gabarit retenu en premier, et mobile.log sortait tantot
+# avec ses couleurs et son horodatage a 17 chiffres (ce que l'encart
+# osmo-fft-snap.py et rapport-run.sh savent lire), tantot avec les defauts de
+# libosmocore plus le masque -d de qosmo. On pose ici LE bloc, une fois, quel
+# que soit le gabarit : les sept categories que suit le banc en debug, couleur
+# par sous-systeme, horodatage compact. ATTENTION aux deux horodatages de
+# libosmocore 1.12 : « logging timestamp 1 » = ctime (« Mon Oct 19 10:10:03
+# 2026 », 25 colonnes, constate le 19/10 sur le banc DSP) ; « logging print
+# extended-timestamp 1 » = YYYYMMDDhhmmssnnn (17 chiffres, triable, et le seul
+# que tail_lines() de l'encart sait retirer). C'est le second qu'on pose. Le
+# bloc gsmtap, lui, n'est pas touche.
+MS_LOG_STDERR_BLOC=' logging filter all 1
+ logging color 1
+ logging timestamp 0
+ logging print extended-timestamp 1
+ logging print category 1
+ logging level mm debug
+ logging level rr debug
+ logging level cc debug
+ logging level sms debug
+ logging level plmn debug
+ logging level sim debug
+ logging level sap debug'
+_ms_cfg_garantir_log() {
+    local dest="$1" existe=0
+    [ -f "$dest" ] || return 0
+    # On sait AVANT de lire si le bloc existe : dans mobile_group1.cfg, « line
+    # vty » precede « log stderr », et une seule passe inserait un second bloc
+    # devant line vty avant de tomber sur le premier (constate au test).
+    grep -q '^log stderr[[:space:]]*$' "$dest" && existe=1
+    awk -v bloc="$MS_LOG_STDERR_BLOC" -v existe="$existe" '
+        BEGIN { vu = 0; dedans = 0 }
+        # Le bloc existe : on le remplace en entier, une seule fois.
+        /^log stderr[[:space:]]*$/ && !vu {
+            vu = 1; dedans = 1
+            print "log stderr"; print bloc
+            next
+        }
+        dedans {
+            if ($0 ~ /^[[:space:]]+[a-z]/) next     # ancienne ligne du bloc
+            dedans = 0                               # « ! » ou autre : fin du bloc
+        }
+        # Pas de bloc : on le pose devant le premier « log gsmtap », sinon
+        # devant « line vty ».
+        /^(log gsmtap|line vty)([[:space:]]|$)/ && !existe && !vu {
+            vu = 1
+            print "log stderr"; print bloc; print "!"
+        }
+        { print }
+        END { if (!vu) { print "!"; print "log stderr"; print bloc; print "!" } }
+    ' "$dest" > "${dest}.log" 2>/dev/null && mv -f "${dest}.log" "$dest" || rm -f "${dest}.log"
 }
 # ⚠️ [2026-08-08, resolu le 26/08] LE RUN N'UTILISE PAS mobile.cfg POUR MS#1.
 # Le mobile Calypso tourne avec
@@ -1598,7 +1699,10 @@ printf '  %srun.sh%s     %s\n' "$C_DIM" "$C_Z" "$RUN_SH"
 # n'est ouvert par personne, et le mobile qui tourne est celui du banc DSP
 # (mobile_pont.cfg, VTY 4347). Le resume annoncait le mauvais fichier ET le
 # mauvais port -- on allait se connecter a une VTY qui n'existe pas.
-if [ "$DSP_BANC" = 1 ]; then
+if [ "$DSP_BANC" = 1 ] && [ "${OSMO_TRX:-0}" = 1 ]; then
+    printf '  %sMS#1%s       non lance : le Calypso de QEMU est le TRX de la BTS#0 (--osmo-trx : trx.highram.elf + transceiver, timeslots %s)\n' \
+        "$C_DIM" "$C_Z" "${OSMO_TRX_TS_MASK:-0x01}"
+elif [ "$DSP_BANC" = 1 ]; then
     _ms1_cfg="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}"
     _ms1_vty="$(sed -n 's/^ *bind 127.0.0.1 \([0-9]*\).*/\1/p' "$_ms1_cfg" 2>/dev/null | head -1)"
     printf '  %sMS#1%s       %s  IMSI %s  ARFCN %s  VTY %s  %s(banc DSP)%s\n' \
@@ -1617,13 +1721,28 @@ fi
 # l environnement de systemd (OSMO_BB1_VTY_PORT, lu par server.js au
 # redemarrage du tableau de bord, plus bas). Efface a l arret.
 MS1_VTY_PORT="${_ms1_vty:-4247}"
+# [2026-10-19] LE JOURNAL DU MOBILE EST PUBLIE DE LA MEME FACON. Il vit sous
+# LOG_DIR (qosmo, run_modules/70-l2.sh : « mobile ... >>LOG_DIR/mobile.log »),
+# et en --dsp sous le RUNDIR de c54x_exe (run.sh : RUNDIR/mobile.log, /tmp/
+# c54x-pont par defaut). L encart osmo-fft-snap.py tapait /run/user/0/... en
+# dur : LOG_DIR suit l uid qui lance (XDG_RUNTIME_DIR), et le cadre restait sur
+# « pas encore de journal ». Le chemin reel est ecrit dans
+# /run/osmo-banc/mobile-log et pousse dans l environnement de systemd
+# (OSMO_MOBILE_LOG). Efface a l arret, avec ms1-vty.
+if [ "$DSP_BANC" = 1 ]; then
+    MS1_LOG="${RUNDIR:-/tmp/c54x-pont}/mobile.log"
+else
+    MS1_LOG="$LOG_DIR/mobile.log"
+fi
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     mkdir -p /run/osmo-banc 2>/dev/null && chmod 755 /run/osmo-banc 2>/dev/null
     printf '%s\n' "$MS1_VTY_PORT" > /run/osmo-banc/ms1-vty 2>/dev/null && chmod 644 /run/osmo-banc/ms1-vty 2>/dev/null
-    command -v systemctl >/dev/null 2>&1 && systemctl set-environment "OSMO_BB1_VTY_PORT=$MS1_VTY_PORT" 2>/dev/null || true
+    printf '%s\n' "$MS1_LOG" > /run/osmo-banc/mobile-log 2>/dev/null && chmod 644 /run/osmo-banc/mobile-log 2>/dev/null
+    command -v systemctl >/dev/null 2>&1 && systemctl set-environment "OSMO_BB1_VTY_PORT=$MS1_VTY_PORT" "OSMO_MOBILE_LOG=$MS1_LOG" 2>/dev/null || true
 fi
 printf '  %sMS#2%s       %s  IMSI %s  ARFCN %s  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)" "$MS_ARFCN2"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
+printf '  %smobile.log%s %s\n' "$C_DIM" "$C_Z" "$MS1_LOG"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
 # --- 7. actions deleguees a run.sh --------------------------------------------
@@ -1643,6 +1762,18 @@ RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
 # pas dans --dry-run ni dans la ligne affichee juste avant l exec : l option
 # porte le meme reglage la ou on le cherche.
 [ "${CALYPSO_NO_ATTACH:-0}" = "1" ] && RUN_ARGS+=(--no-attach)
+# [2026-10-19] --icount et --assembly-logs vers run.sh, donc vers 40-qemu.sh
+# (chemin --grgsm ; en --dsp le module qemu est retire, c54x_exe/run.sh lit
+# QEMU_ICOUNT et ASSEMBLY_LOGS lui-meme). Memes -d / -dfilter que le banc DSP.
+case "${QEMU_ICOUNT:-}" in ''|0|off) ;; *) RUN_ARGS+=("--icount=$QEMU_ICOUNT") ;; esac
+if [ "${ASSEMBLY_LOGS:-0}" = 1 ]; then
+    RUN_ARGS+=(--asm)
+    # [2026-10-19] in_asm seul par defaut : exec,nochain (une ligne par bloc
+    # execute, 494 Mo en 90 s) rendait l'ARM 150 fois plus lent et cassait
+    # l'attach, voir l'aide de --assembly-logs.
+    export QEMU_ASM_FLAGS="${ASSEMBLY_LOGS_FLAGS:-in_asm}"
+    [ -n "${ASSEMBLY_LOGS_FILTRE:-}" ] && export QEMU_ASM_FILTRE="$ASSEMBLY_LOGS_FILTRE"
+fi
 # ── Les sessions tmux d'un run precedent ────────────────────────────────────
 # Le teardown de run.sh arrete les processus mais laisse la session tmux
 # debout. Au demarrage suivant, son module de panes RECREE ses fenetres dans la
@@ -1711,8 +1842,8 @@ case "$ACTION" in
         say_end " KO " "$C_KO" "Fiche du noeud" "ecriture impossible : $_gc_out"; exit 1
         ;;
     stop)
-        rm -f /run/osmo-banc/ms1-vty 2>/dev/null
-        command -v systemctl >/dev/null 2>&1 && systemctl unset-environment OSMO_BB1_VTY_PORT 2>/dev/null || true
+        rm -f /run/osmo-banc/ms1-vty /run/osmo-banc/mobile-log 2>/dev/null
+        command -v systemctl >/dev/null 2>&1 && systemctl unset-environment OSMO_BB1_VTY_PORT OSMO_MOBILE_LOG 2>/dev/null || true
         say_begin "Arret de la pile via run.sh"
         banc_dsp_arreter          # QEMU, osmocon, mobile, pont : a lui
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
@@ -1766,9 +1897,9 @@ case "$ACTION" in
         if [ "$DSP_BANC" = 1 ]; then
             printf '  %sbanc DSP%s   %s\n' "$C_DIM" "$C_Z" "$BANC_DSP"
             for f in "$(dirname "$BANC_DSP")/c54x_exe" "$GSM_ROOT/qosmo/build/qemu-system-arm" \
-                     "${FIRMWARE_ELF:-$GSM_ROOT/firmware/board/compal_e88/layer1.highram.elf}" \
+                     "${FIRMWARE_ELF:-$GSM_ROOT/firmware/board/compal_e88/$([ "${OSMO_TRX:-0}" = 1 ] && echo trx || echo layer1).highram.elf}" \
                      "$GSM_ROOT/osmocom-bb/src/host/osmocon/osmocon" \
-                     "$HERE/pont/pont_dsp.py"; do
+                     "$([ "${OSMO_TRX:-0}" = 1 ] && echo "$GSM_ROOT/osmocom-bb-transceiver/src/host/layer23/src/transceiver/transceiver" || echo "$HERE/pont/pont_dsp.py")"; do
                 [ -e "$f" ] && printf '   OK   %s\n' "$f" || printf '   KO   %s (absent)\n' "$f"
             done
             printf '\n'
@@ -3099,6 +3230,9 @@ if [ "$DSP_BANC" = 1 ]; then
     #                            pas de SB, pas de BCCH, pas de SI
     # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
     export MODE=dsp PONT=1
+    # [2026-10-19] --osmo-trx : transceiver a la place de mobile, pas de pont
+    # (c54x_exe/run.sh force PONT=0 lui-meme ; on le dit ici pour le dry-run).
+    if [ "${OSMO_TRX:-0}" = 1 ]; then export OSMO_TRX PONT=0; fi
     # [2026-09-23] Trace asm de l'ARM, lue par c54x_exe/run.sh (etape 2, QEMU -d).
     export ASSEMBLY_LOGS="${ASSEMBLY_LOGS:-0}" ASSEMBLY_LOGS_FLAGS ASSEMBLY_LOGS_FILTRE
     : "${IQ:=none}";        export IQ
@@ -3150,8 +3284,12 @@ if [ "$DSP_BANC" = 1 ]; then
         say_begin "Transmission a run.sh puis au banc DSP"
         say_end " -- " "$C_DIM" "Transmission a run.sh puis au banc DSP" "dry-run"
         printf '  1. CALYPSO_PROFILE=%s bash %s %s\n' "$CALYPSO_PROFILE" "$RUN_SH" "${RUN_ARGS[*]}"
-        printf '  2. MODE=dsp PONT=1 IQ=%s INSNS=%s LOCKSTEP=%s BANC_VOCODEUR=%s bash %s\n' \
-            "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_VOCODEUR" "$BANC_DSP"
+        printf '  2. MODE=dsp PONT=%s IQ=%s INSNS=%s LOCKSTEP=%s BANC_VOCODEUR=%s%s%s bash %s\n' \
+            "$PONT" "$IQ" "$INSNS" "$LOCKSTEP" "$BANC_VOCODEUR" \
+            "${QEMU_ICOUNT:+ QEMU_ICOUNT=$QEMU_ICOUNT}" \
+            "$([ "${ASSEMBLY_LOGS:-0}" = 1 ] && echo " ASSEMBLY_LOGS=1")" "$BANC_DSP"
+        [ "${OSMO_TRX:-0}" = 1 ] && printf '     OSMO_TRX=1 : trx.highram.elf + transceiver --no-sync --ts-mask %s (pas de mobile, pas de pont)\n' "${OSMO_TRX_TS_MASK:-0x01}"
+        [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp bash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "$BANC_DSP"
         exit 0
     fi
     audio_start
@@ -3162,11 +3300,30 @@ if [ "$DSP_BANC" = 1 ]; then
     fi
     say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE, chaine Calypso laissee au banc DSP"
     say_begin "Banc DSP C54x"
-    say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ)"
+    say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ$([ "${OSMO_TRX:-0}" = 1 ] && echo " OSMO_TRX=1 : trx.highram.elf + transceiver, TS ${OSMO_TRX_TS_MASK:-0x01}"))"
     # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
     # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
     # deja exporte juste au-dessus, il ecrase celui du profil.
     # [2026-10-14] --sap : la copie « sim sap » de mobile_pont.cfg, au banc seul.
+    # [2026-10-20] --bts --ms : l'instance 1 (la radio de la BTS) d'abord, puis, quand le
+    # firmware trx est passe en mode BTS (osmo-bts-trx a envoye POWERON : « BTS MODE: 7 514 »
+    # dans osmocon.log), l'instance 2 (le mobile + l'air), qui prend la main.
+    if [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ]; then
+        bash "$BANC_DSP" || exit 1
+        say_begin "Mobile par l'air (instance 2)"
+        _ok=0
+        for _i in $(seq 1 "${OSMO_TRX_BTS_ATTENTE:-150}"); do
+            grep -aq 'BTS MODE: [0-9]* [1-9]' /tmp/c54x-pont/osmocon.log 2>/dev/null && { _ok=1; break; }
+            sleep 1
+        done
+        if [ "$_ok" = 1 ]; then
+            say_end " OK " "$C_OK" "Mobile par l'air (instance 2)" "firmware trx en mode BTS apres ${_i}s ; INSTANCE=2 AIR=1 $BANC_DSP"
+        else
+            say_end " !! " "$C_KO" "Mobile par l'air (instance 2)" "le firmware trx n'est pas en mode BTS (osmo-bts-trx absente ?) ; on lance quand meme"
+        fi
+        sleep 10
+        exec env INSTANCE=2 AIR=1 ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
+    fi
     exec env ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
 fi
 

@@ -944,9 +944,19 @@ highlight-foreground-color='#0B0A05'
 palette=['#1C1A10', '#FF5555', '#50FA7B', '#FFD75F', '#57A6FF', '#FF79C6', '#4FE0D4', '#FFD98A', '#5C5230', '#FF6E6E', '#69FF94', '#FFE28A', '#7CC0FF', '#FF92DF', '#7FF2E6', '#FFF3C8']
 use-system-font=false
 font='Ubuntu Mono 12'
-scrollback-unlimited=true
+scrollback-unlimited=false
+scrollback-lines=50000
 audible-bell=false
 EOF
+    # ── LE DEFILEMENT EST BORNE : IL VIT DANS /tmp ───────────────────────────
+    # [2026-10-19] scrollback-unlimited=true remplissait /tmp. VTE garde le
+    # defilement dans des fichiers SUPPRIMES de /tmp (/tmp/#NNNN (deleted),
+    # tenus par gnome-terminal-server) : invisibles a du, visibles a df. Sur
+    # legion, deux onglets qui suivaient les journaux du banc tenaient 2,0 Go
+    # et 2,8 Go d'un /tmp de 4,7 Go - « No space left on device » pour tout le
+    # monde, machine sans disque plein. Un tail -F de mobile.log en debug est un
+    # writer non borne comme ceux de 83-espace-ram.sh : on le borne pareil.
+    # 50 000 lignes = ~10 Mo par onglet, et largement de quoi remonter.
     chroot "$ROOTFS" dconf update 2>/dev/null \
         && echo -e "  ${GREEN}✓${NC} gnome-terminal : profil ${CYAN}osmo-operator${NC} (noir, 18 % transparent) via dconf systeme" \
         || echo -e "  ${YELLOW}!${NC} dconf update a echoue - profil terminal non compile"

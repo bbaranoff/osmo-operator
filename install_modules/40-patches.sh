@@ -10,6 +10,8 @@ _patch_target() {
         osmo-msc-*)   printf '%s\n' "$GSM_ROOT/osmo-msc" ;;
         osmo-hlr-*)   printf '%s\n' "$GSM_ROOT/osmo-hlr" ;;
         osmo-trx-*)   printf '%s\n' "$GSM_ROOT/osmo-trx" ;;
+        # [2026-10-19] avant osmocom-bb-* : l arbre jolly/testing (appli transceiver)
+        osmocom-bb-transceiver-*) printf '%s\n' "$GSM_ROOT/osmocom-bb-transceiver" ;;
         osmocom-bb-*) printf '%s\n' "$GSM_ROOT/osmocom-bb" ;;
         grgsm-*)      printf '%s\n' "$GSM_ROOT/gr-gsm" ;;
         *)            printf '' ;;

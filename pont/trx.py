@@ -59,6 +59,25 @@ HORLOGE = "/dev/shm/calypso_horloge"
 HORLOGE_PERIODE = float(os.environ.get("PONT_HORLOGE_PERIODE", "0.05"))
 HORLOGE_KP = float(os.environ.get("PONT_HORLOGE_KP", "1.0"))
 HORLOGE_PHASE_N = float(os.environ.get("PONT_HORLOGE_PHASE_N", "100.0"))
+# [2026-10-19] PLAFOND DE RALENTISSEMENT. L'horloge asservie ne descendait pas
+# sous le quart du temps reel (4 x FRAME_DUR). Avec la trace asm complete de
+# l'ARM (start-native.sh --assembly-logs, ASSEMBLY_LOGS_FLAGS=in_asm,exec,
+# nochain) le couple ARM+DSP en pas-a-pas tourne a 66 ms par trame, 14 fois le
+# temps reel : le pont prenait +1159 puis +3897 trames d'avance, le BSP ne
+# trouvait plus les bursts (« le burst a existe puis a disparu ») et mobile ne
+# voyait aucune cellule (FBSB result=255, run du 2026-10-19 02:06).
+# PONT_HORLOGE_MAX (defaut 4) borne le facteur ; c54x_exe/run.sh pose 20 quand
+# ASSEMBLY_LOGS=1. Le plafond reste bas en temps normal : apres un a-coup du
+# DSP, la cadence mesuree sur 50 ms explose et l'horloge ne doit pas s'affaler.
+# Au-dela de 4, run_clock raccourcit la periode des IND CLOCK, voir plus bas.
+HORLOGE_MAX = float(os.environ.get("PONT_HORLOGE_MAX", "4.0"))
+# [2026-10-19] IND CLOCK en horloge lente, voir run_clock : avance maximale
+# laissee a la BTS avant l'IND (= pause demandee, limite BTS 50), fn-advance de
+# la BTS (osmotrx fn-advance), et garde-fou si la BTS ne livre plus rien
+# (osmo-bts-trx coupe apres TRX_LOSS_FRAMES = 400 trames sans IND).
+CLCK_PAUSE_MAX = int(os.environ.get("PONT_CLCK_PAUSE_MAX", "20"))
+CLCK_BTS_FN_ADVANCE = int(os.environ.get("PONT_BTS_FN_ADVANCE", "2"))
+CLCK_SANS_IND_MAX = int(os.environ.get("PONT_CLCK_SANS_IND_MAX", "300"))
 
 
 class Clock:
@@ -101,7 +120,8 @@ class Clock:
             return
         if not self._dit:
             self._dit = True
-            log.info("horloge asservie au DSP (%s, avance visee %d trames)", HORLOGE, self._avance)
+            log.info("horloge asservie au DSP (%s, avance visee %d trames, ralentissement max x%g)",
+                     HORLOGE, self._avance, HORLOGE_MAX)
         t_prec, dsp_prec = self._t_prec, self._dsp_prec
         self._t_prec, self._dsp_prec = now, dsp
         if t_prec is None:
@@ -116,7 +136,7 @@ class Clock:
         if ecart > gsm.HYPERFRAME // 2:
             ecart -= gsm.HYPERFRAME
         cible = dur_dsp * (1.0 + HORLOGE_KP * ecart / HORLOGE_PHASE_N)
-        cible = min(max(cible, gsm.FRAME_DUR * 0.5), gsm.FRAME_DUR * 4.0)
+        cible = min(max(cible, gsm.FRAME_DUR * 0.5), gsm.FRAME_DUR * HORLOGE_MAX)
         dur = 0.7 * self.dur + 0.3 * cible
         self.t0 = now - f * dur                      # rebase : fn() reste continue
         self.dur = dur
@@ -169,6 +189,11 @@ class Trx:
         self.sk_data = _udp(cfg.trx_bind, cfg.trx_base + 2)
         self.bts_data = None
         self.bts_clck = None
+        self.fn_bts_vu = None          # fn du dernier burst descendant recu de la BTS (run_data)
+        self._clck_t = 0.0             # dernier IND CLOCK : instant, fn BTS vu, avance demandee
+        self._clck_vu = None
+        self._clck_avance = 0
+        self._clck_lent = False
 
     def run_ctrl(self):
         while True:
@@ -187,10 +212,94 @@ class Trx:
                 log.info("CTRL %s%s", cmd, args)
 
     def run_clock(self):
+        # [2026-10-19] IND CLOCK QUAND L'HORLOGE EST LENTE : ATTENDRE LA REPRISE DE
+        # LA BTS. osmo-bts-trx (scheduler_trx.c) avance ses trames a sa propre
+        # cadence murale entre deux IND CLOCK. A chaque IND il mesure
+        # elapsed_fn = fn_trx - fn_bts ; negatif, il met son timer en PAUSE de
+        # -elapsed_fn trames (« We were N FN faster than TRX, compensating »), et
+        # cette pause est REARMEE DEPUIS MAINTENANT par tout IND recu pendant
+        # qu'elle court. Son timer tue la BTS si deux expirations sont separees
+        # de plus de MAX_FN_SKEW = 50 trames (« PC clock skew too high »).
+        # Run du 2026-10-19 02:20 (horloge a k=14, IND toutes les 28 trames) :
+        # pause de 31 trames, IND suivant arrive pendant la pause, rearmee a 25,
+        # elapsed_us=267403 > 230750, BTS arretee. Avec la periode fixe de 51
+        # trames et k <= 4 la pause valait 38 trames et finissait 13 trames
+        # avant l'IND suivant ; a k=14 elle vaudrait 47 trames, a 3 trames de
+        # l'IND suivant : intenable.
+        # Regle. Tant que la pause de la periode fixe, periode x (1 - 1/k),
+        # tient sous CLCK_PAUSE_MAX (k <= ~1,9), rien ne change : un IND toutes
+        # les 51 trames, la pause finit bien avant le suivant. Au-dela, un IND
+        # part seulement quand (1) la pause demandee par le precedent est
+        # ecoulee ET la BTS a recommence a livrer des bursts (fn vu par run_data
+        # avance), et (2) la BTS a repris CLCK_PAUSE_MAX trames d'avance sur
+        # l'horloge. Apres une pause N l'avance vaut encore N (1 - 1/k) : la BTS
+        # ne court que quelques trames avant l'IND suivant, la pause demandee
+        # reste ~CLCK_PAUSE_MAX quel que soit k et n'est jamais rearmee. Pas de
+        # retour a la periode fixe dans ce regime : c'est elle qui laissait
+        # l'avance monter a 40-100 trames (simulation, scratch sim_clck.py).
+        # Les bursts descendants portent fn_bts + clock_advance (osmotrx
+        # fn-advance, 2 par defaut : main.c).
+        periode = self.cfg.clock_period
+        pause_max = CLCK_PAUSE_MAX
+        fn_adv = CLCK_BTS_FN_ADVANCE
+        demi = gsm.HYPERFRAME // 2
+        lent = False
         while True:
+            now = time.monotonic()
             if self.bts_clck:
-                self.sk_clck.sendto(("IND CLOCK %u" % self.clock.fn()).encode() + b"\0", self.bts_clck)
-            time.sleep(gsm.FRAME_DUR * self.cfg.clock_period)
+                fn_trx = self.clock.fn()
+                k = self.clock.dur / gsm.FRAME_DUR
+                vu = self.fn_bts_vu
+                attente = (now - self._clck_t) / gsm.FRAME_DUR
+                lent = k > 1.0 and vu is not None and periode * (1.0 - 1.0 / k) > pause_max
+                if lent != self._clck_lent:
+                    self._clck_lent = lent
+                    if lent:
+                        log.info("IND CLOCK : horloge lente (x%.1f), on attend la reprise de la BTS entre deux IND "
+                                 "(pause max %d trames)", k, pause_max)
+                    else:
+                        log.info("IND CLOCK : horloge x%.1f, retour a la periode fixe de %d trames", k, periode)
+                if not lent:
+                    envoyer = attente >= periode
+                    avance = 0
+                else:
+                    avance = ((vu - fn_adv - fn_trx) + demi) % gsm.HYPERFRAME - demi
+                    # Reprise de la BTS : des bursts arrivent a nouveau. Un ou deux
+                    # peuvent etre en vol juste apres l'IND, d'ou la pause attendue
+                    # (ou 3 bursts, si la BTS s'est recalee sans pause : « GSM
+                    # clock skew », ou IND precedent envoye avant son premier burst).
+                    if self._clck_vu is None:
+                        livre = 3
+                    else:
+                        livre = ((vu - self._clck_vu) + demi) % gsm.HYPERFRAME - demi
+                    reprise = livre >= 3 or (livre >= 1 and attente >= self._clck_avance)
+                    envoyer = (reprise and avance >= pause_max) or attente >= CLCK_SANS_IND_MAX
+                if envoyer:
+                    self.sk_clck.sendto(("IND CLOCK %u" % fn_trx).encode() + b"\0", self.bts_clck)
+                    self._clck_t = now
+                    self._clck_vu = vu
+                    self._clck_avance = max(avance, 0)
+                    self.stats_clck(avance)
+            # Horloge asservie (k > 1) : on scrute a chaque trame, sinon la premiere
+            # mesure d'avance apres la mise en route arrive 51 trames trop tard
+            # (avance 47 a k=14, pause > 50 : BTS arretee des le depart).
+            # En regime lent, a la demi-trame : la pause d'equilibre vaut r (k - 1),
+            # r etant le retard de detection de la reprise (simulation : r ~1,5
+            # trame a la trame, soit 30 trames a k=20 ; ~1 a la demi-trame).
+            if lent:
+                time.sleep(gsm.FRAME_DUR / 2)
+            else:
+                time.sleep(gsm.FRAME_DUR if self.clock.dur > gsm.FRAME_DUR else gsm.FRAME_DUR * periode)
+
+    def stats_clck(self, avance):
+        """Compte les IND CLOCK envoyes horloge lente ; trace les pauses longues."""
+        if not self._clck_lent:
+            return
+        self._clck_n = getattr(self, "_clck_n", 0) + 1
+        if avance > CLCK_PAUSE_MAX + 10 and getattr(self, "_clck_longues", 0) < 20:
+            self._clck_longues = getattr(self, "_clck_longues", 0) + 1
+            log.warning("IND CLOCK : la BTS avait %d trames d'avance (pause demandee > %d, limite BTS 50)",
+                        avance, CLCK_PAUSE_MAX)
 
     def run_data(self, on_burst):
         while True:
@@ -200,6 +309,7 @@ class Trx:
                 continue
             tn = data[0] & 0x07
             fn = struct.unpack_from(">L", data, 1)[0]
+            self.fn_bts_vu = fn            # ou en est la BTS (run_clock, horloge lente)
             bits = gsm.normalize_bits(data[6:154])
             if self.cfg.dsp_port:
                 # [2026-09-17] Le meme burst, tel que le BSP du DSP l'attend

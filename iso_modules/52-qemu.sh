@@ -385,7 +385,9 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         # qu'il corresponde au gdb_cmd.sh qui part. gdb-multiarch et telnet sont
         # dans PKGS (role operateur), il n'y a rien d'autre a installer.
         if [ -f "$ROOTFS/opt/GSM/$fork/tools/gdb_cmd.sh" ]; then
-            if (cd "$ROOTFS/opt/GSM/$fork/tools" && bash ./gdb_cmd.sh >/dev/null 2>&1) \
+            # GDB_CMD_HERE : le chemin que cmd.gdb aura DANS L'IMAGE, pas celui du
+            # rootfs de build (sinon `source /var/tmp/iso-build-NNN/rootfs/...`).
+            if (cd "$ROOTFS/opt/GSM/$fork/tools" && GDB_CMD_HERE="/opt/GSM/$fork/tools" bash ./gdb_cmd.sh >/dev/null 2>&1) \
                && [ -s "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb" ]; then
                 echo -e "  ${GREEN}✓${NC} gdb telnet ${CYAN}$fork${NC} : tools/cmd.gdb genere ($(grep -c '^define ' "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb") commandes), serveur 44-gdb-telnet.sh"
             else

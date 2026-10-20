@@ -340,6 +340,205 @@ base stations come up and how:
 
 ---
 
+### 2.5 The Calypso as the BTS transceiver (`--osmo-trx`)
+
+[2026-10-19] A third shape of the DSP chain: the emulated phone no longer
+camps on BTS#0, it *is* BTS#0's radio. QEMU boots `trx.highram.elf` (the
+`trx` app of Sylvain Munaut's transceiver branch, tree
+`/opt/GSM/osmocom-bb-transceiver`), and the host app `transceiver` from the
+same tree replaces both `mobile` and the bridge: it talks L1CTL to the phone
+through osmocon and exposes the TRXD UDP interface (5700-5702) that
+`osmo-bts-trx` already expects. The rest of the stack (BSC, MSC, side-car)
+comes up unchanged.
+
+```
+./start-native.sh --bts               # [2026-10-20] alias of --osmo-trx ; implies --dsp ; c54x_exe/run.sh runs with OSMO_TRX=1
+./start-native.sh --bts --ms          # the BTS radio, then the second phone over the air (INSTANCE=2, see 2.7)
+```
+(`--ms` alone, or no option, is the usual mobile + bridge setup.)
+
+What changes in `c54x_exe/run.sh` when `OSMO_TRX=1`: step 2 loads
+`trx.highram.elf`, step 4 launches `transceiver -l /tmp/osmocom_l2 -m 0x01 -M 0x01 -b 7
+--no-sync -e 3` instead of `mobile`, step 5 (the bridge) is skipped because the
+transceiver holds the same ports. `OSMO_TRX_TS_MASK` (default `0x01`: TS0
+only, BCCH/CCCH) widens the timeslot set later; `OSMO_TRX_ARGS` and
+`TRANSCEIVER` override the arguments and the binary.
+
+The host app needed four things the 2013 code did not have; they live in
+`patches/osmocom-bb-transceiver-qemu-bench.patch`, applied by the Dockerfile
+right after the clone and by `install_modules/40-patches.sh` natively:
+`--no-sync` (there is no cell to FBSB on inside QEMU: BTS mode as soon as the
+phone resets), `--ts-mask`, `--l1ctl`/`--base-port`, and `SETTSC`,
+`SETFORMAT` (TRXD v0 answered) and `NOMTXPOWER` acknowledged, since
+`osmo-bts-trx` 1.10 treats them as critical.
+
+Verified on 2026-10-20 (bench run): the DSP extcode runs on `c54x_exe`
+(extended NDB at 0x2400 `active=1, tsc=7`), BTS#0 gets its clock from the
+firmware's frame number and comes up; the TRX emits FB and SB one burst in ten
+each plus the BCCH/CCCH normal bursts of the BTS (`[rom-tx] ... NB n, SB n, FB n`
+in `/tmp/c54x-pont/dsp.log`). Four things had to change to get there:
+
+* `-m` only sets the **RX** mask now; the TX mask is `-M` (`OSMO_TRX_TX_MASK`,
+  default `0x01`). The firmware (`prim_bts.c`) opens its TX window at TPU slot
+  `(tx_start + 5) & 7`, three slots ahead of the downlink timeslot it serves,
+  and used to serve TS0 only with the upstream multi-window mask `0xe3`
+  (`tx_start == 5`, slot 3) while putting `tn = 1` for any other mask: with
+  `-m 0x01` applied to TX too, every burst was a dummy. The patched firmware
+  computes `SLOT = (8 - tx_start) & 7`, `tn = tx_start + SLOT`, so a single
+  window (`0x01`) serves TS0; `c54x_exe` only plays one TX window per frame.
+* `osmo-bts-trx` sends its bursts `fn-advance` frames ahead of the clock; the
+  default (2) left them 1-4 frames early and the firmware discarded most of
+  them (`STALE BURST` in osmocon.log). `configs/osmo-bts-trx.cfg` now has
+  `osmotrx fn-advance 20` / `rts-advance 5` (the osmo-trx values).
+* `osmo-bts-trx` **exits** when its transceiver disappears ("No more clock from
+  transceiver"), i.e. after every `banc-stop`; `run.sh` relaunches it at step
+  4b when BTS#0 is absent (`OSMO_TRX_BTS_RELANCE=0` to disable). Wait for the
+  old process to finish its shutdown (up to a minute) before `banc-trx`.
+* The SCH the extcode encodes comes out half wrong on `c54x_exe`: compared with
+  `gsm0503_sch_encode()` of the `sch` words of the extended page, the first 39
+  coded bits are exact and the last 39 (upper info bits, CRC-10 parity, tail)
+  are ~50 % wrong, so the mobile's ROM read `crc_ko` at TOA 23 on every SB. The
+  encoder lives in the DSP extension code (`dsp_extcode.c`), not in the ROM: a
+  C54x instruction of that loop is emulated wrongly (to find). Meanwhile
+  `c54x_exe` re-encodes the SCH before publishing it (`MONTANT_ROM_TX_SB_RECODE`,
+  default on in TRX mode; `[rom-tx] SB recode` counts the wrong bits).
+
+* The TRX's uplink: the mobile's bursts arrive through the air tagged with
+  their GSM frame number (the mobile's `a_a5fn`), and the BSP of instance 1 has
+  no SB to learn the firmware's clock from. `c54x_exe` now decodes the `sch`
+  word of each SB it publishes (fn F emitted at tick T) and sets the BSP's
+  fn/tick offset to `F - T + delta` (`calypso_bsp_trx_calage()`,
+  `CALYPSO_BSP_TRX=1`, `CALYPSO_BSP_TRX_DELTA` default -1: the uplink burst of
+  fn X is read in the DSP frame where the downlink burst fn X+1 goes out), so an
+  uplink burst is played at the frame where `l1s_bts_resp` tags it with its own
+  fn. `[ts0] mode TRX : offset fn-tick pose a ...` in `/tmp/c54x-pont/dsp.log`.
+
+* The firmware's BTS "sync" task (`prim_bts_sync.c`, one normal-burst read
+  on TS0 every 51 frames: it is what produces the `DATA_IND` the host turns
+  into `IND CLOCK`) fed its TOA and frequency measurements into the TA and AFC
+  loops. On the bench there is no cell to follow, and the first mobile burst
+  that landed in that window (`freq_err=3967`) shifted the TPU and the
+  frequency, the task stopped reporting, the clock stopped and osmo-bts-trx
+  exited ("No more clock from transceiver"). The patch removes both loops from
+  that task and keeps the measurement trace and the `DATA_IND`.
+
+* The host re-sends `BTS_MODE` on every `SETRXGAIN`, `SETSLOT`, `HANDOVER`
+  and `NOHANDOVER` command, and osmo-bts-trx sends one right after the RACH
+  (channel activation). The firmware's handler did `l1a_mftask_set(0)` and
+  re-enabled the BTS tasks, which killed the sync task mid-run: the clock
+  stopped two seconds after every channel request. The handler is now
+  idempotent: once in BTS mode it only updates the parameters.
+
+* The real killer of the clock, found last: once the BSP of the TRX instance
+  had stored its first uplink burst, `bsp_attendre_trame()` waited up to 40 ms
+  at every tick whose frame had no burst (the mobile-side rule "a late BTS
+  frame is worth waiting for"). Uplink bursts are rare (a RACH, then four
+  bursts per SDCCH block), so the DSP/ARM lockstep collapsed two seconds after
+  the mobile's first RACH: the firmware programmed nothing any more (121 DSP
+  instructions per frame), no `DATA_IND`, no clock, osmo-bts-trx exited. In TRX
+  mode (`g_trx_cale`) the BSP no longer waits: a frame without a burst is
+  silence.
+
+* With all four bursts of a block reaching the BTS at the right frame numbers,
+  the SABM still did not decode: a capture of the TRXD uplink (TRX → BTS, UDP
+  source port 5702) showed nearly all-zero bits, and the result words the
+  extension code leaves for `l1s_bts_resp` (`d[5..33]`) were empty while the
+  mobile's bursts were full. Like its SCH encoder, the extcode's normal-burst
+  demodulator yields nothing right on `c54x_exe`. Second prosthesis
+  (`calypso_bsp_trx_ul_prothese()`, `CALYPSO_BSP_TRX_UL=0` to disable): the
+  BSP remembers the uplink NB it played, and at the next frame's phase A
+  `c54x_exe` writes its exact bits into the result page the ARM is about to
+  read (`[ts0] prothese montante` in dsp.log; the "bits already right" counter
+  measures how far the emulated demodulator is from working). The RACH keeps
+  its own path (I/Q to the host) and was never affected.
+* `BTS_RX_LAG` (prim_bts.c) is 3 instead of 2 and the BSP delta -2: one frame
+  of margin for the air's latency, without which three bursts out of four of
+  each uplink block arrived after their window.
+
+Still open: `DSP Error Status: 24` printed every frame by the trx firmware
+(DMA_PROG|DMA_TASK, known since 2026-09-22, harmless so far), and the C54x
+emulation bug behind the SCH prosthesis.
+
+### 2.6 The C123 screen and keypad under QEMU
+
+[2026-10-19] Three SoC devices were added to `qosmo` (`hw/arm/calypso/`):
+`calypso_armio.c` (the ARMIO block at 0xFFFE4800: the 5x5 key matrix, IRQ 8,
+as `calypso/keypad.c` scans it), `calypso_i2c_ctrl.c` (the real I2C
+controller at 0xFFFE2800, previously swallowed by the catch-all stub) and
+`calypso_st7558.c` (the 96x65 LCD, I2C slave 0x3c). Any firmware app that
+draws and reads keys now works: `rssi`, `menu`, `hello_world`, `trx`.
+
+* The screen is published in `/dev/shm/calypso_lcd` (`CALYPSO_LCD_SHM`) on
+  every flush, and also on the QEMU graphic console (`-display sdl`).
+* Keys arrive on the Unix datagram socket `/tmp/calypso_keys.sock`
+  (`CALYPSO_KEYS_SOCK`): `press 5`, `release 5`, `tap menu 200`. Key names:
+  `0`-`9`, `star`, `hash`, `menu`, `lsb`, `rsb`, `up`, `down`, `left`,
+  `right`, `ok`, `power`. `CALYPSO_KEYS_DEBUG=1` traces them on stderr.
+* `tools/osmo-c123-gtk.py` (run with `/usr/bin/python3`) shows the photo of
+  the phone from `data/c123.jpg`, overlays the live LCD in the `lcd` zone of
+  `data/c123-zones.json` and sends a press/release for each key clicked; the
+  PC keyboard works too. `--calibrate` redraws the zones with the mouse.
+
+```
+FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh     # steps 1-3 only: DSP, QEMU, osmocon
+/usr/bin/python3 tools/osmo-c123-gtk.py              # the phone window
+echo "tap menu" | socat - UNIX-SENDTO:/tmp/calypso_keys.sock   # or by hand
+```
+
+### 2.7 Two Calypsos and the air between them
+
+[2026-10-19] With `--osmo-trx` the emulated phone is the BTS radio, so a second
+emulated phone is needed to be the mobile. `c54x_exe/run.sh INSTANCE=2` runs a
+complete second chain (DSP, QEMU, osmocon, mobile) next to the first. It re-executes
+itself in a private mount namespace where `/dev/shm` is the host's
+`/dev/shm/calypso2`, so none of the hard-coded `/dev/shm/...` paths of c54x_exe or
+qosmo had to change; the host's real `/dev/shm` stays readable at
+`/run/calypso-shm-hote`. Everything else is shifted: `/tmp/c54x-pont2`,
+`/tmp/osmocom_l2_2`, `/tmp/calypso_dsp2.sock`, gdb 1235/44445, keypad socket
+`/tmp/calypso_keys2.sock`, BSP UDP port 6712, mobile VTY +100, 4347 (a derived copy of
+`mobile_pont.cfg`).
+
+The air is `pont/air.py`: each c54x_exe publishes the bursts its ROM emits in the
+ring `calypso_tx_rom` (now including the SB, dummy and FB bursts of a BTS, and
+one per frame in TRX mode), and each BSP accepts bursts in TRXDv0 over UDP. The
+relay feeds A's ring to B's BSP and B's ring to A's BSP. It is step 5 of
+instance 2 (`AIR=1`), in place of the bridge, which must not touch 5700.
+
+```
+banc-trx          # instance 1 : the BTS radio (restart it after a rebuild of c54x_exe or trx.highram)
+banc-mobile       # instance 2 : the mobile, plus the air ; banc-mobile-stop / -status / -logs
+c123-2            # its screen and keypad
+```
+
+First run on 2026-10-20: the air carries the TRX's bursts to the mobile
+(`/tmp/c54x-pont2/air.log`: `A->B n (NB SB DUMMY FB)`), the mobile's ROM detects
+the FCCH (`FB1 ... TOA=8759`) and receives the SB in its SB window
+(`[sbwin] ... FENETRE SB (one-shot)` in `/tmp/c54x-pont2/dsp.log`); the SB
+only decodes once the TRX side re-encodes it (see 2.5). The two instances are
+not slaved to each other: each runs real time (4.62 ms per frame) and the
+mobile's BSP waits up to 40 ms for a late frame. `air.py` keeps the relayed
+frame numbers continuous across a restart of `banc-trx` (the TRX publishes its
+tick as fn, which restarts at 0; without the offset the mobile's BSP waited
+for a frame in the future: "le DSP court devant le BTS").
+
+**2026-10-20, 19:30 — first location update through the two Calypsos**:
+`LOCATION UPDATING ACCEPT (lai=001-01-1)`, `got TMSI 0x28a6ecbc`,
+`TMSI REALLOCATION COMPLETE` in `/tmp/c54x-pont2/mobile.log`, with the BTS
+radio being the first emulated phone and the air relay in between. What it
+took, in order, is listed in 2.5 (TX mask, fn-advance, BTS relaunch, SCH
+re-encoding, uplink calibration, no 40 ms wait, idempotent BTS_MODE, uplink
+bit prosthesis). Not yet exercised: SMS and calls over this path.
+
+Later the same day, once the SCH was re-encoded: `=> SB 0x...: BSIC=7`, SI1/3/4/13
+read, `CHANNEL REQUEST`, `IMMEDIATE ASSIGNMENT` received, the TRX host
+demodulating the mobile's RACH (`Access Burst Indication`) and its SDCCH bursts
+(`Normal Burst Indication`). The location update then failed because the BSC
+allocated an SDCCH/8 on **TS1**, which a one-timeslot TRX never serves:
+`configs/osmo-bsc.cfg` now has `timeslot 1 phys_chan_config TCH/F`, so the
+SDCCH comes from the SDCCH/4 of TS0. Restart osmo-bsc (systemd) for a config
+change to apply; osmo-bts-trx exits when OML drops and must be relaunched
+(`run.sh` step 4b does it at start).
+
 ## 3. Building the images
 
 ```bash
@@ -488,6 +687,44 @@ m3ua / sccp               # SS7, if you run multi-operator
 
 ---
 
+### 4.5 Logs
+
+Every component writes under `LOG_DIR`, which is `RUN_DIR/logs` — that is
+`/run/user/<uid>/osmo-nitb/logs` when the launching user has an
+`XDG_RUNTIME_DIR`, `/tmp/osmo-nitb/logs` otherwise (see
+`environment/paths.env`). The directory is on tmpfs on purpose: tmux and the
+desktop panel follow the files live, and tmpfs is the only filesystem here where
+inotify works reliably. `run.sh --stop` archives the directory under
+`../archives/<timestamp>`, truncates oversized archives and prunes old ones.
+
+`mobile.log` is the journal of osmocom-bb `mobile` (MS#1). It is written by
+qosmo's `run_modules/70-l2.sh` (`mobile -c <cfg> -d <mask> >> mobile.log`),
+or, with `--dsp`, by `c54x_exe/run.sh` under `/tmp/c54x-pont`. Its format is
+fixed by the `log stderr` block that `start-native.sh` guarantees in every
+generated `mobile.cfg`: colour per subsystem, category prefix, the compact
+17-digit timestamp (`logging print extended-timestamp 1`, `YYYYMMDDhhmmssnnn`;
+not `logging timestamp 1`, which libosmocore 1.12 renders as a 25-column ctime
+string), and the seven categories the bench follows in debug (mm, rr, cc, sms,
+plmn, sim, sap). Readers strip the ANSI codes and the timestamp themselves: the
+desktop panel (`tools/osmo-fft-snap.py`), `qosmo/tools/rapport-run.sh`,
+`scripts/banc-repro.sh`. The attach rung of `tests/banc-max.sh`
+(`modules/70-attache.sh`) also quotes the `LOCATION UPDATING ACCEPT` / `REJECT`
+lines of this file next to the VTY state, so an attach that was obtained and
+then lost reads differently from a location update that never got an answer.
+
+Where the journal is, for tools of the session, is published by
+`start-native.sh` at start and removed at stop — the same way as the MS#1 VTY
+port:
+
+| path | holds |
+|---|---|
+| `/run/osmo-banc/ms1-vty` | the VTY port of MS#1 (4247, 4347 with `--dsp`) |
+| `/run/osmo-banc/mobile-log` | the absolute path of `mobile.log` |
+
+Both are also pushed into systemd's environment (`OSMO_BB1_VTY_PORT`,
+`OSMO_MOBILE_LOG`). Setting `OSMO_MOBILE_LOG` by hand overrides the published
+path for the panel.
+
 ## 5. Diagnosing the radio side
 
 **Read [`pont/README.md`](../pont/README.md) before chasing a radio fault through a
@@ -522,10 +759,14 @@ QEMU monitor:
 docker exec -ti osmo-operator-1 socat - unix-connect:/tmp/qemu-calypso-mon.sock
 ```
 
-`--assembly-logs` gives an instruction trace of the emulated ARM
-(`-d in_asm,exec,nochain`). It is very large and the bench no longer runs in real
-time — use it when you are chasing the firmware, not when you are running the
-network.
+`--assembly-logs` gives a trace of the emulated ARM (`-d in_asm`: each block
+once, when it is translated). `ASSEMBLY_LOGS_FLAGS=in_asm,exec,nochain` also logs
+every execution; that makes the ARM ~150 times slower (14 x real time for the
+whole ARM+DSP lockstep). The bridge clock then follows the DSP down to
+`PONT_HORLOGE_MAX` times real time (4 by default, 16 when `ASSEMBLY_LOGS=1`,
+see `pont/trx.py`; the trace itself goes to `/var/tmp/c54x-pont`, not the tmpfs), but the wall-clock timers of `mobile` (T3210) and of the core
+network (T3101) still run, so the attach may still time out — use it to chase
+the firmware, not to measure the network.
 
 ---
 
