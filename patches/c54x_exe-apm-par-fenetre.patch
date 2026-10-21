@@ -1,0 +1,86 @@
+diff --git a/src/pont.c b/src/pont.c
+index f4a3080..ab4cc3f 100644
+--- a/src/pont.c
++++ b/src/pont.c
+@@ -853,13 +868,80 @@ static void tx_tsp_publier(const C54xState *dsp, uint32_t fn)
+     static int nlog;
+     if (nlog++ < 6 || (b.type == TSP_TX_RACH && n_rach <= 3))
+         printf("  [rom-tx] #%u tick=%u fn=%u (%s) %s%s offset=%d @%04x : %s...\n", w_compte, fn, fn_gsm,
+-               src == 1 ? "a_a5fn" : src == 2 ? "tick+dec" : "TICK NU",
++               src == 1 ? "a_a5fn" : src == 2 ? "tick+dec" : src == 3 ? "calage BSP" : "TICK NU",
+                b.type == TSP_TX_RACH ? "RACH" : b.type == TSP_TX_NB ? "NB" : b.type == TSP_TX_SB ? "SB" : b.type == TSP_TX_DUMMY ? "DUMMY" : b.type == TSP_TX_FB ? "FB" : "?", b.type == TSP_TX_NB ? (char[]){' ', 'T', 'S', 'C', (char)('0' + b.tsc), 0} : "",
+                b.offset, b.adresse, (char[]){ '0' + b.bits[0], '0' + b.bits[1], '0' + b.bits[2], '0' + b.bits[3], '0' + b.bits[4], '0' + b.bits[5], '0' + b.bits[6], '0' + b.bits[7], 0 });
+     if ((n_rach + n_nb + n_sb + n_dummy + n_fb + n_inconnu) % 2000 == 0)
+         printf("  [rom-tx] %u bursts publies : RACH %u, NB %u, SB %u, DUMMY %u, FB %u, inconnus %u\n", n_rach + n_nb + n_sb + n_dummy + n_fb + n_inconnu, n_rach, n_nb, n_sb, n_dummy, n_fb, n_inconnu);
+ }
+ 
++/* [2026-10-21 19:00] RACH VERS L'AIR (CALYPSO_RACH_VERS_AIR=1, Magnetite). La capture au script TSP de la
++ * ROM (0x3cbb/0x3ccd, chemin du firmware osmocom) ne voit pas le burst d'acces du firmware TI : montant.c
++ * detectait bien les RACH (d_task_ra, ra/bsic) mais ils n'allaient qu'a /dev/shm/calypso_rach, que l'air
++ * ne lit pas -> B->A 0, pas de CHAN RQD, « Network forbidden ». On code le burst d'acces (05.03,
++ * gsm0503_rach_ext_encode) et on le publie dans calypso_tx_rom, date de la trame BTS du calage. */
++/* [2026-10-21 19:40] a_pm JAMAIS NUL (CALYPSO_BSP_BRUIT_FOND=1, Magnetite). La L1 TI lit pm = a_pm >> 5
++ * (l1ddsp_meas_read) et compte chaque pm nul comme une panne (l1_check_pm_error : 100 -> recovery, DSP
++ * relance). Le modele de puissance du banc (calypso_bsp_rssi_apm) ne passe que sur les ecritures du DSP ;
++ * un a_pm laisse a 0 par la ROM partait tel quel. Avant de rendre la trame a l'ARM, chaque mot a_pm nul
++ * des deux pages R recoit le modele (plancher 64). */
++static void apm_jamais_nul(uint16_t *api_ram)
++{
++    static int on = -1;
++    if (on < 0) { const char *e = calypso_getenv("CALYPSO_BSP_BRUIT_FOND"); on = (e && *e == '1'); }
++    if (!on) return;
++    for (int pg = 0; pg < 2; pg++) {
++        uint16_t *a = &api_ram[(API_R_PAGE(pg) + RP_A_PM) / 2];
++        for (int k = 0; k < 3; k++)
++            if ((a[k] >> 5) == 0) a[k] = calypso_bsp_rssi_apm_k(k);   /* [2026-10-21] une mesure par fenetre */
++    }
++    /* [2026-10-21 20:00] MESURE PLEINE LISTE (RXL_R 548) : la L1 TI (DSP 36) programme d_task_md = 0x200 + n
++     * (n <= 8 mesures, l1_sync.c) et lit les n PM dans les mots 12..12+n-1 de la page R (l1ddsp_meas_read,
++     * nbmeas = 8 vu au gdb) : au-dela des 3 mots a_pm, ce sont les mots de a_sch. Le modele de puissance du
++     * banc ne couvrait que les mots 12..14 : 15..19 restaient a 0 (vu au moniteur, d_task_md 0x0208), 5 PM
++     * nuls sur 8 a chaque trame du balayage -> recovery. La page R reprend d_task_md (mot 4) : on s'en sert. */
++    /* [2026-10-21 21:50] MODE DEDIE : les taches SDCCH/SACCH (ADL 22, DDL 24 cote L1 TI) lisent la puissance dans
++     * a_serv_demod[D_PM], mot 9 de la page R pour le DSP 36 (l1_defty.h : a_serv_demod 8..11). Le DSP emule l'y
++     * laissait a 0 apres l'IMM ASS : « > PM 1778 22 », « > PM 1808 24 » a chaque trame, ABORT, retour en veille.
++     * Meme plancher que a_pm, des qu'une tache descendante (d_task_d, mot 0) est rapportee. */
++    for (int pg = 0; pg < 2; pg++) {
++        uint16_t *r = &api_ram[API_R_PAGE(pg) / 2];
++        if ((r[0] & 0x7fff) && (r[9] >> 5) == 0) r[9] = calypso_bsp_rssi_apm();
++    }
++    for (int pg = 0; pg < 2; pg++) {
++        uint16_t *r = &api_ram[API_R_PAGE(pg) / 2];
++        uint16_t md = r[4];
++        if (!(md & 0x200)) continue;
++        int n = md & 0xff; if (n > 8) n = 8;
++        for (int k = 0; k < n; k++)
++            if ((r[12 + k] >> 5) == 0) r[12 + k] = calypso_bsp_rssi_apm_k(k);
++    }
++}
++
++void tx_rach_vers_air(uint8_t ra, uint8_t bsic, uint32_t tick)
++{
++    static int actif = -1;
++    if (actif < 0) { const char *e = calypso_getenv("CALYPSO_RACH_VERS_AIR"); actif = (e && *e == '1'); }
++    if (!actif) return;
++    /* [2026-10-21 20:55] le BURST D'ACCES ENTIER (05.02 5.2.7), comme le chemin ROM (tsp_tx.c, offset 8) :
++     * 8 bits de queue etendue, 41 de synchro, les 36 codes, 3 de queue. gsm0503_rach_ext_encode ne rend que
++     * les 36 bits codes : publies seuls en tete, le TRX n'avait aucune synchro a correler (transceiver :
++     * aucun « TOA : », osmo-bts rach:rcvd 0). */
++    static const char queue[] = "00111010", sync[] = "01001011011111111001100110101010001111000";
++    uint8_t code[36], bits[148] = {0};
++    if (gsm0503_rach_ext_encode(code, ra, bsic, false) < 0) return;
++    for (int i = 0; i < 8; i++) bits[i] = (uint8_t)(queue[i] - '0');
++    for (int i = 0; i < 41; i++) bits[8 + i] = (uint8_t)(sync[i] - '0');
++    memcpy(bits + 49, code, 36);
++    int src = 0;
++    uint32_t fn_gsm = tx_tsp_fn(tick, &src);
++    if (!ring_publier(TSP_TX_RACH, bits, -1, 8, (uint8_t)src, fn_gsm)) return;
++    static unsigned n;
++    if (++n <= 20 || n % 100 == 0)
++        printf("  [rach-air] RACH ra=0x%02x bsic=%u tick=%u -> fn BTS %u (%s) publie vers l'air [%u]\n",
++               ra, bsic, tick, fn_gsm, src == 1 ? "a_a5fn" : src == 2 ? "tick+dec" : src == 3 ? "calage BSP" : src == 4 ? "fn du mobile (SB)" : "TICK NU", n);
++}
++
+ /* [2026-10-20] MODE TRX : PUBLICATION DEPUIS LA PAGE DE L'EXTCODE. Le firmware trx remplit tx[p] (cmd,
+  * pointeur de donnees) pour chaque slot p de sa fenetre TX (prim_bts.c patche : slot p = TS (tx_start + p)),
+  * et l'extcode du DSP les module ; la ROM emulee ne joue qu'un burst par trame (le script TSP) et le
