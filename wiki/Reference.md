@@ -355,6 +355,7 @@ comes up unchanged.
 ./start-native.sh --bts               # [2026-10-20] alias of --osmo-trx ; implies --dsp ; c54x_exe/run.sh runs with OSMO_TRX=1
 ./start-native.sh --bts --ms          # the BTS radio, then the second phone over the air (INSTANCE=2, see 2.7)
 ./start-native.sh --bts --ms --ts 2   # [2026-10-20] one Calypso TRX per timeslot: TS1 (TCH/F) served by a 3rd QEMU (OSMO_TRX_TS1=1, transceiver -2) ; --ts 1 = TS0 only
+sudo armbian/build-armbian.sh         # [2026-10-20] SD image via github.com/armbian/build (userpatches/customize-image.sh + overlay from osmocom-nitb:arm64) ; --prepare, --no-stack, --board=
 ```
 (`--ms` alone, or no option, is the usual mobile + bridge setup.)
 

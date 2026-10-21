@@ -24,6 +24,13 @@ vont au mobile avec tn=1 ; les bursts du mobile vont au TRX du TS0 (A) tant qu'i
 du TS1 (C) une fois l'ASSIGNMENT COMMAND passe. L'air lit cet ASSIGNMENT COMMAND dans les blocs SDCCH/4 du
 TS0 (pont.gsm, libosmocoding) et l'annonce au c54x_exe du mobile par --tch-cfg (format de pont/state.py :
 seq, tn, tsc, arfcn), comme le faisait le pont ; un RACH du mobile rend le SDCCH (tn=0).
+
+[2026-10-21] Le telephone 2 a son PROPRE compteur de trames (il part de 0 a son boot, comme le 1) : ses bursts
+sortent de son anneau avec son fn local, et son BSP attend les bursts montants dans sa numerotation. Le
+transceiver hote mesure D = fn1 - fn2 sur les DATA_IND des deux telephones et l'ecrit dans --fn-delta
+(/tmp/osmocom_fn_delta_2) ; l'air tague C->B avec fn + D et envoie B->C avec fn - D, en tn 0 (le BSP du
+telephone 2 range un burst tn=1 dans les « autres » intervalles, rx[2], que son firmware ne lit pas :
+pour lui le TS1 est SON intervalle). Tant que D est inconnu, rien ne passe par C.
 """
 import argparse
 import os
@@ -172,6 +179,36 @@ class Cible:
             self.par_type[100 + tn] = self.par_type.get(100 + tn, 0) + 1   # compte par intervalle (TS1..7)
 
 
+class Decalage:
+    """D = fn1 - fn2, publie par le transceiver (--fn-delta-file) ; relu quand le fichier change."""
+
+    def __init__(self, chemin):
+        self.chemin, self.d, self.mtime, self.prochain = chemin, None, None, 0.0
+        self.changements = 0
+
+    def lire(self):
+        now = time.monotonic()
+        if now < self.prochain or not self.chemin:
+            return self.d
+        self.prochain = now + 0.5
+        try:
+            st = os.stat(self.chemin)
+        except OSError:
+            return self.d
+        if st.st_mtime == self.mtime and self.d is not None:
+            return self.d
+        try:
+            d = int(open(self.chemin).read().strip())
+        except (OSError, ValueError):
+            return self.d
+        self.mtime = st.st_mtime
+        if d != self.d:
+            self.changements += 1
+            print("air : decalage de trames du telephone 2 : fn1 - fn2 = %d (%s, %d changements)" % (d, self.chemin, self.changements), flush=True)
+            self.d = d
+        return self.d
+
+
 SDCCH4_DL = {22: 0, 23: 0, 24: 0, 25: 0, 26: 1, 27: 1, 28: 1, 29: 1, 32: 2, 33: 2, 34: 2, 35: 2, 36: 3, 37: 3, 38: 3, 39: 3}
 
 
@@ -253,6 +290,9 @@ def main():
     ap.add_argument("--c-ring", default=None, help="anneau TX de C, le telephone 2 du TRX (TS1), optionnel")
     ap.add_argument("--c-port", type=int, default=None, help="port UDP du BSP de C")
     ap.add_argument("--tch-cfg", default=None, help="annonce du TCH au c54x_exe du mobile (calypso_tch_cfg de son /dev/shm)")
+    ap.add_argument("--fn-delta", default="/tmp/osmocom_fn_delta_2", help="fichier ou le transceiver publie fn1 - fn2 du telephone 2 (avec --c-ring)")
+    ap.add_argument("--c-toujours", action="store_true", help="relayer C->B meme hors TCH (defaut : seulement pendant un TCH assigne, les bursts TS1 dans la trame des SB cassaient la synchro du mobile le 21/10)")
+    ap.add_argument("--c-tn", type=int, default=0, help="tn de l'en-tete TRXD des bursts du mobile envoyes au telephone 2 (0 : son intervalle principal)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--tn", type=int, default=0, help="timeslot annonce dans l'en-tete TRXD des bursts de A (defaut 0)")
     ap.add_argument("--sans", default="", help="types a ne pas relayer, ex. « ?,RACH »")
@@ -269,6 +309,10 @@ def main():
     vers_b1 = Cible(args.host, args.b_port, "B(TS1)", 1) if c_ring else None   # ce que C emet -> B recoit, tn 1
     vers_c = Cible(args.host, args.c_port, "C", 1) if (c_ring and args.c_port) else None
     dedie = Dedie(args.tch_cfg)
+    decalage = Decalage(args.fn_delta if c_ring else None)
+    c_sans_d = 0
+    mobile_tch = 0.0          # [2026-10-21] instant du dernier burst du mobile sur un TS dedie (tn_m != 0) : avec le
+                              # SDCCH chiffre l'air ne lit plus l'ASSIGNMENT COMMAND, c'est le mobile qui dit qu'il est sur le TCH
     print("air : A %s -> udp %d (B) ; B %s -> udp %d (A) ; tn %d%s%s%s" %
           (args.a_ring, args.b_port, args.b_ring, args.a_port, args.tn,
            " ; C %s -> udp %d (B, tn 1) ; B -> udp %s (C) sur TCH" % (args.c_ring, args.b_port, args.c_port) if c_ring else "",
@@ -287,11 +331,15 @@ def main():
             if tn_b == 0:
                 dedie.descendant(fnc, typ, bits)
         if c_ring:
+            d = decalage.lire()
             for seq, fn, typ, tsc, offset, src, bits in c_ring.nouveaux():
                 bouge = True
                 if typ in sans or offset == 0xff and typ == 0:
                     continue
-                vers_b1.envoyer(c_ring.fn_continu(fn), typ, bits)
+                if d is None or (dedie.tn is None and not args.c_toujours and time.monotonic() - mobile_tch > 2.0):
+                    c_sans_d += 1
+                    continue
+                vers_b1.envoyer((fn + d) % 2715648, typ, bits)
         for seq, fn, typ, tsc, offset, src, bits in b_ring.nouveaux():
             bouge = True
             if typ in sans or offset == 0xff and typ == 0:
@@ -303,7 +351,12 @@ def main():
                     dedie.liberer("RACH du mobile")
                 vers_a.envoyer(fnc, typ, bits, 0)
             elif tn_m and vers_c is not None:
-                vers_c.envoyer(fnc, typ, bits, tn_m)       # TCH du TS1 -> telephone 2 du TRX (montage a 3 Calypsos)
+                mobile_tch = time.monotonic()
+                d = decalage.lire()
+                if d is None:
+                    c_sans_d += 1
+                    continue
+                vers_c.envoyer((fnc - d) % 2715648, typ, bits, args.c_tn)   # TCH du TS1 -> telephone 2 du TRX, dans SA numerotation
             else:
                 vers_a.envoyer(fnc, typ, bits, tn_m)       # un seul telephone TRX : TS0 et TS1 par tn
         if not bouge:
@@ -316,7 +369,8 @@ def main():
                   (vers_b.envoyes, fmt(vers_b), vers_a.envoyes, fmt(vers_a),
                    "  C->B %d (%s)  B->C %d (%s)" % (vers_b1.envoyes, fmt(vers_b1), vers_c.envoyes if vers_c else 0, fmt(vers_c) if vers_c else "-") if c_ring else "",
                    a_ring.rate, b_ring.rate, " C %d" % c_ring.rate if c_ring else "",
-                   dedie.decodes, dedie.decodes + dedie.rates, "  TCH TS%d" % dedie.tn if dedie.tn is not None else ""), flush=True)
+                   dedie.decodes, dedie.decodes + dedie.rates, "  TCH TS%d" % dedie.tn if dedie.tn is not None else "")
+                  + ("  D=%s%s" % (decalage.d, " (sans D : %d perdus)" % c_sans_d if c_sans_d else "") if c_ring else ""), flush=True)
 
 
 if __name__ == "__main__":

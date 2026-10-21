@@ -11,13 +11,22 @@ calypso_armio.c). Cette fenetre GTK3 fait le reste :
   - un clic sur une touche de la photo = press/release vers QEMU ; le clavier
     du PC marche aussi (0-9, * ou s, # ou h, fleches, Entree = menu,
     Entree pave ou o = ok, Echap ou p = power, F1/F2 = touches logicielles).
+[2026-10-21] Plusieurs instances (c54x_exe/run.sh INSTANCE=N : ecran
+/dev/shm/calypsoN/calypso_lcd, touches /tmp/calypso_keysN.sock). Sans
+--instance, la fenetre choisit la premiere instance vivante qui N'EST PAS un
+TRX de la BTS (firmware trx : /tmp/c54x-pontN/transceiver.log ou « BTS MODE »
+dans osmocon.log) - le montage --bts --ms met le mobile en instance 2. La
+touche power (rouge, Echap, p) eteint le firmware des l'appui (trx comme
+layer1 : « Powering off due to keypress ») : elle n'est envoyee qu'apres un
+APPUI LONG (%.1f s), et jamais a une instance TRX (le 21/10 a 08:18 un power
+envoye a l'instance 1 a eteint le TRX et la BTS a perdu son horloge).
 Zones : data/c123-zones.json (x, y, l, h normalises). `--calibrate` les
 redefinit a la souris : pour chaque zone annoncee, cliquer le coin haut-gauche
 puis le coin bas-droit ; `s` sauve, `q` quitte.
 
   /usr/bin/python3 tools/osmo-c123-gtk.py [--image PHOTO] [--zones JSON]
-        [--lcd /dev/shm/calypso_lcd] [--keys /tmp/calypso_keys.sock]
-        [--scale 2.5] [--calibrate]
+        [--instance N] [--lcd /dev/shm/calypso_lcd] [--keys /tmp/calypso_keys.sock]
+        [--scale 2.5] [--calibrate] [--power-libre] [--toutes [1,2,3]]
 (python3 systeme : celui de /root/.env n'a pas PyGObject.)
 """
 import argparse
@@ -37,6 +46,8 @@ import cairo  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data")
 LCD_W, LCD_H, LCD_PAGES, LCD_HDR = 96, 65, 9, 32
+POWER_APPUI_LONG_S = 1.2       # duree d'appui sur power avant de l'envoyer au firmware
+__doc__ = __doc__ % POWER_APPUI_LONG_S
 ORDRE_ZONES = ["lcd", "lsb", "rsb", "up", "left", "menu", "right", "down", "ok", "power",
                "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "0", "hash"]
 LIBELLES = {"lsb": "─", "rsb": "─", "up": "▲", "down": "▼", "left": "◀", "right": "▶",
@@ -49,6 +60,51 @@ CLAVIER = {  # nom de touche GDK -> touche du C123
     "Return": "menu", "KP_Enter": "ok", "o": "ok", "Escape": "power", "p": "power",
     "F1": "lsb", "F2": "rsb",
 }
+
+
+def rundir_instance(n):
+    return "/tmp/c54x-pont" if n == 1 else "/tmp/c54x-pont%d" % n
+
+
+def chemins_instance(n):
+    """(ecran, socket des touches) de l'instance n (c54x_exe/run.sh : INSTANCE=1 sans suffixe)."""
+    if n == 1:
+        return "/dev/shm/calypso_lcd", "/tmp/calypso_keys.sock"
+    return "/dev/shm/calypso%d/calypso_lcd" % n, "/tmp/calypso_keys%d.sock" % n
+
+
+def instance_vivante(n):
+    try:
+        with open(os.path.join(rundir_instance(n), "dsp.pid")) as f:
+            pid = int(f.read().strip() or 0)
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def instance_est_trx(n):
+    """Vrai si l'instance n fait tourner le firmware trx (radio de la BTS) : un power l'eteint et la BTS
+    perd son horloge. Indices : transceiver.log dans son RUNDIR (run.sh OSMO_TRX=1), ou « BTS MODE » sur
+    sa console (trx.highram imprime BTS MODE: ... des le L1CTL_RESET)."""
+    rd = rundir_instance(n)
+    if os.path.isfile(os.path.join(rd, "transceiver.log")):
+        return True
+    try:
+        with open(os.path.join(rd, "osmocon.log"), "rb") as f:
+            return b"BTS MODE:" in f.read(1 << 20)
+    except OSError:
+        return False
+
+
+def instance_par_defaut():
+    """La premiere instance vivante qui n'est pas un TRX (le mobile du montage --bts --ms est la 2) ;
+    a defaut la premiere vivante ; a defaut 1."""
+    vivantes = [n for n in range(1, 9) if instance_vivante(n)]
+    for n in vivantes:
+        if not instance_est_trx(n):
+            return n
+    return vivantes[0] if vivantes else 1
 
 
 class Lcd:
@@ -118,15 +174,32 @@ class Clavier:
             return False
 
 
+FENETRES = []
+
+
+def fenetre_fermee(_w):
+    """Une fenetre fermee ; Gtk.main s'arrete avec la derniere."""
+    if _w in FENETRES:
+        FENETRES.remove(_w)
+    if not FENETRES:
+        Gtk.main_quit()
+
+
 class Fenetre(Gtk.Window):
     def __init__(self, args):
-        super().__init__(title="Motorola C123 - Calypso emule")
+        titre = "Motorola C123 - Calypso emule"
+        if args.instance:
+            titre += " - instance %d (%s)" % (args.instance, "TRX de la BTS" if instance_est_trx(args.instance) else "mobile")
+        super().__init__(title=titre)
         self.args = args
         self.zones = self._charger_zones(args.zones)
         self.pixbuf = self._charger_image(args.image)
         self.lcd = Lcd(args.lcd)
         self.clavier = Clavier(args.keys)
         self.enfoncees = set()
+        self.trx = instance_est_trx(args.instance) if args.instance else False
+        self.power_depuis = None      # instant de l'appui sur power (appui long en cours)
+        self.power_envoyee = False    # press power deja transmis au firmware
         self.calibrage = [] if args.calibrate else None   # [(zone, x1, y1)] en cours
         self.cal_index = 0
         self.cal_premier = None
@@ -153,7 +226,7 @@ class Fenetre(Gtk.Window):
         boite.pack_start(self.statut, False, False, 2)
         self.connect("key-press-event", self.touche_pc)
         self.connect("key-release-event", self.touche_pc)
-        self.connect("destroy", Gtk.main_quit)
+        self.connect("destroy", fenetre_fermee)
         GLib.timeout_add(40, self.tic)
         self._statut()
 
@@ -266,20 +339,49 @@ class Fenetre(Gtk.Window):
             return self._clic_calibrage(ev)
         nom = self.zone_sous(ev.x, ev.y)
         if nom:
-            self.enfoncees.add(nom)
-            self.clavier.envoyer("press", nom)
-            self._statut("touche %s" % nom)
-            self.zone.queue_draw()
+            self.appuyer(nom)
         return True
 
     def relacher(self, _w, ev):
         if self.calibrage is not None:
             return True
         for nom in list(self.enfoncees):
-            self.clavier.envoyer("release", nom)
-        self.enfoncees.clear()
+            self.lacher(nom)
         self.zone.queue_draw()
         return True
+
+    # --- touches : press/release vers QEMU, power sous appui long ---------
+    def appuyer(self, nom):
+        if nom in self.enfoncees:
+            return
+        self.enfoncees.add(nom)
+        if nom == "power" and not self.args.power_libre:
+            self.power_depuis = time.monotonic()
+            self.power_envoyee = False
+            if self.trx:
+                self._statut("power ignoree : l'instance %s est le TRX de la BTS (un power l'eteint et la BTS perd son horloge)"
+                             % self.args.instance)
+            else:
+                self._statut("power : maintenir %.1f s pour eteindre le firmware" % POWER_APPUI_LONG_S)
+        else:
+            self.clavier.envoyer("press", nom)
+            self._statut("touche %s" % nom)
+        self.zone.queue_draw()
+
+    def lacher(self, nom):
+        if nom not in self.enfoncees:
+            return
+        self.enfoncees.discard(nom)
+        if nom == "power" and not self.args.power_libre:
+            if self.power_envoyee:
+                self.clavier.envoyer("release", nom)
+            elif not self.trx:
+                self._statut("power relachee avant %.1f s : rien envoye" % POWER_APPUI_LONG_S)
+            self.power_depuis = None
+            self.power_envoyee = False
+        else:
+            self.clavier.envoyer("release", nom)
+        self.zone.queue_draw()
 
     def touche_pc(self, _w, ev):
         nom_gdk = Gdk.keyval_name(ev.keyval)
@@ -293,13 +395,9 @@ class Fenetre(Gtk.Window):
         if not nom:
             return False
         if ev.type == Gdk.EventType.KEY_PRESS:
-            if nom not in self.enfoncees:
-                self.enfoncees.add(nom)
-                self.clavier.envoyer("press", nom)
+            self.appuyer(nom)
         else:
-            self.enfoncees.discard(nom)
-            self.clavier.envoyer("release", nom)
-        self.zone.queue_draw()
+            self.lacher(nom)
         return True
 
     # --- calibrage ---------------------------------------------------------
@@ -338,6 +436,11 @@ class Fenetre(Gtk.Window):
         if self.lcd.lire():
             self.zone.queue_draw()
             self._statut()
+        if (self.power_depuis is not None and not self.power_envoyee and not self.trx
+                and time.monotonic() - self.power_depuis >= POWER_APPUI_LONG_S):
+            self.power_envoyee = True
+            self.clavier.envoyer("press", "power")
+            self._statut("power envoyee a l'instance %s (appui long)" % self.args.instance)
         return True
 
     def _statut(self, msg=None):
@@ -345,25 +448,82 @@ class Fenetre(Gtk.Window):
             msg = "calibrage : %s : coin haut-gauche" % ORDRE_ZONES[0]
         etat = "LCD %s (v%d)" % ("vivant" if self.lcd.vivant else "absent", max(self.lcd.seq, 0))
         clav = "touches -> %s%s" % (self.args.keys, " (%s)" % self.clavier.erreur if self.clavier.erreur else "")
-        self.statut.set_text("%s · %s%s" % (etat, clav, " · " + msg if msg else ""))
+        inst = "instance %s%s · " % (self.args.instance, " (TRX de la BTS)" if self.trx else "") if self.args.instance else ""
+        self.statut.set_text("%s%s · %s%s" % (inst, etat, clav, " · " + msg if msg else ""))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--image", help="photo du telephone (defaut data/c123.jpg|png)")
     ap.add_argument("--zones", default=os.path.join(DATA, "c123-zones.json"))
-    ap.add_argument("--lcd", default=os.environ.get("CALYPSO_LCD_SHM", "/dev/shm/calypso_lcd"))
-    ap.add_argument("--keys", default=os.environ.get("CALYPSO_KEYS_SOCK", "/tmp/calypso_keys.sock"))
+    ap.add_argument("--instance", type=int, default=0,
+                    help="instance c54x_exe (1 = /dev/shm/calypso_lcd, N = /dev/shm/calypsoN/... et /tmp/calypso_keysN.sock) ; "
+                         "defaut : la premiere instance vivante qui n'est pas un TRX de la BTS")
+    ap.add_argument("--lcd", default=os.environ.get("CALYPSO_LCD_SHM"), help="ecran partage (prime sur --instance)")
+    ap.add_argument("--keys", default=os.environ.get("CALYPSO_KEYS_SOCK"), help="socket des touches (prime sur --instance)")
+    ap.add_argument("--power-libre", action="store_true",
+                    help="touche power envoyee des l'appui, meme a un TRX (defaut : appui long de %.1f s, jamais a un TRX)"
+                         % POWER_APPUI_LONG_S)
+    ap.add_argument("--toutes", nargs="?", const="1,2,3,4", metavar="N,M,...",
+                    help="une fenetre par instance (defaut 1,2,3,4 : TRX TS0, mobile, TRX TS1, rssi ; plus toute autre instance vivante, et celles qui "
+                         "apparaissent ensuite : guet toutes les 2 s), cote a cote")
     ap.add_argument("--scale", type=float, default=0, help="facteur d'agrandissement de la photo (defaut : hauteur 900 px max)")
     ap.add_argument("--calibrate", action="store_true", help="redefinir les zones a la souris")
     ap.add_argument("--autotest", action="store_true", help="sans fenetre : lit l'image LCD une fois et sort")
     args = ap.parse_args()
+    if args.toutes:
+        if args.calibrate or args.autotest:
+            ap.error("--toutes ne va pas avec --calibrate / --autotest")
+        voulues = [int(x) for x in args.toutes.replace(" ", ",").split(",") if x]
+        for n in range(1, 9):
+            if n not in voulues and instance_vivante(n):
+                voulues.append(n)
+        ouvertes = {}
+        pos = [0]
+
+        def ouvrir(n):
+            a = argparse.Namespace(**vars(args))
+            a.instance, a.lcd, a.keys = n, None, None
+            a.lcd, a.keys = chemins_instance(n)
+            if not args.scale:
+                a.scale = 1.1                      # quatre telephones de front sur un ecran 1080p
+            f = Fenetre(a)
+            FENETRES.append(f)
+            ouvertes[n] = f
+            f.move(pos[0], 0)
+            pos[0] += f.lw + 24
+            f.show_all()
+
+        for n in voulues:
+            ouvrir(n)
+
+        # [2026-10-21] une instance lancee APRES la fenetre (banc-rssi, INSTANCE=4...) avait pas de fenetre :
+        # on guette les instances 1..8 toutes les 2 s et on ouvre celles qui apparaissent.
+        def guetter():
+            for n in range(1, 9):
+                if n not in ouvertes and instance_vivante(n):
+                    print("instance %d apparue : fenetre ouverte" % n, file=sys.stderr)
+                    ouvrir(n)
+            return True
+        GLib.timeout_add(2000, guetter)
+        Gtk.main()
+        return 0
+    if not args.instance and not (args.lcd and args.keys):
+        args.instance = instance_par_defaut()
+    if args.instance:
+        lcd, keys = chemins_instance(args.instance)
+        args.lcd = args.lcd or lcd
+        args.keys = args.keys or keys
+        if instance_est_trx(args.instance):
+            print("instance %d : firmware trx (TRX de la BTS) ; touche power refusee sans --power-libre" % args.instance,
+                  file=sys.stderr)
     if args.autotest:
         lcd = Lcd(args.lcd)
         ok = lcd.lire()
         print("lcd %s : vivant=%s seq=%d flags=%d" % (args.lcd, lcd.vivant, lcd.seq, lcd.flags))
         return 0 if ok else 1
     f = Fenetre(args)
+    FENETRES.append(f)
     f.show_all()
     Gtk.main()
     return 0

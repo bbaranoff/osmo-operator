@@ -58,6 +58,10 @@ for arg in "$@"; do
             echo "               par docker buildx --platform linux/arm64 sous qemu-user-static."
             echo "               Images taguees :arm64 (osmocom-nitb:arm64...). LENT au premier"
             echo "               build (emulation) ; le cache .deb rend les suivants courts."
+            echo "               Pose aussi sur l hote tout ce que la chaine arm64 demande :"
+            echo "               qemu-user-static, binfmt-support, docker-buildx, debootstrap,"
+            echo "               mtools, dosfstools, e2fsprogs, kpartx... (build-iso.sh --arm,"
+            echo "               armbian/build-armbian.sh)."
             echo "  --no-cache   Reconstruction complete : cache docker ignore, paquets .deb recompiles"
             echo "               et le cache /var/cache/osmo-debs reecrit."
             echo "  --lite       Construit EN PLUS osmocom-nitb:lite : la meme pile, sans les"
@@ -187,8 +191,18 @@ if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
         *) echo -e "${RED}[ERREUR] --arch : amd64 ou arm64 (recu : $OSMO_ARCH)${NC}"; exit 2 ;;
     esac
     IMG_TAG=":$OSMO_ARCH"
-    echo "[*] qemu-user-static + binfmt-support (emulation ${OSMO_ARCH} pour docker et chroot)..."
-    apt-fast install -y --no-install-recommends qemu-user-static binfmt-support \
+    # [2026-10-20] TOUT ce que la chaine --arm demande a l hote, pose ici une fois pour toutes :
+    # l emulation (qemu-user-static, binfmt-support) et buildx pour cette image Docker ; puis les
+    # outils de build-iso.sh --arm (iso_modules/20-hote.sh, ISO_HOST_PKGS_COMMON : debootstrap,
+    # mke2fs -d, mcopy, sfdisk, kpartx, zstd, python3-pil...) et de armbian/build-armbian.sh (git,
+    # docker, qemu-user pour le chroot de customize-image.sh). Avant, build-iso.sh les posait a son
+    # etape 0 et build-armbian.sh se contentait de les reclamer : un hote qui n avait fait que
+    # ./build.sh --arm partait sans mtools ni dosfstools.
+    echo "[*] Paquets hote de la chaine ${OSMO_ARCH} : emulation, buildx, outils d image SD..."
+    apt-fast install -y --no-install-recommends qemu-user-static binfmt-support docker-buildx \
+        git debootstrap rsync wget curl ca-certificates gnupg zstd xz-utils cpio file gcc make \
+        python3 python3-pil python3-yaml e2fsprogs fdisk util-linux dosfstools mtools kpartx \
+        || apt-fast install -y --no-install-recommends qemu-user-static binfmt-support \
         || echo -e "${YELLOW}[WARN] qemu-user-static non installe (apt) - binfmt via docker ci-dessous${NC}"
     _bf="/proc/sys/fs/binfmt_misc/qemu-${OSMO_ARCH/arm64/aarch64}"
     _bf="${_bf/amd64/x86_64}"

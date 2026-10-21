@@ -152,8 +152,13 @@ Usage : ./start-native.sh [options] [mode]
                                      les appels) est servi par un deuxieme telephone TRX
                                      (c54x_exe/run.sh OSMO_TRX_TS1=1, instance 3,
                                      transceiver -2 -L /tmp/osmocom_l2_3) ; le premier
-                                     garde le TS0 seul (OSMO_TRX_TCH=0).
-                        Sans --ts : comme --ts 2 (defaut de run.sh depuis le 20/10 23:10).
+                                     garde le TS0 seul (OSMO_TRX_TCH=0). [21/10] PAS D'APPEL
+                                     dans ce mode : le fn du 2e telephone n'est pas aligne
+                                     (TCH descendant a ~80 bits faux, ASSIGNMENT FAILURE).
+                            --ts 2/1 TS0 + TS1 par UN SEUL Calypso (OSMO_TRX_TCH=1, masques
+                                     0x03, OSMO_TRX_TS1=0) : le montage qui a passe un
+                                     appel audible le 20/10 21:08.
+                        Sans --ts : comme --ts 2/1 (21/10 ; du 20/10 23:10 au 21/10 c'etait --ts 2).
     --ms                [2026-10-20] le telephone emule est un MOBILE. Seul (ou sans
                         option) : le montage habituel, mobile + pont vers osmo-bts-trx.
                         AVEC --bts : un DEUXIEME Calypso (c54x_exe/run.sh INSTANCE=2,
@@ -326,13 +331,13 @@ while [ $# -gt 0 ]; do
         --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
         # [2026-10-20] --ts N : 1 = TS0 seul ; 2 = TS0 + TS1, un Calypso TRX par intervalle
         # (OSMO_TRX_TS1=1 : instance 3 pour le TS1). Implique --bts. Exporte plus bas (export_trx_ts).
-        --ts)          if [ $# -lt 2 ] || ! [[ "${2:-}" =~ ^[12]$ ]]; then
-                           printf '%s\n\n' "--ts attend 1 (TS0 seul) ou 2 (TS0 + TS1, un Calypso par intervalle)" >&2
+        --ts)          if [ $# -lt 2 ] || ! [[ "${2:-}" =~ ^(1|2|2/1)$ ]]; then
+                           printf '%s\n\n' "--ts attend 1 (TS0 seul), 2 (TS0 + TS1, un Calypso par intervalle) ou 2/1 (TS0 + TS1, un seul Calypso)" >&2
                            usage >&2; exit 2
                        fi
                        OSMO_TRX_TS="$2"; DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; shift ;;
         --ts=*)        OSMO_TRX_TS="${1#*=}"
-                       [[ "$OSMO_TRX_TS" =~ ^[12]$ ]] || { printf '%s\n\n' "--ts attend 1 ou 2 (recu : $OSMO_TRX_TS)" >&2; usage >&2; exit 2; }
+                       [[ "$OSMO_TRX_TS" =~ ^(1|2|2/1)$ ]] || { printf '%s\n\n' "--ts attend 1, 2 ou 2/1 (recu : $OSMO_TRX_TS)" >&2; usage >&2; exit 2; }
                        DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
         # [2026-10-20] --ms : sans --bts c'est le defaut (mobile + pont) ; avec --bts, l'instance 2 par l'air
         --ms)          MS_AIR=1 ;;
@@ -404,9 +409,12 @@ done
 # [2026-10-20] --ts N -> variables de c54x_exe/run.sh (OSMO_TRX=1). Sans --ts, run.sh garde son defaut
 # (OSMO_TRX_TCH=1 : un Calypso, TS0 + TS1, masques 0x03). trx_ts_desc : le libelle des resumes.
 export_trx_ts() {
+    # [2026-10-21] 2/1 et le defaut : un seul Calypso pour TS0 + TS1 (le seul montage qui passe un appel) ;
+    # 2 : un Calypso par intervalle (LU OK, appels KO : fn du telephone 2 non aligne).
     case "${OSMO_TRX_TS:-}" in
-        1) export OSMO_TRX_TCH=0 OSMO_TRX_TS1=0 ;;
-        2|"") export OSMO_TRX_TCH=0 OSMO_TRX_TS1=1 ;;
+        1)      export OSMO_TRX_TCH=0 OSMO_TRX_TS1=0 ;;
+        2)      export OSMO_TRX_TCH=0 OSMO_TRX_TS1=1 ;;
+        2/1|"") export OSMO_TRX_TCH=1 OSMO_TRX_TS1=0 ;;
     esac
 }
 trx_ts_desc() {

@@ -50,7 +50,7 @@ What is specific to the arm64 build:
 - `iso_modules/92-rpi-image.sh` assembles the image without mounting anything
   (`mke2fs -d`, `mcopy`, `sfdisk`, `dd`).
 
-Host packages needed: `qemu-user-static`, `binfmt-support`, `docker-buildx`.
+Host packages: `./build.sh --arm` installs everything the arm64 chain needs on the host (`qemu-user-static`, `binfmt-support`, `docker-buildx`, `debootstrap`, `mtools`, `dosfstools`, `e2fsprogs`, `kpartx`, ...).
 
 ## CI
 
@@ -60,3 +60,29 @@ Host packages needed: `qemu-user-static`, `binfmt-support`, `docker-buildx`.
 - `.github/workflows/build-arm.yml` pulls that image and produces the SD image.
   It runs on tags `rpi-*` / `arm-*` or by hand. The emulated x86 path cannot
   finish within GitHub's 6-hour job limit, hence the native runner.
+
+## Build it with the official Armbian framework (armbian/build)
+
+`armbian/build-armbian.sh` builds the same image through
+[github.com/armbian/build](https://github.com/armbian/build) instead of the
+hand-made assembly of `build-iso.sh --arm`: Armbian produces the kernel, the
+board support, the firmware partition and the `.img`; the stack is dropped in
+through the framework's own hook, `userpatches/customize-image.sh`, with the
+contents of the project's arm64 Docker image bind-mounted as `/tmp/overlay`.
+
+```bash
+sudo ./build.sh --arch=arm64                        # host packages (qemu-user, binfmt, buildx...) + the arm64 stack image, once
+sudo armbian/build-armbian.sh                       # clone armbian/build, overlay, compile.sh
+sudo armbian/build-armbian.sh --prepare             # everything but compile.sh (inspect userpatches/)
+sudo armbian/build-armbian.sh --board=orangepi5 --branch=edge
+```
+
+Defaults: `BOARD=rpi4b BRANCH=current RELEASE=noble`, clone in
+`/opt/GSM/armbian-build` (`--armbian-dir=`), image in its `output/images/`.
+The stack source is `osmocom-nitb:arm64` if present, else the published
+`ghcr.io/<repo>/osmocom-nitb:base-arm64-<fingerprint>`, else `--image=`.
+`customize-image.sh` installs the runtime packages, `dpkg -i` the build `.deb`s,
+copies `/usr/local`, `/opt/GSM`, `/etc/osmocom` and the units, compiles natively
+what an x86 host cannot (toast, the qosmo launcher, `c54x_exe`/`grgsm_exe`, the
+bench `.deb`s), sets the accounts (root/osmo, osmocom/osmo) and skips Armbian's
+first-login wizard. `--no-stack` gives a bare Armbian image.

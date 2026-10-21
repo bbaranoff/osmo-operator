@@ -104,8 +104,14 @@ def read_types():
     # premier trx uniquement
     trx0 = re.split(r'\n\s*trx\s+\d+', block)
     scope = trx0[1] if len(trx0) > 1 else block
-    for tm in re.finditer(r'\n\s*timeslot\s+(\d+)\s*\n\s*phys_chan_config\s+(\S+)', scope):
-        types[int(tm.group(1))] = tm.group(2)
+    # [2026-10-21] le phys_chan_config n est pas forcement la ligne qui SUIT
+    # « timeslot N » : un commentaire (« ! ... ») entre les deux laissait la
+    # case sans type (TS1 affiche « — » alors que la conf dit TCH/F). On prend
+    # le premier phys_chan_config du bloc du timeslot, jusqu au timeslot suivant.
+    for tm in re.finditer(r'\n\s*timeslot\s+(\d+)((?:\n(?!\s*timeslot\s)[^\n]*)*)', scope):
+        pm = re.search(r'\n\s*phys_chan_config\s+(\S+)', tm.group(2))
+        if pm:
+            types[int(tm.group(1))] = pm.group(1)
     return types, arfcn
 
 

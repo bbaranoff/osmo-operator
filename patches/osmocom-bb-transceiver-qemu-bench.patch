@@ -1,29 +1,198 @@
 diff --git a/src/host/layer23/src/transceiver/app.h b/src/host/layer23/src/transceiver/app.h
-index 7b8e25c..ce70d5c 100644
+index 7b8e25c..5e70dd6 100644
 --- a/src/host/layer23/src/transceiver/app.h
 +++ b/src/host/layer23/src/transceiver/app.h
-@@ -52,6 +52,7 @@ struct app_state
+@@ -26,6 +26,7 @@
+ 
+ 
+ #include <stdint.h>
++#include <time.h>
+ 
+ #include "l1ctl_link.h"
+ 
+@@ -52,7 +53,24 @@ struct app_state
  
  	/* Options */
  	uint16_t arfcn_sync;
 +	int no_sync;	/* [2026-10-19] mode BTS sans synchro sur une cellule (QEMU, pas d'air) */
++
++	/* [2026-10-21] telephone 2 (TS1, -2) : son compteur de trames est independant de celui du
++	 * telephone 1 (chacun part de 0 a son boot). On mesure D = fn1 - fn2 sur les DATA_IND des deux
++	 * (fn1 extrapole a l'instant du DATA_IND du 2 par le temps ecoule, 4.615 ms par trame), et on
++	 * renumerote : BURST_REQ vers le 2 avec fn - D, indications du 2 avec fn + D. D est publie dans
++	 * fn_delta_file pour l'air (pont/air.py) qui tague de meme les bursts du telephone 2. */
++	struct { uint32_t fn; struct timespec t; int valid; } clk[2];
++	int fn_delta, fn_delta_valid;
++	int fn_samples[64]; unsigned fn_n_samples, fn_n_total;
++	const char *fn_delta_file;
  };
  
++#define TRX_GSM_MAX_FN 2715648u
++/* fn du telephone 2 -> numerotation du telephone 1 (la BTS), et retour */
++#define TRX_FN_P2_TO_BTS(as, fn) ((uint32_t)(((int64_t)(fn) + (as)->fn_delta + TRX_GSM_MAX_FN) % TRX_GSM_MAX_FN))
++#define TRX_FN_BTS_TO_P2(as, fn) ((uint32_t)(((int64_t)(fn) - (as)->fn_delta + 2 * (int64_t)TRX_GSM_MAX_FN) % TRX_GSM_MAX_FN))
++int app_fn_delta_sample(struct app_state *as, int idx, uint32_t fn);
++
  
+ #endif /* __TRX_APP_H__ */
 diff --git a/src/host/layer23/src/transceiver/l1ctl.c b/src/host/layer23/src/transceiver/l1ctl.c
-index 5bcabe3..da99988 100644
+index 5bcabe3..e9af802 100644
 --- a/src/host/layer23/src/transceiver/l1ctl.c
 +++ b/src/host/layer23/src/transceiver/l1ctl.c
-@@ -200,7 +200,7 @@ _l1ctl_rx_bts_burst_nb_ind(struct l1ctl_link *l1l, struct msgb *msg)
+@@ -21,7 +21,9 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <stdio.h>
+ #include <stdlib.h>
++#include <time.h>
+ #include <string.h>
+ 
+ #include <osmocom/core/select.h>
+@@ -147,6 +149,75 @@ l1ctl_tx_bts_mode(struct l1ctl_link *l1l, uint8_t enabled, uint8_t *type,
+ 	return l1l_send(l1l, msg);
+ }
+ 
++/* [2026-10-21] mesure de D = fn1 - fn2 (voir app.h). idx 0 : telephone 1, 1 : telephone 2. */
++static void
++_fn_delta_write(struct app_state *as)
++{
++	char tmp[256];
++	FILE *f;
++
++	if (!as->fn_delta_file)
++		return;
++	snprintf(tmp, sizeof(tmp), "%s.tmp", as->fn_delta_file);
++	f = fopen(tmp, "w");
++	if (!f)
++		return;
++	fprintf(f, "%d\n", as->fn_delta);
++	fclose(f);
++	rename(tmp, as->fn_delta_file);
++}
++
++int
++app_fn_delta_sample(struct app_state *as, int idx, uint32_t fn)
++{
++	struct timespec now;
++	int64_t d, el_ns, fn1;
++	unsigned i, best = 0, best_n = 0;
++
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	as->clk[idx].fn = fn;
++	as->clk[idx].t = now;
++	as->clk[idx].valid = 1;
++	if (idx != 1 || !as->clk[0].valid)
++		return 0;
++
++	/* fn du telephone 1 a cet instant : son dernier fn + les trames ecoulees depuis */
++	el_ns = (int64_t)(now.tv_sec - as->clk[0].t.tv_sec) * 1000000000LL + (now.tv_nsec - as->clk[0].t.tv_nsec);
++	if (el_ns < 0 || el_ns > 2000000000LL)
++		return 0;
++	fn1 = (int64_t)as->clk[0].fn + (el_ns + 2307692) / 4615385;
++	d = ((fn1 - (int64_t)fn) % TRX_GSM_MAX_FN + TRX_GSM_MAX_FN) % TRX_GSM_MAX_FN;
++	if (d > TRX_GSM_MAX_FN / 2)
++		d -= TRX_GSM_MAX_FN;
++	as->fn_samples[as->fn_n_samples++] = (int)d;
++	as->fn_n_total++;
++	if (as->fn_n_samples < (as->fn_delta_valid ? 64u : 16u))
++		return 0;
++
++	/* le mode des echantillons */
++	for (i = 0; i < as->fn_n_samples; i++) {
++		unsigned j, n = 0;
++		for (j = 0; j < as->fn_n_samples; j++)
++			if (as->fn_samples[j] == as->fn_samples[i])
++				n++;
++		if (n > best_n) { best_n = n; best = i; }
++	}
++	d = as->fn_samples[best];
++	as->fn_n_samples = 0;
++
++	if (!as->fn_delta_valid) {
++		as->fn_delta = (int)d; as->fn_delta_valid = 1;
++		LOGP(DL1C, LOGL_NOTICE, "Phone 2 frame offset: fn1 - fn2 = %d (%u/%u samples) -> written to %s\n",
++		     as->fn_delta, best_n, 16, as->fn_delta_file ? as->fn_delta_file : "(nowhere)");
++		_fn_delta_write(as);
++	} else if (d - as->fn_delta >= 2 || as->fn_delta - d >= 2) {
++		LOGP(DL1C, LOGL_NOTICE, "Phone 2 frame offset drifted: %d -> %d (%u/64 samples)\n", as->fn_delta, (int)d, best_n);
++		as->fn_delta = (int)d;
++		_fn_delta_write(as);
++	}
++	return 0;
++}
++
+ int
+ l1ctl_tx_bts_burst_req(struct l1ctl_link *l1l,
+                        uint32_t fn, uint8_t tn, struct burst_data *burst)
+@@ -157,6 +228,13 @@ l1ctl_tx_bts_burst_req(struct l1ctl_link *l1l,
+ 	if (!l1l->sync)
+ 		return -EIO;
+ 
++	/* [2026-10-21] telephone 2 : dans SA numerotation de trames (fn - D) ; rien tant que D est inconnu */
++	if (l1l == &l1l->as->l1l[1]) {
++		if (!l1l->as->fn_delta_valid)
++			return 0;
++		fn = TRX_FN_BTS_TO_P2(l1l->as, fn);
++	}
++
+ 	msg = _l1ctl_alloc(L1CTL_BTS_BURST_REQ);
+ 	if (!msg)
+ 		return -1;
+@@ -184,7 +262,7 @@ _l1ctl_rx_bts_burst_nb_ind(struct l1ctl_link *l1l, struct msgb *msg)
+ {
+ 	struct l1ctl_bts_burst_nb_ind *bi;
+ 	uint32_t fn;
+-	int rc, i;
++	int rc = 0, i;
+ 	sbit_t data[148], steal[2];
+ 	float toa;
+ 	int8_t rssi;
+@@ -200,7 +278,13 @@ _l1ctl_rx_bts_burst_nb_ind(struct l1ctl_link *l1l, struct msgb *msg)
  
  	fn = ntohl(bi->fn);
  
 -	LOGP(DL1C, LOGL_INFO, "Normal Burst Indication (fn=%d)\n", fn);
++	/* [2026-10-21] telephone 2 : vers la numerotation de la BTS (fn + D) */
++	if (l1l == &l1l->as->l1l[1]) {
++		if (!l1l->as->fn_delta_valid) { rc = 0; goto exit; }
++		fn = TRX_FN_P2_TO_BTS(l1l->as, fn);
++	}
++
 +	LOGP(DL1C, LOGL_INFO, "Normal Burst Indication (fn=%d tn=%d)\n", fn, bi->tn);
  
  	toa = bi->toa * 1.0F;
  
-@@ -380,6 +380,16 @@ l1ctl_recv(void *data, struct msgb *msg)
+@@ -244,6 +328,10 @@ _l1ctl_rx_bts_burst_ab_ind(struct l1ctl_link *l1l, struct msgb *msg)
+ 	}
+ 
+ 	fn = ntohl(bi->fn);
++	if (l1l == &l1l->as->l1l[1]) {
++		if (!l1l->as->fn_delta_valid) { rc = 0; goto exit; }
++		fn = TRX_FN_P2_TO_BTS(l1l->as, fn);
++	}
+ 
+ 	rc = gsm_ab_ind_process(l1l->as, bi, data, &toa);
+ 	if (rc < 0)
+@@ -265,7 +353,7 @@ _l1ctl_rx_data_ind(struct l1ctl_link *l1l, struct msgb *msg)
+ {
+ 	struct l1ctl_info_dl *dl;
+ 	struct l1ctl_data_ind *di;
+-	int rc;
++	int rc = 0;
+ 
+ 	dl = (struct l1ctl_info_dl *) msg->l1h;
+ 	msg->l2h = dl->payload;
+@@ -299,6 +387,8 @@ _l1ctl_rx_data_ind(struct l1ctl_link *l1l, struct msgb *msg)
+ 	/* forward clock of fist l1ctl_link instance only */
+ 	if (l1l == &l1l->as->l1l[0])
+ 		rc = trx_clk_ind(l1l->trx, ntohl(dl->frame_nr));
++	/* [2026-10-21] et la mesure du decalage de trames entre les deux telephones */
++	app_fn_delta_sample(l1l->as, l1l == &l1l->as->l1l[0] ? 0 : 1, ntohl(dl->frame_nr));
+ 
+ exit:
+ 	msgb_free(msg);
+@@ -380,6 +470,16 @@ l1ctl_recv(void *data, struct msgb *msg)
  
  	case L1CTL_RESET_IND:
  	case L1CTL_RESET_CONF:
@@ -41,10 +210,18 @@ index 5bcabe3..da99988 100644
  		l1l->sync = 0;
  		l1ctl_tx_fbsb_req(l1l, l1l->as->arfcn_sync, L1CTL_FBSB_F_FB01SB, 100, 0, CCCH_MODE_NONE);
 diff --git a/src/host/layer23/src/transceiver/main.c b/src/host/layer23/src/transceiver/main.c
-index a895ffc..2e02273 100644
+index a895ffc..86c8c5c 100644
 --- a/src/host/layer23/src/transceiver/main.c
 +++ b/src/host/layer23/src/transceiver/main.c
-@@ -46,6 +46,23 @@ static int arfcn_sync = 0;
+@@ -22,6 +22,7 @@
+  */
+ 
+ #include <stdlib.h>
++#include <unistd.h>
+ #include <string.h>
+ #include <getopt.h>
+ #include <sched.h>
+@@ -46,6 +47,25 @@ static int arfcn_sync = 0;
  static int daemonize = 0;
  static int rt_prio = -1;
  static int second_phone = 0;
@@ -62,13 +239,15 @@ index a895ffc..2e02273 100644
 +static int tx_mask_opt = -1;
 +/* [2026-10-20] second telephone (TS1, --second-phone) : son socket L1CTL (banc QEMU : /tmp/osmocom_l2_3) */
 +static const char *l1ctl2_path = "/tmp/osmocom_l2.2";
++/* [2026-10-21] ou publier fn1 - fn2 du telephone 2 (lu par pont/air.py) */
++static const char *fn_delta_file = "/tmp/osmocom_fn_delta_2";
 +static const char *l1ctl_path = "/tmp/osmocom_l2";
 +static int base_port = 5700;
 +static int bsic_opt = -1;
  
  static void print_help(char *argv[])
  {
-@@ -61,6 +78,13 @@ static void print_help(char *argv[])
+@@ -61,6 +81,14 @@ static void print_help(char *argv[])
  		"  -p   --arfcn-sync-pcs   The ARFCN above is PCS\n"
  		"  -2   --second-phone     Use second phone for TS 1\n"
  		"  -r	--realtime PRIO	   Set realtime scheduler with given prio\n"
@@ -77,12 +256,13 @@ index a895ffc..2e02273 100644
 +		"  -M   --tx-mask MASK     TX timeslot mask of phone 1 (default 0xe3 = TS 5,6,7,0,1 : tx_start 5 serves TS0)\n"
 +		"  -l   --l1ctl PATH       L1CTL socket of phone 1 (default /tmp/osmocom_l2)\n"
 +		"  -L   --l1ctl2 PATH      L1CTL socket of phone 2, TS1 (default /tmp/osmocom_l2.2, with -2)\n"
++		"  -F   --fn-delta-file P  where to publish fn1 - fn2 of phone 2 (default /tmp/osmocom_fn_delta_2, with -2)\n"
 +		"  -P   --base-port PORT   TRX UDP base port (default 5700)\n"
 +		"  -b   --bsic BSIC        BSIC of the cell (osmo-bts-trx sends SETTSC, not SETBSIC: NCC<<3|BCC)\n"
  		);
  }
  
-@@ -78,9 +102,17 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+@@ -78,9 +106,18 @@ static void handle_options(int argc, char **argv, struct app_state *as)
  			{ "arfcn-sync-pcs", 0, 0, 'p' },
  			{ "second-phone", 0, 0, '2' },
  			{ "realtime", 1, 0, 'r' },
@@ -91,17 +271,18 @@ index a895ffc..2e02273 100644
 +			{ "tx-mask", 1, 0, 'M' },
 +			{ "l1ctl", 1, 0, 'l' },
 +			{ "l1ctl2", 1, 0, 'L' },
++			{ "fn-delta-file", 1, 0, 'F' },
 +			{ "base-port", 1, 0, 'P' },
 +			{ "bsic", 1, 0, 'b' },
 +			{ NULL, 0, 0, 0 },
  		};
  
 -		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:",
-+		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:nm:M:l:L:P:b:",
++		c = getopt_long(argc, argv, "hd:e:Dsa:p2r:nm:M:l:L:F:P:b:",
  			long_options, &option_idx);
  
  		if (c == -1)
-@@ -116,6 +148,27 @@ static void handle_options(int argc, char **argv, struct app_state *as)
+@@ -116,6 +153,30 @@ static void handle_options(int argc, char **argv, struct app_state *as)
  		case 'r':
  			rt_prio = atoi(optarg);
  			break;
@@ -120,6 +301,9 @@ index a895ffc..2e02273 100644
 +		case 'L':
 +			l1ctl2_path = optarg;
 +			break;
++		case 'F':
++			fn_delta_file = optarg;
++			break;
 +		case 'P':
 +			base_port = atoi(optarg);
 +			break;
@@ -129,7 +313,7 @@ index a895ffc..2e02273 100644
  		default:
  			fprintf(stderr, "Unknow option %s\n", optarg);
  			exit(0);
-@@ -148,10 +201,11 @@ int main(int argc, char *argv[])
+@@ -148,10 +209,14 @@ int main(int argc, char *argv[])
  		return -1;
  	}
  	handle_options(argc, argv, as);
@@ -140,10 +324,13 @@ index a895ffc..2e02273 100644
  		exit(0);
  	}
 +	as->no_sync = no_sync;
++	as->fn_delta_file = second_phone ? fn_delta_file : NULL;
++	if (second_phone)
++		unlink(fn_delta_file);	/* pas de D perime pour l'air */
  
  	/* App state init */
  	printf("%d\n", as->arfcn_sync);
-@@ -168,34 +222,55 @@ int main(int argc, char *argv[])
+@@ -168,34 +233,55 @@ int main(int argc, char *argv[])
  		exit(-1);
  
  	/* TRX interface with OpenBTS */

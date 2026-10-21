@@ -3,7 +3,7 @@
 #   banc-trx     c54x_exe + qosmo (trx.highram.elf) + osmocon + transceiver  : le Calypso est le
 #                TRX de la BTS#0 (TRXD 5700-5702) ; pas de pont, il tiendrait les memes ports
 #   banc-mobile  INSTANCE 2 : c54x_exe + qosmo (layer1) + osmocon + mobile, et l'AIR vers l'instance 1
-#                (banc-mobile-stop/-status/-logs pour cette instance ; c123-2 pour son ecran)
+#                (banc-mobile-stop/-status/-logs pour cette instance ; c123-1 pour son ecran)
 #   banc-mobile-seul  l'ancien montage : mobile + pont vers osmo-bts-trx, instance 1
 #   banc-rssi    c54x_exe + qosmo (rssi.highram.elf) + osmocon : l'appli RSSI seule, ecran et
 #                clavier emules ; la fenetre : c123
@@ -21,9 +21,19 @@ alias banc-mobile-status='INSTANCE=2 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --st
 alias banc-mobile-logs='INSTANCE=2 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --logs'
 # l'ancien montage a un seul Calypso (mobile + pont vers osmo-bts-trx), instance 1
 alias banc-mobile-seul='MODE=dsp PONT=1 bash /opt/GSM/c54x_exe/run.sh'
-alias banc-rssi='MODE=dsp FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh'
+# [2026-10-21] rssi sur l'INSTANCE 4 : l'instance 1 est le TRX de la BTS (--ts 2 : 1 = TS0, 3 = TS1, 2 = mobile) ;
+# banc-rssi-stop pour l'arreter ; c123-3 pour son ecran. Reprend l'environnement du profil hybrid de l'instance 1 si elle tourne.
+unalias banc-rssi 2>/dev/null   # l'ancien alias (meme nom) s'expanserait a la definition de la fonction
+function banc-rssi { local e; e=$(tr '\0' '\n' < /proc/$(cat /tmp/c54x-pont/dsp.pid 2>/dev/null)/environ 2>/dev/null | grep -E '^CALYPSO_(C54X|RHEA|BSP_STREAM|BSP_ATTENTE|PROFILE|MAC|NORM|A5|VSP|FORK|PONT|IQDUMP)[A-Z_0-9]*=' | tr '\n' ' '); env $e INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh "$@"; }
+alias banc-rssi-stop='INSTANCE=4 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-stop='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-status='MODE=dsp OSMO_TRX=1 bash /opt/GSM/c54x_exe/run.sh --status'
 alias banc-logs='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --logs'
-alias c123='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py'
-alias c123-2='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --lcd /dev/shm/calypso2/calypso_lcd --keys /tmp/calypso_keys2.sock'
+# [2026-10-21] numerotation demandee par le banc : c123 = TRX (instance 1, TS0), c123-1 = layer1 (le mobile,
+# instance 2), c123-2 = trx2 (telephone 2 du TRX, TS1, instance 3), c123-3 = rssi (instance 4, banc-rssi).
+alias c123='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --instance 1'
+alias c123-1='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --instance 2'
+alias c123-2='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --instance 3'
+alias c123-3='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --instance 4'
+alias c123-mobile='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py'   # la premiere instance vivante qui n'est pas un TRX
+alias c123-tous='/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py --toutes 1,2,3,4'   # + celles qui apparaissent ensuite
