@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Réglages Osmocom</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Réglages Osmocom</h1>
+  <nav>
+    <button data-o="reseau" class="actif">globals.conf</button>
+    <button data-o="instances">Instances Calypso</button>
+    <button data-o="demons">Démons (VTY)</button>
+    <button data-o="fichiers">Fichiers</button>
+    <button data-o="etat">État</button>
+  </nav>
+  <span id="msg"></span>
+</header>
+
+<main>
+  <!-- globals.conf (reseau + lanceur), sur le modele de globals.conf.example -->
+  <section id="reseau" class="onglet actif">
+    <div class="barre">
+      <button class="b" id="g-enr">Enregistrer globals.conf</button>
+      <input id="g-filtre" placeholder="filtrer (ex. ARFCN, SAP, WAN)">
+      <label class="case"><input type="checkbox" id="g-modifiees"> seulement les valeurs posées</label>
+      <span class="aide">Vide = défaut du script (grisé). Pris en compte au prochain run ; sauvegarde .bak horodatée.</span>
+    </div>
+    <div id="g-form"></div>
+  </section>
+
+  <!-- un fichier par instance Calypso (c54x_exe/run.sh) : instances/instance-N.env -->
+  <section id="instances" class="onglet">
+    <div class="barre">
+      <select id="i-sel"></select>
+      <button class="b" id="i-enr">Enregistrer l'instance</button>
+      <input id="i-filtre" placeholder="filtrer (ex. CALYPSO_BSP, INSNS, AIR)">
+      <label class="case"><input type="checkbox" id="i-modifiees"> seulement les valeurs posées</label>
+      <span class="aide">Réglages du banc DSP de <em>cette</em> instance (pas globaux) : la ligne de commande garde la priorité, puis ce fichier, puis le défaut de run.sh.</span>
+    </div>
+    <div id="i-form"></div>
+  </section>
+
+  <!-- running-config de chaque demon, par la VTY -->
+  <section id="demons" class="onglet">
+    <div class="barre">
+      <select id="d-sel"></select>
+      <button class="b2" id="d-ref">↻ Recharger</button>
+      <button class="b2" id="d-scan">Rechercher les démons</button>
+      <input id="filtre" placeholder="filtrer (ex. arfcn, bts 0)">
+      <button class="b2" id="d-write" title="écrit le fichier de config du démon">write memory</button>
+    </div>
+    <div class="flex2">
+      <div class="carte"><h2>running-config — clic pour modifier, Entrée pour appliquer</h2><div id="d-cfg" class="cfg"></div></div>
+      <div>
+        <div class="carte">
+          <h2>Console VTY</h2>
+          <textarea id="c-in" rows="5" placeholder="show bts 0&#10;configure terminal&#10; network&#10;  ..."></textarea>
+          <div class="barre serre">
+            <button class="b" id="c-go">Exécuter</button>
+            <button class="b2" data-c="show running-config">running-config</button>
+            <button class="b2" data-c="show rate-counters">rate-counters</button>
+            <button class="b2" data-c="show bts 0">bts 0</button>
+            <button class="b2" data-c="show subscriber cache">abonnés</button>
+            <button class="b2" data-c="show talloc-context application brief">talloc</button>
+          </div>
+          <pre id="c-out"></pre>
+        </div>
+        <div class="carte"><h2>Journal des modifications</h2><pre id="d-jrn"></pre></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- edition brute des fichiers de config -->
+  <section id="fichiers" class="onglet">
+    <div class="barre">
+      <select id="f-sel"></select>
+      <button class="b" id="f-enr">Enregistrer</button>
+      <span class="aide">Sauvegarde .bak horodatée ; effet au prochain démarrage du démon.</span>
+    </div>
+    <textarea id="f-txt" rows="34" spellcheck="false"></textarea>
+  </section>
+
+  <section id="etat" class="onglet">
+    <div class="carte"><h2>Processus</h2><table id="e-ps"></table></div>
+    <div class="carte"><h2>VTY détectées</h2><table id="e-vty"></table></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

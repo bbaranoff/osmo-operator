@@ -295,6 +295,9 @@ def main():
     ap.add_argument("--c-tn", type=int, default=0, help="tn de l'en-tete TRXD des bursts du mobile envoyes au telephone 2 (0 : son intervalle principal)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--tn", type=int, default=0, help="timeslot annonce dans l'en-tete TRXD des bursts de A (defaut 0)")
+    ap.add_argument("--b-fn-delta", type=int, default=int(os.environ.get("AIR_B_FN_DELTA", "0") or 0),
+                    help="[21/10] trames ajoutees au fn des bursts du mobile B (defaut 0 : le fn publie par c54x_exe est "
+                         "le bon ; l'ecart de 2 vu le 21/10 venait d'une comparaison au RA_R de la L1 TI). Env AIR_B_FN_DELTA")
     ap.add_argument("--sans", default="", help="types a ne pas relayer, ex. « ?,RACH »")
     ap.add_argument("--periode", type=float, default=0.002, help="periode de scrutation (s)")
     ap.add_argument("--stats", type=float, default=5.0, help="periode des comptes (s)")
@@ -317,7 +320,8 @@ def main():
           (args.a_ring, args.b_port, args.b_ring, args.a_port, args.tn,
            " ; C %s -> udp %d (B, tn 1) ; B -> udp %s (C) sur TCH" % (args.c_ring, args.b_port, args.c_port) if c_ring else "",
            " ; annonce TCH : %s" % args.tch_cfg if args.tch_cfg else "",
-           " ; sans %s" % args.sans if sans else ""), flush=True)
+           " ; sans %s" % args.sans if sans else "")
+          + (" ; fn de B %+d" % args.b_fn_delta if args.b_fn_delta else ""), flush=True)
     prochain = time.monotonic() + args.stats
     while True:
         bouge = False
@@ -344,7 +348,7 @@ def main():
             bouge = True
             if typ in sans or offset == 0xff and typ == 0:
                 continue
-            fnc = b_ring.fn_continu(fn)
+            fnc = (b_ring.fn_continu(fn) + args.b_fn_delta) % 2715648
             tn_m = (src >> 4) & 7                      # le TS sur lequel le mobile a emis (montant_tn_dedie)
             if typ == 1:                                   # RACH : le mobile est (re)venu sur le TS0
                 if dedie.tn is not None:

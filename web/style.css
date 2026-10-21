@@ -1,0 +1,67 @@
+/* Reglages Osmocom - web/index.html */
+:root {
+  --fond: #f6f7f9; --carte: #fff; --texte: #1d2330; --doux: #667085; --bord: #d9dde5;
+  --accent: #2f6fde; --ok: #1f8a4c; --err: #c0362c; --modif: #fff4d6; --pose: #e8f1ff; --code: #f0f2f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fond: #14171c; --carte: #1c2027; --texte: #e3e6eb; --doux: #8d96a5; --bord: #2e3440;
+    --accent: #6b9cff; --ok: #4cc27e; --err: #ff6b5e; --modif: #3a3220; --pose: #1d2a40; --code: #232833;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fond); color: var(--texte); font: 14px/1.45 system-ui, sans-serif; }
+
+header {
+  display: flex; gap: 4px; align-items: center; flex-wrap: wrap; padding: 10px 16px;
+  border-bottom: 1px solid var(--bord); background: var(--carte); position: sticky; top: 0; z-index: 2;
+}
+header h1 { font-size: 15px; margin: 0 16px 0 0; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--doux); cursor: pointer; font: inherit; }
+nav button.actif { background: var(--code); color: var(--texte); font-weight: 600; }
+#msg { margin-left: auto; font-size: 13px; }
+.ok { color: var(--ok); } .err { color: var(--err); }
+
+main { padding: 16px; max-width: 1300px; margin: auto; }
+.onglet { display: none; } .onglet.actif { display: block; }
+.carte { background: var(--carte); border: 1px solid var(--bord); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--doux); margin: 0 0 10px; }
+.aide { color: var(--doux); font-size: 13px; }
+
+.barre { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.barre.serre { margin: 8px 0 0; }
+.barre select { width: auto; min-width: 240px; }
+#g-filtre, #filtre { max-width: 300px; }
+.case { display: inline-flex; gap: 6px; align-items: center; font: 13px system-ui; color: var(--doux); }
+.case input { width: auto; }
+
+/* formulaire globals.conf */
+.grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px 18px; }
+.champ label { display: block; font: 600 12.5px ui-monospace, monospace; }
+.champ label small { display: block; font: 12px system-ui; color: var(--doux); font-weight: 400; }
+.champ.pose input { background: var(--pose); }
+input, select, textarea {
+  font: 13px ui-monospace, monospace; background: var(--fond); color: var(--texte);
+  border: 1px solid var(--bord); border-radius: 5px; padding: 5px 7px; width: 100%;
+}
+input::placeholder { color: var(--doux); opacity: .7; }
+input.modifie, textarea.modifie { background: var(--modif) !important; }
+
+button.b { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+button.b2 { background: var(--code); color: var(--texte); border: 1px solid var(--bord); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; }
+
+/* running-config */
+.cfg { font: 13px ui-monospace, monospace; }
+.cfg .l { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.cfg .l .t { flex: 1; padding: 2px 6px; border: 1px solid transparent; background: none; width: auto; }
+.cfg .l .t:hover { border-color: var(--bord); }
+.cfg .l.noeud > .t { font-weight: 700; color: var(--accent); }
+.cfg .l button { visibility: hidden; }
+.cfg .l:hover button, .cfg .l .t.modifie ~ button { visibility: visible; }
+
+pre { background: var(--code); padding: 10px; border-radius: 6px; overflow: auto; max-height: 420px; margin: 8px 0 0; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+td, th { border-bottom: 1px solid var(--bord); padding: 4px 8px; text-align: left; vertical-align: top; }
+td code { font-size: 12px; word-break: break-all; }
+.flex2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 800px) { .flex2 { grid-template-columns: 1fr; } main { padding: 16px 12px; } }

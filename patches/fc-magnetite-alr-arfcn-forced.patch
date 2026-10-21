@@ -1,0 +1,235 @@
+--- a/src/aci2/alr/alr_cs.c
++++ b/src/aci2/alr/alr_cs.c
+@@ -44,6 +44,11 @@
+ #include "alr_em.h"
+ #include "cl_list.h"
+ 
++/* [2026-10-21] banc osmo-operator : ARFCN force par defaut (voir cs_rxlev_ind) */
++#ifndef ARFCN_FORCED
++#define ARFCN_FORCED 1
++#endif
++
+ #if defined (_SIMULATION_)
+ #define TRACING
+ #endif
+@@ -828,6 +833,32 @@
+         /* Sort the channels based on their RxLev */
+         cs_add_and_sort_channels ();
+ 
++#if ARFCN_FORCED >= 0
++        /* [2026-10-21] banc d'emulation osmo-operator : seule la cellule de l'ARFCN_FORCED est presentee
++         * a RR (les autres porteuses sont retirees de la liste triee ; ajoutee au niveau max si le
++         * balayage ne l'a pas vue). -DARFCN_FORCED=<n> pour une autre, -1 pour le comportement normal. */
++        {
++          U16 k, n = 0;
++          for (k = 0; k < mph_power_cnf->num_of_chan; k++)
++          {
++            if ((mph_power_cnf->arfcn[k] & 0x03FF) EQ ARFCN_FORCED)
++            {
++              mph_power_cnf->arfcn[n]  = mph_power_cnf->arfcn[k];
++              mph_power_cnf->rx_lev[n] = mph_power_cnf->rx_lev[k];
++              n++;
++            }
++          }
++          if (n EQ 0)
++          {
++            mph_power_cnf->arfcn[0]  = ARFCN_FORCED;
++            mph_power_cnf->rx_lev[0] = 63;
++            n = 1;
++          }
++          mph_power_cnf->num_of_chan = (U8)n;
++          TRACE_EVENT_P2 ("ARFCN_FORCED=%u : %u porteuse(s) presentee(s) a RR", ARFCN_FORCED, n);
++        }
++#endif
++
+         if(!IS_EXT_MEAS_RUNNING)
+         {
+           /* Free MPH_POWER_REQ buffer */
+--- a/src/ui3/bmi/mmiDummy.c
++++ b/src/ui3/bmi/mmiDummy.c
+@@ -154,12 +154,34 @@
+  *
+  *******************************************************************************************/
+ 
++/* [2026-10-21] banc osmo-operator : un handle de fenetre perime (petite valeur, fenetre detruite) faisait
++ * lire hdr->data en flash a ~0 (vecteur 0xEA003FFD) puis faute de donnees (DFAR 0xEA003FFD, LR dans
++ * mmi_send_event) ; le gestionnaire d'abort bouclait et tout le firmware gelait (ATI muet). On ne
++ * suit que des pointeurs en RAM (interne 0x800000-0x83FFFF, externe 0x1000000-0x17FFFFF). */
++#define MMI_EN_RAM(p) ((((ULONG)(p)) >= 0x00800000UL && ((ULONG)(p)) < 0x00840000UL) || \
++                       (((ULONG)(p)) >= 0x01000000UL && ((ULONG)(p)) < 0x01800000UL))
++
+ void mmi_send_event (T_MFW_HND win, USHORT event, USHORT value, void * parameter)
+ {
+ 
+ 	if (win){
+-		T_MFW_WIN     * win_data  = ((T_MFW_HDR *)win)->data;
+-		  T_MMI_CONTROL * control  = (T_MMI_CONTROL *)win_data->user;
++		T_MFW_WIN     * win_data;
++		T_MMI_CONTROL * control;
++
++		if (!MMI_EN_RAM(win)) {
++			TRACE_EVENT_P2("mmi_send_event: handle invalide 0x%08x (evt %d) ignore", (ULONG)win, event);
++			return;
++		}
++		win_data = ((T_MFW_HDR *)win)->data;
++		if (!MMI_EN_RAM(win_data)) {
++			TRACE_EVENT_P2("mmi_send_event: win_data invalide 0x%08x (evt %d) ignore", (ULONG)win_data, event);
++			return;
++		}
++		control = (T_MMI_CONTROL *)win_data->user;
++		if (!MMI_EN_RAM(control)) {
++			TRACE_EVENT_P2("mmi_send_event: control invalide 0x%08x (evt %d) ignore", (ULONG)control, event);
++			return;
++		}
+ 
+ 		if (control->dialog NEQ 0)
+ 		    (control->dialog) (win, event, value, parameter);
+--- a/src/ui3/mfw/mfw_nm.c
++++ b/src/ui3/mfw/mfw_nm.c
+@@ -1259,6 +1259,40 @@
+ }
+ 
+ 
++/* [2026-10-21] banc osmo-operator : enregistrement robuste aux touches.
++ * - BANC_REG_AUTO (defaut 1) : nm_registration() part toujours en automatique. Le mode manuel
++ *   memorise en FFS (/mmi/mmidata) sans operateur connu (LOCI vierge) laissait le MM sans
++ *   recherche (+CREG 0) et le MMI affichait "Network Forbidden".
++ * - nm_nrg_robuste() : si l'ACI repond AT_BUSY (une commande MM en cours, liste PLMN lancee au
++ *   clavier, +COPS d'un autre canal...), on l'abandonne et on relance une fois. */
++#ifndef BANC_REG_AUTO
++#define BANC_REG_AUTO 1
++#endif
++static U8 nm_reg_attente;   /* nm_registration() refusee faute de SIM active : a relancer */
++void nm_reg_en_attente (void)
++{
++    if (!nm_reg_attente)
++        return;
++    nm_reg_attente = 0;
++    TRACE_EVENT("nm_reg_en_attente: SIM active, enregistrement relance");
++    nm_registration(NM_AUTOMATIC, 0, 0);
++}
++
++static T_ACI_RETURN nm_nrg_robuste (T_ACI_NRG_RGMD rm, char *opr)
++{
++    T_ACI_RETURN r = sAT_PercentNRG(CMD_SRC_LCL, rm, NRG_SVMD_Full, NRG_FRMT_Numeric, opr);
++    if (r == AT_BUSY)
++    {
++        TRACE_EVENT("nm_nrg_robuste: AT_BUSY, abandon COPS/NRG et relance");
++        sAT_Abort(CMD_SRC_LCL, AT_CMD_COPS);
++        sAT_Abort(CMD_SRC_LCL, AT_CMD_NRG);
++        r = sAT_PercentNRG(CMD_SRC_LCL, rm, NRG_SVMD_Full, NRG_FRMT_Numeric, opr);
++    }
++    if (r != AT_EXCT && r != AT_CMPL)
++        TRACE_EVENT_P1("nm_nrg_robuste: sAT_PercentNRG -> %d", r);
++    return r;
++}
++
+ /*
+ +--------------------------------------------------------------------+
+ | PROJECT : MMI-Framework (8417)        MODULE  : MFW_NM             |
+@@ -1296,7 +1330,19 @@
+       return IMEI_NOT_VALID;
+ 
+     if (!limited && sim_stat != SIM_ACTIVE)
++    {
++      /* [2026-10-21] banc : relancee par nm_reg_en_attente() quand la SIM devient active */
++      nm_reg_attente = 1;
++      TRACE_EVENT("nm_registration: SIM pas encore active, enregistrement mis en attente");
+       return SIM_NOT_ACTIVE;
++    }
++    nm_reg_attente = 0;
++
++#if BANC_REG_AUTO
++    if (mode == NM_MANUAL)
++        TRACE_EVENT("nm_registration: mode manuel memorise -> automatique (BANC_REG_AUTO)");
++    mode = NM_AUTOMATIC;
++#endif
+ 
+ 
+     if (mode == NM_MANUAL)
+@@ -1310,22 +1356,14 @@
+                           to the last manual selected HPLMN cell before the power cycle, and this does not happen; 
+                           instead this, the sample shows up the available networks list
+            Fix         :  call to nm_avail_plmn_list() is changed to call to sAT_PercentNRG() */        
+-     	if (sAT_PercentNRG(CMD_SRC_LCL,
+-                           NRG_RGMD_Manual,
+-                           NRG_SVMD_Full,
+-                           NRG_FRMT_Numeric,
+-                           NULL) != AT_EXCT)
++        if (nm_nrg_robuste(NRG_RGMD_Manual, NULL) != AT_EXCT)
+         {
+             TRACE_ERROR("sAT_PercentNRG error");
+         }
+     }
+     else
+     {
+-    	if (sAT_PercentNRG(CMD_SRC_LCL,
+-                           NRG_RGMD_Auto,
+-                           NRG_SVMD_Full,
+-                           NRG_FRMT_Numeric,
+-                           NULL) != AT_EXCT)
++        if (nm_nrg_robuste(NRG_RGMD_Auto, NULL) != AT_EXCT)
+         {
+             TRACE_ERROR("sAT_PercentNRG error");
+         }
+@@ -1856,12 +1894,9 @@
+     T_ACI_RETURN result;
+     TRACE_FUNCTION("nm_select_plmn()");
+ 
+-   result = sAT_PercentNRG(CMD_SRC_LCL,
+-                       NRG_RGMD_Manual,
+-                       NRG_SVMD_Full,
+-                       NRG_FRMT_Numeric,
+-                       (char *) network);
+-   result = AT_FAIL;
++   /* [2026-10-21] banc : le "result = AT_FAIL;" d'origine qui suivait cet appel faisait
++    * tracer une erreur (et tester un qAT_ErrDesc perime) a chaque choix de reseau au clavier. */
++   result = nm_nrg_robuste(NRG_RGMD_Manual, (char *) network);
+     if (result != AT_EXCT)
+     {
+         TRACE_ERROR("sAT_PercentNRG error");
+--- a/src/ui3/mfw/mfw_sim.c
++++ b/src/ui3/mfw/mfw_sim.c
+@@ -656,8 +656,21 @@
+ 
+ */
+ 
++/* [2026-10-21] banc osmo-operator : course au boot. nm_registration() appelee avant que la SIM
++ * soit active rendait SIM_NOT_ACTIVE sans rien lancer, et personne ne la rappelait (+CREG 0,0,
++ * pas de RACH, "Network Forbidden"). Chaque changement d etat SIM passe par sim_signal() : on
++ * y relance l enregistrement en attente (mfw_nm.c, nm_reg_en_attente) quand la SIM devient active. */
++static void sim_signal_mmi (MfwEvt event, void *para);
++EXTERN void nm_reg_en_attente (void);
+ void sim_signal (MfwEvt event, void *para)
+ {
++    sim_signal_mmi(event, para);
++    if (sim_stat == SIM_ACTIVE)
++        nm_reg_en_attente();
++}
++
++static void sim_signal_mmi (MfwEvt event, void *para)
++{
+  UBYTE temp = dspl_Enable(0);
+     TRACE_FUNCTION ("sim_signal()");
+ 
+--- a/src/cs/layer1/dyn_dwl_cfile/l1_dyn_dwl_async.c
++++ b/src/cs/layer1/dyn_dwl_cfile/l1_dyn_dwl_async.c
+@@ -182,6 +182,18 @@
+   UWORD16 temp_patch_id[MAX_NUM_OF_PATCH_IDS];
+   BOOL return_flag = FALSE;
+ 
++  /* [2026-10-21] banc osmo-operator (BANC_SANS_DYN_DWNLD, defaut 1) : aucun telechargement dynamique. Le DSP
++   * emule n a pas le patch TI qui sert ce protocole : les pointeurs d_api_dwl_* du NDB etaient faux et la copie
++   * du patch (l1_dyn_dwl_apihisr.c) ecrasait la table des vecteurs ARM a 0x0 a l entree en dedie (D_DWL_C puis
++   * abort en boucle). Sans patch charge (DWNLD 0) il n y a rien a completer. L1_DYN_DSP_DWNLD 0 ne compile pas
++   * (variante audio AMR sans en-tetes). */
++  #ifndef BANC_SANS_DYN_DWNLD
++  #define BANC_SANS_DYN_DWNLD 1
++  #endif
++  #if BANC_SANS_DYN_DWNLD
++  return FALSE;
++  #endif
++
+   // Primitive is processed only if it triggers a dynamic download or there is a delay
+   if(delay_flag == TRUE || l1_does_the_incoming_primitive_trigger_dynamic_dwnld(SignalCode, FALSE) == TRUE)
+   {

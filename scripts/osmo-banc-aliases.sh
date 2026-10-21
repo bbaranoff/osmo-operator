@@ -21,10 +21,11 @@ alias banc-mobile-status='INSTANCE=2 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --st
 alias banc-mobile-logs='INSTANCE=2 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --logs'
 # l'ancien montage a un seul Calypso (mobile + pont vers osmo-bts-trx), instance 1
 alias banc-mobile-seul='MODE=dsp PONT=1 bash /opt/GSM/c54x_exe/run.sh'
-# [2026-10-21] rssi sur l'INSTANCE 4 : l'instance 1 est le TRX de la BTS (--ts 2 : 1 = TS0, 3 = TS1, 2 = mobile) ;
-# banc-rssi-stop pour l'arreter ; c123-3 pour son ecran. Reprend l'environnement du profil hybrid de l'instance 1 si elle tourne.
+# [2026-10-21] rssi sur l'INSTANCE 4, SEPAREE du reste du banc : ni environnement copie de l'instance 1
+# (le TRX), ni arret par banc-stop / start-native --stop (banc_dsp_arreter_instances l'epargne).
+# banc-rssi-stop pour l'arreter seul ; c123-3 pour son ecran.
 unalias banc-rssi 2>/dev/null   # l'ancien alias (meme nom) s'expanserait a la definition de la fonction
-function banc-rssi { local e; e=$(tr '\0' '\n' < /proc/$(cat /tmp/c54x-pont/dsp.pid 2>/dev/null)/environ 2>/dev/null | grep -E '^CALYPSO_(C54X|RHEA|BSP_STREAM|BSP_ATTENTE|PROFILE|MAC|NORM|A5|VSP|FORK|PONT|IQDUMP)[A-Z_0-9]*=' | tr '\n' ' '); env $e INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh "$@"; }
+function banc-rssi { INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh "$@"; }
 alias banc-rssi-stop='INSTANCE=4 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-stop='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-status='MODE=dsp OSMO_TRX=1 bash /opt/GSM/c54x_exe/run.sh --status'

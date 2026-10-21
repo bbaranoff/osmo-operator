@@ -58,6 +58,12 @@ UL_RAW_DECAL = int(os.environ.get("PONT_UL_RAW_DECAL", "0"))
 # pas la parole : RACH et SDCCH/SACCH par la ROM, le TCH entier (FACCH, SACCH/T, parole) par l'hote.
 # PONT_UL_RAW_TCH=1 : tout par la ROM (voix montante coupee).
 UL_RAW_TCH = os.environ.get("PONT_UL_RAW_TCH", "0") == "1"
+# [2026-10-21] Magnetite (firmware TI) : la ROM n'emet pas ses bursts par le script TSP que lit calypso_tx_rom,
+# sauf le RACH que c54x_exe y publie lui-meme (tx_rach_vers_air). Le SABM et la SACCH, captures dans a_cu par
+# montant.c (calypso_sdcch_ul), partaient au puits (« DL: >N200 of SABM »). PONT_UL_RAW_DCCH_HOTE=1 : SDCCH et
+# SACCH codes par l'hote et envoyes a la BTS, le reste du tuyau ROM inchange.
+UL_RAW_DCCH_HOTE = os.environ.get("PONT_UL_RAW_DCCH_HOTE", "0") == "1"
+UL_TN_DEFAUT = int(os.environ["PONT_UL_TN_DEFAUT"]) if os.environ.get("PONT_UL_TN_DEFAUT", "") != "" else None
 
 
 class RomTxRing:
@@ -213,7 +219,7 @@ class UplinkDsp(Uplink):
             return None
         self.rom_attente = None
         self.stats.xcch_ul_rom_ko += ko
-        if UL_RAW:
+        if UL_RAW and not UL_RAW_DCCH_HOTE:
             # [2026-10-15] B2 : sous PONT_UL_RAW=1 la copie hote finissait au puits ; on ne la
             # code plus. Liste vide = _poll_sdcch garde ses effets (GSMTAP, sacch_ul, routage)
             # sans rien programmer. Ce qui part a l'antenne reste le burst ROM de calypso_tx_rom.
@@ -325,6 +331,11 @@ class UplinkDsp(Uplink):
             if ded is None:
                 self.dedicated.refresh()
                 ded = self.dedicated.plan()
+            # [2026-10-21] Magnetite : pas de tap L1CTL, donc jamais de calypso_dcch_cfg. Ses bursts SDCCH
+            # (TSC 7, 4 trames de suite, deja dans calypso_tx_rom avec leur fn) partaient « aucun canal dedie
+            # connu, perdu ». PONT_UL_TN_DEFAUT=<tn> : l'intervalle a prendre faute d'annonce (TS0, SDCCH/4).
+            if ded is None and UL_TN_DEFAUT is not None:
+                return UL_TN_DEFAUT
             return ded[2] if ded else None
 
         tch_dit = set()
@@ -388,9 +399,19 @@ class UplinkDsp(Uplink):
         while True:
             self._poll_release()
             self._poll_rach()
-            self._poll_sdcch()
-            self._poll_facch()
-            self._poll_sacch()
+            if UL_RAW_DCCH_HOTE:
+                # [2026-10-21] SDCCH et SACCH codes par l'hote, envoyes pour de vrai (le RACH reste a la ROM)
+                puits, self.tx = self.tx, self.tx_rom
+                try:
+                    self._poll_sdcch()
+                    self._poll_sacch()
+                finally:
+                    self.tx = puits
+                self._poll_facch()
+            else:
+                self._poll_sdcch()
+                self._poll_facch()
+                self._poll_sacch()
             self._poll_voice()
             if attente:
                 tn = tn_dedie()

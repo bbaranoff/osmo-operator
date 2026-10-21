@@ -509,6 +509,7 @@ apply_config_templates() {
             -e "s|__RXLEV_ACCESS_MIN__|${RXLEV_ACCESS_MIN}|g" \
             -e "s|__CELL_RESEL_HYST__|${CELL_RESEL_HYST}|g" \
             -e "s|__T3109__|${T3109}|g" -e "s|__APN__|${APN}|g" \
+            -e "s|__TS1_PCHAN_BTS0__|$([ "${OSMO_TRX:-0}" = 1 ] || [ -n "${MS_MAGNETITE:-}" ] && echo TCH/F || echo SDCCH8)|g" \
             -e "s|__SIP_HOST_PORT__|${sip_host_port}|g" \
             -e "s|__ALSA_OUTPUT__|${ALSA_OUTPUT}|g" -e "s|__ALSA_INPUT__|${ALSA_INPUT}|g" \
             -e "s|__RTP_START__|${rtp_start}|g" -e "s|__RTP_END__|${rtp_end}|g" \

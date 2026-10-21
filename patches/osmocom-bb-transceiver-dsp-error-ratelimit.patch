@@ -1,0 +1,266 @@
+diff --git a/src/target/firmware/layer1/prim_bts.c b/src/target/firmware/layer1/prim_bts.c
+index 91b18dc..910277c 100644
+--- a/src/target/firmware/layer1/prim_bts.c
++++ b/src/target/firmware/layer1/prim_bts.c
+@@ -139,7 +139,13 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 	struct gsm_time rx_time;
+ 
+ 	/* Time of the command */
+-	gsm_fn2gsmtime(&rx_time, l1s.current_time.fn - 2);
++	/* [2026-10-20] Banc QEMU : BTS_RX_LAG = 3 au lieu de 2. Le burst montant du mobile emule
++	 * traverse l'air (anneau -> air.py -> UDP -> BSP) et arrive ~1 trame apres l'instant ou la
++	 * fenetre RX de sa trame s'ouvre : 3 bursts sur 4 d'un bloc SDCCH manquaient. On lit donc le
++	 * burst de la trame X une trame plus tard et on le marque X (le BSP de c54x_exe le joue a
++	 * tick(X) + 1 : CALYPSO_BSP_TRX_DELTA = -2). Silicium : remettre 2. */
++#define BTS_RX_LAG 12  /* [2026-10-21] 12 : ~10 trames de marge, latence aller-retour de l air + rattrapage Magnetite (delta -11 cote c54x_exe, run.sh) */
++	gsm_fn2gsmtime(&rx_time, l1s.current_time.fn - BTS_RX_LAG);
+ 		/* We're shifted in time since we RX in the 'next' frame */
+ 
+ 
+@@ -165,9 +171,11 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 		bi->tn = l1s.bts.rx_start;
+ 
+ 		/* Data (cut to 8 bits */
+-		bi->toa = db->rx[1].cmd;
+-		if (bi->toa > 68)
++		/* [2026-10-19] la garde testait bi->toa, tronque a 8 bits : 0x7719 passait
++		 * (0x19 = 25) et j = 0xee32 sortait de la fenetre API (data abort). */
++		if (db->rx[1].cmd > 68)
+ 			goto exit;
++		bi->toa = db->rx[1].cmd;
+ 		for (i=0,j=(db->rx[1].cmd)<<1; i<2*88; i++,j++)
+ 			bi->iq[i] = iq[j] >> 8;
+ 
+@@ -261,6 +269,48 @@ l1s_bts_resp(uint8_t p1, uint8_t p2, uint16_t p3)
+ 		}
+ 	}
+ 
++	/* [2026-10-20] banc QEMU : le deuxieme intervalle (rx_start + 1), resultat pose par c54x_exe
++	 * dans rx[2] / data[72..] (meme format que d[] ci-dessus : toa, pm, -, energie, -, bits) */
++	if (l1s.bts.rx_num > 1 && db->rx[2].cmd == DSP_EXT_RX_CMD_NB)
++	{
++		uint16_t *d = &db->data[72];
++		int rssi = agc_inp_dbm8_by_pm(d[1] >> 3) / 8;
++		int16_t toa = (int16_t)d[0] - 3;
++
++		db->rx[2].cmd = 0;
++		if (d[3] > 0x1000) {
++			struct msgb *msg;
++			struct l1ctl_bts_burst_nb_ind *bi;
++			int i;
++
++			msg = l1ctl_msgb_alloc(L1CTL_BTS_BURST_NB_IND);
++			if (!msg)
++				goto exit;
++
++			bi = (struct l1ctl_bts_burst_nb_ind *) msgb_put(msg, sizeof(*bi));
++			bi->fn = htonl(rx_time.fn);
++			bi->tn = (l1s.bts.rx_start + 1) & 7;
++			if (toa > -32 && toa < 32)
++				bi->toa = toa;
++			if (rssi < -110)
++				bi->rssi = -110;
++			else if (rssi < 0)
++				bi->rssi = rssi;
++			memset(bi->data, 0x00, sizeof(bi->data));
++			for (i=0; i<116; i++)
++			{
++				int sbit = 0x0008 << ((3 - (i & 3)) << 2);
++				int sword = i >> 2;
++				int dbit = 1 << (7 - (i & 7));
++				int dbyte = i >> 3;
++
++				if (d[5+sword] & sbit)
++					bi->data[dbyte] |= dbit;
++			}
++			l1_queue_for_l2(msg);
++		}
++	}
++
+ exit:
+ 	/* We're done with this */
+ 	dsp_api.r_page_used = 1;
+@@ -289,15 +339,31 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+ 
+ 	db->rx[0].cmd = 0;
+ 	db->rx[0].data = 0x000;
++	/* [2026-10-19] rx[1] (offset du burst dans data[]) n'etait jamais remis a
++	 * zero : sur le banc QEMU (c54x_exe) la page garde une copie de code ROM
++	 * tant que le DSP n'y a rien ecrit, et l1s_bts_resp indexait data[] avec. */
++	db->rx[1].cmd = 0;
++	db->rx[1].data = 0x000;
++	/* [2026-10-20] banc QEMU : rx[2] est le resultat du DEUXIEME intervalle (rx_start + 1, le TCH),
++	 * pose par c54x_exe (prothese montante TS1) dans data[72..] ; remis a zero a chaque trame */
++	db->rx[2].cmd = 0;
++	db->rx[2].data = 0x000;
+ 
+ 	t3 = l1s.next_time.t3;
+ 
+ 	if (t3 != 2)
+ 	{
+ 		/* We're really a frame in advance since we RX in the next frame ! */
+-		t3 = t3 - 1;
+-		fn_mod_26 = (l1s.next_time.fn + 2715648 - 1) % 26;
+-		fn_mod_102 = (l1s.next_time.fn + 2715648 - 1) % 102;
++		/* [2026-10-21] banc QEMU : avec BTS_RX_LAG > 2 le burst joue dans cette fenetre est celui de
++		 * BTS_RX_LAG - 2 trames plus tot (l1s_bts_resp le marque current_fn - BTS_RX_LAG). Le choix AB/NB
++		 * se faisait sur la trame native : un RACH (t3 14..36) tombait sur une trame SDCCH -> traite en
++		 * NB, jamais d'AB vers le transceiver (osmo-bts rach:rcvd = 0). On classe donc la trame recue. */
++		{
++			uint32_t fn_rx = (l1s.next_time.fn + 2715648 - 1 - (BTS_RX_LAG - 2)) % 2715648;
++			t3 = fn_rx % 51;
++			fn_mod_26 = fn_rx % 26;
++			fn_mod_102 = fn_rx % 102;
++		}
+ 
+ 		/* Select which type of burst */
+ 		switch (l1s.bts.type[l1s.bts.rx_start]) {
+@@ -365,64 +431,69 @@ l1s_bts_cmd(uint8_t p1, uint8_t p2, uint16_t p3)
+ 	/* TX side */
+ 	/* ------- */
+ 
+-	// FIXME put that in a loop over all TX bursts
+-	static uint8_t SLOT, tn;
+-	if (l1s.bts.tx_start == 5) {
+-		SLOT = 3;
+-		tn = 0;
+-	} else {
+-		SLOT = 0;
+-		tn = 1;
+-	}
++	/* [2026-10-20] Tous les slots de la fenetre TX, pas un seul : le slot p de la fenetre ouverte
++	 * au slot TPU (tx_start + 5) & 7 part sur le TS descendant (tx_start + p) & 7 (le TX du Calypso
++	 * est en avance de 3 slots). Sur le banc QEMU c54x_exe ne joue pas la fenetre multiple de la
++	 * ROM : il publie lui-meme les bursts a partir de tx[p] (cmd + donnees) de cette page.
++	 * Les donnees NB du slot p sont dans data[8 p .. 8 p + 7]. */
++	{
++	int p, nslots = l1s.bts.tx_num ? l1s.bts.tx_num : 1;
++	if (nslots > 8) nslots = 8;
+ 
+ 	/* Reset all commands to dummy burst */
+ 	for (i=0; i<8; i++)
+ 		db->tx[i].cmd = DSP_EXT_TX_CMD_DUMMY;
+ 
+-	/* Get the next burst */
+-	type = trx_get_burst(l1s.next_time.fn, tn, data);
+-
+-	/* Program the TX commands */
+-	if (t3 == 2 && (l1s.bts.type[tn] >> 1) != 2) {
+-		// FIXME use dummy until TSC will be set individually
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-	} else
+-	switch (type) {
+-	case BURST_FB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_FB;
+-		break;
+-
+-	case BURST_SB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_SB;
+-
+-		sb = sb_build(
+-			l1s.bts.bsic,                   /* BSIC */
+-			l1s.next_time.t1,               /* T1   */
+-			l1s.next_time.t2,               /* T2   */
+-			(l1s.next_time.t3 - 1) / 10     /* T3'  */
+-		);
+-
+-		db->sch[0] = sb;
+-		db->sch[1] = sb >> 16;
+-
+-		break;
+-
+-	case BURST_DUMMY:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-		break;
+-
+-	case BURST_NB:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_NB;
+-		db->tx[SLOT].data = sizeof(struct dsp_ext_db) / sizeof(uint16_t);
+-
+-		for (i=0; i<7; i++)
+-			db->data[i] = (data[i<<1] << 8) | data[(i<<1)+1];
+-		db->data[7] = data[14] << 8;
+-		break;
+-
+-	default:
+-		db->tx[SLOT].cmd = DSP_EXT_TX_CMD_DUMMY;
+-		break;
++	for (p = 0; p < nslots; p++) {
++		uint8_t tn = (l1s.bts.tx_start + p) & 7;
++
++		/* Get the next burst */
++		type = trx_get_burst(l1s.next_time.fn, tn, data);
++
++		/* Program the TX commands */
++		if (t3 == 2 && (l1s.bts.type[tn] >> 1) != 2) {
++			// FIXME use dummy until TSC will be set individually
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			continue;
++		}
++		switch (type) {
++		case BURST_FB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_FB;
++			break;
++
++		case BURST_SB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_SB;
++
++			sb = sb_build(
++				l1s.bts.bsic,                   /* BSIC */
++				l1s.next_time.t1,               /* T1   */
++				l1s.next_time.t2,               /* T2   */
++				(l1s.next_time.t3 - 1) / 10     /* T3'  */
++			);
++
++			db->sch[0] = sb;
++			db->sch[1] = sb >> 16;
++
++			break;
++
++		case BURST_DUMMY:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			break;
++
++		case BURST_NB:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_NB;
++			db->tx[p].data = sizeof(struct dsp_ext_db) / sizeof(uint16_t) + 8 * p;
++
++			for (i=0; i<7; i++)
++				db->data[8 * p + i] = (data[i<<1] << 8) | data[(i<<1)+1];
++			db->data[8 * p + 7] = data[14] << 8;
++			break;
++
++		default:
++			db->tx[p].cmd = DSP_EXT_TX_CMD_DUMMY;
++			break;
++		}
++	}
+ 	}
+ 
+ 	/* Enable the task */
+diff --git a/src/target/firmware/layer1/sync.c b/src/target/firmware/layer1/sync.c
+index 0cf4f10..7201b23 100644
+--- a/src/target/firmware/layer1/sync.c
++++ b/src/target/firmware/layer1/sync.c
+@@ -270,8 +270,20 @@ static void l1_sync(void)
+ 	/* Update AFC */
+ 	afc_load_dsp();
+ 
++	/* [2026-10-21] banc QEMU : le DSP emule leve d_error_status a CHAQUE trame ; une ligne
++	 * console par trame (21 octets x 216/s) prend les msgb du meme pool (32) que les bursts
++	 * vers transceiver, et au premier retard de l'hote _talloc_zero() boucle a l'infini
++	 * (BTS : « No more clock from transceiver »). On n'affiche que les changements de
++	 * valeur, et un rappel toutes les 10000 occurrences. */
+ 	if (dsp_api.ndb->d_error_status) {
+-		printf("DSP Error Status: %u\n", dsp_api.ndb->d_error_status);
++		static uint16_t last_err;
++		static uint32_t n_err;
++		uint16_t err = dsp_api.ndb->d_error_status;
++
++		n_err++;
++		if (err != last_err || n_err % 10000 == 0)
++			printf("DSP Error Status: %u (%lu fois)\n", err, (unsigned long)n_err);
++		last_err = err;
+ 		dsp_api.ndb->d_error_status = 0;
+ 	}
+ 

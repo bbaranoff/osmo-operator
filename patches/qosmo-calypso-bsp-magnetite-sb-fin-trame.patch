@@ -1,0 +1,499 @@
+diff --git a/hw/arm/calypso/l1-dsp/calypso_bsp.c b/hw/arm/calypso/l1-dsp/calypso_bsp.c
+index 881cd317..6d72ad53 100644
+--- a/hw/arm/calypso/l1-dsp/calypso_bsp.c
++++ b/hw/arm/calypso/l1-dsp/calypso_bsp.c
+@@ -603,6 +603,101 @@ uint8_t  calypso_bsp_get_last_att(void)   { return bsp.last_att; }
+ static struct { uint32_t fn; uint8_t bits[148]; uint8_t valid, joue; } *g_ts0;
+ static uint32_t g_ts0_next; static int g_ts0_any;
+ static int64_t g_ts0_offset = INT64_MIN;
++/* [2026-10-21] firmware TI en mode dedie (taches ALLC vues par montant.c) : voir CALYPSO_BSP_DEDIE_DECAL */
++static int g_dedie_ti;
++extern unsigned long calypso_bsp_routeur_bilan(char *buf, size_t n);
++void calypso_bsp_set_dedie_ti(int actif)
++{
++    char b[160] = "";
++    if (actif != g_dedie_ti) {
++        if (!actif) calypso_bsp_routeur_bilan(b, sizeof b);
++        printf("  [ts0] firmware TI %s le mode dedie%s\n", actif ? "entre dans" : "quitte", b);
++    }
++    g_dedie_ti = actif;
++}
++/* [2026-10-21] FENETRE SB EN FIN DE TRAME (CALYPSO_BSP_SB_FIN_TRAME=1, Magnetite / L1 TI TCS211).
++ * La L1 TI ouvre sa fenetre SB SB_MARGIN (92 qbits) avant le debut du burst : quand le SCH est cale
++ * en debut de trame, elle s'ouvre A LA FIN DE LA TRAME PRECEDENTE (SB_I time_alignmt=4928), et la L1
++ * en deduit « trame BTS N = trame locale k+1 » (l1a_add_time_for_nb : 4928+80 -> 8, fn_offset-1).
++ * Le banc, lui, livrait au tick k le burst du tick k : toutes les fenetres NB etaient armees un
++ * tick APRES leur burst (BCCH : p51=2 dans aucune fenetre, p51=3..5 dans celles de 2..4), CRC KO
++ * sur chaque bloc. Dans ce mode l'offset est cale sur fn - tick - 1 au SCH livre en fenetre SB,
++ * puis VERIFIE sur la lecture BCCH elle-meme (bsp_bcch_calage) : la L1 arme ses fenetres NB sur les
++ * trames ou elle croit le bloc, ce qui dit directement de combien le flux est decale. Une lecture
++ * en avance du SCH (premier essai) aggravait les choses : a la resynchro la L1 arme DEUX fenetres SB
++ * de suite et cale son horloge sur la seconde. */
++static int sb_fin_trame(void)
++{
++    static int on = -1;
++    if (on < 0) { const char *e = calypso_getenv("CALYPSO_BSP_SB_FIN_TRAME"); on = (e && *e == '1'); }
++    return on;
++}
++/* [2026-10-21] FAUX AIR (CALYPSO_FAUX_AIR=<arfcn de la cellule>, Magnetite). Le pont livrait les bursts
++ * du BTS quelle que soit la frequence du telephone : la L1 TI voyait la cellule (BSIC 7) sur 65, 81,
++ * 265... et RR s'y perdait. QEMU publie chaque programmation du synthetiseur (calypso_rf_arfcn.h) ;
++ * ici, une fenetre accordee ailleurs que sur la cellule recoit du bruit (CALYPSO_FAUX_AIR_BRUIT,
++ * ecart-type, 200 par defaut) au lieu du burst. ARFCN inconnu (pas de shm, pas encore programme) :
++ * comportement d'avant. */
++#include "hw/arm/calypso/calypso_rf_arfcn.h"
++#include <sys/mman.h>
++#include <fcntl.h>
++static int faux_air_cellule(void)
++{
++    static int a = -2;
++    if (a == -2) { const char *e = calypso_getenv("CALYPSO_FAUX_AIR"); a = (e && *e) ? atoi(e) : -1;
++                   if (a >= 0) printf("  [faux-air] cellule sur l'ARFCN %d : bruit sur les autres frequences\n", a); }
++    return a;
++}
++/* ARFCN de la fenetre du tick : derniere programmation faite avant `limite` qbits dans la trame tick. */
++static int faux_air_arfcn(uint32_t tick, int limite)
++{
++    static const CalypsoRfArfcnShm *m;
++    static uint32_t essai;
++    if (!m) {
++        if (essai++ % 216) return -1;              /* QEMU cree le fichier a sa premiere ecriture */
++        int fd = open(CALYPSO_RF_ARFCN_SHM, O_RDONLY);
++        if (fd < 0) return -1;
++        void *p = mmap(NULL, sizeof *m, PROT_READ, MAP_SHARED, fd, 0);
++        close(fd);
++        if (p == MAP_FAILED) return -1;
++        m = p;
++    }
++    if (m->magic != CALYPSO_RF_ARFCN_MAGIC) return -1;
++    uint32_t w = __atomic_load_n(&m->widx, __ATOMIC_ACQUIRE);
++    uint32_t n = w < CALYPSO_RF_ARFCN_N ? w : CALYPSO_RF_ARFCN_N - 4;   /* les plus vieilles peuvent etre reecrites */
++    for (uint32_t k = 1; k <= n; k++) {
++        const CalypsoRfProg *e = &m->e[(w - k) % CALYPSO_RF_ARFCN_N];
++        int32_t d = (int32_t)(e->fn - tick);
++        if (d < 0 || (d == 0 && e->qbit <= limite)) return e->arfcn;
++    }
++    return -1;
++}
++static void faux_air_bruit(int16_t *iq, int n_ech)
++{
++    static double sigma = -1; static uint32_t x = 0x12345678u;
++    if (sigma < 0) { const char *e = calypso_getenv("CALYPSO_FAUX_AIR_BRUIT"); sigma = (e && *e) ? atof(e) : 200.0; }
++    for (int k = 0; k < 2 * n_ech; k++) {
++        double u = 0;
++        for (int j = 0; j < 4; j++) { x = x * 1664525u + 1013904223u; u += (double)(x >> 8) / 16777216.0; }
++        iq[k] = (int16_t)lrint((u - 2.0) * 1.732 * sigma);   /* somme de 4 uniformes ~ gaussienne */
++    }
++}
++/* [2026-10-21 19:20] BRUIT DE FOND (CALYPSO_BSP_BRUIT_FOND=1, Magnetite). Les intervalles sans burst etaient
++ * bourres de ZEROS : la L1 TI y prend ses mesures de puissance, le DSP rendait PM = 0, et au bout de 100
++ * (l1_check_pm_error) la L1 se croyait plantee : l1_initialize_for_recovery, DSP relance toutes les ~173
++ * trames (« > RECOVERY »), retards et campement casse. Un vrai recepteur voit toujours du bruit. */
++extern uint16_t g_remplissage_ts0[];
++static const int16_t *bsp_remplissage(void)
++{
++    static int on = -1;
++    static int16_t bruit[2 * 148];
++    if (on < 0) { const char *e = calypso_getenv("CALYPSO_BSP_BRUIT_FOND"); on = (e && *e == '1'); }
++    if (!on) return (const int16_t *)g_remplissage_ts0;
++    faux_air_bruit(bruit, 148);
++    return bruit;
++}
++static int g_bcch_verrou;        /* offset confirme par la lecture BCCH : les SCH ne le recalent plus */
++static uint32_t g_bcch_vu_tick;  /* dernier tick ou une fenetre NB BCCH a ete vue armee */
+ /* [2026-10-20] MODE TRX (CALYPSO_BSP_TRX=1, c54x_exe/run.sh OSMO_TRX=1) : cette instance est la radio de la
+  * BTS (firmware trx), elle ne recoit jamais de SB ; ses bursts montants arrivent de l'air (pont/air.py)
+  * tagues du fn GSM du mobile. L'offset fn <-> tick est alors POSE par pont.c, qui decode le sch du SB
+@@ -1272,15 +1367,116 @@ int calypso_bsp_sb_retenter(void)
+     g_dernier_sch.livre_sb = 1;
+     /* Le SCH est livre a ce tick-ci : c'est lui qui fixe l'offset ARM-tick,
+      * exactement comme la livraison native en fenetre SB (bsp_ts0_livrer). */
+-    int64_t off = (int64_t)g_dernier_sch.fn - (int64_t)g_tick_courant;
++    int64_t off = (int64_t)g_dernier_sch.fn - (int64_t)g_tick_courant - sb_fin_trame();
+     int recale = (off != g_ts0_offset);
+-    if (!g_trx_cale) g_ts0_offset = off;
++    if (!g_trx_cale && !g_bcch_verrou) g_ts0_offset = off;
+     if (g_sb_relivres <= 100 || g_sb_relivres % 100 == 0)
+         printf("  [sbwin] SB fn=%u RELIVRE au tick %u (depose au tick %u, fenetre SB armee apres) : page=%d marge=%d%s [%lu relivres, %lu expires]\n",
+                g_dernier_sch.fn, g_tick_courant, g_dernier_sch.tick, total, marge,
+                recale ? ", offset ARM-tick recale" : "", g_sb_relivres, g_sb_expires);
+     return 1;
+ }
++/* [2026-10-21 22:45] ROUTAGE DES FENETRES EN DEDIE (firmware TI). Le banc depose UN burst (148 echantillons,
++ * TS0) par tick ; en dedie la ROM arme DEUX fenetres one-shot par trame : la mesure de puissance (64) puis la
++ * reception NB (151), 215 echantillons (CALYPSO_BSP_TS0_DEBUG, run de 22:19 : SDCCH p51 22..25 deposes en
++ * « fenetre=64 », les 151 armees 3 a 5 ticks plus tard et de plus en plus tard : +67 echantillons par trame).
++ * Sur silicium la mesure tombe sur un autre intervalle et consomme du vide. Ici : fenetre de mesure (< 150)
++ * <- remplissage (bsp_remplissage), fenetre NB (150..189) <- le vrai burst, garde dans un anneau si la NB
++ * n'est pas armee au depot ; pont.c fait tourner le DSP entre deux livraisons dans le meme tick (boucle
++ * pump). Seulement en dedie TI (calypso_bsp_set_dedie_ti) ; CALYPSO_BSP_NB_RETENTER=0 pour couper. */
++#define NB_GARDE_N 4
++static struct { int valide; uint32_t fn, tick; uint8_t bits[148]; } g_nb_garde[NB_GARDE_N];
++static unsigned g_nb_garde_w;
++static unsigned long g_nb_relivres, g_nb_expires, g_pm_servies;
++static int nb_retenter_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char *e = calypso_getenv("CALYPSO_BSP_NB_RETENTER"); on = !(e && *e == '0'); }
++    return on && g_dedie_ti;
++}
++static void nb_garde_poser(uint32_t fn, uint32_t tick, const uint8_t *bits)
++{
++    unsigned k = g_nb_garde_w++ % NB_GARDE_N;
++    if (g_nb_garde[k].valide) g_nb_expires++;
++    g_nb_garde[k].fn = fn; g_nb_garde[k].tick = tick; g_nb_garde[k].valide = 1;
++    memcpy(g_nb_garde[k].bits, bits, 148);
++}
++static void nb_moduler(const uint8_t *bits, int16_t *iq, int marge)
++{
++    static double sym = -2;
++    if (sym == -2) { const char *e = calypso_getenv("CALYPSO_BSP_NB_SYM"); sym = (e && *e) ? atof(e) : 0.3; }
++    gmsk_moduler(bits, 148, 30000, 0.0, 0.5, iq + 2 * marge);
++    gmsk_elargir(iq + 2 * marge, 148, sym);
++}
++static int nb_marge_ti(void)
++{
++    static int nb_marge = -1;
++    if (nb_marge < 0) { const char *e = calypso_getenv("CALYPSO_BSP_NB_MARGE"); nb_marge = (e && *e) ? atoi(e) : 3;
++                        if (nb_marge < 0 || nb_marge > 3) nb_marge = 3; }
++    return nb_marge;
++}
++/* la fenetre de mesure armee recoit du remplissage : elle se termine, la ROM arme la suivante */
++static int pm_servir(int nwin)
++{
++    calypso_rif_flush();
++    calypso_bsp_rx_burst(0, g_depot_fn, bsp_remplissage(), 2 * nwin);
++    g_pm_servies++;
++    return 1;
++}
++/* [2026-10-21 22:55] SONDE DMA (CALYPSO_BSP_DMA_TRACE=1) : chaque changement d'etat du canal RX (armee,
++ * one-shot, longueur) avec le tick, pendant le dedie TI. Le modele rhea-dma trace ses registres sur stderr,
++ * mais c54x_exe (verbosite.c) les avale. Sert a voir ce que la ROM arme sur le TCH (TS1), ou aucune fenetre
++ * n'etait armee au depot (appel du 21/10 22:42 : a_dd BFI, « >N200 of SABM » sur la FACCH). 3000 lignes. */
++static void dma_trace(const char *ou)
++{
++    static int on = -1; static unsigned n; static int armee_p = -1, os_p = -1, len_p = -1;
++    if (on < 0) { const char *e = calypso_getenv("CALYPSO_BSP_DMA_TRACE"); on = (e && *e == '1'); }
++    if (!on || !g_dedie_ti || n >= 3000) return;
++    int armee = calypso_rhea_dma_rx_armed(), os = calypso_rhea_dma_one_shot(), len = calypso_rhea_dma_get_len_words() / 2;
++    if (armee == armee_p && os == os_p && len == len_p) return;
++    armee_p = armee; os_p = os; len_p = len; n++;
++    printf("  [dma] tick=%u %s : armee=%d one_shot=%d fenetre=%d rif=%d\n", g_tick_courant, ou, armee, os, len, calypso_rif_level());
++}
++void calypso_bsp_dma_trace(const char *ou) { dma_trace(ou); }
++unsigned long calypso_bsp_routeur_bilan(char *buf, size_t n)
++{
++    snprintf(buf, n, " (routeur : %lu NB relivres, %lu expires, %lu mesures servies)", g_nb_relivres, g_nb_expires, g_pm_servies);
++    return g_nb_relivres;
++}
++int calypso_bsp_nb_retenter(void)
++{
++    dma_trace("pump");
++    if (!nb_retenter_on()) return 0;
++    if (!calypso_rhea_dma_rx_armed() || !calypso_rhea_dma_one_shot()) return 0;
++    int nwin = calypso_rhea_dma_get_len_words() / 2;
++    if (nwin <= 0) return 0;
++    if (nwin < 150) return pm_servir(nwin);
++    if (nwin >= 190) return 0;                                  /* fenetre SB : calypso_bsp_sb_retenter */
++    /* la NB est armee : le plus ancien burst garde encore frais (2 ticks) */
++    int k_min = -1;
++    for (int k = 0; k < NB_GARDE_N; k++) {
++        if (!g_nb_garde[k].valide) continue;
++        if ((int32_t)(g_tick_courant - g_nb_garde[k].tick) > 2) { g_nb_garde[k].valide = 0; g_nb_expires++; continue; }
++        if (k_min < 0 || (int32_t)(g_nb_garde[k].fn - g_nb_garde[k_min].fn) < 0) k_min = k;
++    }
++    if (k_min < 0) return 0;
++    int marge = nb_marge_ti();
++    static int16_t iq[2 * 256];
++    int total = nwin > marge + 148 ? nwin : marge + 148;
++    if (total > 256) total = 256;
++    memset(iq, 0, sizeof iq);
++    nb_moduler(g_nb_garde[k_min].bits, iq, marge);
++    calypso_rif_flush();
++    calypso_bsp_rx_burst(0, g_nb_garde[k_min].fn, iq, 2 * total);
++    bsp.bursts_written++;
++    g_nb_garde[k_min].valide = 0;
++    g_nb_relivres++;
++    if (g_nb_relivres <= 40 || g_nb_relivres % 500 == 0)
++        printf("  [nbwin] NB fn=%u p51=%u RELIVRE au tick %u (depose au tick %u) : fenetre=%d [%lu relivres, %lu expires, %lu mesures servies]\n",
++               g_nb_garde[k_min].fn, g_nb_garde[k_min].fn % 51u, g_tick_courant, g_nb_garde[k_min].tick, nwin,
++               g_nb_relivres, g_nb_expires, g_pm_servies);
++    return 1;
++}
+ /* pont.c : tracer CHAQUE SCH pendant `ticks` ticks (apres une detection FB, ou
+  * quand l'ARM poste une tache SB), pour voir le depot exact autour des tentatives. */
+ void calypso_bsp_sb_trace(unsigned ticks)
+@@ -1288,6 +1484,44 @@ void calypso_bsp_sb_trace(unsigned ticks)
+     uint32_t j = g_tick_courant + ticks;
+     if ((int32_t)(j - g_sb_trace_jusqua) > 0) g_sb_trace_jusqua = j;
+ }
++/* [2026-10-21] SB_FIN_TRAME : la lecture BCCH (p51 2..5) dit ou la L1 croit le bloc. Fenetres NB
++ * armees sur 3..6 = flux en avance d'une trame (offset - 1) ; sur 1..4 = en retard (offset + 1).
++ * Deux blocs de suite avant de corriger ; un bloc bien cale verrouille l'offset (les SCH relus ne le
++ * recalent plus), deverrouille quand plus aucune fenetre BCCH n'est vue (la L1 a perdu la cellule). */
++static void bsp_bcch_calage(uint32_t tick, unsigned p, bool nb)
++{
++    static uint8_t arme[7];
++    static int tard, tot;
++    if (p >= 1 && p <= 6) {
++        arme[p] = nb;
++        if (nb) g_bcch_vu_tick = tick;
++    }
++    if (p == 6) {
++        bool bon = arme[2] && arme[3] && arme[4] && arme[5] && !arme[6];
++        bool retard = !arme[2] && arme[3] && arme[4] && arme[5] && arme[6];
++        bool avance = arme[1] && arme[2] && arme[3] && arme[4] && !arme[5];
++        if (retard) { tard++; tot = 0; }
++        else if (avance) { tot++; tard = 0; }
++        else if (bon) {
++            tard = tot = 0;
++            if (!g_bcch_verrou) printf("  [bcch] tick=%u bloc BCCH dans ses fenetres (2..5) : offset %lld verrouille\n",
++                                       tick, (long long)g_ts0_offset);
++            g_bcch_verrou = 1;
++        }
++        if (tard >= 2 || tot >= 2) {
++            int d = tard >= 2 ? -1 : +1;
++            g_ts0_offset = (g_ts0_offset + d + BSP_FN_MAX) % BSP_FN_MAX;
++            printf("  [bcch] tick=%u fenetres NB sur p51 %s : offset %+d -> %lld\n",
++                   tick, d < 0 ? "3..6 (flux en avance)" : "1..4 (flux en retard)", d, (long long)g_ts0_offset);
++            tard = tot = 0;
++        }
++        memset(arme, 0, sizeof arme);
++    }
++    if (g_bcch_verrou && (uint32_t)(tick - g_bcch_vu_tick) > 160u) {
++        g_bcch_verrou = 0;
++        printf("  [bcch] tick=%u plus de lecture BCCH depuis %u trames : offset deverrouille\n", tick, tick - g_bcch_vu_tick);
++    }
++}
+ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+ {
+     static int16_t iq[2 * 512];
+@@ -1434,7 +1668,26 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+     const int page_prog = calypso_rhea_dma_get_len_words() / 2;   /* ALGTH/2 mots = echantillons par page, ONE_SHOT ou pas */
+     const int rif_avant = calypso_rif_level();
+     int nwin = one_shot ? page_prog : 0;
+-    int marge = nwin >= 190 ? 21 : nwin >= 150 ? 3 : 0;
++    /* [2026-10-21] CALYPSO_BSP_NB_MARGE : la L1 TI vise un TOA NB de 3 (l1ctl_toa_update : ISH =
++     * TOA_estime - 16 qbits) ; a la marge 3 le DSP mesure 5, d'ou +8 qbits de tpu_offset a chaque
++     * periode sans fin (le banc ne deplace pas le burst). Magnetite : 1. */
++    static int nb_marge = -1;
++    if (nb_marge < 0) { const char *e = calypso_getenv("CALYPSO_BSP_NB_MARGE"); nb_marge = (e && *e) ? atoi(e) : 3;
++                        if (nb_marge < 0 || nb_marge > 3) nb_marge = 3; }
++    int marge = nwin >= 190 ? 21 : nwin >= 150 ? nb_marge : 0;
++    /* [2026-10-21] faux air : fenetre NB (debut de trame) -> synthetiseur programme avant 1250 qbits ;
++     * fenetre SB (fin de trame), PM ou continue -> derniere programmation de la trame. */
++    bool hors_freq = false;
++    if (faux_air_cellule() >= 0) {
++        int a = faux_air_arfcn(tick_fn, (nwin >= 150 && nwin < 190) ? 1250 : 5000);
++        hors_freq = (a >= 0 && a != faux_air_cellule());
++        static unsigned n_hors, n_dans;
++        if (hors_freq) n_hors++; else if (a >= 0) n_dans++;
++        if (hors_freq && (n_hors <= 20 || n_hors % 5000 == 0))
++            printf("  [faux-air] tick=%u fn=%u fenetre=%d accorde sur %d : bruit [%u hors, %u sur la cellule]\n",
++                   tick_fn, g_ts0[i].fn, nwin, a, n_hors, n_dans);
++        if (hors_freq) sb = fcch = 0;
++    }
+     /* [2026-09-29] Un SCH est memorise ici (g_dernier_sch) ; si la fenetre SB
+      * ne s'arme qu'apres ce depot, calypso_bsp_sb_retenter() l'y livrera. */
+     const char *sb_action = "cadree comme un burst normal";
+@@ -1452,9 +1705,19 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+     if (g_trx_cale && !sb && !fcch && !bsp_ts0_est_rach(bits)) {
+         g_trx_ul.fn = g_ts0[i].fn; g_trx_ul.tick = tick_fn; memcpy(g_trx_ul.bits, bits, 148); g_trx_ul.valide = 1;
+     }
+-    if (sb) sb_moduler(bits, iq + 2 * marge, g_ts0[i].fn);   /* [2026-09-30] voir sb_moduler() */
++    /* [2026-10-21 22:45] dedie TI (routage, voir calypso_bsp_nb_retenter) : la NB n'est pas armee au depot ->
++     * le burst va dans l'anneau de garde, et une fenetre de mesure armee recoit du remplissage a sa place */
++    dma_trace("depot");
++    bool devie = false;
++    if (!sb && !fcch && !hors_freq && nb_retenter_on() && !(one_shot && nwin >= 150 && nwin < 190)) {
++        nb_garde_poser(g_ts0[i].fn, tick_fn, bits);
++        if (one_shot && nwin > 0 && nwin < 150) pm_servir(nwin);
++        devie = true;
++    }
++    if (hors_freq) faux_air_bruit(iq + 2 * marge, 148);
++    else if (sb) sb_moduler(bits, iq + 2 * marge, g_ts0[i].fn);   /* [2026-09-30] voir sb_moduler() */
+     else    gmsk_moduler(bits, 148, 30000, 0.0, 0.5, iq + 2 * marge);
+-    if (!sb && !fcch) {
++    if (!sb && !fcch && !hors_freq) {
+         static double sym = -2;
+         if (sym == -2) { const char *e = calypso_getenv("CALYPSO_BSP_NB_SYM"); sym = (e && *e) ? atof(e) : 0.3; }
+         gmsk_elargir(iq + 2 * marge, 148, sym);
+@@ -1481,10 +1744,10 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+         }
+     }
+     if (sb && one_shot && nwin >= 190) {
+-        int64_t off = (int64_t)g_ts0[i].fn - (int64_t)tick_fn;
++        int64_t off = (int64_t)g_ts0[i].fn - (int64_t)tick_fn - sb_fin_trame();
+         if (off != g_ts0_offset) printf("  [ts0] SB fn=%u livree au tick %u dans une fenetre SB : offset ARM-tick = %lld%s\n",
+                                         g_ts0[i].fn, tick_fn, (long long)off, g_ts0_offset == INT64_MIN ? " (premier calage)" : " (recalage)");
+-        if (!g_trx_cale) g_ts0_offset = off;
++        if (!g_trx_cale && !g_bcch_verrou) g_ts0_offset = off;
+     }
+     /* [2026-09-21] Une ligne par trame livree : c'etait la sonde de calage des
+      * fenetres (nwin > 0 est vrai pour TOUT burst normal depuis la DMA one-shot,
+@@ -1502,11 +1765,20 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+                            : (nl < 20 || nl % 5000 == 0);
+       nl++;
+       if (trame_dediee && nd < 300) { trace = true; nd++; }
++      /* [2026-10-21] Magnetite : SB decodee (BSIC 7) mais chaque bloc BCCH en CRC KO (BS_I
++       * error_flag=1) ; les 400 premieres trames BCCH normal (p51 2..5) disent quelle fenetre
++       * DMA la ROM avait armee quand le burst est arrive. */
++      if (sb_fin_trame() && g_dedie_tn <= 0)
++          bsp_bcch_calage(tick_fn, g_ts0[i].fn % 51u, nwin >= 150 && nwin < 190);
++      { static unsigned nbcch;
++        const unsigned p = g_ts0[i].fn % 51u;
++        if (p >= 2 && p <= 5 && nbcch < 400) { trace = true; nbcch++; } }
+       if (trace) printf("  [ts0] tick=%u fn=%u p51=%u %s fenetre=%d marge=%d rif_avant=%d%s\n",
+                         tick_fn, g_ts0[i].fn, g_ts0[i].fn % 51u,
+                         sb ? "SB" : fcch ? "FCCH" : "NB", nwin, marge, calypso_rif_level(),
+                         trame_dediee ? (burst_dedie ? "  <- canal dedie" : "  <- canal dedie, BURST MANQUANT") : ""); }
+     g_ts0[i].joue = 1;
++    if (devie) return;                       /* garde / remplissage faits ci-dessus */
+     calypso_bsp_rx_burst(0, g_ts0[i].fn, iq, 2 * total);
+     bsp.bursts_written++;
+     /* Continuous DMA (FB search): the ROM counts 1250 samples per frame and
+@@ -1521,8 +1793,7 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+         for (int tn = 1; tn < 8; tn++) {
+             const uint8_t *b = bsp_autres_bits(g_ts0[i].fn, (unsigned)tn);
+             if (!b) {
+-                calypso_bsp_rx_burst((uint8_t)tn, g_ts0[i].fn,
+-                                     (const int16_t *)g_remplissage_ts0, 2 * 148);
++                calypso_bsp_rx_burst((uint8_t)tn, g_ts0[i].fn, bsp_remplissage(), 2 * 148);
+                 continue;
+             }
+             memset(iq_autre, 0, sizeof iq_autre);
+@@ -1568,6 +1839,18 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+  * (0 avant le premier calage sur SB : l'horloge reste libre), trame BTS
+  * reclamee, tick de l'ARM. CALYPSO_BSP_HORLOGE=0 coupe la publication. */
+ #define SHM_HORLOGE "/dev/shm/calypso_horloge"
++/* [2026-10-21 18:45] trame BTS d'un tick, d'apres le calage du flux TS0 (SB, puis verrou BCCH) : la
++ * trame que la L1 du telephone croit vivre a ce tick. pont.c (tx_tsp_fn) en date les bursts montants
++ * quand le firmware ne pose pas a_a5fn (L1 TI : le RACH de Magnetite partait « TICK NU », l'air ne le
++ * placait pas, B->A 0). 0 si pas encore cale. */
++int calypso_bsp_fn_bts_du_tick(uint32_t tick, uint32_t *fn_bts)
++{
++    if (g_ts0_offset == INT64_MIN) return 0;
++    int64_t w = ((int64_t)tick + g_ts0_offset) % (int64_t)BSP_FN_MAX;
++    if (w < 0) w += BSP_FN_MAX;
++    *fn_bts = (uint32_t)w;
++    return 1;
++}
+ static void bsp_horloge_publier(uint32_t fn_bts, uint32_t tick_fn, int cale)
+ {
+     static int actif = -1, fd = -1;
+@@ -1665,9 +1948,9 @@ static void bsp_ts0_service(uint32_t tick_fn)
+     if (g_sc.actif) {
+         if (tick_fn == g_sc.tick + 1) {
+             if (sc_rom_a_decode()) {
+-                int64_t off = (int64_t)g_sc.fn_sch - (int64_t)g_sc.tick;
++                int64_t off = (int64_t)g_sc.fn_sch - (int64_t)g_sc.tick - sb_fin_trame();
+                 if (off < 0) off += BSP_FN_MAX;
+-                g_sc.ok++; if (!g_trx_cale) g_ts0_offset = off;
++                g_sc.ok++; if (!g_trx_cale && !g_bcch_verrou) g_ts0_offset = off;
+                 if (g_sc.ok <= 300 || g_sc.ok % 50 == 0)
+                     printf("  [sbwin] SECONDE CHANCE : SB fn=%u DECODE a la tentative 1 (tick %u), offset ARM-tick recale [%u/%u]\n",
+                            g_sc.fn_sch, g_sc.tick, g_sc.ok, g_sc.n);
+@@ -1687,8 +1970,63 @@ static void bsp_ts0_service(uint32_t tick_fn)
+     static unsigned manques, manques_log;
+     if (g_ts0_offset != INT64_MIN) {
+         int64_t w = ((int64_t)tick_fn + g_ts0_offset) % (int64_t)BSP_FN_MAX; if (w < 0) w += BSP_FN_MAX;
++        /* [2026-10-21 19:10] RATTRAPAGE DU DIRECT (CALYPSO_BSP_RATTRAPE=1, Magnetite). Au boot l'instance
++         * prend du retard sur le BTS (relances DSP du firmware, verrou ARM qui attend jusqu'a 5 s par trame)
++         * et ne le rattrape jamais : mesure 18:55, le TRX attendait le montant fn 36209 et recevait 33528,
++         * 2700 trames (12 s) de retard, les RACH datees du passe n'etaient jamais jouees. Au-dela de 200
++         * trames de retard sur la derniere trame recue, l'offset saute au direct (marge 2, voir plus bas) et le verrou
++         * BCCH tombe : la L1 voit une discontinuite et se resynchronise sur le flux en direct. */
++        {
++            /* [2026-10-21 20:10] marge 2 (au lieu de 20) et seuil 30 (au lieu de 200) : le montant n'a que ~2
++             * trames de jeu chez le TRX (BTS_RX_LAG) ; avec 20 a 200 trames de retard les RACH arrivaient
++             * apres leur trame (mesure : fn 14556 recu quand le TRX etait a 14583), jamais joues. */
++            static int rattrape = -1, marge_r = 2, seuil_r = 30;
++            if (rattrape < 0) { const char *e = calypso_getenv("CALYPSO_BSP_RATTRAPE"); rattrape = (e && *e == '1');
++                                e = calypso_getenv("CALYPSO_BSP_RATTRAPE_MARGE"); if (e && *e) marge_r = atoi(e);
++                                e = calypso_getenv("CALYPSO_BSP_RATTRAPE_SEUIL"); if (e && *e) seuil_r = atoi(e);
++                                if (seuil_r <= marge_r) seuil_r = marge_r + 1; }
++            int32_t retard = (int32_t)(g_ts0_fn_max - (uint32_t)w);
++            if (rattrape && g_ts0_any && !g_trx_cale && retard > seuil_r) {
++                int64_t saut = retard - marge_r;
++                g_ts0_offset = (g_ts0_offset + saut) % (int64_t)BSP_FN_MAX;
++                g_bcch_verrou = 0;
++                w = ((int64_t)tick_fn + g_ts0_offset) % (int64_t)BSP_FN_MAX; if (w < 0) w += BSP_FN_MAX;
++                printf("  [ts0] RATTRAPAGE : %d trames de retard sur le BTS (derniere recue fn=%u) -> offset %+lld, livre fn=%lld\n",
++                       retard, g_ts0_fn_max, (long long)saut, (long long)w);
++            }
++        }
++        /* [2026-10-21 22:05] DECALAGE EN DEDIE (CALYPSO_BSP_DEDIE_DECAL=<n>, Magnetite). L'offset est verrouille
++         * sur la lecture BCCH (491 au run de 21:59 alors que les SB donnaient 489-490) ; en dedie la L1 TI ne
++         * decode ni SACCH (SA_I en erreur) ni SDCCH (l'UA jamais lu, « >N200 of SABM »). Applique seulement
++         * pendant les taches dediees signalees par montant.c (calypso_bsp_set_dedie_ti). */
++        {
++            static int decal = -999;
++            if (decal == -999) { const char *e = calypso_getenv("CALYPSO_BSP_DEDIE_DECAL"); decal = (e && *e) ? atoi(e) : 0;
++                                 if (decal) printf("  [ts0] decalage en dedie TI : %+d trame(s)\n", decal); }
++            if (decal && g_dedie_ti) { w = (w + decal) % (int64_t)BSP_FN_MAX; if (w < 0) w += BSP_FN_MAX; }
++        }
+         unsigned i = (unsigned)w % BSP_TS0_RING;
+         bsp_horloge_publier((uint32_t)w, tick_fn, 1);
++        /* [2026-10-21 18:55] SB_FIN_TRAME, offset VERROUILLE par la lecture BCCH : la L1 TI ouvre sa
++         * fenetre SB a la fin de la trame qui precede le SB ; flux cale sur les NB, le SCH arrivait au tick
++         * suivant, fenetre fermee (relectures SB du campement toutes ratees : SB_I flag 0, NET_I 0 ->
++         * la cellule etait abandonnee). Une fenetre SB armee pendant la trame w recoit donc le SCH w+1,
++         * sans recalage (verrou). Hors verrou (resynchro), la lecture en avance faussait le calage. */
++        if (sb_fin_trame() && g_bcch_verrou && g_dedie_tn <= 0 && calypso_rhea_dma_rx_armed() &&
++            calypso_rhea_dma_one_shot() && calypso_rhea_dma_get_len_words() / 2 >= 190) {
++            uint32_t fn1 = (uint32_t)((w + 1) % BSP_FN_MAX);
++            unsigned j = fn1 % BSP_TS0_RING;
++            if (g_ts0[j].valid && g_ts0[j].fn == fn1 && bsp_ts0_est_sb(g_ts0[j].bits)) {
++                static unsigned n_avance;
++                if (++n_avance <= 20 || n_avance % 500 == 0)
++                    printf("  [sbwin] SB_FIN_TRAME (verrou) : fenetre SB au tick %u (trame %u) -> SCH fn=%u [%u]\n",
++                           tick_fn, (uint32_t)w, fn1, n_avance);
++                bsp_ts0_livrer(tick_fn, j);
++                g_dernier_sch.valide = 0;
++                g_ts0[i].joue = 1;
++                return;
++            }
++        }
+         if (g_ts0[i].valid && g_ts0[i].fn == (uint32_t)w && sb_double_on() && g_dedie_tn <= 0 &&
+             bsp_ts0_est_fcch(g_ts0[i].bits) && calypso_rhea_dma_rx_armed() && calypso_rhea_dma_one_shot() &&
+             calypso_rhea_dma_get_len_words() / 2 >= 190) {
+@@ -1855,16 +2193,16 @@ static void bsp_ts0_service(uint32_t tick_fn)
+                 int total = marge > 0 ? (nwin > marge + 148 ? nwin : marge + 148) : 148;
+                 if (total > 256) total = 256;
+                 memset(vide, 0, (size_t)(2 * total) * sizeof *vide);
++                if (bsp_remplissage() != (const int16_t *)g_remplissage_ts0)
++                    faux_air_bruit(vide, total);              /* bruit de fond, pas des zeros (PM = 0) */
+                 calypso_bsp_rx_burst(0, (uint32_t)w, vide, 2 * total);
+                 bsp.bursts_written++;
+                 /* En mode continu la trame doit faire 1250 echantillons, sinon
+                  * le compteur de symboles de la ROM derive : memes remplissages
+                  * que bsp_ts0_livrer(). */
+                 if (!one_shot) {
+-                    extern uint16_t g_remplissage_ts0[];
+                     for (int tn = 1; tn < 8; tn++) {
+-                        calypso_bsp_rx_burst((uint8_t)tn, (uint32_t)w,
+-                                             (const int16_t *)g_remplissage_ts0, 2 * 148);
++                        calypso_bsp_rx_burst((uint8_t)tn, (uint32_t)w, bsp_remplissage(), 2 * 148);
+                     }
+                 }
+                 g_ts0_silences++;
+diff --git a/hw/arm/calypso/l1-dsp/calypso_bsp.h b/hw/arm/calypso/l1-dsp/calypso_bsp.h
+index b4e684a3..faad7b02 100644
+--- a/hw/arm/calypso/l1-dsp/calypso_bsp.h
++++ b/hw/arm/calypso/l1-dsp/calypso_bsp.h
+@@ -41,6 +41,7 @@ int calypso_bsp_trx_calage(uint32_t fn_sb, uint32_t tick);
+ int calypso_bsp_trx_ul_prothese(uint16_t *dspdata, uint32_t tick, int w_page);   /* [2026-10-20] mode TRX : bits exacts du burst montant dans la page de resultat (pont.c, phase A) */   /* [2026-10-20] mode TRX : offset fn/tick depuis le SB emis (pont.c) */
+ int  calypso_bsp_service(uint32_t current_fn);
+ int  calypso_bsp_sb_retenter(void);
++int  calypso_bsp_nb_retenter(void);   /* [2026-10-21] NB garde en dedie TI */
+ void calypso_bsp_sb_trace(unsigned ticks);   /* [2026-09-29] tracer chaque SCH pendant n ticks ([sbwin]) */     /* [2026-09-29] relivre un SCH garde faute de DMA armee ; 1 si livre (pont.c, boucle de pompe) */  /* drains UDP 6702 and delivers the current frame (standalone host) */
+ 
+ /*
+@@ -80,6 +81,7 @@ bool calypso_bsp_send_rach_ra(uint8_t ra, uint8_t bsic, uint32_t fn, uint8_t tn)
+ 
+ uint16_t calypso_bsp_get_daram_addr(void);
+ uint32_t calypso_bsp_get_last_fn(void);
++int calypso_bsp_fn_bts_du_tick(uint32_t tick, uint32_t *fn_bts);
+ uint16_t calypso_bsp_get_daram_len(void);
+ 
+ /* Reference probe: compares DARAM against the last bursts the BSP was handed;

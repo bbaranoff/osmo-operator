@@ -47,6 +47,7 @@ start)
     [ "${QEMU_GDB:-0}" != 0 ] && dbg+=(-gdb "tcp::${QEMU_GDB_PORT:-1240}")
     [ "${QEMU_GDB_WAIT:-0}" != 0 ] && dbg+=(-S)     # CPU gele au depart, gdb fait « continue »
     [ -n "${QEMU_TRACE:-}" ] && dbg+=(-trace "$QEMU_TRACE")   # ex. QEMU_TRACE='pflash*' (dans qemu.log)
+    CALYPSO_PACER_RATTRAPAGE="${CALYPSO_PACER_RATTRAPAGE:-0}" \
     CALYPSO_LCD=c139 CALYPSO_LCD_SHM="${CALYPSO_LCD_SHM:-/dev/shm/calypso_lcd}" \
     CALYPSO_KEYS_SOCK="${CALYPSO_KEYS_SOCK:-/tmp/calypso_keys.sock}" \
     "$QEMU" -M calypso -cpu "${QEMU_CPU:-ti925t}" -display none -parallel none \
@@ -89,7 +90,10 @@ log)
     tail -n "${2:-40}" "$RUNDIR/qemu.log"
     ;;
 gtk)
-    exec /usr/bin/python3 "$HERE/tools/osmo-c123-gtk.py" --modele c139 "${@:2}"
+    # [2026-10-21] --lcd/--keys explicites : sans eux la fenetre prend la premiere instance vivante non-TRX
+    # (rssi, instance 4) et affiche son ecran au lieu de Magnetite.
+    exec /usr/bin/python3 "$HERE/tools/osmo-c123-gtk.py" --modele c139 \
+        --lcd "${CALYPSO_LCD_SHM:-/dev/shm/calypso_lcd}" --keys "${CALYPSO_KEYS_SOCK:-/tmp/calypso_keys.sock}" "${@:2}"
     ;;
 *)
     echo "usage : $0 start|stop|status|log|traces|fsio [cmd]|shell [cmd]|gtk" >&2; exit 2

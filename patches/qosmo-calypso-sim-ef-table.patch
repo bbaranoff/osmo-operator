@@ -1,0 +1,486 @@
+diff --git a/hw/arm/calypso/calypso_comp128.c b/hw/arm/calypso/calypso_comp128.c
+new file mode 100644
+index 00000000..fcb03ed2
+--- /dev/null
++++ b/hw/arm/calypso/calypso_comp128.c
+@@ -0,0 +1,252 @@
++/* [2026-10-21] calypso_comp128.c — COMP128v1 pour la carte SIM emulee (calypso_sim.c, RUN GSM ALGORITHM).
++ * Copie de libosmocore src/gsm/comp128.c (QEMU ne lie pas libosmogsm). Avant : SRES = RAND ^ 0xAA, Kc = 0,
++ * la Ki chargee de mobile.cfg n etait jamais utilisee -> LOCATION UPDATING REJECT du MSC (COMP128v1). */
++/*! \file comp128.c
++ *  COMP128 v1; common/old GSM Authentication Algorithm (A3/A8).
++ *
++ * This code is inspired by original code from :
++ *  Marc Briceno <marc@scard.org>, Ian Goldberg <iang@cs.berkeley.edu>,
++ *  and David Wagner <daw@cs.berkeley.edu>
++ *
++ * But it has been fully rewritten from various PDFs found online describing
++ * the algorithm because the licence of the code referenced above was unclear.
++ * A comment snippet from the original code is included below, it describes
++ * where the doc came from and how the algorithm was reverse engineered.
++ *
++ * This code derived from a leaked document from the GSM standards.
++ * Some missing pieces were filled in by reverse-engineering a working SIM.
++ * We have verified that this is the correct COMP128 algorithm.
++ *
++ * The first page of the document identifies it as
++ *
++ * 	_Technical Information: GSM System Security Study_.
++ * 	10-1617-01, 10th June 1988.
++ *
++ * The bottom of the title page is marked
++ *
++ * 	Racal Research Ltd.
++ * 	Worton Drive, Worton Grange Industrial Estate,
++ * 	Reading, Berks. RG2 0SB, England.
++ * 	Telephone: Reading (0734) 868601   Telex: 847152
++ *
++ * The relevant bits are in Part I, Section 20 (pages 66--67).  Enjoy!
++ *
++ * Note: There are three typos in the spec (discovered by
++ * reverse-engineering).
++ * - First, "z = (2 * x[n] + x[n]) mod 2^(9-j)" should clearly read
++ *   "z = (2 * x[m] + x[n]) mod 2^(9-j)".
++ * - Second, the "k" loop in the "Form bits from bytes" section is severely
++ *   botched: the k index should run only from 0 to 3, and clearly the range
++ *   on "the (8-k)th bit of byte j" is also off (should be 0..7, not 1..8,
++ *   to be consistent with the subsequent section).
++ * - Third, SRES is taken from the first 8 nibbles of x[], not the last 8 as
++ *   claimed in the document.  (And the document doesn't specify how Kc is
++ *   derived, but that was also easily discovered with reverse engineering.)
++ * All of these typos have been corrected in the following code.
++ */
++/*
++ * (C) 2009 by Sylvain Munaut <tnt@246tNt.com>
++ *
++ * All Rights Reserved
++ *
++ * SPDX-License-Identifier: GPL-2.0+
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#include <string.h>
++#include <stdint.h>
++void comp128v1(const uint8_t *ki, const uint8_t *rand, uint8_t *sres, uint8_t *kc);
++void comp128(const uint8_t *ki, const uint8_t *rand, uint8_t *sres, uint8_t *kc);
++
++/*! \addtogroup auth
++ *  @{
++ * \file comp128.c */
++
++/* The compression tables (just copied ...) */
++static const uint8_t table_0[512] = {
++ 102, 177, 186, 162,   2, 156, 112,  75,  55,  25,   8,  12, 251, 193, 246, 188,
++ 109, 213, 151,  53,  42,  79, 191, 115, 233, 242, 164, 223, 209, 148, 108, 161,
++ 252,  37, 244,  47,  64, 211,   6, 237, 185, 160, 139, 113,  76, 138,  59,  70,
++  67,  26,  13, 157,  63, 179, 221,  30, 214,  36, 166,  69, 152, 124, 207, 116,
++ 247, 194,  41,  84,  71,   1,  49,  14,  95,  35, 169,  21,  96,  78, 215, 225,
++ 182, 243,  28,  92, 201, 118,   4,  74, 248, 128,  17,  11, 146, 132, 245,  48,
++ 149,  90, 120,  39,  87, 230, 106, 232, 175,  19, 126, 190, 202, 141, 137, 176,
++ 250,  27, 101,  40, 219, 227,  58,  20,  51, 178,  98, 216, 140,  22,  32, 121,
++  61, 103, 203,  72,  29, 110,  85, 212, 180, 204, 150, 183,  15,  66, 172, 196,
++  56, 197, 158,   0, 100,  45, 153,   7, 144, 222, 163, 167,  60, 135, 210, 231,
++ 174, 165,  38, 249, 224,  34, 220, 229, 217, 208, 241,  68, 206, 189, 125, 255,
++ 239,  54, 168,  89, 123, 122,  73, 145, 117, 234, 143,  99, 129, 200, 192,  82,
++ 104, 170, 136, 235,  93,  81, 205, 173, 236,  94, 105,  52,  46, 228, 198,   5,
++  57, 254,  97, 155, 142, 133, 199, 171, 187,  50,  65, 181, 127, 107, 147, 226,
++ 184, 218, 131,  33,  77,  86,  31,  44,  88,  62, 238,  18,  24,  43, 154,  23,
++  80, 159, 134, 111,   9, 114,   3,  91,  16, 130,  83,  10, 195, 240, 253, 119,
++ 177, 102, 162, 186, 156,   2,  75, 112,  25,  55,  12,   8, 193, 251, 188, 246,
++ 213, 109,  53, 151,  79,  42, 115, 191, 242, 233, 223, 164, 148, 209, 161, 108,
++  37, 252,  47, 244, 211,  64, 237,   6, 160, 185, 113, 139, 138,  76,  70,  59,
++  26,  67, 157,  13, 179,  63,  30, 221,  36, 214,  69, 166, 124, 152, 116, 207,
++ 194, 247,  84,  41,   1,  71,  14,  49,  35,  95,  21, 169,  78,  96, 225, 215,
++ 243, 182,  92,  28, 118, 201,  74,   4, 128, 248,  11,  17, 132, 146,  48, 245,
++  90, 149,  39, 120, 230,  87, 232, 106,  19, 175, 190, 126, 141, 202, 176, 137,
++  27, 250,  40, 101, 227, 219,  20,  58, 178,  51, 216,  98,  22, 140, 121,  32,
++ 103,  61,  72, 203, 110,  29, 212,  85, 204, 180, 183, 150,  66,  15, 196, 172,
++ 197,  56,   0, 158,  45, 100,   7, 153, 222, 144, 167, 163, 135,  60, 231, 210,
++ 165, 174, 249,  38,  34, 224, 229, 220, 208, 217,  68, 241, 189, 206, 255, 125,
++  54, 239,  89, 168, 122, 123, 145,  73, 234, 117,  99, 143, 200, 129,  82, 192,
++ 170, 104, 235, 136,  81,  93, 173, 205,  94, 236,  52, 105, 228,  46,   5, 198,
++ 254,  57, 155,  97, 133, 142, 171, 199,  50, 187, 181,  65, 107, 127, 226, 147,
++ 218, 184,  33, 131,  86,  77,  44,  31,  62,  88,  18, 238,  43,  24,  23, 154,
++ 159,  80, 111, 134, 114,   9,  91,   3, 130,  16,  10,  83, 240, 195, 119, 253,
++}, table_1[256] = {
++  19,  11,  80, 114,  43,   1,  69,  94,  39,  18, 127, 117,  97,   3,  85,  43,
++  27, 124,  70,  83,  47,  71,  63,  10,  47,  89,  79,   4,  14,  59,  11,   5,
++  35, 107, 103,  68,  21,  86,  36,  91,  85, 126,  32,  50, 109,  94, 120,   6,
++  53,  79,  28,  45,  99,  95,  41,  34,  88,  68,  93,  55, 110, 125, 105,  20,
++  90,  80,  76,  96,  23,  60,  89,  64, 121,  56,  14,  74, 101,   8,  19,  78,
++  76,  66, 104,  46, 111,  50,  32,   3,  39,   0,  58,  25,  92,  22,  18,  51,
++  57,  65, 119, 116,  22, 109,   7,  86,  59,  93,  62, 110,  78,  99,  77,  67,
++  12, 113,  87,  98, 102,   5,  88,  33,  38,  56,  23,   8,  75,  45,  13,  75,
++  95,  63,  28,  49, 123, 120,  20, 112,  44,  30,  15,  98, 106,   2, 103,  29,
++  82, 107,  42, 124,  24,  30,  41,  16, 108, 100, 117,  40,  73,  40,   7, 114,
++  82, 115,  36, 112,  12, 102, 100,  84,  92,  48,  72,  97,   9,  54,  55,  74,
++ 113, 123,  17,  26,  53,  58,   4,   9,  69, 122,  21, 118,  42,  60,  27,  73,
++ 118, 125,  34,  15,  65, 115,  84,  64,  62,  81,  70,   1,  24, 111, 121,  83,
++ 104,  81,  49, 127,  48, 105,  31,  10,   6,  91,  87,  37,  16,  54, 116, 126,
++  31,  38,  13,   0,  72, 106,  77,  61,  26,  67,  46,  29,  96,  37,  61,  52,
++ 101,  17,  44, 108,  71,  52,  66,  57,  33,  51,  25,  90,   2, 119, 122,  35,
++}, table_2[128] = {
++ 52,  50,  44,   6,  21,  49,  41,  59,  39,  51,  25,  32,  51,  47,  52,  43,
++ 37,   4,  40,  34,  61,  12,  28,   4,  58,  23,   8,  15,  12,  22,   9,  18,
++ 55,  10,  33,  35,  50,   1,  43,   3,  57,  13,  62,  14,   7,  42,  44,  59,
++ 62,  57,  27,   6,   8,  31,  26,  54,  41,  22,  45,  20,  39,   3,  16,  56,
++ 48,   2,  21,  28,  36,  42,  60,  33,  34,  18,   0,  11,  24,  10,  17,  61,
++ 29,  14,  45,  26,  55,  46,  11,  17,  54,  46,   9,  24,  30,  60,  32,   0,
++ 20,  38,   2,  30,  58,  35,   1,  16,  56,  40,  23,  48,  13,  19,  19,  27,
++ 31,  53,  47,  38,  63,  15,  49,   5,  37,  53,  25,  36,  63,  29,   5,   7,
++}, table_3[64] = {
++  1,   5,  29,   6,  25,   1,  18,  23,  17,  19,   0,   9,  24,  25,   6,  31,
++ 28,  20,  24,  30,   4,  27,   3,  13,  15,  16,  14,  18,   4,   3,   8,   9,
++ 20,   0,  12,  26,  21,   8,  28,   2,  29,   2,  15,   7,  11,  22,  14,  10,
++ 17,  21,  12,  30,  26,  27,  16,  31,  11,   7,  13,  23,  10,   5,  22,  19,
++}, table_4[32] = {
++ 15,  12,  10,   4,   1,  14,  11,   7,   5,   0,  14,   7,   1,   2,  13,   8,
++ 10,   3,   4,   9,   6,   0,   3,   2,   5,   6,   8,   9,  11,  13,  15,  12,
++};
++
++static const uint8_t *_comp128_table[5] = { table_0, table_1, table_2, table_3, table_4 };
++
++
++static inline void
++_comp128_compression_round(uint8_t *x, int n, const uint8_t *tbl)
++{
++	int i, j, m, a, b, y, z;
++	m = 4 - n;
++	for (i=0; i<(1<<n); i++)
++		for (j=0; j<(1<<m); j++) {
++			a = j + i * (2<<m);
++			b = a + (1<<m);
++			y = (x[a] + (x[b]<<1)) & ((32<<m)-1);
++			z = ((x[a]<<1) + x[b]) & ((32<<m)-1);
++			x[a] = tbl[y];
++			x[b] = tbl[z];
++		}
++}
++
++static inline void
++_comp128_compression(uint8_t *x)
++{
++	int n;
++	for (n=0; n<5; n++)
++		_comp128_compression_round(x, n, _comp128_table[n]);
++}
++
++static inline void
++_comp128_bitsfrombytes(uint8_t *x, uint8_t *bits)
++{
++	int i;
++	memset(bits, 0x00, 128);
++	for (i=0; i<128; i++)
++		if (x[i>>2] & (1<<(3-(i&3))))
++			bits[i] = 1;
++}
++
++static inline void
++_comp128_permutation(uint8_t *x, uint8_t *bits)
++{
++	int i;
++	memset(&x[16], 0x00, 16);
++	for (i=0; i<128; i++)
++		x[(i>>3)+16] |= bits[(i*17) & 127] << (7-(i&7));
++}
++
++/*! Perform COMP128v1 algorithm
++ *  \param[in] ki Secret Key K(i) of subscriber
++ *  \param[in] rand Random Challenge
++ *  \param[out] sres user-supplied buffer for storing computed SRES value
++ *  \param[out] kc user-supplied buffer for storing computed Kc value */
++void
++comp128v1(const uint8_t *ki, const uint8_t *rand, uint8_t *sres, uint8_t *kc)
++{
++	int i;
++	uint8_t x[32], bits[128];
++
++	/* x[16-31] = RAND */
++	memcpy(&x[16], rand, 16);
++
++	/* Round 1-7 */
++	for (i=0; i<7; i++) {
++		/* x[0-15] = Ki */
++		memcpy(x, ki, 16);
++
++		/* Compression */
++		_comp128_compression(x);
++
++		/* FormBitFromBytes */
++		_comp128_bitsfrombytes(x, bits);
++
++		/* Permutation */
++		_comp128_permutation(x, bits);
++	}
++
++	/* Round 8 (final) */
++		/* x[0-15] = Ki */
++	memcpy(x, ki, 16);
++
++		/* Compression */
++	_comp128_compression(x);
++
++	/* Output stage */
++	for (i=0; i<8; i+=2)
++		sres[i>>1] = x[i]<<4 | x[i+1];
++
++	for (i=0; i<12; i+=2)
++		kc[i>>1] = (x[i + 18] << 6) |
++		           (x[i + 19] << 2) |
++		           (x[i + 20] >> 2);
++
++	kc[6] = (x[30]<<6) | (x[31]<<2);
++	kc[7] = 0;
++}
++
++
++/*! Perform COMP128v1 algorithm
++ *  \param[in] ki Secret Key K(i) of subscriber
++ *  \param[in] rand Random Challenge
++ *  \param[out] sres user-supplied buffer for storing computed SRES value
++ *  \param[out] kc user-supplied buffer for storing computed Kc value */
++void
++comp128(const uint8_t *ki, const uint8_t *rand, uint8_t *sres, uint8_t *kc)
++{
++    comp128v1(ki, rand, sres, kc);
++}
++
++/*! @} */
+diff --git a/hw/arm/calypso/calypso_sim.c b/hw/arm/calypso/calypso_sim.c
+index add33055..416b6f5b 100644
+--- a/hw/arm/calypso/calypso_sim.c
++++ b/hw/arm/calypso/calypso_sim.c
+@@ -5,9 +5,19 @@
+ #include "qemu/main-loop.h"
+ #include "exec/cpu-common.h"
+ #include "hw/core/cpu.h"
++#include "target/arm/cpu.h"
+ #include "hw/arm/calypso/calypso_sim.h"
+ 
+ #define SIM_LOG(...) do { fprintf(stderr, "[sim] " __VA_ARGS__); fputc('\n', stderr); } while(0)
++static uint32_t sim_guest_pc(void)
++{
++    return (first_cpu && first_cpu->cc && first_cpu->cc->get_pc) ? (uint32_t)first_cpu->cc->get_pc(first_cpu) : 0;
++}
++static uint32_t sim_guest_lr(void)
++{
++    ARMCPU *cpu = ARM_CPU(first_cpu);
++    return (uint32_t)cpu->env.regs[14];
++}
+ 
+ #define APDU_MAX_LEN     261
+ #define RX_FIFO_SIZE     512
+@@ -56,11 +66,47 @@ static SimFile sim_files[] = {
+         0xFF, 0xFF, 0xFF,
+         0x00, 0x00,
+         0xFF, 0x00 } },
++    /* [2026-10-21] EF_BCCH (liste BA) : seul l'ARFCN 1 (bit 6 de l'octet 0, MSB d'abord).
++     * A 0xFF la liste couvrait presque tous les ARFCN : la recherche balayait 1..409 au hasard. */
+     { 0x6F74, 0x7F20, EF_TRANSPARENT, 16, 0,
+-      { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } },
++      { 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } },
+     { 0x6F46, 0x7F20, EF_TRANSPARENT, 17, 0,
+       { 0x01, 'Q','E','M','U','-','S','I','M', ' ',' ',' ',' ',' ',' ',' ',' ' } },
++    /* [2026-10-21] EF absents -> « SIM Invalid » sur Magnetite (la pile TI lit Kc et
++     * PHASE a l'activation ; « file not found » les fait echouer). GSM 11.11 :
++     * Kc = 8 octets + CKSN (0x07 = pas de cle) ; PHASE 0x03 = phase 2+ ;
++     * HPLMN 0xFF = recherche desactivee ; FPLMN vide (0xFF). */
++    { 0x6F20, 0x7F20, EF_TRANSPARENT, 9, 0,
++      { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07 } },
++    /* [2026-10-21] ECC (112) et LP (anglais) : « file not found » juste apres l'activation,
++     * le MMI affiche « SIM Invalid » (activation SIM_NO_ERROR, cause 0x80FF mesuree). */
++    { 0x6FB7, 0x7F20, EF_TRANSPARENT, 3, 0,
++      { 0x11, 0xF2, 0xFF } },
++    { 0x6F05, 0x7F20, EF_TRANSPARENT, 1, 0,
++      { 0x01 } },
++    /* [2026-10-21] EF_ADN (repertoire) : la SST annonce ADN (service 1). Sans ce fichier le driver
++     * SIM met crdFun = SIM_NO_OPERATION -> SS_INV -> CME_ERR_SimWrong -> « SIM Invalid ». */
++    { 0x6FAE, 0x7F20, EF_TRANSPARENT, 1, 0,
++      { 0x03 } },
++    { 0x6F31, 0x7F20, EF_TRANSPARENT, 1, 0,
++      { 0xFF } },
++    { 0x6F7B, 0x7F20, EF_TRANSPARENT, 12, 0,
++      { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } },
++    /* [2026-10-21] EF_SMS : capacite de stockage SMS (memory.total = nb d'enregistrements).
++     * Sans ce fichier g_max_messages = 0 -> ALLOC_MEMORY(0) dans smsidle_sms_cb -> « mfwAlloc invalid »
++     * et « Messages: full ». 4 enregistrements libres de 176 octets. */
++    { 0x6F3C, 0x7F20, EF_LINEAR_FIXED, 704, 176,
++      { 0 } },
++    /* [2026-10-21] SMS init : EF SMSP (1 enregistrement libre), SMSS et CBMI vides */
++    { 0x6F42, 0x7F20, EF_LINEAR_FIXED, 28, 28,
++      { 0xFF } },
++    { 0x6F43, 0x7F20, EF_TRANSPARENT, 2, 0,
++      { 0xFF, 0xFF } },
++    { 0x6F45, 0x7F20, EF_TRANSPARENT, 2, 0,
++      { 0xFF, 0xFF } },
++    { 0x6F48, 0x7F20, EF_TRANSPARENT, 2, 0,
++      { 0xFF, 0xFF } },
+ };
+ #define SIM_FILE_COUNT (sizeof(sim_files) / sizeof(sim_files[0]))
+ 
+@@ -297,9 +343,14 @@ static int build_select_response(CalypsoSim *s, SimFile *f, uint8_t *out)
+         out[p++] = 0x00;
+         out[p++] = 0x00; out[p++] = 0x00;
+         out[p++] = 0x00;
+-        out[p++] = 0xAA;
+-        out[p++] = 0x00; out[p++] = 0x00;
+-        out[p++] = 0x00;
++        /* [2026-10-21] file status (octet 11) : b1 = 1 -> fichier non invalide. 0xAA (b1 = 0)
++         * faisait croire a app_check_imsi_loci_validation() que IMSI/LOCI sont invalides ->
++         * rehabilitation -> SIM_NO_OPERATION (« SIM Invalid ») */
++        out[p++] = 0xAB;
++        /* [2026-10-21] octets 13-15 (GSM 11.11 9.2.1) : longueur des donnees suivantes (2), structure,
++         * longueur d'enregistrement. Trois zeros de trop decalaient tout : structure lue 00
++         * (transparent) et longueur d'enregistrement 0 -> l'entite SIM ne lisait que l'enregistrement 1
++         * de EF SMS, capacite SMS 0 -> mfwAlloc(0) en boucle et « Messages: full » dans l'IHM. */
+         out[p++] = 0x02;
+         out[p++] = (f->structure == EF_TRANSPARENT) ? 0x00
+                 : (f->structure == EF_LINEAR_FIXED) ? 0x01 : 0x03;
+@@ -353,7 +404,7 @@ static void cmd_select(CalypsoSim *s, uint8_t p1, uint8_t p2,
+ 
+     uint8_t resp[32];
+     int n = build_select_response(s, f, resp);
+-    SIM_LOG("SELECT 0x%04x (%s) → %d bytes pending",
++    SIM_LOG("pc=0x%08x SELECT 0x%04x (%s) → %d bytes pending", sim_guest_pc(),
+             fid,
+             f->structure == EF_MF ? "MF" :
+             f->structure == EF_DF ? "DF" : "EF",
+@@ -373,6 +424,35 @@ static void cmd_get_response(CalypsoSim *s, uint8_t le)
+     s->resp_len = 0;
+ }
+ 
++static void cmd_read_record(CalypsoSim *s, uint8_t rec, uint8_t mode, uint8_t le)
++{
++    SimFile *f = find_file(s->selected_ef, 0);
++    if (!f || f->structure != EF_LINEAR_FIXED) {
++        respond_sw(s, 0x94, 0x00);
++        return;
++    }
++    int nrec = f->size / f->rec_len;
++    /* [2026-10-21] modes 02 (suivant) / 03 (precedent) en plus de 04 (absolu), GSM 11.11 9.2.5 */
++    static uint16_t rec_ef; static int rec_cur;
++    if (rec_ef != s->selected_ef) { rec_ef = s->selected_ef; rec_cur = 0; }
++    if (mode == 0x02) rec = (uint8_t)(rec_cur + 1);
++    else if (mode == 0x03) rec = (uint8_t)(rec_cur > 0 ? rec_cur - 1 : nrec);
++    else if (mode != 0x04) { respond_sw(s, 0x6B, 0x00); return; }
++    if (rec < 1 || rec > nrec) {
++        respond_sw(s, 0x94, 0x02);
++        return;
++    }
++    rec_cur = rec;
++    /* enregistrements libres (0xFF) : pas de contenu stocke pour ce fichier */
++    uint8_t buf[256];
++    int n = (le == 0) ? f->rec_len : le;
++    if (n > f->rec_len) n = f->rec_len;
++    memset(buf, 0xFF, n);
++    rx_push_n(s, buf, n);
++    SIM_LOG("READ_RECORD EF=0x%04x rec=%d len=%d", s->selected_ef, rec, n);
++    respond_sw(s, 0x90, 0x00);
++}
++
+ static void cmd_read_binary(CalypsoSim *s, uint8_t p1, uint8_t p2, uint8_t le)
+ {
+     SimFile *f = find_file(s->selected_ef, 0);
+@@ -391,6 +471,29 @@ static void cmd_read_binary(CalypsoSim *s, uint8_t p1, uint8_t p2, uint8_t le)
+     respond_sw(s, 0x90, 0x00);
+ }
+ 
++/* [2026-10-21] UPDATE BINARY / UPDATE RECORD : refuses (6D00) jusqu'ici, le telephone ne pouvait
++ * rien ecrire (LOCI, Kc, FPLMN, SMS...). Le transparent est garde dans data[] tant qu'il y tient ;
++ * les enregistrements sont acceptes sans etre gardes (les lectures rendent des enregistrements libres). */
++static void cmd_update_binary(CalypsoSim *s, uint8_t p1, uint8_t p2, uint8_t lc, const uint8_t *data)
++{
++    SimFile *f = find_file(s->selected_ef, 0);
++    if (!f || f->structure != EF_TRANSPARENT) { respond_sw(s, 0x94, 0x08); return; }
++    int offset = (p1 << 8) | p2;
++    if (offset + lc > f->size) { respond_sw(s, 0x67, 0x00); return; }
++    if (offset + lc <= (int)sizeof f->data) memcpy(f->data + offset, data, lc);
++    SIM_LOG("UPDATE_BINARY EF=0x%04x off=%d len=%d", s->selected_ef, offset, lc);
++    respond_sw(s, 0x90, 0x00);
++}
++
++static void cmd_update_record(CalypsoSim *s, uint8_t rec, uint8_t mode, uint8_t lc)
++{
++    SimFile *f = find_file(s->selected_ef, 0);
++    if (!f || f->structure != EF_LINEAR_FIXED) { respond_sw(s, 0x94, 0x08); return; }
++    if (lc != f->rec_len) { respond_sw(s, 0x67, 0x00); return; }
++    SIM_LOG("UPDATE_RECORD EF=0x%04x rec=%d mode=%d len=%d (non garde)", s->selected_ef, rec, mode, lc);
++    respond_sw(s, 0x90, 0x00);
++}
++
+ static void cmd_status(CalypsoSim *s, uint8_t le)
+ {
+     SimFile *df = find_file(s->selected_df, 0);
+@@ -411,16 +514,25 @@ static void cmd_verify_chv(CalypsoSim *s, uint8_t p2, uint8_t lc,
+     respond_sw(s, 0x90, 0x00);
+ }
+ 
++void comp128v1(const uint8_t *ki, const uint8_t *rand, uint8_t *sres, uint8_t *kc);   /* calypso_comp128.c */
+ static void cmd_run_gsm_algo(CalypsoSim *s, uint8_t lc, const uint8_t *data)
+ {
+ 
+     if (lc != 16) { respond_sw(s, 0x67, 0x00); return; }
+ 
+     uint8_t resp[12];
+-    for (int i = 0; i < 4; i++) resp[i]    = data[i] ^ 0xAA;
+-    for (int i = 0; i < 8; i++) resp[4+i] = 0x00;
+-    SIM_LOG("RUN_GSM_ALGORITHM (RAND[0]=0x%02x) → SRES[0]=0x%02x",
+-            data[0], resp[0]);
++    /* [2026-10-21] le VRAI calcul : COMP128v1 avec la Ki de mobile.cfg (calypso_comp128.c). Le faux SRES
++     * (RAND ^ 0xAA, Kc 0) ne genait pas le mobile osmocom (sim test : comp128 fait dans layer23), mais le
++     * firmware TI (Magnetite) demande le calcul a la carte -> LOCATION UPDATING REJECT du MSC. */
++    if (s->ki_valid) {
++        comp128v1(s->ki, data, resp, resp + 4);
++        SIM_LOG("RUN_GSM_ALGORITHM COMP128v1 (RAND[0]=0x%02x) → SRES=%02x%02x%02x%02x Kc[0]=0x%02x",
++                data[0], resp[0], resp[1], resp[2], resp[3], resp[4]);
++    } else {
++        for (int i = 0; i < 4; i++) resp[i]    = data[i] ^ 0xAA;
++        for (int i = 0; i < 8; i++) resp[4+i] = 0x00;
++        SIM_LOG("RUN_GSM_ALGORITHM SANS Ki (CALYPSO_SIM_CFG ?) → SRES bidon RAND^0xAA");
++    }
+     respond_with_data_pending(s, resp, 12);
+ }
+ 
+@@ -451,6 +563,9 @@ static void dispatch_apdu(CalypsoSim *s)
+     switch (ins) {
+     case 0xA4: cmd_select(s, p1, p2, p3, data ? data : (const uint8_t *)""); break;
+     case 0xB0: cmd_read_binary(s, p1, p2, p3); break;
++    case 0xB2: cmd_read_record(s, p1, p2, p3); break;
++    case 0xD6: cmd_update_binary(s, p1, p2, p3, data ? data : (const uint8_t *)""); break;
++    case 0xDC: cmd_update_record(s, p1, p2, p3); break;
+     case 0xC0: cmd_get_response(s, p3); break;
+     case 0xF2: cmd_status(s, p3); break;
+     case 0x20: cmd_verify_chv(s, p2, p3, data ? data : (const uint8_t *)""); break;
+@@ -582,7 +697,7 @@ void calypso_sim_reg_write(CalypsoSim *s, hwaddr off, uint16_t val)
+              * driver TI : la carte repondait avant que SIM_ManualStart ait mis
+              * VCC, SIO et l'horloge, et la sequence ne finissait jamais. L'ATR
+              * du mode manuel part sur CONF1 (SCLKEN / SRSTLEV, ci-dessous). */
+-            SIM_LOG("RESET → ATR delivered (synchronous)");
++            SIM_LOG("RESET → ATR delivered (synchronous) pc=0x%08x lr=0x%08x", sim_guest_pc(), sim_guest_lr());
+             s->apdu_pos = 0;
+             s->apdu_expected = 0;
+             s->resp_len = 0;
+diff --git a/hw/arm/calypso/meson.build b/hw/arm/calypso/meson.build
+index 97e185f8..ca293409 100644
+--- a/hw/arm/calypso/meson.build
++++ b/hw/arm/calypso/meson.build
+@@ -12,6 +12,7 @@ arm_ss.add(when: 'CONFIG_CALYPSO', if_true: files(
+   'calypso_tsp.c',
+   'calypso_trf6151.c',
+   'calypso_sim.c',
++  'calypso_comp128.c',   # [2026-10-21] COMP128v1 de la SIM emulee (copie de libosmocore)
+   'calypso_l1_dispatch.c',
+   'calypso_dcch_tap.c',
+   # [2026-10-19] la carte vue de l'utilisateur : clavier (ARMIO), I2C reel et
