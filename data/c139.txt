@@ -1,0 +1,3 @@
+data/c139.jpg : photo « Motorola C139-1170.jpg » de Raimond Spekking (travail personnel), Wikimedia Commons,
+licence CC BY-SA 4.0 (https://commons.wikimedia.org/wiki/File:Motorola_C139-1170.jpg), recadree sur le telephone
+et reduite a 720x1561 le 21/10/2026 pour osmo-c123-gtk.py --modele c139.

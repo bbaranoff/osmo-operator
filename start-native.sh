@@ -166,6 +166,16 @@ Usage : ./start-native.sh [options] [mode]
                         il est lance quand le firmware trx est en mode BTS.
                             ./start-native.sh --bts          la radio de la BTS seule
                             ./start-native.sh --bts --ms     la BTS et le mobile, par l'air
+    --ms-magnetite      [2026-10-21] comme --ms, mais le mobile est le VRAI firmware TI :
+                        FreeCalypso Magnetite (cible c139, config hybrid-ui-vo, compile
+                        avec le TMS470 sous Wine ; doc/magnetite.md) en flash a la place
+                        du layer1 osmocom-bb (c54x_exe/run.sh FIRMWARE_FLASH=...). Pile
+                        L23 et interface dans le firmware : pas d'osmocon ni de mobile,
+                        rvinterf decode les traces, ecran couleur du C139 dans
+                        tools/osmo-c123-gtk.py --modele c139. MAGNETITE_FLASH=<image>
+                        (defaut /opt/GSM/firmware/magnetite/c139-flash.img).
+                            ./start-native.sh --bts --ms-magnetite   la BTS et le C139 Magnetite, par l'air
+                            ./start-native.sh --ms-magnetite         le C139 Magnetite seul, par le pont
     --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la pile ; le MS#1 passe en
                         « sim sap ». Sert la carte du lecteur PC/SC (HID Omnikey,
@@ -341,6 +351,14 @@ while [ $# -gt 0 ]; do
                        DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX ;;
         # [2026-10-20] --ms : sans --bts c'est le defaut (mobile + pont) ; avec --bts, l'instance 2 par l'air
         --ms)          MS_AIR=1 ;;
+        # [2026-10-21] --ms-magnetite : --ms avec le firmware TI (Magnetite) en flash, voir l'aide
+        --ms-magnetite) MS_AIR=1; MS_MAGNETITE=1
+                       MAGNETITE_FLASH="${MAGNETITE_FLASH:-/opt/GSM/firmware/magnetite/c139-flash.img}"
+                       [ -r "$MAGNETITE_FLASH" ] || { printf '%s\n' "--ms-magnetite : image flash absente : $MAGNETITE_FLASH (doc/magnetite.md : build fc-magnetite c139 hybrid-ui-vo)" >&2; exit 2; }
+                       # [2026-10-21 11:10] PAS d'export ici : exporte, FIRMWARE_FLASH atteignait aussi l'instance 1
+                       # (la radio de la BTS) qui bootait Magnetite au lieu du firmware trx. Il n'est passe qu'au
+                       # mobile (exec ci-dessous).
+                       ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
         --sap=*)       SAP_MODE=1; SAP_TYPE="${1#*=}"; export SAP_MODE SAP_TYPE ;;
         --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
@@ -3359,7 +3377,7 @@ if [ "$DSP_BANC" = 1 ]; then
             "$([ "${ASSEMBLY_LOGS:-0}" = 1 ] && echo " ASSEMBLY_LOGS=1")" "$BANC_DSP"
         [ "${OSMO_TRX:-0}" = 1 ] && printf '     OSMO_TRX=1 : trx.highram.elf + transceiver --no-sync (pas de mobile, pas de pont) ; %s\n' "$(trx_ts_desc)"
         [ "${OSMO_TRX_TS1:-0}" = 1 ] && printf '     OSMO_TRX_TS1=1 : INSTANCE=3 OSMO_TRX_PHONE=2 bash %s   (le 2e Calypso TRX, TS1, avant le transceiver)\n' "$BANC_DSP"
-        [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp bash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "$BANC_DSP"
+        [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp %sbash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "${MS_MAGNETITE:+FIRMWARE_FLASH=$MAGNETITE_FLASH }" "$BANC_DSP"
         exit 0
     fi
     audio_start
@@ -3396,10 +3414,12 @@ if [ "$DSP_BANC" = 1 ]; then
         # l'instance 2 en heritait -> firmware trx + second transceiver, « port UDP 5700 deja pris ».
         # Le mobile par l'air est le layer1 d'origine (FIRMWARE_ELF du profil retire : c'est le
         # layer1.highram.elf qui a fait le LU et l'appel du 20/10 21:08 ; FIRMWARE_SRC explicite garde la main).
+        # [2026-10-21] --ms-magnetite : FIRMWARE_FLASH (exporte au parsing) remplace le layer1 pour l'instance 2
         exec env -u FIRMWARE_ELF -u FIRMWARE_BIN ${FIRMWARE_SRC:+FIRMWARE_ELF="$FIRMWARE_ELF"} \
+            ${MS_MAGNETITE:+FIRMWARE_FLASH="$MAGNETITE_FLASH"} \
             INSTANCE=2 AIR=1 OSMO_TRX=0 ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
     fi
-    exec env ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
+    exec env ${MS_MAGNETITE:+FIRMWARE_FLASH="$MAGNETITE_FLASH"} ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"
 fi
 
 [ $DRY -eq 1 ] || audio_start
