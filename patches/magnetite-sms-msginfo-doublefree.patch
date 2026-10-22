@@ -1,0 +1,128 @@
+diff -r 9394305d4ff5 src/ui3/bmi/mmiSmsRead.c
+--- a/src/ui3/bmi/mmiSmsRead.c	Mon Oct 31 00:14:44 2022 +0000
++++ b/src/ui3/bmi/mmiSmsRead.c	Thu Oct 22 16:08:11 2026 +0200
+@@ -777,6 +777,11 @@
+ 			{
+ 				for (i = 0; i < ((data->sms_list_data).nb_sms_stored); i++)
+ 					{
++#ifdef FF_MMI_SMS_DYNAMIC
++					/* [banc 2026-10-22] deja libere par E_EXIT, ou jamais alloue (liste vide) */
++					if (data->sms_list_data.sms_header == NULL || data->sms_list_data.sms_header[i] == NULL)
++						continue;
++#endif
+ 					FREE_MEMORY( (void *)data->sms_list_data.sms_header[i], UCS2_MENU_TEXT_LEN+ 1/*SPR1242*/);
+ 					}
+ 				/*SPR 2686, only de-allocate memory for the number of messages displayed*/
+@@ -784,8 +789,11 @@
+ 				FREE_MEMORY ((UBYTE *)data->menu_list_data, sizeof(ListMenuData));
+ 			}
+ #ifdef FF_MMI_SMS_DYNAMIC
+-			FREE_MEMORY((void*)data->sms_list_data.sms_messages,g_max_messages * sizeof(T_MFW_SMS_MSG) );
+-			FREE_MEMORY((void*)data->sms_list_data.sms_header, g_max_messages * sizeof(wstring_t));
++			/* [banc 2026-10-22] gardes : E_EXIT a pu les liberer deja (remis a NULL) */
++			if (data->sms_list_data.sms_messages != NULL)
++				FREE_MEMORY((void*)data->sms_list_data.sms_messages,g_max_messages * sizeof(T_MFW_SMS_MSG) );
++			if (data->sms_list_data.sms_header != NULL)
++				FREE_MEMORY((void*)data->sms_list_data.sms_header, g_max_messages * sizeof(wstring_t));
+ #endif
+ 			FREE_MEMORY ((void *)data, sizeof (T_SMSREAD_R));
+ 			sms_read_win = 0;
+@@ -1012,18 +1020,32 @@
+ 	    l_parent = data->parent;
+ 		SmsRead_R_destroy(win);
+ 		SEND_EVENT(l_parent, E_RETURN, data->id, NULL);		
+-	
++		/* [banc 2026-10-22] break ajoute : E_EXIT relisait data/list_data deja liberes par SmsRead_R_destroy */
++		break;
++
+ 	case E_EXIT: // Terminate exit from sms send...
+ 	// May 27, 2005    MMI-FIX-29869 x0018858
+ #ifdef FF_MMI_SMS_DYNAMIC
+      {
+      		int i;
+-		for (i=0;i<list_data->nb_sms_stored; i++)
+-			{
+-				FREE_MEMORY((U8*)list_data->sms_header[i], UCS2_MENU_TEXT_LEN + 1 );
+-			}
+-		FREE_MEMORY((U8*)list_data->sms_header, g_max_messages * sizeof(wstring_t) );		
+-		FREE_MEMORY((U8*)list_data->sms_messages, g_max_messages * sizeof(T_MFW_SMS_MSG));		
++		/* [banc 2026-10-22] gardes + NULL : sans eux SmsRead_R_destroy liberait une 2e fois (tas MMI
++		   corrompu, « Preceeding Sentinal Bytes have been corrupted »), et sms_header n'existe pas si la
++		   liste est vide */
++		if (list_data->sms_header != NULL)
++		{
++			for (i=0;i<list_data->nb_sms_stored; i++)
++				{
++					if (list_data->sms_header[i] != NULL)
++						FREE_MEMORY((U8*)list_data->sms_header[i], UCS2_MENU_TEXT_LEN + 1 );
++					list_data->sms_header[i] = NULL;
++				}
++			FREE_MEMORY((U8*)list_data->sms_header, g_max_messages * sizeof(wstring_t) );		
++			list_data->sms_header = NULL;
++		}
++		if (list_data->sms_messages != NULL)
++			FREE_MEMORY((U8*)list_data->sms_messages, g_max_messages * sizeof(T_MFW_SMS_MSG));		
++		list_data->sms_messages = NULL;
++		list_data->nb_sms_stored = 0;
+ 	}
+ #endif
+ 	    listDisplayListMenu(win, data->menu_list_data, (ListCbFunc_t)SmsRead_R_smslist_cb,0);
+diff -r 9394305d4ff5 src/ui3/mfw/mfw_sms.c
+--- a/src/ui3/mfw/mfw_sms.c	Mon Oct 31 00:14:44 2022 +0000
++++ b/src/ui3/mfw/mfw_sms.c	Thu Oct 22 16:08:11 2026 +0200
+@@ -241,6 +241,8 @@
+ 
+ //May 27, 2005    MMI-FIX-29869 x0018858 - Added a Checking variable.
+ static int Counter_first = 0;
++/* [banc 2026-10-22] sms_read_msg_info() appele avant l'allocation de msg_info (voir Check_max_sms_allowed) */
++static int liste_avant_alloc = 0;
+ #else
+ static T_MFW_SMS_MSG msg_info[MAX_MESSAGES]; /* message table */
+ #endif
+@@ -348,8 +350,30 @@
+ 				{
+ 					msg_info = (T_MFW_SMS_MSG*)ALLOC_MEMORY(g_max_messages*sizeof(T_MFW_SMS_MSG));
+ 
++					/* [banc 2026-10-22] Le tableau sortait de ALLOC_MEMORY NON initialise. rAT_sms_ready() ->
++					   sms_read_msg_info() passe souvent AVANT cette allocation (premier evenement SMS de l'ecran de
++					   veille) : sa remise a index -1 tombait sur msg_info NULL et le tableau alloue ensuite gardait
++					   des dechets. Index != -1 = entrees fantomes « [P] » dans Messages > Read ; en ouvrir une lancait
++					   sms_read sur un index bidon, sans reponse : « Please wait » infini. */
++					for (i=0; i<g_max_messages; i++)
++					{
++						memset(&msg_info[i], 0, sizeof(T_MFW_SMS_MSG));
++						msg_info[i].index = -1;
++						msg_info[i].first_index = -1;
++						msg_info[i].addr.ton = MFW_TON_UNKNOWN;
++						msg_info[i].addr.npi = MFW_NPI_UNKNOWN;
++						msg_info[i].concat_status = MFW_SMS_NO_CONC;
++						msg_info[i].mem = MFW_MEM_NOTPRESENT;
++						msg_info[i].first_mem = MFW_MEM_NOTPRESENT;
++					}
+ 				}
+ 			Counter_first ++;
++			/* la liste lue avant l'allocation est perdue : la relire maintenant */
++			if (liste_avant_alloc)
++			{
++				liste_avant_alloc = 0;
++				sms_read_msg_info();
++			}
+ 		}
+ 
+ }
+@@ -853,6 +877,15 @@
+     TRACE_FUNCTION("sms_read_msg_info()");
+ 
+ #ifdef FF_MMI_SMS_DYNAMIC
++    if (msg_info == NULL)
++    {
++        /* [banc 2026-10-22] trop tot : Check_max_sms_allowed() relira la liste apres l'allocation */
++        liste_avant_alloc = 1;
++        return;
++    }
++#endif
++
++#ifdef FF_MMI_SMS_DYNAMIC
+     for (i=0; i<g_max_messages; i++)
+ #else
+     for (i=0; i<MAX_MESSAGES; i++)

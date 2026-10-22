@@ -5,6 +5,8 @@ import struct
 
 from . import gsm
 
+_dcch_gen = [0]   # [2026-10-22] generation de calypso_dcch_cfg (IMM ASS), voir CHANNEL RELEASE
+
 log = logging.getLogger("pont")
 
 TCH_DL_PATH = "/dev/shm/calypso_tch_dl"
@@ -228,6 +230,7 @@ class Downlink:
         else:
             return
         from .state import ecrire_dcch
+        _dcch_gen[0] += 1                                  # annule une liberation differee en attente
         ecrire_dcch(kind, ss, cn)
         log.info("IMMEDIATE ASSIGNMENT (fn=%u) : SDCCH/%d TS%d SS%d -> calypso_dcch_cfg (firmware TI)",
                  fn, 8 if kind else 4, cn & 7, ss)
@@ -242,10 +245,33 @@ class Downlink:
             self.tch.arm(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
         elif mt == gsm.RR_CHANNEL_RELEASE:
             self.tch.release_requested("CHANNEL RELEASE")
-            if os.environ.get("MS_MAGNETITE") and os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") != "0":
-                from .state import ecrire_dcch, DCCH_RELEASED
+            self._liberer_dcch_ti(fn, "CHANNEL RELEASE")
+
+    def _liberer_dcch_ti(self, fn, quoi):
+        """Firmware TI (Magnetite) : pas de tap QEMU pour dire que le mobile a quitte le dedie ; le pont libere
+        lui-meme calypso_dcch_cfg (et le TCH) apres le CHANNEL RELEASE."""
+        if not os.environ.get("MS_MAGNETITE") or os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") == "0":
+            return
+        # [2026-10-22 14:10] DIFFEREE. Le pont lit le descendant ~30 trames AVANT le mobile (marge DL
+        # +28..+35) : liberer tout de suite coupait le SDCCH au BSP avant que le mobile ait recu ce
+        # CHANNEL RELEASE ; il restait sur un canal mort (SA_I en erreur) jusqu'a la perte du lien
+        # (~13 s, DDS_R), sourd au paging pendant ce temps (MT SMS, appels entrants perdus).
+        # PONT_DCCH_REL_DELAI (s, defaut 1.5) ; une IMM ASS entre-temps annule la liberation.
+        # [2026-10-22 20:55] AUSSI SUR LA FACCH. Le CHANNEL RELEASE d'un appel arrive sur le TCH : rien n'etait
+        # libere, TCH tenu 20 s (RELEASE_FALLBACK) et BSP route sur le dedie apres le raccroche (DESACCORD),
+        # NP_I en erreur, RECOVERY de la L1 TI, DSP relance en 2,4 s, 444 trames perdues : antenne perdue.
+        import threading
+        from .state import ecrire_dcch, DCCH_RELEASED
+        gen = _dcch_gen[0]
+        delai = float(os.environ.get("PONT_DCCH_REL_DELAI", "1.5"))
+        def _liberer():
+            if _dcch_gen[0] == gen:
+                self.tch.close("%s, liberation differee (firmware TI)" % quoi)
                 ecrire_dcch(DCCH_RELEASED, 0, 0)
-                log.info("CHANNEL RELEASE (fn=%u) : calypso_dcch_cfg libere (firmware TI)", fn)
+                log.info("%s (fn=%u) : calypso_dcch_cfg libere apres %.1f s (firmware TI)", quoi, fn, delai)
+        t = threading.Timer(delai, _liberer)
+        t.daemon = True
+        t.start()
 
     def _tch(self, tn, fn, burst):
         if gsm.is_dummy(burst):
@@ -280,6 +306,7 @@ class Downlink:
             self.feed.l2(fn, gsm.GSMTAP_TCH_F, l2, tn)
             if gsm.rr_message_type(l2)[1] == gsm.RR_CHANNEL_RELEASE:
                 self.tch.release_requested("CHANNEL RELEASE (FACCH)")
+                self._liberer_dcch_ti(fn, "CHANNEL RELEASE (FACCH)")
         else:
             self.stats.tch_crc += 1
 

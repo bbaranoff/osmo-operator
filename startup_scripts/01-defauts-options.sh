@@ -145,6 +145,14 @@ Usage : ./start-native.sh [options] [mode]
                         (defaut /opt/GSM/firmware/magnetite/c139-flash.img).
                             ./start-native.sh --bts --ms-magnetite   la BTS et le C139 Magnetite, par l'air
                             ./start-native.sh --ms-magnetite         le C139 Magnetite seul, par le pont
+    --vocoder-rom       [2026-10-22] DEFAUT. Le codec FR de la mask-ROM du DSP vocode (port voix
+                        SP0 modelise, CALYPSO_VSP=1, pont/vsp_audio.py) : BANC_VOCODEUR=rom.
+                        Le C54x emule doit alors tenir le temps reel AVEC le codec.
+    --gapk              [2026-10-22] Le vocodeur tourne sur l'hote (osmo-gapk dans le mobile L23) :
+                        BANC_VOCODEUR=hote, CALYPSO_VSP=0, TCH montant code par l'hote
+                        (PONT_UL_RAW_TCH=0). Le DSP ne fait plus que le canal : il tient le temps
+                        reel. Mobile osmocom seulement : le firmware TI (--ms-magnetite) vocode
+                        toujours dans la ROM.
     --sap, --softsim    SIM via SAP : serveur softSIM (Ruby, /opt/GSM/softsim) sur
                         /tmp/osmocom_sap, lance avant la pile ; le MS#1 passe en
                         « sim sap ». Sert la carte du lecteur PC/SC (HID Omnikey,
@@ -334,6 +342,11 @@ while [ $# -gt 0 ]; do
                        # (__TS1_PCHAN_BTS0__) : IMM ASS sur TS1, SABM de Magnetite sur TS0, LU en Timeout.
                        export MS_MAGNETITE
                        ;;
+        # [2026-10-22] vocodeur : la ROM du DSP (defaut, 14-demarrage.sh) ou GAPK sur l'hote. Exportes ici :
+        # /etc/default/osmo-banc (BANC_VOCODEUR=rom, CALYPSO_VSP=1, PONT_UL_RAW_TCH=1) ne remplit que le vide.
+        --vocoder-rom|--vocodeur-rom) BANC_VOCODEUR=rom; CALYPSO_VSP=1; export BANC_VOCODEUR CALYPSO_VSP ;;
+        --gapk|--vocodeur-hote) BANC_VOCODEUR=hote; CALYPSO_VSP=0; PONT_UL_RAW_TCH=0
+                       export BANC_VOCODEUR CALYPSO_VSP PONT_UL_RAW_TCH ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
         --sap=*)       SAP_MODE=1; SAP_TYPE="${1#*=}"; export SAP_MODE SAP_TYPE ;;
         --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap

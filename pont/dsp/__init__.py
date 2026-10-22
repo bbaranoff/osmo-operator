@@ -66,6 +66,12 @@ def main(argv=None):
     downlink = DownlinkDsp(cfg, stats, cipher, dedicated, tch, feeder, record, timeslots)
     uplink = UplinkDsp(cfg, clock, stats, dedicated, tch, transmitter, feeder, cipher)
     scheduler = TchScheduler(cfg, clock, stats, tch, uplink, transmitter)
+    if os.environ.get("PONT_VOIX_HOTE", "0") == "1":
+        # [2026-10-22] la voix du Magnetite par l'hote (libgsm), voir pont/voix_hote.py
+        from ..voix_hote import VoixHote
+        voix = VoixHote(uplink, tch, stats)
+        downlink.ring = voix
+        voix.start()
     if os.environ.get("PONT_UL_RAW", "0") == "1":
         # [2026-10-04] tuyau unique : les bursts de la ROM partent par `transmitter`, ceux que l'hote
         # code encore (RACH, SDCCH, FACCH, SACCH, parole) vont au puits. Voir dsp/uplink.py RomTxRing.

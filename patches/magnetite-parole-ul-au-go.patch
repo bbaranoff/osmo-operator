@@ -1,0 +1,28 @@
+--- a/c54x_exe/src/montant.c
++++ b/c54x_exe/src/montant.c
+@@ -356,6 +356,25 @@
+         if (g.facch++ < (unsigned long)journal())
+             printf("  [montant] FACCH UL fn=%u (au GO)\n", fn);
+     }
++    /* [2026-10-22] LA PAROLE MONTANTE AU GO. a_du (NDB_A_DU_1) souffre du meme mal que a_fu : la ROM
++     * pose B_BLUD puis l'efface des la phase B de la trame ; capture_tch_ul (montant_scruter, fin de
++     * trame) arrivait trop tard, prendre_ul() rendait false -> publier_parole() jamais appelee, SHM parole
++     * absent, pont ul=0 (aucune voix montante). On la capte ici au GO, symetrique a la FACCH ci-dessus.
++     * L'anti-doublon de prendre_ul() (dedup par contenu, vu[]) empeche le double envoi quand
++     * capture_tch_ul la retente en fin de trame. MONTANT_DU_AU_GO=0 coupe. */
++    static int du = -1;
++    if (du < 0) { const char *e = calypso_getenv("MONTANT_DU_AU_GO"); du = !(e && *e == '0'); }
++    if (du) {
++        uint8_t fr[FR_BYTES];
++        if (prendre_ul(api_ram, NDB_A_DU_1, fr, FR_BYTES)) {
++            noter_ul(fn, 1, TCHT_DSP_TASK, fr, FR_BYTES);   /* brute, format TI (a_du) */
++            parole_ti_vers_fr(fr);
++            noter_ul(fn, 0, TCHT_DSP_TASK, fr, FR_BYTES);   /* convertie FR, ce que recoit le pont */
++            publier_parole(fr, fn);
++            if (g.parole++ < (unsigned long)journal())
++                printf("  [montant] parole UL fn=%u (au GO)\n", fn);
++        }
++    }
+ }
+ 
+ static bool capture_tch_ul(uint16_t *api_ram, uint16_t task_u, uint32_t fn)

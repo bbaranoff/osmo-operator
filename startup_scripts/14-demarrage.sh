@@ -64,6 +64,11 @@ if [ "$DSP_BANC" = 1 ]; then
         unset _k _v
     fi
     : "${BANC_VOCODEUR:=rom}"; export BANC_VOCODEUR
+    # [2026-10-22] --gapk avec --ms-magnetite : pas de mobile L23 pour GAPK, la voix est codee par le pont
+    # (pont/voix_hote.py, libgsm) ; le DSP ne fait plus que le canal (CALYPSO_VSP=0).
+    if [ "$BANC_VOCODEUR" = hote ] && [ -n "${MS_MAGNETITE:-}" ]; then
+        : "${PONT_VOIX_HOTE:=1}"; export PONT_VOIX_HOTE
+    fi
     : "${CALYPSO_VSP:=1}";     export CALYPSO_VSP
     # [2026-10-18] ET LE RESTE DU PROFIL --vocodeur-rom, MEME SANS
     # /etc/default/osmo-banc. Sur acer (10.99.0.2) le fichier n'existait pas :
