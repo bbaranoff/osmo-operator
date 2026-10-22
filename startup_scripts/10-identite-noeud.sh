@@ -58,7 +58,11 @@ case "$ACTION" in
         # du bureau, launch.sh --stop et start-multi.sh --stop.
         # --no-block : on n attend pas systemd, et surtout on ne peut pas se
         # bloquer quand cet arret est lui-meme l ExecStop de osmo-banc.
-        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+        # [2026-10-22] PLUS PAR DEFAUT : le tableau de bord (:8080) reste en ligne banc arrete (demande
+        # explicite) ; CALYPSO_DASHBOARD_SUIT_BANC=1 retablit l'arret avec le banc.
+        if [ "${CALYPSO_DASHBOARD_SUIT_BANC:-0}" != 1 ]; then
+            :
+        elif [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
             systemctl --no-block stop osmo-egprs-web.service 2>/dev/null || true
         else
             pkill -f "osmo-egprs-web/server.js" 2>/dev/null || true

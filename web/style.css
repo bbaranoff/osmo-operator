@@ -65,3 +65,17 @@ td, th { border-bottom: 1px solid var(--bord); padding: 4px 8px; text-align: lef
 td code { font-size: 12px; word-break: break-all; }
 .flex2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 800px) { .flex2 { grid-template-columns: 1fr; } main { padding: 16px 12px; } }
+/* [2026-10-22] onglet Configs osmo : menu des /etc/osmocom/osmo-*.cfg a gauche, editeur a droite */
+.osmo { display: grid; grid-template-columns: 240px 1fr; gap: 14px; align-items: start; }
+.o-menu { position: sticky; top: 64px; }
+.o-menu ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: 70vh; overflow: auto; }
+.o-menu li { padding: 5px 8px; border-radius: 5px; cursor: pointer; font: 13px ui-monospace, monospace; display: flex; gap: 8px; align-items: center; }
+.o-menu li:hover { background: var(--code); }
+.o-menu li.actif { background: var(--pose); font-weight: 600; }
+.o-menu li small { color: var(--doux); font: 11px system-ui; }
+.pt { width: 8px; height: 8px; border-radius: 50%; background: var(--bord); flex: none; }
+.pt.on { background: var(--ok); }
+.bascule button.actif { background: var(--accent); color: #fff; border-color: var(--accent); }
+.bascule button:disabled { opacity: .45; cursor: default; }
+@media (max-width: 720px) { .osmo { grid-template-columns: 1fr; } .o-menu { position: static; } }
+#o-prot.actif { background: var(--ok); color: #fff; border-color: var(--ok); }

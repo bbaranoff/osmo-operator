@@ -337,6 +337,52 @@ def fichier_autorise(p):
     return p in [os.path.realpath(x) for x in fichiers_cfg()]
 
 
+# [2026-10-22] Onglet « Configs osmo » : chaque /etc/osmocom/osmo-*.cfg, son gabarit configs/ (start.sh
+# regenere /etc/osmocom depuis configs/ a chaque run : une retouche de /etc ne vit que jusque-la) et le
+# demon qui le lit en ce moment (-c <fichier> dans sa ligne de commande).
+PROTEGES = "/etc/osmocom/.proteges"   # lib/gabarits.sh install_configs_native n'ecrase pas ces fichiers
+
+
+def proteges():
+    try:
+        with open(PROTEGES, encoding="utf-8") as f:
+            return {l.split("#")[0].strip() for l in f} - {""}
+    except FileNotFoundError:
+        return set()
+
+
+def proteger(nom, on):
+    if "/" in nom or not nom:
+        raise ValueError("nom invalide")
+    if (nom in proteges()) == on:
+        return
+    lignes = []
+    if os.path.exists(PROTEGES):
+        with open(PROTEGES, encoding="utf-8") as f:
+            lignes = [l for l in f if l.split("#")[0].strip() != nom]
+    else:
+        lignes = ["# Fichiers de /etc/osmocom que start.sh ne regenere pas depuis configs/ (un par ligne).\n"]
+    if on:
+        lignes.append(nom + "\n")
+    with open(PROTEGES, "w", encoding="utf-8") as f:
+        f.writelines(lignes)
+
+
+def configs_osmo():
+    cmds = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout.splitlines()[1:]
+    prot = proteges()
+    r = []
+    for p in sorted(glob.glob("/etc/osmocom/osmo-*.cfg")):
+        nom = os.path.basename(p)
+        gab = os.path.join(RACINE, "configs", nom)
+        st = os.stat(p)
+        pid = next((c.split(None, 1)[0] for c in cmds
+                    if re.search(r"(^|\s)-c\s+" + re.escape(p) + r"(\s|$)", c.split(None, 1)[-1])), None)
+        r.append({"nom": nom[:-4], "etc": p, "gabarit": gab if os.path.exists(gab) else None,
+                  "pid": pid, "taille": st.st_size, "mtime": int(st.st_mtime), "protege": nom in prot})
+    return r
+
+
 # ── Etat ───────────────────────────────────────────────────
 
 def etat():
@@ -403,6 +449,8 @@ class H(BaseHTTPRequestHandler):
                 return self.envoyer(200, {"lignes": arbre_config(t), "brut": t})
             if u.path == "/api/fichiers":
                 return self.envoyer(200, fichiers_cfg())
+            if u.path == "/api/configs-osmo":
+                return self.envoyer(200, configs_osmo())
             if u.path == "/api/fichier":
                 if not fichier_autorise(q["p"]):
                     return self.envoyer(403, {"err": "fichier hors liste"})
@@ -434,6 +482,13 @@ class H(BaseHTTPRequestHandler):
                 sauvegarde(j["p"])
                 with open(j["p"], "w", encoding="utf-8") as f:
                     f.write(j["texte"])
+                # un fichier de /etc/osmocom retouche ici n'est plus ecrase par la regeneration
+                protege = os.path.dirname(os.path.realpath(j["p"])) == "/etc/osmocom"
+                if protege:
+                    proteger(os.path.basename(j["p"]), True)
+                return self.envoyer(200, {"ok": True, "protege": protege})
+            if u.path == "/api/protege":
+                proteger(os.path.basename(j["nom"]), bool(j["on"]))
                 return self.envoyer(200, {"ok": True})
             self.envoyer(404, {"err": "?"})
         except Exception as e:

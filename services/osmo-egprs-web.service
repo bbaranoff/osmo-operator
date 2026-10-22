@@ -11,7 +11,9 @@ After=network.target
 # ajouter l ordre inverse ferait un cycle que systemd casserait au hasard.
 # Le geste direct (start-native.sh --stop, le bouton du bureau, start-multi.sh)
 # est couvert de son cote, dans start-native.sh.
-PartOf=osmo-banc.service
+# [2026-10-22] PartOf RETIRE : le tableau de bord reste en ligne par defaut, banc arrete
+# compris (demande explicite). L'arret avec le banc : CALYPSO_DASHBOARD_SUIT_BANC=1
+# (startup_scripts/10-identite-noeud.sh) ; pour systemd, remettre PartOf=osmo-banc.service.
 
 [Service]
 Type=simple

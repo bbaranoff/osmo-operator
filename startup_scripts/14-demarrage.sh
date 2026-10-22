@@ -38,6 +38,12 @@ if [ "$DSP_BANC" = 1 ]; then
     # data[0x2d0d] apres sa reinitialisation par 0xe68a, et le CALLD 0xea0c
     # ecrasait SP (« SP-CORRUPT pc=0xeac9 »). Le vrai C54x a ~480000 cycles par
     # trame. Capture gdb du 2026-09-23 15:07.
+    # [2026-10-22] Magnetite (--ms-magnetite) : 480000. Le firmware TI en TCH demande bien plus que
+    # l'osmocom : a 120000 la file des taches du DSP debordait (d_error_status 20h/28h), la L1 voyait
+    # ses resultats en retard (« > COM »), relancait le DSP et l'appel au 600 tombait (Assignment
+    # Failure). Rejeu tools/rejeu_banc de l'appel de 10:58 : 120000 -> ticks non finis des fn%26=10,
+    # 240000 -> 5, 480000 -> 0. Le vrai C54x a ~480000 cycles par trame.
+    if [ -n "${MS_MAGNETITE:-}" ]; then : "${INSNS:=480000}"; fi
     : "${INSNS:=120000}";   export INSNS
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM

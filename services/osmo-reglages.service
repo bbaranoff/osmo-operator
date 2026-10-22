@@ -1,0 +1,20 @@
+[Unit]
+Description=Page web de reglage de la pile Osmocom (http://127.0.0.1:8090/)
+After=network.target
+# [2026-10-22] En ligne par defaut, independante du banc : globals.conf et les
+# fichiers de config se reglent banc arrete ; les onglets Demons/Etat disent
+# simplement qu'aucun demon ne repond. 127.0.0.1 seulement : la console VTY
+# de la page execute tout (voir tools/osmo-reglages.py).
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/GSM/osmo-operator
+ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-reglages.py --port 8090 --bind 127.0.0.1
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osmo-reglages
+
+[Install]
+WantedBy=multi-user.target

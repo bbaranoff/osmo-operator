@@ -217,6 +217,77 @@ $('#f-enr').onclick = async () => {
   catch (e) { msg(e.message, false); }
 };
 
+/* ── configs osmo : /etc/osmocom/osmo-*.cfg, fichier actif ou gabarit configs/ ── */
+const osmo = { liste: [], courant: null, vue: 'etc' };
+function dessinerOsmo() {
+  const f = $('#o-filtre').value.trim().toLowerCase();
+  $('#o-liste').innerHTML = osmo.liste.filter(c => !f || c.nom.includes(f)).map(c =>
+    `<li class="${osmo.courant && osmo.courant.nom === c.nom ? 'actif' : ''}" data-n="${esc(c.nom)}">` +
+    `<span class="pt ${c.pid ? 'on' : ''}" title="${c.pid ? 'démon en marche (pid ' + c.pid + ')' : 'aucun démon ne lit ce fichier'}"></span>` +
+    `${esc(c.nom)}${c.protege ? ' <span title="protégé : start.sh ne le réécrit pas">🔒</span>' : ''}` +
+    `${c.gabarit ? '' : ' <small>sans gabarit</small>'}</li>`).join('');
+  document.querySelectorAll('#o-liste li').forEach(li => li.onclick = () => ouvrirOsmo(li.dataset.n));
+}
+async function chargerOsmo() {
+  osmo.liste = await api('/api/configs-osmo');
+  dessinerOsmo();
+  if (!osmo.courant && osmo.liste.length) {
+    let n = null;
+    try { n = localStorage.getItem('osmo'); } catch (e) { }
+    ouvrirOsmo(osmo.liste.some(c => c.nom === n) ? n : osmo.liste[0].nom);
+  }
+}
+async function ouvrirOsmo(nom, vue) {
+  const t = $('#o-txt');
+  if (t.classList.contains('modifie') && !confirm('Modifications non enregistrées : les abandonner ?')) return;
+  osmo.courant = osmo.liste.find(c => c.nom === nom);
+  osmo.vue = vue || (osmo.vue === 'gabarit' && osmo.courant.gabarit ? 'gabarit' : 'etc');
+  try { localStorage.setItem('osmo', nom); } catch (e) { }
+  const c = osmo.courant, p = osmo.vue === 'gabarit' ? c.gabarit : c.etc;
+  $('#o-titre').textContent = c.nom + '.cfg';
+  $('#o-v-etc').classList.toggle('actif', osmo.vue === 'etc');
+  $('#o-v-gab').classList.toggle('actif', osmo.vue === 'gabarit');
+  $('#o-v-gab').disabled = !c.gabarit;
+  $('#o-prot').textContent = c.protege ? '🔒 Protégé' : '🔓 Non protégé';
+  $('#o-prot').classList.toggle('actif', c.protege);
+  $('#o-aide').textContent = osmo.vue === 'gabarit'
+    ? c.gabarit + (c.protege ? ' — ' + c.etc + ' est protégé : ce gabarit ne s\'applique plus tant que la protection reste.'
+                             : ' — start.sh en régénère ' + c.etc + ' (marqueurs __X__ remplacés).')
+    : c.etc + (c.protege ? ' — protégé : start.sh ne le réécrit pas. ' : c.gabarit ? ' — réécrit depuis le gabarit au prochain run ; Enregistrer le protège. ' : ' — ') +
+      (c.pid ? 'Lu par le démon pid ' + c.pid + ' : effet à son redémarrage.' : 'Aucun démon ne le lit en ce moment.');
+  t.value = (await api('/api/fichier?p=' + encodeURIComponent(p))).texte;
+  t.dataset.orig = t.value;
+  t.dataset.p = p;
+  t.classList.remove('modifie');
+  dessinerOsmo();
+}
+$('#o-filtre').oninput = dessinerOsmo;
+$('#o-txt').oninput = e => e.target.classList.toggle('modifie', e.target.value !== e.target.dataset.orig);
+$('#o-v-etc').onclick = () => osmo.courant && ouvrirOsmo(osmo.courant.nom, 'etc');
+$('#o-v-gab').onclick = () => osmo.courant && ouvrirOsmo(osmo.courant.nom, 'gabarit');
+$('#o-rech').onclick = () => { $('#o-txt').classList.remove('modifie'); chargerOsmo().then(() => osmo.courant && ouvrirOsmo(osmo.courant.nom, osmo.vue)); };
+$('#o-enr').onclick = async () => {
+  const t = $('#o-txt');
+  try {
+    const r = await api('/api/fichier', { p: t.dataset.p, texte: t.value });
+    msg(t.dataset.p + ' enregistré (.bak horodaté)' + (r.protege ? ', protégé contre la régénération' : ''));
+    t.classList.remove('modifie');
+    await chargerOsmo();
+    ouvrirOsmo(osmo.courant.nom, osmo.vue);
+  } catch (e) { msg(e.message, false); }
+};
+$('#o-prot').onclick = async () => {
+  const c = osmo.courant;
+  if (!c) return;
+  if (c.protege && !confirm(c.nom + '.cfg redeviendra réécrit depuis le gabarit au prochain run. Continuer ?')) return;
+  try {
+    await api('/api/protege', { nom: c.nom + '.cfg', on: !c.protege });
+    msg(c.nom + '.cfg ' + (c.protege ? 'rendu au gabarit' : 'protégé'));
+    await chargerOsmo();
+    ouvrirOsmo(c.nom, osmo.vue);
+  } catch (e) { msg(e.message, false); }
+};
+
 /* ── etat ── */
 const duree = s => s > 3600 ? (s / 3600 | 0) + 'h' + String((s % 3600) / 60 | 0).padStart(2, '0') : s > 60 ? (s / 60 | 0) + 'm' : s + 's';
 async function chargerEtat() {
@@ -232,4 +303,5 @@ chargerGlobals();
 chargerInstances().catch(e => msg(e.message, false));
 chargerDemons().catch(e => msg(e.message, false));
 chargerFichiers();
+chargerOsmo().catch(e => msg(e.message, false));
 try { const o = localStorage.getItem('onglet'); if (o) document.querySelector(`nav button[data-o="${o}"]`)?.click(); } catch (e) { }

@@ -479,7 +479,19 @@ install_configs_native() {
     local src=$1 root="${2:-}"
     _gab_fixups_natifs "$src"
     mkdir -p "${root}/etc/osmocom" "${root}/etc/asterisk" "$HOME/.osmocom/bb"
-    cp -f "$src/osmocom"/*      "${root}/etc/osmocom/"  2>/dev/null || true
+    # [2026-10-22] /etc/osmocom/.proteges : un nom de fichier par ligne (# commentaire), jamais ecrase par la
+    # regeneration. La page http://127.0.0.1:8090/ (onglet Configs osmo) y inscrit chaque fichier qu'elle
+    # enregistre ; retirer la ligne rend le fichier au gabarit.
+    local _prot="${root}/etc/osmocom/.proteges" _f _b
+    for _f in "$src/osmocom"/*; do
+        [ -e "$_f" ] || continue
+        _b="${_f##*/}"
+        if [ -f "$_prot" ] && grep -qxF "$_b" <(sed 's/#.*//; s/[[:space:]]*$//' "$_prot"); then
+            printf '  gabarits   %s protege (%s) : conserve\n' "$_b" "$_prot" >&2
+            continue
+        fi
+        cp -f "$_f" "${root}/etc/osmocom/" 2>/dev/null || true
+    done
     cp -f "$src/asterisk"/*.conf "${root}/etc/asterisk/" 2>/dev/null || true
     [ -f "$src/bb/mobile.cfg" ]        && cp -f "$src/bb/mobile.cfg"        "$HOME/.osmocom/bb/mobile.cfg"
     [ -f "$src/bb/mobile_group1.cfg" ] && cp -f "$src/bb/mobile_group1.cfg" "$HOME/.osmocom/bb/mobile_group1.cfg"

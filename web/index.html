@@ -11,6 +11,7 @@
   <h1>Réglages Osmocom</h1>
   <nav>
     <button data-o="reseau" class="actif">globals.conf</button>
+    <button data-o="osmo">Configs osmo</button>
     <button data-o="instances">Instances Calypso</button>
     <button data-o="demons">Démons (VTY)</button>
     <button data-o="fichiers">Fichiers</button>
@@ -29,6 +30,31 @@
       <span class="aide">Vide = défaut du script (grisé). Pris en compte au prochain run ; sauvegarde .bak horodatée.</span>
     </div>
     <div id="g-form"></div>
+  </section>
+
+  <!-- chaque /etc/osmocom/osmo-*.cfg : menu a gauche, fichier actif ou gabarit configs/ a droite -->
+  <section id="osmo" class="onglet">
+    <div class="osmo">
+      <div class="carte o-menu">
+        <h2>/etc/osmocom</h2>
+        <input id="o-filtre" placeholder="filtrer (bsc, bts, pcu…)">
+        <ul id="o-liste"></ul>
+      </div>
+      <div class="carte o-edit">
+        <div class="barre serre">
+          <strong id="o-titre">—</strong>
+          <span class="bascule">
+            <button class="b2" id="o-v-etc" data-v="etc">Fichier actif</button>
+            <button class="b2" id="o-v-gab" data-v="gabarit">Gabarit configs/</button>
+          </span>
+          <button class="b" id="o-enr">Enregistrer</button>
+          <button class="b2" id="o-prot" title="un fichier protégé n'est plus réécrit par start.sh depuis configs/">🔒 Protégé</button>
+          <button class="b2" id="o-rech">↻ Recharger</button>
+        </div>
+        <p class="aide" id="o-aide"></p>
+        <textarea id="o-txt" rows="34" spellcheck="false"></textarea>
+      </div>
+    </div>
   </section>
 
   <!-- un fichier par instance Calypso (c54x_exe/run.sh) : instances/instance-N.env -->
