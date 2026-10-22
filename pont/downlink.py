@@ -144,6 +144,8 @@ class Downlink:
             mt = l2[4]
         if mt in (gsm.RR_IMMEDIATE_ASSIGNMENT, gsm.RR_IMMEDIATE_ASSIGNMENT_EXT):
             self.cipher.release("IMMEDIATE ASSIGNMENT")
+            if mt == gsm.RR_IMMEDIATE_ASSIGNMENT:
+                self._imm_ass_dcch(l2, fn0)
         if mt in gsm.SI_TYPES:
             self.feed.l2(fn0, gsm.GSMTAP_BCCH, l2, tn)
         elif mt in gsm.CCCH_TYPES:
@@ -208,6 +210,28 @@ class Downlink:
             return rc2, fr2
         return rc, fr
 
+    def _imm_ass_dcch(self, l2, fn):
+        """[2026-10-22] Firmware TI (Magnetite) : pas de tap QEMU pour dire au banc sur quel canal dedie le
+        mobile va. L'IMMEDIATE ASSIGNMENT (44.018 9.1.18) le dit : octet 1 pseudo-longueur, 2 PD, 3 type,
+        4 mode de page, 5 chan_nr. SDCCH/4 = 0b00100SST, SDCCH/8 = 0b01SSSTTT. Le dernier recu gagne : la BSC
+        repond aux RACH dans l'ordre, et celui que le mobile accepte (sa reference) arrive en dernier.
+        CALYPSO_PONT_IMM_DCCH=0 pour couper ; seulement avec MS_MAGNETITE (le firmware osmocom a son tap)."""
+        if not os.environ.get("MS_MAGNETITE") or os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") == "0":
+            return
+        if len(l2) < 5 or l2[1] != gsm.RR_PD:
+            return
+        cn = l2[4]
+        if (cn >> 5) == 0b001:                             # SDCCH/4 + SACCH : 0b001SSTTT, sous-canal 0..3
+            kind, ss = 0, (cn >> 3) & 3
+        elif (cn >> 6) == 0b01:                            # SDCCH/8 + SACCH, sous-canal 0..7
+            kind, ss = 1, (cn >> 3) & 7
+        else:
+            return
+        from .state import ecrire_dcch
+        ecrire_dcch(kind, ss, cn)
+        log.info("IMMEDIATE ASSIGNMENT (fn=%u) : SDCCH/%d TS%d SS%d -> calypso_dcch_cfg (firmware TI)",
+                 fn, 8 if kind else 4, cn & 7, ss)
+
     def _rr_downlink(self, l2, fn):
         off, mt = gsm.rr_message_type(l2)
         if mt == gsm.RR_ASSIGNMENT_COMMAND and len(l2) > off + 4:
@@ -218,6 +242,10 @@ class Downlink:
             self.tch.arm(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
         elif mt == gsm.RR_CHANNEL_RELEASE:
             self.tch.release_requested("CHANNEL RELEASE")
+            if os.environ.get("MS_MAGNETITE") and os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") != "0":
+                from .state import ecrire_dcch, DCCH_RELEASED
+                ecrire_dcch(DCCH_RELEASED, 0, 0)
+                log.info("CHANNEL RELEASE (fn=%u) : calypso_dcch_cfg libere (firmware TI)", fn)
 
     def _tch(self, tn, fn, burst):
         if gsm.is_dummy(burst):

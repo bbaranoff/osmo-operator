@@ -14,6 +14,29 @@ DCCH_TTL = 0.1
 DCCH_RELEASED = 0xFF
 
 
+def ecrire_dcch(kind, ss, chan_nr):
+    """[2026-10-22] calypso_dcch_cfg ecrit par le pont, au format du tap QEMU (calypso_dcch_tap.c) :
+    seq(4) kind(1) ss(1) tn(1) chan_nr(1), 16 octets. Le firmware TI (Magnetite) n'a pas de tap :
+    sans annonce, montant.c n'armait jamais un SDCCH hors TS0 (SDCCH/8 sur TS1 : IMM ASS ignoree
+    par le banc, LU en Timeout). seq repart au-dessus de celui du fichier."""
+    seq = 0
+    try:
+        with open(DCCH_CFG, "rb") as f:
+            b = f.read(4)
+            if len(b) == 4:
+                seq = struct.unpack("<I", b)[0]
+    except OSError:
+        pass
+    b = struct.pack("<IBBBB", (seq + 1) & 0xFFFFFFFF, kind & 0xFF, ss & 7, chan_nr & 7, chan_nr & 0xFF) + bytes(8)
+    # EN PLACE, pas de os.replace : montant.c et pont/state.py gardent le fichier ouvert (pread sur leur fd),
+    # un nouvel inode ne serait jamais relu.
+    fd = os.open(DCCH_CFG, os.O_WRONLY | os.O_CREAT, 0o666)
+    try:
+        os.pwrite(fd, b, 0)
+    finally:
+        os.close(fd)
+
+
 class Dedicated:
     def __init__(self):
         self._fd = None
