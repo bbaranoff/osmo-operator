@@ -28,10 +28,16 @@ unalias banc-rssi 2>/dev/null   # l'ancien alias (meme nom) s'expanserait a la d
 # [2026-10-23] En BTS CLASSIQUE (--bts-classic : pont_dsp.py vivant), pas d'air : il relaierait l'anneau TX de
 # l'instance 1, qui est alors le MOBILE (rien en veille, d'ou « Sync error ») et renverrait les bursts de rssi
 # vers son BSP. Le descendant arrive par la copie du pont (PONT_DSP_COPIES, udp 6762). Sinon (--bts), l'air.
+# Air realiste (calypso_bsp.c, CALYPSO_AIR_NIVEAUX) : la cellule n'est entendue que sur son ARFCN (plan
+# radio), le descendant a CALYPSO_AIR_DL_DBM, le montant du mobile a CALYPSO_AIR_UL_DBM, ailleurs du bruit.
+# CALYPSO_AIR_NIVEAUX=0 banc-rssi : l'ancien comportement (tout au maximum, sur toutes les frequences).
 function banc-rssi {
-    local air=1
+    local air=1 arfcn
     pgrep -f 'pont/pont_dsp\.py' >/dev/null && air=0
-    INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi AIR="${AIR:-$air}" bash /opt/GSM/c54x_exe/run.sh "$@"
+    arfcn="$( . /etc/osmocom/radio-plan.env 2>/dev/null; echo "${PLAN_ARFCN:-}")"
+    INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi AIR="${AIR:-$air}" \
+        CALYPSO_AIR_NIVEAUX="${CALYPSO_AIR_NIVEAUX:-1}" CALYPSO_FAUX_AIR="${CALYPSO_FAUX_AIR:-$arfcn}" \
+        bash /opt/GSM/c54x_exe/run.sh "$@"
 }
 alias banc-rssi-stop='INSTANCE=4 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-stop='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'

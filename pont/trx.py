@@ -201,6 +201,7 @@ class Trx:
         self.dsp_copies = [int(p) for p in os.environ.get("PONT_DSP_COPIES", "").replace(",", " ").split()
                            if p.isdigit() and int(p) != cfg.dsp_port]
         self.sk_copies = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.dsp_copies else None
+        self.copies_ul = os.environ.get("PONT_DSP_COPIES_UL", "1") != "0"
 
     def run_ctrl(self):
         while True:
@@ -400,6 +401,16 @@ class Trx:
         hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([self.cfg.rssi & 0xFF]) + struct.pack(">h", 0)
         self.sk_data.sendto(hdr + bytes(255 if b else 0 for b in burst), self.bts_data)
         self.stats.ul_sent += 1
+        # [2026-10-23] le MONTANT aussi vers les copies (PONT_DSP_COPIES), marque 0xA5 a l octet 6 : le BSP
+        # (calypso_bsp.c, CALYPSO_AIR_NIVEAUX) le range a part et ne le joue qu a une fenetre accordee sur la
+        # frequence montante (rssi, vue UL). PONT_DSP_COPIES_UL=0 le coupe.
+        if self.dsp_copies and self.copies_ul:
+            paquet = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([0, 0xA5, 0]) + bytes(1 if b else 0 for b in burst)
+            for port in self.dsp_copies:
+                try:
+                    self.sk_copies.sendto(paquet, ("127.0.0.1", port))
+                except OSError:
+                    pass
         if self.record:
             self.record.feed_ul(fn, tn, burst)
 
