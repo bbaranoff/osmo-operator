@@ -1,88 +1,101 @@
-<html><head></head><body><p><a href="https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml"><img src="https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg" alt="Build ISO"></a></p>
-<h2>osmo-operator-desktop.iso</h2>
-<p>the pmOS phone password is 147147, the live ISO is osmo</p>
-<h3>Download</h3>
-<p><strong>Download every <code>.part-NN</code> file</strong>, not just the first one.</p>
-<p>GitHub caps release files at 2 GiB: the image ships in pieces. Reassemble, then verify:</p>
-<pre><code class="language-sh">cat osmo-operator-desktop.iso.part-* &gt; osmo-operator-desktop.iso
-sha256sum -c SHA256SUMS
-</code></pre>
-<p><img src="https://raw.githubusercontent.com/bbaranoff/bbaranoff/main/norf-box.gif" alt="The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone"></p>
-<p>A complete GSM + LTE operator on a single live image, with a GNOME desktop (Wireshark in a window, linphone-desktop, GSM LAB wallpaper) for everything that can't be driven from the VTY. No SDR and no physical phone: the radio is emulated end to end, all the way down to the baseband.</p>
-<p><code>/etc/os-release</code>: <code>IMAGE_VERSION="OSMO_EGPRS_V2"</code> — <code>/etc/osmo-role</code>: <code>OSMO_ROLE=operator</code>, <code>OSMO_LITE=0</code>.</p>
-<h3>What's inside</h3>
-<p><strong>2G/GSM — Osmocom</strong></p>
-<ul>
-<li>Full core: osmo-stp (M3UA, SCTP :2905), osmo-bsc, osmo-msc, osmo-hlr, osmo-sgsn, osmo-ggsn (GTPv1-C/U), osmo-pcu, osmo-mgw (MGCP :2427).</li>
-<li>Two DCS1800 cells in LAC 1 — BTS 0 (Cell ID 6001, BSIC 7) and BTS 1 (Cell ID 6012, BSIC 8) — each on its own osmo-bts-trx.</li>
-<li>Layer 1: <strong>a real emulated Calypso</strong>. <code>qemu-system-arm -M calypso -cpu arm946</code> (<a href="https://github.com/bbaranoff/qosmO">qosmo</a>) runs <code>layer1.highram.elf</code>, loaded by <code>osmocon</code> exactly as on a C123. <code>pont.py</code> converts the bursts to I/Q for <code>fake_trx.py</code>, then <code>trxcon</code> and two <code>mobile</code> (osmocom-bb) instances on the terminal side. Two demodulators to choose from at launch: gr-gsm (the default) or the Calypso's own DSP (see below).</li>
-<li>Working GPRS/EDGE: BSSGP/NS to the PCU, PDP contexts through osmo-ggsn.</li>
-<li>Voice: external MNCC → Asterisk (SIP :5060, FR/HR codecs) via osmo-sip-connector.</li>
-<li>SMS: SMS-over-GSUP → proto-smsc-daemon, SMPP (:2775) with a test ESME, inter-operator relay (:7890).</li>
-<li>A3A8 authentication with deterministic RAND (<code>*-force-rand-toy</code> patches): the bench is reproducible from one boot to the next.</li>
-<li>Live GSMTAP capture, ready to open directly in Wireshark.</li>
-</ul>
-<p><strong>The DSP — the Calypso's TMS320C54x, running TI's real mask ROM</strong></p>
-<ul>
-<li>By default the handset's layer 1 is demodulated by gr-gsm (<a href="https://github.com/bbaranoff/grgsm_exE">grgsm_exe</a>). With <code>./start-native.sh --dsp</code>, it is done instead by the baseband's own DSP: a TMS320C54x core emulated outside QEMU (<a href="https://github.com/bbaranoff/c54x_exe">c54x_exe</a>), executing the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM, <code>/opt/GSM/calypso_dsp.*.bin</code>).</li>
-<li>The ARM (QEMU) and the DSP share the API RAM through <code>/dev/shm/calypso_api_ram</code> and run in lockstep, one TDMA frame at a time, over <code>/tmp/calypso_dsp.sock</code>; downlink bursts from osmo-bts-trx reach the DSP's serial port (BSP) over UDP 6702 via <code>pont_dsp.py</code>. The rest of the stack (core, BTS, second mobile) is unchanged.</li>
-<li>What the ROM does by itself (bench runs of 2026-09-23): FCCH/SCH acquisition, BCCH decoding (SI1-4), camping, location update, SMS MO and MT, MO and MT calls with A5/1 and speech audible both ways (TCH/F channel decoding by the ROM, FR codec on the host).</li>
-<li>Still a work bench, not the demo path: every TCH/F frame is flagged bad (BFI) by the ROM even though the speech stays intelligible, the SACCH occasionally drops a call (LOS), the SB window is rarely armed by the ROM, and the DSP needs 4.3–4.6 ms of host time for a 4.62 ms frame. Details in the <a href="https://github.com/bbaranoff/c54x_exe">c54x_exe README</a>.</li>
-</ul>
-<p><strong>4G/LTE — open5gs + srsRAN</strong></p>
-<ul>
-<li>open5gs core (MME, SGW-C/U, SMF, UPF, PCRF, HSS…) on dedicated loopbacks, Prometheus metrics (:9090), WebUI (:9999), MongoDB behind the HSS.</li>
-<li>PLMN 001/01, TAC 7. NAS security with null ciphering (EIA2/EIA1 + EEA0), on purpose: this is an analysis bench, the NAS reads in clear text in Wireshark.</li>
-<li>srsRAN RAN over ZMQ: srsENB (10 MHz, EARFCN 3350, band 7) and srsUE linked by a socket, no SDR. Milenage test subscriber (IMSI 001010001000001). The UE gets an IP in a netns and reaches the Internet through NAT.</li>
-</ul>
-<p><strong>CSFB — the piece that ties the two together</strong></p>
-<ul>
-<li>SGs interface between osmo-msc and the MME (:29118), with the <code>TAI (001-01, TAC 7) → LAI (001-01, LAC 1)</code> mapping: the VLR files the subscriber under LAC 1 while it is physically on LTE.</li>
-<li>Combined EPS+IMSI attach, radio presence on the GSM side: an incoming call is paged by the MME and the UE drops back to the BTS.</li>
-<li>Two provisioned subscribers (100101 and 100102, one per cell): the bench is wired for an inter-cell call with fallback.</li>
-</ul>
-<p><strong>postmarketOS — the phone</strong></p>
-<ul>
-<li>An x86_64 pmOS VM with a patched kernel: upstream <code>linux-postmarketos-stable</code> doesn't enable <code>CONFIG_PPP</code>, without which an AT modem can't carry IP. The prebuilt kernel (Git LFS) is provided in <code>/opt/user_interface/kernel/pmos/</code>.</li>
-<li>4G data: NetworkManager → pppd (<code>ATD*99***1#</code>) → virtio-console <code>osmo.data</code> → <code>osmo-phonesim-banc.py</code> → UE netns → srsUE → srsENB → UPF → Internet.</li>
-<li>2G voice and SMS: a second virtio-console <code>osmo.modem</code>, where <code>osmo-phonesim-banc.py</code> plays the 27.007 AT modem (state read from the osmo-bsc, osmo-msc and mobile VTYs) and oFono drives it. No dongle.</li>
-<li>Audio: two duplex PulseAudio chains (intel-hda) — a bridge to the osmocom-bb mobile via GAPK, and a chain with echo cancellation.</li>
-<li>Result: data on 4G, voice and SMS on 2G, under the same identity. The behaviour of a real CSFB handset, at the modem level.</li>
-<li><strong>pmOS password: <code>147147</code></strong></li>
-</ul>
-<h3>Running the image</h3>
-<p>In every case: x86_64, <strong>8 GB of RAM and 4 cores</strong> minimum. The live root is a tmpfs (~6 GB in <code>toram</code> mode); logs and captures are bounded there, and purged at every boot. The bench itself runs two QEMUs (the Calypso and the postmarketOS VM): in a virtual machine, enable <strong>nested virtualization</strong>, otherwise the pmOS VM falls back to software emulation and becomes very slow.</p>
-<p><strong>QEMU</strong></p>
-<pre><code class="language-sh">qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm \
+[![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
+
+## osmo-operator-desktop.iso · v0.1-9
+
+Live ISO password: **`osmo`** · postmarketOS phone password: **`147147`**
+
+A complete GSM + LTE operator on one live image, with a GNOME desktop. No SDR and no physical phone: the radio is
+emulated end to end, down to the baseband. The Calypso's ARM runs under QEMU
+([qosmo](https://github.com/bbaranoff/qosmo)), its TI C54x DSP runs the real mask ROM
+([c54x_exe](https://github.com/bbaranoff/c54x_exe)).
+
+### Download
+
+**Download every `.part-NN` file**, not just the first one (GitHub caps release files at 2 GiB). Then:
+
+```sh
+cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+![The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone](https://raw.githubusercontent.com/bbaranoff/bbaranoff/main/norf-box.gif)
+
+### New in 0.1-9
+
+**Phones and radio**
+- **Classic BTS is the default**: `./start.sh --bts-classique --ms`. `osmo-bts-trx` talks to `pont/pont_dsp.py`; the
+  emulated phone runs osmocom-bb `layer1` + `mobile` on the DSP mask ROM. The red phone icon starts exactly this.
+- **The original TI firmware**: `--ms-magnetite` boots a Motorola C139 running FreeCalypso Magnetite (TI L2/L3 and
+  UI, colour screen and keypad in `c123`). It camps, registers, sends and receives SMS; calls work in A5/0, voice on
+  the host with `--gapk`. Build: `sudo ./addition.sh --magnetite` ([doc/magnetite.md](https://github.com/bbaranoff/osmo-operator/blob/main/doc/magnetite.md)).
+- **The Calypso as the BTS radio**: `--bts` runs the `trx` firmware in QEMU; `--ms` adds a second Calypso that
+  camps on it over the air; `--ts 1 | 2 | 2/1` chooses the timeslots.
+- **`banc-rssi`**: the osmocom-bb `rssi` app on a fourth Calypso, fed by the pont in classic BTS mode, with a
+  realistic air: the cell only on its ARFCN, -60 dBm downlink, noise elsewhere, AGC, BCCH decoded.
+- **Voice**: `--vocoder-rom` (the FR codec of the DSP ROM, default) or `--gapk` (host vocoder, keeps real time).
+- C123 and C139 screens and keypads in QEMU: `c123 --instance N`.
+
+**Robustness**
+- BTS#0 runs under a watchdog: an `osmo-bts-trx` exit on "PC clock skew too high" restarts it after 3 s.
+- The pont caps the pause it asks of the BTS (`PONT_CLCK_PAUSE_PLAFOND`), the root cause of those exits.
+- **Nothing telecom starts at boot** (systemd preset `80-osmo-operator.preset`): the bench, the Osmocom core, the
+  BTS, Asterisk, oFono, Open5GS and srsRAN wait for you. Web consoles, sound and network addressing still start.
+
+**Desktop and docs**
+- The **?** at the top of the dock opens the help page (modes, modules, notebooks, repositories, references),
+  served by the dashboard so that the snap Firefox can open it.
+- A new Plymouth boot screen: flat 2D, an antenna and its circles.
+- Settings page for the whole stack: http://127.0.0.1:8090 (`globals.conf`, Osmocom configs, Calypso instances).
+- Notebooks: [install](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/installer-osmo-jusquau-dsp.ipynb),
+  [run each mode](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/lancer-les-modes.ipynb),
+  [process by process](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/lancer-pas-a-pas.ipynb).
+- The launcher is now `start.sh` (`start-native.sh` stays as a link).
+
+**Supplements** (`sudo ./addition.sh`, not in the ISO)
+- `--gnuarm` (arm-elf-gcc 4.5.2), `--magnetite` (Wine + TI TMS470), `--trx`
+  ([osmocom-bb-trx](https://github.com/bbaranoff/osmocom-bb-trx) image + TX firmware), `--calypso-fw` (the bench
+  firmware rebuilt with gnuarm), `--fernvale` (MediaTek MT6260: fernly, NuttX, MTK layer 1), `--simcom`
+  (SIMCom docs and SDKs), `--firmwares` (all of them).
+
+**Known limits**
+- Magnetite: calls need A5/0 (with A5/1 the FACCH is decoded too early).
+- `--bts --ts 2`: camps and registers, no call yet (the second TRX is not frame-aligned); `--ts 2/1` calls.
+- `banc-rssi`: the uplink per-timeslot view does not show the phone yet.
+- The ROM vocoder costs real time on slow hosts: use `--gapk`. Do not compile while a bench runs.
+
+### What's inside
+
+- **2G (Osmocom)**: osmo-stp, osmo-bsc, osmo-msc, osmo-hlr, osmo-sgsn, osmo-ggsn, osmo-pcu, osmo-mgw; two cells in
+  LAC 1 (cell 6001 BSIC 7, cell 6012 BSIC 8); GPRS/EDGE; voice through osmo-sip-connector and Asterisk; SMS over
+  GSUP and SMPP; deterministic RAND for reproducible runs; live GSMTAP for Wireshark.
+- **The DSP**: a TMS320C54x emulated outside QEMU on the dumped mask ROM, sharing the API RAM with the ARM and
+  stepping one TDMA frame at a time.
+- **4G (Open5GS + srsRAN)** over ZMQ, PLMN 001/01, null NAS ciphering for analysis; **CSFB** through SGs between
+  the MME and osmo-msc.
+- **postmarketOS phone**: data on 4G, voice and SMS on 2G under one identity, oFono on a virtual AT modem.
+
+### Running the image
+
+x86_64, **8 GB of RAM and 4 cores** minimum; in a VM, enable nested virtualization.
+
+```sh
+qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm \
   -cpu host -smp 4 -nic user,hostfwd=tcp::8080-:8080
-</code></pre>
-<p><strong>VirtualBox</strong></p>
-<ul>
-<li>New VM, type Linux / Ubuntu (64-bit), 8 GB of RAM, 4 processors, 3D disabled.</li>
-<li>System → Processor: tick <em>Nested VT-x/AMD-V</em> (if the box is greyed out: <code>VBoxManage modifyvm "&lt;name&gt;" --nested-hw-virt on</code>).</li>
-<li>Storage: attach the ISO to the optical drive. No disk needed, it's a live image.</li>
-<li>NAT network: add a port forwarding rule host 8080 → guest 8080 to reach the bench from the host machine.</li>
-</ul>
-<p><strong>VMware (Workstation / Player / Fusion)</strong></p>
-<ul>
-<li>New VM from the ISO, Linux / Ubuntu 64-bit, 8 GB, 4 cores.</li>
-<li>Processors: tick <em>Virtualize Intel VT-x/EPT or AMD-V/RVI</em>.</li>
-<li>Skip Easy Install: it's a live image, it boots from the ISO.</li>
-</ul>
-<p><strong>USB stick</strong> (the ISO is hybrid, it can be copied raw)</p>
-<pre><code class="language-sh">sudo dd if=osmo-operator-desktop.iso of=/dev/sdX bs=4M status=progress conv=fsync
-</code></pre>
-<p>On Windows, <strong>Rufus</strong>: select the ISO and, if Rufus offers the choice, write in <em>DD Image mode</em> rather than ISO. Then boot from the stick, in UEFI or BIOS, either works. On real hardware, KVM is available directly: this is the most comfortable setup.</p>
-<h3>Getting started</h3>
-<p>Everything launches from the dock, where three launchers are pinned as favourites. 2G and 4G are independent and can be started in any order; the smartphone is launched <strong>last</strong>, once both networks are up.</p>
+```
 
-  | Launcher | What it starts
--- | -- | --
-<img src="https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/data/osmo-launch.svg" width="32"> | 2G — the red handset | The GSM core and the emulated radio: osmo-stp / bsc / msc / hlr / sgsn / ggsn / pcu, the Calypso under QEMU, the two BTS and the two osmocom-bb mobiles, Asterisk, the SMSC.
-<img src="https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/data/osmo-lte.svg" width="32"> | 4G — the signal bars | open5gs, srsENB and srsUE over ZMQ, and the SGs interface to the MSC (the CSFB).
-📱 | Smartphone — the Adwaita theme's phone icon | The postmarketOS VM: oFono on the virtual modem, data on 4G, voice and SMS on 2G. Launch it last.
+VirtualBox or VMware: Linux / Ubuntu 64-bit, 8 GB, 4 CPUs, nested VT-x/AMD-V ticked, the ISO in the optical drive.
+USB stick: `sudo dd if=osmo-operator-desktop.iso of=/dev/sdX bs=4M status=progress conv=fsync` (Rufus: DD mode).
 
+### Getting started
 
-<p>The 2G and 4G icons are SVGs from the repo (<code>data/</code>), hand-drawn rather than taken from the theme: <code>call-start</code> is green in Adwaita with no red variant, and a missing theme icon is silently replaced by a grey rectangle. An embedded SVG can't go missing.</p>
-<p>To run the 2G handset on the DSP instead of gr-gsm, from a terminal: <code>cd /opt/GSM/osmo-operator &amp;&amp; sudo ./start-native.sh --dsp</code> (the <code>--menu</code> option asks the same question interactively: layer 1 <code>grgsm_exe</code> or <code>c54x_exe</code>).</p>
-<p>Check that everything is in place: <code>checks/diag-stp-operator.sh</code>.</p></body></html>
+| Dock | Starts |
+|---|---|
+| **?** | this help: every mode, module, notebook and repository |
+| red phone | the 2G bench, `./start.sh --bts-classique --ms` |
+| signal bars | 4G: Open5GS, srsENB, srsUE and SGs |
+| phone | the postmarketOS VM (start it last) |
+
+Other modes from a terminal: `cd /opt/GSM/osmo-operator && sudo ./start.sh --help`. Health check:
+`checks/diag-stp-operator.sh`. Documentation: [README](https://github.com/bbaranoff/osmo-operator#readme) ·
+[wiki](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/Home.md) ·
+[bbaranoff.github.io](https://bbaranoff.github.io) · [pl4y.store](https://pl4y.store).

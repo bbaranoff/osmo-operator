@@ -427,6 +427,36 @@ osmo_politique_telecom_boot() {
 }
 osmo_politique_telecom_boot
 
+# ── LE « ? » DU DOCK : PAGE D AIDE SERVIE EN HTTP, EN TETE (2026-10-23) ───────
+# L icone ouvrait file:///usr/share/osmo-operator/info.html, que Firefox (snap)
+# ne lit pas : page vide. On pose /usr/local/bin/osmo-info (dashboard 8080, repli
+# local), la page a jour aux deux endroits, et osmo-info.desktop en tete des
+# favoris de chaque session ouverte.
+osmo_poser_aide() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local R=/opt/GSM/osmo-operator u uid bus
+    [ -f "$R/configs/info.html" ] || return 0
+    install -m755 "$R/tools/osmo-info" /usr/local/bin/osmo-info 2>/dev/null || true
+    install -D -m644 "$R/configs/info.html" /usr/share/osmo-operator/info.html
+    [ -d /opt/GSM/osmo-egprs-web/web ] && cp -f "$R/configs/info.html" /opt/GSM/osmo-egprs-web/web/info.html
+    install -m644 "$R/data/desktop/osmo-info.desktop" /usr/share/applications/osmo-info.desktop
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        bus="/run/user/$uid/bus"; [ -S "$bus" ] || continue
+        sudo -u "$u" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" python3 - <<'PY' 2>/dev/null || true
+import subprocess, ast
+g = ["gsettings", "get", "org.gnome.shell", "favorite-apps"]
+cur = ast.literal_eval(subprocess.run(g, capture_output=True, text=True).stdout.strip() or "[]")
+neu = ["osmo-info.desktop"] + [a for a in cur if a != "osmo-info.desktop"]
+if neu != cur:
+    subprocess.run(["gsettings", "set", "org.gnome.shell", "favorite-apps", repr(neu)], check=False)
+PY
+    done
+    return 0
+}
+osmo_poser_aide
+
 # ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
 # Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
 # l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes

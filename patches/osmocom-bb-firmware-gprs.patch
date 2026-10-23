@@ -1,0 +1,635 @@
+diff --git a/src/target/firmware/include/layer1/prim.h b/src/target/firmware/include/layer1/prim.h
+index 4e34bb23..ea2715ba 100644
+--- a/src/target/firmware/include/layer1/prim.h
++++ b/src/target/firmware/include/layer1/prim.h
+@@ -25,6 +25,7 @@ void l1a_rach_req(uint16_t offset, uint8_t combined, uint8_t ra, uint8_t uic);
+ /* Primitives raw scheduling sets */
+ extern const struct tdma_sched_item nb_sched_set[];
+ extern const struct tdma_sched_item nb_sched_set_ul[];
++extern const struct tdma_sched_item pdtch_sched_set_ul[];
+ 
+ extern const struct tdma_sched_item tch_sched_set[];
+ extern const struct tdma_sched_item tch_a_sched_set[];
+diff --git a/src/target/firmware/layer1/Makefile b/src/target/firmware/layer1/Makefile
+index 0a24e054..b1765b44 100644
+--- a/src/target/firmware/layer1/Makefile
++++ b/src/target/firmware/layer1/Makefile
+@@ -5,5 +5,5 @@ LIB_layer1_SRCS=avg.c agc.c afc.c toa.c sync.c tdma_sched.c tpu_window.c init.c
+ 		l23_api.c mframe_sched.c sched_gsmtime.c async.c rfch.c
+ 
+ LIB_layer1_SRCS += prim_pm.c prim_rach.c prim_tx_nb.c prim_rx_nb.c prim_fbsb.c \
+-		   prim_freq.c prim_utils.c prim_tch.c
++		   prim_freq.c prim_utils.c prim_tch.c l1gprs_fw.c prim_pdtch.c
+ 
+diff --git a/src/target/firmware/layer1/l23_api.c b/src/target/firmware/layer1/l23_api.c
+index f4309e2a..2519a59c 100644
+--- a/src/target/firmware/layer1/l23_api.c
++++ b/src/target/firmware/layer1/l23_api.c
+@@ -44,6 +44,7 @@
+ #include <calypso/dsp.h>
+ 
+ #include <l1ctl_proto.h>
++#include <layer1/l1gprs_fw.h>
+ 
+ /* the size we will allocate struct msgb* for HDLC */
+ #define L3_MSG_HEAD 4
+@@ -300,6 +301,26 @@ static void l1ctl_rx_dm_est_req(struct msgb *msg)
+ 
+ 	/* figure out which MF tasks to enable */
+ 	l1a_mftask_set(chan_nr2mf_task_mask(ul->chan_nr, NEIGH_MODE_PM));
++
++	/* [2026-10-15] PDCH : annoncer l intervalle TOUT DE SUITE. Sur le banc
++	 * (QEMU + c54x_exe), le BSP ne joue l intervalle du PDCH qu une fois que le
++	 * tap QEMU a vu un L1CTL_GPRS_DL_BLOCK_IND de ce TN. Le premier n arrivait
++	 * qu apres le premier bloc PDTCH decode - lui-meme joue depuis TS0, donc
++	 * perdu : les premiers blocs apres l assignation (commandes, polls)
++	 * manquaient, T3190/T3168 et TBF abandonne. Une indication vide (meme
++	 * forme qu un bloc en erreur, cf. l1gprs de trxcon) arme le BSP des
++	 * l etablissement du PDCH. */
++	if (l1s.dedicated.type == GSM_DCHAN_PDCH) {
++		struct l1ctl_gprs_dl_block_ind *ind;
++		struct msgb *m = l1ctl_msgb_alloc(L1CTL_GPRS_DL_BLOCK_IND);
++		ind = (struct l1ctl_gprs_dl_block_ind *) msgb_put(m, sizeof(*ind));
++		memset(ind, 0, sizeof(*ind));
++		ind->hdr.fn = htonl(l1s.current_time.fn);
++		ind->hdr.tn = ul->chan_nr & 0x7;
++		ind->usf = 0xff;
++		l1_queue_for_l2(m);
++		printf("l1gprs: PDCH TN=%u etabli, annonce\n", ul->chan_nr & 0x7);
++	}
+ }
+ 
+ /* receive a L1CTL_DM_FREQ_REQ from L23 */
+@@ -351,6 +372,7 @@ static void l1ctl_rx_crypto_req(struct msgb *msg)
+ /* receive a L1CTL_DM_REL_REQ from L23 */
+ static void l1ctl_rx_dm_rel_req(struct msgb *msg)
+ {
++	l1gprs_fw_reset();	/* PDCH: drop TBFs and queued uplink blocks */
+ 	printd("L1CTL_DM_REL_REQ\n");
+ 	l1a_mftask_set(0);
+ 	l1s.dedicated.type = GSM_DCHAN_NONE;
+@@ -719,6 +741,19 @@ void l1a_l23_handler(void)
+ 	case L1CTL_SIM_REQ:
+ 		l1ctl_sim_req(msg);
+ 		break;
++	case L1CTL_GPRS_UL_TBF_CFG_REQ:
++		l1gprs_fw_ul_tbf_cfg(msg);
++		break;
++	case L1CTL_GPRS_DL_TBF_CFG_REQ:
++		l1gprs_fw_dl_tbf_cfg(msg);
++		break;
++	case L1CTL_GPRS_UL_BLOCK_REQ:
++		l1gprs_fw_ul_block_req(msg);
++		/* queued for prim_pdtch.c (or freed there on error) */
++		goto exit_nofree;
++	default:
++		printf("l1a_l23_cb: unknown L1CTL msg_type 0x%02x\n", l1h->msg_type);
++		break;
+ 	}
+ 
+ exit_msgbfree:
+diff --git a/src/target/firmware/layer1/mframe_sched.c b/src/target/firmware/layer1/mframe_sched.c
+index 478fd20a..8ad23838 100644
+--- a/src/target/firmware/layer1/mframe_sched.c
++++ b/src/target/firmware/layer1/mframe_sched.c
+@@ -46,6 +46,7 @@ struct mframe_sched_item {
+ #define NB_QUAD_FH_DL	NB_QUAD_DL
+ #define NB_QUAD_UL	nb_sched_set_ul
+ #define NB_QUAD_FH_UL	NB_QUAD_UL
++#define PDTCH_QUAD_UL	pdtch_sched_set_ul
+ #define NEIGH_PM	neigh_pm_sched_set
+ 
+ /* BCCH Normal */
+@@ -312,7 +313,11 @@ static const struct mframe_sched_item mf_gprs_pdtch[] = {
+ 	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 0 },
+ 	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 4 },
+ 	{ .sched_set = NB_QUAD_DL, .modulo = 13, .frame_nr = 8 },
+-	/* NOTE: receive only task */
++	/* Uplink block periods, same frame numbers (3-TS offset in the TPU):
++	 * prim_pdtch.c only transmits when L23 queued a block for that Fn. */
++	{ .sched_set = PDTCH_QUAD_UL, .modulo = 13, .frame_nr = 0 },
++	{ .sched_set = PDTCH_QUAD_UL, .modulo = 13, .frame_nr = 4 },
++	{ .sched_set = PDTCH_QUAD_UL, .modulo = 13, .frame_nr = 8 },
+ 	{ .sched_set = NULL }
+ };
+ 
+diff --git a/src/target/firmware/layer1/prim_rx_nb.c b/src/target/firmware/layer1/prim_rx_nb.c
+index d6dd82a5..6cee98ce 100644
+--- a/src/target/firmware/layer1/prim_rx_nb.c
++++ b/src/target/firmware/layer1/prim_rx_nb.c
+@@ -48,6 +48,7 @@
+ #include <layer1/agc.h>
+ 
+ #include <l1ctl_proto.h>
++#include <layer1/l1gprs_fw.h>
+ 
+ struct l1s_rxnb_state {
+ 	struct l1s_meas_hdr meas[4];
+@@ -153,7 +154,16 @@ static int l1s_nb_resp(__unused uint8_t p1, uint8_t burst_id, uint16_t p3)
+ 		/* copy actual data, skipping the information block [0,1,2] */
+ 		dsp_memcpy_from_api(rxnb.di->data, &dsp_api.ndb->a_cd[3], 23, 0);
+ 
+-		l1_queue_for_l2(rxnb.msg);
++		if (mf_task_id == MF_TASK_GPRS_PDTCH) {
++			/* PDCH: a CS-1 block (same coding as xCCH) goes to the
++			 * GPRS state machine, not up as L1CTL_DATA_IND. */
++			l1gprs_fw_dl_block(rx_time.fn, tn, rxnb.di->data,
++					   rxnb.dl->fire_crc < 2,
++					   rxnb.dl->rx_level, num_biterr, rxnb.dl->snr);
++			msgb_free(rxnb.msg);
++		} else {
++			l1_queue_for_l2(rxnb.msg);
++		}
+ 		rxnb.msg = NULL; rxnb.dl = NULL; rxnb.di = NULL;
+ 
+ 		/* clear downlink task */
+diff --git a/src/target/firmware/include/layer1/l1gprs_fw.h b/src/target/firmware/include/layer1/l1gprs_fw.h
+new file mode 100644
+index 00000000..2688e3f5
+--- /dev/null
++++ b/src/target/firmware/include/layer1/l1gprs_fw.h
+@@ -0,0 +1,33 @@
++/* l1gprs_fw.h - GPRS (PDCH) support in the Calypso layer1 firmware.
++ *
++ * A static-allocation port of src/shared/l1gprs.c (trxcon/virtphy) to the
++ * target: TBF registry, DL block filtering by TFI, RTS generation, and the
++ * uplink block queue consumed by prim_pdtch.c.  CS-1 only: the DSP xCCH
++ * coder/decoder (DDL/DUL tasks) is bit-exact with GPRS CS-1.
++ */
++#pragma once
++
++#include <stdint.h>
++#include <stdbool.h>
++
++struct msgb;
++
++/* L1A side (l23_api.c, main loop) */
++void l1gprs_fw_reset(void);
++int  l1gprs_fw_ul_tbf_cfg(struct msgb *msg);   /* L1CTL_GPRS_UL_TBF_CFG_REQ */
++int  l1gprs_fw_dl_tbf_cfg(struct msgb *msg);   /* L1CTL_GPRS_DL_TBF_CFG_REQ */
++int  l1gprs_fw_ul_block_req(struct msgb *msg); /* L1CTL_GPRS_UL_BLOCK_REQ: takes ownership of msg */
++
++/* L1S side (TDMA interrupt) */
++/* A downlink PDTCH block was decoded (or failed: crc_ok == 0, data ignored). */
++void l1gprs_fw_dl_block(uint32_t fn, uint8_t tn, const uint8_t *data,
++			bool crc_ok, uint8_t rx_lev, uint16_t num_biterr, uint16_t snr);
++/* Uplink block to transmit at exactly (fn, tn), or NULL.  Stale blocks are dropped. */
++struct msgb *l1gprs_fw_ul_dequeue(uint32_t fn, uint8_t tn);
++/* The block for (fn, tn) went out: L1CTL_GPRS_UL_BLOCK_CNF to L23. */
++void l1gprs_fw_ul_block_cnf(uint32_t fn, uint8_t tn, const uint8_t *data);
++
++/* Frame-number advance of the RTS.ind relative to the DL block that carried
++ * the USF (13 = next-but-one block period; 13 maps a block start onto a
++ * block start of the 52-multiframe).  Polls (RRBP) are at N+13 at least. */
++#define L1GPRS_FW_RTS_ADVANCE	13
+diff --git a/src/target/firmware/layer1/l1gprs_fw.c b/src/target/firmware/layer1/l1gprs_fw.c
+new file mode 100644
+index 00000000..301a88f4
+--- /dev/null
++++ b/src/target/firmware/layer1/l1gprs_fw.c
+@@ -0,0 +1,324 @@
++/* l1gprs_fw.c - GPRS (PDCH) layer-1 state for the Calypso firmware.
++ *
++ * (C) 2026 osmo-operator bench. GPLv2+.
++ * Port of src/shared/l1gprs.c (C) 2022-2024 sysmocom, Vadim Yanitskiy,
++ * to static allocation and to the firmware's L1A/L1S split.
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#include <errno.h>
++
++#include <arpa/inet.h>
++#include <asm/system.h>
++
++#include <osmocom/core/msgb.h>
++#include <osmocom/core/linuxlist.h>
++#include <osmocom/gsm/gsm_utils.h>
++
++#include <layer1/l23_api.h>
++#include <layer1/l1gprs_fw.h>
++#include <l1ctl_proto.h>
++
++#define MAX_TBF		8
++#define TDMA_FN_INVALID	0xffffffff
++#define CS1_BLOCK_LEN	23
++
++struct fw_tbf {
++	bool used;
++	bool uplink;
++	bool pending;		/* waiting for start_fn */
++	uint8_t ref;
++	uint8_t slotmask;
++	uint8_t dl_tfi;
++	uint32_t start_fn;
++};
++
++static struct fw_tbf tbfs[MAX_TBF];
++/* Uplink blocks queued by L23 (L1CTL_GPRS_UL_BLOCK_REQ), fn in cb[0], tn in cb[1] */
++static struct llist_head ul_queue = LLIST_HEAD_INIT(ul_queue);
++
++/* 0 when a == b, >0 when a is after b, <0 when a is before b (hyperframe wrap) */
++static int fn_cmp(uint32_t a, uint32_t b)
++{
++	uint32_t d = (a + GSM_MAX_FN - b) % GSM_MAX_FN;
++	if (d == 0)
++		return 0;
++	return (d < GSM_MAX_FN / 2) ? 1 : -1;
++}
++
++void l1gprs_fw_reset(void)
++{
++	unsigned long flags;
++	struct msgb *msg;
++
++	local_firq_save(flags);
++	memset(tbfs, 0, sizeof(tbfs));
++	while ((msg = msgb_dequeue(&ul_queue)))
++		msgb_free(msg);
++	local_irq_restore(flags);
++}
++
++static struct fw_tbf *find_tbf(bool uplink, uint8_t ref, bool pending)
++{
++	int i;
++	for (i = 0; i < MAX_TBF; i++) {
++		if (!tbfs[i].used || tbfs[i].uplink != uplink)
++			continue;
++		if (tbfs[i].ref != ref || tbfs[i].pending != pending)
++			continue;
++		return &tbfs[i];
++	}
++	return NULL;
++}
++
++static struct fw_tbf *alloc_tbf(void)
++{
++	int i;
++	for (i = 0; i < MAX_TBF; i++)
++		if (!tbfs[i].used)
++			return &tbfs[i];
++	return NULL;
++}
++
++/* Called from both contexts; the caller holds the IRQ lock */
++static void tbf_cfg(bool uplink, uint8_t ref, uint8_t slotmask, uint8_t dl_tfi, uint32_t start_fn)
++{
++	struct fw_tbf *t;
++
++	if (slotmask == 0x00) {
++		/* release */
++		while ((t = find_tbf(uplink, ref, false)) || (t = find_tbf(uplink, ref, true)))
++			t->used = false;
++		printf("l1gprs: %cL-TBF#%u released\n", uplink ? 'U' : 'D', ref);
++		return;
++	}
++	if (start_fn != TDMA_FN_INVALID) {
++		t = find_tbf(uplink, ref, true);
++		if (!t)
++			t = alloc_tbf();
++		if (!t) {
++			puts("l1gprs: no free TBF slot (pending)\n");
++			return;
++		}
++		*t = (struct fw_tbf) { .used = true, .uplink = uplink, .pending = true, .ref = ref,
++				       .slotmask = slotmask, .dl_tfi = dl_tfi, .start_fn = start_fn };
++		printf("l1gprs: %cL-TBF#%u pending slotmask=0x%02x start_fn=%u\n",
++		       uplink ? 'U' : 'D', ref, slotmask, start_fn);
++		return;
++	}
++	t = find_tbf(uplink, ref, false);
++	if (!t)
++		t = alloc_tbf();
++	if (!t) {
++		puts("l1gprs: no free TBF slot\n");
++		return;
++	}
++	*t = (struct fw_tbf) { .used = true, .uplink = uplink, .pending = false, .ref = ref,
++			       .slotmask = slotmask, .dl_tfi = dl_tfi, .start_fn = TDMA_FN_INVALID };
++	printf("l1gprs: %cL-TBF#%u active slotmask=0x%02x tfi=%u\n",
++	       uplink ? 'U' : 'D', ref, slotmask, dl_tfi);
++}
++
++/* Promote pending TBFs whose starting time has come (L1S context) */
++static void check_pending(uint32_t fn)
++{
++	int i;
++	for (i = 0; i < MAX_TBF; i++) {
++		struct fw_tbf *t = &tbfs[i], *a;
++		if (!t->used || !t->pending)
++			continue;
++		if (fn_cmp(fn, t->start_fn) < 0)
++			continue;
++		/* merge into an existing active TBF of the same ref, or promote */
++		a = find_tbf(t->uplink, t->ref, false);
++		if (a) {
++			a->slotmask = t->slotmask;
++			a->dl_tfi = t->dl_tfi;
++			t->used = false;
++		} else {
++			t->pending = false;
++		}
++		printf("l1gprs: %cL-TBF#%u becomes active (fn=%u)\n", t->uplink ? 'U' : 'D', t->ref, fn);
++	}
++}
++
++static unsigned int pdch_count(uint8_t tn, bool pending, uint32_t *dl_tfi_mask)
++{
++	unsigned int n = 0;
++	int i;
++	for (i = 0; i < MAX_TBF; i++) {
++		struct fw_tbf *t = &tbfs[i];
++		if (!t->used || t->pending != pending)
++			continue;
++		if (!(t->slotmask & (1 << tn)))
++			continue;
++		n++;
++		if (dl_tfi_mask && !t->uplink)
++			*dl_tfi_mask |= (1 << t->dl_tfi);
++	}
++	return n;
++}
++
++int l1gprs_fw_ul_tbf_cfg(struct msgb *msg)
++{
++	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
++	struct l1ctl_gprs_ul_tbf_cfg_req *req = (void *) l1h->data;
++	unsigned long flags;
++
++	if (msg->len < sizeof(*l1h) + sizeof(*req))
++		return -EINVAL;
++	local_firq_save(flags);
++	tbf_cfg(true, req->tbf_ref, req->slotmask, 0, ntohl(req->start_fn));
++	local_irq_restore(flags);
++	return 0;
++}
++
++int l1gprs_fw_dl_tbf_cfg(struct msgb *msg)
++{
++	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
++	struct l1ctl_gprs_dl_tbf_cfg_req *req = (void *) l1h->data;
++	unsigned long flags;
++
++	if (msg->len < sizeof(*l1h) + sizeof(*req))
++		return -EINVAL;
++	if (req->dl_tfi > 31)
++		return -EINVAL;
++	local_firq_save(flags);
++	tbf_cfg(false, req->tbf_ref, req->slotmask, req->dl_tfi, ntohl(req->start_fn));
++	local_irq_restore(flags);
++	return 0;
++}
++
++int l1gprs_fw_ul_block_req(struct msgb *msg)
++{
++	struct l1ctl_hdr *l1h = (struct l1ctl_hdr *) msg->data;
++	struct l1ctl_gprs_ul_block_req *req = (void *) l1h->data;
++	unsigned long flags;
++	uint32_t fn;
++
++	if (msg->len < sizeof(*l1h) + sizeof(*req) + CS1_BLOCK_LEN) {
++		printf("l1gprs: short UL BLOCK.req (len=%u)\n", msg->len);
++		msgb_free(msg);
++		return -EINVAL;
++	}
++	fn = ntohl(req->hdr.fn);
++	if (req->hdr.tn > 7) {
++		msgb_free(msg);
++		return -EINVAL;
++	}
++	msg->l3h = req->data;
++	msg->cb[0] = fn;
++	msg->cb[1] = req->hdr.tn;
++	local_firq_save(flags);
++	msgb_enqueue(&ul_queue, msg);
++	local_irq_restore(flags);
++	return 0;
++}
++
++struct msgb *l1gprs_fw_ul_dequeue(uint32_t fn, uint8_t tn)
++{
++	struct msgb *msg, *tmp;
++
++	llist_for_each_entry_safe(msg, tmp, &ul_queue, list) {
++		int c = fn_cmp((uint32_t) msg->cb[0], fn);
++		if (c < 0) {
++			/* the ship has sailed */
++			printf("l1gprs: drop stale UL block fn=%u (now %u)\n", (uint32_t) msg->cb[0], fn);
++			llist_del(&msg->list);
++			msgb_free(msg);
++			continue;
++		}
++		if (c == 0 && (uint8_t) msg->cb[1] == tn) {
++			llist_del(&msg->list);
++			return msg;
++		}
++	}
++	return NULL;
++}
++
++void l1gprs_fw_ul_block_cnf(uint32_t fn, uint8_t tn, const uint8_t *data)
++{
++	struct l1ctl_gprs_ul_block_cnf *cnf;
++	struct msgb *msg = l1ctl_msgb_alloc(L1CTL_GPRS_UL_BLOCK_CNF);
++
++	cnf = (void *) msgb_put(msg, sizeof(*cnf));
++	cnf->fn = htonl(fn);
++	cnf->tn = tn;
++	if (data)
++		memcpy(msgb_put(msg, CS1_BLOCK_LEN), data, CS1_BLOCK_LEN);
++	l1_queue_for_l2(msg);
++}
++
++/* Does the (CS-1) downlink block address one of our DL TBFs? Control blocks
++ * without optional octets always pass (3GPP TS 44.060 10.2.1 / 10.3.1). */
++static bool filter_dl_block(uint32_t dl_tfi_mask, const uint8_t *data)
++{
++	uint8_t dl_tfi;
++	switch (data[0] >> 6) {
++	case 0x00:	/* RLC data block */
++		dl_tfi = (data[1] >> 1) & 0x1f;
++		break;
++	case 0x02:	/* control block with optional octets */
++		dl_tfi = (data[2] >> 1) & 0x1f;
++		break;
++	case 0x01:	/* control block, no optional octets */
++		return true;
++	default:
++		return false;
++	}
++	return (dl_tfi_mask & (1 << dl_tfi)) != 0;
++}
++
++void l1gprs_fw_dl_block(uint32_t fn, uint8_t tn, const uint8_t *data,
++			bool crc_ok, uint8_t rx_lev, uint16_t num_biterr, uint16_t snr)
++{
++	struct l1ctl_gprs_dl_block_ind *ind;
++	struct l1ctl_gprs_rts_ind *rts;
++	uint32_t dl_tfi_mask = 0;
++	uint8_t usf = 0xff;
++	struct msgb *msg;
++	uint32_t ber10k;
++
++	check_pending(fn);
++
++	if (pdch_count(tn, false, &dl_tfi_mask) == 0) {
++		/* nothing configured on this PDCH (yet): L23 does not want to hear about it */
++		return;
++	}
++
++	ber10k = (uint32_t) num_biterr * 10000 / 456;
++	if (ber10k > 10000)
++		ber10k = 10000;
++
++	msg = l1ctl_msgb_alloc(L1CTL_GPRS_DL_BLOCK_IND);
++	ind = (void *) msgb_put(msg, sizeof(*ind));
++	ind->hdr.fn = htonl(fn);
++	ind->hdr.tn = tn;
++	ind->meas.ber10k = htons(ber10k);
++	ind->meas.ci_cb = htons((int16_t) (snr > 300 ? 300 : snr));
++	ind->meas.rx_lev = rx_lev;
++	ind->usf = 0xff;
++	if (crc_ok && data) {
++		if ((fn % 104) == 12) {
++			/* PTCCH/D: pass as-is */
++			memcpy(msgb_put(msg, CS1_BLOCK_LEN), data, CS1_BLOCK_LEN);
++		} else {
++			usf = data[0] & 0x07;
++			ind->usf = usf;
++			if (filter_dl_block(dl_tfi_mask, data))
++				memcpy(msgb_put(msg, CS1_BLOCK_LEN), data, CS1_BLOCK_LEN);
++		}
++	}
++	l1_queue_for_l2(msg);
++
++	/* Ready-to-send for the uplink block L1GPRS_FW_RTS_ADVANCE frames after
++	 * this one.  The USF is the one just decoded: on the bench a lone UL TBF
++	 * gets its USF in every block, and polls (RRBP) are fn-exact anyway. */
++	msg = l1ctl_msgb_alloc(L1CTL_GPRS_RTS_IND);
++	rts = (void *) msgb_put(msg, sizeof(*rts));
++	rts->fn = htonl((fn + L1GPRS_FW_RTS_ADVANCE) % GSM_MAX_FN);
++	rts->tn = tn;
++	rts->usf = usf;
++	l1_queue_for_l2(msg);
++}
+diff --git a/src/target/firmware/layer1/prim_pdtch.c b/src/target/firmware/layer1/prim_pdtch.c
+new file mode 100644
+index 00000000..bac76f3a
+--- /dev/null
++++ b/src/target/firmware/layer1/prim_pdtch.c
+@@ -0,0 +1,115 @@
++/* prim_pdtch.c - PDTCH uplink (CS-1, four normal bursts, DUL task) for the
++ * Calypso firmware.  Mirror of prim_tx_nb.c, but a block is only sent when
++ * L23 queued one for exactly this frame number (L1CTL_GPRS_UL_BLOCK_REQ);
++ * otherwise the uplink block period is left silent.
++ *
++ * (C) 2026 osmo-operator bench. GPLv2+. */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include <defines.h>
++#include <debug.h>
++#include <memory.h>
++#include <byteorder.h>
++#include <osmocom/gsm/gsm_utils.h>
++#include <osmocom/core/msgb.h>
++#include <calypso/dsp_api.h>
++#include <calypso/irq.h>
++#include <calypso/tpu.h>
++#include <calypso/tsp.h>
++#include <calypso/dsp.h>
++#include <calypso/timer.h>
++#include <comm/sercomm.h>
++
++#include <layer1/sync.h>
++#include <layer1/agc.h>
++#include <layer1/tdma_sched.h>
++#include <layer1/mframe_sched.h>
++#include <layer1/tpu_window.h>
++#include <layer1/l23_api.h>
++#include <layer1/rfch.h>
++#include <layer1/prim.h>
++#include <layer1/l1gprs_fw.h>
++
++#include <l1ctl_proto.h>
++
++static struct {
++	uint8_t active;		/* a block is being transmitted in this period */
++	uint32_t fn;		/* its first frame number */
++	uint8_t tn;
++	uint8_t data[23];
++} pdtch_ul;
++
++static int l1s_pdtch_tx_resp(__unused uint8_t p1, uint8_t burst_id, __unused uint16_t p3)
++{
++	if (!pdtch_ul.active)
++		return 0;
++
++	putchart('p');
++	dsp_api.r_page_used = 1;
++
++	if (burst_id == 3) {
++		pdtch_ul.active = 0;
++		l1gprs_fw_ul_block_cnf(pdtch_ul.fn, pdtch_ul.tn, pdtch_ul.data);
++	}
++	return 0;
++}
++
++static int l1s_pdtch_tx_cmd(__unused uint8_t p1, uint8_t burst_id, __unused uint16_t p3)
++{
++	uint16_t arfcn;
++	uint8_t tsc, tn;
++
++	rfch_get_params(&l1s.next_time, &arfcn, &tsc, &tn);
++
++	if (burst_id == 0) {
++		uint16_t *info_ptr = dsp_api.ndb->a_cu;
++		struct msgb *msg;
++
++		msg = l1gprs_fw_ul_dequeue(l1s.next_time.fn, tn);
++		if (!msg) {
++			pdtch_ul.active = 0;
++			return 0;
++		}
++		putchart('P');
++		pdtch_ul.active = 1;
++		pdtch_ul.fn = l1s.next_time.fn;
++		pdtch_ul.tn = tn;
++		memcpy(pdtch_ul.data, msg->l3h, sizeof(pdtch_ul.data));
++		msgb_free(msg);
++
++		/* Fill data block Header */
++		info_ptr[0] = (1 << B_BLUD);     // 1st word: Set B_BLU bit.
++		info_ptr[1] = 0;                 // 2nd word: cleared.
++		info_ptr[2] = 0;                 // 3rd word: cleared.
++		/* Copy the actual data after the header */
++		dsp_memcpy_to_api(&info_ptr[3], pdtch_ul.data, 23, 0);
++	} else if (!pdtch_ul.active) {
++		return 0;
++	}
++
++	l1s_tx_apc_helper(arfcn);
++
++	/* DUL_DSP_TASK, four normal bursts: the ROM's xCCH coding is CS-1 */
++	dsp_load_tch_param(&l1s.next_time, SIG_ONLY_MODE, SDCCH_4, 0, 0, 0, tn);
++
++	dsp_load_tx_task(
++		dsp_task_iq_swap(DUL_DSP_TASK, arfcn, 1),
++		burst_id, tsc
++	);
++
++	l1s_tx_win_ctrl(arfcn | ARFCN_UPLINK, L1_TXWIN_NB, 0, 3);
++
++	return 0;
++}
++
++const struct tdma_sched_item pdtch_sched_set_ul[] = {
++	SCHED_ITEM_DT(l1s_pdtch_tx_cmd, 3, 2, 0),						SCHED_END_FRAME(),
++	SCHED_ITEM_DT(l1s_pdtch_tx_cmd, 3, 2, 1),						SCHED_END_FRAME(),
++	SCHED_ITEM(l1s_pdtch_tx_resp, -4, 2, 0),	SCHED_ITEM_DT(l1s_pdtch_tx_cmd, 3, 2, 2),	SCHED_END_FRAME(),
++	SCHED_ITEM(l1s_pdtch_tx_resp, -4, 2, 1),	SCHED_ITEM_DT(l1s_pdtch_tx_cmd, 3, 2, 3),	SCHED_END_FRAME(),
++						SCHED_ITEM(l1s_pdtch_tx_resp, -4, 2, 2),	SCHED_END_FRAME(),
++						SCHED_ITEM(l1s_pdtch_tx_resp, -4, 2, 3),	SCHED_END_FRAME(),
++	SCHED_END_SET()
++};

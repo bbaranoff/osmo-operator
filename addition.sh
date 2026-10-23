@@ -46,9 +46,11 @@
 #                                 (sources, patchs du banc, image flash)
 #   sudo ./addition.sh --trx      osmocom-bb-trx : image Docker publiee + firmware
 #                                 trx (TX) compile avec gnuarm
+#   sudo ./addition.sh --calypso-fw le firmware Calypso du banc (layer1, rssi)
+#                                 recompile avec gnuarm (OSMO_FW_INSTALLER=1 : le poser)
 #   sudo ./addition.sh --fernvale fernly, fernvale-nuttx, layer1 MTK (MT6260)
 #   sudo ./addition.sh --simcom   documentation et SDK SIMCom (~3,4 Go)
-#   sudo ./addition.sh --firmwares les cinq precedents
+#   sudo ./addition.sh --firmwares les six precedents
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -187,7 +189,7 @@ _docker_groupe_session() {
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
 DO_BUILD=0; DO_EXTRAS=0; DO_SIM=0
-DO_GNUARM=0; DO_MAGNETITE=0; DO_TRX=0; DO_FERNVALE=0; DO_SIMCOM=0
+DO_GNUARM=0; DO_MAGNETITE=0; DO_TRX=0; DO_FERNVALE=0; DO_SIMCOM=0; DO_CALFW=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
@@ -202,12 +204,13 @@ for a in "$@"; do
         --gnuarm)    DO_GNUARM=1;    ANY_FLAG=1 ;;
         --magnetite) DO_MAGNETITE=1; ANY_FLAG=1 ;;
         --trx)       DO_TRX=1;       ANY_FLAG=1 ;;
+        --calypso-fw) DO_CALFW=1;    ANY_FLAG=1 ;;
         --fernvale)  DO_FERNVALE=1;  ANY_FLAG=1 ;;
         --simcom)    DO_SIMCOM=1;    ANY_FLAG=1 ;;
-        --firmwares) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_FERNVALE=1; DO_SIMCOM=1; ANY_FLAG=1 ;;
+        --firmwares) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_CALFW=1; DO_FERNVALE=1; DO_SIMCOM=1; ANY_FLAG=1 ;;
         --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; DO_SIM=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
-        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,54p' "$0"; exit 0 ;;
     esac
 done
 
@@ -388,7 +391,7 @@ if [ "$ANY_FLAG" = "0" ]; then
         case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
         case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
         case "$_choix" in *extras*) DO_EXTRAS=1 ;; esac
-        case "$_choix" in *firmwares*) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_FERNVALE=1; DO_SIMCOM=1 ;; esac
+        case "$_choix" in *firmwares*) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_CALFW=1; DO_FERNVALE=1; DO_SIMCOM=1 ;; esac
     else
         # Console sans zenity : le supplement historique, celui de l icone.
         DO_MULTI=1
@@ -1176,7 +1179,7 @@ fi
 # ── FIRMWARES TELEPHONE (supplement independant) ─────────────────────────────
 # gnuarm, Magnetite C139, osmocom-bb-trx, Fernvale, SIMCom : tools/osmo-firmwares-install.sh.
 # osmocom-bb-trx tire une image Docker : sans moteur, --trx ne pose que le firmware.
-if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_FERNVALE$DO_SIMCOM" != "00000" ]; then
+if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_CALFW$DO_FERNVALE$DO_SIMCOM" != "000000" ]; then
     if [ -f "$DIR/tools/osmo-firmwares-install.sh" ]; then
         # shellcheck source=tools/osmo-firmwares-install.sh
         . "$DIR/tools/osmo-firmwares-install.sh"
@@ -1184,6 +1187,7 @@ if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_FERNVALE$DO_SIMCOM" != "00000" ]; then
         [ "$DO_GNUARM" = "1" ]    && { osmo_gnuarm_install    || true; }
         [ "$DO_MAGNETITE" = "1" ] && { osmo_magnetite_install || true; }
         [ "$DO_TRX" = "1" ]       && { osmo_trx_install       || true; }
+        [ "$DO_CALFW" = "1" ]     && { osmo_calypso_fw_install || true; }
         [ "$DO_FERNVALE" = "1" ]  && { osmo_fernvale_install  || true; }
         [ "$DO_SIMCOM" = "1" ]    && { osmo_simcom_install    || true; }
         echo -e "  ${CYAN}→${NC} journaux : ${BOLD}${OSMO_FW_LOG:-/var/log/osmo-firmwares}/${NC}"

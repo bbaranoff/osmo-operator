@@ -567,6 +567,8 @@ echo "Dashboard injoignable sur $PORT - repli file:// sur la copie de /usr/share
 exec xdg-open "file:///usr/share/osmo-operator/tutorial.html"
 TUTO
     chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"
+    # [2026-10-23] le meme lanceur pour la page d aide (le « ? »), servie par le dashboard
+    install -m755 "$DIR/tools/osmo-info" "$ROOTFS/usr/local/bin/osmo-info"
 
     # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
     # l install native (install_modules/80-bureau.sh) et le paquet .deb posent

@@ -66,6 +66,13 @@ if [ -f "$DIR/data/tutorial.html" ]; then
     cp -f "$DIR/data/tutorial.html" "$WEB/web/tutorial.html"
     echo -e "  ${GREEN}✓${NC} tutoriel servi par le dashboard : ${CYAN}/tutorial.html${NC}"
 fi
+# [2026-10-23] la page d aide (le « ? » du dock) aussi : Firefox est un snap et ne lit pas
+# file:///usr/share, l icone ouvrait une page vide. Voir /usr/local/bin/osmo-info.
+if [ -f "$DIR/configs/info.html" ]; then
+    mkdir -p "$WEB/web"
+    cp -f "$DIR/configs/info.html" "$WEB/web/info.html"
+    echo -e "  ${GREEN}✓${NC} aide servie par le dashboard : ${CYAN}/info.html${NC}"
+fi
 
 # Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
 # (ou ip netns exec) au lieu de docker exec. Idempotent ; n'echoue pas le build.

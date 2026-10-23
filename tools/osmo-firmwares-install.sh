@@ -13,6 +13,8 @@
 #   osmo_magnetite_install  FreeCalypso Magnetite pour le Motorola C139 (le vrai
 #                           firmware TI) : Wine + environnement TI TMS470, sources
 #                           hg figees, patchs du banc, image flash de 4 MiB
+#   osmo_calypso_fw_install le firmware Calypso du banc (layer1 GPRS, rssi...)
+#                           recompile avec gnuarm depuis osmocom-bb eac4eed1 + patchs
 #   osmo_trx_install        osmocom-bb-trx : l image Docker publiee (cote hote,
 #                           ubuntu 16.04) et le firmware trx (TX actif) compile
 #                           avec gnuarm
@@ -47,20 +49,27 @@ _fw_clone() {   # url dest [branche]
         || { _fw_err "clone de $url impossible (voir $(_fw_log git))"; return 1; }
 }
 
-# [2026-10-23] LE BUG .map D OSMOCOM-BB. Les Makefile.inc d osmocom-bb passent
-# « -Map board/... » a l edition de liens. C est une option de ld : tant que le
-# lien se fait par $(LD) (gnuarm, osmocom-bb jolly/testing) elle passe ; des
-# qu il se fait par le pilote gcc ($(CC), arbres plus recents et MTK), gcc la lit
-# comme -M -ap et le lien casse. On la reecrit en -Wl,-Map,<fichier> seulement
-# quand la ligne de lien passe par gcc. Le script solve_envs.py, lui, est en
-# Python 2 (print sans parentheses) : sans python2 sur l hote, aucun
-# environnement n est resolu et le firmware sort sans .bin, silencieusement.
+# [2026-10-23] LE BUG .map D OSMOCOM-BB. Le fichier .map est demande a l edition
+# de liens sous deux formes, cassees toutes deux des que le lien passe par le
+# pilote gcc ($(CC)) :
+#   « -Map board/... »       (jolly/testing, MTK) : gcc lit -Map comme -M -ap ;
+#   « -Wl,-Map board/... »   (osmocom-bb amont, eac4eed1) : -Map part a ld mais le
+#                            NOM part a gcc, comme fichier d entree : « board/
+#                            compal_e88/hello_world.highram.map : No such file ».
+# Les deux deviennent -Wl,-Map,<fichier> (virgule). Par $(LD) directement (gnuarm
+# sur jolly/testing) « -Map fichier » est juste : on n y touche pas. Le script
+# solve_envs.py, lui, est en Python 2 (print sans parentheses) : sans python2 sur
+# l hote, aucun environnement n est resolu et le firmware sort sans .bin, en silence.
 _fw_bb_corriger() {   # racine/src/target/firmware
     local fw="$1" mk="$1/Makefile.inc"
+    if [ -f "$mk" ] && grep -q '^\s*-Wl,-Map board' "$mk"; then
+        sed -i 's|^\(\s*\)-Wl,-Map board/|\1-Wl,-Map,board/|' "$mk"
+        _fw_ok "Makefile.inc : -Wl,-Map <fichier> -> -Wl,-Map,<fichier>"
+    fi
     if [ -f "$mk" ] && grep -q '^\s*-Map board' "$mk" \
        && grep -B2 '^\s*-Map board' "$mk" | grep -q '\$(CC)'; then
         sed -i 's|^\(\s*\)-Map board/\$(2)/\$(1)\.\$(3)\.map |\1-Wl,-Map,board/$(2)/$(1).$(3).map |' "$mk"
-        _fw_ok "Makefile.inc : -Map -> -Wl,-Map (lien par gcc)"
+        _fw_ok "Makefile.inc : -Map -> -Wl,-Map,<fichier> (lien par gcc)"
     fi
     if [ -f "$fw/solve_envs.py" ] && grep -q "^\s*print ' '" "$fw/solve_envs.py"; then
         sed -i "1s|python\$|python3|; s|^\(\s*\)print ' '.join(envs)|\1print(' '.join(envs))|" "$fw/solve_envs.py"
@@ -217,6 +226,55 @@ osmo_trx_install() {
     else
         _fw_err "trx.highram.bin absent apres make (voir $log)"; return 1
     fi
+}
+
+# ── firmware Calypso du banc (layer1, rssi...) avec gnuarm ──────────────────
+# Le firmware livre est celui du depot bbaranoff/firmware (/opt/GSM/firmware,
+# board/compal_e88/{layer1,rssi,trx}.highram). Celui-ci le RECOMPILE depuis l arbre
+# osmocom-bb du banc : eac4eed1 + les patchs de patches/ (dont
+# osmocom-bb-firmware-gprs.patch, le layer1 GPRS), avec arm-elf-gcc 4.5.2.
+# layer1.compalram deborde de LRAM (3448 octets) avec le GPRS et gcc 4.5 : il n est
+# pas utilise par le banc (highram), d ou make -k. OSMO_FW_INSTALLER=1 recopie les
+# .highram.{elf,bin} dans /opt/GSM/firmware (anciens en .avant-<date>).
+OSMOCOM_BB_REF="${OSMOCOM_BB_REF:-eac4eed1}"
+osmo_calypso_fw_install() {
+    echo -e "${BOLD}== firmware Calypso du banc (osmocom-bb, gnuarm) ==${NC}"
+    osmo_gnuarm_install || return 1
+    local t="$GSM_ROOT/osmocom-bb" fw log p; log="$(_fw_log calypso-fw)"
+    _fw_apt autoconf automake libtool pkg-config python3 git
+    if [ ! -d "$t/.git" ]; then
+        _fw_clone https://gitea.osmocom.org/phone-side/osmocom-bb "$t" || return 1
+        git -C "$t" checkout -q "$OSMOCOM_BB_REF" && _fw_ok "osmocom-bb epingle sur $OSMOCOM_BB_REF"
+    fi
+    for p in "$REPO"/patches/osmocom-bb-*.patch; do
+        case "$p" in *transceiver*) continue ;; esac     # ceux-la visent osmocom-bb-transceiver
+        if git -C "$t" apply -R --check "$p" 2>/dev/null; then :
+        elif git -C "$t" apply --check "$p" 2>/dev/null; then git -C "$t" apply "$p" && _fw_ok "patch $(basename "$p")"
+        else _fw_warn "$(basename "$p") ne s applique pas sur cet arbre"; fi
+    done
+    fw="$t/src/target/firmware"
+    _fw_bb_corriger "$fw"
+    ( cd "$t/src" && PATH="$GNUARM_DIR/install/bin:$PATH" make libosmocore-target \
+        && PATH="$GNUARM_DIR/install/bin:$PATH" make -k -j"$OSMO_FW_JOBS" -C target/firmware \
+           CROSS_COMPILE=arm-elf- BOARDS=compal_e88 ) >>"$log" 2>&1
+    local b="$fw/board/compal_e88" ok=1 a
+    for a in layer1 rssi; do
+        if [ -s "$b/$a.highram.bin" ]; then _fw_ok "$a.highram.bin ($b)"; else _fw_err "$a.highram.bin absent (voir $log)"; ok=0; fi
+    done
+    if [ "$ok" = 1 ] && [ "${OSMO_FW_INSTALLER:-0}" = 1 ]; then
+        local dst="$GSM_ROOT/firmware/board/compal_e88" d; d="$(date +%Y%m%d-%H%M)"
+        mkdir -p "$dst"
+        for a in layer1 rssi; do
+            for x in elf bin; do
+                [ -f "$dst/$a.highram.$x" ] && cp -p "$dst/$a.highram.$x" "$dst/$a.highram.$x.avant-$d"
+                cp -f "$b/$a.highram.$x" "$dst/"
+            done
+        done
+        _fw_ok "pose dans $dst (anciens en .avant-$d)"
+    elif [ "$ok" = 1 ]; then
+        echo -e "  ${CYAN}→${NC} le banc garde le firmware livre ; OSMO_FW_INSTALLER=1 pour poser celui-ci dans $GSM_ROOT/firmware"
+    fi
+    [ "$ok" = 1 ]
 }
 
 # ── Fernvale (MT6260) ────────────────────────────────────────────────────────

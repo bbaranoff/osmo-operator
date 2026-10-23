@@ -1,0 +1,19 @@
+#!/bin/bash
+# osmo-info - ouvre la page d aide du banc (le « ? » du dock).
+#
+# [2026-10-23] PAR HTTP, PAS PAR file://. Firefox est un snap : son confinement
+# ne lit pas /usr/share, et l ancien Exec=xdg-open file:///usr/share/... ouvrait
+# une page « fichier introuvable ». Le dashboard (8080) sert la page ; la copie
+# de /usr/share reste en repli si le dashboard ne repond pas, recopiee alors
+# dans ~/Documents (le snap ne lit pas les dossiers caches du home).
+set -u
+URL="${OSMO_INFO_URL:-http://127.0.0.1:8080/info.html}"
+PORT="${URL##*:}"; PORT="${PORT%%/*}"
+if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+    exec 3>&- 2>/dev/null
+    exec xdg-open "$URL"
+fi
+echo "Dashboard injoignable sur $PORT - repli sur une copie locale" >&2
+D="$(xdg-user-dir DOCUMENTS 2>/dev/null || echo "$HOME/Documents")/osmo-operator"
+mkdir -p "$D" && cp -f /usr/share/osmo-operator/info.html "$D/help.html" 2>/dev/null
+exec xdg-open "file://$D/help.html"
