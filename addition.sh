@@ -41,6 +41,14 @@
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --extras   Jeux + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
+#   sudo ./addition.sh --gnuarm   la chaine historique arm-elf-gcc 4.5.2 (/root/gnuarm)
+#   sudo ./addition.sh --magnetite Wine + TI TMS470, FreeCalypso Magnetite C139
+#                                 (sources, patchs du banc, image flash)
+#   sudo ./addition.sh --trx      osmocom-bb-trx : image Docker publiee + firmware
+#                                 trx (TX) compile avec gnuarm
+#   sudo ./addition.sh --fernvale fernly, fernvale-nuttx, layer1 MTK (MT6260)
+#   sudo ./addition.sh --simcom   documentation et SDK SIMCom (~3,4 Go)
+#   sudo ./addition.sh --firmwares les cinq precedents
 #   sudo ./addition.sh --status   dit seulement ce qui est present
 # =============================================================================
 set -uo pipefail
@@ -179,6 +187,7 @@ _docker_groupe_session() {
 
 DO_DOCKER=0; DO_IMAGE=0; DO_MULTI=0; DO_OPENCL=0; DO_CLAUDE=0; STATUS_ONLY=0; ANY_FLAG=0
 DO_BUILD=0; DO_EXTRAS=0; DO_SIM=0
+DO_GNUARM=0; DO_MAGNETITE=0; DO_TRX=0; DO_FERNVALE=0; DO_SIMCOM=0
 for a in "$@"; do
     case "$a" in
         --docker) DO_DOCKER=1; ANY_FLAG=1 ;;
@@ -190,9 +199,15 @@ for a in "$@"; do
         --claude) DO_CLAUDE=1; ANY_FLAG=1 ;;
         --extras) DO_EXTRAS=1; ANY_FLAG=1 ;;
         --sim)    DO_SIM=1;    ANY_FLAG=1 ;;
+        --gnuarm)    DO_GNUARM=1;    ANY_FLAG=1 ;;
+        --magnetite) DO_MAGNETITE=1; ANY_FLAG=1 ;;
+        --trx)       DO_TRX=1;       ANY_FLAG=1 ;;
+        --fernvale)  DO_FERNVALE=1;  ANY_FLAG=1 ;;
+        --simcom)    DO_SIMCOM=1;    ANY_FLAG=1 ;;
+        --firmwares) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_FERNVALE=1; DO_SIMCOM=1; ANY_FLAG=1 ;;
         --all)    DO_DOCKER=1; DO_IMAGE=1; DO_MULTI=1; DO_OPENCL=1; DO_CLAUDE=1; DO_EXTRAS=1; DO_SIM=1; ANY_FLAG=1 ;;
         --status) STATUS_ONLY=1; ANY_FLAG=1 ;;
-        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
     esac
 done
 
@@ -236,6 +251,17 @@ etat() {
     [ -x "$DIR/launch/start-multi.sh" ] || echo -e "  start-multi.sh       : ${YELLOW}absent de $DIR${NC}"
     [ "$ok_cl" = "1" ] && echo -e "  OpenCL               : ${GREEN}operationnel${NC}" || echo -e "  OpenCL               : ${YELLOW}absent${NC}"
     [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
+    # [2026-10-23] les firmwares telephone (tools/osmo-firmwares-install.sh)
+    _fw_etat() { [ -e "$2" ] && echo -e "  $(printf '%-20s' "$1") : ${GREEN}present${NC}" || echo -e "  $(printf '%-20s' "$1") : ${YELLOW}absent${NC}"; }
+    _fw_etat "gnuarm"            /root/gnuarm/install/bin/arm-elf-gcc
+    _fw_etat "Magnetite C139"    /opt/GSM/firmware/magnetite/c139-flash.img
+    _fw_etat "firmware trx (TX)" /opt/GSM/osmocom-bb-trx/src/target/firmware/board/compal_e88/trx.highram.bin
+    _fw_etat "Fernvale fernly"   /opt/GSM/fernly/build/firmware.bin
+    _fw_etat "Fernvale NuttX"    /opt/GSM/fernvale-nuttx/nuttx/nuttx.bin
+    _fw_etat "layer1 MTK"        /opt/GSM/osmocom-bb-mtk-layer1/src/target/firmware/board/fernvale/layer1.mt6260.bin
+    _fw_etat "SIMCom"            /opt/GSM/simcom/.git
+    { command -v docker >/dev/null 2>&1 && docker image inspect "${OSMOCOM_BB_TRX_IMAGE:-ghcr.io/bbaranoff/osmocom-bb-trx:main}" >/dev/null 2>&1; } \
+        && echo -e "  image osmocom-bb-trx : ${GREEN}presente${NC}" || echo -e "  image osmocom-bb-trx : ${YELLOW}absente${NC}"
 }
 
 [ "$STATUS_ONLY" = "1" ] && { etat; exit 0; }
@@ -328,6 +354,7 @@ if [ "$ANY_FLAG" = "0" ]; then
             TRUE  multi  "Docker container and SS7 multioperator - docker.io, l image operateur (telechargee du hub OU compilee sur place : le choix vient ensuite), et la topologie op1 natif + op2/op3 docker + inter-STP" \
             FALSE opencl "OpenCL (calcul GPU) - runtime ICD, clinfo, le pilote de la carte detectee (Intel / Mesa-AMD, pocl en repli), et les outils deka / a51_tools / dst80_reversing / tea1-cracker clones dans /root" \
             FALSE claude "Claude Code (CLI de l assistant IA) - installeur natif claude.ai/install.sh (binaire autonome, sans npm) ; lance ensuite avec la commande claude" \
+            FALSE firmwares "Firmwares telephone - gnuarm (arm-elf-gcc 4.5.2), FreeCalypso Magnetite C139 (Wine + TI TMS470), osmocom-bb-trx (image Docker + firmware trx TX), Fernvale MT6260 (fernly, NuttX, layer1 MTK), documentation SIMCom ; long (plusieurs Go, compilations)" \
             FALSE extras "Jeux + media - Doom (freedoom + chocolate-doom), Quake III (OpenArena), Kodi, YouTube (Firefox + uBlock Origin), Wireshark (root), Linphone ; ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis l encart du bureau" \
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
@@ -361,6 +388,7 @@ if [ "$ANY_FLAG" = "0" ]; then
         case "$_choix" in *opencl*) DO_OPENCL=1 ;; esac
         case "$_choix" in *claude*) DO_CLAUDE=1 ;; esac
         case "$_choix" in *extras*) DO_EXTRAS=1 ;; esac
+        case "$_choix" in *firmwares*) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_FERNVALE=1; DO_SIMCOM=1 ;; esac
     else
         # Console sans zenity : le supplement historique, celui de l icone.
         DO_MULTI=1
@@ -370,6 +398,8 @@ fi
 # Le multi-operateur ENTRAINE ses dependances : sans moteur ni image, la
 # topologie posee ne servirait a rien et start-multi.sh renverrait ici.
 if [ "$DO_MULTI" = "1" ]; then DO_DOCKER=1; DO_IMAGE=1; fi
+# osmocom-bb-trx : la partie hote est une image Docker, il lui faut le moteur.
+if [ "$DO_TRX" = "1" ]; then DO_DOCKER=1; fi
 
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis : sudo $0${NC}"; exit 1; }
 
@@ -1140,6 +1170,25 @@ if [ "$DO_SIM" = "1" ]; then
         REPO="$DIR" osmo_sim_install
     else
         echo -e "  ${YELLOW}!${NC} tools/osmo-sim-install.sh introuvable"
+    fi
+fi
+
+# ── FIRMWARES TELEPHONE (supplement independant) ─────────────────────────────
+# gnuarm, Magnetite C139, osmocom-bb-trx, Fernvale, SIMCom : tools/osmo-firmwares-install.sh.
+# osmocom-bb-trx tire une image Docker : sans moteur, --trx ne pose que le firmware.
+if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_FERNVALE$DO_SIMCOM" != "00000" ]; then
+    if [ -f "$DIR/tools/osmo-firmwares-install.sh" ]; then
+        # shellcheck source=tools/osmo-firmwares-install.sh
+        . "$DIR/tools/osmo-firmwares-install.sh"
+        export REPO="$DIR"
+        [ "$DO_GNUARM" = "1" ]    && { osmo_gnuarm_install    || true; }
+        [ "$DO_MAGNETITE" = "1" ] && { osmo_magnetite_install || true; }
+        [ "$DO_TRX" = "1" ]       && { osmo_trx_install       || true; }
+        [ "$DO_FERNVALE" = "1" ]  && { osmo_fernvale_install  || true; }
+        [ "$DO_SIMCOM" = "1" ]    && { osmo_simcom_install    || true; }
+        echo -e "  ${CYAN}→${NC} journaux : ${BOLD}${OSMO_FW_LOG:-/var/log/osmo-firmwares}/${NC}"
+    else
+        echo -e "  ${YELLOW}!${NC} tools/osmo-firmwares-install.sh introuvable"
     fi
 fi
 

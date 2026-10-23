@@ -1,266 +1,308 @@
-diff --git a/hw/arm/calypso/calypso_trf6151.c b/hw/arm/calypso/calypso_trf6151.c
-index 53638ded..0afbb82b 100644
---- a/hw/arm/calypso/calypso_trf6151.c
-+++ b/hw/arm/calypso/calypso_trf6151.c
-@@ -89,6 +89,41 @@ int calypso_trf6151_arfcn(void)
-     return -1;
- }
- 
-+/* [2026-10-23] AIR REALISTE (c54x_exe, CALYPSO_AIR_NIVEAUX) : l'etat du synthetiseur pour le champ `reserve`
-+ * de calypso_rf_arfcn.h. bit 15 : mode RX (PWR bit 11) ; bit 14 : mode TX (PWR bit 13) ; bit 13 : frequence
-+ * dans une bande MONTANTE (GSM900/E-GSM 880-915 MHz, DCS 1710-1785 MHz), ARFCN correspondant dans les bits
-+ * 0..10. calypso_trf6151_arfcn() ne decode que les bandes descendantes et rend -1 pour ces frequences : la vue
-+ * montante de l'appli rssi (RX accorde sur l'UL) passait pour « inconnue » et recevait le descendant. */
-+int calypso_trf6151_rf_flags(void)
-+{
-+    unsigned a = (g_reg_pll >> 3) & 0x3f;
-+    unsigned b = ((g_reg_pll >> 9) & 0x7f) + 64;
-+    unsigned n = b * 64 + a;
-+    bool high_band = ((g_reg_pwr >> 6) & 3) == TRF6151_BAND_1800;
-+    unsigned freq10 = high_band ? n * 2 : n;
-+    int f = 0, ul = -1;
-+    if (g_reg_pwr & (1u << 11)) {
-+        f |= 1 << 15;
-+    }
-+    if (g_reg_pwr & (1u << 13)) {
-+        f |= 1 << 14;
-+    }
-+    if (!g_reg_pll) {
-+        return f;
-+    }
-+    if (freq10 >= 8902 && freq10 <= 9148) {
-+        ul = (int)((freq10 - 8900) / 2);
-+    } else if (freq10 >= 8802 && freq10 < 8900) {
-+        ul = 1024 - (int)(8900 - freq10) / 2;
-+    } else if (freq10 >= 17102 && freq10 <= 17848) {
-+        ul = (int)(512 + (freq10 - 17102) / 2);
-+    }
-+    if (ul >= 0) {
-+        f |= (1 << 13) | (ul & 0x7ff);
-+    }
-+    return f;
-+}
-+
- int calypso_trf6151_total_gain_db(void)
- {
-     return SYSTEM_INHERENT_GAIN + trf6151_gain_from_reg(g_reg_rx);
-diff --git a/hw/arm/calypso/calypso_trf6151.h b/hw/arm/calypso/calypso_trf6151.h
-index a1798c87..3d70c2e4 100644
---- a/hw/arm/calypso/calypso_trf6151.h
-+++ b/hw/arm/calypso/calypso_trf6151.h
-@@ -10,5 +10,6 @@ int calypso_trf6151_total_gain_db(void);
- 
- uint16_t calypso_trf6151_apm_for_rf(int target_rf_dbm);
- int calypso_trf6151_arfcn(void);
-+int calypso_trf6151_rf_flags(void);   /* [2026-10-23] mode RX/TX + ARFCN montant, voir le .c */
- 
- #endif
-diff --git a/hw/arm/calypso/calypso_tsp.c b/hw/arm/calypso/calypso_tsp.c
-index 628e57c5..41fff3fa 100644
---- a/hw/arm/calypso/calypso_tsp.c
-+++ b/hw/arm/calypso/calypso_tsp.c
-@@ -33,6 +33,7 @@ static void rf_arfcn_publier(uint32_t fn)
-     e->qbit = (int16_t)calypso_tpu_qbit();
-     e->arfcn = (int16_t)calypso_trf6151_arfcn();
-     e->gain_db = (int16_t)calypso_trf6151_total_gain_db();
-+    e->reserve = (int16_t)calypso_trf6151_rf_flags();   /* [2026-10-23] voir calypso_rf_arfcn.h */
-     __atomic_store_n(&m->widx, m->widx + 1, __ATOMIC_RELEASE);
- }
- 
+diff --git a/hw/arm/calypso/l1-dsp/c54x_mem.c b/hw/arm/calypso/l1-dsp/c54x_mem.c
+index cac9a37e..14b2ef5c 100644
+--- a/hw/arm/calypso/l1-dsp/c54x_mem.c
++++ b/hw/arm/calypso/l1-dsp/c54x_mem.c
+@@ -1140,6 +1140,7 @@ void data_write(C54xState *s, uint16_t addr, uint16_t val)
+         if (rssi_on < 0) rssi_on = calypso_gate("CALYPSO_PM_RSSI", 1);
+         if (rssi_on && ((addr >= 0x0834 && addr <= 0x0836) || (addr >= 0x0848 && addr <= 0x084A)))
+             val = calypso_bsp_rssi_apm_suivante(NULL);   /* [2026-10-22] fenetre suivante, dans l'ordre (calypso_bsp.c) */
++        if (addr == 0x0831 || addr == 0x0845) val = calypso_bsp_air_dpm(val);   /* [2026-10-23] D_PM, air realiste */
+         /* [2026-10-19] moniteur mailbox aussi sur le chemin rapide (voir data_read) */
+         calypso_mbx(MBX_DSP_WR, addr, val, s->data[addr], s->pc, 0, s->insn_count);
+         data_write_locked(s, addr, val);
+@@ -1344,6 +1345,7 @@ void data_write(C54xState *s, uint16_t addr, uint16_t val)
+                             (addr >= 0x0848 && addr <= 0x084A))) {
+                     val = calypso_bsp_rssi_apm_suivante(NULL);   /* [2026-10-22] fenetre suivante, dans l'ordre (calypso_bsp.c) */
+                 }
++                if (addr == 0x0831 || addr == 0x0845) val = calypso_bsp_air_dpm(val);   /* [2026-10-23] D_PM, air realiste */
+             }
+         }
+         if (sent && addr == 0x08f8) {
 diff --git a/hw/arm/calypso/l1-dsp/calypso_bsp.c b/hw/arm/calypso/l1-dsp/calypso_bsp.c
-index 564de57b..10d1b0fc 100644
+index 10d1b0fc..c8a4eb62 100644
 --- a/hw/arm/calypso/l1-dsp/calypso_bsp.c
 +++ b/hw/arm/calypso/l1-dsp/calypso_bsp.c
-@@ -982,6 +982,113 @@ static void faux_air_bruit(int16_t *iq, int n_ech)
-         iq[k] = (int16_t)lrint((u - 2.0) * 1.732 * sigma);   /* somme de 4 uniformes ~ gaussienne */
-     }
+@@ -225,7 +225,7 @@ static int pm_limite_qbit(int rang)
+ {
+     return rang == 0 ? -1 : 2500;    /* -1 : seulement les trames precedentes */
  }
-+/* [2026-10-23] AIR REALISTE (CALYPSO_AIR_NIVEAUX=1, banc-rssi). Sans lui, tout burst recu est joue a
-+ * l'amplitude 30000 quelle que soit la frequence ou le sens sur lequel le recepteur est accorde : l'appli rssi
-+ * voyait la cellule sur n'importe quel ARFCN et ses huit barres au maximum (rxlev 63), y compris en vue
-+ * MONTANTE ou il n'y a que le mobile. Ici :
-+ *   - QEMU publie le mode et la frequence montante (calypso_trf6151_rf_flags, champ `reserve`) ;
-+ *   - le pont copie aussi le montant (octet 6 = 0xA5, pont/trx.py send_ul), range a part (g_air_ul) ;
-+ *   - une fenetre accordee sur la frequence descendante de la cellule recoit le descendant au niveau
-+ *     CALYPSO_AIR_DL_DBM (-60) moins l'attenuation BTS, une fenetre accordee sur sa frequence montante recoit le
-+ *     burst du mobile de cet intervalle (TN montant = position - 3) au niveau CALYPSO_AIR_UL_DBM (-75), tout le
-+ *     reste du bruit. L'amplitude 30000 vaut CALYPSO_AIR_REF_DBM (-40) : a etalonner sur l'affichage.
-+ * Cellule : CALYPSO_FAUX_AIR (sinon toute frequence est la cellule). Sans les drapeaux de QEMU (QEMU
-+ * d'avant) : rien ne change. */
-+static int air_niveaux_on(void)
+-static void bsp_pm_mav_noter(const int16_t *iq, int n)
++static void bsp_pm_mav_noter(const int16_t *iq, int n, double k_air)
+ {
+     if (g_pm_mav_tick != g_tick_courant) {
+         if (g_pm_mav_n > 0) { memcpy(g_pm_mav_der, g_pm_mav, sizeof g_pm_mav); g_pm_mav_der_n = g_pm_mav_n; }
+@@ -235,7 +235,7 @@ static void bsp_pm_mav_noter(const int16_t *iq, int n)
+     int lim = pm_limite_qbit(g_pm_mav_n);      /* rang de cette fenetre dans la trame (avant ajout) */
+     uint64_t acc = 0;
+     for (int i = 0; i < n; i++) { int v = iq[i]; acc += (v < 0) ? (uint32_t)(-v) : (uint32_t)v; }
+-    uint32_t mav = (uint32_t)(acc / (uint32_t)n);
++    uint32_t mav = (uint32_t)(acc / (uint32_t)n * k_air);
+     uint16_t m16 = mav > 0xffff ? 0xffff : (uint16_t)mav;
+     if (m16 >= 5000) g_pm_mav_cellule = m16;   /* dernier vrai burst vu dans une fenetre de mesure */
+     g_pm_der_mav = m16; g_pm_der_gain = faux_air_gain(g_tick_courant, lim); g_pm_der_ok = 1;
+@@ -255,6 +255,34 @@ static void bsp_pm_mav_noter(const int16_t *iq, int n)
+     if (g_pm_fifo_w - g_pm_fifo_r > BSP_PM_FIFO_N) g_pm_fifo_r = g_pm_fifo_w - BSP_PM_FIFO_N;
+ }
+ static uint16_t bsp_apm_de_mav(double mav, int gain_db);
++static int air_niveaux_on(void);
++/* [2026-10-23] AGC de l'air realiste (CALYPSO_AIR_AGC=1, defaut) : le niveau d'un burst de la cellule (dBm) ne
++ * change plus son amplitude I/Q -- un vrai recepteur la ramene a pleine echelle par son AGC, et a l'amplitude
++ * 3000 le DSP ne decodait plus le BCCH (appli rssi : synchro OK mais MCC/MNC/LAC jamais lus, run du 23/10
++ * 18:55 ; sans l'air realiste : MCC 001 01 LAC 1 cell 6001). Le niveau ne porte que sur la MESURE de puissance :
++ * air_choisir() range le facteur d'amplitude par (fn, TN), calypso_bsp_rx_burst() l'applique au MAV de la
++ * fenetre de mesure (bsp_pm_mav_noter). */
++#define AIR_PM_RING 4096u
++static struct { uint32_t fn; float k; } g_air_pm[AIR_PM_RING][8];
++static double air_pm_k(uint32_t fn, unsigned tn)
 +{
-+    static int on = -1;
-+    if (on < 0) { const char *e = calypso_getenv("CALYPSO_AIR_NIVEAUX"); on = (e && *e == '1');
-+                  if (on) printf("  [air] niveaux realistes : DL/UL separes, amplitude selon le niveau\n"); }
-+    return on;
++    const typeof(g_air_pm[0][0]) *e = &g_air_pm[fn % AIR_PM_RING][tn & 7];
++    return (e->fn == fn && e->k > 0) ? e->k : 1.0;
 +}
-+static double air_env_dbm(const char *nom, double defaut)
++static double g_air_k_der = 1.0;   /* facteur du dernier burst livre au DSP (calypso_bsp_rx_burst) */
++static int g_air_dpm = -1;          /* D_PM du modele pour ce burst (meme echelle que a_pm), -1 inconnu */
++static int faux_air_gain(uint32_t tick, int limite);
++/* D_PM (a_serv_demod[1], 1/64 dB a la bande de base, layer1/prim_rx_nb.c : agc_inp_dbm8_by_pm(D_PM >> 3)) : le DSP
++ * le calcule sur des I/Q a pleine echelle ; l'appli rssi en tire le niveau de la vue synchro (rx_level). */
++uint16_t calypso_bsp_air_dpm(uint16_t val)
 +{
-+    const char *e = calypso_getenv(nom);
-+    return (e && *e) ? atof(e) : defaut;
++    /* La valeur du DSP ne sert pas : sur des I/Q a pleine echelle il sature (rxlev 63, -47 dBm affiche) et un
++     * simple decalage de 20 log k donnait -73 pour -60. Le modele de a_pm (bsp_apm_de_mav, gain programme de la
++     * fenetre) donne la meme echelle que la vue spectre. */
++    if (!air_niveaux_on() || g_air_dpm < 0 || val == 0) return val;
++    return (uint16_t)g_air_dpm;
 +}
-+/* accord de la fenetre : comme faux_air_arfcn, mais en sautant les reglages d'EMISSION et en gardant les
-+ * receptions sur une frequence montante. Rend 1 si connu (*arfcn, *ul, *qbit), 0 sinon. */
-+static int air_accord(uint32_t tick, int limite, int *arfcn, int *ul, int *qbit)
-+{
-+    static const CalypsoRfArfcnShm *m;
-+    static uint32_t essai;
-+    if (!m) {
-+        if (essai++ % 216) return 0;
-+        int fd = open(CALYPSO_RF_ARFCN_SHM, O_RDONLY);
-+        if (fd < 0) return 0;
-+        void *p = mmap(NULL, sizeof *m, PROT_READ, MAP_SHARED, fd, 0);
-+        close(fd);
-+        if (p == MAP_FAILED) return 0;
-+        m = p;
-+    }
-+    if (m->magic != CALYPSO_RF_ARFCN_MAGIC) return 0;
-+    uint32_t w = __atomic_load_n(&m->widx, __ATOMIC_ACQUIRE);
-+    uint32_t n = w < CALYPSO_RF_ARFCN_N ? w : CALYPSO_RF_ARFCN_N - 4;
-+    for (uint32_t k = 1; k <= n; k++) {
-+        const CalypsoRfProg *e = &m->e[(w - k) % CALYPSO_RF_ARFCN_N];
++static double air_env_dbm(const char *nom, double defaut);
+ /* sonde [apm] (pont.c) : les MAV par fenetre de la trame en cours et de la precedente */
+ int calypso_bsp_pm_mav_texte(char *buf, size_t n)
+ {
+@@ -317,6 +345,15 @@ static uint16_t bsp_apm_de_mav(double mav, int gain_db)
+         const char *rr = calypso_getenv("CALYPSO_DECAN_PM_RF_REF");
+         if (rr && *rr) {
+             rf_ref = atof(rr);
++        } else if (air_niveaux_on()) {
++            /* [2026-10-23] AIR REALISTE : une seule echelle. mav_ref (20929) est le MAV d'un burst module a
++             * 30000, que l'air realiste pose a CALYPSO_AIR_REF_DBM (-40) ; avec -60 ici, la cellule jouee a
++             * -60 dBm (amplitude 3000) ressortait a -83 dBm dans le modele, et l'appli rssi l'affichait
++             * n'importe ou des que le gain de la fenetre manquait (-38 dBm releve le 23/10 18:50). */
++            rf_ref = air_env_dbm("CALYPSO_AIR_REF_DBM", -40.0);
++            /* MAV mesure d'un burst GMSK module a 30000 (moyenne des |I|,|Q| : 1330..1400 a l'amplitude 3000,
++             * trace [apmL] du 23/10) ; 20929 laissait la cellule 4 dB sous sa consigne (-64 pour -60). */
++            if (!(mr && *mr)) mav_ref = 13700.0;
+         }
+         if (mav_ref < 1.0) {
+             mav_ref = 1.0;
+@@ -965,12 +1002,18 @@ static int faux_air_gain(uint32_t tick, int limite)
+     if (m->magic != CALYPSO_RF_ARFCN_MAGIC) return -999;
+     uint32_t w = __atomic_load_n(&m->widx, __ATOMIC_ACQUIRE);
+     uint32_t n = w < CALYPSO_RF_ARFCN_N ? w : CALYPSO_RF_ARFCN_N - 4;
++    int recent = -999;
+     for (uint32_t k = 1; k <= n; k++) {
+         const CalypsoRfProg *e = &m->e[(w - k) % CALYPSO_RF_ARFCN_N];
++        /* [2026-10-23] air realiste : le dernier reglage de RECEPTION (pas celui d'emission) sert de repli. Hors
++         * pas a pas (banc-rssi, tick 0 ou ~130 trames derriere QEMU) aucun reglage n'est « avant » le tick :
++         * -999 faisait convertir la PM avec le gain de RESET de c54x_exe (calypso_trf6151_apm_for_rf), l'appli
++         * rssi lisait -38 dBm pour une cellule a -60. Meme repli que air_accord. */
++        if (recent == -999 && !((uint16_t)e->reserve & (1u << 14))) recent = e->gain_db;
+         int32_t d = (int32_t)(e->fn - tick);
+         if (d < 0 || (d == 0 && e->qbit <= limite)) return e->gain_db;
+     }
+-    return -999;
++    return air_niveaux_on() ? recent : -999;
+ }
+ static void faux_air_bruit(int16_t *iq, int n_ech)
+ {
+@@ -1024,22 +1067,31 @@ static int air_accord(uint32_t tick, int limite, int *arfcn, int *ul, int *qbit)
+     if (m->magic != CALYPSO_RF_ARFCN_MAGIC) return 0;
+     uint32_t w = __atomic_load_n(&m->widx, __ATOMIC_ACQUIRE);
+     uint32_t n = w < CALYPSO_RF_ARFCN_N ? w : CALYPSO_RF_ARFCN_N - 4;
++    /* [2026-10-23] REPLI SUR LE REGLAGE LE PLUS RECENT. Hors pas a pas (banc-rssi), le DSP court ~130 trames
++     * derriere QEMU (dsp.log fn=8895, shm fn=9023) et l'anneau ne garde que ~10 trames : aucun reglage n'etait
++     * « avant » le tick, l'accord restait inconnu et tout passait comme avant. Le synthe d'une appli comme rssi
++     * reste longtemps sur la meme frequence : le dernier reglage de reception est le bon. */
++    int r_arfcn = -1, r_ul = 0, r_qbit = -1;
+     for (uint32_t k = 1; k <= n; k++) {
+         const CalypsoRfProg *e = &m->e[(w - k) % CALYPSO_RF_ARFCN_N];
+-        int32_t d = (int32_t)(e->fn - tick);
+-        if (!(d < 0 || (d == 0 && e->qbit <= limite))) continue;
+         uint16_t f = (uint16_t)e->reserve;
+         if (f & (1u << 14)) continue;                              /* reglage d'emission */
+-        if ((f & (1u << 15)) && (f & (1u << 13))) { *arfcn = f & 0x7ff; *ul = 1; *qbit = e->qbit; return 1; }
+-        if (e->arfcn < 0) continue;
+-        *arfcn = e->arfcn; *ul = 0; *qbit = e->qbit; return 1;
++        int a_ul = (f & (1u << 15)) && (f & (1u << 13));
++        int a = a_ul ? (int)(f & 0x7ff) : e->arfcn;
++        if (a < 0) continue;
++        if (r_arfcn < 0) { r_arfcn = a; r_ul = a_ul; r_qbit = e->qbit; }
 +        int32_t d = (int32_t)(e->fn - tick);
 +        if (!(d < 0 || (d == 0 && e->qbit <= limite))) continue;
-+        uint16_t f = (uint16_t)e->reserve;
-+        if (f & (1u << 14)) continue;                              /* reglage d'emission */
-+        if ((f & (1u << 15)) && (f & (1u << 13))) { *arfcn = f & 0x7ff; *ul = 1; *qbit = e->qbit; return 1; }
-+        if (e->arfcn < 0) continue;
-+        *arfcn = e->arfcn; *ul = 0; *qbit = e->qbit; return 1;
++        *arfcn = a; *ul = a_ul; *qbit = e->qbit; return 1;
+     }
++    if (r_arfcn >= 0) { *arfcn = r_arfcn; *ul = r_ul; *qbit = r_qbit; return 1; }
+     return 0;
+ }
+ /* le montant copie par le pont, par trame et par TN (BTS) */
+ #define AIR_UL_RING (1u << 12)
+ static struct { uint32_t fn; uint8_t bits[8][148]; uint8_t presents; } *g_air_ul;
+ static unsigned long g_air_ul_recus;
++static struct { uint32_t fn; int valide; } g_air_ul_der[8];   /* dernier fn montant recu par TN */
+ static void air_ul_stocker(uint32_t fn, unsigned tn, const uint8_t *bits)
+ {
+     if (!g_air_ul && !(g_air_ul = calloc(AIR_UL_RING, sizeof *g_air_ul))) return;
+@@ -1047,13 +1099,42 @@ static void air_ul_stocker(uint32_t fn, unsigned tn, const uint8_t *bits)
+     if (g_air_ul[i].fn != fn) { g_air_ul[i].fn = fn; g_air_ul[i].presents = 0; }
+     memcpy(g_air_ul[i].bits[tn & 7], bits, 148);
+     g_air_ul[i].presents |= (uint8_t)(1u << (tn & 7));
++    g_air_ul_der[tn & 7].fn = fn; g_air_ul_der[tn & 7].valide = 1;
+     g_air_ul_recus++;
+ }
++/* [2026-10-23] le DERNIER burst montant de l'intervalle, s'il a moins de deux multitrames (102 trames) d'ecart avec
++ * la trame jouee. Chercher la trame exacte ne trouvait rien : sur le chemin direct la fenetre est servie a
++ * l'arrivee du descendant, que la BTS emet en avance, alors que le montant du meme fn n'existe pas encore
++ * (4050 recus, 0 joues, run du 23/10 14:50). */
+ static const uint8_t *air_ul_bits(uint32_t fn, unsigned tn)
+ {
+-    if (!g_air_ul) return NULL;
+-    unsigned i = fn % AIR_UL_RING;
+-    return (g_air_ul[i].fn == fn && (g_air_ul[i].presents & (1u << (tn & 7)))) ? g_air_ul[i].bits[tn & 7] : NULL;
++    if (!g_air_ul || !g_air_ul_der[tn & 7].valide) return NULL;
++    uint32_t f = g_air_ul_der[tn & 7].fn;
++    int32_t d = (int32_t)(fn - f);
++    if (d < -102 || d > 102) return NULL;
++    unsigned i = f % AIR_UL_RING;
++    return (g_air_ul[i].fn == f && (g_air_ul[i].presents & (1u << (tn & 7)))) ? g_air_ul[i].bits[tn & 7] : NULL;
++}
++/* bruit de l'air realiste : plancher CALYPSO_AIR_BRUIT_DBM (-110), sur la meme echelle que les bursts (30000 =
++ * CALYPSO_AIR_REF_DBM). Le bruit du faux air (ecart-type 200, ~-83 dBm sur cette echelle) noyait le montant du
++ * mobile (-75 dBm = 533) : les huit barres de la vue UL restaient au meme niveau (run du 23/10 14:51). */
++static void air_bruit(int16_t *iq, int n_ech)
++{
++    static double sigma = -1; static uint32_t x = 0x9e3779b9u;
++    if (sigma < 0) sigma = 30000.0 * pow(10.0, (air_env_dbm("CALYPSO_AIR_BRUIT_DBM", -110.0)
++                                               - air_env_dbm("CALYPSO_AIR_REF_DBM", -40.0)) / 20.0);
++    for (int k = 0; k < 2 * n_ech; k++) {
++        double u = 0;
++        for (int j = 0; j < 4; j++) { x = x * 1664525u + 1013904223u; u += (double)(x >> 8) / 16777216.0; }
++        iq[k] = (int16_t)lrint((u - 2.0) * 1.732 * sigma);
 +    }
-+    return 0;
 +}
-+/* le montant copie par le pont, par trame et par TN (BTS) */
-+#define AIR_UL_RING (1u << 12)
-+static struct { uint32_t fn; uint8_t bits[8][148]; uint8_t presents; } *g_air_ul;
-+static unsigned long g_air_ul_recus;
-+static void air_ul_stocker(uint32_t fn, unsigned tn, const uint8_t *bits)
++/* ramene des echantillons modules a 30000 (sb_moduler) a l'amplitude choisie par l'air realiste */
++static void air_echelle(int16_t *iq, int n_ech, int amp)
 +{
-+    if (!g_air_ul && !(g_air_ul = calloc(AIR_UL_RING, sizeof *g_air_ul))) return;
-+    unsigned i = fn % AIR_UL_RING;
-+    if (g_air_ul[i].fn != fn) { g_air_ul[i].fn = fn; g_air_ul[i].presents = 0; }
-+    memcpy(g_air_ul[i].bits[tn & 7], bits, 148);
-+    g_air_ul[i].presents |= (uint8_t)(1u << (tn & 7));
-+    g_air_ul_recus++;
-+}
-+static const uint8_t *air_ul_bits(uint32_t fn, unsigned tn)
-+{
-+    if (!g_air_ul) return NULL;
-+    unsigned i = fn % AIR_UL_RING;
-+    return (g_air_ul[i].fn == fn && (g_air_ul[i].presents & (1u << (tn & 7)))) ? g_air_ul[i].bits[tn & 7] : NULL;
-+}
-+/* intervalle d'une fenetre de mesure, tire du qbit du reglage du synthe (pose ~200 qbits avant la fenetre) */
-+static unsigned air_pos_fenetre(uint32_t tick)
-+{
-+    int a, ul, q;
-+    if (!air_accord(tick, 5000, &a, &ul, &q) || q < 0) return 0;
-+    return (unsigned)(((q + 300) / 625) & 7);
-+}
-+/* Le burst a jouer dans la fenetre (intervalle `pos` de la trame fn) et son amplitude (*amp, deja calculee
-+ * pour le niveau de reference) ; NULL = bruit. Hors CALYPSO_AIR_NIVEAUX, ou accord inconnu : dl tel quel. */
-+static const uint8_t *air_choisir(uint32_t tick, int limite, uint32_t fn, unsigned pos, const uint8_t *dl, int *amp)
-+{
-+    if (!air_niveaux_on()) return dl;
-+    int a, ul, q;
-+    if (!air_accord(tick, limite, &a, &ul, &q)) return dl;
-+    int cell = faux_air_cellule();
-+    static unsigned long n_dl, n_ul, n_bruit;
-+    const uint8_t *b = NULL;
-+    double dbm = 0;
-+    if (cell < 0 || a == cell) {
-+        if (!ul) { b = dl; dbm = air_env_dbm("CALYPSO_AIR_DL_DBM", -60.0) - calypso_bsp_get_last_att(); }
-+        else     { b = air_ul_bits(pos >= 3 ? fn : fn - 1, (pos + 5) & 7); dbm = air_env_dbm("CALYPSO_AIR_UL_DBM", -75.0); }
-+    }
-+    if (b) {
-+        double r = *amp * pow(10.0, (dbm - air_env_dbm("CALYPSO_AIR_REF_DBM", -40.0)) / 20.0);
-+        *amp = r > 32000.0 ? 32000 : r < 1.0 ? 1 : (int)r;
-+        if (ul) n_ul++; else n_dl++;
-+    } else n_bruit++;
-+    unsigned long t = n_dl + n_ul + n_bruit;
-+    if (t <= 30 || t % 5000 == 0)
-+        printf("  [air] tick=%u fn=%u pos=%u accord %s %d (cellule %d) -> %s amp=%d [%lu DL, %lu UL, %lu bruit ; %lu UL recus]\n",
-+               tick, fn, pos, ul ? "UL" : "DL", a, cell, b ? (ul ? "burst montant" : "burst descendant") : "bruit",
-+               b ? *amp : 0, n_dl, n_ul, n_bruit, g_air_ul_recus);
-+    return b;
-+}
++    if (amp == 30000) return;
++    double k = amp / 30000.0;
++    for (int i = 0; i < 2 * n_ech; i++) iq[i] = (int16_t)lrint(iq[i] * k);
+ }
+ /* intervalle d'une fenetre de mesure, tire du qbit du reglage du synthe (pose ~200 qbits avant la fenetre) */
+ static unsigned air_pos_fenetre(uint32_t tick)
+@@ -1075,18 +1156,25 @@ static const uint8_t *air_choisir(uint32_t tick, int limite, uint32_t fn, unsign
+     double dbm = 0;
+     if (cell < 0 || a == cell) {
+         if (!ul) { b = dl; dbm = air_env_dbm("CALYPSO_AIR_DL_DBM", -60.0) - calypso_bsp_get_last_att(); }
+-        else     { b = air_ul_bits(pos >= 3 ? fn : fn - 1, (pos + 5) & 7); dbm = air_env_dbm("CALYPSO_AIR_UL_DBM", -75.0); }
++        else     { b = air_ul_bits(fn, (pos + 5) & 7); dbm = air_env_dbm("CALYPSO_AIR_UL_DBM", -75.0); }
+     }
++    static int agc = -1;
++    if (agc < 0) { const char *e = calypso_getenv("CALYPSO_AIR_AGC"); agc = !(e && *e == '0'); }
++    typeof(g_air_pm[0][0]) *pm = &g_air_pm[fn % AIR_PM_RING][pos & 7];
++    pm->fn = fn; pm->k = 1.0f;
+     if (b) {
+         double r = *amp * pow(10.0, (dbm - air_env_dbm("CALYPSO_AIR_REF_DBM", -40.0)) / 20.0);
+-        *amp = r > 32000.0 ? 32000 : r < 1.0 ? 1 : (int)r;
++        if (r > 32000.0) r = 32000.0;
++        if (r < 1.0) r = 1.0;
++        if (agc) pm->k = (float)(r / *amp);    /* I/Q a pleine echelle, le niveau va a la mesure */
++        else *amp = (int)r;
+         if (ul) n_ul++; else n_dl++;
+     } else n_bruit++;
+     unsigned long t = n_dl + n_ul + n_bruit;
+     if (t <= 30 || t % 5000 == 0)
+-        printf("  [air] tick=%u fn=%u pos=%u accord %s %d (cellule %d) -> %s amp=%d [%lu DL, %lu UL, %lu bruit ; %lu UL recus]\n",
++        printf("  [air] tick=%u fn=%u pos=%u accord %s %d (cellule %d) -> %s amp=%d k_pm=%.3f [%lu DL, %lu UL, %lu bruit ; %lu UL recus]\n",
+                tick, fn, pos, ul ? "UL" : "DL", a, cell, b ? (ul ? "burst montant" : "burst descendant") : "bruit",
+-               b ? *amp : 0, n_dl, n_ul, n_bruit, g_air_ul_recus);
++               b ? *amp : 0, (double)pm->k, n_dl, n_ul, n_bruit, g_air_ul_recus);
+     return b;
+ }
  /* [2026-10-21 19:20] BRUIT DE FOND (CALYPSO_BSP_BRUIT_FOND=1, Magnetite). Les intervalles sans burst etaient
-  * bourres de ZEROS : la L1 TI y prend ses mesures de puissance, le DSP rendait PM = 0, et au bout de 100
-  * (l1_check_pm_error) la L1 se croyait plantee : l1_initialize_for_recovery, DSP relance toutes les ~173
-@@ -2210,6 +2317,17 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
-                    tick_fn, g_ts0[i].fn, nwin, a, n_hors, n_dans);
-         if (hors_freq) sb = fcch = 0;
+@@ -2360,8 +2448,11 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+         if (one_shot && nwin > 0 && nwin < 150) pm_servir(nwin);
+         devie = true;
      }
-+    /* [2026-10-23] air realiste : quel burst (descendant de cet intervalle, montant du mobile, ou bruit) et a quel
-+     * niveau. Une fenetre de mesure (< 150) vise l'intervalle tire du reglage du synthe ; NB/SB : TS0. */
-+    int amp_ts0 = (one_shot && nwin >= 150 && nwin < 190) ? nb_amp(tick_fn) : 30000;
-+    const uint8_t *bits_mod = bits;
-+    if (air_niveaux_on() && !hors_freq) {
-+        unsigned pos = (one_shot && nwin > 0 && nwin < 150) ? air_pos_fenetre(tick_fn) : 0;
-+        const uint8_t *dl = pos ? bsp_autres_bits(g_ts0[i].fn, pos) : bits;
-+        bits_mod = air_choisir(tick_fn, (nwin >= 150 && nwin < 190) ? 1250 : 5000, g_ts0[i].fn, pos, dl, &amp_ts0);
-+        if (!bits_mod) { hors_freq = true; bits_mod = bits; }
-+        if (bits_mod != bits || hors_freq) sb = fcch = 0;
+-    if (hors_freq) faux_air_bruit(iq + 2 * marge, 148);
+-    else if (sb) sb_moduler(bits, iq + 2 * marge, g_ts0[i].fn);   /* [2026-09-30] voir sb_moduler() */
++    if (hors_freq) { if (air_niveaux_on()) air_bruit(iq + 2 * marge, 148); else faux_air_bruit(iq + 2 * marge, 148); }
++    else if (sb) {
++        sb_moduler(bits, iq + 2 * marge, g_ts0[i].fn);   /* [2026-09-30] voir sb_moduler() */
++        if (air_niveaux_on()) air_echelle(iq + 2 * marge, 148, amp_ts0);   /* [2026-10-23] meme niveau que la cellule */
 +    }
-     /* [2026-09-29] Un SCH est memorise ici (g_dernier_sch) ; si la fenetre SB
-      * ne s'arme qu'apres ce depot, calypso_bsp_sb_retenter() l'y livrera. */
-     const char *sb_action = "cadree comme un burst normal";
-@@ -2244,8 +2362,7 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
-     }
-     if (hors_freq) faux_air_bruit(iq + 2 * marge, 148);
-     else if (sb) sb_moduler(bits, iq + 2 * marge, g_ts0[i].fn);   /* [2026-09-30] voir sb_moduler() */
--    else    gmsk_moduler(bits, 148, (one_shot && nwin >= 150 && nwin < 190) ? nb_amp(tick_fn) : 30000,
--                         0.0, 0.5, iq + 2 * marge);
-+    else    gmsk_moduler(bits_mod, 148, amp_ts0, 0.0, 0.5, iq + 2 * marge);
+     else    gmsk_moduler(bits_mod, 148, amp_ts0, 0.0, 0.5, iq + 2 * marge);
      if (!sb && !fcch && !hors_freq) {
          static double sym = -2;
-         if (sym == -2) { const char *e = calypso_getenv("CALYPSO_BSP_NB_SYM"); sym = (e && *e) ? atof(e) : 0.3; }
-@@ -2324,12 +2441,22 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
-         static int16_t iq_autre[2 * 148];
-         for (int tn = 1; tn < 8; tn++) {
-             const uint8_t *b = bsp_autres_bits(g_ts0[i].fn, (unsigned)tn);
-+            int amp_autre = 30000;
-+            if (air_niveaux_on()) {   /* [2026-10-23] air realiste, voir air_choisir() */
-+                b = air_choisir(tick_fn, 5000, g_ts0[i].fn, (unsigned)tn, b, &amp_autre);
-+                if (!b) {
-+                    static int16_t bruit_autre[2 * 148];
-+                    faux_air_bruit(bruit_autre, 148);
-+                    calypso_bsp_rx_burst((uint8_t)tn, g_ts0[i].fn, bruit_autre, 2 * 148);
-+                    continue;
-+                }
-+            }
-             if (!b) {
-                 calypso_bsp_rx_burst((uint8_t)tn, g_ts0[i].fn, bsp_remplissage(), 2 * 148);
-                 continue;
-             }
-             memset(iq_autre, 0, sizeof iq_autre);
--            gmsk_moduler(b, 148, 30000, 0.0, 0.5, iq_autre);
-+            gmsk_moduler(b, 148, amp_autre, 0.0, 0.5, iq_autre);
-             {   /* meme elargissement que les bursts normaux de TS0 */
-                 static double sym2 = -2;
-                 if (sym2 == -2) { const char *e = calypso_getenv("CALYPSO_BSP_NB_SYM"); sym2 = (e && *e) ? atof(e) : 0.3; }
-@@ -2903,6 +3030,13 @@ static void bsp_trxd_readable(void *opaque)
-     uint8_t  tn  = buf[0] & 0x07;
-     uint32_t fn  = ((uint32_t)buf[1]<<24)|((uint32_t)buf[2]<<16)|
-                    ((uint32_t)buf[3]<<8)|buf[4];
-+    /* [2026-10-23] montant copie par le pont (octet 6 = 0xA5) : range a part pour l'air realiste, jamais
-+     * joue comme un burst descendant (il casserait la synchro), que CALYPSO_AIR_NIVEAUX soit pose ou non. */
-+    if (n >= 8 + 148 && buf[6] == 0xA5) {
-+        air_ul_stocker(fn, tn, buf + 8);
-+        bsp.bursts_seen++;   /* la boucle de vidage de calypso_bsp_service() s'arrete quand ceci ne bouge plus */
-+        return;
+@@ -2446,7 +2537,7 @@ static void bsp_ts0_livrer(uint32_t tick_fn, unsigned i)
+                 b = air_choisir(tick_fn, 5000, g_ts0[i].fn, (unsigned)tn, b, &amp_autre);
+                 if (!b) {
+                     static int16_t bruit_autre[2 * 148];
+-                    faux_air_bruit(bruit_autre, 148);
++                    air_bruit(bruit_autre, 148);
+                     calypso_bsp_rx_burst((uint8_t)tn, g_ts0[i].fn, bruit_autre, 2 * 148);
+                     continue;
+                 }
+@@ -3275,9 +3366,22 @@ static void bsp_trxd_readable(void *opaque)
+             est_sb = 1;
+             for (int k = 0; k < 64 && est_sb; k++) if ((bits[42 + k] & 1) != train_sb[k]) est_sb = 0;
+         }
+-        if (est_sb) sb_moduler(bits, iq + iq_count, fn);
++        /* [2026-10-23] air realiste aussi sur ce chemin direct (sans CALYPSO_BSP_STREAM : banc-rssi) */
++        int amp_dir = 30000, bruit_dir = 0;
++        if (air_niveaux_on() && nbits == 148) {
++            const uint8_t *b2 = air_choisir(g_tick_courant, 5000, fn, tn, bits, &amp_dir);
++            if (!b2) bruit_dir = 1;
++            else if (b2 != bits) { bits = b2; est_sb = 0; }
++        }
++        if (bruit_dir) air_bruit(iq + iq_count, nbits);
++        else if (est_sb) {
++            /* [2026-10-23] le SCH au meme niveau que le reste de la cellule : a 30000 au milieu de bursts a 3000,
++             * il saturait apres le reglage de gain sur le FB (FB1 -71 dBm puis « Sync error ») */
++            sb_moduler(bits, iq + iq_count, fn);
++            air_echelle(iq + iq_count, nbits, amp_dir);
++        }
+         else {
+-            gmsk_moduler(bits, nbits, 30000, 0.0, 0.5, iq + iq_count);
++            gmsk_moduler(bits, nbits, amp_dir, 0.0, 0.5, iq + iq_count);
+             if (nbits == 148) {
+                 static double sym = -2;
+                 if (sym == -2) { const char *e = calypso_getenv("CALYPSO_BSP_NB_SYM"); sym = (e && *e) ? atof(e) : 0.3; }
+@@ -4023,13 +4127,19 @@ void calypso_bsp_rx_burst(uint8_t tn, uint32_t fn,
+         return;
+     }
+     if (n_int16 <= 0 || iq == NULL) return;
++    g_air_k_der = air_niveaux_on() ? air_pm_k(fn, tn) : 1.0;
++    if (air_niveaux_on()) {
++        uint64_t acc = 0;
++        for (int i = 0; i < n_int16; i++) { int v = iq[i]; acc += (v < 0) ? (uint32_t)(-v) : (uint32_t)v; }
++        g_air_dpm = bsp_apm_de_mav((double)acc / n_int16 * g_air_k_der, faux_air_gain(g_tick_courant, 5000));
 +    }
-     bsp.last_att = (n > 5) ? buf[5] : 0;
+     if (calypso_bsp_dma_trace_on())
+         printf("  [dma-dep] tick=%u insn=%u fn=%u tn=%u n=%d armee=%d one_shot=%d fenetre=%d\n", g_tick_courant,
+                bsp.dsp->insn_count, (unsigned)fn, (unsigned)tn, n_int16 / 2, (int)calypso_rhea_dma_rx_armed(),
+                (int)calypso_rhea_dma_one_shot(), calypso_rhea_dma_get_len_words() / 2);
+     if (calypso_rhea_dma_one_shot() && calypso_rhea_dma_get_len_words() / 2 > 0 &&
+         calypso_rhea_dma_get_len_words() / 2 < 150)
+-        bsp_pm_mav_noter(iq, n_int16);    /* fenetre de mesure : voir calypso_bsp_rssi_apm_k() */
++        bsp_pm_mav_noter(iq, n_int16, g_air_k_der);   /* fenetre de mesure : voir calypso_bsp_rssi_apm_k() */
  
-     int nbits = (int)n - 8;  /* TRXDv0 header is 8 bytes (TS+FN+RSSI+ToA) */
-diff --git a/include/hw/arm/calypso/calypso_rf_arfcn.h b/include/hw/arm/calypso/calypso_rf_arfcn.h
-index e8b60637..18c281b3 100644
---- a/include/hw/arm/calypso/calypso_rf_arfcn.h
-+++ b/include/hw/arm/calypso/calypso_rf_arfcn.h
-@@ -25,6 +25,8 @@ typedef struct {
-      * qui convertit la PM de veille avec SON gain (l1ctl_pgc, used_il/used_lna), lisait la cellule au
-      * plancher : (1 54) -> (1 8), antenne perdue en veille. */
-     int16_t  gain_db;
-+    /* [2026-10-23] calypso_trf6151_rf_flags() : bit 15 mode RX, bit 14 mode TX, bit 13 frequence MONTANTE
-+     * (ARFCN dans les bits 0..10). 0 : QEMU d'avant (c54x_exe retombe sur `arfcn` seul). */
-     int16_t  reserve;
- } CalypsoRfProg;
+     /* [2026-09-20] FULL TIMESLOT. A bare 148-symbol burst (296 words) is padded
+      * with the 8.25 guard symbols of its timeslot (156 symbols, 157 on
+diff --git a/hw/arm/calypso/l1-dsp/calypso_bsp.h b/hw/arm/calypso/l1-dsp/calypso_bsp.h
+index 2c0d5db2..dee8dac8 100644
+--- a/hw/arm/calypso/l1-dsp/calypso_bsp.h
++++ b/hw/arm/calypso/l1-dsp/calypso_bsp.h
+@@ -128,6 +128,8 @@ uint16_t calypso_bsp_rssi_apm_k(int k);
+ int calypso_bsp_pm_mav_texte(char *buf, size_t n);
+ int calypso_bsp_pm_mav_fort(void);
+ uint16_t calypso_bsp_rssi_apm_suivante(int *depile_mav);
++/* [2026-10-23] air realiste + AGC : le D_PM ecrit par le DSP (a_serv_demod[1]) ramene au niveau du dernier burst */
++uint16_t calypso_bsp_air_dpm(uint16_t val);
+ int calypso_apm_trace_on(void);
  
+ int calypso_bsp_fenetre_tn(void);

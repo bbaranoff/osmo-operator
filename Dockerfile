@@ -556,9 +556,15 @@ ARG OSMO_DEB_REFRESH=0
 COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
 COPY patches/osmocom-bb-plmn-a6-reinsert.patch /tmp/osmocom-bb-plmn-a6-reinsert.patch
 COPY patches/osmocom-bb-sim-plmn-from-bcd.patch /tmp/osmocom-bb-sim-plmn-from-bcd.patch
+# [2026-10-23] OSMOCOM_BB_REF : osmocom-bb est EPINGLE. En amont, a0a315e2 « trxcon/trx_if: migrate to
+# libosmo-trx » a sorti trxcon de `make nofirmware` et lui fait exiger libosmo-trx : un clone de la tete ne
+# produit plus src/host/trxcon/src/trxcon (install plus bas en echec, notebook d'installation du 23/10). eac4eed1
+# est l'arbre du banc, celui sur lequel les trois patchs sont faits.
+ARG OSMOCOM_BB_REF=eac4eed1
 RUN if ! osmo-deb install osmocom-bb 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/phone-side/osmocom-bb && \
+      git -C ${ROOT}/osmocom-bb checkout -q ${OSMOCOM_BB_REF} && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-clck-gen-frame-tolerance.patch && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-plmn-a6-reinsert.patch && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-sim-plmn-from-bcd.patch && \

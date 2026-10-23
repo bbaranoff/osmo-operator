@@ -78,6 +78,16 @@ HORLOGE_MAX = float(os.environ.get("PONT_HORLOGE_MAX", "4.0"))
 CLCK_PAUSE_MAX = int(os.environ.get("PONT_CLCK_PAUSE_MAX", "20"))
 CLCK_BTS_FN_ADVANCE = int(os.environ.get("PONT_BTS_FN_ADVANCE", "2"))
 CLCK_SANS_IND_MAX = int(os.environ.get("PONT_CLCK_SANS_IND_MAX", "300"))
+# [2026-10-23] PLAFOND DE LA PAUSE DEMANDEE A LA BTS. osmo-bts-trx (scheduler_trx.c) met son timer en pause
+# de N+1 trames quand l'IND le dit N trames en avance (N <= MAX_FN_SKEW = 50 ; au-dela il se recale, « GSM
+# clock skew », sans dommage) ; si deux expirations s'ecartent alors de plus de 50 trames (230,75 ms), il
+# SORT (« PC clock skew too high »). Une pause de 46 a 50 trames plus une trame de gigue suffit : run du
+# 23/10 17:37 (Magnetite, DSP lent apres une liberation SDCCH), BTS0 sortie a 48 trames d'avance, reseau
+# perdu. Si l'avance de la BTS tombe dans la zone dangereuse (> PLAFOND et <= MAX_FN_SKEW + marge), l'IND
+# porte fn_bts - PLAFOND au lieu de fn_trx : la pause est bornee et l'avance restante se resorbe aux IND
+# suivants (les bursts arrivent seulement plus tot, l'anneau du BSP les garde). 0 = comportement d'avant.
+CLCK_PAUSE_PLAFOND = int(os.environ.get("PONT_CLCK_PAUSE_PLAFOND", "38"))
+CLCK_SKEW_ZONE = int(os.environ.get("PONT_CLCK_SKEW_ZONE", "60"))   # au-dela, la BTS se recale seule
 
 
 class Clock:
@@ -283,7 +293,16 @@ class Trx:
                     reprise = livre >= 3 or (livre >= 1 and attente >= self._clck_avance)
                     envoyer = (reprise and avance >= pause_max) or attente >= CLCK_SANS_IND_MAX
                 if envoyer:
-                    self.sk_clck.sendto(("IND CLOCK %u" % fn_trx).encode() + b"\0", self.bts_clck)
+                    fn_ind = fn_trx
+                    if CLCK_PAUSE_PLAFOND > 0 and vu is not None:
+                        av_bts = ((vu - fn_adv - fn_trx) + demi) % gsm.HYPERFRAME - demi
+                        if CLCK_PAUSE_PLAFOND < av_bts <= CLCK_SKEW_ZONE:
+                            fn_ind = (fn_trx + av_bts - CLCK_PAUSE_PLAFOND) % gsm.HYPERFRAME
+                            self._clck_bornees = getattr(self, "_clck_bornees", 0) + 1
+                            if self._clck_bornees <= 20 or self._clck_bornees % 100 == 0:
+                                log.warning("IND CLOCK : BTS %d trames devant, pause bornee a %d (fn %u au lieu de %u, "
+                                            "%d fois)", av_bts, CLCK_PAUSE_PLAFOND, fn_ind, fn_trx, self._clck_bornees)
+                    self.sk_clck.sendto(("IND CLOCK %u" % fn_ind).encode() + b"\0", self.bts_clck)
                     self._clck_t = now
                     self._clck_vu = vu
                     self._clck_avance = max(avance, 0)

@@ -39,7 +39,10 @@ function banc-rssi {
         CALYPSO_AIR_NIVEAUX="${CALYPSO_AIR_NIVEAUX:-1}" CALYPSO_FAUX_AIR="${CALYPSO_FAUX_AIR:-$arfcn}" \
         bash /opt/GSM/c54x_exe/run.sh "$@"
 }
-alias banc-rssi-stop='INSTANCE=4 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
+# [2026-10-23] banc-rssi --stop (ou banc-rssi-stop) arrete TOUTE l'instance 4, restes compris (run.sh arreter). Une
+# fonction et plus un alias : un alias n'existe pas dans un shell non interactif (bash -lc), l'arret n'y faisait rien.
+unalias banc-rssi-stop 2>/dev/null
+function banc-rssi-stop { banc-rssi --stop; }
 alias banc-stop='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-status='MODE=dsp OSMO_TRX=1 bash /opt/GSM/c54x_exe/run.sh --status'
 alias banc-logs='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --logs'

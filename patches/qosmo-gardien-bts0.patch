@@ -1,0 +1,53 @@
+diff --git a/run_modules/09-teardown.sh b/run_modules/09-teardown.sh
+index b4f62a65..acb224e9 100644
+--- a/run_modules/09-teardown.sh
++++ b/run_modules/09-teardown.sh
+@@ -6,6 +6,7 @@ MOD_TIMEOUT[teardown]=25
+ _td_patterns() {
+     cat <<'EOF'
+ f:qemu-system-arm
++f:gardien-bts
+ x:osmo-bts-trx
+ x:osmocon
+ x:mobile
+diff --git a/run_modules/60-bts.sh b/run_modules/60-bts.sh
+index 4eccac07..9f0371eb 100644
+--- a/run_modules/60-bts.sh
++++ b/run_modules/60-bts.sh
+@@ -48,7 +48,25 @@ mod_bts_status() {
+ mod_bts_start() {
+     mkdir -p "${RUN_DIR:-/tmp/calypso}" "$(dirname "$BTS_LOG")" 2>/dev/null || true
+     : > "$BTS_LOG" 2>/dev/null || true
+-    setsid stdbuf -oL -eL $(rt_prefixe) "$OSMO_BTS_TRX" -c "$BTS_CFG" >>"$BTS_LOG" 2>&1 </dev/null &
++    # [2026-10-23] GARDIEN (BTS_GARDIEN=1 par defaut) : osmo-bts-trx SORT (exit 1) sur « PC clock skew too high »
++    # quand l'horloge du pont, cadencee par le DSP, cale plus de 50 trames (run du 23/10 17:37, Magnetite : apres
++    # une liberation SDCCH, BTS0 partie, plus aucune voie descendante, reseau perdu jusqu'a la relance du banc).
++    # La boucle la relance apres BTS_GARDIEN_PAUSE s ; elle attend si une autre BTS de la meme config tourne
++    # deja (c54x_exe/run.sh la relance aussi en --bts). Le pid du fichier est celui de la boucle : mod_bts_stop
++    # tue la boucle d'abord, puis la BTS.
++    if [ "${BTS_GARDIEN:-1}" = 1 ]; then
++        setsid bash -c '
++            bin="$1" cfg="$2" log="$3" pause="$4"; shift 4
++            while :; do
++                if pgrep -f -- "osmo-bts-trx -c $cfg\$" >/dev/null 2>&1; then sleep 2; continue; fi
++                stdbuf -oL -eL "$@" "$bin" -c "$cfg" </dev/null; rc=$?
++                printf "\n[gardien bts] %s : osmo-bts-trx sorti (code %s), relance dans %s s\n" "$(date +%T)" "$rc" "$pause"
++                sleep "$pause"
++            done' gardien-bts "$OSMO_BTS_TRX" "$BTS_CFG" "$BTS_LOG" "${BTS_GARDIEN_PAUSE:-3}" $(rt_prefixe) \
++            >>"$BTS_LOG" 2>&1 </dev/null &
++    else
++        setsid stdbuf -oL -eL $(rt_prefixe) "$OSMO_BTS_TRX" -c "$BTS_CFG" >>"$BTS_LOG" 2>&1 </dev/null &
++    fi
+     printf '%s\n' "$!" > "${RUN_DIR:-/tmp/calypso}/bts.pid"
+     mod_ok
+ }
+@@ -85,6 +103,9 @@ mod_bts_stop() {
+     local pidf="${RUN_DIR:-/tmp/calypso}/bts.pid" pid _p
+     pid="$(cat "$pidf" 2>/dev/null || echo 0)"
+     [ "$pid" != 0 ] && kill "$pid" 2>/dev/null
++    for _p in $(pgrep -f '^bash -c .*gardien-bts' 2>/dev/null) $(pgrep -f "gardien-bts .*$BTS_CFG" 2>/dev/null); do
++        _bts_est_le_notre "$_p" && kill "$_p" 2>/dev/null
++    done
+     for _p in $(pgrep -x osmo-bts-trx 2>/dev/null); do
+         _bts_est_le_notre "$_p" && kill "$_p" 2>/dev/null
+     done

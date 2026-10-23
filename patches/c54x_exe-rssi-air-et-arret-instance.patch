@@ -1,0 +1,64 @@
+diff --git a/run.sh b/run.sh
+index 767103e..142271b 100755
+--- a/run.sh
++++ b/run.sh
+@@ -64,6 +64,7 @@ if [ -r "$INSTANCE_ENV" ]; then
+     printf '\033[1m[run dsp]\033[0m instance %s : reglages de %s\n' "$INSTANCE" "$INSTANCE_ENV"
+ fi
+ HOTE_SHM=/run/calypso-shm-hote
++AIR_DEMANDE="${AIR:-}"   # [2026-10-23] AIR pose par l appelant (sinon defaut par instance / appli, plus bas)
+ if [ "$INSTANCE" != 1 ] && [ -z "${CALYPSO_NS:-}" ]; then
+     command -v unshare >/dev/null || { echo "[run] ECHEC : unshare absent (util-linux)" >&2; exit 1; }
+     _d="/dev/shm/calypso$INSTANCE"; mkdir -p "$_d" "$HOTE_SHM" && chmod 1777 "$_d"
+@@ -102,6 +103,15 @@ if [ -n "$FIRMWARE_APP" ]; then
+     FIRMWARE_BIN="${FIRMWARE_ELF%.elf}.bin"
+     PONT=0
+ fi
++# [2026-10-23] RSSI : l'air realiste par defaut (calypso_bsp.c CALYPSO_AIR_NIVEAUX : la cellule seulement sur son
++# ARFCN, niveaux DL/UL, bruit ailleurs) et, en BTS classique (pont_dsp.py vivant), pas d'air.py : le descendant arrive
++# par la copie du pont (PONT_DSP_COPIES, udp 6762). Ici et non dans banc-rssi : un terminal ouvert avant la mise a
++# jour des alias, ou un autre lanceur, relancait rssi avec l'ancien comportement.
++if [ "$FIRMWARE_APP" = rssi ]; then
++    export CALYPSO_AIR_NIVEAUX="${CALYPSO_AIR_NIVEAUX:-1}"
++    export CALYPSO_FAUX_AIR="${CALYPSO_FAUX_AIR:-$( . /etc/osmocom/radio-plan.env 2>/dev/null; echo "${PLAN_ARFCN:-}")}"
++    [ -z "$AIR_DEMANDE" ] && pgrep -f 'pont/pont_dsp\.py' >/dev/null && AIR=0
++fi
+ # [2026-10-20] OSMO_TRX_TS1=1 (instance 1, avec OSMO_TRX=1) : un DEUXIEME Calypso TRX pour le TS1 (TCH/F, les appels) :
+ # l'instance OSMO_TRX_TS1_INSTANCE (3) est lancee avant le transceiver (etapes 1-3 seules, OSMO_TRX_PHONE=2 : firmware trx,
+ # L1CTL /tmp/osmocom_l2_3, pas de transceiver, pas d'air) et le transceiver prend « -2 -L /tmp/osmocom_l2_3 » (telephone 2 =
+@@ -694,13 +704,34 @@ arreter() {
+         rm -f "$RUNDIR/$n.pid"
+     done; bruit_arreter
+     sleep 1
++    # [2026-10-23] ARRET COMPLET D'UNE INSTANCE N != 1 (banc-rssi --stop) : les processus sans fichier pid ou dont
++    # le pid a ete perdu (relance par-dessus une instance vivante) gardaient le port BSP (udp 6762 tenu par un
++    # c54x_exe fantome, le nouveau ne recevait rien). On balaie ce qui porte les ressources propres a l'instance.
++    if [ "$INSTANCE" != 1 ]; then
++        # Pas « $RUNDIR/ » : un simple tail -F de ses journaux, ou le shell qui a lance --stop, y passaient.
++        local motif="$DSP_SOCK|$MONITOR|$L2_SOCK|--stub $GDB_STUB |--port $GDB_TELNET "
++        local p=$$ ancetres=" $$ "
++        while p="$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null)" && [ -n "$p" ] && [ "$p" -gt 1 ]; do
++            ancetres="$ancetres$p "
++        done
++        local restes="" r
++        for r in $(pgrep -f -- "$motif"); do
++            case "$ancetres" in *" $r "*) ;; *) restes="$restes$r " ;; esac
++        done
++        if [ -n "${restes// /}" ]; then
++            dire "instance $INSTANCE : restes arretes (pid $restes)"
++            kill $restes 2>/dev/null; sleep 1; kill -9 $restes 2>/dev/null
++        fi
++    fi
+     rm -f "$DSP_SHM" "$DSP_SOCK" "$L2_SOCK" "$MONITOR" "$RUNDIR/modem.pty" /dev/shm/qemu-asm.fifo
+     # [2026-09-22] Sockets du mobile : elles ne disparaissent pas avec lui. Le
+     # « sap » etait deja oublie, et « ms_data » (tch-data, mobile_pont.cfg)
+     # arrive avec la meme faiblesse : un fichier reste fait echouer le bind du
+     # run suivant sur EADDRINUSE, et le mobile demarre sans sa voie donnees
+     # sans le dire.
+-    rm -f /tmp/osmocom_sap /tmp/ms_data
++    # [2026-10-23] SEULEMENT pour l'instance 1 : ces sockets sont dans le /tmp COMMUN et appartiennent au mobile de
++    # l'instance 1 ; banc-rssi --stop (instance 4) les effacait sous le mobile en marche (SAP, tch-data).
++    [ "$INSTANCE" = 1 ] && rm -f /tmp/osmocom_sap /tmp/ms_data
+     # [2026-09-22] Horloge du banc (calypso_bsp.c -> pont/trx.py) : laissee en
+     # place, pont.py asservirait sa premiere seconde sur la trame d'une session
+     # morte et la BTS resterait figee en attendant un DSP qui n'existe plus.

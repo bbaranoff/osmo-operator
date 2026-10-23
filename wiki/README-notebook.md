@@ -125,20 +125,26 @@ that cell and its error.
 | 5 | the SMSC (gsup-smsc-proto, sms-coding-utils) | for SMS |
 | 6 | osmocom-bb host tools: osmocon, mobile, trxcon | yes |
 | 7 | prebuilt Calypso firmware | yes |
+| 7b | the transceiver tree, `trx` firmware and host `transceiver` (`./start.sh --bts`) | no |
 | 8 | qosmo, the Calypso QEMU | yes |
 | 9 | c54x_exe and the DSP ROM from FreeCalypso | yes |
+| 9b | FreeCalypso Magnetite for the C139 (TMS470 under Wine), its flash image, rvinterf (`--ms-magnetite`) | no |
 | 10 | grgsm_exe | no |
 | 11 | runtime setup: configs, run-time scripts, directories | yes |
 | 11b | audio sinks | only to hear the call |
-| 12 | start the network, the BTS, then the DSP bench | yes |
+| 12 | start the network, the BTS, then the DSP bench: `./start.sh --bts-classique --ms`, or the Magnetite / `--bts` variants | yes |
 | 13 | camp, location update, call to 600 (echo test) | yes |
 | 14 | full test ladder from [bbaranoff/tests](https://github.com/bbaranoff/tests) | no |
 | 15 | stop | — |
 
-To start the bench **process by process** instead of through `start-native.sh`, run the companion
+The launcher is `./start.sh` since 2026-10-21; `start-native.sh` is a symlink to it and still works.
+
+To start the bench **process by process** instead of through `start.sh`, run the companion
 notebook [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb) once the install is done: it installs nothing,
 starts the network daemons one by one, then the emulated phone (DSP, QEMU, osmocon, mobile, bridge), and
-checks each one before the next. The same steps as a page: [Lancer-a-la-main](Lancer-a-la-main.md).
+checks each one before the next, with optional sections on the `--bts` variant (12b), the classic BTS
+seen from the bridge (12a) and the rssi application (`banc-rssi`, last section). The same steps as a page:
+[Lancer-a-la-main](Lancer-a-la-main.md).
 
 ## Troubleshooting
 
