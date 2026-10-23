@@ -4,7 +4,8 @@ Name=Lancer le banc GSM
 Name[fr]=Lancer le banc GSM
 Comment=Demarre le banc, Wireshark, Linphone et la console web
 Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
-Exec=/opt/GSM/osmo-operator/launch.sh
+# [2026-10-23] Le clic simple : la BTS classique (osmo-bts-trx <-> pont_dsp.py) et le mobile osmocom-bb.
+Exec=/opt/GSM/osmo-operator/launch.sh --bts-classique --ms
 Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
 Terminal=false
 Categories=System;Network;
@@ -28,7 +29,7 @@ Actions=Service;Dashboard;Console;Vty;Grgsm;Stop;
 Name=Demarrer le banc en service
 Name[fr]=Demarrer le banc en service (sans terminal)
 
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Banc GSM 2G" --icon /usr/share/osmo-operator/icons/osmo-launch.svg -- /opt/GSM/osmo-operator/launch.sh --service-suivi
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Banc GSM 2G" --icon /usr/share/osmo-operator/icons/osmo-launch.svg -- /opt/GSM/osmo-operator/launch.sh --service-suivi --bts-classique --ms
 
 [Desktop Action Dashboard]
 Name=Tableau de bord (127.0.0.1:8080)
