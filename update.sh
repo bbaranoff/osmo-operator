@@ -413,6 +413,20 @@ osmo_reposer_unite_banc() {
 }
 osmo_reposer_unite_banc
 
+# ── AUCUN SERVICE TELECOM AU BOOT : RATTRAPAGE, UNE SEULE FOIS (2026-10-23) ───
+# Les machines installees avant la politique (tools/osmo-telecom-boot.sh) la
+# recoivent ici, UNE fois (marqueur) : un service que l operateur reactive
+# ensuite (systemctl enable osmo-banc) ne doit pas etre redesactive a chaque
+# mise a jour.
+osmo_politique_telecom_boot() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local m=/var/lib/osmo-operator/telecom-boot-v1 t=/opt/GSM/osmo-operator/tools/osmo-telecom-boot.sh
+    [ -e "$m" ] || [ ! -f "$t" ] && return 0
+    bash "$t" && mkdir -p "${m%/*}" && date -Is > "$m"
+    return 0
+}
+osmo_politique_telecom_boot
+
 # ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
 # Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
 # l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes

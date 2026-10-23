@@ -9,19 +9,20 @@
 # rejoue le script, et l ISO suivante en herite. iso_modules/86-finitions.sh
 # l appelle au build.
 #
-# CE QU ON VOIT AU DEMARRAGE :
+# CE QU ON VOIT AU DEMARRAGE ([2026-10-23] plus simple, 2D pure) :
 #
-#     ((( ▲ )))                                     ▄▄▄
-#      pylone    ( ( (  ondes  ) ) )               |o o|   <- le mobile
-#      (BTS)                                       |___|
+#                        (  (  ( • )  )  )
+#                               /|\
+#                              / | \         une antenne stylisee au centre,
+#                             /__|__\        des cercles fins qui s ouvrent
+#                                            depuis son sommet
+#                            LAB GSM
+#                 ━━━━━━━━━━ (barre) ━━━━━━━━━━
 #
-#   Un pylone a gauche, un mobile a droite, et des ondes entre les deux :
-#   des anneaux concentriques « 3D » (ellipses en perspective, neon cyan) qui
-#   s ouvrent depuis le pylone et depuis le mobile - c est litteralement ce
-#   que la machine s apprete a faire tourner. En bas, le nom du banc et la
-#   barre d avancement. [2026-10-01] RIEN D AUTRE dans l animation : plus de
-#   rafale a huit creneaux (les rectangles) ni d etiquettes DL/UL - juste les
-#   ronds, c est ce qui a ete demande.
+#   Un fond uni, une seule antenne en traits epais arrondis, et des cercles
+#   concentriques a trait net qui s ouvrent et s effacent. Plus de pylone en
+#   treillis, de mobile ni d anneaux « 3D » (ellipses en perspective, halo
+#   neon) : trop charge, ils se recouvraient.
 #
 # --gif FICHIER sort en plus un apercu anime (fond + 24 frames, reduit), pour
 # le wiki ou pour juger le rendu sans redemarrer. Il ne va PAS dans --out :
@@ -50,79 +51,42 @@ def font(name, size):
 
 
 def background():
-    """Degrade vertical bleu nuit, le meme bleu que le fond d ecran du banc."""
-    bg = Image.new("RGB", (W, H), BG_TOP)
-    d = ImageDraw.Draw(bg)
-    for y in range(H):
-        t = y / H
-        d.line([(0, y), (W, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(BG_TOP, BG_BOT)))
-    return bg
+    """Fond UNI bleu nuit ([2026-10-23] 2D pure : plus de degrade vertical)."""
+    return Image.new("RGB", (W, H), BG_TOP)
 
 
-def tower(d, cx, base_y, h, col=GREY):
-    """Un pylone en treillis : deux montants qui se rapprochent, des croix
-    entre les deux, et trois petits panneaux d antenne en haut."""
-    top_w, bot_w = h * 0.055, h * 0.30
-    def edges(t):                      # t = 0 en bas, 1 en haut
-        wdt = bot_w + (top_w - bot_w) * t
-        y = base_y - h * t
-        return (cx - wdt / 2, y), (cx + wdt / 2, y)
-    steps = 14
-    pts = [edges(i / steps) for i in range(steps + 1)]
-    for i in range(steps):
-        (l0, r0), (l1, r1) = pts[i], pts[i + 1]
-        d.line([l0, l1], fill=col, width=4)
-        d.line([r0, r1], fill=col, width=4)
-        d.line([l0, r1], fill=col, width=2)     # les croix du treillis
-        d.line([r0, l1], fill=col, width=2)
-        d.line([l1, r1], fill=col, width=2)
-    # Les panneaux d antenne, en haut, ecartes en triangle.
-    tx, ty = cx, base_y - h
-    for dx in (-38, 0, 38):
-        d.rounded_rectangle([tx + dx - 7, ty - 46, tx + dx + 7, ty - 4], 4,
-                            fill=(30, 42, 70), outline=CYAN, width=2)
-    d.line([(tx, ty - 4), (tx, ty + 20)], fill=col, width=4)
-    return (tx, ty - 25)               # le point d ou partent les ondes
+def mast(d, cx, top_y, h, col=(200, 210, 225)):
+    """L antenne, en 2D pure : un mat, deux jambages et deux traverses, traits
+    epais a bouts ronds, et un point lumineux au sommet (d ou partent les ondes)."""
+    w, lw = h * 0.26, 7
+    foot = top_y + h
+    def seg(a, b):
+        d.line([a, b], fill=col, width=lw)
+        for x, y in (a, b):
+            d.ellipse([x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2], fill=col)
+    seg((cx, top_y + 18), (cx, foot))
+    seg((cx, top_y + 30), (cx - w, foot))
+    seg((cx, top_y + 30), (cx + w, foot))
+    for t in (0.55, 0.82):                       # traverses entre les jambages
+        y = top_y + 30 + (foot - top_y - 30) * t
+        dx = w * t
+        seg((cx - dx, y), (cx + dx, y))
+    r = 10
+    d.ellipse([cx - r, top_y - r, cx + r, top_y + r], fill=NEON)
+    return (cx, top_y)
 
 
-def handset(d, cx, cy, hh=210, col=GREY):
-    """Un mobile : coque, ecran, touche - et sa petite antenne fouet, parce que
-    le banc emule un Calypso, pas un smartphone."""
-    hw = hh * 0.46
-    box = [cx - hw / 2, cy - hh / 2, cx + hw / 2, cy + hh / 2]
-    d.rounded_rectangle(box, 16, fill=(26, 34, 58), outline=col, width=4)
-    d.rounded_rectangle([box[0] + 12, box[1] + 16, box[2] - 12, box[1] + hh * 0.46], 6,
-                        fill=(14, 40, 30), outline=GREEN, width=2)
-    for r in range(3):                 # le clavier
-        for c in range(3):
-            x = box[0] + 20 + c * (hw - 40) / 2
-            y = box[1] + hh * 0.56 + r * (hh * 0.30) / 2
-            d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=(40, 52, 80))
-    d.line([(cx + hw / 2 - 10, cy - hh / 2), (cx + hw / 2 + 4, cy - hh / 2 - 42)], fill=col, width=5)
-    return (cx + hw / 2 + 4, cy - hh / 2 - 46)
-
-
-def ripples(d, at, phase, rmax=300, n=4, col=NEON, aspect=0.32, cone=0.30):
-    """Les ondes « 3D » : des anneaux concentriques POSES A PLAT, vus en
-    perspective (ellipses, rapport `aspect`), qui s ouvrent depuis l antenne
-    et s effacent en s eloignant. Les grands anneaux descendent un peu
-    (`cone`) : empiles, ils dessinent un cone de rayonnement, comme les
-    cercles d un radar ou d une balise - c est l image demandee le
-    2026-10-01, a la place des trois arcs plats d avant. Chaque anneau porte
-    un halo (trait large et pale) sous son trait net : c est lui qui donne
-    le « neon » cyan."""
+def ripples(d, at, phase, rmax=300, n=4, col=NEON):
+    """Les ondes, en 2D pure : des CERCLES concentriques centres sur l antenne,
+    qui s ouvrent et s effacent en s eloignant. Un seul trait net par cercle :
+    plus d ellipse en perspective, de cone, de halo ni de coeur clair (le
+    « neon 3D » du 2026-10-01, retire le 2026-10-23)."""
     x, y = at
     for k in range(n):
         t = ((phase + k / n) % 1.0)
-        rx = 28 + t * rmax
-        ry = rx * aspect
-        cy = y + t * rmax * cone
+        r = 28 + t * rmax
         a = int(255 * (1 - t) ** 0.9)
-        box = [x - rx, cy - ry, x + rx, cy + ry]
-        d.ellipse(box, outline=(col[0], col[1], col[2], a // 3), width=13)   # halo
-        d.ellipse(box, outline=(col[0], col[1], col[2], a), width=5)         # trait
-        d.ellipse([x - rx + 1, cy - ry + 1, x + rx - 1, cy + ry - 1],
-                  outline=(235, 252, 255, int(a * 0.8)), width=2)            # coeur clair
+        d.ellipse([x - r, y - r, x + r, y + r], outline=(col[0], col[1], col[2], a), width=4)
 
 
 def main():
@@ -139,8 +103,7 @@ def main():
 
     bg = background()
     d = ImageDraw.Draw(bg)
-    ant = tower(d, 470, 760, 470)
-    ms = handset(d, 1450, 640)
+    ant = mast(d, W // 2, int(H * 0.36), int(H * 0.25))
     f_title, f_sub = font("DejaVuSans-Bold.ttf", 64), font("DejaVuSansMono.ttf", 24)
     d.text((W / 2, 900), "LAB GSM", font=f_title, fill=(230, 237, 243), anchor="mm")
     d.text((W / 2, 952), "reseau 2G complet, sans materiel  ·  osmocom  ·  calypso emule",
@@ -150,23 +113,21 @@ def main():
     # Les frames : seulement la BANDE entre les deux antennes, en RGBA. Plymouth
     # les pose par-dessus le fond - une image par frame plutot qu un fond
     # complet redessine 24 fois (24 x 1,3 Mo tiendrait mal dans un initrd).
-    # La bande part SOUS la pointe du pylone et englobe les anneaux (qui
-    # debordent de part et d autre des deux antennes) : les ellipses ne sont
-    # jamais coupees par le bord de la bande.
-    bx0, bx1 = ant[0] - 360, ms[0] + 220
-    strip_y, strip_h = ant[1] - 110, 300
-    tip = (ant[0] - bx0, ant[1] - strip_y)                 # la pointe du pylone, dans la bande
-    ms_top = (ms[0] - bx0, ms[1] - 95 - strip_y)            # le haut du mobile, dans la bande
+    # La bande englobe les cercles ENTIERS (rayon maximal + trait) : un cercle
+    # n est jamais coupe par son bord. Hors des traits elle est transparente,
+    # donc legere dans l initrd.
+    R, M = 230, 12
+    bx0, bx1 = ant[0] - 28 - R - M, ant[0] + 28 + R + M
+    strip_y = ant[1] - 28 - R - M
+    strip_h = 2 * (28 + R + M)
+    tip = (ant[0] - bx0, ant[1] - strip_y)                 # le sommet de l antenne, dans la bande
     frames = []
     for i in range(FRAMES):
         t = i / FRAMES
         im = Image.new("RGBA", (int(bx1 - bx0), strip_h), (0, 0, 0, 0))
         dd = ImageDraw.Draw(im)
-        # Les ondes, et rien d autre : grands anneaux depuis le pylone
-        # (descendant), petits anneaux depuis le mobile (montant), decales
-        # d une demi-periode.
-        ripples(dd, tip, t, rmax=340, n=4)
-        ripples(dd, ms_top, (t + 0.5) % 1.0, rmax=190, n=3, aspect=0.36)
+        # les ondes, et rien d autre
+        ripples(dd, tip, t, rmax=R, n=3)
         im.save(os.path.join(a.out, "burst-%02d.png" % i), "PNG", optimize=True)
         frames.append(im)
 

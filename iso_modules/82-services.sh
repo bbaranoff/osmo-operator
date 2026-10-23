@@ -534,6 +534,19 @@ LOGO
 # mot de passe (sinon sshd refuse le login root).
 echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 
+# ── POLITIQUE PAR DEFAUT : AUCUN SERVICE TELECOM AU BOOT (2026-10-23) ─────────
+# Le preset services/80-osmo-operator.preset est pose dans le rootfs, et toute
+# unite telecom deja activee (paquet asterisk/ofono qui s active a
+# l installation, unites osmo-* amont, image reprise d un ancien build) est
+# desactivee. Restent actives les seules demandes EXPLICITES du build :
+# OSMO_ISO_BANC / _MULTI / _LTE=1, et le hub osmo-interstp, raison d etre du
+# role interstp.
+_garder=()
+[ "$ISO_ROLE" = "interstp" ] && _garder+=(osmo-interstp)
+[ "${OSMO_ISO_BANC:-0}" = 1 ]  && _garder+=(osmo-banc)
+[ "${OSMO_ISO_MULTI:-0}" = 1 ] && _garder+=(osmo-multi)
+[ "${OSMO_ISO_LTE:-0}" = 1 ]   && _garder+=(osmo-lte)
+bash "$DIR/tools/osmo-telecom-boot.sh" --root "$ROOTFS" ${_garder[@]+--garder "${_garder[@]}"} || true
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
 # build-iso.sh tourne sous set -e. Un module qui finirait par un test faux

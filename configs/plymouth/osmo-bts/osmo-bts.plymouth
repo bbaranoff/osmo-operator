@@ -3,8 +3,8 @@
 # (iso_modules/86-finitions.sh) : ce depot ne porte que le dessin, en Python,
 # et le script d animation ci-contre.
 [Plymouth Theme]
-Name=osmo-operator (BTS <-> MS)
-Description=Un pylone, un mobile, et une rafale GSM qui fait l aller-retour
+Name=osmo-operator (antenne)
+Description=Une antenne et des cercles qui s ouvrent, en 2D pure
 ModuleName=script
 
 [script]

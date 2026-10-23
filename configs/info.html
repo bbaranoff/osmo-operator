@@ -1,158 +1,196 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>osmo-operator - running the bench</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>osmo-operator · help</title>
+<!-- [2026-10-23] Rewritten. Served by the dashboard (http://127.0.0.1:8080/info.html, iso_modules/60-dashboard.sh)
+     and opened by /usr/local/bin/osmo-info : Firefox is a snap and cannot read file:///usr/share (the old icon
+     opened an empty page). The copy in /usr/share/osmo-operator is only the offline fallback. -->
 <style>
-  /* configs/info.html - "how do I run this", in English. Opened by the Info
-     dock icon (data/desktop/osmo-info.desktop) or at
-     file:///usr/share/osmo-operator/info.html. Same palette as the desktop:
-     dark navy, blue accent, amber for commands (the terminal is amber). */
-  :root{--bg:#0b1020;--card:#121a2e;--line:rgba(88,166,255,.22);--txt:#e6edf3;--dim:#8b949e;
-        --blue:#58a6ff;--amber:#ffb000;--green:#3fb950;--violet:#a371f7}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--txt);font-family:"Ubuntu","Ubuntu Sans",sans-serif;line-height:1.5}
-  main{max-width:1060px;margin:0 auto;padding:28px 22px 60px}
-  h1{font-size:2rem;margin:.2em 0 .1em;color:var(--blue)}
-  h2{font-size:1.3rem;margin:1.9em 0 .5em;color:var(--blue);border-bottom:1px solid var(--line);padding-bottom:.25em}
-  p{margin:.4em 0 .8em} .lead{color:var(--dim)}
-  code{font-family:"Ubuntu Mono",monospace;color:var(--amber);background:rgba(255,176,0,.08);padding:.05em .35em;border-radius:4px}
-  pre{background:#070b16;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow:auto}
-  pre code{background:none;padding:0;color:#ffd75f}
-  .file{color:var(--violet);font-family:"Ubuntu Mono",monospace}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:12px 0}
-  table{width:100%;border-collapse:collapse;margin:.6em 0 1em;font-size:.95rem}
-  th,td{text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid var(--line)}
-  th{color:var(--dim);font-weight:500;font-size:.8rem;text-transform:uppercase;letter-spacing:.06em}
-  .tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:.02em .6em;font-size:.78rem;margin-right:.3em}
-  .icon{color:var(--blue)} .cli{color:var(--amber)} .bar{color:var(--green)}
-  .note{border-left:3px solid var(--amber);padding:.3em .9em;color:var(--dim)}
-  a{color:var(--blue)}
-</style></head>
-<body><main>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#d9dde5; --acc:#2f6fde; --code:#eef1f6; --warn:#a15c00; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#12151b; --card:#1b1f27; --fg:#e3e6eb; --mute:#8d96a5; --line:#2c3340; --acc:#6b9cff; --code:#242a35; --warn:#f0b35a; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 system-ui,sans-serif; }
+header { position:sticky; top:0; z-index:2; background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; }
+header b { font-size:16px; margin-right:8px; }
+header a { color:var(--mute); text-decoration:none; font-size:14px; }
+header a:hover { color:var(--acc); }
+main { max-width:1100px; margin:auto; padding:16px; }
+section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 20px; margin:0 0 16px; }
+h1 { font-size:24px; margin:8px 0 4px; }
+h2 { font-size:18px; margin:0 0 10px; }
+h3 { font-size:15px; margin:16px 0 6px; }
+p { margin:6px 0; }
+a { color:var(--acc); }
+code, pre { font:13px/1.5 ui-monospace,monospace; background:var(--code); border-radius:5px; }
+code { padding:1px 5px; }
+pre { padding:10px 12px; overflow-x:auto; margin:8px 0; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; vertical-align:top; padding:7px 8px; border-top:1px solid var(--line); }
+th { color:var(--mute); font-weight:600; border-top:0; }
+td:first-child { white-space:nowrap; }
+.lead { color:var(--mute); }
+.warn { color:var(--warn); }
+.ref { font-size:12px; vertical-align:super; text-decoration:none; }
+ol.refs { padding-left:22px; font-size:14px; } ol.refs li { margin:3px 0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; }
+.tile { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+.tile a { font-weight:600; text-decoration:none; } .tile p { color:var(--mute); font-size:13px; margin:4px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <b>osmo-operator · help</b>
+  <a href="#modes">Modes</a><a href="#modules">Modules</a><a href="#notebooks">Notebooks</a>
+  <a href="#local">On this machine</a><a href="#sites">Sites</a><a href="#repos">Repositories</a><a href="#refs">References</a>
+</header>
+<main>
 
-<h1>osmo-operator - running the bench</h1>
-<p class="lead">A complete 2G network with no radio hardware (emulated Calypso baseband, Osmocom core, gr-gsm layer 1),
-a 4G cell (srsRAN + Open5GS), a SIP softphone and a postmarketOS phone VM. Everything lives in
-<span class="file">/opt/GSM/osmo-operator</span>. For each module this page gives the three ways to start it:
-<span class="tag icon">dock icon</span> <span class="tag bar">launcher bar</span> <span class="tag cli">CLI</span>,
-and the file in the repository that does the work.</p>
+<h1>Running the bench</h1>
+<p class="lead">A complete 2G network with no radio hardware: Osmocom core, an emulated Calypso phone (QEMU for the ARM,
+<code>c54x_exe</code> for the TI DSP and its mask ROM), plus a 4G cell, a SIP softphone and a postmarketOS phone.
+Everything lives in <code>/opt/GSM/osmo-operator</code><a class="ref" href="#r1">[1]</a>.
+Nothing telecom starts at boot: starting a network is your gesture<a class="ref" href="#r12">[12]</a>.</p>
 
-<div class="note">Three rules. The bench runs as <b>root</b>: icons use <code>pkexec</code> (a password window), the CLI wants
-<code>sudo</code>. Long-running parts are <b>systemd units</b>, so <code>systemctl</code> and <code>journalctl</code> know them.
-<b>Nothing 2G or 4G starts at boot</b>: starting the bench is your gesture (see <span class="file">iso_modules/00-options.sh</span>).</div>
-
-<h2>GSM bench <span class="tag icon">Lancer le banc GSM</span> <span class="tag bar">run standalone</span> <span class="tag cli">CLI</span></h2>
-<div class="card">
-<p>The red phone icon runs <span class="file">launch.sh</span>: Wireshark on GSMTAP (udp/4729), Linphone, Firefox on the dashboard,
-then <span class="file">start-native.sh</span>, the native single-operator bench (hlr, msc, bsc, stp, mgw, bts-trx, the emulated
-mobile with QEMU + trxcon, gapk voice). The launcher bar's <b>run standalone</b> starts <code>osmo-banc.service</code> without any
-terminal and streams its journal in the bar (click <b>journal</b> to expand).</p>
+<section id="modes">
+<h2>Modes: one command per bench</h2>
+<p>All modes go through <code>./start.sh</code> (<code>start-native.sh</code> is the same script, kept as a link).
+Add <code>--regen</code> to rebuild <code>/etc/osmocom</code> from the templates, <code>--no-attach</code> to stay out of tmux.
+Full option list: <code>./start.sh --help</code><a class="ref" href="#r2">[2]</a>.</p>
 <table>
-<tr><th>Icon right-click</th><th>CLI</th><th>Code</th></tr>
-<tr><td>Start as a service</td><td><code>systemctl start osmo-banc</code></td><td><span class="file">launch.sh --service</span>, <span class="file">services/osmo-banc.service</span></td></tr>
-<tr><td>Dashboard</td><td><code>firefox http://127.0.0.1:8080</code></td><td><span class="file">launch.sh --dashboard</span></td></tr>
-<tr><td>Bench console (tmux)</td><td><code>sudo tmux attach -t calypso</code></td><td><span class="file">launch.sh --console</span></td></tr>
-<tr><td>Mobile console (VTY)</td><td><code>telnet 127.0.0.1 4247</code></td><td><span class="file">launch.sh --vty</span></td></tr>
-<tr><td>DSP mode (defaut)</td><td><code>sudo ./start-native.sh</code></td><td><span class="file">launch.sh</span></td></tr>
-<tr><td>gr-gsm mode</td><td><code>sudo ./start-native.sh --grgsm</code></td><td><span class="file">launch.sh --grgsm</span></td></tr>
-<tr><td>Stop</td><td><code>systemctl stop osmo-banc</code></td><td><span class="file">launch.sh --stop</span></td></tr>
+<tr><th>Command</th><th>What runs</th><th>State</th></tr>
+<tr><td><code>./start.sh --bts-classique --ms</code></td>
+<td><b>The default (red phone icon).</b> Classic BTS: <code>osmo-bts-trx</code> talks to <code>pont/pont_dsp.py</code>; the emulated
+phone runs the osmocom-bb <code>layer1</code> firmware and <code>mobile</code>, on the real DSP ROM<a class="ref" href="#r3">[3]</a>.</td>
+<td>LU, SMS, calls</td></tr>
+<tr><td><code>./start.sh --bts-classique --ms-magnetite</code></td>
+<td>Same network, but the phone is a Motorola C139 running the <b>real TI firmware</b> (FreeCalypso Magnetite): its own
+L2/L3 and UI, colour screen in <code>tools/osmo-c123-gtk.py --modele c139</code>, traces by <code>rvinterf</code><a class="ref" href="#r4">[4]</a>.
+Add <code>--gapk</code> for voice on the host.</td>
+<td>LU, SMS, calls in A5/0: <code>ENCRYPTION="a5 0" ./start.sh --regen …</code></td></tr>
+<tr><td><code>./start.sh --bts --ms --ts 2</code></td>
+<td>The Calypso of QEMU <b>is the BTS radio</b> (firmware <code>trx</code> + host <code>transceiver</code>); a second Calypso is the
+phone and camps on it over the air (<code>pont/air.py</code>). <code>--ts 2</code>: one Calypso per timeslot (TS0 CCCH/SDCCH, TS1 TCH/F).</td>
+<td class="warn">camps, LU; no call yet (2nd TRX not frame-aligned)</td></tr>
+<tr><td><code>./start.sh --bts --ms --ts 2/1</code></td><td>TS0 and TS1 served by a single Calypso TRX (also the default of <code>--bts</code>).</td><td>calls (audible on 20/10)</td></tr>
+<tr><td><code>./start.sh --bts --ms --ts 1</code></td><td>TS0 only (CCCH + SDCCH/4).</td><td>LU, SMS, no call</td></tr>
+<tr><td><code>./start.sh --bts --ms-magnetite</code></td><td>Calypso TRX + the C139 Magnetite over the air.</td><td>experimental</td></tr>
+<tr><td><code>./start.sh --grgsm</code></td><td>gr-gsm layer 1 in QEMU + <code>grgsm_exe</code> instead of the DSP<a class="ref" href="#r5">[5]</a>.</td><td>end to end</td></tr>
+<tr><td><code>--vocoder-rom</code> / <code>--gapk</code></td><td>Speech codec in the DSP mask ROM (default) or on the host (osmo-gapk / libgsm).</td><td>--gapk keeps real time</td></tr>
+<tr><td><code>--sap</code>, <code>--sap=pcsc</code></td><td>SIM over SAP: the card in the PC/SC reader (sysmoISIM) or the soft SIM<a class="ref" href="#r6">[6]</a>.</td><td></td></tr>
+<tr><td><code>--wan</code>, <code>--payload-ism</code></td><td>Link several nodes (SS7 hub, WireGuard); SMS text over an ISM radio link<a class="ref" href="#r7">[7]</a>.</td><td></td></tr>
+<tr><td><code>banc-rssi</code></td><td>The osmocom-bb <code>rssi</code> app on a 4th Calypso (spectrum, sync, per-timeslot levels), fed by the pont in
+<code>--bts-classique</code>; <code>banc-rssi --stop</code>. Screen: <code>c123-3</code>.</td><td>DL OK, UL view in progress</td></tr>
+<tr><td><code>./start.sh --stop</code> · <code>--status</code></td><td>Stop / query the whole stack.</td><td></td></tr>
 </table>
-<pre><code>cd /opt/GSM/osmo-operator &amp;&amp; sudo ./start-native.sh          # foreground
-sudo systemctl start osmo-banc &amp;&amp; journalctl -u osmo-banc -f  # as a service</code></pre>
-<p>Configs are generated by <span class="file">generate_configs.sh</span> into <span class="file">/etc/osmocom/</span>;
-subscriber count and operator id come from <span class="file">/etc/osmocom/coeur.env</span> (<code>N_MS</code>, <code>OPERATOR_ID</code>).</p>
-</div>
+<h3>Safeguards</h3>
+<p>BTS#0 runs under a watchdog (<code>BTS_GARDIEN=1</code>, <code>qosmo/run_modules/60-bts.sh</code>): if <code>osmo-bts-trx</code> exits on
+“PC clock skew too high” it is restarted after 3&nbsp;s. The pont caps the pause it asks of the BTS
+(<code>PONT_CLCK_PAUSE_PLAFOND=38</code>, <code>pont/trx.py</code>). Do not compile during a run: a loaded host still trips the clock.</p>
+</section>
 
-<h2>Multi-operator SS7 <span class="tag icon">multi-operator</span> <span class="tag bar">run multi</span> <span class="tag cli">CLI</span></h2>
-<div class="card">
-<p>Operator 1 stays native (point code 1.1.2). Operators 2 and 3 are the containers <code>osmo-operator-2</code> and
-<code>osmo-operator-3</code> (172.20.0.12 / .13, PC 1.2.2 / 1.3.2) and the hub is <code>osmo-inter-stp</code>
-(172.20.0.10, M3UA over SCTP 2908). The antenna icon runs <span class="file">launch.sh --multi</span>, which starts
-<code>osmo-multi.service</code>; the unit runs <span class="file">start-multi.sh</span>, which reads the topology written by the
-Supplements (<span class="file">/etc/osmocom/osmo-multi.conf</span>) and delegates to
-<span class="file">start-docker.sh virtual --operators 2</span> with <code>OP_ID_BASE=2</code>.</p>
-<pre><code>systemctl start osmo-multi          # a session (several minutes: images, containers, HLR)
-journalctl -u osmo-multi -f         # follow it
-sudo ./launch/start-multi.sh --status      # containers and hub
-systemctl stop osmo-multi           # remove the containers (the native op stays)
-systemctl enable --now osmo-multi   # every boot (off by default)</code></pre>
-<p>Dialling plan: MSISDN = <code>&lt;node&gt;00&lt;op&gt;&lt;ms&gt;</code> (100101 = node 1, op 1, MS 1); the prefix to reach another
-node is its indicatif (11, 22, 33; <span class="file">iso_modules/00-options.sh</span>). The SS7 matrix comes from
-<span class="file">checks/ss7_check.sh</span>.</p>
-</div>
-
-<h2>Supplements <span class="tag icon">Supplements</span> <span class="tag cli">CLI</span></h2>
-<div class="card">
-<p>The Supplements icon runs <span class="file">addition.sh</span> with a checklist. It installs what is <i>not</i> in the ISO. With
-multi-operator ticked it installs docker, pulls the operator image (<code>ghcr.io/bbaranoff/osmo-operator/osmocom-nitb</code>),
-derives <code>osmocom-run</code> (<span class="file">Dockerfile.run</span>), writes the topology, installs
-<code>osmo-multi.service</code> and the antenna icon, then <b>starts the multi bench once</b> so the containers exist when the window
-closes (<code>OSMO_MULTI_START=0</code> to skip).</p>
-<pre><code>sudo ./addition.sh             # checklist window
-sudo ./addition.sh --multi     # docker + image + topology + start
-sudo ./addition.sh --opencl    # OpenCL runtime and GPU driver
-sudo ./addition.sh --claude    # Claude Code CLI
-sudo ./addition.sh --extras    # Doom, Quake III, Kodi, YouTube, Wireshark (root), Linphone
-sudo ./addition.sh --status    # what is present</code></pre>
-</div>
-
-<h2>4G (srsRAN + Open5GS) <span class="tag icon">4G du banc</span> <span class="tag cli">CLI</span></h2>
-<div class="card">
-<p>One click starts the core (Open5GS), the eNB and the UE joined over ZeroMQ; a second click stops it. Code:
-<span class="file">tools/osmo-lte.sh</span> (radio), <span class="file">tools/osmo-epc.sh</span> (core),
-<span class="file">tools/osmo-lte-install.sh</span> (installation); the cell is declared in <span class="file">configs/srsran/enb.conf</span>.</p>
-<pre><code>osmo-lte toggle | up | down | status
-osmo-lte start-gui        # with the srsGUI constellation/spectrum windows
-osmo-epc start | stop | status
-journalctl -u osmo-lte -f</code></pre>
-</div>
-
-<h2>Phone, softphone, sniffer <span class="tag icon">dock</span> <span class="tag bar">pmOS, Linphone, Wireshark</span></h2>
-<div class="card">
+<section id="modules">
+<h2>Modules: icon, launcher, CLI</h2>
 <table>
-<tr><th>Module</th><th>CLI</th><th>Code</th></tr>
-<tr><td>postmarketOS phone VM</td><td><code>osmo-pmos up | toggle | stop | status</code></td><td><span class="file">tools/osmo-pmos.sh</span>, <span class="file">osmo-pmos-qemu.sh</span></td></tr>
-<tr><td>Linphone (SIP)</td><td><code>linphone</code></td><td>registered on <code>osmo-sip-connector</code>; audio via <span class="file">scripts/pulse-gsm-setup.sh</span></td></tr>
-<tr><td>Wireshark (root)</td><td><code>osmo-wireshark-root</code></td><td><span class="file">tools/osmo-wireshark-root.sh</span> (GSMTAP udp/4729)</td></tr>
-<tr><td>oFono bridge</td><td><code>osmo-ofono</code></td><td><span class="file">tools/osmo-ofono-bridge.py</span></td></tr>
+<tr><th>Dock icon</th><th>CLI</th><th>Code</th></tr>
+<tr><td>Red phone: the GSM bench</td><td><code>launch.sh --bts-classique --ms</code> · <code>systemctl start osmo-banc</code></td><td><code>launch.sh</code>, <code>services/osmo-banc.service</code></td></tr>
+<tr><td>Antenna: SS7 multi-operator</td><td><code>systemctl start osmo-multi</code> · <code>launch/start-multi.sh --status</code></td><td>operators 2 and 3 in Docker, inter-STP hub<a class="ref" href="#r8">[8]</a></td></tr>
+<tr><td>4G</td><td><code>osmo-lte toggle | status</code> · <code>osmo-epc start</code></td><td><code>tools/osmo-lte.sh</code>, Open5GS + srsRAN<a class="ref" href="#r9">[9]</a></td></tr>
+<tr><td>Supplements</td><td><code>sudo ./addition.sh --multi | --opencl | --claude | --extras | --sim</code><br>
+<code>--gnuarm | --magnetite | --trx | --fernvale | --simcom | --firmwares</code></td><td><code>addition.sh</code>, <code>tools/osmo-firmwares-install.sh</code></td></tr>
+<tr><td>postmarketOS phone</td><td><code>osmo-pmos up | stop | status</code></td><td><code>tools/osmo-pmos.sh</code></td></tr>
+<tr><td>Linphone, Wireshark (bench)</td><td><code>linphone</code> · <code>osmo-wireshark-root</code> (GSMTAP udp/4729)</td><td><code>tools/osmo-wireshark-root.sh</code></td></tr>
+<tr><td>Update</td><td><code>sudo ./update.sh</code></td><td>git pull of the embedded trees</td></tr>
+<tr><td>Tutorial</td><td><code>osmo-tutorial</code></td><td><a href="tutorial.html">tutorial.html</a></td></tr>
+<tr><td>? (this page)</td><td><code>osmo-info</code></td><td><code>configs/info.html</code></td></tr>
 </table>
-</div>
+<h3>Day to day</h3>
+<pre>sudo tmux attach -t calypso          # the bench consoles
+telnet 127.0.0.1 4254                # MSC VTY: show subscriber cache
+telnet 127.0.0.1 4242                # BSC VTY
+telnet 127.0.0.1 4247                # mobile VTY (osmocom phone; not with Magnetite)
+./run.sh --logs   (in /opt/GSM/c54x_exe)   # DSP bench logs: /tmp/c54x-pont/*.log</pre>
+<p>Settings: <code>globals.conf</code> (MCC, MNC, ARFCN, A5…) or the settings page below; configs are generated into <code>/etc/osmocom</code> by <code>--regen</code><a class="ref" href="#r10">[10]</a>.</p>
+</section>
 
-<h2>Update, Install, Tutorial, Paint, Claude</h2>
-<div class="card">
+<section id="notebooks">
+<h2>Jupyter notebooks</h2>
+<div class="grid">
+<div class="tile"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/installer-osmo-jusquau-dsp.ipynb">installer-osmo-jusquau-dsp.ipynb</a>
+<p>From a fresh Ubuntu 24.04 to a call on the DSP, one cell per step, with checks; optional Magnetite build.
+<a href="https://nbviewer.org/github/bbaranoff/osmo-operator/blob/main/wiki/installer-osmo-jusquau-dsp.ipynb">nbviewer</a></p></div>
+<div class="tile"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/lancer-pas-a-pas.ipynb">lancer-pas-a-pas.ipynb</a>
+<p>The bench started process by process: HLR, MGW, MSC, BSC, BTS, QEMU, osmocon, mobile, pont; classic BTS, rssi.
+<a href="https://nbviewer.org/github/bbaranoff/osmo-operator/blob/main/wiki/lancer-pas-a-pas.ipynb">nbviewer</a></p></div>
+<div class="tile"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/README-notebook.md">README-notebook</a>
+<p>How to run them: disposable container, fresh VM, or unattended with <code>nbconvert</code><a class="ref" href="#r11">[11]</a>.</p></div>
+</div>
+<pre># locally (the notebooks are in /opt/GSM/osmo-operator/wiki)
+python3 -m venv ~/.venv-jupyter && ~/.venv-jupyter/bin/pip install jupyterlab
+~/.venv-jupyter/bin/jupyter lab /opt/GSM/osmo-operator/wiki</pre>
+</section>
+
+<section id="local">
+<h2>On this machine</h2>
+<div class="grid">
+<div class="tile"><a href="http://127.0.0.1:8080/">Dashboard</a><p>http://127.0.0.1:8080 · subscribers, VTY, calls, logs (osmo-egprs-web)</p></div>
+<div class="tile"><a href="http://127.0.0.1:8090/">Settings</a><p>http://127.0.0.1:8090 · globals.conf, Osmocom configs, Calypso instances (osmo-reglages)</p></div>
+<div class="tile"><a href="tutorial.html">Tutorial</a><p>The quick start, served by the dashboard</p></div>
+<div class="tile"><a href="https://github.com/bbaranoff/osmo-operator/wiki">Wiki</a><p>The detailed reference, page by page<a class="ref" href="#r13">[13]</a></p></div>
+</div>
+</section>
+
+<section id="sites">
+<h2>Sites</h2>
+<div class="grid">
+<div class="tile"><a href="https://bbaranoff.github.io">bbaranoff.github.io</a><p>Bastien Baranoff · resources, articles and the related projects</p></div>
+<div class="tile"><a href="https://pl4y.store">pl4y.store</a><p>pl4y (<a href="https://github.com/bbaranoff/pl4y">github.com/bbaranoff/pl4y</a>)</p></div>
+<div class="tile"><a href="https://github.com/bbaranoff">github.com/bbaranoff</a><p>All the repositories</p></div>
+<div class="tile"><a href="https://github.com/bbaranoff/osmo-operator/releases/latest">Latest release</a><p>The desktop ISO, in parts, with SHA256SUMS</p></div>
+</div>
+</section>
+
+<section id="repos">
+<h2>Repositories</h2>
 <table>
-<tr><th>Icon</th><th>CLI</th><th>What it does</th></tr>
-<tr><td>Update osmo-operator</td><td><code>sudo ./update.sh</code></td><td>Replays the repository's update script (git pull of the embedded trees).</td></tr>
-<tr><td>Installer</td><td><code>osmo-install</code></td><td>Calamares: installs the live system on disk; ticking encryption encrypts <code>/home</code> only (<span class="file">installer/calamares/</span>).</td></tr>
-<tr><td>Tutorial</td><td><code>osmo-tutorial</code></td><td>Five-minute walkthrough served by the dashboard.</td></tr>
-<tr><td>Paint</td><td><code>overlay-draw.py</code></td><td>Draw over the desktop (<span class="file">tools/overlay-draw.py</span>).</td></tr>
-<tr><td>Claude</td><td><code>claude</code></td><td>Installs itself on first click (<code>addition.sh --claude</code>).</td></tr>
+<tr><th>Repository</th><th>Role in the bench</th></tr>
+<tr><td><a href="https://github.com/bbaranoff/osmo-operator">osmo-operator</a></td><td>This bench: launchers, configs, pont, ISO, supplements, docs</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/qosmo">qosmo</a></td><td>QEMU with the Calypso machine (ARM, TPU, TSP, BSP, ST7558/C139 screens), run modules</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/c54x_exe">c54x_exe</a></td><td>The TI C54x DSP outside QEMU, on the mask ROM; <code>run.sh</code> drives the instances</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/grgsm_exe">grgsm_exe</a></td><td>The gr-gsm layer 1 bridge</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/firmware">firmware</a></td><td>Prebuilt osmocom-bb Calypso firmware</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/osmocom-bb-trx">osmocom-bb-trx</a></td><td>osmocom-bb jolly/testing with TX (Docker image <code>ghcr.io/bbaranoff/osmocom-bb-trx:main</code>)</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/osmo-egprs-web">osmo-egprs-web</a> · <a href="https://github.com/bbaranoff/osmo_egprs">osmo_egprs</a></td><td>The dashboard; the EGPRS workflow</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/fernly">fernly</a> · <a href="https://github.com/bbaranoff/fernvale-nuttx">fernvale-nuttx</a> · <a href="https://github.com/bbaranoff/osmocom-bb-mtk-layer1">osmocom-bb-mtk-layer1</a></td><td>MediaTek MT6260 (Fernvale): reversing OS, NuttX, osmocom-bb layer 1 (<code>addition.sh --fernvale</code>)</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/simcom">simcom</a></td><td>SIMCom module documentation and SDKs (<code>addition.sh --simcom</code>)</td></tr>
+<tr><td><a href="https://github.com/bbaranoff/deka">deka</a> · <a href="https://github.com/bbaranoff/a51_tools">a51_tools</a></td><td>A5/1 tools (OpenCL supplement)</td></tr>
+<tr><td>Upstream</td><td><a href="https://gitea.osmocom.org/">Osmocom</a> · <a href="https://www.freecalypso.org/">FreeCalypso</a> (<a href="https://hg.themyscira.org/fc-magnetite">fc-magnetite</a>) ·
+<a href="https://github.com/axilirator/gnu-arm-installer">gnu-arm-installer</a> (arm-elf-gcc 4.5.2)</td></tr>
 </table>
-<p>At boot an encrypted <code>/home</code> asks for its passphrase, echoed as <code>****</code> (<span class="file">configs/crypthome/unlock-home</span>): typing it opens the user session,
-pressing Enter on an empty line, or not answering, opens an ephemeral root session; the boot never blocks.</p>
-</div>
+</section>
 
-<h2>The launcher bar and the desktop widgets</h2>
-<div class="card">
-<p>The bar at the bottom (<span class="file">tools/osmo-launcher.py</span>) groups Banc, Jeux, Media, Telephone and Outils. The three
-<b>run</b> buttons never open a terminal: they run in the background (as root through <code>pkexec</code>), write to
-<code>$XDG_RUNTIME_DIR/osmo-launcher/&lt;name&gt;.log</code>, and the bar unfolds a live log pane (one tab per run, stop and fold buttons).
-Other buttons: click = fit on the live frame, the fullscreen button, the send-to-top button (LAB GSM zone).</p>
-<p>The live frame (<span class="file">tools/osmo-fft-snap.py</span>) shows the bench illustration, fading to the I/Q spectrum and
-<code>mobile.log</code> when the bench runs; the banner (<span class="file">tools/osmo-topzone.py</span> +
-<span class="file">configs/conky/labgsm.html</span>, fed by <span class="file">tools/osmo-ts-probe.py</span>) shows the eight timeslots, core and radio
-daemons, subscribers, calls and uptime in real time; the Conky (<span class="file">configs/conky/osmo-conky.conf</span>) shows the machine and the
-selected operator (<code>Ctrl+AltGr+Left/Right</code>, or <code>osmo-op --next</code>).</p>
-</div>
+<section id="refs">
+<h2>References</h2>
+<ol class="refs">
+<li id="r1"><a href="https://github.com/bbaranoff/osmo-operator#readme">README</a> — start here, by goal (ISO, Docker, native, ARM, DSP, 4G, SS7)</li>
+<li id="r2"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/Start-native.md">wiki/Start-native</a> — the launcher step by step, options manual</li>
+<li id="r3"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-dsp.md">doc/README-dsp</a> — the real C54x DSP on the mask ROM</li>
+<li id="r4"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/magnetite.md">doc/magnetite</a> — FreeCalypso Magnetite in qosmo: build, flash image, state</li>
+<li id="r5"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-grgsm.md">doc/README-grgsm</a> — the gr-gsm layer 1</li>
+<li id="r6"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/SIM.md">wiki/SIM</a> — Omnikey reader, sysmoISIM, soft SIM over SAP</li>
+<li id="r7"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/WAN.md">wiki/WAN</a> · <a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/Payload-ISM.md">wiki/Payload-ISM</a> — linking nodes</li>
+<li id="r8"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-ss7.md">doc/README-ss7</a> — multi-operator, SS7 interconnect</li>
+<li id="r9"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-lte.md">doc/README-lte</a> — 4G, CSFB, the postmarketOS phone</li>
+<li id="r10"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/Environnement.md">wiki/Environnement</a> — which variable wins, what reaches QEMU</li>
+<li id="r11"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/README-notebook.md">wiki/README-notebook</a> — running the notebooks</li>
+<li id="r12"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/services/80-osmo-operator.preset">services/80-osmo-operator.preset</a> — the boot policy (<code>tools/osmo-telecom-boot.sh</code>)</li>
+<li id="r13"><a href="https://github.com/bbaranoff/osmo-operator/blob/main/wiki/Home.md">wiki/Home</a> · <a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-usage.md">doc/README-usage</a> · <a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-architecture.md">doc/README-architecture</a> · <a href="https://github.com/bbaranoff/osmo-operator/blob/main/doc/README-tests.md">doc/README-tests</a></li>
+</ol>
+</section>
 
-<h2>CLI cheat sheet</h2>
-<pre><code>sudo ./start-native.sh              # native bench, foreground
-systemctl start|stop osmo-banc      # native bench, service
-systemctl start|stop osmo-multi     # docker operators 2, 3 and the inter-STP hub
-osmo-lte toggle                     # 4G
-osmo-pmos toggle                    # phone VM
-osmo-op --list-vue / --next         # operator selector (Conky and live frame)
-sudo ./addition.sh --status         # which supplements are installed
-journalctl -u osmo-banc -f          # logs</code></pre>
-
-</main></body></html>
+</main>
+</body>
+</html>

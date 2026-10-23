@@ -74,7 +74,7 @@ GNUARM_URL="${GNUARM_URL:-https://github.com/axilirator/gnu-arm-installer}"
 osmo_gnuarm_install() {
     echo -e "${BOLD}== gnuarm (arm-elf-gcc 4.5.2) ==${NC}"
     if [ ! -x "$GNUARM_DIR/install/bin/arm-elf-gcc" ]; then
-        _fw_apt build-essential wget bzip2 texinfo libgmp-dev libmpfr-dev libmpc-dev libncurses-dev flex bison
+        _fw_apt build-essential wget bzip2 texinfo libgmp-dev libmpfr-dev libmpc-dev libncurses-dev flex bison zlib1g-dev
         _fw_clone "$GNUARM_URL" "$GNUARM_DIR" || return 1
         # sources.redhat.com ne sert plus newlib (meme correctif que le Dockerfile d osmocom-bb-trx)
         sed -i 's|ftp://sources.redhat.com/pub/newlib/|https://sourceware.org/pub/newlib/|g' "$GNUARM_DIR/download.sh"
@@ -147,25 +147,42 @@ osmo_magnetite_install() {
         || _fw_warn "nowhine : compilation en echec"
     # la compilation : c139, hybrid-ui-vo. SANS -j : le TMS470 sous Wine ecrit des
     # fichiers temporaires a noms fixes, deux cl470 en parallele se marchent dessus.
-    local b="$fcm/build-c139-hybrid-ui-vo"
+    # [2026-10-23] LA VARIANTE DU BANC : DWNLD 0 (FC_MAGNETITE_DWNLD), dossier -nopatch. Le
+    # patch DSP telecharge par la L1 TI (DWNLD 1) echouait sous l emulation (LA_LoadPage :
+    # course sur LA_TIMEOUT) ; le banc tourne depuis le 21/10 sur ce build-la, verifie
+    # octet pour octet contre c139-flash.img. L1_DYN_DSP_DWNLD reste a 1 (a 0,
+    # l1audio_async.c ne compile pas). FC_MAGNETITE_DWNLD=1 : le build d origine.
+    local dwnld="${FC_MAGNETITE_DWNLD:-0}" suf="" b
+    [ "$dwnld" = 0 ] && suf="-nopatch"
+    b="$fcm/build-c139-hybrid-ui-vo$suf"
     if [ ! -s "$b/fwimage.bin" ] || [ "${OSMO_FW_REFAIRE:-0}" = 1 ]; then
-        ( cd "$fcm" && (cd helpers && make) && ./configure.sh c139 hybrid-ui-vo && cd "$b" && WINEDEBUG=-all make ) \
+        ( cd "$fcm" && (cd helpers && make) && ./configure.sh --clean c139 hybrid-ui-vo ${suf:+SUFFIX=$suf} \
+            && sed -i "s/^#define DWNLD [01]\$/#define DWNLD $dwnld/" "$b/config/swconfig.cfg" \
+            && cd "$b" && WINEDEBUG=-all make ) \
             >>"$log" 2>&1 || { _fw_err "compilation Magnetite en echec (voir $log)"; return 1; }
     fi
-    _fw_ok "fwimage.bin : $(stat -c %s "$b/fwimage.bin") octets"
-    # l image flash de 4 MiB : bootloader Compal FreeCalypso a 0, fwimage.bin a 0x10000.
-    # Une image existante GARDE sa FFS (0x3C0000, IMEI, afcparams, rfcap ecrits par fc-fsio).
+    _fw_ok "fwimage.bin (DWNLD $dwnld) : $(stat -c %s "$b/fwimage.bin") octets, $b"
+    # l image flash de 4 MiB : bootloader Compal FreeCalypso a 0, fwimage.bin a 0x10000,
+    # FFS a 0x3C0000 (IMEI, afcparams, rfcap ecrits par fc-fsio). Une image EXISTANTE ne
+    # change que sa zone firmware : bootloader et FFS du banc restent tels quels (la zone
+    # du bootloader de l image du banc differe de 4 octets du fichier FreeCalypso, au
+    # vecteur 0x10, depuis le 22/10, d origine inconnue ; le banc demarre avec). Copie
+    # de l ancienne image en .avant-supplement.
     [ -s "$bdl/compal-flash-boot-for-fc.bin" ] || wget -q -O "$bdl/compal-flash-boot-for-fc.bin" \
         "$FC_FTP/FreeCalypso/compal-flash-boot-for-fc.bin" >>"$log" 2>&1 || _fw_warn "bootloader Compal : telechargement en echec"
+    [ -f "$out/c139-flash.img" ] && cp -p "$out/c139-flash.img" "$out/c139-flash.img.avant-supplement"
     python3 - "$bdl/compal-flash-boot-for-fc.bin" "$b/fwimage.bin" "$out/c139-flash.img" <<'EOF' \
         && _fw_ok "image flash $out/c139-flash.img" || _fw_err "assemblage de l image flash en echec"
 import os, sys
 boot, fw, img_path = sys.argv[1:4]
-img = bytearray(b"\xff" * (4 << 20))
-if os.path.exists(img_path) and os.path.getsize(img_path) == len(img):
-    img[0x3C0000:] = open(img_path, "rb").read()[0x3C0000:]      # FFS du banc gardee
-b = open(boot, "rb").read(); f = open(fw, "rb").read()
-img[0:len(b)] = b; img[0x10000:0x10000 + len(f)] = f
+f = open(fw, "rb").read()
+if os.path.exists(img_path) and os.path.getsize(img_path) == 4 << 20:
+    img = bytearray(open(img_path, "rb").read())              # bootloader + FFS du banc gardes
+    img[0x10000:0x3C0000] = b"\xff" * (0x3C0000 - 0x10000)
+else:
+    img = bytearray(b"\xff" * (4 << 20))
+    b = open(boot, "rb").read(); img[0:len(b)] = b
+img[0x10000:0x10000 + len(f)] = f
 open(img_path, "wb").write(img)
 EOF
     echo -e "  ${CYAN}→${NC} lancer : ${BOLD}./start.sh --bts-classique --ms-magnetite --gapk${NC} (appels : ENCRYPTION=\"a5 0\" et --regen)"
@@ -187,6 +204,7 @@ osmo_trx_install() {
     # osmocom-bb-transceiver, garde ses patchs et n est pas touche)
     osmo_gnuarm_install || return 1
     local t="$GSM_ROOT/osmocom-bb-trx" log; log="$(_fw_log trx)"
+    _fw_apt autoconf automake libtool pkg-config python3 git   # libosmocore cote cible
     _fw_clone https://gitea.osmocom.org/phone-side/osmocom-bb "$t" jolly/testing || return 1
     sed -i 's/^#CFLAGS += -DCONFIG_TX_ENABLE/CFLAGS += -DCONFIG_TX_ENABLE/' "$t/src/target/firmware/Makefile"
     _fw_bb_corriger "$t/src/target/firmware"
@@ -206,7 +224,7 @@ osmo_fernvale_install() {
     echo -e "${BOLD}== Fernvale (MediaTek MT6260) ==${NC}"
     local log; log="$(_fw_log fernvale)"
     _fw_apt gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi build-essential \
-            libusb-1.0-0-dev genromfs python3 \
+            libusb-1.0-0-dev genromfs python3 autoconf automake libtool pkg-config git \
         || _fw_warn "paquets arm-none-eabi : installation incomplete (voir $(_fw_log apt))"
     local fl="$GSM_ROOT/fernly" nx="$GSM_ROOT/fernvale-nuttx" mtk="$GSM_ROOT/osmocom-bb-mtk-layer1"
     _fw_clone https://github.com/bbaranoff/fernly "$fl"
@@ -217,7 +235,7 @@ osmo_fernvale_install() {
         if ( cd "$fl" && make CROSS_COMPILE=arm-none-eabi- ) >>"$log" 2>&1; then
             _fw_ok "fernly : $fl/build/firmware.bin + fernly-usb-loader"
         else _fw_err "fernly : make en echec (voir $log)"; fi
-        [ -f "$fl/95-fernvale-test.rules" ] && install -m644 "$fl/95-fernvale-test.rules" /etc/udev/rules.d/ \
+        [ -f "$fl/95-fernvale-test.rules" ] && install -D -m644 "$fl/95-fernvale-test.rules" /etc/udev/rules.d/95-fernvale-test.rules \
             && udevadm control --reload 2>/dev/null; true
     fi
     # NuttX (kosagi-fernvale/nsh) : les correctifs de compilation sont deja dans le depot

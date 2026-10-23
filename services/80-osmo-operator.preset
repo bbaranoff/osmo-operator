@@ -1,0 +1,53 @@
+# 80-osmo-operator.preset - POLITIQUE PAR DEFAUT : AUCUN SERVICE TELECOM AU BOOT
+#
+# [2026-10-23] Un reseau mobile se DEMARRE (icone, start.sh, systemctl start) :
+# ce n est pas un effet de bord du demarrage de la machine. Ce preset systemd
+# (pose dans /usr/lib/systemd/system-preset/, lu AVANT 90-systemd.preset) dit
+# « disable » pour tout ce qui fait tourner un element de reseau : le banc et
+# ses variantes, le coeur Osmocom, les BTS, Asterisk, oFono, Open5GS, srsRAN.
+# Il ne touche a rien d autre : les consoles web (osmo-egprs-web,
+# osmo-reglages, open5gs-webui), le son (osmo-pulse), le plan d adresses
+# (osmo-ip-plan), la purge, les mises a jour et le bureau gardent leur etat.
+#
+# Applique par tools/osmo-telecom-boot.sh (ISO : iso_modules/82-services.sh ;
+# machines deja installees : update.sh, une seule fois). Un service active
+# ensuite a la main (systemctl enable osmo-banc) le reste : ce fichier ne sert
+# qu a l installation et a `systemctl preset`, jamais en tache de fond.
+
+# les bancs
+disable osmo-banc.service
+disable osmo-multi.service
+disable osmo-lte.service
+disable osmo-egprs-dsp.service
+disable osmo-dsp-rom-max.service
+disable osmo-interstp.service
+# le coeur Osmocom et les stations de base
+disable osmo-msc.service
+disable osmo-bsc.service
+disable osmo-hlr.service
+disable osmo-mgw.service
+disable osmo-stp.service
+disable osmo-sgsn.service
+disable osmo-ggsn.service
+disable osmo-gtphub.service
+disable osmo-gbproxy.service
+disable osmo-pcu.service
+disable osmo-sip-connector.service
+disable osmo-cbc.service
+disable osmo-smlc.service
+disable osmo-hnbgw.service
+disable osmo-hnodeb.service
+disable osmo-bts-*.service
+disable osmo-trx-*.service
+disable osmo-nitb.service
+# la voix et les modems
+disable asterisk.service
+disable ofono.service
+disable kamailio.service
+disable yate.service
+# 4G / 5G (la console web open5gs-webui n est pas un element de reseau)
+disable open5gs-*d.service
+disable srsenb.service
+disable srsepc.service
+disable srsue.service
+disable srsran*.service
