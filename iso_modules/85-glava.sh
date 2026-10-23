@@ -5,7 +5,7 @@
 # [2026-10-23] GLava n a pas de paquet dans noble : tools/glava-build.sh le
 # compile sur l HOTE (meme Ubuntu que l image) avec le patch du module NCS, et
 # l installe dans le rootfs par DESTDIR - binaire, shaders dans /etc/xdg/glava,
-# lanceur /usr/local/bin/osmo-glava, autostart /etc/xdg/autostart. Les
+# lanceur /usr/local/bin/osmo-glava, service utilisateur glava.service. Les
 # bibliotheques d execution (libpulse0, libx11-6, libxext6, libxrender1,
 # libxcomposite1, libgl1) viennent deja avec le bureau GNOME.
 #

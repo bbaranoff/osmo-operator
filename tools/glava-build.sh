@@ -66,6 +66,15 @@ cp -r "$TMP/ncs/ncs" "$TMP/ncs/ncs.glsl" "$XDG/"
 sed -i 's/^#define color vec3(0.0118, 0.1412, 0.3412)/#define color vec3(0.3412, 0.1873, 0.0535)/' "$XDG/ncs.glsl"
 grep -q '^#define color vec3(0.3412, 0.1873, 0.0535)' "$XDG/ncs.glsl" \
     || echo "glava-build : couleur NCS non changee (ncs.glsl a bouge ?)" >&2
+# [2026-10-24] La bande du bas (module bars, lancee par osmo-glava a cote du
+# cercle) : barres epaisses (12 px, ecart 3), bleu clair, fond transparent.
+sed -i -e 's/^#define BAR_WIDTH 5$/#define BAR_WIDTH 12/' \
+       -e 's/^#define BAR_GAP 1$/#define BAR_GAP 3/' \
+       -e 's/^#define USE_ALPHA 0$/#define USE_ALPHA 1/' \
+       -e 's/^#define COLOR @fg:mix(#3366b2, #a0a0b2, clamp(d \/ GRADIENT, 0, 1))$/#define COLOR @fg:mix(#78c3ff, #d6eeff, clamp(d \/ GRADIENT, 0, 1))/' \
+       "$XDG/bars.glsl"
+grep -q '^#define COLOR @fg:mix(#78c3ff' "$XDG/bars.glsl" \
+    || echo "glava-build : couleur des barres non changee (bars.glsl a bouge ?)" >&2
 sed -i -e 's/^#request mod bars/#request mod ncs/' \
        -e 's/^#request setdecorated true/#request setdecorated false/' \
        -e 's/^#request setmirror false/#request setmirror true/' \
@@ -76,17 +85,33 @@ sed -i -e 's/^#request mod bars/#request mod ncs/' \
        "$XDG/rc.glsl"
 
 install -Dm755 "$DIR/tools/osmo-glava.sh" "$DEST/usr/local/bin/osmo-glava"
-install -d "$DEST/etc/xdg/autostart"
-cat > "$DEST/etc/xdg/autostart/osmo-glava.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=GLava NCS Spectrum
-Comment=Visualiseur audio du bureau
-Exec=/usr/local/bin/osmo-glava
-X-GNOME-Autostart-enabled=true
-NoDisplay=true
-EOF
-chmod 644 "$DEST/etc/xdg/autostart/osmo-glava.desktop"
+# [2026-10-24] UN SERVICE UTILISATEUR, PLUS UN AUTOSTART. Lance par un .desktop
+# de /etc/xdg/autostart, GLava n avait pas de commande d arret : il fallait
+# pkill. En service systemd --user, cercle ET barres sont dans le meme cgroup :
+#   systemctl --user stop glava      arrete les deux (et retire le mixage)
+#   systemctl --user start glava     les relance
+#   systemctl --user disable glava   plus de GLava a la connexion (ce compte)
+# Active pour tous les comptes (graphical-session.target.wants dans
+# /etc/systemd/user) : demarre avec la session graphique, qui fournit DISPLAY.
+rm -f "$DEST/etc/xdg/autostart/osmo-glava.desktop"
+install -d "$DEST/etc/systemd/user/graphical-session.target.wants"
+cat > "$DEST/etc/systemd/user/glava.service" <<'UNIT'
+[Unit]
+Description=GLava : cercle NCS et barres du bas (micro + haut-parleurs)
+PartOf=graphical-session.target
+After=graphical-session.target pulseaudio.service pipewire-pulse.service
+
+[Service]
+ExecStart=/usr/local/bin/osmo-glava
+ExecStopPost=/usr/local/bin/osmo-glava --retirer-mix
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+chmod 644 "$DEST/etc/systemd/user/glava.service"
+ln -sfn ../glava.service "$DEST/etc/systemd/user/graphical-session.target.wants/glava.service"
 
 if [ -n "$DEST" ]; then chroot "$DEST" ldconfig 2>/dev/null || true; else ldconfig; fi
 echo "GLava + NCS : $(git -C "$TMP/glava" rev-parse --short HEAD) / $(git -C "$TMP/ncs" rev-parse --short HEAD) -> ${DEST:-/}"
