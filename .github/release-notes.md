@@ -18,7 +18,7 @@ cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-![The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone](https://raw.githubusercontent.com/bbaranoff/bbaranoff/main/norf-box.gif)
+![LAB GSM: the osmo-operator desktop wallpaper](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-wallpaper.png)
 
 ### New in 0.1-9
 
