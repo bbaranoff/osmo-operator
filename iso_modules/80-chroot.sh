@@ -939,7 +939,9 @@ GDM
     # Les sections :ubuntu doublent la section nue, pour la meme raison que le
     # fond (10_ubuntu-settings.gschema.override pose gtk-theme=Yaru dans
     # [org.gnome.desktop.interface:ubuntu], que la session ubuntu lit d abord).
-    for _sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu"; do
+    # [2026-10-24] Et :GNOME-Greeter, comme le fond : sans elle, l ecran de
+    # connexion (gdm) restait en Yaru orange, seul ecran hors du theme du banc.
+    for _sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu" "org.gnome.desktop.interface:GNOME-Greeter"; do
         printf "\n[%s]\ncolor-scheme=\047prefer-dark\047\ngtk-theme=\047Yaru-blue-dark\047\nicon-theme=\047Yaru-blue\047\ncursor-theme=\047Yaru\047\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done

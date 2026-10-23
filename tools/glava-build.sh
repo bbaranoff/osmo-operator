@@ -60,6 +60,12 @@ DESTDIR="$DEST" ninja -C "$TMP/glava/build" install >/dev/null
 
 XDG="$DEST/etc/xdg/glava"
 cp -r "$TMP/ncs/ncs" "$TMP/ncs/ncs.glsl" "$XDG/"
+# [2026-10-24] Particules en ORANGE (celui du schema BTS -> Core du fond,
+# 255/140/40), a la meme intensite que le bleu d origine (0.0118, 0.1412,
+# 0.3412) : le melange est additif, une couleur plus forte sature en blanc.
+sed -i 's/^#define color vec3(0.0118, 0.1412, 0.3412)/#define color vec3(0.3412, 0.1873, 0.0535)/' "$XDG/ncs.glsl"
+grep -q '^#define color vec3(0.3412, 0.1873, 0.0535)' "$XDG/ncs.glsl" \
+    || echo "glava-build : couleur NCS non changee (ncs.glsl a bouge ?)" >&2
 sed -i -e 's/^#request mod bars/#request mod ncs/' \
        -e 's/^#request setdecorated true/#request setdecorated false/' \
        -e 's/^#request setmirror false/#request setmirror true/' \
