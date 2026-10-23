@@ -4,6 +4,8 @@ The fastest path: a GNOME live image with the whole bench (2G, DSP, 4G, CSFB,
 postmarketOS phone), Wireshark, Linphone and the I/Q spectra. Nothing to
 compile or configure.
 
+![The ISO desktop: Telecom Operator, no RF, full stack](../configs/gsm-lab-ville.jpg)
+
 ← [README](../README.md) · Details: [wiki/ISO](../wiki/ISO.md), [wiki/Home](../wiki/Home.md), [wiki/Build](../wiki/Build.md)
 
 | | |
@@ -18,12 +20,12 @@ compile or configure.
 [Latest release](https://github.com/bbaranoff/osmo-operator/releases/latest), or:
 
 - [Google Drive (single file)](https://drive.usercontent.google.com/download?id=1fDvbBzfdxir6JM7MM_zlAm5Rtef5RnGB&export=download&authuser=1)
-- GitHub v0.1-7:
-  [part-00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-00) ·
-  [part-01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-01) ·
-  [part-02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-02) ·
-  [part-03](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/osmo-operator-desktop.iso.part-03) ·
-  [SHA256SUMS](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-7/SHA256SUMS)
+- GitHub v0.1-9:
+  [part-00](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-9/osmo-operator-desktop.iso.part-00) ·
+  [part-01](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-9/osmo-operator-desktop.iso.part-01) ·
+  [part-02](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-9/osmo-operator-desktop.iso.part-02) ·
+  [part-03](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-9/osmo-operator-desktop.iso.part-03) ·
+  [SHA256SUMS](https://github.com/bbaranoff/osmo-operator/releases/download/v0.1-9/SHA256SUMS)
 
 > [!IMPORTANT]
 > Download **every** `.part-NN` file, not just the first one. GitHub caps release

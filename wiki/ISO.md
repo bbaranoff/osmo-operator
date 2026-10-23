@@ -7,9 +7,13 @@ It points to the repository files for each item; the
 [Build](Build.md), [Start-native](Start-native.md) and [Environnement](Environnement.md)
 pages detail the scripts themselves.
 
-Reference state: **osmo-operator-desktop.iso v0.1-6** (tag `v0.1-6`, commit
-`869f830`), plus the 2026-10-01 changes described below (DSP by default,
-LUKS question on the console, GTK launchers).
+Reference state: **osmo-operator-desktop.iso v0.1-9** (tag `v0.1-9`, commit
+`eeda9a2`). It includes the 2026-10-01 changes described below (DSP by default,
+LUKS question on the console, GTK launchers); what is new in 0.1-9 is listed in
+[`.github/release-notes.md`](../.github/release-notes.md). The sizes in § 1 were
+measured on v0.1-6.
+
+![The ISO desktop: Telecom Operator, no RF, full stack](../configs/gsm-lab-ville.jpg)
 
 ---
 

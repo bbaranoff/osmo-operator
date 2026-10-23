@@ -22,12 +22,20 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
     # plutot que d ajouter des binaires au depot. Calamares les met a l echelle.
     _WPI="$DIR/configs/gsm-lab-wallpaper.png"
     if [ -f "$_WPI" ]; then
-        cp "$_WPI" "$ROOTFS/etc/calamares/branding/osmo/welcome.png"
         cp "$_WPI" "$ROOTFS/etc/calamares/branding/osmo/logo.png"
     else
         # Sans image, Calamares journalise une erreur par ecran. On retire les
-        # trois cles plutot que de laisser pointer vers des fichiers absents.
-        sed -i '/^images:/,/^slideshow:/{/productLogo\|productIcon\|productWelcome/d}' \
+        # cles plutot que de laisser pointer vers des fichiers absents.
+        sed -i '/^images:/,/^slideshow:/{/productLogo\|productIcon/d}' \
+            "$ROOTFS/etc/calamares/branding/osmo/branding.desc"
+    fi
+    # [2026-10-24] L accueil et la premiere diapo : le fond "Telecom Operator /
+    # No RF" (gsm-lab-ville.jpg), le meme que celui du bureau live.
+    _VILLE="$DIR/configs/gsm-lab-ville.jpg"
+    if [ -f "$_VILLE" ]; then
+        cp "$_VILLE" "$ROOTFS/etc/calamares/branding/osmo/welcome.jpg"
+    else
+        sed -i '/^images:/,/^slideshow:/{/productWelcome/d}' \
             "$ROOTFS/etc/calamares/branding/osmo/branding.desc"
     fi
 

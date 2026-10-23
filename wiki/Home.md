@@ -119,7 +119,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 ## Reference
 
-### What is in the image (v0.1-3)
+### What is in the image (v0.1-9)
 
 `/etc/os-release`: `IMAGE_VERSION="OSMO_EGPRS_V2"` — `/etc/osmo-role`:
 `OSMO_ROLE=operator`, `OSMO_LITE=0`.
@@ -128,7 +128,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 - Core: osmo-stp (M3UA, SCTP :2905), osmo-bsc, osmo-msc, osmo-hlr, osmo-sgsn, osmo-ggsn (GTPv1-C/U), osmo-pcu, osmo-mgw (MGCP :2427).
 - Two DCS1800 cells, LAC 1: BTS 0 (Cell ID 6001, BSIC 7) and BTS 1 (Cell ID 6012, BSIC 8), each on its own osmo-bts-trx.
-- Layer 1: `qemu-system-arm -M calypso -cpu arm946` runs `layer1.highram.elf`, loaded by osmocon as on a C123; `pont.py` converts bursts to I/Q for `fake_trx.py`, then trxcon and two `mobile` (osmocom-bb).
+- Layer 1 (default, `./start.sh --bts-classique --ms`): `osmo-bts-trx` talks to `pont/pont_dsp.py`; the emulated phone (`qemu-system-arm -M calypso`, qosmo) runs osmocom-bb `layer1` + `mobile` on the C54x DSP mask ROM. Other modes: `--ms-magnetite` (FreeCalypso Magnetite on a C139), `--bts` (the Calypso as the BTS radio, `--ts 1 | 2 | 2/1`), `banc-rssi`.
 - GPRS/EDGE: BSSGP/NS to the PCU, PDP contexts through osmo-ggsn.
 - Voice: external MNCC → Asterisk (SIP :5060, FR/HR) via osmo-sip-connector.
 - SMS: SMS-over-GSUP → proto-smsc-daemon, SMPP :2775 with a test ESME, inter-operator relay :7890.
