@@ -89,6 +89,8 @@ Usage : ./start-native.sh [options] [mode]
     core           alias noproc
     hybrid         alias faketrx-qemu
   Options :
+    --docker            banc en conteneurs : passe la main a
+                        launch/start-docker.sh avec les autres arguments
     --dsp               (defaut) banc DSP C54x : le TMS320C54x tourne hors QEMU
                         (/opt/GSM/c54x_exe, mask-ROM TI) et decode lui-meme
                         FCCH/SCH/BCCH ; aucun decodeur gr-gsm n'est lance.

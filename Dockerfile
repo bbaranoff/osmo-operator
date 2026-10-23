@@ -810,20 +810,25 @@ ARG OSMO_DEB_REFRESH=0
 # Patch maintenu dans patches/ (regenere a chaque changement gr-gsm).
 #
 # matplotlib est consomme par tools/fft_global.sh et tools/matrix.sh.
+# numpy RESTE en 1.x : le gist pose "numpy<2" (GNU Radio 3.10 compile contre),
+# mais un `pip install matplotlib` nu tire la derniere matplotlib/contourpy, qui
+# exigent numpy>=2, et pip remplace alors la 1.26 par une 2.x. La contrainte
+# sur la meme ligne fait choisir a pip une matplotlib compatible numpy 1.
+# Le paquet du cache passe en 1.git : le 0.git embarque un venv en numpy 2.
 #
 # Le paquet du cache (grgsm-venv) est le venv COMPLET, patch et matplotlib
 # compris : c est pour cela que les trois etapes tiennent dans un seul RUN. Les
 # arbres /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} ne sont pas dans le paquet - rien
 # ne les lit au runtime (le venv porte ses .so avec un RPATH sur /root/.env).
 COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
-RUN if ! osmo-deb install grgsm-venv 0.git; then \
+RUN if ! osmo-deb install grgsm-venv 1.git; then \
       curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
       && make -j"$(nproc)" \
       && make install \
-      && . ~/.env/bin/activate && pip install matplotlib \
-      && osmo-deb snapshot grgsm-venv 0.git /root/.env /etc/ld.so.conf.d/gnuradio.conf; \
+      && . ~/.env/bin/activate && pip install matplotlib "numpy<2" \
+      && osmo-deb snapshot grgsm-venv 1.git /root/.env /etc/ld.so.conf.d/gnuradio.conf; \
     fi && ldconfig
 
 # ────────────────────────────────────────────────────────────────────────────

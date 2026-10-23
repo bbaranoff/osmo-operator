@@ -5,7 +5,9 @@
 set -eu
 # Racine du depot : ce script vit dans launch/ depuis le 2026-10-18 (ex start.sh a la
 # racine). Les anciens chemins en « dirname $0 » visaient en fait le depot.
-START_REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# OSMO_REPO_DIR d'abord : build-iso.sh (iso_modules/30-image-configs.sh) source une
+# COPIE de ce fichier dans $WORK ; BASH_SOURCE donnerait alors /var/tmp.
+START_REPO="${OSMO_REPO_DIR:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
 
 # ── Ce script est le lanceur de l'HOTE. Refus net s'il tourne DANS le conteneur ──
 # [2026-08-12] start-docker.sh pilote docker (build, reseaux, `docker run`, volumes) ;
@@ -855,13 +857,13 @@ _GC_SH="${OSMO_REPO_DIR:-$START_REPO}/generate_configs.sh"
 # ORDRE : cette fonction DOIT etre appelee apres `docker run` et AVANT le
 # `docker exec ... run.sh`. Apres, run.sh aurait deja lu l'ancien code.
 #
-# `--ff-only`, PAS de `reset --hard` : le depot qosmo-grgsm du conteneur recoit des
+# `--ff-only`, PAS de `reset --hard` : le depot qosmo du conteneur recoit des
 # commits faits a la main pendant une session (c'est le mode de travail : on
 # corrige, on compile, on commite dans le conteneur). Un reset dur les
 # effacerait sans le dire. En avance-rapide seule, une divergence s'ARRETE et se
 # VOIT au lieu d'etre ecrasee en silence.
 #
-# qosmo-grgsm est RECOMPILE apres le pull : mettre la source a jour sans relier le
+# qosmo est RECOMPILE apres le pull : mettre la source a jour sans relier le
 # binaire ne change rien a ce qui tourne - et c'est indiscernable d'un pull qui
 # aurait echoue. Le juge d'un binaire a jour reste `stat -L /proc/<pid>/exe`.
 #
@@ -870,7 +872,7 @@ _GC_SH="${OSMO_REPO_DIR:-$START_REPO}/generate_configs.sh"
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
-    for repo in /opt/GSM/qosmo-grgsm /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
+    for repo in /opt/GSM/qosmo /opt/GSM/osmo-operator /opt/GSM/osmo-egprs-web; do
         if ! docker exec "$c" test -d "$repo/.git" 2>/dev/null; then
             echo -e "    ${YELLOW}$repo : pas un depot git - ignore${NC}"
             continue
@@ -909,11 +911,11 @@ force_update_trees() {
     # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
     # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
     echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
-    if docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja' >/dev/null 2>&1; then
-        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo-grgsm/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
+    if docker exec "$c" bash -c 'cd /opt/GSM/qosmo/build && ninja' >/dev/null 2>&1; then
+        echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
     else
         echo -e "    ${RED}ninja KO - le run utilisera le binaire de l'image${NC}"
-        docker exec "$c" bash -c 'cd /opt/GSM/qosmo-grgsm/build && ninja 2>&1 | tail -15' | sed 's/^/      /'
+        docker exec "$c" bash -c 'cd /opt/GSM/qosmo/build && ninja 2>&1 | tail -15' | sed 's/^/      /' || true
     fi
 }
 
@@ -1521,8 +1523,8 @@ start_bridge_mode() {
         # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
         # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
-        ENCRYPTION="a5 0"
-        echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qosmo-grgsm/run.sh · A5/1${NC}"
+        ENCRYPTION="${ENCRYPTION:-a5 1}"
+        echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qosmo/run.sh · ${ENCRYPTION}${NC}"
     else
         # ── Mode interactif ──────────────────────────────────────────────────
         # Deja repondu dans le menu WAN (« combien tournent ICI ») : on ne
@@ -1641,7 +1643,7 @@ start_bridge_mode() {
         # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
         # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
-        ENCRYPTION="${ENCRYPTION:-a5 0}"
+        ENCRYPTION="${ENCRYPTION:-a5 1}"
         if [ -n "$HANDOFF_MODE_FROM_ENV" ]; then
             # [2026-08-31] L APPELANT A IMPOSE LE MODE : on ne lui repose pas la
             # question. Sans cette branche, seul --wan pouvait choisir l hybride
@@ -2512,7 +2514,10 @@ start_bridge_mode() {
             # pas : elle ne traversait pas ce handoff-ci.
             [ "${OSMO_NO_ATTACH:-0}" = "1" ] && _cmd="$_cmd CALYPSO_NO_ATTACH=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
-            _cmd="$_cmd ENCRYPTION='a5 1' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
+            # Le chiffrement de l'HOTE, pas une constante : les configs du
+            # conteneur sont deja ecrites avec lui (OSMO_NO_REGEN=1 la-bas), et
+            # 08-gabarits.sh refuse de demarrer si les deux different.
+            _cmd="$_cmd ENCRYPTION='${ENCRYPTION}' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-native.sh ${_na} --force"
             printf '%s' "$_cmd"
@@ -2739,7 +2744,7 @@ choose_ran_host() {
         "1" "A5/1 - chiffrement legacy (defaut)" \
         "0" "A5/0 - pas de chiffrement" \
         "2" "A5/2 - (casse, usage test)") || exit 1
-    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 0" ;; esac
+    case "$e" in 0) ENCRYPTION="a5 0" ;; 2) ENCRYPTION="a5 2" ;; *) ENCRYPTION="a5 1" ;; esac
     echo -e "  ${GREEN}[RAN] mode=${CYAN}${HANDOFF_MODE}${NC}${GREEN} pipeline=${CYAN}${HANDOFF_QEMU_CHOICE}${NC}${GREEN} chiffrement=${CYAN}${ENCRYPTION}${NC}"
 }
 

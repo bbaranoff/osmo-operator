@@ -39,6 +39,19 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
+# ── --docker : le banc en conteneurs, par launch/start-docker.sh ─────────────
+# Un seul point d'entree pour les deux lanceurs : `./start.sh --docker [args]`
+# passe la main a start-docker.sh avec les autres arguments, tels quels. Le
+# reste de ce script (startup_scripts/) est le lanceur NATIF et n'est pas lu.
+_args=(); _docker=0
+for _a in "$@"; do
+    if [ "$_a" = --docker ]; then _docker=1; else _args+=("$_a"); fi
+done
+if [ "$_docker" = 1 ]; then
+    exec bash "$HERE/launch/start-docker.sh" "${_args[@]+"${_args[@]}"}"
+fi
+unset _args _docker _a
+
 # ── Le reste du lanceur : startup_scripts/*.sh, sourcees dans l'ordre (meme shell, memes variables) ──
 for _f in "$HERE"/startup_scripts/*.sh; do
     . "$_f"
