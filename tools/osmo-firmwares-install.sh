@@ -7,9 +7,10 @@
 # reclone, un binaire deja sorti n est pas refait sans OSMO_FW_REFAIRE=1) et
 # rien n est fatal : un miroir absent ne doit pas arreter les autres supplements.
 #
-#   osmo_gnuarm_install     la chaine historique d osmocom-bb : arm-elf-gcc 4.5.2
-#                           (gnu-arm-installer) dans /root/gnuarm, et le lien
-#                           libmpfr.so.4 -> libmpfr.so.6 que son cc1 reclame
+#   osmo_gnuarm_install     la chaine historique d osmocom-bb : arm-elf-gcc 4.5.2,
+#                           TIREE de l image Docker osmocom-bb-trx (pas recompilee)
+#                           dans /root/gnuarm, et le lien libmpfr.so.4 -> libmpfr.so.6
+#                           que son cc1 reclame
 #   osmo_magnetite_install  FreeCalypso Magnetite pour le Motorola C139 (le vrai
 #                           firmware TI) : Wine + environnement TI TMS470, sources
 #                           hg figees, patchs du banc, image flash de 4 MiB
@@ -78,23 +79,40 @@ _fw_bb_corriger() {   # racine/src/target/firmware
 }
 
 # ── gnuarm ───────────────────────────────────────────────────────────────────
+# [2026-10-24] LA CHAINE N EST PLUS RECONSTRUITE. gnu-arm-installer (binutils,
+# gcc 4.5.2, newlib 1.19 depuis les sources) prenait de longues minutes et
+# dependait de miroirs qui disparaissent (newlib a deja quitte sources.redhat.com).
+# L image osmocom-bb-trx, deja tiree pour --trx, porte la meme chaine, construite
+# une fois pour toutes : /root/gnuarm/install. On la copie hors de l image
+# (docker create + docker cp, sans lancer de conteneur) vers $GNUARM_DIR/install.
+# Ses binaires viennent d Ubuntu 16.04 : sur noble il ne leur manque que
+# libmpfr.so.4, le lien pose plus bas. Teste : compilation et lien d un .c
+# avec newlib (-mcpu=arm7tdmi) par arm-elf-gcc 4.5.2.
 GNUARM_DIR="${GNUARM_DIR:-/root/gnuarm}"
-GNUARM_URL="${GNUARM_URL:-https://github.com/axilirator/gnu-arm-installer}"
+OSMOCOM_BB_TRX_IMAGE="${OSMOCOM_BB_TRX_IMAGE:-ghcr.io/bbaranoff/osmocom-bb-trx:main}"
 osmo_gnuarm_install() {
-    echo -e "${BOLD}== gnuarm (arm-elf-gcc 4.5.2) ==${NC}"
+    echo -e "${BOLD}== gnuarm (arm-elf-gcc 4.5.2, image $OSMOCOM_BB_TRX_IMAGE) ==${NC}"
     if [ ! -x "$GNUARM_DIR/install/bin/arm-elf-gcc" ]; then
-        _fw_apt build-essential wget bzip2 texinfo libgmp-dev libmpfr-dev libmpc-dev libncurses-dev flex bison zlib1g-dev
-        _fw_clone "$GNUARM_URL" "$GNUARM_DIR" || return 1
-        # sources.redhat.com ne sert plus newlib (meme correctif que le Dockerfile d osmocom-bb-trx)
-        sed -i 's|ftp://sources.redhat.com/pub/newlib/|https://sourceware.org/pub/newlib/|g' "$GNUARM_DIR/download.sh"
-        local log; log="$(_fw_log gnuarm)"
-        ( cd "$GNUARM_DIR" && { [ -s src/newlib-1.19.0.tar.gz ] || ./download.sh; } && ./build.sh ) >>"$log" 2>&1 \
-            || { _fw_err "construction de gnuarm en echec (voir $log)"; return 1; }
+        if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+            _fw_err "docker absent ou arrete : gnuarm vient de l image $OSMOCOM_BB_TRX_IMAGE (addition.sh --docker)"
+            return 1
+        fi
+        local log c; log="$(_fw_log gnuarm)"
+        docker pull "$OSMOCOM_BB_TRX_IMAGE" >>"$log" 2>&1 \
+            || { _fw_err "docker pull $OSMOCOM_BB_TRX_IMAGE en echec (voir $log)"; return 1; }
+        c="$(docker create "$OSMOCOM_BB_TRX_IMAGE" 2>>"$log")" \
+            || { _fw_err "docker create en echec (voir $log)"; return 1; }
+        mkdir -p "$GNUARM_DIR"
+        rm -rf "$GNUARM_DIR/install"
+        docker cp -q "$c:/root/gnuarm/install" "$GNUARM_DIR/install" >>"$log" 2>&1
+        local rc=$?
+        docker rm -f "$c" >/dev/null 2>&1
+        [ "$rc" = 0 ] || { _fw_err "docker cp de /root/gnuarm/install en echec (voir $log)"; return 1; }
+        _fw_ok "gnuarm copie depuis l image ($GNUARM_DIR/install, $(du -sh "$GNUARM_DIR/install" | cut -f1))"
     fi
     # [2026-10-23] cc1 de gcc 4.5.2 est lie a libmpfr.so.4, que noble ne fournit plus
     # (libmpfr.so.6, meme ABI pour ce qu il en fait) : sans ce lien, « cc1: error while
-    # loading shared libraries: libmpfr.so.4 ». Pose APRES la construction, qui, elle,
-    # se fait contre la libmpfr de l hote.
+    # loading shared libraries: libmpfr.so.4 ».
     if [ ! -e /usr/local/lib/libmpfr.so.4 ]; then
         local m6; m6="$(ls /usr/lib/*-linux-gnu/libmpfr.so.6 2>/dev/null | head -1)"
         if [ -n "$m6" ]; then ln -sf "$m6" /usr/local/lib/libmpfr.so.4 && ldconfig && _fw_ok "lien libmpfr.so.4 -> $m6"
@@ -198,7 +216,6 @@ EOF
 }
 
 # ── osmocom-bb-trx ───────────────────────────────────────────────────────────
-OSMOCOM_BB_TRX_IMAGE="${OSMOCOM_BB_TRX_IMAGE:-ghcr.io/bbaranoff/osmocom-bb-trx:main}"
 osmo_trx_install() {
     echo -e "${BOLD}== osmocom-bb-trx (jolly/testing, TX) ==${NC}"
     # cote hote (layer23 --enable-transceiver, libosmocore 1.1.0) : l image publiee

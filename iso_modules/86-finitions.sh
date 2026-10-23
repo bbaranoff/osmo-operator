@@ -228,6 +228,50 @@ else
     echo -e "  ${YELLOW}!${NC} plymouth ou son greffon script absent du rootfs - pas de theme de demarrage"
 fi
 
+# ── PLYMOUTH : VORTEX UBUNTU PAR DEFAUT ─────────────────────────────────────
+# [2026-10-23] L ecran de demarrage devient « Vortex Ubuntu » (logo Ubuntu et
+# bandes de couleur qui tournent), repris tel quel dans
+# configs/plymouth/vortex-ubuntu/ (voir SOURCE). osmo-bts reste inscrit dans
+# les alternatives (priorite 200) : `update-alternatives --config
+# default.plymouth` y revient. Vortex gere aussi la saisie LUKS
+# (SetDisplayPasswordFunction).
+_VTX_SRC="$DIR/configs/plymouth/vortex-ubuntu"
+_VTX_DST="$ROOTFS/usr/share/plymouth/themes/vortex-ubuntu"
+if [ -d "$_VTX_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" ]; then
+    install -d "$_VTX_DST"
+    install -m644 "$_VTX_SRC"/*.png "$_VTX_SRC"/vortex-ubuntu.plymouth "$_VTX_SRC"/vortex-ubuntu.script "$_VTX_DST/"
+    chroot "$ROOTFS" update-alternatives --install \
+        /usr/share/plymouth/themes/default.plymouth default.plymouth \
+        /usr/share/plymouth/themes/vortex-ubuntu/vortex-ubuntu.plymouth 210 >/dev/null 2>&1 || true
+    chroot "$ROOTFS" update-alternatives --set default.plymouth \
+        /usr/share/plymouth/themes/vortex-ubuntu/vortex-ubuntu.plymouth >/dev/null 2>&1 \
+        || ln -sfn /usr/share/plymouth/themes/vortex-ubuntu/vortex-ubuntu.plymouth \
+                   "$ROOTFS/usr/share/plymouth/themes/default.plymouth"
+    install -d "$ROOTFS/etc/initramfs-tools/conf.d"
+    echo "FRAMEBUFFER=y" > "$ROOTFS/etc/initramfs-tools/conf.d/splash"
+    chroot "$ROOTFS" update-initramfs -u >/dev/null 2>&1 || true
+    echo -e "  ${GREEN}✓${NC} plymouth : theme ${CYAN}vortex-ubuntu${NC} par defaut (osmo-bts en alternative)"
+fi
+
+# ── GRUB : THEME « osmo » SUR LE SYSTEME INSTALLE ───────────────────────────
+# [2026-10-23] Genere par tools/grub-theme-render.py (fond = la ville bleue,
+# floutee). Pose dans /boot/grub/themes : Calamares recopie le rootfs, /boot
+# compris, et grub-mkconfig (lance par l installeur) lit /etc/default/grub.d.
+# Le menu est AFFICHE 5 s (Ubuntu le cache par defaut : un theme invisible).
+if python3 "$DIR/tools/grub-theme-render.py" --out "$ROOTFS/boot/grub/themes/osmo" >/dev/null 2>&1; then
+    install -d "$ROOTFS/etc/default/grub.d"
+    cat > "$ROOTFS/etc/default/grub.d/osmo-theme.cfg" <<'GRUBTHEME'
+# Theme GRUB « osmo » (tools/grub-theme-render.py). Menu affiche 5 s.
+GRUB_THEME=/boot/grub/themes/osmo/theme.txt
+GRUB_GFXMODE=auto
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TIMEOUT=5
+GRUBTHEME
+    echo -e "  ${GREEN}✓${NC} grub : theme ${CYAN}osmo${NC} (systeme installe)"
+else
+    echo -e "  ${YELLOW}!${NC} grub : rendu du theme echoue (python3-pil, grub-mkfont, fonts-ubuntu ?) - menu texte"
+fi
+
 cat > "$ROOTFS/usr/local/bin/osmo-banner" <<'BANNER'
 #!/bin/bash
 # Banniere d ouverture de terminal : screenfetch avec le logo du banc, puis

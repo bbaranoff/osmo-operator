@@ -246,6 +246,12 @@ SQ_MB=$(( $(stat -Lc%s "$ISOROOT/live/filesystem.squashfs") / 1048576 ))
 RAM_TORAM_GB=$(( (SQ_MB + 2048 + 1023) / 1024 ))
 SQ_GB=$(awk -v m="$SQ_MB" 'BEGIN{printf "%.1f", m/1024}')
 
+# [2026-10-23] Theme « osmo » (tools/grub-theme-render.py), le meme que sur le
+# systeme installe. S il ne se charge pas (polices absentes, GRUB signe sans
+# gfxterm), le bloc « if loadfont » est saute et le menu reste en texte.
+python3 "$DIR/tools/grub-theme-render.py" --out "$ISOROOT/boot/grub/themes/osmo" >/dev/null 2>&1 \
+    || echo -e "  ${YELLOW}!${NC} grub : rendu du theme echoue - menu du live en texte"
+
 cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
 # ATTENTION - ce fichier est GENERE par build-iso.sh. Le modifier dans l'ISO ne
 # survit pas au build suivant.
@@ -256,6 +262,17 @@ cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
 
 set default=0
 set timeout=5
+
+if loadfont /boot/grub/themes/osmo/osmo-18.pf2; then
+    loadfont /boot/grub/themes/osmo/osmo-24.pf2
+    loadfont /boot/grub/themes/osmo/osmom-22.pf2
+    set gfxmode=auto
+    insmod all_video
+    insmod gfxterm
+    insmod png
+    terminal_output gfxterm
+    set theme=/boot/grub/themes/osmo/theme.txt
+fi
 
 # TROIS entrees, et le reste dans un sous-menu. Cinq lignes dont deux doublons
 # "verbose", c est un menu ou l on cherche - alors que le choix reel n en compte

@@ -41,7 +41,8 @@
 #   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
 #   sudo ./addition.sh --extras   Jeux + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
-#   sudo ./addition.sh --gnuarm   la chaine historique arm-elf-gcc 4.5.2 (/root/gnuarm)
+#   sudo ./addition.sh --gnuarm   la chaine historique arm-elf-gcc 4.5.2 (/root/gnuarm),
+#                                 copiee de l image Docker osmocom-bb-trx
 #   sudo ./addition.sh --magnetite Wine + TI TMS470, FreeCalypso Magnetite C139
 #                                 (sources, patchs du banc, image flash)
 #   sudo ./addition.sh --trx      osmocom-bb-trx : image Docker publiee + firmware
@@ -402,7 +403,10 @@ fi
 # topologie posee ne servirait a rien et start-multi.sh renverrait ici.
 if [ "$DO_MULTI" = "1" ]; then DO_DOCKER=1; DO_IMAGE=1; fi
 # osmocom-bb-trx : la partie hote est une image Docker, il lui faut le moteur.
-if [ "$DO_TRX" = "1" ]; then DO_DOCKER=1; fi
+# [2026-10-24] gnuarm aussi : la chaine arm-elf-gcc n est plus recompilee, elle
+# est copiee de cette meme image (tools/osmo-firmwares-install.sh). Le firmware
+# Calypso du banc (--calypso-fw) la demande.
+if [ "$DO_TRX$DO_GNUARM$DO_CALFW" != "000" ]; then DO_DOCKER=1; fi
 
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis : sudo $0${NC}"; exit 1; }
 
@@ -1220,6 +1224,14 @@ fi
 # manquent et qu aucun .deb n est la) et tools/osmo-pmos-install.sh
 # (/opt/user_interface/pmos : scripts, pmbootstrap patche, gabarit ; kernel/ :
 # le .deb du noyau PPP, de /var/cache/osmo-debs ou de GitHub). Non fatal.
+# [2026-10-24] SAUF QUAND CLAUDE EST SEUL DEMANDE. « addition.sh --claude » (et
+# l icone Claude, qui l appelle au premier clic) ne doit installer que Claude :
+# ce bloc, lui, passait a chaque appel et lancait la 4G et postmarketOS
+# (paquets, eventuelle compilation de /opt/LTE) pour un simple CLI.
+if [ "$DO_CLAUDE" = "1" ] && [ "$DO_DOCKER$DO_IMAGE$DO_MULTI$DO_OPENCL$DO_EXTRAS$DO_SIM" = "000000" ] \
+   && [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_CALFW$DO_FERNVALE$DO_SIMCOM" = "000000" ]; then
+    :
+else
 echo -e "${BOLD}== La 4G et le telephone ==${NC}"
 if [ -f "$DIR/tools/osmo-lte-install.sh" ]; then
     # shellcheck source=tools/osmo-lte-install.sh
@@ -1234,6 +1246,7 @@ if [ -f "$DIR/tools/osmo-pmos-install.sh" ]; then
     osmo_pmos_install || true
 else
     echo -e "  ${YELLOW}!${NC} tools/osmo-pmos-install.sh introuvable"
+fi
 fi
 
 echo

@@ -510,7 +510,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # autoriser le compte au home chiffre sur le serveur X de la session root.
     apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop \
-        vlc \
+        vlc chrome-gnome-shell \
         wmctrl x11-utils x11-xserver-utils xdotool zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \

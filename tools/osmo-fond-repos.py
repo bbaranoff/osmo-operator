@@ -5,7 +5,8 @@
 # IA : texte du terminal invente, ligne « GSM | ... | MSC »). Regenerer le fond au
 # repos, puis sa variante « banc en marche » :
 #   tools/osmo-fond-repos.py configs/gsm-lab-source.png /tmp/repos.png
-#   tools/osmo-fond-antenne.py /tmp/repos.png /tmp/antenne.png
+#   tools/osmo-fond-bleu.py /tmp/repos.png /tmp/bleu.png     (fond orange -> bleu)
+#   tools/osmo-fond-antenne.py /tmp/bleu.png /tmp/antenne.png
 # et poser les deux en JPEG (qualite 92) sous configs/gsm-lab-ville.jpg et
 # configs/gsm-lab-antenne.jpg (les noms que lit tools/osmo-fond.py).
 # Les coordonnees (ecran du portable, ligne GSM) sont celles de CETTE image source.

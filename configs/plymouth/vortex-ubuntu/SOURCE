@@ -1,0 +1,4 @@
+Theme Plymouth « Vortex Ubuntu », repris tel quel (GPL-2, voir LICENSE).
+Origine : https://github.com/emanuele-scarsella/vortex-ubuntu-plymouth-theme
+Commit   : 3072445ee35f10a0268baa9aaa326c0abd54af3e (2025-06-20)
+Installe par iso_modules/86-finitions.sh comme theme de demarrage par defaut.

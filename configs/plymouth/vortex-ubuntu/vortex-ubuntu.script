@@ -1,0 +1,190 @@
+/*
+ * Configuration
+ */
+
+logo_spin = -0.009;
+
+/*
+ * Screen dimensions
+ */
+
+// Screen size
+screen.w = Window.GetWidth(0);
+screen.h = Window.GetHeight(0);
+screen.half.w = screen.w / 2;
+screen.half.h = screen.h / 2;
+
+/*
+ * Background
+ */
+
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+bg = Sprite(Image("bg.png").Scale(screen.w, screen.h));
+bg.SetZ(-10);
+
+/*
+ * Global state
+ */
+
+// Message
+message = null;
+
+// Question and password prompts
+prompt = null;
+response = null;
+bullet.image = Image("dot.png").Scale(10, 10);
+
+text_line_height = Image.Text("Dummy text abcxyz").GetHeight();
+prompt_y = screen.h * 0.75;
+response_y = prompt_y + text_line_height * 2;
+message_y = prompt_y + text_line_height * 4;
+
+// Flow
+time_counter = 0.0;
+
+// Stop animation flag
+stop_animation = 0;
+
+/*
+ * Splash image
+ */
+
+splash_scale = 0.75;
+splash_y_position = 0.4;
+if (Plymouth.GetMode() == "shutdown") {
+    splash_y_position = 0.5;
+}
+
+fun make_splash_sprite_from_image(img) {
+    local.splash_sprite.image = img;
+    local.splash_sprite.sprite = make_splash_sprite_sprite(local.splash_sprite.image);
+    return local.splash_sprite;
+}
+
+fun make_splash_sprite_sprite(img) {
+    local.sprite = Sprite(local.img);
+    local.sprite.SetX(screen.half.w - local.img.GetWidth() / 2);
+    local.sprite.SetY((screen.h * splash_y_position) - local.img.GetHeight() / 2);
+    return local.sprite;
+}
+
+fun make_splash_sprite(fn) {
+    local.img = Image(local.fn);
+    local.splash_sprite.image = local.img.Scale(img.GetWidth() * splash_scale, local.img.GetHeight() * splash_scale);
+    local.splash_sprite.sprite = make_splash_sprite_sprite(local.splash_sprite.image);
+    return local.splash_sprite;
+}
+
+spins = [0.009, 0.007, 0.006, 0.0053, 0.0048, 0.004, 0.0035, 0.003, 0.0025, 0.002];
+spin_sprite_count = 10;
+
+logo_image = Image("logo.png").Scale(120 * splash_scale, 120 * splash_scale);
+logo_sprite = make_splash_sprite_from_image(logo_image);
+
+splash_static_bg_image = Image("static.png");
+splash_static_bg_image = splash_static_bg_image.Scale(splash_static_bg_image.GetWidth() * splash_scale * 0.3, splash_static_bg_image.GetHeight() * splash_scale * 0.3);
+splash_static_bg = make_splash_sprite_from_image(splash_static_bg_image);
+
+for (i = 0; i < spin_sprite_count; i++) {
+    splash_sprites[i] = make_splash_sprite((i + 1) + ".png");
+}
+
+fun rotate_splash_sprite(splash_sprite, rotation) {
+    splash_sprite.sprite.SetImage(splash_sprite.image.Rotate(rotation));
+}
+
+fun update_splash_sprites() {
+    if (stop_animation == 0) {
+      rotate_splash_sprite(logo_sprite, time_counter * logo_spin);
+      for (i = 0; i < spin_sprite_count; i++) {
+          rotate_splash_sprite(splash_sprites[i], time_counter * spins[i]);
+      }
+    }
+}
+
+/*
+ * Callback functions
+ */
+
+fun refresh_callback() {
+    time_counter++;
+    update_splash_sprites();
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+// Progress bar
+if (Plymouth.GetMode () == "boot") {
+    ipb = Image("pb.png");
+    pb = Sprite(ipb);
+    pb.SetX(screen.half.w - 50);
+    pb.SetY(screen.h * 0.6 - ipb.GetHeight() / 2);
+
+    fun boot_progress_callback(duration, progress) {
+         pb.SetImage(ipb.Scale(progress * 100, 3));
+    }
+    Plymouth.SetBootProgressFunction(boot_progress_callback);
+}
+
+fun display_prompt(prompt_text) {
+    prompt.image = Image.Text(prompt_text, 1, 1, 1);
+    prompt.sprite = Sprite(prompt.image);
+    prompt.sprite.SetX(screen.half.w - prompt.image.GetWidth() / 2);
+    prompt.sprite.SetY(prompt_y);
+}
+
+fun display_question_callback(prompt_text, entry) {
+    stop_animation = 1;
+    display_prompt(prompt_text);
+
+    local.entry_config.alpha = 1.0;
+    local.entry_config.font = "Sans Bold 12";
+    if (entry == "") {
+        entry = "Type your response";
+        local.entry_config.alpha = 0.5;
+        local.entry_config.font = "Sans 12";
+    }
+
+    response = null;
+    response.image = Image.Text(entry, 1, 1, 1, local.entry_config.alpha, local.entry_config.font);
+    response.sprite = Sprite(response.image);
+    response.sprite.SetX(screen.half.w - response.image.GetWidth() / 2);
+    response.sprite.SetY(response_y);
+}
+Plymouth.SetDisplayQuestionFunction(display_question_callback);
+
+fun display_password_callback(prompt_text, dot_count) {
+	stop_animation = 1;
+    display_prompt(prompt_text);
+
+    response = null;
+    if (dot_count > 0) {
+        dot_start_position = screen.half.w - (dot_count * bullet.image.GetWidth()) / 2;
+        for (i = 0; i < dot_count; i++) {
+            response[i].sprite = Sprite(bullet.image);
+            response[i].sprite.SetX(dot_start_position + i * bullet.image.GetWidth());
+            response[i].sprite.SetY(response_y + (text_line_height - bullet.image.GetHeight()) / 2);
+        }
+    } else {
+        response.image = Image.Text("Enter passphrase", 1, 1, 1, 0.5);
+        response.sprite = Sprite(response.image);
+        response.sprite.SetX(screen.half.w - response.image.GetWidth() / 2);
+        response.sprite.SetY(response_y);
+    }
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+fun display_normal_callback() {
+    prompt = null;
+    message = null;
+    response = null;
+	stop_animation = 0;
+}
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+
+fun message_callback(text) {
+    message.image = Image.Text(text, 1, 1, 1, 0.75, "Sans 10");
+    message.sprite = Sprite(message.image);
+    message.sprite.SetPosition(screen.half.w - message.image.GetWidth() / 2, message_y);
+}
+Plymouth.SetMessageFunction(message_callback);

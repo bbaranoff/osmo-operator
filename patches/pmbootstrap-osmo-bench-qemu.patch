@@ -15,7 +15,7 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..a5fb10a4 100644
+index 72b46c60..d2aadc99 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
 @@ -61,6 +61,34 @@ def which_qemu(arch: Arch) -> str:
@@ -199,7 +199,27 @@ index 72b46c60..a5fb10a4 100644
  
      if qemu_cpu:
          command += ["-cpu", qemu_cpu]
-@@ -264,9 +377,119 @@ def command_qemu(
+@@ -255,6 +368,19 @@ def command_qemu(
+     display = qemu_display
+     if display != "none":
+         display += ",show-cursor=on,gl=" + ("on" if use_qemu_gl else "off")
++    # [2026-10-14] A GTK WINDOW THAT FITS THE SCREEN. The phone is 720x1440 and
++    # most monitors are 1080 high: without zoom-to-fit the GTK drawing area
++    # asks for the full guest size, the window manager clamps the window and
++    # the bottom of the phone is simply cut off. zoom-to-fit scales the frame
++    # (and the pointer with it) to whatever size the window gets. GTK is also
++    # the only display that leaves the host GPU alone when GL is off: the SDL
++    # display loads this chroot's Mesa and opens /dev/dri/renderD128 whatever
++    # its renderer, which is where the on-screen artefacts came from.
++    # OSMO_PMOS_GTK_OPTS replaces the extra options (empty: none).
++    if display.startswith("gtk"):
++        gtk_opts = os.environ.get("OSMO_PMOS_GTK_OPTS", "zoom-to-fit=on")
++        if gtk_opts:
++            display += "," + gtk_opts
+ 
+     # Separate -show-cursor option is deprecated. If your host qemu fails here,
+     # it's old (#1995).
+@@ -264,9 +390,119 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  
