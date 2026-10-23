@@ -18,7 +18,7 @@ cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-![LAB GSM: the osmo-operator desktop wallpaper](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-wallpaper.png)
+![osmo-operator: Open Source, No RF](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-ville.jpg)
 
 ### New in 0.1-9
 
