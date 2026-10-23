@@ -666,7 +666,8 @@ def render_live(data, data_ul=None):
     lx0 = split
     d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
     op = operator()
-    d.text((lx0, y0), ("mobile.log  ·  QEMU MS#1" if op["MODE"] != "docker"
+    # [2026-10-23] le nom du fichier lu : rvinterf.log (traces TI) avec --ms-magnetite
+    d.text((lx0, y0), (f"{os.path.basename(mobile_log_path())}  ·  QEMU MS#1" if op["MODE"] != "docker"
                        else f"journal  ·  {op['NAME']}"), font=F_TITLE, fill=(88, 166, 255))
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)

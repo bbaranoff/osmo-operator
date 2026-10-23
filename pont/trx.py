@@ -194,6 +194,13 @@ class Trx:
         self._clck_vu = None
         self._clck_avance = 0
         self._clck_lent = False
+        # [2026-10-23] COPIES DU DESCENDANT vers d autres BSP (PONT_DSP_COPIES, ports UDP separes par
+        # des virgules) : un Calypso qui ecoute la cellule sans etre le mobile du pont, l appli rssi de
+        # l instance 4 (banc-rssi, BSP udp 6762) en BTS classique. Socket a part : un port sans
+        # ecouteur (rssi pas lance) ne doit rien changer au chemin du mobile.
+        self.dsp_copies = [int(p) for p in os.environ.get("PONT_DSP_COPIES", "").replace(",", " ").split()
+                           if p.isdigit() and int(p) != cfg.dsp_port]
+        self.sk_copies = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.dsp_copies else None
 
     def run_ctrl(self):
         while True:
@@ -336,7 +343,13 @@ class Trx:
                 if self.dechiffre_dl and self.cipher.dl_active and self._burst_dedie(tn, fn):
                     bits_dsp = self.cipher.apply(bits, fn, False)
                 hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([data[5] if len(data) > 5 else 0, 0, 0])
-                self.sk_data.sendto(hdr + bytes(1 if b else 0 for b in bits_dsp), ("127.0.0.1", self.cfg.dsp_port))
+                paquet = hdr + bytes(1 if b else 0 for b in bits_dsp)
+                self.sk_data.sendto(paquet, ("127.0.0.1", self.cfg.dsp_port))
+                for port in self.dsp_copies:
+                    try:
+                        self.sk_copies.sendto(paquet, ("127.0.0.1", port))
+                    except OSError:
+                        pass
             on_burst(tn, fn, bits)
 
     # Dechiffrer le descendant avant de le passer au BSP : oui pour le shunt

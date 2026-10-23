@@ -25,7 +25,14 @@ alias banc-mobile-seul='MODE=dsp PONT=1 bash /opt/GSM/c54x_exe/run.sh'
 # (le TRX), ni arret par banc-stop / start-native --stop (banc_dsp_arreter_instances l'epargne).
 # banc-rssi-stop pour l'arreter seul ; c123-3 pour son ecran.
 unalias banc-rssi 2>/dev/null   # l'ancien alias (meme nom) s'expanserait a la definition de la fonction
-function banc-rssi { INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi bash /opt/GSM/c54x_exe/run.sh "$@"; }
+# [2026-10-23] En BTS CLASSIQUE (--bts-classic : pont_dsp.py vivant), pas d'air : il relaierait l'anneau TX de
+# l'instance 1, qui est alors le MOBILE (rien en veille, d'ou « Sync error ») et renverrait les bursts de rssi
+# vers son BSP. Le descendant arrive par la copie du pont (PONT_DSP_COPIES, udp 6762). Sinon (--bts), l'air.
+function banc-rssi {
+    local air=1
+    pgrep -f 'pont/pont_dsp\.py' >/dev/null && air=0
+    INSTANCE=4 MODE=dsp FIRMWARE_APP=rssi AIR="${AIR:-$air}" bash /opt/GSM/c54x_exe/run.sh "$@"
+}
 alias banc-rssi-stop='INSTANCE=4 MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-stop='MODE=dsp bash /opt/GSM/c54x_exe/run.sh --stop'
 alias banc-status='MODE=dsp OSMO_TRX=1 bash /opt/GSM/c54x_exe/run.sh --status'

@@ -18,6 +18,11 @@ os.environ.setdefault("PONT_UL_RETARD_MAX", "26")
 # Le Kc est garde apres la liberation (pont/dsp/uplink.py) : c'est la
 # retention qui le rend encore lisible une fois montant.c revenu en clair.
 os.environ.setdefault("PONT_KC_RETENTION", "1")
+# [2026-10-23] Le descendant aussi vers le BSP de l instance 4 (banc-rssi, udp 6762) :
+# en BTS classique, l appli rssi n a pas d autre source (l air ne relaie que
+# l anneau TX du Calypso de l instance 1, ici le mobile). Sans rssi lance, la copie
+# part vers un port vide. PONT_DSP_COPIES= (vide) la coupe.
+os.environ.setdefault("PONT_DSP_COPIES", "6762")
 
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from pont.dsp import main

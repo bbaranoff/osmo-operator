@@ -33,15 +33,11 @@
      les deux a la fois, meme duree. body.instant : sans animation (premier
      etat pousse au chargement de la page, pour ne pas voir le titre clignoter
      devant un banc deja debout). */
-  #titre{position:absolute;inset:0;display:flex;align-items:center;padding:0 1.8vw;
-    font-weight:700;font-size:5.4vw;line-height:1;letter-spacing:.02em;
-    background:linear-gradient(92deg,#ffffff,#dfe8ff 55%,var(--moon));
-    -webkit-background-clip:text;background-clip:text;color:transparent;
-    text-shadow:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.75)) drop-shadow(0 0 14px rgba(0,0,0,.45));
-    opacity:0;pointer-events:none;transition:opacity 1.4s ease}
-  body.repos #titre{opacity:1}
+  /* [2026-10-23] PLUS DE TITRE au repos : le fond (gsm-lab-ville.jpg) porte le sien,
+     peint, « TELECOM OPERATOR » ; le notre s y superposait au logo ubuntu. La zone
+     est vide au repos, la carte arrive seule en fondu. */
   body.repos #card{opacity:0;pointer-events:none;transition:opacity 1.4s ease}
-  body.instant #titre,body.instant #card{transition:none!important}
+  body.instant #card{transition:none!important}
   .eyebrow{display:flex;justify-content:space-between;align-items:center;
     color:var(--dim);letter-spacing:.16em;font-size:.9vw;font-weight:500}
   .eyebrow .dot{color:var(--teal)}
@@ -88,7 +84,6 @@
   #noconf{color:var(--orange);opacity:.9}
 </style></head>
 <body class="repos">
-<div id="titre">Telecom Operator</div>
 <div id="card">
   <div class="eyebrow">
     <div><span class="dot">●</span> SOFTWARE DEFINED RADIO · UM INTERFACE · GR-GSM</div>
@@ -182,7 +177,7 @@ window.osmoUpdate=function(state){
 };
 // fondu : osmo-topzone.py bascule .faded pour laisser place a une appli
 window.osmoFade=function(on){document.getElementById('card').classList.toggle('faded',!!on);};
-// banc debout (on=true) : la carte ; a l arret : le titre « Telecom Operator ».
+// banc debout (on=true) : la carte ; a l arret : rien (le fond porte le titre).
 // instant=true : sans fondu (etat initial, au chargement).
 window.osmoBanc=function(on,instant){const b=document.body;
   if(instant){b.classList.add('instant');void b.offsetWidth;}

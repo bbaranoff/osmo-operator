@@ -1,5 +1,5 @@
 [Unit]
-Description=osmo-operator - banc GSM autonome (start-native.sh, session tmux « calypso »)
+Description=osmo-operator - banc GSM autonome (start.sh, session tmux « calypso »)
 Documentation=file:/opt/GSM/osmo-operator/README.md
 # Le banc a besoin du son systeme (osmo-pulse), des adresses privees du noeud
 # et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
@@ -15,7 +15,7 @@ After=network.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.serv
 # systemd l arrete donc avec lui. Ce Wants= est la contrepartie obligatoire -
 # sans lui, un cycle arret/relance laisserait le tableau de bord eteint.
 Wants=osmo-pulse.service osmo-egprs-web.service
-ConditionPathExists=/opt/GSM/osmo-operator/start-native.sh
+ConditionPathExists=/opt/GSM/osmo-operator/start.sh
 # Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
 # (Requires= dans osmo-multi.service), il ne le remplace pas.
 #
@@ -29,7 +29,7 @@ ConditionPathExists=/opt/GSM/osmo-operator/start-native.sh
 
 [Service]
 # ── ONESHOT + RemainAfterExit : LE BANC VIT DANS TMUX, PAS DANS ExecStart ──
-# start-native.sh passe la main a run.sh (qosmo-grgsm), qui monte tout dans
+# start.sh passe la main a run.sh (qosmo-grgsm), qui monte tout dans
 # une session tmux puis SORT sans s'y attacher (pas de tty). Avec Type=simple,
 # systemd prendrait cette sortie pour la fin du service et tuerait le cgroup -
 # donc la pile entiere. En oneshot + RemainAfterExit, l'unite reste « active
@@ -42,7 +42,7 @@ WorkingDirectory=/opt/GSM/osmo-operator
 # HOME : mobile.cfg vit dans /root/.osmocom/bb. PATH : le venv python
 # (/root/.env) que ~/.bashrc active, gr-gsm et les ponts en dependent ; systemd
 # ne lit pas ~/.bashrc. /etc/osmocom/coeur.env (N_MS) est charge par
-# start-native.sh lui-meme.
+# start.sh lui-meme.
 Environment=HOME=/root USER=root LOGNAME=root
 Environment=VIRTUAL_ENV=/root/.env
 Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -50,16 +50,16 @@ Environment=PULSE_SERVER=unix:/var/run/pulse/native
 # Pas de menu, pas d'attache tmux, pas de couleurs : il n'y a personne devant.
 Environment=NO_MENU=1 CALYPSO_NO_ATTACH=1 NO_COLOR=1 OSMO_NO_TERM=1 OSMO_LAUNCH_APPS=0
 # Options de lancement (--grgsm, --op 2, --node 3, --regen...) ; le DSP est
-# le defaut de start-native.sh depuis le 2026-10-01, --grgsm l ancienne chaine :
+# le defaut de start.sh depuis le 2026-10-01, --grgsm l ancienne chaine :
 #   - durables : OSMO_BANC_ARGS="--grgsm" dans /etc/default/osmo-banc
 #   - pour une fois : launch.sh les pose via systemctl set-environment
 EnvironmentFile=-/etc/default/osmo-banc
-# --no-attach : l option de start-native.sh (meme effet que CALYPSO_NO_ATTACH=1
+# --no-attach : l option de start.sh (meme effet que CALYPSO_NO_ATTACH=1
 # ci-dessus). Elle va ICI, sur la ligne de commande - pas sur
 # ConditionPathExists, qui ne prend qu un chemin : « chemin --no-attach »
 # n existe pas, et l unite est alors sautee sans jamais demarrer.
-ExecStart=/bin/bash /opt/GSM/osmo-operator/start-native.sh --no-attach $OSMO_BANC_ARGS
-ExecStop=/bin/bash /opt/GSM/osmo-operator/start-native.sh --stop
+ExecStart=/bin/bash /opt/GSM/osmo-operator/start.sh --no-attach $OSMO_BANC_ARGS
+ExecStop=/bin/bash /opt/GSM/osmo-operator/start.sh --stop
 # LE COEUR ET LE TABLEAU DE BORD SUIVENT LE BANC. osmo-hlr et osmo-egprs-web
 # sont des unites a part, demarrees l une par run.sh, l autre au boot : elles
 # survivaient a l arret du banc. On se retrouvait avec un HLR qui garde ses
@@ -89,7 +89,7 @@ TimeoutStartSec=900
 # a deux. La pile s arrete en quelques secondes ; passe 30 s, elle est bloquee
 # et un SIGKILL est la bonne reponse - pas une attente de plus.
 TimeoutStopSec=30
-# A l'arret, ce que start-native.sh --stop n'a pas demonte est termine par
+# A l'arret, ce que start.sh --stop n'a pas demonte est termine par
 # systemd (SIGTERM puis SIGKILL sur le cgroup) : pas de reste de run precedent.
 KillMode=control-group
 StandardOutput=journal
@@ -98,7 +98,7 @@ SyslogIdentifier=osmo-banc
 
 # ── REPRENDRE LA MAIN ───────────────────────────────────────────────────────
 #   tmux attach -t calypso        (root ; Ctrl-b d pour detacher)
-#   journalctl -u osmo-banc -f    (la sortie de start-native.sh / run.sh)
+#   journalctl -u osmo-banc -f    (la sortie de start.sh / run.sh)
 # Le socket tmux est celui de root par defaut (/tmp/tmux-0/default) : PrivateTmp
 # n'est PAS active ici, sinon la session serait invisible hors du service.
 

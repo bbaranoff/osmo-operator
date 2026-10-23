@@ -293,8 +293,17 @@ MS1_VTY_PORT="${_ms1_vty:-4247}"
 # « pas encore de journal ». Le chemin reel est ecrit dans
 # /run/osmo-banc/mobile-log et pousse dans l environnement de systemd
 # (OSMO_MOBILE_LOG). Efface a l arret, avec ms1-vty.
-if [ "$DSP_BANC" = 1 ]; then
-    MS1_LOG="${RUNDIR:-/tmp/c54x-pont}/mobile.log"
+# [2026-10-23] --bts --ms / --ms-magnetite : le telephone est l INSTANCE 2 de run.sh (14-demarrage.sh,
+# INSTANCE=2 AIR=1), son RUNDIR est /tmp/c54x-pont2 ; /tmp/c54x-pont est celui du TRX, sans mobile.
+_ms1_rundir="${RUNDIR:-/tmp/c54x-pont}"
+[ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && _ms1_rundir="${RUNDIR:-/tmp/c54x-pont2}"
+MS1_LOG_NOM="mobile.log"
+if [ "$DSP_BANC" = 1 ] && [ -n "${MS_MAGNETITE:-}" ]; then
+    # [2026-10-22] Magnetite : pas de mobile L23, le journal du telephone est la trace L1/pile TI de rvinterf
+    MS1_LOG="$_ms1_rundir/rvinterf.log"
+    MS1_LOG_NOM="rvinterf"
+elif [ "$DSP_BANC" = 1 ]; then
+    MS1_LOG="$_ms1_rundir/mobile.log"
 else
     MS1_LOG="$LOG_DIR/mobile.log"
 fi
@@ -306,7 +315,7 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
 fi
 printf '  %sMS#2%s       %s  IMSI %s  ARFCN %s  VTY 4248\n' "$C_DIM" "$C_Z" "$MS2_CFG" "$(ms_imsi 2)" "$MS_ARFCN2"
 printf '  %sjournaux%s   %s\n' "$C_DIM" "$C_Z" "$LOG_DIR"
-printf '  %smobile.log%s %s\n' "$C_DIM" "$C_Z" "$MS1_LOG"
+printf '  %s%-10s%s %s\n' "$C_DIM" "$MS1_LOG_NOM" "$C_Z" "$MS1_LOG"
 printf '  %schiffrement%s %s\n' "$C_DIM" "$C_Z" "$ENCRYPTION"
 printf '\n'
 # --- 7. actions deleguees a run.sh --------------------------------------------

@@ -397,6 +397,22 @@ osmo_reposer_lien_start_native() {
 }
 osmo_reposer_lien_start_native
 
+# ── osmo-banc.service : L UNITE INSTALLEE SUIT CELLE DU DEPOT (2026-10-23) ───
+# La copie de /etc/systemd/system visait encore start-direct.sh : sa
+# ConditionPathExists etait fausse, systemd sautait l unite SANS erreur et
+# l icone du telephone rouge (launch.sh -> systemctl restart osmo-banc) ne
+# lancait rien. On repose services/osmo-banc.service (start.sh) quand elle
+# differe, sans toucher a une unite absente (machine sans le service).
+osmo_reposer_unite_banc() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local src=/opt/GSM/osmo-operator/services/osmo-banc.service dst=/etc/systemd/system/osmo-banc.service
+    [ -f "$src" ] && [ -f "$dst" ] || return 0
+    cmp -s "$src" "$dst" && return 0
+    install -m644 "$src" "$dst" && systemctl daemon-reload 2>/dev/null || true
+    return 0
+}
+osmo_reposer_unite_banc
+
 # ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
 # Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
 # l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes
