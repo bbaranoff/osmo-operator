@@ -1,7 +1,5 @@
 # osmo-operator
 
-[![Build ISO](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/bbaranoff/osmo-operator/actions/workflows/build-iso.yml)
-
 A complete **GSM + LTE operator on one machine**: an Osmocom core network (BTS, BSC, MSC, HLR, MGW, SMSC,
 Asterisk) and **emulated Calypso phones**. The ARM runs under QEMU ([qosmo](https://github.com/bbaranoff/qosmo)) and the
 TI C54x DSP runs outside it, executing the real mask ROM ([c54x_exe](https://github.com/bbaranoff/c54x_exe)). The phone
