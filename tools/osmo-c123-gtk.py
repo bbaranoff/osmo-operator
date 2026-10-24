@@ -54,7 +54,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf  # noqa: E402
 import cairo  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))
 DATA = os.path.join(HERE, "..", "data")
 LCD_W, LCD_H, LCD_PAGES, LCD_HDR = 96, 65, 9, 32
 POWER_APPUI_LONG_S = 1.2       # duree d'appui sur power avant de l'envoyer au firmware

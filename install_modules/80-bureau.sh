@@ -98,6 +98,7 @@ inst_bureau_done() {
         have_file "$_BUREAU_ICONS/$e.svg" || return 1
     done
     [ -L /usr/local/bin/osmo-start-direct ] || return 1
+    [ -L /usr/local/bin/c123 ] || return 1
     return 0
 }
 
@@ -122,6 +123,16 @@ inst_bureau_run() {
     # garde l ancien nom pour les habitudes et les scripts deja ecrits.
     ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-native
     ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-direct
+    # [2026-10-24] c123 : la fenetre du C123 emule (tools/osmo-c123-gtk.py) dans le
+    # PATH, pas seulement en alias de shell de connexion. Elle tourne sous le
+    # python3 SYSTEME : PyGObject + GTK3 + cairo (Gdk.cairo_set_source_pixbuf
+    # veut python3-gi-cairo) viennent d apt, pas de pip.
+    ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/c123
+    ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
+    /usr/bin/python3 -c 'import gi, cairo; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk' 2>/dev/null \
+        || apt-get install -y --no-install-recommends python3-gi python3-gi-cairo python3-cairo \
+               gir1.2-gtk-3.0 gir1.2-gdkpixbuf-2.0 >/dev/null \
+        || inst_hint "c123 : paquets GTK non installes (python3-gi python3-gi-cairo gir1.2-gtk-3.0)"
 
     while read -r h; do
         for d in Bureau Desktop; do

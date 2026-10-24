@@ -20,6 +20,22 @@
 #   sudo ./build-armbian.sh --no-stack            une Armbian nue (pas d overlay, pas de customize)
 #   sudo ./build-armbian.sh --board=orangepi5 --branch=edge --release=noble
 #   sudo ./build-armbian.sh --image=osmocom-nitb:arm64      l image Docker qui fournit la pile
+#
+# [2026-10-24] LES CIBLES : --board= prend une carte, une liste (virgules) ou un groupe :
+#   rpi4                  rpi4b (Raspberry Pi 4)
+#   opi5                  TOUTES les Orange Pi 5 d Armbian : orangepi5, orangepi5b, orangepi5-plus,
+#                         orangepi5pro, orangepi5-max, orangepi5-ultra (la Max et l Ultra ont chacune
+#                         leur fichier de carte : ce ne sont pas des variantes de orangepi5.conf)
+#   all                   rpi4 + opi5
+# Une image par carte, construites l une apres l autre (meme overlay). La branche noyau est choisie
+# PAR CARTE : --branch si la carte la propose (KERNEL_TARGET de config/boards/<carte>.*), sinon
+# current, sinon la premiere qu elle propose (orangepi5b n a que edge et vendor). Les cartes .csc
+# (communautaires : 5b, 5 Pro, 5 Max, 5 Ultra) se construisent avec EXPERT=yes.
+#   --desktop             bureau GNOME (DESKTOP_ENVIRONMENT=gnome, DESKTOP_TIER=minimal, via
+#                         armbian/configng) + le bureau du banc (fond, Conky, encart, icones, c123)
+#   --banc / --multi      osmo-banc.service / osmo-multi.service actives au boot
+#   --build-image         sans image Docker arm64 de la pile, la construire (build.sh --arch=arm64)
+#                         au lieu d echouer
 #   --armbian-dir=/chemin   le clone d armbian/build         [/opt/GSM/armbian-build]
 #   --update                git pull du clone avant de construire
 #   --install-deps          apt install qemu-user-static binfmt-support si l aarch64 n est pas emulable
@@ -36,11 +52,16 @@ BOARD=rpi4b; BRANCH=current; RELEASE=noble
 ARMBIAN_DIR="${ARMBIAN_DIR:-/opt/GSM/armbian-build}"
 ARMBIAN_GIT="${ARMBIAN_GIT:-https://github.com/armbian/build}"
 IMAGE=""; PREPARE=0; NO_STACK=0; UPDATE=0; INSTALL_DEPS=0; DRY=0
+DESKTOP=0; BANC=0; MULTI=0; BUILD_IMAGE=0; BRANCH_GIVEN=0
 DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 for arg in "$@"; do
     case "$arg" in
         --board=*)       BOARD="${arg#*=}" ;;
-        --branch=*)      BRANCH="${arg#*=}" ;;
+        --branch=*)      BRANCH="${arg#*=}"; BRANCH_GIVEN=1 ;;
+        --desktop)       DESKTOP=1 ;;
+        --banc)          BANC=1 ;;
+        --multi)         MULTI=1 ;;
+        --build-image)   BUILD_IMAGE=1 ;;
         --release=*)     RELEASE="${arg#*=}" ;;
         --image=*)       IMAGE="${arg#*=}" ;;
         --armbian-dir=*) ARMBIAN_DIR="${arg#*=}" ;;
@@ -49,8 +70,8 @@ for arg in "$@"; do
         --update)        UPDATE=1 ;;
         --install-deps)  INSTALL_DEPS=1 ;;
         --dry-run)       DRY=1 ;;
-        -h|--help)       sed -n '2,30p' "$0"; exit 0 ;;
-        *) echo "option inconnue : $arg" >&2; sed -n '2,30p' "$0" >&2; exit 2 ;;
+        -h|--help)       sed -n '2,46p' "$0"; exit 0 ;;
+        *) echo "option inconnue : $arg" >&2; sed -n '2,46p' "$0" >&2; exit 2 ;;
     esac
 done
 say()  { printf '\033[1;32m[armbian]\033[0m %s\n' "$*"; }
@@ -75,7 +96,18 @@ if [ "$HOST_ARCH" != arm64 ] && [ "$NO_STACK" = 0 ]; then
         fi
     fi
 fi
-say "hote $HOST_ARCH ($(nproc) coeurs) ; cible BOARD=$BOARD BRANCH=$BRANCH RELEASE=$RELEASE ; clone $ARMBIAN_DIR"
+OPI5_BOARDS="orangepi5 orangepi5b orangepi5-plus orangepi5pro orangepi5-max orangepi5-ultra"
+BOARDS=""
+for b in ${BOARD//,/ }; do
+    case "$b" in
+        rpi4|rpi4b) BOARDS="$BOARDS rpi4b" ;;
+        opi5|orangepi5-all) BOARDS="$BOARDS $OPI5_BOARDS" ;;
+        all)        BOARDS="$BOARDS rpi4b $OPI5_BOARDS" ;;
+        *)          BOARDS="$BOARDS $b" ;;
+    esac
+done
+BOARDS=$(echo $BOARDS | tr ' ' '\n' | awk '!vu[$0]++' | tr '\n' ' ')
+say "hote $HOST_ARCH ($(nproc) coeurs) ; cartes : $BOARDS; RELEASE=$RELEASE ; bureau=$([ "$DESKTOP" = 1 ] && echo gnome || echo non) ; clone $ARMBIAN_DIR"
 
 # ── 2. le framework ──────────────────────────────────────────────────────────
 if [ ! -f "$ARMBIAN_DIR/compile.sh" ]; then
@@ -85,9 +117,30 @@ elif [ "$UPDATE" = 1 ]; then
     say "mise a jour du clone"
     run git -C "$ARMBIAN_DIR" pull --ff-only
 fi
+# board_file CARTE : le fichier de carte d Armbian (.conf supportee, .csc communautaire, .wip)
+board_file() {
+    local e
+    for e in conf csc wip tvb eos; do
+        [ -f "$ARMBIAN_DIR/config/boards/$1.$e" ] && { echo "$ARMBIAN_DIR/config/boards/$1.$e"; return 0; }
+    done
+    return 1
+}
+# board_branch CARTE : --branch si la carte la propose, sinon current, sinon sa premiere branche
+board_branch() {
+    local f targets
+    f=$(board_file "$1") || { echo "$BRANCH"; return; }
+    targets=$(sed -n 's/^KERNEL_TARGET="\(.*\)".*/\1/p' "$f" | head -1)
+    [ -n "$targets" ] || { echo "$BRANCH"; return; }
+    case ",$targets," in
+        *",$BRANCH,"*) echo "$BRANCH" ;;
+        *",current,"*) [ "$BRANCH_GIVEN" = 1 ] && warn "$1 : pas de branche $BRANCH ($targets), current a la place" >&2; echo current ;;
+        *) warn "$1 : pas de branche $BRANCH$([ "$BRANCH" = current ] || echo " ni current") ($targets), ${targets%%,*} a la place" >&2; echo "${targets%%,*}" ;;
+    esac
+}
 if [ "$DRY" = 0 ]; then
-    [ -f "$ARMBIAN_DIR/config/boards/$BOARD.conf" ] || [ -f "$ARMBIAN_DIR/config/boards/$BOARD.csc" ] || [ -f "$ARMBIAN_DIR/config/boards/$BOARD.wip" ] \
-        || die "carte inconnue d Armbian : $BOARD (voir $ARMBIAN_DIR/config/boards/)"
+    for b in $BOARDS; do
+        board_file "$b" >/dev/null || die "carte inconnue d Armbian : $b (voir $ARMBIAN_DIR/config/boards/)"
+    done
 fi
 
 # ── 3. userpatches : le script de personnalisation et l overlay ──────────────
@@ -116,8 +169,12 @@ if [ "$NO_STACK" = 0 ]; then
             elif [ "$DRY" = 1 ]; then
                 warn "aucune image Docker arm64 de la pile en local ($GHCR non testee en dry-run) : il faudra d abord sudo $REPO/build.sh --arch=arm64"
                 IMAGE="osmocom-nitb:arm64"
+            elif [ "$BUILD_IMAGE" = 1 ]; then
+                say "aucune image Docker arm64 de la pile : build.sh --arch=arm64 (emule sur un hote x86 : ~10 h au premier build)"
+                bash "$REPO/build.sh" --arch=arm64 || die "build.sh --arch=arm64 a echoue"
+                if docker image inspect osmocom-nitb:arm64 >/dev/null 2>&1; then IMAGE=osmocom-nitb:arm64; else IMAGE=osmocom-nitb; fi
             else
-                die "aucune image Docker arm64 de la pile : ni osmocom-nitb:arm64 en local, ni $GHCR. Sur cet hote : sudo $REPO/build.sh --arch=arm64 (emule, ~10 h au premier build), ou lancer docker-arm.yml sur GitHub (runner arm64 natif) puis relancer ici."
+                die "aucune image Docker arm64 de la pile : ni osmocom-nitb:arm64 en local, ni $GHCR. Sur cet hote : sudo $REPO/build.sh --arch=arm64 (emule, ~10 h au premier build) ou --build-image, ou lancer docker-arm.yml sur GitHub (runner arm64 natif) puis relancer ici."
             fi
         fi
     fi
@@ -157,21 +214,59 @@ if [ "$NO_STACK" = 0 ]; then
         done
         cp -f "$REPO"/services/*.service "$OV/rootfs/lib/systemd/system/" 2>/dev/null || true
         docker rm "$CID" >/dev/null; trap - EXIT
-        printf 'IMAGE=%s\nRELEASE=%s\nBOARD=%s\nDATE=%s\nNDEBS=%s\n' "$IMAGE" "$RELEASE" "$BOARD" "$(date -Is)" "$NDEBS" > "$OV/SOURCE"
+        # [2026-10-24] osmo-operator = CET arbre (fichiers suivis + non suivis, sans .git ni ignores),
+        # comme l ISO qui fait foi sur le depot et non sur la copie de l image : le bureau (data/,
+        # configs/, tools/) et les correctifs pas encore dans une image publiee.
+        rm -rf "$OV/rootfs/opt/GSM/osmo-operator"; install -d "$OV/rootfs/opt/GSM/osmo-operator"
+        (cd "$REPO" && git ls-files -co --exclude-standard -z | tar --null --ignore-failed-read -T - -cf - 2>/dev/null) \
+            | tar -xf - -C "$OV/rootfs/opt/GSM/osmo-operator"
+        # le gardien de l encart et du Conky : le MEME que l ISO, extrait de 85-installeur-bureau.sh
+        sed -n "/<<'PANEL'$/,/^PANEL$/p" "$REPO/iso_modules/85-installeur-bureau.sh" | sed '1d;$d' > "$OV/osmo-desktop-panel"
+        [ -s "$OV/osmo-desktop-panel" ] || warn "osmo-desktop-panel non extrait de iso_modules/85-installeur-bureau.sh : pas de Conky au login"
+        printf 'IMAGE=%s\nRELEASE=%s\nBOARDS=%s\nDESKTOP=%s\nDATE=%s\nNDEBS=%s\n' "$IMAGE" "$RELEASE" "$BOARDS" "$DESKTOP" "$(date -Is)" "$NDEBS" > "$OV/SOURCE"
         say "overlay pret : $NDEBS .deb, $(du -sh "$OV" | cut -f1)"
     fi
 fi
 
-# ── 5. compile.sh ────────────────────────────────────────────────────────────
-CMD=(./compile.sh build "BOARD=$BOARD" "BRANCH=$BRANCH" "RELEASE=$RELEASE" BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img)
+# Les marqueurs que customize-image.sh lit dans l overlay (les services actives au boot)
+if [ "$NO_STACK" = 0 ] && [ "$DRY" = 0 ]; then
+    rm -f "$OV/OSMO_IMAGE_BANC" "$OV/OSMO_IMAGE_MULTI" "$OV/OSMO_ARM_GLAVA"
+    [ "${OSMO_ARM_GLAVA:-0}" = 1 ] && : > "$OV/OSMO_ARM_GLAVA"
+    [ "$BANC" = 1 ]  && : > "$OV/OSMO_IMAGE_BANC"
+    [ "$MULTI" = 1 ] && : > "$OV/OSMO_IMAGE_MULTI"
+fi
+
+# ── 5. compile.sh, une fois par carte ────────────────────────────────────────
+# Le bureau : armbian/build ne prend plus DESKTOP_ENVIRONMENT_CONFIG_NAME ni
+# DESKTOP_APPGROUPS_SELECTED (lib/functions/configuration/config-desktop.sh) : le
+# bureau vient des YAML de armbian/configng, choisi par DESKTOP_ENVIRONMENT + DESKTOP_TIER.
+# GNOME minimal y tire gdm3, pulseaudio et Xorg - ce que le Conky et c123 attendent.
+if [ "$DESKTOP" = 1 ]; then
+    DESK=(BUILD_DESKTOP=yes DESKTOP_ENVIRONMENT=gnome DESKTOP_TIER=minimal)
+else
+    DESK=(BUILD_DESKTOP=no)
+fi
+IMGS=()
+for b in $BOARDS; do
+    br=$(board_branch "$b")
+    CMD=(./compile.sh build "BOARD=$b" "BRANCH=$br" "RELEASE=$RELEASE" BUILD_MINIMAL=no "${DESK[@]}" KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img)
+    case "$(board_file "$b" 2>/dev/null)" in *.conf|"") ;; *) CMD+=(EXPERT=yes) ;; esac
+    if [ "$PREPARE" = 1 ] || [ "$DRY" = 1 ]; then
+        echo "  + (cd $ARMBIAN_DIR && ${CMD[*]})"
+        continue
+    fi
+    say "[$b] compile.sh (long : noyau + rootfs + customize sous qemu-user) : ${CMD[*]}"
+    t0=$(date +%s)
+    (cd "$ARMBIAN_DIR" && "${CMD[@]}") || die "[$b] compile.sh a echoue"
+    IMG=$(find "$ARMBIAN_DIR/output/images" -maxdepth 1 -name '*.img' -newermt "@$t0" 2>/dev/null | head -1)
+    [ -n "$IMG" ] || die "[$b] pas de nouvelle image dans $ARMBIAN_DIR/output/images/"
+    IMGS+=("$IMG")
+    say "[$b] image : $IMG  ($(du -h "$IMG" | cut -f1))"
+done
 if [ "$PREPARE" = 1 ]; then
-    say "--prepare : fini. Pour construire :  cd $ARMBIAN_DIR && sudo ${CMD[*]}"
+    say "--prepare : fini. Pour construire : les commandes ci-dessus, en root"
     exit 0
 fi
-say "compile.sh (long : noyau + rootfs + customize sous qemu-user) : ${CMD[*]}"
-if [ "$DRY" = 1 ]; then echo "  + (cd $ARMBIAN_DIR && ${CMD[*]})"; exit 0; fi
-(cd "$ARMBIAN_DIR" && "${CMD[@]}")
-IMG=$(ls -t "$ARMBIAN_DIR"/output/images/*.img 2>/dev/null | head -1)
-[ -n "$IMG" ] || die "pas d image dans $ARMBIAN_DIR/output/images/"
-say "image : $IMG  ($(du -h "$IMG" | cut -f1))"
-say "flash : sudo dd if=$IMG of=/dev/sdX bs=4M status=progress conv=fsync   (comptes : root/osmo, osmocom/osmo)"
+[ "$DRY" = 1 ] && exit 0
+say "images :"; for i in "${IMGS[@]}"; do echo "    $i"; done
+say "flash : sudo dd if=<image> of=/dev/sdX bs=4M status=progress conv=fsync   (comptes : root/osmo, osmocom/osmo)"

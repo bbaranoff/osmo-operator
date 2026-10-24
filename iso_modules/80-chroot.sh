@@ -514,7 +514,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         wmctrl x11-utils x11-xserver-utils xdotool zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
-        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi gir1.2-gtk-3.0 gir1.2-vte-2.91 \
+        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0 gir1.2-vte-2.91 \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
@@ -580,6 +580,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     #   python3-gi      l encart vivant cliquable (tools/osmo-panel.py, GTK)
     #   gir1.2-gtk-3.0
     #   fonts-dejavu    autostart GNOME pose plus bas) - live et disque installe
+    #   python3-gi-     la fenetre c123 (tools/osmo-c123-gtk.py) : import cairo
+    #   cairo (+cairo)  et Gdk.cairo_set_source_pixbuf, l ecran du C123 emule
     #   lvm2            LVM dans le partitionnement manuel de Calamares (groupes
     #                   de volumes, LUKS sur LVM) ; son hook initramfs suit
     #   cryptsetup      LUKS : la case "Chiffrer le systeme" de l installeur

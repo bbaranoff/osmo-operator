@@ -5,9 +5,12 @@
 #  Usage : sudo ./build-iso.sh [options]
 #    (sans option)        les quatre images amd64 : interstp, operator, lite, desktop
 #    --role=operator|interstp   --node=N   --lite   --desktop   --all
-#    --arm                image SD arm64 pour Raspberry Pi 4, base Armbian 24.04
-#                         (osmo-operator-<...>-rpi4.img) ; --lite accepte,
-#                         --desktop et --all refuses. Voir iso_modules/00-options.sh.
+#    --arm                images SD arm64 par github.com/armbian/build
+#                         (armbian/build-armbian.sh) : Raspberry Pi 4 et toutes
+#                         les Orange Pi 5 (5, 5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra) ;
+#                         --board=rpi4|opi5|all|<carte>[,...] (defaut all),
+#                         --desktop = GNOME + le bureau du banc ; --all et --lite
+#                         refuses. Voir iso_modules/00-options.sh.
 #    --banc --multi       active osmo-banc.service / osmo-multi.service au boot
 #                         de l'image. Par defaut les deux unites sont POSEES mais
 #                         NON activees : la machine demarre sur son bureau, et

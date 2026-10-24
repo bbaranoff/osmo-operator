@@ -87,6 +87,94 @@ if [ -x /opt/GSM/osmo-operator/packaging/build-debs.sh ]; then
         && log ".deb du banc construits dans /var/cache/osmo-debs" || log ".deb du banc non construits (l image sort sans eux)"
 fi
 
+# ── 4b. le bureau du banc (BUILD_DESKTOP=yes : GNOME minimal pose par Armbian) ─
+# [2026-10-24] Ce que l ISO --desktop pose en plus de GNOME (iso_modules/80-chroot.sh,
+# 85-installeur-bureau.sh), ramene a ce qui a un sens sur une carte : X11 en autologin
+# root, le fond GSM LAB, sombre/Yaru bleu, les icones du depot et le dock, le Conky et
+# l encart (osmo-desktop-panel, extrait par build-armbian.sh), c123 et ses paquets GTK.
+# Pas de calamares, grub, secure boot, firefox Mozilla, extensions GNOME.
+# GLava N EST PAS pose par defaut : le cercle NCS veut OpenGL >= 4.2 (imageLoad/Store),
+# que ni le V3D du Pi 4 ni le Mali G610 des Orange Pi 5 n offrent sous Mesa (GL 3.1).
+# OSMO_ARM_GLAVA=1 sudo ./build-armbian.sh ... pour essayer quand meme (marqueur OSMO_ARM_GLAVA de l overlay).
+if [ "$BUILD_DESKTOP" = yes ]; then
+    REPO=/opt/GSM/osmo-operator
+    DPKGS="conky-all fonts-dejavu python3-pil python3-gi python3-gi-cairo python3-cairo
+           gir1.2-gtk-3.0 gir1.2-gdkpixbuf-2.0 gir1.2-vte-2.91 wmctrl x11-utils x11-xserver-utils
+           xdotool zenity librsvg2-common yaru-theme-gtk yaru-theme-icon yaru-theme-gnome-shell
+           wireshark vlc linphone-desktop gnome-terminal"
+    apt-get update
+    # shellcheck disable=SC2086
+    apt-get install -y --no-install-recommends $DPKGS || {
+        for p in $DPKGS; do apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1 || log "  bureau, absent : $p"; done
+    }
+
+    # gdm : autologin root sous X11 (le banc tourne en root ; xdotool, xprop, le Conky veulent X)
+    sed -i "/pam_succeed_if.so user != root quiet_success/s/^/#/" \
+        /etc/pam.d/gdm-password /etc/pam.d/gdm-autologin 2>/dev/null || true
+    install -d /etc/gdm3
+    printf '[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=root\nWaylandEnable=false\n' > /etc/gdm3/custom.conf
+    rm -f /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
+
+    # les defauts de schema : fond, theme, veille, clavier, dock (memes valeurs que l ISO)
+    OVR=/usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
+    FOND=/usr/share/backgrounds/gsm-lab-ville.jpg
+    for f in gsm-lab-ville.jpg gsm-lab-antenne.jpg gsm-lab-fond.jpg; do
+        [ -f "$REPO/configs/$f" ] && install -Dm644 "$REPO/configs/$f" "/usr/share/backgrounds/$f"
+    done
+    [ -f "$FOND" ] || FOND=/usr/share/backgrounds/gsm-lab-fond.jpg
+    printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type='nothing'\nsleep-inactive-battery-type='nothing'\n\n[org.gnome.desktop.input-sources]\nsources=[('xkb','%s')]\n" \
+        "${OSMO_KB:-fr}" > "$OVR"
+    for sec in org.gnome.desktop.interface org.gnome.desktop.interface:GNOME-Greeter; do
+        printf "\n[%s]\ncolor-scheme='prefer-dark'\ngtk-theme='Yaru-blue-dark'\nicon-theme='Yaru-blue'\ncursor-theme='Yaru'\n" "$sec" >> "$OVR"
+    done
+    if [ -f "$FOND" ]; then
+        for sec in org.gnome.desktop.background org.gnome.desktop.background:GNOME-Greeter; do
+            printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" "$sec" "$FOND" "$FOND" >> "$OVR"
+        done
+    fi
+    printf "\n[org.gnome.shell]\nfavorite-apps=['osmo-info.desktop', 'org.gnome.Nautilus.desktop', 'osmo-launch.desktop', 'osmo-tutorial.desktop', 'osmo-addition.desktop', 'osmo-update.desktop', 'linphone.desktop', 'org.wireshark.Wireshark.desktop', 'org.gnome.Terminal.desktop']\n" >> "$OVR"
+    printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/']\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname='osmo-operator : arret suivant (Conky)'\ncommand='/usr/local/bin/osmo-op --next'\nbinding='<Control><Mod5>Right'\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname='osmo-operator : arret precedent (Conky)'\ncommand='/usr/local/bin/osmo-op --prev'\nbinding='<Control><Mod5>Left'\n" \
+        > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
+    glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || log "glib-compile-schemas a echoue"
+
+    # les icones du depot (sauf multi : posee par addition.sh --multi, cf. 85-installeur-bureau.sh)
+    install -d /usr/share/applications /usr/share/icons/hicolor/scalable/apps
+    for d in "$REPO"/data/desktop/*.desktop; do
+        [ -f "$d" ] || continue
+        e=$(basename "$d" .desktop); [ "$e" = osmo-multi ] && continue
+        install -m644 "$d" "/usr/share/applications/$e.desktop"
+        [ -f "$REPO/data/$e.svg" ] && install -m644 "$REPO/data/$e.svg" "/usr/share/icons/hicolor/scalable/apps/$e.svg"
+    done
+    gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+
+    # les commandes du bureau dans le PATH (memes liens que iso_modules/70-scripts.sh)
+    ln -sf "$REPO/start-native.sh"        /usr/local/bin/osmo-start-native
+    ln -sf "$REPO/tools/osmo-fond.py"     /usr/local/bin/osmo-fond
+    ln -sf "$REPO/tools/osmo-op.sh"       /usr/local/bin/osmo-op
+    ln -sf "$REPO/tools/osmo-drivers.sh"  /usr/local/bin/osmo-drivers
+    ln -sf "$REPO/tools/overlay-draw.py"  /usr/local/bin/overlay-draw
+    ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/c123
+    ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
+    install -m644 "$REPO/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh 2>/dev/null || true
+
+    # le Conky et l encart, gardes en vie toute la session (le meme gardien que l ISO)
+    if [ -s "$OV/osmo-desktop-panel" ]; then
+        install -m755 "$OV/osmo-desktop-panel" /usr/local/bin/osmo-desktop-panel
+        install -d /etc/xdg/autostart
+        printf '[Desktop Entry]\nType=Application\nName=Conky osmo-operator\nComment=Tableau de bord du banc GSM\nExec=/usr/local/bin/osmo-desktop-panel\nIcon=utilities-system-monitor\nTerminal=false\nNoDisplay=true\nOnlyShowIn=GNOME;\nX-GNOME-Autostart-enabled=true\nX-GNOME-Autostart-Delay=6\n' \
+            > /etc/xdg/autostart/osmo-conky.desktop
+        log "bureau : Conky + encart a la connexion"
+    fi
+
+    if [ -f "$OV/OSMO_ARM_GLAVA" ]; then
+        apt-get install -y --no-install-recommends git meson ninja-build gcc pkg-config patch \
+            libpulse-dev libx11-dev libxext-dev libxrender-dev libxcomposite-dev libgl-dev >/dev/null \
+            && bash "$REPO/tools/glava-build.sh" && log "GLava pose (OSMO_ARM_GLAVA)" \
+            || log "GLava non pose"
+    fi
+    log "bureau du banc pose (fond $FOND)"
+fi
+
 # ── 5. comptes, premier login, services ──────────────────────────────────────
 id -u osmocom >/dev/null 2>&1 || useradd -m -s /bin/bash -c 'Compte osmocom (non privilegie)' osmocom
 echo 'osmocom:osmo' | chpasswd

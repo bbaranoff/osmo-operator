@@ -65,6 +65,11 @@ ln -sf /opt/GSM/osmo-operator/tools/osmo-fond.py "$ROOTFS/usr/local/bin/osmo-fon
 ln -sf /opt/GSM/osmo-operator/tools/osmo-op.sh "$ROOTFS/usr/local/bin/osmo-op" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-drivers.sh "$ROOTFS/usr/local/bin/osmo-drivers" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overlay-draw" 2>/dev/null || true
+# [2026-10-24] La fenetre du C123 emule (ecran + clavier de qosmo) dans le PATH :
+# l alias c123 de /etc/profile.d/98-osmo-banc-aliases.sh ne vit que dans un shell
+# de connexion ; le lien sert partout ailleurs (Alt+F2, sudo, scripts).
+ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/c123" 2>/dev/null || true
+ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/osmo-c123" 2>/dev/null || true
 # (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then

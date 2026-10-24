@@ -50,6 +50,8 @@ ISO_LITE=0
 # gr-gsm (grgsm_livemon). Le rootfs grossit d environ 2,5 Go : c est pourquoi
 # c est une VARIANTE, et non un ajout aux images existantes.
 ISO_DESKTOP=0
+# --arm : les cartes de armbian/build-armbian.sh (--board=)
+ISO_ARM_BOARD="${OSMO_ISO_BOARD:-all}"
 # ── --all : TOUTES les images en une passe ──────────────────────────────────
 # Sans argument, le script construit deja les trois images historiques (hub,
 # noeud, noeud lite). --all y ajoute la desktop : c est la seule facon de tout
@@ -229,9 +231,13 @@ ${B}LE LIEN ENTRE NOEUDS (WAN)${N}
 
 ${B}LA BASE${N}
   ${C}--version=22.04|24.04${N}     suite Ubuntu du rootfs                       ${D}[${ISO_UBUNTU:-24.04}]${N}
-  --arm, --arch=arm64       image SD arm64 pour Raspberry Pi 4 (base Armbian).
-                            Ni --desktop ni --all sur cette cible. Le premier
-                            build emule aarch64 : comptez une dizaine d'heures.
+  --arm, --arch=arm64       images SD arm64 par github.com/armbian/build
+                            (armbian/build-armbian.sh) : Raspberry Pi 4 et
+                            toutes les Orange Pi 5. --desktop = GNOME + le
+                            bureau du banc. Pas de --all ni de --lite. Le
+                            premier build emule aarch64 : une dizaine d'heures.
+  ${C}--board=LISTE${N}             cartes de --arm : rpi4, opi5, all, ou des noms
+                            Armbian (orangepi5-max,rpi4b...)       ${D}[${ISO_ARM_BOARD:-all}]${N}
   ${C}--arch=amd64${N}              le defaut.
 
   ${C}-h, --help${N}                ceci.
@@ -287,11 +293,12 @@ for arg in "$@"; do case "$arg" in
     --desktop)      ISO_DESKTOP=1 ;;
     --all)          ISO_ALL=1 ;;
     --skip-build)   ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1 ;;
-    --skip-build=*) ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1; ISO_PULL_IMAGE="${arg#*=}" ;;
+    --skip-build=*) ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1; ISO_PULL_IMAGE="${arg#*=}"; ISO_PULL_IMAGE_GIVEN=1 ;;
     --build-docker) ISO_FORCE_BUILD=1 ;;
     --without-debs) ISO_WITH_DEBS=0 ;;
     --with-debs)    ISO_WITH_DEBS=1 ;;
     --arm|--arch=arm64) ISO_ARCH=arm64 ;;
+    --board=*)      ISO_ARM_BOARD="${arg#*=}" ;;
     --arch=amd64)   ISO_ARCH=amd64 ;;
     --arch=*)       echo -e "${RED}--arch : amd64 ou arm64 (recu : ${arg#*=})${NC}" >&2; exit 2 ;;
 esac; done
@@ -349,13 +356,33 @@ esac
 # doivent repondre pareil a la meme question.
 [ "$ISO_ARCH" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ] && ISO_IMG_TAG=""
 export ISO_ARCH ISO_MIRROR ISO_IMG_TAG
-if [ "$ISO_ARCH" = "arm64" ]; then
-    [ "$ISO_DESKTOP" = "1" ] && { echo -e "${RED}--arm : pas de --desktop (GNOME, calamares, grub-efi-amd64 : rien de tout cela sur le Pi)${NC}" >&2; exit 2; }
-    [ "$ISO_ALL" = "1" ]     && { echo -e "${RED}--arm : pas de --all - une image a la fois (--role=operator, --lite ou --role=interstp)${NC}" >&2; exit 2; }
-    echo -e "  ${CYAN}cible : arm64 / Raspberry Pi 4, base Armbian ${ISO_UBUNTU} - image SD .img, miroir ${ISO_MIRROR}${NC}"
-fi
-
 [ "$(id -u)" -ne 0 ] && { echo -e "${RED}Root requis.${NC}"; exit 1; }
+
+# [2026-10-24] --arm PASSE PAR LE FRAMEWORK ARMBIAN (github.com/armbian/build) :
+# armbian/build-armbian.sh fabrique noyau, BSP, u-boot/firmware, rootfs et image
+# pour chaque carte, et y pose la pile par userpatches/customize-image.sh. Les
+# modules d assemblage manuel (82-arm-natif, 92-rpi-image : debootstrap + noyau
+# apt.armbian.com + .img a la main, Pi 4 seulement) ne sont plus atteints : on
+# remplace ce script par build-armbian.sh, ici, avant toute etape.
+if [ "$ISO_ARCH" = "arm64" ]; then
+    [ "$ISO_ALL" = "1" ]  && { echo -e "${RED}--arm : pas de --all (--board=all construit toutes les cartes)${NC}" >&2; exit 2; }
+    [ "$ISO_LITE" = "1" ] && { echo -e "${RED}--arm : pas de --lite avec le framework Armbian${NC}" >&2; exit 2; }
+    case "${ISO_ROLE:-operator}" in operator) ;; *) echo -e "${RED}--arm : --role=operator seulement (recu : $ISO_ROLE)${NC}" >&2; exit 2 ;; esac
+    [ "$ISO_SUITE" = noble ] || { echo -e "${RED}--arm : noble (24.04) seulement - les .deb du build arm64 visent noble${NC}" >&2; exit 2; }
+    [ "$OUTPUT_SET" = "1" ] && echo -e "${YELLOW}--arm : --output ignore, les images sortent dans le output/images/ d armbian/build${NC}"
+    _ARM=("--board=${ISO_ARM_BOARD:-all}" "--release=$ISO_SUITE" --install-deps)   # 20-hote.sh, qui posait qemu-user-static, n est plus atteint
+    [ "$ISO_DESKTOP" = "1" ]            && _ARM+=(--desktop)
+    [ "${OSMO_ISO_BANC:-0}" = "1" ]     && _ARM+=(--banc)
+    [ "${OSMO_ISO_MULTI:-0}" = "1" ]    && _ARM+=(--multi)
+    # l image de --skip-build=REF seulement : le defaut (norf_gsm:latest) est amd64
+    [ "${ISO_PULL_IMAGE_GIVEN:-0}" = "1" ] && _ARM+=("--image=$ISO_PULL_IMAGE")
+    # rien n est publie en arm64 hors GHCR base-arm64 : sans --skip-build explicite,
+    # l image de la pile se construit si elle manque (comme avant)
+    [ "$ISO_SKIP_BUILD_GIVEN" = "1" ] || _ARM+=(--build-image)
+    [ "${OSMO_ISO_ARM_DRY:-0}" = "1" ]  && _ARM+=(--dry-run)   # voir les compile.sh sans rien lancer
+    echo -e "  ${CYAN}cible : arm64, framework Armbian - armbian/build-armbian.sh ${_ARM[*]}${NC}"
+    exec bash "$DIR/armbian/build-armbian.sh" "${_ARM[@]}"
+fi
 
 
 # Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et

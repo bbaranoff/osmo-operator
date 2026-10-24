@@ -37,7 +37,17 @@ if command -v pactl >/dev/null 2>&1; then
     if ! pactl list short sinks 2>/dev/null | grep -q "^[0-9]*[[:space:]]$MIX[[:space:]]"; then
         pactl load-module module-null-sink sink_name=$MIX \
             sink_properties=device.description=GLava-micro+HP >/dev/null
-        pactl load-module module-loopback source=@DEFAULT_MONITOR@ sink=$MIX \
+        # [2026-10-24] Les haut-parleurs = le moniteur de la sortie MATERIELLE.
+        # @DEFAULT_MONITOR@ ne suffit pas : a la connexion, le sink par defaut
+        # peut etre osmo_hp_ec (l annulation d echo du banc, 8 kHz mono, la seule
+        # voix GSM) - GLava ne voyait alors ni le navigateur ni le reste. Le sink
+        # ALSA recoit tout, osmo_hp_ec compris (son maitre).
+        hp=$(pactl get-default-sink 2>/dev/null)
+        case "$hp" in alsa_output.*|bluez_sink.*) ;;
+            *) hp=$(pactl list short sinks 2>/dev/null | awk '$2 ~ /^(alsa_output|bluez_sink)\./ {print $2; exit}') ;;
+        esac
+        hp=${hp:+$hp.monitor}
+        pactl load-module module-loopback source="${hp:-@DEFAULT_MONITOR@}" sink=$MIX \
             source_dont_move=true sink_dont_move=true latency_msec=30 >/dev/null
         pactl load-module module-loopback source=@DEFAULT_SOURCE@ sink=$MIX \
             source_dont_move=true sink_dont_move=true latency_msec=30 >/dev/null
