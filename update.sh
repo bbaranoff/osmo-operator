@@ -823,7 +823,11 @@ osmo_unites_user_session
 # doublon survivait a la mise a jour jusqu au prochain redemarrage.
 osmo_poser_correctif_audio() {
     [ "$(id -u)" -eq 0 ] || return 0
-    local d=/opt/GSM/osmo-operator src="$d/scripts/gapk-start.sh" dst=/etc/osmocom/gapk-start.sh
+    # NB: deux 'local' separes - sous 'set -u', bash evalue TOUS les membres
+    # droits d un meme 'local' AVANT d affecter le premier, donc "$d/..." sur la
+    # meme ligne que d=... plantait ("d: unbound variable").
+    local d=/opt/GSM/osmo-operator
+    local src="$d/scripts/gapk-start.sh" dst=/etc/osmocom/gapk-start.sh
     [ -f "$src" ] || return 0
     if [ -d /etc/osmocom ] && ! cmp -s "$src" "$dst"; then
         install -m 755 "$src" "$dst" && echo "[OK] $dst repose depuis scripts/ (emetteur RTP en doublon retire)"
