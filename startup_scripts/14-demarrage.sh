@@ -110,7 +110,19 @@ if [ "$DSP_BANC" = 1 ]; then
     if [ -w "$_cfg_pont" ] && [[ "$_arfcn_pont" =~ ^[0-9]+$ ]]; then
         sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${_arfcn_pont}|" "$_cfg_pont"
     fi
-    unset _cfg_pont _arfcn_pont
+    # [2026-10-24] Meme gabarit, meme trou pour la SIM : imsi/ki/rplmn restaient
+    # ceux de l'op1 (001010001000001, ki ..01 01). Dans le conteneur de l'op2,
+    # la HLR ne connait cette IMSI que sans donnees d'auth -> LU reject cause 2.
+    # On reprend la carte de mobile.cfg, celle que start-docker genere par operateur.
+    _sim_src="/root/.osmocom/bb/mobile.cfg"
+    if [ -w "$_cfg_pont" ] && [ -r "$_sim_src" ]; then
+        for _k in imsi "ki comp128" rplmn; do
+            _l="$(grep -m1 -E "^[[:space:]]+${_k} " "$_sim_src")" || continue
+            _l="${_l//|/\\|}"
+            sed -i "s|^[[:space:]]\+${_k} .*\$|${_l}|" "$_cfg_pont"
+        done
+    fi
+    unset _cfg_pont _arfcn_pont _sim_src _k _l
     audio_start
     say_begin "Transmission a run.sh (sans $DSP_MODULES_RETIRES)"
     if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then
