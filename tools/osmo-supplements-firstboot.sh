@@ -40,7 +40,10 @@ done
 
 echo "=== $(date '+%F %T') essai $n/$MAX : addition.sh $OSMO_SUPPLEMENTS ===" >>"$LOG"
 # shellcheck disable=SC2086
-env HUB_IMAGE="${HUB_IMAGE:-}" bash "$REPO/addition.sh" $OSMO_SUPPLEMENTS >>"$LOG" 2>&1 </dev/null
+# OSMO_COMPTE : le compte de l installeur (groupe docker, icones), personne n etant
+# encore connecte ; a defaut, le premier compte humain (uid 1000 et plus).
+[ -n "${OSMO_COMPTE:-}" ] || OSMO_COMPTE="$(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $1; exit}')"
+env HUB_IMAGE="${HUB_IMAGE:-}" OSMO_COMPTE="${OSMO_COMPTE:-}" bash "$REPO/addition.sh" $OSMO_SUPPLEMENTS >>"$LOG" 2>&1 </dev/null
 rc=$?
 echo "=== $(date '+%F %T') fin : statut $rc ===" >>"$LOG"
 

@@ -137,10 +137,13 @@ _trust_desktop() {
 #   2. PKEXEC_UID  (l icone, pkexec)
 #   3. le proprietaire d un bus de session actif (/run/user/*/bus) - systemd,
 #      shell root, autologin : c est la seule preuve qu une session existe.
+# [2026-10-24] 0. OSMO_COMPTE : le compte cree par l installeur, passe par
+#    osmo-supplements-firstboot.sh. Au premier demarrage personne n est encore
+#    connecte : sans lui, ni groupe docker ni icone pour ce compte.
 # /root reste TOUJOURS servi : la cle vive ouvre sa session en root.
 _comptes_session() {
     local u uid bus
-    for u in "${SUDO_USER:-}" \
+    for u in "${OSMO_COMPTE:-}" "${SUDO_USER:-}" \
              "$([ -n "${PKEXEC_UID:-}" ] && getent passwd "$PKEXEC_UID" | cut -d: -f1)"; do
         [ -n "$u" ] && [ "$u" != root ] || continue
         getent passwd "$u" >/dev/null 2>&1 && { printf '%s\n' "$u"; return 0; }

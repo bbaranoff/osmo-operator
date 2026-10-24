@@ -54,6 +54,11 @@ def run():
         f.write('OSMO_SUPPLEMENTS="%s"\n' % " ".join(DRAPEAUX[c] for c in choix))
         if "multi" in choix:
             f.write('HUB_IMAGE="%s"\n' % IMAGES.get(image, IMAGES["ghcr"]))
+        # le compte cree (page Utilisateurs) : au premier demarrage personne n est encore
+        # connecte, addition.sh ne le trouverait pas (groupe docker, icones)
+        compte = libcalamares.globalstorage.value("username")
+        if compte:
+            f.write('OSMO_COMPTE="%s"\n' % compte)
     if os.path.exists(os.path.join(root, "etc/systemd/system", UNITE)):
         os.makedirs(os.path.dirname(lien), exist_ok=True)
         if os.path.lexists(lien):
