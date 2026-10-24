@@ -608,8 +608,12 @@ ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 # exactement celui que start-docker.sh a deja provisionne - et son propre controle
 # d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
 # On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo.
-export MCC="${MCC:-$MS_MCC}"
-export MNC="${MNC:-$MS_MNC}"
+# [2026-10-24] SANS « ${MNC:-...} » : 03-affichage.sh a deja source globals.conf
+# (MNC="01"), qui l emportait sur la config deployee - l op2 recreait
+# 001010002000001 a chaque demarrage (sans auth, MSISDN refuse), visible en
+# rouge dans les abonnes du conky. MS_MCC/MS_MNC SONT la config deployee.
+export MCC="$MS_MCC"
+export MNC="$MS_MNC"
 
 # ── Le plan radio : on le LIT, on ne le recalcule pas ───────────────────────
 # generate_configs.sh l'ecrit dans /etc/osmocom/radio-plan.env en meme temps

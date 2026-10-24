@@ -12,6 +12,11 @@
 #
 # Sans argument : toute la chaine d un coup, depuis configs/gsm-lab-source.png
 # jusqu a configs/gsm-lab-ville.jpg et configs/gsm-lab-antenne.jpg.
+#
+# [2026-10-24] OSMO_FOND_ORANGE_HAUT=1 : la variante « banc en marche » (celle
+# sans le NO RF) melange les deux, l orange d origine en haut qui se fond en
+# degrade dans le bleu vers le bas. La chaine sans argument l applique a
+# gsm-lab-antenne.jpg seulement ; gsm-lab-ville.jpg (au repos) reste bleu.
 import os
 import subprocess
 import sys
@@ -23,11 +28,13 @@ if len(sys.argv) == 1:
     outils = os.path.dirname(os.path.abspath(__file__))
     configs = os.path.join(os.path.dirname(outils), "configs")
     with tempfile.TemporaryDirectory() as tmp:
-        repos, bleu, antenne = (os.path.join(tmp, n) for n in ("repos.png", "bleu.png", "antenne.png"))
-        for script, src, dst in (("osmo-fond-repos.py", os.path.join(configs, "gsm-lab-source.png"), repos),
-                                 ("osmo-fond-bleu.py", repos, bleu),
-                                 ("osmo-fond-antenne.py", bleu, antenne)):
-            subprocess.run([sys.executable, os.path.join(outils, script), src, dst], check=True)
+        repos, bleu, mix, antenne = (os.path.join(tmp, n) for n in ("repos.png", "bleu.png", "mix.png", "antenne.png"))
+        for script, src, dst, env in (("osmo-fond-repos.py", os.path.join(configs, "gsm-lab-source.png"), repos, {}),
+                                      ("osmo-fond-bleu.py", repos, bleu, {"OSMO_FOND_ORANGE_HAUT": "0"}),
+                                      ("osmo-fond-bleu.py", repos, mix, {"OSMO_FOND_ORANGE_HAUT": "1"}),
+                                      ("osmo-fond-antenne.py", mix, antenne, {})):
+            subprocess.run([sys.executable, os.path.join(outils, script), src, dst], check=True,
+                           env={**os.environ, **env})
         for src, nom in ((bleu, "gsm-lab-ville.jpg"), (antenne, "gsm-lab-antenne.jpg")):
             Image.open(src).convert("RGB").save(os.path.join(configs, nom), quality=92)
             print(os.path.join(configs, nom))
@@ -73,6 +80,10 @@ vif = np.asarray(Image.fromarray(vif).filter(ImageFilter.MaxFilter(5)), float) /
 P = np.asarray(Image.fromarray((P * vif * 255).astype(np.uint8))
                .filter(ImageFilter.GaussianBlur(2 * k)), float) / 255
 w = w * (1 - P)
+if os.environ.get("OSMO_FOND_ORANGE_HAUT", "0") == "1":
+    # orange pur sur le premier cinquieme, fondu en smoothstep jusqu aux 3/5 : bleu en dessous
+    u = np.clip((yy / H - 0.2) / 0.4, 0, 1)
+    w = w * (u * u * (3 - 2 * u))
 
 # dégradé marine -> cyan, suivant la luminosité
 # [2026-10-24] etait violet sombre (45, 22, 85) -> bleu clair (120, 195, 255) ; demande : du cyan, un marine plus clair

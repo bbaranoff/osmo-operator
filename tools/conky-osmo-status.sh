@@ -228,9 +228,17 @@ subs)
     banc_debout || exit 0
     db=/var/lib/osmocom/hlr.db
     # Le conteneur n a pas forcement sqlite3 : on lit sa base par une copie.
+    # [2026-10-24] Avec son -wal : osmo-hlr est en WAL, les LU n y sont pas encore
+    # reportes dans hlr.db (copie seule = « 0 rattaches » alors que tout l est).
+    # Copie par utilisateur : celle de root bloquait le conky de nirvana, qui
+    # relisait sans le dire la meme copie perimee.
     if [ "$OP_MODE" = docker ]; then
-        dbl="/tmp/.conky-hlr-${OP_NAME}.db"
-        docker cp "$OP_NAME:$db" "$dbl" >/dev/null 2>&1 && db="$dbl"
+        dbl="/tmp/.conky-hlr-$(id -u)-${OP_NAME}.db"
+        rm -f "$dbl-wal" "$dbl-shm"
+        if docker cp "$OP_NAME:$db" "$dbl" >/dev/null 2>&1; then
+            docker cp "$OP_NAME:$db-wal" "$dbl-wal" >/dev/null 2>&1
+            db="$dbl"
+        fi
     fi
     # ── L ETAT DU HLR NE SE LIT PAS DANS SA BASE ─────────────────────────
     # [2026-09-04] Ce bloc ouvrait hlr.db et affichait « N abonnes · M
