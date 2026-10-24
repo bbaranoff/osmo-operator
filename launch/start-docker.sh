@@ -2057,6 +2057,9 @@ start_bridge_mode() {
         # Verifie a la main sur ce banc : memes drapeaux + apparmor=unconfined
         # -> "Queued start job for default target multi-user.target", conteneur
         # Up ; sans lui -> exit 255 en boucle.
+        # [2026-10-24] SYS_NICE : c54x_exe/run.sh lance la chaine (DSP, QEMU, osmocon,
+        # mobile, pont) sous `nice -n -10` (RT_NICE) ; sans la capability chaque etape
+        # crachait « nice: cannot set niceness: Permission denied » et tournait sans priorite.
         # shellcheck disable=SC2086
         docker run -d \
             --restart unless-stopped \
@@ -2067,6 +2070,7 @@ start_bridge_mode() {
             --cap-add NET_ADMIN \
             --cap-add SYS_ADMIN \
             --cap-add NET_RAW \
+            --cap-add SYS_NICE \
             --security-opt apparmor=unconfined \
             --ulimit rtprio=18 \
             --shm-size=8g \
@@ -2644,7 +2648,7 @@ start_host_mode() {
     # dans un environnement incomplet. Ce mode se relance donc a la main.
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
-        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW \
+        --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
         --security-opt apparmor=unconfined \
         --shm-size=8g \
         --cgroupns host \
