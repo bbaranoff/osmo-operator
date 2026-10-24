@@ -155,7 +155,6 @@ if [ "$BUILD_DESKTOP" = yes ]; then
     ln -sf "$REPO/tools/overlay-draw.py"  /usr/local/bin/overlay-draw
     ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/c123
     ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
-    install -m644 "$REPO/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh 2>/dev/null || true
 
     # le Conky et l encart, gardes en vie toute la session (le meme gardien que l ISO)
     if [ -s "$OV/osmo-desktop-panel" ]; then
@@ -173,6 +172,12 @@ if [ "$BUILD_DESKTOP" = yes ]; then
             || log "GLava non pose"
     fi
     log "bureau du banc pose (fond $FOND)"
+fi
+
+# les alias du banc (banc-rssi, banc-trx, c123-1...) : profile.d ET vraies commandes, bureau ou non
+if [ -f /opt/GSM/osmo-operator/scripts/osmo-banc-aliases.sh ]; then
+    install -m644 /opt/GSM/osmo-operator/scripts/osmo-banc-aliases.sh /etc/profile.d/98-osmo-banc-aliases.sh
+    bash /opt/GSM/osmo-operator/tools/osmo-banc-cmd.sh --install /usr/local/bin
 fi
 
 # ── 5. comptes, premier login, services ──────────────────────────────────────

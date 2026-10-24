@@ -99,6 +99,7 @@ inst_bureau_done() {
     done
     [ -L /usr/local/bin/osmo-start-direct ] || return 1
     [ -L /usr/local/bin/c123 ] || return 1
+    [ -L /usr/local/bin/banc-rssi ] || return 1
     return 0
 }
 
@@ -129,6 +130,9 @@ inst_bureau_run() {
     # veut python3-gi-cairo) viennent d apt, pas de pip.
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/c123
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
+    # [2026-10-24] banc-rssi, banc-trx, c123-1... : profile.d ET vraies commandes (tools/osmo-banc-cmd.sh)
+    install -m644 "$INST_TREE/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
+    OSMO_BANC_TREE="$INST_TREE" bash "$INST_TREE/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
     /usr/bin/python3 -c 'import gi, cairo; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk' 2>/dev/null \
         || apt-get install -y --no-install-recommends python3-gi python3-gi-cairo python3-cairo \
                gir1.2-gtk-3.0 gir1.2-gdkpixbuf-2.0 >/dev/null \

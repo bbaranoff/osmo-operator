@@ -70,6 +70,10 @@ ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overl
 # de connexion ; le lien sert partout ailleurs (Alt+F2, sudo, scripts).
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/c123" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/osmo-c123" 2>/dev/null || true
+# [2026-10-24] Les alias du banc (banc-rssi, banc-trx, banc-mobile, c123-1...) : le fichier dans
+# profile.d pour les shells de connexion, et les memes noms en vraies commandes (tools/osmo-banc-cmd.sh).
+install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"
+bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
 # (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then
