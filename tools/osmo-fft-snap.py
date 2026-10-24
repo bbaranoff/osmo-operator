@@ -141,9 +141,9 @@ MOBILE_LOG_DEFAUT = "/run/user/0/osmo-nitb/logs/mobile.log"
 
 
 def mobile_log_path():
-    force = os.environ.get("OSMO_MOBILE_LOG")
-    if force:
-        return force
+    # [2026-10-24] LE FICHIER PUBLIE D ABORD. OSMO_MOBILE_LOG est fige au demarrage du service : lance
+    # pendant un --ms, l encart restait sur mobile.log (vide) apres un --ms-magnetite, alors que
+    # /run/osmo-banc/mobile-log, reecrit a chaque lancement, disait deja rvinterf.log.
     try:
         with open("/run/osmo-banc/mobile-log") as f:
             publie = f.read().strip()
@@ -151,6 +151,9 @@ def mobile_log_path():
             return publie
     except OSError:
         pass
+    force = os.environ.get("OSMO_MOBILE_LOG")
+    if force:
+        return force
     vus = []
     for motif in MOBILE_LOG_CANDIDATS:
         for p in glob.glob(motif):
@@ -239,10 +242,11 @@ F_SMALL = font("DejaVuSansMono.ttf", 12)
 F_LOG = font("DejaVuSansMono.ttf", 12)
 
 
-def inferno(v):
-    """Palette type inferno, 0..1 -> RGB (la meme famille que l onglet FFT)."""
-    stops = [(0, (0, 0, 4)), (0.25, (87, 16, 110)), (0.5, (188, 55, 84)),
-             (0.75, (249, 142, 9)), (1.0, (252, 255, 164))]
+def palette_sdr(v):
+    """Palette SDR, 0..1 -> RGB : marine, bleu, cyan, vert, jaune, rouge (la meme que l onglet FFT, sdr).
+    [2026-10-24] remplace inferno."""
+    ancres = [(0,0,40), (0,20,150), (0,90,255), (0,200,230), (0,210,80), (170,235,0), (255,230,0), (255,130,0), (230,0,0)]
+    stops = [(i / (len(ancres) - 1), c) for i, c in enumerate(ancres)]
     v = 0.0 if v < 0 else 1.0 if v > 1 else v
     for i in range(len(stops) - 1):
         a, ca = stops[i]
@@ -659,7 +663,7 @@ def render_live(data, data_ul=None):
     px = wf.load()
     for row, line in enumerate(history):
         for x in range(min(sw, len(line))):
-            px[x, row] = inferno(line[x])
+            px[x, row] = palette_sdr(line[x])
     img.paste(wf, (sx0, wy0))
     # Journal
     d = ImageDraw.Draw(img)
@@ -978,7 +982,7 @@ def render_lte(etat):
     px = wf.load()
     for row, line in enumerate(historique_lte):
         for x in range(min(sw, len(line))):
-            px[x, row] = inferno(line[x])
+            px[x, row] = palette_sdr(line[x])
     img.paste(wf, (sx0, wy0))
     d = ImageDraw.Draw(img)
     lx0 = split

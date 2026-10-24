@@ -74,11 +74,12 @@ P = np.asarray(Image.fromarray((P * vif * 255).astype(np.uint8))
                .filter(ImageFilter.GaussianBlur(2 * k)), float) / 255
 w = w * (1 - P)
 
-# dégradé violet sombre -> bleu clair, suivant la luminosité
+# dégradé marine -> cyan, suivant la luminosité
+# [2026-10-24] etait violet sombre (45, 22, 85) -> bleu clair (120, 195, 255) ; demande : du cyan, un marine plus clair
 L = 0.3 * r + 0.59 * g + 0.11 * b
 t = np.clip(L / 0.6, 0, 1)[..., None]
-VIOLET, BLEU = np.array([45, 22, 85]) / 255, np.array([120, 195, 255]) / 255
-neuf = (VIOLET * (1 - t) + BLEU * t) * (0.55 + 0.45 * np.clip(mx / 0.9, 0, 1))[..., None] * 1.15
+MARINE, CYAN = np.array([35, 70, 140]) / 255, np.array([80, 225, 255]) / 255
+neuf = (MARINE * (1 - t) + CYAN * t) * (0.55 + 0.45 * np.clip(mx / 0.9, 0, 1))[..., None] * 1.15
 out = a * (1 - w[..., None]) + np.clip(neuf, 0, 1) * w[..., None]
 
 # [2026-10-24] TITRE EN UBUNTU SANS. « TELECOM OPERATOR » etait peint au pinceau dans la source : on efface
@@ -110,9 +111,17 @@ img = Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
 TITRE_FONTE = "/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf"
 ft = ImageFont.truetype(TITRE_FONTE, round(150 * k))
 ft.set_variation_by_axes([100, 800])
-dt = ImageDraw.Draw(img)
-dt.text((round(200 * k), round(400 * k)), "TELECOM", font=ft, fill=(245, 245, 245), anchor="lt")
-dt.text((round(200 * k), round(545 * k)), "OPERATOR", font=ft, fill=(255, 120, 30), anchor="lt")
+# les couleurs mesurees sur les lettres peintes : TELECOM blanc casse, OPERATOR orange en degrade vertical
+def titre_degrade(xy, texte, haut, bas):
+    masque = Image.new("L", img.size, 0)
+    ImageDraw.Draw(masque).text(xy, texte, font=ft, fill=255, anchor="lt")
+    y0_, y1_ = masque.getbbox()[1], masque.getbbox()[3]
+    tt = np.clip((np.arange(img.size[1]) - y0_) / max(1, y1_ - y0_), 0, 1)[:, None, None]
+    couleur = np.array(haut) * (1 - tt) + np.array(bas) * tt
+    couche = Image.fromarray(np.broadcast_to(couleur, (img.size[1], img.size[0], 3)).astype(np.uint8))
+    img.paste(couche, (0, 0), masque)
+titre_degrade((round(200 * k), round(400 * k)), "TELECOM", (249, 247, 245), (248, 246, 244))
+titre_degrade((round(200 * k), round(545 * k)), "OPERATOR", (248, 112, 2), (247, 99, 2))
 
 # cadre autour du schema : tout tourne en local, sans emission radio. Le titre
 # est pose dans une coupure du trait du haut (comme une legende de fieldset).

@@ -60,6 +60,10 @@ CRYPTHOME_TIMEOUT=60
 #            frappe y est prise.
 CRYPTHOME_PROMPT="console"
 
+# [2026-10-24] Image peinte derriere la question (console, /dev/fb0) par
+# crypthome-fond. "none" : console texte nue.
+CRYPTHOME_IMAGE="/usr/share/backgrounds/gsm-lab-antenne.jpg"
+
 # Repertoires recouverts d un overlay en RAM pendant une session ROOT (/home
 # ferme), EN PLUS de /root qui l est toujours. Le banc entier vit dans /opt/GSM
 # (depot, configs, hlr.db, journaux) : en session root il est "live" - tout ce

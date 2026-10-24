@@ -1,0 +1,78 @@
+#!/usr/bin/python3
+# crypthome-fond - peint une image sur le framebuffer pendant la question LUKS du demarrage.
+#
+#   crypthome-fond [IMAGE]     (defaut : CRYPTHOME_IMAGE de /etc/default/crypthome)
+#
+# [2026-10-24] unlock-home quitte plymouth et lit la phrase sur la console texte (le clavier de plymouth
+# est mort sur certains portables, voir unlock-home). La console texte, c est fbcon : un framebuffer
+# (/dev/fb0) sur lequel le noyau dessine les caracteres. On y peint l image, assombrie dans le bas ;
+# l invite est ensuite posee sur la DERNIERE ligne, ou fbcon ne repeint que les cases ecrites. La saisie
+# reste celle du tty : l image n est qu un decor, et si elle echoue (pas de /dev/fb0, pas de Pillow,
+# format de pixel inconnu) on sort 0 sans rien dire de plus qu une ligne au journal.
+import os
+import sys
+
+
+def lire(chemin, defaut=""):
+    try:
+        with open(chemin) as f:
+            return f.read().strip()
+    except OSError:
+        return defaut
+
+
+def image_conf():
+    for ligne in lire("/etc/default/crypthome").splitlines():
+        if ligne.startswith("CRYPTHOME_IMAGE="):
+            return ligne.split("=", 1)[1].strip().strip('"')
+    return "/usr/share/backgrounds/gsm-lab-antenne.jpg"
+
+
+def main():
+    chemin = sys.argv[1] if len(sys.argv) > 1 else image_conf()
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return "Pillow absent"
+    sysfb = "/sys/class/graphics/fb0"
+    try:
+        w, h = (int(v) for v in lire(sysfb + "/virtual_size").split(","))
+        bpp = int(lire(sysfb + "/bits_per_pixel"))
+        stride = int(lire(sysfb + "/stride") or w * bpp // 8)
+    except ValueError:
+        return "pas de framebuffer"
+    if bpp != 32:
+        return "framebuffer %d bits par point, seul 32 est gere" % bpp
+    try:
+        img = Image.open(chemin).convert("RGB")
+    except OSError as e:
+        return "image illisible (%s)" % e
+    # couvrir l ecran sans deformer : mise a l echelle puis recadrage au centre
+    k = max(w / img.width, h / img.height)
+    img = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
+    x0, y0 = (img.width - w) // 2, (img.height - h) // 2
+    img = img.crop((x0, y0, x0 + w, y0 + h))
+    # bande sombre en bas : l invite blanche de la console y reste lisible
+    bande = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(bande).rectangle((0, h - h // 7, w, h), fill=200)
+    img = Image.composite(Image.new("RGB", (w, h), (0, 0, 0)), img, bande)
+    # XRGB8888 petit-boutiste (B, G, R, X), le format de fbcon sur simpledrm / nvidia-drm / i915
+    brut = img.tobytes("raw", "BGRX")
+    try:
+        with open("/dev/fb0", "r+b") as fb:
+            if stride == w * 4:
+                fb.write(brut)
+            else:
+                for y in range(h):
+                    fb.seek(y * stride)
+                    fb.write(brut[y * w * 4:(y + 1) * w * 4])
+    except OSError as e:
+        return "ecriture /dev/fb0 impossible (%s)" % e
+    return None
+
+
+if __name__ == "__main__":
+    err = main()
+    if err:
+        print("crypthome-fond: %s - question sans image." % err, file=sys.stderr)
+    sys.exit(0)
