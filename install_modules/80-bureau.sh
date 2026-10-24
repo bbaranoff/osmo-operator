@@ -67,6 +67,16 @@ _bureau_fond() {
         printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" \
             "$sec" "$_BUREAU_FOND" "$_BUREAU_FOND" >> "$_BUREAU_SCHEMA"
     done
+    # [2026-10-24] MODE CLAIR PAR DEFAUT, comme l ISO (iso_modules/80-chroot.sh) :
+    # Yaru-blue, color-scheme default. 99-osmo-live (pose par l ISO sur une
+    # machine installee depuis elle) disait prefer-dark : il est remis au clair.
+    for sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu" "org.gnome.desktop.interface:GNOME-Greeter"; do
+        printf "\n[%s]\ncolor-scheme='default'\ngtk-theme='Yaru-blue'\nicon-theme='Yaru-blue'\ncursor-theme='Yaru'\n" \
+            "$sec" >> "$_BUREAU_SCHEMA"
+    done
+    [ -f /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override ] \
+        && sed -i -e "s/^color-scheme='prefer-dark'/color-scheme='default'/" -e "s/^gtk-theme='Yaru-blue-dark'/gtk-theme='Yaru-blue'/" \
+            /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     if command -v glib-compile-schemas >/dev/null 2>&1; then
         glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null \
             && inst_say "fond GNOME par defaut : $_BUREAU_FOND" \
@@ -134,6 +144,17 @@ inst_bureau_run() {
     install -m644 "$INST_TREE/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
     OSMO_BANC_TREE="$INST_TREE" bash "$INST_TREE/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
     install -m644 "$INST_TREE/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh   # gnuarm dans le PATH, s il est pose
+    # [2026-10-24] gcc-9 et gcc-11 a cote de gcc-13, et leurs alternatives, comme l ISO
+    # (iso_modules/80-chroot.sh) : jolly/testing et burst_ind d osmocom-bb veulent gcc-9.
+    apt-get install -y --no-install-recommends gcc-9 g++-9 gcc-11 g++-11 >/dev/null \
+        || inst_hint "gcc-9 / gcc-11 non installes : alternatives limitees aux compilateurs presents"
+    bash "$INST_TREE/tools/osmo-gcc-alternatives.sh"
+    # [2026-10-24] WireGuard du WAN : « wg 1 » / « wg N ... » (tools/osmo-wg.sh), comme l ISO
+    install -m644 "$INST_TREE/scripts/osmo-wg-profile.sh" /etc/profile.d/97-osmo-wg.sh
+    ln -sf "$INST_TREE/tools/osmo-wg.sh" /usr/local/bin/osmo-wg
+    command -v wg-quick >/dev/null 2>&1 \
+        || apt-get install -y --no-install-recommends wireguard-tools >/dev/null \
+        || inst_hint "wireguard-tools non installe : « wg N » ne montera pas de tunnel"
     /usr/bin/python3 -c 'import gi, cairo; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk' 2>/dev/null \
         || apt-get install -y --no-install-recommends python3-gi python3-gi-cairo python3-cairo \
                gir1.2-gtk-3.0 gir1.2-gdkpixbuf-2.0 >/dev/null \

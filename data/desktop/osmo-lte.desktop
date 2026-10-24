@@ -49,7 +49,7 @@ Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --close-on-exit --t
 [Desktop Action Status]
 Name=Etat (osmo-lte status, osmo-epc status)
 Name[fr]=Etat (osmo-lte status, osmo-epc status)
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat 4G" -- bash -c "/usr/local/bin/osmo-lte status; /usr/local/bin/osmo-epc status"
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --keep-open --title "Etat 4G" -- bash -c "/usr/local/bin/osmo-lte status; /usr/local/bin/osmo-epc status"
 
 [Desktop Action Journal]
 Name=Voir le journal (journalctl -u osmo-lte)

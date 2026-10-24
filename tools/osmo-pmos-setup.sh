@@ -406,12 +406,13 @@ else
     # de passe (« a terminal is required ») et le modem ne partait pas.
     # --data : le port de donnees (hvc1, chardev QEMU sur PORT_AT+1), voir le
     # modem a deux ports dans osmo-phonesim-banc.py.
-    # OSMO_LTE_TUN : la sortie radio de la data du telephone est le tun du MS
-    # GPRS du banc (modem osmocom-bb, qosmo run_modules/71-modem-gprs.sh), sur
-    # l'hote (pas d'espace de noms). Le PPP du telephone est route vers lui en
-    # NAT, et sort par SGSN/GGSN (apn internet) : la data passe par osmo-bsc.
+    # [2026-10-24] LA SORTIE RADIO, LE BANC LA CHOISIT (_radio_choix de
+    # osmo-phonesim-banc.py) : la 4G d abord (tun_srsue dans le netns ue1),
+    # sinon le PDP GPRS du modem osmocom-bb (tun_modem dans msgprs). On
+    # forcait ici OSMO_LTE_TUN=tun_modem OSMO_LTE_NETNS= : la branche 4G
+    # etait coupee, et tun_modem cherche sur l hote (il vit dans msgprs) -
+    # 4G attachee, telephone sans data. On ne redit plus rien.
     $BANC_SUDO setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
-        OSMO_LTE_TUN="${MODEM_TUN:-tun_modem}" OSMO_LTE_NETNS= OSMO_LTE_SGI_NET=176.16.32.0/24 \
         OSMO_PPP_DNS="${OSMO_PPP_DNS:-192.168.1.254,1.1.1.1}" \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$PORT_AT" --data "127.0.0.1:$((PORT_AT + 1))" \
         >>"$BANC_LOG" 2>&1 </dev/null &

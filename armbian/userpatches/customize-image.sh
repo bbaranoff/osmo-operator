@@ -125,7 +125,7 @@ if [ "$BUILD_DESKTOP" = yes ]; then
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type='nothing'\nsleep-inactive-battery-type='nothing'\n\n[org.gnome.desktop.input-sources]\nsources=[('xkb','%s')]\n" \
         "${OSMO_KB:-fr}" > "$OVR"
     for sec in org.gnome.desktop.interface org.gnome.desktop.interface:GNOME-Greeter; do
-        printf "\n[%s]\ncolor-scheme='prefer-dark'\ngtk-theme='Yaru-blue-dark'\nicon-theme='Yaru-blue'\ncursor-theme='Yaru'\n" "$sec" >> "$OVR"
+        printf "\n[%s]\ncolor-scheme='default'\ngtk-theme='Yaru-blue'\nicon-theme='Yaru-blue'\ncursor-theme='Yaru'\n" "$sec" >> "$OVR"
     done
     if [ -f "$FOND" ]; then
         for sec in org.gnome.desktop.background org.gnome.desktop.background:GNOME-Greeter; do

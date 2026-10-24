@@ -303,7 +303,8 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd
       psmisc
       cryptsetup rsync
       python3 python3-venv python3-scapy
-      tshark wireshark-common"
+      tshark wireshark-common
+      wireguard-tools"
 [ "$NODE_VIA_APT" = "1" ] && PKGS="$PKGS nodejs"
 
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
@@ -956,16 +957,19 @@ GDM
 
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
-    # ── MODE SOMBRE, YARU BLEU ──────────────────────────────────────────
-    # [2026-10-01] Comme sur le banc installe : theme sombre et accent bleu
-    # (Yaru-blue-dark, icones Yaru-blue), le bleu du Conky et des encarts.
+    # ── MODE CLAIR, YARU BLEU ───────────────────────────────────────────
+    # [2026-10-01] Comme sur le banc installe : accent bleu (icones Yaru-blue),
+    # le bleu du Conky et des encarts.
+    # [2026-10-24] RETOUR AU MODE CLAIR PAR DEFAUT (Yaru-blue, color-scheme
+    # default), ici et dans le natif (install_modules/80-bureau.sh). Le
+    # sombre reste a un clic : Parametres > Apparence.
     # Les sections :ubuntu doublent la section nue, pour la meme raison que le
     # fond (10_ubuntu-settings.gschema.override pose gtk-theme=Yaru dans
     # [org.gnome.desktop.interface:ubuntu], que la session ubuntu lit d abord).
     # [2026-10-24] Et :GNOME-Greeter, comme le fond : sans elle, l ecran de
     # connexion (gdm) restait en Yaru orange, seul ecran hors du theme du banc.
     for _sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu" "org.gnome.desktop.interface:GNOME-Greeter"; do
-        printf "\n[%s]\ncolor-scheme=\047prefer-dark\047\ngtk-theme=\047Yaru-blue-dark\047\nicon-theme=\047Yaru-blue\047\ncursor-theme=\047Yaru\047\n" "$_sec" \
+        printf "\n[%s]\ncolor-scheme=\047default\047\ngtk-theme=\047Yaru-blue\047\nicon-theme=\047Yaru-blue\047\ncursor-theme=\047Yaru\047\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done
     unset _sec

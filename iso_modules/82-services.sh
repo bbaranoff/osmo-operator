@@ -172,7 +172,9 @@ fi
 # l icone « 4G du banc ») suit la meme regle : posee, OSMO_ISO_LTE=1 pour
 # l activer au boot. Sans srsenb (interstp, arm64) sa Condition la saute.
 if [ "$ISO_ROLE" != "interstp" ]; then
-    for _u in osmo-banc osmo-multi osmo-lte; do
+    # [2026-10-24] osmo-supplements : posee, PAS activee ; le job Calamares osmosupplements
+    # l active dans la cible si une case de la page « Supplements » est cochee.
+    for _u in osmo-banc osmo-multi osmo-lte osmo-supplements; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
         else

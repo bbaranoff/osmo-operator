@@ -2,7 +2,7 @@
 # osmo-gtk-run.py - UNE COMMANDE, UNE FENETRE GTK : le terminal devient un journal.
 #
 #     osmo-gtk-run.py [--title T] [--icon FICHIER] [--root] [--tty] [--progress]
-#                     [--close-on-exit] [--cwd DIR] -- COMMANDE [ARGS...]
+#                     [--keep-open] [--cwd DIR] -- COMMANDE [ARGS...]
 #
 # [2026-10-01] AUCUN FAVORI N OUVRE PLUS DE TERMINAL. Les icones du dock et du
 # bureau (supplements, update, Claude, deka, telephone pmOS, 4G, pilotes, le
@@ -11,7 +11,14 @@
 # ferme pas avant qu on ait lu. Elles passent toutes par ICI : une fenetre GTK
 # du banc (meme habillage que la barre de lancement, tools/osmo-launcher.py),
 # qui montre la sortie de la commande, dit quand elle est finie et avec quel
-# statut, et reste ouverte jusqu a « fermer ».
+# statut, et se ferme.
+#
+# [2026-10-24] LA FIN DU SCRIPT FERME LA FENETRE. Un favori qui a fini n a
+# plus rien a montrer : sortie en 0, la fenetre part apres 1,5 s ; en echec,
+# la console est depliee et un compte a rebours de 15 s laisse lire l erreur
+# (« garder ouverte » l arrete). --keep-open : l ancien comportement, pour ce
+# qu on ouvre POUR LIRE (« Etat 4G », « Etat du telephone »). --close-on-exit
+# est accepte et ne change plus rien (c est le defaut).
 #
 # DEUX FACONS DE MONTRER LA COMMANDE :
 #   - journal (defaut) : stdout + stderr de la commande dans une vue texte
@@ -91,7 +98,8 @@ def _parse():
     ap.add_argument("--tty", action="store_true", help="un terminal (VTE) plutot qu un journal")
     ap.add_argument("--progress", action="store_true",
                     help="une barre de progression, la console repliee derriere un bouton")
-    ap.add_argument("--close-on-exit", action="store_true", help="ferme la fenetre si la commande sort en 0")
+    ap.add_argument("--close-on-exit", action="store_true", help="(defaut, garde pour les anciens .desktop)")
+    ap.add_argument("--keep-open", action="store_true", help="la fenetre reste ouverte a la fin de la commande")
     ap.add_argument("--cwd", default=None)
     ap.add_argument("--width", type=int, default=980)
     ap.add_argument("--height", type=int, default=600)
@@ -199,6 +207,11 @@ class Run(Gtk.Window):
         self.b_close = Gtk.Button(label="fermer")
         self.b_close.connect("clicked", lambda *_x: self.destroy())
         head.pack_end(self.b_close, False, False, 0)
+        self.rebours = None         # secondes avant fermeture, None = pas de rebours
+        self.b_garder = Gtk.Button(label="garder ouverte")
+        self.b_garder.set_tooltip_text("annule la fermeture automatique")
+        self.b_garder.connect("clicked", lambda *_x: self._garder())
+        head.pack_end(self.b_garder, False, False, 0)
         if not a.tty:
             b_copy = Gtk.Button(label="copier")
             b_copy.set_tooltip_text("copie tout le journal dans le presse-papier")
@@ -289,6 +302,7 @@ class Run(Gtk.Window):
                 col.pack_start(sc, True, True, 0)
         self.add(col)
         self.show_all()
+        self.b_garder.hide()
         if a.tty and Vte is None:
             self._append("[osmo-gtk-run] VTE (gir1.2-vte-2.91) absent : journal au lieu du terminal, "
                          "les questions de la commande ne pourront pas etre repondues.\n")
@@ -497,9 +511,32 @@ class Run(Gtk.Window):
                     pass
                 self.master = None
         self.b_stop.set_sensitive(False)
-        if self.a.close_on_exit and rc == 0:
-            GLib.timeout_add(1200, lambda: (self.destroy(), False)[1])
+        if not self.a.keep_open:
+            if rc == 0:
+                GLib.timeout_add(1500, lambda: (self.destroy(), False)[1])
+            else:
+                self.rebours = 15
+                self.b_garder.show()
+                self._tic()
+                GLib.timeout_add(1000, self._tic)
         return False
+
+    def _tic(self):
+        """Echec : compte a rebours dans le bandeau, puis fermeture."""
+        if self.rebours is None:
+            return False
+        if self.rebours <= 0:
+            self.destroy()
+            return False
+        base = self.state.get_text().split(" - ")[0]
+        self.state.set_text("%s - fermeture dans %d s" % (base, self.rebours))
+        self.rebours -= 1
+        return True
+
+    def _garder(self):
+        self.rebours = None
+        self.state.set_text(self.state.get_text().split(" - ")[0])
+        self.b_garder.hide()
 
     def _copier(self, *_a):
         buf = self.tv.get_buffer()

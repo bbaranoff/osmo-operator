@@ -260,7 +260,7 @@ if [ "$_bloc_direct" = "1" ]; then
         fi
         # [2026-10-01] Dans une fenetre GTK du banc (terminal VTE dedans), plus
         # dans un gnome-terminal : aucun favori n ouvre de terminal.
-        _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; }"
+        _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; exit 1; }"
         exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
              --title "Console du mobile (VTY $_p)" -- bash -c "$_c"
         _note "Aucune fenetre possible - tapez : telnet 127.0.0.1 $_p"

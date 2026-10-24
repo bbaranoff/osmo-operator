@@ -1,0 +1,24 @@
+osmocom-bb firmware : -Wl,-Map,<fichier> au lieu de -Wl,-Map <fichier>
+
+[2026-10-24] Le lien des .elf passe par gcc ($(LD) = $(CC)). « -Wl,-Map board/x.map »
+ne transmet a ld QUE « -Map » ; le chemin du .map reste un argument de gcc, qui le prend
+pour un fichier d entree et s arrete avant ld :
+  arm-elf-gcc: board/compal_e88/hello_world.highram.map : No such file or directory
+  make[1]: *** [Makefile.inc:139: board/compal_e88/hello_world.highram.elf] Error 1
+Avec la virgule, option et fichier vont ensemble a ld. tools/osmo-firmwares-install.sh
+(_fw_bb_corriger) le faisait par sed pour le supplement --gnuarm ; le patch couvre aussi
+un « make firmware » tape a la main dans osmocom-bb/src.
+
+diff --git a/src/target/firmware/Makefile.inc b/src/target/firmware/Makefile.inc
+index 86e8f3ce..17549064 100644
+--- a/src/target/firmware/Makefile.inc
++++ b/src/target/firmware/Makefile.inc
+@@ -99,7 +99,7 @@ $(1)_$(2)_$(3)_OBJS+=board/$(2)/$(1).$(3).manifest.o
+ # define compilation rule, also generates map file
+ board/$(2)/$(1).$(3).elf board/$(2)/$(1).$(3).map: $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) $$(ENV_$(3)_LDS)
+ 	$$(Q_LD)$(CROSS_COMPILE)$(LD) $(LDFLAGS) -T $$(ENV_$(3)_LDS) -Bstatic \
+-		-Wl,-Map board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
++		-Wl,-Map,board/$(2)/$(1).$(3).map -o board/$(2)/$(1).$(3).elf \
+ 		-Wl,--start-group $$($(1)_$(2)_$(3)_OBJS) $$($(1)_$(2)_$(3)_LIBS) -Wl,--end-group
+ 
+ # define size rule

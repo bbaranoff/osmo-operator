@@ -363,7 +363,7 @@ Actions=Etat;Arreter;
 
 [Desktop Action Etat]
 Name=Etat du telephone
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --keep-open --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
 
 [Desktop Action Arreter]
 Name=Arreter le telephone

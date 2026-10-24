@@ -17,6 +17,12 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
     cp -a "$_CAL_SRC/settings.conf" "$ROOTFS/etc/calamares/"
     cp -a "$_CAL_SRC/modules"       "$ROOTFS/etc/calamares/"
     cp -a "$_CAL_SRC/branding"      "$ROOTFS/etc/calamares/"
+    # [2026-10-24] Le job python osmosupplements (page « Supplements ») : dans le repertoire
+    # des modules SYSTEME, celui de modules-search que Calamares parcourt a coup sur.
+    _CAL_MODS="$ROOTFS/usr/lib/$(chroot "$ROOTFS" dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)/calamares/modules"
+    install -d "$_CAL_MODS/osmosupplements"
+    install -m644 "$_CAL_SRC/jobs/osmosupplements/module.desc" "$_CAL_SRC/jobs/osmosupplements/main.py" \
+        "$_CAL_MODS/osmosupplements/"
 
     # Les images de l habillage : on reprend le fond d ecran deja fige au build
     # plutot que d ajouter des binaires au depot. Calamares les met a l echelle.

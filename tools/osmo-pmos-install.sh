@@ -145,7 +145,7 @@ Keywords=postmarketos;pmos;qemu;modem;gsm;telephone;
 Actions=status;stop;build;
 [Desktop Action status]
 Name=Etat du telephone (osmo-pmos status)
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --keep-open --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
 [Desktop Action stop]
 Name=Arreter le telephone (osmo-pmos stop)
 Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --close-on-exit --title "Arret du telephone" -- /usr/local/bin/osmo-pmos stop

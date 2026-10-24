@@ -77,6 +77,11 @@ bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
 # [2026-10-24] /root/gnuarm/install/bin dans le PATH des qu il existe (supplement --gnuarm) :
 # le fichier est pose ici, il ne fait rien tant que la chaine est absente.
 install -Dm644 "$P/scripts/osmo-gnuarm-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-gnuarm.sh"
+# [2026-10-24] WireGuard du WAN (wiki/WAN.md) : « wg 1 » (hub 10.99.0.1), « wg N ... » (10.99.0.N),
+# fonction de profile.d qui laisse passer le vrai wg ; osmo-wg pour sudo et les scripts. Les cles
+# sont generees au premier « wg N » sur la machine, JAMAIS dans l image (elles seraient partagees).
+install -Dm644 "$P/scripts/osmo-wg-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-wg.sh"
+ln -sf /opt/GSM/osmo-operator/tools/osmo-wg.sh "$ROOTFS/usr/local/bin/osmo-wg" 2>/dev/null || true
 # (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then

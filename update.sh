@@ -227,7 +227,7 @@ Actions=Etat;Arreter;
 
 [Desktop Action Etat]
 Name=Etat du telephone
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --keep-open --title "Etat du telephone" -- /usr/local/bin/osmo-pmos status
 
 [Desktop Action Arreter]
 Name=Arreter le telephone
@@ -938,12 +938,16 @@ osmo_poser_voix_forks
 #   - /usr/local/bin/osmo-glava (une copie, pas un lien) aligne sur tools/osmo-glava.sh.
 osmo_poser_outils_banc() {
     [ "$(id -u)" -eq 0 ] || return 0
-    local r=/opt/GSM/osmo-operator v neuf=0
+    local r=/opt/GSM/osmo-operator v
     [ -d "$r" ] || return 0
     [ -f "$r/scripts/osmo-gnuarm-profile.sh" ] \
         && install -m644 "$r/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh
     [ -f "$r/scripts/osmo-banc-aliases.sh" ] \
         && install -m644 "$r/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
+    # WireGuard du WAN (« wg 1 », « wg N ... ») ; le paquet, lui, demande apt : install native / ISO
+    [ -f "$r/scripts/osmo-wg-profile.sh" ] \
+        && install -m644 "$r/scripts/osmo-wg-profile.sh" /etc/profile.d/97-osmo-wg.sh \
+        && ln -sf "$r/tools/osmo-wg.sh" /usr/local/bin/osmo-wg
     [ -x "$r/tools/osmo-banc-cmd.sh" ] && bash "$r/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
     for v in c123 osmo-c123; do
         [ "$(readlink "/usr/local/bin/$v" 2>/dev/null)" = "$r/tools/osmo-c123-gtk.py" ] \
@@ -953,17 +957,8 @@ osmo_poser_outils_banc() {
         && ! cmp -s "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
         && install -m755 "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
         && echo "  [bureau] osmo-glava aligne sur le depot (systemctl --user restart glava)"
-    if command -v update-alternatives >/dev/null 2>&1; then
-        update-alternatives --list gcc >/dev/null 2>&1 || neuf=1
-        for v in 9 11 13; do
-            [ -x "/usr/bin/gcc-$v" ] && [ -x "/usr/bin/g++-$v" ] || continue
-            update-alternatives --list gcc 2>/dev/null | grep -qx "/usr/bin/gcc-$v" && continue
-            update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-$v" "$(( v * 10 ))" \
-                --slave /usr/bin/g++ g++ "/usr/bin/g++-$v" >/dev/null 2>&1 \
-                && echo "  [outils] alternative gcc-$v posee"
-        done
-        [ "$neuf" = 1 ] && [ -x /usr/bin/gcc-13 ] && update-alternatives --set gcc /usr/bin/gcc-13 >/dev/null 2>&1
-    fi
+    # alternatives gcc-9 / gcc-11 / gcc-13 (une seule definition : tools/osmo-gcc-alternatives.sh)
+    [ -x "$r/tools/osmo-gcc-alternatives.sh" ] && bash "$r/tools/osmo-gcc-alternatives.sh"
     return 0
 }
 osmo_poser_outils_banc
