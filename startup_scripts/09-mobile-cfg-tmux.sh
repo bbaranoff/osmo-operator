@@ -216,7 +216,7 @@ if [ "${AIR_MESH:-0}" = "1" ]; then
         done
 
         printf '  %sair-mesh%s   noeud %s  arfcn %s  emplacements TRXD %s et %s  pairs:%s\n' \
-            "${C_DIM:-}" "${C_Z:-}" "${NODE_ID:-1}" "${ARFCN:-514}" \
+            "${C_DIM:-}" "${C_Z:-}" "${NODE_ID:-1}" "${ARFCN:-1}" \
             "$_TRX_MS" "$_TRX_BTS" "${_PAIRS:- aucun}"
 
         # On attend que fake_trx ait BINDE l'emplacement, pas une duree : il ne
@@ -236,7 +236,7 @@ if [ "${AIR_MESH:-0}" = "1" ]; then
           sleep 1
           # shellcheck disable=SC2086
           exec setsid python3 -u "$_AIRMESH" \
-              --node "${NODE_ID:-1}" --arfcn "${ARFCN:-514}" \
+              --node "${NODE_ID:-1}" --arfcn "${ARFCN:-1}" \
               --port "${AIRMESH_PORT:-4739}" \
               --trx-ms "$_TRX_MS" --trx-bts "$_TRX_BTS" \
               --topologie "${HERE}/data/air-mesh.txt" \

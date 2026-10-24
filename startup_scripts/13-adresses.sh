@@ -334,7 +334,7 @@ start_sap() {
         if [ -r "$_src" ]; then
             sed -e "s#^\([[:space:]]*\)sim \(test\|reader\)\$#\1sim sap#" \
                 -e "s|^\([[:space:]]*\)sap-socket .*|\1sap-socket $sock|" \
-                -e "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${PLAN_ARFCN:-${ARFCN:-514}}|" "$_src" > "$_dst.tmp" \
+                -e "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${PLAN_ARFCN:-${ARFCN:-1}}|" "$_src" > "$_dst.tmp" \
                 && mv -f "$_dst.tmp" "$_dst"
             grep -q "^[[:space:]]*sap-socket " "$_dst" \
                 || sed -i "s|^\([[:space:]]*\)layer2-socket .*|&\n\1sap-socket $sock|" "$_dst"

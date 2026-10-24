@@ -20,7 +20,7 @@ Le démod produit les 148 bits du burst complet (3 tail | 57 | 1 | 26 train |
 (le decoder est silencieux sur CRC fail), inverser BIT_SIGN.
 
 Usage : source /root/.env/bin/activate ; python tools/qemu_bcch_grgsm.py
-Env   : IQ_TEE_PORT(6703) GSMTAP_HOST/PORT(127.0.0.1/4730) ARFCN(514)
+Env   : IQ_TEE_PORT(6703) GSMTAP_HOST/PORT(127.0.0.1/4730) ARFCN(1)
         TS(0) BIT_SIGN(1)
 """
 import os, socket, struct
@@ -30,7 +30,7 @@ from gnuradio import gr, gsm, network
 IQ_TEE_PORT = int(os.environ.get("IQ_TEE_PORT", "6703"))
 GSMTAP_HOST = os.environ.get("GSMTAP_HOST", "127.0.0.1")
 GSMTAP_PORT = int(os.environ.get("GSMTAP_PORT", "4730"))
-ARFCN       = int(os.environ.get("ARFCN", "514"))
+ARFCN       = int(os.environ.get("ARFCN", "1"))
 TS          = int(os.environ.get("TS", "0"))
 BIT_SIGN    = int(os.environ.get("BIT_SIGN", "1"))
 

@@ -165,6 +165,29 @@ osmo_corriger_multi_natif() {
 }
 osmo_corriger_multi_natif
 
+# ── LE MOBILE QEMU DOIT CHERCHER LA CELLULE SUR L ARFCN DU PLAN ─────────────
+# [2026-10-24] Dans les conteneurs du multi, la BSC emet sur PLAN_ARFCN (1,
+# globals.conf ARFCN="1") mais le mobile QEMU de l instance 1 lit
+# c54x_exe/mobile_pont.cfg tel quel : `stick 514`, le gabarit. run.sh ne
+# reecrit le stick que pour les instances 2+ : le mobile cherchait 514 et
+# ne trouvait jamais la cellule. On aligne le gabarit sur le plan radio
+# (radio-plan.env, puis ARFCN de globals.conf, puis 1). Idempotent.
+osmo_aligner_arfcn_qemu() {
+    local cfg arfcn
+    arfcn="$( . /etc/osmocom/radio-plan.env 2>/dev/null; echo "${PLAN_ARFCN:-}")"
+    [ -n "$arfcn" ] || arfcn="$(sed -n 's/^ARFCN="\{0,1\}\([0-9]*\)"\{0,1\}$/\1/p' \
+        "$(dirname "$(readlink -f "$0")")/globals.conf" 2>/dev/null | tail -1)"
+    [[ "$arfcn" =~ ^[0-9]+$ ]] || arfcn=1
+    for cfg in /opt/GSM/c54x_exe/mobile_pont.cfg; do
+        [ -w "$cfg" ] || continue
+        grep -qE "^[[:space:]]*stick ${arfcn}\$" "$cfg" && continue
+        sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${arfcn}|" "$cfg"
+        echo "[OK] $cfg : stick ${arfcn} (ARFCN du plan radio)."
+    done
+    return 0
+}
+osmo_aligner_arfcn_qemu
+
 # ── L OUTIL DE PEINTURE (overlay) SUR LES MACHINES DEJA INSTALLEES ──────────
 # [2026-09-05] tools/overlay-draw.py + son lanceur. build-iso l embarque ; ici
 # on rattrape les machines deja posees : symlink, icone, chemin absolu. Idempotent.
