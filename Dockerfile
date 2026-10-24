@@ -485,7 +485,7 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
 # dans aucun de ses Makefiles). bindir vaut /usr/local/bin par configure.
 RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       cd ${ROOT} && \
-      wget -q https://www.freecalypso.org/pub/GSM/FreeCalypso/sms-coding-utils-latest.tar.bz2 && \
+      wget -q https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env/sms-coding-utils-latest.tar.bz2 && \
       tar xf sms-coding-utils-latest.tar.bz2 && \
       cd sms-coding-utils-r1 && \
       ./configure && \
@@ -758,7 +758,9 @@ RUN ldconfig
 # le dump FreeCalypso 3606, le convertit en .bin et verifie SHA256SUMS.3606 ;
 # calypso_dsp.txt, c est le dump brut lui-meme, qu il ne garde pas : on le
 # telecharge a part.
-ARG FREECALYPSO_URL=ftp://ftp.freecalypso.org/pub/GSM/Calypso
+# [2026-10-24] dsp-rom-3606-dump.txt vient du depot fc-magnetite (freecalypso-env/),
+# plus du FTP FreeCalypso (~18 Ko/s).
+ARG FREECALYPSO_URL=https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env
 RUN if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
       && cd /opt/GSM/c54x_exe \
