@@ -17,6 +17,73 @@ measured on v0.1-6.
 
 ---
 
+## What's inside — a mobile operator on one USB stick
+
+Boot it, click one icon, and you are running a **whole GSM network with its
+phones**: no radio, no SDR, no SIM card required. Everything below is in the
+image. Nothing starts by itself; you start it.
+
+**📡 A real 2G core, end to end** — osmo-bsc, osmo-msc, osmo-hlr, osmo-stp,
+osmo-sgsn/ggsn, osmo-pcu (GPRS/EDGE), osmo-mgw, Asterisk, an SMSC. Two cells,
+two subscribers, A5/1, location update, SMS, **audible voice calls**, GSMTAP
+straight into Wireshark. → [§ 5.1](#51-the-standalone-2g-bench)
+
+**📱 Real phone firmware on an emulated phone** — a QEMU fork (`qosmo`) runs
+the Calypso baseband of a Motorola C123 with the genuine OsmocomBB firmware,
+and the **TI TMS320C54x DSP runs on its own mask ROM**: the emulated phone
+syncs to the cell (FCCH/SCH), reads SI1-4 and camps.
+→ [§ 5.2](#52-two-layer-1-chains-dsp-default-and-gr-gsm), [§ 5.3](#53-the-emulated-calypso-baseband)
+
+**🗼 The phone can even *be* the base station** — `./start-native.sh --bts`
+turns the emulated Calypso into the transceiver of the BTS; `--bts --ms`
+adds a second Calypso that camps on it **over an emulated air interface**. A
+fourth one runs the RSSI app. One command each: `banc-trx`, `banc-mobile`,
+`banc-rssi`. → [§ 5.13](#513-the-calypso-bench-the-c123-window-and-glava)
+
+**🖐️ Hold the phone in your hand** — `c123` opens a photo of the Motorola
+C123 with its live LCD inlaid and clickable keys (or your PC keyboard).
+→ [§ 5.13](#513-the-calypso-bench-the-c123-window-and-glava)
+
+**🌐 4G next to it, with fallback to 2G** — Open5GS core, srsENB and srsUE
+over ZeroMQ, data out to the Internet, and **CSFB** over SGs back to the 2G
+MSC. → [§ 5.6](#56-4g-srsran--open5gs-and-csfb)
+
+**☎️ A smartphone on the network** — a postmarketOS/Phosh VM whose modem is
+the bench: SMS and voice through 2G, data through 4G.
+→ [§ 5.7](#57-the-postmarketos-phone)
+
+**🔗 Several operators, roaming between them** — SS7 with an inter-STP hub,
+1 to 9 nodes across machines (`--node`, `--wan`), operators in Docker next to
+the native one. → [§ 5.4](#54-start-nativesh-profiles-and-options), [§ 5.5](#55-ss7-multi-operator-docker-and-the-add-ons)
+
+**🖥️ A desktop made for the bench** — GNOME with a city wallpaper that
+**raises its antenna when a network starts**, a live I/Q spectrum panel, a
+timeslot banner, a Conky status board, a **GLava spectrum circle dancing on
+the speakers and the microphone**, Wireshark as root with ready-made filters,
+Linphone on extension 100, a web dashboard and a tutorial. Every launcher
+opens a progress window, never a bare terminal.
+→ [§ 5.8](#58-the-desktop), [§ 5.13](#513-the-calypso-bench-the-c123-window-and-glava)
+
+**🔍 Tools to look inside** — gdb on the emulated baseband, VTYs for every
+daemon, `ss7-console.py`, `checks/check_all.sh`, a ring-buffer tcpdump.
+→ [§ 5.10](#510-diagnostics), [§ 5.11](#511-ports-vty-network)
+
+**💾 Live, in RAM, or installed** — hybrid ISO (UEFI/BIOS, Secure Boot),
+`toram` entry, persistence, and a Calamares installer with an optional
+LUKS2-encrypted `/home`. → [§ 3](#3-getting-it-booting-finding-your-way), [§ 6](#6-installing-to-a-disk)
+
+**➕ One click for more** — the *Supplements* icon adds the multi-operator
+Docker bench, OpenCL + deka (A5/1 tables), Claude Code, games and media, and
+extra phone firmwares (FreeCalypso Magnetite on a C139, MediaTek Fernvale,
+osmocom-bb-trx). → [§ 5.5](#55-ss7-multi-operator-docker-and-the-add-ons)
+
+**🍓 On ARM boards too** — the same stack as SD images built by
+[armbian/build](https://github.com/armbian/build) for the **Raspberry Pi 4**
+and **every Orange Pi 5** (5, 5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra), with or
+without the bench desktop. → [§ 2](#2-images-produced)
+
+---
+
 ## 1. At a glance
 
 | Item | Value |
@@ -40,8 +107,9 @@ measured on v0.1-6.
 
 ## 2. Images produced
 
-A single chain (`build-iso.sh` + `iso_modules/`) produces five images. With no
-option, the four amd64 images are built back to back (`--all`).
+A single chain (`build-iso.sh` + `iso_modules/`) produces the four amd64
+images, built back to back with no option (`--all`); `--arm` hands over to
+the Armbian framework for the SD images.
 
 | Image | File | Role | Contents |
 |---|---|---|---|
@@ -49,7 +117,7 @@ option, the four amd64 images are built back to back (`--all`).
 | Operator | `osmo-operator.iso` | `--role=operator` (default): the full bench, no desktop | 2G stack, emulated baseband, 4G, dashboard, tools; text console |
 | Lite | `osmo-operator-lite.iso` | `--lite`: the same minus the build workshops | `/opt/GSM` stripped of source trees (`iso_modules/87-lite.sh`, same rules as `Dockerfile.lite`) |
 | Desktop | `osmo-operator-desktop.iso` | `--desktop`: + GNOME, Wireshark, Linphone, VLC, Calamares, Conky, Firefox (~2.5 GB more) | this is the image published in releases |
-| Raspberry Pi 4 | `osmo-operator-…-rpi4.img` | `--arm`: arm64 SD image on an Armbian 24.04 base | no squashfs or GRUB, native compilation in the emulated chroot (`82-arm-natif.sh`), about ten hours the first time |
+| ARM boards | `Armbian-…_<Board>_noble_….img` (CI: `osmo-operator-<board>[-desktop].img`) | `--arm`: one arm64 SD image **per board**, built by [armbian/build](https://github.com/armbian/build) (`armbian/build-armbian.sh`): `rpi4b` and every Orange Pi 5 — `orangepi5`, `orangepi5b`, `orangepi5-plus`, `orangepi5pro`, `orangepi5-max`, `orangepi5-ultra` (`--board=rpi4\|opi5\|all\|<board>,…`, default `all`) | Armbian builds kernel, BSP, u-boot/firmware, rootfs and image; the stack comes from the arm64 Docker image through `armbian/userpatches/customize-image.sh`. `--desktop`: GNOME (Armbian configng, tier minimal) + the bench desktop, without GLava (OpenGL ≥ 4.2 missing on these GPUs). No 4G, no `--lite`. The first Docker build is emulated: about ten hours |
 
 With `--node=N` (1 to 9), the name becomes `osmo-operator-N[-lite][-desktop].iso`
 and the image carries the SS7 identity of node N. `--output=FILE` forces the name.
@@ -167,7 +235,8 @@ The bench runs as root. Icons elevate via `pkexec`, the command line via
   rootfs; `/usr/local/lib` goes first in `ldconfig`. The environment that
   works is the image's, not a different apt version.
 - Desktop: `ubuntu-desktop-minimal`, wireshark, linphone-desktop, vlc,
-  calamares, conky, `python3-gi`, `gir1.2-gtk-3.0`, `gir1.2-vte-2.91`, Firefox
+  calamares, conky, `python3-gi`, `python3-gi-cairo`, `python3-cairo`,
+  `gir1.2-gtk-3.0`, `gir1.2-vte-2.91`, GLava (compiled, `85-glava.sh`), Firefox
   from packages.mozilla.org, GDM with root autologin, no Wayland.
 - Integrity check: the rootfs is verified against dpkg **before**
   compression, then the squashfs is read back and re-verified (`90-iso.sh`).
@@ -436,6 +505,69 @@ Network: docker interconnect `gsm-inter` 172.20.0.0/24 and `gsm-net-opN`
 | `osmo-dsp` icon | DSP is the default, right-click offers gr-gsm | `85-installeur-bureau.sh` |
 | `osmo-trust-desktop` and the desktop icons | launchers are in the dock and the menu | `85-installeur-bureau.sh` |
 
+### 5.13 The Calypso bench, the C123 window and GLava
+
+**The Calypso chains** (`/opt/GSM/c54x_exe/run.sh`, `MODE=dsp`): each chain
+is an *instance* of four processes — `c54x_exe` (the DSP), `qosmo` (the ARM),
+osmocon, and the host application. The network itself (core, BSC, BTS) stays
+with `./start-native.sh`; these commands only add phones to it.
+
+| Command | Instance | What runs | Logs |
+|---|---|---|---|
+| `banc-trx` | 1 | firmware `trx.highram.elf` + host `transceiver`: the Calypso **is the BTS#0 radio** (TRXD 5700-5702) | `/tmp/c54x-pont` |
+| `banc-mobile` | 2 | firmware layer1 + `mobile`, camped on instance 1 **over the air** (`pont/air.py`) | `/tmp/c54x-pont2` |
+| `banc-mobile-seul` | 1 | the classic set-up: one mobile + `pont/pont_dsp.py` towards osmo-bts-trx | `/tmp/c54x-pont` |
+| `banc-rssi` | 4 | firmware `rssi.highram.elf`: the RSSI app alone, screen and keys emulated; kept apart (`banc-stop` and `start-native.sh --stop` leave it running) | `/tmp/c54x-pont4` |
+| `banc-stop` / `banc-status` / `banc-logs` | | `run.sh --stop` / `--status` / `--logs` | |
+| `banc-mobile-stop`/`-status`/`-logs`, `banc-rssi-stop` | 2, 4 | the same for one instance | |
+
+In classic-BTS mode (`pont_dsp.py` running) `banc-rssi` takes its downlink
+from the bridge's copy (UDP 6762); with `--bts`, from the air. Realistic air
+levels are on by default (`CALYPSO_AIR_NIVEAUX=1`): the cell is heard only on
+its ARFCN (`PLAN_ARFCN` in `/etc/osmocom/radio-plan.env`), noise elsewhere.
+
+The same set-ups in one go, network included:
+
+```bash
+./start-native.sh --bts            # the Calypso is the BTS radio, alone
+./start-native.sh --bts --ms       # + a mobile camped on it over the air
+./start-native.sh --bts-classic    # osmo-bts-trx + bridge + emulated mobile (the --dsp default)
+```
+
+These names are defined once, in `scripts/osmo-banc-aliases.sh`, installed as
+`/etc/profile.d/98-osmo-banc-aliases.sh` for login shells. They are **also
+real commands** in `/usr/local/bin`, links to `tools/osmo-banc-cmd.sh`, which
+sources that file and replays its own name: they work from Alt+F2, `sudo`, a
+script or `bash -c` (`tools/osmo-banc-cmd.sh --install` lays the links;
+`70-scripts.sh` does it in the ISO).
+
+**The C123 window** (`tools/osmo-c123-gtk.py`, GTK3, system `python3` with
+`python3-gi`, `python3-gi-cairo`, `gir1.2-gtk-3.0`): a photo of the Motorola
+C123 (`data/c123.jpg`) with the ST7558 LCD that `qosmo` publishes in
+`/dev/shm/calypso[N]/calypso_lcd` redrawn into it, and keys you can click —
+or type: `0-9`, `*`/`s`, `#`/`h`, arrows, Enter = menu, `o` = ok, F1/F2 =
+soft keys. Power (red key, Esc, `p`) needs a **long press** and is never sent
+to a TRX instance: it would switch the BTS radio off.
+
+| Command | Window on |
+|---|---|
+| `c123` | the first live instance that is **not** a TRX (the mobile); in a login shell, the alias `c123` opens instance 1 |
+| `c123-1`, `c123-2`, `c123-3` | instances 2 (mobile), 3 (second TRX phone), 4 (rssi) |
+| `c123-tous` | one window per live instance, plus those that appear later |
+| `c123 --modele c139` | the colour C139 screen, for the Magnetite firmware (add-on) |
+| `c123 --calibrate` | redefine the key zones (`data/c123-zones.json`) with the mouse |
+
+**GLava** (`tools/glava-build.sh`, `iso_modules/85-glava.sh`, desktop ISO
+only): GLava with the *NCS Spectrum* module, compiled at build time (no noble
+package). A spectrum circle sits above the city of the wallpaper and a bar
+spectrum runs along the bottom edge, both sized from the screen at login
+(`tools/osmo-glava.sh`). They listen to **the speakers and the microphone
+together**: a null sink `osmo_glava` fed by two loopbacks, the monitor of the
+hardware output (everything that plays, bench voice included) and the default
+source (`osmo_mic_ec`, the echo-cancelled mic). The mic goes only to that
+sink, never to the speakers: no feedback. A systemd user service:
+`systemctl --user stop|start|disable glava`. It needs OpenGL ≥ 4.2.
+
 ---
 
 ## 6. Installing to a disk
@@ -600,7 +732,8 @@ sudo ./build-iso.sh --arm --lite              # Raspberry Pi 4 SD image
 | `--role=operator\|interstp` | `ISO_ROLE` | bench or SS7 hub |
 | `--node=N` | `ISO_NODE`, `ISO_WAN_ID` | node identity 1-9, name `osmo-operator-N` |
 | `--lite`, `--desktop`, `--all` | `ISO_LITE`, `ISO_DESKTOP`, `ISO_ALL` | see §2 |
-| `--arm` / `--arch=arm64` | `ISO_ARCH` | Raspberry Pi 4 (Armbian, ports.ubuntu.com) |
+| `--arm` / `--arch=arm64` | `ISO_ARCH` | ARM SD images through `armbian/build-armbian.sh` (§2); `OSMO_ISO_ARM_DRY=1` prints the `compile.sh` commands only |
+| `--board=LIST` | `ISO_ARM_BOARD`, `OSMO_ISO_BOARD` | `--arm` boards: `rpi4`, `opi5`, `all` (default) or Armbian names |
 | `--banc`, `--multi` | `OSMO_ISO_BANC`, `OSMO_ISO_MULTI` | enable the unit at the image's boot |
 | `--version=24.04\|22.04` | `ISO_UBUNTU`, `ISO_SUITE` | noble (default) or jammy |
 | `--kb=fr` | `OSMO_ISO_KB` | keyboard layout (asked in the terminal otherwise) |
@@ -634,25 +767,25 @@ to do exits via `return` (that is how `--arm` skips a step).
 | `40-rootfs.sh` | `debootstrap --variant=minbase` (cache `~/.cache/osmo-iso-debs`), or inherited rootfs |
 | `50-injection-image.sh` | build `.deb`s via `dpkg -i`, copy of `/usr/local`, `/opt/GSM`, venv, node, units |
 | `51-depot.sh` | clone of osmo-operator and the tests, `coeur.env` |
-| `51-shannon.sh` | clone of `bbaranoff/firmwire` (`/opt/GSM/FirmWire`) and `bbaranoff/shannon_ghidra_proj` (`/opt/GSM/shannon_ghidra_proj`) |
 | `52-qemu.sh` | qosmo, c54x_exe, grgsm_exe, DSP ROMs, firmware, qemu-system-arm, `qosmo` launcher, toast/untoast |
 | `60-dashboard.sh` | osmo-egprs-web (native, no docker), tutorial, unit enabled |
-| `70-scripts.sh` | `/usr/local/bin` links, `osmo-wan.conf`, NetworkManager |
+| `70-scripts.sh` | `/usr/local/bin` links (`c123`, the `banc-*` commands), `98-osmo-banc-aliases.sh`, `osmo-wan.conf`, NetworkManager |
 | `71-debs-banc.sh` | `packaging/build-debs.sh` → rootfs `/var/cache/osmo-debs` |
 | `80-chroot.sh` | apt repos (NodeSource, MongoDB, Armbian), kernel, packages, venv, desktop, Firefox, GDM, gsettings, `update-initramfs` |
 | `81-cloture-systeme.sh` | `ldd` closure from the image, no-wait network, DNS, `osmo-ip-plan`, `osmo-qemu-link`, `osmo-update`, SMS animation |
-| `82-arm-natif.sh` | `--arm`: native compilation in the arm64 chroot |
+| `82-arm-natif.sh` | former `--arm` path (native compilation in a debootstrap arm64 chroot); no longer reached: `00-options.sh` hands `--arm` over to `armbian/build-armbian.sh` |
 | `82-services.sh` | role marker, os-release, Asterisk, audio (system-wide PulseAudio, `asound.conf`), units installed not enabled, Open5GS WebUI |
 | `83-espace-ram.sh` | fstab, `/tmp` and `/dev/shm` as % of RAM, journal, logrotate, ring-buffer tcpdump, ssh, purge |
 | `84-comptes.sh` | root and osmocom, console and GDM autologin, Linphone account |
 | `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icons, GTK launchers (`osmo-*-anim`), Info page |
 | `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, screenfetch banner, Plymouth `osmo-bts` |
+| `85-glava.sh` | `--desktop`: GLava + NCS Spectrum compiled into the rootfs, `glava.service` (user) |
 | `87-lite.sh` | `--lite` pruning of `/opt/GSM` |
 | `88-lte-pmos.sh` | srsRAN + Open5GS (from the `.deb`s, otherwise compiled), freeDiameter, pmbootstrap, PPP kernel, VM image, final 2G + 4G + phone check |
 | `89-home-chiffre.sh` | crypthome tools, `unlock-home.service`, root keyring on the encrypted volume, launchers under `run-as-owner` |
 | `90-iso.sh` | dpkg check, squashfs zstd -19, kernel, GRUB menu, `/.disk/info`, squashfs read-back |
 | `91-secure-boot.sh` | xorriso ISO with signed shim and GRUB (or unsigned `grub-mkrescue`) |
-| `92-rpi-image.sh` | `--arm`: SD image (boot partition + Armbian ext4) |
+| `92-rpi-image.sh` | former `--arm` SD image assembly (Pi 4 only); no longer reached |
 | `99-fin.sh` | rootfs handed to the next pass (`--all`), summary |
 
 ### 7.5 CI (`.github/workflows/build-iso.yml`)
@@ -665,6 +798,11 @@ to do exits via `return` (that is how `--arm` skips a step).
   `/mnt`, `.deb` cache keyed by fingerprint
   (`osmo-debs-noble-g2-<empreinte>`). If `ghcr.io/…/osmocom-nitb:base-<empreinte>`
   exists, it is pulled (`--skip-build=REF`); otherwise `--build-docker`.
+- ARM: `.github/workflows/build-arm.yml` — the arm64 Docker image from
+  `docker-arm.yml`, then **one job per board** (matrix, native
+  `ubuntu-24.04-arm` runners) running `build-iso.sh --arm --board=<board>
+  --skip-build=<ghcr image> [--desktop]`, and a release job gathering every
+  board. Inputs `boards` (default `all`) and `desktop` (default on).
 - Outputs: `SHA256SUMS`, `MD5SUMS`, files over 2 GiB split into
   `*.iso.part-NN` (1,900 MB) with `PARTS.sha256`, 14-day artifact,
   GitHub release (`softprops/action-gh-release`) with the notes from
@@ -679,7 +817,7 @@ to do exits via `return` (that is how `--arm` skips a step).
 | Desktop ISO | 6.5 GB (4 parts in the release) |
 | Desktop vs operator | +2.5 GB |
 | Base Docker image | ~11 GB |
-| `--arm` first time | about ten hours (emulation) |
+| `--arm` first time on x86 | about ten hours (arm64 Docker image under emulation), then one Armbian build per board |
 
 ---
 
