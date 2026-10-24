@@ -7,7 +7,7 @@ is either the OsmocomBB `layer1` + `mobile`, or a Motorola C139 running the **or
 Magnetite). It camps, authenticates, ciphers, sends SMS and holds voice calls. No SDR and no physical phone: the
 radio is emulated end to end, down to the baseband.
 
-![The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone](test.png)
+![The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-ville.jpg)
 
 ## Start here
 
