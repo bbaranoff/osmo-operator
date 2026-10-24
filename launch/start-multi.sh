@@ -287,6 +287,15 @@ esac
 # au lieu de la compiler ; osmocom-run en decoule par Dockerfile.run en
 # quelques secondes. Refuser de demarrer pour ca et renvoyer vers addition.sh
 # - qui aurait repondu "image deja presente" - etait une boucle sans issue.
+# [2026-10-24] ABSENTE : ON LA TIRE DE norf_gsm D ABORD. Le Hub publie
+# osmocom-run telle quelle (Dockerfile.run deja joue) ; la derivation depuis
+# osmocom-nitb ne reste qu en repli (pas de reseau, Hub injoignable).
+: "${MULTI_HUB_RUN_IMAGE:=bastienbaranoff/norf_gsm:latest}"
+if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+    echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente : docker pull ${MULTI_HUB_RUN_IMAGE}"
+    docker pull "$MULTI_HUB_RUN_IMAGE" && docker tag "$MULTI_HUB_RUN_IMAGE" "$MULTI_IMAGE" \
+        || echo -e "  ${YELLOW}!${NC} pull ${MULTI_HUB_RUN_IMAGE} impossible - repli sur la derivation locale"
+fi
 if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
     if docker image inspect osmocom-nitb >/dev/null 2>&1; then
         echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente, base osmocom-nitb presente : derivation (Dockerfile.run)"

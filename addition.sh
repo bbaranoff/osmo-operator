@@ -387,7 +387,7 @@ if [ "$ANY_FLAG" = "0" ]; then
             # existe toujours, mais il se demande explicitement
             # (OSMO_ADDITION_BUILD_LOCAL=1), pas par un bouton radio.
             case "$_orig" in
-                hub)   DO_BUILD=0; HUB_IMAGE="bastienbaranoff/norf_gsm" ;;
+                hub)   DO_BUILD=0; HUB_IMAGE="bastienbaranoff/norf_gsm"; HUB_IS_RUN=1 ;;
                 dl)    DO_BUILD=0 ;;
                 *)     echo "Aucune origine choisie."; exit 0 ;;
             esac
@@ -961,8 +961,11 @@ _pull_image() {
         echo -e "    Autre image : ${BOLD}HUB_IMAGE=<ref> $0 --multi${NC}"
         echo -e "    Compiler sur place : ${BOLD}OSMO_ADDITION_BUILD_LOCAL=1 $0 --multi-build${NC}"
         return 1; }
-    docker tag "$HUB_IMAGE" "$BASE_IMAGE" || { echo -e "  ${RED}✗ docker tag ${HUB_IMAGE} ${BASE_IMAGE} a echoue${NC}"; return 1; }
-    echo -e "  ${GREEN}✓${NC} image operateur tiree et taguee ${BASE_IMAGE}"
+    # [2026-10-24] norf_gsm est publiee depuis osmocom-run (Dockerfile.run deja
+    # joue) : on la tague osmocom-run directement, sans derivation.
+    local _tag="$BASE_IMAGE"; [ "${HUB_IS_RUN:-0}" = 1 ] && _tag="$MULTI_IMAGE"
+    docker tag "$HUB_IMAGE" "$_tag" || { echo -e "  ${RED}✗ docker tag ${HUB_IMAGE} ${_tag} a echoue${NC}"; return 1; }
+    echo -e "  ${GREEN}✓${NC} image operateur tiree et taguee ${_tag}"
 }
 # L IMAGE QUE LE MULTI-OPERATEUR LANCE EST osmocom-run, PAS osmocom-nitb.
 # Ni le pull ni build.sh ne la produisent : c est Dockerfile.run (FROM
@@ -977,18 +980,20 @@ _derive_run_image() {
         || { echo -e "  ${RED}✗ derivation de ${MULTI_IMAGE} echouee${NC}"; return 1; }
     echo -e "  ${GREEN}✓${NC} image d execution prete (${MULTI_IMAGE})"
 }
+# norf_gsm (choix « hub », ou HUB_IMAGE pose par l installeur) EST osmocom-run.
+case "$HUB_IMAGE" in *norf_gsm*) HUB_IS_RUN=1 ;; esac
 if [ "$DO_IMAGE" = "1" ]; then
     if [ "$DO_BUILD" = "1" ]; then
         _build_image || exit 1
         _derive_run_image || exit 1
     elif docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} image operateur deja presente (${MULTI_IMAGE})"
-    elif docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+    elif [ "${HUB_IS_RUN:-0}" != 1 ] && docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} image de base deja presente (${BASE_IMAGE})"
         _derive_run_image || exit 1
     else
         _pull_image || exit 1
-        _derive_run_image || exit 1
+        [ "${HUB_IS_RUN:-0}" = 1 ] || _derive_run_image || exit 1
     fi
 fi
 
