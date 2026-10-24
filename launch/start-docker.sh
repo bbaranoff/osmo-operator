@@ -2946,7 +2946,11 @@ esac
 echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
 
 ./helpers/prepare_host.sh
-build_run_image
+# [2026-10-24] OSMO_NO_BUILD=1 (start-multi.sh) : lancer l'image telle qu'elle
+# est. QEMU_CACHE_BUST casse le cache a chaque appel : sans ce garde, chaque
+# lancement du multi refaisait git pull + recompilation de qosmo/c54x_exe.
+# check_image la construit quand meme si elle est absente.
+[ "${OSMO_NO_BUILD:-0}" = 1 ] || build_run_image
 check_image
 
 case "$NETWORK_MODE" in
