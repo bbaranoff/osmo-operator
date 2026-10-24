@@ -318,6 +318,48 @@ PMD
 }
 osmo_poser_pmos
 
+# ── DEKA : UN STOP AU CLIC DROIT DE L ICONE ──────────────────────────────────
+# [2026-10-25] L icone deka ne savait que DEMARRER (clic = osmo-deka-anim ->
+# deka-start.sh). Pour arreter (tuer les workers, demonter les tables,
+# desactiver le LVM) il fallait un terminal et « deka-start.sh --stop ». On
+# ajoute donc une ACTION de menu (clic droit) « Arreter deka », exactement
+# comme le telephone pmOS expose son arret. Le clic principal reste le
+# demarrage ; deka-start.sh fait deja un --stop implicite avant de remonter.
+#
+# addition.sh (--opencl) POSE le .desktop ; ici on ne fait que le REECRIRE pour
+# lui ajouter l action, et seulement si deka est installe - sinon on ne touche
+# a rien.
+osmo_poser_deka() {
+    local dsk=/usr/share/applications/deka.desktop
+    [ -x /usr/local/bin/osmo-deka-anim ] || [ -f "$dsk" ] || return 0
+    local icon=/usr/share/osmo-operator/icons/deka.svg
+    [ -f "$icon" ] || icon=deka
+    local gtk=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py
+    cat > "$dsk" <<DEKADSK
+[Desktop Entry]
+Type=Application
+Name=deka
+Name[fr]=deka
+Comment=Monte les tables et lance les workers deka
+Comment[fr]=Monte les tables et lance les workers deka
+Exec=/usr/local/bin/osmo-deka-anim
+Icon=$icon
+Terminal=false
+Categories=System;Utility;
+Keywords=deka;tables;workers;opencl;
+Actions=Arreter;
+
+[Desktop Action Arreter]
+Name=Arreter deka
+Name[fr]=Arreter deka
+Exec=$gtk --root --title "Arret deka" -- /root/deka/deka-start.sh --stop
+DEKADSK
+    chmod 644 "$dsk" 2>/dev/null || true
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    echo "  [deka] icone : clic = demarrer, clic droit « Arreter deka » = stop (workers + demontages)"
+}
+osmo_poser_deka
+
 # ── LA 4G ET L UI SMARTPHONE : le rattrapage ─────────────────────────────────
 # [2026-09-08] Meme source que addition.sh et l ISO (tools/osmo-lte-install.sh,
 # tools/osmo-pmos-install.sh). Ici on ne compile rien : les configs du depot

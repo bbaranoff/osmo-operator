@@ -741,6 +741,12 @@ Icon=/usr/share/osmo-operator/icons/deka.svg
 Terminal=false
 Categories=System;Utility;
 Keywords=deka;tables;workers;opencl;
+Actions=Arreter;
+
+[Desktop Action Arreter]
+Name=Arreter deka
+Name[fr]=Arreter deka
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Arret deka" -- /root/deka/deka-start.sh --stop
 DEKADSK
         chmod 644 "$_deka_desktop"
         command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
