@@ -74,6 +74,9 @@ ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/osmo
 # profile.d pour les shells de connexion, et les memes noms en vraies commandes (tools/osmo-banc-cmd.sh).
 install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"
 bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
+# [2026-10-24] /root/gnuarm/install/bin dans le PATH des qu il existe (supplement --gnuarm) :
+# le fichier est pose ici, il ne fait rien tant que la chaine est absente.
+install -Dm644 "$P/scripts/osmo-gnuarm-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-gnuarm.sh"
 # (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
 #  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then

@@ -123,6 +123,12 @@ osmo_gnuarm_install() {
     else
         _fw_err "arm-elf-gcc ne compile pas (cc1, libmpfr ?)"; return 1
     fi
+    # [2026-10-24] $GNUARM_DIR/install/bin dans le PATH de tout shell de connexion
+    # (scripts/osmo-gnuarm-profile.sh -> /etc/profile.d/97-osmo-gnuarm.sh)
+    if [ -f "${REPO:-/opt/GSM/osmo-operator}/scripts/osmo-gnuarm-profile.sh" ]; then
+        install -m644 "${REPO:-/opt/GSM/osmo-operator}/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh \
+            && _fw_ok "PATH : $GNUARM_DIR/install/bin (/etc/profile.d/97-osmo-gnuarm.sh, nouveaux shells)"
+    fi
 }
 
 # ── Magnetite (C139) ─────────────────────────────────────────────────────────

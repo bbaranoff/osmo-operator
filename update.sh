@@ -924,6 +924,50 @@ osmo_poser_voix_forks() {
 }
 osmo_poser_voix_forks
 
+# ── gnuarm, ALTERNATIVES GCC, c123 ET banc-* : RATTRAPAGE (2026-10-24) ───────
+# Ce que build-iso.sh (70-scripts, 80-chroot) et l install native posent desormais,
+# rejoue sur une machine deja installee. Sans apt ni reseau : seuls les compilateurs
+# deja presents entrent dans les alternatives.
+#   - /etc/profile.d/97-osmo-gnuarm.sh : /root/gnuarm/install/bin dans le PATH
+#     (arm-elf-gcc 4.5.2 du supplement --gnuarm), sans effet tant qu il est absent ;
+#   - update-alternatives gcc : gcc-9 (90), gcc-11 (110), gcc-13 (130). Un choix deja
+#     fait (update-alternatives --config gcc) est garde ; a la creation, gcc-13, le
+#     compilateur du noyau, pour DKMS ;
+#   - c123 / osmo-c123 et les commandes du banc (banc-rssi, banc-trx, c123-1...)
+#     dans /usr/local/bin, 98-osmo-banc-aliases.sh dans profile.d ;
+#   - /usr/local/bin/osmo-glava (une copie, pas un lien) aligne sur tools/osmo-glava.sh.
+osmo_poser_outils_banc() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local r=/opt/GSM/osmo-operator v neuf=0
+    [ -d "$r" ] || return 0
+    [ -f "$r/scripts/osmo-gnuarm-profile.sh" ] \
+        && install -m644 "$r/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh
+    [ -f "$r/scripts/osmo-banc-aliases.sh" ] \
+        && install -m644 "$r/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
+    [ -x "$r/tools/osmo-banc-cmd.sh" ] && bash "$r/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
+    for v in c123 osmo-c123; do
+        [ "$(readlink "/usr/local/bin/$v" 2>/dev/null)" = "$r/tools/osmo-c123-gtk.py" ] \
+            || ln -sf "$r/tools/osmo-c123-gtk.py" "/usr/local/bin/$v"
+    done
+    [ -f /usr/local/bin/osmo-glava ] && [ -f "$r/tools/osmo-glava.sh" ] \
+        && ! cmp -s "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
+        && install -m755 "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
+        && echo "  [bureau] osmo-glava aligne sur le depot (systemctl --user restart glava)"
+    if command -v update-alternatives >/dev/null 2>&1; then
+        update-alternatives --list gcc >/dev/null 2>&1 || neuf=1
+        for v in 9 11 13; do
+            [ -x "/usr/bin/gcc-$v" ] && [ -x "/usr/bin/g++-$v" ] || continue
+            update-alternatives --list gcc 2>/dev/null | grep -qx "/usr/bin/gcc-$v" && continue
+            update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-$v" "$(( v * 10 ))" \
+                --slave /usr/bin/g++ g++ "/usr/bin/g++-$v" >/dev/null 2>&1 \
+                && echo "  [outils] alternative gcc-$v posee"
+        done
+        [ "$neuf" = 1 ] && [ -x /usr/bin/gcc-13 ] && update-alternatives --set gcc /usr/bin/gcc-13 >/dev/null 2>&1
+    fi
+    return 0
+}
+osmo_poser_outils_banc
+
 case "${1:-}" in
     --quiet) exit 0 ;;
 esac

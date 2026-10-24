@@ -308,9 +308,14 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd
 
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     # Radio, emulation Calypso, audio, PBX : le noeud operateur seulement.
+    # [2026-10-24] gcc-9 et gcc-11 a cote du gcc-13 de noble : les memes compilateurs que
+    # l image Docker (Dockerfile, update-alternatives), pour recompiler osmocom-bb sur la
+    # machine - jolly/testing et burst_ind veulent gcc-9. Les alternatives sont posees
+    # apres l installation, plus bas.
     PKGS="$PKGS
       libasound2-plugins pulseaudio pulseaudio-utils alsa-utils
       binutils-arm-none-eabi gdb-multiarch
+      gcc-9 g++-9 gcc-11 g++-11
       asterisk
       ffmpeg"
     # ── La 4G : srsRAN (ZeroMQ) et Open5GS, ce que ldd reclame ────────────
@@ -362,6 +367,22 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
 fi
 
 apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
+
+# ── LES ALTERNATIVES GCC ────────────────────────────────────────────────────
+# [2026-10-24] Meme choix que l image Docker (gcc-9 90, gcc-11 110), plus gcc-13, le
+# compilateur de noble, en DEFAUT (130) : c est lui qui a compile le noyau, et DKMS
+# (pilote NVIDIA par ubuntu-drivers, osmo-drivers) construit ses modules avec « gcc ».
+# Un gcc-11 par defaut, comme dans l image, ferait echouer ou deriver ces modules.
+#   update-alternatives --config gcc      choisir (g++ suit, en esclave)
+#   update-alternatives --set gcc /usr/bin/gcc-9
+for _v in 9 11 13; do
+    [ -x "/usr/bin/gcc-$_v" ] && [ -x "/usr/bin/g++-$_v" ] || continue
+    update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-$_v" "$(( _v * 10 ))" \
+        --slave /usr/bin/g++ g++ "/usr/bin/g++-$_v"
+done
+unset _v
+[ -x /usr/bin/gcc-13 ] && update-alternatives --set gcc /usr/bin/gcc-13
+echo "  [chroot] alternatives gcc : $(update-alternatives --list gcc 2>/dev/null | xargs) (defaut $(readlink -f /usr/bin/gcc))"
 
 # ── LA SIM : lecteur PC/SC (HID Omnikey), softSIM en lecteur, pySim ─────────
 # [2026-10-14] Meme code que le supplement addition.sh --sim :
