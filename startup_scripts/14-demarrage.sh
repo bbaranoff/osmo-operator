@@ -102,6 +102,15 @@ if [ "$DSP_BANC" = 1 ]; then
         [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp %sbash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "${MS_MAGNETITE:+FIRMWARE_FLASH=$MAGNETITE_FLASH }" "$BANC_DSP"
         exit 0
     fi
+    # [2026-10-24] Le mobile de l'instance 1 lit mobile_pont.cfg tel quel (run.sh ne
+    # reecrit le stick que pour les instances 2+) : gabarit a 514, cellule du plan a 1
+    # dans les conteneurs du multi -> FBSB result=255 en boucle. On l'aligne ici.
+    _cfg_pont="$(dirname "$BANC_DSP")/mobile_pont.cfg"
+    _arfcn_pont="${PLAN_ARFCN:-${MS_ARFCN1:-${ARFCN:-1}}}"
+    if [ -w "$_cfg_pont" ] && [[ "$_arfcn_pont" =~ ^[0-9]+$ ]]; then
+        sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${_arfcn_pont}|" "$_cfg_pont"
+    fi
+    unset _cfg_pont _arfcn_pont
     audio_start
     say_begin "Transmission a run.sh (sans $DSP_MODULES_RETIRES)"
     if ! env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" "${RUN_ARGS[@]}"; then

@@ -2499,7 +2499,10 @@ start_bridge_mode() {
         # que start-docker.sh executait quand il imprimait les lignes a recopier.
         _hcmd() {                      # $1=indice du conteneur -> imprime la commande
             local _na; _na="$(_node_args "$1")"
-            local _cmd="cd /opt/GSM/osmo-operator && NO_MENU=1"
+            # [2026-10-24] `unset PONT_PY` : l'image (Dockerfile.run) le figeait sur
+            # pont.py (grgsm). En DSP, c54x_exe/run.sh lancait alors pont.py
+            # --dsp-port 6702, refuse, et aucun burst n'arrivait au DSP.
+            local _cmd="cd /opt/GSM/osmo-operator && unset PONT_PY && NO_MENU=1"
             # [2026-08-31] CALYPSO_NO_ATTACH SUIT LE HANDOFF.
             # L attache ne venait ni d ici ni de start-native.sh, mais du
             # qosmo-grgsm/run.sh qu il appelle en bout de chaine :
@@ -2517,7 +2520,10 @@ start_bridge_mode() {
             # Le chiffrement de l'HOTE, pas une constante : les configs du
             # conteneur sont deja ecrites avec lui (OSMO_NO_REGEN=1 la-bas), et
             # 08-gabarits.sh refuse de demarrer si les deux different.
-            _cmd="$_cmd ENCRYPTION='${ENCRYPTION}' CALYPSO_BRIDGE=pont CALYPSO_MODE=shunt_legit"
+            # [2026-10-24] CALYPSO_BRIDGE n'est plus impose : 05-run-sh.sh le met a
+            # `none` en DSP (le pont est celui de c54x_exe/run.sh) et a `pont` en
+            # grgsm. Force a `pont`, le pont grgsm prenait 5700-5702 avant le DSP.
+            _cmd="$_cmd ENCRYPTION='${ENCRYPTION}' CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-native.sh ${_na} --force"
             printf '%s' "$_cmd"

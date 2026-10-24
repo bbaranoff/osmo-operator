@@ -76,7 +76,8 @@ COPY configs/asound.conf /etc/
 # version sans plan SDCCH/8 : deux heures de LU en echec, SMS rejete et
 # appel impossible, sans un message. Le depot est desormais la seule source ;
 # start-native.sh resout $NITB_ROOT/pont/pont.py.
-ENV PONT_PY=/opt/GSM/osmo-operator/pont/pont.py
+# [2026-10-24] ENV PONT_PY RETIRE : il forcait pont.py (grgsm) jusque dans
+# c54x_exe/run.sh en MODE=dsp, qui veut pont_dsp.py. Chaque lanceur a son defaut.
 
 # Bits d'execution + chemins uniques. DOIT rester APRES toutes les COPY ci-dessus.
 # /scripts/run.sh (laissé par "COPY scripts/*") et /etc/osmocom/run.sh
