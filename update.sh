@@ -180,9 +180,14 @@ osmo_aligner_arfcn_qemu() {
     [[ "$arfcn" =~ ^[0-9]+$ ]] || arfcn=1
     for cfg in /opt/GSM/c54x_exe/mobile_pont.cfg; do
         [ -w "$cfg" ] || continue
-        grep -qE "^[[:space:]]*stick ${arfcn}\$" "$cfg" && continue
-        sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${arfcn}|" "$cfg"
-        echo "[OK] $cfg : stick ${arfcn} (ARFCN du plan radio)."
+        grep -qE "^[[:space:]]*stick ${arfcn}\$" "$cfg" \
+            && ! grep -qE "^[[:space:]]*no (p|e)-gsm\$" "$cfg" && continue
+        # [2026-10-24] le gabarit ne supporte que DCS (no p-gsm/no e-gsm) : un
+        # stick sur une ARFCN 900 non supportee fait boucler gsm322_cs_powerscan
+        # a 100 % CPU (« goto again » sans fin), le mobile ne dit plus rien.
+        sed -i -e "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${arfcn}|" \
+            -e "s|^\([[:space:]]*\)no \([pe]-gsm\)\$|\1\2|" "$cfg"
+        echo "[OK] $cfg : stick ${arfcn} (ARFCN du plan radio), bandes P/E-GSM actives."
     done
     return 0
 }
