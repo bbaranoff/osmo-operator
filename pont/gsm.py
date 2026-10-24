@@ -52,6 +52,8 @@ _cod.gsm0503_xcch_encode.argtypes = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes
 _cod.gsm0503_xcch_decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit),
                                      ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
 _cod.gsm0503_rach_ext_encode.argtypes = [ctypes.POINTER(ubit), ctypes.c_uint16, ctypes.c_uint8, ctypes.c_bool]
+_cod.gsm0503_rach_decode_ber.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit), ctypes.c_uint8,
+                                        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
 _cod.gsm0503_sch_decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit)]
 _cod.gsm0503_tch_fr_encode.argtypes = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int]
 _cod.gsm0503_tch_fr_decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit), ctypes.c_int,
@@ -132,6 +134,20 @@ def rach_burst(ra, bsic):
     coded = (ubit * 40)()
     _cod.gsm0503_rach_ext_encode(coded, ctypes.c_uint16(ra), ctypes.c_uint8(bsic), False)
     return bytes(8) + RACH_SYNC + bytes(coded)[:36] + bytes(148 - 8 - 41 - 36)
+
+
+def rach_ra(burst, bsic):
+    """[2026-10-24] RA d'un access burst (bits durs, 8 de queue + 41 de synchro + 36 codes), None si le CRC
+    (colore par le BSIC) ne colle pas."""
+    d36 = burst[8 + 41:8 + 41 + 36]
+    if len(d36) != 36:
+        return None
+    buf = (sbit * 36)(*[-127 if b else 127 for b in d36])
+    ra = ctypes.c_uint8()
+    nerr, nbits = ctypes.c_int(), ctypes.c_int()
+    if _cod.gsm0503_rach_decode_ber(ctypes.byref(ra), buf, ctypes.c_uint8(bsic), ctypes.byref(nerr), ctypes.byref(nbits)):
+        return None
+    return ra.value
 
 
 def a5_keystream(algo, kc, fn):

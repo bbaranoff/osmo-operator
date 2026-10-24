@@ -6,6 +6,17 @@ import struct
 from . import gsm
 
 _dcch_gen = [0]   # [2026-10-22] generation de calypso_dcch_cfg (IMM ASS), voir CHANNEL RELEASE
+# [2026-10-24] RA des derniers RACH du firmware TI (dsp/uplink.py, noter_rach) et instant de la derniere IMM ASS
+# retenue : voir _imm_ass_dcch.
+_rach_ra = []
+_imm_ass_retenue = [0.0]
+IMM_ASS_GARDE_S = float(os.environ.get("PONT_IMM_ASS_GARDE", "2.0"))
+
+
+def noter_rach(ra):
+    """Un RACH du firmware TI : le mobile acceptera l'IMM ASS qui repond a l'un de ses 3 derniers (44.018 3.3.1.1.3)."""
+    _rach_ra.append(ra)
+    del _rach_ra[:-3]
 
 log = logging.getLogger("pont")
 
@@ -217,7 +228,13 @@ class Downlink:
         mobile va. L'IMMEDIATE ASSIGNMENT (44.018 9.1.18) le dit : octet 1 pseudo-longueur, 2 PD, 3 type,
         4 mode de page, 5 chan_nr. SDCCH/4 = 0b00100SST, SDCCH/8 = 0b01SSSTTT. Le dernier recu gagne : la BSC
         repond aux RACH dans l'ordre, et celui que le mobile accepte (sa reference) arrive en dernier.
-        CALYPSO_PONT_IMM_DCCH=0 pour couper ; seulement avec MS_MAGNETITE (le firmware osmocom a son tap)."""
+        CALYPSO_PONT_IMM_DCCH=0 pour couper ; seulement avec MS_MAGNETITE (le firmware osmocom a son tap).
+        [2026-10-24] FAUX : le mobile prend la PREMIERE qui repond a l'un de ses RACH et ignore les suivantes. Appel du
+        24/10 18:59 : 5 IMM ASS (SS0..SS4), le C139 sur SS0 (SS1..4 tombes en T3101 a la BSC), le pont sur SS4 ;
+        l'ASSIGNMENT COMMAND passait sur SS0 sans etre lue, TCH jamais arme, pas de SABM sur la FACCH, « Assignment
+        Failure ». On garde donc la premiere dont la reference (octet 7, RA) est un RACH du mobile, puis on ignore
+        les autres pendant PONT_IMM_ASS_GARDE s (le pont lit le descendant ~30 trames avant le mobile, qui peut
+        encore emettre un RACH). Sans RA connu (decodage rate), l'ancienne regle."""
         if not os.environ.get("MS_MAGNETITE") or os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") == "0":
             return
         if len(l2) < 5 or l2[1] != gsm.RR_PD:
@@ -229,6 +246,15 @@ class Downlink:
             kind, ss = 1, (cn >> 3) & 7
         else:
             return
+        if _rach_ra and len(l2) > 7:
+            import time
+            ra = l2[7]
+            if ra not in _rach_ra or time.monotonic() - _imm_ass_retenue[0] < IMM_ASS_GARDE_S:
+                log.info("IMMEDIATE ASSIGNMENT (fn=%u) : SDCCH TS%d SS%d pour RA 0x%02x, ignoree (RACH du mobile : %s)",
+                         fn, cn & 7, ss, ra, " ".join("0x%02x" % r for r in _rach_ra) or "-")
+                return
+            _imm_ass_retenue[0] = time.monotonic()
+            _rach_ra.clear()
         from .state import ecrire_dcch
         _dcch_gen[0] += 1                                  # annule une liberation differee en attente
         ecrire_dcch(kind, ss, cn)

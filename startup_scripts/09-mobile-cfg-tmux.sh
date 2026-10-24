@@ -307,6 +307,9 @@ elif [ "$DSP_BANC" = 1 ]; then
 else
     MS1_LOG="$LOG_DIR/mobile.log"
 fi
+# [2026-10-24] exporte : la fenetre ms1 de tmux (qosmo tmux_modules/bench.sh) suit le journal du telephone
+# (rvinterf en Magnetite) au lieu d'un mobile.log vide
+export MS1_LOG MS1_LOG_NOM
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     mkdir -p /run/osmo-banc 2>/dev/null && chmod 755 /run/osmo-banc 2>/dev/null
     printf '%s\n' "$MS1_VTY_PORT" > /run/osmo-banc/ms1-vty 2>/dev/null && chmod 644 /run/osmo-banc/ms1-vty 2>/dev/null

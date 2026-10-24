@@ -80,7 +80,39 @@ t = np.clip(L / 0.6, 0, 1)[..., None]
 VIOLET, BLEU = np.array([45, 22, 85]) / 255, np.array([120, 195, 255]) / 255
 neuf = (VIOLET * (1 - t) + BLEU * t) * (0.55 + 0.45 * np.clip(mx / 0.9, 0, 1))[..., None] * 1.15
 out = a * (1 - w[..., None]) + np.clip(neuf, 0, 1) * w[..., None]
+
+# [2026-10-24] TITRE EN UBUNTU SANS. « TELECOM OPERATOR » etait peint au pinceau dans la source : on efface
+# les lettres (blanches ou orange, dans le cadre du titre, dilatees pour prendre leur liseré sombre) en
+# rebouchant par une convolution normalisee de plus en plus large (pas d OpenCV sur le banc), puis on les
+# reecrit plus bas dans la police par defaut d Ubuntu. Le sous-titre « Open Source... » reste tel quel.
+X0, Y0, X1, Y1 = (round(v * k) for v in (160, 375, 1065, 708))
+L = 0.3 * out[..., 0] + 0.59 * out[..., 1] + 0.11 * out[..., 2]
+omx, omn = out.max(2), out.min(2)
+osat = np.where(omx > 0, (omx - omn) / np.maximum(omx, 1e-6), 0)
+lettre = np.zeros((H, W), bool)
+lettre[Y0:Y1, X0:X1] = (((L > .38) & (osat < .45)) |
+                        ((out[..., 0] > .45) & (out[..., 0] > out[..., 1] * 1.3) & (osat > .4)))[Y0:Y1, X0:X1]
+M = np.asarray(Image.fromarray((lettre * 255).astype(np.uint8))
+               .filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.MaxFilter(5))) > 127
+connu = (~M).astype(float)
+for rayon in (2, 4, 8, 16, 32, 64):
+    num = np.asarray(Image.fromarray((np.clip(out * connu[..., None], 0, 1) * 255).astype(np.uint8))
+                     .filter(ImageFilter.GaussianBlur(rayon * k)), float) / 255
+    den = np.asarray(Image.fromarray((connu * 255).astype(np.uint8))
+                     .filter(ImageFilter.GaussianBlur(rayon * k)), float) / 255
+    sel = M & (den > .02) & (connu < .5)
+    out[sel] = (num / np.maximum(den[..., None], 1e-3))[sel]
+    connu[sel] = 1
+
+# [2026-10-24] un peu plus clair : gamma sur tout le fond (les sombres remontent plus que les clairs)
+out = np.clip(out, 0, 1) ** float(os.environ.get("OSMO_FOND_GAMMA", "0.82"))
 img = Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+TITRE_FONTE = "/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf"
+ft = ImageFont.truetype(TITRE_FONTE, round(150 * k))
+ft.set_variation_by_axes([100, 800])
+dt = ImageDraw.Draw(img)
+dt.text((round(200 * k), round(400 * k)), "TELECOM", font=ft, fill=(245, 245, 245), anchor="lt")
+dt.text((round(200 * k), round(545 * k)), "OPERATOR", font=ft, fill=(255, 120, 30), anchor="lt")
 
 # cadre autour du schema : tout tourne en local, sans emission radio. Le titre
 # est pose dans une coupure du trait du haut (comme une legende de fieldset).

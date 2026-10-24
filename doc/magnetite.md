@@ -108,5 +108,12 @@ le TRX de la BTS garde le firmware trx (run.sh refuse FIRMWARE_FLASH avec OSMO_T
 La fenetre GTK bascule seule en C139 quand l'ecran partage change de magic, se relance avec
 /usr/bin/python3 si gi manque.
 
-Points ouverts : « SIM Invalid » ; os_SystemError au format du FFS ; accrochage reseau sur le
+[2026-10-24] « SIM Invalid » elucide (qosmo `calypso_sim.c`) : l'IT TX etait levee aussitot l'octet ecrit, l'en-tete
+partait en quelques us et l'ACK arrivait 1,5 ms apres le premier octet. `SIM_Command_Base` ecrit le premier octet puis
+seulement passe `moderx` a 6 : une tache SIM preemptee entre les deux rangeait l'ACK comme SW1, finissait en
+SIM_ERR_WAIT et renvoyait un en-tete que l'emulateur prenait pour les donnees (`SELECT 0xa0a4`, puis `CLA=00 INS=00`
+-> 6D00 a perpetuite). Correctifs : IT TX apres un temps caractere (`CALYPSO_SIM_US_OCTET`), et un silence de plus
+de 500 ms au milieu d'un APDU le resynchronise.
+
+Points ouverts : os_SystemError au format du FFS ; accrochage reseau sur le
 banc (--bts --ms-magnetite) jamais observe jusqu'au LU ; DSP reel « occupe boot ».

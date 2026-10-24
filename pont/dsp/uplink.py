@@ -371,6 +371,12 @@ class UplinkDsp(Uplink):
             self.tx_rom.trx.send_ul(tn, (fn + UL_RAW_DECAL) % gsm.HYPERFRAME, list(bits), False)
             if typ == 1:
                 st.air_rom_rach += 1
+                ra = gsm.rach_ra(bits, self.cfg.bsic)      # [2026-10-24] voir downlink._imm_ass_dcch
+                if ra is not None:
+                    from ..downlink import noter_rach
+                    noter_rach(ra)
+                elif st.air_rom_rach <= 3:
+                    log.info("RACH ROM #%d : RA illisible (BSIC %d), IMM ASS choisie sans reference", seq, self.cfg.bsic)
             elif tn == self.dedicated.pdch():
                 st.air_rom_pdch += 1
             elif typ not in (1, 2):
