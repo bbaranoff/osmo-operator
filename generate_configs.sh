@@ -358,6 +358,19 @@ apply_config_templates() {
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
         cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
     fi
+    # [2026-10-26] LA SIM DU GABARIT SUIT --sap, ICI AUSSI. 11-regen-configs.sh
+    # rejoue ce gabarit 15 s APRES generate_mobile_cfg (08/09-mobile-*.sh) et
+    # l'installait tel quel dans ~/.osmocom/bb : avec « sim sap » le mobile
+    # restait en « A6 no SIM inserted » (aucun serveur SAP sans --sap) et la
+    # cellule n'etait jamais choisie. Meme regle que ms_sim_mode
+    # (06-banc-dsp-menu.sh) : « sap » seulement si SAP_MODE=1, pose par
+    # --sap / --softsim (01-defauts-options.sh). Les conteneurs, sans softSIM,
+    # restent en « sim test ».
+    local _sim=test _f
+    [ "${SAP_MODE:-0}" = 1 ] && _sim=sap
+    for _f in "$dest/bb/mobile.cfg" "$dest/bb/mobile_group1.cfg"; do
+        [ -f "$_f" ] && sed -i "s#^\([[:space:]]*\)sim \(sap\|test\|reader\)\$#\1sim ${_sim}#" "$_f"
+    done
 
     local rctx_msc rctx_stp rctx_bsc rctx_inter
     rctx_msc=$(op_rctx_msc "$op_id");   rctx_stp=$(op_rctx_stp "$op_id")
