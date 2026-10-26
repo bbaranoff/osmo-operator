@@ -20,7 +20,12 @@ RR_ASSIGNMENT_COMPLETE = 0x29
 RR_CHANNEL_RELEASE = 0x0d
 RR_IMMEDIATE_ASSIGNMENT = 0x3f
 RR_IMMEDIATE_ASSIGNMENT_EXT = 0x39
-SI_TYPES = frozenset((0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e))
+# [2026-10-26] + SI13 (0x00), SI2bis (0x02), SI2ter (0x03), SI2quater (0x07).
+# Des que la BTS 0 a une voisine dans une autre bande (BTS 1 DCS1800, ARFCN 614),
+# osmo-bsc emet un SI2ter et l'annonce dans les rest octets de SI3 : le mobile
+# l'exige avant de choisir la cellule (gsm322.c) et bouclait sur « Cell selection
+# failed, sync timeout » tant que ce filtre le jetait. SI13 sert au GPRS.
+SI_TYPES = frozenset((0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x00, 0x02, 0x03, 0x07))
 CCCH_TYPES = frozenset((0x3f, 0x39, 0x3a, 0x21, 0x22, 0x24))
 
 
