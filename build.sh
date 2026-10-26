@@ -23,7 +23,7 @@
 #     build compile tout ; les suivants ne compilent que ce qui manque.
 #     --no-cache : OSMO_DEB_REFRESH=1, tout est recompile et le cache reecrit.
 #
-#  Usage : sudo ./build.sh [--no-cache] [--lite] [--stp]
+#  Usage : sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run]
 # =============================================================================
 set -euo pipefail
 
@@ -44,16 +44,18 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC
 NO_CACHE=""
 LITE=0
 STP=0
+BUILD_RUN=0
 OSMO_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 for arg in "$@"; do
     case "$arg" in
         --no-cache) NO_CACHE="--no-cache" ;;
         --lite)     LITE=1 ;;
         --stp)      STP=1 ;;
+        --build-run) BUILD_RUN=1 ;;
         --arch=*)   OSMO_ARCH="${arg#*=}" ;;
         --arm)      OSMO_ARCH=arm64 ;;
         -h|--help)
-            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--arch=arm64|--arm]"
+            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--arch=arm64|--arm]"
             echo "  --arch=arm64 Construit les images pour arm64 (Raspberry Pi 4) sur cet hote,"
             echo "               par docker buildx --platform linux/arm64 sous qemu-user-static."
             echo "               Images taguees :arm64 (osmocom-nitb:arm64...). LENT au premier"
@@ -67,6 +69,9 @@ for arg in "$@"; do
             echo "  --lite       Construit EN PLUS osmocom-nitb:lite : la meme pile, sans les"
             echo "               arbres de sources de /opt/GSM (~4 Go sur 11). Voir Dockerfile.lite."
             echo "  --stp        Construit EN PLUS osmocom-stp (Dockerfile.stp), le hub SS7 seul."
+            echo "  --build-run  Construit SEULEMENT osmocom-run (Dockerfile.run) sur l image"
+            echo "               osmocom-nitb deja presente, puis s arrete : ni preparation de"
+            echo "               l hote, ni rebuild de la base. QEMU_CACHE_BUST force les git pull."
             echo ""
             echo "  OSMO_DEB_CACHE=/chemin   cache des .deb compiles (defaut /var/cache/osmo-debs)"
             exit 0
@@ -74,6 +79,23 @@ for arg in "$@"; do
         *) echo -e "${YELLOW}[WARN] Argument inconnu ignore : $arg${NC}" ;;
     esac
 done
+
+# --build-run : la couche de mise a jour seule (Dockerfile.run), en secondes.
+# Elle part de l image osmocom-nitb du docker local : rien a preparer sur l hote.
+if [[ "$BUILD_RUN" -eq 1 ]]; then
+    if ! docker image inspect osmocom-nitb >/dev/null 2>&1; then
+        echo -e "${RED}[ERREUR] image osmocom-nitb absente : lancer d abord sudo $0${NC}"
+        exit 1
+    fi
+    echo "--- Lancement du build de l'image osmocom-run ---"
+    if docker build $NO_CACHE --build-arg QEMU_CACHE_BUST=$(date +%s) \
+           -f "$DIR/Dockerfile.run" -t osmocom-run "$DIR"; then
+        echo -e "${GREEN}[OK] Image osmocom-run construite.${NC}"
+        exit 0
+    fi
+    echo -e "${RED}[ERREUR] Le build de l'image osmocom-run a echoue.${NC}"
+    exit 1
+fi
 
 # 1. Verification des privileges ROOT
 if [[ $EUID -ne 0 ]]; then
