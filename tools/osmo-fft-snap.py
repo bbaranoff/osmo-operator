@@ -405,6 +405,11 @@ def base_moitie(m):
 
 
 # ── LE JOURNAL DU MOBILE ────────────────────────────────────────────────────
+# Le nom du fichier lu dans chaque conteneur (mobile.log, rvinterf.log...),
+# rempli par tail_lines pour le titre de l encart.
+JOURNAL_DOCKER_NOM = {}
+
+
 def tail_lines(path, n, width):
     op = operator()
     if op["MODE"] == "docker":
@@ -419,18 +424,35 @@ def tail_lines(path, n, width):
         # est celui du RUN_DIR de la pile, et `docker logs` reste en dernier
         # recours pour une image qui lancerait l operateur autrement.
         data = ""
-        for chemin in (path, "/tmp/osmo-nitb/logs/mobile.log"):
-            try:
-                out = subprocess.run(["docker", "exec", op["NAME"], "tail", "-n", str(n + 5), chemin],
-                                     capture_output=True, text=True, timeout=4)
-            except Exception as e:
-                return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
-            if out.returncode == 0 and out.stdout.strip():
-                data = out.stdout
-                break
-            if "permission denied" in (out.stderr or "").lower():
-                return [("journal indisponible (docker : droit refuse -", None),
-                        ("  le compte n est pas dans le groupe docker)", None)]
+        # [2026-10-26] LE CHEMIN PUBLIE DANS LE CONTENEUR, PAS CELUI DE L HOTE.
+        # On tapait `path` - le mobile.log de l HOTE, qui n existe pas dans le
+        # conteneur - puis /tmp/osmo-nitb/logs/mobile.log, VIDE (0 octet) des que
+        # l operateur tourne en DSP : son MS#1 ecrit /tmp/c54x-pont/mobile.log.
+        # On retombait sur `docker logs` et op2/op3 montraient deux lignes
+        # d entrypoint. Le conteneur publie lui aussi son journal dans
+        # /run/osmo-banc/mobile-log (start-native.sh) : on le lit la, et a defaut
+        # le plus recent NON VIDE des emplacements connus (DSP, instance 2,
+        # Magnetite, qosmo). La premiere ligne rendue porte le nom du fichier
+        # (@@chemin) pour le titre de l encart.
+        choix = (
+            'p=$(cat /run/osmo-banc/mobile-log 2>/dev/null); '
+            'if [ -n "$p" ] && [ -s "$p" ]; then f="$p"; else f=""; '
+            'for x in $(ls -t /tmp/c54x-pont/mobile.log /tmp/c54x-pont2/mobile.log '
+            '/tmp/c54x-pont/rvinterf.log /tmp/c54x-pont2/rvinterf.log '
+            '/tmp/osmo-nitb/logs/mobile.log /run/user/*/osmo-nitb/logs/mobile.log 2>/dev/null); do '
+            '[ -s "$x" ] && { f="$x"; break; }; done; fi; '
+            '[ -n "$f" ] || exit 3; echo "@@$f"; tail -n ' + str(n + 5) + ' "$f"')
+        try:
+            out = subprocess.run(["docker", "exec", op["NAME"], "sh", "-c", choix],
+                                 capture_output=True, text=True, timeout=4)
+        except Exception as e:
+            return [(f"{op['NAME']} : journal inaccessible ({type(e).__name__})", None)]
+        if out.returncode == 0 and out.stdout.startswith("@@"):
+            nom, _, data = out.stdout.partition("\n")
+            JOURNAL_DOCKER_NOM[op["NAME"]] = os.path.basename(nom[2:].strip())
+        elif "permission denied" in (out.stderr or "").lower():
+            return [("journal indisponible (docker : droit refuse -", None),
+                    ("  le compte n est pas dans le groupe docker)", None)]
         if not data:
             try:
                 r = subprocess.run(["docker", "logs", "--tail", str(n + 5), op["NAME"]],
@@ -671,12 +693,16 @@ def render_live(data, data_ul=None):
     d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
     op = operator()
     # [2026-10-23] le nom du fichier lu : rvinterf.log (traces TI) avec --ms-magnetite
-    d.text((lx0, y0), (f"{os.path.basename(mobile_log_path())}  ·  QEMU MS#1" if op["MODE"] != "docker"
-                       else f"journal  ·  {op['NAME']}"), font=F_TITLE, fill=(88, 166, 255))
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)
     cols = max(10, int((x1 - lx0) / 7.3))
-    for i, (l, col) in enumerate(tail_lines(mobile_log_path(), n, cols)):
+    # Les lignes d abord : pour un conteneur, c est leur lecture qui dit quel
+    # fichier porte le journal (JOURNAL_DOCKER_NOM), et le titre le nomme.
+    lignes = tail_lines(mobile_log_path(), n, cols)
+    d.text((lx0, y0), (f"{os.path.basename(mobile_log_path())}  ·  QEMU MS#1" if op["MODE"] != "docker"
+                       else f"{JOURNAL_DOCKER_NOM.get(op['NAME'], 'journal')}  ·  {op['NAME']}  ·  MS#1"),
+           font=F_TITLE, fill=(88, 166, 255))
+    for i, (l, col) in enumerate(lignes):
         if col is None:
             # Journal sans couleurs (docker logs, redirection qui les a
             # mangees) : on retombe sur la lecture par mots-cles.
