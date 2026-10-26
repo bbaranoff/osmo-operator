@@ -45,6 +45,7 @@ class TchDsp(Tch):
             self.seq += 1
             self.tn = None
             self.open = False
+            self.open_since = None
             self.release_seen = None
             self._write_cfg(0, 0, 0, self.seq)
         log.info("TCH TN=%d abandonne (%s) : retour sur le SDCCH", tn, reason)

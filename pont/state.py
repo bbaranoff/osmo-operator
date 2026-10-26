@@ -89,6 +89,14 @@ class Tch:
         self.seq = 0
         self.on_close = []
         self.release_seen = None
+        # [2026-10-26] instant de la preuve (prove) : dsp/uplink.py ne retire l'annonce du TCH sur un
+        # bloc SDCCH montant qu'apres un delai de grace, voir TCH_ABANDON_GRACE.
+        self.open_since = None
+
+    def open_age(self):
+        """Secondes depuis que le mobile a prouve le TCH, None s'il n'est pas ouvert."""
+        with self.lock:
+            return None if self.open_since is None else time.monotonic() - self.open_since
 
     def arm(self, tn, tsc, arfcn):
         with self.lock:
@@ -104,6 +112,7 @@ class Tch:
             if self.tn is None or self.open:
                 return
             self.open = True
+            self.open_since = time.monotonic()
             tn = self.tn
         log.info("le mobile est sur le TCH TN=%d (%s) : montant TCH ouvert", tn, source)
 
@@ -130,6 +139,7 @@ class Tch:
             tn = self.tn
             self.tn = None
             self.open = False
+            self.open_since = None
             self._write_cfg(0, 0, 0, 0)
         log.info("TCH TN=%d ferme (%s)", tn, reason)
         for cb in self.on_close:

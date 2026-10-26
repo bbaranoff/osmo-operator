@@ -58,6 +58,16 @@ UL_RAW_DECAL = int(os.environ.get("PONT_UL_RAW_DECAL", "0"))
 # pas la parole : RACH et SDCCH/SACCH par la ROM, le TCH entier (FACCH, SACCH/T, parole) par l'hote.
 # PONT_UL_RAW_TCH=1 : tout par la ROM (voix montante coupee).
 UL_RAW_TCH = os.environ.get("PONT_UL_RAW_TCH", "0") == "1"
+# [2026-10-26] DELAI DE GRACE AVANT D'ABANDONNER LE TCH SUR UN BLOC SDCCH MONTANT (secondes).
+# Run du 26/10 09:42-09:45, BTS classique + Magnetite + gapk, appels MS#2 -> 100101 : trois echecs
+# (cause 47) et trois reussites avec la MEME sequence, le seul ecart etant, dans les echecs, un bloc
+# sur la voie SDCCH juste apres le SABM FACCH (« xCCH ROM seq=61 : CRC faux » x5 au meme instant) :
+# _route_sdcch retirait l'annonce (« TCH TN=2 abandonne (bloc montant du mobile sur le SDCCH) »), le
+# SABM n'etait plus code en FACCH (STATS : FACCH ul=0), le firmware TI sortait en « DL: >N200 of
+# SABM » -> RR ASSIGNMENT FAILURE -> MSC « Assignment Failure, releasing call ». Ce bloc est la queue
+# de la tache SDCCH du firmware (ABORT apres CAS_C), pas un retour sur le SDCCH : pendant ce delai on
+# l'ignore. Un vrai retour est annonce par une ASSIGNMENT FAILURE, traitee avant et sans delai.
+TCH_ABANDON_GRACE = float(os.environ.get("PONT_TCH_ABANDON_GRACE", "2.0"))
 # [2026-10-21] Magnetite (firmware TI) : la ROM n'emet pas ses bursts par le script TSP que lit calypso_tx_rom,
 # sauf le RACH que c54x_exe y publie lui-meme (tx_rach_vers_air). Le SABM et la SACCH, captures dans a_cu par
 # montant.c (calypso_sdcch_ul), partaient au puits (« DL: >N200 of SABM »). PONT_UL_RAW_DCCH_HOTE=1 : SDCCH et
@@ -262,6 +272,14 @@ class UplinkDsp(Uplink):
             if gsm.rr_message_type(l2)[1] == RR_ASSIGNMENT_FAILURE:
                 self.tch.abandon("ASSIGNMENT FAILURE sur le SDCCH")
             elif self.tch.is_open():
+                age = self.tch.open_age()
+                if age is not None and age < TCH_ABANDON_GRACE:
+                    self._grace_vus = getattr(self, "_grace_vus", 0) + 1
+                    if self._grace_vus <= 5:
+                        log.info("bloc montant sur le SDCCH %.2f s apres l'ouverture du TCH : ignore (delai de grace "
+                                 "%.1f s, PONT_TCH_ABANDON_GRACE) -- queue de la tache SDCCH du firmware, pas un retour",
+                                 age, TCH_ABANDON_GRACE)
+                    return False
                 self.tch.abandon("bloc montant du mobile sur le SDCCH")
         return False
 
