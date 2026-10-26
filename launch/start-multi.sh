@@ -59,6 +59,13 @@ for a in "$@"; do
         --status)  ACTION="status" ;;
         --stop)    ACTION="stop" ;;
         --dry-run) ACTION="dry" ;;
+        # [2026-10-26] --align : SEULEMENT l identite SS7 du natif (aligner_natif), puis
+        # sortie. Le banc (tests/modules/00-demarrage.sh) l appelle AVANT start-native.sh
+        # pour que le natif demarre deja aligne. L option n existait pas : elle etait
+        # ignoree, ACTION restait « start », et le banc lancait la multi COMPLETE depuis
+        # son barreau demarrage (conteneurs, puis « natif realigne : arret + relance »
+        # du coeur en plein run - BTS coupee, mobile « No service » a 10:36 le 26/10).
+        --align)   ACTION="align" ;;
         --restart-natif) RESTART_NATIF=1 ;;
         -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     esac
@@ -80,7 +87,7 @@ done
 # l appelant, qui n obtiendrait RIEN. Constate en les testant d ici.
 _multi_readonly=0
 case " $* " in
-    *" --status "*|*" --dry-run "*|*" -h "*|*" --help "*) _multi_readonly=1 ;;
+    *" --status "*|*" --dry-run "*|*" --align "*|*" -h "*|*" --help "*) _multi_readonly=1 ;;
 esac
 
 # [2026-08-31] stdin ET stdout : `[ ! -t 0 ]` seul prenait un
@@ -291,12 +298,12 @@ esac
 # osmocom-run telle quelle (Dockerfile.run deja joue) ; la derivation depuis
 # osmocom-nitb ne reste qu en repli (pas de reseau, Hub injoignable).
 : "${MULTI_HUB_RUN_IMAGE:=bastienbaranoff/norf_gsm:latest}"
-if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+if [ "$ACTION" != align ] && ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
     echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente : docker pull ${MULTI_HUB_RUN_IMAGE}"
     docker pull "$MULTI_HUB_RUN_IMAGE" && docker tag "$MULTI_HUB_RUN_IMAGE" "$MULTI_IMAGE" \
         || echo -e "  ${YELLOW}!${NC} pull ${MULTI_HUB_RUN_IMAGE} impossible - repli sur la derivation locale"
 fi
-if ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
+if [ "$ACTION" != align ] && ! docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1; then
     if docker image inspect osmocom-nitb >/dev/null 2>&1; then
         echo -e "  ${CYAN}→${NC} image '$MULTI_IMAGE' absente, base osmocom-nitb presente : derivation (Dockerfile.run)"
         ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
@@ -487,6 +494,18 @@ aligner_natif() {
     done
 }
 aligner_natif
+
+# ── --align : ON S ARRETE LA ────────────────────────────────────────────────
+# Rien n est lance ni arrete : le natif relira sa config quand start-native.sh
+# le demarrera juste apres (c est pour ca que le banc appelle --align d abord).
+if [ "$ACTION" = "align" ]; then
+    if [ "$NATIF_REALIGNE" = 1 ]; then
+        echo -e "  ${CYAN}i${NC} --align : identite posee ; le natif la lira a son prochain demarrage (rien relance ici)"
+    else
+        echo -e "  ${GREEN}✓${NC} --align : identite du natif deja en place, rien a faire"
+    fi
+    exit 0
+fi
 
 # ── LA 2G NATIVE RESTE DEBOUT ; LES CONTENEURS REPARTENT A NEUF ─────────────
 # [2026-08-31] Un clic = un banc NEUF, parce que les demons Osmocom ne
