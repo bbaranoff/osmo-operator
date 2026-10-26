@@ -25,6 +25,7 @@
 #   sudo ./launch/start-multi.sh --status     etat des conteneurs et du hub
 #   sudo ./launch/start-multi.sh --stop       arrete les conteneurs (le natif reste)
 #   sudo ./launch/start-multi.sh --dry-run    affiche la commande sans la lancer
+#   sudo ./launch/start-multi.sh --align      identite SS7 du natif seule, rien lance (le banc l appelle avant start-native)
 #   sudo ./launch/start-multi.sh --restart-natif
 #                                      arrete et relance aussi la 2G native
 #                                      (par defaut on la GARDE si elle tourne,
