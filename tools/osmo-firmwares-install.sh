@@ -266,46 +266,46 @@ osmo_trx_install() {
     fi
 }
 
-# ── firmware Calypso du banc (layer1, rssi...) avec gnuarm ──────────────────
-# Le firmware livre est celui du depot bbaranoff/firmware (/opt/GSM/firmware,
-# board/compal_e88/{layer1,rssi,trx}.highram). Celui-ci le RECOMPILE depuis l arbre
-# osmocom-bb du banc : eac4eed1 + les patchs de patches/ (dont
-# osmocom-bb-firmware-gprs.patch, le layer1 GPRS), avec arm-elf-gcc 4.5.2.
-# layer1.compalram deborde de LRAM (3448 octets) avec le GPRS et gcc 4.5 : il n est
-# pas utilise par le banc (highram), d ou make -k. OSMO_FW_INSTALLER=1 recopie les
-# .highram.{elf,bin} dans /opt/GSM/firmware (anciens en .avant-<date>).
+# ── firmware Calypso du banc (layer1 GPRS, rssi...) avec gnuarm ─────────────
+# Recompile l arbre osmocom-bb du banc (OSMOCOM_BB_REF + patches/osmocom-bb-*.patch,
+# dont le layer1 GPRS) avec arm-elf-gcc 4.5.2 : « cd src && make », l arbre entier
+# (outils hote, libosmocore cible, firmware). layer1 n existe qu en highram : avec
+# le PDCH il ne tient plus dans les 64 Ko du chargeur Compal (target/firmware/Makefile).
+# OSMO_FW_INSTALLER=1 pose layer1/rssi .highram.{elf,bin} dans /opt/GSM/firmware,
+# layer1 aussi sous le nom layer1.highram.gprs.* (celui que lisent dsp-rom-max.sh
+# et egprs-dsp.sh) ; les anciens restent en .avant-<date>.
 OSMOCOM_BB_REF="${OSMOCOM_BB_REF:-eac4eed1}"
 osmo_calypso_fw_install() {
     echo -e "${BOLD}== firmware Calypso du banc (osmocom-bb, gnuarm) ==${NC}"
     osmo_gnuarm_install || return 1
-    local t="$GSM_ROOT/osmocom-bb" fw log p; log="$(_fw_log calypso-fw)"
+    local t="$GSM_ROOT/osmocom-bb" fw log; log="$(_fw_log calypso-fw)"
     _fw_apt autoconf automake libtool pkg-config python3 git
     if [ ! -d "$t/.git" ]; then
         _fw_clone https://gitea.osmocom.org/phone-side/osmocom-bb "$t" || return 1
         git -C "$t" checkout -q "$OSMOCOM_BB_REF" && _fw_ok "osmocom-bb epingle sur $OSMOCOM_BB_REF"
     fi
-    for p in "$REPO"/patches/osmocom-bb-*.patch; do
-        case "$p" in *transceiver*) continue ;; esac     # ceux-la visent osmocom-bb-transceiver
-        if git -C "$t" apply -R --check "$p" 2>/dev/null; then :
-        elif git -C "$t" apply --check "$p" 2>/dev/null; then git -C "$t" apply "$p" && _fw_ok "patch $(basename "$p")"
-        else _fw_warn "$(basename "$p") ne s applique pas sur cet arbre"; fi
-    done
+    OSMO_PATCHES_ONLY=osmocom-bb GSM_ROOT="$GSM_ROOT" REPO="$REPO" bash "$REPO/tools/osmo-patches-apply.sh" "$GSM_ROOT" \
+        || _fw_warn "un correctif osmocom-bb ne s applique pas (ci-dessus)"
     fw="$t/src/target/firmware"
     _fw_bb_corriger "$fw"
-    ( cd "$t/src" && PATH="$GNUARM_DIR/install/bin:$PATH" make libosmocore-target \
-        && PATH="$GNUARM_DIR/install/bin:$PATH" make -k -j"$OSMO_FW_JOBS" -C target/firmware \
-           CROSS_COMPILE=arm-elf- BOARDS=compal_e88 ) >>"$log" 2>&1
+    if ( cd "$t/src" && PATH="$GNUARM_DIR/install/bin:$PATH" make -j"$OSMO_FW_JOBS" ) >>"$log" 2>&1; then
+        _fw_ok "osmocom-bb : make complet dans $t/src (gnuarm)"
+    else
+        _fw_err "make dans $t/src en echec (voir $log)"; return 1
+    fi
     local b="$fw/board/compal_e88" ok=1 a
     for a in layer1 rssi; do
         if [ -s "$b/$a.highram.bin" ]; then _fw_ok "$a.highram.bin ($b)"; else _fw_err "$a.highram.bin absent (voir $log)"; ok=0; fi
     done
     if [ "$ok" = 1 ] && [ "${OSMO_FW_INSTALLER:-0}" = 1 ]; then
-        local dst="$GSM_ROOT/firmware/board/compal_e88" d; d="$(date +%Y%m%d-%H%M)"
+        local dst="$GSM_ROOT/firmware/board/compal_e88" d n x; d="$(date +%Y%m%d-%H%M)"
         mkdir -p "$dst"
         for a in layer1 rssi; do
-            for x in elf bin; do
-                [ -f "$dst/$a.highram.$x" ] && cp -p "$dst/$a.highram.$x" "$dst/$a.highram.$x.avant-$d"
-                cp -f "$b/$a.highram.$x" "$dst/"
+            for n in "$a.highram" $([ "$a" = layer1 ] && echo layer1.highram.gprs); do
+                for x in elf bin; do
+                    [ -f "$dst/$n.$x" ] && cp -p "$dst/$n.$x" "$dst/$n.$x.avant-$d"
+                    cp -f "$b/$a.highram.$x" "$dst/$n.$x"
+                done
             done
         done
         _fw_ok "pose dans $dst (anciens en .avant-$d)"

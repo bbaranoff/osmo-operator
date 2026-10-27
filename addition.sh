@@ -47,8 +47,8 @@
 #                                 (sources, patchs du banc, image flash)
 #   sudo ./addition.sh --trx      osmocom-bb-trx : image Docker publiee + firmware
 #                                 trx (TX) compile avec gnuarm
-#   sudo ./addition.sh --calypso-fw le firmware Calypso du banc (layer1, rssi)
-#                                 recompile avec gnuarm (OSMO_FW_INSTALLER=1 : le poser)
+#   sudo ./addition.sh --calypso-fw osmocom-bb du banc recompile avec gnuarm (cd src && make) :
+#                                 layer1 GPRS, rssi (OSMO_FW_INSTALLER=1 : les poser)
 #   sudo ./addition.sh --fernvale fernly, fernvale-nuttx, layer1 MTK (MT6260)
 #   sudo ./addition.sh --simcom   documentation et SDK SIMCom (~3,4 Go)
 #   sudo ./addition.sh --firmwares les six precedents
@@ -263,6 +263,7 @@ etat() {
     _fw_etat "gnuarm"            /root/gnuarm/install/bin/arm-elf-gcc
     _fw_etat "Magnetite C139"    /opt/GSM/firmware/magnetite/c139-flash.img
     _fw_etat "firmware trx (TX)" /opt/GSM/osmocom-bb-trx/src/target/firmware/board/compal_e88/trx.highram.bin
+    _fw_etat "layer1 GPRS (gnuarm)" /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
     _fw_etat "Fernvale fernly"   /opt/GSM/fernly/build/firmware.bin
     _fw_etat "Fernvale NuttX"    /opt/GSM/fernvale-nuttx/nuttx/nuttx.bin
     _fw_etat "layer1 MTK"        /opt/GSM/osmocom-bb-mtk-layer1/src/target/firmware/board/fernvale/layer1.mt6260.bin

@@ -1,3 +1,17 @@
+diff --git a/src/target/firmware/Makefile b/src/target/firmware/Makefile
+index 64ed667f..0d8e610f 100644
+--- a/src/target/firmware/Makefile
++++ b/src/target/firmware/Makefile
+@@ -127,6 +127,9 @@ APPLICATIONS?=hello_world compal_dsp_dump layer1 loader rssi menu
+ # Applications specific env requirements
+ APP_loader_ENVIRONMENTS=compalram highram
+ APP_rssi_ENVIRONMENTS=* -compalram
++# layer1 : avec le PDCH (l1gprs_fw.c, prim_pdtch.c) l image ne tient plus dans
++# les 64 Ko que le chargeur Compal accepte (LRAM) : highram via loader.compalram
++APP_layer1_ENVIRONMENTS=* -compalram
+ APP_menu_ENVIRONMENTS=* -highram
+ 
+ # Various objects that are currently linked into all applications
 diff --git a/src/target/firmware/include/layer1/prim.h b/src/target/firmware/include/layer1/prim.h
 index 4e34bb23..ea2715ba 100644
 --- a/src/target/firmware/include/layer1/prim.h

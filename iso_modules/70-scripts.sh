@@ -77,6 +77,10 @@ bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
 # [2026-10-24] /root/gnuarm/install/bin dans le PATH des qu il existe (supplement --gnuarm) :
 # le fichier est pose ici, il ne fait rien tant que la chaine est absente.
 install -Dm644 "$P/scripts/osmo-gnuarm-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-gnuarm.sh"
+# Les correctifs du depot (patches/) sur les arbres du rootfs : osmocom-bb sort de l image
+# Docker avec ceux du cote hote, le reste (layer1 GPRS, osmocon...) est pose ici, hors chroot.
+# Avec gnuarm, « cd /opt/GSM/osmocom-bb/src && make » compile alors l arbre entier.
+OSMO_PATCHES_QUIET=1 GSM_ROOT="$ROOTFS/opt/GSM" REPO="$P" bash "$P/tools/osmo-patches-apply.sh" "$ROOTFS/opt/GSM" || true
 # [2026-10-24] WireGuard du WAN (wiki/WAN.md) : « wg 1 » (hub 10.99.0.1), « wg N ... » (10.99.0.N),
 # fonction de profile.d qui laisse passer le vrai wg ; osmo-wg pour sudo et les scripts. Les cles
 # sont generees au premier « wg N » sur la machine, JAMAIS dans l image (elles seraient partagees).

@@ -19,3 +19,6 @@ mynode*.conf
 
 # Jupyter
 .ipynb_checkpoints/
+*-[0-9]*.pdf
+osmo-operator-qmd/
+bundle-qmd/

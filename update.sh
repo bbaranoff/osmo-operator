@@ -1037,6 +1037,19 @@ osmo_poser_outils_banc() {
 }
 osmo_poser_outils_banc
 
+# ── CORRECTIFS DES ARBRES /opt/GSM (patches/) ───────────────────────────────
+# Les arbres poses par l ISO (osmocom-bb, osmo-trx...) recoivent les correctifs
+# du depot : idempotent, hors ligne. Avec gnuarm (addition.sh --gnuarm),
+# « cd /opt/GSM/osmocom-bb/src && make » sort alors le layer1 GPRS.
+osmo_poser_correctifs() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local r=/opt/GSM/osmo-operator
+    [ -x "$r/tools/osmo-patches-apply.sh" ] || return 0
+    OSMO_PATCHES_QUIET=1 bash "$r/tools/osmo-patches-apply.sh" /opt/GSM 2>/dev/null | sed 's/^ */[OK] /'
+    return 0
+}
+osmo_poser_correctifs
+
 case "${1:-}" in
     --quiet) exit 0 ;;
 esac
