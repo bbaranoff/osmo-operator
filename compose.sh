@@ -1,26 +1,26 @@
 #!/bin/bash
 # =============================================================================
-#  compose.sh - le banc en docker compose v2 : images, hub + un operateur
+#  compose.sh - the bench with docker compose v2: images, hub + one operator
 # =============================================================================
 #
-#    sudo ./compose.sh build [--no-cache] [--lite] [--stp]   les images (= build.sh)
+#    sudo ./compose.sh build [--no-cache] [--lite] [--stp]   the images (= build.sh)
 #    sudo ./compose.sh up [--ms N] [--phy faketrx|virtphy|qemu] [--no-run]
-#    sudo ./compose.sh down          arrete et retire hub + operateur (configs gardees)
+#    sudo ./compose.sh down          stop and remove hub + operator (configs kept)
 #    sudo ./compose.sh ps | logs [service] | shell
-#    sudo ./compose.sh debs          le cache .deb de l hote (/var/cache/osmo-debs)
+#    sudo ./compose.sh debs          the host .deb cache (/var/cache/osmo-debs)
 #
-#  `up` fait ce que start-docker.sh fait pour UN operateur, avec compose.yaml comme
-#  description du banc :
-#    1. les configs (apply_config_templates de generate_configs.sh, la config
-#       du hub par helpers/create_interop.sh) dans data/compose/ ;
-#    2. data/compose/.env : les adresses calculees par les memes fonctions que
-#       start-docker.sh (op_backbone_ip, op_private_*), les choix (N_MS, PHY_MODE) ;
-#    3. data/compose/compose.audio.yaml : le socket PulseAudio de l hote et
-#       /dev/snd, quand ils existent (compose ne sait pas les rendre optionnels) ;
-#    4. docker compose --profile bench up -d ;
-#    5. run.sh dans le conteneur, attente du HLR, abonnes de test dans le HLR
-#       (memes IMSI / MSISDN <noeud>00<op><ms> / Ki que start-docker.sh).
-#  Pour N operateurs, le WAN, les ports publies : start-docker.sh.
+#  `up` does what start-docker.sh does for ONE operator, with compose.yaml as
+#  the bench description:
+#    1. the configs (apply_config_templates from generate_configs.sh, the hub
+#       config from helpers/create_interop.sh) in data/compose/;
+#    2. data/compose/.env: the addresses computed by the same functions as
+#       start-docker.sh (op_backbone_ip, op_private_*), the choices (N_MS, PHY_MODE);
+#    3. data/compose/compose.audio.yaml: the host PulseAudio socket and
+#       /dev/snd, when they exist (compose cannot make them optional);
+#    4. docker compose --profile bench up -d;
+#    5. run.sh in the container, wait for the HLR, test subscribers in the HLR
+#       (same IMSI / MSISDN <node>00<op><ms> / Ki as start-docker.sh).
+#  For N operators, the WAN and published ports: start-docker.sh.
 # =============================================================================
 set -euo pipefail
 
@@ -40,8 +40,8 @@ need_compose() {
         || die "docker compose v2 absent : sudo ./build.sh l installe (docker-compose-v2 + docker-buildx)."
 }
 
-# La bibliotheque de start-docker.sh : ses fonctions (op_*, apply_config_templates...)
-# sans son execution - meme decoupe que build-iso.sh (load_start_lib).
+# The start-docker.sh library: its functions (op_*, apply_config_templates...)
+# without its execution - same cut as build-iso.sh (load_start_lib).
 load_start_lib() {
     local lib; lib="$(mktemp)"
     awk '
@@ -90,7 +90,7 @@ cmd_up() {
     done
 
     load_start_lib
-    export OSMO_PRIV_BY_OP=1      # on provisionne PAR operateur (voir _osmo_priv_index)
+    export OSMO_PRIV_BY_OP=1      # provision PER operator (see _osmo_priv_index)
     local op=1 node="${WAN_NODE_ID:-1}"
     local bb_ip priv_net priv_gw priv_ip mcc mnc name
     bb_ip="$(op_backbone_ip "$op")"
@@ -100,7 +100,7 @@ cmd_up() {
     echo -e "${CYAN}── Banc compose : hub 172.20.0.10 + operateur ${op} (${name}, MCC ${mcc} MNC ${mnc}, ${n_ms} MS, PHY ${phy}) ──${NC}"
     echo -e "  backbone ${CYAN}${bb_ip}${NC}   prive ${CYAN}${priv_ip}${NC} (${priv_net})"
 
-    # 1. Les configs
+    # 1. The configs
     rm -rf "$CDIR/op1" "$CDIR/hub"
     mkdir -p "$CDIR/op1/osmocom" "$CDIR/op1/asterisk" "$CDIR/op1/bb" "$CDIR/hub"
     apply_config_templates "$CDIR/op1" "$priv_ip" "$priv_gw" "$op" \
@@ -117,7 +117,7 @@ cmd_up() {
     chmod +x "$CDIR/op1/osmocom"/*.sh 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} configs dans ${CDIR}"
 
-    # 2. .env : ce que compose.yaml lit
+    # 2. .env: what compose.yaml reads
     local host_ip; host_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
     cat > "$CDIR/.env" <<ENV
 # genere par compose.sh up - ne pas editer : relancer compose.sh up
@@ -134,7 +134,7 @@ HOST_IP=${host_ip}
 WAN_NODE_ID=${node}
 ENV
 
-    # 3. L audio de l hote : socket pulse et /dev/snd quand ils existent
+    # 3. Host audio: pulse socket and /dev/snd when they exist
     local pa=""
     for s in /var/run/pulse/native /run/pulse/native "/run/user/${SUDO_UID:-$(id -u)}/pulse/native"; do
         [ -S "$s" ] && { pa="$s"; break; }
@@ -155,14 +155,14 @@ ENV
     [ -n "$pa" ] && echo -e "  ${GREEN}✓${NC} audio : socket pulse ${pa}" \
                  || echo -e "  ${YELLOW}audio : pas de socket pulse sur l hote - repli TCP 172.20.0.1:4713${NC}"
 
-    # 4. Les conteneurs
+    # 4. The containers
     modprobe sctp 2>/dev/null || true; modprobe tun 2>/dev/null || true
     mkdir -p /tmp/osmocom-logs/op1
     compose --profile bench up -d --remove-orphans
     echo -e "  ${GREEN}✓${NC} osmo-inter-stp et osmo-operator-1 lances"
     [ "$do_run" = 1 ] || { echo "  (--no-run : run.sh non lance - docker exec -ti osmo-operator-1 bash)"; return 0; }
 
-    # 5. La pile, puis les abonnes
+    # 5. The stack, then the subscribers
     echo -e "  ${GREEN}[*] run.sh dans osmo-operator-1...${NC}"
     docker exec -d osmo-operator-1 bash -c \
         "mkdir -p /var/log/osmocom && { RUN_NO_PROCESS=0 CALYPSO_NO_ATTACH=1 /etc/osmocom/run.sh; } > /var/log/osmocom/run.sh.log 2>&1"

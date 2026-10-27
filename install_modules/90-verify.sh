@@ -1,5 +1,5 @@
-# 90-verify - controle d'ensemble. Distinct des `verify` de chaque etape :
-# ici on regarde si la machine est utilisable, pas si une etape a reussi.
+# 90-verify - overall check. Distinct from each step's `verify`: here we check
+# whether the machine is usable, not whether a step succeeded.
 INST_REGISTER verify "Verification de l'installation"
 INST_DEPS[verify]="binaires configs"
 INST_ROOT[verify]=0

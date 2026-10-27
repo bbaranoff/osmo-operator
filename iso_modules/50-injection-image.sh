@@ -1,18 +1,21 @@
 #!/bin/bash
-# iso_modules/50-injection-image.sh - etape 5 : .deb du build puis docker cp de l image
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/50-injection-image.sh - step 5: build .debs first, then docker cp of the image
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment:
+#   OSMO_DEB_CACHE=<dir>  host cache of the build .debs (default /var/cache/osmo-debs)
+#   ISO_EMBED_DEBS=1      keep the .debs in the ISO (/var/cache/osmo-debs)
 
-# ── Etape 5 : LES .deb DU BUILD DOCKER D ABORD, puis le reste de l image ────
-# [2026-09-03] Ce que l image a compile est sorti en paquets (packaging/
-# osmo-deb.sh) : libosmocore et les osmo-*, gapk, QEMU et son arbre, osmocom-bb,
-# le venv gr-gsm, le firmware. On les pose dans le rootfs par dpkg, comme sur
-# n importe quelle machine, et on ne recopie de l image que ce qui n est pas
-# en paquet (scripts, configs, unites, node, le depot, les ateliers restants).
-# Source des paquets : le cache de l HOTE (/var/cache/osmo-debs, que build.sh
-# alimente), sinon le cache embarque dans l image. Seuls ceux de la suite du
-# rootfs (~noble) sont pris. Sans paquet, on retombe sur le docker cp complet.
+# ── Step 5: the .debs OF THE DOCKER BUILD first, then the rest of the image ──
+# What the image compiled is packaged (packaging/osmo-deb.sh): libosmocore and
+# the osmo-*, gapk, QEMU and its tree, osmocom-bb, the gr-gsm venv, the
+# firmware. They are installed into the rootfs with dpkg; only what is not
+# packaged is copied from the image (scripts, configs, units, node, the repo).
+# Package source: the HOST cache (/var/cache/osmo-debs, fed by build.sh), else
+# the cache embedded in the image. Only those of the rootfs suite/arch are
+# taken. Without packages, the full docker cp is used.
 if [ "$OSMO_ISO_INHERITED" = "1" ]; then
     echo -e "${GREEN}[5/9] Injection : rootfs herite, deja fait${NC}"
 else
@@ -20,14 +23,14 @@ echo -e "${GREEN}[5/9] Injection stack Osmocom (paquets .deb du build, puis imag
 CID=$(docker create "$ISO_RUN_IMAGE" /bin/true)
 ISO_DEB_HOST_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 _iso_debs="$WORK/debs-build"; mkdir -p "$_iso_debs"
-# Suite ET architecture : le cache de l hote porte les paquets des deux
-# architectures cote a cote (..._amd64.deb, ..._arm64.deb).
+# Suite AND architecture: the host cache holds the packages of both
+# architectures side by side (..._amd64.deb, ..._arm64.deb).
 cp -f "$ISO_DEB_HOST_CACHE"/osmo-build-*"~${ISO_SUITE}_${ISO_ARCH}.deb" "$_iso_debs/" 2>/dev/null || true
 if ! ls "$_iso_debs"/*.deb >/dev/null 2>&1; then
     docker cp "$CID:/var/cache/osmo-debs/." "$_iso_debs/" 2>/dev/null || true
     find "$_iso_debs" -name '*.deb' ! -name "*~${ISO_SUITE}_${ISO_ARCH}.deb" -delete 2>/dev/null || true
 fi
-# Le hub n a besoin que du STP : libosmocore, libosmo-netif, libosmo-sigtran.
+# The hub only needs the STP: libosmocore, libosmo-netif, libosmo-sigtran.
 if [ "$ISO_ROLE" = "interstp" ]; then
     find "$_iso_debs" -name '*.deb' ! -name 'osmo-build-libosmocore_*' \
         ! -name 'osmo-build-libosmo-netif_*' ! -name 'osmo-build-libosmo-sigtran_*' -delete 2>/dev/null || true
@@ -35,10 +38,10 @@ fi
 ISO_DEBS_USED=0
 _ndebs=$(find "$_iso_debs" -maxdepth 1 -name '*.deb' | wc -l)
 if [ "$_ndebs" -gt 0 ]; then
-    # Poses via un repertoire DANS le rootfs (dpkg lit ses paquets sous la
-    # racine), retire ensuite : les paquets ne voyagent dans l ISO que sur
-    # ISO_EMBED_DEBS=1 - un arbre QEMU en zstd dans une image qui tient en RAM,
-    # ca ne va pas de soi.
+    # Installed from a directory INSIDE the rootfs (dpkg reads its packages
+    # under the root), removed afterwards: the packages only travel in the ISO
+    # with ISO_EMBED_DEBS=1 (a zstd QEMU tree in an image that fits in RAM
+    # is not a given).
     install -d "$ROOTFS/var/cache/osmo-debs"
     cp -f "$_iso_debs"/*.deb "$ROOTFS/var/cache/osmo-debs/"
     if chroot "$ROOTFS" sh -c 'dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb' \
@@ -58,9 +61,9 @@ docker cp "$CID:/usr/local/bin/." "$ROOTFS/usr/local/bin/"  2>/dev/null||true
 docker cp "$CID:/usr/local/lib/." "$ROOTFS/usr/local/lib/"  2>/dev/null||true
 docker cp "$CID:/usr/local/include/." "$ROOTFS/usr/local/include/" 2>/dev/null||true
 docker cp "$CID:/usr/local/sbin/." "$ROOTFS/usr/local/sbin/" 2>/dev/null||true
-# /opt/GSM : tout, SAUF les arbres que les paquets viennent de poser (osmocom-bb,
-# qosmo, qemu-install, firmware) - et rien du tout pour le hub, qui n en
-# lit pas une ligne (le depot lui-meme est clone a l etape 5a).
+# /opt/GSM: everything EXCEPT the trees the packages just installed (osmocom-bb,
+# qosmo, qemu-install, firmware) - and nothing at all for the hub, which does
+# not read any of it (the repo itself is cloned at step 5a).
 if [ "$ISO_ROLE" != "interstp" ]; then
     _excl=()
     if [ "$ISO_DEBS_USED" = "1" ]; then
@@ -71,8 +74,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     mkdir -p "$ROOTFS/opt"
     docker cp "$CID:/opt/GSM" - 2>/dev/null | tar -x -C "$ROOTFS/opt" "${_excl[@]+"${_excl[@]}"}" 2>/dev/null || true
 fi
-# venv python (gr-gsm + bridges) attendu par le pont (grgsm_exe, pont/*.py)
-# - en paquet (grgsm-venv) quand le cache l a, depuis l image sinon.
+# Python venv (gr-gsm + bridges) expected by the bridge (grgsm_exe, pont/*.py)
+# - as a package (grgsm-venv) when the cache has it, from the image otherwise.
 [ -d "$ROOTFS/root/.env" ] || docker cp "$CID:/root/.env" "$ROOTFS/root/" 2>/dev/null||true
 [ -d "$ROOTFS/root/.venv-qemu" ] || docker cp "$CID:/root/.venv-qemu" "$ROOTFS/root/" 2>/dev/null||true
 docker cp "$CID:/opt/node"            "$ROOTFS/opt/"        2>/dev/null||true
@@ -86,7 +89,7 @@ echo -e "  ${GREEN}✓${NC} binaires + libs + configs injectes"
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

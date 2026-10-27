@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-# osmosupplements - les choix des supplements, de Calamares au premier demarrage.
+# main.py - Calamares job "osmosupplements": carries the supplement choices
+# from the installer to the first boot of the installed system.
 #
-# [2026-10-24] packagechooser@supplements (optionalmultiple, methode legacy) range les cles
-# cochees dans packagechooser_supplements, separees par des virgules ; packagechooser@image
-# range ghcr ou hub dans packagechooser_image. On les traduit en drapeaux d addition.sh,
-# ecrits dans /etc/osmo-supplements de la cible, et on active osmo-supplements.service :
-# tools/osmo-supplements-firstboot.sh les rejoue au premier demarrage, reseau monte.
+# packagechooser@supplements (optionalmultiple, legacy method) stores the
+# checked keys in packagechooser_supplements, comma separated;
+# packagechooser@image stores ghcr or hub in packagechooser_image. They are
+# translated into addition.sh flags, written to /etc/osmo-supplements in the
+# target, and osmo-supplements.service is enabled: tools/osmo-supplements-firstboot.sh
+# replays them at first boot, once the network is up.
 import os
 
 import libcalamares
@@ -54,8 +56,8 @@ def run():
         f.write('OSMO_SUPPLEMENTS="%s"\n' % " ".join(DRAPEAUX[c] for c in choix))
         if "multi" in choix:
             f.write('HUB_IMAGE="%s"\n' % IMAGES.get(image, IMAGES["ghcr"]))
-        # le compte cree (page Utilisateurs) : au premier demarrage personne n est encore
-        # connecte, addition.sh ne le trouverait pas (groupe docker, icones)
+        # Account created on the Users page: at first boot nobody is logged in
+        # yet, so addition.sh could not find it (docker group, icons).
         compte = libcalamares.globalstorage.value("username")
         if compte:
             f.write('OSMO_COMPTE="%s"\n' % compte)

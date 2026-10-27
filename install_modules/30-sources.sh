@@ -1,5 +1,5 @@
-# 30-sources - recuperation des depots. Idempotent : un depot deja clone est laisse tel quel
-# (on ne tire pas : ce serait modifier le travail en cours de l'utilisateur sans le lui demander).
+# 30-sources - fetch the repositories. Idempotent: an already cloned repository is left as is
+# (no pull unless REINSTALL=1: pulling would modify the user's work in progress without asking).
 INST_REGISTER sources "Recuperation des sources Osmocom"
 INST_DEPS[sources]="prereqs"
 

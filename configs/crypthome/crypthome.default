@@ -1,84 +1,84 @@
-# /etc/default/crypthome - second disque chiffre porte /home
+# /etc/default/crypthome - encrypted second disk carrying /home
 #
-# LE MODELE. Le disque systeme n'est PAS chiffre : tout ce qui est systeme est
-# lisible - l'OS, /etc, et /root qui est le compte de TRAVAIL du banc. Ce qui
-# est chiffre, c'est le second disque, monte sur /home : les profils, les
-# donnees personnelles, et TOUT CE QUI TIENT AU KEYRING.
+# MODEL. The system disk is NOT encrypted: everything that is system is
+# readable - the OS, /etc, and /root, the WORKING account of the bench. What
+# is encrypted is the second disk, mounted on /home: profiles, personal data
+# and everything that belongs to the keyring.
 #
-# QUI REMPLIT CE FICHIER. Deux ecrivains, pour deux chemins :
-#   - crypthome-postinstall, a l INSTALLATION, quand Calamares vient de chiffrer
-#     la partition /home (le cas normal) ;
-#   - init-crypthome.sh, apres coup, quand on chiffre un SECOND disque ajoute a
-#     une machine deja installee.
-# CRYPTHOME_UUID est vide tant qu aucun des deux n'est passe ; unlock-home ne
-# fait alors rien et le boot n'en souffre pas.
+# WHO WRITES THIS FILE. Two writers, for two paths:
+#   - crypthome-postinstall, at INSTALLATION time, when Calamares has just
+#     encrypted the /home partition (the normal case);
+#   - init-crypthome.sh, afterwards, when encrypting a SECOND disk added to an
+#     already installed machine.
+# CRYPTHOME_UUID stays empty until one of them has run; unlock-home then does
+# nothing and the boot is not affected.
 
-# UUID du conteneur LUKS (= UUID vu par blkid sur la partition chiffree).
+# UUID of the LUKS container (= UUID shown by blkid on the encrypted partition).
 CRYPTHOME_UUID=""
 
-# Nom du mapping dans /dev/mapper et point de montage.
+# Mapping name in /dev/mapper and mount point.
 #
-# "crypthome" est le nom que choisit init-crypthome.sh. Une installation par
-# Calamares, elle, herite du nom que kpmcore a forge - "luks-<uuid>" - et
-# crypthome-postinstall ecrit CELUI-LA ici. Les deux conviennent : tout le
-# dispositif lit ce reglage au lieu de supposer un nom.
+# "crypthome" is the name chosen by init-crypthome.sh. A Calamares installation
+# inherits the name forged by kpmcore - "luks-<uuid>" - and crypthome-postinstall
+# writes THAT one here. Both are fine: every component reads this setting
+# instead of assuming a name.
 CRYPTHOME_NAME="crypthome"
 CRYPTHOME_MOUNT="/home"
 
-# Le compte dont le home vit sur le disque chiffre : c'est LUI qui porte le
-# keyring et fait tourner les applications a secrets (voir run-as-owner).
+# The account whose home lives on the encrypted disk: it carries the keyring
+# and runs the applications holding secrets (see run-as-owner).
 #
-# Sur la cle live, c est osmocom, et la session tourne sous root. Sur un disque
-# installe, osmocom n existe plus (shellprocess-osmo.conf le supprime) et
-# crypthome-postinstall met ici le compte choisi a l installation - qui est
-# aussi celui de la session. run-as-owner n a alors plus rien a basculer et
-# lance l application telle quelle : c est le bon comportement, le home de ce
-# compte EST deja sur le volume chiffre.
+# On the live key it is osmocom, and the session runs as root. On an installed
+# disk, osmocom no longer exists (removed by shellprocess-osmo.conf) and
+# crypthome-postinstall writes here the account chosen at installation - which
+# is also the session account. run-as-owner then has nothing to switch and
+# starts the application as is: the home of that account IS already on the
+# encrypted volume.
 #
-# DEUX SESSIONS, SELON LA REPONSE AU DEMARRAGE (unlock-home) :
-#   oui -> le compte ci-dessus, PERSISTANT : son home est sur le volume chiffre ;
-#   non -> ROOT, EPHEMERE : GDM s ouvre sur root pour ce demarrage, et tout ce
-#          que la session ecrit dans /root - et dans /opt/GSM, voir
-#          CRYPTHOME_RAM_DIRS - reste dans /tmp/crypthome-root (tmpfs, en RAM) :
-#          rien ne survit a l arret.
+# TWO SESSIONS, DEPENDING ON THE ANSWER AT BOOT (unlock-home):
+#   yes -> the account above, PERSISTENT: its home is on the encrypted volume;
+#   no  -> ROOT, EPHEMERAL: GDM opens on root for this boot only, and whatever
+#          the session writes in /root - and in /opt/GSM, see
+#          CRYPTHOME_RAM_DIRS - stays in /tmp/crypthome-root (tmpfs, in RAM):
+#          nothing survives a shutdown.
 CRYPTHOME_OWNER="__OWNER__"
 
-# Boot : nombre d'essais de phrase de passe, et delai (s) au bout duquel une
-# question sans reponse vaut "non". Le boot n'est JAMAIS bloque : au pire on
-# demarre sans /home.
+# Boot: number of passphrase attempts, and delay (s) after which an unanswered
+# prompt counts as "no". The boot is NEVER blocked: at worst the machine
+# starts without /home.
 CRYPTHOME_TRIES=3
 CRYPTHOME_TIMEOUT=60
 
-# Ou la question « decrypt /home -passphrase- or Enter » est posee au boot :
-#   console  (defaut) sur la console texte, lue par unlock-home lui-meme ;
-#            plymouth, s'il tourne, est quitte juste avant. C'est le chemin
-#            qui marche partout : il ne depend ni d'un agent systemd ni du
-#            clavier de plymouth (muet sur certaines machines, portable
-#            Intel + NVIDIA en tete).
-#   plymouth dans le theme de demarrage (osmo-bts), via systemd-ask-password :
-#            plus joli, a reserver a une machine ou l'on a VERIFIE que la
-#            frappe y est prise.
+# Where the prompt "decrypt /home -passphrase- or Enter" is asked at boot:
+#   console  (default) on the text console, read by unlock-home itself;
+#            plymouth, if running, is quit just before. This path works
+#            everywhere: it depends neither on a systemd agent nor on the
+#            plymouth keyboard (dead on some machines, Intel + NVIDIA laptops
+#            in particular).
+#   plymouth in the boot theme (osmo-bts), through systemd-ask-password:
+#            nicer, for a machine where keyboard input in plymouth has been
+#            VERIFIED to work.
 CRYPTHOME_PROMPT="console"
 
-# [2026-10-24] Image peinte derriere la question (console, /dev/fb0) par
-# crypthome-fond. "none" : console texte nue.
+# Image painted behind the prompt (console mode, /dev/fb0) by crypthome-fond.
+# "none": bare text console.
 CRYPTHOME_IMAGE="/usr/share/backgrounds/gsm-lab-antenne.jpg"
 
-# Repertoires recouverts d un overlay en RAM pendant une session ROOT (/home
-# ferme), EN PLUS de /root qui l est toujours. Le banc entier vit dans /opt/GSM
-# (depot, configs, hlr.db, journaux) : en session root il est "live" - tout ce
-# qui s y ecrit s evapore a l arret, et le disque garde l etat d avant. Le
-# contenu reste lisible et executable ; seules les ecritures partent en RAM.
-# Separes par des espaces ; un repertoire absent est ignore. Vide = /root seul.
+# Directories covered by a RAM overlay during a ROOT session (/home closed),
+# IN ADDITION to /root, which always is. The whole bench lives in /opt/GSM
+# (repository, configs, hlr.db, logs): in a root session it is "live" -
+# everything written there evaporates at shutdown, and the disk keeps its
+# previous state. Content stays readable and executable; only writes go to
+# RAM. Space separated; a missing directory is ignored. Empty = /root only.
 CRYPTHOME_RAM_DIRS="/opt/GSM"
 
-# Repertoires de root qui ne doivent pas exister en clair sur le disque
-# systeme : init-crypthome.sh les remplace par des liens vers le disque
-# chiffre. Disque non dechiffre = lien mort = rien ne s'ecrit en clair.
+# Directories of root that must not exist in clear on the system disk:
+# init-crypthome.sh replaces them with links to the encrypted disk. Disk not
+# decrypted = dangling link = nothing is written in clear.
 CRYPTHOME_ROOT_LINKS=".local/share/keyrings"
 
-# Les applications qui portent des secrets : leurs lanceurs sont rediriges
-# vers run-as-owner par refresh-owner-apps. Noms de fichiers .desktop, sans
-# l'extension ; ceux qui ne sont pas installes sont ignores en silence.
-# Relancer « refresh-owner-apps » apres en avoir ajoute.
+# Applications holding secrets: their launchers are redirected to run-as-owner
+# by refresh-owner-apps. Names of .desktop files without the extension; those
+# not installed are silently ignored. Run "refresh-owner-apps" again after
+# adding some.
 CRYPTHOME_OWNER_APPS="firefox firefox-esr thunderbird chromium chromium-browser google-chrome keepassxc seahorse org.gnome.seahorse.Application signal-desktop element-desktop telegramdesktop org.gnome.Geary org.gnome.Evolution evolution nextcloud org.keepassxc.KeePassXC"

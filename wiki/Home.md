@@ -1,9 +1,9 @@
 # osmo-operator — Quick start & reference
 
-A complete **GSM + LTE** operator in a single image, with the radio emulated end
-to end down to the baseband (Calypso under QEMU), and a postmarketOS phone that
-does data over 4G and voice/SMS over 2G on the same identity — a real handset's
-CSFB, at the modem level. No SDR, no physical phone.
+A complete **GSM + LTE** operator in a single image, with the radio emulated
+end to end down to the baseband (Calypso under QEMU), and a postmarketOS phone
+that does data over 4G and voice/SMS over 2G on the same identity — a real
+handset's CSFB, at the modem level. No SDR, no physical phone.
 
 | Page | Contents |
 |---|---|
@@ -11,32 +11,30 @@ CSFB, at the modem level. No SDR, no physical phone.
 | [Start-native](Start-native.md) | `start-native.sh` step by step, options manual |
 | [Resultats](Resultats.md) | reference `check_all.sh` runs, 1 and 3 operators, and how to read the deviations |
 | [Build](Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
+| [ISO](ISO.md) | everything the desktop ISO contains, how it is built and installed |
 | [Environnement](Environnement.md) | which variable wins, what makes it all the way to QEMU |
-| [Reference](Reference.md) | the old full README (in English): multi-PLMN architecture, SS7, SMS, voice, diagnostics |
+| [Reference](Reference.md) | full reference: multi-PLMN architecture, SS7, SMS, voice, diagnostics |
 | [Telephone-emule](Telephone-emule.md) | plug **only** the emulated phone (qosmo, c54x_exe, grgsm_exe) into **your own** Osmocom stack |
-| [Lancer-a-la-main](Lancer-a-la-main.md) · [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb) | the phone launched process by process, no script, with proof at every step |
+| [Installer-qosmo](Installer-qosmo.md) · [Installer-c54x_exe](Installer-c54x_exe.md) · [Installer-grgsm_exe](Installer-grgsm_exe.md) | per-repository install of the emulated phone's components |
+| [Lancer-a-la-main](Lancer-a-la-main.md) · [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb) · [lancer-les-modes.ipynb](lancer-les-modes.ipynb) | the phone launched process by process, no script, with proof at every step |
 | [SIM](SIM.md) | the bench's card in an Omnikey HID reader (sysmoISIM programmed by pySim) or softSIM, served to the mobile over SAP: `start-native.sh --sap`, `tools/osmo-sim.sh` |
 | [WAN](WAN.md) | linking two nodes (LAN or Internet via WireGuard): ports, SS7 hub, `--wan-nodes`, layer-by-layer checks, failures |
 | [Payload-ISM](Payload-ISM.md) | SMS **text** between two nodes over an ISM-band radio link, everything else (SS7, SIP, addresses) over IP: `start-native.sh --wan --payload-ism`, `network/setup-payload-ism.sh` |
-| [Injecteur-bruit](Injecteur-bruit.md) | degrade the downlink between the bridge and layer 1 (bit flips, bursts, AWGN, I/Q): `BRUIT_MODE=…`, off by default |
 | [README-notebook](README-notebook.md) · [installer-osmo-jusquau-dsp.ipynb](installer-osmo-jusquau-dsp.ipynb) | the install notebook: fresh Ubuntu 24.04 to a call on the DSP, step by step, and how to run it |
 
 ---
 
 ## Recommended method: the desktop ISO (release)
 
-> Everything the ISO contains, how it is built and installed, and each of its
-> capabilities: see [ISO](ISO.md).
-
 This is the path that works without compiling or configuring anything: the
 [latest release](https://github.com/bbaranoff/osmo-operator/releases/latest)
-ships `osmo-operator-desktop.iso`, a GNOME live system with Wireshark, Linphone,
-the I/Q spectra and the three launchers in the dock.
+ships `osmo-operator-desktop.iso`, a GNOME live system with Wireshark,
+Linphone, the I/Q spectra and the three launchers in the dock.
 
 ### 1. Download and reassemble
 
 GitHub caps a release file at 2 GiB, so the image ships in pieces.
-**Download all four `part-*`**, then:
+**Download all the `part-*`**, then:
 
 ```bash
 cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
@@ -63,8 +61,8 @@ qemu-system-x86_64 -cdrom osmo-operator-desktop.iso -m 8G -enable-kvm \
 
 **VirtualBox** — new Linux / Ubuntu 64-bit VM, 8 GB, 4 CPUs, 3D disabled.
 System → Processor: tick *Enable Nested VT-x/AMD-V* (if greyed out:
-`VBoxManage modifyvm "<nom>" --nested-hw-virt on`). Attach the ISO to the optical
-drive, no disk. NAT network: port forward host 8080 → guest 8080.
+`VBoxManage modifyvm "<name>" --nested-hw-virt on`). Attach the ISO to the
+optical drive, no disk. NAT network: port forward host 8080 → guest 8080.
 
 **VMware** (Workstation / Player / Fusion) — VM from the ISO, Linux / Ubuntu
 64-bit, 8 GB, 4 cores, tick *Virtualize Intel VT-x/EPT or AMD-V/RVI*, skip
@@ -92,17 +90,17 @@ the dock, 2G and 4G independent and in any order, **the smartphone last**:
 Passwords: live **`osmo`**, pmOS phone **`147147`**.
 
 Check that everything is up: `checks/diag-stp-operator.sh`, or the full check
-`bash ./checks/check_all.sh` (reference result for a standalone native node
-in [Resultats](Resultats.md): everything
-passes, only the SS7 interconnect is *down* for lack of an inter-STP — that is expected).
+`bash ./checks/check_all.sh` (reference result for a standalone native node in
+[Resultats](Resultats.md): everything passes, only the SS7 interconnect is
+*down* for lack of an inter-STP — that is expected).
 
 ### 5. Make a call
 
 The two provisioned subscribers are **100101** and **100102**, one per cell;
 `100`/`200` are the Linphones, `600` the echo test. An incoming call to the
 smartphone is paged by the MME, the UE falls back to the BTS (CSFB), voice goes
-over 2G; the speedtest, on the other hand, goes over 4G. Everything is visible in
-Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
+over 2G; the speedtest, on the other hand, goes over 4G. Everything is visible
+in Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 ---
 
@@ -110,7 +108,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 | Path | When | See |
 |---|---|---|
-| **Docker** — `docker pull bastienbaranoff/norf_gsm`, `sudo ./launch/start-docker.sh` | N operators interconnected through an inter-STP, on an existing host | [README-docker](../doc/README-docker.md) |
+| **Docker** — `docker pull bastienbaranoff/norf_gsm`, `sudo ./launch/start-docker.sh` (or `./start.sh --docker`) | N operators interconnected through an inter-STP, on an existing host | [README-docker](../doc/README-docker.md) |
 | **Native** — `sudo ./install.sh` then `./start-native.sh` | a dedicated Ubuntu 24.04 machine, no container | [Build § install.sh](Build.md#4-installsh--native-ubuntu-2404-noble) |
 | **Build the ISO yourself** — `sudo ./build-iso.sh` | modify the image, pre-wired WAN, arm64 for the hub | [Build § build-iso.sh](Build.md#2-build-isosh--bootable-iso--sd-image) |
 | **Install to disk** — Calamares from the live system | keep the bench, LUKS, NVIDIA drivers | [Build](Build.md) |
@@ -119,7 +117,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 ## Reference
 
-### What is in the image (v0.1-9)
+### What is in the image
 
 `/etc/os-release`: `IMAGE_VERSION="OSMO_EGPRS_V2"` — `/etc/osmo-role`:
 `OSMO_ROLE=operator`, `OSMO_LITE=0`.
@@ -151,7 +149,7 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 - x86_64 VM, patched kernel (`CONFIG_PPP`, missing from upstream `linux-postmarketos-stable`) shipped prebuilt (Git LFS) in `/opt/user_interface/kernel/pmos/`.
 - 4G data: NetworkManager → pppd (`ATD*99***1#`) → virtio-console `osmo.data` → `osmo-phonesim-banc.py` → UE netns → srsUE → srsENB → UPF → Internet.
 - 2G voice/SMS: second virtio-console `osmo.modem`, `osmo-phonesim-banc.py` plays the 27.007 AT modem (state read from the bsc, msc and mobile VTYs), oFono drives it.
-- Audio: two full-duplex PulseAudio chains (intel-hda) — a GAPK bridge to the osmocom-bb mobile, and a chain with echo cancellation. Slimmed down at every start (speech-dispatcher stopped, `osmo_rec` at 8 kHz mono, stream-restore without device restore). webrtc canceller by default, its `aec_args` passed as a single argument — without that the AGC muted the mic; `AUDIO_AEC_METHOD=speex` is still available.
+- Audio: two full-duplex PulseAudio chains (intel-hda) — a GAPK bridge to the osmocom-bb mobile, and a chain with echo cancellation. Slimmed down at every start (speech-dispatcher stopped, `osmo_rec` at 8 kHz mono, stream-restore without device restore). speex canceller by default; `AUDIO_AEC_METHOD=webrtc` selects the webrtc canceller (its `aec_args` are passed as a single argument).
 
 ### Ports and access
 
@@ -159,12 +157,13 @@ Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 |---|---|---|---|---|
 | 4239 | osmo-stp VTY | | 8080 | bench dashboard |
 | 4242 | osmo-bsc VTY | | 8081 | I/Q spectra (fft-web) |
-| 4243 | osmo-mgw VTY | | 9090 | open5gs Prometheus |
-| 4254 | osmo-msc VTY | | 9999 | open5gs WebUI |
-| 4258 | osmo-hlr VTY | | 5060 | Asterisk SIP |
-| 4729 | GSMTAP (Wireshark) | | 2775 | SMPP |
-| 2905 | local M3UA | | 7890 | inter-op SMS relay |
-| 2908 | inter-STP M3UA | | 29118 | SGs (MSC ↔ MME) |
+| 4243 | osmo-mgw VTY | | 8090 | settings page (`osmo-reglages`) |
+| 4254 | osmo-msc VTY | | 9090 | open5gs Prometheus |
+| 4258 | osmo-hlr VTY | | 9999 | open5gs WebUI |
+| 4729 | GSMTAP (Wireshark) | | 5060 | Asterisk SIP |
+| 2905 | local M3UA | | 2775 | SMPP |
+| 2908 | inter-STP M3UA | | 7890 | inter-op SMS relay |
+| | | | 29118 | SGs (MSC ↔ MME) |
 
 ```bash
 tmux attach -t calypso          # the 2G stack; Ctrl-b d detaches
@@ -190,10 +189,11 @@ journalctl -u osmo-banc -f      # if started as a service
 | `./start-native.sh --list` | the plan, without launching |
 | `./start-native.sh --menu` | asks the questions instead of guessing |
 | `./start-native.sh --regen` | regenerates the configs from the templates |
-| `./start-native.sh` | C54x DSP bench (c54x_exe, TI mask ROM), **the default** since 2026-10-01: the mobile camps and does its LU |
-| `./start-native.sh --grgsm` | gr-gsm layer 1 inside QEMU (the old default): the stack goes all the way to a voice call |
+| `./start-native.sh` | C54x DSP bench (c54x_exe, TI mask ROM), **the default**: the mobile camps, does its LU, SMS and calls |
+| `./start-native.sh --grgsm` | gr-gsm layer 1 inside QEMU |
 | `./start-native.sh --node 2 --hub-ip IP` | this node = node 2 of a WAN, ASP towards the inter-STP |
 | `./start-native.sh --wan` | N-node WAN, interactive questions |
+| `./start-native.sh --sap` | SIM served over SAP (reader or softSIM) |
 | `./generate_configs.sh ARFCN=520` | changes a value in `globals.conf` |
 | `sudo ./build-iso.sh --desktop` | rebuild the desktop ISO |
 | `bash ./checks/check_all.sh` | full check, log in `/tmp` |
@@ -202,11 +202,13 @@ journalctl -u osmo-banc -f      # if started as a service
 
 | File | Role |
 |---|---|
-| `globals.conf` | the network configuration; a non-empty variable set on the command line overrides it (since 2026-09-22) |
-| `environment/load.env` | the loading order of profiles and defaults |
+| `globals.conf` | the network configuration; a non-empty variable set on the command line overrides it |
+| `environment/load.env` | the loading order of profiles and defaults (`environment/README.md`) |
 | `/etc/osmocom/coeur.env` | `N_MS`, written by the ISO |
 | `/etc/osmo-wan.conf`, `/etc/osmo-role` | WAN table, node role |
 | `/etc/default/osmo-banc` | `OSMO_BANC_ARGS="--grgsm"` to make the service start in gr-gsm (DSP otherwise) |
 | `/var/log/osmocom/{qemu,bridge,run.sh}.log` | QEMU, bridge, orchestration |
 | `/tmp/c54x-pont/`, `/dev/shm/pont.log` | DSP bench: links to its logs (real files at the dashboard paths), bridge log |
-| `pont/README.md` | read it **before** hunting for a radio fault in a CRC counter |
+| `pont/README.md` | the TRX bridge: interfaces, ciphering rules, variables, known issues |
+| `services/README.md` | the systemd units and how to run the bench as a service |
+| `patches/` | patches applied to the trees under `/opt/GSM` by `tools/osmo-patches-apply.sh` |

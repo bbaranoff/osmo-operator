@@ -1,9 +1,10 @@
+# branding.desc - Calamares branding of the osmo-operator ISO (names, images, slideshow, colours).
 ---
 componentName: osmo
 
-# Les chaines vides sont VOLONTAIRES : elles retirent les liens (support, notes
-# de version) que l'ecran d'accueil afficherait sinon vers des pages qui
-# n'existent pas pour ce projet.
+# The empty strings are INTENTIONAL: they remove the links (support, release
+# notes) that the welcome screen would otherwise show, pointing to pages that
+# do not exist for this project.
 strings:
     productName:         osmo-operator
     shortProductName:    osmo-operator
@@ -23,21 +24,16 @@ images:
     productWelcome: "welcome.jpg"
 
 slideshow: "show.qml"
-# show.qml est ecrit pour l API 1 du diaporama (un Timer qui tourne du debut a
-# la fin). Sans cette cle, Calamares journalise "Invalid or missing
-# *slideshowAPI*" et devine.
+# show.qml is written for slideshow API 1 (a Timer running from start to
+# end). Without this key, Calamares logs "Invalid or missing *slideshowAPI*"
+# and guesses.
 slideshowAPI: 1
 
-# ── LES COULEURS DE LA BARRE LATERALE ──────────────────────────────────────
-# [2026-09-04] CES QUATRE NOMS ONT CHANGE EN CALAMARES 3.3. Les anciens
-# (sidebarBackground, sidebarText, sidebarTextSelect, sidebarTextHighlight)
-# etaient refuses un par un - "Unknown branding *style* entry" dans
-# ~/.cache/calamares/session.log - et la barre retombait sur la palette Qt du
-# bureau sombre : noir sur noir, les etapes INVISIBLES, seule l etape courante
-# se voyait. Les seuls noms que 3.3 accepte sont ceux-ci, majuscule initiale
-# (lus dans libcalamaresui : SidebarBackground, SidebarText,
-# SidebarTextCurrent, SidebarBackgroundCurrent). "Current" = l etape en cours,
-# ce que les anciens noms appelaient "Select"/"Highlight".
+# ── SIDEBAR COLOURS ────────────────────────────────────────────────────────
+# Calamares 3.3 accepts only these four names (initial capital, as read in
+# libcalamaresui); any other name is rejected with "Unknown branding *style*
+# entry" and the sidebar falls back to the Qt palette. "Current" = the step
+# in progress.
 style:
     SidebarBackground:         "#0d1b2a"
     SidebarText:               "#ffffff"

@@ -1,59 +1,56 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# set_stp_ip.sh - donne a CETTE VM son adresse SS7 sur le reseau en pont
+# set_stp_ip.sh - gives THIS VM its SS7 address on the bridged network
 #
-# Une seule ISO, deux roles. Le script demande d'abord LEQUEL, puis les
-# adresses - parce que ce ne sont pas les memes des deux cotes :
+# One ISO, two roles. The script first asks WHICH role, then the addresses,
+# because they differ on each side:
 #
-#   inter-STP (hub)      son IP de pont, + l'IP de chaque osmo-operator-N
-#   osmo-operator-N      son IP de pont, + l'IP de l'inter-STP
+#   inter-STP (hub)      its bridge IP, plus the IP of every osmo-operator-N
+#   osmo-operator-N      its bridge IP, plus the IP of the inter-STP
 #
 #   osmo-operator-1  192.168.1.11 ─┐
 #   osmo-operator-2  192.168.1.12 ─┼─ M3UA/SCTP 2908 ─► inter-STP 192.168.1.10
 #   osmo-operator-3  192.168.1.13 ─┘                     PC 0.0.0
 #
-# POURQUOI LE PONT ET PAS L'HOTE-SEUL
-# Les configs de l'image visent 192.168.56.1 (host-only VirtualBox) ou
-# 172.20.0.10 (reseau docker). Ni l'un ni l'autre n'existe quand les VM sont en
-# "acces par pont" : elles sont sur le LAN, en 192.168.1.X. Un ASP qui vise
-# une adresse absente du segment ne dit rien d'autre que "connection
-# refused" cote noeud - le hub, lui, ne voit jamais personne arriver.
+# Bridged, not host-only: the image's configs target 192.168.56.1 (VirtualBox
+# host-only) or 172.20.0.10 (docker network); neither exists when the VMs are
+# bridged on the LAN (192.168.1.X), so the ASPs must be re-addressed.
 #
-# CE QUE LE SCRIPT ECRIT
-#   hub       /etc/osmocom/osmo-stp-interop.cfg   local-ip = son IP de pont
-#             /etc/osmo-wan.conf                  la table des operateurs
+# What the script writes
+#   hub       /etc/osmocom/osmo-stp-interop.cfg   local-ip = its bridge IP
+#             /etc/osmo-wan.conf                  the operator table
 #             /etc/osmo-role                      OSMO_ROLE=interstp
-#   operateur /etc/osmocom/osmo-stp.cfg           local-ip = la sienne
-#                                                 remote-ip = celle du hub
-#             /etc/osmocom/osmo-{msc,bsc}.cfg     point codes du plan WAN
+#   operator  /etc/osmocom/osmo-stp.cfg           local-ip = its own
+#                                                 remote-ip = the hub's
+#             /etc/osmocom/osmo-{msc,bsc}.cfg     WAN-plan point codes
 #             /etc/osmo-wan.conf, /etc/osmo-role
 #
-# Idempotent : relancer avec d'autres adresses les remplace, il n'y a pas
-# d'etat a nettoyer entre deux passages.
+# Idempotent: re-running with other addresses replaces them, nothing to clean up.
+# Environment: CONF_DIR (default /etc/osmocom), ROLE_FILE (default /etc/osmo-role)
 #
-# Usage :
-#   sudo ./set_stp_ip.sh                        menu : role, puis adresses
+# Usage:
+#   sudo ./set_stp_ip.sh                        menu: role, then addresses
 #   sudo ./set_stp_ip.sh --inter --ip 192.168.1.10 --ips "192.168.1.11 192.168.1.12"
 #   sudo ./set_stp_ip.sh --operator --node 1 --ip 192.168.1.11 --hub-ip 192.168.1.10
-#   sudo ./set_stp_ip.sh --show                 etat actuel, sans rien modifier
+#   sudo ./set_stp_ip.sh --show                 current state, changes nothing
 #
-#   --inter | --operator   role (sinon : demande)
-#   --ip ADRESSE           IP de pont de CETTE machine
-#   --ips "a b c"          hub : IP des operateurs, dans l'ordre
-#   --hub-ip ADRESSE       operateur : IP de l'inter-STP
-#   --node N               operateur : son numero de noeud (1-9)
-#   --op K                 COMBIEN d'operateurs (PLMN) ce noeud porte (defaut 1)
-#   --op-index K           LEQUEL de ces operateurs est celui de ce noeud, dans
-#                          le point code 1.<noeud><op>.<role> (1 a 9, pas plus
-#                          que --op ; defaut 1)
-#   --iface NOM            interface ou poser l'adresse (defaut : detectee)
-#   --port N               port M3UA (defaut 2908)
-#   --no-ip                ne touche pas a la configuration reseau
-#   --defaut               la configuration du banc, sans une question : role
-#                          deduit, IP de pont deduite, hub 192.168.1.49, noeud
-#                          lu dans /etc/osmo-role ou la table WAN.
-#   --restart              relance la pile apres reecriture
-#   --dry-run              montre ce qui serait ecrit
+#   --inter | --operator   role (otherwise: asked)
+#   --ip ADDRESS           bridge IP of THIS machine
+#   --ips "a b c"          hub: operator IPs, in order
+#   --hub-ip ADDRESS       operator: IP of the inter-STP
+#   --node N               operator: its node number (1-9)
+#   --op K                 HOW MANY operators (PLMN) this node carries (default 1)
+#   --op-index K           WHICH of those operators is this node's, in the point
+#                          code 1.<node><op>.<role> (1-9, not above --op; default 1)
+#   --iface NAME           interface to put the address on (default: detected)
+#   --port N               M3UA port (default 2908)
+#   --conf-dir DIR         configuration directory (default /etc/osmocom)
+#   --no-ip                leave the network configuration alone
+#   --defaut               the bench configuration without any question: role
+#                          deduced, bridge IP deduced, hub 172.20.0.10, node read
+#                          from /etc/osmo-role or the WAN table.
+#   --restart              restart the stack after rewriting
+#   --dry-run              show what would be written
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -65,9 +62,8 @@ CONF_DIR="${CONF_DIR:-/etc/osmocom}"
 ROLE_FILE="${ROLE_FILE:-/etc/osmo-role}"
 INTEROP_CFG="${CONF_DIR}/osmo-stp-interop.cfg"
 
-# wan_detect_local_ip, _wan_ask, la table WAN et sa validation vivent ici. Les
-# redefinir localement, c'est se garantir qu'un jour ce script et les lanceurs
-# ne designeront plus la meme carte ni la meme table.
+# wan_detect_local_ip, _wan_ask, the WAN table and its validation live in
+# network/wan-nodes.sh, shared with the launchers (same interface, same table).
 # shellcheck source=network/wan-nodes.sh
 . "$HERE/network/wan-nodes.sh"
 
@@ -77,25 +73,20 @@ HUB_IP=""
 IPS=""
 NODE=""
 OPS=1
-# --op COMPTE les operateurs : il dimensionne le pare-feu, les blocs "as" du hub
-# et la table WAN. Il ne dit pas LEQUEL est celui de ce noeud - et c'est pourtant
-# lui qui partait en --op de set-node-id.sh, ou l'option est un INDICE. Avec
-# --op 2 sur le noeud 3, l'ecran annoncait STP 1.31.2 pendant que les fichiers
-# recevaient 1.32.2 et le routing context 3250 : l'ASP se presentait au hub sous
-# une identite que sa table ne connait pas.
+# --op COUNTS the operators carried by this node (it sizes the firewall, the
+# hub's "as" blocks and the WAN table); --op-index says WHICH one is this node's.
 OP_INDEX=1
 IFACE=""
 PORT=2908
 SET_IP=1
 RESTART=0
-# ── La configuration du banc, sans une question ─────────────────────────────
-# --defaut repond a tout ce que ce script demande d'habitude, a partir de ce
-# que la machine sait deja d'elle-meme :
-#   role     interstp si son adresse EST celle du hub, operateur sinon ;
-#   son IP   celle du pont, deduite ;
-#   le hub   172.20.0.10 (osmo-inter-stp, backbone docker) ;
-#   le noeud /etc/osmo-role, puis la table WAN, puis 1.
-# Chaque valeur reste surchargeable : --defaut --node 3 gagne sur la deduction.
+# ── The bench configuration without any question (--defaut) ─────────────────
+# Every answer is deduced from what the machine already knows about itself:
+#   role      interstp if its address IS the hub's, operator otherwise;
+#   its IP    the bridge one, detected;
+#   the hub   172.20.0.10 (osmo-inter-stp, docker backbone);
+#   the node  /etc/osmo-role, then the WAN table, then 1.
+# Every value stays overridable: --defaut --node 3 wins over the deduction.
 USE_DEFAULTS=0
 DEFAULT_HUB_IP="172.20.0.10"
 DRY=0
@@ -153,22 +144,22 @@ is_ipv4() {
     return 0
 }
 
-need_ipv4() {  # $1=valeur  $2=ce que c'est
+need_ipv4() {  # $1=value  $2=what it is
     is_ipv4 "$1" || { echo -e "${RED}$2 : '$1' n'est pas une IPv4${NC}" >&2; exit 2; }
 }
 
-# ── L'adresse de pont de cette VM ────────────────────────────────────────────
-# wan_detect_local_ip privilegie le host-only VirtualBox (192.168.56-63), qui
-# est le bon choix pour le banc mais pas ici : en acces par pont, la VM est sur
-# le LAN de l'hote. On cherche donc d'abord une adresse de LAN privee qui ne
-# soit ni le NAT VirtualBox (10.0.2.x), ni un alias du plan docker (172.20.x),
-# ni le host-only - et on ne retombe sur wan_detect_local_ip qu'a defaut.
+# ── This VM's bridge address ─────────────────────────────────────────────────
+# wan_detect_local_ip prefers the VirtualBox host-only range (192.168.56-63),
+# right for the bench but not here: a bridged VM sits on the host's LAN. Look
+# first for a private LAN address that is neither the VirtualBox NAT (10.0.2.x),
+# a docker alias (172.20.x) nor host-only; fall back to wan_detect_local_ip
+# only when none is found.
 bridge_ip() {
     local addrs a
     addrs="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
     for a in $addrs; do
         case "$a" in
-            192.168.5[6-9].*|192.168.6[0-3].*) ;;   # host-only : pas le pont
+            192.168.5[6-9].*|192.168.6[0-3].*) ;;   # host-only: not the bridge
             192.168.*) printf '%s' "$a"; return 0 ;;
         esac
     done
@@ -181,9 +172,8 @@ bridge_ip() {
     wan_detect_local_ip 2>/dev/null || return 1
 }
 
-# L'interface qui porte deja ce /24 : c'est celle du segment vise. A defaut, la
-# premiere interface globale - poser l'adresse sur la mauvaise carte donne un
-# ASP qui part par une route qui ne mene pas au pair.
+# The interface that already carries this /24 is the one on the target segment;
+# otherwise the first global interface.
 iface_for() {  # $1=ip
     local ip="$1" f
     f="$(ip -4 -o addr show scope global 2>/dev/null \
@@ -192,7 +182,7 @@ iface_for() {  # $1=ip
     printf '%s' "$f"
 }
 
-ensure_ip() {  # $1=ip - la pose si elle manque
+ensure_ip() {  # $1=ip - adds it when missing
     local ip="$1" dev
     [ "$SET_IP" = "1" ] || { echo -e "  ${YELLOW}-${NC} --no-ip : reseau inchange"; return 0; }
     if ip -4 addr show 2>/dev/null | grep -q "inet ${ip}/"; then
@@ -211,7 +201,7 @@ ensure_ip() {  # $1=ip - la pose si elle manque
     fi
 }
 
-write_role() {  # $1=role  $2=hub-ip  $3=node (vide pour le hub)
+write_role() {  # $1=role  $2=hub-ip  $3=node (empty for the hub)
     if [ "$DRY" = "1" ]; then
         echo -e "  [dry-run] ${ROLE_FILE} : OSMO_ROLE=$1 OSMO_HUB_IP=$2 ${3:+OSMO_WAN_NODE=$3}"
         return 0
@@ -230,7 +220,7 @@ hub_of_file()  { awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2); print $2}' "$RO
 node_of_file() { awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2); print $2}' "$ROLE_FILE" 2>/dev/null | tail -1; }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# --show : ce que cette machine croit etre, aujourd'hui
+# --show: what this machine currently believes it is
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$SHOW" = "1" ]; then
     banner
@@ -281,12 +271,10 @@ banner
     || { echo -e "${RED}Root requis (ecriture dans ${CONF_DIR} et sur l'interface).${NC}" >&2; exit 1; }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 1. QUI EST CETTE MACHINE ?
+# 1. WHICH MACHINE IS THIS?
 # ══════════════════════════════════════════════════════════════════════════════
-# Le role decide de tout le reste : le hub ecoute et connait ses operateurs, un
-# operateur s'attache et ne connait que le hub. Se tromper ici produit une
-# machine qui ecoute sans que personne l'appelle, ou qui appelle une adresse
-# qui n'ecoute pas.
+# The role decides everything else: the hub listens and knows its operators, an
+# operator attaches and only knows the hub.
 if [ -z "$ROLE" ]; then
     def_role="$(role_of_file)"; [ -n "$def_role" ] || def_role="operator"
     if [ -t 0 ]; then
@@ -313,8 +301,8 @@ case "$ROLE" in
 esac
 [[ "$OPS" =~ ^[1-9]$ ]] || { echo -e "${RED}--op : un chiffre de 1 a 9${NC}" >&2; exit 2; }
 [[ "$OP_INDEX" =~ ^[1-9]$ ]] || { echo -e "${RED}--op-index : un chiffre de 1 a 9${NC}" >&2; exit 2; }
-# Un indice au-dela du compteur designe un operateur que ce noeud ne porte pas :
-# le point code partirait dans une plage dont personne n'a la route.
+# An index above the count names an operator this node does not carry: its
+# point code would fall in a range nobody routes.
 [ "$OP_INDEX" -le "$OPS" ] \
     || { echo -e "${RED}--op-index ${OP_INDEX} : ce noeud n'annonce que ${OPS} operateur(s) (--op)${NC}" >&2; exit 2; }
 
@@ -323,7 +311,7 @@ echo -e "${BOLD}Role :${NC} ${CYAN}${ROLE}${NC}${DETECTED:+    IP de pont detect
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2A. INTER-STP - son IP de pont, et celles des osmo-operator-N
+# 2A. INTER-STP - its bridge IP, and those of the osmo-operator-N
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$ROLE" = "interstp" ]; then
 
@@ -333,11 +321,10 @@ if [ "$ROLE" = "interstp" ]; then
     fi
     need_ipv4 "$SELF_IP" "IP du hub"
 
-    # Les IP des operateurs. Le hub n'en a pas besoin pour ROUTER - il ecoute et
-    # les ASP viennent a lui, c'est le point code qui decide du reste. Il en a
-    # besoin pour n'ouvrir son pare-feu qu'a eux, pour ecrire la table que
-    # liront les noeuds, et pour que --status puisse dire QUI manque : sans la
-    # liste, un noeud absent est indiscernable d'un noeud qui n'existe pas.
+    # Operator IPs. The hub does not need them to ROUTE (it listens, the ASPs
+    # come to it, the point code decides the rest); it needs them to open its
+    # firewall only to them, to write the table the nodes read, and so that
+    # --status can say WHO is missing.
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=(); i=0
     if [ -n "$IPS" ]; then
         for ip in ${IPS//,/ }; do
@@ -353,8 +340,8 @@ if [ "$ROLE" = "interstp" ]; then
         n="$(_wan_ask "Inter-STP" "Nombre d'osmo-operator (1-9) :" "$([ "$old_n" -ge 1 ] && echo "$old_n" || echo 3)")" || exit 1
         [[ "$n" =~ ^[1-9]$ ]] || { echo -e "${RED}nombre invalide : $n${NC}" >&2; exit 2; }
         for i in $(seq 1 "$n"); do
-            # Defaut aligne sur le plan du banc : osmo-operator-N a .1N sur le
-            # meme /24 que le hub.
+            # Default aligned with the bench plan: osmo-operator-N at .1N on
+            # the hub's /24.
             def="${old_ip[$i]:-${SELF_IP%.*}.$((10 + i))}"
             ip="$(_wan_ask "osmo-operator-$i" "IP de pont de osmo-operator-$i :" "$def")" || exit 1
             need_ipv4 "$ip" "IP de osmo-operator-$i"
@@ -363,9 +350,9 @@ if [ "$ROLE" = "interstp" ]; then
     fi
     NODES="${#WAN_NODE_LIST[@]}"
     [ "$NODES" -ge 1 ] || { echo -e "${RED}aucun operateur saisi${NC}" >&2; exit 2; }
-    # Le hub ne porte aucun operateur : il n'est pas un noeud de la table. On note
-    # 0 - que wan_nodes_validate accepte - plutot qu'un numero qui le ferait
-    # ressembler a un noeud et lui volerait un point code.
+    # The hub carries no operator and is not a node of the table: node id 0
+    # (accepted by wan_nodes_validate) rather than a number that would make it
+    # look like a node and steal a point code.
     WAN_NODE_ID=0; WAN_NODE_COUNT="$NODES"; WAN_OPS="$OPS"
     wan_nodes_validate || exit 2
 
@@ -379,21 +366,18 @@ if [ "$ROLE" = "interstp" ]; then
 
     ensure_ip "$SELF_IP"
 
-    # ── La config du hub ────────────────────────────────────────────────────
-    # local-ip 0.0.0.0 marche, mais annonce dans l'INIT SCTP toutes les adresses
-    # de la machine - NAT 10.0.2.15 et alias 172.20.x compris. Les noeuds tentent
-    # alors des chemins qui, vus d'eux, ne menent nulle part. Une adresse unique
-    # et juste vaut mieux qu'un multi-homing dont trois branches sur quatre sont
-    # mortes.
+    # ── The hub's config ────────────────────────────────────────────────────
+    # local-ip 0.0.0.0 would advertise every address of the machine in the SCTP
+    # INIT (NAT 10.0.2.15 and 172.20.x aliases included): paths that lead
+    # nowhere from the nodes. A single correct address is written instead.
     if [ "$DRY" = "1" ]; then
         echo -e "  [dry-run] ${INTEROP_CFG} : listen m3ua ${PORT} / local-ip ${SELF_IP}"
     else
         mkdir -p "$CONF_DIR"
-        # Regeneree a chaque passage, comme le fait start-interstp.sh : ce
-        # fichier est entierement derive de (NODES, OPS): le garder tel quel
-        # apres un changement de nombre d'operateurs laisserait des blocs "as"
-        # pour des noeuds disparus et aucun pour le nouveau - un ASP qui arrive
-        # sans "as" correspondant est refuse, sans que rien ne le dise.
+        # Regenerated on every run, as start-interstp.sh does: the file is
+        # fully derived from (NODES, OPS). A stale one would keep "as" blocks
+        # for vanished nodes and none for new ones (an ASP without a matching
+        # "as" is silently refused).
         bash "$HERE/helpers/create_interop.sh" --wan "$NODES" "$OPS" "$INTEROP_CFG" || exit 1
         tmp="$(mktemp)"
         awk -v hub="$SELF_IP" -v port="$PORT" '
@@ -402,8 +386,8 @@ if [ "$ROLE" = "interstp" ]; then
             in_l && /^(!|[a-z])/ { in_l=0 }
             { print }
         ' "$INTEROP_CFG" > "$tmp"
-        # cat plutot que mv : sur l'ISO comme dans un conteneur ces fichiers
-        # peuvent etre des points de montage, et rename() y echoue.
+        # cat rather than mv: on the ISO or in a container these files may be
+        # mount points, where rename() fails.
         cat "$tmp" > "$INTEROP_CFG"; rm -f "$tmp"
         echo -e "  ${GREEN}✓${NC} $(basename "$INTEROP_CFG") - ecoute ${CYAN}${SELF_IP}:${PORT}${NC}"
     fi
@@ -440,7 +424,7 @@ if [ "$ROLE" = "interstp" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2B. OSMO-OPERATOR-N - son IP de pont, et celle de l'inter-STP
+# 2B. OSMO-OPERATOR-N - its bridge IP, and the inter-STP's
 # ══════════════════════════════════════════════════════════════════════════════
 if [ -z "$NODE" ]; then
     def="$(node_of_file)"; [ -n "$def" ] || def=1
@@ -456,19 +440,18 @@ need_ipv4 "$SELF_IP" "IP de ce noeud"
 
 if [ -z "$HUB_IP" ]; then
     def="$(hub_of_file)"
-    # Un hub en 172.20.x (plan docker) ou 192.168.56.x (host-only) herite de
-    # l'image n'existe pas sur le pont : le proposer comme defaut ferait
-    # reconduire l'adresse meme qu'on est venu corriger.
+    # A hub in 172.20.x (docker plan) or 192.168.56.x (host-only) inherited
+    # from the image does not exist on the bridge: never offer it as default.
     case "$def" in ""|172.20.*|192.168.5[6-9].*|192.168.6[0-3].*) def="${SELF_IP%.*}.10" ;; esac
     HUB_IP="$(_wan_ask "Inter-STP" "IP de pont de l'inter-STP :" "$def")" || exit 1
 fi
 need_ipv4 "$HUB_IP" "IP de l'inter-STP"
 
 if [ "$SELF_IP" = "$HUB_IP" ]; then
-    # Hub co-localise : le noeud 1 porte l'inter-STP sur sa propre adresse.
-    # C'est valide tant que le hub ECOUTE (port 2908) et que l'ASP part d'un
-    # autre port (2910) - le noeud ne s'attache pas a lui-meme, il s'attache
-    # a un processus voisin. On ne refuse que si personne n'ecoute au hub.
+    # Co-located hub: node 1 carries the inter-STP on its own address. Valid as
+    # long as the hub LISTENS (port 2908) and the ASP leaves from another port
+    # (2910): the node attaches to a neighbouring process, not to itself.
+    # Refuse only when nobody listens at the hub.
     if pgrep -f 'osmo-stp -c /etc/osmocom/osmo-stp-interop\.cfg' >/dev/null 2>&1; then
         echo -e "  ${YELLOW}⚠${NC} inter-STP co-localise sur ${SELF_IP} (hub en service) - ASP vers le voisin, pas vers soi"
     else
@@ -484,29 +467,25 @@ fi
 
 echo ""
 echo -e "  ${BOLD}osmo-operator-${NODE}${NC}   ${CYAN}${SELF_IP}${NC}  ──M3UA──►  inter-STP ${CYAN}${HUB_IP}:${PORT}${NC}"
-# Le <op> du plan est l'indice, pas le compteur. Ces trois point codes portaient
-# un 1 en dur : ils annoncaient 1.<noeud>1.x quoi qu'on demande, pendant que
-# set-node-id.sh en ecrivait un autre dans les fichiers.
+# The <op> of the plan is the operator index, not the count.
 echo -e "  STP ${CYAN}1.${NODE}${OP_INDEX}.2${NC}   MSC ${CYAN}1.${NODE}${OP_INDEX}.1${NC}   BSC ${CYAN}1.${NODE}${OP_INDEX}.3${NC}   (plan WAN 1.<noeud><op>.<role>)"
 echo ""
 
 ensure_ip "$SELF_IP"
 
-# ── Point codes et adresses de l'ASP ────────────────────────────────────────
-# set-node-id.sh est le seul endroit qui sait tenir d'accord les TROIS fichiers
-# (osmo-stp, osmo-msc, osmo-bsc) : son PC, son routing-key, et le PC du pair que
-# chacun appelle. En rater un donne un coeur qui demarre et des appels qui
-# n'aboutissent pas - d'ou la delegation plutot qu'un second sed ici.
-# Son --op est un INDICE d'operateur, pas un nombre : lui passer le compteur
-# revenait a lui demander le point code du DERNIER operateur du noeud.
+# ── Point codes and ASP addresses ───────────────────────────────────────────
+# set-node-id.sh is the only place that keeps the THREE files (osmo-stp,
+# osmo-msc, osmo-bsc) consistent: own PC, routing key and the peer PC each one
+# calls; hence the delegation rather than a second sed here. Its --op is an
+# operator INDEX, not a count.
 SNI_ARGS=(--node "$NODE" --op "$OP_INDEX" --native
           --local-ip "$SELF_IP" --hub-ip "$HUB_IP" --conf-dir "$CONF_DIR")
 [ "$DRY" = "1" ] && SNI_ARGS+=(--dry-run)
 bash "$HERE/network/set-node-id.sh" "${SNI_ARGS[@]}" || exit 1
 
-# ── La table WAN ────────────────────────────────────────────────────────────
-# On repart de celle qui existe pour ne pas perdre les autres noeuds : ce script
-# ne connait que CE noeud et le hub, il n'a rien a dire sur les voisins.
+# ── The WAN table ───────────────────────────────────────────────────────────
+# Start from the existing one so the other nodes are kept: this script only
+# knows THIS node and the hub.
 WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
 [ -r "$WAN_CONF_FILE" ] && wan_nodes_load "$WAN_CONF_FILE" >/dev/null 2>&1 || true
 if [ -z "${WAN_IP[$NODE]:-}" ]; then

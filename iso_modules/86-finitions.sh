@@ -1,32 +1,21 @@
 #!/bin/bash
-# iso_modules/86-finitions.sh - live-boot toram, sssd, firefox, micro, bannieres, demontage
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/86-finitions.sh - live-boot toram fix, sssd, firefox, plymouth, grub, terminal banner, unmount
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# ── L ERREUR DE SYNTAXE DE LA COPIE EN RAM ──────────────────────────────────
-# L entree "en RAM" du menu passe "toram=filesystem.squashfs" : live-boot ne
-# recopie alors QUE le squashfs, pas le medium entier. Le calcul de la taille du
-# tmpfs est celui-ci, dans lib/live/boot/9990-toram-todisk.sh :
-#
+# ── live-boot: tmpfs size computation of the RAM copy ───────────────────────
+# The "in RAM" menu entry passes "toram=filesystem.squashfs": live-boot then
+# copies ONLY the squashfs. lib/live/boot/9990-toram-todisk.sh sizes the tmpfs
+# with
 #     size=$( expr $(ls -la ${MODULETORAMFILE} | awk '{print $5}') / 1024 + 5000 )
-#
-# C est le SEUL expr de tout ce chemin, donc la seule chose qui puisse repondre
-# "expr: syntax error" pendant la copie. Il suffit que le ls de l initramfs
-# (busybox, pas coreutils) ne rende pas la taille en 5e champ - ou ne rende
-# rien - pour qu expr recoive "expr / 1024 + 5000" et le dise.
-#
-# L erreur ne BLOQUE pas : size reste vide, le tmpfs est monte sans -o size et
-# prend son defaut (la moitie de la RAM), ce qui suffit le plus souvent. D ou un
-# banc qui demarre quand meme, avec un message rouge au passage - le genre de
-# message qu on finit par ignorer, et qui masque le jour ou il compte.
-#
-# On remplace expr par l arithmetique du shell, avec le champ VALIDE avant
-# usage et un repli explicite. "ls -lan" plutot que "ls -la" : le -n evite la
-# resolution des noms d utilisateur, qui dans un initramfs sans /etc/passwd
-# complet peut elargir la colonne et decaler les champs - c est le candidat le
-# plus credible. Le patch precede update-initramfs, sinon il ne part pas dans
-# l image ; d ou la regeneration explicite juste apres.
+# which prints "expr: syntax error" when the initramfs ls (busybox) does not
+# return the size in the 5th field. Not fatal (the tmpfs falls back to its
+# default size), but noisy. expr is replaced by shell arithmetic with the
+# field VALIDATED before use and an explicit fallback; "ls -lan" avoids user
+# name resolution, which can widen the column in an initramfs without a full
+# /etc/passwd. The patch must precede update-initramfs, hence the explicit
+# regeneration right after.
 _LB_TORAM="$ROOTFS/lib/live/boot/9990-toram-todisk.sh"
 if [ -f "$_LB_TORAM" ] && grep -q 'expr \$(ls -la \${MODULETORAMFILE}' "$_LB_TORAM"; then
     python3 - "$_LB_TORAM" <<'PYLB'
@@ -53,48 +42,26 @@ else
     echo -e "  ${GREEN}·${NC} live-boot : rien a corriger (absent, ou deja corrige)"
 fi
 
-# ── sssd : le service qui echoue au demarrage pour rien ─────────────────────
-# ubuntu-desktop-minimal tire sssd (par gnome-online-accounts / realmd). Sur une
-# machine qui n est dans AUCUN domaine - ce qui est le cas d un banc - sssd n a
-# pas de fournisseur configure : il sort en erreur a chaque demarrage,
-#     sssd.service: Failed with result exit-code
-# et systemd le compte comme un service en echec. Rien ne casse : aucune session
-# ne depend de lui ici. Mais "systemctl --failed" en garde la trace, et sur une
-# machine ou l on diagnostique justement des pannes, un service rouge en
-# permanence est un bruit qui coute cher - on finit par ne plus regarder la
-# liste, et c est la qu on rate le vrai.
-#
-# On MASQUE plutot que de desinstaller : purger sssd emporterait des paquets du
-# bureau par dependance inverse. Reversible en une commande, et la commande est
-# ecrite ci-dessous pour qui voudrait joindre un domaine.
+# ── sssd: a service that fails at boot for nothing ──────────────────────────
+# ubuntu-desktop-minimal pulls sssd (gnome-online-accounts / realmd). On a
+# machine in NO domain - a bench - sssd has no provider configured and exits
+# with an error at every boot, leaving a permanently red entry in
+# "systemctl --failed". MASKED rather than purged: purging would drag desktop
+# packages along by reverse dependency. Reversible for whoever joins a domain:
 #     systemctl unmask sssd && systemctl enable --now sssd
 for _s in sssd sssd-autofs sssd-nss sssd-pac sssd-pam sssd-ssh sssd-sudo; do
     chroot "$ROOTFS" systemctl mask "$_s" >/dev/null 2>&1 || true
 done
 echo -e "  ${GREEN}✓${NC} sssd masque (aucun domaine sur un banc) - ${CYAN}systemctl unmask sssd${NC} pour le rendre"
 
-# ── FIREFOX : LE NAVIGATEUR DU BANC, ET RIEN D AUTRE ────────────────────────
-# [2026-08-31] Ici vivaient ~180 lignes de plomberie CHROMIUM : un lanceur
-# /usr/local/bin/chromium qui rebasculait root -> osmocom par runuser (xhost,
-# XDG_RUNTIME_DIR, profil dans /var/lib/osmo-chromium) pour rendre son bac a
-# sable utilisable, une unite qui preparait ce runtime, une seconde qui
-# effacait ses .desktop en double, et un alias de profil.
-#
-# TOUT CELA REPONDAIT A UNE SEULE CONTRAINTE DE CHROMIUM :
-#     Running as root without --no-sandbox is not supported
-# Cette image ouvre sa session en root ; Chromium exigeait donc soit un
-# changement de compte, soit un navigateur SANS confinement lance par le compte
-# le plus privilegie de la machine. Firefox n a pas cette contrainte : il
-# demarre en root sans lanceur intermediaire - donc sans xhost, sans runuser,
-# sans second profil, et sans les trois unites qui les tenaient.
-#
-# La derniere raison de preferer Chromium etait "Firefox ne capte pas le micro".
-# Elle est tombee : le navigateur ne pouvait pas se connecter a PulseAudio, ce
-# qui n avait rien d une affaire de navigateur. Voir osmo-pulse-link.sh.
-#
-# On efface donc ce que les images precedentes ont pu poser : une ISO
-# reconstruite par-dessus un rootfs de cache garderait sinon un lanceur
-# "chromium" qui ne mene nulle part, et des unites qui echouent au boot.
+# ── FIREFOX: THE BENCH BROWSER, AND NOTHING ELSE ────────────────────────────
+# Chromium requires either a change of account or --no-sandbox when the
+# session runs as root ("Running as root without --no-sandbox is not
+# supported"); Firefox starts as root without an intermediate launcher. The
+# Chromium plumbing older images may have installed (launcher, profile
+# runtime units, duplicate .desktop files) is removed: an ISO rebuilt over a
+# cached rootfs would otherwise keep a "chromium" launcher leading nowhere and
+# units failing at boot.
 rm -f "$ROOTFS/usr/local/bin/chromium" \
       "$ROOTFS/usr/local/bin/chromium-browser" \
       "$ROOTFS/etc/profile.d/98-osmo-chromium.sh" \
@@ -108,105 +75,64 @@ for _u in osmo-chromium-runtime osmo-chromium-desktop; do
 done
 rm -rf "$ROOTFS/var/lib/osmo-chromium" 2>/dev/null || true
 
-# ── LE MICRO DU DASHBOARD : CE QUE FIREFOX EXIGE, ET QU IL NE DEVINE PAS ────
-# Trois conditions doivent etre reunies pour que le bouton micro de
-# osmo-egprs-web fonctionne. Deux sont ailleurs, la troisieme est ici.
-#
-#   1. UN SERVEUR AUDIO JOIGNABLE. osmo-pulse.service + osmo-pulse-link.sh.
-#      Sans lui, getUserMedia rend « NotFoundError » : zero peripherique.
-#   2. UN CONTEXTE SECURISE. navigator.mediaDevices n EXISTE PAS en http://
-#      sur une IP - seulement en https:// ou sur http://localhost. C est le
-#      listener HTTPS de server.js, arme par le certificat que pose
+# ── THE DASHBOARD MICROPHONE: WHAT FIREFOX REQUIRES ─────────────────────────
+# Three conditions for the osmo-egprs-web microphone button to work:
+#   1. A REACHABLE AUDIO SERVER: osmo-pulse.service + osmo-pulse-link.sh.
+#      Without it getUserMedia returns "NotFoundError": zero devices.
+#   2. A SECURE CONTEXT: navigator.mediaDevices does NOT EXIST over http:// on
+#      an IP - only https:// or http://localhost. That is the HTTPS listener
+#      of server.js, armed with the certificate installed by
 #      install-web-service.sh.
-#   3. LA PERMISSION, ET LA CONFIANCE DANS LE CERTIFICAT. C est ce bloc.
-#
-# POURQUOI UNE POLITIQUE ET PAS UN CLIC. Le certificat est auto-signe : sans
-# rien, Firefox affiche son interstitiel, et l operateur doit accepter une
-# exception AVANT de pouvoir seulement voir la page - puis repondre a une
-# seconde demande pour le micro. Sur un banc qui se reinstalle, ces deux clics
-# reviennent a chaque fois, et le second est le plus trompeur : refuse une
-# fois, Firefox retient le refus et le bouton reste mort sans un mot.
-#
-# /etc/firefox/policies/policies.json est le chemin systeme des politiques
-# Firefox sur Linux ; le deb Mozilla (80-chroot.sh) le lit directement, sans
-# plug ni bac a sable.
-#
-# Le CONTENU, lui, ne peut pas etre ecrit ici : il nomme les origines
-# (https://<ip>:80) et le certificat de CETTE machine, qui n existent pas au
-# build. Il est genere par install-web-service.sh, en meme temps que le
-# certificat et depuis la meme liste d adresses - une seule verite, un seul
-# endroit ou la changer.
+#   3. THE PERMISSION, AND TRUST IN THE CERTIFICATE: this block.
+# A policy rather than a click: the certificate is self-signed, and without a
+# policy the operator must accept an exception before seeing the page, then
+# answer a second prompt for the microphone; a refusal is remembered and the
+# button stays dead silently.
+# /etc/firefox/policies/policies.json is the system policy path on Linux; the
+# Mozilla deb (80-chroot.sh) reads it directly. Its CONTENT cannot be written
+# here: it names the origins (https://<ip>:80) and the certificate of THIS
+# machine, which do not exist at build time. install-web-service.sh generates
+# it, together with the certificate and from the same address list.
 install -d "$ROOTFS/etc/firefox/policies"
 echo -e "  ${GREEN}✓${NC} Chromium retire ; ${CYAN}Firefox${NC} seul navigateur (politique micro+certificat posee au boot)"
 
 
-# ── LA BANNIERE DES TERMINAUX ───────────────────────────────────────────────
-# Ce que quelqu un cherche en ouvrant un terminal sur ce banc, c est la commande
-# qui le demarre. Elle est dans le README, dans l aide de start-native.sh, et
-# nulle part la ou on la cherche. On la met donc sous les yeux, avec la meme
-# animation SMS que l ouverture de session - c est la signature de l image, et
-# elle dit en une seconde que la pile est bien celle-la.
-#
-# TROIS GARDES, ET AUCUNE N EST DECORATIVE :
-#   $- == *i*   shell INTERACTIF seulement. Sans cette garde, la banniere part
-#               aussi dans les shells non interactifs - et scp, rsync et git
-#               over ssh lisent ce flux comme leur protocole : ils echouent sur
-#               un "protocol error", loin de leur vraie cause.
-#   [ -t 1 ]    un terminal, pas un fichier. Les sequences de curseur dans un
-#               journal le rendent illisible.
-#   OSMO_BANNER un shell dans un shell (tmux, un sudo -i, un make qui ouvre un
-#               bash) ne la rejoue pas : une fois par terminal suffit.
-# ── PLYMOUTH : LE BANC SE PRESENTE DES L ALLUMAGE ───────────────────────────
-# [2026-09-04] L ecran de demarrage etait celui d Ubuntu. Un theme "script"
-# maison le remplace : un pylone a gauche, un mobile a droite, et une rafale
-# GSM qui fait l aller-retour entre les deux (les 8 intervalles de la trame,
-# celui qui est allume se deplace) - ce que la machine s apprete precisement a
-# faire tourner.
-#
-# LES IMAGES SONT GENEREES ICI, pas stockees : tools/plymouth-render.py les
-# dessine (Pillow + DejaVu, les memes dependances que le fond d ecran). Un
-# theme, ce sont trente PNG ; dans le depot ils seraient illisibles en diff et
-# incorrigibles. Le dessin est le code.
-#
-# Le theme gere AUSSI la saisie de la phrase LUKS (SetDisplayPasswordFunction) :
-# sur une installation chiffree, sans cette partie, l ecran reste fige sur
-# l animation pendant que la machine attend une phrase - elle parait plantee.
+# ── PLYMOUTH: THE BENCH PRESENTS ITSELF FROM POWER-ON ───────────────────────
+# A home-made "script" theme: a pylon on the left, a mobile on the right and a
+# GSM burst going back and forth between them (the 8 timeslots of the frame,
+# the lit one moving). THE IMAGES ARE GENERATED HERE, not stored:
+# tools/plymouth-render.py draws them (Pillow + DejaVu, the same dependencies
+# as the wallpaper); thirty PNGs would be unreadable in a diff.
+# The theme ALSO handles the LUKS passphrase prompt (SetDisplayPasswordFunction):
+# on an encrypted install the screen would otherwise look frozen while the
+# machine waits for a passphrase.
 _PLY_SRC="$DIR/configs/plymouth/osmo-bts"
 _PLY_DST="$ROOTFS/usr/share/plymouth/themes/osmo-bts"
-# plymouthd vit dans /usr/sbin sur noble (pas /usr/bin), et le theme est de
-# type "script" : sans le greffon script.so, plymouthd ignore le theme et
-# retombe sur le mode texte - un ecran noir avec des points, et personne pour
-# dire pourquoi. On verifie les deux.
-# [2026-09-13] PAS de `$(ls ... | head -1)` ici. build-iso.sh tourne sous
-# `set -euo pipefail` : quand le glob ne correspond a rien (rootfs sans
-# plymouth - le hub interstp), bash passe le motif litteral a ls, ls sort en
-# statut 2, et pipefail rend ce 2 pour toute la pipeline. L affectation
-# echoue donc, set -e arrete le build - APRES la derniere ligne affichee
-# (« Chromium retire »), et sans un mot : le 2>/dev/null avale aussi le
-# message de ls. Symptome observe en CI : « Echec de interstp.iso » sans
-# aucune cause visible. nullglob + tableau ne lance aucun processus et ne
-# peut pas echouer ; le tableau vide donne la chaine vide, que le test
-# -n plus bas attendait deja.
+# plymouthd lives in /usr/sbin on noble (not /usr/bin), and the theme is of
+# type "script": without the script.so plugin plymouthd ignores the theme and
+# falls back to text mode. Both are checked.
+# No `$(ls ... | head -1)` here: build-iso.sh runs under `set -euo pipefail`
+# and an empty glob (rootfs without plymouth - the interstp hub) would make ls
+# exit 2 and abort the build silently. nullglob + array spawns no process and
+# cannot fail; an empty array yields the empty string the -n test expects.
 shopt -s nullglob; _PLY_SOS=("$ROOTFS"/usr/lib/*/plymouth/script.so); shopt -u nullglob
 _PLY_SO="${_PLY_SOS[0]-}"
 if [ -d "$_PLY_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" ]; then
     install -d "$_PLY_DST"
     install -m644 "$_PLY_SRC/osmo-bts.plymouth" "$_PLY_SRC/osmo-bts.script" "$_PLY_DST/"
-    # --template : le gabarit du depot ; le rendu ecrit a cote des images le
-    # script avec la geometrie injectee (il ECRASE la copie brute posee juste
-    # au-dessus, et c est voulu - c est la version calee sur le dessin).
+    # --template: the repository's template; the renderer writes next to the
+    # images the script with the geometry injected (it OVERWRITES the raw copy
+    # installed just above, on purpose: it is the version aligned with the drawing).
     if python3 "$DIR/tools/plymouth-render.py" --out "$_PLY_DST" \
             --template "$_PLY_SRC/osmo-bts.script" >/dev/null 2>&1; then
         chmod 644 "$_PLY_DST"/*.png
-        # ── LE CHOIX DU THEME PASSE PAR update-alternatives ─────────────
-        # [2026-09-04] `plymouth-set-default-theme` N EXISTE PAS sur noble :
-        # verifie sur la machine installee, "command not found", et il n est
-        # dans aucun des paquets plymouth. Ubuntu gere le theme par le systeme
-        # d alternatives - /usr/share/plymouth/themes/default.plymouth est un
-        # lien vers /etc/alternatives/default.plymouth, et bgrt y est inscrit
-        # en priorite 110. On s inscrit au-dessus (200) et on fixe le choix.
-        # Un `ln -sfn` direct sur default.plymouth serait EFFACE au premier
-        # apt-get qui touche a plymouth : les alternatives reprennent la main.
+        # ── THE THEME CHOICE GOES THROUGH update-alternatives ────────────────
+        # `plymouth-set-default-theme` does NOT EXIST on noble. Ubuntu manages
+        # the theme through alternatives: /usr/share/plymouth/themes/default.plymouth
+        # links to /etc/alternatives/default.plymouth, where bgrt is registered
+        # with priority 110. Register above it (200) and set the choice. A
+        # direct `ln -sfn` on default.plymouth would be ERASED by the first
+        # apt-get touching plymouth.
         chroot "$ROOTFS" update-alternatives --install \
             /usr/share/plymouth/themes/default.plymouth default.plymouth \
             /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth 200 >/dev/null 2>&1 || true
@@ -214,9 +140,9 @@ if [ -d "$_PLY_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" 
             /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth >/dev/null 2>&1 \
             || ln -sfn /usr/share/plymouth/themes/osmo-bts/osmo-bts.plymouth \
                        "$ROOTFS/usr/share/plymouth/themes/default.plymouth"
-        # Le theme doit ENTRER dans l initrd : sans ce fichier, hook-functions
-        # n embarque que le theme par defaut d origine et l ecran reste celui
-        # d Ubuntu malgre le lien ci-dessus.
+        # The theme must GET INTO the initrd: without this file hook-functions
+        # only embeds the original default theme and the screen stays Ubuntu's
+        # despite the link above.
         install -d "$ROOTFS/etc/initramfs-tools/conf.d"
         echo "FRAMEBUFFER=y" > "$ROOTFS/etc/initramfs-tools/conf.d/splash"
         chroot "$ROOTFS" update-initramfs -u >/dev/null 2>&1 || true
@@ -228,12 +154,11 @@ else
     echo -e "  ${YELLOW}!${NC} plymouth ou son greffon script absent du rootfs - pas de theme de demarrage"
 fi
 
-# ── PLYMOUTH : VORTEX UBUNTU PAR DEFAUT ─────────────────────────────────────
-# [2026-10-23] L ecran de demarrage devient « Vortex Ubuntu » (logo Ubuntu et
-# bandes de couleur qui tournent), repris tel quel dans
-# configs/plymouth/vortex-ubuntu/ (voir SOURCE). osmo-bts reste inscrit dans
-# les alternatives (priorite 200) : `update-alternatives --config
-# default.plymouth` y revient. Vortex gere aussi la saisie LUKS
+# ── PLYMOUTH: UBUNTU VORTEX BY DEFAULT ──────────────────────────────────────
+# The boot screen is "Vortex Ubuntu" (Ubuntu logo and rotating colour bands),
+# taken as is from configs/plymouth/vortex-ubuntu/ (see SOURCE). osmo-bts stays
+# registered in the alternatives (priority 200): `update-alternatives --config
+# default.plymouth` switches back. Vortex also handles the LUKS prompt
 # (SetDisplayPasswordFunction).
 _VTX_SRC="$DIR/configs/plymouth/vortex-ubuntu"
 _VTX_DST="$ROOTFS/usr/share/plymouth/themes/vortex-ubuntu"
@@ -253,15 +178,15 @@ if [ -d "$_VTX_SRC" ] && [ -x "$ROOTFS/usr/sbin/plymouthd" ] && [ -n "$_PLY_SO" 
     echo -e "  ${GREEN}✓${NC} plymouth : theme ${CYAN}vortex-ubuntu${NC} par defaut (osmo-bts en alternative)"
 fi
 
-# ── GRUB : THEME « osmo » SUR LE SYSTEME INSTALLE ───────────────────────────
-# [2026-10-23] Genere par tools/grub-theme-render.py (fond = la ville bleue,
-# floutee). Pose dans /boot/grub/themes : Calamares recopie le rootfs, /boot
-# compris, et grub-mkconfig (lance par l installeur) lit /etc/default/grub.d.
-# Le menu est AFFICHE 5 s (Ubuntu le cache par defaut : un theme invisible).
+# ── GRUB: "osmo" THEME ON THE INSTALLED SYSTEM ──────────────────────────────
+# Generated by tools/grub-theme-render.py (background = the blue city,
+# blurred). Installed in /boot/grub/themes: Calamares copies the rootfs, /boot
+# included, and grub-mkconfig (run by the installer) reads /etc/default/grub.d.
+# The menu is SHOWN for 5 s (Ubuntu hides it by default: an invisible theme).
 if python3 "$DIR/tools/grub-theme-render.py" --out "$ROOTFS/boot/grub/themes/osmo" >/dev/null 2>&1; then
     install -d "$ROOTFS/etc/default/grub.d"
     cat > "$ROOTFS/etc/default/grub.d/osmo-theme.cfg" <<'GRUBTHEME'
-# Theme GRUB « osmo » (tools/grub-theme-render.py). Menu affiche 5 s.
+# GRUB theme "osmo" (tools/grub-theme-render.py). Menu shown for 5 s.
 GRUB_THEME=/boot/grub/themes/osmo/theme.txt
 GRUB_GFXMODE=auto
 GRUB_TIMEOUT_STYLE=menu
@@ -272,20 +197,27 @@ else
     echo -e "  ${YELLOW}!${NC} grub : rendu du theme echoue (python3-pil, grub-mkfont, fonts-ubuntu ?) - menu texte"
 fi
 
+# ── THE TERMINAL BANNER ─────────────────────────────────────────────────────
+# /usr/local/bin/osmo-banner is played from .bashrc (below). Three guards,
+# none of them decorative:
+#   $- == *i*   INTERACTIVE shell only: otherwise scp, rsync and git over ssh
+#               read the banner as their protocol and fail on "protocol error".
+#   [ -t 1 ]    a terminal, not a file: cursor sequences make a log unreadable.
+#   OSMO_BANNER a shell within a shell (tmux, sudo -i, a make that opens a
+#               bash) does not replay it: once per terminal is enough.
 cat > "$ROOTFS/usr/local/bin/osmo-banner" <<'BANNER'
 #!/bin/bash
-# Banniere d ouverture de terminal : screenfetch avec le logo du banc, puis
-# une phrase. [2026-10-01] Plus d animation SMS, plus de mode d emploi : le
-# terminal s ouvre sur le fetch (configs/screenfetch/osmo-lab.sh : pylone,
-# rafale, mobile - pas le logo Ubuntu) et une ligne, c est tout.
+# Terminal opening banner: screenfetch with the bench logo
+# (configs/screenfetch/osmo-lab.sh: pylon, burst, mobile - not the Ubuntu
+# logo), then one line.
 set -u
 [ -t 1 ] || exit 0
 
 ART=/opt/GSM/osmo-operator/configs/screenfetch/osmo-lab.sh
-# Les couleurs des infos : utilisateur jaune et hote vert - ROOT en rouge et
-# l hote en jaune. Un filtre sur la sortie : screenfetch fige ses lignes avant
-# de lire le fichier du logo, on ne peut donc pas les teinter de l interieur.
-# Les etiquettes (OS:, Kernel:...) tournent sur six couleurs.
+# Info colours: user yellow and host green - ROOT in red and host in yellow.
+# A filter on the output: screenfetch freezes its lines before reading the
+# logo file, so they cannot be tinted from inside. Labels (OS:, Kernel:...)
+# rotate over six colours.
 _filtre() {
     command -v perl >/dev/null 2>&1 || { cat; return; }
     if [ "$(id -u)" = 0 ]; then _cu='1;31'; _ch='1;33'; else _cu='1;33'; _ch='1;32'; fi
@@ -303,14 +235,9 @@ if command -v screenfetch >/dev/null 2>&1; then
     if [ -f "$ART" ]; then screenfetch -E -a "$ART" | _filtre; else screenfetch -E | _filtre; fi
 fi
 
-# ── LA LIGNE DU BAS ─────────────────────────────────────────────────────────
-# Une phrase, tiree au sort, a chaque terminal. Rien de fonctionnel - mais un
-# banc GSM se debogue a des heures ou l on est seul avec un VTY, et une image
-# qui a un caractere se retient mieux qu une image qui n en a pas.
-#
-# Le tirage passe par $RANDOM et pas par `shuf` : shuf est dans coreutils, donc
-# present, mais un fork de plus a CHAQUE ouverture de terminal pour une blague,
-# c est un fork de trop.
+# ── THE BOTTOM LINE ─────────────────────────────────────────────────────────
+# One sentence, drawn at random, per terminal. Drawn with $RANDOM rather than
+# `shuf`: one fork less at EVERY terminal opening.
 _q=(
   "Um, Abis, A, Gb - quatre lettres, et six mois de votre vie."
   "L abonne est toujours joignable. C est le reseau qui ne repond pas."
@@ -331,33 +258,31 @@ _q=(
 printf '  \033[2;3m« %s »\033[0m\n\n' "${_q[$RANDOM % ${#_q[@]}]}"
 BANNER
 chmod +x "$ROOTFS/usr/local/bin/osmo-banner"
-# ── screenfetch : SANS SON EASTER-EGG ───────────────────────────────────────
-# [2026-10-01] screenfetch tire un nombre au hasard A CHAQUE LIGNE et, sur
-# cinq valeurs sur mille, MELANGE l ordre des lignes du logo et des infos
-# (« case $(awk ... rand ...) in 411|188|15|166|609) »). Avec dix-sept lignes,
-# un terminal sur douze s ouvrait sur un pylone en vrac. On neutralise les
-# cinq valeurs ; le reste du script est intact.
+# ── screenfetch: WITHOUT ITS EASTER EGG ─────────────────────────────────────
+# screenfetch draws a random number AT EACH LINE and, for five values out of a
+# thousand, SHUFFLES the order of logo and info lines
+# ("case $(awk ... rand ...) in 411|188|15|166|609)"). Those five values are
+# neutralised; the rest of the script is intact.
 [ -f "$ROOTFS/usr/bin/screenfetch" ] && \
     sed -i 's/^\([[:space:]]*\)411|188|15|166|609)/\1--jamais--)/' "$ROOTFS/usr/bin/screenfetch"
 
-# Pose dans le .bashrc des DEUX comptes, et dans /etc/skel pour ceux que
-# l installeur creera. On APPEND, sans jamais reecrire le fichier : le .bashrc
-# d Ubuntu porte l invite, les couleurs et les alias, et l ecraser se paie a
-# chaque ouverture de terminal ensuite.
+# Installed in the .bashrc of BOTH accounts, and in /etc/skel for those the
+# installer will create. APPENDED, never rewriting the file: Ubuntu's .bashrc
+# carries the prompt, colours and aliases.
 for _h in "$ROOTFS/root" "$ROOTFS/home/osmocom" "$ROOTFS/etc/skel"; do
     install -d "$_h"
     [ -f "$_h/.bashrc" ] || cp "$ROOTFS/etc/skel/.bashrc" "$_h/.bashrc" 2>/dev/null || : > "$_h/.bashrc"
     grep -q 'osmo-banner' "$_h/.bashrc" 2>/dev/null || cat >> "$_h/.bashrc" <<'BASHRC'
 
-# ── Banniere osmo-operator ─────────────────────────────────────────────────────
-# Interactif ET terminal ET pas deja jouee : voir /usr/local/bin/osmo-banner.
-# Retirer ces trois lignes suffit a s en debarrasser.
+# ── osmo-operator banner ───────────────────────────────────────────────────────
+# Interactive AND terminal AND not already played: see /usr/local/bin/osmo-banner.
+# Removing these three lines is enough to get rid of it.
 if [[ $- == *i* ]] && [ -t 1 ] && [ -z "${OSMO_BANNER:-}" ] && [ -x /usr/local/bin/osmo-banner ]; then
     export OSMO_BANNER=1
     /usr/local/bin/osmo-banner
 fi
-# L invite du banc : utilisateur jaune, hote vert, chemin bleu - ROOT en rouge,
-# hote en jaune.
+# The bench prompt: user yellow, host green, path blue - ROOT in red, host
+# in yellow.
 if [[ $- == *i* ]]; then
     if [ "$EUID" = 0 ]; then
         PS1='\[\e[1;31m\]\u\[\e[0m\]@\[\e[1;33m\]\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
@@ -376,7 +301,7 @@ umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 echo -e "  ${GREEN}✓${NC} config terminee"
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would stop everything silently. Always 0 here.
 true

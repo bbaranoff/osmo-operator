@@ -1,42 +1,41 @@
 #!/bin/bash
-# iso_modules/85-installeur-bureau.sh - calamares, osmo-install, bureau (icones, lanceurs)
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/85-installeur-bureau.sh - Calamares installer, osmo-install, desktop (icons, launchers)
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# --arm : calamares, osmo-install et le bureau : pas de --desktop en arm64, rien a poser.
+# --arm: no Calamares, osmo-install or desktop on arm64 (no --desktop there).
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
-# ── L INSTALLEUR ────────────────────────────────────────────────────────────
-# La configuration vit dans le depot (installer/calamares/) plutot qu en
-# heredocs ici : elle est relisible, versionnee, et validable hors build
-# (c est du YAML, "python3 -c import yaml" suffit a la verifier).
+# ── INSTALLER ───────────────────────────────────────────────────────────────
+# The configuration lives in the repository (installer/calamares/) rather than
+# in heredocs here: versioned, and checkable outside a build (plain YAML).
 _CAL_SRC="$DIR/installer/calamares"
 if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
     install -d "$ROOTFS/etc/calamares"
     cp -a "$_CAL_SRC/settings.conf" "$ROOTFS/etc/calamares/"
     cp -a "$_CAL_SRC/modules"       "$ROOTFS/etc/calamares/"
     cp -a "$_CAL_SRC/branding"      "$ROOTFS/etc/calamares/"
-    # [2026-10-24] Le job python osmosupplements (page « Supplements ») : dans le repertoire
-    # des modules SYSTEME, celui de modules-search que Calamares parcourt a coup sur.
+    # The osmosupplements python job ("Supplements" page) goes in the SYSTEM
+    # modules directory, the one Calamares' modules-search always scans.
     _CAL_MODS="$ROOTFS/usr/lib/$(chroot "$ROOTFS" dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)/calamares/modules"
     install -d "$_CAL_MODS/osmosupplements"
     install -m644 "$_CAL_SRC/jobs/osmosupplements/module.desc" "$_CAL_SRC/jobs/osmosupplements/main.py" \
         "$_CAL_MODS/osmosupplements/"
 
-    # Les images de l habillage : on reprend le fond d ecran deja fige au build
-    # plutot que d ajouter des binaires au depot. Calamares les met a l echelle.
+    # Branding images: reuse the wallpaper frozen at build time instead of
+    # adding binaries to the repository. Calamares scales them.
     _WPI="$DIR/configs/gsm-lab-wallpaper.png"
     if [ -f "$_WPI" ]; then
         cp "$_WPI" "$ROOTFS/etc/calamares/branding/osmo/logo.png"
     else
-        # Sans image, Calamares journalise une erreur par ecran. On retire les
-        # cles plutot que de laisser pointer vers des fichiers absents.
+        # Without an image Calamares logs an error per screen: drop the keys
+        # rather than leave them pointing at missing files.
         sed -i '/^images:/,/^slideshow:/{/productLogo\|productIcon/d}' \
             "$ROOTFS/etc/calamares/branding/osmo/branding.desc"
     fi
-    # [2026-10-24] L accueil et la premiere diapo : le fond "Telecom Operator /
-    # No RF" (gsm-lab-ville.jpg), le meme que celui du bureau live.
+    # Welcome screen and first slide: the "Telecom Operator / No RF"
+    # background (gsm-lab-ville.jpg), the same as the live desktop.
     _VILLE="$DIR/configs/gsm-lab-ville.jpg"
     if [ -f "$_VILLE" ]; then
         cp "$_VILLE" "$ROOTFS/etc/calamares/branding/osmo/welcome.jpg"
@@ -45,67 +44,45 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
             "$ROOTFS/etc/calamares/branding/osmo/branding.desc"
     fi
 
-    # ── LE LANCEUR ──────────────────────────────────────────────────────────
-    # pkexec et non sudo : l installeur est lance depuis le bureau, ou il n y a
-    # pas de terminal pour taper un mot de passe. La session tourne deja en
-    # root, mais osmocom doit pouvoir lancer l installeur aussi - et c est la
-    # que pkexec sert vraiment.
+    # ── LAUNCHER ────────────────────────────────────────────────────────────
+    # pkexec rather than sudo: the installer is started from the desktop, where
+    # there is no terminal to type a password. The live session runs as root,
+    # but the osmocom user must be able to start the installer too.
     cat > "$ROOTFS/usr/local/bin/osmo-install" <<'INSTALLER'
 #!/bin/bash
-# Lance l installeur du systeme. Sur la cle live uniquement.
+# Starts the system installer. Live medium only.
 set -u
 if [ ! -r /etc/calamares/settings.conf ]; then
     echo "Calamares n est pas installe sur cette image (ISO_DESKTOP=0 ?)." >&2
     exit 1
 fi
 
-# On repasse root TOUT DE SUITE, et sur ce script - pas sur calamares. Ce qui
-# suit (monter le medium, demonter une cible restee ouverte) demande root ;
-# le faire apres pkexec, c etait le faire en simple utilisateur, donc pas du
-# tout. pkexec transmet DISPLAY et XAUTHORITY, l interface s ouvre quand meme.
+# Become root RIGHT AWAY, for this script - not just for calamares: what
+# follows (mounting the medium, unmounting a target left open) needs root.
+# pkexec passes DISPLAY and XAUTHORITY along, so the GUI still opens.
 if [ "$(id -u)" -ne 0 ]; then
     exec pkexec --disable-internal-agent "$0" "$@"
 fi
 
-# ── Retrouver le squashfs, sans jamais supposer OU il est ───────────────────
-# LE SYMPTOME QUI A AMENE CE BLOC A SA FORME ACTUELLE. L entree "en RAM" du
-# menu demarre parfaitement, et depuis elle - et depuis elle seule -
-# l installeur repondait "Medium live introuvable ... Rien a installer".
-#
-# POURQUOI. En mode normal, live-boot monte le medium sur /run/live/medium et
-# le squashfs y est a sa place d origine : live/filesystem.squashfs. En
-# "toram=filesystem.squashfs", live-boot ne recopie PAS l arborescence du
-# medium : il copie LE FICHIER, seul, a la racine d un tmpfs, puis deplace ce
-# tmpfs sur /run/live/medium (cp -a "${MODULETORAMFILE}" "${copyto}", puis
-# mount -r -o move). Le squashfs se retrouve donc en
+# ── Locate the squashfs without assuming WHERE it is ────────────────────────
+# In normal mode live-boot mounts the medium on /run/live/medium and the
+# squashfs sits at live/filesystem.squashfs. With "toram=filesystem.squashfs"
+# live-boot copies only THE FILE to the root of a tmpfs, then moves that tmpfs
+# onto /run/live/medium: the squashfs ends up at
 #     /run/live/medium/filesystem.squashfs
-# et non plus en
-#     /run/live/medium/live/filesystem.squashfs
-# Le sous-repertoire "live/" a disparu au passage. live-boot s en moque - il
-# sait ou il l a mis - mais tout ce qui ecrit ce chemin en dur le rate.
-#
-# Et la version precedente de ce bloc le ratait DEUX FOIS : son repli prenait
-# le fichier de backing du loop (donc le bon chemin), puis lui appliquait deux
-# dirname pour "remonter a la racine du medium". Deux dirname sur
-# /run/live/medium/filesystem.squashfs donnent /run/live - qui n a pas plus de
-# sous-repertoire "live/". Le bind reussissait, le test suivant echouait, et le
-# message accusait le medium d etre absent alors qu il etait en RAM, monte, et
-# parfaitement lisible.
-#
-# CE QU ON FAIT A LA PLACE. On ne reconstitue plus une arborescence supposee :
-# on trouve LE FICHIER, par trois voies de plus en plus larges, et on le
-# presente a Calamares a un chemin qui, lui, ne depend d aucun mode de
-# demarrage. C est ce chemin que nomme unpackfs.conf.
+# and the "live/" subdirectory is gone, so anything that hardcodes the path
+# misses it. Instead of rebuilding an assumed tree, the file is located by
+# three increasingly broad means and presented to Calamares at a path that
+# does not depend on the boot mode: the one named in unpackfs.conf.
 SQ=""
 
-# 1. Le chemin canonique du demarrage normal. S il est la, rien a faire.
+# 1. Canonical path of a normal boot. If present, nothing to do.
 [ -e /run/live/medium/live/filesystem.squashfs ] \
     && SQ=/run/live/medium/live/filesystem.squashfs
 
-# 2. Le loop qui porte la racine en cours d execution. C est la source la plus
-#    sure qui soit : ce n est pas "un" squashfs trouve quelque part, c est
-#    CELUI sur lequel ce systeme tourne. Vrai en normal, en toram et en
-#    persistant.
+# 2. The loop device backing the running root. The most reliable source: not
+#    "a" squashfs found somewhere, but THE one this system runs on. Holds in
+#    normal, toram and persistent modes.
 if [ -z "$SQ" ]; then
     _loop=$(findmnt -no SOURCE /run/live/rootfs/filesystem.squashfs 2>/dev/null || true)
     if [ -n "$_loop" ]; then
@@ -114,9 +91,9 @@ if [ -z "$SQ" ]; then
     fi
 fi
 
-# 3. Dernier recours : n importe quel loop dont le fichier de backing est un
-#    squashfs. Couvre le cas ou live-boot aurait nomme le point de montage
-#    autrement (persistance : /run/live/persistence/sdX).
+# 3. Last resort: any loop device whose backing file is a squashfs. Covers a
+#    live-boot that named the mount point differently (persistence:
+#    /run/live/persistence/sdX).
 if [ -z "$SQ" ]; then
     SQ=$(losetup -anO BACK-FILE 2>/dev/null | grep -m1 '\.squashfs$' || true)
     [ -n "$SQ" ] && [ -e "$SQ" ] || SQ=""
@@ -128,13 +105,11 @@ if [ -z "$SQ" ]; then
     exit 1
 fi
 
-# ── LE CHEMIN STABLE, CELUI QUE CALAMARES LIT ───────────────────────────────
-# Un bind sur le FICHIER, pas sur son repertoire : le repertoire d origine
-# change de forme d un mode de demarrage a l autre (c est tout le probleme
-# ci-dessus), le fichier non. /run est un tmpfs sur un systeme live, donc
-# inscriptible - contrairement a /run/live/medium en toram, que live-boot
-# deplace en lecture seule et dans lequel on ne pourrait pas creer le "live/"
-# qui manque.
+# ── THE STABLE PATH, THE ONE CALAMARES READS ────────────────────────────────
+# Bind-mount the FILE, not its directory: the origin directory changes shape
+# from one boot mode to the next, the file does not. /run is a tmpfs on a live
+# system, hence writable - unlike /run/live/medium in toram mode, which
+# live-boot moves read-only, so the missing "live/" could not be created there.
 SRC=/run/osmo-install-src
 mkdir -p "$SRC/live"
 if ! mountpoint -q "$SRC/live/filesystem.squashfs"; then
@@ -146,19 +121,19 @@ if ! mountpoint -q "$SRC/live/filesystem.squashfs"; then
 fi
 echo "Image source : $SQ  ->  $SRC/live/filesystem.squashfs"
 
-# Le FICHIER, pas le repertoire. Tester "-d" ne prouvait rien : le repertoire
-# existe meme vide, le test passait, et l echec tombait plus loin dans
-# Calamares - au pire endroit, le disque deja repartitionne.
+# Test the FILE, not the directory: the directory exists even when empty, and
+# a failure would then only show up later in Calamares, with the disk already
+# repartitioned.
 if [ ! -s "$SRC/live/filesystem.squashfs" ]; then
     echo "Le squashfs presente a l installeur est vide - rien a installer." >&2
     exit 1
 fi
 
-# ── Nettoyer la cible d un essai precedent ──────────────────────────────────
-# Quand une etape echoue, Calamares saute tous les jobs suivants, "umount"
-# compris : la cible reste montee sous /tmp/calamares-root-*. Au lancement
-# d apres il voit un disque monte, retire "Effacer le disque" de la liste et ne
-# laisse que le partitionnement manuel. Chaque echec degradait l essai suivant.
+# ── Clean up the target of a previous attempt ───────────────────────────────
+# When a step fails, Calamares skips all following jobs, "umount" included: the
+# target stays mounted under /tmp/calamares-root-*. On the next run it sees a
+# mounted disk, removes "Erase disk" from the list and only offers manual
+# partitioning.
 for _t in /tmp/calamares-root-*; do
     [ -d "$_t" ] || continue
     if mountpoint -q "$_t"; then
@@ -171,15 +146,11 @@ for _t in /tmp/calamares-root-*; do
     rmdir "$_t" 2>/dev/null || true
 done
 
-# ── GARDE-FOU : une page generee invalide ne doit pas bloquer l installation ─
-# [2026-09-04] Un seul antislash de trop dans contextualprocess-mirror.conf et
-# Calamares s ouvrait sur "Calamares Initialization Failed - the following
-# modules could not be loaded : contextualprocess@mirror" : plus d installeur
-# du tout, pour une QUESTION DE MIROIR. Les deux pages ci-dessous sont
-# ECRITES a chaque lancement, donc verifiees a chaque lancement : si le YAML
-# ne se relit pas, on repose la version minimale (celle qui ne fait rien) et
-# l operateur installe quand meme. yaml.safe_load lit ce que lit yaml-cpp.
-# Sans python3-yaml sous la main, on ne bloque rien : le test s efface.
+# ── GUARD: an invalid generated page must not block the installation ────────
+# The two pages below are WRITTEN at every launch, hence checked at every
+# launch: if the YAML does not parse, the minimal version (the one that does
+# nothing) is put back and the operator can still install. yaml.safe_load
+# reads what yaml-cpp reads. Without python3-yaml the check is skipped.
 _yamlok() {
     python3 -c "import yaml" 2>/dev/null || return 0
     python3 - "$1" <<'YAMLCHECK'
@@ -192,18 +163,16 @@ if not isinstance(d, dict):
 YAMLCHECK
 }
 
-# ── MIROIR : la page "Miroir Ubuntu" de l installeur suit le reseau ─────────
-# packaging/apt-mirror.sh --list mesure les miroirs d ici (5 s max chacun) ;
-# la page propose ceux qui repondent, du plus rapide au plus lent, le premier
-# pre-selectionne, plus "celui de la cle" (aucun changement). Le module
-# contextualprocess@mirror ecrit le choix dans la cible, apres unpackfs.
-# [2026-09-04] AUCUN ANTISLASH DANS CES COMMANDES. Elles sont posees dans une
-# chaine YAML entre guillemets, ou seule une poignee d echappements existe :
-# \s et \S (les classes de sed) n en font pas partie et yaml-cpp refusait le
-# FICHIER ENTIER - Calamares s ouvrait sur "contextualprocess@mirror could not
-# be loaded". D ou les classes POSIX ([[:space:]], [^[:space:]]) et l expression
-# sed entre guillemets echappes (\" est, lui, un echappement YAML valide), ce
-# qui dispense aussi d echapper l espace du remplacement.
+# ── MIRROR: the installer's "Miroir Ubuntu" page follows the network ────────
+# packaging/apt-mirror.sh --list measures the mirrors from here (5 s max each);
+# the page offers those that answer, fastest first, the first one preselected,
+# plus "the live key's one" (no change). The contextualprocess@mirror module
+# writes the choice into the target, after unpackfs.
+# NO BACKSLASH IN THESE COMMANDS: they sit in a double-quoted YAML string,
+# where only a handful of escapes exist. \s and \S (sed classes) are not among
+# them and yaml-cpp would reject the WHOLE file. Hence the POSIX classes
+# ([[:space:]], [^[:space:]]) and the sed expression in escaped quotes (\" is
+# a valid YAML escape), which also avoids escaping the space in the replacement.
 _pm=/etc/calamares/modules/packagechooser-mirror.conf
 _cm=/etc/calamares/modules/contextualprocess-mirror.conf
 _am=/opt/GSM/osmo-operator/packaging/apt-mirror.sh
@@ -262,34 +231,28 @@ if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
     fi
 fi
 
-# ── NVIDIA : la page "Pilotes graphiques" de l installeur suit la machine ────
-# Calamares ne sait pas griser une entree selon le materiel : on ECRIT sa page
-# de choix et le module qui installe a CHAQUE lancement, d apres lspci :
-#   - carte NVIDIA vue -> l entree "nvidia-driver-610" est nommee avec la carte
-#     et pre-selectionnee ;
-#   - sans carte NVIDIA, la page le dit et tout choix reste sans effet
-#     (contextualprocess refait le test lspci dans la cible).
-# Sur le systeme installe, tools/osmo-drivers.sh (icone "Pilotes graphiques")
-# montre le meme etat et laisse installer ou mettre a jour plus tard.
+# ── NVIDIA: the installer's "Pilotes graphiques" page follows the machine ───
+# Calamares cannot grey out an entry based on hardware: its chooser page and
+# the module that installs are WRITTEN at EVERY launch, from lspci:
+#   - NVIDIA card seen -> the "nvidia-driver-610" entry is named after the card
+#     and preselected;
+#   - no NVIDIA card: the page says so and any choice has no effect
+#     (contextualprocess re-runs the lspci test in the target).
+# On the installed system, tools/osmo-drivers.sh ("Pilotes graphiques" icon)
+# shows the same state and allows installing or updating later.
 #
-# [2026-09-04] UNE SEULE VERSION, FIGEE : nvidia-driver-610. La page listait
-# auparavant tout ce que `ubuntu-drivers list` proposait, plus une entree
-# "recommande" qui deleguait le choix a `ubuntu-drivers install`. Resultat :
-# une page differente d une machine et d une semaine a l autre, et une
-# installation qui dependait d un outil absent des que le live n avait pas
-# ubuntu-drivers-common. Le banc demande nvidia-driver-610 - il est dans
-# noble-updates/multiverse et s installe comme n importe quel paquet :
-#     sudo apt install nvidia-driver-610
-# OSMO_NVIDIA_DRIVER permet d en figer un autre au build.
+# ONE FIXED VERSION: nvidia-driver-610 (noble-updates/multiverse), installed
+# like any package: sudo apt install nvidia-driver-610.
+# OSMO_NVIDIA_DRIVER selects another one at build time.
 _pc=/etc/calamares/modules/packagechooser-nvidia.conf
 _cp=/etc/calamares/modules/contextualprocess-nvidia.conf
 _nvdrv="${OSMO_NVIDIA_DRIVER:-nvidia-driver-610}"
 if [ -f "$_pc" ] && [ -f "$_cp" ]; then
     _nv="$(lspci -d 10de: 2>/dev/null | head -1 | cut -d: -f3- | sed 's/^ //; s/ (rev.*//')"
-    # Aucun guillemet dans cette commande : elle est posee entre apostrophes
-    # (bash -c) dans une chaine YAML entre guillemets - l un comme l autre y
-    # seraient une fin de chaine. /run de la cible est un tmpfs vide (mount.conf)
-    # et /etc/resolv.conf y pointe : on y ecrit des resolveurs le temps de l apt.
+    # No double quote in this command: it sits between single quotes (bash -c)
+    # inside a double-quoted YAML string - either would end the string. The
+    # target's /run is an empty tmpfs (mount.conf) and /etc/resolv.conf points
+    # there: resolvers are written there for the duration of apt.
     _apt_cmd='mkdir -p /run/systemd/resolve; [ -s /run/systemd/resolve/stub-resolv.conf ] || { echo nameserver 1.1.1.1 > /run/systemd/resolve/stub-resolv.conf; echo nameserver 8.8.8.8 >> /run/systemd/resolve/stub-resolv.conf; }; export DEBIAN_FRONTEND=noninteractive; lspci -n 2>/dev/null | grep -qi 10de: || { echo [nvidia] aucune carte NVIDIA : rien a installer; exit 0; }; apt-get update -qq || { echo [nvidia] pas de reseau : pilote non installe; exit 0; }'
     {
         echo "---"
@@ -340,82 +303,61 @@ exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"
 
-    # ── CONKY : le tableau de bord du banc, dans TOUTE session GNOME ─────────
-    # [2026-09-03] /etc/xdg/autostart vaut pour tous les comptes : root sur la
-    # cle live, l utilisateur cree par Calamares sur le disque (le fichier
-    # voyage dans le squashfs, donc dans la copie installee). La config et le
-    # script d etat vivent dans le depot (/opt/GSM/osmo-operator, present sur
-    # les deux) : configs/conky/osmo-conky.conf, tools/conky-osmo-status.sh.
-    # sleep 6 : conky doit trouver le bureau GNOME deja peint (own_window_type
-    # desktop), sinon il reste derriere le fond d ecran. --daemonize : la
-    # session n attend pas. Une seule instance : pkill avant.
-    # ── UN VEILLEUR, PAS UN LANCEMENT UNIQUE ───────────────────────────────
-    # [2026-09-04] L autostart lancait osmo-panel.py UNE FOIS, en tache de fond.
-    # osmo-panel.py est la fenetre qui AFFICHE /run/osmo-fft/panel.png : sans
-    # elle, l encart n existe pas a l ecran, quoi que fabrique osmo-fft-snap.
-    # Or c est un python3 - et le demontage du banc tuait tous les python3 (voir
-    # killall_python dans start-native.sh). Un seul arret du banc, et l encart
-    # disparaissait de l ecran POUR LE RESTE DE LA SESSION : plus de FFT, plus
-    # de mobile.log, et rien dans aucun journal pour le dire.
-    # Le teardown les epargne desormais, mais un plantage, un OOM ou un kill a
-    # la main auraient le meme effet. On les surveille donc : ce script relance
-    # ce qui manque, toutes les cinq secondes, sans jamais doubler.
+    # ── CONKY: the bench dashboard, in EVERY GNOME session ───────────────────
+    # /etc/xdg/autostart applies to all accounts: root on the live key, the
+    # user created by Calamares on disk (the file travels in the squashfs).
+    # The config and the status script live in the repository
+    # (/opt/GSM/osmo-operator, present on both): configs/conky/osmo-conky.conf,
+    # tools/conky-osmo-status.sh.
+    # ── A WATCHER, NOT A ONE-SHOT LAUNCH ─────────────────────────────────────
+    # osmo-panel.py is the window that DISPLAYS /run/osmo-fft/panel.png: without
+    # it the inset does not exist on screen, whatever osmo-fft-snap renders. A
+    # crash, an OOM kill or a manual kill would remove it for the rest of the
+    # session, so this script restarts whatever is missing every five seconds,
+    # never doubling an instance.
     cat > "$ROOTFS/usr/local/bin/osmo-desktop-panel" <<'PANEL'
 #!/bin/sh
-# osmo-desktop-panel - tient l encart et Conky en vie pour toute la session.
-# Lance par /etc/xdg/autostart/osmo-conky.desktop. Voir build-iso.sh (85).
+# osmo-desktop-panel - keeps the inset and Conky alive for the whole session.
+# Started by /etc/xdg/autostart/osmo-conky.desktop. See iso_modules/85-installeur-bureau.sh.
 REPO=/opt/GSM/osmo-operator
 export OSMO_REPO="$REPO"
-# La carte LAB GSM n est plus cuite dans le fond : c est osmo-topzone.py qui la
-# rend, vivante. On le dit au rendu du fond.
+# The LAB GSM banner is not baked into the wallpaper: osmo-topzone.py renders
+# it live. Tell the wallpaper renderer.
 export OSMO_LIVE_BANNER=1
 
-# ── UN WIDGET RESCAPE DE LA SESSION D AVANT N EST PAS UN WIDGET ─────────────
-# [2026-09-10] Le Conky avait disparu du coin haut droit, et le gardien ne le
-# relancait JAMAIS. Pourquoi : un conky de la session X precedente tournait
-# encore, avec DISPLAY=:0, alors que GNOME etait reparti sur :1 (le socket
-# /tmp/.X11-unix/X0 avait disparu avec l ancien serveur). Il ne peut plus rien
-# peindre - « Invalid MIT-MAGIC-COOKIE-1 key / can't open display: :0 » dans
-# /tmp/osmo-conky.log - mais il EXISTE, et « pgrep -x conky » ne sait dire que
-# ca. Le gardien le comptait pour vivant et n en relancait pas d autre : plus
-# de tableau de bord pour toute la session. Meme piege pour les widgets python
-# (osmo-ts-probe.py etait dans le meme etat).
-#
-# On ne compte donc que les processus qui regardent NOTRE display, et on tue
-# les autres : ils ne peuvent plus servir personne.
+# ── A WIDGET LEFT OVER FROM THE PREVIOUS SESSION IS NOT A WIDGET ────────────
+# A conky or python widget from a previous X session may still be running with
+# an old DISPLAY (e.g. :0 while GNOME restarted on :1): it cannot paint
+# anything, but "pgrep -x conky" would count it as alive and nothing would be
+# restarted. Only processes looking at OUR display count; the others are
+# killed, they can no longer serve anyone.
 osmo_vivant() {
     _trouve=1
     for _p in $(pgrep "$@" 2>/dev/null); do
         _d="$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -1)"
-        # On ne tue QUE ce qu on a lu et qui regarde ailleurs. Un environ
-        # illisible, ou sans DISPLAY, ne prouve rien : ce processus compte
-        # pour vivant - une sonde qui confond « absent » et « invisible »
-        # ferait ici pousser un doublon de chaque widget a chaque tour.
+        # Kill ONLY what was read and looks elsewhere. An unreadable environ,
+        # or one without DISPLAY, proves nothing: that process counts as
+        # alive - confusing "absent" with "invisible" would spawn a duplicate
+        # of each widget on every pass.
         if [ -n "$_d" ] && [ "$_d" != "$DISPLAY" ]; then kill "$_p" 2>/dev/null
         else _trouve=0
         fi
     done
     return $_trouve
 }
-# Et le gardien ne survit pas a son propre serveur X : sans cette sortie,
-# l ancien tourne en parallele du neuf et relance dans le vide, pour toujours
-# (on en avait deux, l un sur :0 et l autre sur :1).
+# The watcher must not outlive its own X server: otherwise the old one keeps
+# running next to the new one and restarts into the void forever.
 osmo_display_vivant() {
-    [ -n "$DISPLAY" ] || return 0          # pas de display nomme : on ne juge pas
+    [ -n "$DISPLAY" ] || return 0          # no named display: cannot judge
     _n="${DISPLAY#*:}"; _n="${_n%%.*}"
     [ -S "/tmp/.X11-unix/X$_n" ]
 }
 
-# ── LES FLECHES DU CONKY, AU CLAVIER : Ctrl+AltGr+Gauche / Droite ───────────
-# [2026-09-10] Le raccourci est cuit dans un override de schema
-# (/usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override, pose par
-# iso_modules/80-chroot.sh) - sauf qu un override ne prend PAS sur un schema
-# RELOCALISABLE : « gsettings get ...custom-keybinding:/...osmo-op-next/
-# binding » rendait '' sur un systeme ou le fichier etait pourtant bien
-# compile. Le raccourci n a donc jamais rien lie. On l ecrit ici, dans la
-# session, une fois par demarrage : c est le seul endroit qui tourne SOUS le
-# compte de l utilisateur, et gsettings ecrit dans son dconf.
-# <Mod5> est ISO_Level3_Shift, c est-a-dire AltGr (xmodmap -pm le confirme).
+# ── CONKY ARROWS ON THE KEYBOARD: Ctrl+AltGr+Left / Right ───────────────────
+# A gschema.override does NOT apply to a RELOCATABLE schema, so the shortcut
+# is written here, in the session, once per boot: the only place that runs
+# UNDER the user's account, where gsettings writes into their dconf.
+# <Mod5> is ISO_Level3_Shift, i.e. AltGr (xmodmap -pm confirms it).
 osmo_raccourci() {
     command -v gsettings >/dev/null 2>&1 || return 0
     _k=org.gnome.settings-daemon.plugins.media-keys.custom-keybinding
@@ -431,26 +373,23 @@ osmo_raccourci() {
 }
 osmo_raccourci
 
-# Conky doit trouver le bureau GNOME deja peint (own_window_type desktop),
-# sinon il se pose derriere le fond d ecran.
+# Conky must find the GNOME desktop already painted (own_window_type
+# desktop), otherwise it ends up behind the wallpaper.
 sleep 6
 while osmo_display_vivant; do
     osmo_vivant -f "$REPO/tools/osmo-panel.py" || \
         "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
-    # [2026-09-13] LE DINO N'EST PLUS SUR LE BUREAU. Il etait relance ici en
-    # boucle, en fenetre de type BUREAU collee sous le Conky. Il est maintenant
-    # une APPLICATION : data/desktop/osmo-dino.desktop, dans le menu, qui lance
-    # osmo-dino.py --app (fenetre ordinaire, page entiere, plein ecran par son
-    # propre bouton). Le bureau ne porte plus que le Conky et ses encarts.
-    # la sonde d activite des timeslots (conf osmo-bsc + VTY) pour la banniere
+    # The dino is not on the desktop: it is an APPLICATION
+    # (data/desktop/osmo-dino.desktop, osmo-dino.py --app).
+    # Timeslot activity probe (osmo-bsc conf + VTY) for the banner
     osmo_vivant -f "$REPO/tools/osmo-ts-probe.py" || \
         "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
-    # la zone haute LAB GSM vivante (timeslots clignotants + accueil d appli)
+    # Live LAB GSM top zone (blinking timeslots + app welcome)
     osmo_vivant -f "$REPO/tools/osmo-topzone.py" || \
         "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
-    # [2026-10-12] LA BARRE DU BAS N EST PLUS SUR LE BUREAU (choix du banc :
-    # « enleve les choix en bas »). Le 2G/4G se lancent par les icones et
-    # launch.sh ; OSMO_LAUNCHER=1 dans l environnement de session la remet.
+    # The bottom launcher bar is off the desktop by default: 2G/4G start from
+    # the icons and launch.sh; OSMO_LAUNCHER=1 in the session environment
+    # restores it.
     if [ "${OSMO_LAUNCHER:-0}" = 1 ]; then
         osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
             "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
@@ -485,44 +424,34 @@ CONKY
              "$ROOTFS/opt/GSM/osmo-operator/tools/osmo-wallpaper.sh" 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Conky du banc : autostart GNOME (live et disque), config ${CYAN}configs/conky/osmo-conky.conf${NC}"
 
-    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
-    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
-    # le MEME.
-    # [2026-09-03] TOUS les raccourcis du depot, pas seulement osmo-install.
-    # Ils etaient poses par l install native (install_modules/80-bureau.sh) et
-    # par le .deb, mais PAS dans l ISO : la cle live n avait qu une icone sur
-    # neuf, et les huit autres n existaient meme pas dans le menu des
-    # applications — donc le dock ne pouvait pas les afficher non plus.
-    # [2026-10-12] SAUF L ICONE multi-operator : elle n a de sens qu une fois
-    # les Supplements poses (docker, l image operateur, osmo-multi.conf), et
-    # c est addition.sh --multi qui la pose a ce moment-la. Copiee ici, elle
-    # etait au dock des le premier boot et son clic finissait en « il manque
-    # ... » (launch.sh --multi). Le dock la montre quand elle existe
-    # (favorite-apps la nomme deja, iso_modules/80-chroot.sh).
+    # The file lives in the repository (data/desktop/), not in a heredoc here:
+    # the native install (install_modules/80-bureau.sh) and the .deb install
+    # the SAME one.
+    # ALL the repository's shortcuts, EXCEPT osmo-multi.desktop: it only makes sense once the Supplements are
+    # installed (docker, the operator image, osmo-multi.conf), and
+    # addition.sh --multi installs it at that point. The dock shows it when it
+    # exists (favorite-apps already names it, iso_modules/80-chroot.sh).
     for _d in "$DIR"/data/desktop/*.desktop; do
         [ -f "$_d" ] || continue
         [ "$(basename "$_d")" = osmo-multi.desktop ] && continue
         install -m644 "$_d" "$ROOTFS/usr/share/applications/$(basename "$_d")"
     done
 
-    # ── PLUS D ICONES SUR LE BUREAU : LE DOCK SUFFIT ─────────────────────
-    # [2026-09-04] Les raccourcis ne sont plus copies dans ~/Desktop ni
-    # ~/Bureau : ils vivent dans /usr/share/applications (ci-dessus) et dans
-    # les favoris du dock (favorite-apps, iso_modules/80-chroot.sh). Cela
-    # retire aussi tout le mecanisme d approbation (metadata::trusted,
-    # osmo-trust-desktop au login) qui n existait que pour DING.
-    # Le bureau reste vide ; le fond d ecran du jour s y voit en entier.
+    # ── NO ICONS ON THE DESKTOP: THE DOCK IS ENOUGH ──────────────────────────
+    # Shortcuts are not copied to ~/Desktop or ~/Bureau: they live in
+    # /usr/share/applications (above) and in the dock favorites (favorite-apps,
+    # iso_modules/80-chroot.sh). Leftovers from older images are removed,
+    # including the DING trust mechanism (osmo-trust-desktop).
     rm -f "$ROOTFS/root/Desktop"/*.desktop "$ROOTFS/root/Bureau"/*.desktop \
           "$ROOTFS/home/osmocom/Desktop"/*.desktop "$ROOTFS/home/osmocom/Bureau"/*.desktop \
           "$ROOTFS/usr/local/bin/osmo-trust-desktop" \
           "$ROOTFS/etc/xdg/autostart/osmo-trust-desktop.desktop" 2>/dev/null || true
     chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 
-    # ── LANCEUR ET TUTORIEL : ICONES DU BUREAU ────────────────────────────
-    # Icones du depot (data/*.svg) et pas des noms du theme : "call-start" est
-    # VERT dans Adwaita et n a pas de variante rouge, et un nom d icone absent
-    # se remplace EN SILENCE par un rectangle gris - le lanceur devient alors
-    # introuvable sur le bureau qu il est cense ouvrir.
+    # ── LAUNCHER AND TUTORIAL: DESKTOP ICONS ─────────────────────────────────
+    # Repository icons (data/*.svg), not theme names: "call-start" is GREEN in
+    # Adwaita with no red variant, and a missing icon name is SILENTLY replaced
+    # by a grey rectangle.
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
               "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
@@ -530,46 +459,35 @@ CONKY
         [ -f "$DIR/data/$_ic.svg" ] || continue
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
-        # LA COPIE QUI COMPTE POUR LE BUREAU. Voir le bloc juste dessous.
+        # THE COPY THAT MATTERS FOR THE DESKTOP. See the block right below.
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
         chmod 644 "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
     done
 
-    # ⚠️ LES .desktop POINTENT LE FICHIER, PAS LE NOM DE L ICONE.
-    # [2026-08-31] Les trois raccourcis s affichaient en PAGE BLANCHE generique
-    # sur le bureau, SVG valides et bien installes. Cause : "Icon=osmo-launch"
-    # n est pas un chemin, c est un nom a resoudre dans le thème, et cette
-    # resolution passe par /usr/share/icons/hicolor/icon-theme.cache. Le cache
-    # etait construit AVANT que les icones n arrivent - constate sur le banc :
-    #     strings .../icon-theme.cache | grep -c osmo   ->  0
-    #     cache 17:22:12   ·   icones 17:28:07
-    # Zero entree sur trois, et rien ne le signale : un nom d icone qui ne
-    # resout pas se remplace EN SILENCE par la page blanche. "Supplements" s en
-    # sortait seul parce que son "system-software-install" vient de Yaru, deja
-    # dans le cache depuis l installation du systeme.
-    # D ou les deux mesures, et pas une seule :
-    #   - Icon= en CHEMIN ABSOLU (plus bas) : court-circuite thème et cache,
-    #     c est ce qui garantit l icone sur le bureau ;
-    #   - le cache reconstruit quand meme, pour le menu des applications, qui
-    #     lui continue de resoudre par nom.
+    # The .desktop files POINT TO THE FILE, NOT TO THE ICON NAME.
+    # "Icon=osmo-launch" is a name resolved through the theme and
+    # /usr/share/icons/hicolor/icon-theme.cache; a name that does not resolve
+    # is SILENTLY replaced by a blank page. Two measures:
+    #   - Icon= as an ABSOLUTE PATH (below): bypasses theme and cache;
+    #   - the cache is rebuilt anyway, for the applications menu, which still
+    #     resolves by name.
     if chroot "$ROOTFS" sh -c 'command -v gtk-update-icon-cache' >/dev/null 2>&1; then
         chroot "$ROOTFS" gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
     fi
     [ -f "$DIR/data/tutorial.html" ] && \
         cp -f "$DIR/data/tutorial.html" "$ROOTFS/usr/share/osmo-operator/tutorial.html"
 
-    # Un exemplaire dans /usr/share sert de repli hors ligne : c est le seul
-    # chemin qui reste lisible quand le dashboard ne repond pas.
+    # A copy in /usr/share is the offline fallback: the only path that stays
+    # readable when the dashboard does not answer.
     cat > "$ROOTFS/usr/local/bin/osmo-tutorial" <<'TUTO'
 #!/bin/bash
-# osmo-tutorial - ouvre le quick-start.
+# osmo-tutorial - opens the quick-start.
 #
-# PAR HTTP, PAS PAR file://. Le dashboard sert deja ce fichier sur 8080 : en
-# passant par lui, la page affichee est CELLE QUI FAIT FOI (celle du depot,
-# recopiee a chaque build), la meme que depuis une autre machine du banc, et
-# les liens relatifs vers le tableau de bord marchent. Le file:// reste en
-# repli, pour le cas ou le dashboard ne repond pas.
+# OVER HTTP, NOT file://. The dashboard already serves this file on 8080: the
+# page shown is the authoritative one (the repository's, copied at each build),
+# the same as from another machine of the bench, and relative links to the
+# dashboard work. file:// remains as a fallback when the dashboard is down.
 set -u
 URL="${OSMO_TUTORIAL_URL:-http://127.0.0.1:8080/tutorial.html}"
 PORT="${URL##*:}"; PORT="${PORT%%/*}"
@@ -581,39 +499,36 @@ echo "Dashboard injoignable sur $PORT - repli file:// sur la copie de /usr/share
 exec xdg-open "file:///usr/share/osmo-operator/tutorial.html"
 TUTO
     chmod +x "$ROOTFS/usr/local/bin/osmo-tutorial"
-    # [2026-10-23] le meme lanceur pour la page d aide (le « ? »), servie par le dashboard
+    # Same launcher for the help page (the "?"), served by the dashboard
     install -m755 "$DIR/tools/osmo-info" "$ROOTFS/usr/local/bin/osmo-info"
 
-    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
-    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
-    # le MEME.
+    # The file lives in the repository (data/desktop/), not in a heredoc here:
+    # the native install (install_modules/80-bureau.sh) and the .deb install
+    # the SAME one.
     install -m644 "$DIR/data/desktop/osmo-launch.desktop" "$ROOTFS/usr/share/applications/osmo-launch.desktop"
-    # [2026-09-04] Plus d'icone DSP a part. [2026-10-01] Le DSP est le defaut
-    # du banc ; le clic droit du telephone propose l'autre chaine (« Lancer en
-    # mode gr-gsm »).
+    # No separate DSP icon: DSP is the bench default; the phone icon's right
+    # click offers the other chain ("Lancer en mode gr-gsm").
     rm -f "$ROOTFS/usr/share/applications/osmo-dsp.desktop"
 
-    # osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI. Son lanceur
-    # start-multi.sh suppose docker + l image + la topologie SS7, qui n existent
-    # qu apres le supplement (addition.sh). L icone apparaissait donc au premier
-    # boot pour ne rien faire au clic ; addition.sh la pose desormais LUI-MEME,
-    # a la fin d une install SS7 reussie. Son SVG reste installe (bloc icones
-    # ci-dessus) pour que cette pose differee y trouve l image.
+    # osmo-multi (antenna, multi-operator) is NOT installed here: its launcher
+    # start-multi.sh needs docker + the image + the SS7 topology, which only
+    # exist after the supplement; addition.sh installs it at the end of a
+    # successful SS7 install. Its SVG stays installed (icons block above) so
+    # that deferred install finds the image.
 
-    # ── SUPPLEMENTS : LA FENETRE A COCHER ─────────────────────────────────
-    # [2026-10-01] Meme facture que osmo-update-anim : une fenetre GTK du banc
-    # avec un terminal VTE dedans (tools/osmo-gtk-run.py --tty), et la main
-    # rendue seulement quand on a lu la fin. addition.sh ouvre lui-meme sa
-    # liste a cocher (zenity) quand DISPLAY est la ; le terminal reste utile
-    # pour la suite, longue et bavarde (apt, puis compilation Osmocom). Aucun
-    # favori du dock n ouvre plus de gnome-terminal.
+    # ── SUPPLEMENTS: THE CHECKLIST WINDOW ────────────────────────────────────
+    # Same shape as osmo-update-anim: a bench GTK window with a VTE terminal
+    # inside (tools/osmo-gtk-run.py), control given back only once the end has
+    # been read. addition.sh opens its own checklist (zenity) when DISPLAY is
+    # set; the terminal remains useful for the long, verbose rest (apt, then
+    # the Osmocom build). No dock favorite opens gnome-terminal.
     cat > "$ROOTFS/usr/local/bin/osmo-addition-anim" <<'ADDGUI'
 #!/bin/bash
-# osmo-addition-anim - les supplements (addition.sh) dans une fenetre GTK du
-# banc : un terminal VTE dedans, pour la liste a cocher puis la suite, longue
-# et bavarde (apt, compilation) ; la fenetre reste ouverte a la fin, avec le
-# statut. Root par pkexec, DISPLAY/XAUTHORITY et le proxy de la session
-# reportes (osmo-gtk-run --root). [2026-10-01] Plus de gnome-terminal.
+# osmo-addition-anim - the supplements (addition.sh) in a bench GTK window: a
+# VTE terminal inside, for the checklist and then the long, verbose rest (apt,
+# build); the window stays open at the end with the status. Root through
+# pkexec, DISPLAY/XAUTHORITY and the session proxy carried over
+# (osmo-gtk-run --root).
 set -u
 REPO=/opt/GSM/osmo-operator
 SCRIPT=$REPO/addition.sh
@@ -622,40 +537,38 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="addition.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-# [2026-10-12] --progress : barre + etape, la console (VTE) repliee derriere « console »
+# --progress: progress bar + step, the console (VTE) folded behind "console"
 exec python3 "$REPO/tools/osmo-gtk-run.py" --progress --root --title "osmo-operator - supplements" -- "$SCRIPT" "$@"
 
 ADDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-addition-anim"
 
-    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
-    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
-    # le MEME.
+    # The file lives in the repository (data/desktop/), not in a heredoc here:
+    # the native install (install_modules/80-bureau.sh) and the .deb install
+    # the SAME one.
     install -m644 "$DIR/data/desktop/osmo-addition.desktop" "$ROOTFS/usr/share/applications/osmo-addition.desktop"
 
-    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
-    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
-    # le MEME.
+    # The file lives in the repository (data/desktop/), not in a heredoc here:
+    # the native install (install_modules/80-bureau.sh) and the .deb install
+    # the SAME one.
     install -m644 "$DIR/data/desktop/osmo-tutorial.desktop" "$ROOTFS/usr/share/applications/osmo-tutorial.desktop"
-    # [2026-10-01] La page Info (anglais) : chaque module du banc, par icone,
-    # barre de lancement ou CLI, avec le code derriere. Icone dans les favoris.
+    # The Info page (English): every bench module, by icon, launch bar or CLI,
+    # with the code behind it. Icon in the favorites.
     install -d "$ROOTFS/usr/share/osmo-operator"
     install -m644 "$DIR/configs/info.html" "$ROOTFS/usr/share/osmo-operator/info.html"
     install -d "$ROOTFS/usr/share/osmo-operator/icons"
     install -m644 "$DIR/data/osmo-info.svg" "$ROOTFS/usr/share/osmo-operator/icons/osmo-info.svg"
     install -m644 "$DIR/data/desktop/osmo-info.desktop" "$ROOTFS/usr/share/applications/osmo-info.desktop"
 
-    # ── CLAUDE : lanceur + entree de menu ─────────────────────────────────
-    # Claude Code n est PAS dans l ISO (il s installe via le supplement) : le
-    # lanceur enchaine donc l installation (addition.sh --claude) au premier
-    # clic si claude manque, puis l ouvre. L icone est la des le boot, mais elle
-    # ne ment pas - elle sait s installer elle-meme.
+    # ── CLAUDE: launcher + menu entry ────────────────────────────────────────
+    # Claude Code is NOT in the ISO (it is installed by the supplement): the
+    # launcher runs the install (addition.sh --claude) on the first click if
+    # claude is missing, then opens it.
     cat > "$ROOTFS/usr/local/bin/osmo-claude-anim" <<'CLA'
 #!/bin/bash
-# osmo-claude-anim - Claude Code dans une fenetre GTK du banc (terminal VTE :
-# claude est interactif de bout en bout). Pas dans l ISO : le premier clic
-# l installe (addition.sh --claude, en root) puis l ouvre, dans la meme
-# fenetre. [2026-10-01] Plus de gnome-terminal.
+# osmo-claude-anim - Claude Code in a bench GTK window (VTE terminal: claude is
+# interactive end to end). Not in the ISO: the first click installs it
+# (addition.sh --claude, as root) then opens it, in the same window.
 set -u
 exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Claude" -- bash -lc '
 if ! command -v claude >/dev/null 2>&1; then
@@ -674,21 +587,19 @@ exit 1'
 
 CLA
     chmod +x "$ROOTFS/usr/local/bin/osmo-claude-anim"
-    # Le fichier vit dans le depot (data/desktop/) ; Icon= en chemin absolu.
+    # The file lives in the repository (data/desktop/); Icon= as an absolute path.
     install -m644 "$DIR/data/desktop/claude.desktop" "$ROOTFS/usr/share/applications/claude.desktop"
     sed -i "s|^Icon=.*|Icon=/usr/share/osmo-operator/icons/claude.svg|" \
         "$ROOTFS/usr/share/applications/claude.desktop"
 
-    # Terminal=false : launch.sh ouvre LUI-MEME son terminal et demande les
-    # privileges (pkexec). [2026-09-04] Plus de copie sur le bureau : les
-    # raccourcis sont dans le menu et les favoris du dock.
+    # Terminal=false: launch.sh opens ITS OWN terminal and asks for privileges
+    # (pkexec). No copy on the desktop: shortcuts are in the menu and dock.
     echo -e "  ${GREEN}✓${NC} menu/dock : ${CYAN}telephone${NC} (lancer) · ${CYAN}livre${NC} (tutoriel) · ${CYAN}supplements${NC} · ${CYAN}Claude${NC}"
 
-    # Le paquet calamares pose SA propre entree de menu, qui lance
-    # /usr/bin/calamares directement. Elle court-circuite osmo-install : ni le
-    # medium remis a sa place, ni la cible d un essai precedent demontee - donc
-    # exactement la panne qu on vient de corriger, a un clic de la bonne icone.
-    # NoDisplay la retire des menus sans toucher au paquet.
+    # The calamares package installs ITS OWN menu entry, which runs
+    # /usr/bin/calamares directly and bypasses osmo-install (no medium put back
+    # in place, no previous target unmounted). NoDisplay removes it from the
+    # menus without touching the package.
     if [ -f "$ROOTFS/usr/share/applications/calamares.desktop" ]; then
         grep -q '^NoDisplay=' "$ROOTFS/usr/share/applications/calamares.desktop" \
             || echo 'NoDisplay=true' >> "$ROOTFS/usr/share/applications/calamares.desktop"
@@ -699,15 +610,13 @@ elif [ "${ISO_DESKTOP:-0}" = "1" ]; then
     echo -e "  ${YELLOW}!${NC} $_CAL_SRC absent - pas d installeur dans cette image"
 fi
 
-# ── SANS --desktop : LES RACCOURCIS ET LEURS ICONES QUAND MEME ──────────────
-# [2026-10-01] Le controle 4G de 88-lte-pmos.sh exige osmo-lte.desktop sur
-# TOUTE image operateur, et l ISO de base (osmo-operator.iso, sans GNOME) ne le
-# posait pas : le bloc ci-dessus est conditionne par --desktop. En CI, la passe
-# --all tombait donc sur « ✗ 4G osmo-lte.service + osmo-lte.desktop » des la
-# deuxieme image. On pose ici, hors bureau, ce que l install native
-# (install_modules/80-bureau.sh) pose de toute facon : les .desktop du depot et
-# leurs SVG. Quelques Ko, et un bureau installe apres coup (apt install
-# ubuntu-desktop) trouve ses entrees de menu toutes pretes.
+# ── WITHOUT --desktop: THE SHORTCUTS AND THEIR ICONS ANYWAY ─────────────────
+# The 4G check of 88-lte-pmos.sh requires osmo-lte.desktop on EVERY operator
+# image, including the base ISO (no GNOME), and the block above only runs with
+# --desktop. Install here what the native install (install_modules/80-bureau.sh)
+# installs anyway: the repository's .desktop files and their SVGs. A few KB,
+# and a desktop installed afterwards (apt install ubuntu-desktop) finds its
+# menu entries ready.
 if [ "${ISO_DESKTOP:-0}" != "1" ]; then
     install -d "$ROOTFS/usr/share/applications" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
@@ -717,12 +626,10 @@ if [ "${ISO_DESKTOP:-0}" != "1" ]; then
         install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
         install -m644 "$DIR/data/$_ic.svg" "$ROOTFS/usr/share/osmo-operator/icons/$_ic.svg"
     done
-    # [2026-10-12] SAUF L ICONE multi-operator : elle n a de sens qu une fois
-    # les Supplements poses (docker, l image operateur, osmo-multi.conf), et
-    # c est addition.sh --multi qui la pose a ce moment-la. Copiee ici, elle
-    # etait au dock des le premier boot et son clic finissait en « il manque
-    # ... » (launch.sh --multi). Le dock la montre quand elle existe
-    # (favorite-apps la nomme deja, iso_modules/80-chroot.sh).
+    # EXCEPT osmo-multi.desktop: it only makes sense once the Supplements are
+    # installed (docker, the operator image, osmo-multi.conf), and
+    # addition.sh --multi installs it at that point. The dock shows it when it
+    # exists (favorite-apps already names it, iso_modules/80-chroot.sh).
     for _d in "$DIR"/data/desktop/*.desktop; do
         [ -f "$_d" ] || continue
         [ "$(basename "$_d")" = osmo-multi.desktop ] && continue
@@ -731,22 +638,20 @@ if [ "${ISO_DESKTOP:-0}" != "1" ]; then
     echo -e "  ${GREEN}✓${NC} raccourcis du depot (data/desktop/) + icones poses, sans bureau"
 fi
 
-# ── LE LANCEUR GTK "UPDATE" -> update.sh DU DEPOT ───────────────────────────
-# Independant de Calamares : c'est une icone de bureau qui rejoue update.sh, le
-# fichier SUIVI dans le depot osmo-operator (/opt/GSM/osmo-operator/update.sh).
-# update.sh est une animation de TERMINAL : sa premiere ligne utile est
-# "[ -t 1 ] || exit 0", donc lance sans tty (depuis une icone GTK) il sort
-# aussitot sans rien montrer. [2026-10-01] Le lanceur l'ouvre DONC dans un
-# terminal VTE pose DANS une fenetre GTK du banc (tools/osmo-gtk-run.py
-# --tty), qui reste ouverte a la fin pour qu'on lise le resultat - plus de
-# gnome-terminal.
+# ── THE "UPDATE" GTK LAUNCHER -> the repository's update.sh ─────────────────
+# Independent of Calamares: a desktop icon that replays update.sh, the TRACKED
+# file of the osmo-operator repository (/opt/GSM/osmo-operator/update.sh).
+# update.sh is a TERMINAL animation: its first useful line is
+# "[ -t 1 ] || exit 0", so without a tty (from a GTK icon) it exits at once.
+# The launcher therefore opens it in a VTE terminal inside a bench GTK window
+# (tools/osmo-gtk-run.py), which stays open at the end to read the result.
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > "$ROOTFS/usr/local/bin/osmo-update-anim" <<'UPDGUI'
 #!/bin/bash
-# osmo-update-anim - rejoue update.sh du depot dans une fenetre GTK du banc.
-# update.sh est une animation de TERMINAL ([ -t 1 ] || exit 0) : --tty, un
-# terminal VTE dans la fenetre, qui reste ouverte sur la derniere ligne
-# (« SMS delivered ») avec le statut. [2026-10-01] Plus de gnome-terminal.
+# osmo-update-anim - replays the repository's update.sh in a bench GTK window.
+# update.sh is a TERMINAL animation ([ -t 1 ] || exit 0): a VTE terminal in
+# the window, which stays open on the last line ("SMS delivered") with the
+# status.
 set -u
 SCRIPT=/opt/GSM/osmo-operator/update.sh
 if [ ! -x "$SCRIPT" ]; then
@@ -754,49 +659,42 @@ if [ ! -x "$SCRIPT" ]; then
         zenity --error --text="update.sh introuvable : $SCRIPT" 2>/dev/null
     exit 1
 fi
-# [2026-10-12] --progress : barre + etape, la console (VTE) repliee derriere « console »
+# --progress: progress bar + step, the console (VTE) folded behind "console"
 exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --title "osmo-operator - update" -- "$SCRIPT" "$@"
 
 UPDGUI
     chmod +x "$ROOTFS/usr/local/bin/osmo-update-anim"
 
-    # Le fichier vit dans le depot (data/desktop/), pas en heredoc ici :
-    # l install native (install_modules/80-bureau.sh) et le paquet .deb posent
-    # le MEME.
+    # The file lives in the repository (data/desktop/), not in a heredoc here:
+    # the native install (install_modules/80-bureau.sh) and the .deb install
+    # the SAME one.
     install -m644 "$DIR/data/desktop/osmo-update.desktop" "$ROOTFS/usr/share/applications/osmo-update.desktop"
-
-    # [2026-09-04] Pas de copie sur le bureau (menu + favoris du dock).
 
     echo -e "  ${GREEN}✓${NC} lanceur GTK ${CYAN}update${NC} : /usr/local/bin/osmo-update-anim (+ icone sur le bureau)"
 fi
 
 
-# ── LE BUREAU, SUITE : FOND DU JOUR, SPECTRES, TERMINAL, DING ───────────────
-# [2026-09-04] Tout ce bloc est HORS du chroot de 80-chroot.sh (quotes simples
-# la-bas) : ici les heredocs et les apostrophes sont libres.
+# ── DESKTOP, CONTINUED: WALLPAPER OF THE DAY, SPECTRA, TERMINAL, DING ───────
+# This whole block is OUTSIDE the chroot of 80-chroot.sh: heredocs and single
+# quotes are free here.
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
-    # ── 1. Le fond d ecran du jour : strip Calvin & Hobbes incruste ──────────
-    # tools/osmo-wallpaper.sh va chercher le strip du jour (gocomics, comme le
-    # gist hellogist), recompose la photo + carte LAB GSM + strip
-    # (tools/wallpaper-render.py) et pousse le resultat dans les sessions
-    # ouvertes. Au boot (40 s, le reseau est la), chaque jour a 6h30, et
-    # toutes les 4 h en rattrapage (banc hors ligne au boot).
+    # ── 1. Wallpaper of the day: Calvin & Hobbes strip inset ─────────────────
+    # tools/osmo-wallpaper.sh fetches the strip of the day (gocomics), composes
+    # photo + LAB GSM map + strip (tools/wallpaper-render.py) and pushes the
+    # result into the open sessions. At boot (40 s, network up), daily at 6:30,
+    # and every 4 h as a catch-up (bench offline at boot).
     install -m755 "$DIR/tools/osmo-wallpaper.sh" "$ROOTFS/usr/local/sbin/osmo-wallpaper"
-    # L arbre /opt/GSM/osmo-operator de l image vient du clone GitHub fait dans
-    # Docker : on y pose aussi, depuis CE depot, ce que le fond et les spectres
-    # utilisent - le build ne depend pas d un push pour ces fichiers-la.
+    # The image's /opt/GSM/osmo-operator tree comes from the GitHub clone made
+    # in Docker: what the wallpaper and spectra use is also installed from THIS
+    # repository, so the build does not depend on a push for those files.
     _rt="$ROOTFS/opt/GSM/osmo-operator"
     install -d "$_rt/tools" "$_rt/configs/wallpaper" "$_rt/configs/conky"
-    # conky-osmo-status.sh est dans la liste depuis le 2026-09-04 : c est lui
-    # qui dit si le HLR tourne (il lisait sa base sqlite, qui survit au demon,
-    # et annoncait un HLR allume des heures apres l arret du banc). Sans cette
-    # ligne il ne venait QUE du clone GitHub - donc une correction non poussee
-    # ne partait pas dans l image, alors que les quatre autres outils, eux,
-    # partaient. Meme regle pour tous : le depot local fait foi.
+    # conky-osmo-status.sh is in the list: it reports whether the HLR runs.
+    # Same rule for all: the local repository is authoritative.
     install -m755 "$DIR/tools/wallpaper-render.py" "$DIR/tools/osmo-fft-snap.py" "$DIR/tools/osmo-panel.py" "$DIR/tools/osmo-wallpaper.sh" "$DIR/tools/conky-osmo-status.sh" "$_rt/tools/"
-    # Le bureau interactif (banniere LAB GSM vivante + barre de lancement) et le
-    # dino : fichiers locaux, souvent pas encore pousses - on les pose depuis CE
-    # depot, comme les cinq ci-dessus. osmo-extras-install.sh sert au natif (80).
+    # The interactive desktop (live LAB GSM banner + launch bar) and the dino:
+    # local files, installed from THIS repository like the five above.
+    # osmo-extras-install.sh serves the native install (80).
     for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh osmo-fond.py \
              osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh osmo-wireshark-root.sh \
              osmo-ofono-bridge.py osmo-phonesim-banc.py \
@@ -804,34 +702,33 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         [ -f "$DIR/tools/$_f" ] && install -m755 "$DIR/tools/$_f" "$_rt/tools/"
     done
     unset _f
-    # tower.* et non tower.jpg : la photo voyage dans son format d origine
-    # (PNG pleine definition aujourd hui), sans re-encodage.
+    # tower.* and not tower.jpg: the photo travels in its original format
+    # (full-definition PNG), without re-encoding.
     for _tw in "$DIR"/configs/wallpaper/tower.*; do
         [ -f "$_tw" ] && install -m644 "$_tw" "$_rt/configs/wallpaper/"
     done
     unset _tw
     install -m644 "$DIR/configs/conky/osmo-conky.conf" "$_rt/configs/conky/"
-    # [2026-10-12] la plaque du conky (Cairo), chargee par osmo-conky.conf
+    # The conky plate (Cairo), loaded by osmo-conky.conf
     [ -f "$DIR/configs/conky/osmo-conky.lua" ] && install -m644 "$DIR/configs/conky/osmo-conky.lua" "$_rt/configs/conky/"
-    # la banniere LAB GSM vivante et le html du dino (rendus par WebKit)
+    # The live LAB GSM banner and the dino html (rendered by WebKit)
     for _h in labgsm.html dino.html; do
         [ -f "$DIR/configs/conky/$_h" ] && install -m644 "$DIR/configs/conky/$_h" "$_rt/configs/conky/"
     done
     unset _h
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$_rt/configs/gsm-lab-wallpaper.png"
-    # 80-chroot.sh a copie le fond depuis le clone GitHub (avant ce module) :
-    # on repose ici celui de CE depot, le rendu du jour de tools/wallpaper-render.py.
+    # 80-chroot.sh copied the wallpaper from the GitHub clone (before this
+    # module): put THIS repository's one back, the render of tools/wallpaper-render.py.
     install -m644 "$DIR/configs/gsm-lab-wallpaper.png" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.png"
-    # [2026-09-25] Le fond par DEFAUT est l illustration brute (80-chroot.sh) ;
-    # le rendu compose ci-dessus reste pose pour osmo-wallpaper lance a la main.
+    # The DEFAULT wallpaper is the raw illustration (80-chroot.sh); the composed
+    # render above stays installed for osmo-wallpaper run by hand.
     install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$_rt/configs/gsm-lab-wallpaper.jpg"
     install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-wallpaper.jpg"
-    # [2026-10-01] Le fond GNOME par defaut est configs/gsm-lab-fond.jpg (le
-    # schema de 80-chroot.sh le nomme) ; l illustration ci-dessus reste pour
-    # l encart, qui la montre entiere au milieu. Depuis CE depot, comme le reste.
-    # [2026-10-11] Les deux fichiers sont rendus ensemble par
-    # tools/paysage-render.py (meme scene : fond nu, encart avec les pylones),
-    # puis retouches a la main : le depot porte la version choisie sur le banc.
+    # The default GNOME wallpaper is configs/gsm-lab-fond.jpg (named by the
+    # 80-chroot.sh schema); the illustration above remains for the inset, which
+    # shows it whole in the middle. Both are rendered together by
+    # tools/paysage-render.py (same scene: bare background, inset with the
+    # pylons), then retouched by hand: the repository holds the chosen version.
     if [ -f "$DIR/configs/gsm-lab-fond.jpg" ]; then
         install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$_rt/configs/gsm-lab-fond.jpg"
         install -m644 "$DIR/configs/gsm-lab-fond.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-fond.jpg"
@@ -843,19 +740,17 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'
 [Unit]
 Description=Fond d ecran du banc (image du jour : Calvin, xkcd, APOD, Bing, turnoff.us)
-# [2026-09-04] AUCUNE ATTENTE RESEAU. C etait Wants/After=network-online.target :
-# un fond d ecran faisait attendre le demarrage jusqu a 2 min
-# (systemd-networkd-wait-online) pour aller chercher un dessin. Sans reseau, le
-# script pose le fond fige de l image et sort 0 ; avec reseau, le timer
-# quotidien (osmo-wallpaper.timer) le remplacera au prochain passage.
+# NO NETWORK WAIT: without network the script installs the frozen wallpaper
+# and exits 0; with network the daily timer (osmo-wallpaper.timer) replaces it
+# on its next pass.
 After=network.target
 ConditionPathExists=/opt/GSM/osmo-operator/tools/wallpaper-render.py
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/osmo-wallpaper
-# Un telechargement qui traine ne doit pas retenir le boot NI l arret : le
-# service est tue au bout de 45 s, le fond fige reste.
+# A slow download must hold neither boot nor shutdown: the service is killed
+# after 45 s, the frozen wallpaper stays.
 TimeoutStartSec=45
 TimeoutStopSec=10
 EOF
@@ -873,19 +768,19 @@ Unit=osmo-wallpaper.service
 [Install]
 WantedBy=timers.target
 EOF
-    # [2026-09-25] Timer NON active : il remplacait, 40 s apres le boot, le fond
-    # brut par le rendu compose (teinte + cadres BD). L unite reste posee :
-    #     systemctl enable --now osmo-wallpaper.timer   pour revenir au fond du jour
+    # Timer NOT enabled: it would replace the raw wallpaper with the composed
+    # render 40 s after boot. The unit stays installed:
+    #     systemctl enable --now osmo-wallpaper.timer   to get the wallpaper of the day back
     chroot "$ROOTFS" systemctl disable osmo-wallpaper.timer 2>/dev/null || true
 
-    # ── 2. Les spectres I/Q dans le Conky du bas a droite ────────────────────
-    # [2026-09-04] tools/osmo-fft-snap.py trace /run/osmo-fft/panel.png : le
-    # cadre Calvin & Hobbes du fond (decoupe dans le PNG du jour) qui fond vers
-    # « FFT du mobile + mobile.log » quand /psd a un flux ; osmo-panel.py (GTK,
-    # fenetre de type bureau, cliquable : Dashboard, tmux, fleches operateur)
-    # l affiche sur le cadre, a l echelle de l ecran. Il vit avec le dashboard et
-    # affiche. Le service vit avec le dashboard et se relance sans lui : sans
-    # flux, l image dit "pas de flux" au lieu de figer.
+    # ── 2. I/Q spectra in the bottom-right Conky ─────────────────────────────
+    # tools/osmo-fft-snap.py draws /run/osmo-fft/panel.png: the Calvin & Hobbes
+    # frame of the wallpaper (cut from the PNG of the day) fading to "mobile
+    # FFT + mobile.log" when /psd has a stream; osmo-panel.py (GTK desktop-type
+    # window, clickable: Dashboard, tmux, operator arrows) displays it over the
+    # frame, scaled to the screen. The service lives with the dashboard and
+    # restarts without it: without a stream the image says "no stream" instead
+    # of freezing.
     cat > "$ROOTFS/etc/systemd/system/osmo-fft-snap.service" <<'EOF'
 [Unit]
 Description=Encart vivant du bureau : strip du jour qui fond vers FFT du mobile + mobile.log
@@ -895,21 +790,17 @@ ConditionPathExists=/opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 [Service]
 ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-fft-snap.py
 RuntimeDirectory=osmo-fft
-# [2026-09-04] 0775 ET LE GROUPE sudo, PAS 0755 root:root. osmo-panel.py, lui,
-# tourne dans la SESSION DE BUREAU : root sur la cle, mais le compte cree par
-# l installeur sur le disque - et il ECRIT /run/osmo-fft/operator quand on
-# change d operateur avec les fleches. En 0755 root:root cette ecriture est
-# refusee. Le compte de l installeur est sudoer par construction (users.conf,
-# defaultGroups + sudoersGroup), et root l est aussi : le groupe sudo est
-# exactement "qui pilote ce banc". ExecStartPost et non Group= : l unite doit
-# rester root pour lire les conteneurs et le flux /psd.
+# 0775 AND the sudo group, NOT 0755 root:root: osmo-panel.py runs in the
+# DESKTOP SESSION (root on the key, the installer-created account on disk) and
+# WRITES /run/osmo-fft/operator when the operator is changed with the arrows.
+# The installer's account is a sudoer by construction (users.conf), and so is
+# root: the sudo group is exactly "who drives this bench". ExecStartPost rather
+# than Group=: the unit must stay root to read the containers and /psd.
 RuntimeDirectoryMode=0775
 ExecStartPost=-/bin/chgrp sudo /run/osmo-fft
-# [2026-09-04] SANS CECI, UNE RELANCE EFFACE L ENCART. systemd supprime le
-# RuntimeDirectory a l arret de l unite : /run/osmo-fft/panel.png disparaissait
-# le temps de la relance, et Conky affichait un trou dans le fond d ecran la ou
-# on attendait le strip Calvin & Hobbes. Le fichier est reecrit chaque seconde :
-# le conserver ne coute rien et supprime le clignotement.
+# systemd removes the RuntimeDirectory when the unit stops: keeping it avoids
+# /run/osmo-fft/panel.png disappearing (and the inset blinking) across a
+# restart. The file is rewritten every second.
 RuntimeDirectoryPreserve=yes
 Restart=always
 RestartSec=5
@@ -920,18 +811,16 @@ WantedBy=multi-user.target
 EOF
     [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-fft-snap 2>/dev/null || true
 
-    # ── 3. Le terminal : legerement transparent, noir sur gris clair ─────────
-    # Un profil gnome-terminal est un schema RELOCALISABLE : impossible par
-    # gschema.override. C est donc une base dconf SYSTEME (/etc/dconf/db/local)
-    # lue par toute session, root sur la cle comme l utilisateur Calamares sur
-    # le disque, et que l utilisateur peut encore changer (base "user" devant).
-    # [2026-10-01] TERMINAL AMBRE. Texte jaune ambre (#FFB000) sur fond presque
-    # noir et chaud, curseur bloc ambre qui clignote, gras jaune clair, palette
-    # entiere ramenee dans les ambres/ors (le rouge et le vert restent
-    # distincts pour les erreurs et les ✓), Ubuntu Mono 12 ; 18 % de
-    # transparence. C est le terminal « sketchy jaune » du banc, par defaut
-    # sur l ISO comme sur le natif (le meme fichier est charge dans la base
-    # utilisateur par update.sh / a la main : dconf load).
+    # ── 3. The terminal: slightly transparent, amber on near-black ───────────
+    # A gnome-terminal profile is a RELOCATABLE schema: impossible through
+    # gschema.override. Hence a SYSTEM dconf database (/etc/dconf/db/local) read
+    # by every session, root on the key as well as the Calamares user on disk,
+    # which the user can still override ("user" database in front).
+    # AMBER TERMINAL: amber text (#FFB000) on a warm near-black background,
+    # blinking amber block cursor, light-yellow bold, palette in ambers/golds
+    # (red and green stay distinct for errors and checkmarks), Ubuntu Mono 12,
+    # 18 % transparency. Default on the ISO as on native (the same file is
+    # loaded into the user database by update.sh / by hand: dconf load).
     install -d "$ROOTFS/etc/dconf/profile" "$ROOTFS/etc/dconf/db/local.d"
     printf 'user-db:user\nsystem-db:local\n' > "$ROOTFS/etc/dconf/profile/user"
     cat > "$ROOTFS/etc/dconf/db/local.d/10-osmo-terminal" <<'EOF'
@@ -964,25 +853,20 @@ scrollback-unlimited=false
 scrollback-lines=50000
 audible-bell=false
 EOF
-    # ── LE DEFILEMENT EST BORNE : IL VIT DANS /tmp ───────────────────────────
-    # [2026-10-19] scrollback-unlimited=true remplissait /tmp. VTE garde le
-    # defilement dans des fichiers SUPPRIMES de /tmp (/tmp/#NNNN (deleted),
-    # tenus par gnome-terminal-server) : invisibles a du, visibles a df. Sur
-    # legion, deux onglets qui suivaient les journaux du banc tenaient 2,0 Go
-    # et 2,8 Go d'un /tmp de 4,7 Go - « No space left on device » pour tout le
-    # monde, machine sans disque plein. Un tail -F de mobile.log en debug est un
-    # writer non borne comme ceux de 83-espace-ram.sh : on le borne pareil.
-    # 50 000 lignes = ~10 Mo par onglet, et largement de quoi remonter.
+    # ── SCROLLBACK IS BOUNDED: IT LIVES IN /tmp ──────────────────────────────
+    # VTE keeps the scrollback in DELETED files under /tmp (held by
+    # gnome-terminal-server): invisible to du, visible to df. An unlimited
+    # scrollback on a tab following the bench logs can fill /tmp ("No space
+    # left on device"). 50 000 lines = ~10 MB per tab, plenty to scroll back.
     chroot "$ROOTFS" dconf update 2>/dev/null \
         && echo -e "  ${GREEN}✓${NC} gnome-terminal : profil ${CYAN}osmo-operator${NC} (noir, 18 % transparent) via dconf systeme" \
         || echo -e "  ${YELLOW}!${NC} dconf update a echoue - profil terminal non compile"
 
-    # ── 4. DING relance apres l ouverture de session ─────────────────────────
-    # [2026-09-04] Mesure sur la cle : l extension "Desktop Icons NG" ouvre sa
-    # fenetre plein ecran avant que GNOME Shell ait peint le fond, et garde
-    # jusqu au bout l image du greeter (le numbat sombre d Ubuntu) par-dessus
-    # notre fond - sans DING, le fond GSM apparait. La tuer une fois la session
-    # ouverte suffit : l extension la relance en une seconde, proprement.
+    # ── 4. DING restarted after login ────────────────────────────────────────
+    # The "Desktop Icons NG" extension opens its full-screen window before GNOME
+    # Shell has painted the wallpaper and keeps the greeter image on top of
+    # ours. Killing it once the session is open is enough: the extension
+    # restarts it within a second, cleanly.
     cat > "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -998,14 +882,13 @@ EOF
     chmod 644 "$ROOTFS/etc/xdg/autostart/osmo-ding-refresh.desktop"
     echo -e "  ${GREEN}✓${NC} bureau : fond brut (gsm-lab-wallpaper.jpg), spectres (osmo-fft-snap), DING relance a l ouverture"
 
-    # ── 5. VLC DEPUIS UNE SESSION ROOT ───────────────────────────────────────
-    # [2026-09-04] La session de la cle s ouvre sous root, et VLC refuse de
-    # demarrer en root ("VLC is not supposed to be run as root") : l icone ne
-    # faisait rien. On ne touche pas au binaire : le wrapper /usr/local/bin/vlc
-    # (devant /usr/bin dans le PATH, vise par le .desktop local) relance VLC
-    # sous le compte osmocom quand on est root - acces X par xhost (local
-    # seulement), son par le demon PulseAudio systeme du banc (osmo-pulse,
-    # groupe pulse-access). Un utilisateur normal passe tout droit.
+    # ── 5. VLC FROM A ROOT SESSION ───────────────────────────────────────────
+    # The live session runs as root and VLC refuses to start as root ("VLC is
+    # not supposed to be run as root"). The binary is untouched: the wrapper
+    # /usr/local/bin/vlc (ahead of /usr/bin in PATH, targeted by the local
+    # .desktop) re-runs VLC under the osmocom account when root - X access via
+    # xhost (local only), sound via the bench's system PulseAudio daemon
+    # (osmo-pulse, pulse-access group). A normal user goes straight through.
     if [ -x "$ROOTFS/usr/bin/vlc" ]; then
         chroot "$ROOTFS" getent passwd osmocom >/dev/null 2>&1 \
             || chroot "$ROOTFS" useradd -m -s /bin/bash osmocom 2>/dev/null || true
@@ -1013,8 +896,8 @@ EOF
             && chroot "$ROOTFS" usermod -aG pulse-access,audio,video osmocom 2>/dev/null || true
         cat > "$ROOTFS/usr/local/bin/vlc" <<'VLCW'
 #!/bin/bash
-# vlc - wrapper osmo-operator : VLC refuse root, la session de la cle EST root.
-# Root : on relance sous osmocom (X local par xhost, son par osmo-pulse).
+# vlc - osmo-operator wrapper: VLC refuses root, the live session IS root.
+# Root: re-run under osmocom (local X via xhost, sound via osmo-pulse).
 VLC_USER="${OSMO_VLC_USER:-osmocom}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/var/run/pulse/native}"
 if [ "$(id -u)" -eq 0 ] && id "$VLC_USER" >/dev/null 2>&1; then
@@ -1027,8 +910,8 @@ fi
 exec /usr/bin/vlc "$@"
 VLCW
         chmod 755 "$ROOTFS/usr/local/bin/vlc"
-        # Le .desktop du paquet appelle /usr/bin/vlc en chemin absolu : copie
-        # locale (prioritaire, apt ne l ecrase pas) qui passe par le wrapper.
+        # The package's .desktop calls /usr/bin/vlc by absolute path: local copy
+        # (higher priority, not overwritten by apt) that goes through the wrapper.
         if [ -f "$ROOTFS/usr/share/applications/vlc.desktop" ]; then
             install -d "$ROOTFS/usr/local/share/applications"
             sed 's|^Exec=/usr/bin/vlc|Exec=/usr/local/bin/vlc|; s|^Exec=vlc |Exec=/usr/local/bin/vlc |' \
@@ -1041,7 +924,7 @@ VLCW
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would stop everything silently. Always 0 here.
 true

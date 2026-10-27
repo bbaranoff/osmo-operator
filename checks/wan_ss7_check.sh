@@ -1,29 +1,28 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# checks/wan_ss7_check.sh - etat du WAN, et etat du SS7 VIS-A-VIS du WAN
+# checks/wan_ss7_check.sh - WAN health, and the reach of SS7 across the WAN
 #
-# checks/ss7_check.sh verifie le SS7 D'UN noeud (inter-STP, ASP, routes). Ce
-# script-ci repond a la question qui vient juste apres : "et entre noeuds ?"
+# checks/ss7_check.sh verifies the SS7 of ONE node (inter-STP, ASPs, routes).
+# This script answers the next question: "and between nodes?"
 #
-# CE QU'IL FAUT SAVOIR AVANT DE LIRE LA SORTIE
-# --------------------------------------------
-# Le WAN d'osmo-operator ne transporte PAS de SS7. Entre deux noeuds il n'y a que :
-#     • SIP/RTP  (Asterisk ↔ Asterisk)  → la voix
-#     • TCP 789x (sms-interop-relay)    → les SMS
-# Le SS7/M3UA (osmo-stp, point codes 1.N.2, inter-STP 0.0.0) reste INTERNE a un
-# noeud : l'ASP de chaque operateur pointe sur 172.20.0.10, une adresse du plan
-# docker prive, injoignable depuis l'exterieur - et le catch-all "route 0.0.0
-# 0.0.0 → as-inter" envoie tout PC inconnu vers CET inter-STP local.
+# Without a common inter-STP hub the osmo-operator WAN carries NO SS7. Between
+# two nodes there is only:
+#     • SIP/RTP  (Asterisk <-> Asterisk)  -> voice
+#     • TCP 789x (sms-interop-relay)      -> SMS
+# SS7/M3UA (osmo-stp, point codes 1.N.2, inter-STP 0.0.0) stays INSIDE a node:
+# each operator's ASP points at 172.20.0.10 (private docker range) and the
+# catch-all "route 0.0.0 0.0.0 -> as-inter" sends unknown PCs to that local
+# inter-STP. An inter-node call is a SIP termination, not a MAP/ISUP relay.
+# With a hub (OSMO_HUB_IP) SS7 does cross the WAN and the point codes must be
+# unique per node (1.<node><op>.<role>).
 #
-# Ce n'est donc pas une panne a reparer, c'est la frontiere du montage : un
-# appel inter-noeud est une TERMINAISON SIP, pas un relais MAP/ISUP. Ce script
-# le VERIFIE au lieu de le supposer - et signale les deux cas ou l'on croit a
-# tort avoir du SS7 inter-noeud :
-#   1. deux noeuds qui reutilisent les MEMES point codes (ils le font tous :
-#      1.1.2, 1.2.2... sont recalcules a l'identique sur chaque machine) ;
-#   2. un port M3UA (2905/2908) expose sur l'interface publique.
+# The script verifies which situation applies and flags the two cases where
+# inter-node SS7 is wrongly assumed: identical point codes on several nodes,
+# and an M3UA port (2905/2908) exposed on the public interface.
 #
-# Usage : sudo checks/wan_ss7_check.sh [--verbose] [--conf /etc/osmo-wan.conf]
+# Usage: sudo checks/wan_ss7_check.sh [--verbose] [--conf /etc/osmo-wan.conf]
+#   --verbose, -v   print details of each check
+#   --conf FILE     WAN node table (default /etc/osmo-wan.conf)
 # ══════════════════════════════════════════════════════════════════════════════
 set -u
 
@@ -58,7 +57,7 @@ echo "║   WAN - diagnostic voix / SMS / SS7 entre noeuds osmo-operator      �
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ── 0. Table des noeuds ───────────────────────────────────────────────────────
+# ── 0. Node table ─────────────────────────────────────────────────────────────
 banner "0. Table des noeuds WAN"
 if [ ! -r "$SCRIPT_DIR/network/wan-nodes.sh" ]; then
     fail "network/wan-nodes.sh introuvable - depot incomplet"; exit 1
@@ -84,7 +83,7 @@ if [ "${#REMOTES[@]}" -eq 0 ]; then
     exit 0
 fi
 
-# ── Mode ──────────────────────────────────────────────────────────────────────
+# ── Mode (docker / native) ──────────────────────────────────────────────────────────────────────
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^osmo-operator-1$'; then
     MODE=docker
     N_OPS=$(docker ps --format '{{.Names}}' | grep -c '^osmo-operator-[0-9]*$')
@@ -93,39 +92,33 @@ else
 fi
 info "mode=${MODE} operateurs locaux=${N_OPS}"
 
-# ── Ce que porte un pair, et ou il ecoute ────────────────────────────────────
-# Ces deux fonctions repliquent ce que network/setup-wan-mesh.sh a REELLEMENT
-# ecrit dans les configs. Sans elles, ce controle bouclait sur le nombre
-# d'operateurs LOCAUX et cherchait chez chaque pair autant de trunks que nous en
-# avons : des qu'un pair en portait moins - le montage un noeud par conteneur,
-# soit le banc courant - il sortait "trunk wan_n2_op2 ABSENT, relancez
-# setup-wan-mesh.sh" et rendait 1. Un echec faux, avec un conseil qui n'y
-# changeait rien : le trunk manquant n'a jamais eu lieu d'exister.
-peer_nops() {   # $1 = id de noeud
+# ── What a peer carries, and where it listens ───────────────────────────────
+# These two helpers mirror what network/setup-wan-mesh.sh actually writes into
+# the configs: the number of trunks expected per peer is the peer's operator
+# count, not the local one.
+peer_nops() {   # $1 = node id
     local n="${WAN_NOPS[$1]:-}"
     if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then echo "$n"; return; fi
-    # Table sans le 4e champ (une table ecrite a la main, ou anterieure) : un
-    # pair du backbone est un conteneur, donc un operateur ; ailleurs, on
-    # suppose le pair monte comme nous. C'est la meme regle que node_nops dans
-    # network/setup-wan-mesh.sh - il faut lire ce que le maillage a ecrit, pas
-    # ce qu'on aurait souhaite qu'il ecrive.
+    # Table without the 4th field (hand-written table): a docker backbone peer
+    # is one container, hence one operator; elsewhere assume the peer is set
+    # up like us. Same rule as node_nops in network/setup-wan-mesh.sh.
     if peer_is_backbone "${WAN_IP[$1]:-}"; then echo 1; else echo "${N_OPS:-1}"; fi
 }
-# Un pair du backbone docker est joint a son adresse propre : le conteneur y
-# ecoute sur 5060 et sur le port de base du relais SMS. Les 5080/5082 et 7891
-# sont les ports PUBLIES sur l'hote, ils ne veulent rien dire de ce cote.
+# A docker backbone peer is reached on its own address: the container listens
+# on 5060 and on the base SMS relay port. 5080/5082 and 7891 are the ports
+# PUBLISHED on the host and are meaningless on that side.
 peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
 
-ast() { # $1=op  $2=commande
+ast() { # $1=op  $2=asterisk CLI command
     if [ "$MODE" = docker ]; then docker exec "osmo-operator-$1" asterisk -rx "$2" 2>/dev/null
     else asterisk -rx "$2" 2>/dev/null; fi
 }
-inside() { # $1=op  $2=commande shell
+inside() { # $1=op  $2=shell command
     if [ "$MODE" = docker ]; then docker exec "osmo-operator-$1" bash -c "$2" 2>/dev/null
     else bash -c "$2" 2>/dev/null; fi
 }
 
-# ── 1. Joignabilite des pairs ─────────────────────────────────────────────────
+# ── 1. Peer reachability ─────────────────────────────────────────────────────
 banner "1. Pairs - joignabilite IP et ports WAN"
 for r in "${REMOTES[@]}"; do
     rip="${WAN_IP[$r]}"
@@ -143,7 +136,7 @@ for r in "${REMOTES[@]}"; do
     done
 done
 
-# ── 2. Asterisk - trunks WAN ──────────────────────────────────────────────────
+# ── 2. Asterisk - WAN trunks ──────────────────────────────────────────────────
 banner "2. Asterisk - trunks WAN (voix)"
 for i in $(seq 1 "$N_OPS"); do
     out="$(ast "$i" 'pjsip show endpoints')"
@@ -164,7 +157,7 @@ for i in $(seq 1 "$N_OPS"); do
     done
 done
 
-# ── 3. Dialplan - indicatifs ──────────────────────────────────────────────────
+# ── 3. Dialplan - prefixes ────────────────────────────────────────────────────
 banner "3. Dialplan - un indicatif route par pair"
 for i in $(seq 1 "$N_OPS"); do
     for r in "${REMOTES[@]}"; do
@@ -180,7 +173,7 @@ for i in $(seq 1 "$N_OPS"); do
         || warn "op${i} : indicatif local ${LOCAL_IND} non traite - un appel 'plein numero' echouera"
 done
 
-# ── 4. SMS - routes et strip ──────────────────────────────────────────────────
+# ── 4. SMS - routes and strip ─────────────────────────────────────────────────
 banner "4. SMS - routes WAN et retrait d'indicatif"
 for i in $(seq 1 "$N_OPS"); do
     conf="$(inside "$i" 'cat /etc/osmocom/sms-routing.conf')"
@@ -196,8 +189,8 @@ for i in $(seq 1 "$N_OPS"); do
             fail "op${i} : route SMS ${ind} SANS strip= - le noeud distant cherchera "${ind}10001" dans son HLR et repondra "not found""
         fi
     done
-    # Le relais doit savoir lire strip= : une conf correcte sur un relais qui
-    # l'ignore est exactement aussi cassee qu'une conf sans strip.
+    # The relay must understand strip=: a correct config on a relay that
+    # ignores it is just as broken as a config without strip.
     if inside "$i" 'grep -q lookup_strip /opt/GSM/osmo-operator/scripts/sms-interop-relay.py 2>/dev/null || grep -q lookup_strip /etc/osmocom/sms-interop-relay.py 2>/dev/null || grep -rq lookup_strip /usr/local/bin 2>/dev/null'; then
         ok "op${i} : le relais SMS gere strip="
     else
@@ -205,20 +198,18 @@ for i in $(seq 1 "$N_OPS"); do
     fi
 done
 
-# ── 5. SS7 - ce qui traverse, ce qui ne traverse pas ──────────────────────────
+# ── 5. SS7 - what crosses the WAN, what does not ───────────────────────────────
 banner "5. SS7 - portee reelle vis-a-vis du WAN"
 echo -e "  ${CYAN}Attendu : le SS7 s'arrete au bord du noeud. On verifie que c'est bien${NC}"
 echo -e "  ${CYAN}le cas, et qu'on ne croit pas avoir un lien SS7 inter-noeud.${NC}"
 echo ""
 
-# Le hub change la donne : s'il y en a un, le SS7 TRAVERSE, et ce sont les
-# point codes qu'il faut verifier - pas leur absence.
+# A hub changes the picture: with one, SS7 DOES cross the WAN and the point
+# codes must be verified rather than their absence.
 HUB_IP=""
 [ -r /etc/osmo-role ] && HUB_IP="$(awk -F= '/^OSMO_HUB_IP=/{print $2}' /etc/osmo-role)"
-# En docker, /etc/osmo-role n'existe pas sur l'hote : l'adresse du hub est
-# injectee dans les conteneurs par start-docker.sh (-e OSMO_HUB_IP, cf. --hub-ip).
-# Sans ce repli, un hub WAN parfaitement declare passait pour "un lien non
-# maitrise" faute d'etre reconnu comme LE hub.
+# In docker /etc/osmo-role does not exist on the host: the hub address is
+# injected into the containers by start-docker.sh (-e OSMO_HUB_IP, --hub-ip).
 if [ -z "$HUB_IP" ]; then
     for _i in $(seq 1 "$N_OPS"); do
         HUB_IP="$(inside "$_i" 'printenv OSMO_HUB_IP' | tr -d '\r' | tail -1)"
@@ -226,7 +217,7 @@ if [ -z "$HUB_IP" ]; then
     done
 fi
 
-# 5a - ou pointe l'ASP local ?
+# 5a - where does the local ASP point?
 for i in $(seq 1 "$N_OPS"); do
     cfg="$(inside "$i" 'cat /etc/osmocom/osmo-stp.cfg')"
     if [ -z "$cfg" ]; then skip "op${i} : osmo-stp.cfg illisible"; continue; fi
@@ -239,10 +230,9 @@ for i in $(seq 1 "$N_OPS"); do
         else
             fail "op${i} : ASP → hub ${remote} mais ${BOLD}shutdown${NC} - aucun SS7 ne passera"
         fi
-        # Un hub joignable ou non, ca ne se devine pas depuis la config. Mais
-        # le lien est du M3UA sur SCTP : "nc -z" (TCP) rend "Connection
-        # refused" sur un hub parfaitement vivant. La preuve, c'est
-        # l'association SCTP ETABLIE, vue depuis le noeud lui-meme.
+        # The link is M3UA over SCTP: "nc -z" (TCP) reports "Connection
+        # refused" on a perfectly live hub. The proof is an ESTABLISHED SCTP
+        # association seen from the node itself.
         assoc="$(inside "$i" "ss -an --sctp" | grep -E "ESTAB.*[[:space:]]${remote//./\\.}:2908([[:space:]]|\$)" || true)"
         if [ -n "$assoc" ]; then
             ok "op${i} : association SCTP etablie vers le hub ${remote}:2908"
@@ -263,10 +253,10 @@ for i in $(seq 1 "$N_OPS"); do
     fi
 done
 
-# 5b - le point code porte-t-il le numero de noeud ?
-# Le plan local (1.<op>.<role>) se recalcule a l'identique partout : trois
-# noeuds attaches au meme hub y presenteraient trois fois 1.1.2. Le plan WAN
-# (1.<noeud><op>.<role>) leve l'ambiguite. On verifie lequel est en place.
+# 5b - does the point code carry the node number?
+# The local plan (1.<op>.<role>) is computed identically everywhere: three
+# nodes attached to the same hub would all present 1.1.2. The WAN plan
+# (1.<node><op>.<role>) removes the ambiguity. Check which one is in place.
 if [ "${#REMOTES[@]}" -ge 1 ]; then
     pc_local="$(inside 1 'cat /etc/osmocom/osmo-stp.cfg' | awk '/^ point-code/{print $2; exit}')"
     expected="1.${WAN_NODE_ID}1.2"
@@ -282,13 +272,12 @@ if [ "${#REMOTES[@]}" -ge 1 ]; then
     fi
 fi
 
-# 5c - un port M3UA expose publiquement ?
+# 5c - is an M3UA port publicly exposed?
 LOCAL_IP="$(wan_local_ip)"
 for port in 2905 2908; do
     if command -v ss >/dev/null 2>&1; then
-        # M3UA tourne sur SCTP dans ce depot (osmo-stp.cfg : "listen m3ua ..."),
-        # pas sur TCP : "ss -lntp" seul ne verrait RIEN et conclurait a tort
-        # "aucun ecouteur". On regarde les deux transports.
+        # M3UA runs over SCTP here (osmo-stp.cfg: "listen m3ua ..."), not
+        # TCP: "ss -lntp" alone would see nothing. Check both transports.
         listen="$( { ss -lntp 2>/dev/null; ss -ln --sctp 2>/dev/null; } | grep ":${port} ")"
         if [ -z "$listen" ]; then
             ok "M3UA ${port} : aucun ecouteur sur l'hote"
@@ -301,7 +290,7 @@ for port in 2905 2908; do
     else skip "ss absent : ecouteurs M3UA non verifies"; fi
 done
 
-# 5d - SS7 interne toujours sain ? (delegue au check existant)
+# 5d - internal SS7 still healthy? (delegated to the existing check)
 if [ -x "$SCRIPT_DIR/checks/ss7_check.sh" ] && [ "$MODE" = docker ]; then
     echo ""
     echo -e "  ${CYAN}SS7 interne : checks/ss7_check.sh --quick${NC}"
@@ -325,7 +314,7 @@ else
     fi
 fi
 
-# ── Bilan ─────────────────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 printf '─%.0s' $(seq 1 64); echo ""
 echo -e "  ${GREEN}${PASS} ok${NC}   ${RED}${FAIL} echec${NC}   ${YELLOW}${WARN} avertissement${NC}   ${SKIP} ignore"

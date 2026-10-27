@@ -1,14 +1,14 @@
 #!/bin/bash
-# iso_modules/31-image-source.sh - image source de l ISO, controle de suite, image run
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/31-image-source.sh - ISO source image, suite check, run image
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# ── L image source ──────────────────────────────────────────────────────────
-# osmocom-nitb pour tout le monde (un seul build), sauf le hub demande SEUL :
-# osmocom-stp, construite a l etape 1. Dans une passe --all, le hub prend aussi
-# osmocom-nitb (qui porte osmo-stp) : une image osmocom-stp restee d une autre
-# base sur la machine ne doit pas s inviter. OSMO_ISO_SRC_IMAGE force une image.
+# ── The source image ─────────────────────────────────────────────────────────
+# osmocom-nitb for everyone (a single build), except the hub requested ALONE:
+# osmocom-stp, built at step 1. In an --all pass the hub also takes
+# osmocom-nitb (which carries osmo-stp): an osmocom-stp image left over from
+# another base must not sneak in. OSMO_ISO_SRC_IMAGE forces an image.
 if [ -n "${OSMO_ISO_SRC_IMAGE:-}" ]; then
     ISO_SRC_IMAGE="$OSMO_ISO_SRC_IMAGE"
 elif [ "$ISO_ROLE" = "interstp" ] && [ "${OSMO_ISO_ALL_RUN:-0}" != "1" ] \
@@ -25,11 +25,12 @@ esac
 docker image inspect "$ISO_SRC_IMAGE" >/dev/null 2>&1 \
     || { echo -e "${RED}Image source ${ISO_SRC_IMAGE} introuvable${NC}" >&2; exit 1; }
 
-# ── L image et le rootfs doivent etre de la MEME suite Ubuntu ───────────────
-# /usr/local, /root/.env et /root/.venv-qemu sont copies tels quels : un venv
-# noble (python 3.12) sur un rootfs jammy (python 3.10) n a pas d interpreteur,
-# et les .so de l image cherchent une glibc que le rootfs n a pas. On lit
-# l os-release de l image et on refuse le melange - --version=<suite> aligne.
+# ── The image and the rootfs must be the SAME Ubuntu suite ───────────────────
+# /usr/local, /root/.env and /root/.venv-qemu are copied as-is: a noble venv
+# (python 3.12) on a jammy rootfs (python 3.10) has no interpreter, and the
+# image's .so files need a glibc the rootfs does not have. The image's
+# os-release is read and a mismatch is refused; --version=<suite> aligns them.
+# OSMO_ISO_SUITE_MISMATCH_OK=1 continues anyway.
 _img_suite="$(docker run --rm --entrypoint sh "$ISO_SRC_IMAGE" -c '. /etc/os-release; echo "$VERSION_CODENAME"' 2>/dev/null | tr -d '[:space:]' || true)"
 if [ -n "$_img_suite" ] && [ "$_img_suite" != "$ISO_SUITE" ]; then
     if [ "${OSMO_ISO_SUITE_MISMATCH_OK:-0}" = "1" ]; then
@@ -43,26 +44,17 @@ fi
 echo -e "  ${GREEN}✓${NC} image source ${CYAN}${ISO_SRC_IMAGE}${NC} (${_img_suite:-suite inconnue}) -> rootfs ${CYAN}${ISO_SUITE}${NC}"
 TMP_CID="$(docker create "$ISO_SRC_IMAGE" /bin/sh)"
 
-# Le hub ne porte AUCUN operateur : lui pousser le jeu complet, c'est embarquer
-# un osmo-stp.cfg de point-code 1.1.2 avec local-ip 172.20.0.11 a cote du
-# osmo-stp-interop.cfg qui, lui, fait autorite. Deux configurations STP dans le
-# meme /etc/osmocom, l'une morte mais plausible : on relance la mauvaise, le hub
-# se presente au WAN avec le point-code d'un operateur, et le routage M3UA part
-# sur une adresse du plan docker que la VM n'a jamais eue.
-# On ne copie donc que la config du hub - et pas par lien symbolique : le pgrep
-# de start-interstp.sh discrimine sur le NOM du fichier de conf passe a osmo-stp.
-# On retire donc la config STP d'operateur - et elle seule. Ne pousser que
-# osmo-stp-interop.cfg privait aussi le hub de run.sh, status.sh, check.sh et
-# entrypoint.sh, que /etc/osmocom est le seul a fournir (l'image osmocom-stp
-# part d'ubuntu:22.04 nu) : le chmod de l'etape 5 s'arretait alors sur un
-# fichier absent et la construction du hub - donc ./build-iso.sh sans
-# argument, qui commence par lui - echouait apres une heure de travail.
+# The hub carries NO operator: only the hub config is pushed, and the
+# operator's osmo-stp.cfg (point code 1.1.2, docker local-ip) is removed so
+# that two STP configurations never coexist in /etc/osmocom (start-interstp.sh
+# discriminates by the NAME of the config file passed to osmo-stp). The rest of
+# /etc/osmocom (run.sh, status.sh, check.sh, entrypoint.sh) is still needed:
+# the osmocom-stp image starts from a bare ubuntu:22.04.
 if [ "$ISO_ROLE" = "interstp" ]; then
     rm -f "$TEMP_CONFIG/osmocom/osmo-stp.cfg"
 fi
 docker cp "$TEMP_CONFIG/osmocom/."  "$TMP_CID:/etc/osmocom/"  2>/dev/null || true
-# Le hub n'a pas d'Asterisk : lui pousser des configs SIP n'aurait pas de sens,
-# et l'image n'a meme pas /etc/asterisk.
+# The hub has no Asterisk: no SIP configs for it (the image has no /etc/asterisk).
 [ "$ISO_ROLE" = "interstp" ] || \
     docker cp "$TEMP_CONFIG/asterisk/." "$TMP_CID:/etc/asterisk/" 2>/dev/null || true
 
@@ -72,13 +64,12 @@ rm -rf "$TEMP_CONFIG"
 
 echo -e "  ${GREEN}✓${NC} image ${CYAN}${ISO_RUN_IMAGE}${NC} prete"
 
-# ── Etape 3 : (SUPPRIME) - ISO NATIF : on n'embarque PAS l'image Docker ────
-# L'image osmocom-run ne sert plus que de SOURCE de build (docker cp des binaires
-# et configs vers le rootfs a l'etape 6). On ne la save plus dans l'ISO : pas de
-# docker au runtime, pas de tar.gz de plusieurs Go embarque.
+# ── Step 3: none - NATIVE ISO, the Docker image is NOT embedded ──────────────
+# The osmocom-run image is only a build SOURCE (docker cp of binaries and
+# configs into the rootfs at step 5). No docker at runtime, no multi-GB tarball.
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

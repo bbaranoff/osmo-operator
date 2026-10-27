@@ -1,119 +1,151 @@
-# FreeCalypso Magnetite dans qosmo (le vrai firmware TI, cible Motorola C139)
+# FreeCalypso Magnetite in qosmo (the original TI firmware, Motorola C139)
 
-[2026-10-21] Le firmware ARM d'origine (TI TCS211, recompile par le projet FreeCalypso
-Magnetite de Mychaela Falconia) tourne dans l'emulateur Calypso du depot (qosmo) a la place
-de la layer1 osmocom-bb : Nucleus, la pile GSM L23 de TI, l'interface BMI, les traces RVTMUX.
-Le telephone emule devient un **C139** (ecran couleur 96x64 sur uWire, meme clavier Compal
-que le C123), parce que c'est la seule cible Mot C1xx pour laquelle Magnetite a une
-configuration avec interface (`c139 hybrid-ui-vo`) ; le C11x/C123 n'a qu'un pseudo-modem AT.
+The original ARM firmware (TI TCS211, rebuilt by Mychaela Falconia's FreeCalypso
+Magnetite project) runs in the repository's Calypso emulator (qosmo) in place of
+the osmocom-bb `layer1`: Nucleus, the TI GSM L2/L3 stack, the BMI user interface
+and the RVTMUX traces. The emulated phone is a **C139** (96x64 colour screen on
+uWire, same Compal keypad as the C123), because it is the only Mot C1xx target
+for which Magnetite has a configuration with a user interface (`c139
+hybrid-ui-vo`); the C11x/C123 target only has an AT pseudo-modem.
 
-## 1. Sources et chaine de compilation
+← [README](../README.md) · Related: [README-dsp](README-dsp.md), [README-architecture](README-architecture.md)
 
-Magnetite ne se compile **pas** avec gcc (ni /root/gnuarm) : tout l'arbre (sources, `.s` en
-syntaxe TI, blobs `.lib` COFF, Nucleus) exige le compilateur TI TMS470 1.22e, un binaire
-Windows qu'on fait tourner sous Wine.
+## Install
 
+```bash
+sudo ./addition.sh --magnetite
 ```
-/root/.env/bin/hg clone https://hg.themyscira.org/fc-magnetite /opt/GSM/fc-magnetite
-/root/.env/bin/hg clone https://hg.themyscira.org/freecalypso-tools /opt/GSM/fc-host-tools   # rvinterf, fc-shell, fc-fsio
-dpkg --add-architecture i386 && apt-get update && apt-get install -y wine64 wine32:i386
-# environnement TI (compilateur, cygwin, perl, java) : ftp.freecalypso.org/pub/GSM/TI_src/wine/installed-env.tar.xz
+
+This installs Wine and the TI TMS470 environment, clones FreeCalypso Magnetite
+and the FreeCalypso host tools, applies the bench patch, builds the firmware and
+assembles the flash image (logic in `tools/osmo-firmwares-install.sh`).
+`./addition.sh --status` shows whether the image is present.
+
+## Sources and toolchain
+
+Magnetite does **not** build with gcc (nor with `/root/gnuarm`): the whole tree
+(sources, `.s` files in TI syntax, COFF `.lib` blobs, Nucleus) requires the TI
+TMS470 1.22e compiler, a Windows binary run under Wine.
+
+| path | content |
+|---|---|
+| `/opt/GSM/fc-magnetite` | Magnetite source tree (`freecalypso-env/` included) |
+| `/opt/GSM/fc-host-tools` | FreeCalypso host tools: `rvinterf`, `fc-shell`, `fc-fsio` |
+| `/opt/GSM/fc-wine-dl` | the TI Wine environment archive (`installed-env.tar.xz`), `nowhine.c` |
+| `/opt/GSM/fc-dl` | the Compal boot loader `compal-flash-boot-for-fc.bin` |
+| `/opt/GSM/firmware/magnetite/c139-flash.img` | the 4 MiB flash image used by the bench |
+
+Manual build, equivalent to what the installer does:
+
+```bash
+dpkg --add-architecture i386 && apt-get update && apt-get install -y wine wine64 wine32:i386
+# TI environment (compiler, cygwin, perl, java): freecalypso-env/installed-env.tar.xz
 mkdir -p ~/.wine/drive_c && tar xJf installed-env.tar.xz -C ~/.wine/drive_c && wineboot -u
-gcc -O2 -o /usr/local/bin/nowhine nowhine.c      # wrapper qui tait les plaintes de wine (meme repertoire FTP)
-cd /opt/GSM/fc-magnetite && (cd helpers && make) && ./configure.sh c139 hybrid-ui-vo
-cd build-c139-hybrid-ui-vo && make -j4           # ~1 min, 4 cl470 sous Wine en parallele
+gcc -O2 -o /usr/local/bin/nowhine nowhine.c      # wrapper that silences Wine's warnings
+cd /opt/GSM/fc-magnetite && patch -p1 < /opt/GSM/osmo-operator/patches/fc-magnetite-banc.patch
+(cd helpers && make) && ./configure.sh c139 hybrid-ui-vo
+cd build-c139-hybrid-ui-vo && make               # no -j: parallel cl470 runs clobber each other's temp files
 ```
 
-Resultat : `fwimage.bin` (2 Mo, a flasher a 0x10000) et `flash-script`. Les copies sont dans
-`/opt/GSM/fc-wine-dl` (env Wine) et `/opt/GSM/fc-dl` (bootloader).
+The installer builds the bench variant with `DWNLD 0` in `config/swconfig.cfg`
+(directory `build-c139-hybrid-ui-vo-nopatch`); `FC_MAGNETITE_DWNLD=1` builds the
+original configuration, and `OSMO_FW_REFAIRE=1` forces a rebuild. The output is
+`fwimage.bin` (2 MB, flashed at 0x10000) and `flash-script`.
 
-## 2. L'image flash
+Bench patches (in [`patches/`](../patches/)):
 
-Sur un C1xx le boot ROM est hors circuit : le CPU demarre a 0 dans la flash, ou le bootloader
-Compal (version FreeCalypso `compal-flash-boot-for-fc.bin`, 8 Ko) saute a 0x10058. L'image de
-4 MiB pour qosmo est assemblee ainsi (`/opt/GSM/firmware/magnetite/c139-flash.img`) :
+| patch | applies to | purpose |
+|---|---|---|
+| `fc-magnetite-banc.patch` | fc-magnetite | all bench changes in one file (forced ARFCN, automatic registration, SMS, MMI) |
+| `fc-magnetite-alr-arfcn-forced.patch` | fc-magnetite | forced default ARFCN in ALR cell selection (`ARFCN_FORCED`) |
+| `magnetite-sms-msginfo-doublefree.patch` | fc-magnetite | SMS message-info double free in the BMI |
+| `magnetite-parole-ul-au-go.patch` | c54x_exe | uplink speech capture for the TI firmware on the DSP bench |
+
+## The flash image
+
+On a C1xx the boot ROM is out of circuit: the CPU starts at 0 in flash, where
+the Compal boot loader (FreeCalypso build `compal-flash-boot-for-fc.bin`, 8 KB)
+jumps to 0x10058. The 4 MiB image is laid out as:
 
 ```
 img = 0xFF * 4 MiB ; img[0:8192] = compal-flash-boot-for-fc.bin ; img[0x10000:] = fwimage.bin
 ```
 
-Le FFS (systeme de fichiers du firmware) vit dans cette flash a 0x3C0000 (3 secteurs de 64 Ko).
+The firmware's flash file system (FFS: IMEI, afcparams, rfcap, configuration)
+lives at 0x3C0000 (3 sectors of 64 KB). When the installer updates an existing
+image it only rewrites the firmware area, keeps the boot loader and FFS, and
+saves the previous image as `c139-flash.img.avant-supplement`.
 
-## 3. Ce qu'il a fallu changer dans qosmo
+## Emulation support in qosmo
 
-| fichier | changement |
+| file | what it provides for Magnetite |
 |---|---|
-| `hw/arm/calypso/calypso_uwire.c` (nouveau) | controleur uWire 0xFFFE4000 + ecran C139 (mots de 9 bits sur CS0, fenetre 0x10-0x15, RGB565) ; publie `/dev/shm/calypso_lcd` avec le magic `C139LCD` ; propriete `c139-lcd`, posee par `CALYPSO_LCD=c139` |
-| `calypso_mb.c` | sans `-kernel` et avec `-drive if=pflash` : pas de vecteurs factices, demarrage a 0 ; flash identifiee Intel 0x88C4 (28F320C3B, celle des C139, reconnue par `ffs/board/dev.c`) |
-| `calypso_soc.c` | `flash_boot` : l'ecriture de CNTL_ARM_CLK ne remappe plus l'IRAM a 0 (Magnetite y ecrit 0x40 : l'IRAM pleine de zeros recouvrait la flash) |
-| `hw/ssi/calypso_spi.c` | la vraie trame TWL3025 (bit 0 lecture, registre en 5..1, donnee en 15..6, reponse dans RX_LSB), STATUS = RE_ST et WE_ST, CTRL bit 0 ou 1 declenche, VRPCSTS = ONBSTS (bouton ON relache : TI attend sa liberation en boucle) |
-| `calypso_trx.c` | le TDMA (IRQ trame = tick Nucleus) demarre au premier `TP_Enable` : TI n'ecrit jamais TPU_INT_CTRL |
-| `target/arm/tcg/hflags.c` | plus de fault d'alignement en ARMv4 (le driver flash TI ecrit un demi-mot a l'adresse impaire 0x5555, comme sur ARM7TDMI) |
+| `hw/arm/calypso/calypso_uwire.c` | uWire controller at 0xFFFE4000 + C139 screen (9-bit words on CS0, window 0x10-0x15, RGB565); publishes `/dev/shm/calypso_lcd` with the magic `C139LCD`; property `c139-lcd`, set by `CALYPSO_LCD=c139` |
+| `hw/arm/calypso/calypso_mb.c` | without `-kernel` and with `-drive if=pflash`: no fake vectors, boot at 0; 16-bit flash identified as Intel 0x0089 / 0x88C4 (28F320C3B, the C139 part recognised by `ffs/board/dev.c`) |
+| `hw/arm/calypso/calypso_soc.c` | flash boot: writing CNTL_ARM_CLK does not remap IRAM at 0 |
+| `hw/ssi/calypso_spi.c` | real TWL3025 framing (bit 0 read, register in bits 5..1, data in 15..6, answer in RX_LSB), STATUS = RE_ST and WE_ST, VRPCSTS = ONBSTS (ON button released), VRPCSIM returns RSIMRSU |
+| `hw/arm/calypso/calypso_trx.c` | the TDMA frame IRQ (Nucleus tick) starts on the first `TP_Enable`, since TI never writes TPU_INT_CTRL |
+| `hw/arm/calypso/calypso_sim.c` | ATR in manual mode, TX interrupt one character time after each byte (`CALYPSO_SIM_US_OCTET`, default 1040 µs), T=0 procedure byte, GSM 11.11 SELECT answers; a silence of more than 500 ms inside an APDU resynchronises it |
+| `hw/char/calypso_uart.c` | RX wake-up interrupt (SCR[4] / SSR[1]) of the TI driver; no romload stub in flash boot; `CALYPSO_UART_DEBUG=1` traces IER/SCR/RX |
+| `target/arm/tcg/translate.c`, `target/arm/tcg/hflags.c` | ARMv4T behaviour: BX to ARM state ignores bit 1; no alignment fault (the TI flash driver writes a halfword at odd address 0x5555) |
 
-Le CPU doit etre **ti925t** (ARMv4T). Avec arm946 (ARMv5) le `pop {pc}` des trampolines Thumb
-de TI interworke vers ARM et plante au premier appel.
+The CPU must be **ti925t** (ARMv4T). With arm946 (ARMv5) the `pop {pc}` of TI's
+Thumb trampolines interworks to ARM state and crashes on the first call.
 
-## 4. Lancer
+## Running
 
-Seul, avec la couche 1 gr-gsm de qosmo (pas de DSP) :
+Standalone, with the qosmo gr-gsm layer 1 (no DSP):
 
+```bash
+scripts/magnetite-c139.sh start        # QEMU + rvinterf; RUNDIR /dev/shm/magnetite; persistent working flash
+scripts/magnetite-c139.sh gtk          # the window: C139 photo, colour screen, clickable keys
+scripts/magnetite-c139.sh traces       # rvinterf.log (decoded L1, GPF, Riviera traces)
+scripts/magnetite-c139.sh fsio ls /    # fc-fsio on the rvinterf socket (also: shell → fc-shell)
+scripts/magnetite-c139.sh status | log
+scripts/magnetite-c139.sh stop
 ```
-scripts/magnetite-c139.sh start        # QEMU + rvinterf ; RUNDIR /dev/shm/magnetite ; flash de travail persistante
-scripts/magnetite-c139.sh gtk          # la fenetre : photo du C139, ecran couleur, touches cliquables
-scripts/magnetite-c139.sh traces       # rvinterf.log (traces L1, GPF, Riviera decodees)
-scripts/magnetite-c139.sh fsio ls /    # fc-fsio sur le socket de rvinterf (voir points ouverts)
-scripts/magnetite-c139.sh stop         # FLASH_RESET=1 au start suivant pour repartir d'un FFS vierge
-```
 
-Sur le banc DSP (c54x_exe, la ROM du DSP emulee) : `c54x_exe/run.sh` avec
-`FIRMWARE_FLASH=/opt/GSM/firmware/magnetite/c139-flash.img` (CPU ti925t, `CALYPSO_LCD=c139`,
-rvinterf a l'etape 3 a la place d'osmocon, pas de mobile a l'etape 4 ; air ou pont inchanges).
-`start-native.sh --ms-magnetite` le pose : comme `--ms`, mais le mobile est Magnetite
-(`--bts --ms-magnetite` : la BTS en instance 1, le C139 Magnetite en instance 2 par l'air).
+| variable | effect |
+|---|---|
+| `QEMU` | QEMU binary (default `/opt/GSM/qosmo/build/qemu-system-arm`) |
+| `FLASH` | source flash image (default `/opt/GSM/firmware/magnetite/c139-flash.img`) |
+| `RUNDIR` | run directory (default `/dev/shm/magnetite`) |
+| `FLASH_RESET=1` | restart from the pristine image (empty FFS); a newer source image also replaces the working copy |
+| `RVINTERF=0` | do not start rvinterf (otherwise traces go to `$RUNDIR/rvinterf.log`, socket `$RUNDIR/rvinterf.sock`) |
+| `QEMU_CPU` | default `ti925t` |
+| `QEMU_DEBUG=1`, `QEMU_DEBUG_FLAGS` | `-d` flags (default `guest_errors,unimp`) into `qemu-debug.log` |
+| `QEMU_GDB=1`, `QEMU_GDB_PORT`, `QEMU_GDB_WAIT=1` | gdb stub on `tcp::1240` (gdb-multiarch, addresses from `fwimage.map`); `-S` to freeze at start |
+| `QEMU_TRACE` | QEMU trace pattern, e.g. `'pflash_*'` |
+| `CALYPSO_LCD_DEBUG=1` | LCD commands on stderr |
 
-La fenetre : `tools/osmo-c123-gtk.py --modele c139 [--instance N]` (auto : le magic de l'ecran
-partage). Photo `data/c139.jpg` (Raimond Spekking, Wikimedia Commons, CC BY-SA 4.0, credit
-dans `data/c139.txt`), zones `data/c139-zones.json` (`--calibrate` pour les reprendre).
+On the DSP bench (c54x_exe, emulated DSP ROM): `c54x_exe/run.sh` with
+`FIRMWARE_FLASH=/opt/GSM/firmware/magnetite/c139-flash.img` (CPU ti925t,
+`CALYPSO_LCD=c139`, rvinterf at step 3 instead of osmocon, no `mobile` at
+step 4; air link or bridge unchanged). `start-native.sh --ms-magnetite` sets
+this up: like `--ms`, but the phone is Magnetite. With `--bts --ms-magnetite`
+the BTS is instance 1 and the Magnetite C139 is instance 2 over the air; the
+flash image is only given to the phone, the BTS TRX keeps the `trx` firmware.
+With `--gapk`, voice is coded by the bridge (there is no L2/L3 mobile for GAPK).
 
-## 5. Etat au 21/10/2026 (fin de journee)
+The window: `tools/osmo-c123-gtk.py --modele c139 [--instance N]`; the model is
+otherwise picked automatically from the shared screen's magic, and the window
+switches to C139 by itself when it changes. Photo `data/c139.jpg` (Raimond
+Spekking, Wikimedia Commons, CC BY-SA 4.0, credit in `data/c139.txt`), key zones
+`data/c139-zones.json` (`--calibrate` to redo them).
 
-Corrections d'emulation ajoutees dans l'apres-midi (toutes dans qosmo, non commitees) :
+## Debugging
 
-- `target/arm/tcg/translate.c` gen_bx : en ARMv4T un BX vers l'etat ARM ignore le bit 1
-  (TI int.s fait « bx pc » en Thumb a une adresse 2 mod 4 : cible (pc+4) & ~3). Sans ca,
-  prefetch abort dans INT_DisableIRQ depuis le gestionnaire de veille, et le HISR timer de
-  Nucleus ne tournait plus jamais (sleeps longs, UART RX, SIM tous geles). C'etait LA cause.
-- `hw/char/calypso_uart.c` : IT de reveil RX (SCR[4] / SSR[1]) du driver TI, plus de stub
-  romload en boot flash ; `CALYPSO_UART_DEBUG=1` trace IER/SCR/rx.
-- `hw/arm/calypso/calypso_sim.c` : ATR livre en mode manuel (CONF1 SCLKEN/SRSTLEV), IT TX
-  apres chaque octet, octet de procedure T=0 pour les commandes de lecture, reponses de la
-  carte differees de 1,5 ms, reponse SELECT conforme GSM 11.11 (carte 3 V, CHV1 desactive) ;
-  nouvel ATR a chaque warm reset. Resultat : le firmware lit SST, AD, IMSI, LOCI, Kc...
-  puis le MMI affiche « SIM Invalid » (a elucider : sans reseau, ou IMEI absent du FFS).
-- `hw/ssi/calypso_spi.c` : VRPCSIM renvoie RSIMRSU (regulateur SIM pret).
-- `hw/arm/calypso/calypso_mb.c` : flash 16 bits en boot flash, identifiants places pour que
-  drv.c lise 0x0089 / 0x88C4 : le FFS reconnait la flash (« ffs not formatted »).
-  `fc-fsio format /` efface et programme les 3 blocs (trace pflash OK) puis le firmware
-  finit dans os_SystemError : a reprendre (relecture apres programmation ? erreur FFS ?).
-- fc-fsio / fc-shell fonctionnent (ETM par rvinterf) : `scripts/magnetite-c139.sh fsio ls /`.
+- Breakpoints disturb the firmware; prefer `QEMU_DEBUG_FLAGS=int,in_asm`, or
+  dump the Nucleus task list from the monitor (`TCD_Created_Tasks_List` at
+  0x80cd60).
+- `QEMU_TRACE='pflash_*'` traces flash programming.
+- `fc-fsio` / `fc-shell` work over ETM through rvinterf.
 
-Outils : `QEMU_GDB=1 [QEMU_GDB_WAIT=1]` (stub gdb tcp::1240, gdb-multiarch, adresses dans
-fwimage.map ; les points d'arret perturbent le firmware, preferer in_asm ou le vidage des
-taches Nucleus par le moniteur : TCD_Created_Tasks_List 0x80cd60), `QEMU_TRACE='pflash_*'`,
-`QEMU_DEBUG_FLAGS=int,in_asm`. Un build DISABLE_SLEEP=1 existe (build-c139-hybrid-ui-vo-nosleep,
-image c139-flash-sleep.img = build normal) mais n'est pas necessaire depuis le correctif gen_bx.
+## Known issues
 
---ms-magnetite : corrige a 11:10, la flash Magnetite n'est passee qu'au mobile (instance 2),
-le TRX de la BTS garde le firmware trx (run.sh refuse FIRMWARE_FLASH avec OSMO_TRX=1).
-La fenetre GTK bascule seule en C139 quand l'ecran partage change de magic, se relance avec
-/usr/bin/python3 si gi manque.
-
-[2026-10-24] « SIM Invalid » elucide (qosmo `calypso_sim.c`) : l'IT TX etait levee aussitot l'octet ecrit, l'en-tete
-partait en quelques us et l'ACK arrivait 1,5 ms apres le premier octet. `SIM_Command_Base` ecrit le premier octet puis
-seulement passe `moderx` a 6 : une tache SIM preemptee entre les deux rangeait l'ACK comme SW1, finissait en
-SIM_ERR_WAIT et renvoyait un en-tete que l'emulateur prenait pour les donnees (`SELECT 0xa0a4`, puis `CLA=00 INS=00`
--> 6D00 a perpetuite). Correctifs : IT TX apres un temps caractere (`CALYPSO_SIM_US_OCTET`), et un silence de plus
-de 500 ms au milieu d'un APDU le resynchronise.
-
-Points ouverts : os_SystemError au format du FFS ; accrochage reseau sur le
-banc (--bts --ms-magnetite) jamais observe jusqu'au LU ; DSP reel « occupe boot ».
+- Calls only work with ciphering off (`ENCRYPTION="a5 0" ./start.sh --regen …`).
+- Formatting the FFS with `fc-fsio format /` erases and programs the 3 blocks,
+  then the firmware ends in `os_SystemError`.
+- The DSP patch download of the TI L1 (`DWNLD 1`) fails under emulation
+  (`LA_LoadPage`), hence the `DWNLD 0` bench build. `L1_DYN_DSP_DWNLD` stays at 1
+  (`l1audio_async.c` does not compile with 0).

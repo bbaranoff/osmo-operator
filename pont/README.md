@@ -1,619 +1,218 @@
-# Chiffrement A5, Kc et SACCH — ce qui a été mesuré, et pourquoi c'est écrit ainsi
+# `pont/` — the TRX bridge between osmo-bts and the emulated Calypso
 
-Ce document est un **compte rendu de mesure**, pas une présentation. Il existe
-parce que chacune des pannes ci-dessous s'est présentée comme « le pont a des
-CRC » — un compteur global qui ne distingue rien — et qu'il a fallu à chaque
-fois remonter d'un symptôme identique à des causes sans rapport entre elles.
+`pont` is a Python package that sits between `osmo-bts-trx` (TRXD/TRXC on UDP)
+and the emulated phone's layer 1. It decodes the downlink bursts, applies or
+undoes A5 ciphering, feeds the layer 1, and encodes and sends the uplink
+bursts back to the BTS at the right frame number. It also records I/Q for the
+spectrum panel and publishes GSMTAP for Wireshark.
 
-Tout ce qui est chiffré ici vient des journaux du banc. Les hypothèses écartées
-sont conservées : elles étaient plausibles, et les réécarter coûte moins cher que
-les redécouvrir.
+## Entry points
 
----
-
-## 0. Deux montages, deux points d'entrée
-
-Depuis le 2026-09-01, le pont est un **paquet** (`trx`, `downlink`, `uplink`,
-`cipher`, `state`, `gsm`, `record`, `stats`, `config`, `airmesh`). Depuis le 2026-09-23, il a deux
-points d'entrée sur ce paquet :
-
-| point d'entrée | montage | défauts posés avant l'import |
+| Entry point | Mount | Defaults set before the import |
 |---|---|---|
-| `pont.py` | grgsm (L1 gr-gsm dans QEMU, GSMTAP 4730/4731) | `PONT_UL_RETARD_MAX=0` ; refuse `--dsp-port` |
-| `pont_dsp.py` → `pont.dsp.main` | DSP (`c54x_exe --arm`) ; `--dsp-port 6702` (ou `PONT_DSP_PORT`) obligatoire | `PONT_UL_RETARD_MAX=26`, `PONT_KC_RETENTION=1` |
+| `pont.py` | grgsm (gr-gsm layer 1 inside QEMU, GSMTAP 4730/4731) | `PONT_UL_RETARD_MAX=0`; refuses `--dsp-port` |
+| `pont_dsp.py` (`pont.dsp.main`) | DSP (`c54x_exe --arm`); `--dsp-port 6702` (or `PONT_DSP_PORT`) mandatory | `PONT_UL_RETARD_MAX=26`, `PONT_KC_RETENTION=1`, `PONT_DSP_COPIES=6762` |
 
-Les numéros de ligne cités aux §1 à 3ter (`pont.py:941-942`…) et les noms
-`ul_facch_from_sideband`, `_tn_epoque`, `tch_desarme` renvoient à l'**ancien**
-`pont.py` monolithique. Le montage DSP est décrit au § 8.
+`pont_dsp.py` is launched by `c54x_exe/run.sh` (`PONT_PY`), hence by
+`start-native.sh` on the DSP bench (the default). A variable set by the
+operator always wins over these defaults (`setdefault`).
 
-## 1. Le Kc — trois écrivains, aucun arbitrage
+With `BRUIT_MODE=ber` or `relais`, `pont.py` targets `BRUIT_PORT_GRGSM`
+(14730) instead of 4730 so that `qosmo/tools/injecteur_bruit.py` can sit in
+between.
 
-### Le symptôme
+## Command line (`pont/config.py`)
 
-`/dev/shm/calypso_kc` à 32 zéros. `A5=non` sur la totalité du canal dédié.
-`SOUS-VOIE ACTIVE : clair 50/277  chiffre 0/96` — **zéro** bloc chiffré décodé
-sur 96. Tout ce qui suit le CIPHERING MODE COMMAND rate le CRC, SDCCH puis TCH
-(qui conserve le chiffrement après l'ASSIGNMENT COMMAND). D'où des CRC qui
-n'apparaissent qu'au deuxième appel : le premier passe en clair, le second
-trouve un réseau qui chiffre.
+| Option | Env var | Default | Role |
+|---|---|---|---|
+| `--arfcn` | `PONT_ARFCN` | 514 | |
+| `--bsic` | `PONT_BSIC` | 7 | |
+| `--trx-bind` | `PONT_TRX_BIND` | 127.0.0.1 | TRX side bind address |
+| `--trx-base` | `PONT_TRX_BASE` | 5700 | TRX base port |
+| `--dsp-port` | `PONT_DSP_PORT` | 0 | UDP port of the C54x BSP (6702); 0 = off |
+| `--bsc-cfg` | `PONT_BSC_CFG` | `/etc/osmocom/osmo-bsc.cfg` | timeslot plan read from the BSC config |
+| `--no-tap` | `PONT_TAP=0` | tap on | GSMTAP output (`PONT_TAP_PORT`, 4729) |
+| `--no-record` | `PONT_AIRREC=0` | record on | I/Q recording (and the panel's FFT) |
 
-### La cause
+## Package layout
 
-Trois producteurs écrivaient le même fichier, sans le moindre arbitrage :
-
-| # | écrivain | état |
-|---|---|---|
-| 1 | `osmocon` | hors dépôt, **efface** le fichier sur `DM_EST_REQ` |
-| 2 | `l1ctl_sock.c` (QEMU) | chemin mort — le socket l1ctl est orphelin, le mobile parle à osmocon |
-| 3 | `calypso_dsp_shunt.c` | **n'existait pas** |
-
-Le troisième est le point clé. `pont.py` documentait `shunt_publish_kc` depuis le
-27/08 et avait mis `PONT_KC_RETENTION=0` *sur la foi de son existence*. Or
-`grep shunt_publish_kc` ne rendait rien dans tout `qosmo-grgsm`. On avait donc
-coupé le dernier filet en se fiant à un producteur imaginaire.
-
-Le dernier qui écrit gagne — et c'est l'effaceur.
-
-### Pourquoi osmocon effaçait
-
-osmocon est le multiplexeur série entre le mobile et le firmware. Il
-**espionnait** `L1CTL_CRYPTO_REQ` au passage et en profitait pour publier la clé.
-C'était la seule façon de la sortir à l'époque.
-
-Mais un espion voit passer la clé, pas sa fin de vie : il doit la **deviner**. Il
-la devinait sur `DM_EST_REQ` et `DM_REL_REQ`. L'intention est juste pour le
-RELEASE, **fausse pour l'ESTABLISH** : le mobile émet aussi un `DM_EST_REQ` pour
-ouvrir un lien *supplémentaire* sur un canal **déjà chiffré** (le SAPI 3 du SMS,
-un ré-établissement LAPDm). La clé disparaissait en pleine session.
-
-### Le correctif
-
-Un format commun ne règle pas une course — c'était l'erreur de la première passe.
-Il faut séparer les **autorités** :
-
-* **La source autoritaire a son propre fichier.** `calypso_dsp_shunt.c` publie
-  `/dev/shm/calypso_kc_l1` depuis `d_a5mode` et `a_kc[4]` du NDB, c'est-à-dire ce
-  que le **firmware** a réellement chargé dans le DSP
-  (`calypso/dsp.c:dsp_load_ciph_param`). Aucun autre écrivain ne connaît ce
-  chemin. La course disparaît au lieu d'être arbitrée.
-* **Le patch osmocon est retiré** du `Dockerfile`, désappliqué, et osmocon
-  reconstruit. Il n'écrit plus rien. Le patch reste dans `patches/` à titre
-  documentaire.
-* `pont.py` lit `calypso_kc_l1` en priorité et ne retombe sur l'historique que
-  s'il est absent — **jamais un mélange des deux**, sous peine de réintroduire la
-  course.
-
-### Les offsets NDB ne se devinent pas
-
-`d_a5mode` et `a_kc` sont résolus **du DWARF du firmware vivant**, via
-`tools/ndb-offsets.py`, comme les six autres champs. Valeurs au 2026-08-30 :
-`d_a5mode=0x1ce`, `a_kc=0x2ce`.
-
-C'est ici que le repli par `#define` est le plus dangereux : un offset faux ne
-produit pas d'erreur, il produit une **clé fausse**. `osmo_a5` accepte n'importe
-quels 8 octets et rend un keystream. Le trafic se « déchiffre » alors en bruit,
-et le CRC accuse la radio.
-
-Même piège sur l'ordre des octets : le firmware range la clé **à l'envers, et par
-mots** — `a_kc[0] = key[7] | key[6]<<8` … `a_kc[3] = key[1] | key[0]<<8`. Il faut
-défaire les **deux** inversions.
-
-### Preuve de fonctionnement
-
-```
-KC : couche 1 EN CLAIR (d_a5mode=0, seq=1)
-KC : A5/1 actif, Kc=29365ddd5623c400 (NDB d_a5mode@0x1ce a_kc@0x2ce, seq=2)
-KC : couche 1 EN CLAIR (d_a5mode=0, seq=3)
-KC : A5/1 actif, Kc=29365ddd5623c400 (seq=4)   …
-```
-
-Côté pont : `clair 21/21`, `chiffre 62/69`.
-
----
-
-## 2. La rétention du Kc — trois marqueurs faux, puis le bon critère
-
-Quatre tentatives, dont **trois miennes ou héritées, et fausses**. Elles sont
-listées parce que chacune paraît raisonnable jusqu'à la mesure qui la tue.
-
-| marqueur de relâchement | pourquoi c'est faux |
+| Module | Role |
 |---|---|
-| `seq` de `calypso_dcch_cfg` | ne bouge pas du LU à l'appel (`chan_nr` reste 0x41) → clé retenue **indéfiniment**, A5 appliqué à un canal qui démarre en clair → UA brouillée, T200 ×6, appel mort |
-| SABM montante | une SABM ne veut **pas** dire « on repart en clair » : un ré-établissement LAPDm sur canal chiffré en est une, le SAPI 3 du SMS aussi. Mesuré : 11 lâchers en pleine session |
-| `algo=0` d'un producteur autoritaire | `d_a5mode` décrit **notre** L1, pas le **réseau**. Le firmware appelle `dsp_load_ciph_param(0, NULL)` à chaque resynchronisation (`sync.c:419`), donc **pendant** la bascule SDCCH→TCH. Lâcher là, c'est cesser de déchiffrer l'ASSIGNMENT COMMAND elle-même |
+| `__init__.py` | `main()` of the grgsm mount: threads, signals, reporter |
+| `config.py` | options and environment variables |
+| `trx.py` | TRXD/TRXC sockets, `Clock` (DSP-slaved clock), `Transmitter` (uplink scheduling), copies to other BSPs |
+| `downlink.py` | downlink decoding, `Feeder` (towards layer 1), IMMEDIATE ASSIGNMENT guard |
+| `uplink.py` | uplink encoding, `TchScheduler`, FACCH handling |
+| `cipher.py` | A5 keystream, Kc from `/dev/shm/calypso_kc_l1`, retention rule |
+| `state.py` | `Dedicated` / `Tch` state machines |
+| `gsm.py` | channel plans (SDCCH/8, TCH), xCCH coding |
+| `record.py` | I/Q recording to files and FIFOs |
+| `stats.py` | counters and the periodic STATS line |
+| `dsp/` | subclasses for the DSP mount: `clock.py`, `dedicated.py`, `downlink.py`, `tch.py`, `trx.py`, `uplink.py` |
+| `air.py`, `airmesh.py` | burst relays between Calypso instances (BTS mode, multi-node air mesh) |
+| `voix_hote.py`, `vsp_audio.py` | host-side speech coding (`PONT_VOIX_HOTE=1`) and the modelled voice port (`CALYPSO_VSP=1`) |
+| `pont.py`, `pont_dsp.py` | entry points |
 
-Le troisième est instructif : il a produit, en une ligne de journal chacun, la
-cause **et** l'effet.
+## Shared memory interface
 
-```
-Kc LACHE (la couche 1 declare le clair (seq=7))
-TCH arme TN=2 depuis 5 s SANS ASSIGNMENT COMPLETE : le mobile n'a pas bascule
-```
+The bridge, the firmware shunt in QEMU and `c54x_exe` exchange state through
+`/dev/shm`:
 
-Le DSP étant shunté, **c'est le pont qui déchiffre pour le firmware**. Le mobile
-ne recevait donc jamais l'ordre de basculer.
-
-### La règle retenue
-
-> La fin de vie d'une clé est un **événement réseau**, pas un état local.
-
-Les trois marqueurs conservés le sont tous : `IMMEDIATE ASSIGNMENT` (seul octroi
-d'un canal **neuf**, qui démarre toujours en clair), `CHANNEL RELEASE` sur SDCCH,
-`CHANNEL RELEASE` sur FACCH. La rétention (`PONT_KC_RETENTION`, défaut `1`) ne
-compense plus l'effaceur d'osmocon — il n'existe plus — mais la fenêtre pendant
-laquelle notre L1 est en clair alors que le réseau chiffre encore.
-
----
-
-## 3. `unsupported SAPI` — deux diagnostics faux, un vrai défaut trouvé en chemin
-
-### Le symptôme
-
-Côté mobile, en boucle :
-
-```
-DLLAPD lapdm.c Received frame for unsupported SAPI 6!
-DRR    gsm48_rr.c:4390 Radio link is released
-DMNCC  mnccms.c:714    Call has been released (cause 16)
-```
-
-SAPI 6 n'existe pas en LAPDm (0 = signalisation, 3 = SMS).
-
-### Une fausse piste, gardée parce qu'elle était convaincante
-
-Première explication : l'en-tête L1 du SACCH (2 octets) ne serait pas retiré, et
-LAPDm lirait l'octet de **puissance ordonnée** comme octet d'adresse. Le
-comptage collait parfaitement — 33 SAPI invalides pour exactement 33 blocs SACCH
-tentés (`TS1/32 : 30/33`), et les quatre valeurs observées se rangeaient dans les
-paliers de puissance.
-
-**C'était faux.** Le tampon réellement présenté commence par `07` :
-`(0x07 >> 2) & 7` = **SAPI 1** — une valeur jamais observée. Une corrélation de
-comptage n'est pas une preuve tant que l'arithmétique du mécanisme ne suit pas.
-
-Vérifié au passage, et négatif aussi : la table `mf_sdcch8_0` du firmware est
-conforme au 05.02 (`MF_F_SACCH` bien posé à `fn%102 ∈ [32,35]`), et
-`prim_rx_nb.c:122` en tire correctement `link_id = 0x40`. **Aucun patch firmware
-n'était nécessaire** — c'est précisément ce que la mesure a évité.
-
-### Deuxième explication : le SI du camp — réfutée elle aussi
-
-`lapdm_rx_ph_data_ind` calcule `sapi = (l2h[0] >> 2) & 7`. Les valeurs observées
-correspondent à des premiers octets dans `0x08–0x1B`, soit la forme d'un **octet
-de pseudo-longueur** de bloc BCCH — `(L << 2) | 1`, donc `SAPI = L & 7` :
-
-| SI | L | 1er octet | `L & 7` | SAPI observé |
-|---|---|---|---|---|
-| SI1 / SI2 | 21 | `0x55` | 5 | 5 (×2) |
-| SI3 | 18 | `0x49` | 2 | 2 (×2) |
-| SI4 | 12 | `0x31` | 4 | 4 (×1) |
-| — | 22 | `0x59` | 6 | 6 (×28) |
-
-Ce ne sont pas des blocs SACCH : ce sont les **SI du camp**, injectés dans `a_cd`
-pendant le canal dédié. Le rapport de forces, mesuré :
-
-| écrivain de `a_cd` | occurrences |
-|---|---|
-| `DCCH-SACCH #` (présentation légitime) | **3** |
-| `DISPATCH ALLC → SI3 a_cd[3..14]` | **29 483** |
-
-`DCCH-GARDE` doit empêcher exactement cela. Elle s'armait bien, mais se levait
-sur un **TTL de fraîcheur de blocs** (`dcch_guard_tick`, ~2 s) rafraîchi
-uniquement par le **descendant** — donc par notre chance de décodage. Trois blocs
-sur tout le run : entre deux, le TTL expirait, la garde concluait « canal fini »,
-et le camp reprenait `a_cd`.
-
-```
-DCCH-GARDE : ARMEE  -- SI du camp supprime dans a_cd
-DCCH-GARDE : levee (peremption) -- SI du camp retabli     ← ×4, canal bien vivant
-```
-
-C'est **la même erreur de raisonnement** qu'aux §1 et §2 : déduire un événement de
-cycle de vie (« le canal est fini ») d'un symptôme local (« je n'ai rien décodé
-depuis 2 s »). Sur un banc où le décodage est imparfait, les deux sont confondus
-en permanence, et la garde se retourne contre le canal qu'elle protège.
-
-### Le correctif — et ce qu'il a prouvé, ce qu'il n'a pas prouvé
-
-La garde est rafraîchie par le **montant dédié** (`d_task_u` ∈ {12 DUL, 13 TCHT,
-14 TCHA}) : le mobile qui émet sur son canal dédié prouve que ce canal existe,
-indépendamment de notre décodage.
-
-**Mesuré, et le correctif fait ce qu'il annonce** — sonde du site de présentation
-(`CAMP: a_cd<-SI`), et non celle du point d'injection, qui continue d'imprimer en
-amont de la garde :
-
-| | avant | après |
+| File | Writer | Content |
 |---|---|---|
-| `CAMP: a_cd<-SI` pendant le dédié | flot continu | **0** |
-| `levee (peremption)` | ×4 | **0** |
+| `calypso_kc_l1` | the layer 1 (from `d_a5mode` and `a_kc[4]` in the NDB, resolved from the firmware DWARF) | the Kc actually loaded into the DSP; the bridge reads it first and falls back on the historical file only if it is absent, never a mix of the two |
+| `calypso_dcch_cfg` | layer 1 | current dedicated channel (`chan_nr`, kind, sub-slot, `seq`; kinds 2/3 = TCH/F, TCH/H on the DSP mount); `0xFF` ends the connection |
+| `calypso_tch_cfg` | the bridge | TCH announcement to `c54x_exe`; `seq+1, tn=0` returns to the SDCCH without dropping the Kc |
+| `calypso_sdcch_ul` | layer 1 | uplink SDCCH/SACCH L2 blocks; never a FACCH |
+| `calypso_tch_facch_ul` | layer 1 | uplink FACCH blocks (single slot with a process-wide `seq`; the bridge resyncs its cursor at each new channel epoch so a stale block is never replayed) |
+| `calypso_xcch_ul_rom` | `c54x_exe` | ring of uplink SDCCH/SACCH bursts as emitted by the ROM, with the uplink A5 stream it XORed (header `w`(u32) `n`(u32), 1024-byte slots `seq fn l2[23] . bits[4x116] flux[4x116]`) |
+| `calypso_tx_rom` | `c54x_exe` | final uplink bursts of the ROM (`PONT_UL_RAW=1`) |
 
-**Mais les SAPI invalides ont AUGMENTÉ : 33 → 52.** Le SI du camp n'était donc
-pas leur source. La cause reste **inconnue** — c'est le deuxième diagnostic faux
-sur ce même symptôme, après celui des paliers de puissance. Le correctif de la
-garde est conservé parce qu'il corrige un défaut réel et démontré ; il ne corrige
-simplement pas celui-là.
+Kc byte order: the firmware stores the key reversed and by words
+(`a_kc[0] = key[7] | key[6]<<8` ... `a_kc[3] = key[1] | key[0]<<8`); both
+inversions are undone when reading.
 
-### Entretenir n'est pas armer
+## Ciphering rules
 
-La première version **armait** la garde depuis le montant. `task_u` vaut 12/13/14
-bien au-delà du canal dédié (621 / 1954 / 81 sur le run) : la garde s'est armée à
-6 % du journal et n'a **jamais** été levée — `CAMP: a_cd<-SI` = 0 sur les 94 %
-restants, et 27 lignes de sélection de cellule côté mobile. C'est trait pour trait
-la famine de SI que ce TTL existait pour éviter (commentaire du 2026-08-12), et
-qu'on réintroduisait en croyant la contourner.
+- The end of life of a Kc is a **network event**, not a local state. The key
+  is released on IMMEDIATE ASSIGNMENT (the only grant of a new channel, which
+  always starts in clear), CHANNEL RELEASE on SDCCH and CHANNEL RELEASE on
+  FACCH. It is not released on SABM, on a layer-1 `algo=0` (the firmware
+  reloads `dsp_load_ciph_param(0, NULL)` at every resynchronisation, including
+  during the SDCCH to TCH switch) nor on `DM_EST_REQ` (also used to open SAPI 3
+  on an already ciphered channel).
+- `PONT_KC_RETENTION` (default 1) keeps the key over the window where the
+  local layer 1 is in clear while the network still ciphers.
+- The C0 dummy burst (`osmo-bts` fills every idle timeslot of C0) is filtered
+  before `a5_apply` on both the xCCH and the TCH paths: a dummy burst is never
+  ciphered, and counting it as a CRC failure inflates the error rate on a
+  healthy radio. `ne=0` with `rc=-1` on the TCH is the signature of a constant
+  input, not of noise.
+- A dedicated channel identity (`chan_nr`) is not an instance: the BSC
+  reallocates the same sub-slot, so the identity is forgotten when the channel
+  ends, and the next establishment is learnt even with an equal `chan_nr`.
+- The DCCH guard (which removes the camp's SI from `a_cd` during a dedicated
+  channel) is armed by the downlink (`set_dcch_active`) and kept alive by the
+  dedicated uplink (`d_task_u` in {12 DUL, 13 TCHT, 14 TCHA}); its TTL (~2 s)
+  returns the camp to the mobile at the end of the channel.
+- `CALYPSO_CANNED` takes a token list (`FBDET,TOA,PM,SNR,ANGLE,CRC | FULL |
+  ALL | NONE`) or a boolean (`1/ON/YES/TRUE`, `0/OFF/NO/FALSE`).
 
-Corrigé : l'**armement** reste au descendant (`set_dcch_active`), seul signal lié
-à un bloc dédié réel ; le montant ne fait que **repousser la péremption** d'une
-garde déjà armée. Le TTL reste court (~2 s) — c'est lui qui rend le camp au mobile
-dès la fin du canal, et l'allonger l'affame. Le montant couvre les trous *pendant*
-le canal ; le TTL tranche *après*.
+## DSP mount (`pont_dsp.py`, `pont/dsp/`)
 
-## 3bis. Identité n'est pas instance — un vrai défaut, mais pas LA cause
+Same building blocks as grgsm, but the dedicated state follows the DSP instead
+of the bridge's own decoding, because the BSP plays frames at the C54x's time,
+12 to ~200 frames after the bridge:
 
-### La mesure
+- **Downlink A5 is done by the DSP.** The mask ROM programs the Calypso XIO
+  coprocessor (ports `0x2800..0x2818`, modelled in
+  `qosmo/hw/arm/calypso/l1-dsp/calypso_a5.c`, compiled into c54x_exe) with
+  `a_kc` and `a_a5fn`. The bridge does not apply the stream to the downlink;
+  `PONT_DSP_DECHIFFRE=1` makes it do so again (with `CALYPSO_A5=0` on
+  c54x_exe). The uplink stays ciphered by the bridge, at the air fn.
+- **`TchDsp`**: the ASSIGNMENT COMMAND is an announcement; c54x_exe switches
+  the BSP at the first TCHT/TCHA/TCHD task set by the firmware. `abandon()`
+  returns to the SDCCH without dropping the Kc.
+- **`UplinkDsp`**: uplink SDCCH/SACCH bursts come from the ROM
+  (`calypso_xcch_ul_rom`); the bridge re-decodes them, undoes the ROM's XOR if
+  needed (it ciphers at the DSP's time), compares with the L2 of
+  `calypso_sdcch_ul`, then sends and re-ciphers at the air fn. Without ROM
+  bursts after `PONT_UL_ROM_ATTENTE` (0.12 s): host coding. STATS line:
+  `xCCH ul rom= hote= rom_ko=`. A block of `calypso_sdcch_ul` is never a FACCH;
+  an ASSIGNMENT FAILURE, or an SDCCH block while the mobile was on the TCH,
+  withdraws the announcement. The Kc is kept after the release until the next
+  IMMEDIATE ASSIGNMENT.
+- **`DedicatedDsp`**: `plan()` always returns the last SDCCH while the
+  connection lives; only `0xFF` ends it.
+- **`TrxDsp`**: the TCH timeslot counts as dedicated from the announcement
+  (osmo-bts ciphers the TCH from activation), under the `cipher.dl_active`
+  guard.
+- **`ClockDsp`**, closed-loop clock: advance = `PONT_MARGE_DL` (16) minus the
+  minimum BTS advance over `PONT_MARGE_FENETRE` (3 s), bounded to
+  [`PONT_AVANCE_MIN` 10, `PONT_AVANCE_MAX` 40]. The BTS advance is measured on
+  the targeted point (DSP + advance). A "marge DL reelle ... min ... moy" line
+  every 10 s in `pont.log` must stay > 0. `PONT_MARGE_DL=0` returns to the
+  fixed advance of `Clock`.
 
-Un LU suivi de **deux appels**, tous trois sur SDCCH/8 SS0 :
+## Environment variables
 
-```
-DCCH #1 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1 (vu sur DATA_IND)     ← et c'est tout
-/dev/shm/calypso_dcch_cfg : seq=1
-```
-
-**Trois canaux dédiés successifs, un seul appris.**
-
-### La cause
-
-```c
-/* l1ctl_sock.c */
-if (kind >= 0 && chan_nr != last_chan_nr) {
-    dcch_seq++;
-    ... écrit /dev/shm/calypso_dcch_cfg ...
-    calypso_dsp_shunt_set_dcch(kind, ss);
-}
-```
-
-La mise à jour ne se déclenche que si `chan_nr` **change**. Or le BSC réalloue
-volontiers la même sous-voie : un second appel qui retombe sur SDCCH/8 SS0
-présente le même `chan_nr = 0x41`. Rien ne se passe — ni nouveau `dcch_seq`, ni
-`set_dcch()`. Le shunt reste configuré sur l'**instance précédente** : fenêtre de
-présentation `a_cd` périmée pour le canal courant.
-
-`chan_nr` **est** l'identité du canal ; il ne porte aucun numéro d'instance. On ne
-peut donc pas comparer plus finement — il faut **oublier** l'identité quand le
-canal se termine.
-
-### Le correctif
-
-`calypso_l1ctl_dcch_forget()` remet `last_chan_nr` à `0xFF`. Elle est appelée par
-la garde `DCCH` au moment où celle-ci conclut à la fin du canal — et la mesure
-montre que la garde, elle, cycle correctement (**4** paires `ARMEE`/`levee` sur ce
-run). C'est donc elle qui sait, et c'est d'elle qu'on prévient.
-
-La prochaine établissement redéclenche alors, même à `chan_nr` égal.
-
-### Confirmation par le réseau, et par la mesure d'après
-
-Le BSC voit la même chose par l'autre bout — il réutilise tout, jusqu'à l'objet :
-
-```
-lchan(0-0-2-TCH_F-0)[0x5e7e3da21f50]   ×7    (jamais TS3..TS7, sur six TCH/F)
-lchan(0-0-1-SDCCH8-0)[0x5e7e3da21e20]  ×4    (jamais SS1..SS7, sur huit)
-lchan(0-0-1-SDCCH8-0){ESTABLISHED}: ERROR INDICATION
-    cause=SABM frame with information not allowed in this state   ×4
-```
-
-Le mobile réémet un SABM sur un lien que le BSC tient pour établi : il n'a jamais
-vu l'UA. Puis `EQUIPMENT FAILURE: Timeout` et `rll_ready=no`.
-
-**La réutilisation n'est pas le défaut, c'est le révélateur.** Rien dans le GSM ne
-l'interdit, et l'allocateur reprend naturellement le premier canal libre : avec un
-seul mobile, c'est toujours le même. Un réseau réel ferait pareil — donc ce défaut
-frapperait *tous* les deuxièmes appels, partout. Ce n'est pas un artefact de banc.
-
-Après correctif :
-
-```
-DCCH #1 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1
-DCCH #2 : chan_nr=0x41 -> SDCCH/8 SS=0 TN=1     ← MEME chan_nr, et pourtant appris
-dcch_cfg : seq=2      identite oubliee : x1      DCCH-GARDE : ARMEE x2, levee x1
-```
-
-### Le motif, pour la quatrième fois
-
-Déduire un **événement** (« canal neuf ») d'une **comparaison d'état**
-(« `chan_nr` a changé ») au lieu de l'événement lui-même. Exactement comme :
-osmocon devinant la fin de vie du Kc sur `DM_EST_REQ` (§1), les trois marqueurs
-de relâchement (§2), et la garde concluant « canal fini » sur un TTL de fraîcheur
-de décodage (§3). Quand ce dépôt se trompe, c'est presque toujours de cette
-façon-là.
-
----
-
-## 3ter. Le DISC de l'appel précédent rejoué sur le canal suivant — LA cause
-
-C'est le défaut qui produisait les échecs d'assignation intermittents. Trouvé par
-un fan-out de 29 agents avec réfutation adversariale, après que quatre
-hypothèses posées à la main se soient révélées fausses.
-
-### Le mécanisme
-
-`/dev/shm/calypso_tch_facch_ul` est un slot **unique**, dont le `seq` est de
-portée-processus côté shunt : il n'a aucune notion d'époque de canal dédié.
-
-1. Un appel se termine **normalement** → `tch_desarme()` met `_tch_tn = None`.
-2. `ul_facch_from_sideband` part alors en `continue` sans jamais lire
-   (`pont.py:941-942`) — et son curseur `last`, **local au thread**, gèle.
-3. Le mobile émet ensuite son **DISC** LAPDm de libération. Le shunt le publie
-   dans le slot avec un `seq` neuf. Le bloc y reste, avec `seq > last`.
-4. À l'ASSIGNMENT COMMAND suivant, le thread se réveille, voit `seq != last`, et
-   traite ce vieux DISC comme un montant frais : il pose `_tch_mobile_ok`
-   **avant toute bascule réelle**, et l'ordonnanceur l'émet sur la FACCH du TCH
-   tout neuf.
-5. La LAPDm de la BTS, en `LAPD_STATE_IDLE` sur ce lchan fraîchement activé,
-   répond **DM**.
-6. Le mobile, qui vient d'envoyer son vrai SABM, reçoit ce DM en `SABM_SENT` →
-   `ASSIGNMENT FAILURE`. Le BSC n'a jamais son ASSIGNMENT COMPLETE → `T10` →
-   `EQUIPMENT FAILURE: Timeout`.
-
-### La mesure qui l'établit
-
-Capture GSMTAP, premier bloc FACCH montant réellement **émis par le pont** après
-chaque ASSIGNMENT COMMAND — corrélation **6/6**, aux octets :
-
-```
-01 3f (SABM) -> 01 73 (UA)    => appel OK
-01 53 (DISC) -> 01 1f (DM)    => appel ECHOUE
-```
-
-Et l'arithmétique de propagation exclut « le DM répondait au SABM » :
-DISC fn 26340 → DM fn 26367 (Δ=27) ; SABM fn 26353 → UA fn 26380 (Δ=27). **Même
-delta** — le DM répond au bloc émis 13 trames *avant* le SABM.
-
-### Pourquoi c'était intermittent — et pas « le 2ᵉ appel »
-
-Rien de positionnel : ce qui compte est le **mode de sortie de l'appel
-précédent**.
-
-| sortie précédente | effet | appel suivant |
+| Variable | Default | Effect |
 |---|---|---|
-| normale → `tch_desarme` (`_tch_tn = None`) | le thread cesse de lire, le DISC empoisonne le slot | **échoue** |
-| en échec → `tch_suspend` (**conserve** `_tch_tn`) | le thread continue de vider la bande latérale | **réussit** |
-| premier appel | slot à `seq=0`, la garde `if seq and ...` saute | réussit |
+| `PONT_KC_RETENTION` | 1 | keep the Kc until the next network release event; 0 to compare |
+| `PONT_DSP_DECHIFFRE` | 0 | DSP: the bridge deciphers the DL (with `CALYPSO_A5=0` on c54x_exe) |
+| `PONT_DSP_COPIES` | `6762` (pont_dsp.py) | extra BSP UDP ports receiving a copy of the downlink (banc-rssi instance); empty = none |
+| `PONT_DSP_COPIES_UL` | 1 | also copy the uplink to those ports (marker 0xA5 at byte 6) |
+| `PONT_UL_ROM` | 1 | DSP: uplink SDCCH/SACCH bursts from the ROM; 0 = coded by the bridge |
+| `PONT_UL_ROM_ATTENTE` | 0.12 | DSP: maximum wait (s) for a block's ROM bursts before host fallback |
+| `PONT_UL_RAW` | 0 | DSP: uplink = the ROM's final bursts (`calypso_tx_rom`); host coding and A5 inactive |
+| `PONT_UL_RAW_TCH` | 0 | with `PONT_UL_RAW=1`: 1 = TCH by the ROM too (uplink speech cut) |
+| `PONT_UL_RAW_DCCH_HOTE` | 0 | with `PONT_UL_RAW=1`: SDCCH/SACCH still coded by the host |
+| `PONT_UL_RAW_SACCH_T`, `PONT_UL_RAW_DECAL` | 0 | raw-mode SACCH/T handling and burst offset |
+| `PONT_UL_TN_DEFAUT` | unset | default uplink timeslot |
+| `PONT_PDCH_FILTRE` | 1 | filter PDCH bursts on the uplink |
+| `PONT_UL_RETARD_MAX` | 0 (grgsm), 26 (DSP) | maximum lateness (frames) of an uplink burst still sent; 0 = drop |
+| `PONT_UL_FN_ADVANCE` | 3 | uplink frame advance |
+| `PONT_WINDOW_TOL`, `PONT_WINDOW_ESSAIS` | 1, 12 | tolerance and re-waits of an uplink burst woken too early |
+| `PONT_HORLOGE` | 1 | 0 = wall clock instead of the DSP-slaved clock |
+| `PONT_HORLOGE_AVANCE` / `_PERIODE` / `_KP` / `_PHASE_N` / `_MAX` | 12, 0.05 s, 1.0, 100, 4 | clock servo: fixed advance, period, gain, phase, maximum factor |
+| `PONT_MARGE_DL`, `PONT_AVANCE_MIN`, `PONT_AVANCE_MAX`, `PONT_MARGE_FENETRE` | 16, 10, 40, 3 s | `ClockDsp` |
+| `PONT_CLCK_PERIOD_FN`, `PONT_CLCK_PAUSE_MAX`, `PONT_CLCK_PAUSE_PLAFOND`, `PONT_CLCK_SANS_IND_MAX`, `PONT_CLCK_SKEW_ZONE`, `PONT_BTS_FN_ADVANCE` | 51, 20, 38, 300, 60, 2 | TRXC CLOCK handling |
+| `PONT_FACCH_SKIP` | 0 | 1 = also skip the pending FACCH when switching to the TCH |
+| `PONT_FACCH_TOUT` | 0 | 1 = send every uplink FACCH block without filtering |
+| `PONT_IMM_ASS_GARDE` | 2.0 | s: guard after an IMMEDIATE ASSIGNMENT (Magnetite mobile, `CALYPSO_PONT_IMM_DCCH=0` to disable) |
+| `PONT_DCCH_REL_DELAI` | 1.5 | s: delay before a channel release takes effect |
+| `PONT_TCH_ABANDON_GRACE` | 2.0 | s: grace before a TCH announcement is abandoned |
+| `PONT_GSMTAP_PORT` | 4730 | gr-gsm layer 1 GSMTAP target (14730 with the noise injector) |
+| `PONT_TAP`, `PONT_TAP_PORT` | 1, 4729 | GSMTAP for Wireshark |
+| `PONT_RSSI` | 60 | RSSI reported to the BTS |
+| `PONT_AIRREC`, `PONT_AIRREC_UL` | 1, 1 | I/Q recording DL / UL |
+| `PONT_AIRREC_DL_PATH`, `PONT_AIRREC_UL_PATH` | `/root/record.cfile`, `/root/record_ul.cfile` | recording files |
+| `PONT_AIRREC_DL_FIFO`, `PONT_AIRREC_UL_FIFO` | `/tmp/iq_fft.fifo`, `/tmp/iq_fft_ms.fifo` | FIFOs for the FFT panel |
+| `PONT_AIRREC_MAX_MB`, `PONT_AIRREC_MINFREE_MB`, `PONT_AIRREC_OSR` | 4096, 8192, 4 | file recording stops below the free-space threshold |
+| `PONT_VOIX_HOTE`, `PONT_VOIX_SHM_UL`, `PONT_VOIX_SHM_DL` | 0, `/dev/shm/pont_voix_ul`, `/dev/shm/pont_voix_dl` | host-side speech coding for the Magnetite C139 |
+| `CALYPSO_CANNED` | | `NONE` = nothing canned, everything real |
 
-D'où des séries `ÉCHEC/OK/ÉCHEC` ou `OK/ÉCHEC/OK` selon l'amorce. Toute la
-formulation « le 2ᵉ appel échoue », qui a orienté des heures d'enquête, était un
-artefact d'échantillon.
+Counters: `ne` is the number of bit errors, `nb` the **total** number of bits
+(378 for TCH/FS, constant). `ne=0` with `rc=-1` indicates a constant input,
+not a healthy radio.
 
-### Le correctif
+## Reproducible experiment
 
-À chaque **nouvelle époque de canal**, resynchroniser `last` sur le `seq` courant
-**sans consommer** le bloc : ce qui date d'avant l'armement n'appartient pas à ce
-canal. C'est exactement l'idiome que ce fichier applique déjà à l'anneau voix
-montant (`session precedente : on ignore`) et qui n'avait pas été porté sur ce
-sideband-ci.
-
-L'époque est suivie par `_tn_epoque`, remis à `None` au désarmement — car le BSC
-réalloue toujours TS2, donc comparer les TN ne suffit pas : **identité n'est pas
-instance**, encore (cf. §3bis).
-
-### Validation
-
-`scripts/banc-repro.sh --calls 4`, pile redémarrée :
-
-| | avant | après |
-|---|---|---|
-| appels | ÉCHEC / OK / ÉCHEC | **OK / OK / OK / OK** |
-| `Assignment failed` (BSC) | 20 | **0** |
-| `unsupported SAPI` | 14 | 4 |
-
----
-
-## 4. Le remplissage de C0 compté comme échec
-
-`osmo-bts` remplit **tous** les timeslots de C0 avec le dummy burst
-(`scheduler_trx.c`) pour tenir la puissance de la balise. Un canal dédié inactif
-reçoit donc du remplissage en continu.
-
-Le filtre `_is_dummy()` existait pour le xcch — avec sa mesure : *515 blocs de
-remplissage comptés en `crc_fail`, 76 % d'échec annoncés sur une radio saine*.
-**Le chemin TCH ne l'avait jamais eu** : `dl_dispatch` fait `return` sur la
-branche TCH avant d'atteindre le filtre.
-
-Le traçage `PONT_TCH_TRACE=1` a montré la même cause sous **deux signatures**,
-selon que le Kc était disponible ou non :
-
-| phase | entrée du Viterbi | `ne` |
-|---|---|---|
-| pas de Kc | dummy brut, motif **figé** | `0`, constant |
-| Kc arrivé | dummy **chiffré**, clé variant par trame | ~50 |
-
-`ne=0` avec `rc=-1` ne s'obtient pas sur du bruit : c'est la signature d'une
-entrée constante. Le filtre est posé **avant** l'`a5_apply`, pour la même raison
-que côté xcch — le dummy n'est jamais chiffré, et le passer au keystream le
-rendrait méconnaissable.
-
----
-
-## 5. `CALYPSO_CANNED=1` ne cannait rien
-
-`shunt_parse_canned()` attend une **liste de jetons** :
-`FBDET,TOA,PM,SNR,ANGLE,CRC | FULL | ALL | NONE`.
-
-`start-native.sh` posait `CALYPSO_CANNED=1` depuis toujours. `1` n'est aucun de
-ces jetons : il tombait dans le `else`, sortait un `token inconnu '1' ignore`
-noyé dans le démarrage, et le masque restait **vide** :
+`scripts/banc-repro.sh` freezes the whole sequence: detached start
+(`CALYPSO_NO_ATTACH=1`), camp waited for by **querying** the VTY (`show ms` ->
+`C3`), N identical calls, a verdict per call computed on that call's slice of
+`pont.log` alone, timestamped collection in `/root/repro-<stamp>/` with a
+`resume.txt`.
 
 ```
-CALYPSO_CANNED (dette fabriquée EXPLICITE) : FBDET=0 TOA=0 PM=0 SNR=0 ANGLE=0 CRC=0
+scripts/banc-repro.sh --calls 4                 # with restart
+scripts/banc-repro.sh --no-restart --calls 3    # on the running stack
+scripts/banc-repro.sh --dest 600                # called number (default 600)
+PONT_KC_RETENTION=0 scripts/banc-repro.sh       # A/B of a setting
 ```
 
-Le banc tournait avec **rien de canné** pendant que sa configuration affichait
-l'inverse.
+Three calls are enough to tell an intermittent fault from a positional one.
 
-Corrigé des deux côtés — et les deux comptent : `start-native.sh` pose désormais
-`FULL`, **et** le parseur accepte `1/ON/YES/TRUE` et `0/OFF/NO/FALSE`. Une
-variable booléenne qui veut dire « rien » au lieu de « tout » est un piège ;
-changer la valeur sans changer le parseur l'aurait laissé armé.
+## Known issues
 
----
-
-## 6. Hypothèses écartées
-
-Conservées pour ne pas être réexplorées.
-
-| hypothèse | verdict |
-|---|---|
-| Plan SDCCH/8 mal implémenté | **non** — `PLAN_SD8` est conforme au 05.02 : blocs à `4·ss`, SACCH/C8 à 32/36/40/44 avec report `+51` pour SS4..7, UL à `+15` |
-| Trame idle (`m26=25`) empoisonnant la fenêtre TCH | **non** — `tch_dl_burst` écarte `m26 in (12, 25)`, et `gap=0` sur tout le run |
-| Alias SACCH 32/83 en `fn%51` | **non** — filtré sur la 102-multitrame : `(k[1] % 102) != plan.sacch_dl102[_act]` |
-| TCH resté armé après l'appel | **non** — compteurs figés sur cinq intervalles après `DESARME` |
-| `_TBL_SOFT` écrasant deux encodages | **non pour ce symptôme** — le DL TRXD arrive en bits durs `0x00/0x01`. La fragilité reste réelle (une table, deux encodages : `0x01` et `0xFF` donnent tous deux `-127`) mais n'est pas la cause |
-
----
-
-## 7. Reste ouvert
-
-* **`unsupported SAPI` côté mobile** — tombés de 64 à 4, mais pas à zéro.
-  Source résiduelle inconnue. Ne bloque plus les appels (§3ter : 0 échec
-  d'assignation sur 4 appels). Ni l'en-tête
-  L1 du SACCH (§3, réfuté), ni le SI du camp (§3, réfuté par la mesure). Source
-  toujours inconnue : chercher qui d'autre atteint `a_cd`, ou si le firmware
-  relit un bloc périmé faute de rafraîchissement (`B_BLUD`).
-* **CRC résiduels** — `chiffre 62/69`, soit 7 échecs sur le SDCCH chiffré, plus
-  3 sur le SACCH. Non isolés.
-* **TCH** — l'histogramme rend `octets[00:928]` : les 928 octets de la fenêtre
-  sont à **zéro**. Ce ne sont ni des dummy bursts (motif non nul, désormais
-  filtrés) ni du bruit : le timeslot ne porte rien. Vraisemblablement en aval du
-  mobile qui ne bascule pas, donc à revoir **après** le correctif SACCH.
-
----
-
-## 8. Montage DSP (`pont_dsp.py`, sous-paquet `pont/dsp/`)
-
-Mêmes briques qu'en grgsm, mais l'état dédié suit le DSP au lieu du décodage du
-pont. Ce qui change :
-
-* **A5 descendant : fait par le DSP.** La mask-ROM programme le coprocesseur XIO
-  du Calypso (ports `0x2800..0x2818`, modélisé dans `qosmo/hw/arm/calypso/l1-dsp/calypso_a5.c`,
-  compilé dans c54x_exe) avec
-  `a_kc` et `a_a5fn`. Le pont n'applique donc plus le flux au DL : le faire en
-  plus renverrait le burst chiffré au décodeur. `PONT_DSP_DECHIFFRE=1` rétablit
-  l'ancien comportement, et va avec `CALYPSO_A5=0` sur c54x_exe. Le **montant**
-  reste chiffré par le pont (au fn de l'air).
-* **`TchDsp` — l'ASSIGNMENT COMMAND est une annonce.** `/dev/shm/calypso_tch_cfg`
-  est écrit comme avant, mais c54x_exe ne bascule le BSP qu'à la première tâche
-  TCHT/TCHA/TCHD posée par le firmware. Basculer à l'heure de la BTS remplaçait
-  les trames pas encore jouées — l'ASSIGNMENT COMMAND comprise. `abandon()`
-  écrit `seq+1, tn=0` : retour au SDCCH **sans lâcher le Kc**.
-* **`UplinkDsp` — bursts SDCCH/SACCH montants de la ROM** (2026-10-03). Les 4
-  bursts d'un bloc ne sont plus codés par `gsm.xcch_encode` mais pris dans
-  `/dev/shm/calypso_xcch_ul_rom`, que c54x_exe remplit avec ce que la ROM émet
-  (`data[0x3f8a]`, un burst par trame) et le flux A5 montant qu'elle y XORe en
-  chiffré. Anneau : en-tête `w`(u32) `n`(u32), cases de 1024 octets
-  `seq fn l2[23] . bits[4×116] flux[4×116]`. Le pont redécode, défait le XOR de la
-  ROM si besoin (elle chiffre à l'heure du DSP), compare au L2 de
-  `calypso_sdcch_ul`, puis émet et rechiffre au fn de l'air comme avant. Sans
-  bursts ROM après `PONT_UL_ROM_ATTENTE` (0,12 s) : codage hôte. STATS :
-  `xCCH ul rom= hote= rom_ko=`. Le hook est `Uplink._bursts_xcch` (hôte par
-  défaut, montage grgsm inchangé).
-* **`UplinkDsp`** — un bloc de `calypso_sdcch_ul` n'est **jamais** une FACCH (le
-  TCH passe par `calypso_tch_facch_ul`) ; une ASSIGNMENT FAILURE, ou un bloc
-  SDCCH alors que le mobile était sur le TCH, retire l'annonce. Le Kc est gardé
-  après la libération jusqu'à la prochaine IMMEDIATE ASSIGNMENT : la libération
-  se lit à l'heure du DSP, et la BTS chiffre encore.
-* **`DedicatedDsp`** — genres 2/3 = TCH/F et TCH/H dans `calypso_dcch_cfg` ;
-  `plan()` rend toujours le dernier SDCCH tant que la connexion vit, seul `0xFF`
-  la termine.
-* **`TrxDsp`** — le TS du TCH compte comme dédié **dès l'annonce** (osmo-bts
-  chiffre le TCH dès l'activation), toujours sous la garde de `cipher.dl_active`.
-* **`ClockDsp` — horloge en boucle fermée.** avance = `PONT_MARGE_DL` (16) − creux
-  de l'avance BTS sur `PONT_MARGE_FENETRE` (3 s), bornée à [`PONT_AVANCE_MIN` 10,
-  `PONT_AVANCE_MAX` 40]. Depuis le correctif qui suit le relevé de 19:06 (2026-09-23), l'avance BTS se mesure sur le
-  point visé (DSP + avance) et non sur l'horloge réelle, qui traîne dès que le
-  DSP attend la BTS : l'avance tombait au plancher, le SDCCH DL se trouait, l'UA
-  se perdait et le mobile répétait son SABM. Une ligne « marge DL réelle … min
-  … moy » toutes les 10 s dans `pont.log` : c'est elle qui doit rester > 0.
-  `PONT_MARGE_DL=0` revient à l'avance fixe de `Clock`. Correctif **confirmé
-  au run du 2026-09-23 20:22** : aucun « SABM frame with information not
-  allowed » au BSC, marge DL réelle moyenne +22.3 à +38.9.
-
-### État au 2026-09-23 — runs du banc DSP de 20:22 et 20:32
-
-Mobile DSP = MSISDN 100101, l'autre = 100102. Constaté :
-
-* appel 100101 → 600 (écho Asterisk), ACTIVE 20:22:55 → DISCONNECT 20:23:27,
-  parole audible dans les deux sens ; TCH dl=1607 ul=1601 trames, perdus=11 ;
-* appel mobile à mobile 100102 → 100101 via osmo-sip-connector, ACTIVE
-  20:24:28, release normal 20:24:32 ;
-* SMS MO/MT dans les deux sens (20:23:49-55, 20:24:05-09), acquittés ;
-* A5/1 sur les **cinq** établissements (« chiffrement descendant confirmé »
-  à 20:22:45, 20:22:53, 20:23:53, 20:24:04, 20:24:24), Kc retenu sans casse
-  jusqu'à l'IMMEDIATE ASSIGNMENT suivante.
-
-Ouvert, par ordre d'importance :
-
-1. **B_BFI** *(mise à jour 2026-10-03 : `err` = 0 partout désormais, BFI=1 dès
-   le 1er bloc incomplet ; voir c54x_exe docs/README.fr.md)* sur toutes les trames de parole : 40/40 états `a_dd` à 20:22,
-   `vues=2200 bfi=2200` à 20:32 ; `err` = 0 sur les 19 c214 du début
-   d'appel, 15 à 93 ensuite. Trames réellement dégradées, FR intelligible
-   malgré tout ; signal ou cœur C54x, non tranché.
-2. **LOS à 20:32:45** : premier appel du run 20:32 (ACTIVE 20:32:30), 408
-   blocs jetés jusqu'au LOS, dont 32 SACCH : SACCH du TCH perdu en entier,
-   `LOSS counter for ACCH` 31 → 0. L'appel suivant (20:33:39 → 20:34:06) est
-   propre.
-3. SACCH descendant du SDCCH/8 : 30 blocs jetés par le mobile à 20:22, dont
-   18 SACCH (« LOSS counter for ACCH »).
-4. UI SAPI 0 sur le TCH (BSC 20:22:54, « unimplemented Abis RLL message »),
-   non bloquante.
-5. Horloge : avance visée au plafond de 40 cinq fois (avance BTS −25 à −29),
-   marge DL réelle min +0 à la première mesure de chaque run.
-
-**Pas une anomalie** : les échecs CRC du moniteur TCH descendant du pont (30
-sur les 32 premières trames de l'appel 600, 103 en fin d'appel) ; la BTS n'a
-rien à mettre sur le TCH tant que le RTP ne coule pas. Décodage du pont,
-indépendant du DSP. Détail : `navigation/STATUS.md` § 0.
-
----
-
-## Rejouer une experience
-
-`scripts/banc-repro.sh` fige toute la sequence : demarrage detache
-(`CALYPSO_NO_ATTACH=1`), attente du camp **interrogee** au VTY (`show ms` ->
-`C3`) et non supposee par un `sleep`, N appels identiques, verdict par appel
-calcule sur la seule tranche de `pont.log` de cet appel, collecte horodatee dans
-`/root/repro-<stamp>/`.
-
-```
-scripts/banc-repro.sh --calls 4                 # avec redemarrage
-scripts/banc-repro.sh --no-restart --calls 3    # sur la pile en cours
-PONT_KC_RETENTION=0 scripts/banc-repro.sh       # A/B d'un reglage
-```
-
-C'est ce qui a permis de decouvrir que l'echec n'etait pas positionnel : trois
-appels suffisent, et deux runs successifs donnent `ECHEC/OK/ECHEC` puis
-`OK/ECHEC/OK`. Sans sequence figee, on compare des runs qui ne se comparent pas.
-
-## Outils de diagnostic
-
-| variable | effet |
-|---|---|
-| `PONT_TCH_TRACE=1` | *ancien pont, absent du paquet actuel* — une ligne par bloc TCH/F en échec : `fn/m26/idx/acc` (alignement), `A5` (déchiffrement et clé), `rc/ne/nb` (décodeur), et l'**histogramme des octets** de la fenêtre |
-| `PONT_KC_RETENTION=0` | désactive la rétention, pour comparer (défaut 1) |
-| `PONT_A5=1..3` | *ancien pont, absent du paquet actuel* — forçait l'algorithme au lieu de suivre celui du Kc |
-| `PONT_DSP_DECHIFFRE=1` | DSP : le pont déchiffre le DL (avec `CALYPSO_A5=0` sur c54x_exe) |
-| `PONT_UL_ROM=0` | DSP : bursts SDCCH/SACCH montants codés par le pont au lieu de ceux de la ROM |
-| `PONT_UL_ROM_ATTENTE` | DSP : attente maximale des bursts ROM d'un bloc avant repli hôte (0.12 s) |
-| `PONT_UL_RETARD_MAX` | retard maximal (trames) d'un burst montant encore envoyé ; 0 = jeter (grgsm), 26 (DSP) |
-| `PONT_WINDOW_ESSAIS` | re-attentes d'un burst montant réveillé trop tôt (12) |
-| `PONT_HORLOGE=0` | horloge murale au lieu de l'horloge asservie au DSP |
-| `PONT_HORLOGE_AVANCE` / `_PERIODE` / `_KP` / `_PHASE_N` | asservissement : avance fixe (12), période (0.05 s), gain (1.0), phase (100) |
-| `PONT_MARGE_DL`, `PONT_AVANCE_MIN/MAX`, `PONT_MARGE_FENETRE` | `ClockDsp` (§ 8) : 16, 10/40, 3 s |
-| `PONT_FACCH_SKIP=1` | saute aussi la FACCH en attente au passage sur le TCH (ancien comportement) |
-| `PONT_AIRREC=0` | coupe l'enregistrement I/Q (`--no-record`), donc la FFT du panneau |
-| `CALYPSO_CANNED=NONE` | rien de canné, tout réel |
-
-Lecture des compteurs : `ne` est le nombre d'erreurs binaires, `nb` le nombre
-**total** de bits (378 pour TCH/FS — constant, ce n'est pas un compteur
-d'erreurs). `ne=0` avec `rc=-1` signale une entrée constante, pas une radio
-saine.
+- **`unsupported SAPI` on the mobile side**: a few per run remain (not the
+  SACCH L1 header, not the camp's SI; both checked). Does not block calls.
+  Possible leads: another writer of `a_cd`, or the firmware re-reading a stale
+  block for lack of refresh (`B_BLUD`).
+- **Residual CRC failures** on the ciphered SDCCH and on the SACCH, not
+  isolated.
+- **B_BFI** set on every speech frame delivered by the ROM while FR stays
+  intelligible; signal path or C54x core, not decided.
+- **Occasional LOS** on a TCH call: the TCH's SACCH is lost entirely for ~15 s;
+  the next call is clean. Cause unknown.
+- **Downlink SACCH of the SDCCH/8**: about half of the blocks discarded by the
+  mobile during an LU; suspect the BSP's SACCH/8 table (alternation over two
+  51-multiframes).
+- **UI SAPI 0 on the TCH** ("unimplemented Abis RLL message" at the BSC), not
+  blocking.
+- **Clock**: the targeted advance sometimes reaches `PONT_AVANCE_MAX`; the
+  real DL margin can touch 0 right after a LOS.
+- `_TBL_SOFT` holds two encodings (`0x01` and `0xFF` both map to `-127`);
+  harmless as long as the DL TRXD arrives as hard bits `0x00/0x01`.
+- Not anomalies: CRC failures of the bridge's downlink TCH monitor at the start
+  and end of a call (the BTS puts nothing on the TCH while RTP does not flow).

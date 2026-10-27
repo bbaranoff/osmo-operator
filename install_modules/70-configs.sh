@@ -1,5 +1,6 @@
-# 70-configs - configuration Osmocom. `cp -n` : on n'ecrase JAMAIS une configuration
-# existante, elle a pu etre adaptee a la machine.
+# 70-configs - Osmocom configuration. `cp -n`: an existing configuration is NEVER
+# overwritten (it may have been adapted to the machine), except with REINSTALL=1,
+# which backs up /etc/osmocom first.
 INST_REGISTER configs "Configuration (/etc/osmocom)"
 INST_DEPS[configs]="prereqs"
 
@@ -8,8 +9,8 @@ inst_configs_run() {
     mkdir -p /etc/osmocom /var/log/osmocom /var/run/smsc "${OSMOCOM_HOME:-$HOME/.osmocom}/bb" \
         || { inst_fail "impossible de creer les repertoires de configuration"; return $INST_RC_FAIL; }
     if [ "${REINSTALL:-0}" = 1 ]; then
-        # On ecrase, mais jamais sans copie : /etc/osmocom.<date> garde l etat
-        # d avant, comme le fait --regen dans start-native.sh.
+        # Overwrite, but never without a copy: /etc/osmocom.<date> keeps the
+        # previous state, as --regen does in start-native.sh.
         local sav="/etc/osmocom.$(date +%Y%m%d-%H%M%S)"
         cp -a /etc/osmocom "$sav" 2>/dev/null && inst_say "sauvegarde : $sav"
         cp -f "$INST_TREE"/configs/*.cfg /etc/osmocom/ 2>/dev/null

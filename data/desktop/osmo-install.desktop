@@ -1,3 +1,5 @@
+# osmo-install.desktop - launcher: install osmo-operator (the GSM/EGPRS bench)
+# to disk from the live ISO. Runs /usr/local/bin/osmo-install (Calamares).
 [Desktop Entry]
 Type=Application
 Name=Installer osmo-operator

@@ -1,24 +1,24 @@
 #!/bin/bash
-# vty-debug-dump.sh
+# vty-debug-dump.sh - Dump every Osmocom VTY of each operator and of the inter-STP
 #
-# Parcourt tous les VTY Osmocom de chaque operateur ET de l'inter-STP,
-# active le niveau de log DEBUG, execute les commandes "show" pertinentes,
-# et consolide dans un log.
+# Walks every Osmocom VTY of each operator AND of the inter-STP, enables the
+# DEBUG log level, runs the relevant "show" commands and consolidates
+# everything into one log file.
 #
-# DEUX MONDES, detection automatique (checks/_mode.sh) :
-#   docker : un conteneur osmo-operator-N par operateur, le hub SS7 est le
-#            conteneur osmo-inter-stp ; on interroge les VTY par "docker exec".
-#   natif  : ISO, VM ou machine nue - un seul operateur (sauf topologie netns),
-#            les VTY sont en telnet sur 127.0.0.1. Ce qui n'existe que sous
-#            docker (le conteneur inter-STP) est IGNORE EXPLICITEMENT : un dump
-#            qui inventerait un hub absent se lirait comme une panne SS7.
+# TWO WORLDS, automatic detection (checks/_mode.sh):
+#   docker: one osmo-operator-N container per operator, the SS7 hub is the
+#           osmo-inter-stp container; VTYs are queried through "docker exec".
+#   native: ISO, VM or bare machine - a single operator (unless netns
+#           topology), VTYs reached by telnet on 127.0.0.1. What exists only
+#           under docker (the inter-STP container) is EXPLICITLY SKIPPED: a
+#           dump inventing an absent hub would read as an SS7 outage.
 #
-# L'etiquette "container=osmo-operator-N" est ecrite dans le dump DANS LES
-# DEUX MODES : checks/operator_summary.sh y accroche toutes ses extractions
-# (grep -A20 "container=..."). En natif c'est un nom d'affichage, une cle de
-# correlation, pas un objet interrogeable.
+# The "container=osmo-operator-N" label is written in the dump IN BOTH MODES:
+# checks/operator_summary.sh anchors all its extractions on it
+# (grep -A20 "container=..."). In native mode it is a display name, a
+# correlation key, not a queryable object.
 #
-# VTY couverts par operateur :
+# VTYs covered per operator:
 #   OsmoSTP          4239
 #   OsmoHLR          4258
 #   OsmoMGW          4243
@@ -30,33 +30,34 @@
 #   OsmoGGSN         4260
 #   OsmoSIP-conn     4255
 #
-# VTY de l'inter-STP (hub SS7) :
-#   OsmoSTP (hub)    4239
+# Inter-STP (SS7 hub) VTY:
+#   OsmoSTP (hub)    4239 (or the port bound in /etc/osmocom/osmo-stp-interop.cfg)
 #
-# Usage :
-#   sudo ./vty-debug-dump.sh [--out /chemin/log.txt] [--docker|--native]
+# Usage:
+#   sudo ./checks/vty-debug-dump.sh [--out /path/log.txt] [--docker|--native]
+# Environment: OUTFILE (default /tmp/vty-debug-dump.txt), OSMO_MODE=docker|native.
 
 set -euo pipefail
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
-# Memorise AVANT le sourcing : la bibliotheque ecrit dans OSMO_MODE (memoisation),
-# on ne saurait plus apres coup si la valeur venait de l'environnement.
+# Saved BEFORE sourcing: the library writes into OSMO_MODE (memoisation), so
+# afterwards it cannot be told whether the value came from the environment.
 MODE_ENV="${OSMO_MODE:-}"
 
-# ── Bibliotheque commune docker/natif ─────────────────────────────────────────
-# Chemin RELATIF au script (BASH_SOURCE) : le depot et l'ISO n'ont pas la meme
-# racine, et l'ISO embarque checks/ en entier - donc _mode.sh est toujours a
-# cote de ce fichier, jamais a un chemin absolu du depot.
+# ── Common docker/native library ─────────────────────────────────────────────
+# Looked up RELATIVE to the script (BASH_SOURCE): the repo and the ISO do not
+# share the same root, and the ISO ships checks/ as a whole, so _mode.sh is
+# always next to this file.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
 
-# ── Options ───────────────────────────────────────────────────────────────────
-# --out reste accepte A N'IMPORTE QUELLE POSITION : operator_summary.sh --live
-# lance "./vty-debug-dump.sh --out /tmp/vty-live-$$.txt" et doit continuer a
-# marcher meme precede de --native.
+# ── Options ──────────────────────────────────────────────────────────────────
+# --out is accepted AT ANY POSITION: operator_summary.sh --live runs
+# "./vty-debug-dump.sh --out /tmp/vty-live-$$.txt" and must keep working even
+# when preceded by --native.
 OUTFILE="${OUTFILE:-/tmp/vty-debug-dump.txt}"
 MODE_FORCED=0
 while [ $# -gt 0 ]; do
@@ -82,9 +83,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-INTER_STP_CONTAINER="$(osmo_node hub)"   # "osmo-inter-stp" dans les deux mondes
+INTER_STP_CONTAINER="$(osmo_node hub)"   # "osmo-inter-stp" in both modes
 
-# ── Tables VTY : deux jeux (operateur / inter-stp) ───────────────────────────
+# ── VTY tables: two sets (operator / inter-stp) ──────────────────────────────
 declare -A OP_VTY_NAME OP_VTY_SHOW
 declare -A ISTP_VTY_NAME ISTP_VTY_SHOW
 
@@ -100,7 +101,7 @@ register_istp_vty() {
     ISTP_VTY_SHOW[$port]="$show_cmds"
 }
 
-# ── Commandes show operateur - enrichies ──────────────────────────────────────
+# ── Operator show commands ───────────────────────────────────────────────────
 
 register_op_vty 4239 "OsmoSTP" "\
 show cs7 instance 0 users|\
@@ -207,8 +208,8 @@ show talloc-context all brief"
 
 OP_VTY_PORTS=(4239 4258 4243 4254 4242 4241 4240 4245 4260 4255)
 
-# ── Commandes show inter-STP - balayage instances 0..9 ────────────────────────
-# L'inter-STP hub peut avoir N instances CS7 (une par lien operateur).
+# ── Inter-STP show commands - sweep of instances 0..9 ────────────────────────
+# The inter-STP hub may have N CS7 instances (one per operator link).
 
 ISTP_SHOW_CMDS="show cs7 instance 0 users|\
 show cs7 instance 0 as all|\
@@ -256,10 +257,10 @@ show logging level|\
 show stats|\
 show talloc-context all brief"
 
-# Le hub peut avoir ete pousse hors de 4239 (co-localise avec le STP
-# operateur, cf. start-interstp.sh) : relire son VTY dans sa config. En
-# docker le hub reste a 4239 (interroge par docker exec) et le fichier
-# hote est absent : sed rend vide, on garde 4239.
+# The hub may have been moved off port 4239 (co-located with the operator
+# STP, see start-interstp.sh): read its VTY port from its config. In docker
+# the hub stays on 4239 (queried through docker exec) and the host file is
+# absent: sed returns nothing and 4239 is kept.
 ISTP_HUB_VTY=4239
 _hubp="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' /etc/osmocom/osmo-stp-interop.cfg 2>/dev/null | head -1)"
 [ -n "$_hubp" ] && ISTP_HUB_VTY="$_hubp"
@@ -267,30 +268,30 @@ register_istp_vty "$ISTP_HUB_VTY" "OsmoSTP-hub" "$ISTP_SHOW_CMDS"
 
 ISTP_VTY_PORTS=("$ISTP_HUB_VTY")
 
-# ── Inventaire des noeuds - docker ou natif ────────────────────────────────────
+# ── Node inventory - docker or native ────────────────────────────────────────
 MODE="$(osmo_mode)"
-# Un OSMO_MODE d'environnement qui ne vaut ni docker ni native est ignore par la
-# bibliotheque (elle redetecte) : on ne l'annonce donc pas comme un forcage.
+# An environment OSMO_MODE that is neither docker nor native is ignored by the
+# library (it re-detects): it is therefore not reported as forced.
 if   [ "$MODE_FORCED" -eq 1 ]; then MODE_SRC="force par option"
 elif [ "$MODE_ENV" = docker ] || [ "$MODE_ENV" = native ]; then MODE_SRC="force par OSMO_MODE"
 else MODE_SRC="detection automatique"
 fi
 
-# osmo_ops : conteneurs osmo-operator-N en docker ; OSMO_OP_IDS / netns /
-# N_OPERATORS (sinon 1) en natif. Deja trie numeriquement et dedoublonne, d'ou
-# la disparition du "sort -t - -k 3 -n".
+# osmo_ops: osmo-operator-N containers in docker; OSMO_OP_IDS / netns /
+# N_OPERATORS (else 1) in native. Already numerically sorted and deduplicated.
 mapfile -t OPS < <(osmo_ops)
 OP_CONTAINERS=()
 for op in "${OPS[@]:-}"; do
     [ -n "$op" ] && OP_CONTAINERS+=("$(osmo_node "$op")")
 done
 
-# Inter-STP : present SI on peut l'interroger D'ICI.
-#   docker : le conteneur osmo-inter-stp tourne.
-#   natif  : cette machine EST le hub (OSMO_ROLE=interstp, ou un osmo-stp lance
-#            sur osmo-stp-interop.cfg). Si le hub est une autre machine, son VTY
-#            n'ecoute que sur SON 127.0.0.1 : rien n'est dumpable d'ici, et on le
-#            dit - un bloc "OsmoSTP-hub" vide serait lu comme un hub en panne.
+# Inter-STP: present IF it can be queried FROM HERE.
+#   docker: the osmo-inter-stp container is running.
+#   native: this machine IS the hub (OSMO_ROLE=interstp, or an osmo-stp started
+#           on osmo-stp-interop.cfg). If the hub is another machine, its VTY
+#           listens only on ITS 127.0.0.1: nothing can be dumped from here and
+#           this is stated - an empty "OsmoSTP-hub" block would read as a
+#           dead hub.
 HAS_INTER_STP=0
 osmo_hub >/dev/null 2>&1 && HAS_INTER_STP=1
 
@@ -305,13 +306,13 @@ if [ ${#OP_CONTAINERS[@]} -eq 0 ] && [ "$HAS_INTER_STP" -eq 0 ]; then
 fi
 
 N_OPS=${#OP_CONTAINERS[@]}
-# Le mode est annonce AVANT tout le reste : un diagnostic qui ne dit pas dans
-# quel monde il a regarde n'est pas exploitable.
+# The mode is printed BEFORE anything else: a diagnostic that does not say
+# which world it looked at is not usable.
 echo -e "${CYAN}Mode : ${MODE} (${MODE_SRC})${NC}"
 echo -e "${GREEN}=== VTY Debug Dump - ${N_OPS} operateur(s) + inter-stp=${HAS_INTER_STP} → ${OUTFILE} ===${NC}"
 echo ""
 
-# ── Vider / initialiser le fichier de sortie ─────────────────────────────────
+# ── Clear / initialise the output file ───────────────────────────────────────
 : > "$OUTFILE"
 log() { echo -e "$*" | tee -a "$OUTFILE"; }
 logsep() {
@@ -337,11 +338,10 @@ elif [ "$MODE" = docker        ]; then log "Inter-STP  : absent"
 else                                  log "Inter-STP  : ignore (natif) - $(osmo_hub_hint)"
 fi
 
-# ── Interroger un VTY sur un noeud ─────────────────────────────────────────────
-# $1=<op> (numero d'operateur ou "hub")  $2=port  $3=nom  $4=commandes show
-# osmo_vty_up / osmo_vty remplacent le couple "docker exec ... echo
-# >/dev/tcp/127.0.0.1/PORT" + "docker exec ... nc" : meme dialogue, mais local
-# en natif. Le champ "container=" du dump garde l'etiquette du noeud.
+# ── Query one VTY on a node ──────────────────────────────────────────────────
+# $1=<op> (operator number or "hub")  $2=port  $3=name  $4=show commands
+# osmo_vty_up / osmo_vty handle the dialogue (docker exec, or local in native
+# mode). The "container=" field of the dump keeps the node label.
 query_vty() {
     local op="$1"
     local port="$2"
@@ -350,8 +350,8 @@ query_vty() {
     local container
     container="$(osmo_node "$op")"
 
-    # Test de connectivite rapide. En natif la sonde passive (ss) passe d'abord :
-    # elle n'ouvre aucune session VTY.
+    # Quick connectivity test. In native mode the passive probe (ss) runs
+    # first: it opens no VTY session.
     if ! osmo_vty_up "$op" "$port"; then
         echo -e "  ${YELLOW}[SKIP]${NC} ${name} (port ${port}) - non disponible"
         log "  [SKIP] ${name} port ${port} - non disponible"
@@ -360,7 +360,7 @@ query_vty() {
 
     echo -ne "  ${CYAN}${name}${NC} (${port}) ... "
 
-    # Construire le script VTY : passage en DEBUG, puis les show, puis end.
+    # Build the VTY script: switch to DEBUG, then the show commands, then end.
     local -a VTY_CMDS=(enable "logging level all debug" "logging filter all 1")
     IFS='|' read -ra SHOW_CMDS <<< "$show_str"
     for cmd in "${SHOW_CMDS[@]}"; do
@@ -368,17 +368,15 @@ query_vty() {
     done
     VTY_CMDS+=(end)
 
-    # Temporisations d'origine conservees telles quelles (nc -q2, 0,5 s avant
-    # d'ecrire, 2 s de lecture) : ce sont de gros jeux de commandes, et changer
-    # ces valeurs changerait la QUANTITE de sortie capturee - donc le compteur
-    # de lignes affiche juste apres.
+    # Timings (nc -q2, 0.5 s before writing, 2 s of reading): these are large
+    # command sets, and changing these values changes the AMOUNT of output
+    # captured - hence the line count printed right after.
     local raw_output
     raw_output="$(OSMO_VTY_OPEN=0.5 OSMO_VTY_READ=2 OSMO_VTY_Q=2 \
                   osmo_vty "$op" "$port" "${VTY_CMDS[@]}" || true)"
 
-    # Filtrer banniere/prompt VTY - meme motif et meme ordre qu'avant.
-    # Sans argument : ce dump GARDE la ligne "Free Software lives", contrairement
-    # a global_check.sh et ss7_check.sh.
+    # Filter VTY banner/prompt. Without argument the "Free Software lives" line
+    # is KEPT, unlike global_check.sh and ss7_check.sh.
     local clean_output
     clean_output="$(printf '%s\n' "$raw_output" | osmo_vty_clean)"
 
@@ -397,7 +395,7 @@ query_vty() {
     return 0
 }
 
-# ── Boucle principale : noeuds operateur ───────────────────────────────────────
+# ── Main loop: operator nodes ────────────────────────────────────────────────
 TOTAL_OK=0
 TOTAL_SKIP=0
 
@@ -438,15 +436,15 @@ elif [ "$MODE" = docker ]; then
     log ""
     log "  [INFO] Container ${INTER_STP_CONTAINER} absent - skipped"
 else
-    # Natif sans hub local : ni OK ni echec, et surtout pas de compteur touche -
-    # il n'y a rien a interroger ici, ce n'est pas une panne.
+    # Native without a local hub: neither OK nor failure, and no counter
+    # touched - there is nothing to query here, it is not an outage.
     echo -e "  ${YELLOW}${INTER_STP_CONTAINER} - ignore (natif)${NC}"
     echo -e "  ${YELLOW}  $(osmo_hub_hint)${NC}"
     log ""
     log "  [INFO] ${INTER_STP_CONTAINER} - ignore (natif) : $(osmo_hub_hint)"
 fi
 
-# ── Resume ────────────────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────────
 logsep "RESUME - $(date '+%Y-%m-%d %H:%M:%S')"
 log "  Mode                  : ${MODE} (${MODE_SRC})"
 log "  VTY interroges        : ${TOTAL_OK}"
@@ -472,7 +470,7 @@ echo -e "  ${CYAN}ASP etat  :${NC}  grep -iE 'asp|active|inactive|down' ${OUTFIL
 echo -e "  ${CYAN}SCCP      :${NC}  grep -A10 'sccp' ${OUTFILE}"
 echo -e "  ${CYAN}Erreurs   :${NC}  grep -iE 'error|fail|warn|prohib|timeout|refused' ${OUTFILE}"
 
-# Copie locale si lance depuis l'hote
+# Local copy when run from the host
 if [ -w "$(pwd)" ]; then
     cp "$OUTFILE" "$(pwd)/vty-debug-dump-$(date '+%Y%m%d-%H%M%S').txt" 2>/dev/null && \
         echo -e "  ${CYAN}Copie locale :${NC} $(pwd)/vty-debug-dump-$(date '+%Y%m%d-%H%M%S').txt" || true

@@ -1,3 +1,5 @@
+# osmo-drivers.desktop - launcher: NVIDIA driver status / install / update
+# (tools/osmo-drivers.sh in a bench GTK progress window; no terminal).
 [Desktop Entry]
 Type=Application
 Name=Pilotes graphiques
@@ -6,8 +8,8 @@ Comment=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
 Comment[fr]=Pilote NVIDIA : etat, installation, mise a jour (ubuntu-drivers)
 Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Pilotes graphiques" -- /opt/GSM/osmo-operator/tools/osmo-drivers.sh
 Icon=preferences-desktop-display
-# [2026-10-01] Le menu whiptail vit dans un terminal VTE DANS une fenetre GTK
-# du banc (osmo-gtk-run --tty) : aucun favori n ouvre de terminal.
+# The whiptail menu runs in a VTE terminal inside a bench GTK window
+# (osmo-gtk-run --tty): no launcher opens a system terminal.
 Terminal=false
 Categories=System;Settings;HardwareSettings;
 Keywords=nvidia;pilote;driver;ubuntu-drivers;

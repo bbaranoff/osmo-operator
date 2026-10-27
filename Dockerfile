@@ -1,52 +1,49 @@
 # syntax=docker/dockerfile:1
-# Dockerfile — IMAGE DE BASE osmocom-nitb (COUCHE STABLE)
+# Dockerfile - osmocom-nitb base image (stable layer)
 # ─────────────────────────────────────────────────────────────────────────────
-# Tout ce qui est LONG et rarement modifie vit ici : la TOTALITE des paquets apt
-# (une seule liste, plus aucun apt dans Dockerfile.run), la pile Osmocom
-# compilee depuis les sources, osmocom-bb + le firmware Calypso, QEMU et son
-# device IPC, gr-gsm/GNU Radio, le runtime Node et le dashboard web, la config
-# PulseAudio, les units systemd, les repertoires, le prompt.
-# ~11 Go et ~40 min de build : on ne la rebatit que quand une dependance change.
+# Everything long and rarely changed lives here: the full apt package list (one
+# list, no apt in Dockerfile.run), the Osmocom stack built from source,
+# osmocom-bb + the Calypso firmware, QEMU and its IPC device, gr-gsm/GNU Radio,
+# the Node runtime and the web dashboard, the PulseAudio config, the systemd
+# units, the directories and the prompt. Roughly 11 GB and 40 min to build;
+# rebuilt only when a dependency changes.
 #
-# [2026-09-03] BASE ubuntu:24.04 (noble) - python 3.12, gcc 13 par defaut,
-# bibliotheques renommees *t64 (libasound2t64, libgnutls30t64...). L ISO
-# (build-iso.sh) part du MEME noble : le venv /root/.env et les .so de
-# /usr/local sont copies tels quels dans le rootfs, ils doivent trouver la
-# meme glibc et le meme python. Changer la base ici, c est la changer la-bas.
+# Base ubuntu:24.04 (noble): python 3.12, gcc 13 default, *t64-renamed libraries
+# (libasound2t64, libgnutls30t64...). The ISO (build-iso.sh) starts from the
+# SAME noble: /root/.env and the /usr/local .so files are copied as-is into the
+# rootfs and must find the same glibc and python. Changing the base here changes
+# it there too.
 #
-# CACHE .deb - packaging/osmo-deb.sh. Chaque dossier compile ci-dessous sort en
-# paquet .deb dans /var/cache/osmo-debs (COPY depuis .deb-cache/, que build.sh
-# synchronise avec /var/cache/osmo-debs de l HOTE). Au rebuild, `osmo-deb
-# install` pose le paquet et saute le clone + la compilation ; `osmo-deb pack`
-# et `osmo-deb snapshot` fabriquent le paquet la premiere fois. build.sh
-# --no-cache passe OSMO_DEB_REFRESH=1 : tout est recompile et le cache reecrit.
-# LES SOURCES RESTENT DANS /opt/GSM : `osmo-deb pack` embarque l arbre courant
-# (/opt/GSM/<nom>, .git et objets compris) dans le paquet, et les snapshots
-# nomment l arbre. Un rebuild depuis le cache redonne donc la meme image, avec
-# ses ateliers - pas une image ou seul /usr/local subsiste.
+# .deb cache (packaging/osmo-deb.sh): each directory built below is emitted as a
+# .deb in /var/cache/osmo-debs (COPY from .deb-cache/, which build.sh keeps in
+# sync with /var/cache/osmo-debs on the host). On rebuild, `osmo-deb install`
+# lays the package down and skips the clone + compilation; `osmo-deb pack` and
+# `osmo-deb snapshot` build the package the first time. build.sh --no-cache sets
+# OSMO_DEB_REFRESH=1: everything is recompiled and the cache rewritten. Sources
+# stay in /opt/GSM: `osmo-deb pack` embeds the current tree (/opt/GSM/<name>,
+# .git included) in the package, so a cache rebuild yields the same image with
+# its source trees, not an image where only /usr/local survives.
 #
-# L'iteration quotidienne se fait dans Dockerfile.run, qui repart de cette image
-# (`FROM osmocom-nitb`) et n'y rafraichit que les scripts, les configs, le pont
-# et les arbres git qosmo / osmo-operator — en secondes, pas en 40 minutes.
+# Daily iteration happens in Dockerfile.run, which starts from this image
+# (`FROM osmocom-nitb`) and only refreshes the scripts, configs, bridge and the
+# qosmo / osmo-operator git trees.
 #
-# Cette image reste AUTONOME : elle a son propre ENTRYPOINT et start-nitb.sh la
-# lance seule. Ne pas retirer ses COPY de configs/scripts sous pretexte que
-# Dockerfile.run les refait : le recouvrement est voulu des deux cotes.
+# This image is self-contained: it has its own ENTRYPOINT and start-nitb.sh runs
+# it standalone. Do not remove its config/script COPYs because Dockerfile.run
+# redoes them: the overlap is intentional on both sides.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [2026-09-25] LE BUILD EST UN GRAPHE, PLUS UNE CHAINE — stages BuildKit
+# The build is a graph, not a chain - BuildKit stages
 # ─────────────────────────────────────────────────────────────────────────────
-# Ce fichier etait une seule cible de ~75 etapes : une chaine, donc un seul
-# chemin d execution, meme sur une machine a 32 coeurs. Or quatre des cinq
-# compilations longues n ont AUCUNE dependance entre elles - la pile Osmocom,
-# QEMU (qosmo), le venv GNU Radio, la 4G (srsRAN + Open5GS). Elles s additionnaient
-# pour rien.
+# Four of the five long compilations have no dependency between them (the
+# Osmocom stack, QEMU/qosmo, the GNU Radio venv, the 4G srsRAN + Open5GS), so
+# they build in parallel:
 #
 #                  base   (apt, apt-fast, osmo-deb, configs)
 #                    |
 #         +----------+--------+---------+
 #         |          |        |         |
-#     osmo-core    qemu      lte      node          <- EN PARALLELE
+#     osmo-core    qemu      lte      node          <- in parallel
 #         |          |
 #    +----+-----+    |
 #    |    |     |    |
@@ -56,101 +53,85 @@
 #    |    |     |
 #    +----+-----+
 #         |
-#     osmocom-nitb      (assemblage : dpkg -i, puis configs)
+#     osmocom-nitb      (assembly: dpkg -i, then configs)
 #           |
-#         debs          (FROM scratch : le cache .deb pour la CI)
+#         debs          (FROM scratch: the .deb cache for CI)
 #
-# CE QUI REND LE DECOUPAGE POSSIBLE : packaging/osmo-deb.sh. Chaque bloc sort
-# deja en .deb qui contient A LA FOIS les fichiers installes ET l arbre de
-# sources de /opt/GSM (cmd_pack, « L ARBRE DE SOURCES PART AVEC »). Un stage
-# parallele n a donc pas a exporter un systeme de fichiers : il exporte ses
-# .deb, et l assemblage les repose avec un `dpkg -i`. C est EXACTEMENT ce que
-# fait deja iso_modules/50-injection-image.sh pour le rootfs de l ISO — le
-# precedent existe dans ce depot, on le reutilise.
+# What makes the split possible: packaging/osmo-deb.sh. Each block is emitted as
+# a .deb that contains BOTH the installed files AND the /opt/GSM source tree
+# (cmd_pack). A parallel stage therefore exports its .deb files, and the
+# assembly lays them back with `dpkg -i`.
 #
-# TROIS STAGES NE SONT PAS PARALLELES A osmo-core, et c est voulu — tous les
-# trois se lient a libosmocore d une facon ou d une autre :
-#   - osmocom-bb : `make nofirmware` lie mobile/trxcon a libosmocore ;
-#   - c54x_exe   : son Makefile fait `pkg-config --libs libosmocoding libosmocore` ;
-#   - gr-gsm     : son CMakeLists cherche libosmocore/libosmocoding/libosmogsm.
-# Les en sortir donnerait un build qui casse, pas un build plus rapide. Ils
-# tournent en revanche EN PARALLELE ENTRE EUX, une fois osmo-core fini.
+# Three stages are NOT parallel to osmo-core, by design - all three link to
+# libosmocore one way or another:
+#   - osmocom-bb : `make nofirmware` links mobile/trxcon to libosmocore;
+#   - c54x_exe   : its Makefile runs `pkg-config --libs libosmocoding libosmocore`;
+#   - gr-gsm     : its CMakeLists looks for libosmocore/libosmocoding/libosmogsm.
+# They do run in parallel WITH EACH OTHER once osmo-core is finished.
 #
-# CE QUI NE CHANGE PAS : les versions, les patchs, les ./configure, le contenu
-# de /opt/GSM, et --target osmocom-nitb (build.sh, compose.yaml) reste
-# OBLIGATOIRE puisque `debs` est toujours la derniere etape du fichier.
+# Invariant: --target osmocom-nitb (build.sh, compose.yaml) is MANDATORY, since
+# `debs` is always the last stage of the file.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 FROM ubuntu:24.04 AS base
 
-# ROOT : ou vivent les sources dans l'image. Chemin FIXE et assume — dans un
-# conteneur, il n'y a rien a rendre portable.
+# ROOT: where the sources live in the image. Fixed path; nothing to make
+# portable inside a container.
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROOT=/opt/GSM
 
-# OSMO_IMAGE=1 : « image de ce depot, son reseau est pose par start-docker.sh /
-# compose » - network/osmo-ip-plan.sh ne touche alors a aucune adresse. Un
-# conteneur quelconque (ubuntu:24.04 nu) ne l a pas et s adresse comme un natif.
+# OSMO_IMAGE=1 marks "image of this repo, its network is set up by
+# start-docker.sh / compose": network/osmo-ip-plan.sh then touches no address.
+# A plain ubuntu:24.04 container lacks it and addresses itself like a native.
 ENV container=docker \
     OSMO_IMAGE=1 \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib \
     GIT_TERMINAL_PROMPT=0
 
-# ── apt-fast : les téléchargements apt en parallèle ─────────────────────────
-# Cette image installe plusieurs centaines de paquets ; apt les récupère un par
-# un, apt-fast les met en parallèle via aria2. Le gain porte sur le
-# téléchargement, pas sur dpkg — l'installation reste séquentielle.
+# ── apt-fast: parallel apt downloads ─────────────────────────────────────────
+# This image installs several hundred packages; apt fetches them one by one,
+# apt-fast parallelises the downloads via aria2 (the gain is on the download,
+# not on dpkg - installation stays sequential).
 #
-# UN SEUL installeur pour tous les environnements : packaging/apt-fast-install.sh
-# (cette image, Dockerfile.stp, le chroot de l ISO, l hote via build.sh). Il
-# pose aussi /etc/apt/apt.conf.d/90osmo-operator, les reglages de
-# telechargement communs. Repli integre : sans GitHub, apt-fast appelle apt-get
-# et le build continue, plus lentement.
+# One installer for all environments: packaging/apt-fast-install.sh (this image,
+# Dockerfile.stp, the ISO chroot, the host via build.sh). It also writes
+# /etc/apt/apt.conf.d/90osmo-operator with the shared download settings.
+# Built-in fallback: without GitHub, apt-fast calls apt-get and the build
+# continues, more slowly.
 #
-# LE CACHE APT DU BUILD. [2026-09-04] Chaque etape apt de ce fichier monte
-# /var/cache/apt/archives en cache BuildKit (id osmo-apt-archives, partage avec
-# Dockerfile.stp) : les .deb telecharges une fois y restent, sur l hote, dans le
-# cache de BuildKit - une reconstruction ne retelecharge que ce qui a change.
-# apt-fast-install retire docker-clean et pose Keep-Downloaded-Packages, sinon
-# apt effacerait les paquets a peine installes. Necessite BuildKit (docker
-# compose, ou docker-buildx : build.sh les installe) - le builder historique
-# ne connait pas --mount.
+# Build apt cache: every apt step in this file mounts /var/cache/apt/archives as
+# a BuildKit cache (id osmo-apt-archives, shared with Dockerfile.stp), so a
+# rebuild re-downloads only what changed. apt-fast-install removes docker-clean
+# and sets Keep-Downloaded-Packages, otherwise apt would delete freshly
+# installed packages. Requires BuildKit (docker compose or docker-buildx, which
+# build.sh installs); the legacy builder does not understand --mount.
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
-# Le miroir Ubuntu mesure par build.sh (packaging/apt-mirror.sh) : vide = les
-# sources de l image de base (archive.ubuntu.com), qui peut etre inutilisable
-# depuis l hote (3 Ko/s le 2026-09-04) sans qu apt le dise.
+# Ubuntu mirror measured by build.sh (packaging/apt-mirror.sh): empty = the base
+# image sources (archive.ubuntu.com), which may be unusably slow from the host
+# without apt saying so.
 ARG OSMO_UBUNTU_MIRROR=
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
     && rm -rf /var/lib/apt/lists/*
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Dépendances système — TOUTES ici, y compris celles qu'installait
-#    Dockerfile.run. Une seule liste, un seul endroit où la faire évoluer :
-#    l'image d'exécution n'a plus à connaître apt du tout.
+# 1. System dependencies - ALL of them here. One list, one place to evolve it;
+#    the runtime image (Dockerfile.run) needs no apt.
 #
-# tshark tire wireshark-common, qui pose une question debconf (capture non-root)
-# et bloquerait un build non interactif : on y répond d'avance.
+# tshark pulls wireshark-common, which asks a debconf question (non-root
+# capture) that would block a non-interactive build: answered in advance.
 #
-# ⚠️ COUPLAGE EXTERIEUR — install_modules/10-deps.sh EXTRAIT cette liste du
-# Dockerfile (« la liste fait autorite dans le Dockerfile ») avec
-#   awk '/^RUN apt-get update && apt-get install/,/[^\\]$/'
-# Ce motif ne connait QUE `apt-get` : depuis le passage a apt-fast, il ne
-# capture plus que le bloc d'amorcage (aria2 curl ca-certificates) et
-# l'installation NATIVE (hors docker) repart avec une liste tronquee —
-# inst_deps_verify echoue sur build-essential/libtalloc-dev/libsctp-dev.
-# Le correctif est dans 10-deps.sh (accepter `apt-(get|fast)` dans l'awk ET
-# dans le sed qui suit), pas ici : ne pas repasser cette liste en apt-get pour
-# contourner le probleme.
+# External coupling: install_modules/10-deps.sh EXTRACTS this list from the
+# Dockerfile (the list is authoritative here) and must accept both `apt-get` and
+# `apt-fast`. Do not revert this list to apt-get to work around that extractor.
 RUN echo 'wireshark-common wireshark-common/install-setuid boolean true' | debconf-set-selections
-# deb-src AVANT l unique `apt-fast update` : le build-dep gnuradio (gr-gsm, fin
-# du bloc ci-dessous) lit les index Sources. Il avait son propre RUN avec un
-# deuxieme update + une deuxieme resolution apt : fusionne ici. Noble ecrit ses
-# sources en deb822 (ubuntu.sources, ligne "Types: deb") ; l ancien
-# /etc/apt/sources.list (jammy) reste gere au cas ou la base change (gnuradio
-# est dans universe : tous les composants).
+# deb-src BEFORE the single `apt-fast update`: the gnuradio build-dep (gr-gsm,
+# end of the block below) reads the Sources indexes. Noble writes its sources in
+# deb822 (ubuntu.sources, "Types: deb"); the old /etc/apt/sources.list (jammy)
+# is still handled in case the base changes (gnuradio is in universe: all
+# components).
 RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
         sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources; \
     else \
@@ -159,108 +140,99 @@ RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
     fi
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     apt-fast update && apt-fast install -y --no-install-recommends \
-    # Outils de build
+    # Build tools
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
-    # Dépendances Osmocom Core & Network
+    # Osmocom core & network dependencies
     libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev asterisk-moh* \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \
-    # Audio, Radio & SIP
+    # Audio, radio & SIP
     libortp-dev libfftw3-dev libusb-1.0-0-dev libsofia-sip-ua-dev libsofia-sip-ua-glib-dev \
-    # Python & Outils système
+    # Python & system tools
     python3 python3-dev python3-scapy ca-certificates tmux systemd systemd-sysv \
-    # Debug — gdb-multiarch pour attacher au gdb-stub QEMU (ARM Calypso)
+    # Debug: gdb-multiarch to attach to the QEMU gdb-stub (ARM Calypso)
     gdb-multiarch \
-    # ALSA — requis par osmo-gapk pour l'I/O audio matériel
-    # (libasound2t64 : nom noble de libasound2, transition time_t 64 bits)
+    # ALSA: required by osmo-gapk for hardware audio I/O
+    # (libasound2t64: noble name for libasound2, time_t 64-bit transition)
     libasound2-dev libasound2t64 alsa-utils \
-    # libgsm — codec GSM-FR natif (accélère gapk en mode gsmfr)
+    # libgsm: native GSM-FR codec (speeds up gapk in gsmfr mode)
     libgsm1-dev libgsm1 \
     iptables iproute2 asterisk ffmpeg \
-    # Sync build-iso : psmisc (pkill/killall, cleanup) + pulseaudio (chaîne audio gapk/parec)
+    # build-iso sync: psmisc (pkill/killall, cleanup) + pulseaudio (gapk/parec audio chain)
     psmisc pulseaudio pulseaudio-utils binutils-arm-none-eabi \
-    # Toolchains alternatives : osmocom-bb jolly/testing et fixeria/burst_ind ne
-    # compilent qu'avec gcc-9 ; gcc-11 reste le compilateur par defaut du reste
-    # (gcc-13 est celui de noble : il compile la pile Osmocom en tete de fichier,
-    # les alternatives ci-dessous ne sont posees qu apres).
-    # (Ex-bloc apt dedie, supprime : les `update-alternatives` plus bas echouaient
-    #  « alternative path /usr/bin/gcc-9 doesn't exist » sans ces paquets.)
+    # Alternative toolchains: osmocom-bb jolly/testing and fixeria/burst_ind only
+    # compile with gcc-9; gcc-11 is the default compiler for the rest (gcc-13 is
+    # noble's and builds the Osmocom stack at the top of this file). These
+    # packages are required by the update-alternatives calls below.
     gcc-9 g++-9 gcc-11 g++-11 \
-    # log4cpp : etait installe a part avec le build-dep gnuradio (gr-gsm).
+    # log4cpp: used by gnuradio (gr-gsm)
     liblog4cpp5-dev \
-    # QEMU Calypso (bbaranoff/qosmO) : venv + numpy/scipy pour l'outillage
-    # DSP, glib/pixman/slirp pour la cible arm-softmmu, ninja pour meson, socat
-    # pour les PTY de scripts/run.sh. (Ex-bloc apt-get juste avant le build QEMU.)
+    # QEMU Calypso (bbaranoff/qosmO): venv + numpy/scipy for the DSP tooling,
+    # glib/pixman/slirp for the arm-softmmu target, ninja for meson, socat for
+    # the scripts/run.sh PTYs.
     python3-venv python3-pip python3-numpy python3-scipy \
     libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build \
-    # Ex-Dockerfile.run — outillage d'exploitation du conteneur :
-    #   telnet   -> repli VTY (run_modules/21-abonnes-hlr.sh) + transport dashboard
-    #   whiptail -> menus de tools/vty-menu.sh et de start-docker.sh
-    #   xz-utils -> `tar -xJf` du tarball Node 22 (bloc dashboard, en fin de fichier)
-    #   libasound2-plugins -> greffon ALSA->PulseAudio, EXIGE par configs/asound.conf
-    #        (`type pulse` sur gsm_out, gsm_in ET pcm.!default) : sans lui, toute
-    #        ouverture ALSA (gapk, mobile) echoue et l'audio est mort des 2 cotes
-    #   tshark/tcpdump/libcap2-bin -> capture ; libcap2-bin fournit le setcap ci-dessous
+    # Container operation tooling:
+    #   telnet   -> VTY fallback (run_modules/21-abonnes-hlr.sh) + dashboard transport
+    #   whiptail -> menus of tools/vty-menu.sh and start-docker.sh
+    #   xz-utils -> `tar -xJf` of the Node 22 tarball (dashboard block, end of file)
+    #   libasound2-plugins -> ALSA->PulseAudio plugin, REQUIRED by configs/asound.conf
+    #        (`type pulse` on gsm_out, gsm_in AND pcm.!default): without it any
+    #        ALSA open (gapk, mobile) fails and audio is dead on both sides
+    #   tshark/tcpdump/libcap2-bin -> capture; libcap2-bin provides the setcap below
     telnet nano whiptail xz-utils libasound2-plugins \
     tcpdump tshark libcap2-bin \
-    # Deps GNU Radio 3.10 (gr-gsm, venv /root/.env plus bas) : meme resolution
-    # apt que le reste, pas de second RUN apt. (Le && ferme la liste pour
-    # l extracteur de install_modules/10-deps.sh.)
+    # GNU Radio 3.10 deps (gr-gsm, venv /root/.env below): same apt resolution as
+    # the rest, no second RUN apt. (The && closes the list for the
+    # install_modules/10-deps.sh extractor.)
     && apt-fast build-dep -y gnuradio \
     && rm -rf /var/lib/apt/lists/*
 
-# Capture non-root pour le dashboard et tcpdump. Position OBLIGATOIRE : dumpcap
-# n'existe qu'une fois wireshark-common installe (tire par tshark, juste au-dessus).
+# Non-root capture for the dashboard and tcpdump. Position is MANDATORY: dumpcap
+# only exists once wireshark-common is installed (pulled by tshark, above).
 RUN setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
 
-# ── Le cache .deb : l outil, puis les paquets deja construits ────────────────
-# .deb-cache/ est le miroir, dans le contexte de build, de /var/cache/osmo-debs
-# de l hote (build.sh l y recopie avant, et ramene les nouveaux paquets apres).
-# Vide au premier build : tout se compile et se met en cache. Plein ensuite :
-# chaque etape ci-dessous pose son paquet et ne compile rien.
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) : le cache est ignore et reecrit.
+# ── The .deb cache: the tool, then the already-built packages ────────────────
+# .deb-cache/ is the build-context mirror of /var/cache/osmo-debs on the host
+# (build.sh copies it in before, and brings new packages back after). Empty on
+# the first build: everything compiles and is cached. Populated afterwards: each
+# step below lays down its package and compiles nothing.
+# OSMO_DEB_REFRESH=1 (build.sh --no-cache): the cache is ignored and rewritten.
 ARG OSMO_DEB_REFRESH=0
 COPY packaging/osmo-deb.sh /usr/local/sbin/osmo-deb
 COPY .deb-cache/ /var/cache/osmo-debs/
 RUN chmod 755 /usr/local/sbin/osmo-deb && osmo-deb list || true
 
-# ── git : plus de forçage HTTP/1.1 ───────────────────────────────────────────
-# [2026-09-03] RETIRE. Le contournement http.version=HTTP/1.1 (contre "expected
-# flush after ref listing", un flux HTTP/2 coupe par un intermediaire) etait
-# pose ici en global et repete a chaque clone. Il n a plus lieu d etre : git
-# parle HTTP/2 normalement, et forcer HTTP/1.1 ralentissait tous les clones
-# pour un incident de reseau local. GIT_TERMINAL_PROMPT=0 (ENV, plus haut)
-# reste : sans terminal, un clone qui veut un login doit ECHOUER net, pas
-# attendre. postBuffer large pour les gros clones.
+# git: large postBuffer for big clones. GIT_TERMINAL_PROMPT=0 (ENV, above)
+# makes a clone that wants a login fail fast rather than hang with no terminal.
 RUN git config --global http.postBuffer 524288000
 
 SHELL ["/bin/bash", "-c"]
 COPY configs/*conf /etc/asterisk/
-# asound.conf DOIT AUSSI ETRE A LA RACINE. Le COPY ci-dessus le depose dans
-# /etc/asterisk/ - ALSA ne regarde jamais la : il lit /etc/asound.conf (ou
-# ~/.asoundrc). Sans ce second exemplaire, `aplay -D gsm_out` repond
-#     ALSA lib pcm.c: (snd_pcm_open_noupdate) Unknown PCM gsm_out
-# et le mobile du conteneur est MUET, sans qu aucun log ne parle d audio.
-# start-docker.sh l.469 monte bien celui de l hote (-v ...:/etc/asound.conf), mais un
-# conteneur lance autrement - docker run a la main, diagnostic - n a rien.
+# asound.conf must ALSO be at the root. The COPY above puts it in /etc/asterisk/,
+# which ALSA never reads: ALSA reads /etc/asound.conf (or ~/.asoundrc). Without
+# this second copy, `aplay -D gsm_out` returns "Unknown PCM gsm_out" and the
+# container mobile is silent. start-docker.sh mounts the host copy
+# (-v ...:/etc/asound.conf), but a container started otherwise (plain docker
+# run, diagnostics) has none.
 COPY configs/asound.conf /etc/asound.conf
 
 WORKDIR ${ROOT}
 
-# 2. Création de l'utilisateur osmocom
+# 2. Create the osmocom user
 RUN groupadd osmocom && useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom && \
     mkdir -p /var/lib/osmocom && chown osmocom:osmocom /var/lib/osmocom
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE osmo-core — la pile Osmocom : 17 depots, 4 patchs, gapk, SMSC, libosmo-dsp
+# STAGE osmo-core — the Osmocom stack: 17 repos, 4 patches, gapk, SMSC, libosmo-dsp
 # ────────────────────────────────────────────────────────────────────────────
 FROM base AS osmo-core
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
-# 3. Compilation de la pile Osmocom (Ordre respecté)
+# 3. Build the Osmocom stack (order matters)
 RUN for repo in \
     libosmocore:1.12.1 \
     libosmo-netif:1.7.0 \
@@ -289,7 +261,7 @@ RUN for repo in \
         GIT_URL="https://gitea.osmocom.org/cellular-infrastructure/$name"; \
     fi && \
     \
-    # Le paquet du cache d abord : s il est la, ni clone ni compilation.
+    # Cached package first: if present, neither clone nor compile.
     if osmo-deb install "$name" "$version"; then continue; fi && \
     \
     cd ${ROOT} && \
@@ -307,31 +279,29 @@ RUN for repo in \
     \
     ./configure $EXTRA_FLAGS && \
     make -j$(nproc) && \
-    # make install sous DESTDIR -> .deb dans le cache -> dpkg -i dans la racine
+    # make install under DESTDIR -> .deb in the cache -> dpkg -i into the root
     osmo-deb pack "$name" "$version" make install && \
     ldconfig \
     || { echo "ECHEC build osmocom: $name"; exit 1; }; \
     done
 
-# ── Patch osmo-trx IPC : alignement ts_initial sur la trame TDMA (fix RACH/LU) ──
-# Le device IPC (calypso-ipc-device) commit des buffers RX a des timestamps
-# multiples de 2500 (CALYPSO_SHM_BUFSIZE) ; sans arrondi, ts_initial%5000 valait
-# 0 ou 2500 -> device-TN0 mappe sur osmo-TN4 -> la RACH (UL) ratait le slot
-# TS0/RACH -> NOPE/-110 -> Location Update bloquee. Le patch arrondit ts_initial
-# a la frontiere de trame (8*625=5000 @ 4 SPS). Patch maintenu dans patches/.
-# ── Patch osmo-trx RACH UL : table de modulation per-RA (fix LU, no-hardcode) ──
-# La vraie RA du mobile (d_rach@0x0474, plombee via /dev/shm/calypso_rach par QEMU)
-# varie a chaque burst ; le device rejouait un RA=3 fixe -> request-reference de
-# l'IMM ASSIGN jamais matchee -> LU en boucle. sigProcLib pre-genere la modulation
-# Laurent EXACTE d'osmo-trx pour chaque RA 0x00..0x0f (-> /root/rach_ref_RA<nn>.cs16),
-# le device selectionne le ref de la VRAIE RA. Ajoute aussi les logs RACH-DET
-# (Transceiver.cpp) + le lien libosmocoding dans COMMON_LDADD (Makefile.am, requis
-# pour gsm0503_rach_ext_encode). Touche Makefile.am -> autoreconf+configure requis.
+# ── osmo-trx IPC patch: align ts_initial on the TDMA frame boundary ──────────
+# The IPC device (calypso-ipc-device) commits RX buffers at timestamps that are
+# multiples of 2500 (CALYPSO_SHM_BUFSIZE). The patch rounds ts_initial to the
+# frame boundary (8*625=5000 @ 4 SPS) so device-TN0 maps to osmo-TN0 and the UL
+# RACH hits the TS0/RACH slot. Maintained in patches/.
+# ── osmo-trx RACH UL patch: per-RA modulation table ──────────────────────────
+# The mobile's real RA (d_rach@0x0474, fed via /dev/shm/calypso_rach by QEMU)
+# varies per burst. sigProcLib pre-generates osmo-trx's exact Laurent modulation
+# for each RA 0x00..0x0f (-> /root/rach_ref_RA<nn>.cs16) and the device selects
+# the reference for the real RA. Also adds the RACH-DET logs (Transceiver.cpp)
+# and the libosmocoding link in COMMON_LDADD (Makefile.am, required for
+# gsm0503_rach_ext_encode). Touches Makefile.am -> autoreconf+configure needed.
 COPY patches/osmo-trx-ipc-ts-frame-align.patch /tmp/osmo-trx-ipc-ts-frame-align.patch
 COPY patches/osmo-trx-rach-per-ra-table.patch /tmp/osmo-trx-rach-per-ra-table.patch
-# Meme nom de paquet que dans la boucle (osmo-trx), version 1.7.2+ipc : dpkg
-# fait une mise a jour, les fichiers sont les memes. Si la boucle est sortie du
-# cache, l arbre source n existe pas : on le reclone avant d appliquer les patchs.
+# Same package name as in the loop (osmo-trx), version 1.7.2+ipc: dpkg does an
+# upgrade. If the loop was served from the cache the source tree does not exist,
+# so it is re-cloned before applying the patches.
 RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       { [ -d ${ROOT}/osmo-trx ] || { cd ${ROOT} \
           && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-trx \
@@ -346,19 +316,15 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       && ldconfig; \
     fi
 
-# ── Patch osmo-bts RAND : forcer le defi d'authentification ────────────────
-# osmo-bts relaie normalement l'AUTHENTICATION REQUEST du reseau telle quelle.
-# Ce patch, dans rsl_rx_rll() (src/common/rsl.c), reecrit le RAND de cette
-# trame quand la variable d'environnement RAND est posee sur le processus BTS :
-#     RAND non defini -> rien de touche (comportement normal) ;
-#     RAND=0          -> RAND nul sur 16 octets (defi fixe COMP128v1,
-#                        defi fixe connu, Ki = prefixe connu
-#                        + 2 octets a retrouver) ;
-#     RAND=<hexa>     -> jusqu'a 16 octets lus en hexa, completes de zeros.
-# « seulement quand precise, mais force quand precise ». Ne touche que rsl.c,
-# donc pas de Makefile.am : autoreconf/configure quand meme, l'arbre reclone
-# arrive sans ./configure. Meme nom de paquet (osmo-bts), version 1.10.0+rand :
-# dpkg fait une mise a jour. Patch maintenu dans patches/.
+# ── osmo-bts RAND patch: pin the authentication challenge (lab only) ─────────
+# In rsl_rx_rll() (src/common/rsl.c), rewrites the RAND of the AUTHENTICATION
+# REQUEST frame when the RAND environment variable is set on the BTS process:
+#     RAND unset   -> nothing touched (normal behaviour);
+#     RAND=0       -> 16-byte zero RAND;
+#     RAND=<hex>   -> up to 16 bytes read as hex, zero-padded.
+# Touches only rsl.c (no Makefile.am), but autoreconf/configure is still run
+# because a re-cloned tree has no ./configure. Same package name (osmo-bts),
+# version 1.10.0+rand: dpkg upgrades. Maintained in patches/.
 COPY patches/osmo-bts-force-rand-toy.patch /tmp/osmo-bts-force-rand-toy.patch
 RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
       { [ -d ${ROOT}/osmo-bts ] || { cd ${ROOT} \
@@ -373,16 +339,14 @@ RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
       && ldconfig; \
     fi
 
-# ── Patch osmo-hlr RAND : forcer le RAND du vecteur d'auth ──────────────────
-# auc.c/auc_compute_vectors() : gate minimal. Si la variable d'environnement
-# RAND est posee sur le process HLR, le RAND tire pour CHAQUE vecteur est force
-# a 0 (16 octets) AVANT osmo_auth_gen_vec2 : SRES et Kc sont alors calcules sur
-# RAND=0 (le HLR a le Ki). C'est l'etage indispensable pour une LU ACCEPTEE :
-# osmo-msc envoie ce RAND et compare au SRES du meme vecteur -> match. Le seul
-# gate osmo-msc (cote tx) donnerait un mismatch -> LU reject. RAND absent ->
-# reseau normal. Ne touche pas Makefile.am ; autoreconf/configure quand meme
-# (arbre reclone sans ./configure). Meme nom de paquet (osmo-hlr), version
-# 1.9.2+rand : dpkg met a jour. Patch maintenu dans patches/.
+# ── osmo-hlr RAND patch: pin the auth-vector RAND (lab only) ─────────────────
+# In auc.c/auc_compute_vectors(): when the RAND environment variable is set on
+# the HLR process, the RAND drawn for each vector is forced to 16 zero bytes
+# before osmo_auth_gen_vec2, so SRES and Kc are computed over RAND=0 (the HLR
+# holds Ki). This keeps the HLR and MSC vectors consistent. RAND unset -> normal
+# network. No Makefile.am touched; autoreconf/configure still run (re-cloned
+# tree has no ./configure). Same package name (osmo-hlr), version 1.9.2+rand:
+# dpkg upgrades. Maintained in patches/.
 COPY patches/osmo-hlr-force-rand-toy.patch /tmp/osmo-hlr-force-rand-toy.patch
 RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
       { [ -d ${ROOT}/osmo-hlr ] || { cd ${ROOT} \
@@ -397,14 +361,14 @@ RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
       && ldconfig; \
     fi
 
-# ── Patch osmo-msc RAND : forcer le defi d'authentification ────────────────
-# gsm48_tx_mm_auth_req() (src/libmsc/gsm_04_08.c) : gate minimal. Si la variable
-# d'environnement RAND est posee sur le processus MSC, le RAND de l'AUTH REQUEST
-# descendante est force (0 sur 16 octets dans notre cas ; changer l'initialiseur
-# forced_rand[] pour un autre RAND). RAND absent -> comportement normal du reseau.
-# Ne touche pas Makefile.am ; autoreconf/configure quand meme (arbre reclone sans
-# ./configure). Meme nom de paquet (osmo-msc), version 1.15.0+rand : dpkg met a
-# jour. Patch maintenu dans patches/. Meme gate cote BSC (openbsc gsm_04_08.c).
+# ── osmo-msc RAND patch: pin the authentication challenge (lab only) ─────────
+# In gsm48_tx_mm_auth_req() (src/libmsc/gsm_04_08.c): when the RAND environment
+# variable is set on the MSC process, the RAND of the downlink AUTH REQUEST is
+# forced (16 zero bytes here; change the forced_rand[] initialiser for another
+# value). RAND unset -> normal network behaviour. No Makefile.am touched;
+# autoreconf/configure still run (re-cloned tree has no ./configure). Same
+# package name (osmo-msc), version 1.15.0+rand: dpkg upgrades. Maintained in
+# patches/.
 COPY patches/osmo-msc-force-rand-toy.patch /tmp/osmo-msc-force-rand-toy.patch
 RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
       { [ -d ${ROOT}/osmo-msc ] || { cd ${ROOT} \
@@ -419,33 +383,18 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
       && ldconfig; \
     fi
 
-# ── Patch gapk : sonde sur la sortie ALSA (GAPK_ALSA_PROBE) ──────────────────
-# Diagnostic pur, inerte tant que GAPK_ALSA_PROBE != 1. Tranche une question que
-# rien d'autre ne permet de trancher : quand l'ecouteur du MS est muet, le PCM
-# remis a snd_pcm_writei est-il deja nul (defaut en amont, dans la chaine gapk)
-# ou non nul (defaut en aval, ALSA/PulseAudio) ? osmo_gapk_pq_execute ne
-# journalise rien ici, car il ne se plaint que d'un retour negatif et
-# pq_cb_alsa_output rend « succes » meme pour une ecriture vide.
-# Patch maintenu dans patches/ (regenere si pq_alsa.c change).
-#
-# [2026-08-12] LE PATCH RESTE DANS LE DEPOT, LE BUILD NE L'APPLIQUE PLUS.
-# Demande explicite : garder patches/gapk-pq-alsa-output-probe.patch versionne
-# (il tranche encore la question amont/aval quand l'ecouteur est muet) mais ne
-# plus le poser sur le gapk construit — un `git apply` dans le build casse
-# l'image des que pq_alsa.c bouge en amont, et la sonde n'est plus la question
-# du jour (descendant muet resolu par CALYPSO_PULSE_LATENCY_MSEC, 240 depuis
-# le 2026-09-09 : cf. start-native.sh, le tampon du greffon ALSA-PulseAudio).
-# POUR LE REMETTRE, deux gestes, dans cet ordre :
-#   1. decommenter la ligne COPY ci-dessous ;
-#   2. reinserer dans le RUN, entre le `git clone` et le `cd osmo-gapk` :
-#        git -C ${ROOT}/osmo-gapk apply /tmp/gapk-pq-alsa-output-probe.patch && \
-#      (elle ne peut pas rester en commentaire : une ligne `#` au milieu d'une
-#       continuation `\` couperait la chaine shell du RUN).
-# Verifier d'abord que le patch s'applique toujours :
-#   git -C <clone gapk> apply --check patches/gapk-pq-alsa-output-probe.patch
-# POUR L'APPLIQUER A CHAUD SANS REBUILD : le poser dans le conteneur sur un
-# clone de gapk, puis reconstruire gapk seul.
-# COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
+# ── gapk: ALSA-output probe patch (GAPK_ALSA_PROBE), NOT applied by the build ─
+# patches/gapk-pq-alsa-output-probe.patch is a diagnostic (inert unless
+# GAPK_ALSA_PROBE=1) that tells whether a silent MS listener is caused upstream
+# (PCM already zero in the gapk chain) or downstream (ALSA/PulseAudio). It is
+# kept versioned in patches/ but not applied here, so an upstream change to
+# pq_alsa.c cannot break the image.
+# To re-enable: apply it after the `git clone`, before `cd osmo-gapk`, in the
+# RUN below (it cannot stay as a `#` line inside the `\` continuation), i.e.
+#   git -C ${ROOT}/osmo-gapk apply /tmp/gapk-pq-alsa-output-probe.patch && \
+# and add back:
+#   COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
+# Check first with: git -C <gapk clone> apply --check patches/gapk-pq-alsa-output-probe.patch
 RUN if ! osmo-deb install osmo-gapk 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
@@ -457,15 +406,13 @@ RUN if ! osmo-deb install osmo-gapk 0.git; then \
       ldconfig; \
     fi
 
-# ── gsup-smsc-proto : SMSC externe connecté à OsmoHLR via GSUP ────────────────
-# Programmes : proto-smsc-daemon (réception MO SMS + relai MT via GSUP)
-#              proto-smsc-sendmt (injection MT SMS via socket UNIX local)
-# Dépendances build : libosmocore, libosmogsm, libosmo-gsup-client
-# [2026-09-03] Son Makefile de tete lance `make DESTDIR= install` dans daemon/
-# et sendmt/ - DESTDIR force a vide, le staging d osmo-deb restait vide ("rien
-# n a ete installe dans DESTDIR") alors que la compilation (gcc courant) etait
-# bonne. On installe donc les deux sous-repertoires nous-memes, avec le DESTDIR
-# qu osmo-deb pose : leurs Makefiles, eux, l honorent.
+# ── gsup-smsc-proto: external SMSC connected to OsmoHLR over GSUP ─────────────
+# Programs: proto-smsc-daemon (MO SMS reception + MT relay over GSUP)
+#           proto-smsc-sendmt (MT SMS injection over a local UNIX socket)
+# Build deps: libosmocore, libosmogsm, libosmo-gsup-client
+# The top-level Makefile forces DESTDIR= empty, so the two sub-directories are
+# installed here directly with the DESTDIR that osmo-deb sets (their own
+# Makefiles honour it).
 RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
@@ -477,12 +424,11 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
       ldconfig; \
     fi
 
-# ── sms-coding-utils : encodage/décodage SMS PDU (GSM 03.40) ──────────────────
+# ── sms-coding-utils: SMS PDU encode/decode (GSM 03.40) ──────────────────────
 # sms-encode-text, gen-sms-deliver-pdu, sms-pdu-decode, etc.
-# Son Makefile de tete pose `DESTDIR=` (vide) et le repasse aux sous-repertoires :
-# une variable donnee SUR LA LIGNE DE COMMANDE de make l emporte et descend
-# avec, d ou `make install DESTDIR=...` explicite (l ancien INSTDIR=... n existait
-# dans aucun de ses Makefiles). bindir vaut /usr/local/bin par configure.
+# The top-level Makefile sets DESTDIR= empty and passes it to sub-directories; a
+# variable given on make's COMMAND LINE wins and propagates, hence the explicit
+# `make install DESTDIR=...`. bindir is /usr/local/bin per configure.
 RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
       cd ${ROOT} && \
       wget -q https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env/sms-coding-utils-latest.tar.bz2 && \
@@ -494,7 +440,7 @@ RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
         sh -c 'mkdir -p "$DESTDIR/usr/local/bin" && make install DESTDIR="$DESTDIR"'; \
     fi
 
-# ── libosmo-dsp (dépendance transceiver/burst_ind) ──────────────────────────
+# ── libosmo-dsp (transceiver/burst_ind dependency) ──────────────────────────
 RUN if ! osmo-deb install libosmo-dsp 0.git; then \
       cd /opt/GSM \
       && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
@@ -507,59 +453,37 @@ RUN if ! osmo-deb install libosmo-dsp 0.git; then \
     fi
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE bb — osmocom-bb, le firmware Calypso et les deux branches gcc-9
+# STAGE bb — osmocom-bb, the Calypso firmware and the two gcc-9 branches
 # ────────────────────────────────────────────────────────────────────────────
 FROM osmo-core AS bb
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
 # ── Calypso build ─────────────────────────────
-
-# ── Patch osmocon : filtre Kc — RETIRE le 2026-08-30 ─────────────────────────
-# Ce patch faisait ecrire /dev/shm/calypso_kc a osmocon, en espionnant
-# L1CTL_CRYPTO_REQ au passage sur le lien serie. Il etait la SEULE source du Kc
-# a l'epoque ; il ne l'est plus, et il faisait desormais plus de mal que de bien.
 #
-# POURQUOI ON LE RETIRE. Un espion voit passer la cle, mais pas sa fin de vie :
-# il doit la DEVINER. Le patch la devinait sur DM_EST_REQ et DM_REL_REQ, et
-# remettait le fichier a 32 zeros. L'intention est juste pour le RELEASE, fausse
-# pour l'ESTABLISH -- le mobile emet aussi un DM_EST_REQ pour ouvrir un lien
-# SUPPLEMENTAIRE sur un canal DEJA chiffre (le SAPI 3 du SMS). La cle
-# disparaissait donc en pleine session chiffree.
-#
-# Pire, il y avait TROIS ecrivains sur ce fichier (osmocon, l1ctl_sock.c, le
-# shunt DSP) sans le moindre arbitrage : le dernier qui ecrit gagne, et c'est
-# l'effaceur. Mesure du 30/08 : fichier a 32 zeros, « A5=non » sur tout le canal
-# dedie, premier appel mort.
-#
-# CE QUI LE REMPLACE. calypso_dsp_shunt.c publie /dev/shm/calypso_kc_l1 depuis
-# d_a5mode et a_kc du NDB -- ce que le FIRMWARE a reellement charge dans le DSP
-# (calypso/dsp.c:dsp_load_ciph_param). Ce n'est plus un espion qui devine, c'est
-# l'etat de la couche 1, remis a zero par le firmware lui-meme quand il repart
-# en clair. Et le fichier lui est PROPRE : plus de course a l'ecriture.
-#
-# Le patch reste dans patches/ a titre documentaire, il n'est plus applique.
-# L arbre ENTIER part dans le paquet (snapshot) : trx_toolkit, osmocon et les
-# binaires host sont lus dans l arbre au runtime, pas seulement dans /usr/local.
-# [2026-09-08] trx_toolkit/clck_gen.py : l horloge TDMA de fake_trx ne se
-# remet a zero que pour un retard superieur a une trame (4,615 ms). Avant, un
-# retard de 0,3 a 2 ms decalait la base de temps a chaque fois ; osmo-bts-trx
-# compensait en boucle et la parole perdait des trames. Patch maintenu dans
-# patches/, applique aussi par install_modules/40-patches.sh en natif.
-# mobile : une SIM reinseree sans RPLMN (reconnexion SAP) restait en A6 et la
-# recherche de PLMN finissait « unhandled » (patches/osmocom-bb-plmn-a6-reinsert.patch).
-# PLMNsel / FPLMN lus avec osmo_plmn_to_bcd (ecriture) au lieu de from_bcd : 000-00
-# (patches/osmocom-bb-sim-plmn-from-bcd.patch). Les deux, aussi, par 40-patches.sh.
+# Three patches are applied to osmocom-bb and the WHOLE tree is snapshotted into
+# the package: trx_toolkit, osmocon and the host binaries are read from the tree
+# at runtime, not only from /usr/local. The same three patches are also applied
+# natively by install_modules/40-patches.sh.
+#   - clck-gen-frame-tolerance: fake_trx's TDMA clock only resets for a delay
+#     larger than one frame (4.615 ms), so sub-frame jitter no longer drops
+#     speech frames.
+#   - plmn-a6-reinsert: a SIM re-inserted without RPLMN (SAP reconnect) no
+#     longer stays in A6 with an "unhandled" PLMN search.
+#   - sim-plmn-from-bcd: PLMNsel / FPLMN read with osmo_plmn_to_bcd instead of
+#     from_bcd.
+# patches/osmocom-bb-osmocon-kc-filter.patch is kept for reference but not
+# applied (the Kc comes from calypso_dsp_shunt.c via /dev/shm/calypso_kc_l1).
 COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
 COPY patches/osmocom-bb-plmn-a6-reinsert.patch /tmp/osmocom-bb-plmn-a6-reinsert.patch
 COPY patches/osmocom-bb-sim-plmn-from-bcd.patch /tmp/osmocom-bb-sim-plmn-from-bcd.patch
-# [2026-10-23] OSMOCOM_BB_REF : osmocom-bb est EPINGLE. En amont, a0a315e2 « trxcon/trx_if: migrate to
-# libosmo-trx » a sorti trxcon de `make nofirmware` et lui fait exiger libosmo-trx : un clone de la tete ne
-# produit plus src/host/trxcon/src/trxcon (install plus bas en echec, notebook d'installation du 23/10). eac4eed1
-# est l'arbre du banc, celui sur lequel les trois patchs sont faits.
+# OSMOCOM_BB_REF: osmocom-bb is PINNED. Upstream a0a315e2 "trxcon/trx_if: migrate
+# to libosmo-trx" removed trxcon from `make nofirmware` and made it require
+# libosmo-trx, so a clone of HEAD no longer produces src/host/trxcon/src/trxcon.
+# eac4eed1 is the bench tree the three patches are made against.
 ARG OSMOCOM_BB_REF=eac4eed1
 RUN if ! osmo-deb install osmocom-bb 0.git; then \
       cd ${ROOT} && \
@@ -569,55 +493,33 @@ RUN if ! osmo-deb install osmocom-bb 0.git; then \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-plmn-a6-reinsert.patch && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-sim-plmn-from-bcd.patch && \
       cd osmocom-bb/src && \
-      # Build complet : firmware (layer1.bin/.elf pour Calypso) + outils host
-      # (mobile, trxcon, virtphy, ccch_scan). Le firmware est nécessaire pour
-      # le mode PHY_MODE=qemu où QEMU émule un Calypso et exécute layer1.
+      # Full build: firmware (layer1.bin/.elf for Calypso) + host tools (mobile,
+      # trxcon, virtphy, ccch_scan). The firmware is needed for PHY_MODE=qemu,
+      # where QEMU emulates a Calypso and runs layer1.
       make nofirmware && \
       osmo-deb snapshot osmocom-bb 0.git ${ROOT}/osmocom-bb; \
     fi
 
-# ── Note historique — patch fake_trx TRXD v0 (RETIRE) ────────────────────────
-# Conserve verbatim : il documente une panne vecue. Il flottait dans
-# Dockerfile.run juste au-dessus du bloc firmware, avec lequel il n'a AUCUN
-# rapport — voisinage accidentel, pas lien de cause a effet.
-# ── Patch fake_trx : forcer TRXD v0 ─────────────────────────────────────────
-# osmo-bts-trx 1.10+ négocie TRXD v1 via SETFORMAT, mais trxcon (OsmocomBB)
-# ne supporte que v0. Le header v1 a 2 octets de plus → décalage des soft-bits
-# → BER constant 55/456 sur chaque frame → FBSB_SEARCH échoue en boucle.
-# Fix : forcer ver_req=0 dans la réponse SETFORMAT → le BTS reste en v0.
-# (patch TRXD v0 retire : burst_fwd.py:66 re-encode deja par interface,
-#  trxcon recoit du v0 quoi qu'il arrive -> le forcage etait inutile)
-
-# ── Firmware Calypso prebuild (layer1.highram.*) — ex-Dockerfile.run ─────────
-# `make nofirmware` ci-dessus ne construit justement PAS le firmware : on prend
-# les binaires prebuild de bbaranoff/firmware et on les depose la ou le mode
-# PHY_MODE=qemu les cherche. ORDRE IMPOSE : ce bloc exige A LA FOIS ce clone ET
-# l'arbre /opt/GSM/osmocom-bb ci-dessus — le placer plus haut ferait echouer les
-# cp et PHY_MODE=qemu partirait sans layer1.
-# (Le `rm -rf /opt/GSM/firmware` qui precedait le clone dans Dockerfile.run est
-#  supprime : ici le chemin n'existe pas encore, l'instruction etait morte.)
-# GIT_TERMINAL_PROMPT=0 : sans terminal (docker build), un clone qui demande un
-# login doit echouer NET (message clair) au lieu d attendre un identifiant que
-# personne ne tapera. --depth 1 : on ne veut que les binaires prebuild, pas
-# l historique. (Le -c http.version=HTTP/1.1 qui etait ici est retire.)
+# ── Firmware Calypso prebuild (layer1.highram.*) ─────────────────────────────
+# `make nofirmware` above does NOT build the firmware: the prebuilt binaries
+# from bbaranoff/firmware are fetched and placed where PHY_MODE=qemu looks for
+# them. Order is fixed: this block needs BOTH this clone AND the /opt/GSM/
+# osmocom-bb tree above. GIT_TERMINAL_PROMPT=0 makes a login-prompting clone
+# fail fast with no terminal; --depth 1 fetches only the prebuilt binaries, not
+# the history.
 RUN if ! osmo-deb install calypso-firmware 0.git; then \
       GIT_TERMINAL_PROMPT=0 git clone --depth 1 \
         https://github.com/bbaranoff/firmware /opt/GSM/firmware \
       && osmo-deb snapshot calypso-firmware 0.git /opt/GSM/firmware; \
     fi
-# [2026-08-28] Les trois `cp` vers /opt/GSM/osmocom-bb/src/target/firmware qui
-# suivaient sont SUPPRIMES. Ils entretenaient un deuxieme exemplaire du firmware
-# que plus personne ne lit : depuis la normalisation, environnement/paths.env du
-# depot qemu ne connait qu'un chemin, $GSM_ROOT/firmware, et c'est celui que
-# QEMU (-kernel .elf) comme osmocon (romload .bin) recoivent.
-# Verifie sur le banc 192.168.1.7 : les deux exemplaires etaient bit a bit
-# identiques (md5 3363105f...), et seul /opt/GSM/firmware etait charge.
-# Si vous recompilez le firmware dans osmocom-bb, deposez le resultat dans
-# /opt/GSM/firmware : c'est desormais le seul endroit consulte.
+# The single firmware copy lives in /opt/GSM/firmware: that is what both QEMU
+# (-kernel .elf) and osmocon (romload .bin) are given (qemu paths.env knows only
+# $GSM_ROOT/firmware). If you recompile the firmware in osmocom-bb, place the
+# result in /opt/GSM/firmware.
 
-# ── GCC 9 pour osmocom-bb branches expérimentales (jolly/testing, burst_ind) ─
-# gcc-9 et gcc-11 sont installés avec le reste, plus haut : ici on ne fait que
-# déclarer les alternatives, dont l'ordre compte pour osmocom-bb.
+# ── GCC 9 for the experimental osmocom-bb branches (jolly/testing, burst_ind) ─
+# gcc-9 and gcc-11 are installed with the rest, above; here we only declare the
+# alternatives, whose order matters for osmocom-bb.
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
@@ -625,15 +527,15 @@ RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
 
 RUN update-alternatives --set gcc /usr/bin/gcc-9
 
-# osmocom-bb jolly/testing → transceiver (BTS soft-SDR pour Calypso)
-# Le binaire ET l arbre partent dans le paquet : les sources restent dans
-# /opt/GSM au rebuild depuis le cache (voir l en-tete, CACHE .deb).
-# [2026-10-19] patches/osmocom-bb-transceiver-qemu-bench.patch : l appli hote
-# `transceiver` sert le Calypso EMULE (start-native.sh --osmo-trx, c54x_exe/run.sh
-# OSMO_TRX=1) : --no-sync (pas de cellule a ecouter, mode BTS des le reset),
-# --ts-mask (un seul timeslot), --l1ctl/--base-port, et SETTSC/SETFORMAT/
-# NOMTXPOWER acquiesces (osmo-bts-trx >= 1.3 les tient pour critiques).
-# Applique aussi par install_modules/40-patches.sh en natif.
+# osmocom-bb jolly/testing -> transceiver (soft-SDR BTS for Calypso)
+# Both the binary AND the tree go into the package, so the sources survive a
+# cache rebuild (see the .deb cache note in the header).
+# patches/osmocom-bb-transceiver-qemu-bench.patch: the host `transceiver` app
+# serves the emulated Calypso (start-native.sh --osmo-trx, c54x_exe/run.sh
+# OSMO_TRX=1): --no-sync (BTS mode from reset, no cell to listen to), --ts-mask
+# (single timeslot), --l1ctl/--base-port, and SETTSC/SETFORMAT/NOMTXPOWER
+# acknowledged (osmo-bts-trx >= 1.3 treats them as critical). Also applied
+# natively by install_modules/40-patches.sh.
 COPY patches/osmocom-bb-transceiver-qemu-bench.patch /tmp/osmocom-bb-transceiver-qemu-bench.patch
 RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
       git clone --branch jolly/testing --depth 1 \
@@ -648,7 +550,7 @@ RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
              /opt/GSM/osmocom-bb-transceiver; \
     fi
 
-# osmocom-bb fixeria/burst_ind → ccch_scan / bcch_scan / cell_log
+# osmocom-bb fixeria/burst_ind -> ccch_scan / bcch_scan / cell_log
 RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
       git clone --branch fixeria/burst_ind --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
@@ -665,55 +567,47 @@ RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
            $(ls /usr/local/bin/ccch_scan /usr/local/bin/bcch_scan /usr/local/bin/cell_log 2>/dev/null); \
     fi
 
-# Retour au compilateur par defaut : ce stage ne sert qu a produire des .deb,
-# mais le laisser sur gcc-9 piegerait quiconque en derive une etape.
+# Back to the default compiler: this stage only produces .deb files, but leaving
+# it on gcc-9 would trap anyone deriving a step from it.
 RUN update-alternatives --set gcc /usr/bin/gcc-11
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE qemu — le seul arbre QEMU : /opt/GSM/qosmo (--enable-l1-grgsm)
+# STAGE qemu — the single QEMU tree: /opt/GSM/qosmo (--enable-l1-grgsm)
 # ────────────────────────────────────────────────────────────────────────────
 FROM base AS qemu
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# QEMU Calypso — RAN virtuel (baseband émulé)
+# QEMU Calypso — virtual RAN (emulated baseband)
 # ─────────────────────────────────────────────────────────────────────────────
-# Architecture :
-#   - QEMU émule un SoC Calypso (ARM7TDMI + DSP TMS320C54x)
-#   - L'ARM exécute le vrai firmware osmocom-bb layer1.highram.elf
-#   - Le DSP charge le ROM réel (calypso_dsp.txt) au boot
-#   - bridge.py relaie les bursts entre osmo-bts-trx (UDP 5700-5702)
-#     et la BSP du DSP (UDP 6702), avec QEMU comme maître d'horloge TDMA
-#   - Le mobile (layer23) se connecte directement au socket L1CTL
-#     publié par le firmware via la PTY série de QEMU
+# Architecture:
+#   - QEMU emulates a Calypso SoC (ARM7TDMI + DSP TMS320C54x)
+#   - the ARM runs the real osmocom-bb firmware layer1.highram.elf
+#   - the DSP loads the real ROM (calypso_dsp.txt) at boot
+#   - bridge.py relays bursts between osmo-bts-trx (UDP 5700-5702) and the DSP
+#     BSP (UDP 6702), with QEMU as the TDMA clock master
+#   - the mobile (layer23) connects directly to the L1CTL socket published by
+#     the firmware via QEMU's serial PTY
 #
-# Voir scripts/run.sh PHY_MODE=qemu pour l'orchestration runtime.
+# See scripts/run.sh PHY_MODE=qemu for the runtime orchestration.
 # ─────────────────────────────────────────────────────────────────────────────
-
-# (Le `apt-get install python3-venv python3-pip python3-numpy python3-scipy
-#  libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build` qui etait ici
-#  a ete fusionne dans la liste apt-fast en tete de fichier : une seule liste,
-#  un seul endroit ou la faire evoluer. Aucun paquet perdu.)
+# qosmo + c54x_exe + grgsm_exe
 # ─────────────────────────────────────────────────────────────────────────────
-# [2026-09-25] qosmo + c54x_exe + grgsm_exe — remplacent qosmo-grgsm et qosmo-dsp
-# ─────────────────────────────────────────────────────────────────────────────
-# Les deux forks QEMU sont retires (cf. start-native.sh, environment/paths.env) :
-#   /opt/GSM/qosmo      UN seul arbre QEMU (bbaranoff/qosmO), --enable-l1-grgsm.
-#                       Il porte run.sh, run_modules, cfgs. Le meme binaire sert
-#                       au mode --dsp : CALYPSO_DSP_EXTERN=1 y coupe la L1 gr-gsm.
-#                       `ninja install` pose aussi le lanceur C `qosmo`.
-#   /opt/GSM/c54x_exe   le C54x HORS de QEMU (mask-ROM TI, sa ROM dans rom/).
-#                       Il compile les sources de /opt/GSM/qosmo : APRES qosmo.
-#   /opt/GSM/grgsm_exe  la couche 1 gr-gsm hors QEMU, memes sources qosmo.
-# Snapshot de l arbre qosmo ENTIER, build/ compris : QEMU_BIN pointe sur
-# $OQC_ROOT/build/qemu-system-arm, et QEMU lit build/qemu-bundle pour se
-# relocaliser (voir Dockerfile.lite).
-# L ancien RUN « /opt/GSM/qemu/{build,*.py} » et calypso-ipc-device disparaissent
-# avec qosmo-grgsm : plus rien ne les lit.
+#   /opt/GSM/qosmo      single QEMU tree (bbaranoff/qosmO), --enable-l1-grgsm.
+#                       Carries run.sh, run_modules, cfgs. The same binary serves
+#                       the --dsp mode: CALYPSO_DSP_EXTERN=1 disables the gr-gsm
+#                       L1 there. `ninja install` also installs the C launcher
+#                       `qosmo`.
+#   /opt/GSM/c54x_exe   the C54x OUTSIDE QEMU (TI mask-ROM, its ROM in rom/).
+#                       Builds the /opt/GSM/qosmo sources: AFTER qosmo.
+#   /opt/GSM/grgsm_exe  the gr-gsm layer 1 outside QEMU, same qosmo sources.
+# The WHOLE qosmo tree is snapshotted, build/ included: QEMU_BIN points at
+# $OQC_ROOT/build/qemu-system-arm, and QEMU reads build/qemu-bundle to relocate
+# itself (see Dockerfile.lite).
 RUN if ! osmo-deb install qosmo 0.git; then \
       git clone https://github.com/bbaranoff/qosmO /opt/GSM/qosmo \
       && cd /opt/GSM/qosmo \
@@ -732,34 +626,30 @@ RUN if ! osmo-deb install qosmo 0.git; then \
     fi
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE l1 — les deux couches 1 hors QEMU : c54x_exe et grgsm_exe
+# STAGE l1 — the two layer-1 builds outside QEMU: c54x_exe and grgsm_exe
 # ────────────────────────────────────────────────────────────────────────────
 FROM qemu AS l1
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
-# Elles compilent les sources de /opt/GSM/qosmo (deja la, ce stage en derive)
-# et se lient a libosmocoding/libosmocore pour c54x_exe. On rapatrie donc
-# /usr/local depuis osmo-core plutot que de faire deriver ce stage de lui :
-# copier /usr/local (quelques centaines de Mo) coute bien moins que de copier
-# l arbre de build de QEMU (~1,5 Go d objets) dans l autre sens.
+# These build the /opt/GSM/qosmo sources (already present, this stage derives
+# from qemu) and link to libosmocoding/libosmocore for c54x_exe. /usr/local is
+# pulled from osmo-core rather than deriving this stage from it: copying
+# /usr/local (a few hundred MB) is far cheaper than copying QEMU's build tree
+# (~1.5 GB of objects) the other way.
 COPY --from=osmo-core /usr/local /usr/local
 RUN ldconfig
 
-# c54x_exe : le Makefile met -march=native dans CFLAGS - dans une image qui
-# tourne sur d autres CPU que celui du build, c est un SIGILL au demarrage. On
-# garde ses drapeaux, sans celui-la. La ROM est aussi posee en
-# /opt/GSM/calypso_dsp.*.bin, le --rom-dir par defaut de c54x_exe.
-# [2026-10-10] La ROM n est plus dans le depot c54x_exe : le `cp rom/...`
-# tombait sur « cannot stat rom/calypso_dsp.txt ». rom/fetch-rom.sh telecharge
-# le dump FreeCalypso 3606, le convertit en .bin et verifie SHA256SUMS.3606 ;
-# calypso_dsp.txt, c est le dump brut lui-meme, qu il ne garde pas : on le
-# telecharge a part.
-# [2026-10-24] dsp-rom-3606-dump.txt vient du depot fc-magnetite (freecalypso-env/),
-# plus du FTP FreeCalypso (~18 Ko/s).
+# c54x_exe: its Makefile puts -march=native in CFLAGS, which would SIGILL at
+# startup on a CPU other than the build host's. We keep its flags without that
+# one. The ROM is also placed at /opt/GSM/calypso_dsp.*.bin, c54x_exe's default
+# --rom-dir. The ROM is not in the c54x_exe repo: rom/fetch-rom.sh downloads the
+# FreeCalypso 3606 dump, converts it to .bin and verifies SHA256SUMS.3606;
+# calypso_dsp.txt (the raw dump) is downloaded separately.
+# dsp-rom-3606-dump.txt comes from the fc-magnetite repo (freecalypso-env/).
 ARG FREECALYPSO_URL=https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env
 RUN if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
@@ -783,45 +673,43 @@ RUN if ! osmo-deb install grgsm-exe 0.git; then \
     fi
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE grgsm-venv — GNU Radio 3.10 + gr-osmosdr + gr-gsm dans /root/.env
+# STAGE grgsm-venv — GNU Radio 3.10 + gr-osmosdr + gr-gsm in /root/.env
 # ────────────────────────────────────────────────────────────────────────────
-# gr-gsm se lie a libosmocore/libosmocoding/libosmogsm (son CMakeLists les
-# cherche par pkg-config) : ce stage DOIT donc partir d osmo-core, pas de base.
-# Il reste parallele a `bb` et a `l1`, qui en derivent aussi.
+# gr-gsm links to libosmocore/libosmocoding/libosmogsm (its CMakeLists finds
+# them via pkg-config), so this stage MUST start from osmo-core, not base. It
+# stays parallel to `bb` and `l1`, which also derive from osmo-core.
 FROM osmo-core AS grgsm-venv
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
-# ── gr-gsm : GNU Radio 3.10 + gr-osmosdr + gr-gsm dans le venv /root/.env ────
-# (= moteur de démod du SI réel utilisé par si_bridge.py / grgsm_decode).
-# Les deps GNU Radio (apt build-dep) sont posees par l unique bloc apt en tete
-# de fichier, deb-src compris : plus aucun apt ici.
-
-# ── GNU Radio + gr-osmosdr + gr-gsm, en UN paquet : le venv /root/.env ────────
-# On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409). Il
-# cree /root/.env et y installe les trois. Puis :
+# ── gr-gsm: GNU Radio 3.10 + gr-osmosdr + gr-gsm in the venv /root/.env ──────
+# (= the real-SI demod engine used by si_bridge.py / grgsm_decode).
+# The GNU Radio deps (apt build-dep) are installed by the single apt block at
+# the top of the file, deb-src included: no apt here.
 #
-# Patch gr-gsm : le receiver poste le BSIC/FN du SCH (decode_sch) sur le port
-# `measurements` ET sur stdout ("SCHBSIC <bsic> <fn>"). Le shunt DSP le recoit
-# (si_bridge.py parse le stdout de grgsm_decode -> UDP 4731 -> feed_sb) et encode
-# le VRAI BSIC dans dispatch_sb (remplace SHUNT_CANNED_BSIC 63). Applique APRES le
-# gist (qui clone+build gr-gsm propre), puis recompile/reinstalle dans le venv.
-# Patch maintenu dans patches/ (regenere a chaque changement gr-gsm).
+# The build downloads and runs the gist (pinned to commit fcdb409), which
+# creates /root/.env and installs the three. Then:
 #
-# matplotlib est consomme par tools/fft_global.sh et tools/matrix.sh.
-# numpy RESTE en 1.x : le gist pose "numpy<2" (GNU Radio 3.10 compile contre),
-# mais un `pip install matplotlib` nu tire la derniere matplotlib/contourpy, qui
-# exigent numpy>=2, et pip remplace alors la 1.26 par une 2.x. La contrainte
-# sur la meme ligne fait choisir a pip une matplotlib compatible numpy 1.
-# Le paquet du cache passe en 1.git : le 0.git embarque un venv en numpy 2.
+# gr-gsm patch: the receiver publishes the SCH BSIC/FN (decode_sch) on the
+# `measurements` port AND on stdout ("SCHBSIC <bsic> <fn>"). The DSP shunt reads
+# it (si_bridge.py parses grgsm_decode's stdout -> UDP 4731 -> feed_sb) and
+# encodes the REAL BSIC in dispatch_sb. Applied AFTER the gist (which clones and
+# builds gr-gsm), then rebuilt/reinstalled in the venv. Maintained in patches/.
 #
-# Le paquet du cache (grgsm-venv) est le venv COMPLET, patch et matplotlib
-# compris : c est pour cela que les trois etapes tiennent dans un seul RUN. Les
-# arbres /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} ne sont pas dans le paquet - rien
-# ne les lit au runtime (le venv porte ses .so avec un RPATH sur /root/.env).
+# matplotlib is used by tools/fft_global.sh and tools/matrix.sh.
+# numpy STAYS at 1.x: the gist pins "numpy<2" (GNU Radio 3.10 is built against
+# it), but a bare `pip install matplotlib` would pull the latest
+# matplotlib/contourpy, which require numpy>=2. The same-line constraint makes
+# pip pick a numpy-1-compatible matplotlib. The cached package is 1.git (the
+# 0.git one carried a numpy-2 venv).
+#
+# The cached package (grgsm-venv) is the COMPLETE venv, patch and matplotlib
+# included: that is why the three steps fit in one RUN. The
+# /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} trees are not in the package - nothing
+# reads them at runtime (the venv carries its .so with an RPATH on /root/.env).
 COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
 RUN if ! osmo-deb install grgsm-venv 1.git; then \
       curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
@@ -834,43 +722,38 @@ RUN if ! osmo-deb install grgsm-venv 1.git; then \
     fi && ldconfig
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE node — Node 22 et le dashboard web osmo-egprs-web
+# STAGE node - Node 22 and the osmo-egprs-web dashboard
 # ────────────────────────────────────────────────────────────────────────────
 FROM base AS node
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Node.js + dashboard web osmo-egprs-web (ex-Dockerfile.run, chaine complete)
+# Node.js + osmo-egprs-web dashboard
 # ═════════════════════════════════════════════════════════════════════════════
-# Place EN FIN DE FICHIER a dessein : aucune etape du build ne depend de Node,
-# et la fin de fichier preserve le cache des couches longues de compilation.
-# L'ORDRE INTERNE DE CETTE CHAINE EST CONTRAINT — voir les ⚠️ ci-dessous.
-# /opt/GSM et pas /opt : c'est /opt/GSM que l'ISO recupere en bloc
-# (docker cp "$CID:/opt/GSM"). Le dashboard vivait a cote, dans /opt, et devait
-# donc etre reclone une seconde fois a la construction de l'image - deux
-# sources pour le meme depot, qui n'avancaient pas ensemble.
+# No other build step depends on Node. The order inside this chain is
+# constrained (see the ORDER notes below).
+# Cloned under /opt/GSM because the ISO copies /opt/GSM as a whole
+# (docker cp "$CID:/opt/GSM").
 RUN if [ ! -d "/opt/GSM/osmo-egprs-web/" ]; then \
       mkdir -p /opt/GSM && \
       git clone -b main https://github.com/bbaranoff/osmo-egprs-web /opt/GSM/osmo-egprs-web; \
     fi
 
-# ── Runtime Node.js + service web osmo-egprs-web ──────────────────────────────
-# Le dashboard /opt/GSM/osmo-egprs-web/server.js tourne en mode NATIF (telnet VTY
-# local, pas de docker) et est servi sur :8080. Le DÉMARRAGE est géré par
-# start-native.sh (`systemctl restart osmo-egprs-web`) — ici on ne fait
-# qu'INSTALLER le runtime + les dépendances + le unit (enable au boot).
+# ── Node.js runtime + osmo-egprs-web web service ──────────────────────────────
+# /opt/GSM/osmo-egprs-web/server.js runs in native mode (local telnet VTY, no
+# docker) and serves :8080. Startup is handled by start-native.sh
+# (`systemctl restart osmo-egprs-web`); this only installs the runtime, the
+# dependencies and the unit (enabled at boot).
 #
-# Node 22 (LTS « Jod ») — même famille majeure que l'ISO, qui installe
-# nodesource setup_22.x (build-iso.sh). Garder les deux alignés : le dashboard
-# est le même server.js des deux côtés.
+# Node 22 (LTS "Jod"): same major version as the ISO (nodesource setup_22.x in
+# build-iso.sh). Keep both aligned: the dashboard is the same server.js.
 ARG NODE_VERSION=v22.23.2
-# Le tarball suit l architecture de l image (x64 sur amd64, arm64 sur un build
-# --platform linux/arm64 pour le Raspberry Pi) : un node x64 dans une image
-# arm64 ne se lancerait pas, et le dashboard avec lui.
+# The tarball follows the image architecture (x64 on amd64, arm64 for a
+# --platform linux/arm64 build for the Raspberry Pi).
 RUN case "$(uname -m)" in x86_64) _na=x64 ;; aarch64) _na=arm64 ;; *) echo "arch node inconnue: $(uname -m)" >&2; exit 1 ;; esac && \
     curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${_na}.tar.xz" \
         -o /tmp/node.tar.xz && \
@@ -881,120 +764,75 @@ RUN case "$(uname -m)" in x86_64) _na=x64 ;; aarch64) _na=arm64 ;; *) echo "arch
     ln -sf /opt/node/bin/npm  /usr/local/bin/npm && \
     ln -sf /opt/node/bin/npx  /usr/local/bin/npx && \
     node --version
-# Unit systemd (fichier versionné dans le repo osmo-nitb-for-calypso, source unique).
-# Le START reste géré par start-native.sh (`systemctl restart osmo-egprs-web`).
+# systemd unit (single source: services/ in this repo). Start is still done by
+# start-native.sh (`systemctl restart osmo-egprs-web`).
 COPY services/osmo-egprs-web.service /etc/systemd/system/osmo-egprs-web.service
 RUN ln -sf /etc/systemd/system/osmo-egprs-web.service \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service
 
-# ── Dashboard web : install-web-service.sh joue AU BOOT ───────────────────────
-# [2026-08-12] Remplace le geste manuel `bash /opt/GSM/osmo-egprs-web/install-web-service.sh`
-# qu'il fallait refaire dans chaque conteneur pour armer le HTTPS.
+# ── Web dashboard: install-web-service.sh ─────────────────────────────────────
+# ORDER: this block must stay AFTER the /opt/GSM/osmo-egprs-web clone (top of
+# this section); the COPY below writes into that repository.
 #
-# Ce qui reste au BUILD : node et le unit du service (plus haut), le
-# `npm install` (juste en dessous). Ce qui passe au BOOT : le certificat TLS
-# auto-signe — une cle privee generee au build serait la meme pour tous ceux qui tirent l'image. Le detail
-# du raisonnement est dans services/osmo-egprs-web-install.service.
-#
-# ⚠️ ORDRE : ce bloc DOIT rester APRES le clone de /opt/GSM/osmo-egprs-web
-# (haut de cette section) — la COPY ci-dessous ecrit dans ce depot.
-#
-# SOURCE UNIQUE DU UNIT. install-web-service.sh installe le unit en le copiant
-# depuis /opt/GSM/osmo-egprs-web/osmo-egprs-web.service — la copie du depot
-# osmo-egprs-web, qui avait DIVERGE de celle-ci (elle avait perdu
-# `CAP_IFACE=any`, donc la capture du dashboard). On ecrase donc cette copie par
-# services/osmo-egprs-web.service : les deux emplacements servent desormais le
-# meme fichier, et le script ne peut plus reintroduire la regression.
+# Single source for the unit: install-web-service.sh installs the unit from
+# /opt/GSM/osmo-egprs-web/osmo-egprs-web.service, so that copy is overwritten
+# with services/osmo-egprs-web.service (which carries `CAP_IFACE=any`, needed
+# for the dashboard capture).
 COPY services/osmo-egprs-web.service /opt/GSM/osmo-egprs-web/osmo-egprs-web.service
-# Fail-fast : si l'amont retire le script, on le sait au build, pas au boot par
-# un HTTPS muet.
+# Fail fast at build time if upstream removes the script.
 RUN test -s /opt/GSM/osmo-egprs-web/install-web-service.sh
-# Dependances JS (ws) — UN SEUL `npm install`, apres le clone.
-# Non fatal (`|| true`) : node_modules est versionne dans le depot, un build
-# hors-ligne reste valable. Mais la sortie est conservee, pas avalee.
+# JS dependencies (ws): a single `npm install`, after the clone. Non-fatal
+# (`|| true`): node_modules is versioned in the repo, so an offline build works.
 RUN cd /opt/GSM/osmo-egprs-web && npm install --omit=dev --no-audit --no-fund || true
-# ── L INSTALLATION EST JOUEE ICI, AU BUILD ──────────────────────────────────
-# [2026-08-31] On se contentait de VERIFIER que le script existe (le `test -s`
-# ci-dessus) et on remettait tout au boot. L unite arrivait donc dans l image
-# telle que le gabarit la portait, avec son ExecStart fige — et dans un
-# conteneur, ou node vit en /usr/local/bin et non /usr/bin, systemd sortait en
-#     status=203/EXEC
-# en boucle, sans que rien ne parle d un chemin.
+# ── The installation runs here, at build time ──────────────────────────────
+# The script resolves the node path (/usr/local/bin in the container) and
+# writes the unit with the correct ExecStart, so the image ships a working unit.
 #
-# Le script sait resoudre node et poser l unite avec le bon chemin : on le
-# joue donc au build, pour que l image contienne une unite deja juste.
+# `|| true`: there is no systemd during a build, so the script's `systemctl`
+# calls fail; the unit, certificate and runtime are written before them.
 #
-# `|| true` : dans un build il n y a PAS de systemd. Le script le sait et ne
-# s arrete pas dessus (voir son en-tete), mais ses `systemctl` echouent
-# forcement ; les avaler ici evite qu un detail d environnement fasse tomber
-# une image de 11 Go. Ce qui compte - le unit, le certificat, le runtime - est
-# ecrit avant ces appels.
-#
-# ⚠️ ET IL N Y A PLUS DE REJEU AU BOOT. osmo-egprs-web-install.service a ete
-# retire des trois chemins de deploiement, pour une raison simple : ce script
-# TELECHARGE node quand il manque. Le laisser au demarrage faisait dependre
-# d Internet un banc concu pour tourner isole - et un premier boot hors ligne
-# repartait sans dashboard. Tout est desormais fige dans l image ; le
-# demarrage ne fait plus que lancer osmo-egprs-web.service.
+# Nothing is replayed at boot: the script downloads node when it is missing,
+# and the bench must work offline. Boot only starts osmo-egprs-web.service.
 RUN bash /opt/GSM/osmo-egprs-web/install-web-service.sh || true
 
 # ────────────────────────────────────────────────────────────────────────────
-# STAGE lte — la 4G du banc : srsRAN_4G (ZeroMQ) et Open5GS dans /opt/LTE
+# STAGE lte - the bench's 4G: srsRAN_4G (ZeroMQ) and Open5GS in /opt/LTE
 # ────────────────────────────────────────────────────────────────────────────
 FROM base AS lte
-# ARG ne traverse pas un FROM : les stages qui appellent osmo-deb ou
-# ${ROOT} doivent les redeclarer, sinon ROOT est vide et
-# OSMO_DEB_REFRESH=1 (build.sh --no-cache) ne descend pas jusqu ici.
+# ARG does not cross a FROM: stages that call osmo-deb or use ${ROOT} must
+# redeclare them, otherwise ROOT is empty and OSMO_DEB_REFRESH=1
+# (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
 
-# osmo-lte-install --configs lit $OSMO_REPO : ce stage a besoin du depot, et
-# il ne derive pas de celui qui le clone. Le clone y est donc refait — c est
-# quelques secondes, et l assemblage refait le sien, qui reste LA source pour
-# le `git pull` de Dockerfile.run.
+# osmo-lte-install --configs reads $OSMO_REPO, so this stage needs its own
+# clone of the repo. The assembly stage makes its own clone, which is the one
+# Dockerfile.run `git pull`s.
 RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 
-# ── LA 4G DU BANC : srsRAN_4G (ZeroMQ) et Open5GS, dans /opt/LTE ─────────────
-# [2026-09-08] DEUX CHEMINS VERS LES MEMES PAQUETS (voir packaging/
-# snapshot-lte-debs.sh) : le raccourci photographie le natif de la machine de
-# reference en osmo-build-libzmq / osmo-build-srsran / osmo-build-open5gs, et
-# le cache .deb les rend a `osmo-deb install` ci-dessous - rien n est alors
-# compile. Cache vide : on compile depuis les sources, par le MEME script que
-# le natif (tools/osmo-lte-install.sh --build, OSMO_DEB=1 -> osmo-deb pack).
-# libzmq vient d Ubuntu (libzmq3-dev, pose par `--deps` ci-dessous) : le
-# /opt/LTE/libzmq compile a la main n a de raison d etre que sur le natif.
-# Open5GS : prefixe /opt/LTE/open5gs/install (bin, etc/open5gs, var/log) - pas
-# /root.
+# ── The bench's 4G: srsRAN_4G (ZeroMQ) and Open5GS, in /opt/LTE ─────────────
+# Two paths to the same packages (see packaging/snapshot-lte-debs.sh): the .deb
+# cache provides osmo-build-libzmq / osmo-build-srsran / osmo-build-open5gs to
+# `osmo-deb install` below, and nothing is compiled. With an empty cache, they
+# are built from source by the same script as the native install
+# (tools/osmo-lte-install.sh --build, OSMO_DEB=1 -> osmo-deb pack).
+# libzmq comes from Ubuntu (libzmq3-dev, installed by `--deps`).
+# Open5GS prefix: /opt/LTE/open5gs/install (bin, etc/open5gs, var/log).
 #
-# LES CONFIGS ET LES LANCEURS AUSSI (`--configs --launchers`, en fin de RUN).
-# [2026-09-09] Ils n etaient poses que dans l ISO (88-lte-pmos.sh) et en natif
-# (addition.sh), « pas ici : l image docker n a pas de HOME de session a
-# servir ». Faux pour le conteneur : il tourne en root, et /root/.config/srsran
-# EST le HOME que srsenb/srsue lisent. L image sortait donc avec les binaires
-# 4G mais sans mme.yaml (donc sans SGs, donc sans CSFB), sans enb.conf, et
-# sans la commande osmo-lte : une 4G qu on ne pouvait pas lancer. Et le .deb
-# Open5GS n apporte AUCUN yaml (ninja install sous DESTDIR ne pose pas les
-# exemples : 128 fichiers, tous dans bin/ et lib/) - les configs du depot
-# sont la seule source. Elles viennent du clone GitHub de /opt/GSM/
-# osmo-operator (ligne « git clone » plus haut) : ce qui est pousse est ce que
-# le conteneur voit. Les abonnes (configs/open5gs/dump, subscribers.json) ne
-# sont pas poses au build : osmo-epc start les restaure dans MongoDB.
+# Configs and launchers too (`--configs --launchers`, at the end of the RUN):
+# the container runs as root and /root/.config/srsran is what srsenb/srsue
+# read. The Open5GS .deb carries no yaml; the repo configs (from the
+# /opt/GSM/osmo-operator clone above) are the only source. Subscribers
+# (configs/open5gs/dump, subscribers.json) are not installed at build time:
+# `osmo-epc start` restores them into MongoDB.
 #
-# ⚠️ `--deps` D ABORD, TOUJOURS (pas seulement quand on compile).
-# [2026-09-09] Le commentaire ci-dessus affirmait que libzmq3-dev etait « dans
-# la liste apt plus haut » : il n y etait pas, ni lui ni libmbedtls-dev,
-# libboost-program-options-dev, libconfig++-dev, meson, flex, bison, libmongoc.
-# Le build tombait donc net des le cmake de srsRAN :
-#     Could NOT find MbedTLS (missing: MBEDTLS_LIBRARIES MBEDTLS_INCLUDE_DIRS)
-# La liste apt du haut de ce fichier est celle de la pile Osmocom (et elle est
-# RELUE par install_modules/10-deps.sh pour le natif) : la 4G a la sienne,
-# tenue dans tools/osmo-lte-install.sh (lte_deps), une seule fois pour les
-# trois chemins. On l appelle, on ne la recopie pas.
-# Inconditionnel parce que ces paquets sont aussi le RUNTIME : les .deb du
-# cache ne portent que les binaires (osmo-deb pack = un tar), pas leurs
-# dependances - srsenb sorti du cache reclame quand meme libmbedtls, libzmq5,
-# libconfig++ et boost_program_options. `--deps` tire aussi mongodb-org (base
-# d abonnes du HSS/PCRF) et n est fatal sur aucun paquet.
+# `--deps` first, always (not only when compiling). The apt list at the top of
+# this file is the Osmocom stack's (also read by install_modules/10-deps.sh);
+# the 4G list lives in tools/osmo-lte-install.sh (lte_deps). These packages are
+# also the runtime: cached .debs carry only the binaries (osmo-deb pack is a
+# tar), not their dependencies (libmbedtls, libzmq5, libconfig++,
+# boost_program_options). `--deps` also pulls mongodb-org (HSS/PCRF subscriber
+# DB) and is not fatal on any package.
 COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/osmo-lte-install && \
@@ -1014,16 +852,15 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     && test -s /opt/LTE/open5gs/install/etc/freeDiameter/mme.conf && test -s /opt/LTE/open5gs/install/etc/open5gs/tls/mme.crt \
     && test -s /root/.config/srsran/enb.conf && test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc
 
-# ── L UI SMARTPHONE : pmbootstrap PATCHE, dans /opt/user_interface/pmos ───────
-# Le telephone du banc est une VM postmarketOS lancee par pmbootstrap (patche
-# pour le modem serie PCI, le son du banc, la taille d ecran, et le port 5038
-# qui n est pas un adb : patches/pmbootstrap-osmo-bench-qemu.patch). Le clone
-# et le patch sont faits ici, une fois, et sortent en osmo-build-pmbootstrap :
-# l ISO (50-injection-image.sh) le pose tel quel, tools/osmo-pmos-install.sh
-# le trouve en place et n a plus rien a cloner. Le NOYAU PPP, lui, ne se
-# construit pas ici (pmbootstrap, non root, montages de boucle) : il arrive
-# par osmo-build-pmos-kernel (packaging/build-pmos-kernel-deb.sh, ou GitHub
-# bbaranoff/pmos_ppp_kernel), pose par 88-lte-pmos.sh.
+# ── Smartphone UI: patched pmbootstrap, in /opt/user_interface/pmos ─────────
+# The bench phone is a postmarketOS VM launched by pmbootstrap, patched for the
+# PCI serial modem, bench audio, screen size and port 5038 (not adb):
+# patches/pmbootstrap-osmo-bench-qemu.patch. Clone + patch are packaged as
+# osmo-build-pmbootstrap: the ISO (50-injection-image.sh) installs it as-is and
+# tools/osmo-pmos-install.sh finds it in place. The PPP kernel is not built
+# here (pmbootstrap needs non-root and loop mounts): it comes from
+# osmo-build-pmos-kernel (packaging/build-pmos-kernel-deb.sh, or GitHub
+# bbaranoff/pmos_ppp_kernel), installed by 88-lte-pmos.sh.
 COPY patches/pmbootstrap-osmo-bench-qemu.patch /tmp/pmbootstrap-osmo-bench-qemu.patch
 RUN if ! osmo-deb install pmbootstrap 0.git; then \
         mkdir -p /opt/user_interface/pmos && \
@@ -1035,35 +872,29 @@ RUN if ! osmo-deb install pmbootstrap 0.git; then \
     fi && test -f /opt/user_interface/pmos/pmbootstrap/pmbootstrap.py
 
 # ============================================================================
-# STAGE osmocom-nitb — L ASSEMBLAGE. C est l image publiee.
+# STAGE osmocom-nitb - assembly. This is the published image.
 # ============================================================================
-# Rien ne se compile ici : on repose les .deb produits par les stages, puis on
-# ajoute ce qu aucun paquet ne porte (Node, le dashboard, la 4G, le depot, les
-# configs du contexte). Le nom osmocom-nitb reste sur CETTE etape : build.sh
-# (compose_build) et compose.yaml passent --target osmocom-nitb.
+# Nothing is compiled here: the .debs produced by the stages are installed,
+# then what no package carries is added (Node, the dashboard, the 4G, the repo,
+# the build-context configs). build.sh (compose_build) and compose.yaml pass
+# --target osmocom-nitb.
 FROM base AS osmocom-nitb
 ARG ROOT=/opt/GSM
 
-# ── 1. Les paquets de tous les stages ───────────────────────────────────────
-# bb DERIVE de osmo-core et l1 DERIVE de qemu : leur cache porte deja celui de
-# leur parent, d ou cinq COPY et non sept.
+# ── 1. Packages from all stages ─────────────────────────────────────────────
+# bb derives from osmo-core and l1 from qemu: their caches already include
+# their parent's.
 COPY --from=bb         /var/cache/osmo-debs/ /var/cache/osmo-debs/
 COPY --from=l1         /var/cache/osmo-debs/ /var/cache/osmo-debs/
 COPY --from=grgsm-venv /var/cache/osmo-debs/ /var/cache/osmo-debs/
 COPY --from=lte        /var/cache/osmo-debs/ /var/cache/osmo-debs/
-# (pas de COPY depuis `node` : ce stage n appelle jamais osmo-deb - Node est un
-#  tarball et le dashboard un clone git. Son cache n est que celui de base.)
+# (No COPY from `node`: that stage never calls osmo-deb.)
 
-# ⚠️ L ORDRE DE POSE COMPTE POUR LES QUATRE PAQUETS PATCHES.
-# osmo-trx, osmo-bts, osmo-hlr et osmo-msc existent en DEUX versions portant le
-# MEME nom de paquet : celle de la boucle (osmo-trx 1.7.2) et la patchee
-# (1.7.2+ipc). Dans la chaine lineaire d avant, la patchee etait posee apres,
-# donc elle gagnait. Ici le glob les pose dans l ordre ASCII, ou « + » (0x2B)
-# precede « ~ » (0x7E) : osmo-trx_1.7.2+ipc passe AVANT osmo-trx_1.7.2, et
-# c est la version NON patchee qui finissait installee - RACH sans table per-RA,
-# BTS/HLR/MSC sans le forcage du RAND, et une LU qui ne passe plus. Silencieux :
-# le binaire est la, il est juste le mauvais.
-# On repose donc les quatre explicitement, en dernier.
+# Install order matters for the four patched packages. osmo-trx, osmo-bts,
+# osmo-hlr and osmo-msc exist in two versions with the same package name
+# (e.g. osmo-trx 1.7.2 and 1.7.2+ipc). The glob installs in ASCII order, where
+# "+" sorts before "~", so the unpatched one would win; the patched four are
+# therefore reinstalled explicitly, last.
 RUN set -eux; \
     dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb; \
     dpkg -i --force-overwrite \
@@ -1073,10 +904,9 @@ RUN set -eux; \
         /var/cache/osmo-debs/osmo-build-osmo-msc_1.15.0+rand~*.deb; \
     ldconfig
 
-# ── 2. Ce qu aucun .deb ne porte ────────────────────────────────────────────
-# Node et le dashboard : le runtime est un tarball detarre dans /opt/node, le
-# dashboard un clone git avec son node_modules. Ni l un ni l autre ne passe par
-# osmo-deb, et install-web-service.sh a deja ete joue dans le stage node.
+# ── 2. What no .deb carries ─────────────────────────────────────────────────
+# Node (tarball in /opt/node) and the dashboard (git clone with node_modules);
+# install-web-service.sh already ran in the node stage.
 COPY --from=node /opt/node                                      /opt/node
 COPY --from=node /opt/GSM/osmo-egprs-web                        /opt/GSM/osmo-egprs-web
 COPY --from=node /etc/systemd/system/osmo-egprs-web.service     /etc/systemd/system/osmo-egprs-web.service
@@ -1087,39 +917,28 @@ RUN ln -sf /opt/node/bin/node /usr/local/bin/node \
         /etc/systemd/system/multi-user.target.wants/osmo-egprs-web.service \
     && node --version
 
-# Chemin EXPLICITE. Sans lui, ce clone heritait du WORKDIR /etc/osmocom (pose
-# beaucoup plus haut, jamais remis a ${ROOT}) et atterrissait dans
-# /etc/osmocom/osmo-operator — masque au runtime par le montage de start-docker.sh l.505,
-# et surtout PAS la ou Dockerfile.run va faire son `git pull`. Deux arbres, deux
-# HEAD, un seul utilise. /opt/GSM/osmo-operator est le chemin nominal, teste en
-# premier par build-iso.sh l.964 et update.sh l.329.
-# On reste sur la branche par defaut du depot (main) : pas de checkout explicite,
-# donc pas de ref a maintenir ici, et HEAD est attache — ce dont le `git pull`
-# de Dockerfile.run a besoin.
+# Explicit destination path: /opt/GSM/osmo-operator is the nominal location,
+# used by Dockerfile.run (`git pull`), build-iso.sh and update.sh.
+# Default branch (main), no explicit checkout: HEAD stays attached, as the
+# `git pull` in Dockerfile.run requires.
 RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 
 COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
 RUN chmod 755 /usr/local/sbin/osmo-lte-install
 
-# ── La 4G ───────────────────────────────────────────────────────────────────
-# /opt/LTE en entier, et pas seulement ce que portent les .deb : le prefixe
-# d installation d Open5GS vit SOUS l arbre de sources (/opt/LTE/open5gs/install),
-# et /opt/LTE n est pas sous /opt/GSM - osmo-deb pack n y ajoute donc aucune
-# source (SRC_ROOT). Sans cette copie, l image aurait les binaires 4G sans un
-# seul arbre pour les recompiler.
+# ── 4G ──────────────────────────────────────────────────────────────────────
+# All of /opt/LTE, not only what the .debs carry: the Open5GS install prefix
+# lives under the source tree, and /opt/LTE is outside /opt/GSM so osmo-deb
+# pack embeds no sources (SRC_ROOT). This keeps the source trees in the image.
 COPY --from=lte /opt/LTE /opt/LTE
 
-# ⚠️ `--deps` DOIT ETRE REJOUE ICI. Ce sont AUSSI les paquets de RUNTIME
-# (libzmq5, libmbedtls, libconfig++, boost_program_options, mongodb-org...) et
-# les .deb d osmo-deb ne declarent aucune dependance - leur en-tete le dit. Les
-# poser dans le seul stage `lte` donnait une image ou srsenb et open5gs-mmed
-# existent mais ne demarrent pas, faute de .so. Le montage du cache apt fait que
-# rien n est retelecharge : les paquets sont deja dans le cache BuildKit, poses
-# par le stage lte.
+# `--deps` must run again here: these are also the runtime packages (libzmq5,
+# libmbedtls, libconfig++, boost_program_options, mongodb-org...) and osmo-deb
+# .debs declare no dependencies. The apt cache mount avoids re-downloading.
 #
-# `--configs --launchers` ensuite, dans le meme ordre que le stage lte : les yaml
-# d Open5GS, enb.conf et les deux lanceurs s ecrivent HORS de tout DESTDIR, donc
-# aucun .deb ne les porte. Ils lisent /opt/GSM/osmo-operator, clone juste au-dessus.
+# Then `--configs --launchers`, same order as in the lte stage: the Open5GS
+# yaml, enb.conf and the two launchers are written outside any DESTDIR, so no
+# .deb carries them. They read /opt/GSM/osmo-operator, cloned above.
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
     OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
@@ -1130,24 +949,20 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     && test -s /opt/LTE/open5gs/install/etc/open5gs/tls/mme.crt \
     && test -s /root/.config/srsran/enb.conf && test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc
 
-# Les alternatives gcc : elles ont ete DECLAREES dans le stage bb, qui ne
-# transmet que ses .deb. On les redeclare ici pour que l image finale offre le
-# meme choix, et on reste sur gcc-11 - le defaut d avant le decoupage.
+# gcc alternatives: declared in the bb stage, which only passes on its .debs;
+# redeclared here, with gcc-11 as default.
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-11 \
     && update-alternatives --set gcc /usr/bin/gcc-11
 
-# 4. Installation des fichiers du projet
+# ── 3. Project files ────────────────────────────────────────────────────────
 WORKDIR /etc/osmocom
 COPY scripts/. /etc/osmocom/
 COPY configs/*cfg /etc/osmocom/
 RUN mv /etc/osmocom/run.sh /root/run.sh
-# Copie des binaires vers /usr/bin pour systemd et installation des .service
-# (La `COPY scripts/gapk-start.sh /etc/osmocom/gapk-start.sh` qui etait ici est
-#  supprimee : `COPY scripts/. /etc/osmocom/` ci-dessus depose deja le fichier.
-#  Le RUN ci-dessous reste : le symlink et /var/lib/gapk sont uniques.)
+# gapk-start.sh (copied by `COPY scripts/.` above): symlink + state directory.
 RUN chmod +x /etc/osmocom/gapk-start.sh && \
     ln -sf /etc/osmocom/gapk-start.sh /usr/local/bin/gapk-start.sh && \
     mkdir -p /var/lib/gapk
@@ -1156,53 +971,40 @@ RUN cp -f /usr/local/bin/osmo* /usr/bin/ || true && \
     cp -f /usr/local/bin/proto-smsc-* /usr/bin/ || true && \
     cp -f /usr/local/bin/sms-* /usr/bin/ || true && \
     cp -f /usr/local/bin/gen-sms-* /usr/bin/ || true && \
-    # Si tu as des fichiers .service dans configs/
+    # Install any .service files from configs/
     cp /etc/osmocom/configs/*.service /lib/systemd/system/ 2>/dev/null || true
 
-# ── Vérification binaires proto-SMSC ──────────────────────────────────────────
-# Ex-Dockerfile.run. Premier point du build ou les deux chemins testes sont
-# peuples (produits par gsup-smsc-proto, recopies dans /usr/bin juste au-dessus).
+# ── proto-SMSC binaries check ───────────────────────────────────────────────
+# Built by gsup-smsc-proto, copied into /usr/bin just above. Warning only.
 RUN which proto-smsc-daemon && which proto-smsc-sendmt && \
     echo "proto-smsc binaries OK" || \
     echo "WARNING: proto-smsc binaries not found in PATH"
 
-# 5. Fix Permissions & Systemd (Status 214/217)
+# Permissions and systemd fixes (status 214/217: CPUScheduling and the
+# osmocom user are not available in the container).
 RUN sed -i 's/^CPUScheduling/#CPUScheduling/g' /lib/systemd/system/osmo-*.service && \
     sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-ggsn.service && \
     sed -i 's/User=osmocom/User=root/g' /lib/systemd/system/osmo-sgsn.service && \
     chmod +x /etc/osmocom/*.sh
 
-# Activation du service et nettoyage
-# Les unites systemd vivent dans services/ ; elles doivent atterrir dans
-# /etc/systemd/system/, seul repertoire ou systemd les cherche.
+# Enable services; units from services/ go to /etc/systemd/system/.
 COPY services/osmo-bts-trx.service /etc/systemd/system/osmo-bts-trx.service
 RUN systemctl enable osmo-bts-trx.service && \
     passwd -d root && \
     systemctl mask getty@tty1.service serial-getty@tty1.service
 
-# Binaires cote hote produits par osmocom-bb, deposes en une seule couche.
-# `install -m755` plutot que `cp` : les droits sont explicites, pas herites.
+# Host-side osmocom-bb binaries, installed in a single layer with explicit modes.
 RUN mkdir -p /root/.osmocom/bb/ \
     && install -m755 ${ROOT}/osmocom-bb/src/host/trxcon/src/trxcon           /usr/local/bin/trxcon \
     && install -m755 ${ROOT}/osmocom-bb/src/host/layer23/src/mobile/mobile   /usr/local/bin/mobile \
     && install -m755 ${ROOT}/osmocom-bb/src/host/virt_phy/src/virtphy        /usr/local/bin/virtphy
-# ccch_scan n'est plus installe ici : la branche fixeria/burst_ind, en fin de
-# fichier, ecrase de toute facon /usr/local/bin/ccch_scan par SA version (cp sans
-# `|| true`, donc obligatoire). Le binaire de master ne survivait jamais — c'est
-# la version burst_ind qui fait foi.
+# ccch_scan is installed from the fixeria/burst_ind branch, not from here.
 
-# Confort du shell interactif. Pas de `source` ici : chaque RUN est un shell neuf,
-# ce serait sans effet — le fichier est lu a l'ouverture d'une session.
+# Interactive shell conveniences (read when a session starts).
 RUN echo "alias faketrx='python3 ${ROOT}/osmocom-bb/src/target/trx_toolkit/fake_trx.py'" >> ~/.bashrc
-# Prompt : root(rouge)@(bleu)<nom-container=\h>(jaune)☎️<dossier courant>(vert)#
-# \h = nom du container grâce à `docker run --hostname "$container_name"` (start-docker.sh).
-# [refactor] LE PS1 ETAIT DEFINI DEUX FOIS, avec deux formats DIFFERENTS : ici
-# et dans Dockerfile.run. Bash lit ~/.bashrc de haut en bas -> c'est celui de
-# Dockerfile.run qui gagnait, et le prompt reellement affiche etait
-# `user@host:cwd☎️#`, pas celui decrit deux lignes plus haut. On ne garde QUE le
-# gagnant, a l'identique, pour ne rien changer au prompt visible ; l'explication
-# du `\h` ci-dessus reste vraie pour les deux formats.
-# ── Prompt interactif (root rouge / hostname bleu / cwd vert / ☎️#) ───────────
+# ── Interactive prompt (user red / hostname blue / cwd green / ☎️#) ─────────
+# \h = container name, set by `docker run --hostname "$container_name"`
+# (start-docker.sh).
 RUN printf '%s\n' '' \
     '### calypso-prompt ###' \
     "export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m\]\w\[\033[0m\]☎️# '" \
@@ -1210,32 +1012,19 @@ RUN printf '%s\n' '' \
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 RUN chmod +x /root/run.sh
 
-# Répertoires pour le proto-SMSC + arborescence Asterisk (ex-Dockerfile.run,
-# ou ce mkdir faisait doublon avec celui-ci ; seul le chmod 755 etait unique).
-# Position : apres l'installation d'asterisk (liste apt) et apres WORKDIR /etc/osmocom.
+# proto-SMSC directories + Asterisk tree.
 RUN mkdir -p /var/log/osmocom /var/run/smsc \
         /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/run/asterisk \
         /root/.osmocom/bb && \
     chmod 755 /etc/asterisk /var/lib/asterisk /var/log/asterisk \
         /var/run/asterisk /var/log/osmocom
 
-# ── PulseAudio system-mode : config bakée au build ────────────────────────────
-# (ex-Dockerfile.run — depend du paquet pulseaudio de la liste apt en tete ;
-#  place ici, tard, pour ne pas invalider le cache des ~200 lignes de compilation.)
-# Cause racine du warning "[audio] PulseAudio injoignable — audio dégradé" :
-# le démon system-mode lancé au runtime tournait SANS auth-anonymous (le patch
-# de start-native.sh arrivait après son démarrage) → 'pactl' renvoyait
-# "Access denied", et un 2e démon ne pouvait pas démarrer ("Daemon already
-# running"). On bake ici la config pour que TOUT démon soit joignable dès son
-# lancement : socket anonyme + null-sinks gsm_audio/gsm_mic + root dans
-# pulse-access.
-#
-# [2026-08-12] gsm_mic AJOUTÉ ICI. Il n'était créé que par
-# scripts/pulse-gsm-setup.sh, appelé tard dans run.sh (après osmo-start.sh) :
-# un HLR qui rate coupe run.sh (set -e) et le sink n'existe jamais. Or
-# configs/asound.conf fait pointer la CAPTURE gsm_in sur gsm_mic.monitor, et
-# gapk_io abandonne lecture ET capture si la capture échoue → appel muet des
-# deux côtés. Les deux sinks doivent naître avec le démon, pas avec un script.
+# ── PulseAudio system mode: config baked at build time ──────────────────────
+# Every daemon must be reachable from startup: anonymous socket, null sinks
+# gsm_audio / gsm_mic / osmo_tts_off, root in pulse-access.
+# gsm_mic must exist with the daemon: configs/asound.conf points the gsm_in
+# capture at gsm_mic.monitor, and gapk_io drops both playback and capture if
+# capture fails.
 RUN set -eux; \
     usermod -aG pulse-access root 2>/dev/null || true; \
     test -f /etc/pulse/system.pa; \
@@ -1251,41 +1040,29 @@ RUN set -eux; \
     sed -i 's|^load-module module-suspend-on-idle|#load-module module-suspend-on-idle|' /etc/pulse/system.pa; \
     mkdir -p /var/run/pulse && chown -R pulse:pulse /var/run/pulse
 
-# Dernier maillon de la chaine venv/gr-gsm (ex-Dockerfile.run) : le profil de
-# root active le venv.
+# root's shell profile activates the gr-gsm venv.
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 
-# ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qosmo/run.sh casse) :
+# ── Camping bridge scripts -> /opt/GSM (required by /opt/GSM/qosmo/run.sh):
 # si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
 # record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
 COPY opt-gsm/. /opt/GSM/
 
-# --- Metadonnees de l'image ---------------------------------------------------
-# Regroupees a la fin : elles decrivent le conteneur qui tournera, pas une etape
-# de construction. SIGRTMIN+3 est le signal d'arret propre de systemd.
+# --- Image metadata ----------------------------------------------------------
+# SIGRTMIN+3 is systemd's clean shutdown signal.
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]
 CMD ["/bin/bash"]
 
-# ── L'ETAPE `debs` : le cache .deb seul, rien d'autre ────────────────────────
-# ATTENTION - `osmocom-nitb` N'EST PLUS LA DERNIERE ETAPE de ce fichier. Tout
-# ce qui construit l'image doit donc dire `--target osmocom-nitb` : build.sh
-# (compose_build), compose.yaml (build.target du service nitb),
-# iso_modules/21-docker-build.sh, .github/workflows/docker.yml. Sans ce
-# --target, docker batit `debs` et sort une image VIDE de 2 Go de paquets.
+# ── Stage `debs`: the .deb cache only ───────────────────────────────────────
+# `osmocom-nitb` is NOT the last stage of this file: everything that builds the
+# image must pass `--target osmocom-nitb` (build.sh compose_build, compose.yaml
+# build.target, iso_modules/21-docker-build.sh, .github/workflows/docker.yml).
+# Without it, docker builds `debs`: an image containing only ~2 GB of packages.
 #
-# Pourquoi cette etape existe. En CI, l'image de base n'est plus chargee dans
-# le docker du runner : elle part directement vers GHCR (buildx --push), parce
-# que la materialiser localement demandait de tenir DEUX fois 11 Go et tuait le
-# job en « exporting layers » (exit 143). Mais le workflow doit quand meme
-# recuperer les .deb que le build vient de compiler, pour les rendre a
-# actions/cache - et sans image locale, plus de `docker create` ni de
-# `docker cp` (l'equivalent de debs_from_image, build.sh:306).
-#
-# D'ou cette etape : une seconde passe `--target debs --output type=local`
-# reutilise INTEGRALEMENT le cache de la premiere (meme builder, memes couches,
-# tout en hit) et n'ecrit sur le disque du runner que /var/cache/osmo-debs -
-# quelques Go de .deb au lieu de l'image entiere. Sur l'hote, build.sh continue
-# de passer par debs_from_image : il a l'image sous la main, lui.
+# Used by CI, where the image is pushed straight to GHCR without being loaded
+# locally: a second pass `--target debs --output type=local` reuses the whole
+# build cache and writes only /var/cache/osmo-debs to the runner disk, for
+# actions/cache. On the host, build.sh uses debs_from_image instead.
 FROM scratch AS debs
 COPY --from=osmocom-nitb /var/cache/osmo-debs/ /

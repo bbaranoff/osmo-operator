@@ -1,49 +1,42 @@
 #!/bin/bash
-# operator_summary.sh - Resume des caracteristiques principales de chaque operateur
+# operator_summary.sh - Summary of each operator's main characteristics
 #
-# Analyse le dump produit par checks/vty-debug-dump.sh et en extrait, operateur
-# par operateur, les quelques chiffres qui disent si le reseau vit : ASP actifs,
-# routes SS7, abonnes HLR/VLR, etat des BTS, contextes PDP, appels en cours.
+# Parses the dump produced by checks/vty-debug-dump.sh and extracts, operator
+# by operator, the few figures that tell whether the network is alive: active
+# ASPs, SS7 routes, HLR/VLR subscribers, BTS state, PDP contexts, ongoing calls.
 #
-# DOUBLE MODE (docker / natif)
-# ----------------------------
-# Ce script ne parle a AUCUN demon : il lit un fichier. Le mode ne change donc
-# pas ses quinze extractions - il change trois choses, et il faut les dire :
+# DUAL MODE (docker / native)
+# This script talks to NO daemon: it reads a file. The mode only changes:
+#   1. dump GENERATION (--live): the generator must look at the SAME world,
+#      so the mode is passed to it through OSMO_MODE, even when forced here.
+#   2. the INTER-STP: in docker it is the osmo-inter-stp container; in native
+#      mode it is either this machine (role interstp) or ANOTHER machine whose
+#      VTY is not reachable from here, so the dump contains nothing about it.
+#      The section is then explicitly SKIPPED: a fabricated "0 active AS"
+#      would read as an SS7 core outage.
+#   3. the "container=osmo-operator-N" label of the dump: identical in native
+#      mode (checks/_mode.sh, osmo_node). It is a CORRELATION KEY between the
+#      dump blocks, not a queryable docker object: every extraction below
+#      depends on it.
+# The selected mode is printed in the header.
 #
-#   1. la GENERATION du dump (--live) : le generateur doit regarder le MEME
-#      monde que nous, sinon on analyse le dump d'un autre lab. Le mode lui est
-#      transmis par OSMO_MODE, y compris quand il a ete force ici.
-#
-#   2. l'INTER-STP : en docker c'est le conteneur osmo-inter-stp ; en natif
-#      c'est soit cette machine (role interstp), soit une AUTRE machine - et
-#      dans ce dernier cas son VTY n'est pas joignable d'ici, donc le dump n'en
-#      contient rien. La section est alors IGNOREE, explicitement : un
-#      "0 AS actif" fabrique se lirait comme une panne du coeur SS7.
-#
-#   3. l'etiquette "container=osmo-operator-N" du dump : en natif elle reste
-#      la meme (checks/_mode.sh, osmo_node). C'est une CLE DE CORRELATION entre
-#      les blocs du dump, pas un objet docker interrogeable - on ne la renomme
-#      donc pas, sous peine de casser toutes les extractions ci-dessous.
-#
-# Le mode retenu est affiche en tete : un resume qui ne dit pas dans quel monde
-# il a regarde n'est pas exploitable.
-#
-# Usage :
-#   sudo ./operator_summary.sh [--dump=/chemin/dump.txt] [--live]
-#                              [--docker|--native]
+# Usage:
+#   sudo ./checks/operator_summary.sh [--dump=/path/dump.txt] [--live]
+#                                     [--docker|--native]
+# Environment: OSMO_MODE=docker|native forces the mode.
 
 set -euo pipefail
 
-# ── Bibliotheque commune de detection docker/natif ────────────────────────────
-# Chemin relatif a CE fichier (jamais absolu) : le depot vit dans /home/... en
-# developpement et dans /opt/GSM/osmo-operator sur l'ISO.
+# ── Common docker/native detection library ───────────────────────────────────
+# Looked up relative to THIS file (never absolute): the repo lives at
+# different roots in development and on the ISO.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
 
-# ── Couleurs ──────────────────────────────────────────────────────────────────
+# ── Colors ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -51,13 +44,13 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────────
 DUMP_FILE=""
 LIVE_MODE=0
 TEMP_DUMP=""
 
-# OSMO_MODE herite de l'environnement vaut choix explicite, au meme titre que
-# --docker/--native : on le signale comme "force" dans l'en-tete.
+# OSMO_MODE inherited from the environment is an explicit choice, like
+# --docker/--native: reported as "force" in the header.
 MODE_FORCED=0
 [ -n "${OSMO_MODE:-}" ] && MODE_FORCED=1
 
@@ -66,8 +59,8 @@ for arg in "$@"; do
         --dump=*) DUMP_FILE="${arg#*=}" ;;
         --live)   LIVE_MODE=1 ;;
         --docker|--native|--mode=*)
-            # osmo_mode_force rend 2 si l'argument n'est pas un mode : seul
-            # "--mode=n'importe-quoi" peut encore echouer ici.
+            # osmo_mode_force returns 2 when the argument is not a mode: only
+            # "--mode=<anything>" can still fail here.
             if osmo_mode_force "$arg"; then
                 MODE_FORCED=1
             else
@@ -90,7 +83,7 @@ done
 MODE="$(osmo_mode)"
 if [ "$MODE_FORCED" -eq 1 ]; then MODE_SRC="force"; else MODE_SRC="detecte"; fi
 
-# ── Helper d'affichage ────────────────────────────────────────────────────────
+# ── Display helpers ──────────────────────────────────────────────────────────
 print_header() {
     echo ""
     echo -e "${BOLD}$1${NC}"
@@ -105,7 +98,7 @@ print_section() {
     echo -e "\n  ${CYAN}${BOLD}$1${NC}"
 }
 
-# Ligne de la boite d'en-tete, calee sur les 58 colonnes du filet ╔══╗.
+# One line of the header box, aligned on the 58 columns of the ╔══╗ frame.
 box_line() {
     local txt="$1" pad
     pad=$(( 58 - 5 - ${#txt} ))
@@ -113,16 +106,14 @@ box_line() {
     echo -e "${CYAN}║     ${txt}$(printf '%*s' "$pad" '')║${NC}"
 }
 
-# ── Extraction de donnees depuis le dump ──────────────────────────────────────
+# ── Data extraction from the dump ────────────────────────────────────────────
 #
-# PIEGE PIPEFAIL, valable pour TOUTES les extractions de ce fichier : sous
-# "set -o pipefail", un grep qui ne trouve rien (rc 1) ou un "head -1" qui
-# sort tot (le producteur meurt en SIGPIPE, rc 141) fait echouer le tube entier,
-# donc l'affectation "var=$(...)", donc - sous "set -e" - le script lui-meme.
-# Sur un dump vide ou partiel (mode natif ou tout est absent, dump produit
-# ailleurs) le resume s'interrompait sans un mot. D'ou les "|| true" : ils ne
-# masquent aucune erreur, ils disent "rien trouve = zero", ce que wc et grep -c
-# ont deja ecrit sur leur sortie.
+# PIPEFAIL, for EVERY extraction in this file: under "set -o pipefail" a grep
+# that finds nothing (rc 1) or a "head -1" that exits early (producer killed
+# by SIGPIPE, rc 141) fails the whole pipeline, hence the assignment and,
+# under "set -e", the script itself (empty or partial dump). The "|| true"
+# hide no error: they mean "nothing found = zero", which wc and grep -c
+# already printed.
 
 extract_value() {
     local container="$1"
@@ -161,12 +152,9 @@ extract_subscriber_count() {
     echo "${count:-0}"
 }
 
-# Renseigne BTS_STATE, OML_OK et RSL_OK - des variables GLOBALES, a dessein.
-# La version precedente ecrivait l'etat sur stdout ET posait OML_OK/RSL_OK dans
-# la foulee ; appelee en "$( )" elle tournait dans un SOUS-SHELL, ou ces deux
-# affectations mouraient avec lui : les lignes OML et RSL affichaient
-# "✗ deconnecte" meme quand le dump montrait des liens connectes. On renseigne
-# donc les trois au meme endroit, sans substitution de commande.
+# Sets BTS_STATE, OML_OK and RSL_OK as GLOBAL variables, on purpose: it must
+# be called without command substitution, otherwise the assignments would die
+# with the $( ) sub-shell and OML/RSL would always show as disconnected.
 extract_bts_info() {
     local container="$1"
     local bts_id="$2"
@@ -190,7 +178,7 @@ extract_bts_info() {
         BTS_STATE="Down"
     fi
 
-    # Renseigne aussi OML/RSL pour info
+    # Also set OML/RSL for information
     [ "$oml" -gt 0 ] && OML_OK=1 || OML_OK=0
     [ "$rsl" -gt 0 ] && RSL_OK=1 || RSL_OK=0
 }
@@ -214,20 +202,19 @@ extract_asp_state() {
     echo "$asp_block" | grep -c "ASP_ACTIVE" || true
 }
 
-# ── Generation d'un dump live si demande ──────────────────────────────────────
+# ── Live dump generation on request ──────────────────────────────────────────
 if [ "$LIVE_MODE" -eq 1 ]; then
     echo -e "${CYAN}Generation d'un dump live (mode ${MODE})...${NC}"
     TEMP_DUMP="/tmp/vty-live-$$.txt"
 
-    # Le generateur est cherche A COTE DE NOUS (BASH_SOURCE), plus dans le
-    # repertoire courant : "./vty-debug-dump.sh" n'existait que si l'on avait
-    # fait "cd checks/" au prealable, ce qui n'est pas le cas depuis l'ISO.
+    # The generator is looked up NEXT TO THIS FILE (BASH_SOURCE), not in the
+    # current directory.
     DUMPER="$_here/vty-debug-dump.sh"
     [ -x "$DUMPER" ] || DUMPER="./vty-debug-dump.sh"
 
-    # OSMO_MODE est transmis explicitement : le generateur doit interroger le
-    # meme monde que celui qu'on analysera, meme si --native/--docker a force
-    # un mode qu'il n'aurait pas detecte seul.
+    # OSMO_MODE is passed explicitly: the generator must query the same world
+    # as the one analysed here, even when --native/--docker forced a mode it
+    # would not have detected by itself.
     if ! OSMO_MODE="$MODE" "$DUMPER" --out "$TEMP_DUMP" > /dev/null; then
         echo -e "${RED}Echec de la generation du dump (${DUMPER}, mode ${MODE}).${NC}" >&2
         if [ "$MODE" = native ]; then
@@ -248,10 +235,10 @@ if [ -z "$DUMP_FILE" ] || [ ! -f "$DUMP_FILE" ]; then
     exit 1
 fi
 
-# ── Detection des noeuds presents DANS LE DUMP ─────────────────────────────────
-# "container=osmo-operator-N" est ecrit par vty-debug-dump.sh dans les deux
-# mondes : en docker c'est le nom du conteneur, en natif l'etiquette rendue par
-# osmo_node(). On lit donc le dump de la meme facon des deux cotes.
+# ── Nodes present IN THE DUMP ────────────────────────────────────────────────
+# "container=osmo-operator-N" is written by vty-debug-dump.sh in both modes:
+# the container name in docker, the label returned by osmo_node() in native.
+# The dump is therefore read the same way on both sides.
 mapfile -t CONTAINERS < <(
     grep -E "container=osmo-operator-[0-9]+" "$DUMP_FILE" \
         | sed -E 's/.*container=([^ ]+).*/\1/' \
@@ -264,7 +251,7 @@ INTER_STP=$(grep -E "container=osmo-inter-stp" "$DUMP_FILE" \
 
 N_OPS=${#CONTAINERS[@]}
 
-# ── En-tete ───────────────────────────────────────────────────────────────────
+# ── Header ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║     Resume Operateurs - $(date '+%Y-%m-%d %H:%M')              ║${NC}"
@@ -272,9 +259,10 @@ echo -e "${CYAN}║     ${N_OPS} operateur(s) trouve(s)                         
 box_line "Mode : ${MODE} (${MODE_SRC})"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
-# Dump muet : on le dit. Le comparer a l'inventaire vivant distingue "rien ne
-# tourne" de "le dump vient d'ailleurs / est partiel" - deux pannes tres
-# differentes, surtout en natif ou aucun "docker ps" ne peut trancher.
+# Silent dump: say so. Comparing it with the live inventory tells "nothing is
+# running" from "the dump comes from elsewhere / is partial" - two very
+# different failures, especially in native mode where no "docker ps" can
+# decide.
 if [ "$N_OPS" -eq 0 ]; then
     live_ops="$(osmo_ops 2>/dev/null | tr '\n' ' ' || true)"
     live_ops="${live_ops% }"
@@ -305,11 +293,11 @@ if [ -n "$INTER_STP" ]; then
     print_row "AS actifs" "$as_count"
 
 elif osmo_is_native; then
-    # Rien sur le hub dans le dump, et nous sommes en natif : soit cette machine
-    # EST le hub et le dump est plus vieux qu'elle, soit le hub est une AUTRE
-    # machine, dont le VTY 4239 n'ecoute que sur son propre 127.0.0.1 - il n'est
-    # donc PAS observable d'ici. On l'ignore visiblement au lieu d'afficher des
-    # compteurs a zero qui se liraient comme un coeur SS7 mort.
+    # Nothing about the hub in the dump, and we are native: either this
+    # machine IS the hub and the dump predates it, or the hub is ANOTHER
+    # machine whose VTY 4239 listens only on its own 127.0.0.1 and is NOT
+    # observable from here. Skipped visibly rather than showing zero counters
+    # that would read as a dead SS7 core.
     print_header "INTER-STP HUB - ignore (natif)"
     if hub_here="$(osmo_hub)"; then
         print_row "Hub local" "${hub_here} present ici, mais absent du dump"
@@ -319,10 +307,10 @@ elif osmo_is_native; then
     fi
 
 elif hub_remote="$(osmo_hub_is_remote 2>/dev/null)"; then
-    # WAN : le hub vit sur une AUTRE machine (--hub-ip / OSMO_HUB_IP), il ne
-    # peut donc pas figurer dans un dump pris ici, et son VTY 4239 n'ecoute que
-    # sur sa propre boucle locale. Ce qui est observable d'ici, c'est le LIEN
-    # vers lui : l'association SCTP que chaque noeud tient ouverte.
+    # WAN: the hub lives on ANOTHER machine (--hub-ip / OSMO_HUB_IP), so it
+    # cannot appear in a dump taken here, and its VTY 4239 listens only on its
+    # own loopback. What is observable from here is the LINK to it: the SCTP
+    # association each node keeps open.
     print_header "INTER-STP HUB - distant (${hub_remote})"
     hub_assoc="$(osmo_hub_assoc "$hub_remote" 2>/dev/null)" && hub_rc=0 || hub_rc=$?
     case "$hub_rc" in
@@ -333,28 +321,28 @@ elif hub_remote="$(osmo_hub_is_remote 2>/dev/null)"; then
     print_row "Etat interne" "$(osmo_hub_hint)"
 
 elif hub_here="$(osmo_hub)"; then
-    # Mode docker : le conteneur tourne mais ne figure pas dans le dump - le
-    # dump est donc anterieur au hub. Sans conteneur hub, on ne dit rien, comme
-    # avant : il n'y a simplement pas d'inter-STP dans ce lab.
+    # Docker mode: the container runs but is not in the dump, so the dump
+    # predates the hub. Without a hub container nothing is printed: there is
+    # simply no inter-STP in this lab.
     print_header "INTER-STP HUB (${hub_here})"
     print_row "Etat" "conteneur en cours, mais absent du dump"
     print_row "Pour l'inclure" "relancez avec --live"
 fi
 
-# ── Boucle sur les operateurs ─────────────────────────────────────────────────
-# "${CONTAINERS[@]+...}" : sur un dump muet le tableau est vide, et sous
-# "set -u" un ""${CONTAINERS[@]}"" nu casserait au lieu de ne rien faire.
+# ── Loop over operators ──────────────────────────────────────────────────────
+# "${CONTAINERS[@]+...}": on a silent dump the array is empty, and under
+# "set -u" a bare "${CONTAINERS[@]}" would abort instead of doing nothing.
 for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
-    # Le numero est le suffixe de l'etiquette ; la mapfile n'a laisse passer que
-    # "osmo-operator-<chiffres>", donc pas de sous-shell ni de grep ici.
+    # The number is the label suffix; mapfile only let "osmo-operator-<digits>"
+    # through, so no sub-shell or grep is needed here.
     op_id="${container##*-}"
 
     print_header "OPERATEUR ${op_id} (${container})"
 
-    # ── STP local ────────────────────────────────────────────────────────
+    # ── Local STP ────────────────────────────────────────────────────────────
     print_section "SS7"
 
-    # ASP actifs dans STP
+    # Active ASPs in STP
     stp_asp=$(extract_asp_state "$container" "STP")
     print_row "ASP actifs (STP)" "$stp_asp"
 
@@ -371,7 +359,7 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     msc_asp=$(extract_asp_state "$container" "MSC")
     print_row "ASP actif" "$([ "$msc_asp" -gt 0 ] && echo "✓" || echo "✗")"
 
-    # Subscribers VLR
+    # VLR subscribers
     vlr_count=$(grep -A30 "\[OsmoMSC\]" "$DUMP_FILE" \
         | grep -A20 "container=${container}" \
         | grep -E "subscriber count.*[0-9]+" \
@@ -391,7 +379,7 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     bsc_asp=$(extract_asp_state "$container" "BSC")
     print_row "ASP actif" "$([ "$bsc_asp" -gt 0 ] && echo "✓" || echo "✗")"
 
-    # BTS 0 etat
+    # BTS 0 state
     OML_OK=0
     RSL_OK=0
     BTS_STATE="Down"
@@ -400,7 +388,7 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     print_row "  ├─ OML" "$([ "$OML_OK" -eq 1 ] && echo "✓ connecte" || echo "✗ deconnecte")"
     print_row "  └─ RSL" "$([ "$RSL_OK" -eq 1 ] && echo "✓ connecte" || echo "✗ deconnecte")"
 
-    # Nombre de BTS total
+    # Total number of BTS
     n_bts=$(grep -A50 "\[OsmoBSC\]" "$DUMP_FILE" \
         | grep -A30 "container=${container}" \
         | grep -c "^ bts [0-9]" || true)
@@ -412,22 +400,22 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
     subs_count=$(extract_subscriber_count "$container")
     print_row "Abonnes" "$subs_count"
 
-    # Connexions GSUP
+    # GSUP connections
     gsup=$(grep -A20 "\[OsmoHLR\]" "$DUMP_FILE" \
         | grep -A10 "container=${container}" \
         | grep -c "GSUP" || true)
     print_row "Connexions GSUP" "$gsup"
 
-    # ── BTS (si disponible) ───────────────────────────────────────────────
+    # ── BTS (if available) ───────────────────────────────────────────────────
     print_section "BTS (phy)"
 
-    # LCHAN actifs
+    # Active LCHANs
     lchan=$(grep -A30 "\[OsmoBTS\]" "$DUMP_FILE" \
         | grep -A10 "container=${container}" \
         | grep -c "lchan" || true)
     print_row "LCHAN" "$lchan"
 
-    # ── SGSN/GGSN (si GPRS actif) ─────────────────────────────────────────
+    # ── SGSN/GGSN (if GPRS is enabled) ───────────────────────────────────────
     print_section "GPRS"
 
     # NS entities
@@ -442,7 +430,7 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
         | grep -c "PDP context" || true)
     print_row "PDP contexts" "$pdp"
 
-    # ── Services auxiliaires ─────────────────────────────────────────────
+    # ── Auxiliary services ───────────────────────────────────────────────────
     print_section "Services"
 
     # SIP connector
@@ -456,10 +444,10 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
         | grep -c "port 7890" || true)
     print_row "SMS relay" "$([ "$sms" -gt 0 ] && echo "✓ actif" || echo "?")"
 
-    # ── Statistiques rapides ─────────────────────────────────────────────
+    # ── Quick statistics ─────────────────────────────────────────────────────
     print_section "Statistiques"
 
-    # Appels actifs
+    # Active calls
     calls=$(grep -A20 "\[OsmoMSC\]" "$DUMP_FILE" \
         | grep -A10 "container=${container}" \
         | grep -c "call-leg" || true)
@@ -473,7 +461,7 @@ for container in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do
 
 done
 
-# ── Nettoyage ─────────────────────────────────────────────────────────────────
+# ── Cleanup ──────────────────────────────────────────────────────────────────
 if [ "$LIVE_MODE" -eq 1 ] && [ -n "$TEMP_DUMP" ]; then
     rm -f "$TEMP_DUMP"
 fi

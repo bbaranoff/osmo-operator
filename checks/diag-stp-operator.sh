@@ -1,14 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# diag-stp-operator.sh -- diagnostic SS7/interco vu d'un noeud operateur
+# checks/diag-stp-operator.sh - SS7 / interconnect diagnostic from an operator node
 #
-# Lit le role et le plan WAN, compare la conf sur disque a ce que le demon
-# osmo-stp fait tourner reellement (VTY), teste le transport SCTP vers
-# l'inter-STP, et rend un verdict clair : interco UP / DOWN + la cause.
+# Reads the role and the WAN plan, compares the on-disk configuration with
+# what the osmo-stp daemon actually runs (VTY), tests the SCTP transport to
+# the inter-STP and gives a clear verdict: interconnect UP / DOWN + the cause.
 #
-# Ne modifie rien. Ne redemarre rien. Lecture seule.
+# Read-only: changes nothing, restarts nothing.
 #
-# Usage : sudo ./diag-stp-operator.sh [--node N] [--hub-ip IP] [--no-color]
+# Usage: sudo ./checks/diag-stp-operator.sh [--node N] [--hub-ip IP] [--no-color]
+#   --node N     WAN node number (default: OSMO_WAN_NODE from /etc/osmo-role)
+#   --hub-ip IP  inter-STP address (default: OSMO_HUB_IP from /etc/osmo-role)
 # =============================================================================
 set -uo pipefail
 
@@ -40,14 +42,14 @@ PROB=0
 hr(){ printf '%s\n' "-------------------------------------------------------------------------"; }
 section(){ printf '\n%s== %s ==%s\n' "$B" "$1" "$Z"; }
 
-# ---- identite ---------------------------------------------------------------
+# ---- identity ---------------------------------------------------------------
 getv(){ awk -F= -v k="$1" '$1==k{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$ROLE_FILE" 2>/dev/null; }
 [ -z "$NODE" ]   && NODE="$(getv OSMO_WAN_NODE)"
 [ -z "$HUB_IP" ] && HUB_IP="$(getv OSMO_HUB_IP)"
 ROLE="$(getv OSMO_ROLE)"
 [ -z "$NODE" ] && NODE="?"
 
-# IP locale de ce noeud, depuis la table WAN si dispo
+# local IP of this node, from the WAN table when available
 SELF_IP=""
 if [ -r "$WAN_FILE" ]; then
   wl="$(awk -F\" '/WAN_NODES=/{print $2}' "$WAN_FILE" 2>/dev/null)"
@@ -65,7 +67,7 @@ if [ "$ROLE" != "operator" ]; then
   printf '  %s ce n est pas un noeud operateur (role=%s) -- utilise diag-interstp.sh\n' "$WARN" "${ROLE:-?}"
 fi
 
-# plan attendu pour ce noeud
+# expected plan for this node
 if [ "$NODE" != "?" ]; then
   EXP_PC="1.${NODE}1.2"; EXP_MSC="1.${NODE}1.1"; EXP_BSC="1.${NODE}1.3"
   EXP_RK=$(( NODE*1000 + 150 ))
@@ -73,7 +75,7 @@ else
   EXP_PC=""; EXP_MSC=""; EXP_BSC=""; EXP_RK=""
 fi
 
-# ---- conf sur disque --------------------------------------------------------
+# ---- on-disk configuration --------------------------------------------------
 section "CONF SUR DISQUE ($STP_CFG)"
 f_pc="$(awk '/^cs7 instance/{c=1} c&&/^ *point-code /{print $2; exit}' "$STP_CFG" 2>/dev/null)"
 f_rip="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG" 2>/dev/null)"
@@ -107,7 +109,7 @@ for s in osmo-stp osmo-msc osmo-bsc osmo-hlr; do
   printf '  %-14s %-10s %s\n' "$s" "${st:-inconnu}" "$m"
 done
 
-# ---- VTY : ce que le demon fait tourner reellement --------------------------
+# ---- VTY: what the daemon actually runs -------------------------------------
 vty(){ # commands...
   { printf 'enable\n'; for c in "$@"; do printf '%s\n' "$c"; done; sleep 0.5; } \
     | timeout 6 nc -q1 127.0.0.1 "$VTY_PORT" 2>/dev/null | tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g'
@@ -124,7 +126,7 @@ else
   printf '  asp-to-inter  etat=%s%s%s  remote=%s\n' "$C" "${r_state:-absent}" "$Z" "${r_rem:-?}"
   nact="$(printf '%s\n' "$ASP" | grep -c 'ASP_ACTIVE')"
   printf '  ASP locaux ACTIVE (MSC/HLR internes) : %s\n' "$nact"
-  # derive interne : fichier corrige mais demon pas recharge
+  # drift: file fixed but daemon not reloaded
   if [ -n "$r_rem" ] && [ -n "$f_rip" ] && [ "$r_rem" != "${f_rip}:${M3UA_PORT}" ] && [ "${r_rem%:*}" != "$f_rip" ]; then
     printf '  %s DERIVE : disque remote=%s mais demon tourne remote=%s -> reload/restart requis\n' "$WARN" "$f_rip" "$r_rem"
     PROB=$((PROB+1))

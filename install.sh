@@ -1,32 +1,34 @@
 #!/bin/bash
 # =============================================================================
-#  install.sh - installation native, par modules
+#  install.sh - native, module-based installation
 # =============================================================================
 #
-#  Meme architecture que run.sh : ce fichier n'est qu'un moteur. Chaque etape
-#  vit dans install_modules/NN-<slug>.sh et respecte le contrat decrit dans
-#  install_modules/_lib/inst.sh.
+#  Same architecture as start-native.sh: this file is only an engine. Each
+#  step lives in install_modules/NN-<slug>.sh and follows the contract
+#  described in install_modules/_lib/inst.sh.
 #
-#      sudo ./install.sh                tout
-#      ./install.sh --list              les etapes, sans rien faire
-#      ./install.sh --dry-run           deroule sans effet de bord
-#      sudo ./install.sh --only deps    une seule etape
-#      sudo ./install.sh --skip build   tout sauf celle-la
-#      ./install.sh --check             ce qui est deja installe
-#      sudo ./install.sh --reinstall    rejoue TOUT, meme ce qui est deja la
-#                                       (sources mises a jour, configs et
-#                                       raccourcis reecrits, binaires refaits)
+#      sudo ./install.sh                everything
+#      ./install.sh --list              list the steps, do nothing
+#      ./install.sh --dry-run           walk through without side effects
+#      sudo ./install.sh --only deps    one step only
+#      sudo ./install.sh --skip build   everything except that step
+#      ./install.sh --check             what is already installed
+#      sudo ./install.sh --reinstall    replay EVERYTHING, even what is
+#                                       already there (sources updated,
+#                                       configs and shortcuts rewritten,
+#                                       binaries rebuilt)
 #
-#  Ou : GSM_ROOT (defaut /opt/GSM) recoit sources et binaires.
-#  Le bureau (icones, raccourcis "Lancer le banc GSM" et "multi-operator") est
-#  l etape `bureau` : elle pose les MEMES fichiers que l ISO (data/desktop/).
+#  Where: GSM_ROOT (default /opt/GSM) receives sources and binaries.
+#  The desktop (icons, "Lancer le banc GSM" and "multi-operator" shortcuts) is
+#  the `bureau` step: it installs the SAME files as the ISO (data/desktop/).
+#  New to the project? Prefer Docker: ./tools/make-docker-image.sh.
+#  This native install is for people who want to work on the sources.
 #
-#  SI VOUS DECOUVREZ LE PROJET, PREFEREZ DOCKER : `./tools/make-docker-image.sh` produit une image
-#  complete et reproductible. Cette installation native s'adresse a ceux qui
-#  veulent travailler sur les sources.
+#  The package list is not duplicated here: it is EXTRACTED from the
+#  Dockerfile, which stays the reference, so the two cannot diverge.
 #
-#  La liste des paquets n'est pas dupliquee ici : elle est EXTRAITE du
-#  Dockerfile, qui reste la reference. Les deux ne peuvent donc pas diverger.
+#  Environment: GSM_ROOT, OSMOCOM_HOME (default ~/.osmocom),
+#               LOG_DIR (default /tmp/osmo-nitb-install), NO_COLOR.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -36,6 +38,7 @@ MODDIR="$INST_TREE/install_modules"
 : "${OSMOCOM_HOME:=$HOME/.osmocom}"
 export INST_TREE GSM_ROOT OSMOCOM_HOME
 
+# ── Options ──────────────────────────────────────────────────────────────────
 DRY=0 ONLY="" SKIP="" ACTION=install REINSTALL=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# ── Output helpers ───────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     TTY=1; C_OK=$'\033[32m'; C_KO=$'\033[31m'; C_SK=$'\033[33m'; C_DIM=$'\033[2m'; C_Z=$'\033[0m'
 else
@@ -63,6 +67,7 @@ end()   { [ $TTY -eq 1 ] && printf '\r\033[K'; printf '[%s%s%s] %s' "$2" "$1" "$
 LOGDIR="${LOG_DIR:-/tmp/osmo-nitb-install}"; mkdir -p "$LOGDIR" 2>/dev/null || true
 export REINSTALL
 
+# ── Load the modules and select the steps ────────────────────────────────────
 [ -d "$MODDIR" ] || { printf 'install_modules/ introuvable\n' >&2; exit 2; }
 . "$MODDIR/_lib/inst.sh"
 shopt -s nullglob; for f in "$MODDIR"/[0-9][0-9]-*.sh; do . "$f"; done; shopt -u nullglob
@@ -76,6 +81,7 @@ for s in "${INST_ORDER[@]}"; do
     selected+=("$s")
 done
 
+# ── --list ───────────────────────────────────────────────────────────────────
 if [ "$ACTION" = list ]; then
     printf 'Etapes - %d, dans cet ordre\n\n' "${#selected[@]}"
     for s in "${selected[@]}"; do
@@ -87,6 +93,7 @@ if [ "$ACTION" = list ]; then
     exit 0
 fi
 
+# ── --check ──────────────────────────────────────────────────────────────────
 if [ "$ACTION" = check ]; then
     rc=0
     for s in "${selected[@]}"; do
@@ -101,7 +108,7 @@ if [ "$ACTION" = check ]; then
     exit $rc
 fi
 
-# root : exige seulement si une etape retenue le demande
+# root: required only when a selected step asks for it
 need_root=0
 for s in "${selected[@]}"; do [ "${INST_ROOT[$s]}" = 1 ] && need_root=1; done
 if [ $DRY -eq 0 ] && [ $need_root -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
@@ -110,16 +117,15 @@ if [ $DRY -eq 0 ] && [ $need_root -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
     exit 2
 fi
 
+# ── Run the steps ────────────────────────────────────────────────────────────
 declare -A STATE=()
 nb_ok=0 nb_skip=0 nb_fail=0
 for s in "${selected[@]}"; do
     p="$(inst_prefix "$s")"; log="$LOGDIR/$s.log"
     _INST_REASON=""; _INST_HINT=""
 
-    # Une etape prerequise que l appelant a ECARTEE (--only, --skip) n est pas
-    # un echec : c est son choix. Seule une etape jouee et RATEE bloque. Sans
-    # ca, "--only deps" sautait deps parce que prereqs n etait pas dans la
-    # selection - l exemple de l en-tete ne marchait pas.
+    # A prerequisite step the caller EXCLUDED (--only, --skip) is not a
+    # failure: only a step that ran and FAILED blocks its dependents.
     dep_ko=""
     for d in ${INST_DEPS[$s]}; do
         in_csv "$(IFS=,; echo "${selected[*]}")" "$d" || continue
@@ -132,9 +138,9 @@ for s in "${selected[@]}"; do
 
     begin "${INST_DESC[$s]}"
 
-    # --reinstall : on ne demande plus « deja fait ? », on refait. Les modules
-    # lisent REINSTALL pour ecraser ce qu ils conservent d ordinaire (cp -n,
-    # depot laisse tel quel).
+    # --reinstall: skip the "already done?" check and redo the step. Modules
+    # read REINSTALL to overwrite what they normally keep (cp -n, existing
+    # checkout left as is).
     if [ "$REINSTALL" -eq 0 ] && declare -F "${p}_done" >/dev/null && "${p}_done" >>"$log" 2>&1; then
         end "SKIP" "$C_SK" "${INST_DESC[$s]}" "deja installe"
         STATE[$s]=skip; nb_skip=$((nb_skip+1)); continue
@@ -168,7 +174,7 @@ for s in "${selected[@]}"; do
                        continue ;;
     esac
 
-    # installer n'est pas avoir installe : on controle apres coup
+    # Running an installer is not the same as having installed: verify afterwards.
     if declare -F "${p}_verify" >/dev/null; then
         if ! "${p}_verify" >>"$log" 2>&1; then
             end "FAIL" "$C_KO" "${INST_DESC[$s]}" "faite, mais le controle echoue : ${_INST_REASON:-}"
@@ -183,6 +189,7 @@ for s in "${selected[@]}"; do
     end " OK " "$C_OK" "${INST_DESC[$s]}"; STATE[$s]=ok; nb_ok=$((nb_ok+1))
 done
 
+# ── Summary ──────────────────────────────────────────────────────────────────
 printf '\n%d ok · %d ignores · %d echecs\n' "$nb_ok" "$nb_skip" "$nb_fail"
 if [ $nb_fail -eq 0 ] && [ $DRY -eq 0 ]; then
     printf '\n  %sverifier%s   ./install.sh --check\n'          "$C_DIM" "$C_Z"

@@ -1,49 +1,59 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  generate_configs.sh - le SEUL endroit ou la configuration du reseau est
-#                        decidee, et le seul qui sait substituer les gabarits.
+#  generate_configs.sh - the ONLY place where the network configuration is
+#                        decided, and the only one that substitutes templates.
 # =============================================================================
 #
-#  POURQUOI CE FICHIER EXISTE
-#  --------------------------
-#  La mecanique est inchangee : les fichiers de `configs/` contiennent des
-#  marqueurs `__MCC__`, `__ARFCN__`, `__KI__`... qu'une fonction remplace au
-#  demarrage. Ce qui change, c'est qu'il n'y a plus DEUX implementations de
-#  cette fonction - `start-docker.sh` en portait une copie de 132 lignes et
-#  `lib/gabarits.sh` une autre de 70, identiques au formatage pres, qui
-#  derivaient donc en silence. Elles vivent ici, une fois.
+#  HOW IT WORKS
+#  ------------
+#  The files under configs/ carry markers (__MCC__, __ARFCN__, __KI__, ...)
+#  that apply_config_templates() replaces at start-up. The derivation
+#  formulas (ARFCN, BSIC, IMSI, IMEI, Ki...) are only DEFAULTS: globals.conf,
+#  at the repository root, exposes them all and wins.
 #
-#  Et surtout : les valeurs n'etaient calculees NULLE PART de facon visible.
-#  ARFCN, BSIC, IMSI, IMEI, Ki etaient des formules enfouies au milieu de la
-#  substitution (`arfcn=$(( 512 + op_id * 2 ))`). Pour changer l'ARFCN il
-#  fallait trouver et editer la formule. Desormais ces formules ne sont plus
-#  que des DEFAUTS : `globals.conf`, a la racine, les expose toutes et gagne.
-#
-#  DEUX USAGES
-#  -----------
-#    ./generate_configs.sh [--force] [--show] [CLE=VALEUR ...]
-#         ecrit/complete globals.conf a la racine, puis affiche l'effectif.
-#         Sans --force, un globals.conf existant n'est JAMAIS ecrase : c'est
-#         ton fichier, on ne reecrit pas par-dessus tes reglages.
+#  TWO USAGES
+#  ----------
+#    ./generate_configs.sh [--force] [--show] [KEY=VALUE ...]
+#         writes/completes globals.conf at the root, then prints the
+#         effective values. Without --force an existing globals.conf is
+#         NEVER overwritten.
 #
 #    . ./generate_configs.sh
-#         charge globals.conf et definit apply_config_templates().
-#         C'est ce que font start-docker.sh (hote) et lib/gabarits.sh.
+#         loads globals.conf and defines apply_config_templates() and
+#         apply_native_post_patches().
 #
-#  QUI APPELLE QUOI
-#  ----------------
-#    start-docker.sh          -> execute ce script (genere globals.conf) puis le source
-#    start-native.sh   -> source globals.conf (docker : la conf est deja la)
-#    lib/gabarits.sh   -> source ce script pour apply_config_templates()
+#  WHO CALLS WHAT
+#  --------------
+#    launch/start-docker.sh  -> runs this script (writes globals.conf), then
+#                               sources it
+#    start-native.sh         -> sources globals.conf
+#    lib/gabarits.sh         -> sources this script for apply_config_templates()
+#    iso_modules/30-image-configs.sh, startup_scripts/11-regen-configs.sh
+#                            -> apply_native_post_patches() on a generated tree
 #
-#  MULTI-OPERATEUR
-#  ---------------
-#  En mode `virtual` (N_OPERATORS > 1) chaque operateur a besoin de valeurs
-#  DISTINCTES. Une valeur posee dans globals.conf s'applique alors a TOUS -
-#  ce qui est presque toujours faux pour ARFCN, LAC, IMSI... Laisse-les vides
-#  (le defaut) pour garder la derivation par operateur, et ne fixe que ce que
-#  tu veux vraiment figer. Le script te previent si tu figes un champ
-#  per-operateur avec N_OPERATORS > 1.
+#  PRECEDENCE
+#  ----------
+#    command line / environment  >  globals.conf  >  defaults of _gc_table
+#
+#  MULTI-OPERATOR
+#  --------------
+#  In `virtual` mode (N_OPERATORS > 1) each operator needs DISTINCT values.
+#  A value set in globals.conf applies to ALL of them, which is almost always
+#  wrong for ARFCN, LAC, IMSI... Leave them empty (the default) to keep the
+#  per-operator derivation and pin only what you really want pinned. The
+#  script warns when a per-operator field is pinned with N_OPERATORS > 1.
+#
+#  ENVIRONMENT
+#  -----------
+#    OSMO_NO_REGEN=1    keep the installed configs (start-native.sh default;
+#                       --regen clears it)
+#    OSMO_NO_STP_IP=1   skip the node SS7 addressing (network/set-node-id.sh)
+#    OSMO_WAN_NODE, WAN_NODE_ID, ROLE_FILE (/etc/osmo-role): node number
+#    OSMO_ROLE, OSMO_HUB_IP, WAN_STP_TARGET, INTER_STP_IP: WAN node identity
+#    SAP_MODE=1         mobile.cfg uses "sim sap" instead of "sim test"
+#    RCTX_INTER_OVERRIDE, INTER_LOCAL_IP_OVERRIDE, SIP_REMOTE_IP_OVERRIDE:
+#                       set by the ISO build / --regen for a WAN node
+#    WAN_CONF_FILE      WAN table (default /etc/osmo-wan.conf)
 #
 #  SPDX-License-Identifier: GPL-2.0-or-later
 # =============================================================================
@@ -51,26 +61,20 @@
 _GC_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _GC_FILE="$_GC_HERE/globals.conf"
 
-# ── Les reglages exposes, avec leur defaut historique ────────────────────────
-# Format : CLE|VALEUR-PAR-DEFAUT|PER-OP|COMMENTAIRE
-#   PER-OP=1 -> la valeur est normalement derivee du numero d'operateur ;
-#               la figer n'a de sens qu'avec un seul operateur.
+# ── Exposed settings, with their default ─────────────────────────────────────
+# Format: KEY|DEFAULT|PER-OP|COMMENT
+#   PER-OP=1 -> the value is normally derived from the operator number;
+#               pinning it only makes sense with a single operator.
 #
-#  ATTENTION : le corps de _gc_table est une TABLE, pas du shell. La seule ligne
-#  non-donnee admise est « #SECTION|<titre> ». Un « # » ordinaire y devient une
-#  entree malformee -- verifie le 27/08, en cassant le module « gabarits » du run.
-#  Toute explication se met donc ICI, au-dessus de la fonction.
+# The body of _gc_table is a TABLE, not shell: the only non-data line allowed
+# is "#SECTION|<title>". A plain "#" line there becomes a malformed entry, so
+# explanations go HERE, above the function.
 #
-#  [2026-08-27] A5/1 EST LE DEFAUT ASSUME, ET IL A UN COUT CONNU. Le mobile
-#  derriere QEMU ne dechiffre pas encore l'A5/1 : le chemin cipher du modele n'est
-#  pas exerce (hw/arm/calypso/l1ctl_sock.c, « s'execute donc JAMAIS -- a verifier
-#  avant d'activer l'A5/1 »). Comptage des rejets LAPDm dans mobile.log de part et
-#  d'autre du CIPHERING MODE COMPLETE : 2 avant, 477 apres, et le LU s'arretait la
-#  (T3210). Le side-car osmocom-bb, lui, traite l'A5/1 sans broncher et obtient
-#  son LU ACCEPT : c'est le chemin emule qui doit rattraper, pas le reseau qui
-#  doit baisser la garde. Repli de travail : ENCRYPTION="a5 0" en ligne de
-#  commande, qui traverse jusqu'au fichier pose depuis que 08-gabarits.sh
-#  l'exporte.
+# Known limitation: the mobile emulated under QEMU does not decipher A5/1 yet
+# (the cipher path of hw/arm/calypso/l1ctl_sock.c is not exercised), so with
+# the default ENCRYPTION="a5 1" its Location Update stops after CIPHERING
+# MODE COMPLETE (T3210). The osmocom-bb side-car handles A5/1 fine.
+# Work-around: ENCRYPTION="a5 0" on the command line.
 _gc_table() {
 cat <<'TABLE'
 #SECTION|Identite du reseau
@@ -108,7 +112,7 @@ HOST_IP|127.0.0.1|0|Adresse de l'hote vue par la pile
 TABLE
 }
 
-# ── Ecriture de globals.conf ─────────────────────────────────────────────────
+# ── Write globals.conf ───────────────────────────────────────────────────────
 _gc_write() {
     local force=$1
     if [ -f "$_GC_FILE" ] && [ "$force" != "1" ]; then
@@ -154,7 +158,7 @@ _gc_write() {
            "$(_gc_table | grep -vc '^#SECTION')"
 }
 
-# ── Poser une valeur DANS le fichier, en place, sans casser la mise en forme ──
+# ── Set one value IN the file, in place, keeping the layout ──────────────────
 _gc_set() {
     local key="${1%%=*}" val="${1#*=}"
     _gc_table | grep -q "^${key}|" || {
@@ -169,33 +173,16 @@ _gc_set() {
     printf '  %s = %s\n' "$key" "${val:-(auto)}"
 }
 
-# ── Chargement ───────────────────────────────────────────────────────────────
-# Charge globals.conf, puis COMPLETE avec les defauts de la table.
-#
-# L'ordre compte : le fichier est lu d'abord et fait autorite sur les variables
-# qu'il declare ; ensuite, toute cle encore vide recoit son defaut d'usine.
-#
-# Ce filet n'est pas decoratif. Sans lui, un globals.conf ABSENT - clone frais,
-# fichier volontairement gitignore, suppression accidentelle - laissait BAND,
-# SIM_ALGO, APN, T3109... vides, et la substitution les ecrivait tels quels dans
-# les configs : "band" sans valeur, "ki  <hexa>" sans algorithme. osmo-bsc
-# refuse alors de demarrer, et rien dans le journal ne dit pourquoi. Constate
-# en vrai le 2026-08-03. Les defauts appartiennent au SCRIPT ; globals.conf
-# n'est qu'une couche de surcharge par-dessus.
+# ── Loading ──────────────────────────────────────────────────────────────────
+# Loads globals.conf, then COMPLETES it with the table defaults. Precedence:
+#     command line / environment  >  globals.conf  >  default of _gc_table
+# globals.conf assigns unconditionally, so the keys already present in the
+# environment are saved BEFORE sourcing it and restored AFTER. Any key still
+# empty then receives its factory default: an absent globals.conf (fresh
+# clone, the file is gitignored) must never leave BAND, SIM_ALGO, APN...
+# empty in the substituted configs, or osmo-bsc refuses to start.
 gc_load() {
     local key def perop comment
-    # ── LA LIGNE DE COMMANDE PRIME SUR globals.conf ──────────────────────────
-    # globals.conf affecte SECHEMENT (MCC=001, ENCRYPTION="a5 1", ...). Le sourcer
-    # en premier ecrasait donc ce que l'appelant venait de poser dans son
-    # environnement : sur une machine qui a un globals.conf,
-    #     ENCRYPTION="a5 0" ./run.sh
-    # etait avale sans un mot et le run repartait en a5 1. Constate le 2026-08-27,
-    # et c'est la meme famille de panne que les deux autres du jour : une valeur
-    # qui depend du chemin par lequel on entre, sans que rien ne le signale.
-    #
-    # On releve donc les cles DEJA presentes dans l'environnement AVANT de sourcer,
-    # et on les repose APRES. Precedence retablie, dans l'ordre habituel :
-    #     ligne de commande  >  globals.conf  >  defaut de _gc_table
     local -A _gc_env=()
     while IFS='|' read -r key def perop comment; do
         [ -n "$key" ] && [ "$key" != "#SECTION" ] || continue
@@ -215,18 +202,15 @@ gc_load() {
     return 0
 }
 
-# ── IMEI tire au hasard, avec sa cle de Luhn ────────────────────────────────
-# L'IMEI etait derive du numero d'operateur : deux bancs identiques rendaient
-# les memes, et deux MS du meme operateur ne se distinguaient plus dans une
-# trace. On garde un TAC plausible (35892500) et on tire les six chiffres de
-# serie, puis on calcule la 15e position : un IMEI dont la cle est fausse est
-# rejete par certains equipements, et surtout il se voit tout de suite comme
-# fabrique a la main.
+# ── Random IMEI with its Luhn check digit ────────────────────────────────────
+# Plausible TAC (35892500) + six random serial digits + Luhn digit, so that
+# two benches, or two MS of the same operator, never share an IMEI and the
+# value passes the check of equipment that validates it.
 rand_imei() {
     local body d i sum=0 dbl parity
     body="35892500$(printf '%06d' "$(( (RANDOM << 15 | RANDOM) % 1000000 ))")"
-    # Luhn sur les 14 chiffres : on double un chiffre sur deux en partant de la
-    # droite, en repliant les resultats a deux chiffres.
+    # Luhn over the 14 digits: double every second digit from the right,
+    # folding two-digit results.
     for (( i = ${#body} - 1; i >= 0; i-- )); do
         d=${body:i:1}
         parity=$(( (${#body} - 1 - i) % 2 ))
@@ -240,35 +224,30 @@ rand_imei() {
     printf '%s%d' "$body" "$(( (10 - sum % 10) % 10 ))"
 }
 
-# ── LE PLAN DE NUMEROTATION, EN UN SEUL ENDROIT ──────────────────────────────
+# ── THE NUMBERING PLAN, IN ONE PLACE ─────────────────────────────────────────
 #
-#   MSISDN = <noeud> 00 <operateur> <rang du MS sur 2 chiffres>
-#            noeud 1, operateur 1, MS 1  ->  100101
-#            noeud 1, operateur 1, MS 2  ->  100102
-#            noeud 2, operateur 1, MS 1  ->  200101
+#   MSISDN = <node> 00 <operator> <MS rank on 2 digits>
+#            node 1, operator 1, MS 1  ->  100101
+#            node 1, operator 1, MS 2  ->  100102
+#            node 2, operator 1, MS 1  ->  200101
 #
-# POURQUOI LE NOEUD EN TETE. Le plan precedent commencait par un 6 fixe
-# (600000 + op*100 + ms) : le numero ne disait donc RIEN de la machine qui le
-# porte. Sur un banc a plusieurs noeuds, l'operateur 1 du noeud 1 et l'operateur
-# 1 du noeud 2 revendiquaient tous deux 600101 - le meme abonne a deux endroits,
-# et un SMS ou un appel qui part chez le premier qui repond. Le premier chiffre
-# devient donc l'adresse du noeud, et le routage (SMS comme dialplan) se lit
-# directement dans le numero.
+# The leading digit is the node address, so SMS and dialplan routing can be
+# read directly from the number on a multi-node bench.
 #
-# CE QUI NE CHANGE PAS, ET C'EST VOULU : l'IMSI (MCC MNC <op sur 4> <ms sur 6>)
-# et le Ki (00 11 ... dd <ms> <op>). Ces deux-la sont derives a l'IDENTIQUE dans
-# quatre endroits - ici pour mobile.cfg, start-native.sh pour les mobiles,
-# run_modules/21-abonnes-hlr.sh et start-docker.sh pour le HLR - et ils doivent rester
-# d'accord au bit pres, sans quoi l'authentification echoue sur un Kc different
-# des deux cotes, sans autre trace qu'un rejet de CIPHER MODE. On ne touche donc
-# qu'au MSISDN, qui n'entre dans aucun calcul de securite.
-osmo_msisdn_pfx() { printf '%s00' "${1:-1}"; }                       # <noeud>00
+# Invariant: the IMSI (MCC MNC <op on 4 digits> <ms on 6>) and the Ki
+# (00 11 ... dd <ms> <op>) do NOT depend on the node. They are derived
+# identically here (mobile.cfg), in start-native.sh (mobiles) and in
+# launch/start-docker.sh (HLR subscribers) and must stay bit-identical,
+# otherwise authentication fails on a Kc mismatch with no trace other than a
+# CIPHER MODE reject. Only the MSISDN, which enters no security computation,
+# carries the node.
+osmo_msisdn_pfx() { printf '%s00' "${1:-1}"; }                       # <node>00
 osmo_msisdn()     { printf '%d' "$(( ${1:-1} * 100000 + ${2:-1} * 100 + ${3:-1} ))"; }
 
-# Le noeud tel que le voit la generation : l'environnement d'abord (c'est ce que
-# start-docker.sh passe a un conteneur et ce que start-native.sh exporte avant un
-# --regen), /etc/osmo-role ensuite, 1 par defaut. JAMAIS vide : un plan de
-# numerotation sans noeud, c'est le plan de tout le monde.
+# The node as seen by the generator: environment first (what
+# launch/start-docker.sh passes to a container and what start-native.sh
+# exports before a --regen), then /etc/osmo-role, then 1. NEVER empty: a
+# numbering plan without a node is everybody's plan.
 osmo_node_id() {
     local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
     if [ -z "$n" ] && [ -r "${ROLE_FILE:-/etc/osmo-role}" ]; then
@@ -279,45 +258,31 @@ osmo_node_id() {
     printf '%s' "$n"
 }
 
-# ── La substitution des gabarits - implementation UNIQUE ─────────────────────
-#  Signature inchangee, pour rester compatible avec les deux appelants :
+# ── Template substitution - the SINGLE implementation ────────────────────────
+#  Signature shared by all callers:
 #    apply_config_templates DEST CONTAINER_IP GATEWAY_IP OP_ID \
 #                           PC_MSC PC_STP PC_BSC MCC MNC OP_NAME \
 #                           INTER_STP INTER_STP_SHUTDOWN N_OPERATORS
+#  Writes DEST/osmocom, DEST/asterisk and DEST/bb from configs/ and scripts/,
+#  then DEST/osmocom/radio-plan.env (the decided radio plan and PLMN, read by
+#  start-native.sh for the mobiles and the side-car) and sms-routing.conf.
 apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
 
-    # ── OSMO_NO_REGEN : ne pas refaire ce qui vient d'etre fait ─────────────
-    # run.sh (qosmo-grgsm) peut rejouer cette fonction au demarrage. Dans un
-    # conteneur, c'est une REGRESSION : les configs viennent d'etre generees par
-    # start-docker.sh, avec l'identite du noeud, ses point codes et son inter-STP. Les
-    # regenerer depuis les gabarits les remplace par les valeurs par defaut -
-    # 1.1.2 pour tout le monde, ASP vers le hub docker, en shutdown - et
-    # l'interco meurt sans un mot.
-    #
-    # Ce commentaire nommait run_modules/08-gabarits.sh comme cet appelant. Ce
-    # module N'EXISTE PAS - start-native.sh le constate deja. Les appelants
-    # reels sont start-docker.sh (deux fois : la boucle des operateurs et le mode
-    # net-host) et build-iso.sh, qui construit l'arbre de l'image. Decrire un
-    # module imaginaire a fait regler plus bas une option sur une configuration
-    # que personne ne pose.
-    #
-    # start-native.sh pose donc cette variable par defaut, et --regen la leve
-    # pour qui veut vraiment repartir des gabarits.
+    # OSMO_NO_REGEN=1: keep the configs already in place. In a container they
+    # were just generated by launch/start-docker.sh with the node identity,
+    # point codes and inter-STP; regenerating from the templates would replace
+    # them with the single-machine defaults. start-native.sh sets it by
+    # default, --regen clears it.
     if [ "${OSMO_NO_REGEN:-0}" = "1" ]; then
         echo "  gabarits : conserves (OSMO_NO_REGEN=1 ; --regen pour regenerer)"
         return 0
     fi
     local pc_msc=$5 pc_stp=$6 pc_bsc=$7 mcc=$8 mnc=$9 op_name=${10}
 
-    # ── Le PLMN, avant d'ecrire quoi que ce soit ────────────────────────────
-    # osmo-msc REFUSE "network country code 000" : il abandonne la lecture du
-    # fichier a cette ligne, sort, et systemd le relance - trois fois par
-    # seconde, indefiniment. Le journal du lanceur, lui, affiche une croix a
-    # cote d'osmo-msc puis annonce "Core Osmocom pret" : on cherche la panne
-    # dans le SS7 ou dans la BTS pendant que la cause tient en trois chiffres.
-    # Un MCC vide donne 000 par printf ; c'est ainsi que c'est arrive.
-    # On s'arrete ICI, ou le nom du parametre est encore connu.
+    # PLMN check before writing anything: osmo-msc refuses "network country
+    # code 000" (an empty MCC gives 000 through printf), exits, and systemd
+    # restarts it endlessly. Fail HERE, where the parameter name is known.
     case "$mcc" in
         ''|000|00|0) echo "  ERREUR : MCC invalide ('$mcc') pour l'operateur $op_id - osmo-msc refuserait la config" >&2; return 1 ;;
     esac
@@ -326,9 +291,8 @@ apply_config_templates() {
     esac
     local inter_stp=${11} inter_stp_shutdown=${12} n_operators=${13}
 
-    # Le noeud entre dans le plan de numerotation : MSISDN = <noeud>00<op><ms>.
-    # Il n'entre PAS dans l'IMSI ni dans le Ki - ceux-la sont derives a
-    # l'identique dans quatre endroits et doivent le rester (voir osmo_msisdn).
+    # The node enters the numbering plan (MSISDN = <node>00<op><ms>), NOT the
+    # IMSI nor the Ki (see osmo_msisdn).
     local node msisdn_pfx
     node="$(osmo_node_id)"
     msisdn_pfx="$(osmo_msisdn_pfx "$node")"
@@ -345,9 +309,8 @@ apply_config_templates() {
         bn=$(basename "$f"); [ "$bn" = "sms-routing.conf" ] && continue
         cp "$f" "$dest/asterisk/"
     done
-    # scripts/ en entier : c'est le comportement de start-docker.sh, le plus permissif
-    # des deux qui coexistaient. lib/gabarits.sh en copiait une liste blanche,
-    # qui omettait silencieusement tout script ajoute depuis.
+    # scripts/ as a whole, so that a script added later is never silently
+    # left out.
     cp scripts/* "$dest/osmocom/" 2>/dev/null || true
     chmod +x "$dest/osmocom"/*.sh 2>/dev/null || true
 
@@ -358,14 +321,11 @@ apply_config_templates() {
         cp "configs/mobile.cfg" "$dest/bb/mobile.cfg"
         cp "configs/mobile.cfg" "$dest/bb/mobile_group1.cfg"
     fi
-    # [2026-10-26] LA SIM DU GABARIT SUIT --sap, ICI AUSSI. 11-regen-configs.sh
-    # rejoue ce gabarit 15 s APRES generate_mobile_cfg (08/09-mobile-*.sh) et
-    # l'installait tel quel dans ~/.osmocom/bb : avec « sim sap » le mobile
-    # restait en « A6 no SIM inserted » (aucun serveur SAP sans --sap) et la
-    # cellule n'etait jamais choisie. Meme regle que ms_sim_mode
-    # (06-banc-dsp-menu.sh) : « sap » seulement si SAP_MODE=1, pose par
-    # --sap / --softsim (01-defauts-options.sh). Les conteneurs, sans softSIM,
-    # restent en « sim test ».
+    # The SIM mode of the template follows --sap: "sim sap" only when
+    # SAP_MODE=1 (set by --sap / --softsim in startup_scripts/01-defauts-options.sh),
+    # "sim test" otherwise. Same rule as ms_sim_mode in
+    # startup_scripts/06-banc-dsp-menu.sh; containers, without softSIM, stay
+    # in "sim test".
     local _sim=test _f
     [ "${SAP_MODE:-0}" = 1 ] && _sim=sap
     for _f in "$dest/bb/mobile.cfg" "$dest/bb/mobile_group1.cfg"; do
@@ -375,87 +335,59 @@ apply_config_templates() {
     local rctx_msc rctx_stp rctx_bsc rctx_inter
     rctx_msc=$(op_rctx_msc "$op_id");   rctx_stp=$(op_rctx_stp "$op_id")
     rctx_bsc=$(op_rctx_bsc "$op_id")
-    # RCTX_INTER_OVERRIDE : pose par build-iso.sh quand l'image est un NOEUD DE
-    # WAN. Le routing context identifie l'AS aupres du hub ; la formule locale
-    # (op*100+50) donne la meme valeur sur tous les noeuds, donc plusieurs AS
-    # indiscernables sur le meme hub. Vide = formule d'origine, rien ne change.
+    # RCTX_INTER_OVERRIDE: set when the image is a WAN NODE. The routing
+    # context identifies the AS at the hub, and the local formula (op*100+50)
+    # gives the same value on every node. Empty = local formula.
     rctx_inter="${RCTX_INTER_OVERRIDE:-$(op_rctx_inter "$op_id")}"
 
-    # ── Les valeurs. globals.conf gagne ; sinon, la formule historique. ──────
+    # ── The values: globals.conf wins, otherwise the default formula ─────────
     local arfcn="${ARFCN:-$(( 512 + op_id * 2 ))}"
-    # ── La SECONDE BTS (le side-car) doit avoir son propre canal ────────────
-    # Elle etait figee sur l'ARFCN 516 et l'unit-id 6002 - les valeurs qui vont
-    # a l'operateur 1, et a lui seul. Pour l'operateur 2, dont la BTS
-    # principale tombe justement sur 516, les DEUX cellules emettaient sur la
-    # meme frequence : dans un milieu virtuel ou fake_trx apparie par
-    # frequence, leurs bursts se melangent. Constate sur le banc -
-    #     TRX 0 of BTS 0 is on ARFCN 516
-    #     TRX 0 of BTS 1 is on ARFCN 516
-    # - pendant que le mobile envoyait ses RACH sans jamais recevoir
-    # d'Immediate Assignment. L'operateur 1 n'y echappait que par coincidence.
-    # Le decalage de 100 met les side-cars hors d'atteinte de tout le plan
-    # principal (614, 616, 618... contre 514, 516, 518), et reste dans la
-    # bande DCS1800 (512-885).
+    # The SECOND BTS (the side-car) needs its own channel: +100 keeps the
+    # side-cars (614, 616, 618...) out of reach of the main plan (514, 516,
+    # 518...) and inside the DCS1800 band (512-885). In a virtual medium
+    # fake_trx pairs by frequency, so two cells on one ARFCN mix their bursts.
     local arfcn_bts1="${ARFCN_BTS1:-$(( 612 + op_id * 2 ))}"
-    # +2 sur le pas de 10 de la BTS principale : 6010/6012, 6020/6022...
+    # +2 on the main BTS step of 10: 6010/6012, 6020/6022...
     local ipa_unit_id_bts1="${IPA_UNIT_ID_BTS1:-$(( 6000 + op_id * 10 + 2 ))}"
     local bsic="${BSIC:-$(( (op_id * 7) % 64 ))}"
-    # Le side-car a son propre BSIC : c'est lui qui departage deux cellules
-    # dans les mesures du mobile, et deux cellules du meme operateur qui
-    # portent le meme code sont indiscernables l'une de l'autre.
+    # The side-car has its own BSIC: it is what tells two cells apart in the
+    # mobile measurements.
     local bsic_bts1="${BSIC_BTS1:-$(( (bsic + 1) % 64 ))}"
     local lac="${LAC:-0x000${op_id}}"
     local cell_id="${CELL_ID:-$(( 6000 + op_id ))}"
-    # Pas 6000+op_id : le gabarit de la SECONDE BTS
-    # (configs/osmo-bts-trx-bts1.cfg) porte "ipa unit-id 6002 0" EN DUR. Avec
-    # l'ancienne formule, l'operateur 2 recevait lui aussi 6002 : ses deux BTS se
-    # presentaient au BSC sous le meme identifiant, il en acceptait une et
-    # ejectait l'autre, en boucle. Symptome observe : "BTS failures : 26 OML,
-    # 26 RSL", un lien OML qui se reconnecte toutes les deux secondes, et aucun
-    # abonne attache - alors que l'operateur 1 (6001) fonctionnait, par simple
-    # coincidence de numerotation.
-    # Le pas de 10 laisse les valeurs de la seconde BTS hors d'atteinte, quel
-    # que soit le nombre d'operateurs.
+    # Step of 10, not 6000+op_id: the second BTS takes op*10+2, so the two BTS
+    # of an operator never present the same unit-id to the BSC (which would
+    # accept one and eject the other, in a loop), whatever the operator count.
     local ipa_unit_id="${IPA_UNIT_ID:-$(( 6000 + op_id * 10 ))}"
     local bvci="${BVCI:-$(( op_id * 10 + 2 ))}"
     local nsei="${NSEI:-$(( op_id * 10 ))}"
     local nsvci="${NSVCI:-$(( op_id * 10 ))}"
-    # Meme plan d'abonne que le HLR (start-docker.sh, section "HLR subscribers") :
-    #    IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6>
-    # Ce gabarit sert le MS #1. L'ancien %010d donnait 0000000002 la ou le HLR
-    # provisionne 0002000001 : la fiche existait, l'IMSI presente ne la visait
-    # pas, et l'attachement echouait sans que rien ne dise pourquoi.
+    # Same subscriber plan as the HLR (launch/start-docker.sh, "HLR subscribers"):
+    #    IMSI = MCC MNC <operator on 4 digits> <MS index on 6>
+    # This template serves MS #1.
     local imsi="${IMSI:-${mcc}${mnc}$(printf '%04d%06d' "$op_id" 1)}"
     local imei="${IMEI:-$(rand_imei)}"
-    # IMEI : tire au hasard a chaque generation (voir rand_imei).
-    # Ki : deux derniers octets = index du MS, puis operateur - l'ordre du HLR
-    # (printf '...dd%02x%02x' ms_idx op_id). Le "ff" final ne correspondait a
-    # aucune fiche : sans Ki commun, pas de Kc, et le CIPHER MODE est rejete.
+    # Ki: last two bytes = MS index, then operator - the HLR order
+    # (printf '...dd%02x%02x' ms_idx op_id). Without a common Ki there is no
+    # Kc and the CIPHER MODE is rejected.
     local ki="${KI:-00 11 22 33 44 55 66 77 88 99 aa bb cc dd $(printf '%02x %02x' 1 "$op_id")}"
     local sms_sc="${SMS_SC:-+336661234$(printf '%04d' "$op_id")}"
 
     local inter_local_ip sip_remote_ip rtp_start rtp_end sip_host_port
-    # Idem : sur un noeud de WAN, l'adresse source de l'ASP n'est pas une IP du
-    # plan docker mais celle du segment - ou 0.0.0.0 quand elle vient du DHCP.
+    # On a WAN node the ASP source address is not a docker-plan IP but the
+    # segment address, or 0.0.0.0 when it comes from DHCP.
     inter_local_ip="${INTER_LOCAL_IP_OVERRIDE:-$(op_backbone_ip "$op_id")}"
-    # La patte SIP vers Asterisk n'est PAS la dorsale : elle est locale dans les
-    # deux topologies, et Asterisk ne l'identifie que sur la boucle (pjsip.conf
-    # [gsm_msc-identify] match=127.0.0.1). Elle avait herite d'inter_local_ip -
-    # donc de 172.20.0.11, absente de l'ISO - et tout INVITE sortait en
-    # "Invalid argument (22)" puis 503. Variable distincte, defaut loopback.
+    # The SIP leg to Asterisk is NOT the backbone: it is local in both
+    # topologies, and Asterisk identifies it on loopback only (pjsip.conf
+    # [gsm_msc-identify] match=127.0.0.1).
     sip_remote_ip="${SIP_REMOTE_IP_OVERRIDE:-127.0.0.1}"
     rtp_start=$(linphone_rtp_start "$op_id"); rtp_end=$(linphone_rtp_end "$op_id")
     sip_host_port=$(linphone_sip_port "$op_id")
 
-    # ── Le plan radio, ECRIT, a cote des configurations ─────────────────────
-    # ARFCN, unit-id, PLMN etaient recalcules ailleurs a partir des memes
-    # formules - dans start-native.sh pour les mobiles, dans un module de
-    # qosmo-grgsm pour le side-car. Trois copies d'une meme regle, et la serie de
-    # pannes qui va avec : un unit-id 6002 fige, un ARFCN 516 fige, des IMSI
-    # sur le PLMN de l'operateur 1. Chaque fois, les valeurs concordaient pour
-    # l'operateur 1 et divergeaient pour les suivants.
-    # Le generateur est le seul a decider. Il ECRIT donc ce qu'il a decide, et
-    # les autres le LISENT au lieu de le refaire.
+    # ── The radio plan, WRITTEN next to the configurations ───────────────────
+    # The generator is the only one that decides ARFCN, unit-id, PLMN...: it
+    # WRITES what it decided and the other scripts READ it instead of
+    # recomputing the formulas.
     {
         printf '# radio-plan.env - ecrit par generate_configs.sh. Ne pas editer.\n'
         printf '# Le plan radio et le PLMN de CET operateur, tels qu ils viennent\n'
@@ -476,12 +408,11 @@ apply_config_templates() {
         printf 'PLAN_CELL_ID=%s\n'     "$cell_id"
     } > "$dest/osmocom/radio-plan.env"
 
-    # extensions.conf porte un #include "annuaire.conf" (les fiches d'abonnes,
-    # ecrites par start-docker.sh pour que le nom de l'appelant arrive au combine).
-    # Asterisk avertit a chaque chargement quand un include manque, et un banc
-    # monte sans start-docker.sh - une VM, start-native.sh seul - n'en a pas. On pose
-    # donc toujours un fichier, quitte a ce qu'il soit vide : le repli _X. de
-    # extensions.conf fait le reste, et l'avertissement disparait.
+    # extensions.conf carries a #include "annuaire.conf" (subscriber entries,
+    # written by launch/start-docker.sh so that the caller name reaches the
+    # handset). Asterisk warns on every load when an include is missing, so
+    # a bench started without start-docker.sh always gets a file, even empty:
+    # the _X. fallback of extensions.conf does the rest.
     if [ ! -f "$dest/asterisk/annuaire.conf" ]; then
         {
             printf '; annuaire.conf - fiches d abonnes, ecrites par start-docker.sh.\n'
@@ -532,13 +463,8 @@ apply_config_templates() {
 
     generate_pjsip_interop_trunks     "$op_id" "$n_operators" >> "$dest/asterisk/pjsip.conf"
     generate_extensions_interop_out   "$op_id" "$n_operators" >> "$dest/asterisk/extensions.conf"
-    # Routes SMS (fallback = generateur par defaut). Condition d'echec : le
-    # MSISDN reel du premier MS absent OU route parasite (op0000/op000).
-    # Si non remplie -> regen.
-    # Le controle suivait encore "600000 + op*100 + 1" alors que le generateur
-    # ecrit desormais <noeud>00<op><ms> : il ne trouvait plus la ligne qu'il
-    # venait d'ecrire et regenerait a chaque fois - sans effet visible, mais
-    # c'est exactement le genre de test qui finit par masquer une vraie panne.
+    # SMS routes (default generator). Regenerated when the real MSISDN of the
+    # first MS is missing or a stray route (op0000/op000) is present.
     _src="$dest/osmocom/sms-routing.conf"
     _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
     if ! grep -q "^$(osmo_msisdn "$node" "$op_id" 1) = " "$_src" 2>/dev/null \
@@ -546,26 +472,19 @@ apply_config_templates() {
         _generate_sms_routing_conf_fallback "$op_id" "$n_operators" >  "$_src"
     fi
 
-    # ── L'adressage SS7 du noeud : rendu a set-node-id.sh ────────────────────
-    # Les gabarits portent les defauts d'une machine SEULE (point-code 1.1.2,
-    # ASP vers 127.0.0.1, shutdown). Sur un noeud de WAN ils sont faux - et ils
-    # revenaient ici a CHAQUE regeneration : l'adressage pose par set_stp_ip.sh
-    # etait efface au demarrage suivant sans que rien ne le signale. L'interco
-    # retombait alors que le fichier venait d'etre "regenere proprement".
-    #
-    # set-node-id.sh (ce que set_stp_ip.sh appelle lui-meme) est le seul endroit
-    # qui tienne d'accord les trois fichiers - osmo-stp, osmo-msc, osmo-bsc - et
-    # leurs point codes croises. On le rejoue APRES la substitution plutot que
-    # de dupliquer ici un sed qui divergerait le jour ou le plan changerait.
-    # Son echec est celui de la generation : des configs porteuses du point-code
-    # du gabarit ne valent pas mieux que des configs non generees.
+    # ── The node SS7 addressing: delegated to set-node-id.sh ─────────────────
+    # The templates carry the defaults of a SINGLE machine (point code 1.1.2,
+    # ASP to 127.0.0.1, shutdown). On a WAN node they are wrong, so
+    # network/set-node-id.sh (the only place that keeps osmo-stp, osmo-msc
+    # and osmo-bsc and their cross point codes consistent) is replayed AFTER
+    # the substitution. Its failure is the generation's failure.
     _apply_node_ss7_addressing "$dest" || return 1
 }
 
-# Rejoue l'adressage SS7 du noeud sur les configs fraichement generees.
-#   $1 = repertoire destination (celui qui contient osmocom/)
-# Sans effet - et silencieux - quand la machine n'est pas un noeud de WAN, quand
-# le script est absent, ou quand OSMO_NO_STP_IP=1 le demande explicitement.
+# Replays the node SS7 addressing on freshly generated configs.
+#   $1 = destination directory (the one that contains osmocom/)
+# No effect, silently, when the machine is not a WAN node, when the script is
+# missing, or when OSMO_NO_STP_IP=1 asks for it explicitly.
 _apply_node_ss7_addressing() {
     local dest="$1"
     local role_file="${ROLE_FILE:-/etc/osmo-role}"
@@ -574,17 +493,9 @@ _apply_node_ss7_addressing() {
     [ "${OSMO_NO_STP_IP:-0}" = "1" ] && return 0
     [ -d "$dest/osmocom" ] || return 0
 
-    # ── L'ENVIRONNEMENT D'ABORD, le fichier de role ensuite ─────────────────
-    # Cette fonction s'execute AUSSI dans un conteneur : run.sh (qosmo-grgsm) peut
-    # y rejouer apply_config_templates, ce qui regenere tout /etc/osmocom a
-    # partir des gabarits - et efface l'identite SS7 que start-docker.sh venait
-    # d'ecrire. Le conteneur repartait alors avec le plan du gabarit :
-    # point-code 1.1.2 pour TOUS les operateurs, donc deux equipements a la meme
-    # adresse SS7 et aucun ASP attache.
-    #
-    # Or le conteneur n'a pas de /etc/osmo-role - il a des VARIABLES, que
-    # start-docker.sh lui passe (OSMO_WAN_NODE, OSMO_HUB_IP). On les lit en premier :
-    # c'est la seule source disponible la ou le probleme se produit.
+    # ENVIRONMENT FIRST, the role file next: a container has no
+    # /etc/osmo-role, only the variables launch/start-docker.sh passes it
+    # (OSMO_WAN_NODE, OSMO_HUB_IP).
     local role node hub
     node="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
     hub="${OSMO_HUB_IP:-}"
@@ -594,92 +505,66 @@ _apply_node_ss7_addressing() {
         [ -n "$node" ] || node="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$role_file")"
         [ -n "$hub"  ] || hub="$(awk  -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2}  END{print v}' "$role_file")"
     fi
-    # UN ROLE EXPLICITE, ET RIEN D'AUTRE.
-    # Deduire "operateur" de la simple presence d'un numero de noeud etait faux
-    # sur l'hote : start-docker.sh y porte WAN_NODE_ID = le noeud de la MACHINE, alors
-    # qu'il genere les configs de CONTENEURS qui sont, eux, d'autres noeuds. Le
-    # hook reappliquait donc le noeud de l'hote a chaque operateur : tous se
-    # retrouvaient avec le meme point code, et deux equipements a la meme
-    # adresse SS7 ne peuvent pas s'attacher tous les deux.
-    #
-    # Ce rattrapage ne vaut donc QUE pour une machine qui se declare operateur
-    # dans /etc/osmo-role (une VM, un noeud natif) ou via OSMO_ROLE. Quand
-    # start-docker.sh calcule lui-meme l'identite de chaque conteneur, il n'a besoin
-    # de personne.
-
-    # OSMO_WAN_NODE pose dans l'ENVIRONNEMENT vaut declaration lui aussi :
-    # c'est ce que start-docker.sh passe au conteneur (-e OSMO_WAN_NODE), et un
-    # conteneur n'a pas de /etc/osmo-role, donc pas de OSMO_ROLE. Avec le seul
-    # test sur le role, le rattrapage sortait ici sans un mot la ou il est
-    # justement necessaire, et le conteneur gardait le point-code du gabarit.
-    # WAN_NODE_ID, lui, ne vaut PAS declaration : sur l'hote il designe le noeud
-    # de la MACHINE, pas celui du conteneur dont on genere les configs.
+    # An EXPLICIT declaration only: OSMO_ROLE=operator (a VM, a native node)
+    # or OSMO_WAN_NODE in the environment (what start-docker.sh passes to a
+    # container). WAN_NODE_ID alone is NOT a declaration: on the host it
+    # designates the MACHINE's node, not the container whose configs are
+    # being generated, and applying it to every operator would give them all
+    # the same point code.
     [ "$role" = "operator" ] || [ -n "${OSMO_WAN_NODE:-}" ] || return 0
     [[ "$node" =~ ^[1-9]$ ]] || return 0
 
     local setid="$here/network/set-node-id.sh"
     [ -r "$setid" ] || return 0
 
-    # Le hub, quelle qu'en soit la source. Sans lui, set-node-id.sh DEMANDE -
-    # et comme il est appele ici depuis une boucle de demarrage, il attendait
-    # une reponse que personne ne venait donner : le lancement se figeait juste
-    # apres la creation du reseau de l'operateur, sans un mot.
+    # The hub, from any source: without it set-node-id.sh would PROMPT, and
+    # nobody answers from a start-up loop.
     [ -n "$hub" ] || hub="${WAN_STP_TARGET:-${INTER_STP_IP:-}}"
 
-    # --op de set-node-id.sh est l'INDICE de l'operateur dans le point code
-    # 1.<noeud><op>.<role>, pas leur nombre. 1 en dur : un noeud de WAN n'en
-    # porte qu'un ici. OPS_PER_NODE, lue jusqu'ici, n'est posee nulle part dans
-    # le depot - elle valait donc toujours 1, mais par accident, et le jour ou
-    # quelqu'un l'aurait exportee l'identite du noeud aurait change sans raison.
-    # Ne pas y mettre l'identifiant d'operateur : dans start-docker.sh il vaut l'indice
-    # du CONTENEUR, et le noeud 2 passerait de 1.21.2 a 1.22.2.
+    # --op is the operator INDEX inside the point code 1.<node><op>.<role>,
+    # not the operator count: a WAN node carries one here. Not the operator
+    # id either: in start-docker.sh it is the CONTAINER index, and node 2
+    # would move from 1.21.2 to 1.22.2.
     local args=(--node "$node" --op 1 --native --conf-dir "$dest/osmocom")
     [ -n "$hub" ] && args+=(--hub-ip "$hub")
 
-    # </dev/null : cette reecriture est automatique, elle ne pose JAMAIS de
-    # question. Si une valeur manque, on prefere un echec signale a un blocage.
+    # </dev/null: this rewrite is automatic and must NEVER ask a question. A
+    # reported failure is preferred to a hang.
     if bash "$setid" "${args[@]}" </dev/null >/dev/null 2>&1; then
         echo "  ✓ adressage SS7 du noeud ${node} reapplique (set-node-id.sh)"
     else
         echo "  ⚠ adressage SS7 du noeud ${node} NON reapplique - l'ASP inter-STP" >&2
         echo "    gardera les defauts du gabarit (127.0.0.1, shutdown)." >&2
-        # Avertir puis rendre 0, c'etait laisser le demarrage se poursuivre sur
-        # des configs dont l'identite SS7 est restee au gabarit : rien en amont
-        # ne relit le point code qui vient d'etre ecrit, et la panne ne se
-        # voyait qu'a l'ASP qui ne s'attachait jamais.
+        # Configs left with the template SS7 identity are no better than no
+        # configs: nothing upstream re-reads the point code, so fail here.
         return 1
     fi
 }
 
-# ── sms-routing.conf : LE ROUTAGE SE LIT DANS LE NUMERO ──────────────────────
-# La cle de routage est le NOEUD, pas l'operateur, et c'est le premier chiffre
-# du MSISDN (<noeud>00<op><ms>). Avant, [operators] portait une entree par
-# operateur pointant sur op_backbone_ip - 172.20.0.11, une adresse du plan
-# DOCKER absente de toute VM - et l'operateur 1 du noeud 1 comme celui du noeud
-# 2 revendiquaient la meme cle "1". Sur un banc a plusieurs noeuds, un SMS
-# partait donc chez le premier qui repondait, quand il partait.
+# ── sms-routing.conf: THE ROUTING IS READ FROM THE NUMBER ────────────────────
+# The routing key is the NODE, not the operator, and it is the first digit of
+# the MSISDN (<node>00<op><ms>). The addresses come from the WAN TABLE
+# (/etc/osmo-wan.conf), the only source that knows where the other nodes are
+# really reachable. Without a table (single-node bench) there is one entry:
+# ours.
 #
-# Les adresses viennent de la TABLE WAN (/etc/osmo-wan.conf), la seule source
-# qui sache ou joignent reellement les autres noeuds. Sans table - un banc a un
-# seul noeud - il ne reste qu'une entree, la notre.
-#
-#   $1 fichier  $2 noeud  $3 operateur  $4 nb de MS  $5 IP locale du coeur
-#   $6 table WAN
+#   $1 file  $2 node  $3 operator  $4 MS count  $5 local IP of the core
+#   $6 WAN table
 _write_sms_routing_native() {
     local out="$1" node="$2" op_id="$3" n_ms="$4" host_ip="$5" wanf="$6"
     local spec="" ent id ip nops n o m
     local -a ids=() 
 
-    # WAN_NODES="id:ip:indicatif[:operateurs] ..." - lu sans sourcer la table :
-    # ce fichier pose aussi WAN_NODE_ID et WAN_OPS, qui ecraseraient ceux de
-    # l'appelant.
+    # WAN_NODES="id:ip:prefix[:operators] ..." - read without sourcing the
+    # table: that file also sets WAN_NODE_ID and WAN_OPS, which would
+    # overwrite the caller's.
     if [ -r "$wanf" ]; then
         spec="$(sed -n 's/^WAN_NODES=//p' "$wanf" | tr -d '"'"'"'' | tail -1)"
     fi
 
-    # NOTRE adresse, celle par laquelle les autres noeuds nous joignent. La
-    # table d'abord (c'est un choix explicite), la route ensuite, la boucle
-    # locale en dernier - un banc isole doit quand meme router ses SMS.
+    # OUR address, the one other nodes reach us at: the table first (an
+    # explicit choice), then the default route, loopback last - an isolated
+    # bench must still route its SMS.
     local self_ip=""
     for ent in $spec; do
         IFS=: read -r id ip _ nops <<< "$ent"
@@ -713,9 +598,7 @@ _write_sms_routing_native() {
             for ent in $spec; do
                 IFS=: read -r id ip _ nops <<< "$ent"
                 [ -n "$id" ] || continue
-                # nops non renseigne = 3 champs dans l'entree. Le "${nops:-1}"
-                # d'un case teste la valeur ETENDUE, pas la variable : il ne
-                # corrigeait donc rien et seq recevait une borne vide.
+                # nops missing = 3-field entry: default to 1 operator.
                 nops="${nops:-1}"
                 case "$nops" in ''|*[!0-9]*) nops=1 ;; esac
                 for o in $(seq 1 "$nops"); do
@@ -733,67 +616,52 @@ _write_sms_routing_native() {
     } > "$out"
 }
 
-# ── Les retouches NATIVES : la recette de l'ISO, en UN SEUL endroit ──────────
-# Ce que build-iso.sh posait a la main APRES apply_config_templates, et que
-# personne ne rejouait ensuite. C'est la difference entre "les gabarits sont
-# substitues" et "la machine a une configuration qui demarre" :
+# ── NATIVE post-patches: the ISO recipe, in ONE place ────────────────────────
+# What turns "the templates are substituted" into "the machine has a
+# configuration that starts" on a native host (ISO, VM, start-native.sh):
 #
-#   sms-routing.conf  le fallback des gabarits enumere les operateurs sur
-#                     op_backbone_ip (172.20.0.11) - une adresse du plan
-#                     DOCKER, qui n'existe sur aucune VM - et n'y met que deux
-#                     routes par operateur. En natif tout boucle sur l'adresse
-#                     locale du coeur, et il faut UNE route par MS reellement
-#                     embarque, sans quoi le relais rend "No route for
-#                     destination" des le troisieme.
-#   osmo-sgsn.cfg     "gtp local-ip" est fige a 127.0.0.1 dans le gabarit ; en
-#                     natif le GGSN ecoute sur l'adresse du coeur. Le SGSN
-#                     annoncait une adresse et le GGSN en servait une autre.
-#   osmo-msc.cfg      "hlr remote-ip", meme histoire.
-#   run.sh            "trxcon <options>" et "mobile <options>" reduits au seul
-#                     binaire : sur l'ISO ce sont les modules qui decident des
-#                     options, pas la ligne heritee de l'image docker.
+#   sms-routing.conf  one route per embarked MS, on the local core address
+#                     (the template fallback lists docker-plan addresses).
+#   osmo-sgsn.cfg     "gtp local-ip", "gsup remote-ip" and the NS listen
+#                     address follow the native plan.
+#   osmo-msc.cfg      "hlr remote-ip" follows the HLR bind address.
+#   osmo-stp.cfg      the local-ip of the ASP to the inter-STP hub.
+#   pjsip.conf        the [transport-udp] block loses its docker NAT settings.
+#   mobile.cfg        the GSMTAP target becomes 127.0.0.1.
+#   run.sh            "trxcon <options>" and "mobile <options>" reduced to
+#                     the bare binary: the start-up modules decide the options.
 #
-# Sans cette fonction, une regeneration rendait des configurations SUBSTITUEES
-# mais NATIVEMENT FAUSSES : le SGSN se liait a une adresse qu'il n'a pas, le
-# relais SMS visait le plan docker - et rien ne le disait avant le demarrage
-# suivant. Elle est donc appelee des DEUX cotes, sur la meme arborescence :
-#   build-iso.sh        sur $TEMP_CONFIG puis sur $ROOTFS/etc (construction)
-#   start-native.sh     sur le repertoire temporaire d'un --regen (execution)
-# Idempotente : la rejouer sur un arbre deja retouche ne change rien.
+# Called on both sides, on the same tree: the ISO build ($TEMP_CONFIG then
+# $ROOTFS/etc) and start-native.sh --regen (its temporary directory).
+# Idempotent: replaying it on an already patched tree changes nothing.
 #
-#   $1  racine qui porte osmocom/ : $TEMP_CONFIG, $ROOTFS/etc, /etc
-#   $2  numero d'operateur      (defaut 1)
-#   $3  nombre de MS embarques  (defaut 2)
-#   $4  adresse locale du coeur (defaut 127.0.0.2)
-#   $5  numero de noeud         (defaut : osmo_node_id)
-#   $6  table WAN a lire        (defaut /etc/osmo-wan.conf)
+#   $1  root that holds osmocom/ : $TEMP_CONFIG, $ROOTFS/etc, /etc
+#   $2  operator number         (default 1)
+#   $3  number of embarked MS   (default 2)
+#   $4  local address of the core (default 127.0.0.2)
+#   $5  node number             (default: osmo_node_id)
+#   $6  WAN table to read       (default /etc/osmo-wan.conf)
+#   $7  SGSN GTP local-ip       (default 192.168.<node+1>.1)
+#   $8  HLR address             (default 127.0.0.2)
 apply_native_post_patches() {
     local dest="${1:?apply_native_post_patches : racine manquante}"
     local op_id="${2:-1}" n_ms="${3:-2}" host_ip="${4:-127.0.0.2}"
     local node="${5:-$(osmo_node_id)}" wanf="${6:-${WAN_CONF_FILE:-/etc/osmo-wan.conf}}"
-    # ── DEUX ADRESSES DE PLUS, ET POURQUOI ELLES NE SONT PAS host_ip ────────
-    # sgsn_gtp_ip  Le SGSN et le GGSN ouvrent tous deux un socket GTP. Leur
-    #              donner la meme adresse - ce que faisait ce patch, qui ecrivait
-    #              host_ip dans « gtp local-ip » alors que le gabarit du GGSN
-    #              met ce meme host_ip dans « gtp bind-ip » - donne un GGSN qui
-    #              prend le port et un SGSN qui meurt sur « Address already in
-    #              use », relance par systemd sans fin. Le packet attach ne se
-    #              termine jamais. Par defaut : la passerelle du segment prive
-    #              du noeud, 192.168.<noeud+1>.1, posee par osmo-ip-plan.sh.
-    # hlr_ip       « gsup remote-ip » et le « remote-ip » du bloc hlr du MSC
-    #              designent OU ECOUTE LE HLR, pas l adresse locale du noeud.
-    #              Les aligner sur host_ip ne se voyait pas tant que les deux
-    #              valaient 127.0.0.2 ; des que host_ip bouge, le MSC et le SGSN
-    #              appellent une adresse ou personne ne repond. On suit donc le
-    #              « bind ip » d osmo-hlr.cfg.
+    # sgsn_gtp_ip  The SGSN and the GGSN both open a GTP socket; on the same
+    #              address the SGSN dies on "Address already in use". Default:
+    #              the gateway of the node's private segment,
+    #              192.168.<node+1>.1, set by network/osmo-ip-plan.sh.
+    # hlr_ip       "gsup remote-ip" and the hlr "remote-ip" of the MSC
+    #              designate WHERE THE HLR LISTENS (the "bind ip" of
+    #              osmo-hlr.cfg), not the local address of the node.
     local sgsn_gtp_ip="${7:-}"
     local hlr_ip="${8:-127.0.0.2}"
     local cfg="$dest/osmocom"
     [ -d "$cfg" ] || return 0
     [ "$n_ms" -ge 1 ] 2>/dev/null || n_ms=1
     case "$node" in [1-9]) ;; *) node=1 ;; esac
-    # APRES la validation du noeud, jamais avant : un $node vide donnerait
-    # 192.168.1.1 - le LAN du banc, ou vivent deja les VM et le hub SS7.
+    # AFTER the node validation, never before: an empty $node would give
+    # 192.168.1.1, the bench LAN where the VMs and the SS7 hub live.
     : "${sgsn_gtp_ip:=192.168.$((node + 1)).1}"
 
     _write_sms_routing_native "$cfg/sms-routing.conf" \
@@ -813,43 +681,25 @@ apply_native_post_patches() {
             "$cfg/osmo-msc.cfg"
     fi
 
-    # ── osmo-stp.cfg : LE local-ip DE L ASP VERS L INTER-STP ────────────────
-    # [2026-08-31] Ce fichier manquait a la liste, et c'est une adresse de
-    # CONTENEUR qui restait dans une config d'HOTE.
+    # ── osmo-stp.cfg: the local-ip of the ASP to the inter-STP ───────────────
+    # The template sets  local-ip __INTER_LOCAL_IP__  under  asp asp-to-inter,
+    # substituted by op_backbone_ip(N) = 172.20.0.<10+N>: right INSIDE the
+    # container, nonexistent on the host. An unbindable local-ip gives no
+    # readable error: the ASP simply never comes up (as-inter AS_DOWN).
     #
-    # Le gabarit pose  local-ip __INTER_LOCAL_IP__  sous  asp asp-to-inter,
-    # substitue par op_backbone_ip(N) = 172.20.0.<10+N>, soit 172.20.0.11 pour
-    # l'operateur 1. C'est juste DANS le conteneur, qui porte cette adresse.
-    # Sur l'hote elle N'EXISTE PAS - build-iso.sh la retire meme explicitement
-    # ("172.20.0.11 est RETIREE : c'est l'adresse du PREMIER CONTENEUR").
+    # The local-ip is the source address the kernel picks to reach the hub
+    # (ip route get): an SCTP association bound to 127.0.0.1 towards a hub on
+    # a network address - even this machine's own - is refused ("Network is
+    # unreachable"). 127.0.0.1 only when the hub is on loopback or no route
+    # leads to it. The remote-ip is already resolved by the template.
     #
-    # Un local-ip inbindable ne produit pas d'erreur lisible : l'ASP ne monte
-    # simplement jamais, et le diagnostic sort en aval, tres loin de la cause -
-    #     as-inter : AS_DOWN
-    #     Route par defaut -> inter-STP absente ou non avail
-    # ce qui envoie chercher un probleme de hub ou de filtrage alors que la
-    # patte locale n'a jamais pu s'ouvrir. Constate le 31/08 sur le banc natif.
-    #
-    # Le local-ip vaut l'adresse qui ROUTE vers le hub (ip route get), pas
-    # 127.0.0.1 : un hub distant (LAN) est injoignable depuis la boucle locale
-    # (Network is unreachable, l'ASP ne monte jamais). Sans hub distant, on
-    # garde 127.0.0.1. Le remote-ip, lui, est deja resolu par le gabarit.
-    #
-    # awk et pas sed : il faut ne modifier QUE le local-ip qui suit
-    # « asp asp-to-inter », pas ceux du bloc d'ecoute juste au-dessus
-    # (local-ip 127.0.0.1 / 127.0.0.2), qui sont corrects.
-    # [2026-10-15] 127.0.0.1 NE VAUT QUE POUR UN HUB EN 127.0.0.1. Vers un hub
-    # sur une adresse reseau - meme celle de CETTE machine (192.168.1.31) - une
-    # association SCTP liee a 127.0.0.1 est refusee par le noyau : « Network is
-    # unreachable » toutes les 5 s, as-inter AS_DOWN, barreau ss7 en echec. On
-    # prend donc l adresse source que le noyau choisit pour joindre le hub
-    # (ip route get), et 127.0.0.1 seulement si le hub est en boucle locale ou
-    # si aucune route ne mene a lui.
+    # awk, not sed: only the local-ip that follows "asp asp-to-inter" must
+    # change, not those of the listen block above it, which are correct.
     if [ -f "$cfg/osmo-stp.cfg" ]; then
         local inter_rip inter_lip=127.0.0.1
         inter_rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{f=1;next} f&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} f&&/^ (asp|as) /{exit}' "$cfg/osmo-stp.cfg")"
         case "$inter_rip" in
-            ""|127.*|__*) ;;   # __* : gabarit pas encore substitue
+            ""|127.*|__*) ;;   # __* : template not substituted yet
             *) inter_lip="$(ip -4 route get "$inter_rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
                [ -n "$inter_lip" ] || inter_lip=127.0.0.1 ;;
         esac
@@ -864,30 +714,15 @@ apply_native_post_patches() {
             && mv -f "$cfg/osmo-stp.cfg.tmp" "$cfg/osmo-stp.cfg"
     fi
 
-    # ── pjsip.conf : LE BLOC [transport-udp] ────────────────────────────────
-    # [2026-08-31] Troisieme adresse de conteneur dans une config d'hote, et la
-    # plus couteuse. configs/pjsip.conf ne porte AUCUN placeholder : le bloc
-    # transport est fige sur le plan docker -
-    #     external_media_address=10.2.0.2
-    #     external_signaling_address=10.2.0.2
-    #     local_net=172.20.0.0/16
-    # et generate_configs.sh n'y ajoutait que les trunks interop, jamais le
-    # transport. Sur un banc natif, 10.2.0.2 n'existe nulle part.
-    #
-    # CE QUE CA CASSE. external_* est une option de NAT : pour tout pair HORS
-    # local_net, Asterisk REECRIT le Contact et le SDP avec cette adresse. Un
-    # Linphone sur le LAN (192.168.x, hors du 172.20.0.0/16 declare) recevait
-    # donc "10.2.0.2" et n'avait plus personne a joindre - enregistrement ou
-    # audio muet, selon le moment. Le trunk Zadarma le montrait en clair :
-    # il nous interrogeait sur sip:474117@127.0.0.1:5060, un Contact
-    # inexploitable qu'il avait appris de nous.
-    #
-    # LE CORRECTIF : sur un hote plat il n'y a pas de frontiere NAT a declarer.
-    # On SUPPRIME les external_* - sans eux, pjsip repond avec l'adresse de la
-    # socket, c'est-a-dire la bonne, par destination - et on declare local_net
-    # sur tout l'espace prive plutot que sur le seul plan docker. Ce jeu est
-    # topologie-INDEPENDANT : il reste vrai que l'ISO tourne sur un LAN en
-    # 192.168.x, en 10.x, derriere docker, ou avec l'APN GSM.
+    # ── pjsip.conf: the [transport-udp] block ────────────────────────────────
+    # configs/pjsip.conf carries no placeholder: its transport block is pinned
+    # on the docker plan (external_media_address / external_signaling_address
+    # = 10.2.0.2, local_net = 172.20.0.0/16). external_* is a NAT option: for
+    # any peer OUTSIDE local_net Asterisk rewrites the Contact and the SDP
+    # with that address, which a LAN Linphone cannot reach.
+    # On a flat host there is no NAT boundary: the external_* lines are
+    # REMOVED (pjsip then answers with the socket address, per destination)
+    # and local_net covers the whole private space, whatever the topology.
     if [ -f "$dest/asterisk/pjsip.conf" ]; then
         awk '
             /^\[transport-udp\]/ { in_t = 1; print; next }
@@ -909,18 +744,11 @@ apply_native_post_patches() {
             && mv -f "$dest/asterisk/pjsip.conf.tmp" "$dest/asterisk/pjsip.conf"
     fi
 
-    # ── mobile.cfg : LA CIBLE GSMTAP ────────────────────────────────────────
-    # [2026-08-31] Deuxieme adresse de conteneur dans une config d'hote.
-    # Le gabarit pose  remote-host __INTER_NET_GATEWAY__  sous  gsmtap,
-    # substitue par 172.20.0.1 - la passerelle du bridge docker. Elle n'existe
-    # QUE tant qu'un reseau docker est monte : sur un banc natif, ou des que
-    # les conteneurs sont arretes, l'adresse disparait et les paquets GSMTAP
-    # partent dans le vide.
-    # Personne ne le signale : le mobile continue a fonctionner, l'appel passe,
-    # et c'est Wireshark qui reste desesperement vide sur udp/4729 - ce qu'on
-    # met naturellement sur le compte de la radio ou du filtre de capture.
-    # Les autres composants (osmo-bts-trx, osmo-pcu, osmo-bsc) tapent deja sur
-    # 127.0.0.1:4729 ; le mobile etait le seul a viser ailleurs.
+    # ── mobile.cfg: the GSMTAP target ────────────────────────────────────────
+    # The template sets  remote-host __INTER_NET_GATEWAY__  under  gsmtap,
+    # substituted by 172.20.0.1 (the docker bridge gateway), which only exists
+    # while a docker network is up. The other components (osmo-bts-trx,
+    # osmo-pcu, osmo-bsc) already send to 127.0.0.1:4729.
     if [ -f "$cfg/mobile.cfg" ]; then
         sed -i \
             -e "/^gsmtap\$/,/^!\$/ s/^\([[:space:]]*remote-host[[:space:]]\+\).*/\1127.0.0.1/" \
@@ -937,7 +765,7 @@ apply_native_post_patches() {
     return 0
 }
 
-# ── Affichage de l'effectif ──────────────────────────────────────────────────
+# ── Show the effective values ────────────────────────────────────────────────
 _gc_show() {
     local key def perop comment val src
     printf '\n  %-13s %-26s %s\n' "REGLAGE" "VALEUR EFFECTIVE" "ORIGINE"
@@ -953,7 +781,7 @@ _gc_show() {
     printf '\n'
 }
 
-# ── Garde-fou multi-operateur ────────────────────────────────────────────────
+# ── Multi-operator guard ─────────────────────────────────────────────────────
 _gc_warn_perop() {
     [ "${N_OPERATORS:-1}" -gt 1 ] 2>/dev/null || return 0
     local key def perop comment figes=""
@@ -967,7 +795,7 @@ _gc_warn_perop() {
     printf '    sur la radio et/ou les identites. Videz-les dans globals.conf.\n\n'
 }
 
-# ── Mode execute ─────────────────────────────────────────────────────────────
+# ── Executed mode ────────────────────────────────────────────────────────────
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     force=0; show=0; _gc_sets=()
     for a in "$@"; do
@@ -988,5 +816,5 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit 0
 fi
 
-# ── Mode source ──────────────────────────────────────────────────────────────
+# ── Sourced mode ─────────────────────────────────────────────────────────────
 gc_load

@@ -1,29 +1,19 @@
+# osmo-multi.desktop - launcher: the multi-operator bench (SS7 between the
+# native operator, two docker operators and the inter-STP hub).
+# Single click runs `launch.sh --multi-suivi` in the bench progress window:
+# launch.sh checks the ConditionPathExists of osmo-multi.service itself
+# (/etc/osmocom/osmo-multi.conf, written by addition.sh), names what is
+# missing, starts the unit and reports by notification; the unit's journal
+# scrolls in the window. The bench runs as a systemd unit (osmo-multi.service,
+# like osmo-banc.service for the mono-operator): one journal, one status, a
+# clean stop. Its ExecStop only stops the containers and the hub; the native
+# operator stays with osmo-banc.
 [Desktop Entry]
 Type=Application
 Name=multi-operator
 Name[fr]=multi-operator
 Comment=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
 Comment[fr]=SS7 entre l operateur natif, deux operateurs docker et l inter-STP
-# [2026-09-07] PAR launch.sh --multi, ET PLUS PAR UN systemctl NU.
-# `pkexec systemctl start osmo-multi.service` rendait 0 SANS RIEN DEMARRER
-# quand une ConditionPathExists de l unite manquait (/etc/osmocom/osmo-multi.conf,
-# ecrit par addition.sh) : systemd saute l unite, ne la marque pas en echec, et
-# le clic restait sans effet ni message. launch.sh --multi teste les conditions
-# lui-meme, nomme ce qui manque, demarre l unite et annonce le resultat par
-# notification (cf. le bloc « LE MULTI-OPERATEUR » dans launch.sh).
-#
-# [2026-09-04] PAR LE SERVICE, COMME LE MONO-OPERATEUR.
-# L icone lancait start-multi.sh en direct (pkexec) : le banc multi partait
-# alors hors de systemd, sa sortie vivait dans un terminal que personne ne
-# relit, et quand un operateur ne demarrait pas il n en restait aucune trace -
-# ni `systemctl status`, ni `journalctl -u`, juste des conteneurs manquants.
-# Le mono-operateur, lui, est une unite (osmo-banc.service) depuis le debut.
-# Les deux se lancent donc pareil : une unite, un journal, un etat, un arret
-# propre. osmo-multi.service porte deja l environnement du banc (HOME, venv,
-# OSMO_NO_TERM) et son ExecStop n arrete que les conteneurs et le hub - le
-# natif reste a osmo-banc.
-# [2026-10-12] En fenetre de progression (barre, etape, console repliee) : le
-# journal de osmo-multi.service defile dedans (launch.sh --multi-suivi).
 Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --title "Multi-operateur" --icon /usr/share/osmo-operator/icons/osmo-multi.svg -- /opt/GSM/osmo-operator/launch.sh --multi-suivi
 Icon=/usr/share/osmo-operator/icons/osmo-multi.svg
 Terminal=false
@@ -37,11 +27,8 @@ Name=Arreter le multi-operateur
 Name[fr]=Arreter le multi-operateur
 Exec=/opt/GSM/osmo-operator/launch.sh --multi-stop
 
-# Le lancement peut durer plusieurs minutes (images, conteneurs, HLR) : sans un
-# moyen de REGARDER, l icone parait ne rien faire. C est le pendant direct du
-# passage en service - le journal existe, autant l ouvrir d un clic.
-# [2026-10-01] Dans une fenetre GTK du banc (tools/osmo-gtk-run.py), plus dans
-# un gnome-terminal : aucun favori n ouvre de terminal.
+# Startup can take minutes (images, containers, HLR): this action follows the
+# unit's journal in a bench GTK window (tools/osmo-gtk-run.py), not a terminal.
 [Desktop Action Journal]
 Name=Voir le journal (journalctl -u osmo-multi)
 Name[fr]=Voir le journal (journalctl -u osmo-multi)

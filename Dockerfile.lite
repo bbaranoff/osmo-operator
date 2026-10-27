@@ -1,96 +1,59 @@
 # =============================================================================
-# Dockerfile.lite - l'image d'EXECUTION : les binaires, sans les sources
+# Dockerfile.lite - runtime image: the binaries, without the source trees
 # =============================================================================
 #
-# osmocom-nitb pese ~11 Go, dont 4 Go de /opt/GSM : les arbres de construction
-# de gnuradio, gr-gsm, libosmocore, qemu, osmo-* ... Ces arbres ont servi a
-# COMPILER ; ce qui tourne ensuite vit dans /usr/local/bin (119 Mo) et
-# /usr/local/lib (17 Mo). Les garder revient a trimballer l'atelier avec la
-# machine.
+# Purpose: derive osmocom-nitb:lite from the osmocom-nitb image by removing the
+# build trees under /opt/GSM (gnuradio, gr-gsm, libosmocore, qemu, osmo-*...)
+# and the rest of the build toolchain, while keeping everything the stack
+# launches at runtime.
 #
-# POURQUOI DEUX ETAPES ET UN APLATISSEMENT
-# Effacer dans une couche supplementaire ne rend RIEN : une image est la somme
-# de ses couches, et les fichiers effaces continuent d'occuper celles d'avant.
-# On elague donc dans une etape (prune), puis on recopie la racine obtenue dans
-# une image vierge : seule la version elaguee est ecrite, et l'espace est
-# reellement rendu.
+# Build:    ./build.sh --lite      (or: docker build -f Dockerfile.lite .)
+# ISO:      ./build-iso.sh --role=operator --lite
+# Args:     BASE   image to prune (default: osmocom-nitb)
 #
-# On repart de la racine COMPLETE plutot que de reconstruire une base a partir
-# d'une liste de paquets : les binaires de /usr/local dependent de dizaines de
-# bibliotheques posees par apt (boost, volk, fftw, sofia-sip...). Une liste
-# reecrite a la main s'en approche, ne les couvre jamais toutes, et la panne
-# n'apparait qu'a l'execution - un binaire qui ne demarre pas, faute d'un .so.
-# Ici, tout ce qui n'est pas une source reste EXACTEMENT ce qu'il etait.
+# Why two stages and a flatten: deleting files in an extra layer frees nothing
+# (the image is the sum of its layers). The prune stage trims the tree, then
+# FROM scratch + COPY writes only the pruned root as a single layer.
+# Starting from the complete root, rather than reinstalling a hand-written
+# package list, keeps every runtime library the /usr/local binaries depend on.
 #
-# Ce qui est GARDE dans /opt/GSM : ce que la pile lance vraiment.
-#   qosmo/                          l'arbre ENTIER, moins ses objets de compilation.
-#                                [2026-08-27] Avant, on n'en gardait que quatre
-#                                morceaux (le binaire, pc-bios, tools, le
-#                                firmware compal_e88). Il manquait ce qui LANCE :
-#                                run.sh, run_modules/, environnement/, cfgs/,
-#                                scripts/. start-native.sh delegue a
-#                                $OQC_ROOT/run.sh - absent, l'image lite savait
-#                                emuler un Calypso mais pas le demarrer.
-#                                build/ ne garde que qemu-system-arm : 1,5 Go de
-#                                .o et de .a en moins, et .git reste coherent
-#                                avec son arbre (build/ est dans son .gitignore).
-#   osmocom-bb/src/host/osmocon/osmocon       le chargeur
-#   osmocom-bb/src/target/trx_toolkit         fake_trx.py et compagnie
-#   c54x_exe/, grgsm_exe/                     les couches 1 hors QEMU
-#   calypso_dsp.*.bin                         les ROM du DSP
-#   firmware/, qemu-install/, osmo-operator/     images, qemu installe, ce depot
+# Kept in /opt/GSM (what the stack actually launches):
+#   qosmo/                              whole tree (run.sh, run_modules/,
+#                                       environnement/, cfgs/, scripts/, .git),
+#                                       build/ reduced to qemu-system-arm and
+#                                       qemu-bundle/
+#   osmocom-bb/src/host/osmocon/osmocon the loader
+#   osmocom-bb/src/target/trx_toolkit   fake_trx.py and friends
+#   c54x_exe/, grgsm_exe/               layer-1 implementations outside QEMU
+#   calypso_dsp.*.bin                   DSP ROMs
+#   firmware/, qemu-install/, osmo-operator/, pont/
 #
-# LES DEPOTS GARDENT LEUR .git - qosmo comme osmo-operator. Ce n'est pas un
-# oubli : c'est lui qui permet "osmo-update" (git fetch en place) sur la machine
-# qui tourne, au lieu d'un effacement suivi d'un reclone. Les 96 Mo qu'il pese
-# ne sont rien a cote des 4 Go d'ateliers que cette image retire.
-#
-# Construction :  ./build.sh --lite      (ou docker build -f Dockerfile.lite .)
-# L'ISO correspondante :  ./build-iso.sh --role=operator --lite
+# The repositories keep their .git: "osmo-update" runs git fetch in place on
+# the running machine instead of deleting and recloning.
 # =============================================================================
 
 ARG BASE=osmocom-nitb
 
-# ── Etape 1 : elagage ───────────────────────────────────────────────────────
+# ── Stage 1: prune ──────────────────────────────────────────────────────────
 FROM ${BASE} AS prune
 
-# set -e implicite (SHELL par defaut) : si l'elagage echoue, l'image ne sort pas
-# a moitie taillee. Tout se fait dans UNE couche - c'est son etat final qui sera
-# recopie, pas les etapes intermediaires.
+# Implicit set -e (default SHELL): a failed prune does not produce a half-cut
+# image. Everything happens in ONE layer; only its final state is copied.
 RUN set -eux; \
     cd /opt/GSM; \
     mkdir -p /keep/qosmo/build /keep/osmocom-bb/src/host/osmocon \
              /keep/osmocom-bb/src/target; \
-    # qosmo : l'arbre entier, sauf build/. Le binaire est mis de cote AVANT
-    # la copie, et --exclude=./build empeche le tar de le recouvrir ensuite.
+    # qosmo: the whole tree except build/. The binary is set aside BEFORE the
+    # copy, and --exclude=./build keeps the tar from overwriting it.
     cp -a qosmo/build/qemu-system-arm  /keep/qosmo/build/ 2>/dev/null || true; \
-    # [2026-08-28] qemu-bundle SUIT le binaire, et ce n'est pas un detail de
-    # confort : c'est par LUI que QEMU trouve ses donnees quand il est lance
-    # depuis un arbre de compilation. QEMU 8 n'utilise pas le prefix compile
-    # tel quel - il le RELOCALISE par rapport a l'endroit ou le binaire se
-    # trouve reellement, et dans un arbre de build cette relocalisation passe
-    # par build/qemu-bundle/, qui rejoue l'arborescence d'installation.
-    #
-    # En le supprimant avec les 1,5 Go d'objets, l'image lite laissait un
-    # qemu-system-arm incapable de lire son propre keymap :
-    #
-    #     qemu-system-arm: could not read keymap file: 'en-us'
-    #
-    # QEMU mourait AVANT d'allouer ses PTY, et start-native.sh s'arretait sur
-    #     [FAIL] Emulator serial PTY (... s'est arrete avant d'allouer son PTY)
-    # c'est-a-dire une image, et une ISO, sans MS. Le fichier existait pourtant
-    # en trois exemplaires sur la machine - a un chemin que QEMU ne consulte
-    # jamais. Diagnostique sur banc le 2026-08-28 : sans qemu-bundle rc=1 et
-    # QEMU meurt, avec lui il tourne.
-    #
-    # Ce que ca coute : 146 Ko, 175 entrees dont 140 liens symboliques. C'est
-    # la difference entre l'image complete, ou le Calypso demarre, et la lite,
-    # ou il ne demarrait pas.
+    # qemu-bundle must follow the binary: QEMU relocates its data directory
+    # relative to the binary location, and in a build tree that goes through
+    # build/qemu-bundle/. Without it qemu-system-arm cannot read its keymap
+    # ("could not read keymap file: 'en-us'") and dies before allocating PTYs.
     cp -a qosmo/build/qemu-bundle      /keep/qosmo/build/ 2>/dev/null || true; \
     tar -C qosmo --exclude=./build -cf - . | tar -C /keep/qosmo -xf -; \
-    # [2026-09-25] c54x_exe (--dsp) et grgsm_exe : petits arbres (binaire +
-    # run.sh + rom/), gardes ENTIERS, .git compris (osmo-update). Leur source
-    # C vit dans qosmo, garde ci-dessus. qosmo-grgsm/qosmo-dsp sont retires.
+    # c54x_exe (--dsp) and grgsm_exe: small trees (binary + run.sh + rom/),
+    # kept whole, .git included (osmo-update). Their C sources live in qosmo.
     for d in c54x_exe grgsm_exe; do \
         [ -d "$d" ] && cp -a "$d" /keep/ || true; \
     done; \
@@ -102,35 +65,32 @@ RUN set -eux; \
     for d in firmware qemu-install osmo-operator pont; do \
         [ -e "$d" ] && cp -a "$d" /keep/ || true; \
     done; \
-    # La coupe : tout /opt/GSM disparait, seuls les artefacts reviennent.
+    # The cut: all of /opt/GSM goes, only the kept artefacts come back.
     cd /; rm -rf /opt/GSM; mkdir -p /opt/GSM; \
     cp -a /keep/. /opt/GSM/; rm -rf /keep; \
-    # Reste de l'atelier : en-tetes, bibliotheques statiques, objets, caches.
-    # /var/cache/osmo-debs : le cache des paquets compiles (packaging/osmo-deb.sh)
-    # est un outil de CONSTRUCTION - l arbre QEMU en zstd, le venv gr-gsm... Il
-    # vit sur l hote ; dans l image d execution elaguee il n a pas sa place.
+    # Rest of the toolchain: headers, static libraries, objects, caches.
+    # /var/cache/osmo-debs (packaging/osmo-deb.sh) is a BUILD cache that lives
+    # on the host; it has no place in the pruned runtime image.
     rm -rf /usr/local/include /root/.cache /root/.cargo /root/.rustup \
            /usr/share/doc /usr/share/man /usr/share/locale \
            /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
            /var/cache/osmo-debs /var/cache/apt/apt-fast \
            /tmp/* /var/tmp/*; \
     find /usr/local/lib -name '*.a' -delete 2>/dev/null || true; \
-    # Le balayage des .o EVITE /opt/GSM. [2026-08-27] Il y passait, et
-    # l ancien qosmo-grgsm/tools/calypso-ipc-device/*.o etaient SUIVIS PAR GIT :
-    # les effacer laissait un arbre que git voit comme modifie, et "osmo-update"
-    # refuse alors de l'avancer - a raison, il ne sait pas ce qu'on y a fait.
-    # Ce qui restait a couper est de toute facon parti avec l'atelier.
+    # The .o sweep SKIPS /opt/GSM: some .o there are tracked by git, and
+    # deleting them would leave a modified tree that "osmo-update" refuses
+    # to fast-forward.
     find / -xdev -path /opt/GSM -prune -o -name '*.o' -exec rm -f {} + 2>/dev/null || true; \
     du -sh /opt/GSM /usr/local/bin /usr/local/lib
 
-# ── Etape 2 : aplatissement ─────────────────────────────────────────────────
-# FROM scratch + COPY de la racine : une seule couche, qui ne contient que
-# l'etat elague. C'est ce qui fait reellement tomber la taille.
+# ── Stage 2: flatten ────────────────────────────────────────────────────────
+# FROM scratch + COPY of the root: a single layer holding only the pruned
+# state. This is what actually reduces the image size.
 FROM scratch
 COPY --from=prune / /
 
-# La configuration ne traverse pas un FROM scratch : on la redeclare a
-# l'identique de l'image d'origine, sinon l'image lite ne demarre pas pareil.
+# Configuration does not survive FROM scratch: redeclare it identically to the
+# original image, otherwise the lite image does not start the same way.
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     container=docker \
     OSMO_IMAGE=1 \

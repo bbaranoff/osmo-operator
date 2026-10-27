@@ -1,27 +1,24 @@
--- osmo-conky.lua - le PANNEAU du tableau de bord Conky du banc (Cairo).
+-- osmo-conky.lua - Cairo panel of the bench's Conky dashboard.
 --
--- [2026-10-12] POURQUOI. Le fond d ecran est maintenant une ville sous un
--- ciel bleu clair (configs/gsm-lab-ville.jpg / gsm-lab-antenne.jpg) : du texte
--- pose a meme le ciel, meme avec une ombre, se lisait mal, et les barres
--- cyan se perdaient dans le bleu. Conky ne sait dessiner qu un rectangle
--- plein (own_window_colour + argb) : d ou ce petit Lua, charge par
--- osmo-conky.conf (lua_load / lua_draw_hook_pre), qui peint AVANT le texte :
---   - une plaque sombre translucide, aux coins arrondis, qui laisse voir le
---     ciel au travers ;
---   - un filet clair d un pixel tout autour ;
---   - un trait d accent (le bleu du banc) le long du bord haut.
--- Conky 1.19 (conky-all, Ubuntu 24.04) : les bindings Cairo sont dans
--- « cairo » et, pour la surface X11, « cairo_xlib » (absent des versions
--- anterieures - on le charge sans l exiger).
+-- Loaded by osmo-conky.conf (lua_load / lua_draw_hook_pre = 'panneau'). Conky
+-- can only draw a solid rectangle (own_window_colour + argb), so this hook
+-- paints, before the text:
+--   - a translucent dark panel with rounded corners (the wallpaper,
+--     configs/gsm-lab-ville.jpg, shows through);
+--   - a one-pixel light outline all around;
+--   - an accent line (the bench blue) along the top edge.
+-- Conky 1.19 (conky-all, Ubuntu 24.04): the Cairo bindings are in "cairo"
+-- and, for the X11 surface, "cairo_xlib" (absent from older versions, so it
+-- is loaded without being required).
 require 'cairo'
 pcall(require, 'cairo_xlib')
 
--- Les reglages du panneau (fond, filet, accent) : rgba 0..1.
+-- Panel settings (background, outline, accent): rgba 0..1.
 local FOND     = {0.03, 0.06, 0.12, 0.42}
 local FILET    = {1.00, 1.00, 1.00, 0.16}
-local ACCENT   = {0.35, 0.78, 0.98, 0.95}   -- #5ac8fa, le bleu du banc
+local ACCENT   = {0.35, 0.78, 0.98, 0.95}   -- #5ac8fa, the bench blue
 local RAYON    = 16
-local MARGE    = 1                          -- le filet ne doit pas raser le bord
+local MARGE    = 1                          -- the outline must not touch the edge
 
 local function arrondi(cr, x, y, w, h, r)
     cairo_new_path(cr)
@@ -40,16 +37,16 @@ function conky_panneau()
                                          conky_window.visual, w, h)
     local cr = cairo_create(cs)
 
-    -- la plaque
+    -- the panel
     arrondi(cr, MARGE + 0.5, MARGE + 0.5, w - 2 * MARGE - 1, h - 2 * MARGE - 1, RAYON)
     cairo_set_source_rgba(cr, FOND[1], FOND[2], FOND[3], FOND[4])
     cairo_fill_preserve(cr)
-    -- le filet
+    -- the outline
     cairo_set_source_rgba(cr, FILET[1], FILET[2], FILET[3], FILET[4])
     cairo_set_line_width(cr, 1)
     cairo_stroke(cr)
 
-    -- l accent : un trait sous le bord haut, entre les deux arrondis
+    -- the accent: a line under the top edge, between the two rounded corners
     cairo_new_path(cr)
     cairo_move_to(cr, MARGE + RAYON, MARGE + 2)
     cairo_line_to(cr, w - MARGE - RAYON, MARGE + 2)

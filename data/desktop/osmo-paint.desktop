@@ -1,3 +1,5 @@
+# osmo-paint.desktop - launcher: on-screen drawing overlay (pen, shapes,
+# eraser) over the desktop. Runs tools/overlay-draw.py.
 [Desktop Entry]
 Type=Application
 Name=Peinture (overlay)

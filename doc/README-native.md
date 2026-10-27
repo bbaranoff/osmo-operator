@@ -1,8 +1,8 @@
 # osmo-operator — native install (no Docker)
 
 The repository installs directly on Ubuntu 24.04 (noble, the same base as the
-Dockerfile). The launcher, `start-native.sh`, is the same one used inside the
-container and on the ISO.
+Dockerfile). The launcher, `start-native.sh` (a symlink to `start.sh`), is the
+same one used inside the container and on the ISO.
 
 ← [README](../README.md) · Details: [wiki/Start-native](../wiki/Start-native.md), [wiki/Build](../wiki/Build.md), [wiki/Environnement](../wiki/Environnement.md), [wiki/Lancer-a-la-main](../wiki/Lancer-a-la-main.md)
 
@@ -13,25 +13,32 @@ container and on the ISO.
 on a fresh Ubuntu 24.04 it builds everything (apt dependencies, Osmocom core,
 SMSC, osmocom-bb, firmware, qosmo, c54x_exe, runtime setup) and ends with a
 verified call on the DSP. How to run it (disposable container, fresh 24.04,
-unattended): [wiki/README-notebook](../wiki/README-notebook.md).
+unattended): [wiki/README-notebook](../wiki/README-notebook.md). The same
+steps as plain text: [doc/install-from-scratch](install-from-scratch.md).
 
-`install.sh` covers only part of it: apt dependencies (extracted from the
-Dockerfile), the `osmocom` account, osmocom-bb, gapk, libosmo-dsp, toast, the 4G,
-configs and desktop icons. It does **not** build the Osmocom core, qosmo,
-c54x_exe or the firmware, so on a stock 24.04 its last step fails with
-"demons absents". The notebook reuses its `deps`, `user` and `configs` steps.
+`install.sh` is a step engine (`install_modules/NN-<step>.sh`): `prereqs`,
+`deps` (apt packages extracted from the Dockerfile), `user` (the `osmocom`
+account), `sources`, `patches` (`tools/osmo-patches-apply.sh`), `build`,
+`binaires`, `configs`, `bureau` (desktop icons and shortcuts, the same files as
+the ISO), `verify`. `GSM_ROOT` (default `/opt/GSM`) receives sources and
+binaries.
 
 ```bash
-sudo ./install.sh                  # its steps: deps, sources, build, binaries, configs, desktop
+sudo ./install.sh                  # every step
 ./install.sh --list                # show the steps, do nothing
+./install.sh --dry-run             # walk through with no side effects
 ./install.sh --check               # what is already in place
 sudo ./install.sh --only deps      # one step
+sudo ./install.sh --skip build     # every step but this one
+sudo ./install.sh --reinstall      # replay everything, even what is already there
 sudo ./install.sh --only bureau    # desktop icons and shortcuts only
 ```
 
 To install the pieces one by one instead: [wiki/Installer-qosmo](../wiki/Installer-qosmo.md),
 [wiki/Installer-grgsm_exe](../wiki/Installer-grgsm_exe.md),
-[wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md).
+[wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md). The supplements
+(gnuarm toolchain, Magnetite, extra firmware, 4G…) are `sudo ./addition.sh`
+([README](../README.md#supplements)).
 
 ## Start and stop
 
@@ -44,18 +51,23 @@ To install the pieces one by one instead: [wiki/Installer-qosmo](../wiki/Install
 
 Every start stops the stack first: there is no hot restart. `--force` only
 restarts modules that are already running instead of skipping them.
-`--no-attach` starts without attaching to tmux, which is what
-`osmo-banc.service` uses.
+`--no-attach` starts without attaching to tmux (`CALYPSO_NO_ATTACH=1`), which
+is what `osmo-banc.service` uses (`OSMO_BANC_ARGS` in `/etc/default/osmo-banc`).
 
 ## Choosing what runs
 
 The layer 1 (who demodulates the air interface):
 
 ```bash
-./start-native.sh --grgsm     # gr-gsm layer 1, works end to end   → README-grgsm
 ./start-native.sh --dsp       # real C54x mask ROM (default)        → README-dsp
+./start-native.sh --grgsm     # gr-gsm layer 1                      → README-grgsm
 ./start-native.sh --menu      # ask interactively
 ```
+
+The radio setup (see the [modes table](../README.md#modes)): `--bts-classique`
+(`osmo-bts-trx` on the bridge, default), `--bts` (the Calypso is the BTS
+radio) with `--ts 1|2|2/1`, `--ms` / `--ms-magnetite` (the phone), and the
+vocoder, `--vocoder-rom` (default) or `--gapk`.
 
 The profile (how many base stations come up, and how):
 
@@ -73,15 +85,17 @@ The profile (how many base stations come up, and how):
 ./start-native.sh --dry-run     # walk through it with no side effects
 ```
 
-Identity and network options (`--node`, `--op`, `--hub-ip`, `--wan`) are in
-[README-ss7](README-ss7.md). A real SIM card in an Omnikey reader (`--sap`) is
-in [wiki/SIM](../wiki/SIM.md).
+The layer-2 client of the Calypso: `--mobile` (default), `--ccch_scan`,
+`--bcch_scan`, `--cell_log`. Identity and network options (`--node`, `--op`,
+`--hub-ip`, `--wan`) are in [README-ss7](README-ss7.md). A real SIM card in an
+Omnikey reader or the softSIM (`--sap`, `--sap=pcsc`, `--sap=sim`, `--no-sap`)
+is in [wiki/SIM](../wiki/SIM.md). `./start-native.sh --help` lists everything.
 
 ## The `qosmo` launcher
 
-`40-qemu.sh` does not call `qemu-system-arm` directly: it calls the C launcher
-`qosmo`, installed next to it by `ninja install`. The launcher knows which
-layer 1 its QEMU was built with.
+`run_modules/40-qemu.sh` does not call `qemu-system-arm` directly: it calls
+the C launcher `qosmo`, installed next to it by `ninja install`. The launcher
+knows which layer 1 its QEMU was built with.
 
 ```bash
 qosmo -k /opt/GSM/firmware/board/compal_e88/layer1.highram.elf
@@ -98,7 +112,15 @@ it if the source is there and the binary is not, and falls back to the plain
 
 Which variable wins (command line, environment, `/etc/osmo-role`, defaults) and
 what actually reaches QEMU: [wiki/Environnement](../wiki/Environnement.md) and
-[`environment/README.md`](../environment/README.md). Systemd units:
-[`services/README.md`](../services/README.md).
+[`environment/README.md`](../environment/README.md). The network settings
+(ARFCN, PLMN, …) are in `globals.conf`, applied by `generate_configs.sh`.
+Systemd units: [`services/README.md`](../services/README.md).
 
 Using the running bench (tmux, VTY, Wireshark): [README-usage](README-usage.md).
+
+## Known issues
+
+- `install.sh` does not build the Osmocom core, qosmo, c54x_exe or the
+  firmware, so on a stock 24.04 its `verify` step ends with "demons absents".
+  Use the notebook for a complete native build; the notebook reuses the
+  `deps`, `user` and `configs` steps of `install.sh`.

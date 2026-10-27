@@ -1,16 +1,17 @@
 <!doctype html><html><head><meta charset="utf-8">
 <title>LAB GSM</title>
 <style>
-  /* [2026-10-01] LISIBLE, EN UBUNTU, ET VIVANTE.
-     - Les tailles sont en vw (largeur de la zone, 1110 px de reference), plus en
-       vh : la fenetre est rabattue sur la hauteur du contenu (osmo-topzone.py,
-       INJECT_CSS), et des polices en vh de 500 px donnaient 7 a 10 px de texte.
-     - Tailles calees pour que la carte (TOP_BOX y=60) S ARRETE AU-DESSUS de
-       l encart (y=220) : sans titre, elle tient en ~160 px de reference.
-     - Police Ubuntu partout (fonts-ubuntu est dans l image, 80-chroot.sh).
-     - Une rangee « banc en temps reel » sous les timeslots : coeur, radio,
-       abonnes, appels, depuis quand - poussee par osmo-ts-probe.py dans
-       timeslots.json (core / radio / phy / subs / calls / up). */
+  /* labgsm.html - "LAB GSM" banner of the desktop top zone. Loaded by
+     tools/osmo-topzone.py, which pushes state through osmoUpdate(), osmoFade()
+     and osmoBanc() (see the script section below).
+     - Sizes are in vw (zone width, 1110 px reference), never in vh: the window
+       is shrunk to the content height (INJECT_CSS in osmo-topzone.py).
+     - The card (TOP_BOX y=60) must end above the panel (y=220): without a
+       title it fits in about 160 reference px.
+     - Ubuntu font everywhere (fonts-ubuntu is installed by iso_modules/80-chroot.sh).
+     - The "live bench" row under the timeslots (core, radio, subscribers,
+       calls, uptime) is fed by tools/osmo-ts-probe.py through timeslots.json
+       (core / radio / phy / subs / calls / up). */
   :root{
     --ink:#131018; --ink2:#1c1822; --card:rgba(13,11,20,0);
     --bone:#f4eddc; --dim:#c9bfab; --violet:#9d8cf0; --violet2:#6f5fc0;
@@ -25,17 +26,11 @@
     background:var(--card);backdrop-filter:blur(3px);padding:1vw 1.8vw .9vw;
     display:flex;flex-direction:column;gap:.45vw;transition:opacity .6s ease}
   #card.faded{opacity:0;pointer-events:none}
-  /* [2026-10-12] AU REPOS, PAS DE BANNIERE : LE TITRE. Tant qu aucun banc ne
-     tourne (osmo-panel.py ecrit 0 dans $XDG_RUNTIME_DIR/osmo-banc.etat, que
-     osmo-topzone.py relaie par osmoBanc(false)), la carte est invisible et la
-     zone porte seulement « Telecom Operator », en grand. Au lancement de la 2G
-     (ou de la 4G), le titre s efface en fondu pendant que la carte apparait -
-     les deux a la fois, meme duree. body.instant : sans animation (premier
-     etat pousse au chargement de la page, pour ne pas voir le titre clignoter
-     devant un banc deja debout). */
-  /* [2026-10-23] PLUS DE TITRE au repos : le fond (gsm-lab-ville.jpg) porte le sien,
-     peint, « TELECOM OPERATOR » ; le notre s y superposait au logo ubuntu. La zone
-     est vide au repos, la carte arrive seule en fondu. */
+  /* body.repos: no bench is running (osmo-panel.py writes 0 to
+     $XDG_RUNTIME_DIR/osmo-banc.etat, relayed by osmo-topzone.py as
+     osmoBanc(false)): the card is invisible and the zone is empty (the
+     wallpaper carries the title). When a bench starts, the card fades in.
+     body.instant: no animation (first state pushed at page load). */
   body.repos #card{opacity:0;pointer-events:none;transition:opacity 1.4s ease}
   body.instant #card{transition:none!important}
   .eyebrow{display:flex;justify-content:space-between;align-items:center;
@@ -50,7 +45,7 @@
   .lede{color:#e6ddcb;font-size:1.35vw;line-height:1.4;max-width:78%}
   .lede b{color:#fff;font-weight:500}
   .meta{color:var(--dim);letter-spacing:.12em;font-size:.85vw;font-weight:500}
-  /* la rangee des timeslots : huit colonnes de meme largeur, hautes */
+  /* timeslot row: eight tall columns of equal width */
   #ts{display:grid;grid-template-columns:repeat(8,1fr);gap:.7vw;min-height:4.2vw}
   .ts{border:1px solid rgba(180,194,234,.3);border-radius:.8vw;padding:.5vw .4vw;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.5vw;
@@ -59,14 +54,14 @@
   .ts .n{font-weight:700;font-size:1.5vw;line-height:1}
   .ts .k{color:var(--dim);font-size:.9vw;letter-spacing:.04em;font-family:"Ubuntu Mono",monospace}
   .ts.bcch{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
-  /* clignotement orange quand le timeslot porte des bursts */
+  /* orange blink when the timeslot carries bursts */
   .ts.on{border-color:var(--orange);
     background:rgba(255,154,60,.16);
     box-shadow:0 0 14px rgba(255,154,60,.55),0 0 0 1px var(--orange) inset;
     animation:blink .9s steps(2,end) infinite}
   @keyframes blink{50%{box-shadow:0 0 4px rgba(255,154,60,.2),0 0 0 1px rgba(255,154,60,.4) inset;
     background:rgba(255,154,60,.05)}}
-  /* ── LE BANC EN TEMPS REEL ──────────────────────────────────────────── */
+  /* ── LIVE BENCH ROW ────────────────────────────────────────────────── */
   #live{display:flex;gap:.6vw;flex-wrap:wrap;align-items:center;
     border-top:1px solid var(--line);padding-top:.45vw}
   .grp{display:flex;align-items:center;gap:.35vw;border:1px solid var(--line);
@@ -89,8 +84,8 @@
     <div><span class="dot">●</span> SOFTWARE DEFINED RADIO · UM INTERFACE · GR-GSM</div>
     <div class="pill" id="arfcn">ARFCN 514 · DCS 1800</div>
   </div>
-  <!-- [2026-10-01] Plus de titre « LAB GSM » ni de paragraphe de presentation :
-       la banniere ne porte que le vivant - timeslots, banc, tags. -->
+  <!-- No title or presentation paragraph: the banner only shows live data
+       (timeslots, bench row, tags). -->
   <div class="meta">TRAME TDMA · 8 TIMESLOTS · 4,615 MS</div>
   <div id="ts"></div>
   <div id="live"></div>
@@ -106,7 +101,7 @@
 </div>
 
 <script>
-// Libelles courts par type de canal physique (phys_chan_config d osmo-bsc).
+// Short labels per physical channel type (osmo-bsc phys_chan_config).
 const LABEL = {
   "CCCH+SDCCH4":"FCCH·SCH·BCCH", "CCCH":"FCCH·SCH·BCCH", "BCCH":"BCCH",
   "SDCCH8":"SDCCH", "SDCCH8+CBCH":"SDCCH", "SDCCH":"SDCCH",
@@ -126,8 +121,8 @@ function drawTS(){
     box.appendChild(d);
   });
 }
-// ── LA RANGEE « BANC » ───────────────────────────────────────────────────────
-// Ordre fixe : on lit toujours les pastilles au meme endroit.
+// ── BENCH ROW ────────────────────────────────────────────────────────────────
+// Fixed order: the dots are always read at the same place.
 const CORE=["HLR","MSC","BSC","STP","MGW","BTS","SIP","SMSC","PBX"];
 const RADIO=["FAKETRX","PONT","MOBILE","TRXCON","QEMU","GAPK"];
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -158,7 +153,7 @@ function drawLive(state){
   box.innerHTML=h;
 }
 // osmoUpdate({ts:[{n,type,active,voice}], bsc:true, arfcn:"...", core:{}, radio:{}, subs:{}, calls:n, up:s})
-// - appele par osmo-topzone.py
+// - called by osmo-topzone.py
 window.osmoUpdate=function(state){
   try{
     if(state.ts && state.ts.length){ TS=state.ts; drawTS(); }
@@ -168,23 +163,23 @@ window.osmoUpdate=function(state){
     if(state.a5) document.getElementById('a5tag').innerHTML='A5/'+state.a5+' <b>✓</b>';
     (state.ts||[]).forEach(t=>{
       const el=document.querySelector('.ts[data-n="'+t.n+'"]'); if(!el) return;
-      // .on = ce timeslot porte des bursts (voix comprise) : c est le SEUL
-      // clignotement de la carte depuis que le chronogramme est parti.
+      // .on = this timeslot carries bursts (voice included): the only
+      // blinking element of the card.
       el.classList.toggle('on', !!t.active || !!t.voice);
     });
     drawLive(state);
   }catch(e){}
 };
-// fondu : osmo-topzone.py bascule .faded pour laisser place a une appli
+// fade: osmo-topzone.py toggles .faded to make room for an application
 window.osmoFade=function(on){document.getElementById('card').classList.toggle('faded',!!on);};
-// banc debout (on=true) : la carte ; a l arret : rien (le fond porte le titre).
-// instant=true : sans fondu (etat initial, au chargement).
+// bench running (on=true): show the card; stopped: nothing (the wallpaper
+// carries the title). instant=true: no fade (initial state, at page load).
 window.osmoBanc=function(on,instant){const b=document.body;
   if(instant){b.classList.add('instant');void b.offsetWidth;}
   b.classList.toggle('repos',!on);
   if(instant){void b.offsetWidth;b.classList.remove('instant');}};
 drawTS(); drawLive(null);
-// demo si personne ne pousse d etat (osmo-topzone absent) : un timeslot au hasard
+// demo when nobody pushes a state (osmo-topzone absent): random TCH timeslots blink
 let demo=setInterval(()=>{ if(window.__osmoLive) return clearInterval(demo);
   TS.forEach(t=>{const el=document.querySelector('.ts[data-n="'+t.n+'"]');
     if(el) el.classList.toggle('on', (t.type||'').indexOf('TCH')>=0 && Math.random()<0.25);});

@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
-# fft_web.py — 2 FFT (MS + BTS) sur UNE page, serveur web autonome (port 8081).
+# fft_web.py - two live FFTs (MS + BTS) on ONE page, standalone web server (port 8081).
 #
-# Reprend la logique de tools/fft.sh / tools/fft2.sh (PSD Welch sur l'I/Q fc32) mais :
-#   - NATIF : lit directement les sources de l'hôte, pas de docker exec.
-#   - HEADLESS : pas de matplotlib/X. numpy calcule la PSD → JSON → le navigateur dessine (canvas).
-#   - LIVE FIFO : le spectre BTS lit /tmp/iq_fft.fifo EN CONTINU (le tap FFT
-#     dédié du relay DL osmo-trx) au lieu du ring record.cfile (128 Mo) qui
-#     FIGEAIT une fois plein. La FIFO est ouverte O_RDWR|O_NONBLOCK (comme
-#     grgsm_fft_live.py) : pas d'EOF, le write non-bloquant du relay trouve
-#     toujours un lecteur, et on ne perturbe pas la boucle relay / le camping.
+# Same processing as tools/fft.sh / tools/fft2.sh (Welch PSD on fc32 I/Q) but:
+#   - NATIVE: reads the host sources directly, no docker exec.
+#   - HEADLESS: no matplotlib/X. numpy computes the PSD -> JSON -> the browser
+#     draws it (canvas: PSD trace + waterfall).
+#   - LIVE FIFO: a FIFO source is read CONTINUOUSLY. It is opened
+#     O_RDWR|O_NONBLOCK (like grgsm_fft_live.py): no EOF, the writer's
+#     non-blocking write always finds a reader, and the producer (relay,
+#     camping loop) is never disturbed.
 #
-#   - MS  = iq_fft_ms.fifo (montant, ecrit par pont.py ; LIVE)
-#   - BTS = iq_fft.fifo    (DL relay osmo-trx, LIVE)
-#   Chaque source accepte indifféremment un .cfile (lecture tail) OU un .fifo
-#   (lecture live) : auto-détecté. Override par env CFILE_MS / CFILE_BTS.
+# Sources:
+#   - MS  = /tmp/iq_fft_ms.fifo (uplink, written by pont.py; LIVE)
+#   - BTS = /tmp/iq_fft.fifo    (DL tap of the osmo-trx relay; LIVE)
+#   Each source accepts either a .cfile (tail read) or a .fifo (live read),
+#   auto-detected. Override with CFILE_MS / CFILE_BTS.
 #
-# Lancement :  python3 /opt/GSM/osmo-nitb-for-calypso/fft-web/fft_web.py
-#   FFT_WEB_PORT=8081 RATE=1083333 NSAMP=262144 NFFT=4096 ...  (overridables par env)
+# Usage:  python3 /opt/GSM/osmo-operator/fft-web/fft_web.py
+#   Environment: FFT_WEB_PORT=8081 RATE=1083333 NSAMP=262144 NFFT=4096
+#                REFRESH_MS=40 NSEG_MAX=16 CFILE_MS CFILE_BTS ARFCN_MS ARFCN_BTS
+#   GET /          the page;  GET /psd?src=ms|bts   one PSD as JSON.
 import os, json, stat, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import numpy as np
 
-# --- racine de l'installation, resolue sans chemin en dur --------------------
-# GSM_ROOT si l'environnement le pose (c'est le cas quand on passe par run.sh),
-# sinon le parent du depot : les deux depots vivent cote a cote.
+# --- installation root, resolved without a hard-coded path -------------------
+# GSM_ROOT when the environment sets it (the case through start.sh), otherwise
+# the parent of this repository: the repositories live side by side.
 import os as _os
 GSM_ROOT = _os.environ.get(
     "GSM_ROOT",
@@ -32,39 +35,39 @@ GSM_ROOT = _os.environ.get(
 
 
 PORT  = int(os.environ.get('FFT_WEB_PORT', '8081'))
-RATE  = float(os.environ.get('RATE', '1083333'))   # 4 SPS natif = 26e6/24 (= Fs du relay/FIFO)
-NSAMP = int(os.environ.get('NSAMP', '262144'))     # complex samples gardés (tail / fenêtre live)
-NFFT  = int(os.environ.get('NFFT', '4096'))        # résolution FFT (segment Welch)
-# Cadence d'affichage : 40 ms = 25 img/s. Le navigateur poll /psd à cet intervalle
-# (2 fetch ms+bts par tick → ~50 req/s). On borne le nb de segments Welch par
-# requête (NSEG_MAX) pour que le calcul tienne la cadence (NFFT*NSEG_MAX FFT/req).
+RATE  = float(os.environ.get('RATE', '1083333'))   # native 4 SPS = 26e6/24 (= Fs of the relay/FIFO)
+NSAMP = int(os.environ.get('NSAMP', '262144'))     # complex samples kept (tail / live window)
+NFFT  = int(os.environ.get('NFFT', '4096'))        # FFT resolution (Welch segment)
+# Display rate: 40 ms = 25 fps. The browser polls /psd at this interval
+# (2 fetches ms+bts per tick -> ~50 req/s). The number of Welch segments per
+# request is bounded (NSEG_MAX) so the computation keeps up (NFFT*NSEG_MAX FFT/req).
 REFRESH_MS = int(os.environ.get('REFRESH_MS', '40'))
 NSEG_MAX   = int(os.environ.get('NSEG_MAX', '16'))
 
 SRC = {
-    # [2026-08-29] Le montant vient de pont.py (PONT_AIRREC_UL_FIFO), pas du
-    # cfile DSP : en mode pont, /dev/shm/dsp_iq.cfile n'a aucun producteur et
-    # le spectre MS restait vide - une seule FFT vivante sur les deux.
+    # Uplink comes from pont.py (PONT_AIRREC_UL_FIFO): in bridge mode the DSP
+    # cfile (/dev/shm/dsp_iq.cfile) has no producer.
     'ms':  {'path': os.environ.get('CFILE_MS',  '/tmp/iq_fft_ms.fifo'),
             'arfcn': os.environ.get('ARFCN_MS', '514'),  'label': 'MS — montant (iq_fft_ms.fifo)'},
     'bts': {'path': os.environ.get('CFILE_BTS', '/tmp/iq_fft.fifo'),
             'arfcn': os.environ.get('ARFCN_BTS', '514'), 'label': 'BTS — DL relay LIVE (iq_fft.fifo)'},
 }
 
-# ── État live par source FIFO : fd O_RDWR|O_NONBLOCK + buffer roulant ────────
+# ── Live state per FIFO source: fd O_RDWR|O_NONBLOCK + rolling buffer ────────
 _state = {}                                        # src -> {'fd':int, 'buf':bytearray}
 _locks = {k: threading.Lock() for k in SRC}
-MAXB   = NSAMP * 8                                 # octets gardés (complex64 = 8 o/échantillon)
+MAXB   = NSAMP * 8                                 # bytes kept (complex64 = 8 bytes/sample)
 
+# ── I/Q acquisition ──────────────────────────────────────────────────────────
 def _is_fifo(path):
     try:
         return stat.S_ISFIFO(os.stat(path).st_mode)
     except OSError:
-        return path.endswith('.fifo')              # pas encore créé : on se fie au suffixe
+        return path.endswith('.fifo')              # not created yet: trust the suffix
 
 def read_live_iq(src, path):
-    """Draine la FIFO en non-bloquant et renvoie les NSAMP derniers échantillons
-    (le plus frais). O_RDWR => jamais d'EOF, jamais de blocage du relay."""
+    """Drain the FIFO without blocking and return the last NSAMP samples
+    (the freshest). O_RDWR => never an EOF, never blocks the writer."""
     st = _state.get(src)
     if st is None:
         if not os.path.exists(path):
@@ -82,7 +85,7 @@ def read_live_iq(src, path):
             break
         buf += c
         if len(buf) > MAXB:
-            del buf[:-MAXB]                         # borne la RAM, garde le frais
+            del buf[:-MAXB]                         # bound the RAM, keep the freshest
     if len(buf) > MAXB:
         del buf[:-MAXB]
     n = (len(buf) // 8) * 8
@@ -92,19 +95,20 @@ def read_live_iq(src, path):
 
 def read_tail_iq(path, nsamp):
     sz = os.path.getsize(path)
-    nbytes = min(sz - (sz % 8), nsamp * 8)         # complex64 = 8 octets/échantillon
+    nbytes = min(sz - (sz % 8), nsamp * 8)         # complex64 = 8 bytes/sample
     with open(path, 'rb') as f:
         if sz > nbytes:
             f.seek(sz - nbytes)
         raw = f.read(nbytes)
     return np.frombuffer(raw, dtype=np.complex64)
 
+# ── PSD ──────────────────────────────────────────────────────────────────────
 def welch_psd(iq, nfft, rate):
     if iq.size < nfft:
         return None, None
     win = np.hanning(nfft).astype(np.float32)
-    nseg = min(iq.size // nfft, NSEG_MAX)          # borne le coût pour tenir 25 img/s
-    iq = iq[-nseg*nfft:]                            # garde les segments les plus frais
+    nseg = min(iq.size // nfft, NSEG_MAX)          # bound the cost to hold 25 fps
+    iq = iq[-nseg*nfft:]                            # keep the freshest segments
     acc = np.zeros(nfft, dtype=np.float64)
     for i in range(nseg):
         seg = iq[i*nfft:(i+1)*nfft] * win
@@ -123,7 +127,7 @@ def psd_json(src):
         f, p = welch_psd(iq, NFFT, RATE)
         if f is None:
             return {'error': "flux pas encore prêt (pas assez d'échantillons)", 'label': s['label']}
-        step = max(1, len(f)//1024)                # sous-échantillonne pour le transport
+        step = max(1, len(f)//1024)                # decimate for transport
         return {'label': s['label'], 'arfcn': s['arfcn'], 'rate': RATE,
                 'freqs': [round(x, 1) for x in f[::step].tolist()],
                 'psd':   [round(x, 2) for x in p[::step].tolist()]}
@@ -132,6 +136,7 @@ def psd_json(src):
     except Exception as e:
         return {'error': str(e), 'label': s['label']}
 
+# ── HTML page (canvas PSD + waterfall, polls /psd) ───────────────────────────
 PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Calypso FFT — MS & BTS</title>
 <style>body{background:#0b0f14;color:#cdd6e0;font-family:monospace;margin:0;padding:12px}
 h1{font-size:15px;color:#2aa198;margin:0 0 10px} .row{display:flex;gap:12px;flex-wrap:wrap}
@@ -159,17 +164,13 @@ function drawPsd(src,d){var c=document.getElementById('c-'+src),x=c.getContext('
 function drawWf(src,d){var c=document.getElementById('w-'+src),x=c.getContext('2d');
  var p=d.psd,n=p.length;if(!n)return;
  if(c.width!==n){c.width=n;c.height=160;x.fillStyle='#060a0e';x.fillRect(0,0,n,c.height);}
- // [2026-08-09] SENS DE DEFILEMENT REMIS A L'ENDROIT. C'etait drawImage(c,0,-1)
- // + putImageData(...,c.height-1) : le plus recent en BAS, l'historique qui
- // monte. Toutes les cascades SDR (gqrx, GNU Radio, grgsm) font l'inverse — le
- // plus recent EN HAUT, l'historique qui descend — et l'oeil lit le temps de
- // haut en bas. On decale donc l'image vers le BAS et on ecrit la ligne neuve
- // sur la PREMIERE ligne.
- x.drawImage(c,0,1);                        // scroll vers le bas d'1px
+ // Waterfall scrolls like every SDR one (gqrx, GNU Radio, grgsm): newest line
+ // at the TOP, history going down.
+ x.drawImage(c,0,1);                        // scroll down by 1px
  var mn=Math.min.apply(null,p),mx=Math.max.apply(null,p),rg=(mx-mn)||1;
  var row=x.createImageData(n,1);
  for(var i=0;i<n;i++){var col=cmap((p[i]-mn)/rg),o=i*4;row.data[o]=col[0];row.data[o+1]=col[1];row.data[o+2]=col[2];row.data[o+3]=255;}
- x.putImageData(row,0,0);}                  // nouvelle ligne en haut
+ x.putImageData(row,0,0);}                  // new line at the top
 function draw(src,d){var e=document.getElementById('e-'+src),tt=document.getElementById('t-'+src);
  if(d.error){e.textContent=d.error;tt.textContent=d.label||'';return;} e.textContent='';
  tt.textContent=d.label+'  •  ARFCN '+d.arfcn+'  •  Fs '+(d.rate/1e6).toFixed(3)+' MHz';
@@ -180,6 +181,7 @@ function tick(){['ms','bts'].forEach(function(s){
 tick();setInterval(tick,__REFRESH_MS__);
 </script></body></html>"""
 
+# ── HTTP server ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass

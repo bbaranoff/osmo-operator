@@ -1,34 +1,34 @@
 #!/bin/bash
 # =============================================================================
-# checks/diag-interstp.sh -- diagnostic SS7 vu du HUB (inter-STP)
+# checks/diag-interstp.sh - SS7 diagnostic as seen from the HUB (inter-STP)
 #
-# Repond a une seule question : QUI est attache, et qui manque ?
-# L'identite de ce qui est attache vient du hub lui-meme (colonne AS Name et
-# adresse distante de "show cs7 instance 0 asp"). La table /etc/osmo-wan.conf
-# ne sert plus qu'a l'appel des absents : un noeud absent de la table reste
-# indiscernable d'un noeud eteint.
+# Answers one question: WHO is attached, and who is missing?
+# What is attached is read from the hub itself (AS Name column and remote
+# address of "show cs7 instance 0 asp"). /etc/osmo-wan.conf is only used for
+# the roll call of absent nodes: a node missing from that table cannot be
+# told apart from a node that is switched off.
 #
-# CE QU'IL VERIFIE
-#   1. role et adresse d'ecoute (le multi-homing 0.0.0.0 est signale)
-#   2. le demon tourne, le port M3UA ecoute
-#   3. chaque AS declare par le hub : AS_ACTIVE / AS_DOWN, et les ASP rattaches
-#   4. l'appel de la table WAN : quelle adresse attendue n'est vue nulle part
-#   5. les routes : PROHIB / UNAVAIL signales
-#   6. le flapping : deux mesures espacees, les ASP dynamiques renumerotes
-#      trahissent des associations qui se reetablissent en boucle
+# WHAT IT CHECKS
+#   1. role and listen address (0.0.0.0 multi-homing is flagged)
+#   2. daemon running, M3UA port listening
+#   3. each AS declared by the hub: AS_ACTIVE / AS_DOWN, and attached ASPs
+#   4. WAN table roll call: which expected address is seen nowhere
+#   5. routes: PROHIB / UNAVAIL flagged
+#   6. flapping: two measurements; renumbered dynamic ASPs reveal
+#      associations that re-establish in a loop
 #
-# Ne modifie rien. Ne redemarre rien. Lecture seule.
+# Read-only: changes nothing, restarts nothing.
 #
-# Usage : sudo ./checks/diag-interstp.sh [--watch] [--no-color]
-#   --watch     seconde mesure a +10 s pour detecter le flapping
+# Usage: sudo ./checks/diag-interstp.sh [--watch] [--no-color]
+#   --watch     second measurement at +10 s to detect flapping
 # =============================================================================
 set -uo pipefail
 
 ROLE_FILE=/etc/osmo-role
 WAN_FILE=/etc/osmo-wan.conf
 CFG=/etc/osmocom/osmo-stp-interop.cfg
-# Le hub peut avoir ete pousse hors de 4239 (co-localise avec le STP
-# operateur, cf. start-interstp.sh) : relire son VTY dans sa config.
+# The hub may have been moved off port 4239 (co-located with the operator
+# STP, see start-interstp.sh): read its VTY port from its config.
 VTY_PORT=4239
 _hubp="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
 [ -n "$_hubp" ] && VTY_PORT="$_hubp"
@@ -55,14 +55,14 @@ vty(){ { printf 'enable\n'; for c in "$@"; do printf '%s\n' "$c"; done; sleep 0.
 
 getv(){ awk -F= -v k="$1" '$1==k{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$ROLE_FILE" 2>/dev/null; }
 
-# ---- identite ---------------------------------------------------------------
+# ---- identity ---------------------------------------------------------------
 head "IDENTITE"
 ROLE="$(getv OSMO_ROLE)"; SELF="$(getv OSMO_HUB_IP)"
 printf '  hostname : %s\n' "$(hostname)"
 printf '  role     : %s%s%s   adresse annoncee : %s%s%s\n' "$C" "${ROLE:-?}" "$Z" "$C" "${SELF:-?}" "$Z"
 [ "$ROLE" = "interstp" ] || printf '  %s role=%s : ce script vise le HUB (voir diag-stp-operator.sh)\n' "$WARN" "${ROLE:-?}"
 
-# adresse d'ecoute effective
+# effective listen address
 LISTEN_IP="$(awk '/listen m3ua/{f=1} f&&/local-ip/{print $2; exit}' "$CFG" 2>/dev/null)"
 LISTEN_PORT="$(awk '/listen m3ua/{print $3; exit}' "$CFG" 2>/dev/null)"
 printf '  ecoute   : %s:%s\n' "${LISTEN_IP:-?}" "${LISTEN_PORT:-?}"
@@ -73,7 +73,7 @@ if [ "$LISTEN_IP" = "0.0.0.0" ]; then
   printf '         Corriger : set_stp_ip.sh --inter --ip <adresse du hub>\n'
 fi
 
-# ---- demon ------------------------------------------------------------------
+# ---- daemon -----------------------------------------------------------------
 head "DEMON"
 ST="$(systemctl is-active osmo-interstp 2>/dev/null)"
 [ -z "$ST" ] && ST="$(systemctl is-active osmo-stp 2>/dev/null)"
@@ -85,13 +85,12 @@ else
   printf '  %s port M3UA %s PAS en ecoute\n' "$KO" "${LISTEN_PORT:-$M3UA_PORT}"
 fi
 
-# ---- table WAN (sert seulement a l appel des absents) -----------------------
+# ---- WAN table (only used for the roll call of absent nodes) ----------------
 declare -A EXP_IP=()
 NODES=""
 if [ -r "$WAN_FILE" ]; then
-  # Ancre en debut de ligne : la ligne de commentaire du fichier rappelle le
-  # format WAN_NODES="id:ip:indicatif ..." et etait lue comme une entree, d ou
-  # deux noeuds fantomes ("id", "...") toujours portes manquants a l appel.
+  # Anchored at line start: the file's own comment line mentions
+  # WAN_NODES="id:ip:prefix ..." and must not be parsed as an entry.
   spec="$(awk -F\" '/^WAN_NODES=/{print $2}' "$WAN_FILE" 2>/dev/null)"
   for tok in $spec; do
     id="${tok%%:*}"; rest="${tok#*:}"; ip="${rest%%:*}"
@@ -104,14 +103,10 @@ head "AS DECLARES PAR LE HUB"
 AS_OUT="$(vty 'show cs7 instance 0 as all')"
 ASP_OUT="$(vty 'show cs7 instance 0 asp')"
 
-# Le hub construit ses AS a partir du seul NOMBRE de noeuds et apparie les ASP
-# par routing context. Apparier ici as-n<n>op1 avec l'adresse attendue du noeud
-# n, lue dans une table locale rangee autrement que celle en service, donnait
-# l'etat d'une machine a sa voisine : un noeud sain sortait en panne et l'autre
-# en marche. On lit donc le rattachement la ou le hub le declare : colonne
-# AS Name et adresse distante de sa propre sortie.
-# Ces colonnes ont bouge selon les versions de libosmo-sigtran : l'etat et
-# l'adresse sont reperes a leur forme, pas a leur rang.
+# Attachment is read where the hub declares it (AS Name column and remote
+# address of its own output), never derived from the local WAN table. Column
+# positions vary between libosmo-sigtran versions: the state and the address
+# are matched by their form, not by their rank.
 ASP_ROWS="$(printf '%s\n' "$ASP_OUT" | awk '
   /ASP_/ {
     st = ""; rem = ""
@@ -141,10 +136,8 @@ else
     done <<< "$ASP_ROWS"
     [ "$attache" = 0 ] && printf '         aucun ASP rattache : noeud eteint, asp en shutdown, ou SCTP bloque\n'
   done <<< "$AS_ROWS"
-  # NF : sans aucun ASP, printf emet quand meme une ligne vide, dont le champ
-  # 2 (vide) ne matche pas /^as-/. Le bloc annoncait alors un orphelin "()" et
-  # un desaccord de routing context - dans l'etat ou il n'y a tout simplement
-  # rien d'attache, celui-la meme pour lequel on lance ce diagnostic.
+  # NF: with no ASP at all, printf still emits an empty line whose empty
+  # field 2 must not be reported as an orphan.
   orph="$(printf '%s\n' "$ASP_ROWS" | awk -F'|' 'NF && $2 !~ /^as-/ {printf "%s(%s) ", $1, $4}')"
   if [ -n "$orph" ]; then
     printf '  %s ASP connecte mais rattache a aucun AS : %s\n' "$WARN" "${orph% }"
@@ -159,19 +152,17 @@ elif [ -z "$NODES" ]; then
   printf '  %s table absente ou vide : impossible de dire qui manque a l appel,\n' "$WARN"
   printf '         la liste ci-dessus reste complete pour ce qui est attache\n'
 else
-  # Une adresse attachee absente de la table = noeud masque (NAT) : le hub voit
-  # alors l'adresse du routeur et pas celle du noeud. Sans ce rappel on declare
-  # absent un noeud qui parle, au seul motif qu'il est masque.
+  # An attached address missing from the table = node masked by NAT: the hub
+  # sees the router's address, not the node's. Such a node must not be
+  # declared absent just because it is masked.
   tab=" "
   for n in $NODES; do tab="$tab${EXP_IP[$n]} "; done
   hors=""
   for ip in $(printf '%s\n' "$ASP_ROWS" | awk -F'|' '$4 ~ /^[0-9]/ {print $4}' | sort -u); do
     case "$tab" in *" $ip "*) ;; *) hors="$hors $ip" ;; esac
   done
-  # Une adresse hors table ne peut masquer QU'UN seul noeud. Sans ce compte,
-  # un unique ASP masque - l'etat permanent d'un conteneur derriere le NAT -
-  # degradait en WARN tous les noeuds reellement absents, et le FAIL "aucune
-  # association" ne pouvait plus jamais sortir.
+  # An address outside the table can mask only ONE node; without this count
+  # a single masked ASP would downgrade every truly absent node to WARN.
   n_hors=0
   for _ in $hors; do n_hors=$(( n_hors + 1 )); done
   for n in $NODES; do
@@ -232,11 +223,8 @@ fi
 # ---- verdict ----------------------------------------------------------------
 head "VERDICT"
 if [ -n "${AS_OUT:-}" ]; then
-  # Deux conventions de nom coexistent : as-n<noeud>op<op> en mode WAN, et
-  # as-op<i> hors mode WAN (helpers/create_interop.sh). Le verdict ne comptait
-  # que la premiere : la section ci-dessus listait trois AS_ACTIVE et le verdict
-  # concluait juste en dessous "aucun AS actif". Une sortie qui se dement
-  # elle-meme fait chercher une panne qui n'existe pas.
+  # Two naming conventions coexist: as-n<node>op<op> in WAN mode and as-op<i>
+  # otherwise (helpers/create_interop.sh); the verdict counts both.
   tot="$(printf '%s\n' "$AS_OUT" | grep -cE 'as-(n[0-9]+)?op[0-9]+' || true)"
   act="$(printf '%s\n' "$AS_OUT" | grep -E 'as-(n[0-9]+)?op[0-9]+' | grep -c 'AS_ACTIVE' || true)"
   if [ "${act:-0}" -gt 0 ] && [ "${act:-0}" = "${tot:-0}" ]; then

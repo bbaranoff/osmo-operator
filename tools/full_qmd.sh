@@ -1,49 +1,45 @@
 #!/bin/bash
-# full_qmd.sh - Bundle du depot en Quarto : doc + tests + .h + .c + .py + .sh,
-# chaque fichier dans un bloc code type, theme "sketchy".
+# full_qmd.sh - bundle the repository as Quarto: docs + tests + .h + .c + .py
+# + .sh, each file in a typed code block, "sketchy" theme.
 #
-# DEUX MODES
-#   MODE=single (defaut) : un seul .qmd. Simple, mais Deno/Quarto casse
-#                          ("Maximum call stack size exceeded") au-dela de
-#                          ~1-2 Mo, surtout avec embed-resources.
-#   MODE=site            : projet Quarto multi-pages (recommande au-dela de 1 Mo).
-#                          Sections decoupees en pages de SPLIT_KB max,
-#                          recherche plein-texte integree, index global.
+# TWO MODES
+#   MODE=single (default): one .qmd. Simple, but Deno/Quarto breaks
+#                          ("Maximum call stack size exceeded") above
+#                          ~1-2 MB, especially with embed-resources.
+#   MODE=site            : multi-page Quarto project (recommended above 1 MB).
+#                          Sections split into pages of at most SPLIT_KB,
+#                          built-in full-text search, global index.
 #
-# Usage :
-# TOUT EST ECRIT DANS UN SEUL DOSSIER ($OUTDIR, par defaut ./bundle-qmd/) :
-# le .qmd, sketchy.css, sk-filter.html, et le rendu quarto. Le depot reste
-# propre, et une seconde execution ne rescanne pas sa propre sortie.
+# Everything goes into ONE directory ($OUTDIR, default ./<dir>-qmd/, <dir> =
+# the script's directory name): .qmd, sketchy.css, sk-filter.html, quarto
+# output; a second run does not rescan its own output. Known limitation: the
+# scan starts from the script's own directory (tools/); SCOPE is relative to it.
 #
-# Usage :
-#   MODE=site ./full_qmd.sh              # -> ./bundle-qmd/ (multi-pages)
-#   ./full_qmd.sh                        # -> ./bundle-qmd/<depot>-full.qmd
-#   ./full_qmd.sh out.qmd                # chemin explicite (mode single)
-#   OUTDIR=/tmp/x ./full_qmd.sh          # ailleurs
-#   PL4Y_SECTION=calypso ./full_qmd.sh   # section pl4y.store visee
+# Usage:
+#   MODE=site ./full_qmd.sh              # -> ./<dir>-qmd/ (multi-page)
+#   ./full_qmd.sh                        # -> ./<dir>-qmd/<dir>-full.qmd
+#   ./full_qmd.sh out.qmd                # explicit path (single mode)
+#   OUTDIR=/tmp/x ./full_qmd.sh          # elsewhere
+#   PL4Y_SECTION=calypso ./full_qmd.sh   # target pl4y.store section
 #   SCOPE=hw/arm/calypso ./full_qmd.sh   # only this subdir
 #   EXCLUDE='build|pc-bios' ./full_qmd.sh
-#   MAX_KB=256 ./full_qmd.sh             # troncature par fichier
-#   SPLIT_KB=300 MODE=site ./full_qmd.sh # taille max d'une page
-#   EMBED=true ./full_qmd.sh             # html self-contained (risque de crash)
-#   RENDER_MERMAID=0 ./full_qmd.sh       # .mmd en code au lieu de diagramme
-#   RENDER=0 MODE=site ./full_qmd.sh     # sources .qmd seules, sans rendu
+#   MAX_KB=256 ./full_qmd.sh             # per-file truncation
+#   SPLIT_KB=300 MODE=site ./full_qmd.sh # max page size
+#   EMBED=true ./full_qmd.sh             # self-contained html (may crash)
+#   RENDER_MERMAID=0 ./full_qmd.sh       # .mmd as code instead of diagram
+#   RENDER=0 MODE=site ./full_qmd.sh     # .qmd sources only, no render
 
 set -uo pipefail
 
 case "${1:-}" in -h|--help) sed -n '2,30p' "$0"; exit 0;; esac
 
 MODE="${MODE:-single}"
-# Dossier unique de sortie, pour les DEUX modes. Le mode single ecrivait avant
-# a la racine du depot (calypso-full.qmd + sketchy.css + sk-filter.html, puis
-# calypso-full.html et calypso-full_files/ au rendu) : quatre artefacts laches
-# dans le depot, que la passe suivante rescannait comme des sources.
-# Nom derive du depot (osmo-operator -> ./osmo-operator-qmd) : les bundles de deux
-# depots differents peuvent ainsi etre deposes cote a cote sans collision.
+# One output directory for BOTH modes, named after the script's directory, so
+# bundles of different repositories can sit side by side without collision.
 OUTDIR="${OUTDIR:-./$(basename "$(cd "$(dirname "$0")" && pwd)")-qmd}"
-# Section pl4y.store visee par ce bundle : ecrite dans .pl4y-section a la racine
-# du dossier de sortie. build.mjs (dans pl4y) la lit pour savoir sous quelle URL
-# publier, plutot que de deviner d'apres le nom du dossier.
+# pl4y.store section targeted by this bundle: written to .pl4y-section at the
+# root of the output directory; build.mjs (in pl4y) reads it to know under
+# which URL to publish.
 PL4Y_SECTION="${PL4Y_SECTION:-}"
 OUT="${1:-}"
 SCOPE="${SCOPE:-.}"
@@ -53,23 +49,23 @@ MAX_KB="${MAX_KB:-512}"
 SPLIT_KB="${SPLIT_KB:-400}"
 RENDER_MERMAID="${RENDER_MERMAID:-1}"
 EMBED="${EMBED:-false}"
-# En mode site on rend par defaut : le dossier produit est alors DIRECTEMENT
-# deposable dans pl4y/bundles/ (il contient _site/, du HTML). Sans rendu, ce
-# n'est qu'un projet Quarto, que rien en aval ne sait publier.
-# RENDER=0 pour ne generer que les sources .qmd.
+# In site mode rendering is the default: the produced directory is then
+# directly usable in pl4y/bundles/ (it contains _site/, HTML). Without
+# rendering it is only a Quarto project that nothing downstream can publish.
+# RENDER=0 generates the .qmd sources only.
 if [ "$MODE" = "site" ]; then RENDER="${RENDER:-1}"; else RENDER="${RENDER:-0}"; fi
 EXCLUDE_RE="${EXCLUDE:-subprojects|build|pc-bios|tests/functional|tests/qtest|tests/unit|tests/migration|tests/qemu-iotests|node_modules|\.git|\.pytest_cache}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
-# Le dossier existe avant toute chose : les deux modes ecrivent dedans.
+# The directory exists before anything else: both modes write into it.
 mkdir -p "$OUTDIR" || { echo "ERROR: mkdir '$OUTDIR'" >&2; exit 1; }
 OUTDIR="$(cd "$OUTDIR" && pwd)"
 
-# Slug de section : explicite via PL4Y_SECTION, sinon derive du depot.
-# qemu-calypso est publie sous /calypso/ — d'ou la seule correspondance
-# particuliere.
+# Section slug: explicit via PL4Y_SECTION, otherwise derived from the
+# repository. qemu-calypso is published under /calypso/, hence the single
+# special case.
 if [ -z "$PL4Y_SECTION" ]; then
     case "$(basename "$HERE")" in
         qemu-calypso) PL4Y_SECTION="calypso" ;;
@@ -78,8 +74,8 @@ if [ -z "$PL4Y_SECTION" ]; then
 fi
 printf '%s\n' "$PL4Y_SECTION" > "$OUTDIR/.pl4y-section"
 
-# Sans argument, le .qmd va dans $OUTDIR. Un argument explicite reste
-# respecte : `./full_qmd.sh /tmp/x.qmd` ecrit bien la (et son css/js a cote).
+# Without argument the .qmd goes into $OUTDIR. An explicit argument is
+# honoured: `./full_qmd.sh /tmp/x.qmd` writes there (css/js next to it).
 if [ -z "$OUT" ]; then
     OUT="$OUTDIR/$(basename "$HERE")-full.qmd"
 elif [ -d "$OUT" ]; then
@@ -95,16 +91,15 @@ GITREV="$(git rev-parse --short HEAD 2>/dev/null || echo 'n/a')"
 GITBRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'n/a')"
 NOW="$(date -Iseconds)"
 
-# --- cible + auto-exclusion -------------------------------------------------
-SELF_FIXED=""      # fichier a exclure du scan (mode single)
-SELF_PREFIX=""     # prefixe de dossier a exclure (mode site)
+# --- target + self-exclusion ------------------------------------------------
+SELF_FIXED=""      # file excluded from the scan (single mode)
+SELF_PREFIX=""     # directory prefix excluded from the scan (site mode)
 
-# $OUTDIR est exclu du scan dans LES DEUX modes. Auparavant le mode single
-# n'excluait que le .qmd lui-meme : sketchy.css, sk-filter.html et le
-# repertoire *_files/ du rendu precedent etaient reavales comme des sources a
-# chaque execution, et le bundle grossissait a chaque passe.
+# $OUTDIR is excluded from the scan in BOTH modes, so sketchy.css,
+# sk-filter.html and the *_files/ directory of a previous render are never
+# swallowed as sources.
 SELF_PREFIX="${OUTDIR#"$HERE"/}/"
-[ "$SELF_PREFIX" = "$OUTDIR/" ] && SELF_PREFIX=""   # $OUTDIR hors du depot
+[ "$SELF_PREFIX" = "$OUTDIR/" ] && SELF_PREFIX=""   # $OUTDIR outside the repository
 
 if [ "$MODE" = "site" ]; then
     DEST=""
@@ -174,7 +169,7 @@ _find_into() {
     wc -l < "$TMPD/list"
 }
 
-# ------------------------------------------------------- emission d'un fichier
+# ------------------------------------------------------------- emit one file
 
 _add() {
     local f="$1" lang fence size nlines anchor ext eff
@@ -213,7 +208,7 @@ _add() {
         printf '\n%s\n' "$fence" >> "$DEST"
     fi
 
-    # manifest : section | page | fichier | ancre | lignes | taille
+    # manifest: section | page | file | anchor | lines | size
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$SECNUM" "$(basename "${DEST%.qmd}")" "$f" "$anchor" "$nlines" "$(_human "$size")" \
         >> "$TMPD/manifest"
@@ -221,7 +216,7 @@ _add() {
     PAGE_BYTES=$(( PAGE_BYTES + eff + 400 ))
 }
 
-# ------------------------------------------------------------- mode site : page
+# ------------------------------------------------------------- site mode: page
 
 _new_page() {
     local base
@@ -237,7 +232,7 @@ EOF
     PAGE_BYTES=0
 }
 
-# ----------------------------------------------------------------- une section
+# ----------------------------------------------------------------- one section
 
 _section() {
     SECNUM="$1"; SECTITLE="$2"
@@ -269,7 +264,7 @@ _section() {
     fi
 }
 
-# --------------------------------------------------------------------- le CSS
+# --------------------------------------------------------------------- the CSS
 
 _write_css() {
     cat > "$1" <<'SKETCHYCSS'
@@ -397,7 +392,7 @@ FILTERJS
 : > "$TMPD/manifest"
 : > "$TMPD/pages"
 
-# =========================================================== MODE SINGLE ======
+# =========================================================== SINGLE MODE =====
 
 if [ "$MODE" != "site" ]; then
 
@@ -450,7 +445,7 @@ _write_filter_js "$(dirname "$OUT")/sk-filter.html"
 
 fi
 
-# ============================================================= MODE SITE ======
+# ============================================================= SITE MODE =====
 
 if [ "$MODE" = "site" ]; then
     _write_css "$OUTDIR/sketchy.css"
@@ -466,11 +461,11 @@ _section 4 "4 - Sources"       ''                                   '*.c' '*.cpp
 _section 5 "5 - Python"        '/tests/|test_.*\.py$|conftest\.py$' '*.py'
 _section 6 "6 - Shell"         ''                                   '*.sh' '*.bash'
 
-# ------------------------------------------------------- index + config site --
+# ------------------------------------------------------- index + site config --
 
 if [ "$MODE" = "site" ]; then
 
-    # index.qmd : table globale, liens inter-pages
+    # index.qmd: global table, cross-page links
     {
         cat <<EOF
 ---

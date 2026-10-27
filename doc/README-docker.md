@@ -11,7 +11,7 @@ several operators run side by side on one host ([README-ss7](README-ss7.md)).
 sudo docker pull ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest
 git clone https://github.com/bbaranoff/osmo-operator
 cd osmo-operator
-sudo ./launch/start-docker.sh
+sudo ./launch/start-docker.sh          # or: sudo ./start.sh --docker
 ```
 
 Then enter the container and bring the stack up:
@@ -40,9 +40,10 @@ Everything `start-native.sh` does is the same as in native mode:
 ```bash
 sudo ./build.sh                # build osmocom-nitb (apt-fast, compose v2, .deb cache)
 sudo ./build.sh --no-cache     # recompile everything and rewrite the cache
-sudo ./build.sh --lite         # without the workshops
+sudo ./build.sh --lite         # without the workshops (Dockerfile.lite)
 sudo ./build.sh --stp          # osmocom-stp: the inter-STP alone (Dockerfile.stp)
-sudo ./build.sh --arch=arm64   # cross-build, see README-arm
+sudo ./build.sh --build-run    # the osmocom-run update layer (Dockerfile.run)
+sudo ./build.sh --arch=arm64   # cross-build (also --arm), see README-arm
 ```
 
 ### The build is a graph, not a chain
@@ -89,13 +90,13 @@ sudo dpkg -i packaging/dist/*.deb  # refuses to install over a git clone at the 
 
 ```bash
 sudo ./compose.sh build [--no-cache] [--lite] [--stp]
-sudo ./compose.sh up [--ms 2] [--phy faketrx]    # hub + osmo-operator-1, HLR populated
-sudo ./compose.sh down | ps | logs | shell
+sudo ./compose.sh up [--ms 2] [--phy faketrx] [--no-run]   # hub + osmo-operator-1, HLR populated
+sudo ./compose.sh down | ps | logs | shell | debs
 ```
 
 ## PHY modes (mobile side, in a container)
 
-Selected through `PHY_MODE` inside the container before calling `run.sh`:
+Selected through `PHY_MODE` inside the container before calling `scripts/run.sh`:
 
 | `PHY_MODE` | stack | use |
 |---|---|---|

@@ -1,4 +1,4 @@
-# 00-prereqs - la machine peut-elle accueillir cette installation ?
+# 00-prereqs - can this machine host the installation? (apt-get, git, free disk space)
 INST_REGISTER prereqs "Prerequis du systeme"
 INST_ROOT[prereqs]=0
 

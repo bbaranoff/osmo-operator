@@ -1,5 +1,6 @@
-# adresses.txt - "rue, ville" par ligne. start-docker.sh prefixe un numero tire au
-# hasard. Rien de tout cela n'existe non plus.
+# adresses.txt - fake subscriber addresses, one "street, town" per line.
+# launch/start-docker.sh prefixes a random house number. Blank lines and lines
+# starting with # are ignored. None of these places exist.
 rue des Ondes Courtes, Fontaine-sur-Onde
 impasse du Burst, Val-de-Trame
 allee Erlang, Bourg-la-Cellule

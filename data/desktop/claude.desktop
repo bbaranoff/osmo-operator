@@ -1,3 +1,5 @@
+# claude.desktop - launcher: Claude Code, the terminal AI assistant.
+# Runs /usr/local/bin/osmo-claude-anim.
 [Desktop Entry]
 Type=Application
 Name=Claude

@@ -1,18 +1,14 @@
 import QtQuick 2.0;
 import calamares.slideshow 1.0;
 
-// Le diaporama pendant la copie. Deux captures du banc en marche
-// (slide-banc.png : le bureau, le tableau de bord et tmux ; slide-calypso-gdb.png :
-// gdb attache au firmware Calypso emule) entre des diapos de texte qui
-// reprennent la fiche de l image (osmo-operator-desktop.iso v0.1-9) : ce que
-// la machine est en train de recevoir, poste par poste.
-// [2026-09-03] Plus de compte osmocom sur le disque : la diapo "comptes" dit
-// ce que l installation fait vraiment (voir modules/shellprocess-osmo.conf).
-// [2026-10-01] Fiche v0.1-6 : base, taille, 2G, baseband, 4G, telephone,
-// bureau, audio, installation. A refaire a chaque tag.
-// [2026-10-24] Fiche v0.1-9 (.github/release-notes.md) : BTS classique par
-// defaut, Magnetite, Calypso en radio de BTS, banc-rssi, vocodeur, rien de
-// telecom au boot, start.sh. Taille et fichiers non remesures : retires.
+// show.qml - Calamares slideshow shown while the system is being copied.
+// Two screenshots of the running bench (slide-banc.png: desktop, dashboard
+// and tmux; slide-calypso-gdb.png: gdb attached to the emulated Calypso
+// firmware) between text slides that summarise the image release notes
+// (osmo-operator-desktop.iso v0.1-9, .github/release-notes.md): what the
+// machine is receiving, component by component. Update at every tag.
+// The "accounts" slide describes what the installation really does
+// (see modules/shellprocess-osmo.conf): no osmocom account on the disk.
 Presentation {
     id: presentation
     Timer {
@@ -21,7 +17,7 @@ Presentation {
         repeat: true
         onTriggered: presentation.goToNextSlide()
     }
-    // Le fond du bureau live, copie en welcome.jpg par iso_modules/85-installeur-bureau.sh.
+    // Live desktop wallpaper, copied to welcome.jpg by iso_modules/85-installeur-bureau.sh.
     Slide {
         Image {
             anchors.fill: parent

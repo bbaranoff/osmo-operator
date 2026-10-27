@@ -10,57 +10,42 @@ Two families of tests:
 
 ← [README](../README.md) · Details: [wiki/Resultats](../wiki/Resultats.md), [wiki/Start-native](../wiki/Start-native.md)
 
-## Reference run: `tout-en-un-20261016-164539.qmd`
+## Reference run
 
-The current reference is
+The reference report is
 [`tout-en-un-20261016-164539.qmd`](https://github.com/bbaranoff/tests/blob/main/tout-en-un-20261016-164539.qmd),
-a Quarto run report of two `banc-max.sh` runs in **DSP mode** (layer 1 = real TI
-mask ROM). A healthy bench must reproduce these lines. Render it with
-`quarto render tout-en-un-20261016-164539.qmd` (HTML, self-contained).
+a Quarto report of `banc-max.sh` in **DSP mode** (layer 1 = real TI mask ROM).
+Render it with `quarto render tout-en-un-20261016-164539.qmd` (self-contained
+HTML). A healthy bench reproduces these results: **27/27 rungs, 0 failures**,
+14 signal-path steps handled by the ROM and none on the host.
 
-| | run 2026-10-04 14:04 | run 2026-10-16 16:32 (reference) |
+| # | rung | expected result |
 |---|---|---|
-| Ladder | **25/25**, 0 failures | **27/27**, 0 failures |
-| Layer 1 | `--dsp` | `--dsp` |
-| Coverage (layer 1) | 33 handled, 1 degraded, 1 not handled, 2 not observed | 31 handled, 1 degraded, 1 not handled, 4 not observed |
-| Signal path | 7 ROM, 7 host | **14 ROM, 0 host**, 0 mixed |
-| Skipped | 4g, multi, liens, pytest-legacy | data, ms2, 4g, multi, liens, pytest-legacy |
+| 1 | demarrage | full stop, then `start-native.sh --dsp`: core up |
+| 2 | coeur | processes + VTY 4258 4239 4254 4242 4243 |
+| 3 | bts | osmo-bts-trx, VTY 4241 |
+| 4 | services | asterisk 5060, sip-connector, `/tmp/sendmt_socket` |
+| 5 | ss7 | `ss7_check` with no failure, `diag-stp-operator` |
+| 6 | checks-existants | `global_check`, `call-diag`, `audio-diag` with no failure |
+| 7 | couche1 | `c54x_exe --arm`, `qemu-system-arm`, `osmocon`, `pont_dsp.py` |
+| 8 | mobile | VTY 4247, IMSI 001010001000001 |
+| 9 | camp | ARFCN 514 (DCS), CGI 001-01-1-6001 |
+| 10 | attache | MM idle normal service, in the VLR, MSISDN 100101 |
+| 11 | sms-mo | SMS to 100102, RP-ACK |
+| 12 | sms-mt | MSC delivered 1 → 2 |
+| 13 | ussd | `*#100#` → 100101, `*#101#` → IMSI |
+| 14 | appel | CC ACTIVE |
+| 15 | voix | 1 kHz tone comes back, energy concentrated in 950–1050 Hz |
+| 16–20 | data, ms2, 4g, multi, liens | skipped unless `--data`, `--ms2`, `--4g`, `--multi` |
+| 21–24 | pytest infra / couche1 / mobile / reseau | passed |
+| 25 | pytest-legacy | skipped unless `--legacy` |
+| 26 | emulateur | ISA examples checked against the reference, no BC divergence |
+| 27 | couverture | layer-1 coverage, see below |
 
-The 2026-10-16 ladder, rung by rung (quoted from `verdict.txt` in the report):
-
-| # | rung | result | evidence |
-|---|---|---|---|
-| 1 | demarrage | OK | full stop, then `start-native.sh --dsp`: core up in 16 s |
-| 2 | coeur | OK | processes + VTY 4258 4239 4254 4242 4243 |
-| 3 | bts | OK | osmo-bts-trx, VTY 4241 |
-| 4 | services | OK | asterisk 5060, sip-connector, `/tmp/sendmt_socket` |
-| 5 | ss7 | OK | `ss7_check` 7 ✓ 0 ✗, `diag-stp-operator` |
-| 6 | checks-existants | OK | `global_check`, `call-diag`, `audio-diag` with no failure |
-| 7 | couche1 | OK | `c54x_exe --arm`, `qemu-system-arm`, `osmocon`, `pont_dsp.py` |
-| 8 | mobile | OK | VTY 4247, IMSI 001010001000001 |
-| 9 | camp | OK | after 1 s, ARFCN 514 (DCS), CGI 001-01-1-6001 |
-| 10 | attache | OK | MM idle normal service, in the VLR, MSISDN 100101 |
-| 11 | sms-mo | OK | SMS to 100102, RP-ACK |
-| 12 | sms-mt | OK | MSC delivered 1 → 2 (1 s) |
-| 13 | ussd | OK | `*#100#` → 100101, `*#101#` → IMSI |
-| 14 | appel | OK | CC ACTIVE after 3 s |
-| 15 | voix | OK | 1 kHz tone back after 0.54 s, +59.7 dB over silence, 100 % of the energy in 950–1050 Hz |
-| 16–20 | data, ms2, 4g, multi, liens | skipped | need `--data`, `--ms2`, `--4g`, `--multi` |
-| 21–24 | pytest infra / couche1 / mobile / reseau | OK | 11 / 12 (+11 skipped) / 10 / 6 passed |
-| 25 | pytest-legacy | skipped | needs `--legacy` |
-| 26 | emulateur | OK | 210 ISA examples: 207 ok, 3 FAIL, 22 not assembled; no BC divergence |
-| 27 | couverture | OK | see below |
-
-Layer-1 coverage on the same run (`couverture.txt`): every step from FCCH
-detection to CHANNEL RELEASE is **handled by the ROM**, including A5 on the
-coprocessor and uplink TCH speech. The open points are:
-
-| function | verdict |
-|---|---|
-| TCH/F downlink quality (`B_BFI`) | DEGRADED: 26 proofs, 46 symptoms (really bad frames and FACCH steals, masked by `layer1.highram_patched`) |
-| frequency hopping | NOT HANDLED (outside this setup) |
-| MVKD/MVDK guard, uplink speech ring, host vocoding | NOT OBSERVED |
-| DSP real-time margin | handled: 4.62 ms frame, worst DSP 3.37 ms, 0/1000 frames over budget |
+Layer-1 coverage (`couverture.txt`): every step from FCCH detection to CHANNEL
+RELEASE is **handled by the ROM**, including A5 on the coprocessor and uplink
+TCH speech; the DSP stays within the 4.62 ms frame budget. Open points are
+listed under [Known issues](#known-issues).
 
 ## The ladder: `banc-max.sh`
 
@@ -113,7 +98,7 @@ rendered as Mermaid diagrams.
 
 ```bash
 ./tout-en-un.py                                 # /opt/GSM/tests + the last /root/banc-max-*
-./tout-en-un.py /root/banc-max-20261016-163229  # a given run
+./tout-en-un.py /root/banc-max-<date>           # a given run
 SORTIE=/tmp/run.qmd EXCLURE="banc-max-*" ./tout-en-un.py
 ```
 
@@ -179,3 +164,12 @@ navigation/test-console.sh      # every command of the SS7 console, with a repor
 The GitHub workflows (`.github/workflows/`) build the images and the ISO. They
 do not run the radio bench. The ladder needs a full stack with QEMU and is run
 on a real machine.
+
+## Known issues
+
+- TCH/F downlink quality (`B_BFI`) is DEGRADED in the coverage report: really
+  bad frames and FACCH steals, masked by `layer1.highram_patched`.
+- Frequency hopping is NOT HANDLED (outside this setup).
+- MVKD/MVDK guard, uplink speech ring and host vocoding are NOT OBSERVED by the
+  coverage rung.
+- 3 of the emulator rung's ISA examples fail and some are not assembled.

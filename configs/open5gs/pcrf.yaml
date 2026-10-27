@@ -1,3 +1,8 @@
+# pcrf.yaml - Open5GS PCRF (Gx policy, 127.0.0.9) for the lab EPC.
+# Installed by tools/osmo-lte-install.sh --configs into $PREFIX/etc/open5gs;
+# the /opt/LTE/open5gs/install prefix is substituted at install time (OPEN5GS_PREFIX).
+# Upstream Open5GS template: the commented blocks below are the upstream examples.
+
 db_uri: mongodb://localhost/open5gs
 logger:
   file:

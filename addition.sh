@@ -1,58 +1,58 @@
 #!/bin/bash
 # =============================================================================
-# addition.sh - LES SUPPLEMENTS QUI NE SONT PAS DANS L ISO
+# addition.sh - supplements that are not shipped in the ISO
 #
-# Jumelle d update.sh, et lancee comme elle : une icone GTK sur le bureau
-# (osmo-addition-anim), ou a la main.
+# Companion to update.sh, launched the same way: a GTK desktop icon
+# (osmo-addition-anim), or by hand.
 #
-# POURQUOI DOCKER N EST PAS DANS L IMAGE
-# L ISO est un noeud NATIF : elle porte le banc complet sans conteneur, et
-# n a donc besoin de docker pour rien. L y embarquer couterait ~500 Mo et le
-# demon tournerait en permanence sur un banc qui ne s en sert pas - avec son
-# bridge, ses regles iptables et sa MASQUERADE, au milieu d une machine dont
-# tout l interet est de router du GSM a la main.
-# Docker ne sert qu a UN scenario : le multi-operateur (start-multi.sh), ou les
-# operateurs 2 et 3 et l inter-STP tournent en conteneurs a cote du natif.
-# C est un supplement, il s installe comme tel - ici.
+# Why docker is not in the image:
+# The ISO is a NATIVE node: it carries the full bench without containers, so
+# it needs docker for nothing. Embedding it would cost ~500 MB and the daemon
+# would run permanently on a bench that does not use it - with its bridge,
+# its iptables rules and its MASQUERADE, on a machine whose whole point is to
+# route GSM by hand.
+# Docker serves only ONE scenario: the multi-operator (start-multi.sh), where
+# operators 2 and 3 and the inter-STP run in containers beside the native one.
+# It is a supplement, installed as such - here.
 #
-# Usage :
-#   sudo ./addition.sh            fenetre GTK : "Docker container and SS7
-#                                 multioperator", puis une seconde fenetre en
-#                                 boutons radio : image TELECHARGEE ou COMPILEE
-#                                 (exclusif). osmocom-run est derivee dans la
-#                                 foulee, puis osmo-multi.service DEMARRE : en
-#                                 sortant, osmo-operator-2, -3 et le hub
-#                                 tournent (OSMO_MULTI_START=0 : poser sans
-#                                 lancer).
-#   sudo ./addition.sh --multi    le meme, sans la fenetre : image TELECHARGEE
-#                                 (docker pull ghcr.io/<depot>/osmocom-nitb,
-#                                 taguee osmocom-nitb)
+# Usage:
+#   sudo ./addition.sh            GTK window: "Docker container and SS7
+#                                 multioperator", then a second window with
+#                                 radio buttons: DOWNLOADED or BUILT image
+#                                 (exclusive). osmocom-run is derived right
+#                                 after, then osmo-multi.service STARTS: on
+#                                 exit, osmo-operator-2, -3 and the hub are
+#                                 running (OSMO_MULTI_START=0: install without
+#                                 launching).
+#   sudo ./addition.sh --multi    the same, without the window: DOWNLOADED
+#                                 image (docker pull ghcr.io/<repo>/osmocom-nitb,
+#                                 tagged osmocom-nitb)
 #   sudo ./addition.sh --multi-build
-#                                 le meme. [2026-09-13] Ce drapeau ne COMPILE
-#                                 plus : il tire lui aussi l image du depot,
-#                                 que la CI publie a partir du meme Dockerfile.
-#                                 Pour compiler vraiment (Dockerfile modifie,
-#                                 rien de publie) :
+#                                 the same. This flag no longer COMPILES: it
+#                                 also pulls the image from the repo, which
+#                                 the CI publishes from the same Dockerfile.
+#                                 To really compile (modified Dockerfile,
+#                                 nothing published):
 #                                   OSMO_ADDITION_BUILD_LOCAL=1 ... --multi-build
-#   sudo ./addition.sh --docker   le moteur de conteneurs seul   (depannage)
-#   sudo ./addition.sh --image    l image operateur seule, telechargee (depannage)
-#   sudo ./addition.sh --build    l image operateur seule, du depot   (depannage)
-#   sudo ./addition.sh --opencl   la pile OpenCL seule (calcul GPU)
-#   sudo ./addition.sh --claude   Claude Code (CLI de l assistant) seul
-#   sudo ./addition.sh --extras   Jeux + media (Doom, Quake III, Kodi,
+#   sudo ./addition.sh --docker   the container engine only   (troubleshooting)
+#   sudo ./addition.sh --image    the operator image only, downloaded (troubleshooting)
+#   sudo ./addition.sh --build    the operator image only, from the repo   (troubleshooting)
+#   sudo ./addition.sh --opencl   the OpenCL stack only (GPU compute)
+#   sudo ./addition.sh --claude   Claude Code (assistant CLI) only
+#   sudo ./addition.sh --extras   Games + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
-#   sudo ./addition.sh --gnuarm   la chaine historique arm-elf-gcc 4.5.2 (/root/gnuarm),
-#                                 copiee de l image Docker osmocom-bb-trx
+#   sudo ./addition.sh --gnuarm   the legacy arm-elf-gcc 4.5.2 toolchain (/root/gnuarm),
+#                                 copied from the osmocom-bb-trx Docker image
 #   sudo ./addition.sh --magnetite Wine + TI TMS470, FreeCalypso Magnetite C139
-#                                 (sources, patchs du banc, image flash)
-#   sudo ./addition.sh --trx      osmocom-bb-trx : image Docker publiee + firmware
-#                                 trx (TX) compile avec gnuarm
-#   sudo ./addition.sh --calypso-fw osmocom-bb du banc recompile avec gnuarm (cd src && make) :
-#                                 layer1 GPRS, rssi (OSMO_FW_INSTALLER=1 : les poser)
+#                                 (sources, bench patches, flash image)
+#   sudo ./addition.sh --trx      osmocom-bb-trx: published Docker image + trx
+#                                 (TX) firmware built with gnuarm
+#   sudo ./addition.sh --calypso-fw bench osmocom-bb rebuilt with gnuarm (cd src && make):
+#                                 layer1 GPRS, rssi (OSMO_FW_INSTALLER=1: install them)
 #   sudo ./addition.sh --fernvale fernly, fernvale-nuttx, layer1 MTK (MT6260)
-#   sudo ./addition.sh --simcom   documentation et SDK SIMCom (~3,4 Go)
-#   sudo ./addition.sh --firmwares les six precedents
-#   sudo ./addition.sh --status   dit seulement ce qui est present
+#   sudo ./addition.sh --simcom   SIMCom documentation and SDK (~3.4 GB)
+#   sudo ./addition.sh --firmwares the previous six
+#   sudo ./addition.sh --status   only reports what is present
 # =============================================================================
 set -uo pipefail
 
@@ -61,42 +61,36 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MULTI_CONF="${MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
-# NOM DE L IMAGE : osmocom-run, PAS "osmo-operator".
-# build.sh produit osmocom-nitb (Dockerfile, ~11 Go) puis Dockerfile.run en
-# derive osmocom-run, et c est CELLE-LA que start-docker.sh lance - verifie sur le
-# banc : `docker inspect osmo-operator-1 --format {{.Config.Image}}` rend
-# osmocom-run. Chercher "osmo-operator" (le nom du DEPOT, pas de l image)
-# rendait la sonde toujours negative : "image absente" en permanence, et une
-# recompilation Osmocom de 40 minutes relancee pour rien a chaque passage.
+# Image name: osmocom-run, NOT "osmo-operator". build.sh produces osmocom-nitb
+# (Dockerfile, ~11 GB), then Dockerfile.run derives osmocom-run, which is the
+# one start-docker.sh runs (docker inspect osmo-operator-1 --format
+# {{.Config.Image}} returns osmocom-run). "osmo-operator" is the REPO name, not
+# the image name, so probing for it would always report the image as absent.
 MULTI_IMAGE="${MULTI_IMAGE:-osmocom-run}"
-# IMAGE DE BASE ET SON ORIGINE. osmocom-nitb est ce que build.sh COMPILE
-# (~40 min sur une bonne machine, 1h23 sur un runner). On la TIRE et on la tague
-# osmocom-nitb : start-docker.sh en derive ensuite osmocom-run via Dockerfile.run
-# exactement comme apres un build local.
+# Base image and its origin. osmocom-nitb is what build.sh compiles. It is
+# PULLED and tagged osmocom-nitb; start-docker.sh then derives osmocom-run from
+# it via Dockerfile.run, exactly as after a local build.
 #
-# [2026-09-13] LA SOURCE EST GHCR, PLUS DOCKER HUB. .github/workflows/docker.yml
-# publie l'image a chaque push sur ghcr.io/<depot>/osmocom-nitb - c'est la MEME
-# pile, construite par la CI a partir du MEME Dockerfile, et elle suit le depot
-# au lieu de dependre d'un compte Hub tenu a la main. bastienbaranoff/norf_gsm
-# reste joignable en posant HUB_IMAGE.
-#   :latest      la derniere publiee (defaut)
-#   :base-<sha>  une empreinte de contexte precise, si on veut figer
+# The source is GHCR, not Docker Hub: .github/workflows/docker.yml publishes
+# the image on every push to ghcr.io/<repo>/osmocom-nitb - the SAME stack, built
+# by the CI from the SAME Dockerfile, following the repo instead of a manually
+# maintained Hub account. bastienbaranoff/norf_gsm stays reachable via HUB_IMAGE.
+#   :latest      the latest published (default)
+#   :base-<sha>  a precise context fingerprint, to pin
 BASE_IMAGE="${BASE_IMAGE:-osmocom-nitb}"
 HUB_IMAGE="${HUB_IMAGE:-ghcr.io/bbaranoff/osmo-operator/osmocom-nitb:latest}"
 
-# ── _trust_desktop : rendre un raccourci du bureau VISIBLE par DING ──────────
-# DING n affiche un .desktop avec son nom et son icone que s il est executable,
-# possede par l utilisateur du bureau, ET porteur de metadata::trusted. Cet
-# attribut ne vit PAS dans le fichier : il est ecrit dans les metadonnees gvfs
-# de la SESSION, donc gio doit parler au bus de CET utilisateur.
+# ── _trust_desktop: make a desktop shortcut VISIBLE to DING ─────────────────
+# DING shows a .desktop with its name and icon only if it is executable, owned
+# by the desktop user, AND carries metadata::trusted. That attribute does NOT
+# live in the file: it is written in the SESSION's gvfs metadata, so gio must
+# talk to THAT user's bus.
 #
-# LE PIEGE QUI RENDAIT L ICONE INVISIBLE. addition.sh est lance par
-# `pkexec env DISPLAY=... XAUTHORITY=... ` (osmo-addition-anim) : pkexec NETTOIE
-# l environnement et ne transmet ni XDG_RUNTIME_DIR ni DBUS_SESSION_BUS_ADDRESS.
-# `gio set metadata::trusted` n avait alors aucun bus a joindre, echouait en
-# silence (2>/dev/null), et le fichier restait pose mais jamais approuve - donc
-# absent du bureau. On reconstruit l env a partir de l UID proprietaire du
-# bureau et on lance gio SOUS cet utilisateur.
+# addition.sh is launched by `pkexec env DISPLAY=... XAUTHORITY=... `
+# (osmo-addition-anim); pkexec CLEANS the environment and passes neither
+# XDG_RUNTIME_DIR nor DBUS_SESSION_BUS_ADDRESS, so `gio set metadata::trusted`
+# has no bus to reach. We rebuild the env from the desktop owner's UID and run
+# gio AS that user.
 _trust_desktop() {
     local f="$1" home="$2" pos="${3:-}" owner uid bus
     [ -f "$f" ] || return 1
@@ -105,10 +99,10 @@ _trust_desktop() {
     chown "$owner" "$f" 2>/dev/null || true
     chmod +x "$f" 2>/dev/null || true
     bus="/run/user/$uid/bus"
-    # Session active pour ce proprietaire : on pose les attributs TOUT DE SUITE.
-    # Sinon (pas de bus), osmo-trust-desktop (autostart) posera trusted au
-    # prochain login - l icone apparait alors sans intervention.
-    # pos "x,y" (optionnel) : place l icone sur le bureau via DING.
+    # Active session for this owner: set the attributes RIGHT NOW. Otherwise (no
+    # bus), osmo-trust-desktop (autostart) sets trusted at the next login, and
+    # the icon then appears without intervention.
+    # pos "x,y" (optional): place the icon on the desktop via DING.
     if [ -S "$bus" ] && command -v runuser >/dev/null 2>&1; then
         runuser -u "$owner" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
@@ -120,27 +114,19 @@ _trust_desktop() {
     return 0
 }
 
-# ── LES BUREAUX A SERVIR : /root ET CELUI DE LA SESSION GRAPHIQUE ────────────
-# [2026-09-05] LE BUREAU DE L UTILISATEUR ETAIT MANQUE, ET TOUJOURS. Les deux
-# blocs qui posent des icones construisaient leur liste ainsi :
-#     _homes=(/root)
-#     [ -n "$SUDO_USER" ] && _homes+=("$(getent passwd "$SUDO_USER" ...)")
-# Or SUDO_USER n existe QUE sous sudo. Ces scripts sont lances par une icone,
-# donc par PKEXEC (qui pose PKEXEC_UID, pas SUDO_USER), ou par une unite
-# systemd, ou depuis un shell root - trois cas ou la variable est vide. La
-# liste restait donc (/root), tout atterrissait dans /root/Desktop, et le
-# compte cree par l installeur ouvrait sa session sur un bureau NU. C est la
-# meme confusion racine/session qui rendait les boutons de l encart inertes.
-#
-# On cherche donc le compte de la SESSION GRAPHIQUE, dans cet ordre :
+# ── Desktops to serve: /root AND the graphical session's ────────────────────
+# Find the GRAPHICAL SESSION account, in this order:
+#   0. OSMO_COMPTE: the account created by the installer, passed by
+#      osmo-supplements-firstboot.sh. At first boot nobody is logged in yet:
+#      without it, neither docker group nor icon for that account.
 #   1. SUDO_USER   (sudo)
-#   2. PKEXEC_UID  (l icone, pkexec)
-#   3. le proprietaire d un bus de session actif (/run/user/*/bus) - systemd,
-#      shell root, autologin : c est la seule preuve qu une session existe.
-# [2026-10-24] 0. OSMO_COMPTE : le compte cree par l installeur, passe par
-#    osmo-supplements-firstboot.sh. Au premier demarrage personne n est encore
-#    connecte : sans lui, ni groupe docker ni icone pour ce compte.
-# /root reste TOUJOURS servi : la cle vive ouvre sa session en root.
+#   2. PKEXEC_UID  (the icon, pkexec)
+#   3. the owner of an active session bus (/run/user/*/bus) - systemd, root
+#      shell, autologin: the only proof that a session exists.
+# SUDO_USER exists ONLY under sudo, and these scripts are launched by an icon
+# (pkexec, which sets PKEXEC_UID), a systemd unit, or a root shell - so relying
+# on SUDO_USER alone would leave the installer's account with a bare desktop.
+# /root is ALWAYS served: the live key opens its session as root.
 _comptes_session() {
     local u uid bus
     for u in "${OSMO_COMPTE:-}" "${SUDO_USER:-}" \
@@ -167,18 +153,12 @@ _bureau_homes() {
     printf '%s\n' "${homes[@]}"
 }
 
-# ── LE COMPTE DE LA SESSION DOIT POUVOIR PARLER A DOCKER ────────────────────
-# [2026-09-05] MESURE SUR LE BANC : le Conky affichait « banc a l arret » et ses
-# sections Coeur GSM / Radio / Abonnes VIDES pendant que les trois operateurs
-# tournaient. Cause : le Conky et l encart tournent sous le compte de la
-# SESSION, qui n etait dans aucun groupe docker ; chaque sonde
-# (`docker exec ... pgrep`) rendait « permission denied while trying to connect
-# to the docker API », donc « arrete ». tools/osmo-op.sh decrit deja ce piege -
-# une sonde qui confond « absent » et « invisible » est une sonde qui ment - et
-# son commentaire affirmait que le compte etait « ajoute au groupe docker par
-# ailleurs (users.conf, addition.sh) ». Ce code n existait nulle part.
-# Le groupe ne prend qu au prochain login : on le dit plutot que de laisser
-# croire a une panne.
+# ── The session account must be able to talk to docker ──────────────────────
+# The Conky and the desktop panel run under the SESSION account. If it is in no
+# docker group, every probe (`docker exec ... pgrep`) returns "permission denied
+# while trying to connect to the docker API", so the bench reads as stopped even
+# while the operators run. Add the account to the docker group; it only takes
+# effect at the next login, which is reported rather than left looking broken.
 _docker_groupe_session() {
     getent group docker >/dev/null 2>&1 || return 0
     local u
@@ -230,23 +210,20 @@ etat() {
     [ "$ok_d" = "1" ] && docker info >/dev/null 2>&1 && ok_r=1
     [ "$ok_r" = "1" ] && docker image inspect "$MULTI_IMAGE" >/dev/null 2>&1 && ok_i=1
     [ -f "$MULTI_CONF" ] && ok_m=1
-    # [2026-10-01] CE QUE L ICONE EXIGE, L ETAT LE MONTRE. launch.sh --multi
-    # refuse de demarrer sans l unite osmo-multi.service, sans start-multi.sh
-    # et sans la topologie - et le dit par notification. Avant, cet etat ne
-    # regardait que docker, l image et la topologie : « tout est vert » ici et
-    # « unite absente » au clic, sur la meme machine (depot deroule a la main,
-    # unite jamais posee). Les memes conditions, lues au meme endroit.
+    # Report the same conditions launch.sh --multi requires: the
+    # osmo-multi.service unit, start-multi.sh and the topology. Read here what
+    # the icon checks at click time.
     systemctl cat osmo-multi.service >/dev/null 2>&1 && ok_u=1
     [ -f /usr/share/applications/osmo-multi.desktop ] && ok_k=1
     local ok_cl=0
-    # clinfo qui rend au moins une plateforme : c est la seule preuve qu une
-    # pile OpenCL est UTILISABLE. Les paquets poses ne prouvent rien - un ICD
-    # sans pilote derriere laisse "Number of platforms 0".
+    # clinfo returning at least one platform is the only proof the OpenCL stack
+    # is USABLE. Installed packages prove nothing - an ICD with no driver behind
+    # it leaves "Number of platforms 0".
     command -v clinfo >/dev/null 2>&1 \
         && [ "$(clinfo -l 2>/dev/null | grep -c Platform)" -gt 0 ] && ok_cl=1
     local ok_cc=0
-    # claude qui repond --version : la seule preuve qu il est UTILISABLE. Le
-    # binaire pose sans node derriere (installation npm cassee) sort en erreur.
+    # claude answering --version is the only proof it is USABLE. The binary
+    # installed without node behind it (broken npm install) exits with an error.
     command -v claude >/dev/null 2>&1 \
         && claude --version >/dev/null 2>&1 && ok_cc=1
     [ "$ok_d" = "1" ] && echo -e "  docker installe      : ${GREEN}oui${NC}"      || echo -e "  docker installe      : ${YELLOW}non${NC}"
@@ -258,7 +235,7 @@ etat() {
     [ -x "$DIR/launch/start-multi.sh" ] || echo -e "  start-multi.sh       : ${YELLOW}absent de $DIR${NC}"
     [ "$ok_cl" = "1" ] && echo -e "  OpenCL               : ${GREEN}operationnel${NC}" || echo -e "  OpenCL               : ${YELLOW}absent${NC}"
     [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
-    # [2026-10-23] les firmwares telephone (tools/osmo-firmwares-install.sh)
+    # phone firmwares (tools/osmo-firmwares-install.sh)
     _fw_etat() { [ -e "$2" ] && echo -e "  $(printf '%-20s' "$1") : ${GREEN}present${NC}" || echo -e "  $(printf '%-20s' "$1") : ${YELLOW}absent${NC}"; }
     _fw_etat "gnuarm"            /root/gnuarm/install/bin/arm-elf-gcc
     _fw_etat "Magnetite C139"    /opt/GSM/firmware/magnetite/c139-flash.img
@@ -274,17 +251,16 @@ etat() {
 
 [ "$STATUS_ONLY" = "1" ] && { etat; exit 0; }
 
-# ── UNITES osmo-* : User=osmocom -> compte de la SESSION ─────────────────────
-# Les .service amont (osmo-bsc/bts-trx/bts-virtual/msc) posent User=osmocom /
-# Group=osmocom. En natif post-live le compte osmocom n'existe pas (l'image le
-# supprime, cf iso_modules/52-qemu.sh) : les demons meurent en 217/USER avec
-# Restart=always -> crash-loop bloquant et MUET (rien dans leur propre journal),
-# et run.sh abandonne la sequence ("OsmoMSC started but never ready"). On rend
-# ces unites au compte de la SESSION (celui de l'installeur, meme racine/session
-# que le reste d'addition.sh) via un drop-in /etc/systemd/system/<unit>.d/ - on
-# NE touche PAS au .service amont qu'un update de paquet reecrirait. A defaut de
-# session (build en chroot) : root, comme 52-qemu.sh. Miroir : update.sh
-# (rattrapage machines deja installees) et 52-qemu.sh (image live -> root).
+# ── osmo-* units: User=osmocom -> the SESSION account ───────────────────────
+# The upstream .service files (osmo-bsc/bts-trx/bts-virtual/msc) set
+# User=osmocom / Group=osmocom. In native post-live the osmocom account does
+# not exist (the image removes it, see iso_modules/52-qemu.sh): the daemons die
+# with 217/USER and Restart=always -> a blocking, SILENT crash-loop, and run.sh
+# aborts ("OsmoMSC started but never ready"). Reassign these units to the
+# SESSION account via a drop-in /etc/systemd/system/<unit>.d/ - do NOT touch the
+# upstream .service that a package update would rewrite. With no session (chroot
+# build): root, like 52-qemu.sh. Mirrored by update.sh (for already-installed
+# machines) and 52-qemu.sh (live image -> root).
 _osmo_unites_user_session() {
     [ "$(id -u)" -eq 0 ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
@@ -302,13 +278,13 @@ _osmo_unites_user_session() {
     done
     [ "$n" -gt 0 ] || return 0
     systemctl daemon-reload 2>/dev/null || true
-    # les repertoires d'etat/log osmocom appartenaient a root/osmocom : sans ce
-    # chown le demon (desormais User=$u) ne peut pas creer /var/log/osmocom/*.log
-    # -> "Unable to create file" -> parse du .cfg en echec -> status=1.
+    # The osmocom state/log directories are owned by root/osmocom: without this
+    # chown the daemon (now User=$u) cannot create /var/log/osmocom/*.log
+    # -> "Unable to create file" -> .cfg parse fails -> status=1.
     for _d in /var/log/osmocom /var/lib/osmocom /run/osmocom; do
         [ -e "$_d" ] && chown -R "$u:$grp" "$_d" 2>/dev/null || true
     done
-    # couper un crash-loop en cours : relancer les unites qui tournaient/bouclaient
+    # break any running crash-loop: restart the units that were running/looping
     for base in osmo-msc osmo-bsc osmo-bts-trx osmo-bts-virtual; do
         systemctl cat "$base" >/dev/null 2>&1 || continue
         systemctl reset-failed "$base" 2>/dev/null || true
@@ -319,39 +295,26 @@ _osmo_unites_user_session() {
 }
 _osmo_unites_user_session
 
-# ── LE CHOIX ────────────────────────────────────────────────────────────────
-# Lancee par l icone, cette fenetre est la SEULE interface : sans elle, un
-# double-clic partait droit sur un apt-get de plusieurs centaines de Mo et une
-# compilation Osmocom, sans rien demander.
+# ── The choice ──────────────────────────────────────────────────────────────
+# Launched by the icon, this window is the ONLY interface: without it a
+# double-click would go straight to a multi-hundred-MB apt-get and an Osmocom
+# compilation without asking anything.
 #
-# [2026-08-31] UN SEUL CHOIX, ET C EST VOULU.
-# La liste a cocher en offrait trois - "multi-operateur SS7", "docker", "image
-# operateur" - alors qu il n y a jamais eu qu un scenario : le multi-operateur,
-# qui ENTRAINE les deux autres (l implication, juste en dessous, remettait
-# DO_DOCKER=1 et DO_IMAGE=1 des que la premiere ligne etait cochee). Les deux
-# dernieres cases n etaient donc decochables qu en apparence : les decocher ne
-# changeait rien tant que la premiere restait cochee, et les cocher seules
-# donnait un demi-supplement dont rien ne se sert - docker sans image, ou une
-# image de 11 Go sans la topologie qui l emploie.
-# Une fenetre qui propose des choix sans effet ment sur ce que fait le script.
-#
-# [2026-09-02] DEUX CHOIX MAINTENANT - ET LA REGLE N A PAS CHANGE.
-# Ce qui etait reproche aux trois cases d avant, ce n est pas leur nombre :
-# c est qu elles etaient FAUSSES (cocher "docker" seul ne donnait rien
-# d utilisable, et le decocher ne l empechait pas d etre installe). OpenCL,
-# lui, est un supplement REELLEMENT independant : il n entraine rien, rien ne
-# l entraine, on peut le vouloir sans le multi-operateur et l inverse. Une case
-# qui commande quelque chose a le droit d exister ; une case decorative, non.
-# Les drapeaux --docker / --image / --opencl restent pour le depannage console.
+# Two choices are offered. The multi-operator is one supplement that ENTAILS
+# docker and the operator image (the implication just below sets DO_DOCKER=1 and
+# DO_IMAGE=1): docker without an image, or an 11 GB image without the topology,
+# are useless on their own, so they are not offered separately. OpenCL is a
+# genuinely INDEPENDENT supplement: it entails nothing and nothing entails it.
+# The --docker / --image / --opencl flags remain for console troubleshooting.
 if [ "$ANY_FLAG" = "0" ]; then
     if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
-        # --print-column=2 N EST PAS FACULTATIF : le defaut de zenity est la
-        # colonne 1, qui pour un --checklist est la CASE A COCHER - on
-        # recupererait une liste de "TRUE" au lieu des choix. On imprime donc
-        # la colonne 2, cachee, qui porte la CLE ("multi", "opencl") : le
-        # libelle affiche peut alors changer sans casser les tests.
-        # --separator : le defaut "|" traverse mal les tests ci-dessous ; on
-        # prend un caractere qui n apparait dans aucun libelle.
+        # --print-column=2 is NOT optional: zenity defaults to column 1, which
+        # for a --checklist is the CHECKBOX - we would get a list of "TRUE"
+        # instead of the choices. We print column 2, hidden, which carries the
+        # KEY ("multi", "opencl"): the displayed label can then change without
+        # breaking the tests below.
+        # --separator: the default "|" travels badly through the tests below; we
+        # pick a character that appears in no label.
         _choix=$(zenity --list --checklist --width=680 --height=340 \
             --title="osmo-operator - supplements" \
             --text="Supplements qui ne sont PAS dans l ISO.\nUne connexion Internet est necessaire." \
@@ -367,10 +330,9 @@ if [ "$ANY_FLAG" = "0" ]; then
             2>/dev/null) || { echo "Annule."; exit 0; }
         [ -n "$_choix" ] || { echo "Rien de selectionne."; exit 0; }
         case "$_choix" in *multi*)  DO_MULTI=1  ;; esac
-        # L ORIGINE DE L IMAGE : une seconde fenetre, en BOUTONS RADIO.
-        # Deux sources exclusives par construction - un radiolist ne rend qu une
-        # valeur, il n y a pas de "les deux" a rattraper apres coup comme avec
-        # des cases a cocher.
+        # Image origin: a second window, with RADIO BUTTONS. Two sources,
+        # exclusive by construction - a radiolist returns a single value, so
+        # there is no "both" to resolve afterwards as with checkboxes.
         if [ "$DO_MULTI" = "1" ]; then
             _orig=$(zenity --list --radiolist --width=680 --height=260 \
                 --title="osmo-operator - image operateur" \
@@ -381,12 +343,9 @@ if [ "$ANY_FLAG" = "0" ]; then
                 TRUE  dl    "LE DEPOT (GHCR) - ${HUB_IMAGE}, publiee par la CI a chaque push" \
                 FALSE hub   "DOCKER HUB - bastienbaranoff/norf_gsm, la pile publiee a la main" \
                 2>/dev/null) || { echo "Annule."; exit 0; }
-            # [2026-09-13] LES DEUX CHOIX SONT DEUX SOURCES, PLUS « TIRER OU
-            # COMPILER ». Compiler sur place refaisait, en dizaines de minutes,
-            # exactement ce que la CI publie a partir du meme Dockerfile : ce
-            # n'etait pas une origine, c'etait une attente. Le build local
-            # existe toujours, mais il se demande explicitement
-            # (OSMO_ADDITION_BUILD_LOCAL=1), pas par un bouton radio.
+            # The two choices are two sources, not "pull or build". A local
+            # build is still available but requested explicitly
+            # (OSMO_ADDITION_BUILD_LOCAL=1), not via a radio button.
             case "$_orig" in
                 hub)   DO_BUILD=0; HUB_IMAGE="bastienbaranoff/norf_gsm"; HUB_IS_RUN=1 ;;
                 dl)    DO_BUILD=0 ;;
@@ -398,69 +357,62 @@ if [ "$ANY_FLAG" = "0" ]; then
         case "$_choix" in *extras*) DO_EXTRAS=1 ;; esac
         case "$_choix" in *firmwares*) DO_GNUARM=1; DO_MAGNETITE=1; DO_TRX=1; DO_CALFW=1; DO_FERNVALE=1; DO_SIMCOM=1 ;; esac
     else
-        # Console sans zenity : le supplement historique, celui de l icone.
+        # Console without zenity: default to the icon's supplement.
         DO_MULTI=1
     fi
 fi
 
-# Le multi-operateur ENTRAINE ses dependances : sans moteur ni image, la
-# topologie posee ne servirait a rien et start-multi.sh renverrait ici.
+# The multi-operator ENTAILS its dependencies: without engine or image the
+# topology would be useless and start-multi.sh would come back here.
 if [ "$DO_MULTI" = "1" ]; then DO_DOCKER=1; DO_IMAGE=1; fi
-# osmocom-bb-trx : la partie hote est une image Docker, il lui faut le moteur.
-# [2026-10-24] gnuarm aussi : la chaine arm-elf-gcc n est plus recompilee, elle
-# est copiee de cette meme image (tools/osmo-firmwares-install.sh). Le firmware
-# Calypso du banc (--calypso-fw) la demande.
+# osmocom-bb-trx: the host side is a Docker image, so it needs the engine.
+# gnuarm too: the arm-elf-gcc toolchain is no longer rebuilt, it is copied from
+# that same image (tools/osmo-firmwares-install.sh). The bench Calypso firmware
+# (--calypso-fw) requires it.
 if [ "$DO_TRX$DO_GNUARM$DO_CALFW" != "000" ]; then DO_DOCKER=1; fi
 
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis : sudo $0${NC}"; exit 1; }
 
 # ── OPENCL ──────────────────────────────────────────────────────────────────
-# Supplement independant : rien ici n entraine docker, et docker n entraine pas
-# ceci. Il sert au calcul GPU - les traitements lourds du cote SDR (correlation,
-# FFT larges) et tout ce qu un utilisateur voudra faire tourner a cote.
+# Independent supplement: nothing here entails docker and docker does not entail
+# this. It serves GPU compute - heavy SDR-side processing (correlation, wide
+# FFTs) and anything a user wants to run alongside.
 #
-# UNE PILE OPENCL, C EST DEUX MOITIES, ET L ERREUR CLASSIQUE EST DE N EN POSER
-# QU UNE. Le "runtime" (ocl-icd) n est qu un aiguilleur : il lit
-# /etc/OpenCL/vendors/*.icd et charge la bibliotheque du VENDEUR qui y est
-# nommee. Sans ICD de vendeur, tout s installe sans une erreur et clinfo rend
+# An OpenCL stack has two halves, and the classic mistake is to install only
+# one. The "runtime" (ocl-icd) is just a dispatcher: it reads
+# /etc/OpenCL/vendors/*.icd and loads the VENDOR library named there. Without a
+# vendor ICD, everything installs without error and clinfo returns
 #     Number of platforms   0
-# ce qui ressemble a un materiel non supporte alors qu il ne manque qu un
-# paquet. On pose donc l aiguilleur ET le pilote de la carte reellement
-# presente, lue dans lspci.
+# which looks like unsupported hardware when only a package is missing. So we
+# install the dispatcher AND the driver of the card actually present, read from
+# lspci.
 #
-# pocl est pose dans tous les cas : c est une implementation PROCESSEUR. Elle
-# ne remplace pas un GPU, mais elle garantit qu un programme OpenCL trouve
-# toujours une plateforme - y compris en machine virtuelle, ou dans un banc
-# sans carte graphique dediee, ou l absence totale de plateforme fait echouer
-# le code avec un CL_PLATFORM_NOT_FOUND_KHR que personne ne sait lire.
+# pocl is installed in all cases: it is a CPU implementation. It does not
+# replace a GPU, but it guarantees an OpenCL program always finds a platform -
+# including in a VM or on a bench with no dedicated graphics card, where the
+# total absence of a platform makes the code fail with a CL_PLATFORM_NOT_FOUND_KHR.
 #
-# NVIDIA est le cas a part : son ICD OpenCL n est pas un paquet separe
-# installable seul, il voyage avec le pilote proprietaire (le paquet
-# libnvidia-compute-xxx, tire par nvidia-driver-xxx). On installe donc le
-# pilote, et l ICD vient avec. C est un pilote graphique proprietaire, sur une
-# machine dont l ecran depend : il faut le plus souvent REDEMARRER pour qu il
-# prenne - on le dit clairement.
+# NVIDIA is the special case: its OpenCL ICD is not a standalone package, it
+# ships with the proprietary driver (libnvidia-compute-xxx, pulled by
+# nvidia-driver-xxx). We install the driver and the ICD comes with it. It is a
+# proprietary graphics driver on a machine whose display depends on it: a REBOOT
+# is usually needed for it to take effect, which is stated clearly.
 #
-# [2026-09-04] LA VERSION EST FIGEE : nvidia-driver-610, et plus
-# `ubuntu-drivers install`. L outil interrogeait les depots et decidait seul :
-# d une machine a l autre on n installait pas le meme pilote, et sans
-# ubuntu-drivers-common il ne decidait rien. Un paquet nomme s installe, se
-# verifie et se raconte : sudo apt install nvidia-driver-610.
-# OSMO_NVIDIA_DRIVER permet d en choisir un autre.
+# The version is pinned: nvidia-driver-610, not `ubuntu-drivers install` (which
+# queried the repos and decided on its own, so the installed driver varied
+# between machines). OSMO_NVIDIA_DRIVER selects a different one.
 if [ "$DO_OPENCL" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de la pile OpenCL ..."
     export DEBIAN_FRONTEND=noninteractive
 
-    # lvm2 : PAS de l OpenCL, mais deka (installe avec ce supplement) monte ses
-    # tables sur des volumes LVM - sans vgchange, deka-start.sh ne monte rien.
-    # On le pose donc ici, avec deka.
-    # swig4.1 + python3-dev : compilation des modules natifs de deka
-    # (_delta.so, _libvankus.so) plus bas. build-essential est deja tire
-    # ailleurs.
-    # [2026-09-04] swig4.1 ET PAS swig : le metapaquet `swig` de noble tire
-    # swig 4.2, sous lequel les interfaces de deka ne passent plus. La 4.1 est
-    # dans la distribution (noble/universe, paquet swig4.1) : on la nomme
-    # explicitement plutot que de dependre de ce que `swig` designera demain.
+    # lvm2: NOT part of OpenCL, but deka (installed with this supplement) mounts
+    # its tables on LVM volumes - without vgchange, deka-start.sh mounts nothing.
+    # Installed here, with deka.
+    # swig4.1 + python3-dev: build deka's native modules (_delta.so,
+    # _libvankus.so) below. build-essential is pulled elsewhere.
+    # swig4.1 and NOT swig: the noble `swig` metapackage pulls swig 4.2, under
+    # which deka's interfaces no longer build. 4.1 is in the distribution
+    # (noble/universe, package swig4.1): name it explicitly.
     _cl_pkgs="ocl-icd-libopencl1 ocl-icd-opencl-dev opencl-headers clinfo pocl-opencl-icd lvm2 swig4.1 python3-dev"
     _vga="$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display' || true)"
     _nvidia=0
@@ -478,21 +430,21 @@ if [ "$DO_OPENCL" = "1" ]; then
     apt-get update || { echo -e "  ${RED}✗ apt-get update a echoue - pas de reseau ?${NC}"
                         echo -e "    Ce supplement a BESOIN d Internet : rien n est pre-telecharge dans l ISO."
                         exit 1; }
-    # Paquet par paquet, et non fatal : un ICD de vendeur absent du miroir
-    # (cela arrive) ne doit pas emporter le runtime avec lui - la pile
-    # processeur reste utilisable, et c est mieux que rien du tout.
+    # Package by package, non-fatal: a vendor ICD missing from the mirror must
+    # not take the runtime down with it - the CPU stack stays usable.
     for _p in $_cl_pkgs; do
         apt-get install -y "$_p" >/dev/null 2>&1 \
             && echo -e "      ${GREEN}✓${NC} $_p" \
             || echo -e "      ${YELLOW}!${NC} $_p non installe (absent du miroir ?)"
     done
 
-    # pyopencl : le binding Python d OpenCL, POSE DANS LE VENV /root/.env - le
-    # meme que start-clean.sh (qosmo-grgsm) et le profil de root activent, et ou
-    # vit deja gr-gsm. On l installe avec le pip DU VENV (/root/.env/bin/python3)
-    # et pas le pip systeme : sinon le module ne serait pas visible du code qui
-    # tourne sous ce venv. opencl-headers + ocl-icd-opencl-dev (poses au-dessus)
-    # fournissent les en-tetes et libOpenCL.so dont pyopencl a besoin. Non fatal.
+    # pyopencl: the Python OpenCL binding, installed in the VENV /root/.env - the
+    # same one start-clean.sh (qosmo-grgsm) and root's profile activate, and
+    # where gr-gsm already lives. Installed with the VENV pip
+    # (/root/.env/bin/python3), not the system pip, otherwise the module would
+    # not be visible to code running under that venv. opencl-headers +
+    # ocl-icd-opencl-dev (installed above) provide the headers and libOpenCL.so
+    # pyopencl needs. Non-fatal.
     if [ -x /root/.env/bin/python3 ]; then
         echo -e "  ${CYAN}→${NC} pyopencl dans le venv ${BOLD}/root/.env${NC} ..."
         if /root/.env/bin/python3 -m pip install --no-cache-dir --disable-pip-version-check pyopencl >/dev/null 2>&1; then
@@ -504,7 +456,7 @@ if [ "$DO_OPENCL" = "1" ]; then
         echo -e "  ${YELLOW}!${NC} venv /root/.env absent - pyopencl non pose (attendu sur l ISO)"
     fi
 
-    # LA SEULE VERIFICATION QUI VAUT : est-ce qu une plateforme repond ?
+    # The only check that matters: does a platform respond?
     if command -v clinfo >/dev/null 2>&1; then
         _np="$(clinfo -l 2>/dev/null | grep -c Platform || true)"
         if [ "${_np:-0}" -gt 0 ]; then
@@ -518,17 +470,17 @@ if [ "$DO_OPENCL" = "1" ]; then
 
     if [ "$_nvidia" = "1" ]; then
         echo -e "  ${CYAN}→${NC} carte ${BOLD}NVIDIA${NC} detectee : installation du pilote (ICD OpenCL inclus) ..."
-        # LES HEADERS DU NOYAU D ABORD. Le pilote NVIDIA compile son module par
-        # DKMS contre le noyau EN COURS : sans linux-headers-$(uname -r), dkms
-        # et build-essential, le build du module echoue et l installation part
-        # en erreur (souvent muette : le paquet s installe, mais nvidia.ko
-        # n existe pas, et OpenCL reste absent). On les pose avant.
+        # Kernel headers first. The NVIDIA driver builds its module via DKMS
+        # against the RUNNING kernel: without linux-headers-$(uname -r), dkms
+        # and build-essential, the module build fails and the install errors
+        # out (often silently: the package installs, but nvidia.ko does not
+        # exist and OpenCL stays absent). Install them first.
         _kver="$(uname -r)"
         echo -e "      ${CYAN}→${NC} pre-requis DKMS : linux-headers-${_kver}, dkms, build-essential"
         apt-get install -y "linux-headers-${_kver}" dkms build-essential >/dev/null 2>&1 \
             || echo -e "      ${YELLOW}!${NC} headers/dkms : installation partielle (headers absents du miroir ?)"
-        # linux-headers-generic en filet : garde les headers alignes sur le
-        # meta-noyau pour les mises a jour de noyau suivantes.
+        # linux-headers-generic as a safety net: keeps the headers aligned with
+        # the meta-kernel for later kernel updates.
         apt-get install -y linux-headers-generic >/dev/null 2>&1 || true
         _nvdrv="${OSMO_NVIDIA_DRIVER:-nvidia-driver-610}"
         echo -e "      ${CYAN}→${NC} ${BOLD}apt install ${_nvdrv}${NC}"
@@ -538,14 +490,14 @@ if [ "$DO_OPENCL" = "1" ]; then
             echo -e "  ${YELLOW}!${NC} ${BOLD}${_nvdrv}${NC} non installe - il est dans multiverse :"
             echo -e "      ${BOLD}sudo add-apt-repository multiverse && sudo apt install ${_nvdrv}${NC}"
         fi
-        # ── SECURE BOOT : SIGNER LES MODULES NVIDIA (MOK) ────────────────────
-        # Sous Secure Boot, le noyau REFUSE un module non signe par une cle de
-        # confiance : nvidia.ko compile par DKMS n est signe par personne, et le
-        # pilote reste muet (nvidia-smi : "NVIDIA-SMI has failed..."). On genere
-        # une cle MOK (une fois), on SIGNE les modules nvidia*.ko du noyau courant,
-        # puis on PROPOSE la cle a l enrolement (mokutil) - a VALIDER au prochain
-        # reboot dans l ecran bleu MOK Manager. Hors Secure Boot ou sans module :
-        # on saute. Emplacement standard Ubuntu : /var/lib/shim-signed/mok.
+        # ── Secure Boot: sign the NVIDIA modules (MOK) ───────────────────────
+        # Under Secure Boot, the kernel REFUSES a module not signed by a trusted
+        # key: nvidia.ko built by DKMS is signed by no one, and the driver stays
+        # silent (nvidia-smi: "NVIDIA-SMI has failed..."). Generate a MOK key
+        # (once), SIGN the current kernel's nvidia*.ko modules, then PROPOSE the
+        # key for enrollment (mokutil) - to be CONFIRMED at the next reboot in
+        # the blue MOK Manager screen. Outside Secure Boot or with no module:
+        # skip. Standard Ubuntu location: /var/lib/shim-signed/mok.
         if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
             echo -e "  ${CYAN}→${NC} Secure Boot actif : signature MOK des modules NVIDIA ..."
             apt-get install -y --no-install-recommends openssl mokutil zstd xz-utils >/dev/null 2>&1 || true
@@ -596,27 +548,25 @@ if [ "$DO_OPENCL" = "1" ]; then
         echo -e "      NVIDIA (et donc son OpenCL) soit actif - ${BOLD}clinfo${NC} le confirmera ensuite."
     fi
 
-    # ── LES OUTILS QUI TOURNENT SUR OPENCL ───────────────────────────────────
-    # deka, a51_tools, dst80_reversing, tea1-cracker : quatre depots de calcul
-    # qui se servent du GPU. Ils VONT AVEC OpenCL - c est pour eux qu on le
-    # pose - donc ils s installent ici, avec lui, et pas dans l ISO : l image
-    # reste un noeud GSM, ces outils sont un supplement de calcul.
-    # Clones dans /root. Idempotent : si le depot est deja la, on met a jour
-    # (git pull) au lieu de recloner. Non fatal - un depot injoignable (prive,
-    # reseau) n arrete pas le reste.
+    # ── The tools that run on OpenCL ─────────────────────────────────────────
+    # deka, a51_tools, dst80_reversing, tea1-cracker: four compute repositories
+    # that use the GPU. They GO WITH OpenCL, so they are installed here with it,
+    # not in the ISO: the image stays a GSM node, these are a compute supplement.
+    # Cloned into /root. Idempotent: if a repo is already there, update it (git
+    # pull) instead of re-cloning. Non-fatal - an unreachable repo (private,
+    # network) does not stop the rest.
     echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
-    # NON-INTERACTIF, SINON LA FENETRE FIGE. Sur un depot prive ou absent, git
-    # reclame un identifiant sur le terminal et attend INDEFINIMENT - lance par
-    # l icone, il n y a personne pour repondre. GIT_TERMINAL_PROMPT=0 le fait
-    # echouer net (pas de prompt), et le message plus bas dit quoi faire.
+    # Non-interactive, otherwise the window hangs. On a private or absent repo,
+    # git asks for credentials on the terminal and waits INDEFINITELY - launched
+    # by the icon, there is no one to answer. GIT_TERMINAL_PROMPT=0 makes it fail
+    # cleanly (no prompt), and the message below says what to do.
     export GIT_TERMINAL_PROMPT=0
     for _rt in "deka=https://github.com/bbaranoff/deka" \
                "a51_tools=https://github.com/bbaranoff/a51_tools" \
                "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
                "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
         _name="${_rt%%=*}"; _url="${_rt#*=}"; _dst="/root/$_name"
-        # [2026-09-03] Plus de -c http.version=HTTP/1.1 (retire partout dans le
-        # depot). On CAPTURE la sortie de git et on la MONTRE en cas d echec.
+        # Capture git's output and SHOW it on failure.
         GIT="git"
         if [ -d "$_dst/.git" ]; then
             if _err=$($GIT -C "$_dst" pull --ff-only 2>&1); then
@@ -632,11 +582,11 @@ if [ "$DO_OPENCL" = "1" ]; then
         fi
     done
 
-    # ── deka : compilation des modules natifs (make) ─────────────────────────
-    # deka importe _delta.so et _libvankus.so, produits par SWIG + gcc depuis
-    # delta.c / libvankus.c (voir son Makefile). Sans ce make, les workers
-    # importent des modules absents et deka ne calcule rien. Pre-requis : swig4.1
-    # et les entetes python3. Non fatal : un echec le dit, sans stopper le reste.
+    # ── deka: build the native modules (make) ────────────────────────────────
+    # deka imports _delta.so and _libvankus.so, produced by SWIG + gcc from
+    # delta.c / libvankus.c (see its Makefile). Without this make, the workers
+    # import missing modules and deka computes nothing. Requires: swig4.1 and
+    # the python3 headers. Non-fatal: a failure is reported without stopping.
     if [ -f /root/deka/Makefile ]; then
         echo -e "  ${CYAN}→${NC} deka : compilation des modules natifs (make) ..."
         apt-get install -y --no-install-recommends swig4.1 python3-dev build-essential >/dev/null 2>&1 || true
@@ -648,17 +598,17 @@ if [ "$DO_OPENCL" = "1" ]; then
         fi
     fi
 
-    # ── deka : une ICONE d appli (pas un service) ────────────────────────────
-    # deka monte des tables et lance des workers - ca ne doit PAS partir a
-    # chaque boot dans le dos de l utilisateur (le montage suppose le groupe de
-    # volumes present). On pose donc une icone : l utilisateur la clique quand
-    # il veut demarrer deka. deka-start.sh reste le moteur ; l icone l appelle
-    # avec les droits root (pkexec) dans un terminal, pour voir la sortie.
+    # ── deka: an application ICON (not a service) ────────────────────────────
+    # deka mounts tables and launches workers - this must NOT start at every
+    # boot behind the user's back (the mount assumes the volume group present).
+    # So we install an icon: the user clicks it when they want to start deka.
+    # deka-start.sh remains the engine; the icon calls it with root rights
+    # (pkexec) in a terminal, to see the output.
     if [ -d /root/deka ]; then
         echo -e "  ${CYAN}→${NC} deka : pose de l icone d application ..."
-        # deka-start.sh vit dans le depot : s il est la (clone a jour), on n y
-        # touche pas. On ne l ecrit qu en SECOURS, pour un clone qui ne l aurait
-        # pas encore.
+        # deka-start.sh lives in the repo: if it is there (up-to-date clone),
+        # leave it alone. Write it only as a FALLBACK, for a clone that does not
+        # have it yet.
         if [ ! -f /root/deka/deka-start.sh ]; then
         cat > /root/deka/deka-start.sh <<'DEKASTART'
 #!/bin/bash
@@ -702,10 +652,9 @@ DEKASTART
         chmod 755 /root/deka/deka-start.sh
         fi
 
-        # LE LANCEUR : deka-start.sh a besoin de root (vgchange, mount). Depuis
-        # une icone on n est pas root : pkexec eleve, et un terminal reste
-        # ouvert pour lire la sortie (montages, PID des workers). Meme facture
-        # que osmo-addition-anim.
+        # The launcher: deka-start.sh needs root (vgchange, mount). From an icon
+        # we are not root: pkexec elevates, and a terminal stays open to read the
+        # output (mounts, worker PIDs). Same style as osmo-addition-anim.
         cat > /usr/local/bin/osmo-deka-anim <<'DEKAGUI'
 #!/bin/bash
 set -u
@@ -721,9 +670,8 @@ exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --progress --root --ti
 DEKAGUI
         chmod 755 /usr/local/bin/osmo-deka-anim
 
-        # ICONE DEDIEE : la mandala de connecteurs (data/deka.svg, facon BRMLAB),
-        # posee en CHEMIN ABSOLU dans Icon= - un nom de theme arrive apres
-        # icon-theme.cache s afficherait en page blanche (cf. update.sh).
+        # Dedicated icon (data/deka.svg), set as an ABSOLUTE PATH in Icon= - a
+        # theme name arriving after icon-theme.cache would show as a blank page.
         install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
         if [ -f "$DIR/data/deka.svg" ]; then
             install -m644 "$DIR/data/deka.svg" /usr/share/osmo-operator/icons/deka.svg
@@ -753,19 +701,11 @@ DEKADSK
         command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
         update-desktop-database /usr/share/applications 2>/dev/null || true
 
-        # ── PAS D ICONE DEKA SUR LE BUREAU ───────────────────────────────
-        # [2026-09-04] Ce bloc posait deka.desktop sur CHAQUE bureau (/root et
-        # tous les /home), en "trusted" pour que DING l affiche, et en 0,0 -
-        # donc par-dessus le coin ou le fond GSM LAB attend ses icones. Sur une
-        # machine fraichement installee, le supplement OpenCL ajoutait ainsi une
-        # icone que personne n avait demandee, et qu il fallait retirer a la
-        # main de deux repertoires par compte (Bureau ET Desktop).
-        # deka reste lancable : l entree /usr/share/applications/deka.desktop
-        # ci-dessus le met dans le menu des applications, et deka-start.sh
-        # s appelle directement. Ce qui disparait, c est l icone imposee.
-        #
-        # On efface aussi celles qu une execution precedente avait posees :
-        # sans ca, mettre a jour ne suffisait pas a s en debarrasser.
+        # ── No deka icon on the desktop ───────────────────────────────────
+        # deka stays launchable: the /usr/share/applications/deka.desktop entry
+        # above puts it in the applications menu, and deka-start.sh is called
+        # directly. No icon is imposed on the desktop.
+        # Also remove any dropped by a previous run.
         for _h in /root /home/*; do
             for _dir in Bureau Desktop; do
                 rm -f "$_h/$_dir/deka.desktop" 2>/dev/null || true
@@ -775,26 +715,26 @@ DEKADSK
     fi
 fi
 
-# ── CLAUDE CODE ──────────────────────────────────────────────────────────────
-# Supplement independant : Claude Code, la CLI de l assistant. Rien ici
-# n entraine docker ni OpenCL, et rien ne l entraine - on peut le vouloir seul.
+# ── Claude Code ───────────────────────────────────────────────────────────
+# Independent supplement: Claude Code, the assistant CLI. Nothing here entails
+# docker or OpenCL, and nothing entails it - it can be wanted on its own.
 #
-# ON PREND L INSTALLEUR NATIF (claude.ai/install.sh), PAS npm, ET C EST VOULU.
-# @anthropic-ai/claude-code par npm exige node >= 18 ; or le node des depots
-# Ubuntu 22.04 est une v12, trop vieille - l installation npm casserait, ou
-# reclamerait un depot tiers (NodeSource) qu on evite ici comme on evite
-# get.docker.com plus bas. L installeur natif pose un binaire autonome (node
-# embarque), sans toucher au systeme : c est le chemin le plus sur.
+# We use the native installer (claude.ai/install.sh), not npm.
+# @anthropic-ai/claude-code via npm requires node >= 18, but the node in the
+# Ubuntu 22.04 repos is a v12, too old - the npm install would break, or would
+# require a third-party repo (NodeSource) avoided here as get.docker.com is
+# avoided below. The native installer drops a standalone binary (embedded node),
+# without touching the system: the safest path.
 #
-# Il pose dans ~/.local/bin (donc /root/.local/bin, lance en sudo). On lie ce
-# binaire dans /usr/local/bin pour qu il soit sur le PATH de tout le monde et
-# que la sonde `command -v claude` le voie.
+# It installs into ~/.local/bin (so /root/.local/bin when run via sudo). We link
+# that binary into /usr/local/bin so it is on everyone's PATH and the
+# `command -v claude` probe sees it.
 if [ "$DO_CLAUDE" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de Claude Code ..."
     export DEBIAN_FRONTEND=noninteractive
 
-    # curl + certificats : l installeur les exige. Non fatal en soi, mais on
-    # previent tot si le reseau manque - rien n est pre-telecharge dans l ISO.
+    # curl + certificates: the installer requires them. Non-fatal in itself, but
+    # warn early if the network is missing - nothing is pre-downloaded in the ISO.
     command -v curl >/dev/null 2>&1 || apt-get install -y curl ca-certificates >/dev/null 2>&1 || true
     if ! command -v curl >/dev/null 2>&1; then
         echo -e "  ${RED}✗ curl absent et non installable - pas de reseau ?${NC}"
@@ -802,8 +742,8 @@ if [ "$DO_CLAUDE" = "1" ]; then
         exit 1
     fi
 
-    # HOME explicite : lance par pkexec/sudo, $HOME peut manquer ou pointer
-    # ailleurs ; l installeur pose dans $HOME/.local/bin, on veut savoir ou.
+    # Explicit HOME: launched by pkexec/sudo, $HOME may be missing or point
+    # elsewhere; the installer drops into $HOME/.local/bin, we want to know where.
     _cc_home="${HOME:-/root}"
     if _out=$(HOME="$_cc_home" bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1); then
         echo -e "      ${GREEN}✓${NC} installeur natif termine"
@@ -811,8 +751,8 @@ if [ "$DO_CLAUDE" = "1" ]; then
         echo -e "      ${YELLOW}!${NC} installeur natif en echec - $(echo "$_out" | tail -1)"
     fi
 
-    # Trouver le binaire pose et le lier sur le PATH global. On regarde les
-    # emplacements connus de l installeur (~/.local/bin, puis repli /root).
+    # Find the installed binary and link it onto the global PATH. Look at the
+    # installer's known locations (~/.local/bin, then /root as fallback).
     _cc_bin=""
     for _c in "$_cc_home/.local/bin/claude" /root/.local/bin/claude "$_cc_home/.claude/bin/claude"; do
         [ -x "$_c" ] && { _cc_bin="$_c"; break; }
@@ -822,7 +762,7 @@ if [ "$DO_CLAUDE" = "1" ]; then
         echo -e "      ${GREEN}✓${NC} lien /usr/local/bin/claude -> $_cc_bin"
     fi
 
-    # LA SEULE VERIFICATION QUI VAUT : est-ce que claude repond ?
+    # The only check that matters: does claude respond?
     if command -v claude >/dev/null 2>&1 && _ver=$(claude --version 2>/dev/null); then
         echo -e "  ${GREEN}✓${NC} Claude Code operationnel - ${BOLD}${_ver}${NC}"
         echo -e "      lancez-le avec la commande ${BOLD}claude${NC}"
@@ -831,9 +771,9 @@ if [ "$DO_CLAUDE" = "1" ]; then
         echo -e "      Ouvrez un nouveau terminal (PATH), ou lancez ${BOLD}$_cc_home/.local/bin/claude${NC}"
     fi
 
-    # ── ICONE CLAUDE : tuile clay + sunburst Anthropic (data/claude.svg) ──────
-    # Lanceur osmo-claude-anim : ouvre un terminal qui lance claude ; s il n est
-    # pas installe, il enchaine ce meme supplement (--claude) puis le lance.
+    # ── Claude icon (data/claude.svg) ────────────────────────────────────────
+    # Launcher osmo-claude-anim: opens a terminal that runs claude; if it is not
+    # installed, it first runs this same supplement (--claude), then launches it.
     install -d /usr/share/osmo-operator/icons /usr/share/icons/hicolor/scalable/apps
     if [ -f "$DIR/data/claude.svg" ]; then
         install -m644 "$DIR/data/claude.svg" /usr/share/osmo-operator/icons/claude.svg
@@ -886,11 +826,11 @@ CLA
     fi
 fi
 
-# ── DOCKER ──────────────────────────────────────────────────────────────────
-# docker.io des depots Ubuntu, PAS le script get.docker.com : celui-ci ajoute un
-# depot tiers et remplace containerd, ce qui sur une image figee se paie au
-# premier apt-get upgrade. La version des depots suffit : on ne fait tourner
-# que nos propres conteneurs.
+# ── Docker ──────────────────────────────────────────────────────────────────
+# docker.io from the Ubuntu repos, NOT the get.docker.com script: that one adds
+# a third-party repo and replaces containerd, which on a frozen image costs at
+# the first apt-get upgrade. The repo version is enough: we only run our own
+# containers.
 if [ "$DO_DOCKER" = "1" ]; then
     if command -v docker >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} docker deja installe ($(docker --version 2>/dev/null | head -1))"
@@ -903,15 +843,14 @@ if [ "$DO_DOCKER" = "1" ]; then
         apt-get install -y docker.io || { echo -e "  ${RED}✗ installation de docker.io echouee${NC}"; exit 1; }
         echo -e "  ${GREEN}✓${NC} docker.io installe"
     fi
-    # docker compose build passe par Bake et avertit si buildx manque. Non fatal.
+    # docker compose build goes through Bake and warns if buildx is missing. Non-fatal.
     if ! docker buildx version >/dev/null 2>&1; then
         apt-get install -y docker-buildx >/dev/null 2>&1 \
             || apt-get install -y docker-buildx-plugin >/dev/null 2>&1 || true
     fi
     systemctl enable --now docker 2>/dev/null || true
-    # Le socket met un instant a repondre apres un premier demarrage : sans
-    # cette attente, le `docker info` suivant echoue et l on croit
-    # l installation ratee.
+    # The socket takes a moment to respond after a first start: without this
+    # wait, the next `docker info` fails and the install looks broken.
     for _i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
     docker info >/dev/null 2>&1 \
         && echo -e "  ${GREEN}✓${NC} demon docker actif" \
@@ -919,26 +858,21 @@ if [ "$DO_DOCKER" = "1" ]; then
     _docker_groupe_session
 fi
 
-# ── IMAGE OPERATEUR ─────────────────────────────────────────────────────────
-# Deux chemins pour obtenir osmocom-nitb :
-#   1. docker pull ${HUB_IMAGE} && docker tag ... osmocom-nitb  (defaut)
-#      La pile Osmocom deja compilee, publiee sur le hub : le telechargement
-#      remplace 40 minutes de compilation. Le tag donne au resultat le nom que
-#      start-docker.sh (Dockerfile.run : FROM osmocom-nitb) et start-nitb.sh attendent.
-#   2. build.sh --no-cache  (--build / --multi-build / case "compiler")
-#      --no-cache : le supplement rebatit l image PROPRE. Le cache docker
-#      gardait des couches d une pile Osmocom a moitie compilee (ex. le clone
-#      github casse de libosmocore) et les rejouait a l identique - un build
-#      deja casse restait casse a chaque passage. On force la reconstruction.
-# [2026-09-13] COMPILER, C EST DESORMAIS TIRER DE GHCR.
-# --build / --multi-build compilaient sur place : plusieurs dizaines de minutes
-# de pile Osmocom, sur la machine de l operateur, pour obtenir exactement ce
-# que la CI vient de publier a partir du meme Dockerfile. Le resultat est le
-# meme a l octet pres quand le depot n a pas bouge ; le temps, non. Ces deux
-# drapeaux font donc le pull, et gardent leur sens : « prends l image de CE
-# depot », par opposition a une image du Hub.
-# Le vrai build local reste accessible - il le faut, c est le seul chemin quand
-# on a MODIFIE le Dockerfile et qu'aucune CI n a encore publie :
+# ── Operator image ──────────────────────────────────────────────────────────
+# Two paths to obtain osmocom-nitb:
+#   1. docker pull ${HUB_IMAGE} && docker tag ... osmocom-nitb  (default)
+#      The already-compiled Osmocom stack, published on the hub: the download
+#      replaces the compilation. The tag gives the result the name that
+#      start-docker.sh (Dockerfile.run: FROM osmocom-nitb) and start-nitb.sh expect.
+#   2. build.sh --no-cache  (--build / --multi-build / "compile" case)
+#      --no-cache: rebuild the image CLEAN. The docker cache could keep layers
+#      from a half-compiled Osmocom stack and replay them identically, so a
+#      broken build stayed broken every time. Force a rebuild.
+# --build / --multi-build no longer compile locally: they pull from GHCR, the
+# same image the CI publishes from the same Dockerfile. Both flags still mean
+# "take the image of THIS repo", as opposed to a Hub image.
+# A real local build stays available - it is the only path once the Dockerfile
+# has been MODIFIED and no CI has published yet:
 #     sudo OSMO_ADDITION_BUILD_LOCAL=1 ./addition.sh --multi-build
 _build_image() {
     if [ "${OSMO_ADDITION_BUILD_LOCAL:-0}" != "1" ]; then
@@ -956,10 +890,10 @@ _build_image() {
 _pull_image() {
     echo -e "  ${CYAN}→${NC} telechargement de l image : ${BOLD}docker pull ${HUB_IMAGE}${NC}"
     echo -e "      ~11 Go - selon le debit, quelques minutes a une heure."
-    # GHCR sert les images PUBLIQUES sans authentification. Si le paquet du
-    # depot est prive, il faut un jeton : docker login ghcr.io -u <compte>
-    # (jeton classique avec read:packages). Le message le dit plutot que de
-    # laisser l operateur devant un "denied" sans explication.
+    # GHCR serves PUBLIC images without authentication. If the repo package is
+    # private, a token is needed: docker login ghcr.io -u <account> (classic
+    # token with read:packages). The message says so rather than leaving the
+    # operator facing a "denied" without explanation.
     docker pull "$HUB_IMAGE" || {
         echo -e "  ${RED}✗ docker pull ${HUB_IMAGE} a echoue${NC} - reseau, image absente, ou paquet prive."
         case "$HUB_IMAGE" in ghcr.io/*)
@@ -968,18 +902,16 @@ _pull_image() {
         echo -e "    Autre image : ${BOLD}HUB_IMAGE=<ref> $0 --multi${NC}"
         echo -e "    Compiler sur place : ${BOLD}OSMO_ADDITION_BUILD_LOCAL=1 $0 --multi-build${NC}"
         return 1; }
-    # [2026-10-24] norf_gsm est publiee depuis osmocom-run (Dockerfile.run deja
-    # joue) : on la tague osmocom-run directement, sans derivation.
+    # norf_gsm is published from osmocom-run (Dockerfile.run already applied):
+    # tag it osmocom-run directly, with no derivation.
     local _tag="$BASE_IMAGE"; [ "${HUB_IS_RUN:-0}" = 1 ] && _tag="$MULTI_IMAGE"
     docker tag "$HUB_IMAGE" "$_tag" || { echo -e "  ${RED}✗ docker tag ${HUB_IMAGE} ${_tag} a echoue${NC}"; return 1; }
     echo -e "  ${GREEN}✓${NC} image operateur tiree et taguee ${_tag}"
 }
-# L IMAGE QUE LE MULTI-OPERATEUR LANCE EST osmocom-run, PAS osmocom-nitb.
-# Ni le pull ni build.sh ne la produisent : c est Dockerfile.run (FROM
-# osmocom-nitb) qui la derive, en quelques secondes. start-multi.sh sonde
-# osmocom-run et renvoie ici si elle manque : sans cette derivation, un
-# supplement "reussi" laissait le multi-operateur incapable de demarrer.
-# Meme commande que start-docker.sh (build_run_image, mode quick).
+# The image the multi-operator runs is osmocom-run, NOT osmocom-nitb. Neither
+# the pull nor build.sh produces it: Dockerfile.run (FROM osmocom-nitb) derives
+# it in a few seconds. start-multi.sh probes osmocom-run and comes back here if
+# it is missing. Same command as start-docker.sh (build_run_image, quick mode).
 _derive_run_image() {
     echo -e "  ${CYAN}→${NC} derivation de l image d execution : ${BOLD}docker build -f Dockerfile.run -t ${MULTI_IMAGE}${NC}"
     ( cd "$DIR" && docker build --build-arg QEMU_CACHE_BUST=$(date +%s) \
@@ -987,7 +919,7 @@ _derive_run_image() {
         || { echo -e "  ${RED}✗ derivation de ${MULTI_IMAGE} echouee${NC}"; return 1; }
     echo -e "  ${GREEN}✓${NC} image d execution prete (${MULTI_IMAGE})"
 }
-# norf_gsm (choix « hub », ou HUB_IMAGE pose par l installeur) EST osmocom-run.
+# norf_gsm (the "hub" choice, or HUB_IMAGE set by the installer) IS osmocom-run.
 case "$HUB_IMAGE" in *norf_gsm*) HUB_IS_RUN=1 ;; esac
 if [ "$DO_IMAGE" = "1" ]; then
     if [ "$DO_BUILD" = "1" ]; then
@@ -1004,30 +936,27 @@ if [ "$DO_IMAGE" = "1" ]; then
     fi
 fi
 
-# ── TOPOLOGIE MULTI-OPERATEUR ───────────────────────────────────────────────
-# Ecrite ICI, une fois, et relue par start-multi.sh. Elle n est pas recalculee
-# des deux cotes : deux formules jumelles finissent toujours par diverger, et le
-# depot en porte deja la trace (start-docker.sh et lib/gabarits.sh tiennent les MEMES
-# fonctions en double).
+# ── Multi-operator topology ─────────────────────────────────────────────────
+# Written HERE, once, and read back by start-multi.sh. It is not recomputed on
+# both sides: two twin formulas always diverge in the end.
 #
-# LE PLAN SS7, tel que start-interstp.sh le definit :
-#     PC   = 1.<noeud><op>.<role>      role 1=MSC 2=STP 3=BSC
-#     RCTX = noeud*1000 + op*100 + 50
-# Sur une seule machine le noeud vaut 1, donc PC = 1.<op>.<role>.
+# The SS7 plan, as start-interstp.sh defines it:
+#     PC   = 1.<node><op>.<role>       role 1=MSC 2=STP 3=BSC
+#     RCTX = node*1000 + op*100 + 50
+# On a single machine node is 1, so PC = 1.<op>.<role>.
 #
-#   op 1  NATIF   - PC 1.1.2, celui de start-native.sh, laisse tel quel
+#   op 1  NATIVE  - PC 1.1.2, that of start-native.sh, left as is
 #   op 2  DOCKER  - PC 1.2.2, backbone 172.20.0.12
 #   op 3  DOCKER  - PC 1.3.2, backbone 172.20.0.13
 #
-# ⚠️ LES CONTENEURS COMMENCENT A 2, ET CELA SE PILOTE.
-# start-docker.sh numerotait ses conteneurs 1..N en dur : avec --operators 2 il creait
-# osmo-operator-1 en point code 1.1.2, celui du natif. Deux equipements a la
-# meme adresse SS7 - "pas un conflit de nom, du routage faux"
-# (checks/wan_ss7_check.sh). OP_ID_BASE=2 (start-docker.sh) fait demarrer les
-# conteneurs au rang 2 et laisse le 1 au natif ; nom, backbone, point code,
-# RCTX, segment prive et ports publies en decoulent tous.
-# Le natif joint le hub par la passerelle du bridge : l hote atteint
-# 172.20.0.10 directement, sans NAT ni route a ajouter.
+# The containers start at index 2, and this is controllable. OP_ID_BASE=2
+# (start-docker.sh) starts the containers at index 2 and leaves index 1 to the
+# native operator; name, backbone, point code, RCTX, private segment and
+# published ports all follow. Otherwise osmo-operator-1 would get point code
+# 1.1.2, the native one's - two devices at the same SS7 address, i.e. wrong
+# routing (checks/wan_ss7_check.sh).
+# The native operator reaches the hub via the bridge gateway: the host reaches
+# 172.20.0.10 directly, with no NAT or route to add.
 if [ "$DO_MULTI" = "1" ]; then
     install -d "$(dirname "$MULTI_CONF")"
     cat > "$MULTI_CONF" <<CONF

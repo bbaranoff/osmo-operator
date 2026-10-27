@@ -1,112 +1,66 @@
-# Dockerfile.run — COUCHE DE MISE A JOUR (image d'execution osmocom-run)
+# Dockerfile.run - update layer on top of osmocom-nitb (runtime image osmocom-run)
 # ─────────────────────────────────────────────────────────────────────────────
-# Ce fichier ne CONSTRUIT rien. Il repart de l'image de base osmocom-nitb
-# (Dockerfile : ~11 Go, ~40 min de compilation) et n'y rafraichit que ce qui
-# bouge a chaque iteration du lab :
-#   - les scripts et les configs du depot (COPY, quelques secondes) ;
-#   - le pont TRX pont/pont.py, source iteree a chaud au meme titre ;
-#   - les arbres git qosmo, c54x_exe, grgsm_exe et osmo-operator (git pull + rebuild).
+# This file builds nothing from scratch. It starts from the osmocom-nitb base
+# image (Dockerfile) and refreshes only what changes between lab iterations:
+#   - the repository's scripts and configs (COPY, a few seconds);
+#   - the git trees qosmo, c54x_exe, grgsm_exe and osmo-operator (fetch + rebuild).
+# Everything else (apt packages, Node/web dashboard, Calypso firmware,
+# PulseAudio config, prompt, systemd units...) lives in Dockerfile; there is
+# no apt call here.
 #
-# Tout le reste vit desormais dans Dockerfile : paquets apt, Node/dashboard web,
-# firmware Calypso, config PulseAudio, prompt, repertoires, units systemd,
-# verification proto-smsc, dsp_txt2bin, pip matplotlib. IL N'Y A PLUS UN SEUL
-# `apt` ICI — l'image d'execution n'a plus a connaitre apt du tout.
+# Build:  docker build -f Dockerfile.run .      (or via build.sh / start-docker.sh)
+# Args:   BASE             base image (default: osmocom-nitb; the CI passes its
+#                          GHCR reference osmocom-nitb:base-<context fingerprint>)
+#         QEMU_CACHE_BUST  any changing value (e.g. $(date +%s)) to force the
+#                          git refresh RUNs past the build cache
 #
-# Le recouvrement des COPY avec Dockerfile est VOULU, ce n'est pas un doublon a
-# supprimer : c'est exactement ce qui permet de rebatir une config en secondes
-# au lieu de rebatir l'image de base. Cote Dockerfile, les memes COPY restent en
-# place parce que l'image osmocom-nitb doit rester autonome (start-nitb.sh la
-# lance seule, avec son propre ENTRYPOINT).
-# [2026-09-13] BASE parametrable. L'image de base ne se rebatit plus a chaque
-# push : la CI la publie une fois sur GHCR (osmocom-nitb:base-<empreinte du
-# contexte>) et passe sa reference ici. En local, le defaut reste l'image du
-# docker de l'hote, donc `docker build -f Dockerfile.run .` et build.sh ne
-# changent pas d'un iota. Meme mecanique que Dockerfile.lite, qui a son ARG
-# BASE depuis toujours.
+# The COPYs below overlap with Dockerfile on purpose: that overlap is what lets
+# a config change be rebuilt in seconds instead of rebuilding the base image.
+# Dockerfile keeps the same COPYs because osmocom-nitb must stay self-contained.
 ARG BASE=osmocom-nitb
 FROM ${BASE} AS osmocom-run
 
 # ── Scripts ───────────────────────────────────────────────────────────────────
-# Deux destinations, deux usages :
-#   /scripts      -> entrypoint.sh (l'ENTRYPOINT ci-dessous) et les outils que
-#                    scripts/run.sh appelle par ce chemin (pulse-gsm-setup.sh) ;
-#   /etc/osmocom  -> ce que consomment les modules ($OSMOCOM_CFG/...). L'image de
-#                    base les y depose deja, mais a l'etat de SON build : sans
-#                    cette COPY, osmo-start.sh / status.sh / check.sh /
-#                    audio-chain.sh n'etaient JAMAIS rafraichis par l'image
-#                    legere — trou dans la « mise a jour des scripts ».
-# Cette COPY groupee remplace les 7 COPY unitaires d'avant (sms-interop-relay.py,
-# gapk-start.sh, smsc-start.sh, send-mt-sms.sh, pulse-gsm-setup.sh...), qui
-# recopiaient un a un des fichiers deja couverts.
-# ⚠️ Le depot versionne ces fichiers en 644 (cf. start-nitb.sh l.50-55) : le bit
-# +x se pose APRES les COPY, dans le RUN plus bas — une COPY posterieure au
-# chmod reposerait le mode 644 et annulerait le chmod.
+# Two destinations, two uses:
+#   /scripts      -> entrypoint.sh (the ENTRYPOINT below) and the tools that
+#                    scripts/run.sh calls through this path (pulse-gsm-setup.sh);
+#   /etc/osmocom  -> what the modules consume ($OSMOCOM_CFG/...). The base
+#                    image already has them, but at the state of ITS build;
+#                    this COPY refreshes osmo-start.sh / status.sh / check.sh /
+#                    audio-chain.sh too.
+# The repository tracks these files as 644: the +x bit is set AFTER all COPYs,
+# in the RUN further down. A COPY placed after that chmod would reset the mode.
 COPY scripts/* /etc/osmocom/
 COPY scripts/entrypoint.sh /scripts/
 
-# ── Configs Osmocom (templates avec placeholders __XXX__) ─────────────────────
-# Toutes les configs sont copiées ; les valeurs réelles sont injectées
-# au démarrage via start-docker.sh (apply_config_templates) et montées en volume.
+# ── Osmocom configs (templates with __XXX__ placeholders) ─────────────────────
+# All configs are copied; the real values are injected at start-up by
+# start-docker.sh (apply_config_templates) and mounted as volumes.
 COPY configs/*.conf /etc/asterisk/
 COPY configs/*.cfg configs/sms-routing.conf /etc/osmocom/
 COPY configs/mobile.cfg /root/.osmocom/bb/mobile.cfg
 COPY configs/asound.conf /etc/
 
-# ── Pont TRX burst-level (CALYPSO_BRIDGE=pont) ────────────────────────────────
-# AVANT : le pont n'etait NULLE PART dans cette image. Il n'existait dans le
-# conteneur que parce qu'on l'y avait depose a la main ; une reconstruction de
-# l'image le faisait disparaitre, et start-native.sh tombait sur sa branche
-# « pont introuvable (...) » en degradant silencieusement le mode.
-# Le chemin est desormais EXPLICITE et unique : /opt/GSM/pont/pont.py, expose
-# par PONT_PY que start-native.sh consomme (`_PONT="${PONT_PY:-...}"`).
-# ⚠️ La source qui part dans l'image est pont/pont.py DU CONTEXTE DE BUILD
-# (/opt/GSM/osmo-operator/pont/). Apres avoir modifie /opt/GSM/pont/pont.py a
-# chaud, la recopier ici avant de reconstruire, sinon l'image reste en arriere.
-#
-# EXCEPTION ASSUMEE au « tout dans Dockerfile » : pont.py est une source iteree
-# a chaud, de la meme famille que scripts/ et configs/ — le garder ici, c'est
-# une reconstruction en secondes au lieu de l'image de base. build-iso.sh
-# l.590-592 nomme d'ailleurs explicitement Dockerfile.run comme la raison pour
-# laquelle pont/ doit figurer dans la charge de l'ISO.
-# (Le `mkdir -p /opt/GSM/pont` qui precedait est supprime : une COPY cree
-#  toujours ses repertoires parents.)
-# [2026-08-27] COPY RETIRE. Il fabriquait /opt/GSM/pont/pont.py, une copie
-# HORS DEPOT que rien ne gardait en phase avec pont/pont.py -- et l ENV
-# PONT_PY la rendait souveraine. Le 27/08 cette copie etait restee a une
-# version sans plan SDCCH/8 : deux heures de LU en echec, SMS rejete et
-# appel impossible, sans un message. Le depot est desormais la seule source ;
-# start-native.sh resout $NITB_ROOT/pont/pont.py.
-# [2026-10-24] ENV PONT_PY RETIRE : il forcait pont.py (grgsm) jusque dans
-# c54x_exe/run.sh en MODE=dsp, qui veut pont_dsp.py. Chaque lanceur a son defaut.
+# ── Burst-level TRX bridge (CALYPSO_BRIDGE=pont) ──────────────────────────────
+# pont.py is NOT copied and no PONT_PY is exported: the repository tree under
+# /opt/GSM/osmo-operator is the single source. start-native.sh resolves
+# $NITB_ROOT/pont/pont.py and c54x_exe/run.sh (MODE=dsp) picks pont_dsp.py;
+# each launcher has its own default.
 
-# Bits d'execution + chemins uniques. DOIT rester APRES toutes les COPY ci-dessus.
-# /scripts/run.sh (laissé par "COPY scripts/*") et /etc/osmocom/run.sh
-# pointent vers la même source que /root/run.sh — on symlink pour éviter
-# trois copies divergentes. Idem /root/osmo-start.sh, chemin de memoire
-# musculaire que rien ne reference dans le depot : un symlink plutot qu'une
-# deuxieme copie qui divergerait.
+# Execute bits. MUST stay AFTER all the COPYs above.
 RUN chmod +x /etc/osmocom/*.sh
 
-# ── Disclaimer au login du conteneur (pendant du 01-osmo-disclaimer.sh de l'ISO)
-# On veut le MEME rappel a l'entree d'un conteneur qu'au boot de l'ISO. Le
-# conteneur se rejoint par `docker exec -ti <ct> bash` : un shell interactif
-# NON-login, qui lit ~/.bashrc (et pas /etc/profile.d) - c'est la qu'est deja
-# pose le prompt calypso. On depose donc le texte dans un fichier a part et on
-# le source depuis .bashrc, garde par [ -t 1 ] et OSMO_DISCLAIMER_SHOWN :
-#   - [ -t 1 ]                : uniquement quand un humain a un terminal ;
-#   - OSMO_DISCLAIMER_SHOWN   : une seule fois par session, pas a chaque sous-shell.
-# Les `bash -c "..."` de start-docker.sh (lancement des piles) sont NON-interactifs :
-# bash n'y lit pas .bashrc, le disclaimer ne pollue donc pas le defilement des
-# [ OK ]. Le fichier n'est pas interpole au build : $(hostname) n'est evalue
-# qu'a l'ouverture du shell, il nomme donc le conteneur courant.
-# Le texte lui-meme vit dans scripts/osmo-disclaimer.sh (deja depose en
-# /etc/osmocom/ par la COPY plus haut) : PAS de heredoc ici. Le builder docker
-# classique (`Step N/M`, sans BuildKit) ne connait pas les heredocs — il joignait
-# les lignes de continuation et lancait le RUN sans le corps :
-#   /bin/bash: warning: here-document at line 1 delimited by end-of-file
-# laissant /etc/osmo-disclaimer.sh VIDE et le disclaimer muet. Un fichier du
-# depot + un symlink marchent avec les deux builders.
-# Le `grep -q` garde l'ajout idempotent si l'image de base a deja pose le bloc.
+# ── Disclaimer at container login (counterpart of the ISO's 01-osmo-disclaimer.sh)
+# `docker exec -ti <ct> bash` opens an interactive NON-login shell, which reads
+# ~/.bashrc (not /etc/profile.d). The text lives in scripts/osmo-disclaimer.sh
+# (already in /etc/osmocom/ from the COPY above) and is sourced from .bashrc,
+# guarded by:
+#   - [ -t 1 ]                : only when a human has a terminal;
+#   - OSMO_DISCLAIMER_SHOWN   : once per session, not in every sub-shell.
+# The non-interactive `bash -c` of start-docker.sh never reads .bashrc, so the
+# stack start-up output is not polluted. No heredoc here: the classic docker
+# builder (no BuildKit) does not support RUN heredocs; a repository file plus a
+# symlink works with both builders. `grep -q` keeps the append idempotent.
 RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
     { grep -q '### osmo-disclaimer ###' /root/.bashrc || \
       printf '%s\n' '' \
@@ -114,67 +68,37 @@ RUN ln -sf /etc/osmocom/osmo-disclaimer.sh /etc/osmo-disclaimer.sh && \
         '[ -z "${OSMO_DISCLAIMER_SHOWN:-}" ] && [ -t 1 ] && . /etc/osmo-disclaimer.sh' \
         '### end osmo-disclaimer ###' >> /root/.bashrc; }
 
-# ── Mise a jour des arbres git ────────────────────────────────────────────────
-# [refactor] start-docker.sh l.323 et l.326 lancent
-#   `docker build --build-arg QEMU_CACHE_BUST=$(date +%s) -f Dockerfile.run`
-# mais AUCUN `ARG QEMU_CACHE_BUST` n'existait : docker repondait « unused build
-# argument » et servait les deux `git pull` ci-dessous DEPUIS LE CACHE — les
-# deux RUN qu'on garde justement pour la fraicheur ne rafraichissaient rien, et
-# l'image run pouvait embarquer un qosmo et un osmo-operator perimes sans que
-# rien ne le signale. L'ARG est declare ici, JUSTE AVANT les pulls (un ARG
-# invalide le cache a son PREMIER USAGE, pas a sa declaration : d'ou le
-# `: "${QEMU_CACHE_BUST:-}"` en tete de chaque RUN, qui le consomme reellement).
+# ── Git tree refresh ──────────────────────────────────────────────────────────
+# start-docker.sh passes --build-arg QEMU_CACHE_BUST=$(date +%s). An ARG
+# invalidates the cache at its FIRST USE, not at its declaration: hence the
+# `: "${QEMU_CACHE_BUST:-}"` at the head of each RUN below, which consumes it.
 ARG QEMU_CACHE_BUST
 
-# [2026-08-12] Le `cd /opt/GSM/osmo-operator && git pull` qui était ici a été
-# supprimé : il faisait doublon avec celui de la ligne ~192, et rien entre les
-# deux ne consomme /opt/GSM/osmo-operator. On garde le plus tardif, au plus près
-# de l'entrypoint.
-# Le clone de l'image de base laisse HEAD sur la branche par defaut : un simple
-# pull suffit, aucune ref a nommer ici.
-# [2026-08-31] LE PULL NE PEUT PLUS TUER LE BUILD.
-# Constate : `git pull` ici sort en 1 avec
-#     fatal: could not read Username for 'https://github.com': No such device or address
-#     fatal: expected flush after ref listing
-# et emporte une image de 11 Go et 40 minutes de compilation - pour un
-# rafraichissement, pas pour une dependance.
-#
-# CE N EST PAS UN PROBLEME D IDENTIFIANTS. Le depot est PUBLIC : depuis l hote
-# comme depuis un conteneur LANCE (docker run), `git ls-remote origin HEAD`
-# repond a0a7888 en anonyme, DNS compris. Seul le reseau du BUILD echoue. Git
-# lit alors une reponse HTTP qu il n attend pas ("expected flush after ref
-# listing"), la prend pour une demande d authentification, et va chercher un
-# terminal qui n existe pas dans un build - d ou le message trompeur sur le nom
-# d utilisateur, qui envoie chercher des identifiants la ou il n en faut aucun.
-#
-# GIT_TERMINAL_PROMPT=0 : echouer TOUT DE SUITE et clairement plutot que de
-# bloquer sur une invite invisible.
-# `|| echo` : l arbre du clone de base reste utilisable tel quel. Une image qui
-# se construit avec un depot de la veille vaut mieux qu une image qui ne se
-# construit pas - et le message dit lequel des deux on a.
+# The base image clone leaves HEAD on the default branch: a plain pull is
+# enough. The pull must never kill the build: the build network may fail
+# (git then prints a misleading "could not read Username" although the
+# repository is public). GIT_TERMINAL_PROMPT=0 fails immediately instead of
+# blocking on an invisible prompt, and `|| echo` keeps the base clone's tree,
+# with a message saying which of the two we got.
 RUN : "${QEMU_CACHE_BUST:-}" && cd /opt/GSM/osmo-operator \
     && (GIT_TERMINAL_PROMPT=0 git pull --ff-only \
         || echo "[warn] git pull osmo-operator impossible (reseau du build) - on garde l arbre du clone de base")
 
-# ── Rebuild qosmo + c54x_exe + grgsm_exe (pull + rebuild) ────────────────────
-# [2026-09-25] qosmo-grgsm/qosmo-dsp sont retires : un seul arbre QEMU
-# (/opt/GSM/qosmo) et deux couches 1 hors QEMU, c54x_exe et grgsm_exe, qui
-# compilent les sources de /opt/GSM/qosmo (hw/arm/calypso, contrib/hors-qemu).
-# Les trois sont donc rafraichis DANS LE MEME RUN : un c54x_exe recompile sur
-# un qosmo perime (ou l inverse) donnerait un DSP et un ARM qui ne parlent pas
-# du meme protocole de pont, sans rien qui le signale. Ne pas decouper.
-# Le pull rafraichit, il ne conditionne pas (cf. osmo-operator ci-dessus).
-# [2026-10-01] fetch + reset --hard, PAS `pull --ff-only`. Les arbres de la base
-# portent des fichiers suivis modifies (__pycache__/*.pyc dans qosmo, le binaire
-# c54x_exe versionne) : le pull refusait de fusionner, le `|| echo` avalait
-# l echec et l image se reconstruisait sur du code perime. Ces arbres sont des
-# sources a jour, pas un espace de travail : on les aligne sur origin.
-# gcc-13 pour ninja : build/ de qosmo vient d un snapshot configure avec gcc-13
-# (meson y a memorise -ftrivial-auto-var-init, absent de gcc-11, le `cc` par
-# defaut de l image). Avec un arbre inchange ninja ne recompilait rien et la
-# difference ne se voyait pas ; des sources a jour imposent de recompiler, et
-# gcc-11 echouait des la premiere unite. Un PATH local suffit (update-alternatives ne connait pas gcc-13) ; le defaut reste gcc-11.
-# c54x_exe : CFLAGS sans -march=native, comme dans le Dockerfile de base.
+# ── Rebuild qosmo + c54x_exe + grgsm_exe (fetch + rebuild) ───────────────────
+# One QEMU tree (/opt/GSM/qosmo) and two layer-1 implementations outside QEMU,
+# c54x_exe and grgsm_exe, which compile sources from /opt/GSM/qosmo
+# (hw/arm/calypso, contrib/hors-qemu). All three are refreshed in the SAME RUN:
+# a c54x_exe rebuilt against a stale qosmo (or the reverse) would give a DSP
+# and an ARM speaking different bridge protocols with nothing reporting it.
+# Do not split.
+# fetch + reset --hard rather than `pull --ff-only`: the base trees carry
+# modified tracked files (__pycache__/*.pyc in qosmo, the versioned c54x_exe
+# binary) that a pull refuses to merge. These trees are sources, not a
+# workspace: align them on origin.
+# gcc-13 for ninja: qosmo's build/ was configured with gcc-13 (meson recorded
+# -ftrivial-auto-var-init, unknown to gcc-11, the image's default cc). A local
+# PATH is enough (update-alternatives does not know gcc-13); the default stays gcc-11.
+# c54x_exe: CFLAGS without -march=native, as in the base Dockerfile.
 RUN : "${QEMU_CACHE_BUST:-}" && \
     for d in qosmo c54x_exe grgsm_exe; do \
         (cd /opt/GSM/$d && GIT_TERMINAL_PROMPT=0 git fetch origin \

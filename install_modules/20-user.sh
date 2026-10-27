@@ -1,4 +1,4 @@
-# 20-user - compte de service, tel que le Dockerfile le cree.
+# 20-user - service account, as the Dockerfile creates it.
 INST_REGISTER user "Utilisateur et groupe osmocom"
 INST_DEPS[user]="prereqs"
 

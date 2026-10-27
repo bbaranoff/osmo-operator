@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Raccourci vers la console SS7 : le code vit dans navigation/.
+# ss7-console.py - shortcut to the SS7 console; the code lives in navigation/ss7-console.py.
 import os
 import runpy
 import sys

@@ -1,4 +1,4 @@
-# 60-binaires - depot des executables dans /usr/local/bin, comme le fait le Dockerfile.
+# 60-binaires - install the executables into /usr/local/bin, as the Dockerfile does.
 INST_REGISTER binaires "Installation des binaires"
 INST_DEPS[binaires]="build"
 

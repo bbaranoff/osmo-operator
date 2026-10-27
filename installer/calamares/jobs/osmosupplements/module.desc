@@ -1,7 +1,8 @@
 ---
-# [2026-10-24] Ecrit les choix des pages « Supplements » et « Image operateur » dans
-# /etc/osmo-supplements de la cible et active osmo-supplements.service (premier demarrage).
-# Pose par iso_modules/85-installeur-bureau.sh dans le repertoire des modules systeme.
+# module.desc - Calamares job osmosupplements: writes the choices of the
+# "Supplements" and "Image operateur" pages to /etc/osmo-supplements in the
+# target and enables osmo-supplements.service (first boot).
+# Installed by iso_modules/85-installeur-bureau.sh in the system modules directory.
 type: "job"
 name: "osmosupplements"
 interface: "python"

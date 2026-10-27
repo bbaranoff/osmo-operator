@@ -1,39 +1,39 @@
 # =============================================================================
-#  80-bureau - icones et raccourcis du bureau (install native)
+#  80-bureau - desktop icons and shortcuts (native install)
 # =============================================================================
-#  Pose EXACTEMENT ce que l ISO pose (build-iso.sh, etape 8d) a partir des
-#  memes fichiers du depot :
+#  Installs the same files the ISO installs (build-iso.sh), from the same
+#  repository files:
 #     data/desktop/osmo-launch.desktop   "Lancer le banc GSM"  -> launch.sh
-#     data/*.svg                         les icones
+#     data/desktop/osmo-dino.desktop     the Dino game
+#     data/*.svg                         the icons
+#  plus: /usr/local/bin/osmo-start-native and osmo-start-direct -> start-native.sh,
+#  c123 / osmo-c123 -> tools/osmo-c123-gtk.py, osmo-wg -> tools/osmo-wg.sh,
+#  the bench commands (tools/osmo-banc-cmd.sh), the profile.d snippets (gnuarm
+#  PATH, bench aliases, WireGuard), the gcc-9/gcc-11 alternatives and the
+#  GNOME default background (gschema override).
 #
-#  osmo-multi (antenne, multi-operator) N EST PLUS POSEE ICI : son lanceur
-#  start-multi.sh suppose le supplement SS7 (docker + image + topologie), qui
-#  n existe qu apres addition.sh. C est addition.sh qui pose l antenne, a la fin
-#  d une install SS7 reussie - pas avant, ou elle ne ferait rien au clic.
-#  et le lien /usr/local/bin/osmo-start-direct -> start-native.sh.
+#  osmo-multi (antenna, multi-operator) is NOT installed here: its launcher
+#  launch/start-multi.sh needs the SS7 supplement (docker + image + topology),
+#  which only exists after addition.sh; addition.sh installs that icon itself
+#  at the end of a successful SS7 install.
 #
-#  Icon= est reecrit en CHEMIN ABSOLU (/usr/share/osmo-operator/icons/*.svg) :
-#  un nom de theme passe par icon-theme.cache, qui ne connait pas une icone
-#  arrivee apres lui, et GNOME affiche alors une page blanche sans rien dire
-#  (voir update.sh, osmo_reposer_icones). Le cache est quand meme reconstruit
-#  pour le menu des applications.
+#  Icon= is rewritten as an ABSOLUTE PATH (/usr/share/osmo-operator/icons/*.svg):
+#  a theme name goes through icon-theme.cache, which does not know an icon
+#  added after it, and GNOME then silently shows a blank page. The cache is
+#  still rebuilt for the applications menu.
 #
-#  Les raccourcis sont copies sur le bureau de root et de l utilisateur qui a
-#  lance sudo (SUDO_USER), en Bureau/ et Desktop/. L attribut metadata::trusted
-#  ne peut pas etre pose ici (il vit dans les metadonnees gvfs de la session) :
-#  update.sh le pose au login, et un double-clic + "Autoriser" suffit sinon.
+#  Shortcuts are copied to the desktop of root and of the user who ran sudo
+#  (SUDO_USER), in Bureau/ and Desktop/. The metadata::trusted attribute
+#  cannot be set here (it lives in the session's gvfs metadata): update.sh
+#  sets it at login; otherwise double-click + "Allow" is enough.
 #
-#  [2026-10-12] LE FOND D ECRAN AUSSI. L ISO pose configs/gsm-lab-fond.jpg
-#  comme fond GNOME par defaut (iso_modules/80-chroot.sh, override de schema) ;
-#  l install native ne le faisait pas, et le bureau restait sur le numbat
-#  d Ubuntu. On pose le meme fichier (/usr/share/backgrounds/gsm-lab-fond.jpg)
-#  et le meme override (99-osmo-fond.gschema.override) : un DEFAUT de schema,
-#  pas un reglage d utilisateur - qui a choisi un autre fond le garde.
+#  The background is a schema DEFAULT (99-osmo-fond.gschema.override), not a
+#  user setting: a user who chose another background keeps it.
 #
-#  Ni osmo-tutorial, ni osmo-addition, ni osmo-update : leurs lanceurs sont
-#  des enrobages ecrits par build-iso.sh pour l image (terminal + pkexec) et
-#  dependent du bureau GNOME de l ISO. Sur une machine deja installee, launch.sh
-#  et start-multi.sh se suffisent.
+#  Neither osmo-tutorial, osmo-addition nor osmo-update: their launchers are
+#  wrappers written by build-iso.sh for the image (terminal + pkexec) and
+#  depend on the ISO's GNOME desktop. On an installed machine, launch.sh and
+#  launch/start-multi.sh are enough.
 # -----------------------------------------------------------------------------
 INST_REGISTER bureau "Bureau : icones et raccourcis"
 INST_DEPS[bureau]="configs"
@@ -41,18 +41,18 @@ INST_REQUIRED[bureau]=0
 
 _BUREAU_ICONS=/usr/share/osmo-operator/icons
 _BUREAU_ENTRIES="osmo-launch osmo-dino"
-# [2026-10-12] Le fond au repos est la ville SANS antenne (gsm-lab-ville.jpg) ;
-# gsm-lab-antenne.jpg (la meme ville, le pylone dresse) est posee en fondu par
-# tools/osmo-fond.py quand une 2G/4G tourne. Les deux sont copiees ; le
-# paysage low-poly (gsm-lab-fond.jpg) aussi, sans etre le defaut.
+# The idle background is the city WITHOUT antenna (gsm-lab-ville.jpg);
+# gsm-lab-antenne.jpg (same city, mast raised) is faded in by tools/osmo-fond.py
+# while a 2G/4G network runs. Both are copied, plus the low-poly landscape
+# (gsm-lab-fond.jpg), which is not the default.
 _BUREAU_FOND=/usr/share/backgrounds/gsm-lab-ville.jpg
 _BUREAU_FONDS="gsm-lab-antenne.jpg gsm-lab-fond.jpg"
 _BUREAU_SCHEMA=/usr/share/glib-2.0/schemas/99-osmo-fond.gschema.override
 
-# Le fond par defaut : meme fichier et memes trois sections que l ISO
-# (org.gnome.desktop.background, :ubuntu, :GNOME-Greeter - une session
-# ubuntu:GNOME lit les secondes de preference). Sans glib-compile-schemas
-# (pas de GNOME ici), on pose le fichier et on s arrete la.
+# Default background: same file and same three sections as the ISO
+# (org.gnome.desktop.background, :ubuntu, :GNOME-Greeter - an ubuntu:GNOME
+# session reads the latter). Without glib-compile-schemas (no GNOME here),
+# the file is installed and nothing more.
 _bureau_fond() {
     local src="$INST_TREE/configs/gsm-lab-ville.jpg" sec f
     for f in $_BUREAU_FONDS; do
@@ -67,9 +67,9 @@ _bureau_fond() {
         printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" \
             "$sec" "$_BUREAU_FOND" "$_BUREAU_FOND" >> "$_BUREAU_SCHEMA"
     done
-    # [2026-10-24] MODE CLAIR PAR DEFAUT, comme l ISO (iso_modules/80-chroot.sh) :
-    # Yaru-blue, color-scheme default. 99-osmo-live (pose par l ISO sur une
-    # machine installee depuis elle) disait prefer-dark : il est remis au clair.
+    # Light mode by default, as on the ISO (iso_modules/80-chroot.sh):
+    # Yaru-blue, color-scheme default. A 99-osmo-live override left by the ISO
+    # on a machine installed from it is switched back to light as well.
     for sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu" "org.gnome.desktop.interface:GNOME-Greeter"; do
         printf "\n[%s]\ncolor-scheme='default'\ngtk-theme='Yaru-blue'\nicon-theme='Yaru-blue'\ncursor-theme='Yaru'\n" \
             "$sec" >> "$_BUREAU_SCHEMA"
@@ -124,32 +124,32 @@ inst_bureau_run() {
         }
         install -m644 "$INST_TREE/data/desktop/$e.desktop" "/usr/share/applications/$e.desktop" \
             || { inst_fail "copie impossible : $e.desktop"; return $INST_RC_FAIL; }
-        # Exec= et Icon= suivent l arbre INSTALLE, pas /opt/GSM en dur : ce
-        # depot peut vivre ailleurs (GSM_ROOT).
+        # Exec= and Icon= follow the INSTALLED tree, not a hard-coded /opt/GSM:
+        # this repository may live elsewhere (GSM_ROOT).
         sed -i -e "s|^Exec=/opt/GSM/osmo-operator/|Exec=$INST_TREE/|" \
                -e "s|^Icon=.*|Icon=$_BUREAU_ICONS/$e.svg|" "/usr/share/applications/$e.desktop"
         inst_say "menu : /usr/share/applications/$e.desktop"
     done
-    # osmo-start-native : le nom du lanceur depuis le 2026-10-18 ; osmo-start-direct
-    # garde l ancien nom pour les habitudes et les scripts deja ecrits.
+    # osmo-start-native is the launcher name; osmo-start-direct is kept as an
+    # alias for existing habits and scripts.
     ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-native
     ln -sf "$INST_TREE/start-native.sh" /usr/local/bin/osmo-start-direct
-    # [2026-10-24] c123 : la fenetre du C123 emule (tools/osmo-c123-gtk.py) dans le
-    # PATH, pas seulement en alias de shell de connexion. Elle tourne sous le
-    # python3 SYSTEME : PyGObject + GTK3 + cairo (Gdk.cairo_set_source_pixbuf
-    # veut python3-gi-cairo) viennent d apt, pas de pip.
+    # c123: the emulated C123 window (tools/osmo-c123-gtk.py) in the PATH, not
+    # only as a login-shell alias. It runs under the SYSTEM python3: PyGObject
+    # + GTK3 + cairo (python3-gi-cairo for Gdk.cairo_set_source_pixbuf) come
+    # from apt, not from pip.
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/c123
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
-    # [2026-10-24] banc-rssi, banc-trx, c123-1... : profile.d ET vraies commandes (tools/osmo-banc-cmd.sh)
+    # banc-rssi, banc-trx, c123-1...: profile.d aliases AND real commands (tools/osmo-banc-cmd.sh)
     install -m644 "$INST_TREE/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
     OSMO_BANC_TREE="$INST_TREE" bash "$INST_TREE/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
-    install -m644 "$INST_TREE/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh   # gnuarm dans le PATH, s il est pose
-    # [2026-10-24] gcc-9 et gcc-11 a cote de gcc-13, et leurs alternatives, comme l ISO
-    # (iso_modules/80-chroot.sh) : jolly/testing et burst_ind d osmocom-bb veulent gcc-9.
+    install -m644 "$INST_TREE/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh   # gnuarm in the PATH, if installed
+    # gcc-9 and gcc-11 next to gcc-13, with their alternatives, as on the ISO
+    # (iso_modules/80-chroot.sh): jolly/testing and burst_ind of osmocom-bb need gcc-9.
     apt-get install -y --no-install-recommends gcc-9 g++-9 gcc-11 g++-11 >/dev/null \
         || inst_hint "gcc-9 / gcc-11 non installes : alternatives limitees aux compilateurs presents"
     bash "$INST_TREE/tools/osmo-gcc-alternatives.sh"
-    # [2026-10-24] WireGuard du WAN : « wg 1 » / « wg N ... » (tools/osmo-wg.sh), comme l ISO
+    # WireGuard for the WAN: "wg 1" / "wg N ..." (tools/osmo-wg.sh), as on the ISO
     install -m644 "$INST_TREE/scripts/osmo-wg-profile.sh" /etc/profile.d/97-osmo-wg.sh
     ln -sf "$INST_TREE/tools/osmo-wg.sh" /usr/local/bin/osmo-wg
     command -v wg-quick >/dev/null 2>&1 \

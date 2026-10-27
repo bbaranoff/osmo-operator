@@ -1,71 +1,60 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# update.sh - l'animation SMS de l'ouverture de session. Rien d'autre.
+# update.sh - per-session catch-up of an installed osmo-operator machine, then
+# the "SMS delivered" session animation.
 #
-# [2026-08-27] Ce fichier ne faisait pas ce que son nom dit : il posait un
-# osmo-sync.sh qui, a CHAQUE demarrage, effacait puis reclonait osmo-operator et
-# osmo-egprs-web depuis GitHub, resynchronisait qosmo-grgsm, installait socat a
-# coups d'apt, et rearmait un declencheur sur la console. Trois consequences :
+# Everything that belongs to the build (cloning repos, apt packages, services)
+# is done by build-iso.sh. This script only replays, idempotently and offline,
+# what an already installed machine would otherwise miss after a git pull:
+#   - desktop icons (absolute Icon= paths, metadata::trusted, icon cache);
+#   - osmo-multi.service: Wants= instead of Requires=osmo-banc.service;
+#   - QEMU mobile template (c54x_exe/mobile_pont.cfg) aligned on PLAN_ARFCN;
+#   - launchers and .desktop entries: overlay-draw, postmarketOS phone, deka,
+#     4G/LTE and smartphone UI (tools/osmo-lte-install.sh,
+#     tools/osmo-pmos-install.sh), Wireshark (root, bench filters),
+#     /usr/local/bin launchers of tools/osmo-extras-install.sh,
+#     osmo-start-native / osmo-start-direct, the "?" help page (osmo-info);
+#   - systemd: services/osmo-banc.service, web consoles (osmo-egprs-web,
+#     open5gs-webui) enabled unless masked, "no telecom service at boot"
+#     policy applied once (tools/osmo-telecom-boot.sh), osmo-* units run as
+#     the session user instead of the missing "osmocom" account;
+#   - osmo-desktop-panel wrapper (desktop widgets, Conky);
+#   - Firefox from the Mozilla deb repository when no browser is present;
+#   - session user added to the docker group;
+#   - audio: /etc/osmocom/gapk-start.sh, Asterisk 600 echo test, PulseAudio
+#     echo canceller and speech-dispatcher sink; srsUE log levels;
+#   - voice settings in the qosmo forks (scripts/voix-forks.sh);
+#   - gnuarm profile, gcc alternatives, c123 and banc-* commands, WireGuard;
+#   - patches/*.patch applied to the /opt/GSM trees (tools/osmo-patches-apply.sh).
 #
-#   - ce qui tournait sur la machine n'etait plus ce que l'ISO portait, mais ce
-#     que GitHub avait ce matin-la ;
-#   - sans reseau au demarrage, les arbres effaces ne revenaient pas ;
-#   - un paquet reinstalle a chaque boot, c'est un boot qui depend du reseau.
+# Usage:
+#   sudo ./update.sh            run the catch-up steps, then play the animation
+#   sudo ./update.sh --quiet    run the catch-up steps only (exit code 0)
+#   ./update.sh -h | --help     print this header
 #
-# Tout cela appartient a la CONSTRUCTION, pas au demarrage : c'est build-iso.sh
-# qui embarque desormais les trois depots AVEC leur .git (et qosmo-grgsm avec son
-# build/ compile), installe socat/nc/tcpdump/git dans le rootfs, et pose le
-# service du dashboard. Une machine qui demarre n'a plus rien a aller chercher.
-#
-# Ce qu'il reste ici est ce qui ne peut pas etre fait a la construction, ou
-# qui doit rattraper les machines DEJA installees :
-#
-#   - l'animation, qui a besoin d'un terminal et de quelqu'un devant ;
-#   - la repose des ICONES DU BUREAU (voir le bloc dedie plus bas) : les
-#     raccourcis dessines tombaient en page blanche generique, et le
-#     correctif de build-iso.sh ne touche que les ISO a venir. Idempotent.
-#
-# Usage :
-#   sudo ./update.sh            repose les icones, puis joue l'animation
-#   sudo ./update.sh --quiet    repose les icones, sans l'animation (code 0)
-#
-# Sur l'ISO, /etc/profile.d/99-osmo-sms.sh l'appelle une fois par demarrage,
-# apres le choix du clavier (ordre alphabetique de /etc/profile.d).
+# On the ISO, /etc/profile.d/99-osmo-sms.sh calls it once per session, after
+# the keyboard choice (alphabetical order of /etc/profile.d). Most steps need
+# root and are skipped silently otherwise. Without a tty, the result is shown
+# in a zenity window when a display is available; otherwise the script exits
+# 0 silently.
 # ══════════════════════════════════════════════════════════════════════════════
 set -u
 
-# Meme raison que dans build.sh : ce script est appele depuis
-# /etc/profile.d et depuis les lanceurs du bureau, ou le repertoire courant
-# n'est pas le sien. On se place chez soi avant de toucher a quoi que ce soit.
+# Called from /etc/profile.d and from desktop launchers, where the current
+# directory is not the repository: move there before touching anything.
 cd "$(dirname "$(readlink -f "$0")")" || true
 
 case "${1:-}" in
     -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
-# ── LES ICONES DU BUREAU, REPOSEES A CHAQUE DEMARRAGE ───────────────────────
-# [2026-08-31] Les trois raccourcis dessines - "Lancer le banc GSM",
-# "multi-operator", "Tutoriel" - s affichaient en PAGE BLANCHE generique sur le
-# bureau. Les SVG etaient pourtant valides et bien poses dans
-# /usr/share/icons/hicolor/scalable/apps/.
-#
-# La cause n est pas le fichier, c est la RESOLUTION DU NOM. "Icon=osmo-launch"
-# n est pas un chemin : c est un nom que GTK va chercher dans le thème, via
-# /usr/share/icons/hicolor/icon-theme.cache. Ce cache datait d AVANT l arrivee
-# des icones - releve sur le banc :
-#     strings /usr/share/icons/hicolor/icon-theme.cache | grep -c osmo  ->  0
-#     cache 17:22:12   ·   icones 17:28:07
-# Zero entree sur trois. Et un nom d icone qui ne resout pas ne provoque aucune
-# erreur : GNOME/DING le remplace EN SILENCE par la page blanche. "Supplements"
-# gardait la sienne parce que "system-software-install" vient de Yaru, deja
-# dans le cache depuis l installation du systeme.
-#
-# build-iso.sh pose desormais le correctif dans l image. Le meme correctif est
-# REJOUE ICI parce qu une machine deja installee ne repasse pas par la
-# construction : sans ce bloc, elle garderait ses pages blanches jusqu a la
-# prochaine ISO. Tout y est idempotent - on peut le rejouer a chaque session.
+# ── DESKTOP ICONS, RE-INSTALLED AT EVERY SESSION ────────────────────────────
+# "Icon=<name>" is resolved through the hicolor icon-theme cache, and a name
+# that does not resolve is silently replaced by a blank page by GNOME/DING.
+# The shortcuts therefore carry Icon= with an absolute path; the theme copy
+# (plus a cache refresh) only serves the application menu. Idempotent.
 osmo_reposer_icones() {
-    [ "$(id -u)" -eq 0 ] || return 0        # sans droits : on ne casse rien
+    [ "$(id -u)" -eq 0 ] || return 0        # without root: nothing to do
     local src=/opt/GSM/osmo-operator/data
     local dst=/usr/share/osmo-operator/icons
     [ -d "$src" ] || return 0
@@ -76,8 +65,8 @@ osmo_reposer_icones() {
         [ -f "$src/$ic.svg" ] || continue
         cp -f "$src/$ic.svg" "$dst/$ic.svg" 2>/dev/null || continue
         chmod 644 "$dst/$ic.svg" 2>/dev/null || true
-        # La copie du thème sert au MENU des applications, qui lui resout
-        # encore par nom ; le bureau, lui, passe par le chemin absolu.
+        # The theme copy serves the application MENU, which still resolves
+        # icons by name; the desktop uses the absolute path.
         install -d /usr/share/icons/hicolor/scalable/apps 2>/dev/null || true
         cp -f "$src/$ic.svg" \
               "/usr/share/icons/hicolor/scalable/apps/$ic.svg" 2>/dev/null || true
@@ -85,16 +74,10 @@ osmo_reposer_icones() {
     command -v gtk-update-icon-cache >/dev/null 2>&1 && \
         gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
 
-    # Icon= EN CHEMIN ABSOLU : plus de thème, plus de cache, plus de silence.
-    # Les raccourcis vivent en trois endroits (le menu, et les deux noms du
-    # bureau - Bureau en francais, Desktop en anglais, DING lit celui que la
-    # locale designe) ; les trois doivent porter la meme ligne.
-    # [2026-09-05] TOUS LES COMPTES, PAS « osmocom » EN DUR. La liste nommait
-    # /home/osmocom, le compte de la cle ; l installeur, lui, cree le compte que
-    # l utilisateur a choisi. Sur une machine installee, aucune de ces lignes ne
-    # designait donc son bureau, et les icones y gardaient l ancien Icon= (ou
-    # n etaient jamais reparees). Meme confusion racine/session que les blocs
-    # d addition.sh corriges le meme jour.
+    # Icon= as an absolute path: no theme, no cache, no silent fallback.
+    # The shortcuts live in the menu and on each account's desktop (Bureau or
+    # Desktop, whichever the locale names); every copy carries the same line.
+    # All accounts are covered, not only a hard-coded "osmocom".
     local f b d
     for d in /usr/share/applications /root/Bureau /root/Desktop \
              /home/*/Bureau /home/*/Desktop; do
@@ -107,15 +90,11 @@ osmo_reposer_icones() {
         done
     done
 
-    # Un .desktop du bureau ne s affiche avec son nom et son icone que s il est
-    # executable ET porteur de metadata::trusted. Cet attribut vit dans les
-    # metadonnees gvfs de la SESSION, jamais dans le fichier : il se repose
-    # donc ici, sous la session, et pas a la construction.
-    # metadata::trusted vit dans les metadonnees gvfs DU PROPRIETAIRE : un `gio
-    # set` lance par root le pose pour root, jamais pour la session de
-    # l utilisateur. On repasse donc par son compte et son bus (runuser), comme
-    # _trust_desktop() d addition.sh - sans quoi les icones du compte installe
-    # restaient en pastille « fichier non fiable ».
+    # A desktop .desktop file only shows its name and icon when it is
+    # executable AND carries metadata::trusted. That attribute lives in the
+    # OWNER's gvfs session metadata, never in the file: a `gio set` run by root
+    # sets it for root only, so it is set through the owner's account and
+    # session bus (runuser), as _trust_desktop() in addition.sh does.
     local _own _uid _bus
     for d in "$HOME/Bureau" "$HOME/Desktop" /root/Bureau /root/Desktop \
              /home/*/Bureau /home/*/Desktop; do
@@ -135,8 +114,8 @@ osmo_reposer_icones() {
                 gio set -t string "$f" metadata::trusted true 2>/dev/null || true
             fi
         done
-        # DING ne relit pas les metadonnees a chaud : toucher le repertoire le
-        # force a rebalayer, sinon la page blanche reste jusqu au login suivant.
+        # DING does not re-read metadata on the fly: touching the directory
+        # forces a rescan.
         touch "$d" 2>/dev/null || true
     done
     update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -144,13 +123,11 @@ osmo_reposer_icones() {
 }
 osmo_reposer_icones
 
-# ── LE MULTI NE DOIT PAS SE TUER EN RECYCLANT LE NATIF ──────────────────────
-# [2026-09-05] osmo-multi.service portait `Requires=osmo-banc.service`. Or
-# start-multi.sh applique « un clic = un banc neuf » : il ARRETE osmo-banc a
-# chaque lancement, puis le relance. Requires= propage l arret explicite d une
-# dependance a l unite qui en depend -- ce stop du natif arretait osmo-multi
-# LUI-MEME en plein ExecStart (code=killed, status=15/TERM). Le correctif est
-# `Wants=` : meme ordre au boot (After=), mais plus de propagation de l arret.
+# ── osmo-multi.service MUST NOT DIE WHEN THE NATIVE BENCH IS RECYCLED ───────
+# start-multi.sh stops and restarts osmo-banc at every launch. With
+# Requires=osmo-banc.service that explicit stop would propagate to osmo-multi
+# itself during its ExecStart; Wants= keeps the boot order (After=) without
+# propagating the stop.
 osmo_corriger_multi_natif() {
     [ "$(id -u)" -eq 0 ] || return 0
     local unit=/etc/systemd/system/osmo-multi.service
@@ -165,13 +142,11 @@ osmo_corriger_multi_natif() {
 }
 osmo_corriger_multi_natif
 
-# ── LE MOBILE QEMU DOIT CHERCHER LA CELLULE SUR L ARFCN DU PLAN ─────────────
-# [2026-10-24] Dans les conteneurs du multi, la BSC emet sur PLAN_ARFCN (1,
-# globals.conf ARFCN="1") mais le mobile QEMU de l instance 1 lit
-# c54x_exe/mobile_pont.cfg tel quel : `stick 514`, le gabarit. run.sh ne
-# reecrit le stick que pour les instances 2+ : le mobile cherchait 514 et
-# ne trouvait jamais la cellule. On aligne le gabarit sur le plan radio
-# (radio-plan.env, puis ARFCN de globals.conf, puis 1). Idempotent.
+# ── THE QEMU MOBILE MUST LOOK FOR THE CELL ON THE RADIO PLAN'S ARFCN ─────────
+# The BSC of the multi containers transmits on PLAN_ARFCN, but the QEMU mobile
+# of instance 1 reads c54x_exe/mobile_pont.cfg as is (run.sh only rewrites
+# "stick" for instances 2+). Align the template on the radio plan:
+# radio-plan.env, then ARFCN of globals.conf, then 1. Idempotent.
 osmo_aligner_arfcn_qemu() {
     local cfg arfcn
     arfcn="$( . /etc/osmocom/radio-plan.env 2>/dev/null; echo "${PLAN_ARFCN:-}")"
@@ -182,9 +157,9 @@ osmo_aligner_arfcn_qemu() {
         [ -w "$cfg" ] || continue
         grep -qE "^[[:space:]]*stick ${arfcn}\$" "$cfg" \
             && ! grep -qE "^[[:space:]]*no (p|e)-gsm\$" "$cfg" && continue
-        # [2026-10-24] le gabarit ne supporte que DCS (no p-gsm/no e-gsm) : un
-        # stick sur une ARFCN 900 non supportee fait boucler gsm322_cs_powerscan
-        # a 100 % CPU (« goto again » sans fin), le mobile ne dit plus rien.
+        # The template only enables DCS (no p-gsm / no e-gsm): a stick on an
+        # unsupported 900 MHz ARFCN makes gsm322_cs_powerscan loop at 100% CPU,
+        # so the P/E-GSM bands are enabled as well.
         sed -i -e "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${arfcn}|" \
             -e "s|^\([[:space:]]*\)no \([pe]-gsm\)\$|\1\2|" "$cfg"
         echo "[OK] $cfg : stick ${arfcn} (ARFCN du plan radio), bandes P/E-GSM actives."
@@ -193,9 +168,9 @@ osmo_aligner_arfcn_qemu() {
 }
 osmo_aligner_arfcn_qemu
 
-# ── L OUTIL DE PEINTURE (overlay) SUR LES MACHINES DEJA INSTALLEES ──────────
-# [2026-09-05] tools/overlay-draw.py + son lanceur. build-iso l embarque ; ici
-# on rattrape les machines deja posees : symlink, icone, chemin absolu. Idempotent.
+# ── THE OVERLAY PAINT TOOL ON ALREADY INSTALLED MACHINES ────────────────────
+# tools/overlay-draw.py and its launcher: symlink, icon, absolute icon path.
+# Idempotent.
 osmo_poser_peinture() {
     [ "$(id -u)" -eq 0 ] || return 0
     local d=/opt/GSM/osmo-operator
@@ -223,13 +198,11 @@ osmo_poser_peinture() {
 }
 osmo_poser_peinture
 
-# ── LE TELEPHONE postmarketOS SUR LES MACHINES DEJA INSTALLEES ──────────────
-# [2026-09-07] Le telephone du banc n est plus Android (Waydroid, abandonne)
-# mais une VM postmarketOS/Phosh : tools/osmo-pmos.sh. L ISO et le supplement
-# (addition.sh, par tools/osmo-extras-install.sh) posent son lanceur et son
-# icone ; une machine deja installee, elle, ne repasse ni par l un ni par
-# l autre - d ou ce rattrapage. On enleve au passage l ancien lanceur Waydroid,
-# qui pointerait sur un script disparu du depot. Idempotent.
+# ── THE postmarketOS PHONE ON ALREADY INSTALLED MACHINES ────────────────────
+# The bench phone is a postmarketOS/Phosh VM (tools/osmo-pmos.sh). The ISO and
+# addition.sh (through tools/osmo-extras-install.sh) install its launcher and
+# icon; this replays it on installed machines and removes the obsolete
+# Waydroid launcher. Idempotent.
 osmo_poser_pmos() {
     [ "$(id -u)" -eq 0 ] || return 0
     local d=/opt/GSM/osmo-operator
@@ -262,24 +235,20 @@ Name=Arreter le telephone
 Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --close-on-exit --title "Arret du telephone" -- /usr/local/bin/osmo-pmos stop
 PMD
     chmod 644 /usr/share/applications/osmo-pmos.desktop 2>/dev/null || true
-    # [2026-09-07] LES DEUX LANCEURS PAR pmbootstrap vivent dans le depot :
-    # tools/osmo-pmos-qemu.sh (la VM, format smartphone|tablette en argument)
-    # et tools/osmo-pmos-setup.sh (le modem et la voix, VM demarree). Le
-    # patch pmbootstrap qui va avec (port serie du modem, cartes son, taille
-    # d ecran) est patches/pmbootstrap-osmo-bench-qemu.patch - il s applique
-    # dans le pmbootstrap de l utilisateur, pas ici.
+    # The two pmbootstrap launchers: tools/osmo-pmos-qemu.sh (the VM, format
+    # smartphone|tablette as argument) and tools/osmo-pmos-setup.sh (modem and
+    # voice, VM running). The matching pmbootstrap patch,
+    # patches/pmbootstrap-osmo-bench-qemu.patch, applies to the user's
+    # pmbootstrap, not here.
     local s
     for s in qemu setup; do
         [ -f "$d/tools/osmo-pmos-$s.sh" ] \
             && install -m 755 "$d/tools/osmo-pmos-$s.sh" "/usr/local/bin/osmo-pmos-$s" 2>/dev/null
     done
-    # [2026-09-07] DEUX FORMATS, DEUX ICONES. Phosh se met en page d apres
-    # l ecran qu on lui donne : haut et etroit, c est un telephone ; large,
-    # c est une tablette - meme image, meme session. C est la carte graphique
-    # de QEMU qui porte cette taille (OSMO_PMOS_RES, lu par le patch
-    # pmbootstrap), et le systeme demarre dedans : le format se choisit donc
-    # AU LANCEMENT et ne change pas sous une session deja ouverte. D ou deux
-    # entrees plutot qu un reglage.
+    # Two formats, two icons: Phosh lays itself out according to the screen
+    # QEMU gives it (OSMO_PMOS_RES, read by the pmbootstrap patch), and that
+    # size cannot change under a running session, so the format is chosen at
+    # launch through two entries.
     local f n r
     for f in smartphone:720x1440 tablette:1280x800; do
         n="${f%%:*}"; r="${f#*:}"
@@ -318,17 +287,10 @@ PMD
 }
 osmo_poser_pmos
 
-# ── DEKA : UN STOP AU CLIC DROIT DE L ICONE ──────────────────────────────────
-# [2026-10-25] L icone deka ne savait que DEMARRER (clic = osmo-deka-anim ->
-# deka-start.sh). Pour arreter (tuer les workers, demonter les tables,
-# desactiver le LVM) il fallait un terminal et « deka-start.sh --stop ». On
-# ajoute donc une ACTION de menu (clic droit) « Arreter deka », exactement
-# comme le telephone pmOS expose son arret. Le clic principal reste le
-# demarrage ; deka-start.sh fait deja un --stop implicite avant de remonter.
-#
-# addition.sh (--opencl) POSE le .desktop ; ici on ne fait que le REECRIRE pour
-# lui ajouter l action, et seulement si deka est installe - sinon on ne touche
-# a rien.
+# ── DEKA: A STOP ACTION ON THE ICON'S RIGHT CLICK ───────────────────────────
+# addition.sh (--opencl) installs deka.desktop; it is rewritten here only to
+# add the "Arreter deka" menu action (deka-start.sh --stop), and only when deka
+# is installed. The main click still starts deka.
 osmo_poser_deka() {
     local dsk=/usr/share/applications/deka.desktop
     [ -x /usr/local/bin/osmo-deka-anim ] || [ -f "$dsk" ] || return 0
@@ -360,13 +322,13 @@ DEKADSK
 }
 osmo_poser_deka
 
-# ── LA 4G ET L UI SMARTPHONE : le rattrapage ─────────────────────────────────
-# [2026-09-08] Meme source que addition.sh et l ISO (tools/osmo-lte-install.sh,
-# tools/osmo-pmos-install.sh). Ici on ne compile rien : les configs du depot
-# (sans ecraser celles qui existent), les lanceurs osmo-lte / osmo-epc /
-# open5gs-epc.sh, le layout /opt/user_interface/pmos et son noyau PPP (du
-# cache .deb ou de GitHub). Les binaires, s ils manquent, viennent des .deb
-# du cache ; sinon « osmo-lte-install --build ».
+# ── 4G AND THE SMARTPHONE UI: CATCH-UP ──────────────────────────────────────
+# Same sources as addition.sh and the ISO (tools/osmo-lte-install.sh,
+# tools/osmo-pmos-install.sh). Nothing is compiled here: repository configs
+# (existing ones are not overwritten), the osmo-lte / osmo-epc /
+# open5gs-epc.sh launchers, the /opt/user_interface/pmos layout and its PPP
+# kernel (from the .deb cache or GitHub). Missing binaries come from the cached
+# .deb files; otherwise run "osmo-lte-install --build".
 osmo_poser_lte() {
     local d=/opt/GSM/osmo-operator
     if [ -f "$d/tools/osmo-lte-install.sh" ]; then
@@ -382,15 +344,13 @@ osmo_poser_lte() {
 }
 osmo_poser_lte
 
-# ── WIRESHARK : UNE ICONE QUI ECOUTE DEJA LE BANC ───────────────────────────
-# [2026-09-08] tools/osmo-wireshark-root.sh : root par pkexec (invite de mot de
-# passe graphique), capture immediate LTE + SCTP + GSM, filtre d affichage 2G +
-# 4G + telephone (signalisation, appel, SMS, data ; les battements de coeur
-# retranches) et boutons de filtre dans le profil de root. « wireshark » au
-# clavier est un lien dessus. Le favori du dock (org.wireshark.Wireshark, le
-# Wireshark nu qui refuse de capturer) est remplace par le notre, pour chaque
-# session ouverte - les favoris sont dans le dconf de l utilisateur, pas de
-# root (voir la famille root / session). L ISO fait pareil dans 80-chroot.
+# ── WIRESHARK: AN ICON THAT ALREADY LISTENS TO THE BENCH ────────────────────
+# tools/osmo-wireshark-root.sh: root through pkexec, immediate LTE + SCTP + GSM
+# capture, 2G + 4G + phone display filter (signalling, call, SMS, data;
+# heartbeats removed) and filter buttons in root's profile. "wireshark" on the
+# command line links to it. The dock favourite (org.wireshark.Wireshark, which
+# cannot capture) is replaced by ours in every open session; favourites live
+# in the user's dconf, not root's. The ISO does the same in 80-chroot.
 osmo_poser_wireshark() {
     [ "$(id -u)" -eq 0 ] || return 0
     local d=/opt/GSM/osmo-operator
@@ -412,7 +372,7 @@ Keywords=wireshark;capture;pcap;reseau;lte;sctp;gsm;gsmtap;2g;4g;sms;appel;
 WSD
     chmod 644 /usr/share/applications/osmo-wireshark-root.desktop
     update-desktop-database /usr/share/applications 2>/dev/null || true
-    # Le favori, dans chaque session GNOME ouverte.
+    # The favourite, in every open GNOME session.
     local u uid bus
     for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
         uid="$(id -u "$u" 2>/dev/null)" || continue
@@ -434,12 +394,10 @@ PY
 }
 osmo_poser_wireshark
 
-# ── LES LANCEURS /usr/local/bin (osmo-dino-play, osmo-youtube...) ───────────
-# [2026-09-07] osmo-dino-play est CUIT dans /usr/local/bin par
-# tools/osmo-extras-install.sh (addition.sh et l ISO) ; quand il change dans
-# le depot - le plein ecran pilote par la page, ce jour-la - une machine deja
-# installee garde l ancien. On rejoue la seule fonction qui pose les lanceurs :
-# idempotente, sans apt, sans reseau.
+# ── THE /usr/local/bin LAUNCHERS (osmo-dino-play, osmo-youtube...) ──────────
+# They are installed by tools/osmo-extras-install.sh (addition.sh and the ISO);
+# replay its launcher function alone so installed machines follow the
+# repository. Idempotent, no apt, no network.
 osmo_reposer_lanceurs() {
     [ "$(id -u)" -eq 0 ] || return 0
     local ex=/opt/GSM/osmo-operator/tools/osmo-extras-install.sh
@@ -452,10 +410,10 @@ osmo_reposer_lanceurs() {
 }
 osmo_reposer_lanceurs
 
-# ── start-direct.sh DEVENU start-native.sh (2026-10-18) ──────────────────────
-# Le lien /usr/local/bin/osmo-start-direct d une machine deja installee vise
-# encore start-direct.sh, que git pull vient de faire disparaitre. On le
-# repointe, et on pose le nouveau nom a cote. Idempotent.
+# ── osmo-start-direct -> start-native.sh ────────────────────────────────────
+# /usr/local/bin/osmo-start-direct on an installed machine may still point to
+# the removed start-direct.sh: repoint it and install osmo-start-native next
+# to it. Idempotent.
 osmo_reposer_lien_start_native() {
     [ "$(id -u)" -eq 0 ] || return 0
     local t=/opt/GSM/osmo-operator/start-native.sh l
@@ -467,12 +425,9 @@ osmo_reposer_lien_start_native() {
 }
 osmo_reposer_lien_start_native
 
-# ── osmo-banc.service : L UNITE INSTALLEE SUIT CELLE DU DEPOT (2026-10-23) ───
-# La copie de /etc/systemd/system visait encore start-direct.sh : sa
-# ConditionPathExists etait fausse, systemd sautait l unite SANS erreur et
-# l icone du telephone rouge (launch.sh -> systemctl restart osmo-banc) ne
-# lancait rien. On repose services/osmo-banc.service (start.sh) quand elle
-# differe, sans toucher a une unite absente (machine sans le service).
+# ── osmo-banc.service: THE INSTALLED UNIT FOLLOWS THE REPOSITORY ─────────────
+# Re-install services/osmo-banc.service when it differs from the installed
+# copy; a machine without the unit is left alone.
 osmo_reposer_unite_banc() {
     [ "$(id -u)" -eq 0 ] || return 0
     local src=/opt/GSM/osmo-operator/services/osmo-banc.service dst=/etc/systemd/system/osmo-banc.service
@@ -483,11 +438,10 @@ osmo_reposer_unite_banc() {
 }
 osmo_reposer_unite_banc
 
-# ── AUCUN SERVICE TELECOM AU BOOT : RATTRAPAGE, UNE SEULE FOIS (2026-10-23) ───
-# Les machines installees avant la politique (tools/osmo-telecom-boot.sh) la
-# recoivent ici, UNE fois (marqueur) : un service que l operateur reactive
-# ensuite (systemctl enable osmo-banc) ne doit pas etre redesactive a chaque
-# mise a jour.
+# ── NO TELECOM SERVICE AT BOOT: APPLIED ONCE ─────────────────────────────────
+# tools/osmo-telecom-boot.sh is run once (marker file) so that a service the
+# operator re-enables afterwards (systemctl enable osmo-banc) is not disabled
+# again at every update.
 osmo_politique_telecom_boot() {
     [ "$(id -u)" -eq 0 ] || return 0
     local m=/var/lib/osmo-operator/telecom-boot-v1 t=/opt/GSM/osmo-operator/tools/osmo-telecom-boot.sh
@@ -497,11 +451,10 @@ osmo_politique_telecom_boot() {
 }
 osmo_politique_telecom_boot
 
-# ── LE « ? » DU DOCK : PAGE D AIDE SERVIE EN HTTP, EN TETE (2026-10-23) ───────
-# L icone ouvrait file:///usr/share/osmo-operator/info.html, que Firefox (snap)
-# ne lit pas : page vide. On pose /usr/local/bin/osmo-info (dashboard 8080, repli
-# local), la page a jour aux deux endroits, et osmo-info.desktop en tete des
-# favoris de chaque session ouverte.
+# ── THE DOCK'S "?": HELP PAGE SERVED OVER HTTP, FIRST FAVOURITE ─────────────
+# Installs /usr/local/bin/osmo-info (dashboard on port 8080, local fallback),
+# the help page in both locations, and osmo-info.desktop as first favourite of
+# every open session (snap Firefox cannot open file:// pages).
 osmo_poser_aide() {
     [ "$(id -u)" -eq 0 ] || return 0
     local R=/opt/GSM/osmo-operator u uid bus
@@ -527,15 +480,12 @@ PY
 }
 osmo_poser_aide
 
-# ── BUREAU INTERACTIF : RATTRAPAGE DU WRAPPER osmo-desktop-panel ─────────────
-# Le lanceur des widgets (/usr/local/bin/osmo-desktop-panel) est CUIT dans
-# l image par iso_modules/85-installeur-bureau.sh. Les widgets eux-memes
-# (osmo-topzone.py, osmo-launcher.py, osmo-ts-probe.py) vivent dans le depot et
-# arrivent par git pull - mais une machine deja installee garde son ANCIEN
-# wrapper, qui ne les lance pas. On re-pose donc le wrapper quand il ignore
-# encore la zone haute vivante - ou, depuis le 2026-09-10, quand il compte pour
-# vivant un widget rescape d une session X precedente (osmo_vivant : le Conky
-# ne revenait jamais apres un redemarrage de GNOME). Miroir exact de 85.
+# ── INTERACTIVE DESKTOP: CATCH-UP OF THE osmo-desktop-panel WRAPPER ──────────
+# The widget launcher (/usr/local/bin/osmo-desktop-panel) is baked into the
+# image by iso_modules/85-installeur-bureau.sh; the widgets (osmo-topzone.py,
+# osmo-launcher.py, osmo-ts-probe.py) arrive by git pull. The wrapper is
+# re-installed when it lacks osmo_vivant (widgets tracked per display).
+# Exact mirror of iso_modules/85-installeur-bureau.sh.
 osmo_reposer_bureau_interactif() {
     [ "$(id -u)" -eq 0 ] || return 0
     local w=/usr/local/bin/osmo-desktop-panel
@@ -634,28 +584,21 @@ while osmo_display_vivant; do
 done
 PANEL
     chmod 755 "$w"
-    # relancer : tuer l ancien wrapper, l autostart (ou la boucle) reprend le neuf
+    # restart: kill the old wrapper, the autostart (or the loop) picks up the new one
     pkill -f /usr/local/bin/osmo-desktop-panel 2>/dev/null || true
     echo "  [bureau] wrapper osmo-desktop-panel remis a jour (zone LAB GSM vivante, barre de lancement, widgets suivis par display)"
     return 0
 }
 osmo_reposer_bureau_interactif
 
-# ── LES DEUX CONSOLES WEB, ACTIVES PAR DEFAUT (COTE NATIF) ──────────────────
-# [2026-09-10] L ISO les active au build (iso_modules/60-dashboard.sh pour le
-# tableau de bord 2G, iso_modules/82-services.sh pour les deux) ; une machine
-# deja installee, elle, gardait ce qu elle avait - et pour open5gs-webui c est
-# RIEN : l unite n existait pas avant aujourd hui. On pose ce qui manque et on
-# active ce qui ne l est pas.
-#
-# LE MOYEN DE DIRE NON, C EST `systemctl mask`. Un simple `disable` serait
-# remis a l endroit au prochain update - c est le sens de « par defaut ». Une
-# unite masquee est laissee tranquille, ici comme partout.
-#
-# Aucune des deux n est DEMARREE ici : osmo-egprs-web suit le banc (PartOf=
-# osmo-banc.service) et open5gs-webui n a rien a servir tant que le WebUI n est
-# pas construit (« osmo-lte-install --webui »). L activation suffit : elles
-# partiront au prochain demarrage, ou tout de suite avec `systemctl start`.
+# ── THE TWO WEB CONSOLES, ENABLED BY DEFAULT (NATIVE SIDE) ──────────────────
+# The ISO enables them at build time (iso_modules/60-dashboard.sh,
+# iso_modules/82-services.sh); installed machines get the missing units here.
+# `systemctl mask` is the way to opt out: a plain `disable` is undone at the
+# next update, a masked unit is left alone.
+# Neither unit is STARTED here: osmo-egprs-web follows the bench (PartOf=
+# osmo-banc.service) and open5gs-webui has nothing to serve until the WebUI is
+# built ("osmo-lte-install --webui").
 osmo_activer_consoles_web() {
     [ "$(id -u)" -eq 0 ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
@@ -665,7 +608,7 @@ osmo_activer_consoles_web() {
         dst="/etc/systemd/system/$u.service"
         [ -f "$src" ] || continue
         etat="$(systemctl is-enabled "$u" 2>/dev/null)"
-        [ "$etat" = masked ] && continue          # coupee a la main : on respecte
+        [ "$etat" = masked ] && continue          # masked by hand: respected
         if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst"; then
             install -m644 "$src" "$dst"
             systemctl daemon-reload 2>/dev/null || true
@@ -682,14 +625,10 @@ osmo_activer_consoles_web() {
 osmo_activer_consoles_web
 
 # ── FIREFOX ─────────────────────────────────────────────────────────────────
-# Le dashboard et fft-web s ouvrent dans un navigateur. Les images du
-# 2026-09-04 et apres embarquent le .deb de Mozilla : il est deja la, apt le
-# tient a jour, et cette fonction ne fait rien.
-#
-# Elle ne sert donc qu aux machines plus anciennes, ou aux images ou le depot
-# Mozilla etait injoignable au build. Elle repose ce depot puis installe le
-# paquet - le "firefox" des depots Ubuntu n est PAS une solution de repli : il
-# rappelle snapd, et c est ce montage-la qui laissait des bancs sans navigateur.
+# The dashboard and fft-web open in a browser. Recent images ship Mozilla's
+# .deb, in which case this does nothing. Otherwise the Mozilla repository is
+# set up and the package installed; the Ubuntu "firefox" package is not a
+# fallback, it pulls snapd.
 osmo_installer_firefox() {
     [ "$(id -u)" -eq 0 ] || return 0
     command -v firefox >/dev/null 2>&1 && return 0
@@ -717,19 +656,15 @@ osmo_installer_firefox() {
 }
 osmo_installer_firefox
 
-# ── LE COMPTE DE LA SESSION DOIT VOIR DOCKER ────────────────────────────────
-# [2026-09-05] RATTRAPAGE : le Conky (tools/conky-osmo-status.sh) et l'encart
-# (tools/osmo-panel.py) tournent sous le compte de la SESSION et sondent chaque
-# operateur en conteneur par "docker exec". Sans le groupe docker, la sonde rend
-# "permission denied while trying to connect to the docker API", que le code lit
-# comme "operateur arrete" : Conky annoncant « banc a l arret » et sections
-# Coeur GSM / Radio / Abonnes VIDES, avec les trois operateurs bien vivants.
-# Le groupe est desormais pose a l'installation (users.conf, defaultGroups) et
-# par addition.sh (_docker_groupe_session) ; ici on rattrape les machines deja
-# installees, qui ne repassent par aucun des deux.
-# Meme detection qu'addition.sh : SUDO_USER, puis PKEXEC_UID, puis le
-# proprietaire d'un bus de session actif - update.sh est lance par une icone
-# (pkexec) autant que par sudo.
+# ── THE SESSION ACCOUNT MUST SEE DOCKER ─────────────────────────────────────
+# Conky (tools/conky-osmo-status.sh) and the panel (tools/osmo-panel.py) run
+# under the SESSION account and probe each containerised operator with
+# "docker exec"; without the docker group the probe reports every operator as
+# stopped. The group is set at installation (users.conf, defaultGroups) and by
+# addition.sh (_docker_groupe_session); this covers installed machines.
+# Same user detection as addition.sh: SUDO_USER, then PKEXEC_UID, then the
+# owner of an active session bus (update.sh is launched by an icon via pkexec
+# as well as by sudo).
 osmo_docker_groupe_session() {
     [ "$(id -u)" -eq 0 ] || return 0
     getent group docker >/dev/null 2>&1 || return 0
@@ -756,15 +691,14 @@ osmo_docker_groupe_session() {
 }
 osmo_docker_groupe_session
 
-# ── UNITES osmo-* : User=osmocom -> compte de la SESSION (rattrapage) ────────
-# Miroir d'addition.sh (_osmo_unites_user_session) pour les machines DEJA
-# installees qui ne repassent pas par addition.sh. Meme cause : les .service
-# amont (osmo-bsc/bts-trx/bts-virtual/msc) posent User=osmocom / Group=osmocom,
-# et le compte osmocom n'existe pas en natif (l'image le supprime, cf
-# iso_modules/52-qemu.sh) -> 217/USER, crash-loop Restart=always MUET, run.sh
-# abandonne ("OsmoMSC started but never ready"). On rend les unites au compte de
-# session via un drop-in /etc/systemd/system/<unit>.d/ (le .service amont reste
-# intact). Meme detection d'user qu'osmo_docker_groupe_session.
+# ── osmo-* UNITS: User=osmocom -> SESSION ACCOUNT (CATCH-UP) ────────────────
+# Mirror of addition.sh (_osmo_unites_user_session). The upstream .service
+# files (osmo-bsc/bts-trx/bts-virtual/msc) set User=osmocom / Group=osmocom,
+# and that account does not exist natively (iso_modules/52-qemu.sh removes it)
+# -> 217/USER, silent Restart=always crash loop. A drop-in
+# /etc/systemd/system/<unit>.d/ hands the units to the session account; the
+# upstream .service stays intact. Same user detection as
+# osmo_docker_groupe_session.
 osmo_unites_user_session() {
     [ "$(id -u)" -eq 0 ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
@@ -794,8 +728,8 @@ osmo_unites_user_session() {
     done
     [ "$n" -gt 0 ] || return 0
     systemctl daemon-reload 2>/dev/null || true
-    # repertoires d'etat/log osmocom -> compte de session, sinon "Unable to
-    # create file /var/log/osmocom/*.log" -> parse .cfg en echec -> status=1.
+    # osmocom state/log directories -> session account, otherwise "Unable to
+    # create file /var/log/osmocom/*.log" and the .cfg parse fails (status=1).
     for _d in /var/log/osmocom /var/lib/osmocom /run/osmocom; do
         [ -e "$_d" ] && chown -R "$vus:$grp" "$_d" 2>/dev/null || true
     done
@@ -809,33 +743,26 @@ osmo_unites_user_session() {
 }
 osmo_unites_user_session
 
-# ── LE 600 QU ON ENTEND MAL : LE SUPERVISEUR GAPK ────────────────────────────
-# [2026-09-09] scripts/gapk-start.sh (mode auto) lancait, a chaque appel, un
-# osmo-gapk qui encodait le micro (gsm_in) et l ENVOYAIT au pair de la premiere
-# connexion MGW - le port RTP d osmo-bts (127.0.0.1:16384). Le BTS recevait deux
-# flux RTP entremeles sur un seul jitter-buffer : son hache, double, le micro
-# renvoye en direct dans l oreille. Le mobile (io-handler gapk) porte deja le
-# montant par la radio ; cette patte etait un doublon. Le correctif est dans le
-# depot (git pull), mais lib/audio.sh prefere /etc/osmocom/gapk-start.sh - une
-# COPIE posee par le Dockerfile/l ISO, que git pull ne touche pas. On la repose
-# ici, on tue un eventuel emetteur qui trainerait, et on relance le superviseur
-# (session tmux « gapk ») pour qu il lise la nouvelle version : sans cela le
-# doublon survivait a la mise a jour jusqu au prochain redemarrage.
+# ── THE 600 ECHO TEST SOUNDS BAD: THE GAPK SUPERVISOR ───────────────────────
+# lib/audio.sh prefers /etc/osmocom/gapk-start.sh, a COPY installed by the
+# Dockerfile/ISO that git pull does not touch: re-install it from
+# scripts/gapk-start.sh, kill a stray osmo-gapk transmitter (the mobile's
+# gapk io-handler already carries the uplink) and restart the supervisor
+# (tmux session "gapk") so it reads the new version.
 osmo_poser_correctif_audio() {
     [ "$(id -u)" -eq 0 ] || return 0
-    # NB: deux 'local' separes - sous 'set -u', bash evalue TOUS les membres
-    # droits d un meme 'local' AVANT d affecter le premier, donc "$d/..." sur la
-    # meme ligne que d=... plantait ("d: unbound variable").
+    # NB: two separate 'local' statements: under 'set -u', bash evaluates all
+    # right-hand sides of one 'local' before assigning the first one.
     local d=/opt/GSM/osmo-operator
     local src="$d/scripts/gapk-start.sh" dst=/etc/osmocom/gapk-start.sh
     [ -f "$src" ] || return 0
     if [ -d /etc/osmocom ] && ! cmp -s "$src" "$dst"; then
         install -m 755 "$src" "$dst" && echo "[OK] $dst repose depuis scripts/ (emetteur RTP en doublon retire)"
     fi
-    # Un osmo-gapk en cours = l ancien TX (le mobile n en lance jamais) : on l arrete.
+    # A running osmo-gapk is the old TX (the mobile never starts one): stop it.
     pkill -x osmo-gapk 2>/dev/null && echo "[OK] osmo-gapk en doublon arrete"
     rm -f /var/run/gapk-tx.pid /var/run/gapk-rx.pid
-    # Le superviseur ne se relance que s il tourne deja : hors banc, rien a faire.
+    # The supervisor is only restarted when it already runs: off bench, nothing to do.
     if tmux has-session -t gapk 2>/dev/null; then
         local log_dir; log_dir="$(tmux list-panes -t gapk -F '#{pane_start_command}' 2>/dev/null \
                                  | grep -oE 'tee [^ ]+/gapk-auto.log' | awk '{print $2}' | xargs -r dirname)"
@@ -848,14 +775,10 @@ osmo_poser_correctif_audio() {
             "GAPK_ALSA_DEV=gsm_out GAPK_ALSA_DEV_IN=gsm_in PULSE_SERVER=unix:${sock} bash '$dst' auto gsm gsm_out gsm_in 2>&1 | tee ${log_dir}/gapk-auto.log" \
             && echo "[OK] superviseur gapk relance (tmux gapk, journal ${log_dir}/gapk-auto.log)"
     fi
-    # ── Le 600 depuis le telephone : pas d annonce avant l echo ──
-    # [2026-09-09] Deuxieme cause du son mauvais « pendant une partie de
-    # l appel » : avec l enregistrement (sub-record) sur la jambe Local du banc,
-    # le passage Playback(demo-echotest) -> Echo faisait lacher a Asterisk une
-    # rafale de milliers de paquets RTP de silence vers le BTS. Le gabarit
-    # configs/extensions.conf saute l annonce quand ECHO_NO_PROMPT=1 (pose par
-    # osmo-phonesim-banc.py) ; la copie vivante /etc/asterisk/extensions.conf
-    # n est regeneree qu au demarrage : on la retouche ici et on recharge.
+    # ── The 600 from the phone: no announcement before the echo ──
+    # configs/extensions.conf skips the announcement when ECHO_NO_PROMPT=1
+    # (set by osmo-phonesim-banc.py); the live copy /etc/asterisk/extensions.conf
+    # is only regenerated at start-up, so it is patched here and reloaded.
     local ext=/etc/asterisk/extensions.conf
     if [ -f "$ext" ] && ! grep -q 'ECHO_NO_PROMPT' "$ext"; then
         sed -i '/^exten => 600,1,NoOp(=== ECHO TEST/,/^ same => n,Hangup()/{
@@ -863,17 +786,16 @@ osmo_poser_correctif_audio() {
             s|^ same => n,Echo()$| same => n(echo),Echo()|
         }' "$ext" && echo "[OK] $ext : le 600 saute son annonce pour le banc (ECHO_NO_PROMPT)"
     fi
-    # L annonce de l echo test, rejouee sur la patte du mobile (Dial ...rT${DIAL_OPTS},
-    # le banc pose DIAL_OPTS=A(demo-echotest) pour le 600) : contexte [internal] seulement.
+    # The echo test announcement, replayed on the mobile leg (Dial ...rT${DIAL_OPTS};
+    # the bench sets DIAL_OPTS=A(demo-echotest) for 600): [internal] context only.
     if [ -f "$ext" ] && ! grep -q 'rT\${DIAL_OPTS}' "$ext"; then
         sed -i '/^\[internal\]/,/^\[/{s|^ same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT)$| same => n,Dial(PJSIP/${EXTEN}@gsm_msc,,rT${DIAL_OPTS})|}' "$ext" \
             && echo "[OK] $ext : annonce de l echo test sur la patte du mobile (DIAL_OPTS)"
     fi
     command -v asterisk >/dev/null 2>&1 && asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
-    # Le modem du banc (osmo-phonesim-banc.py --connect) tourne depuis le depot
-    # mais ne relit pas son code : on le relance tel qu osmo-pmos-setup.sh l a
-    # lance, sinon il continue d originer sans ECHO_NO_PROMPT et de marteler
-    # « call 1 answer » (29 x « % No alerting call » par appel).
+    # The bench modem (osmo-phonesim-banc.py --connect) runs from the repository
+    # but does not re-read its code: restart it exactly as osmo-pmos-setup.sh
+    # launched it, so it picks up ECHO_NO_PROMPT.
     local bpid
     bpid="$(pgrep -f '[o]smo-phonesim-banc.py --connect' | head -1)"
     if [ -n "$bpid" ]; then
@@ -886,14 +808,14 @@ osmo_poser_correctif_audio() {
             && echo "[OK] modem du banc relance ($bargs) - journal /tmp/osmo-phonesim-vm-root.log" \
             || echo "[!!] le modem du banc ne s est pas relance : osmo-pmos-setup pour le rebrancher"
     fi
-    # ── Micro « sature, grave » : l AGC analogique de l annuleur d echo ──
-    # [2026-09-09] module-echo-cancel (webrtc) pilotait le gain du micro et
-    # le faisait pomper entre 0 et 100 % (voir tools/osmo-pmos-setup.sh). Si
-    # l annuleur tourne encore sans aec_args, on le recharge a l identique
-    # avec l AGC analogique coupe, et on rebranche les flux de la VM dessus.
+    # ── Saturated, bassy microphone: the echo canceller's analog AGC ──
+    # module-echo-cancel (webrtc) drives the microphone gain and makes it pump
+    # (see tools/osmo-pmos-setup.sh). If the canceller still runs without
+    # aec_args, reload it identically with the analog AGC disabled and move
+    # the VM's streams back onto it.
     export PULSE_SERVER="${PULSE_SERVER:-unix:/var/run/pulse/native}"
-    # [2026-09-23] Seulement un annuleur WEBRTC sans aec_args : speex (le defaut
-    # desormais, lib/audio.sh) n en a pas et ne doit pas etre ramene a webrtc.
+    # Only a WEBRTC canceller without aec_args: speex (the default, lib/audio.sh)
+    # has none and must not be switched to webrtc.
     if command -v pactl >/dev/null 2>&1 && pactl list short modules 2>/dev/null | grep module-echo-cancel | grep -q aec_method=webrtc \
        && ! pactl list short modules 2>/dev/null | grep module-echo-cancel | grep -q analog_gain_control=0; then
         local ecm mic hp so si
@@ -916,9 +838,9 @@ osmo_poser_correctif_audio() {
             pactl set-source-mute osmo_mic_ec 0 2>/dev/null; pactl set-source-volume osmo_mic_ec 25% 2>/dev/null
         fi
     fi
-    # ── Le message factice de speech-dispatcher dans les haut-parleurs ──
-    # [2026-09-09] Voir lib/audio.sh (osmo_tts_off) : on cree le sink poubelle
-    # s il manque et on y envoie tout flux speech-dispatcher deja ouvert.
+    # ── speech-dispatcher's dummy message in the speakers ──
+    # See lib/audio.sh (osmo_tts_off): create the discard sink if missing and
+    # move any open speech-dispatcher stream onto it.
     if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
         pactl list short sinks 2>/dev/null | grep -qw osmo_tts_off \
             || pactl load-module module-null-sink sink_name=osmo_tts_off format=s16le rate=8000 channels=1 sink_properties=device.description=TTS_off >/dev/null 2>&1
@@ -930,14 +852,13 @@ osmo_poser_correctif_audio() {
 }
 osmo_poser_correctif_audio
 
-# ── LA CONSOLE srsUE DU BUREAU : DES JOURNAUX 4G ─────────────────────────────
-# [2026-09-09] L encart (tools/osmo-fft-snap.py) cherchait /tmp/ue.log, jamais
-# ecrit : osmo-lte.sh impose --log.filename=/tmp/osmo-lte-ue.log et met la
-# console dans /tmp/osmo-lte-ue.console. Le depot est corrige (git pull) ; ici on
-# porte le NAS en info (sans hexa) dans le ue.conf DEJA pose (osmo-lte-install --configs ne
-# l ecrase pas sans --force) et on relance l encart, qui lit ses chemins au
-# demarrage. Le UE lui-meme n est pas relance : les niveaux valent au prochain
-# « osmo-lte restart ».
+# ── THE DESKTOP srsUE CONSOLE: 4G LOGS ──────────────────────────────────────
+# osmo-lte.sh sets --log.filename=/tmp/osmo-lte-ue.log and the console in
+# /tmp/osmo-lte-ue.console. Set NAS to info (no hex dump) in an already
+# installed ue.conf (osmo-lte-install --configs does not overwrite it without
+# --force) and restart the osmo-fft-snap panel, which reads its paths at
+# start-up. The UE itself is not restarted: the levels apply at the next
+# "osmo-lte restart".
 osmo_poser_journaux_lte() {
     [ "$(id -u)" -eq 0 ] || return 0
     local f
@@ -956,39 +877,30 @@ osmo_poser_journaux_lte() {
 }
 osmo_poser_journaux_lte
 
-# ── LE FORMAT DE TRAME TCH ET LE TAMPON DU MOBILE, DANS LES FORKS ───────────
-# [2026-09-09] DEUX REGLAGES VITAUX VIVENT DANS DES DEPOTS QU ON REFETCHE.
-# La voix du banc depend de deux lignes qui ne sont PAS dans osmo-operator :
+# ── TCH FRAME FORMAT AND MOBILE BUFFER, IN THE FORKS ────────────────────────
+# Two vital voice settings live in repositories that the update re-fetches
+# (qosmo-grgsm, qosmo-dsp; "git reset --hard FETCH_HEAD"), so git pull on
+# osmo-operator cannot carry them:
 #
-#  1. « io-tch-format rtp » dans cfgs/mobile_group1.cfg des forks. C est le
-#     gabarit que run.sh (run_modules/20-mobile-cfg.sh) RECOPIE par-dessus
-#     ~/.osmocom/bb/mobile_group1.cfg a chaque demarrage, ecrasant ce que
-#     start-native.sh avait genere. Sans cette ligne, le mobile lit et ecrit
-#     ses trames TCH dans la disposition Texas Instruments des vrais Calypso,
-#     alors que pont.py les code avec libosmocoding, en disposition
-#     RTP/RFC3551. Les deux bouts ne se comprennent DANS AUCUN SENS, aucun
-#     compteur ne bronche, et la voix sort robotisee. Constate le 09/09 : les
-#     TROIS configurations du banc tournaient sans cette ligne.
+#  1. "io-tch-format rtp" in the forks' cfgs/mobile_group1.cfg, the template
+#     that run.sh (run_modules/20-mobile-cfg.sh) copies over
+#     ~/.osmocom/bb/mobile_group1.cfg at every start. Without it the mobile
+#     uses the Texas Instruments TCH frame layout while pont.py encodes
+#     RTP/RFC3551 with libosmocoding: no counter complains, the voice is
+#     robotic.
 #
-#  2. CALYPSO_PULSE_LATENCY_MSEC dans run_modules/70-l2.sh et
-#     68-sidecar-mobile.sh. Le mobile ecrit une trame GSM (20 ms) par
-#     snd_pcm_writei ; si le tampon du greffon ALSA-PulseAudio est trop court,
-#     chaque ecriture rend -EPIPE et pq_alsa.c y repond par un snd_pcm_prepare()
-#     muet, qui DEMONTE ET REMONTE le flux PulseAudio - 50 fois par seconde
-#     pendant un appel. Mesure du 09/09, ecrivain cadence a 20 ms sur 10 s :
-#     80 ms -> 16 remontages, 120 -> 19, 160 -> 1, 200 -> 0, 240 -> 0.
-#     start-native.sh exporte 320, ce qui suffit ; on aligne quand meme le
-#     defaut des forks, pour qui lance run.sh directement.
+#  2. CALYPSO_PULSE_LATENCY_MSEC in run_modules/70-l2.sh and
+#     68-sidecar-mobile.sh. The mobile writes one 20 ms GSM frame per
+#     snd_pcm_writei; with a too short ALSA-PulseAudio buffer every write
+#     returns -EPIPE and the PulseAudio stream is torn down and rebuilt 50
+#     times per second. 200 ms or more is enough (start-native.sh exports 320).
 #
-# git pull sur osmo-operator ne peut rien pour ces fichiers-la : ils
-# appartiennent a qosmo-grgsm et qosmo-dsp, que la mise a jour resynchronise
-# (« git reset --hard FETCH_HEAD »). Le COMMENT est dans scripts/voix-forks.sh,
-# seul a savoir poser ces deux reglages ; ici on ne fait que l appeler, comme
-# le service osmo-update (juste apres son fetch) et iso_modules/70-scripts.sh
-# (sur le ROOTFS). Un seul endroit a corriger le jour ou ca rebouge.
-# JUGE : `grep io-tch-format ~/.osmocom/bb/mobile_group1.cfg` apres un
-# demarrage, et l index du sink-input du mobile qui doit rester FIXE pendant
-# un appel (`pactl list short sink-inputs`, deux releves a 1 s).
+# scripts/voix-forks.sh is the only place that applies both settings; it is
+# also called by the osmo-update service (after its fetch) and by
+# iso_modules/70-scripts.sh (on the rootfs).
+# Check: `grep io-tch-format ~/.osmocom/bb/mobile_group1.cfg` after a start,
+# and the mobile's sink-input index must stay fixed during a call
+# (`pactl list short sink-inputs`, two readings 1 s apart).
 osmo_poser_voix_forks() {
     [ "$(id -u)" -eq 0 ] || return 0
     local s=/opt/GSM/osmo-operator/scripts/voix-forks.sh
@@ -998,18 +910,18 @@ osmo_poser_voix_forks() {
 }
 osmo_poser_voix_forks
 
-# ── gnuarm, ALTERNATIVES GCC, c123 ET banc-* : RATTRAPAGE (2026-10-24) ───────
-# Ce que build-iso.sh (70-scripts, 80-chroot) et l install native posent desormais,
-# rejoue sur une machine deja installee. Sans apt ni reseau : seuls les compilateurs
-# deja presents entrent dans les alternatives.
-#   - /etc/profile.d/97-osmo-gnuarm.sh : /root/gnuarm/install/bin dans le PATH
-#     (arm-elf-gcc 4.5.2 du supplement --gnuarm), sans effet tant qu il est absent ;
-#   - update-alternatives gcc : gcc-9 (90), gcc-11 (110), gcc-13 (130). Un choix deja
-#     fait (update-alternatives --config gcc) est garde ; a la creation, gcc-13, le
-#     compilateur du noyau, pour DKMS ;
-#   - c123 / osmo-c123 et les commandes du banc (banc-rssi, banc-trx, c123-1...)
-#     dans /usr/local/bin, 98-osmo-banc-aliases.sh dans profile.d ;
-#   - /usr/local/bin/osmo-glava (une copie, pas un lien) aligne sur tools/osmo-glava.sh.
+# ── gnuarm, GCC ALTERNATIVES, c123 AND banc-*: CATCH-UP ─────────────────────
+# What build-iso.sh (70-scripts, 80-chroot) and the native install set up,
+# replayed on an installed machine. No apt, no network: only compilers already
+# present enter the alternatives.
+#   - /etc/profile.d/97-osmo-gnuarm.sh: /root/gnuarm/install/bin in PATH
+#     (arm-elf-gcc 4.5.2 from addition.sh --gnuarm), no effect while absent;
+#   - update-alternatives gcc: gcc-9 (90), gcc-11 (110), gcc-13 (130). An
+#     existing choice (update-alternatives --config gcc) is kept; on creation,
+#     gcc-13, the kernel compiler, for DKMS;
+#   - c123 / osmo-c123 and the bench commands (banc-rssi, banc-trx, c123-1...)
+#     in /usr/local/bin, 98-osmo-banc-aliases.sh in profile.d;
+#   - /usr/local/bin/osmo-glava (a copy, not a link) aligned on tools/osmo-glava.sh.
 osmo_poser_outils_banc() {
     [ "$(id -u)" -eq 0 ] || return 0
     local r=/opt/GSM/osmo-operator v
@@ -1018,7 +930,7 @@ osmo_poser_outils_banc() {
         && install -m644 "$r/scripts/osmo-gnuarm-profile.sh" /etc/profile.d/97-osmo-gnuarm.sh
     [ -f "$r/scripts/osmo-banc-aliases.sh" ] \
         && install -m644 "$r/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
-    # WireGuard du WAN (« wg 1 », « wg N ... ») ; le paquet, lui, demande apt : install native / ISO
+    # WAN WireGuard ("wg 1", "wg N ..."); the package itself needs apt: native install / ISO
     [ -f "$r/scripts/osmo-wg-profile.sh" ] \
         && install -m644 "$r/scripts/osmo-wg-profile.sh" /etc/profile.d/97-osmo-wg.sh \
         && ln -sf "$r/tools/osmo-wg.sh" /usr/local/bin/osmo-wg
@@ -1031,16 +943,16 @@ osmo_poser_outils_banc() {
         && ! cmp -s "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
         && install -m755 "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
         && echo "  [bureau] osmo-glava aligne sur le depot (systemctl --user restart glava)"
-    # alternatives gcc-9 / gcc-11 / gcc-13 (une seule definition : tools/osmo-gcc-alternatives.sh)
+    # gcc-9 / gcc-11 / gcc-13 alternatives (single definition: tools/osmo-gcc-alternatives.sh)
     [ -x "$r/tools/osmo-gcc-alternatives.sh" ] && bash "$r/tools/osmo-gcc-alternatives.sh"
     return 0
 }
 osmo_poser_outils_banc
 
-# ── CORRECTIFS DES ARBRES /opt/GSM (patches/) ───────────────────────────────
-# Les arbres poses par l ISO (osmocom-bb, osmo-trx...) recoivent les correctifs
-# du depot : idempotent, hors ligne. Avec gnuarm (addition.sh --gnuarm),
-# « cd /opt/GSM/osmocom-bb/src && make » sort alors le layer1 GPRS.
+# ── PATCHES FOR THE /opt/GSM TREES (patches/) ───────────────────────────────
+# The trees installed by the ISO (osmocom-bb, osmo-trx...) receive the
+# repository patches: idempotent, offline. With gnuarm (addition.sh --gnuarm),
+# "cd /opt/GSM/osmocom-bb/src && make" then builds the GPRS layer1.
 osmo_poser_correctifs() {
     [ "$(id -u)" -eq 0 ] || return 0
     local r=/opt/GSM/osmo-operator
@@ -1054,30 +966,21 @@ case "${1:-}" in
     --quiet) exit 0 ;;
 esac
 
-# [2026-09-03] Le "git config --global http.version HTTP/1.1" qui etait ici est
-# retire (voir Dockerfile) : on defait meme le reglage s il traine encore.
+# Remove a stale global http.version setting if still present (see Dockerfile).
 git config --global --unset http.version 2>/dev/null || true
 
 
-# ── SANS TERMINAL : UNE FENETRE GTK ─────────────────────────────────────────
-# [2026-09-03] Ici, le script sortait en silence des qu il n avait pas de tty.
-# C etait juste pour l animation -- mais lance depuis l ICONE DU BUREAU, il n a
-# jamais de tty : la repose des icones se faisait, et l utilisateur ne voyait
-# RIEN. Aucun retour, aucune erreur, rien : le double-clic ne repondait pas.
-#
-# On garde la regle qui a motive la sortie (pas de sequences de curseur hors
-# terminal, elles rendent un journal illisible) et on repond en GTK quand il y a
-# un serveur graphique. Sans terminal NI graphique -- cron, ssh sans X,
-# /etc/profile.d en console -- on sort comme avant, en silence et en code 0.
-#
-# zenity vient de la variante desktop (build-iso.sh l installe) ; l absence du
-# binaire n est donc pas une erreur, c est une image sans bureau.
+# ── WITHOUT A TERMINAL: A GTK WINDOW ────────────────────────────────────────
+# Launched from the desktop icon the script never has a tty; the catch-up
+# steps above are already done when we get here. With a display server the
+# result is shown through zenity (no cursor sequences outside a terminal);
+# without terminal or display (cron, ssh without X, /etc/profile.d on a
+# console) exit silently with code 0. zenity comes with the desktop variant
+# (build-iso.sh installs it): its absence means an image without a desktop.
 if [ ! -t 1 ]; then
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; then
-        # --pulsate et non un pourcentage : les etapes ci-dessus sont deja
-        # faites quand on arrive ici, il n y a pas de progression a mesurer --
-        # une barre chiffree mentirait. --auto-close pour que la fenetre parte
-        # avec le flux, sans bouton a cliquer.
+        # --pulsate, not a percentage: there is no progress left to measure.
+        # --auto-close so the window leaves with the stream, no button to click.
         {
             echo "# Recherche de la cellule (ARFCN)..." ; sleep 0.6
             echo "# Raccourcis du bureau reposes."      ; sleep 0.6

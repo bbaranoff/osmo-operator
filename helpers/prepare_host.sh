@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# force_stack.sh
-# A lancer en root (sudo).
-# But :
-#  - FORCER (kill + relance) Linphone en user
-#  - FORCER (kill + relance) Wireshark en root sur UDP/4729 (GSMTAP)
-#  - Restart du service docker
-# Affichage:
-#   [....] action en cours  -> se transforme en -> [ OK ] action finie (meme ligne)
+# prepare_host.sh - reset the host-side desktop tools of the GSM bench.
+# Usage: sudo ./helpers/prepare_host.sh
+# Steps:
+#  - kill and relaunch Linphone as the session user
+#  - kill xterm and Wireshark (root)
+#  - check the UDP/GSMTAP listeners
+# Env: GSMTAP_PORT (default 4729), HOST_PULSE_USER (session user override).
+# Display: "[....] step" is rewritten in place as "[ OK ] step".
 
 set -euo pipefail
 
@@ -37,22 +37,11 @@ need docker
 need ss
 need systemctl
 
-# ---------- QUI EST L UTILISATEUR DE LA SESSION ----------
-# Ce bloc exigeait SUDO_USER non vide ET different de root, et sortait en [FAIL]
-# sinon. Deux situations parfaitement legitimes tombaient dedans :
-#
-#   1. `sudo -i` puis ./launch/start-docker.sh - le shell est deja root, sudo n a plus rien a
-#      transmettre et SUDO_USER est VIDE. C est le mode de travail courant sur
-#      ce banc.
-#   2. L ISO --desktop : la session graphique EST root. build-iso.sh ecrit
-#      AutomaticLogin=root dans /etc/gdm3/custom.conf et decommente le
-#      pam_succeed_if qui interdit la connexion de root. "root" est donc ICI la
-#      BONNE reponse - la rejeter revenait a refuser la configuration nominale
-#      de l image qu on livre.
-#
-# Le bon critere n est pas le NOM du compte mais la PRESENCE de sa session,
-# c est-a-dire de son socket pulse. Meme logique que session_pulse_user() dans
-# start-docker.sh, a laquelle ce fichier ne faisait qu ajouter une divergence.
+# ---------- session user ----------
+# The session user is identified by the PRESENCE of its pulse socket, not by
+# the account name: SUDO_USER is empty after `sudo -i`, and on the --desktop
+# ISO the graphical session is root itself. Same logic as session_pulse_user()
+# in launch/start-docker.sh.
 resolve_session_user() {
   local u uid sock
   for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)"; do
@@ -60,36 +49,32 @@ resolve_session_user() {
     uid="$(id -u "$u" 2>/dev/null)" || continue
     [[ -S "/run/user/${uid}/pulse/native" ]] && { echo "$u"; return 0; }
   done
-  # Proprietaire du premier socket pulse trouve : couvre le `sudo -i` et les
-  # sessions sans logname (cron, service, terminal detache).
+  # Owner of the first pulse socket found: covers `sudo -i` and sessions
+  # without logname (cron, service, detached terminal).
   for sock in /run/user/*/pulse/native; do
     [[ -S "$sock" ]] || continue
     uid="${sock#/run/user/}"; uid="${uid%%/*}"
     u="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)"
     [[ -n "$u" ]] && { echo "$u"; return 0; }
   done
-  # Aucune session pulse vivante : on retombe sur l invocateur, root compris.
+  # No live pulse session: fall back to the invoker, root included.
   echo "${SUDO_USER:-$(id -un)}"
 }
 TARGET_USER="$(resolve_session_user)"
 
 id -u "${TARGET_USER}" >/dev/null 2>&1 || fail "User invalide: ${TARGET_USER}"
 
-# ---------- 1) Linphone : kill + relance en user ----------
+# ---------- Linphone: kill + relaunch as the session user ----------
 step "Linphone: kill (user=${TARGET_USER})"
 kill_name_as_user "${TARGET_USER}" "linphone"
 sleep 0.2
 step_ok "Linphone: kill (user=${TARGET_USER})"
 
 step "Linphone: relance (user=${TARGET_USER})"
-    # Ne PAS re-resoudre TARGET_USER ici : la ligne qui s y trouvait
-    # (${SUDO_USER:-$(logname ...)}) ecrasait le resultat de
-    # resolve_session_user() par une valeur moins fiable, juste avant de s en
-    # servir. Une seule resolution, en tete de script.
+    # TARGET_USER is resolved once, at the top of the script; do not
+    # re-resolve it here.
     TARGET_UID=$(id -u "$TARGET_USER")
-    # HOME par getent, pas /home/$TARGET_USER en dur : root habite /root. Avec
-    # le chemin fige, une session sous root pointait XAUTHORITY sur
-    # /home/root/.Xauthority - inexistant - et linphone ne s ouvrait pas.
+    # HOME via getent, not a hard-coded /home/$TARGET_USER: root lives in /root.
     TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
     DISPLAY="${DISPLAY:-:0}"
     XAUTHORITY="${XAUTHORITY:-${TARGET_HOME:-/home/$TARGET_USER}/.Xauthority}"
@@ -98,22 +83,22 @@ step "Linphone: relance (user=${TARGET_USER})"
         env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
         linphone </dev/null >/dev/null 2>&1 &
-                
+
 step_ok "Linphone: relance (user=${TARGET_USER})"
 
-# ---------- 3) Xterm : kill----------
+# ---------- Xterm: kill ----------
 step "Xterm kill"
 kill_name_root "xterm"
 sleep 0.2
 step_ok "Xterm: kill (root)"
 
-# ---------- 2) Wireshark : kill + relance en root sur GSMTAP/4729 ----------
+# ---------- Wireshark: kill (root) ----------
 step "Wireshark: kill (root)"
 kill_name_root "wireshark"
 sleep 0.2
 step_ok "Wireshark: kill (root)"
 
-# ---------- 5) Mini-check (optionnel) ----------
+# ---------- Listener check (optional) ----------
 step "Check: listeners UDP/${GSMTAP_PORT}"
 ss -lunp | awk -v p=":${GSMTAP_PORT}" '$0 ~ p {print}' >/dev/null 2>&1 || true
 step_ok "Check: listeners UDP/${GSMTAP_PORT}"

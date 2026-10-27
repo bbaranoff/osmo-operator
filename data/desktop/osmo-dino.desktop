@@ -1,3 +1,5 @@
+# osmo-dino.desktop - launcher: the dino game (Sun, Moon and computed shadows).
+# Runs tools/osmo-dino.py --app.
 [Desktop Entry]
 Type=Application
 Name=Dino (Coureur d'ombres)

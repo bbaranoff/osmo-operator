@@ -13,7 +13,7 @@ compile or configure.
 | **Live ISO password** | `osmo` |
 | **postmarketOS phone password** | `147147` |
 | **Minimum host** | x86_64, 8 GB RAM, 4 cores, nested virtualization in a VM |
-| **Image identity** | `IMAGE_VERSION="OSMO_EGPRS_V2"` · `OSMO_ROLE=operator` · `OSMO_LITE=0` |
+| **Image identity** | `IMAGE_VERSION="OSMO_EGPRS_V2"` · `OSMO_ROLE=operator` · `OSMO_LITE=0` (`/etc/os-release`, `/etc/osmo-role`) |
 
 ## Download
 
@@ -77,19 +77,22 @@ in any order. **Launch the smartphone last**, once both networks are up.
 
 | | Launcher | What it starts |
 |:---:|---|---|
-| <img src="https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/data/osmo-launch.svg" width="32"> | **2G** (red handset) | The GSM core and the emulated radio: osmo-stp / bsc / msc / hlr / sgsn / ggsn / pcu, the Calypso under QEMU, the two BTS and the two osmocom-bb mobiles, Asterisk, the SMSC. |
+| <img src="https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/data/osmo-launch.svg" width="32"> | **2G** (red handset) | The GSM core and the emulated radio: osmo-stp / bsc / msc / hlr / sgsn / ggsn / pcu, the Calypso under QEMU on the DSP ROM, the two BTS and the two osmocom-bb mobiles, Asterisk, the SMSC. |
 | <img src="https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/data/osmo-lte.svg" width="32"> | **4G** (signal bars) | open5gs, srsENB and srsUE over ZMQ, and the SGs interface to the MSC (CSFB). See [README-lte](README-lte.md). |
 | 📱 | **Smartphone** | The postmarketOS VM: oFono on the virtual modem, data on 4G, voice and SMS on 2G. |
 
-From a terminal, the same 2G bench, on the Calypso DSP instead of gr-gsm:
+The **?** of the dock (`osmo-info`) lists the modes. From a terminal, the same
+2G bench:
 
 ```sh
-cd /opt/GSM/osmo-operator && sudo ./start-native.sh --dsp
+cd /opt/GSM/osmo-operator && sudo ./start-native.sh            # DSP (default)
+cd /opt/GSM/osmo-operator && sudo ./start-native.sh --grgsm    # gr-gsm layer 1
 ```
 
-`--menu` asks interactively (layer 1 `grgsm_exe` or `c54x_exe`). Check that
-everything is in place with `checks/diag-stp-operator.sh`, or the full suite in
-[README-tests](README-tests.md).
+`--menu` asks interactively (profile, layer 1 `grgsm_exe` or `c54x_exe`).
+Check that everything is in place with `checks/diag-stp-operator.sh`, or the
+full suite in [README-tests](README-tests.md). What is not in the ISO installs
+with `sudo ./addition.sh` ([README](../README.md#supplements)).
 
 ## What's inside
 
@@ -102,8 +105,8 @@ everything is in place with `checks/diag-stp-operator.sh`, or the full suite in
 - **The emulated Calypso**: `qemu-system-arm -M calypso -cpu arm946` runs
   `layer1.highram.elf`, loaded by `osmocon` exactly as on a C123. See
   [README-grgsm](README-grgsm.md).
-- **The DSP**: the Calypso's TMS320C54x on TI's real mask ROM, with
-  `--dsp`. See [README-dsp](README-dsp.md).
+- **The DSP**: the Calypso's TMS320C54x on TI's real mask ROM. See
+  [README-dsp](README-dsp.md).
 - **4G, CSFB and postmarketOS**: see [README-lte](README-lte.md).
 
 ## Installing to disk and building the ISO
@@ -114,7 +117,8 @@ choices, and a *Graphics drivers* page offers `nvidia-driver-610` when `lspci`
 sees a card.
 
 `sudo ./build-iso.sh` does **one** Docker build (`osmocom-nitb`) and derives
-each rootfs from it: interstp, normal, lite (normal without the workshops),
-desktop. Options, modules (`iso_modules/NN-*.sh`) and CI are covered in
+each rootfs from it: interstp, operator, lite (operator without the workshops),
+desktop (`--role=operator|interstp`, `--node=N`, `--lite`, `--desktop`, `--all`,
+`--arm`). Options, modules (`iso_modules/NN-*.sh`) and CI are covered in
 [wiki/ISO](../wiki/ISO.md) and [wiki/Build](../wiki/Build.md). The Raspberry Pi
 image is in [README-arm](README-arm.md).

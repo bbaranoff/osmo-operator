@@ -1,3 +1,8 @@
+# smf.yaml - Open5GS SMF / PGW-C (127.0.0.4) for the lab EPC.
+# Installed by tools/osmo-lte-install.sh --configs into $PREFIX/etc/open5gs;
+# the /opt/LTE/open5gs/install prefix is substituted at install time (OPEN5GS_PREFIX).
+# Upstream Open5GS template: the commented blocks below are the upstream examples.
+
 logger:
   file:
     path: /opt/LTE/open5gs/install/var/log/open5gs/smf.log

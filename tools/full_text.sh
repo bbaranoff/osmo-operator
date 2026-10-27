@@ -1,10 +1,11 @@
 #!/bin/bash
-# full_text.sh - Concat doc + tests + .h + .c + .py + .sh dans cet ordre
-# en un seul .txt brut (separateurs ASCII, sans markdown fences).
-# Pour ingestion LLM / archive plate.
+# full_text.sh - concatenate docs + tests + .h + .c + .py + .sh, in that order,
+# into a single raw .txt (ASCII separators, no markdown fences), for LLM
+# ingestion or a flat archive. Relative paths are taken from the script's
+# directory (it cd's there first).
 #
-# Usage :
-#   ./full_text.sh                          # -> /tmp/calypso-full.txt
+# Usage:
+#   ./full_text.sh                          # -> ./calypso-full.txt
 #   ./full_text.sh out.txt                  # custom output
 #   SCOPE=hw/arm/calypso ./full_text.sh     # only this subdir
 #   EXCLUDE='build|pc-bios' ./full_text.sh  # extra excludes
@@ -15,8 +16,7 @@ OUT="${1:-./calypso-full.txt}"
 SCOPE="${SCOPE:-.}"
 EXCLUDE_RE="${EXCLUDE:-subprojects|build|pc-bios|tests/functional|tests/qtest|tests/unit|tests/migration|tests/qemu-iotests|node_modules|\.git|\.pytest_cache}"
 
-# Si $OUT est un dossier, append le nom de fichier par defaut.
-# Evite le cas "./full_text.sh /home/nirvana/qemu-calypso" -> echo >> dossier crash.
+# If $OUT is a directory, append the default file name.
 if [ -d "$OUT" ]; then
     OUT="${OUT%/}/calypso-full.txt"
 fi
@@ -123,7 +123,7 @@ echo "Section 4 : $N files"
 echo "Total sources files : $N" >> "$OUT"
 for f in $SRCS; do _add "$f"; done
 
-# ---- 5) Python scripts (hors tests/) ----
+# ---- 5) Python scripts (outside tests/) ----
 {
     echo ""
     echo "################################################################################"

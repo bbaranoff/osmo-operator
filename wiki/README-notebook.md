@@ -69,7 +69,7 @@ Cells are idempotent: re-run the one you stopped at. When you are done: `docker 
 
 ### Testing local changes
 
-Step 1 clones osmo-operator from GitHub, so the notebook always installs the **pushed** version. To test
+Step 1 clones osmo-operator from GitHub, so the notebook installs the **pushed** version. To test
 an edited notebook before pushing, mount your clone instead of cloning it:
 
 ```bash
@@ -137,7 +137,7 @@ that cell and its error.
 | 14 | full test ladder from [bbaranoff/tests](https://github.com/bbaranoff/tests) | no |
 | 15 | stop | — |
 
-The launcher is `./start.sh` since 2026-10-21; `start-native.sh` is a symlink to it and still works.
+The launcher is `./start.sh`; `start-native.sh` is a symlink to it.
 
 To start the bench **process by process** instead of through `start.sh`, run the companion
 notebook [lancer-pas-a-pas.ipynb](lancer-pas-a-pas.ipynb) once the install is done: it installs nothing,

@@ -1,48 +1,44 @@
 #!/bin/bash
 # =============================================================================
-# start.sh - Prepare l'environnement Calypso puis lance run.sh
+# start.sh - native launcher: prepares the Calypso environment, then runs run.sh
+# (start-native.sh is a symlink to this file)
 # =============================================================================
 #
-# Ce script ne demarre aucun demon.
+# Usage:
+#   ./start.sh [options]            native launcher (startup_scripts/*.sh)
+#   ./start.sh --docker [options]   hands over to launch/start-docker.sh
+#   VAR=x ./start.sh                environment overrides always win
 #
-# Il :
-#   1. charge l'environnement ;
-#   2. detecte le materiel / les binaires ;
-#   3. choisit le mode (profil) ;
-#   4. genere les fichiers mobile_*.cfg ;
-#   5. exporte les variables necessaires ;
-#   6. execute run.sh.
+# This script starts no daemon itself. It:
+#   1. loads the environment (environment/load.env);
+#   2. detects the hardware / binaries;
+#   3. chooses the mode (profile);
+#   4. generates the mobile_*.cfg files;
+#   5. exports the required variables;
+#   6. executes run.sh (RUN_SH, resolved in startup_scripts/05-run-sh.sh).
 #
-# Toute la logique GSM vit ensuite dans run.sh (et run_modules/).
+# All GSM logic then lives in run.sh (and run_modules/).
 #
-# CHAINE DE CONFIGURATION - NE PAS LA CASSER
-#     VAR=x ./start-native.sh   ← la ligne de commande gagne toujours
+# Configuration chain (do not break it):
+#     VAR=x ./start.sh              <- the command line always wins
 #       -> environment/load.env
-#          -> paths / modes / domaines
-#     puis exec run.sh avec le profil choisi.
+#          -> paths / modes / domains
+#     then exec run.sh with the chosen profile.
+#
+# Known limitation: there is no "must run inside Docker" guard, because the ISO
+# has no Docker. Run by mistake on a host with Docker, it dies with "run.sh not
+# found": the launchers there are ./launch/start-docker.sh or
+# ./launch/start-nitb.sh, not this one.
 # -----------------------------------------------------------------------------
 set -uo pipefail
-
-# ── [2026-08-14] GARDE "on doit etre dans Docker" RETIREE ───────────────────
-# Elle exigeait /.dockerenv ET /etc/docker-entrypoint-cmd, et sortait en exit 1
-# quand l'un manquait. Sur l'ISO il n'y a pas de Docker : les deux fichiers sont
-# absents, la garde bloquait donc le seul lanceur utilisable la-bas. Retiree sur
-# demande explicite - c'est le cas d'usage ISO qui prime.
-#
-# CE QU'ON PERD, et c'etait sa raison d'etre (constat du 12/08) : lance par
-# erreur sur un HOTE qui a Docker, ce script repart sur un environnement a
-# moitie construit - /opt/GSM/qosmo n'y existe pas, mais /tmp/osmo-nitb/logs,
-# lui, se cree tout seul - et meurt sur un "run.sh introuvable" qui ne designe
-# pas la vraie cause. Si ce symptome reapparait sur une machine avec Docker,
-# c'est ca : la-bas le lanceur est ./launch/start-docker.sh (ou ./launch/start-nitb.sh), pas celui-ci.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-# ── --docker : le banc en conteneurs, par launch/start-docker.sh ─────────────
-# Un seul point d'entree pour les deux lanceurs : `./start.sh --docker [args]`
-# passe la main a start-docker.sh avec les autres arguments, tels quels. Le
-# reste de ce script (startup_scripts/) est le lanceur NATIF et n'est pas lu.
+# ── --docker: the bench in containers, through launch/start-docker.sh ────────
+# `./start.sh --docker [args]` hands over to start-docker.sh with the other
+# arguments untouched; the rest of this script (startup_scripts/) is the
+# NATIVE launcher and is not read.
 _args=(); _docker=0
 for _a in "$@"; do
     if [ "$_a" = --docker ]; then _docker=1; else _args+=("$_a"); fi
@@ -52,7 +48,7 @@ if [ "$_docker" = 1 ]; then
 fi
 unset _args _docker _a
 
-# ── Le reste du lanceur : startup_scripts/*.sh, sourcees dans l'ordre (meme shell, memes variables) ──
+# ── Native launcher: startup_scripts/*.sh, sourced in order (same shell, same variables) ──
 for _f in "$HERE"/startup_scripts/*.sh; do
     . "$_f"
 done

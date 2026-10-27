@@ -1,32 +1,21 @@
 #!/bin/bash
-# iso_modules/51-depot.sh - etape 5a : osmo-operator a jour, coeur.env
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/51-depot.sh - step 5a: up-to-date osmo-operator and tests trees, coeur.env
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment:
+#   OSMO_EGPRS_REPO / OSMO_EGPRS_BRANCH   osmo-operator repo and branch to clone
+#   OSMO_TESTS_REPO / OSMO_TESTS_BRANCH   tests repo and branch to clone
 
-# ── osmo-operator : ARBRE a jour depuis GitHub, AVEC son .git ─────────────────
-# La copie docker cp ci-dessus peut etre perimee ; on avance la branche main du
-# depot (start-native.sh, run.sh, scripts/, configs/, build-iso.sh...) dans l'ISO.
+# ── osmo-operator: up-to-date TREE from GitHub, WITH its .git ────────────────
+# The docker cp copy may be stale: the repo branch is cloned fresh (the .git is
+# kept so that update.sh can fetch at boot instead of recloning, and the
+# running commit is known). The clone is made NEXT TO the tree, then swapped
+# in: without network, the image tree stays in place.
 EGPRS_BRANCH="${OSMO_EGPRS_BRANCH:-main}"
 EGPRS_REPO="${OSMO_EGPRS_REPO:-https://github.com/bbaranoff/osmo-operator}"
 echo -e "${GREEN}[5a/9] Clone de osmo-operator (branche ${EGPRS_BRANCH})...${NC}"
-# [2026-08-31] CLONE, PAS "fetch + merge --ff-only" SUR L ARBRE DE L IMAGE.
-# L ancienne version avancait en place le depot venu du docker cp. Elle avait
-# deux defauts qui se voyaient au moment ou l on veut justement graver :
-#   - --ff-only echoue des que l arbre de l image porte le moindre commit local
-#     ou diverge, et la branche d echec se contentait d un ⚠ jaune : l ISO se
-#     construisait alors avec l arbre de l IMAGE, c est-a-dire avec du code
-#     vieux de la derniere reconstruction docker, sans que rien n arrete le
-#     build. On croyait graver son travail, on gravait celui d avant.
-#   - trois chemins (arbre avec .git / arbre sans .git / rien) pour un seul
-#     besoin : avoir le depot a jour dans l ISO.
-# Un clone rend le resultat previsible : ce qui est sur la branche est ce qui
-# est grave, point. Le .git est conserve - c est un clone, pas un tarball - donc
-# update.sh peut toujours faire son fetch au demarrage plutot que d effacer et
-# recloner a chaque boot (wipe=1), et l on sait sur quel commit on tourne.
-#
-# On clone A COTE puis on bascule : si le reseau manque, l arbre de l image
-# reste en place. Effacer d abord donnerait une ISO sans depot du tout.
 EGPRS_TREE="$ROOTFS/opt/GSM/osmo-operator"
 EGPRS_TMP="$WORK/osmo-operator-clone"
 rm -rf "$EGPRS_TMP"
@@ -46,10 +35,9 @@ else
     fi
 fi
 
-# ── tests : /opt/GSM/tests depuis GitHub (bbaranoff), AVEC son .git ───────────
-# Meme logique que osmo-operator : clone a cote puis bascule, pour qu un reseau
-# absent laisse l arbre existant de l image en place (jamais une ISO sans tests
-# si l image en avait deja).
+# ── tests: /opt/GSM/tests from GitHub (bbaranoff), WITH its .git ─────────────
+# Same logic as osmo-operator: clone next to the tree, then swap, so that a
+# missing network leaves the existing image tree in place.
 TESTS_BRANCH="${OSMO_TESTS_BRANCH:-main}"
 TESTS_REPO="${OSMO_TESTS_REPO:-https://github.com/bbaranoff/tests}"
 TESTS_TREE="$ROOTFS/opt/GSM/tests"
@@ -72,21 +60,12 @@ else
     fi
 fi
 
-# ── Feed HLR : aligner N_MS sur le nombre de MS embarques ────────────────────
-# run_modules/21-abonnes-hlr.sh retombe sur ": "${N_MS:=1}"" : sans ce fichier
-# un SEUL abonne etait provisionne alors que l'ISO en declare ISO_N_MS, et les
-# MS suivants se voyaient refuser le rattachement ("IMSI unknown in HLR") -
-# panne lue a tort comme un defaut radio.
-#
-# PAS dans /opt/GSM/osmo-operator/environment : ce fichier n'est pas dans git. Il y
-# a survecu au demarrage tant que personne ne mettait le depot a jour, et pas une
-# minute de plus - a l'epoque osmo-update.service effacait et reclonait l'arbre
-# a chaque boot (wipe=1), aujourd'hui "osmo-update" fait un git fetch, dont le
-# reset --hard emporte de la meme facon ce qui n'est pas suivi. N_MS retombait
-# a 1, MS#2 restait inconnu du HLR, et start-native.sh le lancait quand meme.
-# /opt/GSM/qosmo/environment, lui, n'existe pas : ce depot-la nomme son
-# repertoire "environnement".
-# /etc/osmocom n'appartient a aucun depot : ce qui y est ecrit reste.
+# ── HLR feed: align N_MS with the number of embedded MS ──────────────────────
+# run_modules/21-abonnes-hlr.sh falls back to N_MS=1: without this file a
+# SINGLE subscriber would be provisioned while the ISO declares ISO_N_MS, and
+# the other MS would be refused ("IMSI unknown in HLR").
+# NOT in /opt/GSM/osmo-operator/environment: that file is not in git and the
+# reset --hard of osmo-update would remove it. /etc/osmocom belongs to no repo.
 mkdir -p "$ROOTFS/etc/osmocom"
 cat > "$ROOTFS/etc/osmocom/coeur.env" <<COEUR
 # coeur.env - genere par build-iso.sh. Aligne le nombre d'abonnes provisionnes
@@ -98,7 +77,7 @@ echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmoc
 
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

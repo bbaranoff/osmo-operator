@@ -1,29 +1,27 @@
 #!/bin/bash
-# init-crypthome.sh - initialise le second disque en LUKS2 et y deplace /home.
+# init-crypthome.sh - initialises the second disk as LUKS2 and moves /home onto it.
 #
-#   sudo /root/init-crypthome.sh [/dev/partition]
+#   sudo /root/init-crypthome.sh [/dev/partition] [--key-file=F] [--yes]
 #
-# CE N EST PLUS LE CHEMIN NORMAL. [2026-09-25] Sur une machine installee depuis
-# l ISO, /home est chiffre PAR L INSTALLEUR : partition.conf decoupe le disque
-# en racine + /home et ne chiffre que /home, crypthome-postinstall raccorde le
-# tout. Rien a lancer apres coup, et pas de basculement etale sur deux
-# demarrages.
+# NOT THE NORMAL PATH. On a machine installed from the ISO, /home is encrypted
+# BY THE INSTALLER: installer/calamares/modules/partition.conf splits the disk
+# into root + /home and encrypts only /home; crypthome-postinstall wires it up.
 #
-# Ce script sert au cas que Calamares ne couvre pas : chiffrer un SECOND DISQUE
-# ajoute a une machine deja installee. Il refuse d ailleurs toute partition du
-# disque de la racine.
+# This script covers the case Calamares does not: encrypting a SECOND DISK
+# added to an already installed machine. It refuses any partition of the root
+# disk.
 #
-# Sans argument, la partition candidate est deduite - et il doit n'y en avoir
-# qu'une, sinon le script s'arrete et les affiche.
+# Without argument, the candidate partition is deduced - there must be exactly
+# one, otherwise the script stops and lists them.
 #
-# CE SCRIPT EFFACE LA PARTITION VISEE. Il refuse de tourner si elle contient
-# autre chose que lost+found, si elle est montee, ou si elle porte deja un
-# en-tete LUKS - et il demande une confirmation tapee en toutes lettres.
+# THIS SCRIPT WIPES THE TARGET PARTITION. It refuses to run if the partition
+# contains anything but lost+found, if it is mounted, or if it already carries
+# a LUKS header - and it asks for a confirmation typed in full.
 #
-# Ce qu'il fait, dans l'ordre : chiffre la partition, y recopie le contenu
-# actuel de /home, met l'ancien /home de cote, cable /etc/crypttab et
-# /etc/fstab en "noauto" (c'est unlock-home qui monte, apres avoir demande),
-# et active unlock-home.service.
+# What it does, in order: encrypts the partition, copies the current content
+# of /home onto it, leaves the old /home in place (unlock-home moves it aside
+# at next boot), writes /etc/crypttab and /etc/fstab with "noauto" (unlock-home
+# mounts after asking), and enables unlock-home.service.
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
@@ -39,11 +37,11 @@ TMP=/mnt/crypthome-init
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}A lancer en root.${NC}" >&2; exit 1; }
 
 # ── OPTIONS ─────────────────────────────────────────────────────────────────
-#   --key-file=F  phrase de passe lue dans F au lieu d etre demandee. Pour les
-#                 installations scriptees. Le fichier ne doit PAS survivre au
-#                 script : c est a l appelant de l effacer.
-#   --yes         pas de confirmation. A reserver a un appel non interactif ;
-#                 le script EFFACE la partition qu il vise.
+#   --key-file=F  passphrase read from F instead of being asked. For scripted
+#                 installations. The file must NOT outlive the script: the
+#                 caller deletes it.
+#   --yes, -y     no confirmation. For non-interactive calls only; the script
+#                 WIPES the target partition.
 KEYFILE=""
 SANS_QUESTION=0
 _args=()
@@ -60,11 +58,11 @@ if [ -n "$KEYFILE" ] && [ ! -r "$KEYFILE" ]; then
     echo -e "${RED}--key-file : $KEYFILE illisible.${NC}" >&2; exit 1
 fi
 
-# ── QUELLE PARTITION ────────────────────────────────────────────────────────
-# Rien n'est devine en silence : ce script EFFACE ce qu'il vise. Sans argument
-# il ne retient que les partitions qui remplissent TOUTES les conditions - pas
-# sur le disque de la racine, non montee, sans en-tete LUKS, ni iso9660 ni swap
-# ni EFI - et il faut qu'il n'en reste qu'une pour qu'il aille plus loin seul.
+# ── WHICH PARTITION ─────────────────────────────────────────────────────────
+# Nothing is guessed silently: this script WIPES its target. Without argument
+# it keeps only the partitions meeting ALL the conditions - not on the root
+# disk, not mounted, no LUKS header, not iso9660/swap/EFI - and exactly one
+# must remain for it to go on by itself.
 disque_racine="$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)"
 candidates() {
     local p pk
@@ -101,7 +99,7 @@ else
     fi
 fi
 
-# ── VERIFICATIONS ───────────────────────────────────────────────────────────
+# ── CHECKS ──────────────────────────────────────────────────────────────────
 [ -b "$DEV" ] || { echo -e "${RED}$DEV n'est pas une partition.${NC}" >&2; exit 1; }
 
 if findmnt -S "$DEV" >/dev/null 2>&1; then
@@ -115,8 +113,8 @@ if cryptsetup isLuks "$DEV" 2>/dev/null; then
     exit 1
 fi
 
-# Le disque doit etre vide. On regarde VRAIMENT, en montant en lecture seule :
-# un blkid qui dit "ext4" ne dit pas s'il y a 900 Go de donnees dedans.
+# The partition must be empty. Checked for real by mounting it read-only: a
+# blkid saying "ext4" does not tell whether it holds data.
 if blkid "$DEV" >/dev/null 2>&1; then
     mkdir -p "$TMP"
     if mount -o ro "$DEV" "$TMP" 2>/dev/null; then
@@ -150,27 +148,22 @@ else
     [ "$accord" = "OUI" ] || { echo "Abandon."; exit 1; }
 fi
 
-# ── LA SESSION DU COMPTE PROPRIETAIRE DOIT ETRE FERMEE ──────────────────────
-# Recopier un home pendant que sa session tourne donne une copie incoherente :
-# le trousseau, dconf et les profils de navigateur sont reecrits en continu.
-# ── LA SESSION DU COMPTE PROPRIETAIRE ───────────────────────────────────────
-# Recopier un home pendant que sa session tourne donne une copie un peu
-# flottante : dconf, l historique du navigateur et les fichiers de cache sont
-# reecrits en continu. Ce n est pas grave ICI - l original n est pas efface, il
-# est mis de cote intact au demarrage suivant, et c est le trousseau (statique)
-# qui compte.
+# ── THE OWNER ACCOUNT'S SESSION ─────────────────────────────────────────────
+# Copying a home while its session runs gives a slightly inconsistent copy:
+# dconf, browser history and cache files are rewritten continuously. Harmless
+# HERE: the original is not deleted, it is moved aside intact at next boot,
+# and what matters is the (static) keyring.
 #
-# ON NE TUE PAS LA SESSION. Ce script est souvent lance depuis un terminal qui
-# EN FAIT PARTIE : la fermer, c est se couper le tapis sous les pieds, entre
-# luksFormat et la recopie, et laisser un disque chiffre a moitie rempli. Le
-# vrai basculement se fait au demarrage suivant, quand personne ne tient /home
-# - c est unlock-home qui evacue alors l ancien contenu.
+# THE SESSION IS NOT KILLED: this script is often run from a terminal that is
+# PART of it; closing it between luksFormat and the copy would leave a half
+# filled encrypted disk. The real switch happens at next boot, when nobody
+# holds /home - unlock-home then moves the old content aside.
 if [ -n "$OWNER" ] && loginctl list-sessions --no-legend 2>/dev/null | grep -qw "$OWNER"; then
     echo -e "${YELLOW}Session de $OWNER ouverte : la copie sera prise a chaud.${NC}"
     echo -e "${YELLOW}L original n est pas efface - il sera mis de cote au redemarrage.${NC}"
 fi
 
-# ── 1. CHIFFREMENT ──────────────────────────────────────────────────────────
+# ── 1. ENCRYPTION ───────────────────────────────────────────────────────────
 echo
 echo -e "${GREEN}[1/7]${NC} Creation du conteneur LUKS2 sur $DEV."
 echo -e "      ${BOLD}Choisissez une phrase de passe longue.${NC} Elle ne se recupere pas :"
@@ -197,73 +190,62 @@ fi
 UUID="$(cryptsetup luksUUID "$DEV")"
 echo -e "      UUID LUKS : ${CYAN}$UUID${NC}"
 
-# ── 3. SYSTEME DE FICHIERS ──────────────────────────────────────────────────
+# ── 3. FILE SYSTEM ──────────────────────────────────────────────────────────
 echo -e "${GREEN}[3/7]${NC} Formatage ext4."
 mkfs.ext4 -q -L crypthome "/dev/mapper/$MAPPER"
 
-# ── 4. RECOPIE DE /home ─────────────────────────────────────────────────────
+# ── 4. COPY OF /home ────────────────────────────────────────────────────────
 echo -e "${GREEN}[4/7]${NC} Recopie du contenu actuel de $MOUNT."
 mkdir -p "$TMP"
 mount "/dev/mapper/$MAPPER" "$TMP"
-# -aHAX : liens durs, ACL et attributs etendus compris - un home sans ses ACL
-# ni ses xattrs revient a des permissions subtilement fausses, qu'on ne
-# decouvre qu'a l'usage.
-#
-# --sparse : SANS LUI, les fichiers creux sont recopies TROUS COMPRIS, zero par
-# zero. Mesure le 2026-09-15 sur un home de 6,6 Go : 19 Go a l'arrivee, les
-# 12 Go d'ecart venant d'une seule image QEMU de pmbootstrap (16 Go annonces,
-# 3,9 Go reellement alloues). Les machines virtuelles et les images disque sont
-# la regle dans un home d'operateur, pas l'exception.
-#
-# -x : on ne franchit pas les points de montage. Ce qui est monte SOUS le home
-# appartient a un autre disque ; le recopier ici le dupliquerait, et pas au bon
-# endroit.
-#
-# --info=progress2 seulement sur un terminal : lance par systemd, sa barre de
-# progression ecrit des dizaines de milliers de lignes dans le journal.
+# -aHAX: hard links, ACLs and extended attributes included - a home without
+# its ACLs and xattrs ends up with subtly wrong permissions.
+# --sparse: without it, sparse files (VM and disk images) are copied holes
+# included, zero by zero.
+# -x: mount points are not crossed; what is mounted UNDER the home belongs to
+# another disk.
+# --info=progress2 only on a terminal: run by systemd, the progress bar would
+# write tens of thousands of lines to the journal.
 _rs=(-aHAX --sparse -x)
 [ -t 1 ] && _rs+=(--info=progress2)
 rsync "${_rs[@]}" "$MOUNT"/ "$TMP"/
-# Le trousseau de root vit ici, et nulle part ailleurs : /root/.local/share/
-# keyrings est un lien vers ce repertoire.
+# Root's keyring lives here and nowhere else: /root/.local/share/keyrings is
+# a link to this directory.
 install -d -m 0700 "$TMP/.crypthome/root-keyrings"
 chown -R root:root "$TMP/.crypthome"
 sync
 umount "$TMP"
 rmdir "$TMP"
 
-# ── 5. CABLAGE ──────────────────────────────────────────────────────────────
+# ── 5. WIRING ───────────────────────────────────────────────────────────────
 echo -e "${GREEN}[5/7]${NC} Ecriture de la configuration."
 sed -i "s|^CRYPTHOME_UUID=.*|CRYPTHOME_UUID=\"$UUID\"|" "$CONF"
 
-# crypttab : "noauto" - systemd ne doit RIEN demander de lui-meme au boot,
-# c'est unlock-home qui pose la question et ouvre le volume.
+# crypttab: "noauto" - systemd must ask NOTHING by itself at boot; unlock-home
+# asks the question and opens the volume.
 sed -i "/^$MAPPER[[:space:]]/d" /etc/crypttab
 printf '%-22s %-40s %-10s %s\n' "$MAPPER" "UUID=$UUID" "none" "luks,noauto" >> /etc/crypttab
 
-# fstab : "noauto" pour la meme raison, et "nofail" en ceinture - une entree
-# qui echoue au boot sur un systeme sans le disque ne doit pas basculer la
-# machine en mode secours.
+# fstab: "noauto" for the same reason, and "nofail" as a safety net - an entry
+# failing at boot on a system without the disk must not drop the machine into
+# rescue mode.
 sed -i "\|^[^#].*[[:space:]]$MOUNT[[:space:]]|d" /etc/fstab
 printf '%-42s %-14s %-7s %s %s %s\n' \
     "/dev/mapper/$MAPPER" "$MOUNT" "ext4" "defaults,noauto,nofail" "0" "2" >> /etc/fstab
 
-# ── 6. L'ANCIEN /home ────────────────────────────────────────────────────
-# On n y touche pas, et ce n est pas un oubli : des processus le tiennent en ce
-# moment meme (la session depuis laquelle ce script tourne, le plus souvent).
-# C est unlock-home qui l evacuera vers /var/backups au demarrage suivant,
-# AVANT de monter le disque chiffre - le seul instant ou personne ne l occupe.
+# ── 6. THE OLD /home ────────────────────────────────────────────────────────
+# Left untouched on purpose: processes hold it right now (usually the session
+# this script runs from). unlock-home moves it to /var/backups at next boot,
+# BEFORE mounting the encrypted disk - the only moment nobody uses it.
 echo -e "${GREEN}[6/7]${NC} Ancien $MOUNT laisse en place ; il sera mis de cote au redemarrage."
 
-# ── 7. ACTIVATION ───────────────────────────────────────────────────────────
+# ── 7. ENABLING ─────────────────────────────────────────────────────────────
 echo -e "${GREEN}[7/7]${NC} Activation du service de demarrage."
 systemctl daemon-reload
 systemctl enable unlock-home.service >/dev/null
 /usr/local/sbin/refresh-owner-apps >/dev/null
-# [2026-10-01] On ne retire plus "splash" de la ligne de commande du noyau :
-# unlock-home quitte plymouth lui-meme juste avant de poser la question sur la
-# console. Le decor de demarrage reste, la question est lisible, et une
-# installation Calamares et un disque ajoute apres coup se comportent pareil.
+# "splash" stays on the kernel command line: unlock-home quits plymouth itself
+# just before asking the question on the console.
 
 cryptsetup close "$MAPPER"
 

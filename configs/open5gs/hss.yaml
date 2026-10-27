@@ -1,3 +1,4 @@
+# hss.yaml - Open5GS HSS of the bench (/opt/LTE/open5gs/install); Diameter S6a on 127.0.0.8.
 db_uri: mongodb://localhost/open5gs
 logger:
   file:

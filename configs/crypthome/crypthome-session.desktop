@@ -1,3 +1,5 @@
+# crypthome-session.desktop - GNOME autostart entry (installed in ~/.config/autostart by
+# iso_modules/89-home-chiffre.sh): runs crypthome-session-setup once /home is decrypted.
 [Desktop Entry]
 Type=Application
 Name=Preparation du compte chiffre

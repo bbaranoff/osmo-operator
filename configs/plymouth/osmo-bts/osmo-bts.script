@@ -1,33 +1,29 @@
-# osmo-bts.script - l animation du demarrage.
+# osmo-bts.script - Plymouth boot animation of the "osmo-bts" theme.
 #
-# Plymouth appelle Plymouth.SetRefreshFunction ~50 fois par seconde. Tout ce
-# qu on fait ici, c est avancer un compteur et changer l image de deux sprites :
-# la bande des ondes (24 frames : les anneaux qui s ouvrent depuis le pylone
-# et depuis le mobile - juste les ronds, rien d autre) et la pastille de la
-# barre d avancement. Le reste - pylone, mobile, titre - est PEINT DANS LE FOND
-# (background.png), une seule image : un initrd n a pas a porter 24 fois le
-# meme decor. Apercu anime : wiki/plymouth-osmo-bts.gif (plymouth-render.py
-# --gif).
+# Plymouth calls the refresh function ~50 times per second; the script only
+# advances a counter and swaps the image of two sprites: the wave strip
+# (24 frames of rings opening from the tower and from the phone) and the
+# knob of the progress bar. Tower, phone and title are painted once in
+# background.png so the initrd does not carry 24 copies of the scenery.
+# Animated preview: wiki/plymouth-osmo-bts.gif (tools/plymouth-render.py --gif).
 #
-# Les coordonnees sont celles d un ecran 1920x1080 ramenees a l ecran reel :
-# Window.GetWidth()/GetHeight() donnent la taille vraie, et tout est place en
-# FRACTION - sur un 1366x768 comme sur un 4K, la rafale reste entre les deux
-# antennes. CE FICHIER EST UN GABARIT : les @@...@@ sont remplaces par
-# tools/plymouth-render.py, qui est l auteur du decor et connait sa geometrie.
+# All positions are FRACTIONS of the real screen size (Window.GetWidth()/
+# GetHeight()), so the layout holds on 1366x768 as on 4K. THIS FILE IS A
+# TEMPLATE: the @@...@@ placeholders are filled in by tools/plymouth-render.py,
+# which draws the background and therefore knows its geometry.
 
 sw = Window.GetWidth();
 sh = Window.GetHeight();
 
-# ── LE DECOR ────────────────────────────────────────────────────────────────
+# ── BACKGROUND ──────────────────────────────────────────────────────────────
 bg_image = Image("background.png");
 bg = Sprite(bg_image.Scale(sw, sh));
 bg.SetX(0);
 bg.SetY(0);
 bg.SetZ(-100);
 
-# ── LES ONDES ENTRE LES DEUX ANTENNES ───────────────────────────────────────
-# 24 images, jouees a ~12 images/seconde (une frame toutes les 4 rafraichis).
-# Les fichiers gardent leur nom historique (burst-NN.png).
+# ── WAVES BETWEEN THE TWO ANTENNAS ──────────────────────────────────────────
+# 24 frames played at ~12 fps (one frame every 4 refreshes), files burst-NN.png.
 n_frames = 24;
 for (i = 0; i < n_frames; i++) {
     if (i < 10) {
@@ -37,17 +33,15 @@ for (i = 0; i < n_frames; i++) {
     }
     burst_scaled[i] = burst_image[i].Scale(sw * @@BW@@, sh * @@BH@@);
 }
-# @@BX@@ / @@BY@@ / @@BW@@ / @@BH@@ : la bande entre les deux antennes, en
-# FRACTIONS de l ecran, injectees par tools/plymouth-render.py - c est lui qui
-# a place le pylone et le mobile dans background.png, donc lui seul sait ou
-# tombe l espace entre les deux. Un gabarit plutot que des nombres recopies :
-# on deplace le pylone dans le dessin, les ondes suivent.
+# @@BX@@ / @@BY@@ / @@BW@@ / @@BH@@: the strip between the two antennas, as
+# screen FRACTIONS injected by tools/plymouth-render.py (it places the tower
+# and the phone in background.png, so moving them in the drawing moves the waves).
 burst = Sprite();
 burst.SetX(sw * @@BX@@);
 burst.SetY(sh * @@BY@@);
 burst.SetZ(10);
 
-# ── LA BARRE D AVANCEMENT ───────────────────────────────────────────────────
+# ── PROGRESS BAR ───────────────────────────────────────────────────────────
 box_image = Image("progress-box.png");
 bar_image = Image("progress-bar.png");
 box_w = sw * 0.27;
@@ -63,24 +57,21 @@ bar.SetZ(11);
 
 tick = 0;
 
-# ── LA SAISIE : LA PHRASE DE PASSE LUKS DE /home ────────────────────────────
-# [2026-10-01] Une seule invite, « decrypt /home -passphrase- or Enter » : la
-# phrase ouvre /home, Entree a vide demarre en root sans /home. Avant : un
-# champ vide et des pastilles rondes, sans rien qui dise « j attends que tu
-# tapes ».
+# ── PASSWORD ENTRY: THE LUKS PASSPHRASE OF /home ────────────────────────────
+# Single prompt ("decrypt /home -passphrase- or Enter"): the passphrase opens
+# /home, an empty Enter boots as root without /home. A blinking cursor shows
+# in the field while the question is pending and each typed character is
+# echoed as "*".
 #
-# CE CHAMP N EST PLUS LE CHEMIN PAR DEFAUT. unlock-home pose sa question sur
-# la console texte, apres avoir quitte plymouth : sur un portable Intel +
-# NVIDIA, le clavier de plymouth etait muet (curseur qui clignote, aucune
-# touche prise, delai qui expire). Il ne sert que si /etc/default/crypthome
-# dit CRYPTHOME_PROMPT=plymouth - alors unlock-home passe par
-# systemd-ask-password, dont l agent plymouth appelle ce qui suit.
-# Maintenant : un CURSEUR QUI CLIGNOTE dans le champ des que la question est
-# posee, et chaque caractere tape s affiche en « * » - la saisie d un terminal,
-# celle qu on reconnait, sur l ecran graphique.
+# This entry is NOT the default path: unlock-home asks on the text console
+# after leaving plymouth. It is used only when /etc/default/crypthome sets
+# CRYPTHOME_PROMPT=plymouth; unlock-home then goes through
+# systemd-ask-password, whose plymouth agent calls the callbacks below.
+# Known limitation: on some Intel + NVIDIA laptops the plymouth keyboard
+# input does not work (cursor blinks, no key accepted, timeout).
 #
-# Tout est declare ICI, avant refresh_callback : c est lui qui fait clignoter
-# le curseur, et il tourne des la premiere image.
+# Everything is declared HERE, before refresh_callback: it blinks the cursor
+# and runs from the first frame.
 entry_image = Image("entry.png");
 entry = Sprite();
 entry.SetZ(20);
@@ -88,8 +79,8 @@ prompt_sprite = Sprite();
 prompt_sprite.SetZ(20);
 stars_sprite = Sprite();
 stars_sprite.SetZ(21);
-# Le curseur : le trait bas d un terminal, dans la police de l image (Ubuntu
-# est dans l initrd ; a defaut, fontconfig rend la police par defaut).
+# Cursor: a terminal-style underscore (Ubuntu Mono is in the initrd; otherwise
+# fontconfig falls back to the default font).
 cursor_image = Image.Text("_", 0.95, 0.96, 0.98, 1, "Ubuntu Mono 16");
 cursor_sprite = Sprite(cursor_image);
 cursor_sprite.SetZ(22);
@@ -98,18 +89,17 @@ saisie_visible = 0;
 
 fun refresh_callback() {
     tick++;
-    # Les ondes : une image toutes les 4 passes (~12 i/s).
+    # Waves: one frame every 4 refreshes (~12 fps).
     frame = Math.Int(tick / 4) % n_frames;
     burst.SetImage(burst_scaled[frame]);
-    # La pastille : un va-et-vient regulier dans la barre. Plymouth ne nous dit
-    # pas ou en est le boot en mode script sans plugin de progression - une
-    # navette honnete vaut mieux qu un pourcentage invente.
+    # Knob: a steady back-and-forth in the bar (no boot progress is available
+    # to a script theme without a progress plugin, so no fake percentage).
     u = (tick % 200) / 200;
     if (u > 0.5) {
         u = 1 - u;
     }
     bar.SetX((sw - box_w) / 2 + u * 2 * (box_w - bar_w));
-    # Le curseur : allume une demi-seconde, eteint une demi-seconde (~50 Hz).
+    # Cursor: half a second on, half a second off (~50 Hz refresh).
     if (saisie_visible == 1) {
         if (Math.Int(tick / 25) % 2 == 0) {
             cursor_sprite.SetOpacity(1);
@@ -134,7 +124,7 @@ fun display_password_callback(prompt, bullets) {
     prompt_sprite.SetX((sw - text.GetWidth()) / 2);
     prompt_sprite.SetY(sh * 0.66);
     prompt_sprite.SetOpacity(1);
-    # Les « * » : un par caractere tape, dans le champ, a gauche.
+    # Stars: one "*" per typed character, left-aligned in the field.
     marge = sh * 0.016;
     stars_w = 0;
     if (bullets > 0) {
@@ -151,7 +141,7 @@ fun display_password_callback(prompt, bullets) {
     } else {
         stars_sprite.SetOpacity(0);
     }
-    # Le curseur suit le dernier « * » ; refresh_callback le fait clignoter.
+    # The cursor follows the last "*"; refresh_callback blinks it.
     cursor_sprite.SetX((sw - ew) / 2 + marge + stars_w);
     cursor_sprite.SetY(sh * 0.72 + (eh - cursor_image.GetHeight()) / 2);
     saisie_visible = 1;
@@ -168,8 +158,7 @@ fun display_normal_callback() {
 Plymouth.SetDisplayPasswordFunction(display_password_callback);
 Plymouth.SetDisplayNormalFunction(display_normal_callback);
 
-# ── PAS DE MESSAGES ─────────────────────────────────────────────────────────
-# [2026-10-01] Les messages que systemd et fsck envoient a plymouth ne sont
-# plus affiches : juste les ondes. Ils restent dans le journal (journalctl -b),
-# et un demarrage qui a vraiment besoin de parler le fait sur la console texte
-# - c est ce que fait unlock-home pour la phrase de passe.
+# ── NO MESSAGES ─────────────────────────────────────────────────────────────
+# No message callback: what systemd and fsck send to plymouth is not shown
+# (it stays in journalctl -b). Anything that really needs to talk during boot
+# uses the text console, as unlock-home does for the passphrase.

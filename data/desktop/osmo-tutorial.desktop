@@ -1,3 +1,5 @@
+# osmo-tutorial.desktop - launcher: five-minute quick-start tutorial of the
+# bench. Runs /usr/local/bin/osmo-tutorial.
 [Desktop Entry]
 Type=Application
 Name=Tutoriel - demarrage rapide

@@ -1,21 +1,21 @@
 # =============================================================================
-#  install_modules/_lib/inst.sh - contrat des modules d'installation
+#  install_modules/_lib/inst.sh - contract of the installation modules
 # =============================================================================
 #
-#  Meme principe que run_modules/_lib/mod.sh, mais pour l'installation. La
-#  difference tient a la nature des etapes : on n'y "demarre" rien, on
-#  transforme la machine - donc on veut savoir, pour chacune, si elle est DEJA
-#  faite (idempotence) et si elle a REUSSI (verification).
+#  Same principle as qosmo/run_modules/_lib/mod.sh, but for installation.
+#  The steps do not "start" anything, they transform the machine: for each
+#  one we want to know whether it is ALREADY done (idempotence) and whether
+#  it SUCCEEDED (verification).
 #
-#  Quatre fonctions par module, `run` seule obligatoire :
-#     inst_<p>_check    prerequis, LECTURE SEULE          0 ok · 1 manque · 4 sans objet
-#     inst_<p>_done     deja installe ?                   0 oui · 1 non
-#     inst_<p>_run      fait le travail                   0 ok · 1 echec · 3 deja fait
-#     inst_<p>_verify   controle APRES coup               0 ok · 1 echec
+#  Four functions per module, only `run` is mandatory:
+#     inst_<p>_check    prerequisites, READ ONLY       0 ok · 1 missing · 4 not applicable
+#     inst_<p>_done     already installed?             0 yes · 1 no
+#     inst_<p>_run      does the work                  0 ok · 1 failure · 3 already done
+#     inst_<p>_verify   check AFTER the fact           0 ok · 1 failure
 #
-#  `verify` est le pendant de la barriere `wait` cote execution : installer
-#  n'est pas avoir installe. Un `apt-get` qui rend 0 mais laisse un binaire
-#  absent doit etre vu ici, pas trois etapes plus loin.
+#  `verify` is the counterpart of the `wait` barrier on the run side:
+#  installing is not having installed. An `apt-get` that returns 0 but leaves
+#  a binary missing must be caught here, not three steps later.
 # -----------------------------------------------------------------------------
 
 readonly INST_RC_OK=0
@@ -24,11 +24,11 @@ readonly INST_RC_DONE=3
 readonly INST_RC_NA=4
 
 declare -a INST_ORDER=()
-declare -A INST_DESC=()      # description affichee
-declare -A INST_DEPS=()      # etapes prerequises
-declare -A INST_REQUIRED=()  # 1 = un echec arrete tout
-declare -A INST_ROOT=()      # 1 = exige les droits root
-declare -A INST_TIMEOUT=()   # secondes, pour les etapes longues
+declare -A INST_DESC=()      # displayed description
+declare -A INST_DEPS=()      # prerequisite steps
+declare -A INST_REQUIRED=()  # 1 = a failure stops everything
+declare -A INST_ROOT=()      # 1 = requires root
+declare -A INST_TIMEOUT=()   # seconds, for long steps
 
 INST_REGISTER() {
     local slug="$1" desc="$2"
@@ -42,7 +42,7 @@ INST_REGISTER() {
 
 inst_prefix() { printf 'inst_%s' "${1//-/_}"; }
 
-# --- protocole de message (identique a run_modules) ---------------------------
+# --- message protocol (same as the run modules) -------------------------------
 _INST_REASON=""
 _INST_HINT=""
 inst_ok()   { _INST_REASON=""   ; return $INST_RC_OK; }
@@ -52,7 +52,7 @@ inst_na()   { _INST_REASON="$*" ; return $INST_RC_NA; }
 inst_hint() { _INST_HINT="$*"; }
 inst_say()  { printf '%s\n' "$*"; }
 
-# --- sondes -------------------------------------------------------------------
+# --- probes -------------------------------------------------------------------
 have_cmd()  { command -v "$1" >/dev/null 2>&1; }
 have_dir()  { [ -d "$1" ]; }
 have_file() { [ -f "$1" ]; }

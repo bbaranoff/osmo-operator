@@ -1,3 +1,5 @@
+# osmo-addition.desktop - launcher: optional add-ons (Docker container,
+# SS7 multi-operator) installed by addition.sh. Runs /usr/local/bin/osmo-addition-anim.
 [Desktop Entry]
 Type=Application
 Name=Supplements

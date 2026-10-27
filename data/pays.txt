@@ -1,9 +1,9 @@
-# pays.txt - les pays du banc, un par ligne. Le MCC designe un PAYS, et sur ce
-# banc un pays est un noeud : le noeud 1 habite la premiere ligne, le 2 la
-# deuxieme... start-docker.sh melange la liste a chaque lancement, puis s'y tient pour
-# toute la duree du run (un pays qui change en cours de route ne veut rien dire).
-# Aucun n'existe. C'est fait expres : si l'on voit "Syldavie" dans un journal,
-# on sait qu'on regarde le banc et pas un vrai reseau.
+# pays.txt - fake country names for the test bench, one per line. An MCC
+# designates a country and on this bench a country is a node: node 1 gets the
+# first line, node 2 the second, and so on. launch/start-docker.sh shuffles the
+# list at each launch and keeps that order for the whole run. Blank lines and
+# lines starting with # are ignored. None of these countries exist, on purpose:
+# a "Syldavie" in a log means the bench, not a real network.
 Syldavie
 Bordurie
 Poldevie

@@ -1,27 +1,53 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# launch.sh - Point d entree DOUBLE-CLIC du banc osmo-operator.
+# launch.sh - DOUBLE-CLICK entry point of the osmo-operator bench.
 #
-# Monte le poste de travail complet en un geste :
-#     1. wireshark    sur udp/4729 (GSMTAP)        - root
-#     2. linphone     le softphone SIP             - utilisateur de la session
-#     3. firefox      sur http://127.0.0.1:8080    - des que le dashboard repond
-#     4. start.sh                           - le banc, au PREMIER PLAN
+# Brings up the complete workstation in one gesture:
+#     1. wireshark    on udp/4729 (GSMTAP)         - root, only with OSMO_LAUNCH_APPS=1
+#     2. linphone     the SIP softphone            - session user, only with OSMO_LAUNCH_APPS=1
+#     3. firefox      on http://127.0.0.1:8080     - as soon as the dashboard answers
+#     4. start.sh                                  - the bench, in the FOREGROUND
 #
-# Les trois premiers partent en arriere-plan et ne peuvent pas faire echouer le
-# lancement : un outil absent se signale et on continue. start.sh, lui,
-# tient le terminal - c est sa sortie qu on veut lire.
+# The first three start in the background and cannot fail the launch: a
+# missing tool is reported and the launch goes on. start.sh keeps the
+# terminal: its output is what one wants to read.
 #
-# Trois choses separent un script qui marche au terminal d un script qui marche
-# au double-clic, et elles sont traitees en tete :
-#   1. PAS DE TERMINAL. Un .desktop lance sans tty : start.sh ecrirait
-#      dans le vide. On se relance dans un emulateur de terminal.
-#   2. PAS DE ROOT. Le banc a besoin des privileges (netns, systemd, captures).
-#      Depuis une icone : pkexec (fenetre graphique), repli sudo.
-#   3. LA FENETRE SE FERME AVANT QU ON LISE L ERREUR. On la retient a la fin.
+# Three things separate a script that works in a terminal from one that works
+# on double-click, and they are handled first:
+#   1. NO TERMINAL. A .desktop starts without a tty: start.sh would write into
+#      the void. With the systemd unit installed the launch becomes a service
+#      start (notification + progress window); otherwise the script re-executes
+#      itself inside a terminal window (tools/osmo-gtk-run.py --tty).
+#   2. NO ROOT. The bench needs privileges (netns, systemd, captures). From an
+#      icon: pkexec (graphical prompt), sudo as fallback.
+#   3. THE WINDOW CLOSES BEFORE THE ERROR CAN BE READ. It is held at the end.
 #
-# Usage au terminal (aucun de ces detours ne s applique) :
-#     sudo ./launch.sh [arguments passes a start.sh]
+# Terminal usage (none of these detours apply):
+#     sudo ./launch.sh [arguments passed to start.sh]
+#
+# Right-click actions (handled before any window, root through pkexec):
+#     --service [args]   start osmo-banc.service (args -> OSMO_BANC_ARGS)
+#     --service-suivi    same, following the unit journal (progress window)
+#     --stop             stop the bench, native and container operators
+#     --multi            start osmo-multi.service (multi-operator topology)
+#     --multi-suivi      same, following the unit journal
+#     --multi-stop       stop the multi-operator containers
+#     --dashboard        open the dashboard in the browser
+#     --console          attach to the bench tmux session in a window
+#     --vty              open the MS VTY (telnet) in a window
+#
+# Environment:
+#     GSMTAP_PORT (4729), OSMO_DASH_URL (http://127.0.0.1:8080),
+#     OSMO_TUTORIAL_URL, OSMO_BANC_SERVICE (osmo-banc.service),
+#     OSMO_MULTI_SERVICE (osmo-multi.service), OSMO_LAUNCH_LOCK,
+#     OSMO_LAUNCH_APPS=1 (also start wireshark and linphone),
+#     OSMO_LAUNCH_MENU=1 (keep the interactive whiptail menus of start.sh),
+#     OSMO_LAUNCH_GTK=0 (no progress window, notifications only),
+#     OSMO_LAUNCH_NO_SERVICE=1 (never go through the systemd unit from an icon),
+#     OSMO_BANC_DIRECT=1 (run start.sh directly, bypassing the unit),
+#     OSMO_LAUNCH_LOG (/var/log/osmo-launch.log, detached fallback),
+#     OSMO_MS_VTY_PORT, TMUX_SESSION (calypso), HOST_PULSE_USER.
+#     OSMO_LAUNCH_TERM / OSMO_TERM_TAKEN are internal re-exec flags.
 # ══════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -30,39 +56,31 @@ TARGET="$DIR/start.sh"
 GSMTAP_PORT="${GSMTAP_PORT:-4729}"
 DASH_URL="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
 DASH_PORT="${DASH_URL##*:}"
-# Le tutoriel s ouvre en DEUXIEME ONGLET, a cote du tableau de bord. Servi par
-# le dashboard plutot qu en file:// : une seule copie fait foi, celle que le
-# dashboard expose, et l URL marche a l identique depuis une autre machine du
-# banc. Voir /usr/local/bin/osmo-tutorial.
+# The tutorial opens as a SECOND TAB next to the dashboard. Served by the
+# dashboard rather than file://: a single copy, and the URL works the same
+# from another machine of the bench. See /usr/local/bin/osmo-tutorial.
 TUTO_URL="${OSMO_TUTORIAL_URL:-${DASH_URL%/}/tutorial.html}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
 
 [ -x "$TARGET" ] || { echo -e "${RED}start.sh introuvable ou non executable dans $DIR${NC}" >&2; exit 1; }
 
-# ── UN SEUL LANCEMENT A LA FOIS ─────────────────────────────────────────────
-# [2026-09-04] Un double-clic sur le telephone rouge, c est DEUX lancements. Le
-# second n attend pas le premier : il commence par tout arreter (un clic = un
-# banc neuf) et demonte donc la pile que le premier est en train de monter. On
-# obtient un banc a moitie debout, deux journaux entrelaces dans deux fenetres,
-# et une panne qui ne ressemble a aucune panne connue - pour un geste qui
-# n etait meme pas voulu.
-#
-# DEUX FACONS D ETRE DEJA EN TRAIN DE DEMARRER, DEUX TESTS :
-#   1. un autre launch.sh tient le verrou. C est un flock non bloquant sur un
-#      descripteur qui SURVIT a l exec de start.sh : il couvre donc tout
-#      le demarrage, et le noyau le libere quand le processus meurt, meme tue -
-#      rien a nettoyer, et surtout aucun verrou fantome apres une coupure.
-#   2. l unite osmo-banc est « activating ». Un banc lance par systemd
-#      (`systemctl start osmo-banc`, l action « en service » de l icone, ou une
-#      image gravee avec --banc) ne passe par aucun launch.sh : il ne tient
-#      aucun verrou, et sans ce second test un clic pendant ce demarrage-la
-#      passerait au travers.
-# `--stop` n est jamais bloque : c est justement le geste qui reprend la main
-# quand un lancement s eternise.
+# ── ONE LAUNCH AT A TIME ─────────────────────────────────────────────────────
+# A second launch would begin by stopping everything (one click = a fresh
+# bench) and tear down the stack the first one is bringing up. Two ways of
+# already being in the middle of a start-up, two tests:
+#   1. another launch.sh holds the lock: a non-blocking flock on a descriptor
+#      that SURVIVES the exec of start.sh, so it covers the whole start-up and
+#      the kernel releases it when the process dies, even killed - nothing to
+#      clean up, no stale lock after a power cut.
+#   2. the osmo-banc unit is "activating": a bench started by systemd
+#      (`systemctl start osmo-banc`, the "as a service" action of the icon, or
+#      an image burnt with --banc) goes through no launch.sh and holds no lock.
+# `--stop` is never blocked: it is the gesture that takes back control when a
+# launch drags on.
 LOCK_FILE="${OSMO_LAUNCH_LOCK:-/run/lock/osmo-launch.lock}"
 verrou_pris() {
-    command -v flock >/dev/null 2>&1 || return 0   # pas de flock : on ne bloque rien
+    command -v flock >/dev/null 2>&1 || return 0   # no flock: nothing is blocked
     mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null || true
     exec 9>>"$LOCK_FILE" 2>/dev/null || return 0
     flock -n 9
@@ -74,35 +92,23 @@ lancement_possible() {
     banc_en_demarrage && return 1
     verrou_pris
 }
-# [2026-09-04] LE VERROU DOIT MOURIR AVEC LE DEMARRAGE, PAS AVEC LA FENETRE.
-# Tenu par le descripteur 9, il vivait aussi longtemps que le processus - donc
-# jusqu a ce que quelqu un appuie sur Entree devant « Fenetre maintenue
-# ouverte », et au-dela si la fenetre restait la (ou si on s attachait a tmux,
-# l exec gardant le descripteur). Une fenetre oubliee sur un coin de bureau
-# suffisait alors a faire repondre « un lancement est deja en cours » a TOUS
-# les clics suivants, y compris « Demarrer le banc en service ». On le rend
-# donc des que le banc est monte.
+# The lock must die with the START-UP, not with the window: held by descriptor
+# 9 it would otherwise live as long as the process, i.e. until someone presses
+# Enter at "Fenetre maintenue ouverte" (or while attached to tmux), and a
+# forgotten window would refuse every later click. It is released as soon as
+# the bench is up.
 verrou_liberer() { exec 9>&- 2>/dev/null || true; }
 
-# ── 0. DEMARRER COMME UN SERVICE (action du clic droit) ─────────────────────
-# [2026-09-04] L icone n avait que deux gestes : « lancer » (qui ouvre un
-# terminal et y deroule tout le demarrage) et « arreter ». Il manquait celui
-# qu on veut sur une machine qui tourne toute seule : monter le banc COMME UN
-# SERVICE - pas de fenetre a garder ouverte, pas de sortie a surveiller, et un
-# banc qui survit a la fermeture de la session.
-#
-# On parle donc a systemd et a personne d autre, AVANT le bloc terminal
-# ci-dessous : cette action ne doit jamais ouvrir de fenetre. Le compte rendu
-# passe par une notification de bureau, seul endroit ou l operateur regarde
-# quand il n a pas de terminal. `systemctl restart` rend la main a la fin du
-# demarrage (jusqu a TimeoutStartSec=900) : rien n attend ici, ni le bureau ni
-# l icone - c est ce delai qui permet d annoncer un vrai resultat plutot qu un
-# « c est parti » sans suite.
+# ── 0. DIRECT ACTIONS (right-click menu): no window, talk to systemd only ────
+# The report goes through a desktop notification, the only place the operator
+# looks when there is no terminal. `systemctl restart` returns at the end of
+# the start-up (up to TimeoutStartSec=900), which allows announcing a real
+# result rather than a "started" with no follow-up.
 case "${1:-}" in --service|--service-suivi|--stop|--dashboard|--console|--vty|--multi|--multi-suivi|--multi-stop) _bloc_direct=1 ;; *) _bloc_direct=0 ;; esac
 if [ "$_bloc_direct" = "1" ]; then
-    # Root SANS terminal : pkexec demande le mot de passe dans une fenetre du
-    # bureau. On ne retombe PAS sur sudo ici - sudo voudrait un terminal, et
-    # c est precisement ce que ces deux actions promettent de ne pas ouvrir.
+    # Root WITHOUT a terminal: pkexec asks for the password in a desktop
+    # window. No sudo fallback here: sudo would need a terminal, which is
+    # precisely what these actions promise not to open.
     if [ "$(id -u)" -ne 0 ] && command -v pkexec >/dev/null 2>&1 \
        && [ -n "${DISPLAY:-}" ]; then
         exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
@@ -118,27 +124,15 @@ if [ "$_bloc_direct" = "1" ]; then
         echo -e "  ${CYAN}→${NC} $1"
     }
 
-    # ── ET LES OPERATEURS EN CONTENEUR ─────────────────────────────────────
-    # [2026-09-04] « Arreter le banc » LAISSAIT LE BANC DEBOUT. Le natif
-    # s arretait bien, mais les operateurs docker du multi (osmo-operator-2,
-    # -3, le hub osmo-inter-stp) continuaient de tourner : chacun porte SON
-    # dashboard, SON asterisk, SON HLR et son propre gapk, dans son propre
-    # cgroup (/system.slice/docker-<id>.scope) - donc hors de portee de
-    # `systemctl stop osmo-banc`, quoi que fasse son ExecStop. Le 8080
-    # repondait encore, les abonnes restaient « rattaches », le telephone
-    # sonnait toujours : de l exterieur, l arret n avait rien arrete.
-    #
-    # osmo-multi.service porte pourtant Requires=osmo-banc.service, et systemd
-    # propage bien l arret - MAIS SEULEMENT SI CETTE UNITE EST ACTIVE. Tuee en
-    # cours de demarrage (constate : Main process exited, signal=15/TERM), elle
-    # passe « failed » : plus rien ne porte les conteneurs, aucun ExecStop ne
-    # tourne, et ils survivent a tous les arrets suivants. On arrete donc
-    # l unite quand elle existe, PUIS on balaie ce qui reste.
-    #
-    # Le balai n est pas redondant avec `start-multi.sh --stop` : celui-ci ne
-    # connait que la topologie declaree dans /etc/osmocom/osmo-multi.conf, et
-    # un conteneur d une topologie precedente lui echapperait. Le filtre est
-    # celui que start-docker.sh applique deja en tete de course.
+    # ── The container operators ──────────────────────────────────────────────
+    # The docker operators of the multi (osmo-operator-2, -3, the osmo-inter-stp
+    # hub) run in their own cgroups (/system.slice/docker-<id>.scope), out of
+    # reach of `systemctl stop osmo-banc`. osmo-multi.service propagates the
+    # stop only while it is active: once "failed" (killed during start-up)
+    # nothing holds the containers any more. So the unit is stopped when it
+    # exists, THEN whatever remains is swept with the same filter
+    # launch/start-docker.sh applies at the start of a run (a container of a
+    # previous topology would escape `start-multi.sh --stop`).
     _arret_multi() {
         local _m="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
         if systemctl cat "$_m" >/dev/null 2>&1; then
@@ -150,32 +144,24 @@ if [ "$_bloc_direct" = "1" ]; then
         _c="$(docker ps -q --filter name=osmo- 2>/dev/null)" || return 0
         [ -n "$_c" ] || return 0
         _note "Arret des operateurs en conteneur..."
-        # shellcheck disable=SC2086  # une liste d ID, un par ligne
+        # shellcheck disable=SC2086  # a list of IDs, one per line
         docker rm -f $_c >/dev/null 2>&1 || true
     }
 
-    # ── LE MULTI-OPERATEUR : L ICONE DEMARRE L UNITE, ET LE DIT ────────────
-    # [2026-09-07] L ICONE « multi-operator » NE DEMARRAIT RIEN, SANS UN MOT.
-    # Elle appelait directement `pkexec systemctl start osmo-multi.service`, et
-    # cet appel rend 0 dans DEUX cas qu on ne distingue pas d un clic :
-    #   1. osmo-multi.service porte deux ConditionPathExists (start-multi.sh et
-    #      /etc/osmocom/osmo-multi.conf, la topologie qu ecrit addition.sh).
-    #      Une condition non remplie n est PAS un echec pour systemd : l unite
-    #      est SAUTEE, `systemctl start` sort en 0, `systemctl --failed` reste
-    #      vide. Sur une ISO fraiche - ou personne n a encore lance les
-    #      Supplements - c est le cas NORMAL : le clic ne pouvait rien faire.
-    #   2. l unite est deja active (RemainAfterExit=yes) : start ne rejoue rien.
-    # Dans les deux cas, aucune fenetre, aucune notification, rien : l icone
-    # passait pour morte. On teste donc les conditions AVANT de demarrer, on
-    # nomme ce qui manque, et on annonce le resultat par notification - comme
-    # « Demarrer le banc en service » juste au-dessus.
+    # ── Multi-operator: the icon starts the unit, and says so ────────────────
+    # `systemctl start osmo-multi.service` returns 0 in two cases that are
+    # indistinguishable from a click: a ConditionPathExists not met (the unit
+    # is SKIPPED, not failed - the normal case on a fresh ISO before the
+    # "Supplements" icon ran) and a unit already active (RemainAfterExit=yes).
+    # The conditions are therefore tested HERE, what is missing is named, and
+    # the result is announced by notification.
     _svcm="${OSMO_MULTI_SERVICE:-osmo-multi.service}"
-    # ── LE LANCEMENT SUIVI : L ACTION, ET LE JOURNAL DE L UNITE QUI DEFILE ──
-    # [2026-10-12] Ce que la fenetre de lancement du bureau (osmo-gtk-run.py
-    # --progress) execute : « systemctl start » ne montre rien, le banc ecrit
-    # dans le journal de son unite. On le suit en parallele, et la fenetre y
-    # lit les reperes « [n/10] » de run.sh pour sa barre. Le verrou, les
-    # notifications, le code de retour : ceux de --service / --multi.
+    # ── Followed launch: the action plus the unit journal streaming ──────────
+    # What the desktop launch window (osmo-gtk-run.py --progress) executes:
+    # `systemctl start` shows nothing, the bench writes to its unit journal.
+    # The journal is followed in parallel and the window reads the "[n/10]"
+    # markers of run.sh for its progress bar. Lock, notifications and return
+    # code are those of --service / --multi.
     if [ "$_action" = "--service-suivi" ] || [ "$_action" = "--multi-suivi" ]; then
         if [ "$_action" = "--service-suivi" ]; then _u="$_svc"; _sub=--service; else _u="$_svcm"; _sub=--multi; fi
         journalctl -u "$_u" -f -n 0 -o cat 2>/dev/null & _j=$!
@@ -195,8 +181,8 @@ if [ "$_bloc_direct" = "1" ]; then
             _note "Unite $_svcm absente : lancez d abord l icone « Supplements »."
             exit 1
         fi
-        # Les memes chemins que les ConditionPathExists de l unite. On les lit
-        # ICI plutot que de croire le code de retour de systemctl.
+        # The same paths as the ConditionPathExists of the unit, checked HERE
+        # rather than trusting the systemctl return code.
         if [ ! -f "$DIR/launch/start-multi.sh" ]; then
             _note "start-multi.sh introuvable dans $DIR - depot incomplet."
             exit 1
@@ -211,10 +197,10 @@ if [ "$_bloc_direct" = "1" ]; then
         esac
         systemctl reset-failed "$_svcm" 2>/dev/null || true
         _note "Demarrage de $_svcm - comptez plusieurs minutes (images, conteneurs, HLR)."
-        # `start` et non `restart` : ExecStop demonte les conteneurs, et un
-        # restart sur une unite deja montee couterait un demontage inutile.
+        # `start`, not `restart`: ExecStop tears the containers down, and a
+        # restart on an already running unit would cost a useless teardown.
         if systemctl start "$_svcm"; then
-            # Type=oneshot + conditions : un 0 ne prouve pas que ca a tourne.
+            # Type=oneshot + conditions: a 0 does not prove that it ran.
             if [ "$(systemctl is-active "$_svcm" 2>/dev/null)" = active ]; then
                 _note "Multi-operateur en service. Journal : journalctl -u ${_svcm%.service} -f"
                 exit 0
@@ -226,15 +212,12 @@ if [ "$_bloc_direct" = "1" ]; then
         exit 1
     fi
 
-    # ── LE TABLEAU DE BORD ─────────────────────────────────────────────────
-    # Un clic, une page. xdg-open passe par le navigateur par defaut, donc par
-    # la fenetre deja ouverte s il y en a une : un onglet de plus, pas une
-    # deuxieme fenetre.
+    # ── The dashboard ────────────────────────────────────────────────────────
+    # Firefox FIRST, not xdg-open: it is the browser of the image, and a second
+    # invocation adds a tab to the existing window instead of opening another
+    # one. xdg-open is only the fallback.
     if [ "$_action" = "--dashboard" ]; then
         _u="${OSMO_DASH_URL:-http://127.0.0.1:8080}"
-        # Firefox EN PREMIER, pas xdg-open : c est le navigateur de l image, et
-        # une seconde invocation lui ajoute un onglet au lieu d ouvrir une
-        # fenetre de plus. xdg-open ne sert que de repli.
         if command -v firefox >/dev/null 2>&1; then
             setsid firefox "$_u" >/dev/null 2>&1 &
         elif command -v xdg-open >/dev/null 2>&1; then
@@ -245,21 +228,19 @@ if [ "$_bloc_direct" = "1" ]; then
         exit 0
     fi
 
-    # ── LA CONSOLE DU MOBILE (VTY) ─────────────────────────────────────────
-    # telnet, comme le dit la documentation Osmocom : le VTY attend un terminal
-    # ligne a ligne. Le `read` final garde la fenetre le temps de lire l erreur
-    # quand le port est ferme.
+    # ── The MS console (VTY) ─────────────────────────────────────────────────
+    # telnet, as the Osmocom documentation says: the VTY expects a line-mode
+    # terminal. Opened in a GTK window of the bench (VTE terminal inside,
+    # tools/osmo-gtk-run.py); no favourite opens a gnome-terminal.
     if [ "$_action" = "--vty" ]; then
-        # [2026-10-12] 4247, ou 4347 en --dsp : start.sh publie le port
-        # reel dans /run/osmo-banc/ms1-vty ; sans le fichier, on regarde qui
-        # ecoute (4347 d abord, puis 4247).
+        # 4247, or 4347 in --dsp: start.sh publishes the real port in
+        # /run/osmo-banc/ms1-vty; without the file, look at who listens
+        # (4347 first, then 4247).
         _p="${OSMO_MS_VTY_PORT:-}"
         [ -z "$_p" ] && [ -r /run/osmo-banc/ms1-vty ] && _p="$(tr -dc 0-9 < /run/osmo-banc/ms1-vty)"
         if [ -z "$_p" ]; then
             if ss -ltnH "( sport = :4347 )" 2>/dev/null | grep -q .; then _p=4347; else _p=4247; fi
         fi
-        # [2026-10-01] Dans une fenetre GTK du banc (terminal VTE dedans), plus
-        # dans un gnome-terminal : aucun favori n ouvre de terminal.
         _c="telnet 127.0.0.1 $_p || { echo; echo 'VTY 127.0.0.1:$_p injoignable - banc arrete ?'; exit 1; }"
         exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
              --title "Console du mobile (VTY $_p)" -- bash -c "$_c"
@@ -267,58 +248,50 @@ if [ "$_bloc_direct" = "1" ]; then
         exit 1
     fi
 
-    # ── LA CONSOLE DU BANC ─────────────────────────────────────────────────
-    # Celle-ci, ET ELLE SEULE, ouvre un terminal : `tmux attach` est une session
-    # interactive, elle n a nulle part ailleurs ou vivre. Le lancement du banc,
-    # lui, n en ouvre plus (voir le bloc « UN CLIC = UN SERVICE »).
+    # ── The bench console ────────────────────────────────────────────────────
+    # This one, AND ONLY THIS ONE, opens a terminal: `tmux attach` is an
+    # interactive session and has nowhere else to live. The bench launch
+    # itself no longer opens one (see "ONE CLICK = ONE SERVICE" below).
     if [ "$_action" = "--console" ]; then
         _sess="${TMUX_SESSION:-calypso}"
         if ! tmux has-session -t "$_sess" 2>/dev/null; then
             _note "Pas de session « $_sess » : le banc ne tourne pas."
             exit 1
         fi
-        # [2026-10-01] Le terminal VTE vit dans une fenetre GTK du banc
-        # (tools/osmo-gtk-run.py) : aucun favori n ouvre de terminal.
         exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
              --title "Console du banc (tmux $_sess)" -- tmux attach -t "$_sess"
         _note "Aucune fenetre possible - tapez : tmux attach -t $_sess"
         exit 1
     fi
 
-    # ── ARRETER ────────────────────────────────────────────────────────────
-    # [2026-09-04] « Arreter le banc » etait traite APRES le bloc terminal :
-    # le clic ouvrait donc une fenetre entiere pour y lancer un systemctl stop,
-    # et sur une machine sans emulateur de terminal il ne se passait
-    # simplement RIEN. Un arret n a rien a montrer : il se fait ici, avant
-    # toute fenetre.
+    # ── Stop ─────────────────────────────────────────────────────────────────
+    # A stop has nothing to show: it is done here, before any window.
     if [ "$_action" = "--stop" ]; then
         _etat="$(systemctl is-active "$_svc" 2>/dev/null || true)"
         if systemctl cat "$_svc" >/dev/null 2>&1; then
             _note "Arret de $_svc..."
             timeout 200 systemctl stop "$_svc" || true
         fi
-        # ExecStop ne tourne QUE si l unite etait active ou en cours de
-        # demarrage. Quand elle est « failed » (start.sh sorti en
-        # erreur), systemd a deja tue son cgroup - mais le coeur (osmo-stp,
-        # hlr, msc, bsc...) vit dans SES PROPRES unites, que run.sh a
-        # demarrees par systemctl : elles restent debout, le telephone du
-        # tableau de bord aussi, et l arret semblait ne rien faire. On demonte
-        # alors a la main ce que ExecStop n a pas eu l occasion de demonter.
+        # ExecStop only runs when the unit was active or activating. When it
+        # is "failed" (start.sh exited with an error) systemd has already
+        # killed its cgroup, but the core (osmo-stp, hlr, msc, bsc...) lives
+        # in ITS OWN units, started by run.sh through systemctl: they stay up.
+        # Tear down by hand what ExecStop had no chance to tear down.
         case "$_etat" in
-            active|activating|reloading) ;;   # ExecStop a fait le travail
+            active|activating|reloading) ;;   # ExecStop did the work
             *)
                 [ -x "$TARGET" ] && timeout 120 "$TARGET" --stop >/dev/null 2>&1 || true
-                # Les deux unites que le second ExecStop de osmo-banc.service
-                # arrete : elles ne sont PAS dans le cgroup du banc et
-                # survivraient a un arret par ce chemin-la.
+                # The two units that the second ExecStop of osmo-banc.service
+                # stops: they are NOT in the bench cgroup and would survive a
+                # stop through this path.
                 systemctl stop osmo-egprs-web.service osmo-hlr.service 2>/dev/null || true
                 ;;
         esac
-        # Le natif est a terre ; les operateurs en conteneur, eux, ne
-        # dependent d aucun de ces chemins (voir _arret_multi).
+        # The native stack is down; the container operators depend on none of
+        # these paths (see _arret_multi).
         _arret_multi
-        # Sans ca l unite reste « failed » et le prochain demarrage part d un
-        # etat d echec.
+        # Otherwise the unit stays "failed" and the next start begins from a
+        # failed state.
         systemctl reset-failed "$_svc" 2>/dev/null || true
         _note "Banc arrete."
         exit 0
@@ -328,14 +301,14 @@ if [ "$_bloc_direct" = "1" ]; then
         _note "Unite $_svc absente : utilisez « Lancer le banc GSM »."
         exit 1
     fi
-    # Meme garde que le lancement en fenetre : deux demarrages a la fois se
-    # demontent l un l autre.
+    # Same guard as the windowed launch: two start-ups at once tear each
+    # other down.
     if ! lancement_possible; then
         _note "Un lancement est deja en cours - rien de fait. journalctl -u ${_svc%.service} -f"
         exit 1
     fi
-    # Les options du clic droit (--dsp...) passent a l unite comme dans
-    # banc_unit_restart : meme mecanique, meme portee (jusqu au reboot).
+    # The right-click options (--dsp...) reach the unit as in
+    # banc_unit_restart: same mechanism, same scope (until reboot).
     if [ $# -gt 0 ]; then
         systemctl set-environment OSMO_BANC_ARGS="$*" 2>/dev/null || true
     else
@@ -351,47 +324,39 @@ if [ "$_bloc_direct" = "1" ]; then
     exit 1
 fi
 
-# ── UN CLIC = UN SERVICE ; UN DEUXIEME CLIC = UNE FENETRE QUI DIT POURQUOI ──
-# [2026-09-04] Un clic sur le telephone rouge ouvrait une fenetre de terminal et
-# y deroulait tout le demarrage. C est utile quand on lance a la main, ca ne
-# l est pas depuis une icone : on veut le banc, pas sa sortie, et la fenetre
-# reste ensuite ouverte sur un « Entree pour fermer » que personne ne lit.
+# ── ONE CLICK = ONE SERVICE; A SECOND CLICK = A NOTIFICATION THAT SAYS WHY ───
+# From an icon (neither stdin nor stdout on a terminal) the launch goes
+# through the service: systemd brings the bench up, a progress window or a
+# notification announces the result, no terminal opens. This is exactly the
+# "start the bench as a service" right-click action: a single path.
 #
-# Depuis une icone (ni stdin ni stdout sur un terminal), on part donc en mode
-# service : systemd monte le banc, une notification annonce le resultat, aucune
-# fenetre ne s ouvre. C est exactement l action « Demarrer le banc en service »
-# du clic droit - un seul chemin, pas deux comportements a tenir a jour.
+# A second click must not open anything either, but it must be SEEN: it
+# answers with a desktop notification.
 #
-# LE DEUXIEME CLIC NE DOIT RIEN OUVRIR NON PLUS - mais il doit se VOIR. Sans
-# rien, un double-clic sortirait en silence et l icone passerait pour morte. Il
-# repond donc par une notification de bureau : le verrou est annonce, aucune
-# fenetre n apparait.
-#
-# Lancement a la main dans un terminal : rien ne change, on garde ce terminal,
-# et c est la que l avertissement encadre du verrou (plus bas) s affiche.
+# A manual launch from a terminal keeps that terminal; the boxed lock warning
+# further down is displayed there.
 if { [ ! -t 0 ] || [ ! -t 1 ]; } \
    && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ] && [ "${OSMO_TERM_TAKEN:-0}" != "1" ] \
    && [ "${OSMO_LAUNCH_NO_SERVICE:-0}" != "1" ] \
    && systemctl cat "${OSMO_BANC_SERVICE:-osmo-banc.service}" >/dev/null 2>&1; then
     if lancement_possible; then
-        # [2026-10-12] AVEC UNE FENETRE, SANS SHELL : depuis le bureau, le
-        # lancement s affiche dans la fenetre de progression du banc
-        # (tools/osmo-gtk-run.py --progress : barre, etape, console repliee).
-        # OSMO_LAUNCH_GTK=0 revient aux seules notifications.
+        # WITH A WINDOW, WITHOUT A SHELL: the launch is shown in the bench
+        # progress window (tools/osmo-gtk-run.py --progress: bar, step,
+        # collapsed console). OSMO_LAUNCH_GTK=0 falls back to notifications.
         _gtk="$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py"
         if [ "${OSMO_LAUNCH_GTK:-1}" != 0 ] && [ -n "${DISPLAY:-}" ] && [ -x "$_gtk" ]; then
-            # le verrou est rendu ICI : c est le --service lance dans la
-            # fenetre (en root) qui le reprend ; garde par la fenetre, il
-            # ferait refuser ce lancement meme
+            # The lock is released HERE: the --service started inside the
+            # window (as root) takes it again; held by the window, it would
+            # refuse that very launch.
             verrou_liberer
             exec python3 "$_gtk" --progress --root --title "Banc GSM 2G" \
                  --icon /usr/share/osmo-operator/icons/osmo-launch.svg -- "$0" --service-suivi "$@"
         fi
-        # Le verrou pris ici survit a l exec : c est le meme processus qui va
-        # tenir le demarrage, sous son autre nom.
+        # The lock taken here survives the exec: the same process holds the
+        # start-up under its other name.
         exec "$0" --service "$@"
     fi
-    # Verrou pris : on le dit, et on s arrete la. Pas de fenetre.
+    # Lock held: say so, and stop here. No window.
     if command -v notify-send >/dev/null 2>&1; then
         notify-send -i /usr/share/osmo-operator/icons/osmo-launch.svg "Banc GSM" \
             "Un lancement est deja en cours. Rien de fait - suivez-le avec journalctl -u osmo-banc -f." \
@@ -401,54 +366,44 @@ if { [ ! -t 0 ] || [ ! -t 1 ]; } \
     exit 1
 fi
 
-# ── 1. Un terminal, si on n en a pas — OU s il n est pas a nous ─────────────
-# On teste la presence d un TTY, pas $DISPLAY : c est la difference reelle entre
-# « lance a la main » et « lance par une icone ». OSMO_LAUNCH_TERM marque le
-# tour de relance pour ne pas boucler.
-#
-# [2026-08-31] DEUX DEFAUTS, LE MEME MALENTENDU : la garde demandait « y a-t-il
-# UN terminal ? », jamais « est-ce LE MIEN ? ».
-#   1. stdin SEUL. `./launch.sh < fichier` depuis un vrai terminal se croyait
-#      lance par une icone et ouvrait une fenetre en trop, dont la sortie
-#      n allait pas a l appelant. On teste donc stdin ET stdout.
-#   2. UN TTY HERITE N EST PAS LE NOTRE. start.sh TIENT le terminal
-#      jusqu a la fin (cf. l en-tete de ce fichier). Appele par un autre
-#      lanceur — start-multi.sh, qui monte le natif AVANT ses conteneurs — il
-#      heritait du terminal de celui-ci, ecrivait par-dessus sa sortie et ne
-#      lui rendait la main qu a la fin du natif. OSMO_TERM_TAKEN=1 dit « ce
-#      terminal est deja occupe » : on ouvre alors LA NOTRE, tty ou pas.
+# ── 1. A terminal, if there is none - OR if it is not ours ───────────────────
+# The test is the presence of a TTY on stdin AND stdout, not $DISPLAY: that is
+# the real difference between "run by hand" and "run from an icon".
+# OSMO_LAUNCH_TERM marks the re-exec round so as not to loop.
+# An INHERITED tty is not ours: called by another launcher (start-multi.sh,
+# which brings the native stack up BEFORE its containers) start.sh would write
+# over its output. OSMO_TERM_TAKEN=1 says "this terminal is already busy": a
+# window of our own is opened, tty or not.
 _lt_besoin=0
 { [ ! -t 0 ] || [ ! -t 1 ]; } && _lt_besoin=1
 [ "${OSMO_TERM_TAKEN:-0}" = "1" ] && _lt_besoin=1
 if [ "$_lt_besoin" = "1" ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
     export OSMO_LAUNCH_TERM=1
-    unset OSMO_TERM_TAKEN            # la fenetre qu on ouvre ici EST la notre
-    # [2026-10-01] La fenetre est celle du banc (GTK + terminal VTE,
-    # tools/osmo-gtk-run.py), plus un gnome-terminal.
+    unset OSMO_TERM_TAKEN            # the window opened here IS ours
+    # The window is the bench one (GTK + VTE terminal, tools/osmo-gtk-run.py).
     exec python3 "$(dirname "$(readlink -f "$0")")/tools/osmo-gtk-run.py" --tty \
          --title "Banc GSM" -- "$0" "$@"
-    # AUCUN emulateur installe. On ne reprend pas le terminal de l appelant -
-    # ce serait refaire exactement la panne que cette garde empeche. On se
-    # detache, et la sortie va dans un journal plutot que dans le vide.
+    # NO window possible. The caller's terminal is not taken over (that is
+    # the failure this guard prevents): detach, and send the output to a log
+    # rather than into the void.
     _lt_log="${OSMO_LAUNCH_LOG:-/var/log/osmo-launch.log}"
     echo -e "${YELLOW}Aucun emulateur de terminal - lancement detache, journal : ${_lt_log}${NC}" >&2
     exec setsid "$0" "$@" </dev/null >>"$_lt_log" 2>&1
 fi
 
-# Le drapeau a joue son role. On le RETIRE de l environnement : exporte, il
-# descendait dans start.sh et tout ce qui suit, ou il ferait croire a
-# n importe quel descendant rappelant ce script qu il est deja dans sa fenetre
-# - et plus aucune ne s ouvrirait. La valeur reste ici, dans une variable de
-# shell, la ou on en a besoin (retenir la fenetre a la fin).
+# The flag has done its job: REMOVE it from the environment, or it would reach
+# start.sh and every descendant that calls this script back, which would then
+# believe it already has its window. The value stays in a shell variable, for
+# holding the window at the end.
 _own_window=0
 [ "${OSMO_LAUNCH_TERM:-0}" = "1" ] && _own_window=1
 unset OSMO_LAUNCH_TERM
 
-# ── 2. Les privileges ───────────────────────────────────────────────────────
+# ── 2. Privileges ────────────────────────────────────────────────────────────
 if [ "$(id -u)" -ne 0 ]; then
     if command -v pkexec >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
-        # pkexec lave l environnement : DISPLAY et XAUTHORITY sont repasses a la
-        # main, sinon rien de graphique ne peut s ouvrir ensuite.
+        # pkexec scrubs the environment: DISPLAY and XAUTHORITY are passed
+        # again by hand, otherwise nothing graphical can open afterwards.
         exec pkexec env DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" \
              OSMO_LAUNCH_TERM="$_own_window" "$0" "$@"
     fi
@@ -457,11 +412,11 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# ── L UTILISATEUR DE LA SESSION GRAPHIQUE ───────────────────────────────────
-# Meme critere que helpers/prepare_host.sh et start-docker.sh : le NOM du compte ne
-# dit rien, la presence de son socket pulse si. Sur l ISO --desktop la session
-# est ouverte sous root (gdm3 AutomaticLogin=root) - « root » est donc ici une
-# reponse valide, pas une erreur.
+# ── The user of the graphical session ────────────────────────────────────────
+# Same criterion as helpers/prepare_host.sh and launch/start-docker.sh: the
+# account NAME says nothing, the presence of its pulse socket does. On the
+# --desktop ISO the session is opened as root (gdm3 AutomaticLogin=root), so
+# "root" is a valid answer here, not an error.
 session_user() {
     local u uid sock
     for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)"; do
@@ -483,10 +438,9 @@ GUI_HOME="$(getent passwd "$GUI_USER" 2>/dev/null | cut -d: -f6)"
 export DISPLAY="${DISPLAY:-:0}"
 export XAUTHORITY="${XAUTHORITY:-${GUI_HOME:-/root}/.Xauthority}"
 
-# Lance une application graphique sous le compte de la session. `setsid` la
-# detache : elle survit a la fermeture de ce terminal, et son code de retour ne
-# peut pas faire tomber launch.sh (set -e n est pas arme ici, mais on garde le
-# || true pour l intention).
+# Starts a graphical application under the session account. `setsid` detaches
+# it: it survives the closing of this terminal, and its return code cannot
+# bring launch.sh down.
 gui_run() {
     setsid sudo -u "$GUI_USER" \
         env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" \
@@ -495,27 +449,23 @@ gui_run() {
     disown 2>/dev/null || true
 }
 
-# ── LE PAVAGE 2x2 ───────────────────────────────────────────────────────────
-# Chaque action prend UN QUART de l ecran :
+# ── The 2x2 tiling ───────────────────────────────────────────────────────────
+# Each application takes ONE QUARTER of the screen:
 #
 #        +---------------------+---------------------+
-#        |  terminal du banc   |  firefox / dashboard|
+#        |  bench terminal     |  firefox / dashboard|
 #        |  (start.sh)         |  127.0.0.1:8080     |
 #        +---------------------+---------------------+
 #        |  wireshark          |  linphone           |
-#        |  udp/4729 GSMTAP    |  postes 100 / 200   |
+#        |  udp/4729 GSMTAP    |  extensions 100/200 |
 #        +---------------------+---------------------+
 #
-# Pourquoi wmctrl et pas les raccourcis GNOME : le pavage au clavier est une
-# action d utilisateur, il n existe pas en ligne de commande. wmctrl parle a
-# l EWMH, ce que Mutter expose EN X11 - et l ISO force X11 (build-iso.sh ecrit
-# WaylandEnable=false dans gdm3/custom.conf, la session Wayland tombant sur
-# llvmpipe en machine virtuelle). Sous Wayland, rien de tout ceci ne repondrait
-# et le pavage serait simplement ignore, sans casser le lancement.
+# wmctrl talks EWMH, which Mutter exposes under X11 (the ISO forces X11:
+# WaylandEnable=false in gdm3/custom.conf). Under Wayland nothing answers and
+# the tiling is simply ignored, without breaking the launch.
 #
-# ⚠️ Retirer les etats maximise AVANT de poser la geometrie : une fenetre
-# maximisee accepte l ordre et n en tient aucun compte - elle reste plein ecran
-# et l on croit wmctrl casse.
+# The maximized states are removed BEFORE setting the geometry: a maximized
+# window accepts the order and ignores it.
 tile_windows() {
     command -v wmctrl  >/dev/null 2>&1 || { echo -e "  ${YELLOW}○${NC} wmctrl absent - fenetres non pavees"; return 0; }
     command -v xdpyinfo >/dev/null 2>&1 || { echo -e "  ${YELLOW}○${NC} xdpyinfo absent - fenetres non pavees"; return 0; }
@@ -526,7 +476,7 @@ tile_windows() {
     [ -n "$sw" ] && [ -n "$sh" ] || return 0
     qw=$(( sw / 2 )); qh=$(( sh / 2 ))
 
-    # $1 = motif WM_CLASS (insensible a la casse), $2 = x, $3 = y
+    # $1 = WM_CLASS pattern (case-insensitive), $2 = x, $3 = y
     place() {
         local pat="$1" x="$2" y="$3" i id
         for i in $(seq 1 90); do
@@ -545,22 +495,19 @@ tile_windows() {
     place 'linphone'                                   "$qw" "$qh"
 }
 
-# ── LE BANC EST UNE UNITE SYSTEMD QUAND ELLE EXISTE ─────────────────────────
-# [2026-09-04] services/osmo-banc.service demarre le banc sans terminal et le
-# tient dans la session tmux « calypso ». (Elle est POSEE mais plus activee au
-# boot depuis le 2026-09-05 : c est ce script, ou l icone, qui la demarre.)
-# Quand l unite est
-# installee, ce script ne lance plus start.sh lui-meme : il (re)demarre
-# l unite, ouvre les applications du bureau comme avant, puis S ATTACHE a tmux
-# dans son terminal - le meme ecran qu avant, mais un seul proprietaire du
-# banc. Lancer start.sh a la main par-dessus tuerait les processus du
-# service sans que systemd le sache (unite « active (exited) », pile morte).
+# ── The bench is a systemd unit when it exists ───────────────────────────────
+# services/osmo-banc.service starts the bench without a terminal and keeps it
+# in the tmux session "calypso" (installed but not enabled at boot: this
+# script or the icon starts it). When the unit is installed this script does
+# not run start.sh itself: it (re)starts the unit, opens the desktop
+# applications, then ATTACHES to tmux in its terminal. Running start.sh by
+# hand on top would kill the service processes behind systemd's back.
 #
-# Les arguments (--dsp, --op 2, --regen...) passent a l unite par
-# OSMO_BANC_ARGS (systemctl set-environment : vaut jusqu au reboot, puis
-# /etc/default/osmo-banc reprend). Sans argument, on efface un reste eventuel.
+# The arguments (--dsp, --op 2, --regen...) reach the unit through
+# OSMO_BANC_ARGS (systemctl set-environment: until reboot, then
+# /etc/default/osmo-banc applies). Without arguments a leftover is cleared.
 #
-# OSMO_BANC_DIRECT=1 ./launch.sh contourne l unite (debogage a la main).
+# OSMO_BANC_DIRECT=1 ./launch.sh bypasses the unit (manual debugging).
 BANC_UNIT="${OSMO_BANC_SERVICE:-osmo-banc.service}"
 banc_unit_present() {
     [ "${OSMO_BANC_DIRECT:-0}" = "1" ] && return 1
@@ -568,10 +515,10 @@ banc_unit_present() {
     [ -d /run/systemd/system ] || return 1
     systemctl cat "$BANC_UNIT" >/dev/null 2>&1
 }
-# L arret vit en tete de fichier (bloc « ARRETER »), avant toute fenetre :
-# `launch.sh --stop` n arrive donc jamais jusqu ici.
-# Suit le journal de l unite pendant le demarrage : c est la sortie de
-# start.sh / run.sh qu on lisait avant dans ce meme terminal.
+# The stop lives at the top of the file ("Stop" block), before any window:
+# `launch.sh --stop` never reaches this point.
+# Follows the unit journal during the start-up: the output of start.sh /
+# run.sh, in this terminal.
 banc_unit_restart() {
     if [ $# -gt 0 ]; then
         systemctl set-environment OSMO_BANC_ARGS="$*" 2>/dev/null || true
@@ -593,9 +540,9 @@ banc_unit_restart() {
     return "$rc"
 }
 
-# Le verrou (voir son bloc en tete de fichier). Ici, et pas plus haut : `--stop`
-# doit passer, et les privileges doivent etre regles - un flock pris avant le
-# re-exec sudo serait tenu par un processus qui disparait aussitot.
+# The lock (see its block at the top of the file). Here and not earlier:
+# `--stop` must pass, and privileges must be settled - a flock taken before
+# the sudo re-exec would be held by a process that disappears at once.
 if [ "${1:-}" != "--stop" ] && ! lancement_possible; then
     echo
     echo -e "${YELLOW}+------------------------------------------------------------+${NC}"
@@ -622,71 +569,51 @@ if [ "${1:-}" != "--stop" ] && ! lancement_possible; then
     exit 1
 fi
 
-# ── TOUT ARRETER AVANT DE RELANCER ──────────────────────────────────────────
-# [2026-08-31] Un clic = un banc NEUF. Sans ca, un lancement par-dessus un banc
-# deja debout ne relance presque rien : les demons Osmocom ne relisent PAS leur
-# configuration a chaud. On l a paye plusieurs fois - un osmo-stp realigne sur
-# le bon point code gardait l ancien en memoire, et `kill -HUP` n y change rien
-# (verifie : config a jour sur le disque, ASP toujours ASP_DOWN sur l ancienne
-# adresse). Le seul geste qui compte est l arret complet.
-#
-# On arrete le NATIF (il delegue a run.sh --stop, qui demonte proprement radio
-# et coeur). Rien ici ne doit faire echouer le lancement : ce qui est deja
-# arrete l est tres bien, d ou les || true.
+# ── Stop everything before relaunching ───────────────────────────────────────
+# One click = a FRESH bench: the Osmocom daemons do not re-read their
+# configuration while running (not even on SIGHUP), so a launch on top of a
+# running bench would change almost nothing. The NATIVE stack is stopped
+# (start.sh --stop, which tears radio and core down cleanly). Nothing here
+# may fail the launch, hence the || true.
 tout_arreter() {
-    # Avec l unite, l arret est fait par `systemctl restart` plus bas.
+    # With the unit, the stop is done by `systemctl restart` further down.
     banc_unit_present && return 0
     echo -e "  ${CYAN}→${NC} arret du banc en place (un clic = un banc neuf)"
     if [ -x "$DIR/start.sh" ]; then
         timeout 120 "$DIR/start.sh" --stop >/dev/null 2>&1 || true
         echo -e "    ${GREEN}✓${NC} pile native arretee"
     fi
-    # Les conteneurs ne sont PAS touches ici : start-docker.sh fait deja
-    # `docker rm -f $(docker ps -aq --filter name=osmo-)` en tete de course.
-    # Le refaire serait redondant, et surtout destructeur depuis launch.sh -
-    # un clic sur le telephone rouge, qui ne monte que le natif, balayerait
-    # les conteneurs multi-operateur d a cote.
-    # Les ponts audio survivent aux conteneurs (setsid) : sans ca on empile un
-    # relais de plus a chaque relance, et le son se dedouble.
+    # The containers are NOT touched here: launch/start-docker.sh already does
+    # `docker rm -f $(docker ps -aq --filter name=osmo-)` at the start of a
+    # run, and a click on the red phone, which only brings the native stack
+    # up, must not sweep the multi-operator containers next to it.
+    # The audio bridges survive the containers (setsid): without this a relay
+    # would pile up at every relaunch and the sound would double.
     pkill -f 'paplay --server=tcp:' 2>/dev/null || true
 }
 
 tout_arreter
 
-# ── LES OUTILS D EXPLOITATION SONT-ILS DEMANDES ? ───────────────────────────
-# [2026-08-31] OSMO_LAUNCH_APPS=0 : ni wireshark, ni linphone. C est ce que
-# demande start-multi.sh quand il declenche ce lanceur pour remonter le natif -
-# il veut la PILE, pas une seconde instance des outils.
+# ── Are the operating tools wanted? ──────────────────────────────────────────
+# OSMO_LAUNCH_APPS=0 (default): neither wireshark nor linphone. They are tools
+# one opens WHEN needed, from their own icon; they are not part of the
+# start-up. It is also what start-multi.sh asks for when it triggers this
+# launcher to bring the native stack back up. OSMO_LAUNCH_APPS=1 opens them.
 #
-# ⚠️ FIREFOX N EST PAS CONCERNE, et c est deliberé : le navigateur porte le
-# dashboard du natif et le tutoriel, et start-multi.sh y AJOUTE les onglets des
-# dashboards conteneurs. Le couper ici priverait un clic sur l antenne bleue de
-# la base sur laquelle ces onglets viennent se greffer - on n aurait plus que
-# les deux consoles conteneurs, sans celle du natif ni le tutoriel.
-# Firefox, lui, sait ne pas se dedoubler : une seconde invocation ajoute des
-# onglets a la fenetre existante.
-#
-# [2026-09-04] PAR DEFAUT A 0. Un clic sur le telephone rouge ouvrait QUATRE
-# fenetres d un coup : son terminal, Wireshark, Linphone et le navigateur -
-# empilees, a repositionner a la main, alors qu on voulait seulement monter le
-# banc. Wireshark et Linphone sont des outils qu on ouvre QUAND on en a besoin,
-# depuis leur propre icone ; ils ne font pas partie du demarrage. Restent le
-# terminal (la sortie du demarrage) et le navigateur (le tableau de bord).
-# OSMO_LAUNCH_APPS=1 ./launch.sh les rouvre pour qui les veut tous.
+# FIREFOX IS NOT CONCERNED, deliberately: the browser carries the native
+# dashboard and the tutorial, and start-multi.sh ADDS the container dashboard
+# tabs to it. Firefox does not duplicate itself: a second invocation adds
+# tabs to the existing window.
 OSMO_LAUNCH_APPS="${OSMO_LAUNCH_APPS:-0}"
 if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
     echo -e "  ${CYAN}i${NC} wireshark et linphone non lances (OSMO_LAUNCH_APPS=1 pour les avoir)"
 fi
 
-# ── 1. WIRESHARK sur udp/4729 ───────────────────────────────────────────────
-# En ROOT, et pas sous $GUI_USER : la capture sur `any` demande CAP_NET_RAW.
-# -k demarre la capture tout de suite (sinon on ouvre sur un ecran de choix
-# d interface, et rien n est capture tant qu on n a pas clique).
-# [2026-08-31] LES DEUX RAISONS DE NE PAS LANCER SONT DISTINGUEES.
-# Le test cumulait "demande ?" et "installe ?" dans un seul if, et le else
-# annoncait toujours "absent". En mode banc seul (OSMO_LAUNCH_APPS=0, pose par
-# start-multi.sh), on lisait donc "wireshark absent" pour un wireshark
-# parfaitement installe - un message qui envoie verifier un paquet present.
+# ── 1. WIRESHARK on udp/4729 ─────────────────────────────────────────────────
+# As ROOT, not as $GUI_USER: capturing on `any` needs CAP_NET_RAW. -k starts
+# the capture at once (otherwise it opens on the interface chooser and
+# nothing is captured until a click). "not requested" and "not installed" are
+# reported separately.
 if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
     echo -e "  ${CYAN}○${NC} wireshark : non demande (mode banc seul)"
 elif command -v wireshark >/dev/null 2>&1; then
@@ -698,11 +625,10 @@ else
     echo -e "  ${YELLOW}○${NC} wireshark absent - capture GSMTAP ignoree"
 fi
 
-# ── 2. LINPHONE ─────────────────────────────────────────────────────────────
-# Le compte SIP est pre-provisionne (configs/linphonerc, pose par build-iso.sh).
-# ⚠️ Linphone ne relit PAS sa config a chaud : s il tourne deja, il garde son
-# etat en memoire. On ne le relance donc pas de force ici - on le laisse tel
-# quel plutot que de couper un appel en cours.
+# ── 2. LINPHONE ──────────────────────────────────────────────────────────────
+# The SIP account is pre-provisioned (configs/linphonerc, installed by the ISO
+# build). Linphone does NOT re-read its config while running: if it is
+# already up it is left as is rather than cutting a call in progress.
 if [ "$OSMO_LAUNCH_APPS" != "1" ]; then
     echo -e "  ${CYAN}○${NC} linphone : non demande (mode banc seul)"
 elif command -v linphone >/dev/null 2>&1; then
@@ -716,20 +642,18 @@ else
     echo -e "  ${YELLOW}○${NC} linphone absent"
 fi
 
-# ── 3. FIREFOX sur le dashboard, QUAND IL REPOND ────────────────────────────
-# Ouvrir l URL tout de suite donnerait une page d erreur : le dashboard n est
-# pas encore la, et une fois l onglet en echec l utilisateur doit recharger a la
-# main. On attend donc que le port reponde, en tache de fond, jusqu a 180 s.
+# ── 3. FIREFOX on the dashboard, WHEN IT ANSWERS ─────────────────────────────
+# Opening the URL at once would give an error page (the dashboard is not up
+# yet) that the user would have to reload by hand. The port is polled in the
+# background, up to 180 s.
 if command -v firefox >/dev/null 2>&1; then
     (
         for _i in $(seq 1 180); do
             if (exec 3<>"/dev/tcp/127.0.0.1/${DASH_PORT}") 2>/dev/null; then
                 exec 3>&- 2>/dev/null
-                # Deux URL sur la meme ligne de commande = deux ONGLETS, dans
-                # la meme fenetre. Un second `firefox <url>` marcherait aussi
-                # (le premier processus recupere l argument), mais il faudrait
-                # le cadencer : lance trop tot, il fait la course avec le
-                # demarrage du navigateur et ouvre parfois une 2e fenetre.
+                # Two URLs on the same command line = two TABS in the same
+                # window. A second `firefox <url>` would race with the browser
+                # start-up and sometimes open a second window.
                 gui_run firefox "$DASH_URL" "$TUTO_URL"
                 exit 0
             fi
@@ -742,40 +666,32 @@ else
     echo -e "  ${YELLOW}○${NC} firefox absent - dashboard a ouvrir a la main sur ${DASH_URL}"
 fi
 
-# Le pavage part en tache de fond : chaque fenetre est placee des qu elle
-# apparait, sans retarder le demarrage du banc.
+# The tiling runs in the background: each window is placed as soon as it
+# appears, without delaying the bench start-up.
 tile_windows &
 disown 2>/dev/null || true
 
-# ── 4. LE BANC, AU PREMIER PLAN ─────────────────────────────────────────────
+# ── 4. THE BENCH, IN THE FOREGROUND ──────────────────────────────────────────
 echo
 cd "$DIR" || exit 1
 
-# ── AUCUNE SAISIE ───────────────────────────────────────────────────────────
-# [2026-08-31] start.sh ouvre menu_interactif() (startup_scripts/06-banc-dsp-menu.sh) : Profil, Noeud SS7,
-# Operateur, Inter-STP - quatre questions whiptail avant que quoi que ce soit
-# ne demarre. Il les saute quand PERSONNE ne peut repondre, et il teste ca sur
-# la presence d un terminal ([ -t 0 ]) - or launch.sh vient justement d en
-# ouvrir un pour afficher la sortie. La garde ne se declenchait donc jamais
-# ici, et un double-clic sur le telephone rouge s arretait sur un formulaire
-# au lieu de lancer le banc.
-#
-# NO_MENU=1 est le drapeau prevu pour ca (startup_scripts/06-banc-dsp-menu.sh et 10-identite-noeud.sh) :
-# les menus rendent la main sans rien demander et les valeurs par defaut
-# s appliquent - noeud 1, operateur 1, hub local. C est exactement ce que
-# start-docker.sh pose deja devant ses conteneurs.
-#
-# OSMO_LAUNCH_MENU=1 ./launch.sh redonne les questions quand on les veut.
+# ── No input ─────────────────────────────────────────────────────────────────
+# start.sh opens menu_interactif() (startup_scripts/06-banc-dsp-menu.sh):
+# profile, SS7 node, operator, inter-STP - whiptail questions it skips only
+# when no terminal is present ([ -t 0 ]), and launch.sh has just opened one.
+# NO_MENU=1 (startup_scripts/06-banc-dsp-menu.sh and 10-identite-noeud.sh)
+# makes the menus return without asking: node 1, operator 1, local hub, as
+# launch/start-docker.sh already sets for its containers.
+# OSMO_LAUNCH_MENU=1 ./launch.sh gives the questions back.
 if banc_unit_present; then
     banc_unit_restart "$@"
     rc=$?
-    # Le banc tourne dans tmux : on s y attache si on a un terminal, comme
-    # run.sh le faisait en fin de course. Ctrl-b d pour detacher ; le banc
-    # continue sans ce terminal.
+    # The bench runs in tmux: attach to it when a terminal is available.
+    # Ctrl-b d detaches; the bench goes on without this terminal.
     if [ "$rc" -eq 0 ] && [ -t 1 ] && tmux has-session -t "${TMUX_SESSION:-calypso}" 2>/dev/null; then
         echo -e "  ${CYAN}connexion a la session tmux « ${TMUX_SESSION:-calypso} »  (Ctrl-b d pour detacher)${NC}"
         sleep 1
-        verrou_liberer   # sinon le client tmux le garderait tant qu on reste attache
+        verrou_liberer   # otherwise the tmux client would hold it while attached
         exec tmux attach -t "${TMUX_SESSION:-calypso}"
     fi
 elif [ "${OSMO_LAUNCH_MENU:-0}" = "1" ]; then
@@ -794,8 +710,8 @@ if [ "$rc" -eq 0 ]; then
 else
     echo -e "${RED}=== start.sh a ECHOUE (code $rc) ===${NC}"
 fi
-# Uniquement dans une fenetre ouverte par nos soins : au terminal, rendre la
-# main tout de suite est le comportement attendu.
+# Only in a window opened by this script: in a terminal, returning at once is
+# the expected behaviour.
 if [ "$_own_window" = "1" ]; then
     echo "Fenetre maintenue ouverte - Entree pour fermer."
     read -r _ || true

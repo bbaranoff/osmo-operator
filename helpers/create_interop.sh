@@ -1,50 +1,51 @@
 #!/bin/bash
-# create_interop.sh - Genere la configuration inter-STP (hub SS7 central)
+# create_interop.sh - Generate the inter-STP configuration (central SS7 hub)
 #
-# Parametres :
-#   $1  n_operators   Nombre d'operateurs (1..24)
-#   $2  outfile       Chemin fichier config de sortie (defaut: osmo-stp-interop.cfg)
+# Usage:
+#   create_interop.sh [--listen-ip <ip>] <n_operators> [outfile]
+#   create_interop.sh [--listen-ip <ip>] --wan <n_nodes> <ops_per_node> [outfile]
 #
-# Point codes ITU 3-8-3 :
+# Parameters (single-machine mode):
+#   $1  n_operators   Number of operators (1..24)
+#   $2  outfile       Output config file (default: osmo-stp-interop.cfg)
+#
+# Environment:
+#   HUB_LISTEN_IP   Address the hub listens on (also --listen-ip). Empty or
+#                   unset = 0.0.0.0 (single-machine setups). On a multi-homed
+#                   host a single correct address is required: with 0.0.0.0
+#                   SCTP announces every interface in its INIT and the peer ASP
+#                   flaps on the unreachable ones.
+#   OP_ID_BASE      Id of the first container operator (default 1). The AS
+#                   list runs from 1 up to OP_ID_BASE + n_operators - 1 so the
+#                   native operator (op1) is covered when containers start at 2.
+#   WAN_NODE_IDS    WAN mode: node numbers, e.g. "1 3" (default 1..n_nodes).
+#
+# Point codes, ITU 3-8-3:
 #   Inter-STP : 0.0.0
-#   Op N STP  : 1.N.2    (cluster = N, 8 bits → max 255, limite a 24)
+#   Op N STP  : 1.N.2    (cluster = N, 8 bits -> max 255, limited to 24)
 #   Op N MSC  : 1.N.1
 #   Op N BSC  : 1.N.3
 #
-# Routes statiques avec masque exact 7.255.7 (14 bits) :
-#   1.N.1 → as-opN  (MSC)
-#   1.N.3 → as-opN  (BSC)
+# Static routes with exact mask 7.255.7 (14 bits):
+#   1.N.1 -> as-opN  (MSC)
+#   1.N.3 -> as-opN  (BSC)
+#
+# This file is REGENERATED at every hub start (launch/start-interstp.sh): any
+# fix must go through its options/environment, not into the generated file.
 
 set -e
 
-# ── Mode WAN ─────────────────────────────────────────────────────────────────
-#   create_interop.sh --wan <n_noeuds> <ops_par_noeud> <outfile>
-#   WAN_NODE_IDS="1 3" : les numeros des noeuds (defaut 1..n), table non contigue
+# ── WAN mode ─────────────────────────────────────────────────────────────────
+#   create_interop.sh --wan <n_nodes> <ops_per_node> <outfile>
 #
-# Le hub d'origine ne dessert qu'UNE machine : ses point codes 1.<op>.<role> se
-# recalculent a l'identique sur chaque noeud d'un WAN, donc trois noeuds relies
-# au meme hub presenteraient trois fois 1.1.2. Un point code est une ADRESSE :
-# la collision n'est pas un detail de nommage, elle rend le routage SS7 faux.
-#
-# Le plan WAN encode le noeud DANS le point code :
-#   PC = 1.<noeud><op>.<role>     noeud 1 op 1 → 1.11.2 ; noeud 3 op 2 → 1.32.2
-#   RCTX = noeud*1000 + op*100 + 50
-# Lisible a l'oeil (le premier chiffre est le noeud), unique, et le champ
-# central du 3-8-3 tient jusqu'a 9 noeuds × 9 operateurs.
-# ── Adresse d'ecoute du hub ──────────────────────────────────────────────────
-# Ce fichier est REGENERE a chaque demarrage du hub (start-interstp.sh). Tant
-# que l'adresse etait ecrite 0.0.0.0 en dur ici, toute correction posee ailleurs
-# - set_stp_ip.sh en particulier - etait effacee au redemarrage suivant, sans
-# que rien ne le signale : le hub repartait en multi-homing.
-#
-# Et 0.0.0.0 n'est pas neutre : SCTP annonce alors TOUTES les adresses de la
-# machine dans son INIT (NAT 10.0.2.x, alias 172.20.x, host-only 192.168.56.x).
-# Le pair essaie des chemins qui, vus de lui, ne menent nulle part ; l'ASP monte
-# puis retombe, en boucle. Une adresse unique et juste vaut mieux qu'un
-# multi-homing dont trois branches sur quatre sont mortes.
-#
-# HUB_LISTEN_IP (ou --listen-ip) impose l'adresse. Vide = 0.0.0.0, l'ancien
-# comportement, conserve pour les montages d'une seule machine.
+# A point code is an ADDRESS: several nodes sharing one hub must not all be
+# 1.1.2. The WAN plan encodes the node INSIDE the point code:
+#   PC = 1.<node><op>.<role>     node 1 op 1 -> 1.11.2 ; node 3 op 2 -> 1.32.2
+#   RCTX = node*1000 + op*100 + 50
+# Readable (first digit is the node), unique, and the middle field of 3-8-3
+# holds up to 9 nodes x 9 operators.
+
+# ── Hub listen address ───────────────────────────────────────────────────────
 HUB_LISTEN_IP="${HUB_LISTEN_IP:-0.0.0.0}"
 _ci_args=()
 while [ $# -gt 0 ]; do
@@ -75,6 +76,7 @@ else
     fi
 fi
 
+# ── Header: logging, VTY, cs7 instance, M3UA listener ────────────────────────
 cat > "$outfile" <<'EOFCONFIG'
 !
 ! osmo-stp-interop.cfg - Configuration inter-STP centrale
@@ -112,10 +114,11 @@ cs7 instance 0
 !
 EOFCONFIG
 
-# Heredoc quote : le gabarit sort tel quel, on substitue ensuite. Le marqueur
-# n'existe que dans l'entete, la boucle WAN qui suit n'en pose pas.
+# Quoted heredoc: the template is written verbatim, then substituted. The
+# marker only exists in the header; the AS loops below do not use it.
 sed -i "s|__LISTEN_IP__|${HUB_LISTEN_IP}|" "$outfile"
 
+# ── Application servers (one per operator STP) ───────────────────────────────
 if [ "$WAN_MODE" = "1" ]; then
     for n in ${WAN_NODE_IDS:-$(seq 1 "$n_nodes")}; do
         for o in $(seq 1 "$ops_per_node"); do
@@ -130,14 +133,9 @@ EOF
         done
     done
 else
-# [2026-08-31] DE 1 AU RANG LE PLUS HAUT, pas "1 a n_operators".
-# n_operators compte les CONTENEURS ; il ne dit rien du natif, qui est un
-# operateur du banc au meme titre. Avec OP_ID_BASE=2 - conteneurs en 2 et 3,
-# natif en 1 - la boucle produisait as-op1 et as-op2 pour DEUX conteneurs
-# qui sont en realite op2 et op3 : le hub declarait donc un as-op2 en 1.2.2
-# que personne ne venait prendre, et AUCUN as-op3. D ou, cote natif,
-#     1.2.2/14 INACC ... PROHIB   1.3.2/14 INACC ... PROHIB
-# et un banc ou les operateurs sont attaches mais ne se routent pas.
+# From 1 up to the highest operator id, not "1..n_operators": n_operators
+# counts the CONTAINERS, the native operator is op1 and containers may start
+# at OP_ID_BASE=2.
 for i in $(seq 1 "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
     rctx_inter=$(( i * 100 + 50 ))
     pc_stp="1.${i}.2"
@@ -151,6 +149,7 @@ EOF
 done
 fi
 
+# ── Route table (MSC and BSC of every operator) ──────────────────────────────
 cat >> "$outfile" <<'EOFROUTES'
 
  route-table system
@@ -166,14 +165,7 @@ EOF
         done
     done
 else
-# [2026-08-31] DE 1 AU RANG LE PLUS HAUT, pas "1 a n_operators".
-# n_operators compte les CONTENEURS ; il ne dit rien du natif, qui est un
-# operateur du banc au meme titre. Avec OP_ID_BASE=2 - conteneurs en 2 et 3,
-# natif en 1 - la boucle produisait as-op1 et as-op2 pour DEUX conteneurs
-# qui sont en realite op2 et op3 : le hub declarait donc un as-op2 en 1.2.2
-# que personne ne venait prendre, et AUCUN as-op3. D ou, cote natif,
-#     1.2.2/14 INACC ... PROHIB   1.3.2/14 INACC ... PROHIB
-# et un banc ou les operateurs sont attaches mais ne se routent pas.
+# Same range as the AS list above (1 .. OP_ID_BASE + n_operators - 1).
 for i in $(seq 1 "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
     cat >> "$outfile" <<EOF
   update route 1.${i}.1 7.255.7 linkset as-op${i}
@@ -187,6 +179,7 @@ cat >> "$outfile" <<'EOF'
 !
 EOF
 
+# ── Summary ──────────────────────────────────────────────────────────────────
 if [ "$WAN_MODE" = "1" ]; then
     echo "✓ Config inter-STP WAN generee : $outfile" >&2
     echo "  PC hub  : 0.0.0   Noeuds : $n_nodes × $ops_per_node operateur(s)" >&2

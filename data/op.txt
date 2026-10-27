@@ -1,8 +1,8 @@
-# op.txt - noms d'operateur, un par ligne. start-docker.sh en tire un au hasard par
-# operateur au lancement.
-# PAS D'ESPACE dans un nom : la commande VTY "short name" d'osmo-msc prend UN
-# mot, et un nom coupe en deux y passe pour un argument surnumeraire - osmo-msc
-# refuse alors la ligne et demarre sans nom de reseau.
+# op.txt - fake operator names, one per line. launch/start-docker.sh picks one at
+# random per operator at startup. Blank lines and lines starting with # are ignored.
+# Constraint: NO SPACES in a name. The osmo-msc VTY command "short name" takes a
+# single word; a name with a space is rejected and osmo-msc starts without a
+# network name.
 FreeRadis
 OrangeMecanique
 SFRagile

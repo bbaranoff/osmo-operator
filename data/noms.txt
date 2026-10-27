@@ -1,7 +1,7 @@
-# noms.txt - etat civil des abonnes du banc. Un "Prenom Nom" par ligne.
-# Tout est faux : ces gens n'existent pas, ils servent a mettre un visage sur
-# un IMSI dans un journal. start-docker.sh en pioche un au hasard par abonne.
-# Lignes vides et lignes commencant par # ignorees.
+# noms.txt - fake subscriber names for the test bench, one "Firstname Lastname"
+# per line. launch/start-docker.sh picks one at random per subscriber so that an
+# IMSI has a face in the logs. Blank lines and lines starting with # are ignored.
+# None of these people exist.
 Aline Boulanger
 Bastien Carpentier
 Chloe Delaunay

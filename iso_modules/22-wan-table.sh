@@ -1,22 +1,15 @@
 #!/bin/bash
-# iso_modules/22-wan-table.sh - table WAN, cleanup/trap, outils requis, WORK
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/22-wan-table.sh - WAN node table, cleanup trap, required tools, WORK dirs
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# ── La table WAN : arretee ICI, pas au milieu de la construction ────────────
-# --role=interstp implique le WAN (le hub doit savoir combien de noeuds il
-# dessert). L'etape 7b la demandait alors interactivement, une heure apres le
-# lancement : de quoi bloquer une construction que l'on croyait autonome, et
-# faire echouer la CI, qui n'a pas de terminal pour repondre.
-#
-# On la fige donc maintenant, avec la table du banc pour defaut. --wan-nodes
-# reste prioritaire et n'est pas touche.
-# [2026-09-04] AUTOMATIQUE. La question etait posee a chaque passe fille (quatre
-# fois pour --all), au milieu d une construction d une heure, pour une reponse
-# qui est presque toujours le defaut. La table du banc et le hub s appliquent
-# donc sans rien demander ; pour autre chose, --wan-nodes="..." et --hub-ip=...
-# (ou OSMO_ISO_WAN_ASK=1 pour retrouver la question, avec un terminal).
+# ── WAN table: fixed HERE, before the build starts ───────────────────────────
+# --role=interstp implies the WAN (the hub must know how many nodes it serves).
+# The table is fixed now, with the bench table as default, so that no question
+# is asked in the middle of an hour-long (possibly CI, terminal-less) build.
+# --wan-nodes="..." and --hub-ip=... take precedence; OSMO_ISO_WAN_ASK=1 asks
+# interactively instead (requires a terminal).
 if [ "$ISO_WAN" = "1" ] && [ -z "$ISO_WAN_NODES" ]; then
     if [ "${OSMO_ISO_WAN_ASK:-0}" = "1" ] && [ -t 0 ]; then
         echo -e "${CYAN}${BOLD}== Table WAN de l'image ==${NC}"
@@ -34,8 +27,8 @@ if [ "$ISO_WAN" = "1" ] && [ -z "$ISO_WAN_NODES" ]; then
     echo -e "  ${GREEN}✓${NC} WAN : ${CYAN}${ISO_WAN_NODES}${NC}   hub ${CYAN}${ISO_HUB_IP}${NC}  (defaut du banc ; --wan-nodes= / --hub-ip= pour changer)"
 fi
 
-# Propage --no-cache aux deux builds Docker : build.sh (image osmocom-nitb) et
-# build_run_image (image osmocom-run, via DOCKER_NO_CACHE).
+# Propagate --no-cache to both Docker builds: build.sh (osmocom-nitb image) and
+# build_run_image (osmocom-run image, via DOCKER_NO_CACHE).
 export DOCKER_NO_CACHE="$NO_CACHE"
 
 
@@ -43,16 +36,14 @@ cleanup() { umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true; umount "$
 trap cleanup EXIT
 
 
-# Paquets hote : une fois (voir iso_host_packages, plus haut).
+# Host packages: once (see iso_host_packages, defined earlier).
 iso_host_packages
 
-# Docker n'est pas auto-installe ici (paquet docker-ce hors apt standard).
+# Docker is not auto-installed here (docker-ce is outside the standard apt repos).
 _ISO_TOOLS="docker mksquashfs xorriso grub-mkrescue debootstrap git"
-# [2026-09-14] qemu-aarch64-static n est exige que pour EMULER : sur un hote
-# deja aarch64 (un runner ubuntu-24.04-arm, un Pi, un Ampere) le paquet n a
-# aucune raison d etre la, et le job mourait sur « Manquant: qemu-aarch64-static »
-# avant la premiere etape. Meme regle que 40-rootfs.sh (l.57), qui decide de
-# --foreign en comparant a l architecture de l hote.
+# qemu-aarch64-static is only required to EMULATE: on a host that is already
+# aarch64 it is not needed. Same rule as 40-rootfs.sh, which decides on
+# --foreign by comparing with the host architecture.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
     _ISO_TOOLS="docker debootstrap git mke2fs mkfs.vfat mcopy sfdisk truncate"
     [ "$ISO_ARCH" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ] \
@@ -67,7 +58,7 @@ mkdir -p "$WORK" "$ROOTFS" "$ISOROOT"
 echo -e "${CYAN}${BOLD}══ osmo-operator ISO builder (via build.sh + start-docker.sh) ══${NC}"
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

@@ -1,37 +1,25 @@
-# 10-deps - paquets systeme.
-# La liste fait autorite dans le Dockerfile : on l'en EXTRAIT au lieu de la
-# recopier, pour que les deux ne divergent jamais.
+# 10-deps - system packages (apt).
+# The package list is authoritative in the Dockerfile: it is EXTRACTED from it
+# rather than copied, so the two can never diverge.
 INST_REGISTER deps "Dependances systeme (apt)"
 INST_DEPS[deps]="prereqs"
 
-# [2026-08-25] L'extraction reconnaissait "RUN apt-get update && apt-get
-# install" EN DUR. Le Dockerfile installe desormais via apt-fast : le motif ne
-# capturait plus que le bloc d'amorcage (aria2, curl, et les bouts de la
-# commande qui installe apt-fast lui-meme), et l'installation native repartait
-# avec 29 jetons de charabia au lieu des paquets. Elle echouait sur des noms
-# comme "&&" ou une URL, sans que rien ne designe le Dockerfile comme cause.
-#
-# Deux durcissements plutot qu'un simple elargissement du motif :
-#   1. apt-get ET apt-fast sont acceptes, dans n'importe quel ordre update/install ;
-#   2. on ne garde que ce qui RESSEMBLE a un nom de paquet. Un bloc apt peut
-#      contenir des `&&`, des URL, des accolades - les laisser passer, c'est
-#      transformer une erreur de format en erreur d'apt, illisible.
-# Le filtre est la vraie protection : il survit au prochain changement de forme.
+# Extract the package names from the Dockerfile's apt-get/apt-fast install
+# block (either tool, any update/install order, optional --mount=... on the
+# RUN line). Only tokens that LOOK like package names are kept, and the list
+# is cut at the first shell operator (&&, ||, {) or URL: the bootstrap block
+# contains commands (chmod, printf, rm) that would otherwise pass for
+# packages and turn a format error into an unreadable apt error.
 _deps_list() {
-    # Un paquet, c'est ce qui suit "install -y --no-install-recommends" et
-    # PRECEDE le premier operateur shell. Filtrer sur la forme des mots ne
-    # suffit pas : le bloc d'amorcage contient "chmod", "printf", "rm",
-    # qui ressemblent tous a des noms de paquets. On coupe donc a `&&`, `||`,
-    # `{` ou une URL, et on ne garde que ce qu'il y a avant.
     awk '
         /^RUN( --mount=[^ ]+)? *\\?$/ { pending = 1; next }
         /^RUN( --mount=[^ ]+)? +apt-(get|fast) update && apt-(get|fast) install/ || (pending && /^ *apt-(get|fast) update && apt-(get|fast) install/) {
             pending = 0
             inblk = 1
             line = $0
-            # Le RUN peut porter un --mount=... (cache apt BuildKit) et se
-            # continuer a la ligne suivante : on coupe tout ce qui precede la
-            # fin de la commande apt, que la ligne commence par RUN ou non.
+            # The RUN may carry a --mount=... (BuildKit apt cache) and continue
+            # on the next line: strip everything before the end of the apt
+            # command, whether the line starts with RUN or not.
             sub(/^.*--no-install-recommends/, "", line)
             emit(line)
             next
@@ -40,20 +28,19 @@ _deps_list() {
         inblk { emit($0) }
 
         function emit(l,   n, a, i, cont) {
-            # Le commentaire en PREMIER. Les lignes "# ..." au milieu de la
-            # liste nont pas de barre de continuation : Docker les retire avant
-            # le shell. Les traiter comme une fin de bloc coupait la liste au
-            # premier commentaire - soit trois paquets sur soixante-dix.
-            # (Pas dapostrophe dans ce bloc : il vit entre quotes simples.)
+            # Strip the comment FIRST: "# ..." lines inside the list carry no
+            # continuation backslash (Docker removes them before the shell),
+            # so they must not be taken as the end of the block.
+            # (No apostrophe in this block: it lives between single quotes.)
             sub(/#.*/, "", l)
-            if (l ~ /^[ \t]*$/) return          # commentaire pur : transparent
+            if (l ~ /^[ \t]*$/) return          # pure comment: transparent
 
             cont = (l ~ /\\[ \t]*$/)
-            if (l ~ /&&|\|\||[{}]|https?:/) {   # on sort de la liste de paquets
+            if (l ~ /&&|\|\||[{}]|https?:/) {   # end of the package list
                 sub(/(&&|\|\||\{).*/, "", l)
                 inblk = 0
             } else if (!cont) {
-                inblk = 0                        # derniere ligne du bloc
+                inblk = 0                        # last line of the block
             }
             sub(/\\[ \t]*$/, "", l)
             n = split(l, a, /[ \t]+/)
@@ -67,12 +54,10 @@ inst_deps_check() {
     have_file "$INST_TREE/Dockerfile" || { inst_fail "Dockerfile introuvable - c'est lui qui porte la liste des paquets"; return $INST_RC_FAIL; }
     inst_ok
 }
-# [2026-10-18] « Deja installe » se jugeait sur trois paquets temoins : un
-# systeme partiellement equipe (les binaires sans les -dev) passait pour complet,
-# l etape etait sautee, et osmo-hlr echouait trois etapes plus loin sur
-# « Package requirements (sqlite3) were not met ». On verifie donc TOUTE la
-# liste. Un motif (asterisk-moh*) compte comme present si l un des paquets qu il
-# designe est installe.
+# "Already installed" is judged on the WHOLE list, not on a few witness
+# packages: a partially equipped system (binaries without the -dev packages)
+# must not skip this step. A pattern (asterisk-moh*) counts as present if one
+# of the packages it matches is installed.
 _deps_missing() {
     local p
     for p in $(_deps_list); do
@@ -86,8 +71,8 @@ inst_deps_run() {
     local pkgs; pkgs="$(_deps_list)"
     [ -z "${pkgs// }" ] && { inst_fail "liste de paquets vide - le format du Dockerfile a change"; return $INST_RC_FAIL; }
     inst_say "paquets : $(echo $pkgs | wc -w), dont manquants : $(_deps_missing | wc -l)"
-    # La liste COMPLETE, pas seulement les manquants : apt-get install est
-    # idempotent, et un motif comme asterisk-moh* ne se resout bien que par apt.
+    # The FULL list, not only the missing packages: apt-get install is
+    # idempotent, and a pattern like asterisk-moh* is only resolved by apt.
     apt-get update -qq && apt-get install -y --no-install-recommends $pkgs
 }
 inst_deps_verify() {

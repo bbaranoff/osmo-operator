@@ -1,5 +1,5 @@
-# 40-patches - correctifs locaux (patches/*.patch) sur les arbres de $GSM_ROOT,
-# par tools/osmo-patches-apply.sh : un correctif deja present n est pas une erreur.
+# 40-patches - local fixes (patches/*.patch) applied to the trees under $GSM_ROOT
+# by tools/osmo-patches-apply.sh (idempotent: an already applied patch is not an error).
 INST_REGISTER patches "Application des correctifs"
 INST_DEPS[patches]="sources"
 INST_REQUIRED[patches]=0

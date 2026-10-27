@@ -1,80 +1,73 @@
 #!/bin/bash
-# build-iso.sh - Genere une ISO bootable en utilisant build.sh et start-docker.sh
-# Aucun docker build direct dans ce script, tout passe par les scripts existants.
+# build-iso.sh - build a bootable amd64 ISO or an arm64 SD image, through
+# build.sh and start-docker.sh (no direct docker build in this script).
 #
-#  Usage : sudo ./build-iso.sh [options]
-#    (sans option)        les quatre images amd64 : interstp, operator, lite, desktop
+#  Usage: sudo ./build-iso.sh [options]
+#    (no option)          the four amd64 images: interstp, operator, lite, desktop
 #    --role=operator|interstp   --node=N   --lite   --desktop   --all
-#    --arm                images SD arm64 par github.com/armbian/build
-#                         (armbian/build-armbian.sh) : Raspberry Pi 4 et toutes
-#                         les Orange Pi 5 (5, 5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra) ;
-#                         --board=rpi4|opi5|all|<carte>[,...] (defaut all),
-#                         --desktop = GNOME + le bureau du banc ; --all et --lite
-#                         refuses. Voir iso_modules/00-options.sh.
-#    --banc --multi       active osmo-banc.service / osmo-multi.service au boot
-#                         de l'image. Par defaut les deux unites sont POSEES mais
-#                         NON activees : la machine demarre sur son bureau, et
-#                         c'est l'operateur qui lance son banc (icone, launch.sh,
-#                         systemctl start osmo-banc). Equivalents en variables :
+#    --arm                arm64 SD images via github.com/armbian/build
+#                         (armbian/build-armbian.sh): Raspberry Pi 4 and the
+#                         Orange Pi 5 family (5, 5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra);
+#                         --board=rpi4|opi5|all|<board>[,...] (default all),
+#                         --desktop = GNOME + the bench desktop; --all and --lite
+#                         are refused. See iso_modules/00-options.sh.
+#    --banc --multi       enable osmo-banc.service / osmo-multi.service at boot
+#                         of the image. By default both units are INSTALLED but
+#                         NOT enabled: the machine boots to its desktop and the
+#                         operator starts the bench (icon, launch.sh,
+#                         systemctl start osmo-banc). Env equivalents:
 #                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
-#    --version=24.04|22.04   --kb=fr   --output=fichier   --no-cache
-#    (defaut, amd64)      L'IMAGE DOCKER EST TIREE, PAS CONSTRUITE, et taguee
-#                         osmocom-nitb. Dans l'ordre : bastienbaranoff/norf_gsm:latest
-#                         (Docker Hub), puis ghcr.io/<depot>/osmocom-nitb:base-<empreinte>,
-#                         puis le :latest de GHCR.
-#                         build.sh ne tourne que si aucune ne repond. L'empreinte
-#                         est celle des workflows : quand elle correspond, l'image
-#                         publiee a ete batie sur exactement cet arbre de travail ;
-#                         les deux autres references ne le garantissent pas, et le
-#                         script le dit avant de s'en servir. En arm64 rien n'est
-#                         publie : la compilation reste le defaut.
-#    --skip-build[=image:tag]   rend le pull obligatoire (pas de repli sur
-#                         build.sh) et, avec =image, impose la reference au lieu
-#                         de la deduire. Une image deja presente localement
-#                         n'est pas retiree. Variable : OSMO_ISO_SKIP_BUILD=0
-#                         pour l'inverse - ne jamais tirer.
-#    --build-docker       l'inverse, et il gagne : l'image est construite par
-#                         build.sh meme si un --skip-build traine par ailleurs.
-#                         Variable : OSMO_ISO_BUILD_DOCKER=1.
-#    --without-debs       aucun .deb ne voyage dans l'image : ni les paquets du
-#                         banc (etape 7c), ni ceux du build docker. Ils servent
-#                         toujours a poser la pile dans le rootfs, ils n'y
-#                         restent plus. Variable : OSMO_ISO_WITHOUT_DEBS=1.
+#    --version=24.04|22.04   --kb=fr   --output=file   --no-cache
+#    (default, amd64)     THE DOCKER IMAGE IS PULLED, NOT BUILT, and tagged
+#                         osmocom-nitb. Tried in order: bastienbaranoff/norf_gsm:latest
+#                         (Docker Hub), then ghcr.io/<repo>/osmocom-nitb:base-<fingerprint>,
+#                         then the GHCR :latest. build.sh runs only if none
+#                         answers. The fingerprint is the one of the workflows:
+#                         when it matches, the published image was built from
+#                         exactly this working tree; the two other references
+#                         do not guarantee that, and the script says so before
+#                         using them. On arm64 nothing is published: building
+#                         remains the default.
+#    --skip-build[=image:tag]   make the pull mandatory (no fallback to
+#                         build.sh) and, with =image, force that reference
+#                         instead of deriving it. An image already present
+#                         locally is not pulled. Env: OSMO_ISO_SKIP_BUILD=0
+#                         for the opposite - never pull.
+#    --build-docker       the opposite, and it wins: the image is built by
+#                         build.sh even if a --skip-build is set elsewhere.
+#                         Env: OSMO_ISO_BUILD_DOCKER=1.
+#    --without-debs       no .deb travels in the image: neither the bench
+#                         packages (step 7c) nor those of the docker build.
+#                         They are still used to install the stack in the
+#                         rootfs but are not kept there. Env: OSMO_ISO_WITHOUT_DEBS=1.
 #    --wan --wan-nodes=... --wan-id=N --wan-ops=N --hub-ip=IP
 set -euo pipefail
 
-# Couleurs definies AVANT tout : sous `set -u`, la premiere ligne coloree d'un
-# script qui les declare plus bas echoue sur "variable sans liaison" - et le
-# message ne parle ni de couleurs ni de l'endroit fautif.
+# Colours are defined first: under `set -u`, a coloured message emitted before
+# their definition would fail with "unbound variable".
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; NC='\033[0m'; BOLD='\033[1m'
 
 VERSION="${OSMO_ISO_VERSION:-main}"
 OUTPUT="osmo-operator-${VERSION}.iso"
-# Repertoire de travail SUR DISQUE (pas /tmp, souvent un tmpfs en RAM -> "No
-# space left on device" car le rootfs est volumineux). Overridable via OSMO_ISO_WORK.
+# Work directory ON DISK (not /tmp, often a RAM tmpfs too small for the
+# rootfs). Override with OSMO_ISO_WORK.
 WORK="${OSMO_ISO_WORK:-/var/tmp}/iso-build-$$"
 ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
-# /usr/local/sbin DANS le PATH : apt-fast-install pose apt-fast la, sur l hote
-# comme dans le rootfs. Le chroot plus bas herite de ce PATH (env ... bash -c) :
-# sans lui, "[apt-fast] pret : /usr/local/sbin/apt-fast" etait suivi de
-# "bash: line 202: apt-fast: command not found" dans le chroot.
+# /usr/local/sbin in PATH: apt-fast-install puts apt-fast there, on the host as
+# in the rootfs; the chroot below inherits this PATH (env ... bash -c).
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 
-# ── LES ETAPES SONT DANS iso_modules/ ────────────────────────────────────────
-# [2026-09-04] Ce script faisait 5 100 lignes d un seul tenant. Chaque etape
-# vit maintenant dans iso_modules/NN-<slug>.sh, source ICI, dans l ordre des
-# numeros, dans CE shell : les variables, les fonctions et le trap restent
-# globaux, exactement comme avant le decoupage. Un module qui n a rien a
-# faire (une variante, une architecture) fait `return` en tete.
-# ATTENTION : `. fichier` rend le statut de la derniere commande du fichier,
-# et set -e est actif. Chaque module se termine donc par `true` - sans quoi
-# un module finissant par un test faux ("[ ... ] && { ... }", le test root de
-# 00-options quand on EST root) arretait le script en silence, statut 1.
+# ── Build steps live in iso_modules/ ─────────────────────────────────────────
+# Each step is iso_modules/NN-<slug>.sh, sourced here in numeric order, in THIS
+# shell: variables, functions and the trap stay global. A module that has
+# nothing to do (another variant or architecture) returns at its top.
+# Invariant: `. file` returns the status of the file's last command and set -e
+# is active, so every module must end with `true`.
 MODDIR="$DIR/iso_modules"
 [ -d "$MODDIR" ] || { echo -e "${RED}iso_modules/ introuvable a cote de $0${NC}" >&2; exit 2; }
 shopt -s nullglob; _ISO_MODS=("$MODDIR"/[0-9][0-9]-*.sh); shopt -u nullglob

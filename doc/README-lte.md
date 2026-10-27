@@ -42,7 +42,8 @@ flowchart LR
   Internet through NAT.
 
 Shipped in `/opt/LTE`, launched with `osmo-lte` and `osmo-epc`
-(`tools/osmo-lte.sh`, `tools/osmo-epc.sh`), or the **4G** launcher in the dock.
+(`tools/osmo-lte.sh`, `tools/osmo-epc.sh`, unit `services/osmo-lte.service`),
+or the **4G** launcher in the dock. Installed by `tools/osmo-lte-install.sh`.
 
 ## CSFB
 
@@ -72,8 +73,8 @@ sequenceDiagram
 ## postmarketOS: the phone
 
 - x86_64 pmOS VM with a patched kernel (`CONFIG_PPP` enabled, missing
-  upstream). The prebuilt kernel is in `/opt/user_interface/kernel/pmos/`.
-  Password `147147`.
+  upstream; patch `patches/pmaports-linux-postmarketos-stable-ppp.patch`). The
+  prebuilt kernel is in `/opt/user_interface/kernel/pmos/`. Password `147147`.
 - 4G data: NetworkManager → pppd (`ATD*99***1#`) → virtio-console `osmo.data`
   → `osmo-phonesim-banc.py` → UE netns → srsUE → srsENB → UPF → Internet.
 - 2G voice and SMS: virtio-console `osmo.modem`, where `osmo-phonesim-banc.py`
@@ -81,8 +82,10 @@ sequenceDiagram
 - Audio: two duplex PulseAudio chains (GAPK bridge to the osmocom-bb mobile,
   and an echo-cancelled chain).
 
-Tools: `tools/osmo-pmos*.sh` (build, install, setup, QEMU), and a patched
-`pmbootstrap` in `/opt/user_interface/pmos`. **Launch the phone last**, once 2G
-and 4G are up.
+Tools: `tools/osmo-pmos-build.sh`, `osmo-pmos-install.sh`, `osmo-pmos-setup.sh`,
+`osmo-pmos-qemu.sh`, `osmo-pmos.sh` (build, install, setup, QEMU, launch) and a
+patched `pmbootstrap` in `/opt/user_interface/pmos`
+(`patches/pmbootstrap-osmo-bench-qemu.patch`). **Launch the phone last**, once
+2G and 4G are up.
 
 Test it: `cd /opt/GSM/tests && ./banc-max.sh --4g` ([README-tests](README-tests.md)).

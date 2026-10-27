@@ -1,46 +1,43 @@
 #!/bin/bash
 # =============================================================================
-#  build.sh - prepare l hote et construit l image osmocom-nitb
+#  build.sh - prepare the host and build the osmocom-nitb image
 # =============================================================================
 #
-#  [2026-09-03] TROIS CHANGEMENTS, LIES :
+#  Usage: sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run] [--arch=arm64|--arm]
+#         (-h describes every option)
 #
-#  1. apt-fast partout. packaging/apt-fast-install.sh pose apt-fast (aria2) et
-#     les reglages apt communs, sur l hote comme dans les images et le rootfs
-#     de l ISO. Un seul installeur, une seule facon de parler a apt.
+#  - apt-fast everywhere: packaging/apt-fast-install.sh installs apt-fast
+#    (aria2) and the common apt settings on the host, in the images and in the
+#    ISO rootfs.
+#  - docker compose v2 (+ buildx) is a dependency: it builds the images
+#    (compose.yaml: services nitb, run, lite, stp). `docker build` is the
+#    fallback when compose is missing.
+#  - .deb cache on the host: every tree compiled in the image is packaged as a
+#    .deb (packaging/osmo-deb.sh) and stored in
+#        /var/cache/osmo-debs          (OSMO_DEB_CACHE to relocate)
+#    Before the build they are copied into .deb-cache/ (the docker context) and
+#    the image installs them with dpkg instead of recompiling; after the build
+#    the packages produced by the image are copied back to the host cache.
+#    The first build compiles everything, later ones only what is missing.
+#    --no-cache sets OSMO_DEB_REFRESH=1: everything is recompiled and the
+#    cache rewritten.
 #
-#  2. docker compose v2 (+ buildx) est une DEPENDANCE, pas une option : il est
-#     installe avec docker, et c est lui qui construit les images
-#     (compose.yaml : services nitb, run, lite, stp). `docker build` reste le
-#     repli si compose manque.
-#
-#  3. LE CACHE .deb SUR L HOTE. Chaque dossier compile dans l image sort en
-#     paquet (.deb) - packaging/osmo-deb.sh. Ces paquets vivent dans
-#         /var/cache/osmo-debs          (OSMO_DEB_CACHE pour deplacer)
-#     Avant le build, on les recopie dans .deb-cache/ (le contexte docker) ;
-#     l image les pose par dpkg au lieu de recompiler. Apres le build, on
-#     ramene ce que l image a produit dans le cache de l hote. Le premier
-#     build compile tout ; les suivants ne compilent que ce qui manque.
-#     --no-cache : OSMO_DEB_REFRESH=1, tout est recompile et le cache reecrit.
-#
-#  Usage : sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run]
+#  Env: OSMO_DEB_CACHE, OSMO_UBUNTU_MIRROR, OSMO_HOST_MIRROR (0|1|force),
+#       OSMO_HOST_DOCKER (0 = never ask apt for docker), BUILDKIT_PROGRESS.
 # =============================================================================
 set -euo pipefail
 
-# Contexte de build : le repertoire de CE script, pas le cwd de l appelant.
-# Le lanceur .desktop passe par pkexec, qui demarre dans /root : sans ce cd,
-# "docker build ." cherche /root/Dockerfile et echoue.
+# Build context: the directory of THIS script, not the caller's cwd (the
+# .desktop launcher goes through pkexec, which starts in /root).
 cd "$(dirname "$(readlink -f "$0")")"
 DIR="$(pwd)"
-# /usr/local/sbin DANS le PATH : apt-fast-install pose apt-fast la (comme le
-# Dockerfile). Un root dont le PATH ne le contient pas (shell perso, sans sudo)
-# voyait "[apt-fast] pret : /usr/local/sbin/apt-fast" puis "apt-fast: command
-# not found" a la ligne suivante.
+# /usr/local/sbin in PATH: apt-fast-install puts apt-fast there (as the
+# Dockerfile does); a root shell without it in PATH would not find apt-fast.
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
-# 0. Parsing des arguments
+# 0. Argument parsing
 NO_CACHE=""
 LITE=0
 STP=0
@@ -80,8 +77,8 @@ for arg in "$@"; do
     esac
 done
 
-# --build-run : la couche de mise a jour seule (Dockerfile.run), en secondes.
-# Elle part de l image osmocom-nitb du docker local : rien a preparer sur l hote.
+# --build-run: only the update layer (Dockerfile.run), on top of the local
+# osmocom-nitb image: nothing to prepare on the host.
 if [[ "$BUILD_RUN" -eq 1 ]]; then
     if ! docker image inspect osmocom-nitb >/dev/null 2>&1; then
         echo -e "${RED}[ERREUR] image osmocom-nitb absente : lancer d abord sudo $0${NC}"
@@ -97,7 +94,7 @@ if [[ "$BUILD_RUN" -eq 1 ]]; then
     exit 1
 fi
 
-# 1. Verification des privileges ROOT
+# 1. Root privileges
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}[ERREUR] Ce script doit etre lance en tant que root (sudo).${NC}"
    exit 1
@@ -106,22 +103,20 @@ fi
 echo "--- Preparation complete de l'hote (SDR & Docker) ---"
 export DEBIAN_FRONTEND=noninteractive
 
-# 2. apt-fast sur l hote : le meme installeur que dans les images
+# 2. apt-fast on the host: the same installer as in the images
 echo "[*] apt-fast (packaging/apt-fast-install.sh)..."
 bash "$DIR/packaging/apt-fast-install.sh" || echo -e "${YELLOW}[WARN] apt-fast non installe - apt-get${NC}"
 command -v apt-fast >/dev/null 2>&1 || apt-fast() { apt-get "$@"; }
 
-# ── Le miroir Ubuntu : mesure, pas suppose - pour l image ET pour l hote ────
-# archive.ubuntu.com peut repondre a 3 Ko/s ou pas du tout depuis ici (vu le
-# 2026-09-04 : dix minutes muettes a l etape 3/64, et un apt de l hote qui ne
-# rend jamais la main). packaging/apt-mirror.sh mesure quelques miroirs :
-#   - le plus rapide part dans l image en build-arg (compose le lit dans
-#     l environnement) ; OSMO_UBUNTU_MIRROR=http://... force un miroir ;
-#   - si archive.ubuntu.com ne repond PAS et que les sources apt de l hote le
-#     designent, elles sont basculees sur le plus rapide, avec une sauvegarde
-#     (*.osmo-bak) - sinon aucun paquet hote (qemu-user-static, docker...) ne
-#     s installe. OSMO_HOST_MIRROR=0 interdit de toucher aux sources de l hote,
-#     OSMO_HOST_MIRROR=force les bascule meme si archive repond (lentement).
+# ── Ubuntu mirror: measured, not assumed - for the image AND the host ────────
+# packaging/apt-mirror.sh benchmarks a few mirrors:
+#   - the fastest goes into the image as a build-arg (compose reads it from the
+#     environment); OSMO_UBUNTU_MIRROR=http://... forces a mirror;
+#   - if archive.ubuntu.com does NOT answer and the host apt sources point to
+#     it, they are switched to the fastest mirror, with a backup (*.osmo-bak),
+#     otherwise no host package (qemu-user-static, docker...) could be
+#     installed. OSMO_HOST_MIRROR=0 forbids touching the host sources,
+#     OSMO_HOST_MIRROR=force switches them even if archive answers (slowly).
 echo "[*] Miroir Ubuntu (packaging/apt-mirror.sh)..."
 _MLIST="$(bash "$DIR/packaging/apt-mirror.sh" --list noble 2>&1 | tee /dev/stderr | grep -E '^[0-9]+' || true)"
 OSMO_UBUNTU_MIRROR="${OSMO_UBUNTU_MIRROR:-$(printf '%s\n' "$_MLIST" | head -1 | cut -f2)}"
@@ -145,25 +140,13 @@ if { [ "${OSMO_HOST_MIRROR:-1}" = "force" ] || { [ "${OSMO_HOST_MIRROR:-1}" = "1
 fi
 apt-fast update -qq || true
 
-# 3. Docker, docker compose v2 et buildx : TOUJOURS dans les dependances.
-#    (Avant, compose n etait pose qu avec docker, quand docker manquait : un
-#    hote qui avait deja docker.io ne l obtenait jamais.)
-#
-# [2026-09-13] MAIS JAMAIS docker.io SI DOCKER EST DEJA LA. Sur un runner
-# GitHub - et sur tout hote qui suit le depot Docker - docker vient de
-# docker-ce + containerd.io ; docker.io entre en conflit avec les deux, apt
-# repond « pkgProblemResolver::Resolve generated breaks », les DEUX lignes de
-# repli contenaient docker.io, et le job mourait sur « docker /
-# docker-compose-v2 non installables » alors que docker ET compose v2
-# marchaient parfaitement. iso_modules/20-hote.sh a toujours eu cette garde
-# (iso_host_docker, « UNIQUEMENT SI ABSENT ») ; build.sh l avait perdue en
-# rendant compose inconditionnel. On ne complete donc que ce qui MANQUE, et
-# on accepte les deux nommages : docker-compose-v2 / docker-buildx (Ubuntu)
-# et docker-compose-plugin / docker-buildx-plugin (depot Docker).
-# OSMO_HOST_DOCKER=0 : ne RIEN demander a apt pour docker. Un runner GitHub
-# arrive avec docker, compose v2 et buildx tout faits (paquets moby-*) ; lui
-# laisser tenter quoi que ce soit, c est parier sur un nommage de paquets qu on
-# ne maitrise pas, pour un gain nul. Le workflow pose donc cette variable.
+# 3. Docker, docker compose v2 and buildx: always dependencies, but only what
+#    is MISSING is installed - never docker.io when docker is already there
+#    (docker-ce + containerd.io conflict with it). Both package namings are
+#    accepted: docker-compose-v2 / docker-buildx (Ubuntu) and
+#    docker-compose-plugin / docker-buildx-plugin (Docker repository).
+#    OSMO_HOST_DOCKER=0: do not ask apt for anything docker-related (a GitHub
+#    runner ships docker, compose v2 and buildx as moby-* packages).
 echo "[*] Docker + docker compose v2 + buildx..."
 if [ "${OSMO_HOST_DOCKER:-1}" = 0 ]; then
     echo -e "${GREEN}[OK] docker : installation sautee (OSMO_HOST_DOCKER=0) - $(docker --version 2>/dev/null || echo 'docker introuvable, la suite dira si c est un probleme')${NC}"
@@ -190,20 +173,18 @@ fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 HAVE_COMPOSE=0
 docker compose version >/dev/null 2>&1 && HAVE_COMPOSE=1
-# L affichage BuildKit reste celui par defaut (tty, en bleu) : il replie la
-# sortie de chaque RUN sur quelques lignes. Pour lire TOUT ce qu une etape
-# ecrit (une compilation d une heure, un apt muet a l etape 3/64) :
+# BuildKit output stays the default (tty, folded). To read everything a step
+# writes (a one-hour compilation, a silent apt):
 #     BUILDKIT_PROGRESS=plain ./build.sh
-# Vaut pour docker compose build ET docker build (et buildx).
+# Applies to docker compose build AND docker build (and buildx).
 export BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-auto}"
 
-# ── Architecture cible : la meme que l hote, ou une autre par buildx ─────────
-# --arch=arm64 sur un hote x86 : docker buildx build --platform linux/arm64,
-# qemu-user-static emulant l aarch64 dans les conteneurs de construction. Il
-# faut binfmt_misc avec le drapeau F (fix-binary) - sans lui le conteneur ne
-# trouve pas l emulateur. Les images sortent taguees :arm64 pour cohabiter avec
-# les images natives. Le cache .deb est deja par architecture (osmo-deb nomme
-# les paquets ..._arm64.deb).
+# ── Target architecture: the host's, or another one through buildx ──────────
+# --arch=arm64 on an x86 host: docker buildx build --platform linux/arm64, with
+# qemu-user-static emulating aarch64 in the build containers. binfmt_misc must
+# carry the F (fix-binary) flag, otherwise the container cannot find the
+# emulator. Images are tagged :arm64 to coexist with the native ones. The .deb
+# cache is already per architecture (osmo-deb names packages ..._arm64.deb).
 HOST_ARCH="$(dpkg --print-architecture)"
 BUILD_PLATFORM=""; IMG_TAG=""
 if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
@@ -213,13 +194,12 @@ if [ "$OSMO_ARCH" != "$HOST_ARCH" ]; then
         *) echo -e "${RED}[ERREUR] --arch : amd64 ou arm64 (recu : $OSMO_ARCH)${NC}"; exit 2 ;;
     esac
     IMG_TAG=":$OSMO_ARCH"
-    # [2026-10-20] TOUT ce que la chaine --arm demande a l hote, pose ici une fois pour toutes :
-    # l emulation (qemu-user-static, binfmt-support) et buildx pour cette image Docker ; puis les
-    # outils de build-iso.sh --arm (iso_modules/20-hote.sh, ISO_HOST_PKGS_COMMON : debootstrap,
-    # mke2fs -d, mcopy, sfdisk, kpartx, zstd, python3-pil...) et de armbian/build-armbian.sh (git,
-    # docker, qemu-user pour le chroot de customize-image.sh). Avant, build-iso.sh les posait a son
-    # etape 0 et build-armbian.sh se contentait de les reclamer : un hote qui n avait fait que
-    # ./build.sh --arm partait sans mtools ni dosfstools.
+    # Everything the --arm chain needs on the host, installed once here: the
+    # emulation (qemu-user-static, binfmt-support) and buildx for this image,
+    # then the tools of build-iso.sh --arm (iso_modules/20-hote.sh,
+    # ISO_HOST_PKGS_COMMON: debootstrap, mke2fs -d, mcopy, sfdisk, kpartx,
+    # zstd, python3-pil...) and of armbian/build-armbian.sh (git, docker,
+    # qemu-user for the customize-image.sh chroot).
     echo "[*] Paquets hote de la chaine ${OSMO_ARCH} : emulation, buildx, outils d image SD..."
     apt-fast install -y --no-install-recommends qemu-user-static binfmt-support docker-buildx \
         git debootstrap rsync wget curl ca-certificates gnupg zstd xz-utils cpio file gcc make \
@@ -246,20 +226,20 @@ IMG_STP="osmocom-stp${IMG_TAG}"
 [ "$HAVE_COMPOSE" = 1 ] && echo -e "${GREEN}[OK] $(docker compose version)${NC}" \
     || echo -e "${YELLOW}[WARN] docker compose absent - repli sur docker build${NC}"
 
-# 4. Installation des dependances critiques sur l'hote
-# SCTP est vital pour les protocoles de signalisation Osmocom
+# 4. Critical host dependencies
+# SCTP is required by the Osmocom signalling protocols
 echo "[*] Installation de SCTP, TUN et D-Bus sur l'hote..."
 apt-fast install -y lksctp-tools libsctp-dev dbus uml-utilities libusb-1.0-0-dev \
      wireshark linphone* gnome-terminal whiptail expect netcat-openbsd \
      telnet iproute2 pulseaudio-utils dpkg-dev zstd
 
-# 4b. toast : le codec GSM 06.10 (quut.com), absent du paquet apt
-# libgsm1 (apt) fournit la LIB mais pas le binaire toast/untoast/tcat. On le
-# compile depuis les sources officielles, SOUS /opt/GSM, et on pose le binaire
-# dans /usr/local/bin. Non fatal : sans reseau on continue le build.
+# 4b. toast: the GSM 06.10 codec (quut.com), missing from apt
+# libgsm1 (apt) ships the library but not the toast/untoast/tcat binaries.
+# Built from the official sources under /opt/GSM, binaries installed in
+# /usr/local/bin. Non-fatal: without network the build goes on.
 echo "[*] Compilation de toast (codec GSM 06.10)..."
 _GSM_VER=gsm-1.0.24
-_GSM_DIR=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
+_GSM_DIR=gsm-1.0-pl24   # the tarball extracts under this name
 _GSM_URL="https://www.quut.com/gsm/${_GSM_VER}.tar.gz"
 if command -v toast >/dev/null 2>&1; then
     echo -e "${GREEN}[OK] toast deja present ($(command -v toast)).${NC}"
@@ -283,13 +263,13 @@ else
     fi
 fi
 
-# 5. Chargement des modules noyau
+# 5. Kernel modules
 echo "[*] Chargement des modules noyau (SCTP & TUN)..."
 modprobe sctp
 modprobe tun
 
-# Verification du module SCTP (lecture directe de /proc/modules : pas de tube,
-# donc pas de SIGPIPE/pipefail, et ancrage sur le nom de module exact)
+# SCTP module check (direct read of /proc/modules: no pipe, hence no
+# SIGPIPE/pipefail, and anchored on the exact module name)
 if grep -q '^sctp ' /proc/modules; then
     echo -e "${GREEN}[OK] Module SCTP charge sur l'hote.${NC}"
 else
@@ -297,7 +277,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. Le cache .deb : de l hote vers le contexte de build
+# 6. The .deb cache: from the host to the build context
 # ══════════════════════════════════════════════════════════════════════════════
 OSMO_DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 mkdir -p "$OSMO_DEB_CACHE" "$DIR/.deb-cache"
@@ -308,8 +288,8 @@ if [[ -n "$NO_CACHE" ]]; then
     echo "[*] Mode --no-cache actif : reconstruction complete, paquets .deb recompiles."
 else
     cp -f "$OSMO_DEB_CACHE"/osmo-build-*.deb "$DIR/.deb-cache/" 2>/dev/null || true
-    # find, pas "ls | wc" : sous pipefail, un ls sans resultat sortait en 2 et
-    # set -e arretait le script ici, sans un mot, des le premier build.
+    # find, not "ls | wc": under pipefail an empty ls exits 2 and set -e would
+    # stop the script silently on the first build.
     _n=$(find "$DIR/.deb-cache" -maxdepth 1 -name '*.deb' | wc -l)
     if [ "$_n" -gt 0 ]; then
         echo -e "${GREEN}[OK] cache .deb : ${_n} paquets repris de ${OSMO_DEB_CACHE} ($(du -sh "$DIR/.deb-cache" | cut -f1))${NC}"
@@ -319,20 +299,20 @@ else
 fi
 export OSMO_DEB_REFRESH
 
-# Construit un service de compose.yaml (ou son equivalent docker build).
+# Build one compose.yaml service (or its docker build equivalent).
 #   $1 = service (nitb|run|lite|stp)   $2 = image   $3 = Dockerfile   $4.. = build-args
 compose_build() {
     local svc="$1" image="$2" dockerfile="$3"; shift 3
-    # Dockerfile (nitb) ne se termine PLUS par l etape osmocom-nitb : l etape
-    # `debs` la suit, qui n exporte que le cache .deb pour la CI. Sans --target
-    # docker batirait celle-la. Les autres Dockerfile n ont qu une cible utile,
-    # qui est deja la derniere - rien a leur passer. compose.yaml porte le meme
-    # target sur son service nitb, pour la branche compose ci-dessous.
+    # Dockerfile (nitb) does not end with the osmocom-nitb stage: the `debs`
+    # stage follows it and only exports the .deb cache for the CI, so without
+    # --target docker would build that one. The other Dockerfiles have a single
+    # useful target, already the last. compose.yaml carries the same target on
+    # its nitb service for the compose branch below.
     local target=()
     [ "$svc" = nitb ] && target=(--target osmocom-nitb)
     if [ -n "$BUILD_PLATFORM" ]; then
-        # Autre architecture : buildx --platform, --load pour que l image soit
-        # dans le docker local (et non seulement dans le cache de buildx).
+        # Other architecture: buildx --platform, --load so the image lands in
+        # the local docker (not only in the buildx cache).
         local args=(); local a; for a in "$@"; do args+=(--build-arg "$a"); done
         docker buildx build --platform "$BUILD_PLATFORM" --load $NO_CACHE \
             "${target[@]+"${target[@]}"}" \
@@ -346,7 +326,7 @@ compose_build() {
     fi
 }
 
-# Ramene dans le cache de l hote les paquets que l image vient de produire.
+# Copy the packages the image just produced back into the host cache.
 #   $1 = image
 debs_from_image() {
     local image="$1" cid n
@@ -362,7 +342,7 @@ debs_from_image() {
     rm -rf "$DIR/.deb-cache/out"
 }
 
-# 7. Lancement du build Docker
+# 7. Docker build
 echo "--- Lancement du build de l'image ${IMG_NITB} ---"
 if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR"; then
     echo -e "${GREEN}[OK] Image ${IMG_NITB} construite avec succes.${NC}"
@@ -372,12 +352,11 @@ else
     exit 1
 fi
 
-# 8. Image lite : la meme pile, sans les arbres de sources
-# osmocom-nitb embarque /opt/GSM - les arbres de construction de gnuradio,
-# gr-gsm, qemu, libosmocore... 4 Go sur 11, qui ont servi a COMPILER et ne
-# servent plus a rien ensuite : ce qui tourne vit dans /usr/local.
-# Dockerfile.lite les retire et aplatit le resultat (voir son entete : effacer
-# dans une couche de plus ne rend aucun espace).
+# 8. lite image: the same stack without the source trees
+# osmocom-nitb embeds /opt/GSM - the build trees of gnuradio, gr-gsm, qemu,
+# libosmocore... (4 GB out of 11) which were only needed to compile; what runs
+# lives in /usr/local. Dockerfile.lite removes them and flattens the result
+# (see its header: deleting in one more layer frees nothing).
 if [[ "$LITE" -eq 1 ]]; then
     echo "--- Lancement du build de l'image ${IMG_LITE} ---"
     if LITE_BASE="$IMG_NITB" LITE_IMAGE="$IMG_LITE" \
@@ -391,7 +370,7 @@ if [[ "$LITE" -eq 1 ]]; then
     fi
 fi
 
-# 9. Image STP : le hub SS7 seul (Dockerfile.stp), avec le meme cache .deb
+# 9. STP image: the SS7 hub alone (Dockerfile.stp), with the same .deb cache
 if [[ "$STP" -eq 1 ]]; then
     echo "--- Lancement du build de l'image ${IMG_STP} ---"
     if compose_build stp "$IMG_STP" Dockerfile.stp "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR"; then
@@ -403,5 +382,5 @@ if [[ "$STP" -eq 1 ]]; then
     fi
 fi
 
-# Le contexte ne garde pas les paquets : ils sont dans le cache de l hote.
+# The context does not keep the packages: they live in the host cache.
 find "$DIR/.deb-cache" -maxdepth 1 -name '*.deb' -delete

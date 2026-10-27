@@ -1,57 +1,59 @@
 # =============================================================================
-# Dockerfile.stp — l'inter-STP : le hub SS7 du WAN, et rien d'autre
+# Dockerfile.stp - inter-STP image: the SS7/M3UA hub of the WAN, nothing else
 # =============================================================================
 #
-# osmocom-run porte toute la maquette (HLR, MSC, BSC, PCU, BTS, Asterisk, QEMU,
-# gr-gsm…). Le hub n'en utilise rien : il reçoit du M3UA, consulte sa table de
-# routage, renvoie vers le bon linkset. Cette image ne contient que ça.
+# osmocom-run carries the whole mock-up (HLR, MSC, BSC, PCU, BTS, Asterisk,
+# QEMU, gr-gsm...). The hub uses none of it: it receives M3UA, looks up its
+# routing table and forwards to the right linkset. This image contains only
+# that. osmo-stp has no repository of its own; it is built by libosmo-sigtran,
+# hence three sources (libosmocore, libosmo-netif, libosmo-sigtran).
 #
-# osmo-stp n'a pas de dépôt à lui — il est produit par libosmo-sigtran. D'où ces
-# trois sources et pas quatre.
+# Versions are aligned with Dockerfile: a hub built against a newer
+# libosmo-sigtran than the nodes would negotiate M3UA extensions they ignore,
+# which only shows up as "ASP DOWN".
 #
-# Versions alignées sur Dockerfile : un hub compilé contre une libosmo-sigtran
-# plus récente que les nœuds négocierait des extensions M3UA qu'ils ignorent, ce
-# qui ne se lit que « ASP DOWN ».
+# Two ways to build it:
 #
-# DEUX FAÇONS DE LA CONSTRUIRE, ET POURQUOI
-#
-#   autonome (défaut) — compile les trois bibliothèques depuis ubuntu:24.04
-#   (noble, la meme base que Dockerfile), en passant par le cache .deb de
-#   packaging/osmo-deb.sh : la seconde construction ne compile plus rien.
+#   standalone (default): compiles the three libraries from ubuntu:24.04
+#   (noble, the same base as Dockerfile), through the .deb cache of
+#   packaging/osmo-deb.sh (the second build compiles nothing).
 #     docker build -f Dockerfile.stp -t osmocom-stp .
 #     docker compose build stp          (build.sh / build-iso.sh --role=interstp)
 #
-#   sur la pile existante — si osmocom-nitb est déjà là (c'est la base de
-#   Dockerfile.run), elle porte DÉJÀ ces bibliothèques et osmo-stp. On les
-#   reprend au lieu de les recompiler : quelques secondes, et surtout la
-#   certitude que le hub et les nœuds partagent le MÊME code. Deux compilations
-#   séparées peuvent diverger sans que rien ne le signale.
+#   on the existing stack: osmocom-nitb (the base of Dockerfile.run) already
+#   carries these libraries and osmo-stp; they are reused instead of being
+#   recompiled, so hub and nodes share the SAME code.
 #     docker build -f Dockerfile.stp --build-arg BASE_IMAGE=osmocom-nitb -t osmocom-stp .
 #
+# Args:  BASE_IMAGE            ubuntu:24.04 (default) or osmocom-nitb
+#        LIBOSMOCORE_VERSION, LIBOSMO_NETIF_VERSION, LIBOSMO_SIGTRAN_VERSION
+#        OSMO_UBUNTU_MIRROR    apt mirror for apt-fast-install
+#        OSMO_DEB_REFRESH      1 forces a rebuild past the .deb cache
+#        HUB_NODES, HUB_OPS    size of the default point-code plan
+#
+# Run:
 #   docker run --rm -p 2908:2908 -p 4239:4239 osmocom-stp
 #   docker run --rm -v ./hub.cfg:/etc/osmocom/osmo-stp-interop.cfg osmocom-stp
 # =============================================================================
 
-# ── Base commune aux deux étages ─────────────────────────────────────────────
-# La liste est celle de Dockerfile, reprise telle quelle. Volontairement plus
-# large que ce que ces trois bibliothèques paraissent exiger : le configure de
-# libosmocore active ou refuse ses composants selon ce qu'il trouve, et une
-# liste taillée au plus juste l'a déjà fait échouer (« no suitable Python
-# interpreter found » — python3 sert à ses générateurs de code, pas à
-# l'exécution). La déclarer une seule fois évite qu'elle diverge entre l'étage
-# qui compile et celui qui exécute.
+# ── Base shared by both stages ───────────────────────────────────────────────
+# The package list is the one from Dockerfile, taken as is. Deliberately wider
+# than what these three libraries seem to need: libosmocore's configure enables
+# or drops components according to what it finds (python3 is needed by its code
+# generators). Declared once so it cannot diverge between the stage that
+# compiles and the one that runs.
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE} AS base
 ARG DEBIAN_FRONTEND=noninteractive
-# apt-fast : le meme installeur que Dockerfile (packaging/apt-fast-install.sh).
-# Cache apt BuildKit, le meme que Dockerfile (id osmo-apt-archives).
+# apt-fast: the same installer as Dockerfile (packaging/apt-fast-install.sh).
+# BuildKit apt cache, the same as Dockerfile (id osmo-apt-archives).
 ARG OSMO_UBUNTU_MIRROR=
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install
-# apt est idempotent : sur osmocom-nitb, où tout est déjà installé, cette étape
-# ne fait que constater. On ne duplique donc pas la liste pour ce cas.
-# libasound2t64 : nom noble de libasound2 (transition time_t 64 bits).
+# apt is idempotent: on osmocom-nitb, where everything is already installed,
+# this step only confirms it, so the list is not duplicated for that case.
+# libasound2t64: noble name of libasound2 (64-bit time_t transition).
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     apt-fast update && apt-fast install -y --no-install-recommends \
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
@@ -64,7 +66,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     LD_LIBRARY_PATH=/usr/local/lib
 
-# ── Compilation ──────────────────────────────────────────────────────────────
+# ── Build stage ──────────────────────────────────────────────────────────────
 FROM base AS builder
 ARG LIBOSMOCORE_VERSION=1.12.1
 ARG LIBOSMO_NETIF_VERSION=1.7.0
@@ -72,21 +74,20 @@ ARG LIBOSMO_SIGTRAN_VERSION=2.2.1
 
 WORKDIR /build
 
-# ── Cache .deb (packaging/osmo-deb.sh) : les memes paquets que l image nitb ──
-# .deb-cache/ est le miroir du cache de l hote (/var/cache/osmo-debs). Un
-# paquet osmo-build-libosmocore_1.12.1~noble deja la = pas de compilation.
+# ── .deb cache (packaging/osmo-deb.sh): the same packages as the nitb image ──
+# .deb-cache/ mirrors the host cache (/var/cache/osmo-debs). A package
+# osmo-build-libosmocore_1.12.1~noble already present = no compilation.
 ARG OSMO_DEB_REFRESH=0
 COPY packaging/osmo-deb.sh /usr/local/sbin/osmo-deb
 COPY .deb-cache/ /var/cache/osmo-debs/
 RUN chmod 755 /usr/local/sbin/osmo-deb
 
-# Ordre imposé : chaque bibliothèque se compile contre la précédente.
-# libosmocore depuis github (miroir officiel), les deux autres depuis gitea —
-# même provenance que Dockerfile, pour que les deux images voient le même code.
+# Fixed order: each library builds against the previous one.
+# libosmocore from github (official mirror), the other two from gitea, the
+# same origins as Dockerfile so both images see the same code.
 #
-# Si la base fournit déjà osmo-stp (cas BASE_IMAGE=osmocom-nitb), on ne
-# recompile rien : ce serait long, et surtout ce serait un SECOND exemplaire des
-# mêmes bibliothèques, susceptible de diverger de celui des nœuds.
+# If the base already provides osmo-stp (BASE_IMAGE=osmocom-nitb), nothing is
+# recompiled: a second copy of the same libraries could diverge from the nodes'.
 RUN set -eux; \
     if command -v osmo-stp >/dev/null 2>&1; then \
         echo "osmo-stp fourni par l'image de base — compilation inutile"; \
@@ -112,9 +113,9 @@ RUN set -eux; \
         cd /build; \
     done
 
-# Config par défaut du hub, produite par le script du dépôt : une seule source
-# de vérité pour le plan de point codes 1.<nœud><op>.<rôle>, partagée avec l'ISO
-# et avec start-docker.sh. Remplaçable par un montage au lancement.
+# Default hub config, generated by the repository script: a single source of
+# truth for the point-code plan 1.<node><op>.<role>, shared with the ISO and
+# start-docker.sh. Can be replaced by a volume mount at run time.
 ARG HUB_NODES=3
 ARG HUB_OPS=1
 COPY helpers/create_interop.sh /build/create_interop.sh
@@ -122,38 +123,34 @@ RUN mkdir -p /etc/osmocom \
     && bash /build/create_interop.sh --wan "${HUB_NODES}" "${HUB_OPS}" \
          /etc/osmocom/osmo-stp-interop.cfg
 
-# ── Image finale ─────────────────────────────────────────────────────────────
-# Même base, donc mêmes bibliothèques : rien de ce que la compilation a pu
-# activer ne peut manquer. Ce qui reste dehors, ce sont les arbres de sources
-# et les objets de compilation — l'essentiel du volume.
+# ── Final image ──────────────────────────────────────────────────────────────
+# Same base, hence same libraries: nothing the build may have enabled can be
+# missing. Left out: the source trees and build objects, most of the volume.
 FROM base
 LABEL org.opencontainers.image.title="osmocom-stp" \
       org.opencontainers.image.description="Inter-STP osmo-operator — hub SS7/M3UA, PC 0.0.0"
 
-# groupadd et useradd échouent (code 9) si le compte existe déjà — et il existe
-# déjà quand BASE_IMAGE=osmocom-nitb, où le Dockerfile principal le crée. Sans
-# ces gardes, le chemin « construire sur la pile existante » ne construit pas du
-# tout, alors que c est justement le plus rapide des deux.
+# groupadd and useradd fail (code 9) if the account already exists, which is
+# the case with BASE_IMAGE=osmocom-nitb (the main Dockerfile creates it).
 RUN getent group osmocom >/dev/null || groupadd -r osmocom \
     && id -u osmocom >/dev/null 2>&1 \
        || useradd -r -g osmocom -s /usr/sbin/nologin -d /var/lib/osmocom osmocom \
     && mkdir -p /var/lib/osmocom /var/log/osmocom \
     && chown osmocom:osmocom /var/lib/osmocom /var/log/osmocom
 
-# /usr/local est l'endroit où les deux chemins déposent leur résultat : celui
-# qui compile (--prefix=/usr/local) comme osmocom-nitb (même préfixe dans
-# Dockerfile). Une seule copie couvre donc les deux cas.
+# /usr/local is where both paths put their result: the compiling one
+# (--prefix=/usr/local) and osmocom-nitb (same prefix in Dockerfile). One copy
+# covers both cases.
 COPY --from=builder /usr/local/bin/osmo-stp /usr/local/bin/osmo-stp
 COPY --from=builder /usr/local/lib/         /usr/local/lib/
 COPY --from=builder /etc/osmocom/osmo-stp-interop.cfg /etc/osmocom/osmo-stp-interop.cfg
-# Les paquets produits voyagent dans l image finale : build.sh les ramene dans
-# le cache de l hote (docker cp), et build-iso.sh --role=interstp les pose
-# dans le rootfs du hub par dpkg.
+# The produced packages travel in the final image: build.sh brings them back
+# into the host cache (docker cp), and build-iso.sh --role=interstp installs
+# them into the hub rootfs with dpkg.
 COPY --from=builder /var/cache/osmo-debs/ /var/cache/osmo-debs/
 
-# La clôture des dépendances vérifiée sur l'image LIVRÉE, binaire et
-# bibliothèques : une .so manquante ne se verrait sinon qu'au premier démarrage,
-# dans une VM, loin d'ici.
+# Dependency closure checked on the SHIPPED image, binary and libraries: a
+# missing .so would otherwise only show at first start, inside a VM.
 RUN set -eux; \
     ldconfig; \
     fail=0; \
@@ -166,8 +163,8 @@ RUN set -eux; \
     [ "$fail" = "0" ]; \
     osmo-stp --version
 
-# 2908 : M3UA — en SCTP, que EXPOSE ne sait pas déclarer (tcp/udp seulement).
-# 4239 : VTY.
+# 2908: M3UA over SCTP, which EXPOSE cannot declare (tcp/udp only).
+# 4239: VTY.
 EXPOSE 2908/tcp 4239/tcp
 
 ENTRYPOINT ["/usr/local/bin/osmo-stp"]

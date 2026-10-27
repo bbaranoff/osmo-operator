@@ -1,30 +1,27 @@
+# osmo-launch.desktop - launcher: start the GSM bench (osmo-bts-trx +
+# pont_dsp.py DSP chain, osmocom-bb mobile, Wireshark, Linphone, web console).
+# Every action is one launch.sh command line; launch.sh passes "$@" to start.sh.
 [Desktop Entry]
 Type=Application
 Name=Lancer le banc GSM
 Name[fr]=Lancer le banc GSM
 Comment=Demarre le banc, Wireshark, Linphone et la console web
 Comment[fr]=Demarre le banc, Wireshark, Linphone et la console web
-# [2026-10-23] Le clic simple : la BTS classique (osmo-bts-trx <-> pont_dsp.py) et le mobile osmocom-bb.
+# Single click: the classic BTS (osmo-bts-trx <-> pont_dsp.py) and the osmocom-bb mobile.
 Exec=/opt/GSM/osmo-operator/launch.sh --bts-classique --ms
 Icon=/usr/share/osmo-operator/icons/osmo-launch.svg
 Terminal=false
 Categories=System;Network;
 Keywords=gsm;osmocom;banc;lancer;
 
-# ── ACTIONS DU CLIC DROIT ────────────────────────────────────────────────────
-# GNOME/DING lit `Actions=` et ajoute une entree par action au menu contextuel
-# de l icone (bureau ET dock). launch.sh passe tout son "$@" a start.sh :
-# les deux actions ci-dessous sont donc exactement les deux lignes de commande,
-# sans duplication de logique.
-#
-# Les noms des groupes doivent correspondre EXACTEMENT aux jetons de `Actions=`,
-# a la casse pres inclus : une entree qui ne correspond a rien est ignoree en
-# silence, et le clic droit affiche simplement une action de moins.
+# ── RIGHT-CLICK ACTIONS ──────────────────────────────────────────────────────
+# GNOME/DING reads `Actions=` and adds one context-menu entry per action
+# (desktop AND dock). Group names must match the `Actions=` tokens EXACTLY,
+# case included: an entry that matches nothing is silently ignored.
 Actions=Service;Dashboard;Console;Vty;Grgsm;Stop;
 
-# « Comme un service » : systemctl, pas de terminal, et le banc survit a la
-# fermeture de la session. C est launch.sh --service qui parle a systemd -
-# l icone ne connait toujours qu une seule ligne de commande.
+# "As a service": systemctl, no terminal, the bench survives the end of the
+# session (launch.sh --service-suivi talks to systemd).
 [Desktop Action Service]
 Name=Demarrer le banc en service
 Name[fr]=Demarrer le banc en service (sans terminal)
@@ -37,8 +34,7 @@ Name[fr]=Tableau de bord (127.0.0.1:8080)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --dashboard
 
-# La seule action qui ouvre un terminal, et pour cause : une session tmux est
-# interactive, elle n a nulle part ailleurs ou s afficher.
+# The only action that opens a terminal: a tmux session is interactive.
 [Desktop Action Console]
 Name=Console du banc (tmux attach)
 Name[fr]=Console du banc (tmux attach)
@@ -51,8 +47,8 @@ Name[fr]=Console du mobile (VTY 4247)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --vty
 
-# [2026-10-01] Le DSP (C54x) est le defaut de start.sh : un clic simple
-# le lance. L action du clic droit est donc l AUTRE chaine, gr-gsm.
+# The DSP (C54x) chain is the start.sh default (single click); this action
+# starts the OTHER chain, gr-gsm.
 [Desktop Action Grgsm]
 Name=Lancer en mode gr-gsm (sans DSP)
 Name[fr]=Lancer en mode gr-gsm (sans DSP)

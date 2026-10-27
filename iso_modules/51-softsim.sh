@@ -1,20 +1,24 @@
 #!/bin/bash
-# iso_modules/51-softsim.sh - etape 5a ter : softSIM (SIM via SAP, Osmocom)
-# Source par build-iso.sh, dans l ordre des numeros. `return` en tete = rien a faire.
+# iso_modules/51-softsim.sh - step 5a ter: softSIM (SIM over SAP, Osmocom)
+# Sourced by build-iso.sh in numeric order. A `return` at the top = nothing to do.
 #
-# softSIM (Ruby) : clone depuis gitea.osmocom.org dans /opt/GSM/softsim, avec son .git.
-# Ruby 3.2+ : File.exists? et Fixnum n existent plus ; le shim tools/softsim/ruby_compat.rb
-# est pose dans /usr/local/share/softsim/ (usage : ruby -r<shim> demo_server.rb ...).
-# Ruby et ruby-libxml sont dans PKGS de 80-chroot.sh.
+# softSIM (Ruby): cloned from gitea.osmocom.org into /opt/GSM/softsim, with its .git.
+# Ruby 3.2+: File.exists? and Fixnum no longer exist; the shim tools/softsim/ruby_compat.rb
+# is installed in /usr/local/share/softsim/ (usage: ruby -r<shim> demo_server.rb ...).
+# Ruby and ruby-libxml are in PKGS of 80-chroot.sh.
 #
-# Desactivable : --no-softsim (OSMO_ISO_SOFTSIM=0).
+# Environment:
+#   OSMO_ISO_SOFTSIM=0     disable (--no-softsim)
+#   OSMO_SOFTSIM_REPO      git URL to clone
+#   OSMO_SOFTSIM_LOCAL     local reference copy on the host (default /opt/GSM/softsim)
+#   OSMO_SIM_IMSI          IMSI of the generated sim-op1.xml (default 001010001000001)
 if [ "${OSMO_ISO_SOFTSIM:-1}" != "1" ]; then
     echo -e "${YELLOW}[5a/9] softSIM desactive (--no-softsim)${NC}"
     return 0
 fi
 
-# [2026-10-09] Le hub inter-STP n a pas de SIM a emuler (aucun MS) : 50-injection
-# saute deja son /opt/GSM. On ne clone donc pas softsim pour lui.
+# The inter-STP hub has no SIM to emulate (no MS): 50-injection already skips
+# its /opt/GSM, so softsim is not cloned for it.
 if [ "$ISO_ROLE" = "interstp" ]; then
     echo -e "${CYAN}[5a/9] Role inter-STP : pas de softSIM (hub M3UA)${NC}"
     return 0
@@ -37,7 +41,7 @@ else
     rm -rf "$SOFTSIM_TMP"
     echo -e "  ${YELLOW}⚠${NC} softSIM : clone impossible (reseau ?)" >&2
 fi
-# Copie locale de reference, si l hote en a une (comme 51-shannon.sh)
+# Local reference copy, if the host has one (same as 51-shannon.sh)
 if [ -d "$SOFTSIM_LOCAL" ] && [ "$SOFTSIM_LOCAL" != "$SOFTSIM_TREE" ]; then
     mkdir -p "$SOFTSIM_TREE"
     cp -a "$SOFTSIM_LOCAL/." "$SOFTSIM_TREE/" 2>/dev/null \
@@ -45,13 +49,12 @@ if [ -d "$SOFTSIM_LOCAL" ] && [ "$SOFTSIM_LOCAL" != "$SOFTSIM_TREE" ]; then
         || echo -e "  ${YELLOW}⚠${NC} softSIM : copie locale incomplete" >&2
 fi
 
-# COMP128v1 pour la SIM (Ki du HLR) : lib/comp128.rb + patch de simos_server.rb.
-# Le patch n est applique qu une fois (un arbre local deja patche le garde).
+# COMP128v1 for the SIM (HLR Ki): lib/comp128.rb + patches of simos_server.rb.
+# Each patch is applied only once (an already patched local tree keeps it).
 if [ -d "$SOFTSIM_TREE/src" ] && [ -f "$DIR/tools/softsim/comp128.rb" ]; then
     install -Dm644 "$DIR/tools/softsim/comp128.rb" "$SOFTSIM_TREE/src/lib/comp128.rb"
-    # [2026-10-14] TOUS les patches de tools/softsim (0001 COMP128v1, 0002 client
-    # suivant, 0003 journal horodate, 0004 deconnexion pcsc idempotente), comme
-    # tools/osmo-sim-install.sh : avant, seul le 0001 partait dans l ISO.
+    # ALL patches of tools/softsim (0001 COMP128v1, 0002 next client, 0003
+    # timestamped log, 0004 idempotent pcsc disconnect), as tools/osmo-sim-install.sh does.
     for _sp in "$DIR"/tools/softsim/*.patch; do
         [ -f "$_sp" ] || continue
         if git -C "$SOFTSIM_TREE" apply --check -R "$_sp" 2>/dev/null; then
@@ -63,7 +66,7 @@ if [ -d "$SOFTSIM_TREE/src" ] && [ -f "$DIR/tools/softsim/comp128.rb" ]; then
         fi
     done
     unset _sp
-    # SIM de l abonne du HLR (IMSI 001010001000001) : le Ki vient de SOFTSIM_KI
+    # SIM of the HLR subscriber (IMSI 001010001000001): the Ki comes from SOFTSIM_KI
     if python3 "$DIR/tools/softsim/make_sim_op1.py" "$SOFTSIM_TREE/src/sim.xml" \
             "$SOFTSIM_TREE/src/sim-op1.xml" --imsi "${OSMO_SIM_IMSI:-001010001000001}" >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} softSIM : sim-op1.xml (IMSI ${OSMO_SIM_IMSI:-001010001000001})"
@@ -72,7 +75,7 @@ if [ -d "$SOFTSIM_TREE/src" ] && [ -f "$DIR/tools/softsim/comp128.rb" ]; then
     fi
 fi
 
-# Shim Ruby 3.2+ : depuis le depot de construction
+# Ruby 3.2+ shim: from the build repo
 if [ -f "$DIR/tools/softsim/ruby_compat.rb" ]; then
     install -Dm644 "$DIR/tools/softsim/ruby_compat.rb" "$ROOTFS/usr/local/share/softsim/ruby_compat.rb"
     echo -e "  ${GREEN}✓${NC} shim Ruby : /usr/local/share/softsim/ruby_compat.rb"

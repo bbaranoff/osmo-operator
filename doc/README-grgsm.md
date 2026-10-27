@@ -1,13 +1,13 @@
 # osmo-operator — the gr-gsm layer 1
 
 `--grgsm` runs the handset with gr-gsm as layer 1. This chain works end to
-end: camping, location update, authentication, A5/1, SMS and voice calls. Use
-it to get work done. To study the real DSP instead, see [README-dsp](README-dsp.md).
+end: camping, location update, authentication, A5/1, SMS and voice calls. To
+study the real DSP instead, see [README-dsp](README-dsp.md).
 
 ← [README](../README.md) · Details: [wiki/Installer-grgsm_exe](../wiki/Installer-grgsm_exe.md), [wiki/Installer-qosmo](../wiki/Installer-qosmo.md), [wiki/Lancer-a-la-main](../wiki/Lancer-a-la-main.md), [`pont/README.md`](../pont/README.md)
 
 ```bash
-./start-native.sh --grgsm
+./start-native.sh --grgsm      # DSP_MODE=0 in the environment is equivalent
 ```
 
 ## The two layer-1 chains
@@ -15,31 +15,31 @@ it to get work done. To study the real DSP instead, see [README-dsp](README-dsp.
 Both chains run the same core network, the same BTS and the same `mobile`. They
 differ in **who demodulates the air interface**.
 
-| | **`--grgsm`** | **`--dsp`** (default since 2026-10-01) |
+| | **`--grgsm`** | **`--dsp`** (default) |
 |---|---|---|
 | Layer 1 | gr-gsm inside QEMU + `grgsm_exe` bridge | real TI mask-ROM C54x, **outside** QEMU |
 | QEMU's job | ARM7 + gr-gsm layer 1 | ARM7 only (`CALYPSO_DSP_EXTERN=1`) |
 | Bridge | `pont/pont.py` | `pont/pont_dsp.py` |
-| Mobile VTY | 4247 | 4347 (4247 on the 2026-10-16 reference run) |
+| Mobile VTY | 4247 | 4347 |
 
 ## One QEMU tree, two layer 1s
 
-Since 2026-09-25 there is a **single QEMU tree**. The layer 1 is a `configure`
-option, not a separate repository.
+There is a **single QEMU tree**. The layer 1 is a `configure` option, not a
+separate repository.
 
 ```mermaid
 flowchart TB
     Q["qosmO — QEMU fork, -M calypso<br/>ARM7TDMI + platform, run.sh, run_modules/"]
     Q -->|--enable-l1-grgsm| G["layer 1: gr-gsm"]
     Q -->|--enable-l1-dsp| D["layer 1: c54x (external)"]
-    GE["grgsm_exE<br/>gr-gsm layer 1 outside QEMU, 118 KB"] -.compiles qosmo sources.-> Q
+    GE["grgsm_exE<br/>gr-gsm layer 1 outside QEMU"] -.compiles qosmo sources.-> Q
     CE["c54x_exe<br/>TMS320C54x on the TI mask ROM"] -.compiles qosmo sources.-> Q
 ```
 
 | tree | what it is |
 |---|---|
 | [`/opt/GSM/qosmo`](https://github.com/bbaranoff/qosmO) | the QEMU fork |
-| [`/opt/GSM/grgsm_exe`](https://github.com/bbaranoff/grgsm_exE) | the gr-gsm layer 1 outside QEMU, 118 KB against the 93 MB `qemu-system-arm` that normally hosts it |
+| [`/opt/GSM/grgsm_exe`](https://github.com/bbaranoff/grgsm_exE) | the gr-gsm layer 1 as a small standalone binary outside QEMU |
 | [`/opt/GSM/c54x_exe`](https://github.com/bbaranoff/c54x_exe) | the DSP, see [README-dsp](README-dsp.md) |
 
 `qemu-system-arm -M help` names the layer 1 actually linked in:
@@ -102,8 +102,9 @@ QEMU monitor: `socat - unix-connect:/tmp/qemu-calypso-mon.sock`.
 once, when translated). `ASSEMBLY_LOGS_FLAGS=in_asm,exec,nochain` also logs every
 execution: the ARM becomes ~150 times slower. The bridge clock follows the DSP
 down to `PONT_HORLOGE_MAX` times real time (16 with `ASSEMBLY_LOGS=1`, 4
-otherwise; the trace goes to `/var/tmp/c54x-pont`), but the wall-clock timers of mobile and of the core network still
-run, so use that only to chase the firmware.
+otherwise; the trace goes to `/var/tmp/c54x-pont`), but the wall-clock timers
+of mobile and of the core network still run, so use that only to chase the
+firmware.
 
 Test it: `cd /opt/GSM/tests && ./banc-max.sh --grgsm --restart`
 ([README-tests](README-tests.md)).

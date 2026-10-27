@@ -1,36 +1,35 @@
 #!/bin/bash
-# global_check.sh - Verification complete de tous les composants Osmocom
+# global_check.sh - Full health check of every Osmocom component
 #
-# Verifie pour chaque operateur :
-#   - STP (4239) : ASP, AS, routes
-#   - HLR (4258) : connexions GSUP, abonnes
-#   - MSC (4254) : ASP, SCCP, subscribers
-#   - BSC (4242) : ASP, SCCP, BTS, OML/RSL
-#   - BTS (4241) : etat des transceivers, LCHAN
-#   - PCU (4240) : BTS, TBF, MS (si GPRS actif)
-#   - SGSN (4245) : MM context, PDP context (si GPRS)
-#   - GGSN (4260) : PDP context, APN (si GPRS)
-#   - MGW (4243) : endpoints MGCP
-#   - SIP connector (4255) : etat (si present)
-#   - Services : SMS relay, MNCC socket, Asterisk
+# Checks, for each operator:
+#   - STP (4239): ASP, AS, routes
+#   - HLR (4258): GSUP connections, subscribers
+#   - MSC (4254): ASP, SCCP, subscribers
+#   - BSC (4242): ASP, SCCP, BTS, OML/RSL
+#   - BTS (4241): transceiver state, LCHAN
+#   - PCU (4240): BTS, TBF, MS (if GPRS is enabled)
+#   - SGSN (4245): MM context, PDP context (if GPRS)
+#   - GGSN (4260): PDP context, APN (if GPRS)
+#   - MGW (4243): MGCP endpoints
+#   - SIP connector (4255): state (if present)
+#   - Services: SMS relay, MNCC socket, Asterisk
 #
-# DOUBLE MODE - docker ou natif
-#   docker : chaque operateur est un conteneur osmo-operator-N ; on l'interroge
-#            par "docker exec" ; l'inter-STP est le conteneur osmo-inter-stp.
-#   natif  : ISO, VM ou machine nue ; un seul operateur, les demons tournent
-#            ici, les VTY sont sur 127.0.0.1 (memes ports), les configs dans
-#            /etc/osmocom.
-# Le mode est DETECTE (checks/_mode.sh) et affiche en tete de sortie : un
-# diagnostic qui ne dit pas dans quel monde il a regarde est inexploitable.
-# --docker / --native forcent, quand la detection ne peut pas trancher (hote
-# qui a docker installe mais fait tourner le lab en natif, par exemple).
+# DUAL MODE - docker or native
+#   docker: each operator is an osmo-operator-N container queried through
+#           "docker exec"; the inter-STP is the osmo-inter-stp container.
+#   native: ISO, VM or bare machine; a single operator, the daemons run here,
+#           VTYs on 127.0.0.1 (same ports), configs in /etc/osmocom.
+# The mode is DETECTED (checks/_mode.sh) and printed at the top of the output.
+# --docker / --native force it when detection cannot decide (e.g. a host with
+# docker installed that runs the lab natively).
 #
-# Usage :
-#   sudo ./global_check.sh [--verbose] [--quick] [--op=N] [--docker|--native]
+# Usage:
+#   sudo ./checks/global_check.sh [--verbose] [--quick] [--op=N] [--docker|--native]
+# Environment: OSMO_MODE=docker|native also forces the mode.
 
 set -u
 
-# ── Couleurs ──────────────────────────────────────────────────────────────────
+# ── Colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -38,11 +37,10 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# ── Bibliotheque de mode (docker | natif) ─────────────────────────────────────
-# Chemin RELATIF au script : le depot vit en /home/.../osmo-operator pendant le
-# developpement et en /opt/GSM/osmo-operator sur l'ISO ; un chemin absolu casserait
-# l'un des deux. Le second candidat couvre le cas d'un appel par lien
-# symbolique, ou dirname ne pointe pas sur checks/.
+# ── Mode library (docker | native) ────────────────────────────────────────────
+# Looked up RELATIVE to the script: the repo lives at different roots in
+# development and on the ISO. The second candidate covers a call through a
+# symlink, where dirname does not point to checks/.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
@@ -55,8 +53,8 @@ QUICK=0
 SPECIFIC_OP=""
 MODE_FORCED=0
 
-# OSMO_MODE pose dans l'environnement est deja une forme de forcage
-# ("OSMO_MODE=native ./checks/global_check.sh") : on le signale comme tel.
+# OSMO_MODE set in the environment is already a forced mode
+# ("OSMO_MODE=native ./checks/global_check.sh"): report it as such.
 case "${OSMO_MODE:-}" in docker|native) MODE_FORCED=1 ;; esac
 
 for arg in "$@"; do
@@ -64,8 +62,8 @@ for arg in "$@"; do
         --verbose|-v) VERBOSE=1 ;;
         --quick|-q)   QUICK=1 ;;
         --op=*)       SPECIFIC_OP="${arg#*=}" ;;
-        # osmo_mode_force rend 2 si l'argument n'est pas un mode : ici il en est
-        # toujours un, le "|| true" ne sert qu'a survivre a un futur set -e.
+        # osmo_mode_force returns 2 when the argument is not a mode; it always
+        # is one here, "|| true" only guards against a future set -e.
         --docker|--native|--mode=*) osmo_mode_force "$arg" && MODE_FORCED=1 || true ;;
     esac
 done
@@ -94,12 +92,11 @@ section() {
     echo -e "\n  ${CYAN}${BOLD}$*${NC}"
 }
 
-# ── Fonction VTY ──────────────────────────────────────────────────────────────
-# Meme signature qu'avant - premier argument : l'ETIQUETTE du noeud
-# (osmo-operator-N), que osmo_vty traduit en "docker exec" ou en execution
-# locale selon le mode. Les temporisations reproduisent a l'identique celles de
-# l'ancienne implementation (0.5 / 2 / nc -q1) : les changer changerait la
-# QUANTITE de sortie capturee, donc les "grep -c" qui la comptent plus bas.
+# ── VTY function ──────────────────────────────────────────────────────────────
+# First argument: the node LABEL (osmo-operator-N), which osmo_vty maps to
+# "docker exec" or local execution depending on the mode. The timings
+# (0.5 / 2 / nc -q1) determine the AMOUNT of output captured, hence the
+# "grep -c" counts below: do not change them.
 vty_cmd() {
     local node="$1"
     local port="$2"
@@ -110,26 +107,24 @@ vty_cmd() {
     raw_output=$(OSMO_VTY_OPEN=0.5 OSMO_VTY_READ="$timeout" OSMO_VTY_Q=1 \
                  osmo_vty "$node" "$port" enable "$cmd" end) || return 1
 
-    # Filtrage identique a l'ancien (motif et ordre des filtres) ; "Free
-    # Software lives" en supplement, comme avant.
+    # Filter banner/prompt lines; "Free Software lives" is dropped as well.
     printf '%s\n' "$raw_output" | osmo_vty_clean 'Free Software lives'
     return 0
 }
 
-# ── Verification rapide de disponibilite VTY ──────────────────────────────────
-# En natif, osmo_vty_up sonde d'abord avec ss (passif, n'ouvre pas de session
-# VTY) et ne retombe sur la connexion TCP que si ss ne voit rien.
+# ── Quick VTY availability check ──────────────────────────────────────────────
+# In native mode osmo_vty_up probes with ss first (passive, opens no VTY
+# session) and falls back to a TCP connection only if ss sees nothing.
 vty_available() {
     osmo_vty_up "$1" "$2"
 }
 
-# ── Detection des operateurs ──────────────────────────────────────────────────
-# docker : les conteneurs osmo-operator-N en cours.
-# natif  : $OSMO_OP_IDS, sinon les netns osmo-opN, sinon N_OPERATORS de
-#          globals.conf, sinon 1 - il n'existe pas d'inventaire en natif.
+# ── Operator detection ────────────────────────────────────────────────────────
+# docker: running osmo-operator-N containers.
+# native: $OSMO_OP_IDS, else the osmo-opN netns, else N_OPERATORS from
+#         globals.conf, else 1 - there is no inventory in native mode.
 if [ -n "$SPECIFIC_OP" ]; then
-    # osmo_op_exists est ANCRE, contrairement a l'ancien "docker ps | grep
-    # osmo-operator-N" : "--op=1" acceptait aussi osmo-operator-10.
+    # osmo_op_exists is ANCHORED: "--op=1" must not match osmo-operator-10.
     if ! osmo_op_exists "$SPECIFIC_OP"; then
         echo -e "${RED}Operateur ${SPECIFIC_OP} non trouve (mode ${MODE})${NC}"
         exit 1
@@ -141,13 +136,12 @@ fi
 
 N_OPS=${#OP_IDS[@]}
 
-# Une ligne de l'encadre, remplie a la largeur exacte (58 colonnes). Le texte
-# passe ici reste en ASCII : sous une locale C, ${#t} compterait les octets
-# d'un caractere accentue et le cadre se decalerait.
+# One line of the header box, padded to exactly 58 columns. The text must be
+# ASCII: under a C locale ${#t} counts the bytes of an accented character and
+# the frame shifts.
 box_line() {
-    # Deux instructions, pas une : dans "local t="$1" pad=$(( ... ${#t} ))"
-    # l'arithmetique est developpee AVANT l'affectation de t, ce qui donne
-    # "variable sans liaison" sous set -u.
+    # Two statements, not one: in 'local t="$1" pad=$(( ... ${#t} ))' the
+    # arithmetic expands BEFORE t is assigned (unbound variable under set -u).
     local t="$1"
     local pad=$(( 58 - 5 - ${#t} ))
     [ "$pad" -lt 0 ] && pad=0
@@ -158,8 +152,8 @@ echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║     Global Health Check - $(date '+%Y-%m-%d %H:%M:%S')            ║${NC}"
 echo -e "${CYAN}║     ${N_OPS} operateur(s) a verifier                              ║${NC}"
-# Le mode fait partie du diagnostic : sans lui, un "service DOWN" ne dit pas
-# s'il a ete cherche dans un conteneur ou sur cette machine.
+# The mode is part of the diagnostic: without it a "service DOWN" does not say
+# whether it was looked for in a container or on this machine.
 if [ "$MODE_FORCED" -eq 1 ]; then
     box_line "mode : ${MODE} (force)"
 else
@@ -173,21 +167,20 @@ fi
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 
 if [ "$N_OPS" -eq 0 ]; then
-    # En natif osmo_ops rend toujours au moins "1" : ce cas est donc celui de
-    # docker sans conteneur en cours. On le dit, plutot que de laisser croire a
-    # une panne des services.
+    # In native mode osmo_ops always returns at least "1": this case is docker
+    # with no running container. Say so instead of suggesting a service outage.
     echo -e "${RED}Aucun operateur trouve (mode ${MODE})${NC}"
     [ "$MODE" = docker ] && echo -e "     ${CYAN}aucun conteneur osmo-operator-N en cours - sudo ./launch/start-docker.sh${NC}"
     exit 1
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Pour chaque operateur
+# For each operator
 # ══════════════════════════════════════════════════════════════════════════════
 for op_id in "${OP_IDS[@]}"; do
-    # osmo_node rend "osmo-operator-N" dans les DEUX modes : en docker c'est
-    # le nom du conteneur, en natif un nom d'affichage. La banniere et les
-    # champs "container=" que relit operator_summary.sh sont preserves.
+    # osmo_node returns "osmo-operator-N" in BOTH modes: the container name in
+    # docker, a display label in native. The banner and the "container=" fields
+    # read back by operator_summary.sh rely on it.
     container="$(osmo_node "$op_id")"
     banner "OPERATEUR ${op_id} (${container})"
 
@@ -199,7 +192,7 @@ for op_id in "${OP_IDS[@]}"; do
     if ! vty_available "$container" 4239; then
         fail "STP VTY (4239) inaccessible - service DOWN"
     else
-        # ASP locaux
+        # local ASPs
         asp_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 asp")
         n_asp=$(echo "$asp_out" | grep -c 'ASP_ACTIVE' || true)
         
@@ -211,7 +204,7 @@ for op_id in "${OP_IDS[@]}"; do
             fail "ASP actifs : aucun"
         fi
 
-        # AS locaux
+        # local AS
         as_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 as all")
         n_as=$(echo "$as_out" | grep -c 'AS_ACTIVE' || true)
         
@@ -221,7 +214,7 @@ for op_id in "${OP_IDS[@]}"; do
             warn "AS actifs : ${n_as}"
         fi
 
-        # Routes (pas de PROHIB)
+        # Routes (no PROHIB)
         route_out=$(vty_cmd "$container" 4239 "show cs7 instance 0 route")
         n_prohib=$(echo "$route_out" | grep -ciE 'prohib' || true)
         
@@ -231,12 +224,11 @@ for op_id in "${OP_IDS[@]}"; do
             fail "Routes : ${n_prohib} PROHIB detectes"
         fi
 
-        # Route par defaut vers inter-STP.
-        # L'inter-STP est un conteneur en docker (osmo-inter-stp, 172.20.0.10).
-        # En natif il n'existe que si CETTE machine tient ce role, ou s'il est
-        # sur une autre machine du WAN : dans ce cas l'absence de route
-        # catch-all n'est pas une anomalie, c'est la topologie. On l'ignore
-        # explicitement au lieu de fabriquer un avertissement.
+        # Default route to the inter-STP.
+        # In docker the inter-STP is a container (osmo-inter-stp, 172.20.0.10).
+        # In native mode it exists only if THIS machine holds that role, or on
+        # another WAN machine: then a missing catch-all route is topology, not
+        # an anomaly, and is skipped explicitly.
         has_default=$(echo "$route_out" | grep -cE '0\.0\.0/0.*avail' || true)
         if [ "$has_default" -gt 0 ]; then
             ok "Route par defaut → inter-STP : presente"
@@ -255,7 +247,7 @@ for op_id in "${OP_IDS[@]}"; do
     if ! vty_available "$container" 4258; then
         fail "HLR VTY (4258) inaccessible - service DOWN"
     else
-        # Connexions GSUP
+        # GSUP connections
         gsup_out=$(vty_cmd "$container" 4258 "show gsup-connections")
         vlr_conn=$(echo "$gsup_out" | grep -c "VLR" || true)
         smsc_conn=$(echo "$gsup_out" | grep -c "SMSC" || true)
@@ -263,7 +255,7 @@ for op_id in "${OP_IDS[@]}"; do
         [ "$vlr_conn" -gt 0 ] && ok "GSUP : VLR connecte" || fail "GSUP : VLR absent"
         [ "$smsc_conn" -gt 0 ] && ok "GSUP : SMSC connecte" || warn "GSUP : SMSC absent"
 
-        # Nombre d'abonnes
+        # Subscriber count
         sub_out=$(vty_cmd "$container" 4258 "show subscriber count")
         sub_count=$(echo "$sub_out" | grep -oE '[0-9]+' | head -1)
         info "Abonnes dans HLR : ${sub_count:-0}"
@@ -277,7 +269,7 @@ for op_id in "${OP_IDS[@]}"; do
     if ! vty_available "$container" 4254; then
         fail "MSC VTY (4254) inaccessible - service DOWN"
     else
-        # ASP vers STP
+        # ASP to STP
         msc_asp=$(vty_cmd "$container" 4254 "show cs7 instance 0 asp")
         msc_active=$(echo "$msc_asp" | grep -c 'ASP_ACTIVE' || true)
         [ "$msc_active" -gt 0 ] && ok "MSC→STP : ASP_ACTIVE" || fail "MSC→STP : pas de ASP actif"
@@ -290,7 +282,7 @@ for op_id in "${OP_IDS[@]}"; do
             fail "SCCP SSN 254 absent"
         fi
 
-        # Subscribers VLR
+        # VLR subscribers
         vlr_out=$(vty_cmd "$container" 4254 "show subscriber count")
         vlr_count=$(echo "$vlr_out" | grep -oE '[0-9]+' | head -1 || echo "0")
         info "Subscribers dans VLR : ${vlr_count}"
@@ -304,7 +296,7 @@ for op_id in "${OP_IDS[@]}"; do
     if ! vty_available "$container" 4242; then
         fail "BSC VTY (4242) inaccessible - service DOWN"
     else
-        # ASP vers STP
+        # ASP to STP
         bsc_asp=$(vty_cmd "$container" 4242 "show cs7 instance 0 asp")
         bsc_active=$(echo "$bsc_asp" | grep -c 'ASP_ACTIVE' || true)
         [ "$bsc_active" -gt 0 ] && ok "BSC→STP : ASP_ACTIVE" || fail "BSC→STP : pas de ASP actif"
@@ -313,7 +305,7 @@ for op_id in "${OP_IDS[@]}"; do
         bsc_sccp=$(vty_cmd "$container" 4242 "show cs7 instance 0 sccp users")
         echo "$bsc_sccp" | grep -qE 'SSN 254' && ok "SCCP SSN 254 (BSC) enregistre" || fail "SCCP SSN 254 absent"
 
-        # BTS 0 etat
+        # BTS 0 state
         bts_out=$(vty_cmd "$container" 4242 "show bts 0")
         
         if echo "$bts_out" | grep -qE "Oper 'Enabled'.*Avail 'OK'"; then
@@ -324,18 +316,18 @@ for op_id in "${OP_IDS[@]}"; do
             fail "BTS 0 : pas Enabled"
         fi
 
-        # OML dans show bts 0
+        # OML in show bts 0
         oml_up=$(echo "$bts_out" | grep -c 'OML Link state: connected' || true)
         [ "$oml_up" -gt 0 ] && ok "OML : connecte" || fail "OML : deconnecte"
 
-        # RSL : verifier dans show trx 0 0 (pas dans show bts 0)
+        # RSL: check in show trx 0 0 (not in show bts 0)
         trx_out=$(vty_cmd "$container" 4242 "show trx 0 0")
         rsl_up=$(echo "$trx_out" | grep -c 'RSL State: connected' || true)
         
         if [ "$rsl_up" -gt 0 ]; then
             ok "RSL : connecte (TRX 0)"
         else
-            # Fallback : verifier si c'est mentionne ailleurs
+            # Fallback: check whether it is mentioned elsewhere
             rsl_alt=$(echo "$bts_out" | grep -c 'RSL' || true)
             if [ "$rsl_alt" -gt 0 ]; then
                 warn "RSL : statut ambigu (verifier manuellement)"
@@ -344,30 +336,30 @@ for op_id in "${OP_IDS[@]}"; do
             fi
         fi
 
-        # Nombre de BTS
+        # Number of BTS
         n_bts=$(vty_cmd "$container" 4242 "show bts all" | grep -c '^bts' || true)
         info "BTS configurees : ${n_bts}"
     fi
 
     # =========================================================================
-    # 5. BTS (Station de base)
+    # 5. BTS (base station)
     # =========================================================================
     section "BTS (Station de base)"
 
     if ! vty_available "$container" 4242; then
         skip "BSC VTY (4242) inaccessible - impossible de verifier les BTS"
     else
-        # Verifier BTS 0 directement
+        # Check BTS 0 directly
         bts0_out=$(vty_cmd "$container" 4242 "show bts 0")
         
         if [ -z "$bts0_out" ]; then
             fail "Impossible d'obtenir les informations de BTS 0"
         else
-            # Verifier que la BTS existe (presence du nom)
+            # Check that the BTS exists (name present)
             if echo "$bts0_out" | grep -q "BTS 0 is of osmo-bts type"; then
                 ok "BTS 0 : configuree"
                 
-                # Etat operationnel
+                # Operational state
                 if echo "$bts0_out" | grep -q "Oper 'Enabled'.*Avail 'OK'"; then
                     ok "BTS 0 : operationnelle (Enabled/OK)"
                 elif echo "$bts0_out" | grep -q "Oper 'Enabled'"; then
@@ -383,13 +375,15 @@ for op_id in "${OP_IDS[@]}"; do
                     fail "OML : deconnecte"
                 fi
                 
-                # RSL (present dans les statistiques en bas)
+                # RSL (present in the statistics at the bottom)
+                # Known limitation: BASH_REMATCH is never set by grep, so the
+                # second branch prints an empty count (unbound under set -u).
                 if echo "$bts0_out" | grep -q "Number of RSL links connected.* 1"; then
                     ok "RSL : connecte"
                 elif echo "$bts0_out" | grep -q "Number of RSL links connected.* [1-9]"; then
                     ok "RSL : connecte (${BASH_REMATCH[1]})"
                 else
-                    # Verifier via TRX
+                    # Check via TRX
                     trx0_out=$(vty_cmd "$container" 4242 "show trx 0 0" 2>/dev/null)
                     if echo "$trx0_out" | grep -q "RSL State: connected"; then
                         ok "RSL : connecte (TRX 0)"
@@ -406,7 +400,7 @@ for op_id in "${OP_IDS[@]}"; do
                 uptime=$(echo "$bts0_out" | grep "Seconds of uptime" | grep -oE '[0-9]+ s')
                 [ -n "$uptime" ] && info "Uptime : ${uptime}"
                 
-                # Verifier s'il y a d'autres BTS
+                # Check for other BTS
                 n_bts=$(vty_cmd "$container" 4242 "show bts all" | grep -c '^bts' || true)
                 if [ "$n_bts" -gt 1 ]; then
                     ok "BTS multiples : ${n_bts} (BTS 0 OK)"
@@ -494,7 +488,7 @@ for op_id in "${OP_IDS[@]}"; do
         ep_count=$(echo "$ep_out" | grep -c 'Endpoint' || true)
         info "Endpoints MGCP : ${ep_count}"
 
-        # Connexions actives
+        # Active connections
         conn_out=$(vty_cmd "$container" 4243 "show mgcp stats")
         if echo "$conn_out" | grep -qE "active calls.*[1-9]"; then
             ok "MGW : appels actifs"
@@ -512,7 +506,7 @@ for op_id in "${OP_IDS[@]}"; do
         skip "SIP connector VTY (4255) - non disponible"
     else
         ok "SIP connector : accessible"
-        # Pas beaucoup de commandes show utiles dans osmo-sip-connector
+        # osmo-sip-connector has few useful show commands
     fi
 
     # =========================================================================
@@ -520,17 +514,16 @@ for op_id in "${OP_IDS[@]}"; do
     # =========================================================================
     section "Services"
 
-    # MNCC socket - osmo_sock interroge ss AVANT "test -S" : sous PrivateTmp
-    # (unit systemd de l'ISO) le socket existe sans etre visible par test -S, et
-    # un "voix impossible" mensonger en decoulerait.
+    # MNCC socket - osmo_sock queries ss BEFORE "test -S": under PrivateTmp
+    # (ISO systemd unit) the socket exists without being visible to test -S.
     if osmo_sock "$container" /tmp/msc_mncc; then
         ok "MNCC socket present (MSC ↔ SIP connector)"
     else
         fail "MNCC socket absent - voix impossible"
     fi
 
-    # SMS relay - awk sur le port exact, et non "grep -c :7890" qui aurait
-    # aussi accepte 17890.
+    # SMS relay - awk on the exact port, not "grep -c :7890" which would also
+    # match 17890.
     if osmo_port "$container" 7890 tcp; then
         ok "SMS relay : ecoute sur port 7890"
     else
@@ -541,7 +534,7 @@ for op_id in "${OP_IDS[@]}"; do
     if osmo_running "$container" asterisk; then
         ok "Asterisk : en cours d'execution"
 
-        # Verification rapide Asterisk
+        # Quick Asterisk check
         ast_out=$(osmo_ast "$container" "core show channels" || true)
         channels=$(echo "$ast_out" | grep -c "active channels" || true)
         info "Asterisk : ${channels} canaux actifs"
@@ -549,13 +542,13 @@ for op_id in "${OP_IDS[@]}"; do
         warn "Asterisk : non detecte"
     fi
 
-    # Verification des processus cles
+    # Key process check
     section "Processus"
 
-    # En natif, osmo_running essaie systemctl PUIS pgrep -x PUIS pgrep -f : les
-    # demons sont des units sur l'ISO mais des processus detaches quand systemd
-    # est absent, et /proc/PID/comm est tronque a 15 caracteres ("pgrep -x
-    # osmo-sip-connector" ne trouve jamais rien).
+    # In native mode osmo_running tries systemctl, THEN pgrep -x, THEN pgrep -f:
+    # daemons are units on the ISO but detached processes without systemd, and
+    # /proc/PID/comm is truncated to 15 characters ("pgrep -x
+    # osmo-sip-connector" never matches).
     if [ "$MODE" = native ] && [ "$N_OPS" -gt 1 ]; then
         info "natif multi-operateur : ip netns exec n'isole pas les PID, ces etats portent sur la machine"
     fi
@@ -564,7 +557,7 @@ for op_id in "${OP_IDS[@]}"; do
         if osmo_running "$container" "$proc"; then
             ok "$proc : en cours"
         else
-            # Certains processus peuvent ne pas etre presents selon configuration
+            # Some processes may be absent depending on the configuration
             skip "$proc : non trouve"
         fi
     done
@@ -573,7 +566,7 @@ for op_id in "${OP_IDS[@]}"; do
 done
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RESUME GLOBAL
+# GLOBAL SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "$(printf '═%.0s' {1..70})"

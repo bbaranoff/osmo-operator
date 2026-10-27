@@ -1,22 +1,24 @@
 #!/bin/bash
-# iso_modules/71-debs-banc.sh - etape 7c : .deb du banc embarques
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/71-debs-banc.sh - step 7c: bench .debs embedded in the image
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment: ISO_WITH_DEBS=0 (--without-debs) skips this step.
 
-# ── Etape 7c : les paquets .deb du banc, EMBARQUES dans l image ─────────────
-# packaging/build-debs.sh fabrique un .deb par composant (osmo-operator, pont,
-# qemu-calypso, calypso-firmware) depuis les arbres que cette ISO embarque de
-# toute facon. On les range dans /var/cache/osmo-debs : une machine installee
-# depuis l ISO, ou n importe quelle autre, peut alors faire
+# ── Step 7c: the bench .deb packages, EMBEDDED in the image ──────────────────
+# packaging/build-debs.sh builds one .deb per component (osmo-operator, pont,
+# qemu-calypso, calypso-firmware) from the trees this ISO embeds anyway. They
+# are stored in /var/cache/osmo-debs: a machine installed from the ISO, or any
+# other, can then run
 #     dpkg -i /var/cache/osmo-debs/*.deb
-# et obtenir le banc sans Docker ni git. L ISO elle-meme continue de tourner
-# sur les arbres complets (le depot et qosmo avec leur .git : c est un
-# atelier) - les paquets ne les remplacent pas, ils voyagent avec.
-# Non fatal : sans dpkg-deb ou sans qemu construit, l image sort sans eux.
-# --arm : build-debs.sh compile le lanceur C et lit les binaires par ldd - sur
-# l hote ce serait du x86 etiquete arm64. Il tourne DANS le chroot, apres l apt
-# de l etape 8 (82-arm-natif).
+# and get the bench without Docker or git. The ISO itself keeps running on the
+# full trees (the repo and qosmo with their .git) - the packages travel along,
+# they do not replace them.
+# Non-fatal: without dpkg-deb or without a built qemu, the image ships without them.
+# --arm: build-debs.sh compiles the C launcher and reads binaries with ldd - on
+# the host that would be x86 labelled arm64. It runs INSIDE the chroot, after
+# the apt of step 8 (82-arm-natif).
 if [ "${ISO_WITH_DEBS:-1}" = "0" ]; then
     echo -e "  ${CYAN}·${NC} --without-debs : aucun paquet .deb embarque dans l'image"
 elif [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then
@@ -36,7 +38,7 @@ elif [ -x "$DIR/packaging/build-debs.sh" ] && command -v dpkg-deb >/dev/null 2>&
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

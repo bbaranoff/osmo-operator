@@ -2,28 +2,28 @@
 Description=Dechiffrement optionnel de /home (second disque, LUKS)
 Documentation=file:/etc/default/crypthome
 ConditionPathExists=/etc/default/crypthome
-# APRES les systemes de fichiers locaux et udev (le lien /dev/disk/by-uuid
-# doit exister), APRES plymouth (unlock-home le quitte avant de poser la
-# question sur la console - il doit donc etre deja la, pas en train de
-# demarrer), et APRES la mise en place du clavier : la disposition de
-# /etc/default/keyboard doit etre celle qui est chargee quand on tape la phrase.
+# unlock-home.service - optional decryption of /home at boot (runs unlock-home --boot).
+# AFTER local file systems and udev (the /dev/disk/by-uuid link must exist),
+# AFTER plymouth (unlock-home quits it before asking on the console, so it
+# must already be up, not starting), and AFTER keyboard setup: the layout of
+# /etc/default/keyboard must be the one loaded when the passphrase is typed.
 After=local-fs.target systemd-udev-settle.service plymouth-start.service
 After=keyboard-setup.service console-setup.service
 Wants=systemd-udev-settle.service
-# AVANT tout ce qui ouvre une session : GDM ne doit pas demarrer sur un /home
-# vide alors que l'operateur vient de repondre "oui".
+# BEFORE anything that opens a session: GDM must not start on an empty /home
+# when the operator has just answered "yes".
 Before=systemd-user-sessions.service display-manager.service multi-user.target graphical.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/unlock-home --boot
-# La question et la saisie passent par /dev/console (ou, CRYPTHOME_PROMPT=
-# plymouth, par systemd-ask-password), jamais par stdin.
+# The prompt and the input go through /dev/console (or, with CRYPTHOME_PROMPT=
+# plymouth, through systemd-ask-password), never through stdin.
 StandardInput=null
 StandardOutput=journal+console
 StandardError=journal+console
-# Large, mais borne : unlock-home applique deja son propre delai par question.
+# Generous but bounded: unlock-home already applies its own timeout per prompt.
 TimeoutStartSec=600
 
 [Install]

@@ -1,19 +1,18 @@
 #!/bin/bash
-# iso_modules/87-lite.sh - etape 8c : elagage lite du rootfs
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/87-lite.sh - step 8c: lite pruning of the rootfs
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# ── Etape 8c : LITE = la normale MOINS les ateliers, sur le rootfs ──────────
-# [2026-09-03] Plus de Dockerfile.lite ici : on retire du rootfs ce que
-# Dockerfile.lite retirait de l image, avec les memes regles (voir son en-tete
-# pour le pourquoi de chaque exception). Ce qui reste dans /opt/GSM :
-#   qosmo/                l arbre entier, build/ reduit a qemu-system-arm et
-#                         qemu-bundle (QEMU se relocalise par lui)
-#   osmocom-bb/           osmocon (le chargeur) et trx_toolkit (fake_trx.py)
+# ── Step 8c: LITE = the normal image MINUS the build workshops, on the rootfs ─
+# Removes from the rootfs what Dockerfile.lite removes from the image, with the
+# same rules (see its header for each exception). What remains in /opt/GSM:
+#   qosmo/                the whole tree, build/ reduced to qemu-system-arm and
+#                         qemu-bundle (QEMU relocates itself through it)
+#   osmocom-bb/           osmocon (the loader) and trx_toolkit (fake_trx.py)
 #   firmware/ qemu-install/ osmo-operator/ pont/ osmo-egprs-web/ qemu/
-#   c54x_exe/ grgsm_exe/   les deux couches 1 hors QEMU (+ c54x_exe/rom)
-#   *.bin *.py *.txt      ROM DSP, scripts de pont, calypso_dsp.txt
+#   c54x_exe/ grgsm_exe/   the two layer-1 stacks outside QEMU (+ c54x_exe/rom)
+#   *.bin *.py *.txt      DSP ROM, bridge scripts, calypso_dsp.txt
 if [ "$ISO_LITE" = "1" ]; then
     echo -e "${GREEN}[8c/9] Elagage lite : les ateliers de compilation quittent le rootfs...${NC}"
     _G="$ROOTFS/opt/GSM"
@@ -47,7 +46,7 @@ if [ "$ISO_LITE" = "1" ]; then
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would stop everything silently. Always 0 here.
 true

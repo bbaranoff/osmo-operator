@@ -1,11 +1,10 @@
 # osmo-operator — the DSP chain (`--dsp`)
 
-With `--dsp`, the handset's own DSP takes over. A TMS320C54x core is emulated
-outside QEMU ([c54x_exe](https://github.com/bbaranoff/c54x_exe)) and runs the
-mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM). This has been the
-default since 2026-10-01.
+With `--dsp` (the default), the handset's own DSP takes over. A TMS320C54x core
+is emulated outside QEMU ([c54x_exe](https://github.com/bbaranoff/c54x_exe))
+and runs the mask ROM dumped from a real Calypso (PROM0-3, DROM, PDROM).
 
-← [README](../README.md) · Details: [wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md), [wiki/Start-native §8-dsp](../wiki/Start-native.md), [install notebook](../wiki/README-notebook.md), [c54x_exe README](https://github.com/bbaranoff/c54x_exe)
+← [README](../README.md) · Details: [wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md), [wiki/Start-native §8](../wiki/Start-native.md), [install notebook](../wiki/README-notebook.md), [c54x_exe README](https://github.com/bbaranoff/c54x_exe)
 
 ```bash
 ./start-native.sh                         # real C54x mask ROM (default)
@@ -53,31 +52,63 @@ The five steps of `c54x_exe/run.sh`:
 already in use*. `./start-native.sh --stop` tears down the DSP bench too,
 without repeating `--dsp`.
 
-## What the ROM does today
+Instances: `INSTANCE=N` runs a second complete chain next to the first
+(`/dev/shm/calypsoN`, `/tmp/osmocom_l2_N`, `/tmp/c54x-pontN`); the bench
+aliases `banc-mobile` (instance 2, over the air) and `banc-rssi` (instance 4)
+use it. Per-instance settings live in `instances/instance-N.env`.
 
-From the reference run of 2026-10-16
-([`tout-en-un-20261016-164539.qmd`](https://github.com/bbaranoff/tests/blob/main/tout-en-un-20261016-164539.qmd),
-details in [README-tests](README-tests.md)): ladder **27/27**, and on the signal
-path **14 steps by the ROM, 0 by the host**.
+Firmware: `/opt/GSM/firmware/board/compal_e88/layer1.highram.elf` by default
+(`FIRMWARE_ELF=` for another binary, `FIRMWARE_FLASH=` for a flash image such
+as Magnetite, see [magnetite](magnetite.md)). The highram firmware is loaded
+through `loader.compalram.bin`; with GPRS it no longer fits the 64 KiB the
+Compal boot loader accepts, so no compalram variant of `layer1` is built.
+
+## What the ROM does
 
 - Handled by the ROM: FCCH detection, SCH/BSIC, BCCH SI1/2/4, SACCH SI5/6,
   RACH, SDCCH both ways, A5 on the modelled coprocessor, TCH/F downlink
   (Viterbi), FACCH and SACCH uplink, uplink TCH speech, and the ROM's FR codec
-  through the voice serial port (VSP).
-- End to end: camping, location update, SMS MO/MT, USSD, MO/MT calls with A5/1;
-  a 1 kHz tone comes back after 0.54 s at +59.7 dB.
-- Open points: `B_BFI` is still raised on bad frames and FACCH steals (masked
-  by `layer1.highram_patched`), frequency hopping is not handled, and the DSP
-  takes 4.3–4.6 ms of host time per 4.62 ms frame (worst DSP frame 3.37 ms on
-  the reference run).
+  through the voice serial port (VSP, `--vocoder-rom`, default; `--gapk`
+  moves the vocoder to the host).
+- End to end: camping, location update, SMS MO/MT, USSD, MO/MT calls with
+  A5/1, echo test 600.
+- Real time: the DSP has to process one 4.62 ms TDMA frame within the frame;
+  the bridge clock follows the DSP (`PONT_HORLOGE_MAX`, see
+  [README-grgsm](README-grgsm.md#diagnosing-the-radio-side)).
+
+The ladder in [README-tests](README-tests.md) checks every step of this list
+on a running bench.
 
 ## GPRS / EGPRS on the DSP bench
 
-`scripts/egprs-dsp.sh` (and `osmo-egprs-dsp.service`) runs the EGPRS workflow
-next to the DSP mobile. The calypso layer1 firmware has no PDCH support
-(`L1CTL_GPRS_*`), so the **DSP gate is closed**: the GPRS modem runs on a
-virtual layer 1 (`virtphy`) in the same PLMN/LAC/RA, while the DSP mobile camps
-on BTS 0.
+`scripts/egprs-dsp.sh` (and `services/osmo-egprs-dsp.service`) brings up the
+EGPRS workflow next to the DSP mobile:
+
+```bash
+scripts/egprs-dsp.sh [start|stop|status|check] [--l1 auto|virtphy|dsp] [--no-banc] [--regen-gprs] [--all]
+```
+
+| step | what it does |
+|---|---|
+| preflight | binaries, the 7 DSP ROM files, `c54x_exe`, the osmocom-bb `modem`; checks whether the `layer1` firmware handles `L1CTL_GPRS_*` (PDCH) |
+| configs | `/etc/osmocom`: the virtual EGPRS BTS 2 in `osmo-bsc.cfg` (`configs/gprs/osmo-bsc-bts2-egprs.frag`, re-inserted after each `--regen`), `osmo-bts-virtual-gprs.cfg`, `osmo-pcu-gprs.cfg`, `modem-gprs.cfg` |
+| banc | `osmo-banc.service` (`start-native.sh --dsp`) |
+| abonne | the modem's IMSI in the HLR (idempotent) |
+| cellule | `osmo-bts-virtual` (BTS 2, Um multicast on `lo`) + `osmo-pcu` as transient systemd units |
+| modem | GPRS attach (GMM) + PDP context (SM), tun in the `msgprs` netns; verified at the SGSN and by a ping from the netns |
+
+Layer 1 of the modem (`--l1`, or `EGPRS_L1`): `auto` picks `dsp` when the
+firmware source handles `L1CTL_GPRS_*` and `virtphy` otherwise. With `dsp` the
+`modem` replaces `mobile` on the DSP bench's L1CTL socket (`/tmp/osmocom_l2`),
+the GPRS firmware `layer1.highram.gprs.elf` and `UL_RAW=1` are written to
+`/etc/default/osmo-banc` (restart `osmo-banc` to load them), and the bench must
+be running in DSP mode (`c54x_exe --arm` present). With `virtphy` the modem
+runs on a virtual layer 1 in the same PLMN/LAC/RA while the DSP mobile camps on
+BTS 0. The Calypso ROM modulates GMSK only (CS-1..4): 8-PSK (MCS-5..9) stays
+on the virtphy modem.
+
+Logs: `journalctl -u osmo-egprs-dsp`, `-u osmo-modem-gprs`, `-u osmo-pcu-gprs`,
+`-u osmo-bts-virtual-gprs`, `-u osmo-virtphy-gprs`.
 
 ## Building
 
@@ -85,6 +116,17 @@ on BTS 0.
 files in `rom/calypso_dsp.*.bin`. Step by step:
 [wiki/Installer-c54x_exe](../wiki/Installer-c54x_exe.md). The
 [notebook](../wiki/installer-osmo-jusquau-dsp.ipynb) replays the whole Dockerfile
-natively, from apt to a call on the DSP.
+natively, from apt to a call on the DSP. The GPRS `layer1` firmware is rebuilt
+with `sudo ./addition.sh --calypso-fw` (gnuarm toolchain required).
 
 Test it: `cd /opt/GSM/tests && ./banc-max.sh --dsp --restart`.
+
+## Known issues
+
+- TCH/F downlink: `B_BFI` is raised on really bad frames and on FACCH steals;
+  the audio is handled by the codec's error concealment.
+- Frequency hopping is not handled.
+- The emulated DSP uses most of the 4.62 ms frame budget on the host; a slow
+  host loses real time (the bridge then slows the clock, see `PONT_HORLOGE_MAX`).
+- PDCH on the C54x depends on the GPRS `layer1` firmware being loaded by the
+  bench; `egprs-dsp.sh --l1 virtphy` is the path that does not depend on it.

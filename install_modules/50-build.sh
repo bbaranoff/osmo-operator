@@ -1,4 +1,4 @@
-# 50-build - compilation. L'etape longue : d'ou le timeout large et le journal detaille.
+# 50-build - compilation. The long step: hence the large timeout and the detailed log.
 INST_REGISTER build "Compilation des sources"
 INST_DEPS[build]="deps sources"
 INST_TIMEOUT[build]=5400
@@ -18,15 +18,15 @@ inst_build_run() {
                                    inst_fail "echec de compilation : $d"; return $INST_RC_FAIL; }
     done
 
-    # toast : codec GSM 06.10 (quut.com). libgsm1 fournit la lib, pas le binaire.
-    # Sources sous $GSM_ROOT, binaire dans /usr/local/bin. Optionnel : un echec
-    # (reseau, quut.com injoignable) n arrete pas l installation.
+    # toast: GSM 06.10 codec (quut.com). libgsm1 ships the library, not the
+    # binary. Sources under $GSM_ROOT, binary in /usr/local/bin. Optional: a
+    # failure (network, quut.com unreachable) does not stop the installation.
     inst_say "=== toast (codec GSM 06.10) ==="
     if command -v toast >/dev/null 2>&1; then
         inst_say "toast deja present ($(command -v toast))"
     else
         local gver=gsm-1.0.24
-        local gdir=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
+        local gdir=gsm-1.0-pl24   # the tarball extracts UNDER this name
         local gurl="https://www.quut.com/gsm/${gver}.tar.gz"
         if ( cd "$GSM_ROOT" \
              && wget -qO "${gver}.tar.gz" "$gurl" \
@@ -44,10 +44,10 @@ inst_build_run() {
             inst_hint "toast non compile (reseau ou quut.com injoignable) - suite sans lui"
         fi
     fi
-    # ── La 4G : srsRAN (ZeroMQ) et Open5GS dans /opt/LTE ──────────────────
-    # [2026-09-08] Le meme script que le Dockerfile et addition.sh
-    # (tools/osmo-lte-install.sh) : .deb du cache s ils sont la, compilation
-    # sinon. Non fatal : la 2G n en depend pas.
+    # ── 4G: srsRAN (ZeroMQ) and Open5GS in /opt/LTE ──────────────────────
+    # Same script as the Dockerfile and addition.sh (tools/osmo-lte-install.sh):
+    # cached .deb packages if present, compilation otherwise. Non-fatal: 2G
+    # does not depend on it.
     inst_say "=== la 4G (srsRAN ZeroMQ + Open5GS) ==="
     if [ -f "$INST_TREE/tools/osmo-lte-install.sh" ]; then
         OSMO_REPO="$INST_TREE" bash "$INST_TREE/tools/osmo-lte-install.sh" --all \

@@ -1,14 +1,13 @@
 #!/usr/bin/python3
-# crypthome-fond - peint une image sur le framebuffer pendant la question LUKS du demarrage.
+# crypthome-fond - paints an image on the framebuffer during the LUKS prompt at boot.
 #
-#   crypthome-fond [IMAGE]     (defaut : CRYPTHOME_IMAGE de /etc/default/crypthome)
+#   crypthome-fond [IMAGE]     (default: CRYPTHOME_IMAGE from /etc/default/crypthome)
 #
-# [2026-10-24] unlock-home quitte plymouth et lit la phrase sur la console texte (le clavier de plymouth
-# est mort sur certains portables, voir unlock-home). La console texte, c est fbcon : un framebuffer
-# (/dev/fb0) sur lequel le noyau dessine les caracteres. On y peint l image, assombrie dans le bas ;
-# l invite est ensuite posee sur la DERNIERE ligne, ou fbcon ne repeint que les cases ecrites. La saisie
-# reste celle du tty : l image n est qu un decor, et si elle echoue (pas de /dev/fb0, pas de Pillow,
-# format de pixel inconnu) on sort 0 sans rien dire de plus qu une ligne au journal.
+# unlock-home quits plymouth and reads the passphrase on the text console, i.e. fbcon: a framebuffer
+# (/dev/fb0) on which the kernel draws the characters. The image is painted there, darkened at the
+# bottom; the prompt is then placed on the LAST line, where fbcon repaints only the cells it writes.
+# Input stays on the tty: the image is only decoration, and if it fails (no /dev/fb0, no Pillow,
+# unknown pixel format) the script exits 0 with a single line on stderr.
 import os
 import sys
 
@@ -47,16 +46,16 @@ def main():
         img = Image.open(chemin).convert("RGB")
     except OSError as e:
         return "image illisible (%s)" % e
-    # couvrir l ecran sans deformer : mise a l echelle puis recadrage au centre
+    # cover the screen without distortion: scale, then crop at the centre
     k = max(w / img.width, h / img.height)
     img = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
     x0, y0 = (img.width - w) // 2, (img.height - h) // 2
     img = img.crop((x0, y0, x0 + w, y0 + h))
-    # bande sombre en bas : l invite blanche de la console y reste lisible
+    # dark band at the bottom: the white console prompt stays readable on it
     bande = Image.new("L", (w, h), 0)
     ImageDraw.Draw(bande).rectangle((0, h - h // 7, w, h), fill=200)
     img = Image.composite(Image.new("RGB", (w, h), (0, 0, 0)), img, bande)
-    # XRGB8888 petit-boutiste (B, G, R, X), le format de fbcon sur simpledrm / nvidia-drm / i915
+    # little-endian XRGB8888 (B, G, R, X): the fbcon format on simpledrm / nvidia-drm / i915
     brut = img.tobytes("raw", "BGRX")
     try:
         with open("/dev/fb0", "r+b") as fb:

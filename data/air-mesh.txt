@@ -1,34 +1,33 @@
-# air-mesh.txt - QUI ENTEND QUI, sur le maillage de bursts.
+# air-mesh.txt - who hears whom on the burst mesh (read by pont/airmesh.py).
 #
-# Une arete par ligne :
-#     <noeud a> <noeud b> <attenuation dB> [uni]
+# One edge per line:
+#     <node a> <node b> <attenuation dB> [uni]
 #
-# Sans le mot "uni" a la fin, l'arete vaut DANS LES DEUX SENS. Avec, elle ne
-# vaut que de a vers b - utile pour un noeud qui emet fort et recoit mal, ou
-# pour forcer un handover a sens unique.
+# Without the trailing word "uni" the edge applies in BOTH directions. With it,
+# it only applies from a to b: useful for a node that transmits strongly but
+# receives poorly, or to force a one-way handover.
 #
-# UNE PAIRE ABSENTE DE CE FICHIER NE S'ENTEND PAS. C'est ce qui fait un
-# maillage et non un bus : sans graphe, chaque mobile entendrait toutes les
-# BTS du banc a pleine puissance, il n'y aurait plus de cellule, plus de
-# reselection, plus rien a demontrer.
+# A PAIR ABSENT FROM THIS FILE CANNOT HEAR EACH OTHER. This is what makes a
+# mesh rather than a bus: without the graph every mobile would hear every BTS
+# of the bench at full power and there would be no cell, no reselection,
+# nothing to demonstrate.
 #
-# ORDRE DE GRANDEUR. Le RSSI annonce par la BTS tourne autour de -60 dBm ; le
-# plancher d'airmesh est a -110 dBm par defaut. Donc :
-#     10-25 dB   deux cellules voisines, les deux lisibles - reselection
-#     30-45 dB   cellule lointaine, lisible mais moins bonne que la voisine
-#     50 dB et + a la limite : de quoi voir un mobile hesiter puis decrocher
-#     au-dela de 50, ou pas de ligne du tout : hors de portee
+# Orders of magnitude: the RSSI announced by the BTS is around -60 dBm and the
+# airmesh floor is -110 dBm by default, so:
+#     10-25 dB    two neighbouring cells, both readable - reselection
+#     30-45 dB    distant cell, readable but worse than the neighbour
+#     ~50 dB      at the limit: a mobile hesitates, then drops
+#     > 50 dB, or no line at all: out of range
 #
-# Ce fichier n'est PAS relu a chaud : airmesh le charge au demarrage. Le
-# modifier demande de relancer airmesh, pas toute la pile.
+# Constraint: this file is NOT reloaded at runtime; airmesh loads it at startup.
+# Changing it requires restarting airmesh, not the whole stack.
 
-# ── Le banc courant : trois noeuds ──────────────────────────────────────────
-# 1 et 2 sont deux conteneurs sur la meme machine, donc deux cellules
-# adjacentes. 3 est la VM : plus loin, lisible depuis 2 seulement.
+# -- Current bench: three nodes ---------------------------------------------
+# 1 and 2 are two containers on the same machine, hence two adjacent cells.
+# 3 is the VM: further away, readable from 2 only.
 1 2 20
 2 3 35
 
-# 1 et 3 ne s'entendent pas : la ligne n'existe pas, et c'est delibere.
-# Un mobile du noeud 1 qui veut joindre le noeud 3 doit passer par la cellule
-# du noeud 2 - c'est le seul moyen d'avoir un vrai chemin a deux sauts sur un
-# banc de trois machines.
+# 1 and 3 do not hear each other: the line does not exist, deliberately. A
+# mobile on node 1 that wants to reach node 3 must go through the cell of
+# node 2 - the only way to get a real two-hop path on a three-machine bench.
