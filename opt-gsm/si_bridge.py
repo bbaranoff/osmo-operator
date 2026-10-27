@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
-# Bridge : grgsm_decode -v (DECODE le vrai SI du flux continu) -> parse les
-# lignes SI (PD=0x06) -> GSMTAP 16B + L2 -> 4730 (shunt feed_si -> DATA_IND ->
-# mobile). Le SCH reel (patch grgsm) -> UDP 4731 (feed_sb).
+# Bridge: grgsm_decode -v (DECODES the real SI of the continuous stream) ->
+# parses the SI lines (PD=0x06) -> GSMTAP 16B + L2 -> 4730 (shunt feed_si ->
+# DATA_IND -> mobile). The real SCH (grgsm patch) -> UDP 4731 (feed_sb).
 #
-# GESTION DU FN (corrige le bug "GSMTAP frame_number=0") :
-#   - le FN reel vient des lignes SCHBSIC <bsic> <fn> <toa> (horloge fiable),
-#     ou d'un "FN: <n>" explicite si grgsm -v en imprime un.
-#   - on l'ecrit dans le champ frame_number du GSMTAP envoye a feed_si.
-#   - rappel 51-multiframe BCCH non-combine TS0 DL (FN % 51) :
+# FN HANDLING:
+#   - the real FN comes from the SCHBSIC <bsic> <fn> <toa> lines (reliable
+#     clock), or from an explicit "FN: <n>" if grgsm -v prints one.
+#   - it is written in the frame_number field of the GSMTAP sent to feed_si.
+#   - reminder, 51-multiframe non-combined BCCH TS0 DL (FN % 51):
 #       0,10,20,30,40 = FCCH | 1,11,21,31,41 = SCH | 2-5 = BCCH
 #       6-9,12-19,22-29,32-39,42-49 = CCCH (PCH/AGCH) | 50 = idle
-#     -> 31 = position SCH, 32 = debut d'un bloc CCCH, 51 = longueur multiframe.
+#     -> 31 = SCH position, 32 = start of a CCCH block, 51 = multiframe length.
 import subprocess, socket, struct, re, sys, os, threading, time
 
 ARFCN = int(os.environ.get("CALYPSO_CCCH_ARFCN", "514"))
 CF = sys.argv[1] if len(sys.argv) > 1 else "/tmp/iq_grgsm.fifo"
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-SI = {0x1b:"SI3",0x1a:"SI2",0x1c:"SI4",0x19:"SI1",0x1d:"SI2bis",0x1e:"SI2ter",0x06:"RR"}  # NB: 0x21 = PAGING (pas SI13=0x00)
-# CCCH/AGCH downlink (PORTE 3a) : l'IMM ASSIGN doit etre forwarde au mobile, pas
-# seulement les SI. gr-gsm le decode (06 3f) mais si_bridge ne forwardait que les SI.
+SI = {0x1b:"SI3",0x1a:"SI2",0x1c:"SI4",0x19:"SI1",0x1d:"SI2bis",0x1e:"SI2ter",0x06:"RR"}  # NB: 0x21 = PAGING (not SI13=0x00)
+# CCCH/AGCH downlink (GATE 3a): the IMM ASSIGN must be forwarded to the mobile,
+# not only the SIs. gr-gsm decodes it (06 3f).
 CCCH = {0x3f:"IMM-ASSIGN", 0x39:"IMM-ASSIGN-EXT", 0x3a:"IMM-ASSIGN-REJ"}
-# Paging Request (PCH) : type1=0x21 (== GSM48_MT_RR_PAG_REQ_1, PAS SI13), type2=0x22, type3=0x24.
+# Paging Request (PCH): type1=0x21 (== GSM48_MT_RR_PAG_REQ_1, NOT SI13), type2=0x22, type3=0x24.
 PAGING = {0x21:"PAG-REQ-1", 0x22:"PAG-REQ-2", 0x24:"PAG-REQ-3"}
 GSMTAP_BCCH = 0x01
 GSMTAP_AGCH = 0x04
 GSMTAP_SDCCH4 = 0x07
-GSMTAP_SACCH  = 0x07 | 0x80   # SDCCH/4 + ACCH = SACCH dediee SS0 (SI5/SI6 reels)
+GSMTAP_SACCH  = 0x07 | 0x80   # SDCCH/4 + ACCH = dedicated SACCH SS0 (real SI5/SI6)
 
 def fn51_role(fn):
     m = fn % 51
@@ -37,8 +37,8 @@ def fn51_role(fn):
     return "CCCH"
 
 def gsmtap(fn, chan, l2):
-    # v2, hdr_len=4 (16B), type=UM(1), ts=0, arfcn, signal_dbm=0 (RIEN d'injecte),
-    # snr=0, frame_number=fn (REEL, decode), sub_type=chan, antenna=0, sub_slot=0, res=0
+    # v2, hdr_len=4 (16B), type=UM(1), ts=0, arfcn, signal_dbm=0 (NOTHING injected),
+    # snr=0, frame_number=fn (REAL, decoded), sub_type=chan, antenna=0, sub_slot=0, res=0
     hdr = struct.pack(">BBBBHbbIBBBB", 2, 4, 0x01, 0, ARFCN & 0xffff,
                       0, 0, fn & 0xffffffff, chan, 0, 0, 0)
     return hdr + l2
@@ -47,7 +47,7 @@ n = 0; nsch = 0; nsd = 0; nsa = 0; last_fn = 0; last_sd_fn = -1; last_sa_fn = -1
 
 def handle_line(line):
     global n, nsch, nsd, nsa, last_fn, last_sd_fn, last_sa_fn
-    # --- SCH reel : "SCHBSIC <bsic> <fn> <toa>" -> 4731 + horloge FN ---
+    # --- real SCH: "SCHBSIC <bsic> <fn> <toa>" -> 4731 + FN clock ---
     msch = re.search(r"SCHBSIC\s+(\d+)\s+(\d+)\s+(-?\d+)", line)
     if msch:
         bsic, fn, toa = int(msch.group(1)), int(msch.group(2)), int(msch.group(3))
@@ -58,10 +58,10 @@ def handle_line(line):
             print("[si-bridge] SCH -> 4731 : BSIC=%d (ncc=%d bcc=%d) FN=%d (%%51=%d %s) TOA=%d  #%d"
                   % (bsic,(bsic>>3)&7,bsic&7,fn,fn%51,fn51_role(fn),toa,nsch), flush=True)
         return
-    # --- FN explicite eventuel dans la ligne -v ---
+    # --- optional explicit FN in the -v line ---
     mfn = re.search(r"\bFN[:=]?\s*(\d+)", line)
     if mfn: last_fn = int(mfn.group(1))
-    # --- ligne SI hexa ---
+    # --- SI hex line ---
     lstr = line.strip()
     m = re.search(r":\s+([0-9a-fA-F][0-9a-fA-F ]+)$", lstr)
     if not m: return
@@ -71,9 +71,10 @@ def handle_line(line):
         mline_fn = re.match(r"^\s*(\d+)\b", lstr)
         si_fn = int(mline_fn.group(1)) if mline_fn else last_fn
         L2 = (by[:23] + b"\x2b"*23)[:23]
-        # IMM ASSIGN (AGCH) ET Paging Request (PCH) -> meme chemin AGCH/PCH cote shunt
-        # (feed_agch -> bloc CCCH -> firmware chan_nr=0x90 -> gsm48_rr_rx_pch_agch qui
-        # dispatch IMM-ASS vs PAGING par msg type). SI -> BCCH.
+        # IMM ASSIGN (AGCH) AND Paging Request (PCH) -> same AGCH/PCH path on the
+        # shunt side (feed_agch -> CCCH block -> firmware chan_nr=0x90 ->
+        # gsm48_rr_rx_pch_agch, which dispatches IMM-ASS vs PAGING by msg type).
+        # SI -> BCCH.
         is_ccch = (by[2] in CCCH) or (by[2] in PAGING)
         chan = GSMTAP_AGCH if is_ccch else GSMTAP_BCCH
         s.sendto(gsmtap(si_fn, chan, L2), ("127.0.0.1", 4730))
@@ -83,21 +84,21 @@ def handle_line(line):
             print("[si-bridge] %s (mt=0x%02x) FN=%d (%%51=%d %s) -> %s (4730)  #%d"
                   % (name, by[2], si_fn, si_fn%51, fn51_role(si_fn),
                      "feed_agch/PCH" if is_ccch else "feed_si", n), flush=True)
-    # --- SDCCH/4 SS0 DL (#2) : LAPDm (UA/AUTH), pas du RR -> gate fn%51 in {22-25} ---
+    # --- SDCCH/4 SS0 DL (#2): LAPDm (UA/AUTH), not RR -> gate fn%51 in {22-25} ---
     mfn_sd = re.match(r"^\s*(\d+)\b", lstr)
     sd_fn = int(mfn_sd.group(1)) if mfn_sd else last_fn
     if len(by) >= 3 and (sd_fn % 51) in (22, 23, 24, 25):
         L2 = (by[:23] + b"\x2b"*23)[:23]
-        # DEDUP PAR FN (corrige) : gr-gsm peut re-decoder le MEME bloc on-air (meme FN)
-        # -> il faut sauter ce doublon (re-decode). MAIS la BTS RE-EMET legitimement le
-        # MEME contenu (UA byte-identique) sur un FN DIFFERENT en reponse a une
-        # retransmission SABM T200 du mobile : ce re-UA DOIT etre forwarde sinon le
-        # mobile ne confirme jamais (UA rate -> boucle SABM -> "SABM not expected in
-        # timer recovery"). L'ancien dedup-par-contenu (L2 != last_sd_l2) DROPPAIT ce
-        # re-UA legitime. On dedup donc par FN decode (sd_fn) : grgsm emet chaque FN
-        # on-air UNE seule fois (FN monotone, verifie) -> dedup-par-FN supprime le
-        # re-decode (meme FN) ET forwarde le re-envoi BTS (FN distinct, meme contenu).
-        # On saute toujours le bourrage LAPDm (UI c=0x03).
+        # DEDUP BY FN: gr-gsm may re-decode the SAME on-air block (same FN) ->
+        # that duplicate must be skipped. BUT the BTS legitimately RE-SENDS the
+        # SAME content (byte-identical UA) on a DIFFERENT FN in answer to a
+        # SABM T200 retransmission of the mobile: that re-UA MUST be forwarded,
+        # otherwise the mobile never confirms (missed UA -> SABM loop -> "SABM
+        # not expected in timer recovery"). A dedup by content would DROP that
+        # legitimate re-UA. Dedup is therefore by decoded FN (sd_fn): grgsm
+        # emits each on-air FN ONCE (monotonic FN) -> dedup-by-FN removes the
+        # re-decode (same FN) AND forwards the BTS re-send (distinct FN, same
+        # content). LAPDm fill (UI c=0x03) is always skipped.
         ctrl = by[1] if len(by) > 1 else 0
         is_fill = (ctrl == 0x03)
         if (not is_fill) and sd_fn != last_sd_fn:
@@ -107,13 +108,13 @@ def handle_line(line):
             if nsd <= 20 or nsd % 50 == 0:
                 print("[si-bridge] SDCCH/4 SS0 DL (a0=0x%02x c=0x%02x) FN=%d (%%51=%d) -> feed_sdcch (4730)  #%d [new]"
                       % (by[0], ctrl, sd_fn, sd_fn%51, nsd), flush=True)
-            # ARMEMENT DU TCH : l'ASSIGNMENT COMMAND passe par ce meme bloc DL.
+            # TCH ARMING: the ASSIGNMENT COMMAND goes through this same DL block.
             check_assignment(by, sd_fn)
-    # --- SACCH (SDCCH/4 SS0) DL : SI5(0x1d)/SI6(0x1e) REELS -> feed_sacch ---
-    # Slots SACCH SS0 (combine CCCH+SDCCH/4) : fn%51 in {42-45}. grgsm donne le
-    # bloc 23o = [L1 hdr 2][LAPDm: 03 03 len 06 mt L3...]. On detecte le RR header
-    # "06 1d"/"06 1e" et on forwarde le bloc TEL QUEL au shunt (sub_type 0x87 =
-    # SDCCH4|ACCH) -> feed_sacch REEL, remplace la fabrication SI3->SI6.
+    # --- SACCH (SDCCH/4 SS0) DL: REAL SI5(0x1d)/SI6(0x1e) -> feed_sacch ---
+    # SACCH SS0 slots (combined CCCH+SDCCH/4): fn%51 in {42-45}. grgsm gives the
+    # 23-byte block = [L1 hdr 2][LAPDm: 03 03 len 06 mt L3...]. The RR header
+    # "06 1d"/"06 1e" is detected and the block forwarded AS IS to the shunt
+    # (sub_type 0x87 = SDCCH4|ACCH) -> REAL feed_sacch.
     if len(by) >= 8 and (sd_fn % 51) in (42, 43, 44, 45):
         mt_sa = None
         for off in range(2, min(9, len(by) - 1)):
@@ -128,30 +129,30 @@ def handle_line(line):
                 print("[si-bridge] SACCH SI%d (mt=0x%02x) FN=%d (%%51=%d) -> feed_sacch REEL (4730)  #%d"
                       % (5 if mt_sa == 0x1d else 6, mt_sa, sd_fn, sd_fn % 51, nsa), flush=True)
 
-# === STAGE 3 : DECHIFFREMENT DL — DEUX grgsm QUI SE DELEGUENT ================
-# PROBLEME resolu : tuer grgsm pour le relancer avec -k au CIPHER MODE retirait
-# le lecteur de la FIFO -> l'ipc-device se figeait (DL FIFO plein -> osmo-trx
-# SETPOWER no-response -> feed_iq gele -> pas de LU accept).
-# SOLUTION (design B) : on ne tue JAMAIS le grgsm CLAIR. Deux process tournent
-# en parallele, chacun sur SA FIFO (les deux alimentees par l'ipc-device relay) :
-#   - grgsm CLAIR  sur CF (iq_grgsm.fifo)  : decode etablissement/ID/AUTH(RAND)/
-#     CIPHER MODE COMMAND. Ne sort QUE des trames CRC-valides -> se tait tout seul
-#     sur le dedie une fois le DL chiffre.
-#   - grgsm CHIFFRE sur CIPH_CF (-e -k)    : spawne des qu'un Kc apparait (fenetre
-#     RAND->cipher : il a le temps de locker FCCH/SCH AVANT que le DL passe chiffre),
-#     decode le dedie chiffre (LU ACCEPT...). Tue seulement au release (Kc efface).
-# Les deux sorties sont fusionnees par handle_line (sous lock) : le CRC de grgsm
-# fait le tri, le dedup par FN evite les doublons. ZERO trou de lecteur sur la
-# FIFO clair -> l'ipc-device ne gele plus. Le churn (spawn/kill) du grgsm chiffre
-# est inoffensif grace au writer ipc-device non-bloquant (relay_fifo_writer).
+# === STAGE 3: DL DECIPHERING — TWO grgsm THAT HAND OVER TO EACH OTHER =========
+# The CLEAR grgsm is NEVER killed: killing it to restart with -k at CIPHER MODE
+# would remove the FIFO reader and freeze the ipc-device (DL FIFO full ->
+# osmo-trx SETPOWER no-response -> feed_iq frozen -> no LU accept). Two
+# processes run in parallel, each on ITS FIFO (both fed by the ipc-device relay):
+#   - CLEAR grgsm    on CF (iq_grgsm.fifo): decodes establishment/ID/AUTH(RAND)/
+#     CIPHER MODE COMMAND. Only outputs CRC-valid frames -> goes quiet by itself
+#     on the dedicated channel once the DL is ciphered.
+#   - CIPHERED grgsm on CIPH_CF (-e -k): spawned as soon as a Kc appears
+#     (RAND->cipher window: it has time to lock FCCH/SCH BEFORE the DL turns
+#     ciphered), decodes the ciphered dedicated channel (LU ACCEPT...). Killed
+#     only at release (Kc erased).
+# Both outputs are merged by handle_line (under lock): grgsm's CRC sorts them
+# out, dedup by FN avoids duplicates. ZERO reader gap on the clear FIFO -> the
+# ipc-device does not freeze. The churn (spawn/kill) of the ciphered grgsm is
+# harmless thanks to the non-blocking ipc-device writer (relay_fifo_writer).
 CIPH_CF = os.environ.get("CALYPSO_CIPH_FIFO", "/tmp/iq_grgsm_ciph.fifo")
 _hl_lock = threading.Lock()
 
-# grgsm_decode HARDCODE le port GSMTAP UDP 4729 (socket_pdu UDP_SERVER+CLIENT, pas
-# d'option). Deux instances -> "bind: Address already in use" -> le 2e crash
-# (silencieux car stderr=DEVNULL) -> jamais de decode chiffre. On lit le STDOUT
-# (-v), pas le 4729 -> on patche une COPIE pour le grgsm chiffre sur un port libre
-# (4799). Genere au demarrage -> reproductible, survit au reclone du conteneur.
+# grgsm_decode HARD-CODES the GSMTAP UDP port 4729 (socket_pdu UDP_SERVER+CLIENT,
+# no option). Two instances -> "bind: Address already in use" -> the 2nd crashes
+# (silently, stderr=DEVNULL) -> never any ciphered decode. STDOUT (-v) is read,
+# not 4729 -> a COPY is patched for the ciphered grgsm on a free port (4799).
+# Generated at startup -> reproducible, survives a reclone of the container.
 import shutil
 def make_ciph_binary():
     src = shutil.which("grgsm_decode")
@@ -161,7 +162,7 @@ def make_ciph_binary():
     try:
         with open(src) as f:
             code = f.read()
-        code = code.replace('"4729"', '"4799"')   # port GSMTAP unique (pas de conflit avec le clair)
+        code = code.replace('"4729"', '"4799"')   # unique GSMTAP port (no conflict with the clear one)
         with open(dst, "w") as f:
             f.write(code)
         os.chmod(dst, 0o755)
@@ -181,33 +182,32 @@ def spawn_grgsm(fifo, algo=0, kc_hex=None, binary="grgsm_decode", errlog=None):
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True)
 
 # =============================================================================
-# ARMEMENT DU TCH : ASSIGNMENT COMMAND -> calypso_tch_cfg -> 3e grgsm_decode
+# TCH ARMING: ASSIGNMENT COMMAND -> calypso_tch_cfg -> 3rd grgsm_decode
 # =============================================================================
-# [2026-08-11] RECONSTRUIT. Cette logique existait (08/08) et a disparu de
-# l'arbre le 11/08. Sans elle la panne est en cascade et SILENCIEUSE :
-#   calypso_tch_cfg reste a 0 octet -> aucun `grgsm_decode -m TCHF` -> aucun
-#   GSMTAP dedie -> feed_tch_sacch JAMAIS appele -> la SACCH du TCH n'est pas
-#   alimentee -> le MS y lit le SI5/SI6 du camp (a_cd est PARTAGE camp<->TCH,
-#   avec DEUX conventions d'en-tete) -> "Short header message type 0x07
-#   unsupported" une fois par seconde, a partir de ~30 s apres l'ASSIGNMENT.
+# Without it the failure cascades SILENTLY: calypso_tch_cfg stays at 0 bytes ->
+#   no `grgsm_decode -m TCHF` -> no dedicated GSMTAP -> feed_tch_sacch NEVER
+#   called -> the TCH SACCH is not fed -> the MS reads the camping SI5/SI6
+#   there (a_cd is SHARED camp<->TCH, with TWO header conventions) -> "Short
+#   header message type 0x07 unsupported" once a second, from ~30 s after
+#   the ASSIGNMENT.
 #
-# CONTRAT DU FICHIER — lu chez son CONSOMMATEUR (qemu_wrap.c
-# calypso_tch_cfg_read), jamais devine :
-#   0..3 seq uint32 LE (≠0)   4 TN   5 TSC   6..7 ARFCN uint16 LE   (16 o)
-# Le seq est ecrit EN DERNIER : publication atomique, le lecteur ne voit jamais
-# un demi-enregistrement.
+# FILE CONTRACT — as read by its CONSUMER (qemu_wrap.c calypso_tch_cfg_read),
+# never guessed:
+#   0..3 seq uint32 LE (≠0)   4 TN   5 TSC   6..7 ARFCN uint16 LE   (16 B)
+# The seq is written LAST: atomic publication, the reader never sees a
+# half-written record.
 #
-# JUGES : calypso_tch_cfg non vide ; un process `-m TCHF` vivant ;
-#         `feed_tch_sacch` > 0 dans qemu.log ; `Short header 0x07` = 0.
+# CHECKS: calypso_tch_cfg not empty; a live `-m TCHF` process;
+#         `feed_tch_sacch` > 0 in qemu.log; `Short header 0x07` = 0.
 TCH_CFG_PATH = "/dev/shm/calypso_tch_cfg"
 TCH_FIFO     = os.environ.get("CALYPSO_TCH_FIFO", "/tmp/iq_grgsm_tch.fifo")
 TCH_SPEECH   = "/dev/shm/calypso_tch_speech.gsm"
 _tch_proc = None
-_tch_cur  = None          # (tn, tsc, arfcn) actuellement arme
+_tch_cur  = None          # (tn, tsc, arfcn) currently armed
 _tch_seq  = 0
 
 def _tch_write_cfg(tn, tsc, arfcn):
-    """Publie TN/TSC/ARFCN. seq en dernier = publication atomique."""
+    """Publish TN/TSC/ARFCN. seq last = atomic publication."""
     global _tch_seq
     _tch_seq += 1
     buf = bytearray(16)
@@ -222,21 +222,21 @@ def _tch_write_cfg(tn, tsc, arfcn):
         os.close(fd)
 
 def make_tch_binary():
-    """Copie patchee de grgsm_decode pour le TCH — DEUX ports a corriger.
+    """Patched copy of grgsm_decode for the TCH — TWO ports to fix.
 
-    grgsm_decode code en dur 127.0.0.1:4729 DEUX fois (l.122-123) :
-      - l.122 UDP_SERVER : ne sert QU'A eviter les ICMP port-unreachable. Deux
-        instances -> « bind: Address already in use » -> la 2e MEURT. C'est ce
-        qui faisait mourir le decodeur TCH aussitot lance (14 reamorcages
-        mesures le 11/08), donc feed_tch_sacch = 0, donc SACCH dediee muette.
-      - l.123 UDP_CLIENT : c'est la VRAIE sortie GSMTAP. En mode TCHF,
-        tch_f_decoder ET cch_decoder y publient (l.213-214).
-    On bind donc le serveur sur un port libre, et on pointe le client droit sur
-    4730, que le shunt ecoute : il dispatche par sub_type — TCH_F (0x02) ->
-    feed_facch, TCH_ACCH (0x82) -> feed_tch_sacch (calypso_dsp_shunt.c:3126-3134).
-    Pas de parsing de stdout : les donnees vont du decodeur au shunt en direct.
-    ⚠️ Remplacements CIBLES ligne par ligne : un `replace("4729","4730")` global
-    ferait binder le serveur sur 4730 et entrerait en conflit avec le shunt.
+    grgsm_decode hard-codes 127.0.0.1:4729 TWICE (l.122-123):
+      - l.122 UDP_SERVER: only there to avoid ICMP port-unreachable. Two
+        instances -> "bind: Address already in use" -> the 2nd DIES, so
+        feed_tch_sacch = 0 and the dedicated SACCH stays silent.
+      - l.123 UDP_CLIENT: the REAL GSMTAP output. In TCHF mode, tch_f_decoder
+        AND cch_decoder publish there (l.213-214).
+    The server is therefore bound on a free port, and the client pointed
+    straight at 4730, which the shunt listens on: it dispatches by sub_type —
+    TCH_F (0x02) -> feed_facch, TCH_ACCH (0x82) -> feed_tch_sacch
+    (calypso_dsp_shunt.c:3126-3134). No stdout parsing: data goes from the
+    decoder to the shunt directly.
+    ⚠️ TARGETED replacements line by line: a global `replace("4729","4730")`
+    would bind the server on 4730 and conflict with the shunt.
     """
     src = shutil.which("grgsm_decode")
     if not src:
@@ -265,7 +265,7 @@ def make_tch_binary():
 GRGSM_TCH = make_tch_binary()
 
 def _tch_spawn(tn, arfcn):
-    """3e decodeur, sur le tube IQ dedie (alimente par CALYPSO_RELAY_FIFOS)."""
+    """3rd decoder, on the dedicated IQ pipe (fed by CALYPSO_RELAY_FIFOS)."""
     cmd = [GRGSM_TCH, "-m", "TCHF", "-t", str(tn), "-a", str(arfcn),
            "-c", TCH_FIFO, "-s", "1083333", "-v", "-d", "FR", "-o", TCH_SPEECH]
     try:
@@ -279,7 +279,7 @@ def arm_tch(tn, tsc, arfcn):
     cfg = (tn, tsc, arfcn)
     vivant = _tch_proc is not None and _tch_proc.poll() is None
     if cfg == _tch_cur and vivant:
-        return                                   # deja arme sur cette config
+        return                                   # already armed on this config
     if _tch_proc is not None and vivant:
         try: _tch_proc.terminate()
         except Exception: pass
@@ -290,14 +290,14 @@ def arm_tch(tn, tsc, arfcn):
           % (tn, tsc, arfcn, TCH_CFG_PATH, _tch_proc.pid), flush=True)
 
 def check_assignment(by, fn):
-    """Detecte un ASSIGNMENT COMMAND (RR PD=0x06, MT=0x2e) sur le SDCCH DL.
+    """Detect an ASSIGNMENT COMMAND (RR PD=0x06, MT=0x2e) on the SDCCH DL.
 
-    Channel Description 2 (GSM 04.08 10.5.2.5), 3 octets, decodage aligne sur
-    `struct gsm48_chan_desc` de libosmocore :
-        b0 : chan_nr           -> TN = b0 & 0x07
-        b1 : tsc(3) h(1) arfcn_high(2) spare(2)
-             TSC = (b1>>5)&7   H = (b1>>4)&1   ARFCN_high = b1 & 0x03
-        b2 : ARFCN_low         -> ARFCN = (ARFCN_high<<8) | b2   [si H=0]
+    Channel Description 2 (GSM 04.08 10.5.2.5), 3 octets, decoded like
+    libosmocore's `struct gsm48_chan_desc`:
+        b0: chan_nr           -> TN = b0 & 0x07
+        b1: tsc(3) h(1) arfcn_high(2) spare(2)
+            TSC = (b1>>5)&7   H = (b1>>4)&1   ARFCN_high = b1 & 0x03
+        b2: ARFCN_low         -> ARFCN = (ARFCN_high<<8) | b2   [if H=0]
     """
     for off in range(2, min(7, len(by) - 5)):
         if by[off] != 0x06 or by[off + 1] != 0x2e:
@@ -307,10 +307,10 @@ def check_assignment(by, fn):
         tsc = (b1 >> 5) & 0x07
         h   = (b1 >> 4) & 0x01
         if h:
-            # ⚠️ REFUS EXPLICITE. Cette chaine ne gere PAS le saut de frequence
-            # (cf. la meme limite cote injection UL). Fabriquer une ARFCN a
-            # partir des champs MAIO/HSN donnerait un nombre FAUX en silence,
-            # et le decodeur ecouterait a cote sans que rien ne le signale.
+            # ⚠️ EXPLICIT REFUSAL. This chain does NOT handle frequency hopping
+            # (same limit on the UL injection side). Building an ARFCN from
+            # the MAIO/HSN fields would silently give a WRONG number, and the
+            # decoder would listen elsewhere with nothing to show for it.
             print("[si-bridge] ASSIGNMENT COMMAND avec SAUT DE FREQUENCE (H=1) : "
                   "TCH NON arme (chaine sans hopping). FN=%d" % fn, flush=True)
             return
@@ -321,7 +321,7 @@ def check_assignment(by, fn):
         return
 
 def reader_loop(proc, tag):
-    # log brut par grgsm (diagnostic decipher) : /root/grgsm_clair.raw / _ciph.raw
+    # raw log per grgsm (decipher diagnostic): /root/grgsm_clair.raw / _ciph.raw
     try: raw = open("/root/grgsm_%s.raw" % tag, "w")
     except Exception: raw = None
     for line in proc.stdout:
@@ -349,7 +349,7 @@ def read_kc():
         return (0, 0, None)
     return (seq, b[4], b[6:14].hex())
 
-# --- grgsm CLAIR : toujours vivant (watchdog respawn si crash), JAMAIS tue au cipher ---
+# --- CLEAR grgsm: always alive (watchdog respawn on crash), NEVER killed at cipher ---
 clear = {"proc": None}
 def ensure_clear():
     p = clear["proc"]
@@ -361,16 +361,16 @@ def ensure_clear():
 
 ensure_clear()
 
-# --- grgsm CHIFFRE : spawne/tue selon le Kc, TOUJOURS sur CIPH_CF (jamais sur CF) ---
+# --- CIPHERED grgsm: spawned/killed by the Kc, ALWAYS on CIPH_CF (never on CF) ---
 ciph = {"applied": (0, None), "proc": None}
 while True:
     time.sleep(0.5)
-    ensure_clear()                     # watchdog du grgsm clair
+    ensure_clear()                     # clear grgsm watchdog
     seq, algo, kc = read_kc()
     want = (algo, kc) if (seq and algo in (1, 2, 3)) else (0, None)
     if want == ciph["applied"]:
         continue
-    # etat Kc change -> on (re)cycle UNIQUEMENT le grgsm chiffre (sur CIPH_CF)
+    # Kc state changed -> ONLY the ciphered grgsm is (re)cycled (on CIPH_CF)
     p = ciph["proc"]
     if p is not None:
         try: p.kill(); p.wait(timeout=2)

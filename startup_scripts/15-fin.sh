@@ -1,5 +1,5 @@
-# 15-fin.sh - partie de start.sh (lignes 3443-3454 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 15-fin.sh - part of start.sh (hand-off to run.sh)
+# Sourced by start.sh in the main shell: same order, same variables.
 [ $DRY -eq 1 ] || audio_start
 say_begin "Transmission a run.sh"
 if [ $DRY -eq 1 ]; then
@@ -9,5 +9,5 @@ if [ $DRY -eq 1 ]; then
     exit 0
 fi
 say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE"
-# Hand-off total : ce processus devient run.sh
+# Full hand-off: this process becomes run.sh
 exec bash "$RUN_SH" "${RUN_ARGS[@]}"

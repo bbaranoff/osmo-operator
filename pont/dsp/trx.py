@@ -1,39 +1,36 @@
-# pont/dsp/trx.py - le Trx du pont DSP.
+# pont/dsp/trx.py - the Trx of the DSP bridge.
 #
-# La copie de chaque burst vers le BSP du C54x (UDP dsp_port, 8 octets
-# d'en-tete + 148 bits 0/1) reste dans Trx.run_data : pont.dsp.main refuse de
-# demarrer sans --dsp-port, donc ce chemin y est toujours pris.
+# The copy of every burst to the C54x BSP (UDP dsp_port, 8-byte header + 148
+# bits 0/1) lives in Trx.run_data: pont.dsp.main refuses to start without
+# --dsp-port, so that path is always taken here.
 import os
 
 from ..trx import Trx
 
 
 class TrxDsp(Trx):
-    # [2026-09-23] LE DSP DECHIFFRE LUI-MEME. La mask-ROM programme le
-    # coprocesseur A5 du Calypso (ports XIO 0x2800..0x2818, voir
-    # l1-dsp/calypso_a5.c) avec a_kc et a_a5fn, et applique le flux au burst
-    # demodule. Ce coprocesseur n'etait pas modelise : le flux restait nul, d'ou
-    # le dechiffrement ici. Il l'est desormais, et dechiffrer ici en plus
-    # appliquerait le flux deux fois (= renvoyer le burst chiffre au decodeur).
-    # Le BSP recoit donc le descendant tel que la BTS l'a emis.
-    # PONT_DSP_DECHIFFRE=1 retablit l'ancien comportement (coeur sans modele A5,
-    # ou c54x_exe lance avec CALYPSO_A5=0).
+    # THE DSP DECIPHERS BY ITSELF. The mask-ROM programs the Calypso A5
+    # coprocessor (XIO ports 0x2800..0x2818, see l1-dsp/calypso_a5.c) with
+    # a_kc and a_a5fn, and applies the keystream to the demodulated burst.
+    # Deciphering here as well would apply the keystream twice (= hand the
+    # ciphered burst back to the decoder). The BSP therefore receives the
+    # downlink as the BTS sent it. PONT_DSP_DECHIFFRE=1 deciphers here (core
+    # without A5 model, or c54x_exe started with CALYPSO_A5=0).
     dechiffre_dl = os.environ.get("PONT_DSP_DECHIFFRE", "0") == "1"
 
     def _burst_dedie(self, tn, fn):
-        """[2026-09-23] LE TCH EST DECHIFFRE DES L'ANNONCE.
+        """THE TCH IS DECIPHERED FROM THE ANNOUNCEMENT ON.
 
-        Trx._burst_dedie ne comptait l'intervalle du TCH comme dedie qu'une
-        fois Tch.prove() passe, c'est-a-dire apres une premiere trame montante
-        du mobile sur le TCH. Or osmo-bts chiffre le TCH dans les deux sens
-        des l'activation du canal (osmo-bts-trx l1_if.c:479-483) : entre la
-        bascule du firmware et prove(), le BSP jouait des bursts TS2 chiffres,
-        et les premiers blocs de la BTS -- l'UA qui repond au SABM de
-        l'ASSIGNMENT -- etaient perdus cote ROM (appel 1 du run de 12:22).
-        Le dechiffrement reste garde par cipher.dl_active (Trx.run_data),
-        confirme sur le SDCCH de la MEME session et remis a zero a l'IMMEDIATE
-        ASSIGNMENT : un Kc retenu d'une session precedente ne touche jamais un
-        TCH en clair."""
+        Trx._burst_dedie only counts the TCH timeslot as dedicated once
+        Tch.prove() has passed, that is after a first uplink frame of the
+        mobile on the TCH. But osmo-bts ciphers the TCH in both directions
+        from the channel activation on (osmo-bts-trx l1_if.c:479-483): between
+        the firmware switch and prove(), the BSP would play ciphered bursts,
+        and the first blocks of the BTS -- the UA answering the SABM of the
+        ASSIGNMENT -- would be lost on the ROM side. Deciphering stays guarded
+        by cipher.dl_active (Trx.run_data), confirmed on the SDCCH of the SAME
+        session and reset at the IMMEDIATE ASSIGNMENT: a Kc kept from a
+        previous session never touches a TCH in clear."""
         if self.tch is not None and tn == self.tch.active_tn():
             return True
         return super()._burst_dedie(tn, fn)

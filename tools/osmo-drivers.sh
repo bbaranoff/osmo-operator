@@ -1,23 +1,20 @@
 #!/bin/bash
 # =============================================================================
-#  osmo-drivers - le pilote graphique NVIDIA : etat, installation, mise a jour
+#  osmo-drivers - the NVIDIA graphics driver: status, installation, update
 # =============================================================================
-#  Le pendant, sur le systeme qui tourne (live ou installe), de la page
-#  "Pilotes graphiques" de l installeur : montre la carte, le module charge et
-#  ce qui est installe, et laisse installer ou mettre a jour.
+#  The counterpart, on the running system (live or installed), of the
+#  "Graphics drivers" page of the installer: shows the card, the loaded module
+#  and what is installed, and lets you install or update.
 #
-#  [2026-09-04] LE PILOTE DU BANC EST FIGE : nvidia-driver-610. `ubuntu-drivers`
-#  n arbitre plus rien - il interrogeait les depots et decidait seul, si bien
-#  qu on n installait pas le meme pilote d une machine a l autre, et rien du
-#  tout quand ubuntu-drivers-common manquait. Ici c est un paquet, nomme :
+#  THE BENCH DRIVER IS FIXED: nvidia-driver-610, a named package:
 #      sudo apt install nvidia-driver-610
-#  ubuntu-drivers reste utilise s il est la, mais UNIQUEMENT pour informer
-#  (la liste et le "recommande" affiches par --status). OSMO_NVIDIA_DRIVER
-#  permet d en viser un autre.
+#  ubuntu-drivers does not decide anything; it is only used, if present, to
+#  inform (the list and the "recommended" shown by --status).
+#  OSMO_NVIDIA_DRIVER selects another package.
 #
-#      sudo ./tools/osmo-drivers.sh            menu whiptail
-#      sudo ./tools/osmo-drivers.sh --status   l etat seul, en texte
-#      sudo ./tools/osmo-drivers.sh --install [pilote]   (defaut : nvidia-driver-610)
+#      sudo ./tools/osmo-drivers.sh            whiptail menu
+#      sudo ./tools/osmo-drivers.sh --status   status only, as text
+#      sudo ./tools/osmo-drivers.sh --install [driver]   (default: nvidia-driver-610)
 #      sudo ./tools/osmo-drivers.sh --update
 # =============================================================================
 set -u
@@ -27,11 +24,11 @@ export DEBIAN_FRONTEND=noninteractive
 [ "$(id -u)" -eq 0 ] || exec pkexec --disable-internal-agent "$0" "$@" 2>/dev/null || exec sudo "$0" "$@"
 
 need() { command -v "$1" >/dev/null 2>&1; }
-# NVDRV : le pilote que ce script installe. Un nom de paquet, pas une enquete.
+# NVDRV: the driver this script installs. A package name, not a lookup.
 NVDRV="${OSMO_NVIDIA_DRIVER:-nvidia-driver-610}"
-# ubuntu-drivers n est plus une dependance : on ne l installe pas pour lui-meme.
-# S il est deja la, --status s en sert pour afficher le "recommande" d Ubuntu -
-# a titre d information, a cote du pilote que le banc installe reellement.
+# ubuntu-drivers is not a dependency: it is not installed for its own sake.
+# If it is already there, --status uses it to show Ubuntu's "recommended" -
+# for information, next to the driver the bench actually installs.
 
 gpu()        { lspci -d 10de: 2>/dev/null | head -1 | cut -d: -f3- | sed 's/^ //; s/ (rev.*//'; }
 reco()       { ubuntu-drivers devices 2>/dev/null | awk '/^driver *:/ && /recommended/{print $3; exit}'; }

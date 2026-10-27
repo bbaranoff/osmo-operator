@@ -15,7 +15,7 @@ def _flag(name, default):
 class Config:
     trx_bind: str
     trx_base: int
-    dsp_port: int          # [2026-09-17] >0 : copie chaque burst DL vers le DSP (BSP UDP, 6702)
+    dsp_port: int          # >0: copy every DL burst to the DSP (BSP UDP, 6702)
     arfcn: int
     bsic: int
     ul_fn_advance: int
@@ -61,18 +61,18 @@ def parse(argv=None):
         bsic=a.bsic,
         ul_fn_advance=int(_env("PONT_UL_FN_ADVANCE", "3")),
         window_tol=int(_env("PONT_WINDOW_TOL", "1")),
-        # Combien de fois re-attendre un burst montant reveille trop tot
-        # (horloge asservie au DSP, cf. trx.py Transmitter.run).
+        # How many times to wait again for an uplink burst woken up too early
+        # (clock slaved to the DSP, see trx.py Transmitter.run).
         window_essais=int(_env("PONT_WINDOW_ESSAIS", "12")),
-        # Retard maximal (trames) d'un burst montant encore envoye a la BTS,
-        # cf. trx.py Transmitter.run. 0 = jeter tout burst en retard (defaut du
-        # paquet ; pont_dsp.py, le point d'entree DSP, pose 26).
+        # Maximum lateness (frames) of an uplink burst still sent to the BTS,
+        # see trx.py Transmitter.run. 0 = drop any late burst (package
+        # default; pont_dsp.py, the DSP entry point, sets 26).
         ul_retard_max=int(_env("PONT_UL_RETARD_MAX", "0")),
         rssi=int(_env("PONT_RSSI", "60")),
-        # [2026-10-03] 4730 reste la cible : c'est le port, fige, de la L1 gr-gsm de
-        # QEMU (calypso_l1_grgsm.c). PONT_GSMTAP_PORT permet d'intercaler
-        # qosmo/tools/injecteur_bruit.py (cible grgsm, 14730 -> 4730) ; pont.py le
-        # pose seul quand BRUIT_MODE vaut ber ou relais.
+        # 4730 is the target: the fixed port of the gr-gsm L1 of QEMU
+        # (calypso_l1_grgsm.c). PONT_GSMTAP_PORT allows inserting
+        # qosmo/tools/injecteur_bruit.py (grgsm target, 14730 -> 4730); pont.py
+        # sets it by itself when BRUIT_MODE is ber or relais.
         gsmtap_port=int(_env("PONT_GSMTAP_PORT", "4730")),
         sch_port=4731,
         tap=not a.no_tap,

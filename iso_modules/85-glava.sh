@@ -1,17 +1,17 @@
 #!/bin/bash
-# iso_modules/85-glava.sh - le visualiseur audio du bureau (GLava + NCS Spectrum)
-# Source par build-iso.sh, dans l ordre des numeros. `return` en tete = rien a faire.
+# iso_modules/85-glava.sh - desktop audio visualiser (GLava + NCS Spectrum)
+# Sourced by build-iso.sh in numeric order. A top-level `return` means nothing to do.
 #
-# [2026-10-23] GLava n a pas de paquet dans noble : tools/glava-build.sh le
-# compile sur l HOTE (meme Ubuntu que l image) avec le patch du module NCS, et
-# l installe dans le rootfs par DESTDIR - binaire, shaders dans /etc/xdg/glava,
-# lanceur /usr/local/bin/osmo-glava, service utilisateur glava.service. Les
-# bibliotheques d execution (libpulse0, libx11-6, libxext6, libxrender1,
-# libxcomposite1, libgl1) viennent deja avec le bureau GNOME.
+# GLava has no package in noble: tools/glava-build.sh builds it on the host
+# (same Ubuntu as the image) with the NCS module patch and installs it into the
+# rootfs via DESTDIR - binary, shaders in /etc/xdg/glava, launcher
+# /usr/local/bin/osmo-glava, user service glava.service. Runtime libraries
+# (libpulse0, libx11-6, libxext6, libxrender1, libxcomposite1, libgl1) already
+# come with the GNOME desktop.
 #
-# Bureau seulement (--desktop), amd64. Desactivable : OSMO_ISO_GLAVA=0.
-# Un echec (reseau, paquets -dev absents de l hote) n arrete pas le build :
-# l ISO sort sans visualiseur, avec un avertissement.
+# Desktop only (--desktop), amd64. Disable with OSMO_ISO_GLAVA=0.
+# A failure (network, missing -dev packages on the host) does not stop the
+# build: the ISO ships without the visualiser, with a warning.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ] || [ "${ISO_DESKTOP:-0}" != "1" ]; then return 0; fi
 if [ "${OSMO_ISO_GLAVA:-1}" != "1" ]; then
     echo -e "  ${YELLOW}!${NC} GLava desactive (OSMO_ISO_GLAVA=0)"

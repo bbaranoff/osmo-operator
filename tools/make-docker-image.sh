@@ -1,10 +1,9 @@
 #!/bin/bash
-# tools/make-docker-image.sh - construit l image docker osmocom-nitb.
+# tools/make-docker-image.sh - build the osmocom-nitb docker image.
 #
-# [2026-09-03] Ce script etait une copie de build.sh, moins toast et --lite,
-# et les deux divergeaient. Il delegue desormais a build.sh : apt-fast,
-# docker compose v2 + buildx dans les dependances, cache .deb sur l hote
-# (/var/cache/osmo-debs). Tous les arguments sont transmis tels quels.
+# Delegates to build.sh: apt-fast, docker compose v2 + buildx among the
+# dependencies, .deb cache on the host (/var/cache/osmo-debs). All arguments
+# are passed through unchanged.
 #
 #   sudo ./tools/make-docker-image.sh [--no-cache] [--lite] [--stp]
 set -euo pipefail

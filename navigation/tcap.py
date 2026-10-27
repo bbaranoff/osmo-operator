@@ -1,18 +1,18 @@
-# tcap.py - TCAP (Q.773) : begin / continue / end / abort, et les composants
+# tcap.py - TCAP (Q.773): begin / continue / end / abort, and the components
 # invoke / returnResultLast / returnError / reject.
 #
-# La console emet un begin contenant UN invoke, et lit ce qui revient. Le
-# dialogue (AARQ/AARE) porte le contexte applicatif MAP : sans lui, un vrai
-# HLR repond "abort" - on le met donc systematiquement.
+# The console sends a begin holding ONE invoke, and reads what comes back. The
+# dialogue (AARQ/AARE) carries the MAP application context: without it a real
+# HLR answers "abort", so it is always included.
 
 from . import ber
 
-# Tags applicatifs des messages TCAP.
+# Application tags of the TCAP messages.
 BEGIN, END, CONTINUE, ABORT = 0x62, 0x64, 0x65, 0x67
 TID_ORIG, TID_DEST = 0x48, 0x49
 DIALOGUE, COMPONENTS = 0x6B, 0x6C
 
-# Composants.
+# Components.
 INVOKE, RET_RES_LAST, RET_ERROR, REJECT = 0xA1, 0xA2, 0xA3, 0xA4
 
 DIALOGUE_AS_ID = "0.0.17.773.1.1.1"
@@ -23,7 +23,7 @@ COMP_NAME = {INVOKE: "invoke", RET_RES_LAST: "returnResultLast",
 
 
 def dialogue_request(app_context_oid):
-    """dialoguePortion contenant un AARQ (demande d'ouverture)."""
+    """dialoguePortion holding an AARQ (dialogue open request)."""
     aarq = ber.tlv(0x60,
                    ber.tlv(0x80, b"\x07\x80") +               # version 1
                    ber.ctx(1, ber.enc_oid(app_context_oid)))
@@ -106,7 +106,7 @@ def _oid_str(raw):
 
 
 def parse(data):
-    """Rend un Message, ou None si ce n'est pas du TCAP."""
+    """Return a Message, or None if this is not TCAP."""
     top = ber.decode(data)
     if not top:
         return None
@@ -159,7 +159,7 @@ def _parse_component(comp):
 
 
 def dialogue_response(app_context_oid, result=0, diagnostic=0):
-    """dialoguePortion contenant un AARE (acceptation d'ouverture)."""
+    """dialoguePortion holding an AARE (dialogue open accept)."""
     aare = ber.tlv(0x61,
                    ber.tlv(0x80, b"\x07\x80") +
                    ber.ctx(1, ber.enc_oid(app_context_oid)) +
@@ -180,7 +180,7 @@ def return_error(invoke_id, error_code, parameter=b""):
 
 
 def end_response(dtid, components, app_context_oid=None):
-    """end + AARE : la reponse complete a un begin."""
+    """end + AARE: the complete answer to a begin."""
     body = ber.tlv(TID_DEST, dtid)
     if app_context_oid:
         body += dialogue_response(app_context_oid)

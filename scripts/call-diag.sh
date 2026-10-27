@@ -1,8 +1,8 @@
 #!/bin/bash
-# call-diag.sh - Diagnostic chemin d'appel MS → Asterisk echo test
+# call-diag.sh - call path diagnostic, MS → Asterisk echo test
 # Usage: sudo docker exec -ti osmo-operator-1 bash /scripts/call-diag.sh
 #
-# Verifie chaque maillon : MSC → MNCC → osmo-sip-connector → Asterisk
+# Checks each link: MSC → MNCC → osmo-sip-connector → Asterisk
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
@@ -14,7 +14,7 @@ warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 echo -e "${CYAN}${BOLD}═══ Diagnostic appel MS → Echo Test ═══${NC}"
 echo ""
 
-# ── 1. Services core ─────────────────────────────────────────────────────────
+# ── 1. Core services ─────────────────────────────────────────────────────────
 echo -e "${BOLD}[1/8] Services Osmocom${NC}"
 for svc in osmo-msc osmo-bsc osmo-mgw osmo-stp osmo-hlr; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
@@ -44,7 +44,7 @@ if pgrep -f "osmo-sip-connector" >/dev/null 2>&1; then
     ok "Processus actif"
     pgrep -fa "osmo-sip-connector" | head -1 | sed 's/^/       /'
     
-    # Verifier qu'il ecoute bien sur 5061
+    # Check that it listens on 5061
     if ss -tlnp 2>/dev/null | grep -q ":5061 "; then
         ok "Ecoute sur :5061 (cote SIP)"
     else
@@ -70,11 +70,11 @@ if pgrep -f "asterisk" >/dev/null 2>&1; then
         fail "Pas en ecoute sur :5060/udp"
     fi
     
-    # Verifier les endpoints PJSIP
+    # Check the PJSIP endpoints
     echo "       Endpoints PJSIP:"
     asterisk -rx "pjsip show endpoints" 2>/dev/null | grep -E "Endpoint:|Contact:" | head -10 | sed 's/^/       /' || warn "Impossible de lister les endpoints"
     
-    # Verifier que le dialplan a le 600
+    # Check that the dialplan has 600
     echo ""
     echo "       Dialplan 600:"
     asterisk -rx "dialplan show 600@gsm_in" 2>/dev/null | head -10 | sed 's/^/       /' || warn "Extension 600 introuvable dans gsm_in"
@@ -148,7 +148,7 @@ else
 fi
 echo ""
 
-# ── Resume ───────────────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────────
 echo -e "${BOLD}═══ Chaine d'appel echo test ═══${NC}"
 echo ""
 echo "  mobile (call 1 600)"

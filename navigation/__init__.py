@@ -1,15 +1,14 @@
-# ss7console - console SS7 de osmo-operator.
+# ss7console - the osmo-operator SS7 console.
 #
-# Le paquet est volontairement sans dependance : rien que la bibliotheque
-# standard de Python 3. Il tourne sur l'HOTE, et parle au lab par deux
-# chemins complementaires :
+# The package has no dependency beyond the Python 3 standard library. It runs
+# on the HOST and talks to the lab through two complementary paths:
 #
-#   - les VTY Osmocom, atteints par "docker exec" (les VTY n'ecoutent que sur
-#     la boucle locale DU NOEUD) - lecture et pilotage des demons ;
-#   - un vrai lien M3UA/SCTP vers l'inter-STP, qui fait de la console un point
-#     SS7 a part entiere : elle peut emettre du TCAP/MAP (sendRoutingInfo,
-#     sendRoutingInfoForSM, anyTimeInterrogation...) et lire les reponses.
+#   - the Osmocom VTYs, reached through "docker exec" (the VTYs only listen on
+#     the NODE's loopback) - reading and driving the daemons;
+#   - a real M3UA/SCTP link to the inter-STP, which makes the console a full
+#     SS7 point: it can send TCAP/MAP (sendRoutingInfo, sendRoutingInfoForSM,
+#     anyTimeInterrogation...) and read the answers.
 #
-# Toute la topologie est HERITEE des configurations du depot et des noeuds :
-# aucun point code, aucune adresse, aucun port n'est ecrit en dur ici.
+# The whole topology is INHERITED from the repository and node configurations:
+# no point code, address or port is hard-coded here.
 __version__ = "1.0"

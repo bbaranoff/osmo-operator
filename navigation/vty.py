@@ -1,13 +1,13 @@
-# vty.py - acces aux VTY Osmocom depuis l'hote.
+# vty.py - access to the Osmocom VTYs from the host.
 #
-# Les VTY du lab n'ecoutent que sur 127.0.0.1 A L'INTERIEUR du noeud : depuis
-# l'hote, on passe donc par "docker exec". Les conteneurs n'ont pas tous nc ;
-# ils ont python3, telnet et socat. On pousse donc un petit relais python dans
-# le conteneur, ce qui donne en prime une session PERSISTANTE : le VTY garde
-# son contexte (enable, node de config) d'une commande a l'autre, exactement
-# comme un telnet a la main.
+# The lab VTYs only listen on 127.0.0.1 INSIDE the node: from the host, they
+# are reached through "docker exec". Not every container has nc; they all
+# have python3, telnet and socat. A small python relay is therefore pushed
+# into the container, which also gives a PERSISTENT session: the VTY keeps
+# its context (enable, config node) from one command to the next, exactly
+# like a manual telnet.
 #
-# En natif (pas de docker), la meme classe parle directement au socket local.
+# In native mode (no docker), the same class talks directly to the local socket.
 
 import os
 import re
@@ -19,8 +19,8 @@ import time
 
 EOC = b"\x01EOC\x01"
 
-# Relais execute DANS le noeud. Protocole : une commande par ligne sur stdin,
-# la sortie brute du VTY sur stdout, terminee par le marqueur EOC.
+# Relay executed INSIDE the node. Protocol: one command per line on stdin,
+# the raw VTY output on stdout, terminated by the EOC marker.
 _RELAY = r'''
 import socket, sys, time
 port = int(sys.argv[1])
@@ -60,16 +60,16 @@ _IAC = re.compile(rb"\xff[\xfb-\xfe].|\xff[\xf0-\xfa]")
 
 
 def clean(raw):
-    """Sortie VTY lisible : negociation telnet, CR et invites en moins."""
+    """Readable VTY output: telnet negotiation, CRs and prompts removed."""
     if isinstance(raw, str):
         raw = raw.encode("utf-8", "replace")
     raw = _IAC.sub(b"", raw)
     txt = raw.decode("utf-8", "replace").replace("\r", "")
     out = []
     for line in txt.split("\n"):
-        # L'invite ("OsmoSTP> ", "OsmoHLR# ") revient a chaque commande : elle
-        # n'apporte rien dans un panneau, et le prompt reel est affiche par la
-        # console elle-meme.
+        # The prompt ("OsmoSTP> ", "OsmoHLR# ") comes back with every command:
+        # it adds nothing in a panel, and the real prompt is shown by the
+        # console itself.
         line = re.sub(r"^Osmo[A-Za-z0-9_-]*[#>]\s?", "", line)
         line = line.replace("\x00", "")
         out.append(line.rstrip())
@@ -85,7 +85,7 @@ class VtyError(Exception):
 
 
 class VtySession(object):
-    """Session VTY persistante vers un (noeud, port)."""
+    """Persistent VTY session to a (node, port)."""
 
     def __init__(self, node, port, docker=True, timeout=12.0):
         self.node = node
@@ -98,7 +98,7 @@ class VtySession(object):
         self.lock = threading.Lock()
         self.alive = False
 
-    # ── ouverture / fermeture ────────────────────────────────────────────
+    # ── open / close ─────────────────────────────────────────────────────
     def open(self):
         if self.alive:
             return self
@@ -113,10 +113,9 @@ class VtySession(object):
             self.proc.stdin.write(_RELAY.encode())
             self.proc.stdin.flush()
             self.proc.stdin.close()
-            # Le relais lit ensuite ses commandes sur... stdin, que l'on vient
-            # de fermer. On repasse donc par un second canal : docker exec ne
-            # sait pas rouvrir stdin, alors le relais est relance en mode
-            # "script sur la ligne de commande" (voir _open_docker).
+            # The relay then reads its commands on stdin, which has just been
+            # closed. docker exec cannot reopen stdin, so the relay is started
+            # again in "script on the command line" mode (see _open_docker).
             self.proc.kill()
             self.proc = None
             return self._open_docker()
@@ -131,8 +130,8 @@ class VtySession(object):
         return self
 
     def _open_docker(self):
-        # -c : le relais arrive en argument, stdin reste libre pour les
-        # commandes. C'est ce qui donne la session persistante.
+        # -c: the relay comes as an argument, stdin stays free for the
+        # commands. This is what gives the persistent session.
         self.proc = subprocess.Popen(
             ["docker", "exec", "-i", self.node, "python3", "-c", _RELAY, str(self.port)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -204,7 +203,7 @@ class VtySession(object):
         return out
 
     def cmd(self, command):
-        """Envoie une commande, rend la sortie nettoyee."""
+        """Send a command, return the cleaned output."""
         with self.lock:
             if not self.alive:
                 self.open()
@@ -223,9 +222,9 @@ class VtySession(object):
 
 
 class VtyPool(object):
-    """Sessions ouvertes, une par (noeud, port). Ferme a la demande - c'est
-    ce que fait Echap dans la console : on quitte CE VTY, les autres restent
-    disponibles."""
+    """Open sessions, one per (node, port). Closed on request - that is what
+    Escape does in the console: THIS VTY is left, the others stay
+    available."""
 
     def __init__(self, docker=True):
         self.docker = docker

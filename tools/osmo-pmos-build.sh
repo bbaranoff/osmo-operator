@@ -1,43 +1,43 @@
 #!/bin/bash
 # =============================================================================
-# osmo-pmos-build.sh - LE NOYAU postmarketOS AVEC PPP, L IMAGE, ET LA VM QUI
-# VA AVEC. (ex ~nirvana/build-pm.sh, entre dans le depot le 2026-09-08.)
+# osmo-pmos-build.sh - THE postmarketOS KERNEL WITH PPP, THE IMAGE, AND THE VM
+# THAT GOES WITH IT.
 #
-# [2026-09-07] POURQUOI. La data 4G du telephone (ATD*99 -> CONNECT) meurt en
-# NO CARRIER : le noyau linux-postmarketos-stable n a pas PPP (« # CONFIG_PPP
-# is not set ») et refuse les modules non signes (lockdown). Les modules
-# construits AVEC le noyau sont signes par la cle du build : il suffit donc de
-# reconstruire le noyau avec CONFIG_PPP/CONFIG_PPP_ASYNC, puis l image.
+# WHY. The phone 4G data (ATD*99 -> CONNECT) needs PPP: the stock
+# linux-postmarketos-stable kernel has no PPP ("# CONFIG_PPP is not set") and
+# refuses unsigned modules (lockdown). Modules built WITH the kernel are
+# signed by the build key, so the kernel is rebuilt with
+# CONFIG_PPP/CONFIG_PPP_ASYNC, then the image.
 #
-# [2026-09-08] DEUX CHEMINS VERS CE NOYAU :
-#   1. LE RACCOURCI : /opt/user_interface/kernel/pmos/ (pose par le .deb
-#      osmo-build-pmos-kernel, dans l ISO et dans /var/cache/osmo-debs) porte
-#      l apk deja construit, son index, sa cle publique et le commit pmaports.
-#      On les copie dans le dossier de travail pmbootstrap et « pmbootstrap
-#      install » prend ce noyau-la : ZERO compilation.
-#   2. LES SOURCES : pas d apk, ou --rebuild -> pmbootstrap build du noyau
-#      (15 a 40 min), comme avant.
+# TWO PATHS TO THIS KERNEL:
+#   1. THE SHORTCUT: /opt/user_interface/kernel/pmos/ (installed by the
+#      osmo-build-pmos-kernel .deb, in the ISO and in /var/cache/osmo-debs)
+#      carries the already built apk, its index, its public key and the
+#      pmaports commit. They are copied into the pmbootstrap work directory and
+#      "pmbootstrap install" takes that kernel: ZERO compilation.
+#   2. THE SOURCES: no apk, or --rebuild -> pmbootstrap build of the kernel
+#      (15 to 40 min).
 #
-# A lancer sous le COMPTE DE SESSION (pmbootstrap refuse root ; il demande
-# sudo lui-meme), dans un terminal :
-#   osmo-pmos-build                  noyau + image + VM smartphone (720x1440)
-#   osmo-pmos-build tablette         idem, VM au format tablette (1280x800)
-#   osmo-pmos-build --no-install     le noyau seulement
-#   osmo-pmos-build --no-launch      noyau + image, sans allumer la VM
-#   osmo-pmos-build --rebuild        recompiler meme si l apk avec PPP est deja la
-#   osmo-pmos-build --init           seulement preparer pmbootstrap (config, pmaports, noyau)
-#   JOBS=8 osmo-pmos-build           moins de coeurs (srsRAN tourne a cote)
+# Run under the SESSION ACCOUNT (pmbootstrap refuses root; it asks for sudo
+# itself), in a terminal:
+#   osmo-pmos-build                  kernel + image + smartphone VM (720x1440)
+#   osmo-pmos-build tablette         same, VM in tablet format (1280x800)
+#   osmo-pmos-build --no-install     the kernel only
+#   osmo-pmos-build --no-launch      kernel + image, without starting the VM
+#   osmo-pmos-build --rebuild        recompile even if the apk with PPP is already there
+#   osmo-pmos-build --init           only prepare pmbootstrap (config, pmaports, kernel)
+#   JOBS=8 osmo-pmos-build           fewer cores (srsRAN runs alongside)
 #
-# PMBOOTSTRAP ET SON DOSSIER DE TRAVAIL. pmbootstrap est celui de
-# /opt/user_interface/pmos/pmbootstrap (patche : patches/pmbootstrap-osmo-
-# bench-qemu.patch - le modem sur un port serie PCI, la carte son du banc, la
-# taille d ecran, et le port 5038 qui n est pas un adb). Le dossier de travail
-# est celui du pmbootstrap_v3.cfg du compte, sinon ~/.local/var/pmbootstrap
-# (OSMO_PMB_WORK pour un autre). Sans config, on en ecrit une depuis le
-# gabarit /opt/user_interface/pmos/pmbootstrap_v3.cfg : Phosh, fr_FR,
-# hostname pmos-gsm, et les paquets du modem (ppp, networkmanager-ppp...).
-# pmaports est clone au commit du noyau (pmaports.commit) et recoit le patch
-# PPP : meme pkgver/pkgrel que l apk, sinon pmbootstrap ne le prefere pas.
+# PMBOOTSTRAP AND ITS WORK DIRECTORY. pmbootstrap is the one of
+# /opt/user_interface/pmos/pmbootstrap (patched: patches/pmbootstrap-osmo-
+# bench-qemu.patch - the modem on a PCI serial port, the bench sound card, the
+# screen size, and port 5038 which is not an adb). The work directory is the
+# one of the account's pmbootstrap_v3.cfg, else ~/.local/var/pmbootstrap
+# (OSMO_PMB_WORK for another). Without config, one is written from the
+# template /opt/user_interface/pmos/pmbootstrap_v3.cfg: Phosh, fr_FR,
+# hostname pmos-gsm, and the modem packages (ppp, networkmanager-ppp...).
+# pmaports is cloned at the kernel commit (pmaports.commit) and receives the
+# PPP patch: same pkgver/pkgrel as the apk, otherwise pmbootstrap does not prefer it.
 # =============================================================================
 set -u
 
@@ -81,14 +81,13 @@ ok()   { echo -e "${GREEN}✓${NC} $*"; }
 warn() { echo -e "${YELLOW}!${NC} $*"; }
 die()  { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
-# [2026-09-09] ROOT ACCEPTE. La session de l ISO EST root (voir osmo-pmos-
-# qemu) : refuser root, c etait refuser l icone. pmbootstrap accepte
-# --as-root ; sous un compte, rien ne change.
+# ROOT ACCEPTED. The ISO session IS root (see osmo-pmos-qemu): pmbootstrap
+# accepts --as-root; under a regular account, nothing changes.
 PMB_OPTS=(); [ "$(id -u)" -eq 0 ] && { PMB_OPTS=(--as-root); warn "en root : pmbootstrap --as-root (dossier de travail de root)"; }
 pmb() { "$PMB" "${PMB_OPTS[@]}" "$@"; }
 [ -n "$PMB" ] && [ -x "$PMB" ] || die "pmbootstrap introuvable ($PM/pmbootstrap manquant : osmo-pmos-install)"
 
-# ── 0. LA CONFIG pmbootstrap DU COMPTE ──────────────────────────────────────
+# ── 0. THE ACCOUNT'S pmbootstrap CONFIG ─────────────────────────────────────
 if [ ! -f "$CFG" ]; then
     [ -f "$PM/pmbootstrap_v3.cfg" ] || die "pas de $CFG ni de gabarit $PM/pmbootstrap_v3.cfg"
     mkdir -p "$(dirname "$CFG")" "$WORK"
@@ -96,43 +95,40 @@ if [ ! -f "$CFG" ]; then
     ok "config pmbootstrap ecrite : $CFG (work = $WORK)"
 fi
 mkdir -p "$WORK"
-# Le numero de version du dossier de travail : sans lui, pmbootstrap demande
-# « init ». C est celui de pmb/config/__init__.py (work_version).
+# The work directory version number: without it, pmbootstrap asks for
+# "init". It is the one of pmb/config/__init__.py (work_version).
 if [ ! -f "$WORK/version" ]; then
     _wv="$(grep -m1 -oE '^work_version *= *[0-9]+' "$(dirname "$PMB")/pmb/config/__init__.py" 2>/dev/null | grep -oE '[0-9]+$')"
     echo "${_wv:-8}" > "$WORK/version"
 fi
 
-# ── 1. pmaports, AU COMMIT DU NOYAU, avec le patch PPP ──────────────────────
+# ── 1. pmaports, AT THE KERNEL COMMIT, with the PPP patch ───────────────────
 _commit="$(cat "$KD/pmaports.commit" 2>/dev/null || true)"
-# [2026-09-09] UN SEUL osmo-pmos-build A LA FOIS. Deux lancements (l icone
-# cliquee pendant qu un premier clone tourne) se marchaient dessus : le second
-# voyait un .git sans commit - celui du clone EN COURS - et l effacait
-# (« fatal: could not open .../tmp_pack_... » chez le premier). Verrou sur le
-# dossier de travail, et on ne touche jamais a un clone qui a encore son git.
+# ONE osmo-pmos-build AT A TIME. Two launches (the icon clicked while a first
+# clone is running) would step on each other: the second would see a .git
+# without commit - the one of the clone IN PROGRESS - and erase it. Lock on
+# the work directory, and never touch a clone that still has its git.
 exec 9>"$WORK/.osmo-pmos-build.lock"
 flock -n 9 || die "un autre osmo-pmos-build tourne deja (verrou $WORK/.osmo-pmos-build.lock) : attends-le, ou ferme-le"
-# Un clone interrompu (reseau coupe, fenetre fermee) laisse un .git SANS
-# commit : on passait le clone, et on mourait plus bas sur « config noyau
-# introuvable ». Un depot sans HEAD, et sans git dessus, est un depot absent.
+# An interrupted clone (network cut, window closed) leaves a .git WITHOUT
+# commit, and the build would die further down on "kernel config not found".
+# A repository without HEAD, and without git running on it, is a missing one.
 if [ -d "$PMAPORTS/.git" ] && ! git -C "$PMAPORTS" rev-parse --verify HEAD >/dev/null 2>&1 \
    && ! pgrep -f "git(-remote-https)? .*$PMAPORTS" >/dev/null 2>&1; then
     warn "pmaports : clone vide ou interrompu, on le refait ($PMAPORTS)"
     rm -rf "$PMAPORTS"
 fi
-# [2026-09-09] PMAPORTS SANS GITLAB QUAND C EST POSSIBLE. Le clone complet
-# (des centaines de Mo, GitLab lent) a echoue deux fois sur trois depuis le
-# live : git efface alors tout et le telephone ne s allume jamais. Dans
-# l ordre : la copie posee par l ISO (88-lte-pmos.sh : $PM/pmaports, au commit
-# du noyau, sans reseau) ; sinon UN SEUL commit recupere par fetch --depth 1
-# (quelques dizaines de Mo) ; le clone complet seulement si le commit est
-# inconnu.
+# PMAPORTS WITHOUT GITLAB WHEN POSSIBLE. The full clone (hundreds of MB, slow
+# GitLab) is unreliable from the live system, and git then erases everything.
+# In order: the copy installed by the ISO (88-lte-pmos.sh: $PM/pmaports, at
+# the kernel commit, no network); else A SINGLE commit fetched with
+# --depth 1 (a few tens of MB); the full clone only if the commit is unknown.
 if [ ! -d "$PMAPORTS/.git" ]; then
     mkdir -p "$(dirname "$PMAPORTS")"
     if [ -d "$PM/pmaports/.git" ] && git -C "$PM/pmaports" rev-parse --verify HEAD >/dev/null 2>&1; then
         say "pmaports : copie de celui de l ISO ($PM/pmaports -> $PMAPORTS)..."
         cp -a "$PM/pmaports" "$PMAPORTS" || die "copie de pmaports"
-        # pmbootstrap lit channels.cfg dans origin/main : la ref doit exister.
+        # pmbootstrap reads channels.cfg in origin/main: the ref must exist.
         git -C "$PMAPORTS" rev-parse -q --verify origin/main >/dev/null 2>&1 \
             || git -C "$PMAPORTS" update-ref refs/remotes/origin/main HEAD
         ok "pmaports au commit $(git -C "$PMAPORTS" rev-parse --short HEAD) (celui de l ISO)"
@@ -175,9 +171,9 @@ PY
         ok "config noyau : PPP=m, PPP_ASYNC=m (sauvegarde : $KCFG.avant-ppp)"
     fi
 fi
-# La somme de controle : abuild verifie le sha512 de chaque fichier source, et
-# la config modifiee n a plus celui de l APKBUILD (« FAILED, Use 'abuild
-# checksum' »). On le remet a jour, toujours, ca ne coute rien.
+# The checksum: abuild checks the sha512 of each source file, and the modified
+# config no longer has the one of the APKBUILD ("FAILED, Use 'abuild
+# checksum'"). It is always updated, it costs nothing.
 APKB="$(dirname "$KCFG")/APKBUILD"
 somme="$(sha512sum "$KCFG" | cut -d' ' -f1)"
 if grep -q "^$somme  $(basename "$KCFG")\$" "$APKB"; then
@@ -188,7 +184,7 @@ else
         || die "sha512 de la config non remplace dans $APKB"
 fi
 
-# ── 2. LES REGLAGES pmbootstrap : Phosh, pas la console ─────────────────────
+# ── 2. THE pmbootstrap SETTINGS: Phosh, not the console ─────────────────────
 ui="$(pmb config ui 2>/dev/null | tail -1)"
 if [ "$ui" != "phosh" ]; then
     warn "pmbootstrap config ui = « $ui » : un install ferait une VM sans bureau"
@@ -196,12 +192,12 @@ if [ "$ui" != "phosh" ]; then
 fi
 ok "ui = phosh, device = $(pmb config device 2>/dev/null | tail -1), jobs = $JOBS, work = $WORK"
 
-# ── 3. LE NOYAU : LE RACCOURCI D ABORD ──────────────────────────────────────
-# L apk du .deb osmo-build-pmos-kernel, copie dans le depot local de
-# pmbootstrap avec son index et sa cle : « pmbootstrap install » le prefere
-# au depot en ligne (meme version, paquet local). Sinon, un apk deja
-# construit ici, plus recent que la config, qui a ppp_async.ko. Sinon on
-# compile. --rebuild force la compilation.
+# ── 3. THE KERNEL: THE SHORTCUT FIRST ───────────────────────────────────────
+# The apk of the osmo-build-pmos-kernel .deb, copied into the local pmbootstrap
+# repository with its index and its key: "pmbootstrap install" prefers it to
+# the online repository (same version, local package). Else an apk already
+# built here, newer than the config, which has ppp_async.ko. Else compile.
+# --rebuild forces the compilation.
 _a_ppp() { grep -q 'ppp_async\.ko' < <(tar tzf "$1" 2>/dev/null); }
 if [ "$REBUILD" = 0 ] && [ -f "$KD"/linux-postmarketos-stable-*.apk ]; then
     read -r _chan _parch _ver < "$KD/apk.info" 2>/dev/null || { _chan=edge; _parch=x86_64; }
@@ -230,22 +226,22 @@ _a_ppp "$apk" && ok "noyau : $apk contient ppp_async.ko" || die "le paquet $apk 
 [ "$INIT_ONLY" = 1 ] && { ok "pmbootstrap pret (--init)"; exit 0; }
 [ "$INSTALL" = 1 ] || { ok "fini (--no-install)"; exit 0; }
 
-# ── 4. L IMAGE ──────────────────────────────────────────────────────────────
-# On ecrit l image que la VM utilise : elle ne doit pas tourner dessus.
-# Une image deja fournie (/opt/user_interface/pmos/image/qemu-amd64.img.zst,
-# la VM de reference) est decompressee a la place d un install : c est le
-# raccourci n° 2 - OSMO_PMOS_FRESH=1 pour installer quand meme.
+# ── 4. THE IMAGE ────────────────────────────────────────────────────────────
+# The image the VM uses is written: the VM must not be running on it.
+# An image already provided (/opt/user_interface/pmos/image/qemu-amd64.img.zst,
+# the reference VM) is decompressed instead of an install: that is shortcut
+# no. 2 - OSMO_PMOS_FRESH=1 to install anyway.
 if pgrep -f "qemu-system-x86_64.*$(basename "$IMG")" >/dev/null 2>&1; then
     die "la VM tourne encore sur $IMG : arrete-la (osmo-pmos-qemu stop) puis relance"
 fi
 sudo -v || die "sudo refuse"
-# ── L IMAGE DE REFERENCE : LA, OU TELECHARGEE ───────────────────────────────
-# [2026-10-01] Si le .zst manque (ISO construite sans) ou est CORROMPU (zstd -t
-# le dit : une copie coupee, un 404 enregistre tel quel, une cle retiree trop
-# tot), on le reprend sur la release GitHub « pmos-image » - celle que le
-# workflow embarque dans l ISO. 1,7 Go, reprise possible (curl -C -), teste
-# avant d etre mis en place. OSMO_PMOS_IMAGE_URL pour une autre adresse, vide
-# pour ne rien telecharger (on retombe alors sur pmbootstrap install).
+# ── THE REFERENCE IMAGE: PRESENT, OR DOWNLOADED ─────────────────────────────
+# If the .zst is missing (ISO built without it) or CORRUPT (zstd -t says so:
+# a truncated copy, a 404 saved as is, a key removed too early), it is taken
+# from the GitHub release "pmos-image" - the one the workflow embeds in the
+# ISO. 1.7 GB, resumable (curl -C -), tested before being put in place.
+# OSMO_PMOS_IMAGE_URL for another address, empty to download nothing (falls
+# back to pmbootstrap install).
 ZST="$PM/image/qemu-amd64.img.zst"
 : "${OSMO_PMOS_IMAGE_URL=https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst}"
 pmos_zst_ok() { [ -f "$ZST" ] && zstd -t "$ZST" >/dev/null 2>&1; }
@@ -276,9 +272,9 @@ if [ ! -f "$IMG" ] || [ "${OSMO_PMOS_FRESH:-0}" = 1 ]; then
 fi
 [ "$LAUNCH" = 1 ] || { ok "fini (--no-launch) - « osmo-pmos-qemu $FORMAT » branche VM, modem et voix"; exit 0; }
 
-# ── 5. LA VM, ET LE MODEM DES QU ELLE REPOND ────────────────────────────────
-# osmo-pmos-qemu garde la main (fenetre SDL) et son guetteur branche le modem
-# et la voix tout seul (osmo-pmos-setup) des que le SSH de la VM repond.
+# ── 5. THE VM, AND THE MODEM AS SOON AS IT ANSWERS ──────────────────────────
+# osmo-pmos-qemu keeps control (SDL window) and its watcher plugs the modem
+# and the voice by itself (osmo-pmos-setup) as soon as the VM SSH answers.
 QEMU="$(command -v osmo-pmos-qemu 2>/dev/null || echo "$PM/bin/osmo-pmos-qemu.sh")"
 export OSMO_PMOS_FROM_BUILD=1     # osmo-pmos-qemu ne doit pas nous rappeler
 exec "$QEMU" "$FORMAT"

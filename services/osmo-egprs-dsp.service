@@ -1,26 +1,26 @@
 [Unit]
 Description=osmo-operator - workflow EGPRS : cellule paquet virtuelle + modem GPRS, sur le banc DSP (ROM TI)
 Documentation=file:/opt/GSM/osmo-operator/scripts/egprs-dsp.sh
-# Le banc (coeur, BTS 0 sur le C54x, SGSN/GGSN) doit etre la : Requires=, pas
-# seulement Wants= - sans lui, ce workflow n a rien a attacher.
+# The bench (core, BTS 0 on the C54x, SGSN/GGSN) must be there: Requires=, not
+# only Wants= - without it this workflow has nothing to attach to.
 Requires=osmo-banc.service
 After=osmo-banc.service network.target
 ConditionPathExists=/opt/GSM/osmo-operator/scripts/egprs-dsp.sh
 
 [Service]
-# Oneshot + RemainAfterExit : le script lance la cellule et le modem en unites
-# transitoires (systemd-run : osmo-bts-virtual-gprs, osmo-pcu-gprs,
-# osmo-virtphy-gprs, osmo-modem-gprs), puis sort. L unite reste « active
-# (exited) » ; ExecStop les demonte.
+# Oneshot + RemainAfterExit: the script starts the cell and the modem as
+# transient units (systemd-run: osmo-bts-virtual-gprs, osmo-pcu-gprs,
+# osmo-virtphy-gprs, osmo-modem-gprs), then exits. The unit stays « active
+# (exited) »; ExecStop tears them down.
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/GSM/osmo-operator
 Environment=HOME=/root NO_COLOR=1 EGPRS_BANC=1
-# EGPRS_L1=auto|virtphy|dsp, EGPRS_IMSI..., OSMOCOM_CFG : a poser ici.
+# EGPRS_L1=auto|virtphy|dsp, EGPRS_IMSI..., OSMOCOM_CFG: set them here.
 EnvironmentFile=-/etc/default/osmo-egprs-dsp
 ExecStart=/bin/bash /opt/GSM/osmo-operator/scripts/egprs-dsp.sh start
 ExecStop=/bin/bash /opt/GSM/osmo-operator/scripts/egprs-dsp.sh stop
-# Le banc est deja monte (Requires) ; ici : BTS 2, PCU, attach, PDP.
+# The bench is already up (Requires); here: BTS 2, PCU, attach, PDP.
 TimeoutStartSec=600
 TimeoutStopSec=30
 StandardOutput=journal

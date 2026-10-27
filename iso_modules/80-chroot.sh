@@ -1,19 +1,19 @@
 #!/bin/bash
-# iso_modules/80-chroot.sh - etape 8 : configuration du rootfs dans le chroot (apt, noyau, bureau)
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/80-chroot.sh - step 8: configure the rootfs inside the chroot (apt, kernel, desktop).
+# Sourced by build-iso.sh in numeric order (same shell, variables and functions);
+# not runnable on its own. A `return` at the top of a module means "nothing to do"
+# (this is how --arm skips a step).
+# Environment: ROOTFS, DIR, ISO_ROLE, ISO_LITE, ISO_ARCH, ISO_MIRROR, ISO_SUITE,
+# ISO_DESKTOP, ISO_DEB_CACHE, NO_CACHE, OSMO_ISO_KB, OSMO_ISO_SOFTSIM, OSMO_FF_HOME.
 
 echo -e "${GREEN}[8/9] Configuration chroot...${NC}"
 mount --bind /proc "$ROOTFS/proc"; mount --bind /sys "$ROOTFS/sys"
-# ── LE CACHE APT DU CHROOT EST PERSISTANT ───────────────────────────────────
-# [2026-09-04] Chaque passe retelechargeait ~700 paquets (le hub, la normale,
-# et toute reconstruction). Le repertoire ou apt (et apt-fast, DLDIR) range ses
-# .deb est un bind du cache de l hote, ISO_DEB_CACHE/apt-archives : telecharge
-# une fois, reutilise par toutes les passes et les builds suivants. Il est
-# demonte AVANT le squashfs (les .deb ne partent pas dans l ISO), et le
-# chroot ne fait plus "apt-get clean" quand il est monte - ce serait vider le
-# cache de l hote. --no-cache : pas de bind, comportement d avant.
+# ── Persistent apt cache for the chroot ─────────────────────────────────────
+# The apt/apt-fast download directory is a bind mount of the host cache
+# ISO_DEB_CACHE/apt-archives, reused by every pass and later builds. It is
+# unmounted before the squashfs (no .deb files in the ISO), and the chroot skips
+# "apt-get clean" while it is mounted (that would empty the host cache).
+# --no-cache: no bind mount.
 ISO_APT_CACHE_BOUND=0
 if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
     mkdir -p "$ISO_DEB_CACHE/apt-archives/partial" "$ROOTFS/var/cache/apt/archives"
@@ -23,22 +23,19 @@ if [ -n "$ISO_DEB_CACHE" ] && [ -z "$NO_CACHE" ]; then
     fi
 fi
 mount --bind /dev "$ROOTFS/dev";   mount --bind /dev/pts "$ROOTFS/dev/pts" 2>/dev/null||true
-# Le resolv.conf de l HOTE, et seulement pour la duree du chroot : c est lui qui
-# donne un DNS a apt pendant la construction. Il est REMPLACE a la fin
-# (81-cloture-systeme.sh) - voir le bloc DNS la-bas pour ce qu il cassait quand
-# il restait.
+# The host resolv.conf gives apt DNS during the build only; it is replaced at
+# the end by 81-cloture-systeme.sh (see its DNS block).
 cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null||true
 
-# L installeur apt-fast, le meme que celui du Dockerfile, dans le rootfs.
+# Install the apt-fast installer (same as the Dockerfile) into the rootfs.
 install -m755 "$DIR/packaging/apt-fast-install.sh" "$ROOTFS/usr/local/sbin/apt-fast-install"
 
-# ISO_ROLE passe par l environnement : le script est en quotes simples, rien n y
-# est substitue a l ecriture - c est voulu (aucune surprise d expansion), donc la
-# seule facon de lui dire quelle image on construit est de le lui passer.
-# LC_ALL=C.UTF-8 : la locale de l hote (fr_FR.UTF-8) fuyait dans le chroot, ou
-# elle n est pas encore generee ; perl (dpkg-preconfigure, debconf) le disait a
-# chaque paquet - "Setting locale failed" - et retombait sur C. On le fait
-# d emblee, sans bruit. C.UTF-8 existe toujours dans la libc, sans locale-gen.
+# The script below is single-quoted (no expansion at write time), so ISO_ROLE and
+# the other settings are passed through the environment.
+# LC_ALL=C.UTF-8: the host locale is not generated in the chroot and perl/debconf
+# would warn "Setting locale failed" on every package. C.UTF-8 needs no locale-gen.
+# NOTE: everything up to the closing quote is inside a single-quoted bash -c
+# string: never put an apostrophe in it, comments included (use \047).
 chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
                    LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE= \
                    ISO_ROLE="$ISO_ROLE" ISO_LITE="$ISO_LITE" ISO_APT_CACHE_BOUND="$ISO_APT_CACHE_BOUND" \
@@ -48,23 +45,15 @@ chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbi
 set -e; export DEBIAN_FRONTEND=noninteractive
 export DPKG_OPTIONS="--force-confold --force-confdef"
 
-# ── apt/dpkg rapides ────────────────────────────────────────────────────────
-# Ce rootfs est jetable : il est fabrique, empaquete en squashfs, puis efface.
-# Les garanties de durabilite que dpkg paie a chaque fichier - un fsync par
-# fichier deballe - n ont donc aucune valeur ici, et elles dominent le temps de
-# construction. force-unsafe-io les coupe : c est le reglage qu utilisent les
-# images Docker officielles, pour la meme raison.
-#
-# Le reste ne joue pas sur la durabilite mais sur ce qui est TELECHARGE :
-#   Languages=none    supprime les traductions de descriptions (inutiles ici)
-#   Pipeline-Depth    plusieurs requetes en vol au lieu d une a la fois
-#   Retries           un miroir qui bronche ne fait plus echouer la construction
-#                     entiere - ce chroot tourne sous set -e
+# ── Fast apt/dpkg ───────────────────────────────────────────────────────────
+# This rootfs is disposable (built, packed into a squashfs, then deleted), so
+# the per-file fsync of dpkg is useless here and dominates build time.
+# force-unsafe-io disables it, as the official Docker images do.
 mkdir -p /etc/dpkg/dpkg.cfg.d /etc/apt/apt.conf.d
 echo "force-unsafe-io" > /etc/dpkg/dpkg.cfg.d/02-unsafe-io
-# Les reglages de telechargement (Languages, Retries, Pipeline, Use-Pty) sont
-# poses par apt-fast-install, plus bas, dans /etc/apt/apt.conf.d/90osmo-operator
-# - les memes que dans l image docker et sur l hote.
+# Download settings (Languages=none, Retries, Pipeline-Depth, Use-Pty) are written
+# by apt-fast-install below into /etc/apt/apt.conf.d/90osmo-operator, the same
+# as in the Docker image and on the host.
 
 APT_OPTS="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
 
@@ -74,21 +63,17 @@ echo "keyboard-configuration keyboard-configuration/layoutcode string us" | debc
 echo "keyboard-configuration keyboard-configuration/modelcode string pc105" | debconf-set-selections
 echo "console-setup console-setup/charmap47 select UTF-8" | debconf-set-selections
 
-# ${ISO_SUITE} vient de l environnement du chroot (export plus haut) ; le
-# heredoc est NON quote pour que la substitution ait lieu ici.
+# ISO_SUITE comes from the chroot environment; the heredoc below is unquoted so
+# that the variables are substituted.
 _S="${ISO_SUITE:-noble}"
-# Le miroir suit l architecture (arm64 : ports.ubuntu.com). restricted en plus
-# sur arm64 : linux-firmware-raspi (start4.elf, le firmware de demarrage du Pi)
-# y est range.
+# The mirror follows the architecture (arm64: ports.ubuntu.com). arm64 also
+# needs restricted (linux-firmware-raspi, the Pi boot firmware start4.elf).
 _M="${ISO_MIRROR:-http://archive.ubuntu.com/ubuntu}"
 _C="main universe multiverse"
 [ "${ISO_ARCH:-amd64}" = "arm64" ] && _C="$_C restricted"
-# ── GIT : plus de forcage HTTP/1.1 ──────────────────────────────────────────
-# [2026-09-03] RETIRE, ici comme dans le Dockerfile et update.sh. Le reglage
-# http.version=HTTP/1.1 datait d un incident de reseau ("expected flush after
-# ref listing") ; il ralentissait tous les clones de l image. Si une machine
-# retombe dessus, c est un reglage LOCAL a poser sur elle :
-#     git config --global http.version HTTP/1.1
+# ── Git: no forced HTTP/1.1 ─────────────────────────────────────────────────
+# Remove any system-wide http.version setting. If a machine needs it, set it
+# locally:  git config --global http.version HTTP/1.1
 git config --system --unset http.version 2>/dev/null || true
 
 cat > /etc/apt/sources.list <<SOURCES
@@ -97,27 +82,21 @@ deb $_M $_S-updates    $_C
 deb $_M $_S-security   $_C
 SOURCES
 
-# ── Les certificats D ABORD ─────────────────────────────────────────────────
-# Installer ca-certificates ne suffit pas : c est update-ca-certificates qui
-# deballe /usr/share/ca-certificates/* dans /etc/ssl/certs et fabrique le
-# ca-certificates.crt que lisent OpenSSL, curl, git, apt (https) et snap. Dans
-# un chroot le postinst ne le fait pas toujours, et le rootfs sortait avec un
-# magasin vide : "certificate verify failed" partout, et le message accuse le
-# reseau. On le fait ICI, avant le premier octet TLS (la cle NodeSource
-# ci-dessous), et plus jamais apres : un --reinstall du paquet en fin de chroot
-# ne faisait que rejouer ce meme appel, une resolution apt de plus pour rien.
-# --fresh : on repart du magasin du paquet plutot que d un etat herite du
-# debootstrap, dont on ne sait pas ce qu il contient.
+# ── CA certificates first ───────────────────────────────────────────────────
+# Installing ca-certificates is not enough: update-ca-certificates builds
+# /etc/ssl/certs/ca-certificates.crt (used by OpenSSL, curl, git, apt, snap),
+# and the postinst does not always run it in a chroot. Run it before the first
+# TLS access (the NodeSource key below). --fresh rebuilds from the package store
+# instead of whatever debootstrap left.
 update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
 
-# ── arm64 : LE DEPOT ARMBIAN (noble), en plus des ports Ubuntu ──────────────
-# La base arm64 est Armbian 24.04 : le noyau bcm2711 d Armbian (rpi-6.18.y),
-# ses device-trees, le paquet BSP rpi4b (les hooks qui tiennent /boot/firmware
-# a jour, zram, resize, motd...), et son base-files (os-release Armbian). Le
-# depot porte aussi les paquets Ubuntu du Pi (linux-firmware-raspi, rpi-eeprom,
-# libraspberrypi-bin). Ecrit APRES les certificats (le depot est en https) et
-# AVANT l unique apt-get update, cle dearmee dans /usr/share/keyrings : c est
-# le format deb822 qu Armbian lui-meme utilise.
+# ── arm64: Armbian repository (noble), in addition to Ubuntu ports ─────────
+# The arm64 base is Armbian 24.04: bcm2711 kernel (rpi-6.18.y), device trees,
+# the rpi4b BSP package (hooks keeping /boot/firmware up to date, zram, resize,
+# motd) and its base-files. The repository also carries the Ubuntu Pi packages
+# (linux-firmware-raspi, rpi-eeprom, libraspberrypi-bin). Written after the
+# certificates (https) and before the single apt-get update, deb822 format with
+# the dearmored key in /usr/share/keyrings, as Armbian does.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
     curl -fsSL --retry 3 https://apt.armbian.com/armbian.key | gpg --dearmor -o /usr/share/keyrings/armbian.gpg
     cat > /etc/apt/sources.list.d/armbian.sources <<EOF
@@ -127,32 +106,26 @@ Suites: $_S
 Components: main $_S-utils $_S-desktop
 Signed-By: /usr/share/keyrings/armbian.gpg
 EOF
-    # /boot/firmware doit EXISTER avant l installation du noyau : les hooks du
-    # BSP (zzz-copy-new-files, zzz-update-initramfs, en bash -e) y copient sans
-    # le creer, et update-initramfs echouerait avec eux - donc tout ce script.
+    # /boot/firmware must exist before the kernel is installed: the BSP hooks
+    # (zzz-copy-new-files, zzz-update-initramfs, bash -e) copy into it without
+    # creating it, and their failure would abort this whole script.
     mkdir -p /boot/firmware
     echo "depot Armbian : https://apt.armbian.com $_S"
 fi
 
-# ── deb-src : AVANT l unique apt-get update ─────────────────────────────────
-# Le build-dep gnuradio plus bas lit les index Sources. Ils etaient tires par
-# un DEUXIEME apt-get update, juste pour lui ; en ecrivant deb-src.list ici, le
-# seul update du chroot les ramene avec le reste. Le hub inter-STP n a pas de
-# gr-gsm : lui faire tirer ~80 Mo d index Sources, c est du temps pour rien -
-# il n a donc pas de deb-src, et pas de build-dep.
+# ── deb-src: before the single apt-get update ──────────────────────────────
+# The gnuradio build-dep below needs the Sources indexes. The inter-STP hub has
+# no gr-gsm, so it gets neither deb-src (~80 MB of indexes) nor build-dep.
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     sed -nE "s|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p" \
         /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list
 fi
 
-# ── NodeSource : AVANT l unique apt-get update, et nodejs dans PKGS ─────────
-# Le dashboard tourne sous node 22, que jammy n a pas (12.22 dans les depots).
-# L ancien chemin lancait le script setup_22.x de NodeSource, qui fait SON
-# apt-get update, puis un apt-get install nodejs a part : deux resolutions de
-# plus. On pose le depot a la main - cle ASCII dans /etc/apt/keyrings, apt 2.4
-# la lit telle quelle, sans gpg --dearmor - et nodejs rejoint la liste unique.
-# Si la cle ne se telecharge pas (pas de reseau vers NodeSource), on retombe
-# plus bas sur le script officiel, comme avant.
+# ── NodeSource: before the single apt-get update, nodejs in PKGS ───────────
+# The dashboard needs node 22, which the distribution does not ship. The
+# repository is added by hand (ASCII key in /etc/apt/keyrings, read as-is by
+# apt >= 2.4) so nodejs joins the single install list. If the key download
+# fails, the official setup script is used as a fallback further down.
 NODE_VIA_APT=0
 if ! command -v node >/dev/null 2>&1; then
     mkdir -p /etc/apt/keyrings
@@ -167,11 +140,11 @@ if ! command -v node >/dev/null 2>&1; then
     fi
 fi
 
-# ── MongoDB (Open5GS : HSS et PCRF y lisent les abonnes) : AVANT l apt update ─
-# [2026-09-08] mongodb-org n est pas dans Ubuntu : depot repo.mongodb.org
-# (noble/8.0), cle dearmee dans /usr/share/keyrings - le meme fichier que
-# tools/osmo-lte-install.sh pose sur une machine installee. Sans cle (pas de
-# reseau vers mongodb.org), pas de depot : osmo-epc le dira au premier start.
+# ── MongoDB (Open5GS HSS/PCRF subscriber store): before the apt update ─────
+# mongodb-org is not in Ubuntu: repo.mongodb.org (noble/8.0), dearmored key in
+# /usr/share/keyrings, same file as tools/osmo-lte-install.sh. Without the key
+# (no network to mongodb.org) the repository is skipped and osmo-epc reports it
+# on first start.
 MONGO_VIA_APT=0
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     if curl -fsSL --retry 3 https://www.mongodb.org/static/pgp/server-8.0.asc \
@@ -185,90 +158,60 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     fi
 fi
 
-# ── UN SEUL apt update, puis apt-fast pour tout le reste ───────────────────
-# [2026-09-02] Il y en avait trois dans ce chroot : celui-ci, un pour les
-# deb-src du build-dep, un dans le script NodeSource. Tout ce qui ajoute une
-# source est maintenant fait AVANT, et cet appel les lit toutes d un coup.
-# [2026-09-03] apt-fast : le meme installeur que le Dockerfile
-# (/usr/local/sbin/apt-fast-install, copie dans le rootfs avant ce chroot).
-# Il pose aria2 et curl par apt-get - le seul apt-get qui reste - puis tout
-# passe en parallele. Repli integre sur apt-get si GitHub est injoignable.
+# ── Single apt-get update, then apt-fast for everything else ───────────────
+# Every extra source is added above so that this one update reads them all.
+# apt-fast-install (/usr/local/sbin, same installer as the Dockerfile) installs
+# aria2 and curl with apt-get, then downloads in parallel; it falls back to
+# apt-get if GitHub is unreachable.
 apt-get update -qq
 /usr/local/sbin/apt-fast-install
 
-# ── UN SEUL apt-get install ────────────────────────────────────────────────
-# [2026-08-27] Il y en avait cinq a la suite. apt resout, telecharge puis
-# configure a CHAQUE appel : cinq resolutions de dependances, cinq lots de
-# telechargement qui ne se recouvrent pas, et dpkg qui reconfigure ce que le lot
-# suivant vient de tirer. Un seul appel resout une fois, telecharge en parallele
-# et deballe dans un seul ordre - c est le poste le plus lourd du chroot.
+# ── Single apt-get install ──────────────────────────────────────────────────
+# One call resolves dependencies once, downloads in parallel and unpacks in a
+# single order; this is the heaviest part of the chroot.
 #
-# L ordre compte encore : cet appel reste JUSTE APRES apt-get update, avant le
-# build-dep. Ce chroot tourne sous set -e ; un build-dep qui echoue ne doit pas
-# emporter avec lui les outils sans lesquels l ISO sort muette :
-#   nc       le VTY est la seule source de verite sur l etat SS7 : tout le
-#            depot l interroge par "nc 127.0.0.1 4239". Sans nc, les checks ne
-#            se plaignent pas - ils affichent un diagnostic VIDE, qui se lit
-#            comme "rien n est attache" alors que tout va bien.
-#   socat    le transport VTY que run_modules/_lib/core.sh prend EN PREMIER, et
-#            sans lequel 21-abonnes-hlr.sh se rabat sur telnet - qui ne rend pas
-#            la main sur EOF de stdin, donc pas de provisionnement HLR.
-#   tcpdump  les captures GSMTAP/M3UA. Sans lui, une capture lancee en arriere
-#            plan echoue en silence et le pcap reste vide.
-#   git      les trois depots embarques gardent leur .git : c est par lui qu on
-#            les met a jour, sur la machine, sans les recloner.
+# It must stay right after apt-get update and before the build-dep: under set -e
+# a failing build-dep must not take down the tools the ISO cannot work without:
+#   nc       the whole repository queries the VTY with "nc 127.0.0.1 4239";
+#            without nc the checks show an EMPTY diagnostic instead of failing.
+#   socat    first-choice VTY transport of run_modules/_lib/core.sh; without it
+#            21-abonnes-hlr.sh falls back to telnet, which does not exit on stdin
+#            EOF, so HLR provisioning fails.
+#   tcpdump  GSMTAP/M3UA captures; without it background captures fail silently.
+#   git      the embedded repositories keep their .git and are updated in place.
 #
-# Deux listes, parce que les deux images ne font pas le meme metier. Le hub
-# inter-STP ne fait que router du M3UA : ni radio, ni QEMU, ni audio, ni PBX.
-# Lui installer asterisk, pulseaudio et ffmpeg, c est du poids et des services
-# en plus pour rien.
-# ca-certificates EN TETE de liste ; son magasin, lui, est regenere en tete de
-# ce chroot (update-ca-certificates --fresh, voir plus haut) : le rootfs sort
-# de debootstrap avec le paquet mais SANS /etc/ssl/certs peuple, et tout ce qui
-# parle en TLS echouait sur "certificate verify failed".
-# LE NOYAU : 6.8 (HWE), PAS 5.15 (GA). linux-image-generic sur jammy est fige a
-# la serie 5.15 ; le materiel recent (NIC, USB3, SDR branches en direct) y perd
-# des pilotes que la serie 6.8 porte. linux-image-generic-hwe-22.04 est le noyau
-# d activation materielle officiel de jammy (6.8.0-138, meme depot main, meme
-# cle Canonical - donc toujours signe pour Secure Boot) et tire
-# linux-modules-extra en dependance. La detection plus bas [ls vmlinuz-star,
-# sort -V, tail -1] choisit automatiquement le 6.8 pour l ISO.
-# [2026-09-03] LES NOMS DEPENDENT DE LA SUITE. noble a renomme les
-# bibliotheques dont l ABI portait un time_t (transition 64 bits) : libasound2
-# -> libasound2t64, libgnutls30 -> libgnutls30t64, libdbi1 -> libdbi1t64,
-# libsofia-sip-ua-glib3 -> libsofia-sip-ua-glib3t64 ; et c-ares s appelle
-# libcares2. Le noyau : sur noble, linux-image-generic EST la serie 6.8 (GA),
-# la meme que le HWE de jammy - pas besoin du HWE de noble (7.0). Verifie le
-# 2026-09-03 sur ubuntu:24.04 (apt-cache policy) pour chacun de ces noms.
-# ── LES EN-TETES DU NOYAU, DANS L IMAGE PAR DEFAUT ──────────────────────────
-# [2026-09-04] linux-headers-* suit linux-image-* : le METAPAQUET, pas une
-# version figee - c est lui qui garantit que les en-tetes correspondent au
-# noyau reellement installe, y compris apres une mise a jour du noyau sur le
-# systeme installe. Sans eux, tout module hors arbre (le pilote NVIDIA de
-# contextualprocess-nvidia.conf, une cle SDR, VirtualBox) echoue a la
-# compilation DKMS avec "Your kernel headers for kernel X cannot be found",
-# et ce n est reparable QUE avec du reseau - ce qu un banc n a pas toujours.
-# dkms et build-essential vont avec : des en-tetes sans compilateur ne
-# construisent rien. build-essential est deja dans la liste arm64 plus bas.
+# Two lists: the inter-STP hub only routes M3UA (no radio, QEMU, audio or PBX).
+# ca-certificates comes first (its store is regenerated above).
+#
+# Kernel: on noble linux-image-generic is the 6.8 series. The vmlinuz detection
+# further down (ls vmlinuz-*, sort -V, tail -1) picks the newest kernel.
+# Package names depend on the suite: noble renamed the time_t ABI libraries
+# (libasound2t64, libgnutls30t64, libdbi1t64, libsofia-sip-ua-glib3t64) and
+# c-ares is libcares2.
+#
+# ── Kernel headers in the default image ─────────────────────────────────────
+# linux-headers-* follows linux-image-* (the metapackage, not a fixed version),
+# so headers always match the installed kernel, also after kernel updates.
+# Out-of-tree modules (NVIDIA driver, SDR dongles, VirtualBox) need them for
+# DKMS, which otherwise requires network access. dkms and build-essential go
+# with them (build-essential is already in the arm64 list).
 case "$_S" in
     noble) _KERNEL_PKG="linux-image-generic linux-headers-generic";           _T64="t64"; _CARES="libcares2" ;;
     *)     _KERNEL_PKG="linux-image-generic-hwe-22.04 linux-headers-generic-hwe-22.04"; _T64="";    _CARES="libc-ares2" ;;
 esac
-# ── arm64 / Raspberry Pi 4 : ARMBIAN, pas de live-boot ──────────────────────
-# Exactement ce que le build Armbian pose pour rpi4b (config/sources/families/
-# bcm2711.conf) : linux-image-current-bcm2711 (noyau rpi-6.18.y, vmlinuz dans
-# /boot, dtb + overlays sous /usr/lib/linux-image-<ver>), linux-dtb-current-
-# bcm2711, armbian-bsp-cli-rpi4b-current (les hooks /etc/kernel/postinst.d qui
-# recopient noyau, dtb et firmware dans /boot/firmware, le resize au premier
-# boot, zram, motd, armbian-config), armbian-firmware ; et les paquets Ubuntu
-# du Pi que le depot Armbian porte : linux-firmware-raspi (start4.elf,
-# fixup4.dat - le GPU les charge avant le noyau), rpi-eeprom, libraspberrypi-
-# bin (vcgencmd), raspi-config. Pas de u-boot sur le Pi 4 : le firmware charge
-# vmlinuz directement (config.txt, ecrit par 82-arm-natif). build-essential et
-# wget : toast et les lanceurs se compilent dans ce chroot (l hote ne sait pas
-# produire de l aarch64), et osmo-update recompile les lanceurs sur la machine.
-# PAS de live-boot : la racine est une ext4 sur la carte SD, montee par
-# l initramfs standard (root=LABEL=armbi_root dans cmdline.txt).
+# ── arm64 / Raspberry Pi 4: Armbian, no live-boot ──────────────────────────
+# Same packages as the Armbian rpi4b build (config/sources/families/bcm2711.conf):
+# linux-image-current-bcm2711 (vmlinuz in /boot, dtb and overlays under
+# /usr/lib/linux-image-<ver>), linux-dtb-current-bcm2711,
+# armbian-bsp-cli-rpi4b-current (postinst.d hooks that copy kernel, dtb and
+# firmware to /boot/firmware, first-boot resize, zram, motd, armbian-config),
+# armbian-firmware; plus the Ubuntu Pi packages: linux-firmware-raspi
+# (start4.elf, fixup4.dat, loaded by the GPU before the kernel), rpi-eeprom,
+# libraspberrypi-bin (vcgencmd), raspi-config. No u-boot: the firmware loads
+# vmlinuz directly (config.txt written by 82-arm-natif). build-essential and
+# wget: toast and the launchers are compiled in this chroot, and osmo-update
+# recompiles the launchers on the device. No live-boot: the root is an ext4 on
+# the SD card mounted by the standard initramfs (root=LABEL=armbi_root).
 _LIVE_PKGS="live-boot live-boot-initramfs-tools"
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
     _KERNEL_PKG="linux-image-current-bcm2711 linux-headers-current-bcm2711 linux-dtb-current-bcm2711
@@ -276,16 +219,13 @@ if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
       linux-firmware-raspi rpi-eeprom libraspberrypi-bin raspi-config build-essential wget"
     _LIVE_PKGS=""
 fi
-# systemd-resolved : sur noble c est un paquet A PART, et il n est PAS tire par
-# le minbase de debootstrap. Sans lui, le stub 127.0.0.53 que designe
-# /etc/resolv.conf n a personne derriere - voir le bloc DNS de
-# 81-cloture-systeme.sh.
+# systemd-resolved is a separate package on noble, not pulled by the debootstrap
+# minbase. Without it nothing answers on the 127.0.0.53 stub named in
+# /etc/resolv.conf (see the DNS block of 81-cloture-systeme.sh).
 #
-# cryptsetup et rsync sont dans la liste de BASE, pas dans le bloc bureau qui
-# les demande deja : le second disque chiffre sur /home (etape 8i) vaut aussi
-# pour une image sans bureau - unlock-home ouvre le volume au demarrage, et
-# init-crypthome.sh recopie le home avec rsync -aHAX. Sans eux, le dispositif
-# echoue au pire moment : au premier demarrage apres chiffrement.
+# cryptsetup and rsync are in the BASE list: the encrypted /home disk (step 8i)
+# also applies to images without a desktop (unlock-home opens the volume at
+# boot, init-crypthome.sh copies the home with rsync -aHAX).
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved
       $_KERNEL_PKG initramfs-tools dkms build-essential
       $_LIVE_PKGS
@@ -308,29 +248,27 @@ PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd
 [ "$NODE_VIA_APT" = "1" ] && PKGS="$PKGS nodejs"
 
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
-    # Radio, emulation Calypso, audio, PBX : le noeud operateur seulement.
-    # [2026-10-24] gcc-9 et gcc-11 a cote du gcc-13 de noble : les memes compilateurs que
-    # l image Docker (Dockerfile, update-alternatives), pour recompiler osmocom-bb sur la
-    # machine - jolly/testing et burst_ind veulent gcc-9. Les alternatives sont posees
-    # apres l installation, plus bas.
+    # Radio, Calypso emulation, audio, PBX: operator node only.
+    # gcc-9 and gcc-11 next to the noble gcc-13, as in the Docker image, to rebuild
+    # osmocom-bb on the machine (jolly/testing and burst_ind need gcc-9). The
+    # alternatives are set after installation, below.
     PKGS="$PKGS
       libasound2-plugins pulseaudio pulseaudio-utils alsa-utils
       binutils-arm-none-eabi gdb-multiarch
       gcc-9 g++-9 gcc-11 g++-11
       asterisk
       ffmpeg"
-    # ── La 4G : srsRAN (ZeroMQ) et Open5GS, ce que ldd reclame ────────────
-    # [2026-09-08] Les binaires arrivent par les .deb du build (osmo-build-
-    # srsran, osmo-build-open5gs, osmo-build-libzmq : 50-injection-image.sh),
-    # leurs bibliotheques systeme par cette liste - elle fait autorite, comme
-    # celle du Dockerfile. Les -dev restent : /opt/LTE est un atelier (cmake,
-    # meson) et tools/osmo-lte-install.sh --build doit pouvoir y recompiler.
-    # [2026-09-10] qtbase5 / qwt / boost : srsGUI, compile AVANT srsRAN pour
-    # que celui-ci arme ses traces temps reel (constellation, spectre) - voir
-    # lte_build dans tools/osmo-lte-install.sh. Ce sont aussi les biblioteques
-    # que srsenb et srsue reclameront a l execution une fois lies a srsgui.
-    # mongodb-org : le depot MongoDB pose plus haut ; mongosh et les outils
-    # (mongodump/mongorestore) pour la base des abonnes du depot.
+    # ── LTE: srsRAN (ZeroMQ) and Open5GS runtime libraries ─────────────────
+    # The binaries come from the build .deb files (osmo-build-srsran,
+    # osmo-build-open5gs, osmo-build-libzmq: 50-injection-image.sh); this list
+    # provides their system libraries (authoritative, like the Dockerfile list).
+    # The -dev packages stay: /opt/LTE is a workshop and
+    # tools/osmo-lte-install.sh --build must be able to rebuild there.
+    # qtbase5 / qwt / boost: srsGUI, built before srsRAN to enable its real-time
+    # plots (see lte_build in tools/osmo-lte-install.sh); srsenb and srsue need them
+    # at runtime once linked against srsgui.
+    # mongodb-org: from the MongoDB repository added above; mongosh and the tools
+    # (mongodump/mongorestore) for the subscriber database.
     PKGS="$PKGS
       libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev libfftw3-dev cmake
       qtbase5-dev libqt5opengl5-dev libqwt-qt5-dev libboost-system-dev libboost-thread-dev libboost-test-dev
@@ -340,27 +278,15 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       libtins-dev libtalloc-dev libc-ares-dev
       zstd rsync kpartx"
     [ "$MONGO_VIA_APT" = "1" ] && PKGS="$PKGS mongodb-org mongodb-mongosh mongodb-database-tools"
-    # [2026-09-09] kpartx : pmbootstrap le compte parmi ses programmes requis
-    # (pmb/config/__init__.py, required_programs) et refuse de demarrer sans -
-    # « Cant find all programs required to run pmbootstrap: kpartx ». Le live
-    # du 3953233 ne l avait pas : le telephone ne pouvait pas s allumer.
+    # kpartx: required by pmbootstrap (pmb/config/__init__.py, required_programs),
+    # which refuses to start without it.
 
-    # ── En-tetes de build QEMU : l ISO NORMALE SEULEMENT ────────────────────
-    # L image normale embarque /opt/GSM/qosmo avec son .git ET son build/ :
-    # c est un atelier, on y developpe l emulation Calypso et on doit pouvoir
-    # relancer "make -C build qemu-system-arm" sur la machine. Or les runtimes
-    # seuls (liburing2, libslirp0, libpixman-1-0) ne suffisent pas : ninja
-    # reclame le lien de developpement .so ET l en-tete.
-    #
-    # MESURE DU 2026-08-27, sur l ISO telle que construite jusqu ici :
-    #   ninja: error: "/usr/lib/x86_64-linux-gnu/libpixman-1.so" missing
-    #   include/block/aio.h:18: fatal error: liburing.h: No such file
-    # -> la recompilation etait IMPOSSIBLE sur la machine, alors que tout
-    # l atelier (sources, .git, build/ deja peuple) etait la pour ca.
-    #
-    # La LITE, elle, n est pas un atelier : elle part de Dockerfile.lite, qui
-    # elague justement les chaines de compilation. Trois paquets -dev de plus
-    # y seraient du poids sans usage - d ou le test sur ISO_LITE.
+    # ── QEMU build headers: normal ISO only ────────────────────────────────
+    # The normal image ships /opt/GSM/qosmo with its .git and build/ so that
+    # "make -C build qemu-system-arm" can be rerun on the machine. ninja needs the
+    # development .so links and headers, not just the runtimes (liburing2,
+    # libslirp0, libpixman-1-0). The LITE image (Dockerfile.lite) strips the
+    # toolchains, hence the ISO_LITE test.
     if [ "${ISO_LITE:-0}" != "1" ]; then
         PKGS="$PKGS
       liburing-dev libslirp-dev libpixman-1-dev"
@@ -369,12 +295,11 @@ fi
 
 apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
 
-# ── LES ALTERNATIVES GCC ────────────────────────────────────────────────────
-# [2026-10-24] Meme choix que l image Docker (gcc-9 90, gcc-11 110), plus gcc-13, le
-# compilateur de noble, en DEFAUT (130) : c est lui qui a compile le noyau, et DKMS
-# (pilote NVIDIA par ubuntu-drivers, osmo-drivers) construit ses modules avec « gcc ».
-# Un gcc-11 par defaut, comme dans l image, ferait echouer ou deriver ces modules.
-#   update-alternatives --config gcc      choisir (g++ suit, en esclave)
+# ── GCC alternatives ────────────────────────────────────────────────────────
+# Same as the Docker image (gcc-9 90, gcc-11 110) plus gcc-13, the noble
+# compiler, as DEFAULT (130): it built the kernel, and DKMS (NVIDIA driver via
+# ubuntu-drivers, osmo-drivers) builds modules with "gcc".
+#   update-alternatives --config gcc      choose (g++ follows as a slave)
 #   update-alternatives --set gcc /usr/bin/gcc-9
 for _v in 9 11 13; do
     [ -x "/usr/bin/gcc-$_v" ] && [ -x "/usr/bin/g++-$_v" ] || continue
@@ -385,17 +310,14 @@ unset _v
 [ -x /usr/bin/gcc-13 ] && update-alternatives --set gcc /usr/bin/gcc-13
 echo "  [chroot] alternatives gcc : $(update-alternatives --list gcc 2>/dev/null | xargs) (defaut $(readlink -f /usr/bin/gcc))"
 
-# ── LA SIM : lecteur PC/SC (HID Omnikey), softSIM en lecteur, pySim ─────────
-# [2026-10-14] Meme code que le supplement addition.sh --sim :
-# tools/osmo-sim-install.sh (dans le rootfs, pose par 50-injection). Il pose
-# pcscd + libccid + pcsc-tools + opensc + pyscard + ruby/ruby-libxml (apt), le
-# gem smartcard (softSIM en mode pcsc : la carte du lecteur servie par SAP) et
-# pySim (Osmocom, depuis son git) dans /opt/GSM/pysim-venv. softSIM lui-meme
-# est deja la (51-softsim.sh, cote hote) : OSMO_SIM_SOFTSIM=0. Non fatal.
-# Le hub inter-STP n a pas de mobile : rien. --no-softsim (OSMO_ISO_SOFTSIM=0)
-# le retire aussi.
-# On est DEJA dans le chroot, dans un bash -c en quotes simples : pas de quote
-# simple brute ici (voir la note du gem smartcard, 2026-10-09, plus bas).
+# ── SIM: PC/SC reader (HID Omnikey), softSIM as a reader, pySim ───────────
+# Same code as addition.sh --sim: tools/osmo-sim-install.sh (placed in the
+# rootfs by 50-injection). Installs pcscd, libccid, pcsc-tools, opensc, pyscard,
+# ruby/ruby-libxml (apt), the smartcard gem (softSIM in pcsc mode: the reader
+# card served over SAP) and pySim (from git) in /opt/GSM/pysim-venv. softSIM
+# itself is already installed (51-softsim.sh, host side): OSMO_SIM_SOFTSIM=0.
+# Non-fatal. Skipped on the inter-STP hub (no mobile) and with --no-softsim
+# (OSMO_ISO_SOFTSIM=0).
 if [ "$ISO_ROLE" != "interstp" ] && [ "${OSMO_ISO_SOFTSIM:-1}" = "1" ]; then
     _SIMI=/opt/GSM/osmo-operator/tools/osmo-sim-install.sh
     if [ -f "$_SIMI" ]; then
@@ -406,10 +328,10 @@ if [ "$ISO_ROLE" != "interstp" ] && [ "${OSMO_ISO_SOFTSIM:-1}" = "1" ]; then
     fi
 fi
 
-# build-dep gnuradio : tire toutes les deps de GNU Radio (boost, fftw, gmp,
-# log4cpp, volk...) dont depend le gnuradio/gr-gsm custom de /usr/local. Les
-# index Sources sont deja la : deb-src.list a ete ecrit avant l unique
-# apt-get update. Le hub n a pas de gr-gsm, donc pas de deb-src ni de build-dep.
+# build-dep gnuradio: all GNU Radio dependencies (boost, fftw, gmp, log4cpp,
+# volk...) needed by the custom gnuradio/gr-gsm in /usr/local. The Sources
+# indexes are already present (deb-src.list written before apt-get update).
+# The hub has no gr-gsm: no deb-src, no build-dep.
 if [ -s /etc/apt/sources.list.d/deb-src.list ]; then
     apt-fast build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
 fi
@@ -417,26 +339,17 @@ fi
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf
 ldconfig
 
-# -- venv /root/.env : il doit EXISTER et porter tomli --------------------
-# /root/.env est le venv que le pont (grgsm_exe) et le profil de root
-# activent : le .bashrc pose plus bas fait
-#     [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
-# Il arrive ici par un docker cp du CID vers /root/, suivi de || true : si
-# l image de run ne le porte pas, ou si son bin/ pointe sur un interpreteur
-# absent, le venv MANQUE et personne ne le dit -- le test du .bashrc echoue
-# en silence et tout retombe sur le python3 systeme.
+# ── venv /root/.env: must exist and provide tomli ──────────────────────
+# /root/.env is the venv activated by the bridge (grgsm_exe) and the root
+# profile (.bashrc: [ -f /root/.env/bin/activate ] && source ...). It is copied
+# from the image with "|| true", so it may be missing or point to an absent
+# interpreter, and everything would silently fall back to the system python3.
 #
-# python3 -m venv SANS --clear est REPARATEUR, pas destructeur : il recree
-# bin/ et pyvenv.cfg, installe pip par ensurepip, et laisse
-# lib/pythonX.Y/site-packages en place. On peut donc l appeler aussi bien
-# sur le venv copie que sur un repertoire absent. C est aussi ce qui exige
-# python3-venv dans PKGS : sans lui ensurepip n a pas ses roues, et la
-# creation echoue.
+# python3 -m venv WITHOUT --clear repairs: it recreates bin/ and pyvenv.cfg,
+# installs pip via ensurepip and keeps site-packages. It works on the copied
+# venv and on a missing directory. ensurepip needs python3-venv in PKGS.
 #
-# tomli : lecteur TOML entre dans la bibliotheque standard en 3.11 sous le
-# nom tomllib, mais ABSENT de la 3.10 de jammy. Ce qui lit un TOML depuis
-# le venv en depend donc explicitement - et le garde sur noble (3.12), ou il
-# ne coute rien : le code importe tomli, pas tomllib.
+# tomli: the code imports tomli (not tomllib), so it is installed explicitly.
 python3 -m venv /root/.env
 /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli \
     || echo "WARN: pip a echoue pour tomli dans /root/.env"
@@ -446,12 +359,12 @@ else
     echo "WARN: /root/.env sans tomli utilisable"
 fi
 
-# Docker NON installe dans le ISO (natif) : le lab tourne via start-native.sh et le
-# dashboard web via node natif. Le build sur le HOTE utilise le docker du HOTE pour
-# extraire binaires/configs, mais le ISO final nembarque pas docker.
+# Docker is NOT installed in the ISO: the lab runs via start-native.sh and the
+# web dashboard via native node. The host build uses the host docker only to
+# extract binaries and configs.
 
-# Repli NodeSource : uniquement si la cle n a pas pu etre posee avant l update
-# (voir NODE_VIA_APT plus haut). Le script officiel fait son propre update.
+# NodeSource fallback: only if the key could not be added before the update
+# (see NODE_VIA_APT above). The official script runs its own update.
 if ! command -v node >/dev/null 2>&1; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y $APT_OPTS --no-install-recommends nodejs
@@ -461,34 +374,18 @@ if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
     cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null || true
 fi
 
-# ── LE DASHBOARD S INSTALLE ICI, PAS AU PREMIER BOOT ────────────────────────
-# install-web-service.sh est le script du depot osmo-egprs-web qui sait poser le
-# dashboard : runtime node, dependances JS, unite systemd, certificat TLS et
-# politique Firefox. Il n etait joue nulle part pendant la construction - on ne
-# copiait que ses unites (etape 6) - et tout reposait donc sur
-# osmo-egprs-web-install.service au premier demarrage. Quand cet oneshot
-# echouait (il l a fait : l unite nommait /usr/local/bin/node, absent), l ISO
-# livrait un dashboard sans TLS, donc sans micro, et rien ne le disait pendant
-# le build.
+# ── Dashboard installed at build time ───────────────────────────────────────
+# install-web-service.sh (osmo-egprs-web repository) installs the node runtime,
+# JS dependencies, the systemd unit, the TLS certificate and the Firefox
+# policy. Running it here makes failures visible during the build;
+# osmo-egprs-web-install.service at first boot is an idempotent catch-up.
 #
-# On le joue DONC ici, ou son echec se voit tout de suite. Les deux
-# interrupteurs sont ceux que le script documente lui-meme, et ils sont faits
-# pour ce cas :
-#
-#   WEB_NO_TLS=1   pas de certificat au build. Une cle privee fabriquee dans ce
-#                  chroot serait IDENTIQUE dans toutes les ISO tirees de cette
-#                  image : n importe qui pourrait se faire passer pour la
-#                  console. Elle est posee sur la machine, au premier
-#                  demarrage, avec ses vraies adresses - et la politique
-#                  Firefox avec, puisqu elle nomme ces memes adresses.
-#   WEB_NO_START=1 systemd ne tourne pas dans un chroot ; `systemctl restart`
-#                  y echoue toujours, et le script est en `set -eu`. Sans cet
-#                  interrupteur, la construction entiere s arreterait sur un
-#                  service qui n avait aucune raison de demarrer la.
-#
-# Ce qui reste fait au build est justement ce qui n a pas besoin de la machine :
-# node, node_modules, l unite. L oneshot du premier boot devient alors ce qu il
-# aurait toujours du etre - un rattrapage idempotent, pas le seul chemin.
+#   WEB_NO_TLS=1   no certificate at build time: a private key generated here
+#                  would be identical in every ISO. The certificate and the
+#                  Firefox policy (which names the same addresses) are created
+#                  on the machine at first boot with its real addresses.
+#   WEB_NO_START=1 systemd does not run in a chroot; systemctl restart would
+#                  fail and the script is set -eu.
 if [ -x /opt/GSM/osmo-egprs-web/install-web-service.sh ]; then
     echo "  [web] install-web-service.sh (sans TLS ni demarrage : chroot)"
     WEB_NO_TLS=1 WEB_NO_START=1 bash /opt/GSM/osmo-egprs-web/install-web-service.sh \
@@ -497,39 +394,28 @@ else
     echo "  [web] WARN: install-web-service.sh absent de /opt/GSM/osmo-egprs-web"
 fi
 
-# ── VARIANTE DESKTOP : bureau, wireshark en fenetre, linphone ──────────────
-# Place ICI, et pas ailleurs : APRES le gros apt-get install (les deps communes
-# sont deja la, apt ne les reresout pas), mais AVANT update-initramfs - le
-# bureau tire plymouth et des modules qui doivent entrer dans l initrd - et
-# avant le apt-get clean qui vide le cache.
+# ── DESKTOP variant: desktop, wireshark GUI, linphone ──────────────────────
+# Placed after the main apt-get install (shared deps already present), before
+# update-initramfs (the desktop pulls plymouth and modules for the initrd) and
+# before apt-get clean.
 if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     echo "  [desktop] ubuntu-desktop-minimal + wireshark + linphone-desktop"
 
-    # AVEC les recommends, et c est tout le piege. ubuntu-desktop-minimal est un
-    # metapaquet dont presque TOUT est en Recommends. Installe avec le
-    # --no-install-recommends que le reste de ce chroot utilise, il tire
-    # gnome-shell et a peu pres rien autour : ni gdm3, ni session, ni terminal.
-    # On obtient un ecran noir au boot, pas un bureau - et le message
-    # d installation, lui, dit "done".
+    # WITH recommends: ubuntu-desktop-minimal puts almost everything in
+    # Recommends. With --no-install-recommends it installs gnome-shell without
+    # gdm3, session or terminal, giving a black screen at boot.
     #
-    # linphone (sans suffixe) est un paquet de TRANSITION vide sur jammy ; le
-    # client graphique s appelle linphone-desktop. wireshark tire wireshark-qt.
-    # wmctrl + x11-utils (xdpyinfo) : launch.sh s en sert pour paver les quatre
-    # fenetres en quarts d ecran. Sans eux le lancement marche toujours, mais
-    # les fenetres se posent ou le gestionnaire veut.
+    # linphone-desktop is the graphical client (linphone is a transition package).
+    # wireshark pulls wireshark-qt. wmctrl + x11-utils (xdpyinfo): launch.sh tiles
+    # the four windows into screen quarters (optional, placement only).
     #
-    # [2026-09-02] UN SEUL appel pour le bureau ET l installeur (calamares, grub
-    # signe, outils de partitionnement - voir le bloc suivant pour le detail de
-    # chaque paquet). Il y en avait deux : deux resolutions, deux lots de
-    # telechargement, et le premier avalait son echec ("|| echo WARN") - une
-    # image DESKTOP sans bureau sortait avec "done". Ici l echec ARRETE le
-    # build : sans bureau ou sans installeur, cette image ne sert a rien.
-    # snapd n est PLUS demande ici : plus rien de cette image ne s installe par
-    # snap (le navigateur est un .deb Mozilla, voir plus bas). Il arrive encore
-    # comme recommandation d ubuntu-desktop-minimal - c est pourquoi il est
-    # desactive et masque en fin de bloc plutot que simplement absent.
-    # x11-xserver-utils : xhost, dont run-as-owner (etape 8i) a besoin pour
-    # autoriser le compte au home chiffre sur le serveur X de la session root.
+    # One call for the desktop AND the installer (calamares, signed grub,
+    # partitioning tools: see the next block). A failure stops the build: without
+    # desktop or installer this image is useless.
+    # snapd is not requested (the browser is a Mozilla .deb) but still comes as a
+    # recommendation of ubuntu-desktop-minimal; see the snapd handling below.
+    # x11-xserver-utils: xhost, used by run-as-owner (step 8i) to allow the
+    # encrypted-home account on the root session X server.
     apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop \
         vlc chrome-gnome-shell \
@@ -541,101 +427,61 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
 
-    # ── AVAHI : PURGE ─────────────────────────────────────────────────────
-    # avahi n est demande NULLE PART dans ce depot : il arrive en Recommends de
-    # ubuntu-desktop-minimal, que l on installe volontairement AVEC ses
-    # recommends (sans eux, pas de gdm3 ni de session - voir plus haut). Il
-    # repart donc explicitement, apres coup.
-    #
-    # Pourquoi on n en veut pas sur un banc GSM : avahi-daemon diffuse en
-    # permanence du mDNS sur 224.0.0.251:5353 et sur TOUTE interface qui
-    # apparait - y compris apn0 et les veth du plan docker. Sur une capture
-    # GSMTAP ou une trace SIP, ce bruit periodique se mele au trafic qu on
-    # cherche a lire. Il pose aussi un .local qui prend le pas sur la
-    # resolution, ce qui n a aucun interet ici : tout est adresse en dur.
-    #
-    # --purge, et libnss-mdns avec : le paquet seul desinstalle laisserait la
-    # ligne "mdns4_minimal" dans /etc/nsswitch.conf, et chaque resolution
-    # paierait alors un aller-retour vers un service absent.
+    # ── Avahi: purged ───────────────────────────────────────────────────────
+    # avahi comes only as a Recommends of ubuntu-desktop-minimal. On a GSM bench
+    # avahi-daemon broadcasts mDNS (224.0.0.251:5353) on every interface, apn0 and
+    # docker veths included, polluting GSMTAP and SIP captures; all addresses here
+    # are static. --purge with libnss-mdns, and the mdns entries are removed from
+    # /etc/nsswitch.conf so lookups do not query an absent service.
     apt-fast purge -y $APT_OPTS avahi-daemon avahi-utils avahi-autoipd libnss-mdns 2>/dev/null \
         || echo "  [desktop] avahi deja absent"
     apt-fast autoremove -y $APT_OPTS 2>/dev/null || true
-    # Ceinture et bretelles : si une dependance future le reinstalle, il ne
-    # demarrera pas pour autant.
+    # Masked so that a future dependency cannot start it again.
     systemctl mask avahi-daemon.service avahi-daemon.socket 2>/dev/null || true
-    # ⚠️ GUILLEMETS DOUBLES, ET AUCUNE APOSTROPHE - COMMENTAIRES COMPRIS.
-    # Ce bloc entier est passe a bash -c en quotes SIMPLES : la moindre
-    # apostrophe y ferme la chaine. Ce sed en portait deux ; la sequence se
-    # terminait donc au milieu du chroot et bash sortait sur
-    #     bash: -c: line 270: syntax error: unexpected end of file
-    # apres avoir execute tout ce qui precedait - le message ne designe donc
-    # meme pas la bonne ligne. Et `bash -n build-iso.sh` ne peut PAS le voir :
-    # pour lui, ce bloc n est qu une chaine de caracteres.
-    # Les guillemets doubles passent sans encombre ; le depot utilise \047
-    # ailleurs quand une apostrophe est vraiment necessaire.
+    # Double quotes only, no apostrophe (this block is inside a single-quoted
+    # bash -c string, and bash -n on build-iso.sh cannot detect a stray one).
     sed -i "s/[[:space:]]*mdns4_minimal[[:space:]]*\[NOTFOUND=return\]//; s/[[:space:]]*mdns4//" \
         /etc/nsswitch.conf 2>/dev/null || true
     echo "  [desktop] avahi purge (mDNS retire du banc)"
 
-    # ── L INSTALLEUR : CALAMARES, ET POURQUOI PAS UBIQUITY ─────────────────
-    # Ubiquity est l installeur d Ubuntu et il est dans jammy (22.04.15). Il ne
-    # peut pas servir ici : il lit l etat du systeme live par CASPER, alors que
-    # cette image demarre avec LIVE-BOOT, celui de Debian (voir la liste PKGS
-    # plus haut : live-boot, live-boot-initramfs-tools, pas casper). Ubiquity ne
-    # trouverait ni le squashfs ni le point de montage du medium, et sortirait
-    # avant la premiere question - sans dire que la cause est l initramfs.
+    # ── Installer: Calamares (Ubiquity needs casper, this image uses live-boot) ──
+    # Calamares is told where the squashfs is. Its configuration lives in the
+    # repository (installer/calamares/) and is copied into the rootfs outside this
+    # chroot (the files contain apostrophes).
     #
-    # Calamares ne suppose rien : on lui DIT ou est le squashfs. Sa
-    # configuration vit dans le depot (installer/calamares/), elle est copiee
-    # dans le rootfs HORS de ce chroot - ces fichiers sont pleins
-    # d apostrophes, et ce script-ci est en quotes simples.
-    #
-    # Les dependances ne sont pas facultatives, chacune couvre une etape :
-    #   squashfs-tools  unpackfs, qui deverse le systeme sur le disque
-    #   dosfstools      la partition EFI, formatee en FAT
-    #   efibootmgr      l entree de demarrage UEFI
-    #   os-prober       les autres systemes, pour le menu GRUB
-    #   pciutils        lspci : la detection de la carte NVIDIA (osmo-install
-    #   ubuntu-drivers  et contextualprocess@nvidia) ; ubuntu-drivers choisit
-    #   -common         le pilote nvidia-driver-5xx recommande pour la carte
-    #   conky-all       le tableau de bord Conky du banc (configs/conky/,
-    #   python3-gi      l encart vivant cliquable (tools/osmo-panel.py, GTK)
+    # Each dependency covers a step:
+    #   squashfs-tools  unpackfs, which copies the system to disk
+    #   dosfstools      the FAT EFI partition
+    #   efibootmgr      the UEFI boot entry
+    #   os-prober       other systems, for the GRUB menu
+    #   pciutils        lspci: NVIDIA card detection (osmo-install
+    #   ubuntu-drivers  and contextualprocess@nvidia); ubuntu-drivers picks
+    #   -common         the recommended nvidia-driver-5xx
+    #   conky-all       the bench Conky dashboard (configs/conky/,
+    #   python3-gi      the clickable live panel (tools/osmo-panel.py, GTK)
     #   gir1.2-gtk-3.0
-    #   fonts-dejavu    autostart GNOME pose plus bas) - live et disque installe
-    #   python3-gi-     la fenetre c123 (tools/osmo-c123-gtk.py) : import cairo
-    #   cairo (+cairo)  et Gdk.cairo_set_source_pixbuf, l ecran du C123 emule
-    #   lvm2            LVM dans le partitionnement manuel de Calamares (groupes
-    #                   de volumes, LUKS sur LVM) ; son hook initramfs suit
-    #   cryptsetup      LUKS : la case "Chiffrer le systeme" de l installeur
-    #   (+ -initramfs)  (partition.conf) ; l initrd de la cible doit savoir
-    #                   ouvrir la racine, et c est cryptsetup-initramfs qui
-    #                   pose le hook - sans lui, disque chiffre = boot mort
-    #   qml-module-*    le diaporama pendant la copie
-    # L echec de CETTE etape ne doit PAS etre avale. calamares tire une longue
-    # chaine de dependances Qt/KDE ; si le miroir en manque une, apt sort en
-    # erreur - et un "|| echo WARN" laissait alors construire une image DESKTOP
-    # SANS installeur, exactement le "calamares marche pas" observe (ni binaire
-    # ni /etc/calamares dans le squashfs livre). Ces paquets sont dans l unique
-    # apt-get install du bureau, plus haut ; ici on VERIFIE que le binaire est
-    # bien la, sinon on arrete le build.
-    # On est DANS le chroot (ce bloc tourne sous "chroot ... bash -c") : le
-    # binaire est donc a /usr/bin/calamares, pas sous $ROOTFS (variable absente
-    # ici). set -e est actif ; l apt-get du bureau n a pas de "|| echo" donc un
-    # echec avorte deja - ce test attrape le cas ou apt sort 0 mais sans poser le
-    # binaire (paquet recommande saute, etc.).
+    #   fonts-dejavu    GNOME autostart set below), live and installed disk
+    #   python3-gi-     the c123 window (tools/osmo-c123-gtk.py): import cairo
+    #   cairo (+cairo)  and Gdk.cairo_set_source_pixbuf, the emulated C123 screen
+    #   lvm2            LVM in the Calamares manual partitioning (volume groups,
+    #                   LUKS on LVM); its initramfs hook follows
+    #   cryptsetup      LUKS: the installer encryption checkbox (partition.conf);
+    #   (+ -initramfs)  cryptsetup-initramfs installs the hook that lets the target
+    #                   initrd open an encrypted root
+    #   qml-module-*    the slideshow during the copy
+    # These packages are in the desktop apt-get install above (a failure aborts).
+    # Here we also check that the binary exists, in case apt exits 0 without it.
+    # We are inside the chroot: the binary is /usr/bin/calamares (no $ROOTFS here).
     if [ ! -x /usr/bin/calamares ]; then
         echo "ERREUR: calamares absent du rootfs apres apt-get - build DESKTOP interrompu." >&2
         echo "        (dependance Qt/KDE manquante au miroir ? relancer avec un cache .deb)" >&2
         exit 1
     fi
 
-    # ── LES OUTILS QUE CALAMARES APPELLE, ET QU IL NE TIRE PAS ──────────────
-    # unpackfs ne fait pas la copie lui-meme : il lance unsquashfs, puis RSYNC.
-    # Le paquet calamares ne depend d aucun des deux. Sans rsync, l installeur
-    # va jusqu au bout du partitionnement, puis s arrete sur
-    # "rsync a echoue avec le code d erreur 127" - 127, c est "commande
-    # introuvable", et rien dans le message ne le dit. Le disque cible reste
-    # partitionne et vide. On verifie donc a la construction, pas sur le banc.
+    # ── Tools Calamares calls but does not depend on ───────────────────────────
+    # unpackfs runs unsquashfs and then rsync; without rsync the install fails
+    # after partitioning with "error code 127" (command not found). Checked at
+    # build time.
     for _t in rsync unsquashfs; do
         if ! command -v "$_t" >/dev/null 2>&1; then
             echo "ERREUR: $_t absent du rootfs - unpackfs echouerait a l installation." >&2
@@ -643,19 +489,11 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         fi
     done
 
-    # ── GRUB DOIT ETRE DANS LA CIBLE, PAS SEULEMENT SUR LA MACHINE DE BUILD ──
-    # ISO_HOST_PKGS pose grub-efi-amd64-bin sur l HOTE, pour fabriquer l image
-    # amorcable. Le module bootloader de calamares, lui, lance grub-install DANS
-    # LE SYSTEME INSTALLE - c est-a-dire dans ce rootfs. Le rootfs n avait que
-    # grub-common (grub-mkconfig, grub-probe) et PAS grub2-common, qui fournit
-    # grub-install : l installation allait jusqu au bout de la copie, puis
-    # s arretait sur
-    #     "grub-install --target=x86_64-efi ... a renvoye le code d erreur 127"
-    # 127 = commande introuvable, sur un disque deja partitionne et rempli.
-    #
-    # Les binaires SIGNES vont avec : bootloader.conf pose
-    # efiBootloaderId=ubuntu precisement pour que le systeme installe reste
-    # amorcable en Secure Boot, ce qui suppose shimx64 et grubx64 signes ici.
+    # ── GRUB must be in the target, not only on the build host ─────────────
+    # The calamares bootloader module runs grub-install INSIDE the installed
+    # system (this rootfs); grub-install comes from grub2-common, not grub-common.
+    # The signed binaries (shimx64, grubx64) are needed too: bootloader.conf sets
+    # efiBootloaderId=ubuntu so the installed system boots with Secure Boot.
     for _t in grub-install grub-mkconfig grub-probe; do
         if ! command -v "$_t" >/dev/null 2>&1; then
             echo "ERREUR: $_t absent du rootfs - le module bootloader echouerait." >&2
@@ -670,17 +508,11 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         fi
     done
 
-    # ── FIREFOX : LE DEB DE MOZILLA, PAS LE SNAP ────────────────────────────
-    # [2026-09-04] L installation par snap au premier boot ne s achevait JAMAIS
-    # sur la cle : des minutes en "activating" (1,5 Go a deballer, snapd qui
-    # refuse tant qu un changement est en cours), et le banc tournait sans
-    # navigateur. Le paquet "firefox" des depots Ubuntu ne remplace rien : c est
-    # un paquet de transition qui rappelle snapd, inutilisable dans un chroot.
-    # Mozilla publie ses propres .deb (packages.mozilla.org), a jour a chaque
-    # version : on prend celui-la, epingle au-dessus de celui
-    # d Ubuntu, et apt le tient a jour sur le systeme installe. Le .desktop
-    # est firefox.desktop et la politique /etc/firefox/policies/policies.json
-    # est lue telle quelle, sans plug ni bac a sable.
+    # ── Firefox: the Mozilla .deb, not the snap ────────────────────────────
+    # The Ubuntu "firefox" package is a snap transition package, unusable in a
+    # chroot. Mozilla publishes .deb packages (packages.mozilla.org), pinned above
+    # the Ubuntu one and kept up to date by apt. The desktop file is
+    # firefox.desktop and /etc/firefox/policies/policies.json is read directly.
     apt-fast purge -y firefox chromium-browser 2>/dev/null || true
     install -d -m0755 /etc/apt/keyrings
     _ff_ok=0
@@ -693,19 +525,15 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         apt-get update -qq
         if apt-fast install -y $APT_OPTS firefox; then
             _ff_ok=1
-            # La langue de l interface suit le clavier demande au build (--kb).
+            # The UI language follows the keyboard chosen at build time (--kb).
             apt-fast install -y $APT_OPTS "firefox-l10n-${OSMO_ISO_KB:-fr}" 2>/dev/null \
                 || echo "  [desktop] firefox-l10n-${OSMO_ISO_KB:-fr} indisponible - interface en anglais"
         fi
     fi
-    # ── LA PAGE DE DEMARRAGE ────────────────────────────────────────────────
-    # Par une preference PAR DEFAUT (defaults/pref/), pas par une politique :
-    # /etc/firefox/policies/policies.json a deja un proprietaire
-    # (install-web-service.sh, qui y met les origines et le certificat du
-    # tableau de bord), et Firefox n en lit qu UN SEUL - le deuxieme qui ecrit
-    # efface le premier. Une preference par defaut ne croise rien, et
-    # l operateur peut toujours changer sa page d accueil dans les reglages.
-    # OSMO_FF_HOME permet de la choisir au build.
+    # ── Start page ──────────────────────────────────────────────────────────
+    # Set as a DEFAULT preference (defaults/pref/), not a policy: policies.json
+    # belongs to install-web-service.sh and Firefox reads only one. The operator
+    # can still change it. OSMO_FF_HOME selects it at build time.
     if [ "$_ff_ok" = "1" ] && [ -d /usr/lib/firefox/defaults/pref ]; then
         cat > /usr/lib/firefox/defaults/pref/osmo-homepage.js <<FFPREF
 // Pose par build-iso.sh (iso_modules/80-chroot.sh). Preference PAR DEFAUT :
@@ -720,104 +548,53 @@ FFPREF
     else
         echo "  [desktop] WARN: Firefox (deb Mozilla) NON installe - packages.mozilla.org injoignable ?"
     fi
-    # PLUS AUCUN SNAP DANS L IMAGE. Le navigateur etant un .deb, snapd n a plus
-    # rien a poser : il ne fait que retarder le boot (snapd.seeded attend le
-    # deballage de la graine). On le desactive, et on efface ce que les images
-    # precedentes posaient - une ISO reconstruite sur un rootfs de cache
-    # garderait sinon l unite d installation par snap, qui echouerait au boot
-    # faute de snapd.
+    # No snaps in the image: disable snap seeding and remove the snap install unit
+    # that older images installed (it would fail at boot on a cached rootfs).
     rm -rf /var/lib/osmo-snaps
     rm -f /etc/systemd/system/osmo-firefox-snap.service \
           /etc/systemd/system/multi-user.target.wants/osmo-firefox-snap.service \
           /usr/local/sbin/osmo-firefox-snap
-    # ── MAIS SNAPD RESTE UTILISABLE ────────────────────────────────────────
-    # [2026-09-04] Il etait DESACTIVE ET MASQUE. Consequence sur la machine
-    # installee :
-    #     # snap refresh
-    #     error: cannot communicate with server: Post "http://localhost/v2/snaps":
-    #            dial unix /run/snapd.socket: connect: no such file or directory
-    # Le paquet snapd etait la, la commande `snap` aussi, et rien ne marchait -
-    # sans qu aucun message ne dise que c est nous qui l avions coupe.
-    #
-    # Ce qu on voulait eviter, c est que l IMAGE EMBARQUE des snaps (le
-    # navigateur est un .deb) et que snapd.seeded retarde le boot en deballant
-    # une graine. Ce n est pas la meme chose que priver l operateur de snap.
-    # On garde donc le demon disponible, mais EN ACTIVATION PAR SOCKET : snapd
-    # ne demarre que si quelqu un lui parle, et un banc qui n installe aucun
-    # snap ne le voit jamais tourner. snapd.seeded reste, sans graine il rend la
-    # main tout de suite.
+    # ── snapd stays usable ──────────────────────────────────────────────────
+    # The image ships no snaps, but snapd remains available through SOCKET
+    # activation: it starts only when someone talks to it. snapd.seeded returns
+    # immediately without a seed.
     systemctl unmask snapd.service snapd.socket snapd.seeded.service snapd.apparmor.service 2>/dev/null || true
     systemctl enable snapd.socket snapd.apparmor.service 2>/dev/null || true
-    # snapd.service, lui, n est PAS active : la socket le reveillera au besoin.
+    # snapd.service is not enabled: the socket starts it on demand.
     systemctl disable snapd.service 2>/dev/null || true
 
     systemctl set-default graphical.target
 
-    # ── AUDIO : PULSEAUDIO SYSTEME, MEME SUR NOBLE ─────────────────────────
-    # [2026-09-04] ubuntu-desktop-minimal de noble DEPEND de pipewire-pulse, en
-    # conflit avec pulseaudio : le gros apt-get du bureau retirait pulseaudio
-    # sans le dire (apt history : "Remove: pulseaudio"), et au boot
-    # osmo-pulse.service bouclait en 203/EXEC - /usr/bin/pulseaudio absent.
-    # Sans lui : pas de sink gsm_audio, gapk muet, "pulse" rouge sur le
-    # tableau de bord. Le banc est construit autour du demon SYSTEME
-    # (/run/pulse/native, cf. osmo-pulse.service) : on le remet, ce qui retire
-    # le METAPAQUET ubuntu-desktop-minimal - pas le bureau, dont les paquets
-    # sont ensuite marques "manuels" pour qu aucun autoremove ne les emporte.
+    # ── Audio: system-wide PulseAudio, also on noble ───────────────────────
+    # ubuntu-desktop-minimal on noble depends on pipewire-pulse; the bench relies on
+    # the SYSTEM pulseaudio daemon (/run/pulse/native, osmo-pulse.service: gsm_audio
+    # sink, gapk). Installing pulseaudio removes the desktop METAPACKAGE only; the
+    # desktop packages are then marked manual so autoremove keeps them.
     #
-    # ── [2026-09-04, second passage] REMETTRE PULSEAUDIO NE SUFFIT PAS ──────
-    # SYMPTOME : le systeme INSTALLE n a aucun son sur le bureau. Mesure sur la
-    # machine installee, apres l installeur :
-    #     pactl -s unix:/run/pulse/native list short sinks
-    #         3  alsa_output.pci-...analog-stereo  RUNNING   <- la carte est la
-    #     sudo -u <user> wpctl status
-    #         Sinks:  *  33. Dummy Output                     <- la session n a RIEN
-    #     ps aux | grep pipewire
-    #         <user>  /usr/bin/pipewire-pulse                 <- toujours installe
+    # pulseaudio and pipewire-pulse are co-installable on noble, so pipewire-pulse
+    # must be purged explicitly: otherwise it holds /run/user/<uid>/pulse/native,
+    # and since wireplumber has no ALSA access (51-osmo-no-alsa.lua, the cards
+    # belong to the system daemon) the session only sees "Dummy Output" and is
+    # silent. This shows only for non-root users (installed disk).
     #
-    # DEUX CAUSES, ET IL FALLAIT LES DEUX :
-    #   1. pipewire-pulse N ETAIT PAS RETIRE. Le commentaire ci-dessus
-    #      l affirmait et le message de build le repetait, mais rien ne le
-    #      verifiait : dans noble, pulseaudio 16.1 et pipewire-pulse 1.0.5 sont
-    #      CO-INSTALLABLES (aucun Conflicts entre les deux paquets), donc
-    #      `apt install pulseaudio` ne retire que le metapaquet du bureau. Les
-    #      deux serveurs tournent alors cote a cote : le demon systeme tient la
-    #      carte, pipewire-pulse tient /run/user/<uid>/pulse/native - le socket
-    #      que la session regarde.
-    #   2. wireplumber n a pas le droit de toucher ALSA (51-osmo-no-alsa.lua,
-    #      pose plus bas, et il DOIT rester : les cartes sont au demon
-    #      systeme). PipeWire n a donc AUCUN peripherique : la session voit
-    #      "Dummy Output", GNOME n affiche aucune sortie, et tout ce qu on joue
-    #      part dans le vide. Un bureau parfaitement muet, sans un message.
-    #
-    # Sur la CLE le defaut ne se voyait pas : la session s y ouvre en root
-    # (uid 0), dont /run/user/0 existe deja quand osmo-pulse demarre, si bien
-    # que le lien pose par osmo-pulse-link.sh (ExecStartPost) recouvrait le
-    # socket de pipewire-pulse. Sur le DISQUE l utilisateur est celui de
-    # l installeur (uid >= 1000) : son /run/user/<uid> n existe pas encore au
-    # boot, aucun lien n est pose, et pipewire-pulse garde la main. D ou un bug
-    # qui ne sort QU APRES INSTALLATION - exactement le symptome rapporte.
-    #
-    # On purge donc pipewire-pulse pour de bon, on masque ses unites
-    # utilisateur (le paquet peut revenir par une mise a jour du bureau), et on
-    # VERIFIE. pipewire lui-meme reste : le screencast de GNOME en depend.
-    # Le raccordement de la session au demon systeme, lui, ne repose plus sur
-    # une course au boot : /etc/pulse/client.conf.d et une unite UTILISATEUR
-    # s en chargent, tous deux poses par iso_modules/82-services.sh.
+    # pipewire-pulse is purged, its user units masked (it may come back with a
+    # desktop update) and the result verified. pipewire itself stays (GNOME
+    # screencast). The session is connected to the system daemon by
+    # /etc/pulse/client.conf.d and a user unit, both installed by
+    # iso_modules/82-services.sh.
     if [ "$_S" = "noble" ]; then
         _auto=$(apt-mark showauto)
         apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils \
             || echo "  [desktop] WARN: apt n a pas pu remettre pulseaudio (conflit pipewire-pulse ?)"
         if [ -n "$_auto" ]; then apt-mark manual $_auto >/dev/null 2>&1 || true; fi
-        # LA PURGE EXPLICITE : `apt install pulseaudio` ne l entraine pas.
+        # Explicit purge: installing pulseaudio does not remove it.
         apt-get purge -y pipewire-pulse pipewire-media-session >/dev/null 2>&1 || true
         systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
-        # Ceinture et bretelles : si une mise a jour du bureau reinstallait
-        # pipewire-pulse, ses unites resteraient mortes et le socket
-        # /run/user/<uid>/pulse/native reste libre pour le lien vers le demon
-        # systeme. Un socket occupe = une session muette (voir ci-dessus).
+        # Masked in case a desktop update reinstalls pipewire-pulse: the socket
+        # /run/user/<uid>/pulse/native must stay free for the link to the system daemon.
         systemctl --global mask pipewire-pulse.service pipewire-pulse.socket 2>/dev/null || true
-        # wireplumber reste (le screencast GNOME passe par PipeWire) mais ne
-        # doit pas prendre les cartes son : elles sont au demon pulseaudio.
+        # wireplumber stays (GNOME screencast uses PipeWire) but must not take the
+        # sound cards: they belong to the pulseaudio daemon.
         mkdir -p /etc/wireplumber/main.lua.d
         printf "alsa_monitor.enabled = false\n" > /etc/wireplumber/main.lua.d/51-osmo-no-alsa.lua
         if [ -x /usr/bin/pulseaudio ]; then
@@ -825,8 +602,7 @@ FFPREF
         else
             echo "  [desktop] WARN: /usr/bin/pulseaudio toujours absent - osmo-pulse.service echouera"
         fi
-        # LA VERIFICATION, parce que le message precedent MENTAIT : il annoncait
-        # "pipewire-pulse retire" sans jamais regarder.
+        # Verify that pipewire-pulse is really gone.
         if [ -x /usr/bin/pipewire-pulse ]; then
             echo "  [desktop] WARN: pipewire-pulse TOUJOURS PRESENT - il prendra /run/user/<uid>/pulse/native et le bureau sera muet"
         else
@@ -834,50 +610,29 @@ FFPREF
         fi
     fi
 
-    # ── NetworkManager : ACTIF ──────────────────────────────────────────────
-    # Il etait masque pour laisser systemd-networkd seul maitre des interfaces.
-    # Le cout etait un bureau sans reseau utilisable a la main : pas de choix de
-    # Wi-Fi, pas de VPN, pas de bascule d interface - il fallait editer un
-    # .network et redemarrer un service pour changer de carte.
-    #
-    # Les deux cohabitent a condition que chacun sache ce qui ne lui appartient
-    # pas. systemd-networkd garde les interfaces du banc (apn0, les tun/veth du
-    # coeur paquet) ; NetworkManager prend les cartes physiques. La regle qui le
-    # dit - /etc/NetworkManager/conf.d/10-osmo-networkd.conf - est ecrite HORS
-    # de ce chroot, dont le script est en quotes simples. Sans elle, les deux se
-    # disputent la meme carte et c est l adresse qui saute au milieu d une
-    # session M3UA.
+    # ── NetworkManager: enabled ────────────────────────────────────────────
+    # systemd-networkd keeps the bench interfaces (apn0, packet core tun/veth);
+    # NetworkManager manages the physical cards (Wi-Fi, VPN, manual switching).
+    # The split is defined in /etc/NetworkManager/conf.d/10-osmo-networkd.conf,
+    # written outside this chroot. Without it both would fight over the same card.
     systemctl unmask NetworkManager 2>/dev/null || true
     systemctl enable NetworkManager 2>/dev/null || true
-    # ── AUCUNE ATTENTE RESEAU AU DEMARRAGE ─────────────────────────────────
-    # [2026-09-04] Mesure sur la machine installee :
-    #     systemd-analyze blame
-    #         2min  0.188s systemd-networkd-wait-online.service
-    #             5.719s NetworkManager-wait-online.service
-    # DEUX MINUTES de boot pour attendre une carte qui, sur un banc, n a
-    # souvent aucun lien : les interfaces du coeur paquet (apn0, les tun/veth)
-    # ne sont pas "en ligne" au sens de ces unites, et le cable WAN n est pas
-    # toujours branche. L attente ne rend service a personne - rien de ce que
-    # nous demarrons n exige une route par defaut AVANT de partir : les unites
-    # du banc reessaient (Restart=on-failure) et osmo-update sort 0 hors ligne.
-    #
-    # On les MASQUE (pas seulement disable) : network-online.target est tire
-    # par des unites tierces (apt-daily, snapd...) qui les rallumeraient.
-    # network-online.target reste atteignable, il devient simplement immediat.
-    # Meme raison a l arret : une unite ordonnee After=network-online.target
-    # est arretee AVANT le reseau, et un wait-online encore en vol y ajoute
-    # son propre delai d extinction.
+    # ── No network wait at boot ────────────────────────────────────────────
+    # The wait-online units can delay boot by minutes: bench interfaces (apn0,
+    # tun/veth) are never "online" in their sense and the WAN cable is often
+    # unplugged. Nothing we start needs a default route first (bench units use
+    # Restart=on-failure, osmo-update exits 0 offline).
+    # They are MASKED (not just disabled) because third-party units (apt-daily,
+    # snapd...) pull network-online.target, which then becomes immediate. This
+    # also avoids an extra delay at shutdown.
     systemctl disable NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
     systemctl mask    NetworkManager-wait-online.service systemd-networkd-wait-online.service 2>/dev/null || true
 
     # ── Autologin ──────────────────────────────────────────────────────────
-    # ROOT, directement : il n y a plus de compte "osmocom" (supprime plus
-    # haut - c etait un alias d UID 0 qui se faisait passer pour un compte
-    # ordinaire). GDM, lui, refuse toute session pour l uid 0, et la regle
-    # n est pas dans gdm3.conf mais dans PAM :
+    # Directly as root (there is no separate "osmocom" account). GDM refuses
+    # sessions for uid 0 through PAM, not gdm3.conf:
     #     auth required pam_succeed_if.so user != root quiet_success
-    # Sans la neutraliser, autologin ou pas, on retombe sur l ecran de connexion
-    # et AUCUN mot de passe ne passe - y compris le bon.
+    # That line is commented out, otherwise no login works at all.
     sed -i "/pam_succeed_if.so user != root quiet_success/s/^/#/" \
         /etc/pam.d/gdm-password /etc/pam.d/gdm-autologin 2>/dev/null || true
     mkdir -p /etc/gdm3
@@ -885,127 +640,72 @@ FFPREF
 [daemon]
 AutomaticLoginEnable=true
 AutomaticLogin=root
-# X11 impose : sous VirtualBox/QEMU, la session Wayland de GNOME 42 tombe sur
-# le pilote llvmpipe et rend un bureau inutilisable, quand elle demarre.
+# X11 forced: under VirtualBox/QEMU the GNOME Wayland session falls back to
+# llvmpipe and is unusable.
 WaylandEnable=false
 GDM
 
-    # ── LA CONTREPARTIE DE LA SESSION ROOT : PIPEWIRE ───────────────────────
-    # [2026-08-31] Le screencast de GNOME (Ctrl+Alt+Shift+R) ne faisait RIEN.
-    # Seul le journal le disait :
-    #     gnome-shell -> org.gnome.Shell.Screencast
-    #     gjs: Failed to start recorder: Failed to start screen cast:
-    #          Couldn t connect pipewire context
-    # L enregistrement d ecran passe OBLIGATOIREMENT par PipeWire, et les unites
-    # livrees par upstream portent ConditionUser=!root - pipewire.socket:3 et
-    # pipewire.service:17. La session ouverte en root juste au-dessus n avait
-    # donc jamais /run/user/0/pipewire-0, et gnome-shell aucun contexte ou
-    # pousser ses images.
-    #
-    # C est la contrepartie directe du choix d AutomaticLogin=root : elle se
-    # corrige ICI, a cote de lui, et pas ailleurs.
-    #
-    # Une affectation VIDE remet la liste de conditions a zero - c est la facon
-    # systemd d annuler une condition heritee ; un "!=root" ne le ferait pas.
-    # /etc/systemd/user/ vaut pour toutes les sessions, quel que soit le compte.
-    #
-    # RESERVE : PipeWire en root n est pas supporte upstream. Sur noble,
-    # wireplumber arrive avec le bureau : son moniteur ALSA est coupe plus haut
-    # (51-osmo-no-alsa.lua) pour qu il ne dispute pas les cartes au
-    # `pulseaudio --system` du banc.
+    # ── PipeWire for the root session ──────────────────────────────────────
+    # GNOME screencast (Ctrl+Alt+Shift+R) requires PipeWire, and the upstream
+    # pipewire.socket/pipewire.service units carry ConditionUser=!root, so the
+    # root autologin session would have no /run/user/0/pipewire-0.
+    # An EMPTY assignment resets the inherited conditions (the systemd way to
+    # cancel them). /etc/systemd/user/ applies to every account.
+    # Known limitation: PipeWire as root is not supported upstream. On noble the
+    # wireplumber ALSA monitor is disabled above (51-osmo-no-alsa.lua) so it does
+    # not compete with the bench pulseaudio --system.
     for _pwu in pipewire.socket pipewire.service; do
         mkdir -p "/etc/systemd/user/${_pwu}.d"
-        # GUILLEMETS DOUBLES : ce bloc est en quotes simples. Avec des
-        # apostrophes, le printf recevait [Unit]nConditionUser=n sans aucun
-        # retour a la ligne - le drop-in etait illisible et le correctif mort.
+        # Double quotes: this block is inside single quotes.
         printf "[Unit]\nConditionUser=\n" > "/etc/systemd/user/${_pwu}.d/10-allow-root.conf"
     done
     unset _pwu
 
-    # L assistant de premier demarrage (langue, comptes en ligne, sondage) se
-    # rejoue a CHAQUE boot sur un live sans persistance : il faut le desarmer,
-    # sinon il est la premiere - et longtemps la seule - chose a l ecran.
+    # The first-login assistant would run at EVERY boot on a non-persistent live:
+    # disable it.
     rm -f /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
     for h in /root; do
         mkdir -p "$h/.config" && echo yes > "$h/.config/gnome-initial-setup-done"
     done
 
-    # Verrouillage d ecran et mise en veille : desarmes. Une image de banc reste
-    # affichee pendant qu on regarde une capture ou un appel courir ; et sur un
-    # live, l ecran verrouille se rouvre avec un mot de passe que personne n a
-    # choisi. La disposition clavier suit celle demandee au build (--kb).
-    # printf et pas un heredoc : les valeurs gschema portent des apostrophes, et
-    # ce chroot tourne dans un bash -c en quotes simples - d ou les \047.
-    # ── LES FLECHES DU CONKY, AU CLAVIER ────────────────────────────────
-    # [2026-09-04] Le Conky affiche « ◀ op 2/3 ▶ » mais ne recoit PAS les clics
-    # (une fenetre Conky ne prend pas le pointeur - c est toute la raison d etre
-    # de tools/osmo-panel.py, la fenetre GTK posee sur l encart). Ces fleches
-    # seraient donc decoratives sans un moyen de pousser la selection depuis le
-    # clavier. Ctrl+AltGr+Droite : arret suivant ; Ctrl+AltGr+Gauche : precedent.
-    #
-    # [2026-09-10] C ETAIT Ctrl+Alt+O / Ctrl+Alt+Maj+O - une lettre, parce que
-    # Ctrl+Alt+Gauche/Droite change de bureau virtuel sous GNOME et qu on ne
-    # prend pas un raccourci a l utilisateur. Ce sont maintenant les FLECHES,
-    # celles-la memes que le Conky dessine, avec AltGr au lieu d Alt : GNOME ne
-    # met rien sur Ctrl+AltGr, les bureaux virtuels gardent leur Ctrl+Alt, et
-    # le raccourci se lit enfin sur l ecran (◀ ▶). AltGr, c est ISO_Level3_Shift,
-    # soit <Mod5> dans la syntaxe des accelerateurs GTK.
-    # osmo-op ecrit /run/osmo-fft/operator, que l encart, osmo-fft-snap.py et le
-    # Conky relisent a leur rythme.
+    # Screen lock and suspend disabled: the bench screen stays on during captures
+    # and calls, and a live session has no chosen password. The keyboard layout
+    # follows --kb. printf instead of a heredoc: gschema values need apostrophes
+    # (written as \047 inside this single-quoted block).
+    # ── Conky arrows on the keyboard ────────────────────────────────────
+    # Conky windows ignore the pointer, so the operator selection shown by Conky
+    # is changed with Ctrl+AltGr+Right (next) and Ctrl+AltGr+Left (previous).
+    # Ctrl+Alt+arrows stay with GNOME workspaces; AltGr is ISO_Level3_Shift,
+    # <Mod5> in GTK accelerator syntax. osmo-op writes /run/osmo-fft/operator,
+    # read by the panel, osmo-fft-snap.py and Conky.
     printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=[\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/\047,\047/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/\047]\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname=\047osmo-operator : arret suivant (Conky)\047\ncommand=\047/usr/local/bin/osmo-op --next\047\nbinding=\047<Control><Mod5>Right\047\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname=\047osmo-operator : arret precedent (Conky)\047\ncommand=\047/usr/local/bin/osmo-op --prev\047\nbinding=\047<Control><Mod5>Left\047\n\n" \
         > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
 
     printf "[org.gnome.desktop.session]\nidle-delay=uint32 0\n\n[org.gnome.desktop.screensaver]\nlock-enabled=false\nidle-activation-enabled=false\n\n[org.gnome.settings-daemon.plugins.power]\nsleep-inactive-ac-type=\047nothing\047\nsleep-inactive-battery-type=\047nothing\047\n\n[org.gnome.desktop.input-sources]\nsources=[(\047xkb\047,\047%s\047)]\n" \
         "${OSMO_ISO_KB:-fr}" > /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
-    # ── MODE CLAIR, YARU BLEU ───────────────────────────────────────────
-    # [2026-10-01] Comme sur le banc installe : accent bleu (icones Yaru-blue),
-    # le bleu du Conky et des encarts.
-    # [2026-10-24] RETOUR AU MODE CLAIR PAR DEFAUT (Yaru-blue, color-scheme
-    # default), ici et dans le natif (install_modules/80-bureau.sh). Le
-    # sombre reste a un clic : Parametres > Apparence.
-    # Les sections :ubuntu doublent la section nue, pour la meme raison que le
-    # fond (10_ubuntu-settings.gschema.override pose gtk-theme=Yaru dans
-    # [org.gnome.desktop.interface:ubuntu], que la session ubuntu lit d abord).
-    # [2026-10-24] Et :GNOME-Greeter, comme le fond : sans elle, l ecran de
-    # connexion (gdm) restait en Yaru orange, seul ecran hors du theme du banc.
+    # ── Light mode, Yaru blue ───────────────────────────────────────────
+    # Blue accent (Yaru-blue icons), light color scheme by default, same as the
+    # native install (install_modules/80-bureau.sh); dark mode is available in
+    # Settings > Appearance. The :ubuntu sections duplicate the plain one
+    # (10_ubuntu-settings.gschema.override sets gtk-theme=Yaru there and the ubuntu
+    # session reads it first); :GNOME-Greeter applies the theme to the gdm screen.
     for _sec in "org.gnome.desktop.interface" "org.gnome.desktop.interface:ubuntu" "org.gnome.desktop.interface:GNOME-Greeter"; do
         printf "\n[%s]\ncolor-scheme=\047default\047\ngtk-theme=\047Yaru-blue\047\nicon-theme=\047Yaru-blue\047\ncursor-theme=\047Yaru\047\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     done
     unset _sec
-    # ── Fond d ecran GSM LAB ────────────────────────────────────────────
-    # [2026-09-25] L illustration « communication tower landscape »
-    # (configs/gsm-lab-wallpaper.jpg, 7800x6030), TELLE QUELLE : ni recadree,
-    # ni teintee, ni cadres incrustes (osmo-wallpaper.timer n est plus active,
-    # cf. 85-installeur-bureau.sh). Posee comme fond GNOME par DEFAUT de session
-    # (live sans persistance : il faut le defaut de schema, pas un reglage
-    # utilisateur). zoom : GNOME remplit l ecran sans deformer (l image est en
-    # 4:3, le haut et le bas debordent un peu sur un ecran 16:9).
-    # [2026-10-01] DEUX IMAGES, DEUX ROLES. Le fond GNOME est desormais
-    # configs/gsm-lab-fond.jpg (le paysage numerique bleu, choisi sur le banc) ;
-    # l illustration aux pylones (gsm-lab-wallpaper.jpg) reste posee pour
-    # l ENCART du bureau, qui la montre entiere au milieu (osmo-fft-snap.py).
-    # [2026-10-11] LES DEUX SORTENT DU MEME DESSIN (tools/paysage-render.py) :
-    # gsm-lab-fond.jpg est le paysage low-poly nu (16:9, zoom),
-    # gsm-lab-wallpaper.jpg la decoupe de la boite de l encart dans ce meme
-    # paysage, pylones en plus. Posees cote a cote, elles ne font qu une.
-    # Les fichiers du depot sont une version retouchee de ce rendu (choisie
-    # sur le banc le 2026-10-11) ; le generateur reste la pour en refaire.
-    # [2026-10-12] L ENCART NE MONTRE PLUS D ILLUSTRATION (osmo-fft-snap.py,
-    # FOND_MODE=aucun) et n est a l ecran que si un banc tourne
-    # (osmo-panel.py) : le fond GNOME par defaut est donc gsm-lab-fond.jpg
-    # tel que le depot le porte - c est LUI le bureau au repos. Meme fond pose
-    # par l install native (install_modules/80-bureau.sh).
-    # Les deux fichiers sont reposes par 85-installeur-bureau.sh depuis le depot
-    # local - ici on prend ce que le clone porte, et le schema nomme le fond
-    # quoi qu il arrive (85 garantit le fichier).
-    # [2026-10-12] LE FOND SUIT LE BANC. Deux images d une meme scene :
-    # gsm-lab-ville.jpg (la ville au bord de l eau, sans antenne) est le fond
-    # au REPOS et le defaut de schema ; gsm-lab-antenne.jpg (la meme ville, le
-    # pylone 2G/4G dresse devant) est posee en fondu par tools/osmo-fond.py
-    # quand une 2G ou une 4G demarre (osmo-launcher.py au clic, osmo-panel.py
-    # quand il voit le banc debout), et la ville revient a l arret. Le paysage
-    # low-poly (gsm-lab-fond.jpg) reste pose, sans etre le defaut.
+    # ── GSM LAB wallpaper ───────────────────────────────────────────────
+    # Set as the session DEFAULT through the schema (a user setting would not
+    # survive a non-persistent live boot).
+    #   gsm-lab-ville.jpg     idle wallpaper and schema default
+    #   gsm-lab-antenne.jpg   same scene with the 2G/4G tower, faded in by
+    #                         tools/osmo-fond.py when a 2G or 4G network starts
+    #                         (osmo-launcher.py, osmo-panel.py); back to idle on stop
+    #   gsm-lab-fond.jpg      low-poly landscape (tools/paysage-render.py), fallback
+    #   gsm-lab-wallpaper.jpg tower illustration, also installed
+    # 85-installeur-bureau.sh reinstalls the files from the local repository; the
+    # schema names the wallpaper regardless. The native install
+    # (install_modules/80-bureau.sh) uses the same wallpaper.
     _WP=/opt/GSM/osmo-operator/configs/gsm-lab-wallpaper.jpg
     _FOND=/opt/GSM/osmo-operator/configs/gsm-lab-fond.jpg
     _VILLE=/opt/GSM/osmo-operator/configs/gsm-lab-ville.jpg
@@ -1024,18 +724,16 @@ GDM
         _DEFAUT=/usr/share/backgrounds/gsm-lab-fond.jpg
     fi
     if [ -f "$_WP" ] || [ -f "$_FOND" ] || [ -f "$_VILLE" ]; then
-        # TROIS sections : la valeur nue, puis les memes pour les "desktop
-        # overrides" [schema:ubuntu] et [schema:GNOME-Greeter] que pose
-        # 10_ubuntu-settings.gschema.override - une session ubuntu:GNOME lit
-        # celles-la de preference, et sans elles le greeter et l extension
-        # DING (icones du bureau) repartaient sur le numbat d Ubuntu.
+        # Three sections: the plain value plus the [schema:ubuntu] and
+        # [schema:GNOME-Greeter] desktop overrides from
+        # 10_ubuntu-settings.gschema.override, which an ubuntu:GNOME session reads
+        # first (otherwise the greeter and DING would use the Ubuntu default).
         for _sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
             printf "\n[%s]\npicture-uri=\047file://%s\047\npicture-uri-dark=\047file://%s\047\npicture-options=\047zoom\047\nprimary-color=\047#0d1b2a\047\n" "$_sec" "$_DEFAUT" "$_DEFAUT" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
-        # Icones du bureau en haut a gauche (DING), la ou le fond leur laisse la
-        # place : la carte LAB GSM commence a x=320 (tools/wallpaper-render.py).
+        # Desktop icons (DING) in the top-left corner, where the wallpaper leaves room.
         for _sec in "org.gnome.shell.extensions.ding" "org.gnome.shell.extensions.ding:ubuntu"; do
             printf "\n[%s]\nstart-corner=\047top-left\047\nshow-trash=false\nshow-volumes=false\n" "$_sec" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
@@ -1045,28 +743,15 @@ GDM
     else
         echo "  [desktop] WARN: $_WP absent -- fond d ecran GNOME par defaut"
     fi
-    # ── DOCK : LES FAVORIS DU BANC ──────────────────────────────────────
-    # Meme raison que le fond d ecran : sur un live sans persistance, un
-    # reglage utilisateur ne survit pas au boot. C est donc le DEFAUT DE SCHEMA
-    # qu il faut poser - et AUSSI la section [org.gnome.shell:ubuntu], que
-    # 10_ubuntu-settings pose avec la liste Ubuntu (thunderbird, rhythmbox...)
-    # et que la session ubuntu:GNOME lit de preference a la valeur nue.
-    #
-    # [2026-09-04] L ordre demande, gauche a droite dans le dock :
-    #   firefox · fichiers · claude · lancer le banc · installer · tutoriel ·
-    #   supplements · multi · deka · dsp · linphone · wireshark · le telephone
-    #   du banc (osmo-pmos.desktop : la VM postmarketOS/Phosh, posee par
-    #   tools/osmo-extras-install.sh)
-    #
-    # [2026-09-07] Les deux entrees Waydroid (waydroid.org.fossify.phone /
-    # .messages) sont retirees : Android est abandonne, le telephone est la VM
-    # postmarketOS.
-    #
-    # Une entree qui designe un .desktop absent est IGNOREE par GNOME Shell,
-    # sans erreur ni trou dans le dock : la liste peut donc citer deka.desktop
-    # et claude.desktop meme sur une image ou ils ne sont pas
-    # installes (deka est pose par addition.sh, un supplement).
-    # firefox.desktop : celui du deb Mozilla (packages.mozilla.org).
+    # ── Dock: bench favorites ───────────────────────────────────────────
+    # Set as the schema DEFAULT (non-persistent live) and also in
+    # [org.gnome.shell:ubuntu], which 10_ubuntu-settings fills with the Ubuntu list
+    # and the ubuntu:GNOME session reads first.
+    # Entries pointing to a missing .desktop are silently ignored by GNOME Shell,
+    # so deka.desktop and claude.desktop may be listed even when not installed
+    # (deka comes from addition.sh). firefox.desktop is the Mozilla .deb one;
+    # osmo-pmos.desktop (postmarketOS/Phosh VM) comes from
+    # tools/osmo-extras-install.sh.
     for _sec in "org.gnome.shell" "org.gnome.shell:ubuntu"; do
         printf "\n[%s]\nfavorite-apps=[\047osmo-info.desktop\047, \047firefox.desktop\047, \047org.gnome.Nautilus.desktop\047, \047claude.desktop\047, \047osmo-launch.desktop\047, \047osmo-install.desktop\047, \047osmo-tutorial.desktop\047, \047osmo-addition.desktop\047, \047osmo-multi.desktop\047, \047osmo-update.desktop\047, \047osmo-paint.desktop\047, \047deka.desktop\047, \047linphone.desktop\047, \047osmo-wireshark-root.desktop\047, \047osmo-pmos.desktop\047, \047osmo-lte.desktop\047]\n" "$_sec" \
             >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
@@ -1074,17 +759,16 @@ GDM
     unset _sec
     echo "  [desktop] favoris du dock poses (14 entrees)"
 
-    # ── JEUX + MEDIA DANS LE NATIF ───────────────────────────────────────
-    # Meme lot que le supplement addition.sh, meme code source
-    # (tools/osmo-extras-install.sh) : Kodi / YouTube+
-    # uBlock / Wireshark(root) / Linphone, ranges en dossiers Jeux / Media /
-    # Telephone / Outils. Non fatal : un paquet absent du miroir ne casse pas le
-    # build. On est root dans le chroot, avec le depot a /opt/GSM/osmo-operator.
+    # ── Extras (media, tools) in the native image ───────────────────────
+    # Same set and code as addition.sh (tools/osmo-extras-install.sh): Kodi,
+    # YouTube + uBlock, Wireshark (root), Linphone, grouped in Games / Media /
+    # Phone / Tools folders. Non-fatal. Runs as root in the chroot with the
+    # repository at /opt/GSM/osmo-operator.
     _EXTRAS=/opt/GSM/osmo-operator/tools/osmo-extras-install.sh
     if [ -f "$_EXTRAS" ]; then
         echo "  [desktop] jeux + media (natif) : $_EXTRAS"
-        # [2026-09-25] SANS les jeux (Doom/Quake III, ~470 Mo) : ils ne se posent
-        # qu avec addition.sh --extras, sur une machine deja installee.
+        # Games (Doom/Quake III, ~470 MB) are excluded: they are installed only by
+        # addition.sh --extras on an installed machine.
         OSMO_EXTRAS_JEUX=0 REPO=/opt/GSM/osmo-operator . "$_EXTRAS" && OSMO_EXTRAS_JEUX=0 osmo_extras_install || \
             echo "  [desktop] WARN: osmo_extras_install a echoue (non fatal)"
     else
@@ -1096,9 +780,9 @@ GDM
     echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox deb Mozilla"
 fi
 
-# ── Les certificats : verification finale ───────────────────────────────────
-# Le magasin a ete regenere EN TETE de ce chroot (update-ca-certificates
-# --fresh, avant le premier acces TLS). On verifie seulement qu il est plein.
+# ── CA certificates: final check ────────────────────────────────────────────
+# The store was regenerated at the start of this chroot; just check it is
+# not empty.
 if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
     echo "  certificats : $(grep -c "BEGIN CERTIFICATE" /etc/ssl/certs/ca-certificates.crt) autorites dans /etc/ssl/certs"
 else
@@ -1110,12 +794,10 @@ setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
 KERNEL=$(ls /boot/vmlinuz-* | sort -V | tail -1 | sed "s|/boot/vmlinuz-||")
 update-initramfs -u -k "$KERNEL"
 
-# deb-src.list part avec le reste : les index Sources qu il fait telecharger
-# pesent ~80 Mo, et sur un live en toram ils sont repris en RAM au premier
-# "apt-get update" du boot. Ils n ont servi qu au build-dep gnuradio ci-dessus,
-# qui est deja passe - et plus rien n installe de paquet au demarrage.
-# Pas de "apt-get clean" quand /var/cache/apt/archives est le cache de l hote
-# (bind, voir plus haut) : on ne retire que les index et les caches binaires.
+# Remove deb-src.list: its Sources indexes (~80 MB) were only needed for the
+# gnuradio build-dep and would be loaded into RAM by the first apt-get update
+# on a toram live. No "apt-get clean" when /var/cache/apt/archives is the
+# bind-mounted host cache: only indexes and binary caches are removed.
 if [ "${ISO_APT_CACHE_BOUND:-0}" = "1" ]; then
     rm -f /var/cache/apt/*.bin; rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 else
@@ -1125,7 +807,6 @@ rm -f /etc/apt/sources.list.d/deb-src.list
 '
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: sourcing returns the status of the LAST command and
+# build-iso.sh runs under set -e, so always end with a true status.
 true

@@ -1,19 +1,20 @@
 #!/bin/bash
-# iso_modules/20-stockage-docker.sh - Docker ne doit pas stocker sur un overlay
-# Source par build-iso.sh, dans l ordre des numeros (apres 20-hote : docker est
-# deja pose). Ne s execute pas seul.
+# iso_modules/20-stockage-docker.sh - keep Docker storage off overlayfs
+# Sourced by build-iso.sh in numeric order (after 20-hote: docker is
+# installed). Not meant to run on its own.
 #
-# Quand l hote est lui-meme un conteneur (racine en `overlay`), le snapshotter
-# overlayfs de docker/containerd monte un overlay SUR un overlay, ce que le
-# noyau refuse. Le build echoue des les `RUN --mount=type=cache` avec :
+# When the host is itself a container (root on `overlay`), the docker/containerd
+# overlayfs snapshotter mounts an overlay ON an overlay, which the kernel
+# refuses. The build then fails at the first `RUN --mount=type=cache` with:
 #   failed to solve: mount source: "overlay" ... err: invalid argument
-# Remede : /var/lib/docker et /var/lib/containerd sur un ext4 en boucle
-# (fichier sparse). Idempotent ; ne touche a rien si le stockage est deja sain.
-# Desactiver : OSMO_ISO_NO_DOCKER_FIX=1. Taille : OSMO_ISO_DOCKER_LOOP_GB (10).
+# Fix: put /var/lib/docker and /var/lib/containerd on a loop-mounted ext4
+# (sparse file). Idempotent; does nothing if storage is already fine.
+# Env: OSMO_ISO_NO_DOCKER_FIX=1 disables it; OSMO_ISO_DOCKER_LOOP_GB sets the
+# size in GB (default 10).
 iso_docker_storage_fix() {
     command -v docker >/dev/null 2>&1 || return 0
     [ "${OSMO_ISO_NO_DOCKER_FIX:-0}" = 1 ] && return 0
-    # --skip-build ne construit rien : le pull n a pas besoin d overlay imbrique.
+    # A pull alone (--skip-build) does not need nested overlays.
     local fs; fs="$(findmnt -no FSTYPE -T /var/lib/containerd 2>/dev/null || stat -f -c %T /var/lib/containerd 2>/dev/null)"
     [ "$fs" = overlay ] || return 0
     [ "$(id -u)" = 0 ] || { echo -e "${YELLOW}! /var/lib/containerd est sur overlay : le build docker echouera (relancer en root)${NC}" >&2; return 0; }
@@ -44,5 +45,5 @@ iso_docker_storage_fix() {
 }
 iso_docker_storage_fix || { echo -e "${RED}Correctif du stockage docker echoue (voir plus haut)${NC}" >&2; exit 1; }
 
-# Fin de module : toujours 0 (voir 20-hote.sh).
+# End of module: always return 0 (see 20-hote.sh).
 true

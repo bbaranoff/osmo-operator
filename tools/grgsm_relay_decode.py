@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# tools/grgsm_relay_decode.py — décodeur gr-gsm sur l'I/Q CONTINU relayée (mode
-# full-grgsm). Lit l'I/Q du BTS relayée par calypso-ipc-device (UDP 5810,
-# fc32), la passe dans le receiver gr-gsm complet (gsm.receiver : FCCH/SCH
-# sync + démod GMSK), décode le BCCH/CCCH, et envoie le L2 en GSMTAP au
-# listener du shunt (4730) → feed_si → a_cd → le mobile (sur osmocon) campe.
+# tools/grgsm_relay_decode.py - gr-gsm decoder on the relayed CONTINUOUS I/Q
+# (full-grgsm mode). Reads the BTS I/Q relayed by calypso-ipc-device (UDP 5810,
+# fc32), feeds it to the complete gr-gsm receiver (gsm.receiver: FCCH/SCH
+# sync + GMSK demod), decodes the BCCH/CCCH and sends the L2 as GSMTAP to
+# the shunt listener (4730) -> feed_si -> a_cd -> the mobile (on osmocon) camps.
 #
-# C'est un DÉCODEUR (pas un transceiver) : pas besoin de trxcon. La chaîne
-# est celle de grgsm_decode mais avec une source UDP au lieu d'un fichier.
+# It is a DECODER (not a transceiver): no trxcon needed. The chain is the one
+# of grgsm_decode but with a UDP source instead of a file.
 #
-#   udp_source(5810, fc32) → lpf → gsm.receiver(osr) → C0 bursts →
-#       gsm_bcch_ccch_demapper → control_channels_decoder → GSMTAP(4730)
+#   udp_source(5810, fc32) -> lpf -> gsm.receiver(osr) -> C0 bursts ->
+#       gsm_bcch_ccch_demapper -> control_channels_decoder -> GSMTAP(4730)
 #
-# osr DOIT matcher le SPS d'osmo-trx (tx-sps=1 → osr=1). Si la sync n'accroche
-# pas à osr=1, passer osmo-trx en SPS=4 et CALYPSO_TRX_OSR=4.
+# osr MUST match the SPS of osmo-trx (tx-sps=1 -> osr=1). If the sync does not
+# lock at osr=1, switch osmo-trx to SPS=4 and CALYPSO_TRX_OSR=4.
 import os, sys
 
 from gnuradio import gr, network, filter
@@ -22,10 +22,10 @@ from gnuradio.filter import firdes
 from gnuradio.fft import window
 from gnuradio import gsm
 
-# OSR = oversampling vu par gsm.receiver. Il a besoin de ~4 pour locker la
-# FCCH/SCH et la récupération de timing GMSK. L'I/Q relayée est à 1 SPS
-# (osmo-trx tx-sps=1) → on RESAMPLE 1→OSR dans le flowgraph (pas de chirurgie
-# device, pas de SPS=4 côté osmo-trx).
+# OSR = oversampling seen by gsm.receiver. It needs ~4 to lock the FCCH/SCH
+# and the GMSK timing recovery. The relayed I/Q is at 1 SPS (osmo-trx
+# tx-sps=1) -> it is RESAMPLED 1->OSR in the flowgraph (no device surgery,
+# no SPS=4 on the osmo-trx side).
 OSR        = int(os.environ.get("CALYPSO_TRX_OSR", "4"))
 IN_SPS     = int(os.environ.get("CALYPSO_TRX_IN_SPS", "1"))   # SPS du relais (osmo-trx)
 SYM_RATE   = 1625000.0 / 6.0                       # 270833.33 Hz
@@ -37,12 +37,12 @@ TS         = int(os.environ.get("TS", "0"))
 
 tb = gr.top_block("grgsm relay decode")
 
-# Source : I/Q continu relayé (fc32, 625 samples/datagram = 5000 o). src_zeros
-# → flux continu si pas de data (le receiver ne stalle pas).
+# Source: relayed continuous I/Q (fc32, 625 samples/datagram = 5000 B). src_zeros
+# -> continuous stream when there is no data (the receiver does not stall).
 src = network.udp_source(gr.sizeof_gr_complex, 1, RX_PORT,
                          0, 5000, False, True, False)
 
-# Resampling 1→OSR (IN_SPS→OSR) : donne à gsm.receiver les ~4 SPS qu'il attend.
+# Resampling 1->OSR (IN_SPS->OSR): gives gsm.receiver the ~4 SPS it expects.
 resamp = filter.rational_resampler_ccc(interpolation=OSR, decimation=IN_SPS)
 
 lpf = filter.fir_filter_ccf(1, firdes.low_pass(

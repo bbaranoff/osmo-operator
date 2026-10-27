@@ -1,16 +1,16 @@
-"""voix_hote.py - [2026-10-22] la voix du C139 Magnetite codee par l'hote (PONT_VOIX_HOTE=1).
+"""voix_hote.py - the voice of the C139 Magnetite coded by the host (PONT_VOIX_HOTE=1).
 
-Le vocodeur de la mask-ROM ne tient pas encore : le C54x emule tourne a ~9,5 ms par trame
-quand le codec FR tourne (budget 4,62 ms), la ROM decode le TCH descendant en BFI (parole,
-FACCH, SACCH) et ne remplit jamais a_du. Le pont, lui, decode deja chaque trame FR que la BTS
-envoie (Downlink._tch) et code deja le TCH montant (TchScheduler). Il ne manquait que le PCM :
+The mask-ROM vocoder does not keep up: the emulated C54x runs at ~9.5 ms per frame when
+the FR codec runs (budget 4.62 ms), the ROM decodes the downlink TCH as BFI (speech, FACCH,
+SACCH) and never fills a_du. The bridge already decodes every FR frame the BTS sends
+(Downlink._tch) and already codes the uplink TCH (TchScheduler). Only the PCM is added:
 
-    DL : trame FR de la BTS --libgsm--> anneau /dev/shm/pont_voix_dl --pacat--> gsm_audio
-    UL : gsm_mic.monitor --parec--> anneau /dev/shm/pont_voix_ul --libgsm--> uplink.q_voice
+    DL: FR frame from the BTS --libgsm--> ring /dev/shm/pont_voix_dl --pacat--> gsm_audio
+    UL: gsm_mic.monitor --parec--> ring /dev/shm/pont_voix_ul --libgsm--> uplink.q_voice
 
-Le DSP ne fait plus que le canal : CALYPSO_VSP=0 (pas de port voix, pas de codec ROM). Active
-par --gapk avec --ms-magnetite (startup_scripts/14-demarrage.sh). Les trames FR sont au format
-de libosmocoding net_order=1 (TS 101 318, quartet 0xD en tete), celui de libgsm.
+The DSP only does the channel: CALYPSO_VSP=0 (no voice port, no ROM codec). Enabled by
+--gapk with --ms-magnetite (startup_scripts/14-demarrage.sh). FR frames are in the
+libosmocoding net_order=1 format (TS 101 318, leading 0xD nibble), the one of libgsm.
 """
 import ctypes
 import logging
@@ -26,7 +26,7 @@ log = logging.getLogger("pont")
 SHM_UL = os.environ.get("PONT_VOIX_SHM_UL", "/dev/shm/pont_voix_ul")
 SHM_DL = os.environ.get("PONT_VOIX_SHM_DL", "/dev/shm/pont_voix_dl")
 N = vsp_audio.N
-ECH = 160                                   # 20 ms a 8 kHz, une trame FR
+ECH = 160                                   # 20 ms at 8 kHz, one FR frame
 
 _gsm = ctypes.CDLL("libgsm.so.1")
 _gsm.gsm_create.restype = ctypes.c_void_p
@@ -35,8 +35,8 @@ _gsm.gsm_encode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_short), cty
 
 
 class VoixHote:
-    """Remplace l'anneau TCH descendant du pont DSP (DownlinkDsp.ring) : publish() recoit chaque
-    trame FR decodee de la BTS. Un fil code le micro et alimente le TCH montant."""
+    """Replaces the downlink TCH ring of the DSP bridge (DownlinkDsp.ring): publish() receives
+    every FR frame decoded from the BTS. A thread codes the microphone and feeds the uplink TCH."""
 
     def __init__(self, uplink, tch, stats):
         self.uplink = uplink
@@ -48,10 +48,10 @@ class VoixHote:
         self.dl = vsp_audio.anneau(SHM_DL)
         self.pcm = (ctypes.c_short * ECH)()
         self.n_dl = self.n_dl_ko = self.n_ul = 0
-        # une seule source pour la parole montante : plus celle de montant.c (a_du, /dev/shm/calypso_tch_ul)
+        # a single source for uplink speech: not the one of montant.c (a_du, /dev/shm/calypso_tch_ul)
         uplink._poll_voice = lambda: None
 
-    # -- descendant ----------------------------------------------------------------------------
+    # -- downlink ------------------------------------------------------------------------------
     def publish(self, fr33, fn):
         if len(fr33) != 33 or _gsm.gsm_decode(self.dec, bytes(fr33), self.pcm) != 0:
             self.n_dl_ko += 1
@@ -59,10 +59,10 @@ class VoixHote:
         w = struct.unpack_from("<I", self.dl, 0)[0]
         for i in range(ECH):
             struct.pack_into("<h", self.dl, 8 + 2 * ((w + i) % N), self.pcm[i])
-        struct.pack_into("<I", self.dl, 0, (w + ECH) & 0xFFFFFFFF)   # compteur en dernier
+        struct.pack_into("<I", self.dl, 0, (w + ECH) & 0xFFFFFFFF)   # counter last
         self.n_dl += 1
 
-    # -- montant -------------------------------------------------------------------------------
+    # -- uplink --------------------------------------------------------------------------------
     def _codeur(self):
         lu = struct.unpack_from("<I", self.ul, 0)[0]
         pcm = (ctypes.c_short * ECH)()
@@ -70,7 +70,7 @@ class VoixHote:
         while True:
             w = struct.unpack_from("<I", self.ul, 0)[0]
             dispo = (w - lu) & 0xFFFFFFFF
-            if dispo > N // 2:                       # retard (pont arrete, parec en rafale) : rattraper
+            if dispo > N // 2:                       # behind (bridge paused, parec burst): catch up
                 lu = (w - ECH) & 0xFFFFFFFF
                 dispo = ECH
             if dispo < ECH:

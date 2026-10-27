@@ -1,23 +1,22 @@
-# pont/dsp - le pont du montage DSP (c54x_exe --arm, BSP du C54x sur udp/6702).
+# pont/dsp - the bridge of the DSP setup (c54x_exe --arm, C54x BSP on udp/6702).
 #
-# [2026-09-23] Le paquet pont/ servait tel quel aux deux montages, et tout son
-# etat dedie (TCH, chiffrement, Kc) vivait a l'heure du pont, c'est-a-dire de
-# la BTS. En DSP le BSP joue les trames a l'heure du C54x, 12 a ~200 trames
-# plus tard : chaque decision prise au decodage frappait des trames que le
-# mobile n'avait pas encore entendues. Ce sous-paquet assemble les memes
-# briques avec des sous-classes propres au DSP :
-#   ClockDsp    l'avance de l'horloge suit l'avance reelle de la BTS
-#               (osmotrx fn-advance et ses a-coups), mesuree en continu.
-#   TchDsp      l'ASSIGNMENT COMMAND n'est qu'une annonce ; c54x_exe bascule
-#               le BSP sur la tache TCH du firmware (montant.c) ; abandon()
-#               rend le SDCCH apres une ASSIGNMENT FAILURE.
-#   TrxDsp      l'intervalle du TCH est dechiffre des l'annonce.
-#   UplinkDsp   un bloc SDCCH montant n'est jamais une FACCH ; le Kc n'est
-#               plus lache a la liberation vue par le mobile.
+# The dedicated state of the pont/ package (TCH, ciphering, Kc) lives at the
+# bridge's time, that is the BTS's. In DSP mode the BSP plays the frames at
+# the C54x's time, 12 to ~200 frames later: a decision taken at decoding time
+# would hit frames the mobile has not heard yet. This sub-package assembles
+# the same building blocks with DSP-specific subclasses:
+#   ClockDsp    the clock advance follows the real advance of the BTS
+#               (osmotrx fn-advance and its jolts), measured continuously.
+#   TchDsp      the ASSIGNMENT COMMAND is only an announcement; c54x_exe
+#               switches the BSP on the firmware's TCH task (montant.c);
+#               abandon() gives the SDCCH back after an ASSIGNMENT FAILURE.
+#   TrxDsp      the TCH timeslot is deciphered from the announcement on.
+#   UplinkDsp   an uplink SDCCH block is never a FACCH; the Kc is not
+#               dropped at the release seen by the mobile.
 #   FeederDsp,
-#   DownlinkDsp pas de GSMTAP 4730/4731 ni d'anneau calypso_tch_dl (grgsm).
-# pont/__init__.py (et donc pont.py, le montage grgsm) n'importe jamais ce
-# sous-paquet.
+#   DownlinkDsp no GSMTAP 4730/4731 nor calypso_tch_dl ring (grgsm).
+# pont/__init__.py (and so pont.py, the grgsm setup) never imports this
+# sub-package.
 import gc
 import logging
 import os
@@ -56,7 +55,7 @@ def main(argv=None):
     stats = Stats()
     clock = ClockDsp()
     cipher = Cipher(cfg.kc_retention, stats)
-    dedicated = DedicatedDsp()     # [2026-09-23] genres TCH du tap, voir dsp/dedicated.py
+    dedicated = DedicatedDsp()     # TCH kinds from the tap, see dsp/dedicated.py
     tch = TchDsp(stats)
     record = Recorder(cfg, clock) if cfg.record else None
     trx = TrxDsp(cfg, clock, stats, cipher, record, dedicated, tch)
@@ -67,17 +66,17 @@ def main(argv=None):
     uplink = UplinkDsp(cfg, clock, stats, dedicated, tch, transmitter, feeder, cipher)
     scheduler = TchScheduler(cfg, clock, stats, tch, uplink, transmitter)
     if os.environ.get("PONT_VOIX_HOTE", "0") == "1":
-        # [2026-10-22] la voix du Magnetite par l'hote (libgsm), voir pont/voix_hote.py
+        # the Magnetite voice by the host (libgsm), see pont/voix_hote.py
         from ..voix_hote import VoixHote
         voix = VoixHote(uplink, tch, stats)
         downlink.ring = voix
         voix.start()
     if os.environ.get("PONT_UL_RAW", "0") == "1":
-        # [2026-10-04] tuyau unique : les bursts de la ROM partent par `transmitter`, ceux que l'hote
-        # code encore (RACH, SDCCH, FACCH, SACCH, parole) vont au puits. Voir dsp/uplink.py RomTxRing.
+        # single pipe: the ROM bursts leave through `transmitter`, the ones the host still
+        # codes (RACH, SDCCH, FACCH, SACCH, speech) go to the sink. See dsp/uplink.py RomTxRing.
         from .uplink import TransmitterPuits
         uplink.tx_rom = transmitter
-        uplink.tx = TransmitterPuits(stats, transmitter, tch)   # le TCH passe au vrai Transmitter (UL_RAW_TCH)
+        uplink.tx = TransmitterPuits(stats, transmitter, tch)   # the TCH goes to the real Transmitter (UL_RAW_TCH)
         scheduler.tx = uplink.tx
         log.info("PONT_UL_RAW=1 : montant = bursts finaux de la ROM (calypso_tx_rom) ; codage et A5 hote inactifs")
 
@@ -93,7 +92,7 @@ def main(argv=None):
              ("udp/%d" % cfg.tap_port) if cfg.tap else "coupe")
 
     def _dl(tn, fn, bits):
-        clock.note_dl(fn)       # avance reelle de la BTS, voir dsp/clock.py
+        clock.note_dl(fn)       # real advance of the BTS, see dsp/clock.py
         downlink.dispatch(tn, fn, bits)
 
     threads = [

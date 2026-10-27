@@ -1,25 +1,25 @@
 #!/bin/bash
-# magnetite-c139.sh - FreeCalypso Magnetite (cible c139, config hybrid-ui-vo) dans qosmo.
+# magnetite-c139.sh - FreeCalypso Magnetite (c139 target, hybrid-ui-vo config) in qosmo.
 #
-# [2026-10-21] Le vrai firmware TI/TCS211 (recompile par fc-magnetite avec le
-# compilateur TMS470 sous Wine) a la place de la layer1 osmocom-bb :
-#   - image flash 4 MiB = bootloader Compal FreeCalypso en secteur 0 +
-#     fwimage.bin a 0x10000 (/opt/GSM/firmware/magnetite/c139-flash.img) ;
-#   - qosmo demarre a 0 dans la flash (pas de -kernel), CALYPSO_LCD=c139 met
-#     l'ecran couleur 96x64 du C139 sur uWire CS0 (calypso_uwire.c) ;
-#   - traces RVTMUX du firmware sur l'UART modem (-serial 0 -> pty), a lire
-#     avec rvinterf (/opt/GSM/fc-host-tools) ; UART IrDA sur le 2e pty.
+# The real TI/TCS211 firmware (rebuilt by fc-magnetite with the TMS470
+# compiler under Wine) instead of the osmocom-bb layer1:
+#   - 4 MiB flash image = Compal FreeCalypso bootloader in sector 0 +
+#     fwimage.bin at 0x10000 (/opt/GSM/firmware/magnetite/c139-flash.img);
+#   - qosmo boots at 0 in the flash (no -kernel), CALYPSO_LCD=c139 puts the
+#     96x64 colour screen of the C139 on uWire CS0 (calypso_uwire.c);
+#   - RVTMUX traces of the firmware on the modem UART (-serial 0 -> pty), read
+#     with rvinterf (/opt/GSM/fc-host-tools); IrDA UART on the 2nd pty.
 #
 #   scripts/magnetite-c139.sh [start|stop|status|log|traces|fsio|shell|gtk]
 #     QEMU=/opt/GSM/qosmo/build/qemu-system-arm  FLASH=.../c139-flash.img
-#     FLASH_RESET=1 : repartir de l'image neuve (FFS efface)
-#     RVINTERF=0 : ne pas lancer rvinterf (traces RVTMUX decodees dans $RUNDIR/rvinterf.log,
-#       socket $RUNDIR/rvinterf.sock pour fc-shell / fc-fsio -s)
-#     QEMU_DEBUG=1 : -d ${QEMU_DEBUG_FLAGS:-guest_errors,unimp} dans qemu-debug.log
-#     QEMU_CPU=ti925t (defaut) : ARMv4T comme l ARM7TDMI du Calypso. Avec arm946
-#       (ARMv5) les trampolines Thumb de TI (pop {pc} sans bit 0) partent en ARM
-#       -> prefetch abort a la premiere, vu le 21/10.
-#     CALYPSO_LCD_DEBUG=1 : commandes LCD sur stderr
+#     FLASH_RESET=1: start again from the pristine image (FFS erased)
+#     RVINTERF=0: do not start rvinterf (decoded RVTMUX traces in $RUNDIR/rvinterf.log,
+#       socket $RUNDIR/rvinterf.sock for fc-shell / fc-fsio -s)
+#     QEMU_DEBUG=1: -d ${QEMU_DEBUG_FLAGS:-guest_errors,unimp} in qemu-debug.log
+#     QEMU_CPU=ti925t (default): ARMv4T like the Calypso ARM7TDMI. With arm946
+#       (ARMv5) the TI Thumb trampolines (pop {pc} without bit 0) run in ARM
+#       -> prefetch abort at the first one.
+#     CALYPSO_LCD_DEBUG=1: LCD commands on stderr
 set -u
 RUNDIR="${RUNDIR:-/dev/shm/magnetite}"
 QEMU="${QEMU:-/opt/GSM/qosmo/build/qemu-system-arm}"
@@ -35,18 +35,18 @@ start)
     [ -x "$QEMU" ] || { echo "QEMU absent : $QEMU" >&2; exit 1; }
     [ -f "$FLASH_SRC" ] || { echo "image flash absente : $FLASH_SRC (voir doc/magnetite.md)" >&2; exit 1; }
     mkdir -p "$RUNDIR"
-    # copie de travail : le firmware ecrit son FFS dans la flash (0x3C0000, 3 x 64 KiB),
-    # gardee d'un lancement a l'autre (IMEI, rfcap, config) ; FLASH_RESET=1 ou une
-    # image source plus recente (nouveau build) la remplacent.
+    # working copy: the firmware writes its FFS in the flash (0x3C0000, 3 x 64 KiB),
+    # kept from one run to the next (IMEI, rfcap, config); FLASH_RESET=1 or a newer
+    # source image (new build) replace it.
     if [ "${FLASH_RESET:-0}" != 0 ] || [ ! -f "$RUNDIR/flash.img" ] || [ "$FLASH_SRC" -nt "$RUNDIR/flash.img" ]; then
         cp "$FLASH_SRC" "$RUNDIR/flash.img" && echo "flash de travail (re)creee depuis $FLASH_SRC"
     fi
     dbg=()
     [ "${QEMU_DEBUG:-0}" != 0 ] && dbg=(-d "${QEMU_DEBUG_FLAGS:-guest_errors,unimp}" -D "$RUNDIR/qemu-debug.log")
-    # QEMU_GDB=1 : stub gdb sur tcp::${QEMU_GDB_PORT:-1240} (gdb-multiarch, symboles : adresses de fwimage.map)
+    # QEMU_GDB=1: gdb stub on tcp::${QEMU_GDB_PORT:-1240} (gdb-multiarch, symbols: fwimage.map addresses)
     [ "${QEMU_GDB:-0}" != 0 ] && dbg+=(-gdb "tcp::${QEMU_GDB_PORT:-1240}")
-    [ "${QEMU_GDB_WAIT:-0}" != 0 ] && dbg+=(-S)     # CPU gele au depart, gdb fait « continue »
-    [ -n "${QEMU_TRACE:-}" ] && dbg+=(-trace "$QEMU_TRACE")   # ex. QEMU_TRACE='pflash*' (dans qemu.log)
+    [ "${QEMU_GDB_WAIT:-0}" != 0 ] && dbg+=(-S)     # CPU halted at start, gdb does « continue »
+    [ -n "${QEMU_TRACE:-}" ] && dbg+=(-trace "$QEMU_TRACE")   # e.g. QEMU_TRACE='pflash*' (in qemu.log)
     CALYPSO_PACER_RATTRAPAGE="${CALYPSO_PACER_RATTRAPAGE:-0}" \
     CALYPSO_LCD=c139 CALYPSO_LCD_SHM="${CALYPSO_LCD_SHM:-/dev/shm/calypso_lcd}" \
     CALYPSO_KEYS_SOCK="${CALYPSO_KEYS_SOCK:-/tmp/calypso_keys.sock}" \
@@ -79,7 +79,7 @@ traces)
     tail -n "${2:-40}" "$RUNDIR/rvinterf.log"
     ;;
 fsio|shell)
-    # fc-fsio / fc-shell de FreeCalypso sur le socket de rvinterf
+    # FreeCalypso fc-fsio / fc-shell on the rvinterf socket
     bin="/opt/GSM/fc-host-tools/rvinterf/$([ "$cmd" = fsio ] && echo etmsync/fc-fsio || echo asyncshell/fc-shell)"
     exec "$bin" -s "$RUNDIR/rvinterf.sock" "${@:2}"
     ;;
@@ -90,8 +90,8 @@ log)
     tail -n "${2:-40}" "$RUNDIR/qemu.log"
     ;;
 gtk)
-    # [2026-10-21] --lcd/--keys explicites : sans eux la fenetre prend la premiere instance vivante non-TRX
-    # (rssi, instance 4) et affiche son ecran au lieu de Magnetite.
+    # explicit --lcd/--keys: without them the window takes the first live non-TRX instance
+    # (rssi, instance 4) and shows its screen instead of Magnetite.
     exec /usr/bin/python3 "$HERE/tools/osmo-c123-gtk.py" --modele c139 \
         --lcd "${CALYPSO_LCD_SHM:-/dev/shm/calypso_lcd}" --keys "${CALYPSO_KEYS_SOCK:-/tmp/calypso_keys.sock}" "${@:2}"
     ;;

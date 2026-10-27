@@ -1,15 +1,15 @@
-# tui.py - la console : un schema du reseau ou l'on circule aux fleches, et
-# d'ou l'on ouvre soit un VTY, soit un script SS7.
+# tui.py - the console: a network diagram browsed with the arrow keys, from
+# which either a VTY or an SS7 script is opened.
 #
-# Principes de navigation, tenus partout :
-#   fleches      se deplacer (dans le schema : de boite en boite, dans l'espace)
-#   Entree       ouvrir / valider
-#   Echap        revenir en arriere ; DANS UN VTY, Echap ferme la session et
-#                rend la main au schema - les autres VTY restent disponibles
-#   q            quitter (depuis le schema)
+# Navigation principles, kept everywhere:
+#   arrows       move (in the diagram: from box to box, in space)
+#   Enter        open / confirm
+#   Escape       go back; IN A VTY, Escape closes the session and returns to
+#                the diagram - the other VTYs stay available
+#   q            quit (from the diagram)
 #
-# Le reste (v, s, a, c, r, ?) est du raccourci : tout est aussi atteignable a
-# la fleche depuis le menu d'une boite.
+# The rest (v, s, a, c, r, ?) are shortcuts: everything is also reachable
+# with the arrows from a box menu.
 
 import curses
 import locale
@@ -63,13 +63,13 @@ HELP = [
 ]
 
 
-# ── lecture des touches ───────────────────────────────────────────────────────
-# ncurses ne reconnait les fleches que dans la forme prevue par le terminfo du
-# terminal (ici "\x1bOB", mode curseur applicatif). Un multiplexeur, un SSH mal
-# configure ou un terminal qui reste en mode normal envoient "\x1b[B" : ncurses
-# rend alors trois touches brutes et la navigation semble morte. On decode donc
-# nous-memes les deux formes. Echap seul reste Echap : c'est l'absence de suite
-# dans les 40 ms qui le distingue d'un debut de sequence.
+# ── key reading ───────────────────────────────────────────────────────────────
+# ncurses only recognises the arrows in the form given by the terminal's
+# terminfo (here "\x1bOB", application cursor mode). A multiplexer, a badly
+# configured SSH or a terminal left in normal mode send "\x1b[B": ncurses then
+# returns three raw keys and navigation looks dead. Both forms are therefore
+# decoded here. A lone Escape stays Escape: what tells it from the start of a
+# sequence is the absence of a follow-up within 40 ms.
 _CSI_FINAL = {
     "A": curses.KEY_UP, "B": curses.KEY_DOWN, "C": curses.KEY_RIGHT,
     "D": curses.KEY_LEFT, "H": curses.KEY_HOME, "F": curses.KEY_END,
@@ -150,7 +150,7 @@ class App(object):
         self.status_attr = C_DEFAULT
         self.rebuild()
 
-    # ── etat ─────────────────────────────────────────────────────────────
+    # ── state ────────────────────────────────────────────────────────────
     def rebuild(self):
         extra = {"local_pc": self.local_pc, "local_ssn": self.local_ssn,
                  "state": (self.client.asp.state if self.client and self.client.asp
@@ -162,7 +162,7 @@ class App(object):
         self.status = text
         self.status_attr = attr
 
-    # ── dessin ───────────────────────────────────────────────────────────
+    # ── drawing ─────────────────────────────────────────────────────────
     def draw(self):
         self.scr.erase()
         h, w = self.scr.getmaxyx()
@@ -248,7 +248,7 @@ class App(object):
             return FAMILY_COLOR.get(b.ref.family, C_DEFAULT)
         return C_DEFAULT
 
-    # ── fenetres generiques ──────────────────────────────────────────────
+    # ── generic windows ──────────────────────────────────────────────────
     def _win(self, height, width, title):
         h, w = self.scr.getmaxyx()
         height = min(height, h - 2)
@@ -262,7 +262,7 @@ class App(object):
         return win
 
     def menu(self, title, items, footer="fleches + Entree, Echap pour revenir"):
-        """items : liste de (etiquette, valeur). Rend la valeur, ou None."""
+        """items: list of (label, value). Return the value, or None."""
         if not items:
             self.show_text(title, ["(rien a proposer ici)"])
             return None
@@ -303,7 +303,7 @@ class App(object):
                 self.draw()
 
     def show_text(self, title, lines, wrap=True):
-        """Zone de texte defilante. Echap ou q pour revenir."""
+        """Scrolling text area. Escape or q to go back."""
         h, w = self.scr.getmaxyx()
         win = self._win(h - 2, w - 2, title)
         inner_h = win.getmaxyx()[0] - 3
@@ -356,10 +356,10 @@ class App(object):
                 return
 
     def form(self, title, fields, note=""):
-        """fields : liste de dicts {key,label,value,help}. Rend un dict ou None.
+        """fields: list of dicts {key,label,value,help}. Return a dict or None.
 
-        Navigation : haut/bas entre les champs, frappe pour editer, Entree sur
-        [ Envoyer ] pour valider, Echap pour abandonner."""
+        Navigation: up/down between fields, type to edit, Enter on
+        [ Envoyer ] to submit, Escape to give up."""
         idx = 0
         rows = fields + [{"key": "__submit__", "label": "[ Envoyer ]", "value": "",
                           "help": "Entree pour lancer"}]
@@ -482,8 +482,8 @@ class App(object):
                 except vty_mod.VtyError as exc:
                     out = "[session perdue : %s]" % exc
                 rows = out.split("\n")
-                # Le VTY renvoie la commande en echo : elle est deja affichee
-                # au-dessus, on ne la montre pas deux fois.
+                # The VTY echoes the command back: it is already displayed
+                # above, so it is not shown twice.
                 if rows and rows[0].strip() == cmd:
                     rows = rows[1:]
                 lines.extend(rows)
@@ -515,7 +515,7 @@ class App(object):
             elif 32 <= key < 127:
                 current += chr(key)
 
-    # ── lien SS7 ─────────────────────────────────────────────────────────
+    # ── SS7 link ─────────────────────────────────────────────────────────
     def ensure_link(self):
         if self.client and self.client.connected:
             return True
@@ -611,7 +611,7 @@ class App(object):
                 "Il rejoue exactement cet envoi :",
                 "  python3 %s" % os.path.relpath(path, topo_mod.REPO)])
 
-    # ── menus des boites ─────────────────────────────────────────────────
+    # ── box menus ────────────────────────────────────────────────────────
     def open_box(self, box):
         if box.kind == "console":
             self.console_menu()
@@ -793,11 +793,11 @@ class App(object):
             out = "[VTY indisponible : %s]" % exc
         self.show_text("%s : %s" % (node.name, cmd), out.split("\n"), wrap=False)
 
-    # ── boucle principale ────────────────────────────────────────────────
-    # Les raccourcis sont en MINUSCULES uniquement : les sequences de fleches
-    # se terminent par A, B, C ou D, et une sequence mal decoupee par le
-    # terminal arriverait sinon comme un raccourci - une fleche fermerait le
-    # lien M3UA. Avec des minuscules seules, le pire cas ne fait rien.
+    # ── main loop ────────────────────────────────────────────────────────
+    # Shortcuts are LOWERCASE only: arrow sequences end with A, B, C or D,
+    # and a sequence badly split by the terminal would otherwise arrive as a
+    # shortcut - an arrow would close the M3UA link. With lowercase letters
+    # only, the worst case does nothing.
     def run(self):
         while True:
             self.draw()
@@ -867,14 +867,14 @@ class App(object):
 
 
 def export_script(op, values, dest_pc, dest_ssn, dest_gt, local_pc, topo):
-    """Ecrit un script Python autonome qui rejoue exactement cet envoi."""
+    """Write a standalone Python script that replays exactly this send."""
     out_dir = os.path.join(topo_mod.REPO, "navigation", "scripts")
     os.makedirs(out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = os.path.join(out_dir, "%s-%s.py" % (op.key, stamp))
     body = '''#!/usr/bin/env python3
-# Genere par la console SS7 (navigation/) le {stamp}.
-# Rejoue un envoi MAP {name} vers {dest}.
+# Generated by the SS7 console (navigation/) on {stamp}.
+# Replays a MAP {name} send to {dest}.
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 from navigation import ss7

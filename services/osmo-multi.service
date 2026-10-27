@@ -1,45 +1,38 @@
 [Unit]
 Description=osmo-operator - banc multi-operateur (start-multi.sh : natif + conteneurs + inter-STP)
 Documentation=file:/opt/GSM/osmo-operator/README.md
-# Le multi-operateur RACCORDE le natif, il ne le lance pas : c'est osmo-banc
-# qui le tient.
-# [2026-09-05] Requires= -> Wants=. C'ETAIT UN SUICIDE. start-multi.sh applique
-# « un clic = un banc neuf » : il fait `systemctl stop osmo-banc` a chaque
-# lancement (tout_arreter), puis le relance (lancer_natif_si_absent). Or
-# Requires= propage l'arret EXPLICITE d'une dependance a l'unite qui en depend :
-# ce stop du natif arretait osmo-multi lui-meme, en plein ExecStart -
-# `code=killed, status=15/TERM`, l'unite en echec sans une ligne d'erreur utile.
-# Wants= tire le natif au boot dans le meme ordre (After= plus bas) mais NE
-# propage PLUS l'arret : start-multi.sh peut recycler osmo-banc sans se tuer. La
-# garantie « pas de natif = un ASP sur trois » reste tenue par start-multi.sh,
-# qui relance osmo-banc si besoin - ce n'est pas a systemd de la porter.
+# The multi-operator bench connects to the native one, it does not start it:
+# osmo-banc holds it.
+# Wants=, not Requires=: start-multi.sh applies « one click = a fresh bench »
+# and runs `systemctl stop osmo-banc` at every launch (tout_arreter), then
+# restarts it (lancer_natif_si_absent). Requires= would propagate that explicit
+# stop to this unit, in the middle of its own ExecStart. Wants= pulls the native
+# bench in at boot in the same order (After= below) without propagating the
+# stop. The guarantee « no native bench = one ASP out of three » is held by
+# start-multi.sh, which restarts osmo-banc when needed.
 Wants=osmo-banc.service
-# [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
-# ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
-# mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les
-# tun/veth du coeur paquet - ne sont jamais "en ligne" au sens de cette unite,
-# et qui demarre souvent sans cable. network.target suffit : les interfaces
-# sont configurees, la route par defaut peut arriver apres.
+# network.target only, not network-online.target: the latter can cost up to
+# 2 min at boot (systemd-networkd-wait-online) on a bench whose interfaces
+# (apn0, the tun/veth of the packet core) are never "online" in that sense and
+# which often boots without a cable. The interfaces are configured; the default
+# route may arrive later.
 After=osmo-banc.service docker.service network.target
 Wants=docker.service
 ConditionPathExists=/opt/GSM/osmo-operator/launch/start-multi.sh
-# ── ET LA TOPOLOGIE DOIT EXISTER ────────────────────────────────────────────
-# [2026-09-04] Sur une ISO fraiche, un demarrage de cette unite serait un echec :
-# ni docker ni l image osmocom-run ne sont dans le squashfs - ils arrivent avec
-# le supplement SS7 (addition.sh), qui est aussi ce qui ecrit ce fichier.
-# Une condition non remplie n est PAS un echec pour systemd : l unite est
-# sautee, en silence, et `systemctl --failed` reste vide (ce que le Conky
-# affiche desormais nommement). La condition vaut pour le boot comme pour un
-# `systemctl start` a la main : tant que la topologie n existe pas, il n y a
-# rien a monter.
+# ── And the topology must exist ─────────────────────────────────────────────
+# On a fresh ISO neither docker nor the osmocom-run image are in the squashfs:
+# they come with the SS7 supplement (addition.sh), which also writes this file.
+# An unmet condition is not a failure for systemd: the unit is skipped silently
+# and `systemctl --failed` stays empty (the Conky names it). The condition holds
+# at boot as for a manual `systemctl start`: without the topology there is
+# nothing to bring up.
 ConditionPathExists=/etc/osmocom/osmo-multi.conf
-# [2026-09-05] NI CELLE-CI NI osmo-banc NE SONT ACTIVEES PAR DEFAUT. Les deux
-# sont posees par l'ISO (iso_modules/82-services.sh) et par addition.sh, et
-# c'est l'operateur qui demarre son banc - pas le boot, sur une configuration
-# qu'il n'a pas encore choisie.
-#   systemctl start osmo-multi          pour une session
-#   systemctl enable --now osmo-multi   pour le demarrer a chaque boot
-# Au build : OSMO_ISO_MULTI=1 (ou --multi) active l'unite dans l'image.
+# Neither this unit nor osmo-banc is enabled by default. Both are installed by
+# the ISO (iso_modules/82-services.sh) and by addition.sh; the operator starts
+# the bench - not the boot, on a configuration not yet chosen.
+#   systemctl start osmo-multi          for one session
+#   systemctl enable --now osmo-multi   to start it at every boot
+# At build time: OSMO_ISO_MULTI=1 (or --multi) enables the unit in the image.
 
 [Service]
 Type=oneshot
@@ -48,27 +41,27 @@ WorkingDirectory=/opt/GSM/osmo-operator
 Environment=HOME=/root USER=root LOGNAME=root
 Environment=VIRTUAL_ENV=/root/.env
 Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# OSMO_NO_TERM : start-multi.sh ne doit ni ouvrir un emulateur de terminal ni
-# retenir une fenetre. OSMO_BANC_SERVICE : le natif est une unite systemd,
-# start-multi.sh le (re)lance par systemctl et non par le raccourci du bureau.
+# OSMO_NO_TERM: start-multi.sh must neither open a terminal emulator nor hold a
+# window. OSMO_BANC_SERVICE: the native bench is a systemd unit, start-multi.sh
+# (re)starts it through systemctl and not through the desktop shortcut.
 Environment=NO_COLOR=1 OSMO_NO_TERM=1 OSMO_BANC_SERVICE=osmo-banc.service
 EnvironmentFile=-/etc/default/osmo-multi
 ExecStart=/bin/bash /opt/GSM/osmo-operator/launch/start-multi.sh $OSMO_MULTI_ARGS
-# --stop n'arrete que les conteneurs et le hub : le natif reste a osmo-banc.
+# --stop only stops the containers and the hub: the native bench stays with
+# osmo-banc.
 ExecStop=/bin/bash /opt/GSM/osmo-operator/launch/start-multi.sh --stop
 TimeoutStartSec=1200
-# [2026-09-04] 180 s -> 30 s. A l arret de la machine, systemd attend ce delai
-# AVANT de tuer ce qui reste : trois minutes d ecran noir par unite, et il y en
-# a deux. La pile s arrete en quelques secondes ; passe 30 s, elle est bloquee
-# et un SIGKILL est la bonne reponse - pas une attente de plus.
+# At machine shutdown systemd waits this long before killing what is left. The
+# stack stops in a few seconds; past 30 s it is stuck and SIGKILL is the right
+# answer.
 TimeoutStopSec=30
 KillMode=control-group
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=osmo-multi
 
-# Reprendre la main : tmux attach -t calypso (natif) ; docker logs -f osmo-op2
-# (conteneurs) ; journalctl -u osmo-multi -f.
+# Taking over: tmux attach -t calypso (native); docker logs -f osmo-op2
+# (containers); journalctl -u osmo-multi -f.
 
 [Install]
 WantedBy=multi-user.target

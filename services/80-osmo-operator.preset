@@ -1,27 +1,27 @@
-# 80-osmo-operator.preset - POLITIQUE PAR DEFAUT : AUCUN SERVICE TELECOM AU BOOT
+# 80-osmo-operator.preset - default policy: no telecom service at boot
 #
-# [2026-10-23] Un reseau mobile se DEMARRE (icone, start.sh, systemctl start) :
-# ce n est pas un effet de bord du demarrage de la machine. Ce preset systemd
-# (pose dans /usr/lib/systemd/system-preset/, lu AVANT 90-systemd.preset) dit
-# « disable » pour tout ce qui fait tourner un element de reseau : le banc et
-# ses variantes, le coeur Osmocom, les BTS, Asterisk, oFono, Open5GS, srsRAN.
-# Il ne touche a rien d autre : les consoles web (osmo-egprs-web,
-# osmo-reglages, open5gs-webui), le son (osmo-pulse), le plan d adresses
-# (osmo-ip-plan), la purge, les mises a jour et le bureau gardent leur etat.
+# A mobile network is started on purpose (icon, start.sh, systemctl start): it
+# is not a side effect of the machine booting. This systemd preset (installed in
+# /usr/lib/systemd/system-preset/, read before 90-systemd.preset) says
+# « disable » for everything that runs a network element: the bench and its
+# variants, the Osmocom core, the BTSs, Asterisk, oFono, Open5GS, srsRAN.
+# It touches nothing else: the web consoles (osmo-egprs-web, osmo-reglages,
+# open5gs-webui), the sound (osmo-pulse), the address plan (osmo-ip-plan), the
+# purge, the updates and the desktop keep their state.
 #
-# Applique par tools/osmo-telecom-boot.sh (ISO : iso_modules/82-services.sh ;
-# machines deja installees : update.sh, une seule fois). Un service active
-# ensuite a la main (systemctl enable osmo-banc) le reste : ce fichier ne sert
-# qu a l installation et a `systemctl preset`, jamais en tache de fond.
+# Applied by tools/osmo-telecom-boot.sh (ISO: iso_modules/82-services.sh;
+# already installed machines: update.sh, once). A service enabled by hand
+# afterwards (systemctl enable osmo-banc) stays enabled: this file is only used
+# at install time and by `systemctl preset`, never in the background.
 
-# les bancs
+# the benches
 disable osmo-banc.service
 disable osmo-multi.service
 disable osmo-lte.service
 disable osmo-egprs-dsp.service
 disable osmo-dsp-rom-max.service
 disable osmo-interstp.service
-# le coeur Osmocom et les stations de base
+# the Osmocom core and the base stations
 disable osmo-msc.service
 disable osmo-bsc.service
 disable osmo-hlr.service
@@ -40,12 +40,12 @@ disable osmo-hnodeb.service
 disable osmo-bts-*.service
 disable osmo-trx-*.service
 disable osmo-nitb.service
-# la voix et les modems
+# voice and modems
 disable asterisk.service
 disable ofono.service
 disable kamailio.service
 disable yate.service
-# 4G / 5G (la console web open5gs-webui n est pas un element de reseau)
+# 4G / 5G (the open5gs-webui web console is not a network element)
 disable open5gs-*d.service
 disable srsenb.service
 disable srsepc.service

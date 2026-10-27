@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# osmo-launcher.py - LA BARRE DE LANCEMENT DU BAS, cliquable, categorisee.
+# osmo-launcher.py - THE BOTTOM LAUNCHER BAR, clickable, by category.
 #
-# Meme mecanique de fenetre que osmo-panel.py / osmo-dino.py : une fenetre de
-# type BUREAU (Gdk.WindowTypeHint.DESKTOP - sous les fenetres applicatives,
-# au-dessus du fond, transparente, collante, non decoree), posee tout en BAS de
-# l ecran. Elle rend, en RECTANGLES TRANSPARENTS groupes par categorie, tout ce
-# qu on lance depuis le bureau du banc :
+# Same window mechanics as osmo-panel.py / osmo-dino.py: a window of DESKTOP
+# type (Gdk.WindowTypeHint.DESKTOP - under the application windows, above the
+# wallpaper, transparent, sticky, undecorated), placed at the very BOTTOM of
+# the screen. It renders, as TRANSPARENT RECTANGLES grouped by category,
+# everything that is started from the desktop of the bench:
 #
 #   Banc      : run standalone · run multi · run deka · Dashboard · tmux · VTY
 #   Jeux      : Doom (freedoom) · Quake (OpenArena) · Dino
@@ -13,28 +13,26 @@
 #   Telephone : Linphone
 #   Outils    : Wireshark (root)
 #
-# Chaque appli a TROIS gestes :
-#   - clic sur le nom  -> lance l appli CALEE SUR LE CADRE FFT (fenetre normale
-#                         deplacee/redimensionnee sur l encart, via wmctrl) ;
-#   - bouton  ⛶  -> lance en PLEIN ECRAN ;
-#   - bouton  ⤒  -> lance et ENVOIE EN HAUT (zone LAB GSM) : ecrit une
-#                         commande que osmo-topzone.py lit pour faire le fondu de
-#                         la banniere et accueillir la fenetre.
+# Each application has THREE gestures:
+#   - click on the name -> starts the application FITTED ON THE FFT FRAME
+#                         (normal window moved/resized on the panel, via wmctrl);
+#   - button  ⛶  -> starts in FULL SCREEN;
+#   - button  ⤒  -> starts and SENDS TO THE TOP (LAB GSM zone): writes a
+#                         command that osmo-topzone.py reads to fade the
+#                         banner and host the window.
 #
-# ── LES « run » N OUVRENT PLUS DE TERMINAL ───────────────────────────────────
-# [2026-10-01] run standalone / run multi / run deka ouvraient un gnome-terminal
-# qui vivait le temps du lancement et dont la sortie partait avec lui. Ils
-# tournent maintenant EN FOND, sans fenetre : leur sortie va dans un fichier
-# ($XDG_RUNTIME_DIR/osmo-launcher/<nom>.log), et la barre se DEPLIE (bouton
-# « ▴ journal », ou automatiquement au clic sur un run) pour montrer ce
-# journal, en direct, au-dessus des boutons. Un bouton par run deja lance
-# permet de passer de l un a l autre ; « ▾ » replie. Les privileges passent
-# par pkexec (fenetre de mot de passe du bureau), comme launch.sh le fait
-# deja pour les actions sans terminal.
+# ── THE "run" ENTRIES DO NOT OPEN A TERMINAL ─────────────────────────────────
+# run standalone / run multi / run deka run IN THE BACKGROUND, without
+# window: their output goes to a file ($XDG_RUNTIME_DIR/osmo-launcher/<name>.log),
+# and the bar UNFOLDS ("▴ journal" button, or automatically on the click on
+# a run) to show that log, live, above the buttons. One button per run
+# already started switches from one to the other; "▾" folds. Privileges go
+# through pkexec (desktop password window), as launch.sh does for the
+# actions without terminal.
 #
-# Le placement se fait en reperant la NOUVELLE fenetre apparue apres le
-# lancement (diff des ids wmctrl) : robuste meme pour les applis qui forkent
-# (firefox, kodi). Lance par /usr/local/bin/osmo-desktop-panel.
+# Placement is done by spotting the NEW window that appeared after the
+# launch (diff of the wmctrl ids): robust even for applications that fork
+# (firefox, kodi). Started by /usr/local/bin/osmo-desktop-panel.
 import os
 import re
 import shlex
@@ -44,10 +42,10 @@ import subprocess
 import sys
 import time
 
-# [2026-09-06] MEME PIEGE QUE osmo-panel.py / osmo-dino.py (voir leurs notes) :
-# sous Wayland, GTK3 ignore move() et le type BUREAU, et une fois passe par
-# XWayland le couple type BUREAU + « toujours dessous » fait manger les clics
-# par la couche de bureau de GNOME Shell. Backend X11, fenetre normale.
+# SAME CONSTRAINT AS osmo-panel.py / osmo-dino.py (see their notes): under
+# Wayland, GTK3 ignores move() and the DESKTOP type, and once on XWayland the
+# pair DESKTOP type + "always below" makes the GNOME Shell desktop layer eat
+# the clicks. X11 backend, normal window.
 X11_FORCE = os.environ.get("XDG_SESSION_TYPE") == "wayland" and bool(os.environ.get("DISPLAY"))
 if X11_FORCE:
     os.environ["GDK_BACKEND"] = "x11"
@@ -62,20 +60,20 @@ TYPE_HINT = Gdk.WindowTypeHint.NORMAL if X11_FORCE else Gdk.WindowTypeHint.DESKT
 KEEP_BELOW = (not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1"
 
 FW, FH = 1920, 1080
-# L encart FFT (tools/wallpaper-render.py) : c est la que se cale une appli
-# lancee "dans le panel". Meme boite que osmo-panel.py.
+# The FFT panel (tools/wallpaper-render.py): where an application started
+# "in the panel" is fitted. Same box as osmo-panel.py.
 FFT_BOX = (510, 220, 900, 790)
-# La zone haute LAB GSM (carte du fond) : la cible de "envoyer en haut".
+# The top LAB GSM zone (card of the wallpaper): the target of "send to the top".
 TOP_BOX = (320, 60, 1110, 500)
 
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 RUN = RUN if os.path.isdir(RUN) else "/tmp"
 PID_FILE = os.path.join(RUN, "osmo-launcher.pid")
-# Le canal vers osmo-topzone.py : une ligne "HOST <winid>" ou "HOST FS <winid>".
+# The channel to osmo-topzone.py: one line "HOST <winid>" or "HOST FS <winid>".
 TOPZONE_CMD = os.path.join(RUN, "osmo-topzone.cmd")
-# Les journaux des « run » : un fichier par action, ecrase a chaque lancement.
+# The logs of the "run" entries: one file per action, overwritten at each launch.
 LOG_DIR = os.path.join(RUN, "osmo-launcher")
-LOG_H = 300                     # hauteur du journal deplie, en px
+LOG_H = 300                     # height of the unfolded log, in px
 LOG_W_MAX = 1240
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
@@ -114,7 +112,7 @@ CSS = b"""
 """
 
 
-# ── LA GEOMETRIE DE L ECRAN (comme osmo-panel.py) ────────────────────────────
+# ── THE SCREEN GEOMETRY (like osmo-panel.py) ─────────────────────────────────
 def screen_geom():
     disp = Gdk.Display.get_default()
     mon = disp.get_primary_monitor() or disp.get_monitor(0)
@@ -140,7 +138,7 @@ def box_to_screen(box):
     return (gx + int(bx * sx - ox), gy + int(by * sy - oy), int(bw * sx), int(bh * sy))
 
 
-# ── wmctrl : PLACER LA NOUVELLE FENETRE ──────────────────────────────────────
+# ── wmctrl: PLACE THE NEW WINDOW ─────────────────────────────────────────────
 def _wmctrl_ids():
     try:
         out = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=3).stdout
@@ -169,16 +167,16 @@ GTK_RUN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-gtk-run
 
 
 def _terminal_argv(cmd, titre="Banc GSM"):
-    """argv qui ouvre `cmd` (chaine shell) dans un terminal VTE pose DANS une
-    fenetre GTK du banc (osmo-gtk-run.py --tty). [2026-10-01] Plus
-    d emulateur de terminal : aucune entree de la barre n en ouvre."""
+    """argv that opens `cmd` (shell string) in a VTE terminal placed INSIDE a
+    GTK window of the bench (osmo-gtk-run.py --tty). No terminal emulator:
+    no entry of the bar opens one."""
     return [sys.executable, GTK_RUN, "--tty", "--title", titre, "--", "bash", "-lc", cmd]
 
 
 def _root_prefix():
-    """Prefixe argv pour executer en root SANS terminal : rien si on l est deja,
-    pkexec (fenetre de mot de passe du bureau) sinon, sudo -n en dernier recours
-    (il ne peut pas demander : sans NOPASSWD il echoue net, et le journal le dit)."""
+    """argv prefix to execute as root WITHOUT terminal: nothing if already root,
+    pkexec (desktop password window) otherwise, sudo -n as a last resort
+    (it cannot ask: without NOPASSWD it fails at once, and the log says so)."""
     if os.geteuid() == 0:
         return []
     if shutil.which("pkexec") and os.environ.get("DISPLAY"):
@@ -187,22 +185,22 @@ def _root_prefix():
     return ["sudo", "-n", "-E"]
 
 
-LAUNCHER = None     # la fenetre, pour que les Action puissent lui confier un journal
+LAUNCHER = None     # the window, so that the Actions can hand it a log
 
 
 class Action:
-    """Une appli : comment la lancer - fenetre, terminal, ou run en fond avec journal."""
+    """An application: how to start it - window, terminal, or background run with log."""
     def __init__(self, argv=None, term_cmd=None, fs_argv=None, log_cmd=None, root=False, slug=None):
-        self.argv = argv          # fenetre graphique normale
-        self.term_cmd = term_cmd  # commande a ouvrir dans un terminal
-        self.fs_argv = fs_argv    # variante plein ecran si l appli la gere
-        self.log_cmd = log_cmd    # commande shell en fond, sortie dans un journal (pas de terminal)
-        self.root = root          # log_cmd : en root (pkexec)
-        self.slug = slug          # nom du journal
-        self.nom = slug or ""     # le libelle du bouton (titre de la fenetre tty)
+        self.argv = argv          # normal graphical window
+        self.term_cmd = term_cmd  # command to open in a terminal
+        self.fs_argv = fs_argv    # full screen variant if the application handles it
+        self.log_cmd = log_cmd    # shell command in the background, output in a log (no terminal)
+        self.root = root          # log_cmd: as root (pkexec)
+        self.slug = slug          # name of the log
+        self.nom = slug or ""     # the button label (title of the tty window)
 
     def launch(self, mode):
-        """mode: 'frame' (cale sur l encart) | 'full' (plein ecran) | 'top'."""
+        """mode: 'frame' (fitted on the panel) | 'full' (full screen) | 'top'."""
         if self.log_cmd is not None:
             if LAUNCHER is not None:
                 LAUNCHER.run_logged(self)
@@ -218,7 +216,7 @@ class Action:
 
     def _settle(self, before, mode, tries):
         new = _wmctrl_ids() - before
-        # on ignore nos propres fenetres bureau
+        # our own desktop windows are ignored
         new = {w for w in new}
         if not new:
             if tries < 25:  # ~10 s
@@ -239,7 +237,7 @@ class Action:
         return False
 
 
-# ── LE CATALOGUE ─────────────────────────────────────────────────────────────
+# ── THE CATALOGUE ────────────────────────────────────────────────────────────
 def _sudo():
     return "" if os.geteuid() == 0 else "sudo -E "
 
@@ -248,7 +246,7 @@ def catalogue():
     tmux = os.environ.get("TMUX_SESSION", "calypso")
     vty = os.environ.get("MS_VTY_PORT", "")
     if not vty:
-        try:                      # 4347 en --dsp : start-native.sh publie le port
+        try:                      # 4347 with --dsp: start-native.sh publishes the port
             vty = open("/run/osmo-banc/ms1-vty").read().strip() or "4247"
         except OSError:
             vty = "4247"
@@ -258,15 +256,15 @@ def catalogue():
         if shutil.which(b):
             browser = b
             break
-    # Les trois « run » : en fond, journal dans la barre (voir l en-tete).
-    #   standalone : launch.sh --service demarre osmo-banc.service et le DIT
-    #                (notification) ; on deroule ensuite le journal de l unite.
-    #   multi      : launch.sh --multi (osmo-multi.service, plusieurs minutes)
-    #                EN PARALLELE du journal de l unite, qui montre les
-    #                conteneurs monter - lance en sequence, le journal n aurait
-    #                commence qu a la fin du demarrage.
-    #   deka       : deka-start.sh (pose par addition.sh --opencl), qui tee deja
-    #                dans /var/log/deka.log.
+    # The three "run" entries: in the background, log in the bar (see the header).
+    #   standalone : launch.sh --service starts osmo-banc.service and SAYS so
+    #                (notification); then the log of the unit is followed.
+    #   multi      : launch.sh --multi (osmo-multi.service, several minutes)
+    #                IN PARALLEL with the log of the unit, which shows the
+    #                containers coming up - run in sequence, the log would only
+    #                start at the end of the startup.
+    #   deka       : deka-start.sh (installed by addition.sh --opencl), which
+    #                already tees into /var/log/deka.log.
     run_standalone = (f"{REPO}/launch.sh --service; echo; "
                       "exec journalctl -u osmo-banc -f -n 40 --no-pager -o cat")
     run_multi = (f"{REPO}/launch.sh --multi & "
@@ -279,13 +277,13 @@ def catalogue():
             ("run multi",      Action(log_cmd=run_multi, root=True, slug="multi")),
             ("run deka",       Action(log_cmd=run_deka, root=True, slug="deka")),
             ("Dashboard",      Action(argv=[browser, f"http://127.0.0.1:{dash}"])),
-            # tmux, VTY, oFono, pmOS : interactifs, donc un terminal - VTE, dans
-            # une fenetre GTK du banc, qui reste ouverte a la fin (plus de read).
+            # tmux, VTY, oFono, pmOS: interactive, hence a terminal - VTE, in a GTK
+            # window of the bench, which stays open at the end.
             ("tmux",           Action(term_cmd=f"tmux attach -t {tmux} || tmux -S /tmp/osmocom_tmux attach -t osmocom || echo 'pas de session tmux'")),
             (f"VTY {vty}",     Action(term_cmd=f"telnet 127.0.0.1 {vty} || {{ echo; echo 'VTY injoignable'; }}")),
         ]),
-        # Doom et Quake ne sont poses que par addition.sh --extras (pas dans
-        # l ISO) : une entree n apparait que si son binaire est la.
+        # Doom and Quake are only installed by addition.sh --extras (not in the
+        # ISO): an entry only appears if its binary is there.
         ("Jeux", [j for j in [
             ("Doom",   Action(argv=["/usr/games/chocolate-doom", "-iwad", "/usr/share/games/doom/freedoom2.wad", "-window"],
                               fs_argv=["/usr/games/chocolate-doom", "-iwad", "/usr/share/games/doom/freedoom2.wad", "-fullscreen"])),
@@ -302,8 +300,8 @@ def catalogue():
         ("Telephone", [
             ("Linphone", Action(argv=["sh", "-c", "linphone || linphone-desktop"])),
             ("oFono",    Action(term_cmd="/usr/local/bin/osmo-ofono")),
-            # Le telephone du banc : une VM postmarketOS/Phosh, avec son
-            # ModemManager branche sur le modem du banc (tools/osmo-pmos.sh).
+            # The phone of the bench: a postmarketOS/Phosh VM, with its ModemManager
+            # plugged on the modem of the bench (tools/osmo-pmos.sh).
             ("pmOS",     Action(term_cmd="/usr/local/bin/osmo-pmos up")),
         ]),
         ("Outils", [
@@ -336,10 +334,10 @@ class Launcher(Gtk.Window):
         prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        # ── les journaux des run ───────────────────────────────────────────
-        self.runs = {}          # slug -> {"proc": Popen|None, "titre": str, "log": chemin, "bouton": Gtk.Button}
-        self.cur = None         # slug affiche
-        self._shown = ""        # dernier texte pousse dans la vue
+        # ── the run logs ───────────────────────────────────────────────────
+        self.runs = {}          # slug -> {"proc": Popen|None, "titre": str, "log": path, "bouton": Gtk.Button}
+        self.cur = None         # displayed slug
+        self._shown = ""        # last text pushed into the view
         self.deplie = False
         os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -357,7 +355,7 @@ class Launcher(Gtk.Window):
         row.set_valign(Gtk.Align.END)
         for cat, apps in catalogue():
             row.pack_start(self._cat_box(cat, apps), False, False, 0)
-        # Le grand « ? » rouge : la page Info (chaque module, icone / barre / CLI).
+        # The big red "?": the Info page (each module, icon / bar / CLI).
         aide = Gtk.Button(label="?")
         aide.get_style_context().add_class("osmo-help")
         aide.set_valign(Gtk.Align.CENTER)
@@ -367,7 +365,7 @@ class Launcher(Gtk.Window):
         col.pack_start(row, False, False, 0)
         self.add(col)
 
-        # bande basse, pleine largeur, ~72 px ; depliee : + le journal
+        # bottom band, full width, ~72 px; unfolded: + the log
         self.h = 74
         self._taille(self.h)
         self.show_all()
@@ -391,7 +389,7 @@ class Launcher(Gtk.Window):
         self.stop_runs()
         Gtk.main_quit()
 
-    # ── le journal : la boite au-dessus des boutons ────────────────────────
+    # ── the log: the box above the buttons ────────────────────────────────
     def _log_box(self, sw):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.get_style_context().add_class("osmo-log")
@@ -460,7 +458,7 @@ class Launcher(Gtk.Window):
             self.lbl_titre.set_text("journal : aucun run lance")
             self.deplier()
 
-    # ── lancer un run en fond ──────────────────────────────────────────────
+    # ── start a run in the background ──────────────────────────────────────
     def run_logged(self, action):
         slug = action.slug or re.sub(r"\W+", "-", action.log_cmd)[:24]
         log = os.path.join(LOG_DIR, slug + ".log")
@@ -471,9 +469,9 @@ class Launcher(Gtk.Window):
             b.show()
             r = self.runs[slug] = {"proc": None, "titre": slug, "log": log, "bouton": b}
         self._stop(r)
-        # [2026-10-12] 2G (standalone) ou 4G (multi) : l antenne se dresse dans
-        # le fond d ecran des le clic (tools/osmo-fond.py, fondu) - osmo-panel.py
-        # fera de meme quand il verra le banc debout, sans effet s il l est deja.
+        # 2G (standalone) or 4G (multi): the antenna rises in the wallpaper from
+        # the click on (tools/osmo-fond.py, fade) - osmo-panel.py does the same
+        # when it sees the bench up, without effect if it already is.
         if slug in ("standalone", "multi"):
             fond = os.path.join(REPO, "tools", "osmo-fond.py")
             if os.path.exists(fond):
@@ -542,7 +540,7 @@ class Launcher(Gtk.Window):
             self.tv.scroll_to_iter(fin, 0.0, False, 0.0, 1.0)
         return True
 
-    # ── les boutons ────────────────────────────────────────────────────────
+    # ── the buttons ────────────────────────────────────────────────────────
     def _cat_box(self, cat, apps):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.get_style_context().add_class("osmo-cat")
@@ -573,17 +571,17 @@ class Launcher(Gtk.Window):
         b.connect("clicked", lambda *_a: action.launch("frame"))
         wrap.pack_start(b, False, False, 0)
         if action.log_cmd is not None:
-            # un run n a pas de fenetre a caler ni a envoyer en haut : un seul bouton
+            # a run has no window to fit nor to send to the top: a single button
             b.set_tooltip_text(f"{name} - en fond, journal dans la barre")
             return wrap
         b.set_tooltip_text(f"{name} - clic: cale sur le cadre")
-        # ⛶ plein ecran
+        # ⛶ full screen
         bf = Gtk.Button(label="⛶")
         bf.get_style_context().add_class("mini")
         bf.set_tooltip_text("plein ecran")
         bf.connect("clicked", lambda *_a: action.launch("full"))
         wrap.pack_start(bf, False, False, 0)
-        # ⤒ envoyer en haut (zone LAB GSM)
+        # ⤒ send to the top (LAB GSM zone)
         bt = Gtk.Button(label="⤒")
         bt.get_style_context().add_class("mini")
         bt.set_tooltip_text("envoyer en haut (zone LAB GSM)")
@@ -610,7 +608,7 @@ def single_instance():
 if __name__ == "__main__":
     single_instance()
     LAUNCHER = Launcher()
-    # SIGTERM (relance par le gardien du bureau, single_instance) : les
-    # journalctl -f lances en fond ne doivent pas survivre a la barre.
+    # SIGTERM (restart by the desktop guardian, single_instance): the
+    # journalctl -f started in the background must not outlive the bar.
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *_a: (LAUNCHER._quit(), False)[1])
     Gtk.main()

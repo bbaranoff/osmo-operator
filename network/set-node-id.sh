@@ -1,33 +1,32 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/set-node-id.sh - donne a CETTE machine son identite de noeud SS7
+# network/set-node-id.sh - gives THIS machine its SS7 node identity
 #
-# Une seule ISO pour tous les noeuds : le numero se choisit au demarrage, pas a
-# la construction. Ce script reecrit ce qui, dans les configs Osmocom, designe
-# le noeud - c'est-a-dire ses POINT CODES et ses routing contexts.
+# A single ISO for every node: the number is chosen at start-up, not at build
+# time. This script rewrites what designates the node in the Osmocom configs,
+# i.e. its POINT CODES and its routing contexts.
 #
-#   plan local (une machine)   1.<op>.<role>          op×100 + {10,20,30,50}
-#   plan WAN   (N machines)    1.<noeud><op>.<role>    noeud×1000 + op×100 + ...
+#   local plan (one machine)   1.<op>.<role>          op×100 + {10,20,30,50}
+#   WAN plan   (N machines)    1.<node><op>.<role>     node×1000 + op×100 + ...
 #
-# Pourquoi ca ne peut pas rester le plan local : la formule se recalcule a
-# l'identique sur chaque machine. Trois noeuds attaches au meme inter-STP y
-# presenteraient trois fois 1.11.2. Un point code est une ADRESSE - deux
-# equipements qui partagent la leur, ce n'est pas un doublon de nom, c'est du
-# routage faux, et le hub n'a aucun moyen de s'en apercevoir.
+# Why the local plan cannot stay: the formula gives the same result on every
+# machine. Three nodes attached to the same inter-STP would all present
+# 1.11.2. A point code is an ADDRESS - two devices sharing one is not a name
+# clash, it is wrong routing, and the hub has no way to notice.
 #
-# Trois fichiers portent cette identite, et ils doivent rester d'accord :
-#   osmo-stp.cfg   son propre PC, son routing-key, son ASP vers le hub
-#   osmo-msc.cfg   son PC, son routing-key, et le PC du BSC qu'il appelle
-#   osmo-bsc.cfg   son PC, son routing-key, et le PC du MSC qu'il appelle
-# En rater un donne un coeur qui demarre et des appels qui n'aboutissent pas.
+# Three files carry this identity, and they must agree:
+#   osmo-stp.cfg   its own PC, its routing-key, its ASP towards the hub
+#   osmo-msc.cfg   its PC, its routing-key, and the PC of the BSC it calls
+#   osmo-bsc.cfg   its PC, its routing-key, and the PC of the MSC it calls
+# Missing one gives a core that starts and calls that do not complete.
 #
-# Idempotent : il lit l'etat courant et le remplace. Passer --node 2 apres
-# --node 1 fonctionne, il n'y a pas d'etat a nettoyer entre les deux.
+# Idempotent: it reads the current state and replaces it. --node 2 after
+# --node 1 works, there is no state to clean between the two.
 #
-# Usage :
+# Usage:
 #   sudo network/set-node-id.sh --node 3 [--op 1] [--hub-ip 192.168.1.49]
-#   sudo network/set-node-id.sh --show          etat actuel, sans rien modifier
-#   sudo network/set-node-id.sh --node 3 --local   plan local (annule le plan WAN)
+#   sudo network/set-node-id.sh --show          current state, changes nothing
+#   sudo network/set-node-id.sh --node 3 --local   local plan (cancels the WAN plan)
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -35,17 +34,17 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# wan_detect_local_ip vit ici : c'est la meme regle de choix d'adresse que celle
-# qu'appliquent start-docker.sh et start-native.sh. La dupliquer, c'est se garantir
-# qu'un jour les deux ne designeront plus la meme carte.
+# wan_detect_local_ip lives there: the same address selection rule as the one
+# start-docker.sh and start-native.sh apply, so that both always designate
+# the same card.
 # shellcheck source=network/wan-nodes.sh
 . "$SCRIPT_DIR/wan-nodes.sh"
 
 NODE=""
 OP=1
 HUB_IP=""
-MODE=""            # docker | native - l'adressage n'est pas le meme
-LOCAL_IP=""        # adresse source de l'ASP ; "auto" = detectee
+MODE=""            # docker | native - the addressing differs
+LOCAL_IP=""        # source address of the ASP; "auto" = detected
 CONF_DIR="${CONF_DIR:-/etc/osmocom}"
 SHOW=0
 LOCAL_PLAN=0
@@ -80,10 +79,10 @@ STP="$CONF_DIR/osmo-stp.cfg"
 MSC="$CONF_DIR/osmo-msc.cfg"
 BSC="$CONF_DIR/osmo-bsc.cfg"
 
-# ── Lecture de l'identite en place ──────────────────────────────────────────
-# Le premier point-code d'un fichier est CELUI DU DEMON ; ceux qui suivent, a
-# l'interieur d'un bloc "sccp-address", designent ses pairs. C'est cette
-# distinction qui structure toute la reecriture.
+# ── Reading the identity in place ───────────────────────────────────────────
+# The first point-code of a file is THE DAEMON'S; the following ones, inside
+# an "sccp-address" block, designate its peers. This distinction structures
+# the whole rewrite.
 own_pc() { awk '/^cs7 instance/{c=1} c && /^ *point-code /{print $2; exit}' "$1" 2>/dev/null; }
 
 show_state() {
@@ -116,41 +115,41 @@ for f in "$STP" "$MSC" "$BSC"; do
     [ -w "$f" ] || { echo -e "${RED}$f introuvable ou non modifiable${NC}" >&2; exit 1; }
 done
 
-# ── Le nouveau plan ─────────────────────────────────────────────────────────
+# ── The new plan ────────────────────────────────────────────────────────────
 if [ "$LOCAL_PLAN" = "1" ]; then
-    MID="$OP"                       # 1.<op>.<role> - plan d'une machine isolee
+    MID="$OP"                       # 1.<op>.<role> - plan of an isolated machine
     RBASE=$(( OP * 100 ))
 else
-    MID="${NODE}${OP}"              # 1.<noeud><op>.<role> - plan WAN
+    MID="${NODE}${OP}"              # 1.<node><op>.<role> - WAN plan
     RBASE=$(( NODE * 1000 + OP * 100 ))
 fi
 PC_MSC="1.${MID}.1"; PC_STP="1.${MID}.2"; PC_BSC="1.${MID}.3"
 RCTX_MSC=$(( RBASE + 10 )); RCTX_STP=$(( RBASE + 20 ))
 RCTX_BSC=$(( RBASE + 30 )); RCTX_INTER=$(( RBASE + 50 ))
 
-# ── DOCKER OU VM : deux plans d'adressage, et le defaut de l'un est faux dans
-# l'autre ──────────────────────────────────────────────────────────────────
-#   docker : le hub est le conteneur osmo-inter-stp, 172.20.0.10, sur le reseau
-#            gsm-inter. Le noeud y a deja son IP quand osmo-stp demarre.
-#   VM/ISO : le hub est une machine a part, sur le LAN en acces par pont.
-#            L'adresse du noeud vient du DHCP et n'est pas forcement montee au
-#            lancement.
-# Se tromper de defaut donne un ASP qui ne s'attache jamais, et le journal ne
-# dit que "connection refused" - sans indiquer que l'adresse visee n'existe
-# nulle part sur ce reseau-la.
+# ── DOCKER OR VM: two address plans, and the default of one is wrong in the
+# other ────────────────────────────────────────────────────────────────────
+#   docker: the hub is the osmo-inter-stp container, 172.20.0.10, on the
+#           gsm-inter network. The node already has its IP when osmo-stp starts.
+#   VM/ISO: the hub is a separate machine, on the LAN in bridged mode. The
+#           node's address comes from DHCP and is not necessarily up at
+#           start-up.
+# A wrong default gives an ASP that never attaches, and the log only says
+# "connection refused" - without telling that the target address exists
+# nowhere on that network.
 #
-# Le host-only VirtualBox (192.168.56.1) a longtemps servi de repli ici. Il est
-# FAUX des que les VM sont en acces par pont : l'adresse n'existe sur aucun
-# segment, et l'ASP la vise sans jamais rien atteindre. On DEMANDE donc
-# l'adresse au lieu de la deviner, avec le hub du banc comme defaut. Une
-# reponse VIDE est acceptee quand on ne la connait pas encore : dans ce cas le
-# remote-ip deja present dans le fichier n'est pas touche - mieux vaut ne rien
-# ecrire qu'ecrire une adresse fausse.
+# The VirtualBox host-only address (192.168.56.1) is WRONG as soon as the VMs
+# are bridged: the address exists on no segment, and the ASP aims at it
+# without ever reaching anything. The address is therefore ASKED instead of
+# guessed, with the bench hub as default. An EMPTY answer is accepted when it
+# is not known yet: in that case the remote-ip already present in the file is
+# left untouched - better to write nothing than to write a wrong address.
+#
 if [ -z "$MODE" ]; then
     if [ -f /.dockerenv ]; then MODE="docker"; else MODE="native"; fi
 fi
 
-: "${HUB_IP_DEFAULT:=172.20.0.10}"    # le hub du banc : osmo-inter-stp, backbone docker
+: "${HUB_IP_DEFAULT:=172.20.0.10}"    # the bench hub: osmo-inter-stp, docker backbone
 
 if [ -z "$HUB_IP" ]; then
     if [ -r /etc/osmo-role ]; then
@@ -161,9 +160,9 @@ if [ -z "$HUB_IP" ]; then
     case "$MODE" in
         docker) HUB_IP="${INTER_STP_IP:-172.20.0.10}" ;;
         *)
-            # Interactif : on demande. Sinon (ISO, service, CI) on prend le
-            # defaut du banc - un script non interactif ne peut pas repondre,
-            # et rester bloque sur une lecture ne ferait qu'echouer plus tard.
+            # Interactive: ask. Otherwise (ISO, service, CI) take the bench
+            # default - a non-interactive script cannot answer, and blocking
+            # on a read would only fail later.
             if [ -t 0 ] && [ "$DRY" != "1" ] && command -v _wan_ask >/dev/null 2>&1; then
                 HUB_IP="$(_wan_ask "Inter-STP" \
                     "IP de l'inter-STP (vide si inconnue) :" "$HUB_IP_DEFAULT")" || exit 1
@@ -173,8 +172,8 @@ if [ -z "$HUB_IP" ]; then
     esac
 fi
 
-# Vide assume : on ne reecrira pas le remote-ip. Le reste (point codes,
-# routing-keys, local-ip) garde tout son sens et s'applique quand meme.
+# Empty is accepted: the remote-ip is not rewritten. The rest (point codes,
+# routing-keys, local-ip) keeps its meaning and is applied anyway.
 SET_HUB_IP=1
 if [ -z "$HUB_IP" ]; then
     SET_HUB_IP=0
@@ -182,36 +181,36 @@ if [ -z "$HUB_IP" ]; then
     echo -e "  ${YELLOW}Renseignez-le plus tard : --hub-ip ADRESSE, ou set_stp_ip.sh${NC}"
 fi
 
-# ── Adresse SOURCE de l'ASP vers le hub ─────────────────────────────────────
-# En docker on n'y touche pas : le conteneur a son adresse avant que le demon ne
-# demarre, et une source explicite evite que SCTP annonce plusieurs adresses
-# (multi-homing) a un pair qui n'en attend qu'une.
+# ── SOURCE address of the ASP towards the hub ───────────────────────────────
+# In docker it is left alone: the container has its address before the daemon
+# starts, and an explicit source keeps SCTP from announcing several addresses
+# (multi-homing) to a peer that expects only one.
 #
-# En VM, on INJECTE l'adresse reellement detectee sur le segment VirtualBox
-# plutot que 0.0.0.0. La difference n'est pas cosmetique : avec 0.0.0.0, SCTP
-# annonce TOUTES les adresses locales dans son INIT - y compris le NAT 10.0.2.15
-# et les alias 172.20.x que l'ISO pose. Le hub tente alors de joindre des
-# adresses qui, vues de lui, ne menent nulle part. Une adresse unique et juste
-# vaut mieux qu'un multi-homing dont trois branches sur quatre sont mortes.
+# In a VM, the address actually detected on the VirtualBox segment is
+# INJECTED rather than 0.0.0.0. The difference is not cosmetic: with 0.0.0.0,
+# SCTP announces ALL local addresses in its INIT - including the 10.0.2.15 NAT
+# and the 172.20.x aliases the ISO sets. The hub then tries to reach addresses
+# that, seen from it, lead nowhere. A single correct address beats a
+# multi-homing with three dead branches out of four.
 #
-# On retombe sur 0.0.0.0 si aucune adresse n'est detectable - s'y lier vaut
-# mieux que de se lier a une adresse absente, qui empeche osmo-stp de demarrer.
+# Falls back to 0.0.0.0 when no address is detectable - binding there beats
+# binding to a missing address, which prevents osmo-stp from starting.
 SET_LOCAL_IP=0
 ASP_LOCAL_IP=""
 if [ "$MODE" != "docker" ]; then
     SET_LOCAL_IP=1
     case "$LOCAL_IP" in
         "" | auto)
-            # ── L'adresse qui ROUTE vers le hub, avant toute heuristique ────
-            # Le noyau sait exactement quelle source il utilisera pour joindre
-            # le hub : c'est ce que "ip route get" repond. Toute autre methode
-            # devine - et devine mal des que la machine porte plusieurs
-            # adresses privees. Une VM du banc en a trois (192.168.1.2 le pont,
-            # 192.168.2.1 et .2.10 le plan prive de l'ISO) : l'heuristique
-            # choisissait 192.168.2.1, une adresse que le hub ne peut pas
-            # joindre en retour. L'ASP partait alors dans le vide et le journal
-            # ne disait que "connect failed (-110)" - un timeout, sans indice
-            # sur la source fautive.
+            # ── The address that ROUTES to the hub, before any heuristic ────
+            # The kernel knows exactly which source it will use to reach the
+            # hub: that is what "ip route get" answers. Any other method
+            # guesses - and guesses wrong as soon as the machine carries
+            # several private addresses. A bench VM has three (192.168.1.2 the
+            # bridge, 192.168.2.1 and .2.10 the ISO's private plan): a
+            # heuristic may pick 192.168.2.1, an address the hub cannot reach
+            # back; the ASP would then go nowhere and the log would only say
+            # "connect failed (-110)" - a timeout, with no hint about the
+            # faulty source.
             if [ -n "$HUB_IP" ]; then
                 ASP_LOCAL_IP="$(ip route get "$HUB_IP" 2>/dev/null \
                                 | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
@@ -246,12 +245,12 @@ else
 fi
 echo ""
 
-# ── Reecriture ──────────────────────────────────────────────────────────────
-# `own` = le point code du demon (au niveau cs7 instance).
-# `peer` = celui qu'il declare dans ses blocs sccp-address.
-# La distinction se fait sur le bloc courant, pas sur le numero de ligne : un
-# fichier qui gagne une directive ne decale pas la reecriture.
-rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
+# ── Rewrite ─────────────────────────────────────────────────────────────────
+# `own` = the daemon's point code (at cs7 instance level).
+# `peer` = the one it declares in its sccp-address blocks.
+# The distinction is made on the current block, not on the line number: a
+# file that gains a directive does not shift the rewrite.
+rewrite() {  # $1=file  $2=own  $3=peer  $4=rctx  $5=1 if inter-STP asp block
     local f="$1" own="$2" peer="$3" rctx="$4" do_asp="$5"
     local tmp; tmp="$(mktemp)"
     awk -v own="$own" -v peer="$peer" -v rctx="$rctx" -v do_asp="$do_asp" -v hub="$HUB_IP" \
@@ -265,11 +264,11 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
         in_asp && /^ *(as|listen|route-table|!)/ { in_asp=0 }
 
         in_asp && do_asp && set_hub && /^ *remote-ip /   { sub(/remote-ip .*/, "remote-ip " hub); print; next }
-        # local-ip de l ASP : l adresse SOURCE de la SCTP vers le hub. Elle vaut
-        # 127.0.0.1 dans l image (tout etait local) ; la laisser ainsi ferait
-        # partir la connexion de la boucle locale vers une adresse de segment -
-        # elle n aboutirait jamais, et le seul symptome serait un ASP DOWN.
-        # 0.0.0.0 : le noyau choisit la source selon la route.
+        # local-ip of the ASP: the SOURCE address of the SCTP towards the hub.
+        # It is 127.0.0.1 in the image (everything local); left as is, the
+        # connection would leave the loopback towards a segment address -
+        # it would never complete, and the only symptom would be an ASP DOWN.
+        # 0.0.0.0: the kernel picks the source according to the route.
         in_asp && do_asp && set_local && /^ *local-ip / { sub(/local-ip.*/, "local-ip " localip); print; next }
         in_asp && do_asp && /^ *shutdown[ \t]*$/ { sub(/shutdown/, "no shutdown"); print; next }
 
@@ -283,30 +282,27 @@ rewrite() {  # $1=fichier  $2=own  $3=peer  $4=rctx  $5=1 si bloc asp inter-STP
     ' "$f" > "$tmp"
 
     if [ "$DRY" = "1" ]; then
-        # diff renvoie 1 quand les fichiers different : c'est le cas normal ici,
-        # et pipefail ferait tomber le script des la premiere reecriture.
+        # diff returns 1 when the files differ: the normal case here, and
+        # pipefail would abort the script at the first rewrite.
         echo "  [dry-run] $f"; { diff -u "$f" "$tmp" || true; } | sed -n '4,30p' | sed 's/^/    /'; rm -f "$tmp"
     else
-        # cat plutot que mv : sur l'ISO comme dans un conteneur, ces fichiers
-        # peuvent etre des points de montage, et rename() y echoue.
+        # cat rather than mv: on the ISO as in a container, these files may be
+        # mount points, where rename() fails.
         cat "$tmp" > "$f"; rm -f "$tmp"
         echo -e "  ${GREEN}✓${NC} $(basename "$f")"
     fi
 }
 
-# ── LE PLAN DE POINT CODES ET LE HUB SONT DEUX CHOSES ───────────────────────
-# [2026-08-31] do_asp valait 0 des que LOCAL_PLAN=1 : le plan local coupait
-# TOUT traitement du bloc asp-to-inter. C etait vrai tant que "plan local"
-# voulait dire "machine isolee, aucun hub". Ce n est plus le cas : le banc
-# multi-operateur porte son inter-STP dans un CONTENEUR, sur la meme machine,
-# joignable en 127.0.0.1:2908 (port SCTP publie par start-docker.sh). Le plan des
-# point codes y est bien local - 1.<op>.<role> - ET il y a un hub.
-# Consequence du couplage : `--local --hub-ip 127.0.0.1` affichait
-# "plan LOCAL : cette machine ne peut pas partager un hub avec une autre" et
-# laissait le local-ip du gabarit, 172.20.0.11 - l adresse du PREMIER
-# CONTENEUR, inexistante sur l hote. L ASP restait ASP_DOWN sans qu une seule
-# ligne ne parle d adresse : le journal ne montre qu un timeout.
-# On traite donc l ASP des qu un hub est CONFIGURE, quel que soit le plan.
+# ── THE POINT CODE PLAN AND THE HUB ARE TWO DIFFERENT THINGS ────────────────
+# The multi-operator bench carries its inter-STP in a CONTAINER, on the same
+# machine, reachable at 127.0.0.1:2908 (SCTP port published by
+# start-docker.sh). Its point code plan is local - 1.<op>.<role> - AND there
+# is a hub. The asp-to-inter block is therefore handled as soon as a hub is
+# CONFIGURED, whatever the plan; otherwise `--local --hub-ip 127.0.0.1` would
+# leave the template's local-ip, 172.20.0.11 - the FIRST CONTAINER's address,
+# which does not exist on the host - and the ASP would stay ASP_DOWN with
+# nothing but a timeout in the log.
+
 _DO_ASP=0
 [ -n "$HUB_IP" ] && _DO_ASP=1
 [ "$LOCAL_PLAN" = "1" ] || _DO_ASP=1

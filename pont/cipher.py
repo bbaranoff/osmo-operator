@@ -21,9 +21,9 @@ class Cipher:
         self._cache = None
         self._next = 0.0
         self._held = None
-        # La BTS ne chiffre le descendant qu'apres avoir recu la premiere trame
-        # montante chiffree (osmo-bts l1sap.c check_for_first_ciphrd). Tant que
-        # ce n'est pas constate, le descendant du canal dedie est en clair.
+        # The BTS only ciphers the downlink after receiving the first ciphered
+        # uplink frame (osmo-bts l1sap.c check_for_first_ciphrd). Until that is
+        # observed, the downlink of the dedicated channel is in clear.
         self.dl_active = False
 
     def _read(self):

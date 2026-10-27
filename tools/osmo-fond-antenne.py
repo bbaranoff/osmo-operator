@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# Variante « banc en marche » du fond : sans le bandeau ubuntu|osmocom ni le NO RF,
-# pour laisser la place à la bannière et au Conky. Seuls les pixels clairs des
-# logos / du panneau sont effacés (le fond derrière est sombre) ; on les remplit
-# par un flou normalisé des voisins sombres, plus un léger grain.
+# "Bench running" variant of the wallpaper: without the ubuntu|osmocom banner and
+# the NO RF sign, to leave room for the banner and Conky. Only the light pixels of
+# the logos / sign are erased (the background behind them is dark); they are filled
+# with a normalised blur of the dark neighbours, plus a light grain.
 #
-# [2026-10-23] Entree : la sortie de tools/osmo-fond-repos.py (2560x1600) ; les
-# zones effacees sont en coordonnees de cette image. Voir l en-tete de
-# osmo-fond-repos.py pour la chaine complete.
+# Input: the output of tools/osmo-fond-repos.py (2560x1600); the erased areas are
+# in the coordinates of that image. See the header of osmo-fond-repos.py for the
+# complete chain.
 import sys
 import numpy as np
 from PIL import Image, ImageFilter
@@ -34,17 +34,17 @@ def dilate(m, n):
 lum = im.max(axis=2)
 clair = lum > 55
 
-# zone 1 : bandeau ubuntu | osmocom | GSM...LTE - seuls les pixels clairs
+# zone 1: ubuntu | osmocom | GSM...LTE banner - light pixels only
 zone = np.zeros((H, W), bool); zone[115:355, 175:1630] = True
 trou = dilate(clair & zone, 23)
-# zone 2 : panneau NO RF (disque du cercle barré + texte + trait) - en entier,
-# le fond orange derriere le texte ne se distingue pas du trait
+# zone 2: NO RF sign (disc of the barred circle + text + stroke) - whole area,
+# the orange background behind the text cannot be told apart from the stroke
 cx, cy, r = 2205, 285, 268
 norf = (xx - cx) ** 2 + (yy - cy) ** 2 < r ** 2
 norf[475:700, 2045:2415] = True
 norf = dilate(norf, 9)
 
-# remplissage : moyenne des pixels sombres voisins, à plusieurs échelles
+# fill: mean of the neighbouring dark pixels, at several scales
 garde = (~trou).astype(float)
 rempli = np.zeros_like(im); poids = np.zeros((H, W))
 for s, seuil in ((6, .15), (14, .15), (30, .15), (60, .1), (120, .03), (250, 0.003)):
@@ -54,9 +54,9 @@ for s, seuil in ((6, .15), (14, .15), (30, .15), (60, .1), (120, .03), (250, 0.0
     rempli[ok] = num[ok] / den[ok][:, None]
     poids[ok] = 1
 
-# panneau NO RF : membrane lisse (diffusion depuis le bord, a 1/8), sans les
-# paliers des echelles de flou, puis les coups de pinceau d une zone 690 px a
-# gauche (bandeau deja efface, tour de la ville evitee), estompes vers le bas
+# NO RF sign: smooth membrane (diffusion from the edge, at 1/8), without the
+# steps of the blur scales, then the brush strokes of a 690 px zone on the
+# left (banner already erased, city tower avoided), faded towards the bottom
 def membrane(img, trou, f=8, n=400):
     h, w = H // f, W // f
     p = np.stack([np.asarray(Image.fromarray(img[..., c].astype(np.uint8)).resize((w, h), Image.BOX), float)
@@ -69,7 +69,7 @@ def membrane(img, trou, f=8, n=400):
     return np.stack([np.asarray(Image.fromarray(np.clip(q[..., c], 0, 255).astype(np.uint8))
                                 .resize((W, H), Image.BICUBIC), float) for c in range(3)], -1)
 
-# grain : un bruit léger, flouté d un pixel, pour ne pas laisser d aplat lisse
+# grain: light noise, blurred by one pixel, so as not to leave a flat area
 rng = np.random.default_rng(23)
 bruit = rng.normal(0, 5, (H, W))
 bruit = np.asarray(Image.fromarray(np.clip(bruit + 128, 0, 255).astype(np.uint8))

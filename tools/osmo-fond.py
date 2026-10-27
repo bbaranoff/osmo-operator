@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-# osmo-fond.py - LE FOND D ECRAN DU BANC, EN DEUX ETATS, AVEC UN FONDU ENTRE LES DEUX.
+# osmo-fond.py - THE BENCH WALLPAPER, IN TWO STATES, WITH A FADE BETWEEN THEM.
 #
-#   osmo-fond ville        le bureau au repos : la ville au bord de l eau, sans
-#                          antenne (configs/gsm-lab-ville.jpg)
-#   osmo-fond antenne      un banc tourne : la MEME ville, le pylone 2G/4G
-#                          dresse devant, les icones qui montent
+#   osmo-fond ville        the idle desktop: the city by the water, without
+#                          antenna (configs/gsm-lab-ville.jpg)
+#   osmo-fond antenne      a bench is running: the SAME city, the 2G/4G mast
+#                          raised in front, the icons going up
 #                          (configs/gsm-lab-antenne.jpg)
-#   osmo-fond etat         affiche l etat courant (ville / antenne / autre)
-#   osmo-fond <fichier>    n importe quelle image, meme fondu
+#   osmo-fond etat         prints the current state (ville / antenne / autre)
+#   osmo-fond <file>       any image, same fade
 #
-#   --duree S     longueur du fondu (defaut 2.4 s) ; --sec : pas de fondu
-#   --pas N       nombre d images intermediaires (defaut 12)
+#   --duree S     length of the fade (default 2.4 s); --sec: no fade
+#   --pas N       number of intermediate images (default 12)
 #
-# [2026-10-12] POURQUOI. Le bureau montrait l antenne en permanence. Choix du
-# banc : au repos, la ville seule ; quand on LANCE la 2G (run standalone) ou
-# la 4G (run multi), l antenne se dresse dans le paysage - en fondu, pas d un
-# coup - et elle repart quand tout s eteint. Deux appelants :
-#   - tools/osmo-launcher.py, au CLIC sur un run (immediat, avant meme que le
-#     service soit debout) ;
-#   - tools/osmo-panel.py, qui sait deja quand un banc monte ou tombe
-#     (montrer(actif)) : couvre un lancement depuis un terminal, et le retour
-#     a la ville a l arret.
-# Les deux peuvent se suivre de pres : l outil est IDEMPOTENT (deja sur la
-# cible : rien), et un seul fondu a la fois par session (verrou).
+# WHY. Bench choice: idle, the city alone; when the 2G (standalone run) or
+# the 4G (multi run) is STARTED, the antenna rises in the landscape - with a
+# fade, not at once - and it goes away when everything stops. Two callers:
+#   - tools/osmo-launcher.py, on the CLICK on a run (immediately, even before
+#     the service is up);
+#   - tools/osmo-panel.py, which already knows when a bench goes up or down
+#     (montrer(actif)): covers a launch from a terminal, and the return to
+#     the city on stop.
 #
-# COMMENT. GNOME Shell fait lui-meme un petit fondu croise (~1 s) a chaque
-# changement de picture-uri. On s appuie dessus et on l allonge : Pillow rend N
-# images intermediaires (melange lineaire des deux fonds) dans
-# $XDG_RUNTIME_DIR/osmo-fond/, et on les pousse une a une par gsettings, a
-# intervalle regulier ; la derniere valeur posee est le VRAI fichier
-# (/usr/share/backgrounds/gsm-lab-*.jpg), pas une image de cache. Les images
-# sont gardees (tmpfs, quelques Mo) : le fondu inverse les relit a l envers.
+# Both may follow each other closely: the tool is IDEMPOTENT (already on the
+# target: nothing), and only one fade at a time per session (lock).
 #
-# UTILISATEUR. gsettings parle au bus de SESSION : l outil doit tourner comme
-# l utilisateur du bureau. Lance en root (start-docker.sh, un service), il se relance
-# lui-meme sous le compte qui a un gnome-shell et un /run/user/<uid>/bus.
+# HOW. GNOME Shell itself does a short cross-fade (~1 s) on every change of
+# picture-uri. It is relied upon and stretched: Pillow renders N intermediate
+# images (linear blend of the two wallpapers) in
+# $XDG_RUNTIME_DIR/osmo-fond/, pushed one by one through gsettings at a
+# regular interval; the last value set is the REAL file
+# (/usr/share/backgrounds/gsm-lab-*.jpg), not a cache image. The images are
+# kept (tmpfs, a few MB): the reverse fade reads them backwards.
+#
+# USER. gsettings talks to the SESSION bus: the tool must run as the desktop
+# user. Started as root (start-docker.sh, a service), it re-executes itself
+# under the account that has a gnome-shell and a /run/user/<uid>/bus.
 import argparse
 import fcntl
 import hashlib
@@ -48,7 +48,7 @@ from urllib.parse import quote, unquote, urlparse
 
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 BG_DIR = "/usr/share/backgrounds"
-# Nom -> fichier pose par l install (80-chroot.sh / 80-bureau.sh), sinon le depot.
+# Name -> file installed by the install (80-chroot.sh / 80-bureau.sh), else the repo.
 ETATS = {
     "ville":   ("gsm-lab-ville.jpg",   "le bureau au repos"),
     "antenne": ("gsm-lab-antenne.jpg", "un banc tourne"),
@@ -70,18 +70,18 @@ def fichier_etat(nom):
     return None
 
 
-# ── tourner comme l utilisateur du bureau ────────────────────────────────────
+# ── run as the desktop user ──────────────────────────────────────────────────
 def _session_bus(uid):
     p = "/run/user/%d/bus" % uid
     return "unix:path=" + p if os.path.exists(p) else None
 
 
 def se_relancer_en_utilisateur():
-    """Root sans bus de session : trouver le bureau et se relancer dessous."""
+    """Root without a session bus: find the desktop and re-execute under it."""
     if os.geteuid() != 0:
         return
     if os.environ.get("DBUS_SESSION_BUS_ADDRESS") and _session_bus(0):
-        return                      # le bureau est a root (la cle live)
+        return                      # the desktop belongs to root (the live key)
     candidats = []
     su = os.environ.get("SUDO_USER")
     if su:
@@ -139,8 +139,8 @@ def chemin_de(uri):
 
 
 def etat_courant():
-    """(etat, chemin) : ville / antenne / « <cible> en cours » (image d un fondu
-    interrompu - un osmo-fond tue en plein vol, cf. start-native.sh
+    """(state, path): ville / antenne / "<target> en cours" (image of an
+    interrupted fade - an osmo-fond killed in flight, cf. start-native.sh
     killall_python) / autre."""
     p = chemin_de(gs_get("picture-uri")) or ""
     for nom, (f, _) in ETATS.items():
@@ -152,7 +152,7 @@ def etat_courant():
     return "autre", p
 
 
-# ── le fondu ─────────────────────────────────────────────────────────────────
+# ── the fade ─────────────────────────────────────────────────────────────────
 def _cache_dir():
     base = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
     if not os.path.isdir(base):
@@ -163,7 +163,7 @@ def _cache_dir():
 
 
 def rendre_etapes(src, dst, pas, cible):
-    """Les images intermediaires src -> dst (sans les deux bouts) ; None si impossible."""
+    """The intermediate images src -> dst (without both ends); None if impossible."""
     try:
         from PIL import Image
     except ImportError:
@@ -174,7 +174,7 @@ def rendre_etapes(src, dst, pas, cible):
     except OSError:
         return None
     if a.size != b.size:
-        # ramener la source au format de la cible, en « zoom » comme GNOME
+        # bring the source to the target format, "zoomed" like GNOME
         W, H = b.size
         r = max(W / a.width, H / a.height)
         a = a.resize((max(1, round(a.width * r)), max(1, round(a.height * r))), Image.LANCZOS)
@@ -201,8 +201,8 @@ def poser(cible, duree, pas, sec):
     if (etat == nom and nom != "autre") or (src and os.path.abspath(src) == dst):
         dire("deja « %s » : rien a faire" % nom)
         return 0
-    # un fondu interrompu : on repart de l image ou il s est arrete (src)
-    # un seul fondu a la fois par session
+    # an interrupted fade: restart from the image where it stopped (src)
+    # only one fade at a time per session
     verrou = open(os.path.join(_cache_dir(), "verrou"), "w")
     try:
         fcntl.flock(verrou, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -222,7 +222,7 @@ def poser(cible, duree, pas, sec):
         else:
             dire("%s -> %s (fondu GNOME seul)" % (etat, nom))
     finally:
-        # quoi qu il arrive (erreur, SIGTERM), le VRAI fichier est pose
+        # whatever happens (error, SIGTERM), the REAL file is set
         gs_set(uri_de(dst))
     return 0
 
@@ -235,7 +235,7 @@ def main():
     ap.add_argument("--sec", action="store_true", help="sans fondu")
     a = ap.parse_args()
     se_relancer_en_utilisateur()
-    # SIGTERM pendant le fondu : le finally de poser() pose la cible
+    # SIGTERM during the fade: the finally of poser() sets the target
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if a.cible == "etat":
         etat, p = etat_courant()

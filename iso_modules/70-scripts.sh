@@ -1,39 +1,21 @@
 #!/bin/bash
-# iso_modules/70-scripts.sh - etape 7/7b : scripts projet, WAN, NetworkManager
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/70-scripts.sh - steps 7/7b: project scripts, WAN, NetworkManager
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
 
-# ── Etape 7 : Injection des scripts projet et installation du lanceur start-native.sh ──
+# ── Step 7: project scripts and the start-native.sh launcher ────────────────
 echo -e "${GREEN}[7/9] Scripts projet et adaptation ISO...${NC}"
-# ── UN SEUL ARBRE DU DEPOT : /opt/GSM/osmo-operator ────────────────────────────
-# Ici vivait la fabrication d'un SECOND arbre, /opt/GSM/osmo-operator : une copie
-# PARTIELLE du depot (une liste de fichiers nommes un a un, plus sept
-# repertoires), sans .git, figee a la construction. L'ISO partait donc avec
-# deux osmo-operator :
-#
-#   /opt/GSM/osmo-operator   l'arbre COMPLET, avec son .git, mis a jour a
-#                         l'etape [5a/9] et par "osmo-update" ensuite ;
-#   /opt/GSM/osmo-operator       une copie partielle que plus rien ne mettait a jour.
-#
-# Et c'est le second que visaient les liens osmo-start-direct / osmo-start-lab,
-# le message de login, l'alias osmo-lab et l'unite du hub SS7. Autrement dit :
-# on mettait a jour un arbre, on en executait un autre. Tout ce qui a ete ajoute
-# au depot depuis la derniere construction - un module, un script network/, une
-# option - existait sur la machine et restait sans effet, parce que le lanceur
-# lance n'etait pas celui qu'on venait de corriger.
-#
-# Le filet que la copie apportait - "un lanceur present meme sans reseau" - est
-# conserve, mais AU MEME ENDROIT : si l'arbre complet n'a pas pu etre recupere,
-# on le remplit depuis le depot de construction, et il n'y a toujours qu'un
-# seul chemin.
+# ── A single repository tree: /opt/GSM/osmo-operator ───────────────────────
+# All launchers, links, aliases and units point to this tree (full clone with
+# .git, updated at step [5a/9] and by osmo-update). If the clone could not be
+# fetched, it is filled from the build repository instead, at the same path.
 P="$ROOTFS/opt/GSM/osmo-operator"
 if [ ! -x "$P/start-native.sh" ]; then
     echo -e "  ${YELLOW}!${NC} /opt/GSM/osmo-operator sans lanceur (image perimee, clone impossible)"
     echo -e "    -> remplissage depuis le depot de construction ${CYAN}${DIR}${NC}"
     mkdir -p "$P"
-    # --exclude .git : on ne fabrique pas un faux depot. S'il en manquait un,
-    # c'est que le reseau a manque ; osmo-update le reconstituera.
+    # --exclude .git: do not fake a repository; osmo-update will rebuild it.
     tar -C "$DIR" --exclude=.git --exclude='*.iso' -cf - . | tar -C "$P" -xf -
     find "$P" -name "*.sh" -exec chmod +x {} \;
 fi
@@ -42,97 +24,81 @@ if [ ! -x "$P/start-native.sh" ]; then
     exit 1
 fi
 ln -sf /opt/GSM/osmo-operator/start-native.sh "$ROOTFS/usr/local/bin/osmo-start-native" 2>/dev/null || true
-ln -sf /opt/GSM/osmo-operator/start-native.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true   # ancien nom
-# [2026-09-25] Le fond par defaut (80-chroot.sh le lit dans CET arbre, qui vient
-# du clone GitHub) : pose depuis le depot de construction, pour qu une image non
-# encore poussee parte quand meme avec son fond.
+ln -sf /opt/GSM/osmo-operator/start-native.sh "$ROOTFS/usr/local/bin/osmo-start-direct" 2>/dev/null || true  # legacy name
+# Default wallpaper (80-chroot.sh reads it from THIS tree): installed from the
+# build repository so that an unpushed tree still ships it.
 [ -f "$DIR/configs/gsm-lab-wallpaper.jpg" ] \
     && install -Dm644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$P/configs/gsm-lab-wallpaper.jpg"
-# [2026-10-11] Le fond nu va avec (meme scene que l encart, cf. tools/paysage-render.py).
+# Plain background (same scene as the overlay, see tools/paysage-render.py).
 [ -f "$DIR/configs/gsm-lab-fond.jpg" ] \
     && install -Dm644 "$DIR/configs/gsm-lab-fond.jpg" "$P/configs/gsm-lab-fond.jpg"
-# [2026-10-12] Le fond en DEUX ETATS (tools/osmo-fond.py) : la ville seule au
-# repos (gsm-lab-ville.jpg, le defaut de schema), la ville avec l antenne quand
-# un banc tourne (gsm-lab-antenne.jpg) - fondu de l un a l autre.
+# Two-state background (tools/osmo-fond.py): the city alone when idle
+# (gsm-lab-ville.jpg, schema default), the city with the antenna while a bench
+# is running (gsm-lab-antenne.jpg), cross-faded.
 for _bg in gsm-lab-ville.jpg gsm-lab-antenne.jpg; do
     [ -f "$DIR/configs/$_bg" ] && install -Dm644 "$DIR/configs/$_bg" "$P/configs/$_bg"
 done
 unset _bg
 ln -sf /opt/GSM/osmo-operator/tools/osmo-fond.py "$ROOTFS/usr/local/bin/osmo-fond" 2>/dev/null || true
-# osmo-op : quel operateur l encart et le Conky regardent (les fleches, en
-# ligne de commande). C est aussi ce qu appelle le raccourci clavier pose par
-# iso_modules/80-chroot.sh - Ctrl+AltGr+Droite / Ctrl+AltGr+Gauche.
+# osmo-op: selects which operator the overlay and Conky show (arrows, from
+# the command line). Also bound by iso_modules/80-chroot.sh to
+# Ctrl+AltGr+Right / Ctrl+AltGr+Left.
 ln -sf /opt/GSM/osmo-operator/tools/osmo-op.sh "$ROOTFS/usr/local/bin/osmo-op" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-drivers.sh "$ROOTFS/usr/local/bin/osmo-drivers" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overlay-draw" 2>/dev/null || true
-# [2026-10-24] La fenetre du C123 emule (ecran + clavier de qosmo) dans le PATH :
-# l alias c123 de /etc/profile.d/98-osmo-banc-aliases.sh ne vit que dans un shell
-# de connexion ; le lien sert partout ailleurs (Alt+F2, sudo, scripts).
+# Emulated C123 window (qosmo screen + keypad) in PATH: the c123 alias of
+# /etc/profile.d/98-osmo-banc-aliases.sh only exists in login shells; the link
+# works everywhere else (Alt+F2, sudo, scripts).
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/c123" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/osmo-c123" 2>/dev/null || true
-# [2026-10-24] Les alias du banc (banc-rssi, banc-trx, banc-mobile, c123-1...) : le fichier dans
-# profile.d pour les shells de connexion, et les memes noms en vraies commandes (tools/osmo-banc-cmd.sh).
+# Bench aliases (banc-rssi, banc-trx, banc-mobile, c123-1...): the profile.d
+# file for login shells, and the same names as real commands (tools/osmo-banc-cmd.sh).
 install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"
 bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
-# [2026-10-24] /root/gnuarm/install/bin dans le PATH des qu il existe (supplement --gnuarm) :
-# le fichier est pose ici, il ne fait rien tant que la chaine est absente.
+# Adds /root/gnuarm/install/bin to PATH when present (--gnuarm add-on);
+# inert while the toolchain is absent.
 install -Dm644 "$P/scripts/osmo-gnuarm-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-gnuarm.sh"
-# Les correctifs du depot (patches/) sur les arbres du rootfs : osmocom-bb sort de l image
-# Docker avec ceux du cote hote, le reste (layer1 GPRS, osmocon...) est pose ici, hors chroot.
-# Avec gnuarm, « cd /opt/GSM/osmocom-bb/src && make » compile alors l arbre entier.
+# Apply the repo patches (patches/, via tools/osmo-patches-apply.sh) to the
+# rootfs trees, outside the chroot (GPRS layer1, osmocon...). With gnuarm,
+# "cd /opt/GSM/osmocom-bb/src && make" then builds the whole tree.
 OSMO_PATCHES_QUIET=1 GSM_ROOT="$ROOTFS/opt/GSM" REPO="$P" bash "$P/tools/osmo-patches-apply.sh" "$ROOTFS/opt/GSM" || true
-# [2026-10-24] WireGuard du WAN (wiki/WAN.md) : « wg 1 » (hub 10.99.0.1), « wg N ... » (10.99.0.N),
-# fonction de profile.d qui laisse passer le vrai wg ; osmo-wg pour sudo et les scripts. Les cles
-# sont generees au premier « wg N » sur la machine, JAMAIS dans l image (elles seraient partagees).
+# WAN WireGuard (wiki/WAN.md): "wg 1" (hub 10.99.0.1), "wg N ..." (10.99.0.N),
+# a profile.d function that passes through to the real wg; osmo-wg for sudo and
+# scripts. Keys are generated on the machine at the first "wg N", NEVER in the
+# image (they would be shared).
 install -Dm644 "$P/scripts/osmo-wg-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-wg.sh"
 ln -sf /opt/GSM/osmo-operator/tools/osmo-wg.sh "$ROOTFS/usr/local/bin/osmo-wg" 2>/dev/null || true
-# (osmo-start-lab -> start-docker.sh retire le 2026-09-02 : start-docker.sh est le lanceur
-#  Docker, et cette image n a pas Docker.)
 if [ -f "$DIR/launch/osmo-launch.sh" ]; then
     cp "$DIR/launch/osmo-launch.sh" "$ROOTFS/opt/osmo-launch.sh" && chmod +x "$ROOTFS/opt/osmo-launch.sh"
     ln -sf /opt/osmo-launch.sh "$ROOTFS/usr/local/bin/osmo-launch"
 fi
 echo -e "  ${GREEN}✓${NC} lanceurs -> ${CYAN}/opt/GSM/osmo-operator${NC} (arbre unique, avec .git)"
 
-# [2026-09-09] /etc/osmocom/gapk-start.sh vient de l image Docker (COPY scripts/.)
-# et lib/audio.sh le PREFERE a scripts/gapk-start.sh. Une image en cache, batie
-# avant le correctif du superviseur (emetteur RTP en doublon vers le BTS : le
-# « 600 qu on entend mal »), embarquerait l ancien. On aligne la copie du rootfs
-# sur le depot, toujours - c est idempotent et c est le depot qui fait foi.
+# /etc/osmocom/gapk-start.sh comes from the Docker image (COPY scripts/.) and
+# lib/audio.sh prefers it over scripts/gapk-start.sh: always align it with the
+# repo copy (idempotent), so a cached image cannot ship an outdated one.
 if [ -f "$P/scripts/gapk-start.sh" ]; then
     install -d "$ROOTFS/etc/osmocom"
     install -m 755 "$P/scripts/gapk-start.sh" "$ROOTFS/etc/osmocom/gapk-start.sh"
     echo -e "  ${GREEN}✓${NC} /etc/osmocom/gapk-start.sh aligne sur scripts/ (superviseur gapk sans emetteur en doublon)"
 fi
 
-# ── LA VOIX DANS L IMAGE : io-tch-format ET LE TAMPON DU MOBILE ─────────────
-# [2026-09-09] MEME CORRECTIF QUE update.sh, applique ici au ROOTFS - et par
-# le MEME script, scripts/voix-forks.sh, qui porte le pourquoi en entier. Ces deux reglages ne vivent pas dans osmo-operator mais dans
-# qosmo (run_modules, cfgs), que 50-injection-image.sh recopie tels quels
-# depuis l image de reference : une image batie sur une machine dont les forks
-# n ont pas le correctif l embarquerait sans, et l ISO sortirait avec la voix
-# robotisee sans qu aucun compteur ne bronche.
+# ── Voice in the image: io-tch-format and the mobile audio buffer ───────────
+# Same fix as update.sh, applied to the ROOTFS by scripts/voix-forks.sh (which
+# documents the details). Both settings live in qosmo (run_modules, cfgs),
+# copied as-is from the reference image by 50-injection-image.sh.
 #
-#   io-tch-format rtp : sans lui, le mobile lit et ecrit ses trames TCH dans
-#   la disposition Texas Instruments des vrais Calypso, alors que pont.py les
-#   code avec libosmocoding, en disposition RTP/RFC3551. C est le gabarit
-#   cfgs/mobile_group1.cfg qui compte : run_modules/20-mobile-cfg.sh le
-#   RECOPIE par-dessus ~/.osmocom/bb/ a chaque demarrage.
+#   io-tch-format rtp: otherwise the mobile reads/writes TCH frames in the TI
+#   Calypso layout, while pont.py encodes them with libosmocoding in RTP/RFC3551
+#   layout. The template cfgs/mobile_group1.cfg is what matters:
+#   run_modules/20-mobile-cfg.sh copies it over ~/.osmocom/bb/ at every start.
 #
-#   CALYPSO_PULSE_LATENCY_MSEC : le mobile ecrit une trame GSM (20 ms) par
-#   snd_pcm_writei ; un tampon trop court fait rendre -EPIPE a chaque
-#   ecriture, et pq_alsa.c y repond par un snd_pcm_prepare() muet qui demonte
-#   et remonte le flux PulseAudio - 50 fois par seconde pendant un appel.
-#   Mesure du 09/09 : 80 ms -> 16 remontages en 10 s, 200 -> 0. On pose 320.
+#   CALYPSO_PULSE_LATENCY_MSEC: the mobile writes one 20 ms GSM frame per
+#   snd_pcm_writei; a too-short buffer makes every write return -EPIPE and
+#   pq_alsa.c silently re-prepares the PulseAudio stream. Set to 320 ms.
 if [ -x "$P/scripts/voix-forks.sh" ]; then
-    # [2026-09-14] PAS DE COULEUR DANS UN REMPLACEMENT sed. Cette ligne etait
-    #     ... | sed "s|^  \[voix\]|  ${GREEN}\xe2\x9c\x93${NC}|"
-    # or GREEN vaut '\033[0;32m' - une chaine faite pour `echo -e`, pas pour
-    # sed : dans le remplacement, GNU sed lit \0 comme « toute la chaine
-    # trouvee » (synonyme de &). Chaque ligne ressortait donc
-    #     [voix]33[0;32m✓  [voix]33[0m /opt/GSM/... : io-tch-format rtp repose
-    # - le [voix] reinjecte deux fois et l echappement en clair. On relit les
-    # lignes et on les reecrit avec echo -e, comme partout ailleurs ici.
+    # Do not put color codes in a sed replacement: GNU sed reads \0 in
+    # '\033[0;32m' as "whole match". Lines are re-read and printed with echo -e.
     "$P/scripts/voix-forks.sh" "$ROOTFS" | while IFS= read -r _l; do
         case "$_l" in
             "  [voix]"*) echo -e "  ${GREEN}✓${NC}${_l#"  [voix]"}" ;;
@@ -141,7 +107,7 @@ if [ -x "$P/scripts/voix-forks.sh" ]; then
     done
 fi
 
-# ── WAN : table des noeuds figee dans l'image ────────────────────────────────
+# ── WAN: node table fixed in the image ──────────────────────────────────────
 if [ "$ISO_WAN" = "1" ]; then
     echo -e "${GREEN}[7b/9] WAN - table des noeuds embarquee...${NC}"
     # shellcheck source=network/wan-nodes.sh
@@ -151,9 +117,9 @@ if [ "$ISO_WAN" = "1" ]; then
         wan_nodes_parse "$ISO_WAN_NODES" || exit 1
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
     else
-        # Construction interactive : memes questions que ./launch/start-docker.sh --wan.
-        # Le numero du noeud demande ici n'est qu'un defaut : chaque machine
-        # qui demarre l'ISO se re-reconnait a son IP.
+        # Interactive build: same questions as ./launch/start-docker.sh --wan.
+        # The node number asked here is only a default: each machine booting the ISO
+        # identifies itself by its IP.
         WAN_NODE_ID="${ISO_WAN_ID:-0}"
         wan_nodes_prompt || exit 1
     fi
@@ -167,29 +133,20 @@ else
     echo -e "  ${CYAN}[7b/9] WAN non embarque (--wan absent) - ISO autonome${NC}"
 fi
 
-# ── Etape 8 : (SUPPRIME) - ISO NATIF, plus de Docker au runtime ───────────
-# L'ancien load-osmocom-image.service chargeait osmocom-run.tar.gz via 'docker
-# load' au boot ; son ExecStartPre 'while ! docker info' bloquait indefiniment la
-# file systemd en natif (docker jamais up) → boot fige. Le lab tourne desormais
-# en natif (start-native.sh) : pas d'image Docker a charger, pas de ce service.
+# ── Step 9 prep: files the chroot cannot write itself ───────────────────────
+# The chroot script is passed to "bash -c" in SINGLE quotes: a single
+# apostrophe in its body would end the string. Files containing quotes (quoted
+# heredocs, nested shell commands) are therefore written HERE, into the rootfs;
+# the chroot only enables them.
 
-# ── Etape 9 : Configuration chroot (paquets) ───────────────────────────────
-# ── Ce que le chroot ne peut pas ecrire lui-meme ────────────────────────────
-# Le script du chroot est passe a "bash -c" en QUOTES SIMPLES : rien n'y est
-# substitue a l'ecriture, ce qui est voulu, mais une seule apostrophe dans le
-# corps referme la chaine et tout ce qui suit change de sens. Les fichiers qui
-# en contiennent - un heredoc quote, une commande shell imbriquee - s'ecrivent
-# donc ICI, dans le rootfs, ou le quoting est normal. Le chroot ne fait plus que
-# les activer.
-
-# NetworkManager pilote le bureau ; ce qui appartient au coeur paquet ne lui
-# appartient pas. Sans cette regle, NM reprend apn0 ou un tun du GGSN et coupe
-# la session de donnees d'un abonne parce qu'il l'a jugee "non configuree".
+# NetworkManager drives the desktop, not the packet core: without this rule NM
+# takes over apn0 or a GGSN tun and drops a subscriber's data session as
+# "unconfigured".
 mkdir -p "$ROOTFS/etc/NetworkManager/conf.d"
 cat > "$ROOTFS/etc/NetworkManager/conf.d/10-osmo-networkd.conf" <<'NMCONF'
-# Ecrit par build-iso.sh. NetworkManager gere les cartes physiques et le
-# bureau ; les interfaces du coeur paquet restent a systemd-networkd et aux
-# scripts du banc.
+# Written by build-iso.sh. NetworkManager manages the physical NICs and the
+# desktop; packet-core interfaces are left to systemd-networkd and the bench
+# scripts.
 [main]
 plugins=keyfile
 
@@ -197,24 +154,9 @@ plugins=keyfile
 unmanaged-devices=interface-name:apn*;interface-name:tun*;interface-name:veth*;interface-name:docker*;interface-name:br-*;interface-name:osmo*
 NMCONF
 
-# ── FIREFOX : PLUS RIEN A FAIRE ICI ────────────────────────────────────────
-# [2026-09-04] Ce module posait /usr/local/sbin/osmo-firefox-snap et son unite
-# de premier demarrage : une centaine de lignes pour installer Firefox par snap,
-# hors ligne depuis /var/lib/osmo-snaps puis depuis le magasin. Le navigateur
-# vient desormais du .deb de Mozilla, installe dans le chroot par
-# 80-chroot.sh - donc PRESENT DANS L IMAGE, et tenu a jour par apt sur le
-# systeme installe.
-#
-# Ce que le snap coutait, et pourquoi on ne le regrette pas : l unite restait en
-# "activating" des minutes au premier boot (1,5 Go a deballer, snapd qui refuse
-# tant qu un changement est en cours), et quand elle echouait - medium lent, pas
-# de reseau - le banc demarrait SANS navigateur, donc sans tableau de bord. Le
-# bac a sable, lui, refusait le socket PulseAudio et les file:// hors /home, ce
-# qui a coute deux enquetes entieres (micro muet, tutoriel "introuvable").
-# Le .deb n a ni bac a sable, ni service d installation, ni delai au boot.
+# Firefox comes from Mozilla's .deb, installed in the chroot by 80-chroot.sh.
 
-
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

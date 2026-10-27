@@ -1,10 +1,10 @@
 [Unit]
 Description=Page web de reglage de la pile Osmocom (http://127.0.0.1:8090/)
 After=network.target
-# [2026-10-22] En ligne par defaut, independante du banc : globals.conf et les
-# fichiers de config se reglent banc arrete ; les onglets Demons/Etat disent
-# simplement qu'aucun demon ne repond. 127.0.0.1 seulement : la console VTY
-# de la page execute tout (voir tools/osmo-reglages.py).
+# Online by default, independent of the bench: globals.conf and the config
+# files can be edited with the bench stopped; the Daemons/State tabs simply say
+# that no daemon answers. 127.0.0.1 only: the VTY console of the page executes
+# anything (see tools/osmo-reglages.py).
 
 [Service]
 Type=simple

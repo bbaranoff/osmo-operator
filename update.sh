@@ -210,7 +210,7 @@ osmo_poser_pmos() {
     chmod 755 "$d/tools/osmo-pmos.sh" 2>/dev/null || true
     cat > /usr/local/bin/osmo-pmos <<'PM'
 #!/bin/bash
-# osmo-pmos - le telephone postmarketOS du banc (voir tools/osmo-pmos.sh).
+# osmo-pmos - the bench's postmarketOS phone (see tools/osmo-pmos.sh).
 exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos.sh" "$@"
 PM
     chmod 755 /usr/local/bin/osmo-pmos 2>/dev/null || true
@@ -493,59 +493,46 @@ osmo_reposer_bureau_interactif() {
     grep -q 'osmo_vivant' "$w" 2>/dev/null && return 0
     cat > "$w" <<'PANEL'
 #!/bin/sh
-# osmo-desktop-panel - tient l encart et Conky en vie pour toute la session.
+# osmo-desktop-panel - keeps the inset and Conky alive for the whole session.
 REPO=/opt/GSM/osmo-operator
 export OSMO_REPO="$REPO"
-# La carte LAB GSM n est plus cuite dans le fond : c est osmo-topzone.py qui la
-# rend, vivante. On le dit au rendu du fond.
+# The LAB GSM banner is not baked into the wallpaper: osmo-topzone.py renders
+# it live. Tell the wallpaper renderer.
 export OSMO_LIVE_BANNER=1
 
-# ── UN WIDGET RESCAPE DE LA SESSION D AVANT N EST PAS UN WIDGET ─────────────
-# [2026-09-10] Le Conky avait disparu du coin haut droit, et le gardien ne le
-# relancait JAMAIS. Pourquoi : un conky de la session X precedente tournait
-# encore, avec DISPLAY=:0, alors que GNOME etait reparti sur :1 (le socket
-# /tmp/.X11-unix/X0 avait disparu avec l ancien serveur). Il ne peut plus rien
-# peindre - « Invalid MIT-MAGIC-COOKIE-1 key / can't open display: :0 » dans
-# /tmp/osmo-conky.log - mais il EXISTE, et « pgrep -x conky » ne sait dire que
-# ca. Le gardien le comptait pour vivant et n en relancait pas d autre : plus
-# de tableau de bord pour toute la session. Meme piege pour les widgets python
-# (osmo-ts-probe.py etait dans le meme etat).
-#
-# On ne compte donc que les processus qui regardent NOTRE display, et on tue
-# les autres : ils ne peuvent plus servir personne.
+# ── A WIDGET LEFT OVER FROM THE PREVIOUS SESSION IS NOT A WIDGET ────────────
+# A conky or python widget from a previous X session may still be running with
+# an old DISPLAY (e.g. :0 while GNOME restarted on :1): it cannot paint
+# anything, but "pgrep -x conky" would count it as alive and nothing would be
+# restarted. Only processes looking at OUR display count; the others are
+# killed, they can no longer serve anyone.
 osmo_vivant() {
     _trouve=1
     for _p in $(pgrep "$@" 2>/dev/null); do
         _d="$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -1)"
-        # On ne tue QUE ce qu on a lu et qui regarde ailleurs. Un environ
-        # illisible, ou sans DISPLAY, ne prouve rien : ce processus compte
-        # pour vivant - une sonde qui confond « absent » et « invisible »
-        # ferait ici pousser un doublon de chaque widget a chaque tour.
+        # Kill ONLY what was read and looks elsewhere. An unreadable environ,
+        # or one without DISPLAY, proves nothing: that process counts as
+        # alive - confusing "absent" with "invisible" would spawn a duplicate
+        # of each widget on every pass.
         if [ -n "$_d" ] && [ "$_d" != "$DISPLAY" ]; then kill "$_p" 2>/dev/null
         else _trouve=0
         fi
     done
     return $_trouve
 }
-# Et le gardien ne survit pas a son propre serveur X : sans cette sortie,
-# l ancien tourne en parallele du neuf et relance dans le vide, pour toujours
-# (on en avait deux, l un sur :0 et l autre sur :1).
+# The watcher must not outlive its own X server: otherwise the old one keeps
+# running next to the new one and restarts into the void forever.
 osmo_display_vivant() {
-    [ -n "$DISPLAY" ] || return 0          # pas de display nomme : on ne juge pas
+    [ -n "$DISPLAY" ] || return 0          # no named display: cannot judge
     _n="${DISPLAY#*:}"; _n="${_n%%.*}"
     [ -S "/tmp/.X11-unix/X$_n" ]
 }
 
-# ── LES FLECHES DU CONKY, AU CLAVIER : Ctrl+AltGr+Gauche / Droite ───────────
-# [2026-09-10] Le raccourci est cuit dans un override de schema
-# (/usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override, pose par
-# iso_modules/80-chroot.sh) - sauf qu un override ne prend PAS sur un schema
-# RELOCALISABLE : « gsettings get ...custom-keybinding:/...osmo-op-next/
-# binding » rendait '' sur un systeme ou le fichier etait pourtant bien
-# compile. Le raccourci n a donc jamais rien lie. On l ecrit ici, dans la
-# session, une fois par demarrage : c est le seul endroit qui tourne SOUS le
-# compte de l utilisateur, et gsettings ecrit dans son dconf.
-# <Mod5> est ISO_Level3_Shift, c est-a-dire AltGr (xmodmap -pm le confirme).
+# ── CONKY ARROWS ON THE KEYBOARD: Ctrl+AltGr+Left / Right ───────────────────
+# A gschema.override does NOT apply to a RELOCATABLE schema, so the shortcut
+# is written here, in the session, once per boot: the only place that runs
+# UNDER the user's account, where gsettings writes into their dconf.
+# <Mod5> is ISO_Level3_Shift, i.e. AltGr (xmodmap -pm confirms it).
 osmo_raccourci() {
     command -v gsettings >/dev/null 2>&1 || return 0
     _k=org.gnome.settings-daemon.plugins.media-keys.custom-keybinding
@@ -561,21 +548,22 @@ osmo_raccourci() {
 }
 osmo_raccourci
 
-# Conky doit trouver le bureau GNOME deja peint (own_window_type desktop),
-# sinon il se pose derriere le fond d ecran.
+# Conky must find the GNOME desktop already painted (own_window_type
+# desktop), otherwise it ends up behind the wallpaper.
 sleep 6
 while osmo_display_vivant; do
     osmo_vivant -f "$REPO/tools/osmo-panel.py" || \
         "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
     osmo_vivant -f "$REPO/tools/osmo-dino.py" || \
         "$REPO/tools/osmo-dino.py" >>/tmp/osmo-dino.log 2>&1 &
-    # la sonde d activite des timeslots (conf osmo-bsc + VTY) pour la banniere
+    # Timeslot activity probe (osmo-bsc conf + VTY) for the banner
     osmo_vivant -f "$REPO/tools/osmo-ts-probe.py" || \
         "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
-    # la zone haute LAB GSM vivante (timeslots clignotants + accueil d appli)
+    # Live LAB GSM top zone (blinking timeslots + app welcome)
     osmo_vivant -f "$REPO/tools/osmo-topzone.py" || \
         "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
-    # la barre de lancement categorisee du bas
+    # The categorised launcher bar at the bottom
+
     osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
         "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
     osmo_vivant -x conky || \

@@ -1,20 +1,19 @@
 #!/bin/bash
-# iso_modules/81-cloture-systeme.sh - etape 8b : cloture ldd depuis l image, reseau, osmo-update
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/81-cloture-systeme.sh - step 8b: ldd closure from the run image, network, osmo-update
+# Sourced by build-iso.sh in numeric order (same shell, variables and functions);
+# not meant to run on its own. A top-level `return` means "nothing to do here"
+# (this is how --arm skips a step).
 
-# ── Etape 8b : Reequilibrage sur build.sh - cloture de dependances ldd ────────
-# L'image osmocom-run (produite par build.sh + Dockerfile) est l'environnement
-# qui MARCHE. Au lieu de se fier aux versions apt du rootfs (skew -> crash
-# logging libosmocore), on copie depuis le conteneur la cloture .so EXACTE de
-# tous les binaires osmo + calypso-ipc-device, en ecrasant les libs apt. On
-# exclut la famille glibc/loader (identique en jammy, ne pas clobber ld.so).
+# ── Step 8b: ldd dependency closure copied from the run image ────────────────
+# The osmocom-run image (build.sh + Dockerfile) is the reference environment.
+# Instead of relying on the rootfs apt versions (version skew breaks libosmocore
+# logging), copy the exact .so closure of all osmo binaries and
+# calypso-ipc-device from the container, overwriting the apt libs. The
+# glibc/loader family is excluded (never clobber ld.so).
 echo -e "${GREEN}[8b/9] Cloture de dependances COMPLETE depuis ${CYAN}${ISO_RUN_IMAGE}${NC}${GREEN} (toute l'install)...${NC}"
-# On ldd TOUS les ELF (executables + toutes les .so) de l'install custom :
-# /usr/local/bin (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (venv
-# python : bindings gnuradio/gr-gsm + leurs deps boost/log4cpp/volk/fftw...).
-# => toutes les deps natives finissent dans l'ISO, plus de "import gsm" qui rate.
+# ldd every ELF (executables and .so) of the custom install: /usr/local/bin
+# (osmo), /opt/GSM (qemu, ipc-device, gr-gsm), /root/.env (Python venv:
+# gnuradio/gr-gsm bindings and their boost/log4cpp/volk/fftw deps).
 docker run --rm --entrypoint bash \
     -e OSMO_LDD_ROOTS="$([ "$ISO_ROLE" = "interstp" ] && echo "/usr/local/bin /usr/local/lib" || echo "/usr/local/bin /opt/GSM /root/.env")" \
     "$ISO_RUN_IMAGE" -c '
@@ -28,12 +27,9 @@ docker run --rm --entrypoint bash \
 ' > "$WORK/closure.tar.gz" || true
 if [ -s "$WORK/closure.tar.gz" ]; then
     tar -xzf "$WORK/closure.tar.gz" -C "$ROOTFS" 2>/dev/null || true
-    # La LISTE de ce qui vient d etre ecrase, pour 90-iso.sh. Ces libs
-    # remplacent volontairement celles d apt : leur md5 dpkg ne correspond
-    # donc plus, et sans cette liste la relecture du squashfs les compte
-    # comme des fichiers ALTERES (build vert sur la machine, rouge en CI,
-    # selon que l image docker et le rootfs ont la meme mise a jour de
-    # securite). Chemins relatifs, comme dans les .md5sums.
+    # List of the overwritten libs, for 90-iso.sh: they intentionally replace
+    # apt's, so their dpkg md5 no longer matches; the squashfs verification
+    # uses this list to not report them as altered. Relative paths, as in .md5sums.
     tar -tzf "$WORK/closure.tar.gz" 2>/dev/null \
         | sed 's#^\./##; s#^/##' | sort -u > "$WORK/closure.list" || true
     echo -e "  ${GREEN}✓${NC} $(wc -l < "$WORK/closure.list") libs injectees (Docker)"
@@ -41,9 +37,9 @@ else
     echo -e "  ${YELLOW}cloture vide - on garde les libs apt${NC}"
 fi
 
-# Priorite /usr/local/lib (libosmo* custom) + purge de tout doublon systeme.
-# NB: pas de `| grep` ici - sous set -euo pipefail un grep sans correspondance
-# (cas normal: aucun doublon) renverrait 1 et tuerait le script avant l'ISO.
+# /usr/local/lib (custom libosmo*) takes priority; system duplicates are purged.
+# No `| grep` here: under set -euo pipefail a grep with no match (the normal
+# case: no duplicate) would return 1 and abort the build.
 echo "/usr/local/lib" > "$ROOTFS/etc/ld.so.conf.d/00-osmocom-local.conf"
 find "$ROOTFS/usr/lib" "$ROOTFS/lib" -maxdepth 4 -name 'libosmo*.so*' -delete 2>/dev/null || true
 chroot "$ROOTFS" ldconfig 2>/dev/null || true
@@ -62,64 +58,33 @@ cat > "$ROOTFS/etc/systemd/network/20-dhcp.network" <<'EOF'
 Name=en* eth*
 [Network]
 DHCP=yes
-# ── Adresses heritees du plan docker, en /32 ────────────────────────────────
-# Elles servent aux configs de l'image qui nomment encore 172.20.x (passerelle
-# du backbone, cible gsmtap...) : sans elles, un demon qui s'y lie ne demarre
-# pas. On les garde donc - mais sans revendiquer de reseau.
+# ── Legacy docker-plan addresses, as /32 ───────────────────────────────────
+# Image configs still reference 172.20.x (backbone gateway, gsmtap target...);
+# daemons binding to them need the addresses to exist locally.
 #
-# POURQUOI /32 ET PLUS /24
-# Un /24 fait croire a la machine que TOUT 172.20.0.0/24 est sur son lien. Elle
-# l'ARP alors sur le LAN au lieu de le router. Sur un banc mixte VM + docker,
-# les conteneurs de l'hote deviennent injoignables : "ip route add
-# 172.20.0.0/24 via <hote>" est refuse d'un "File exists", et le trafic part
-# dans le vide. Le /32 garde l'adresse locale sans fermer la porte au routage.
+# /32 rather than /24: a /24 makes the machine ARP the whole 172.20.0.0/24 on
+# the LAN instead of routing it, which breaks reaching host containers on a
+# mixed VM + docker bench ("ip route add ... via <host>" fails with "File exists").
 #
-# 172.20.0.11 est RETIREE : c'est l'adresse du PREMIER CONTENEUR operateur. Une
-# VM qui la porte se repond a elle-meme et ne joint jamais le conteneur - la
-# panne la plus deroutante du lot, puisque tout repond en local.
+# 172.20.0.11 is intentionally absent: it is the first operator container's
+# address; a VM holding it would answer itself. No /16 route for the same reason.
 #
-# La route /16 disparait pour la meme raison : elle couvrait le plan docker
-# entier et primait sur toute route plus fine vers l'hote.
-#
-# [2026-08-29] LES ADRESSES PRIVEES NE SONT PLUS ICI.
-# Elles y etaient sous [Match] Name=en* eth*, donc posees sur TOUTE carte qui
-# repond au motif - et le motif ne dit rien de celle qui porte reellement le
-# reseau. Sur une VM a plusieurs interfaces, l'adresse se retrouvait sur le NAT
-# pendant que le pont, lui, ne l'avait pas : un pair visait 192.168.2.10 sans
-# trouver personne, alors que "ip addr" la montrait bien presente - ailleurs.
-# systemd-networkd ne sait pas exprimer « la carte qui a la route par defaut » :
-# c'est une propriete d'execution. C'est osmo-ip-plan.service qui les pose
-# maintenant, avec repli sur la boucle locale quand aucune carte ne mene nulle
-# part (voir network/osmo-ip-plan.sh).
+# The private node addresses are set at runtime by osmo-ip-plan.service on the
+# interface that holds the default route (see network/osmo-ip-plan.sh).
 EOF
-# docker RETIRE de la liste : son service n'existe plus (ISO natif) et 'systemctl
-# enable' valide tous les units d'abord → un seul manquant faisait AVORTER l'enable
-# de systemd-networkd/resolved → enp3s0 sans IP au boot. On active chaque unit
-# separement pour qu'un eventuel echec n'empeche pas les autres.
+# Units are enabled one by one: 'systemctl enable' validates all listed units
+# first, so one missing unit would prevent enabling the others.
 chroot "$ROOTFS" systemctl enable systemd-networkd 2>/dev/null||true
 chroot "$ROOTFS" systemctl enable systemd-resolved 2>/dev/null||true
 
-# ── DNS : NE PAS EMBARQUER LE resolv.conf DE L HOTE DE CONSTRUCTION ─────────
-# [2026-09-04] 80-chroot.sh copie /etc/resolv.conf de l hote dans le rootfs pour
-# que l apt du chroot ait un DNS. Sur un hote Ubuntu, ce fichier est le STUB de
-# systemd-resolved : « nameserver 127.0.0.53 », une adresse qui n a de sens que
-# si systemd-resolved tourne. Il partait tel quel dans l image, en fichier
-# ordinaire - et la machine demarree n avait pas systemd-resolved (paquet a part
-# sur noble, ajoute depuis dans PKGS). Resultat : personne derriere 127.0.0.53,
-# et TOUTE resolution echouait par « Temporary failure in name resolution »,
-# sur une machine dont l IP marchait parfaitement (route par defaut, ping vers
-# une IP nue, tout allait). Le fond d ecran ne trouvait plus son strip, apt ne
-# trouvait plus ses depots, et l on cherchait une panne de reseau qui n existait
-# pas.
-#
-# On remet donc le lien standard d Ubuntu vers le stub. Il pointe vers un
-# fichier de /run que systemd-resolved ecrit a chaque demarrage ; le paquet
-# etant maintenant installe ET active (ci-dessus), quelqu un ecoute bien
-# derriere. Sans le lien, le fichier fige de l hote resterait prioritaire.
+# ── DNS: do not ship the build host's resolv.conf ───────────────────────────
+# 80-chroot.sh copies the host's /etc/resolv.conf so apt in the chroot has DNS;
+# on Ubuntu hosts it is the systemd-resolved stub (127.0.0.53). Restore the
+# standard Ubuntu symlink to the stub file that systemd-resolved writes in /run
+# at each boot (systemd-resolved is installed and enabled above).
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$ROOTFS/etc/resolv.conf"
-# Filet : si systemd-resolved ne demarrait pas, /run/.../stub-resolv.conf serait
-# absent et le lien pendouillerait - donc AUCUN DNS. On laisse une copie de
-# secours que NetworkManager ou un operateur peut remettre en place.
+# Fallback: if systemd-resolved does not start, the symlink dangles and there
+# is no DNS. Leave a backup copy that NetworkManager or an operator can restore.
 printf '# Repli hors systemd-resolved : cp %s /etc/resolv.conf
 nameserver 1.1.1.1
 nameserver 8.8.8.8
@@ -127,25 +92,17 @@ nameserver 8.8.8.8
     /etc/resolv.conf.secours > "$ROOTFS/etc/resolv.conf.secours"
 echo -e "  ${GREEN}✓${NC} DNS : /etc/resolv.conf -> stub systemd-resolved (repli /etc/resolv.conf.secours)"
 
-# ── AUCUNE ATTENTE RESEAU, NI AU DEMARRAGE NI A L ARRET ─────────────────────
-# [2026-09-04] Mesure sur une machine installee :
-#     systemd-analyze blame
-#         2min  0.188s systemd-networkd-wait-online.service
-#             5.719s NetworkManager-wait-online.service
-# Deux minutes de demarrage passees a attendre qu une carte soit "en ligne".
-# Sur un banc, la question n a pas de reponse utile : les interfaces qui
-# comptent (apn0, les tun/veth du coeur paquet) ne sont jamais "en ligne" au
-# sens de ces unites, et le cable WAN n est pas toujours branche. Rien de ce
-# que nous demarrons n exige une route par defaut AVANT de partir - les unites
-# du banc reessaient, osmo-update sort 0 hors ligne, et osmo-ip-plan est rejoue
-# par les dispatchers des qu une carte arrive.
+# ── No waiting for the network, at boot or shutdown ────────────────────────
+# The *-wait-online units can delay boot by up to 2 minutes; the bench
+# interfaces (apn0, packet-core tun/veth) are never "online" in their sense
+# and the WAN cable is not always plugged in. Nothing started here needs a
+# default route first: bench units retry, osmo-update exits 0 offline, and
+# osmo-ip-plan is replayed by the dispatchers when a link comes up.
 #
-# MASQUE, pas seulement desactive : network-online.target est tire par des
-# unites tierces (apt-daily, snapd, cloud-init) qui rallumeraient les
-# wait-online. Masquees, la cible reste atteignable - elle devient immediate.
-#
-# Fait ICI et pas dans le module du bureau : ca vaut pour TOUTES les variantes
-# (operateur, inter-STP, lite), pas seulement --desktop.
+# Masked, not just disabled: network-online.target is pulled in by third-party
+# units (apt-daily, snapd, cloud-init); with the wait-online units masked the
+# target is reached immediately. Applies to all variants (operator, inter-STP,
+# lite), not only --desktop.
 install -d "$ROOTFS/etc/systemd/system"
 for _wo in systemd-networkd-wait-online.service NetworkManager-wait-online.service \
            systemd-networkd-wait-online@.service; do
@@ -153,44 +110,34 @@ for _wo in systemd-networkd-wait-online.service NetworkManager-wait-online.servi
 done
 unset _wo
 
-# ── ET L ARRET NE TRAINE PAS NON PLUS ───────────────────────────────────────
-# Le defaut systemd est 90 s par unite recalcitrante : une machine qui doit
-# s eteindre reste sur un ecran noir pendant qu on attend un service qui ne
-# rendra jamais la main. 30 s suffisent a un arret propre ; au-dela, le SIGKILL
-# est la bonne reponse. DefaultTimeoutStartSec suit, pour la meme raison au
-# demarrage. Un service qui a besoin de plus le declare chez lui.
+# ── Bounded shutdown ───────────────────────────────────────────────────────
+# systemd defaults to 90 s per stuck unit. 30 s is enough for a clean stop;
+# beyond that SIGKILL is the right answer. DefaultTimeoutStartSec likewise
+# at boot. Services that need more declare it themselves.
 install -d "$ROOTFS/etc/systemd/system.conf.d"
 cat > "$ROOTFS/etc/systemd/system.conf.d/10-osmo-timeouts.conf" <<'SDTO'
-# Pose par build-iso.sh (iso_modules/81-cloture-systeme.sh).
-# Ni le demarrage ni l arret du banc ne doivent attendre le reseau, ni un
-# service bloque. Les wait-online sont masquees a cote de ce fichier.
+# Installed by build-iso.sh (iso_modules/81-cloture-systeme.sh).
+# Neither boot nor shutdown should wait for the network or a stuck service.
+# The wait-online units are masked next to this file.
 [Manager]
 DefaultTimeoutStartSec=45s
 DefaultTimeoutStopSec=30s
 SDTO
 echo -e "  ${GREEN}✓${NC} aucune attente reseau : ${CYAN}*-wait-online${NC} masquees · arret plafonne a ${CYAN}30 s${NC}"
 
-# ── Les adresses privees du noeud, posees a l'EXECUTION ─────────────────────
-# Voir network/osmo-ip-plan.sh : il choisit la carte qui fournit reellement
-# Internet, y pose 192.168.<noeud+1>.1 et .10, et retombe sur 127.0.0.66 sur lo
-# quand aucune carte ne mene nulle part - de sorte que les configurations qui
-# nomment une adresse privee trouvent TOUJOURS quelque chose de local, au lieu
-# d'echouer au bind sur une adresse absente.
+# ── Private node addresses, set at runtime ─────────────────────────────────
+# network/osmo-ip-plan.sh picks the interface that actually provides Internet,
+# assigns 192.168.<node+1>.1 and .10 to it, and falls back to 127.0.0.66 on lo
+# when no interface leads anywhere, so configs that name a private address
+# always find something local to bind to.
 install -Dm755 "$DIR/network/osmo-ip-plan.sh" "$ROOTFS/usr/local/sbin/osmo-ip-plan.sh"
 cat > "$ROOTFS/etc/systemd/system/osmo-ip-plan.service" <<'IPPLAN'
 [Unit]
 Description=Adresses privees du noeud sur la carte qui fournit Internet
-# [2026-09-04] PLUS D ATTENTE RESEAU. Cette unite etait ordonnee
-# After/Wants=network-online.target pour qu'une route par defaut existe deja -
-# sinon le script conclut "aucune carte" et le repli loopback devient la regle.
-# Mais network-online.target coutait DEUX MINUTES de boot
-# (systemd-networkd-wait-online, mesure : systemd-analyze blame), et le banc
-# demarre souvent sans cable. On paye donc l'inverse : le premier passage peut
-# retomber sur 127.0.0.66, et les DEUX repartiteurs ci-dessous rejouent le plan
-# des qu'une carte devient joignable - networkd-dispatcher pour les interfaces
-# de systemd-networkd, NetworkManager-dispatcher pour les cartes physiques.
-# Le repli loopback n'est plus l'exception : il est l'etat transitoire d'un
-# banc encore sans reseau, et il se corrige tout seul en une seconde.
+# Not ordered after network-online.target (see above): the first run may
+# fall back to 127.0.0.66; both dispatchers below replay the plan as soon as
+# an interface becomes routable (networkd-dispatcher for systemd-networkd
+# interfaces, NetworkManager-dispatcher for physical NICs).
 After=network.target systemd-networkd.service
 Before=osmo-egprs-web.service
 
@@ -202,25 +149,21 @@ ExecStart=/usr/local/sbin/osmo-ip-plan.sh --apply
 [Install]
 WantedBy=multi-user.target
 IPPLAN
-# Rejoue a chaque changement de lien : un cable rebranche, un Wi-Fi qui prend le
-# relais, et la carte qui fournit Internet n'est plus la meme. Sans ca, les
-# adresses restaient sur l'ancienne - presentes, et injoignables.
+# Replayed on every link change (cable replugged, Wi-Fi taking over), since
+# the interface providing Internet may change.
 mkdir -p "$ROOTFS/etc/networkd-dispatcher/routable.d"
 cat > "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan" <<'IPHOOK'
 #!/bin/sh
 exec /usr/local/sbin/osmo-ip-plan.sh --apply
 IPHOOK
 chmod +x "$ROOTFS/etc/networkd-dispatcher/routable.d/50-osmo-ip-plan"
-# LE MEME CROCHET, COTE NetworkManager. networkd-dispatcher ne voit que les
-# interfaces de systemd-networkd ; depuis que NetworkManager tient les cartes
-# physiques (iso_modules/80-chroot.sh), c'est LUI qui annonce le Wi-Fi ou le
-# cable qui arrive - et sans ce fichier, un banc demarre sans reseau restait sur
-# le repli 127.0.0.66 jusqu'au redemarrage suivant. Indispensable depuis qu'on
-# n'attend plus network-online.target au boot (voir l'unite ci-dessus).
+# Same hook for NetworkManager: networkd-dispatcher only sees systemd-networkd
+# interfaces, while NetworkManager manages the physical NICs
+# (iso_modules/80-chroot.sh).
 mkdir -p "$ROOTFS/etc/NetworkManager/dispatcher.d"
 cat > "$ROOTFS/etc/NetworkManager/dispatcher.d/50-osmo-ip-plan" <<'NMHOOK'
 #!/bin/sh
-# $1 = interface, $2 = action. Seules les montees de lien nous interessent.
+# $1 = interface, $2 = action. Only link-up events matter.
 case "$2" in
     up|dhcp4-change|dhcp6-change|connectivity-change) ;;
     *) exit 0 ;;
@@ -231,47 +174,33 @@ chmod +x "$ROOTFS/etc/NetworkManager/dispatcher.d/50-osmo-ip-plan"
 chroot "$ROOTFS" systemctl enable osmo-ip-plan 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-ip-plan : ${CYAN}192.168.$(( ${ISO_NODE:-1} + 1 )).1/.10${NC} sur la carte Internet, repli ${CYAN}127.0.0.66${NC}"
 
-# live-boot ecrit /root/etc/network/interfaces dans la racine montee au boot.
-# Sans ifupdown, /etc/network/ n'existe pas -> "/init: can't create
-# /root/etc/network/interfaces: nonexistent directory". On cree le dossier + un
-# interfaces minimal (loopback). systemd-networkd gere le reseau ; ce fichier
-# n'est lu par personne (ifupdown absent), il satisfait juste le hook live-boot.
+# live-boot writes /root/etc/network/interfaces in the root mounted at boot;
+# without ifupdown /etc/network/ does not exist and /init fails with
+# "nonexistent directory". Create the directory and a minimal (loopback)
+# interfaces file. systemd-networkd manages the network; nobody reads this
+# file, it only satisfies the live-boot hook.
 mkdir -p "$ROOTFS/etc/network"
 cat > "$ROOTFS/etc/network/interfaces" <<'EOF'
 auto lo
 iface lo inet loopback
 EOF
 
-# ── Animation SMS a l'ouverture de session ─────────────────────────────────
-# [2026-08-27] Ce qui vivait ici : osmo-update.service, qui a CHAQUE demarrage
-# telechargeait update.sh depuis GitHub et l'executait - lequel effacait puis
-# reclonait osmo-operator et osmo-egprs-web, resynchronisait qosmo (ex-qosmo-grgsm) et installait
-# socat a coups d'apt. Le contenu de la machine etait donc decide au boot par le
-# reseau, et sans reseau il ne restait rien des arbres effaces.
+# ── SMS animation at login ─────────────────────────────────────────────────
+# The repositories, packages and dashboard service are all provisioned at
+# build time; the only interactive part of update.sh left is the SMS animation.
 #
-# Tout cela se fait ICI, une fois, a la construction : les trois depots partent
-# dans l'image AVEC leur .git (etapes [5a/9] et [5b/9]), qosmo avec son
-# build/ compile, les paquets sont installes dans le rootfs (etape 5), et le
-# service du dashboard est pose plus bas. Du update.sh il ne reste que ce qui
-# exige un terminal et quelqu'un devant : l'animation SMS.
-#
-# Elle est jouee par le PROFIL, pas par un service : un oneshot systemd tourne
-# avant qu'un terminal existe, et sa sortie part dans un log que personne ne lit.
-# /etc/profile.d est source dans l'ordre alphabetique - 01-osmo-disclaimer.sh
-# d'abord, 99-osmo-sms.sh ensuite : l'utilisateur lit ce qu'il peut lancer, puis
-# le SMS arrive. Et le fichier est ECRIT DANS L'IMAGE, donc present quand le
-# shell developpe son "for i in /etc/profile.d/*.sh" : c'est precisement ce qui
-# manquait a l'ancienne version, posee trop tard par un service, et qui
-# l'obligeait a armer un declencheur separe sur /dev/tty1.
+# It is played by the login profile, not a service (a systemd oneshot runs
+# before any terminal exists). /etc/profile.d is sourced alphabetically:
+# 01-osmo-disclaimer.sh first, then 99-osmo-sms.sh.
 install -Dm755 "$DIR/update.sh" "$ROOTFS/usr/local/sbin/osmo-sms.sh"
 cat > "$ROOTFS/etc/profile.d/99-osmo-sms.sh" <<'EOF'
-# 99-osmo-sms.sh - pose par build-iso.sh. Joue l'arrivee d'un SMS, une fois par
-# demarrage. Source APRES 01-keyboard-setup.sh (ordre alphabetique).
+# 99-osmo-sms.sh - installed by build-iso.sh. Plays an incoming SMS once per
+# boot. Sourced after 01-keyboard-setup.sh (alphabetical order).
 [ -n "${BASH_VERSION:-}" ] || return 0
 case $- in *i*) ;; *) return 0 ;; esac      # session interactive seulement
 [ -x /usr/local/sbin/osmo-sms.sh ] || return 0
-# /run est un tmpfs que le noyau recree vide a chaque demarrage : l'animation se
-# rejoue a chaque boot, mais pas a chaque tty ni a chaque "su -".
+# /run is a tmpfs recreated at each boot: the animation plays once per boot,
+# not on every tty or "su -".
 [ -e /run/osmo-sms.done ] && return 0
 : > /run/osmo-sms.done
 /usr/local/sbin/osmo-sms.sh
@@ -279,30 +208,23 @@ EOF
 chmod +x "$ROOTFS/etc/profile.d/99-osmo-sms.sh"
 echo -e "  ${GREEN}✓${NC} animation SMS a l'ouverture de session (99-osmo-sms.sh)"
 
-# ── /usr/local/bin/osmo-update : la mise a jour, EN PLACE, par git ─────────
-# [2026-08-27] L'ancien mecanisme n'etait pas une mise a jour, c'etait un
-# remplacement : effacer /opt/GSM/osmo-operator et /opt/GSM/osmo-egprs-web, recloner
-# depuis GitHub, a chaque demarrage. Il fallait un reseau pour demarrer, ce qui
-# tournait n'etait jamais ce que l'ISO portait, et tout ce qui avait ete pose
-# dans un arbre disparaissait au boot suivant.
-#
-# Les trois depots partent maintenant dans l'image AVEC leur .git : il y a donc
-# un HEAD auquel se comparer, et la mise a jour redevient ce qu'elle doit etre -
-# un fetch et une avance rapide. Rien n'est efface, rien n'est reclone, et une
-# machine sans reseau garde exactement ce avec quoi elle a ete gravee.
+# ── /usr/local/bin/osmo-update: in-place update via git ────────────────────
+# The repositories ship in the image with their .git, so the update is a
+# fetch plus fast-forward. Nothing is deleted or recloned, and an offline
+# machine keeps exactly what it was built with.
 cat > "$ROOTFS/usr/local/bin/osmo-update" <<'OSMOUPD'
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# osmo-update - met a jour, en place, les depots embarques dans l'image.
+# osmo-update - update the repositories embedded in the image, in place.
 #
-#   osmo-update              les trois depots
-#   osmo-update qosmo        un seul (osmo-operator | osmo-egprs-web | qosmo | c54x_exe | grgsm_exe)
-#   osmo-update --check      dit ce qui est en retard, n'ecrit rien
-#   osmo-update --quiet      sans couleurs ni fioritures (journal, cron)
-#   osmo-update --boot       mode demarrage : --quiet, journalise, sort toujours 0
+#   osmo-update              all repositories
+#   osmo-update qosmo        a single one (osmo-operator | osmo-egprs-web | qosmo | c54x_exe | grgsm_exe)
+#   osmo-update --check      report what is behind, write nothing
+#   osmo-update --quiet      no colours or decoration (journal, cron)
+#   osmo-update --boot       boot mode: --quiet, logged, always exits 0
 #
-# Ce qu'il ne fait PAS, deliberement : effacer un arbre, recloner un depot,
-# installer un paquet. Une machine qui demarre n'a rien a aller chercher.
+# Never deletes a tree, reclones a repository or installs a package.
+#
 # ══════════════════════════════════════════════════════════════════════════════
 set -u
 
@@ -321,8 +243,8 @@ while [ $# -gt 0 ]; do
 done
 [ "$QUIET" = "1" ] && { G=''; Y=''; R=''; C=''; B=''; N=''; }
 
-# Au demarrage personne ne lit l'ecran : la sortie part dans le journal, et le
-# code de retour ne doit jamais retarder ni bloquer multi-user.target.
+# At boot nobody reads the screen: output goes to the log, and the exit code
+# must never delay or block multi-user.target.
 if [ "$BOOT" = "1" ]; then
     exec >>/var/log/osmo-update.log 2>&1
     echo "===== osmo-update (boot) $(date '+%F %T') ====="
@@ -330,8 +252,8 @@ fi
 
 [ "$(id -u)" -eq 0 ] || { echo "Root requis." >&2; exit 1; }
 
-# nom|chemin - les chemins que cherchent deja start-native.sh, le dashboard et
-# environnement/paths.env. En changer un ici ne deplacerait pas ceux qui les lisent.
+# name|path - the paths start-native.sh, the dashboard and
+# environnement/paths.env already use. Changing one here does not move theirs.
 REPOS="osmo-operator|/opt/GSM/osmo-operator
 osmo-egprs-web|/opt/GSM/osmo-egprs-web
 qosmo|/opt/GSM/qosmo
@@ -351,19 +273,18 @@ while IFS='|' read -r name dir; do
         printf "    ${R}✗${N} absent - l'image ne le portait pas\n"; rc=1; continue
     fi
     if [ ! -d "$dir/.git" ]; then
-        # On ne reclone pas par-dessus : ce serait effacer un arbre dont on ne
-        # sait pas ce qu'il contient. On le dit, et on passe.
+        # Never reclone over it: that would erase a tree of unknown content.
+        # Report and skip.
         printf "    ${Y}⚠${N} pas de depot (.git absent) - laisse tel quel\n"; rc=1; continue
     fi
 
     br="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" || br=""
     [ -n "$br" ] || br=main
 
-    # Un depot livre en --depth 1 est GREFFE : son unique commit n'a pas de
-    # parent, donc rien de ce que le serveur renvoie n'a d'ancetre commun avec
-    # lui. Le refetcher en --depth 1 garde cette propriete (et le depot reste
-    # leger) ; un depot complet, lui, se fetch complet - sinon on lui ferait
-    # perdre l'ancestralite qui permet justement l'avance rapide.
+    # A --depth 1 repository is grafted: its single commit has no parent, so
+    # nothing fetched shares an ancestor with it. Refetch shallow repos with
+    # --depth 1 (keeps them light) and full repos fully (keeps ancestry for
+    # fast-forward).
     if git -C "$dir" rev-parse --is-shallow-repository 2>/dev/null | grep -q true; then
         fetch_ok=$(git -C "$dir" fetch --depth 1 --quiet origin "$br" 2>/dev/null && echo 1)
     else
@@ -384,18 +305,16 @@ while IFS='|' read -r name dir; do
         continue
     fi
 
-    # Trois cas, et un seul refus. Le refus porte sur le TRAVAIL LOCAL, jamais
-    # sur l'historique : c'est la difference avec l'ancien "rm -rf puis clone",
-    # qui effacait sans distinguer.
+    # Three cases; only local changes block the update, never history.
     if git -C "$dir" merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null \
        && git -C "$dir" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
-        # 1. Avance rapide : on est en retard sur la meme branche.
+        # 1. Fast-forward: behind on the same branch.
         printf "    ${G}✓${N} %s\n" "$(git -C "$dir" log -1 --format='%h %s')"
         [ "$name" = "osmo-egprs-web" ] && web_moved=1
         case "$name" in qosmo) forks_moved="$forks_moved $name" ;; esac
     elif [ -z "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
-        # 2. Pas d'ancetre commun (depot greffe par --depth 1) mais arbre propre :
-        #    il n'y a rien a perdre, on aligne sur le serveur.
+        # 2. No common ancestor (grafted --depth 1 repo) but clean tree:
+        #    nothing to lose, align with the server.
         if git -C "$dir" reset --hard FETCH_HEAD >/dev/null 2>&1; then
             printf "    ${G}✓${N} aligne sur origin/%s - %s\n" "$br" "$(git -C "$dir" log -1 --format='%h %s')"
             [ "$name" = "osmo-egprs-web" ] && web_moved=1
@@ -404,7 +323,7 @@ while IFS='|' read -r name dir; do
             printf "    ${Y}⚠${N} alignement impossible - arbre inchange\n"; rc=1
         fi
     else
-        # 3. Des fichiers ont ete modifies ici : on ne touche a rien, on le dit.
+        # 3. Local modifications: touch nothing, report it.
         printf "    ${Y}⚠${N} modifications locales - rien n'a ete ecrase\n"
         printf "       a la main : ${C}git -C %s status${N}\n" "$dir"
         rc=1
@@ -418,17 +337,13 @@ if [ -z "${found:-}" ]; then
     exit 2
 fi
 
-# Un fork qui avance peut changer tools/qosmo-launch : le lanceur installe
-# (/usr/local/bin/<fork>, celui que 40-qemu.sh appelle) est recompile sur place.
-# C pur, libc seule, quelques secondes ; sans gcc on le dit et on laisse
-# l'ancien binaire, qui reste valide (40-qemu.sh retombe sinon sur QEMU_BIN).
-# [2026-09-09] LA VOIX, REPOSEE APRES CHAQUE FETCH. « git reset --hard
-# FETCH_HEAD » ci-dessus efface deux reglages vitaux des forks :
-# « io-tch-format rtp » dans cfgs/mobile_group1.cfg (sans lui le mobile parle
-# la disposition Texas Instruments quand le pont code en RTP : voix robotisee)
-# et CALYPSO_PULSE_LATENCY_MSEC (un tampon trop court fait remonter le flux
-# PulseAudio du mobile 50 fois par seconde). Le pourquoi complet et le comment
-# sont dans osmo-operator/scripts/voix-forks.sh - ici on ne fait que l appeler.
+# A fork update may change tools/qosmo-launch: the installed launcher
+# (/usr/local/bin/<fork>, called by 40-qemu.sh) is rebuilt in place (plain C,
+# libc only). Without gcc the old binary is kept (40-qemu.sh otherwise falls
+# back to QEMU_BIN).
+# scripts/voix-forks.sh reapplies the fork voice settings that
+# "git reset --hard FETCH_HEAD" wipes ("io-tch-format rtp" in
+# cfgs/mobile_group1.cfg and CALYPSO_PULSE_LATENCY_MSEC); see that script.
 [ -x /opt/GSM/osmo-operator/scripts/voix-forks.sh ] \
     && /opt/GSM/osmo-operator/scripts/voix-forks.sh
 
@@ -442,8 +357,8 @@ for f in $forks_moved; do
     fi
 done
 
-# Le dashboard tourne en service : un depot avance ne change rien tant que le
-# demon fait tourner l'ancien server.js.
+# The dashboard runs as a service: it must be restarted to pick up a new
+# server.js.
 if [ "$web_moved" = "1" ]; then
     [ -f /opt/GSM/osmo-egprs-web/package.json ] && \
         (cd /opt/GSM/osmo-egprs-web && npm install --production >/dev/null 2>&1 || true)
@@ -456,16 +371,14 @@ exit $rc
 OSMOUPD
 chmod +x "$ROOTFS/usr/local/bin/osmo-update"
 
-# Au demarrage : apres le reseau, sans le bloquer. Type=oneshot + un ExecStart
-# qui sort toujours 0 en mode --boot : une machine hors ligne demarre pareil.
+# At boot: after the network, without blocking it. Type=oneshot and an
+# ExecStart that always exits 0 in --boot mode, so an offline machine boots
+# the same.
 cat > "$ROOTFS/etc/systemd/system/osmo-update.service" <<'EOF'
 [Unit]
 Description=osmo-operator - mise a jour des depots embarques (git, en place)
-# [2026-09-04] PLUS D ATTENTE RESEAU. C etait Wants/After=network-online.target
-# + systemd-networkd-wait-online.service, soit jusqu a 2 min de boot (mesure :
-# systemd-analyze blame) pour une garantie dont cette unite n a pas besoin.
-# network.target suffit : les interfaces sont configurees, la route par defaut
-# peut arriver apres - ce service le supporte (voir son ExecStart).
+# network.target is enough: the default route may come later, which
+# osmo-update --boot tolerates. No network-online.target (boot delay).
 After=network.target
 [Service]
 Type=oneshot
@@ -477,39 +390,30 @@ EOF
 chroot "$ROOTFS" systemctl enable osmo-update 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} osmo-update (/usr/local/bin, + service au demarrage : git fetch, jamais de reclone)"
 
-# ── QEMU_BIN apres le reclone : build/qemu-system-arm dans l'arbre qosmo ──
-# [2026-08-27] Deux decisions justes, prises separement, se contredisent :
+# ── QEMU_BIN in the qosmo tree: build/qemu-system-arm ──────────────────────
+# The qosmo tree ships with .git and build/, so QEMU_BIN normally resolves
+# already. This service covers a tree that lost its build/ (manual reclone or
+# fresh checkout): environnement/paths.env would then resolve QEMU_BIN to a
+# missing path and the stack would stop at the prerequisite check.
 #
-# L'arbre qosmo part maintenant entier - .git et build/ compris - donc
-# QEMU_BIN est resolu des la gravure, et ce service n'a rien a faire. Il est la
-# pour le seul cas ou l'arbre perdrait son build/ : quelqu'un qui le reclone a
-# la main, ou qui remplace /opt/GSM/qosmo par un checkout frais. Sans build/,
-# environnement/paths.env resout QEMU_BIN a un chemin inexistant et la pile
-# s'arrete des le premier module :
-#     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
-# — alors que le binaire est la, dans /usr/local/bin.
-#
-# On recree donc le seul chemin que paths.env cherche, apres le reclone. Un lien
-# symbolique, pas une copie : le binaire fait ~30 Mo et l'ISO tient en RAM.
-# "build/" est la premiere ligne du .gitignore de qemu : le "git clean -fd" des
-# synchronisations suivantes (wipe=0, incremental) ne l'efface pas - seul un
-# clone frais le ferait, et ce service repasse a chaque demarrage.
+# Recreate the only path paths.env looks for, as a symlink to the installed
+# binary (~30 MB, the ISO lives in RAM). build/ is in qemu's .gitignore, so
+# "git clean -fd" does not remove it; the service runs at every boot.
 cat > "$ROOTFS/usr/local/sbin/osmo-qemu-link.sh" <<'QLINK'
 #!/bin/bash
-# osmo-qemu-link.sh - rend QEMU_BIN resolvable apres le reclone de qosmo.
-# Voir build-iso.sh, etape [6/9], pour le pourquoi.
+# osmo-qemu-link.sh - make QEMU_BIN resolvable in the qosmo tree.
+# Installed by build-iso.sh (iso_modules/81-cloture-systeme.sh).
 set -u
 SRC="${OSMO_QEMU_BIN:-/usr/local/bin/qemu-system-arm}"
 TREE="${OSMO_QEMU_SRC:-/opt/GSM/qosmo}"
 LNK="$TREE/build/qemu-system-arm"
 
-# Pas de binaire (image inter-STP) ou pas d'arbre (reclone impossible, reseau
-# coupe) : il n'y a rien a relier, et ce n'est pas ce service qui le dira.
+# No binary (inter-STP image) or no tree: nothing to link.
 [ -x "$SRC" ] || { echo "osmo-qemu-link: $SRC absent - rien a faire"; exit 0; }
 [ -d "$TREE" ] || { echo "osmo-qemu-link: $TREE absent - rien a faire"; exit 0; }
 
-# Un VRAI build compile sur place gagne toujours : on ne remplace qu'un lien
-# (le notre) ou un chemin vide.
+# A real build compiled in place always wins: only replace our own
+# symlink or an empty path.
 if [ -e "$LNK" ] && [ ! -L "$LNK" ]; then
     echo "osmo-qemu-link: $LNK est un vrai fichier - laisse tel quel"
     exit 0
@@ -519,10 +423,10 @@ mkdir -p "$TREE/build"
 ln -sfn "$SRC" "$LNK"
 echo "osmo-qemu-link: $LNK -> $SRC"
 
-# ── Lanceurs C (tools/qosmo-launch) : ce que 40-qemu.sh appelle ─────────────
-# [2026-09-03] /usr/local/bin/<fork> est recompile s'il manque ou si la source
-# de l'arbre est plus recente (reclone, osmo-update). [2026-09-25] Un seul
-# arbre, qosmo ; le DSP (--dsp) est c54x_exe, hors QEMU : on dit s'il manque.
+# ── C launchers (tools/qosmo-launch), called by 40-qemu.sh ──────────────────
+# /usr/local/bin/<fork> is rebuilt if missing or older than the tree source.
+# Only one tree, qosmo; the DSP (--dsp) is c54x_exe, outside QEMU: report if
+# it is missing.
 for fork in qosmo; do
     src="/opt/GSM/$fork/tools/qosmo-launch"
     [ -f "$src/qosmo-launch.c" ] || continue
@@ -559,7 +463,7 @@ echo -e "  ${GREEN}✓${NC} osmo-qemu-link (QEMU_BIN relie apres le reclone de q
 
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its last command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would silently stop everything. Always 0 here.
 true

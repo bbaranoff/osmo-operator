@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-# grub-theme-render.py - fabrique le theme GRUB « osmo ».
+# grub-theme-render.py - builds the "osmo" GRUB theme.
 #
 #     python3 tools/grub-theme-render.py --out /boot/grub/themes/osmo
 #
-# [2026-10-23] Comme le theme Plymouth (tools/plymouth-render.py) : LE THEME
-# EST GENERE, PAS STOCKE. Le dessin est le code ; on change une couleur, on
-# rejoue le script. Appele par iso_modules/86-finitions.sh (systeme installe)
-# et iso_modules/90-iso.sh (menu du live).
+# Like the Plymouth theme (tools/plymouth-render.py): THE THEME IS GENERATED,
+# NOT STORED. The drawing is the code; change a colour, rerun the script.
+# Called by iso_modules/86-finitions.sh (installed system) and
+# iso_modules/90-iso.sh (live menu).
 #
-# CE QU ON VOIT :
-#   - en fond, la ville du fond d ecran (configs/gsm-lab-ville.jpg) floutee et
-#     assombrie, dans le meme degrade violet sombre -> bleu ;
-#   - en haut, « osmo-operator » et, en orange, « localhost · no radio emission »
-#     (le cadre du schema du bureau) ;
-#   - au centre, le menu dans un panneau translucide a bord bleu ; l entree
-#     choisie est une pastille en degrade violet -> bleu ;
-#   - en bas, le compte a rebours (orange) et l aide clavier.
+# WHAT IS SHOWN:
+#   - as background, the city of the wallpaper (configs/gsm-lab-ville.jpg) blurred
+#     and darkened, in the same dark purple -> blue gradient;
+#   - at the top, "osmo-operator" and, in orange, "localhost · no radio emission"
+#     (the frame of the desktop diagram);
+#   - in the middle, the menu in a translucent panel with a blue border; the
+#     selected entry is a pill in a purple -> blue gradient;
+#   - at the bottom, the countdown (orange) and the keyboard help.
 #
-# Les polices (.pf2) sont faites par grub-mkfont (grub-common) depuis Ubuntu
-# (fonts-ubuntu) : la meme famille que le bureau.
+# The fonts (.pf2) are made by grub-mkfont (grub-common) from Ubuntu
+# (fonts-ubuntu): the same family as the desktop.
 import argparse
 import os
 import subprocess
@@ -44,13 +44,13 @@ def police(f, t):
     return ImageFont.truetype(os.path.join(FONTS, f), t)
 
 
-# ── fond ─────────────────────────────────────────────────────────────────────
+# ── background ───────────────────────────────────────────────────────────────
 src = Image.open(a.fond).convert("RGB")
 r = max(W / src.width, H / src.height)
 src = src.resize((round(src.width * r), round(src.height * r)), Image.LANCZOS)
 x0, y0 = (src.width - W) // 2, (src.height - H) // 2
 fond = src.crop((x0, y0, x0 + W, y0 + H)).filter(ImageFilter.GaussianBlur(30))
-# voile : violet sombre en haut a gauche -> bleu nuit en bas a droite
+# veil: dark purple at the top left -> night blue at the bottom right
 voile = Image.new("RGB", (W, H))
 dv = ImageDraw.Draw(voile)
 for i in range(W + H):
@@ -69,9 +69,9 @@ d.line([(W / 2 - lw / 2, 252), (W / 2 + lw / 2, 252)], fill=ORANGE + (255,), wid
 fond.save(out("background.png"), optimize=True)
 
 
-# ── panneau du menu (9 morceaux : menu_*.png) ───────────────────────────────
+# ── menu panel (9 pieces: menu_*.png) ──────────────────────────────────────
 def neuf(prefixe, taille, rayon, remplissage, bord, epais):
-    """Dessine un rectangle arrondi et le coupe en 9 morceaux pour GRUB."""
+    """Draws a rounded rectangle and cuts it into 9 pieces for GRUB."""
     s = taille
     im = Image.new("RGBA", (3 * s, 3 * s), (0, 0, 0, 0))
     ImageDraw.Draw(im).rounded_rectangle((0, 0, 3 * s - 1, 3 * s - 1), radius=rayon,
@@ -84,7 +84,7 @@ def neuf(prefixe, taille, rayon, remplissage, bord, epais):
 
 neuf("menu", 24, 22, (12, 8, 30, 175), BORD + (200,), 2)
 
-# ── entree choisie (select_w / select_c / select_e) : pastille en degrade ───
+# ── selected entry (select_w / select_c / select_e): gradient pill ──────────
 HS = 44
 pastille = Image.new("RGBA", (400, HS), (0, 0, 0, 0))
 masque = Image.new("L", (400, HS), 0)
@@ -99,9 +99,9 @@ pastille.crop((0, 0, HS // 2, HS)).save(out("select_w.png"))
 pastille.crop((HS // 2, 0, 400 - HS // 2, HS)).save(out("select_c.png"))
 pastille.crop((400 - HS // 2, 0, 400, HS)).save(out("select_e.png"))
 
-# ── polices ──────────────────────────────────────────────────────────────────
-# -r : ASCII, Latin-1 et Latin etendu A (les accents des entrees), le point
-# median de l aide. -n fixe le nom : « Osmo Regular 24 ».
+# ── fonts ────────────────────────────────────────────────────────────────────
+# -r: ASCII, Latin-1 and Latin extended A (the accents of the entries), the
+# middle dot of the help. -n sets the name: "Osmo Regular 24".
 plages = "0x20-0x7E,0xA0-0x17F,0x2022-0x2022"
 for fichier, nom, taille in (("Ubuntu-R.ttf", "Osmo", 24), ("Ubuntu-M.ttf", "OsmoM", 22),
                              ("Ubuntu-R.ttf", "Osmo", 18)):

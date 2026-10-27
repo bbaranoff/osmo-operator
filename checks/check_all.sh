@@ -1,94 +1,92 @@
 #!/bin/bash
 # =============================================================================
-# checks/check_all.sh -- lance TOUS les checks du banc, dans le bon ordre,
-#                        et rend UN verdict.
+# checks/check_all.sh -- run ALL bench checks in the right order and return
+#                        ONE verdict.
 #
-# POURQUOI CE FICHIER EXISTE
-# --------------------------
-# checks/ contient huit scripts qui ne se recouvrent pas : global_check voit
-# les demons, ss7_check voit la signalisation, diag-* voit l'interco d'un cote
-# ou de l'autre, wan_ss7_check voit ce qui passe entre machines, annuaire voit
-# les abonnes. Pris un par un ils sont justes ; pris a la main ils sont
-# oublies, lances dans le desordre, ou lances sur le mauvais noeud - et le
-# diagnostic finit par dependre de qui tape la commande.
+# checks/ holds scripts that do not overlap: global_check sees the daemons,
+# ss7_check the signalling, diag-* the interconnect from either side,
+# wan_ss7_check the traffic between machines, annuaire the subscribers.
+# This script selects WHAT MAKES SENSE HERE (mode and role decide), runs them
+# from the most general to the most specific, logs everything, and ends with
+# a table: one row per check, one verdict, one exit code.
 #
-# Ce script tape la commande. Il choisit CE QUI A UN SENS ICI (le mode et le
-# role decident), execute dans l'ordre du plus general au plus fin, garde tout
-# dans un journal, et termine par un tableau : une ligne par check, un verdict,
-# un code de retour.
+# WHAT IT DOES NOT DO
+#   - it modifies nothing and restarts nothing: all called checks are
+#     read-only (only --dump changes daemon log levels, so it is optional and
+#     never enabled by default);
+#   - it reimplements no test: each verdict comes from the original script,
+#     never from a second VTY read done here.
 #
-# CE QU'IL NE FAIT PAS
-#   - il ne modifie rien, ne redemarre rien : tous les checks appeles sont en
-#     lecture seule (seul --dump touche au niveau de log des demons, et il est
-#     donc optionnel, jamais par defaut) ;
-#   - il ne reimplemente aucun test : chaque verdict vient du script d'origine,
-#     jamais d'une seconde lecture des VTY faite ici.
+# CHECK SELECTION - WHAT RUNS, AND WHEN
+#   mode           all checks honour --docker/--native; the option is passed
+#                  through unchanged, so a single world is inspected.
+#   diag-interstp  only if an inter-STP is QUERYABLE HERE (osmo-inter-stp
+#                  container, or OSMO_ROLE=interstp): on an operator node the
+#                  hub is another machine whose VTY listens on its loopback
+#                  only, so running it would report a false "hub silent".
+#   diag-stp-oper. the exact opposite: only when this node is NOT the hub and
+#                  has an /etc/osmo-role (i.e. a WAN setup).
+#   wan_ss7_check  only if /etc/osmo-wan.conf exists: without a WAN plan there
+#                  is nothing "between nodes" to verify.
+#   annuaire       only if the directory files exist (/var/tmp or /etc/osmocom).
+#   dump + resume  never by default: vty-debug-dump.sh switches the daemons to
+#                  DEBUG and writes several MB. --dump enables both, the
+#                  summary rereading the dump just written.
 #
-# CHOIX DES CHECKS - CE QUI EST LANCE, ET QUAND
-#   mode           tous les checks respectent --docker/--native ; l'option est
-#                  transmise telle quelle, donc un seul monde est regarde.
-#   diag-interstp  seulement si un inter-STP est INTERROGEABLE ICI (conteneur
-#                  osmo-inter-stp, ou OSMO_ROLE=interstp) : sur un noeud
-#                  operateur le hub est une autre machine, son VTY n'ecoute que
-#                  sur sa boucle locale, et le lancer produirait un "hub muet"
-#                  qui se lit comme une panne.
-#   diag-stp-oper. l'exact symetrique : seulement quand ce noeud n'est PAS le
-#                  hub et qu'il a un /etc/osmo-role (donc un montage WAN).
-#   wan_ss7_check  seulement si /etc/osmo-wan.conf existe : sans plan WAN il
-#                  n'y a pas de "entre noeuds" a verifier.
-#   annuaire       seulement si les fiches existent (var/tmp ou /etc/osmocom).
-#   dump + resume  jamais par defaut : vty-debug-dump.sh passe les demons en
-#                  DEBUG et ecrit plusieurs Mo. --dump les active tous les deux,
-#                  le resume relisant le dump que le premier vient d'ecrire.
+# HOW A CHECK VERDICT IS DERIVED
+# The checks/ scripts do not share one convention:
+#   rc    global_check.sh / ss7_check.sh return the NUMBER of failures;
+#   rcb   wan_ss7_check.sh returns 0 or 1;
+#   motif diag-*.sh and annuaire.sh always return 0 - their verdict is in
+#         their last section ("INTERCO SS7 : DOWN"), read from the output
+#         with colors stripped.
 #
-# COMMENT EST RENDU LE VERDICT D'UN CHECK
-# Les scripts de checks/ n'ont pas tous la meme convention, et on ne la leur
-# impose pas apres coup :
-#   rc    global_check.sh / ss7_check.sh rendent le NOMBRE d'echecs ;
-#   rcb   wan_ss7_check.sh rend 0 ou 1 ;
-#   motif diag-*.sh et annuaire.sh rendent toujours 0 - leur verdict est dans
-#         leur derniere section ("INTERCO SS7 : DOWN"), on l'y lit, sur la
-#         sortie DEBARRASSEE des couleurs.
-#
-# Usage :
+# Usage:
 #   sudo ./checks/check_all.sh [options]
-#     --quick|-q        transmis a global_check / ss7_check (passage rapide)
-#     --verbose|-v      transmis aux checks qui le comprennent
-#     --op=N            limiter a un operateur (global_check, annuaire)
-#     --docker|--native forcer le monde ; sans option, detection automatique
-#     --dump            ajouter vty-debug-dump.sh puis operator_summary.sh
-#     --only=a,b        ne lancer que ces checks (voir --list)
-#     --skip=a,b        lancer tous les checks sauf ceux-la
-#     --list            afficher les checks, leur cle et leur applicabilite
-#     --out FICHIER     journal complet (defaut /tmp/osmo-check-all-<date>.txt)
-#     --no-log          ne rien ecrire sur disque
-#     --timeout N       delai maximum par check, en secondes (defaut 300)
-#     --no-color        sortie sans couleur
+#     --quick|-q        passed to global_check / ss7_check (quick pass)
+#     --verbose|-v      passed to the checks that support it
+#     --op=N            limit to one operator (global_check, annuaire)
+#     --docker|--native force the world; without it, auto-detection
+#     --mode=X          same as --docker / --native
+#     --dump            add vty-debug-dump.sh then operator_summary.sh
+#     --only=a,b        run only these checks (see --list)
+#     --skip=a,b        run all checks except these
+#     --list            show the checks, their key and applicability
+#     --out FILE        full log (default /tmp/osmo-check-all-<date>.txt)
+#     --no-log          write nothing to disk
+#     --timeout N       maximum time per check, in seconds (default 300)
+#     --no-color        plain output
 #
-# Code de retour : nombre de checks en echec (0 = tout va bien), 125 au plus.
+# Env: OSMO_MODE=docker|native forces the world like --docker/--native.
+#
+# Exit code: number of failed checks (0 = all good), at most 125.
+#
+# Check keys: global ss7 interstp operator wan annuaire dump resume.
+# Examples:
+#   sudo ./checks/check_all.sh --quick
+#   sudo ./checks/check_all.sh --only=global,ss7 --no-log
+#   sudo ./checks/check_all.sh --native --dump
 # =============================================================================
 
 set -u
 
-# ── Bibliotheque commune (detection docker/natif, inventaire, VTY) ────────────
-# Chemin RELATIF a CE fichier : le depot vit en /home/.../osmo-operator pendant le
-# developpement et en /opt/GSM/osmo-operator sur l'ISO ; un chemin absolu casserait
-# l'un des deux.
+# ── Shared library (docker/native detection, inventory, VTY) ───────────────
+# Path relative to THIS file: the repository lives in a home directory during
+# development and in /opt/GSM/osmo-operator on the ISO.
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
     [ -r "$_c" ] && { . "$_c"; break; }
 done
 command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
 
-# ── Options ───────────────────────────────────────────────────────────────────
+# ── Options ─────────────────────────────────────────────────────────────────
 QUICK=0; VERBOSE=0; SPECIFIC_OP=""; WANT_DUMP=0
 ONLY=""; SKIP_LIST=""; LIST_ONLY=0
 LOGFILE=""; NO_LOG=0; TIMEOUT=300; USE_COLOR=1
 MODE_FORCED=0; MODE_OPT=""
 
-# OSMO_MODE pose dans l'environnement est deja une forme de forcage
-# ("OSMO_MODE=native ./checks/check_all.sh") : on le signale comme tel, et on
-# le transmet aux fils sous forme d'option pour qu'aucun d'eux ne redetecte.
+# OSMO_MODE in the environment counts as forcing ("OSMO_MODE=native
+# ./checks/check_all.sh"); it is passed to the children as an option.
 case "${OSMO_MODE:-}" in docker|native) MODE_FORCED=1 ;; esac
 
 while [ $# -gt 0 ]; do
@@ -120,7 +118,7 @@ done
 
 case "$TIMEOUT" in ''|*[!0-9]*) echo "--timeout attend un entier" >&2; exit 1 ;; esac
 
-# ── Couleurs ──────────────────────────────────────────────────────────────────
+# ── Colors ──────────────────────────────────────────────────────────────────
 if [ "$USE_COLOR" = 1 ] && [ -t 1 ]; then
     GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YELLOW=$'\033[1;33m'
     RED=$'\033[0;31m';   BOLD=$'\033[1m';    DIM=$'\033[2m'; NC=$'\033[0m'
@@ -134,15 +132,13 @@ banner() {
     printf '%s\n' "$(printf '─%.0s' $(seq 1 74))"
 }
 
-# ── Mode, role, inventaire ────────────────────────────────────────────────────
+# ── Mode, role, inventory ───────────────────────────────────────────────────
 MODE="$(osmo_mode)"
 [ "$MODE_FORCED" -eq 1 ] && MODE_SRC="force" || MODE_SRC="detecte"
 
-# L'option de mode transmise aux fils. On la transmet TOUJOURS, meme quand elle
-# a ete detectee ici : sans elle chaque fils refait la detection, et deux
-# detections successives sur un hote qui a docker installe mais fait tourner le
-# lab en natif peuvent ne pas tomber d'accord. Un rapport dont les moities
-# regardent deux mondes differents n'est pas un rapport.
+# Mode option passed to the children. ALWAYS passed, even when detected here:
+# otherwise each child redetects, and on a host with docker installed but the
+# lab running natively two detections may disagree.
 MODE_OPT="--$MODE"
 
 HUB_LOCAL=0; HUB_LABEL=""
@@ -155,18 +151,16 @@ ROLE=""
 OPS="$(osmo_ops 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
 N_OPS="$(printf '%s\n' "$OPS" | wc -w | tr -d ' ')"
 
-# Les fiches d'abonnes ne sont pas au meme endroit selon d'ou l'on regarde :
-# start-docker.sh les ecrit sur l'HOTE dans /var/tmp et en pose une copie dans
-# /etc/osmocom de chaque conteneur. Meme regle que checks/annuaire.sh.
+# Subscriber directory files: start-docker.sh writes them on the HOST in
+# /var/tmp and copies them into /etc/osmocom of each container. Same rule as
+# checks/annuaire.sh.
 ANNU_FOUND=0
 for f in "${OSMO_ANNUAIRE:-}" /var/tmp/osmo-annuaire.csv /etc/osmocom/annuaire.csv; do
     [ -n "$f" ] && [ -r "$f" ] && { ANNU_FOUND=1; break; }
 done
 
-# ── Journal ───────────────────────────────────────────────────────────────────
-# Le journal recoit la sortie SANS les couleurs : un rapport qu'on envoie par
-# mail ou qu'on relit six mois plus tard ne doit pas etre truffe d'echappements.
-# Le terminal, lui, garde les siennes.
+# ── Log ─────────────────────────────────────────────────────────────────────
+# The log receives the output WITHOUT colors; the terminal keeps them.
 STRIP_ANSI='s/\x1b\[[0-9;]*[a-zA-Z]//g'
 if [ "$NO_LOG" -eq 0 ]; then
     [ -n "$LOGFILE" ] || LOGFILE="/tmp/osmo-check-all-$(date '+%Y%m%d-%H%M%S').txt"
@@ -179,15 +173,15 @@ else
 fi
 journal() { [ -n "$LOGFILE" ] && printf '%s\n' "$*" | sed "$STRIP_ANSI" >>"$LOGFILE"; return 0; }
 
-# ── Le catalogue ──────────────────────────────────────────────────────────────
-# Un enregistrement par check :  cle | script | verdict | description
-#   verdict = rc     le script rend le NOMBRE d'echecs (global_check, ss7_check)
-#             rcb    le script rend 0 ou non-0 (wan_ss7_check)
-#             motif  le script rend toujours 0 : le verdict se lit dans sa
-#                    sortie, motif donne apres ':' (diag-*, annuaire)
-#             info   sortie informative, jamais en echec (dump, resume)
-# L'ordre est celui du diagnostic : d'abord ce qui tourne, puis la
-# signalisation locale, puis l'interco, puis le WAN, puis les abonnes.
+# ── Catalogue ───────────────────────────────────────────────────────────────
+# One record per check:  key | script | verdict | description
+#   verdict = rc     the script returns the NUMBER of failures (global_check, ss7_check)
+#             rcb    the script returns 0 or non-0 (wan_ss7_check)
+#             motif  the script always returns 0: the verdict is read from its
+#                    output, pattern given after ':' (diag-*, annuaire)
+#             info   informational output, never failing (dump, resume)
+# Order follows the diagnosis: running daemons, local signalling,
+# interconnect, WAN, then subscribers.
 CATALOGUE=(
   "global|global_check.sh|rc|etat de tous les demons (STP, HLR, MSC, BSC, BTS, PCU, SGSN, GGSN, MGW)"
   "ss7|ss7_check.sh|rc|signalisation SS7 : AS, ASP, routes, catch-all vers l inter-STP"
@@ -200,12 +194,12 @@ CATALOGUE=(
 )
 
 champ() { printf '%s' "$1" | cut -d'|' -f"$2"; }
-# Le motif peut contenir des '|' (alternative regex) : il occupe donc tout ce
-# qui est entre le 3e champ et le DERNIER, la description etant le dernier.
+# The pattern may contain '|' (regex alternation): it spans everything
+# between the 3rd field and the LAST one, the description being the last.
 verdict_de()     { printf '%s' "${1#*|*|}" | sed 's/|[^|]*$//'; }
 description_de() { printf '%s' "$1" | awk -F'|' '{print $NF}'; }
 
-# applicable <cle> - ce check a-t-il un sens ici ? Ecrit la raison si non.
+# applicable <key> - does this check make sense here? Prints the reason if not.
 applicable() {
     case "$1" in
         global|ss7) return 0 ;;
@@ -234,7 +228,7 @@ applicable() {
     return 0
 }
 
-# args_de <cle> - les options a passer, chaque script n'ayant pas les memes.
+# args_de <key> - options to pass; each script takes different ones.
 args_de() {
     local a=("$MODE_OPT")
     case "$1" in
@@ -246,10 +240,9 @@ args_de() {
             [ "$QUICK" -eq 1 ]        && a+=(--quick)
             [ "$VERBOSE" -eq 1 ]      && a+=(--verbose) ;;
         interstp)
-            # diag-interstp.sh et diag-stp-operator.sh sont anterieurs a
-            # _mode.sh : ils lisent /etc/osmo-role et les VTY locaux, et ne
-            # connaissent ni --docker ni --native. Leur passer MODE_OPT les
-            # ferait sortir en "option inconnue".
+            # diag-interstp.sh and diag-stp-operator.sh do not use _mode.sh: they read
+            # /etc/osmo-role and the local VTYs and reject --docker/--native as an
+            # unknown option, so MODE_OPT is not passed.
             a=()
             [ "$USE_COLOR" -eq 0 ]    && a+=(--no-color) ;;
         operator)
@@ -270,7 +263,7 @@ args_de() {
     printf '%s\n' "${a[@]:-}"
 }
 
-# ── --list : dire ce qui serait fait, sans rien faire ─────────────────────────
+# ── --list: show what would be done, without doing it ───────────────────────
 if [ "$LIST_ONLY" -eq 1 ]; then
     echo "${BOLD}checks disponibles${NC}   (mode ${MODE}, ${MODE_SRC})"
     echo ""
@@ -289,7 +282,7 @@ if [ "$LIST_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-# ── En-tete ───────────────────────────────────────────────────────────────────
+# ── Header ──────────────────────────────────────────────────────────────────
 DUMP_OUT="/tmp/osmo-check-all-dump-$(date '+%Y%m%d-%H%M%S').txt"
 DATE_DEB="$(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -310,16 +303,16 @@ en_tete() {
     fi
     [ -n "$ROLE" ] && printf '  role       : %s\n' "$ROLE"
     [ -n "$LOGFILE" ] && printf '  journal    : %s\n' "$LOGFILE"
-    # Les VTY Osmocom ecoutent sur la boucle locale et docker exige le socket :
-    # sans droits, la moitie des checks rendront "muet" pour une raison qui n'a
-    # rien a voir avec le reseau. On le dit AVANT, pas apres.
+    # Osmocom VTYs listen on loopback and docker needs the socket: without root,
+    # half the checks would report "silent" for reasons unrelated to the network.
+    # Warn up front.
     [ "$(id -u)" -ne 0 ] && printf '  %s! lance sans root : certains checks seront incomplets (sudo recommande)%s\n' "$YELLOW" "$NC"
 }
 en_tete
 en_tete_txt="$(en_tete 2>&1)"
 journal "$en_tete_txt"
 
-# ── Execution ─────────────────────────────────────────────────────────────────
+# ── Execution ───────────────────────────────────────────────────────────────
 NB_OK=0; NB_KO=0; NB_IGN=0
 RES_CLE=(); RES_ETAT=(); RES_RC=(); RES_DUREE=(); RES_NOTE=()
 
@@ -340,9 +333,8 @@ for entree in "${CATALOGUE[@]}"; do
     desc="$(description_de "$entree")"
     chemin="$_here/$script"
 
-    # --only / --skip d'abord : ce que l'utilisateur a exclu n'est meme pas
-    # evalue, et n'apparait pas comme "ignore par le banc" - la distinction
-    # compte, l'un est un choix, l'autre un constat.
+    # --only / --skip first: user-excluded checks are not evaluated and are not
+    # reported as "not applicable" (a choice, not a finding).
     [ -n "$ONLY" ]      && { dans_liste "$cle" "$ONLY"      || continue; }
     [ -n "$SKIP_LIST" ] && { dans_liste "$cle" "$SKIP_LIST" && continue; }
 
@@ -363,8 +355,8 @@ for entree in "${CATALOGUE[@]}"; do
     fi
 
     mapfile -t opts < <(args_de "$cle")
-    # args_de rend une ligne vide quand il n'y a aucune option : le tableau
-    # contiendrait alors un argument vide, que certains scripts refusent.
+    # args_de prints an empty line when there are no options; avoid passing an
+    # empty argument, which some scripts reject.
     [ "${#opts[@]}" -eq 1 ] && [ -z "${opts[0]}" ] && opts=()
 
     banner "[$cle] $script ${DIM}${opts[*]:-}${NC}"
@@ -378,10 +370,10 @@ for entree in "${CATALOGUE[@]}"; do
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/osmo-check-$cle-XXXXXX")"
     debut=$SECONDS
-    # timeout : un VTY qui ne repond jamais (demon fige, docker exec suspendu)
-    # bloquerait tout le rapport. On coupe, on le dit, on continue.
-    # PIPESTATUS et non "set -o pipefail" : sous pipefail un "grep -q" en fin
-    # de tube, dans l'un des fils, rendrait 141 (voir checks/_mode.sh).
+    # timeout: a VTY that never answers (frozen daemon, hung docker exec) would
+    # block the whole report; cut it, report it, continue.
+    # PIPESTATUS rather than "set -o pipefail": under pipefail a trailing
+    # "grep -q" in a child would return 141 (see checks/_mode.sh).
     timeout "$TIMEOUT" "$chemin" "${opts[@]}" 2>&1 | tee "$tmp"
     rc="${PIPESTATUS[0]}"
     duree=$((SECONDS - debut))
@@ -396,15 +388,13 @@ for entree in "${CATALOGUE[@]}"; do
     else
         case "$verdict" in
             rc)
-                # global_check.sh et ss7_check.sh rendent le nombre d'echecs.
+                # global_check.sh and ss7_check.sh return the number of failures.
                 if [ "$rc" -ne 0 ]; then etat=ECHEC; note="$rc test(s) en echec"; fi ;;
             rcb)
                 if [ "$rc" -ne 0 ]; then etat=ECHEC; note="code de retour $rc"; fi ;;
             motif:*)
-                # Le script rend toujours 0 : son verdict est dans sa sortie.
-                # On retient la LIGNE entiere, pas le motif : "[FAIL]" tout seul
-                # dans le bilan n'apprend rien, "[FAIL] operateur 1 : VTY STP
-                # (4239) muet" dispense d'aller rouvrir le journal.
+                # The script always returns 0: its verdict is in its output. Keep the whole
+                # LINE, not just the pattern, so the summary is self-explanatory.
                 m="${verdict#motif:}"
                 nb="$(printf '%s\n' "$propre" | grep -Ec -- "$m")"
                 if [ "${nb:-0}" -gt 0 ]; then
@@ -428,7 +418,7 @@ for entree in "${CATALOGUE[@]}"; do
     enregistre "$cle" "$etat" "$rc" "${duree}s" "$note"
 done
 
-# ── Bilan ─────────────────────────────────────────────────────────────────────
+# ── Summary ─────────────────────────────────────────────────────────────────
 bilan() {
     echo ""
     printf '%s\n' "$(printf '═%.0s' $(seq 1 74))"
@@ -454,8 +444,7 @@ bilan() {
         "$GREEN" "$NB_OK" "$NC" "$RED" "$NB_KO" "$NC" "$DIM" "$NB_IGN" "$NC" "$MODE"
     echo ""
     if [ "$NB_KO" -eq 0 ] && [ "$NB_OK" -eq 0 ]; then
-        # Tout ignore ou tout exclu : dire "BANC OK" ici serait un mensonge par
-        # omission - rien n'a ete regarde.
+        # Everything skipped or excluded: nothing was inspected, so do not report OK.
         echo "  ${YELLOW}${BOLD}AUCUN CHECK N A TOURNE${NC} - tout etait ignore ou exclu (--list pour savoir pourquoi)"
     elif [ "$NB_KO" -eq 0 ]; then
         echo "  ${GREEN}${BOLD}BANC OK${NC} - ${NB_OK} check(s) passes, aucun en echec"
@@ -477,8 +466,7 @@ bilan() {
 bilan
 journal "$(bilan)"
 
-# Meme convention que global_check.sh / ss7_check.sh : le code de retour est le
-# nombre d'echecs. Plafonne a 125 - au-dela, un code de sortie shell change de
-# sens (126, 127 et 128+n sont reserves).
+# Same convention as global_check.sh / ss7_check.sh: exit code = number of
+# failures, capped at 125 (126, 127 and 128+n have special meanings).
 [ "$NB_KO" -gt 125 ] && NB_KO=125
 exit "$NB_KO"

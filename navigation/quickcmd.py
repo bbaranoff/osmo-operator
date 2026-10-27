@@ -1,6 +1,6 @@
-# quickcmd.py - les commandes VTY qui servent tous les jours, par demon.
-# Elles alimentent le menu "commandes rapides" de la console : on choisit a la
-# fleche, la sortie s'affiche, et on reste dans le schema.
+# quickcmd.py - the everyday VTY commands, per daemon.
+# They feed the console's "quick commands" menu: pick one with the arrow keys,
+# the output is shown, and the diagram stays on screen.
 
 QUICK = {
     "OsmoSTP": [

@@ -1,41 +1,40 @@
 #!/bin/bash
 # =============================================================================
-# osmo-sim.sh - LA SIM DU BANC DANS UN LECTEUR PC/SC (HID Omnikey).
+# osmo-sim.sh - THE BENCH SIM IN A PC/SC READER (HID Omnikey).
 #
-# La carte (sysmoISIM-SJA5 de sysmocom, dans un OMNIKEY 6121) est lue et
-# programmee avec pySim (Osmocom, venv /opt/GSM/pysim-venv), puis SERVIE au
-# mobile osmocom-bb par le serveur SAP de softSIM en mode pcsc : c est ce que
-# fait start-native.sh --sap quand une carte est dans le lecteur.
+# The card (sysmocom sysmoISIM-SJA5, in an OMNIKEY 6121) is read and
+# programmed with pySim (Osmocom, venv /opt/GSM/pysim-venv), then SERVED to
+# the osmocom-bb mobile by the softSIM SAP server in pcsc mode: this is what
+# start-native.sh --sap does when a card is in the reader.
 #
-#   tools/osmo-sim.sh lecteur                 les lecteurs PC/SC, l ATR, le type de carte
-#   tools/osmo-sim.sh lire                    tout ce que la carte dit (pySim-read)
-#   tools/osmo-sim.sh programmer [options]    ecrit l identite du banc sur la carte
-#   tools/osmo-sim.sh verifier  [options]     la carte porte-t-elle l identite du banc,
-#                                             le HLR la connait-il : prete pour --sap ?
-#   tools/osmo-sim.sh hlr [--creer] [options] l abonne de la carte dans le HLR
-#   tools/osmo-sim.sh sap [--socket S]        sert la carte par SAP (premier plan),
-#                                             ce que start-native.sh --sap fait tout seul
-#   tools/osmo-sim.sh shell                   pySim-shell sur la carte (ADM1 si connue)
+#   tools/osmo-sim.sh lecteur                 the PC/SC readers, the ATR, the card type
+#   tools/osmo-sim.sh lire                    everything the card says (pySim-read)
+#   tools/osmo-sim.sh programmer [options]    writes the bench identity on the card
+#   tools/osmo-sim.sh verifier  [options]     does the card carry the bench identity,
+#                                             does the HLR know it: ready for --sap?
+#   tools/osmo-sim.sh hlr [--creer] [options] the card subscriber in the HLR
+#   tools/osmo-sim.sh sap [--socket S]        serves the card over SAP (foreground),
+#                                             what start-native.sh --sap does by itself
+#   tools/osmo-sim.sh shell                   pySim-shell on the card (ADM1 if known)
 #
-# L IDENTITE DU BANC (meme plan que qosmo/run_modules/21-abonnes-hlr.sh et
-# start-native.sh, section "ms_imsi / ms_ki") :
-#   IMSI   = MCC MNC <operateur sur 4> <MS sur 6>        001 01 0001 000001
-#   Ki     = 00112233445566778899aabbccdd <MS> <operateur>   ...dd 01 01
-#   MSISDN = noeud*100000 + operateur*100 + MS                 100101
-#   algo   = COMP128v1 (osmo-hlr : aud2g comp128v1)
-# Options : --ms N  --op N  --mcc 001  --mnc 01  --imsi I  --ki K  --msisdn M
-#           --lecteur N (index PC/SC, defaut 0)  --dry-run  --oui (pas de question)
+# THE BENCH IDENTITY (same plan as qosmo/run_modules/21-abonnes-hlr.sh and
+# start-native.sh, section "ms_imsi / ms_ki"):
+#   IMSI   = MCC MNC <operator on 4> <MS on 6>           001 01 0001 000001
+#   Ki     = 00112233445566778899aabbccdd <MS> <operator>   ...dd 01 01
+#   MSISDN = node*100000 + operator*100 + MS                  100101
+#   algo   = COMP128v1 (osmo-hlr: aud2g comp128v1)
+# Options: --ms N  --op N  --mcc 001  --mnc 01  --imsi I  --ki K  --msisdn M
+#          --lecteur N (PC/SC index, default 0)  --dry-run  --oui (no question)
 #
-# L ECRITURE passe par l outil de sysmocom, sysmo-usim-tool (sysmo-isim-tool.sja5.py,
-# SYSMO_TOOL=/opt/GSM/sysmo-usim-tool) : IMSI, Ki, algorithme COMP128v1, OPc. Sans
-# lui (ou OSMO_SIM_PYSIM_PROG=1) : pySim-prog puis pySim-shell pour l algorithme.
+# WRITING goes through the sysmocom tool, sysmo-usim-tool (sysmo-isim-tool.sja5.py,
+# SYSMO_TOOL=/opt/GSM/sysmo-usim-tool): IMSI, Ki, COMP128v1 algorithm, OPc. Without
+# it (or OSMO_SIM_PYSIM_PROG=1): pySim-prog then pySim-shell for the algorithm.
 #
-# LA CLE ADM1 : ecrire sur une sysmoISIM demande la cle ADM1 de LA carte (8
-# chiffres, fournie par sysmocom avec la carte : fichier CSV / courriel de la
-# commande). Trois essais faux BLOQUENT la carte pour de bon : le script ne
-# devine jamais. Sources, dans l ordre : --adm1 K, OSMO_SIM_ADM1, le fichier
-# /etc/osmocom/sim-adm1 (une ligne, ou "ICCID clé" par ligne pour plusieurs
-# cartes), ~/.config/osmo/sim-adm1.
+# THE ADM1 KEY: writing on a sysmoISIM requires the ADM1 key of THE card (8
+# digits, provided by sysmocom with the card: CSV file / order e-mail). Three
+# wrong attempts BLOCK the card for good: the script never guesses. Sources,
+# in order: --adm1 K, OSMO_SIM_ADM1, the file /etc/osmocom/sim-adm1 (one line,
+# or "ICCID key" per line for several cards), ~/.config/osmo/sim-adm1.
 # =============================================================================
 set -u
 
@@ -46,8 +45,9 @@ SAP_SOCK="${SAP_SOCK:-/tmp/osmocom_sap}"
 HLR_VTY_PORT="${HLR_VTY_PORT:-4258}"
 HLR_DB="${HLR_DB:-/var/lib/osmocom/hlr.db}"
 OSMOCOM_CFG="${OSMOCOM_CFG:-/etc/osmocom}"
-# Le python qui a pyscard : celui du venv pySim (le profil de root met /root/.env,
-# le venv du pont, en tete du PATH, et il n a pas pyscard), sinon celui du systeme.
+# The python that has pyscard: the one of the pySim venv (root's profile puts
+# /root/.env, the bridge venv, first in the PATH, and it has no pyscard), else the
+# system one.
 PY="$PYSIM_VENV/bin/python3"; [ -x "$PY" ] || PY=/usr/bin/python3
 
 if [ -t 1 ]; then
@@ -62,7 +62,7 @@ die()  { ko "$*"; exit 1; }
 
 usage() { sed -n '2,/^# ====*$/p' "$0" | sed -n '2,$p' | sed 's/^# \{0,1\}//' | sed '$d'; }
 
-# ── le plan d identite ───────────────────────────────────────────────────────
+# ── the identity plan ────────────────────────────────────────────────────────
 MS=1 OP=1 MCC="" MNC="" IMSI="" KI="" MSISDN="" READER="${OSMO_SIM_READER:-0}"
 DRY=0 OUI=0 ADM1="${OSMO_SIM_ADM1:-}" CREER=0 SOCK="$SAP_SOCK" VERB="${SAP_VERBOSITY:-3}"
 
@@ -86,7 +86,7 @@ plan_imsi()   { [ -n "$IMSI" ] && printf '%s' "$IMSI" || printf '%s%s%04d%06d' "
 plan_ki()     { [ -n "$KI" ] && printf '%s' "$KI" || printf '00112233445566778899aabbccdd%02x%02x' "$MS" "$OP"; }
 plan_msisdn() { [ -n "$MSISDN" ] && printf '%s' "$MSISDN" || printf '%d' $(( $(plan_node) * 100000 + OP * 100 + MS )); }
 
-# ── les outils ───────────────────────────────────────────────────────────────
+# ── the tools ────────────────────────────────────────────────────────────────
 pysim() {  # pysim read|prog|shell args...
     local t="$1"; shift
     local bin="$PYSIM_VENV/bin/pySim-$t.py"
@@ -98,7 +98,7 @@ pcscd_pret() {
         systemctl start pcscd.socket >/dev/null 2>&1 || true
     fi
 }
-# Les lecteurs, et s ils portent une carte : "N Yes|No nom"
+# The readers, and whether they hold a card: "N Yes|No name"
 lecteurs() {
     "$PY" - <<'PYSC' 2>/dev/null
 from smartcard.System import readers
@@ -118,7 +118,7 @@ exiger_carte() {
     [ -n "$(lecteurs)" ] || die "aucun lecteur PC/SC (pcscd actif ? Omnikey branche ? libccid ?)"
     carte_presente || die "pas de carte dans le lecteur $READER :$(lecteurs | sed 's/^/\n    /')"
 }
-# L ICCID et l IMSI de la carte (pySim-read), "iccid imsi"
+# The ICCID and the IMSI of the card (pySim-read), "iccid imsi"
 carte_identite() {
     local out
     out="$(timeout 90 "$PYSIM_VENV/bin/pySim-read.py" -p "$READER" 2>/dev/null)" || return 1
@@ -128,7 +128,7 @@ carte_identite() {
         "$(printf '%s\n' "$out" | sed -n 's/^Autodetected card type: *//p' | head -1 | tr ' ' '_')"
 }
 
-# La cle ADM1 : --adm1, OSMO_SIM_ADM1, /etc/osmocom/sim-adm1, ~/.config/osmo/sim-adm1
+# The ADM1 key: --adm1, OSMO_SIM_ADM1, /etc/osmocom/sim-adm1, ~/.config/osmo/sim-adm1
 adm1_trouver() {  # $1 = ICCID de la carte
     local f k
     [ -n "$ADM1" ] && { printf '%s' "$ADM1"; return 0; }
@@ -151,7 +151,7 @@ hlr_connait() {  # $1 = IMSI
     command -v socat >/dev/null 2>&1 && vty "subscriber imsi $1 show" | grep -q "IMSI: $1"
 }
 
-# ── les commandes ────────────────────────────────────────────────────────────
+# ── the commands ─────────────────────────────────────────────────────────────
 cmd_lecteur() {
     pcscd_pret
     local l; l="$(lecteurs)"
@@ -178,13 +178,14 @@ cmd_shell() {
     if [ -n "$k" ]; then pysim shell -a "$k" "$@"; else pysim shell "$@"; fi
 }
 
-# pySim-prog (identite, PLMN, SMSP, Ki) puis pySim-shell : l algorithme 2G de la
-# sysmoISIM. pySim-prog n ecrit que le Ki (octet 1..16 de EF.SIM_AUTH_KEY), pas
-# l octet de configuration : la carte resterait en Milenage et le HLR (COMP128v1)
-# repondrait « authentication failed ». Octet 0 : bits 7-6 libres, bit 5 SRES
-# derivation 1, bit 4 OPc, bits 3-0 algorithme (1 = COMP128v1, 4 = Milenage) :
-# 0x11. Ecrit dans DF.SYSTEM/EF.SIM_AUTH_KEY (6f20) et ADF.USIM/EF.USIM_AUTH_KEY_2G
-# (af22), les deux fichiers 2G de la carte. OP/OPc : 16 octets a zero.
+# pySim-prog (identity, PLMN, SMSP, Ki) then pySim-shell: the 2G algorithm of
+# the sysmoISIM. pySim-prog only writes the Ki (bytes 1..16 of EF.SIM_AUTH_KEY),
+# not the configuration byte: the card would stay in Milenage and the HLR
+# (COMP128v1) would answer "authentication failed". Byte 0: bits 7-6 free,
+# bit 5 SRES derivation 1, bit 4 OPc, bits 3-0 algorithm (1 = COMP128v1, 4 =
+# Milenage): 0x11. Written in DF.SYSTEM/EF.SIM_AUTH_KEY (6f20) and
+# ADF.USIM/EF.USIM_AUTH_KEY_2G (af22), the two 2G files of the card. OP/OPc:
+# 16 zero bytes.
 cmd_programmer() {
     exiger_carte
     local imsi ki msisdn mcc mnc iccid cur_imsi type
@@ -206,10 +207,10 @@ cmd_programmer() {
     fi
     local sysmo="${SYSMO_TOOL:-/opt/GSM/sysmo-usim-tool}/sysmo-isim-tool.sja5.py"
     if [ "$type" = sysmoISIM-SJA5 ] && [ -f "$sysmo" ] && [ "${OSMO_SIM_PYSIM_PROG:-0}" != 1 ]; then
-        # 1. L outil de sysmocom (sysmo-usim-tool, sysmo-isim-tool.sja5.py) : IMSI,
-        # longueur du MNC, Ki (2G/3G/4G5G), algorithme 2G COMP128v1 (3G Milenage),
-        # OPc. C est lui qui sait poser l algorithme ; pySim-prog ne le fait pas.
-        # [2026-10-14] Verifie sur la carte : « 2g: 1=COMP128v1 », Ki relu.
+        # 1. The sysmocom tool (sysmo-usim-tool, sysmo-isim-tool.sja5.py): IMSI,
+        # MNC length, Ki (2G/3G/4G5G), 2G algorithm COMP128v1 (3G Milenage),
+        # OPc. It is the one that knows how to set the algorithm; pySim-prog
+        # does not.
         printf '%s1. sysmo-isim-tool.sja5 (sysmocom)%s\n' "$C_B" "$C_Z"
         if [ "$DRY" = 1 ]; then
             printf '    %s -a <ADM1> -J %s -N %s -K %s -T COMP128v1:MILENAGE -C %s\n' "$(basename "$sysmo")" "$imsi" "${#mnc}" "$ki" "00000000000000000000000000000000"
@@ -222,15 +223,15 @@ cmd_programmer() {
             die "sysmo-isim-tool a echoue (ADM1 refusee ? carte retiree ?)"
         fi
         printf '%s\n' "$out" | grep -E 'programmed|algorithm|2g:|3g:|IMSI|Error|rror' | sed 's/^/    /'
-        # 2. relire l algorithme et le Ki avec le meme outil
+        # 2. read back the algorithm and the Ki with the same tool
         printf '%s2. relecture (algorithme, Ki)%s\n' "$C_B" "$C_Z"
         out="$("$PY" "$sysmo" -a "$adm" -t -k 2>&1)"
         printf '%s\n' "$out" | grep -q '2g: 1=COMP128v1' || { printf '%s\n' "$out" | tail -8 | sed 's/^/    /' >&2; die "COMP128v1 non relu sur la carte"; }
         printf '%s\n' "$out" | grep -q "2g: Key: $ki" || { printf '%s\n' "$out" | tail -8 | sed 's/^/    /' >&2; die "Ki non relu sur la carte"; }
         ok "COMP128v1 et Ki relus sur la carte (2g)"
     else
-        # Sans l outil sysmocom (ou OSMO_SIM_PYSIM_PROG=1) : pySim-prog puis pySim-shell.
-        # 1. pySim-prog : ICCID conserve, IMSI, PLMN (HPLMN, PLMNsel), SPN, SMSP, MSISDN, Ki
+        # Without the sysmocom tool (or OSMO_SIM_PYSIM_PROG=1): pySim-prog then pySim-shell.
+        # 1. pySim-prog: ICCID kept, IMSI, PLMN (HPLMN, PLMNsel), SPN, SMSP, MSISDN, Ki
         local args=(-t sysmoISIM-SJA5 -s "$iccid" -i "$imsi" -k "$ki" -o 00000000000000000000000000000000
                     -x "$mcc" -y "$mnc" --mnclen "${#mnc}" -n "Osmo $OP" --msisdn "$msisdn" --acc 0001)
         [ "$type" = sysmoISIM-SJA5 ] || args=("${args[@]:2}")   # autre carte : laisser pySim la reconnaitre
@@ -244,9 +245,9 @@ cmd_programmer() {
         fi
         printf '%s\n' "$out" | grep -E '^( > |Programming|Dry Run|Autodetected)' | sed 's/^/    /'
         [ "$DRY" = 1 ] && { ok "dry-run : rien n a ete ecrit"; return 0; }
-        # 2. pySim-shell : l algorithme 2G = COMP128v1 dans les deux fichiers d authentification.
-        # verify_adm recoit la cle : sans argument il la cherche dans un CSV par ICCID
-        # (« Unable to find card key data »), -a ne suffit pas.
+        # 2. pySim-shell: the 2G algorithm = COMP128v1 in both authentication files.
+        # verify_adm receives the key: without argument it looks for it in a CSV by
+        # ICCID ("Unable to find card key data"), -a is not enough.
         printf '%s2. pySim-shell : algorithme COMP128v1%s\n' "$C_B" "$C_Z"
         local script; script="$(mktemp)"
         cat >"$script" <<EOF
@@ -271,7 +272,7 @@ EOF
         [ "$n" -ge 1 ] || { printf '%s\n' "$out" | tail -8 | sed 's/^/    /' >&2; die "COMP128v1 non relu sur la carte"; }
         ok "COMP128v1 relu dans $n fichier(s) d authentification"
     fi
-    # 3. relire
+    # 3. read back
     read -r iccid cur_imsi type <<<"$(carte_identite)"
     [ "$cur_imsi" = "$imsi" ] || die "relecture : IMSI $cur_imsi au lieu de $imsi"
     ok "carte programmee : IMSI $imsi, Ki ${ki:0:8}..., COMP128v1, MSISDN $msisdn"
@@ -334,7 +335,7 @@ cmd_sap() {
     cd "$SOFTSIM_DIR/src" && exec ruby -r"$shim" demo_server.rb --type pcsc --socket unix --unix "$SOCK" --verbosity "$VERB"
 }
 
-# ── ligne de commande ────────────────────────────────────────────────────────
+# ── command line ─────────────────────────────────────────────────────────────
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 REST=()
 while [ $# -gt 0 ]; do

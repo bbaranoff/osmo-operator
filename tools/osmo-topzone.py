@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
-# osmo-topzone.py - LA ZONE HAUTE « LAB GSM », vivante et cliquable.
+# osmo-topzone.py - THE TOP "LAB GSM" ZONE, live and clickable.
 #
-# Remplace la carte LAB GSM autrefois CUITE dans le fond d ecran
-# (tools/wallpaper-render.py, desormais lance avec OSMO_LIVE_BANNER=1 pour ne
-# plus la dessiner). C est une fenetre de type BUREAU (comme osmo-panel.py) posee
-# EXACTEMENT sur la boite de la carte (320,60 .. 1430,560 en 1920x1080), qui
-# affiche configs/conky/labgsm.html via WebKit.
+# Replaces the LAB GSM card formerly BAKED into the wallpaper
+# (tools/wallpaper-render.py, run with OSMO_LIVE_BANNER=1 so that it does not
+# draw it). It is a window of DESKTOP type (like osmo-panel.py) placed EXACTLY
+# on the box of the card (320,60 .. 1430,560 in 1920x1080), which displays
+# configs/conky/labgsm.html through WebKit.
 #
-# DEUX ROLES :
-#   1. AU REPOS (rien d heberge) : la banniere anime ses 8 timeslots. Elle lit
-#      $OSMO_FFT_DIR/timeslots.json (ecrit par tools/osmo-ts-probe.py : conf
-#      osmo-bsc + VTY) et fait CLIGNOTER EN ORANGE tout timeslot qui porte des
-#      bursts - un TCH ne clignote que s il y a de la voix. ARFCN / IMSI / A5
-#      sont les valeurs LIVE. Le chronogramme du burst scintille avec l activite.
-#   2. HEBERGEMENT : quand osmo-launcher.py envoie « en haut » une appli, il
-#      ecrit "HOST <winid>" dans $XDG_RUNTIME_DIR/osmo-topzone.cmd. On fait alors
-#      le FONDU de la banniere et on cale la fenetre de l appli sur la zone. Une
-#      petite barre au-dessus (toujours devant) porte une CROIX de fermeture et
-#      un bascule PLEIN ECRAN / RECTANGLE HAUT.
+# TWO ROLES:
+#   1. IDLE (nothing hosted): the banner animates its 8 timeslots. It reads
+#      $OSMO_FFT_DIR/timeslots.json (written by tools/osmo-ts-probe.py: osmo-bsc
+#      config + VTY) and makes any timeslot carrying bursts BLINK IN ORANGE -
+#      a TCH only blinks when there is voice. ARFCN / IMSI / A5 are the LIVE
+#      values. The burst chronogram flickers with the activity.
+#   2. HOSTING: when osmo-launcher.py sends an application "to the top", it
+#      writes "HOST <winid>" in $XDG_RUNTIME_DIR/osmo-topzone.cmd. The banner
+#      is then FADED and the application window is placed on the zone. A small
+#      bar above (always in front) carries a close CROSS and a FULL SCREEN /
+#      TOP RECTANGLE toggle.
 import json
 import os
 import subprocess
 import sys
 import time
 
-# [2026-09-06] MEME PIEGE QUE osmo-panel.py / osmo-dino.py (voir leurs notes) :
-# sous Wayland, GTK3 ignore move() et le type BUREAU ; une fois passe par
-# XWayland, « toujours dessous » fait avaler les clics par la couche de bureau
-# de GNOME Shell. Backend X11, fenetre normale.
+# SAME CONSTRAINT AS osmo-panel.py / osmo-dino.py (see their notes): under
+# Wayland, GTK3 ignores move() and the DESKTOP type; once on XWayland,
+# "always below" makes the GNOME Shell desktop layer swallow the clicks.
+# X11 backend, normal window.
 X11_FORCE = os.environ.get("XDG_SESSION_TYPE") == "wayland" and bool(os.environ.get("DISPLAY"))
 if X11_FORCE:
     os.environ["GDK_BACKEND"] = "x11"
@@ -39,51 +39,44 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gdk, GLib, Gtk, WebKit2  # noqa: E402
 
-# [2026-09-06] LA BANNIERE, ELLE, RESTE AU FOND. Contrairement a l encart et au
-# lanceur, on la VEUT collee au bureau, derriere tout : c est un decor, pas un
-# panneau de commande. Sur XWayland ca coute les clics (GNOME Shell range les
-# fenetres de type BUREAU sous sa couche d icones, qui les avale) - donc
-# l hebergement de fenetre dans la zone haute ne repond plus a la souris. C est
-# le choix assume ici ; OSMO_TOPZONE_CLIQUABLE=1 pour reprendre une fenetre
-# normale (devant, mais cliquable) si on a besoin de s en servir.
+# THE BANNER STAYS AT THE BACK. Unlike the panel and the launcher, it is
+# WANTED stuck to the desktop, behind everything: it is a decoration, not a
+# control panel. On XWayland this costs the clicks (GNOME Shell puts DESKTOP
+# type windows under its icons layer, which swallows them) - so window
+# hosting in the top zone does not respond to the mouse. That is the choice
+# made here; OSMO_TOPZONE_CLIQUABLE=1 to get a normal window back (in front,
+# but clickable) when it is needed.
 _CLIQUABLE = os.environ.get("OSMO_TOPZONE_CLIQUABLE") == "1"
 TYPE_HINT = Gdk.WindowTypeHint.NORMAL if _CLIQUABLE else Gdk.WindowTypeHint.DESKTOP
 KEEP_BELOW = not _CLIQUABLE
 
 FW, FH = 1920, 1080
-# [2026-09-06] ON ENLEVE LE VIDE DU BAS, PAS LE CONTENU.
-# La boite (1110x500, soit 1644x740 sur l ecran du banc) etait bien plus haute
-# que ce que la carte remplit : tout le bas etait du fond vide qui mangeait le
-# bureau. Deux fausses pistes, ecartees :
-#   - rapetisser la boite : la page est ecrite en unites vh/vw (#card fait
-#     height:100%, les titres 8.5vh, les etiquettes 1.3vh...), donc raccourcir
-#     la fenetre RAPETISSE tout l interieur - ce n est pas ce qu on veut ;
-#   - zoomer la vue a 0.5 : meme resultat, l interieur maigrit.
-# Ce qu on fait : la page est rendue A SA TAILLE D ORIGINE (les vh gardent la
-# hauteur de reference ci-dessous, donc l interieur est identique a avant), le
-# cadre s arrete apres son contenu (CSS injecte : #card passe en height:auto),
-# et la fenetre se cale sur la hauteur reellement occupee, mesuree DANS la page
-# une fois chargee. Plus de vide, et pas un pixel de contenu perdu.
-TOP_BOX = (320, 60, 1110, 500)          # carte LAB GSM (x,y,w,h) - le RENDU
-# La feuille qui coupe le vide. Attention au piege : #card est en
-# « position:absolute; inset:0 » - ce n est pas une hauteur qui l etire mais son
-# bottom:0. Lui poser height:auto ne change donc RIEN tant qu on ne relache pas
-# le bas ; il faut les deux.
+# THE EMPTY BOTTOM IS REMOVED, NOT THE CONTENT.
+# The box (1110x500, i.e. 1644x740 on the bench screen) is much taller than
+# what the card fills; the page is written in vh/vw units (#card is
+# height:100%, titles 8.5vh, labels 1.3vh...), so shortening the window or
+# zooming the view to 0.5 would SHRINK the whole content.
+# What is done: the page is rendered AT ITS ORIGINAL SIZE (the vh keep the
+# reference height below, so the content is unchanged), the frame stops after
+# its content (injected CSS: #card becomes height:auto), and the window is
+# fitted to the height really occupied, measured IN the page once loaded.
+# No empty space, and not one pixel of content lost.
+TOP_BOX = (320, 60, 1110, 500)          # LAB GSM card (x,y,w,h) - the RENDERING
+# The stylesheet that cuts the empty space. Note: #card is in
+# "position:absolute; inset:0" - it is not a height that stretches it but its
+# bottom:0. Setting height:auto changes NOTHING as long as the bottom is not
+# released; both are needed.
 INJECT_CSS = "#card{bottom:auto!important;height:auto!important}"
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 HTML = os.environ.get("OSMO_LABGSM_HTML", os.path.join(REPO, "configs/conky/labgsm.html"))
 FFT_RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 
 
-# ── OU LIRE : LA MEME REGLE QUE LA SONDE, ET RELUE A CHAQUE TOUR ────────────
-# [2026-09-10] Ce chemin etait fige au demarrage, et sa regle n etait pas tout
-# a fait celle de l ecrivain (tools/osmo-ts-probe.py, run_dir()) : la sonde se
-# repliait sur $XDG_RUNTIME_DIR, jamais regarde ici. Deux regles pour un seul
-# fichier, et la banniere restait en demonstration devant un banc qui portait
-# des appels, sans une ligne d erreur nulle part. C est la MEME regle des deux
-# cotes, mot pour mot : le premier repertoire qui existe et ou l on peut
-# ecrire, entre $OSMO_FFT_DIR et /tmp - relue a chaque lecture, parce que
-# /run/osmo-fft est un RuntimeDirectory qui va et vient avec son service.
+# ── WHERE TO READ: THE SAME RULE AS THE PROBE, RE-EVALUATED ON EVERY TURN ───
+# The SAME rule on both sides (tools/osmo-ts-probe.py, run_dir()), word for
+# word: the first directory that exists and is writable, among $OSMO_FFT_DIR
+# and /tmp - re-evaluated on every read, because /run/osmo-fft is a
+# RuntimeDirectory that comes and goes with its service.
 def ts_json():
     for d in (FFT_RUN, "/tmp"):
         if os.path.isdir(d) and os.access(d, os.W_OK):
@@ -91,10 +84,10 @@ def ts_json():
     return "/tmp/timeslots.json"
 RUN = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 CMD_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-topzone.cmd")
-# [2026-10-12] L ETAT DU BANC, ECRIT PAR osmo-panel.py ("1" : une 2G ou une 4G
-# tourne, "0" : rien). Banc a l arret, la banniere s efface et la zone ne porte
-# que le titre « Telecom Operator » ; au lancement de la 2G, le titre fond vers
-# la banniere (labgsm.html, osmoBanc). Fichier absent : au repos.
+# THE BENCH STATE, WRITTEN BY osmo-panel.py ("1": a 2G or a 4G is running,
+# "0": nothing). Bench stopped, the banner fades and the zone only carries the
+# "Telecom Operator" title; when the 2G starts, the title fades into the
+# banner (labgsm.html, osmoBanc). File absent: idle.
 ETAT_FILE = os.path.join(RUN if os.path.isdir(RUN) else "/tmp", "osmo-banc.etat")
 
 
@@ -147,7 +140,7 @@ def _close_win(winid):
 
 
 class Strip(Gtk.Window):
-    """Barre de controle TOUJOURS DEVANT (croix + bascule plein ecran)."""
+    """Control bar ALWAYS IN FRONT (cross + full screen toggle)."""
     def __init__(self, on_close, on_toggle):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.set_decorated(False)
@@ -187,8 +180,8 @@ class TopZone(Gtk.Window):
         super().__init__(title="osmo-topzone")
         x, y, w, h = box_to_screen(TOP_BOX)
         self.box_geo = (x, y, w, h)
-        self.hosted = None       # winid de l appli hebergee
-        self.fs = False          # mode plein ecran de l appli hebergee
+        self.hosted = None       # winid of the hosted application
+        self.fs = False          # full screen mode of the hosted application
         self.set_type_hint(TYPE_HINT)
         self.set_decorated(False)
         self.set_resizable(False)
@@ -211,8 +204,8 @@ class TopZone(Gtk.Window):
             INJECT_CSS, WebKit2.UserContentInjectedFrames.ALL_FRAMES,
             WebKit2.UserStyleLevel.USER, None, None))
         self.view = WebKit2.WebView.new_with_user_content_manager(ucm)
-        # Une fois la page chargee, on lui demande la hauteur que la carte
-        # occupe VRAIMENT et on rabat la fenetre dessus.
+        # Once the page is loaded, it is asked for the height the card REALLY
+        # occupies and the window is fitted to it.
         self.view.connect("load-changed", self.on_load)
         self.view.set_background_color(Gdk.RGBA(0, 0, 0, 0))
         self.add(self.view)
@@ -225,26 +218,23 @@ class TopZone(Gtk.Window):
 
         self._cmd_mtime = None
         self._etat_mtime = None
-        self._etat = False           # ce que la page montre : False = le titre
+        self._etat = False           # what the page shows: False = the title
         self.show_all()
         self.move(x, y)
-        # [2026-09-06] LE TEMPS REEL SE PERD AUSSI ICI. On poussait l etat une
-        # fois par seconde, en aveugle : ajoute a la seconde de la sonde, un
-        # timeslot pouvait mettre deux secondes a clignoter. On regarde
-        # maintenant le fichier cinq fois par seconde et on ne pousse QUE s il
-        # a change - plus reactif, et moins de JS inutile qu avant.
+        # The file is looked at five times per second and the state is pushed
+        # ONLY if it changed: reactive, and no useless JS.
         self._ts_mtime = None
         GLib.timeout_add(200, self.push_state)
         GLib.timeout_add(500, self.poll_cmd)
 
-    # ── rabattre la fenetre sur la hauteur utile ────────────────────────────
+    # ── fit the window to the useful height ─────────────────────────────────
     def on_load(self, _view, event):
         if event != WebKit2.LoadEvent.FINISHED:
             return
-        # l etat du banc tel qu il est, SANS fondu (la page part « au repos »)
+        # the bench state as it is, WITHOUT fade (the page starts "idle")
         self._banc(banc_etat(), instant=True)
-        # Un cheveu de marge sous le cadre, sinon la bordure du bas rase le
-        # bord de la fenetre.
+        # A hair of margin under the frame, otherwise the bottom border grazes
+        # the edge of the window.
         self.view.run_javascript(
             "(function(){var c=document.getElementById('card')||document.body;"
             "return Math.ceil(c.getBoundingClientRect().bottom)+2;})()",
@@ -253,12 +243,12 @@ class TopZone(Gtk.Window):
     def on_height(self, view, res, _data):
         try:
             val = view.run_javascript_finish(res).get_js_value().to_double()
-        except Exception as e:                      # page remplacee, JS coupe...
+        except Exception as e:                      # page replaced, JS cut...
             print("[topzone] hauteur non mesuree : %s" % e, file=sys.stderr, flush=True)
             return
         h = int(val)
         x, y, w, h_full = self.box_geo
-        if not (0 < h < h_full):                    # mesure absurde : on garde tout
+        if not (0 < h < h_full):                    # absurd measurement: everything is kept
             print("[topzone] hauteur mesuree %d ignoree (fenetre %d)" % (h, h_full),
                   file=sys.stderr, flush=True)
             return
@@ -268,7 +258,7 @@ class TopZone(Gtk.Window):
         self.resize(w, h)
         self.move(x, y)
 
-    # ── au repos : pousser l etat des timeslots dans la page ─────────────────
+    # ── idle: push the timeslot state into the page ──────────────────────────
     def push_state(self):
         chemin = ts_json()
         try:
@@ -276,7 +266,7 @@ class TopZone(Gtk.Window):
         except OSError:
             mt = None
         if mt is not None and mt == self._ts_mtime:
-            return True                      # rien de neuf depuis le dernier tour
+            return True                      # nothing new since the last turn
         self._ts_mtime = mt
         try:
             with open(chemin) as f:
@@ -298,7 +288,7 @@ class TopZone(Gtk.Window):
         except Exception:
             pass
 
-    # ── titre « Telecom Operator » (repos) <-> banniere (banc debout) ──────────
+    # ── "Telecom Operator" title (idle) <-> banner (bench up) ──────────────────
     def _banc(self, on, instant=False):
         self._etat = on
         try:
@@ -321,7 +311,7 @@ class TopZone(Gtk.Window):
             print("[topzone] %s" % ("un banc tourne : banniere" if on else "banc a l arret : titre"), flush=True)
             self._banc(on)
 
-    # ── hebergement : lire le canal osmo-launcher -> osmo-topzone ────────────
+    # ── hosting: read the osmo-launcher -> osmo-topzone channel ──────────────
     def poll_cmd(self):
         self.poll_etat()
         try:
@@ -349,7 +339,7 @@ class TopZone(Gtk.Window):
             _fullscreen(winid, True)
         else:
             _place(winid, self.box_geo)
-        # la barre de controle, au coin haut-droit de la zone
+        # the control bar, in the top-right corner of the zone
         self.strip.b_mode.set_label("▭" if full else "⛶")
         self.strip.show_at(x + w - 74, max(0, y - 2))
 

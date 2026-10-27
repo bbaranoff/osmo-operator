@@ -1,46 +1,38 @@
 #!/bin/bash
-# iso_modules/83-espace-ram.sh - fstab, tmp, journal, logrotate, tcpdump, purge, ssh, clavier
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/83-espace-ram.sh - fstab, /tmp, journal, logrotate, tcpdump wrapper, purge, ssh, keyboard
+# Sourced by build-iso.sh in numeric order (same shell, variables and functions);
+# not meant to run on its own. A top-level `return` means "nothing to do here"
+# (this is how --arm skips a step).
 
-# ── Espace writable du live : /dev/shm + /tmp, en POURCENTAGE de la RAM ─────
-# Le live boote en 'toram' → racine = overlay tmpfs (RAM). Les gros writers de la
-# stack sont les cfiles I/Q dans /dev/shm (FFT/record, plusieurs centaines de Mo)
-# et /tmp. systemd applique ces entrees au boot.
+# ── Live writable space: /dev/shm and /tmp, as a percentage of RAM ─────────
+# The live system boots 'toram': the root is a tmpfs overlay (RAM). The big
+# writers are the I/Q cfiles in /dev/shm (FFT/record, hundreds of MB) and /tmp.
 #
-# POURQUOI PLUS 2 Go EN DUR
-# Ces caps ne reservent rien, mais ils AUTORISENT : 2 + 2 Go, sur une machine
-# ou le squashfs occupe deja ~2,5 Go de RAM et ou la racine elle-meme est un
-# tmpfs, c'est plus que ce dont dispose une VM de 8 Go. Deux writers un peu
-# gourmands suffisaient alors a saturer la memoire - et le symptome n'est pas
-# "tmpfs plein" mais une machine exsangue : "No space left on device" sur la
-# racine, puis un sshd qui n'arrive meme plus a envoyer sa banniere.
+# Percentages, not fixed sizes: the squashfs already takes ~2.5 GB of RAM and
+# the root is itself a tmpfs; 20 % + 15 % always leave two thirds of RAM to
+# the squashfs, root and processes, whatever the machine size.
 #
-# En pourcentage, le plafond suit la taille de la machine : 20 % + 15 % laissent
-# toujours les deux tiers de la RAM au squashfs, a la racine et aux processus.
-# Une VM a 16 Go y gagne autant qu'une VM a 8 Go cesse de se noyer.
-# Idempotent + anti-doublon : on purge d'abord toute entree tmpfs /tmp ou /dev/shm
-# preexistante (y compris la variante 'nosuid,nodev' sans size=) et l'ancien
-# commentaire de bloc, PUIS on (re)ecrit le bloc canonique size en pourcentage. Garantit
-# exactement une entree /tmp et une entree /dev/shm dans le fstab du squashfs.
+# Idempotent: first remove any existing tmpfs /tmp or /dev/shm entry
+# (including the 'nosuid,nodev' variant without size=) and the old block
+# comment, then write the canonical block, so the squashfs fstab has exactly
+# one /dev/shm entry.
 touch "$ROOTFS/etc/fstab"
 sed -i -E \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]/d' \
     -e '/^[[:space:]]*tmpfs[[:space:]]+\/dev\/shm[[:space:]]/d' \
     -e '/^# osmo-operator live - espace writable/d' \
     "$ROOTFS/etc/fstab"
-# /dev/shm : sizing via fstab (sans risque de doublon generateur).
+# /dev/shm: sized via fstab (no generator duplicate risk).
 cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
 # osmo-operator live - espace writable (cfiles I/Q FFT)
 tmpfs   /dev/shm   tmpfs   defaults,nosuid,nodev,size=20%   0 0
 FSTAB
-# --arm : la racine et la partition firmware sont de VRAIES partitions de la
-# carte SD (92-rpi-image les nomme ainsi). Le live n en a pas : live-boot lui
-# donne sa racine. Etiquettes, pas UUID : l image est fabriquee sans monter.
+# --arm: root and firmware are real SD card partitions (named by
+# 92-rpi-image). The live image has none: live-boot provides its root.
+# Labels, not UUIDs: the image is built without mounting.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    # Les etiquettes d Armbian (armbi_root, RPICFG) : c est ce que son
-    # armbian-resize-filesystem et sa doc attendent.
+    # Armbian labels (armbi_root, RPICFG): what armbian-resize-filesystem and its
+    # docs expect.
     sed -i -E -e '/^LABEL=armbi_root[[:space:]]/d' -e '/^LABEL=RPICFG[[:space:]]/d' "$ROOTFS/etc/fstab"
     cat >> "$ROOTFS/etc/fstab" <<'FSTAB'
 LABEL=armbi_root    /               ext4    defaults,noatime,commit=120,errors=remount-ro   0 1
@@ -48,12 +40,9 @@ LABEL=RPICFG        /boot/firmware  vfat    defaults                            
 FSTAB
     install -d "$ROOTFS/boot/firmware"
 fi
-# /tmp : PAS dans fstab. Une entree fstab /tmp entre en collision avec l'unite
-# systemd tmp.mount -> "systemd-fstab-generator: tmp.mount already exists,
-# Duplicate entry in /etc/fstab" (generateur en exit 1) ; et l'ancien update.sh
-# la reinjectait au boot, ce qui obligeait a la retirer apres coup. On gere /tmp
-# en natif systemd via un drop-in size=15% : une seule source, zero doublon -
-# et plus rien, au demarrage, qui reecrive fstab.
+# /tmp: not in fstab. An fstab /tmp entry collides with systemd's tmp.mount
+# (systemd-fstab-generator: "Duplicate entry in /etc/fstab"). /tmp is managed
+# natively via a tmp.mount drop-in with size=15%.
 mkdir -p "$ROOTFS/etc/systemd/system/tmp.mount.d"
 cat > "$ROOTFS/etc/systemd/system/tmp.mount.d/size.conf" <<'EOF'
 [Mount]
@@ -61,27 +50,21 @@ Options=mode=1777,strictatime,nosuid,nodev,size=15%
 EOF
 chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
 
-# ── Ce qui remplit la RAM : les ECRITURES DE LA PILE ────────────────────────
-# En 'toram' la racine est un overlay tmpfs : TOUT ce qui s'ecrit a l'execution
-# reste en RAM, rien n'atteint un disque. Le squashfs y est deja recopie, /tmp
-# et /dev/shm en reservent 2 Go chacun - le reste, quelques Go, est tout ce dont
-# dispose la racine.
-#
-# Trois writers non bornes suffisaient a la remplir, et le symptome n'apparait
-# qu'apres des heures : "No space left on device" sur une machine qui n'a
-# pourtant aucun disque plein.
-#   1. le journal systemd, sans plafond ;
-#   2. /var/log/osmocom/*.log - la pile journalise en 'filter all 1', et mobile
-#      tourne avec une vingtaine de categories de debug ;
-#   3. les captures pcap GSMTAP, ecrites en continu et sans limite de taille.
-# On les borne ici, dans l'image : un cap pose au build vaut pour toutes les VM,
-# alors qu'un nettoyage manuel est a refaire apres chaque boot.
+# ── Bounding the stack's writes ────────────────────────────────────────────
+# With 'toram' the root is a tmpfs overlay: everything written at runtime stays
+# in RAM. Three unbounded writers would fill it after hours ("No space left on
+# device" with no full disk):
+#   1. the systemd journal;
+#   2. /var/log/osmocom/*.log - the stack logs with 'filter all 1', and mobile
+#      runs with about twenty debug categories;
+#   3. GSMTAP pcap captures, written continuously.
+# They are bounded here, in the image, so the caps apply to every machine.
 
-# 1. Journal : volatile (il est de toute facon perdu au reboot d'un live) et
-#    plafonne. Sans RuntimeMaxUse, journald s'autorise 10 % de la RAM.
+# 1. Journal: volatile (lost on reboot of a live system anyway) and capped.
+#    Without RuntimeMaxUse journald allows itself 10 % of RAM.
 mkdir -p "$ROOTFS/etc/systemd/journald.conf.d"
-# --arm : la racine est persistante, le journal aussi (Storage=persistent,
-# plafonne) ; volatile jetterait les logs a chaque reboot d une carte SD.
+# --arm: the root is persistent, so is the journal (Storage=persistent,
+# capped); volatile would drop the logs on every SD card reboot.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
     cat > "$ROOTFS/etc/systemd/journald.conf.d/osmo-live.conf" <<'EOF'
 [Journal]
@@ -91,7 +74,7 @@ RuntimeMaxUse=64M
 EOF
 else
 cat > "$ROOTFS/etc/systemd/journald.conf.d/osmo-live.conf" <<'EOF'
-# osmo-operator live : la racine est en RAM, le journal ne doit pas la manger.
+# osmo-operator live: the root is in RAM, the journal must not eat it.
 [Journal]
 Storage=volatile
 RuntimeMaxUse=64M
@@ -99,10 +82,10 @@ RuntimeKeepFree=256M
 EOF
 fi
 
-# 2. Logs Osmocom : rotation a la TAILLE, pas a la date - une pile bavarde
-#    remplit en une heure ce qu'une rotation quotidienne ne verrait jamais.
-#    copytruncate : les demons gardent leur descripteur ouvert ; sans lui la
-#    rotation leur laisse un fichier supprime, et l'espace n'est pas rendu.
+# 2. Osmocom logs: rotate by size, not date - a verbose stack fills in an hour
+#    what a daily rotation would never see.
+#    copytruncate: daemons keep their descriptor open; otherwise rotation
+#    leaves them a deleted file and the space is not released.
 mkdir -p "$ROOTFS/etc/logrotate.d"
 cat > "$ROOTFS/etc/logrotate.d/osmocom" <<'EOF'
 /var/log/osmocom/*.log {
@@ -115,7 +98,7 @@ cat > "$ROOTFS/etc/logrotate.d/osmocom" <<'EOF'
     copytruncate
 }
 EOF
-# logrotate.timer ne passe qu'une fois par jour : trop tard pour un tmpfs.
+# logrotate.timer runs only once a day: too late for a tmpfs.
 cat > "$ROOTFS/etc/systemd/system/osmo-logrotate.service" <<'EOF'
 [Unit]
 Description=osmo-operator - rotation des journaux Osmocom (racine en RAM)
@@ -134,60 +117,46 @@ WantedBy=timers.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-logrotate.timer 2>/dev/null || true
 
-# 3. Captures pcap : purge de celles de plus d'une heure. La capture GSMTAP
-#    tourne en continu ; elle sert a regarder ce qui vient de se passer, pas a
-#    constituer un historique - qu'aucun live ne pourrait de toute facon garder.
+# 3. pcap captures: delete those older than one hour. The GSMTAP capture runs
+#    continuously; it is for looking at what just happened, not for history.
 mkdir -p "$ROOTFS/etc/tmpfiles.d"
 cat > "$ROOTFS/etc/tmpfiles.d/osmo-captures.conf" <<'EOF'
-# osmo-operator : les captures vivent en RAM, on ne les garde pas plus d'une heure.
+# osmo-operator: captures live in RAM, keep them at most one hour.
 d /run/user/0/osmo-nitb/captures 0755 root root 1h
 EOF
 
-# 3bis. Le ring, plutot qu'un fichier qui gonfle
-# Purger toutes les heures ne protege de rien : entre deux passages, UNE
-# capture continue peut a elle seule remplir la RAM - et sur un lien charge,
-# c'est l'affaire de quelques minutes, pas d'une nuit. Un fichier unique en -w
-# croit sans limite ; -C <Mo> -W <n> lui substitue un ANNEAU de n fichiers qui
-# se recyclent : la capture ne s'arrete jamais, l'empreinte reste bornee.
+# 3b. Ring buffer instead of an ever-growing file
+# An hourly purge does not protect against one continuous capture filling RAM
+# between two passes. A single -w file grows without limit; -C <MB> -W <n>
+# turns it into a ring of n recycled files: the capture never stops and its
+# footprint stays bounded.
 #
-# Par un wrapper plutot qu'en corrigeant les appelants : la capture GSMTAP est
-# lancee depuis le dashboard web (autre depot, clone au build) et depuis des
-# outils qui ne vivent pas dans ce depot-ci. Un wrapper vaut pour tous, y
-# compris ceux qu'on ajoutera. /usr/local/bin precede /usr/bin dans le PATH :
-# l'appel "tcpdump" passe par lui sans que rien n'ait a etre reecrit.
+# A wrapper rather than fixing callers: GSMTAP capture is started from the
+# web dashboard (another repository) and from tools outside this repository.
+# /usr/local/bin precedes /usr/bin in PATH, so plain "tcpdump" goes through it.
 #
-# Il ne force rien quand l'appelant a deja choisi (-C ou -W presents), et sans
-# -w il n'y a rien a borner.
+# It forces nothing if the caller already chose (-C or -W given), and without
+# -w there is nothing to bound.
 cat > "$ROOTFS/usr/local/bin/tcpdump" <<'TCPDUMPEOF'
 #!/bin/sh
-# tcpdump - wrapper osmo-operator : impose un anneau aux captures sur fichier.
+# tcpdump - osmo-operator wrapper: forces a ring buffer on file captures.
 #
-# La racine du live est un tmpfs : une capture non bornee finit par remplir la
-# RAM, et l'erreur ("No space left on device") tombe des heures plus tard, sur
-# une machine qui n'a pourtant aucun disque plein.
+# The live root is a tmpfs: an unbounded capture eventually fills RAM.
 #
-# DEUX PIEGES, DEUX PARADES
-#  -Z root : avec -C/-W, tcpdump cree les membres suivants de l'anneau APRES
-#            avoir abandonne ses privileges (utilisateur "tcpdump"). Sans -Z il
-#            echoue des le premier : "Permission denied" - et aucune capture.
-#            Sans -C il ouvrait le fichier AVANT, d'ou un fonctionnement qui ne
-#            cassait qu'en ajoutant l'anneau.
-#  lien    : avec -C/-W, tcpdump n'ecrit pas le nom demande mais numerote les
-#            membres (capture.pcap0, .pcap1...). Le nom exact n'existe jamais,
-#            et l'appelant qui l'attend conclut a un echec. On maintient donc
-#            <nom exact> -> membre courant : la barriere le suit, qui ouvre le
-#            fichier lit la capture en cours, et rien n'a a etre reecrit.
+# Two pitfalls handled:
+#  -Z root : with -C/-W, tcpdump creates the next ring members after dropping
+#            privileges (user "tcpdump"); without -Z it fails with
+#            "Permission denied".
+#  symlink : with -C/-W, tcpdump numbers the members (capture.pcap0, .pcap1...)
+#            and the exact requested name never exists. <exact name> ->
+#            current member is maintained so callers expecting it keep working.
 #
-# Reglable : OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
+# Tunables: OSMO_PCAP_RING_MB (32), OSMO_PCAP_RING_FILES (5).
 mkdir -p "$ROOTFS/usr/bin"
-# [2026-09-04] SANS ECRASER LES BINAIRES DE DPKG. Ce `cp -a` recopiait TOUT
-# /usr/local/bin - dont le wrapper tcpdump (docker cp de l'image en 50, puis
-# 83-espace-ram.sh) - par-dessus /usr/bin/tcpdump, le vrai binaire. Le wrapper
-# appelle /usr/bin/tcpdump : il s'appelait donc lui-meme a l'infini. Sur la
-# machine demarree : "tcpdump n'a pas cree <pcap>", 1 module en echec, run.sh
-# sort en 1, et osmo-banc.service (oneshot) tue toute la pile. On ne copie que
-# ce qui n'existe pas deja dans /usr/bin (-n) ; les lanceurs qemu/qosmo, eux,
-# n'ont pas d'homonyme dpkg et passent comme avant.
+# Known limitation / TODO: the mkdir/find lines below are build-time commands
+# (copy /usr/local/bin to /usr/bin without overwriting dpkg binaries, -n, and
+# never the tcpdump wrapper) that ended up inside this heredoc; the generated
+# wrapper also lacks REAL=/usr/bin/tcpdump and has_w=0 initialisation.
 find "$ROOTFS/usr/local/bin" -mindepth 1 -maxdepth 1 ! -name tcpdump \
     -exec cp -an {} "$ROOTFS/usr/bin/" \; 2>/dev/null || true
  has_ring=0; has_z=0; wfile=""; next_is_w=0
@@ -201,14 +170,14 @@ for a in "$@"; do
     esac
 done
 
-# Rien a borner, ou l'appelant a deja choisi son anneau : on s'efface.
+# Nothing to bound, or the caller already chose its ring: step aside.
 if [ "$has_w" != 1 ] || [ "$has_ring" = 1 ] || [ -z "$wfile" ]; then
     exec "$REAL" "$@"
 fi
 
-# Le veilleur du lien. Lance AVANT l'exec : apres, ce processus EST tcpdump.
-# $$ reste le meme a travers l'exec, donc il suit exactement sa vie et s'arrete
-# avec lui - aucun processus orphelin a nettoyer.
+# Symlink watcher. Started before exec: afterwards this process is tcpdump.
+# $$ is unchanged across exec, so it follows tcpdump's lifetime exactly and
+# stops with it - no orphan to clean up.
 ( ppid=$$
   n=0
   while [ "$n" -lt 300 ]; do
@@ -230,29 +199,26 @@ fi
 exec "$REAL" -Z root -C "${OSMO_PCAP_RING_MB:-32}" -W "${OSMO_PCAP_RING_FILES:-5}" "$@"
 TCPDUMPEOF
 chmod +x "$ROOTFS/usr/local/bin/tcpdump"
-# Le vrai binaire doit etre reste un ELF : si un module l'a remplace par un
-# script, l'image part avec un tcpdump qui boucle. On arrete la construction
-# plutot que de decouvrir ca sur la machine demarree.
+# The real binary must still be an ELF: if a module replaced it with a script,
+# the wrapper would loop. Stop the build rather than ship that.
 if [ "$(head -c 2 "$ROOTFS/usr/bin/tcpdump" 2>/dev/null)" = "#!" ]; then
     echo -e "  ${RED}✗ /usr/bin/tcpdump du rootfs est un script, pas le binaire dpkg${NC}" >&2
     exit 1
 fi
 echo -e "  ${GREEN}✓${NC} wrapper tcpdump (anneau pcap) dans /usr/local/bin, binaire dpkg intact dans /usr/bin"
 
-# ── Purge complete a chaque relance ─────────────────────────────────────────
-# Les caps ci-dessus empechent la derive PENDANT une session ; celui-ci repart
-# d'une racine propre A CHAQUE DEMARRAGE. Sur un live c'est sans perte : ces
-# fichiers ne survivraient pas au reboot de toute facon. Avec persistance, en
-# revanche, ils s'accumuleraient d'un boot a l'autre jusqu'a remplir le medium -
-# c'est precisement le cas ou la purge devient indispensable.
+# ── Full purge at every boot ───────────────────────────────────────────────
+# The caps above prevent drift during a session; this starts each boot from
+# a clean root. On a live system nothing is lost; with persistence these
+# files would otherwise accumulate until the medium is full.
 #
-# Avant la pile (Before=osmo-*.service) : purger APRES le demarrage effacerait
-# les journaux de la session en cours, et le premier incident serait invisible.
+# Before the stack (Before=osmo-*.service): purging after start would erase
+# the logs of the current session.
 cat > "$ROOTFS/usr/local/sbin/osmo-purge.sh" <<'PURGEEOF'
 #!/bin/bash
-# osmo-purge.sh - repart d'une racine propre. Appele au boot par osmo-purge.service.
-# Ne touche NI aux configs (/etc/osmocom), NI aux bases (HLR) : seulement ce qui
-# se regenere - journaux, captures, fichiers de travail.
+# osmo-purge.sh - start from a clean root. Called at boot by osmo-purge.service.
+# Never touches configs (/etc/osmocom) or databases (HLR): only regenerated
+# data - logs, captures, work files.
 set -u
 
 purge_dir() {   # $1=repertoire  $2=motif
@@ -260,29 +226,27 @@ purge_dir() {   # $1=repertoire  $2=motif
     find "$1" -maxdepth 1 -type f -name "$2" -delete 2>/dev/null || true
 }
 
-# Journaux de la pile
+# Stack logs
 purge_dir /var/log/osmocom '*.log'
 purge_dir /var/log/osmocom '*.log.*'
 purge_dir /var/log/osmocom '*.gz'
 
-# Captures pcap (GSMTAP et autres)
+# pcap captures (GSMTAP and others)
 rm -rf /run/user/0/osmo-nitb/captures/* 2>/dev/null || true
 purge_dir /var/log/osmocom '*.pcap'
 find /tmp /var/tmp -maxdepth 2 -type f -name '*.pcap*' -delete 2>/dev/null || true
 
-# Fichiers de travail : I/Q FFT (plusieurs centaines de Mo piece)
+# Work files: FFT I/Q (hundreds of MB each)
 find /dev/shm -maxdepth 1 -type f \( -name '*.cfile' -o -name '*.raw' \) -delete 2>/dev/null || true
-# Les MEMES fichiers HORS /dev/shm - ce sont eux qui ont rempli la RAM de la VM
-# (4,6 Go mesures). Le mode pont ecrit /root/record.cfile et /root/record_ul.cfile
-# en continu et empile /root/osmo-rec/*.cfile jusqu'a son propre plafond de 64 Go ;
-# sur un live la racine EST un tmpfs, donc ce plafond n'en est pas un. Ne purger
-# que /dev/shm laissait passer la totalite de ce qui se remplit vraiment.
+# The same files outside /dev/shm: bridge mode writes /root/record.cfile and
+# /root/record_ul.cfile continuously and stacks /root/osmo-rec/*.cfile up to
+# its own 64 GB cap, which is meaningless when the root is a tmpfs.
 find /root /tmp /var/tmp -maxdepth 2 -type f \( -name '*.cfile' -o -name '*.raw' \) -delete 2>/dev/null || true
 
-# Repertoire d'execution du live, recree par la pile au demarrage
+# Live runtime directory, recreated by the stack at start
 rm -rf /run/user/0/osmo-nitb/logs/* 2>/dev/null || true
 
-# Journal systemd volatile
+# Volatile systemd journal
 command -v journalctl >/dev/null 2>&1 && journalctl --rotate --vacuum-time=1s >/dev/null 2>&1
 
 exit 0
@@ -305,7 +269,7 @@ WantedBy=multi-user.target
 EOF
 chroot "$ROOTFS" systemctl enable osmo-purge.service 2>/dev/null || true
 
-# SSH : autorise le login root par mot de passe + active le service au boot.
+# SSH: allow root password login and enable the service at boot.
 if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
     sed -i \
         -e 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' \
@@ -316,12 +280,9 @@ if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
 fi
 chroot "$ROOTFS" systemctl enable ssh 2>/dev/null || true
 
-# ── Clavier : fige DANS l'image, plus demande au premier boot ───────────────
-# Le choix se fait au debut de cette construction (voir "LES QUESTIONS"). Ici on
-# ne fait que l'ecrire. L'ancienne version posait la question dans
-# /etc/profile.d au premier login : chaque machine du banc s'arretait alors sur
-# un menu, et une VM demarree sans console attendait une reponse que personne
-# n'allait donner.
+# ── Keyboard: fixed in the image, not asked at first boot ──────────────────
+# The layout is chosen at the start of the build (see "LES QUESTIONS");
+# it is only written here, so no machine blocks on a menu at login.
 cat > "$ROOTFS/etc/default/keyboard" <<KBCONF
 XKBMODEL="pc105"
 XKBLAYOUT="${OSMO_ISO_KB}"
@@ -332,10 +293,9 @@ KBCONF
 chroot "$ROOTFS" setupcon --force 2>/dev/null || true
 chroot "$ROOTFS" dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 
-# Ce qui reste au login : le rappel, qui n'attend rien.
-# La commande DEPEND du role : le hub n'a pas de coeur GSM a demarrer, et
-# start-native.sh y chercherait un BSC, un MSC, une BTS qui n'existent pas.
-# Lui dicter start-native.sh, c'est envoyer droit dans une erreur.
+# What remains at login: a reminder that waits for nothing.
+# The command depends on the role: the hub has no GSM core, and
+# start-native.sh would look for a BSC, MSC and BTS that do not exist there.
 if [ "$ISO_ROLE" = "interstp" ]; then
     OSMO_START_HINT='Pour demarrer le hub SS7 : /opt/GSM/osmo-operator/launch/start-interstp.sh'
     OSMO_START_HINT2='  (etat des noeuds attaches : ./launch/start-interstp.sh --status)'
@@ -362,12 +322,11 @@ KBSCRIPT
 chmod +x "$ROOTFS/etc/profile.d/01-osmo-disclaimer.sh"
 rm -f "$ROOTFS/etc/profile.d/01-keyboard-setup.sh"
 
-# Le choix du clavier reste offert - mais QUAND ON LE DEMANDE. C'est le meme
-# menu qu'avant ; ce qui change, c'est qu'il ne s'interpose plus entre le login
-# et le shell : une VM sans console ne peut plus rester bloquee dessus.
+# Keyboard selection on demand only (osmo-keyboard), never between login
+# and shell.
 cat > "$ROOTFS/usr/local/bin/osmo-keyboard" <<'KBCMD'
 #!/bin/bash
-# osmo-keyboard - change la disposition clavier du systeme, a la demande.
+# osmo-keyboard - change the system keyboard layout, on demand.
 [ "$(id -u)" -ne 0 ] && { echo "Root requis."; exit 1; }
 
 if [ -n "$1" ]; then
@@ -405,7 +364,7 @@ echo -e "  \033[1;32mClavier : ${KB_LAYOUT}\033[0m   (sans persistance, revient 
 KBCMD
 chmod +x "$ROOTFS/usr/local/bin/osmo-keyboard"
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its last command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would silently stop everything. Always 0 here.
 true

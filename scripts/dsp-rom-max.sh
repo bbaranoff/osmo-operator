@@ -1,68 +1,66 @@
 #!/bin/bash
 # =============================================================================
-# scripts/dsp-rom-max.sh - workflow « le DSP en fait un maximum par la ROM ».
+# scripts/dsp-rom-max.sh - workflow « the DSP does as much as possible in ROM ».
 # =============================================================================
 #
-# Le banc DSP (c54x_exe, mask-ROM TI) peut remplacer certains traitements de
-# la ROM par des reconstructions sur l hote (pont.py, montant.c, qosmo) :
-# SB/TOA « en conserve », RACH code par le pont, codage xCCH montant par le
-# pont, dechiffrement A5 par le pont... Chaque ecart est un commutateur
-# d environnement (hacks_actifs() dans c54x_exe/src/pont.c les affiche au
-# demarrage). Ce workflow :
+# The DSP bench (c54x_exe, TI mask-ROM) can replace some ROM processing with
+# host reconstructions (pont.py, montant.c, qosmo): canned SB/TOA, RACH coded
+# by the bridge, uplink xCCH coding by the bridge, A5 deciphering by the
+# bridge... Each deviation is an environment switch (hacks_actifs() in
+# c54x_exe/src/pont.c prints them at startup). This workflow:
 #
-#   1. profil     pose dans /etc/default/osmo-banc le profil « ROM max » : tous
-#                 les commutateurs qui ont un chemin ROM sont sur ROM, aucun
-#                 SB/TOA en conserve. Persistant : chaque boot du banc le lit.
-#   2. banc       redemarre osmo-banc (--dsp) avec ce profil et attend le camp
-#                 (VTY du mobile 4247).
-#   3. echelle    joue l echelle de /opt/GSM/tests/banc-max.sh --dsp sur la
-#                 pile en cours : LU, SMS MO/MT, appel voix, puis le barreau
-#                 « couverture » (tests/modules/99-couverture.sh) qui tranche,
-#                 traitement par traitement, ROM ou HOTE d apres les journaux.
-#   4. bilan      relit couverture.txt : ce que la ROM a fait, ce qui est reste
-#                 a l hote MALGRE le profil (a corriger), et ce qui n a pas de
-#                 chemin ROM branche (le reste a faire : FACCH/SACCH-TCH/parole
-#                 montants, A5 montant au fn de l air, vocodage).
+#   1. profil     writes the « ROM max » profile to /etc/default/osmo-banc:
+#                 every switch that has a ROM path is on ROM, no canned SB/TOA.
+#                 Persistent: every boot of the bench reads it.
+#   2. banc       restarts osmo-banc (--dsp) with this profile and waits for
+#                 camping (mobile VTY 4247).
+#   3. echelle    runs the ladder of /opt/GSM/tests/banc-max.sh --dsp on the
+#                 running stack: LU, SMS MO/MT, voice call, then the
+#                 « couverture » rung (tests/modules/99-couverture.sh), which
+#                 decides, processing by processing, ROM or HOST from the logs.
+#   4. bilan      reads couverture.txt back: what the ROM did, what stayed on
+#                 the host despite the profile (to fix), and what has no ROM
+#                 path wired (remaining work: uplink FACCH/SACCH-TCH/speech,
+#                 uplink A5 at the air fn, vocoding).
 #
-# Usage : dsp-rom-max.sh [run|profile|report|status] [--no-restart] [--only=camp,attache]
-#   run (defaut)   1 -> 4            profile  pose le profil seulement (1)
-#   report         relit le dernier /root/banc-max-*/couverture.txt (4)
-#   --no-restart   ne redemarre pas osmo-banc (la pile en cours a deja le profil ?)
-#   --only=...     passe a banc-max.sh (ex. --only=camp,attache,couverture)
-#   --parole-rom   [2026-10-15] TCH montant (parole, FACCH, SACCH/T) emis par la ROM :
-#                  CALYPSO_NORM_TC=0 + CALYPSO_C54X_BCTC_NORM=1 (emulateur : le marqueur
-#                  de trame de parole de PROM0 0x90a0 n'etait jamais pose) + PONT_UL_RAW_TCH=1.
-#                  DEFAUT depuis le 18/10 ; --parole-hote revient en arriere (et coupe --vocodeur-rom).
-#   --vocodeur-rom [2026-10-15] le codec FR de la ROM vocode (port voix SP0 modelise,
-#                  calypso_vsp.c) : BANC_VOCODEUR=rom (mobile en l1phy, sans GAPK) +
-#                  CALYPSO_VSP=1 (pont/vsp_audio.py <-> PulseAudio). Implique --parole-rom.
-#                  + emulateur : CALYPSO_C54X_BCD_CARRY=1 (BCD sur C/NC, depaquetage FR PDROM 0xe458)
-#                  et CALYPSO_C54X_OVM_LOGIQUE=1 (SFTL/AND/OR/XOR/ROL ne saturent pas, en-tete PDROM 0xe4c4)
-#                  et CALYPSO_MAC=1 (MACR/MASR/MACA/MASA/MPYA conformes SPRU172C) : sans lui le decodeur
-#                  FR de la ROM sort un spectre retourne (1 kHz rendu a ~3 kHz, 74 % de l'energie
-#                  au-dessus de 3 kHz) ; avec, sa sortie au rejeu a le spectre de libgsm (16/10).
-#                  + CALYPSO_C54X_BCD_TC=1 (vrai TC sur les 12 BCD tc/ntc : signe des coefficients
-#                  de reflexion du codeur, Schur PDROM 0xe763/0xedc5, faux 47 % du temps sans lui)
-#                  et CALYPSO_C54X_BCTC_COMBO=1 (BC tc,nc,bio : conditions ET-ees, isa 28). Avec ces
-#                  drapeaux et le decalage ASM de ADD/SUB src,ASM (corrige par defaut le 16/10), le
-#                  codeur FR de la ROM est bit-exact avec libgsm sur ~99 % des trames au rejeu.
-#                  DEFAUT depuis le 18/10 (valide banc 16/10) ; --vocodeur-hote revient a GAPK.
-#   --fw-gprs      firmware layer1 avec PDCH (layer1.highram.gprs.elf) : le DEFAUT depuis le 15/10 ;
-#   --fw-stock     le firmware d origine (sans GPRS)
+# Usage: dsp-rom-max.sh [run|profile|report|status] [--no-restart] [--only=camp,attache]
+#   run (default)  1 -> 4            profile  write the profile only (1)
+#   report         read the latest /root/banc-max-*/couverture.txt (4)
+#   --no-restart   do not restart osmo-banc (the running stack already has the profile?)
+#   --only=...     passed to banc-max.sh (e.g. --only=camp,attache,couverture)
+#   --parole-rom   uplink TCH (speech, FACCH, SACCH/T) sent by the ROM:
+#                  CALYPSO_NORM_TC=0 + CALYPSO_C54X_BCTC_NORM=1 (emulator: speech frame
+#                  marker of PROM0 0x90a0) + PONT_UL_RAW_TCH=1.
+#                  Default; --parole-hote reverts (and turns off --vocodeur-rom).
+#   --vocodeur-rom the ROM FR codec does the vocoding (modelled SP0 voice port,
+#                  calypso_vsp.c): BANC_VOCODEUR=rom (mobile in l1phy, without GAPK) +
+#                  CALYPSO_VSP=1 (pont/vsp_audio.py <-> PulseAudio). Implies --parole-rom.
+#                  + emulator: CALYPSO_C54X_BCD_CARRY=1 (BCD on C/NC, FR unpacking PDROM 0xe458)
+#                  and CALYPSO_C54X_OVM_LOGIQUE=1 (SFTL/AND/OR/XOR/ROL do not saturate, PDROM
+#                  header 0xe4c4) and CALYPSO_MAC=1 (MACR/MASR/MACA/MASA/MPYA per SPRU172C):
+#                  without it the ROM FR decoder outputs a mirrored spectrum (1 kHz rendered
+#                  at ~3 kHz); with it, its replay output has the libgsm spectrum.
+#                  + CALYPSO_C54X_BCD_TC=1 (true TC on the 12 BCD tc/ntc: sign of the coder
+#                  reflection coefficients, Schur PDROM 0xe763/0xedc5) and
+#                  CALYPSO_C54X_BCTC_COMBO=1 (BC tc,nc,bio: ANDed conditions, isa 28). With
+#                  these flags and the ASM shift of ADD/SUB src,ASM, the ROM FR coder is
+#                  bit-exact with libgsm on ~99 % of the frames at replay.
+#                  Default; --vocodeur-hote goes back to GAPK.
+#   --fw-gprs      layer1 firmware with PDCH (layer1.highram.gprs.elf): the default;
+#   --fw-stock     the stock firmware (without GPRS)
 #
-# Unite : services/osmo-dsp-rom-max.service (oneshot, lancee a la demande :
-# une campagne de tests n a rien a faire au boot ; le PROFIL, lui, persiste).
-# Journal : journalctl -u osmo-dsp-rom-max ; rapports : /root/banc-max-<date>/
+# Unit: services/osmo-dsp-rom-max.service (oneshot, started on demand: a test
+# campaign has no business at boot; the profile, however, persists).
+# Journal: journalctl -u osmo-dsp-rom-max; reports: /root/banc-max-<date>/
 # -----------------------------------------------------------------------------
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULTS=/etc/default/osmo-banc
 TESTS=/opt/GSM/tests
 FW_GPRS=/opt/GSM/firmware/board/compal_e88/layer1.highram.gprs.elf
-# [2026-10-18] --vocodeur-rom (donc --parole-rom) PAR DEFAUT. Valide au banc le
-# 16/10 (27/27, voix 1 kHz 100 %, tout ROM). Sans lui, une machine sans
-# /etc/default/osmo-banc (acer, 10.99.0.2) tournait le codec FR de la ROM sans
-# ses correctifs d emulateur : trames de silence au montant, echo test muet.
+# --vocodeur-rom (hence --parole-rom) by default: a machine without
+# /etc/default/osmo-banc would otherwise run the ROM FR codec without its
+# emulator fixes (uplink silence frames, silent echo test).
 RESTART=1; ONLY=""; FWGPRS=1; PAROLE_ROM=1; VOCODEUR_ROM=1; ACTION=run
 MOB_VTY=4247
 
@@ -75,8 +73,8 @@ warn() { printf '  %s[ !! ]%s %s\n' "$C_WA" "$C_Z" "$*"; }
 titre(){ printf '\n%s== %s ==%s\n' "$C_B" "$*" "$C_Z"; }
 port_open() { timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
 
-# ── 1. le profil ROM max ─────────────────────────────────────────────────────
-# Chaque ligne : VARIABLE=valeur   # ce qu elle met dans la ROM (et l autre valeur)
+# ── 1. the ROM max profile ───────────────────────────────────────────────────
+# Each line: VARIABLE=value   # what it puts in the ROM (and the other value)
 profil_lignes() { cat <<'P'
 MONTANT_EFFACE_TASK_RA=0
 MONTANT_ROM_UL=1
@@ -93,27 +91,27 @@ P
 }
 profil_doc() { cat <<'P'
 # ── profil « la ROM fait le maximum » (scripts/dsp-rom-max.sh) ──────────────
-# MONTANT_EFFACE_TASK_RA=0  RACH : la ROM garde la tache et code l access-burst (1 : le pont le code)
-# MONTANT_ROM_UL=1          SDCCH/SACCH montants : bursts codes par la ROM (0 : codage hote)
-# MONTANT_ROM_TX=1          bursts finaux de la ROM publies au pont (calypso_tx_rom)
-# UL_RAW=1                  le pont emet ces bursts tels quels (0 : recodage + A5 cote hote)
-# PONT_DSP_DECHIFFRE=0      A5 descendant : la ROM dechiffre, pas le pont
-# CALYPSO_A5=1              coprocesseur A5 du silicium, modelise dans c54x_exe (0 : coupe)
-# MONTANT_REQREF=0          IMMEDIATE ASSIGNMENT : reference de la BTS laissee telle quelle (1 : qosmo la recale sur last_rach)
-# CALYPSO_C54X_BCTC_ETENDU=1  emulateur : BC tc/ntc au vrai TC apres cmpr/bit/bitt et apres cmpm/bitf + ST (0xb2c7, double tampon I/Q) (0 : heuristique ACC)
-# PONT_CAN_TOA= / PONT_CAN_SB_TOA= / PONT_CAN_SB=   rien « en conserve » : FB/SB/TOA par la ROM
+# MONTANT_EFFACE_TASK_RA=0  RACH: the ROM keeps the task and codes the access burst (1: the bridge codes it)
+# MONTANT_ROM_UL=1          uplink SDCCH/SACCH: bursts coded by the ROM (0: host coding)
+# MONTANT_ROM_TX=1          final ROM bursts published to the bridge (calypso_tx_rom)
+# UL_RAW=1                  the bridge sends those bursts as is (0: recoding + A5 on the host)
+# PONT_DSP_DECHIFFRE=0      downlink A5: the ROM deciphers, not the bridge
+# CALYPSO_A5=1              A5 coprocessor of the silicon, modelled in c54x_exe (0: off)
+# MONTANT_REQREF=0          IMMEDIATE ASSIGNMENT: BTS reference left as is (1: qosmo realigns it on last_rach)
+# CALYPSO_C54X_BCTC_ETENDU=1  emulator: BC tc/ntc on the true TC after cmpr/bit/bitt and after cmpm/bitf + ST (0xb2c7, double I/Q buffer) (0: ACC heuristic)
+# PONT_CAN_TOA= / PONT_CAN_SB_TOA= / PONT_CAN_SB=   nothing canned: FB/SB/TOA by the ROM
 P
 }
 etape_profil() {
     titre "1. profil ROM max dans $DEFAULTS"
-    # [2026-10-18] acer (10.99.0.2) n a pas de layer1.highram.gprs.elf : le profil
-    # l imposait quand meme et le banc refusait de partir. Firmware d origine alors.
+    # Without layer1.highram.gprs.elf the profile must not require it, otherwise
+    # the bench refuses to start: fall back to the stock firmware.
     if [ "$FWGPRS" = 1 ] && { [ ! -r "$FW_GPRS" ] || [ ! -r "${FW_GPRS%.elf}.bin" ]; }; then
         warn "$FW_GPRS absent : firmware d origine (compiler le layer1 GPRS pour --fw-gprs)"
         FWGPRS=0
     fi
     touch "$DEFAULTS"
-    # retirer une ancienne version du bloc, puis le reposer
+    # remove a previous version of the block, then write it again
     sed -i '/profil « la ROM fait le maximum »/,/^# ── fin profil ROM max/d' "$DEFAULTS"
     while IFS= read -r l; do [ -n "$l" ] && sed -i "/^${l%%=*}=/d" "$DEFAULTS"; done < <(profil_lignes)
     sed -i '/^FIRMWARE_ELF=/d;/^FIRMWARE_BIN=/d;/^CALYPSO_NORM_TC=/d;/^CALYPSO_C54X_BCTC_NORM=/d;/^PONT_UL_RAW_TCH=/d;/^# parole montante ROM/d;/^BANC_VOCODEUR=/d;/^CALYPSO_VSP=/d;/^CALYPSO_C54X_BCD_CARRY=/d;/^CALYPSO_C54X_OVM_LOGIQUE=/d;/^CALYPSO_MAC=/d;/^CALYPSO_C54X_BCD_TC=/d;/^CALYPSO_C54X_BCTC_COMBO=/d;/^# vocodeur ROM/d' "$DEFAULTS"
@@ -125,14 +123,15 @@ etape_profil() {
       if [ "$FWGPRS" = 1 ]; then printf 'FIRMWARE_ELF=%s\nFIRMWARE_BIN=%s\n' "$FW_GPRS" "${FW_GPRS%.elf}.bin"
       else printf '# FIRMWARE_ELF=%s   # --fw-gprs : layer1 avec PDCH (L1CTL_GPRS_*)\n' "$FW_GPRS"; fi
       printf '# ── fin profil ROM max ──\n'; } >> "$DEFAULTS"
-    # [2026-10-15] PAS de OSMO_BANC_ARGS="--dsp" ici : dans l unite, EnvironmentFile=
-    # l emporte sur `systemctl set-environment` (launch.sh --grgsm) et le banc
-    # partait en DSP quoi qu on demande. Le DSP est le defaut de start-native.sh.
+    # No OSMO_BANC_ARGS="--dsp" here: in the unit, EnvironmentFile= takes
+    # precedence over `systemctl set-environment` (launch.sh --grgsm) and the
+    # bench would start in DSP whatever is asked. DSP is the start-native.sh
+    # default.
     sed -i '/^OSMO_BANC_ARGS=/d' "$DEFAULTS"
     ok "profil pose ($(profil_lignes | grep -c .) commutateurs)"; grep -E '^[A-Z_]+=' "$DEFAULTS" | sed 's/^/      /'
 }
 
-# ── 2. le banc ───────────────────────────────────────────────────────────────
+# ── 2. the bench ─────────────────────────────────────────────────────────────
 etape_banc() {
     titre "2. banc DSP (osmo-banc.service)"
     if [ "$RESTART" = 1 ]; then
@@ -152,7 +151,7 @@ etape_banc() {
     return 0
 }
 
-# ── 3. l echelle ─────────────────────────────────────────────────────────────
+# ── 3. the ladder ────────────────────────────────────────────────────────────
 etape_echelle() {
     titre "3. echelle banc-max.sh --dsp --continue${ONLY:+ --only=$ONLY}"
     [ -x "$TESTS/banc-max.sh" ] || { ko "$TESTS/banc-max.sh absent"; return 1; }
@@ -166,7 +165,7 @@ etape_echelle() {
     return 0
 }
 
-# ── 4. le bilan ROM / hote ──────────────────────────────────────────────────
+# ── 4. the ROM / host report ────────────────────────────────────────────────
 etape_bilan() {
     titre "4. bilan ROM / hote"
     local rap; rap="$(ls -t /root/banc-max-*/couverture.txt 2>/dev/null | head -1)"

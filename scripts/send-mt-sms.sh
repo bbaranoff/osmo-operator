@@ -1,6 +1,6 @@
 #!/bin/bash
-# send-mt-sms.sh - Envoi de SMS MT local via proto-smsc-sendmt
-# Usage : ./send-mt-sms.sh <imsi> <message> [from_number]
+# send-mt-sms.sh - send a local MT SMS through proto-smsc-sendmt
+# Usage: ./send-mt-sms.sh <imsi> <message> [from_number]
 set -euo pipefail
 
 OPERATOR_ID="${OPERATOR_ID:-1}"
@@ -21,9 +21,9 @@ sms-encode-text "$MESSAGE" \
     | gen-sms-deliver-pdu "$FROM" \
     | proto-smsc-sendmt "$SC_ADDRESS" "$DEST_IMSI" "$SENDMT_SOCKET"
 
-# Ce MT part par GSUP vers la radio : les modems logiciels du banc ne le
-# verraient jamais (« sms-over-gsup » court-circuite le SMPP d osmo-msc). On
-# les previent, sans quoi un essai a la main n arrive que sur le mobile.
+# This MT goes out over GSUP towards the radio: the software modems of the bench
+# would never see it (« sms-over-gsup » bypasses the osmo-msc SMPP). They are
+# notified here, otherwise a manual test only reaches the mobile.
 "$(dirname "$0")/sms_notify.py" "$DEST_IMSI" "$FROM" "$MESSAGE" || true
 
 echo "MT SMS envoye → IMSI=$DEST_IMSI"

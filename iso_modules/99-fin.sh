@@ -1,12 +1,15 @@
 #!/bin/bash
-# iso_modules/99-fin.sh - rootfs transmis a la passe suivante, resume
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/99-fin.sh - hand the rootfs to the next pass, print the summary.
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to be run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment variables:
+#   OSMO_ISO_ROOTFS_KEEP  path where the rootfs is kept for the next pass (--all)
 
-# ── Le rootfs survit a cette passe si la parente le demande (--all) ─────────
-# Deplace, pas copie : meme systeme de fichiers, instantane. cleanup() efface
-# ensuite $WORK sans lui.
+# ── Keep the rootfs for the next pass if the parent asks (--all) ──────────
+# Moved, not copied (same filesystem, instant). cleanup() then removes $WORK
+# without it.
 if [ -n "${OSMO_ISO_ROOTFS_KEEP:-}" ]; then
     umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null || true
     umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null || true
@@ -28,7 +31,6 @@ echo -e "  Chemin absolu : $(readlink -f "$OUTPUT")"
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. Always return 0 here.
 true

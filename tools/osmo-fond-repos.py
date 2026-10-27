@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# Fond « Telecom Operator » : agrandi en 2560x1600, terminal et ligne GSM réécrits nets.
+# "Telecom Operator" wallpaper: upscaled to 2560x1600, terminal and GSM line redrawn sharp.
 #
-# [2026-10-23] Image de depart : configs/gsm-lab-source.png (1586x992, generee par
-# IA : texte du terminal invente, ligne « GSM | ... | MSC »). Regenerer le fond au
-# repos, puis sa variante « banc en marche » :
+# Source image: configs/gsm-lab-source.png (1586x992, AI generated: invented
+# terminal text, "GSM | ... | MSC" line). Regenerate the idle wallpaper, then
+# its "bench running" variant:
 #   tools/osmo-fond-repos.py configs/gsm-lab-source.png /tmp/repos.png
-#   tools/osmo-fond-bleu.py /tmp/repos.png /tmp/bleu.png     (fond orange -> bleu)
+#   tools/osmo-fond-bleu.py /tmp/repos.png /tmp/bleu.png     (orange -> blue background)
 #   tools/osmo-fond-antenne.py /tmp/bleu.png /tmp/antenne.png
-# et poser les deux en JPEG (qualite 92) sous configs/gsm-lab-ville.jpg et
-# configs/gsm-lab-antenne.jpg (les noms que lit tools/osmo-fond.py).
-# Les coordonnees (ecran du portable, ligne GSM) sont celles de CETTE image source.
+# and store both as JPEG (quality 92) under configs/gsm-lab-ville.jpg and
+# configs/gsm-lab-antenne.jpg (the names read by tools/osmo-fond.py).
+# The coordinates (laptop screen, GSM line) are those of THIS source image.
 import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -26,7 +26,7 @@ up = src.resize((W, H), Image.LANCZOS).filter(ImageFilter.UnsharpMask(2, 60, 2))
 
 
 def coeffs(dst_pts, src_pts):
-    """Coefficients PERSPECTIVE : point de sortie (dst) -> point d entree (src)."""
+    """PERSPECTIVE coefficients: output point (dst) -> input point (src)."""
     A, b = [], []
     for (x, y), (u, v) in zip(dst_pts, src_pts):
         A.append([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.append(u)
@@ -35,7 +35,7 @@ def coeffs(dst_pts, src_pts):
 
 
 def efface(img, masque, sigma):
-    """Remplit les pixels du masque par un flou normalisé des pixels voisins."""
+    """Fills the masked pixels with a normalised blur of the neighbouring pixels."""
     a = np.asarray(img, float)
     m = (np.asarray(masque) > 0)
     garde = Image.fromarray(((~m) * 255).astype(np.uint8))
@@ -47,7 +47,7 @@ def efface(img, masque, sigma):
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
-# ── terminal du portable ────────────────────────────────────────────────────
+# ── laptop terminal ─────────────────────────────────────────────────────────
 Q = [(184 * sx, 507 * sy), (642 * sx, 521 * sy), (682 * sx, 793 * sy), (218 * sx, 806 * sy)]
 FW, FH = 1480, 960
 F = [(0, 0), (FW, 0), (FW, FH), (0, FH)]
@@ -89,7 +89,7 @@ for morceaux in lignes:
     if morceaux and morceaux[0][0].startswith("ubuntu@") and len(morceaux) == 1:
         d.rectangle([x + 2, y + 2, x + 18, y + 36], fill=(150, 230, 190, 255))   # curseur
     y += 50
-# léger halo, comme un écran éclairé
+# light halo, like a lit screen
 halo = calque.filter(ImageFilter.GaussianBlur(4))
 plat = plat.convert("RGBA")
 plat.alpha_composite(Image.eval(halo, lambda v: v // 3))
@@ -100,7 +100,7 @@ colle = plat.transform((W, H), Image.PERSPECTIVE, retour, Image.BICUBIC)
 forme = Image.new("L", (FW, FH), 255).transform((W, H), Image.PERSPECTIVE, retour, Image.BICUBIC)
 up.paste(colle.convert("RGB"), (0, 0), forme)
 
-# ── ligne « GSM | GPRS | EDGE | LTE » sous le logo osmocom ──────────────────
+# ── "GSM | GPRS | EDGE | LTE" line under the osmocom logo ──────────────────
 bx0, by0, bx1, by1 = int(615 * sx), int(176 * sy), int(995 * sx), int(208 * sy)
 zone = up.crop((bx0, by0, bx1, by1))
 mz = Image.fromarray(((np.asarray(zone.convert("L")) > 42) * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(11))

@@ -1,29 +1,29 @@
 #!/bin/bash
 set -e
 
-# --- AJOUT DE LA PARTIE TUN ---
+# --- TUN device ---
 echo "[*] Initialisation du peripherique TUN pour osmo-ggsn..."
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
-    # Creation du noeud de peripherique (c = caractere, 10 = majeur, 200 = mineur)
+    # Create the device node (c = character, 10 = major, 200 = minor)
     mknod /dev/net/tun c 10 200
     chmod 666 /dev/net/tun
 fi
 
-# --- CONFIGURATION ENVIRONNEMENT ---
+# --- Environment ---
 container=docker
 export container
 
-# Verification de la presence d'une commande
+# A command is required
 if [ $# -eq 0 ]; then
   echo >&2 'ERROR: No command specified. You probably want to run bash or a script.'
   exit 1
 fi
 
-# Export des variables pour les sessions systemd
+# Export the variables for the systemd sessions
 env > /etc/docker-entrypoint-env
 
-# Creation du service de demarrage
+# Create the startup service
 quoted_args="$(printf " %q" "${@}")"
 echo "${quoted_args}" > /etc/docker-entrypoint-cmd
 
@@ -44,12 +44,12 @@ EnvironmentFile=/etc/docker-entrypoint-env
 WantedBy=multi-user.target
 EOT
 
-# Desactivation des services systemd conflictuels
+# Mask the conflicting systemd services
 systemctl mask systemd-firstboot.service systemd-udevd.service systemd-modules-load.service \
                systemd-udevd-kernel systemd-udevd-control 2>/dev/null || true
 systemctl enable docker-entrypoint.service
 
-# Localisation et execution de systemd
+# Locate and exec systemd
 if [ -x /lib/systemd/systemd ]; then
   exec /lib/systemd/systemd --show-status=false --unit=multi-user.target
 elif [ -x /usr/lib/systemd/systemd ]; then
@@ -59,6 +59,5 @@ else
   exit 1
 fi
 
-# NOTE : Les directives RUN/COPY/EXPOSE qui etaient ici sont des instructions
-# Dockerfile et doivent etre dans le Dockerfile, pas dans ce script.
-# exec systemd remplace le process - rien apres cette ligne n'est execute.
+# NOTE: RUN/COPY/EXPOSE directives belong in the Dockerfile, not in this script.
+# exec systemd replaces the process - nothing after that line is executed.

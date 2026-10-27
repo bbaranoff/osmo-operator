@@ -1,38 +1,38 @@
 #!/bin/bash
-# [2026-10-12] le port VTY du mobile : 4247, ou 4347 en --dsp (publie par start-native.sh)
+# the mobile VTY port: 4247, or 4347 with --dsp (published by start-native.sh)
 BB_VTY="$(tr -dc 0-9 < /run/osmo-banc/ms1-vty 2>/dev/null)"; BB_VTY="${BB_VTY:-4247}"
 
-# Sauvegarde de la configuration actuelle du terminal
+# Save the current terminal configuration
 OLD_SETTINGS=$(stty -g)
-# Sauvegarde des couleurs initiales (si supporte)
+# Save the initial colours (if supported)
 INITIAL_BG=$(printf '\e]11;?\a')
 
-# Palette de couleurs "Nord Theme" (Plus elegant)
+# "Nord Theme" colour palette
 set_kernel_profile() {
-    # On change le fond et le texte
+    # Change background and text
     echo -ne "\e]11;#2E3440\a" # Fond bleu-gris fonce
     echo -ne "\e]10;#D8DEE9\a" # Texte blanc casse
     clear
 }
 
 reset_terminal_profile() {
-    # 1. Restauration des couleurs d'origine du profil utilisateur
+    # 1. Restore the original colours of the user profile
     echo -ne "\e]110\a" # Reset Foreground
     echo -ne "\e]111\a" # Reset Background
     echo -ne "\e]112\a" # Reset cursor color
     
-    # 2. Commande systeme pour reset le terminal
+    # 2. System command to reset the terminal
     tput reset
     tput sgr0
     
-    # 3. Restauration des parametres stty
+    # 3. Restore the stty settings
     stty "$OLD_SETTINGS"
     
     clear
     echo "--- Session SDR terminee, profil restaure ---"
 }
 
-# Theme Whiptail harmonise
+# Matching whiptail theme
 export NEWT_COLORS='
   root=,rgb:2e/34/40
   window=rgb:d8/de/e9,rgb:3b/42/52
@@ -53,12 +53,12 @@ connect_vty() {
     [[ $? -ne 0 ]] && { echo -e "\n[!] Service hors ligne."; sleep 1; }
 }
 
-# ... (garder le debut du fichier identique) ...
+# ...
 
 menu_services() {
     local OP=$1
     while true; do
-        # Ajout de l'option 7 pour le Baseband
+        # Option 7 is the Baseband
         CHOICE=$(whiptail --title " OPERATOR CONTROL : $OP " --menu "" 20 62 9 \
             "1" "MSC (4254)" "2" "BSC (4242)" "3" "HLR (4258)" \
             "4" "MGW (4243)" "5" "GGSN (4260)" "6" "SGSN (4245)" \
@@ -77,17 +77,17 @@ menu_services() {
             6) connect_vty "$OP" "SGSN" 4245 "sg" ;;
             7) connect_vty "$OP" "STP" 4239 "stp" ;;
             T|t)
-                # La session que start-docker.sh ouvre dans chaque conteneur operateur.
-                # Le terminal de lancement est pris par osmo-operator-1 ; c'est
-                # par ici qu'on rejoint les autres, sans avoir a retenir la
-                # commande docker.
+                # The session start-docker.sh opens in each operator container.
+                # The launch terminal is taken by osmo-operator-1; this is how
+                # the others are reached, without remembering the docker
+                # command.
                 tput cnorm
-                # Trois conventions cohabitent selon le conteneur :
-                #   osmocom sur /tmp/osmocom_tmux  la pile lancee par run.sh
-                #   calypso / gapk sur le socket par defaut  le pipeline QEMU
-                # On les cherche dans cet ordre plutot que d'en imposer une :
-                # une session annoncee mais introuvable ("no sessions") laisse
-                # croire que la pile est morte alors qu'elle tourne.
+                # Several conventions coexist depending on the container:
+                #   osmocom on /tmp/osmocom_tmux  the stack started by run.sh
+                #   calypso / gapk on the default socket  the QEMU pipeline
+                # They are tried in that order rather than imposing one: a
+                # session announced but not found ("no sessions") would
+                # suggest the stack is dead while it is running.
                 _sock=""; _sess=""
                 if docker exec "$OP" tmux -S /tmp/osmocom_tmux has-session -t osmocom 2>/dev/null; then
                     _sock="-S /tmp/osmocom_tmux"; _sess="osmocom"
@@ -105,11 +105,11 @@ menu_services() {
                 fi
                 ;;
             8)
-                # Gestion multi-groupes Baseband (127.0.0.1, 127.0.0.2, etc.)
+                # Multi-group Baseband handling (127.0.0.1, 127.0.0.2, etc.)
                 local GRP_IP
                 GRP_IP=$(whiptail --title " BASEBAND GROUP SELECT " --inputbox "Target IP (127.0.0.X) :" 10 40 "127.0.0.1" 3>&1 1>&2 2>&3)
                 if [[ -n "$GRP_IP" ]]; then
-                    # On passe l'IP du groupe au script expect
+                    # Pass the group IP to the expect script
                     tput cnorm
                     expect ./tools/vty-connect.exp "$OP" "$BB_VTY" "bb" "$GRP_IP"
                 fi
@@ -118,7 +118,7 @@ menu_services() {
     done
 }
 
-# --- BOUCLE PRINCIPALE SECURISEE ---
+# --- MAIN LOOP (guarded) ---
 while true; do
     MAIN_TYPE=$(whiptail --title " OSMO-SDR STACK MANAGER " --menu "Select Category :" 15 60 3 \
         "CORE" "Global Infrastructure (Inter-STP)" \
@@ -128,14 +128,14 @@ while true; do
     [[ -z "$MAIN_TYPE" || "$MAIN_TYPE" == "EXIT" ]] && break
 
     if [[ "$MAIN_TYPE" == "CORE" ]]; then
-        # Verification si l'inter-stp est en vie
+        # Check whether the inter-stp is alive
         if docker ps --format '{{.Names}}' | grep -q "osmo-inter-stp"; then
             docker exec -ti osmo-inter-stp telnet 127.0.0.1 4239
         else
             whiptail --msgbox "Erreur : osmo-inter-stp n'est pas lance." 10 50
         fi
     else
-        # On recupere les operateurs actifs
+        # Get the active operators
         OPS=$(docker ps --format "{{.Names}}" | grep "osmo-operator" | sort)
         
         if [[ -z "$OPS" ]]; then

@@ -1,29 +1,19 @@
 # =============================================================================
-#  lib/gabarits.sh - le moteur de gabarits de configuration d'osmo-operator
+#  lib/gabarits.sh - the osmo-operator configuration template engine
 # =============================================================================
 #
-#  CE FICHIER EST UNE EXTRACTION, PAS UNE REECRITURE.
-#  Les fonctions ci-dessous viennent telles quelles de start-direct.sh.legacy
-#  (L65-76, L106-258, L499-511). Elles n'ont pas ete retouchees : le jour ou
-#  un gabarit change, on veut pouvoir comparer ligne a ligne avec l'ancien.
+#  The functions below substitute __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ ...
+#  in configs/*.cfg and install the result in /etc/osmocom, /etc/asterisk and
+#  ~/.osmocom/bb. Without them, the core daemons start on the files left by a
+#  previous run, and `ENCRYPTION=a5 0` has no effect, silently.
 #
-#  POURQUOI LES SORTIR DU POINT D'ENTREE.
-#  Elles sont la SEULE chose que start-native.sh faisait et que personne
-#  d'autre ne fait : substituer __ENCRYPTION__, __MCC__, __KI__, __ARFCN__ ...
-#  dans configs/*.cfg puis les deposer dans /etc/osmocom, /etc/asterisk et
-#  ~/.osmocom/bb. Sans elles, les demons du coeur demarrent sur les fichiers
-#  qu'un run precedent a laisses - et `ENCRYPTION=a5 0` n'a aucun effet, en
-#  silence. Le reste de start-native.sh (lancer vingt processus) est repris
-#  par le moteur ; ceci ne l'est pas, donc on le preserve a l'identique et on
-#  le rend appelable depuis un module.
+#  THIS FILE DOES NOTHING WHEN SOURCED: it only defines functions.
+#  The only expected caller is run_modules/08-gabarits.sh.
 #
-#  CE FICHIER NE FAIT RIEN AU SOURCE : il ne definit que des fonctions.
-#  Le seul appelant attendu est run_modules/08-gabarits.sh.
-#
-#  DEPENDANCES D'ENVIRONNEMENT (posees par l'appelant, valeurs de l'ancien
-#  script en defaut) : ENCRYPTION, HOST_IP, ALSA_OUTPUT, ALSA_INPUT.
-#  Le repertoire courant doit etre celui d'osmo-operator : les fonctions lisent
-#  `configs/*.cfg` et `scripts/*` en chemin RELATIF, comme dans l'original.
+#  ENVIRONMENT DEPENDENCIES (set by the caller, defaults below): ENCRYPTION,
+#  HOST_IP, ALSA_OUTPUT, ALSA_INPUT.
+#  The current directory must be the osmo-operator one: the functions read
+#  `configs/*.cfg` and `scripts/*` by RELATIVE path.
 # -----------------------------------------------------------------------------
 
 : "${ENCRYPTION:=a5 0}"
@@ -31,53 +21,45 @@
 : "${ALSA_OUTPUT:=default}"
 : "${ALSA_INPUT:=default}"
 
-# Ces fonctions ont une JUMELLE dans start-docker.sh : elles doivent dire la meme
-# chose. C'est CETTE copie que lit une machine qui reclone le depot a chaque
-# demarrage - donc celle qui compte sur une ISO. Tant qu'elle a garde l'ancien
-# plan prive (172.20.<op>.x), les configs regenerees au boot liaient
-# 172.20.1.10, une adresse que plus rien ne pose : osmo-ggsn et osmo-sgsn
-# refusaient de demarrer ("adresse introuvable localement") et osmo-pcu tombait
-# avec eux.
+# These functions have a TWIN in start-docker.sh: both must say the same thing.
+# THIS copy is the one read by a machine that reclones the repository at every
+# boot, i.e. the one that matters on an ISO.
 #
-#   backbone  172.20.0.<10+op>   le segment partage avec l'inter-STP (.10)
-#   prive     192.168.<op+1>.x   un segment par operateur ; le +1 laisse
-#                                192.168.1.0/24 au LAN du banc.
+#   backbone  172.20.0.<10+op>   the segment shared with the inter-STP (.10)
+#   private   192.168.<op+1>.x   one segment per operator; the +1 leaves
+#                                192.168.1.0/24 to the bench LAN.
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-# ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
-# 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
+# ── THE PRIVATE SEGMENT INDEX: THE NODE OR THE OPERATOR, DEPENDING ON THE HOST ─
+# 192.168.<index+1>.x, where "index" depends on where the code runs:
 #
-#   DOCKER   un hote porte N conteneurs operateurs, chacun dans son netns. Ce
-#            qui les distingue est le NUMERO D'OPERATEUR ; le noeud, lui, est
-#            commun a tous les conteneurs de la machine. index = operateur.
-#   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
-#            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
+#   DOCKER    a host carries N operator containers, each in its own netns.
+#             What distinguishes them is the OPERATOR NUMBER; the node is
+#             common to all containers of the machine. index = operator.
+#   VM/NATIVE the machine IS the node and carries only one operator. What
+#             distinguishes it from its neighbours is the NODE NUMBER.
+#             index = node.
 #
-# Sans cette distinction, qosmo-grgsm/run_modules/08-gabarits.sh appelait
-# op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
-# TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
-# 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
-# voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
-# La bascule est ici, une fois, et les deux jumelles (start-docker.sh, lib/gabarits.sh)
-# en heritent.
+# Without this distinction, every VM would write 192.168.2.10 (operator 1) in
+# osmo-ggsn.cfg while the ISO plan reserves 192.168.<node+1>.x: on node 2 the
+# GGSN would bind to the address of node 1. The switch is here, once, and both
+# twins (start-docker.sh, lib/gabarits.sh) inherit it.
 _osmo_priv_index() {
     local op="${1:-1}"
-    # [2026-08-31] L ORCHESTRATEUR N EST PAS DANS LE CONTENEUR QU IL CREE.
-    # La detection ci-dessous demande "suis-je DANS un conteneur ?" et c est la
-    # bonne question pour du code qui tourne a l interieur. Mais start-docker.sh, lui,
-    # provisionne les conteneurs DEPUIS L HOTE : il prenait donc la branche
-    # VM/natif et rendait l index du NOEUD - 1 - pour tous les operateurs.
-    # Les deux reseaux prives se retrouvaient sur 192.168.2.0/24, docker
-    # refusait le second pour chevauchement, et la boucle s arretait net :
+    # THE ORCHESTRATOR IS NOT INSIDE THE CONTAINER IT CREATES.
+    # The detection below asks "am I INSIDE a container?", the right question
+    # for code running inside one. start-docker.sh, however, provisions the
+    # containers FROM THE HOST: it would take the VM/native branch and return
+    # the NODE index - 1 - for every operator, so both private networks would
+    # land on 192.168.2.0/24 and docker would refuse the second one for
+    # overlap:
     #     ── Operateur 2 : ... Prive : 192.168.2.10
     #     ✗ Echec creation reseau gsm-net-op2 (192.168.2.0/24)
-    # osmo-operator-2 n etait jamais cree, sans qu aucun message ne parle de
-    # collision d adresses.
-    # OSMO_PRIV_BY_OP=1 dit "je provisionne par operateur" ; start_bridge_mode
-    # la pose. C est la seule chose que la detection ne pouvait pas deviner.
+    # OSMO_PRIV_BY_OP=1 says "I provision per operator"; start_bridge_mode
+    # sets it. It is the only thing the detection cannot guess.
     [ "${OSMO_PRIV_BY_OP:-0}" = "1" ] && { printf '%s' "$op"; return; }
-    # Meme detection que start-native.sh : le couple /.dockerenv +
-    # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
-    # sert de repli pour un conteneur quelconque.
+    # Same detection as start-native.sh: the pair /.dockerenv +
+    # /etc/docker-entrypoint-cmd identifies a container OF THIS REPOSITORY; the
+    # cgroup is the fallback for any container.
     if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
         printf '%s' "$op"; return
     fi
@@ -96,53 +78,42 @@ op_rctx_msc()     { echo $(( $1 * 100 + 10 )); }
 op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
-# ── PLUS AUCUN DECALAGE DE PORTS ────────────────────────────────────────────
-# [2026-08-31] Il y avait ici une detection : "5060 est-il pris ? alors decale
-# les publications de +100". Elle ne servait qu a une chose - eviter que le
-# 5060 publie d un conteneur n entre en conflit avec l Asterisk du natif.
+# ── NO PORT OFFSET ──────────────────────────────────────────────────────────
+# No SIP/RTP port is published for the containers: they sit on a routable
+# bridge and are reached directly, at their own address, on the nominal port
+# (172.20.0.12:5060 and 172.20.0.13:5060 answer 401 from the host without any
+# publication). So there is no conflict with the native Asterisk on 5060 and
+# no offset to compute.
 #
-# On ne publie PLUS aucun port SIP/RTP pour les conteneurs : ils sont sur un
-# bridge routable et se joignent en direct, a leur propre adresse, sur le port
-# nominal (verifie : 172.20.0.12:5060 et 172.20.0.13:5060 repondent 401 depuis
-# l hote, sans la moindre publication). Le conflit ayant disparu avec sa cause,
-# le decalage n a plus d objet - et il tirait avec lui une sonde instantanee,
-# donc une course : lancee juste apres l arret du banc, elle voyait 5060 libre,
-# ne decalait rien, et le conteneur mourait quand le natif remontait.
-#
-# Les fonctions ci-dessous gardent leur forme (generate_configs.sh s en sert
-# encore pour ecrire les configs) mais rendent desormais les valeurs NOMINALES.
-# OSMO_PORT_OFFSET=N reste disponible pour qui voudrait retablir un decalage.
+# The functions below keep their shape (generate_configs.sh still uses them to
+# write the configs) but return the NOMINAL values.
+# OSMO_PORT_OFFSET=N remains available for whoever wants an offset.
 PORT_OFFSET="${OSMO_PORT_OFFSET:-0}"
-# Le RTP suit la meme regle : plage nominale, 200 ports par operateur.
+# RTP follows the same rule: nominal range, 200 ports per operator.
 linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
-# [2026-08-31] Les boucles de ce fichier enumeraient 1..N en dur, comme celles
-# de start-docker.sh avant leur decalage. Avec OP_ID_BASE=2 - les conteneurs prenant
-# les rangs 2 et 3, le 1 restant au natif - l operateur 2 se fabriquait donc un
-# trunk vers l "operateur 1" a 172.20.0.11, une adresse de dorsale que PERSONNE
-# ne porte (le natif est sur l hote), et AUCUN trunk vers l operateur 3.
-# Les appels inter-operateurs entre conteneurs ne pouvaient pas aboutir, et
-# rien ne le disait : le trunk existe, il pointe simplement dans le vide.
-# Les deux jumelles doivent donc partager la meme base.
+# Both twins enumerate the operators from the same base: with OP_ID_BASE=2 the
+# containers take ranks 2 and 3 and rank 1 stays native. A loop hard-coded on
+# 1..N would build a trunk to "operator 1" at 172.20.0.11, a backbone address
+# NOBODY carries (the native one is on the host), and none to operator 3: the
+# trunk would exist but point into the void.
 generate_pjsip_interop_trunks() {
     local op_id=$1 n_operators=$2 remote_op remote_ip
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
-    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
-    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
-    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
-    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
-    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
-    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    # ── THE OPERATORS BELOW THE BASE ARE THE NATIVE ONES ───────────────────
+    # The loop starts at 1, not at the base: with OP_ID_BASE=2 (containers on
+    # ranks 2..N, rank 1 native on the host) op2 must also get a trunk to the
+    # native operator, otherwise a call 100201 -> 100101 falls into the _X.
+    # catch-all of [interop_out] and ends in Congestion.
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
-        # Un operateur sous la base est NATIF : il tourne sur l hote, pas dans
-        # un conteneur. Vu d un conteneur, l hote est la passerelle du bridge
-        # docker - la meme adresse que le pont audio et que sms-routing.conf.
-        # NB : match=172.20.0.1 n avale pas les REGISTER Linphone, qui arrivent
-        # par la meme passerelle : pjsip.conf pose endpoint_identifier_order=
-        # username,ip,anonymous - le username passe avant l IP.
+        # An operator below the base is NATIVE: it runs on the host, not in a
+        # container. Seen from a container, the host is the docker bridge
+        # gateway - the same address as the audio bridge and sms-routing.conf.
+        # NB: match=172.20.0.1 does not swallow the Linphone REGISTERs, which
+        # arrive through the same gateway: pjsip.conf sets
+        # endpoint_identifier_order=username,ip,anonymous - username first.
         if [ "$remote_op" -lt "${OP_ID_BASE:-1}" ]; then
             remote_ip="${INTER_NET_GATEWAY:-172.20.0.1}"
         else
@@ -178,22 +149,19 @@ EOF
 }
 generate_extensions_interop_out() {
     local op_id=$1 n_operators=$2 remote_op
-    # Le prefixe porte le NOEUD : MSISDN = <noeud>00<operateur><rang>. Fige a
-    # "600", le motif ne matchait plus rien des que le numero commencait par le
-    # numero de noeud - les appels inter-operateurs sortaient en Congestion
-    # sans qu'aucune ligne ne dise que c'est le motif qui n'accroche pas.
+    # The prefix carries the NODE: MSISDN = <node>00<operator><rank>. A fixed
+    # "600" would not match anything once the number starts with the node
+    # number - inter-operator calls would end in Congestion without any line
+    # saying that the pattern does not match.
     local _pfx; _pfx="$(osmo_msisdn_pfx "$(osmo_node_id)")"
     printf '[interop_out]\n\n'
-    # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>. Les
-    # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
-    # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
-    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
-    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
-    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
-    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
-    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
-    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    # One single pattern: MSISDNs are six digits, <node>00<operator><rank>.
+    # ── THE OPERATORS BELOW THE BASE ARE THE NATIVE ONES ───────────────────
+    # The loop starts at 1, not at the base: with OP_ID_BASE=2 (containers on
+    # ranks 2..N, rank 1 native on the host) op2 must also get a route to the
+    # native operator, otherwise a call 100201 -> 100101 falls into the _X.
+    # catch-all of [interop_out] and ends in Congestion. Same rule as
+    # sms-routing.conf, on the VOICE path.
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
@@ -206,20 +174,16 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN}
 EOF
     done
 
-    # ── LES SOFTPHONES AUSSI, ET SANS PREFIXE ───────────────────────────────
-    # [2026-08-31] Depuis [internal], un Linphone ne pouvait joindre un autre
-    # operateur qu'en composant 9 + numero (_9. du gabarit - dont l'exemple
-    # « 920001 pour joindre 20001 sur Op2 » date d'ailleurs du plan a CINQ
-    # chiffres, abandonne). Compose tel quel, 100201 tombait sur le fourre-tout
-    # _X. de [internal] et partait au MSC LOCAL, qui le rendait en
+    # ── THE SOFTPHONES TOO, AND WITHOUT PREFIX ──────────────────────────────
+    # From [internal], a Linphone can reach another operator by dialling the
+    # number as is: without this route, 100201 would fall into the _X.
+    # catch-all of [internal] and go to the LOCAL MSC, which returns
     #     rx MNCC_SETUP_REQ for unknown subscriber number '100201'
-    # avant de le ressortir par MNCC vers Asterisk. Le detour aboutissait, mais
-    # il consommait une transaction MNCC pour rien et faisait dependre un appel
-    # SIP->SIP du bon vouloir du MSC.
-    # On declare donc la route explicitement. _<pfx><op>XX est PLUS SPECIFIQUE
-    # que _X. : Asterisk la choisit d'office, sans qu'il faille toucher au
-    # fourre-tout du gabarit. Gosub(sub-record) comme pour _9., sinon ces
-    # appels-la seraient les seuls a ne pas etre enregistres.
+    # before sending it back through MNCC to Asterisk - a detour that consumes
+    # an MNCC transaction for nothing and makes a SIP->SIP call depend on the
+    # MSC. _<pfx><op>XX is MORE SPECIFIC than _X.: Asterisk picks it first,
+    # without touching the template's catch-all. Gosub(sub-record) as for _9.,
+    # otherwise these calls would be the only ones not recorded.
     printf '[internal]\n\n'
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
@@ -231,36 +195,31 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== SIP -> INTER-OP Op${remote_op}: \${EX
 
 EOF
     done
-    # PAS de fourre-tout _X. ici : le gabarit configs/extensions.conf en declare
-    # deja un dans ce meme contexte. Deux extensions identiques dans un contexte
-    # font refuser la seconde, avec six avertissements a chaque chargement :
+    # NO _X. catch-all here: the configs/extensions.conf template already
+    # declares one in this same context. Two identical extensions in a context
+    # make Asterisk refuse the second, with six warnings at every load:
     #     add_priority: Unable to register extension '_X.' priority 1
     #                   in 'interop_out', already in use
-    # Rien ne cassait - le fourre-tout du gabarit restait en place - mais ces
-    # lignes noyaient celles qui comptent.
 }
 _generate_sms_routing_conf_fallback() {
-    # 'local i' n'est PAS cosmetique. Cette fonction est appelee, via
-    # apply_config_templates, DEPUIS la boucle "for i in ..." qui demarre les
-    # operateurs. Sans local, sa propre boucle ecrase la variable de l'appelant
-    # et la laisse a n_operators : tous les conteneurs suivants calculaient
-    # alors leurs ports avec le MEME indice, d'ou
+    # 'local i' is NOT cosmetic. This function is called, through
+    # apply_config_templates, FROM the "for i in ..." loop that starts the
+    # operators. Without local, its own loop overwrites the caller's variable
+    # and leaves it at n_operators: all following containers would compute
+    # their ports with the SAME index, hence
     #     Bind for 0.0.0.0:5082 failed: port is already allocated
-    # au deuxieme conteneur - et, avant l'erreur, deux operateurs annonces sur
-    # les memes SIP/RTP/SMS.
+    # on the second container - and, before the error, two operators announced
+    # on the same SIP/RTP/SMS.
     local i
     local op_id=$1 n_operators=$2 i j
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ─────────────────────────
-    # [2026-08-31] start-multi.sh pose OP_ID_BASE=2 : les conteneurs prennent
-    # les rangs 2..N et l'operateur 1 reste NATIF, sur l'hote. Comme la boucle
-    # part de OP_ID_BASE, il n'apparaissait ni dans [operators] ni dans
-    # [routes] - releve dans osmo-operator-2 : « 2 = ... / 3 = ... » et rien
-    # pour le 1. Un SMS vers 100101 sortait donc en « No route for
-    # destination », et le natif etait injoignable depuis tout le banc.
-    # Il existe pourtant : il n'est simplement pas dans un conteneur. On le
-    # pointe sur la passerelle du bridge docker, qui EST l'hote vu d'un
-    # conteneur - la meme adresse que le pont audio (172.20.0.1).
+    # ── THE OPERATORS BELOW THE BASE ARE THE NATIVE ONES ────────────────────
+    # start-multi.sh sets OP_ID_BASE=2: the containers take ranks 2..N and
+    # operator 1 stays NATIVE, on the host. It must still appear in [operators]
+    # and [routes], otherwise an SMS to 100101 ends in "No route for
+    # destination" and the native operator is unreachable from the whole bench.
+    # It is pointed at the docker bridge gateway, which IS the host seen from a
+    # container - the same address as the audio bridge (172.20.0.1).
     local _natif_gw="${INTER_NET_GATEWAY:-172.20.0.1}"
     for i in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))); do printf '%s = %s\n' "$i" "$_natif_gw"; done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do printf '%s = %s\n' "$i" "$(op_backbone_ip "$i")"; done
@@ -269,55 +228,49 @@ _generate_sms_routing_conf_fallback() {
         for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done
     done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
-        # Les MSISDN EXACTS, pas un prefixe : un prefixe trop court avalait
-        # les numeros voisins, un prefixe absent laissait le relais rejeter
-        # tout SMS local avec "No route for destination" (2026-07-29).
-        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> (100101, 100102, 200101...)
+        # EXACT MSISDNs, not a prefix: a prefix too short swallows the
+        # neighbouring numbers, a missing prefix makes the relay reject every
+        # local SMS with "No route for destination".
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # exact MSISDNs <node>00<op><ms> (100101, 100102, 200101...)
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
-# [2026-08-03] apply_config_templates() a demenage dans generate_configs.sh :
-# ce fichier en portait une copie, start-docker.sh une autre. Une seule desormais, et
-# ses valeurs (ARFCN, BSIC, KI, IMSI...) sont exposees dans globals.conf au lieu
-# d'etre des formules enfouies dans la substitution.
+# apply_config_templates() lives in generate_configs.sh (one single copy, for
+# this file and for start-docker.sh); its values (ARFCN, BSIC, KI, IMSI...)
+# are exposed in globals.conf instead of being formulas buried in the
+# substitution.
 _GAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -r "$_GAB_ROOT/generate_configs.sh" ] && . "$_GAB_ROOT/generate_configs.sh"
 
-# ── Install configs natif. $1=src $2=prefix racine (/ ou /etc/netns/<ns>) ──
-# ── LES ADRESSES DE CONTENEUR N ONT RIEN A FAIRE SUR L HOTE ─────────────────
-# [2026-08-31] Les gabarits sont ecrits pour un CONTENEUR : ils posent
-# l adresse de dorsale de l operateur (172.20.0.<10+N>) et la passerelle du
-# bridge docker (172.20.0.1). Sur l hote, aucune des deux n existe.
+# ── Native config install. $1=src $2=root prefix (/ or /etc/netns/<ns>) ──
+# ── CONTAINER ADDRESSES HAVE NO PLACE ON THE HOST ───────────────────────────
+# The templates are written for a CONTAINER: they set the operator backbone
+# address (172.20.0.<10+N>) and the docker bridge gateway (172.20.0.1). On the
+# host, neither exists.
 #
-# Ces corrections vivaient dans apply_native_post_patches (generate_configs.sh),
-# que start-native.sh appelle. Mais qosmo-grgsm/run_modules/08-gabarits.sh, lui,
-# n appelle QUE apply_config_templates + install_configs_native, et ne source
-# meme pas generate_configs.sh : il reappliquait donc les gabarits bruts a
-# chaque demarrage du natif et REMETTAIT les adresses de conteneur. Le symptome
-# etait un natif affiche en 172.20.0.11 et un ASP qui ne montait jamais, une
-# seconde apres qu on ait corrige le fichier a la main.
-# (Ce module ne s executait plus depuis un renommage de depot, ce qui cachait
-# le probleme derriere un [SKIP] : il est reparu en le reparant.)
-#
-# On accroche donc ici, dans install_configs_native - le passage OBLIGE du
-# natif, quel que soit l appelant. Idempotent : rejouer ne change rien.
+# apply_native_post_patches (generate_configs.sh) also fixes these, but only
+# start-native.sh calls it; qosmo-grgsm/run_modules/08-gabarits.sh calls ONLY
+# apply_config_templates + install_configs_native and does not even source
+# generate_configs.sh. So the fixes are hooked here, in install_configs_native
+# - the MANDATORY path of the native mode, whatever the caller. Idempotent:
+# replaying changes nothing.
 _gab_fixups_natifs() {
     local src="$1" f
 
-    # 1. osmo-stp.cfg : le local-ip de l ASP vers l inter-STP. 127.0.0.1 est la
-    #    seule adresse dont on soit certain sur un hote. On ne touche QUE le
-    #    local-ip qui suit « asp asp-to-inter » : ceux du bloc d ecoute
-    #    au-dessus (127.0.0.1 / 127.0.0.2) sont corrects.
-    #    [2026-10-15] SAUF si le hub est sur une adresse reseau, meme la notre :
-    #    une SCTP liee a 127.0.0.1 vers 192.168.1.31 est refusee (« Network is
-    #    unreachable »), as-inter reste AS_DOWN. On prend l adresse source que
-    #    le noyau choisit vers le hub (meme regle que generate_configs.sh).
+    # 1. osmo-stp.cfg: the local-ip of the ASP to the inter-STP. Only the
+    #    local-ip following "asp asp-to-inter" is touched: those of the listen
+    #    block above (127.0.0.1 / 127.0.0.2) are correct. 127.0.0.1 is the only
+    #    address one can be sure of on a host, EXCEPT when the hub is on a
+    #    network address, even ours: an SCTP bound to 127.0.0.1 towards
+    #    192.168.1.31 is refused ("Network is unreachable") and as-inter stays
+    #    AS_DOWN. So the source address the kernel picks towards the hub is
+    #    used (same rule as generate_configs.sh).
     f="$src/osmocom/osmo-stp.cfg"
     if [ -f "$f" ]; then
         local rip lip=127.0.0.1
         rip="$(awk '/^[[:space:]]*asp[[:space:]]+asp-to-inter[[:space:]]/{x=1;next} x&&/^[[:space:]]*remote-ip[[:space:]]/{print $2; exit} x&&/^ (asp|as) /{exit}' "$f")"
         case "$rip" in
-            ""|127.*|__*) ;;   # __* : gabarit pas encore substitue
+            ""|127.*|__*) ;;   # __* : template not substituted yet
             *) lip="$(ip -4 route get "$rip" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1); exit}}')"
                [ -n "$lip" ] || lip=127.0.0.1 ;;
         esac
@@ -331,18 +284,19 @@ _gab_fixups_natifs() {
         ' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
     fi
 
-    # 2. mobile.cfg : la cible GSMTAP. 172.20.0.1 disparait avec le bridge, et
-    #    les paquets partent alors dans le vide - Wireshark reste vide sur
-    #    udp/4729 sans qu aucun message ne le dise.
+    # 2. mobile.cfg: the GSMTAP target. 172.20.0.1 does not exist without the
+    #    bridge, and the packets would go nowhere - Wireshark stays empty on
+    #    udp/4729 without any message saying so.
     for f in "$src/osmocom/mobile.cfg" "$src/bb/mobile.cfg" "$src/bb/mobile_group1.cfg"; do
         [ -f "$f" ] || continue
         sed -i "/^gsmtap\$/,/^!\$/ s/^\([[:space:]]*remote-host[[:space:]]\+\).*/\1127.0.0.1/" "$f"
     done
 
-    # 3. pjsip.conf : sur un hote plat il n y a pas de frontiere NAT a declarer.
-    #    external_* fait REECRIRE Contact et SDP pour tout pair hors local_net -
-    #    un Linphone du LAN recevait une adresse injoignable. Sans eux, pjsip
-    #    repond avec l adresse de la socket, la bonne, par destination.
+    # 3. pjsip.conf: on a flat host there is no NAT boundary to declare.
+    #    external_* makes pjsip REWRITE Contact and SDP for any peer outside
+    #    local_net - a LAN Linphone would receive an unreachable address.
+    #    Without them, pjsip answers with the socket address, the right one,
+    #    per destination.
     f="$src/asterisk/pjsip.conf"
     if [ -f "$f" ]; then
         awk '
@@ -361,39 +315,30 @@ _gab_fixups_natifs() {
         ' "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"
     fi
 
-    # 4. sms-routing.conf : LE NATIF NE CONNAISSAIT QUE LUI-MEME.
-    #    [2026-08-31] Releve sur l hote :
-    #        [operators]   1 = 172.20.0.11
-    #        [routes]      100101 = 1   100102 = 1
-    #    Deux erreurs dans quatre lignes. 172.20.0.11 est l adresse de DORSALE
-    #    DOCKER de l operateur 1 - elle n existe pas sur l hote, ou le natif
-    #    tourne. Et aucun des autres operateurs n y figure : un SMS du natif
-    #    vers 100201 sortait en « No route for destination ».
+    # 4. sms-routing.conf: THE NATIVE OPERATOR MUST KNOW THE OTHERS.
+    #    The fallback written by apply_config_templates is meant FOR A
+    #    CONTAINER: 172.20.0.11 as the operator address (the DOCKER backbone
+    #    address, which does not exist on the host) and no other operator at
+    #    all, so an SMS from the native to 100201 would end in "No route for
+    #    destination". Same trap as points 1 to 3 above, hence the fix in the
+    #    same place: install_configs_native is the MANDATORY path of the
+    #    native mode, whatever the caller.
     #
-    #    POURQUOI CE FICHIER ETAIT FAUX. apply_native_post_patches
-    #    (generate_configs.sh) sait deja ecrire cette table - son propre
-    #    commentaire decrit exactement le defaut. Mais elle n est appelee que
-    #    par start-native.sh --regen et build-iso.sh ; le demarrage ordinaire du
-    #    natif passe par 08-gabarits.sh, qui ne fait qu appliquer les gabarits
-    #    bruts. Le fichier repartait donc a chaque fois sur le fallback ecrit
-    #    POUR UN CONTENEUR - le meme piege que les points 1 a 3 ci-dessus, d ou
-    #    la correction au meme endroit : install_configs_native est le passage
-    #    OBLIGE du natif, quel que soit l appelant.
-    #
-    #    LA SOURCE DE VERITE est osmo-multi.conf (ecrit par addition.sh) :
+    #    THE SOURCE OF TRUTH is osmo-multi.conf (written by addition.sh):
     #        MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:... 3:docker:..."
-    #    On garde le keying par OPERATEUR, celui des conteneurs : sur un banc a
-    #    une machine tout le monde est sur le noeud 1, un keying par noeud les
-    #    confondrait. Sans osmo-multi.conf (mono-operateur), on ne touche a rien.
+    #    The keying by OPERATOR, the containers' one, is kept: on a
+    #    single-machine bench everybody is on node 1, a keying by node would
+    #    confuse them. Without osmo-multi.conf (single operator), nothing is
+    #    touched.
     f="$src/osmocom/sms-routing.conf"
     local mc="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
     if [ -f "$f" ] && [ -r "$mc" ]; then
         local _ops _node _self _sc _id _mode _ip _e
         _ops="$(sed -n 's/^MULTI_OPS=//p' "$mc" | tr -d '"' | tail -1)"
         _node="$(sed -n 's/^MULTI_NODE=//p' "$mc" | tail -1)"; case "$_node" in [1-9]) ;; *) _node=1 ;; esac
-        # Identite : on la RELIT, on ne la recalcule pas - c est elle qui dit
-        # quel operateur ce natif est, et elle a pu etre realignee par
-        # start-multi.sh (aligner_natif).
+        # Identity: it is RE-READ, not recomputed - it says which operator this
+        # native is, and it may have been realigned by start-multi.sh
+        # (aligner_natif).
         _self="$(sed -n 's/^operator_id[[:space:]]*=[[:space:]]*//p' "$f" | head -1)"
         _sc="$(sed -n 's/^sc_address[[:space:]]*=[[:space:]]*//p'  "$f" | head -1)"
         case "$_self" in [1-9]*) ;; *) _self=1 ;; esac
@@ -407,8 +352,8 @@ _gab_fixups_natifs() {
                 for _e in $_ops; do
                     IFS=: read -r _id _mode _ip _ <<< "$_e"
                     [ -n "$_id" ] || continue
-                    # Le natif, c est NOUS : 127.0.0.1 est la seule adresse dont
-                    # on soit certain sur un hote (meme choix qu au point 1).
+                    # The native one is US: 127.0.0.1 is the only address one
+                    # can be sure of on a host (same choice as in point 1).
                     if [ "$_mode" = native ] || [ "$_id" = "$_self" ]; then _ip=127.0.0.1; fi
                     [ -n "$_ip" ] || continue
                     printf '%s = %s\n' "$_id" "$_ip"
@@ -426,26 +371,20 @@ _gab_fixups_natifs() {
         fi
     fi
 
-    # 5. LE CHEMIN VOIX INTER-OPERATEUR : trunks SIP + [interop_out].
-    #    [2026-08-31] Meme trou que le point 4, sur la VOIX. Releve sur l hote :
-    #        [interop_out] du natif :  _X.  ->  Congestion()   (et rien d autre)
-    #        pjsip.conf              :  aucun interop_trunk_opN
-    #    Un appel 100101 -> 100201 sortait donc du MSC ...
+    # 5. THE INTER-OPERATOR VOICE PATH: SIP trunks + [interop_out].
+    #    Same need as point 4, on VOICE. Without it, the native [interop_out]
+    #    only holds _X. -> Congestion() and pjsip.conf has no
+    #    interop_trunk_opN: a call 100101 -> 100201 leaves the MSC
     #        rx MNCC_SETUP_REQ for unknown subscriber number '100201'
-    #    ... passait a osmo-sip-connector, tombait sur le fourre-tout, et
-    #    revenait en
+    #    goes to osmo-sip-connector, hits the catch-all and comes back as
     #        INVITE got status(503), releasing leg
-    #    Les SMS passaient (point 4), pas les appels : deux chemins, deux tables,
-    #    une seule des deux corrigee.
     #
-    #    On NE REECRIT PAS la logique : generate_extensions_interop_out et
-    #    generate_pjsip_interop_trunks (plus haut dans ce fichier) savent deja
-    #    la produire. Elles etaient seulement appelees avec le nombre
-    #    d operateurs du CONTENEUR courant - le natif se croyait donc seul.
-    #    On les rejoue ici avec la topologie reelle, comme au point 4.
-    #    OP_ID_BASE=1 : vu du natif, tous les distants sont des conteneurs et
-    #    portent bien une adresse de dorsale ; c est l inverse du cas conteneur,
-    #    ou le natif est celui qui n en a pas.
+    #    The logic is NOT rewritten: generate_extensions_interop_out and
+    #    generate_pjsip_interop_trunks (above in this file) already produce it.
+    #    They are replayed here with the real topology, as in point 4.
+    #    OP_ID_BASE=1: seen from the native, all remotes are containers and do
+    #    carry a backbone address; this is the opposite of the container case,
+    #    where the native is the one without.
     local mc5="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
     if [ -r "$mc5" ]; then
         local _ops5 _self5 _n5=0 _e5 _i5
@@ -456,9 +395,9 @@ _gab_fixups_natifs() {
             IFS=: read -r _i5 _ <<< "$_e5"
             case "$_i5" in [1-9]*) [ "$_i5" -gt "$_n5" ] && _n5="$_i5" ;; esac
         done
-        # Marqueur d idempotence : rejouer install_configs_native ne doit pas
-        # empiler les memes extensions (Asterisk refuserait les doublons avec
-        # « already in use » et noierait le journal).
+        # Idempotence marker: replaying install_configs_native must not stack
+        # the same extensions (Asterisk would refuse the duplicates with
+        # "already in use" and flood the log).
         local _mk5='; --- interop natif : ajoute par _gab_fixups_natifs ---'
         if [ "$_n5" -gt 1 ]; then
             f="$src/asterisk/extensions.conf"
@@ -479,9 +418,10 @@ install_configs_native() {
     local src=$1 root="${2:-}"
     _gab_fixups_natifs "$src"
     mkdir -p "${root}/etc/osmocom" "${root}/etc/asterisk" "$HOME/.osmocom/bb"
-    # [2026-10-22] /etc/osmocom/.proteges : un nom de fichier par ligne (# commentaire), jamais ecrase par la
-    # regeneration. La page http://127.0.0.1:8090/ (onglet Configs osmo) y inscrit chaque fichier qu'elle
-    # enregistre ; retirer la ligne rend le fichier au gabarit.
+    # /etc/osmocom/.proteges: one file name per line (# comment), never
+    # overwritten by the regeneration. The page http://127.0.0.1:8090/ (Configs
+    # osmo tab) adds each file it saves; removing the line gives the file back
+    # to the template.
     local _prot="${root}/etc/osmocom/.proteges" _f _b
     for _f in "$src/osmocom"/*; do
         [ -e "$_f" ] || continue
@@ -508,9 +448,9 @@ detect_host_ip() {
     HOST_IP="${HOST_IP:-127.0.0.1}"
 }
 
-# ── Auto-attach tmux ────────────────────────────────────────────────────────
-# run.sh tourne en arriere-plan et cree la session tmux 'osmocom'
-# (socket /tmp/osmocom_tmux). On attend qu'elle soit prete (run.sh termine)
-# puis on s'y attache dans le terminal courant. $1 = log run.sh a surveiller.
-#   AUTO_ATTACH=0   → desactive (reste en arriere-plan, message manuel)
-#   Desactive aussi si pas de TTY (scripte/bg) ou deja dans un tmux.
+# ── tmux auto-attach ────────────────────────────────────────────────────────
+# run.sh runs in the background and creates the tmux session 'osmocom'
+# (socket /tmp/osmocom_tmux). Wait until it is ready (run.sh finished), then
+# attach to it in the current terminal. $1 = run.sh log to watch.
+#   AUTO_ATTACH=0   → disabled (stays in the background, manual message)
+#   Also disabled without a TTY (scripted/bg) or when already inside tmux.

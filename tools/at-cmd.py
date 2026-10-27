@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-# at-cmd.py - PARLER A LA MAIN AU MODEM AT.
+# at-cmd.py - TALK TO THE AT MODEM BY HAND.
 #
-# Le pendant de tools/osmo-ril-atmodem.py : celui-ci TIENT le role du modem
-# (adosse a oFono), celui-la tient le role du RIL. C est l outil pour verifier,
-# sans Android et sans rild, que le modem virtuel repond ce qu il faut - et
-# c est aussi ce qu on branche sur un VRAI modem (un EC25 sur /dev/ttyUSB2)
-# pour comparer les reponses.
+# Counterpart of tools/osmo-ril-atmodem.py: that one plays the modem role
+# (backed by oFono), this one plays the RIL role. It is the tool to check,
+# without Android and without rild, that the virtual modem answers what it
+# should - and also what gets plugged on a REAL modem (an EC25 on /dev/ttyUSB2)
+# to compare the answers.
 #
-#   at-cmd.py                      ouvre une session interactive
-#   at-cmd.py AT+CREG?             une commande, la reponse, on sort
-#   at-cmd.py -d /dev/ttyUSB2 AT+CSQ   sur un modem physique
-#   at-cmd.py --sms 100102 "salut"     le dialogue AT+CMGS complet (avec le ^Z)
+#   at-cmd.py                      opens an interactive session
+#   at-cmd.py AT+CREG?             one command, the answer, exit
+#   at-cmd.py -d /dev/ttyUSB2 AT+CSQ   on a physical modem
+#   at-cmd.py --sms 100102 "salut"     the complete AT+CMGS dialogue (with the ^Z)
 #   at-cmd.py --call 100102            ATD100102;
 #
-# Par defaut on parle au modem virtuel, dont le lien est publie dans
+# By default it talks to the virtual modem, whose link is published in
 # /run/osmo-ril/at-pty.
 import argparse
 import os
@@ -39,13 +39,13 @@ def open_port(dev, baud=115200):
 
 
 def send(fd, line, wait=1.0, quiet=False):
-    """Envoie une commande et rend tout ce qui arrive jusqu au silence."""
+    """Sends a command and returns everything that arrives until silence."""
     os.write(fd, (line + "\r\n").encode())
     return read_until(fd, wait, quiet)
 
 
 def read_until(fd, wait, quiet=False):
-    """Lit jusqu a OK/ERROR, ou jusqu au bout du delai."""
+    """Reads until OK/ERROR, or until the delay runs out."""
     import select
     out, end = "", time.time() + wait
     while time.time() < end:
@@ -62,7 +62,7 @@ def read_until(fd, wait, quiet=False):
         if not quiet:
             sys.stdout.write(chunk)
             sys.stdout.flush()
-        # Une reponse finale : inutile d attendre le reste du delai.
+                # Final answer: no need to wait for the rest of the delay.
         for fin in ("\r\nOK\r\n", "\r\nERROR\r\n", "+CME ERROR", "+CMS ERROR"):
             if out.endswith(fin) or fin in out[-40:]:
                 return out
@@ -118,7 +118,7 @@ def main():
             send(fd, " ".join(a.cmd), a.timeout)
             return 0
 
-        # session interactive
+                # interactive session
         print("[at-cmd] %s - une commande par ligne, Ctrl-D pour sortir" % a.device)
         while True:
             try:

@@ -1,12 +1,11 @@
-# pont/dsp/downlink.py - le descendant du pont DSP, sans les sorties grgsm.
+# pont/dsp/downlink.py - the downlink of the DSP bridge, without the grgsm outputs.
 #
-# [2026-09-23] En montage DSP, QEMU tourne sous CALYPSO_DSP_EXTERN=1 : la
-# couche 1 gr-gsm y est desactivee, et c'est la seule a ecouter le GSMTAP
-# udp/4730, le SCH udp/4731 et l'anneau de parole /dev/shm/calypso_tch_dl
-# (calypso_l1_grgsm.c:34). Le DSP recoit, lui, les bursts bruts (Trx.run_data
-# -> udp/6702). On garde le tap Wireshark (udp/4729) ; le decodage local du
-# pont (statistiques, confirmation du chiffrement, ASSIGNMENT COMMAND, CHANNEL
-# RELEASE) est inchange.
+# In the DSP setup, QEMU runs with CALYPSO_DSP_EXTERN=1: its gr-gsm layer 1 is
+# disabled, and it is the only listener of the GSMTAP udp/4730, the SCH
+# udp/4731 and the speech ring /dev/shm/calypso_tch_dl (calypso_l1_grgsm.c:34).
+# The DSP receives the raw bursts instead (Trx.run_data -> udp/6702). The
+# Wireshark tap (udp/4729) is kept; the bridge's local decoding (statistics,
+# ciphering confirmation, ASSIGNMENT COMMAND, CHANNEL RELEASE) is the same.
 from ..downlink import Downlink, Feeder
 
 

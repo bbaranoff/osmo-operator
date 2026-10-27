@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
-"""sms_notify.py - PREVENIR LES MODEMS DU BANC QU UN SMS ARRIVE.
+"""sms_notify.py - notify the bench modems that an SMS arrives.
 
-POURQUOI CE FICHIER EXISTE. osmo-msc du banc tourne avec « sms-over-gsup » :
-un SM-RP recu de la radio part au HLR (gsm_04_11.c:742) sans jamais passer par
-gsm340_rx_tpdu(), donc sans jamais atteindre sms_route_mt_sms() ni le serveur
-SMPP. Le « smpp-first » et les « route prefix ... 100101 » de osmo-msc.cfg sont
-de la configuration morte tant que sms-over-gsup est la : un ESME lie sur le
-port 2775 ne recoit RIEN. Et le MT qui revient par GSUP est pousse directement
-a l abonne par la voie radio - le mobile osmocom-bb l a, les modems logiciels
-(Android via oFono, la VM postmarketOS via son port serie PCI) ne l ont pas.
+The bench osmo-msc runs with « sms-over-gsup »: an SM-RP received from the
+radio goes to the HLR (gsm_04_11.c) without ever passing through
+gsm340_rx_tpdu(), hence without reaching sms_route_mt_sms() nor the SMPP
+server. The « smpp-first » and « route prefix ... 100101 » lines of osmo-msc.cfg
+are dead configuration as long as sms-over-gsup is there: an ESME bound on port
+2775 receives nothing. And the MT coming back over GSUP is pushed directly to
+the subscriber over the radio path - the osmocom-bb mobile gets it, the
+software modems (Android through oFono, the postmarketOS VM through its PCI
+serial port) do not.
 
-D ou cette voie de service : la ou la passerelle decide d une remise locale,
-elle previent aussi les modems, qui presentent le message a leur systeme sous
-la forme AT attendue. On ne touche pas au chemin GSUP, donc le mobile continue
-de recevoir comme avant - c est bien pour cela qu on ne duplique RIEN ici.
+Hence this service path: where the gateway decides on a local delivery, it also
+notifies the modems, which present the message to their system in the expected
+AT form. The GSUP path is untouched, so the mobile keeps receiving as before -
+nothing is duplicated here.
 
-Deux emplois :
-    import            : from sms_notify import notifier      (dans le relais)
-    ligne de commande : sms_notify.py <imsi> <from> <texte>   (send-mt-sms.sh)
+Two uses:
+    import       : from sms_notify import notifier      (in the relay)
+    command line : sms_notify.py <imsi> <from> <text>   (send-mt-sms.sh)
 """
 import json
 import os
 import socket
 import sys
 
-# Les boites d entree des modems. Le meme programme (osmo-phonesim-banc.py)
-# tourne DEUX fois sur ce banc et il lui faut donc deux ports : celui du modem
-# d Android (mode ecoute) et celui du modem de la VM (mode --connect).
+# The modem inboxes. The same program (osmo-phonesim-banc.py) runs twice on
+# this bench and therefore needs two ports: the Android modem (listen mode) and
+# the VM modem (--connect mode).
 DEFAUT = "127.0.0.1:12348,127.0.0.1:12349"
 TIMEOUT = 2.0
 
@@ -47,8 +48,8 @@ def cibles():
 
 
 def notifier(imsi, sender, text, log=None):
-    """Remet une copie du SMS aux modems. Best effort : un modem absent n est
-    pas une erreur (la VM peut etre eteinte), on ne leve jamais."""
+    """Hand a copy of the SMS to the modems. Best effort: a missing modem is
+    not an error (the VM may be off), never raises."""
     charge = (json.dumps({"imsi": imsi, "from": sender, "text": text},
                          ensure_ascii=False) + "\n").encode()
     touches = 0
@@ -56,7 +57,7 @@ def notifier(imsi, sender, text, log=None):
         try:
             s = socket.create_connection((hote, port), timeout=TIMEOUT)
         except OSError:
-            continue                      # pas de modem sur ce port : normal
+            continue                      # no modem on this port: normal
         try:
             s.sendall(charge)
             touches += 1

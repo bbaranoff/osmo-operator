@@ -612,17 +612,16 @@ if [ "$DO_OPENCL" = "1" ]; then
         if [ ! -f /root/deka/deka-start.sh ]; then
         cat > /root/deka/deka-start.sh <<'DEKASTART'
 #!/bin/bash
-# deka-start.sh - montage des tables deka et lancement des workers.
-# Pose par addition.sh (supplement OpenCL). Lance par l icone deka (pkexec), ou
-# a la main : sudo /root/deka/deka-start.sh
-#   1. vgchange -ay : active le groupe de volumes (sinon /dev/tables/* absent).
-#   2. les 4 points de montage, puis les 4 volumes (1_10..31_40).
-#   3. les 3 workers python, depuis /root/deka (delta.pyc y vit).
+# deka-start.sh - mount the deka tables and start the workers.
+# Installed by addition.sh (OpenCL supplement). Started by the deka icon (pkexec) or
+# by hand: sudo /root/deka/deka-start.sh
+#   1. vgchange -ay: activate the volume group (otherwise /dev/tables/* is missing).
+#   2. the 4 mount points, then the 4 volumes (1_10..31_40).
+#   3. the 3 python workers, from /root/deka (where delta.pyc lives).
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 LOG=/var/log/deka.log
-# Sortie a l ECRAN + copie dans le log (tee) : on veut VOIR les montages et les
-# PID des workers, pas les chercher dans un fichier.
+# Output on screen + copy in the log (tee), to see mounts and worker PIDs.
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date -Is) deka-start ==="
 [ "$(id -u)" -eq 0 ] || { echo "root requis : sudo $0"; exit 1; }
@@ -658,8 +657,8 @@ DEKASTART
         cat > /usr/local/bin/osmo-deka-anim <<'DEKAGUI'
 #!/bin/bash
 set -u
-# osmo-deka-anim - deka dans une fenetre GTK du banc (terminal VTE dedans),
-# en root par pkexec. [2026-10-01] Plus de gnome-terminal.
+# osmo-deka-anim - deka in a GTK bench window (embedded VTE terminal),
+# as root through pkexec.
 SCRIPT=/root/deka/deka-start.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
@@ -781,10 +780,9 @@ if [ "$DO_CLAUDE" = "1" ]; then
     fi
     cat > /usr/local/bin/osmo-claude-anim <<'CLA'
 #!/bin/bash
-# osmo-claude-anim - Claude Code dans une fenetre GTK du banc (terminal VTE :
-# claude est interactif de bout en bout). Pas dans l ISO : le premier clic
-# l installe (addition.sh --claude, en root) puis l ouvre, dans la meme
-# fenetre. [2026-10-01] Plus de gnome-terminal.
+# osmo-claude-anim - Claude Code in a GTK bench window (VTE terminal: claude is
+# interactive). Not in the ISO: the first click installs it (addition.sh --claude,
+# as root), then opens it in the same window.
 set -u
 exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Claude" -- bash -lc '
 if ! command -v claude >/dev/null 2>&1; then
@@ -960,8 +958,8 @@ fi
 if [ "$DO_MULTI" = "1" ]; then
     install -d "$(dirname "$MULTI_CONF")"
     cat > "$MULTI_CONF" <<CONF
-# osmo-multi.conf - topologie multi-operateur, ecrite par addition.sh.
-# Relue par start-multi.sh. Ne pas editer a la main sans relire les deux.
+# osmo-multi.conf - multi-operator topology, written by addition.sh.
+# Read by start-multi.sh. Do not edit by hand without reading both.
 MULTI_NODE=1
 MULTI_HUB_NAME=osmo-inter-stp
 MULTI_HUB_IP=172.20.0.10
@@ -977,46 +975,30 @@ CONF
     echo -e "  ${GREEN}✓${NC} topologie SS7 ecrite : ${CYAN}${MULTI_CONF}${NC}"
     echo -e "      op1 ${BOLD}natif${NC} (1.1.2) + op2/op3 ${BOLD}docker${NC} (1.2.2 / 1.3.2) → hub 172.20.0.10"
 
-    # ── L ICONE MULTI-OPERATOR : POSEE ICI, A LA FIN, ET PAS AVANT ────────────
-    # L antenne bleue lance start-multi.sh, qui suppose docker, l image et la
-    # topologie ci-dessus. La poser au build ISO (comme le telephone ou le
-    # tutoriel) la faisait apparaitre sur le bureau des le premier boot, AVANT
-    # que ce supplement n existe : un clic ne donnait rien. On la pose donc
-    # seulement maintenant, une fois l install SS7 reellement faite - build-iso
-    # et install_modules/80-bureau.sh ne la posent plus.
+    # ── Multi-operator icon: installed here, at the end ──────────────────────
+    # The blue antenna starts the multi-operator bench, which needs docker, the
+    # image and the topology above, so the icon is only installed once the SS7
+    # supplement is in place (build-iso and install_modules/80-bureau.sh do not).
     _ico_dir=/usr/share/osmo-operator/icons
     _svg="$DIR/data/osmo-multi.svg"
     _dsk="$DIR/data/desktop/osmo-multi.desktop"
 
-    # ── L UNITE D ABORD, L ICONE ENSUITE ────────────────────────────────────
-    # [2026-09-04] L icone lance desormais `systemctl start osmo-multi.service`
-    # et plus start-multi.sh : elle ne vaut donc que si l unite EXISTE. Sur une
-    # ISO elle est posee au build (iso_modules/82-services.sh) ; sur une machine
-    # ou ce depot a ete deroule a la main, non. On la pose ici, avec l icone qui
-    # en depend - les deux vont ensemble ou ne vont pas du tout.
-    #
-    # POURQUOI PLUS DE TERMINAL. start-multi.sh se RELANCE lui-meme dans un
-    # gnome-terminal quand il detecte qu il n en a pas (OSMO_MULTI_TERM) : un
-    # clic sur l icone ouvrait donc une fenetre qui vivait le temps du
-    # lancement, et dont la sortie etait perdue a la fermeture. Quand un
-    # operateur ne demarrait pas, il n en restait aucune trace. L unite, elle,
-    # pose OSMO_NO_TERM=1 : aucune fenetre, tout dans le journal
-    # (`journalctl -u osmo-multi`), un etat lisible et un arret propre - comme
-    # le mono-operateur, qui est une unite depuis le debut.
+    # ── Unit first, then the icon ──────────────────────────────────────────
+    # The icon runs `systemctl start osmo-multi.service`, so the unit must exist.
+    # On an ISO it is installed at build time (iso_modules/82-services.sh); on a
+    # hand-deployed machine it is installed here, together with the icon.
+    # The unit sets OSMO_NO_TERM=1: no terminal window, everything goes to the
+    # journal (`journalctl -u osmo-multi`).
     for _u in osmo-banc osmo-multi; do
         [ -f "$DIR/services/$_u.service" ] || continue
         install -m644 "$DIR/services/$_u.service" "/etc/systemd/system/$_u.service"
     done
     systemctl daemon-reload 2>/dev/null || true
-    # ── POSEES, PAS ACTIVEES ────────────────────────────────────────────────
-    # [2026-09-05] `systemctl enable osmo-multi` etait fait ICI, et l ISO
-    # activait osmo-banc de son cote : le supplement SS7 suffisait donc a ce
-    # que la machine monte, a chaque demarrage, la pile radio ET les conteneurs
-    # du multi - avant meme l ouverture de session, sur une configuration que
-    # personne n avait choisie. Un banc se DEMARRE :
-    #   systemctl start osmo-banc | osmo-multi     une session (ou l icone)
-    #   systemctl enable --now osmo-multi          a chaque demarrage
-    # OSMO_MULTI_ENABLE=1 ./addition.sh retablit l activation automatique.
+    # ── Installed, not enabled ─────────────────────────────────────────────
+    # A bench is started explicitly:
+    #   systemctl start osmo-banc | osmo-multi     one session (or the icon)
+    #   systemctl enable --now osmo-multi          at every boot
+    # OSMO_MULTI_ENABLE=1 ./addition.sh enables it automatically.
     if [ -f /etc/systemd/system/osmo-multi.service ]; then
         if [ "${OSMO_MULTI_ENABLE:-0}" = "1" ]; then
             systemctl enable osmo-multi.service >/dev/null 2>&1 \
@@ -1031,25 +1013,23 @@ CONF
 
     if [ -f "$_dsk" ]; then
         install -d "$_ico_dir" /usr/share/icons/hicolor/scalable/apps /usr/share/applications
-        # SVG en CHEMIN ABSOLU dans Icon= (voir build-iso.sh) : un nom de theme
-        # arrive apres icon-theme.cache s affiche en page blanche.
+        # SVG as an ABSOLUTE PATH in Icon= (see build-iso.sh): a theme name added
+        # after icon-theme.cache was built shows as a blank page.
         if [ -f "$_svg" ]; then
             install -m644 "$_svg" "$_ico_dir/osmo-multi.svg"
             install -m644 "$_svg" /usr/share/icons/hicolor/scalable/apps/osmo-multi.svg
         fi
         install -m644 "$_dsk" /usr/share/applications/osmo-multi.desktop
-        # Icon= suit l arbre reel. Exec=, lui, ne nomme plus l arbre : il appelle
-        # `systemctl start osmo-multi.service`, et c est l UNITE qui porte le
-        # chemin (posee juste au-dessus depuis $DIR/services/). Le sed sur Exec=
-        # reste, sans effet sur la ligne actuelle, pour un .desktop ancien qui
-        # nommerait encore start-multi.sh en dur.
+        # Icon= follows the real tree. Exec= calls `systemctl start osmo-multi.service`;
+        # the unit carries the path. The sed on Exec= also fixes older .desktop files
+        # that still name start-multi.sh.
         sed -i -e "s|^Exec=/opt/GSM/osmo-operator/|Exec=$DIR/|" \
                -e "s|^Icon=.*|Icon=$_ico_dir/osmo-multi.svg|" \
                /usr/share/applications/osmo-multi.desktop
 
-        # Sur les bureaux de root et de l utilisateur sudo, en Bureau/ et
-        # Desktop/. metadata::trusted pour que DING l affiche sans pastille ;
-        # osmo-trust-desktop (au login) la repositionne et la trust aussi.
+        # On the desktops of root and of the sudo user, in Bureau/ and Desktop/.
+        # metadata::trusted so DING shows it without a badge; osmo-trust-desktop
+        # (at login) repositions and trusts it too.
         mapfile -t _homes < <(_bureau_homes)
         _posee=0
         for _h in "${_homes[@]}"; do
@@ -1068,34 +1048,18 @@ CONF
             || echo -e "  ${GREEN}✓${NC} icone ${BOLD}multi-operator${NC} dans le menu des applications"
     fi
 
-    # ── LE BANC MULTI DEMARRE MAINTENANT : LES CONTENEURS EXISTENT EN SORTANT ──
-    # [2026-10-01] L en-tete promettait « start-multi.sh demarre juste apres »
-    # et RIEN ne le faisait : le supplement sortait avec une topologie, une
-    # unite et une icone, mais aucun conteneur - osmo-operator-2 et -3
-    # n existaient qu au premier clic sur l antenne, et un operateur qui venait
-    # d « installer le multi » ne voyait rien dans docker ps. On termine donc
-    # par UNE session du banc multi : `systemctl start`, pas `enable` -
-    # l activation a chaque demarrage reste le geste de l operateur
-    # (00-options.sh, 2026-09-14). OSMO_MULTI_START=0 pour poser sans lancer.
-    # Le journal de l unite defile ici pendant le demarrage : c est lui qui
-    # montre les conteneurs qui montent, et l erreur s il y en a une.
-    #
-    # [2026-10-01] PAR launch.sh --multi, LE MEME CHEMIN QUE L ICONE. Ce bloc
-    # faisait son propre `systemctl start --no-block` : un deuxieme lanceur,
-    # avec ses propres tests - et pas ceux de l icone. launch.sh --multi
-    # verifie l unite, start-multi.sh et la topologie, nomme ce qui manque,
-    # refuse un banc deja en route, demarre l unite (start, pas restart) et
-    # annonce le resultat ; c est aussi ce que fait « run multi » de l encart
-    # du bureau (tools/osmo-launcher.py). Ce que le supplement vient de poser
-    # est donc teste par ce qui s en servira. Le natif que start-multi.sh
-    # lance au passage (osmo-banc) part en DSP : c est le defaut de
-    # start-native.sh depuis ce jour.
+    # ── Start the multi-operator bench now: containers exist on exit ───────
+    # One session through launch.sh --multi, the same path as the icon and the
+    # desktop launcher (tools/osmo-launcher.py): it checks the unit,
+    # start-multi.sh and the topology, refuses a bench already running, starts
+    # the unit (start, not enable) and reports the result. The unit journal
+    # scrolls here during start-up. OSMO_MULTI_START=0 installs without starting.
     if [ "${OSMO_MULTI_START:-1}" = "1" ] && [ -f /etc/systemd/system/osmo-multi.service ]; then
         echo -e "  ${CYAN}→${NC} demarrage du banc multi-operateur (${BOLD}launch.sh --multi${NC}, comme l icone) - comptez plusieurs minutes ..."
         journalctl -u osmo-multi -f -n 0 --no-pager -o cat 2>/dev/null &
         _jpid=$!
-        # OSMO_LAUNCH_NO_SERVICE n a pas de sens ici (--multi est traite en
-        # tete de launch.sh) ; on garde le terminal courant pour sa sortie.
+        # OSMO_LAUNCH_NO_SERVICE is irrelevant here (--multi is handled at the top
+        # of launch.sh); the current terminal keeps its output.
         if "$DIR/launch.sh" --multi; then
             sleep 1; kill "$_jpid" 2>/dev/null; wait "$_jpid" 2>/dev/null
             echo -e "  ${GREEN}✓${NC} banc multi-operateur en service - conteneurs :"
@@ -1109,10 +1073,10 @@ CONF
     fi
 fi
 
-# ── LA SIM DU BANC (supplement independant) ──────────────────────────────────
-# Lecteur PC/SC (pcscd, CCID : HID Omnikey), softSIM (le serveur SAP, Ruby) et
-# pySim (lire / programmer une sysmoISIM). Meme code que l ISO (80-chroot.sh) :
-# tools/osmo-sim-install.sh, qu on source ici. Ensuite : tools/osmo-sim.sh.
+# ── Bench SIM (independent supplement) ──────────────────────────────────
+# PC/SC reader (pcscd, CCID: HID Omnikey), softSIM (Ruby SAP server) and
+# pySim (read / program a sysmoISIM). Same code as the ISO (80-chroot.sh):
+# tools/osmo-sim-install.sh, sourced here. Then: tools/osmo-sim.sh.
 if [ "$DO_SIM" = "1" ]; then
     echo -e "${BOLD}== SIM : lecteur PC/SC, softSIM, pySim ==${NC}"
     if [ -f "$DIR/tools/osmo-sim-install.sh" ]; then
@@ -1124,9 +1088,9 @@ if [ "$DO_SIM" = "1" ]; then
     fi
 fi
 
-# ── FIRMWARES TELEPHONE (supplement independant) ─────────────────────────────
-# gnuarm, Magnetite C139, osmocom-bb-trx, Fernvale, SIMCom : tools/osmo-firmwares-install.sh.
-# osmocom-bb-trx tire une image Docker : sans moteur, --trx ne pose que le firmware.
+# ── Phone firmwares (independent supplement) ────────────────────────────
+# gnuarm, Magnetite C139, osmocom-bb-trx, Fernvale, SIMCom: tools/osmo-firmwares-install.sh.
+# osmocom-bb-trx pulls a Docker image: without the engine, --trx only installs the firmware.
 if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_CALFW$DO_FERNVALE$DO_SIMCOM" != "000000" ]; then
     if [ -f "$DIR/tools/osmo-firmwares-install.sh" ]; then
         # shellcheck source=tools/osmo-firmwares-install.sh
@@ -1144,11 +1108,10 @@ if [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_CALFW$DO_FERNVALE$DO_SIMCOM" != "000000"
     fi
 fi
 
-# ── JEUX + MEDIA (supplement independant) ────────────────────────────────────
-# Doom / Quake III / Kodi / YouTube+uBlock / Wireshark(root) / Linphone,
-# ranges dans les dossiers Jeux / Media / Telephone / Outils et lancables depuis
-# l encart du bureau. La logique est partagee avec l ISO (le natif) :
-# tools/osmo-extras-install.sh, qu on source ici.
+# ── Games + media (independent supplement) ──────────────────────────────
+# Doom / Quake III / Kodi / YouTube+uBlock / Wireshark(root) / Linphone, in the
+# Jeux / Media / Telephone / Outils folders, launchable from the desktop panel.
+# Shared with the ISO: tools/osmo-extras-install.sh, sourced here.
 if [ "$DO_EXTRAS" = "1" ]; then
     echo -e "${BOLD}== Jeux + media ==${NC}"
     if [ -f "$DIR/tools/osmo-extras-install.sh" ]; then
@@ -1160,18 +1123,13 @@ if [ "$DO_EXTRAS" = "1" ]; then
     fi
 fi
 
-# ── LA 4G (srsRAN ZeroMQ + Open5GS) ET L UI SMARTPHONE (postmarketOS) ────────
-# [2026-09-08] Miroir aux trois chemins (addition.sh, update.sh, le build ISO :
-# iso_modules/88-lte-pmos.sh). Tout est ecrit une fois dans
-# tools/osmo-lte-install.sh (paquets, .deb du cache, configs du depot,
-# lanceurs osmo-lte / osmo-epc ; --all compile dans /opt/LTE si les binaires
-# manquent et qu aucun .deb n est la) et tools/osmo-pmos-install.sh
-# (/opt/user_interface/pmos : scripts, pmbootstrap patche, gabarit ; kernel/ :
-# le .deb du noyau PPP, de /var/cache/osmo-debs ou de GitHub). Non fatal.
-# [2026-10-24] SAUF QUAND CLAUDE EST SEUL DEMANDE. « addition.sh --claude » (et
-# l icone Claude, qui l appelle au premier clic) ne doit installer que Claude :
-# ce bloc, lui, passait a chaque appel et lancait la 4G et postmarketOS
-# (paquets, eventuelle compilation de /opt/LTE) pour un simple CLI.
+# ── 4G (srsRAN ZeroMQ + Open5GS) and smartphone UI (postmarketOS) ───────
+# Same code for addition.sh, update.sh and the ISO build (iso_modules/88-lte-pmos.sh):
+# tools/osmo-lte-install.sh (packages, cached .deb, repo configs, osmo-lte /
+# osmo-epc launchers; --all builds into /opt/LTE when binaries and .deb are
+# missing) and tools/osmo-pmos-install.sh (/opt/user_interface/pmos: scripts,
+# patched pmbootstrap, template; kernel/: the PPP kernel .deb). Not fatal.
+# Skipped when only --claude is requested.
 if [ "$DO_CLAUDE" = "1" ] && [ "$DO_DOCKER$DO_IMAGE$DO_MULTI$DO_OPENCL$DO_EXTRAS$DO_SIM" = "000000" ] \
    && [ "$DO_GNUARM$DO_MAGNETITE$DO_TRX$DO_CALFW$DO_FERNVALE$DO_SIMCOM" = "000000" ]; then
     :

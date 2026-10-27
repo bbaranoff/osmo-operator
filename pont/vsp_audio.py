@@ -1,20 +1,21 @@
-"""vsp_audio.py - le port voix (VSP) du DSP Calypso relie a PulseAudio.
+"""vsp_audio.py - the voice port (VSP) of the Calypso DSP connected to PulseAudio.
 
-[2026-10-15] c54x_exe modelise le port serie SP0 de la ROM (qosmo
-hw/arm/calypso/l1-dsp/calypso_vsp.c, CALYPSO_VSP=1) : a chaque echantillon il
-pose DRR depuis l'anneau /dev/shm/calypso_pcm_ul et releve DXR dans
-/dev/shm/calypso_pcm_dl, a 8 kHz exacts par rapport au fn de la BTS. Ce module
-fait le reste, hors de la boucle temps reel du DSP :
+c54x_exe models the SP0 serial port of the ROM (qosmo
+hw/arm/calypso/l1-dsp/calypso_vsp.c, CALYPSO_VSP=1): for every sample it sets
+DRR from the ring /dev/shm/calypso_pcm_ul and picks DXR up into
+/dev/shm/calypso_pcm_dl, at exactly 8 kHz relative to the BTS fn. This module
+does the rest, outside the DSP real-time loop:
 
-    gsm_mic.monitor --parec--> calypso_pcm_ul      (le micro du mobile)
-    calypso_pcm_dl  --pacat--> gsm_audio            (son haut-parleur)
+    gsm_mic.monitor --parec--> calypso_pcm_ul      (the mobile's microphone)
+    calypso_pcm_dl  --pacat--> gsm_audio            (its loudspeaker)
 
-Ce sont les points ou GAPK branchait le mobile (alsa gsm_in / gsm_out) et ceux
-que l'etage « voix » de banc-max injecte et ecoute : le test reste le meme juge.
+These are the points where GAPK plugs the mobile (alsa gsm_in / gsm_out) and
+the ones the "voice" stage of banc-max injects into and listens to: the test
+stays the same judge.
 
-Anneaux : en-tete uint32 ecrit (compteur d'echantillons ecrits), uint32 taille,
-puis taille x int16. Un seul ecrivain par anneau. Lance par c54x_exe/run.sh
-(etape 5b) quand CALYPSO_VSP=1 :  python3 -m pont.vsp_audio
+Rings: header uint32 written (count of samples written), uint32 size, then
+size x int16. A single writer per ring. Started by c54x_exe/run.sh (step 5b)
+when CALYPSO_VSP=1:  python3 -m pont.vsp_audio
 """
 import fcntl
 import mmap
@@ -34,7 +35,7 @@ TAUX = 8000
 SOURCE = os.environ.get("VSP_SOURCE", "gsm_mic.monitor")
 SINK = os.environ.get("VSP_SINK", "gsm_audio")
 GIGUE = int(os.environ.get("VSP_GIGUE_MS", "60")) * TAUX // 1000
-DL_CIBLE = int(os.environ.get("VSP_DL_CIBLE_MS", "150")) * TAUX // 1000   # tuyau vers pacat
+DL_CIBLE = int(os.environ.get("VSP_DL_CIBLE_MS", "150")) * TAUX // 1000   # pipe to pacat
 
 
 def anneau(chemin):
@@ -51,7 +52,7 @@ def journal(*a):
 
 
 def micro(ul):
-    """parec -> anneau UL (ecrivain unique)."""
+    """parec -> UL ring (single writer)."""
     cmd = ["parec", f"--device={SOURCE}", "--format=s16le", f"--rate={TAUX}", "--channels=1",
            "--raw", "--latency-msec=20"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
@@ -64,11 +65,11 @@ def micro(ul):
         for (ech,) in struct.iter_unpack("<h", bloc[: len(bloc) // 2 * 2]):
             struct.pack_into("<h", ul, 8 + 2 * (w % N), ech)
             w = (w + 1) & 0xFFFFFFFF
-        struct.pack_into("<I", ul, 0, w)              # compteur en dernier
+        struct.pack_into("<I", ul, 0, w)              # counter last
 
 
 def en_attente(fd):
-    """Octets deja ecrits dans le tuyau vers pacat et pas encore lus par lui."""
+    """Bytes already written to the pipe to pacat and not yet read by it."""
     try:
         return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
     except OSError:
@@ -76,17 +77,14 @@ def en_attente(fd):
 
 
 def haut_parleur(dl):
-    """anneau DL -> pacat, a retard borne.
+    """DL ring -> pacat, with bounded delay.
 
-    [2026-10-16] LA VOIX REVENAIT 4,5 S APRES. L'ancienne boucle ecrivait dans
-    pacat tout ce que l'anneau contenait, ET du silence chaque fois qu'il etait
-    vide (DSP en retard). pacat consomme a 8 kHz exacts : chaque silence ajoute
-    puis les echantillons du DSP qui arrivent ensuite en rafale s'empilaient
-    dans le tuyau (64 Kio = 4 s), sans jamais se resorber. Mesure sur la pile
-    vivante (FIONREAD sur le stdin de pacat) : 3,30 s en attente. Desormais le
-    tuyau n'est rempli que jusqu'a DL_CIBLE (defaut 150 ms) ; le silence ne
-    sert que si le tuyau va se vider ; l'anneau ne garde pas plus de GIGUE
-    echantillons de retard (le surplus est jete, une fois, et compte)."""
+    pacat consumes at exactly 8 kHz: silence added while the ring is empty
+    (DSP behind), then DSP samples arriving in a burst, would pile up in the
+    pipe (64 KiB = 4 s) without ever draining. The pipe is therefore only
+    filled up to DL_CIBLE (default 150 ms); silence is only used if the pipe
+    is about to run dry; the ring keeps at most GIGUE samples of delay (the
+    surplus is dropped, once, and counted)."""
     cmd = ["pacat", "--playback", f"--device={SINK}", "--format=s16le", f"--rate={TAUX}",
            "--channels=1", "--raw", "--latency-msec=60"]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -102,7 +100,7 @@ def haut_parleur(dl):
         if lu is None:
             lu = (w - GIGUE) & 0xFFFFFFFF
         dispo = (w - lu) & 0xFFFFFFFF
-        if dispo > N or dispo > GIGUE + cible:           # retard de l'anneau : on rattrape
+        if dispo > N or dispo > GIGUE + cible:           # ring behind: catch up
             n_jete += (dispo - GIGUE) if dispo <= N else 0
             lu = (w - GIGUE) & 0xFFFFFFFF
             dispo = GIGUE
@@ -116,7 +114,7 @@ def haut_parleur(dl):
                 out += dl[8 + 2 * ((lu + i) % N): 10 + 2 * ((lu + i) % N)]
             lu = (lu + k) & 0xFFFFFFFF
             n_total += k
-            if file + k < 320:                           # le tuyau va se vider : silence
+            if file + k < 320:                           # the pipe is about to run dry: silence
                 out += bytes(2 * (320 - file - k)); n_silence += 320 - file - k
             if out:
                 p.stdin.write(out); p.stdin.flush()
@@ -133,14 +131,14 @@ def pactl(*args):
 
 
 def micro_reel():
-    """[2026-10-16] Le vrai micro de l'operateur jusqu'a gsm_mic, donc jusqu'a DRR.
+    """The operator's real microphone up to gsm_mic, hence up to DRR.
 
-    Le cablage existe (lib/audio.sh : annuleur d'echo osmo_mic_ec, puis
-    module-loopback osmo_mic_ec -> gsm_mic), mais le 16/10 l'entree materielle
-    etait a 0 % et osmo_mic_ec en sourdine : le DSP ne recevait que le ton
-    injecte par banc-max (« crete UL 0 » dans les lignes [vsp]). lib/audio.sh
-    ne regle le volume qu'a la creation de l'annuleur. On le reverifie ici, a
-    chaque lancement du port voix. VSP_MICRO_REEL=0 laisse le micro tel quel."""
+    The wiring exists (lib/audio.sh: echo canceller osmo_mic_ec, then
+    module-loopback osmo_mic_ec -> gsm_mic), but lib/audio.sh only sets the
+    volume when the canceller is created; a hardware input at 0 % or a muted
+    osmo_mic_ec leaves the DSP with only the tone injected by banc-max. Mute
+    and volume are therefore checked again here, at every start of the voice
+    port. VSP_MICRO_REEL=0 leaves the microphone as is."""
     if os.environ.get("VSP_MICRO_REEL", "1") == "0":
         return
     sources = [l.split("\t")[1] for l in pactl("list", "short", "sources").splitlines() if "\t" in l]

@@ -1,42 +1,39 @@
 #!/bin/bash
 # =============================================================================
-# checks/annuaire.sh -- l'annuaire du banc, confronte a ce que le reseau en sait
+# checks/annuaire.sh -- bench subscriber directory, cross-checked with the network
 #
-# Le banc ne rend que des nombres : 001020002000001, 20001, 1.21.2, rctx 2150.
-# Chacun est juste, aucun ne se retient, et il faut trois fenetres pour savoir
-# si l'abonne 20001 existe, s'il a une cle, s'il est attache, et sur quelle
-# machine. Ce script rassemble les quatre sources en une page :
+# Gathers in one page what is otherwise spread over several tools: does
+# subscriber 20001 exist, does it have a key, is it attached, and which
+# machine serves it. Sources:
 #
-#   data/*.txt  -> annuaire.csv    l'etat civil invente au lancement
-#   hlr.db                          l'abonne existe-t-il, a-t-il une cle
-#   VTY osmo-msc                    est-il ATTACHE, maintenant
-#   annuaire-ss7.csv + VTY stp      quelle machine le sert, et sous quel PC
+#   data/*.txt  -> annuaire.csv    identities generated at startup
+#   hlr.db                          does the subscriber exist, does it have a key
+#   osmo-msc VTY                    is it ATTACHED right now
+#   annuaire-ss7.csv + STP VTY      which machine serves it, under which PC
 #
-# CE QU'IL MONTRE
-#   1. les abonnes : IMSI, MSISDN, nom, operateur, pays, cle, attachement
-#   2. les incoherences : une fiche sans abonne, un abonne sans fiche, un
-#      abonne sans cle - ce dernier etant le plus couteux, parce qu'il n'a
-#      l'air de rien : osmo-msc le trouve, reclame ses vecteurs, n'obtient
-#      rien, et rejette le mobile en accusant la carte SIM
-#   3. l'annuaire SS7 : quel point code, quel routing context, quel hub, et
-#      ce que le STP en dit en ce moment
+# OUTPUT
+#   1. subscribers: IMSI, MSISDN, name, operator, country, key, attach state
+#   2. inconsistencies: a record without subscriber, a subscriber without
+#      record, a subscriber without key - the latter makes osmo-msc request
+#      auth vectors, get none, and reject the phone as if the SIM were wrong
+#   3. SS7 directory: point code, routing context, hub, and the current
+#      STP view
 #
-# Ne modifie rien. Ne redemarre rien. Lecture seule.
+# Read-only: modifies nothing, restarts nothing.
 #
-# Usage : ./checks/annuaire.sh [--op N] [--ss7] [--no-color]
-#   --op N      un seul operateur (defaut : tous ceux qui tournent)
-#   --ss7       la section SS7 seule
-#   --abo       la section abonnes seule
+# Usage: ./checks/annuaire.sh [--op N] [--ss7] [--abo] [--no-color]
+#   --op N      a single operator (default: all running ones)
+#   --ss7       SS7 section only
+#   --abo       subscriber section only
+#   --no-color  plain output
+# Env: OSMO_ANNUAIRE, OSMO_ANNUAIRE_SS7 override the directory CSV paths.
 # =============================================================================
 set -uo pipefail
 
 ONLY_OP=""; WANT_ABO=1; WANT_SS7=1; USE_COLOR=1
 
-# Les fiches ne sont pas au meme endroit selon d'ou l'on regarde : start-docker.sh les
-# ecrit sur l'HOTE dans /var/tmp, et en pose une copie dans /etc/osmocom de
-# chaque conteneur (elle voyage avec la pile). Lance depuis un conteneur, ce
-# script ne trouvait donc rien et annoncait "pas de fiches" sur un banc qui en
-# avait. On prend la premiere qui existe.
+# Directory files: start-docker.sh writes them on the HOST in /var/tmp and
+# copies them into /etc/osmocom of each container. Use the first one found.
 _premier(){ for f in "$@"; do [ -r "$f" ] && { printf '%s' "$f"; return 0; }; done; printf '%s' "$1"; }
 ANNU="${OSMO_ANNUAIRE:-$(_premier /var/tmp/osmo-annuaire.csv /etc/osmocom/annuaire.csv)}"
 ANNU_SS7="${OSMO_ANNUAIRE_SS7:-$(_premier /var/tmp/osmo-annuaire-ss7.csv /etc/osmocom/annuaire-ss7.csv)}"
@@ -59,10 +56,8 @@ else G=; R=; Y=; C=; B=; D=; Z=; fi
 OK="${G}[ OK ]${Z}"; KO="${R}[FAIL]${Z}"; WARN="${Y}[WARN]${Z}"
 head(){ printf '\n%s== %s ==%s\n' "$B" "$1" "$Z"; }
 
-# ── Ou tourne-t-on ? ─────────────────────────────────────────────────────────
-# Sur l'hote on interroge les conteneurs ; dans un conteneur, soi-meme. Le
-# meme script sert donc des deux cotes, et c'est voulu : un diagnostic qu'on ne
-# peut lancer que d'un seul endroit ne sert qu'a la moitie des pannes.
+# ── Where are we running? ──────────────────────────────────────────────────
+# On the host, query the containers; inside a container, query itself.
 if [ -f /.dockerenv ]; then
   MODE=local
   IN(){ shift; bash -c "$*" 2>/dev/null; }          # $1 ignore
@@ -76,10 +71,10 @@ fi
 [ -n "${OPS// /}" ] || { printf '%s aucun operateur en service\n' "$KO"; exit 1; }
 ct(){ [ "$MODE" = docker ] && echo "osmo-operator-$1" || echo local; }
 
-# ── Les fiches, lues une fois ───────────────────────────────────────────────
-# Absent n'est pas une erreur : l'annuaire nait au lancement de start-docker.sh, et un
-# banc monte a la main n'en a pas. On le dit et on continue - la partie HLR et
-# la partie SS7 restent lisibles sans lui.
+# ── Directory records, read once ────────────────────────────────────────────
+# Missing is not an error: the directory is created by start-docker.sh, and a
+# manually set up bench has none. Report it and continue; HLR and SS7 sections
+# still work without it.
 if [ -r "$ANNU" ]; then
   printf '%s fiches abonnes : %s (%s lignes)\n' "$OK" "$ANNU" "$(( $(wc -l < "$ANNU") - 1 ))"
 else
@@ -96,16 +91,15 @@ fiche(){   # $1 = msisdn, $2 = champ (7=nom 3=operateur 4=pays 8=adresse 1=imsi)
   awk -F';' -v n="$1" -v f="$2" 'NR>1 && $2==n {print $f; exit}' "$ANNU"
 }
 
-# ═══════════════════════════ 1. LES ABONNES ═════════════════════════════════
+# ═══════════════════════════ 1. SUBSCRIBERS ═════════════════════════════════
 if [ "$WANT_ABO" = 1 ]; then
 for op in $OPS; do
   C_NAME="$(ct "$op")"
   head "ABONNES - operateur ${op} (${C_NAME})"
 
-  # Le HLR fait foi sur l'existence et sur la cle. On lit la base plutot que le
-  # VTY : "subscriber show" ne parle que d'un abonne a la fois, et il en faut
-  # la liste. La colonne cle vient de auc_2g - un abonne sans ligne la-dedans
-  # ne peut pas s'authentifier, quoi qu'en dise sa fiche.
+  # The HLR is authoritative for existence and key. Read the database rather
+  # than the VTY ("subscriber show" handles one subscriber at a time). The key
+  # column comes from auc_2g: a subscriber without a row there cannot authenticate.
   rows="$(IN "$C_NAME" 'command -v sqlite3 >/dev/null 2>&1 || exit 0
       sqlite3 -separator "|" /var/lib/osmocom/hlr.db "
         select s.imsi, coalesce(s.msisdn,\"\"),
@@ -117,21 +111,16 @@ for op in $OPS; do
     continue
   fi
 
-  # Qui est ATTACHE, maintenant. C'est le cache d'abonnes du VLR : il ne
-  # contient que ce qui s'est presente au reseau. Un abonne provisionne mais
-  # jamais vu n'y figure pas - et c'est exactement l'information qui manque
-  # quand "tout a l'air bon" dans le HLR.
-  # "show subscriber all" n'existe PAS sur osmo-msc (il repond "% Unknown
-  # command." et la sortie, non vide, passait pour une liste : tout le monde
-  # ressortait non attache). Les formes valides sont : cache, imsi, msisdn, tmsi.
+  # Who is ATTACHED now: the VLR subscriber cache only holds subscribers that
+  # have contacted the network; provisioned but never seen ones are absent.
+  # osmo-msc has no "show subscriber all"; valid forms are cache, imsi, msisdn, tmsi.
   att="$(IN "$C_NAME" 'exec 9<>/dev/tcp/127.0.0.1/4254 2>/dev/null || exit 0
       { printf "enable\n"; printf "show subscriber cache\n"; sleep 0.5; } >&9
       timeout 3 cat <&9' | tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g')"
   case "$att" in *"Unknown command"*) att="" ;; esac
 
-  # Les codes ANSI comptent dans la largeur d'un %-Ns : on remplit d'abord le
-  # texte nu, on colore ensuite. Sans cela chaque cellule coloree decale la
-  # ligne d'une dizaine de caracteres et la table devient illisible.
+  # ANSI codes count in a %-Ns width: pad the plain text first, then colorize,
+  # otherwise each colored cell shifts the row.
   col(){ local t; printf -v t '%-*s' "$2" "$1"; printf '%s%s%s' "${3:-}" "$t" "${Z}"; }
   printf '  %-16s %-7s %-4s %-8s %-20s %-15s %s\n' \
          IMSI MSISDN CLE ETAT NOM OPERATEUR PAYS
@@ -156,9 +145,8 @@ for op in $OPS; do
   [ "$n_sans_fiche" -gt 0 ] && \
     printf '  %s %s abonne(s) sans fiche : le HLR les connait, l annuaire non (banc relance sans start-docker.sh ?)\n' "$WARN" "$n_sans_fiche"
 
-  # Le mobile presente-t-il un IMSI que le HLR connait ? C'est la question que
-  # personne ne pose, et la reponse est non plus souvent qu'on ne croit : les
-  # deux valeurs sont ecrites par deux scripts differents.
+  # Does the phone present an IMSI known to the HLR? Both values are written
+  # by two different scripts and may disagree.
   for f in /root/.osmocom/bb/mobile.cfg /root/.osmocom/bb/mobile_faketrx_bts1.cfg; do
     msi="$(IN "$C_NAME" "awk '\$1==\"imsi\"{print \$2; exit}' $f")"
     [ -n "$msi" ] || continue
@@ -171,15 +159,15 @@ for op in $OPS; do
 done
 fi
 
-# ═══════════════════════════ 2. L ANNUAIRE SS7 ══════════════════════════════
+# ═══════════════════════════ 2. SS7 DIRECTORY ═══════════════════════════════
 if [ "$WANT_SS7" = 1 ] && [ -r "$ANNU_SS7" ]; then
   head "ANNUAIRE SS7"
   printf '  %-5s %-16s %-12s %-9s %-9s %-9s %-6s %s\n' \
          NOEUD OPERATEUR PAYS PC_MSC PC_STP PC_BSC RCTX HUB
   awk -F';' 'NR>1 {printf "  %-5s %-16s %-12s %-9s %-9s %-9s %-6s %s\n", $1,$2,$3,$6,$7,$8,$12,$13}' "$ANNU_SS7"
 
-  # Et ce que le STP en dit MAINTENANT. Un point code ecrit dans un fichier ne
-  # prouve rien : c'est l'AS actif qui prouve que la machine parle.
+  # Current STP view: an active AS proves the machine is actually talking,
+  # a point code in a file does not.
   for op in $OPS; do
     C_NAME="$(ct "$op")"
     as_out="$(IN "$C_NAME" 'exec 9<>/dev/tcp/127.0.0.1/4239 2>/dev/null || exit 0

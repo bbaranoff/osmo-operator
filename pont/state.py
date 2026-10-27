@@ -15,10 +15,10 @@ DCCH_RELEASED = 0xFF
 
 
 def ecrire_dcch(kind, ss, chan_nr):
-    """[2026-10-22] calypso_dcch_cfg ecrit par le pont, au format du tap QEMU (calypso_dcch_tap.c) :
-    seq(4) kind(1) ss(1) tn(1) chan_nr(1), 16 octets. Le firmware TI (Magnetite) n'a pas de tap :
-    sans annonce, montant.c n'armait jamais un SDCCH hors TS0 (SDCCH/8 sur TS1 : IMM ASS ignoree
-    par le banc, LU en Timeout). seq repart au-dessus de celui du fichier."""
+    """calypso_dcch_cfg written by the bridge, in the QEMU tap format (calypso_dcch_tap.c):
+    seq(4) kind(1) ss(1) tn(1) chan_nr(1), 16 bytes. The TI firmware (Magnetite) has no tap:
+    without this announcement, montant.c never arms an SDCCH outside TS0 (SDCCH/8 on TS1).
+    seq restarts above the one in the file."""
     seq = 0
     try:
         with open(DCCH_CFG, "rb") as f:
@@ -28,8 +28,8 @@ def ecrire_dcch(kind, ss, chan_nr):
     except OSError:
         pass
     b = struct.pack("<IBBBB", (seq + 1) & 0xFFFFFFFF, kind & 0xFF, ss & 7, chan_nr & 7, chan_nr & 0xFF) + bytes(8)
-    # EN PLACE, pas de os.replace : montant.c et pont/state.py gardent le fichier ouvert (pread sur leur fd),
-    # un nouvel inode ne serait jamais relu.
+    # IN PLACE, no os.replace: montant.c and pont/state.py keep the file open (pread on their fd),
+    # a new inode would never be read again.
     fd = os.open(DCCH_CFG, os.O_WRONLY | os.O_CREAT, 0o666)
     try:
         os.pwrite(fd, b, 0)
@@ -68,7 +68,7 @@ class Dedicated:
         return self._value
 
     def refresh(self):
-        """Forcer la prochaine lecture : le fichier vient peut-etre de changer."""
+        """Force the next read: the file may just have changed."""
         self._next = 0.0
 
     def plan(self):
@@ -89,12 +89,12 @@ class Tch:
         self.seq = 0
         self.on_close = []
         self.release_seen = None
-        # [2026-10-26] instant de la preuve (prove) : dsp/uplink.py ne retire l'annonce du TCH sur un
-        # bloc SDCCH montant qu'apres un delai de grace, voir TCH_ABANDON_GRACE.
+        # time of the proof (prove): dsp/uplink.py only withdraws the TCH announcement on an
+        # uplink SDCCH block after a grace delay, see TCH_ABANDON_GRACE.
         self.open_since = None
 
     def open_age(self):
-        """Secondes depuis que le mobile a prouve le TCH, None s'il n'est pas ouvert."""
+        """Seconds since the mobile proved the TCH, None if it is not open."""
         with self.lock:
             return None if self.open_since is None else time.monotonic() - self.open_since
 

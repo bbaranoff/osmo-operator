@@ -1,39 +1,38 @@
 #!/bin/bash
 # =============================================================================
-# osmo-pmos-install.sh - L UI SMARTPHONE DU BANC, POSEE DANS /opt/user_interface
-# UNE FOIS POUR LES TROIS CHEMINS (addition.sh, update.sh, le build ISO).
+# osmo-pmos-install.sh - THE BENCH SMARTPHONE UI, INSTALLED IN /opt/user_interface
+# ONCE FOR THE THREE PATHS (addition.sh, update.sh, the ISO build).
 #
-# [2026-09-08] Le telephone du banc (la VM postmarketOS/Phosh, son modem, son
-# noyau PPP) vivait eparpille : les scripts dans le depot, pmbootstrap dans le
-# home de nirvana (patche a la main), le noyau dans ~nirvana/test, le script
-# de build dans ~nirvana. Tout cela vit maintenant a UN endroit :
+# The bench phone (the postmarketOS/Phosh VM, its modem, its PPP kernel) lives
+# in ONE place:
 #
 #   /opt/user_interface/
-#     pmos/                       L UI SMARTPHONE
+#     pmos/                       THE SMARTPHONE UI
 #       bin/                      osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh
 #                                 osmo-pmos-build.sh osmo-phonesim-banc.py at-cmd.py
-#                                 (copies du depot ; /usr/local/bin/osmo-pmos* y pointent)
-#       pmbootstrap/              pmbootstrap, PATCHE (patches/pmbootstrap-osmo-bench-qemu.patch)
+#                                 (copies from the repository; /usr/local/bin/osmo-pmos*
+#                                 point there)
+#       pmbootstrap/              pmbootstrap, PATCHED (patches/pmbootstrap-osmo-bench-qemu.patch)
 #                                 -> /usr/local/bin/pmbootstrap
-#       patches/                  les deux patches (pmbootstrap, pmaports PPP)
-#       pmbootstrap_v3.cfg        le gabarit de config (Phosh, fr, paquets du modem)
-#       image/qemu-amd64.img.zst  (optionnel) la VM de reference, compressee
+#       patches/                  the two patches (pmbootstrap, pmaports PPP)
+#       pmbootstrap_v3.cfg        the config template (Phosh, fr, modem packages)
+#       image/qemu-amd64.img.zst  (optional) the reference VM, compressed
 #       README
-#     kernel/                     LES .deb DU NOYAU pmOS PPP
+#     kernel/                     THE pmOS PPP KERNEL .deb
 #       osmo-build-pmos-kernel_*.deb
-#       pmos/                     ce que le .deb pose : apk, APKINDEX, cle .pub,
-#                                 pmaports.commit, patch (lu par osmo-pmos-build)
+#       pmos/                     what the .deb installs: apk, APKINDEX, .pub key,
+#                                 pmaports.commit, patch (read by osmo-pmos-build)
 #
 #   osmo-pmos-install                = --layout --launchers --kernel
-#   osmo-pmos-install --layout       bin/, patches/, gabarit, pmbootstrap (clone + patch si absent)
+#   osmo-pmos-install --layout       bin/, patches/, template, pmbootstrap (clone + patch if missing)
 #   osmo-pmos-install --launchers    /usr/local/bin/osmo-pmos*, pmbootstrap, .desktop
-#   osmo-pmos-install --kernel       dpkg -i du .deb du noyau (kernel/ ou /var/cache/osmo-debs)
-#   osmo-pmos-install --image <img>  range une image de VM (compressee en zstd) dans pmos/image/
-#   osmo-pmos-install --image telecharger   la prend sur la release GitHub pmos-image (aussi
-#                                    le repli automatique si <img> manque ou est corrompue)
+#   osmo-pmos-install --kernel       dpkg -i of the kernel .deb (kernel/ or /var/cache/osmo-debs)
+#   osmo-pmos-install --image <img>  stores a VM image (zstd compressed) in pmos/image/
+#   osmo-pmos-install --image telecharger   takes it from the GitHub release pmos-image (also
+#                                    the automatic fallback if <img> is missing or corrupt)
 #
-# Idempotent ; utilisable en session ET dans le chroot de l ISO (aucun
-# systemctl, aucun reseau requis si pmbootstrap est deja la).
+# Idempotent; usable in session AND in the ISO chroot (no systemctl, no
+# network required if pmbootstrap is already there).
 # =============================================================================
 set -u
 
@@ -43,10 +42,10 @@ PM="$UI/pmos"
 KDIR="$UI/kernel"
 DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 PMB_GIT="${OSMO_PMB_GIT:-https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git}"
-# [2026-09-08] Le .deb du noyau PPP est aussi publie sur GitHub (Git LFS) :
-# https://github.com/bbaranoff/pmos_ppp_kernel - c est le repli quand ni
-# /opt/user_interface/kernel ni /var/cache/osmo-debs ne l ont (une machine
-# qui n est pas celle de reference, un build ISO sur une autre machine).
+# The PPP kernel .deb is also published on GitHub (Git LFS):
+# https://github.com/bbaranoff/pmos_ppp_kernel - the fallback when neither
+# /opt/user_interface/kernel nor /var/cache/osmo-debs has it (a machine other
+# than the reference one, an ISO build on another machine).
 KERNEL_URL="${OSMO_PMOS_KERNEL_URL:-https://media.githubusercontent.com/media/bbaranoff/pmos_ppp_kernel/main/osmo-build-pmos-kernel_7.2.3.0+ppp~noble_amd64.deb}"
 
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${CYAN:=}"; : "${RED:=}"; : "${NC:=}"
@@ -65,9 +64,9 @@ pmos_layout() {
         [ -f "$REPO/patches/$f" ] && install -m644 "$REPO/patches/$f" "$PM/patches/$f"
     done
     [ -f "$REPO/configs/pmos/pmbootstrap_v3.cfg" ] && install -m644 "$REPO/configs/pmos/pmbootstrap_v3.cfg" "$PM/pmbootstrap_v3.cfg"
-    # pmbootstrap : celui deja la (le .deb osmo-build-pmbootstrap du Dockerfile,
-    # ou une pose precedente), sinon un clone. Puis le patch du banc, s il
-    # n est pas deja dedans (osmo_bench_args dans pmb/commands/qemu.py).
+    # pmbootstrap: the one already there (the osmo-build-pmbootstrap .deb of the
+    # Dockerfile, or a previous install), else a clone. Then the bench patch,
+    # if not already in (osmo_bench_args in pmb/commands/qemu.py).
     if [ ! -f "$PM/pmbootstrap/pmbootstrap.py" ]; then
         if git clone -q "$PMB_GIT" "$PM/pmbootstrap" 2>/dev/null; then
             _p_ok "pmbootstrap clone ($PMB_GIT)"
@@ -76,13 +75,12 @@ pmos_layout() {
         fi
     fi
     if [ -f "$PM/pmbootstrap/pmbootstrap.py" ]; then
-        # [2026-09-09] « deja patche » ne veut pas dire « a jour » : le .deb
-        # osmo-build-pmbootstrap porte le patch d une date, le depot celui du
-        # jour (bootindex=0 du disque, sinon OVMF passe par PXE). Sur un
-        # clone git, on repart des fichiers d origine et on applique LE
-        # patch courant - idempotent ; sans git, on se fie aux marqueurs.
-        # Marqueur du patch le plus recent : OSMO_PMOS_HP (2026-09-09, la carte
-        # « combine » nommee) ; avant lui bootindex=0 (2026-09-09 matin).
+        # "already patched" does not mean "up to date": the osmo-build-pmbootstrap
+        # .deb carries the patch of one date, the repository the current one.
+        # On a git clone, start again from the original files and apply THE
+        # current patch - idempotent; without git, rely on the markers.
+        # Marker of the most recent patch: OSMO_PMOS_HP (the named "combine"
+        # card); the older one is bootindex=0.
         if [ -d "$PM/pmbootstrap/.git" ] && ! grep -q 'OSMO_PMOS_HP' "$PM/pmbootstrap/pmb/commands/qemu.py" 2>/dev/null \
            && git -C "$PM/pmbootstrap" checkout -q -- pmb 2>/dev/null \
            && git -C "$PM/pmbootstrap" apply "$PM/patches/pmbootstrap-osmo-bench-qemu.patch" 2>/dev/null; then
@@ -114,8 +112,8 @@ Premiere fois (l icone le fait toute seule ; root accepte : --as-root est passe)
   osmo-pmos-qemu smartphone  ensuite : la VM, le modem et la voix
 Mot de passe de la VM : 147147.
 EOF
-    # Lisible et executable par le compte de session : pmbootstrap y est lance
-    # sous lui, pas sous root.
+    # Readable and executable by the session account: pmbootstrap is run under
+    # it, not under root.
     chmod -R a+rX "$PM" "$KDIR" 2>/dev/null || true
     _p_ok "$PM : bin/ ($(ls "$PM/bin" | wc -l) scripts), patches/, gabarit, pmbootstrap$( [ -f "$PM/pmbootstrap/pmbootstrap.py" ] && echo '' || echo ' (absent)')"
 }
@@ -126,11 +124,11 @@ pmos_launchers() {
         [ -f "$PM/bin/$f.sh" ] && ln -sfn "$PM/bin/$f.sh" "/usr/local/bin/$f"
     done
     [ -f "$PM/pmbootstrap/pmbootstrap.py" ] && ln -sfn "$PM/pmbootstrap/pmbootstrap.py" /usr/local/bin/pmbootstrap
-    # [2026-10-01] Terminal=false partout : chaque Exec passe par
-    # tools/osmo-gtk-run.py (fenetre GTK du banc, terminal VTE dedans quand la
-    # commande parle ou pose des questions) - aucun favori n ouvre de terminal.
-    # Les icones : la VM aux deux formats, l arret, le rebranchement du modem
-    # (memes .desktop que update.sh / osmo-extras-install.sh, une source ici).
+    # Terminal=false everywhere: each Exec goes through tools/osmo-gtk-run.py
+    # (bench GTK window, with a VTE terminal inside when the command talks or
+    # asks questions) - no favourite opens a terminal.
+    # The icons: the VM in both formats, the stop, the modem re-plug (same
+    # .desktop files as update.sh / osmo-extras-install.sh, one source here).
     install -d /usr/share/applications
     cat > /usr/share/applications/osmo-pmos.desktop <<'PMD'
 [Desktop Entry]
@@ -207,10 +205,10 @@ pmos_kernel() {
     [ -f "$KDIR/$(basename "$deb")" ] || cp -f "$deb" "$KDIR/"
 }
 
-# [2026-10-01] L IMAGE PEUT VENIR DU RESEAU. --image sans fichier derriere
-# (absent), ou un .zst corrompu (zstd -t), ou --image telecharger : on prend
-# la release GitHub « pmos-image », la meme que l ISO embarque. Reprise
-# possible, archive testee avant d etre mise en place.
+# THE IMAGE MAY COME FROM THE NETWORK. --image without a file behind it
+# (missing), or a corrupt .zst (zstd -t), or --image telecharger: take the
+# GitHub release "pmos-image", the same one the ISO embeds. Resumable, archive
+# tested before being put in place.
 PMOS_IMAGE_URL="${OSMO_PMOS_IMAGE_URL-https://github.com/bbaranoff/osmo-operator/releases/download/pmos-image/qemu-amd64.img.zst}"
 pmos_image_telecharger() {
     local dst="$1"

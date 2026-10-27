@@ -1,36 +1,36 @@
 #!/bin/bash
 # =============================================================================
-# osmo-sim-install.sh - LA SIM DU BANC, posee une seule fois pour DEUX chemins.
+# osmo-sim-install.sh - THE BENCH SIM, installed once for TWO paths.
 #
-# Meme logique que tools/osmo-extras-install.sh : ce qui doit exister a la fois
-# dans le SUPPLEMENT (addition.sh --sim, sur une machine deja installee) et dans
-# le NATIF (l ISO, iso_modules/80-chroot.sh, dans le chroot) est ecrit UNE fois
-# ici ; les deux chemins sourcent ce script et appellent osmo_sim_install.
-# Rien n est fatal : un paquet absent ne doit pas arreter le reste.
+# Same logic as tools/osmo-extras-install.sh: what must exist both in the
+# SUPPLEMENT (addition.sh --sim, on an already installed machine) and in the
+# NATIVE install (the ISO, iso_modules/80-chroot.sh, in the chroot) is written
+# ONCE here; both paths source this script and call osmo_sim_install.
+# Nothing is fatal: a missing package must not stop the rest.
 #
-# Ce qu il pose :
-#   - pcscd + libccid : le demon PC/SC et le pilote CCID du lecteur HID Omnikey
-#     (6121 verifie le 2026-10-14, ATR de la sysmoISIM-SJA5 lu) ; pcsc-tools
-#     (pcsc_scan) et opensc (opensc-tool -l/-a) pour voir le lecteur et l ATR ;
-#   - Ruby + ruby-libxml + le gem smartcard : softSIM (/opt/GSM/softsim), le
-#     serveur SAP qui sert soit une SIM logicielle (sim.xml, type sim), soit la
-#     carte du lecteur (type pcsc) au mobile osmocom-bb (« sim sap ») ;
-#   - pySim (Osmocom, depuis son git : le « pySim » de PyPI est un autre projet)
-#     dans son venv /opt/GSM/pysim-venv : pySim-read, pySim-prog, pySim-shell,
-#     pour lire et programmer la sysmoISIM-SJA5 (clé ADM1 requise pour ecrire) ;
-#   - sysmo-usim-tool (sysmocom) dans /opt/GSM/sysmo-usim-tool : l outil qui ecrit
-#     IMSI, Ki, algorithme (COMP128v1) et OPc sur la sysmoISIM-SJA5 ;
-#   - softSIM lui-meme si absent (clone + patches tools/softsim/*.patch + shim
-#     Ruby 3.2), comme iso_modules/51-softsim.sh le fait pour l ISO ;
-#   - pcscd.socket active (sauf en chroot : systemd absent, l unite s active au
-#     premier boot par son preset).
+# What it installs:
+#   - pcscd + libccid: the PC/SC daemon and the CCID driver of the HID Omnikey
+#     reader (6121, reads the ATR of the sysmoISIM-SJA5); pcsc-tools
+#     (pcsc_scan) and opensc (opensc-tool -l/-a) to see the reader and the ATR;
+#   - Ruby + ruby-libxml + the smartcard gem: softSIM (/opt/GSM/softsim), the
+#     SAP server that serves either a software SIM (sim.xml, type sim) or the
+#     card in the reader (type pcsc) to the osmocom-bb mobile ("sim sap");
+#   - pySim (Osmocom, from its git: the PyPI "pySim" is another project) in
+#     its venv /opt/GSM/pysim-venv: pySim-read, pySim-prog, pySim-shell, to
+#     read and program the sysmoISIM-SJA5 (ADM1 key required to write);
+#   - sysmo-usim-tool (sysmocom) in /opt/GSM/sysmo-usim-tool: the tool that
+#     writes IMSI, Ki, algorithm (COMP128v1) and OPc on the sysmoISIM-SJA5;
+#   - softSIM itself if missing (clone + patches tools/softsim/*.patch + Ruby
+#     3.2 shim), as iso_modules/51-softsim.sh does for the ISO;
+#   - pcscd.socket enabled (except in chroot: no systemd, the unit is enabled
+#     at first boot by its preset).
 #
-# Idempotent : relancable sans degat. Variables :
-#   OSMO_SIM_PYSIM=0      ne pas poser pySim
-#   OSMO_SIM_SOFTSIM=0    ne pas poser softSIM
-#   PYSIM_VENV            le venv de pySim (defaut /opt/GSM/pysim-venv)
-#   SOFTSIM_DIR           l arbre softSIM (defaut /opt/GSM/softsim)
-#   REPO / DIR            le depot osmo-operator (patches softSIM, shim Ruby)
+# Idempotent: can be re-run without harm. Variables:
+#   OSMO_SIM_PYSIM=0      do not install pySim
+#   OSMO_SIM_SOFTSIM=0    do not install softSIM
+#   PYSIM_VENV            the pySim venv (default /opt/GSM/pysim-venv)
+#   SOFTSIM_DIR           the softSIM tree (default /opt/GSM/softsim)
+#   REPO / DIR            the osmo-operator repository (softSIM patches, Ruby shim)
 # =============================================================================
 
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${CYAN:=}"; : "${BOLD:=}"; : "${NC:=}"
@@ -46,7 +46,7 @@ _sim_repo() {
 _sim_say()  { echo -e "  ${GREEN}✓${NC} $*"; }
 _sim_warn() { echo -e "  ${YELLOW}!${NC} $*" >&2; }
 
-# En chroot (ISO) : pas de systemd qui tourne, pas de lecteur a tester.
+# In chroot (ISO): no running systemd, no reader to test.
 _sim_in_chroot() { [ "$(stat -c %d:%i / 2>/dev/null)" != "$(stat -c %d:%i /proc/1/root/. 2>/dev/null)" ]; }
 
 osmo_sim_install_apt() {
@@ -59,7 +59,7 @@ osmo_sim_install_apt() {
     if $apt install -y --no-install-recommends $pkgs >/dev/null 2>&1; then
         _sim_say "paquets SIM : pcscd, libccid, pcsc-tools, opensc, pyscard, ruby"
     else
-        # un par un : un paquet absent du miroir ne doit pas bloquer les autres
+        # one by one: a package missing from the mirror must not block the others
         local p; for p in $pkgs; do
             $apt install -y --no-install-recommends "$p" >/dev/null 2>&1 || _sim_warn "paquet absent : $p"
         done
@@ -90,7 +90,7 @@ osmo_sim_install_pysim() {
         return 0
     fi
     python3 -m venv "$venv" >/dev/null 2>&1 || { _sim_warn "venv pySim impossible ($venv)"; return 0; }
-    # pyscard a besoin de swig + libpcsclite-dev pour se construire (PKGS ci-dessus).
+    # pyscard needs swig + libpcsclite-dev to build (PKGS above).
     if "$venv/bin/pip" install -q --disable-pip-version-check --no-cache-dir "git+$repo" >/dev/null 2>&1; then
         _sim_say "pySim (Osmocom) : $venv/bin/pySim-{read,prog,shell}.py"
     else
@@ -156,7 +156,7 @@ osmo_sim_install() {
     return 0
 }
 
-# Lance directement : fait le travail (sinon, source + osmo_sim_install).
+# Run directly: do the work (otherwise, source + osmo_sim_install).
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     [ "$(id -u)" -eq 0 ] || { echo "osmo-sim-install.sh : a lancer en root (sudo)" >&2; exit 1; }
     osmo_sim_install

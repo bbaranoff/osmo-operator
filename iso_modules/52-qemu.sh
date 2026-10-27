@@ -1,57 +1,34 @@
 #!/bin/bash
-# iso_modules/52-qemu.sh - etape 5b/5c/5d : QEMU, firmware, toast, lanceurs, configs
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/52-qemu.sh - steps 5b/5c/5d: QEMU, firmware, toast, launchers, configs
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment:
+#   OSMO_QEMU_SRC=<dir>        use this local qosmo tree instead of the image's
+#   OSMO_QEMU_BUILD=<dir>      host QEMU build dir (default: <qosmo>/build)
+#   OSMO_C54X_SRC=<dir>        local c54x_exe tree to embed
+#   OSMO_GRGSM_EXE_SRC=<dir>   local grgsm_exe tree to embed
+#   OSMO_DSP_ROM_DIR=<dir>     where to find the calypso_dsp.*.bin ROM dumps
 
-# ── qosmo : arbre ELAGUE + binaire installe ──────────────────────────────
-# Deux choses distinctes, et l'ISO a besoin des DEUX :
-#   - l'arbre qosmo (run.sh, run_modules/, environnement/) :
-#     c'est LUI le mode qemu de start-native.sh. Il reste dans l'image, prive de
-#     .git et de build/ (voir plus bas).
-#   - le binaire qemu-system-arm, installe dans /usr/local/bin, et relie depuis
-#     l'arbre sous le nom que paths.env cherche (build/qemu-system-arm).
+# ── qosmo: full tree + installed binary ─────────────────────────────────────
+# The ISO needs BOTH:
+#   - the qosmo tree (run.sh, run_modules/, environnement/): it IS the qemu
+#     mode of start-native.sh;
+#   - the qemu-system-arm binary, found by paths.env as build/qemu-system-arm.
 QEMU_BUILD_LOCAL="${OSMO_QEMU_BUILD:-${OSMO_QEMU_SRC:-/opt/GSM/qosmo}/build}"
-# --arm : un build QEMU de l hote est un binaire x86, il n a rien a faire dans
-# un rootfs arm64. Seul le binaire venu de l image (arm64) compte.
+# --arm: a host QEMU build is an x86 binary, useless in an arm64 rootfs.
+# Only the (arm64) binary from the image counts.
 [ "${ISO_ARCH:-amd64}" = "amd64" ] || QEMU_BUILD_LOCAL="/nonexistent/arm64-pas-de-build-hote"
 echo -e "${GREEN}[5b/9] Installation QEMU (artefacts seuls, depuis ${QEMU_BUILD_LOCAL})...${NC}"
-# L'elagage est HORS de la condition, et l'absence du binaire est FATALE. Avant,
-# les deux etaient dans la branche "binaire present" : sur une machine ou QEMU
-# n'avait pas ete recompile - le cas courant - on tombait dans le repli, qui se
-# contentait d'un avertissement jaune, et l'arbre venu du docker cp
-# ($CID:/opt/GSM) partait tel quel dans le squashfs, build/ compris : 1,7 Go
-# dans une ISO qui tient en RAM. Le message passait inapercu au milieu d'une
-# heure de construction, et la taille de l'ISO etait le seul indice.
-# Echouer ici coute une relance ; ne pas echouer coute une ISO inutilisable
-# (sans qemu-system-arm, MS#1 ne demarre pas) et deux fois plus lourde.
-# ── qosmo : l'arbre part ENTIER, .git et build/ compris ─────────────────
-# [2026-08-27] L'effacement pur ("rm -rf $ROOTFS/opt/GSM/qosmo") reglait le
-# poids, mais retirait de l'image le depot dont run.sh, run_modules/ et
-# environnement/ SONT le mode qemu : l'ISO ne savait plus emuler le Calypso par
-# elle-meme et dependait, a CHAQUE demarrage, d'un reclone GitHub par
-# osmo-update.service. Pas de reseau au boot = pas de MS. Et l'arbre reclone
-# arrivait sans build/, donc sans QEMU_BIN : la pile s'arretait au premier
-# module alors que le binaire etait la, dans le PATH.
-#
-# On ne retire donc plus RIEN de cet arbre :
-#   - .git (96 Mo) : c'est lui qui fait la difference entre une mise a jour
-#     incrementale (git fetch) et un reclone complet. Sans .git, update.sh
-#     n'avait pas le choix : il effacait et reclonait a chaque demarrage.
-#   - build/ (1,5 Go d'objets) : il porte le qemu-system-arm COMPILE, celui que
-#     environnement/paths.env cherche sous $QEMU_TREE/build/qemu-system-arm.
-#     L'arbre embarque est donc utilisable tel quel, sans reseau et sans lien.
-#
-# Ce que ca coute : ~1,6 Go de plus dans le squashfs (moins une fois compresse).
-# A surveiller si l'ISO doit tenir en RAM (toram).
-# ── OSMO_QEMU_SRC : L'ARBRE LOCAL PREND LE PAS, QUAND ON LE DEMANDE ─────────
-# [2026-08-30] L'image docker clone qosmo depuis GitHub (Dockerfile:433).
-# Un correctif fait ICI, dans l'arbre local, ne partait donc PAS dans l'ISO --
-# il fallait le pousser sur GitHub d'abord, et rien ne le disait. C'est ainsi
-# que les correctifs du shunt DSP (publication du Kc depuis le NDB) auraient pu
-# etre "appliques" et absents de l'image produite.
-# OSMO_QEMU_SRC=/chemin force desormais l'arbre local, en remplacant celui de
-# l'image. Sans la variable, rien ne change : l'image fait foi, comme avant.
+# ── qosmo tree: embedded WHOLE, .git and build/ included ────────────────────
+#   - .git lets update.sh do an incremental git fetch instead of a reclone;
+#   - build/ holds the compiled qemu-system-arm that environnement/paths.env
+#     expects at $QEMU_TREE/build/qemu-system-arm, so the tree works offline.
+# Known limitation: this adds ~1.6 GB to the squashfs; watch it for toram boots.
+# OSMO_QEMU_SRC=<dir> replaces the image's tree (cloned from GitHub by the
+# Dockerfile) with a local one, so unpushed fixes reach the ISO. Without it,
+# the image tree is used.
 QSRC="$ROOTFS/opt/GSM/qosmo"
 if [ -n "${OSMO_QEMU_SRC:-}" ] && [ -d "$OSMO_QEMU_SRC" ]; then
     rm -rf "$QSRC"
@@ -61,7 +38,7 @@ if [ -n "${OSMO_QEMU_SRC:-}" ] && [ -d "$OSMO_QEMU_SRC" ]; then
 elif [ -d "$QSRC" ]; then
     echo -e "  ${GREEN}✓${NC} qosmo conserve ENTIER ($(du -sh "$QSRC" | cut -f1), .git + build/ compris)"
 else
-    # L'image ne l'avait pas : on prend l'arbre de l'hote, entier lui aussi.
+    # Not in the image: take the host tree, also whole.
     QSRC_HOST="${OSMO_QEMU_SRC:-/opt/GSM/qosmo}"
     if [ -d "$QSRC_HOST" ]; then
         mkdir -p "$ROOTFS/opt/GSM"
@@ -72,13 +49,11 @@ else
     fi
 fi
 
-# ── Les anciens forks quittent le rootfs ────────────────────────────────────
-# [2026-09-25] L'image docker clone encore qosmo-grgsm et qosmo-dsp (Dockerfile),
-# et 50-injection-image.sh recopie tout /opt/GSM et /usr/local/bin de l'image :
-# les deux arbres (~1,6 Go avec build/), le prefixe qemu-dsp-install et leurs
-# lanceurs arrivaient donc dans l'ISO sans que plus rien ne les lise. Le lien
-# /opt/GSM/calypso_dsp.txt de l'image pointait dans qosmo-grgsm ; il est repose
-# plus bas sur c54x_exe/rom.
+# ── Remove the obsolete forks from the rootfs ───────────────────────────────
+# The docker image still clones qosmo-grgsm and qosmo-dsp, and
+# 50-injection-image.sh copies all of /opt/GSM and /usr/local/bin: drop those
+# trees, the qemu-dsp-install prefix and their launchers. A dangling
+# /opt/GSM/calypso_dsp.txt link is removed; it is set again below to c54x_exe/rom.
 for _old in qosmo-grgsm qosmo-dsp qemu-dsp-install; do
     [ -e "$ROOTFS/opt/GSM/$_old" ] || continue
     rm -rf "$ROOTFS/opt/GSM/$_old"
@@ -89,17 +64,14 @@ rm -f "$ROOTFS"/usr/local/bin/qosmo-grgsm "$ROOTFS"/usr/local/bin/qosmo-dsp \
 [ -L "$ROOTFS/opt/GSM/calypso_dsp.txt" ] && [ ! -e "$ROOTFS/opt/GSM/calypso_dsp.txt" ] \
     && rm -f "$ROOTFS/opt/GSM/calypso_dsp.txt"
 
-# ── c54x_exe et grgsm_exe : les deux couches 1 hors QEMU ────────────────────
-# [2026-09-25] Les forks qosmo-dsp et qosmo-grgsm sont remplaces par UN arbre
-# QEMU, /opt/GSM/qosmo (run.sh, run_modules, cfgs, environnement y ont ete
-# repris), et deux executables qui compilent les sources de qosmo :
-#   c54x_exe   le DSP TMS320C54x sur la mask-ROM TI (start-native.sh --dsp,
+# ── c54x_exe and grgsm_exe: the two layer-1 implementations outside QEMU ─────
+#   c54x_exe   TMS320C54x DSP on the TI mask ROM (start-native.sh --dsp,
 #              BANC_DSP = /opt/GSM/c54x_exe/run.sh)
-#   grgsm_exe  la couche 1 gr-gsm hors QEMU (pont : /usr/local/bin/grgsm_exe)
-# OSMO_C54X_SRC / OSMO_GRGSM_EXE_SRC forcent un arbre local, comme
-# OSMO_QEMU_SRC pour qosmo. Non fatal : sans c54x_exe, seul --dsp manque.
-# ⚠️ c54x_exe se compile en -march=native : le binaire de l'hote peut ne pas
-# tourner sur la machine qui boote l'ISO (make -C /opt/GSM/c54x_exe la-bas).
+#   grgsm_exe  gr-gsm layer 1 outside QEMU (bridge: /usr/local/bin/grgsm_exe)
+# OSMO_C54X_SRC / OSMO_GRGSM_EXE_SRC force a local tree, like OSMO_QEMU_SRC.
+# Not fatal: without c54x_exe only --dsp is missing.
+# Known limitation: c54x_exe is built with -march=native, so the host binary may
+# not run on the machine booting the ISO (run make -C /opt/GSM/c54x_exe there).
 for _e in c54x_exe grgsm_exe; do
     case "$_e" in
         c54x_exe)  _esrc="${OSMO_C54X_SRC:-}" ;;
@@ -125,19 +97,18 @@ for _e in c54x_exe grgsm_exe; do
     else
         echo -e "  ${YELLOW}!${NC} $_e : binaire ABSENT - make -C /opt/GSM/$_e avant de graver" >&2
     fi
-    # Les petits lanceurs /usr/local/bin/<exe> (bash) de l'hote.
+    # Small bash launchers /usr/local/bin/<exe> from the host.
     if [ -x "/usr/local/bin/$_e" ] && [ ! -e "$ROOTFS/usr/local/bin/$_e" ]; then
         install -Dm755 "/usr/local/bin/$_e" "$ROOTFS/usr/local/bin/$_e"
         echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$_e${NC} (repris de l'hote)"
     fi
 done
 
-# ── ROMs du DSP TMS320C54x : sans elles, --dsp ne demarre pas ─────────────────
-# [2026-09-03] Sept dumps du silicium (PROM0..3, DROM, PDROM, Registers), lus
-# par c54x_exe sous son --rom-dir (defaut /opt/GSM). ~330 Ko.
-# [2026-09-25] Ils ne sont dans AUCUN depot : on les prend sur l'hote, dans
-# /opt/GSM puis dans /opt/GSM/c54x_exe/rom (copie de secours, non suivie par
-# git, avec calypso_dsp.txt). Non fatal.
+# ── TMS320C54x DSP ROMs: required by --dsp ──────────────────────────────────
+# Seven silicon dumps (PROM0..3, DROM, PDROM, Registers), ~330 KB, read by
+# c54x_exe from its --rom-dir (default /opt/GSM). They are in no repository:
+# taken from the host, $OSMO_DSP_ROM_DIR (default /opt/GSM) then
+# /opt/GSM/c54x_exe/rom (untracked backup copy, with calypso_dsp.txt). Not fatal.
 _ROM_SRC="${OSMO_DSP_ROM_DIR:-/opt/GSM}"
 _ROM_SECOURS=/opt/GSM/c54x_exe/rom
 _rom_ok=0; _rom_miss=""
@@ -154,8 +125,8 @@ for _r in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do
         _rom_miss="$_rom_miss $_r"
     fi
 done
-# calypso_dsp.txt (listing de la ROM) : /opt/GSM/calypso_dsp.txt pointait dans
-# l'ancien qosmo-grgsm ; il pointe maintenant sur la copie de c54x_exe/rom.
+# calypso_dsp.txt (ROM listing): /opt/GSM/calypso_dsp.txt points to the copy
+# in c54x_exe/rom.
 if [ -f "$ROOTFS/opt/GSM/c54x_exe/rom/calypso_dsp.txt" ]; then
     ln -sfn /opt/GSM/c54x_exe/rom/calypso_dsp.txt "$ROOTFS/opt/GSM/calypso_dsp.txt"
 elif [ -f "$_ROM_SECOURS/calypso_dsp.txt" ]; then
@@ -167,33 +138,20 @@ elif [ -d "$ROOTFS/opt/GSM/c54x_exe" ]; then
     echo -e "  ${YELLOW}!${NC} ROMs DSP incompletes (${_rom_ok}/7, manquent :${_rom_miss}) - OSMO_DSP_ROM_DIR=/chemin ; --dsp ne demarrera pas" >&2
 fi
 
-# ── Firmware Calypso : /opt/GSM/firmware, et rien d'autre ───────────────────
-# [2026-08-28] Il y avait ici un bloc qui remplacait $QSRC/target/firmware par
-# un lien vers /opt/GSM/firmware. Il reparait une coquille vide laissee dans
-# l'arbre qosmo, sur laquelle la premiere branche de
-# environnement/paths.env tombait, d'ou :
-#
-#   [FAIL] FIRMWARE_ELF (/opt/GSM/qosmo/target/firmware/board/compal_e88/layer1.highram.elf)
-#
-# La cause a ete traitee a sa source : paths.env (et local.env) du depot qemu
-# ne connaissent plus qu'un seul chemin, $GSM_ROOT/firmware. Il n'y a donc plus
-# de coquille a reparer, et poser le lien reintroduirait justement le deuxieme
-# arbre qu'on vient de supprimer. Constate sur le banc 192.168.1.7 : ce lien
-# n'existait meme pas sur l'ISO gravee, et le run chargeait deja
-# /opt/GSM/firmware/board/compal_e88/layer1.highram.elf sans lui.
-#
-# Reste ce qui a de la valeur : verifier que le firmware EST dans le rootfs.
-# Sans lui, l'ISO demarre et le MS ne part pas.
+# ── Calypso firmware: /opt/GSM/firmware only ────────────────────────────────
+# environnement/paths.env (and local.env) of qosmo only know
+# $GSM_ROOT/firmware; do not add a firmware link inside the qosmo tree.
+# Just check that the firmware is in the rootfs: without it the ISO boots but
+# the MS does not start.
 FW_ELF="board/compal_e88/layer1.highram.elf"
 if [ -e "$ROOTFS/opt/GSM/firmware/$FW_ELF" ]; then
     echo -e "  ${GREEN}✓${NC} firmware : ${CYAN}/opt/GSM/firmware/${FW_ELF}${NC} (source unique ; FIRMWARE_ELF resolu)"
 else
     echo -e "  ${YELLOW}!${NC} /opt/GSM/firmware/${FW_ELF} absent du rootfs - FIRMWARE_ELF restera non resolu" >&2
 fi
-# [2026-09-03] Le firmware est interchangeable (compal_e86, gta0x, ...) : les
-# lanceurs lisent l1s/last_rach dans l'ELF choisi par FIRMWARE_ELF, plus besoin
-# de nm ni d'adresses figees. On dit quels boards l'image embarque, pour que
-# « FIRMWARE_ELF=.../board/X/layer1.highram.elf » ne soit pas une devinette.
+# The firmware is interchangeable (compal_e86, gta0x, ...): the launchers read
+# l1s/last_rach from the ELF selected by FIRMWARE_ELF. List the embedded boards
+# so that FIRMWARE_ELF=.../board/X/layer1.highram.elf is not guesswork.
 _boards=""
 for _b in "$ROOTFS"/opt/GSM/firmware/board/*/layer1.highram.elf; do
     [ -f "$_b" ] || continue
@@ -201,12 +159,10 @@ for _b in "$ROOTFS"/opt/GSM/firmware/board/*/layer1.highram.elf; do
 done
 [ -n "$_boards" ] && echo -e "  ${GREEN}✓${NC} boards layer1 embarques :${CYAN}${_boards}${NC}"
 
-# ── Firmware audio TI TAS2781 (ampli Lenovo Legion 7) ───────────────────────
-# Le codec TAS2781 des Legion 7 ne sort AUCUN son tant que son firmware n est
-# pas dans /lib/firmware : le pilote snd_soc_tas2781 le reclame au chargement
-# et reste muet sinon. On le pose dans le rootfs (donc /lib/firmware du systeme
-# installe), pas dans le /lib/firmware de l hote de build. Non fatal : une image
-# sans ce binaire boote quand meme, seul l audio du Legion manque.
+# ── TI TAS2781 audio firmware (Lenovo Legion 7 amplifier) ───────────────────
+# The snd_soc_tas2781 driver stays silent until its firmware is in
+# /lib/firmware. Installed into the rootfs (not the build host). Not fatal:
+# without it only the Legion 7 audio is missing.
 _TAS_URL="https://github.com/bbaranoff/sound_firmware_lenovo_legion_7/raw/refs/heads/main/TIAS2781RCA2.bin"
 install -d "$ROOTFS/lib/firmware"
 if [ "${ISO_ARCH:-amd64}" != "amd64" ]; then
@@ -218,14 +174,14 @@ else
     echo -e "  ${YELLOW}!${NC} TIAS2781RCA2.bin non telecharge (reseau ?) - audio Legion 7 muet" >&2
 fi
 
-# ── toast : codec GSM 06.10 (quut.com), absent du paquet libgsm1 ─────────────
-# libgsm1 fournit la lib, pas le binaire toast/untoast/tcat. On compile les
-# sources SOUS $ROOTFS/opt/GSM (donc /opt/GSM du systeme installe) et on pose le
-# binaire dans $ROOTFS/usr/local/bin (/usr/local/bin du systeme). La compilation
-# tourne sur l hote de build ; l ISO etant amd64 sur hote amd64, le binaire est
-# bon. Non fatal : sans reseau ou sans toolchain, l ISO se construit sans toast.
+# ── toast: GSM 06.10 codec (quut.com), not shipped by libgsm1 ───────────────
+# libgsm1 provides the library, not toast/untoast/tcat. The sources are built
+# under $ROOTFS/opt/GSM and the binaries installed into $ROOTFS/usr/local/bin.
+# Built on the build host, so only when host and ISO architectures match
+# (otherwise in the chroot, 82-arm-natif). Not fatal: no network or toolchain
+# means no toast.
 _GSM_VER=gsm-1.0.24
-_GSM_DIR=gsm-1.0-pl24   # le tarball se decompresse SOUS ce nom
+_GSM_DIR=gsm-1.0-pl24  # the tarball unpacks under this name
 _GSM_URL="https://www.quut.com/gsm/${_GSM_VER}.tar.gz"
 if [ -x "$ROOTFS/usr/local/bin/toast" ]; then
     echo -e "  ${GREEN}✓${NC} toast deja dans le rootfs (image ?)"
@@ -252,36 +208,15 @@ else
     fi
 fi
 
-# ── Datadir QEMU : le lien que reclame la RELOCALISATION ────────────────────
-# [2026-08-28] Diagnostique en direct sur un banc lite (192.168.1.7), ou la
-# sequence mourait sur :
-#
-#   [FAIL] Emulator serial PTY (QEMU (pid ...) s'est arrete avant d'allouer son PTY)
-#   qemu-system-arm: could not read keymap file: 'en-us'
-#
-# Le bloc "Keymaps QEMU" plus bas copie bien les keymaps - dans
-# /usr/local/share/qemu/keymaps. Or QEMU ne les y cherche JAMAIS, et le fichier
-# etait present en trois exemplaires sur la machine pendant que QEMU jurait ne
-# pas le trouver.
-#
-# La raison tient a get_relocated_path() : QEMU ne prend PAS son
-# CONFIG_QEMU_FIRMWAREPATH tel quel. Il en deduit un chemin RELATIF a son
-# bindir de compilation, puis l'applique au repertoire ou le binaire se trouve
-# REELLEMENT. Ici :
-#
-#   compile avec   prefix=/opt/GSM/qemu-install   (donc bin/ et share/qemu/ y sont)
-#   execute depuis /opt/GSM/qosmo/build/qemu-system-arm   (run.sh -> QEMU_BIN)
-#   QEMU cherche   /opt/GSM/qosmo/share/qemu   <- n'existait pas
-#
-# Le prefix compile n'est alors plus jamais consulte. Mesure faite sur le banc,
-# meme binaire, meme machine :
-#
-#   sans lien : "could not read keymap file: 'en-us'"   rc=1  (QEMU meurt)
-#   avec lien : aucune erreur                           rc=124 (tue par timeout,
-#                                                        donc il tournait)
-#
-# Le lien <exec_dir>/../share/qemu est le SEUL qui repare : l'autre candidat de
-# QEMU, <exec_dir>/pc-bios, a ete teste sur le banc et laisse l'erreur intacte.
+# ── QEMU datadir: link required by QEMU path relocation ─────────────────────
+# QEMU does not use CONFIG_QEMU_FIRMWAREPATH as-is (get_relocated_path()): it
+# makes it relative to its build-time bindir and applies it to the directory
+# the binary actually runs from:
+#   built with    prefix=/opt/GSM/qemu-install
+#   run from      /opt/GSM/qosmo/build/qemu-system-arm   (run.sh -> QEMU_BIN)
+#   QEMU looks in /opt/GSM/qosmo/share/qemu
+# Without the <exec_dir>/../share/qemu link QEMU dies with
+# "could not read keymap file: 'en-us'"; <exec_dir>/pc-bios does not help.
 QINST="$ROOTFS/opt/GSM/qemu-install/share/qemu"
 if [ -d "$QSRC" ] && [ -d "$QINST/keymaps" ]; then
     if [ -e "$QSRC/share/qemu/keymaps/en-us" ]; then
@@ -296,18 +231,11 @@ elif [ -d "$QSRC" ] && [ "$ISO_ROLE" != "interstp" ]; then
     echo -e "  ${YELLOW}!${NC} /opt/GSM/qemu-install/share/qemu/keymaps absent - QEMU mourra sur 'could not read keymap file'" >&2
 fi
 
-# Le binaire vient peut-etre DEJA de l'image : "docker cp $CID:/usr/local/bin/."
-# (plus haut) copie /usr/local/bin/qemu-system-arm dans le rootfs, et c'est
-# exactement celui que le conteneur utilise pour emuler le Calypso. Exiger en
-# plus un build sur l'HOTE faisait echouer la construction sur une machine ou
-# QEMU n'a jamais ete recompile - le cas courant - alors que l'ISO aurait ete
-# parfaitement utilisable. On ne garde le caractere fatal que pour le vrai
-# probleme : aucun binaire, ni sur l'hote, ni dans l'image.
-#
-# Le pc-bios n'est pas necessaire ici : dans l'image, ni /usr/local/share/qemu
-# ni /usr/local/share/qemu-firmware n'existent, et la machine Calypso demarre
-# sans fichier de firmware QEMU (elle charge sa propre ROM). Les recopier
-# couterait 303 Mo dans une ISO qui tient en RAM.
+# The binary may already come from the image (docker cp of /usr/local/bin
+# above): a host build is not required. Fatal only if there is no binary at
+# all, neither on the host nor in the image.
+# pc-bios is not needed: the Calypso machine loads its own ROM, and copying
+# it would add 303 MB to an ISO that runs from RAM.
 ROOTFS_QEMU="$ROOTFS/usr/local/bin/qemu-system-arm"
 if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] \
    && [ ! -x "$ROOTFS_QEMU" ] && [ "$ISO_ROLE" != "interstp" ]; then
@@ -320,8 +248,8 @@ if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] \
     exit 1
 fi
 if [ ! -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ] && [ -x "$ROOTFS_QEMU" ]; then
-    # strip de l hote : x86 seulement (le binutils de l hote ne lit pas l aarch64 ;
-    # le binaire arm64 est garde tel quel, symboles compris).
+    # Host strip: x86 only (host binutils cannot read aarch64; the arm64 binary
+    # is kept as-is, with symbols).
     [ "${ISO_ARCH:-amd64}" = "$(dpkg --print-architecture)" ] && strip --strip-unneeded "$ROOTFS_QEMU" 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} qemu-system-arm repris de l'image ($(du -h "$ROOTFS_QEMU" | cut -f1)), pas de build hote necessaire"
 elif [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
@@ -331,7 +259,7 @@ elif [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     if DESTDIR="$ROOTFS" ninja -C "$QEMU_BUILD_LOCAL" install >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓${NC} qemu installe dans ${ROOTFS}${qpfx} (ninja install, pas de sources)"
     else
-        # repli : binaire + firmwares/keymaps strictement necessaires
+        # Fallback: binary + strictly required firmware/keymaps
         install -Dm755 "$QEMU_BUILD_LOCAL/qemu-system-arm" "$ROOTFS$qpfx/bin/qemu-system-arm"
         install -d "$ROOTFS$qpfx/share/qemu"
         cp -a "$QEMU_BUILD_LOCAL/pc-bios/." "$ROOTFS$qpfx/share/qemu/" 2>/dev/null || true
@@ -339,17 +267,16 @@ elif [ -x "$QEMU_BUILD_LOCAL/qemu-system-arm" ]; then
     fi
     strip --strip-unneeded "$ROOTFS$qpfx/bin/qemu-system-arm" 2>/dev/null || true
 else
-    # Seul le hub arrive ici : il ne fait que router du M3UA, il n'a pas de MS a
-    # emuler. Pour l'operateur, le test ci-dessus a deja arrete la construction.
+    # Only the hub gets here: it just routes M3UA and has no MS to emulate.
+    # For the operator role the check above already aborted the build.
     echo -e "  ${CYAN}Role inter-STP : pas de QEMU (aucun MS a emuler)${NC}"
 fi
-# ── Lanceur C qosmo : ce que 40-qemu.sh appelle ──────────
-# [2026-09-03] Chaque fork porte tools/qosmo-launch/qosmo-launch.c, compile dans
-# SON dossier (make) et installe dans /usr/local/bin sous le nom du fork. Sans
-# lui, run.sh retombe sur qemu-system-arm direct : l'ISO marche, mais sans les
-# liens pty stables ni les options reseau/sockets. On construit sur l'hote (C
-# pur, libc seule, aucun warning sous -Wall -Wextra) et on copie ; a defaut de
-# source, on reprend le binaire deja installe sur l'hote. Jamais fatal.
+# ── qosmo C launcher: called by 40-qemu.sh ──────────────────────────────────
+# tools/qosmo-launch/qosmo-launch.c is built in its directory (make) and
+# installed as /usr/local/bin/<fork>. Without it run.sh calls qemu-system-arm
+# directly: the ISO works, but without stable pty links nor network/socket
+# options. Built on the host (plain C, libc only), else the binary already
+# installed on the host is reused. Never fatal.
 if [ "$ISO_ROLE" != "interstp" ]; then
     for fork in qosmo; do
         lsrc=""
@@ -357,9 +284,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             [ -f "$c/qosmo-launch.c" ] && { lsrc="$c"; break; }
         done
         if [ "${ISO_ARCH:-amd64}" != "$(dpkg --print-architecture)" ]; then
-            # Compilation croisee : ni gcc de l hote ni binaire de l hote, ce
-            # serait du x86. Le lanceur est compile dans le chroot (82-arm-natif)
-            # s il n est pas deja venu de l image.
+            # Cross build: neither host gcc nor host binary (both x86). The launcher is
+            # built in the chroot (82-arm-natif) unless it came with the image.
             if [ -x "$ROOTFS/usr/local/bin/$fork" ]; then
                 echo -e "  ${GREEN}✓${NC} lanceur ${CYAN}/usr/local/bin/$fork${NC} (deja dans l'image ${ISO_ARCH})"
             else
@@ -377,16 +303,15 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         else
             echo -e "  ${YELLOW}!${NC} lanceur $fork absent (ni source, ni binaire) : run.sh appellera qemu-system-arm directement" >&2
         fi
-        # ── Console gdb en telnet (44-gdb-telnet.sh) : le panneau cmd.gdb ─────
-        # tools/gdb-telnet.py sert `telnet localhost 44444` -> gdb-multiarch sur le
-        # gdbstub ARM, cible en marche ; il source tools/cmd.gdb, GENERE par
-        # tools/gdb_cmd.sh (68 commandes osmocom : dsp, sb, tasks, fake_sb,
-        # trace_frames, help_osmo...). On le regenere dans l'arbre embarque pour
-        # qu'il corresponde au gdb_cmd.sh qui part. gdb-multiarch et telnet sont
-        # dans PKGS (role operateur), il n'y a rien d'autre a installer.
+        # ── gdb console over telnet (44-gdb-telnet.sh): the cmd.gdb panel ─────
+        # tools/gdb-telnet.py serves `telnet localhost 44444` -> gdb-multiarch on the
+        # ARM gdbstub; it sources tools/cmd.gdb, GENERATED by tools/gdb_cmd.sh
+        # (osmocom commands: dsp, sb, tasks, fake_sb, trace_frames, help_osmo...).
+        # Regenerated in the embedded tree to match the shipped gdb_cmd.sh.
+        # gdb-multiarch and telnet are in PKGS (operator role).
         if [ -f "$ROOTFS/opt/GSM/$fork/tools/gdb_cmd.sh" ]; then
-            # GDB_CMD_HERE : le chemin que cmd.gdb aura DANS L'IMAGE, pas celui du
-            # rootfs de build (sinon `source /var/tmp/iso-build-NNN/rootfs/...`).
+            # GDB_CMD_HERE: the path cmd.gdb will have INSIDE THE IMAGE, not the build
+            # rootfs path (otherwise `source /var/tmp/iso-build-NNN/rootfs/...`).
             if (cd "$ROOTFS/opt/GSM/$fork/tools" && GDB_CMD_HERE="/opt/GSM/$fork/tools" bash ./gdb_cmd.sh >/dev/null 2>&1) \
                && [ -s "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb" ]; then
                 echo -e "  ${GREEN}✓${NC} gdb telnet ${CYAN}$fork${NC} : tools/cmd.gdb genere ($(grep -c '^define ' "$ROOTFS/opt/GSM/$fork/tools/cmd.gdb") commandes), serveur 44-gdb-telnet.sh"
@@ -396,16 +321,13 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         fi
     done
 fi
-# ── QEMU_BIN dans l'arbre : le lien, SEULEMENT si le binaire n'y est pas ───
-# environnement/paths.env du depot qemu resout QEMU_BIN a
-# $QEMU_TREE/build/qemu-system-arm. L'arbre embarque le porte deja (build/ part
-# entier) : dans ce cas on ne touche a RIEN - un "ln -sf" par-dessus remplacerait
-# le binaire compile par un lien, c'est-a-dire l'effacerait.
-# Le lien ne sert qu'au cas contraire (arbre venu d'ailleurs, build/ absent) :
-# sans lui, run.sh s'arrete des le premier module -
-#     [FAIL] Prerequisite checks (dépendances introuvables : QEMU_BIN)
-# - alors que le binaire est la, dans /usr/local/bin.
-# osmo-qemu-link.service (etape [6/9]) applique la meme regle a chaque demarrage.
+# ── QEMU_BIN in the tree: link ONLY if the binary is missing ────────────────
+# environnement/paths.env resolves QEMU_BIN to $QEMU_TREE/build/qemu-system-arm.
+# If the embedded tree already has it (build/ shipped whole), touch nothing:
+# an "ln -sf" over it would replace the compiled binary with a link.
+# Otherwise (tree without build/) link it to /usr/local/bin, or run.sh stops
+# at its first module with "[FAIL] Prerequisite checks (... QEMU_BIN)".
+# osmo-qemu-link.service (step [6/9]) applies the same rule at every boot.
 if [ -d "$QSRC" ] && [ ! -e "$QSRC/build/qemu-system-arm" ]; then
     qbin=""
     for c in "$ROOTFS/usr/local/bin/qemu-system-arm" \
@@ -423,18 +345,13 @@ elif [ -e "$QSRC/build/qemu-system-arm" ]; then
     echo -e "  ${GREEN}✓${NC} QEMU_BIN : ${CYAN}/opt/GSM/qosmo/build/qemu-system-arm${NC} (binaire compile de l'arbre)"
 fi
 
-# ── Keymaps QEMU : 917 ko qui decident si la machine demarre ────────────────
-# [2026-08-27] Le commentaire du bloc d'installation ci-dessus dit vrai pour le
-# pc-bios - 303 Mo
-# de ROMs (bios.bin, edk2, efi-*.rom) que la machine Calypso n'ouvre jamais,
-# elle charge la sienne. Il est FAUX pour les keymaps, qui ne sont pas du
-# firmware : l'interface graphique les lit a l'initialisation, machine Calypso
-# comprise. Sans $prefix/share/qemu/keymaps, qemu-system-arm ecrit
+# ── QEMU keymaps: required for the machine to start ─────────────────────────
+# Unlike pc-bios (303 MB of ROMs the Calypso machine never opens), keymaps are
+# read by the UI at init, Calypso machine included. Without
+# $prefix/share/qemu/keymaps, qemu-system-arm prints
 #     qemu-system-arm: could not read keymap file: 'en-us'
-# et s'arrete AVANT le premier cycle. Vu de start-native.sh, ca donne
-#     [FAIL] Calypso emulator (QEMU) (started but never ready)
-# c'est-a-dire une ISO sans MS - la panne exacte que le bloc precedent veut
-# eviter. On copie donc les keymaps SEULES : 917 ko, pas 303 Mo.
+# and exits before the first cycle (start-native.sh: "[FAIL] Calypso emulator
+# (QEMU) (started but never ready)"). So copy the keymaps only (~917 KB).
 if [ "$ISO_ROLE" != "interstp" ]; then
     if [ -d "$ROOTFS/usr/local/share/qemu/keymaps" ]; then
         echo -e "  ${GREEN}✓${NC} keymaps QEMU deja en place (${CYAN}/usr/local/share/qemu/keymaps${NC})"
@@ -453,9 +370,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             cp -a "$qkm" "$ROOTFS/usr/local/share/qemu/"
             echo -e "  ${GREEN}✓${NC} keymaps QEMU ($(du -sh "$ROOTFS/usr/local/share/qemu/keymaps" | cut -f1)) copiees depuis ${CYAN}${qkm}${NC}"
         else
-            # Pas fatal : le binaire peut avoir ete configure avec un autre
-            # prefixe, ou une version future ne plus les lire. Mais c'est la
-            # premiere chose a regarder si QEMU "demarre puis s'arrete".
+            # Not fatal: the binary may use another prefix, or a future version may not
+            # read them. But this is the first thing to check if QEMU starts then exits.
             echo -e "  ${YELLOW}!${NC} keymaps QEMU introuvables - si QEMU s'arrete au demarrage," >&2
             echo -e "  ${YELLOW}  cherchez \"could not read keymap file\" dans logs/qemu.log${NC}" >&2
         fi
@@ -465,44 +381,28 @@ fi
 echo -e "${GREEN}[5c/9] Ajustements osmocom dans le rootfs...${NC}"
 echo -e "${GREEN}[5d/9] Patch configs ISO...${NC}"
 
-# LA MEME recette que sur $TEMP_CONFIG, rejouee sur le rootfs. Elle est
-# idempotente : ce qui est deja juste ne bouge pas. On la rejoue quand meme
-# parce que /etc/osmocom du rootfs vient de l'IMAGE docker (docker cp a
-# l'etape 5), pas de $TEMP_CONFIG - l'image peut porter des fichiers que la
-# substitution n'a pas traverses.
+# SAME recipe as on $TEMP_CONFIG, replayed on the rootfs (idempotent):
+# /etc/osmocom in the rootfs comes from the docker IMAGE (docker cp at step 5),
+# not from $TEMP_CONFIG, so it may hold files the substitution never saw.
 apply_native_post_patches "$ROOTFS/etc" "$ISO_OP_ID" "$ISO_N_MS" "$HOST_IP" \
     "${ISO_NODE:-1}" "${ISO_WAN_TMP:-/nonexistent}" "$SGSN_GTP_IP" "$HLR_IP"
 
 if [ -f "$ROOTFS/etc/osmocom/run.sh" ]; then
     chmod +x "$ROOTFS/etc/osmocom/run.sh"
 else
-    # Garde-fou : sous set -e, un run.sh absent tuait la construction tout au
-    # bout de l'etape 5. Le fichier vient de l'image, pas du depot : s'il
-    # manque, c'est l'image qu'il faut regarder, pas une heure de build qu'il
-    # faut perdre.
+    # Guard: under set -e a missing run.sh would abort the build. The file comes
+    # from the image, not the repo: if it is missing, check the image.
     echo -e "  ${YELLOW}!${NC} /etc/osmocom/run.sh absent de l'image ${CYAN}${ISO_SRC_IMAGE}${NC}"
 fi
 
 echo -e "  ${GREEN}✓${NC} retouches natives rejouees sur le rootfs (SGSN, MSC, sms-routing, run.sh)"
 mkdir -p "$ROOTFS/usr/bin"
-# ── /usr/local/bin AUSSI DANS /usr/bin, MAIS JAMAIS SUR UN BINAIRE DE DPKG ──
-# [2026-09-04] Ce `cp -a` recopiait TOUT /usr/local/bin dans /usr/bin. Or
-# /usr/local/bin contient le wrapper tcpdump (l'image l'apporte en 50-injection,
-# 83-espace-ram.sh le repose) - et le wrapper, lui, appelle /usr/bin/tcpdump.
-# Recopie par-dessus le vrai binaire, il s'appelait donc LUI-MEME, indefiniment.
-# L'apt de l'etape 8 ne rattrapait rien : le paquet etant deja installe dans
-# l'image, dpkg n'avait aucune raison de reecrire le fichier.
-#
-# Ce que ca donnait sur la machine demarree, et pourquoi ca ne ressemblait pas a
-# un probleme de tcpdump : run_modules/75-gsmtap.sh attend son pcap, ne le voit
-# jamais venir, et rend "[FAIL] GSMTAP capture (pcap)". run.sh sort alors en 1
-# (nb_fail > 0) ; osmo-banc.service est un oneshot, donc systemd conclut a un
-# service en echec et SIGKILL tout le cgroup - la pile entiere, montee et
-# fonctionnelle, tuee par une capture reseau.
-#
-# On ne copie donc que ce qui n'appartient a AUCUN paquet. La liste des fichiers
-# de dpkg se lit directement dans le rootfs : pas de chroot (qui ne marcherait
-# pas en construction croisee arm64), pas de dpkg-query.
+# ── /usr/local/bin ALSO in /usr/bin, but NEVER over a dpkg-owned binary ─────
+# /usr/local/bin holds wrappers (e.g. tcpdump, which calls /usr/bin/tcpdump):
+# copying one over the real binary would make it call itself forever, and
+# apt would not repair it. Only files owned by NO package are copied. The dpkg
+# file lists are read straight from the rootfs (no chroot, which would not
+# work for an arm64 cross build; no dpkg-query).
 _ubin_dpkg="$WORK/usr-bin-dpkg.txt"
 cat "$ROOTFS"/var/lib/dpkg/info/*.list 2>/dev/null \
     | grep '^/usr/bin/' | sort -u > "$_ubin_dpkg" || true
@@ -525,21 +425,12 @@ elif [ -f "$ROOTFS/etc/osmocom/mobile.cfg" ]; then
     cp "$ROOTFS/etc/osmocom/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
 fi
 
-# ── PAS D'UTILISATEUR osmocom : ROOT, ET RIEN D'AUTRE ───────────────────────
-# L'image portait un compte "osmocom" force a l'UID 0 (usermod -o -u 0). Un
-# compte qui EST root sans le dire coute plus qu'il ne rapporte :
-#   - GDM refuse toute session pour l'uid 0, il fallait donc neutraliser la
-#     regle PAM "user != root" pour qu'un autologin sur ce compte aboutisse ;
-#   - deux noms pour le meme uid donnent deux HOME (/home/osmocom et /root) et
-#     donc deux .osmocom/bb : les mobiles ecrits dans l'un, lus dans l'autre ;
-#   - "ls -l" affiche tantot root tantot osmocom pour un meme proprietaire,
-#     selon l'ordre de /etc/passwd - de quoi chercher longtemps un probleme de
-#     droits qui n'existe pas.
-# Cette image tourne en root, assume : on SUPPRIME le compte et on rend les
-# unites systemd a root. Les .service viennent des paquets Osmocom amont, qui
-# posent "User=osmocom / Group=osmocom" ; sans compte, ils echouent au
-# demarrage sur "Failed to determine user credentials" - un demon qui ne part
-# pas, et rien dans son propre journal pour le dire.
+# ── NO osmocom user: root only ──────────────────────────────────────────────
+# The image had an "osmocom" account forced to UID 0 (usermod -o -u 0), which
+# breaks GDM autologin, yields two HOMEs (two .osmocom/bb) and confusing
+# ownership. The account is DELETED and the systemd units are given back to
+# root: the upstream Osmocom .service files set "User=osmocom / Group=osmocom"
+# and would otherwise fail with "Failed to determine user credentials".
 sed -i -e 's/^User=osmocom$/User=root/' -e 's/^Group=osmocom$/Group=root/' \
        "$ROOTFS/lib/systemd/system"/osmo-*.service \
        "$ROOTFS/etc/systemd/system"/osmo-*.service 2>/dev/null || true
@@ -547,18 +438,17 @@ sed -i -e 's/^User=osmocom$/User=root/' -e 's/^Group=osmocom$/Group=root/' \
 chroot "$ROOTFS" userdel -r osmocom 2>/dev/null || true
 chroot "$ROOTFS" groupdel osmocom  2>/dev/null || true
 rm -rf "$ROOTFS/home/osmocom"
-# /var/lib/osmocom (bases HLR, etats GTP) et /var/log/osmocom appartenaient au
-# compte supprime : sans ce chown ils gardent un UID orphelin, et l'ecriture
-# echoue des le premier demarrage ("Unable to create file").
+# /var/lib/osmocom (HLR databases, GTP state) and /var/log/osmocom belonged to
+# the deleted account: without this chown, writes fail at first boot
+# ("Unable to create file").
 chown -R 0:0 "$ROOTFS/root/.osmocom" "$ROOTFS/var/lib/osmocom" \
              "$ROOTFS/var/log/osmocom" 2>/dev/null || true
 
-# Le compte "osmocom" de l image Docker etait un alias d UID 0 : on le retire
-# ici ; le VRAI compte osmocom, non privilegie, est recree en 8d.
+# The Docker image's "osmocom" account was a UID 0 alias and is removed here;
+# the real, unprivileged osmocom account is recreated at step 8d.
 echo -e "  ${GREEN}✓${NC} alias uid-0 osmocom retire (unites osmo-* rendues a root) + /usr/bin + mobile.cfg prets"
 
-
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

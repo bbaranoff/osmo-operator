@@ -1,4 +1,4 @@
-// Reglages Osmocom - web/index.html, servi par tools/osmo-reglages.py (API /api/...)
+// Osmocom settings - web/index.html, served by tools/osmo-reglages.py (API /api/...)
 'use strict';
 
 const $ = s => document.querySelector(s);
@@ -20,7 +20,7 @@ async function api(u, corps) {
   return j;
 }
 
-/* ── onglets ── */
+/* ── tabs ── */
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button, .onglet').forEach(x => x.classList.remove('actif'));
   b.classList.add('actif');
@@ -29,10 +29,10 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.o === 'etat') chargerEtat();
 });
 
-/* ── formulaires globals.conf / instance ──
- * Un champ = {cle, val, section, doc, defaut, choix[]}. Vide = defaut du script (grise). Quand les scripts
- * comparent la variable a des valeurs fixes (choix), un menu deroulant : « (defaut) », les choix, et la
- * valeur actuelle si elle n'en fait pas partie. "autre…" rend la saisie libre. */
+/* ── globals.conf / instance forms ──
+ * A field = {cle, val, section, doc, defaut, choix[]}. Empty = script default (greyed). When the scripts
+ * compare the variable against fixed values (choix), a drop-down: "(defaut)", the choices, and the
+ * current value if it is not one of them. "autre…" switches to free input. */
 function dessinerForm(champs, conteneur, filtre, posees) {
   const f = filtre.trim().toLowerCase();
   const parSec = new Map();
@@ -65,7 +65,7 @@ function dessinerForm(champs, conteneur, filtre, posees) {
     x.oninput = maj;
     x.onchange = () => {
       if (x.tagName === 'SELECT' && x.value === '\u0000autre') {
-        // bascule en saisie libre, meme id/cle
+        // switch to free input, same id/cle
         const i = document.createElement('input');
         i.id = x.id; i.dataset.cle = x.dataset.cle; i.dataset.orig = x.dataset.orig; i.value = x.dataset.orig;
         i.oninput = () => i.classList.toggle('modifie', i.value !== i.dataset.orig);
@@ -95,7 +95,7 @@ $('#g-enr').onclick = async () => {
   catch (e) { msg(e.message, false); }
 };
 
-/* ── instances Calypso (instances/instance-N.env) ── */
+/* ── Calypso instances (instances/instance-N.env) ── */
 let champsInst = [];
 async function chargerInstances() {
   const l = await api('/api/instances');
@@ -122,7 +122,7 @@ $('#i-enr').onclick = async () => {
   } catch (e) { msg(e.message, false); }
 };
 
-/* ── demons (VTY) ── */
+/* ── daemons (VTY) ── */
 let demons = [], cour = null;
 
 async function chargerDemons(force) {
@@ -198,7 +198,7 @@ $('#d-write').onclick = () => {
   if (d && confirm('write memory sur ' + d.nom + ' ? (réécrit son fichier de config)')) consoleVty(['write memory']);
 };
 
-/* ── fichiers ── */
+/* ── files ── */
 async function chargerFichiers() {
   const l = await api('/api/fichiers');
   $('#f-sel').innerHTML = l.map(p => `<option>${esc(p)}</option>`).join('');
@@ -217,7 +217,7 @@ $('#f-enr').onclick = async () => {
   catch (e) { msg(e.message, false); }
 };
 
-/* ── configs osmo : /etc/osmocom/osmo-*.cfg, fichier actif ou gabarit configs/ ── */
+/* ── osmo configs: /etc/osmocom/osmo-*.cfg, live file or configs/ template ── */
 const osmo = { liste: [], courant: null, vue: 'etc' };
 function dessinerOsmo() {
   const f = $('#o-filtre').value.trim().toLowerCase();
@@ -288,7 +288,7 @@ $('#o-prot').onclick = async () => {
   } catch (e) { msg(e.message, false); }
 };
 
-/* ── etat ── */
+/* ── status ── */
 const duree = s => s > 3600 ? (s / 3600 | 0) + 'h' + String((s % 3600) / 60 | 0).padStart(2, '0') : s > 60 ? (s / 60 | 0) + 'm' : s + 's';
 async function chargerEtat() {
   const e = await api('/api/etat');
@@ -298,7 +298,8 @@ async function chargerEtat() {
     e.vty.map(d => `<tr><td>${esc(d.nom)}</td><td>${d.hote}:${d.port}</td><td>${esc(d.invite)}</td><td>${d.pid}</td></tr>`).join('');
 }
 
-/* ── demarrage ── */
+/* ── start-up ── */
+
 chargerGlobals();
 chargerInstances().catch(e => msg(e.message, false));
 chargerDemons().catch(e => msg(e.message, false));

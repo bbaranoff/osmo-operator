@@ -1,73 +1,66 @@
 #!/bin/bash
-# iso_modules/20-hote.sh - paquets de l hote (iso_host_packages)
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/20-hote.sh - host packages needed to build the image (iso_host_packages)
+# Sourced by build-iso.sh in numeric order (same shell, variables and
+# functions); not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (that is how --arm skips a step).
 
-# ── Paquets hote requis pour fabriquer l'ISO (squashfs, grub, xorriso...) ──
-# Installes ici plutot que dans le workflow CI : `sudo ./build-iso.sh` suffit
-# sur une machine Debian/Ubuntu vierge, sans etape "Install host tools" externe.
+# ── Host packages required to build the ISO (squashfs, grub, xorriso...) ──
+# Installed here rather than in the CI workflow: `sudo ./build-iso.sh` is
+# enough on a fresh Debian/Ubuntu machine.
 #
-# [2026-09-10] LA LISTE EST CELLE D UNE UBUNTU 24.04 FRAICHE. Elle a ete
-# etablie non pas d apres ce qui manquait sur LA machine de developpement -
-# qui a tout depuis longtemps - mais d apres ce que la chaine APPELLE SUR L
-# HOTE, paquet par paquet, en partant d une noble qui n a qu ubuntu-minimal.
-# Ce qui manquait vraiment :
-#   syslinux-utils   isohybrid (91-secure-boot). "isolinux" NE LE FOURNIT PAS :
-#                    isolinux pose isolinux.bin, isohybrid est dans
-#                    syslinux-utils. La ligne d avant listait isolinux et
-#                    l ISO sortait sans table de partitions hybride - une clef
-#                    USB gravee en dd ne bootait pas sur les BIOS qui l exigent.
-#   rsync            unpackfs de calamares, et les copies de rootfs (87-lite).
-#   wget curl        firmware TAS2781 et sources gsm-1.0.24 (52-qemu), noyau
-#                    pmOS (88-lte-pmos), cles de depots (80-chroot).
-#   ca-certificates gnupg  ces telechargements sont en https, et les cles de
-#                    depot passent par gpg --dearmor.
-#   python3-pil      tools/plymouth-render.py (86-finitions) : le theme de
-#                    demarrage est GENERE, il lui faut Pillow.
-#   python3-yaml     controle des configs calamares (85-installeur-bureau).
-#   gcc make         toast/untoast (codec GSM 06.10) compile sur l hote pour
-#                    le rootfs (52-qemu). Sans eux : ISO sans toast, en silence.
-#   kpartx           images disque de l installeur et de pmOS (85, 88).
+# The list is what the chain calls ON THE HOST, starting from a fresh Ubuntu
+# 24.04 with only ubuntu-minimal:
+#   syslinux-utils   isohybrid (91-secure-boot). The isolinux package does NOT
+#                    provide it; without it the ISO has no hybrid partition
+#                    table and a dd-written USB key does not boot on some BIOSes.
+#   rsync            calamares unpackfs, rootfs copies (87-lite).
+#   wget curl        TAS2781 firmware and gsm-1.0.24 sources (52-qemu), pmOS
+#                    kernel (88-lte-pmos), repository keys (80-chroot).
+#   ca-certificates gnupg  downloads are https, repository keys go through
+#                    gpg --dearmor.
+#   python3-pil      tools/plymouth-render.py (86-finitions): the boot theme is
+#                    GENERATED and needs Pillow.
+#   python3-yaml     calamares config check (85-installeur-bureau).
+#   gcc make         toast/untoast (GSM 06.10 codec) built on the host for the
+#                    rootfs (52-qemu). Without them the ISO silently lacks toast.
+#   kpartx           installer and pmOS disk images (85, 88).
 #   e2fsprogs fdisk util-linux  mke2fs / sfdisk / losetup.
 #   xz-utils cpio file zstd  squashfs -comp xz, initrd, identification.
-#   grub2-common     grub-install ; grub-common seul n a que grub-mkrescue.
-#   fonts-ubuntu     tools/grub-theme-render.py (86, 90) : polices du theme
-#                    GRUB, converties par grub-mkfont (grub-common).
+#   grub2-common     grub-install; grub-common alone only has grub-mkrescue.
+#   fonts-ubuntu     tools/grub-theme-render.py (86, 90): GRUB theme fonts,
+#                    converted by grub-mkfont (grub-common).
 #   meson ninja-build pkg-config libpulse-dev libx11-dev libxext-dev
-#   libxrender-dev libxcomposite-dev libgl-dev  GLava compile sur l hote pour
-#                    le rootfs (tools/glava-build.sh, 85-glava).
-# Ubuntu 24.04 fournit deja : tar, gzip, dpkg-deb, coreutils, mount. Pas la
-# peine de les demander. aria2 et curl viennent avec apt-fast-install.sh.
+#   libxrender-dev libxcomposite-dev libgl-dev  GLava built on the host for the
+#                    rootfs (tools/glava-build.sh, 85-glava).
+# Ubuntu 24.04 already provides tar, gzip, dpkg-deb, coreutils, mount. aria2
+# and curl come with apt-fast-install.sh.
 #
-# shim-signed / grub-efi-amd64-signed / dosfstools : la chaine Secure Boot.
-# Voir "Etape 9" plus bas - sans eux l'ISO ne demarre pas sur une machine dont
-# le Secure Boot est actif, et le firmware ne dit qu'une erreur de certificat.
-# apt-fast partout : le meme installeur que le Dockerfile et le chroot
-# (packaging/apt-fast-install.sh), donc les memes reglages apt sur l hote.
+# shim-signed / grub-efi-amd64-signed / dosfstools: the Secure Boot chain
+# (see step 9); without them the ISO does not boot with Secure Boot enabled
+# and the firmware only reports a certificate error.
+# apt-fast everywhere: same installer as the Dockerfile and the chroot
+# (packaging/apt-fast-install.sh), hence the same apt settings on the host.
 #
-# COMMUN AUX DEUX ARCHITECTURES : tout ce qui n est ni grub ni xorriso.
+# COMMON TO BOTH ARCHITECTURES: everything except grub and xorriso.
 ISO_HOST_PKGS_COMMON="debootstrap git rsync wget curl ca-certificates gnupg \
 zstd xz-utils cpio file gcc make python3 python3-pil python3-yaml \
 e2fsprogs fdisk util-linux dosfstools mtools kpartx"
-# amd64 : l ISO elle-meme - squashfs, grub (BIOS + EFI), xorriso, isohybrid.
+# amd64: the ISO itself - squashfs, grub (BIOS + EFI), xorriso, isohybrid.
 ISO_HOST_PKGS="$ISO_HOST_PKGS_COMMON squashfs-tools xorriso grub-common grub2-common grub-pc-bin grub-efi-amd64-bin shim-signed grub-efi-amd64-signed isolinux syslinux-common syslinux-utils \
 fonts-ubuntu meson ninja-build pkg-config libpulse-dev libx11-dev libxext-dev libxrender-dev libxcomposite-dev libgl-dev"
-# --arm : ni grub ni xorriso ni squashfs. Il faut l emulation (qemu-user-static
-# + binfmt-support : chroot et docker executent de l aarch64 sur l hote x86),
-# debootstrap, et de quoi fabriquer l image SD sans monter quoi que ce soit :
+# --arm: no grub, xorriso or squashfs. Needs emulation (qemu-user-static +
+# binfmt-support: chroot and docker run aarch64 code on the x86 host),
+# debootstrap, and tools to build the SD image without mounting anything:
 # mke2fs -d (e2fsprogs), mkfs.vfat + mcopy (dosfstools, mtools), sfdisk.
 [ "${ISO_ARCH:-amd64}" = "arm64" ] \
     && ISO_HOST_PKGS="$ISO_HOST_PKGS_COMMON qemu-user-static binfmt-support docker-buildx"
 
-# ── Docker : une dependance, pas une option ─────────────────────────────────
-# Toute la chaine part d une image docker (build.sh, ou --skip-build qui la
-# tire du Hub). build.sh pose docker.io + docker-compose-v2 + docker-buildx,
-# mais il n est PAS appele en --skip-build - et le controle d outils de
-# 22-wan-table, lui, exige docker dans les deux cas. On le pose donc ici.
-# UNIQUEMENT SI ABSENT : sur un hote qui a docker-ce (depot Docker), poser
-# docker.io le casserait. Un docker deja la, quelle que soit sa provenance,
-# est laisse tel quel.
+# ── Docker: a dependency, not an option ───────────────────────────────────
+# The whole chain starts from a docker image (build.sh, or a pull). build.sh
+# installs docker.io + docker-compose-v2 + docker-buildx but is not called on
+# a pull, while the 22-wan-table tool check requires docker in both cases.
+# ONLY IF MISSING: installing docker.io on a host with docker-ce (Docker repo)
+# would break it. An existing docker, whatever its origin, is left as is.
 iso_host_docker() {
     if command -v docker >/dev/null 2>&1; then
         docker info >/dev/null 2>&1 || systemctl start docker >/dev/null 2>&1 || true
@@ -81,11 +74,9 @@ iso_host_docker() {
     systemctl enable --now docker >/dev/null 2>&1 || true
 }
 
-# ── Les outils que la chaine appelle, et le paquet qui les porte ────────────
-# Le controle d avant ne nommait que six binaires et disait "Manquant: X" sans
-# dire quoi installer. Ici chaque outil sait d ou il vient : un hote ou apt a
-# echoue (miroir coupe, paquet retire) donne une ligne par outil et LA commande
-# qui repare. Les outils optionnels (isohybrid, gcc) ne font qu avertir.
+# ── Tools called by the chain, and the package providing each ─────────────
+# A missing tool is reported with THE command that installs it. Optional
+# tools (isohybrid, gcc) only produce a warning.
 iso_host_check_tools() {
     local missing="" pkgs="" t p
     local required="debootstrap git rsync wget curl mkfs.vfat mcopy sfdisk mke2fs kpartx python3"
@@ -114,17 +105,16 @@ iso_host_check_tools() {
         echo -e "${RED}  apt-get install -y$(echo "$pkgs" | tr ' ' '\n' | sort -u | tr '\n' ' ')${NC}" >&2
         return 1
     fi
-    # Pillow : plymouth-render.py est appele avec le python3 du PATH, qui peut
-    # etre un venv (/root/.env) ou python3-pil n est pas. On avertit, on ne
-    # bloque pas : le theme de demarrage n empeche pas l ISO de sortir.
+    # Pillow: plymouth-render.py runs with the python3 from PATH, which may be a
+    # venv (/root/.env) without python3-pil. Warning only: the boot theme does
+    # not prevent the ISO from being built.
     python3 -c "import PIL" >/dev/null 2>&1 \
         || echo -e "  ${YELLOW}!${NC} Pillow absent du python3 du PATH ($(command -v python3)) - theme Plymouth non genere" >&2
     return 0
 }
 
-# Appelable plusieurs fois (21-docker-build en --all, puis 22-wan-table) : apt
-# ne tourne qu au premier appel. Sans ce garde-fou, une passe --all refaisait
-# l `apt-fast install` a chaque module qui appelle la fonction.
+# May be called several times (21-docker-build with --all, then
+# 22-wan-table): apt only runs on the first call.
 _ISO_HOST_PKGS_DONE=0
 iso_host_packages() {
     [ "$_ISO_HOST_PKGS_DONE" = "1" ] && return 0
@@ -139,10 +129,9 @@ iso_host_packages() {
             || echo -e "  ${YELLOW}apt-fast non installe - apt-get${NC}"
         command -v apt-fast >/dev/null 2>&1 || apt-fast() { apt-get "$@"; }
         apt-fast update -qq || true
-        # UN paquet introuvable (retire d une suite, miroir partiel) faisait
-        # echouer la ligne entiere, et le repli d avant reposait une liste
-        # ecrite a la main, plus courte que la vraie. Repli generique : on
-        # reprend paquet par paquet, et on NOMME ceux qui n ont pas voulu.
+        # One unavailable package (removed from a suite, partial mirror) fails the
+        # whole line: fall back to installing package by package and NAME the
+        # failures.
         if ! apt-fast install -y --no-install-recommends $ISO_HOST_PKGS; then
             echo -e "  ${YELLOW}installation groupee refusee - reprise paquet par paquet${NC}"
             local _ko="" _p
@@ -158,25 +147,18 @@ iso_host_packages() {
     iso_host_check_tools
 }
 
-# ── binfmt : l hote x86 doit executer l aarch64 de facon TRANSPARENTE ────────
-# Deux consommateurs. Le chroot du rootfs : il suffit que qemu-aarch64-static
-# soit enregistre dans binfmt_misc et copie DANS le rootfs. Docker (buildx
-# --platform linux/arm64, docker run de l image arm64 pour la cloture ldd) :
-# le conteneur n a pas l emulateur, il faut le drapeau F (fix-binary) pour que
-# le noyau garde un descripteur ouvert sur l emulateur de l hote. Le paquet
-# qemu-user-static l enregistre avec F depuis jammy ; si ce n est pas le cas
-# ici, on passe par l image binfmt de Docker (tonistiigi/binfmt), qui fait
-# exactement cet enregistrement - c est un telechargement, il est dit.
+# ── binfmt: the x86 host must run aarch64 code TRANSPARENTLY ──────────────
+# Two consumers. The rootfs chroot: qemu-aarch64-static must be registered in
+# binfmt_misc and copied INTO the rootfs. Docker (buildx --platform
+# linux/arm64, docker run of the arm64 image for the ldd closure): the
+# container has no emulator, so the F (fix-binary) flag is required for the
+# kernel to keep the host emulator open. qemu-user-static registers it with F
+# since jammy; otherwise use Docker's binfmt image (tonistiigi/binfmt), which
+# does exactly that registration (a download, announced).
 #
-# [2026-09-14] SUR UN HOTE arm64, IL N Y A RIEN A EMULER. Cette fonction
-# s arretait en erreur fatale sur une machine aarch64 (un Pi, un Ampere, le
-# runner ubuntu-24.04-arm de GitHub) : /proc/sys/fs/binfmt_misc/qemu-aarch64
-# n y existe pas - et n a aucune raison d exister -, update-binfmts n a rien a
-# activer, et tonistiigi/binfmt --install arm64 n installe pas un handler pour
-# l architecture native. On sortait donc en « binfmt qemu-aarch64
-# indisponible » sur la seule machine qui n en a pas besoin. Meme regle que
-# build.sh (l.183) et 40-rootfs.sh (l.57) : on compare a l architecture de
-# l hote, et on ne parle d emulation que si les deux different.
+# On an arm64 host there is nothing to emulate: compare with the host
+# architecture, as build.sh and 40-rootfs.sh do, and only set up emulation
+# when they differ.
 iso_arm_binfmt() {
     [ "${ISO_ARCH:-amd64}" = "arm64" ] || return 0
     if [ "${ISO_ARCH}" = "$(dpkg --print-architecture 2>/dev/null || echo amd64)" ]; then
@@ -201,19 +183,14 @@ iso_arm_binfmt() {
 }
 
 
-# ── ET ON LES POSE ICI, AU LANCEMENT ────────────────────────────────────────
-# [2026-09-10] La fonction etait DEFINIE dans ce module mais appelee seulement
-# par 21-docker-build (branche --all) et 22-wan-table. Consequence sur une
-# machine fraiche : le premier module a avoir besoin d un outil le trouvait
-# absent, et l erreur tombait plusieurs etapes plus loin - loin de sa cause.
-# Les paquets sont maintenant poses des le module 20, avant le moindre docker
-# build ; le seul module qui passe avant est 10-clavier (la question du
-# clavier, qu on veut toujours en premier). Les appels de 21 et 22 restent :
-# ils ne refont rien (garde _ISO_HOST_PKGS_DONE).
+# ── INSTALL THEM HERE, AT STARTUP ──────────────────────────────────────────
+# Host packages are installed in module 20, before any docker build, so a
+# missing tool fails early (only 10-clavier runs before). The calls in 21 and
+# 22 do nothing more (_ISO_HOST_PKGS_DONE guard).
 iso_host_packages
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would silently stop everything. Always 0 here.
 true

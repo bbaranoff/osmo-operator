@@ -1,16 +1,16 @@
 #!/bin/bash
-# armbian/userpatches/customize-image.sh - la pile osmo-operator posee dans l image Armbian
+# armbian/userpatches/customize-image.sh - install the osmo-operator stack into the Armbian image
 #
-# Execute par armbian/build DANS LE CHROOT de l image (arguments : $RELEASE $LINUXFAMILY $BOARD
-# $BUILD_DESKTOP), avec userpatches/overlay monte en /tmp/overlay. Ce que fait l ISO en plusieurs
-# modules (50-injection-image, 80-chroot, 82-arm-natif, 84-comptes), ramene a l essentiel :
-#   1. les paquets Ubuntu dont la pile a besoin a l execution (liste de 80-chroot.sh, sans noyau ni live)
-#   2. dpkg -i des .deb du build docker (osmo-build-* : libosmocore, osmo-*, gapk, QEMU, osmocom-bb...)
-#   3. l arbre /tmp/overlay/osmo/rootfs recopie sur / (/usr/local, /opt/GSM, /etc/osmocom, unites...)
-#   4. ce qu un hote x86 ne peut pas produire, compile ICI (aarch64) : toast, lanceur qosmo,
-#      c54x_exe / grgsm_exe, les .deb du banc (packaging/build-debs.sh)
-#   5. comptes (root/osmo, osmocom/osmo), plus d assistant Armbian au premier login, services
-# Le noyau, le firmware du Pi, l agrandissement de la racine : Armbian s en charge.
+# Run by armbian/build INSIDE the image chroot (arguments: $RELEASE $LINUXFAMILY $BOARD
+# $BUILD_DESKTOP), with userpatches/overlay mounted at /tmp/overlay. Condensed equivalent of the
+# ISO modules 50-injection-image, 80-chroot, 82-arm-natif and 84-comptes:
+#   1. Ubuntu runtime packages needed by the stack (list from 80-chroot.sh, without kernel/live)
+#   2. dpkg -i of the Docker build .debs (osmo-build-*: libosmocore, osmo-*, gapk, QEMU, osmocom-bb...)
+#   3. copy of /tmp/overlay/osmo/rootfs onto / (/usr/local, /opt/GSM, /etc/osmocom, units...)
+#   4. what an x86 host cannot produce, compiled HERE (aarch64): toast, qosmo launcher,
+#      c54x_exe / grgsm_exe, bench .debs (packaging/build-debs.sh)
+#   5. accounts (root/osmo, osmocom/osmo), no Armbian first-login wizard, services
+# Kernel, Pi firmware and root filesystem resizing are handled by Armbian.
 set -euo pipefail
 RELEASE="${1:-}"; LINUXFAMILY="${2:-}"; BOARD="${3:-}"; BUILD_DESKTOP="${4:-}"
 OV=/tmp/overlay/osmo
@@ -21,7 +21,7 @@ log "release=$RELEASE family=$LINUXFAMILY board=$BOARD desktop=$BUILD_DESKTOP ov
 [ -f "$OV/SOURCE" ] && log "pile : $(tr '\n' ' ' < "$OV/SOURCE")"
 case "$RELEASE" in noble) ;; *) log "ATTENTION : les .deb du build visent noble, pas $RELEASE" ;; esac
 
-# ── 1. paquets d execution ───────────────────────────────────────────────────
+# ── 1. Runtime packages ─────────────────────────────────────────────────────
 apt-get update
 PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved build-essential wget
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev libc-ares2
@@ -44,7 +44,7 @@ apt-get install -y --no-install-recommends $PKGS || {
     for p in $PKGS; do apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1 || log "  absent : $p"; done
 }
 
-# ── 2. les .deb du build docker ──────────────────────────────────────────────
+# ── 2. Docker build .debs ───────────────────────────────────────────────────
 if ls "$OV"/debs/*.deb >/dev/null 2>&1; then
     install -d /var/cache/osmo-debs
     cp -f "$OV"/debs/*.deb /var/cache/osmo-debs/
@@ -55,14 +55,14 @@ else
     log "pas de .deb du build dans l overlay : tout vient de l arbre rootfs/"
 fi
 
-# ── 3. l arbre de l image docker ─────────────────────────────────────────────
+# ── 3. Docker image tree ────────────────────────────────────────────────────
 if [ -d "$OV/rootfs" ]; then
     cp -a "$OV/rootfs/." /
     ldconfig
     log "arbre recopie : $(du -sh "$OV/rootfs" | cut -f1) (/usr/local, /opt/GSM, /etc/osmocom, unites)"
 fi
 
-# ── 4. compilation native (aarch64) ──────────────────────────────────────────
+# ── 4. Native compilation (aarch64) ─────────────────────────────────────────
 if [ ! -x /usr/local/bin/toast ]; then
     ( set -e; cd /opt/GSM
       wget -qO gsm-1.0.24.tar.gz https://www.quut.com/gsm/gsm-1.0.24.tar.gz
@@ -87,15 +87,15 @@ if [ -x /opt/GSM/osmo-operator/packaging/build-debs.sh ]; then
         && log ".deb du banc construits dans /var/cache/osmo-debs" || log ".deb du banc non construits (l image sort sans eux)"
 fi
 
-# ── 4b. le bureau du banc (BUILD_DESKTOP=yes : GNOME minimal pose par Armbian) ─
-# [2026-10-24] Ce que l ISO --desktop pose en plus de GNOME (iso_modules/80-chroot.sh,
-# 85-installeur-bureau.sh), ramene a ce qui a un sens sur une carte : X11 en autologin
-# root, le fond GSM LAB, sombre/Yaru bleu, les icones du depot et le dock, le Conky et
-# l encart (osmo-desktop-panel, extrait par build-armbian.sh), c123 et ses paquets GTK.
-# Pas de calamares, grub, secure boot, firefox Mozilla, extensions GNOME.
-# GLava N EST PAS pose par defaut : le cercle NCS veut OpenGL >= 4.2 (imageLoad/Store),
-# que ni le V3D du Pi 4 ni le Mali G610 des Orange Pi 5 n offrent sous Mesa (GL 3.1).
-# OSMO_ARM_GLAVA=1 sudo ./build-armbian.sh ... pour essayer quand meme (marqueur OSMO_ARM_GLAVA de l overlay).
+# ── 4b. Bench desktop (BUILD_DESKTOP=yes: minimal GNOME installed by Armbian) ─
+# Subset of what the ISO --desktop adds on top of GNOME (iso_modules/80-chroot.sh,
+# 85-installeur-bureau.sh) that makes sense on a board: X11 autologin as root, GSM LAB
+# wallpaper, dark/Yaru blue theme, repository icons and dock, Conky and the panel
+# (osmo-desktop-panel, extracted by build-armbian.sh), c123 and its GTK packages.
+# No calamares, grub, secure boot, Mozilla firefox or GNOME extensions.
+# Known limitation: GLava is not installed by default; its NCS circle needs OpenGL >= 4.2
+# (imageLoad/Store), which neither the Pi 4 V3D nor the Orange Pi 5 Mali G610 provide under
+# Mesa (GL 3.1). Use OSMO_ARM_GLAVA=1 sudo ./build-armbian.sh ... to try anyway (overlay marker OSMO_ARM_GLAVA).
 if [ "$BUILD_DESKTOP" = yes ]; then
     REPO=/opt/GSM/osmo-operator
     DPKGS="conky-all fonts-dejavu python3-pil python3-gi python3-gi-cairo python3-cairo
@@ -108,14 +108,14 @@ if [ "$BUILD_DESKTOP" = yes ]; then
         for p in $DPKGS; do apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1 || log "  bureau, absent : $p"; done
     }
 
-    # gdm : autologin root sous X11 (le banc tourne en root ; xdotool, xprop, le Conky veulent X)
+    # gdm: root autologin under X11 (the bench runs as root; xdotool, xprop and Conky need X)
     sed -i "/pam_succeed_if.so user != root quiet_success/s/^/#/" \
         /etc/pam.d/gdm-password /etc/pam.d/gdm-autologin 2>/dev/null || true
     install -d /etc/gdm3
     printf '[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=root\nWaylandEnable=false\n' > /etc/gdm3/custom.conf
     rm -f /etc/xdg/autostart/gnome-initial-setup-first-login.desktop
 
-    # les defauts de schema : fond, theme, veille, clavier, dock (memes valeurs que l ISO)
+    # Schema defaults: wallpaper, theme, idle, keyboard, dock (same values as the ISO)
     OVR=/usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
     FOND=/usr/share/backgrounds/gsm-lab-ville.jpg
     for f in gsm-lab-ville.jpg gsm-lab-antenne.jpg gsm-lab-fond.jpg; do
@@ -137,7 +137,7 @@ if [ "$BUILD_DESKTOP" = yes ]; then
         > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || log "glib-compile-schemas a echoue"
 
-    # les icones du depot (sauf multi : posee par addition.sh --multi, cf. 85-installeur-bureau.sh)
+    # Repository icons (except multi: installed by addition.sh --multi, see 85-installeur-bureau.sh)
     install -d /usr/share/applications /usr/share/icons/hicolor/scalable/apps
     for d in "$REPO"/data/desktop/*.desktop; do
         [ -f "$d" ] || continue
@@ -147,7 +147,7 @@ if [ "$BUILD_DESKTOP" = yes ]; then
     done
     gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
 
-    # les commandes du bureau dans le PATH (memes liens que iso_modules/70-scripts.sh)
+    # Desktop commands in PATH (same links as iso_modules/70-scripts.sh)
     ln -sf "$REPO/start-native.sh"        /usr/local/bin/osmo-start-native
     ln -sf "$REPO/tools/osmo-fond.py"     /usr/local/bin/osmo-fond
     ln -sf "$REPO/tools/osmo-op.sh"       /usr/local/bin/osmo-op
@@ -156,7 +156,7 @@ if [ "$BUILD_DESKTOP" = yes ]; then
     ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/c123
     ln -sf "$REPO/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
 
-    # le Conky et l encart, gardes en vie toute la session (le meme gardien que l ISO)
+    # Conky and the panel, kept alive for the whole session (same watchdog as the ISO)
     if [ -s "$OV/osmo-desktop-panel" ]; then
         install -m755 "$OV/osmo-desktop-panel" /usr/local/bin/osmo-desktop-panel
         install -d /etc/xdg/autostart
@@ -174,20 +174,20 @@ if [ "$BUILD_DESKTOP" = yes ]; then
     log "bureau du banc pose (fond $FOND)"
 fi
 
-# les alias du banc (banc-rssi, banc-trx, c123-1...) : profile.d ET vraies commandes, bureau ou non
+# Bench aliases (banc-rssi, banc-trx, c123-1...): profile.d AND real commands, desktop or not
 if [ -f /opt/GSM/osmo-operator/scripts/osmo-banc-aliases.sh ]; then
     install -m644 /opt/GSM/osmo-operator/scripts/osmo-banc-aliases.sh /etc/profile.d/98-osmo-banc-aliases.sh
     bash /opt/GSM/osmo-operator/tools/osmo-banc-cmd.sh --install /usr/local/bin
 fi
 
-# ── 5. comptes, premier login, services ──────────────────────────────────────
+# ── 5. Accounts, first login, services ──────────────────────────────────────
 id -u osmocom >/dev/null 2>&1 || useradd -m -s /bin/bash -c 'Compte osmocom (non privilegie)' osmocom
 echo 'osmocom:osmo' | chpasswd
 echo 'root:osmo'    | chpasswd
 usermod -aG sudo,audio,dialout,plugdev osmocom 2>/dev/null || true
-rm -f /root/.not_logged_in_yet            # pas d assistant Armbian au premier login : les comptes sont poses
+rm -f /root/.not_logged_in_yet  # no Armbian first-login wizard: accounts are already set
 for u in osmo-egprs-web osmo-pulse; do systemctl enable "$u" 2>/dev/null || true; done
-for u in osmo-banc osmo-multi; do        # poses, pas actives : OSMO_IMAGE_BANC=1 / OSMO_IMAGE_MULTI=1 dans l overlay pour les activer
+for u in osmo-banc osmo-multi; do  # installed, not enabled: set OSMO_IMAGE_BANC=1 / OSMO_IMAGE_MULTI=1 in the overlay to enable
     v="OSMO_IMAGE_${u#osmo-}"; v="${v^^}"
     [ -f "$OV/$v" ] && systemctl enable "$u" 2>/dev/null && log "$u active au boot"
 done

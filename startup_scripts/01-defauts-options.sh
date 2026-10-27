@@ -1,82 +1,83 @@
-# 01-defauts-options.sh - partie de start.sh (lignes 41-542 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 01-defauts-options.sh - part of start.sh (defaults and command-line options)
+# Sourced by start.sh in the main shell: same order, same variables.
 
-# ── LE NOMBRE D'ABONNES NE PASSE PAS PAR ~/.bashrc ──────────────────────────
-# [2026-09-04] /etc/osmocom/coeur.env (N_MS, ecrit par build-iso.sh) n'etait
-# charge que par /root/.bashrc - donc SEULEMENT dans un shell interactif de
-# root. Depuis l'icone (launch.sh -> pkexec), depuis une unite systemd ou
-# depuis start-multi.sh, personne ne le lisait : run_modules/21-abonnes-hlr.sh
-# retombait sur N_MS=1, le HLR n'avait que 100101, et le second mobile se
-# faisait creer a la volee par « subscriber-create-on-demand 5 » avec un
-# MSISDN aleatoire a cinq chiffres (31804) et SANS Ki - donc injoignable et
-# rejete a l'authentification. On le charge ici, une fois pour toutes ; le
-# « := » du fichier laisse gagner un N_MS=3 pose dans l'environnement.
+# ── THE NUMBER OF SUBSCRIBERS DOES NOT GO THROUGH ~/.bashrc ────────────────
+# /etc/osmocom/coeur.env (N_MS, written by build-iso.sh) is loaded here, once
+# and for all, so that the icon (launch.sh -> pkexec), a systemd unit and
+# start-multi.sh all see it - not only an interactive root shell. Without it
+# run_modules/21-abonnes-hlr.sh falls back to N_MS=1, the HLR only has 100101,
+# and the second mobile is created on the fly by "subscriber-create-on-demand
+# 5" with a random five-digit MSISDN and NO Ki - unreachable and rejected at
+# authentication. The ":=" of the file lets an N_MS=3 set in the environment
+# win.
 if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env" ]; then
     set -a; . "${OSMOCOM_CFG:-/etc/osmocom}/coeur.env"; set +a
 fi
 # --- options ------------------------------------------------------------------
 DRY=0 VERBOSE=0 ACTION=start PROFILE="${CALYPSO_PROFILE:-faketrx-qemu}" FORCE=0
-# [2026-10-14] SAP desactive par defaut : la SIM du mobile est la SIM de test.
-# --sap : la SIM est SERVIE au mobile (sim sap) par le serveur SAP de softSIM,
-# lance ici avant la pile. SAP_TYPE : pcsc = la carte du lecteur PC/SC (HID
-# Omnikey, sysmoISIM programmee par tools/osmo-sim.sh), sim = la SIM logicielle
-# sim-op1.xml (IMSI du MS#1, COMP128v1, Ki du HLR), auto = pcsc si une carte
-# est dans un lecteur, sinon sim. SAP_SOCK : le socket (celui de MS#1).
+# SAP disabled by default: the mobile's SIM is the test SIM.
+# --sap: the SIM is SERVED to the mobile (sim sap) by the softSIM SAP server,
+# started here before the stack. SAP_TYPE: pcsc = the card in the PC/SC reader
+# (HID Omnikey, sysmoISIM programmed by tools/osmo-sim.sh), sim = the software
+# SIM sim-op1.xml (IMSI of MS#1, COMP128v1, Ki of the HLR), auto = pcsc if a
+# card is in a reader, otherwise sim. SAP_SOCK: the socket (the one of MS#1).
 : "${SAP_MODE:=0}"
 : "${SAP_TYPE:=auto}"
 : "${SAP_SOCK:=/tmp/osmocom_sap}"
-# 1 des que l'operateur a nomme un profil (--profile, ou le mode en positionnel).
-# Sert a --dsp, qui choisit `qemu` SEULEMENT si personne n'a choisi avant lui.
+# 1 as soon as the operator named a profile (--profile, or the mode as positional).
+# Used by --dsp, which selects `qemu` ONLY if nobody chose before it.
 PROFILE_CHOISI=0
 [ -n "${CALYPSO_PROFILE:-}" ] && PROFILE_CHOISI=1
-# WAN : jamais par defaut. --wan (ou WAN_AUTO=1 dans /etc/osmo-wan.conf, ce que
-# pose une ISO construite avec --wan) le monte avant de passer la main a run.sh.
+# WAN: never by default. --wan (or WAN_AUTO=1 in /etc/osmo-wan.conf, set by an
+# ISO built with --wan) brings it up before handing over to run.sh.
 WAN_MESH=0
-# Ce que la table retiendra (WAN_AUTO_SAVE, network/wan-nodes.sh) : 1 seulement
-# si c'est WAN_AUTO=1 qui monte le WAN ; un --wan sur la ligne vaut pour CE
-# lancement et laisse WAN_AUTO=0, pour que le suivant demarre sans WAN.
+# What the table will keep (WAN_AUTO_SAVE, network/wan-nodes.sh): 1 only if
+# WAN_AUTO=1 brings up the WAN; a --wan on the command line applies to THIS
+# launch and leaves WAN_AUTO=0, so that the next one starts without WAN.
 WAN_AUTO_KEEP=0
-# Inter-STP (hub SS7) lance en standalone a cote du WAN : auto = seulement si le
-# hub n'existe pas encore sur le reseau (ni adresse locale, ni reponse ping).
-# --interstp force, --no-interstp passe. Un seul hub pour tout le WAN : sur le
-# noeud qui ne le porte pas, le hub distant est reconnu et laisse en place.
+# Inter-STP (SS7 hub) started standalone next to the WAN: auto = only if the
+# hub does not exist yet on the network (no local address, no ping answer).
+# --interstp forces, --no-interstp skips. One hub for the whole WAN: on the
+# node that does not carry it, the remote hub is recognized and left alone.
 INTERSTP=auto
-# --wan FICHIER : fiches de noeuds a importer (network/node-conf.sh).
+# --wan FILE: node sheets to import (network/node-conf.sh).
 WAN_IMPORT_FILES=()
-# --regen-conf : la table WAN est reconstruite DE ZERO. La table en place
-# (/etc/osmo-wan.conf) survit aux relances et garde les noeuds qu'on y a vus un
-# jour ; un pair eteint y laisse une route qui passe PROHIB au STP. On met la
-# table de cote (sauvegarde horodatee) et on repart de ce que la ligne donne
-# (--wan-nodes), des fiches (--wan FICHIER) ou de la question interactive.
+# --regen-conf: the WAN table is rebuilt FROM SCRATCH. The table in place
+# (/etc/osmo-wan.conf) survives restarts and keeps the nodes once seen; a
+# switched-off peer leaves a route that goes PROHIB at the STP. The table is
+# set aside (timestamped backup) and rebuilt from the command line
+# (--wan-nodes), the sheets (--wan FILE) or the interactive question.
 REGEN_WAN_CONF=0
-# --payload-ism : le TEXTE des SMS part par radio ISM, le reste (signalisation,
-# SS7, SIP) par IP comme --wan. PAYLOAD_ISM_LINK = backend si donne (--payload-ism=serial).
+# --payload-ism: the TEXT of the SMS goes over the ISM radio, the rest
+# (signalling, SS7, SIP) over IP as with --wan. PAYLOAD_ISM_LINK = backend if
+# given (--payload-ism=serial).
 PAYLOAD_ISM=0
 PAYLOAD_ISM_LINK=""
 GEN_CONF_OUT=""
-# --virtualbox : monte le segment et les VM avant le WAN. Refuse si l'on tourne
-# DANS une VM - c'est l'hote qui pilote VirtualBox (le script le verifie).
+# --virtualbox: brings up the segment and the VMs before the WAN. Refused when
+# running INSIDE a VM - the host drives VirtualBox (the script checks it).
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
-# --node : le numero de CE noeud, choisi au lancement et pas a la construction.
-# C'est ce qui permet une ISO unique pour les neuf noeuds.
+# --node: the number of THIS node, chosen at launch and not at build time.
+# This is what allows a single ISO for the nine nodes.
 NODE_ID=""
 NODE_OP=1
 HUB_IP=""
-# Les gabarits ne sont PAS regeneres par defaut : run.sh le ferait au demarrage
-# et effacerait l'identite SS7 posee juste avant. --regen retablit l'ancien
-# comportement pour qui veut repartir des gabarits.
+# The templates are NOT regenerated by default: run.sh would do it at startup
+# and erase the SS7 identity set just before. --regen regenerates them for
+# whoever wants to start again from the templates.
 REGEN_GABARITS=0
-# --menu : demande les choix au lieu de les deviner. Voir le bloc « Menu » plus bas.
+# --menu: asks for the choices instead of guessing them. See the "Menu" block below.
 MENU_MODE=0
-# ── LA COUCHE 1 PAR DEFAUT : LE DSP ──────────────────────────────────────────
-# [2026-10-01] Le banc demarre en DSP (c54x_exe, mask-ROM TI) sans qu on le
-# demande : c est le banc qu on veut voir au premier clic, en service comme en
-# terminal, en standalone comme sous osmo-multi (qui lance le natif par
-# osmo-banc.service, donc par ce defaut). --grgsm remet la couche 1 gr-gsm.
-# L environnement gagne (DSP_MODE=0 ./start-native.sh), comme pour le reste.
-# Si c54x_exe n est pas la, le banc retombe sur gr-gsm et le dit (plus bas).
+# ── THE DEFAULT LAYER 1: THE DSP ─────────────────────────────────────────────
+# The bench starts in DSP mode (c54x_exe, TI mask-ROM) without being asked:
+# this is the bench wanted at the first click, as a service as in a terminal,
+# standalone as under osmo-multi (which starts the native through
+# osmo-banc.service, hence through this default). --grgsm selects the gr-gsm
+# layer 1. The environment wins (DSP_MODE=0 ./start-native.sh), as for the
+# rest. If c54x_exe is missing, the bench falls back to gr-gsm and says so
+# (below).
 : "${DSP_MODE:=1}"
 usage() {
     cat <<'USAGE'
@@ -292,36 +293,33 @@ while [ $# -gt 0 ]; do
         --assembly-logs) ASSEMBLY_LOGS=1 ;;
         --icount)      QEMU_ICOUNT=auto; export QEMU_ICOUNT ;;
         --icount=*)    QEMU_ICOUNT="${1#*=}"; export QEMU_ICOUNT ;;
-        # [2026-09-04] Equivalent de CALYPSO_NO_ATTACH=1, en option de ligne de
-        # commande pour que l'unite systemd le dise sur son ExecStart. Avant, cette
-        # option n'existait pas : posee sur ExecStart elle tombait dans « option
-        # inconnue » (exit 2), et posee ailleurs dans l'unite elle cassait la ligne
-        # qui la portait (ConditionPathExists=... --no-attach : chemin inexistant,
-        # unite jamais lancee).
+        # Equivalent of CALYPSO_NO_ATTACH=1, as a command-line option so that
+        # the systemd unit can say it on its ExecStart.
         --no-attach)   CALYPSO_NO_ATTACH=1; export CALYPSO_NO_ATTACH ;;
         --check-paths) ACTION=checkpaths ;;
         --wan)         WAN_MESH=1
-                       # --wan FICHIER : la fiche d'un autre noeud (network/node-conf.sh).
+                       # --wan FILE: the sheet of another node (network/node-conf.sh).
                        if [ -n "${2:-}" ] && [ -f "$2" ]; then WAN_IMPORT_FILES+=("$2"); shift; fi ;;
         --gen-conf)    ACTION=genconf
                        if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then GEN_CONF_OUT="$2"; shift; fi ;;
         --gen-conf=*)  ACTION=genconf; GEN_CONF_OUT="${1#*=}" ;;
-        # [2026-09-22] --dsp ne change NI de fork NI de profil : la pile monte
-        # exactement comme en mode grgsm (coeur, BTS, side-car, tmux), et seuls
-        # les quatre modules de la chaine Calypso (qemu, pty, osmocon, l2) sont
-        # remis a /opt/GSM/c54x_exe, ou le C54x tourne hors QEMU sur la mask-ROM
-        # TI. [2026-09-25] Les forks qosmo-dsp/qosmo-grgsm sont retires : un
-        # seul arbre QEMU, /opt/GSM/qosmo (run.sh et run_modules y sont), et la
-        # couche 1 est c54x_exe (--dsp) ou gr-gsm + grgsm_exe (--grgsm).
+        # --dsp changes NEITHER the fork NOR the profile: the stack comes up
+        # exactly as in grgsm mode (core, BTS, side-car, tmux), and only the
+        # four modules of the Calypso chain (qemu, pty, osmocon, l2) are handed
+        # to /opt/GSM/c54x_exe, where the C54x runs outside QEMU on the TI
+        # mask-ROM. One single QEMU tree, /opt/GSM/qosmo (run.sh and
+        # run_modules are there); the layer 1 is c54x_exe (--dsp) or gr-gsm +
+        # grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
-        # [2026-10-19] --osmo-trx : le banc DSP lance trx.highram.elf et l appli
-        # hote transceiver (voir c54x_exe/run.sh, OSMO_TRX=1) ; implique --dsp.
+        # --osmo-trx: the DSP bench starts trx.highram.elf and the host
+        # application transceiver (see c54x_exe/run.sh, OSMO_TRX=1); implies --dsp.
         --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; BTS_TRX_CHOISI="$1" ;;
-        # [2026-10-21] --bts-classic : osmo-bts-trx <-> pont_dsp.py, pas de Calypso TRX (voir l'aide)
+        # --bts-classic: osmo-bts-trx <-> pont_dsp.py, no Calypso TRX (see the help)
         --bts-classic|--bts-classique) DSP_MODE=1; BTS_CLASSIC=1 ;;
-        # [2026-10-20] --ts N : 1 = TS0 seul ; 2 = TS0 + TS1, un Calypso TRX par intervalle
-        # (OSMO_TRX_TS1=1 : instance 3 pour le TS1). Implique --bts. Exporte plus bas (export_trx_ts).
+        # --ts N: 1 = TS0 only; 2 = TS0 + TS1, one Calypso TRX per timeslot
+        # (OSMO_TRX_TS1=1: instance 3 for TS1). Implies --bts. Exported below
+        # (export_trx_ts).
         --ts)          if [ $# -lt 2 ] || ! [[ "${2:-}" =~ ^(1|2|2/1)$ ]]; then
                            printf '%s\n\n' "--ts attend 1 (TS0 seul), 2 (TS0 + TS1, un Calypso par intervalle) ou 2/1 (TS0 + TS1, un seul Calypso)" >&2
                            usage >&2; exit 2
@@ -330,28 +328,33 @@ while [ $# -gt 0 ]; do
         --ts=*)        OSMO_TRX_TS="${1#*=}"
                        [[ "$OSMO_TRX_TS" =~ ^(1|2|2/1)$ ]] || { printf '%s\n\n' "--ts attend 1, 2 ou 2/1 (recu : $OSMO_TRX_TS)" >&2; usage >&2; exit 2; }
                        DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; BTS_TRX_CHOISI=--ts ;;
-        # [2026-10-20] --ms : sans --bts c'est le defaut (mobile + pont) ; avec --bts, l'instance 2 par l'air
+        # --ms: without --bts it is the default (mobile + bridge); with --bts,
+        # instance 2 over the air
         --ms)          MS_AIR=1 ;;
-        # [2026-10-21] --ms-magnetite : --ms avec le firmware TI (Magnetite) en flash, voir l'aide
+        # --ms-magnetite: --ms with the TI firmware (Magnetite) in flash, see the help
         --ms-magnetite) MS_AIR=1; MS_MAGNETITE=1
                        MAGNETITE_FLASH="${MAGNETITE_FLASH:-/opt/GSM/firmware/magnetite/c139-flash.img}"
                        [ -r "$MAGNETITE_FLASH" ] || { printf '%s\n' "--ms-magnetite : image flash absente : $MAGNETITE_FLASH (doc/magnetite.md : build fc-magnetite c139 hybrid-ui-vo)" >&2; exit 2; }
-                       # [2026-10-21 11:10] PAS d'export ici : exporte, FIRMWARE_FLASH atteignait aussi l'instance 1
-                       # (la radio de la BTS) qui bootait Magnetite au lieu du firmware trx. Il n'est passe qu'au
-                       # mobile (exec ci-dessous).
-                       # [2026-10-21 23:20] MS_MAGNETITE, lui, EST exporte : qosmo/run_modules/08-gabarits.sh regenere
-                       # les gabarits dans run.sh (autre bash), et sans lui generate_configs.sh posait SDCCH8 au TS1
-                       # (__TS1_PCHAN_BTS0__) : IMM ASS sur TS1, SABM de Magnetite sur TS0, LU en Timeout.
+                       # NO export of MAGNETITE_FLASH here: exported, FIRMWARE_FLASH
+                       # would also reach instance 1 (the BTS radio), which would
+                       # boot Magnetite instead of the trx firmware. It is only
+                       # passed to the mobile (exec below).
+                       # MS_MAGNETITE IS exported: qosmo/run_modules/08-gabarits.sh
+                       # regenerates the templates in run.sh (another bash), and
+                       # without it generate_configs.sh sets SDCCH8 on TS1
+                       # (__TS1_PCHAN_BTS0__): IMM ASS on TS1, SABM of Magnetite
+                       # on TS0, LU in Timeout.
                        export MS_MAGNETITE
                        ;;
-        # [2026-10-22] vocodeur : la ROM du DSP (defaut, 14-demarrage.sh) ou GAPK sur l'hote. Exportes ici :
-        # /etc/default/osmo-banc (BANC_VOCODEUR=rom, CALYPSO_VSP=1, PONT_UL_RAW_TCH=1) ne remplit que le vide.
+        # vocoder: the DSP ROM (default, 14-demarrage.sh) or GAPK on the host.
+        # Exported here: /etc/default/osmo-banc (BANC_VOCODEUR=rom, CALYPSO_VSP=1,
+        # PONT_UL_RAW_TCH=1) only fills the gaps.
         --vocoder-rom|--vocodeur-rom) BANC_VOCODEUR=rom; CALYPSO_VSP=1; export BANC_VOCODEUR CALYPSO_VSP ;;
         --gapk|--vocodeur-hote) BANC_VOCODEUR=hote; CALYPSO_VSP=0; PONT_UL_RAW_TCH=0
                        export BANC_VOCODEUR CALYPSO_VSP PONT_UL_RAW_TCH ;;
         --sap)         SAP_MODE=1; export SAP_MODE ;;
         --sap=*)       SAP_MODE=1; SAP_TYPE="${1#*=}"; export SAP_MODE SAP_TYPE ;;
-        --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias de --sap
+        --softsim)     SAP_MODE=1; export SAP_MODE ;;   # alias of --sap
         --omnikey|--sim-reader) SAP_MODE=1; SAP_TYPE=pcsc; export SAP_MODE SAP_TYPE ;;
         --no-sap)      SAP_MODE=0; export SAP_MODE ;;
         --launcher)    QOSMO_LAUNCHER="${2:-}"; export QOSMO_LAUNCHER; shift ;;
@@ -383,18 +386,18 @@ while [ $# -gt 0 ]; do
         --hub-ip=*)     HUB_IP="${1#*=}" ;;
         --interstp)     INTERSTP=1 ;;
         --no-interstp)  INTERSTP=0 ;;
-        # MS GPRS (modem osmocom-bb) en second MS du fake_trx du side-car, avec
-        # son PCU (/tmp/pcu_bts2) : qosmo run_modules/{58,61,69,71}.
-        # [2026-10-16] INACTIF par defaut : le banc demarre sans data (full ROM
-        # DSP seul, voix/SMS). --gprs-modem remonte le lot data a la demande.
+        # GPRS MS (osmocom-bb modem) as second MS of the side-car fake_trx, with
+        # its PCU (/tmp/pcu_bts2): qosmo run_modules/{58,61,69,71}.
+        # INACTIVE by default: the bench starts without data (full DSP ROM
+        # alone, voice/SMS). --gprs-modem brings the data set up on demand.
         --gprs-modem)    MODEM_GPRS=1 ;;
         --no-gprs-modem) MODEM_GPRS=0 ;;
         --mobile|--ccch_scan|--bcch_scan|--cell_log)
-                       # run_modules/70-l2.sh gere deja les quatre clients via
-                       # CALYPSO_L2_CLIENT ; il manquait de quoi les choisir.
-                       # Un seul a la fois : ils se disputeraient la socket
-                       # L1CTL (/tmp/osmocom_l2) et la VTY 4247, et le second
-                       # lance resterait muet pour toujours.
+                       # run_modules/70-l2.sh handles the four clients through
+                       # CALYPSO_L2_CLIENT; this is where one is chosen.
+                       # Only one at a time: they would fight over the L1CTL
+                       # socket (/tmp/osmocom_l2) and the VTY 4247, and the
+                       # second one started would stay mute forever.
                        _l2c="${1#--}"
                        if [ -n "${L2_CLIENT_CHOISI:-}" ] && \
                           [ "$L2_CLIENT_CHOISI" != "$_l2c" ]; then
@@ -414,9 +417,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# [2026-10-21] --bts-classic : la BTS est osmo-bts-trx + pont_dsp.py ; un OSMO_TRX=1 herite de
-# l'environnement ne doit pas rallumer le Calypso TRX. --ms / --ms-magnetite restent valables : sans
-# OSMO_TRX, 14-demarrage.sh branche le mobile (ou Magnetite, FIRMWARE_FLASH) sur le pont.
+# --bts-classic: the BTS is osmo-bts-trx + pont_dsp.py; an OSMO_TRX=1 inherited
+# from the environment must not turn the Calypso TRX back on. --ms /
+# --ms-magnetite remain valid: without OSMO_TRX, 14-demarrage.sh connects the
+# mobile (or Magnetite, FIRMWARE_FLASH) to the bridge.
 if [ "${BTS_CLASSIC:-0}" = 1 ]; then
     if [ -n "${BTS_TRX_CHOISI:-}" ]; then
         printf '%s\n\n' "--bts-classic et $BTS_TRX_CHOISI sont exclusifs : BTS classique (pont_dsp.py) ou Calypso TRX" >&2
@@ -425,11 +429,13 @@ if [ "${BTS_CLASSIC:-0}" = 1 ]; then
     OSMO_TRX=0; export OSMO_TRX
 fi
 
-# [2026-10-20] --ts N -> variables de c54x_exe/run.sh (OSMO_TRX=1). Sans --ts, run.sh garde son defaut
-# (OSMO_TRX_TCH=1 : un Calypso, TS0 + TS1, masques 0x03). trx_ts_desc : le libelle des resumes.
+# --ts N -> variables of c54x_exe/run.sh (OSMO_TRX=1). Without --ts, run.sh
+# keeps its default (OSMO_TRX_TCH=1: one Calypso, TS0 + TS1, masks 0x03).
+# trx_ts_desc: the label of the summaries.
 export_trx_ts() {
-    # [2026-10-21] 2/1 et le defaut : un seul Calypso pour TS0 + TS1 (le seul montage qui passe un appel) ;
-    # 2 : un Calypso par intervalle (LU OK, appels KO : fn du telephone 2 non aligne).
+    # 2/1 and the default: one single Calypso for TS0 + TS1 (the only setup
+    # that completes a call); 2: one Calypso per timeslot (LU OK, calls KO: fn
+    # of phone 2 not aligned).
     case "${OSMO_TRX_TS:-}" in
         1)      export OSMO_TRX_TCH=0 OSMO_TRX_TS1=0 ;;
         2)      export OSMO_TRX_TCH=0 OSMO_TRX_TS1=1 ;;
@@ -447,31 +453,30 @@ trx_ts_desc() {
 }
 export_trx_ts
 
-# Le lot GPRS du side-car (fake_trx --trx, second PCU, trxcon + modem) lit
-# MODEM_GPRS dans l'environnement de run.sh : exporte ici, 0 (sans data) par
-# defaut, 1 avec --gprs-modem. L'environnement gagne (MODEM_GPRS=1 ./start-native.sh).
+# The side-car GPRS set (fake_trx --trx, second PCU, trxcon + modem) reads
+# MODEM_GPRS in the run.sh environment: exported here, 0 (no data) by default,
+# 1 with --gprs-modem. The environment wins (MODEM_GPRS=1 ./start-native.sh).
 export MODEM_GPRS="${MODEM_GPRS:-0}"
 
-# --- --dsp garde le profil par defaut ----------------------------------------
-# [2026-09-22] --dsp forcait le profil `qemu` (pipeline Calypso seul, sans
-# side-car), au motif qu'un banc DSP n'a pas a dependre d'une seconde station
-# de base. Retire : le banc DSP doit monter la MEME pile que le mode grgsm,
-# side-car compris, et c'est l'hybride qui est le defaut. Un profil nomme
-# explicitement gagne toujours, comme avant.
+# --- --dsp keeps the default profile ------------------------------------------
+# --dsp does not force the `qemu` profile: the DSP bench brings up the SAME
+# stack as the grgsm mode, side-car included, and the hybrid is the default.
+# An explicitly named profile always wins.
 
-# --- ou tourne-t-on ? ---------------------------------------------------------
-# La question n'est pas cosmetique : le plan d'adressage EN DEPEND.
-#   docker  → l'inter-STP est le conteneur osmo-inter-stp (172.20.0.10), le
-#             noeud a deja son IP quand les demons demarrent.
-#   VM/ISO  → l'inter-STP est une machine a part (192.168.1.49 sur le banc,
-#             ou une host-only 192.168.56.x selon le montage), et l'adresse
-#             du noeud vient du DHCP : elle peut manquer au lancement.
-# Prendre l'un pour l'autre donne un ASP qui ne s'attache jamais, avec pour
-# seule trace un "connection refused" vers une adresse inexistante ici.
+# --- where are we running? ----------------------------------------------------
+# The question is not cosmetic: the addressing plan DEPENDS on it.
+#   docker  → the inter-STP is the osmo-inter-stp container (172.20.0.10), the
+#             node already has its IP when the daemons start.
+#   VM/ISO  → the inter-STP is a separate machine (192.168.1.49 on the bench,
+#             or a host-only 192.168.56.x depending on the setup), and the
+#             node address comes from DHCP: it may be missing at launch.
+# Mistaking one for the other gives an ASP that never attaches, with a
+# "connection refused" towards an address that does not exist here as the
+# only trace.
 #
-# /.dockerenv seul ne suffit pas - il est vrai dans n'importe quel conteneur.
-# On exige aussi /etc/docker-entrypoint-cmd, que scripts/entrypoint.sh depose :
-# c'est ce couple qui identifie un conteneur DE CE DEPOT.
+# /.dockerenv alone is not enough - it is true in any container. We also
+# require /etc/docker-entrypoint-cmd, which scripts/entrypoint.sh drops: this
+# pair identifies a container OF THIS REPOSITORY.
 detect_runtime_env() {
     if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
         echo docker; return
@@ -479,11 +484,11 @@ detect_runtime_env() {
     if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
         echo docker; return
     fi
-    # systemd-detect-virt SORT EN CODE 1 quand il ne trouve rien. Un
-    # "$(cmd || echo none)" produit alors DEUX lignes - la sortie "none" du
-    # programme, plus celle du repli - et aucun motif ne correspond : une
-    # machine physique se retrouvait classee "vm". On ignore le code de
-    # sortie et on ne garde que la premiere ligne.
+    # systemd-detect-virt EXITS WITH CODE 1 when it finds nothing. A
+    # "$(cmd || echo none)" then produces TWO lines - the program's "none"
+    # output plus the fallback - and no pattern matches: a physical machine
+    # would be classified "vm". The exit code is ignored and only the first
+    # line is kept.
     local v
     v="$(systemd-detect-virt 2>/dev/null | head -1)" || true
     v="${v:-none}"
@@ -495,21 +500,22 @@ detect_runtime_env() {
 }
 RUNTIME_ENV="${RUNTIME_ENV:-$(detect_runtime_env)}"
 
-# --- quel noeud sommes-nous ? --------------------------------------------------
-# Le numero de noeud decide des point codes, du routing context et de l'indicatif.
-# Le taper a chaque lancement est une occasion de se tromper - et une erreur ici
-# ne se voit pas : la pile demarre, elle presente simplement au hub l'adresse SS7
-# d'un autre noeud. On le deduit donc, et on DIT d'ou vient la reponse.
+# --- which node are we? -------------------------------------------------------
+# The node number decides the point codes, the routing context and the dial
+# prefix. Typing it at every launch is an opportunity for mistakes - and a
+# mistake here is invisible: the stack starts, it simply presents the SS7
+# address of another node to the hub. So it is deduced, and the origin of the
+# answer is SAID.
 #
-# Ordre, du plus explicite au plus deduit. Le premier qui repond gagne :
-#   1. --node passe en ligne de commande
-#   2. l'environnement - c'est ainsi que start-docker.sh le transmet au conteneur
-#   3. /etc/osmo-role, fige dans l'image par build-iso.sh --node N
-#   4. la table WAN : l'adresse de ce noeud y figure, et nous l'avons
-#   5. rien - on ne touche alors PAS a l'identite SS7, plutot que d'en inventer une
-# Renvoie "numero|origine". Pas deux variables : la fonction est appelee dans
-# une substitution de commande, donc dans un SOUS-SHELL - toute variable qu'elle
-# poserait y resterait, et l'appelant n'afficherait "?" qu'apres coup.
+# Order, from the most explicit to the most deduced. The first one wins:
+#   1. --node given on the command line
+#   2. the environment - this is how start-docker.sh passes it to the container
+#   3. /etc/osmo-role, frozen in the image by build-iso.sh --node N
+#   4. the WAN table: the address of this node is in it, and we have it
+#   5. nothing - the SS7 identity is then NOT touched, rather than invented
+# Returns "number|origin". Not two variables: the function is called in a
+# command substitution, hence in a SUBSHELL - any variable it set would stay
+# there, and the caller would only print "?" afterwards.
 detect_node_id() {
     local n
 
@@ -521,13 +527,13 @@ detect_node_id() {
         if [[ "$n" =~ ^[1-9]$ ]]; then echo "${n}|/etc/osmo-role"; return 0; fi
     fi
 
-    # La table WAN et nos propres adresses : c'est la source la plus fiable en VM,
-    # ou une seule ISO sert les neuf noeuds et ou seule l'IP les distingue.
+    # The WAN table and our own addresses: the most reliable source in a VM,
+    # where a single ISO serves the nine nodes and only the IP tells them apart.
     local conf="${WAN_CONF_FILE:-/etc/osmo-wan.conf}"
     if [ -r "$conf" ] && [ -r "$HERE/network/wan-nodes.sh" ]; then
         n="$(
-            # Sous-shell : wan-nodes.sh pose des variables et des tableaux qu'on
-            # ne veut pas voir deborder dans le lanceur.
+            # Subshell: wan-nodes.sh sets variables and arrays that must not
+            # leak into the launcher.
             set +u
             . "$HERE/network/wan-nodes.sh" 2>/dev/null || exit 0
             WAN_NODE_ID=0

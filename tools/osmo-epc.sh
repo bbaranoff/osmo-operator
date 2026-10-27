@@ -1,37 +1,33 @@
 #!/bin/bash
 # =============================================================================
-# osmo-epc.sh - LE COEUR 4G DU BANC : Open5GS (EPC), en remplacement de srsepc.
+# osmo-epc.sh - THE BENCH 4G CORE: Open5GS (EPC).
 #
-# [2026-09-07] srsepc etait un coeur de demonstration : mono-UE, sans vraie
-# gestion de session et sans interface SGs. Open5GS apporte un EPC complet,
-# et surtout le SGs vers OsmoMSC qui permet le CSFB (voix et SMS depuis le
-# LTE). Plan d adressage : les UE sont en 10.45.0.0/16 sur ogstun (PAS le
-# 172.17.0.0/24 de srsepc, qui recouvrait docker0).
+# Open5GS provides a complete EPC, and above all the SGs interface to OsmoMSC
+# that allows CSFB (voice and SMS from LTE). Addressing plan: the UEs are in
+# 10.45.0.0/16 on ogstun (NOT 172.17.0.0/24, which overlaps docker0).
 #
-# [2026-09-08] OPEN5GS VIT DANS /opt/LTE, PAS DANS /root. Il avait ete compile
-# dans /root/open5gs/install : un coeur de reseau dans le home de root n est
-# ni dans l ISO, ni dans un .deb, ni relisible par le compte de session. Le
-# prefixe est maintenant /opt/LTE/open5gs/install (le Dockerfile, le .deb
-# osmo-build-open5gs et tools/osmo-lte-install.sh le posent la) ; l ancien
-# chemin reste accepte, en dernier recours, pour une machine pas encore
-# migree. Les configs FONT PARTIE DU DEPOT : configs/open5gs/*.yaml, posees
-# par osmo-lte-install.sh dans $PREFIX/etc/open5gs.
+# OPEN5GS LIVES IN /opt/LTE. The prefix is /opt/LTE/open5gs/install (the
+# Dockerfile, the osmo-build-open5gs .deb and tools/osmo-lte-install.sh put it
+# there); the old /root/open5gs/install path is still accepted, as a last
+# resort, for a machine not yet migrated. The configs ARE PART OF THE
+# REPOSITORY: configs/open5gs/*.yaml, installed by osmo-lte-install.sh in
+# $PREFIX/etc/open5gs.
 #
-#   osmo-epc start        mongod, ogstun + NAT, puis les demons dans l ordre
-#   osmo-epc stop         arrete les demons (ogstun reste)
+#   osmo-epc start        mongod, ogstun + NAT, then the daemons in order
+#   osmo-epc stop         stops the daemons (ogstun stays)
 #   osmo-epc restart
-#   osmo-epc status       un etat par demon, ogstun, SGs
-#   osmo-epc subscribers  pose les abonnes du depot (configs/open5gs/
-#                         subscribers.json) dans MongoDB s ils n y sont pas
-#   osmo-epc log [nom]    le journal d un demon (mme par defaut), en direct
+#   osmo-epc status       one state per daemon, ogstun, SGs
+#   osmo-epc subscribers  loads the repository subscribers (configs/open5gs/
+#                         subscribers.json) into MongoDB if they are missing
+#   osmo-epc log [name]   the log of a daemon (mme by default), live
 #
-# Variables : OPEN5GS_PREFIX, SRS_WAN (interface de sortie du NAT ; par defaut
-# celle de la route par defaut), OPEN5GS_UESUBNET, OPEN5GS_TUNADDR.
+# Variables: OPEN5GS_PREFIX, SRS_WAN (NAT output interface; by default the
+# one of the default route), OPEN5GS_UESUBNET, OPEN5GS_TUNADDR.
 # =============================================================================
 set -u
 
 REPO="${OSMO_REPO:-/opt/GSM/osmo-operator}"
-# Le prefixe : la variable, sinon /opt/LTE, sinon l ancien /root.
+# The prefix: the variable, else /opt/LTE, else the old /root.
 _prefix() {
     local p
     for p in "${OPEN5GS_PREFIX:-}" /opt/LTE/open5gs/install /root/open5gs/install; do
@@ -45,12 +41,11 @@ ETC="$PREFIX/etc/open5gs"
 LOG="$PREFIX/var/log/open5gs"
 UESUBNET="${OPEN5GS_UESUBNET:-10.45.0.0/16}"
 TUNADDR="${OPEN5GS_TUNADDR:-10.45.0.1/16}"
-# L interface de sortie du NAT : SRS_WAN, sinon celle de la route par defaut.
-# (Elle etait ecrite en dur - enxa0cec8a98b06 - : une autre machine n a pas
-# cette carte-la.)
+# The NAT output interface: SRS_WAN, else the one of the default route
+# (not hard-coded: another machine does not have the same card).
 WAN="${SRS_WAN:-$(ip -4 route show default 2>/dev/null | awk '/default/ {print $5; exit}')}"
-# Ordre de demarrage : le NRF (les SBI du SMF le cherchent), le HSS avant le
-# MME (Diameter), les plans usager avant les plans controle qui s y rattachent.
+# Start order: the NRF (the SMF SBIs look for it), the HSS before the MME
+# (Diameter), the user planes before the control planes attached to them.
 DAEMONS="open5gs-nrfd open5gs-hssd open5gs-sgwcd open5gs-sgwud open5gs-smfd open5gs-upfd open5gs-pcrfd open5gs-mmed"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -61,11 +56,11 @@ _root() { [ "$(id -u)" -eq 0 ] && return 0; _err "il faut root (tun, NAT, mongod
 
 [ -x "$BIN/open5gs-mmed" ] || { _err "Open5GS introuvable ($BIN/open5gs-mmed) - « osmo-lte-install --build » ou dpkg -i osmo-build-open5gs"; [ "${1:-}" = status ] || exit 1; }
 
-# [2026-09-08] MONGOD D ABORD. Le HSS et le PCRF lisent les abonnes dans
-# MongoDB et MEURENT a l initialisation s il ne tourne pas (« Failed to
-# connect to server [mongodb://localhost/open5gs] ») : le MME repond alors
-# 3002 sur S6a et rejette tout attach (EMM cause 15). Le service peut etre
-# « disabled » : on le lance ici, a chaque fois.
+# MONGOD FIRST. The HSS and the PCRF read the subscribers in MongoDB and DIE
+# at initialisation if it is not running ("Failed to connect to server
+# [mongodb://localhost/open5gs]"): the MME then answers 3002 on S6a and
+# rejects every attach (EMM cause 15). The service may be "disabled": it is
+# started here, every time.
 _mongod() {
     systemctl is-active --quiet mongod && return 0
     if systemctl start mongod 2>/dev/null; then
@@ -76,19 +71,19 @@ _mongod() {
     fi
 }
 
-# Les abonnes du depot, poses s ils manquent. Le champ slice[].session[].smf
-# (127.0.0.200, valeur par defaut du WebUI) est RETIRE : il a priorite sur
-# gtpc.client.smf de mme.yaml, le SGW-C envoyait le Create Session vers
-# 127.0.0.200, personne ne repondait, GTP Timeout, RRC Release.
+# The repository subscribers, loaded if missing. The field slice[].session[].smf
+# (127.0.0.200, WebUI default value) is REMOVED: it takes precedence over
+# gtpc.client.smf of mme.yaml and the SGW-C would send the Create Session to
+# 127.0.0.200, where nobody answers (GTP Timeout, RRC Release).
 epc_subscribers() {
     _root subscribers || return 1
     _mongod || return 1
     local dump="$REPO/configs/open5gs/dump/open5gs" j="$REPO/configs/open5gs/subscribers.json" n
     command -v mongosh >/dev/null 2>&1 || { _warn "mongosh absent : abonnes non poses"; return 0; }
     n="$(mongosh --quiet open5gs --eval 'print(db.subscribers.countDocuments())' 2>/dev/null | tail -1)"
-    # Base vide et un mongodump dans le depot (configs/open5gs/dump : abonnes,
-    # comptes du WebUI, sessions) : on restaure TOUT, tel quel (BSON : les
-    # Long du sqn et les ObjectId restent ce qu ils sont).
+    # Empty database and a mongodump in the repository (configs/open5gs/dump:
+    # subscribers, WebUI accounts, sessions): restore EVERYTHING as is (BSON:
+    # the sqn Longs and the ObjectIds stay what they are).
     if [ "${n:-0}" = "0" ] && [ -f "$dump/subscribers.bson" ] && command -v mongorestore >/dev/null 2>&1; then
         mongorestore --quiet --db open5gs "$dump" >/dev/null 2>&1 \
             && _ok "base open5gs restauree depuis le depot (mongodump)" \
@@ -127,15 +122,15 @@ setup_tun() {
     setup_forward
 }
 
-# [2026-09-16] LE FORWARD, SANS QUOI LE NAT NE SERT A RIEN. Docker pose une
-# politique FORWARD a DROP sur l hote : un paquet de l UE (10.45.0.2, via
-# ogstun) vers Internet etait NATe puis jete, sans refus ni trace. Vu depuis
-# le telephone pmOS : PPP monte, 10.99.0.2 attribuee, ping de la passerelle
-# OK, et rien au-dela - NetworkManager restait « connecte (local) ». Meme
-# constat que start-docker.sh pour le WAN : DOCKER-USER est consultee avant les
-# regles de docker et il ne la reecrit pas ; on y autorise tout ce qui entre
-# ou sort par ogstun. Rejoue a chaque « osmo-epc start » (donc a chaque
-# « osmo-lte start »), et par osmo-pmos-qemu a chaque lancement de la VM.
+# THE FORWARD, WITHOUT WHICH THE NAT IS USELESS. Docker sets a DROP FORWARD
+# policy on the host: a packet from the UE (10.45.0.2, via ogstun) to the
+# Internet would be NATed then dropped, without refusal or trace (seen from
+# the pmOS phone: PPP up, address assigned, gateway ping OK, nothing beyond).
+# Same mechanism as start-docker.sh for the WAN: DOCKER-USER is consulted
+# before docker's rules and docker does not rewrite it; everything entering
+# or leaving through ogstun is allowed there. Replayed at every "osmo-epc
+# start" (hence every "osmo-lte start"), and by osmo-pmos-qemu at every VM
+# launch.
 setup_forward() {
     local spec
     iptables -N DOCKER-USER 2>/dev/null || true
@@ -145,8 +140,8 @@ setup_forward() {
             || iptables -I DOCKER-USER 1 $spec -j ACCEPT 2>/dev/null \
             || { _warn "FORWARD ($spec) : iptables refuse - la data des UE n ira pas plus loin que l hote"; return 0; }
     done
-    # Les regles DOCKER-USER ne comptent que si FORWARD y passe : docker le
-    # fait (-A FORWARD -j DOCKER-USER) ; sans docker, on saute l etape.
+    # The DOCKER-USER rules only matter if FORWARD goes through them: docker
+    # does that (-A FORWARD -j DOCKER-USER); without docker, skip the step.
     iptables -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -I FORWARD 1 -j DOCKER-USER 2>/dev/null || true
     _ok "FORWARD ogstun <-> $WAN autorise (DOCKER-USER)"
 }
@@ -160,28 +155,25 @@ epc_start() {
     local d y
     for d in $DAEMONS; do
         if pgrep -x "$d" >/dev/null; then _ok "$d deja en cours"; continue; fi
-        # -D : demon. La config est celle de $ETC (le prefixe), posee depuis
-        # le depot par osmo-lte-install.sh. [2026-09-09] open5gs-nrfd lit
-        # nrf.yaml, pas nrfd.yaml : le -c echouait TOUJOURS et c est le
-        # repli sans -c (le chemin compile dans le binaire) qui demarrait
-        # tout - meme prefixe, donc meme fichier, mais un OPEN5GS_PREFIX
-        # different n aurait jamais lu ses configs.
-        # Et stdout AUSSI vers /dev/null : -D ne detache pas les descripteurs,
-        # le demon gardait le tube « osmo-epc start | sed » d osmo-lte.sh
-        # ouvert, et sed n en voyait jamais la fin.
+        # -D: daemon. The config is the one of $ETC (the prefix), installed
+        # from the repository by osmo-lte-install.sh. open5gs-nrfd reads
+        # nrf.yaml, not nrfd.yaml: -c must point to the right file, otherwise
+        # the fallback without -c (the path compiled into the binary) would
+        # start it and a different OPEN5GS_PREFIX would never read its configs.
+        # stdout ALSO goes to /dev/null: -D does not detach the descriptors,
+        # the daemon would keep the "osmo-epc start | sed" pipe of osmo-lte.sh
+        # open and sed would never see its end.
         y="${d#open5gs-}"; y="$ETC/${y%d}.yaml"
         if "$BIN/$d" -D -c "$y" >/dev/null 2>&1; then :; else
             "$BIN/$d" -D >/dev/null 2>&1
         fi || _err "ECHEC $d (voir $LOG/$(basename "$y" .yaml).log)"
         sleep 0.5
-        # [2026-09-09] « demarre » NE SUFFISAIT PAS : -D rend la main avant que
-        # le demon ait lu sa config. Sur l ISO, un MME sans freeDiameter/
-        # mme.conf (rien de freeDiameter dans le .deb : voir configs/open5gs/
-        # freeDiameter/mme.conf) donnait « ✓ open5gs-mmed demarre » puis
-        # mourait aussitot - le S1 n ecoutait pas, srsUE recevait
-        # ConnectionReject, et personne ne disait pourquoi. On regarde donc
-        # s il est TOUJOURS la ; sinon on le rejoue 3 s au premier plan pour
-        # rapporter la raison (ses lignes FATAL / ERROR).
+        # "started" IS NOT ENOUGH: -D returns before the daemon has read its
+        # config. An MME without freeDiameter/mme.conf (see configs/open5gs/
+        # freeDiameter/mme.conf) reports started and then dies at once - the S1
+        # does not listen, srsUE receives ConnectionReject, and nobody says
+        # why. So check that it is STILL there; otherwise replay it for 3 s in
+        # the foreground to report the reason (its FATAL / ERROR lines).
         if pgrep -x "$d" >/dev/null; then _ok "$d demarre"
         else
             _err "$d est mort a l init :"

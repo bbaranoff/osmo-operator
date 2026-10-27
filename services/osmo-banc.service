@@ -1,106 +1,94 @@
 [Unit]
 Description=osmo-operator - banc GSM autonome (start.sh, session tmux « calypso »)
 Documentation=file:/opt/GSM/osmo-operator/README.md
-# Le banc a besoin du son systeme (osmo-pulse), des adresses privees du noeud
-# et du dashboard (le pont y pousse la FFT). Pas de Requires= : un de ces
-# services absent ne doit pas empecher la radio de monter.
-# [2026-09-04] PLUS D ATTENTE RESEAU AU BOOT. network-online.target etait tire
-# ici ; il coute jusqu a 2 min de demarrage (systemd-networkd-wait-online,
-# mesure : systemd-analyze blame) sur un banc dont les interfaces - apn0, les
-# tun/veth du coeur paquet - ne sont jamais "en ligne" au sens de cette unite,
-# et qui demarre souvent sans cable. network.target suffit : les interfaces
-# sont configurees, la route par defaut peut arriver apres.
+# The bench needs the system sound (osmo-pulse), the node's private addresses
+# and the dashboard (the bridge pushes the FFT to it). No Requires=: a missing
+# service must not prevent the radio from coming up.
+# network.target only, not network-online.target: the latter can cost up to
+# 2 min at boot (systemd-networkd-wait-online) on a bench whose interfaces
+# (apn0, the tun/veth of the packet core) are never "online" in that sense and
+# which often boots without a cable. The interfaces are configured; the default
+# route may arrive later.
 After=network.target osmo-pulse.service osmo-ip-plan.service osmo-egprs-web.service osmo-qemu-link.service
-# osmo-egprs-web est TIRE par le banc : il porte PartOf=osmo-banc.service et
-# systemd l arrete donc avec lui. Ce Wants= est la contrepartie obligatoire -
-# sans lui, un cycle arret/relance laisserait le tableau de bord eteint.
+# osmo-egprs-web is pulled in by the bench (Wants=): a stop/start cycle must
+# not leave the dashboard down.
 Wants=osmo-pulse.service osmo-egprs-web.service
 ConditionPathExists=/opt/GSM/osmo-operator/start.sh
-# Un seul banc natif a la fois : le multi-operateur DEPEND de celui-ci
-# (Requires= dans osmo-multi.service), il ne le remplace pas.
+# One native bench at a time: the multi-operator bench depends on this one
+# (Requires= in osmo-multi.service), it does not replace it.
 #
-# [2026-09-05] POSEE, PAS ACTIVEE. Cette unite partait au boot depuis le debut :
-# une machine fraichement installee montait QEMU/Calypso et tout le coeur avant
-# meme l'ouverture de session - plusieurs minutes, et un banc lance sur une
-# configuration (noeud, --dsp, topologie) que personne n'avait choisie.
-#   systemctl start osmo-banc           pour une session (ou l'icone du bureau)
-#   systemctl enable --now osmo-banc    pour le demarrer a chaque boot
-# Au build : OSMO_ISO_BANC=1 (ou --banc) active l'unite dans l'image.
+# Installed, not enabled: a fresh machine must not bring up QEMU/Calypso and
+# the whole core before the session opens, on a configuration (node, --dsp,
+# topology) nobody has chosen.
+#   systemctl start osmo-banc           for one session (or the desktop icon)
+#   systemctl enable --now osmo-banc    to start it at every boot
+# At build time: OSMO_ISO_BANC=1 (or --banc) enables the unit in the image.
 
 [Service]
-# ── ONESHOT + RemainAfterExit : LE BANC VIT DANS TMUX, PAS DANS ExecStart ──
-# start.sh passe la main a run.sh (qosmo-grgsm), qui monte tout dans
-# une session tmux puis SORT sans s'y attacher (pas de tty). Avec Type=simple,
-# systemd prendrait cette sortie pour la fin du service et tuerait le cgroup -
-# donc la pile entiere. En oneshot + RemainAfterExit, l'unite reste « active
-# (exited) » et les processus du cgroup (tmux, demons, qemu, pont) vivent
-# jusqu'a ExecStop.
+# ── Oneshot + RemainAfterExit: the bench lives in tmux, not in ExecStart ──
+# start.sh hands over to run.sh (qosmo-grgsm), which brings everything up in a
+# tmux session and then exits without attaching (no tty). With Type=simple,
+# systemd would take that exit for the end of the service and kill the cgroup,
+# hence the whole stack. With oneshot + RemainAfterExit the unit stays
+# « active (exited) » and the cgroup processes (tmux, daemons, qemu, bridge)
+# live until ExecStop.
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/GSM/osmo-operator
-# ── LE MEME ENVIRONNEMENT QU'UN TERMINAL DE ROOT ──────────────────────────
-# HOME : mobile.cfg vit dans /root/.osmocom/bb. PATH : le venv python
-# (/root/.env) que ~/.bashrc active, gr-gsm et les ponts en dependent ; systemd
-# ne lit pas ~/.bashrc. /etc/osmocom/coeur.env (N_MS) est charge par
-# start.sh lui-meme.
+# ── The same environment as a root terminal ──────────────────────────────
+# HOME: mobile.cfg lives in /root/.osmocom/bb. PATH: the python venv
+# (/root/.env) that ~/.bashrc activates; gr-gsm and the bridges depend on it and
+# systemd does not read ~/.bashrc. /etc/osmocom/coeur.env (N_MS) is loaded by
+# start.sh itself.
 Environment=HOME=/root USER=root LOGNAME=root
 Environment=VIRTUAL_ENV=/root/.env
 Environment=PATH=/root/.env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PULSE_SERVER=unix:/var/run/pulse/native
-# Pas de menu, pas d'attache tmux, pas de couleurs : il n'y a personne devant.
+# No menu, no tmux attach, no colours: nobody is in front of it.
 Environment=NO_MENU=1 CALYPSO_NO_ATTACH=1 NO_COLOR=1 OSMO_NO_TERM=1 OSMO_LAUNCH_APPS=0
-# Options de lancement (--grgsm, --op 2, --node 3, --regen...) ; le DSP est
-# le defaut de start.sh depuis le 2026-10-01, --grgsm l ancienne chaine :
-#   - durables : OSMO_BANC_ARGS="--grgsm" dans /etc/default/osmo-banc
-#   - pour une fois : launch.sh les pose via systemctl set-environment
+# Launch options (--grgsm, --op 2, --node 3, --regen...); the DSP is the
+# default of start.sh, --grgsm the gr-gsm chain:
+#   - persistent: OSMO_BANC_ARGS="--grgsm" in /etc/default/osmo-banc
+#   - one-off: launch.sh sets them through systemctl set-environment
 EnvironmentFile=-/etc/default/osmo-banc
-# --no-attach : l option de start.sh (meme effet que CALYPSO_NO_ATTACH=1
-# ci-dessus). Elle va ICI, sur la ligne de commande - pas sur
-# ConditionPathExists, qui ne prend qu un chemin : « chemin --no-attach »
-# n existe pas, et l unite est alors sautee sans jamais demarrer.
+# --no-attach: the start.sh option (same effect as CALYPSO_NO_ATTACH=1 above).
+# It goes here, on the command line - not on ConditionPathExists, which only
+# takes a path: « path --no-attach » does not exist, and the unit would be
+# skipped without ever starting.
 ExecStart=/bin/bash /opt/GSM/osmo-operator/start.sh --no-attach $OSMO_BANC_ARGS
 ExecStop=/bin/bash /opt/GSM/osmo-operator/start.sh --stop
-# LE COEUR ET LE TABLEAU DE BORD SUIVENT LE BANC. osmo-hlr et osmo-egprs-web
-# sont des unites a part, demarrees l une par run.sh, l autre au boot : elles
-# survivaient a l arret du banc. On se retrouvait avec un HLR qui garde ses
-# abonnes et un tableau de bord qui affiche un banc qui n existe plus.
-# `-` en tete : une unite deja arretee, ou absente, n a pas a faire echouer
-# l arret.
-# [2026-09-04] osmo-egprs-web n est plus nomme ici : il porte desormais
-# PartOf=osmo-banc.service et systemd l arrete tout seul, y compris sur un
-# `systemctl restart osmo-banc` que cette ligne ne couvrait pas. Un
-# `systemctl stop` lance depuis l ExecStop de l unite qu on arrete se met en
-# plus en file derriere son propre job : autant le laisser a systemd.
+# The core follows the bench. osmo-hlr is a separate unit started by run.sh;
+# it is stopped here so that it does not keep its subscribers after the bench
+# is gone. Leading `-`: an already stopped or missing unit must not fail the
+# stop. osmo-egprs-web is not named here: the dashboard stays online by
+# default, bench stopped included (see osmo-egprs-web.service).
 ExecStop=-/usr/bin/systemctl stop osmo-hlr.service
-# L ENCART DU BUREAU SUIT LE BANC. osmo-fft-snap.py lit /psd et le mobile.log
-# du run : un banc neuf, ce sont de nouveaux chemins sous /run/user/0 et un
-# nouveau journal. On le relance donc avec le banc, sans jamais le rendre
-# obligatoire - `-` en tete et --no-block : l encart est un ornement, il ne doit
-# ni faire echouer le demarrage ni le retarder. try-restart ne fait rien si
-# l unite n est pas la (image sans bureau).
+# The desktop widget follows the bench. osmo-fft-snap.py reads /psd and the
+# mobile.log of the run: a new bench means new paths under /run/user/0 and a
+# new log. It is restarted with the bench, never required - leading `-` and
+# --no-block: the widget is an ornament, it must neither fail nor delay the
+# start. try-restart does nothing if the unit is absent (image without desktop).
 ExecStartPost=-/usr/bin/systemctl --no-block try-restart osmo-fft-snap.service
-# [2026-09-25] Plus de « image neuve a chaque banc neuf » : osmo-wallpaper
-# n est plus relance ici, le fond reste l illustration brute
-# (/usr/share/backgrounds/gsm-lab-wallpaper.jpg).
-# QEMU + Calypso + rattachement des mobiles : plusieurs minutes sur une VM.
+# osmo-wallpaper is not restarted here: the background stays the raw
+# illustration (/usr/share/backgrounds/gsm-lab-wallpaper.jpg).
+# QEMU + Calypso + mobile attach: several minutes on a VM.
 TimeoutStartSec=900
-# [2026-09-04] 180 s -> 30 s. A l arret de la machine, systemd attend ce delai
-# AVANT de tuer ce qui reste : trois minutes d ecran noir par unite, et il y en
-# a deux. La pile s arrete en quelques secondes ; passe 30 s, elle est bloquee
-# et un SIGKILL est la bonne reponse - pas une attente de plus.
+# At machine shutdown systemd waits this long before killing what is left. The
+# stack stops in a few seconds; past 30 s it is stuck and SIGKILL is the right
+# answer.
 TimeoutStopSec=30
-# A l'arret, ce que start.sh --stop n'a pas demonte est termine par
-# systemd (SIGTERM puis SIGKILL sur le cgroup) : pas de reste de run precedent.
+# At stop, whatever start.sh --stop did not tear down is terminated by systemd
+# (SIGTERM then SIGKILL on the cgroup): nothing left from a previous run.
 KillMode=control-group
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=osmo-banc
 
-# ── REPRENDRE LA MAIN ───────────────────────────────────────────────────────
-#   tmux attach -t calypso        (root ; Ctrl-b d pour detacher)
-#   journalctl -u osmo-banc -f    (la sortie de start.sh / run.sh)
-# Le socket tmux est celui de root par defaut (/tmp/tmux-0/default) : PrivateTmp
-# n'est PAS active ici, sinon la session serait invisible hors du service.
+# ── Taking over ─────────────────────────────────────────────────────────────
+#   tmux attach -t calypso        (root; Ctrl-b d to detach)
+#   journalctl -u osmo-banc -f    (the output of start.sh / run.sh)
+# The tmux socket is root's default one (/tmp/tmux-0/default): PrivateTmp is
+# NOT enabled here, otherwise the session would be invisible outside the service.
 
 [Install]
 WantedBy=multi-user.target

@@ -1,25 +1,25 @@
 #!/bin/bash
-# iso_modules/60-dashboard.sh - etape 6 : dashboard web
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/60-dashboard.sh - step 6: web dashboard (osmo-egprs-web)
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment:
+#   OSMO_WEB_REPO=<url>      dashboard git repository
+#   OSMO_WEB_BRANCH=<branch> branch to clone (default: main)
+#   OSMO_WEB_LOCAL=<dir>     use this local tree instead of cloning
 
-# ── Etape 6 : Injection du dashboard web ───────────────────────────────────
+# ── Step 6: web dashboard injection ─────────────────────────────────────────
 echo -e "${GREEN}[6/9] Dashboard web (git clone)...${NC}"
 WEB="$ROOTFS/opt/GSM/osmo-egprs-web"
 WEB_REPO="${OSMO_WEB_REPO:-https://github.com/bbaranoff/osmo-egprs-web.git}"
-# main, PAS "test". La branche de travail du depot web partait dans toutes les
-# ISO : une image gravee recevait ce qui n'etait pas encore relu, et deux ISO
-# construites a deux semaines d'ecart n'embarquaient pas le meme dashboard sans
-# qu'aucune option ne l'ait demande. OSMO_WEB_BRANCH=test reste possible, mais
-# il faut le vouloir.
+# Default branch is main (reviewed code); OSMO_WEB_BRANCH=test must be explicit.
 WEB_BRANCH="${OSMO_WEB_BRANCH:-main}"
 
 mkdir -p "$WEB/web"
-# Source AUTORITAIRE = le VRAI git bbaranoff/osmo-egprs-web (clone ci-dessous).
-# La copie locale /opt/GSM/osmo-egprs-web n'est plus utilisee que comme override
-# EXPLICITE : OSMO_WEB_LOCAL=/chemin ./build-iso.sh. Sinon -> git.
-# Le patch natif plus bas est idempotent (skip si server.js est deja en mode natif).
+# Source of truth: the bbaranoff/osmo-egprs-web git repo (cloned below).
+# A local tree is only used when requested: OSMO_WEB_LOCAL=<dir> ./build-iso.sh.
+# The native patch below is idempotent (skipped if server.js is already native).
 LOCAL_WEB="${OSMO_WEB_LOCAL:-}"
 if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     cp "$LOCAL_WEB/server.js" "$WEB/server.js"
@@ -27,21 +27,18 @@ if [ -n "$LOCAL_WEB" ] && [ -f "$LOCAL_WEB/server.js" ]; then
     [ -d "$LOCAL_WEB/web" ]          && cp -r "$LOCAL_WEB/web/."     "$WEB/web/"
     [ -f "$LOCAL_WEB/start-web.sh" ] && cp "$LOCAL_WEB/start-web.sh" "$WEB/" && chmod +x "$WEB/start-web.sh"
     [ -f "$LOCAL_WEB/Dockerfile" ]   && cp "$LOCAL_WEB/Dockerfile"   "$WEB/Dockerfile"
-    # Le depot suit les fichiers : c'est lui qui evite le reclone au demarrage.
+    # The .git lets update.sh fetch instead of recloning at boot.
     [ -d "$LOCAL_WEB/.git" ]         && cp -a "$LOCAL_WEB/.git"     "$WEB/"
     echo -e "  ${GREEN}✓${NC} osmo-egprs-web depuis source LOCALE ($LOCAL_WEB)"
 else
     WEB_TMP="$WORK/osmo-egprs-web"
     GIT_TERMINAL_PROMPT=0 git clone --depth 1 -b "$WEB_BRANCH" "$WEB_REPO" "$WEB_TMP" 2>&1 | tail -2 || true
-    # [2026-08-27] Le clone entier part dans l'image, .git COMPRIS. Avant, on ne
-    # prelevait que quelques fichiers : l'ISO recevait un dossier sans depot, et
-    # update.sh, faute de .git, ne pouvait qu'EFFACER et RECLONER a chaque
-    # demarrage (wipe=1) - sans reseau, plus de dashboard du tout.
-    # cp -a : les fichiers deja poses par un override local ne sont pas effaces,
-    # ils sont recouverts par ceux du depot.
+    # The whole clone, .git included, goes into the image so that update.sh can
+    # fetch incrementally instead of wiping and recloning at boot.
+    # cp -a: files already placed by a local override are overwritten, not removed.
     [ -d "$WEB_TMP/.git" ] && cp -a "$WEB_TMP/." "$WEB/"
-    # Layout REEL du repo : server.js / package.json / web/ / start-web.sh a la
-    # RACINE (fallback sous server/ pour un ancien layout).
+    # Repo layout: server.js / package.json / web/ / start-web.sh at the ROOT
+    # (fallback to server/ for an older layout).
     if   [ -f "$WEB_TMP/server.js" ];        then cp "$WEB_TMP/server.js"        "$WEB/server.js"
     elif [ -f "$WEB_TMP/server/server.js" ]; then cp "$WEB_TMP/server/server.js" "$WEB/server.js"; fi
     if   [ -f "$WEB_TMP/package.json" ];        then cp "$WEB_TMP/package.json"        "$WEB/package.json"
@@ -56,26 +53,26 @@ else
     fi
 fi
 
-# ── LE TUTORIEL, SERVI PAR LE DASHBOARD ─────────────────────────────────────
-# Ici et pas ailleurs : $WEB vient d etre peuple (clone ou source locale), et
-# c est la seule racine statique que le dashboard expose. /usr/share garde un
-# exemplaire pour le repli hors ligne, mais c est CELUI-CI que l icone ouvre -
-# voir /usr/local/bin/osmo-tutorial.
+# ── Tutorial, served by the dashboard ───────────────────────────────────────
+# Done here because $WEB has just been populated and is the only static root
+# the dashboard exposes. /usr/share keeps an offline fallback copy, but the
+# icon opens THIS one - see /usr/local/bin/osmo-tutorial.
 if [ -f "$DIR/data/tutorial.html" ]; then
     mkdir -p "$WEB/web"
     cp -f "$DIR/data/tutorial.html" "$WEB/web/tutorial.html"
     echo -e "  ${GREEN}✓${NC} tutoriel servi par le dashboard : ${CYAN}/tutorial.html${NC}"
 fi
-# [2026-10-23] la page d aide (le « ? » du dock) aussi : Firefox est un snap et ne lit pas
-# file:///usr/share, l icone ouvrait une page vide. Voir /usr/local/bin/osmo-info.
+# The help page (the dock "?" button) is served the same way; see
+# /usr/local/bin/osmo-info.
 if [ -f "$DIR/configs/info.html" ]; then
     mkdir -p "$WEB/web"
     cp -f "$DIR/configs/info.html" "$WEB/web/info.html"
     echo -e "  ${GREEN}✓${NC} aide servie par le dashboard : ${CYAN}/info.html${NC}"
 fi
 
-# Patch server.js : mode natif (no-docker). VTY en telnet direct sur 127.0.0.1
-# (ou ip netns exec) au lieu de docker exec. Idempotent ; n'echoue pas le build.
+# Patch server.js for native (no-docker) mode: VTY via direct telnet to
+# 127.0.0.1 (or ip netns exec) instead of docker exec. Idempotent; never fails
+# the build.
 if [ -f "$WEB/server.js" ] && command -v python3 >/dev/null 2>&1; then
 python3 - "$WEB/server.js" <<'PYEOF' || echo -e "  ${YELLOW}[web] patch natif non applique (server.js amont a change ?)${NC}"
 import sys, re
@@ -125,43 +122,16 @@ sys.exit(0 if n[0] >= 6 else 2)
 PYEOF
 fi
 
-# ── LE DASHBOARD DOIT SE LEVER SEUL, ICI COMME SUR LE DISQUE ────────────────
-# Tout etait deja dans l image - server.js, node, node_modules - SAUF les deux
-# unites systemd. services/ n etait copie nulle part par ce script : l ISO
-# arrivait donc avec un dashboard complet et rien pour le demarrer, et il
-# fallait lancer install-web-service.sh a la main a chaque demarrage. C est
-# exactement ce qu on a constate sur le banc.
-#
-# DEUX UNITES, ET PAS UNE :
-#   osmo-egprs-web.service          le dashboard lui-meme.
-#   osmo-egprs-web-install.service  un oneshot qui rejoue install-web-service.sh
-#                                   AU BOOT. Il porte le certificat TLS, et
-#                                   c est la seule place correcte pour lui : une
-#                                   cle posee ici, au build, serait la MEME dans
-#                                   toutes les ISO tirees de cette image -
-#                                   n importe qui pourrait se faire passer pour
-#                                   la console. Genere au boot, il porte le nom
-#                                   et les adresses REELS de la machine, ce qui
-#                                   vaut aussi pour le systeme installe : le
-#                                   disque recoit les unites avec le squashfs et
-#                                   fabrique SON propre certificat au premier
-#                                   demarrage, different de celui de la cle.
-#
-# On active l ONESHOT, pas le service : le script se termine par un
-# `systemctl restart osmo-egprs-web` et l unite le dit - l ordonner avant le
-# service creerait un cycle. Le dashboard est tire par lui.
+# ── The dashboard must start on its own (live ISO and installed disk) ───────
 _SVC_SRC="$DIR/services"
-# [2026-08-31] SEUL LE SERVICE DU DASHBOARD EST POSE. Le oneshot d installation
-# (osmo-egprs-web-install.service) n est plus deploye : il rejouait au premier
-# demarrage un script qui TELECHARGE node s il manque, donc un boot qui exige
-# Internet. L installation est faite au BUILD (Dockerfile, RUN bash
-# install-web-service.sh) : l image arrive complete, le boot ne fait que lancer.
+# Only the dashboard unit (osmo-egprs-web.service) is installed and enabled.
+# The web installation itself is done at image BUILD time (Dockerfile:
+# RUN bash install-web-service.sh), so boot does not need Internet.
 if [ -f "$_SVC_SRC/osmo-egprs-web.service" ]; then
     install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
     cp -f "$_SVC_SRC/osmo-egprs-web.service"         "$ROOTFS/etc/systemd/system/"
-    # Le depot web embarque sa propre copie du unit, qui a deja DIVERGE de
-    # celle-ci (cf. Dockerfile) : on impose celle du depot operateur, une seule
-    # verite.
+    # The web repo ships its own, diverging copy of the unit: the operator
+    # repo's copy is imposed as the single source of truth.
     [ -d "$ROOTFS/opt/GSM/osmo-egprs-web" ] && \
         cp -f "$_SVC_SRC/osmo-egprs-web.service" \
               "$ROOTFS/opt/GSM/osmo-egprs-web/osmo-egprs-web.service"
@@ -173,17 +143,15 @@ else
     exit 1
 fi
 
-# /usr/local/bin/node pointait sur /opt/node/bin/node, absent de l image : un
-# lien mort AVANT /usr/bin dans le PATH. `node` marche par chance, parce que le
-# shell continue son parcours ; un script qui teste `-x /usr/local/bin/node`,
-# lui, se trompe. On ne garde le lien que s il mene quelque part.
+# Remove /usr/local/bin/node if it is a dangling link (e.g. to the absent
+# /opt/node/bin/node): it precedes /usr/bin in PATH and misleads scripts that
+# test `-x /usr/local/bin/node`.
 if [ -L "$ROOTFS/usr/local/bin/node" ] && [ ! -e "$ROOTFS/usr/local/bin/node" ]; then
     rm -f "$ROOTFS/usr/local/bin/node" "$ROOTFS/usr/local/bin/npm" "$ROOTFS/usr/local/bin/npx"
     echo -e "  ${GREEN}✓${NC} liens morts /usr/local/bin/node,npm,npx retires (node reste en /usr/bin)"
 fi
 
-
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command and
+# build-iso.sh runs under set -e. A module ending with a false test
+# ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.
 true

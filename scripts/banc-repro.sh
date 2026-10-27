@@ -1,27 +1,22 @@
 #!/bin/bash
 # =============================================================================
-#  banc-repro.sh — UNE EXPERIENCE REPRODUCTIBLE, DU DEMARRAGE AU VERDICT
+#  banc-repro.sh — a reproducible experiment, from start to verdict
 # =============================================================================
-#  POURQUOI CE SCRIPT EXISTE. Le defaut qu'on chasse est INTERMITTENT : sur une
-#  serie d'appels, certains aboutissent et d'autres non. Diagnostiquer ca demande
-#  de rejouer la meme sequence apres chaque changement, et de comparer des
-#  journaux comparables. Fait a la main, chaque iteration coute plusieurs minutes
-#  et produit des runs qui ne se comparent pas (nombre d'appels different, delais
-#  differents, journaux qui se melangent avec les precedents).
+#  Intermittent call failures are diagnosed by replaying the same sequence
+#  after each change and comparing comparable logs. This script freezes the
+#  sequence: detached start, wait for camping, N identical calls, timestamped
+#  collection, verdict per call.
 #
-#  Ce script fige la sequence : demarrage detache, attente du camp, N appels
-#  identiques, collecte horodatee, verdict par appel.
+#  It fixes nothing and guesses nothing. It produces a measurement.
 #
-#  IL NE CORRIGE RIEN ET NE DEVINE RIEN. Il produit une mesure.
+#  Usage:
+#     scripts/banc-repro.sh                      3 calls, with restart
+#     scripts/banc-repro.sh --calls 5            5 calls
+#     scripts/banc-repro.sh --no-restart         reuse the running stack
+#     scripts/banc-repro.sh --dest 600           called number (default 600)
 #
-#  Usage :
-#     scripts/banc-repro.sh                      3 appels, avec redemarrage
-#     scripts/banc-repro.sh --calls 5            5 appels
-#     scripts/banc-repro.sh --no-restart         reutilise la pile en cours
-#     scripts/banc-repro.sh --dest 600           numero appele (defaut 600)
-#
-#  Sortie : un repertoire /root/repro-<horodatage>/ contenant tous les journaux
-#  du run et un resume.txt. Rien n'est ecrase d'un run a l'autre.
+#  Output: a directory /root/repro-<timestamp>/ with all the logs of the run
+#  and a resume.txt. Nothing is overwritten from one run to the next.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -29,10 +24,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CALLS=3
 DEST=600
 RESTART=1
-VTY=4247                 # MS#1 ; MS#2 est sur 4248
-CALL_S=20                # duree d'un appel
-GAP_S=10                 # silence entre deux appels (le canal doit se liberer)
-BOOT_MAX=180             # attente maximale du camp
+VTY=4247                 # MS#1; MS#2 is on 4248
+CALL_S=20                # duration of one call
+GAP_S=10                 # silence between two calls (the channel must be released)
+BOOT_MAX=180             # maximum wait for camping
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -55,18 +50,17 @@ LOGDIR=/run/user/0/osmo-nitb/logs
 
 say() { printf '  %s\n' "$*"; }
 
-# ── VTY : une commande, une reponse ─────────────────────────────────────────
-# `enable` puis la commande. On laisse une seconde au demon pour repondre : nc
-# ferme des que stdin se termine, et sans cette pause la commande part mais la
-# reponse n'est jamais lue (symptome : "aucune sortie" sur une commande qui a
-# pourtant bien ete executee).
+# ── VTY: one command, one answer ────────────────────────────────────────────
+# `enable` then the command. The daemon gets one second to answer: nc closes as
+# soon as stdin ends, and without this pause the command is sent but the answer
+# is never read.
 vty() {
     { printf 'enable\n%s\n' "$1"; sleep 1; } | timeout 6 nc 127.0.0.1 "$VTY" 2>/dev/null
 }
 
-# ── 1. Demarrage ────────────────────────────────────────────────────────────
-# CALYPSO_NO_ATTACH=1 : run.sh ne s'attache pas a tmux a la fin (run.sh:262).
-# Sans ca le script resterait bloque sur une session interactive.
+# ── 1. Start ────────────────────────────────────────────────────────────────
+# CALYPSO_NO_ATTACH=1: run.sh does not attach to tmux at the end. Without it
+# this script would stay blocked on an interactive session.
 if [ "$RESTART" = 1 ]; then
     say "arret de la pile en cours"
     ( cd "$HERE" && CALYPSO_NO_ATTACH=1 ./start-native.sh --stop ) >"$OUT/stop.log" 2>&1
@@ -77,11 +71,10 @@ else
     say "pile en cours reutilisee (--no-restart)"
 fi
 
-# ── 2. Attendre le camp, ne pas le supposer ─────────────────────────────────
-# On interroge le VTY plutot que d'attendre un delai fixe : selon la machine, le
-# camp arrive en 40 s ou en 2 min, et un sleep fige donne soit du gaspillage soit
-# des appels lances avant que le mobile ne soit pret — donc des "echecs" qui ne
-# mesurent que notre impatience.
+# ── 2. Wait for camping, do not assume it ───────────────────────────────────
+# The VTY is polled rather than waiting a fixed delay: depending on the machine
+# camping takes 40 s or 2 min, and a fixed sleep gives either waste or calls
+# started before the mobile is ready — "failures" that measure nothing.
 say "attente du camp (C3), maximum ${BOOT_MAX}s"
 camp=0
 for i in $(seq 1 "$BOOT_MAX"); do
@@ -96,10 +89,10 @@ if [ "$camp" != 1 ]; then
 fi
 say "campe apres ${i}s"
 
-# Marqueur : tout ce qui suit dans pont.log appartient a l'experience.
+# Marker: everything that follows in pont.log belongs to the experiment.
 PONT_DEBUT=$(wc -l < /dev/shm/pont.log 2>/dev/null || echo 0)
 
-# ── 3. Les appels ───────────────────────────────────────────────────────────
+# ── 3. The calls ────────────────────────────────────────────────────────────
 : > "$OUT/appels.txt"
 for n in $(seq 1 "$CALLS"); do
     say "appel $n/$CALLS  -> $DEST"
@@ -109,10 +102,10 @@ for n in $(seq 1 "$CALLS"); do
     vty "call 1 hangup" >> "$OUT/appel-$n-vty.txt" 2>&1
     sleep 2
 
-    # Verdict : dans la tranche de pont.log produite par CET appel, un
-    # "DESARME (CHANNEL RELEASE" signe un TCH qui a vecu ; un "SANS ASSIGNMENT
-    # COMPLETE" signe un mobile qui n'a pas bascule. On ne conclut pas d'apres
-    # les compteurs cumulatifs, qui melangeraient les appels precedents.
+    # Verdict: in the slice of pont.log produced by this call, a
+    # "DESARME (CHANNEL RELEASE" marks a TCH that lived; a "SANS ASSIGNMENT
+    # COMPLETE" marks a mobile that did not switch. Cumulative counters are not
+    # used, they would mix in the previous calls.
     tranche=$(tail -n +$((avant + 1)) /dev/shm/pont.log 2>/dev/null)
     if printf '%s' "$tranche" | grep -q "SANS ASSIGNMENT COMPLETE"; then
         verdict=ECHEC
@@ -126,7 +119,7 @@ for n in $(seq 1 "$CALLS"); do
     sleep "$GAP_S"
 done
 
-# ── 4. Collecte ─────────────────────────────────────────────────────────────
+# ── 4. Collection ───────────────────────────────────────────────────────────
 say "collecte des journaux"
 cp /dev/shm/pont.log            "$OUT/pont.log"            2>/dev/null
 tail -n +$((PONT_DEBUT + 1)) /dev/shm/pont.log > "$OUT/pont-experience.log" 2>/dev/null
@@ -139,11 +132,11 @@ for f in calypso_dcch_cfg calypso_kc_l1 calypso_tch_cfg; do
     [ -e "/dev/shm/$f" ] && od -A d -t x1 "/dev/shm/$f" > "$OUT/$f.hex" 2>/dev/null
 done
 
-# ── 5. Resume ───────────────────────────────────────────────────────────────
-# Les compteurs de pont.py (STATS, DETAIL blocs) sont de VRAIS cumuls. Ceux du
-# shunt sont des SHUNT_LOG limites en debit (ex. `if (++n <= 3 || n % 2000 == 0)`)
-# : les compter donnerait un chiffre qui ne mesure rien. On ne met donc ici que
-# ce qui est fiable, et on le dit.
+# ── 5. Summary ──────────────────────────────────────────────────────────────
+# The pont.py counters (STATS, DETAIL blocs) are real cumulative counts. The
+# shunt ones are rate-limited SHUNT_LOG lines (e.g. `if (++n <= 3 || n % 2000 == 0)`):
+# counting them would give a number that measures nothing. Only what is
+# reliable goes here, and it is said.
 {
     echo "=== experience $STAMP : $CALLS appels vers $DEST ==="
     cat "$OUT/appels.txt"

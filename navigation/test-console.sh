@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# test-console.sh - passe en revue CHAQUE commande de la console SS7 et de ses
-# outils, garde un journal par commande, et rend un rapport.
+# test-console.sh - runs EVERY command of the SS7 console and its tools,
+# keeps one log per command, and prints a report.
 #
-#   ./navigation/test-console.sh              tout, y compris le SS7 reel
-#   ./navigation/test-console.sh --rapide     sans M3UA/MAP (lab a l'arret)
-#   ./navigation/test-console.sh --dir CHEMIN journaux ailleurs
+#   ./navigation/test-console.sh              everything, including real SS7
+#   ./navigation/test-console.sh --rapide     without M3UA/MAP (lab stopped)
+#   ./navigation/test-console.sh --dir PATH   logs elsewhere
 #
-# Un test = une commande + un critere de reussite (motif attendu dans la
-# sortie, ou code de retour). Chaque commande a SON fichier de journal, nomme
-# par le numero et le nom du test : on peut relire exactement ce qui s'est
-# passe sans relancer quoi que ce soit.
+# One test = one command + one success criterion (expected pattern in the
+# output, or return code). Every command has ITS OWN log file, named after
+# the test number and name: what happened can be read back exactly without
+# running anything again.
 #
-# Codes de sortie : 0 tout passe, sinon le nombre d'echecs.
+# Exit codes: 0 all passed, otherwise the number of failures.
 
 set -u
 
@@ -45,8 +45,8 @@ PASS=0; FAIL=0; SKIP=0; NUM=0
 
 dire() { echo -e "$*"; echo -e "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$RAPPORT"; }
 
-# essai <nom> <motif attendu|-> <commande...>
-#   motif "-" : on ne juge que le code de retour.
+# essai <name> <expected pattern|-> <command...>
+#   pattern "-": only the return code is judged.
 essai() {
     local nom="$1" motif="$2"; shift 2
     NUM=$((NUM + 1))
@@ -93,7 +93,7 @@ ignore() { NUM=$((NUM + 1)); SKIP=$((SKIP + 1)); dire "  ${Y}-${N} $1"; }
 
 titre() { dire ""; dire "${B}$1${N}"; dire "----------------------------------------------------------------------"; }
 
-# ── le lab est-il debout ? ────────────────────────────────────────────────────
+# ── is the lab up? ────────────────────────────────────────────────────────────
 CONTENEURS="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^osmo-' || true)"
 HUB=""
 if [ "${CONTENEURS:-0}" -gt 0 ]; then
@@ -159,7 +159,7 @@ else
     essai "m3ua-audit-inconnu" "INACCESSIBLE|DUNA|aucune reponse" "$CONSOLE" audit 7.255.7
     essai "map-sans-destination" "point code|global title" "$CONSOLE" map sri-sm msisdn=600101
     essai "map-operation-inconnue" "operation inconnue" "$CONSOLE" map pas-une-op --pc 1.11.2
-    # Aller-retour complet : le repondeur repond a l'emetteur a travers le hub.
+    # Full round trip: the responder answers the sender through the hub.
     essai "map-aller-retour" "IMSI" "$DIAG" --no-probe
 fi
 

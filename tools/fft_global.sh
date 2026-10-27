@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# tools/fft_global.sh - FFT "jolie" d'un cfile LOCAL passe en argument (fichier statique).
+# tools/fft_global.sh - "pretty" FFT of a LOCAL cfile given as argument (static file).
 #
-# Derive de tools/fft.sh (osmo-operator) mais SANS docker / ring / tail-live : lit
-# directement un cfile sur l'hote, le balaye en boucle, et affiche
-# PSD moyennee (Welch maison) + waterfall defilant (FuncAnimation).
+# Derived from tools/fft.sh (osmo-operator) but WITHOUT docker / ring / live tail:
+# reads a cfile directly on the host, sweeps it in a loop, and shows an
+# averaged PSD (home-made Welch) + scrolling waterfall (FuncAnimation).
 #
-# Usage :
+# Usage:
 #   ./tools/fft_global.sh my.cfile
 #   ./tools/fft_global.sh my.cfile --save spectre.png
 #   RATE=1083333 NSAMP=32768 REFRESH=0.25 FORMAT=cf32 ARFCN=514 ./tools/fft_global.sh my.cfile
 #
-# FORMAT : cf32 (complex64, defaut, ce qu'ecrit le shunt) | cs8 | cs16
-#          (record.cfile d'osmo-trx est souvent cs8 -> FORMAT=cs8)
+# FORMAT: cf32 (complex64, default, what the shunt writes) | cs8 | cs16
+#         (osmo-trx record.cfile is often cs8 -> FORMAT=cs8)
 set -euo pipefail
 
 CFILE="${1:?usage: tools/fft_global.sh <fichier.cfile> [--save out.png]}"
@@ -47,7 +47,7 @@ FORMAT = os.environ.get("FORMAT","cf32").lower()
 NFFT  = 4096                       # resolution FFT
 WROWS = 120                        # lignes du waterfall
 
-# ---- format d'echantillon -> dtype brut + bytes/sample complexe ----
+# ---- sample format -> raw dtype + bytes per complex sample ----
 if FORMAT in ("cf32","fc32","complex64"):
     RAWDT, ITEMS = np.float32, 2          # I,F float32
 elif FORMAT in ("cs16","sc16","int16"):
@@ -97,7 +97,7 @@ def welch_psd(iq):
     psd = acc/max(1,used)
     return 10*np.log10(psd/(NFFT*RATE) + 1e-20)
 
-# ---- figure "jolie" : PSD (haut) + waterfall (bas) alignees ----
+# ---- "pretty" figure: PSD (top) + waterfall (bottom) aligned ----
 plt.style.use("dark_background")
 fig = plt.figure(figsize=(11,8))
 gs = fig.add_gridspec(2, 2, width_ratios=[40, 1], height_ratios=[1, 1.4],

@@ -1,27 +1,27 @@
 #!/bin/bash
 # =============================================================================
-# scripts/calypso-mode.sh - a qui est le Calypso (QEMU + ROM TI) : voix ou data.
+# scripts/calypso-mode.sh - who owns the Calypso (QEMU + TI ROM): voice or data.
 # =============================================================================
 #
-# La couche 1 du Calypso (osmocon, /tmp/osmocom_l2) n accepte qu UN client de
-# couche 2. Deux clients se la volent : chacun la remet a zero (RESET FULL),
-# le mobile perd le reseau (« No service ») et le modem ne s attache pas.
+# The Calypso layer 1 (osmocon, /tmp/osmocom_l2) accepts only one layer 2
+# client. Two clients steal it from each other: each resets it (RESET FULL),
+# the mobile loses the network (« No service ») and the modem does not attach.
 #
-#   voix   le `mobile` osmocom-bb (MS#1, VTY 4247) : appels, SMS, USSD.
-#   data   le `modem` osmocom-bb GPRS (IMSI du mobile, 001010001000001) : attach GPRS,
-#          contexte PDP, tun_modem dans le netns msgprs. Le mobile est arrete.
+#   voix   the osmocom-bb `mobile` (MS#1, VTY 4247): calls, SMS, USSD.
+#   data   the osmocom-bb GPRS `modem` (IMSI of the mobile, 001010001000001):
+#          GPRS attach, PDP context, tun_modem in the msgprs netns. The mobile
+#          is stopped.
 #
-# Le passage data -> voix relance le mobile EXACTEMENT comme c54x_exe/run.sh
-# l avait lance (ligne de commande, repertoire et journal releves dans /proc
-# avant de l arreter). Appele par tools/osmo-phonesim-banc.py : ATD*99 du
-# telephone -> data ; appel ou SMS -> voix (une 2G de classe B : pas de data
-# pendant la voix). Un appel ENTRANT ne peut pas arriver en mode data : le
-# mobile n est pas la pour etre pagine.
+# Switching data -> voice restarts the mobile exactly as c54x_exe/run.sh had
+# started it (command line, directory and log read from /proc before stopping
+# it). Called by tools/osmo-phonesim-banc.py: ATD*99 from the phone -> data;
+# call or SMS -> voice (a class B 2G: no data during voice). An incoming call
+# cannot arrive in data mode: the mobile is not there to be paged.
 #
-# Usage : calypso-mode.sh data|voix|etat [--wait]
-#   --wait   data : attendre l adresse de tun_modem (PDP actif, 240 s max)
-#            voix : attendre le mobile en service normal (120 s max)
-# Etat : /run/osmo-banc/calypso-mode (voix|data), ligne du mobile :
+# Usage: calypso-mode.sh data|voix|etat [--wait]
+#   --wait   data: wait for the tun_modem address (PDP active, 240 s max)
+#            voix: wait for the mobile in normal service (120 s max)
+# State: /run/osmo-banc/calypso-mode (voix|data), mobile command line:
 #        /run/osmo-banc/calypso-mobile.{cmd,cwd,log}
 # -----------------------------------------------------------------------------
 set -uo pipefail
@@ -39,14 +39,14 @@ mkdir -p "$ETAT"
 log() { printf '[calypso-mode] %s\n' "$*"; }
 mode_courant() { cat "$MODE_F" 2>/dev/null || echo voix; }
 
-# Le fichier de config d un client de couche 2 (mobile ou modem) vise-t-il SOCK ?
-# Sans « layer2-socket », osmocom-bb prend /tmp/osmocom_l2.
+# Does the config file of a layer 2 client (mobile or modem) point at SOCK?
+# Without « layer2-socket », osmocom-bb uses /tmp/osmocom_l2.
 vise_sock() {
     local cfg="$1" s
     s="$(awk '$1=="layer2-socket"{print $2; exit}' "$cfg" 2>/dev/null)"
     [ "${s:-/tmp/osmocom_l2}" = "$SOCK" ]
 }
-# Les PID des `mobile` branches sur SOCK
+# The PIDs of the `mobile` processes connected to SOCK
 mobiles_sur_sock() {
     local p c
     for p in $(pgrep -x mobile); do
@@ -65,13 +65,12 @@ vty() {
 vers_data() {
     local p n=0
     for p in $(mobiles_sur_sock); do
-        # La ligne exacte du mobile, pour le relancer a l identique
+        # The exact mobile command line, to restart it identically
         tr '\0' '\n' < "/proc/$p/cmdline" > "$ETAT/calypso-mobile.cmd"
         readlink "/proc/$p/cwd" > "$ETAT/calypso-mobile.cwd"
         readlink "/proc/$p/fd/1" > "$ETAT/calypso-mobile.log" 2>/dev/null || true
-        # [2026-10-15] SIGTERM ne suffit pas : le mobile tente un detach IMSI
-        # propre, qu il n acheve pas sur une couche 1 disputee (vu : mobile
-        # vivant 2 min apres le SIGTERM, a cote du modem). 3 s, puis SIGKILL.
+        # SIGTERM is not enough: the mobile attempts a clean IMSI detach, which
+        # it does not complete on a contended layer 1. 3 s, then SIGKILL.
         kill "$p" 2>/dev/null
         local w; for w in 1 2 3 4 5 6; do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done
         kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null && log "mobile $p : SIGTERM ignore, SIGKILL"
@@ -111,7 +110,7 @@ vers_voix() {
         cwd="$(cat "$ETAT/calypso-mobile.cwd" 2>/dev/null || echo /)"
         jrn="$(cat "$ETAT/calypso-mobile.log" 2>/dev/null)"
         case "$jrn" in /*) ;; *) jrn=/tmp/c54x-pont/mobile.log ;; esac
-        # Comme c54x_exe/run.sh (etape 4) : priorite de la chaine, sortie ligne a ligne
+        # As c54x_exe/run.sh (step 4): chain priority, line-buffered output
         ( cd "$cwd" && exec setsid taskset -c "${RT_CPUS:-0-15}" nice -n -10 stdbuf -oL "${cmd[@]}" >> "$jrn" 2>&1 < /dev/null ) &
         log "mobile relance : ${cmd[*]} (journal $jrn)"
     fi
@@ -128,9 +127,9 @@ vers_voix() {
 
 ACTION="${1:-etat}"; ATTENDRE=0
 [ "${2:-}" = "--wait" ] && ATTENDRE=1
-# [2026-10-15] Pas de couche 1, pas de bascule : banc arrete (ou pas en DSP),
-# le mobile ou le modem relance mourait aussitot (« Failed to create unix
-# domain socket /tmp/osmocom_l2 »). On le dit au lieu de lancer pour rien.
+# No layer 1, no switch: with the bench stopped (or not in DSP mode), a
+# restarted mobile or modem would die at once (« Failed to create unix domain
+# socket /tmp/osmocom_l2 »). Say so instead of starting for nothing.
 if [ "$ACTION" = data ] || [ "$ACTION" = voix ]; then
     if [ ! -S "$SOCK" ]; then
         log "pas de couche 1 ($SOCK absent) : le banc DSP ne tourne pas - systemctl start osmo-banc, puis relancer"

@@ -1,33 +1,34 @@
 #!/bin/bash
 # =============================================================================
-#  launch/start-oqc.sh - lance qosmo-grgsm depuis osmo-operator
+#  launch/start-oqc.sh - start qosmo-grgsm from osmo-operator
 # =============================================================================
 #
-#  "oqc" = qosmo-grgsm, l'emulation Calypso (ARM7 + DSP TMS320C54x).
-#  Ce fichier est le raccourci depuis osmo-operator : il trouve le depot et lui
-#  passe la main. Toute la logique de lancement vit la-bas, dans run_modules/.
+#  "oqc" = qosmo-grgsm, the Calypso emulation (ARM7 + TMS320C54x DSP).
+#  This is a shortcut from osmo-operator: it locates the repository and hands
+#  over to its run.sh. All launch logic lives there, in run_modules/.
 #
-#      ./launch/start-oqc.sh                  profil calypso (defaut)
-#      ./launch/start-oqc.sh --list           le plan, sans rien lancer
-#      ./launch/start-oqc.sh --dry-run        deroule sans effet de bord
-#      ./launch/start-oqc.sh --status         ou en est chaque etape
-#      ./launch/start-oqc.sh --stop           arrete, en ordre inverse
-#      ./launch/start-oqc.sh --check-paths    verifie les dependances de la machine
+#      ./launch/start-oqc.sh                  calypso profile (default)
+#      ./launch/start-oqc.sh --list           show the plan, start nothing
+#      ./launch/start-oqc.sh --dry-run        run without side effects
+#      ./launch/start-oqc.sh --status         state of each step
+#      ./launch/start-oqc.sh --stop           stop, in reverse order
+#      ./launch/start-oqc.sh --check-paths    check the machine's dependencies
 #
-#  Les variables CALYPSO_* passees en prefixe traversent jusqu'a QEMU :
+#  CALYPSO_* variables given as a prefix are passed through to QEMU:
 #      CALYPSO_MODE=native ./launch/start-oqc.sh
 #
-#  Ou est le depot : OQC_ROOT, sinon les emplacements habituels sont essayes.
+#  Repository location: OQC_ROOT, otherwise ../qosmo-grgsm,
+#  $GSM_ROOT/qosmo-grgsm (default /opt/GSM) and ~/qosmo-grgsm are tried.
 #      OQC_ROOT=~/src/qosmo-grgsm ./launch/start-oqc.sh
 #
-#  A ne pas confondre avec start-native.sh, qui orchestre TOUTE la pile
-#  (coeur Osmocom + radio) et dont le mode "qemu" aboutit egalement ici.
+#  Not to be confused with start-native.sh, which orchestrates the WHOLE stack
+#  (Osmocom core + radio) and whose "qemu" mode also ends up here.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
 _find_oqc() {
     [ -n "${OQC_ROOT:-}" ] && { printf '%s\n' "$OQC_ROOT"; return 0; }
-    local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # launch/ -> racine du depot
+    local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # launch/ -> repository root
     local c
     for c in "$here/../qosmo-grgsm" \
              "${GSM_ROOT:-/opt/GSM}/qosmo-grgsm" \

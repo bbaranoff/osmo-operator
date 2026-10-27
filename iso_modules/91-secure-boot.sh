@@ -1,59 +1,48 @@
 #!/bin/bash
-# iso_modules/91-secure-boot.sh - ISO Secure Boot (shim + grub signes) ou grub-mkrescue
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/91-secure-boot.sh - Secure Boot ISO (signed shim + grub), or
+# grub-mkrescue fallback.
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to be run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Host requirements for Secure Boot: shim-signed, grub-efi-amd64-signed,
+# mtools, dosfstools (sbsigntool optional, to verify the kernel signature).
 
-# --arm : pas de shim ni de xorriso sur le Pi.
+# --arm: no shim or xorriso on the Pi.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECURE BOOT - pourquoi cette etape ne peut pas rester grub-mkrescue
+# SECURE BOOT - why this step does not use grub-mkrescue
 # ══════════════════════════════════════════════════════════════════════════════
-# grub-mkrescue CONSTRUIT son BOOTX64.EFI a la volee, a partir des modules de
-# l'hote. Ce binaire n'est signe par personne. Sur une machine dont le Secure
-# Boot est actif, le firmware refuse de le charger et n'affiche qu'une erreur de
-# certificat - "Verification failed: (0x1A) Security Violation", ou pire un
-# ecran qui retombe au menu de boot sans un mot. L'ISO etait donc inutilisable
-# partout ou l'on ne peut pas desactiver Secure Boot dans le firmware, ce qui
-# est le cas de la plupart des machines d'entreprise et de beaucoup de portables
-# recents.
+# grub-mkrescue builds an unsigned BOOTX64.EFI from host modules, which the
+# firmware refuses to load when Secure Boot is enabled.
 #
-# LA CHAINE DE CONFIANCE, et pourquoi chaque maillon est celui-la :
+# Chain of trust:
 #
-#   firmware --(cle Microsoft)--> shimx64.efi.signed   paquet shim-signed
-#            --(cle Canonical)--> gcdx64.efi.signed    paquet grub-efi-amd64-signed
-#            --(cle Canonical)--> vmlinuz              linux-image-generic (deja signe)
+#   firmware --(Microsoft key)--> shimx64.efi.signed   package shim-signed
+#            --(Canonical key)--> gcdx64.efi.signed    package grub-efi-amd64-signed
+#            --(Canonical key)--> vmlinuz              linux-image-generic (signed)
 #
-# shim est le SEUL maillon signe par Microsoft, dont la cle est dans a peu pres
-# tous les firmwares du marche. Il porte la cle Canonical et valide ce qu'il
-# charge ensuite. On ne le fabrique pas : on copie celui du paquet.
+# shim is the only Microsoft-signed link; it carries the Canonical key. It is
+# copied from the package, not built.
 #
-# gcdx64 ET NON grubx64 - c'est le detail qui coute une soiree. Les deux sont
-# signes par Canonical, mais leur PREFIXE compile differe :
-#     grubx64.efi.signed  -> prefixe /EFI/ubuntu, cherche sa configuration sur
-#                            la partition EFI ; sur une ISO elle n'y est pas, et
-#                            GRUB tombe sur son invite "grub>" sans un message.
-#     gcdx64.efi.signed   -> prefixe /boot/grub RELATIF AU MEDIUM DE BOOT, la
-#                            variante faite pour l'optique. Il trouve donc
-#                            $ISOROOT/boot/grub/grub.cfg, celui qu'on vient
-#                            d'ecrire, sans stub ni duplication.
-# On garde tout de meme un stub en /EFI/ubuntu/grub.cfg sur l'ESP : il ne sert
-# que si le repli sur grubx64 s'est declenche, et il ne coute que 60 octets.
+# gcdx64, not grubx64: both are Canonical-signed but their compiled prefix
+# differs:
+#     grubx64.efi.signed  -> prefix /EFI/ubuntu, looks for its config on the
+#                            EFI partition (absent on an ISO: bare "grub>").
+#     gcdx64.efi.signed   -> prefix /boot/grub relative to the boot medium
+#                            (optical variant), finds $ISOROOT/boot/grub/grub.cfg.
+# A stub /EFI/ubuntu/grub.cfg is still put on the ESP for the grubx64 fallback.
 #
-# CE QUE CETTE ETAPE NE FAIT PAS : signer quoi que ce soit. Aucune cle privee
-# n'est manipulee, rien n'est a enroler par l'utilisateur (pas de MokManager a
-# la premiere ouverture). On assemble des binaires deja signes par Microsoft et
-# Canonical - c'est exactement ce que fait une ISO Ubuntu officielle.
+# Nothing is signed here: no private key, nothing to enrol (no MokManager on
+# first boot). Only binaries already signed by Microsoft and Canonical are
+# assembled, like an official Ubuntu ISO.
 #
-# LE BIOS N'EST PAS ABANDONNE. L'image El Torito i386-pc est construite ici par
-# grub-mkimage au format i386-pc-eltorito (celui qui embarque deja cdboot.img),
-# et la MBR hybride par --grub2-mbr : une machine sans UEFI demarre comme avant.
+# BIOS boot: the El Torito i386-pc image is built by grub-mkimage
+# (i386-pc-eltorito, includes cdboot.img) and the hybrid MBR by --grub2-mbr.
 #
-# REPLI. Si un maillon manque sur l'hote (paquet non installe, architecture
-# autre), on retombe sur grub-mkrescue - l'ISO d'avant, qui demarre partout SAUF
-# en Secure Boot. On le DIT, en clair : une ISO non signee qui se presente comme
-# signee, c'est une panne au premier deploiement.
+# Fallback: if a component is missing on the host, grub-mkrescue builds an
+# ISO that boots everywhere EXCEPT with Secure Boot, and this is reported.
 
 SB_SHIM=""
 for c in /usr/lib/shim/shimx64.efi.signed \
@@ -61,7 +50,7 @@ for c in /usr/lib/shim/shimx64.efi.signed \
          /usr/lib/shim/shimx64.efi; do
     [ -f "$c" ] && { SB_SHIM="$c"; break; }
 done
-# gcdx64 d'abord (prefixe /boot/grub, fait pour l'optique), grubx64 en repli.
+# gcdx64 first (prefix /boot/grub, for optical media), grubx64 as fallback.
 SB_GRUB="" ; SB_GRUB_KIND=""
 for c in /usr/lib/grub/x86_64-efi-signed/gcdx64.efi.signed:gcd \
          /usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed:grub; do
@@ -72,11 +61,9 @@ for c in /usr/lib/shim/mmx64.efi.signed /usr/lib/shim/mmx64.efi; do
     [ -f "$c" ] && { SB_MM="$c"; break; }
 done
 
-# Le noyau doit l'etre aussi : shim valide GRUB, GRUB valide le noyau. Un
-# vmlinuz non signe s'arrete sur "you need to load the kernel first" ou sur un
-# refus de shim_lock, APRES le menu - donc la ou l'on ne soupconne plus l'ISO.
-# Les noyaux Ubuntu "generic" le sont ; un noyau maison, non. On regarde la
-# signature plutot que de faire confiance au nom du paquet.
+# The kernel must be signed too: shim validates GRUB, GRUB validates the
+# kernel. An unsigned vmlinuz fails AFTER the menu. Ubuntu "generic" kernels
+# are signed; the signature is checked rather than trusting the package name.
 SB_KERNEL_SIGNED=0
 if command -v sbverify &>/dev/null; then
     sbverify --list "$ISOROOT/boot/vmlinuz" &>/dev/null && SB_KERNEL_SIGNED=1
@@ -90,14 +77,10 @@ if [ -n "$SB_SHIM" ] && [ -n "$SB_GRUB" ] && command -v mmd &>/dev/null; then
     echo -e "  shim : ${CYAN}${SB_SHIM}${NC}"
     echo -e "  grub : ${CYAN}${SB_GRUB}${NC} (${SB_GRUB_KIND})"
 
-    # ── La partition systeme EFI ────────────────────────────────────────────
-    # FAT16, et un PLANCHER DE 16 Mo. Le contenu ne pese que ~4 Mo (shim ~1 Mo,
-    # grub signe ~2,3 Mo, MokManager ~0,9 Mo), mais FAT16 exige au moins 4085
-    # clusters : mkfs.vfat refuse en dessous, avec
-    #     mkfs.vfat: Attempting to create a too small or a too large filesystem
-    # et l'etape entiere retombait alors en silence sur le repli non signe.
-    # 16 Mo a 2 Ko par cluster (-s 4) font 8192 clusters - au large, et 16 Mo
-    # sur une ISO de plusieurs Go ne se voient pas.
+    # ── EFI system partition ──────────────────────────────────────────────────
+    # FAT16 with a 16 MB floor: the content is ~4 MB, but FAT16 needs at least
+    # 4085 clusters or mkfs.vfat fails. 16 MB with 2 KB clusters (-s 4) gives
+    # 8192 clusters.
     SB_ESP="$WORK/efi.img"
     SB_KB=$(( ( $(stat -Lc%s "$SB_SHIM") + $(stat -Lc%s "$SB_GRUB") \
               + $( [ -n "$SB_MM" ] && stat -Lc%s "$SB_MM" || echo 0 ) ) / 1024 + 2048 ))
@@ -110,15 +93,13 @@ if [ -n "$SB_SHIM" ] && [ -n "$SB_GRUB" ] && command -v mmd &>/dev/null; then
     mcopy -i "$SB_ESP" "$SB_GRUB" ::/EFI/BOOT/grubx64.efi
     [ -n "$SB_MM" ] && mcopy -i "$SB_ESP" "$SB_MM" ::/EFI/BOOT/mmx64.efi
 
-    # Stub : DERNIER RECOURS de la configuration embarquee dans gcdx64 - elle
-    # finit par "source $cmdpath/grub.cfg", et $cmdpath est le repertoire d'ou
-    # le firmware a charge le binaire, donc /EFI/BOOT sur cette ESP. Il sert
-    # aussi tel quel au repli grubx64 (prefixe /EFI/ubuntu).
+    # Stub: last resort of the config embedded in gcdx64, which ends with
+    # "source $cmdpath/grub.cfg" ($cmdpath = /EFI/BOOT on this ESP). Also used
+    # as-is by the grubx64 fallback (prefix /EFI/ubuntu).
     #
-    # "search --set=root" ne touche PAS a la variable quand il echoue : on vise
-    # donc une variable a nous, encore vide, pour pouvoir tester le resultat -
-    # et on le DIT quand rien n'est trouve, plutot que de rendre la main a une
-    # invite "grub>" que personne ne sait interpreter.
+    # "search --set=root" leaves the variable unchanged on failure, so a fresh
+    # variable is used to test the result, and a message is printed if nothing
+    # is found.
     cat > "$WORK/esp-grub.cfg" <<'ESPCFG'
 search --no-floppy --file --set=osmodev /.disk/info
 if [ -z "$osmodev" ]; then
@@ -135,16 +116,11 @@ ESPCFG
     mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/ubuntu/grub.cfg
     mcopy -i "$SB_ESP" "$WORK/esp-grub.cfg" ::/EFI/BOOT/grub.cfg
 
-    # ── LE MEME ARBRE, AUSSI DANS L'ISO9660 ─────────────────────────────────
-    # L'ESP appendue suffit a demarrer depuis un DVD ou une cle ecrite en mode
-    # image (dd, Rufus en mode DD). Elle ne suffit PAS a la methode la plus
-    # repandue sous Windows : formater la cle en FAT et y COPIER le contenu de
-    # l'ISO. Cette copie ne voit que l'ISO9660, ou /EFI/BOOT n'existerait pas -
-    # la cle ne demarre alors pas en UEFI, sans que rien n'explique pourquoi.
-    # C'est exactement ce que xorriso previent :
-    #     WARNING : EFI boot equipment is provided but no directory /EFI/BOOT
-    #     WARNING : will emerge in the ISO filesystem.
-    # Quelques Mo dupliques ; les ISO Ubuntu font de meme.
+    # ── Same tree in the ISO9660 filesystem ───────────────────────────────────
+    # The appended ESP is enough for DVDs and image-mode writes (dd, Rufus DD).
+    # Copying the ISO contents onto a FAT-formatted key (common on Windows) only
+    # sees the ISO9660, which also needs /EFI/BOOT (xorriso warns otherwise).
+    # Ubuntu ISOs do the same.
     mkdir -p "$ISOROOT/EFI/BOOT"
     cp "$SB_SHIM" "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
     cp "$SB_GRUB" "$ISOROOT/EFI/BOOT/grubx64.efi"
@@ -153,9 +129,9 @@ ESPCFG
     mkdir -p "$ISOROOT/EFI/ubuntu"
     cp "$WORK/esp-grub.cfg" "$ISOROOT/EFI/ubuntu/grub.cfg"
 
-    # ── L'amorce BIOS, construite ici puisqu'on n'appelle plus grub-mkrescue ──
-    # i386-pc-eltorito embarque deja cdboot.img : cette image est directement
-    # utilisable comme -eltorito-boot, pas de concatenation a faire.
+    # ── BIOS boot image, built here since grub-mkrescue is not used ───────────
+    # i386-pc-eltorito already includes cdboot.img: usable directly as
+    # -eltorito-boot.
     SB_BIOS="$WORK/eltorito.img"
     grub-mkimage -O i386-pc-eltorito -p /boot/grub -o "$SB_BIOS" \
         biosdisk iso9660 part_msdos part_gpt fat ext2 normal linux configfile \
@@ -164,10 +140,9 @@ ESPCFG
         halt reboot chain 2>/dev/null
 
     if [ -s "$SB_BIOS" ]; then
-        # -eltorito-alt-boot separe les deux entrees du catalogue : la premiere
-        # (BIOS) et la seconde (UEFI). "--interval:appended_partition_2" designe
-        # la partition qu'on ajoute juste apres, sans la copier deux fois dans
-        # l'image.
+        # -eltorito-alt-boot separates the two catalog entries (BIOS, then UEFI).
+        # "--interval:appended_partition_2" refers to the partition appended below,
+        # without storing it twice in the image.
         xorriso -as mkisofs -iso-level 3 \
             -volid "$LABEL" \
             -full-iso9660-filenames \
@@ -206,9 +181,7 @@ else
 fi
 
 if [ "$SECURE_BOOT_OK" != "1" ]; then
-# Repli : l'ancienne recette, mot pour mot. Elle produit une ISO qui demarre en
-# BIOS et en UEFI sans Secure Boot - c'est ce qu'on avait avant, et c'est mieux
-# que pas d'ISO du tout.
+# Fallback: ISO that boots in BIOS and UEFI without Secure Boot.
 #
 # Wrapper: inject -iso-level 3 (multi-extent, lifts the 4 GiB single-file cap)
 # into grub-mkrescue's internal `xorriso -as mkisofs` call.
@@ -239,7 +212,6 @@ if [ ! -f "$OUTPUT" ]; then
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. Always return 0 here.
 true

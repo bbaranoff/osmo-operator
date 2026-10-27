@@ -1,20 +1,20 @@
-# topo.py - inventaire du lab, HERITE des configurations.
+# topo.py - inventory of the lab, INHERITED from the configurations.
 #
-# Rien n'est ecrit en dur : les point codes, les adresses, les ports et les
-# services sont lus la ou ils font foi.
+# Nothing is hard-coded: point codes, addresses, ports and services are read
+# where they are authoritative.
 #
-#   1. "docker ps"                      -> quels noeuds tournent ici ;
-#   2. l'environnement du conteneur     -> OSMO_HUB_IP, WAN_NODE_ID (poses par
-#                                          start-docker.sh, cf. --hub-ip / --wan) ;
-#   3. /etc/osmocom/*.cfg DANS le noeud -> point code, routing keys, listeners
-#                                          M3UA, adresses SCCP, liens vers le
-#                                          hub. C'est la configuration REELLE,
-#                                          pas le gabarit du depot ;
-#   4. /proc/net/tcp DANS le noeud      -> quels VTY ecoutent vraiment, et la
-#                                          banniere de chacun dit QUEL demon
-#                                          repond (OsmoMSC, OsmoHLR, ...).
+#   1. "docker ps"                      -> which nodes run here;
+#   2. the container environment        -> OSMO_HUB_IP, WAN_NODE_ID (set by
+#                                          start-docker.sh, see --hub-ip / --wan);
+#   3. /etc/osmocom/*.cfg IN the node   -> point code, routing keys, M3UA
+#                                          listeners, SCCP addresses, links to
+#                                          the hub. This is the REAL
+#                                          configuration, not the repo template;
+#   4. /proc/net/tcp IN the node        -> which VTYs really listen, and each
+#                                          banner says WHICH daemon answers
+#                                          (OsmoMSC, OsmoHLR, ...).
 #
-# Les gabarits de configs/ ne servent que de repli quand aucun noeud ne tourne.
+# The templates in configs/ are only a fallback when no node runs.
 
 import json
 import os
@@ -23,8 +23,8 @@ import subprocess
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Sonde poussee dans le noeud : liste les VTY qui ecoutent et lit leur
-# banniere. Une seule execution par noeud, tout en parallele.
+# Probe pushed into the node: lists the listening VTYs and reads their
+# banner. One execution per node, all in parallel.
 _PROBE = r'''
 import json, socket, sys, threading
 
@@ -84,7 +84,7 @@ for t in th:
 print(json.dumps(res))
 '''
 
-# Nom court affiche dans le schema, deduit de la banniere ("OsmoMSC" -> MSC).
+# Short name shown in the diagram, derived from the banner ("OsmoMSC" -> MSC).
 _PRETTY = {
     "OsmoSTP": ("STP", "SS7"),
     "OsmoMSC": ("MSC/VLR", "coeur"),
@@ -102,7 +102,7 @@ _PRETTY = {
     "mobile": ("MS", "mobile"),
 }
 
-# Repli quand la banniere ne dit rien (VTY muet, demon en cours de demarrage).
+# Fallback when the banner says nothing (silent VTY, daemon still starting).
 _BY_PORT = {
     4238: "OsmoHNBGW", 4239: "OsmoSTP", 4240: "OsmoPCU", 4241: "OsmoBTS",
     4242: "OsmoBSC", 4243: "OsmoMGW", 4245: "OsmoSGSN", 4246: "OsmoGbProxy",
@@ -123,7 +123,7 @@ def sh(args, timeout=20):
 
 
 class Service(object):
-    """Un demon joignable par VTY sur un noeud."""
+    """A daemon reachable by VTY on a node."""
 
     def __init__(self, node, port, daemon, label, family):
         self.node = node
@@ -137,22 +137,22 @@ class Service(object):
 
 
 class Node(object):
-    """Un noeud du lab : conteneur operateur, ou hub inter-STP."""
+    """A lab node: operator container, or inter-STP hub."""
 
     def __init__(self, name, role, index=None):
-        self.name = name            # nom du conteneur, ou "local"
+        self.name = name            # container name, or "local"
         self.role = role            # "operator" | "interstp"
-        self.index = index          # numero d'operateur
+        self.index = index          # operator number
         self.point_code = ""        # 1.11.2
-        self.hub_ip = ""            # adresse de l'inter-STP vu par ce noeud
+        self.hub_ip = ""            # inter-STP address as seen by this node
         self.hub_port = 2908
         self.local_m3ua = 2905
-        self.routing_ctx = None     # routing key vers le hub
+        self.routing_ctx = None     # routing key to the hub
         self.wan_node = ""
         self.services = []          # [Service]
-        self.sccp = {}              # nom -> {"pc":..., "ssn":..., "ri":...}
+        self.sccp = {}              # name -> {"pc":..., "ssn":..., "ri":...}
         self.env = {}
-        self.cfg = {}               # fichier -> texte
+        self.cfg = {}               # file -> text
 
     @property
     def title(self):
@@ -198,12 +198,13 @@ class Topology(object):
         return None
 
     def free_point_codes(self, count=1):
-        """Point codes libres pour la console, au FORMAT DU LAB (ITU 3-8-3).
+        """Free point codes for the console, in the LAB FORMAT (ITU 3-8-3).
 
-        Le troisieme membre tient sur 3 bits : 0 a 7. Un "1.11.60" deborderait
-        et serait recu comme un autre point code (1.15.4) - le message partirait
-        vers un voisin, ou nulle part. On choisit donc dans les valeurs libres
-        du meme groupe que les STP operateur (qui utilisent .1 a .3)."""
+        The third member fits in 3 bits: 0 to 7. A "1.11.60" would overflow
+        and be received as another point code (1.15.4) - the message would go
+        to a neighbour, or nowhere. The choice is therefore made among the
+        free values of the same group as the operator STPs (which use .1 to
+        .3)."""
         used = set(n.point_code for n in self.nodes if n.point_code)
         for node in self.nodes:
             for addr in node.sccp.values():
@@ -235,7 +236,7 @@ class Topology(object):
         return self.free_point_codes(1)[0]
 
 
-# ── lecture des configurations dans un noeud ──────────────────────────────────
+# ── reading the configurations in a node ──────────────────────────────────────
 
 _CFG_FILES = ["osmo-stp.cfg", "osmo-msc.cfg", "osmo-bsc.cfg", "osmo-hlr.cfg",
               "osmo-sgsn.cfg", "osmo-ggsn.cfg", "osmo-mgw.cfg"]
@@ -279,8 +280,8 @@ def _parse_stp(node):
 
 
 def _parse_sccp(node):
-    """Adresses SCCP declarees (osmo-bsc.cfg / osmo-msc.cfg) : c'est par la
-    qu'on connait les SSN et les point codes des paires A-interface."""
+    """Declared SCCP addresses (osmo-bsc.cfg / osmo-msc.cfg): this is where
+    the SSNs and point codes of the A-interface pairs come from."""
     for fname in ("osmo-bsc.cfg", "osmo-msc.cfg"):
         txt = node.cfg.get(fname, "")
         if not txt:
@@ -299,7 +300,7 @@ def _parse_sccp(node):
             if m:
                 entry["ri"] = m.group(1)
             node.sccp[name] = entry
-        # cs7 instance N / point-code du demon lui-meme
+        # cs7 instance N / point-code of the daemon itself
         m = re.search(r"^\s*point-code\s+(\S+)", txt, re.M)
         if m:
             node.sccp.setdefault("_self_" + fname, {"pc": m.group(1), "ssn": None,
@@ -340,7 +341,7 @@ def _env(name):
 
 
 def _native_present():
-    """Cette machine porte-t-elle une pile Osmocom native ?"""
+    """Does this machine carry a native Osmocom stack?"""
     if os.path.isdir("/etc/osmocom") and os.listdir("/etc/osmocom"):
         return True
     return bool(sh(["pgrep", "-f", "osmo-stp"]).strip())
@@ -379,10 +380,10 @@ def discover(docker=None, probe=True):
             node.hub_ip = node.env.get("OSMO_HUB_IP", "")
         topo.nodes.append(node)
 
-    # Repli natif : SEULEMENT si cette machine porte vraiment une pile Osmocom.
-    # Sans cette verification, un lab docker eteint se presentait comme un
-    # "operateur natif" sans point code ni service - un inventaire imaginaire,
-    # plus trompeur qu'un franc "il n'y a rien ici".
+    # Native fallback: ONLY if this machine really carries an Osmocom stack.
+    # Without this check, a stopped docker lab would show up as a "native
+    # operator" with no point code nor service - an imaginary inventory,
+    # more misleading than a plain "nothing here".
     if not docker and not _native_present():
         topo.errors.append(
             "aucun noeud : ni conteneur osmo-* en cours, ni /etc/osmocom sur "
@@ -394,8 +395,8 @@ def discover(docker=None, probe=True):
         _parse_sccp(node)
         if probe:
             _probe_vty(node, False)
-        # Un repertoire /etc/osmocom peut n'etre qu'un reste d'installation :
-        # sans point code lisible ni VTY qui repond, il n'y a pas de noeud.
+        # An /etc/osmocom directory may be a mere leftover of an install:
+        # without a readable point code nor an answering VTY, there is no node.
         if node.point_code or node.services:
             topo.nodes.append(node)
         else:
@@ -413,8 +414,8 @@ def discover(docker=None, probe=True):
 
     hub = topo.hub
     if hub is None and topo.hub_ip:
-        # Hub distant (WAN) : il ne tourne pas ici, mais il fait partie du
-        # schema - c'est par lui que passe tout le SS7 inter-operateur.
+        # Remote hub (WAN): it does not run here, but it is part of the
+        # diagram - all inter-operator SS7 goes through it.
         hub = Node("hub-distant", "interstp")
         hub.point_code = "0.0.0"
         hub.hub_ip = topo.hub_ip

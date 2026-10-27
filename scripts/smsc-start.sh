@@ -1,6 +1,6 @@
 #!/bin/bash
-# smsc-start.sh - Lance le proto-smsc-daemon + le relay interop
-# Fix: attente HLR GSUP robuste + verification socket sendmt avec retry
+# smsc-start.sh - starts proto-smsc-daemon + the interop relay
+# Waits for the HLR GSUP port, then checks the sendmt socket with retries.
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ echo -e "  Routing    : ${CYAN}${ROUTING_CONF}${NC}"
 rm -f "$SENDMT_SOCKET"
 mkdir -p /var/log/osmocom
 
-# ── Attente HLR GSUP (port 4222) - robuste ──────────────────────────────────
+# ── Wait for the HLR GSUP port (4222) ──────────────────────────────────────
 echo -ne "${YELLOW}[SMSC] Attente OsmoHLR GSUP (4222)"
 retries=60
 while [ $retries -gt 0 ]; do
@@ -35,7 +35,7 @@ while [ $retries -gt 0 ]; do
         echo -e " ${GREEN}✓${NC}"
         break
     fi
-    # Fallback: verifier aussi via ss
+    # Fallback: also check with ss
     if ss -tln 2>/dev/null | grep -q ":4222 "; then
         echo -e " ${GREEN}✓${NC}"
         break
@@ -54,17 +54,17 @@ sleep 3
 # ── 1. proto-smsc-daemon (background) ────────────────────────────────────────
 echo -e "${GREEN}[1/2] proto-smsc-daemon${NC}"
 
-# Verifier que le binaire existe
+# Check that the binary exists
 if ! command -v proto-smsc-daemon >/dev/null 2>&1; then
     echo -e "  ${RED}proto-smsc-daemon introuvable dans PATH${NC}"
     echo -e "  ${YELLOW}SMS local uniquement via MSC VTY${NC}"
-    # Lancer quand meme le relay pour les SMS entrants via TCP
+    # Still start the relay for incoming SMS over TCP
 else
     proto-smsc-daemon "$HLR_IP" "$SMSC_IPA_NAME" "$MO_LOG" "$SENDMT_SOCKET" &
     DAEMON_PID=$!
     echo -e "  PID: ${CYAN}${DAEMON_PID}${NC}"
 
-    # Attente du socket sendmt avec timeout
+    # Wait for the sendmt socket, with timeout
     echo -ne "  Socket sendmt"
     for i in $(seq 1 30); do
         if [ -S "$SENDMT_SOCKET" ]; then
@@ -82,15 +82,15 @@ fi
 # ── 2. Relay interop (background) ────────────────────────────────────────────
 echo -e "${GREEN}[2/2] sms-interop-relay${NC}"
 
-# Verifier que le script existe
+# Check that the script exists
 RELAY_SCRIPT="/etc/osmocom/sms-interop-relay.py"
 if [ ! -f "$RELAY_SCRIPT" ]; then
     echo -e "  ${RED}${RELAY_SCRIPT} introuvable${NC}"
     echo -e "  ${YELLOW}SMS inter-operateur desactive${NC}"
 else
-    # --node-id : la cle de routage de sms-routing.conf est le NOEUD, pas
-    # l'operateur (MSISDN = <noeud>00<operateur><rang>). Sans elle, le relais
-    # tient pour locaux les numeros des autres noeuds et n'emet jamais.
+    # --node-id: the routing key of sms-routing.conf is the node, not the
+    # operator (MSISDN = <node>00<operator><rank>). Without it the relay takes
+    # the numbers of the other nodes for local ones and never sends.
     python3 "$RELAY_SCRIPT" \
         --config "$ROUTING_CONF" \
         --port "$RELAY_PORT" \
@@ -100,7 +100,7 @@ else
     RELAY_PID=$!
     echo -e "  PID: ${CYAN}${RELAY_PID}${NC}"
 
-    # Verifier que le port TCP est en ecoute
+    # Check that the TCP port is listening
     echo -ne "  Relay TCP ${RELAY_PORT}"
     for i in $(seq 1 15); do
         if ss -tlnp 2>/dev/null | grep -q ":${RELAY_PORT} "; then
@@ -128,7 +128,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# Attendre fin d'un processus
+# Wait for one of the processes to end
 if [ -n "${DAEMON_PID:-}" ] && [ -n "${RELAY_PID:-}" ]; then
     wait -n $DAEMON_PID $RELAY_PID 2>/dev/null || true
 elif [ -n "${DAEMON_PID:-}" ]; then
@@ -136,7 +136,7 @@ elif [ -n "${DAEMON_PID:-}" ]; then
 elif [ -n "${RELAY_PID:-}" ]; then
     wait $RELAY_PID 2>/dev/null || true
 else
-    # Aucun processus a attendre - juste dormir
+    # No process to wait for - just sleep
     while true; do sleep 60; done
 fi
 

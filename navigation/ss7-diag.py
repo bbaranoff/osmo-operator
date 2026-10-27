@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-# ss7-diag.py - diagnostic SS7 complet du lab, depuis l'hote.
+# ss7-diag.py - complete SS7 diagnostic of the lab, from the host.
 #
-# Le script se situe TOUT SEUL : il deduit le depot de son propre chemin, et
-# la topologie des conteneurs et de leurs configurations. Aucun argument n'est
-# necessaire.
+# The script locates itself: it derives the repository from its own path, and
+# the topology from the containers and their configurations. No argument is
+# needed.
 #
-#   ./navigation/ss7-diag.py               diagnostic complet
-#   ./navigation/ss7-diag.py --rapide      sans les tests M3UA/MAP
-#   ./navigation/ss7-diag.py --log FICHIER copie integrale dans un fichier
+#   ./navigation/ss7-diag.py               complete diagnostic
+#   ./navigation/ss7-diag.py --rapide      without the M3UA/MAP tests
+#   ./navigation/ss7-diag.py --log FILE    full copy into a file
 #
-# Ce qui est verifie, dans l'ordre ou une panne se lit :
-#   1. l'environnement (docker, SCTP, modules) ;
-#   2. la topologie heritee des configurations ;
-#   3. par operateur : STP, MSC, BSC, HLR - VTY, AS, ASP, routes, SSN ;
-#   4. le lien vers l'inter-STP : association SCTP, etat de l'AS ;
-#   5. la console comme ASP M3UA : ASPUP, RKM, ASPAC, puis audit de chaque
-#      point code connu ;
-#   6. un aller-retour MAP reel (sendRoutingInfoForSM) a travers le hub.
+# What is checked, in the order a failure is read:
+#   1. the environment (docker, SCTP, modules);
+#   2. the topology inherited from the configurations;
+#   3. per operator: STP, MSC, BSC, HLR - VTY, AS, ASP, routes, SSN;
+#   4. the link to the inter-STP: SCTP association, AS state;
+#   5. the console as M3UA ASP: ASPUP, RKM, ASPAC, then audit of every known
+#      point code;
+#   6. a real MAP round trip (sendRoutingInfoForSM) through the hub.
 #
-# Code de sortie = nombre d'echecs.
+# Exit code = number of failures.
 
 import argparse
 import os
@@ -87,7 +87,7 @@ def sh(cmd):
         return ""
 
 
-# ── 1. environnement ─────────────────────────────────────────────────────────
+# ── 1. environment ───────────────────────────────────────────────────────────
 def check_env():
     section("1. ENVIRONNEMENT")
     if sh("docker ps --format '{{.Names}}'").strip():
@@ -106,7 +106,7 @@ def check_env():
     out("    python  : %s" % sys.version.split()[0])
 
 
-# ── 2. topologie ─────────────────────────────────────────────────────────────
+# ── 2. topology ──────────────────────────────────────────────────────────────
 def check_topo(topo):
     section("2. TOPOLOGIE (heritee des configurations)")
     if not topo.operators:
@@ -137,7 +137,7 @@ def check_topo(topo):
                 continue
             info("%-10s %-10s PC %-8s SSN %s" % (node.title, nom, addr["pc"],
                                                  addr.get("ssn")))
-        # Format ITU 3-8-3 : le troisieme membre tient sur 3 bits.
+        # ITU 3-8-3 format: the third member fits in 3 bits.
         membres = node.point_code.split(".")
         if len(membres) == 3:
             a, b, c = (int(x) for x in membres)
@@ -149,7 +149,7 @@ def check_topo(topo):
         info("point codes libres pour la console : %s" % ", ".join(libres))
 
 
-# ── 3. les demons, par operateur ─────────────────────────────────────────────
+# ── 3. the daemons, per operator ─────────────────────────────────────────────
 def check_nodes(topo, pool):
     for node in topo.operators:
         section("3. %s (%s)" % (node.title, node.name))
@@ -181,10 +181,10 @@ def check_nodes(topo, pool):
             ok("route par defaut vers l'inter-STP : presente et avail")
         else:
             fail("route par defaut vers l'inter-STP absente ou indisponible")
-        # PROHIB : on distingue une vraie panne (un noeud DU LAB devenu
-        # inaccessible) d'une route dynamique laissee par un point code de
-        # passage - une console SS7 arretee, un noeud WAN eteint. Les
-        # confondre ferait crier au feu a chaque fois qu'on ferme la console.
+        # PROHIB: a real failure (a node OF THE LAB become unreachable) is
+        # told from a dynamic route left by a transient point code - a
+        # stopped SS7 console, a WAN node switched off. Mixing them up would
+        # raise an alarm every time the console is closed.
         connus = set()
         for autre in topo.operators:
             if autre.point_code:
@@ -212,8 +212,8 @@ def check_nodes(topo, pool):
             if re.search(r"\b%d\b" % ssn, users):
                 info("SSN %s (%s) enregistre sur le STP" % (ssn, nom))
 
-        # Sans sondage des VTY (--no-probe), on retombe sur les ports usuels
-        # plutot que d'annoncer un MSC ou un HLR "absent" qui tourne tres bien.
+        # Without VTY probing (--no-probe), fall back to the usual ports
+        # rather than reporting an "absent" MSC or HLR that runs fine.
         def service(daemon, defaut):
             svc = node.service(daemon)
             if svc:
@@ -250,7 +250,7 @@ def check_nodes(topo, pool):
             warn("BSC : VTY injoignable (%s)" % exc)
 
 
-# ── 4. lien vers le hub, vu des noeuds ───────────────────────────────────────
+# ── 4. link to the hub, seen from the nodes ─────────────────────────────────────
 def check_hub_link(topo):
     section("4. LIEN VERS L'INTER-STP (vu des noeuds)")
     if not topo.hub_ip:
@@ -272,7 +272,7 @@ def check_hub_link(topo):
                  % (node.title, topo.hub_ip, port))
 
 
-# ── 5. la console comme ASP ──────────────────────────────────────────────────
+# ── 5. the console as ASP ────────────────────────────────────────────────────
 def check_console_asp(topo):
     section("5. LA CONSOLE COMME ASP M3UA")
     if not topo.hub_ip:
@@ -314,7 +314,7 @@ def check_console_asp(topo):
     return client
 
 
-# ── 6. aller-retour MAP reel ─────────────────────────────────────────────────
+# ── 6. real MAP round trip ──────────────────────────────────────────────────
 def check_map(topo, client, pool):
     section("6. ALLER-RETOUR MAP (sendRoutingInfoForSM)")
     if client is None:

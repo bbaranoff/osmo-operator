@@ -1,23 +1,23 @@
 #!/bin/bash
-# osmo-patches-apply.sh - applique patches/*.patch sur les arbres de $GSM_ROOT.
+# osmo-patches-apply.sh - apply patches/*.patch on the trees under $GSM_ROOT.
 #
-# Idempotent : un correctif deja present (git apply -R --check) est passe, un
-# correctif qui ne s applique pas est signale, jamais fatal. Sert a l install
-# native (install_modules/40-patches.sh), a l ISO (iso_modules/70-scripts.sh,
-# sur le rootfs), a update.sh (rattrapage d une machine installee) et au
-# supplement --calypso-fw (tools/osmo-firmwares-install.sh).
+# Idempotent: a patch already present (git apply -R --check) is skipped, a
+# patch that does not apply is reported, never fatal. Used by the native
+# install (install_modules/40-patches.sh), the ISO (iso_modules/70-scripts.sh,
+# on the rootfs), update.sh (catch-up on an installed machine) and the
+# --calypso-fw supplement (tools/osmo-firmwares-install.sh).
 #
-#   osmo-patches-apply.sh [GSM_ROOT]        defaut : /opt/GSM
-#   OSMO_PATCHES_ONLY=osmocom-bb            ne traite que les correctifs de cet arbre
-#   OSMO_PATCHES_QUIET=1                    n affiche que les applications et les echecs
+#   osmo-patches-apply.sh [GSM_ROOT]        default: /opt/GSM
+#   OSMO_PATCHES_ONLY=osmocom-bb            only handle the patches of this tree
+#   OSMO_PATCHES_QUIET=1                    only print applications and failures
 #
-# Code de retour : 0 si rien n a echoue, 1 si au moins un correctif ne s applique pas.
+# Exit code: 0 if nothing failed, 1 if at least one patch does not apply.
 set -u
 GSM_ROOT="${1:-${GSM_ROOT:-/opt/GSM}}"
 REPO="${REPO:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${RED:=}"; : "${NC:=}"
 
-# arbre vise par un correctif, d apres son prefixe
+# tree targeted by a patch, from its prefix
 osmo_patch_target() {
     case "$(basename "$1")" in
         osmo-bts-*)               printf '%s\n' "$GSM_ROOT/osmo-bts" ;;

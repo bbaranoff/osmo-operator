@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# overlay-draw.py - dessin vectoriel façon Inkscape, en OVERLAY transparent
-# TOUJOURS AU PREMIER PLAN par-dessus le bureau. Tout tient dans UNE fenêtre :
-# le canevas plein écran + une barre d'outils verticale collée EN BAS À DROITE.
+# overlay-draw.py - Inkscape-style vector drawing, as a transparent OVERLAY
+# ALWAYS ON TOP of the desktop. Everything fits in ONE window: the full-screen
+# canvas + a vertical toolbar stuck to the BOTTOM RIGHT.
 #
-# Feutre (outil par défaut) : on MAINTIENT le clic gauche pour tracer à main
-# levée ; le trait reste au premier plan et il est effaçable (gomme, ou la case
-# « tout effacer » du coin bas-droit).
+# Pen (default tool): HOLD the left click to draw freehand; the stroke stays
+# on top and can be erased (eraser, or the "clear all" box in the bottom
+# right corner).
 #
-# Barre d'outils (de bas en haut, collée au bord droit et au bord bas) :
-#   [C]  Tout effacer   (case rouge, dans le coin)
-#   Gomme · Couleur (cliquer = couleur suivante) · − · +  (épaisseur)
-#   Ellipse · Rectangle · Segment · Feutre · Déplacer · Annuler
-#   Traverser (clic-à-travers) · Quitter
+# Toolbar (from bottom to top, stuck to the right and bottom edges):
+#   [C]  Clear all   (red box, in the corner)
+#   Eraser · Colour (click = next colour) · − · +  (thickness)
+#   Ellipse · Rectangle · Segment · Pen · Move · Undo
+#   Click-through · Quit
 #
-# Molette   = épaisseur du trait.
-# Clavier   : b feutre · l segment · r rect · e ellipse · x gomme · s déplacer
-#             z annuler · Suppr efface la sélection · Espace traverser · Échap/q quitter
+# Wheel     = stroke thickness.
+# Keyboard  : b pen · l segment · r rect · e ellipse · x eraser · s move
+#             z undo · Del deletes the selection · Space click-through · Esc/q quit
 #
-# X11 + compositeur (GNOME/mutter) requis pour la transparence par pixel.
+# X11 + compositor (GNOME/mutter) required for per-pixel transparency.
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
@@ -30,12 +30,12 @@ import os
 
 GRAB_R = 14
 HIT_TOL = 8
-BS = 46          # côté d'un bouton de la barre
-GAP = 6          # espace entre boutons
-MARGIN = 12      # marge aux bords droit / bas
-DOT_R = 24       # rayon de la pastille de rappel (état dormant)
-DOT_MARGIN = 22  # marge de la pastille aux bords
-HOLD_MS = 220    # durée de maintien du 2e clic pour réveiller depuis la pastille
+BS = 46          # side of a toolbar button
+GAP = 6          # gap between buttons
+MARGIN = 12      # margin to the right / bottom edges
+DOT_R = 24       # radius of the reminder dot (dormant state)
+DOT_MARGIN = 22  # margin of the dot to the edges
+HOLD_MS = 220    # hold time of the 2nd click to wake up from the dot
 
 SWATCHES = [
     (0.00, 0.82, 1.00), (1.00, 0.58, 0.00), (0.20, 0.90, 0.35),
@@ -43,7 +43,7 @@ SWATCHES = [
     (1.00, 1.00, 1.00), (0.05, 0.05, 0.05),
 ]
 
-# ordre de la barre, du COIN bas-droit vers le HAUT
+# toolbar order, from the bottom-right CORNER UPWARDS
 TOOLBAR = ["clear", "eraser", "color", "width_dn", "width_up",
            "ellipse", "rect", "line", "pencil", "select", "undo",
            "pass", "quit"]
@@ -114,10 +114,10 @@ class Overlay(Gtk.Window):
         self.set_skip_pager_hint(True)
         self.stick()
 
-        # état du document
+        # document state
         self.objects = []
         self.selected = None
-        self.tool = "pencil"           # le feutre par défaut
+        self.tool = "pencil"           # the pen by default
         self.color_idx = 0
         self.color = SWATCHES[0]
         self.width = 4.0
@@ -127,15 +127,15 @@ class Overlay(Gtk.Window):
         self.redo_stack = []
         self.status = ""
         self.status_until = 0
-        self.dormant = False           # rangé dans la pastille du coin
-        self._dot_pressed = False      # 2e clic de la pastille maintenu ?
+        self.dormant = False           # tucked away in the corner dot
+        self._dot_pressed = False      # 2nd click on the dot held?
 
-        # état d'interaction
+        # interaction state
         self.drag = None
         self.start = None
         self.temp = None
         self.pen_pts = None
-        self.buttons = []              # [(id, x, y, w, h)] recalculé au rendu
+        self.buttons = []              # [(id, x, y, w, h)] recomputed on render
 
         self.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -153,7 +153,7 @@ class Overlay(Gtk.Window):
         self.show_all()
         GLib.timeout_add(300, lambda: (self.set_keep_above(True), False)[1])
 
-    # ── barre d'outils : géométrie et clics ────────────────────────────────
+    # ── toolbar: geometry and clicks ──────────────────────────────────────
     def layout_buttons(self, W, H):
         self.buttons = []
         x = W - MARGIN - BS
@@ -174,8 +174,8 @@ class Overlay(Gtk.Window):
         return reg
 
     def full_region(self):
-        # ce binding refuse None pour « pas de forme » : on redonne l'entree a
-        # toute la fenetre avec une region pleine (equivalent a aucune forme).
+        # this binding refuses None for "no shape": input is given back to the
+        # whole window with a full region (equivalent to no shape).
         a = self.get_allocation()
         return cairo.Region(cairo.RectangleInt(0, 0, max(a.width, 1), max(a.height, 1)))
 
@@ -201,7 +201,7 @@ class Overlay(Gtk.Window):
             self.go_dormant()
         self.queue_draw()
 
-    # ── état dormant : tout se range dans une pastille au coin bas-droit ─────
+    # ── dormant state: everything tucks into a dot in the bottom-right corner ─
     def dot_center(self):
         a = self.get_allocation()
         return a.width - DOT_MARGIN - DOT_R, a.height - DOT_MARGIN - DOT_R
@@ -213,8 +213,8 @@ class Overlay(Gtk.Window):
                                                int(2 * r), int(2 * r)))
 
     def go_dormant(self):
-        # la croix (X) ne quitte pas : elle range. Le dessin disparaît, seule
-        # la pastille reste, toujours au-dessus. Le travail est gardé en mémoire.
+        # the cross (X) does not quit: it tucks away. The drawing disappears, only
+        # the dot remains, always on top. The work is kept in memory.
         self.dormant = True
         self.drag = None
         self.temp = None
@@ -234,13 +234,13 @@ class Overlay(Gtk.Window):
         self.queue_draw()
 
     def _dot_wake_if_held(self):
-        # appelé HOLD_MS après le 2e clic : on ne reveille que s'il est encore
-        # enfonce -> « double-clic dont le deuxieme appui reste long ».
+        # called HOLD_MS after the 2nd click: wake up only if it is still
+        # pressed -> "double-click whose second press stays long".
         if self.dormant and self._dot_pressed:
             self.wake()
         return False
 
-    # ── helpers document ────────────────────────────────────────────────────
+    # ── document helpers ────────────────────────────────────────────────────
     def new_obj(self, typ, pts):
         return {"type": typ, "pts": pts, "stroke": self.color,
                 "width": self.width, "fill": self.color if self.fill else None}
@@ -268,7 +268,7 @@ class Overlay(Gtk.Window):
         self.status_until = time.time() + 1.5
         self.queue_draw()
 
-    # ── historique ──────────────────────────────────────────────────────────
+    # ── history ─────────────────────────────────────────────────────────────
     def push_undo(self):
         self.undo_stack.append(copy.deepcopy(self.objects))
         if len(self.undo_stack) > 120:
@@ -301,7 +301,7 @@ class Overlay(Gtk.Window):
             self.selected = None
             self.flash("tableau effacé")
 
-    # ── clic-à-travers : seule la barre reste cliquable ────────────────────
+    # ── click-through: only the toolbar stays clickable ────────────────────
     def set_passthrough(self, on):
         self.passthrough = on
         gw = self.get_window()
@@ -309,7 +309,7 @@ class Overlay(Gtk.Window):
             gw.input_shape_combine_region(self.toolbar_region() if on else self.full_region(), 0, 0)
         self.flash("clic-à-travers " + ("ON" if on else "OFF"))
 
-    # ── entrées souris ────────────────────────────────────────────────────
+    # ── mouse input ───────────────────────────────────────────────────────
     def on_press(self, w, e):
         x, y = e.x, e.y
         if self.dormant:
@@ -351,7 +351,7 @@ class Overlay(Gtk.Window):
             self.drag = ("erase",)
             self.queue_draw()
             return True
-        if tool == "pencil":                       # le feutre
+        if tool == "pencil":                       # the pen
             self.push_undo()
             self.temp = self.new_obj("path", [(x, y)])
             self.drag = ("free",)
@@ -439,7 +439,7 @@ class Overlay(Gtk.Window):
                 self.tool = m[k]; self.finish_pen(); self.queue_draw()
         return True
 
-    # ── rendu des objets ────────────────────────────────────────────────────
+    # ── object rendering ────────────────────────────────────────────────────
     def draw_obj(self, cr, o, ghost=False):
         pts = o["pts"]; r, g, b = o["stroke"]; a = 0.45 if ghost else 0.97
         cr.set_line_cap(cairo.LINE_CAP_ROUND); cr.set_line_join(cairo.LINE_JOIN_ROUND)
@@ -470,10 +470,10 @@ class Overlay(Gtk.Window):
     def on_draw(self, w, cr):
         a = self.get_allocation()
 
-        # fond
+        # background
         cr.set_operator(cairo.OPERATOR_SOURCE)
         if self.dormant:
-            cr.set_source_rgba(0, 0, 0, 0.0)      # rien que la pastille
+            cr.set_source_rgba(0, 0, 0, 0.0)      # only the dot
         else:
             cr.set_source_rgba(0, 0, 0, 0.0 if self.has_alpha else 0.08)
         cr.paint()
@@ -489,7 +489,7 @@ class Overlay(Gtk.Window):
         if self.temp:
             self.draw_obj(cr, self.temp, ghost=True)
 
-        # sélection
+        # selection
         sel = self.selected
         if sel is not None and sel in self.objects and self.tool == "select":
             x0, y0, x1, y1 = obj_bbox(sel)
@@ -502,27 +502,27 @@ class Overlay(Gtk.Window):
             self._text(cr, self.status, 18, 30, (1, 1, 1))
         return False
 
-    # ── la pastille de rappel (état dormant) ───────────────────────────────
+    # ── the reminder dot (dormant state) ───────────────────────────────────
     def draw_dot(self, cr):
         cx, cy = self.dot_center()
-        cr.arc(cx, cy, DOT_R, 0, 2 * math.pi)          # halo sombre
+        cr.arc(cx, cy, DOT_R, 0, 2 * math.pi)          # dark halo
         cr.set_source_rgba(0, 0, 0, 0.5); cr.fill()
-        cr.arc(cx, cy, DOT_R - 3, 0, 2 * math.pi)      # pastille couleur
+        cr.arc(cx, cy, DOT_R - 3, 0, 2 * math.pi)      # coloured dot
         cr.set_source_rgba(*self.color, 0.95); cr.fill()
         cr.arc(cx, cy, DOT_R - 3, 0, 2 * math.pi)
         cr.set_source_rgba(1, 1, 1, 0.85); cr.set_line_width(1.5); cr.stroke()
-        # petit trait de feutre en signe
+        # small pen stroke as a sign
         cr.set_source_rgba(1, 1, 1, 0.95)
         cr.set_line_width(2.4); cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.move_to(cx - 10, cy + 5)
         cr.curve_to(cx - 3, cy - 10, cx + 3, cy + 10, cx + 10, cy - 5)
         cr.stroke()
 
-    # ── barre d'outils dessinée dans le canevas ────────────────────────────
+    # ── toolbar drawn in the canvas ────────────────────────────────────────
     def draw_toolbar(self, cr):
         for bid, x, y, w, h in self.buttons:
             active = (bid == self.tool)
-            # fond du bouton
+            # button background
             self._round_rect(cr, x, y, w, h, 9)
             if bid == "clear":
                 cr.set_source_rgba(0.80, 0.12, 0.16, 0.92)
@@ -564,7 +564,7 @@ class Overlay(Gtk.Window):
             cr.rectangle(cx - 11, cy - 8, 22, 16); cr.stroke()
         elif bid == "line":
             cr.move_to(cx - 11, cy + 9); cr.line_to(cx + 11, cy - 9); cr.stroke()
-        elif bid == "pencil":                       # feutre : petite vague
+        elif bid == "pencil":                       # pen: small wave
             cr.move_to(cx - 12, cy + 6)
             cr.curve_to(cx - 4, cy - 12, cx + 4, cy + 12, cx + 12, cy - 6)
             cr.stroke()
@@ -588,7 +588,7 @@ class Overlay(Gtk.Window):
             cr.move_to(cx - 8, cy - 8); cr.line_to(cx + 8, cy + 8)
             cr.move_to(cx + 8, cy - 8); cr.line_to(cx - 8, cy + 8); cr.stroke()
 
-        # valeur d'épaisseur affichée sur les boutons − / +
+        # thickness value shown on the − / + buttons
         if bid == "width_up":
             self._text(cr, "%d" % self.width, x + 4, y - 4, (0.8, 0.85, 0.9), 12)
 
@@ -613,7 +613,7 @@ class Overlay(Gtk.Window):
         cr.move_to(x + 1, y + 1); cr.set_source_rgba(0, 0, 0, .8); cr.show_text(s)
         cr.move_to(x, y); cr.set_source_rgba(*rgb, 1); cr.show_text(s)
 
-    # ── export (bonus, touche non mappée dans la barre pour rester compact) ──
+    # ── export (bonus, key not mapped in the toolbar to stay compact) ──
     def export(self):
         ts = time.strftime("%Y%m%d-%H%M%S")
         base = os.path.expanduser("~/overlay-draw-%s" % ts)

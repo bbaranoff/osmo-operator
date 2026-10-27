@@ -1,25 +1,23 @@
 [Unit]
 # =============================================================================
-#  open5gs-webui.service - LA CONSOLE DES ABONNES 4G (Open5GS WebUI), sur :9999
+#  open5gs-webui.service - the 4G subscriber console (Open5GS WebUI), on :9999
 # =============================================================================
-#  [2026-09-10] Le banc portait la 4G complete (tools/osmo-lte.sh : Open5GS,
-#  srsENB, srsUE) mais AUCUNE console : provisionner un abonne LTE se faisait a
-#  la main dans MongoDB, ou par « osmo-epc subscribers » qui rejoue le JSON du
-#  depot. Le WebUI d Open5GS est fait pour ca, il vit dans les sources
-#  (webui/ du depot open5gs) et c est un Next.js : node server/index.js.
+#  The Open5GS WebUI lives in the sources (webui/ of the open5gs repository)
+#  and is a Next.js application: node server/index.js. It is the console used
+#  to provision LTE subscribers (the alternative is MongoDB by hand, or
+#  « osmo-epc subscribers », which replays the repository JSON).
 #
-#  ELLE NE LIT PAS LES DEMONS, ELLE LIT MONGODB - la meme base que le HSS et le
-#  PCRF (DB_URI). D ou After=mongod : sans base, le WebUI demarre et sert des
-#  pages vides. Il ne DEPEND pas d Open5GS lui-meme : on provisionne des
-#  abonnes coeur eteint, c est meme le moment habituel.
+#  It does not talk to the daemons, it reads MongoDB - the same database as the
+#  HSS and the PCRF (DB_URI). Hence After=mongod: without the database the WebUI
+#  starts and serves empty pages. It does not depend on Open5GS itself:
+#  subscribers are usually provisioned with the core stopped.
 #
-#  CONDITION, PAS DEPENDANCE. L unite est ACTIVEE par defaut (ISO et natif),
-#  mais le WebUI n est pas toujours construit : les .deb du banc
-#  (osmo-build-open5gs) n embarquent que le prefixe d installation, pas les
-#  sources ni node_modules. Sans server/index.js, systemd saute l unite au lieu
-#  de la marquer en echec - un service rouge sur un banc en parfait etat est
-#  une fausse alarme, et le Conky les compte. « osmo-lte-install --webui » le
-#  construit.
+#  Condition, not dependency. The unit is enabled by default (ISO and native),
+#  but the WebUI is not always built: the bench .deb packages
+#  (osmo-build-open5gs) only ship the install prefix, not the sources nor
+#  node_modules. Without server/index.js, systemd skips the unit instead of
+#  marking it failed (a red service on a healthy bench would be a false alarm,
+#  and the Conky counts them). « osmo-lte-install --webui » builds it.
 Description=Open5GS WebUI - console des abonnes 4G (:9999)
 Documentation=https://open5gs.org/open5gs/docs/
 After=network.target mongod.service
@@ -30,15 +28,15 @@ ConditionPathExists=/opt/LTE/open5gs/webui/server/index.js
 Type=simple
 WorkingDirectory=/opt/LTE/open5gs/webui
 Environment=NODE_ENV=production
-# 0.0.0.0 : la console se regarde depuis le poste de l operateur, pas seulement
-# depuis la machine du banc.
+# 0.0.0.0: the console is used from the operator's workstation, not only from
+# the bench machine.
 Environment=HOSTNAME=0.0.0.0
 Environment=PORT=9999
-# LA MEME base que hss.yaml et pcrf.yaml (configs/open5gs/) : une console qui
-# ecrirait ailleurs provisionnerait des abonnes que le HSS ne verrait jamais.
+# The same database as hss.yaml and pcrf.yaml (configs/open5gs/): a console
+# writing elsewhere would provision subscribers the HSS never sees.
 Environment=DB_URI=mongodb://localhost/open5gs
-# node vit en /usr/local/bin sur le banc (image) et en /usr/bin sur un systeme
-# apt : env le trouve dans les deux cas, ExecStart exige un chemin absolu.
+# node lives in /usr/local/bin on the bench (image) and in /usr/bin on an apt
+# system: env finds it in both cases, ExecStart requires an absolute path.
 ExecStart=/usr/bin/env node server/index.js
 Restart=on-failure
 RestartSec=5

@@ -1,19 +1,19 @@
-# mapops.py - catalogue des operations MAP que la console sait emettre.
+# mapops.py - catalogue of the MAP operations the console can send.
 #
-# Chaque operation declare : son opcode, son contexte applicatif, le SSN de la
-# machine a qui elle s'adresse (HLR 6, VLR 7, MSC 8, gsmSCF 147), la liste de
-# ses parametres - c'est cette liste que le formulaire de la console affiche -
-# et la facon de lire la reponse.
+# Each operation declares: its opcode, its application context, the SSN of
+# the machine it addresses (HLR 6, VLR 7, MSC 8, gsmSCF 147), the list of its
+# parameters - the list the console form displays - and how to read the
+# answer.
 #
-# Les encodages suivent 3GPP TS 29.002 (MAP v3).
+# Encodings follow 3GPP TS 29.002 (MAP v3).
 
 from . import ber
 from . import sccp
 
-# ── types elementaires ────────────────────────────────────────────────────────
+# ── elementary types ──────────────────────────────────────────────────────────
 
 def address_string(number, nai=1, npi=1):
-    """ISDN-AddressString : un octet nature/plan, puis les chiffres en TBCD.
+    """ISDN-AddressString: one nature/plan octet, then the digits in TBCD.
     nai 1 = international, npi 1 = E.164."""
     digits = "".join(c for c in str(number) if c.isdigit())
     head = 0x80 | ((nai & 0x07) << 4) | (npi & 0x0F)
@@ -37,7 +37,7 @@ def read_imsi(raw):
     return sccp.untbcd(raw)
 
 
-# ── contextes applicatifs MAP (0.4.0.0.1.0.<contexte>.<version>) ──────────────
+# ── MAP application contexts (0.4.0.0.1.0.<context>.<version>) ────────────────
 AC = {
     "networkLocUp": "0.4.0.0.1.0.1.3",
     "roamingNumberEnquiry": "0.4.0.0.1.0.3.3",
@@ -50,7 +50,7 @@ AC = {
     "anyTimeInfoEnquiry": "0.4.0.0.1.0.29.3",
 }
 
-# ── erreurs MAP ───────────────────────────────────────────────────────────────
+# ── MAP errors ────────────────────────────────────────────────────────────────
 MAP_ERRORS = {
     1: "unknownSubscriber", 3: "unknownMSC", 5: "unidentifiedSubscriber",
     6: "absentSubscriberSM", 7: "unknownEquipment", 8: "roamingNotAllowed",
@@ -70,7 +70,7 @@ SSN_HLR, SSN_VLR, SSN_MSC, SSN_SCF = 6, 7, 8, 147
 
 
 class Param(object):
-    """Un champ du formulaire."""
+    """One form field."""
 
     def __init__(self, key, label, default="", kind="text", help=""):
         self.key = key
@@ -100,7 +100,7 @@ class Operation(object):
         return dict((p.key, p.default) for p in self.params)
 
 
-# ── encodeurs ─────────────────────────────────────────────────────────────────
+# ── encoders ──────────────────────────────────────────────────────────────────
 
 def _enc_sri_sm(v):
     body = ber.ctx(0, address_string(v["msisdn"]), constructed=False)
@@ -142,7 +142,7 @@ def _enc_sai(v):
 
 
 def _enc_send_imsi(v):
-    # L'argument est directement une ISDN-AddressString.
+    # The argument is directly an ISDN-AddressString.
     return ber.tlv(0x04, address_string(v["msisdn"]))
 
 
@@ -169,11 +169,11 @@ def _enc_raw(v):
     return bytes.fromhex(txt) if txt else b""
 
 
-# ── lecteurs de resultat ──────────────────────────────────────────────────────
+# ── result readers ────────────────────────────────────────────────────────────
 
 def _walk_pairs(elem, out, path=""):
-    """Extraction opportuniste : tout ce qui ressemble a un IMSI ou a un
-    numero est rendu lisible, avec le chemin de tags qui l'a produit."""
+    """Opportunistic extraction: anything that looks like an IMSI or a
+    number is made readable, with the tag path that produced it."""
     for child in (elem.children if elem else []):
         tag = "%s/%s" % (path, child.tagstr())
         if child.constructed:

@@ -1,27 +1,27 @@
 #!/bin/bash
-# iso_modules/82-arm-natif.sh - --arm : ce que l hote x86 ne peut pas produire
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/82-arm-natif.sh - --arm: what the x86 build host cannot produce
+# Sourced by build-iso.sh in numeric order (same shell, variables and functions);
+# not meant to run on its own. A top-level `return` means "nothing to do here"
+# (this is how --arm skips a step).
 
-# Sur la cible amd64 tout ceci est fait ailleurs, nativement (52-qemu, 71-debs-banc).
+# On amd64 all of this is done elsewhere, natively (52-qemu, 71-debs-banc).
 if [ "${ISO_ARCH:-amd64}" = "amd64" ]; then return 0; fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Etape 8e : COMPILATION NATIVE DANS LE CHROOT arm64
+#  Step 8e: native compilation inside the arm64 chroot
 # ═════════════════════════════════════════════════════════════════════════════
-# Trois choses que l ISO amd64 fabrique SUR L HOTE avec le gcc de l hote :
-# toast (codec GSM 06.10), le lanceur C qosmo, c54x_exe/grgsm_exe, et les .deb du
-# banc (build-debs.sh compile le lanceur et lit les binaires par ldd). Sur un
-# hote x86 ca donnerait du x86 dans un rootfs arm64 - silencieusement, puisque
-# aucune de ces etapes n est fatale. Ici tout tourne DANS le chroot, sous
-# qemu-user : le gcc est celui du rootfs (build-essential, pose a l etape 8),
-# le resultat est de l aarch64. Plus lent qu en natif, mais juste.
+# The amd64 ISO builds these on the host with the host gcc: toast (GSM 06.10
+# codec), the qosmo C launcher, c54x_exe/grgsm_exe, and the bench .deb packages
+# (build-debs.sh compiles the launcher and inspects binaries with ldd). On an
+# x86 host that would silently put x86 code into an arm64 rootfs, since none of
+# these steps is fatal. Here everything runs inside the chroot under qemu-user,
+# with the rootfs gcc (build-essential, step 8): the output is aarch64. Slower
+# than native, but correct.
 #
-# Puis ce que le Pi exige et que l ISO ne connait pas : la partition firmware
-# (/boot/firmware : noyau, initrd, device-trees, start4.elf, config.txt,
-# cmdline.txt), posee par un hook qui rejouera a chaque mise a jour du noyau,
-# et l agrandissement de la racine a la carte au premier demarrage.
+# Then the Pi-specific parts: the firmware partition (/boot/firmware: kernel,
+# initrd, device trees, start4.elf, config.txt, cmdline.txt), kept up to date by
+# hooks on each kernel update, and growing the root filesystem to the card size
+# on first boot.
 echo -e "${GREEN}[8e/9] Compilation native dans le chroot ${ISO_ARCH} (toast, lanceurs, .deb du banc)...${NC}"
 _arm_chroot() {
     chroot "$ROOTFS" env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -62,8 +62,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             echo -e "  ${YELLOW}!${NC} lanceur $fork : pas de source dans le rootfs" >&2
         fi
     done
-    # [2026-09-25] c54x_exe et grgsm_exe : les binaires venus de l hote sont du
-    # x86 ; on les recompile ici, sur les sources de /opt/GSM/qosmo du rootfs.
+    # c54x_exe and grgsm_exe binaries copied from the host are x86: rebuild them
+    # here from the rootfs sources.
     for _e in c54x_exe grgsm_exe; do
         [ -f "$ROOTFS/opt/GSM/$_e/Makefile" ] || continue
         if _arm_chroot make -s -B -C "/opt/GSM/$_e" >"$WORK/make-$_e.log" 2>&1; then
@@ -72,8 +72,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             echo -e "  ${YELLOW}!${NC} $_e : compilation echouee (voir $WORK/make-$_e.log)" >&2
         fi
     done
-    # Le binaire arm64 doit etre executable ici, sous qemu-user : c est le test
-    # qui aurait manque a une compilation croisee silencieuse.
+    # The arm64 binary must run here under qemu-user; this catches a binary or
+    # libraries of the wrong architecture.
     if [ -x "$ROOTFS/usr/local/bin/qemu-system-arm" ]; then
         if _arm_chroot /usr/local/bin/qemu-system-arm --version >/dev/null 2>&1; then
             echo -e "  ${GREEN}✓${NC} qemu-system-arm (aarch64) s execute dans le chroot"
@@ -85,7 +85,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     fi
 fi
 
-# ── Les .deb du banc (etape 7c), fabriques dans le chroot ───────────────────
+# ── Bench .deb packages (step 7c), built inside the chroot ─────────────────
 if [ -x "$ROOTFS/opt/GSM/osmo-operator/packaging/build-debs.sh" ]; then
     install -d "$ROOTFS/var/cache/osmo-debs"
     if _arm_chroot env OSMO_OPERATOR_SRC=/opt/GSM/osmo-operator QOSMO_SRC=/opt/GSM/qosmo \
@@ -99,21 +99,22 @@ if [ -x "$ROOTFS/opt/GSM/osmo-operator/packaging/build-debs.sh" ]; then
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  La partition firmware du Pi : /boot/firmware, comme Armbian la peuple
+#  Pi firmware partition: /boot/firmware, populated the Armbian way
 # ═════════════════════════════════════════════════════════════════════════════
-# Le Pi 4 ne demarre pas par GRUB ni par u-boot : son GPU lit une partition FAT
-# (la premiere, etiquette RPICFG), y charge start4.elf, lit config.txt, puis le
-# noyau et l initrd designes. Armbian monte cette partition sur /boot/firmware
-# et la tient a jour par trois hooks de son paquet BSP (armbian-bsp-cli-rpi4b) :
-#   /etc/kernel/postinst.d/z51-raspi-firmware   start4.elf, fixup4.dat... depuis
+# The Pi 4 boots neither via GRUB nor u-boot: its GPU reads a FAT partition
+# (the first one, label RPICFG), loads start4.elf, reads config.txt, then the
+# kernel and initrd it names. Armbian mounts this partition on /boot/firmware
+# and keeps it up to date with three hooks from its BSP package
+# (armbian-bsp-cli-rpi4b):
+#   /etc/kernel/postinst.d/z51-raspi-firmware   start4.elf, fixup4.dat... from
 #                                               /usr/lib/linux-firmware-raspi
 #   /etc/kernel/postinst.d/zzz-copy-new-files   vmlinuz, *.dtb, overlays/
 #   /etc/initramfs/post-update.d/zzz-update-initramfs   initrd.img
-# Le noyau s installe AVANT le BSP dans un meme apt : ses hooks n ont pas
-# tourne. On les rejoue ici, comme le fait le build Armbian lui-meme
-# (post_family_tweaks__populate_boot_firmware_directory), puis update-initramfs
-# pour que l initrd parte par le troisieme hook. Toute mise a jour du noyau
-# par apt sur la machine refera la meme chose, sans nous.
+# The kernel is installed before the BSP in the same apt run, so these hooks
+# have not run yet. Replay them here, as the Armbian build does
+# (post_family_tweaks__populate_boot_firmware_directory), then run
+# update-initramfs so the third hook installs the initrd. Later kernel updates
+# via apt on the machine do the same automatically.
 _KVER="$(ls "$ROOTFS"/boot/vmlinuz-*-bcm2711 2>/dev/null | sort -V | tail -1 | sed 's|.*/vmlinuz-||' || true)"
 [ -n "$_KVER" ] || { echo -e "${RED}aucun noyau Armbian bcm2711 dans /boot du rootfs (linux-image-current-bcm2711 non installe ?)${NC}" >&2; exit 1; }
 install -d "$ROOTFS/boot/firmware"
@@ -126,14 +127,13 @@ _arm_chroot update-initramfs -u -k "$_KVER" >>"$WORK/rpi-firmware.log" 2>&1 \
     || { echo -e "${RED}update-initramfs -k $_KVER a echoue (voir $WORK/rpi-firmware.log)${NC}" >&2; exit 1; }
 [ -f "$ROOTFS/boot/firmware/initrd.img" ] || cp -f "$ROOTFS/boot/initrd.img-$_KVER" "$ROOTFS/boot/firmware/initrd.img"
 
-# config.txt et cmdline.txt : ceux qu Armbian ecrit pour rpi4b (bcm2711.conf,
-# pre_umount_final_image__write_raspi_config/cmdline), a deux details pres :
-# la console serie est activee (enable_uart=1 : un banc a souvent un cable
-# serie, et l autologin root y est pose par 84-comptes), et loglevel n est pas
-# force a 1 - on veut lire ce que dit le noyau. Ecrits une fois, jamais
-# reecrits ensuite : modifiez librement sur la carte.
+# config.txt and cmdline.txt: as written by Armbian for rpi4b (bcm2711.conf,
+# pre_umount_final_image__write_raspi_config/cmdline), except that the serial
+# console is enabled (enable_uart=1; root autologin on it is set up by
+# 84-comptes) and loglevel is not forced to 1. Written once, never
+# overwritten afterwards: edit freely on the card.
 cat > "$ROOTFS/boot/firmware/config.txt" <<'CFG'
-# osmo-operator sur Armbian - Raspberry Pi 4 (arm64)
+# osmo-operator on Armbian - Raspberry Pi 4 (arm64)
 # For more options and information see http://rptl.io/configtxt
 
 # Enable audio (loads snd_bcm2835)
@@ -161,7 +161,7 @@ disable_overscan=1
 # Run as fast as firmware / board allows
 arm_boost=1
 
-# Console serie (serial0 -> ttyS0), autologin root (osmo-operator)
+# Serial console (serial0 -> ttyS0), root autologin (osmo-operator)
 enable_uart=1
 
 [cm4]
@@ -180,16 +180,14 @@ for _f in vmlinuz initrd.img start4.elf fixup4.dat bcm2711-rpi-4-b.dtb config.tx
 done
 echo -e "  ${GREEN}✓${NC} /boot/firmware : noyau ${CYAN}${_KVER}${NC}, $(ls "$ROOTFS/boot/firmware" | wc -l) entrees ($(du -sh "$ROOTFS/boot/firmware" | cut -f1))"
 
-# ── Les services Armbian du premier demarrage ───────────────────────────────
-# armbian-resize-filesystem : etend la partition racine a la carte et
-# resize2fs, une fois (c est lui, pas nous, qui sait le faire sur MBR ET GPT).
-# armbian-firstrun : cles ssh regenerees, reglages materiels. Le BSP enable
-# zram, hardware-optimize, led-state, monitor par son postinst ; ces deux-la
-# non (le build Armbian le fait a la fabrication de l image, comme ici).
-# armbian-ramlog (log2ram) : COUPE. Il tient /var/log dans 50 Mo de RAM et
-# synchronise sur la carte : les journaux osmocom (logrotate a 32 Mo x 3), les
-# pcap en anneau du tcpdump enveloppe (5 x 32 Mo) le rempliraient en une heure
-# et les ecritures echoueraient sans un mot. Sur un banc, /var/log sur la carte.
+# ── Armbian first-boot services ────────────────────────────────────────────
+# armbian-resize-filesystem: grows the root partition to the card and runs
+# resize2fs, once (handles both MBR and GPT).
+# armbian-firstrun: regenerates ssh keys, hardware tweaks. The BSP postinst
+# enables zram, hardware-optimize, led-state and monitor, but not these two.
+# armbian-ramlog (log2ram) is disabled: it keeps /var/log in 50 MB of RAM;
+# osmocom logs (logrotate 32 MB x 3) and the tcpdump pcap ring (5 x 32 MB)
+# would fill it and writes would fail silently. /var/log stays on the card.
 chroot "$ROOTFS" systemctl enable armbian-resize-filesystem armbian-firstrun >/dev/null 2>&1 \
     || echo -e "  ${YELLOW}!${NC} armbian-resize-filesystem / armbian-firstrun : enable a echoue" >&2
 install -d "$ROOTFS/etc/default"
@@ -198,12 +196,12 @@ if [ -f "$ROOTFS/etc/default/armbian-ramlog" ] || [ -f "$ROOTFS/etc/default/armb
     sed -i 's/^ENABLED=.*/ENABLED=false/' "$ROOTFS/etc/default/armbian-ramlog"
     chroot "$ROOTFS" systemctl disable armbian-ramlog >/dev/null 2>&1 || true
 fi
-# Pas d assistant Armbian au premier login : root:osmo est deja pose, le
-# marqueur /root/.not_logged_in_yet n existe que dans les images Armbian.
+# No Armbian first-login wizard: root:osmo is already set; the marker
+# /root/.not_logged_in_yet only exists in Armbian images.
 rm -f "$ROOTFS/root/.not_logged_in_yet"
 echo -e "  ${GREEN}✓${NC} armbian-resize-filesystem et armbian-firstrun actives, armbian-ramlog coupe"
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its last command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would silently stop everything. Always 0 here.
 true

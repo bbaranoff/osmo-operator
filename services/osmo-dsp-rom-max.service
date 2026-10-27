@@ -5,9 +5,9 @@ After=network.target
 ConditionPathExists=/opt/GSM/osmo-operator/scripts/dsp-rom-max.sh
 
 [Service]
-# A la demande (systemctl start) : une campagne de tests n a rien a faire au
-# boot. Le profil ROM max, lui, vit dans /etc/default/osmo-banc et s applique a
-# chaque demarrage d osmo-banc.
+# On demand (systemctl start): a test campaign has no business at boot. The
+# ROM max profile itself lives in /etc/default/osmo-banc and applies at every
+# start of osmo-banc.
 Type=oneshot
 WorkingDirectory=/opt/GSM/osmo-operator
 Environment=HOME=/root NO_COLOR=1

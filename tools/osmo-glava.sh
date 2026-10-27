@@ -1,29 +1,29 @@
 #!/bin/bash
-# osmo-glava - lance le visualiseur NCS Spectrum (GLava) sur le bureau.
+# osmo-glava - start the NCS Spectrum visualizer (GLava) on the desktop.
 #
-# Pose par tools/glava-build.sh dans /usr/local/bin, lance par le service
-# utilisateur glava.service (systemctl --user stop|start glava). Un seul
-# GLava NCS par utilisateur.
+# Installed by tools/glava-build.sh in /usr/local/bin, started by the user
+# service glava.service (systemctl --user stop|start glava). One GLava NCS per
+# user.
 #
-# [2026-10-23] La fenetre est un carre de 26 % de la hauteur de l ecran, place
-# au-dessus de la ville du fond (gsm-lab-ville.jpg) : x = 49 %, y = 21 %. Sur
-# 2560x1600, c est 420 px en (1250, 330). Calcule ici d apres l ecran
-# principal, plutot que fige dans rc.glsl : la meme ISO tourne sur des ecrans
-# differents.
+# The window is a square of 26 % of the screen height, placed above the city
+# of the wallpaper (gsm-lab-ville.jpg): x = 49 %, y = 21 %. On 2560x1600 that
+# is 420 px at (1250, 330). Computed here from the primary screen rather than
+# fixed in rc.glsl: the same ISO runs on different screens.
 #
-# [2026-10-24] LE MICRO ET LES HAUT-PARLEURS. GLava ne lit qu UNE source
-# PulseAudio. On lui en fabrique une : un sink nul « osmo_glava », dans lequel
-# deux module-loopback recopient le moniteur de la sortie par defaut (ce que
-# jouent les haut-parleurs) et la source par defaut (le micro - sur le banc,
-# osmo_mic_ec, le micro a annulation d echo). GLava ecoute osmo_glava.monitor.
-# Le micro ne va QUE dans ce sink nul, jamais vers les haut-parleurs : pas de
-# larsen. Les sources par defaut sont lues au lancement (connexion).
-# Le garde ne vise que l instance NCS (-r setgeometry...) : une autre instance
-# (glava -m bars, par exemple) ne l empeche pas de demarrer.
+# MICROPHONE AND SPEAKERS. GLava reads only ONE PulseAudio source. One is built
+# for it: a null sink "osmo_glava", into which two module-loopback copy the
+# monitor of the default output (what the speakers play) and the default
+# source (the microphone - on the bench, osmo_mic_ec, the echo-cancelled
+# microphone). GLava listens to osmo_glava.monitor. The microphone goes ONLY
+# into this null sink, never to the speakers: no feedback. The default devices
+# are read at startup (login).
+# The guard only targets the NCS instance (-r setgeometry...): another instance
+# (glava -m bars, for example) does not prevent it from starting.
+#
 MIX=osmo_glava
-# --retirer-mix : appele a l arret du service (ExecStopPost de glava.service),
-# retire les deux boucles puis le sink nul (dans cet ordre : le sink emporte
-# ses boucles, un second retrait echouerait).
+# --retirer-mix: called when the service stops (ExecStopPost of glava.service),
+# removes the two loopbacks then the null sink (in that order: the sink takes
+# its loopbacks with it, a second removal would fail).
 if [ "${1:-}" = "--retirer-mix" ]; then
     pactl list short modules 2>/dev/null \
         | awk -v m="$MIX" '$0 ~ ("sink(_name)?=" m "([[:space:]]|$)") {print $1}' \
@@ -37,11 +37,11 @@ if command -v pactl >/dev/null 2>&1; then
     if ! pactl list short sinks 2>/dev/null | grep -q "^[0-9]*[[:space:]]$MIX[[:space:]]"; then
         pactl load-module module-null-sink sink_name=$MIX \
             sink_properties=device.description=GLava-micro+HP >/dev/null
-        # [2026-10-24] Les haut-parleurs = le moniteur de la sortie MATERIELLE.
-        # @DEFAULT_MONITOR@ ne suffit pas : a la connexion, le sink par defaut
-        # peut etre osmo_hp_ec (l annulation d echo du banc, 8 kHz mono, la seule
-        # voix GSM) - GLava ne voyait alors ni le navigateur ni le reste. Le sink
-        # ALSA recoit tout, osmo_hp_ec compris (son maitre).
+        # The speakers = the monitor of the HARDWARE output. @DEFAULT_MONITOR@
+        # is not enough: at login the default sink may be osmo_hp_ec (the bench
+        # echo cancellation, 8 kHz mono, GSM voice only) and GLava would see
+        # neither the browser nor anything else. The ALSA sink receives
+        # everything, osmo_hp_ec included (its master).
         hp=$(pactl get-default-sink 2>/dev/null)
         case "$hp" in alsa_output.*|bluez_sink.*) ;;
             *) hp=$(pactl list short sinks 2>/dev/null | awk '$2 ~ /^(alsa_output|bluez_sink)\./ {print $2; exit}') ;;
@@ -57,9 +57,9 @@ else
     SOURCE=()
 fi
 
-# [2026-10-24] LA BANDE DU BAS : une seconde instance, module bars, sur toute
-# la largeur libre (a droite du dock : _NET_WORKAREA) et 8,75 % de la hauteur
-# (140 px sur 1600), collee au bord bas. Meme source que le cercle.
+# THE BOTTOM BAND: a second instance, bars module, over the whole free width
+# (right of the dock: _NET_WORKAREA) and 8.75 % of the height (140 px on 1600),
+# stuck to the bottom edge. Same source as the circle.
 lancer_barres() {   # W H
     pgrep -u "$(id -u)" -f '^glava -m bars' >/dev/null && return 0
     local zone x0 h

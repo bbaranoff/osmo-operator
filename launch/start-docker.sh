@@ -1,27 +1,35 @@
 #!/bin/bash
-# start-docker.sh - Lance la stack Osmocom GSM multi-operateurs
+# start-docker.sh - host launcher for the multi-operator Osmocom GSM stack (Docker)
 #
-# Modes : net-host (1 operateur, SDR physique) | bridge (N operateurs SS7 inter-op)
+# Usage: sudo ./launch/start-docker.sh [quick|normal] [WAN options] [qemu|virtual|hw|stop]
+#   qemu     PoC: one operator, QEMU Calypso radio
+#   virtual  N operators in containers, linked by SS7 over a docker bridge
+#   hw       net-host mode: one operator, physical SDR
+#   stop     remove all osmo-*/egprs containers and WAN iptables chains
+#   quick    build the run image with the docker cache (default)
+#   normal   rebuild the run image with --no-cache
+# WAN options (--wan, --wan-nodes, --hub-ip, --operator, ...): see --help.
+#
+# Environment:
+#   OSMO_REPO_DIR        repository root (when this file is sourced from a copy)
+#   IMAGE_RUN/IMAGE_STP  images for operators / SS7 hub
+#   OSMO_QUICK=0         force a --no-cache rebuild;  OSMO_NO_BUILD=1 skip the build
+#   OSMO_NONINTERACTIVE=1  answer every whiptail dialog with its default
+#   OP_ID_BASE=N         first operator number used by containers (lower ones are native)
+#   OPERATOR_COUNT_HINT  number of operators (same as --operators)
+#   HANDOFF_MODE         radio mode handed to start-native.sh (qemu | faketrx-qemu)
+#   OSMO_NO_ATTACH=1, OSMO_NO_TERM=1, OSMO_SKIP_CHECKS=1, BRIDGE_NO_PROCESS=1,
+#   OSMO_DOCKER_ROUTED=1, OSMO_PORT_OFFSET=N  (see the corresponding sections)
 set -eu
-# Racine du depot : ce script vit dans launch/ depuis le 2026-10-18 (ex start.sh a la
-# racine). Les anciens chemins en « dirname $0 » visaient en fait le depot.
-# OSMO_REPO_DIR d'abord : build-iso.sh (iso_modules/30-image-configs.sh) source une
-# COPIE de ce fichier dans $WORK ; BASH_SOURCE donnerait alors /var/tmp.
+# Repository root. OSMO_REPO_DIR first: build-iso.sh (iso_modules/30-image-configs.sh)
+# sources a COPY of this file from $WORK, where BASH_SOURCE would point to /var/tmp.
 START_REPO="${OSMO_REPO_DIR:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
 
-# ── Ce script est le lanceur de l'HOTE. Refus net s'il tourne DANS le conteneur ──
-# [2026-08-12] start-docker.sh pilote docker (build, reseaux, `docker run`, volumes) ;
-# start-native.sh, lui, prepare l'environnement Calypso et lance run.sh A
-# L'INTERIEUR. Les confondre ne donne pas une erreur lisible : `docker` n'existe
-# pas dans l'image, donc on part sur une cascade de "command not found" apres
-# avoir deja cree des fichiers et touche des configs. Mieux vaut s'arreter avant
-# d'avoir rien fait, et nommer le script a utiliser.
-#
-# Discriminant verifie dans LES DEUX SENS le 12/08 : `/.dockerenv` et
-# `/etc/docker-entrypoint-cmd` (pose par scripts/entrypoint.sh) sont presents
-# dans le conteneur et absents sur l'hote. On exige les DEUX : `/.dockerenv`
-# seul serait vrai dans n'importe quel conteneur, y compris un ou ce script
-# aurait legitimement sa place.
+# ── This is the HOST launcher: refuse to run inside the container ──
+# start-docker.sh drives docker (build, networks, docker run, volumes); start-native.sh
+# runs INSIDE the container. Stop before touching anything and name the right script.
+# Both /.dockerenv and /etc/docker-entrypoint-cmd (created by scripts/entrypoint.sh)
+# are required: /.dockerenv alone is true in any container.
 if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then
     printf '\033[1;31mVous etes dans le docker ! Utilisez start-native.sh\033[0m\n' >&2
     printf '\n  \033[0;36m/opt/GSM/osmo-operator/start-native.sh\033[0m   (ou ./start-native.sh depuis le depot)\n' >&2
@@ -38,55 +46,32 @@ if [[ -n "$DEBUG" ]]; then
 fi
 
 IMAGE_BASE="osmocom-nitb"
-# [2026-08-12] Surchargeable depuis l'environnement - c'est ce que fait
-# start-nitb.sh, qui relance exactement ce script avec IMAGE_RUN=osmocom-nitb.
-# Idiome `:=` du projet : une valeur posee explicitement en amont gagne, le
-# defaut ne s'applique qu'a vide. NE PAS remettre en dur : start-nitb.sh
-# deviendrait silencieusement un alias de start-docker.sh, ce qui est indiscernable
-# d'un lanceur qui marche.
+# Overridable from the environment: start-nitb.sh re-runs this script with
+# IMAGE_RUN=osmocom-nitb. Do not hard-code it.
 IMAGE_RUN="${IMAGE_RUN:-osmocom-run}"
 
 INTER_NET="gsm-inter"
 INTER_NET_SUBNET="172.20.0.0/24"
 INTER_NET_GATEWAY="172.20.0.1"
 
-# Quel noeud du WAN heberge le hub SS7. UN SEUL doit le faire : deux hubs, c'est
-# deux reseaux SS7 separes qui s'ignorent, et rien ne le signale.
+# WAN node hosting the SS7 hub. Exactly ONE node may do so: two hubs make two
+# separate SS7 networks, silently.
 WAN_HUB_NODE="${WAN_HUB_NODE:-1}"
-# --hub-ip : l'inter-STP designe par son ADRESSE, pas par un numero de noeud.
-# --hub-node oblige a le faire figurer dans la table WAN ; sur un banc ou le hub
-# est une machine a part - une VM dediee, sans operateur - cela forcait a
-# inventer un noeud pour lui, qui apparaissait ensuite dans les indicatifs et le
-# routage voix/SMS comme s'il portait des abonnes. Avec --hub-ip la table ne
-# contient que de vrais noeuds.
+# --hub-ip: the inter-STP is designated by its ADDRESS, not a node number, so a
+# dedicated hub machine (no operator) does not need an entry in the WAN table.
 WAN_HUB_IP="${WAN_HUB_IP:-}"
-# --node-per-op : chaque conteneur est un NOEUD, pas un operateur de la machine.
-# A n'utiliser que quand les conteneurs ont une adresse joignable de l'exterieur
-# (backbone route vers le LAN) : sinon les autres noeuds ne peuvent pas les
-# appeler, et un noeud injoignable vaut moins qu'un operateur bien range.
+# --node-per-op: each container is a NODE, not an operator of this machine.
+# Only use it when containers have externally reachable addresses (backbone routed
+# to the LAN); otherwise other nodes cannot reach them.
 WAN_NODE_PER_OP="${WAN_NODE_PER_OP:-0}"
-# --operator IP:PREFIXE : declarer un operateur du WAN, ou qu'il soit.
-# La table WAN se saisissait jusqu'ici par --wan-nodes "id:ip:ind", une forme
-# exacte mais qui suppose qu'on connaisse deja les numeros de noeud. Declarer
-# "une machine a cette adresse, joignable par ce prefixe" est plus proche de ce
-# qu'on a sous les yeux - une VM, un conteneur - et les numeros suivent l'ordre
-# de declaration.
+# --operator IP:PREFIX: declare a WAN operator wherever it runs. Node numbers
+# follow the declaration order (alternative to --wan-nodes "id:ip:ind").
 OPERATOR_DECLS=()
-# [2026-08-31] On HERITE de l environnement au lieu de l ecraser.
-# Cette ligne valait OPERATOR_COUNT_HINT="" sec : un appelant qui posait
-# la variable (env OPERATOR_COUNT_HINT=2 ./launch/start-docker.sh ...) la voyait effacee
-# ici, bien avant sa lecture l.1421 - et start-docker.sh reposait la question
-# « Nombre d'operateurs (1-36) » qu on croyait justement avoir evitee.
-# Silencieux de bout en bout : la variable etait bien passee, bien nommee,
-# et simplement remise a zero en chemin.
-# --operators N reste la voie explicite (l.2552) et prime, puisqu il est
-# analyse plus tard.
+# Inherited from the environment; --operators N (parsed later) takes precedence.
 OPERATOR_COUNT_HINT="${OPERATOR_COUNT_HINT:-}"
-# --host : l'adresse de CETTE machine, telle que les VM doivent la joindre.
-# Elle est deduite de l'interface par defaut ; --host la fixe quand la deduction
-# se trompe - plusieurs cartes, un wifi et un ethernet actifs en meme temps, ou
-# une adresse qui vient de changer. Elle sert de recours, pas de reglage
-# quotidien : c'est elle que les VM inscrivent dans leur route vers le backbone.
+# --host: address of THIS machine as seen by the VMs (their route to the backbone).
+# Derived from the default interface; set it when the guess is wrong (several
+# interfaces, address just changed).
 HOST_LAN_IP=""
 IMAGE_STP="${IMAGE_STP:-osmocom-stp}"
 INTER_STP_CONTAINER="osmo-inter-stp"
@@ -105,20 +90,17 @@ SMS_ROUTING_DIR=""
 # ══════════════════════════════════════════════════════════════════════════════
 # WAN Interop
 # ══════════════════════════════════════════════════════════════════════════════
-# Deux WAN coexistent ici, et ils ne font PAS la meme chose :
+# Two mutually exclusive WAN mechanisms, neither enabled by default:
 #
-#   WAN_ENABLED (legacy, --pas d'option, question whiptail) : DEUX serveurs,
-#     prefixe unique 66, network/setup-wan-interop.sh. Conserve tel quel.
+#   WAN_ENABLED (legacy, no option, whiptail question): TWO servers, single
+#     prefix 66, network/setup-wan-interop.sh.
 #
-#   WAN_MESH (option --wan) : N noeuds (1 a 9), UN INDICATIF PAR NOEUD,
-#     network/setup-wan-mesh.sh. C'est le seul qui tienne au-dela de deux
-#     serveurs - le legacy reecrit son bloc de conf a chaque appel, donc
-#     l'enchainer sur trois pairs ne laisse que le dernier.
-#
-# Les deux sont EXCLUSIFS et aucun n'est actif par defaut.
+#   WAN_MESH (--wan): N nodes (1 to 9), ONE PREFIX PER NODE,
+#     network/setup-wan-mesh.sh. Use it beyond two servers: the legacy script
+#     rewrites its config block on each call, so only the last peer survives.
 WAN_MESH=0
-# --virtualbox : les pairs du WAN sont des VM VirtualBox sur CETTE machine, et
-# cette machine est elle-meme un noeud. Voir network/setup-vbox-interco.sh.
+# --virtualbox: the WAN peers are VirtualBox VMs on THIS machine, which is itself a
+# node. See network/setup-vbox-interco.sh.
 VBOX_INTERCO=0
 VBOX_NODES=""
 VBOX_HOST_NODE=1
@@ -135,76 +117,49 @@ WAN_SIP_BASE=5080
 WAN_RTP_BASE=20000
 WAN_RTP_PER_OP=500
 PHY_MODE="faketrx"   # faketrx | virtphy
-# Choix passes au start-native.sh DANS le conteneur via le handoff (NO_MENU=1),
-# pour eviter les menus whiptail laggy en docker exec -ti. Fixes sur l'HOTE.
-# Retenu AVANT le defaut : "l'appelant a-t-il impose le mode ?". C'est ce qui
-# permet a --wan de basculer en hybride sans ecraser un HANDOFF_MODE=... explicite.
+# Choices handed to start-native.sh INSIDE the container (NO_MENU=1), to avoid
+# whiptail menus over docker exec -ti. Decided on the HOST.
+# HANDOFF_MODE_FROM_ENV records whether the caller imposed the mode, so that --wan
+# can switch to hybrid without overriding an explicit HANDOFF_MODE=...
 HANDOFF_MODE_FROM_ENV="${HANDOFF_MODE:+1}"
-HANDOFF_MODE="${HANDOFF_MODE:-qemu}"               # qemu | faketrx-qemu (combine)
+HANDOFF_MODE="${HANDOFF_MODE:-qemu}"  # qemu | faketrx-qemu (combined)
 HANDOFF_QEMU_CHOICE="${HANDOFF_QEMU_CHOICE:-full-grgsm}"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-# ── Les deux plans d'adressage d'un operateur ───────────────────────────────
-# backbone  172.20.0.<10+op>  le segment que TOUS partagent avec l'inter-STP
-#                             (.10). C'est par la que passe le SS7, et c'est ce
-#                             reseau que network/setup-docker-lan-route.sh rend
-#                             joignable depuis le LAN des VM.
-# prive     192.168.<op+1>.x  un segment par operateur : son BTS, son PCU, son
-#                             GGSN. Rien n'y entre de l'exterieur.
+# ── The two address plans of an operator ───────────────────────────────────
+# backbone  172.20.0.<10+op>  segment shared by ALL operators and the inter-STP
+#                             (.10). SS7 goes through it; network/setup-docker-lan-route.sh
+#                             makes it reachable from the VM LAN.
+# private   192.168.<op+1>.x  one segment per operator: its BTS, PCU, GGSN.
+#                             Not reachable from outside.
 #
-# POURQUOI <op+1> ET PAS <op>
-# Le LAN du banc est 192.168.1.0/24 - celui des VM et du hub SS7 en .49. Un
-# operateur 1 en 192.168.1.0/24 entrerait en collision avec lui : deux routes
-# pour le meme reseau sur l'hote, et un conteneur qui ne peut plus joindre le
-# hub. Le decalage d'un rang laisse le .1 au LAN et commence les operateurs a
-# 192.168.2.0/24.
-# ── LE RANG DU PREMIER CONTENEUR ────────────────────────────────────────────
-# [2026-08-31] start-docker.sh numerotait SES operateurs 1..N, en dur. C est juste
-# quand la machine ne porte que des conteneurs ; ca ne l est plus des qu un
-# operateur NATIF tourne a cote, car il occupe deja un rang - et deux
-# equipements au meme point code, ce n est pas un conflit de nom, c est du
-# routage faux (checks/wan_ss7_check.sh).
-# OP_ID_BASE=2 fait donc commencer les conteneurs a l operateur 2, laissant le 1
-# au natif. TOUT en decoule sans autre reglage, puisque tout derive de l index :
-# nom du conteneur (osmo-operator-N), backbone (172.20.0.<10+N>), point code
-# (1.N.2), RCTX, segment prive (192.168.<N+1>.0/24) et ports publies.
+# <op+1> because the lab LAN is 192.168.1.0/24 (VMs, SS7 hub at .49): operator 1
+# on 192.168.1.0/24 would collide with it. Operators start at 192.168.2.0/24.
+# ── First container rank ───────────────────────────────────────────────────
+# OP_ID_BASE=2 starts containers at operator 2, leaving 1 to a NATIVE operator on
+# the host (two equipments with the same point code would mean wrong routing).
+# Everything derives from the index: container name (osmo-operator-N), backbone
+# (172.20.0.<10+N>), point code (1.N.2), RCTX, private segment (192.168.<N+1>.0/24)
+# and published ports.
 OP_ID_BASE="${OP_ID_BASE:-1}"
 op_backbone_ip()  { echo "172.20.0.$((10 + $1))"; }
-# ── L'INDEX DU SEGMENT PRIVE : LE NOEUD OU L'OPERATEUR, SELON L'HOTE ────────
-# 192.168.<index+1>.x, et tout le desaccord tenait a « index ».
+# ── Private segment index: node or operator, depending on the host ────────
+# 192.168.<index+1>.x, where index is:
 #
-#   DOCKER   un hote porte N conteneurs operateurs, chacun dans son netns. Ce
-#            qui les distingue est le NUMERO D'OPERATEUR ; le noeud, lui, est
-#            commun a tous les conteneurs de la machine. index = operateur.
-#   VM/NATIF la machine EST le noeud et ne porte qu'un operateur. Ce qui la
-#            distingue de ses voisines est le NUMERO DE NOEUD. index = noeud.
+#   DOCKER   a host carries N operator containers, each in its own netns; they
+#            differ by OPERATOR number (the node is shared). index = operator.
+#   VM/NATIVE the machine IS the node and carries one operator. index = node.
 #
-# Sans cette distinction, qosmo-grgsm/run_modules/08-gabarits.sh appelait
-# op_private_ip($OPERATOR_ID) et ecrivait 192.168.2.10 dans osmo-ggsn.cfg sur
-# TOUTES les VM - operateur 1 partout - pendant que le plan de l'ISO reservait
-# 192.168.<noeud+1>.x. Sur le noeud 1 les deux coincidaient et rien ne se
-# voyait ; sur le noeud 2, le GGSN se liait a l'adresse du noeud 1.
-# La bascule est ici, une fois, et les deux jumelles (start-docker.sh, lib/gabarits.sh)
-# en heritent.
+# The decision lives here once; lib/gabarits.sh and this script both inherit it.
 _osmo_priv_index() {
     local op="${1:-1}"
-    # [2026-08-31] L ORCHESTRATEUR N EST PAS DANS LE CONTENEUR QU IL CREE.
-    # La detection ci-dessous demande "suis-je DANS un conteneur ?" et c est la
-    # bonne question pour du code qui tourne a l interieur. Mais start-docker.sh, lui,
-    # provisionne les conteneurs DEPUIS L HOTE : il prenait donc la branche
-    # VM/natif et rendait l index du NOEUD - 1 - pour tous les operateurs.
-    # Les deux reseaux prives se retrouvaient sur 192.168.2.0/24, docker
-    # refusait le second pour chevauchement, et la boucle s arretait net :
-    #     ── Operateur 2 : ... Prive : 192.168.2.10
-    #     ✗ Echec creation reseau gsm-net-op2 (192.168.2.0/24)
-    # osmo-operator-2 n etait jamais cree, sans qu aucun message ne parle de
-    # collision d adresses.
-    # OSMO_PRIV_BY_OP=1 dit "je provisionne par operateur" ; start_bridge_mode
-    # la pose. C est la seule chose que la detection ne pouvait pas deviner.
+    # The orchestrator is not inside the containers it creates: the detection below
+    # would take the VM/native branch on the host and give every operator the same
+    # segment (docker then refuses the overlapping network). start_bridge_mode sets
+    # OSMO_PRIV_BY_OP=1 to mean "provisioning per operator".
     [ "${OSMO_PRIV_BY_OP:-0}" = "1" ] && { printf '%s' "$op"; return; }
-    # Meme detection que start-native.sh : le couple /.dockerenv +
-    # /etc/docker-entrypoint-cmd identifie un conteneur DE CE DEPOT ; le cgroup
-    # sert de repli pour un conteneur quelconque.
+    # Same detection as start-native.sh: /.dockerenv + /etc/docker-entrypoint-cmd
+    # identifies a container of THIS repo; the cgroup is a fallback for any container.
     if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
         printf '%s' "$op"; return
     fi
@@ -224,24 +179,16 @@ op_rctx_stp()     { echo $(( $1 * 100 + 20 )); }
 op_rctx_bsc()     { echo $(( $1 * 100 + 30 )); }
 op_rctx_inter()   { echo $(( $1 * 100 + 50 )); }
 
-# ── Le PLMN : le MCC est le PAYS, donc le NOEUD ; le MNC, l'operateur ────────
-# Un MCC fige a 001 pour tout le monde ne laissait que le MNC pour distinguer
-# les reseaux, et toute valeur ecrite en dur ailleurs - les IMSI des MS
-# l'etaient - retombait sur un PLMN plausible mais etranger : le mobile de
-# l'operateur 2 presentait 001-01, son reseau diffusait 001-02, et le Location
-# Updating restait sans reponse, pile entiere debout.
-# Le noeud, c'est ce que --node passe a start-native.sh. Avec --node-per-op
-# chaque conteneur est son propre noeud, donc son propre pays, et le MNC
-# retombe a 01 ; sans lui, les conteneurs sont N operateurs d'un meme pays.
+# ── PLMN: MCC is the COUNTRY, i.e. the NODE; MNC is the operator ────────────
+# The node is what --node passes to start-native.sh. With --node-per-op each
+# container is its own node (own country) and MNC is 01; otherwise containers are
+# N operators of the same country.
 op_plmn_node()  { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo $(( ${WAN_NODE_ID:-1} + $1 - 1 )); else echo "${WAN_NODE_ID:-1}"; fi; }
 op_plmn_index() { if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then echo 1; else echo "$1"; fi; }
-# printf '%03d' sur une valeur vide ou nulle rend "000", et osmo-msc REFUSE
-# "network country code 000" : il abandonne la lecture a cette ligne et systemd
-# le relance trois fois par seconde jusqu'a y renoncer. Le lanceur, lui,
-# affichait une croix puis "Core Osmocom pret". Trois chiffres, une heure de
-# recherche dans le SS7. Un numero de noeud a zero est un bug, pas un MCC : on
-# le borne et on le dit, une fois.
-_plmn_borne() {                 # $1 = valeur, $2 = plancher, $3 = quoi
+# printf '%03d' of an empty/zero value gives "000", which osmo-msc rejects
+# ("network country code 000") and then restart-loops. A zero node number is a
+# bug, not an MCC: clamp it and warn once.
+_plmn_borne() {  # $1 = value, $2 = floor, $3 = what
     case "$1" in
         ''|*[!0-9]*) echo "  ATTENTION : $3 illisible ('$1') - ramene a $2" >&2; echo "$2" ;;
         *) if [ "$1" -lt "$2" ]; then echo "  ATTENTION : $3 vaut $1 - ramene a $2" >&2; echo "$2"; else echo "$1"; fi ;;
@@ -250,19 +197,15 @@ _plmn_borne() {                 # $1 = valeur, $2 = plancher, $3 = quoi
 op_mcc()        { printf '%03d' "$(_plmn_borne "$(op_plmn_node "$1")" 1 "numero de noeud (MCC)")"; }
 op_mnc()        { printf '%02d' "$(_plmn_borne "$(op_plmn_index "$1")" 1 "rang d'operateur (MNC)")"; }
 
-# Noms sans espace : la commande VTY "short name" d'osmo-msc prend un mot, et
-# un nom coupe en deux y passe pour un argument surnumeraire.
-# ── Les jeux de donnees du banc : data/*.txt ─────────────────────────────────
-# Noms d'operateur, pays, etat civil et adresses ne sont pas ecrits dans ce
-# script : ils vivent dans data/, un par ligne, editables sans toucher au code.
-# On les MELANGE au chargement - c'est la le tirage au hasard - puis on les
-# fige pour toute la duree du lancement : un operateur qui changerait de nom ou
-# de pays entre deux lignes du journal ne serait plus le meme reseau.
+# Names without spaces: osmo-msc's VTY "short name" takes a single word.
+# ── Lab data sets: data/*.txt ──────────────────────────────────────────────
+# Operator names, countries, people and addresses live in data/, one per line,
+# editable without touching the code. They are SHUFFLED at load time (the random
+# draw) and then fixed for the whole run.
 OSMO_DATA_DIR="${OSMO_DATA_DIR:-$START_REPO/data}"
 
-# $1 = nom du tableau a remplir, $2 = fichier, le reste = valeurs de secours.
-# Le depot peut etre incomplet (une ISO n'embarque pas toujours data/) : sans
-# repli, un banc entier s'arreterait sur un fichier d'agrement absent.
+# $1 = name of the array to fill, $2 = file, rest = fallback values.
+# The repo may be incomplete (an ISO does not always ship data/).
 _load_pool() {
     local -n __out=$1
     local __file=$2; shift 2
@@ -291,34 +234,21 @@ wan_rtp_start()   { echo $(( WAN_RTP_BASE + ($1 - 1) * WAN_RTP_PER_OP )); }
 wan_rtp_end()     { echo $(( WAN_RTP_BASE + $1 * WAN_RTP_PER_OP - 1 )); }
 
 wan_sms_port()    { echo $(( 7890 + $1 - 1 )); }
-# Un WAN est actif - legacy OU mesh. Sert partout ou la question est "faut-il
-# ouvrir les ports WAN", independamment du mecanisme choisi.
+# A WAN is active (legacy OR mesh): "must the WAN ports be opened?".
 wan_active()      { [ "$WAN_ENABLED" = "true" ] || [ "${WAN_MESH:-0}" = "1" ]; }
 
-# Linphone helpers - port SIP/RTP expose sur le host
-# ── PLUS AUCUN DECALAGE DE PORTS ────────────────────────────────────────────
-# [2026-08-31] Il y avait ici une detection : "5060 est-il pris ? alors decale
-# les publications de +100". Elle ne servait qu a une chose - eviter que le
-# 5060 publie d un conteneur n entre en conflit avec l Asterisk du natif.
-#
-# On ne publie PLUS aucun port SIP/RTP pour les conteneurs : ils sont sur un
-# bridge routable et se joignent en direct, a leur propre adresse, sur le port
-# nominal (verifie : 172.20.0.12:5060 et 172.20.0.13:5060 repondent 401 depuis
-# l hote, sans la moindre publication). Le conflit ayant disparu avec sa cause,
-# le decalage n a plus d objet - et il tirait avec lui une sonde instantanee,
-# donc une course : lancee juste apres l arret du banc, elle voyait 5060 libre,
-# ne decalait rien, et le conteneur mourait quand le natif remontait.
-#
-# Les fonctions ci-dessous gardent leur forme (generate_configs.sh s en sert
-# encore pour ecrire les configs) mais rendent desormais les valeurs NOMINALES.
-# OSMO_PORT_OFFSET=N reste disponible pour qui voudrait retablir un decalage.
+# Linphone helpers - SIP/RTP ports of the containers.
+# No SIP/RTP port is published for containers: they sit on a routable bridge and
+# are reached directly at their own address on the nominal port. These functions
+# return the NOMINAL values (generate_configs.sh uses them to write configs).
+# OSMO_PORT_OFFSET=N re-enables an offset if needed.
 PORT_OFFSET="${OSMO_PORT_OFFSET:-0}"
-# Le RTP suit la meme regle : plage nominale, 200 ports par operateur.
+# RTP follows the same rule: nominal range, 200 ports per operator.
 linphone_sip_port()  { echo $(( 5060  + ${PORT_OFFSET:-0}      + ($1 - 1) )); }
 linphone_rtp_start() { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + ($1 - 1) * 200 )); }
 linphone_rtp_end()   { echo $(( 30000 + ${PORT_OFFSET:-0} * 10 + $1 * 200 - 1 )); }
 
-# Global - detecte avant la boucle operateurs
+# Global - detected before the operator loop
 HOST_IP="127.0.0.1"
 ALSA_OUTPUT="${ALSA_OUTPUT:-default}"
 ALSA_INPUT="${ALSA_INPUT:-default}"
@@ -347,26 +277,17 @@ check_whiptail() {
     fi
 }
 
-# ── MODE NON INTERACTIF : LE QUESTIONNAIRE REPOND TOUT SEUL ─────────────────
-# [2026-08-31] Chaque wt_* ouvre une boite whiptail et ATTEND. C est parfait au
-# terminal, et fatal partout ailleurs : lance par une icone du bureau, par
-# start-multi.sh ou par un script, start-docker.sh s arretait sur « Nombre
-# d'operateurs (1-36) » - un dialogue que personne ne voit et que personne ne
-# valide. Le lancement paraissait bloque ou mort, alors qu il attendait une
-# reponse.
+# ── Non-interactive mode: dialogs answer themselves ────────────────────────
+# Each wt_* opens a whiptail box and WAITS, which blocks when launched from a
+# desktop icon, start-multi.sh or a script. In auto mode the default is used:
+#   wt_input -> its default ($3), the pre-filled value;
+#   wt_menu  -> the FIRST entry, where the cursor starts;
+#   wt_yesno -> no, because boxes use --defaultno;
+#   wt_msg   -> written to stderr instead of waiting for <Ok>.
+# This is exactly what pressing Enter would give.
 #
-# On repond donc AUTOMATIQUEMENT, avec la valeur que la boite proposait deja :
-#   wt_input -> son defaut ($3), celui qui est pre-rempli dans le champ ;
-#   wt_menu  -> la PREMIERE entree, celle sur laquelle le curseur se pose ;
-#   wt_yesno -> non, parce que les boites sont en --defaultno ;
-#   wt_msg   -> ecrit sur stderr au lieu d attendre un <Ok>.
-# Aucune de ces reponses n est inventee : c est exactement ce qu on obtient en
-# appuyant sur Entree.
-#
-# DEUX DECLENCHEURS. OSMO_NONINTERACTIVE=1 le force (start-multi.sh le pose).
-# Et l absence de TTY sur l entree standard le declenche seule : c est la
-# signature d un appel par icone, par cron ou par pipe - la ou aucun dialogue
-# ne peut aboutir. Au terminal, rien ne change : les questions sont posees.
+# Triggers: OSMO_NONINTERACTIVE=1 (set by start-multi.sh), or no TTY on stdin
+# (icon, cron, pipe). On a terminal the questions are asked.
 _wt_auto() { [ "${OSMO_NONINTERACTIVE:-0}" = "1" ] || [ ! -t 0 ]; }
 
 wt_input() {
@@ -400,18 +321,10 @@ wt_msg() {
     whiptail --backtitle "$WT_BACKTITLE" --msgbox "$1" 10 "$WT_WIDTH"
 }
 
-# ── Loopback audio cote session utilisateur ───────────────────────────────
-# ── Session audio de l'hote : QUI, et OU ────────────────────────────────────
-# [2026-08-12] Ces deux fonctions codaient "nirvana" en dur et cherchaient
-# /home/<user>/osmo-operator/loopback.sh - un chemin QUI N'EXISTE PAS (le script
-# est network/loopback.sh). Resultat : enable_user_loopback echouait sur toute
-# machine sans utilisateur nirvana, et disable_user_loopback (appele a l'arret)
-# etait deja du code mort ICI. On resout les deux a l'execution.
-#
-# Le critere du bon utilisateur n'est pas son nom mais la PRESENCE de son socket
-# pulse : c'est la seule chose qui distingue une session graphique vivante d'un
-# compte qui existe. Meme logique que session_user() de wslg-audio-bridge.sh,
-# etendue au balayage de /run/user/*.
+# ── Host audio session: WHO and WHERE ──────────────────────────────────────
+# The right user is found by the PRESENCE of their pulse socket (a live graphical
+# session), not by name. Same logic as session_user() in wslg-audio-bridge.sh,
+# extended to a scan of /run/user/*. The loopback script is network/loopback.sh.
 session_pulse_user() {
     local u uid sock
     for u in "${HOST_PULSE_USER:-}" "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "${USER:-}"; do
@@ -419,8 +332,8 @@ session_pulse_user() {
         uid="$(id -u "$u" 2>/dev/null)" || continue
         [ -S "/run/user/${uid}/pulse/native" ] && { echo "$u"; return 0; }
     done
-    # Dernier recours : proprietaire du premier socket pulse trouve. Couvre le
-    # `sudo -i` (SUDO_USER perdu) et les sessions sans logname (cron, service).
+    # Last resort: owner of the first pulse socket found. Covers `sudo -i`
+    # (SUDO_USER lost) and sessions without logname (cron, service).
     for sock in /run/user/*/pulse/native; do
         [ -S "$sock" ] || continue
         uid="${sock#/run/user/}"; uid="${uid%%/*}"
@@ -430,7 +343,7 @@ session_pulse_user() {
     return 1
 }
 
-# Le script de loopback vit dans le depot, pas dans un $HOME.
+# The loopback script lives in the repo, not in a $HOME.
 find_loopback_script() {
     local d c
     d="$START_REPO"
@@ -483,9 +396,9 @@ build_alsa_args() {
     local src_asound="$START_REPO/configs/asound.conf"
     local host_asound="/tmp/osmocom-alsa/asound.conf"
     mkdir -p /tmp/osmocom-alsa
-    # Docker cree un REPERTOIRE quand la source d'un bind -v n'existe pas :
-    # si un run precedent a laisse ce repertoire, le mount sur /etc/asound.conf
-    # (un fichier) echoue avec "not a directory". On le nettoie avant la copie.
+    # Docker creates a DIRECTORY when the source of a -v bind does not exist; a
+    # leftover directory would make the mount on /etc/asound.conf (a file) fail with
+    # "not a directory". Remove it before the copy.
     if [ -d "$host_asound" ]; then
         rm -rf "$host_asound"
     fi
@@ -496,24 +409,12 @@ build_alsa_args() {
         fi
     fi
     local has_pulse="true"
-    # ── LE SOCKET PULSE DOIT ETRE MONTE, PAS SEULEMENT NOMME ────────────────
-    # [2026-08-31] Cette ligne posait PULSE_SERVER=unix:/run/pulse/native sans
-    # que RIEN ne monte ce socket dans le conteneur. Le chemin existe sur
-    # l hote, pas chez l invite : le plugin ALSA-pulse ouvrait donc dans le
-    # vide, et gapk mourait a l initialisation -
-    #     pulse.c:242 (pulse_connect) PulseAudio: Unable to connect: Connection refused
-    #     pq_alsa.c:168 Couldn't init ALSA device 'gsm_out': Connection refused
-    #     gapk_io.c:468 Failed to initialize GAPK I/O
-    # soit un appel parfaitement etabli et TOTALEMENT muet, sans une ligne qui
-    # parle d audio dans les logs du coeur. Verifie le 31/08 dans
-    # osmo-operator-1 : `docker inspect` ne montrait aucun montage pulse, et
-    # `PULSE_SERVER=unix:/run/pulse/native pactl info` echouait dans le
-    # conteneur la ou tcp:172.20.0.1:4713 repondait.
-    #
-    # On monte donc le socket quand il existe - c est le chemin le plus court
-    # et le moins bavard - et on retombe sur le relais TCP sinon. Le socket est
-    # en srwxrwxrwx et le module unix est en auth-anonymous=1 : l utilisateur
-    # osmocom du conteneur peut s y connecter.
+    # ── The pulse socket must be MOUNTED, not just named ──────────────────────
+    # PULSE_SERVER=unix:/run/pulse/native only works if the socket is mounted into
+    # the container; otherwise gapk fails to init ALSA and calls are silent.
+    # Mount the socket when it exists, else fall back to the TCP relay. The socket is
+    # srwxrwxrwx and the unix module uses auth-anonymous=1, so the container's
+    # osmocom user can connect.
     local _pa_sock=""
     for _s in /var/run/pulse/native /run/pulse/native "/run/user/$(id -u)/pulse/native"; do
         [ -S "$_s" ] && { _pa_sock="$_s"; break; }
@@ -524,8 +425,7 @@ build_alsa_args() {
     elif [ -n "${HOST_AUDIO_RELAY:-}" ]; then
         alsa_args="${alsa_args} -e PULSE_SERVER=${HOST_AUDIO_RELAY}"
     else
-        # Ni socket ni relais : on le DIT. Sans ce message, le silence de
-        # l appel restait la seule trace du probleme.
+        # Neither socket nor relay: say so, otherwise a silent call is the only symptom.
         alsa_args="${alsa_args} -e PULSE_SERVER=tcp:${INTER_NET_GATEWAY:-172.20.0.1}:${WSLG_TCP_PORT:-4713}"
         echo -e "  ${YELLOW}Audio : aucun socket pulse trouve et relais non arme - repli TCP a l aveugle${NC}" >&2
     fi
@@ -554,28 +454,16 @@ build_alsa_args() {
     echo "$alsa_args"
 }
 
-# ── Audio hote : expose le pulse de l'hote en TCP ──────────────────────────
+# ── Host audio: expose the host pulse server over TCP ─────────────────────
 ensure_host_audio_relay() {
     [ -n "${HOST_AUDIO_RELAY_DONE:-}" ] && return 0
     HOST_AUDIO_RELAY_DONE=1
     local bridge="$START_REPO/scripts/wslg-audio-bridge.sh"
     [ -x "$bridge" ] || { echo -e "  ${YELLOW}[host-audio] $bridge introuvable${NC}" >&2; return 0; }
     if "$bridge" host-relay; then
-        # [2026-08-31] ON VERIFIE QUE LE PORT REPOND, on ne se fie plus au seul
-        # code de retour. `host-relay` rend 0 des que le chargement du module a
-        # ete DEMANDE - pas quand pulseaudio accepte des connexions. On
-        # annoncait donc "relai pret" pendant que gapk, dans le conteneur,
-        # recevait :
-        #     lib pulse.c:242:(pulse_connect) PulseAudio: Unable to connect:
-        #         Connection refused
-        #     pq_alsa.c:168 Couldn't init ALSA device 'gsm_out': Connection refused
-        #     gapk_io.c:468 Failed to initialize GAPK I/O
-        # -> appel etabli et TOTALEMENT muet, avec un demarrage qui affichait
-        # "relai pret" en vert. Constate le 31/08, cinq minutes apres un boot :
-        # la course se gagne ou se perd selon ce que la machine fait par
-        # ailleurs, ce qui en fait un "ca marche une fois sur deux".
-        # gapk n init son I/O QU UNE FOIS : rater cette fenetre, c est le
-        # silence pour tout l appel.
+        # Check that the port actually answers: `host-relay` returns 0 as soon as the
+        # module load is REQUESTED, not when pulseaudio accepts connections. gapk
+        # initialises its I/O only ONCE: missing that window means a silent call.
         local _p=0 _i
         for _i in $(seq 1 30); do
             if (exec 3<>"/dev/tcp/${INTER_NET_GATEWAY}/${WSLG_TCP_PORT:-4713}") 2>/dev/null; then
@@ -597,42 +485,29 @@ ensure_host_audio_relay() {
         echo -e "  ${YELLOW}[host-audio] relai non ouvert - fallback carte locale dans le conteneur${NC}"
     fi
 
-    # [2026-08-12] Sens MONTANT (micro). Le relai ci-dessus ne couvre que la
-    # descente (gsm_audio.monitor → HP de l'hote). Le micro, lui, vient du
-    # navigateur, qui capture la source PAR DEFAUT de l'hote - laquelle peut
-    # tres bien etre une entree fantome qui ne sort que du zero (vecu ici :
-    # defaut non mute a 93 % et pourtant silence total, cf. host_mic()).
-    # On choisit donc la source a l'oreille, pas au nom. Non fatal.
+    # Uplink (microphone). The relay above only covers downlink (gsm_audio.monitor
+    # -> host speakers). The mic comes from the browser, which captures the host's
+    # DEFAULT source, possibly a ghost input producing only zeros. host-mic picks the
+    # source by signal, not by name (see host_mic()). Non fatal.
     "$bridge" host-mic || true
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Build
 # ══════════════════════════════════════════════════════════════════════════════
-# [2026-08-31] QUICK PAR DEFAUT, et sans poser la question.
-# Le defaut etait 0 - "normal (--no-cache)" - et, faute de choix explicite,
-# start-docker.sh ouvrait une boite whiptail (l.2578, choose_build_mode) pour la
-# demander. Deux consequences :
-#   - la recompilation Osmocom complete, ~40 minutes, etait ce qu on obtenait
-#     en repondant trop vite, alors que l image ne change quasiment jamais ;
-#   - la QUESTION elle-meme rendait le script inutilisable depuis une icone ou
-#     un appel scripte : il s arretait sur un dialogue que personne ne voit.
-# Le cache docker est la bonne reponse dans la vie de tous les jours ; on ne
-# reconstruit a neuf que quand on le DEMANDE.
-#
-# Comment forcer une reconstruction complete, les deux marchent :
-#     ./launch/start-docker.sh normal ...        (argument positionnel)
-#     OSMO_QUICK=0 ./launch/start-docker.sh ...  (variable d environnement)
+# QUICK by default, without asking: the docker cache is the everyday answer; a
+# full Osmocom rebuild (~40 min) happens only on request:
+#     ./launch/start-docker.sh normal ...        (positional argument)
+#     OSMO_QUICK=0 ./launch/start-docker.sh ...  (environment variable)
 QUICK="${OSMO_QUICK:-1}"
-# EXPLICIT a 1 meme sans demande : c est ce qui supprime le dialogue. Le passer
-# a 0 ici ferait revenir la question a chaque lancement non interactif.
+# Explicit even when not requested: this suppresses the build-mode dialog.
+# Setting it to 0 would bring the question back on every non-interactive run.
 QUICK_EXPLICIT=1
 
 build_run_image() {
-    # [2026-09-03] docker compose v2 (compose.yaml, service "run") quand il est
-    # la - c est lui qui porte les build-args et le nom d image - et docker
-    # build tel quel sinon. Le resultat est le meme : osmocom-run depuis
-    # Dockerfile.run, par-dessus osmocom-nitb.
+    # docker compose v2 (compose.yaml, service "run") when available - it carries
+    # the build-args and image name - else plain docker build. Same result:
+    # osmocom-run from Dockerfile.run, on top of osmocom-nitb.
     local _dir; _dir="${OSMO_REPO_DIR:-$START_REPO}"
     local _nc=""; [ "${QUICK:-0}" = "1" ] || _nc="--no-cache"
     if [ "${QUICK:-0}" = "1" ]; then
@@ -657,28 +532,21 @@ check_image() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Generation dynamique - pjsip interop trunks
+# Dynamic generation - pjsip interop trunks
 # ══════════════════════════════════════════════════════════════════════════════
 generate_pjsip_interop_trunks() {
     local op_id=$1
     local n_operators=$2
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
-    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
-    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
-    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
-    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
-    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
-    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    # Operators below OP_ID_BASE are NATIVE (on the host): include them so that
+    # containers also get a trunk to them.
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
         local remote_ip
-        # Un operateur sous la base est NATIF : il tourne sur l hote, pas dans
-        # un conteneur. Vu d un conteneur, l hote est la passerelle du bridge
-        # docker - la meme adresse que le pont audio et que sms-routing.conf.
-        # NB : match=172.20.0.1 n avale pas les REGISTER Linphone, qui arrivent
-        # par la meme passerelle : pjsip.conf pose endpoint_identifier_order=
-        # username,ip,anonymous - le username passe avant l IP.
+        # A native operator runs on the host; seen from a container the host is the
+        # docker bridge gateway (same address as the audio bridge and sms-routing.conf).
+        # Note: match=172.20.0.1 does not capture Linphone REGISTERs arriving through the
+        # same gateway, because pjsip.conf sets endpoint_identifier_order=username,ip,anonymous.
         if [ "$remote_op" -lt "${OP_ID_BASE:-1}" ]; then
             remote_ip="${INTER_NET_GATEWAY:-172.20.0.1}"
         else
@@ -716,25 +584,14 @@ EOF
 generate_extensions_interop_out() {
     local op_id=$1
     local n_operators=$2
-    # Le prefixe porte le NOEUD : MSISDN = <noeud>00<operateur><rang>. Fige a
-    # "600", le motif n'accrochait plus rien des que le numero commencait par le
-    # numero de noeud, et les appels inter-operateurs sortaient en Congestion
-    # sans qu'une ligne ne designe le motif.
+    # The prefix carries the NODE: MSISDN = <node>00<operator><rank>.
     local _pfx; _pfx="$(osmo_msisdn_pfx "$(osmo_node_id)")"
     cat <<'EOF'
 [interop_out]
 
 EOF
-    # Un seul motif : les MSISDN font six chiffres, <noeud>00<operateur><rang>.
-    # deux motifs _<op>XXXX / _<op>XXXXX visaient l'ancien plan a cinq chiffres,
-    # ou le premier chiffre du numero ETAIT l'operateur - plus rien ne matchait.
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ────────────────────────
-    # [2026-08-31] La boucle partait DE la base. Avec OP_ID_BASE=2 - les
-    # conteneurs prenant les rangs 2..N, le 1 restant au natif sur l hote -
-    # op2 ne fabriquait qu un trunk vers op3 : RIEN vers le natif. Un appel
-    # 100201 -> 100101 tombait dans le fourre-tout _X. de [interop_out] et
-    # sortait en Congestion, sans qu une ligne dise que la route n existe pas.
-    # Meme trou que sms-routing.conf, sur le chemin VOIX.
+    # A single pattern: MSISDNs have six digits, <node>00<operator><rank>.
+    # Operators below OP_ID_BASE are native and are included as well.
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         [ "$remote_op" -eq "$op_id" ] && continue
@@ -747,20 +604,11 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== INTEROP OUT Op${remote_op}: \${EXTEN}
 EOF
     done
 
-    # ── LES SOFTPHONES AUSSI, ET SANS PREFIXE ───────────────────────────────
-    # [2026-08-31] Depuis [internal], un Linphone ne pouvait joindre un autre
-    # operateur qu'en composant 9 + numero (_9. du gabarit - dont l'exemple
-    # « 920001 pour joindre 20001 sur Op2 » date d'ailleurs du plan a CINQ
-    # chiffres, abandonne). Compose tel quel, 100201 tombait sur le fourre-tout
-    # _X. de [internal] et partait au MSC LOCAL, qui le rendait en
-    #     rx MNCC_SETUP_REQ for unknown subscriber number '100201'
-    # avant de le ressortir par MNCC vers Asterisk. Le detour aboutissait, mais
-    # il consommait une transaction MNCC pour rien et faisait dependre un appel
-    # SIP->SIP du bon vouloir du MSC.
-    # On declare donc la route explicitement. _<pfx><op>XX est PLUS SPECIFIQUE
-    # que _X. : Asterisk la choisit d'office, sans qu'il faille toucher au
-    # fourre-tout du gabarit. Gosub(sub-record) comme pour _9., sinon ces
-    # appels-la seraient les seuls a ne pas etre enregistres.
+    # ── Softphones too, without prefix ─────────────────────────────────────────
+    # Lets a Linphone in [internal] dial another operator's number directly instead
+    # of going through the local MSC. _<pfx><op>XX is MORE SPECIFIC than _X., so
+    # Asterisk picks it without touching the template's catch-all. Gosub(sub-record)
+    # as for _9., so these calls are recorded too.
     printf '[internal]\n\n'
     for remote_op in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))) \
                      $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
@@ -772,40 +620,23 @@ exten => _${_pfx}${remote_op}XX,1,NoOp(=== SIP -> INTER-OP Op${remote_op}: \${EX
 
 EOF
     done
-    # PAS de fourre-tout _X. ici : le gabarit configs/extensions.conf en declare
-    # deja un dans ce meme contexte. Deux extensions identiques dans un contexte
-    # font refuser la seconde, avec six avertissements a chaque chargement :
-    #     add_priority: Unable to register extension '_X.' priority 1
-    #                   in 'interop_out', already in use
-    # Rien ne cassait - le fourre-tout du gabarit restait en place - mais ces
-    # lignes noyaient celles qui comptent.
+    # No _X. catch-all here: configs/extensions.conf already declares one in this
+    # context; a duplicate would be rejected with warnings on every reload.
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SMS routing fallback
 # ══════════════════════════════════════════════════════════════════════════════
 _generate_sms_routing_conf_fallback() {
-    # 'local i' n'est PAS cosmetique. Cette fonction est appelee, via
-    # apply_config_templates, DEPUIS la boucle "for i in ..." qui demarre les
-    # operateurs. Sans local, sa propre boucle ecrase la variable de l'appelant
-    # et la laisse a n_operators : tous les conteneurs suivants calculaient
-    # alors leurs ports avec le MEME indice, d'ou
-    #     Bind for 0.0.0.0:5082 failed: port is already allocated
-    # au deuxieme conteneur - et, avant l'erreur, deux operateurs annonces sur
-    # les memes SIP/RTP/SMS.
+    # 'local i' is required: this function is called (via apply_config_templates)
+    # from the "for i in ..." loop that starts the operators; without local it
+    # clobbers the caller's index and every following container gets the same ports.
     local i
     local op_id=$1 n_operators=$2
     printf '# sms-routing.conf - Fallback\n\n[local]\noperator_id = %s\nsc_address  = 1999001%s444\n\n[operators]\n' "$op_id" "$op_id"
-    # ── LES OPERATEURS SOUS LA BASE SONT LES NATIFS ─────────────────────────
-    # [2026-08-31] start-multi.sh pose OP_ID_BASE=2 : les conteneurs prennent
-    # les rangs 2..N et l'operateur 1 reste NATIF, sur l'hote. Comme la boucle
-    # part de OP_ID_BASE, il n'apparaissait ni dans [operators] ni dans
-    # [routes] - releve dans osmo-operator-2 : « 2 = ... / 3 = ... » et rien
-    # pour le 1. Un SMS vers 100101 sortait donc en « No route for
-    # destination », et le natif etait injoignable depuis tout le banc.
-    # Il existe pourtant : il n'est simplement pas dans un conteneur. On le
-    # pointe sur la passerelle du bridge docker, qui EST l'hote vu d'un
-    # conteneur - la meme adresse que le pont audio (172.20.0.1).
+    # Operators below OP_ID_BASE are NATIVE (start-multi.sh sets OP_ID_BASE=2):
+    # list them in [operators] and [routes], pointing to the docker bridge gateway,
+    # which IS the host seen from a container (172.20.0.1).
     local _natif_gw="${INTER_NET_GATEWAY:-172.20.0.1}"
     for i in $(seq 1 $(( ${OP_ID_BASE:-1} - 1 ))); do printf '%s = %s\n' "$i" "$_natif_gw"; done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
@@ -816,59 +647,39 @@ _generate_sms_routing_conf_fallback() {
         for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done
     done
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
-        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done   # MSISDN exacts <noeud>00<op><ms> - PAS de concatenation
+        for ms in 1 2; do printf '%s = %s\n' "$(osmo_msisdn "$(osmo_node_id)" "$i" "$ms")" "$i"; done  # exact MSISDNs <node>00<op><ms> - NO concatenation
     done
     printf '\n[relay]\nport = 7890\nconnect_timeout = 10\nretry_count = 3\nretry_delay = 5\n'
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ─────────────────────────────────────────────────────────────────────────────
-# Configuration du reseau - deleguee a ./generate_configs.sh
+# Network configuration - delegated to ./generate_configs.sh
 #
-# [2026-08-03] Ce fichier portait ici une copie de 132 lignes de
-# apply_config_templates(), jumelle de celle de lib/gabarits.sh (70 lignes).
-# Deux implementations de la meme chose, qui divergeaient en silence : celle-ci
-# copiait tout scripts/, l'autre une liste blanche perimee. Elles vivent
-# desormais dans generate_configs.sh, une seule fois.
-#
-# generate_configs.sh cree globals.conf a la racine s'il n'existe pas - et ne
-# l'ecrase JAMAIS ensuite. Tes reglages survivent donc a tous les runs. Pour
-# repartir des valeurs d'usine : ./generate_configs.sh --force
+# generate_configs.sh creates globals.conf at the repo root if missing and never
+# overwrites it afterwards. Reset to factory values: ./generate_configs.sh --force
 # ─────────────────────────────────────────────────────────────────────────────
-# start-docker.sh n'a pas de variable de repertoire (il travaille en chemins relatifs
-# depuis la racine du depot) : on resout ici, sans rien supposer.
-#
-# BASH_SOURCE ne suffit pas : build-iso.sh extrait ce fichier en bibliotheque
-# ($WORK/start.lib.sh) puis la source, et BASH_SOURCE designe alors la COPIE,
-# dans un repertoire de travail ou generate_configs.sh n'existe pas.
-# OSMO_REPO_DIR laisse l'appelant nommer la vraie racine du depot.
+# OSMO_REPO_DIR lets the caller name the real repo root: build-iso.sh extracts
+# this file as a library ($WORK/start.lib.sh) and sources it, so BASH_SOURCE would
+# point to a copy in a work directory without generate_configs.sh.
 _GC_SH="${OSMO_REPO_DIR:-$START_REPO}/generate_configs.sh"
 "$_GC_SH" >/dev/null || true
 . "$_GC_SH"
 
 
-# ── Mise a jour forcee des trois arbres, AVANT run.sh ─────────────────────────
-# [2026-08-12] Les trois depots sont clones et `git pull`-es DANS LE Dockerfile,
-# donc a l'etat du BUILD. Entre deux builds d'image (11,5 Go, plusieurs dizaines
-# de minutes) un `git push` n'atteignait jamais un conteneur neuf : on lancait un
-# run sur du code perime sans le voir. On les rafraichit donc a chaque demarrage,
-# avant que run.sh ne lise quoi que ce soit.
+# ── Forced update of the three trees, BEFORE run.sh ─────────────────────────
+# The repos are cloned and pulled in the Dockerfile, i.e. frozen at BUILD time.
+# Refresh them at every start so a new container runs the current code.
 #
-# ORDRE : cette fonction DOIT etre appelee apres `docker run` et AVANT le
-# `docker exec ... run.sh`. Apres, run.sh aurait deja lu l'ancien code.
+# ORDER: call after `docker run` and BEFORE `docker exec ... run.sh`.
 #
-# `--ff-only`, PAS de `reset --hard` : le depot qosmo du conteneur recoit des
-# commits faits a la main pendant une session (c'est le mode de travail : on
-# corrige, on compile, on commite dans le conteneur). Un reset dur les
-# effacerait sans le dire. En avance-rapide seule, une divergence s'ARRETE et se
-# VOIT au lieu d'etre ecrasee en silence.
+# `--ff-only`, NOT `reset --hard`: the container's qosmo repo may receive manual
+# commits during a session; a divergence must stop and be visible, not be erased.
 #
-# qosmo est RECOMPILE apres le pull : mettre la source a jour sans relier le
-# binaire ne change rien a ce qui tourne - et c'est indiscernable d'un pull qui
-# aurait echoue. Le juge d'un binaire a jour reste `stat -L /proc/<pid>/exe`.
+# qemu is REBUILT after the pull: updating the source without relinking changes
+# nothing at runtime. To check a running binary: `stat -L /proc/<pid>/exe`.
 #
-# Non bloquant (reseau absent = on continue), mais BRUYANT : un pull rate doit
-# se lire dans la sortie du lanceur, pas se deviner.
+# Non blocking (no network = continue) but LOUD: a failed pull must show up.
 force_update_trees() {
     local c=$1
     echo -e "  ${GREEN}[*] Mise a jour forcee des depots (avant run.sh)...${NC}"
@@ -885,17 +696,9 @@ force_update_trees() {
                 echo -e "    ${CYAN}$repo${NC} : deja a jour ($after)"
             else
                 echo -e "    ${GREEN}$repo${NC} : $before -> $after"
-                # ── LE SERVEUR WEB TOURNE DEJA, ET NODE A DEJA LU SON FICHIER ──
-                # [2026-08-31] Exactement le piege du ninja ci-dessous, sur un
-                # autre maillon : le pull change le FICHIER, pas le PROCESSUS.
-                # osmo-egprs-web.service est une unite systemd, donc lancee au
-                # BOOT du conteneur - avant cet appel - et node ne lit server.js
-                # qu'une fois. Mesure du 31/08 dans osmo-operator-2 :
-                #     node demarre 18:58:18   server.js reecrit 18:58:21
-                # Le disque portait le correctif Kc (grep kcPollVty : 2), le
-                # process tournait encore sur l'ancien code, et le dashboard
-                # affichait « Kc absent » - panne indiscernable d'un pull rate.
-                # On ne relance QUE si le pull a reellement bouge.
+                # ── The web server already runs and node has already read its file ──
+                # osmo-egprs-web.service starts at container boot, before this call, and node
+                # reads server.js only once. Restart it ONLY if the pull actually changed something.
                 if [ "$repo" = /opt/GSM/osmo-egprs-web ]; then
                     if docker exec "$c" systemctl restart osmo-egprs-web 2>/dev/null; then
                         echo -e "    ${GREEN}osmo-egprs-web.service relance${NC} (le dashboard charge le nouveau code)"
@@ -908,8 +711,8 @@ force_update_trees() {
             echo -e "    ${RED}$repo : pull KO (divergence ou reseau) - le run part sur $before${NC}"
         fi
     done
-    # Recompilation de QEMU : sans elle le pull ci-dessus ne change RIEN au
-    # binaire qui tourne. ninja ne reconstruit que ce qui a bouge.
+    # Rebuild QEMU: without it the pull above does not change the running binary.
+    # ninja only rebuilds what changed.
     echo -e "  ${GREEN}[*] Recompilation QEMU (ninja)...${NC}"
     if docker exec "$c" bash -c 'cd /opt/GSM/qosmo/build && ninja' >/dev/null 2>&1; then
         echo -e "    ${GREEN}qemu-system-arm relie${NC} ($(docker exec "$c" stat -L -c %y /opt/GSM/qosmo/build/qemu-system-arm 2>/dev/null | cut -c1-19))"
@@ -937,7 +740,7 @@ build_vol_args() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TUN hote
+# Host TUN
 # ══════════════════════════════════════════════════════════════════════════════
 prepare_host_tun() {
     echo -e "${GREEN}[*] Configuration TUN sur l'hote...${NC}"
@@ -962,10 +765,9 @@ start_inter_stp() {
     tmpdir=$(mktemp -d)
     local inter_cfg="${tmpdir}/osmo-stp-interop.cfg"
     if [ "${WAN_MESH:-0}" = "1" ]; then
-        # Plan WAN : un AS par couple (noeud, operateur), point codes
-        # 1.<noeud><op>.<role>. Le hub doit connaitre TOUS les noeuds, pas
-        # seulement les operateurs locaux - sinon les ASP distants s'attachent
-        # a un AS qui n'existe pas et sont rejetes sans explication.
+        # WAN plan: one AS per (node, operator) pair, point codes 1.<node><op>.<role>.
+        # The hub must know ALL nodes, not only local operators; otherwise remote ASPs
+        # attach to a non-existent AS and are rejected without explanation.
         echo -e "${GREEN}Generation config inter-STP WAN (${WAN_NODE_COUNT} noeuds × ${n_operators})...${NC}"
         bash ./helpers/create_interop.sh --wan "$WAN_NODE_COUNT" "$n_operators" "$inter_cfg" > /dev/null
     else
@@ -975,10 +777,9 @@ start_inter_stp() {
     if [ ! -f "$inter_cfg" ]; then
         echo -e "${RED}Echec generation config inter-STP${NC}"; exit 1
     fi
-    # Le hub ne fait que router du M3UA : l'image osmocom-stp (Dockerfile.stp)
-    # lui suffit et pese une fraction d'osmocom-run. On ne la CONSTRUIT pas ici
-    # a l'insu de l'appelant - si elle manque, on reste sur l'image complete,
-    # qui contient aussi osmo-stp.
+    # The hub only routes M3UA: the osmocom-stp image (Dockerfile.stp) is enough and
+    # much smaller than osmocom-run. It is not built here behind the caller's back:
+    # if missing, the full image (which also contains osmo-stp) is used.
     local stp_image="$IMAGE_RUN"
     if [ "${BUILD_STP:-0}" = "1" ] && ! docker image inspect "$IMAGE_STP" >/dev/null 2>&1; then
         echo -e "  ${GREEN}Construction de ${IMAGE_STP} (Dockerfile.stp)...${NC}"
@@ -995,41 +796,18 @@ start_inter_stp() {
 
     echo -e "${GREEN}Lancement inter-STP @ ${INTER_STP_IP}:2908 (PC 0.0.0)...${NC}"
     docker rm -f "$INTER_STP_CONTAINER" &>/dev/null || true
-    # --restart, PAS --rm : avec --rm, un reboot de l'hote ne laissait pas le hub
-    # arrete, il le faisait DISPARAITRE - au retour, plus rien a redemarrer, et
-    # des ASP qui ouvrent leur SCTP vers personne. Les deux options sont
-    # exclusives (docker refuse la combinaison au parsing), et le "docker rm -f"
-    # ci-dessus tient deja le role de --rm : aucun reliquat du lancement d'avant.
-    # ── 2908 PUBLIE SUR LA BOUCLE LOCALE : LE RACCORD DE L OPERATEUR NATIF ──
-    # [2026-08-31] Sans cette ligne, un operateur NATIF (celui de
-    # start-native.sh, hors conteneur) ne pouvait PAS s attacher au hub.
-    # Son /etc/osmocom/osmo-stp.cfg declare
-    #       asp asp-to-inter 2908 2910 m3ua
-    #        remote-ip 127.0.0.1
-    # ce qui est le bon choix - c est la seule adresse dont on soit sur - mais
-    # RIEN n ecoutait sur 127.0.0.1:2908 cote hote : le hub vit dans le
-    # conteneur, sur le reseau prive, et ne publiait aucun port
-    # ("docker port osmo-inter-stp" : vide). L ASP ouvrait donc son SCTP vers
-    # personne, et le diagnostic sortait tres loin de la cause -
-    #     Aucune association SCTP vers ...:2908 (0/1)
-    #     as-inter : AS_DOWN  /  Route par defaut -> inter-STP absente
-    # ce qui envoie chercher un hub en panne ou un filtrage, alors que le hub
-    # va bien et que rien ne le rendait joignable.
-    #
-    # /sctp, PAS /tcp : M3UA roule sur SCTP. Docker sait publier ce protocole
-    # (verifie sur ce banc : noyau avec module sctp, et
-    # "docker run -p 127.0.0.1:PORT:PORT/sctp" accepte).
-    #
-    # Lie a 127.0.0.1 et pas a 0.0.0.0 : ce point d entree ne sert QU au natif,
-    # sur la meme machine. L exposer sur toutes les interfaces ouvrirait le
-    # coeur SS7 au LAN - checks/wan_ss7_check.sh signale d ailleurs "un port
-    # M3UA expose sur l interface publique" comme un defaut a part entiere.
-    #
-    # L autre solution possible etait de repointer l ASP natif sur
-    # 172.20.0.10 avec local-ip 172.20.0.1. Ecartee : ces deux adresses
-    # n existent que TANT QUE le bridge docker est monte, et elles disparaissent
-    # avec les conteneurs - on aurait remplace une adresse absente par deux
-    # adresses intermittentes, dans une config que start-native.sh regenere.
+    # --restart, NOT --rm: with --rm a host reboot removes the hub instead of leaving
+    # it stopped. The two are mutually exclusive in docker, and the "docker rm -f"
+    # above already removes any leftover.
+    # ── 2908 published on loopback: attachment point of the NATIVE operator ──
+    # The native operator's osmo-stp.cfg declares `asp asp-to-inter 2908 2910 m3ua`
+    # with remote-ip 127.0.0.1; the hub lives in a container, so the port must be
+    # published on the host.
+    # /sctp, NOT /tcp: M3UA runs over SCTP (docker supports publishing it).
+    # Bound to 127.0.0.1, not 0.0.0.0: only the local native operator uses it; exposing
+    # it would open the SS7 core to the LAN (checks/wan_ss7_check.sh flags a public
+    # M3UA port as a defect). Pointing the native ASP at 172.20.0.10 instead is not
+    # viable: that address only exists while the docker bridge is up.
     docker run -d \
         --restart unless-stopped \
         --name "$INTER_STP_CONTAINER" \
@@ -1042,19 +820,9 @@ start_inter_stp() {
         --entrypoint bash \
         "$stp_image" \
         -c "sleep infinity" > /dev/null
-    # tmux si l'image en a un, sinon un simple processus detache.
-    #
-    # osmocom-stp est l'image "STP seul" : elle ne porte que osmo-stp et ses
-    # bibliotheques - c'est tout son interet, 877 Mo contre 11 Go. tmux n'y est
-    # pas, et l'exec echouait alors sur "tmux: executable file not found in
-    # $PATH". Le conteneur tournait pourtant (sleep infinity) : un hub bien
-    # demarre, mais SANS osmo-stp dedans - il n'ecoutait rien, et les noeuds ne
-    # s'attachaient a personne.
-    #
-    # tmux n'apportait ici que le confort de s'attacher a la session. La
-    # barriere qui suit ne lit que /tmp/osmo-stp.log : un processus detache qui
-    # redirige vers ce meme fichier remplit le contrat, et l'image complete
-    # garde son tmux quand elle en a un.
+    # tmux if the image has it, otherwise a plain detached process.
+    # osmocom-stp is the minimal "STP only" image and has no tmux. The barrier below
+    # only reads /tmp/osmo-stp.log, which the detached process also writes.
     if docker exec "$INTER_STP_CONTAINER" sh -c 'command -v tmux >/dev/null 2>&1'; then
         docker exec "$INTER_STP_CONTAINER" \
             tmux new-session -d -s stp \
@@ -1134,17 +902,15 @@ setup_wan_interop() {
 # ══════════════════════════════════════════════════════════════════════════════
 # WAN mesh (--wan)
 # ══════════════════════════════════════════════════════════════════════════════
-# Renseigne la table des noeuds : sans interaction si WAN_NODES est deja pose
-# (option --wan-nodes ou variable d'environnement), par questions sinon.
+# Fill the node table: non-interactively if WAN_NODES is already set (--wan-nodes
+# or environment variable), otherwise by asking.
 wan_mesh_configure() {
     local n_operators=$1
     WAN_OPS="$n_operators"
 
-    # Le point code WAN vaut 1.<noeud><op>.<role> : le champ central du format
-    # ITU 3-8-3 tient sur 8 bits, soit 255. Avec 12 operateurs, le noeud 9
-    # donnerait "912" - un point code invalide, refuse par osmo-stp au
-    # demarrage avec une erreur de parsing qui ne dit rien du nombre
-    # d'operateurs. On arrete ici, en nommant la cause.
+    # The WAN point code is 1.<node><op>.<role>: the middle field of the ITU 3-8-3
+    # format is 8 bits (max 255). With 12 operators, node 9 would give "912", which
+    # osmo-stp rejects with an unhelpful parse error. Stop here, naming the cause.
     if [ "$n_operators" -gt 9 ]; then
         echo -e "${RED}[WAN] ${n_operators} operateurs : le plan de point codes WAN${NC}" >&2
         echo -e "${RED}      (1.<noeud><op>.<role>) n'en admet que 9 par noeud.${NC}" >&2
@@ -1152,9 +918,8 @@ wan_mesh_configure() {
         exit 1
     fi
 
-    # --virtualbox : le segment, les VM et la table sont fabriques AVANT tout le
-    # reste, puis relus comme n'importe quelle table. Le WAN qui suit ne sait
-    # pas - et n'a pas a savoir - que ses pairs sont des VM.
+    # --virtualbox: segment, VMs and table are created BEFORE everything else, then
+    # read back like any table. The WAN code does not need to know its peers are VMs.
     if [ "${VBOX_INTERCO:-0}" = "1" ] && [ -z "${WAN_NODES:-}" ]; then
         local _vb=("$START_REPO/network/setup-vbox-interco.sh"
                    --host-node "$VBOX_HOST_NODE" --conf "$WAN_CONF_FILE")
@@ -1170,16 +935,11 @@ wan_mesh_configure() {
     if [ -n "${WAN_NODES:-}" ]; then
         wan_nodes_parse "$WAN_NODES" || exit 1
         if [ "${WAN_NODE_ID:-0}" = "0" ]; then
-            # La detection par IP echoue par construction quand les premiers
-            # noeuds sont des CONTENEURS : leurs adresses (172.20.0.11, .12)
-            # appartiennent au backbone docker, pas a l'hote. L'hote n'est donc
-            # dans la table sous aucune de ses adresses - et il n'a pas a y
-            # etre : il porte des noeuds, il n'en est pas un.
-            #
-            # Son numero est celui de son PREMIER conteneur, c'est-a-dire 1
-            # dans le modele "conteneur i = noeud i". On ne s'arrete donc plus :
-            # on le pose, et on ne demande --wan-id que si la table ne contient
-            # meme pas ce noeud-la.
+            # IP-based detection cannot work when the first nodes are CONTAINERS: their
+            # addresses (172.20.0.11, .12) belong to the docker backbone, not to the host.
+            # The host carries nodes without being one. Its number is that of its FIRST
+            # container, i.e. 1 ("container i = node i"); --wan-id is only asked if the
+            # table does not even contain that node.
             if wan_nodes_detect_self 2>/dev/null; then
                 :
             elif [ -n "${WAN_IP[1]:-}" ]; then
@@ -1192,21 +952,19 @@ wan_mesh_configure() {
         fi
         wan_nodes_validate || exit 1
     else
-        # Une table deja posee sur cette machine sert de valeurs par defaut :
-        # relancer le lab ne redemande donc pas tout, il propose l'existant.
+        # A table already present on this machine provides the defaults: relaunching
+        # the lab proposes the existing values.
         wan_nodes_load "$WAN_CONF_FILE" 2>/dev/null || true
         wan_nodes_prompt || exit 1
     fi
 
-    # ── Ce que la table WAN ne dit pas, et qu'il faut pourtant savoir ───────
-    # Elle donne les noeuds et leurs adresses. Elle ne dit ni ou est le hub SS7,
-    # ni si les conteneurs de CETTE machine sont ses operateurs ou des noeuds a
-    # part entiere. Sans ces reponses, --wan partait sur ses defauts - hub
-    # local, conteneurs = operateurs - et sur un banc ou le hub est une VM
-    # dediee, cela donnait un second hub inutile et des ASP attaches au mauvais.
+    # ── What the WAN table does not say ────────────────────────────────────────
+    # It gives nodes and addresses, but not where the SS7 hub is, nor whether this
+    # machine's containers are its operators or separate nodes. Ask (or use the CLI
+    # options) instead of falling back on defaults (local hub, containers = operators).
     wan_menu_complements
 
-    WAN_ENABLED="false"          # exclusif du WAN legacy
+    WAN_ENABLED="false"  # excludes the legacy WAN
     WAN_LOCAL_IP="$(wan_local_ip)"
     echo ""
     wan_nodes_summary
@@ -1217,10 +975,9 @@ wan_mesh_configure() {
     fi
     [ "${WAN_NODE_PER_OP:-0}" = "1" ] \
         && echo -e "  conteneurs: ${CYAN}un noeud chacun${NC}, a partir du noeud ${CYAN}${WAN_NODE_ID}${NC}"
-    # Qui tourne ICI, et qui est seulement DECLARE. La distinction n'a rien de
-    # cosmetique : un noeud declare doit deja tourner ailleurs, sinon ses
-    # abonnes figurent dans les tables SMS et le dialplan sans que personne ne
-    # reponde - un appel qui sonne dans le vide se diagnostique mal.
+    # Who runs HERE and who is only DECLARED: a declared node must already run
+    # elsewhere, otherwise its subscribers appear in SMS tables and the dialplan with
+    # nobody answering.
     for _nid in ${WAN_NODE_LIST[@]+"${WAN_NODE_LIST[@]}"}; do
         if [ "$_nid" = "${WAN_NODE_ID:-0}" ] || \
            { [ "${WAN_NODE_PER_OP:-0}" = "1" ] && [ "$_nid" -gt "${WAN_NODE_ID:-0}" ]; }; then
@@ -1232,18 +989,17 @@ wan_mesh_configure() {
     echo ""
 }
 
-# ── La table WAN, batie dans l'ordre ou on la pense ─────────────────────────
-# D'abord COMBIEN d'operateurs en tout, puis combien tournent ICI en conteneur,
-# puis les autres un par un. Les conteneurs prennent les premiers rangs -
-# osmo-operator-1 est le noeud 1, -2 le noeud 2 - de sorte que le nom du
-# conteneur donne son numero de noeud, sans table a consulter. Les operateurs
-# distants (une VM deja demarree) prennent les rangs suivants : on ne demande
-# que ce qu'on ne peut pas deduire, leur adresse et leur indicatif.
+# ── Building the WAN table ─────────────────────────────────────────────────
+# First the TOTAL number of operators, then how many run HERE as containers, then
+# the others one by one. Containers take the first ranks (osmo-operator-1 is node
+# 1, -2 node 2), so the container name gives its node number. Remote operators
+# (an already running VM) take the next ranks: only their address and prefix are
+# asked.
 wan_menu_table() {
     command -v whiptail >/dev/null 2>&1 || return 0
     [ -t 0 ] || return 0
-    [ -n "${WAN_NODES:-}" ] && return 0            # deja donne en CLI
-    [ "${#OPERATOR_DECLS[@]}" -gt 0 ] && return 0  # deja declare par --operator
+    [ -n "${WAN_NODES:-}" ] && return 0  # already given on the CLI
+    [ "${#OPERATOR_DECLS[@]}" -gt 0 ] && return 0  # already declared with --operator
 
     local total cont k ip ind spec=""
     total=$(wt_input "WAN" "Nombre d'operateurs du WAN, tous sites confondus (1-9) :" "3") || return 0
@@ -1253,13 +1009,13 @@ wan_menu_table() {
     [[ "$cont" =~ ^[0-9]$ ]] && [ "$cont" -le "$total" ] \
         || { wt_msg "Entre 0 et ${total}."; return 0; }
 
-    # Les conteneurs : adresse du backbone, indicatif du rang. Rien a demander.
+    # Containers: backbone address, prefix from the rank. Nothing to ask.
     for k in $(seq 1 "$cont"); do
         spec="${spec}${spec:+ }${k}:$(op_backbone_ip "$k"):$(( k * 11 ))"
     done
-    # Les autres : eux seuls ont besoin d'une reponse.
+    # The others: only they need an answer.
     for k in $(seq $(( cont + 1 )) "$total"); do
-        # Defaut : la VM du banc, seul noeud distant du montage courant.
+        # Default: the lab VM, the only remote node of the current setup.
         _defip=""; [ "$k" = 3 ] && _defip="192.168.1.123"
         ip=$(wt_input "Operateur distant ${k}/${total}" \
              "Adresse du noeud ${k} (une VM, une autre machine) :" "$_defip") || return 0
@@ -1276,11 +1032,9 @@ wan_menu_table() {
     echo -e "  ${CYAN}Table WAN :${NC} $WAN_NODES"
 }
 
-# ── Les questions WAN que la table ne porte pas ──────────────────────────────
-# Chacune se saute des que l'option correspondante a ete donnee en ligne de
-# commande : une invocation scriptee reste muette, une invocation a la main est
-# guidee. Sans terminal (CI, cron), on garde les defauts plutot que d'attendre
-# une reponse que personne ne donnera.
+# ── WAN questions not covered by the table ─────────────────────────────────
+# Each is skipped when the matching CLI option was given: scripted runs stay
+# silent, manual runs are guided. Without a terminal (CI, cron) defaults are kept.
 wan_menu_complements() {
     command -v whiptail >/dev/null 2>&1 || return 0
     [ -t 0 ] || return 0
@@ -1317,22 +1071,19 @@ Non : ce sont les operateurs du noeud ${WAN_NODE_ID}."; then
     fi
 }
 
-# Applique la table (Asterisk, iptables, SMS) une fois les containers debout.
+# Apply the table (Asterisk, iptables, SMS) once the containers are up.
 wan_mesh_apply() {
     local n_operators=$1
     local script_path="$START_REPO/network/setup-wan-mesh.sh"
     if [ ! -f "$script_path" ]; then
         echo -e "${RED}[WAN] network/setup-wan-mesh.sh introuvable${NC}"; return 1
     fi
-    # ── Le 4e champ de la table : combien d'operateurs porte chaque noeud ────
-    # WAN_NOPS n'avait AUCUN producteur dans le depot : la table sortait
-    # toujours a trois champs, setup-wan-mesh.sh se repliait sur une supposition
-    # et fabriquait - ou supprimait - des trunks au jugee. On l'ecrit ici, ou
-    # l'information est certaine : avec --op-is-node chaque noeud EST un
-    # conteneur et porte donc un operateur ; sinon, notre noeud les porte tous.
-    # wan_nodes_spec n'ecrit le champ que lorsqu'il vaut autre chose que 1, donc
-    # une table de conteneurs garde exactement la forme que les autres lecteurs
-    # (build-iso.sh, set_stp_ip.sh, les diagnostics) lui connaissent.
+    # ── 4th table field: number of operators per node (WAN_NOPS) ───────────────
+    # Written here, where the information is certain: with --op-is-node each node IS
+    # a container and carries one operator; otherwise our node carries them all.
+    # wan_nodes_spec writes the field only when it differs from 1, so a container
+    # table keeps the 3-field form other readers (build-iso.sh, set_stp_ip.sh,
+    # diagnostics) expect.
     local _k
     if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
         for _k in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
@@ -1343,11 +1094,9 @@ wan_mesh_apply() {
     fi
 
     if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
-        # UN SEUL passage, avec --op-is-node : le script associe alors
-        # l'operateur i au noeud i et recalcule SES pairs. Un passage par noeud,
-        # comme on le faisait, ecrivait dans TOUS les conteneurs a chaque fois :
-        # le dernier gagnait, l'un d'eux se routait vers lui-meme et l'autre
-        # n'avait aucun maillage.
+        # A SINGLE pass with --op-is-node: the script maps operator i to node i and
+        # computes ITS peers. One pass per node would write into ALL containers each
+        # time, the last one winning.
         bash "$script_path" --docker --op-is-node \
             --nodes "$(wan_nodes_spec)" --id 1 --ops "$n_operators" \
             || echo -e "${RED}[WAN] setup-wan-mesh.sh a echoue${NC}"
@@ -1359,23 +1108,16 @@ wan_mesh_apply() {
 
 }
 
-# ── Rendre au trafic sortant son adresse d'origine ───────────────────────────
-# Docker masque tout ce qui quitte un bridge : vues du LAN, les associations des
-# conteneurs semblent toutes venir de l'hote. Ce n'est PAS ce qui empeche un ASP
-# de rejoindre son AS : l'inter-STP est en "accept-asp-connections
-# dynamic-permitted" (helpers/create_interop.sh) et apparie par ROUTING CONTEXT,
-# pas par adresse source - il n'a aucun bloc "match=", contrairement a ce qui
-# etait ecrit ici. Preserver l'adresse reste utile pour autre chose : un
-# diagnostic qui nomme l'operateur au lieu de montrer trois fois l'hote
-# (checks/diag-interstp.sh), et un pare-feu qui peut distinguer les sources.
-# network/setup-docker-lan-route.sh pose donc un RETURN en tete de POSTROUTING.
+# ── Preserving the source address of outgoing traffic ──────────────────────
+# Docker masquerades everything leaving a bridge: seen from the LAN, all container
+# associations come from the host. This does NOT prevent an ASP from joining its
+# AS: the inter-STP uses "accept-asp-connections dynamic-permitted"
+# (helpers/create_interop.sh) and matches by ROUTING CONTEXT, not source address.
+# network/setup-docker-lan-route.sh manages the related POSTROUTING RETURN rule.
 #
-# POURQUOI LE REJOUER ICI
-# Docker REINSERE ses MASQUERADE en tete a chaque reseau cree - et start-docker.sh en
-# cree un par operateur. Le RETURN se retrouve alors DERRIERE eux et ne sert
-# plus a rien : "iptables -L" le montre toujours, et pourtant le hub revoit
-# l'adresse de l'hote. On le remet donc en premiere position une fois TOUS les
-# reseaux crees.
+# Replayed here because docker RE-INSERTS its MASQUERADE rules at the head for
+# each network created (one per operator), which would push a RETURN rule behind
+# them while "iptables -L" still shows it.
 reassert_docker_lan_return() {
     command -v iptables >/dev/null 2>&1 || return 0
     [ "$(id -u)" -eq 0 ] || return 0
@@ -1387,52 +1129,28 @@ reassert_docker_lan_return() {
     [ -n "$lan_ip" ] || return 0
     lan_net="${lan_ip%.*}.0/24"
 
-    # Si LAN et backbone se recouvrent, la regle porterait sur du trafic interne
-    # au bridge : on s'abstient plutot que de deviner.
+    # If LAN and backbone overlap, the rule would hit bridge-internal traffic:
+    # do nothing rather than guess.
     [ "${lan_net%%/*}" = "${INTER_NET_SUBNET%%/*}" ] && return 0
 
-    # ── LA REGLE RETURN EST RETIREE, PAS POSEE ──────────────────────────────
-    # [2026-08-26] Elle preservait l'adresse source des conteneurs vers le LAN :
-    # l'inter-STP voyait 172.20.0.11 et 172.20.0.12 au lieu de l'hote. C'etait
-    # l'intention. Le resultat etait l'inverse : ASP_DOWN des deux cotes et
-    # "connect failed (-110)" en boucle.
-    #
-    # MESURE, plutot que raisonnement. Capture pendant une reconnexion forcee :
-    #   wlp0s20f3 Out  172.20.0.12.2910 > 192.168.1.49.2908  [INIT]
-    #   wlp0s20f3 Out  192.168.1.49.2908 > 172.20.0.12.2910  [INIT ACK]
-    # L'INIT part, le hub repond - et l'INIT ACK n'est JAMAIS recu en entree par
-    # l'hote (tcpdump -Q in : rien). Il est adresse a 172.20.0.12, une adresse
-    # que l'hote doit ROUTER, et le chemin ne la lui remet pas.
-    #
-    # Ce n'est PAS le drop de Docker 29 dans la table raw, contrairement a ce
-    # qu'on a cru : ses compteurs sont restes a 0 pendant toute la mesure.
-    #   ip daddr 172.20.0.12 iifname != "br-..." counter packets 0 bytes 0 drop
-    #
-    # Sans la regle, le trafic ressort masque en 192.168.1.31 : le hub repond a
-    # l'adresse PROPRE de l'hote, qui la recoit, et conntrack rend le paquet au
-    # conteneur. Verifie : as-inter AS_ACTIVE sur les deux operateurs, en huit
-    # secondes.
-    #
-    # Et l'on ne perd rien : l'inter-STP ne distingue pas ses noeuds par leur
-    # adresse source. Il est en "accept-asp-connections dynamic-permitted"
-    # (helpers/create_interop.sh) et les apparie par ROUTING CONTEXT - 1150,
-    # 2150, 3150. Deux noeuds derriere la meme adresse gardent des contextes
-    # distincts, donc des AS distincts.
-    #
-    # On RETIRE donc la regle si un lancement precedent l'a laissee.
+    # ── The RETURN rule is REMOVED, not added ──────────────────────────────────
+    # With source addresses preserved, the hub's SCTP INIT ACK is addressed to
+    # 172.20.0.x, which the host must route and does not receive back: ASPs stay
+    # down ("connect failed (-110)"). Masqueraded to the host's own address, the
+    # reply comes back and conntrack hands it to the container.
+    # Nothing is lost: the inter-STP distinguishes nodes by ROUTING CONTEXT (1150,
+    # 2150, 3150), not by source address.
+    # Remove the rule if a previous run left it.
     iptables -t nat -D POSTROUTING -s "$INTER_NET_SUBNET" -d "$lan_net" -j RETURN 2>/dev/null \
         && echo -e "  ${CYAN}[WAN] regle RETURN retiree : les noeuds sortent masques (l'inter-STP les apparie par routing context)${NC}" \
         || true
 
-    # ── Le FORWARD, sans quoi le routage ne sert a rien ─────────────────────
-    # Docker pose un FORWARD par defaut a DROP : un paquet du LAN vers le
-    # backbone (ou l'inverse) est jete avant d'atteindre le conteneur, sans
-    # refus ni trace - cote VM, on ne voit qu'un silence. DOCKER-USER est
-    # consultee AVANT les regles de docker et il ne la reecrit pas.
-    # network/setup-docker-lan-route.sh pose ces deux memes regles, mais aucun
-    # chemin automatique ne l'appelle : elles n'existaient donc sur le banc que
-    # si on avait pense a lancer ce script a la main. On les pose ici, ou la
-    # fonction est deja rejouee apres chaque reseau cree.
+    # ── FORWARD, without which routing is useless ──────────────────────────────
+    # Docker sets a default FORWARD DROP policy: a packet between the LAN and the
+    # backbone is silently dropped. DOCKER-USER is evaluated BEFORE docker's rules
+    # and docker does not rewrite it. network/setup-docker-lan-route.sh sets the same
+    # two rules, but nothing calls it automatically; they are set here, where the
+    # function is replayed after each network creation.
     iptables -N DOCKER-USER 2>/dev/null || true
     local _spec
     for _spec in "-s ${lan_net} -d ${INTER_NET_SUBNET}" "-s ${INTER_NET_SUBNET} -d ${lan_net}"; do
@@ -1446,19 +1164,15 @@ reassert_docker_lan_return() {
         fi
     done
 
-    # ── Les traductions DEJA etablies ───────────────────────────────────────
-    # La regle ne vaut que pour les nouvelles associations. Celles qui ont ete
-    # masquees avant elle gardent leur traduction tant qu'elles vivent : le hub
-    # continue de les voir sous l'adresse de l'hote, et l'on croit la regle
-    # inoperante alors qu'elle est bien la. On efface donc ces entrees - les
-    # piles se reconnectent, cette fois avec leur vraie adresse.
+    # ── Already established translations ──────────────────────────────────────
+    # The rule only applies to new associations; masqueraded ones keep their
+    # translation while they live. Flush those entries so the stacks reconnect.
     #
-    # SAUF quand docker 29 a pose son DROP. Sa table "ip raw" jette, en
-    # prerouting, tout paquet entrant vers le backbone qui n'arrive pas par le
-    # bridge : une association qui repart avec sa vraie adresse source ne recoit
-    # alors plus aucune reponse et reste en COOKIE_WAIT. Purger conntrack dans
-    # cet etat coupe des ASP qui ne tiennent QUE par le masquage, pour les faire
-    # renaitre muets - c'est exactement la panne qu'on croit corriger.
+    # EXCEPT when docker 29 has set its DROP: its "ip raw" table drops, in
+    # prerouting, any incoming packet to the backbone not arriving via the bridge.
+    # An association restarting with its real source address would get no reply
+    # (COOKIE_WAIT); flushing conntrack would cut ASPs that only work thanks to
+    # masquerading.
     local _nft_drop=0
     if command -v nft >/dev/null 2>&1; then
         if nft list table ip raw 2>/dev/null \
@@ -1471,24 +1185,20 @@ reassert_docker_lan_return() {
         echo -e "  ${YELLOW}      purge conntrack SAUTEE (elle couperait les ASP attaches).${NC}"
         echo -e "  ${CYAN}      Backbone en mode routed pour le lever : OSMO_DOCKER_ROUTED=1${NC}"
     elif command -v conntrack >/dev/null 2>&1; then
-        # BORNEE a la destination LAN. Sans -d, la meme commande effacait aussi
-        # les flux 172.20.0.x <-> 172.20.0.x, c'est-a-dire tout le SS7
-        # intra-backbone : les ASP du hub local tombaient d'un seul coup, et le
-        # message parlait pourtant de "traductions heritees".
+        # LIMITED to the LAN destination. Without -d this would also flush
+        # 172.20.0.x <-> 172.20.0.x flows, i.e. all intra-backbone SS7.
         local _purged
         _purged="$(conntrack -D -s "$INTER_NET_SUBNET" -d "$lan_net" 2>/dev/null | grep -c . || true)"
         echo -e "  ${CYAN}[WAN] ${_purged} traduction(s) heritee(s) effacee(s) vers ${lan_net}${NC}"
     else
-        # Le cas de l'hote du banc. Le bloc etait saute sans un mot : on croyait
-        # les traductions effacees alors qu'elles vivaient encore, et le hub
-        # continuait de voir l'adresse de l'hote sans que rien ne l'explique.
+        # The lab host case: report explicitly that translations were NOT flushed.
         echo -e "  ${YELLOW}[WAN] conntrack absent : les associations deja masquees gardent${NC}"
         echo -e "  ${YELLOW}      leur traduction jusqu'a leur reconnexion (apt install conntrack)${NC}"
     fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PoC QEMU - entree par defaut du premier menu
+# QEMU PoC - default entry of the first menu
 # ══════════════════════════════════════════════════════════════════════════════
 start_qemu_poc() {
     echo -e "${GREEN}PoC QEMU Calypso - bring-up minimal + qosmo-grgsm/run.sh...${NC}"
@@ -1497,11 +1207,11 @@ start_qemu_poc() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mode virtual (multi-operateurs SS7 - ex-bridge)
+# Virtual mode (multi-operator SS7, formerly "bridge")
 # ══════════════════════════════════════════════════════════════════════════════
 start_bridge_mode() {
-    # Ce mode CREE les conteneurs : le segment prive se derive de l operateur,
-    # pas du noeud (voir _osmo_priv_index).
+    # This mode CREATES the containers: the private segment derives from the
+    # operator, not the node (see _osmo_priv_index).
     export OSMO_PRIV_BY_OP=1
     local n_operators
     declare -A OP_MCC OP_MNC OP_NAME OP_MS
@@ -1509,36 +1219,30 @@ start_bridge_mode() {
     if [ "${QEMU_POC:-0}" = "1" ]; then
         # ── PoC QEMU ──────────────────────────────────────────────────────────
         n_operators=1
-        # Meme base que les boucles : sans ca, un OP_ID_BASE=2 ferait chercher
-        # OP_MCC[2] alors que tout est pose en [1] - tableaux vides et
-        # operateur sans MCC, sans que rien ne le signale.
+        # Same base as the loops: otherwise OP_ID_BASE=2 would look up OP_MCC[2]
+        # while everything is set at [1].
         _b="${OP_ID_BASE:-1}"
         OP_MCC[$_b]="001"; OP_MNC[$_b]="01"; OP_NAME[$_b]="OsmoQEMU"; OP_MS[$_b]=2
-        # PoC a un seul operateur : le PLMN de reference, celui des IMSI du
-        # depot. On ne le derive pas du noeud, il n'y a pas de WAN ici.
+        # Single-operator PoC: reference PLMN, the one of the repo's IMSIs. Not
+        # derived from the node: no WAN here.
         WAN_ENABLED="false"
-        # --wan reste valable en PoC QEMU : un noeud = un operateur, c'est
-        # exactement la maquette "N machines qui s'appellent".
+        # --wan is still valid in the QEMU PoC: one node = one operator.
         [ "${WAN_MESH:-0}" = "1" ] && wan_mesh_configure 1
-        # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
-        # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
+        # BRIDGE_NO_PROCESS=0: radio and mobile start with the core (see
+        # "Containers start the full stack" below).
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 1}"
         echo -e "  ${CYAN}[PoC QEMU] 1 operateur · no-process + qosmo/run.sh · ${ENCRYPTION}${NC}"
     else
-        # ── Mode interactif ──────────────────────────────────────────────────
-        # Deja repondu dans le menu WAN (« combien tournent ICI ») : on ne
-        # repose pas la question, deux reponses divergentes donneraient une
-        # table et un nombre de conteneurs qui ne se correspondent plus.
+        # ── Interactive mode ────────────────────────────────────────────────────
+        # Already answered in the WAN menu ("how many run HERE"): not asked again, two
+        # diverging answers would make the table and container count disagree.
         if [ -n "${OPERATOR_COUNT_HINT:-}" ]; then
             n_operators="$OPERATOR_COUNT_HINT"
             echo -e "  ${CYAN}Conteneurs a lancer : ${n_operators} (--operators / menu WAN)${NC}"
         else
-            # 3 par defaut : c'est la taille du banc (deux conteneurs et une
-            # VM). Un defaut qui correspond au montage courant evite la moitie
-            # des saisies, et surtout evite qu'un oubli produise une table plus
-            # courte que la realite - un noeud absent de la table n'existe pour
-            # personne, et son absence ne se voit qu'a l'appel qui n'aboutit pas.
+            # Default 3: the lab size (two containers and one VM). A node missing from the
+            # table does not exist for anyone.
             n_operators=$(wt_input "Operateurs" "Nombre d'operateurs (1-36) :" "3") || exit 1
         fi
         n_operators=${n_operators:-2}
@@ -1546,17 +1250,10 @@ start_bridge_mode() {
             wt_msg "Nombre invalide (1-36)."; exit 1
         fi
 
-        # ── LE PLAN DE NOEUDS SE DECIDE AVANT LE PLMN ────────────────────────
-        # Ce bloc etait 50 lignes plus bas, APRES le menu des operateurs. Or
-        # c'est lui qui repond a "chaque conteneur est-il un noeud a part
-        # entiere ?", donc lui qui fixe WAN_NODE_PER_OP - et le MCC vaut le
-        # numero de NOEUD. Le menu calculait donc les PLMN alors que la reponse
-        # n'etait pas encore connue : tout le monde recevait le MCC du noeud 1.
-        # Constate sur le banc - "Operateur 2 : MCC=001 MNC=02" annonce juste au-
-        # dessus de "STP PC 1.21.2", c'est-a-dire noeud 2. Deux plans dans le
-        # meme ecran, le point code juste et le PLMN faux.
-        # Les questions de WAN passent donc devant. Elles ne dependent que du
-        # nombre d'operateurs, connu ci-dessus.
+        # ── The node plan is decided BEFORE the PLMN ────────────────────────────
+        # It answers "is each container a separate node?" (WAN_NODE_PER_OP), and the
+        # MCC is the node number, so the WAN questions must come before the operator
+        # menu. They only depend on the operator count, known above.
         # ── WAN ──────────────────────────────────────────────────────────────
         if [ "${WAN_MESH:-0}" = "1" ]; then
             wan_mesh_configure "$n_operators"
@@ -1599,11 +1296,8 @@ start_bridge_mode() {
             common_ms=${common_ms:-8}
             if ! [[ "$common_ms" =~ ^[0-9]+$ ]] || [ "$common_ms" -lt 1 ] || [ "$common_ms" -gt 64 ]; then common_ms=8; fi
             for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
-                # Un PLMN par operateur, sur les DEUX composantes. Le MCC
-                # etait fige a 001 pour tout le monde : seul le MNC separait
-                # les reseaux, et la moindre valeur ecrite en dur ailleurs
-                # (les IMSI des MS l'etaient) retombait sur un PLMN plausible
-                # mais etranger. 001/002/003 rend la confusion visible.
+                # One PLMN per operator, on BOTH components: 001/002/003 makes a PLMN
+                # mismatch visible.
                 OP_MCC[$i]=$(op_mcc "$i"); OP_MNC[$i]=$(op_mnc "$i")
                 OP_NAME[$i]="$(op_default_name "$i")"; OP_MS[$i]=$common_ms
             done
@@ -1628,10 +1322,8 @@ start_bridge_mode() {
                     mcc=$(wt_input "Operateur ${i}" "MCC (pays = noeud $(op_plmn_node "$i"), $(op_country "$i")) :" "$dmcc") || exit 1; OP_MCC[$i]=${mcc:-$dmcc}
                     mnc=$(wt_input "Operateur ${i}" "MNC :" "$dmnc") || exit 1; OP_MNC[$i]=${mnc:-$dmnc}
                     name=$(wt_input "Operateur ${i}" "Nom :" "$dname") || exit 1; OP_NAME[$i]=${name:-$dname}
-                    # 2 par defaut, pas 1 : c est le minimum pour une radio
-                    # MIXTE - un faketrx et un QEMU Calypso, comme le natif.
-                    # A 1, l operateur n avait qu un seul MS et le mode hybride
-                    # n avait plus rien a repartir.
+                    # Default 2, not 1: minimum for a MIXED radio (one faketrx and one QEMU
+                    # Calypso, like the native operator).
                     n_ms=$(wt_input "Operateur ${i}" "Nombre de MS (1-64) :" "2") || exit 1; OP_MS[$i]=${n_ms:-2}
                     if ! [[ "${OP_MS[$i]}" =~ ^[0-9]+$ ]] || [ "${OP_MS[$i]}" -lt 1 ] || [ "${OP_MS[$i]}" -gt 64 ]; then OP_MS[$i]=1; fi
                 done
@@ -1640,24 +1332,19 @@ start_bridge_mode() {
 
 
         # ── RAN / Encryption ─────────────────────────────────────────────────
-        # BRIDGE_NO_PROCESS=0 : la radio et le mobile demarrent avec le coeur
-        # (voir le commentaire "NO-ATTACH, PLUS NO-PROCESS" plus bas).
+        # BRIDGE_NO_PROCESS=0: radio and mobile start with the core (see
+        # "Containers start the full stack" below).
         PHY_MODE="faketrx"; BRIDGE_NO_PROCESS="${BRIDGE_NO_PROCESS:-0}"; BRIDGE_QEMU=1
         ENCRYPTION="${ENCRYPTION:-a5 1}"
         if [ -n "$HANDOFF_MODE_FROM_ENV" ]; then
-            # [2026-08-31] L APPELANT A IMPOSE LE MODE : on ne lui repose pas la
-            # question. Sans cette branche, seul --wan pouvait choisir l hybride
-            # et tout autre lancement retombait sur choose_ran_host - un menu.
-            # En non interactif ce menu s auto-repondait par sa PREMIERE entree,
-            # donc "full-grgsm" : un HANDOFF_MODE=faketrx-qemu passe en
-            # environnement etait lu (HANDOFF_MODE_FROM_ENV=1, l.137) puis
-            # ignore ici. On ne pouvait pas obtenir la radio mixte hors WAN.
+            # The caller imposed the mode (HANDOFF_MODE in the environment): do not ask
+            # again. Otherwise the menu (auto-answered with its first entry in
+            # non-interactive mode) would override it.
             echo -e "  ${GREEN}[RAN] mode impose par l appelant : ${CYAN}${HANDOFF_MODE}${NC}"
         elif [ "${WAN_MESH:-0}" = "1" ]; then
-            # Un noeud de WAN est une maquette complete : il lui faut une radio
-            # des DEUX types pour que l'appel inter-noeud soit vraiment porte de
-            # bout en bout. D'ou l'hybride par defaut - un faketrx + un QEMU
-            # Calypso - au lieu du menu. HANDOFF_MODE=... en prefixe le change.
+            # A WAN node is a complete testbed: it needs a radio of BOTH types for an
+            # inter-node call to be carried end to end. Hence hybrid by default (one faketrx +
+            # one QEMU Calypso). Prefix with HANDOFF_MODE=... to change it.
             HANDOFF_MODE="faketrx-qemu"; HANDOFF_QEMU_CHOICE="faketrx-qemu"
             echo -e "  ${GREEN}[RAN] WAN → hybride par defaut : ${CYAN}1 faketrx + 1 QEMU Calypso${NC}"
         else
@@ -1665,7 +1352,7 @@ start_bridge_mode() {
         fi
     fi
 
-    # ── Detection IP hote ────────────────────────────────────────────────────
+    # ── Host IP detection ─────────────────────────────────────────────────
     HOST_IP=$(ip route get 1.1.1.1 2>/dev/null \
         | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1) || true
     if [ -z "$HOST_IP" ]; then
@@ -1676,16 +1363,15 @@ start_bridge_mode() {
     echo -e "${GREEN}IP hote : ${CYAN}${HOST_IP}${NC}  (Linphone)${NC}"
     echo ""
 
-    # ── Ou joindre le hub SS7, vu d'ici ──────────────────────────────────────
-    # Le hub est UNIQUE pour tout le WAN. Deux cas, et le mauvais donne un ASP
-    # qui ne s'attache jamais :
-    #   ce noeud heberge le hub  → les conteneurs le joignent en interne (172.20.0.10)
-    #   un autre noeud l'heberge → ils sortent sur le WAN, vers SON adresse
+    # ── Where to reach the SS7 hub from here ─────────────────────────────────
+    # The hub is UNIQUE for the whole WAN:
+    #   this node hosts the hub  → containers reach it internally (172.20.0.10)
+    #   another node hosts it    → they go out over the WAN, to ITS address
     WAN_STP_TARGET="$INTER_STP_IP"
     HUB_IS_LOCAL=1
     if [ -n "${WAN_HUB_IP:-}" ]; then
-        # Hub designe par son adresse : il n'est pas un noeud, et rien ne se
-        # lance ici. C'est le cas d'une VM inter-STP dediee.
+        # Hub given by address: it is not a node and nothing is started here
+        # (dedicated inter-STP VM).
         WAN_STP_TARGET="$WAN_HUB_IP"; HUB_IS_LOCAL=0
     elif [ "${WAN_MESH:-0}" = "1" ] && [ "${WAN_NODE_ID}" != "${WAN_HUB_NODE}" ]; then
         WAN_STP_TARGET="${WAN_IP[$WAN_HUB_NODE]:-}"; HUB_IS_LOCAL=0
@@ -1696,17 +1382,13 @@ start_bridge_mode() {
         fi
     fi
 
-    # ── Reseau backbone ──────────────────────────────────────────────────────
-    # OSMO_DOCKER_ROUTED=1 : bridge en mode "routed" (docker >= 28). Docker
-    # cesse alors de masquer ce qui sort du backbone, et surtout n'installe pas
-    # dans sa table "ip raw" le DROP qui jette, en prerouting, tout paquet
-    # entrant vers 172.20.0.x n'arrivant pas par le bridge. Avec ce DROP, un
-    # conteneur joint depuis le LAN a sa VRAIE adresse ne recoit jamais de
-    # reponse : son association SCTP reste en COOKIE_WAIT, sans un mot dans les
-    # journaux. C'est le seul reglage qui leve les deux a la fois.
-    # Optionnel et non fatal : docker < 28 ne connait pas l'option et refuse la
-    # creation, on retombe alors en silence sur le reseau ordinaire (masque),
-    # celui avec lequel le banc a toujours tourne.
+    # ── Backbone network ──────────────────────────────────────────────────
+    # OSMO_DOCKER_ROUTED=1: bridge in "routed" mode (docker >= 28). Docker then stops
+    # masquerading backbone traffic and does not install the "ip raw" DROP that
+    # discards incoming packets to 172.20.0.x not arriving via the bridge (which
+    # leaves SCTP associations from the LAN in COOKIE_WAIT).
+    # Optional and non fatal: docker < 28 rejects the option and the ordinary
+    # (masqueraded) network is used.
     if docker network inspect "$INTER_NET" &>/dev/null; then
         echo -e "  ${CYAN}Reseau backbone ${INTER_NET} deja present${NC}"
     else
@@ -1723,7 +1405,7 @@ start_bridge_mode() {
         fi
     fi
 
-    # ── SMS Routing ──────────────────────────────────────────────────────────
+    # ── SMS Routing ──────────────────────────────────────────────────────
     SMS_ROUTING_DIR=$(mktemp -d)
     if declare -f sms_routing_generate_all > /dev/null 2>&1; then
         local _ms_counts=()
@@ -1741,32 +1423,20 @@ start_bridge_mode() {
         echo -e "${CYAN}      Les ASP de ce noeud s'y attacheront en M3UA/SCTP 2908.${NC}"
     fi
 
-    # ── HLR subscribers ──────────────────────────────────────────────────────
+    # ── HLR subscribers ──────────────────────────────────────────────────
     local all_subscribers_file
     all_subscribers_file=$(mktemp)
     echo "# op_id:ms_idx:imsi:msisdn:ki" > "$all_subscribers_file"
-    # ── L'annuaire : un etat civil pour chaque IMSI ──────────────────────────
-    # Un banc ne rend que des numeros a 15 chiffres, et l'on finit par lire
-    # "001010001000002" comme un mot de passe : impossible de dire de tete a
-    # quel operateur, a quel pays, a quel telephone il appartient. Cette table
-    # met un nom et une adresse en face de chaque abonne. Elle est FABRIQUEE -
-    # personnages et rues n'existent pas - mais elle n'invente pas l'IMSI :
-    # c'est exactement celui qui part au HLR trois lignes plus bas, dans la
-    # meme boucle, a partir de la meme variable.
-    # Les fiches sont tirees dans data/noms.txt et data/adresses.txt, melanges
-    # au chargement. On les parcourt EN ORDRE a partir de la liste melangee
-    # plutot que de retirer au sort a chaque abonne : deux abonnes du meme banc
-    # ne peuvent alors pas porter le meme nom tant que le fichier n'est pas
-    # epuise - et deux homonymes dans une trace, c'est une heure perdue.
+    # ── Directory: a fake identity for each IMSI ────────────────────────────
+    # Puts a name and address next to each subscriber. Names and streets are
+    # FICTITIOUS, but the IMSI is exactly the one sent to the HLR below, from the
+    # same loop and variable. Entries come from data/noms.txt and data/adresses.txt
+    # (shuffled at load) and are taken IN ORDER, so no two subscribers share a name
+    # until the file is exhausted.
     local ANNUAIRE_FILE="${OSMO_ANNUAIRE:-/var/tmp/osmo-annuaire.csv}"
-    # ── L'annuaire du SS7 : le meme service, un etage plus bas ──────────────
-    # L'annuaire d'abonnes met un nom sur un MSISDN. Celui-ci met un nom sur un
-    # POINT CODE. On lit "1.21.2" dans une trace M3UA sans savoir de quelle
-    # machine il s'agit, ni quel operateur elle porte, ni vers quel hub elle
-    # s'attache - et les trois se deduisent d'un plan qui n'est ecrit nulle
-    # part ailleurs que dans la tete de celui qui a lance le banc.
-    # Il est produit par la MEME boucle que les configurations : ce n'est pas
-    # une documentation a cote, c'est le releve de ce qui vient d'etre ecrit.
+    # ── SS7 directory: the same service one layer down ──────────────────────
+    # Maps each POINT CODE to its machine, operator and hub. Produced by the SAME
+    # loop as the configurations: a record of what was just written.
     local ANNUAIRE_SS7="${OSMO_ANNUAIRE_SS7:-/var/tmp/osmo-annuaire-ss7.csv}"
     printf 'noeud;operateur;pays;mcc;mnc;pc_msc;pc_stp;pc_bsc;rctx_msc;rctx_stp;rctx_bsc;rctx_inter;hub;as_inter;asp_inter;backbone;prive\n' \
         > "$ANNUAIRE_SS7"
@@ -1778,15 +1448,9 @@ start_bridge_mode() {
         for ms_idx in $(seq 1 "$n_ms"); do
             local msin; msin=$(printf '%04d%06d' "${op_id}" "${ms_idx}")
             local imsi="${mcc}${mnc}${msin}"
-            # MSISDN a SIX chiffres : <noeud>00<operateur><rang>.
-            # L'ancien plan, op * 10000 + rang, commencait a 10001 - cinq
-            # chiffres dont le premier EST le numero d'operateur, ce qui melait
-            # le plan d'abonnes au plan de composition (les services du dialplan
-            # sont a 100, 200, 500, 600, 700) et obligeait chaque motif local a
-            # dependre de l'operateur. Le prefixe 600 qui l'a remplace etait
-            # commun a TOUTES les machines : deux noeuds y revendiquaient les
-            # memes numeros. Le premier chiffre porte donc le noeud, et le
-            # routage se lit dans le numero : 100101, 100102, 200101...
+            # Six-digit MSISDN: <node>00<operator><rank>, e.g. 100101, 100102, 200101.
+            # The first digit carries the node, so routing can be read from the number and
+            # subscriber numbers do not clash with dialplan services (100, 200, 500, 600, 700).
             local msisdn; msisdn=$(osmo_msisdn "$(osmo_node_id)" "$op_id" "$ms_idx")
             local ki; ki=$(printf '00112233445566778899aabbccdd%02x%02x' "${ms_idx}" "${op_id}")
             echo "${op_id}:${ms_idx}:${imsi}:${msisdn}:${ki}" >> "$all_subscribers_file"
@@ -1801,22 +1465,18 @@ start_bridge_mode() {
     done
     local total_subs; total_subs=$(( $(wc -l < "$all_subscribers_file") - 1 ))
     echo -e "${GREEN}Abonnes total : ${total_subs}${NC}"
-    # Aperçu : les premieres fiches, puis le chemin du fichier complet. Une
-    # table de 8 MS par operateur noierait le reste du demarrage.
+    # Preview: first entries, then the path of the full file.
     awk -F';' 'NR==1 {next}
                NR<=9 {printf "  %-16s %-6s %-16s %-12s %-22s %s\n", $1,$2,$3,$4,$7,$8}
                END {if (NR>9) printf "  ... et %d autres\n", NR-9}' "$ANNUAIRE_FILE"
     echo -e "  ${CYAN}Annuaire complet : ${ANNUAIRE_FILE}${NC}  (aussi /etc/osmocom/annuaire.csv dans chaque conteneur)"
     echo ""
 
-    # ── Table rase sur la serie d'operateurs ────────────────────────────────
-    # Le "docker rm -f" plus bas ne vise que le conteneur de MEME NOM. Un
-    # reliquat d'un lancement precedent - trois operateurs hier, deux
-    # aujourd'hui, ou une serie interrompue en cours de route - garde ses
-    # publications de ports et fait echouer la creation du suivant :
-    #     Bind for 0.0.0.0:5082 failed: port is already allocated
-    # Le message nomme le port, jamais le conteneur qui le tient : on cherche
-    # longtemps. Cette fonction RECREE toute la serie, on efface donc d'abord.
+    # ── Clean slate for the operator series ────────────────────────────────
+    # The "docker rm -f" below only targets the container of the SAME NAME. A leftover
+    # from a previous run (more operators, interrupted series) keeps its published
+    # ports and makes the next creation fail ("port is already allocated"). This
+    # function RECREATES the whole series, so remove them first.
     local _stale
     _stale="$(docker ps -aq --filter "name=^osmo-operator-" 2>/dev/null)"
     if [ -n "$_stale" ]; then
@@ -1825,7 +1485,7 @@ start_bridge_mode() {
         docker rm -f $_stale >/dev/null 2>&1 || true
     fi
 
-    # ── Demarrage sequentiel des operateurs ──────────────────────────────────
+    # ── Sequential operator start ──────────────────────────────────────────
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
         local container_name net_name subnet gateway container_ip inter_local_ip rctx_inter
         local n_groups last_group_ip
@@ -1846,12 +1506,10 @@ start_bridge_mode() {
         if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
             _node_i=$(( WAN_NODE_ID + i - 1 ))
             _op_i=1
-            # Le numero de noeud vit dans 1..9 : au-dela, le point code ecrit
-            # ici (1.<noeud><op>.<role>) sort du format ITU 3-8-3, aucun AS
-            # correspondant n'existe au hub (helpers/create_interop.sh borne a
-            # 9 noeuds), et network/set-node-id.sh comme start-native.sh
-            # refusent l'argument. Mieux vaut le dire ici, avant de fabriquer
-            # une identite SS7 que personne ne connaitra.
+            # Node numbers are 1..9: beyond that the point code 1.<node><op>.<role>
+            # leaves the ITU 3-8-3 format, no matching AS exists on the hub
+            # (helpers/create_interop.sh supports 9 nodes), and network/set-node-id.sh and
+            # start-native.sh reject it.
             if [ "$_node_i" -gt 9 ] || [ "$_node_i" -lt 1 ]; then
                 echo -e "${RED}[WAN] --node-per-op : l'operateur ${i} tomberait sur le noeud ${_node_i}${NC}" >&2
                 echo -e "${RED}      Les numeros de noeud vont de 1 a 9. Avec --wan-id ${WAN_NODE_ID},"' '"${NC}" >&2
@@ -1866,14 +1524,11 @@ start_bridge_mode() {
             _rctx_inter=$(( _node_i * 1000 + _op_i * 100 + 50 ))
         fi
 
-        # L'identite AFFICHEE est celle qui sera ECRITE. Cette ligne montrait
-        # "1.<op>.2" en dur et le routing context du plan local : elle annoncait
-        # donc 1.1.2/150 alors que la config recevait 1.21.2/2150. On cherche
-        # longtemps une panne quand le journal dit le contraire du fichier.
+        # The identity DISPLAYED is the one WRITTEN to the config.
         echo -e "  STP PC     : 1.${_pc_mid}.2  RCTX : ${_rctx_inter:-$rctx_inter}  MS : ${CYAN}${OP_MS[$i]}${NC}"
 
-        # Le releve SS7 de CET operateur, avec les valeurs qui partent dans sa
-        # configuration deux lignes plus bas - pas une reconstitution.
+        # SS7 record of THIS operator, with the values written to its configuration
+        # just below.
         printf '%s;%s;%s;%s;%s;1.%s.1;1.%s.2;1.%s.3;%s;%s;%s;%s;%s;as-n%sop%s;asp-n%sop%s;%s;%s\n' \
             "$_node_i" "${OP_NAME[$i]}" "$(op_country "$i")" \
             "${OP_MCC[$i]}" "${OP_MNC[$i]}" \
@@ -1891,39 +1546,28 @@ start_bridge_mode() {
             echo -e "  ${RED}✗ Echec creation reseau ${net_name} (${subnet})${NC}"; exit 1
         fi
 
-        # ── La regle de non-masquage, AVANT que la pile ne se connecte ───────
-        # Une decision de NAT se prend sur le PREMIER paquet d'une association :
-        # conntrack la conserve ensuite pour toute sa duree. Poser la regle en
-        # fin de lancement arrivait donc trop tard - l'ASP s'etait deja attache,
-        # masque, et le hub le voyait sous l'adresse de l'hote jusqu'a sa
-        # prochaine reconnexion. Deux operateurs y devenaient indiscernables.
-        #
-        # Ici, elle est reaffirmee apres CHAQUE reseau cree (docker reinsere ses
-        # MASQUERADE en tete a chacun) et donc avant tout demarrage de pile.
+        # ── The no-masquerade rule, BEFORE the stack connects ──────────────────
+        # A NAT decision is taken on the FIRST packet of an association and conntrack
+        # keeps it for its lifetime. The rule is re-asserted after EACH network creation
+        # (docker re-inserts its MASQUERADE at the head each time), hence before any
+        # stack starts.
         reassert_docker_lan_return >/dev/null
 
         local tmpdir
         tmpdir=$(mktemp -d)
-        # Plan de point codes. Hors WAN : 1.<op>.<role>, comme toujours. En WAN :
-        # le numero de noeud entre dedans, sans quoi deux machines presentent au
-        # hub des adresses SS7 identiques - routage faux, et silencieux.
-        # Seul RCTX_INTER est surcharge : c'est le seul routing context que le
-        # hub voit. Ceux du MSC et du BSC restent internes au conteneur.
+        # Point code plan. Without WAN: 1.<op>.<role>. With WAN the node number is
+        # included, otherwise two machines present identical SS7 addresses to the hub.
+        # Only RCTX_INTER is overridden: it is the only routing context the hub sees;
+        # MSC and BSC contexts stay internal to the container.
         #
-        # UN NOEUD PAR CONTENEUR (--node-per-op)
-        # Par defaut, la machine EST le noeud et ses conteneurs en sont les
-        # operateurs : 1.<noeud><op>.<role>. C'est juste quand une machine
-        # heberge un operateur complet.
+        # ONE NODE PER CONTAINER (--node-per-op)
+        # By default the machine IS the node and its containers are its operators:
+        # 1.<node><op>.<role>.
         #
-        # Mais des que les conteneurs sont joignables chacun a SON adresse
-        # (172.20.0.11, .12... routees depuis le LAN), ce ne sont plus des
-        # operateurs d'un meme site : ce sont des noeuds a part entiere, au meme
-        # titre qu'une VM. Les traiter en operateurs obligeait alors a inscrire
-        # la MACHINE dans la table WAN - une entree qui ne correspond a aucun
-        # equipement, et qui recevait pourtant un indicatif et des routes.
-        #
-        # Avec --node-per-op, le conteneur i devient le noeud (base + i - 1),
-        # porte l'operateur 1 de ce noeud, et son point code suit : 1.<n>1.<role>.
+        # When containers are reachable at THEIR own address (172.20.0.11, .12... routed
+        # from the LAN) they are full nodes, like a VM. With --node-per-op, container i
+        # becomes node (base + i - 1), carries operator 1 of that node, and its point
+        # code is 1.<n>1.<role>.
         RCTX_INTER_OVERRIDE="$_rctx_inter" \
         apply_config_templates "$tmpdir" \
             "$container_ip" "$gateway" \
@@ -1932,16 +1576,15 @@ start_bridge_mode() {
             "$WAN_STP_TARGET" "no shutdown" \
             "$n_operators"
 
-        # L'annuaire voyage avec la pile : c'est dans le conteneur qu'on lit
-        # un IMSI dans un journal, pas sur l'hote.
+        # The directory travels with the stack: IMSIs are read in logs inside the
+        # container, not on the host.
         [ -f "$ANNUAIRE_FILE" ] && cp "$ANNUAIRE_FILE" "$tmpdir/osmocom/annuaire.csv"
         [ -f "$ANNUAIRE_SS7" ]   && cp "$ANNUAIRE_SS7"   "$tmpdir/osmocom/annuaire-ss7.csv"
 
-        # ── Les fiches du dialplan ─────────────────────────────────────────
-        # Asterisk ne sait pas lire un CSV. On lui ecrit donc les memes fiches
-        # sous la forme qu'il comprend : une extension par MSISDN dans le
-        # contexte sub-annuaire (voir configs/extensions.conf). L'appel arrive
-        # alors sur le combine avec un nom, et non avec cinq chiffres.
+        # ── Dialplan entries ───────────────────────────────────────────────
+        # Asterisk cannot read CSV: write the same entries as one extension per MSISDN
+        # in the sub-annuaire context (see configs/extensions.conf), so calls reach the
+        # handset with a name.
         {
             printf '; annuaire.conf - genere par start-docker.sh, ne pas editer a la main.\n'
             printf '; Une fiche par abonne du banc. Le repli _X. est dans extensions.conf.\n'
@@ -1964,41 +1607,25 @@ start_bridge_mode() {
         vol_args=$(build_vol_args "$tmpdir")
         alsa_args=$(build_alsa_args)
 
-        # [2026-08-12] Le chown est OBLIGATOIRE, pas cosmetique. Ce repertoire est
-        # monte sur /var/log/osmocom et les demons tournent en osmocom (999:1000
-        # dans l'image). Cree en root:root, osmo-hlr ne peut pas creer son fichier
-        # de log → "% Unable to create file '/var/log/osmocom/osmo-hlr.log'" →
-        # echec du parse de sa config → boucle de restart systemd → osmo-start.sh
-        # `exit 1` ("HLR indispensable") → run.sh meurt (set -e) et n'atteint
-        # aucun de ses etages suivants. Un simple probleme de droits fait donc
-        # tomber tout le pipeline, audio compris.
+        # The chown is REQUIRED: this directory is mounted on /var/log/osmocom and the
+        # daemons run as osmocom (999:1000 in the image). Owned by root, osmo-hlr cannot
+        # create its log file, fails to parse its config and restart-loops, and
+        # osmo-start.sh / run.sh abort the whole pipeline.
         mkdir -p /tmp/osmocom-logs/op${i}
         chown 999:1000 /tmp/osmocom-logs/op${i} 2>/dev/null || true
 
-        # ── Ports a exposer ──────────────────────────────────────────────────
+        # ── Ports to expose ──────────────────────────────────────────────────
         local port_args=""
 
-        # ── SIP/RTP : PLUS AUCUNE PUBLICATION SUR L HOTE ─────────────────
-        # [2026-08-31] On publiait le 5060 et la plage RTP de chaque conteneur
-        # sur l hote. C etait la SEULE source du conflit de ports : l operateur
-        # natif tient 5060/udp (Asterisk) et 5061 (osmo-sip-connector) en
-        # permanence, puisqu il tourne EN MEME TEMPS que les conteneurs.
-        #
-        # On a d abord decale les publications (+100). Ca marchait, mais ca
-        # reposait sur une sonde "5060 est-il pris ?" prise a un instant t -
-        # donc sur une course : lancee juste apres l arret du banc, la sonde
-        # voyait le port libre, ne decalait rien, et le conteneur mourait sur
-        #     failed to bind host port 0.0.0.0:5061/udp: address already in use
-        # en restant en etat "Created", des que le natif remontait.
-        #
-        # La publication etait de toute facon INUTILE : les conteneurs sont sur
-        # un bridge routable depuis l hote. On les joint en direct, a leur
-        # propre adresse, sur le port nominal. Supprimer la publication
-        # supprime le conflit, l offset ET la course, d un coup.
+        # ── SIP/RTP: nothing published on the host ─────────────────────────
+        # The native operator permanently holds 5060/udp (Asterisk) and 5061
+        # (osmo-sip-connector). Containers are on a bridge routable from the host and
+        # are reached directly at their own address on the nominal port, so no
+        # publication (and no port conflict) is needed.
         local _cip; _cip="$(op_backbone_ip "$i")"
         echo -e "  Linphone   : ${CYAN}${_cip}:5060${NC}  RTP 30000-30199 (direct, sans publication)"
 
-        # WAN en plus si active (legacy ou mesh)
+        # Plus WAN ports if enabled (legacy or mesh)
         if wan_active; then
             local sip_port rtp_start rtp_end sms_port
             sip_port=$(wan_sip_port "$i")
@@ -2007,11 +1634,9 @@ start_bridge_mode() {
             port_args="${port_args} -p ${sip_port}:5060/udp -p ${sip_port}:5060/tcp -p ${rtp_start}-${rtp_end}:${rtp_start}-${rtp_end}/udp"
             echo -e "  WAN        : SIP ${sip_port} RTP ${rtp_start}-${rtp_end}"
             if [ "${WAN_MESH:-0}" = "1" ]; then
-                # Un port SMS PAR operateur : le relais distant doit joindre le
-                # container du BON operateur, or son injection MT passe par le
-                # HLR local a son container. Un port unique livrerait tous les
-                # SMS au premier operateur, qui ne connait pas les abonnes des
-                # autres - "MSISDN not found in HLR", sans autre trace.
+                # One SMS port PER operator: the remote relay must reach the container of the
+                # RIGHT operator, since MT injection goes through that container's HLR. A single
+                # port would deliver all SMS to the first operator ("MSISDN not found in HLR").
                 sms_port=$(wan_sms_port "$i")
                 port_args="${port_args} -p ${sms_port}:7890/tcp"
                 echo -e "  WAN SMS    : ${sms_port} → relay 7890"
@@ -2021,45 +1646,22 @@ start_bridge_mode() {
         docker rm -f "$container_name" 2>/dev/null || true
         ensure_host_audio_relay
 
-        # --restart, PAS --rm : au reboot, les conteneurs operateurs ne se
-        # retrouvaient pas arretes mais DISPARUS - avec leur base HLR alimentee
-        # et tout ce qui n'est pas monte depuis l'hote. Le banc etait a remonter
-        # entierement apres une simple coupure. Le "docker rm -f" juste au-dessus
-        # rend --rm inutile, et docker refuse --rm avec --restart au parsing.
+        # --restart, NOT --rm: with --rm, operator containers would DISAPPEAR on reboot
+        # together with their HLR database and anything not mounted from the host. The
+        # "docker rm -f" above makes --rm unnecessary, and docker rejects --rm with --restart.
         #
-        # OSMO_ROLE=operator : le conteneur regenere ses configs quand run.sh
-        # rejoue apply_config_templates, et le rattrapage d'identite SS7 de
-        # generate_configs.sh s'arrete net sur un role vide - sans rien
-        # reappliquer et sans rien dire. Le conteneur repartait alors sur le
-        # point code du gabarit, 1.1.2 pour TOUS, donc deux equipements a la
-        # meme adresse SS7 et aucun ASP attache.
-        # shellcheck disable=SC2086
-        # ── --security-opt apparmor=unconfined : SANS LUI, PID 1 MEURT ──────
-        # [2026-09-04] SYMPTOME : osmo-operator-2 en "Restarting (255)" a
-        # l'infini, et l'operateur 3 jamais cree. Diagnostic : le conteneur
-        # execute /scripts/entrypoint.sh, qui finit par `exec systemd`. systemd,
-        # en PID 1, commence par monter ses systemes de fichiers d'API - et
-        # celui-la echoue :
-        #     Failed to mount tmpfs (type tmpfs) on /run/lock
-        #         (MS_NOSUID|MS_NODEV|MS_NOEXEC "mode=1777,size=5242880"):
-        #         Permission denied
-        #     [!!!!!!] Failed to mount API filesystems.
-        #     Exiting PID 1...
-        # Le message ne sort JAMAIS dans `docker logs` : systemd ecrit sur
-        # /dev/console, pas sur stdout. `docker logs` s'arrete apres
-        # "Created symlink ... docker-entrypoint.service" et on ne voit qu'un
-        # code 255 sans explication. Il faut `docker run -t` pour le lire.
-        #
-        # CAP_SYS_ADMIN est deja la, et ne suffit pas : ce n'est pas seccomp qui
-        # refuse le mount, c'est APPARMOR. Le profil docker-default d'Ubuntu
-        # interdit les operations de montage quelles que soient les
-        # capabilities. Un conteneur qui fait tourner systemd doit en sortir.
-        # Verifie a la main sur ce banc : memes drapeaux + apparmor=unconfined
-        # -> "Queued start job for default target multi-user.target", conteneur
-        # Up ; sans lui -> exit 255 en boucle.
-        # [2026-10-24] SYS_NICE : c54x_exe/run.sh lance la chaine (DSP, QEMU, osmocon,
-        # mobile, pont) sous `nice -n -10` (RT_NICE) ; sans la capability chaque etape
-        # crachait « nice: cannot set niceness: Permission denied » et tournait sans priorite.
+        # OSMO_ROLE=operator: the container regenerates its configs when run.sh replays
+        # apply_config_templates, and generate_configs.sh's SS7 identity fix-up silently
+        # stops on an empty role (all containers would then use point code 1.1.2).
+        # ── --security-opt apparmor=unconfined: required for systemd as PID 1 ──────
+        # The entrypoint ends with `exec systemd`, which mounts its API filesystems; Ubuntu's
+        # docker-default AppArmor profile forbids mounts regardless of capabilities
+        # (CAP_SYS_ADMIN is not enough), and PID 1 exits with code 255:
+        #     Failed to mount tmpfs (type tmpfs) on /run/lock ... Permission denied
+        # systemd writes this to /dev/console, so it is NOT in `docker logs`; use
+        # `docker run -t` to see it.
+        # SYS_NICE: c54x_exe/run.sh runs the chain (DSP, QEMU, osmocon, mobile, bridge)
+        # under `nice -n -10` (RT_NICE), which needs this capability.
         # shellcheck disable=SC2086
         docker run -d \
             --restart unless-stopped \
@@ -2102,22 +1704,11 @@ start_bridge_mode() {
 
         docker network connect --ip "$container_ip" "$net_name" "$container_name"
 
-        # ── UN OPERATEUR MORT N'EMPORTE PLUS LES SUIVANTS ───────────────────
-        # [2026-09-04] CE QUI EST ARRIVE : osmo-operator-2 repartait en boucle
-        # (systemd tue par AppArmor, voir le commentaire du docker run
-        # ci-dessus). Tout ce qui suit dans ce tour de boucle parle au conteneur
-        # par `docker exec`, qui repond "container is restarting" et sort en
-        # erreur - et start-docker.sh tourne sous `set -eu`. Le pipeline
-        # d'alimentation du HLR (`... | docker exec -i "$c" bash`) rendait donc
-        # un statut non nul, et LE SCRIPT ENTIER s'arretait la, en silence.
-        # Resultat observe : un op2 en "Restarting (255)", AUCUN conteneur
-        # osmo-operator-3, pas meme son reseau gsm-net-op3 - et rien dans la
-        # sortie qui dise pourquoi le troisieme manque.
-        #
-        # La panne d'un operateur doit rester LA PANNE DE CET OPERATEUR. On
-        # verifie donc qu'il tourne vraiment avant de lui parler ; s'il est
-        # mort, on le DIT (avec les deux commandes qui donnent la vraie cause,
-        # celle que `docker logs` cache) et on passe au suivant.
+        # ── A dead operator does not take down the following ones ──────────────
+        # Everything below talks to the container through `docker exec`, which fails on a
+        # restarting container, and this script runs under `set -eu`. Check the container
+        # really runs first; if not, report it (with the commands that show the real
+        # cause, hidden from `docker logs`) and move on to the next operator.
         _st="$(docker inspect -f '{{.State.Status}}' "$container_name" 2>/dev/null || echo absent)"
         if [ "$_st" != running ]; then
             _rc="$(docker inspect -f '{{.State.ExitCode}}' "$container_name" 2>/dev/null || echo '?')"
@@ -2131,60 +1722,23 @@ start_bridge_mode() {
 
         force_update_trees "$container_name"
 
-        # ── LE CONTENEUR S'ARRETE AU COEUR ──────────────────────────────────
-        # [2026-08-31] NO-ATTACH, PLUS NO-PROCESS.
-        # no-process arretait run.sh au coeur : STP, HLR, MSC, BSC, MGW, GGSN,
-        # SGSN, PCU montaient, puis plus rien - ni PHY, ni mobile, ni Asterisk,
-        # ni SMSC. Il fallait lancer start-native.sh A LA MAIN derriere, et en
-        # attendant le conteneur affichait
-        #     [no-process] mobile non lance - attente 4247 sautee
-        # c est-a-dire un operateur sans radio ni abonne joignable, alors que
-        # tout paraissait "pret".
-        #
-        # La pile complete demarre donc maintenant. Ce n est PAS un retour a
-        # l attachement bloquant : run.sh ne s attache jamais de lui-meme - il
-        # lance tout dans tmux et se contente d imprimer la commande d attache
-        # (scripts/run.sh, "Attach : tmux -S ... attach"). Le pipeline QEMU
-        # delegue, lui, prend CALYPSO_NO_ATTACH=1 (qosmo-grgsm/run.sh l.36).
-        #
-        # BRIDGE_NO_PROCESS=1 ./launch/start-docker.sh retablit l ancien comportement quand on
-        # veut vraiment le coeur seul.
+        # ── Containers start the full stack ────────────────────────────────────
+        # run.sh starts core (STP, HLR, MSC, BSC, MGW, GGSN, SGSN, PCU) and radio (PHY,
+        # mobile, Asterisk, SMSC). It never attaches by itself: everything runs in tmux
+        # and only the attach command is printed. The delegated QEMU pipeline honours
+        # CALYPSO_NO_ATTACH=1.
+        # BRIDGE_NO_PROCESS=1 ./launch/start-docker.sh starts the core only.
         local run_cmd="RUN_NO_PROCESS=${BRIDGE_NO_PROCESS:-0} CALYPSO_NO_ATTACH=1 /etc/osmocom/run.sh"
         echo -e "  ${GREEN}[*] Lancement run.sh...${NC}"
-        # DANS UN TMUX, pas en simple processus detache.
-        #
-        # Le terminal courant est reserve a osmo-operator-1 (handoff QEMU plus
-        # bas) : c'est celui qu'on regarde. Les autres tournaient en
-        # "docker exec -d", c'est-a-dire sans session a laquelle se rattacher -
-        # on ne pouvait plus que LIRE leur journal, jamais reprendre la main sur
-        # la pile qui tourne.
-        #
-        # Une session nommee "osmo" rend chaque operateur joignable a la
-        # demande, sans rien afficher tant qu'on ne le demande pas :
-        #     docker exec -ti osmo-operator-2 tmux attach -t osmo
-        # (ou par tools/vty-menu.sh, qui liste les conteneurs)
-        #
-        # tee : le journal reste ecrit meme quand personne n'est attache, sinon
-        # un incident survenu hors session serait perdu. Repli sans tmux pour
-        # une image qui n'en aurait pas - le comportement d'avant, a l'identique.
-        # UN SEUL chemin de demarrage par conteneur.
-        # En mode QEMU, chaque conteneur est demarre par start-native.sh - le
-        # premier dans le terminal courant, les autres en session tmux. Lancer
-        # run.sh EN PLUS donnait deux piles concurrentes dans le meme
-        # conteneur : la seconde commencait par "--stop" et coupait ce que la
-        # premiere venait de monter. L'ASP de l'operateur 2 s'attachait, puis
-        # tout s'arretait - "Client connected" suivi d'un silence.
-        # run.sh EST conservé : c'est lui qui monte le coeur, et c'est de son
-        # HLR que depend l'etape suivante - l'attente du port 4258 puis le
-        # provisionnement des abonnes. L'en priver figeait le lancement sur
-        # "Attente HLR" pour un demarrage prevu plus tard.
-        #
-        # Les conteneurs qui doivent porter la pile COMPLETE la relancent
-        # ensuite via start-native.sh, une fois les abonnes en base : la base
-        # HLR survit au redemarrage, le travail n'est pas perdu.
+        # run.sh is started detached; its output goes to /var/log/osmocom/run.sh.log
+        # (mounted on the host as /tmp/osmocom-logs/opN).
+        # ONE start path per container: in QEMU mode each container's radio stack is
+        # started later by start-native.sh. run.sh is still needed here: it brings up the
+        # core, and the next step (waiting for HLR port 4258, then provisioning
+        # subscribers) depends on its HLR. The HLR database survives the later restart.
         docker exec -d "$container_name" bash -c "mkdir -p /var/log/osmocom && { ${run_cmd}; } > /var/log/osmocom/run.sh.log 2>&1"
 
-        # Attente HLR
+        # Wait for HLR
         echo -ne "  ${GREEN}[*] Attente HLR (4258)${NC}"
         local retry=0
         while ! docker exec "$container_name" bash -c "echo >/dev/tcp/127.0.0.1/4258" 2>/dev/null; do
@@ -2193,25 +1747,17 @@ start_bridge_mode() {
         done
         echo -e " ${GREEN}✓${NC}"
 
-        # ── CHAQUE HLR NE PORTE QUE SES PROPRES ABONNES ─────────────────────
-        # On y versait TOUS les abonnes du banc, tous operateurs confondus. Cela
-        # simulait un roaming qui n'existe pas : un abonne de l'operateur 1
-        # inscrit dans le HLR de l'operateur 2 y est joignable sans qu'aucun
-        # lien MAP n'ait ete etabli. Et surtout, la liste devenait illisible -
-        # six abonnes chez un operateur qui n'en a que deux, dont on ne savait
-        # plus lesquels etaient les siens.
-        # Un vrai roaming passe par le SS7, pas par une copie de la base.
+        # ── Each HLR only holds its own subscribers ────────────────────────────
+        # Copying all lab subscribers into every HLR would fake a roaming that does not
+        # exist. Real roaming goes through SS7, not through a database copy.
         local _mine; _mine="$(awk -F: -v op="$i" '$1 == op' "$all_subscribers_file")"
         local _n_mine; _n_mine="$(printf '%s\n' "$_mine" | grep -c . || true)"
         echo -e "  ${GREEN}[*] Alimentation HLR Op${i} (${_n_mine} abonnes)...${NC}"
 
-        # ── ET ON EFFACE CE QUI N'EST PLUS AU PLAN ──────────────────────────
-        # hlr.db survit aux relances. Un changement de plan - MCC par noeud,
-        # MSISDN a six chiffres - laisse donc derriere lui des abonnes d'un plan
-        # mort : IMSI que plus aucun mobile ne presente, et surtout MSISDN qu'ils
-        # RETIENNENT. osmo-hlr impose l'unicite du numero, si bien que le bon
-        # abonne ne peut plus recuperer le sien - l'erreur est alors
-        # "cannot update MSISDN", qui ne nomme pas celui qui le tient.
+        # ── Remove subscribers that are no longer in the plan ──────────────────
+        # hlr.db survives restarts, so a plan change leaves stale subscribers that keep
+        # their MSISDN. osmo-hlr enforces MSISDN uniqueness, so the right subscriber
+        # could not get its number ("cannot update MSISDN").
         local _garder; _garder="$(printf '%s\n' "$_mine" | cut -d: -f3 | paste -sd'|' -)"
         {
             echo "#!/bin/bash"
@@ -2230,22 +1776,17 @@ start_bridge_mode() {
             echo "VTYCMDS"
         } | docker exec -i "$container_name" bash
 
-        # ON NE COMPTE PAS LES REFUS. Le compte n'a pas de valeur ici : osmo-hlr
-        # prefixe d'un '%' TOUTES ses reponses, succes compris, et un
-        # "Subscriber already exists" est la reponse NORMALE d'une relance -
-        # le banc est reprovisionne a chaque demarrage. Toute variante de ce
-        # comptage finissait par signaler un probleme la ou il n'y en a pas,
-        # et un controle qui crie au loup ne sert plus a rien le jour ou il a
-        # raison.
+        # Rejections are NOT counted: osmo-hlr prefixes ALL replies with '%', success
+        # included, and "Subscriber already exists" is the NORMAL reply on a restart (the
+        # lab is reprovisioned at each start).
         #
-        # La seule preuve qu'un abonne est servi, c'est sa fiche : on RELIT la
-        # base. Un abonne sans cle est pire qu'un abonne absent - osmo-msc le
-        # trouve, reclame ses vecteurs d'authentification, n'obtient rien, et
-        # rejette le mobile avec un motif qui accuse la carte SIM.
+        # The only proof that a subscriber is served is its record: read the database
+        # back. A subscriber without keys is worse than a missing one - osmo-msc finds it,
+        # requests auth vectors, gets none, and rejects the mobile with a SIM-related cause.
         local _sans_cle
-        # La purge : on LISTE avec sqlite (le VTY n'a pas de "show all" filtrable)
-        # et on SUPPRIME par le VTY - osmo-hlr tient un cache en memoire, un
-        # DELETE direct dans la base ne l'en previendrait pas.
+        # Purge: LIST with sqlite (the VTY has no filterable "show all") and DELETE
+        # through the VTY - osmo-hlr keeps an in-memory cache that a direct SQL DELETE
+        # would bypass.
         docker exec "$container_name" bash -c '
             garder="$(sed -n "s/^__PURGE__//p" /tmp/hlr_feed.vty)"
             sed -i "/^__PURGE__/d" /tmp/hlr_feed.vty
@@ -2286,7 +1827,7 @@ start_bridge_mode() {
             echo -e "  ${GREEN}✓ HLR Op${i} alimente (${_n_mine} abonnes, tous avec cle)${NC}"
         fi
 
-        # Attente dernier groupe - sautee en no-process
+        # Wait for the last group - skipped in no-process mode
         if [ "${BRIDGE_NO_PROCESS:-0}" = "1" ]; then
             echo -e "  ${YELLOW}[no-process] mobile non lance - attente 4247 sautee${NC}"
         else
@@ -2305,7 +1846,7 @@ start_bridge_mode() {
 
     rm -f "$all_subscribers_file"
 
-    # ── Attente relays SMS ────────────────────────────────────────────────────
+    # ── Wait for SMS relays ────────────────────────────────────────────────
     if [ "${BRIDGE_NO_PROCESS:-0}" != "1" ] && declare -f sms_routing_wait_ready > /dev/null 2>&1; then
         for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
             sms_routing_wait_ready "$(op_container "$i")" 90 || true
@@ -2319,7 +1860,7 @@ start_bridge_mode() {
         setup_wan_interop "$n_operators" "$WAN_N_REMOTE"
     fi
 
-    # ── Resume ─────────────────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────────
     echo ""
     echo -e "${GREEN}${BOLD}Stack multi-operateurs demarree !${NC}"
     echo ""
@@ -2352,25 +1893,16 @@ start_bridge_mode() {
     fi
     echo ""
 
-    # ── LES CHECKS, JUSTE APRES LE LANCEMENT ────────────────────────────────
-    # [2026-08-31] Ils tournent ICI depuis que la pile complete demarre
-    # (no-attach au lieu de no-process). Avant, il n y avait rien a mesurer : le
-    # coeur seul tournait, ni PHY ni mobile ni Asterisk, et "Stack demarree !"
-    # etait tout ce qu on obtenait - un banc annonce pret dont personne
-    # n avait verifie qu il portait un appel.
+    # ── Checks, right after the launch ─────────────────────────────────────
+    #   ss7_check.sh        ASP, AS, routes, SSN - the layer that carries calls.
+    #   operator_summary.sh what each operator ACTUALLY has: HLR/VLR subscribers,
+    #                       BTS, PDP contexts. --live makes it generate its own dump;
+    #                       without it, it would analyse a previous lab's dump.
     #
-    #   ss7_check.sh        ASP, AS, routes, SSN - la couche qui porte les appels.
-    #   operator_summary.sh ce que chaque operateur a REELLEMENT : abonnes
-    #                       HLR/VLR, BTS, contextes PDP. --live lui fait generer
-    #                       son propre dump ; sans ce drapeau il analyserait
-    #                       celui d un lab precedent et decrirait un autre banc.
-    #
-    # Chemins RELATIFS, comme ./helpers/prepare_host.sh plus haut : ce script
-    # suppose deja d etre lance depuis la racine du depot.
-    # Ni l un ni l autre ne doit faire echouer le lancement - la pile est
-    # debout, on RAPPORTE son etat, d ou le || true.
-    # OSMO_SKIP_CHECKS=1 les saute (start-multi.sh le pose : il enchaine ses
-    # propres verifications juste apres, inutile de jouer ss7_check deux fois).
+    # RELATIVE paths, like ./helpers/prepare_host.sh above: this script is run from
+    # the repo root. Neither may fail the launch (|| true): the stack is up, its
+    # state is only REPORTED.
+    # OSMO_SKIP_CHECKS=1 skips them (start-multi.sh sets it and runs its own checks).
     if [ "${OSMO_SKIP_CHECKS:-0}" != "1" ]; then
         if [ -r ./checks/ss7_check.sh ]; then
             echo -e "${GREEN}${BOLD}── Check SS7 ──${NC}"
@@ -2388,10 +1920,9 @@ start_bridge_mode() {
         fi
     fi
 
-    # --virtualbox : le "set" ne se limite pas a cette machine. Les VM sont
-    # creees avant (setup-vbox-interco.sh) ; on les demarre ici, une fois que le
-    # hub et les operateurs locaux sont debout - un noeud qui monte avant le hub
-    # voit sa SCTP refusee.
+    # --virtualbox: the VMs are created earlier (setup-vbox-interco.sh) and started
+    # here, once the hub and local operators are up - a node starting before the hub
+    # gets its SCTP refused.
     if [ "${VBOX_INTERCO:-0}" = "1" ]; then
         local _lab="$START_REPO/tools/vbox-wan-lab.sh"
         if [ -x "$_lab" ] || [ -r "$_lab" ]; then
@@ -2401,17 +1932,13 @@ start_bridge_mode() {
         fi
     fi
 
-    # ICI, et pas plus tot : docker reinsere ses MASQUERADE en tete de
-    # POSTROUTING a CHAQUE reseau cree, et il y en a un par operateur. Rejouee
-    # depuis l'application du WAN, la regle se retrouvait derriere eux - donc
-    # inerte, alors qu'"iptables -L" la montrait toujours. A cet endroit, tous
-    # les reseaux existent : plus rien ne passera devant.
+    # HERE and not earlier: docker re-inserts its MASQUERADE rules at the head of
+    # POSTROUTING for EACH network created (one per operator). At this point all
+    # networks exist.
     reassert_docker_lan_return
 
-    # L'adresse par laquelle les VM doivent router vers les conteneurs. Elle
-    # change avec l'interface active - un cable debranche, et c'est le wifi qui
-    # repond, sous une autre adresse. L'afficher ici evite d'aller la chercher
-    # apres coup, quand plus rien ne s'attache et que rien n'a "bouge".
+    # Address through which VMs must route to the containers. It changes with the
+    # active interface (unplugged cable -> wifi answers with another address).
     local _hostip
     _hostip="${HOST_LAN_IP:-$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')}"
     if [ -n "$_hostip" ] && [ "${WAN_MESH:-0}" = "1" ]; then
@@ -2421,19 +1948,15 @@ start_bridge_mode() {
 
     echo -e "\n${GREEN}${BOLD}Stack prete !${NC}"
 
-    # ── Mode QEMU : handoff vers start-native.sh ──────────────────────────────
+    # ── QEMU mode: handoff to start-native.sh ─────────────────────────────────
     if [ "${BRIDGE_QEMU:-0}" = "1" ]; then
         local _qemu_container; _qemu_container=$(op_container 1)
         echo -e "  ${CYAN}[*] run.sh calypso → ${_qemu_container} (terminal courant)${NC}"
         echo -e "  ${CYAN}[*] mode=${HANDOFF_MODE} pipeline=${HANDOFF_QEMU_CHOICE} chiffrement='${ENCRYPTION}' (choisis sur l'hote, NO_MENU)${NC}"
 
-        # Le start-native lance DANS le conteneur doit connaitre son noeud : il
-        # reverifie (et corrige) l'identite SS7 avant de demarrer la pile, au
-        # lieu de dependre de ce que start-docker.sh a ecrit dans les configs.
-        # Ces arguments sont fabriques par la fonction _node_args() plus bas,
-        # une par conteneur. La variable `_node_args` qui vivait ici n'etait
-        # LUE nulle part : une seconde version, figee sur "--op 1", du meme
-        # calcul. Supprimee pour qu'il n'en reste qu'une.
+        # The start-native.sh run INSIDE the container must know its node: it re-checks
+        # (and fixes) the SS7 identity before starting the stack. The arguments are built
+        # per container by _node_args() below.
 
         local _wan_env=""
         if [ "${WAN_MESH:-0}" = "1" ]; then
@@ -2444,53 +1967,32 @@ start_bridge_mode() {
             echo -e "  ${CYAN}[*] SMS inter-WAN → ${WAN_REMOTE_IP} (prefixe ${WAN_PREFIX})${NC}"
         fi
 
-        # ── LANCEMENT DE LA PILE RADIO ──────────────────────────────────────
-        # Les conteneurs se sont arretes au COEUR (no-process) : STP, HLR, MSC,
-        # BSC, MGW, GGSN, SGSN, PCU sont debout, mais ni PHY, ni mobile, ni
-        # Asterisk, ni SMSC. start-docker.sh enchaine maintenant start-native.sh sur
-        # chaque conteneur pour monter la pile radio - la sortie [ OK ] defile
-        # dans le terminal courant, on voit ce qui se passe.
+        # ── Radio stack launch ─────────────────────────────────────────────────
+        # start-native.sh is run in each container to bring up the radio stack.
         #
-        # LE COMPORTEMENT DEPEND DU NOMBRE DE CONTENEURS (voir plus bas) :
-        #   - un seul   : on lance PUIS on s'attache au tmux "calypso" ;
-        #   - plusieurs : on lance chacun en NO-ATTACH, les [ OK ] defilent.
-        #
-        # Les commandes executees ne sont pas indicatives : ce sont EXACTEMENT
-        # celles que start-docker.sh imprimait auparavant a recopier a la main - meme
-        # identite de noeud, meme hub, meme table WAN.
+        # Behaviour depends on the number of containers (see below):
+        #   - one     : start, THEN attach to the "calypso" tmux session;
+        #   - several : start each one detached, sequentially.
 
-        # Les arguments de noeud d'un conteneur : sa place dans le plan WAN.
-        _node_args() {                # $1=indice du conteneur
-            # Le rang d'operateur n'est 1 que si CHAQUE conteneur est un noeud.
-            # Sinon les conteneurs partagent le noeud et se distinguent par
-            # leur rang : figer "--op 1" faisait reecrire par set-node-id.sh
-            # les trois configs du conteneur 2 avec l'identite du conteneur 1
-            # (meme point code, meme routing context) - le hub, en override,
-            # donnait alors tout le trafic au dernier attache. Meme convention
-            # que le plan ecrit plus haut (_node_i / _op_i).
+        # Node arguments of a container: its place in the WAN plan.
+        _node_args() {  # $1 = container index
+            # Operator rank is 1 only if EACH container is a node. Otherwise containers share
+            # the node and differ by rank (set-node-id.sh would otherwise give container 2 the
+            # identity of container 1). Same convention as the plan written above (_node_i / _op_i).
             local _n _op
             if [ "${WAN_NODE_PER_OP:-0}" = "1" ]; then
                 _n=$(( ${WAN_NODE_ID:-1} + $1 - 1 )); _op=1
             else
                 _n="${WAN_NODE_ID:-1}"; _op="$1"
             fi
-            # Repli sur le noeud 1, TOUJOURS. Deux trous se referment ici :
-            #   - sans WAN (`./launch/start-docker.sh` sans argument), la fonction n'imprimait
-            #     RIEN : start-native.sh partait sans identite et montait la
-            #     pile sur les point codes du gabarit (1.1.2), les memes pour
-            #     tout le monde ;
-            #   - avec WAN mais WAN_NODE_ID vide, elle imprimait `--node --op 1`
-            #     — bash recolle les mots, start-native.sh lisait "--op" comme
-            #     numero de noeud et sortait sur
-            #     « [ KO ] --node (un chiffre de 1 a 9) ».
-            # Un noeud unique EST le noeud 1 : c'est deja ce que start-docker.sh se
-            # donne lui-meme (WAN_NODE_ID="${WAN_NODE_ID:-1}" plus haut), on
-            # transmet donc la meme reponse au conteneur au lieu de rien.
+            # ALWAYS fall back to node 1 / operator 1 (also without WAN or with an empty
+            # WAN_NODE_ID): start-native.sh needs a valid "--node N" or it exits, and a
+            # single node IS node 1 (same as WAN_NODE_ID="${WAN_NODE_ID:-1}" above).
             [[ "$_n"  =~ ^[1-9]$ ]] || _n=1
             [[ "$_op" =~ ^[1-9]$ ]] || _op=1
             printf -- '--node %s --op %s' "$_n" "$_op"
-            # Le hub n'a de sens qu'en mesh : hors mesh il n'y a personne a
-            # joindre, et un `--hub-ip` vide decalerait les arguments suivants.
+            # The hub only makes sense in mesh mode; an empty `--hub-ip` would shift the
+            # following arguments.
             [ "${WAN_MESH:-0}" = "1" ] && [ -n "${WAN_STP_TARGET:-}" ] && \
                 printf -- ' --hub-ip %s' "$WAN_STP_TARGET"
             return 0
@@ -2498,35 +2000,23 @@ start_bridge_mode() {
 
         echo ""
 
-        # La commande start-native.sh d'un conteneur : identite de noeud + hub
-        # + table WAN. Rien d'indicatif ici, ce sont EXACTEMENT les arguments
-        # que start-docker.sh executait quand il imprimait les lignes a recopier.
-        _hcmd() {                      # $1=indice du conteneur -> imprime la commande
+        # start-native.sh command for a container: node identity + hub + WAN table.
+        _hcmd() {  # $1 = container index -> prints the command
             local _na; _na="$(_node_args "$1")"
-            # [2026-10-24] `unset PONT_PY` : l'image (Dockerfile.run) le figeait sur
-            # pont.py (grgsm). En DSP, c54x_exe/run.sh lancait alors pont.py
-            # --dsp-port 6702, refuse, et aucun burst n'arrivait au DSP.
+            # `unset PONT_PY`: the image (Dockerfile.run) pins it to pont.py (grgsm); in DSP
+            # mode c54x_exe/run.sh would then start pont.py --dsp-port 6702 and no burst would
+            # reach the DSP.
             local _cmd="cd /opt/GSM/osmo-operator && unset PONT_PY && NO_MENU=1"
-            # [2026-08-31] CALYPSO_NO_ATTACH SUIT LE HANDOFF.
-            # L attache ne venait ni d ici ni de start-native.sh, mais du
-            # qosmo-grgsm/run.sh qu il appelle en bout de chaine :
-            #     NO_ATTACH="${CALYPSO_NO_ATTACH:-0}"      (run.sh l.36)
-            #     [ $TTY -eq 1 ] && [ "$NO_ATTACH" != 1 ] && exec tmux attach
-            # Le defaut est donc D ATTACHER, et `docker exec -t` fournit
-            # justement un TTY. Resultat : meme avec deux conteneurs - donc dans
-            # la branche NO-ATTACH de ce script - la fenetre finissait dans le
-            # tmux du conteneur, start-multi.sh ne reprenait jamais la main, et
-            # ni les checks ni le bilan ne s executaient.
-            # La variable posee plus haut sur /etc/osmocom/run.sh ne suffisait
-            # pas : elle ne traversait pas ce handoff-ci.
+            # CALYPSO_NO_ATTACH follows OSMO_NO_ATTACH: qosmo-grgsm/run.sh attaches to tmux
+            # by default when it has a TTY (NO_ATTACH="${CALYPSO_NO_ATTACH:-0}"), and
+            # `docker exec -t` provides one. The variable set on /etc/osmocom/run.sh above
+            # does not cross this handoff.
             [ "${OSMO_NO_ATTACH:-0}" = "1" ] && _cmd="$_cmd CALYPSO_NO_ATTACH=1"
             _cmd="$_cmd MODE='${HANDOFF_MODE}' QEMU_CHOICE='${HANDOFF_QEMU_CHOICE}'"
-            # Le chiffrement de l'HOTE, pas une constante : les configs du
-            # conteneur sont deja ecrites avec lui (OSMO_NO_REGEN=1 la-bas), et
-            # 08-gabarits.sh refuse de demarrer si les deux different.
-            # [2026-10-24] CALYPSO_BRIDGE n'est plus impose : 05-run-sh.sh le met a
-            # `none` en DSP (le pont est celui de c54x_exe/run.sh) et a `pont` en
-            # grgsm. Force a `pont`, le pont grgsm prenait 5700-5702 avant le DSP.
+            # The HOST's encryption, not a constant: the container's configs are already
+            # written with it (OSMO_NO_REGEN=1 there), and 08-gabarits.sh refuses to start if
+            # they differ. CALYPSO_BRIDGE is not forced: 05-run-sh.sh sets it to `none` in DSP
+            # mode (c54x_exe/run.sh provides the bridge) and to `pont` in grgsm mode.
             _cmd="$_cmd ENCRYPTION='${ENCRYPTION}' CALYPSO_MODE=shunt_legit"
             [ -n "$_wan_env" ] && _cmd="$_cmd ${_wan_env}"
             _cmd="$_cmd ./start-native.sh ${_na} --force"
@@ -2535,23 +2025,13 @@ start_bridge_mode() {
 
         local _c _ct _cmd
         if [ "$n_operators" -eq 1 ] && [ "${OSMO_NO_ATTACH:-0}" != "1" ]; then
-            # ── UN SEUL CONTENEUR : ON LANCE PUIS ON S'ATTACHE ──────────────
-            # [2026-08-31] ...SAUF si l appelant a demande le contraire.
-            # A un seul conteneur, ce bloc s attachait TOUJOURS a la session
-            # tmux du conteneur et n en ressortait plus. C est le bon geste
-            # quand on tape la commande soi-meme ; c est le mauvais quand le
-            # lancement vient d une icone ou d un script : le terminal reste
-            # bloque dans le tmux, le script appelant n a jamais la main, et
-            # rien de ce qui devait suivre - les checks, le bilan - ne
-            # s execute. Constate depuis start-multi.sh, dont la fenetre
-            # finissait sur les panneaux de osmo-operator-1.
-            # OSMO_NO_ATTACH=1 saute l attache ; la pile reste debout dans sa
-            # session calypso, on s y rattache a la main quand on veut.
-            # start-docker.sh lance lui-meme la pile radio, dans le terminal courant :
-            # les [ OK ] de start-native.sh puis de run.sh defilent sous les
-            # yeux, et une fois le coeur monte on S'ATTACHE a la session tmux
-            # "calypso" du conteneur - on reste dedans, on regarde la pile
-            # vivre. Ctrl-b puis d pour se detacher sans rien arreter.
+            # ── One container: start, then attach ──────────────────────────────
+            # ...unless OSMO_NO_ATTACH=1 (launch from an icon or a script such as
+            # start-multi.sh, which must get control back for checks and summary). The
+            # stack then stays up in its calypso session; attach manually when needed.
+            # start-native.sh and run.sh output scrolls in the current terminal, then we
+            # ATTACH to the container's "calypso" tmux session. Ctrl-b then d detaches
+            # without stopping anything.
             _ct="$(op_container 1)"; _cmd="$(_hcmd 1)"
             echo -e "  ${BOLD}Lancement de la pile radio sur ${_ct} (terminal courant)...${NC}"
             echo ""
@@ -2561,29 +2041,17 @@ start_bridge_mode() {
             echo ""
             docker exec -ti "$_ct" tmux attach -t calypso
         else
-            # ── PLUSIEURS CONTENEURS : NO-ATTACH, ET DETACHE ────────────────
-            # On ne peut pas s'attacher a N sessions tmux dans un seul terminal.
+            # ── Several containers: detached ────────────────────────────────────
+            # One terminal cannot attach to N tmux sessions.
             #
-            # [2026-08-31] `docker exec -t` REMPLACE PAR `-d`. Le `-t` allouait
-            # un pty et le rendait au retour du script ; Docker le fermait, et
-            # le noyau envoyait SIGHUP a tout le groupe de premier plan - donc a
-            # TOUS les demons que run_modules lance en `cmd &` (un shell non
-            # interactif n'a pas de controle de tache : ils restent dans le
-            # groupe du script, dont ce pty est le terminal de controle). QEMU
-            # sortait sur "terminating on signal 1", fake_trx et tcpdump avec
-            # lui, et les deux `mobile` sur "Layer2 socket failed" - une
-            # quinzaine de secondes apres un demarrage annonce reussi, sans que
-            # rien ne relie la panne au lanceur. Les modules posent desormais
-            # `setsid` (voir run_modules/_lib/radio.sh, bloc SIGHUP) ; `-d`
-            # supprime la cause en amont : pas de pty, donc pas de hangup.
+            # `docker exec -d`, not `-t`: a pty is closed by docker when the script returns
+            # and the kernel sends SIGHUP to the foreground group, i.e. to every daemon the
+            # run_modules started with `cmd &`. (The modules also use setsid, see
+            # run_modules/_lib/radio.sh.) No pty, no hangup.
             #
-            # CE QU'ON PERD : les [ OK ] ne defilent plus ici. Ils sont donc
-            # rediriges, DANS le conteneur, vers /var/log/osmocom/start-direct.log
-            # - chemin deja monte sur l'hote (/tmp/osmocom-logs/opN), rien n'est
-            # perdu. Meme convention que le lancement de run.sh plus haut.
-            # CE QU'ON GARDE : le sequencement. `wait_bb_vty` ne rend la main
-            # qu'une fois la pile du conteneur en ligne, donc un conteneur a la
-            # fois, et "Toutes les piles tournent" reste vrai a l'impression.
+            # Output goes, INSIDE the container, to /var/log/osmocom/start-direct.log
+            # (mounted on the host as /tmp/osmocom-logs/opN). `wait_bb_vty` returns only once
+            # the container's stack is online, so containers start one at a time.
             echo -e "  ${BOLD}${n_operators} conteneurs : lancement detache - journal ${CYAN}/var/log/osmocom/start-direct.log${NC}${BOLD} dans chaque conteneur.${NC}"
             echo ""
             for _c in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_operators - 1 ))"); do
@@ -2602,7 +2070,7 @@ start_bridge_mode() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Mode net-host
+# net-host mode
 # ══════════════════════════════════════════════════════════════════════════════
 start_host_mode() {
     echo -e "${GREEN}Demarrage en mode net-host (1 operateur)...${NC}"
@@ -2639,13 +2107,11 @@ start_host_mode() {
     local nethost_relay=""
     [ -n "$HOST_AUDIO_RELAY" ] && nethost_relay="tcp:127.0.0.1:${WSLG_TCP_PORT}"
 
-    # --rm CONSERVE ici, contrairement aux conteneurs operateurs. Celui-la a
-    # pour commande run.sh et non "sleep infinity" : il s'arrete des que run.sh
-    # rend la main, et --restart le relancerait alors en boucle - sur le reseau
-    # de l'HOTE, en concurrence avec le gnome-terminal qui ouvre sa propre
-    # session juste apres. Il depend en outre de prepare_host_tun (apn0), qui
-    # n'existe plus apres un reboot : un redemarrage automatique repartirait
-    # dans un environnement incomplet. Ce mode se relance donc a la main.
+    # --rm KEPT here, unlike operator containers: this one runs run.sh (not "sleep
+    # infinity") and stops when run.sh returns; --restart would loop on the HOST
+    # network, competing with the gnome-terminal session opened right after. It also
+    # depends on prepare_host_tun (apn0), gone after a reboot. Restart this mode
+    # manually.
     # shellcheck disable=SC2086
     docker run -d --rm --name egprs --net host \
         --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add NET_RAW --cap-add SYS_NICE \
@@ -2680,12 +2146,10 @@ echo "=== net-host - egprs run.sh ==="
 exec sudo docker exec -ti egprs /bin/bash -c "/root/run.sh; exec bash"
 EOF
     chmod +x "$_hscript"
-    # ── OSMO_NO_TERM=1 : LA PILE MONTE, SANS FENETRE ────────────────────────
-    # [2026-09-04] Lance par une unite systemd (osmo-multi.service, et l icone
-    # du bureau qui passe par elle), il n y a ni ecran ni personne devant : un
-    # gnome-terminal surgirait au milieu de la session, et son contenu serait
-    # perdu a la fermeture. On lance alors run.sh detache dans le conteneur, et
-    # tout est dans le journal du conteneur (`docker logs egprs`).
+    # ── OSMO_NO_TERM=1: start the stack without a window ──────────────────
+    # When launched by a systemd unit (osmo-multi.service, and the desktop icon using
+    # it) there is no screen: run.sh is started detached in the container and
+    # everything is in the container log (`docker logs egprs`).
     if [ "${OSMO_NO_TERM:-0}" = "1" ]; then
         echo -e "  ${CYAN}[*] run.sh dans egprs (OSMO_NO_TERM=1 : pas de terminal)${NC}"
         docker exec -d egprs /bin/bash -c "/root/run.sh > /var/log/osmocom/run.sh.log 2>&1"
@@ -2701,6 +2165,8 @@ EOF
     sleep 0.3
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Stop
 # ══════════════════════════════════════════════════════════════════════════════
 stop_all() {
     echo -e "${YELLOW}Arret de tous les containers Osmocom...${NC}"
@@ -2775,10 +2241,9 @@ choose_network_mode() {
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
-# ── Options longues, extraites AVANT le mode positionnel ──────────────────────
-# start-docker.sh a toujours pris son mode en $1 (qemu|virtual|hw|stop) et son build en
-# quick|normal. On garde ca intact : la pre-passe ne retire que les --wan* et
-# rend la main avec les positionnels d'origine.
+# ── Long options, extracted BEFORE the positional mode ─────────────────────
+# The mode is in $1 (qemu|virtual|hw|stop) and the build in quick|normal; this
+# pre-pass only removes the long options and keeps the original positionals.
 usage_wan() {
     cat <<'USAGE'
 Usage : sudo ./launch/start-docker.sh [quick|normal] [--wan ...] [qemu|virtual|hw|stop]
@@ -2842,14 +2307,11 @@ while [ $# -gt 0 ]; do
         --wan-conf=*)   WAN_CONF_FILE="${1#*=}" ;;
         --build-stp)      BUILD_STP=1 ;;
         --hub-node)       WAN_HUB_NODE="${2:-1}"; WAN_HUB_NODE_GIVEN=1; shift ;;
-        # --hub-ip et --node-per-op IMPLIQUENT le plan WAN. Sans WAN_MESH=1,
-        # _pc_mid retombe sur le plan LOCAL (_pc_mid="$i") : les point codes
-        # deviennent 1.1.2 / 1.2.2 et les routing contexts 150 / 250, calcules
-        # a l'identique sur CHAQUE machine du WAN. Deux noeuds attaches au meme
-        # hub presentent alors le meme PC et le meme contexte ; le hub etant en
-        # traffic-mode override, le dernier ASP attache vole le trafic du
-        # premier, en silence. C'est exactement ce que le plan WAN, indexe par
-        # numero de noeud, existe pour eviter.
+        # --hub-ip and --node-per-op IMPLY the WAN plan. Without WAN_MESH=1, _pc_mid
+        # falls back to the LOCAL plan: point codes 1.1.2 / 1.2.2 and routing contexts
+        # 150 / 250, identical on EVERY WAN machine. Two nodes on the same hub would then
+        # share PC and context and, with the hub in traffic-mode override, the last ASP
+        # attached would silently steal the first one's traffic.
         --hub-ip)         WAN_HUB_IP="${2:-}"; WAN_MESH=1; shift ;;
         --node-per-op)    WAN_NODE_PER_OP=1; WAN_NODE_PER_OP_GIVEN=1; WAN_MESH=1 ;;
         --host)           HOST_LAN_IP="${2:-}"; shift ;;
@@ -2870,19 +2332,17 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# ── --operator : de la declaration a la table WAN ───────────────────────────
-# "IP:PREFIXE" est ce qu'on a sous les yeux ; "id:ip:ind" est ce que le reste du
-# code attend. La conversion se fait ici, une fois, plutot que de demander a
-# l'utilisateur de tenir lui-meme la numerotation des noeuds.
+# ── --operator: from the declaration to the WAN table ────────────────────
+# "IP:PREFIX" is what the user sees; "id:ip:ind" is what the rest of the code
+# expects. Converted here, once.
 if [ "${#OPERATOR_DECLS[@]}" -gt 0 ]; then
     if [ -n "${WAN_NODES:-}" ]; then
         echo -e "\033[0;31m--operator et --wan-nodes sont exclusifs : choisissez l'un des deux.\033[0m" >&2
         exit 2
     fi
-    # LES CONTENEURS D'ABORD, dans l'ordre : osmo-operator-1 est le noeud 1,
-    # -2 le noeud 2... Leur adresse est celle du backbone, leur indicatif le
-    # defaut du rang. Les operateurs declares en CLI prennent les rangs
-    # suivants. Numerotation lisible : le nom du conteneur donne son noeud.
+    # CONTAINERS FIRST, in order: osmo-operator-1 is node 1, -2 node 2... Their
+    # address is the backbone one, their prefix the rank default. Operators declared
+    # on the CLI take the following ranks.
     _n=0; _spec=""
     _ncont="${OPERATOR_COUNT_HINT:-0}"
     while [ "$_n" -lt "$_ncont" ]; do
@@ -2917,16 +2377,15 @@ docker rm -f $(docker ps -aq --filter "name=osmo-") 2>/dev/null || true
 docker rm -f $(docker ps -aq --filter "name=egprs") 2>/dev/null || true
 docker network ls --filter "name=gsm-" -q | xargs -r docker network rm 2>/dev/null || true
 
-# Selection du mode
+# Mode selection
 case "${1:-}" in
     qemu)    NETWORK_MODE="qemu" ;;
     virtual) NETWORK_MODE="bridge" ;;
     hw)      NETWORK_MODE="host" ;;
     "")
         if [ "${WAN_MESH:-0}" = "1" ]; then
-            # --wan sans mode : on ne redemande pas "que lancer ?". Un WAN se
-            # monte sur des operateurs, donc mode virtuel, et le menu de build
-            # reste pose (quick/normal) s'il n'a pas ete tranche en ligne.
+            # --wan without a mode: a WAN runs on operators, so virtual mode; the build
+            # menu (quick/normal) is still shown unless decided on the command line.
             NETWORK_MODE="bridge"
             [ "${QUICK_EXPLICIT:-0}" = "1" ] || { check_whiptail; choose_build_mode; }
         elif [ "${OSMO_MULTI:-0}" = "1" ]; then
@@ -2946,10 +2405,9 @@ esac
 echo -e "${GREEN}Mode : ${CYAN}${NETWORK_MODE}${NC}  ${GREEN}Build : ${CYAN}$([ "${QUICK:-0}" = "1" ] && echo "quick (cache)" || echo "normal (--no-cache)")${NC}"
 
 ./helpers/prepare_host.sh
-# [2026-10-24] OSMO_NO_BUILD=1 (start-multi.sh) : lancer l'image telle qu'elle
-# est. QEMU_CACHE_BUST casse le cache a chaque appel : sans ce garde, chaque
-# lancement du multi refaisait git pull + recompilation de qosmo/c54x_exe.
-# check_image la construit quand meme si elle est absente.
+# OSMO_NO_BUILD=1 (start-multi.sh): use the image as is. QEMU_CACHE_BUST breaks
+# the cache on every build (git pull + qosmo/c54x_exe rebuild). check_image
+# still builds it if missing.
 [ "${OSMO_NO_BUILD:-0}" = 1 ] || build_run_image
 check_image
 

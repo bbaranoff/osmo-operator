@@ -1,8 +1,8 @@
 #!/bin/bash
-# audio-diag.sh - Diagnostic audio complet dans le container
-# Usage : docker exec -ti osmo-operator-1 bash /etc/osmocom/audio-diag.sh
+# audio-diag.sh - full audio diagnostic inside the container
+# Usage: docker exec -ti osmo-operator-1 bash /etc/osmocom/audio-diag.sh
 #
-# Verifie toute la chaine : /dev/snd → ALSA → PulseAudio → mobile l1phy
+# Checks the whole chain: /dev/snd → ALSA → PulseAudio → mobile l1phy
 
 set -euo pipefail
 
@@ -50,7 +50,7 @@ echo ""
 echo -e "${BOLD}[3/7] PulseAudio${NC}"
 if [ -n "${PULSE_SERVER:-}" ]; then
     ok "PULSE_SERVER=${PULSE_SERVER}"
-    # Tester la connexion
+    # Test the connection
     if command -v pactl >/dev/null 2>&1; then
         if pactl info >/dev/null 2>&1; then
             ok "PulseAudio accessible"
@@ -74,7 +74,7 @@ else
 fi
 echo ""
 
-# ── 4. Variables ALSA ────────────────────────────────────────────────────────
+# ── 4. ALSA variables ────────────────────────────────────────────────────────
 echo -e "${BOLD}[4/7] Variables d'environnement${NC}"
 echo "       ALSA_CARD     = ${ALSA_CARD:-<non defini>}"
 echo "       GAPK_ALSA_DEV = ${GAPK_ALSA_DEV:-<non defini>}"
@@ -100,14 +100,14 @@ for cfg in /root/.osmocom/bb/mobile_group*.cfg /root/.osmocom/bb/mobile.cfg; do
 done
 echo ""
 
-# ── 6. Test ALSA rapide ─────────────────────────────────────────────────────
+# ── 6. Quick ALSA test ──────────────────────────────────────────────────────
 echo -e "${BOLD}[6/7] Test ALSA (bip 440Hz 0.2s)${NC}"
 if [ -d /dev/snd ]; then
     if command -v speaker-test >/dev/null 2>&1; then
         echo "       Tentative speaker-test (2 secondes max)..."
         timeout 2 speaker-test -t sine -f 440 -l 1 -P 1 2>&1 | head -5 | sed 's/^/       /' || warn "speaker-test echoue"
     elif command -v aplay >/dev/null 2>&1; then
-        # Generer un bip court
+        # Generate a short beep
         python3 -c "
 import struct, sys
 rate=8000; dur=0.2; freq=440
@@ -121,7 +121,7 @@ else
 fi
 echo ""
 
-# ── 7. Processus audio ──────────────────────────────────────────────────────
+# ── 7. Audio processes ──────────────────────────────────────────────────────
 echo -e "${BOLD}[7/7] Processus audio actifs${NC}"
 if pgrep -fa "mobile.*mobile" >/dev/null 2>&1; then
     ok "Processus mobile actif"
@@ -137,7 +137,7 @@ else
 fi
 echo ""
 
-# ── Resume ───────────────────────────────────────────────────────────────────
+# ── Summary ──────────────────────────────────────────────────────────────────
 echo -e "${BOLD}═══ Resume ═══${NC}"
 ISSUES=0
 

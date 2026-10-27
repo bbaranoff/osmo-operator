@@ -26,35 +26,34 @@ class Stats:
         self.sacch_ul = 0
         self.a5_dl = 0
         self.a5_ul = 0
-        # [2026-10-03] blocs xCCH montants (SDCCH/SACCH du SDCCH) : bursts de la ROM DSP
-        # (0x3f8a, pont/dsp/uplink.py) ou codes par l'hote (gsm.xcch_encode) ; rom_ko = bursts ROM
-        # presents mais qui ne redecodent pas en ce L2.
+        # uplink xCCH blocks (SDCCH/SACCH of the SDCCH): bursts from the DSP ROM
+        # (0x3f8a, pont/dsp/uplink.py) or coded by the host (gsm.xcch_encode); rom_ko = ROM
+        # bursts present but which do not decode back to this L2.
         self.xcch_ul_rom = 0
         self.xcch_ul_hote = 0
         self.xcch_ul_rom_ko = 0
-        # [2026-10-15] CE QUI PART VRAIMENT A L'ANTENNE, par chemin (PONT_UL_RAW=1).
-        # Les compteurs rach/xcch_ul_hote/a5_ul ci-dessus comptent aussi le chemin
-        # hote « fantome » qui tombe dans TransmitterPuits : la couverture les lisait
-        # comme de l'emission hote (lignes MIXTE). air_* = bursts remis au TRX.
+        # WHAT REALLY GOES TO THE ANTENNA, per path (PONT_UL_RAW=1).
+        # The rach/xcch_ul_hote/a5_ul counters above also count the "ghost" host
+        # path that ends in TransmitterPuits. air_* = bursts handed to the TRX.
         self.air_rom_rach = 0
-        self.air_rom_xcch = 0      # NB de la ROM hors TCH et hors PDCH (SDCCH/SACCH, chiffres par la ROM)
+        self.air_rom_xcch = 0      # ROM NBs outside TCH and PDCH (SDCCH/SACCH, ciphered by the ROM)
         self.air_rom_pdch = 0
         self.air_rom_tch = 0
-        self.air_hote_tch = 0      # TCH code par l'hote (PONT_UL_RAW_TCH=0)
-        self.air_puits = 0         # bursts hote jetes (jamais emis)
-        # TCH montant par sous-canal (dsp/uplink.py classe_tch) : F FACCH, S SACCH/T, P parole.
-        # rom = bursts ROM emis, rom_jete = bursts ROM du TCH ecartes (PONT_UL_RAW_TCH=0),
-        # hote = bursts codes par l'hote et emis.
+        self.air_hote_tch = 0      # TCH coded by the host (PONT_UL_RAW_TCH=0)
+        self.air_puits = 0         # host bursts dropped (never sent)
+        # uplink TCH per sub-channel (dsp/uplink.py classe_tch): F FACCH, S SACCH/T, P speech.
+        # rom = ROM bursts sent, rom_jete = ROM TCH bursts discarded (PONT_UL_RAW_TCH=0),
+        # hote = bursts coded by the host and sent.
         self.tch_ul_rom = {"F": 0, "S": 0, "P": 0}
         self.tch_ul_rom_jete = {"F": 0, "S": 0, "P": 0}
         self.tch_ul_hote = {"F": 0, "S": 0, "P": 0}
-        # A5 montant : rom = bursts NB marques chiffres par le coprocesseur (calypso_a5.c),
-        # hote_tch = bursts TCH chiffres par le pont (cipher.py).
+        # uplink A5: rom = NB bursts marked ciphered by the coprocessor (calypso_a5.c),
+        # hote_tch = TCH bursts ciphered by the bridge (cipher.py).
         self.a5_ul_rom = 0
         self.a5_ul_hote_tch = 0
-        # [2026-10-15] phase B : bursts ROM de type inconnu (emis), blocs PDTCH vus sur la voie
-        # SDCCH hote et jetes (B1), blocs xCCH sans bursts ROM a temps, non recodes (B2),
-        # retard fn ROM -> horloge BTS des bursts du TCH (mesure pour B5, en trames).
+        # ROM bursts of unknown type (sent), PDTCH blocks seen on the host SDCCH path
+        # and dropped, xCCH blocks without ROM bursts in time and not recoded,
+        # fn lateness ROM -> BTS clock of the TCH bursts (in frames).
         self.air_rom_inconnu = 0
         self.pdtch_ul_vu_hote = 0
         self.xcch_shadow_ko = 0

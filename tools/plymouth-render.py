@@ -1,34 +1,32 @@
 #!/usr/bin/env python3
-# plymouth-render.py - fabrique les images du theme Plymouth « osmo-bts ».
+# plymouth-render.py - builds the images of the "osmo-bts" Plymouth theme.
 #
 #     python3 tools/plymouth-render.py --out configs/plymouth/osmo-bts
 #
-# LE THEME EST GENERE, PAS STOCKE. Un theme Plymouth, ce sont des PNG : les
-# garder dans le depot, c est une trentaine de binaires qu on ne peut ni relire
-# ni corriger en diff. Ici le dessin EST le code - on change une couleur, on
-# rejoue le script, et l ISO suivante en herite. iso_modules/86-finitions.sh
-# l appelle au build.
+# THE THEME IS GENERATED, NOT STORED. A Plymouth theme is a set of PNGs:
+# keeping them in the repository means some thirty binaries that can neither
+# be read nor fixed in a diff. Here the drawing IS the code - change a colour,
+# rerun the script, and the next ISO inherits it. iso_modules/86-finitions.sh
+# calls it at build time.
 #
-# CE QU ON VOIT AU DEMARRAGE ([2026-10-23] plus simple, 2D pure) :
+# WHAT IS SHOWN AT BOOT (pure 2D):
 #
 #                        (  (  ( • )  )  )
 #                               /|\
-#                              / | \         une antenne stylisee au centre,
-#                             /__|__\        des cercles fins qui s ouvrent
-#                                            depuis son sommet
+#                              / | \         a stylised antenna in the middle,
+#                             /__|__\        thin circles opening from
+#                                            its top
 #                            LAB GSM
-#                 ━━━━━━━━━━ (barre) ━━━━━━━━━━
+#                 ━━━━━━━━━━ (bar) ━━━━━━━━━━
 #
-#   Un fond uni, une seule antenne en traits epais arrondis, et des cercles
-#   concentriques a trait net qui s ouvrent et s effacent. Plus de pylone en
-#   treillis, de mobile ni d anneaux « 3D » (ellipses en perspective, halo
-#   neon) : trop charge, ils se recouvraient.
+#   A flat background, a single antenna in thick rounded strokes, and
+#   concentric circles with a sharp stroke that open and fade out.
 #
-# --gif FICHIER sort en plus un apercu anime (fond + 24 frames, reduit), pour
-# le wiki ou pour juger le rendu sans redemarrer. Il ne va PAS dans --out :
-# tout ce qui est dans le dossier du theme part dans l initrd.
+# --gif FILE also writes an animated preview (background + 24 frames, reduced),
+# for the wiki or to judge the rendering without rebooting. It does NOT go in
+# --out: everything in the theme folder goes into the initrd.
 #
-# Ne depend que de Pillow et des polices DejaVu, comme wallpaper-render.py.
+# Depends only on Pillow and the DejaVu fonts, like wallpaper-render.py.
 import argparse
 import math
 import os
@@ -39,7 +37,7 @@ W, H = 1920, 1080
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 BG_TOP, BG_BOT = (8, 12, 26), (16, 26, 52)
 CYAN, GREEN, VIOLET, GREY = (88, 166, 255), (63, 185, 80), (166, 122, 255), (139, 148, 158)
-NEON = (64, 224, 255)            # le cyan des anneaux : vif, comme un neon
+NEON = (64, 224, 255)            # the cyan of the rings: vivid, like a neon
 FRAMES = 24
 
 
@@ -51,13 +49,13 @@ def font(name, size):
 
 
 def background():
-    """Fond UNI bleu nuit ([2026-10-23] 2D pure : plus de degrade vertical)."""
+    """FLAT night blue background (pure 2D, no vertical gradient)."""
     return Image.new("RGB", (W, H), BG_TOP)
 
 
 def mast(d, cx, top_y, h, col=(200, 210, 225)):
-    """L antenne, en 2D pure : un mat, deux jambages et deux traverses, traits
-    epais a bouts ronds, et un point lumineux au sommet (d ou partent les ondes)."""
+    """The antenna, in pure 2D: a mast, two legs and two cross bars, thick
+    strokes with round ends, and a bright dot at the top (where the waves start)."""
     w, lw = h * 0.26, 7
     foot = top_y + h
     def seg(a, b):
@@ -67,7 +65,7 @@ def mast(d, cx, top_y, h, col=(200, 210, 225)):
     seg((cx, top_y + 18), (cx, foot))
     seg((cx, top_y + 30), (cx - w, foot))
     seg((cx, top_y + 30), (cx + w, foot))
-    for t in (0.55, 0.82):                       # traverses entre les jambages
+    for t in (0.55, 0.82):                       # cross bars between the legs
         y = top_y + 30 + (foot - top_y - 30) * t
         dx = w * t
         seg((cx - dx, y), (cx + dx, y))
@@ -77,10 +75,9 @@ def mast(d, cx, top_y, h, col=(200, 210, 225)):
 
 
 def ripples(d, at, phase, rmax=300, n=4, col=NEON):
-    """Les ondes, en 2D pure : des CERCLES concentriques centres sur l antenne,
-    qui s ouvrent et s effacent en s eloignant. Un seul trait net par cercle :
-    plus d ellipse en perspective, de cone, de halo ni de coeur clair (le
-    « neon 3D » du 2026-10-01, retire le 2026-10-23)."""
+    """The waves, in pure 2D: concentric CIRCLES centred on the antenna, which
+    open and fade out as they move away. A single sharp stroke per circle: no
+    perspective ellipse, cone, halo or light core."""
     x, y = at
     for k in range(n):
         t = ((phase + k / n) % 1.0)
@@ -110,31 +107,31 @@ def main():
            font=f_sub, fill=GREY, anchor="mm")
     bg.save(os.path.join(a.out, "background.png"), "PNG", optimize=True)
 
-    # Les frames : seulement la BANDE entre les deux antennes, en RGBA. Plymouth
-    # les pose par-dessus le fond - une image par frame plutot qu un fond
-    # complet redessine 24 fois (24 x 1,3 Mo tiendrait mal dans un initrd).
-    # La bande englobe les cercles ENTIERS (rayon maximal + trait) : un cercle
-    # n est jamais coupe par son bord. Hors des traits elle est transparente,
-    # donc legere dans l initrd.
+    # The frames: only the BAND between the two antennas, in RGBA. Plymouth
+    # draws them over the background - one image per frame rather than a
+    # complete background redrawn 24 times (24 x 1.3 MB would not fit well in
+    # an initrd). The band encloses the WHOLE circles (maximum radius + stroke):
+    # a circle is never cut by its edge. Outside the strokes it is transparent,
+    # hence light in the initrd.
     R, M = 230, 12
     bx0, bx1 = ant[0] - 28 - R - M, ant[0] + 28 + R + M
     strip_y = ant[1] - 28 - R - M
     strip_h = 2 * (28 + R + M)
-    tip = (ant[0] - bx0, ant[1] - strip_y)                 # le sommet de l antenne, dans la bande
+    tip = (ant[0] - bx0, ant[1] - strip_y)                 # the top of the antenna, in the band
     frames = []
     for i in range(FRAMES):
         t = i / FRAMES
         im = Image.new("RGBA", (int(bx1 - bx0), strip_h), (0, 0, 0, 0))
         dd = ImageDraw.Draw(im)
-        # les ondes, et rien d autre
+        # the waves, and nothing else
         ripples(dd, tip, t, rmax=R, n=3)
         im.save(os.path.join(a.out, "burst-%02d.png" % i), "PNG", optimize=True)
         frames.append(im)
 
-    # L apercu anime : le fond, la bande posee dessus a sa place, une image par
-    # frame, a ~12 i/s comme dans le theme (une frame toutes les 4 passes a
-    # 50 Hz). Reduit : un GIF 1920x1080 de 24 images pese plusieurs Mo pour
-    # rien.
+    # The animated preview: the background, the band drawn over it in place, one
+    # image per frame, at ~12 fps as in the theme (one frame every 4 passes at
+    # 50 Hz). Reduced: a 1920x1080 GIF of 24 images weighs several MB for
+    # nothing.
     if a.gif:
         gw = max(160, a.gif_width)
         gh = int(H * gw / W)
@@ -148,16 +145,16 @@ def main():
                     duration=int(1000 * 4 / 50), optimize=True)
         print("[plymouth] apercu : %s (%dx%d, %d images)" % (a.gif, gw, gh, FRAMES))
 
-    # La barre d avancement : un fond et une pastille qui court dessus.
+    # The progress bar: a background and a dot running over it.
     bar = Image.new("RGBA", (520, 8), (255, 255, 255, 0))
     ImageDraw.Draw(bar).rounded_rectangle([0, 0, 519, 7], 4, fill=(38, 48, 76, 255))
     bar.save(os.path.join(a.out, "progress-box.png"), "PNG")
     dot = Image.new("RGBA", (64, 8), (0, 0, 0, 0))
     ImageDraw.Draw(dot).rounded_rectangle([0, 0, 63, 7], 4, fill=CYAN + (255,))
     dot.save(os.path.join(a.out, "progress-bar.png"), "PNG")
-    # Le champ de saisie de la phrase LUKS (theme script : c est a nous de le
-    # dessiner). Sans ces deux images, une installation chiffree demande sa
-    # phrase sur un ecran vide.
+    # The LUKS passphrase entry field (theme script: it has to be drawn here).
+    # Without these two images, an encrypted installation asks for its
+    # passphrase on an empty screen.
     ent = Image.new("RGBA", (620, 56), (0, 0, 0, 0))
     ImageDraw.Draw(ent).rounded_rectangle([0, 0, 619, 55], 10, fill=(18, 26, 48, 235),
                                           outline=CYAN + (170,), width=2)
@@ -165,10 +162,10 @@ def main():
     bul = Image.new("RGBA", (18, 18), (0, 0, 0, 0))
     ImageDraw.Draw(bul).ellipse([0, 0, 17, 17], fill=(230, 237, 243, 255))
     bul.save(os.path.join(a.out, "bullet.png"), "PNG")
-    # ── LE SCRIPT SORT D ICI AUSSI ──────────────────────────────────────────
-    # Il a besoin de savoir OU est la bande entre les deux antennes ; ces
-    # nombres viennent d etre calcules ci-dessus. Les recopier a la main dans
-    # le .script, c est la garantie qu ils divergeront au premier reglage.
+    # ── THE SCRIPT IS WRITTEN FROM HERE TOO ─────────────────────────────────
+    # It needs to know WHERE the band between the two antennas is; these
+    # numbers were just computed above. Copying them by hand into the .script
+    # would guarantee they diverge at the first adjustment.
     tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "..", "configs", "plymouth", "osmo-bts", "osmo-bts.script")
     tpl = a.template or os.path.normpath(tpl)

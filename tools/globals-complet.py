@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-# [2026-10-21] Les PATRONS de la page web (web/, servie par tools/osmo-reglages.py) :
+# The TEMPLATES of the web page (web/, served by tools/osmo-reglages.py):
 #
-#   globals.conf.example          les reglages reseau de globals.conf + les variables du LANCEUR
-#                                 (start.sh, startup_scripts/*.sh) : globales a la chaine
-#   instances/instance.env.example  les variables du BANC DSP (c54x_exe/run.sh) : UNE VALEUR PAR INSTANCE
-#                                 Calypso (1 = BTS/TRX ou MS sur le pont, 2 = MS QEMU par l'air, 3 = TRX TS1),
-#                                 ecrites par la page dans instances/instance-N.env et lues par run.sh
+#   globals.conf.example          network settings of globals.conf + LAUNCHER variables
+#                                 (start.sh, startup_scripts/*.sh): global to the chain
+#   instances/instance.env.example  DSP BENCH variables (c54x_exe/run.sh): ONE VALUE PER
+#                                 Calypso INSTANCE (1 = BTS/TRX or MS on the bridge,
+#                                 2 = QEMU MS over the air, 3 = TRX TS1), written by the
+#                                 page in instances/instance-N.env and read by run.sh
+#   python3 tools/globals-complet.py            # (re)generates both templates
+#   python3 tools/globals-complet.py --voir     # prints them without writing anything
 #
-#   python3 tools/globals-complet.py            # (re)genere les deux patrons
-#   python3 tools/globals-complet.py --voir     # les affiche sans rien ecrire
-#
-# Chaque variable porte son defaut en commentaire (fichier:ligne) et, quand les scripts la comparent a des
-# valeurs fixes (0/1, dsp/grgsm, ...), une ligne « choix : a | b | c » : la page en fait un menu deroulant.
-# Valeur VIDE = defaut du script. globals.conf est source avec `set -a` apres le traitement des options
-# (03-affichage.sh) : une variable deja posee et non vide (ligne de commande) garde sa valeur ; la page ecrit
-# commentees les variables du lanceur laissees vides (exportees vides, elles cassaient le lancement).
-#
-# Exclus : l'etat interne du lanceur (C_*, *_CHOISI, chemins calcules), les variables lues sans deux-points
-# (${VAR-x} : vide et absent different). Pour run.sh, seules les variables qu'il renormalise lui-meme
-# (VAR="${VAR:-x}", export compris) : une valeur vide n'atteint jamais le C.
+# Each variable carries its default as a comment (file:line) and, when the scripts
+# compare it to fixed values (0/1, dsp/grgsm, ...), a "choix : a | b | c" line: the page
+# turns it into a drop-down menu. EMPTY value = script default. globals.conf is sourced
+# with `set -a` after option parsing (03-affichage.sh): a variable already set and
+# non-empty (command line) keeps its value; the page writes launcher variables left
+# empty as comments (exported empty, they would break the launch).
+# Excluded: the launcher internal state (C_*, *_CHOISI, computed paths), variables
+# read without a colon (${VAR-x}: empty and absent differ). For run.sh, only the
+# variables it renormalises itself (VAR="${VAR:-x}", export included): an empty value
+# never reaches the C.
 
 import argparse, glob, os, re, shutil, time
 
@@ -33,7 +34,7 @@ FIN = "# <<< FIN DES VARIABLES DU LANCEUR <<<"
 
 INTERNES = {"RUNTIME_ENV", "OQC_ROOT", "NITB_TREE", "RAND", "NODE_ID_SRC", "GEN_CONF_OUT", "SAP_FILE",
             "SOFTSIM_KI", "HUB_IP", "NO_COLOR", "RUN_SH", "HERE", "RUNDIR", "INSTANCE", "CALYPSO_NS"}
-# choix a la main (les scripts ne les comparent pas tous a des valeurs fixes)
+# choices by hand (the scripts do not compare all of them to fixed values)
 CHOIX = {
     "BAND": "GSM900 | DCS1800 | PCS1900 | GSM850",
     "ENCRYPTION": "a5 0 | a5 1 | a5 3 | a5 0 1 | a5 0 1 3",
@@ -48,7 +49,7 @@ RENORMALISE = re.compile(r'^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)="?\$\{\1:-')
 
 
 def defaut_apres(ligne, i):
-    """Le texte du defaut d'un ${VAR:-...} a partir de l'indice i, accolades equilibrees."""
+    """The default text of a ${VAR:-...} from index i, with balanced braces."""
     prof, j = 1, i
     while j < len(ligne) and prof:
         if ligne[j] == "{":
@@ -84,7 +85,7 @@ def sans_deux_points(fichiers):
 
 
 def choix_auto(textes):
-    """Les valeurs fixes auxquelles les scripts comparent chaque variable : [ "$VAR" = 1 ], != "off"..."""
+    """The fixed values the scripts compare each variable to: [ "$VAR" = 1 ], != "off"..."""
     comp = {}
     pat = re.compile(r'\$\{?([A-Z][A-Z0-9_]*)(?::-[^}]*)?\}?"?\s*(?:=|==|!=)\s*"?([A-Za-z0-9_./-]+)"?')
     for t in textes:
@@ -145,8 +146,8 @@ def tete_globals():
         queue = reste.split(FIN, 1)[1]
     else:
         tete, queue = texte, ""
-    # le patron porte les reglages reseau VIDES de valeur ? Non : on garde les lignes telles quelles mais on
-    # ajoute les choix a la main ; la page lit les valeurs dans globals.conf, pas ici.
+            # does the template carry the network settings EMPTY of value? No: the lines are
+            # kept as they are, the choices are added by hand; the page reads globals.conf.
     sortie = []
     for l in tete.rstrip("\n").split("\n"):
         m = re.match(r"^([A-Z_][A-Z0-9_]*)=", l)

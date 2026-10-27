@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-# pont.py - le pont du montage GRGSM (couche 1 gr-gsm dans QEMU).
+# pont.py - the bridge of the GRGSM setup (gr-gsm layer 1 inside QEMU).
 #
-# [2026-09-23] Le pont est coupe en deux points d'entree sur le meme paquet :
-#   pont.py           montage grgsm : QEMU recoit les blocs L2 en GSMTAP
-#                     (4730/4731), le pont dechiffre A5 pour lui.
-#   pont_dsp.py       montage DSP (c54x_exe --arm, --dsp-port 6702) : les
-#                     bursts partent vers le BSP du C54x.
-# Les deux gardent le chiffrement A5 dans le pont. Ce qui change d'un montage
-# a l'autre passe par les DEFAUTS poses ici, avant l'import : le chemin grgsm
-# garde exactement le comportement qu'il avait avant le decoupage, et ce qu'on
-# change pour le DSP ne peut plus le casser. Une variable posee par
-# l'operateur gagne toujours (setdefault).
+# The bridge has two entry points on the same package:
+#   pont.py           grgsm setup: QEMU receives the L2 blocks as GSMTAP
+#                     (4730/4731), the bridge deciphers A5 for it.
+#   pont_dsp.py       DSP setup (c54x_exe --arm, --dsp-port 6702): the bursts
+#                     go to the C54x BSP.
+# Both keep the A5 ciphering in the bridge. What differs between the two
+# setups goes through the DEFAULTS set here, before the import, so that a
+# change for the DSP cannot break the grgsm path. A variable set by the
+# operator always wins (setdefault).
 import os
 import sys
 
-# Un burst montant reveille apres sa trame est JETE, comme avant le 2026-09-23
-# (le montage DSP l'envoie, cf. trx.py Transmitter.run).
+# An uplink burst woken up after its frame is DROPPED (the DSP setup sends it,
+# see trx.py Transmitter.run).
 os.environ.setdefault("PONT_UL_RETARD_MAX", "0")
 
-# [2026-10-03] INJECTEUR DE BRUIT (qosmo/tools/injecteur_bruit.py, cible grgsm).
-# La L1 gr-gsm de QEMU ecoute GSMTAP sur 4730 en dur : pour intercaler
-# l'injecteur, c'est le pont qui vise ailleurs. BRUIT_MODE=ber ou relais (les
-# seuls modes qui aient un sens sur des blocs L2 deja decodes) fait viser
-# BRUIT_PORT_GRGSM (14730), ou l'injecteur ecoute (qosmo/run_modules/38-bruit.sh,
-# c54x_exe/run.sh). Sans BRUIT_MODE, rien ne change. PONT_GSMTAP_PORT pose par
-# l'operateur (ou par c54x_exe/run.sh) gagne.
+# NOISE INJECTOR (qosmo/tools/injecteur_bruit.py, grgsm target).
+# The gr-gsm L1 of QEMU listens for GSMTAP on 4730, hard-coded: to insert the
+# injector, the bridge is what aims elsewhere. BRUIT_MODE=ber or relais (the
+# only modes that make sense on already decoded L2 blocks) aims at
+# BRUIT_PORT_GRGSM (14730), where the injector listens
+# (qosmo/run_modules/38-bruit.sh, c54x_exe/run.sh). Without BRUIT_MODE nothing
+# changes. PONT_GSMTAP_PORT set by the operator (or by c54x_exe/run.sh) wins.
 if os.environ.get("BRUIT_MODE", "") in ("ber", "relais"):
     os.environ.setdefault("PONT_GSMTAP_PORT", os.environ.get("BRUIT_PORT_GRGSM", "14730"))
 

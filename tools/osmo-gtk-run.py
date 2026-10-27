@@ -1,61 +1,57 @@
 #!/usr/bin/env python3
-# osmo-gtk-run.py - UNE COMMANDE, UNE FENETRE GTK : le terminal devient un journal.
+# osmo-gtk-run.py - ONE COMMAND, ONE GTK WINDOW: the terminal becomes a log.
 #
-#     osmo-gtk-run.py [--title T] [--icon FICHIER] [--root] [--tty] [--progress]
-#                     [--keep-open] [--cwd DIR] -- COMMANDE [ARGS...]
+#     osmo-gtk-run.py [--title T] [--icon FILE] [--root] [--tty] [--progress]
+#                     [--keep-open] [--cwd DIR] -- COMMAND [ARGS...]
 #
-# [2026-10-01] AUCUN FAVORI N OUVRE PLUS DE TERMINAL. Les icones du dock et du
-# bureau (supplements, update, Claude, deka, telephone pmOS, 4G, pilotes, le
-# journal du multi, la console tmux, la VTY du mobile...) ouvraient chacune un
-# gnome-terminal, avec un « read -n1 » a la fin pour que la fenetre ne se
-# ferme pas avant qu on ait lu. Elles passent toutes par ICI : une fenetre GTK
-# du banc (meme habillage que la barre de lancement, tools/osmo-launcher.py),
-# qui montre la sortie de la commande, dit quand elle est finie et avec quel
-# statut, et se ferme.
+# NO FAVOURITE OPENS A TERMINAL. The dock and desktop icons (supplements,
+# update, Claude, deka, pmOS phone, 4G, drivers, the multi log, the tmux
+# console, the VTY of the mobile...) all go through HERE: a GTK window of the
+# bench (same look as the launcher bar, tools/osmo-launcher.py), which shows
+# the output of the command, says when it is finished and with which status,
+# and closes.
 #
-# [2026-10-24] LA FIN DU SCRIPT FERME LA FENETRE. Un favori qui a fini n a
-# plus rien a montrer : sortie en 0, la fenetre part apres 1,5 s ; en echec,
-# la console est depliee et un compte a rebours de 15 s laisse lire l erreur
-# (« garder ouverte » l arrete). --keep-open : l ancien comportement, pour ce
-# qu on ouvre POUR LIRE (« Etat 4G », « Etat du telephone »). --close-on-exit
-# est accepte et ne change plus rien (c est le defaut).
+# THE END OF THE SCRIPT CLOSES THE WINDOW. A finished favourite has nothing
+# more to show: exit 0, the window leaves after 1.5 s; on failure, the console
+# is unfolded and a 15 s countdown lets the error be read ("garder ouverte"
+# stops it). --keep-open: the window stays, for what is opened TO READ
+# ("Etat 4G", "Etat du telephone"). --close-on-exit is accepted and changes
+# nothing (it is the default).
 #
-# DEUX FACONS DE MONTRER LA COMMANDE :
-#   - journal (defaut) : stdout + stderr de la commande dans une vue texte
-#     (couleurs ANSI retirees, defilement automatique, « copier »). Pour tout
-#     ce qui ne fait qu ecrire : journalctl -f, un status, un service qu on
-#     demarre.
-#   - --tty : un VRAI terminal (widget VTE) dans la fenetre. Pour ce qui
-#     pose des questions (whiptail, sudo, « Entree pour continuer »), anime
-#     la ligne (update.sh teste `[ -t 1 ]` et sort sans tty), ou est
-#     interactif de bout en bout (claude, tmux attach, telnet). C est le
-#     terminal, mais DANS le GTK, avec le meme bandeau d etat ; sans
-#     gir1.2-vte-2.91, on retombe sur le journal et on le dit.
+# TWO WAYS TO SHOW THE COMMAND:
+#   - log (default): stdout + stderr of the command in a text view (ANSI
+#     colours stripped, automatic scrolling, "copier"). For anything that
+#     only writes: journalctl -f, a status, a service being started.
+#   - --tty: a REAL terminal (VTE widget) in the window. For what asks
+#     questions (whiptail, sudo, "Entree pour continuer"), animates the line
+#     (update.sh tests `[ -t 1 ]` and exits without tty), or is interactive
+#     end to end (claude, tmux attach, telnet). It is the terminal, but INSIDE
+#     the GTK, with the same status band; without gir1.2-vte-2.91, falls back
+#     to the log and says so.
 #
-# --progress : LA BARRE DE PROGRESSION, PAS LE SHELL. [2026-10-12] Pour les
-#   lancements (2G, multi, 4G, telephone pmOS) on ne veut pas lire un defile
-#   de shell : une petite fenetre avec une barre, le nom de l etape en cours,
-#   la derniere ligne - et un bouton « console » qui DEPLIE la sortie complete
-#   (un vrai terminal VTE, ou le journal sans VTE) pour qui veut voir. La
-#   commande tourne dans un pseudo-terminal tenu ici : elle se croit dans un
-#   terminal (couleurs, questions, pkexec), ce qu elle ecrit est lu au passage
-#   pour la barre et transmis a la console. L avancement vient des reperes
-#   « [n/m] » que les scripts du banc impriment deja (run.sh : [3/10] Core
-#   Osmocom ; osmo-lte, osmo-pmos : poses le 2026-10-12) ; sans repere, la
-#   barre pulse et montre la derniere ligne. Fin : barre pleine (vert) ou
-#   rouge avec le statut.
+# --progress: THE PROGRESS BAR, NOT THE SHELL. For the launches (2G, multi,
+#   4G, pmOS phone) a scrolling shell is not wanted: a small window with a
+#   bar, the name of the current step, the last line - and a "console"
+#   button that UNFOLDS the complete output (a real VTE terminal, or the log
+#   without VTE) for whoever wants to see. The command runs in a
+#   pseudo-terminal held here: it believes it is in a terminal (colours,
+#   questions, pkexec), what it writes is read on the fly for the bar and
+#   passed to the console. The progress comes from the "[n/m]" markers the
+#   bench scripts print (run.sh: [3/10] Core Osmocom; osmo-lte, osmo-pmos);
+#   without marker, the bar pulses and shows the last line. End: full bar
+#   (green) or red with the status.
 #
-# --root : la commande tourne en root. Deja root : rien a faire. Sinon pkexec
-# (la fenetre de mot de passe du bureau) avec DISPLAY, XAUTHORITY et les
-# variables de proxy de la session - pkexec nettoie l environnement, et sans
-# ce report les git clone des supplements echouent derriere un proxy. Sans
-# pkexec : sudo (qui demande dans le terminal en --tty, et ne peut pas
-# demander en journal : sudo -n, l echec se lit dans la fenetre).
+# --root: the command runs as root. Already root: nothing to do. Otherwise
+# pkexec (the desktop password window) with DISPLAY, XAUTHORITY and the proxy
+# variables of the session - pkexec cleans the environment, and without this
+# forwarding the git clones of the supplements fail behind a proxy. Without
+# pkexec: sudo (which asks in the terminal with --tty, and cannot ask in log
+# mode: sudo -n, the failure is read in the window).
 #
-# Lance par les .desktop du depot (data/desktop/), les lanceurs poses par
-# iso_modules/85-installeur-bureau.sh, addition.sh, update.sh, et par les
-# barres GTK du bureau (osmo-launcher.py, osmo-panel.py) pour leurs entrees
-# interactives.
+# Started by the .desktop of the repository (data/desktop/), the launchers
+# installed by iso_modules/85-installeur-bureau.sh, addition.sh, update.sh,
+# and by the GTK bars of the desktop (osmo-launcher.py, osmo-panel.py) for
+# their interactive entries.
 import argparse
 import fcntl
 import os
@@ -71,8 +67,8 @@ import threading
 
 
 def _root_prefix(tty):
-    """Prefixe argv pour executer en root : rien si on l est deja, pkexec avec
-    l environnement utile sinon, sudo en dernier recours."""
+    """argv prefix to execute as root: nothing if already root, pkexec with
+    the useful environment otherwise, sudo as a last resort."""
     if os.geteuid() == 0:
         return []
     if shutil.which("pkexec") and os.environ.get("DISPLAY"):
@@ -116,8 +112,8 @@ ARGS = _parse()
 
 
 def _exec_direct(pourquoi):
-    # Pas de bureau, ou pas de GTK : on execute tel quel, dans le terminal
-    # courant - mieux vaut la commande sans fenetre que pas de commande.
+    # No desktop, or no GTK: executed as is, in the current terminal - better
+    # the command without window than no command.
     print("[osmo-gtk-run] %s : execution directe" % pourquoi, file=sys.stderr)
     argv = (_root_prefix(True) if ARGS.root else []) + ARGS.cmd
     if ARGS.cwd:
@@ -143,7 +139,7 @@ except (ValueError, ImportError):
     Vte = None
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
-MAX_CHARS = 400_000          # au-dela, on coupe le debut : le journal n est pas une archive
+MAX_CHARS = 400_000          # beyond that, the beginning is cut: the log is not an archive
 
 CSS = b"""
 .osmo-run { background-color: #0b0e14; }
@@ -175,12 +171,12 @@ class Run(Gtk.Window):
     def __init__(self, a):
         super().__init__(title=a.title)
         self.a = a
-        self.proc = None            # journal : Popen
-        self.child_pid = None       # tty : pid du fils VTE
+        self.proc = None            # log: Popen
+        self.child_pid = None       # tty: pid of the VTE child
         self.fini = False
         self.progress = bool(a.progress)
-        self.master = None          # progress : le pty de la commande
-        self.fraction = None        # progress : None tant qu aucun repere [n/m]
+        self.master = None          # progress: the pty of the command
+        self.fraction = None        # progress: None as long as no [n/m] marker
         self._lbuf = ""
         self.set_default_size(*(COMPACT if self.progress else (a.width, a.height)))
         if a.icon and os.path.exists(a.icon):
@@ -207,7 +203,7 @@ class Run(Gtk.Window):
         self.b_close = Gtk.Button(label="fermer")
         self.b_close.connect("clicked", lambda *_x: self.destroy())
         head.pack_end(self.b_close, False, False, 0)
-        self.rebours = None         # secondes avant fermeture, None = pas de rebours
+        self.rebours = None         # seconds before closing, None = no countdown
         self.b_garder = Gtk.Button(label="garder ouverte")
         self.b_garder.set_tooltip_text("annule la fermeture automatique")
         self.b_garder.connect("clicked", lambda *_x: self._garder())
@@ -229,8 +225,8 @@ class Run(Gtk.Window):
         cmdl.set_ellipsize(3)       # Pango.EllipsizeMode.END
         col.pack_start(cmdl, False, False, 0)
 
-        # progress : la barre, l etape, la derniere ligne, puis la console
-        # REPLIEE (Gtk.Revealer) derriere le bouton « console »
+        # progress: the bar, the step, the last line, then the console
+        # FOLDED (Gtk.Revealer) behind the "console" button
         if self.progress:
             self.bar = Gtk.ProgressBar()
             self.bar.set_show_text(True)
@@ -257,8 +253,8 @@ class Run(Gtk.Window):
             col.pack_start(self.rev, True, True, 0)
             GLib.timeout_add(120, self._pulse)
 
-        # en progress, le terminal VTE sert de console des qu il existe (la
-        # commande est dans un pty de toute facon) ; sinon le journal
+        # in progress mode, the VTE terminal is the console as soon as it exists
+        # (the command is in a pty anyway); otherwise the log
         self.tty = bool((a.tty or self.progress) and Vte is not None)
         if self.tty:
             self.term = Vte.Terminal()
@@ -275,7 +271,7 @@ class Run(Gtk.Window):
             bg.parse("#0b0e14")
             self.term.set_colors(fg, bg, None)
             if self.progress:
-                # ce qu on tape dans la console part au pty de la commande
+                # what is typed in the console goes to the pty of the command
                 self.term.connect("commit", self._tty_commit)
                 self.term.connect("size-allocate", self._tty_resize)
             else:
@@ -308,7 +304,7 @@ class Run(Gtk.Window):
                          "les questions de la commande ne pourront pas etre repondues.\n")
         GLib.idle_add(self._start)
 
-    # ── lancer ────────────────────────────────────────────────────────────
+    # ── start ─────────────────────────────────────────────────────────────
     def _argv(self):
         return (_root_prefix(self.tty) if self.a.root else []) + list(self.a.cmd)
 
@@ -342,7 +338,7 @@ class Run(Gtk.Window):
         threading.Thread(target=self._pump, daemon=True).start()
         return False
 
-    # ── progress : la commande dans un pty tenu ici ────────────────────────
+    # ── progress: the command in a pty held here ──────────────────────────
     def _start_pty(self, argv, cwd):
         env = dict(os.environ)
         env.setdefault("TERM", "xterm-256color")
@@ -351,7 +347,7 @@ class Run(Gtk.Window):
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
 
             def enfant():
-                # son propre groupe + le pty comme terminal de controle
+                # its own group + the pty as controlling terminal
                 os.setsid()
                 try:
                     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -372,7 +368,7 @@ class Run(Gtk.Window):
         while True:
             try:
                 data = os.read(self.master, 4096)
-            except OSError:            # EIO : la commande a ferme son cote
+            except OSError:            # EIO: the command closed its side
                 break
             if not data:
                 break
@@ -383,10 +379,10 @@ class Run(Gtk.Window):
     def _feed_pty(self, data):
         text = data.decode("utf-8", "replace")
         if self.tty:
-            self.term.feed(data)       # VTE lit l ANSI lui-meme
+            self.term.feed(data)       # VTE reads the ANSI itself
         else:
             self._append(text)
-        # les reperes d avancement, ligne par ligne
+        # the progress markers, line by line
         self._lbuf += ANSI.sub("", text)
         while "\n" in self._lbuf:
             line, self._lbuf = self._lbuf.split("\n", 1)
@@ -451,7 +447,7 @@ class Run(Gtk.Window):
         self.child_pid = pid
 
     def _tty_exit(self, _term, status):
-        # status : format waitpid
+        # status: waitpid format
         rc = (status >> 8) & 0xff if (status & 0xff) == 0 else 128 + (status & 0x7f)
         self._done(rc)
 
@@ -464,7 +460,7 @@ class Run(Gtk.Window):
         rc = self.proc.wait()
         GLib.idle_add(self._done, rc)
 
-    # ── montrer ───────────────────────────────────────────────────────────
+    # ── show ──────────────────────────────────────────────────────────────
     def _append(self, text):
         if self.tty:
             self.term.feed(text.replace("\n", "\r\n").encode())
@@ -501,7 +497,7 @@ class Run(Gtk.Window):
                 self.bar.set_fraction(self.fraction if self.fraction is not None else 1.0)
                 self.bar.set_text("echec (statut %d)" % rc)
                 self.bar.get_style_context().add_class("ko")
-                # l echec se lit dans la console : on la deplie
+                # the failure is read in the console: unfold it
                 if not self.b_console.get_active():
                     self.b_console.set_active(True)
             if self.master is not None:
@@ -522,7 +518,7 @@ class Run(Gtk.Window):
         return False
 
     def _tic(self):
-        """Echec : compte a rebours dans le bandeau, puis fermeture."""
+        """Failure: countdown in the band, then closing."""
         if self.rebours is None:
             return False
         if self.rebours <= 0:
@@ -543,7 +539,7 @@ class Run(Gtk.Window):
         texte = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(texte, -1)
 
-    # ── arreter ───────────────────────────────────────────────────────────
+    # ── stop ──────────────────────────────────────────────────────────────
     def stop(self):
         if self.tty and not self.progress:
             if self.child_pid:
@@ -562,8 +558,8 @@ class Run(Gtk.Window):
                 pass
 
     def _quit(self, *_a):
-        # La fenetre part : la commande aussi. Un journalctl -f ou un tmux
-        # attach orphelin n a aucune raison de survivre a ce qu on regardait.
+        # The window leaves: the command too. An orphan journalctl -f or tmux
+        # attach has no reason to outlive what was being watched.
         self.stop()
         Gtk.main_quit()
 

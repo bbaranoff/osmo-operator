@@ -1,15 +1,14 @@
 #!/bin/bash
-# osmo-gcc-alternatives.sh - gcc-9 / gcc-11 / gcc-13 dans update-alternatives (g++ en esclave).
+# osmo-gcc-alternatives.sh - gcc-9 / gcc-11 / gcc-13 in update-alternatives (g++ as slave).
 #
-# [2026-10-24] « update-alternatives --config gcc » repondait « pas d alternatives pour gcc »
-# sur l ISO : seul update.sh les posait, en rattrapage, et l ISO n avait que gcc-13. Les
-# branches experimentales d osmocom-bb (jolly/testing, burst_ind) ne compilent qu avec gcc-9
-# (cf. Dockerfile, stage bb). Ce script est LA definition, appelee par iso_modules/80-chroot.sh
-# (dans le chroot, apres apt), install_modules/80-bureau.sh et update.sh.
+# The experimental osmocom-bb branches (jolly/testing, burst_ind) only build with gcc-9
+# (see Dockerfile, stage bb). This script is THE definition, called by
+# iso_modules/80-chroot.sh (in the chroot, after apt), install_modules/80-bureau.sh and
+# update.sh.
 #
-# Priorites : gcc-9 (90), gcc-11 (110), gcc-13 (130). Un choix deja fait
-# (update-alternatives --config gcc) est garde ; a la creation, gcc-13 - le compilateur du
-# noyau, pour DKMS. Seuls les compilateurs presents entrent : ni apt, ni reseau ici.
+# Priorities: gcc-9 (90), gcc-11 (110), gcc-13 (130). A choice already made
+# (update-alternatives --config gcc) is kept; on creation, gcc-13 - the kernel compiler,
+# for DKMS. Only the compilers present are registered: no apt, no network here.
 [ "$(id -u)" -eq 0 ] || { echo "osmo-gcc-alternatives : il faut root" >&2; exit 1; }
 command -v update-alternatives >/dev/null 2>&1 || exit 0
 neuf=0

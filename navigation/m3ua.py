@@ -1,14 +1,14 @@
-# m3ua.py - un ASP M3UA (RFC 4666) en Python, sur SCTP, sans dependance.
+# m3ua.py - an M3UA ASP (RFC 4666) in Python, over SCTP, without dependency.
 #
-# La console devient un vrai point SS7 du lab : elle se connecte a l'inter-STP
-# (ou au STP d'un operateur), s'annonce (ASPUP), enregistre dynamiquement une
-# routing key pour SON point code (RKM - le hub du depot est configure en
-# "routing-key-allocation dynamic-permitted", cf. helpers/create_interop.sh),
-# passe active (ASPAC), puis emet et recoit du SCCP.
+# The console becomes a real SS7 point of the lab: it connects to the
+# inter-STP (or to an operator's STP), announces itself (ASPUP), dynamically
+# registers a routing key for ITS point code (RKM - the repository hub is
+# configured with "routing-key-allocation dynamic-permitted", see
+# helpers/create_interop.sh), goes active (ASPAC), then sends and receives SCCP.
 #
-# Le lien est du SCTP : socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP). Le PPID
-# 3 (M3UA) est pose par sendmsg() - un STP qui filtre sur le PPID jetterait
-# sinon nos messages.
+# The link is SCTP: socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP). PPID 3 (M3UA)
+# is set through sendmsg() - an STP filtering on the PPID would otherwise
+# drop our messages.
 
 import queue
 import socket
@@ -17,14 +17,14 @@ import threading
 import time
 
 IPPROTO_SCTP = 132
-SCTP_SNDRCV = 1          # cmsg type (linux/sctp.h) : 0 = INIT, 1 = SNDRCV
+SCTP_SNDRCV = 1          # cmsg type (linux/sctp.h): 0 = INIT, 1 = SNDRCV
 PPID_M3UA = 3
 
-# Decalage des routing contexts de la console : hors de portee du plan du lab
-# (n*1000 + o*100 + 50, donc au plus 9950 pour 9 noeuds et 9 operateurs).
+# Offset of the console routing contexts: outside the lab numbering plan
+# (n*1000 + o*100 + 50, so at most 9950 for 9 nodes and 9 operators).
 CONSOLE_RCTX_BASE = 900000
 
-# Classes et types de messages.
+# Message classes and types.
 CLS_MGMT, CLS_TRANSFER, CLS_SSNM, CLS_ASPSM, CLS_ASPTM, CLS_RKM = 0, 1, 2, 3, 4, 9
 ERR, NTFY = 0, 1
 DATA = 1
@@ -33,7 +33,7 @@ ASPUP, ASPDN, BEAT, ASPUP_ACK, ASPDN_ACK, BEAT_ACK = 1, 2, 3, 4, 5, 6
 ASPAC, ASPIA, ASPAC_ACK, ASPIA_ACK = 1, 2, 3, 4
 REG_REQ, REG_RSP, DEREG_REQ, DEREG_RSP = 1, 2, 3, 4
 
-# Parametres.
+# Parameters.
 P_INFO = 0x0004
 P_ROUTING_CTX = 0x0006
 P_DIAG = 0x0007
@@ -137,23 +137,23 @@ class M3uaError(Exception):
 
 
 class Asp(object):
-    """ASP M3UA client. Un fil de lecture, une file par usage."""
+    """M3UA ASP client. One reader thread, one queue per usage."""
 
     def __init__(self, remote_ip, remote_port=2908, local_pc=None,
                  routing_ctx=None, traffic_mode=1, log=None):
-        # Duree de vie observee d'une association depuis l'hote vers l'inter-STP
-        # du lab : une trentaine de secondes. Passe ce delai, le hub cesse de
-        # repondre et l'association SCTP expire cote noyau. On la remonte donc
-        # au lieu de faire semblant de tenir un lien permanent (voir renew()).
+        # Observed lifetime of an association from the host to the lab
+        # inter-STP: about thirty seconds. Past that, the hub stops answering
+        # and the SCTP association expires in the kernel. It is brought up
+        # again instead of pretending to hold a permanent link (see renew()).
         self.opened_at = 0.0
         self.remote = (remote_ip, int(remote_port))
         self.local_pc = local_pc
         self.routing_ctx = routing_ctx
         self.traffic_mode = traffic_mode
         self.sock = None
-        self.rx = queue.Queue()          # DATA (SCCP) recus
-        self.ctrl = queue.Queue()        # messages de controle
-        self.events = []                 # journal lisible
+        self.rx = queue.Queue()          # received DATA (SCCP)
+        self.ctrl = queue.Queue()        # control messages
+        self.events = []                 # readable log
         self.reader = None
         self.beater = None
         self.beat_interval = 15.0
@@ -161,7 +161,7 @@ class Asp(object):
         self.state = "deconnecte"
         self._log = log
 
-    # ── journal ──────────────────────────────────────────────────────────
+    # ── log ──────────────────────────────────────────────────────────────
     def log(self, text):
         stamp = time.strftime("%H:%M:%S")
         self.events.append("%s %s" % (stamp, text))
@@ -183,10 +183,10 @@ class Asp(object):
         self.state = "connecte"
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
         self.reader.start()
-        # Battement de coeur M3UA. L'inter-STP ferme l'association d'un ASP
-        # silencieux au bout d'une trentaine de secondes : sans ces BEAT, un
-        # lien parfaitement etabli tombe tout seul entre deux commandes, et la
-        # destination passe DUNA sans rien dans les journaux.
+        # M3UA heartbeat. The inter-STP closes the association of a silent ASP
+        # after about thirty seconds: without these BEATs, a perfectly
+        # established link drops by itself between two commands, and the
+        # destination goes DUNA with nothing in the logs.
         self.beater = threading.Thread(target=self._beat_loop, daemon=True)
         self.beater.start()
         self.log("SCTP etabli vers %s:%d" % self.remote)
@@ -203,9 +203,9 @@ class Asp(object):
 
     def send_msg(self, cls, typ, params_bytes=b""):
         raw = message(cls, typ, params_bytes)
-        # RFC 4666 1.4.4 : le flux SCTP 0 est RESERVE a la gestion. Le trafic
-        # DATA emis dessus se fait refuser avec "Invalid Stream Identifier" -
-        # le lien reste up, et les messages disparaissent en silence.
+        # RFC 4666 1.4.4: SCTP stream 0 is RESERVED for management. DATA
+        # traffic sent on it is refused with "Invalid Stream Identifier" -
+        # the link stays up, and the messages vanish silently.
         self._send(raw, stream=(1 if cls == CLS_TRANSFER else 0))
         name = MSG_NAMES.get((cls, typ), "cls%d/typ%d" % (cls, typ))
         if name not in ("DATA", "BEAT"):
@@ -266,8 +266,8 @@ class Asp(object):
                                                      msg.first(P_HEARTBEAT) or b""))
             return
         if msg.cls == CLS_ASPSM and msg.typ == BEAT_ACK:
-            # Reponse a NOTRE battement : rien a en faire, et surtout pas a
-            # laisser s'accumuler dans la file de controle.
+            # Answer to OUR heartbeat: nothing to do with it, and it must not
+            # pile up in the control queue.
             return
         name = msg.name
         detail = ""
@@ -284,7 +284,7 @@ class Asp(object):
         self.ctrl.put(msg)
 
     def wait_ctrl(self, wanted, timeout=5.0):
-        """Attend un (classe, type) precis. Les autres sont conserves."""
+        """Wait for a given (class, type). The others are kept."""
         end = time.time() + timeout
         keep = []
         found = None
@@ -301,7 +301,7 @@ class Asp(object):
             self.ctrl.put(m)
         return found
 
-    # ── sequence d'activation ────────────────────────────────────────────
+    # ── activation sequence ──────────────────────────────────────────────
     def asp_up(self, timeout=5.0):
         self.send_msg(CLS_ASPSM, ASPUP)
         msg = self.wait_ctrl({(CLS_ASPSM, ASPUP_ACK), (CLS_MGMT, ERR)}, timeout)
@@ -313,30 +313,30 @@ class Asp(object):
         return True
 
     def register(self, point_code, service_ind=None, rk_id=None, timeout=5.0):
-        """RKM : demande dynamique d'une routing key pour NOTRE point code.
+        """RKM: dynamic request of a routing key for OUR point code.
 
-        Le parametre "Service Indicators" est OMIS par defaut : l'inter-STP
-        d'Osmocom le refuse (registration status 9, "parametre de routing key
-        non supporte") et l'enregistrement echoue alors en entier, alors que
-        la meme cle sans ce champ passe sans discuter."""
-        # L'identifiant local de routing key DOIT etre propre a cette cle :
-        # l'inter-STP s'en sert pour reconnaitre une re-registration. Deux ASP
-        # qui envoient tous deux l'identifiant 1 se retrouvent dans LE MEME AS
-        # (meme routing context), et en traffic-mode override le dernier arrive
-        # vole le trafic du premier - la destination du premier devient DUNA.
-        # On derive donc l'identifiant du point code demande.
+        The "Service Indicators" parameter is OMITTED by default: the Osmocom
+        inter-STP refuses it (registration status 9, "unsupported routing key
+        parameter") and the whole registration then fails, while the same key
+        without this field is accepted."""
+        # The local routing key identifier MUST be specific to this key: the
+        # inter-STP uses it to recognise a re-registration. Two ASPs both
+        # sending identifier 1 end up in THE SAME AS (same routing context),
+        # and in traffic-mode override the last one steals the traffic of the
+        # first - whose destination becomes DUNA. The identifier is therefore
+        # derived from the requested point code.
         if rk_id is None:
             rk_id = point_code & 0x00FFFFFF
-        # On PROPOSE aussi le routing context, derive du point code. Sans lui,
-        # l'inter-STP alloue lui-meme un contexte et rend le MEME a deux ASP
-        # differents : le second prend alors la place du premier dans l'AS
-        # (traffic-mode override) et le point code du premier passe DUNA. Avec
-        # un contexte propre a chaque point code, chacun garde son trafic.
-        # Le contexte propose vit dans une plage que le lab n'utilise pas : les
-        # noeuds calculent le leur par n*1000 + o*100 + 50 (au plus 9950), et
-        # le hub ne distingue pas deux AS qui portent le meme contexte. On
-        # ajoute donc un decalage franc au point code plutot que de risquer de
-        # tomber sur la routing key d'un operateur.
+        # The routing context is also PROPOSED, derived from the point code.
+        # Without it, the inter-STP allocates a context itself and returns the
+        # SAME one to two different ASPs: the second then takes the place of
+        # the first in the AS (traffic-mode override) and the first point code
+        # goes DUNA. With a context specific to each point code, each keeps
+        # its traffic. The proposed context lives in a range the lab does not
+        # use: the nodes compute theirs as n*1000 + o*100 + 50 (at most 9950),
+        # and the hub does not tell apart two AS carrying the same context,
+        # hence a large offset added to the point code rather than risking a
+        # collision with an operator's routing key.
         rctx = self.routing_ctx if self.routing_ctx is not None else \
             (CONSOLE_RCTX_BASE + (point_code & 0x00FFFFFF))
         dpc = struct.pack("!I", point_code & 0x00FFFFFF)
@@ -395,21 +395,21 @@ class Asp(object):
             try:
                 self.register(point_code)
             except M3uaError as exc:
-                # Un STP deja provisionne pour ce PC refuse le RKM : on garde
-                # la main, l'activation peut tres bien passer sans.
+                # An STP already provisioned for this PC refuses the RKM: carry
+                # on, the activation may well succeed without it.
                 self.log("RKM : %s (on continue sans)" % exc)
         self.activate()
         return self.state
 
     def renew(self, max_age=3.0):
-        """Rouvre le lien s'il est mort, ou s'il approche de sa duree de vie.
+        """Reopen the link if it is dead, or close to the end of its lifetime.
 
-        Le seuil est court (3 s) : c'est la duree pendant laquelle l'inter-STP
-        du lab repond effectivement a une association venue de l'hote. Une
-        reconnexion coute environ 0,3 s (SCTP + ASPUP + RKM + ASPAC).
+        The threshold is short (3 s): that is how long the lab inter-STP
+        actually answers an association coming from the host. A reconnection
+        costs about 0.3 s (SCTP + ASPUP + RKM + ASPAC).
 
-        Rend True si une reconnexion a eu lieu. Le point code et le contexte
-        de routage sont les memes : de l'exterieur, rien ne bouge."""
+        Return True if a reconnection took place. The point code and the
+        routing context are the same: from the outside, nothing moves."""
         if self.state == "ASP_ACTIVE" and self.age < max_age:
             return False
         pc = getattr(self, "last_pc", None)
@@ -426,7 +426,7 @@ class Asp(object):
         self.log("lien renouvele (PC %s)" % _pc(pc))
         return True
 
-    # ── donnees ──────────────────────────────────────────────────────────
+    # ── data ─────────────────────────────────────────────────────────────
     def send_data(self, opc, dpc, payload, si=3, ni=0, sls=0, mp=0):
         pd = struct.pack("!IIBBBB", opc & 0xFFFFFF, dpc & 0xFFFFFF, si, ni, mp, sls)
         pd += payload

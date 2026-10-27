@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Bridge : grgsm_decode -v (qui DECODE le vrai SI du cfile continu) -> parse les
-# lignes SI (PD=0x06) -> GSMTAP 16B + L2 -> 4730 (shunt feed_si -> DATA_IND -> mobile).
+# Bridge: grgsm_decode -v (decodes the real SI from the continuous cfile) -> parses
+# the SI lines (PD=0x06) -> GSMTAP 16B + L2 -> 4730 (shunt feed_si -> DATA_IND -> mobile).
 import subprocess, socket, struct, re, sys
 GSMTAP = struct.pack(">BBBBHbbIBBBB", 2,4,0x01,0,0,0,0,0,0x01,0,0,0)  # 16B, type UM, BCCH
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -10,10 +10,10 @@ p = subprocess.Popen(["grgsm_decode","-m","BCCH","-t","0","-a","514","-c",CF,"-s
 SI={0x1b:"SI3",0x1a:"SI2",0x1c:"SI4",0x21:"SI13",0x19:"SI1",0x1d:"SI2bis",0x1e:"SI2ter",0x06:"RR"}
 n=0; nsch=0
 for line in p.stdout:
-    # SCH REEL : le receiver gr-gsm patche imprime "SCHBSIC <bsic> <fn> <toa>" sur
-    # stdout (le port measurements est avale par le CLI grgsm_decode). On le
-    # forwarde au shunt en UDP 4731 {magic 'SCH1', int32 bsic, int32 fn, int32 toa}
-    # -> feed_sb -> shunt_dispatch_sb (BSIC reel; TOA reel si hors CALYPSO_CANNED).
+        # Real SCH: the patched gr-gsm receiver prints "SCHBSIC <bsic> <fn> <toa>" on
+        # stdout (the measurements port is consumed by the grgsm_decode CLI). It is
+        # forwarded to the shunt over UDP 4731 {magic 'SCH1', int32 bsic, int32 fn, int32 toa}
+        # -> feed_sb -> shunt_dispatch_sb (real BSIC; real TOA unless CALYPSO_CANNED).
     msch = re.search(r"SCHBSIC\s+(\d+)\s+(\d+)\s+(-?\d+)", line)
     if msch:
         bsic, fn, toa = int(msch.group(1)), int(msch.group(2)), int(msch.group(3))

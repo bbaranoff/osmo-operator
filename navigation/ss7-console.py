@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# ss7-console.py - point d'entree de la console SS7 de osmo-operator.
+# ss7-console.py - entry point of the osmo-operator SS7 console.
 #
-#   ./navigation/ss7-console.py                 le schema navigable (fleches)
-#   ./navigation/ss7-console.py --list          l'inventaire, en texte
-#   ./navigation/ss7-console.py audit 1.11.1    audit SS7 d'un point code
+#   ./navigation/ss7-console.py                 the navigable diagram (arrows)
+#   ./navigation/ss7-console.py --list          the inventory, as text
+#   ./navigation/ss7-console.py audit 1.11.1    SS7 audit of a point code
 #   ./navigation/ss7-console.py vty 1 4258 "show gsup-connections"
 #   ./navigation/ss7-console.py map sri-sm --pc 1.11.1 msisdn=112233445566
 #
-# Le mode texte sert aux scripts et aux machines sans terminal ; le mode
-# schema est celui du quotidien.
+# Text mode is for scripts and machines without a terminal; diagram mode is
+# the everyday one.
 
 import argparse
 import os
@@ -150,9 +150,9 @@ def cmd_serve(topo, args):
 
 
 def _second_pc(topo):
-    """Un point code distinct de celui que prend la console emettrice : le
-    deuxieme de la liste des libres, jamais un increment (le troisieme membre
-    d'un point code ITU tient sur 3 bits, .8 n'existe pas)."""
+    """A point code distinct from the one the sending console takes: the
+    second of the free list, never an increment (the third member of an ITU
+    point code fits in 3 bits, .8 does not exist)."""
     libres = topo.free_point_codes(2)
     return libres[1] if len(libres) > 1 else libres[0]
 
@@ -208,8 +208,8 @@ def main(argv=None):
     p.add_argument("command", nargs="+")
 
     args, extra = ap.parse_known_args(argv)
-    # "map sri-sm --pc 1.11.61 msisdn=100101" : argparse laisse les positionnels
-    # qui suivent une option de cote. On les recupere plutot que de les perdre.
+    # "map sri-sm --pc 1.11.61 msisdn=100101": argparse sets aside the
+    # positionals that follow an option. They are collected rather than lost.
     leftovers = [x for x in extra if "=" in x and not x.startswith("-")]
     unknown = [x for x in extra if x not in leftovers]
     if unknown:

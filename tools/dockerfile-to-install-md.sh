@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# dockerfile-to-install-md.sh - le Dockerfile, etape par etape, en Markdown « installation depuis zero ».
+# dockerfile-to-install-md.sh - the Dockerfile, step by step, as an "install from scratch" Markdown.
 #
-# [2026-10-20] Le Dockerfile est la seule description complete et testee de l'installation
-# (paquets apt, pile Osmocom compilee, osmocom-bb + firmware, qosmo, gr-gsm, node, LTE...).
-# Plutot que de maintenir a la main un second document qui derive, on le genere :
-#   chaque FROM devient un chapitre, chaque RUN un bloc bash a coller tel quel dans un shell
-#   root, chaque COPY un cp depuis le depot, les commentaires du Dockerfile deviennent la prose.
+# The Dockerfile is the only complete and tested description of the installation
+# (apt packages, compiled Osmocom stack, osmocom-bb + firmware, qosmo, gr-gsm, node, LTE...).
+# Rather than maintaining by hand a second document that drifts, it is generated:
+#   each FROM becomes a chapter, each RUN a bash block to paste as is in a root shell,
+#   each COPY a cp from the repository, the Dockerfile comments become the prose.
 #
 #   tools/dockerfile-to-install-md.sh                      # Dockerfile -> doc/install-from-scratch.md
 #   tools/dockerfile-to-install-md.sh Dockerfile.run -o doc/x.md
 #   tools/dockerfile-to-install-md.sh --annexe doc/c54x_exe-depuis-ubuntu-vierge.md
 #
-# Premiere version volontairement simple (python3 embarque, aucune dependance) ; a ameliorer.
+# Deliberately simple (embedded python3, no dependency).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE="$HERE/Dockerfile"
@@ -23,8 +23,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -o|--out)    OUT="$2"; shift ;;
         --annexe)    ANNEXES+=("$2"); shift ;;
-        # --lang en : prose anglaise ; les commentaires (francais) du Dockerfile sont remplaces par les
-        # notes par etape de --notes <fichier> (sections « ## <nom d'etape> »), les blocs de commandes restent.
+        # --lang en: English prose; the (French) Dockerfile comments are replaced by the
+        # per-step notes of --notes <file> (sections "## <step name>"), the command blocks stay.
         --lang)      LANG_DOC="$2"; shift ;;
         --notes)     NOTES="$2"; shift ;;
         -h|--help)   sed -n '2,15p' "$0"; exit 0 ;;
@@ -50,7 +50,7 @@ if notes_file and os.path.isfile(notes_file):
     notes = {k: "\n".join(v).strip() for k, v in notes.items()}
 lines = open(src, encoding="utf-8", errors="replace").read().split("\n")
 
-# 1. recoller les continuations (\ en fin de ligne), garder les commentaires qui precedent
+# 1. re-join the continuations (\ at end of line), keep the comments that precede
 items = []          # (comments:list[str], instr:str, args:str)
 pending = []
 i = 0
@@ -62,14 +62,14 @@ while i < len(lines):
         i += 1
         continue
     if l.lstrip().startswith("#"):
-        # on garde l'indentation apres le « # » : les lignes indentees (schemas, listes
-        # « RAND=0 -> ... ») sont rendues verbatim, dans un bloc
+        # keep the indentation after the "#": indented lines (diagrams, lists
+        # "RAND=0 -> ...") are rendered verbatim, in a block
         pending.append(l.lstrip()[1:].rstrip())
         i += 1
         continue
     buf = [l]
-    # continuation : tant que la derniere ligne NON commentaire finit par « \ » ; Docker admet
-    # des lignes « # ... » au milieu d'un RUN continue, elles ne portent pas de « \ »
+    # continuation: as long as the last NON-comment line ends with "\"; Docker accepts
+    # "# ..." lines in the middle of a continued RUN, they do not carry a "\"
     def derniere_utile():
         for b in reversed(buf):
             if not b.lstrip().startswith("#"):
@@ -125,7 +125,7 @@ def strip_mounts(cmd):
 
 def run_block(args):
     cmd = strip_mounts(args).strip()
-    # commentaires internes aux RUN : ils sont deja du bash (#), on les garde
+    # comments inside RUNs: they are already bash (#), keep them
     return ["```bash", cmd, "```", ""]
 
 doc = []
@@ -191,7 +191,7 @@ mkdir -p "$ROOT"
 if not EN:
     doc.extend(fr)
 
-# sommaire
+# table of contents
 stages = [(k, a) for (c, k, a) in items if k == "FROM"]
 doc.append("## Table of contents" if EN else "## Sommaire")
 doc.append("")
@@ -274,7 +274,7 @@ for an in annexes:
     doc.append(("_Contents of `%s`, included as is._" if EN else "_Contenu de `%s`, repris tel quel._") % os.path.relpath(an, root))
     doc.append("")
     txt = open(an, encoding="utf-8", errors="replace").read()
-    # decaler les titres d'un niveau
+    # shift the headings down one level
     txt = re.sub(r"^(#{1,5}) ", lambda m: "#" + m.group(1) + " ", txt, flags=re.M)
     doc.append(txt)
 

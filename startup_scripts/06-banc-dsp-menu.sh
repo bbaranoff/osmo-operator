@@ -1,5 +1,5 @@
-# 06-banc-dsp-menu.sh - partie de start.sh (lignes 844-1511 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 06-banc-dsp-menu.sh - part of start.sh (DSP bench, --menu, mobile configs)
+# Sourced by start.sh in the main shell: same order, same variables.
 banc_dsp() {
     MODE=dsp bash "$BANC_DSP" "$@"
 }
@@ -7,20 +7,21 @@ banc_dsp_arreter() {
     [ -x "$BANC_DSP" ] || return 0
     banc_dsp --stop "$@"
 }
-# [2026-10-20 22:35] TOUTES les instances Calypso (INSTANCE=N : /tmp/c54x-pontN, le mobile par l'air = 2,
-# le telephone 2 du TRX = 3, les essais = 4...). run.sh --stop (instance 1) entraine deja 2 et 3 ; ceci
-# ramasse le reste, puis les orphelins par leur nom (c54x_exe, QEMU Calypso, transceiver) : un c54x_exe
-# de l'instance 2 vieux de 19 minutes etait encore la apres deux relances.
-# [2026-10-21] banc-rssi (instance 4) et Magnetite (/dev/shm/magnetite, QEMU « -M calypso » comme le banc)
-# sont SEPARES : on n'arrete ni l'un ni l'autre ici. Les pid proteges sont lus dans leurs fichiers pid,
-# les pkill ci-dessous passent par ce filtre au lieu de tuer tout ce qui matche.
+# ALL the Calypso instances (INSTANCE=N: /tmp/c54x-pontN, the over-the-air
+# mobile = 2, phone 2 of the TRX = 3, trials = 4...). run.sh --stop (instance 1)
+# already takes 2 and 3 down; this collects the rest, then the orphans by name
+# (c54x_exe, Calypso QEMU, transceiver).
+# banc-rssi (instance 4) and Magnetite (/dev/shm/magnetite, QEMU "-M calypso"
+# like the bench) are SEPARATE: neither is stopped here. The protected pids
+# are read from their pid files; the pkill below go through this filter
+# instead of killing everything that matches.
 banc_dsp_pids_proteges() {
     cat /tmp/c54x-pont4/*.pid /dev/shm/magnetite/*.pid 2>/dev/null | tr '\n' ' '
 }
 banc_dsp_tuer_sauf_proteges() {
     local nom p garde
     garde=" $(banc_dsp_pids_proteges) "
-    # pgrep -x : nom du processus (comm), pas la ligne de commande : un shell qui contient ce texte n'est pas vise
+    # pgrep -x: process name (comm), not the command line: a shell containing this text is not targeted
     for nom in "$@"; do
         for p in $(pgrep -x -- "$nom" 2>/dev/null); do
             case "$garde" in *" $p "*) ;; *) kill "$p" 2>/dev/null || true ;; esac
@@ -32,7 +33,7 @@ banc_dsp_arreter_instances() {
     for d in /tmp/c54x-pont[0-9]*; do
         [ -d "$d" ] || continue
         n="${d#/tmp/c54x-pont}"
-        [ "$n" = 4 ] && continue                     # banc-rssi : arret par banc-rssi-stop seulement
+        [ "$n" = 4 ] && continue                     # banc-rssi: stopped by banc-rssi-stop only
         ls "$d"/*.pid >/dev/null 2>&1 || continue
         [ -x "$BANC_DSP" ] && INSTANCE="$n" AIR=1 OSMO_TRX=0 MODE=dsp bash "$BANC_DSP" --stop >/dev/null 2>&1 || true
         rm -f "$d"/*.pid
@@ -45,15 +46,16 @@ banc_dsp_arreter_instances() {
     return 0
 }
 
-# --- 2b. lanceur C de QEMU (qosmo) --------------------------------------------
-# [2026-09-03] QEMU n'est plus appele directement par 40-qemu.sh : l'arbre qosmo
-# porte un lanceur C, tools/qosmo-launch, installe dans /usr/local/bin/qosmo. Il fixe les defauts qui marchent (machine calypso + ROMs DSP,
-# -cpu arm946, -gdb tcp::1234, -serial pty x2, -monitor unix:$RUN_DIR/...),
-# lit l1s/last_rach dans l'ELF, et publie des liens stables vers les pty
-# ($RUN_DIR/modem.pty pour osmocon, $RUN_DIR/irda.pty). Options : --bind,
-# --trx-port, --iq-tee, --l1ctl, --monitor, --gdb (voir `qosmo --help`).
-# Le nom est passe a run.sh par QOSMO_LAUNCHER ; s'il manque, 40-qemu.sh
-# retombe sur la ligne qemu-system-arm historique - on le dit, sans bloquer.
+# --- 2b. C launcher of QEMU (qosmo) -------------------------------------------
+# QEMU is not called directly by 40-qemu.sh: the qosmo tree carries a C
+# launcher, tools/qosmo-launch, installed in /usr/local/bin/qosmo. It sets the
+# working defaults (calypso machine + DSP ROMs, -cpu arm946, -gdb tcp::1234,
+# -serial pty x2, -monitor unix:$RUN_DIR/...), reads l1s/last_rach in the
+# ELF, and publishes stable links to the ptys ($RUN_DIR/modem.pty for
+# osmocon, $RUN_DIR/irda.pty). Options: --bind, --trx-port, --iq-tee,
+# --l1ctl, --monitor, --gdb (see `qosmo --help`).
+# The name is passed to run.sh through QOSMO_LAUNCHER; if missing, 40-qemu.sh
+# falls back to the historical qemu-system-arm line - said, without blocking.
 say_begin "Lanceur QEMU"
 : "${QOSMO_LAUNCHER:=/usr/local/bin/${CALYPSO_FORK:-qosmo}}"
 export QOSMO_LAUNCHER
@@ -66,19 +68,19 @@ else
     say_end "WARN" "$C_SK" "Lanceur QEMU" "$QOSMO_LAUNCHER absent : 40-qemu.sh appellera qemu-system-arm directement"
     printf '       %s-> make -C %s/tools/qosmo-launch install%s\n' "$C_DIM" "$RUN_ROOT" "$C_Z"
 fi
-# ══ --menu : on DEMANDE, au lieu de deviner ════════════════════════════════
-# Le lanceur resout tout seul le profil, le noeud, l'inter-STP, le WAN. C'est ce
-# qu'il faut pour une ISO qui demarre sans personne devant. Mais devant un banc,
-# la meme resolution silencieuse oblige a relire le script pour savoir ce qui a
-# ete choisi - et a relancer avec les bonnes options quand ce n'etait pas ca.
+# ══ --menu: ASK instead of guessing ═══════════════════════════════════════
+# The launcher resolves the profile, the node, the inter-STP and the WAN on
+# its own, which is what an ISO booting with nobody in front needs. In front
+# of a bench, the same silent resolution forces one to re-read the script to
+# know what was chosen, and to relaunch with the right options otherwise.
 #
-# Ce menu ne CHANGE aucune regle : il PRE-REMPLIT chaque question avec la valeur
-# que le lanceur aurait prise seul, et n'ecrit que ce que l'operateur modifie.
-# Valider tout sans rien toucher donne donc exactement le lancement par defaut.
+# This menu CHANGES no rule: it PRE-FILLS every question with the value the
+# launcher would have taken alone, and only writes what the operator changes.
+# Validating everything untouched gives exactly the default launch.
 #
-# Il s'efface de lui-meme quand personne ne peut repondre (pas de terminal,
-# --dry-run, NO_MENU=1 que start-docker.sh pose devant un conteneur) : une question
-# sans lecteur, c'est un lancement qui se fige sans le dire.
+# It steps aside when nobody can answer (no terminal, --dry-run, NO_MENU=1
+# set by start-docker.sh in front of a container): a question without a
+# reader is a launch that freezes without saying so.
 menu_interactif() {
     [ "${MENU_MODE:-0}" -eq 1 ] || return 0
     [ "${NO_MENU:-0}" = "1" ] && return 0
@@ -88,9 +90,9 @@ menu_interactif() {
     local has_wt=0
     command -v whiptail >/dev/null 2>&1 && has_wt=1
 
-    # Une question, une valeur par defaut, une reponse. Sans whiptail on
-    # retombe sur read : une ISO minimale n'a pas toujours newt.
-    _ask() {   # $1 = titre  $2 = question  $3 = defaut
+    # One question, one default, one answer. Without whiptail, fall back to
+    # read: a minimal ISO does not always have newt.
+    _ask() {   # $1 = title  $2 = question  $3 = default
         local rep
         if [ "$has_wt" -eq 1 ]; then
             rep="$(whiptail --title "$1" --inputbox "$2" 11 70 "$3" 3>&1 1>&2 2>&3)" || rep="$3"
@@ -100,7 +102,7 @@ menu_interactif() {
         fi
         printf "%s" "${rep:-$3}"
     }
-    _yesno() { # $1 = titre  $2 = question  $3 = defaut (0=oui 1=non)
+    _yesno() { # $1 = title  $2 = question  $3 = default (0=yes 1=no)
         if [ "$has_wt" -eq 1 ]; then
             if [ "$3" -eq 0 ]; then whiptail --title "$1" --yesno "$2" 10 70; else
                 whiptail --title "$1" --defaultno --yesno "$2" 10 70; fi
@@ -113,11 +115,11 @@ menu_interactif() {
         case "${rep:-$d}" in [oOyY]*) return 0 ;; *) return 1 ;; esac
     }
 
-    # Un choix parmi une liste FERMEE. `_ask` est une saisie libre : elle
-    # convient a un numero de noeud, pas a « gr-gsm ou DSP », ou toute frappe
-    # hors liste part en lancement casse. whiptail --radiolist rend le jeton
-    # choisi ; sans newt, on numerote et on lit un chiffre.
-    #   $1 titre  $2 question  $3 defaut  $4.. = jeton libelle jeton libelle...
+    # One choice from a CLOSED list. `_ask` is free input: fine for a node
+    # number, not for "gr-gsm or DSP", where any keystroke outside the list
+    # gives a broken launch. whiptail --radiolist returns the chosen token;
+    # without newt, the entries are numbered and a digit is read.
+    #   $1 title  $2 question  $3 default  $4.. = token label token label...
     _menu() {
         local titre="$1" q="$2" def="$3"; shift 3
         local rep
@@ -149,9 +151,9 @@ menu_interactif() {
     printf "  %smenu%s       --menu : les defauts proposes sont ceux du lancement automatique\n" \
         "${C_DIM:-}" "${C_Z:-}"
 
-    # ── 1. QUI FAIT LA COUCHE 1 ──────────────────────────────────────────────
-    # Le premier choix, parce qu il commande le second : le DSP n a que faire
-    # d une seconde station de base.
+    # ── 1. WHO DOES LAYER 1 ──────────────────────────────────────────────────
+    # The first choice, because it drives the second: the DSP has no use for
+    # a second base station.
     _L1="$(_menu "Couche 1" \
         "Qui demodule ?\n\n  DSP     (defaut) le C54x execute la mask-ROM TI et decode lui-meme :\n          le mobile campe (SI1-4) et fait sa mise a jour de localisation.\n  gr-gsm  la pile va jusqu a l appel voix. Le DSP ne tourne pas." \
         "$([ "${DSP_MODE:-0}" = 1 ] && echo c54x_exe || echo grgsm_exe)" \
@@ -159,11 +161,11 @@ menu_interactif() {
         grgsm_exe "couche 1 gr-gsm dans qosmo (pile complete)")"
     case "$_L1" in c54x_exe) DSP_MODE=1 ;; *) DSP_MODE=0 ;; esac
 
-    # ── 2. TOPOLOGIE : SEUL OU HYBRIDE ───────────────────────────────────────
-    # Meme axe que CALYPSO_PROFILE, dit dans les termes du banc :
-    #   seul     = profil `qemu`         -> une BTS, un QEMU
-    #   hybride  = profil `faketrx-qemu` -> + side-car fake_trx et un MS#2
-    # Le defaut suit le choix ci-dessus : hybride en gr-gsm, seul en DSP.
+    # ── 2. TOPOLOGY: ALONE OR HYBRID ─────────────────────────────────────────
+    # Same axis as CALYPSO_PROFILE, said in bench terms:
+    #   seul     = profile `qemu`         -> one BTS, one QEMU
+    #   hybride  = profile `faketrx-qemu` -> + fake_trx side-car and an MS#2
+    # The default follows the choice above: hybrid in gr-gsm, alone in DSP.
     _topo_def=hybride
     [ "${DSP_MODE:-0}" = 1 ] && _topo_def=seul
     [ "$PROFILE" = qemu ] && _topo_def=seul
@@ -179,14 +181,14 @@ menu_interactif() {
     PROFILE_CHOISI=1
     unset _topo _topo_def
 
-    # Les autres profils (faketrx seul, noproc) restent joignables, mais en
-    # ligne de commande : les proposer ici alourdirait le choix courant.
+    # The other profiles (faketrx alone, noproc) stay reachable, but from the
+    # command line: offering them here would weigh down the usual choice.
     PROFILE="$(_ask "Profil" \
         "Profil de pile retenu (modifiable) :\n  faketrx-qemu = hybride   qemu = seul\n  faketrx  noproc  aussi acceptes" \
         "$PROFILE")"
 
-    # Le noeud est deja resolu plus haut (--node, environnement, /etc/osmo-role,
-    # table WAN) : on propose CE resultat, pas un 1 arbitraire.
+    # The node is already resolved above (--node, environment, /etc/osmo-role,
+    # WAN table): THAT result is proposed, not an arbitrary 1.
     NODE_ID="$(_ask "Noeud SS7" \
         "Numero de ce noeud (1-9). Il fixe le point code 1.<noeud><op>.<role>,\nle routing context et les MSISDN <noeud>00<op><rang>." \
         "${NODE_ID:-1}")"
@@ -209,7 +211,7 @@ menu_interactif() {
 }
 menu_interactif
 
-# Profil → mapping vers les profils attendus par run.sh
+# Profile → mapping to the profiles expected by run.sh
 case "$PROFILE" in
     faketrx-qemu|hybrid) CALYPSO_PROFILE=hybrid;   MODE=faketrx-qemu ;;
     faketrx)             CALYPSO_PROFILE=faketrx;  MODE=faketrx ;;
@@ -220,15 +222,17 @@ esac
 export CALYPSO_PROFILE MODE
 export RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 export ENCRYPTION MS_COUNT HOST_IP
-# RAND passe en prefixe (ex. `RAND=0 ./start-native.sh`) force le defi
-# d'authentification, via le gate getenv("RAND") des patchs osmo-hlr + osmo-msc.
-# Le RAND doit atteindre LES DEUX process : osmo-hlr le tire dans le vecteur
-# (SRES/Kc calcules sur RAND=0 -> LU acceptee) et osmo-msc l'envoie. RAND pose
-# sur osmo-msc SEUL -> mismatch -> LU reject. RAND absent -> reseau normal.
-# core_svc_start (run.sh) lance ces demons de deux facons, on couvre les deux :
-#   - enfant direct (setsid, pas de systemd) -> heritent de l'env : on exporte.
-#   - service systemd -> `systemctl start` N'herite PAS de l'env : drop-in
-#     transient /run/systemd/system/<unit>.service.d/rand.conf + daemon-reload.
+# RAND set as a prefix (e.g. `RAND=0 ./start-native.sh`) forces the
+# authentication challenge, through the getenv("RAND") gate of the osmo-hlr +
+# osmo-msc patches. RAND must reach BOTH processes: osmo-hlr draws it in the
+# vector (SRES/Kc computed on RAND=0 -> LU accepted) and osmo-msc sends it.
+# RAND set on osmo-msc ALONE -> mismatch -> LU reject. RAND absent -> normal
+# network. core_svc_start (run.sh) starts these daemons in two ways, both
+# are covered:
+#   - direct child (setsid, no systemd) -> inherits the env: exported.
+#   - systemd service -> `systemctl start` does NOT inherit the env:
+#     transient drop-in /run/systemd/system/<unit>.service.d/rand.conf +
+#     daemon-reload.
 [ -n "${RAND:-}" ] && export RAND
 if command -v systemctl >/dev/null 2>&1; then
     _rand_changed=0
@@ -245,8 +249,8 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
     done
     [ "$_rand_changed" = 1 ] && systemctl daemon-reload 2>/dev/null || true
-    # rebondir seulement si le forcage change, et HLR AVANT MSC pour que le MSC
-    # reprenne des vecteurs a RAND=0 ; un run normal sans RAND ne touche a rien.
+    # bounce only if the forcing changes, and HLR BEFORE MSC so that the MSC
+    # fetches vectors at RAND=0 again; a normal run without RAND touches nothing.
     if [ -n "${RAND:-}" ] || [ "$_rand_changed" = 1 ]; then
         for _u in osmo-hlr osmo-msc; do
             systemctl is-active --quiet "$_u" 2>/dev/null && systemctl restart "$_u" 2>/dev/null || true
@@ -254,42 +258,41 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
     unset _u _dd _rand_changed
 fi
-# Client de couche 2 : l'option de ligne de commande ECRASE tout, et elle est
-# EXPORTEE -- une valeur posee sans export ne traverse pas jusqu'a run.sh,
-# defaut deja paye sur ENCRYPTION (cf. generate_configs.sh).
+# Layer 2 client: the command-line option OVERRIDES everything, and it is
+# EXPORTED - a value set without export does not reach run.sh (same rule as
+# ENCRYPTION, cf. generate_configs.sh).
 if [ -n "${L2_CLIENT_CHOISI:-}" ]; then
     CALYPSO_L2_CLIENT="$L2_CLIENT_CHOISI"
 fi
 export CALYPSO_L2_CLIENT="${CALYPSO_L2_CLIENT:-mobile}"
-# ── LE TAMPON DU GREFFON ALSA-PULSEAUDIO DU `mobile` ────────────────────────
-# [2026-09-09] 240 ms, PAS 80. Le mecanisme est celui deja documente dans
-# qosmo/run_modules/70-l2.sh (« DESCENDANT MUET ») : le `mobile` ecrit une
-# trame GSM (160 echantillons, 20 ms) par `snd_pcm_writei`, et si le tampon du
-# greffon est trop court chaque ecriture rend -EPIPE ; pq_alsa.c y repond par
-# un `snd_pcm_prepare()` muet, qui DEMONTE ET REMONTE le flux PulseAudio.
-# Le 80 ms retenu a l epoque ne tient plus des qu un consommateur lit
-# gsm_audio.monitor (notre bouclage vers les haut-parleurs) : la latence
-# minimale du sink monte a 26 ms et les remontages reviennent. Mesure du jour,
-# ecrivain cadence a 20 ms comme le mobile, 10 s, sur ce banc :
-#     80 ms -> 16 remontages   120 -> 19   160 -> 1   200 -> 0   240 -> 0
-# Pendant un vrai appel c etait 50 remontages par seconde : flux detruit a
-# chaque trame, « voix saturee et pas belle ». 240 ms = 12 trames GSM, le
-# premier palier stable (200) avec de la marge pour la gigue sous charge.
-# La variable est exportee ICI parce que update.sh re-fetch qosmo :
-# son defaut interne peut repartir a 80, celui-ci gagne (`:=`).
-# JUGE, pendant un appel etabli : l index du sink-input du mobile doit rester
-# FIXE (`pactl list short sink-inputs`, deux releves a 1 s d intervalle).
+# ── THE BUFFER OF THE `mobile` ALSA-PULSEAUDIO PLUGIN ───────────────────────
+# The mechanism is the one documented in qosmo/run_modules/70-l2.sh ("MUTE
+# DOWNLINK"): the `mobile` writes one GSM frame (160 samples, 20 ms) per
+# `snd_pcm_writei`, and if the plugin buffer is too short each write returns
+# -EPIPE; pq_alsa.c answers with a silent `snd_pcm_prepare()`, which TEARS
+# DOWN AND REBUILDS the PulseAudio stream. As soon as a consumer reads
+# gsm_audio.monitor (our loopback to the speakers) the minimum latency of the
+# sink rises to 26 ms, and short buffers rebuild the stream constantly
+# (writer paced at 20 ms like the mobile, 10 s:
+#     80 ms -> 16 rebuilds   120 -> 19   160 -> 1   200 -> 0   240 -> 0
+# during a real call that is 50 rebuilds per second: stream destroyed at
+# every frame, saturated voice). The value is above the first stable step
+# (200 ms) with margin for jitter under load.
+# The variable is exported HERE because update.sh re-fetches qosmo: its
+# internal default may differ, this one wins (`:=`).
+# CHECK, during an established call: the sink-input index of the mobile must
+# stay FIXED (`pactl list short sink-inputs`, two readings 1 s apart).
 export CALYPSO_PULSE_LATENCY_MSEC="${CALYPSO_PULSE_LATENCY_MSEC:-320}"
 export LOG_DIR RUN_DIR
-# --- 2c. firmware ARM : FIRMWARE_SRC ----------------------------------------
-# Les deux lanceurs (qosmo/run.sh via bench.env, c54x_exe/run.sh) lisent
-# FIRMWARE_ELF / FIRMWARE_BIN dans l environnement. FIRMWARE_SRC est le nom
-# que les scripts de packaging emploient (build-debs.sh, 71-debs-banc.sh) ;
-# on l accepte ici aussi pour qu un appel
-#     FIRMWARE_SRC=/chemin/layer1.xxx.elf ./start-native.sh
-# charge ce firmware-la dans QEMU. Un fichier = l ELF lui-meme ; un dossier =
-# l arborescence firmware/ (FIRMWARE_DIR, board/<carte>/ en dessous).
-# FIRMWARE_ELF explicite garde la main.
+# --- 2c. ARM firmware: FIRMWARE_SRC -------------------------------------------
+# Both launchers (qosmo/run.sh through bench.env, c54x_exe/run.sh) read
+# FIRMWARE_ELF / FIRMWARE_BIN from the environment. FIRMWARE_SRC is the name
+# the packaging scripts use (build-debs.sh, 71-debs-banc.sh); it is accepted
+# here too so that a call
+#     FIRMWARE_SRC=/path/layer1.xxx.elf ./start-native.sh
+# loads that firmware into QEMU. A file = the ELF itself; a directory = the
+# firmware/ tree (FIRMWARE_DIR, board/<board>/ below it).
+# An explicit FIRMWARE_ELF keeps the upper hand.
 if [ -n "${FIRMWARE_SRC:-}" ]; then
     if [ -f "$FIRMWARE_SRC" ]; then
         : "${FIRMWARE_ELF:=$FIRMWARE_SRC}"
@@ -301,12 +304,12 @@ if [ -n "${FIRMWARE_SRC:-}" ]; then
     fi
 fi
 if [ -n "${FIRMWARE_ELF:-}" ]; then
-    # Le .bin a cote de l ELF s il existe (qosmo --bin, c54x_exe) ; sinon on
-    # laisse les lanceurs appliquer leur propre defaut.
+    # The .bin next to the ELF if it exists (qosmo --bin, c54x_exe); otherwise
+    # the launchers apply their own default.
     [ -n "${FIRMWARE_BIN:-}" ] || [ ! -r "${FIRMWARE_ELF%.elf}.bin" ] || FIRMWARE_BIN="${FIRMWARE_ELF%.elf}.bin"
     export FIRMWARE_ELF FIRMWARE_BIN
 fi
-# --- 3. validation des chemins critiques --------------------------------------
+# --- 3. validation of the critical paths --------------------------------------
 say_begin "Validation des chemins"
 path_ok=1
 _check() {
@@ -321,12 +324,12 @@ _check() {
         path_ok=0
     fi
 }
-# Variables optionnelles selon le profil ; on ne bloque que si presentes et cassees
-# (DSP_PROM0 retire : ROM plus generee depuis le merge `sans-dsp` de
-#  qosmo — cf. run.sh --check-paths et run_modules/00-prereqs.sh.)
+# Optional variables depending on the profile; only block if present and broken
+# (DSP_PROM0 not checked: the ROM is not generated by qosmo - cf. run.sh
+#  --check-paths and run_modules/00-prereqs.sh.)
 for v in QEMU_BIN FIRMWARE_ELF OSMOCON; do
-    # `[ -n x ] && _check || true` avalait le verdict : _check pouvait poser
-    # path_ok=0 sans que la boucle ne le laisse remonter. Forme explicite.
+    # `[ -n x ] && _check || true` would swallow the verdict: _check could set
+    # path_ok=0 without the loop letting it through. Explicit form.
     if [ -n "${!v:-}" ]; then _check "$v"; fi
 done
 if [ $path_ok -eq 1 ]; then
@@ -334,11 +337,11 @@ if [ $path_ok -eq 1 ]; then
 else
     say_end "WARN" "$C_SK" "Validation des chemins" "certains chemins manquent (run.sh verifiera)"
 fi
-# --- 4. generation des configs mobile -----------------------------------------
-# MS#1 (QEMU / mobile principal) et MS#2 (faketrx side-car) pour le profil hybrid.
+# --- 4. generation of the mobile configs --------------------------------------
+# MS#1 (QEMU / main mobile) and MS#2 (faketrx side-car) for the hybrid profile.
 BB_DIR="/root/.osmocom/bb"
 mkdir -p "$BB_DIR"
-# Sources possibles pour le template mobile
+# Possible sources for the mobile template
 MS_TEMPLATE=""
 for t in \
     "${OQC_ROOT:-}/cfgs/mobile_group1.cfg" \
@@ -350,23 +353,22 @@ for t in \
 do
     if [ -f "$t" ]; then MS_TEMPLATE="$t"; break; fi
 done
-# La SIM du MS : « sap » pour le MS#1 quand --sap est demande (son socket est
-# celui du serveur SAP, SAP_SOCK), « test » (la SIM de test du gabarit) sinon.
+# The MS SIM: "sap" for MS#1 when --sap is requested (its socket is the SAP
+# server one, SAP_SOCK), "test" (the template's test SIM) otherwise.
 ms_sim_mode() {
     if [ "${SAP_MODE:-0}" = 1 ] && [ "$1" = "${SAP_SOCK:-/tmp/osmocom_sap}" ]; then echo sap; else echo test; fi
 }
 generate_mobile_cfg() {
     local dest="$1" vty_port="$2" l2sock="$3" sapsock="$4" arfcn="$5" imsi="$6" ki="$7"
-    # [2026-08-08] Peripheriques ALSA PAR MOBILE. Le template porte
-    # gsm_out/gsm_in pour tout le monde ; laisser ca remettrait les deux
-    # mobiles sur le meme sink et la meme source, c'est-a-dire la boucle
-    # audio qu'on vient d'ouvrir (cf /etc/asound.conf).
+    # ALSA devices PER MOBILE. The template carries gsm_out/gsm_in for
+    # everybody; keeping that would put both mobiles on the same sink and the
+    # same source, i.e. the audio loop (cf. /etc/asound.conf).
     local aout="${8:-gsm_out}" ain="${9:-gsm_in}"
-    # [2026-08-08] GARDE-FOU : la liste de templates contient $BB_DIR/mobile.cfg,
-    # qui est aussi une DESTINATION. Si c'est lui qui est retenu, `sed "$tpl" >
-    # "$dest"` avec tpl == dest fait tronquer le fichier par le shell AVANT que
-    # sed ne le lise : on produit un mobile.cfg VIDE et le mobile ne demarre plus.
-    # On bascule alors sur le template de secours plutot que de se detruire.
+    # GUARD: the template list contains $BB_DIR/mobile.cfg, which is also a
+    # DESTINATION. If it is the one selected, `sed "$tpl" > "$dest"` with
+    # tpl == dest makes the shell truncate the file BEFORE sed reads it: an
+    # EMPTY mobile.cfg, and the mobile no longer starts. Switch to the
+    # fallback template rather than self-destruct.
     local tpl="$MS_TEMPLATE"
     if [ -n "$tpl" ] && [ "$tpl" -ef "$dest" ] 2>/dev/null; then
         printf '\n       %sMS_TEMPLATE == destination (%s) : template de secours%s\n' \
@@ -374,8 +376,8 @@ generate_mobile_cfg() {
         tpl=""
     fi
     if [ -n "$tpl" ]; then
-        # le gabarit porte « sim sap » : seul le MS#1 de --sap le garde
-        # (delimiteur # : le | de s|..| casserait l alternance \| de sed)
+        # the template carries "sim sap": only the MS#1 of --sap keeps it
+        # (delimiter #: the | of s|..| would break the \| alternation of sed)
         local _sim_sed=(-e "s#^\([[:space:]]*\)sim \(sap\|test\|reader\)\$#\1sim $(ms_sim_mode "$sapsock")#")
         sed \
             -e "s|bind 127.0.0.1 424[0-9]|bind 127.0.0.1 ${vty_port}|" \
@@ -390,7 +392,7 @@ generate_mobile_cfg() {
             -e "s|alsa-input-dev .*|alsa-input-dev ${ain}|" \
             "$tpl" > "$dest"
     else
-        # Template minimal de secours
+        # Minimal fallback template
         cat > "$dest" <<EOF
 !
 ! mobile.cfg genere par start-native.sh (secours)
@@ -419,32 +421,30 @@ EOF
     _ms_cfg_garantir_log "$dest"
 }
 
-# ── LE BLOC tch-voice, GARANTI, QUEL QUE SOIT LE GABARIT ────────────────────
-# [2026-09-09] MS#2 SORTAIT SANS « io-tch-format rtp ». Le gabarit retenu par
-# la boucle ci-dessus est le PREMIER trouve, et c'est presque toujours
-# qosmo/cfgs/mobile_group1.cfg - un fichier d'un autre depot, que
-# update.sh refetche, et qui ne porte pas cette ligne. Le sed de generation ne
-# fait que SUBSTITUER : ce qui manque au gabarit manque au resultat. MS#1
-# l'avait (son fichier est ecrit ailleurs, 3192 octets), MS#2 non (2423).
+# ── THE tch-voice BLOCK, GUARANTEED, WHATEVER THE TEMPLATE ──────────────────
+# The template selected by the loop above is the FIRST one found, almost
+# always qosmo/cfgs/mobile_group1.cfg - a file from another repository, which
+# update.sh re-fetches, and which does not carry "io-tch-format rtp". The
+# generation sed only SUBSTITUTES: what the template lacks, the result lacks.
 #
-# Sans cette ligne, le mobile lit et ecrit ses trames TCH dans la disposition
-# Texas Instruments des vrais Calypso, alors que pont.py les code avec
-# libosmocoding, c'est-a-dire en disposition RTP/RFC3551 (33 octets ouverts
-# par la signature 0xD). Les deux bouts ne se comprennent alors DANS AUCUN
-# SENS, aucun compteur ne bronche, et le son sort robotise (cf. le commentaire
-# de configs/mobile.cfg, mesure du 27/08 : anneau descendant « d2 2c fd a2 »
-# contre anneau montant « 83 00 05 e1 ... ff ff ff ff », une trame a champs).
+# Without that line, the mobile reads and writes its TCH frames in the Texas
+# Instruments layout of real Calypsos, while pont.py codes them with
+# libosmocoding, i.e. in the RTP/RFC3551 layout (33 bytes opened by the 0xD
+# signature). Both ends then misunderstand each other IN BOTH DIRECTIONS, no
+# counter flinches, and the sound comes out robotic (cf. the comment in
+# configs/mobile.cfg: downlink ring "d2 2c fd a2" against uplink ring
+# "83 00 05 e1 ... ff ff ff ff", a frame with fields).
 #
-# On ne corrige donc pas le gabarit - il ne nous appartient pas - on garantit
-# le resultat : les quatre reglages de tch-voice sont poses ici, et le bloc
-# entier est cree s'il manque (le gabarit de secours ci-dessus n'en a aucun).
-# MS_TCH_FORMAT pour un banc qui voudrait autre chose que « rtp ».
+# The template is not fixed - it is not ours - the result is guaranteed: the
+# four tch-voice settings are set here, and the whole block is created if
+# missing (the fallback template above has none).
+# MS_TCH_FORMAT for a bench that wants something other than "rtp".
 _ms_cfg_garantir_tch() {
     local dest="$1" aout="${2:-gsm_out}" ain="${3:-gsm_in}" fmt="${MS_TCH_FORMAT:-rtp}"
     [ -f "$dest" ] || return 0
     awk -v aout="$aout" -v ain="$ain" -v fmt="$fmt" '
         BEGIN { vu = 0; dedans = 0 }
-        # Le bloc existe : on pose nos quatre reglages en tete, une seule fois.
+        # The block exists: our four settings are put at its head, once.
         /^[[:space:]]*tch-voice[[:space:]]*$/ && !vu {
             vu = 1; dedans = 1
             print " tch-voice"
@@ -454,15 +454,16 @@ _ms_cfg_garantir_tch() {
             print "  alsa-input-dev " ain
             next
         }
-        # Dans le bloc : on retire les anciennes copies de CES quatre lignes,
-        # on garde tout le reste - les autres reglages comme les commentaires,
-        # qui portent ici la mesure du 27/08 et valent mieux que le code.
+        # Inside the block: the old copies of THESE four lines are removed,
+        # everything else is kept - the other settings as well as the
+        # comments, which document the measurements and are worth more
+        # than the code.
         dedans {
             if ($0 ~ /^[[:space:]][[:space:]]+(io-handler|io-tch-format|alsa-output-dev|alsa-input-dev)([[:space:]]|$)/) next
             if ($0 ~ /^[[:space:]][[:space:]]+[a-z]/ || $0 ~ /^[!#]/) { print; next }
             dedans = 0
         }
-        # Pas de bloc du tout : on le pose juste avant « no shutdown ».
+        # No block at all: it is placed right before "no shutdown".
         /^[[:space:]]*no shutdown[[:space:]]*$/ && !vu {
             vu = 1
             print " tch-voice"
@@ -474,22 +475,20 @@ _ms_cfg_garantir_tch() {
         { print }
     ' "$dest" > "${dest}.tch" 2>/dev/null && mv -f "${dest}.tch" "$dest" || rm -f "${dest}.tch"
 }
-# ── LE BLOC log stderr, GARANTI, DE LA MEME FORME PARTOUT ───────────────────
-# [2026-10-19] LE JOURNAL DU MOBILE N'AVAIT PAS LA MEME FORME SELON LE GABARIT.
-# qosmo/cfgs/mobile_group1.cfg et c54x_exe/mobile_pont.cfg portent un « log
-# stderr » (couleur, horodatage, categorie) ; configs/mobile.cfg n'en porte
-# AUCUN - seul le « log gsmtap ». Le fichier pose dans /root/.osmocom/bb
-# dependait donc du gabarit retenu en premier, et mobile.log sortait tantot
-# avec ses couleurs et son horodatage a 17 chiffres (ce que l'encart
-# osmo-fft-snap.py et rapport-run.sh savent lire), tantot avec les defauts de
-# libosmocore plus le masque -d de qosmo. On pose ici LE bloc, une fois, quel
-# que soit le gabarit : les sept categories que suit le banc en debug, couleur
-# par sous-systeme, horodatage compact. ATTENTION aux deux horodatages de
-# libosmocore 1.12 : « logging timestamp 1 » = ctime (« Mon Oct 19 10:10:03
-# 2026 », 25 colonnes, constate le 19/10 sur le banc DSP) ; « logging print
-# extended-timestamp 1 » = YYYYMMDDhhmmssnnn (17 chiffres, triable, et le seul
-# que tail_lines() de l'encart sait retirer). C'est le second qu'on pose. Le
-# bloc gsmtap, lui, n'est pas touche.
+# ── THE log stderr BLOCK, GUARANTEED, SAME SHAPE EVERYWHERE ─────────────────
+# qosmo/cfgs/mobile_group1.cfg and c54x_exe/mobile_pont.cfg carry a "log
+# stderr" (color, timestamp, category); configs/mobile.cfg carries NONE -
+# only the "log gsmtap". The file placed in /root/.osmocom/bb would otherwise
+# depend on the template selected first, and mobile.log would come out either
+# with colors and its 17-digit timestamp (what the osmo-fft-snap.py panel and
+# rapport-run.sh can read) or with the libosmocore defaults plus the qosmo -d
+# mask. THE block is set here, once, whatever the template: the seven
+# categories the bench follows in debug, color per subsystem, compact
+# timestamp. BEWARE of the two timestamps of libosmocore 1.12: "logging
+# timestamp 1" = ctime ("Mon Oct 19 10:10:03 2026", 25 columns); "logging
+# print extended-timestamp 1" = YYYYMMDDhhmmssnnn (17 digits, sortable, and
+# the only one tail_lines() of the panel can strip). The second one is set.
+# The gsmtap block is not touched.
 MS_LOG_STDERR_BLOC=' logging filter all 1
  logging color 1
  logging timestamp 0
@@ -505,24 +504,24 @@ MS_LOG_STDERR_BLOC=' logging filter all 1
 _ms_cfg_garantir_log() {
     local dest="$1" existe=0
     [ -f "$dest" ] || return 0
-    # On sait AVANT de lire si le bloc existe : dans mobile_group1.cfg, « line
-    # vty » precede « log stderr », et une seule passe inserait un second bloc
-    # devant line vty avant de tomber sur le premier (constate au test).
+    # Whether the block exists is known BEFORE reading: in mobile_group1.cfg,
+    # "line vty" precedes "log stderr", and a single pass would insert a second
+    # block before line vty before reaching the first one.
     grep -q '^log stderr[[:space:]]*$' "$dest" && existe=1
     awk -v bloc="$MS_LOG_STDERR_BLOC" -v existe="$existe" '
         BEGIN { vu = 0; dedans = 0 }
-        # Le bloc existe : on le remplace en entier, une seule fois.
+        # The block exists: it is replaced entirely, once.
         /^log stderr[[:space:]]*$/ && !vu {
             vu = 1; dedans = 1
             print "log stderr"; print bloc
             next
         }
         dedans {
-            if ($0 ~ /^[[:space:]]+[a-z]/) next     # ancienne ligne du bloc
-            dedans = 0                               # « ! » ou autre : fin du bloc
+            if ($0 ~ /^[[:space:]]+[a-z]/) next     # old line of the block
+            dedans = 0                               # "!" or other: end of the block
         }
-        # Pas de bloc : on le pose devant le premier « log gsmtap », sinon
-        # devant « line vty ».
+        # No block: it is placed before the first "log gsmtap", otherwise
+        # before "line vty".
         /^(log gsmtap|line vty)([[:space:]]|$)/ && !existe && !vu {
             vu = 1
             print "log stderr"; print bloc; print "!"
@@ -531,131 +530,112 @@ _ms_cfg_garantir_log() {
         END { if (!vu) { print "!"; print "log stderr"; print bloc; print "!" } }
     ' "$dest" > "${dest}.log" 2>/dev/null && mv -f "${dest}.log" "$dest" || rm -f "${dest}.log"
 }
-# ⚠️ [2026-08-08, resolu le 26/08] LE RUN N'UTILISE PAS mobile.cfg POUR MS#1.
-# Le mobile Calypso tourne avec
+# ⚠️ THE RUN DOES NOT USE mobile.cfg FOR MS#1. The Calypso mobile runs with
 #     mobile -c /root/.osmocom/bb/mobile_group1.cfg
-# alors qu'on ne generait ici que mobile.cfg. mobile_group1.cfg, lui, est COPIE
-# tel quel par qosmo (run_modules/20-mobile-cfg.sh, depuis $QEMU_TREE/cfgs) :
-# un fichier statique, jamais derive de l'operateur. Il porte donc l'identite de
-# l'operateur 1 - IMSI 001010001000001, ARFCN 514 - quel que soit l'operateur.
-#
-# Constate sur le banc, operateur 2 : le HLR attend 002010002000001, la BTS
-# emet sur 516, et le mobile se presentait avec 001010001000001 sur 514.
+# and mobile_group1.cfg is COPIED as is by qosmo (run_modules/20-mobile-cfg.sh,
+# from $QEMU_TREE/cfgs): a static file, never derived from the operator. It
+# carries the identity of operator 1 - IMSI 001010001000001, ARFCN 514 -
+# whatever the operator; on operator 2 (HLR expects 002010002000001, BTS on
+# 516) the mobile would show up with 001010001000001 on 514:
 #     Mobile Subscriber of MS '1':
 #      IMSI: 001010001000001
 #      Status: U2_NOT_UPDATED  IMSI detached  LAI: invalid
 #      Registered PLMN: MCC-MNC 001-01
-# Tout le reste etait juste - clefs, MSISDN, point codes, ARFCN des BTS - et
-# l'abonne restait detache, parce que la seule carte SIM qui compte n'etait
-# generee nulle part.
 #
-# On ecrit donc MS#1 dans LES DEUX fichiers. mobile.cfg reste la reference
-# (d'autres modules la lisent), mobile_group1.cfg est celui que le lanceur
-# ouvre. Verifier lequel tourne, avant de croire un reglage pose ici :
+# So MS#1 is written to BOTH files. mobile.cfg stays the reference (other
+# modules read it), mobile_group1.cfg is the one the launcher opens. Check
+# which one is running before trusting a setting set here:
 #     pgrep -a mobile
-# ── IMSI et Ki des MS : le plan du HLR, pas celui de l'operateur 1 ──────────
-# Ces valeurs etaient ecrites EN DUR sur le PLMN de l'operateur 1 (001-01) et
-# sur son numero d'abonne. Sur l'operateur 2, dont le reseau diffuse un autre
-# MCC, le mobile presentait donc l'IMSI d'un abonne d'un autre pays : ni le MSC
-# ni le HLR n'ont de fiche a ce numero, le Location Updating reste sans reponse,
-# et l'on cherche la panne dans la BTS alors que la pile entiere est debout.
-# Le plan est celui de start-docker.sh (section "HLR subscribers") :
-#     IMSI = MCC MNC <operateur sur 4 chiffres> <index du MS sur 6 chiffres>
-#     Ki   = 00112233445566778899aabbccdd <index du MS> <operateur>
-# MCC et MNC sont relus dans la configuration REELLEMENT deployee - c'est elle
-# que la BTS diffuse - et non redevines a partir d'une convention.
+# ── IMSI and Ki of the MS: the HLR plan, not the plan of operator 1 ────────
+# On operator 2, whose network broadcasts another MNC, a mobile presenting
+# the IMSI of an operator 1 subscriber has no record at the MSC nor the HLR:
+# the Location Updating stays unanswered while the whole stack is up.
+# The plan is the one of start-docker.sh ("HLR subscribers" section):
+#     IMSI = MCC MNC <operator on 4 digits> <MS index on 6 digits>
+#     Ki   = 00112233445566778899aabbccdd <MS index> <operator>
+# MCC and MNC are re-read from the configuration ACTUALLY deployed - the one
+# the BTS broadcasts - and not guessed again from a convention.
 MS_OP_ID="${OPERATOR_ID:-1}"
 MS_MCC="$(awk '$1=="network" && $2=="country" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
 MS_MNC="$(awk '$1=="mobile" && $2=="network" && $3=="code" {print $4; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
-# ── LES REPLIS SUIVENT LE PLAN, ILS NE L INVENTENT PAS ──────────────────────
-# [2026-08-31] Ces deux lignes se declenchent quand osmo-bsc.cfg n est pas
-# encore lisible (configs pas regenerees a cet instant), et elles etaient
-# fausses toutes les deux :
-#
-#   MS_MNC="01"  en dur : l operateur 2 heritait du MNC de l operateur 1, et
-#   ms_imsi() produisait 001|01|0002|000001 - MNC d un operateur, identifiant
-#   d un autre. Ces abonnes-la arrivaient dans le HLR SANS MSISDN ni IMEI
-#   ("none" / "-------------"), a cote des bons : le VLR ne pouvait les
-#   rattacher a personne. Rien ne signalait l incoherence.
-#
-#   MS_MCC=<op sur 3 chiffres> : aurait donne MCC 002 pour l operateur 2,
-#   alors que TOUT le banc est en 001 - c est le PLMN d essai, commun a tous
-#   les operateurs, et c est le MNC qui les distingue.
-#
-# Le plan reel, verifie dans /var/tmp/osmo-annuaire.csv :
+# ── THE FALLBACKS FOLLOW THE PLAN, THEY DO NOT INVENT IT ────────────────────
+# The fallbacks apply when osmo-bsc.cfg is not readable yet (configs not
+# regenerated at that moment). The real plan (/var/tmp/osmo-annuaire.csv):
 #   op 1 -> 001|01   op 2 -> 001|02   op 3 -> 001|03
-# [2026-10-18] Au premier lancement d'une installation fraiche, osmo-bsc.cfg est
-# encore le gabarit : on y lit les MARQUEURS __MCC__ / __MNC__, que la suite
-# ecrivait tels quels dans les mobile_*.cfg (« imsi __MCC____MNC__0001000002 »,
-# refuse par mobile : MS#2 ne demarrait pas) et exportait a run.sh. Seuls des
-# chiffres comptent ; sinon, le repli ci-dessous.
+# The WHOLE bench is in MCC 001 - the test PLMN, common to all operators -
+# and the MNC is what tells them apart. A hard-coded MNC "01" would give
+# operator 2 the MNC of operator 1 and ms_imsi() would produce
+# 001|01|0002|000001: subscribers that reach the HLR WITHOUT MSISDN nor IMEI
+# ("none" / "-------------"), which the VLR cannot attach to anyone.
+# On the first launch of a fresh installation, osmo-bsc.cfg is still the
+# template: it holds the MARKERS __MCC__ / __MNC__, which would otherwise be
+# written as is into the mobile_*.cfg ("imsi __MCC____MNC__0001000002",
+# refused by mobile) and exported to run.sh. Only digits count; otherwise,
+# the fallback below.
 [[ "$MS_MCC" =~ ^[0-9]{3}$ ]] || MS_MCC=""
 [[ "$MS_MNC" =~ ^[0-9]{2,3}$ ]] || MS_MNC=""
 [ -n "$MS_MCC" ] || MS_MCC="001"
 [ -n "$MS_MNC" ] || MS_MNC="$(printf '%02d' "$MS_OP_ID")"
 ms_imsi() { printf '%s%s%04d%06d' "$MS_MCC" "$MS_MNC" "$MS_OP_ID" "$1"; }
 
-# ── LE QUATRIEME PROVISIONNEUR ──────────────────────────────────────────────
-# run.sh embarque son propre module d'abonnes (run_modules/21-abonnes-hlr.sh,
-# dans qosmo). Il calcule son IMSI comme MCC+MNC+operateur+rang - la meme
-# formule que nous - mais lit MCC et MNC dans /etc/osmocom/osmo-msc.cfg via un
-# chemin qui n'aboutit pas toujours ; il retombe alors sur ses defauts, 001 et
-# 01. Sur l'operateur 2 il fabriquait donc 001010002000001 : un abonne que
-# personne ne presente, avec en prime un MSISDN de l'ancien plan (20001), qui
-# RETIENT ce numero et empeche le bon abonne de le recuperer.
+# ── THE FOURTH PROVISIONER ──────────────────────────────────────────────────
+# run.sh embeds its own subscriber module (run_modules/21-abonnes-hlr.sh, in
+# qosmo). It computes its IMSI as MCC+MNC+operator+rank - the same formula as
+# ours - but reads MCC and MNC from /etc/osmocom/osmo-msc.cfg through a path
+# that does not always succeed; it then falls back to its defaults, 001 and
+# 01, and on operator 2 would build 001010002000001: a subscriber nobody
+# presents, with an MSISDN of the old plan (20001) on top, which HOLDS that
+# number and prevents the right subscriber from getting it.
 #
-# Il honore MCC et MNC depuis l'environnement. En les posant, son IMSI devient
-# exactement celui que start-docker.sh a deja provisionne - et son propre controle
-# d'etat (mod_abonnes_hlr_status) le trouve present, donc il ne fait rien.
-# On neutralise ainsi un doublon par son idempotence, sans toucher a qosmo.
-# [2026-10-24] SANS « ${MNC:-...} » : 03-affichage.sh a deja source globals.conf
-# (MNC="01"), qui l emportait sur la config deployee - l op2 recreait
-# 001010002000001 a chaque demarrage (sans auth, MSISDN refuse), visible en
-# rouge dans les abonnes du conky. MS_MCC/MS_MNC SONT la config deployee.
+# It honours MCC and MNC from the environment. With them set, its IMSI becomes
+# exactly the one start-docker.sh has already provisioned - and its own state
+# check (mod_abonnes_hlr_status) finds it present, so it does nothing. The
+# duplicate is neutralized by its idempotence, without touching qosmo.
+# WITHOUT "${MNC:-...}": 03-affichage.sh has already sourced globals.conf
+# (MNC="01"), which would win over the deployed config. MS_MCC/MS_MNC ARE the
+# deployed config.
 export MCC="$MS_MCC"
 export MNC="$MS_MNC"
 
-# ── Le plan radio : on le LIT, on ne le recalcule pas ───────────────────────
-# generate_configs.sh l'ecrit dans /etc/osmocom/radio-plan.env en meme temps
-# que les configurations. Le relire ici garantit que le mobile s'accorde sur
-# ce que la BTS diffuse VRAIMENT - et non sur une formule recopiee qui finira
-# par diverger, comme l'ont fait l'unit-id, l'ARFCN et l'IMSI avant elle.
-# Les replis restent, pour un banc monte sans ce fichier.
+# ── The radio plan: READ, not recomputed ────────────────────────────────────
+# generate_configs.sh writes it to /etc/osmocom/radio-plan.env together with
+# the configurations. Re-reading it here guarantees that the mobile agrees
+# with what the BTS REALLY broadcasts - not with a copied formula that would
+# end up diverging. The fallbacks remain, for a bench set up without this file.
 if [ -r /etc/osmocom/radio-plan.env ]; then
     # shellcheck disable=SC1091
     . /etc/osmocom/radio-plan.env
     printf '  %splan radio%s  lu dans /etc/osmocom/radio-plan.env\n' "${C_DIM:-}" "${C_Z:-}"
 fi
 
-# ── Les deux canaux radio, et a qui chaque MS s'accroche ────────────────────
-# MS#1 et MS#2 avaient leur ARFCN ecrit EN DUR, 514 et 516 : les valeurs de
-# l'operateur 1, et de lui seul. Sur l'operateur 2 la BTS principale passe a
-# 516 et le side-car y restait aussi : deux cellules sur la meme frequence,
-# leurs bursts melanges dans un milieu ou fake_trx apparie par frequence.
-# Le mobile envoyait ses RACH, aucune Immediate Assignment ne revenait, et
-# MS#1 restait accroche a 514 ou plus rien n'emettait.
+# ── The two radio channels, and which MS attaches to which ──────────────────
+# Hard-coded ARFCNs (514 and 516) are the values of operator 1, and of it
+# alone. On operator 2 the main BTS moves to 516; with the side-car staying
+# there too, two cells share the same frequency, their bursts mixed in a
+# medium where fake_trx pairs by frequency: the mobile sends its RACH, no
+# Immediate Assignment comes back.
 #
-# MS#1 suit la BTS principale, dont l'ARFCN est lu dans la configuration
-# REELLEMENT deployee - c'est le BSC qui en decide et qui l'impose a la BTS
-# par OML, donc c'est la qu'est la verite.
+# MS#1 follows the main BTS, whose ARFCN is read from the configuration
+# ACTUALLY deployed - the BSC decides it and imposes it to the BTS through
+# OML, so that is where the truth is.
 MS_ARFCN1="${PLAN_ARFCN:-}"
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1="$(awk '/^ bts 0$/{b=1} b && /^ *arfcn /{print $2; exit}' /etc/osmocom/osmo-bsc.cfg 2>/dev/null || true)"
-# Meme garde que pour MCC/MNC : un gabarit pas encore regenere donne __ARFCN__.
+# Same guard as for MCC/MNC: a template not regenerated yet gives __ARFCN__.
 [[ "$MS_ARFCN1" =~ ^[0-9]+$ ]] || MS_ARFCN1=""
 [ -n "$MS_ARFCN1" ] || MS_ARFCN1=$(( 512 + MS_OP_ID * 2 ))
 
-# MS#2 suit le side-car. Celui-la, c'est NOUS qui le decidons : le module
-# 13-sidecar-cfg.sh de qosmo lit SC_ARFCN et SC_UNIT_ID dans
-# l'environnement (run_modules/_lib/radio.sh : « : "${SC_ARFCN:=516}" »).
-# Les poser ici evite de modifier qosmo, et garde une seule source par
-# valeur - les memes formules que generate_configs.sh.
+# MS#2 follows the side-car. That one is decided by US: the qosmo module
+# 13-sidecar-cfg.sh reads SC_ARFCN and SC_UNIT_ID from the environment
+# (run_modules/_lib/radio.sh: ": "${SC_ARFCN:=516}""). Setting them here
+# avoids modifying qosmo, and keeps a single source per value - the same
+# formulas as generate_configs.sh.
 export SC_ARFCN="${SC_ARFCN:-${PLAN_ARFCN_BTS1:-$(( 612 + MS_OP_ID * 2 ))}}"
 export SC_UNIT_ID="${SC_UNIT_ID:-${PLAN_UNIT_ID_BTS1:-$(( 6000 + MS_OP_ID * 10 + 2 ))}}"
 MS_ARFCN2="$SC_ARFCN"
 ms_ki()   { printf '00 11 22 33 44 55 66 77 88 99 aa bb cc dd %02x %02x' "$1" "$MS_OP_ID"; }
 
-# IMEI tire au hasard, cle de Luhn calculee - un par MS, jamais deux identiques
-# dans une meme trace.
+# Random IMEI, Luhn check digit computed - one per MS, never two identical in
+# the same trace.
 rand_imei() {
     local body d i sum=0 dbl parity
     body="35892500$(printf '%06d' "$(( (RANDOM << 15 | RANDOM) % 1000000 ))")"

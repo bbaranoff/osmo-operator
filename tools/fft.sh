@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# tools/fft.sh - FFT "jolie" du flux I/Q Calypso, lue DIRECTEMENT dans le docker.
+# tools/fft.sh - "pretty" FFT of the Calypso I/Q stream, read DIRECTLY in the docker.
 #
-# Lit /tmp/record.cfile (le ring record CONTINU, ecrit par record_drain.py qui
-# draine iq_record.fifo en O_RDWR - DECOUPLE de la boucle relay temps-reel) DANS
-# le container, le rapatrie en fc32 (complex64), et affiche sur le X de l'HOTE :
-# PSD moyennee (Welch maison) + waterfall defilant. Boucle (FuncAnimation).
+# Reads /tmp/record.cfile (the CONTINUOUS record ring, written by record_drain.py
+# which drains iq_record.fifo in O_RDWR - DECOUPLED from the real-time relay
+# loop) IN the container, fetches it as fc32 (complex64), and displays on the
+# HOST's X: averaged PSD (home-made Welch) + scrolling waterfall. Loops (FuncAnimation).
 #
-# /!\ Le mode 'fifo' (tap LIVE de /tmp/iq_fft.fifo) a ete RETIRE : ouvrir ce fifo
-#     en lecture force l'IPC device a l'ecrire et perturbe le relai temps-reel ->
-#     le decode grgsm s'arrete (si-bridge 'fini') et le camping fige. record.cfile
-#     est near-live et n'a AUCUN effet sur le pipeline.
+# /!\ There is no 'fifo' mode (LIVE tap of /tmp/iq_fft.fifo): opening that fifo
+#     for reading forces the IPC device to write it and disturbs the real-time
+#     relay -> the grgsm decode stops (si-bridge 'fini') and camping freezes.
+#     record.cfile is near-live and has NO effect on the pipeline.
 #
-# Usage :
-#   ./tools/fft.sh                      # tail de record.cfile (defaut, non-perturbant)
-#   FFT_SRC=sweep ./tools/fft.sh        # balaye tout le ring record
-#   ./tools/fft.sh --save spectre.png   # une capture PNG (si pas de X)
+# Usage:
+#   ./tools/fft.sh                      # tail of record.cfile (default, non-intrusive)
+#   FFT_SRC=sweep ./tools/fft.sh        # sweep the whole record ring
+#   ./tools/fft.sh --save spectre.png   # one PNG capture (if no X)
 #   CONTAINER=osmo-operator-1 CFILE=/tmp/record.cfile RATE=1083333 \
 #   NSAMP=262144 REFRESH=1.0 ARFCN=514 ./tools/fft.sh
 #
 set -euo pipefail
 export CONTAINER="${CONTAINER:-osmo-operator-1}"
 export FFT_SRC="${FFT_SRC:-tail}"   # tail (defaut, NON-perturbant) | sweep - lisent record.cfile
-# NB: le mode 'fifo' (tap LIVE de /tmp/iq_fft.fifo) a ete RETIRE : ouvrir ce
-# fifo en lecture force l'IPC device a l'ecrire, ce qui perturbe la boucle relay
-# temps-reel et COUPE le decode grgsm (si-bridge 'fini') -> camping fige. On lit
-# desormais record.cfile, alimente par record_drain.py (decouple, always-on).
+# NB: no 'fifo' mode (LIVE tap of /tmp/iq_fft.fifo): opening that fifo for
+# reading forces the IPC device to write it, which disturbs the real-time relay
+# loop and CUTS the grgsm decode (si-bridge 'fini') -> camping freezes.
+# record.cfile is read instead, fed by record_drain.py (decoupled, always-on).
 export CFILE="${CFILE:-/dev/shm/dsp_iq.cfile}"    # entree DSP shunt = MS (le mobile qui repond a la BTS ; cfile fc32 en /dev/shm RAM). Fichier qui GRANDIT -> tail-c lit le frais. (override CFILE=/dev/shm/record.cfile = BTS)
 export RATE="${RATE:-1083333}"      # 4 SPS natif = 26e6/24
 export NSAMP="${NSAMP:-32768}"      # complex samples par fenetre (256 KB) - court = ca gigote
@@ -34,7 +34,7 @@ export DISPLAY="${DISPLAY:-:0}"
 export FFT_SAVE=""
 [ "${1:-}" = "--save" ] && export FFT_SAVE="${2:?--save needs a path}"
 
-# garde-fous
+# guards
 command -v docker >/dev/null || { echo "docker introuvable"; exit 1; }
 case "$FFT_SRC" in
   sweep|tail) ;;
@@ -72,15 +72,15 @@ SRC  = os.environ.get("FFT_SRC","tail")    # tail (defaut) | sweep - lisent reco
 if SRC not in ("sweep","tail"): SRC = "tail"   # 'fifo' retire (tap live nocif)
 BS   = 4096; NBLK = max(1, NBYTES//BS)
 
-# ---- modes fichier : balaye le ring (sweep) ou lit le tail de record.cfile
-#      (alimente par record_drain.py, decouple de la boucle relay temps-reel).
+# ---- file modes: sweep the ring (sweep) or read the tail of record.cfile
+#      (fed by record_drain.py, decoupled from the real-time relay loop).
 def _filesize():
     try:
         return int(subprocess.run(["docker","exec",CONT,"stat","-c","%s",CFILE],
                                   capture_output=True,timeout=5).stdout or 0)
     except Exception: return NBYTES
 def _ringsize():
-    # taille du ring publiee par record_drain (modulo pour le wrap LIVE)
+    # ring size published by record_drain (modulo for the LIVE wrap)
     try:
         v = int(subprocess.run(["docker","exec",CONT,"cat",CFILE+".ring"],
                                capture_output=True,timeout=5).stdout or 0)
@@ -110,9 +110,9 @@ def grab():
         _off[0] += NBYTES
         if _off[0] + NBYTES > RING: _off[0] = 0
     else:
-        # LIVE (tail) : lit la fenetre fraiche FINISSANT a l'offset d'ecriture
-        # publie par record_drain (<cfile>.off). Corrige le freeze : avec le ring
-        # seek(0) le frais est a `w` (milieu), PAS au tail. Aligne blocs + wrap.
+        # LIVE (tail): read the fresh window ENDING at the write offset
+        # published by record_drain (<cfile>.off). With the ring, seek(0) puts
+        # the fresh data at `w` (middle), NOT at the tail. Block-aligned + wrap.
         try:
             w = int(subprocess.run(["docker","exec",CONT,"cat",CFILE+".off"],
                                    capture_output=True, timeout=5).stdout or -1)
@@ -147,10 +147,10 @@ def welch_psd(iq):
     psd = acc/max(1,nseg)
     return 10*np.log10(psd/ (NFFT*RATE) + 1e-20)
 
-# ---- figure "jolie" : PSD (haut) + waterfall (bas) ALIGNEES verticalement.
-#      GridSpec 2x2 : col 0 = les 2 plots (MEME largeur), col 1 = colorbar (seulement
-#      sur la ligne waterfall) -> la colorbar ne retrecit plus la waterfall, donc x=0
-#      tombe sur la MEME verticale dans la PSD et la waterfall. sharex lie les axes. ----
+# ---- "pretty" figure: PSD (top) + waterfall (bottom) vertically ALIGNED.
+#      GridSpec 2x2: col 0 = the 2 plots (SAME width), col 1 = colorbar (only on
+#      the waterfall row) -> the colorbar does not shrink the waterfall, so x=0
+#      falls on the SAME vertical in the PSD and the waterfall. sharex links the axes. ----
 plt.style.use("dark_background")
 fig = plt.figure(figsize=(11,8))
 gs = fig.add_gridspec(2, 2, width_ratios=[40, 1], height_ratios=[1, 1.4],

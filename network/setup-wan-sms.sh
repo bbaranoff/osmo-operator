@@ -1,15 +1,15 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-wan-sms.sh - Routage SMS inter-serveur
+# network/setup-wan-sms.sh - inter-server SMS routing
 #
-# Ajoute le routage SMS pour le prefixe 66 dans la table sms-routing.conf
-# de chaque operateur. Les SMS a destination de 66XXXXX sont relayes
-# via TCP vers le sms-interop-relay.py du serveur distant.
+# Adds the SMS routing for prefix 66 to the sms-routing.conf table of each
+# operator. SMS to 66XXXXX are relayed over TCP to the remote server's
+# sms-interop-relay.py.
 #
-# Usage :
+# Usage:
 #   sudo ./network/setup-wan-sms.sh <remote_public_ip> [n_operators]
 #
-# Executer sur CHAQUE serveur.
+# Run on EACH server.
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -35,48 +35,48 @@ for i in $(seq 1 "$N_OPS"); do
 
     echo -e "  ${CYAN}Op${i}${NC} - Mise a jour sms-routing.conf..."
 
-    # Ajouter les routes WAN dans sms-routing.conf
+    # Add the WAN routes to sms-routing.conf
     docker exec "$cname" bash -c "
         CONF='/etc/osmocom/sms-routing.conf'
         
-        # Retirer l'ancien bloc WAN s'il existe
+        # Remove the old WAN block if present
         sed -i '/# ── WAN ROUTES/,/# ── FIN WAN/d' \"\$CONF\" 2>/dev/null || true
         
-        # Ajouter les operateurs distants dans [operators]
-        # On utilise des IDs 100+N pour les operateurs distants
+        # Add the remote operators to [operators]
+        # IDs 100+N are used for the remote operators
         cat >> \"\$CONF\" << SMSEOF
 
-# ── WAN ROUTES - Serveur distant ${REMOTE_IP} ─────────────────────────────
-# Les IDs 100+ designent les operateurs sur le serveur distant.
-# Le relay utilise l'IP du serveur distant pour la connexion TCP.
+# ── WAN ROUTES - remote server ${REMOTE_IP} ───────────────────────────────
+# IDs 100+ designate the operators on the remote server.
+# The relay uses the remote server's IP for the TCP connection.
 
 SMSEOF
 
-        # Ajouter dans la section [operators] si pas deja present
+        # Add to the [operators] section if not already present
         for j in \$(seq 1 ${N_OPS}); do
             wan_op_id=\$((100 + j))
             if ! grep -q \"^\${wan_op_id} =\" \"\$CONF\"; then
-                # Inserer apres la derniere ligne de [operators]
+                # Insert after the last line of [operators]
                 sed -i \"/^\\[operators\\]/,/^\\[/ {
                     /^\\[routes\\]/i \${wan_op_id} = ${REMOTE_IP}
                 }\" \"\$CONF\" 2>/dev/null || true
             fi
         done
 
-        # Ajouter les routes pour le prefixe WAN
+        # Add the routes for the WAN prefix
         cat >> \"\$CONF\" << SMSEOF2
-# Routes WAN : prefixe ${WAN_PREFIX}NXXXX → operateur distant N
+# WAN routes: prefix ${WAN_PREFIX}NXXXX → remote operator N
 SMSEOF2
 
         for j in \$(seq 1 ${N_OPS}); do
             wan_op_id=\$((100 + j))
-            # Route prefixe : 66 + operateur + numero
+            # Prefix route: 66 + operator + number
             echo \"${WAN_PREFIX}\${j}0000 = \${wan_op_id}\" >> \"\$CONF\"
             for ms in \$(seq 1 8); do
-                # <noeud>00<op><ms> : ici j numerote le pair distant, donc il
-                # est a la fois son noeud et son operateur (un operateur par
-                # noeud sur ce chemin). Fige a 600, le numero construit ne
-                # correspondait a aucun abonne du pair.
+                # <node>00<op><ms>: here j numbers the remote peer, so it is
+                # both its node and its operator (one operator per node on
+                # this path).
+
                 msisdn=\$(( j * 100000 + j * 100 + ms ))
                 echo \"${WAN_PREFIX}\${msisdn} = \${wan_op_id}\" >> \"\$CONF\"
             done

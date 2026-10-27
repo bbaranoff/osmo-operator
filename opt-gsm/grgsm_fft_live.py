@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# grgsm_fft_live.py — FFT EN DIRECT (spectre ASCII). Lit le FIFO live
-# (defaut /tmp/iq_asciifft.fifo, fc32 4 SPS) que qemu pousse trame-par-trame,
-# OU un cfile fichier (seek-tail) en fallback. Marque le pic FCCH.
+# grgsm_fft_live.py — LIVE FFT (ASCII spectrum). Reads the live FIFO
+# (default /tmp/iq_asciifft.fifo, fc32 4 SPS) that qemu pushes frame by frame,
+# OR a cfile (seek-tail) as fallback. Marks the FCCH peak.
 #
-# FIFO : ouvert O_RDWR|O_NONBLOCK -> open non-bloquant + pas d'EOF (on garde un
-# write-end) => le write non-bloquant de qemu trouve toujours un lecteur. A
-# chaque tour on DRAINE le backlog et on ne garde que les N derniers samples
-# (le plus frais), donc pas de lag qui s'accumule.
+# FIFO: opened O_RDWR|O_NONBLOCK -> non-blocking open + no EOF (a write-end is
+# kept) => qemu's non-blocking write always finds a reader. Every turn DRAINS
+# the backlog and keeps only the last N samples (the freshest), so no lag
+# accumulates.
 import numpy as np, time, os, stat
 CFILE=os.environ.get("CFILE","/tmp/iq_asciifft.fifo")
-FS=float(os.environ.get("FS","1083333"))    # 4 SPS relay (FIFO). cfile BSP 1 SPS=270833
+FS=float(os.environ.get("FS","1083333"))    # 4 SPS relay (FIFO). BSP cfile 1 SPS=270833
 N=int(os.environ.get("NFFT","4096"))
 COLS=70
 FCCH=1625000.0/24                            # +67708 Hz
@@ -31,7 +31,7 @@ def _read_iq():
             except BlockingIOError: break
             if not c: break
             buf+=c
-            if len(buf) > N*8*4: buf=buf[-(N*8):]     # garde le frais, borne la RAM
+            if len(buf) > N*8*4: buf=buf[-(N*8):]     # keep the fresh part, bound RAM
         buf=buf[-(N*8):]
         if len(buf) < N*8: return np.array([],dtype=np.complex64)
         return np.frombuffer(buf[:(len(buf)//8)*8], dtype=np.complex64)

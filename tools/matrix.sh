@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# tools/matrix.sh <burst|si> - MATRICE DYNAMIQUE du treillis 51-multiframe (cote mobile).
+# tools/matrix.sh <burst|si> - DYNAMIC MATRIX of the 51-multiframe trellis (mobile side).
 #
-# Deux vues "temps/canal" complementaires des 2 FFT (frequence) :
-#   tools/matrix.sh burst  -> dynamique des BURSTS (TRXD ts0 DL :5702) :
-#                       lignes = FN%51 (structure canal), colonnes = temps,
-#                       couleur = vide / dummy(idle) / reel(actif).
-#   tools/matrix.sh si     -> dynamique des SI/L2 decodes (GSMTAP :4729/:4730) :
-#                       lignes = FN%51, couleur = type de message (SI/IMM/UA/PAGING/?).
+# Two complementary "time/channel" views of the 2 FFTs (frequency):
+#   tools/matrix.sh burst  -> BURST dynamics (TRXD ts0 DL :5702):
+#                       rows = FN%51 (channel structure), columns = time,
+#                       colour = empty / dummy(idle) / real(active).
+#   tools/matrix.sh si     -> dynamics of the decoded SI/L2 (GSMTAP :4729/:4730):
+#                       rows = FN%51, colour = message type (SI/IMM/UA/PAGING/?).
 #
-# Sniff PASSIF (AF_PACKET via gsm_sniff.py dans le conteneur, ne vole rien, aucune
-# fifo) -> pipe -> rendu matplotlib sur l'hote (X). Ferme la fenetre pour quitter.
+# PASSIVE sniff (AF_PACKET via gsm_sniff.py in the container, steals nothing, no
+# fifo) -> pipe -> matplotlib rendering on the host (X). Close the window to quit.
 #
-# Usage : ./tools/matrix.sh burst    |    ./tools/matrix.sh si
-#         CONTAINER=osmo-operator-66 TS=0 W=240 ./tools/matrix.sh burst
+# Usage: ./tools/matrix.sh burst    |    ./tools/matrix.sh si
+#        CONTAINER=osmo-operator-66 TS=0 W=240 ./tools/matrix.sh burst
 set -euo pipefail
 MODE="${1:?usage: tools/matrix.sh <burst|si>}"
 case "$MODE" in burst|si) ;; *) echo "mode invalide: $MODE (burst|si)"; exit 1;; esac
@@ -26,7 +26,7 @@ PY="${PY:-/root/.env/bin/python3}"; command -v "$PY" >/dev/null 2>&1 || PY=pytho
 SNIFF=/opt/GSM/qosmo-grgsm/opt-gsm-scripts/gsm_sniff.py
 docker exec "$CONTAINER" test -f "$SNIFF" || { echo "gsm_sniff absent dans $CONTAINER"; exit 1; }
 
-# gsm_sniff (conteneur, passif) -> stdout -> python hote (rendu matrice live)
+# gsm_sniff (container, passive) -> stdout -> host python (live matrix rendering)
 docker exec "$CONTAINER" sh -c "SNIFF_IFACE=lo stdbuf -oL python3 $SNIFF $MODE" \
 | "$PY" - <<'PYEOF'
 import sys, os, re, threading, collections
@@ -39,11 +39,11 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 MODE = os.environ.get("MODE","burst"); TS = int(os.environ.get("TS","0")); W = int(os.environ.get("W","240"))
 DUMMY = "00011111011011101100000101001001"   # debut du dummy burst GSM (idle)
 
-# --- type SI/L2 -> code couleur (mode si) ---
+# --- SI/L2 type -> colour code (si mode) ---
 SI_CODE = {"?":1,"SI1":2,"SI2":3,"SI3":4,"SI4":5,"SI2bis":6,"SI2ter":7,"SI13":8,
            "PAGING-REQ-1":9,"PAGING-REQ-2":9,"PAGING-REQ-3":9,
            "IMM-ASSIGN":10,"IMM-ASSIGN-EXT":10,"IMM-ASSIGN-REJ":10}
-# LAPDm (SDCCH/SACCH) detecte par octet de controle : on tag "DEDIE"
+# LAPDm (SDCCH/SACCH) detected by control byte: tagged "DEDIE"
 SI_LABELS = ["·","?","SI1","SI2","SI3","SI4","SI2b","SI2t","SI13","PAG","IMM","DEDIE"]
 SI_COLORS = ["#101018","#888","#1f77b4","#2ca02c","#17becf","#9467bd","#8c564b","#e377c2",
              "#7f7f7f","#ff7f0e","#d62728","#ffd700"]
@@ -62,7 +62,7 @@ def reader():
         m51 = re_m51.search(line);  mts = re_ts.search(line)
         if not m51: continue
         if mts and int(mts.group(1)) != TS:   # filtre timeslot (defaut ts0)
-            # en mode si les lignes :4730 n'ont pas toujours ts -> on garde
+            # in si mode the :4730 lines do not always carry ts -> keep
             if MODE=="burst": continue
         fnm = re_fn.search(line); fn = int(fnm.group(1) or fnm.group(2)) if fnm else None
         r = int(m51.group(1)) % 51
@@ -101,7 +101,7 @@ else:
 im = ax.imshow(mat, aspect="auto", origin="lower", cmap=cmap, norm=norm, interpolation="nearest")
 ax.set_ylabel("FN % 51  (FCCH=0,10..  SCH=1,11..  BCCH=2-5  CCCH=6-19  SDCCH=22-39  SACCH=42-49)")
 ax.set_xlabel("temps (multiframes 51) →")
-# reperes des bandes canal (combine BCCH+SDCCH4 ts0)
+# channel band markers (combined BCCH+SDCCH4 ts0)
 for y in (0,10,20,30,40): ax.axhline(y, color="#444", lw=.4)
 for y0,y1,lbl,c in [(2,5,"BCCH","#17becf"),(22,25,"SDCCH/0","#ffd700"),(42,45,"SACCH/0","#ff7f0e")]:
     ax.axhspan(y0-.5,y1+.5, xmin=0, xmax=0.015, color=c, alpha=.8)

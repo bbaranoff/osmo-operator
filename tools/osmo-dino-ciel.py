@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
-# osmo-dino-ciel.py - le ciel du dino, aux vraies valeurs de la NASA.
+# osmo-dino-ciel.py - the sky of the dino, with the real NASA values.
 #
-# Le modele : un dino court sur l'EQUATEUR, plein est, vers le soleil levant,
-# a une date AVANT J.-C., et le temps est ACCELERE (par defaut une heure de
-# ciel par seconde, comme dans le jeu, dont la journee dure 24 s). Le Soleil et
-# la Lune sont ceux du JPL (NASA) - service Horizons, ephemeride DE441 - vus
-# depuis la position courante du dino, qui gagne des degres de longitude en
-# courant. Sur l'equateur les astres montent a la verticale ; l'INCLINAISON
-# apparait dans l'endroit ou ils se levent : le Soleil a `declinaison` degres a
-# gauche (nord) ou a droite (sud) de la route, la Lune jusqu'a 28,6 degres
-# (23,4 d'obliquite + 5,1 d'inclinaison de son orbite), et sa latitude
-# ecliptique dit de combien elle s'ecarte du chemin du Soleil.
+# The model: a dino runs on the EQUATOR, due east, towards the rising sun, at
+# a date BC, and time is ACCELERATED (by default one hour of sky per second,
+# as in the game, whose day lasts 24 s). The Sun and the Moon are those of the
+# JPL (NASA) - Horizons service, DE441 ephemeris - seen from the current
+# position of the dino, which gains degrees of longitude by running. On the
+# equator the bodies rise vertically; the TILT shows in the place where they
+# rise: the Sun at `declinaison` degrees left (north) or right (south) of the
+# road, the Moon up to 28.6 degrees (23.4 of obliquity + 5.1 of inclination of
+# its orbit), and its ecliptic latitude says how far it departs from the
+# path of the Sun.
 #
-# Sources :
-#   horizons  https://ssd.jpl.nasa.gov/api/horizons.api  (par defaut ; requiert
-#             le reseau ; la Lune y existe de 9999 av. J.-C. a 9999 ap.)
-#   meeus     formules de J. Meeus, Astronomical Algorithms (Soleil ch. 25,
-#             Lune ch. 47 tronquee, ~0,3 degre) - repli hors ligne, sans NASA.
+# Sources:
+#   horizons  https://ssd.jpl.nasa.gov/api/horizons.api  (default; requires
+#             the network; the Moon exists there from 9999 BC to 9999 AD)
+#   meeus     formulas of J. Meeus, Astronomical Algorithms (Sun ch. 25,
+#             Moon ch. 47 truncated, ~0.3 degree) - offline fallback, no NASA.
 #
-# Ce que le script fait lui-meme : la position du dino (longitude qui avance),
-# le temps sideral, le passage geocentrique -> topocentrique (parallaxe de la
-# Lune, jusqu'a 1 degre), azimut/hauteur, le repere du dino (devant/gauche/
-# droite/derriere), l'angle du limbe eclaire de la Lune, le calendrier julien
-# pour les dates anciennes (comme Horizons avant le 15 octobre 1582).
+# What the script does itself: the position of the dino (advancing longitude),
+# sidereal time, the geocentric -> topocentric step (parallax of the Moon, up
+# to 1 degree), azimuth/altitude, the frame of the dino (ahead/left/right/
+# behind), the angle of the lit limb of the Moon, the Julian calendar for
+# ancient dates (like Horizons before 15 October 1582).
 #
-# Exemples :
-#   osmo-dino-ciel.py                                # 9999 av. J.-C., 1 h/s
+# Examples:
+#   osmo-dino-ciel.py                                # 9999 BC, 1 h/s
 #   osmo-dino-ciel.py --date "BC 3000-06-21 04:00" --accel 600
-#   osmo-dino-ciel.py --une-fois --json              # un instant, en JSON
+#   osmo-dino-ciel.py --une-fois --json              # one instant, as JSON
 #   osmo-dino-ciel.py --json --tick 0.5 > ciel.ndjson
-#   osmo-dino-ciel.py --source meeus                 # sans reseau
+#   osmo-dino-ciel.py --source meeus                 # without network
 import argparse
 import json
 import math
@@ -46,16 +46,16 @@ AU_KM = 149597870.7
 R_TERRE_KM = 6378.137
 DEG = math.pi / 180
 J2000 = 2451545.0
-JD_GREGORIEN = 2299160.5          # 1582-10-15 00:00 : avant, calendrier julien
-JD_MIN_HORIZONS = -1931446.5      # BC 9999-Mar-16 00:00 UT (la Lune n'existe pas avant)
+JD_GREGORIEN = 2299160.5          # 1582-10-15 00:00: before, Julian calendar
+JD_MIN_HORIZONS = -1931446.5      # BC 9999-Mar-16 00:00 UT (the Moon does not exist before)
 MOIS = ["janvier", "fevrier", "mars", "avril", "mai", "juin", "juillet",
         "aout", "septembre", "octobre", "novembre", "decembre"]
 
 
-# ---------------------------------------------------------------- calendrier
+# ---------------------------------------------------------------- calendar
 def cal_vers_jd(y, m, d, frac=0.0, julien=None):
-    """Calendrier -> jour julien. y = annee astronomique (0 = 1 av. J.-C.).
-    Julien avant le 15/10/1582 comme Horizons, gregorien apres (ou force)."""
+    """Calendar -> Julian day. y = astronomical year (0 = 1 BC).
+    Julian before 15/10/1582 like Horizons, Gregorian after (or forced)."""
     a = (14 - m) // 12
     yy = y + 4800 - a
     mm = m + 12 * a - 3
@@ -67,10 +67,10 @@ def cal_vers_jd(y, m, d, frac=0.0, julien=None):
 
 
 def jd_vers_cal(jd):
-    """Jour julien -> (annee astronomique, mois, jour, fraction de jour)."""
+    """Julian day -> (astronomical year, month, day, fraction of day)."""
     z = math.floor(jd + 0.5)
     f = jd + 0.5 - z
-    if jd < JD_GREGORIEN:                       # julien (division entiere = plancher)
+    if jd < JD_GREGORIEN:                       # Julian (integer division = floor)
         c = z + 32082
         d = (4 * c + 3) // 1461
         e = c - (1461 * d) // 4
@@ -100,7 +100,7 @@ def date_fr(jd):
 
 def parse_date(s):
     """'BC 3000-06-21 04:00', '-2999-06-21', '3000 av. J.-C. 06-21', 'JD 625844.5',
-    '2026-09-08T06:00'. Les annees BC : 'BC n' ou 'av' = annee 1-n."""
+    '2026-09-08T06:00'. BC years: 'BC n' or 'av' = year 1-n."""
     s = s.strip()
     m = re.match(r"^JD\s*([-+]?\d+(?:\.\d*)?)$", s, re.I)
     if m:
@@ -128,9 +128,9 @@ def horizons_date(jd):
     return f"JD {jd:.8f}"
 
 
-# ---------------------------------------------------------------- geometrie
+# ---------------------------------------------------------------- geometry
 def gmst_deg(jd_ut):
-    """Temps sideral moyen de Greenwich (Meeus 12.4), degres."""
+    """Greenwich mean sidereal time (Meeus 12.4), degrees."""
     t = (jd_ut - J2000) / 36525
     g = 280.46061837 + 360.98564736629 * (jd_ut - J2000) + 0.000387933 * t * t - t ** 3 / 38710000
     return g % 360
@@ -160,15 +160,15 @@ def wrap180(a):
 
 
 def topocentrique(ra, dec, dist_km, jd_ut, lon_deg):
-    """Astre geocentrique (RA/DEC de la date, distance) vu depuis l'equateur a
-    la longitude lon : direction unitaire dans le repere equatorial, plus les
-    axes est / nord / zenith de l'observateur, dans ce meme repere."""
-    theta = (gmst_deg(jd_ut) + lon_deg) * DEG            # temps sideral local
+    """Geocentric body (RA/DEC of date, distance) seen from the equator at
+    longitude lon: unit direction in the equatorial frame, plus the east /
+    north / zenith axes of the observer, in that same frame."""
+    theta = (gmst_deg(jd_ut) + lon_deg) * DEG            # local sidereal time
     obs = (R_TERRE_KM * math.cos(theta), R_TERRE_KM * math.sin(theta), 0.0)
     geo = radec_vec(ra, dec, dist_km)
     d = norm((geo[0] - obs[0], geo[1] - obs[1], geo[2] - obs[2]))
     est = (-math.sin(theta), math.cos(theta), 0.0)
-    nord = (0.0, 0.0, 1.0)                                # sur l'equateur, le pole est a l'horizon
+    nord = (0.0, 0.0, 1.0)                                # on the equator, the pole is on the horizon
     zen = (math.cos(theta), math.sin(theta), 0.0)
     return d, est, nord, zen
 
@@ -181,8 +181,8 @@ def az_el(d, est, nord, zen):
 
 # ---------------------------------------------------------------- Horizons
 class Horizons:
-    """Ephemeride geocentrique apparente du JPL, par lots, avec prelecture.
-    Chaque ligne : jd, ra, dec, illum (0-1), delta (km), elong (deg), waxing,
+    """Apparent geocentric ephemeris of the JPL, in batches, with prefetch.
+    Each line: jd, ra, dec, illum (0-1), delta (km), elong (deg), waxing,
     ecl_lon, ecl_lat."""
     NOM = "JPL Horizons (NASA, DE441)"
 
@@ -229,7 +229,7 @@ class Horizons:
                 deja = {r[0] for r in self.buf[k]}
                 self.buf[k].extend(r for r in rows if r[0] not in deja)
                 self.buf[k].sort()
-                # on ne garde que le recent
+                # only the recent part is kept
                 if len(self.buf[k]) > 4 * self.lot:
                     self.buf[k] = self.buf[k][-3 * self.lot:]
             self.fin = min(self.buf[10][-1][0], self.buf[301][-1][0])
@@ -240,7 +240,7 @@ class Horizons:
                 self.prefetch.join()
             if self.fin is None or jd > self.fin - self.pas / 1440:
                 self._charger(jd if self.fin is None else self.fin)
-        # prelecture quand on a consomme la moitie du lot
+        # prefetch when half of the batch has been consumed
         if (self.prefetch is None or not self.prefetch.is_alive()) and \
                 jd > self.fin - self.pas / 1440 * self.lot / 2:
             self.prefetch = threading.Thread(target=self._charger, args=(self.fin,), daemon=True)
@@ -248,7 +248,7 @@ class Horizons:
 
     @staticmethod
     def _interp(rows, jd):
-        # deux lignes encadrantes, interpolation (RA/DEC via vecteurs)
+        # two bracketing lines, interpolation (RA/DEC through vectors)
         lo, hi = 0, len(rows) - 1
         while hi - lo > 1:
             mid = (lo + hi) // 2
@@ -277,11 +277,11 @@ class Horizons:
             return self._interp(s, jd), self._interp(m, jd)
 
 
-# ---------------------------------------------------------------- Meeus (repli)
+# ---------------------------------------------------------------- Meeus (fallback)
 class Meeus:
-    """Soleil (ch. 25) et Lune (ch. 47, termes principaux), geocentriques
-    apparents, coordonnees de la date. Sans reseau. ~0,3 degre pour la Lune ;
-    les polynomes derivent aux dates tres anciennes (quelques degres a -10000)."""
+    """Sun (ch. 25) and Moon (ch. 47, main terms), apparent geocentric,
+    coordinates of date. No network. ~0.3 degree for the Moon; the polynomials
+    drift at very ancient dates (a few degrees at -10000)."""
     NOM = "formules de Meeus (hors ligne, approximatif)"
 
     LR = [(0, 0, 1, 0, 6288774, -20905355), (2, 0, -1, 0, 1274027, -3699111),
@@ -385,7 +385,7 @@ class Meeus:
         return s, m
 
 
-# ---------------------------------------------------------------- le dino
+# ---------------------------------------------------------------- the dino
 def phase_nom(illum, croissante):
     if illum < 0.03:
         return "nouvelle lune"
@@ -399,7 +399,7 @@ def phase_nom(illum, croissante):
 
 
 def cote(x):
-    """x en degres, positif = a droite du dino (sud, il court vers l'est)."""
+    """x in degrees, positive = to the right of the dino (south, it runs east)."""
     if abs(x) < 0.5:
         return "droit devant"
     return f"{abs(x):.1f} deg a {'droite (sud)' if x > 0 else 'gauche (nord)'}"
@@ -414,19 +414,19 @@ def calcul(eph, jd, lon):
     for nom, d, geo in (("soleil", ds, s), ("lune", dm, m)):
         az, el = az_el(d, est, nord, zen)
         devant, droite = dot(d, est), dot(d, sud)
-        lateral = math.degrees(math.atan2(droite, devant))       # 0 devant, +90 a droite, 180 derriere
+        lateral = math.degrees(math.atan2(droite, devant))       # 0 ahead, +90 right, 180 behind
         out[nom] = dict(az=round(az, 3), hauteur=round(el, 3), lateral=round(lateral, 2),
                         devant=devant > 0, ra=round(geo["ra"], 4), dec=round(geo["dec"], 4),
                         ecl_lon=round(geo["ecl_lon"], 4), ecl_lat=round(geo["ecl_lat"], 4),
                         dist_km=round(geo["dist_km"], 1),
-                        # sur l'equateur, un astre se leve a l'azimut 90 - dec :
-                        # dec > 0 => a gauche (nord) de la route plein est.
+                        # on the equator, a body rises at azimuth 90 - dec:
+                        # dec > 0 => left (north) of the due-east road.
                         lever_lateral=round(-geo["dec"], 2))
-    # limbe eclaire de la Lune : direction du Soleil vue depuis la Lune,
-    # projetee sur le ciel autour d'elle. 0 = eclaire par le haut, 90 = par la
-    # droite du dino, -90 = par la gauche, 180 = par le bas.
+    # lit limb of the Moon: direction of the Sun seen from the Moon,
+    # projected on the sky around it. 0 = lit from the top, 90 = from the
+    # right of the dino, -90 = from the left, 180 = from the bottom.
     haut = norm(tuple(zen[i] - dot(zen, dm) * dm[i] for i in range(3)))
-    droite = cross(dm, haut)          # a droite quand on regarde la Lune (regard x haut)
+    droite = cross(dm, haut)          # to the right when looking at the Moon (looking up)
     vers_soleil = norm(tuple(ds[i] * s["dist_km"] - dm[i] * m["dist_km"] for i in range(3)))
     limbe = math.degrees(math.atan2(dot(vers_soleil, droite), dot(vers_soleil, haut)))
     out["lune"].update(illum=round(m["illum"], 4), elong=round(m["elong"], 3),
@@ -438,7 +438,7 @@ def calcul(eph, jd, lon):
 
 def texte(jd, lon, km, accel, src, c):
     d, h = date_fr(jd)
-    hl = (jd + lon / 360 + 0.5) % 1 * 24                         # heure solaire moyenne locale
+    hl = (jd + lon / 360 + 0.5) % 1 * 24                         # local mean solar time
     s, m = c["soleil"], c["lune"]
     lines = [
         f"{d}, {h} UT  ·  heure locale {int(hl):02d} h {int(hl % 1 * 60):02d}  ·  x{accel:g}",
@@ -476,7 +476,7 @@ def main():
         try:
             eph = Horizons(pas_min)
             eph.at(jd0)
-        except Exception as e:                                   # reseau, date hors DE441...
+        except Exception as e:                                   # network, date outside DE441...
             if a.source == "horizons":
                 sys.exit(f"[ciel] {e}")
             print(f"[ciel] Horizons indisponible ({e}) : repli sur Meeus", file=sys.stderr)
@@ -492,7 +492,7 @@ def main():
             reel = time.monotonic() - t0
             jd = jd0 + reel * a.accel / 86400
             m_parc = a.vitesse * reel * a.accel
-            lon = (a.lon + m_parc / 111319.49 + 180) % 360 - 180   # 1 deg = 111,3 km sur l'equateur
+            lon = (a.lon + m_parc / 111319.49 + 180) % 360 - 180   # 1 deg = 111.3 km on the equator
             c = calcul(eph, jd, lon)
             if a.json:
                 d, h = date_fr(jd)

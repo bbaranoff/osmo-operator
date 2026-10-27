@@ -1,22 +1,21 @@
 #!/bin/bash
-# gnome-extensions-install.sh - extensions GNOME Shell actives par defaut.
+# gnome-extensions-install.sh - GNOME Shell extensions enabled by default.
 #
-#     tools/gnome-extensions-install.sh            sur la machine (/), en root
-#     tools/gnome-extensions-install.sh $ROOTFS    dans le rootfs de l ISO
+#     tools/gnome-extensions-install.sh            on the machine (/), as root
+#     tools/gnome-extensions-install.sh $ROOTFS    in the ISO rootfs
 #                                                  (iso_modules/85-extensions-gnome.sh)
 #
-# [2026-10-23] EasyScreenCast (GPL-3, extensions.gnome.org n° 690) : un menu
-# dans la barre du haut pour l enregistreur d ecran de GNOME (son, webcam,
-# zone, minuterie). Pas de paquet : le zip de la version 53 (GNOME 46 a 48)
-# est telecharge, verifie par son sha256 et pose pour tous les comptes dans
-# /usr/share/gnome-shell/extensions.
-# Le pont navigateur chrome-gnome-shell (gnome-browser-connector) est un
-# paquet apt : il est dans la liste du bureau (iso_modules/80-chroot.sh).
+# EasyScreenCast (GPL-3, extensions.gnome.org no. 690): a top bar menu for the
+# GNOME screen recorder (sound, webcam, area, timer). No package: the zip of
+# version 53 (GNOME 46 to 48) is downloaded, checked against its sha256 and
+# installed for all accounts in /usr/share/gnome-shell/extensions.
+# The browser bridge chrome-gnome-shell (gnome-browser-connector) is an apt
+# package: it is in the desktop list (iso_modules/80-chroot.sh).
 #
-# « Active par defaut » = enabled-extensions dans un override de schema, en
-# section nue ET :ubuntu (la session ubuntu lit celle-la d abord - meme raison
-# que le fond et le dock dans 80-chroot.sh). Un compte qui a deja sa propre
-# liste (gsettings set ...) la garde : l override n est qu un defaut.
+# "Enabled by default" = enabled-extensions in a schema override, in the bare
+# section AND :ubuntu (the ubuntu session reads that one first - same reason
+# as the wallpaper and the dock in 80-chroot.sh). An account that already has
+# its own list (gsettings set ...) keeps it: the override is only a default.
 set -euo pipefail
 
 DEST="${1:-}"

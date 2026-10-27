@@ -1,9 +1,9 @@
-# ss7.py - la couche qui relie tout : M3UA + SCCP + TCAP + MAP.
+# ss7.py - the layer that ties everything together: M3UA + SCCP + TCAP + MAP.
 #
-# C'est l'objet que manipulent la console et les scripts : on lui donne une
-# operation du catalogue, une destination (point code, SSN, GT), il fabrique
-# l'UDT, l'emet sur le lien M3UA et rend un compte rendu lisible de ce qui
-# revient - resultat MAP, erreur MAP, ou refus SCCP.
+# This is the object the console and the scripts use: given an operation from
+# the catalogue and a destination (point code, SSN, GT), it builds the UDT,
+# sends it on the M3UA link and returns a readable report of what comes back
+# - MAP result, MAP error, or SCCP refusal.
 
 import os
 import random
@@ -46,7 +46,7 @@ class Ss7Client(object):
         self.invoke_id = 1
         self.log_cb = log
 
-    # ── lien ─────────────────────────────────────────────────────────────
+    # ── link ─────────────────────────────────────────────────────────────
     @property
     def connected(self):
         return self.asp is not None and self.asp.state == "ASP_ACTIVE"
@@ -66,12 +66,12 @@ class Ss7Client(object):
         return self.asp.state
 
     def fresh(self):
-        """Un lien jeune avant chaque echange.
+        """A young link before every exchange.
 
-        L'inter-STP du lab ne sert une association venue de l'hote qu'une
-        trentaine de secondes ; au-dela, les messages partent dans le vide.
-        Plutot que d'afficher un faux "pas de reponse", on remonte le lien -
-        c'est invisible pour l'appelant, et le point code ne change pas."""
+        The lab inter-STP serves an association coming from the host for
+        about thirty seconds; past that, messages go nowhere. Rather than
+        showing a false "no answer", the link is brought up again - invisible
+        for the caller, and the point code does not change."""
         if self.asp is None:
             self.connect()
             return True
@@ -82,9 +82,9 @@ class Ss7Client(object):
             self.asp.close()
         self.asp = None
 
-    # ── audit de destination (le "ping" du SS7) ──────────────────────────
+    # ── destination audit (the SS7 "ping") ─────────────────────────────
     def audit(self, point_code, timeout=3.0):
-        """DAUD : le STP repond DAVA (joignable) ou DUNA (inaccessible)."""
+        """DAUD: the STP answers DAVA (reachable) or DUNA (unavailable)."""
         rep = Report()
         if not self.asp:
             rep.add("pas de lien M3UA")
@@ -114,7 +114,7 @@ class Ss7Client(object):
             rep.add("reponse inattendue : %s" % msg.name)
         return rep
 
-    # ── envoi d'une operation MAP ────────────────────────────────────────
+    # ── sending a MAP operation ─────────────────────────────────────────
     def send_map(self, op, values, dest_pc, dest_ssn=None, dest_gt="",
                  route_on_gt=False, timeout=6.0, essais=2):
         if isinstance(op, str):
@@ -195,10 +195,9 @@ class Ss7Client(object):
             return rep
 
         if essais > 1:
-            # Le lien vers le hub ne vit que quelques secondes : un envoi peut
-            # tomber pendant que l'un des deux bouts renouvelle son
-            # association. Un second essai, sur un lien neuf, tranche entre
-            # "personne n'ecoute" et "mauvais moment".
+            # The link to the hub only lives a few seconds: a send may fall
+            # while one of the two ends renews its association. A second try,
+            # on a fresh link, tells "nobody listens" from "bad timing".
             rep.add("")
             rep.add("Pas de reponse - second essai sur un lien neuf ...")
             self.asp.renew(max_age=0)
@@ -217,8 +216,8 @@ class Ss7Client(object):
 
 
 def default_client(topo, local_pc=None, log=None):
-    """Fabrique un client a partir de la topologie decouverte : hub, port et
-    point code libre sortent tous de la configuration du lab."""
+    """Build a client from the discovered topology: hub, port and free point
+    code all come from the lab configuration."""
     pc = local_pc or topo.free_point_code()
     gt = ""
     return Ss7Client(topo.hub_ip or "127.0.0.1", topo.hub_port, pc,

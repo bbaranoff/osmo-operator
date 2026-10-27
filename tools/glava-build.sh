@@ -1,25 +1,25 @@
 #!/bin/bash
-# glava-build.sh - GLava + le module « NCS Spectrum », compiles et poses.
+# glava-build.sh - GLava + the "NCS Spectrum" module, built and installed.
 #
-#     tools/glava-build.sh            sur la machine (/), en root
-#     tools/glava-build.sh $ROOTFS    dans le rootfs de l ISO (iso_modules/85-glava.sh)
+#     tools/glava-build.sh            on the machine (/), as root
+#     tools/glava-build.sh $ROOTFS    in the ISO rootfs (iso_modules/85-glava.sh)
 #
-# [2026-10-23] Le visualiseur audio du bureau : le cercle « NCS Spectrum »
-# (particules qui tournent autour d un disque, sur le son qui sort des
-# haut-parleurs), pose en fond de bureau. Deux depots, figes a un commit :
-#   - GLava (GPL-3) : pas de paquet dans noble, on le compile. Le module NCS a
-#     besoin d un patch de glava/render.c (textures image pour les particules,
-#     imageLoad/imageStore - OpenGL >= 4.2), fourni par le depot NCS ;
-#   - NCS_Spectrum_GLava : ncs.glsl et ncs/ vont a cote des modules de GLava,
-#     dans /etc/xdg/glava. Ce depot n a PAS de licence : il est clone au build,
-#     pas copie dans le notre.
-# rc.glsl (systeme) est regle comme le demande le README NCS : module ncs,
-# OpenGL 4.5 / GLSL 450, setmirror (les deux canaux), fenetre de bureau sans
-# bord ni clic. La position et la taille viennent de tools/osmo-glava.sh, qui
-# les calcule d apres l ecran au lancement.
+# The desktop audio visualizer: the "NCS Spectrum" circle (particles turning
+# around a disc, driven by the sound coming out of the speakers), placed as a
+# desktop background. Two repositories, pinned to a commit:
+#   - GLava (GPL-3): no package in noble, built here. The NCS module needs a
+#     patch of glava/render.c (image textures for the particles,
+#     imageLoad/imageStore - OpenGL >= 4.2), provided by the NCS repository;
+#   - NCS_Spectrum_GLava: ncs.glsl and ncs/ go next to the GLava modules, in
+#     /etc/xdg/glava. This repository has NO licence: it is cloned at build
+#     time, not copied into ours.
+# rc.glsl (system) is set as the NCS README asks: module ncs, OpenGL 4.5 /
+# GLSL 450, setmirror (both channels), desktop window without border or
+# click. Position and size come from tools/osmo-glava.sh, which computes them
+# from the screen at startup.
 #
-# Compilation sur l HOTE (meme Ubuntu que l image), installation par DESTDIR :
-# pas de paquets -dev a installer puis retirer dans le rootfs.
+# Built on the HOST (same Ubuntu as the image), installed through DESTDIR: no
+# -dev packages to install and then remove in the rootfs.
 set -euo pipefail
 
 DEST="${1:-}"
@@ -53,21 +53,21 @@ clone "$GLAVA_REPO" "$GLAVA_COMMIT" "$TMP/glava"
 clone "$NCS_REPO" "$NCS_COMMIT" "$TMP/ncs"
 
 patch -s -d "$TMP/glava" glava/render.c < "$TMP/ncs/imageOperations.patch"
-# -Dobs=false : le greffon OBS demande libobs, sans usage ici
+# -Dobs=false: the OBS plugin needs libobs, unused here
 meson setup "$TMP/glava/build" "$TMP/glava" --prefix /usr -Dobs=false >/dev/null
 ninja -C "$TMP/glava/build" >/dev/null
 DESTDIR="$DEST" ninja -C "$TMP/glava/build" install >/dev/null
 
 XDG="$DEST/etc/xdg/glava"
 cp -r "$TMP/ncs/ncs" "$TMP/ncs/ncs.glsl" "$XDG/"
-# [2026-10-24] Particules en ORANGE (celui du schema BTS -> Core du fond,
-# 255/140/40), a la meme intensite que le bleu d origine (0.0118, 0.1412,
-# 0.3412) : le melange est additif, une couleur plus forte sature en blanc.
+# Particles in ORANGE (the one of the BTS -> Core diagram of the wallpaper,
+# 255/140/40), at the same intensity as the original blue (0.0118, 0.1412,
+# 0.3412): the blend is additive, a stronger colour saturates to white.
 sed -i 's/^#define color vec3(0.0118, 0.1412, 0.3412)/#define color vec3(0.3412, 0.1873, 0.0535)/' "$XDG/ncs.glsl"
 grep -q '^#define color vec3(0.3412, 0.1873, 0.0535)' "$XDG/ncs.glsl" \
     || echo "glava-build : couleur NCS non changee (ncs.glsl a bouge ?)" >&2
-# [2026-10-24] La bande du bas (module bars, lancee par osmo-glava a cote du
-# cercle) : barres epaisses (12 px, ecart 3), bleu clair, fond transparent.
+# The bottom band (bars module, started by osmo-glava next to the circle):
+# thick bars (12 px, gap 3), light blue, transparent background.
 sed -i -e 's/^#define BAR_WIDTH 5$/#define BAR_WIDTH 12/' \
        -e 's/^#define BAR_GAP 1$/#define BAR_GAP 3/' \
        -e 's/^#define USE_ALPHA 0$/#define USE_ALPHA 1/' \
@@ -85,14 +85,12 @@ sed -i -e 's/^#request mod bars/#request mod ncs/' \
        "$XDG/rc.glsl"
 
 install -Dm755 "$DIR/tools/osmo-glava.sh" "$DEST/usr/local/bin/osmo-glava"
-# [2026-10-24] UN SERVICE UTILISATEUR, PLUS UN AUTOSTART. Lance par un .desktop
-# de /etc/xdg/autostart, GLava n avait pas de commande d arret : il fallait
-# pkill. En service systemd --user, cercle ET barres sont dans le meme cgroup :
-#   systemctl --user stop glava      arrete les deux (et retire le mixage)
-#   systemctl --user start glava     les relance
-#   systemctl --user disable glava   plus de GLava a la connexion (ce compte)
-# Active pour tous les comptes (graphical-session.target.wants dans
-# /etc/systemd/user) : demarre avec la session graphique, qui fournit DISPLAY.
+# A USER SERVICE. Circle AND bars are in the same cgroup:
+#   systemctl --user stop glava      stops both (and removes the mixing)
+#   systemctl --user start glava     restarts them
+#   systemctl --user disable glava   no more GLava at login (this account)
+# Enabled for all accounts (graphical-session.target.wants in
+# /etc/systemd/user): starts with the graphical session, which provides DISPLAY.
 rm -f "$DEST/etc/xdg/autostart/osmo-glava.desktop"
 install -d "$DEST/etc/systemd/user/graphical-session.target.wants"
 cat > "$DEST/etc/systemd/user/glava.service" <<'UNIT'

@@ -1,15 +1,15 @@
 #!/bin/bash
-# osmo-supplements-firstboot.sh - les supplements choisis dans l installeur, au premier demarrage.
+# osmo-supplements-firstboot.sh - the supplements chosen in the installer, at first boot.
 #
-# [2026-10-24] La page « Supplements » de Calamares (installer/calamares/modules/
-# packagechooser-supplements.conf) ne fait qu ecrire /etc/osmo-supplements :
-#   OSMO_SUPPLEMENTS="--multi --opencl ..."   les drapeaux d addition.sh
-#   HUB_IMAGE="..."                           l origine de l image operateur (multi)
-# osmo-supplements.service lance ce script une fois le reseau monte. Reussi : le fichier
-# devient /etc/osmo-supplements.fait et l unite se desactive. En echec, on reessaie au
-# demarrage suivant, trois fois au plus (/etc/osmo-supplements.essais), puis
-# /etc/osmo-supplements.echec : « sudo addition.sh » reste la, a la main.
-# Journal : /var/log/osmo-supplements.log (et journalctl -u osmo-supplements).
+# The Calamares "Supplements" page (installer/calamares/modules/
+# packagechooser-supplements.conf) only writes /etc/osmo-supplements:
+#   OSMO_SUPPLEMENTS="--multi --opencl ..."   the addition.sh flags
+#   HUB_IMAGE="..."                           the origin of the operator image (multi)
+# osmo-supplements.service runs this script once the network is up. On success the
+# file becomes /etc/osmo-supplements.fait and the unit disables itself. On failure it
+# is retried at the next boot, three times at most (/etc/osmo-supplements.essais), then
+# /etc/osmo-supplements.echec: "sudo addition.sh" remains available by hand.
+# Log: /var/log/osmo-supplements.log (and journalctl -u osmo-supplements).
 set -u
 CONF=/etc/osmo-supplements
 ESSAIS=/etc/osmo-supplements.essais
@@ -31,8 +31,8 @@ _fin() {  # _fin <suffixe> : range la config et desactive l unite
 n=$(( $(cat "$ESSAIS" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$ESSAIS"
 
-# network-online.target ne garantit pas Internet (DHCP lent, Wi-Fi pas encore associe) :
-# on attend que GitHub reponde, cinq minutes au plus.
+# network-online.target does not guarantee Internet (slow DHCP, Wi-Fi not yet associated):
+# wait until GitHub answers, five minutes at most.
 for _ in $(seq 1 60); do
     curl -fsS -m 5 -o /dev/null https://github.com && break
     sleep 5
@@ -40,8 +40,8 @@ done
 
 echo "=== $(date '+%F %T') essai $n/$MAX : addition.sh $OSMO_SUPPLEMENTS ===" >>"$LOG"
 # shellcheck disable=SC2086
-# OSMO_COMPTE : le compte de l installeur (groupe docker, icones), personne n etant
-# encore connecte ; a defaut, le premier compte humain (uid 1000 et plus).
+# OSMO_COMPTE: the installer account (docker group, icons), nobody being logged in
+# yet; otherwise the first human account (uid 1000 and above).
 [ -n "${OSMO_COMPTE:-}" ] || OSMO_COMPTE="$(getent passwd | awk -F: '$3>=1000 && $3<60000 {print $1; exit}')"
 env HUB_IMAGE="${HUB_IMAGE:-}" OSMO_COMPTE="${OSMO_COMPTE:-}" bash "$REPO/addition.sh" $OSMO_SUPPLEMENTS >>"$LOG" 2>&1 </dev/null
 rc=$?

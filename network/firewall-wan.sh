@@ -1,8 +1,8 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/firewall-wan.sh - Ouvre les ports necessaires pour l'interop WAN
+# network/firewall-wan.sh - opens the ports needed for the WAN interop
 #
-# Usage : sudo ./network/firewall-wan.sh <remote_ip> [n_operators]
+# Usage: sudo ./network/firewall-wan.sh <remote_ip> [n_operators]
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -17,7 +17,7 @@ SMS_RELAY_PORT=7890
 echo "=== Firewall WAN Interop - Autorisation ${REMOTE_IP} ==="
 echo ""
 
-# Detection du firewall
+# Firewall detection
 if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
     FW="ufw"
 elif command -v firewall-cmd &>/dev/null; then
@@ -46,7 +46,8 @@ for i in $(seq 1 "$N_OPS"); do
             firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${REMOTE_IP} port port=${rtp_start}-${rtp_end} protocol=udp accept"
             ;;
         iptables)
-            # -C ... || -A : idempotent, pas de doublon si relance a chaque WAN.
+            # -C ... || -A: idempotent, no duplicate when re-run at every WAN start.
+
             iptables -C INPUT -s "$REMOTE_IP" -p udp --dport "$sip_port" -j ACCEPT 2>/dev/null \
                 || iptables -A INPUT -s "$REMOTE_IP" -p udp --dport "$sip_port" -j ACCEPT
             iptables -C INPUT -s "$REMOTE_IP" -p udp --dport "${rtp_start}:${rtp_end}" -j ACCEPT 2>/dev/null \

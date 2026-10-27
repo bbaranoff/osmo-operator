@@ -1,50 +1,50 @@
 #!/usr/bin/env bash
 # =============================================================================
-# network/osmo-ip-plan.sh - QUI PORTE LES ADRESSES PRIVEES DU NOEUD, ET OU
+# network/osmo-ip-plan.sh - WHICH INTERFACE CARRIES THE NODE'S PRIVATE ADDRESSES
 # =============================================================================
 #
-# CE QUI NE MARCHAIT PAS
-# ----------------------
-# Les adresses privees du noeud (192.168.<noeud+1>.1 et .10) etaient posees par
-# systemd-networkd, dans 20-dhcp.network, sous un [Match] Name=en* eth*. Deux
-# consequences, et la seconde est la vraie :
+# WHAT IT DOES
+# ------------
+# The node's private addresses (192.168.<node+1>.1 and .10) are installed as
+# /32 on the ONE interface that provides Internet access, i.e. the one the
+# default route goes through:
 #
-#   1. TOUTES les cartes qui repondent au motif recoivent les deux adresses.
-#      Une machine a deux cartes se retrouve avec la meme /32 des deux cotes.
-#   2. Surtout, le motif ne dit RIEN de la carte qui porte reellement le
-#      reseau. Sur une VM a plusieurs interfaces, "en*" designe aussi bien le
-#      NAT que le pont ; l'adresse se posait donc regulierement sur une carte
-#      qui ne mene nulle part, pendant que celle qui a la route par defaut ne
-#      l'avait pas. Un pair qui visait 192.168.2.10 ne trouvait personne, et
-#      "ip addr" montrait pourtant l'adresse presente - sur l'autre carte.
+#   1. a pattern such as [Match] Name=en* eth* would give the addresses to
+#      EVERY matching card, two cards ending up with the same /32;
+#   2. the pattern says NOTHING about which card really carries the network:
+#      on a VM with several interfaces, "en*" matches the NAT as well as the
+#      bridge, and the address could land on a card that leads nowhere while
+#      the one holding the default route does not have it. A peer aiming at
+#      192.168.2.10 would then find nobody although "ip addr" shows the address.
 #
-# systemd-networkd ne sait pas exprimer "la carte qui a la route par defaut" :
-# c'est une propriete d'EXECUTION, pas de configuration. D'ou ce script, appele
-# au demarrage et a chaque changement de lien.
+# "The card that has the default route" is a RUNTIME property, not a
+# configuration one, which systemd-networkd cannot express. Hence this script,
+# called at boot and at every link change.
 #
-# LE REPLI, ET POURQUOI IL EXISTE
+# THE FALLBACK, AND WHY IT EXISTS
 # -------------------------------
-# Quand AUCUNE carte ne fournit Internet - VM sans reseau, cable debranche,
-# DHCP muet - il n'y a aucun endroit sensé ou poser une adresse de segment. On
-# ne la pose alors pas dans le vide : on met 127.0.0.66/32 sur la boucle
-# locale. Les configurations qui nomment une adresse privee trouvent ainsi
-# TOUJOURS quelque chose de local et de joignable, les demons demarrent, et le
-# banc tourne en autarcie au lieu d'echouer au bind sur une adresse absente.
+# When NO card provides Internet access - VM without network, cable unplugged,
+# silent DHCP - there is no sensible place for a segment address. Instead of
+# installing it nowhere, 127.0.0.66/32 goes on the loopback. Configurations
+# that name a private address then ALWAYS find something local and reachable,
+# the daemons start, and the bench runs self-contained instead of failing at
+# bind on a missing address.
 #
-# DOCKER OU NATIF
-# ---------------
-# Le plan d'adressage n'est pas le meme des deux cotes, et prendre l'un pour
-# l'autre donne des demons qui se lient a des adresses qui n'existent pas ici :
-#   docker  le conteneur a son adresse sur le bridge avant que les demons ne
-#           demarrent, et le backbone est 172.20.0.x. On ne touche a rien :
-#           c'est docker qui adresse.
-#   natif   l'adresse vient du DHCP, elle peut manquer au lancement, et le
-#           segment prive du noeud est 192.168.<noeud+1>.x.
-# « docker » = une image DE CE DEPOT : OSMO_IMAGE=1 (pose par le Dockerfile), ou
-# en repli /.dockerenv ET /etc/docker-entrypoint-cmd. Tout autre conteneur
-# (ubuntu:24.04 nu) est adresse comme une machine native (voir detect_runtime_env).
+# DOCKER OR NATIVE
+# ----------------
+# The address plan differs on the two sides, and mistaking one for the other
+# gives daemons that bind to addresses that do not exist here:
+#   docker  the container has its address on the bridge before the daemons
+#           start, and the backbone is 172.20.0.x. Nothing is touched:
+#           docker does the addressing.
+#   native  the address comes from DHCP, may be missing at start-up, and the
+#           node's private segment is 192.168.<node+1>.x.
+# "docker" = an image OF THIS REPOSITORY: OSMO_IMAGE=1 (set by the Dockerfile),
+# or as a fallback /.dockerenv AND /etc/docker-entrypoint-cmd. Any other
+# container (bare ubuntu:24.04) is addressed like a native machine (see
+# detect_runtime_env).
 #
-# Usage :   osmo-ip-plan.sh [--apply|--show] [--node N]
+# Usage:   osmo-ip-plan.sh [--apply|--show] [--node N]
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -64,23 +64,23 @@ done
 
 LOOPBACK_FALLBACK="${OSMO_PRIV_FALLBACK:-127.0.0.66}"
 
-# ── docker ou natif ─────────────────────────────────────────────────────────
-# [2026-10-18] « docker » veut dire ICI : une image de CE depot, dont le
-# reseau est pose par start-docker.sh / compose (backbone 172.20.0.x). Le Dockerfile
-# pose ENV OSMO_IMAGE=1 ; en repli (variable perdue sous sudo, ou dans une
-# unite systemd qui n herite pas de l environnement du conteneur), le couple
-# /.dockerenv + /etc/docker-entrypoint-cmd ecrit par scripts/entrypoint.sh.
-# Plus de repli sur le seul /.dockerenv ni sur le cgroup : un ubuntu:24.04 nu
-# (le conteneur jetable du notebook d installation) passait pour « docker »,
-# personne n y posait 192.168.2.10, et osmo-ggsn / osmo-sgsn refusaient de
-# demarrer. Tout autre conteneur est donc traite comme une machine native.
+# ── docker or native ────────────────────────────────────────────────────────
+# "docker" means HERE: an image of THIS repository, whose network is set up by
+# start-docker.sh / compose (backbone 172.20.0.x). The Dockerfile sets
+# ENV OSMO_IMAGE=1; as a fallback (variable lost under sudo, or in a systemd
+# unit that does not inherit the container environment), the pair
+# /.dockerenv + /etc/docker-entrypoint-cmd written by scripts/entrypoint.sh.
+# /.dockerenv alone or the cgroup are not enough: a bare ubuntu:24.04 (the
+# disposable container of the installation notebook) would pass for "docker",
+# nobody would install 192.168.2.10 there, and osmo-ggsn / osmo-sgsn would
+# refuse to start. Any other container is treated as a native machine.
 detect_runtime_env() {
     if [ "${OSMO_IMAGE:-0}" = 1 ]; then echo docker; return; fi
     if [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]; then echo docker; return; fi
     echo native
 }
 
-# ── le noeud ────────────────────────────────────────────────────────────────
+# ── the node ────────────────────────────────────────────────────────────────
 resolve_node() {
     local n="${NODE:-${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}}"
     [ -n "$n" ] || n="$(awk -F= '/^OSMO_WAN_NODE=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' \
@@ -90,35 +90,34 @@ resolve_node() {
     printf '%s' "$n"
 }
 
-# ── LA carte qui fournit Internet ───────────────────────────────────────────
-# "ip route get" repond ce que le NOYAU ferait vraiment : c'est la seule
-# reponse qui ne devine pas. On essaie une adresse publique, puis la passerelle
-# par defaut - un banc coupe d'Internet garde en general sa route par defaut.
+# ── THE card that provides Internet access ──────────────────────────────────
+# "ip route get" answers what the KERNEL would really do: the only answer that
+# does not guess. A public address is tried first, then the default gateway -
+# a bench cut off from the Internet usually keeps its default route.
 uplink_dev() {
     local d
     d="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
     [ -n "$d" ] || d="$(ip route show default 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -1)"
-    # lo ne fournit rien : si la route par defaut y mene, c'est qu'il n'y en a pas.
+    # lo provides nothing: a default route through it means there is none.
     [ "$d" = "lo" ] && d=""
     printf '%s' "$d"
 }
 
-# ── CE QUE LES CONFIGS EXIGENT, PAS CE QU'ON SUPPOSE ────────────────────────
-# Le plan prive (192.168.<noeud+1>.x) est une convention ; ce qui compte, c'est
-# l'adresse que chaque demon va REELLEMENT essayer de lier. Elle est ecrite dans
-# /etc/osmocom, et elle peut venir d'un autre generateur que le notre :
-# qosmo-grgsm/run_modules/08-gabarits.sh passe op_private_ip() a
-# apply_config_templates, donc 192.168.2.10, quand la recette native de l'ISO
-# passe 127.0.0.2. Deux verites, et le demon suit la sienne :
-#     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> bind sur une adresse absente
-#     osmo-sgsn : « listen 192.168.2.10 23000 » -> idem
-# On EXTRAIT donc les adresses des fichiers au lieu de les recalculer : la
-# machine finit par porter ce que ses configs demandent, quel que soit celui
-# qui les a ecrites.
+# ── WHAT THE CONFIGS REQUIRE, NOT WHAT IS ASSUMED ───────────────────────────
+# The private plan (192.168.<node+1>.x) is a convention; what matters is the
+# address each daemon will REALLY try to bind. It is written in /etc/osmocom
+# and may come from another generator than ours:
+# qosmo-grgsm/run_modules/08-gabarits.sh passes op_private_ip() to
+# apply_config_templates, hence 192.168.2.10, while the ISO's native recipe
+# passes 127.0.0.2. Two truths, and each daemon follows its own:
+#     osmo-ggsn: "gtp bind-ip 192.168.2.10" -> bind on a missing address
+#     osmo-sgsn: "listen 192.168.2.10 23000" -> same
+# The addresses are therefore EXTRACTED from the files instead of recomputed:
+# the machine ends up carrying what its configs ask for, whoever wrote them.
 #
-# ATTENTION A CE QU ON NE PREND PAS : « ip dns 0/1 » (serveurs annonces a
-# l'abonne), « remote-ip », « ggsn 0 remote-ip » designent des adresses
-# DISTANTES. Les poser localement ferait repondre la machine a la place du pair.
+# NOT taken: "ip dns 0/1" (servers announced to the subscriber), "remote-ip",
+# "ggsn 0 remote-ip" name REMOTE addresses. Installing them locally would make
+# the machine answer in place of the peer.
 addrs_des_configs() {
     local d="${OSMOCOM_CFG:-/etc/osmocom}"
     [ -d "$d" ] || return 0
@@ -129,7 +128,7 @@ addrs_des_configs() {
         sed -n 's/^[[:space:]]*local-addr[[:space:]]\+\([0-9.]*\).*/\1/p'                 "$d"/osmo-upf.cfg  2>/dev/null
     } | sort -u | while read -r a; do
         case "$a" in
-            ''|0.0.0.0|127.*) continue ;;      # deja la, ou « toutes les cartes »
+            ''|0.0.0.0|127.*) continue ;;      # already there, or "all cards"
         esac
         printf '%s\n' "$a"
     done
@@ -148,17 +147,17 @@ if [ "$ACTION" = show ] || [ "${OSMO_IP_PLAN_VERBOSE:-1}" = 1 ]; then
 fi
 [ "$ACTION" = show ] && exit 0
 
-# ── DOCKER : on ne touche a rien ────────────────────────────────────────────
+# ── DOCKER: nothing is touched ──────────────────────────────────────────────
 if [ "$RUNTIME" = docker ]; then
     echo "osmo-ip-plan : conteneur - l'adressage appartient a docker, rien a poser"
     exit 0
 fi
 
-# ── On retire d'abord les adresses de PARTOUT ───────────────────────────────
-# Sans ce nettoyage, changer de carte (cable debranche, Wi-Fi qui prend le
-# relais) laissait l'ancienne adresse en place sur l'ancienne carte : deux
-# interfaces revendiquaient la meme /32 et le noyau choisissait la source par
-# ordre d'apparition, pas par route.
+# ── The addresses are first removed from EVERYWHERE ─────────────────────────
+# Without this clean-up, changing card (cable unplugged, Wi-Fi taking over)
+# would leave the old address on the old card: two interfaces claiming the
+# same /32, with the kernel choosing the source by order of appearance, not
+# by route.
 for a in "$PRIV_GW" "$PRIV_IP" "$LOOPBACK_FALLBACK"; do
     while read -r ifn; do
         [ -n "$ifn" ] || continue
@@ -166,15 +165,15 @@ for a in "$PRIV_GW" "$PRIV_IP" "$LOOPBACK_FALLBACK"; do
     done < <(ip -o -4 addr show 2>/dev/null | awk -v a="$a" '$4 ~ "^"a"/" {print $2}')
 done
 
-# L'union du plan du noeud et de ce que les configs reclament. Les doublons
-# tombent au tri ; « ip addr add » d'une adresse deja posee est sans effet.
+# The union of the node plan and of what the configs ask for. Duplicates are
+# dropped by the sort; "ip addr add" of an address already set has no effect.
 BESOINS="$(printf '%s\n%s\n%s\n' "$PRIV_GW" "$PRIV_IP" "$(addrs_des_configs)" | sed '/^$/d' | sort -u)"
 
 if [ -n "$DEV" ]; then
     _pose=""
     for a in $BESOINS; do
-        # Deja portee par une carte quelconque : on n'y touche pas. Reposer une
-        # adresse ailleurs ferait deux interfaces sur la meme /32.
+        # Already carried by some card: left alone. Installing the address
+        # elsewhere would give two interfaces on the same /32.
         if ip -o -4 addr show 2>/dev/null | awk '{print $4}' | grep -qx "${a}/32\|${a}/[0-9]*"; then
             continue
         fi
@@ -187,14 +186,15 @@ if [ -n "$DEV" ]; then
         echo "osmo-ip-plan : rien a poser, tout est deja la (${DEV})"
     fi
 else
-    # ── REPLI : la boucle locale ────────────────────────────────────────────
-    # Aucune carte ne mene nulle part. Poser 192.168.x sur une interface au
-    # hasard donnerait une adresse presente et injoignable - le pire des deux
-    # mondes, parce que tout a l'air en place. Une adresse de boucle, elle, est
-    # honnete : locale, joignable, et elle ne pretend rien.
-    # Sur lo, une adresse absente empeche un demon de demarrer tout autant que
-    # sur une carte : on y pose donc AUSSI ce que les configs reclament, plutot
-    # que le seul repli. Le banc tourne alors en autarcie, complet.
+    # ── FALLBACK: the loopback ──────────────────────────────────────────────
+    # No card leads anywhere. Installing 192.168.x on a random interface would
+    # give an address that is present and unreachable - the worst of both
+    # worlds, because everything looks in place. A loopback address is honest:
+    # local, reachable, and it claims nothing.
+    # On lo, a missing address prevents a daemon from starting just as on a
+    # card: what the configs ask for is installed there TOO, not only the
+    # fallback. The bench then runs self-contained, complete.
+
     ip addr add "${LOOPBACK_FALLBACK}/32" dev lo 2>/dev/null || true
     for a in $BESOINS; do
         ip -o -4 addr show 2>/dev/null | awk -F'[ /]+' '{print $4}' | grep -qx "$a" && continue

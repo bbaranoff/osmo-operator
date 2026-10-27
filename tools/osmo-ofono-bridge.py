@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-# osmo-ofono-bridge.py - LES APPELS ET LES SMS DU BANC, EN LIGNE DE COMMANDE.
+# osmo-ofono-bridge.py - CALLS AND SMS OF THE BENCH, FROM THE COMMAND LINE.
 #
-# [2026-09-07] CE QUE CE PROGRAMME N EST PLUS. C etait le « raccord mobile »
-# vers Waydroid : il portait les SMS et les appels du banc jusqu a un Android
-# en conteneur (notification, insertion dans content://sms/inbox), faute d une
-# vraie pile radio de ce cote-la. Waydroid est abandonne - le telephone du banc
-# est desormais la VM postmarketOS/Phosh, qui a ModemManager et parle AT au
-# modem du banc (tools/osmo-phonesim-banc.py --connect). Tout le code Android a
-# donc ete retire ; ce qui reste, et qui servait deja, c est le pilotage d oFono
-# depuis un terminal ou une icone :
+# Drives oFono from a terminal or an icon. The phone of the bench is the
+# postmarketOS/Phosh VM, which has ModemManager and talks AT to the modem of
+# the bench (tools/osmo-phonesim-banc.py --connect); this program only handles
+# the oFono side:
 #
-#   osmo-sms-send <numero> <texte>   -> org.ofono.MessageManager.SendMessage
-#   osmo-call <numero>|answer|hangup -> org.ofono.VoiceCallManager
+#   osmo-sms-send <number> <text>    -> org.ofono.MessageManager.SendMessage
+#   osmo-call <number>|answer|hangup -> org.ofono.VoiceCallManager
 #
-# Lance sans --once, il TIENT la ligne : il journalise les SMS et les appels que
-# le banc lui pousse, publie l etat dans /run/osmo-ril/state.json (l encart et
-# le Conky le lisent) et execute les commandes deposees dans la file par les
-# deux lanceurs ci-dessus.
+# Started without --once, it HOLDS the line: it logs the SMS and calls the
+# bench pushes to it, publishes the state in /run/osmo-ril/state.json (the
+# panel and Conky read it) and executes the commands dropped in the queue by
+# the two launchers above.
 #
-# LA DATA. Elle n est pas encore en service sur le banc (pas de contexte PDP
-# etabli). Le chemin est neanmoins CABLE ici : --data active le contexte oFono
-# et publie l interface obtenue. Sans --data on ne touche a rien.
+# DATA. Not yet in service on the bench (no PDP context established). The path
+# is nevertheless WIRED here: --data activates the oFono context and publishes
+# the obtained interface. Without --data nothing is touched.
 #
-# Reglage par variables d environnement :
-#   OSMO_OFONO_MODEM    chemin du modem oFono   (defaut: le premier trouve)
-#   OSMO_BRIDGE_SPOOL   file des commandes      (defaut: /run/osmo-ril/spool)
-#   OSMO_BRIDGE_STATE   etat publie (json)      (defaut: /run/osmo-ril/state.json)
+# Settings through environment variables:
+#   OSMO_OFONO_MODEM    oFono modem path        (default: the first found)
+#   OSMO_BRIDGE_SPOOL   command queue           (default: /run/osmo-ril/spool)
+#   OSMO_BRIDGE_STATE   published state (json)  (default: /run/osmo-ril/state.json)
+#
 import argparse
 import json
 import os
@@ -53,10 +50,10 @@ def log(*a):
     print("[ril]", *a, flush=True)
 
 
-# ── LE BUS ──────────────────────────────────────────────────────────────────
+# ── THE BUS ─────────────────────────────────────────────────────────────────
 class Bus:
-    """Le strict necessaire de D-Bus systeme, sans dbus-python (absent de
-    l image) : Gio suffit et arrive avec PyGObject, deja la pour l encart."""
+    """The bare minimum of system D-Bus, without dbus-python (absent from the
+    image): Gio is enough and comes with PyGObject, already there for the panel."""
 
     def __init__(self):
         self.c = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
@@ -70,9 +67,9 @@ class Bus:
                                        Gio.DBusSignalFlags.NONE, cb)
 
 
-# ── L ETAT PUBLIE ───────────────────────────────────────────────────────────
+# ── THE PUBLISHED STATE ─────────────────────────────────────────────────────
 def publish(**kw):
-    """Ce que le reste du banc lit : l encart et le Conky."""
+    """What the rest of the bench reads: the panel and Conky."""
     try:
         os.makedirs(RUN, exist_ok=True)
         cur = {}
@@ -89,7 +86,7 @@ def publish(**kw):
         log("etat non publie :", e)
 
 
-# ── LE PONT ─────────────────────────────────────────────────────────────────
+# ── THE BRIDGE ──────────────────────────────────────────────────────────────
 class Bridge:
     def __init__(self, bus, modem, with_data=False):
         self.bus = bus
@@ -97,7 +94,7 @@ class Bridge:
         self.with_data = with_data
         self.calls = {}
 
-    # -- modem
+        # -- modem
     def power_on(self):
         for prop in ("Powered", "Online"):
             try:
@@ -106,7 +103,7 @@ class Bridge:
             except GLib.Error as e:
                 log("modem %s : %s" % (prop, e.message.split(":")[-1].strip()))
 
-    # -- SMS
+        # -- SMS
     def on_sms(self, _c, _s, _p, _i, _sig, params):
         text = params[0]
         info = params[1]
@@ -115,7 +112,7 @@ class Bridge:
         log("SMS de %s : %s" % (sender, text))
         publish(last_sms={"from": sender, "text": text, "when": when})
 
-    # -- appels
+        # -- calls
     def on_call_added(self, _c, _s, _p, _i, _sig, params):
         path, props = params[0], params[1]
         num = props.get("LineIdentification", "?")
@@ -130,7 +127,7 @@ class Bridge:
         log("appel termine %s" % num)
         publish(call={"number": num, "state": "ended"})
 
-    # -- data (cablee, pas allumee : voir l entete)
+        # -- data (wired, not enabled: see the header)
     def data_up(self):
         try:
             ctxs = self.bus.call(self.modem, IF_CONN, "GetContexts").unpack()[0]
@@ -157,7 +154,7 @@ class Bridge:
                       "address": st.get("Address"), "gateway": st.get("Gateway"),
                       "dns": st.get("DomainNameServers", [])})
 
-    # -- les commandes venues de osmo-sms-send / osmo-call
+        # -- commands coming from osmo-sms-send / osmo-call
     def command(self, line):
         try:
             verb, rest = (line.split(" ", 1) + [""])[:2]
@@ -198,9 +195,9 @@ class Bridge:
             log("commande inconnue : %s" % line.strip())
 
     def watch_spool(self):
-        """La file : une ligne = une commande. Un fifo serait plus joli mais un
-        simple fichier se lit et s ecrit depuis n importe quel script, y compris
-        a la main pendant une seance."""
+        """The queue: one line = one command. A fifo would be nicer but a plain
+        file can be read and written from any script, including by hand during
+        a session."""
         os.makedirs(RUN, exist_ok=True)
         if not os.path.exists(SPOOL):
             open(SPOOL, "w").close()

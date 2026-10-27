@@ -1,57 +1,44 @@
 # =============================================================================
-#  lib/audio.sh - la chaine audio d'osmo-operator (PulseAudio + pont GAPK)
+#  lib/audio.sh - the osmo-operator audio chain (PulseAudio + GAPK bridge)
 # =============================================================================
 #
-#  CE FICHIER EST UNE EXTRACTION, PAS UNE REECRITURE.
-#  ensure_pulse / ensure_host_audio / ensure_gapk viennent telles quelles de
-#  start-direct.sh.legacy (L566-722). Aucune ligne n'a ete retouchee.
+#  ensure_pulse / ensure_host_audio / ensure_gapk set up the PulseAudio chain
+#  used by the `mobile` and by the MGW RTP bridge. The `qemu` mode of
+#  start-native.sh calls ensure_gapk right before handing over to
+#  qosmo-grgsm/start-clean.sh: this is what connects the MGW RTP to the
+#  `gsm_audio` sink; without it the stack comes up, the call is established,
+#  and nobody hears anything.
 #
-#  POURQUOI LES PRESERVER.
-#  Le mode `qemu` de start-native.sh appelait ensure_gapk JUSTE AVANT de passer
-#  la main a qosmo-grgsm/start-clean.sh (legacy L1077). C'est ce qui branche le RTP
-#  du MGW sur le sink `gsm_audio` : sans lui, la pile monte, l'appel s'etablit,
-#  et personne n'entend rien. Le chemin `qemu` devant continuer a marcher a
-#  l'identique, cette precondition devait survivre au decoupage - on la deplace,
-#  on ne la reinvente pas.
+#  THIS FILE DOES NOTHING WHEN SOURCED: it only defines functions.
+#  Expected caller: run_modules/25-audio.sh.
 #
-#  CE FICHIER NE FAIT RIEN AU SOURCE : il ne definit que des fonctions.
-#  Appelant attendu : run_modules/25-audio.sh.
-#
-#  AUDIO=0 desactive toute la mise en place, exactement comme dans l'original.
+#  AUDIO=0 disables the whole setup.
 # -----------------------------------------------------------------------------
 
 : "${HERE:=/opt/GSM/osmo-operator}"
 : "${LOG_DIR:=/root}"
 : "${AUDIO:=1}"
 : "${PULSE_SOCK:=/var/run/pulse/native}"
-# L'original colorait ses messages ; sous `set -u` une couleur non definie
-# ferait echouer la fonction avant meme d'avoir agi. On les neutralise.
+# Messages are colored; under `set -u` an undefined color would make the
+# function fail before doing anything, so the colors are neutralized here.
 RED='' GREEN='' YELLOW='' CYAN='' NC='' BOLD=''
 
-# Les DEUX null-sinks de la chaine GSM, declares au meme endroit : gsm_audio
-# (= alsa gsm_out, la voix qui SORT) et gsm_mic (= alsa gsm_in via
-# gsm_mic.monitor, le micro silencieux qui ENTRE).
+# The null-sinks of the GSM chain, declared in one place: gsm_audio (= alsa
+# gsm_out, the outgoing voice) and gsm_mic (= alsa gsm_in through
+# gsm_mic.monitor, the silent microphone that feeds in).
 #
-# [2026-08-12] gsm_mic n'etait cree QUE par scripts/pulse-gsm-setup.sh, que
-# run.sh appelle ligne 422 - soit APRES osmo-start.sh (ligne 307). Un HLR qui ne
-# demarre pas fait `exit 1` dans osmo-start.sh, le `set -euo pipefail` de run.sh
-# tue tout, et le sink n'est jamais cree. Or gapk_io ABANDONNE LES DEUX SENS
-# quand la capture echoue :
+# Both sinks are always created together - here, in system.pa and in the
+# Dockerfile - because gapk_io gives up BOTH directions when the capture fails:
 #     pq_alsa.c:168  Couldn't init ALSA device 'gsm_in': Input/output error
 #     gapk_io.c:468  Failed to initialize GAPK I/O
-# → appel parfaitement etabli mais TOTALEMENT muet, et l'erreur est enterree
-# dans mobile.log. C'est le "ca marche sur un PC, pas sur l'autre" : le tirage
-# au sort, c'est de savoir si le HLR est monte avant.
-#
-# Les deux sinks sont desormais SOLIDAIRES - ici, dans system.pa et dans le
-# Dockerfile. Aucun ordre de script ne peut plus en perdre un.
-# [2026-09-09] osmo_tts_off : un sink poubelle pour speech-dispatcher. Sur le
-# banc, une appli du bureau declenche parfois la synthese vocale ; sans voix
-# installee, le module « dummy » de speech-dispatcher joue son message factice
-# (dummy-message.wav : 29 s, voix grave, 83 % de l energie sous 300 Hz, niveau
-# 100 %) dans les haut-parleurs - par-dessus l appel en cours. Mesure : « voix
-# saturee, grave », par intermittence, sur le 600. Une fois le flux deplace ici,
-# module-stream-restore le renvoie ici a chaque apparition.
+# which leaves a perfectly established but totally silent call, with the error
+# buried in mobile.log.
+# osmo_tts_off: a trash sink for speech-dispatcher. On the bench a desktop
+# application sometimes triggers speech synthesis; without an installed voice
+# the "dummy" module of speech-dispatcher plays its placeholder message
+# (dummy-message.wav: 29 s, low voice, 83 % of the energy below 300 Hz, level
+# 100 %) in the speakers, on top of the current call. Once the stream is moved
+# here, module-stream-restore sends it back here each time it appears.
 GSM_SINKS="gsm_audio:GSM_Audio gsm_mic:GSM_Mic osmo_tts_off:TTS_off"
 
 load_gsm_sinks() {
@@ -65,75 +52,63 @@ load_gsm_sinks() {
     done
 }
 
-# ── Loopback local : gsm_audio.monitor → la carte son de la machine ──────────
-# [2026-08-14] CE MAILLON N'EXISTAIT NULLE PART. Le commentaire de ensure_pulse
-# ("en local l'hote entend via le module-loopback vers ses enceintes") le
-# SUPPOSE deja present, mais aucun chemin du depot ne le chargeait :
-#   - enable_user_loopback() de start-docker.sh n'est appelee par personne ;
-#   - network/loopback.sh n'est lance que sciemment, a la main.
-# Resultat mesure dans la VM osmo-egprs : gsm_audio RUNNING (mobile ecrit
-# dedans), gsm_audio.monitor IDLE (personne ne lit), sortie ALSA SUSPENDED,
-# /proc/asound/card0/pcm0p/sub0/status = "closed". Appel etabli, zero son.
-# gsm_audio est un module-null-sink : sans consommateur, la voix descendante est
-# jetee PAR CONSTRUCTION. Ce n'est pas une panne, c'est un maillon manquant.
+# ── Local loopback: gsm_audio.monitor → the machine's sound card ────────────
+# gsm_audio is a module-null-sink: without a consumer the downlink voice is
+# dropped by construction (gsm_audio RUNNING, gsm_audio.monitor IDLE, ALSA
+# output SUSPENDED: call established, no sound). This loopback is that consumer.
 #
-# ⚠️ Le choix du sink n'est pas cosmetique : reboucler sur gsm_audio ou gsm_mic
-# recree la boucle fermee du 08/08 (cf. ensure_gapk : "les mobiles ecrivent
-# dans gsm_out, on les rejouerait dans leur propre uplink"). On exclut donc
-# explicitement les deux null-sinks et on ne garde qu'une sortie materielle.
-# [2026-09-09] 40 ms et pas 20. PulseAudio repondait « Configured latency of
-# 20.00 ms is smaller than minimum latency, using minimum instead » puis
-# « Doing resync » a repetition : la latence minimale de ces sinks est de
-# 26 ms, un bouclage qui en demande 20 se resynchronise sans arret et jette
-# des echantillons (journal : « drop sink », « drop source »). 40 ms passe
-# au-dessus du plancher, et 20 ms de plus sont inaudibles sur un appel.
+# ⚠️ The sink choice matters: looping back onto gsm_audio or gsm_mic creates a
+# closed loop (cf. ensure_gapk: the mobiles write into gsm_out, they would be
+# replayed into their own uplink). Both null-sinks are therefore explicitly
+# excluded and only a hardware output is kept.
+# 40 ms and not 20: the minimum latency of these sinks is 26 ms. A loopback
+# asking for 20 ms resyncs constantly and drops samples ("Configured latency
+# of 20.00 ms is smaller than minimum latency", "Doing resync", "drop sink",
+# "drop source"). 40 ms is above the floor and the extra 20 ms are inaudible
+# on a call.
 LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 
-# ── L AFFECTATION DES HAUT-PARLEURS ET DU MICRO : UN SEUL ENDROIT ───────────
-# [2026-09-09] TROIS SCRIPTS SE DISPUTAIENT LES MEMES ROUTES. Le son du banc a
-# deux modes : SANS telephone postmarketOS, l hote ecoute le descendant par un
-# module-loopback direct (gsm_audio.monitor -> haut-parleurs) ; AVEC la VM, la
-# voix doit passer PAR ELLE (carte « pont » 0x12 <-> carte « combine » 0x13,
-# tools/osmo-pmos-setup.sh) et ce bouclage direct doit disparaitre, sinon on
-# entend deux fois - le direct, puis la VM 500 ms plus tard - « voix pourrie ».
-# Or scripts/audio-chain.sh (au boot, ExecStartPost de pulseaudio) et
-# ensure_pulse (start-native) reposaient le bouclage direct sans regarder si
-# la VM etait la, pendant qu osmo-pmos-setup le retirait : le dernier passe
-# gagnait. Et chacun choisissait « les haut-parleurs » a sa facon (sink par
-# defaut, premiere carte alsa, osmo_hp_ec...), alors que le sink par defaut
-# MEMORISE (osmo_hp_ec) n existe pas au boot - l annuleur d echo n arrivait
-# qu avec la VM - et que les flux QEMU « combine » se posaient donc sur la
-# carte brute, sans annuleur, le temps que le setup les deplace.
+# ── Speaker and microphone assignment: one single place ────────────────────
+# The bench audio has two modes: WITHOUT a postmarketOS phone, the host hears
+# the downlink through a direct module-loopback (gsm_audio.monitor ->
+# speakers); WITH the VM, the voice must go THROUGH IT ("bridge" card 0x12 <->
+# "combine" card 0x13, tools/osmo-pmos-setup.sh) and the direct loopback must
+# not exist, otherwise everything is heard twice (direct, then the VM 500 ms
+# later). scripts/audio-chain.sh (at boot, ExecStartPost of pulseaudio),
+# ensure_pulse (start-native) and osmo-pmos-setup all go through the functions
+# below, so they agree on what "the speakers" are: the memorized default sink
+# (osmo_hp_ec) does not exist at boot, the echo canceller must be loaded before
+# the QEMU "combine" streams appear, otherwise they land on the raw card.
 #
-# Desormais :
-#   audio_hw_sink / audio_hw_source   la carte son materielle (defaut si c en
-#                                     est une, sinon la premiere alsa_*, HDMI
-#                                     exclu) ;
-#   audio_hp_sink / audio_mic_source  CE QUE L OPERATEUR ENTEND / DIT : l
-#                                     annuleur d echo (osmo_hp_ec / osmo_mic_ec)
-#                                     s il est charge, sinon le materiel ;
-#   ensure_echo_cancel                charge cet annuleur (webrtc, sans AGC
-#                                     analogique, micro a 25 %) et en fait le
-#                                     defaut - au boot comme avec la VM ;
-#   pmos_vm_audio_present             la VM postmarketOS a ses cartes son ici
-#                                     (flux QEMU media.name=combine) ;
-#   remove_direct_loopbacks           retire les bouclages directs ;
-#   ensure_local_loopback / _mic      ne posent le direct QUE sans VM, vers
-#                                     audio_hp_sink / depuis audio_mic_source,
-#                                     et remplacent un bouclage pose vers une
-#                                     autre sortie (la carte brute d avant l
-#                                     annuleur, par exemple).
-# osmo-pmos-qemu charge l annuleur AVANT de lancer QEMU et nomme ses sorties
-# a la carte « combine » (OSMO_PMOS_HP / OSMO_PMOS_MIC, patch pmbootstrap) ;
-# osmo-pmos-setup et l arret de la VM (pmos_stop) passent par ces fonctions.
-# AUDIO_ECHO_CANCEL=0 pour se passer de l annuleur (les HP = la carte brute).
+#   audio_hw_sink / audio_hw_source   the hardware sound card (the default if
+#                                     it is one, otherwise the first alsa_*,
+#                                     HDMI excluded);
+#   audio_hp_sink / audio_mic_source  WHAT THE OPERATOR HEARS / SAYS: the echo
+#                                     canceller (osmo_hp_ec / osmo_mic_ec) if
+#                                     loaded, otherwise the hardware;
+#   ensure_echo_cancel                loads that canceller (without analog
+#                                     AGC, microphone at 25 %) and makes it
+#                                     the default, at boot as with the VM;
+#   pmos_vm_audio_present             the postmarketOS VM has its sound cards
+#                                     here (QEMU streams media.name=combine);
+#   remove_direct_loopbacks           removes the direct loopbacks;
+#   ensure_local_loopback / _mic      install the direct loopback ONLY without
+#                                     the VM, to audio_hp_sink / from
+#                                     audio_mic_source, and replace a loopback
+#                                     installed to another output (the raw
+#                                     card from before the canceller, for
+#                                     example).
+# osmo-pmos-qemu loads the canceller BEFORE starting QEMU and names its outputs
+# to the "combine" card (OSMO_PMOS_HP / OSMO_PMOS_MIC, pmbootstrap patch);
+# osmo-pmos-setup and the VM shutdown (pmos_stop) go through these functions.
+# AUDIO_ECHO_CANCEL=0 to do without the canceller (speakers = the raw card).
 EC_AEC_ARGS='aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 high_pass_filter=1"'
 : "${AUDIO_AEC_METHOD:=speex}"
 audio_aec_method() { echo "$AUDIO_AEC_METHOD"; }
-# Les aec_args ne valent que pour webrtc (voir ensure_echo_cancel, aec_opts).
+# aec_args only apply to webrtc (see ensure_echo_cancel, aec_opts).
 : "${EC_MIC_VOLUME:=25%}"
-# [2026-10-18] Le micro PDM de l Acer ne sature pas a 100 % (bruit de piece
-# ~70 rms) et n est plus qu un murmure a 25-50 % (~6 rms) : son volume a lui.
+# The Acer PDM microphone does not saturate at 100 % (room noise ~70 rms) and
+# is only a whisper at 25-50 % (~6 rms): it gets its own volume.
 : "${EC_MIC_VOLUME_PDM:=100%}"
 
 audio_hw_sink() {
@@ -142,15 +117,14 @@ audio_hw_sink() {
     pactl list short sinks 2>/dev/null \
         | awk '$2 ~ /^alsa_output/ && $2 !~ /hdmi/ { print $2; exit }'
 }
-# [2026-10-18] LE MICRO NUMERIQUE INTERNE (PDM/DMIC) AVANT LA PRISE JACK.
-# Sur l Acer (acer, 10.99.0.2), la source par defaut etait l entree jack
-# analogique (alsa_input.pci-0000_04_00.6.analog-stereo) : rien de branche,
-# zero absolu (pas meme du bruit), et l annuleur d echo s y accrochait. Le
-# micro interne est la source acp_pdm_mach, laissee SUSPENDED. Resultat :
-# gsm_mic muet, la ROM codait la trame de silence et l echo test (600) ne
-# renvoyait rien. Le port jack y est en « availability unknown » : pas de
-# detection de prise sur laquelle s appuyer, donc on prefere par nom le micro
-# numerique interne. AUDIO_MIC_SOURCE=<source> force un autre micro (casque).
+# THE INTERNAL DIGITAL MICROPHONE (PDM/DMIC) BEFORE THE JACK INPUT.
+# On the Acer the default source is the analog jack input
+# (alsa_input.pci-0000_04_00.6.analog-stereo): nothing plugged in, absolute
+# zero (not even noise), and the echo canceller would attach to it, while the
+# internal microphone is the acp_pdm_mach source, left SUSPENDED. The jack
+# port reports "availability unknown", so there is no plug detection to rely
+# on: the internal digital microphone is preferred by name.
+# AUDIO_MIC_SOURCE=<source> forces another microphone (headset).
 audio_hw_source() {
     if [ -n "${AUDIO_MIC_SOURCE:-}" ] && pactl list short sources 2>/dev/null \
             | awk -v s="$AUDIO_MIC_SOURCE" '$2 == s { f=1 } END { exit !f }'; then
@@ -175,31 +149,29 @@ audio_mic_source() {
     audio_hw_source
 }
 
-# ── QUI PORTE LA VOIX : L HOTE, OU LA VM ? ──────────────────────────────────
-# [2026-09-09] PAR DEFAUT, L HOTE. Le telephone postmarketOS est l INTERFACE du
-# banc (composer, decrocher, les SMS) ; il n a pas besoin de porter les
-# echantillons. Le faire coutait cher et s entendait : micro -> QEMU -> Pulse
-# de la VM -> module-loopback 400 ms -> QEMU -> gsm_mic, et autant au retour,
-# soit ~800 ms d aller-retour, deux rythmes d horloge emules, et le
-# rechantillonnage de deux cartes HDA a 44,1 kHz pour un signal telephonique a
-# 8 kHz. Mesure et verdict de l operateur : « le son est bon sans pmOS ».
+# ── Who carries the voice: the host, or the VM? ─────────────────────────────
+# BY DEFAULT, THE HOST. The postmarketOS phone is the bench INTERFACE (dial,
+# answer, SMS); it does not need to carry the samples. Doing so is expensive
+# and audible: microphone -> QEMU -> VM Pulse -> module-loopback 400 ms ->
+# QEMU -> gsm_mic, and as much on the way back, i.e. ~800 ms round trip, two
+# emulated clocks, and the resampling of two HDA cards at 44.1 kHz for an
+# 8 kHz telephone signal.
 #
-# Donc : la voix reste sur l hote (gsm_audio -> haut-parleurs, micro ->
-# gsm_mic, 40 ms), et la VM garde ses cartes pour ce qui la regarde - sonnerie,
-# notifications, l application Appels. Elle reste dans le trajet de la
-# SIGNALISATION, qui est son vrai role.
+# So the voice stays on the host (gsm_audio -> speakers, microphone ->
+# gsm_mic, 40 ms), and the VM keeps its cards for its own use - ringtone,
+# notifications, the Calls application. It stays in the SIGNALLING path,
+# which is its real role.
 #
-# Pour remettre la voix DANS la VM (l ancien montage croise, si l on veut
-# vraiment l entendre traverser le telephone) : OSMO_PMOS_VOIX_VM=1 au
-# lancement d osmo-pmos-setup. Il pose alors les deux bouclages dans la VM et
-# depose ce marqueur ; les fonctions ci-dessous retirent alors les bouclages
-# directs de l hote, sans quoi la voix arriverait DEUX fois - en direct, puis
-# par la VM 400 ms plus tard, ce qui etait le defaut du 09/09.
+# To put the voice INSIDE the VM (the crossed setup, to hear it go through the
+# phone): OSMO_PMOS_VOIX_VM=1 when starting osmo-pmos-setup. It then installs
+# the two loopbacks in the VM and drops this marker; the functions below then
+# remove the host's direct loopbacks, otherwise the voice would arrive TWICE -
+# direct, then through the VM 400 ms later.
 PMOS_VOIX_VM_MARQUEUR="${PMOS_VOIX_VM_MARQUEUR:-/run/osmo-pmos-voix-vm}"
 
-# Vrai seulement si la VM porte VRAIMENT la voix : le marqueur ET le processus.
-# Un marqueur oublie par une VM tuee sans menagement ne doit pas priver l hote
-# de ses haut-parleurs.
+# True only if the VM REALLY carries the voice: the marker AND the process.
+# A marker left behind by a VM killed abruptly must not deprive the host of
+# its speakers.
 pmos_vm_audio_present() {
     [ -f "$PMOS_VOIX_VM_MARQUEUR" ] || return 1
     pgrep -f 'qemu-system.*hdac[o]mbine' >/dev/null 2>&1 && return 0
@@ -217,15 +189,16 @@ remove_direct_loopbacks() {
     return 0
 }
 
-# [2026-09-08/09] L ANNULEUR D ECHO ENTRE LE MICRO ET LES HAUT-PARLEURS.
-# Micro interne + haut-parleurs : l echo du 600 se reinjectait dans le micro
-# (2 400 de crete HP coupe, 32 768 sature HP ouvert) : Larsen. Et l AGC
-# analogique de webrtc, laisse par defaut, promenait le gain du micro de 100 %
-# a 0 % d une minute a l autre (voix ecrasee, 93 % de l energie sous 300 Hz a
-# l entree du GSM). Donc : webrtc sans AGC analogique, micro fixe a 25 % (il
-# sature des 45 %), et un demutage explicite - module-device-restore rend
-# parfois le module muet. Le volume d osmo_mic_ec est PARTAGE avec le micro
-# materiel : meme valeur pour les deux.
+# THE ECHO CANCELLER BETWEEN THE MICROPHONE AND THE SPEAKERS.
+# Internal microphone + speakers: the echo of the 600 feeds back into the
+# microphone (2 400 peak with the speaker cut, 32 768 saturated with the
+# speaker open): Larsen. The webrtc analog AGC, left at its default, moves the
+# microphone gain from 100 % to 0 % from one minute to the next (crushed
+# voice, 93 % of the energy below 300 Hz at the GSM input). Hence: no analog
+# AGC, microphone fixed at 25 % (it saturates from 45 %), and an explicit
+# unmute, since module-device-restore sometimes leaves the module muted. The
+# osmo_mic_ec volume is SHARED with the hardware microphone: same value for
+# both.
 ensure_echo_cancel() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     [ "${AUDIO_ECHO_CANCEL:-1}" = "1" ] || {
@@ -237,32 +210,27 @@ ensure_echo_cancel() {
     if [ -z "$mic" ] || [ -z "$hp" ]; then
         echo -e "  ${YELLOW}[audio] pas de micro ou de haut-parleur materiel - annuleur d echo ignore${NC}"; return 0
     fi
-    # Le defaut (osmo_hp_ec / osmo_mic_ec) n est pose qu au CHARGEMENT : le
-    # rejouer a chaque passage renvoyait vers l annuleur les flux que l
-    # operateur venait de mettre ailleurs. Tout ce qui compte pour la chaine
-    # GSM est epingle par nom - le defaut n est plus qu une affaire de bureau.
+    # The default (osmo_hp_ec / osmo_mic_ec) is only set at LOAD time: replaying
+    # it on every pass would send back to the canceller the streams the
+    # operator has just moved elsewhere. Everything that matters for the GSM
+    # chain is pinned by name; the default is only a desktop matter.
     if pactl list short modules 2>/dev/null | grep -q 'module-echo-cancel'; then
         echo -e "  ${GREEN}[audio] annuleur d echo deja en place (osmo_hp_ec / osmo_mic_ec)${NC}"
         return 0
-    # [2026-09-09] 8000 Hz MONO, COMME TOUT LE RESTE DU BANC. Sans « rate », le
-    # module se charge a 32000 Hz : c est ce que montrait « pactl list short
-    # sinks » (osmo_hp_ec en float32le 1ch 32000Hz) alors que gsm_audio, gsm_mic
-    # et osmo_tts_off sont tous en s16le 1ch 8000Hz. Chaque traversee de
-    # l annuleur coutait donc deux reechantillonnages - 8000 -> 32000 a l entree,
-    # 32000 -> 8000 a la sortie - visibles dans les flux :
-    #     Loopback from Micro_sans_echo ... 1ch 32005Hz  -> sink gsm_mic (8000)
-    # Le signal est de toute facon borne a 4 kHz par le GSM : les 32 kHz ne
-    # portaient rien de plus. L annuleur webrtc accepte 8000/16000/32000/48000 ;
-    # 8000 verifie a la main avant d etre pose ici (module charge, sinks lus en
-    # « float32le 1ch 8000Hz », module decharge).
-    # [2026-09-23] SPEEX PAR DEFAUT. webrtc (annulation + reduction de bruit +
-    # passe-haut) coutait a PulseAudio 7 a 17 % d un coeur en continu, appel ou
-    # pas. speex annule l echo pour une fraction de ce prix ; il n a pas l AGC
-    # analogique qui faisait pomper le micro (voir plus haut), rien a couper.
-    # AUDIO_AEC_METHOD=webrtc retablit l ancien annuleur et ses aec_args.
-    # aec_args est UN argument (guillemets compris) : un $(...) non cite le
-    # coupait en morceaux, pactl ignorait analog_gain_control=0 et l AGC de
-    # webrtc descendait le micro a 0 % (micro muet en appel, 2026-09-23).
+    # 8000 Hz MONO, LIKE THE REST OF THE BENCH. Without "rate" the module loads
+    # at 32000 Hz (osmo_hp_ec in float32le 1ch 32000Hz) while gsm_audio,
+    # gsm_mic and osmo_tts_off are all s16le 1ch 8000Hz; each pass through the
+    # canceller would then cost two resamplings (8000 -> 32000 on input,
+    # 32000 -> 8000 on output). The signal is bounded to 4 kHz by GSM anyway.
+    # The webrtc canceller accepts 8000/16000/32000/48000.
+    # SPEEX BY DEFAULT. webrtc (cancellation + noise reduction + high-pass)
+    # costs PulseAudio 7 to 17 % of a core continuously, call or not. speex
+    # cancels the echo for a fraction of that price and has no analog AGC that
+    # would pump the microphone. AUDIO_AEC_METHOD=webrtc selects the webrtc
+    # canceller and its aec_args.
+    # aec_args is ONE argument (quotes included): an unquoted $(...) would
+    # split it, pactl would ignore analog_gain_control=0 and the webrtc AGC
+    # would bring the microphone down to 0 % (mute microphone during a call).
     elif pactl load-module module-echo-cancel aec_method="$(audio_aec_method)" \
             rate=8000 channels=1 \
             source_master="$mic" sink_master="$hp" \
@@ -283,33 +251,30 @@ ensure_echo_cancel() {
     return 0
 }
 
-# ── La source d ENREGISTREMENT : ce qu on entend + ce qu on dit ─────────────
-# [2026-09-09] « pourquoi j ai pas l enregistrement ». L enregistreur d ecran
-# (extension EasyScreenCast, menu « audio source ») ne sait capter qu une
-# SOURCE PulseAudio. Or un appel ne vit pas sur une source : le descendant va
-# dans des sinks (gsm_audio, puis les haut-parleurs), et seul le micro est une
-# source. Resultat : « No audio source » enregistre le silence, et choisir le
-# micro n enregistre que la voix de l operateur, jamais le correspondant.
+# ── The RECORDING source: what is heard + what is said ──────────────────────
+# The screen recorder (EasyScreenCast extension, "audio source" menu) can only
+# capture one PulseAudio SOURCE. A call does not live on a source: the
+# downlink goes into sinks (gsm_audio, then the speakers), and only the
+# microphone is a source. "No audio source" records silence, and choosing the
+# microphone only records the operator's voice, never the other party.
 #
-# On fabrique donc UN sink poubelle, osmo_rec, alimente par les deux cotes :
-#   - le moniteur des haut-parleurs de l operateur (tout ce qu il ENTEND, que
-#     la voix vienne du bouclage direct ou du telephone postmarketOS) ;
-#   - son micro (tout ce qu il DIT).
-# Son moniteur, osmo_rec.monitor, apparait alors dans le menu de l enregistreur
-# sous « Enregistrement_appel » : un seul choix, et l appel entier est dedans.
-# 48 kHz stereo : c est une piste video, pas du GSM ; PulseAudio reechantillonne
-# les 8 kHz une fois pour toutes, ici, hors du chemin de la voix.
-# AUDIO_RECORD_MIX=0 pour ne pas la creer.
-# ── ALLEGER PULSEAUDIO ───────────────────────────────────────────────────
-# [2026-09-23] Mesure : PulseAudio a 7-17 % d un coeur en permanence, pour
-#   - speech-dispatcher (sd_dummy) : un flux 44100 Hz jamais suspendu vers la
-#     carte son, donc un reechantillonnage 44,1 -> 48 kHz continu pour rien ;
-#     il est lance a la demande par le bureau (« -s -t 0 » : ne s arrete jamais) ;
-#   - l annuleur webrtc (voir ensure_echo_cancel) ;
-#   - osmo_rec en 48 kHz stereo, alimente par deux boucles 8 kHz mono.
-# Ici on arrete le premier et on MIGRE un banc deja monte vers speex / 8 kHz :
-# decharger l annuleur fait tomber les boucles epinglees dessus, on les repose.
-# AUDIO_ALLEGER=0 pour ne rien toucher.
+# So ONE trash sink, osmo_rec, is built and fed by both sides:
+#   - the monitor of the operator's speakers (everything he HEARS, whether the
+#     voice comes from the direct loopback or from the postmarketOS phone);
+#   - his microphone (everything he SAYS).
+# Its monitor, osmo_rec.monitor, then shows up in the recorder menu as
+# "Enregistrement_appel": one choice, and the whole call is in it.
+# 8 kHz mono, like the rest of the chain. AUDIO_RECORD_MIX=0 not to create it.
+# ── Lightening PulseAudio ────────────────────────────────────────────────
+# Sources of permanent PulseAudio load (7-17 % of a core):
+#   - speech-dispatcher (sd_dummy): a 44100 Hz stream never suspended towards
+#     the sound card, hence a continuous 44.1 -> 48 kHz resampling for
+#     nothing; started on demand by the desktop ("-s -t 0": never stops);
+#   - the webrtc canceller (see ensure_echo_cancel);
+#   - osmo_rec in 48 kHz stereo, fed by two 8 kHz mono loops.
+# This stops the first one and MIGRATES an already running bench to
+# speex / 8 kHz: unloading the canceller drops the loops pinned on it, so
+# they are reinstalled. AUDIO_ALLEGER=0 to leave everything alone.
 alleger_audio() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     [ "${AUDIO_ALLEGER:-1}" = "1" ] || return 0
@@ -319,10 +284,11 @@ alleger_audio() {
         echo -e "  ${GREEN}[audio] speech-dispatcher arrete (flux 44,1 kHz permanent vers les HP)${NC}"
     fi
     pactl info >/dev/null 2>&1 || return 0
-    # [2026-09-23] module-stream-restore SANS restore_device : il renvoyait le
-    # `mobile` (ALSA « default ») sur la carte brute ou il avait joue une fois,
-    # hors de l annuleur -- echo test : le HP repart dans le micro, Larsen qui
-    # monte au fil de l appel. Les volumes restent memorises, pas le peripherique.
+    # module-stream-restore WITHOUT restore_device: otherwise it sends the
+    # `mobile` (ALSA "default") back to the raw card where it once played,
+    # outside the canceller - echo test: the speaker feeds back into the
+    # microphone, Larsen rising during the call. Volumes stay memorized, the
+    # device does not.
     local sr
     sr="$(pactl list short modules 2>/dev/null | awk '$2 == "module-stream-restore" && $0 !~ /restore_device=false/ {print $1; exit}')"
     if [ -n "$sr" ]; then
@@ -354,13 +320,13 @@ alleger_audio() {
     return 0
 }
 
-# ── REINIT : repartir d une chaine propre sans relancer PulseAudio ─────────
-# [2026-09-23] scripts/audio-chain.sh --reinit. Decharge ce que la chaine a
-# pose PAR-DESSUS les sinks GSM -- annuleur d echo, toutes les boucles,
-# osmo_rec -- et arrete speech-dispatcher ; audio-chain.sh repose ensuite le
-# tout comme au boot. gsm_audio, gsm_mic et osmo_tts_off restent : le
-# `mobile` et gapk y sont branches (PCM ALSA gsm_out/gsm_in), les decharger
-# couperait un appel pour de bon au lieu d une seconde.
+# ── REINIT: start from a clean chain without restarting PulseAudio ─────────
+# scripts/audio-chain.sh --reinit. Unloads what the chain installs ON TOP of
+# the GSM sinks - echo canceller, all the loops, osmo_rec - and stops
+# speech-dispatcher; audio-chain.sh then reinstalls everything as at boot.
+# gsm_audio, gsm_mic and osmo_tts_off stay: the `mobile` and gapk are
+# connected to them (ALSA PCM gsm_out/gsm_in), unloading them would cut a
+# call for good instead of one second.
 reinit_audio() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     pactl info >/dev/null 2>&1 || return 0
@@ -389,7 +355,7 @@ ensure_record_mix() {
     local hp mic src
     hp="$(audio_hp_sink)"; mic="$(audio_mic_source)"
     for src in ${hp:+${hp}.monitor} ${mic:-}; do
-        # Idempotent, et epingle comme les autres (cf. le bloc dont_move).
+        # Idempotent, and pinned like the others (cf. the dont_move block).
         pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
             | grep -F "source=${src}" | grep -qF 'sink=osmo_rec' && continue
         pactl load-module module-loopback source="$src" sink=osmo_rec \
@@ -397,8 +363,8 @@ ensure_record_mix() {
             latency_msec="$LOOPBACK_LATENCY_MSEC" >/dev/null 2>&1
     done
     echo -e "  ${GREEN}[audio] source d enregistrement prete : osmo_rec.monitor (Enregistrement_appel)${NC}"
-    # L enregistreur d ecran s en souvient par son nom d application
-    # (module-stream-restore) : on le deplace une fois, il y revient ensuite.
+    # The screen recorder is remembered by its application name
+    # (module-stream-restore): moved once, it comes back there afterwards.
     local so
     for so in $(pactl list source-outputs 2>/dev/null \
                 | awk '/Source Output #/{id=$3} /application.name = ".*[Ss]creen[Cc]ast|.*Shell.Screencast/{print id}' | tr -d '#'); do
@@ -417,7 +383,7 @@ ensure_local_loopback() {
     pactl list short sources 2>/dev/null | grep -qw 'gsm_audio.monitor' || {
         echo -e "  ${YELLOW}[audio] gsm_audio.monitor absent - loopback local ignore${NC}"; return 0; }
 
-    # Avec le telephone postmarketOS, la voix passe par la VM : pas de direct.
+    # With the postmarketOS phone the voice goes through the VM: no direct loopback.
     if pmos_vm_audio_present; then
         echo -e "  ${GREEN}[audio] telephone postmarketOS en place - l ecoute passe par la VM, pas de bouclage direct${NC}"
         remove_direct_loopbacks
@@ -429,26 +395,25 @@ ensure_local_loopback() {
     [ -n "$sink" ] || {
         echo -e "  ${YELLOW}[audio] aucune sortie materielle - loopback local ignore${NC}"; return 0; }
 
-    # Idempotent : ne pas empiler un 2e loopback (voix doublee + echo)...
+    # Idempotent: do not stack a 2nd loopback (doubled voice + echo)...
     if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
          | grep -F 'source=gsm_audio.monitor' | grep -F "sink=${sink}" | grep -qF 'sink_dont_move=true'; then
         echo -e "  ${GREEN}[audio] loopback local deja en place → ${sink}${NC}"
         return 0
     fi
-    # ...et ne pas en garder un vers une AUTRE sortie (la carte brute posee
-    # avant l annuleur d echo, par exemple).
+    # ...and do not keep one towards ANOTHER output (the raw card installed
+    # before the echo canceller, for example).
     local m
     for m in $(pactl list short modules 2>/dev/null \
                | awk '/module-loopback/ && /source=gsm_audio\.monitor/ { print $1 }'); do
         pactl unload-module "$m" >/dev/null 2>&1
     done
 
-    # [2026-09-09] EPINGLE. PulseAudio 16 deplace tout flux non epingle vers le
-    # nouveau peripherique par defaut (set-default-sink / GNOME « Sortie ») :
-    # mesure - un clic dans les reglages son et ce bouclage lisait le MICRO
-    # (source par defaut) pour le jouer dans la carte brute (sink par defaut).
-    # Larsen, plus rien sur gsm_audio, « son pourri ». dont_move le rend sourd
-    # aux changements de defaut : il ne bouge que si on le decharge.
+    # PINNED. PulseAudio 16 moves any unpinned stream to the new default device
+    # (set-default-sink / GNOME "Output"): one click in the sound settings and
+    # this loopback would read the MICROPHONE (default source) to play it into
+    # the raw card (default sink). dont_move makes it deaf to default changes:
+    # it only moves if unloaded.
     if pactl load-module module-loopback \
             source=gsm_audio.monitor sink="$sink" \
             sink_dont_move=true source_dont_move=true \
@@ -459,29 +424,26 @@ ensure_local_loopback() {
     fi
 }
 
-# ── Micro local : la carte son de la machine → gsm_mic ─────────────────
-# [2026-08-31] SYMETRIQUE de ensure_local_loopback, et il manquait pareil. Le
-# montant (ce que le mobile EMET vers le reseau) part de gsm_in, c'est-a-dire de
-# gsm_mic.monitor - un null-sink que PERSONNE n'alimentait depuis la machine.
-# Le seul producteur etait la console web : le navigateur capturait le micro,
-# poussait les echantillons a /opt/GSM/osmo-egprs-web/server.js, qui les
-# reinjectait via `pacat --playback -d gsm_mic`. Chemin mesure le 31/08 :
-# 3 a 4 secondes de retard sur la voix montante, alors que TOUT le trajet
-# PulseAudio tient sous 100 ms (pacat 45 ms, capture du mobile 0 us, loopback
-# descendant 20 ms). Le tampon n'est donc pas dans PulseAudio mais dans le
-# transport navigateur -> node -> socket, qu'aucun reglage pulse n'atteint.
-# Un module-loopback depuis la carte son supprime ce transport au lieu de
-# l'accelerer : le micro alimente gsm_mic directement, en 20 ms.
+# ── Local microphone: the machine's sound card → gsm_mic ───────────────
+# SYMMETRIC to ensure_local_loopback. The uplink (what the mobile SENDS to
+# the network) starts from gsm_in, i.e. from gsm_mic.monitor, a null-sink
+# that nothing on the machine feeds by itself. The web console can feed it
+# (the browser captures the microphone, pushes the samples to
+# /opt/GSM/osmo-egprs-web/server.js, which reinjects them through
+# `pacat --playback -d gsm_mic`), but the browser -> node -> socket transport
+# adds 3 to 4 seconds of delay that no pulse setting can reach. A
+# module-loopback from the sound card removes that transport: the microphone
+# feeds gsm_mic directly, in 20 ms.
 #
-# ⚠️ DEUX SOURCES A NE JAMAIS PRENDRE ICI :
-#   - gsm_audio.monitor : c'est le DESCENDANT. Le rejouer dans le montant, c'est
-#     exactement la boucle fermee du 08/08 (RMS x11 en 10 s) que le commentaire
-#     d'/etc/asound.conf documente. On ne garde qu'une entree MATERIELLE.
-#   - gsm_mic.monitor : le sink qu'on alimente - il se recopierait sur lui-meme.
+# ⚠️ TWO SOURCES NEVER TO USE HERE:
+#   - gsm_audio.monitor: this is the DOWNLINK. Replaying it into the uplink is
+#     a closed loop (RMS x11 in 10 s), as documented in /etc/asound.conf.
+#     Only a HARDWARE input is kept.
+#   - gsm_mic.monitor: the sink being fed - it would copy itself onto itself.
 #
-# ⚠️ Boucle ACOUSTIQUE : le descendant sort sur les enceintes (loopback
-# ci-dessus) et le micro les reentend. Au casque c'est sans objet ; sur
-# haut-parleurs, couper l'un des deux ou baisser le volume.
+# ⚠️ ACOUSTIC loop: the downlink goes out on the speakers (loopback above)
+# and the microphone hears them again. Irrelevant with a headset; on speakers,
+# mute one of the two or lower the volume.
 AUDIO_LOCAL_MIC="${AUDIO_LOCAL_MIC:-1}"
 
 ensure_local_mic() {
@@ -493,27 +455,27 @@ ensure_local_mic() {
     pactl list short sinks 2>/dev/null | grep -qw 'gsm_mic' || {
         echo -e "  ${YELLOW}[audio] sink gsm_mic absent - micro local ignore${NC}"; return 0; }
 
-    # Avec le telephone postmarketOS, c est la VM qui alimente gsm_mic.
+    # With the postmarketOS phone, the VM feeds gsm_mic.
     if pmos_vm_audio_present; then
         echo -e "  ${GREEN}[audio] telephone postmarketOS en place - le micro passe par la VM, pas de bouclage direct${NC}"
         remove_direct_loopbacks
         return 0
     fi
 
-    # Entree = le micro de l operateur (annuleur d echo s il est la, sinon le
-    # materiel) - jamais un .monitor (voir l avertissement ci-dessus).
+    # Input = the operator's microphone (echo canceller if present, otherwise
+    # the hardware) - never a .monitor (see the warning above).
     local src
     src="$(audio_mic_source)"
     [ -n "$src" ] || {
         echo -e "  ${YELLOW}[audio] aucune entree materielle - micro local ignore${NC}"; return 0; }
 
-    # Idempotent : un 2e loopback doublerait la voix montante...
+    # Idempotent: a 2nd loopback would double the uplink voice...
     if pactl list short modules 2>/dev/null | grep -F 'module-loopback' \
          | grep -F "source=${src}" | grep -F 'sink=gsm_mic' | grep -qF 'sink_dont_move=true'; then
         echo -e "  ${GREEN}[audio] micro local deja en place : ${src} → gsm_mic${NC}"
         return 0
     fi
-    # ...et pas un depuis une AUTRE entree.
+    # ...and not one from ANOTHER input.
     local m
     for m in $(pactl list short modules 2>/dev/null \
                | awk '/module-loopback/ && /sink=gsm_mic([ \t]|$)/ { print $1 }'); do
@@ -531,11 +493,11 @@ ensure_local_mic() {
     fi
 }
 
-# Post-condition : les PCM que `mobile` va reellement ouvrir s'ouvrent-ils ?
-# Tester le sink avec `pactl list sinks` ne suffit pas - c'est le mapping ALSA
-# de /etc/asound.conf qui casse (gsm_in → gsm_mic.monitor). On ouvre pour de
-# vrai, 1 s de chaque cote, et on gueule si ca rate. Sans ca la panne est
-# silencieuse jusqu'au premier appel muet.
+# Post-condition: do the PCMs that `mobile` will actually open really open?
+# Testing the sink with `pactl list sinks` is not enough - it is the ALSA
+# mapping of /etc/asound.conf that breaks (gsm_in → gsm_mic.monitor). Each
+# side is really opened for 1 s and a failure is reported loudly; otherwise
+# the failure stays silent until the first mute call.
 assert_audio_devices() {
     command -v aplay >/dev/null 2>&1 || return 0
     local ko=0
@@ -555,11 +517,11 @@ assert_audio_devices() {
 ensure_pulse() {
     [ "${AUDIO:-1}" = "1" ] || { echo -e "  ${YELLOW}[audio] desactive (AUDIO=0)${NC}"; return 0; }
 
-    # 0. Mapping ALSA gsm_out/gsm_in → sink PulseAudio gsm_audio (REQUIS cote hote
-    #    en mode natif). Sans /etc/asound.conf, le `mobile` (io-handler gapk,
-    #    alsa-output-dev gsm_out) ouvre un PCM ALSA inexistant → "Unknown PCM
-    #    gsm_out" → l'audio TCH n'est jamais decode vers gsm_audio → silence
-    #    navigateur. Le sink seul ne suffit pas : ce mapping doit exister.
+    # 0. ALSA mapping gsm_out/gsm_in → PulseAudio sink gsm_audio (REQUIRED on
+    #    the host in native mode). Without /etc/asound.conf, the `mobile`
+    #    (io-handler gapk, alsa-output-dev gsm_out) opens a non-existent ALSA
+    #    PCM → "Unknown PCM gsm_out" → the TCH audio is never decoded to
+    #    gsm_audio → silence in the browser. The sink alone is not enough.
     if [ -f "$HERE/configs/asound.conf" ] && ! cmp -s "$HERE/configs/asound.conf" /etc/asound.conf 2>/dev/null; then
         cp -f "$HERE/configs/asound.conf" /etc/asound.conf \
             && echo -e "  ${GREEN}[audio] /etc/asound.conf deploye (ALSA gsm_out/gsm_in → pulse gsm_audio)${NC}"
@@ -567,21 +529,19 @@ ensure_pulse() {
 
     export PULSE_SERVER="unix:${PULSE_SOCK}"
     if pactl info >/dev/null 2>&1; then
-        # PulseAudio deja actif (service osmo-pulse au boot, ou un 'fake' solo
-        # precedent). Le sink gsm_audio n'est PAS forcement charge dans CE demon
-        # -> on le (re)charge a la volee s'il manque. SANS ca : l'audio ne marchait
-        # qu'apres un 'fake' solo (qui avait pose le sink) - c'est le maillon qui
-        # manquait a fake+qemu pour avoir l'audio de lui-meme.
+        # PulseAudio already running (osmo-pulse service at boot, or a previous
+        # 'fake' solo). The gsm_audio sink is NOT necessarily loaded in THIS
+        # daemon -> it is (re)loaded on the fly if missing.
         load_gsm_sinks
-        # Dedoublonnage : sur une PipeWire/Pulse PARTAGEE entre containers, chaque
-        # ensure_pulse charge son propre module-null-sink gsm_audio → doublons.
-        # parec (flux /audio du dashboard) lit alors le monitor d'un sink que gapk
-        # n'alimente PAS → audio muet pour les clients distants (navigateur/Windows ;
-        # en local l'hote entend via le module-loopback vers ses enceintes, d'ou
-        # "ca marche sur Linux mais pas sur Windows"). On garde UN seul gsm_audio
-        # (le 1er module) et on decharge les suivants.
-        # (le dedoublonnage vaut pour gsm_mic autant que pour gsm_audio : un
-        #  gsm_mic en double et gapk capture le monitor du mauvais sink)
+        # Deduplication: on a PipeWire/Pulse SHARED between containers, each
+        # ensure_pulse loads its own module-null-sink gsm_audio → duplicates.
+        # parec (the dashboard /audio stream) then reads the monitor of a sink
+        # that gapk does NOT feed → mute audio for remote clients
+        # (browser/Windows; locally the host hears through the module-loopback
+        # to its speakers). ONE gsm_audio (the 1st module) is kept and the
+        # others are unloaded.
+        # (the deduplication applies to gsm_mic as much as to gsm_audio: with a
+        #  duplicated gsm_mic, gapk captures the monitor of the wrong sink)
         local _entry _name
         for _entry in $GSM_SINKS; do
             _name="${_entry%%:*}"
@@ -600,7 +560,7 @@ ensure_pulse() {
         return 0
     fi
 
-    # 1. Installer pulseaudio si absent (le binaire demon, pas que les clients)
+    # 1. Install pulseaudio if missing (the daemon binary, not only the clients)
     if ! command -v pulseaudio >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             echo -e "  ${YELLOW}[audio] installation pulseaudio...${NC}"
@@ -611,10 +571,10 @@ ensure_pulse() {
     command -v pulseaudio >/dev/null 2>&1 || {
         echo -e "  ${YELLOW}[audio] pulseaudio indisponible - audio ignore${NC}"; return 0; }
 
-    # 2. Config system.pa : acces anonyme + les DEUX sinks null (idempotent).
-    #    Les declarer ici plutot que de compter sur un load-module au runtime
-    #    est ce qui rend la chaine robuste : ils existent des le demarrage du
-    #    demon, y compris si le demon redemarre tout seul plus tard.
+    # 2. system.pa config: anonymous access + the null sinks (idempotent).
+    #    Declaring them here rather than relying on a load-module at runtime is
+    #    what makes the chain robust: they exist from the daemon start, even
+    #    if the daemon restarts on its own later.
     local sp=/etc/pulse/system.pa
     if [ -f "$sp" ]; then
         grep -q 'auth-anonymous=1' "$sp" || sed -i \
@@ -627,15 +587,15 @@ ensure_pulse() {
         done
     fi
 
-    # 3. (Re)demarrer le demon systeme - SERIALISE
+    # 3. (Re)start the system daemon - SERIALIZED
     mkdir -p /var/run/pulse "$LOG_DIR"
-    # ensure_pulse est appele en parallele (flux principal + ensure_gapk via la
-    # session tmux 'gapk') → deux 'pulseaudio --system' se lancaient en meme
-    # temps et se disputaient /var/run/pulse/native → "bind(): Address already
-    # in use" → le module socket echoue → demon mort → injoignable.
-    # flock garantit UN SEUL (re)demarrage a la fois ; un demon residuel detenant
-    # un socket perime (parfois sous un autre uid) est tue et le socket efface
-    # par root avant le bind.
+    # ensure_pulse is called in parallel (main flow + ensure_gapk through the
+    # 'gapk' tmux session) → two 'pulseaudio --system' would start at the same
+    # time and fight over /var/run/pulse/native → "bind(): Address already in
+    # use" → the socket module fails → dead daemon → unreachable.
+    # flock guarantees ONE SINGLE (re)start at a time; a leftover daemon
+    # holding a stale socket (sometimes under another uid) is killed and the
+    # socket removed by root before the bind.
     (
         flock 9
         if ! pactl info >/dev/null 2>&1; then
@@ -665,53 +625,52 @@ ensure_pulse() {
     fi
 }
 
-# ── Bridge audio : osmo-gapk auto (chemin reseau MGW RTP → sink gsm_audio) ────
-# gapk auto poll le VTY OsmoMGW (4243) et bridge le RTP de CHAQUE appel vers
-# alsa://gsm_out (= sink null PulseAudio gsm_audio). C'est ce maillon qui rend
-# l'audio des appels "reseau" (ex: 600 = echo-test Asterisk via MGW) audible
-# dans le dashboard web : server.js capte gsm_audio.monitor → /audio (MP3).
-# Lance en session tmux DETACHEE 'gapk' : survit aux 'exec' (start-clean.sh /
-# tmux attach) des modes qemu/hybride et poll jusqu'a ce que le MGW soit up.
-# Idempotent (relance la session), non-fatal. AUDIO=0 → desactive.
-# Pont voix conteneur → hote : parec(gsm_audio.monitor) | paplay(--server=relai).
-# run.sh (no-process) tente ce pont AVANT que PulseAudio soit pret (course →
-# "PulseAudio injoignable apres 30s" → pont jamais lance → VOIX MUETTE dans docker).
-# On le (re)lance ICI, apres ensure_pulse (sink gsm_audio garanti up). Idempotent,
-# gated sur HOST_AUDIO_RELAY (pose par start-docker.sh = tcp:<gw>:4713).
+# ── Audio bridge: osmo-gapk auto (network path MGW RTP → sink gsm_audio) ─────
+# gapk auto polls the OsmoMGW VTY (4243) and bridges the RTP of EACH call to
+# alsa://gsm_out (= PulseAudio null sink gsm_audio). This is the link that
+# makes the audio of "network" calls (e.g. 600 = Asterisk echo-test through
+# the MGW) audible in the web dashboard: server.js captures gsm_audio.monitor
+# → /audio (MP3).
+# Started in a DETACHED tmux session 'gapk': survives the 'exec'
+# (start-clean.sh / tmux attach) of the qemu/hybrid modes and polls until the
+# MGW is up. Idempotent (restarts the session), non-fatal. AUDIO=0 → disabled.
+# Container → host voice bridge: parec(gsm_audio.monitor) | paplay(--server=relay).
+# run.sh (no-process) attempts this bridge BEFORE PulseAudio is ready (race →
+# "PulseAudio injoignable apres 30s" → bridge never started → MUTE VOICE in
+# docker). It is (re)started HERE, after ensure_pulse (gsm_audio sink
+# guaranteed up). Idempotent, gated on HOST_AUDIO_RELAY (set by
+# start-docker.sh = tcp:<gw>:4713).
 ensure_host_audio() {
     local relay="${HOST_AUDIO_RELAY:-}"
     [ -n "$relay" ] || return 0
     if ! pactl --server="$relay" info >/dev/null 2>&1; then
         echo -e "  ${YELLOW}[host-audio] relai ${relay} injoignable - pont voix non lance${NC}"; return 0
     fi
-    # ── UN SEUL PONT POUR TOUT LE BANC ──────────────────────────────────────
-    # [2026-08-31] LE SON ETAIT ENTENDU EN DOUBLE A PARTIR DE DEUX OPERATEURS.
-    # Le `pkill` plus bas s execute DANS le conteneur, qui a son propre espace de
-    # PID : il ne voit JAMAIS le pont du voisin. Chaque operateur demarrait donc
-    # le sien, et comme ils poussent tous vers le MEME PulseAudio d hote, on
-    # entendait l appel deux fois a deux operateurs, trois fois a trois.
-    # On interroge donc le SERVEUR PARTAGE, pas la table des processus locale :
-    # un client deja connecte sous ce nom veut dire qu un pont tourne quelque
-    # part, peu importe dans quel conteneur.
+    # ── ONE SINGLE BRIDGE FOR THE WHOLE BENCH ──────────────────────────────
+    # The `pkill` below runs INSIDE the container, which has its own PID
+    # namespace: it never sees the neighbour's bridge. Each operator would
+    # start its own, and as they all push to the SAME host PulseAudio, the
+    # call would be heard twice with two operators, three times with three.
+    # So the SHARED SERVER is queried, not the local process table: a client
+    # already connected under this name means a bridge is running somewhere,
+    # whatever the container.
     #
-    # ⚠️ scripts/run.sh (audio_bridge) porte le MEME garde-fou. Les deux copies
-    # doivent garder LE MEME nom de client : c est par ce nom qu elles se voient.
-    # C est precisement ce qui manquait ici - le correctif n avait ete pose que
-    # sur run.sh, et cette copie-ci lancait un pont ANONYME, donc invisible au
-    # garde-fou de l autre, qui en ajoutait un second.
+    # ⚠️ scripts/run.sh (audio_bridge) carries the SAME guard. Both copies
+    # must keep THE SAME client name: it is through this name that they see
+    # each other.
     local _bridge_name="osmo-gsm-bridge"
     if pactl --server="$relay" list clients 2>/dev/null \
          | grep -q "application.name = \"${_bridge_name}\""; then
         echo -e "  ${GREEN}[host-audio] pont deja actif sur l hote (${relay}) - on n en ajoute pas un second${NC}"
         return 0
     fi
-    # ── NI DOUBLON AVEC LE LOOPBACK DE L HOTE ───────────────────────────────
-    # L hote charge deja son module-loopback gsm_audio.monitor -> carte son
-    # (ensure_local_loopback, plus haut dans ce fichier). C est le MEME travail
-    # que ce pont : meme source, meme sortie. Les deux ensemble, tout est entendu
-    # DEUX FOIS - et le symptome survit a l arret d un conteneur, ce qui fait
-    # chercher le doublon du mauvais cote. On garde le loopback : il est cote
-    # hote et bien plus court (20 ms contre 250 ms pour le pont TCP).
+    # ── NO DUPLICATE WITH THE HOST LOOPBACK EITHER ─────────────────────────
+    # The host already loads its module-loopback gsm_audio.monitor -> sound
+    # card (ensure_local_loopback, above in this file). This is the SAME job
+    # as this bridge: same source, same output. Both together, everything is
+    # heard TWICE - and the symptom survives stopping a container. The
+    # loopback is kept: it is on the host side and much shorter (20 ms against
+    # 250 ms for the TCP bridge).
     if pactl --server="$relay" list short modules 2>/dev/null \
          | grep -q 'source=gsm_audio.monitor'; then
         echo -e "  ${GREEN}[host-audio] loopback gsm_audio deja en place sur l hote - pont TCP inutile${NC}"
@@ -719,11 +678,11 @@ ensure_host_audio() {
     fi
     pkill -f "paplay --server=${relay}" 2>/dev/null || true          # idempotent (local)
     [ -f /run/host-audio.pid ] && kill -- "-$(cat /run/host-audio.pid)" 2>/dev/null || true
-    # parec lit le pulse LOCAL (gsm_audio.monitor) ; paplay pousse vers l'hote.
-    # --latency-msec : capture courte (30ms) + lecture TAMPONNEE (250ms) pour
-    # absorber la gigue (ordonnancement/TCP/2 horloges pulse) - sinon voix HACHEE.
-    # --client-name : c est LUI qui rend ce pont visible au garde-fou ci-dessus,
-    # depuis n importe quel conteneur. Sans lui, chacun se croit seul.
+    # parec reads the LOCAL pulse (gsm_audio.monitor); paplay pushes to the host.
+    # --latency-msec: short capture (30ms) + BUFFERED playback (250ms) to absorb
+    # jitter (scheduling/TCP/2 pulse clocks) - otherwise CHOPPY voice.
+    # --client-name: this is what makes this bridge visible to the guard above,
+    # from any container. Without it, each one believes it is alone.
     setsid env PULSE_SERVER="unix:${PULSE_SOCK}" sh -c '
       while true; do
         parec -d gsm_audio.monitor --latency-msec=30 --format=s16le --rate=8000 --channels=1 \
@@ -738,28 +697,26 @@ ensure_gapk() {
     [ "${AUDIO:-1}" = "1" ] || return 0
     command -v tmux      >/dev/null 2>&1 || { echo -e "  ${YELLOW}[gapk] tmux absent - bridge audio non lance${NC}"; return 0; }
     command -v osmo-gapk >/dev/null 2>&1 || { echo -e "  ${YELLOW}[gapk] osmo-gapk absent - bridge audio non lance${NC}"; return 0; }
-    ensure_pulse   # gapk ecrit dans alsa://gsm_out = sink gsm_audio (idempotent)
+    ensure_pulse   # gapk writes into alsa://gsm_out = sink gsm_audio (idempotent)
     local gapk_sh="/etc/osmocom/gapk-start.sh"; [ -x "$gapk_sh" ] || gapk_sh="$HERE/scripts/gapk-start.sh"
     [ -x "$gapk_sh" ] || { echo -e "  ${YELLOW}[gapk] gapk-start.sh introuvable - bridge audio non lance${NC}"; return 0; }
     tmux kill-session -t gapk 2>/dev/null || true
-    # [2026-08-10] Le format etait code en dur a "gsmfr", un nom qui n'existe
-    # pas dans osmo-gapk : les deux process mouraient a l'analyse des arguments
-    # ("Unsupported format: gsmfr") et le pont n'a jamais rien transporte.
-    # Le nom du GSM FR est "gsm". Le 3e argument est le peripherique de
-    # CAPTURE : il doit rester gsm_in (moniteur du null-sink gsm_mic). Le
-    # pointer sur gsm_out rebranche la boucle fermee du 08/08 - les mobiles
-    # ecrivent dans gsm_out, on les rejouerait dans leur propre uplink.
+    # The GSM FR format is named "gsm" in osmo-gapk ("gsmfr" does not exist:
+    # both processes would die at argument parsing, "Unsupported format").
+    # The 3rd argument is the CAPTURE device: it must stay gsm_in (monitor of
+    # the gsm_mic null-sink). Pointing it at gsm_out creates a closed loop -
+    # the mobiles write into gsm_out, they would be replayed into their own
+    # uplink.
     tmux new-session -d -s gapk \
         "GAPK_ALSA_DEV=gsm_out GAPK_ALSA_DEV_IN=gsm_in PULSE_SERVER=unix:${PULSE_SOCK} bash '$gapk_sh' auto gsm gsm_out gsm_in 2>&1 | tee ${LOG_DIR}/gapk-auto.log"
-    # [2026-08-26] LA FENETRE "exited".
-    # `tmux new-session -d` rend 0 des que le serveur a pris la commande, pas
-    # quand celle-ci tourne. Si gapk-start.sh rend la main tout de suite - format
-    # refuse, sink pas encore la, binaire absent - la fenetre reste affichee avec
-    # "[exited]" en travers, et le message vert ci-dessous annonce quand meme un
-    # pont audio en place. On attend donc une seconde, et on regarde.
-    # La session morte est retiree : une fenetre "exited" au milieu des autres
-    # fait chercher une panne dans la pile alors que c'est le pont audio, seul,
-    # qui n'a pas demarre - et le journal, lui, dit pourquoi.
+    # `tmux new-session -d` returns 0 as soon as the server has taken the
+    # command, not when it runs. If gapk-start.sh returns right away - format
+    # refused, sink not there yet, binary missing - the window stays displayed
+    # with "[exited]" across it while the green message below would still
+    # announce a working audio bridge. So wait one second and check.
+    # A dead session is removed: an "exited" window among the others makes one
+    # look for a failure in the stack when only the audio bridge did not
+    # start - and the log says why.
     sleep 1
     if tmux has-session -t gapk 2>/dev/null && \
        [ "$(tmux list-panes -t gapk -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; then
@@ -769,19 +726,20 @@ ensure_gapk() {
         echo -e "  ${YELLOW}[gapk] mort au demarrage - pas de pont audio (fenetre retiree)${NC}"
         echo -e "         ${CYAN}tail -20 ${LOG_DIR}/gapk-auto.log${NC}"
     fi
-    ensure_host_audio   # (re)lance le pont voix → hote maintenant que pulse+sink sont up
+    ensure_host_audio   # (re)start the voice bridge → host now that pulse+sink are up
 }
 
 # ══════════════════════════════════════════════════════════════════════════
-# Modes 1 operateur (host loopback + enp0s3) : noproc/faketrx/virtphy/qemu/combine
+# Single-operator modes (host loopback + enp0s3): noproc/faketrx/virtphy/qemu/combine
 # ══════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════
-# Mode HYBRIDE faketrx-qemu (Approche C) : 2 osmo-bts-trx, 1 coeur
-#   BTS#0 = pipeline QEMU INTOUCHE (run.sh : osmo-trx-ipc 5700, ARFCN 514, Calypso)
-#   BTS#1 = side-car : osmo-bts-trx (unit-id 6002, base-port 5820/5720) + fake_trx
-#           (-P 5720 -p 6720) + trxcon + mobile osmocom-bb (ARFCN 516, IMSI ...0002)
-#   Les 2 MS s'enregistrent sur le meme osmo-bsc/MSC/HLR → appel intra-MSC.
-#   1 BTS = 1 horloge (clk_s par process osmo-bts-trx) → pas de conflit d'horloge :
-#   une seule osmo-bts-trx 2-PHY est IMPOSSIBLE (clk_s partage, reset ping-pong),
-#   d'ou 2 process distincts. On NE TOUCHE NI qosmo-grgsm/run.sh NI osmo-bts-trx.cfg.
+# HYBRID mode faketrx-qemu (approach C): 2 osmo-bts-trx, 1 core
+#   BTS#0 = UNTOUCHED QEMU pipeline (run.sh: osmo-trx-ipc 5700, ARFCN 514, Calypso)
+#   BTS#1 = side-car: osmo-bts-trx (unit-id 6002, base-port 5820/5720) + fake_trx
+#           (-P 5720 -p 6720) + trxcon + osmocom-bb mobile (ARFCN 516, IMSI ...0002)
+#   Both MS register on the same osmo-bsc/MSC/HLR → intra-MSC call.
+#   1 BTS = 1 clock (clk_s per osmo-bts-trx process) → no clock conflict:
+#   a single 2-PHY osmo-bts-trx is IMPOSSIBLE (shared clk_s, reset ping-pong),
+#   hence 2 distinct processes. Neither qosmo-grgsm/run.sh nor osmo-bts-trx.cfg
+#   is touched.
 # ══════════════════════════════════════════════════════════════════════════

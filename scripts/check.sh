@@ -4,14 +4,14 @@ sudo docker exec -it osmo-inter-stp telnet 127.0.0.1 4239
 # show cs7 instance 0 as
 # show cs7 instance 0 route
 
-# ── OPERATEUR 1 - STP intra ──────────────────────────────────────────────────
+# ── OPERATOR 1 - intra STP ───────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4239
 # show cs7 instance 0 asp
 # show cs7 instance 0 as
 # show cs7 instance 0 sccp users
 # show cs7 instance 0 sccp connections
 
-# ── OPERATEUR 1 - MSC ────────────────────────────────────────────────────────
+# ── OPERATOR 1 - MSC ─────────────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4254
 # en
 # show cs7 instance 0 asp
@@ -20,7 +20,7 @@ sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4254
 # show subscriber all
 # show connection all
 
-# ── OPERATEUR 1 - BSC ────────────────────────────────────────────────────────
+# ── OPERATOR 1 - BSC ─────────────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4242
 # en
 # show cs7 instance 0 asp
@@ -29,12 +29,12 @@ sudo docker exec -it osmo-operator-1 telnet 127.0.0.1 4242
 # show bts 0
 # show trx 0 0
 
-# ── OPERATEUR 2 - meme chose ──────────────────────────────────────────────────
+# ── OPERATOR 2 - same thing ───────────────────────────────────────────────────
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4239
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4254
 sudo docker exec -it osmo-operator-2 telnet 127.0.0.1 4242
 
-# ── ONE-LINER : dump tout sans interaction ────────────────────────────────────
+# ── ONE-LINER: dump everything without interaction───────────────────────────────────
 for container in osmo-operator-1 osmo-operator-2; do
     echo "=== $container STP ==="
     sudo docker exec $container sh -c \

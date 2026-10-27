@@ -1,23 +1,23 @@
 #!/bin/bash
-# tools/daram_sweep.sh - balaye CALYPSO_BSP_DARAM_ADDR en full mode et compare
-# l'activite du correlateur FB-det (fb0_att / snr / toa / pm).
-# But : trancher empiriquement quelle zone DARAM debloque le FB-det.
+# tools/daram_sweep.sh - sweep CALYPSO_BSP_DARAM_ADDR in full mode and compare
+# the activity of the FB-det correlator (fb0_att / snr / toa / pm).
+# Goal: decide empirically which DARAM area unblocks the FB-det.
 #
-# Robuste : run.sh est lance NO_ATTACH EN AVANT-PLAN (il rend la main seul
-# apres avoir lance qemu, qui survit orphelin). On NE backgroude PAS run.sh
-# avec & (ca cassait le pipe du log → qemu mourait). On verifie que qemu est
-# vivant avant de mesurer ; sinon on le signale.
+# Robust: run.sh is started NO_ATTACH IN THE FOREGROUND (it returns on its own
+# after starting qemu, which survives orphaned). run.sh is NOT backgrounded
+# with & (that breaks the log pipe and qemu dies). qemu is checked to be alive
+# before measuring; otherwise it is reported.
 #
-# Usage (conteneur) : /opt/GSM/daram_sweep.sh
-# Env : ADDRS (defaut "0x0080 0x2a00 0x0060"), SETTLE (attente post-boot, 50s)
+# Usage (container): /opt/GSM/daram_sweep.sh
+# Env: ADDRS (default "0x0080 0x2a00 0x0060"), SETTLE (post-boot wait, 50s)
 set -u
 RUN=/opt/GSM/qosmo-grgsm/run.sh
 QLOG=/root/qemu.log
 ADDRS="${ADDRS:-0x0080 0x2a00 0x0060}"
 SETTLE="${SETTLE:-50}"
-# Profil d'emulation du balayage. "full" a disparu de environment/modes.env :
-# les profils sont empty | shunt_legit | shunt_legit_no_inject | native |
-# native_twl | native_twl_host_demod | native_helped.
+# Emulation profile of the sweep. The profiles in environment/modes.env are
+# empty | shunt_legit | shunt_legit_no_inject | native | native_twl |
+# native_twl_host_demod | native_helped.
 MODE="${MODE:-${CALYPSO_MODE:-native}}"
 declare -A R_FB R_SB R_NZ R_BEST R_ALIVE R_STATES R_TOT
 
@@ -38,17 +38,16 @@ for a in $ADDRS; do
         exit 3
     fi
     : > "$QLOG"
-    # run.sh NO_ATTACH rend la main seul apres le launch (~30-60s). timeout = filet.
+    # run.sh NO_ATTACH returns on its own after the launch (~30-60s). timeout = safety net.
     echo "  launch run.sh (NO_ATTACH, avant-plan, le boot prend ~30-60s)..."
     timeout 150 env CALYPSO_NO_ATTACH=1 CALYPSO_MODE="$MODE" CALYPSO_ICOUNT=off \
       CALYPSO_NO_RESTART=1 CALYPSO_BSP_DARAM_ADDR="$a" "$RUN" \
       </dev/null >"/tmp/sweep_$a.out" 2>&1
     rc_run=$?
-    # Le profil a-t-il seulement ete applique ? Sans ce controle, un mode
-    # inconnu faisait avorter run.sh a son deuxieme module, l'ancien qemu
-    # (relance par la supervision) continuait d'ecrire dans le MEME journal,
-    # et le balayage mesurait cette instance-la : les trois adresses rendaient
-    # alors la meme "premiere detection", au caractere pres.
+    # Check that the profile was actually applied: with an unknown mode run.sh
+    # aborts at its second module, the previous qemu (restarted by the
+    # supervision) keeps writing to the SAME log, and the sweep would measure
+    # that instance instead.
     if grep -qa "CALYPSO_MODE inconnu\|sequence aborted" "/tmp/sweep_$a.out"; then
         echo "  !! run.sh a avorte : profil '''$MODE''' refuse par environment/modes.env" >&2
         sed -n '''/valeurs :/,+2p''' "/tmp/sweep_$a.out" | sed "s/^/     /" >&2
@@ -60,25 +59,24 @@ for a in $ADDRS; do
     for i in $(seq 1 $((SETTLE/5))); do
         sleep 5
         if pgrep -f qemu-system-arm >/dev/null; then alive=yes; else alive=no; fi
-        # stop tot si on a deja du FB data non trivial
+        # stop early once non-trivial FB data has been seen
         grep -qa "real DSP path" "$QLOG" 2>/dev/null && [ "$i" -ge 4 ] && break
     done
 
     fb=$(grep -a "real DSP path" "$QLOG" 2>/dev/null | grep -oE "fb0_att=[0-9]+" | grep -oE "[0-9]+" | sort -n | tail -1)
     sb=$(grep -a "real DSP path" "$QLOG" 2>/dev/null | grep -oE "sb_att=[0-9]+"  | grep -oE "[0-9]+" | sort -n | tail -1)
-    # Le format des lignes FBSB a change : le correlateur s'ecrit desormais
+    # Two FBSB line formats are accepted: the correlator writes
     #   data[](det=0 toa=0 pm=0 ang=0 snr=0x0000) api[](...)
-    # et non plus "last(snr=... toa=... ang=... pm=...)". Les deux motifs sont
-    # acceptes : sans cela le balayage annoncait "non0=0 / 1er_corr=none" pour
-    # TOUTES les adresses, y compris celles ou le correlateur voit tres bien
-    # l'I/Q - un faux negatif qui condamnait la bonne zone DARAM.
+    # or "last(snr=... toa=... ang=... pm=...)". Matching only one of them
+    # would report "non0=0 / 1er_corr=none" for every address, including those
+    # where the correlator sees the I/Q well.
     NUL='(det=0 toa=0 pm=0 ang=0 snr=0x0000)|snr=0 toa=0 ang=0 pm=0'
     nz=$(grep -a "real DSP path" "$QLOG" 2>/dev/null | grep -avcE "$NUL")
     best=$(grep -a "real DSP path" "$QLOG" 2>/dev/null | grep -avE "$NUL" \
              | grep -oE "(data\[\]\(det=[0-9-]+ toa=[0-9-]+ pm=[0-9-]+ ang=[0-9-]+ snr=0x[0-9a-fA-F]+\))|(last\(snr=[0-9-]+ toa=[0-9-]+ ang=[0-9-]+ pm=[0-9a-fx]+\))" \
              | head -1)
-    # Combien de passages en tout : le taux de detection compte autant que le
-    # premier succes (19 % ne suffit pas a verrouiller la synchro).
+    # Total number of hits: the detection rate matters as much as the first
+    # success (19 % is not enough to lock the synchronisation).
     tot=$(grep -ac "real DSP path" "$QLOG" 2>/dev/null)
     states=$(grep -aoE 'state=[A-Z0-9_]+' "$QLOG" 2>/dev/null | sort | uniq -c | tr '\n' ' ')
     qlines=$(wc -l < "$QLOG" 2>/dev/null)

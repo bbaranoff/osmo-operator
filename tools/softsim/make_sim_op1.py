@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# tools/softsim/make_sim_op1.py - genere le sim.xml de la SIM de l abonne du HLR
-# a partir du sim.xml de demonstration de softSIM.
+# tools/softsim/make_sim_op1.py - generates the sim.xml of the HLR subscriber SIM
+# from the softSIM demonstration sim.xml.
 #
-#   make_sim_op1.py <sim.xml de base> <sortie> [--imsi 001010001000001]
+#   make_sim_op1.py <base sim.xml> <output> [--imsi 001010001000001]
 #
-# Remplace l EF_IMSI (6f07) des deux DF par l IMSI donne, encode en BCD comme
-# TS 51.011 (octet 1 : chiffre 1 + indicateur impair + type IMSI). Le Ki n est
-# PAS ecrit ici : il vient de SOFTSIM_KI (lu par le serveur patche).
+# Replaces the EF_IMSI (6f07) of both DFs with the given IMSI, BCD encoded as in
+# TS 51.011 (byte 1: digit 1 + odd indicator + IMSI type). The Ki is NOT
+# written here: it comes from SOFTSIM_KI (read by the patched server).
 import re
 import sys
 
@@ -26,9 +26,9 @@ def imsi_body(imsi):
 
 
 def iccid_body(imsi, mcc, mnc):
-    """ICCID de 20 chiffres (89 + MCC + MNC + fin de l IMSI + 00 + cle de Luhn),
-    en BCD a quartets inverses comme TS 51.011 : le sim.xml de demonstration porte
-    un ICCID aux quartets invalides (e, a) que le mobile affichait en > et :."""
+    """20-digit ICCID (89 + MCC + MNC + end of the IMSI + 00 + Luhn key), in
+    swapped-nibble BCD as in TS 51.011: the demonstration sim.xml carries an
+    ICCID with invalid nibbles (e, a) that the mobile displays as > and :."""
     d = [int(c) for c in "89" + mcc + mnc + imsi[5:] + "00"]
     tot = 0
     for k, v in enumerate(reversed(d)):  # le chiffre de controle s ajoute apres
@@ -41,7 +41,7 @@ def iccid_body(imsi, mcc, mnc):
 
 
 def plmn_bcd(mcc, mnc):
-    """PLMN sur 3 octets (TS 31.102) : MCC1 MCC2 / MNC3 MCC3 / MNC2 MNC1."""
+    """PLMN on 3 bytes (TS 31.102): MCC1 MCC2 / MNC3 MCC3 / MNC2 MNC1."""
     m = [int(c) for c in mcc]
     n = [int(c) for c in mnc]
     n3 = n[2] if len(n) == 3 else 0xF
@@ -49,25 +49,25 @@ def plmn_bcd(mcc, mnc):
 
 
 def set_file_body(s, fid, fn):
-    """Remplace le <body> du fichier fid (DF et tous les endroits) par fn(old_hex)."""
+    """Replaces the <body> of file fid (DF and every place) with fn(old_hex)."""
     pat = re.compile(r'(<file id="%s"[^>]*>.*?<body>)([0-9a-fA-F]*)(</body>)' % fid, re.S)
     return pat.sub(lambda m: m.group(1) + fn(m.group(2)) + m.group(3), s)
 
 
 def set_plmn(s, mcc, mnc):
-    """Remplace le PLMN des fichiers qui le portent (PLMNsel, FPLMN, LOCI, SPN)."""
+    """Replaces the PLMN of the files that carry it (PLMNsel, FPLMN, LOCI, SPN)."""
     p = plmn_bcd(mcc, mnc)
-    # EF_PLMNsel : premiere entree = PLMN, le reste en ff (meme longueur)
+        # EF_PLMNsel: first entry = PLMN, the rest ff (same length)
     s = set_file_body(s, "6f30", lambda b: p + "ff" * (len(b) // 2 - 3))
-    # EF_FPLMN : aucune PLMN interdite
+        # EF_FPLMN: no forbidden PLMN
     s = set_file_body(s, "6f7b", lambda b: "ff" * (len(b) // 2))
-    # EF_LOCI : LAI = PLMN (octets 4..6 du body, apres le TMSI)
+        # EF_LOCI: LAI = PLMN (bytes 4..6 of the body, after the TMSI)
     def loci(b):
         raw = bytearray.fromhex(b)
         raw[4:7] = bytes.fromhex(p)
         return raw.hex()
     s = set_file_body(s, "6f7e", loci)
-    # EF_SPN : nom de l operateur, indicateur d affichage 00
+        # EF_SPN: operator name, display indicator 00
     s = set_file_body(s, "6f46", lambda b: "00" + "Test".encode().hex() + "ff" * (len(b) // 2 - 5))
     return s
 
@@ -77,7 +77,7 @@ def main(argv):
         raise SystemExit(__doc__)
     src, dst = argv[1], argv[2]
     imsi = argv[argv.index("--imsi") + 1] if "--imsi" in argv else "001010001000001"
-    # verification : l encodeur reproduit l IMSI de demonstration
+        # check: the encoder reproduces the demonstration IMSI
     assert imsi_body("460027217044196") == DEMO_IMSI_BODY
     body = imsi_body(imsi)
     s = open(src, encoding="utf-8").read()
@@ -87,7 +87,7 @@ def main(argv):
     mcc = imsi[:3]
     mnc = imsi[3:5]  # MNC a 2 chiffres, comme l IMSI du plan
     s = set_plmn(s, mcc, mnc)
-    # EF_ICCID (2fe2) : 10 octets, valide en BCD
+        # EF_ICCID (2fe2): 10 bytes, valid BCD
     s = set_file_body(s, "2fe2", lambda b: iccid_body(imsi, mcc, mnc))
     open(dst, "w", encoding="utf-8").write(s)
     print("EF_IMSI %s -> %s (%d occurrence(s))" % (imsi, body, n))

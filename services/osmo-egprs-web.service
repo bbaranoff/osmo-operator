@@ -2,82 +2,59 @@
 Description=osmo-nitb-for-calypso Operations Console (web dashboard)
 Documentation=https://github.com/bbaranoff/osmo-egprs-web
 After=network.target
-# ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ────────────────────────────────
-# [2026-09-04] PartOf : systemd propage a CETTE unite les arrets et relances de
-# osmo-banc.service. Sans lui, le dashboard restait debout sur :8080 devant une
-# pile morte - l etat le plus trompeur qui soit, puisqu il se lit exactement
-# comme "le banc tourne". PartOf et PAS After=osmo-banc.service : osmo-banc a
-# deja Wants= et After= vers cette unite (le dashboard demarre AVANT le banc),
-# ajouter l ordre inverse ferait un cycle que systemd casserait au hasard.
-# Le geste direct (start-native.sh --stop, le bouton du bureau, start-multi.sh)
-# est couvert de son cote, dans start-native.sh.
-# [2026-10-22] PartOf RETIRE : le tableau de bord reste en ligne par defaut, banc arrete
-# compris (demande explicite). L'arret avec le banc : CALYPSO_DASHBOARD_SUIT_BANC=1
-# (startup_scripts/10-identite-noeud.sh) ; pour systemd, remettre PartOf=osmo-banc.service.
+# ── The dashboard stays up independently of the bench ───────────────────────
+# No PartOf=osmo-banc.service: the dashboard stays online by default, bench
+# stopped included. To stop it with the bench: CALYPSO_DASHBOARD_SUIT_BANC=1
+# (startup_scripts/10-identite-noeud.sh); for systemd, add
+# PartOf=osmo-banc.service (osmo-banc already has Wants= and After= towards
+# this unit, so do not add After=osmo-banc.service here: it would be a cycle).
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/GSM/osmo-egprs-web
-# Le TLS prend le 80 (demande explicite du 12/08). Le clair descend sur 8080 :
-# les deux listeners ne peuvent pas partager un port, et supprimer le clair
-# priverait `curl http://localhost` de tout point d'entree de diagnostic.
+# TLS takes port 80. Plain HTTP goes to 8080: the two listeners cannot share a
+# port, and removing plain HTTP would deprive `curl http://localhost` of any
+# diagnostic entry point.
 Environment=HTTP_PORT=8080
 Environment=OSMO_NATIVE=1
 Environment=OSMO_OP_IDS=1
-# ⚠️ NE PAS RETIRER : interface de capture du dashboard (GSMTAP/SCTP). La copie
-# de ce unit qui vit dans le depot osmo-egprs-web l'avait perdue ; comme
-# install-web-service.sh reinstalle le unit depuis CE fichier (le Dockerfile le
-# recopie dans /opt/GSM/osmo-egprs-web/, cf. Dockerfile.run), la source unique est
-# ici. Sans CAP_IFACE la capture se rabat sur un defaut et l'onglet trafic se
-# tait — panne silencieuse, aucun message d'erreur.
+# ⚠️ Do not remove: capture interface of the dashboard (GSMTAP/SCTP). Since
+# install-web-service.sh reinstalls the unit from this file (the Dockerfile
+# copies it to /opt/GSM/osmo-egprs-web/, see Dockerfile.run), this is the single
+# source. Without CAP_IFACE the capture falls back to a default and the traffic
+# tab stays silent — no error message.
 Environment=CAP_IFACE=any
 Environment=PULSE_SERVER=unix:/var/run/pulse/native
 Environment=AUDIO_SOURCE=gsm_audio.monitor
-# --- TLS (12/08/2026) ---------------------------------------------------------
-# server.js:1161-1183 n'arme le listener HTTPS que si CES DEUX fichiers existent ;
-# sinon il journalise « HTTPS non arme : certificat absent » et reste en clair.
-# Ils sont poses par install-web-service.sh (auto-signe, jamais dans l'image :
-# une cle privee dans une image serait partagee par tous ceux qui la tirent).
-# Le meme gestionnaire de requetes et la MEME instance WebSocket servent les deux
-# portes -- on ajoute une entree, on ne deplace rien : http:// continue de marcher.
-# ⚠️ TLS sur le 80, pas sur le 443 : l'URL doit donc s'ecrire `https://<ip>:80`
-# explicitement (un navigateur qui lit `https://<ip>` irait sur 443, ferme), et
-# `http://<ip>` ne repond plus en clair — c'est du TLS qui ecoute la.
+# --- TLS -------------------------------------------------------------------
+# server.js only arms the HTTPS listener if both files below exist; otherwise it
+# logs « HTTPS non arme : certificat absent » and stays in plain HTTP.
+# They are installed by install-web-service.sh (self-signed, never in the image:
+# a private key in an image would be shared by everyone pulling it).
+# The same request handler and the same WebSocket instance serve both ports --
+# one entry is added, nothing is moved: http:// keeps working.
+# ⚠️ TLS on port 80, not 443: the URL must be written `https://<ip>:80`
+# explicitly (a browser reading `https://<ip>` would go to 443, closed), and
+# `http://<ip>` no longer answers in plain HTTP — TLS listens there.
 Environment=HTTPS_PORT=80
-# ⚠️ /etc/osmo-web-tls, PAS /opt/GSM/osmo-egprs-web/tls. C'est LA que
-# install-web-service.sh ecrit le certificat (son § 3, variable TLS_DIR), et
-# c'est aussi le defaut de server.js:1805. Ce unit nommait un troisieme
-# chemin, que personne n'ecrit jamais : le certificat existait, le listener
-# HTTPS ne s'armait pas, le journal disait « HTTPS non arme : certificat
-# absent » en citant un repertoire absent, et le dashboard restait en clair.
-# Consequence directe et sans rapport apparent : depuis une IP, le bouton
-# micro etait REFUSE PAR LE NAVIGATEUR - navigator.mediaDevices n'existe pas
-# hors contexte securise. Le diagnostic partait invariablement sur Firefox.
+# ⚠️ /etc/osmo-web-tls, not /opt/GSM/osmo-egprs-web/tls. This is where
+# install-web-service.sh writes the certificate (TLS_DIR), and it is also the
+# default of server.js. Another path would leave the HTTPS listener unarmed and
+# the dashboard in plain HTTP; a direct consequence is that the microphone
+# button is then refused by the browser (navigator.mediaDevices does not exist
+# outside a secure context).
 Environment=TLS_CERT=/etc/osmo-web-tls/cert.pem
 Environment=TLS_KEY=/etc/osmo-web-tls/key.pem
-# ⚠️ /usr/bin/node, PAS /usr/local/bin/node. Dans le conteneur, node vient de
-# install-web-service.sh, qui deballe /opt/node et pose les liens dans
-# /usr/local/bin. Dans l'ISO il vient du paquet nodesource, donc de
-# /usr/bin/node, et build-iso.sh SUPPRIME les liens /usr/local/bin/node,npm,npx
-# parce qu'ils y pendent dans le vide. Cette unite nommait l'autre chemin :
-# apres installation sur disque, le service sortait en 203/EXEC a chaque
-# demarrage, osmo-egprs-web-install echouait dans la foulee, et le dashboard
-# n'avait ni TLS ni micro. /usr/bin/node existe des DEUX cotes (le paquet
-# nodesource s'y installe aussi) : c'est le seul chemin qui vaut partout.
-# ── LE CHEMIN DE NODE N EST PAS LE MEME PARTOUT ──────────────────────────────
-# [2026-08-31] Cette ligne portait /usr/bin/node en dur. C est vrai sur l HOTE,
-# faux dans les conteneurs osmo-operator-*, ou node vit en /usr/local/bin/node
-# (lien vers /opt/node/bin/node, celui qu install-web-service.sh depose quand
-# node manque). systemd sortait alors en
-#     status=203/EXEC
-# et relançait en boucle (Restart=on-failure). 203/EXEC ne dit pas « fichier
-# introuvable » mais « je n ai pas pu executer » : on cherche des droits ou du
-# SELinux, jamais un chemin.
+# ── The node path is not the same everywhere ────────────────────────────────
+# On the host node comes from the nodesource package (/usr/bin/node; build-iso.sh
+# removes the /usr/local/bin/node,npm,npx links, which would dangle). In the
+# osmo-operator-* containers it comes from install-web-service.sh, which unpacks
+# /opt/node and links it into /usr/local/bin. A hard-coded path fails on one
+# side with status=203/EXEC (restart loop).
 #
-# /usr/bin/env resout node dans le PATH, donc a l un OU l autre emplacement.
-# Le PATH est pose explicitement juste au-dessus : celui de systemd ne contient
-# pas toujours /usr/local/bin, et un env sans PATH sur mesure retomberait
-# exactement sur le probleme qu on corrige.
+# /usr/bin/env resolves node through the PATH, so at either location. The PATH
+# is set explicitly just above: systemd's own PATH does not always contain
+# /usr/local/bin.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/bin/env node /opt/GSM/osmo-egprs-web/server.js --verbose
 Restart=on-failure

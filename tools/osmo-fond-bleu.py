@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-# Fond « Telecom Operator » en bleu : les coups de pinceau orange du fond passent
-# en dégradé violet sombre -> bleu clair (selon la luminosité du pixel).
-# Restent orange / rouge : le logo ubuntu, OPERATOR, le panneau NO RF barré et le
-# schéma téléphones -> BTS -> BSC -> MSC -> Core.
+# "Telecom Operator" wallpaper in blue: the orange brush strokes of the background
+# turn into a dark purple -> light blue gradient (by pixel luminance).
+# Kept orange / red: the ubuntu logo, OPERATOR, the barred NO RF sign and the
+# phones -> BTS -> BSC -> MSC -> Core diagram.
 #
-# [2026-10-23] Entree : la sortie de tools/osmo-fond-repos.py (2560x1600) ; les
-# zones protegees sont en coordonnees de cette image. La chaine devient :
+# Input: the output of tools/osmo-fond-repos.py (2560x1600); the protected
+# zones are in the coordinates of that image. The chain is:
 #   tools/osmo-fond-repos.py configs/gsm-lab-source.png /tmp/repos.png
 #   tools/osmo-fond-bleu.py /tmp/repos.png /tmp/bleu.png
 #   tools/osmo-fond-antenne.py /tmp/bleu.png /tmp/antenne.png
 #
-# Sans argument : toute la chaine d un coup, depuis configs/gsm-lab-source.png
-# jusqu a configs/gsm-lab-ville.jpg et configs/gsm-lab-antenne.jpg.
+# Without argument: the whole chain at once, from configs/gsm-lab-source.png
+# to configs/gsm-lab-ville.jpg and configs/gsm-lab-antenne.jpg.
 #
-# [2026-10-24] OSMO_FOND_ORANGE_HAUT=1 : la variante « banc en marche » (celle
-# sans le NO RF) melange les deux, l orange d origine en haut qui se fond en
-# degrade dans le bleu vers le bas. La chaine sans argument l applique a
-# gsm-lab-antenne.jpg seulement ; gsm-lab-ville.jpg (au repos) reste bleu.
+# OSMO_FOND_ORANGE_HAUT=1: the "bench running" variant (the one without the
+# NO RF) mixes both, the original orange at the top fading in a gradient into
+# the blue towards the bottom. The chain without argument applies it to
+# gsm-lab-antenne.jpg only; gsm-lab-ville.jpg (idle) stays blue.
 import os
 import subprocess
 import sys
@@ -50,7 +50,7 @@ a = np.asarray(im, float) / 255
 r, g, b = a[..., 0], a[..., 1], a[..., 2]
 yy, xx = np.mgrid[0:H, 0:W]
 
-# teinte (-180..180 degres) et saturation
+# hue (-180..180 degrees) and saturation
 mx, mn = a.max(2), a.min(2)
 c = mx - mn
 h = np.zeros_like(mx)
@@ -62,11 +62,11 @@ h = h * 60
 h = np.where(h > 180, h - 360, h)
 sat = np.where(mx > 0, c / np.maximum(mx, 1e-6), 0)
 
-# poids « orange » : du bordeaux (-70) au jaune orangé (60), pixels saturés
+# "orange" weight: from burgundy (-70) to orange-yellow (60), saturated pixels
 w = np.clip((60 - h) / 15, 0, 1) * np.clip((h + 70) / 30, 0, 1) * np.clip((sat - .25) / .25, 0, 1)
 
-# zones protegees : seuls les pixels vifs (logo, lettres, traits) y sont gardés,
-# les coups de pinceau plus sombres derriere passent en bleu comme le reste
+# protected zones: only the vivid pixels (logo, letters, strokes) are kept there,
+# the darker brush strokes behind turn blue like the rest
 P = np.zeros((H, W))
 for x0, y0, x1, y1 in [(192, 128, 380, 310),      # logo ubuntu
                        (200, 470, 1060, 720),     # OPERATOR
@@ -81,22 +81,22 @@ P = np.asarray(Image.fromarray((P * vif * 255).astype(np.uint8))
                .filter(ImageFilter.GaussianBlur(2 * k)), float) / 255
 w = w * (1 - P)
 if os.environ.get("OSMO_FOND_ORANGE_HAUT", "0") == "1":
-    # orange pur sur le premier cinquieme, fondu en smoothstep jusqu aux 3/5 : bleu en dessous
+        # pure orange on the first fifth, smoothstep fade down to 3/5: blue below
     u = np.clip((yy / H - 0.2) / 0.4, 0, 1)
     w = w * (u * u * (3 - 2 * u))
 
-# dégradé marine -> cyan, suivant la luminosité
-# [2026-10-24] etait violet sombre (45, 22, 85) -> bleu clair (120, 195, 255) ; demande : du cyan, un marine plus clair
+# navy -> cyan gradient, following the luminance
+# (a lighter navy and some cyan rather than dark purple -> light blue)
 L = 0.3 * r + 0.59 * g + 0.11 * b
 t = np.clip(L / 0.6, 0, 1)[..., None]
 MARINE, CYAN = np.array([35, 70, 140]) / 255, np.array([80, 225, 255]) / 255
 neuf = (MARINE * (1 - t) + CYAN * t) * (0.55 + 0.45 * np.clip(mx / 0.9, 0, 1))[..., None] * 1.15
 out = a * (1 - w[..., None]) + np.clip(neuf, 0, 1) * w[..., None]
 
-# [2026-10-24] TITRE EN UBUNTU SANS. « TELECOM OPERATOR » etait peint au pinceau dans la source : on efface
-# les lettres (blanches ou orange, dans le cadre du titre, dilatees pour prendre leur liseré sombre) en
-# rebouchant par une convolution normalisee de plus en plus large (pas d OpenCV sur le banc), puis on les
-# reecrit plus bas dans la police par defaut d Ubuntu. Le sous-titre « Open Source... » reste tel quel.
+# TITLE IN UBUNTU SANS. "TELECOM OPERATOR" is brush painted in the source: the
+# letters (white or orange, inside the title frame, dilated to take their dark
+# outline) are erased by filling with a wider and wider normalised convolution
+# (no OpenCV on the bench), then rewritten lower in the default Ubuntu font.
 X0, Y0, X1, Y1 = (round(v * k) for v in (160, 375, 1065, 708))
 L = 0.3 * out[..., 0] + 0.59 * out[..., 1] + 0.11 * out[..., 2]
 omx, omn = out.max(2), out.min(2)
@@ -116,13 +116,13 @@ for rayon in (2, 4, 8, 16, 32, 64):
     out[sel] = (num / np.maximum(den[..., None], 1e-3))[sel]
     connu[sel] = 1
 
-# [2026-10-24] un peu plus clair : gamma sur tout le fond (les sombres remontent plus que les clairs)
+# a bit lighter: gamma on the whole background (darks rise more than lights)
 out = np.clip(out, 0, 1) ** float(os.environ.get("OSMO_FOND_GAMMA", "0.82"))
 img = Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
 TITRE_FONTE = "/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf"
 ft = ImageFont.truetype(TITRE_FONTE, round(150 * k))
 ft.set_variation_by_axes([100, 800])
-# les couleurs mesurees sur les lettres peintes : TELECOM blanc casse, OPERATOR orange en degrade vertical
+# colours measured on the painted letters: TELECOM off-white, OPERATOR orange gradient
 def titre_degrade(xy, texte, haut, bas):
     masque = Image.new("L", img.size, 0)
     ImageDraw.Draw(masque).text(xy, texte, font=ft, fill=255, anchor="lt")
@@ -134,8 +134,8 @@ def titre_degrade(xy, texte, haut, bas):
 titre_degrade((round(200 * k), round(400 * k)), "TELECOM", (249, 247, 245), (248, 246, 244))
 titre_degrade((round(200 * k), round(545 * k)), "OPERATOR", (248, 112, 2), (247, 99, 2))
 
-# cadre autour du schema : tout tourne en local, sans emission radio. Le titre
-# est pose dans une coupure du trait du haut (comme une legende de fieldset).
+# frame around the diagram: everything runs locally, no radio emission. The
+# title is placed in a gap of the top stroke (like a fieldset legend).
 ORANGE = (255, 140, 40)
 SANS = "/usr/share/fonts/truetype/ubuntu/Ubuntu[wdth,wght].ttf"
 fonte = ImageFont.truetype(SANS, round(30 * k))
@@ -150,10 +150,10 @@ tl = d.textlength(titre, font=fonte)
 tx = x0 + round(40 * k)
 d.rectangle((tx - round(14 * k), y0 - round(6 * k), tx + tl + round(14 * k), y0 + round(6 * k)), fill=(0, 0, 0, 0))
 img = img.convert("RGBA")
-# la coupure doit laisser voir le fond : on efface le trait sous le titre
+# the gap must show the background: the stroke under the title is erased
 trou = Image.new("L", img.size, 255)
 ImageDraw.Draw(trou).rectangle((tx - round(14 * k), y0 - round(6 * k), tx + tl + round(14 * k), y0 + round(6 * k)), fill=0)
-# le coin du portable est DEVANT le cadre : pas de trait sur sa coque
+# the laptop corner is IN FRONT of the frame: no stroke on its shell
 ImageDraw.Draw(trou).polygon([(round(x * k), round(y * k)) for x, y in
                               ((1150, 1312), (1482, 1356), (1505, 1385), (1150, 1395))], fill=0)
 calque.putalpha(Image.fromarray(np.minimum(np.asarray(calque.getchannel("A")), np.asarray(trou))))

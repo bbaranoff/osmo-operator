@@ -1,99 +1,60 @@
 #!/bin/bash
-# iso_modules/88-lte-pmos.sh - etape 8d : la 4G (srsRAN ZeroMQ + Open5GS) et
-# l UI smartphone (postmarketOS, noyau PPP) dans le rootfs
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/88-lte-pmos.sh - step 8d: 4G (srsRAN ZeroMQ + Open5GS) and the
+# smartphone UI (postmarketOS, PPP kernel) in the rootfs.
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to be run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment variables:
+#   OSMO_ISO_LTE_BUILD=0      do not compile srsRAN/Open5GS in the chroot when
+#                             the .deb cache lacks them (ISO without 4G)
+#   OSMO_ISO_PMOS_IMAGE=PATH  pmOS VM image (.img or .img.zst) to embed;
+#                             'none' embeds nothing; default: look on the host
+#   OSMO_PMOS_IMAGE_URL=URL   download the VM image (release asset) if none found
+#   OSMO_PMOS_KERNEL_URL=URL  PPP kernel .deb to fetch when missing from the cache
+#   OSMO_ISO_PMAPORTS=0       do not embed pmaports at the kernel commit
+#   OSMO_ISO_LTE_REQUIRED=0   final check only reports, does not abort the build
+#   OSMO_SRSRAN_ARCH          ISA baseline for srsRAN builds (default x86-64-v2)
+#   OSMO_DEB_CACHE            host .deb cache (default /var/cache/osmo-debs)
 
-# ── Etape 8d : LA 4G ET LE TELEPHONE, DEPUIS LE NATIF ───────────────────────
-# [2026-09-08] Jusqu ici l ISO n avait NI srsRAN, NI Open5GS, NI le noyau
-# postmarketOS PPP : tout vivait hors depot sur la machine de reference
-# (/opt/LTE, /root/open5gs, ~nirvana/test). Ce module les pose, a partir de
-# ce que les etapes precedentes ont deja mis dans le rootfs :
+# ── Step 8d: 4G and the phone ──────────────────────────────────────────────
+# Sources used by this module:
+#   - Binaries: .deb files from /var/cache/osmo-debs, placed by
+#     50-injection-image.sh: osmo-build-libzmq, osmo-build-srsran
+#     (/opt/LTE/srsRAN_4G, /usr/local/bin), osmo-build-open5gs (/opt/LTE/open5gs,
+#     install/ prefix), osmo-build-pmos-kernel (/opt/user_interface/kernel/pmos),
+#     osmo-build-pmbootstrap (/opt/user_interface/pmos/pmbootstrap, patched).
+#     They come from packaging/snapshot-lte-debs.sh or from the Dockerfile (the
+#     pmOS kernel only from the former). If the cache lacks srsRAN/Open5GS they
+#     are compiled here in the chroot by tools/osmo-lte-install.sh --build.
+#   - apt runtime packages: PKGS in 80-chroot.sh (MongoDB repo added there).
+#   - Configs and launchers: tools/osmo-lte-install.sh and
+#     tools/osmo-pmos-install.sh, run inside the chroot from THIS repository
+#     (not the image's GitHub clone, which may lag behind).
+#   - The VM image (5 GB sparse, ~2 GB zstd) is optional, see
+#     OSMO_ISO_PMOS_IMAGE; without it osmo-pmos-build runs pmbootstrap install.
 #
-#   - LES BINAIRES viennent des .deb de /var/cache/osmo-debs, poses par
-#     50-injection-image.sh avec tous les osmo-build-* :
-#       osmo-build-libzmq, osmo-build-srsran (-> /opt/LTE/srsRAN_4G, /usr/local/bin),
-#       osmo-build-open5gs (-> /opt/LTE/open5gs, prefixe install/),
-#       osmo-build-pmos-kernel (-> /opt/user_interface/kernel/pmos),
-#       osmo-build-pmbootstrap (-> /opt/user_interface/pmos/pmbootstrap, patche).
-#     Ils sont produits soit par packaging/snapshot-lte-debs.sh (le natif,
-#     photographie), soit par le Dockerfile (compiles depuis les sources) -
-#     le noyau pmOS n a que le premier chemin (pmbootstrap, hors docker).
-#     CACHE VIDE : srsRAN et Open5GS sont COMPILES ICI, dans le chroot, par le
-#     meme tools/osmo-lte-install.sh --build (voir le bloc plus bas), et les
-#     .deb produits repartent dans le cache de l hote. OSMO_ISO_LTE_BUILD=0
-#     refuse ce rattrapage.
-#   - LES PAQUETS apt (runtime) sont dans PKGS de 80-chroot.sh, et le depot
-#     MongoDB y est ajoute avant l unique apt-get update.
-#   - LES CONFIGS ET LANCEURS sont ceux du depot : tools/osmo-lte-install.sh
-#     (configs/srsran -> /root/.config/srsran, configs/open5gs -> le prefixe,
-#     osmo-lte / osmo-epc) et tools/osmo-pmos-install.sh (/opt/user_interface/
-#     pmos : bin/, patches/, gabarit pmbootstrap, lanceurs et .desktop).
-#     Les deux tournent DANS le chroot, depuis CE depot (pas le clone GitHub
-#     de l image, qui peut etre en retard).
-#   - L IMAGE DE LA VM (5 Go creux, ~2 Go en zstd) n est PAS embarquee par
-#     defaut : OSMO_ISO_PMOS_IMAGE=/chemin/qemu-amd64.img.zst la range dans
-#     /opt/user_interface/pmos/image/, et osmo-pmos-build la decompresse au
-#     lieu de faire « pmbootstrap install ».
-#
-# [2026-09-09] CE QUE LE LIVE A APPRIS - l ISO du 3953233 avait TOUT (binaires,
-# lanceurs, pmbootstrap, noyau PPP, image de reference), et ni la 4G ni le
-# telephone ne marchaient :
-#   - open5gs-mmed (et hssd, pcrfd, smfd) mourait a l init : PAS de
-#     etc/freeDiameter/*.conf ni de etc/open5gs/tls/. Open5GS les pose par un
-#     script meson qui ne fait RIEN sous DESTDIR, et osmo-deb pack installe
-#     sous DESTDIR : le .deb n a que bin/ et lib/. Les yaml, osmo-lte-install
-#     les reposait ; freeDiameter, personne. Sans MME, pas de S1AP : srsUE
-#     recevait ConnectionReject, jamais d attach. Les .conf sont maintenant
-#     dans le depot (configs/open5gs/freeDiameter), poses avec des certificats
-#     par osmo-lte-install --configs ; le controle final les exige ET fait
-#     demarrer open5gs-mmed 3 s dans le chroot.
-#   - l icone du telephone lancait « pmbootstrap qemu » en root (la session
-#     de l ISO est root) : « Do not run pmbootstrap as root! ». Et aucun
-#     compte n avait de ~/.config/pmbootstrap_v3.cfg : le gabarit n etait
-#     que dans /etc/skel, rempli APRES la creation des comptes (84-comptes).
-#     Les lanceurs passent --as-root en root, le cfg est ecrit dans /root et
-#     /home/osmocom ici, et osmo-pmos-qemu enchaine osmo-pmos-build quand
-#     l image n est pas encore la.
-#   - pmbootstrap exige kpartx, absent de l ISO (PKGS de 80-chroot.sh).
-#   - le premier clic clonait pmaports en entier depuis GitLab, et le clone
-#     echouait presque a chaque fois : le commit du noyau est pose ICI dans
-#     /opt/user_interface/pmos/pmaports (fetch --depth 1, 110 Mo), et
-#     osmo-pmos-build le copie au lieu de cloner.
-#   - le son : la VM nue (sans modem) sortait sur la carte PONT, inaudible ;
-#     osmo-pmos-qemu appelle osmo-pmos-setup --voix des que le SSH repond,
-#     et le disque est bootindex=0 (patch pmbootstrap) - plus de detour PXE.
-#
-# Le hub (interstp) n a pas de 4G. --arm non plus (srsRAN et Open5GS ne sont
-# pas compiles pour arm64, pmbootstrap y ferait une VM x86 emulee).
+# Not for the hub (interstp) nor --arm (srsRAN and Open5GS are not built for
+# arm64, and pmbootstrap would run an emulated x86 VM).
 if [ "$ISO_ROLE" = "interstp" ] || [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
 echo -e "${GREEN}[8d/9] La 4G (srsRAN ZeroMQ + Open5GS) et l UI smartphone (postmarketOS)...${NC}"
 
-# ── /proc /sys /dev : REMONTES POUR LA DUREE DE CE MODULE ───────────────────
-# [2026-09-14] 86-finitions.sh se termine par « umount $ROOTFS/{dev/pts,proc,
-# sys,dev} » : c etait la fin du chroot, du temps ou ce module n existait pas.
-# Or TOUT ce qui suit tourne DANS le chroot - dpkg du noyau pmOS, apt (--deps),
-# la compilation srsRAN / Open5GS, systemctl enable, et les verifications
-# finales. Le cmake de srsRAN le disait a chaque configuration :
-#     Problem opening /proc/cpuinfo
-#     Problem opening /proc/meminfo
-# il ne voyait ni CPU ni memoire, et sans /dev un maintainer-script ou un
-# binaire qui lit /dev/urandom (open5gs-mmed du test de 3 s) tombe sans raison
-# lisible. On remonte donc ici ce qu il faut, et on le DEMONTE a la fin du
-# module : 90-iso.sh fait le squashfs, rien ne doit rester monte sous $ROOTFS.
-# Idempotent dans les deux sens - si un jour 86 ne demonte plus, mountpoint le
-# voit et on ne monte pas deux fois ; on ne demonte que ce qu on a monte.
+# ── /proc /sys /dev: bind-mounted for the duration of this module ─────────
+# Everything below runs inside the chroot (dpkg, apt, srsRAN/Open5GS builds,
+# final checks) and needs them; 86-finitions.sh has already unmounted them.
+# They are unmounted at the end of the module, since 90-iso.sh builds the
+# squashfs. Idempotent: already-mounted points are skipped, and only what was
+# mounted here is unmounted.
 _iso88_mnt=()
-_iso88_up() {   # _iso88_up <source hote> <point de montage, relatif au rootfs>
+_iso88_up() {   # _iso88_up <host source> <mount point, relative to the rootfs>
     local _t="$ROOTFS$2"
     [ -d "$_t" ] || install -d "$_t" 2>/dev/null || return 0
     mountpoint -q "$_t" 2>/dev/null && return 0
     mount --bind "$1" "$_t" 2>/dev/null && _iso88_mnt=("$_t" "${_iso88_mnt[@]}")
     return 0
 }
-_iso88_down() {  # ordre inverse du montage (/dev/pts avant /dev)
+_iso88_down() {  # reverse mount order (/dev/pts before /dev)
     local _m
     for _m in "${_iso88_mnt[@]}"; do umount -l "$_m" 2>/dev/null || true; done
     _iso88_mnt=()
@@ -103,10 +64,9 @@ _iso88_up /sys     /sys
 _iso88_up /dev     /dev
 _iso88_up /dev/pts /dev/pts
 
-# Le DNS du chroot, pour les clones git de --build. 81-cloture-systeme.sh a
-# remplace /etc/resolv.conf par le lien vers /run/systemd/resolve/stub-resolv.conf
-# - ce qu il faut dans l ISO, mais ici il ne designe rien. On peuple la cible :
-# /run est un tmpfs au demarrage, ce fichier ne survit pas au premier boot.
+# Chroot DNS for the git clones of --build: /etc/resolv.conf links to
+# /run/systemd/resolve/stub-resolv.conf, which is empty at build time. /run is
+# a tmpfs at boot, so this file does not survive into the live system.
 install -d "$ROOTFS/run/systemd/resolve"
 [ -s "$ROOTFS/run/systemd/resolve/stub-resolv.conf" ] || {
     grep '^nameserver' /etc/resolv.conf 2>/dev/null | grep -v '^nameserver 127\.' \
@@ -115,7 +75,7 @@ install -d "$ROOTFS/run/systemd/resolve"
 
 _rt="$ROOTFS/opt/GSM/osmo-operator"
 install -d "$_rt/tools" "$_rt/configs/srsran" "$_rt/configs/open5gs" "$_rt/configs/pmos" "$_rt/patches" "$_rt/packaging"
-# Le depot local fait foi (meme regle que 85-installeur-bureau.sh).
+# The local repository is authoritative (same rule as 85-installeur-bureau.sh).
 for _f in osmo-lte.sh osmo-epc.sh osmo-lte-install.sh osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh \
           osmo-pmos-build.sh osmo-pmos-install.sh osmo-phonesim-banc.py at-cmd.py; do
     [ -f "$DIR/tools/$_f" ] && install -m755 "$DIR/tools/$_f" "$_rt/tools/"
@@ -123,7 +83,7 @@ done
 install -m644 "$DIR"/configs/srsran/* "$_rt/configs/srsran/"
 install -m644 "$DIR"/configs/open5gs/*.yaml "$DIR"/configs/open5gs/*.json "$_rt/configs/open5gs/" 2>/dev/null || true
 [ -d "$DIR/configs/open5gs/dump" ] && cp -a "$DIR/configs/open5gs/dump" "$_rt/configs/open5gs/"
-# [2026-09-09] freeDiameter : les .conf du depot (le .deb n en a pas, voir mme.conf).
+# freeDiameter .conf files come from the repo (the Open5GS .deb has none).
 [ -d "$DIR/configs/open5gs/freeDiameter" ] && cp -a "$DIR/configs/open5gs/freeDiameter" "$_rt/configs/open5gs/"
 install -m644 "$DIR"/configs/pmos/* "$_rt/configs/pmos/"
 for _f in pmbootstrap-osmo-bench-qemu.patch pmaports-linux-postmarketos-stable-ppp.patch; do
@@ -134,8 +94,8 @@ for _f in build-pmos-kernel-deb.sh snapshot-lte-debs.sh osmo-deb.sh; do
 done
 unset _f
 
-# Le noyau pmOS PPP absent du cache : GitHub (Git LFS, bbaranoff/pmos_ppp_kernel)
-# le fournit - dans le cache de l hote, pour la prochaine fois, et dans le rootfs.
+# PPP pmOS kernel missing from the cache: fetch it from GitHub (Git LFS,
+# bbaranoff/pmos_ppp_kernel) into the host cache and the rootfs.
 if [ ! -e "$ROOTFS/opt/user_interface/kernel/pmos/APKINDEX.tar.gz" ]; then
     _kurl="${OSMO_PMOS_KERNEL_URL:-https://media.githubusercontent.com/media/bbaranoff/pmos_ppp_kernel/main/osmo-build-pmos-kernel_7.2.3.0+ppp~noble_amd64.deb}"
     _kdeb="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/$(basename "$_kurl")"
@@ -154,7 +114,7 @@ if [ ! -e "$ROOTFS/opt/user_interface/kernel/pmos/APKINDEX.tar.gz" ]; then
     unset _kurl _kdeb
 fi
 
-# Ce que les .deb ont pose (ou pas) : on le dit, on ne s arrete pas.
+# Report what the .deb files installed; warn but do not stop.
 for _c in "srsenb:/usr/local/bin/srsenb" "Open5GS:/opt/LTE/open5gs/install/bin/open5gs-mmed" \
           "noyau pmOS PPP:/opt/user_interface/kernel/pmos/APKINDEX.tar.gz" \
           "pmbootstrap:/opt/user_interface/pmos/pmbootstrap/pmbootstrap.py"; do
@@ -163,43 +123,21 @@ for _c in "srsenb:/usr/local/bin/srsenb" "Open5GS:/opt/LTE/open5gs/install/bin/o
 done
 unset _c
 
-# Le depot MongoDB de 80-chroot.sh est deja la : --deps ne fait ici que les
-# paquets qui manqueraient encore (et enable mongod). Puis les .deb du cache.
+# The MongoDB repo is already configured by 80-chroot.sh: --deps only adds
+# missing packages (and enables mongod), then the cached .deb files are installed.
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --deps --debs 2>&1 | sed 's/^/  /'
 
-# ── PAS DE .deb : ON COMPILE DANS LE CHROOT ─────────────────────────────────
-# [2026-09-09] L ISO n avait qu UN chemin vers ses binaires 4G : les .deb du
-# build docker (ou du snapshot natif). Le jour ou le Dockerfile est tombe -
-# cmake de srsRAN, « Could NOT find MbedTLS », deps apt absentes de l image -
-# le cache est reste vide et l ISO est sortie SANS srsRAN ni Open5GS, avec
-# pour seule trace le « ! absent du rootfs » ci-dessus. Une ISO muette sur sa
-# 4G, c est un banc qu on decouvre casse a l usage.
+# ── No .deb: compile in the chroot ─────────────────────────────────────────
+# The chroot has the -dev packages (PKGS in 80-chroot.sh), /proc /sys /dev and
+# DNS, so the same --build used by the Dockerfile runs here. With OSMO_DEB=1 the
+# build produces .deb files that are copied back to the host cache.
+# OSMO_ISO_LTE_BUILD=0 disables this (ISO without 4G).
 #
-# Le chroot a tout ce qu il faut pour compiler : les -dev sont dans PKGS de
-# 80-chroot.sh (libmbedtls-dev, libzmq3-dev, libconfig++-dev, boost, meson,
-# flex, bison, libmongoc-dev...), --deps vient de repasser, et /proc /sys /dev
-# et le resolv.conf de l hote y sont montes (git clone possible). On rejoue
-# donc le MEME script que le Dockerfile et que le natif : --build.
-#
-# OSMO_DEB=1 : la compilation sort en .deb, qu on RAMENE dans le cache de
-# l hote - la prochaine ISO (et le prochain docker) ne recompileront pas.
-# OSMO_ISO_LTE_BUILD=0 pour refuser ce rattrapage (build court, ISO sans 4G).
-#
-# [2026-09-14] ET SI LE .deb DU CACHE EST TAILLE POUR UNE AUTRE MACHINE ?
-# La condition ci-dessous etait « les binaires sont-ils la ? ». Un
-# osmo-build-srsran fabrique sur la machine de reference (ou par un runner de
-# CI) l est avec -march=native : son srsenb portait 19 353 instructions %ymm
-# (AVX/AVX2) et 417 FMA. Pose tel quel dans le rootfs il passe tous les
-# controles - il EXISTE, ses bibliotheques sont resolues, --help repond - et
-# l ISO sort. C est a l usage, sur la machine de l operateur, que ca tombe :
-#     /usr/local/bin/osmo-lte: line 204: ... Illegal instruction (core dumped) ... srsenb
-#     /usr/local/bin/osmo-lte: line 244: ... Illegal instruction (core dumped) ... srsue
-# Une ISO passe d une machine a l autre : ses binaires doivent etre portables.
-# On regarde donc ce que celui du cache CONTIENT, et on le refuse s il porte
-# de l AVX - la compilation ci-dessous le remplace par un binaire de base
-# commune (voir SRS_ARCH dans tools/osmo-lte-install.sh).
-_iso_srs_avx() {   # 0 = ce binaire ne tournera pas partout
+# A cached srsRAN .deb built with -march=native contains AVX instructions and
+# would die with "Illegal instruction" on other CPUs. It is rejected here and
+# rebuilt with a portable ISA baseline (see SRS_ARCH in tools/osmo-lte-install.sh).
+_iso_srs_avx() {   # 0 = this binary will not run on every CPU
     [ -x "$ROOTFS/usr/local/bin/srsenb" ] || return 1
     command -v objdump >/dev/null 2>&1 || return 1
     objdump -d "$ROOTFS/usr/local/bin/srsenb" 2>/dev/null | grep -qE '%[yz]mm[0-9]'
@@ -207,9 +145,8 @@ _iso_srs_avx() {   # 0 = ce binaire ne tournera pas partout
 if _iso_srs_avx; then
     echo -e "  ${YELLOW}!${NC} srsenb du cache .deb taille pour le CPU du build (AVX) : il ferait « Illegal instruction » ailleurs"
     rm -f "$ROOTFS"/usr/local/bin/srsenb "$ROOTFS"/usr/local/bin/srsue "$ROOTFS"/usr/local/bin/srsepc
-    # Le .deb fautif est ecarte du cache de l hote (renomme, pas efface : le
-    # glob de recuperation plus bas ne prend que *.deb, et l operateur garde
-    # de quoi comprendre). Sans ca, la prochaine ISO le reposerait.
+    # Move the offending .deb aside in the host cache (renamed, not deleted; the
+    # recovery glob below only takes *.deb) so the next ISO does not reuse it.
     for _sd in "${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"/osmo-build-srsran_*.deb; do
         [ -f "$_sd" ] || continue
         mv -f "$_sd" "$_sd.avx-natif" && echo -e "    ${CYAN}·${NC} $(basename "$_sd") ecarte -> $(basename "$_sd").avx-natif"
@@ -222,15 +159,13 @@ if [ ! -x "$ROOTFS/usr/local/bin/srsenb" ] || [ ! -x "$ROOTFS/opt/LTE/open5gs/in
         echo -e "  ${YELLOW}!${NC} 4G absente du cache .deb : compilation dans le chroot (long)"
         install -d "$ROOTFS/var/cache/osmo-debs"
         [ -f "$DIR/packaging/osmo-deb.sh" ] && install -m755 "$DIR/packaging/osmo-deb.sh" "$ROOTFS/usr/local/sbin/osmo-deb"
-        # OSMO_SRSRAN_ARCH : la base ISA des binaires de l ISO. Le defaut du
-        # script (x86-64-v2) est ce qu il faut ici - une ISO doit tourner
-        # ailleurs que sur la machine qui l a construite ; on le passe quand
-        # meme explicitement pour qu un build particulier puisse le changer.
+        # OSMO_SRSRAN_ARCH: ISA baseline of the ISO binaries. The script default
+        # (x86-64-v2) is right for an ISO; passed explicitly so a build can override it.
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive OSMO_DEB=1 OSMO_REPO=/opt/GSM/osmo-operator \
             OSMO_SRSRAN_ARCH="${OSMO_SRSRAN_ARCH:-x86-64-v2}" \
             bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --build 2>&1 | sed 's/^/  /' \
             || echo -e "  ${YELLOW}!${NC} compilation 4G echouee dans le chroot - ISO sans srsRAN/Open5GS"
-        # Les .deb fraichement produits repartent dans le cache de l hote.
+        # Copy freshly built .deb files back to the host cache.
         _dc="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
         install -d "$_dc"
         for _d in "$ROOTFS"/var/cache/osmo-debs/osmo-build-*.deb; do
@@ -244,21 +179,15 @@ if [ ! -x "$ROOTFS/usr/local/bin/srsenb" ] || [ ! -x "$ROOTFS/opt/LTE/open5gs/in
     fi
 fi
 
-# Les configs Open5GS ne se posent que si le prefixe existe : APRES le build.
+# Open5GS configs are only installed if the prefix exists: after the build.
 chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --configs --launchers 2>&1 | sed 's/^/  /'
 chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-pmos-install.sh 2>&1 | sed 's/^/  /'
 
-# [2026-09-08] L IMAGE DE REFERENCE, PAR DEFAUT. Le build du soir avait ete
-# lance sans OSMO_ISO_PMOS_IMAGE : l ISO avait srsRAN, Open5GS, le noyau PPP
-# et pmbootstrap, mais PAS le telephone - le premier osmo-pmos retombait sur
-# un « pmbootstrap install » complet (long, reseau). La machine de reference
-# porte pourtant l image prete a l endroit meme ou osmo-pmos-build la cherche
-# (/opt/user_interface/pmos/image). Si la variable n est pas donnee, on prend
-# donc celle de l hote : l ISO devient ce qu est le disque. Le .zst pret est
-# prefere ; a defaut l image brute de pmbootstrap, compressee au passage.
-# OSMO_ISO_PMOS_IMAGE=none pour ne rien embarquer.
+# Default VM image: if OSMO_ISO_PMOS_IMAGE is unset, use the host's image
+# (where osmo-pmos-build looks for it). A ready .zst is preferred, otherwise
+# the raw pmbootstrap image is compressed. OSMO_ISO_PMOS_IMAGE=none embeds nothing.
 if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     for _cand in /opt/user_interface/pmos/image/qemu-amd64.img.zst \
                  "${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst" \
@@ -272,27 +201,20 @@ if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     unset _cand
 fi
 
-# [2026-09-13] ET SUR UN RUNNER GITHUB ? Aucune machine de reference : pas de
-# /opt/user_interface/pmos/image, pas de dossier de travail pmbootstrap - la
-# boucle ci-dessus ne trouve rien et l ISO de la CI sort sans telephone pret.
-# Meme remede que pour le noyau (plus haut), mais PAS par Git LFS : 1,7 Go
-# creveraient le quota LFS (1 Go de stockage et 1 Go de trafic par mois). Un
-# ASSET DE RELEASE n a pas de quota de trafic et plafonne a 2 Gio par fichier -
-# l image y tient. Publier une fois, depuis la machine de reference :
+# No image on the host (e.g. CI runner): download it from
+# OSMO_PMOS_IMAGE_URL if set. The image is a release asset (too big for the
+# Git LFS quota). Publish once from a reference machine:
 #
 #   gh release create pmos-image --repo bbaranoff/osmo-operator \
 #       --title "postmarketOS - VM de reference (noyau PPP)" --notes "..." \
 #       /opt/user_interface/pmos/image/qemu-amd64.img.zst
 #
-# puis OSMO_PMOS_IMAGE_URL=<url de l asset> au build (le workflow le passe).
-# Vide = on ne telecharge rien : c est le defaut, l image pese trois fois son
-# poids dans un build --all (operator, lite, desktop).
+# Empty (default) = no download.
 if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
     _icache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/qemu-amd64.img.zst"
     echo -e "  ${CYAN}·${NC} image de la VM : telechargement depuis $OSMO_PMOS_IMAGE_URL"
     install -d "$(dirname "$_icache")"
-    # zstd -t : un 404 ou une coupure donnent un fichier bien forme pour curl et
-    # illisible pour zstd - c est ici qu on veut le savoir, pas dans l ISO.
+    # zstd -t catches a 404 page or truncated download here rather than in the ISO.
     if curl -fsSL --retry 3 --retry-delay 5 -o "$_icache.part" "$OSMO_PMOS_IMAGE_URL" \
        && zstd -t "$_icache.part" >/dev/null 2>&1; then
         mv -f "$_icache.part" "$_icache"
@@ -305,7 +227,7 @@ if [ -z "${OSMO_ISO_PMOS_IMAGE:-}" ] && [ -n "${OSMO_PMOS_IMAGE_URL:-}" ]; then
     unset _icache
 fi
 [ "${OSMO_ISO_PMOS_IMAGE:-}" = "none" ] && OSMO_ISO_PMOS_IMAGE=""
-# L image de la VM : celle donnee, ou celle de l hote (voir ci-dessus).
+# Embed the VM image: the given one, or the host's (see above).
 if [ -n "${OSMO_ISO_PMOS_IMAGE:-}" ]; then
     if [ -f "$OSMO_ISO_PMOS_IMAGE" ]; then
         install -d "$ROOTFS/opt/user_interface/pmos/image"
@@ -320,17 +242,12 @@ else
     echo -e "  ${CYAN}·${NC} image de la VM non embarquee (OSMO_ISO_PMOS_IMAGE=... pour l ajouter) : osmo-pmos-build la fera"
 fi
 
-# ── PMAPORTS DANS L ISO, AU COMMIT DU NOYAU ─────────────────────────────────
-# [2026-09-09] Le premier clic sur le telephone clonait pmaports EN ENTIER
-# depuis GitLab (des centaines de Mo) ; depuis le live, deux essais sur trois
-# ont echoue, et git efface tout a l echec : « ca me clone a chaque fois et
-# ca boot pas ». On pose donc ici le SEUL commit qu il faut - celui du noyau
-# PPP (kernel/pmos/pmaports.commit), fetch --depth 1, quelques dizaines de
-# Mo, avec la ref origin/main que pmbootstrap exige pour lire channels.cfg -
-# dans /opt/user_interface/pmos/pmaports ; osmo-pmos-build le COPIE dans
-# le dossier de travail du compte au lieu de cloner. Garde dans le cache de
-# l hote (OSMO_DEB_CACHE) pour les ISO suivantes. OSMO_ISO_PMAPORTS=0 pour
-# s en passer.
+# ── pmaports in the ISO, at the kernel commit ──────────────────────────────
+# Fetch only the commit of the PPP kernel (kernel/pmos/pmaports.commit,
+# --depth 1) with the origin/main ref pmbootstrap needs to read channels.cfg,
+# into /opt/user_interface/pmos/pmaports; osmo-pmos-build copies it instead of
+# cloning the full pmaports. Kept in the host cache (OSMO_DEB_CACHE).
+# OSMO_ISO_PMAPORTS=0 disables it.
 _pc="$(cat "$ROOTFS/opt/user_interface/kernel/pmos/pmaports.commit" 2>/dev/null || true)"
 if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ] && [ -n "$_pc" ] && [ "$_pc" != inconnu ]; then
     _pcache="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}/pmaports-$_pc"
@@ -352,18 +269,15 @@ if [ "${OSMO_ISO_PMAPORTS:-1}" = "1" ] && [ -n "$_pc" ] && [ "$_pc" != inconnu ]
 fi
 unset _pc
 
-# Le compte de session lancera pmbootstrap : /opt/user_interface doit lui
-# etre lisible, et le gabarit de config est pose dans /etc/skel pour qu un
-# compte cree par Calamares le trouve (shellprocess-osmo.conf y met les
-# chemins de SON home).
+# The session account runs pmbootstrap: /opt/user_interface must be readable,
+# and the config template goes to /etc/skel for accounts created by Calamares
+# (shellprocess-osmo.conf fills in the paths of their home).
 chroot "$ROOTFS" chmod -R a+rX /opt/user_interface 2>/dev/null || true
 install -d "$ROOTFS/etc/skel/.config"
 install -m644 "$DIR/configs/pmos/pmbootstrap_v3.cfg" "$ROOTFS/etc/skel/.config/pmbootstrap_v3.cfg.osmo"
-# [2026-09-09] ET DANS LES COMPTES QUI EXISTENT DEJA. /etc/skel ne sert qu aux
-# comptes crees APRES : root et osmocom le sont par 84-comptes.sh, avant ce
-# module - sur l ISO aucun des deux n avait de ~/.config/pmbootstrap_v3.cfg,
-# et la session s ouvre sur root. Meme substitution que shellprocess-osmo.conf
-# (dossier de travail ~/.local/var/pmbootstrap).
+# Existing accounts too: root and osmocom are created by 84-comptes.sh before
+# this module, so /etc/skel does not apply. Same substitution as
+# shellprocess-osmo.conf (work dir ~/.local/var/pmbootstrap).
 for _h in /root /home/osmocom; do
     [ -d "$ROOTFS$_h" ] || continue
     [ -s "$ROOTFS$_h/.config/pmbootstrap_v3.cfg" ] && continue
@@ -375,7 +289,7 @@ chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom/.config 2>/dev/null || t
 unset _h
 echo -e "  ${GREEN}✓${NC} pmbootstrap_v3.cfg : /root, /home/osmocom, /etc/skel"
 
-# Lite : les objets de compilation de /opt/LTE ne servent pas a tourner.
+# Lite: build objects in /opt/LTE are not needed at runtime.
 if [ "$ISO_LITE" = "1" ]; then
     _before=$(du -sh "$ROOTFS/opt/LTE" 2>/dev/null | cut -f1)
     find "$ROOTFS/opt/LTE/srsRAN_4G/build" "$ROOTFS/opt/LTE/open5gs/build" -name '*.o' -delete 2>/dev/null || true
@@ -384,47 +298,31 @@ if [ "$ISO_LITE" = "1" ]; then
 fi
 unset _rt _before
 
-# ── LE CONTROLE FINAL : L ISO DOIT ETRE PRETE A L EMPLOI, 2G + 4G + TELEPHONE ─
-# [2026-09-09] Jusqu ici ce module ne faisait que DIRE ce qui manquait (les
-# « ! absent du rootfs » plus haut) et l ISO sortait quand meme - une ISO ou
-# l icone « 4G du banc » ne lancait rien, ou Open5GS n avait pas de mme.yaml
-# (donc pas de SGs, donc pas de CSFB), ou mongod manquait (le HSS meurt a
-# l init, l attach echoue). Or ce qu on attend d elle est simple : l
-# operateur clique « Lancer le banc GSM », puis « 4G du banc », puis « le
-# telephone pmOS », et ca marche. On verifie donc ICI, dans le rootfs, chaque
-# maillon de ces trois gestes, et on ARRETE le build s il en manque un :
-# mieux vaut une heure de build perdue qu une cle qui ment.
-# OSMO_ISO_LTE_REQUIRED=0 pour ne faire que l inventaire (ISO sans 4G assumee).
+# ── Final check: the ISO must be ready to use, 2G + 4G + phone ────────────
+# Verify in the rootfs every link needed to launch the GSM bench, the 4G and
+# the pmOS phone, and abort the build if one is missing.
+# OSMO_ISO_LTE_REQUIRED=0 only reports (ISO without 4G accepted).
 echo -e "  ${CYAN}·${NC} controle final : 2G + 4G + telephone dans le rootfs"
 _ko=0
-_chk() {  # _chk <libelle> <test chroot...>
+_chk() {  # _chk <label> <chroot test command...>
     local l="$1"; shift
     if chroot "$ROOTFS" "$@" >/dev/null 2>&1; then echo -e "      ${GREEN}✓${NC} $l"
     else echo -e "      ${RED}✗${NC} $l"; _ko=$((_ko + 1)); fi
 }
-# La 2G : le banc, son unite, et le SGs d osmo-msc (l attach combine, le CSFB)
+# 2G: the bench, its unit, and osmo-msc SGs (combined attach, CSFB)
 _chk "2G  launch.sh (icone « Lancer le banc GSM »)"       test -x /opt/GSM/osmo-operator/launch.sh
 _chk "2G  osmo-banc.service"                               test -s /etc/systemd/system/osmo-banc.service
 _chk "2G  osmo-msc.cfg : section sgs (CSFB)"               grep -q '^sgs' /etc/osmocom/osmo-msc.cfg
-# La 4G : binaires, configs (dont le SGs cote MME), lanceurs, unite, MongoDB
+# 4G: binaries, configs (incl. MME SGs), launchers, unit, MongoDB
 _chk "4G  srsenb / srsue"                                  bash -c 'test -x /usr/local/bin/srsenb && test -x /usr/local/bin/srsue'
-# ── ET LEURS BIBLIOTHEQUES SONT-ELLES TOUTES LA ? ───────────────────────────
-# [2026-09-10] srsRAN est desormais compile avec ENABLE_GUI=ON : srsenb et
-# srsue se LIENT a libsrsgui (srsGUI, /usr/local/lib), posee avant eux par
-# osmo-build-srsgui. Une image qui aurait les binaires SANS la bibliotheque
-# donnerait « error while loading shared libraries: libsrsgui.so » au premier
-# clic sur l icone 4G - et rien avant. Le `ldd` couvre srsgui comme le reste.
+# ── Are all their libraries present? ──────────────────────────────────────
+# srsRAN is built with ENABLE_GUI=ON and links to libsrsgui (/usr/local/lib).
 _chk "4G  srsenb / srsue : bibliotheques toutes resolues" \
     bash -c 'for b in srsenb srsue; do ldd /usr/local/bin/$b 2>/dev/null | grep -q "not found" && exit 1; done; exit 0'
-# ── ET TOURNERONT-ILS SUR LA MACHINE DE L OPERATEUR ? ───────────────────────
-# [2026-09-14] Le controle le plus discret et le plus couteux : des binaires
-# presents, lies, qui repondent a --help, et qui meurent en « Illegal
-# instruction » des le premier vrai lancement parce qu ils ont ete compiles
-# avec -march=native sur une autre machine. C est exactement ce qu a vecu
-# l operateur. Une instruction AVX (%ymm) ou AVX512 (%zmm) dans srsenb ou
-# srsue condamne l ISO hors du CPU qui l a construite : ici, c est une faute.
-# Le test se fait depuis l hote (objdump du rootfs), l ISO n embarque pas
-# binutils. Sans objdump sur l hote on ne juge pas : on le dit.
+# ── Will they run on the operator's machine? ──────────────────────────────
+# An AVX (%ymm) or AVX512 (%zmm) instruction in srsenb/srsue ties the ISO to
+# the build CPU: treated as an error. Checked from the host (objdump on the
+# rootfs; the ISO has no binutils). Skipped with a notice if objdump is missing.
 if command -v objdump >/dev/null 2>&1; then
     if objdump -d "$ROOTFS/usr/local/bin/srsenb" 2>/dev/null | grep -qE '%[yz]mm[0-9]' \
        || objdump -d "$ROOTFS/usr/local/bin/srsue" 2>/dev/null | grep -qE '%[yz]mm[0-9]'; then
@@ -437,7 +335,7 @@ if command -v objdump >/dev/null 2>&1; then
 else
     echo -e "      ${CYAN}·${NC} 4G  objdump absent de l hote : portabilite ISA de srsenb non verifiee"
 fi
-# Les traces temps reel sont un bonus, pas une condition : on les ANNONCE.
+# Real-time traces (srsGUI) are optional: only reported.
 if chroot "$ROOTFS" bash -c 'ldd /usr/local/bin/srsenb 2>/dev/null | grep -q libsrsgui' 2>/dev/null; then
     echo -e "      ${GREEN}✓${NC} 4G  srsGUI : traces temps reel armees (srsenb lie a libsrsgui)"
 else
@@ -447,10 +345,9 @@ _chk "4G  open5gs-mmed / open5gs-hssd"                     bash -c 'test -x /opt
 _chk "4G  mme.yaml du depot avec sgsap (CSFB)"             grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml
 _chk "4G  freeDiameter mme/hss/pcrf/smf.conf (S6a, Gx)"   bash -c 'for n in mme hss pcrf smf; do test -s /opt/LTE/open5gs/install/etc/freeDiameter/$n.conf || exit 1; done'
 _chk "4G  TLS freeDiameter (ca + mme/hss/pcrf/smf)"       bash -c 'for n in ca mme hss pcrf smf; do test -s /opt/LTE/open5gs/install/etc/open5gs/tls/$n.crt || exit 1; done'
-# Et le MME DEMARRE-T-IL ? 3 s au premier plan dans le chroot : une config
-# absente ou une lib manquante se voient LA, pas au premier clic (c est
-# exactement la panne du live du 2026-09-09). Un port deja pris sur l hote
-# (sa propre 4G tourne) n est pas une faute de l ISO : on le dit, sans juger.
+# Does the MME start? 3 s in the foreground in the chroot catches missing
+# configs or libraries. A port already in use on the host (its own 4G running)
+# is not an ISO fault: reported without failing.
 _o="$(chroot "$ROOTFS" timeout 3 /opt/LTE/open5gs/install/bin/open5gs-mmed -c /opt/LTE/open5gs/install/etc/open5gs/mme.yaml 2>&1 || true)"
 rm -f "$ROOTFS/opt/LTE/open5gs/install/var/log/open5gs/mme.log"
 if echo "$_o" | grep -aq 'Address already in use'; then
@@ -465,15 +362,14 @@ fi
 unset _o
 _chk "4G  configs srsRAN (/root/.config/srsran)"           bash -c 'test -s /root/.config/srsran/enb.conf && test -s /root/.config/srsran/ue.conf && test -s /root/.config/srsran/user_db.csv'
 _chk "4G  osmo-lte / osmo-epc"                             bash -c 'test -x /usr/local/bin/osmo-lte && test -x /usr/local/bin/osmo-epc'
-# [2026-09-16] La data du telephone : docker met FORWARD a DROP, et sans la
-# regle DOCKER-USER posee par osmo-epc (setup_forward), osmo-pmos-qemu
-# (pmos_forward) et le modem du banc (session PPP), le PPP monte mais rien ne
-# sort de l hote. L ISO ne part pas sans ces trois-la.
+# Phone data path: docker sets FORWARD to DROP; the DOCKER-USER rules from
+# osmo-epc (setup_forward), osmo-pmos-qemu (pmos_forward) and the bench modem
+# (PPP session) are required for traffic to leave the host.
 _chk "4G  FORWARD ogstun : osmo-epc, osmo-pmos-qemu, phonesim" bash -c 'grep -q "^setup_forward()" /opt/GSM/osmo-operator/tools/osmo-epc.sh && grep -q "^pmos_forward()" /opt/GSM/osmo-operator/tools/osmo-pmos-qemu.sh && grep -q "DOCKER-USER" /opt/GSM/osmo-operator/tools/osmo-phonesim-banc.py'
 _chk "4G  osmo-lte.service + osmo-lte.desktop"             bash -c 'test -s /etc/systemd/system/osmo-lte.service && test -s /usr/share/applications/osmo-lte.desktop'
 _chk "4G  mongod + mongosh + mongorestore (abonnes HSS)"   bash -c 'command -v mongod && command -v mongosh && command -v mongorestore'
 _chk "4G  abonnes du depot (dump mongo + subscribers.json)" bash -c 'test -s /opt/GSM/osmo-operator/configs/open5gs/dump/open5gs/subscribers.bson && test -s /opt/GSM/osmo-operator/configs/open5gs/subscribers.json'
-# Le telephone : pmbootstrap patche, le noyau PPP, le lanceur et son icone
+# Phone: patched pmbootstrap, PPP kernel, launcher and icon
 _chk "pmOS pmbootstrap (/opt/user_interface/pmos)"         test -s /opt/user_interface/pmos/pmbootstrap/pmbootstrap.py
 _chk "pmOS noyau PPP (APKINDEX)"                           test -s /opt/user_interface/kernel/pmos/APKINDEX.tar.gz
 _chk "pmOS osmo-pmos + osmo-pmos.desktop"                  bash -c 'test -x /usr/local/bin/osmo-pmos && test -s /usr/share/applications/osmo-pmos.desktop'
@@ -499,12 +395,11 @@ else
 fi
 unset _ko; unset -f _chk
 
-# Fin du chroot de ce module : ce qu on a monte plus haut repart, sinon le
-# squashfs de 90-iso.sh embarquerait /proc et /sys de l hote.
+# Unmount what was mounted above, otherwise the squashfs of 90-iso.sh would
+# include the host's /proc and /sys.
 _iso88_down; unset _iso88_mnt; unset -f _iso88_up _iso88_down
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. Always return 0 here.
 true

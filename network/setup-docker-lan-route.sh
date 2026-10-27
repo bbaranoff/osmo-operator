@@ -1,51 +1,51 @@
 #!/bin/bash
 # =============================================================================
-# network/setup-docker-lan-route.sh - les conteneurs docker vus du LAN, ROUTES
+# network/setup-docker-lan-route.sh - the docker containers seen from the LAN, ROUTED
 #
-# Les operateurs docker vivent sur le backbone 172.20.0.0/24 (osmo-operator-1 en
-# .11, -2 en .12, -3 en .13 ; l'inter-STP en .10). Les VM VirtualBox, elles, sont
-# en acces par pont sur 192.168.1.0/24 avec le hub SS7 en .49. Les deux mondes
-# s'ignorent : rien ne dit au LAN ou trouver 172.20.0.0/24.
+# The docker operators live on the 172.20.0.0/24 backbone (osmo-operator-1 at
+# .11, -2 at .12, -3 at .13; the inter-STP at .10). The VirtualBox VMs are
+# bridged on 192.168.1.0/24 with the SS7 hub at .49. The two worlds ignore
+# each other: nothing tells the LAN where to find 172.20.0.0/24.
 #
-# CE SCRIPT EN FAIT UN SEUL RESEAU, PAR ROUTAGE
-# L'hote porte les deux (192.168.1.101 cote LAN, 172.20.0.1 cote docker) : il lui
-# suffit de router. Pas de macvlan, pas de renumerotation, pas de publication de
-# ports - les conteneurs gardent leurs adresses, et les VM les joignent telles
-# quelles.
+# THIS SCRIPT MAKES THEM ONE NETWORK, BY ROUTING
+# The host carries both (192.168.1.101 LAN side, 172.20.0.1 docker side): it
+# only has to route. No macvlan, no renumbering, no port publishing - the
+# containers keep their addresses, and the VMs reach them as they are.
 #
-# POURQUOI PAS SIMPLEMENT -p (publication de ports)
-# Une publication NAT presente TOUS les conteneurs sous l'IP de l'hote. Or
-# l'inter-STP identifie ses ASP par leur adresse source ("match=" dans les blocs
-# type=identify) : trois operateurs derriere une seule IP sont indiscernables, et
-# le hub rattache leurs associations au mauvais AS - ou les refuse. Le routage,
-# lui, preserve l'adresse d'origine.
 #
-# LES TROIS CHOSES A FAIRE, ET POURQUOI CHACUNE
-#   1. ip_forward       sans lui l'hote ne route rien, il ne fait que recevoir.
-#   2. pas de masquage vers le LAN
-#                       docker MASQUERADE tout ce qui sort du bridge vers
-#                       l'exterieur. Le hub verrait alors 192.168.1.101 partout,
-#                       au lieu de 172.20.0.11/12/13 - exactement ce que le
-#                       paragraphe ci-dessus dit d'eviter. On insere donc un
-#                       RETURN avant la regle de docker, pour la seule
-#                       destination 192.168.1.0/24.
-#   3. FORWARD autorise docker pose un FORWARD par defaut a DROP. La chaine
-#                       DOCKER-USER est faite pour ca : elle est consultee AVANT
-#                       les regles de docker, et il ne la reecrit pas.
+# WHY NOT SIMPLY -p (port publishing)
+# A NAT publication presents ALL containers under the host's IP. But the
+# inter-STP identifies its ASPs by their source address ("match=" in the
+# type=identify blocks): three operators behind a single IP cannot be told
+# apart, and the hub attaches their associations to the wrong AS - or refuses
+# them. Routing preserves the original address.
 #
-# COTE VM, une route a ajouter (le script l'affiche, et la pose si --push) :
-#     ip route add 172.20.0.0/24 via <IP de l hote>
+# THE THREE THINGS TO DO, AND WHY EACH
+#   1. ip_forward       without it the host routes nothing, it only receives.
+#   2. no masquerading towards the LAN
+#                       docker MASQUERADEs everything leaving the bridge for
+#                       the outside. The hub would then see 192.168.1.101
+#                       everywhere instead of 172.20.0.11/12/13 - exactly what
+#                       the paragraph above says to avoid. A RETURN is inserted
+#                       before docker's rule, for the single destination
+#                       192.168.1.0/24.
+#   3. FORWARD allowed  docker sets a default FORWARD policy of DROP. The
+#                       DOCKER-USER chain is made for this: consulted BEFORE
+#                       docker's rules, and docker does not rewrite it.
 #
-# Usage :
-#   sudo network/setup-docker-lan-route.sh              applique sur l'hote
+# VM SIDE, one route to add (the script prints it, and installs it with --push):
+#     ip route add 172.20.0.0/24 via <host IP>
+#
+# Usage:
+#   sudo network/setup-docker-lan-route.sh              apply on the host
 #   sudo network/setup-docker-lan-route.sh --push "192.168.1.123 192.168.1.49"
-#                                                       + pose la route sur ces VM
-#   sudo network/setup-docker-lan-route.sh --status     etat, sans rien changer
-#   sudo network/setup-docker-lan-route.sh --undo       retire ce que le script a pose
+#                                                       + install the route on these VMs
+#   sudo network/setup-docker-lan-route.sh --status     status, changes nothing
+#   sudo network/setup-docker-lan-route.sh --undo       removes what the script installed
 #
-#   --docker-net CIDR   reseau des conteneurs (defaut 172.20.0.0/24)
-#   --lan CIDR          reseau du LAN         (defaut : deduit de l'interface)
-#   --iface NOM         interface LAN         (defaut : celle de la route par defaut)
+#   --docker-net CIDR   container network (default 172.20.0.0/24)
+#   --lan CIDR          LAN network        (default: derived from the interface)
+#   --iface NAME        LAN interface      (default: the one of the default route)
 # =============================================================================
 set -uo pipefail
 
@@ -76,7 +76,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# ── Ou sommes-nous ? ────────────────────────────────────────────────────────
+# ── Where are we? ───────────────────────────────────────────────────────────
 [ -n "$IFACE" ] || IFACE="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
 [ -n "$IFACE" ] || { echo -e "${RED}Aucune interface par defaut - precisez --iface${NC}" >&2; exit 1; }
 
@@ -136,17 +136,18 @@ if [ "$ACTION" = "undo" ]; then
     exit 0
 fi
 
-# ── 1. Le routage ───────────────────────────────────────────────────────────
+# ── 1. Routing ──────────────────────────────────────────────────────────────
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != "1" ]; then
     sysctl -qw net.ipv4.ip_forward=1 && echo -e "  ${GREEN}✓${NC} ip_forward active"
 else
     echo -e "  ${GREEN}✓${NC} ip_forward deja actif"
 fi
 
-# ── 2. Ne PAS masquer vers le LAN ───────────────────────────────────────────
-# -I : en TETE de POSTROUTING, donc avant le MASQUERADE que docker y a mis. Un
-# RETURN rend la main a la chaine appelante sans masquer : le paquet garde son
-# adresse source 172.20.0.x, et le hub SS7 reconnait l'operateur qui l'emet.
+# ── 2. Do NOT masquerade towards the LAN ────────────────────────────────────
+# -I: at the HEAD of POSTROUTING, hence before the MASQUERADE docker put
+# there. A RETURN hands back to the calling chain without masquerading: the
+# packet keeps its 172.20.0.x source address, and the SS7 hub recognises the
+# operator that sends it.
 if iptables -t nat -C POSTROUTING -s "$DOCKER_NET" -d "$LAN_NET" -j RETURN 2>/dev/null; then
     echo -e "  ${GREEN}✓${NC} non-masquage deja en place"
 else
@@ -154,9 +155,9 @@ else
         && echo -e "  ${GREEN}✓${NC} ${DOCKER_NET} -> ${LAN_NET} : adresse source preservee"
 fi
 
-# ── 3. Autoriser le FORWARD dans les deux sens ──────────────────────────────
-# DOCKER-USER est consultee avant les regles de docker, et docker ne la reecrit
-# pas : c'est le seul endroit ou une regle survit a un redemarrage du daemon.
+# ── 3. Allow FORWARD in both directions ─────────────────────────────────────
+# DOCKER-USER is consulted before docker's rules, and docker does not rewrite
+# it: the only place where a rule survives a daemon restart.
 iptables -N DOCKER-USER 2>/dev/null || true
 for spec in "-s ${LAN_NET} -d ${DOCKER_NET}" "-s ${DOCKER_NET} -d ${LAN_NET}"; do
     # shellcheck disable=SC2086
@@ -169,7 +170,8 @@ for spec in "-s ${LAN_NET} -d ${DOCKER_NET}" "-s ${DOCKER_NET} -d ${LAN_NET}"; d
     fi
 done
 
-# ── 4. La route, cote VM ────────────────────────────────────────────────────
+# ── 4. The route, VM side ───────────────────────────────────────────────────
+
 echo ""
 echo -e "  ${BOLD}Il reste UNE chose, sur chaque VM :${NC}"
 echo -e "    ${CYAN}ip route add ${DOCKER_NET} via ${HOST_IP}${NC}"

@@ -1,17 +1,17 @@
-# responder.py - le repondeur MAP de la console.
+# responder.py - the console's MAP responder.
 #
-# Pourquoi : dans ce lab, Osmocom fait dialoguer MSC et HLR en GSUP, pas en
-# MAP. Un sendRoutingInfoForSM envoye vers le HLR reel ne trouve donc personne
-# a l'ecoute, et le SS7 semble muet alors qu'il achemine parfaitement.
+# Why: in this lab, Osmocom makes MSC and HLR talk GSUP, not MAP. A
+# sendRoutingInfoForSM sent to the real HLR therefore finds nobody listening,
+# and SS7 looks silent even though it routes perfectly.
 #
-# Le repondeur comble ce trou : il s'attache au meme inter-STP, avec son propre
-# point code et le SSN 6 (HLR), et repond aux interrogations MAP en puisant les
-# donnees dans le VRAI HLR par son VTY. Le trajet, lui, est bien reel : le
-# message traverse le hub SS7 comme n'importe quel trafic entre operateurs.
+# The responder fills that gap: it attaches to the same inter-STP, with its
+# own point code and SSN 6 (HLR), and answers MAP interrogations with data
+# taken from the REAL HLR through its VTY. The path itself is real: the
+# message crosses the SS7 hub like any traffic between operators.
 #
-#   Terminal A :  ./navigation/ss7-console.py serve --pc 1.11.61
-#   Terminal B :  ./navigation/ss7-console.py map sri-sm --pc 1.11.61 \
-#                     msisdn=100101 sc_addr=600999
+#   Terminal A:  ./navigation/ss7-console.py serve --pc 1.11.61
+#   Terminal B:  ./navigation/ss7-console.py map sri-sm --pc 1.11.61 \
+#                    msisdn=100101 sc_addr=600999
 
 import threading
 import time
@@ -62,7 +62,7 @@ class MapResponder(object):
         if self._log:
             self._log(line)
 
-    # ── donnees d'abonnes, lues dans le vrai HLR ─────────────────────────
+    # ── subscriber data, read from the real HLR ──────────────────────────
     def subscribers(self, max_age=10.0):
         rows, stamp = self._cache
         if rows and (time.time() - stamp) < max_age:
@@ -91,16 +91,16 @@ class MapResponder(object):
                 return sub
         return None
 
-    # ── lien ─────────────────────────────────────────────────────────────
+    # ── link ─────────────────────────────────────────────────────────────
     def start(self):
         self.asp = m3ua.Asp(self.topo.hub_ip, self.topo.hub_port, log=self.log)
         self.asp.bring_up(sccp.pc_to_int(self.local_pc))
         self.running = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
-        # Le hub ne sert une association venue de l'hote que quelques secondes :
-        # sans ce renouvellement, le repondeur serait injoignable au bout d'une
-        # dizaine de secondes, sans que rien ne le signale.
+        # The hub only serves an association coming from the host for a few
+        # seconds: without this renewal the responder would be unreachable
+        # after about ten seconds, with nothing to show for it.
         self.keeper = threading.Thread(target=self._keep_alive, daemon=True)
         self.keeper.start()
         self.log("repondeur MAP actif : PC %s, SSN %d, %d abonne(s) connus"
@@ -134,7 +134,7 @@ class MapResponder(object):
             except Exception as exc:
                 self.log("erreur de traitement : %s: %s" % (type(exc).__name__, exc))
 
-    # ── traitement ───────────────────────────────────────────────────────
+    # ── processing ───────────────────────────────────────────────────────
     def _handle(self, data):
         dec = sccp.decode(data["data"])
         if dec is None or dec.kind not in ("UDT", "XUDT"):
@@ -165,7 +165,7 @@ class MapResponder(object):
 
     @staticmethod
     def _ctx(elem, num):
-        """Fils portant le tag contexte [num], en surface puis en profondeur."""
+        """Child carrying context tag [num], shallow first, then deep."""
         if elem is None:
             return None
         for child in elem.children:
@@ -177,10 +177,9 @@ class MapResponder(object):
         return None
 
     def _param_values(self, comp):
-        """Numeros et IMSI trouves dans le parametre de l'invoke, DANS L'ORDRE
-        de la sequence : le premier champ d'un SRI-SM est le MSISDN, le
-        troisieme l'adresse du SMSC - les confondre repondrait sur le mauvais
-        abonne."""
+        """Numbers and IMSI found in the invoke parameter, IN SEQUENCE ORDER:
+        the first field of an SRI-SM is the MSISDN, the third the SMSC
+        address - mixing them up would answer about the wrong subscriber."""
         found = {"numbers": [], "digits": []}
         if comp.parameter is None:
             return found
@@ -204,8 +203,8 @@ class MapResponder(object):
         op = comp.opcode
         vals = self._param_values(comp)
         wanted = (vals["numbers"] + vals["digits"] + [""])[0].lstrip("+")
-        # Champ nomme quand la structure le permet : SRI-SM et SRI portent le
-        # MSISDN en [0], l'ATI son identite d'abonne en [0]/[0-1].
+        # Named field when the structure allows it: SRI-SM and SRI carry the
+        # MSISDN in [0], the ATI its subscriber identity in [0]/[0-1].
         if op in (OP_SRI_SM, OP_SRI):
             champ = self._ctx(comp.parameter, 0)
             if champ is not None and champ.value:
@@ -253,7 +252,7 @@ class MapResponder(object):
             sub = self.find(msisdn=wanted) or self.find(imsi=wanted)
             if sub is None:
                 return tcap.return_error(comp.invoke_id, 1)
-            # locationInformation [0] { vlr-number [1] } - le minimum utile.
+            # locationInformation [0] { vlr-number [1] } - the useful minimum.
             loc = ber.ctx(1, mapops.address_string(self.msc_number or sub.msisdn),
                           constructed=False)
             body = ber.ctx(0, ber.ctx(0, loc))
@@ -261,8 +260,8 @@ class MapResponder(object):
             return tcap.return_result_last(comp.invoke_id, op, ber.tlv(0x30, body))
 
         if op == OP_SAI:
-            # Pas d'AuC ici : on le dit franchement plutot que d'inventer des
-            # vecteurs qui ne s'authentifieraient nulle part.
+            # No AuC here: say so plainly rather than inventing vectors that
+            # would authenticate nowhere.
             self.log("sendAuthenticationInfo : refuse (pas d'AuC dans ce repondeur)")
             return tcap.return_error(comp.invoke_id, 34)          # systemFailure
 

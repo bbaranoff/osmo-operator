@@ -1,73 +1,70 @@
 #!/bin/bash
 # =============================================================================
-# osmo-lte.sh - LA 4G DU BANC : Open5GS (le coeur), srsENB et srsUE sur la
-# radio ZeroMQ, lances DANS L ORDRE ET DANS LES TEMPS.
+# osmo-lte.sh - THE BENCH 4G: Open5GS (the core), srsENB and srsUE on the
+# ZeroMQ radio, started IN ORDER AND ON TIME.
 #
-# [2026-09-07] POURQUOI UN LANCEUR, alors que trois lignes de commande
-# suffisent. Parce que les trois lignes ont deux pieges, et qu on est tombe
-# dans les deux le meme jour :
+# WHY A LAUNCHER, when three command lines are enough. Because the three
+# lines have two traps:
 #
-#   1. « fail_on_disconnect=true » sur l eNB. C est l argument de la doc, et il
-#      fait ce qu il dit : quand l eNB ne recoit AUCUN echantillon de l UE
-#      pendant 2000 ms (ZMQ_TIMEOUT_MS, rf_zmq_imp_trx.h), sa radio S ARRETE.
-#      Le processus reste, le S1 vers le coeur reste, mais plus rien ne sort
-#      sur ZeroMQ - on l a mesure : une centaine d octets par sens, la poignee
-#      de main ZMTP et rien d autre. Un srsUE lance UNE MINUTE apres l eNB
-#      trouve donc une radio morte : « Attaching UE... » et jamais « Found
-#      Cell ». Ici l UE part une demi-seconde apres l eNB.
+#   1. "fail_on_disconnect=true" on the eNB. It is the argument of the doc,
+#      and it does what it says: when the eNB receives NO sample from the UE
+#      for 2000 ms (ZMQ_TIMEOUT_MS, rf_zmq_imp_trx.h), its radio STOPS. The
+#      process stays, the S1 to the core stays, but nothing goes out on ZeroMQ
+#      any more (a hundred bytes each way, the ZMTP handshake and nothing
+#      else). An srsUE started ONE MINUTE after the eNB finds a dead radio:
+#      "Attaching UE..." and never "Found Cell". Here the UE starts half a
+#      second after the eNB.
 #
-#   2. Le SIB3. sib.conf programme les SIB emis par « si_mapping_info » ; en
-#      y mettant [ 7 ] (le SIB7, la liste GERAN du CSFB) A LA PLACE de [ 3 ],
-#      on a retire le SIB3. Or srsUE ne juge une cellule « convenable » QUE
-#      s il a le SIB3 (srsue rrc.cc, cell_selection_criteria : has_sib3()) :
-#      « Failed to configure serving cell », T3410 expire, cinq essais, rien.
-#      Il faut [ 3, 7 ] - on le verifie avant de lancer.
+#   2. The SIB3. sib.conf programs the SIBs sent through "si_mapping_info";
+#      putting [ 7 ] (the SIB7, the GERAN list of the CSFB) INSTEAD of [ 3 ]
+#      removes the SIB3. srsUE only deems a cell "suitable" IF it has the
+#      SIB3 (srsue rrc.cc, cell_selection_criteria: has_sib3()): "Failed to
+#      configure serving cell", T3410 expires, five attempts, nothing. It
+#      must be [ 3, 7 ] - checked before starting.
 #
-# [2026-09-08] LE COEUR EST OPEN5GS, plus srsepc (tools/osmo-epc.sh : mongod,
-# ogstun, les huit demons, le SGs vers OsmoMSC pour le CSFB). Le MME ecoute
-# le S1 sur 127.0.0.2 - c est ce que dit enb.conf (mme_addr). Et le netns
-# « ue1 » de l UE vit dans /run : il disparait au reboot, on le recree ici.
+# THE CORE IS OPEN5GS (tools/osmo-epc.sh: mongod, ogstun, the eight daemons,
+# the SGs to OsmoMSC for the CSFB). The MME listens for the S1 on 127.0.0.2 -
+# that is what enb.conf says (mme_addr). And the "ue1" netns of the UE lives
+# in /run: it disappears at reboot, it is recreated here.
 #
-# LES CONFIGS SONT CELLES DU DEPOT (configs/srsran/*.conf, user_db.csv),
-# posees dans ~/.config/srsran de root par tools/osmo-lte-install.sh. Elles
-# portent la radio ZeroMQ (device_name / device_args : ports 2000/2001,
-# base_srate 11.52e6) : on ne les redit PAS sur la ligne de commande, sauf
-# OSMO_LTE_SRATE pour forcer une autre cadence. Les srs* sont lances DEPUIS
-# ce repertoire : sib.conf / rr.conf / rb.conf y sont resolus, et le .ctxt
-# (le contexte NAS que srsue sauve dans son cwd) y vit aussi.
+# THE CONFIGS ARE THOSE OF THE REPOSITORY (configs/srsran/*.conf, user_db.csv),
+# installed in root's ~/.config/srsran by tools/osmo-lte-install.sh. They
+# carry the ZeroMQ radio (device_name / device_args: ports 2000/2001,
+# base_srate 11.52e6): they are NOT repeated on the command line, except
+# OSMO_LTE_SRATE to force another rate. The srs* are started FROM this
+# directory: sib.conf / rr.conf / rb.conf are resolved there, and the .ctxt
+# (the NAS context srsue saves in its cwd) lives there too.
 #
-#   osmo-lte start      coeur (osmo-epc), puis eNB, puis UE (refuse si l un tourne deja)
-#   osmo-lte start-gui  LE MEME LANCEMENT, AVEC LES TRACES srsGUI a l ecran
-#                       (constellation, spectre, PDSCH) : --gui.enable sur l eNB
-#                       et l UE, et un DISPLAY. Jamais par systemd - une unite
-#                       systeme n a pas d ecran ; c est un lancement direct.
-#   osmo-lte traces     LES TRACES SEULES : relance eNB et UE avec srsGUI, SANS
-#                       toucher au coeur Open5GS (qui reste debout, abonnes
-#                       compris). srsGUI n est pas une appli a part : ce sont
-#                       des fenetres Qt ouvertes par srsenb/srsue eux-memes
-#                       (--gui.enable), on ne peut pas les accrocher a un eNB
-#                       deja lance - d ou la relance de la radio, et d elle seule.
-#                       Rien ne tourne ? C est alors un start-gui complet.
-#   osmo-lte stop       arrete eNB et UE (le coeur reste : « osmo-epc stop »)
-#   osmo-lte restart    stop puis start
-#                       [2026-10-12] start / stop / restart hors root : le
-#                       script SE RELANCE par pkexec (repli sudo) au lieu de
-#                       refuser - « osmo-lte stop » tape dans un terminal de
-#                       session arrete bien la 4G.
-#   osmo-lte status     processus, S1, debit ZeroMQ, adresse de l UE
-#   osmo-lte log        les journaux, en direct
-#   osmo-lte toggle     L ICONE : le service osmo-lte (systemd) - le demarre s il
-#                       est arrete, l arrete s il tourne (pkexec hors root).
-#                       [2026-10-12] « tourne » = le service actif OU les demons
-#                       (srsenb, srsue, open5gs-mmed) debout : une 4G partie par
-#                       « sudo osmo-lte start » ou start-gui, que l unite ne
-#                       connait pas, s arrete aussi par l icone - avant, le
-#                       clic faisait « systemctl stop » d une unite inactive,
-#                       rendait 0 et annoncait « 4G arretee » devant une 4G
-#                       bien vivante. L arret eteint TOUT (eNB, UE, coeur).
-#   osmo-lte up|down    le service, explicitement (Actions du clic droit)
+#   osmo-lte start      core (osmo-epc), then eNB, then UE (refused if one already runs)
+#   osmo-lte start-gui  THE SAME LAUNCH, WITH THE srsGUI TRACES ON SCREEN
+#                       (constellation, spectrum, PDSCH): --gui.enable on the eNB
+#                       and the UE, and a DISPLAY. Never through systemd - a
+#                       system unit has no screen; it is a direct launch.
+#   osmo-lte traces     THE TRACES ALONE: restarts eNB and UE with srsGUI, WITHOUT
+#                       touching the Open5GS core (which stays up, subscribers
+#                       included). srsGUI is not a separate app: these are Qt
+#                       windows opened by srsenb/srsue themselves (--gui.enable),
+#                       they cannot be attached to an already running eNB - hence
+#                       the restart of the radio, and of the radio only.
+#                       Nothing running? Then it is a full start-gui.
+#   osmo-lte stop       stops eNB and UE (the core stays: "osmo-epc stop")
+#   osmo-lte restart    stop then start
+#                       start / stop / restart without root: the script
+#                       RE-RUNS ITSELF through pkexec (sudo fallback) instead
+#                       of refusing - "osmo-lte stop" typed in a session
+#                       terminal does stop the 4G.
+#   osmo-lte status     processes, S1, ZeroMQ throughput, UE address
+#   osmo-lte log        the logs, live
+#   osmo-lte toggle     THE ICON: the osmo-lte service (systemd) - starts it if
+#                       stopped, stops it if running (pkexec without root).
+#                       "running" = the service active OR the daemons (srsenb,
+#                       srsue, open5gs-mmed) up: a 4G started by "sudo osmo-lte
+#                       start" or start-gui, unknown to the unit, is also
+#                       stopped by the icon. The stop turns EVERYTHING off (eNB,
+#                       UE, core).
+#   osmo-lte up|down    the service, explicitly (right-click Actions)
 #   osmo-lte journal    journalctl -u osmo-lte -f
-#   osmo-lte install    pose les configs et les lanceurs (tools/osmo-lte-install.sh)
+#   osmo-lte install    installs the configs and the launchers (tools/osmo-lte-install.sh)
 # =============================================================================
 set -u
 
@@ -91,11 +88,11 @@ _err()  { echo -e "  ${RED}✗${NC} $*" >&2; }
 
 _root() { [ "$(id -u)" -eq 0 ] && return 0; _err "il faut root (netns, tun, SCTP) : sudo $0 $*"; return 1; }
 
-# [2026-09-08] LE GESTE DE L ICONE. La 4G vit dans services/osmo-lte.service
-# (Open5GS + eNB + UE) ; l icone du bureau (data/desktop/osmo-lte.desktop)
-# appelle « osmo-lte toggle » : un clic demarre, le suivant arrete. Depuis
-# une session sans root, pkexec ouvre la fenetre de mot de passe (repli
-# sudo) ; le resultat part en notification, il n y a pas de terminal.
+# THE ICON GESTURE. The 4G lives in services/osmo-lte.service (Open5GS + eNB
+# + UE); the desktop icon (data/desktop/osmo-lte.desktop) calls "osmo-lte
+# toggle": one click starts, the next one stops. From a session without
+# root, pkexec opens the password window (sudo fallback); the result goes
+# out as a notification, there is no terminal.
 SVC="${OSMO_LTE_SERVICE:-osmo-lte.service}"
 ICONE=/usr/share/osmo-operator/icons/osmo-lte.svg
 _notif() { command -v notify-send >/dev/null 2>&1 && notify-send -i "$ICONE" "4G du banc" "$1" 2>/dev/null || true; _say "$1"; }
@@ -105,14 +102,14 @@ _lte_debout() {
     for d in srsenb srsue open5gs-mmed; do pgrep -x "$d" >/dev/null 2>&1 && return 0; done
     return 1
 }
-# Ce que _svc fait EN ROOT, en un seul passage (une seule fenetre de mot de
-# passe) : l unite, puis ce qu elle ne portait pas.
+# What _svc does AS ROOT, in a single pass (a single password window): the
+# unit, then what it did not carry.
 _svc_root() {
     local act="$1" rc=0
     case "$act" in
         start)
-            # le journal de l unite defile pendant le demarrage : c est lui
-            # que la fenetre de lancement lit (reperes [n/4] de lte_start)
+            # the unit log scrolls during the start: it is what the launch
+            # window reads ([n/4] markers of lte_start)
             journalctl -u "$SVC" -f -n 0 -o cat 2>/dev/null & local _j=$!
             systemctl start "$SVC"; rc=$?
             sleep 1; kill "$_j" 2>/dev/null; wait "$_j" 2>/dev/null ;;
@@ -120,8 +117,8 @@ _svc_root() {
             case "$(systemctl is-active "$SVC" 2>/dev/null)" in
                 active|activating) systemctl stop "$SVC"; rc=$? ;;
             esac
-            # une 4G lancee hors unite (sudo osmo-lte start, start-gui) : on
-            # l eteint de meme - eNB, UE, puis le coeur
+            # a 4G started outside the unit (sudo osmo-lte start, start-gui):
+            # turned off the same way - eNB, UE, then the core
             if _lte_debout; then
                 lte_stop || rc=1
                 "$EPC" stop || rc=1
@@ -146,8 +143,8 @@ _svc() {
     return "$rc"
 }
 
-# [2026-10-12] start / stop / restart SANS root : se relancer eleve, DISPLAY
-# conserve (pkexec le nettoie, et l icone/ le terminal de session en ont un).
+# start / stop / restart WITHOUT root: re-run elevated, DISPLAY kept (pkexec
+# clears it, and the icon / the session terminal have one).
 _eleve() {
     [ "$(id -u)" -eq 0 ] && return 0
     _say "elevation (pkexec) pour « $* »"
@@ -157,29 +154,28 @@ _eleve() {
     exec sudo /bin/bash "$0" "$@"
 }
 
-# ── LE MODE « AVEC TRACES » (srsGUI) ────────────────────────────────────────
-# [2026-09-10] srsRAN est desormais compile avec ENABLE_GUI=ON (srsGUI, pose
-# avant lui par tools/osmo-lte-install.sh) : srsenb et srsue SAVENT tracer leur
-# constellation, leur spectre et leur PDSCH en temps reel. Ils ne le FONT que
-# si on le demande - « [gui] enable » de enb.conf/ue.conf vaut false, et on ne
-# le change pas : la 4G du banc demarre normalement par un service systemd, qui
-# n a pas d ecran, et une fenetre Qt qui ne peut pas s ouvrir ferait echouer un
-# demarrage qui marchait.
+# ── THE "WITH TRACES" MODE (srsGUI) ─────────────────────────────────────────
+# srsRAN is built with ENABLE_GUI=ON (srsGUI, installed before it by
+# tools/osmo-lte-install.sh): srsenb and srsue CAN trace their constellation,
+# their spectrum and their PDSCH in real time. They only DO it when asked -
+# "[gui] enable" of enb.conf/ue.conf is false, and it is not changed: the
+# bench 4G normally starts through a systemd service, which has no screen,
+# and a Qt window that cannot open would make a working start fail.
 #
-# D ou DEUX modes, et le mode normal reste EXACTEMENT ce qu il etait :
-#     « start »      ce que fait le service, sans rien a l ecran
-#     « start-gui »  le meme lancement + --gui.enable=1 sur les deux
-#   (ces deux libelles ne commencent pas par « osmo-lte start » a dessein :
-#    l aide du bas de fichier est un `sed` de plage sur ce motif, et une
-#    seconde occurrence lui faisait recracher le script entier.)
-# La seule difference dans lte_start est un tableau vide quand GUI=0.
+# Hence TWO modes, and the normal mode stays EXACTLY what it was:
+#     "start"      what the service does, nothing on screen
+#     "start-gui"  the same launch + --gui.enable=1 on both
+#   (these two labels deliberately do not begin with "osmo-lte start": the
+#    help at the bottom of the file is a `sed` range on that pattern, and a
+#    second occurrence would make it print the whole script.)
+# The only difference in lte_start is an empty array when GUI=0.
 GUI=0
 
-# Qt a besoin d un serveur X et d un cookie. Le mode traces est lance depuis le
-# bureau (icone, terminal de session) mais TOURNE EN ROOT : DISPLAY et
-# XAUTHORITY ne suivent pas toujours (pkexec nettoie l environnement, sudo
-# aussi selon env_reset). On les retrouve : le socket X du serveur en marche, et
-# le cookie de la session graphique ACTIVE.
+# Qt needs an X server and a cookie. The traces mode is started from the
+# desktop (icon, session terminal) but RUNS AS ROOT: DISPLAY and XAUTHORITY
+# do not always follow (pkexec clears the environment, sudo too depending on
+# env_reset). They are recovered: the X socket of the running server, and
+# the cookie of the ACTIVE graphical session.
 _display_ou_rien() {
     if [ -z "${DISPLAY:-}" ]; then
         local s n=""
@@ -201,11 +197,11 @@ _display_ou_rien() {
             [ -r "$f" ] && { export XAUTHORITY="$f"; break; }
         done
     fi
-    # Qt suivrait WAYLAND_DISPLAY s il traine dans l environnement, et echouerait
-    # en root sur le socket wayland de l utilisateur : on impose xcb.
+    # Qt would follow WAYLAND_DISPLAY if it lingers in the environment, and
+    # would fail as root on the user's wayland socket: xcb is imposed.
     export QT_QPA_PLATFORM=xcb
-    # Un srsenb qui n est pas lie a srsGUI accepte --gui.enable sans rien
-    # afficher : on le dit plutot que de laisser chercher.
+    # An srsenb not linked to srsGUI accepts --gui.enable without showing
+    # anything: say it rather than let the user search.
     local b
     b="$(_bin srsenb 2>/dev/null)"
     if [ -n "$b" ] && ! ldd "$b" 2>/dev/null | grep -q libsrsgui; then
@@ -214,9 +210,9 @@ _display_ou_rien() {
     return 0
 }
 
-# Le mode traces se lance depuis la session, pas depuis systemd : c est donc
-# LUI qui va chercher root, en emportant l ecran (meme geste que l icone du
-# banc, launch/osmo-launch.sh : pkexec env DISPLAY=... XAUTHORITY=...).
+# The traces mode is started from the session, not from systemd: it is the
+# one that fetches root, taking the screen along (same gesture as the bench
+# icon, launch/osmo-launch.sh: pkexec env DISPLAY=... XAUTHORITY=...).
 _root_avec_display() {
     local act="${1:-start-gui}"
     [ "$(id -u)" -eq 0 ] && return 0
@@ -229,7 +225,7 @@ _root_avec_display() {
     exec sudo DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" QT_QPA_PLATFORM=xcb "$0" "$act"
 }
 
-# Le binaire installe d abord, la compilation locale sinon.
+# The installed binary first, the local build otherwise.
 _bin() {
     local n="$1"
     command -v "$n" 2>/dev/null && return 0
@@ -237,7 +233,7 @@ _bin() {
     return 1
 }
 
-# Le SIB3 doit etre programme (piege n° 2 de l entete).
+# The SIB3 must be programmed (trap no. 2 of the header).
 _verifier_sib() {
     local sib="$SRS_DIR/sib.conf"
     [ -f "$sib" ] || { _warn "pas de $sib : srsENB prendra ses valeurs par defaut"; return 0; }
@@ -250,7 +246,7 @@ _verifier_sib() {
     _ok "sib.conf : $map"
 }
 
-# Les configs : celles de ~/.config/srsran, sinon celles du depot, posees.
+# The configs: those of ~/.config/srsran, else those of the repository, installed.
 _configs() {
     [ -f "$SRS_DIR/enb.conf" ] && [ -f "$SRS_DIR/ue.conf" ] && return 0
     [ -d "$REPO/configs/srsran" ] || { _err "pas de configs srsRAN ($SRS_DIR, ni $REPO/configs/srsran)"; return 1; }
@@ -271,16 +267,16 @@ lte_start() {
     done
     _configs || return 1
     _verifier_sib || return 1
-    # [2026-10-12] le bureau suit : l antenne se dresse dans le fond d ecran
-    # (tools/osmo-fond.py se relance sous l utilisateur du bureau ; le retour
-    # a la ville, a l arret, est le fait de osmo-panel.py quand plus rien ne tourne)
+    # the desktop follows: the antenna rises in the wallpaper (tools/osmo-fond.py
+    # re-runs itself under the desktop user; the return to the city, at stop,
+    # is done by osmo-panel.py when nothing runs any more)
     [ -x "$REPO/tools/osmo-fond.py" ] && ("$REPO/tools/osmo-fond.py" antenne >/dev/null 2>&1 &)
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && _ok "espace reseau $NETNS cree"; }
 
-    # [2026-10-12] Les reperes « [n/4] » : la fenetre de lancement du bureau
-    # (tools/osmo-gtk-run.py --progress) en fait sa barre de progression.
+    # The "[n/4]" markers: the desktop launch window (tools/osmo-gtk-run.py
+    # --progress) uses them as its progress bar.
     echo "[1/4] coeur Open5GS"
-    # Le coeur : Open5GS, par osmo-epc (idempotent : ce qui tourne deja reste).
+    # The core: Open5GS, through osmo-epc (idempotent: what already runs stays).
     "$EPC" start | sed 's/^/  /'
     for _ in $(seq 1 20); do ss -Sln 2>/dev/null | grep -q "$MME_S1:36412 " && break; sleep 0.25; done
     ss -Sln 2>/dev/null | grep -q "$MME_S1:36412 " && _ok "MME : S1 en ecoute sur $MME_S1" \
@@ -290,7 +286,7 @@ lte_start() {
     cd "$SRS_DIR" || return 1              # sib.conf & co. relatifs, et le .ctxt de srsue
     rm -f .ctxt                            # un vieux contexte fait echouer l attach apres un redemarrage du coeur
 
-    # Les traces : rien du tout quand GUI=0 - le mode normal est intact.
+    # The traces: nothing at all when GUI=0 - the normal mode is intact.
     local -a gui_opt=()
     [ "$GUI" = 1 ] && gui_opt=(--gui.enable=1)
     local -a enb_rf=() ue_rf=()
@@ -299,7 +295,7 @@ lte_start() {
         ue_rf=(--rf.device_name=zmq --rf.device_args="tx_port=tcp://*:$ZMQ_UE,rx_port=tcp://localhost:$ZMQ_ENB,id=ue,base_srate=$SRATE")
     fi
     echo "[2/4] station de base srsENB"
-    # L eNB, et l UE tout de suite derriere : voir le piege n° 1.
+    # The eNB, and the UE right behind: see trap no. 1.
     setsid "$enb" "$SRS_DIR/enb.conf" "${enb_rf[@]}" "${gui_opt[@]}" \
         --log.filename="$LOGDIR/osmo-lte-enb.log" >"$LOGDIR/osmo-lte-enb.console" 2>&1 </dev/null &
     sleep 0.5
@@ -334,7 +330,7 @@ lte_stop() {
     sleep 2
     for p in srsue srsenb; do lte_tourne "$p" && pkill -9 -x "$p"; done
     [ "$n" -gt 0 ] && _ok "$n processus srs* arrete(s)" || _say "rien ne tournait"
-    # Le S1 met un instant a se refermer cote SCTP ; l eNB suivant en a besoin.
+    # The S1 takes a moment to close on the SCTP side; the next eNB needs it.
     sleep 1
 }
 
@@ -345,8 +341,8 @@ lte_status() {
         lte_tourne "$p" && _ok "$p : pid $(pgrep -x "$p" | head -1)" || _warn "$p : arrete"
     done
     ss -San 2>/dev/null | grep -q "ESTAB.*:36412" && _ok "S1 : eNB associe au MME" || _warn "S1 : pas d association eNB-MME"
-    # Les echantillons eNB -> UE partent de la douille locale :$ZMQ_ENB de
-    # l eNB (bytes_sent) ; ce qu elle RECOIT n est que les requetes de l UE.
+    # The eNB -> UE samples leave from the local socket :$ZMQ_ENB of the eNB
+    # (bytes_sent); what it RECEIVES is only the UE requests.
     local a b
     a="$(ss -tin state established "( sport = :$ZMQ_ENB )" 2>/dev/null | grep -oE "bytes_sent:[0-9]+" | head -1 | cut -d: -f2)"
     if [ -n "$a" ]; then
@@ -369,16 +365,16 @@ esac
 case "${1:-status}" in
     start)   lte_start ;;
     start-gui|gui|start-display)
-        # Le mode traces : root AVEC l ecran, puis le lancement normal + GUI=1.
+        # The traces mode: root WITH the screen, then the normal launch + GUI=1.
         _root_avec_display || exit 1
         _display_ou_rien || exit 1
         GUI=1
         lte_start ;;
     traces|gui-seul)
-        # [2026-10-12] Les traces sans relancer toute la 4G : la radio seule
-        # repart avec srsGUI ; lte_start laisse le coeur tel quel (osmo-epc
-        # start est idempotent). Lance hors unite : « osmo-lte down » / l icone
-        # savent arreter une radio partie ainsi (_svc_root).
+        # The traces without restarting the whole 4G: only the radio restarts
+        # with srsGUI; lte_start leaves the core as is (osmo-epc start is
+        # idempotent). Started outside the unit: "osmo-lte down" / the icon
+        # know how to stop a radio started this way (_svc_root).
         _root_avec_display traces || exit 1
         _display_ou_rien || exit 1
         GUI=1

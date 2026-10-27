@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-# pont_dsp.py - le pont du montage DSP (c54x_exe --arm, bursts vers le BSP du
-# C54x sur --dsp-port 6702). Le montage grgsm a son propre point d'entree,
-# pont.py, qui garde ses defauts d'avant le decoupage du 2026-09-23 ; les deux
-# partagent le paquet (trx, descendant, montant, chiffrement A5).
+# pont_dsp.py - the bridge of the DSP setup (c54x_exe --arm, bursts to the
+# C54x BSP on --dsp-port 6702). The grgsm setup has its own entry point,
+# pont.py, with its own defaults; both share the package (trx, downlink,
+# uplink, A5 ciphering).
 #
-# [2026-09-23] Ce point d'entree lance pont.dsp.main, le vrai pont DSP : memes
-# briques, mais l'etat dedie suit le DSP au lieu du decodage du pont (voir
-# pont/dsp/__init__.py). pont/__init__.py et pont.py n'en dependent pas.
-# Lance par c54x_exe/run.sh en MODE=dsp (PONT_PY par defaut), donc aussi par
-# start-native.sh --dsp.
+# This entry point starts pont.dsp.main, the real DSP bridge: same building
+# blocks, but the dedicated state follows the DSP instead of the bridge's own
+# decoding (see pont/dsp/__init__.py). pont/__init__.py and pont.py do not
+# depend on it. Started by c54x_exe/run.sh in MODE=dsp (default PONT_PY), so
+# also by start-native.sh --dsp.
 import os
 import sys
 
-# Un burst montant reveille apres sa trame part quand meme, jusqu'a 26 trames
-# de retard : la BTS le range par son fn (cf. trx.py Transmitter.run).
+# An uplink burst woken up after its frame is still sent, up to 26 frames
+# late: the BTS files it by its fn (see trx.py Transmitter.run).
 os.environ.setdefault("PONT_UL_RETARD_MAX", "26")
-# Le Kc est garde apres la liberation (pont/dsp/uplink.py) : c'est la
-# retention qui le rend encore lisible une fois montant.c revenu en clair.
+# The Kc is kept after the release (pont/dsp/uplink.py): the retention is
+# what keeps it readable once montant.c is back in clear.
 os.environ.setdefault("PONT_KC_RETENTION", "1")
-# [2026-10-23] Le descendant aussi vers le BSP de l instance 4 (banc-rssi, udp 6762) :
-# en BTS classique, l appli rssi n a pas d autre source (l air ne relaie que
-# l anneau TX du Calypso de l instance 1, ici le mobile). Sans rssi lance, la copie
-# part vers un port vide. PONT_DSP_COPIES= (vide) la coupe.
+# The downlink also goes to the BSP of instance 4 (banc-rssi, udp 6762): with
+# a classic BTS, the rssi application has no other source (the air only relays
+# the TX ring of the instance 1 Calypso, here the mobile). Without rssi
+# running, the copy goes to an empty port. PONT_DSP_COPIES= (empty) cuts it.
 os.environ.setdefault("PONT_DSP_COPIES", "6762")
 
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

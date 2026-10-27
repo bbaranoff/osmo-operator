@@ -1,32 +1,32 @@
 #!/bin/bash
-# network/node-conf.sh - LA FICHE D'UN NOEUD, produite par le run, lue par les
-# autres ISO : « mynode<N>.conf ».
+# network/node-conf.sh - A NODE'S CARD, produced by the run, read by the other
+# ISOs: "mynode<N>.conf".
 #
-#   noeud 1 :  ./start-native.sh              -> ecrit /etc/osmocom/mynode1.conf
-#              ./start-native.sh --gen-conf   -> la meme fiche, sans lancer
-#   noeud 2 :  ./start-native.sh --wan mynode1.conf [mynode3.conf ...]
-#              -> table WAN = ce noeud + les fiches, puis le maillage habituel
-#                 (network/setup-wan-mesh.sh : trunks SIP, dialplan, routes SMS)
+#   node 1:  ./start-native.sh              -> writes /etc/osmocom/mynode1.conf
+#            ./start-native.sh --gen-conf   -> the same card, without starting
+#   node 2:  ./start-native.sh --wan mynode1.conf [mynode3.conf ...]
+#            -> WAN table = this node + the cards, then the usual meshing
+#               (network/setup-wan-mesh.sh: SIP trunks, dialplan, SMS routes)
 #
-# Un « noeud » est une ISO : son operateur natif, ses conteneurs multi-operateur
-# et son inter-STP. Le WAN relie plusieurs ISO. La fiche dit tout ce qu'un autre
-# noeud doit savoir pour le joindre : identite SS7, adresse publique, indicatif,
-# nombre d'operateurs (donc ports SIP/SMS), plan de numerotation. Elle est
-# ecrite au format shell KEY=valeur, comme /etc/osmo-wan.conf, pour se lire
-# d'un `.` et se relire a l'oeil.
+# A "node" is an ISO: its native operator, its multi-operator containers and
+# its inter-STP. The WAN links several ISOs. The card says everything another
+# node must know to reach it: SS7 identity, public address, prefix, number of
+# operators (hence SIP/SMS ports), numbering plan. It is written in shell
+# KEY=value format, like /etc/osmo-wan.conf, so it can be read with `.` and
+# by eye.
 #
-# Cette bibliotheque se SOURCE (start-native.sh, start-multi.sh). Elle suppose
-# network/wan-nodes.sh deja chargee (WAN_IP/WAN_IND/WAN_NOPS/WAN_NODE_LIST,
+# This library is SOURCED (start-native.sh, start-multi.sh). It assumes
+# network/wan-nodes.sh is already loaded (WAN_IP/WAN_IND/WAN_NOPS/WAN_NODE_LIST,
 # wan_default_ind, wan_detect_local_ip).
 : "${OSMOCOM_CFG:=/etc/osmocom}"
 NODE_CONF_DIR="${NODE_CONF_DIR:-$OSMOCOM_CFG}"
 
 node_conf_path() { printf '%s/mynode%s.conf' "$NODE_CONF_DIR" "${1:-1}"; }
 
-# Combien d'operateurs porte CE noeud : le natif + les conteneurs osmo-operator-N
-# EN MARCHE (start-multi.sh). La topologie ecrite par addition.sh existe meme
-# sans multi lance ; ce qui compte pour les ports SIP/SMS du maillage, c'est ce
-# qui repond. OSMO_NODE_NOPS force la valeur.
+# How many operators THIS node carries: the native one + the RUNNING
+# osmo-operator-N containers (start-multi.sh). The topology written by
+# addition.sh exists even without multi started; what matters for the mesh's
+# SIP/SMS ports is what answers. OSMO_NODE_NOPS forces the value.
 node_conf_nops() {
     local n=1 c
     if [ -n "${OSMO_NODE_NOPS:-}" ]; then printf '%s' "$OSMO_NODE_NOPS"; return 0; fi
@@ -37,9 +37,9 @@ node_conf_nops() {
     printf '%s' "$n"
 }
 
-# La liste des operateurs du noeud : "idx:mode:pc_stp:rctx_inter[:ip]" - le
-# natif d'abord, puis les conteneurs de /etc/osmocom/osmo-multi.conf qui
-# tournent. Le plan de point codes est celui du WAN : 1.<noeud><op>.2.
+# The node's operator list: "idx:mode:pc_stp:rctx_inter[:ip]" - the native
+# one first, then the running containers of /etc/osmocom/osmo-multi.conf.
+# The point code plan is the WAN one: 1.<node><op>.2.
 node_conf_ops() {
     local node="$1" op="$2" out="" spec idx mode ip running=""
     out="${op}:native:1.${node}${op}.2:$(( node * 1000 + op * 100 + 50 ))"
@@ -57,10 +57,10 @@ node_conf_ops() {
     printf '%s' "$out"
 }
 
-# node_conf_write FICHIER NOEUD OP [HUB_IP]
-# Ecrit la fiche. IP publique et indicatif : la table WAN si elle connait ce
-# noeud (wan_nodes_load a ete fait), sinon detection locale + indicatif par
-# defaut du numero de noeud (11, 22, 33...).
+# node_conf_write FILE NODE OP [HUB_IP]
+# Writes the card. Public IP and prefix: the WAN table if it knows this node
+# (wan_nodes_load done), otherwise local detection + default prefix derived
+# from the node number (11, 22, 33...).
 node_conf_write() {
     local out="$1" node="$2" op="${3:-1}" hub="${4:-}"
     local ip ind nops ops mcc mnc arfcn nms pfx sip sms
@@ -81,22 +81,22 @@ node_conf_write() {
     nms="${N_MS:-$(sed -n 's/^: "\${N_MS:=\([0-9]*\)}"/\1/p' "$OSMOCOM_CFG/coeur.env" 2>/dev/null | tail -1)}"
     nms="${nms:-2}"
     pfx="${node}00"
-    # Ports vus depuis l'exterieur, memes formules que setup-wan-mesh.sh :
-    # un seul operateur -> 5060 / 7890 ; sinon 5080+(j-1)*2 / 7890+j-1.
+    # Ports as seen from outside, same formulas as setup-wan-mesh.sh:
+    # a single operator -> 5060 / 7890; otherwise 5080+(j-1)*2 / 7890+j-1.
     if [ "$nops" = 1 ]; then sip=5060; sms=7890; else sip="5080+(j-1)*2"; sms="7890+j-1"; fi
     mkdir -p "$(dirname "$out")" || return 1
     cat > "$out.tmp" <<EOF
-# mynode${node}.conf - fiche du noeud ${node}, ecrite par start-native.sh le $(date '+%F %T')
-# A copier sur un autre noeud et a lui donner :  ./start-native.sh --wan $(basename "$out")
-# Format shell (KEY=valeur). Les champs OSMO_NODE_ID/IP/IND/NOPS suffisent au
-# maillage (table WAN "id:ip:indicatif:operateurs") ; le reste documente le noeud.
+# mynode${node}.conf - card of node ${node}, written by start-native.sh on $(date '+%F %T')
+# Copy it to another node and hand it over:  ./start-native.sh --wan $(basename "$out")
+# Shell format (KEY=value). The OSMO_NODE_ID/IP/IND/NOPS fields are enough for
+# the mesh (WAN table "id:ip:prefix:operators"); the rest documents the node.
 OSMO_NODE_CONF_VERSION=1
 OSMO_NODE_ID=${node}
 OSMO_NODE_IP=${ip}
 OSMO_NODE_IND=${ind}
 OSMO_NODE_NOPS=${nops}
 OSMO_NODE_HOSTNAME=$(hostname 2>/dev/null)
-# operateurs : "idx:mode:pc_stp:rctx_inter[:backbone_ip]" (natif puis conteneurs en marche)
+# operators: "idx:mode:pc_stp:rctx_inter[:backbone_ip]" (native, then running containers)
 OSMO_NODE_OPS="${ops}"
 OSMO_NODE_OP=${op}
 OSMO_NODE_PC_MSC=1.${node}${op}.1
@@ -109,7 +109,7 @@ OSMO_NODE_MCC=${mcc}
 OSMO_NODE_MNC=${mnc}
 OSMO_NODE_ARFCN=${arfcn}
 OSMO_NODE_N_MS=${nms}
-# numerotation : MSISDN = <noeud>00<op><ms> ; depuis un autre noeud : <indicatif><MSISDN>
+# numbering: MSISDN = <node>00<op><ms>; from another node: <prefix><MSISDN>
 OSMO_NODE_MSISDN_PFX=${pfx}
 OSMO_NODE_SIP_PORT="${sip}"
 OSMO_NODE_SMS_PORT="${sms}"
@@ -117,9 +117,9 @@ EOF
     mv -f "$out.tmp" "$out" && chmod 644 "$out"
 }
 
-# node_conf_import FICHIER : lit une fiche et pose son noeud dans la table WAN
-# (WAN_IP/WAN_IND/WAN_NOPS/WAN_NODE_LIST) - remplace l'entree si elle existait.
-# Lecture par sed, pas par `.` : une fiche venue d'ailleurs n'execute rien ici.
+# node_conf_import FILE: reads a card and puts its node in the WAN table
+# (WAN_IP/WAN_IND/WAN_NOPS/WAN_NODE_LIST) - replaces the entry if it existed.
+# Read with sed, not with `.`: a card from elsewhere executes nothing here.
 node_conf_import() {
     local f="$1" id ip ind nops
     [ -r "$f" ] || { _wan_err "fiche introuvable : $f"; return 1; }
@@ -138,9 +138,10 @@ node_conf_import() {
     return 0
 }
 
-# node_conf_self NOEUD : garantit que CE noeud figure dans la table (adresse
-# locale detectee, indicatif par defaut, operateurs comptes), sans ecraser une
-# entree deja connue de la table.
+# node_conf_self NODE: makes sure THIS node is in the table (detected local
+# address, default prefix, operators counted), without overwriting an entry
+# the table already knows.
+
 node_conf_self() {
     local id="$1" ip
     [ -n "${WAN_IP[$id]:-}" ] && { WAN_NOPS[$id]="$(node_conf_nops)"; return 0; }

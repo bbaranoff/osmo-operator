@@ -1,36 +1,36 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-"""osmo-c123-gtk.py - le Motorola C123 emule, en photo : ecran LCD incruste, touches cliquables.
+"""osmo-c123-gtk.py - the emulated Motorola C123, as a photo: embedded LCD screen, clickable keys.
 
-[2026-10-19] Le QEMU du depot (qosmo) n'a pas de backend gtk ; il publie l'ecran
-ST7558 dans /dev/shm/calypso_lcd (hw/arm/calypso/calypso_st7558.c) et lit les
-touches sur un socket Unix datagramme (/tmp/calypso_keys.sock,
-calypso_armio.c). Cette fenetre GTK3 fait le reste :
-  - la photo du telephone (data/c123.jpg ou .png ; sans photo, un schema) ;
-    [2026-10-21] --modele c139 : data/c139.jpg + data/c139-zones.json et l'ecran
-    couleur 96x64 publie par calypso_uwire.c (FreeCalypso Magnetite c139) ;
-    auto (defaut) = d'apres le magic de l'image partagee ;
-  - l'ecran 96x65 redessine a chaque changement, incruste dans la zone « lcd » ;
-  - un clic sur une touche de la photo = press/release vers QEMU ; le clavier
-    du PC marche aussi (0-9, * ou s, # ou h, fleches, Entree = menu,
-    Entree pave ou o = ok, Echap ou p = power, F1/F2 = touches logicielles).
-[2026-10-21] Plusieurs instances (c54x_exe/run.sh INSTANCE=N : ecran
-/dev/shm/calypsoN/calypso_lcd, touches /tmp/calypso_keysN.sock). Sans
---instance, la fenetre choisit la premiere instance vivante qui N'EST PAS un
-TRX de la BTS (firmware trx : /tmp/c54x-pontN/transceiver.log ou « BTS MODE »
-dans osmocon.log) - le montage --bts --ms met le mobile en instance 2. La
-touche power (rouge, Echap, p) eteint le firmware des l'appui (trx comme
-layer1 : « Powering off due to keypress ») : elle n'est envoyee qu'apres un
-APPUI LONG (%.1f s), et jamais a une instance TRX (le 21/10 a 08:18 un power
-envoye a l'instance 1 a eteint le TRX et la BTS a perdu son horloge).
-Zones : data/c123-zones.json (x, y, l, h normalises). `--calibrate` les
-redefinit a la souris : pour chaque zone annoncee, cliquer le coin haut-gauche
-puis le coin bas-droit ; `s` sauve, `q` quitte.
+The QEMU of the repository (qosmo) has no gtk backend; it publishes the ST7558
+screen in /dev/shm/calypso_lcd (hw/arm/calypso/calypso_st7558.c) and reads the
+keys on a Unix datagram socket (/tmp/calypso_keys.sock, calypso_armio.c). This
+GTK3 window does the rest:
+  - the photo of the phone (data/c123.jpg or .png; without photo, a diagram);
+    --modele c139: data/c139.jpg + data/c139-zones.json and the 96x64 colour
+    screen published by calypso_uwire.c (FreeCalypso Magnetite c139);
+    auto (default) = from the magic of the shared image;
+  - the 96x65 screen redrawn on every change, embedded in the "lcd" zone;
+  - a click on a key of the photo = press/release to QEMU; the PC keyboard
+    works too (0-9, * or s, # or h, arrows, Enter = menu, keypad Enter or
+    o = ok, Esc or p = power, F1/F2 = soft keys).
+Several instances (c54x_exe/run.sh INSTANCE=N: screen
+/dev/shm/calypsoN/calypso_lcd, keys /tmp/calypso_keysN.sock). Without
+--instance, the window picks the first live instance that is NOT a TRX of the
+BTS (trx firmware: /tmp/c54x-pontN/transceiver.log or "BTS MODE" in
+osmocon.log) - the --bts --ms setup puts the mobile in instance 2. The power
+key (red, Esc, p) switches the firmware off as soon as it is pressed (trx as
+well as layer1: "Powering off due to keypress"): it is only sent after a LONG
+PRESS (%.1f s), and never to a TRX instance (a power sent to the TRX instance
+switches the BTS radio off and the BTS loses its clock).
+Zones: data/c123-zones.json (x, y, l, h normalised). `--calibrate` redefines
+them with the mouse: for each announced zone, click the top-left corner then
+the bottom-right corner; `s` saves, `q` quits.
 
   /usr/bin/python3 tools/osmo-c123-gtk.py [--image PHOTO] [--zones JSON]
         [--instance N] [--lcd /dev/shm/calypso_lcd] [--keys /tmp/calypso_keys.sock]
         [--scale 2.5] [--calibrate] [--power-libre] [--toutes [1,2,3]]
-(python3 systeme : celui de /root/.env n'a pas PyGObject.)
+(system python3: the one of /root/.env has no PyGObject.)
 """
 import argparse
 import json
@@ -43,8 +43,8 @@ import time
 try:
     import gi
 except ModuleNotFoundError:
-    # [2026-10-21] lance avec le python du venv (/root/.env : pas de PyGObject) : on se relance
-    # avec le python systeme, qui a gi ; « pip install gi » n'est pas le bon paquet.
+    # started with the venv python (/root/.env: no PyGObject): re-execute with the
+    # system python, which has gi; "pip install gi" is not the right package.
     if os.path.realpath(sys.executable) != os.path.realpath("/usr/bin/python3") and os.path.exists("/usr/bin/python3"):
         os.execv("/usr/bin/python3", ["/usr/bin/python3", os.path.abspath(__file__)] + sys.argv[1:])
     sys.stderr.write("PyGObject (gi) introuvable : apt install python3-gi gir1.2-gtk-3.0, et lancer avec /usr/bin/python3\n")
@@ -57,13 +57,13 @@ import cairo  # noqa: E402
 HERE = os.path.dirname(os.path.realpath(__file__))
 DATA = os.path.join(HERE, "..", "data")
 LCD_W, LCD_H, LCD_PAGES, LCD_HDR = 96, 65, 9, 32
-POWER_APPUI_LONG_S = 1.2       # duree d'appui sur power avant de l'envoyer au firmware
+POWER_APPUI_LONG_S = 1.2       # hold time on power before sending it to the firmware
 __doc__ = __doc__ % POWER_APPUI_LONG_S
 ORDRE_ZONES = ["lcd", "lsb", "rsb", "up", "left", "menu", "right", "down", "ok", "power",
                "1", "2", "3", "4", "5", "6", "7", "8", "9", "star", "0", "hash"]
 LIBELLES = {"lsb": "─", "rsb": "─", "up": "▲", "down": "▼", "left": "◀", "right": "▶",
             "menu": "●", "ok": "☎", "power": "⏻", "star": "*", "hash": "#"}
-CLAVIER = {  # nom de touche GDK -> touche du C123
+CLAVIER = {  # GDK key name -> C123 key
     "0": "0", "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
     "KP_0": "0", "KP_1": "1", "KP_2": "2", "KP_3": "3", "KP_4": "4", "KP_5": "5", "KP_6": "6",
     "KP_7": "7", "KP_8": "8", "KP_9": "9", "asterisk": "star", "KP_Multiply": "star", "s": "star",
@@ -78,7 +78,7 @@ def rundir_instance(n):
 
 
 def chemins_instance(n):
-    """(ecran, socket des touches) de l'instance n (c54x_exe/run.sh : INSTANCE=1 sans suffixe)."""
+    """(screen, key socket) of instance n (c54x_exe/run.sh: INSTANCE=1 without suffix)."""
     if n == 1:
         return "/dev/shm/calypso_lcd", "/tmp/calypso_keys.sock"
     return "/dev/shm/calypso%d/calypso_lcd" % n, "/tmp/calypso_keys%d.sock" % n
@@ -95,9 +95,9 @@ def instance_vivante(n):
 
 
 def instance_est_trx(n):
-    """Vrai si l'instance n fait tourner le firmware trx (radio de la BTS) : un power l'eteint et la BTS
-    perd son horloge. Indices : transceiver.log dans son RUNDIR (run.sh OSMO_TRX=1), ou « BTS MODE » sur
-    sa console (trx.highram imprime BTS MODE: ... des le L1CTL_RESET)."""
+    """True if instance n runs the trx firmware (radio of the BTS): a power switches it off and the
+    BTS loses its clock. Clues: transceiver.log in its RUNDIR (run.sh OSMO_TRX=1), or "BTS MODE" on
+    its console (trx.highram prints BTS MODE: ... from the L1CTL_RESET on)."""
     rd = rundir_instance(n)
     if os.path.isfile(os.path.join(rd, "transceiver.log")):
         return True
@@ -109,8 +109,8 @@ def instance_est_trx(n):
 
 
 def instance_par_defaut():
-    """La premiere instance vivante qui n'est pas un TRX (le mobile du montage --bts --ms est la 2) ;
-    a defaut la premiere vivante ; a defaut 1."""
+    """The first live instance that is not a TRX (the mobile of the --bts --ms setup is 2);
+    else the first live one; else 1."""
     vivantes = [n for n in range(1, 9) if instance_vivante(n)]
     for n in vivantes:
         if not instance_est_trx(n):
@@ -119,7 +119,7 @@ def instance_par_defaut():
 
 
 def magic_lcd(path):
-    """Le magic de l'image partagee : « C123LCD » (ST7558 mono) ou « C139LCD » (couleur), None si absente."""
+    """The magic of the shared image: "C123LCD" (mono ST7558) or "C139LCD" (colour), None if absent."""
     try:
         with open(path, "rb") as f:
             m = f.read(7)
@@ -129,9 +129,9 @@ def magic_lcd(path):
 
 
 class Lcd:
-    """L'image partagee : en-tete de 32 octets (magic, largeur, hauteur, pages ou octets/point, drapeaux,
-    compteur) puis les points. Deux magics : « C123LCD » (calypso_st7558.c : 96 x 9 pages, 1 bit par point,
-    bit 0 en haut) et « C139LCD » (calypso_uwire.c, Magnetite c139 : 96x64 RGB565 petit-boutiste)."""
+    """The shared image: 32-byte header (magic, width, height, pages or bytes per pixel, flags,
+    counter) then the pixels. Two magics: "C123LCD" (calypso_st7558.c: 96 x 9 pages, 1 bit per pixel,
+    bit 0 at the top) and "C139LCD" (calypso_uwire.c, Magnetite c139: 96x64 little-endian RGB565)."""
 
     def __init__(self, path):
         self.path = path
@@ -190,7 +190,7 @@ class Lcd:
         self.surface.mark_dirty()
 
     def _peindre_c139(self):
-        """RGB565 -> RGB24 ; sans QEMU : gris uniforme."""
+        """RGB565 -> RGB24; without QEMU: uniform grey."""
         data = self.surface.get_data()
         stride = self.surface.get_stride()
         src = self.pages
@@ -209,7 +209,7 @@ class Lcd:
 
 
 class Clavier:
-    """Le socket datagramme de calypso_armio.c : « press X », « release X », « tap X ms »."""
+    """The datagram socket of calypso_armio.c: "press X", "release X", "tap X ms"."""
 
     def __init__(self, path):
         self.path = path
@@ -230,7 +230,7 @@ FENETRES = []
 
 
 def fenetre_fermee(_w):
-    """Une fenetre fermee ; Gtk.main s'arrete avec la derniere."""
+    """A window closed; Gtk.main stops with the last one."""
     if _w in FENETRES:
         FENETRES.remove(_w)
     if not FENETRES:
@@ -239,8 +239,8 @@ def fenetre_fermee(_w):
 
 class Fenetre(Gtk.Window):
     def __init__(self, args):
-        # [2026-10-21] --modele c139 (FreeCalypso Magnetite) : photo data/c139.jpg, zones data/c139-zones.json,
-        # ecran couleur « C139LCD » ; auto = d'apres le magic de l'image partagee, c123 a defaut.
+        # --modele c139 (FreeCalypso Magnetite): photo data/c139.jpg, zones data/c139-zones.json,
+        # colour screen "C139LCD"; auto = from the magic of the shared image, c123 by default.
         self.modele = args.modele
         if self.modele == "auto":
             self.modele = "c139" if magic_lcd(args.lcd) == "C139LCD" else "c123"
@@ -254,11 +254,11 @@ class Fenetre(Gtk.Window):
         self.lcd = Lcd(args.lcd)
         self.clavier = Clavier(args.keys)
         self.enfoncees = set()
-        # un C139 Magnetite n'est jamais un TRX de la BTS (les traces trx d'un ancien run ne comptent pas)
+        # a Magnetite C139 is never a TRX of the BTS (trx traces of an old run do not count)
         self.trx = instance_est_trx(args.instance) if args.instance and self.modele != "c139" else False
-        self.power_depuis = None      # instant de l'appui sur power (appui long en cours)
-        self.power_envoyee = False    # press power deja transmis au firmware
-        self.calibrage = [] if args.calibrate else None   # [(zone, x1, y1)] en cours
+        self.power_depuis = None      # instant of the press on power (long press in progress)
+        self.power_envoyee = False    # press power already sent to the firmware
+        self.calibrage = [] if args.calibrate else None   # [(zone, x1, y1)] in progress
         self.cal_index = 0
         self.cal_premier = None
 
@@ -283,7 +283,7 @@ class Fenetre(Gtk.Window):
         GLib.timeout_add(40, self.tic)
         self._statut()
 
-    # --- chargements -------------------------------------------------------
+    # --- loading -----------------------------------------------------------
     def _titre(self):
         role = "TRX de la BTS" if (self.args.instance and instance_est_trx(self.args.instance)) else "mobile"
         if self.modele == "c139":
@@ -302,8 +302,8 @@ class Fenetre(Gtk.Window):
         return int(iw * scale), int(ih * scale)
 
     def _changer_modele(self, modele):
-        """[2026-10-21] l'ecran partage change de magic (ex. --bts --ms-magnetite : l'instance 2
-        devient un C139 Magnetite apres l'ouverture de la fenetre) : photo, zones, taille et titre suivent."""
+        """The shared screen changes magic (e.g. --bts --ms-magnetite: instance 2 becomes a
+        C139 Magnetite after the window opened): photo, zones, size and title follow."""
         self.modele = modele
         self.args.zones = os.path.join(DATA, "%s-zones.json" % modele)
         self.zones = self._charger_zones(self.args.zones)
@@ -331,7 +331,7 @@ class Fenetre(Gtk.Window):
               % (", ".join(c for c in candidats if c), self.modele.upper(), self.modele), file=sys.stderr)
         return None
 
-    # --- geometrie ---------------------------------------------------------
+    # --- geometry ----------------------------------------------------------
     def rect(self, nom):
         x, y, w, h = self.zones[nom]
         return x * self.lw, y * self.lh, w * self.lw, h * self.lh
@@ -345,7 +345,7 @@ class Fenetre(Gtk.Window):
                 return nom
         return None
 
-    # --- dessin ------------------------------------------------------------
+    # --- drawing -----------------------------------------------------------
     def dessiner(self, _w, cr):
         if self.pixbuf:
             cr.save()
@@ -355,7 +355,7 @@ class Fenetre(Gtk.Window):
             cr.restore()
         else:
             self._schema(cr)
-        # l'ecran
+        # the screen
         x, y, w, h = self.rect("lcd")
         cr.save()
         cr.translate(x, y)
@@ -372,14 +372,14 @@ class Fenetre(Gtk.Window):
             cr.set_font_size(max(10, h / 6))
             cr.move_to(x + 6, y + h / 2)
             cr.show_text("QEMU absent")
-        # touches enfoncees
+        # pressed keys
         for nom in self.enfoncees:
             if nom in self.zones:
                 x, y, w, h = self.rect(nom)
                 cr.set_source_rgba(1.0, 0.85, 0.1, 0.45)
                 cr.rectangle(x, y, w, h)
                 cr.fill()
-        # calibrage : zones deja posees + zone en cours
+        # calibration: zones already set + zone in progress
         if self.calibrage is not None:
             cr.set_line_width(1.5)
             for nom in self.zones:
@@ -415,7 +415,7 @@ class Fenetre(Gtk.Window):
             cr.move_to(x + w * 0.3, y + h * 0.75)
             cr.show_text(LIBELLES.get(nom, nom))
 
-    # --- entrees -----------------------------------------------------------
+    # --- input -------------------------------------------------------------
     def clic(self, _w, ev):
         if self.calibrage is not None:
             return self._clic_calibrage(ev)
@@ -432,7 +432,7 @@ class Fenetre(Gtk.Window):
         self.zone.queue_draw()
         return True
 
-    # --- touches : press/release vers QEMU, power sous appui long ---------
+    # --- keys: press/release to QEMU, power on long press -----------------
     def appuyer(self, nom):
         if nom in self.enfoncees:
             return
@@ -482,7 +482,7 @@ class Fenetre(Gtk.Window):
             self.lacher(nom)
         return True
 
-    # --- calibrage ---------------------------------------------------------
+    # --- calibration -------------------------------------------------------
     def _clic_calibrage(self, ev):
         if self.cal_index >= len(ORDRE_ZONES):
             self._statut("calibrage termine : s = sauver, q = quitter")
@@ -513,7 +513,7 @@ class Fenetre(Gtk.Window):
             json.dump(z, f, indent=2)
         self._statut("zones sauvees dans %s" % self.args.zones)
 
-    # --- boucle ------------------------------------------------------------
+    # --- loop --------------------------------------------------------------
     def tic(self):
         if self.lcd.vivant and not self.modele_force and self.lcd.modele != self.modele:
             self._changer_modele(self.lcd.modele)
@@ -573,7 +573,7 @@ def main():
             a.instance, a.lcd, a.keys = n, None, None
             a.lcd, a.keys = chemins_instance(n)
             if not args.scale:
-                a.scale = 1.1                      # quatre telephones de front sur un ecran 1080p
+                a.scale = 1.1                      # four phones side by side on a 1080p screen
             f = Fenetre(a)
             FENETRES.append(f)
             ouvertes[n] = f
@@ -584,8 +584,8 @@ def main():
         for n in voulues:
             ouvrir(n)
 
-        # [2026-10-21] une instance lancee APRES la fenetre (banc-rssi, INSTANCE=4...) avait pas de fenetre :
-        # on guette les instances 1..8 toutes les 2 s et on ouvre celles qui apparaissent.
+        # an instance started AFTER the window (banc-rssi, INSTANCE=4...) also gets a window:
+        # instances 1..8 are polled every 2 s and those that appear are opened.
         def guetter():
             for n in range(1, 9):
                 if n not in ouvertes and instance_vivante(n):

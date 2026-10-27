@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-# [2026-10-21] Page web de reglage de la pile Osmocom du banc.
+# Web page to configure the Osmocom stack of the bench.
 #
 #   python3 tools/osmo-reglages.py [--port 8090] [--bind 127.0.0.1]
 #   puis http://127.0.0.1:8090/
 #
-# La page est dans web/ (index.html, style.css, app.js) ; ce script la sert et fournit l'API /api/...
-# Quatre onglets :
-#   globals.conf : formulaire sur le modele de globals.conf.example (tools/globals-complet.py : reglages
-#               reseau + toutes les variables du lanceur), valeurs lues et reecrites dans globals.conf
-#   Demons    : running-config de chaque demon lue par la VTY, chaque ligne modifiable
-#               en direct (configure terminal + chemin du noeud + ligne), « no », ajout,
-#               write memory, console VTY libre
-#   Fichiers  : edition brute de configs/*.cfg et /etc/osmocom/*.cfg (sauvegarde)
-#   Etat      : processus osmo-*, ports, compteurs utiles
-#
-# Rien n'est relance : les changements VTY sont immediats, globals.conf et les fichiers
-# servent au prochain run. Ecoute sur 127.0.0.1 seulement : la console VTY execute tout.
-# Bibliotheque standard uniquement.
+# The page is in web/ (index.html, style.css, app.js); this script serves it and provides
+# the /api/... API. Four tabs:
+#   globals.conf : form on the model of globals.conf.example (tools/globals-complet.py:
+#               network settings + all launcher variables), values read from and
+#               written back to globals.conf
+#   Demons    : running-config of each daemon read through the VTY, each line editable
+#               live (configure terminal + node path + line), "no", add, write memory,
+#               free VTY console
+#   Fichiers  : raw editing of configs/*.cfg and /etc/osmocom/*.cfg (backup)
+#   Etat      : osmo-* processes, ports, useful counters
+# Nothing is restarted: VTY changes are immediate, globals.conf and the files are
+# used by the next run. Listens on 127.0.0.1 only: the VTY console executes anything.
+# Standard library only.
 
 import argparse, glob, html, json, os, re, shutil, socket, subprocess, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,7 +58,7 @@ class Vty:
     def cmd(self, ligne):
         self.s.sendall(ligne.encode() + b"\r\n")
         r = self.lire().replace("\r", "")
-        # retire l'echo et le prompt final
+                # strip the echo and the final prompt
         l = r.split("\n")
         if l and l[0].strip() == ligne.strip():
             l = l[1:]
@@ -78,7 +78,7 @@ _cache_vty = {"t": 0, "liste": []}
 
 
 def demons_vty():
-    """Ports d'ecoute des osmo-* et de mobile, sondes : la VTY repond par une banniere."""
+    """Listening ports of the osmo-* and of mobile, probed: the VTY answers with a banner."""
     if time.time() - _cache_vty["t"] < 15:
         return _cache_vty["liste"]
     out = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True).stdout
@@ -120,7 +120,7 @@ def demons_vty():
 
 
 def arbre_config(texte):
-    """running-config -> liste de lignes {txt, prof, chemin[], noeud}."""
+    """running-config -> list of lines {txt, prof, chemin[], noeud}."""
     lignes = []
     for brut in texte.split("\n"):
         if not brut.strip() or brut.strip() == "!" or brut.startswith("Current configuration"):
@@ -194,7 +194,7 @@ def _patron():
 
 
 def lire_globals(patron=None, actuelles=None):
-    """Les champs du patron (ordre, section, commentaire, defaut, choix) avec les valeurs actuelles."""
+    """The template fields (order, section, comment, default, choices) with the current values."""
     if actuelles is None:
         actuelles = _valeurs(GLOBALS)
     champs, section, doc = [], "", []
@@ -223,7 +223,7 @@ def lire_globals(patron=None, actuelles=None):
             val = actuelles.get(cle, _valeur(m.group(2)))
             champs.append({"cle": cle, "val": val, "section": section, "doc": texte, "defaut": defaut, "choix": choix})
         doc = []
-    # variables du fichier absentes du patron : gardees, en fin de liste
+        # file variables absent from the template: kept, at the end of the list
     connues = {c["cle"] for c in champs}
     for cle, val in actuelles.items():
         if cle not in connues:
@@ -231,7 +231,7 @@ def lire_globals(patron=None, actuelles=None):
     return champs
 
 
-# ── instances (c54x_exe/run.sh, un fichier par Calypso) ───────
+# ── instances (c54x_exe/run.sh, one file per Calypso) ───────
 
 INSTANCES = os.path.join(RACINE, "instances")
 PATRON_INST = os.path.join(INSTANCES, "instance.env.example")
@@ -263,7 +263,7 @@ def lire_instance(n):
 
 
 def ecrire_instance(n, nouvelles):
-    """instance-N.env sur le modele du patron : `: "${VAR:=valeur}"` (l environnement garde la priorite)."""
+    """instance-N.env on the model of the template: `: "${VAR:=value}"` (the environment keeps priority)."""
     valeurs = _valeurs_instance(n)
     valeurs.update({k: str(v).replace('"', "").replace("\n", " ") for k, v in nouvelles.items()})
     sortie = ["# instances/instance-%d.env — %s\n" % (n, ROLES.get(n, "")),
@@ -293,12 +293,12 @@ def sauvegarde(chemin):
 
 
 def ecrire_globals(nouvelles):
-    """Reecrit globals.conf sur le modele du patron : memes lignes et commentaires, valeurs actuelles + nouvelles."""
+    """Rewrites globals.conf on the model of the template: same lines and comments, current + new values."""
     valeurs = _valeurs(GLOBALS)
     valeurs.update({k: str(v).replace('"', "").replace("\n", " ") for k, v in nouvelles.items()})
-    # [22:20] dans le bloc du lanceur (marqueurs de tools/globals-complet.py), une variable VIDE est ecrite
-    # commentee : non definie, comme avant. Exportees vides par `set -a`, les 159 variables cassaient le lancement
-    # (« Logs and working area (LOG_DIR non defini) », 21/10 22:11). Seules les valeurs saisies deviennent actives.
+        # in the launcher block (markers of tools/globals-complet.py), an EMPTY variable is
+        # written as a comment: undefined. Exported empty by `set -a`, the launcher variables
+        # would break the launch. Only the entered values become active.
     sortie, vues, bloc = [], set(), False
     for l in open(_patron(), encoding="utf-8"):
         if l.startswith("# >>> VARIABLES DU LANCEUR"):
@@ -337,9 +337,9 @@ def fichier_autorise(p):
     return p in [os.path.realpath(x) for x in fichiers_cfg()]
 
 
-# [2026-10-22] Onglet « Configs osmo » : chaque /etc/osmocom/osmo-*.cfg, son gabarit configs/ (start.sh
-# regenere /etc/osmocom depuis configs/ a chaque run : une retouche de /etc ne vit que jusque-la) et le
-# demon qui le lit en ce moment (-c <fichier> dans sa ligne de commande).
+# "Configs osmo" tab: each /etc/osmocom/osmo-*.cfg, its template in configs/ (start.sh
+# regenerates /etc/osmocom from configs/ on every run: an edit of /etc only lives until
+# then) and the daemon currently reading it (-c <file> in its command line).
 PROTEGES = "/etc/osmocom/.proteges"   # lib/gabarits.sh install_configs_native n'ecrase pas ces fichiers
 
 
@@ -482,7 +482,7 @@ class H(BaseHTTPRequestHandler):
                 sauvegarde(j["p"])
                 with open(j["p"], "w", encoding="utf-8") as f:
                     f.write(j["texte"])
-                # un fichier de /etc/osmocom retouche ici n'est plus ecrase par la regeneration
+                                                                # edited here: kept across the regeneration
                 protege = os.path.dirname(os.path.realpath(j["p"])) == "/etc/osmocom"
                 if protege:
                     proteger(os.path.basename(j["p"]), True)

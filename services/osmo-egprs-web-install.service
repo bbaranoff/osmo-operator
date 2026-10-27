@@ -1,28 +1,28 @@
 [Unit]
-# Joue install-web-service.sh AU BOOT DU CONTENEUR, pas au build de l'image.
+# Runs install-web-service.sh at container boot, not at image build.
 #
-# POURQUOI PAS UN `RUN` DANS LE Dockerfile. Deux raisons, chacune suffisante :
-#   1. le script finit par `systemctl daemon-reload` + `systemctl restart` ;
-#      pendant `docker build` il n'y a pas de systemd (« System has not been
-#      booted with systemd »), et le script est en `set -eu` : le build
-#      echouerait ;
-#   2. il genere un certificat TLS auto-signe. Une cle privee posee au build
-#      serait IDENTIQUE pour quiconque tire l'image — n'importe qui pourrait se
-#      faire passer pour la console. Le script le dit lui-meme dans son § 3.
-#      On la genere donc une fois par conteneur, au premier boot.
+# Why not a `RUN` in the Dockerfile. Two reasons, each sufficient:
+#   1. the script ends with `systemctl daemon-reload` + `systemctl restart`;
+#      during `docker build` there is no systemd (« System has not been
+#      booted with systemd »), and the script runs under `set -eu`: the build
+#      would fail;
+#   2. it generates a self-signed TLS certificate. A private key created at
+#      build time would be identical for everyone pulling the image — anyone
+#      could impersonate the console. It is therefore generated once per
+#      container, at first boot.
 #
-# PAS DE `Before=osmo-egprs-web.service` — c'est deliberé. Le script se termine
-# par `systemctl restart osmo-egprs-web` : ordonner cette unite AVANT le service
-# creerait un cycle (systemctl attendrait un job qui attend cette unite).
-# Consequence assumee et visible au journal : au tout premier boot le dashboard
-# demarre une fois SANS TLS (« HTTPS non arme : certificat absent »), puis cette
-# unite pose le certificat et le redemarre AVEC. Aux boots suivants le
-# certificat est deja la (le script est idempotent, garde de 30 jours) et il n'y
-# a pas de second demarrage.
+# No `Before=osmo-egprs-web.service` — deliberate. The script ends with
+# `systemctl restart osmo-egprs-web`: ordering this unit before the service
+# would create a cycle (systemctl would wait on a job waiting on this unit).
+# Accepted consequence, visible in the journal: at the very first boot the
+# dashboard starts once without TLS (« HTTPS non arme : certificat absent »),
+# then this unit installs the certificate and restarts it with TLS. At later
+# boots the certificate is already there (the script is idempotent, 30-day
+# guard) and there is no second start.
 #
-# ⚠️ Le certificat vit dans /opt/GSM/osmo-egprs-web/tls, DANS le conteneur : il ne
-# survit pas a un `docker rm` (les conteneurs sont lances avec --rm). C'est
-# voulu — il est regenere au boot suivant, avec les IP du moment dans le SAN.
+# ⚠️ The certificate lives in /opt/GSM/osmo-egprs-web/tls, inside the container:
+# it does not survive a `docker rm` (containers are started with --rm). This is
+# intended — it is regenerated at the next boot, with the current IPs in the SAN.
 Description=Installe/rafraichit le dashboard osmo-egprs-web (runtime, unit, certificat TLS)
 Documentation=file:/opt/GSM/osmo-egprs-web/install-web-service.sh
 After=network.target local-fs.target
@@ -32,7 +32,7 @@ ConditionPathIsDirectory=/opt/GSM/osmo-egprs-web
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/bash /opt/GSM/osmo-egprs-web/install-web-service.sh
-# Le script peut passer par un `npm install` : large, mais borne.
+# The script may run an `npm install`: generous, but bounded.
 TimeoutStartSec=600
 StandardOutput=journal
 StandardError=journal

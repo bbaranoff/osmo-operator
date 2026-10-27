@@ -1,9 +1,9 @@
-# sccp.py - SCCP sans connexion (UDT / UDTS / XUDT), juste ce qu'il faut pour
-# transporter du TCAP et pour COMPRENDRE un refus.
+# sccp.py - connectionless SCCP (UDT / UDTS / XUDT), just enough to carry
+# TCAP and to UNDERSTAND a refusal.
 #
-# Le "return cause" d'un UDTS est souvent la seule reponse qu'on obtient d'un
-# reseau de labo : "no translation for this address", "unequipped user"...
-# Le decoder proprement evite de conclure a tort a un silence.
+# The "return cause" of a UDTS is often the only answer a lab network gives:
+# "no translation for this address", "unequipped user"... Decoding it
+# properly avoids mistaking it for silence.
 
 MSG_UDT = 0x09
 MSG_UDTS = 0x0A
@@ -28,7 +28,7 @@ RETURN_CAUSE = {
     0x0E: "segmentation failure",
 }
 
-# SSN usuels (Q.713 + usages Osmocom).
+# Usual SSNs (Q.713 + Osmocom usage).
 SSN = {
     0: "inconnu", 1: "SCCP mgmt", 6: "HLR", 7: "VLR", 8: "MSC", 9: "EIR",
     10: "AUC", 142: "RANAP", 143: "RNSAP", 145: "GMLC", 146: "CAP",
@@ -40,7 +40,7 @@ NAI = {0: "inconnu", 1: "abonne", 2: "reserve national", 3: "national",
 
 
 def tbcd(digits):
-    """Chiffres -> TBCD (demi-octets inverses, complement F)."""
+    """Digits -> TBCD (swapped nibbles, F padding)."""
     digits = "".join(c for c in str(digits) if c in "0123456789*#abc")
     out = bytearray()
     for i in range(0, len(digits), 2):
@@ -61,7 +61,7 @@ def untbcd(raw):
 
 
 def pc_to_int(pc):
-    """'1.11.2' (format ITU 3-8-3) ou entier -> entier 14 bits."""
+    """'1.11.2' (ITU 3-8-3 format) or integer -> 14-bit integer."""
     if isinstance(pc, int):
         return pc
     pc = str(pc).strip()
@@ -76,7 +76,7 @@ def int_to_pc(val):
 
 
 class Address(object):
-    """Adresse SCCP : point code, SSN, et/ou global title (GTI 4)."""
+    """SCCP address: point code, SSN, and/or global title (GTI 4)."""
 
     def __init__(self, pc=None, ssn=None, gt=None, tt=0, np=1, es=2, nai=4,
                  route_on_ssn=None):
@@ -85,7 +85,7 @@ class Address(object):
         self.gt = gt
         self.tt = tt
         self.np = np          # 1 = ISDN/telephony E.164
-        self.es = es          # 2 = BCD, nombre pair (ajuste a l'encodage)
+        self.es = es          # 2 = BCD, even count (adjusted at encoding)
         self.nai = nai        # 4 = international
         if route_on_ssn is None:
             route_on_ssn = gt is None
@@ -156,7 +156,7 @@ class Address(object):
 
 
 def udt(called, calling, data, pclass=0):
-    """UDT : 3 pointeurs relatifs, puis les trois champs de longueur variable."""
+    """UDT: 3 relative pointers, then the three variable-length fields."""
     c1 = called.encode()
     c2 = calling.encode()
     f1 = bytes([len(c1)]) + c1
@@ -209,7 +209,7 @@ def decode(raw):
         data = raw[o3 + 1:o3 + 1 + raw[o3]]
         return Decoded("UDTS", called, calling, data, cause)
     if mtype in (MSG_XUDT, MSG_XUDTS):
-        # XUDT : classe, hop counter, puis 4 pointeurs. On ne lit que l'utile.
+        # XUDT: class, hop counter, then 4 pointers. Only the useful part is read.
         off = 3
         p1, p2, p3 = raw[off], raw[off + 1], raw[off + 2]
         o1, o2, o3 = off + p1, off + 1 + p2, off + 2 + p3

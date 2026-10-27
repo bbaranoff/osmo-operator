@@ -1,150 +1,121 @@
 # =============================================================================
-#  checks/_mode.sh - une seule regle de detection docker/natif, pour tous
-#                    les scripts de checks/
-#  Bibliotheque : a SOURCER, jamais a executer dans une boucle de tests.
+#  checks/_mode.sh - single docker/native detection rule shared by all
+#                    checks/ scripts.
+#  Library: SOURCE it; running it directly only prints what it detects.
 # =============================================================================
 #
-#  POURQUOI CE FICHIER EXISTE
-#  --------------------------
-#  Le lab vit dans deux mondes, et les checks doivent dire la verite dans les
-#  deux :
+#  THE TWO WORLDS
+#  -------------
+#    docker - one osmo-operator-N container per operator on the gsm-inter
+#             network (172.20.0.0/24); the SS7 hub is the osmo-inter-stp
+#             container (172.20.0.10); everything is reached via "docker exec".
+#    native - ISO, VM or bare metal: a single operator (unless netns topology),
+#             everything runs here, VTYs on 127.0.0.1, configs in /etc/osmocom,
+#             daemons are systemd units or plain processes.
 #
-#    docker - un conteneur osmo-operator-N par operateur sur le reseau
-#             gsm-inter (172.20.0.0/24), le hub SS7 est le conteneur
-#             osmo-inter-stp (172.20.0.10) ; on atteint tout par "docker exec".
-#    natif  - ISO, VM ou machine nue : un seul operateur (sauf topologie netns),
-#             tout tourne ici, les VTY sont sur 127.0.0.1, les configs dans
-#             /etc/osmocom, les demons sont des units systemd ou des processus.
-#
-#  Les PORTS VTY sont les MEMES dans les deux mondes - seul l'hote change :
+#  VTY PORTS are the SAME in both worlds - only the host changes:
 #      osmo-stp 4239 · osmo-msc 4254 · osmo-bsc 4242 · osmo-hlr 4258
 #      osmo-sgsn 4245 · osmo-ggsn 4260 · osmo-mgw 4243 · mobile/BB 4247
 #
-#  Avant ce fichier, la meme detection etait recopiee dans cinq scripts, avec
-#  cinq variantes : deux d'entre elles employaient "docker ps | grep -aq", qui
-#  rend 141 sous "set -o pipefail" (grep sort au premier match, le producteur
-#  prend un SIGPIPE) - l'inter-STP etait alors declare absent alors qu'il
-#  tournait, de facon intermittente. Une seule regle, ecrite une fois, corrigee
-#  une fois.
+#  CONTRACT
+#  --------
+#   • defines ONLY functions and ": =" variables; prints nothing, sets no
+#     colors, counts no PASS/FAIL: each check keeps its own ok/fail/warn/skip,
+#     output format and exit code;
+#   • probes return 0 = true, non-0 = false;
+#   • can be sourced twice without side effects (OSMO_MODE_LIB_LOADED guard);
+#   • no "grep -aq" at the end of a pipeline and no "awk ... exit" mid-pipe:
+#     under "set -o pipefail" both return 141;
+#   • compatible with "set -euo pipefail" in the caller.
 #
-#  CONTRAT
-#  -------
-#   • le fichier ne definit QUE des fonctions et des variables ": =" ;
-#     il n'affiche rien, ne pose aucune couleur, ne compte aucun PASS/FAIL :
-#     chaque check garde ses ok/fail/warn/skip, donc son format de sortie et
-#     son code de retour ;
-#   • les sondes rendent 0 = vrai, non-0 = faux ;
-#   • sourcable deux fois sans effet de bord (garde OSMO_MODE_LIB_LOADED) ;
-#   • aucun "grep -aq" en fin de pipeline, aucun "awk ... exit" au milieu d'un
-#     tube : sous "set -o pipefail" ces deux formes rendent 141 ;
-#   • compatible "set -euo pipefail" chez l'appelant.
+#  osmo_mode() VS detect_runtime_env() IN start-native.sh
+#  -----------------------------------------------------
+#  They answer different questions and must not be merged:
+#    detect_runtime_env()  "where am I running?"            -> docker | vm | bare
+#        Decides the ADDRESSING PLAN (docker: inter-STP 172.20.0.10, IP already
+#        set; VM/ISO: inter-STP is another machine, address from DHCP).
+#    osmo_mode()           "how do I REACH the nodes from here?" -> docker | native
+#        Decides between "docker exec" and running locally.
+#  Inside a repository container the first returns "docker" and the second
+#  "native": "docker exec" to oneself makes no sense, even with the socket
+#  mounted. The shared convention is "--docker" / "--native", which
+#  start-native.sh passes to network/setup-wan-mesh.sh and osmo_mode_force()
+#  accepts.
 #
-#  DEUX QUESTIONS DIFFERENTES - POURQUOI start-native.sh GARDE SA DETECTION
-#  ----------------------------------------------------------------------
-#  start-native.sh:159 a sa propre detect_runtime_env(), et elle N'EST PAS un
-#  doublon de osmo_mode() : les deux fonctions repondent a deux questions qui
-#  n'ont pas la meme reponse.
+#  NAMING A NODE - <op>
+#  --------------------
+#  All execution functions take an <op> as first argument, one of:
+#      3                    the operator number (canonical form)
+#      osmo-operator-3      the label (as returned by osmo_ops/osmo_node)
+#      hub | osmo-inter-stp the SS7 hub
+#  In docker this is the container name; in native it is this machine, with
+#  an "ip netns exec osmo-opN" prefix if and only if that namespace exists
+#  (native multi-operator topology, run_modules/12-netns.sh).
+#  The osmo-operator-N label is KEPT in native mode: checks/vty-debug-dump.sh
+#  writes "container=osmo-operator-N" and checks/operator_summary.sh parses
+#  it. It is a correlation key, not a queryable object.
 #
-#    detect_runtime_env()  "ou est-ce que JE tourne ?"  → docker | vm | bare
-#        Question de l'INTERIEUR du noeud. Elle decide du PLAN D'ADRESSAGE :
-#        en docker l'inter-STP est 172.20.0.10 et le noeud a deja son IP ; en
-#        VM/ISO l'inter-STP est une autre machine (192.168.1.49 sur le banc, ou une host-only selon le montage) et l'adresse
-#        arrive par DHCP, donc peut manquer au lancement.
-#
-#    osmo_mode()           "comment j'ATTEINS les noeuds d'ici ?" → docker | native
-#        Question de PILOTAGE. Elle decide entre "docker exec" et "executer
-#        ici".
-#
-#  Elles se CONTREDISENT volontairement dans un cas, et c'est la preuve qu'il ne
-#  faut pas les fusionner : DANS un conteneur du depot, detect_runtime_env rend
-#  "docker" (le plan d'adressage est bien celui de docker) alors qu'osmo_mode
-#  rend "native" - car "docker exec" vers soi-meme n'a aucun sens, meme
-#  quand le socket est monte. Un script qui prendrait l'une pour l'autre
-#  s'enverrait des commandes a lui-meme par le demon docker.
-#
-#  Ce qui EST partage, en revanche, c'est la convention aval : start-native.sh
-#  transmet "--$NODE_MODE" (--docker / --native) a network/setup-wan-mesh.sh
-#  (start-native.sh:756), et c'est exactement ce que consomme osmo_mode_force().
-#  Les deux vocabulaires coincident ; seules les fonctions restent distinctes.
-#
-#  DESIGNER UN NOEUD - <op>
-#  -----------------------
-#  Toutes les fonctions d'execution prennent en premier argument un <op>, qui
-#  accepte indifferemment :
-#      3                    le numero d'operateur (forme normale)
-#      osmo-operator-3      l'etiquette (ce que rendent osmo_ops/osmo_node)
-#      hub | osmo-inter-stp le hub SS7
-#  En docker c'est le nom du conteneur ; en natif c'est cette machine, avec le
-#  prefixe "ip netns exec osmo-opN" si et seulement si l'espace de noms
-#  existe (topologie multi-operateur native, run_modules/12-netns.sh).
-#
-#  L'ETIQUETTE osmo-operator-N EST CONSERVEE EN NATIF. Ce n'est pas une
-#  coquetterie : checks/vty-debug-dump.sh ecrit "container=osmo-operator-N"
-#  dans son dump, et checks/operator_summary.sh y accroche quinze extractions.
-#  L'etiquette est une cle de correlation, pas un objet interrogeable.
-#
-#  SOURCING (le meme bloc partout ; marche depuis le depot et depuis /opt) :
+#  SOURCING (same block everywhere; works from the repository and from /opt):
 #      _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #      for _c in "$_here/_mode.sh" /opt/GSM/osmo-operator/checks/_mode.sh; do
 #          [ -r "$_c" ] && { . "$_c"; break; }
 #      done
 #      command -v osmo_mode >/dev/null || { echo "checks/_mode.sh introuvable" >&2; exit 1; }
+#
+#  Env: OSMO_MODE (force docker|native), OSMO_REPO, OSMO_NATIVE_ROOT, OSMO_BACKBONE_NET,
+#       OSMO_NETNS_PREFIX, OSMO_MULTI_CONF, OSMO_HUB_M3UA_PORT,
+#       OSMO_VTY_OPEN / OSMO_VTY_READ / OSMO_VTY_Q / OSMO_VTY_KILL.
 # =============================================================================
 
 [ -n "${OSMO_MODE_LIB_LOADED:-}" ] && return 0
 OSMO_MODE_LIB_LOADED=1
 
-# Racine du depot : ce fichier est dans checks/, la racine est un cran au-dessus.
-# Sert a retrouver globals.conf ; surchargeable pour les tests.
+# Repository root (this file is in checks/); used to find globals.conf.
+# Can be overridden for tests.
 _osmo_lib_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${OSMO_REPO:=$(dirname "$_osmo_lib_here")}"
 unset _osmo_lib_here
 
-# Plan d'adressage de la dorsale inter-operateurs. La MEME valeur sert aux deux
-# mondes : docker la pose avec "--network gsm-inter --ip", le natif
-# multi-operateur la recree en netns (BACKBONE_NET, run_modules/12-netns.sh:47).
+# Inter-operator backbone addressing. Same value in both worlds: docker uses
+# "--network gsm-inter --ip", native multi-operator recreates it in netns
+# (BACKBONE_NET, run_modules/12-netns.sh).
 : "${OSMO_BACKBONE_NET:=172.20.0}"
 : "${OSMO_NETNS_PREFIX:=${NETNS_PREFIX:-osmo-op}}"
 
-# Prefixe de racine, mode natif seulement : permet de viser un arbre de test
-# (OSMO_NATIVE_ROOT=/tmp/essai) au lieu du /etc de la machine. Vide en
-# production. Meme role que NATIVE_ROOT dans network/setup-wan-mesh.sh.
+# Root prefix, native mode only: points at a test tree
+# (OSMO_NATIVE_ROOT=/tmp/test) instead of the machine's /etc. Empty in
+# production. Same role as NATIVE_ROOT in network/setup-wan-mesh.sh.
 : "${OSMO_NATIVE_ROOT:=}"
 
-# Memo "quel client VTY ce noeud possede-t-il ?", pour ne pas relancer un
-# "command -v nc" a chaque commande VTY (global_check en passe des dizaines).
-# "-g" : la bibliotheque doit rester utilisable meme sourcee DEPUIS une
-# fonction, ou un "declare" nu creerait une variable locale qui disparaitrait
-# au retour.
+# Per-node cache of the available VTY client, to avoid running "command -v nc"
+# for every VTY command. "-g" keeps it global even when the library is sourced
+# from inside a function.
 declare -gA _OSMO_VTY_TOOL 2>/dev/null || declare -A _OSMO_VTY_TOOL
 
 # =============================================================================
 #  1. MODE
 # =============================================================================
 
-# osmo_in_container - tourne-t-on DANS un conteneur DE CE DEPOT ?
-# /.dockerenv seul serait vrai dans n'importe quel conteneur ; on exige aussi
-# /etc/docker-entrypoint-cmd, depose par scripts/entrypoint.sh. C'est le couple
-# qu'emploient start-docker.sh:20 et start-native.sh:159.
+# osmo_in_container - are we running INSIDE a container of THIS repository?
+# /.dockerenv alone is true in any container; also require
+# /etc/docker-entrypoint-cmd, created by scripts/entrypoint.sh (same pair as
+# start-docker.sh and start-native.sh).
 osmo_in_container() {
     [ -f /.dockerenv ] && [ -f /etc/docker-entrypoint-cmd ]
 }
 
-# Detection, du plus explicite au plus deduit.
+# Detection, from the most explicit to the most inferred.
 _osmo_mode_detect() {
-    # Dans un conteneur du depot, on EST le noeud : "docker exec" vers
-    # soi-meme n'a pas de sens, meme si le socket docker est monte (c'est le cas
-    # du conteneur du dashboard). C'est la regle de start-native.sh:237.
+    # Inside a repository container we ARE the node: "docker exec" to oneself
+    # makes no sense, even if the docker socket is mounted (dashboard container).
     if osmo_in_container; then printf 'native\n'; return 0; fi
 
-    # OSMO_NATIVE=1 est deja pose par l'ISO (services/osmo-egprs-web.service).
+    # OSMO_NATIVE=1 is set by the ISO (services/osmo-egprs-web.service).
     if [ "${OSMO_NATIVE:-}" = "1" ]; then printf 'native\n'; return 0; fi
 
-    # LA regle du depot (checks/wan_ss7_check.sh:88, network/setup-wan-mesh.sh:122) :
-    # on ne se fie pas a la presence du binaire docker - l'hote du lab l'a, une
-    # machine de dev aussi - mais a celle d'un conteneur operateur EN COURS.
-    # On capture la liste AVANT de la filtrer : "docker ps | grep -aq" rendrait
-    # 141 sous pipefail.
+    # Repository rule (also in wan_ss7_check.sh and setup-wan-mesh.sh): rely on a
+    # RUNNING operator container, not on the docker binary being present.
+    # Capture the list BEFORE filtering: "docker ps | grep -aq" returns 141 under pipefail.
     if command -v docker >/dev/null 2>&1; then
         local names
         names="$(docker ps --format '{{.Names}}' 2>/dev/null || true)"
@@ -155,8 +126,8 @@ _osmo_mode_detect() {
     printf 'native\n'
 }
 
-# osmo_mode - ecrit "docker" ou "native". Memoise dans OSMO_MODE, qui fait
-# aussi office d'entree : "OSMO_MODE=native ./checks/global_check.sh" force.
+# osmo_mode - prints "docker" or "native". Cached in OSMO_MODE, which also
+# acts as input: "OSMO_MODE=native ./checks/global_check.sh" forces it.
 osmo_mode() {
     case "${OSMO_MODE:-}" in
         docker|native) : ;;
@@ -169,9 +140,8 @@ osmo_is_docker() { [ "$(osmo_mode)" = docker ]; }
 osmo_is_native() { [ "$(osmo_mode)" = native ]; }
 
 # osmo_mode_force <docker|native|--docker|--native|--mode=X>
-# A glisser tel quel dans la boucle "case" d'analyse des options de chaque
-# script : l'explicite gagne toujours sur la detection. Rend 2 sur un argument
-# qui n'est pas un mode (l'appelant sait alors que l'option ne le concerne pas).
+# Drop into each script's option "case" loop: explicit always wins over
+# detection. Returns 2 for an argument that is not a mode.
 osmo_mode_force() {
     local m="${1:-}"
     case "$m" in
@@ -186,11 +156,11 @@ osmo_mode_force() {
 }
 
 # =============================================================================
-#  2. INVENTAIRE
+#  2. INVENTORY
 # =============================================================================
 
-# Lit une cle de globals.conf ("N_OPERATORS=3"). On lit le fichier avec awk
-# directement : pas de tube, donc pas de piege pipefail.
+# Reads a key from globals.conf ("N_OPERATORS=3") with awk directly:
+# no pipe, hence no pipefail trap.
 _osmo_globals() {
     local k="${1:-}" f v
     for f in "${OSMO_GLOBALS:-}" "$OSMO_REPO/globals.conf" \
@@ -202,35 +172,26 @@ _osmo_globals() {
     return 1
 }
 
-# osmo_ops - identifiants des operateurs presents, un par ligne, tries.
-#   docker : les conteneurs osmo-operator-N en cours.
-#   natif  : $OSMO_OP_IDS (pose par services/osmo-egprs-web.service), puis les
-#            netns osmo-opN (multi-operateur natif), puis N_OPERATORS de
-#            globals.conf, sinon 1. Aucun inventaire n'existe en natif : la vie
-#            d'un noeud se deduit des demons, pas d'une liste de conteneurs.
-# ══ LA TOPOLOGIE MULTI-OPERATEUR ═════════════════════════════════════════════
-# [2026-08-31] Ces checks supposaient UN SEUL mode pour tout le banc :
-# osmo_mode() rend "docker" ou "native", et osmo_exec/osmo_ops/osmo_hub_ip s en
-# servent globalement. C etait vrai tant qu une machine portait soit des
-# conteneurs, soit un operateur natif.
+# osmo_ops - IDs of the present operators, one per line, sorted.
+#   multi  : the operators declared in the multi-operator topology (below).
+#   docker : the running osmo-operator-N containers.
+#   native : $OSMO_OP_IDS (set by services/osmo-egprs-web.service), then the
+#            osmo-opN netns (native multi-operator), then N_OPERATORS from
+#            globals.conf, else 1.
 #
-# Le banc multi-operateur est MIXTE : op 1 natif sur l hote, op 2 et 3 en
-# conteneurs, hub en conteneur. Le mode global tranchait donc pour tout le
-# monde, et le check partait interroger un "osmo-operator-1" qui n existe plus,
-# au point code 1.23.2 qui n est celui de personne - d ou des "MSC VTY 4254
-# inaccessible" qui ne disaient rien de l etat reel du banc, juste qu on
-# sondait la mauvaise adresse.
-#
-# /etc/osmocom/osmo-multi.conf est ecrit par addition.sh et fait autorite :
+# ══ MULTI-OPERATOR TOPOLOGY ══════════════════════════════════════════════════
+# A multi-operator bench can be MIXED (e.g. op 1 native on the host, op 2 and 3
+# and the hub in containers), so mode, IP and point code are per operator.
+# /etc/osmocom/osmo-multi.conf, written by addition.sh, is authoritative:
 #   MULTI_OPS="1:native::1.1.2:150 2:docker:172.20.0.12:1.2.2:250 ..."
 #   MULTI_HUB_IP=172.20.0.10  MULTI_HUB_NAME=osmo-inter-stp
-# On le lit quand il existe ; sinon RIEN ne change, l ancienne detection reste.
+# When absent, the global detection above applies.
 OSMO_MULTI_CONF="${OSMO_MULTI_CONF:-/etc/osmocom/osmo-multi.conf}"
 _OSMO_MULTI_LOADED=""
 
 _osmo_multi_load() {
     [ -n "$_OSMO_MULTI_LOADED" ] && return "$_OSMO_MULTI_LOADED"
-    _OSMO_MULTI_LOADED=1                      # 1 = pas de topologie
+    _OSMO_MULTI_LOADED=1                      # 1 = no topology
     [ -r "$OSMO_MULTI_CONF" ] || return 1
     # shellcheck disable=SC1090
     . "$OSMO_MULTI_CONF" 2>/dev/null || return 1
@@ -239,11 +200,11 @@ _osmo_multi_load() {
     return 0
 }
 
-# osmo_multi_active - rc 0 si une topologie multi-operateur est declaree.
+# osmo_multi_active - rc 0 if a multi-operator topology is declared.
 osmo_multi_active() { _osmo_multi_load; }
 
-# osmo_op_mode <id> - "native" ou "docker" POUR CET OPERATEUR.
-# Sans topologie, retombe sur le mode global : le comportement d avant.
+# osmo_op_mode <id> - "native" or "docker" FOR THIS OPERATOR.
+# Without a topology, falls back to the global mode.
 osmo_op_mode() {
     local want="${1:-}" spec idx mode
     if _osmo_multi_load; then
@@ -255,14 +216,14 @@ osmo_op_mode() {
     osmo_mode
 }
 
-# osmo_hub_pc - point code du hub, depuis la topologie ; vide sinon.
+# osmo_hub_pc - hub point code from the topology; empty otherwise.
 osmo_hub_pc() {
     _osmo_multi_load || return 1
     [ -n "${MULTI_HUB_PC:-}" ] || return 1
     printf '%s\n' "$MULTI_HUB_PC"
 }
 
-# osmo_op_pc <id> - point code attendu, depuis la topologie ; vide sinon.
+# osmo_op_pc <id> - expected point code from the topology; empty otherwise.
 osmo_op_pc() {
     local want="${1:-}" spec idx mode ip pc
     _osmo_multi_load || return 1
@@ -275,9 +236,8 @@ osmo_op_pc() {
 
 osmo_ops() {
     local ids=""
-    # La topologie declaree prime sur toute detection : elle enumere les
-    # operateurs ATTENDUS, natif compris - un operateur arrete doit apparaitre
-    # dans le bilan comme manquant, pas disparaitre de la liste.
+    # The declared topology overrides detection: it lists the EXPECTED operators,
+    # so a stopped operator shows up as missing instead of disappearing.
     if _osmo_multi_load; then
         ids="$(tr ' ' '\n' <<<"$MULTI_OPS" | cut -d: -f1 | sed -n 's/^\([0-9][0-9]*\)$/\1/p')"
         [ -n "$ids" ] && { sort -n -u <<<"$ids" | sed '/^$/d'; return 0; }
@@ -303,9 +263,8 @@ osmo_ops() {
     sort -n -u <<<"$ids" | sed '/^$/d'
 }
 
-# osmo_op_exists <id> - l'operateur existe-t-il ?
-# Remplace "docker ps | grep osmo-operator-N" de global_check.sh:131, dont le
-# motif n'etait pas ancre : "--op=1" y acceptait aussi osmo-operator-10.
+# osmo_op_exists <id> - does the operator exist? (anchored match: "1" does
+# not match osmo-operator-10)
 osmo_op_exists() {
     local want="${1:-}" id
     case "$want" in ''|*[!0-9]*) return 2 ;; esac
@@ -315,10 +274,9 @@ osmo_op_exists() {
     return 1
 }
 
-# osmo_node <op> - etiquette du noeud : "osmo-operator-N" ou "osmo-inter-stp".
-# En docker c'est le nom du conteneur ; en natif c'est un NOM D'AFFICHAGE, et
-# c'est ce qui preserve mot pour mot la banniere "OPERATEUR 1 (osmo-operator-1)"
-# et le champ "container=" du dump.
+# osmo_node <op> - node label: "osmo-operator-N" or "osmo-inter-stp".
+# In docker this is the container name; in native it is a DISPLAY NAME that
+# keeps banners and the dump's "container=" field identical.
 osmo_node() {
     case "${1:-}" in
         hub|osmo-inter-stp) printf 'osmo-inter-stp\n' ;;
@@ -328,7 +286,7 @@ osmo_node() {
     esac
 }
 
-# Numero d'operateur d'un <op> ; vide pour le hub ou pour l'inconnu.
+# Operator number of an <op>; empty for the hub or unknown values.
 _osmo_id() {
     case "${1:-}" in
         hub|osmo-inter-stp) printf '' ;;
@@ -338,13 +296,12 @@ _osmo_id() {
     esac
 }
 
-# osmo_hub - un inter-STP est-il interrogeable ICI ? Ecrit son etiquette si oui.
-#   docker : le conteneur osmo-inter-stp tourne.
-#   natif  : cette machine EST le hub - OSMO_ROLE=interstp dans /etc/osmo-role
-#            (pose par build-iso.sh), ou la sonde de start-interstp.sh:100.
-# Sur un noeud operateur natif le hub est une AUTRE machine : rc 1, et c'est
-# osmo_hub_hint qui dit quoi faire. Un "0 AS actif" fabrique se lirait comme
-# une panne.
+# osmo_hub - is an inter-STP queryable HERE? Prints its label if so.
+#   docker : the osmo-inter-stp container is running.
+#   native : this machine IS the hub - OSMO_ROLE=interstp in /etc/osmo-role
+#            (set by build-iso.sh), or the start-interstp.sh probe.
+# On a native operator node the hub is ANOTHER machine: rc 1, and
+# osmo_hub_hint says what to do instead of reporting a fake "0 AS active".
 osmo_hub() {
     if [ "$(osmo_mode)" = docker ]; then
         local names
@@ -362,17 +319,17 @@ osmo_hub() {
     return 1
 }
 
-# OSMO_HUB_M3UA_PORT - port M3UA du hub inter-STP (helpers/create_interop.sh
-# ecrit "listen m3ua 2908"). Les STP operateur, eux, ecoutent sur 2905.
+# OSMO_HUB_M3UA_PORT - M3UA port of the inter-STP hub (helpers/create_interop.sh
+# writes "listen m3ua 2908"). Operator STPs listen on 2905.
 : "${OSMO_HUB_M3UA_PORT:=2908}"
 
-# _osmo_hub_ip_probe - demande aux noeuds operateur ou est leur hub. Deux
-# sources, dans cet ordre :
-#   1. OSMO_HUB_IP, injecte dans chaque conteneur par start-docker.sh (-e OSMO_HUB_IP)
-#      des que --hub-ip / --wan designe un inter-STP hors dorsale docker ;
-#   2. le "remote-ip" de l'asp asp-to-inter dans /etc/osmocom/osmo-stp.cfg, qui
-#      reste vrai meme sans environnement (conteneur relance a la main, ISO).
-# Rend 1 sans rien ecrire si aucun noeud ne sait repondre.
+# _osmo_hub_ip_probe - ask the operator nodes where their hub is. Sources,
+# in order:
+#   1. OSMO_HUB_IP, injected into each container by start-docker.sh (-e OSMO_HUB_IP)
+#      when --hub-ip / --wan points to an inter-STP outside the docker backbone;
+#   2. the "remote-ip" of asp asp-to-inter in /etc/osmocom/osmo-stp.cfg, valid
+#      even without that environment (manually restarted container, ISO).
+# Returns 1 without output if no node can answer.
 _osmo_hub_ip_probe() {
     local op v=""
     for op in $(osmo_ops 2>/dev/null); do
@@ -385,13 +342,12 @@ _osmo_hub_ip_probe() {
     return 1
 }
 
-# osmo_hub_ip - adresse du hub. Rien a dire → rc 1.
-#   docker + hub local  : la dorsale, 172.20.0.10 ;
-#   docker sans hub local : l'adresse WAN vue par les operateurs (--hub-ip) ;
-#   natif : OSMO_HUB_IP de /etc/osmo-role (idiome de wan_ss7_check.sh:193),
-#           puis, a defaut, la meme sonde par les noeuds.
-# Le resultat est mis en cache : la sonde coute un "docker exec" par noeud, et
-# les checks appellent cette fonction plusieurs fois par passage.
+# osmo_hub_ip - hub address. Nothing known -> rc 1.
+#   docker + local hub    : the backbone, 172.20.0.10;
+#   docker, no local hub  : the WAN address seen by the operators (--hub-ip);
+#   native                : OSMO_HUB_IP from /etc/osmo-role, else the same node probe.
+# Cached: the probe costs one "docker exec" per node and checks call this
+# function several times per run.
 _OSMO_HUB_IP_CACHE=""
 osmo_hub_ip() {
     if [ -n "$_OSMO_HUB_IP_CACHE" ]; then
@@ -399,9 +355,8 @@ osmo_hub_ip() {
         printf '%s\n' "$_OSMO_HUB_IP_CACHE"; return 0
     fi
     local v=""
-    # MULTI_HUB_IP fait autorite : sur un banc mixte, deduire l adresse du hub
-    # du mode global menait a la mauvaise (la boucle locale pour un natif,
-    # alors que le hub vit dans un conteneur).
+    # MULTI_HUB_IP is authoritative: on a mixed bench the global mode would give
+    # the wrong address (loopback for a native operator while the hub is a container).
     if _osmo_multi_load && [ -n "${MULTI_HUB_IP:-}" ]; then
         _OSMO_HUB_IP_CACHE="$MULTI_HUB_IP"
         printf '%s\n' "$MULTI_HUB_IP"; return 0
@@ -420,10 +375,10 @@ osmo_hub_ip() {
     printf '%s\n' "$v"
 }
 
-# osmo_hub_is_remote - rc 0 (et ecrit l'IP) quand un hub est CONFIGURE mais
-# vit AILLEURS : c'est le cas WAN (--hub-ip / --wan), ou le noeud operateur
-# natif. Une adresse de dorsale docker ou de boucle locale sans conteneur hub
-# ne compte pas : la, le hub n'est pas distant, il est simplement absent.
+# osmo_hub_is_remote - rc 0 (and prints the IP) when a hub is CONFIGURED but
+# lives ELSEWHERE: the WAN case (--hub-ip / --wan) or a native operator node.
+# A docker backbone or loopback address without a hub container does not
+# count: then the hub is not remote, it is absent.
 osmo_hub_is_remote() {
     local ip
     osmo_hub >/dev/null 2>&1 && return 1
@@ -435,13 +390,12 @@ osmo_hub_is_remote() {
     printf '%s\n' "$ip"
 }
 
-# osmo_hub_assoc [ip] [port] - combien de noeuds locaux ont une association
-# SCTP ETABLIE vers le hub ? Le lien inter-STP est du M3UA sur SCTP : une
-# sonde TCP ("nc -z" sur 2908) rend "Connection refused" meme quand le lien
-# est parfaitement monte. C'est "ss --sctp" qui dit la verite, et il la dit
-# depuis le NOEUD, pas depuis l'hote : le conteneur a sa propre pile reseau.
-# Ecrit "etablies/total" ; rc 0 si au moins une, 1 si aucune, 2 si la sonde
-# n'est pas praticable (ni ss, ni support --sctp, ni noeud interrogeable).
+# osmo_hub_assoc [ip] [port] - how many local nodes have an ESTABLISHED SCTP
+# association to the hub? The inter-STP link is M3UA over SCTP, so a TCP probe
+# ("nc -z" on 2908) is refused even when the link is up. "ss --sctp" is used,
+# run from inside the NODE (containers have their own network stack).
+# Prints "established/total"; rc 0 if at least one, 1 if none, 2 if the probe
+# is not possible (no ss, no --sctp support, no queryable node).
 osmo_hub_assoc() {
     local ip="${1:-}" port="${2:-$OSMO_HUB_M3UA_PORT}" op out probed=0 n=0 tot=0 pat
     [ -n "$ip" ] || ip="$(osmo_hub_ip 2>/dev/null || true)"
@@ -459,10 +413,10 @@ osmo_hub_assoc() {
     [ "$n" -gt 0 ]
 }
 
-# osmo_hub_hint - phrase prete pour skip(), quand le hub existe mais est
-# ailleurs. Le VTY Osmocom n'ecoute que sur 127.0.0.1 (aucune conf du depot ne
-# pose de "bind" sous "line vty") : depuis un noeud operateur, l'etat des AS
-# et des ASP du hub n'est PAS observable. La commande citee existe deja.
+# osmo_hub_hint - ready-made skip() message when the hub exists but is
+# elsewhere. Osmocom VTYs listen only on 127.0.0.1 (no repository config sets
+# "bind" under "line vty"), so the hub's AS/ASP state is NOT observable from
+# an operator node.
 osmo_hub_hint() {
     local ip
     ip="$(osmo_hub_ip 2>/dev/null || true)"
@@ -474,11 +428,11 @@ osmo_hub_hint() {
 }
 
 # =============================================================================
-#  3. EXECUTION SUR UN NOEUD
+#  3. EXECUTION ON A NODE
 # =============================================================================
 
-# Prefixe netns du mode natif. Vide en mono-operateur : la dorsale et les
-# espaces de noms ne sont crees que si N_OPERATORS > 1.
+# Native-mode netns prefix. Empty for a single operator: the backbone and
+# namespaces are only created when N_OPERATORS > 1.
 _osmo_ns_cmd() {
     local id ns
     id="$(_osmo_id "${1:-}")"
@@ -489,12 +443,12 @@ _osmo_ns_cmd() {
     fi
 }
 
-# osmo_exec <op> <argv...> - substitution 1:1 de "docker exec "$container" ...".
+# osmo_exec <op> <argv...> - 1:1 replacement for "docker exec "$container" ...".
 osmo_exec() {
     local op="${1:-}"; shift || return 2
     [ $# -ge 1 ] || return 2
-    # Le mode se decide operateur par operateur : sur un banc mixte, le natif
-    # s interroge en local pendant que ses voisins passent par docker exec.
+    # Mode is decided per operator: on a mixed bench the native one is queried
+    # locally while its neighbours go through docker exec.
     if [ "$(osmo_op_mode "$(_osmo_id "$op")")" = docker ]; then
         local c; c="$(osmo_node "$op")"
         [ -n "$c" ] || return 2
@@ -502,12 +456,12 @@ osmo_exec() {
         return $?
     fi
     local ns; ns="$(_osmo_ns_cmd "$op")"
-    # shellcheck disable=SC2086  # ns doit etre decoupe en mots (ip netns exec X)
+    # shellcheck disable=SC2086  # ns must be word-split (ip netns exec X)
     if [ -n "$ns" ]; then $ns "$@"; else "$@"; fi
 }
 
-# Idem, mais l'entree standard est transmise au noeud ("docker exec -i").
-# Interne : reserve au dialogue VTY, ou le tube est l'entree de nc/telnet.
+# Same, but stdin is forwarded to the node ("docker exec -i").
+# Internal: used for VTY dialogue, where the pipe feeds nc/telnet.
 _osmo_exec_in() {
     local op="${1:-}"; shift || return 2
     if [ "$(osmo_op_mode "$(_osmo_id "$op")")" = docker ]; then
@@ -519,7 +473,7 @@ _osmo_exec_in() {
     if [ -n "$ns" ]; then $ns "$@"; else "$@"; fi
 }
 
-# osmo_cat <op> <chemin> - contenu d'un fichier du noeud (conf, marqueur...).
+# osmo_cat <op> <path> - contents of a file on the node (config, marker...).
 osmo_cat() {
     local op="${1:-}" path="${2:-}"
     [ -n "$path" ] || return 2
@@ -530,25 +484,24 @@ osmo_cat() {
     fi
 }
 
-# osmo_ast <op> <commande CLI> - asterisk -rx, identique dans les deux mondes.
+# osmo_ast <op> <CLI command> - asterisk -rx, identical in both worlds.
 osmo_ast() {
     local op="${1:-}" cli="${2:-}"
     [ -n "$cli" ] || return 2
     osmo_exec "$op" asterisk -rx "$cli" 2>/dev/null
 }
 
-# osmo_running <op> <demon> - ce demon tourne-t-il sur ce noeud ?
+# osmo_running <op> <daemon> - is this daemon running on this node?
 #
-# En natif il faut les DEUX formes : sur l'ISO les demons sont des units
-# (services/osmo-bts-trx.service...) mais core_svc_start retombe sur un lancement
-# detache quand systemd est absent - auquel cas seul pgrep repond.
+# Native mode needs BOTH checks: on the ISO daemons are units
+# (services/osmo-bts-trx.service...), but core_svc_start falls back to a
+# detached process without systemd, where only pgrep answers.
 #
-# Le repli "pgrep -f" n'est pas decoratif : /proc/PID/comm est TRONQUE a 15
-# caracteres, donc "pgrep -ax osmo-sip-connector" (18) ne trouve jamais rien,
-# quand bien meme le demon tourne. On retente alors sur la ligne de commande.
+# The "pgrep -f" fallback is needed because /proc/PID/comm is TRUNCATED to 15
+# characters, so "pgrep -ax osmo-sip-connector" (18) never matches.
 #
-# Limite assumee du natif multi-operateur : "ip netns exec" n'isole pas les
-# PID, la reponse porte donc sur la machine, pas sur l'operateur.
+# Known limitation (native multi-operator): "ip netns exec" does not isolate
+# PIDs, so the answer is per machine, not per operator.
 osmo_running() {
     local op="${1:-}" name="${2:-}"
     [ -n "$name" ] || return 2
@@ -564,13 +517,11 @@ osmo_running() {
     pgrep -f "(^|/)${name}([[:space:]]|\$)" >/dev/null 2>&1
 }
 
-# osmo_sock <op> <chemin> - socket UNIX en ecoute ?
-# L'ORDRE EST OBLIGATOIRE : on interroge ss AVANT le test de fichier. Sous
-# PrivateTmp, /tmp/msc_mncc EXISTE sans etre visible par "test -S" (constate,
-# run_modules/13-msc.sh:14) ; un "test -S" seul donnerait un "voix
-# impossible" mensonger.
-# awk lit TOUTE son entree (pas d'"exit" au milieu du tube) : sous pipefail,
-# un awk qui sort tot ferait mourir ss en SIGPIPE et rendrait 141.
+# osmo_sock <op> <path> - is a UNIX socket listening?
+# ss is queried BEFORE the file test: under PrivateTmp, /tmp/msc_mncc exists
+# but is invisible to "test -S" (run_modules/13-msc.sh).
+# awk reads ALL its input (no mid-pipe "exit"): an early exit would kill ss
+# with SIGPIPE and return 141 under pipefail.
 osmo_sock() {
     local op="${1:-}" p="${2:-}" out
     [ -n "$p" ] || return 2
@@ -579,9 +530,8 @@ osmo_sock() {
     osmo_exec "$op" test -S "$p" 2>/dev/null
 }
 
-# osmo_port <op> <port> [tcp|udp|sctp] - ce port est-il en ecoute sur le noeud ?
-# Remplace le "ss -tlnp | grep -ac ':7890'" de global_check.sh:493 : pas de
-# tube fragile, et ":7890" ne peut plus se confondre avec 17890 ou 78901.
+# osmo_port <op> <port> [tcp|udp|sctp] - is this port listening on the node?
+# Exact port match: ":7890" does not match 17890 or 78901.
 osmo_port() {
     local op="${1:-}" port="${2:-}" proto="${3:-tcp}" out
     local -a opts
@@ -593,7 +543,7 @@ osmo_port() {
         *)    return 2 ;;
     esac
     out="$(osmo_exec "$op" ss "${opts[@]}" 2>/dev/null || true)"
-    # Le 4e champ de ss est "adresse:port" local, pour tcp, udp et sctp.
+    # ss field 4 is the local "address:port" for tcp, udp and sctp.
     awk -v want="$port" '
         { a = $4
           if (a == "" || match(a, /:[0-9]+$/) == 0) next
@@ -601,13 +551,13 @@ osmo_port() {
         END { exit !f }' <<<"$out"
 }
 
-# osmo_host <op> - l'hote a joindre pour ce noeud DEPUIS ICI (relais SMS, SIP,
-# M3UA...). Ce n'est PAS l'hote du VTY : celui-ci est toujours 127.0.0.1 vu de
-# l'interieur du noeud, et osmo_vty s'en charge.
-#   docker           : l'IP du conteneur sur la dorsale (172.20.0.1N, .10 = hub)
-#   natif + netns    : la meme dorsale, recreee en netns
-#   natif mono-op    : 127.0.0.1 - il n'y a ni pont gsm-inter ni 172.20.0.0/24
-#   hub natif        : OSMO_HUB_IP de /etc/osmo-role, sinon 127.0.0.1
+# osmo_host <op> - host to reach this node FROM HERE (SMS relay, SIP,
+# M3UA...). NOT the VTY host, which is always 127.0.0.1 inside the node
+# (handled by osmo_vty).
+#   docker           : container IP on the backbone (172.20.0.1N, .10 = hub)
+#   native + netns   : the same backbone, recreated in netns
+#   native single-op : 127.0.0.1 - no gsm-inter bridge, no 172.20.0.0/24
+#   native hub       : OSMO_HUB_IP from /etc/osmo-role, else 127.0.0.1
 osmo_host() {
     local op="${1:-}" id
     case "$op" in
@@ -632,11 +582,9 @@ osmo_host() {
 #  4. VTY
 # =============================================================================
 
-# Quel client VTY ce noeud possede-t-il ? nc de preference, telnet en repli.
-# L'ISO installe netcat-openbsd ET telnet (build-iso.sh:693) mais PAS socat :
-# ne pas s'appuyer sur socat comme le fait core_vty_ask de run_modules/.
-# Le diagnostic est ecrit UNE FOIS par noeud, sur stderr, pour ne pas polluer la
-# sortie du check ni la repeter a chaque commande.
+# Which VTY client does this node have? nc preferred, telnet as fallback.
+# The ISO installs netcat-openbsd AND telnet but NOT socat (unlike core_vty_ask
+# in run_modules/). The diagnostic is printed ONCE per node, on stderr.
 _osmo_vty_tool() {
     local op="${1:-}" key tool
     key="$(osmo_node "$op")"
@@ -657,11 +605,10 @@ _osmo_vty_tool() {
     printf '%s\n' "$tool"
 }
 
-# osmo_vty_up <op> <port> - le VTY repond-il ?
-# Remplace les cinq copies de "docker exec ... echo >/dev/tcp/127.0.0.1/PORT".
-# En natif on essaie d'abord la sonde PASSIVE (ss) : elle n'ouvre ni ne referme
-# de session VTY. Si elle ne voit rien (ss absent, /proc restreint), on retombe
-# sur la sonde active - pas de faux negatif.
+# osmo_vty_up <op> <port> - does the VTY answer?
+# In native mode the PASSIVE probe (ss) is tried first: it opens no VTY
+# session. If it sees nothing (no ss, restricted /proc), fall back to the
+# active probe - no false negatives.
 osmo_vty_up() {
     local op="${1:-}" port="${2:-}"
     case "$port" in ''|*[!0-9]*) return 2 ;; esac
@@ -671,27 +618,24 @@ osmo_vty_up() {
     osmo_exec "$op" bash -c "echo >/dev/tcp/127.0.0.1/${port}" 2>/dev/null
 }
 
-# osmo_vty <op> <port> <commande>... - envoie les commandes au VTY, rend la
-# sortie BRUTE sur stdout (banniere et invite comprises : c'est osmo_vty_clean
-# qui filtre, et les scripts n'ont pas tous le meme filtre).
+# osmo_vty <op> <port> <command>... - sends the commands to the VTY and
+# prints the RAW output (banner and prompt included; osmo_vty_clean filters).
 #
-# Rend 1 SANS RIEN ECRIRE si le VTY ne repond pas, ou si le noeud n'a ni nc ni
-# telnet : c'est le contrat des vty_cmd() actuelles, que les checks utilisent
-# pour distinguer "service muet" de "service sans reponse a cette commande".
-# La sonde prealable est celle d'osmo_vty_up (une connexion TCP ouverte puis
-# refermee, comme aujourd'hui).
+# Returns 1 WITHOUT OUTPUT if the VTY does not answer or the node has neither
+# nc nor telnet, so callers can tell "service silent" from "no answer to
+# this command". The pre-check is osmo_vty_up (one TCP open/close).
 #
-# L'appelant fournit ses propres "enable" / "end" : la bibliotheque
-# n'invente aucune commande.
+# The caller supplies its own "enable" / "end": the library adds no command.
 #
-# LES TEMPORISATIONS SONT DES PARAMETRES, par variables d'environnement, parce
-# que chaque script a les siennes et que les changer changerait la QUANTITE de
-# sortie capturee - donc les "grep -ac" qui la comptent :
-#     OSMO_VTY_OPEN  attente avant d'ecrire (0.5 ; ss7_check : 1)
-#     OSMO_VTY_READ  attente de lecture     (2   ; ss7_check : 1.5)
-#     OSMO_VTY_Q     nc -q<N>               (1   ; vty-debug-dump : 2)
-# Le VTY Osmocom ignore ce qui arrive avant la fin de sa negociation telnet :
-# ces sleep cadencent le DIALOGUE, ce ne sont pas des barrieres d'attente.
+# TIMINGS ARE PARAMETERS (environment variables), because each script has its
+# own and changing them changes the AMOUNT of captured output, hence the
+# "grep -ac" counts:
+#     OSMO_VTY_OPEN  delay before writing (0.5; ss7_check: 1)
+#     OSMO_VTY_READ  read delay           (2  ; ss7_check: 1.5)
+#     OSMO_VTY_Q     nc -q<N>             (1  ; vty-debug-dump: 2)
+#     OSMO_VTY_KILL  hard timeout of the VTY client, seconds (8)
+# The Osmocom VTY ignores input received before its telnet negotiation ends:
+# these sleeps pace the DIALOGUE, they are not wait barriers.
 osmo_vty() {
     local op="${1:-}" port="${2:-}"
     [ $# -ge 3 ] || return 2
@@ -707,22 +651,16 @@ osmo_vty() {
     tool="$(_osmo_vty_tool "$op")" || return 1
 
     local open="${OSMO_VTY_OPEN:-0.5}" read_s="${OSMO_VTY_READ:-2}" q="${OSMO_VTY_Q:-1}"
-    # [2026-09-05] LE CLIENT VTY EST BORNE DE FORCE, ET C'EST telnet QUI L'EXIGE.
-    # L'image docker des operateurs n'a que telnet (pas netcat-openbsd, que
-    # l'ISO installe pour le natif) : _osmo_vty_tool y retombe donc sur telnet.
-    # Or telnet, lui, N'A PAS d'equivalent du "-q" de nc : EOF sur son entree ne
-    # le fait pas raccrocher, et le VTY Osmocom ne ferme pas non plus apres
-    # "end". Resultat mesure : ss7_check.sh restait bloque pour toujours sur le
-    # premier operateur en conteneur, donc jamais de matrice de connectivite
-    # (l'encart affichait "premiere mesure en cours..." indefiniment) et le
-    # bilan de start-multi.sh ne rendait jamais la main sur op2/op3.
-    # Le "timeout" part DANS le noeud (docker exec ... timeout N telnet ...) :
-    # tuer le docker exec d'ici laisserait le telnet vivant dans le conteneur.
+    # The VTY client is always run under "timeout": operator docker images only
+    # have telnet, which has no equivalent of nc's "-q" (EOF on stdin does not
+    # hang up, and the Osmocom VTY does not close after "end"), so it would block
+    # forever. The timeout runs INSIDE the node (docker exec ... timeout N telnet):
+    # killing docker exec from here would leave telnet running in the container.
     local kill_after="${OSMO_VTY_KILL:-8}"
 
-    # nc/telnet ferment souvent avant d'avoir tout lu : le sous-shell producteur
-    # prend alors un SIGPIPE et le tube rend 141. "|| true" garde la fonction
-    # utilisable sous "set -euo pipefail".
+    # nc/telnet often exit before reading everything: the producer subshell
+    # then gets SIGPIPE and the pipe returns 141. "|| true" keeps the function
+    # usable under "set -euo pipefail".
     if [ "$tool" = nc ]; then
         { sleep "$open"; printf '%s' "$body"; sleep "$read_s"; } \
             | _osmo_exec_in "$op" timeout "$kill_after" nc "-q${q}" 127.0.0.1 "$port" 2>/dev/null || true
@@ -733,11 +671,11 @@ osmo_vty() {
     return 0
 }
 
-# osmo_vty_clean [motif supplementaire] - filtre stdin→stdout : retire banniere,
-# invite et lignes vides. Le motif de base et L'ORDRE des filtres sont ceux des
-# scripts, au caractere pres : y toucher changerait leur sortie.
-# global_check.sh et ss7_check.sh filtrent en plus "Free Software lives", que
-# vty-debug-dump.sh garde - d'ou l'argument optionnel :
+# osmo_vty_clean [extra pattern] - stdin->stdout filter removing banner, prompt
+# and empty lines. The base pattern and the ORDER of filters match the
+# scripts exactly: changing them would change their output.
+# global_check.sh and ss7_check.sh also drop "Free Software lives", which
+# vty-debug-dump.sh keeps - hence the optional argument:
 #     osmo_vty_clean 'Free Software lives'
 osmo_vty_clean() {
     local extra="${1:-}"
@@ -750,12 +688,12 @@ Connection closed)"
     grep -avE "$re" | sed 's/\r//' | grep -av '^[[:space:]]*$' || true
 }
 
-# osmo_vty_interactive <op> <port> [hote] - ouvre une session VTY INTERACTIVE
-# (un humain devant le clavier), la ou osmo_vty envoie des commandes et rend la
-# sortie. Substitution 1:1 de "docker exec -ti <conteneur> telnet <ip> <port>".
-# L'hote reste un PARAMETRE parce que les groupes Baseband ecoutent sur
-# 127.0.0.1, 127.0.0.2... (tools/vty-menu.sh:79) : c'est la seule cible VTY du
-# depot qui ne soit pas 127.0.0.1.
+# osmo_vty_interactive <op> <port> [host] - opens an INTERACTIVE VTY session
+# (a human at the keyboard), whereas osmo_vty sends commands and returns output.
+# 1:1 replacement for "docker exec -ti <container> telnet <ip> <port>".
+# The host is a PARAMETER because Baseband groups listen on 127.0.0.1,
+# 127.0.0.2... (tools/vty-menu.sh): the only VTY target in the repository
+# other than 127.0.0.1.
 osmo_vty_interactive() {
     local op="${1:-}" port="${2:-}" host="${3:-127.0.0.1}"
     case "$port" in ''|*[!0-9]*) return 2 ;; esac
@@ -764,64 +702,50 @@ osmo_vty_interactive() {
         return $?
     fi
     local ns; ns="$(_osmo_ns_cmd "$op")"
-    # shellcheck disable=SC2086  # ns doit etre decoupe en mots (ip netns exec X)
+    # shellcheck disable=SC2086  # ns must be word-split (ip netns exec X)
     if [ -n "$ns" ]; then $ns telnet "$host" "$port"; else telnet "$host" "$port"; fi
 }
 
-# osmo_vty_target <op> - "cible" a remettre a un client VTY qui N'EST PAS du
-# bash et ne peut donc pas sourcer cette bibliotheque.
-#
-# Le cas existe et il est unique : tools/vty-connect.exp est ecrit en expect. La
-# bibliotheque ne l'atteindra jamais ; le mode doit donc etre decide cote bash
-# (tools/vty-menu.sh) et lui etre passe en ARGUMENT. La convention est :
-#     docker → le nom du conteneur, qui devient "docker exec -ti <nom> telnet"
-#     natif  → "-", qui devient un "telnet" direct
-# "-" plutot que la chaine vide : une chaine vide se perd dans un [lindex]
-# expect comme dans un "$@" bash, et l'on ne distingue plus "natif" de
-# "argument oublie".
+# osmo_vty_target <op> - "target" to hand to a non-bash VTY client that
+# cannot source this library (tools/vty-connect.exp, written in expect).
+# The mode is decided in bash (tools/vty-menu.sh) and passed as an ARGUMENT:
+#     docker -> the container name, which becomes "docker exec -ti <name> telnet"
+#     native -> "-", which becomes a direct "telnet"
+# "-" rather than an empty string: an empty string is lost in an expect
+# [lindex] as in a bash "$@", and "native" becomes indistinguishable from
+# "missing argument".
 osmo_vty_target() {
     if [ "$(osmo_mode)" = docker ]; then osmo_node "${1:-}"; else printf -- '-\n'; fi
 }
 
 # =============================================================================
-#  5. CATEGORIE A - REFUSER PROPREMENT QUAND DOCKER MANQUE
+#  5. CATEGORY A - CLEAN REFUSAL WHEN DOCKER IS MISSING
 # =============================================================================
 #
-#  Certains scripts ne se convertissent pas : ils PILOTENT docker par nature -
-#  ils construisent une image, creent un reseau 172.20.N.0/24, lancent un
-#  conteneur. En natif il n'y a ni image, ni reseau a creer, ni conteneur : le
-#  noeud, c'est la machine. Les convertir reviendrait a reecrire start-native.sh
-#  et start-interstp.sh, qui existent deja - le depot a deja paye ce prix
-#  ailleurs (cf. l'en-tete de start-nitb.sh : 4 copies divergentes de
-#  si_bridge.py, 3 de gapk-start.sh).
-#
-#  Ce qui leur manque, c'est un REFUS. build-iso.sh embarque start-docker.sh,
-#  build.sh et launch/osmo-launch.sh sur une ISO ou build-iso.sh:707 garantit
-#  qu'il n'y a PAS de docker : aujourd'hui ces scripts y meurent en 127 sur
-#  "docker: command not found", apres avoir deja touche l'hote, sans nommer
-#  l'alternative qui, elle, est installee juste a cote.
+#  Some scripts inherently DRIVE docker (build an image, create a
+#  172.20.N.0/24 network, start a container) and have no native equivalent;
+#  the native counterparts are start-native.sh and start-interstp.sh.
+#  On an ISO without docker these scripts must refuse cleanly and name the
+#  alternative instead of failing with "docker: command not found".
 
-# osmo_docker_ok - docker est-il REELLEMENT utilisable depuis ici ?
-# Le binaire ne suffit pas : une machine de dev l'a souvent sans demon actif, et
-# "docker build" y echoue alors sur un message de socket. On interroge le
-# demon. Aucun tube : pas de piege pipefail.
+# osmo_docker_ok - is docker REALLY usable from here?
+# The binary is not enough (dev machines often have it without a running
+# daemon), so the daemon is queried. No pipe: no pipefail trap.
 osmo_docker_ok() {
     command -v docker >/dev/null 2>&1 || return 1
     docker info >/dev/null 2>&1
 }
 
-# osmo_require_docker [ligne d'alternative...] - refus propre, puis exit 3.
-# Rend 0 (et ne dit rien) si docker est utilisable : s'appelle donc en tete de
-# script sans condition.
+# osmo_require_docker [alternative line...] - clean refusal, then exit 3.
+# Returns 0 silently if docker is usable, so it can be called unconditionally
+# at the top of a script.
 #
-# Le message suit le gabarit de launch/start-oqc.sh:41-51, le meilleur du
-# depot : dire CE QUI MANQUE, POURQUOI ce script ne peut pas s'en passer, et
-# SURTOUT quoi lancer a la place, par son nom exact. Sans les alternatives
-# fournies en argument, on cite les deux du depot.
+# The message says WHAT IS MISSING, WHY this script needs it, and WHAT TO RUN
+# instead, by exact name. Without alternatives given as arguments, the two
+# repository ones are named.
 #
-# Sortie sur stderr, code 3 : distinct de 1 (echec d'execution) et de 2 (mauvais
-# argument), pour qu'un appelant puisse reconnaitre "mauvais monde" sans lire
-# le texte.
+# Output on stderr, exit code 3: distinct from 1 (execution failure) and 2
+# (bad argument), so a caller can recognise "wrong world" without parsing text.
 osmo_require_docker() {
     osmo_docker_ok && return 0
     {
@@ -849,22 +773,19 @@ osmo_require_docker() {
 }
 
 # =============================================================================
-#  6. DIVERS
+#  6. MISC
 # =============================================================================
 
-# osmo_qgrep <args...> - "grep -aq" sans le piege.
-# "cmd | grep -aq motif" : grep sort a la PREMIERE correspondance, le
-# producteur recoit un SIGPIPE et meurt en 141 - et sous "set -o pipefail"
-# c'est 141 que rend le tube. "trouve" se lit alors "pas trouve", de facon
-# intermittente, selon que la sortie tenait dans le tampon du tube. Ici grep lit
-# toute son entree et on jette sa sortie. Copie conforme de qgrep()
-# (network/setup-wan-mesh.sh:69).
+# osmo_qgrep <args...> - "grep -aq" without the pipefail trap.
+# With "cmd | grep -aq pattern" grep exits on the FIRST match, the producer
+# gets SIGPIPE and the pipe returns 141 under "set -o pipefail", so a match
+# can intermittently read as no match. Here grep reads all input and its
+# output is discarded. Same as qgrep() in network/setup-wan-mesh.sh.
 osmo_qgrep() { grep "$@" >/dev/null; }
 
 # =============================================================================
-#  Execute au lieu d'etre source : on ne fait rien de destructeur, on affiche
-#  ce que la bibliotheque VOIT. Sert de test rapide, et evite qu'un futur
-#  "for f in checks/*.sh; do $f; done" ne tombe dans le vide.
+#  When executed instead of sourced: nothing destructive, just print what the
+#  library detects. Serves as a quick self-test.
 # =============================================================================
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     printf 'mode      : %s\n' "$(osmo_mode)"

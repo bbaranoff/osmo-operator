@@ -1,46 +1,46 @@
 #!/bin/bash
 # =============================================================================
-# scripts/egprs-dsp.sh - workflow EGPRS du banc, sur la chaine DSP (ROM TI).
+# scripts/egprs-dsp.sh - EGPRS workflow of the bench, on the DSP chain (TI ROM).
 # =============================================================================
 #
-# Ce que ce workflow monte, dans l ordre, et verifie a chaque etape :
+# What this workflow brings up, in order, checking each step:
 #
-#   1. preflight    binaires, ROM DSP (7 fichiers), c54x_exe, modem osmocom-bb ;
-#                   et la PORTE DSP : le firmware layer1 Calypso sait-il faire
-#                   du PDCH (L1CTL_GPRS_*) ? Aujourd hui NON -> le modem GPRS
-#                   tourne sur une couche 1 virtuelle (virtphy), dans la MEME
-#                   PLMN/LAC/RA que le mobile DSP, qui lui campe sur la BTS 0.
-#   2. configs      /etc/osmocom : la BTS 2 virtuelle EGPRS dans osmo-bsc.cfg
-#                   (fragment configs/gprs/osmo-bsc-bts2-egprs.frag, re-pose
-#                   apres chaque --regen), osmo-bts-virtual-gprs.cfg,
+#   1. preflight    binaries, DSP ROM (7 files), c54x_exe, osmocom-bb modem;
+#                   and the DSP gate: does the Calypso layer1 firmware handle
+#                   PDCH (L1CTL_GPRS_*)? If not, the GPRS modem runs on a
+#                   virtual layer 1 (virtphy), in the same PLMN/LAC/RA as the
+#                   DSP mobile, which camps on BTS 0.
+#   2. configs      /etc/osmocom: the virtual EGPRS BTS 2 in osmo-bsc.cfg
+#                   (fragment configs/gprs/osmo-bsc-bts2-egprs.frag, reapplied
+#                   after each --regen), osmo-bts-virtual-gprs.cfg,
 #                   osmo-pcu-gprs.cfg, modem-gprs.cfg.
-#   3. banc         osmo-banc.service (start-native.sh --dsp : coeur, BTS 0 sur
-#                   le C54x + ROM TI, SGSN/GGSN/PCU de la BTS 0).
-#   4. abonne       l IMSI du modem dans le HLR (comp128v1), idempotent.
-#   5. cellule      osmo-bts-virtual (BTS 2, Um multicast sur lo) + osmo-pcu
-#                   (socket /tmp/pcu_bts3) en unites systemd transitoires ;
-#                   attend l OML de la BTS 2 au BSC et le NS-VC du PCU.
-#   6. modem        virtphy (-> /tmp/modem_l2) puis osmocom-bb `modem` :
-#                   GPRS attach (GMM) + contexte PDP (SM), tun dans le netns
-#                   msgprs ; verifie au SGSN (mm-context, pdp-context) et par
-#                   un ping vers apn0 depuis le netns.
+#   3. banc         osmo-banc.service (start-native.sh --dsp: core, BTS 0 on
+#                   the C54x + TI ROM, SGSN/GGSN/PCU of BTS 0).
+#   4. abonne       the modem IMSI in the HLR (comp128v1), idempotent.
+#   5. cellule      osmo-bts-virtual (BTS 2, Um multicast on lo) + osmo-pcu
+#                   (socket /tmp/pcu_bts3) as transient systemd units; waits
+#                   for the OML of BTS 2 at the BSC and the NS-VC of the PCU.
+#   6. modem        virtphy (-> /tmp/modem_l2) then osmocom-bb `modem`: GPRS
+#                   attach (GMM) + PDP context (SM), tun in the msgprs netns;
+#                   checked at the SGSN (mm-context, pdp-context) and with a
+#                   ping to apn0 from the netns.
 #
-#   EGPRS_L1=dsp : (quand la porte DSP passera) pas de virtphy ; le modem est
-#   lance par c54x_exe/run.sh a la place de `mobile` (MOBILE= / MOBILE_CFG= dans
-#   /etc/default/osmo-banc) sur /tmp/osmocom_l2. Le script pose ces deux
-#   variables et le dit ; il ne force pas un chemin que le firmware n a pas.
+#   EGPRS_L1=dsp: no virtphy; the modem is started by c54x_exe/run.sh instead
+#   of `mobile` (MOBILE= / MOBILE_CFG= in /etc/default/osmo-banc) on
+#   /tmp/osmocom_l2. The script sets these two variables and says so; it does
+#   not force a path the firmware does not have.
 #
-# Usage : egprs-dsp.sh [start|stop|status|check] [--l1 auto|virtphy|dsp]
-#                      [--no-banc] [--regen-gprs] [--all]
-#   start        tout monter (defaut)            stop   demonter la cellule + modem
-#   status       etat + SGSN                     check  preflight seul, ne lance rien
-#   --no-banc    ne pas toucher a osmo-banc      --all  (stop) arreter aussi osmo-banc
-#   --regen-gprs reposer les 4 configs GPRS depuis configs/gprs meme si presentes
+# Usage: egprs-dsp.sh [start|stop|status|check] [--l1 auto|virtphy|dsp]
+#                     [--no-banc] [--regen-gprs] [--all]
+#   start        bring everything up (default)  stop   tear down cell + modem
+#   status       state + SGSN                   check  preflight only, starts nothing
+#   --no-banc    leave osmo-banc alone          --all  (stop) also stop osmo-banc
+#   --regen-gprs rewrite the 4 GPRS configs from configs/gprs even if present
 #
-# Persistant : services/osmo-egprs-dsp.service (Requires=osmo-banc) enclenche ce
-# script au boot ; OSMO_BANC_ARGS="--dsp" dans /etc/default/osmo-banc.
-# Journal : journalctl -u osmo-egprs-dsp, -u osmo-modem-gprs, -u osmo-pcu-gprs,
-#           -u osmo-bts-virtual-gprs, -u osmo-virtphy-gprs.
+# Persistent: services/osmo-egprs-dsp.service (Requires=osmo-banc) triggers this
+# script at boot; OSMO_BANC_ARGS="--dsp" in /etc/default/osmo-banc.
+# Journal: journalctl -u osmo-egprs-dsp, -u osmo-modem-gprs, -u osmo-pcu-gprs,
+#          -u osmo-bts-virtual-gprs, -u osmo-virtphy-gprs.
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -56,7 +56,7 @@ NETNS="${EGPRS_NETNS:-msgprs}"
 REGEN_GPRS=0
 STOP_ALL=0
 
-# L abonne du modem : le 3e du plan (01-abonnes-hlr : octet 15 = n, 16 = op).
+# The modem subscriber: the 3rd of the plan (01-abonnes-hlr: byte 15 = n, 16 = op).
 IMSI="${EGPRS_IMSI:-001010001000001}"
 KI="${EGPRS_KI:-00 11 22 33 44 55 66 77 88 99 aa bb cc dd 01 01}"
 MSISDN="${EGPRS_MSISDN:-100101}"
@@ -71,7 +71,7 @@ PCU_VTY_IP=127.0.0.2; VTY_PCU=4240
 U_BTS=osmo-bts-virtual-gprs; U_PCU=osmo-pcu-gprs; U_VPHY=osmo-virtphy-gprs; U_MODEM=osmo-modem-gprs
 UNITS=("$U_MODEM" "$U_VPHY" "$U_PCU" "$U_BTS")
 
-# ── affichage ────────────────────────────────────────────────────────────────
+# ── display ──────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     C_OK=$'\033[32m'; C_KO=$'\033[31m'; C_WA=$'\033[33m'; C_DIM=$'\033[2m'; C_B=$'\033[1m'; C_Z=$'\033[0m'
 else C_OK=; C_KO=; C_WA=; C_DIM=; C_B=; C_Z=; fi
@@ -83,16 +83,16 @@ titre(){ printf '\n%s== %s ==%s\n' "$C_B" "$*" "$C_Z"; }
 declare -A BILAN=()
 bilan() { BILAN["$1"]="$2"; }
 
-# ── outils ───────────────────────────────────────────────────────────────────
-# Le VTY Osmocom lit ligne a ligne : une pause entre chaque commande, sinon il
-# en saute (meme constat que start-interstp.sh --status).
+# ── tools ────────────────────────────────────────────────────────────────────
+# The Osmocom VTY reads line by line: a pause between commands, otherwise it
+# skips some (same as start-interstp.sh --status).
 vty() {   # vty HOST PORT cmd...
     local host="$1" port="$2"; shift 2
     { sleep 0.4; printf 'enable\n'; local c; for c in "$@"; do sleep 0.3; printf '%s\n' "$c"; done
       sleep 0.8; printf 'exit\n'; sleep 0.2; } | timeout 10 nc -q1 "$host" "$port" 2>/dev/null | tr -d '\r'
 }
 port_open() { timeout 1 bash -c "exec 3<>/dev/tcp/${2:-127.0.0.1}/$1" 2>/dev/null; }
-wait_until() {   # wait_until SECONDES "libelle" cmd...
+wait_until() {   # wait_until SECONDS "label" cmd...
     local to="$1" what="$2"; shift 2; local t=0
     while ! "$@" >/dev/null 2>&1; do
         [ "$t" -ge "$to" ] && { ko "$what : toujours rien apres ${to}s"; return 1; }
@@ -101,7 +101,7 @@ wait_until() {   # wait_until SECONDES "libelle" cmd...
     ok "$what (${t}s)"
 }
 unit_active() { systemctl is-active --quiet "$1"; }
-unit_run() {   # unit_run NOM cmd... : unite transitoire, vue par systemctl/journalctl
+unit_run() {   # unit_run NAME cmd...: transient unit, visible to systemctl/journalctl
     local u="$1"; shift
     if unit_active "$u"; then say "$u deja actif"; return 0; fi
     systemctl reset-failed "$u" >/dev/null 2>&1 || true
@@ -120,8 +120,8 @@ etape_preflight() {
     for b in osmo-bts-virtual osmo-pcu virtphy nc systemd-run; do
         command -v "$b" >/dev/null 2>&1 && ok "$b : $(command -v "$b")" || { ko "$b introuvable"; rc=1; }
     done
-    # modem osmocom-bb : dans le PATH, sinon celui de l arbre ; on l installe
-    # (persistant) s il n est que dans l arbre.
+    # osmocom-bb modem: from the PATH, otherwise the one of the tree; installed
+    # (persistently) if it is only in the tree.
     MODEM_BIN="$(command -v modem 2>/dev/null || true)"
     if [ -z "$MODEM_BIN" ] && [ -x "$BB/src/host/layer23/src/modem/modem" ]; then
         install -m755 "$BB/src/host/layer23/src/modem/modem" /usr/local/bin/modem 2>/dev/null \
@@ -129,15 +129,15 @@ etape_preflight() {
     fi
     [ -n "$MODEM_BIN" ] && ok "modem : $MODEM_BIN" || { ko "modem (osmocom-bb layer23) absent : make -C $BB/src/host/layer23"; rc=1; }
 
-    # La chaine DSP : ROM TI + c54x_exe (le banc par defaut de start-native.sh)
+    # The DSP chain: TI ROM + c54x_exe (the default bench of start-native.sh)
     local n=0 r
     for r in PROM0 PROM1 PROM2 PROM3 DROM PDROM Registers; do [ -f "$ROM_DIR/calypso_dsp.$r.bin" ] && n=$((n+1)); done
     [ "$n" -eq 7 ] && ok "ROM DSP TI : $n/7 dans $ROM_DIR" || warn "ROM DSP : $n/7 dans $ROM_DIR - --dsp ne demarrera pas (c54x_exe/rom/fetch-rom.sh)"
     [ -x "$C54X/c54x_exe" ] && ok "c54x_exe : $C54X/c54x_exe" || warn "c54x_exe non compile : make -C $C54X"
 
-    # LA PORTE DSP : le firmware layer1 (celui qui tourne sur l ARM emule, devant
-    # la ROM) traite-t-il les primitives GPRS de L1CTL ? Sans elles, aucun PDCH
-    # ne peut etre ouvert sur cette chaine, quoi que sache la ROM.
+    # The DSP gate: does the layer1 firmware (the one running on the emulated
+    # ARM, in front of the ROM) handle the L1CTL GPRS primitives? Without them
+    # no PDCH can be opened on this chain, whatever the ROM can do.
     if grep -q 'L1CTL_GPRS' "$BB/src/target/firmware/layer1/l23_api.c" 2>/dev/null; then
         DSP_GPRS=1; ok "porte DSP : le firmware layer1 traite L1CTL_GPRS_* -> PDCH possible sur le C54x"
     else
@@ -176,13 +176,13 @@ etape_configs() {
     pose_cfg osmo-bts-virtual-gprs.cfg osmo-bts-virtual-gprs.cfg || rc=1
     pose_cfg osmo-pcu-gprs.cfg        osmo-pcu-gprs.cfg "s|__GSMTAP_IP__|$gsmtap_ip|g" || rc=1
     pose_cfg modem-gprs.cfg           modem-gprs.cfg || rc=1
-    # Variante DSP du modem : meme abonne, socket L1CTL du C54x. Posee pour le
-    # jour ou la porte s ouvre (MOBILE_CFG= dans /etc/default/osmo-banc).
+    # DSP variant of the modem: same subscriber, L1CTL socket of the C54x
+    # (MOBILE_CFG= in /etc/default/osmo-banc).
     pose_cfg modem-gprs.cfg modem-gprs-dsp.cfg "s|layer2-socket .*|layer2-socket $SOCK_DSP|" || rc=1
 
-    # La BTS 2 dans osmo-bsc.cfg : un bloc « bts 2 » insere avant « msc 0 ».
-    # --regen regenere ce fichier depuis configs/osmo-bsc.cfg (2 BTS) : on
-    # verifie a chaque start, on re-insere si besoin.
+    # BTS 2 in osmo-bsc.cfg: a « bts 2 » block inserted before « msc 0 ».
+    # --regen regenerates this file from configs/osmo-bsc.cfg (2 BTS): checked
+    # at each start, re-inserted when needed.
     local bsc="$ETC/osmo-bsc.cfg"
     if [ ! -f "$bsc" ]; then ko "$bsc absent (start-native.sh --regen)"; rc=1
     elif grep -q '^ bts 2$' "$bsc"; then ok "BTS 2 EGPRS deja dans osmo-bsc.cfg"
@@ -190,7 +190,7 @@ etape_configs() {
     else
         cp -a "$bsc" "$bsc.avant-bts2-egprs"
         sed "s|__SGSN_IP__|$sgsn_ip|g" "$CFG_SRC/osmo-bsc-bts2-egprs.frag" > "$bsc.frag.$$"
-        # Insertion avant « msc 0 », sans toucher au reste du fichier.
+        # Insert before « msc 0 », without touching the rest of the file.
         awk -v frag="$bsc.frag.$$" '
             /^msc 0$/ && !done { while ((getline l < frag) > 0) print l; done=1 }
             { print }' "$bsc.avant-bts2-egprs" > "$bsc"
@@ -202,7 +202,7 @@ etape_configs() {
     return $rc
 }
 
-# ── 3. banc (osmo-banc.service, chaine DSP) ──────────────────────────────────
+# ── 3. bench (osmo-banc.service, DSP chain) ──────────────────────────────────
 etape_banc() {
     titre "3. banc DSP (osmo-banc.service)"
     if [ "$WITH_BANC" != 1 ]; then say "--no-banc : on suppose le banc deja monte"
@@ -224,7 +224,7 @@ etape_banc() {
     bilan banc OK
 }
 
-# ── 4. l abonne du modem dans le HLR ─────────────────────────────────────────
+# ── 4. the modem subscriber in the HLR ───────────────────────────────────────
 etape_abonne() {
     titre "4. abonne $IMSI (HLR :$VTY_HLR)"
     if vty 127.0.0.1 $VTY_HLR "subscriber imsi $IMSI show" | grep -q "IMSI: *$IMSI"; then
@@ -239,7 +239,7 @@ etape_abonne() {
     bilan abonne OK
 }
 
-# ── 5. la cellule paquet : BTS 2 virtuelle + son PCU ─────────────────────────
+# ── 5. the packet cell: virtual BTS 2 + its PCU ──────────────────────────────
 etape_cellule() {
     titre "5. cellule EGPRS virtuelle (BTS 2, PCU $PCU_SOCK)"
     rm -f "$PCU_SOCK" 2>/dev/null
@@ -253,21 +253,21 @@ etape_cellule() {
     bilan cellule OK
 }
 
-# ── 6. le modem GPRS ─────────────────────────────────────────────────────────
+# ── 6. the GPRS modem ────────────────────────────────────────────────────────
 etape_modem() {
     titre "6. modem GPRS (couche 1 : $L1)"
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && say "netns $NETNS cree"; }
     if [ "$L1" = dsp ]; then
-        # QEMU + ROM TI : le modem prend la place de `mobile` SUR LA MEME socket
-        # L1CTL (/tmp/osmocom_l2, osmocon du banc DSP). On ne passe pas par
-        # MOBILE=/MOBILE_CFG= dans /etc/default/osmo-banc : start-native.sh
-        # reecrit le fichier designe par MOBILE_CFG avec son gabarit `mobile`
-        # (gps device...), que `modem` refuse. On arrete donc le mobile du banc
-        # DSP et on lance modem nous-memes, en unite transitoire.
+        # QEMU + TI ROM: the modem takes the place of `mobile` on the same L1CTL
+        # socket (/tmp/osmocom_l2, osmocon of the DSP bench). MOBILE=/MOBILE_CFG=
+        # in /etc/default/osmo-banc is not used: start-native.sh rewrites the
+        # file named by MOBILE_CFG with its `mobile` template (gps device...),
+        # which `modem` rejects. The DSP bench mobile is therefore stopped and
+        # modem started here, as a transient unit.
         local cfg="$ETC/modem-gprs-dsp.cfg"
         sed "s|layer2-socket .*|layer2-socket $SOCK_DSP|" "$CFG_SRC/modem-gprs.cfg" > "$cfg"
-        # Le firmware layer1 avec PDCH (L1CTL_GPRS_*) et les bursts finaux de la ROM
-        # (UL_RAW=1, pont/dsp/uplink.py) : poses pour le prochain demarrage du banc.
+        # The layer1 firmware with PDCH (L1CTL_GPRS_*) and the final ROM bursts
+        # (UL_RAW=1, pont/dsp/uplink.py): set for the next start of the bench.
         local fw=/opt/GSM/firmware/board/compal_e88/layer1.highram.gprs.elf df=/etc/default/osmo-banc
         if [ -r "$fw" ]; then
             touch "$df"
@@ -279,17 +279,17 @@ etape_modem() {
             warn "firmware GPRS absent : $fw (make board/compal_e88/layer1.highram.elf dans osmocom-bb/src/target/firmware)"
         fi
         [ -S "$SOCK_DSP" ] || { ko "socket L1CTL $SOCK_DSP absente : le banc DSP (osmocon) ne tourne pas"; bilan modem KO; return 1; }
-        # [2026-10-15] Le banc doit etre EN DSP : sans c54x_exe, la couche 1 est gr-gsm
-        # (OSMO_BANC_ARGS=--grgsm pose par le lanceur du bureau jusqu au reboot) et
-        # le PDCH n y existe pas.
+        # The bench must be in DSP mode: without c54x_exe the layer 1 is gr-gsm
+        # (OSMO_BANC_ARGS=--grgsm set by the desktop launcher until reboot) and
+        # there is no PDCH there.
         if ! pgrep -f 'c54x_exe --arm' >/dev/null; then
             ko "le banc tourne en gr-gsm (pas de c54x_exe) : $(systemctl show-environment 2>/dev/null | grep OSMO_BANC_ARGS || echo 'OSMO_BANC_ARGS non pose')"
             say "pour le DSP : systemctl set-environment OSMO_BANC_ARGS=--dsp && systemctl restart osmo-banc"
             bilan modem KO; return 1
         fi
-        # Tout `mobile` branche sur la meme socket L1CTL (mobile_pont du banc DSP,
-        # mobile_group1 du fork...) se battrait avec le modem : chacun remet la
-        # couche 1 a zero (RESET FULL + PM_REQ contre RESET FULL + FBSB_REQ).
+        # Any `mobile` connected to the same L1CTL socket (mobile_pont of the DSP
+        # bench, mobile_group1 of the fork...) would fight with the modem: each
+        # resets the layer 1 (RESET FULL + PM_REQ versus RESET FULL + FBSB_REQ).
         local p c n=0
         for p in $(pgrep -x mobile); do
             c="$(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | sed -n 's/.* -c \([^ ]*\).*/\1/p')"
@@ -304,10 +304,10 @@ etape_modem() {
         wait_until 20 "socket L1CTL $SOCK_VIRT" test -S "$SOCK_VIRT" || { bilan modem KO; return 1; }
         unit_run "$U_MODEM" "$MODEM_BIN" -c "$ETC/modem-gprs.cfg" || { bilan modem KO; return 1; }
     fi
-    # [2026-10-15] L attach et le PDP se lisent chez le modem : « show mm-context »
-    # du SGSN n affiche pas « GMM_REGISTERED » (le test echouait sur un attach
-    # reussi). Attach = « Attach success » du modem ; PDP = tun_modem adresse
-    # dans le netns, posee par le modem a l Activate PDP Context Accept.
+    # Attach and PDP are read from the modem: « show mm-context » of the SGSN
+    # does not show « GMM_REGISTERED ». Attach = « Attach success » from the
+    # modem; PDP = tun_modem addressed in the netns, set by the modem at the
+    # Activate PDP Context Accept.
     local t_debut; t_debut="$(date '+%Y-%m-%d %H:%M:%S')"
     attache() { journalctl -u "$U_MODEM" --since "$t_debut" -o cat 2>/dev/null | grep -q 'Attach success'; }
     wait_until 180 "GPRS attach de $IMSI (Attach success, P-TMSI attribue)" attache || {
@@ -345,8 +345,8 @@ do_start() {
     etape_configs   || return 1
     etape_banc      || return 1
     etape_abonne    || true
-    # La cellule virtuelle n a de sens que pour un modem sur virtphy : en mode
-    # dsp (QEMU + ROM TI) le modem campe sur la BTS 0 du C54x, comme `mobile`.
+    # The virtual cell only makes sense for a modem on virtphy: in dsp mode
+    # (QEMU + TI ROM) the modem camps on BTS 0 of the C54x, like `mobile`.
     if [ "$L1" = virtphy ] || [ "${EGPRS_VIRTUAL_CELL:-0}" = 1 ]; then etape_cellule || true
     else say "cellule virtuelle (BTS 2) non montee : mode $L1 (EGPRS_VIRTUAL_CELL=1 pour l avoir quand meme)"; bilan cellule "--"; fi
     etape_modem     || true

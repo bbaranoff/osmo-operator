@@ -21,7 +21,7 @@
 </header>
 
 <main>
-  <!-- globals.conf (reseau + lanceur), sur le modele de globals.conf.example -->
+  <!-- globals.conf (network + launcher), modelled on globals.conf.example -->
   <section id="reseau" class="onglet actif">
     <div class="barre">
       <button class="b" id="g-enr">Enregistrer globals.conf</button>
@@ -32,7 +32,7 @@
     <div id="g-form"></div>
   </section>
 
-  <!-- chaque /etc/osmocom/osmo-*.cfg : menu a gauche, fichier actif ou gabarit configs/ a droite -->
+  <!-- each /etc/osmocom/osmo-*.cfg: menu on the left, live file or configs/ template on the right -->
   <section id="osmo" class="onglet">
     <div class="osmo">
       <div class="carte o-menu">
@@ -57,7 +57,7 @@
     </div>
   </section>
 
-  <!-- un fichier par instance Calypso (c54x_exe/run.sh) : instances/instance-N.env -->
+  <!-- one file per Calypso instance (c54x_exe/run.sh): instances/instance-N.env -->
   <section id="instances" class="onglet">
     <div class="barre">
       <select id="i-sel"></select>
@@ -69,7 +69,7 @@
     <div id="i-form"></div>
   </section>
 
-  <!-- running-config de chaque demon, par la VTY -->
+  <!-- running-config of each daemon, through the VTY -->
   <section id="demons" class="onglet">
     <div class="barre">
       <select id="d-sel"></select>
@@ -99,7 +99,8 @@
     </div>
   </section>
 
-  <!-- edition brute des fichiers de config -->
+  <!-- raw editing of the config files -->
+
   <section id="fichiers" class="onglet">
     <div class="barre">
       <select id="f-sel"></select>

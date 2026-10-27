@@ -1,39 +1,31 @@
 #!/bin/bash
-# iso_modules/82-services.sh - role, os-release, asterisk, dashboard, audio, pulse
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/82-services.sh - role marker, os-release, asterisk, dashboard, audio, PulseAudio
+# Sourced by build-iso.sh in numeric order (same shell, variables and functions);
+# not meant to run on its own. A top-level `return` means "nothing to do here"
+# (this is how --arm skips a step).
 
-# ── Marqueur de role : ce que CETTE image est ───────────────────────────────
-# Lu par start-native.sh et par la banniere. Sans lui, deux ISO issues de la
-# meme chaine sont indiscernables une fois demarrees - et on lance le mauvais
-# script sur la mauvaise machine.
+# ── Role marker: what this image is ────────────────────────────────────────
+# Read by start-native.sh and the login banner, so images built from the same
+# pipeline can be told apart once booted.
 {
     printf '# /etc/osmo-role - genere par build-iso.sh\n'
     printf 'OSMO_ROLE=%s\n' "$ISO_ROLE"
     [ -n "$ISO_NODE" ] && printf 'OSMO_WAN_NODE=%s\n' "$ISO_NODE"
-    # Pour la meme raison que le role : deux ISO issues de la meme chaine sont
-    # indiscernables une fois demarrees. Celle-ci n'a pas les arbres de
-    # compilation de /opt/GSM - autant que la machine puisse le dire elle-meme
-    # quand quelque chose y sera cherche en vain.
+    # Lite images lack the /opt/GSM build trees; record it so the machine can
+    # report it itself.
     printf 'OSMO_LITE=%s\n' "$ISO_LITE"
     printf 'OSMO_HUB_IP=%s\n' "$ISO_HUB_IP"
 } > "$ROOTFS/etc/osmo-role"
 
-# ── /etc/os-release : l'image se nomme elle-meme ────────────────────────────
-# [2026-08-27] Les trois ISO se presentaient toutes comme "Ubuntu 22.04 LTS".
-# /etc/osmo-role dit deja ce que l'image est, mais lui ne s'affiche nulle part :
-# la banniere de login, `hostnamectl`, les rapports de bug et le tableau de bord
-# lisent os-release. Sur trois machines demarrees cote a cote, rien ne
-# distinguait le hub d'un noeud, ni le noeud complet de sa variante elaguee.
+# ── /etc/os-release: the image names itself ────────────────────────────────
+# The login banner, `hostnamectl`, bug reports and the dashboard read
+# os-release, so it must distinguish hub, node and lite variant.
 #
-# ON NE TOUCHE QU'AUX CHAMPS D'AFFICHAGE. ID, VERSION_ID, VERSION_CODENAME et
-# UBUNTU_CODENAME restent ceux d'Ubuntu : apt, add-apt-repository et la moitie
-# des scripts de paquets s'en servent pour choisir leurs depots. Renommer ID
-# casserait l'image bien au-dela de sa banniere.
-# VARIANT / VARIANT_ID sont les champs prevus par os-release(5) pour exactement
-# cette distinction ; IMAGE_ID / IMAGE_VERSION, ceux prevus pour une image
-# construite. On les remplit plutot que d'inventer des noms a nous.
+# Only display fields are changed. ID, VERSION_ID, VERSION_CODENAME and
+# UBUNTU_CODENAME stay Ubuntu's: apt, add-apt-repository and many package
+# scripts use them to pick repositories.
+# VARIANT / VARIANT_ID are the os-release(5) fields meant for this distinction;
+# IMAGE_ID / IMAGE_VERSION are meant for built images.
 case "$ISO_ROLE" in
     interstp) OS_NAME="osmo-operator interstp"; OS_VARIANT_ID="interstp" ;;
     *)        if [ "$ISO_LITE" = "1" ]; then
@@ -42,14 +34,13 @@ case "$ISO_ROLE" in
                   OS_NAME="osmo-operator";      OS_VARIANT_ID="operator"
               fi ;;
 esac
-# Le numero de noeud fait partie de l'identite quand il est fige dans l'image :
-# c'est la seule chose qui distingue osmo-operator-1.iso de osmo-operator-2.iso.
+# When the node number is baked into the image it is part of the identity:
+# it is the only difference between osmo-operator-1.iso and osmo-operator-2.iso.
 OS_PRETTY="$OS_NAME"
 [ -n "$ISO_NODE" ] && OS_PRETTY="$OS_NAME (noeud $ISO_NODE)"
 
-# /etc/os-release est un lien vers ../usr/lib/os-release : on ecrit la cible et
-# on laisse le lien tranquille - le remplacer par un fichier ferait diverger les
-# deux chemins, que differents outils lisent indifferemment.
+# /etc/os-release is a symlink to ../usr/lib/os-release: write the target and
+# keep the link, otherwise the two paths (both read by various tools) diverge.
 _osrel="$ROOTFS/usr/lib/os-release"
 sed -i -e '/^NAME=/d' -e '/^PRETTY_NAME=/d' \
        -e '/^VARIANT=/d' -e '/^VARIANT_ID=/d' \
@@ -69,29 +60,22 @@ sed -i -e '/^NAME=/d' -e '/^PRETTY_NAME=/d' \
 } >> "$_osrel"
 echo -e "  ${GREEN}✓${NC} os-release : ${CYAN}${OS_PRETTY}${NC}"
 
-# ── Asterisk : UN SEUL proprietaire, et c'est run_modules/19-asterisk.sh ────
-# [2026-08-27] Le paquet asterisk installe son unite `enabled` : systemd
-# demarrait donc un Asterisk au boot, pendant que 19-asterisk.sh lancait le sien
-# en direct. Deux proprietaires pour un seul /etc/asterisk et une seule socket
-# /var/run/asterisk/asterisk.ctl - la console finissait par ne plus repondre a
-# personne et la pile s'arretait sur "console Asterisk : toujours pas pret".
-# Le module ecarte deja systemd a chaque demarrage ; on le fait AUSSI ici pour
-# que le premier boot d'une ISO neuve parte propre, sans le coup de balai.
+# ── Asterisk: single owner, run_modules/19-asterisk.sh ──────────────────────
+# The asterisk package ships its unit enabled; a systemd-started Asterisk
+# would compete with the one started by 19-asterisk.sh for /etc/asterisk and
+# the asterisk.ctl socket. The module also disables it at each start; doing
+# it here keeps the first boot of a fresh ISO clean.
 chroot "$ROOTFS" systemctl disable asterisk >/dev/null 2>&1 || true
 echo -e "  ${GREEN}✓${NC} asterisk.service desactive - le PBX est lance par ${CYAN}19-asterisk.sh${NC}"
 
 if [ "$ISO_ROLE" = "interstp" ]; then
-    # Le hub, lui, DOIT demarrer seul : les noeuds s'attachent a lui au boot, et
-    # un hub qu'il faut lancer a la main transforme un demarrage simultane en
-    # course perdue d'avance.
+    # The hub must start on its own: nodes attach to it at boot, so a hub that
+    # has to be started by hand breaks simultaneous startup.
     cat > "$ROOTFS/etc/systemd/system/osmo-interstp.service" <<EOF
 [Unit]
 Description=osmo-operator inter-STP - hub SS7 du WAN (PC 0.0.0)
-# [2026-09-04] PLUS D ATTENTE RESEAU. C etait Wants/After=network-online.target
-# + systemd-networkd-wait-online.service, soit jusqu a 2 min de boot (mesure :
-# systemd-analyze blame) pour une garantie dont cette unite n a pas besoin.
-# network.target suffit : les interfaces sont configurees, la route par defaut
-# peut arriver apres - ce service le supporte (voir son ExecStart).
+# network.target is enough: the default route may come later, which the
+# service tolerates. No network-online.target (boot delay).
 After=network.target
 [Service]
 Type=forking
@@ -108,31 +92,19 @@ EOF
 fi
 
 
-# Autologin root : pose plus bas (8d, getty@tty1.service.d/10-autologin-root.conf).
+# Root autologin is configured later (8d, getty@tty1.service.d/10-autologin-root.conf).
 
-# ── Service web dashboard : DEJA POSE, NE PAS LE REECRIRE ───────────────────
-# [2026-08-31] Ici vivait un SECOND heredoc qui reecrivait
-# osmo-egprs-web.service par-dessus celui que l'etape 6 venait de copier depuis
-# services/ - et il en etait une version APPAUVRIE : ni TLS_CERT/TLS_KEY (donc
-# pas de listener HTTPS, donc pas de contexte securise, donc pas de micro), ni
-# PULSE_SERVER (donc pas de pont audio vers gsm_mic), ni CAP_IFACE=any (donc
-# l'onglet trafic muet). L'ISO partait avec cette version-la ; ce n'est qu'au
-# premier boot que install-web-service.sh recopiait la bonne par-dessus, et
-# seulement s'il allait au bout - ce qu'il ne faisait pas, puisqu'il echouait
-# justement sur le service qui refusait de demarrer.
-#
-# Deux fichiers pour une seule unite, c'est un de trop : la source unique est
-# services/osmo-egprs-web.service, copiee a l'etape 6. On ne garde ici que
-# l'activation.
-# Le hub n'a ni VTY d'operateur a afficher ni radio a tracer : le tableau de
-# bord n'aurait rien a montrer. On ne l'active pas.
+# ── Web dashboard service ──────────────────────────────────────────────────
+# The unit file is services/osmo-egprs-web.service, copied at step 6 (single
+# source of truth, with TLS_CERT/TLS_KEY, PULSE_SERVER and CAP_IFACE). Only
+# enable it here; never rewrite it.
+# The hub has no operator VTY or radio to show: the dashboard is not enabled there.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
-# ── LA CONSOLE DES ABONNES 4G (Open5GS WebUI, :9999) ────────────────────────
-# [2026-09-10] Meme regle que le tableau de bord 2G : posee ET activee par
-# defaut. Elle ne demarre pas pour autant sur une image sans WebUI construit -
-# son ConditionPathExists (services/open5gs-webui.service) la saute alors, sans
-# echec ni service rouge. Le hub n a pas de coeur 4G : on ne l active pas.
+# ── 4G subscriber console (Open5GS WebUI, :9999) ───────────────────────────
+# Installed and enabled by default, like the 2G dashboard. On images without a
+# built WebUI its ConditionPathExists (services/open5gs-webui.service) skips
+# it cleanly. The hub has no 4G core: not enabled there.
 if [ "$ISO_ROLE" != "interstp" ]; then
     if [ -f "$DIR/services/open5gs-webui.service" ]; then
         install -m644 "$DIR/services/open5gs-webui.service" \
@@ -147,33 +119,24 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     fi
 fi
 
-# ── LE BANC EST POSE EN SERVICE, MAIS NE PART PAS TOUT SEUL ─────────────────
-# [2026-09-04] services/osmo-banc.service (standalone : start-native.sh) et
-# services/osmo-multi.service (multi-operateur : start-multi.sh). Les deux
-# tiennent leur pile dans tmux : `tmux attach -t calypso` depuis n'importe quel
-# terminal de root reprend la main, exactement comme la fin de run.sh le
-# faisait dans le terminal du lanceur. launch.sh et start-multi.sh detectent
-# l'unite et passent par elle.
+# ── Bench services are installed but not started at boot ──────────────────
+# services/osmo-banc.service (standalone: start-native.sh) and
+# services/osmo-multi.service (multi-operator: start-multi.sh) keep their
+# stack in tmux: `tmux attach -t calypso` from any root terminal takes over.
+# launch.sh and start-multi.sh detect the unit and go through it.
 #
-# [2026-09-05] AUCUNE DES DEUX N'EST PLUS ACTIVEE AU BOOT. osmo-banc l'etait
-# depuis le debut, osmo-multi depuis la veille. Ce que ca donnait sur une
-# machine fraichement installee : la pile radio entiere (QEMU/Calypso, le
-# coeur, les conteneurs du multi) montait AVANT que l'operateur ait pu voir
-# l'ecran de session - plusieurs minutes de demarrage, un banc deja lance sur
-# une configuration qu'on n'avait pas encore choisie (noeud, --dsp, topologie),
-# et rien a faire d'autre que l'arreter pour le relancer autrement.
-# Un banc se DEMARRE : c'est le geste de l'operateur, pas un effet de bord du
-# boot.
-#   systemctl start osmo-banc          une session (ou l'icone du bureau)
-#   systemctl enable --now osmo-banc   pour qu'il reparte a chaque demarrage
-# Au build : OSMO_ISO_BANC=1 (ou --banc) et OSMO_ISO_MULTI=1 (ou --multi)
-# rendent l'activation au boot, image par image.
-# [2026-09-08] osmo-lte (services/osmo-lte.service : Open5GS + srsENB + srsUE,
-# l icone « 4G du banc ») suit la meme regle : posee, OSMO_ISO_LTE=1 pour
-# l activer au boot. Sans srsenb (interstp, arm64) sa Condition la saute.
+# Starting a bench is an operator action (node, --dsp and topology are chosen
+# first), not a boot side effect:
+#   systemctl start osmo-banc          one session (or the desktop icon)
+#   systemctl enable --now osmo-banc   restart it at every boot
+# At build time OSMO_ISO_BANC=1 (or --banc) and OSMO_ISO_MULTI=1 (or --multi)
+# enable them at boot, per image.
+# osmo-lte (services/osmo-lte.service: Open5GS + srsENB + srsUE, the "4G du
+# banc" icon) follows the same rule: OSMO_ISO_LTE=1 enables it at boot.
+# Without srsenb (interstp, arm64) its Condition skips it.
 if [ "$ISO_ROLE" != "interstp" ]; then
-    # [2026-10-24] osmo-supplements : posee, PAS activee ; le job Calamares osmosupplements
-    # l active dans la cible si une case de la page « Supplements » est cochee.
+    # osmo-supplements: installed, not enabled; the Calamares osmosupplements job
+    # enables it in the target when a box on the "Supplements" page is ticked.
     for _u in osmo-banc osmo-multi osmo-lte osmo-supplements; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
@@ -181,18 +144,14 @@ if [ "$ISO_ROLE" != "interstp" ]; then
             echo -e "  ${RED}✗ services/$_u.service introuvable${NC}" >&2; exit 1
         fi
     done
-    # `systemctl disable` NE SUFFIT PAS SEUL ICI. Le rootfs vient d'une image
-    # qui a pu etre construite quand ces unites etaient activees : le lien
-    # multi-user.target.wants/ y est deja, et un `disable` dans le chroot
-    # echoue en silence quand systemd n'y tourne pas (2>/dev/null || true).
-    # On efface donc le lien nous-memes, ce qui est de toute facon ce que
-    # `disable` fait - le symetrique exact du `ln -sf` qui sert de repli a
-    # l'`enable` dans l'autre branche.
+    # `systemctl disable` alone is not enough: the base image may already carry
+    # the multi-user.target.wants/ link, and `disable` in the chroot fails
+    # silently when systemd is not running. Remove the link directly (what
+    # `disable` does anyway, the mirror of the `ln -sf` fallback for `enable`).
     mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
     for _u in osmo-banc osmo-multi osmo-lte; do
-        # osmo-banc -> OSMO_ISO_BANC, osmo-multi -> OSMO_ISO_MULTI ; ${!_var}
-        # est l'expansion indirecte de bash (la valeur de la variable NOMMEE
-        # par $_var), pas un eval.
+        # osmo-banc -> OSMO_ISO_BANC, osmo-multi -> OSMO_ISO_MULTI; ${!_var} is
+        # bash indirect expansion (value of the variable named by $_var), not eval.
         _var="OSMO_ISO_${_u#osmo-}"; _var="${_var^^}"
         if [ "${!_var:-0}" = "1" ]; then
             chroot "$ROOTFS" systemctl enable "$_u" 2>/dev/null || \
@@ -207,22 +166,17 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     done
 fi
 
-# ── Audio : PulseAudio systeme (sink gsm_audio) au boot ────────────────────
-# Chaine : osmo-gapk → ALSA gsm_out → sink null gsm_audio → monitor → loopback
-# → carte. system.pa autorise l'acces anonyme + prepare le sink ; le service
-# lance le demon au boot (ensure_pulse de start-native.sh devient un no-op).
+# ── Audio: system PulseAudio (gsm_audio sink) at boot ──────────────────────
+# Chain: osmo-gapk → ALSA gsm_out → null sink gsm_audio → monitor → loopback
+# → sound card. system.pa allows anonymous access and declares the sinks; the
+# service starts the daemon at boot (ensure_pulse in start-native.sh is then a no-op).
 if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
     sed -i 's|^load-module module-native-protocol-unix.*|load-module module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native|' \
         "$ROOTFS/etc/pulse/system.pa"
-    # [2026-08-14] gsm_mic MANQUAIT ICI. Seul gsm_audio etait declare, alors que
-    # lib/audio.sh traite les deux sinks comme SOLIDAIRES (GSM_SINKS) et que
-    # configs/asound.conf fait pointer `pcm.gsm_in` sur `gsm_mic.monitor`.
-    # Consequence mesuree dans la VM : `pactl list short sources` sans gsm_mic
-    # → gapk_io n'initialise pas la capture et ABANDONNE LES DEUX SENS
-    #   (pq_alsa.c:168 "Couldn't init ALSA device 'gsm_in'" puis
-    #    gapk_io.c:468 "Failed to initialize GAPK I/O")
-    # → appel parfaitement etabli et TOTALEMENT MUET. Les deux sinks doivent
-    # etre declares ensemble, ici, comme le dit deja lib/audio.sh.
+    # Both gsm_audio and gsm_mic must be declared: lib/audio.sh treats them as a
+    # pair (GSM_SINKS) and configs/asound.conf maps pcm.gsm_in to gsm_mic.monitor.
+    # Without gsm_mic, gapk_io fails to open 'gsm_in' and drops both directions
+    # (call established but silent).
     for _s in "gsm_audio:GSM_Audio" "gsm_mic:GSM_Mic"; do
         _n="${_s%%:*}"; _d="${_s##*:}"
         grep -q "sink_name=${_n}\b" "$ROOTFS/etc/pulse/system.pa" || \
@@ -230,25 +184,22 @@ if [ -f "$ROOTFS/etc/pulse/system.pa" ]; then
             >> "$ROOTFS/etc/pulse/system.pa"
     done
 fi
-# [2026-08-14] /etc/asound.conf N'ETAIT DEPLOYE NULLE PART sur l'ISO. Il l'est
-# par ensure_pulse() de lib/audio.sh - mais lib/audio.sh n'est source par
-# personne (son appelant annonce, run_modules/25-audio.sh, n'existe pas). Sans
-# ce fichier les PCM `gsm_out`/`gsm_in` que `mobile` ouvre n'existent pas, donc
-# la voix TCH n'atteint jamais gsm_audio. Verifie absent dans la VM au boot.
+# /etc/asound.conf defines the gsm_out/gsm_in PCMs opened by `mobile`;
+# without it TCH voice never reaches gsm_audio.
 if [ -f "$DIR/configs/asound.conf" ]; then
     cp -f "$DIR/configs/asound.conf" "$ROOTFS/etc/asound.conf"
     echo -e "  ${GREEN}✓${NC} /etc/asound.conf (PCM gsm_out/gsm_in → sinks PulseAudio)"
 fi
 cat > "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh" <<'ACHAIN'
 #!/bin/bash
-# osmo-audio-chain.sh - ferme la chaine audio locale apres le demarrage de
-# PulseAudio. Appele en ExecStartPost par osmo-pulse.service.
-#   1. /etc/asound.conf present (PCM gsm_out/gsm_in)
-#   2. les DEUX null-sinks gsm_audio + gsm_mic charges
-#   3. le module-loopback gsm_audio.monitor → carte son
-# Sans (2), gapk_io abandonne LES DEUX SENS ; sans (3), la voix descendante est
-# jetee par le null-sink. Toujours exit 0 : l'audio ne doit jamais empecher la
-# pile de monter. AUDIO=0 ou AUDIO_LOCAL_LOOPBACK=0 neutralisent.
+# osmo-audio-chain.sh - complete the local audio chain once PulseAudio is up.
+# Called as ExecStartPost by osmo-pulse.service. Ensures:
+#   1. /etc/asound.conf is present (PCM gsm_out/gsm_in)
+#   2. both null sinks gsm_audio + gsm_mic are loaded
+#   3. module-loopback gsm_audio.monitor → sound card
+# Without (2) gapk_io drops both directions; without (3) downlink voice is
+# discarded by the null sink. Always exits 0: audio must never block the
+# stack. AUDIO=0 or AUDIO_LOCAL_LOOPBACK=0 disable it.
 set -u
 for r in /opt/GSM/osmo-operator /etc/osmocom/osmo-operator; do
     [ -x "$r/scripts/audio-chain.sh" ] && exec "$r/scripts/audio-chain.sh" "${1:-30}"
@@ -259,53 +210,38 @@ chmod +x "$ROOTFS/usr/local/sbin/osmo-audio-chain.sh"
 
 cat > "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh" <<'PLINK'
 #!/bin/sh
-# osmo-pulse-link.sh [uid] - rend le PulseAudio SYSTEME visible des applications
-# qui cherchent un socket par utilisateur.
+# osmo-pulse-link.sh [uid] - make the system PulseAudio visible to clients
+# that look for a per-user socket.
 #
-# En mode systeme, PulseAudio n'ecoute que sur /run/pulse/native. Les clients,
-# eux, regardent $XDG_RUNTIME_DIR/pulse/native (soit /run/user/<uid>/pulse).
-# Sans ce chemin, le navigateur ne voit AUCUN peripherique : « NotFoundError »
-# sur le micro, pendant que pactl liste deux entrees en RUNNING.
+# In system mode PulseAudio only listens on /run/pulse/native, while clients
+# look at $XDG_RUNTIME_DIR/pulse/native (/run/user/<uid>/pulse). Without that
+# path a browser sees no device ("NotFoundError" on the microphone).
 #
-# Toujours exit 0 : l'audio ne doit jamais empecher la pile de monter.
+# Always exits 0: audio must never block the stack.
 #
-# ── APPELE DEUX FOIS, ET LES DEUX COMPTENT ─────────────────────────────────
-#   1. sans argument, par osmo-pulse.service (ExecStartPost) : les sessions
-#      DEJA ouvertes au (re)demarrage du demon.
-#   2. avec un uid, par le drop-in de user@.service (ExecStartPre=+, donc en
-#      root) : CHAQUE session qui s ouvre ensuite.
+# ── Called twice, both matter ─────────────────────────────────────────────
+#   1. without argument, by osmo-pulse.service (ExecStartPost): sessions
+#      already open when the daemon (re)starts.
+#   2. with a uid, by the user@.service drop-in (ExecStartPre=+, i.e. as
+#      root): every session opened afterwards. At boot osmo-pulse.service
+#      starts before the first login, so /run/user/<uid> of an installed
+#      system's user (uid >= 1000) does not exist yet.
 #
-# [2026-09-04] L appel (2) N EXISTAIT PAS, et c est ce qui rendait le systeme
-# INSTALLE muet alors que la cle live avait du son. Au boot, osmo-pulse.service
-# part bien avant le premier login : /run/user/ ne contient alors QUE les
-# repertoires deja crees. Sur la cle, la session est root (autologin root) et
-# /run/user/0 est la - le lien se posait. Sur le disque, l utilisateur est
-# celui de l installeur (uid >= 1000) et son /run/user/<uid> n existe pas
-# encore : aucun lien, la session tombait sur le socket de pipewire-pulse (ou
-# sur rien du tout), et le bureau restait muet sans un message.
+# ── Socket owner, not only the path ───────────────────────────────────────
+# An AppArmor-confined client may be allowed the path only with the `owner`
+# qualifier (file owner == process fsuid). The socket belongs to `pulse`, so
+# the connection would be refused. Such rules apply to the real path: the
+# symlink below does not hide /run/pulse/native.
 #
-# ── LE PROPRIETAIRE DU SOCKET, PAS SEULEMENT LE CHEMIN ─────────────────────
-# [2026-08-30] Un client confine par AppArmor peut se voir autoriser le chemin
-# avec le qualificateur `owner`, qui exige proprietaire du fichier == fsuid du
-# processus. Le socket appartient a `pulse` (le compte du demon systeme) et la
-# session tourne sous un autre uid : deux nombres differents, et la connexion
-# est refusee alors que tout le reste marche - haut-parleurs audibles, carte en
-# RUNNING, et un navigateur muet. C'est exactement l'ecart qu'on cherche
-# pendant des heures cote « permission micro » ou « pilote son ».
-#
-# ⚠️ Une telle regle porte sur le CHEMIN REEL : le lien symbolique ci-dessous
-# ne masque rien, c'est bien /run/pulse/native qui est evalue.
-#
-# On donne donc le socket a l'uid de la session graphique. Un seul socket ne
-# peut avoir qu'un proprietaire : c'est la DERNIERE session humaine ouverte qui
-# l'obtient. Les comptes de service (gdm, uid < 1000) sont exclus - sans quoi
-# gdm, dont le user@.service part AVANT celui de l operateur, gardait le socket.
-# OSMO_PULSE_UID fige la valeur si une installation veut en decider autrement.
-# Le demon, lui, continue de tourner en `pulse` : accept() ne demande pas
-# d'etre proprietaire, et le mode srwxrwxrwx laisse tout le monde se connecter.
+# The socket is therefore given to the graphical session's uid. A socket has
+# a single owner: the last human session opened gets it. Service accounts
+# (gdm, uid < 1000) are excluded, otherwise gdm, whose user@.service starts
+# first, would keep it. OSMO_PULSE_UID forces the value.
+# The daemon still runs as `pulse`: accept() needs no ownership, and mode
+# srwxrwxrwx lets everyone connect.
 set -u
 
-# Le lien, pour l uid demande ou pour toutes les sessions ouvertes.
+# The symlink, for the given uid or for all open sessions.
 if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
     _dirs="/run/user/$1"
 else
@@ -314,14 +250,14 @@ fi
 for d in $_dirs; do
     [ -d "$d" ] || continue
     mkdir -p "$d/pulse" 2>/dev/null || continue
-    # -f : le socket d un pipewire-pulse qui aurait survecu doit ceder la
-    # place. Sans -f, ln echoue en silence et la session reste muette.
+    # -f: a leftover pipewire-pulse socket must be replaced; without -f ln
+    # fails silently and the session stays mute.
     ln -sfn /run/pulse/native "$d/pulse/native" 2>/dev/null || true
 done
 
-# Le proprietaire. Argument fourni : c est cette session-la, si c est un humain.
-# Sinon on cherche la session graphique active, et root en dernier recours
-# (c est le compte de la cle live).
+# The owner. With an argument: that session, if it is a human one.
+# Otherwise the active graphical session, and root as a last resort
+# (the live USB account).
 PUID="${OSMO_PULSE_UID:-}"
 if [ -z "$PUID" ] && [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
     [ "$1" -ge 1000 ] 2>/dev/null && PUID="$1"
@@ -337,38 +273,35 @@ exit 0
 PLINK
 chmod +x "$ROOTFS/usr/local/sbin/osmo-pulse-link.sh"
 
-# ── LE LIEN EST POSE A CHAQUE OUVERTURE DE SESSION ──────────────────────────
-# [2026-09-04] Voir l en-tete d osmo-pulse-link.sh : au boot, osmo-pulse.service
-# ne peut PAS poser le lien d une session qui n existe pas encore. systemd-logind
-# cree /run/user/<uid> puis demarre user@<uid>.service ; ce drop-in accroche le
-# script juste apres, une fois par session.
+# ── The link is created at every session start ────────────────────────────
+# See the osmo-pulse-link.sh header: at boot osmo-pulse.service cannot link a
+# session that does not exist yet. systemd-logind creates /run/user/<uid>
+# then starts user@<uid>.service; this drop-in hooks the script there, once
+# per session.
 #
-# `ExecStartPre=+` : le `+` fait tourner la commande EN ROOT malgre le User= de
-# user@.service. Sans lui, le script tournerait sous le compte de la session et
-# le chown du socket (qui appartient a `pulse`) echouerait - c est justement la
-# moitie du correctif AppArmor de 2026-08-30.
+# `ExecStartPre=+`: `+` runs the command as root despite user@.service's
+# User=; otherwise chown of the socket (owned by `pulse`) would fail.
 install -d "$ROOTFS/etc/systemd/system/user@.service.d"
 cat > "$ROOTFS/etc/systemd/system/user@.service.d/10-osmo-pulse-link.conf" <<'UAT'
 [Service]
 ExecStartPre=+/usr/local/sbin/osmo-pulse-link.sh %i
 UAT
 
-# ── ET LE SERVEUR PAR DEFAUT, POUR LES CLIENTS QUI IGNORENT LE LIEN ─────────
-# libpulse lit /etc/pulse/client.conf et son repertoire .d avant de deduire un
-# chemin depuis XDG_RUNTIME_DIR. `default-server` est donc la garantie qui ne
-# depend d aucune course, d aucun uid et d aucun ordre de demarrage : GNOME,
-# Firefox, VLC et gapk arrivent au demon systeme meme si le lien manque.
+# ── Default server, for clients that ignore the link ───────────────────────
+# libpulse reads /etc/pulse/client.conf and its .d directory before deriving
+# a path from XDG_RUNTIME_DIR. `default-server` therefore works regardless of
+# races, uid or start order: GNOME, Firefox, VLC and gapk reach the system
+# daemon even if the link is missing.
 #
-# `autospawn = no` avec : sans lui, un client qui ne trouve pas de serveur
-# lance SON PROPRE pulseaudio, lequel echoue a prendre les cartes (le demon
-# systeme les tient) et laisse la session avec un serveur vide - un deuxieme
-# faux "pas de son" par-dessus le premier.
+# `autospawn = no` too: otherwise a client that finds no server spawns its own
+# pulseaudio, which cannot grab the cards (held by the system daemon) and
+# leaves the session with an empty server.
 install -d "$ROOTFS/etc/pulse/client.conf.d"
 cat > "$ROOTFS/etc/pulse/client.conf.d/50-osmo-system-server.conf" <<'PCLIENT'
-# Pose par build-iso.sh (iso_modules/82-services.sh).
-# Le banc tourne un PulseAudio SYSTEME (osmo-pulse.service) : tous les clients,
-# quel que soit leur uid, s y connectent. Sans cette ligne, chaque session
-# cherche un serveur dans son propre /run/user/<uid> et n en trouve pas.
+# Installed by build-iso.sh (iso_modules/82-services.sh).
+# The bench runs a system PulseAudio (osmo-pulse.service): all clients,
+# whatever their uid, connect to it. Without this line each session looks
+# for a server in its own /run/user/<uid> and finds none.
 default-server = unix:/run/pulse/native
 autospawn = no
 PCLIENT
@@ -377,116 +310,69 @@ echo -e "  ${GREEN}✓${NC} audio session : ${CYAN}client.conf.d/50-osmo-system-
 cat > "$ROOTFS/etc/systemd/system/osmo-pulse.service" <<'EOF'
 [Unit]
 Description=osmo-operator PulseAudio system daemon (GSM audio)
-# sound.target seul ne garantit RIEN : c'est une cible passive, atteinte des que
-# systemd a fini de traiter les regles udev deja connues - pas quand les cartes
-# sont la. Au premier demarrage d'un disque fraichement installe, les modules
-# snd_hda_* sont encore en cours de chargement quand cette unite part, et
-# osmo-audio-chain.sh concluait "aucune sortie materielle - loopback local
-# ignore" : l'appel montait, et il etait muet. module-udev-detect rattrape les
-# cartes qui arrivent APRES le demarrage du demon (les sources et sinks ALSA
-# apparaissent tout seuls), mais le loopback vers la carte, lui, n'est pose
-# qu'une fois. On ne tire donc PAS systemd-udev-settle ici - il est obsolete et
-# retarderait tout le boot pour un seul service : l'attente est dans
-# scripts/audio-chain.sh, qui a deja un delai en parametre et ne fait patienter
-# que lui-meme.
+# sound.target is passive: it is reached once systemd has processed the known
+# udev rules, not when the cards are present. module-udev-detect picks up
+# late cards, but the loopback to the card is set up only once; the wait
+# lives in scripts/audio-chain.sh (delay argument) instead of pulling the
+# obsolete systemd-udev-settle, which would delay the whole boot.
 After=sound.target
 Wants=sound.target
 [Service]
-# ── Type=notify ET --daemonize=no, ENSEMBLE OU PAS DU TOUT ──────────────────
-# [2026-08-31] Ce couple valait "Type=forking" + "--daemonize=yes", et c'est ce
-# qui rendait le son INDISPONIBLE sur le systeme installe alors qu'un
-# "systemctl start osmo-pulse" a la main marchait a tous les coups.
-#
-# En Type=forking, systemd attend la mort du processus lance, puis DEVINE lequel
-# des survivants du cgroup est le demon (GuessMainPID). pulseaudio --daemonize
-# fait deux forks et laisse, le temps de la mise en place, ses fils de travail
-# dans le cgroup : la devinette tombe sur un PID deja mort, systemd conclut que
-# le service s'est termine, et son KillMode=control-group emporte le vrai demon
-# qui venait juste de finir de charger ses modules. Le journal en garde la
-# trace, et elle se lit a l'envers :
-#     osmo-pulse.service: Deactivated successfully.
-#     Started osmo-operator PulseAudio system daemon (GSM audio).
-# "Deactivated" AVANT "Started" - le service est annonce demarre alors qu'il est
-# deja mort. Rien n'echoue, rien n'est reessaye (Restart=on-failure ne voit
-# qu'une sortie 0), et /run/pulse/native n'existe simplement jamais : pactl rend
-# "Connection refused", et Firefox, qui cherche ce socket, enumere ZERO micro.
-# Au demarrage manuel la course se joue autrement et la devinette tombe juste -
-# d'ou un bug qui ne se reproduit qu'au boot, le seul moment ou personne ne
-# regarde.
-#
-# La devinette disparait si le demon ne se detache pas : en --daemonize=no le
-# processus lance EST le demon, son PID n'est plus a deviner. Et pulseaudio 15.x
-# de jammy est lie a libsystemd : il appelle sd_notify(READY=1) une fois ses
-# modules charges, ce que Type=notify attend. C'est aussi ce que fait l'unite
-# fournie par le paquet (/usr/lib/systemd/user/pulseaudio.service), qui le dit
-# dans son propre commentaire : "notify will only work if --daemonize=no".
-#
-# BENEFICE COLLATERAL, et il compte : en Type=notify, ExecStartPost ne part
-# qu'apres READY=1. Avant, osmo-pulse-link.sh et osmo-audio-chain.sh couraient
-# contre un demon qui n'avait pas fini d'ouvrir son socket.
+# ── Type=notify and --daemonize=no go together ────────────────────────────
+# With Type=forking + --daemonize=yes, systemd guesses the main PID among the
+# cgroup survivors and may pick a dead worker, then kill the real daemon
+# (KillMode=control-group): /run/pulse/native never appears. With
+# --daemonize=no the started process is the daemon, and pulseaudio (linked
+# to libsystemd) sends sd_notify(READY=1) once its modules are loaded, as the
+# packaged unit does ("notify will only work if --daemonize=no").
+# Type=notify also delays ExecStartPost until READY=1, so the scripts below
+# never race the socket creation.
 Type=notify
 ExecStart=/usr/bin/pulseaudio --system --daemonize=no --disallow-exit --exit-idle-time=-1 --log-target=journal
 ExecStartPre=/bin/mkdir -p /var/log/osmocom /var/run/pulse
-# ── LE SOCKET LA OU LES APPLICATIONS LE CHERCHENT ───────────────────────────
-# PulseAudio tourne ici en mode SYSTEME : il n'ecoute que sur /run/pulse/native.
-# Or une application cherche $XDG_RUNTIME_DIR/pulse/native, soit
-# /run/user/<uid>/pulse/native. Sans ce chemin-la, elle ne trouve AUCUN serveur
-# audio, enumere ZERO entree, et getUserMedia rend « NotFoundError — The object
-# can not be found here ». Le diagnostic part alors invariablement sur une
-# permission micro refusee, alors que la machine a deux entrees bien reelles.
-# Un lien suffit ; il est pose par le demon lui-meme, donc il survit a un
-# restart du service.
+# ── The socket where applications look for it ─────────────────────────────
+# In system mode PulseAudio only listens on /run/pulse/native, while
+# applications look for /run/user/<uid>/pulse/native; without it
+# getUserMedia returns "NotFoundError". Set up by the daemon unit itself, so
+# it survives a service restart.
 ExecStartPost=/usr/local/sbin/osmo-pulse-link.sh
-# [2026-08-14] Sans ceci, gsm_audio (module-null-sink) n'a AUCUN consommateur :
-# la voix descendante y est jetee par construction, la sortie ALSA reste
-# SUSPENDED et l'appel est muet. Le loopback est le maillon qui manquait - il
-# est pose ici, par le demon lui-meme, donc il survit a un restart du service.
-# Non fatal (le script sort 0 quoi qu'il arrive) : l'audio ne doit jamais
-# empecher la pile de monter. AUDIO_LOCAL_LOOPBACK=0 le neutralise.
-# Passe par un wrapper /usr/local/sbin (meme patron que osmo-sms.sh) : une
-# directive `ExecStartPost=/bin/sh -c "... \" ... \" ..."` avec guillemets
-# imbriques est ACCEPTEE par `systemctl cat` mais rejetee par le parseur -
-# `systemctl show -p ExecStartPost` revient alors VIDE et rien ne s'execute.
+# gsm_audio (module-null-sink) needs a consumer, otherwise downlink voice is
+# discarded and the call is silent: the loopback to the card is set up here,
+# by the daemon unit, so it survives a restart. Non-fatal (always exits 0).
+# AUDIO_LOCAL_LOOPBACK=0 disables it.
+# Goes through a /usr/local/sbin wrapper: an ExecStartPost=/bin/sh -c with
+# nested quotes is rejected by the unit parser and silently ignored.
 ExecStartPost=/usr/local/sbin/osmo-audio-chain.sh 30
 Restart=on-failure
 RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-# Idem pour l'audio : le hub ne porte aucun appel, il route de la signalisation.
+# Same for audio: the hub carries no calls, it only routes signalling.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-pulse 2>/dev/null||true
 
-# Modules noyau
+# Kernel modules
 mkdir -p "$ROOTFS/etc/modules-load.d"
 printf 'sctp\ntun\n' > "$ROOTFS/etc/modules-load.d/osmocom.conf"
 
-# Variables d'environnement
+# Environment variables
 cat > "$ROOTFS/etc/environment" <<'EOF'
 PATH="/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 LD_LIBRARY_PATH="/usr/local/lib"
 EOF
 
-# bashrc pour root
+# root bashrc
 cat >> "$ROOTFS/root/.bashrc" <<'BASH'
-# Active par defaut l'environnement python (gr-gsm + bridges) utilise par
-# /opt/GSM/osmo-operator/start-native.sh. VIRTUAL_ENV_DISABLE_PROMPT pour garder le PS1.
+# Activate by default the Python environment (gr-gsm + bridges) used by
+# /opt/GSM/osmo-operator/start-native.sh. VIRTUAL_ENV_DISABLE_PROMPT keeps PS1.
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 [ -f /root/.env/bin/activate ] && source /root/.env/bin/activate
-# coeur.env est pose dans /etc/osmocom pour survivre au reclone de boot, mais
-# environment/load.env ne va le chercher QUE dans son propre repertoire : sorti
-# de l'arbre, personne ne le lit. On le charge donc ici, ou les deux arbres en
-# heritent - l'arbre fige /opt/GSM/osmo-operator, qui n'embarque pas environment/, et
-# l'arbre reclone /opt/GSM/osmo-operator, ou il ne survivrait pas. set -a : sans
-# export, la valeur ne franchirait pas le fork vers start-native.sh. L'idiome
-# ":=" du fichier laisse gagner N_MS=3 ./start-native.sh.
+# /etc/osmocom/coeur.env is loaded here because environment/load.env only
+# looks in its own directory. set -a exports the values to start-native.sh;
+# the file's ":=" idiom lets e.g. N_MS=3 ./start-native.sh override them.
 if [ -f /etc/osmocom/coeur.env ]; then set -a; . /etc/osmocom/coeur.env; set +a; fi
-# Trois annonces designaient trois arbres differents. Le MOTD et le message de
-# login pointent /opt/GSM/osmo-operator (l'arbre fige, present meme sans reseau) ;
-# l'alias visait /opt/GSM/osmo-operator (l'arbre reclone au demarrage). Les deux
-# fonctionnent, mais un utilisateur qui suit l'un puis l'autre ne travaille pas
-# au meme endroit. On prend le premier chemin qui existe, dans l'ordre ou ils
-# sont les plus complets.
+# Shortcuts for the bench.
 alias osmo-lab='cd /opt/GSM/osmo-operator; ./start-native.sh'
 alias osmo-web='systemctl status osmo-egprs-web'
 alias osmo-status='/etc/osmocom/status.sh status'
@@ -497,9 +383,9 @@ export PS1='\[\033[1;31m\]\u\[\033[0m\]@\[\033[1;34m\]\h\[\033[0m\]:\[\033[1;32m
 ### end calypso-prompt ###
 BASH
 
-# Message du jour - banniere couleur + boite alignee. Contenu de la boite en
-# ASCII (pas de ←/e/• multi-octets) + padding printf => bords parfaitement
-# alignes. Genere a chaud pour injecter les couleurs ANSI dans /etc/motd.
+# Message of the day: colour banner and aligned box. Box content is ASCII
+# (no multi-byte characters) with printf padding so the borders align.
+# Generated at build time to embed ANSI colours in /etc/motd.
 {
   B=$'\033[1;36m'; T=$'\033[1;37m'; G=$'\033[1;32m'; Y=$'\033[0;33m'; N=$'\033[0m'
   W=58
@@ -516,11 +402,8 @@ LOGO
   printf "${B}  ║${N} ${T}%-*s${N} ${B}║${N}\n" $((W-2)) "GSM / EGPRS  Multi-PLMN  Live System"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "SS7/SIGTRAN  -  Osmocom  -  Calypso/QEMU"
   printf "${B}  ╠"; printf '═%.0s' $(seq 1 $W); printf "╣${N}\n"
-  # Le chemin annonce ici est celui de l'arbre FIGE, comme le message de login
-  # et comme le lien osmo-start-direct. Il nommait /opt/GSM/osmo-operator, que
-  # osmo-update.service effacait et reclonait au demarrage : sans reseau au boot,
-  # la premiere chose que lisait l'utilisateur designait un arbre qui pouvait ne
-  # pas etre la. Le reclone a disparu, l'arbre fige reste - il ne depend de rien.
+  # Path of the bench launcher (same as the login message and the
+  # osmo-start-direct link).
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "/opt/GSM/osmo-operator/start-native.sh"
   printf "${B}  ║${N} %-*s ${B}║${N}\n"         $((W-2)) "    -> lance le lab Calypso/QEMU (A5/1)"
   printf "${B}  ║${N} ${G}%-*s${N} ${B}║${N}\n" $((W-2)) "Dashboard web  ->  http://<vm-ip>:8080"
@@ -532,17 +415,16 @@ LOGO
   printf "${B}  ╚"; printf '═%.0s' $(seq 1 $W); printf "╝${N}\n\n"
 } > "$ROOTFS/etc/motd"
 
-# Mot de passe root = "osmo" (autologin console + login SSH). On NE vide PAS le
-# mot de passe (sinon sshd refuse le login root).
+# Root password = "osmo" (console autologin + SSH login). The password is
+# not emptied (sshd would refuse root login).
 echo 'root:osmo' | chroot "$ROOTFS" chpasswd 2>/dev/null || true
 
-# ── POLITIQUE PAR DEFAUT : AUCUN SERVICE TELECOM AU BOOT (2026-10-23) ─────────
-# Le preset services/80-osmo-operator.preset est pose dans le rootfs, et toute
-# unite telecom deja activee (paquet asterisk/ofono qui s active a
-# l installation, unites osmo-* amont, image reprise d un ancien build) est
-# desactivee. Restent actives les seules demandes EXPLICITES du build :
-# OSMO_ISO_BANC / _MULTI / _LTE=1, et le hub osmo-interstp, raison d etre du
-# role interstp.
+# ── Default policy: no telecom service at boot ────────────────────────────
+# The services/80-osmo-operator.preset preset is installed in the rootfs and
+# any telecom unit already enabled (asterisk/ofono packages enabling
+# themselves, upstream osmo-* units, base image) is disabled. Only explicit
+# build requests stay enabled: OSMO_ISO_BANC / _MULTI / _LTE=1, and the
+# osmo-interstp hub for the interstp role.
 _garder=()
 [ "$ISO_ROLE" = "interstp" ] && _garder+=(osmo-interstp)
 [ "${OSMO_ISO_BANC:-0}" = 1 ]  && _garder+=(osmo-banc)
@@ -550,7 +432,7 @@ _garder=()
 [ "${OSMO_ISO_LTE:-0}" = 1 ]   && _garder+=(osmo-lte)
 bash "$DIR/tools/osmo-telecom-boot.sh" --root "$ROOTFS" ${_garder[@]+--garder "${_garder[@]}"} || true
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its last command, and
+# build-iso.sh runs under set -e. A module ending on a false test
+# ("[ ... ] && { ...; }") would silently stop everything. Always 0 here.
 true

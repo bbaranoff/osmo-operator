@@ -1,17 +1,16 @@
-# diagram.py - le schema du lab, dessine en caracteres, et navigable.
+# diagram.py - the lab diagram, drawn in characters, and navigable.
 #
-# Chaque element du reseau devient une BOITE placee sur une grille de
-# caracteres. Les fleches ne suivent pas une liste : elles se deplacent dans
-# l'espace, vers la boite la plus proche dans la direction demandee. C'est ce
-# qui fait qu'on "circule" dans le schema comme sur une carte.
+# Every network element becomes a BOX placed on a character grid. The arrow
+# keys do not follow a list: they move in space, to the nearest box in the
+# requested direction, so the diagram is browsed like a map.
 #
-# Les boites sont construites a partir de la topologie decouverte : rien
-# n'est dessine qui n'existe pas dans le lab.
+# The boxes are built from the discovered topology: nothing is drawn that
+# does not exist in the lab.
 
 BOX_W = 20
 
-# Ordre d'affichage des services : le coeur d'abord, la radio ensuite, le
-# reste apres. Ce qui n'est pas liste garde son ordre de decouverte.
+# Display order of the services: core first, radio next, the rest after.
+# Anything not listed keeps its discovery order.
 FAMILY_ORDER = {"SS7": 0, "coeur": 1, "abonnes": 2, "radio": 3, "media": 4,
                 "data": 5, "voix": 6, "mobile": 7, "autre": 8}
 
@@ -30,8 +29,8 @@ class Box(object):
         self.kind = kind          # hub | stp | service | console | note
         self.title = title
         self.lines = lines
-        self.ref = ref            # Service, Node, ou None
-        self.node = node          # Node auquel la boite appartient
+        self.ref = ref            # Service, Node, or None
+        self.node = node          # Node the box belongs to
         self.color = color
 
     @property
@@ -90,7 +89,7 @@ def _service_sort(service):
 
 
 def build(topo, extra=None):
-    """Rend (lignes, boites). extra : dict d'etat de la console SS7."""
+    """Return (lines, boxes). extra: state dict of the SS7 console."""
     extra = extra or {}
     ops = topo.operators
     per_op_cols = 2
@@ -103,7 +102,7 @@ def build(topo, extra=None):
     cv = Canvas(width, height)
     boxes = []
 
-    # ── bandeau ──────────────────────────────────────────────────────────
+    # ── banner ───────────────────────────────────────────────────────────
     cv.put(2, 0, "RESEAU SS7 - %s" % ("docker" if topo.docker else "natif"))
 
     # ── hub inter-STP ────────────────────────────────────────────────────
@@ -122,7 +121,7 @@ def build(topo, extra=None):
     cv.box(hb)
     boxes.append(hb)
 
-    # ── console SS7 (nous) ───────────────────────────────────────────────
+    # ── SS7 console (us) ─────────────────────────────────────────────────
     con_x = max(2, hub_x - BOX_W - 10)
     con_lines = [
         "PC %s" % extra.get("local_pc", topo.free_point_code()),
@@ -136,7 +135,7 @@ def build(topo, extra=None):
     cv.hline(cb.x + cb.w, hb.x - 1, hub_y + 2)
     cv.put(cb.x + cb.w + 1, hub_y + 1, "M3UA")
 
-    # ── bus vers les operateurs ──────────────────────────────────────────
+    # ── bus to the operators ─────────────────────────────────────────────
     bus_y = hub_y + 7
     cv.vline(hub_y + 6, bus_y, hb.cx)
     if ops:
@@ -182,7 +181,7 @@ def build(topo, extra=None):
 
 
 def navigate(boxes, current, direction):
-    """Boite la plus proche dans une direction. dx/dy en {-1,0,1}."""
+    """Nearest box in a direction. dx/dy in {-1,0,1}."""
     if not boxes:
         return current
     cur = boxes[current]
@@ -198,8 +197,8 @@ def navigate(boxes, current, direction):
             continue
         if dy and (vy * dy) <= 0:
             continue
-        # Distance dans l'axe demande, penalisee par l'ecart lateral : on
-        # prefere ce qui est "droit devant" a ce qui est loin sur le cote.
+        # Distance along the requested axis, penalised by the lateral offset:
+        # what is "straight ahead" wins over what is far off to the side.
         along = abs(vx) if dx else abs(vy)
         across = abs(vy) if dx else abs(vx)
         score = along + across * 2.5

@@ -1,13 +1,18 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# /opt/osmo-launch.sh - Orchestrateur osmo-operator (lab + web dashboard)
+# launch/osmo-launch.sh - osmo-operator orchestrator (lab + web dashboard).
+# Installed in the ISO as /opt/osmo-launch.sh (symlink /usr/local/bin/osmo-launch).
 #
-# Usage :
-#   sudo /opt/osmo-launch.sh           # lance tout (interactif)
-#   sudo /opt/osmo-launch.sh --auto    # lance avec les defauts (2 ops, 8 MS)
-#   sudo /opt/osmo-launch.sh stop      # arrete tout
-#   sudo /opt/osmo-launch.sh status    # etat des services
-#   sudo /opt/osmo-launch.sh web-only  # lance uniquement le dashboard
+# Usage:
+#   sudo /opt/osmo-launch.sh           # start everything (interactive)
+#   sudo /opt/osmo-launch.sh --auto    # start with defaults (2 operators, 8 MS)
+#   sudo /opt/osmo-launch.sh stop      # stop everything (native + lab + web)
+#   sudo /opt/osmo-launch.sh restart   # stop then start
+#   sudo /opt/osmo-launch.sh status    # service status
+#   sudo /opt/osmo-launch.sh web-only  # start the dashboard only
+#
+# Environment variables:
+#   OSMO_BANC_SERVICE  systemd unit of the native operator (default osmo-banc.service)
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -60,12 +65,12 @@ start_web() {
     echo -e "${GREEN}[web] Demarrage dashboard...${NC}"
 
     if [ -f "$WEB_DIR/server.js" ] && command -v node &>/dev/null; then
-        # Mode natif (Node.js local)
+        # Native mode (local Node.js)
         systemctl restart "$WEB_SERVICE" 2>/dev/null && {
             echo -e "  ${GREEN}✓${NC} systemd: $WEB_SERVICE actif (port 8080)"
             return 0
         }
-        # Fallback si le service systemd n'existe pas
+        # Fallback when the systemd service does not exist
         echo -e "  ${YELLOW}Service systemd absent, lancement direct...${NC}"
         cd "$WEB_DIR"
         node server.js --verbose >> "$LOG_DIR/web-dashboard.log" 2>&1 &
@@ -119,18 +124,11 @@ start_lab() {
     bash ./launch/start-docker.sh
 }
 
-# ── LE NATIF AUSSI ──────────────────────────────────────────────────────────
-# [2026-09-04] `osmo-launch stop` promet « arrete tout » et balayait bien les
-# conteneurs - mais pas l operateur NATIF, qui vit dans osmo-banc.service
-# (start-native.sh, session tmux « calypso »). On arretait donc la moitie du
-# banc : le coeur natif (osmo-stp, hlr, msc, bsc, asterisk) restait debout, et
-# c est LUI qui tient le 5060 et le 8080 que le lancement suivant reclame.
-# Symetrique de launch.sh --stop, qui arrete desormais les deux cotes.
-#
-# D ABORD LE NATIF, ENSUITE LES CONTENEURS : l unite delegue a
-# start-native.sh --stop, qui demonte radio et coeur proprement ; le faire
-# apres un `docker rm -f` ne changerait rien pour lui, mais l ordre inverse est
-# celui de l arret propre et c est celui qu on garde partout.
+# ── Native operator ────────────────────────────────────────────────────────
+# The native operator runs in osmo-banc.service (start-native.sh, tmux session
+# "calypso") and holds ports 5060 and 8080; `stop` must stop it as well as the
+# containers (same as launch.sh --stop). The unit delegates to
+# start-native.sh --stop. Native side first, then containers (clean shutdown order).
 stop_natif() {
     local u="${OSMO_BANC_SERVICE:-osmo-banc.service}"
     command -v systemctl >/dev/null 2>&1 || return 0
@@ -138,8 +136,8 @@ stop_natif() {
     systemctl cat "$u" >/dev/null 2>&1 || return 0
     echo -e "${YELLOW}[natif] Arret ${u}...${NC}"
     timeout 200 systemctl stop "$u" >/dev/null 2>&1 || true
-    # ExecStop ne tourne pas sur une unite « failed » : le coeur, lance par
-    # run.sh dans SES PROPRES unites, resterait alors debout.
+    # ExecStop does not run on a "failed" unit: the core, started by run.sh in
+    # its own units, would stay up.
     systemctl stop osmo-egprs-web.service osmo-hlr.service >/dev/null 2>&1 || true
     systemctl reset-failed "$u" >/dev/null 2>&1 || true
     echo -e "  ${GREEN}✓${NC} Natif arrete"
@@ -151,7 +149,7 @@ stop_lab() {
         cd "$LAB_DIR"
         bash ./launch/start-docker.sh stop
     fi
-    # Nettoyage complet si start-docker.sh stop ne suffit pas
+    # Full cleanup in case start-docker.sh stop is not enough
     docker ps -a --filter "name=osmo-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
     echo -e "  ${GREEN}✓${NC} Lab arrete"
 }
@@ -220,13 +218,13 @@ do_start() {
     echo -e "${GREEN}[2/3] Lab multi-operateurs...${NC}"
     start_lab
 
-    # 3. Web (attendre que les containers soient up)
+    # 3. Web (wait for the containers to be up)
     echo ""
     echo -e "${GREEN}[3/3] Dashboard web...${NC}"
     wait_operators 180 || true
     start_web || true
 
-    # Resume
+    # Summary
     echo ""
     show_status
     echo -e "${GREEN}${BOLD}Pret !${NC}"
@@ -240,15 +238,14 @@ do_auto() {
     systemctl start docker 2>/dev/null || true
     wait_docker || exit 1
 
-    # Lancer start-docker.sh en mode non-interactif avec des defauts
-    # On pipe les reponses au script interactif
+    # Run start-docker.sh non-interactively by piping default answers to its prompts
     cd "$LAB_DIR"
     {
         echo "2"       # bridge mode
-        echo "2"       # 2 operateurs
-        echo "o"       # valeurs par defaut
+        echo "2"       # 2 operators
+        echo "o"       # default values
         echo "8"       # 8 MS
-        echo "N"       # pas de WAN
+        echo "N"       # no WAN
         echo "1"       # faketrx
         echo "0"       # A5/0
     } | bash ./launch/start-docker.sh

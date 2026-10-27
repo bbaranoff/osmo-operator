@@ -1,46 +1,45 @@
 #!/usr/bin/env python3
-# record_drain.py — draine le FIFO live iq_record.fifo -> record.cfile en RING
-# (128 MB, fseek wrap), HORS du hot-path qemu. C'est l'EXTERNALISATION du ring
-# cfile que qemu ecrivait avant dans son hot-path DL (= ce qui causait les
-# underruns). Ici qemu ne fait qu'un write() non-bloquant vers le FIFO ; ce
-# process (independant) absorbe le flux et l'ecrit sur disque a son rythme.
-# grgsm_decode -c relit record.cfile offline comme avant => SI preserve.
+# record_drain.py — drains the live FIFO iq_record.fifo -> record.cfile as a
+# RING (128 MB, fseek wrap), OUTSIDE the qemu hot path. qemu only does a
+# non-blocking write() to the FIFO; this (independent) process absorbs the
+# stream and writes it to disk at its own pace. grgsm_decode -c reads
+# record.cfile back offline => SI preserved.
 #
-# Ouverture du FIFO en O_RDWR : ne bloque pas a l'ouverture ET ne voit jamais
-# d'EOF (on garde nous-memes un write-end), donc qemu (O_WRONLY|O_NONBLOCK)
-# trouve toujours un lecteur => son open reussit et le flux coule.
+# The FIFO is opened O_RDWR: it does not block at open AND never sees EOF (a
+# write-end is kept here), so qemu (O_WRONLY|O_NONBLOCK) always finds a
+# reader => its open succeeds and the stream flows.
 #
 # =============================================================================
-# [2026-08-11] CAPTURE COMPLETE, DECLENCHABLE — a cote du ring, pas a sa place
+# FULL, TRIGGERABLE CAPTURE — next to the ring, not in its place
 # =============================================================================
-# Le ring ci-dessus rembobine tous les 128 Mo (~15,5 s) : parfait pour rejouer
-# le passe immediat, inutilisable pour capturer un appel entier. La capture
-# complete ci-dessous ne rembobine JAMAIS.
+# The ring above rewinds every 128 MB (~15.5 s): fine to replay the immediate
+# past, unusable to capture a whole call. The full capture below NEVER
+# rewinds.
 #
-# POURQUOI UN TUBE DEDIE, et pas une lecture de iq_record.fifo : un FIFO n'est
-# pas diffusable — deux lecteurs se PARTAGENT les octets, ils ne les voient pas
-# chacun en entier. Draîner iq_record.fifo ici volerait donc une partie du flux
-# au ring et casserait le decodage SI. On ajoute un 8e tube au relai
-# (CALYPSO_RELAY_FIFOS), que qemu alimente comme les autres.
-# ⚠️ RELAY_NFIFO_MAX vaut 8 dans qemu_wrap.c et 7 tubes etaient deja declares :
-# ce tube consomme LA DERNIERE PLACE. En ajouter un 9e exige de relever la
-# constante ET de recompiler, sinon il est ignore EN SILENCE.
+# WHY A DEDICATED PIPE, and not a read of iq_record.fifo: a FIFO cannot be
+# broadcast — two readers SHARE the bytes, neither sees them all. Draining
+# iq_record.fifo here would steal part of the stream from the ring and break
+# SI decoding. An 8th pipe is added to the relay (CALYPSO_RELAY_FIFOS), fed
+# by qemu like the others.
+# ⚠️ RELAY_NFIFO_MAX is 8 in qemu_wrap.c and 7 pipes are already declared:
+# this pipe takes THE LAST SLOT. Adding a 9th requires raising the constant
+# AND recompiling, otherwise it is SILENTLY ignored.
 #
-# ⚠️ PAS SUR TMPFS. /dev/shm et /tmp sont de la RAM. Le flux fait 1083333 ech/s
-# x 8 o = 8,7 Mo/s = 520 Mo/min = 31 Go/h : une capture complete sur tmpfs
-# epuise la memoire de la machine en quelques minutes. Le defaut pointe donc sur
-# l'overlay (disque). Verifier `df -h` avant une longue capture.
+# ⚠️ NOT ON TMPFS. /dev/shm and /tmp are RAM. The stream is 1083333 samples/s
+# x 8 B = 8.7 MB/s = 520 MB/min = 31 GB/h: a full capture on tmpfs exhausts
+# the machine's memory in minutes. The default therefore points to the
+# overlay (disk). Check `df -h` before a long capture.
 #
-# DECLENCHEMENT : la capture n'ecrit que TANT QUE le fichier declencheur existe.
-#     touch /tmp/iq_full.trigger    -> demarre (ouvre/tronque le .cfile)
-#     rm    /tmp/iq_full.trigger    -> arrete et FERME proprement le fichier
-# Hors declenchement le tube est quand meme LU et jete : sinon l'anneau memoire
-# du relai se remplit et qemu se met a jeter des trames entieres pour TOUS les
-# tubes.
+# TRIGGER: the capture only writes AS LONG AS the trigger file exists.
+#     touch /tmp/iq_full.trigger    -> starts (opens/truncates the .cfile)
+#     rm    /tmp/iq_full.trigger    -> stops and CLOSES the file cleanly
+# Without the trigger the pipe is still READ and discarded: otherwise the
+# relay's memory ring fills up and qemu starts dropping whole frames for ALL
+# pipes.
 #
-# PLAFOND : a CALYPSO_RECORD_FULL_MAX octets la capture S'ARRETE et le DIT. Elle
-# ne rembobine pas — un fichier qui se remord la queue en silence est exactement
-# ce qu'on veut eviter ici.
+# CEILING: at CALYPSO_RECORD_FULL_MAX bytes the capture STOPS and SAYS SO. It
+# does not rewind — a file silently biting its own tail is exactly what must
+# be avoided here.
 import os, sys, threading
 
 FIFO = os.environ.get("CALYPSO_RECORD_FIFO", "/tmp/iq_record.fifo")
@@ -58,11 +57,11 @@ def log(msg):
     sys.stderr.flush()
 
 def full_drain():
-    """Capture complete : lit toujours, n'ecrit que sous declencheur, ne wrap jamais."""
+    """Full capture: always reads, only writes under trigger, never wraps."""
     if not os.path.exists(FULL_FIFO):
         os.mkfifo(FULL_FIFO, 0o666)
     os.makedirs(os.path.dirname(FULL_FILE) or ".", exist_ok=True)
-    fd = os.open(FULL_FIFO, os.O_RDWR)       # meme idiome que le ring : ni blocage ni EOF
+    fd = os.open(FULL_FIFO, os.O_RDWR)       # same idiom as the ring: no block, no EOF
     log("[record-full] %s -> %s (plafond %d MB) — declencheur : %s"
         % (FULL_FIFO, FULL_FILE, FULL_MAX >> 20, FULL_TRIGGER))
     out = None
@@ -83,7 +82,7 @@ def full_drain():
             log("[record-full] ARRETE : %s, %.1f MB (%.1f s d'IQ)"
                 % (FULL_FILE, w / 1048576.0, w / 8666664.0))
         if out is None:
-            continue                          # on jette, mais on a LU : le relai ne bouche pas
+            continue                          # discarded, but READ: the relay does not clog
         if w + len(b) > FULL_MAX:
             if not plafond_dit:
                 log("[record-full] PLAFOND %d MB atteint : capture ARRETEE (pas de "
@@ -104,7 +103,7 @@ if FULL_ON:
 else:
     log("[record-full] inactif (CALYPSO_RECORD_FULL != 1)")
 
-fd = os.open(FIFO, os.O_RDWR)            # O_RDWR : pas de blocage / pas d'EOF
+fd = os.open(FIFO, os.O_RDWR)            # O_RDWR: no blocking / no EOF
 out = open(OUT, "wb", buffering=1 << 20)
 w = 0
 log("[record-drain] %s -> %s (ring %d MB)" % (FIFO, OUT, RING >> 20))
@@ -114,6 +113,6 @@ while True:
         continue
     out.write(b)
     w += len(b)
-    if w >= RING:                        # RING : rembobine (grgsm relit depuis 0)
+    if w >= RING:                        # RING: rewind (grgsm reads again from 0)
         out.seek(0); w = 0
     out.flush()

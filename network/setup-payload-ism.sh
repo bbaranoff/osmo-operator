@@ -1,40 +1,40 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-payload-ism.sh — le PAYLOAD des SMS par radio ISM, le reste par IP
+# network/setup-payload-ism.sh — the SMS PAYLOAD over ISM radio, the rest over IP
 #
-# Complement de --wan : la signalisation (MSISDN, IMSI, SC-address, SS7, SIP)
-# passe deja par IP entre les deux noeuds ; ce script branche la liaison RADIO
-# en bande ISM qui portera le SEUL texte des SMS, et ecrit la section [payload]
-# de sms-routing.conf que lit scripts/sms-interop-relay.py (via ism_payload.py).
+# Complement of --wan: the signalling (MSISDN, IMSI, SC-address, SS7, SIP)
+# already goes over IP between the two nodes; this script connects the ISM-band
+# RADIO link that will carry ONLY the SMS text, and writes the [payload] section
+# of sms-routing.conf read by scripts/sms-interop-relay.py (via ism_payload.py).
 #
-# A lancer sur CHAQUE noeud (avec --wan en place). Choisis le backend selon ta
-# radio :
+# Run on EACH node (with --wan in place). Choose the backend according to the
+# radio:
 #
-#   serial  — un module ISM en UART (LoRa, RFM69, CC1101, HC-12...) sur /dev/tty*.
-#             Le plus simple materiellement. Le debit est pose ici par stty.
+#   serial  — an ISM module over UART (LoRa, RFM69, CC1101, HC-12...) on /dev/tty*.
+#             The simplest hardware-wise. The baud rate is set here by stty.
 #               sudo ./network/setup-payload-ism.sh --serial /dev/ttyUSB0 --baud 9600
 #
-#   exec    — un pipeline SDR que TU fournis (HackRF/LimeSDR/USRP + GNU Radio,
-#             rtl_433 en reception, etc.). Deux commandes : TX lit une trame sur
-#             son stdin et l'emet ; RX ecrit les trames recues sur son stdout.
+#   exec    — an SDR pipeline YOU provide (HackRF/LimeSDR/USRP + GNU Radio,
+#             rtl_433 for reception, etc.). Two commands: TX reads a frame on
+#             its stdin and transmits it; RX writes received frames on its stdout.
 #               sudo ./network/setup-payload-ism.sh --exec \
 #                    --tx-cmd '/opt/GSM/ism/ism_tx.sh' --rx-cmd '/opt/GSM/ism/ism_rx.sh'
-#             Des gabarits de ism_tx.sh / ism_rx.sh sont deposes dans /opt/GSM/ism
-#             avec --exemples (ne transmettent rien tant que tu ne les remplis pas).
+#             Templates of ism_tx.sh / ism_rx.sh are placed in /opt/GSM/ism with
+#             --exemples (they transmit nothing until filled in).
 #
-#   fifo    — deux tubes nommes, si tu branches ta radio autrement (socat...).
+#   fifo    — two named pipes, if the radio is connected otherwise (socat...).
 #               sudo ./network/setup-payload-ism.sh --fifo --tx /tmp/ism_tx --rx /tmp/ism_rx
 #
-#   loopback— tout en memoire, pour ESSAYER la chaine SMS sans radio (un noeud).
+#   loopback— all in memory, to TRY the SMS chain without radio (one node).
 #               sudo ./network/setup-payload-ism.sh --loopback
 #
-# Options communes : --conf FICHIER (defaut : les sms-routing.conf trouves),
-# --recv-timeout SECONDES (attente du payload radio avant echec, defaut 30),
-# --selftest (lance l'autotest de ism_payload.py et sort), --off (retire [payload]).
+# Common options: --conf FILE (default: the sms-routing.conf files found),
+# --recv-timeout SECONDS (wait for the radio payload before failing, default 30),
+# --selftest (runs the ism_payload.py self-test and exits), --off (removes [payload]).
 #
-# RAPPEL REGLEMENTAIRE : n'emets que sur une bande et une puissance autorisees
-# chez toi (ISM 433/868 MHz en Europe, 902-928 MHz en region 2, 2,4 GHz), ou en
-# cage/charge. C'est ta responsabilite d'operateur du banc.
+# REGULATORY REMINDER: transmit only on a band and power allowed where you are
+# (ISM 433/868 MHz in Europe, 902-928 MHz in region 2, 2.4 GHz), or into a
+# cage/dummy load. This is your responsibility as bench operator.
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -69,8 +69,8 @@ done
 say() { echo -e "  ${GREEN}✓${NC} $*"; }
 warn() { echo -e "  ${YELLOW}!${NC} $*" >&2; }
 
-# ── les sms-routing.conf a modifier ──────────────────────────────────────────
-# Natif : /etc/osmocom/sms-routing.conf. Docker : celui de chaque container.
+# ── the sms-routing.conf files to modify ─────────────────────────────────────
+# Native: /etc/osmocom/sms-routing.conf. Docker: the one of each container.
 confs() {
     if [ -n "$CONF" ]; then printf '%s\n' "$CONF"; return; fi
     local found=0
@@ -83,7 +83,7 @@ confs() {
     [ "$found" = 1 ] || warn "aucun sms-routing.conf trouve (passe --conf)"
 }
 
-# Ecrit la section [payload] dans un fichier (chemin local ou docker:<container>).
+# Writes the [payload] section into a file (local path or docker:<container>).
 write_block() {
     local target="$1" block="$2"
     local script="
@@ -120,7 +120,7 @@ write_block() {
     esac
 }
 
-# ── autotest ─────────────────────────────────────────────────────────────────
+# ── self-test ────────────────────────────────────────────────────────────────
 if [ "$DO_SELFTEST" = 1 ]; then
     echo -e "${CYAN}Autotest de la liaison payload ISM${NC}"
     case "$LINK" in
@@ -132,7 +132,7 @@ if [ "$DO_SELFTEST" = 1 ]; then
     exit $?
 fi
 
-# ── retrait ──────────────────────────────────────────────────────────────────
+# ── removal ──────────────────────────────────────────────────────────────────
 if [ "$DO_OFF" = 1 ]; then
     echo -e "${CYAN}Retrait du payload ISM (retour au texte par IP)${NC}"
     while read -r t; do [ -n "$t" ] && write_block "$t" ""; done < <(confs)
@@ -141,33 +141,33 @@ fi
 
 [ -n "$LINK" ] || { echo -e "${RED}choisis un backend : --serial /dev/tty* | --exec | --fifo | --loopback${NC}" >&2; exit 2; }
 
-# ── gabarits SDR pour le backend exec ────────────────────────────────────────
+# ── SDR templates for the exec backend ───────────────────────────────────────
 if [ "$DO_EXAMPLES" = 1 ] || { [ "$LINK" = exec ] && [ -z "$TXCMD" ] && [ -z "$RXCMD" ]; }; then
     mkdir -p /opt/GSM/ism
     if [ ! -f /opt/GSM/ism/ism_tx.sh ]; then
         cat > /opt/GSM/ism/ism_tx.sh <<'TX'
 #!/bin/bash
-# ism_tx.sh — EMET une trame (lue sur stdin) en bande ISM. GABARIT : a remplir.
-# La trame est une ligne JSON {"t":jeton,"p":hex,"c":crc}. Emets-la telle quelle
-# (modulation FSK/LoRa/OOK au choix) sur ta frequence ISM autorisee.
-# Exemples de chaine possible :
-#   - module LoRa/UART : cat > /dev/ttyUSB0
-#   - SDR GNU Radio    : passer la ligne a un flowgraph (gr-paquet) via un FIFO
-# Tant que ce fichier n'emet rien, le payload ISM ne traverse pas : remplis-le.
-cat >/dev/null   # <- REMPLACER : ici on jette la trame
+# ism_tx.sh — TRANSMITS a frame (read on stdin) in the ISM band. TEMPLATE: to fill in.
+# The frame is a JSON line {"t":token,"p":hex,"c":crc}. Transmit it as is
+# (FSK/LoRa/OOK modulation, your choice) on your allowed ISM frequency.
+# Possible chains:
+#   - LoRa/UART module : cat > /dev/ttyUSB0
+#   - GNU Radio SDR    : hand the line to a flowgraph (gr-paquet) through a FIFO
+# As long as this file transmits nothing, the ISM payload does not go through.
+cat >/dev/null   # <- REPLACE: the frame is dropped here
 TX
         chmod +x /opt/GSM/ism/ism_tx.sh
     fi
     if [ ! -f /opt/GSM/ism/ism_rx.sh ]; then
         cat > /opt/GSM/ism/ism_rx.sh <<'RX'
 #!/bin/bash
-# ism_rx.sh — RECOIT en bande ISM et ecrit chaque trame recue (une ligne JSON)
-# sur stdout. GABARIT : a remplir. Demodule ta radio et recrache les lignes.
-# Exemples :
-#   - module LoRa/UART : exec cat /dev/ttyUSB0
-#   - SDR              : lire la sortie d'un flowgraph (gr-paquet)
-# Tant que ce fichier ne lit rien, aucun payload n'arrive : remplis-le.
-exec sleep infinity   # <- REMPLACER : ici on ne recoit jamais
+# ism_rx.sh — RECEIVES in the ISM band and writes each received frame (one JSON
+# line) on stdout. TEMPLATE: to fill in. Demodulate your radio and emit the lines.
+# Examples:
+#   - LoRa/UART module : exec cat /dev/ttyUSB0
+#   - SDR              : read the output of a flowgraph (gr-paquet)
+# As long as this file reads nothing, no payload arrives.
+exec sleep infinity   # <- REPLACE: nothing is ever received here
 RX
         chmod +x /opt/GSM/ism/ism_rx.sh
     fi
@@ -176,7 +176,7 @@ RX
     [ -z "$RXCMD" ] && RXCMD="/opt/GSM/ism/ism_rx.sh"
 fi
 
-# ── serie : poser le debit (le backend lit/ecrit ensuite en brut) ─────────────
+# ── serial: set the baud rate (the backend then reads/writes raw) ─────────────
 if [ "$LINK" = serial ]; then
     [ -e "$DEV" ] || warn "$DEV absent pour l'instant (branche le module ISM)"
     if [ -e "$DEV" ]; then
@@ -186,10 +186,11 @@ if [ "$LINK" = serial ]; then
     fi
 fi
 
-# ── composer la section [payload] ────────────────────────────────────────────
+# ── compose the [payload] section ────────────────────────────────────────────
 BLOCK="# ── PAYLOAD ISM ───────────────────────────────────────────────────────────
-# Ecrit par network/setup-payload-ism.sh. Le texte des SMS part par radio ISM,
-# la signalisation reste sur IP (cf. wiki/Payload-ISM.md).
+# Written by network/setup-payload-ism.sh. The SMS text goes over ISM radio,
+# the signalling stays on IP (see wiki/Payload-ISM.md).
+
 [payload]
 mode = ism
 link = $LINK

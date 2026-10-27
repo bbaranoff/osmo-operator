@@ -1,15 +1,15 @@
 [Unit]
 Description=osmo-operator - les supplements choisis dans l installeur (premier demarrage)
 Documentation=file:/opt/GSM/osmo-operator/tools/osmo-supplements-firstboot.sh
-# [2026-10-24] Activee par le job Calamares osmosupplements quand une case de la page
-# « Supplements » est cochee ; se desactive d elle-meme une fois les supplements poses.
+# Enabled by the Calamares job osmosupplements when a box of the « Supplements »
+# page is ticked; disables itself once the supplements are installed.
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/etc/osmo-supplements
 
 [Service]
-# simple, PAS oneshot : un oneshot de multi-user.target retiendrait le demarrage (et
-# l ecran de connexion) jusqu a la fin - une heure pour l image operateur.
+# simple, not oneshot: a oneshot in multi-user.target would hold the boot (and
+# the login screen) until the end - one hour for the operator image.
 Type=simple
 Environment=HOME=/root
 ExecStart=/bin/bash /opt/GSM/osmo-operator/tools/osmo-supplements-firstboot.sh

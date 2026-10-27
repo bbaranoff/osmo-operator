@@ -1,49 +1,49 @@
 #!/bin/bash
 # =============================================================================
-# network/set_ip_vm.sh - rend une VM capable de joindre les conteneurs docker
+# network/set_ip_vm.sh - makes a VM able to reach the docker containers
 #
-# Le probleme, en une ligne : l'ISO pose sur le NIC des adresses du plan docker
-# (172.20.0.1/24, 172.20.0.11/24, 172.20.1.10/24) heritees du temps ou tout
-# tournait sur une seule machine. Sur un banc ou les conteneurs vivent sur un
-# HOTE a part, ces adresses mentent :
+# The problem in one line: the ISO sets docker-plan addresses on the NIC
+# (172.20.0.1/24, 172.20.0.11/24, 172.20.1.10/24), meant for a single machine
+# running everything. On a bench where the containers live on a separate
+# HOST, these addresses lie:
 #
-#   1. le /24 fait croire que 172.20.0.0/24 est sur le lien local. La VM l'ARP
-#      donc sur le LAN au lieu de le router, et
-#          ip route add 172.20.0.0/24 via <hote>
-#      est refuse d'un "RTNETLINK answers: File exists".
-#   2. 172.20.0.11 est l'adresse du PREMIER CONTENEUR operateur. La VM se
-#      repond a elle-meme : la panne la plus deroutante du lot, puisque tout
-#      "fonctionne" en local et que rien n'arrive jamais au conteneur.
+#   1. the /24 pretends 172.20.0.0/24 is on the local link. The VM ARPs for
+#      it on the LAN instead of routing it, and
+#          ip route add 172.20.0.0/24 via <host>
+#      is refused with "RTNETLINK answers: File exists".
+#   2. 172.20.0.11 is the address of the FIRST operator CONTAINER. The VM
+#      answers itself: the most confusing failure of all, since everything
+#      "works" locally and nothing ever reaches the container.
 #
-# Ce script retire ce qui ment, garde ce qui sert, et pose la route. Tout est
-# deduit a l'execution - interface, adresses presentes, reseaux - rien n'est
-# ecrit en dur : la meme commande vaut sur les trois VM du banc.
+# This script removes what lies, keeps what serves, and installs the route.
+# Everything is derived at run time - interface, present addresses, networks -
+# nothing is hard-coded: the same command applies to the three bench VMs.
 #
-# CE QU'IL NE FAIT PAS : casser une pile qui tourne. Une adresse sur laquelle un
-# demon ecoute est signalee et CONSERVEE, sauf --force. Mieux vaut un routage
-# incomplet qu'un osmo-stp qui ne redemarre plus.
+# WHAT IT DOES NOT DO: break a running stack. An address a daemon listens on
+# is reported and KEPT, unless --force. An incomplete routing beats an
+# osmo-stp that no longer restarts.
 #
-# Usage :
-#   sudo network/set_ip_vm.sh --via 192.168.1.101      l'hote qui porte docker
-#   sudo network/set_ip_vm.sh                          --via demande, ou relu
-#   sudo network/set_ip_vm.sh --status                 etat, sans rien changer
-#   sudo network/set_ip_vm.sh --undo                   retire la route posee
+# Usage:
+#   sudo network/set_ip_vm.sh --via 192.168.1.101      the host carrying docker
+#   sudo network/set_ip_vm.sh                          --via asked, or re-read
+#   sudo network/set_ip_vm.sh --status                 status, changes nothing
+#   sudo network/set_ip_vm.sh --undo                   removes the route
 #
-#   --via ADRESSE      hote docker (routeur vers le backbone)
-#   --docker-net CIDR  backbone des conteneurs (defaut 172.20.0.0/24)
-#   --iface NOM        interface (defaut : celle de la route par defaut)
-#   --keep ADRESSE     adresse a NE PAS retirer (repetable)
-#   --force            retire meme les adresses sur lesquelles un demon ecoute
-#   --hub-ip ADRESSE   ecrit l'inter-STP a viser dans osmo-stp.cfg, leve le
-#                      shutdown de l'ASP, puis aligne la source sur la route
-#                      qui y mene. Sans elle, on ne fait qu'aligner la source.
-#   --no-stp           ne touche pas a osmo-stp.cfg (source de l'ASP)
-#   --defaut           applique la configuration du banc sans rien demander.
-#                      L'hote docker n'est PAS suppose : il est cherche sur le
-#                      reseau lu sur l'interface - la seule machine qui sache
-#                      joindre le backbone des conteneurs. --via le fixe.
-#   --persist          rejoue au boot (unite systemd)
-#   --dry-run          montre, n'applique pas
+#   --via ADDRESS      docker host (router towards the backbone)
+#   --docker-net CIDR  container backbone (default 172.20.0.0/24)
+#   --iface NAME       interface (default: the one of the default route)
+#   --keep ADDRESS     address NOT to remove (repeatable)
+#   --force            removes even the addresses a daemon listens on
+#   --hub-ip ADDRESS   writes the inter-STP to aim at in osmo-stp.cfg, lifts
+#                      the ASP's shutdown, then aligns the source on the route
+#                      that leads there. Without it, only the source is aligned.
+#   --no-stp           does not touch osmo-stp.cfg (ASP source)
+#   --defaut           applies the bench configuration without asking.
+#                      The docker host is NOT assumed: it is searched on the
+#                      network read from the interface - the only machine that
+#                      can reach the container backbone. --via fixes it.
+#   --persist          replayed at boot (systemd unit)
+#   --dry-run          shows, does not apply
 # =============================================================================
 set -uo pipefail
 
@@ -55,25 +55,25 @@ VIA=""
 IFACE=""
 FORCE=0
 NO_STP=0
-# --hub-ip : l'inter-STP que cet ASP doit viser. Sans elle, on ne fait
-# qu'ALIGNER la source sur le remote-ip deja ecrit - ce qui ne vaut rien quand
-# ce remote-ip est reste le defaut du gabarit (127.0.0.1) : on validerait une
-# configuration qui ne joindra jamais personne. Avec elle, on ECRIT la
-# destination, puis la source qui y mene.
+# --hub-ip: the inter-STP this ASP must aim at. Without it, the source is only
+# ALIGNED on the remote-ip already written - worthless when that remote-ip is
+# still the template default (127.0.0.1): it would validate a configuration
+# that will never reach anyone. With it, the destination is WRITTEN, then the
+# source that leads there.
 HUB_IP=""
 USE_DEFAULTS=0
-# ── La configuration du banc, en un mot ─────────────────────────────────────
-# --defaut applique ce qui est vrai sur toutes nos VM sans rien demander :
-# l'hote qui porte docker, le backbone des conteneurs, et la persistance au
-# boot (le live n'en a aucune, la route serait perdue au redemarrage).
-# Chaque valeur reste surchargeable : --defaut --via X gagne sur le defaut.
-DEFAULT_VIA=""                  # decouvert : voir discover_docker_host()
+# ── The bench configuration, in a word ──────────────────────────────────────
+# --defaut applies what holds on all our VMs without asking: the host carrying
+# docker, the container backbone, and persistence at boot (the live system
+# has none, the route would be lost at reboot).
+# Each value can still be overridden: --defaut --via X wins over the default.
+DEFAULT_VIA=""                  # discovered: see discover_docker_host()
 DEFAULT_DOCKER_NET="172.20.0.0/24"
 DRY=0
 PERSIST=0
 ACTION="apply"
 KEEP=()
-STATE=/etc/osmo-docker-host          # memoire du --via, pour ne le taper qu'une fois
+STATE=/etc/osmo-docker-host          # remembers --via, so it is typed only once
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -102,48 +102,48 @@ done
 
 run() { if [ "$DRY" = 1 ]; then echo "    [dry-run] $*"; else "$@"; fi; }
 
-# ── Trouver l'hote docker, sans le nommer ───────────────────────────────────
-# Une adresse en dur ne survit pas au banc : il a suffi que l'hote passe de
-# l'ethernet au wifi pour qu'il change d'adresse, et toutes les VM se sont mises
-# a router vers une machine qui n'existait plus - aller sans retour, "connect
-# failed" partout, sans qu'aucune configuration n'ait bouge.
+# ── Finding the docker host, without naming it ──────────────────────────────
+# A hard-coded address does not survive the bench: the host switching from
+# ethernet to wifi changes its address, and every VM would route towards a
+# machine that no longer exists - "connect failed" everywhere, with no
+# configuration having changed.
 #
-# On le cherche donc par ce qu'il FAIT, pas par ce qu'il s'appelle : c'est la
-# seule machine du LAN qui sait joindre le backbone des conteneurs. Pour chaque
-# machine vivante, on pose la route a l'essai et on tente d'atteindre le premier
-# conteneur ; celle qui repond est l'hote. La route est retiree si l'essai
-# echoue - rien ne subsiste d'une tentative infructueuse.
+# It is therefore searched by what it DOES, not by its name: the only machine
+# on the LAN that can reach the container backbone. For each live machine the
+# route is installed on trial and the first container is probed; the one that
+# answers is the host. The route is removed when the trial fails - nothing
+# remains of an unsuccessful attempt.
 discover_docker_host() {
     local prefix probe live c saved
-    # Cette fonction POSE des routes pour trouver la bonne : elle ne passe pas
-    # par run(), donc --dry-run modifiait quand meme la table de routage de la
-    # machine. Un mode qui annonce "montre, n'applique pas" doit tenir parole.
+    # This function INSTALLS routes to find the right one, without going
+    # through run(): under --dry-run it is skipped, so the routing table of
+    # the machine stays untouched, as the mode promises.
     if [ "$DRY" = 1 ]; then
         echo -e "    [dry-run] decouverte sautee : elle pose des routes a l'essai - donnez --via" >&2
         return 1
     fi
-    # Et sans root, "ip route replace" echoue silencieusement a chaque candidat :
-    # la boucle allait au bout, VIA ressortait vide, et --defaut sortait en
-    # "--via manquant" - un message qui designe la mauvaise cause. Le controle
-    # de root n'arrive que cinquante lignes plus bas, trop tard pour celui-ci.
+    # Without root, "ip route replace" would fail silently for every
+    # candidate: the loop would run to the end, VIA would come out empty and
+    # --defaut would exit on "--via manquant" - a message naming the wrong
+    # cause. The general root check comes later, too late for this one.
     if [ "$(id -u)" -ne 0 ]; then
         echo -e "    decouverte impossible sans root (elle pose des routes a l'essai) - donnez --via" >&2
         return 1
     fi
-    # Le reseau se lit sur l'interface, il n'est jamais suppose.
+    # The network is read from the interface, never assumed.
     [ -n "$LAN_IP" ] || return 1
     prefix="${LAN_IP%.*}"
-    probe="$(echo "$DOCKER_NET" | cut -d. -f1-3).11"   # le premier conteneur
+    probe="$(echo "$DOCKER_NET" | cut -d. -f1-3).11"   # the first container
 
     echo -e "  ${CYAN}Recherche de l'hote docker sur ${prefix}.0/24...${NC}" >&2
-    # 1. qui est vivant ? (en parallele, une seconde au total)
+    # 1. who is alive? (in parallel, one second in total)
     live="$(for c in $(seq 1 254); do
                 [ "${prefix}.${c}" = "$LAN_IP" ] && continue
                 ping -c1 -W1 "${prefix}.${c}" >/dev/null 2>&1 && echo "${prefix}.${c}" &
             done; wait)"
     [ -n "$live" ] || return 1
 
-    # 2. lequel route vers les conteneurs ?
+    # 2. which one routes to the containers?
     saved="$(ip -4 route show "$DOCKER_NET" 2>/dev/null | head -1)"
     for c in $live; do
         ip route replace "$DOCKER_NET" via "$c" 2>/dev/null || continue
@@ -152,33 +152,33 @@ discover_docker_host() {
             printf '%s' "$c"; return 0
         fi
     done
-    # rien trouve : on remet ce qui etait la
+    # nothing found: restore what was there
     ip route del "$DOCKER_NET" 2>/dev/null || true
     [ -n "$saved" ] && ip route add $saved 2>/dev/null || true
     return 1
 }
 
-# ── L'interface : celle qui porte la route par defaut ───────────────────────
+# ── The interface: the one carrying the default route ───────────────────────
 [ -n "$IFACE" ] || IFACE="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
 [ -n "$IFACE" ] || { echo -e "${RED}Aucune interface par defaut - precisez --iface${NC}" >&2; exit 1; }
 
-# ── L'adresse de la machine SUR LE LAN ──────────────────────────────────────
-# Prise sur la route par defaut, pas dans la liste des adresses : depuis que
-# l'ISO pose aussi le plan prive (192.168.<n>.1/32 et .10/32), un simple "la
-# premiere qui n'est pas 172.20" tombait sur 192.168.2.1 - une adresse locale,
-# sur aucun segment. La decouverte de l'hote balayait alors le mauvais reseau.
-# La source de la route par defaut, elle, est par construction celle qui sort.
+# ── The machine's address ON THE LAN ────────────────────────────────────────
+# Taken from the default route, not from the address list: the ISO also sets
+# the private plan (192.168.<n>.1/32 and .10/32), so a simple "the first one
+# that is not 172.20" would pick 192.168.2.1 - a local address, on no segment -
+# and the host discovery would sweep the wrong network. The source of the
+# default route is, by construction, the one that goes out.
 LAN_IP="$(ip route show default 2>/dev/null | awk '/^default/{print $9; exit}')"
 [ -n "$LAN_IP" ] || LAN_IP="$(ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null \
           | awk '$0 !~ /\/32/ {print $4}' | cut -d/ -f1 | grep -vE '^172\.20\.' | head -1)"
 
-# ── --defaut : la table du banc, sans rien demander ─────────────────────────
-# Ce bloc vient APRES la lecture de l'interface et de l'adresse LAN, et il doit
-# y rester : discover_docker_host balaye le reseau lu sur l'interface. Tant
-# qu'il etait place avant, LAN_IP n'existait pas encore et set -u tuait le
-# sous-shell de la substitution - la recherche ne demarrait donc jamais, VIA
-# restait vide, et --defaut ressortait sur "--via manquant" (code 2) alors que
-# son role est justement de ne rien avoir a demander.
+# ── --defaut: the bench table, without asking ───────────────────────────────
+# This block comes AFTER the interface and LAN address are read, and must stay
+# there: discover_docker_host sweeps the network read from the interface.
+# Placed earlier, LAN_IP would not exist yet and set -u would kill the
+# substitution's subshell - the search would never start, VIA would stay
+# empty, and --defaut would exit on "--via manquant" (code 2) although its
+# role is precisely to have nothing to ask.
 if [ "$USE_DEFAULTS" = "1" ]; then
     [ -n "$VIA" ] || VIA="$(awk -F= '/^OSMO_DOCKER_HOST=/{print $2}' "$STATE" 2>/dev/null | tr -d ' \r')"
     [ -n "$VIA" ] || VIA="$(discover_docker_host || true)"
@@ -187,15 +187,15 @@ if [ "$USE_DEFAULTS" = "1" ]; then
     echo -e "${CYAN}  --defaut : hote docker ${VIA}, backbone ${DOCKER_NET}, rejoue au boot${NC}"
 fi
 
-# Le prefixe du plan docker, pour reconnaitre les adresses a retirer :
-# 172.20.0.0/24 -> "172.20." (on ratisse le /16, car l'ISO pose aussi 172.20.1.x)
+# The docker plan prefix, to recognise the addresses to remove:
+# 172.20.0.0/24 -> "172.20." (the whole /16, since the ISO also sets 172.20.1.x)
 DOCKER_PREFIX="$(echo "$DOCKER_NET" | cut -d. -f1-2)."
 
 echo -e "${CYAN}${BOLD}== Adressage VM vers les conteneurs docker ==${NC}"
 echo -e "  interface : ${CYAN}${IFACE}${NC}   adresse LAN : ${CYAN}${LAN_IP:-?}${NC}"
 echo -e "  backbone  : ${CYAN}${DOCKER_NET}${NC}"
 
-# ── Ce qui traine ───────────────────────────────────────────────────────────
+# ── What is lying around ────────────────────────────────────────────────────
 mapfile -t STALE_ADDRS < <(ip -4 -o addr show dev "$IFACE" 2>/dev/null \
     | awk '{print $4}' | grep "^${DOCKER_PREFIX}" || true)
 mapfile -t STALE_ROUTES < <(ip -4 route show dev "$IFACE" 2>/dev/null \
@@ -235,9 +235,9 @@ if [ "$ACTION" = "undo" ]; then
     exit 0
 fi
 
-# ── L'hote docker ───────────────────────────────────────────────────────────
-# Memorise : on ne le tape qu'une fois par machine. Sans terminal et sans
-# memoire, on s'arrete plutot que d'inventer une passerelle.
+# ── The docker host ─────────────────────────────────────────────────────────
+# Remembered: typed only once per machine. Without a terminal and without a
+# saved value, stop rather than invent a gateway.
 [ -n "$VIA" ] || VIA="$(awk -F= '/^OSMO_DOCKER_HOST=/{print $2}' "$STATE" 2>/dev/null | tr -d ' \r')"
 if [ -z "$VIA" ] && [ -t 0 ]; then
     def=""
@@ -255,21 +255,21 @@ if ! [[ "$VIA" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
 fi
 echo -e "  hote docker : ${CYAN}${VIA}${NC}"
 
-# ── Ce script est pour les VM. Pas pour l'hote qui porte docker ─────────────
-# Lance sur l'hote, il pose une route vers LUI-MEME et prend le pas sur la route
-# connectee du bridge docker. Resultat immediat : "Destination Host Unreachable"
-# vers ses propres conteneurs - alors qu'ils tournent tres bien.
+# ── This script is for the VMs. Not for the host carrying docker ────────────
+# Run on the host, it would install a route towards ITSELF, overriding the
+# connected route of the docker bridge: immediate "Destination Host
+# Unreachable" towards its own containers - although they run fine.
 #
-# Deux signes le trahissent, et un seul suffit :
-#   - --via est une adresse locale ;
-#   - un bridge porte deja le reseau des conteneurs.
+# Two signs give it away, and one is enough:
+#   - --via is a local address;
+#   - a bridge already carries the container network.
 #
-# Attention a ne pas confondre les deux facons de "porter" ce reseau :
-#   un BRIDGE docker (br-xxxx, docker0)  -> c'est l'hote, on s'arrete ;
-#   une carte ordinaire (enp0s3...)      -> ce sont justement les alias perimes
-#                                           de l'ISO, et c'est notre travail.
-# Un premier jet refusait les deux et bloquait donc sur la VM qu'il devait
-# reparer.
+# The two ways of "carrying" that network must not be confused:
+#   a docker BRIDGE (br-xxxx, docker0)   -> this is the host, stop;
+#   an ordinary card (enp0s3...)         -> these are precisely the stale ISO
+#                                           aliases, and that is our job.
+# Refusing both would block on the very VM this script is meant to repair.
+#
 _self=0
 ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 \
     | grep -qx "$VIA" && _self=1
@@ -288,10 +288,10 @@ if [ "$_self" = 1 ] || [ -n "$_bridge" ]; then
 fi
 echo ""
 
-# ── 1. Retirer ce qui ment ──────────────────────────────────────────────────
-# Une adresse sur laquelle un demon ECOUTE n'est pas retiree : la supprimer
-# ferait tomber le service qui s'y est lie, et le probleme deviendrait pire que
-# celui qu'on corrige.
+# ── 1. Remove what lies ─────────────────────────────────────────────────────
+# An address a daemon LISTENS on is not removed: deleting it would bring down
+# the service bound to it, and the problem would become worse than the one
+# being fixed.
 for a in ${STALE_ADDRS[@]+"${STALE_ADDRS[@]}"}; do
     ip_only="${a%%/*}"
     skip=0
@@ -304,11 +304,11 @@ for a in ${STALE_ADDRS[@]+"${STALE_ADDRS[@]}"}; do
         echo -e "     (relancez la pile puis --force, ou --keep pour l'assumer)"
         continue
     fi
-    # Une adresse qu'une CONFIG nomme, meme si rien n'ecoute encore. C'est le
-    # cas au repos : la pile est arretee, aucun socket ouvert, et pourtant
-    # osmo-ggsn.cfg dit "gtp bind-ip 172.20.1.10". La retirer donne, au
-    # demarrage suivant, un service qui refuse de partir sur une adresse
-    # "introuvable localement" - et le lien avec ce script est loin.
+    # An address a CONFIG names, even if nothing listens yet. That is the
+    # idle case: the stack is stopped, no socket open, and yet osmo-ggsn.cfg
+    # says "gtp bind-ip 172.20.1.10". Removing it gives, at the next start, a
+    # service that refuses to start on an address "not found locally" - far
+    # from this script.
     if [ "$FORCE" != 1 ]; then
         _ref="$(grep -rlF "$ip_only" /etc/osmocom /etc/asterisk 2>/dev/null | head -3)"
         if [ -n "$_ref" ]; then
@@ -328,8 +328,8 @@ for r in ${STALE_ROUTES[@]+"${STALE_ROUTES[@]}"}; do
         && echo -e "  ${GREEN}✓${NC} route connectee ${r} retiree"
 done
 
-# ── 2. Poser la route ───────────────────────────────────────────────────────
-# 'replace' plutot que 'add' : idempotent, et il ne bute pas sur un reste.
+# ── 2. Install the route ────────────────────────────────────────────────────
+# 'replace' rather than 'add': idempotent, and it does not trip on a leftover.
 if run ip route replace "$DOCKER_NET" via "$VIA" dev "$IFACE"; then
     echo -e "  ${GREEN}✓${NC} ${DOCKER_NET} via ${CYAN}${VIA}${NC}"
 else
@@ -338,18 +338,18 @@ else
     exit 1
 fi
 
-# ── 2bis. L'ASP doit partir de l'adresse qui ROUTE ──────────────────────────
-# Poser la route ne suffit pas si osmo-stp se lie a une autre adresse. Une VM du
-# banc en porte plusieurs - le pont, et le plan prive de l'ISO (192.168.<n>.1 et
-# .10) - et l'auto-detection choisissait volontiers une adresse privee. Le hub
-# ne peut alors pas repondre : l'association n'aboutit jamais et le journal ne
-# dit que "connect failed (-110)", un timeout, sans nommer la source fautive.
+# ── 2bis. The ASP must leave from the address that ROUTES ───────────────────
+# Installing the route is not enough if osmo-stp binds to another address. A
+# bench VM carries several - the bridge, and the ISO's private plan
+# (192.168.<n>.1 and .10) - and auto-detection may pick a private one. The
+# hub then cannot answer: the association never completes and the log only
+# says "connect failed (-110)", a timeout, without naming the faulty source.
 #
-# On aligne donc la source de l'ASP sur ce que le noyau utilisera reellement
-# pour joindre le hub - la meme regle que network/set-node-id.sh.
+# The ASP source is therefore aligned on what the kernel will really use to
+# reach the hub - the same rule as network/set-node-id.sh.
 STP_CFG="${STP_CFG:-/etc/osmocom/osmo-stp.cfg}"
 if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
-    # --hub-ip fait autorite ; sinon on lit ce que le fichier declare deja.
+    # --hub-ip is authoritative; otherwise read what the file already declares.
     if [ -n "$HUB_IP" ]; then
         _hub="$HUB_IP"
         _cur_hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
@@ -358,8 +358,8 @@ if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
                 echo -e "  [dry-run] ASP remote-ip ${_cur_hub:-?} -> ${_hub}"
             else
                 sed -i "/asp asp-to-inter/,/^ *as / s/^\( *remote-ip \).*/\1${_hub}/" "$STP_CFG"
-                # Un ASP en shutdown ne s'attache pas, meme bien adresse : on le
-                # leve, sinon la correction reste sans effet visible.
+                # An ASP in shutdown does not attach, even well addressed: lift
+                # it, otherwise the fix has no visible effect.
                 sed -i "/asp asp-to-inter/,/^ *as / s/^\( *\)shutdown[[:space:]]*$/\1no shutdown/" "$STP_CFG"
                 echo -e "  ${GREEN}✓${NC} ASP : hub ${CYAN}${_hub}${NC} (etait ${_cur_hub:-aucun})"
             fi
@@ -367,10 +367,10 @@ if [ "${NO_STP:-0}" != "1" ] && [ -w "$STP_CFG" ]; then
     else
         _hub="$(awk '/asp asp-to-inter/{f=1} f&&/remote-ip/{print $2; exit}' "$STP_CFG")"
     fi
-    # Un remote-ip en boucle locale n'est pas un hub : c'est le defaut du
-    # gabarit, laisse par une regeneration qui a efface l'identite du noeud.
-    # Aligner la source dessus validerait une configuration morte - "source
-    # deja correcte (127.0.0.1)" sur un ASP qui ne joindra jamais personne.
+    # A loopback remote-ip is not a hub: it is the template default, left by
+    # a regeneration that erased the node identity. Aligning the source on it
+    # would validate a dead configuration - "source deja correcte (127.0.0.1)"
+    # on an ASP that will never reach anyone.
     case "$_hub" in
         127.*|0.0.0.0|"")
             echo -e "  ${YELLOW}⚠${NC} ASP : remote-ip=${_hub:-vide} - ce n'est pas un hub."
@@ -399,9 +399,9 @@ fi
 
 [ "$DRY" = 1 ] || printf 'OSMO_DOCKER_HOST=%s\n' "$VIA" > "$STATE" 2>/dev/null || true
 
-# ── 3. Au boot, si demande ──────────────────────────────────────────────────
-# Un live sans persistance repart de l'ISO a chaque demarrage : sans unite, tout
-# est a refaire. Elle rejoue simplement ce script, qui est idempotent.
+# ── 3. At boot, on request ──────────────────────────────────────────────────
+# A live system without persistence restarts from the ISO at every boot:
+# without a unit, everything is to redo. It simply replays this idempotent script.
 if [ "$PERSIST" = 1 ]; then
     here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [ "$DRY" = 1 ]; then
@@ -424,7 +424,8 @@ EOF
     fi
 fi
 
-# ── 4. Le controle qui compte ───────────────────────────────────────────────
+# ── 4. The check that matters ───────────────────────────────────────────────
+
 echo ""
 first="$(echo "$DOCKER_NET" | cut -d. -f1-3).11"
 echo -e "  ${BOLD}Verifier :${NC} ${CYAN}ip route get ${first}${NC}   doit indiquer via ${VIA}"

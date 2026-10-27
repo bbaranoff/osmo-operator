@@ -1,43 +1,33 @@
 #!/bin/bash
-# iso_modules/90-iso.sh - etape 9 : squashfs, noyau, menu GRUB, /.disk
-# Source par build-iso.sh, dans l ordre des numeros : meme shell, memes
-# variables, memes fonctions. Ne s execute pas seul. `return` en tete de
-# module = "rien a faire ici" (c est ainsi que --arm saute une etape).
+# iso_modules/90-iso.sh - step 9: squashfs, kernel, GRUB menu, /.disk.
+# Sourced by build-iso.sh in numeric order: same shell, same variables, same
+# functions. Not meant to be run on its own. A `return` at the top of a module
+# means "nothing to do here" (this is how --arm skips a step).
+#
+# Environment variables:
+#   OSMO_ISO_NO_VERIFY=1     skip the dpkg md5 integrity checks (~40 s per pass)
+#   OSMO_ISO_SQUASH_JOBS=N   limit mksquashfs to N CPU cores (default: all)
 
-# --arm : pas de squashfs ni de GRUB : 92-rpi-image ecrit l image SD.
+# --arm: no squashfs or GRUB; 92-rpi-image writes the SD image.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
-# ── Creation du squashfs et de l'ISO ───────────────────────────────────────
+# ── Squashfs and ISO creation ──────────────────────────────────────────────
 echo -e "${GREEN}[9/9] Squashfs et ISO...${NC}"
 mkdir -p "$ISOROOT/live" "$ISOROOT/boot/grub"
 
-# 2>/dev/null || true : sous pipefail, un ls sans resultat faisait sortir le
-# script AVANT le message « Kernel absent » qui suit.
+# 2>/dev/null || true: under pipefail an empty ls would exit before the
+# "Kernel absent" message below.
 VMLINUZ=$(ls "$ROOTFS"/boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 || true)
 INITRD=$(ls "$ROOTFS"/boot/initrd.img-* 2>/dev/null | sort -V | tail -1 || true)
 if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then echo -e "${RED}Kernel absent${NC}"; exit 1; fi
 echo -e "  Kernel: ${CYAN}$(basename "$VMLINUZ")${NC}"
 
-# ── Compression du squashfs : zstd, et non xz ────────────────────────────────
-# Le noyau embarque est compile avec CONFIG_SQUASHFS_DECOMP_SINGLE=y : UN SEUL
-# flux de decompression, serialise par un mutex. Ajouter des vCPU a la VM n'y
-# change donc rien - c'est le seul chiffre qui compte quand l'ISO est lue a la
-# demande, et c'est celui qu'on regarde le moins.
-#
-# Mesure faite sur ce depot, meme contenu (360 Mo de /usr/bin de l'ISO lite),
-# decompression a UN thread :
-#
-#     -comp xz -Xbcj x86    92,0 Mo    3,82 s
-#     -comp zstd -level 19 106,9 Mo    0,41 s
-#
-# 16 % d'ISO en plus contre 9x en vitesse de lecture. Sur une image qui vit en
-# machine virtuelle, dont chaque fichier ouvert au demarrage coute une
-# decompression de bloc de 1 Mo, l'arbitrage se tranche tout seul.
-#
-# Le repli sur xz n'est pas de la prudence decorative : mksquashfs n'a le zstd
-# que depuis la 4.4, et il n'est compile que si la libzstd etait la. On SONDE
-# donc l'outil au lieu de lire son numero de version - une compression d'essai
-# repond juste, une comparaison de versions non.
+# ── Squashfs compression: zstd rather than xz ──────────────────────────────
+# The embedded kernel has CONFIG_SQUASHFS_DECOMP_SINGLE=y (one serialised
+# decompression stream), so single-thread decompression speed matters: zstd
+# -19 reads ~9x faster than xz for ~16% larger images.
+# Fallback to xz: mksquashfs only supports zstd since 4.4 and only if built
+# with libzstd, so the tool is probed with a test compression.
 _squash_zstd_ok() {
     local t rc
     t="$(mktemp -d)" || return 1
@@ -56,56 +46,31 @@ else
     echo -e "  Compression: ${YELLOW}xz${NC} (mksquashfs sans zstd - ISO plus petite, mais lente a lire)"
 fi
 
-# [2026-09-02] PLUS D EXCLUSION de boot/vmlinuz-* ni de boot/initrd* : ce
-# squashfs n est pas seulement la racine du live, c est aussi la SOURCE de
-# Calamares (unpackfs.conf). Sans noyau dedans, le systeme installe n avait ni
-# vmlinuz ni initrd : grub-mkconfig n ecrivait aucune entree Linux et la
-# machine ne demarrait plus apres « installation reussie ». Les ~100 Mo de
-# plus sont deja compresses (le noyau l est), ils ne pesent presque rien ici.
-# ── Controle d integrite : les fichiers des paquets contre leurs md5 dpkg ───
-# [2026-09-09] Le build du 8 au soir a livre une ISO ou ~440 fichiers
-# differaient d UN bit (le bit 0 tombe a zero, jusque dans des noms de
-# fichiers : « __pyc`che__ », « usr.share ») de ce que dpkg avait pose :
-# libgjs, libmozjs, Xwayland, firefox, mesa, libwireshark... Resultat : GNOME
-# Shell segfaultait dans libmozjs a chaque lancement, « Oh no! Something has
-# gone wrong » au premier boot (VirtualBox comme QEMU). Les .deb sont
-# verifies par leur CRC xz a l extraction : l alteration s est faite APRES,
-# sur l hote (RAM ou disque) - une machine qui flanche sous la charge du
-# build. Aucun maillon de la chaine ne le voit ; on compare donc les fichiers
-# des paquets a leur md5 dpkg.
+# ── Integrity check: package files against their dpkg md5sums ─────────────
+# Kernel and initrd are kept in the squashfs: it is also the Calamares source
+# (unpackfs.conf), and the installed system needs them.
 #
-# [2026-09-14] Le controle ne se faisait qu APRES coup, sur le squashfs relu :
-# il englobait tout le trajet, de l ecriture par dpkg jusqu a la relecture, et
-# ne savait donc pas dire OU le bit avait bascule. On controle desormais DEUX
-# FOIS, avec exactement le meme filtre - sans quoi comparer les deux listes
-# n aurait aucun sens :
+# The check runs twice with exactly the same filter, so both lists compare:
 #
-#   rootfs altere            -> c est ANTERIEUR a la compression (dpkg, ou une
-#                               etape du build qui reecrit par-dessus un paquet)
-#   rootfs sain + sqfs altere-> c est mksquashfs ou la relecture
+#   rootfs altered            -> before compression (dpkg, or a build step
+#                                overwriting a packaged file)
+#   rootfs ok + squashfs bad  -> mksquashfs or the read-back
 #
-# Ce que le build modifie lui-meme est ecarte : /opt et /root (sources et
-# venv), /usr/local, MongoDB, les unites osmo-* (recopiees du docker),
-# calamares.desktop (NoDisplay), live-boot (toram), os-release ; les fichiers
-# supprimes (docs, locales) ne comptent pas ; ni les libs de la cloture ldd de
-# l etape 8b, qui remplacent CELLES D APT a dessein ($WORK/closure.list).
-# [2026-10-01] Et usr/bin/screenfetch : 86-finitions.sh y neutralise au sed
-# l easter-egg qui melange les lignes du logo (cinq valeurs sur mille). Le
-# fichier differe donc de son paquet A DESSEIN, sur toutes les images.
+# Excluded (modified by the build on purpose): /opt and /root (sources and
+# venv), /usr/local, MongoDB, osmo-* units, calamares.desktop (NoDisplay),
+# live-boot (toram), os-release, usr/bin/screenfetch (patched by
+# 86-finitions.sh), and the ldd-closure libs of step 8b ($WORK/closure.list).
+# Deleted files (docs, locales) do not count.
 #
-# Et les listes sont desormais HORODATEES. Le critere qui tranche - « les
-# memes fichiers a chaque build » (une etape du build les reecrit) contre « un
-# tirage different a chaque fois » (l hote qui flanche) - etait inverifiable
-# tant qu un fichier unique etait ecrase a chaque build : le rapport le pose
-# maintenant tout seul, en comparant au build precedent.
-# Environ 40 s par passe. OSMO_ISO_NO_VERIFY=1 pour passer outre.
+# Result lists are timestamped and compared with the previous build: the same
+# files every time points to a build step, a different set to the host.
+# About 40 s per pass. OSMO_ISO_NO_VERIFY=1 skips it.
 _vfy_stamp="$(date +%Y%m%d-%H%M%S)"
 
-# Le controle, applique a une racine quelconque. Pose _vfy_out (les chemins en
-# echec, sans le « : FAILED » - on compare ces listes d un build a l autre),
-# _vfy_n (leur nombre) et _vfy_prev (la liste du build precedent de meme
-# etiquette, vide au premier build).
-_vfy_paquets() {   # $1 = etiquette (rootfs|squashfs), $2 = racine a controler
+# Run the check on a given root. Sets _vfy_out (failing paths, without
+# ": FAILED"), _vfy_n (their count) and _vfy_prev (list of the previous build
+# with the same label, empty on the first build).
+_vfy_paquets() {   # $1 = label (rootfs|squashfs), $2 = root to check
     local _k="$1" _r="$2" _skip="$WORK/closure.list"
     [ -s "$_skip" ] || _skip=/dev/null
     _vfy_out="/var/tmp/osmo-iso-verify-${_vfy_stamp}-${_k}.failed"
@@ -115,17 +80,17 @@ _vfy_paquets() {   # $1 = etiquette (rootfs|squashfs), $2 = racine a controler
         | md5sum -c --quiet 2>/dev/null | grep -v 'open or read' \
         | sed 's/: FAILED$//' ) > "$_vfy_out" || true
     _vfy_n=$(wc -l < "$_vfy_out")
-    # Le chemin historique reste valable : il pointe sur la derniere passe.
+    # Legacy path, points to the latest pass.
     ln -sf "$_vfy_out" /var/tmp/osmo-iso-verify.failed
     _vfy_prev=$(ls -1t /var/tmp/osmo-iso-verify-*-"${_k}".failed 2>/dev/null \
         | grep -vF "$_vfy_stamp" | head -1) || true
-    # Les 20 dernieres : de quoi juger la stabilite, pas de quoi remplir /var/tmp.
+    # Keep the last 20 lists.
     ls -1t /var/tmp/osmo-iso-verify-*-"${_k}".failed 2>/dev/null \
         | tail -n +21 | xargs -r rm -f || true
 }
 
-# Le verdict, une fois qu une liste n est pas vide. C est la comparaison au
-# build precedent qui porte le diagnostic, pas le nombre de fichiers.
+# Verdict for a non-empty list. The comparison with the previous build gives
+# the diagnosis, not the number of files.
 _vfy_verdict() {
     local _c
     head -8 "$_vfy_out" | sed 's/^/      /'
@@ -142,13 +107,6 @@ _vfy_verdict() {
             echo -e "  ${YELLOW}($(basename "$_vfy_prev")) : le tirage CHANGE a chaque fois. Aucune${NC}"
             echo -e "  ${YELLOW}etape du build ne vise des fichiers au hasard : c est l hote.${NC}"
             echo -e "  ${YELLOW}RAM non-ECC : rien ne sera jamais signale (ni EDAC, ni dmesg).${NC}"
-            # [2026-09-14] MESURE, sur le rootfs du build de 11h59. Le meme
-            # pipeline que la passe 1, rejoue sur le MEME rootfs intact :
-            #   juste apres 2 x 160 s de zstd -19 sur 32 coeurs (94-95 C) -> 18 echecs
-            #   la machine refroidie (78 C au depart)                     ->  0, deux fois
-            # et les fichiers incrimines, relus un par un cache vide, rendent
-            # exactement le md5 de dpkg. Les octets du disque sont BONS : ce
-            # qui se corrompt, c est la lecture sous charge. D ou le conseil.
             echo -e "  ${YELLOW}La faute n apparait que SOUS CHARGE SOUTENUE sur tous les coeurs :${NC}"
             echo -e "  ${YELLOW}memtest86+ peut passer une nuit entiere sans rien voir (il ne${NC}"
             echo -e "  ${YELLOW}chauffe pas le CPU). Refaire plutot ce build a froid, et le${NC}"
@@ -164,8 +122,7 @@ _vfy_verdict() {
     fi
 }
 
-# Passe 1 : le rootfs tel que dpkg et le build l ont laisse. Avant les 20 Go
-# de compression - inutile de les payer pour retrouver l alteration a la sortie.
+# Pass 1: the rootfs as left by dpkg and the build, before compression.
 if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     _vfy_paquets rootfs "$ROOTFS"
     if [ "$_vfy_n" -eq 0 ]; then
@@ -180,15 +137,10 @@ if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     fi
 fi
 
-# ── OSMO_ISO_SQUASH_JOBS : brider la compression ────────────────────────────
-# [2026-09-14] mksquashfs prend TOUS les coeurs par defaut. Sur cet hote (32
-# threads, zstd -19) c est le seul moment du build ou la machine tire sa
-# puissance maximale pendant trois minutes d affilee, et c est exactement la
-# que le controle d integrite ci-dessous trouve des octets faux - jamais a
-# froid (mesure : 18 echecs juste apres, 0 sur la meme ISO une fois refroidie).
-# Cette variable sert deux fois : a TRANCHER (les echecs disparaissent-ils a 4
-# coeurs ?) et, si oui, a livrer quand meme - plus lentement, mais juste.
-# Vide par defaut : mksquashfs garde son comportement d origine.
+# ── OSMO_ISO_SQUASH_JOBS: limit compression parallelism ───────────────────
+# mksquashfs uses all cores by default. Limiting it helps tell host
+# instability under full load from a build problem, and allows a correct
+# (slower) build on such a host. Empty by default.
 SQUASH_JOBS=()
 if [ -n "${OSMO_ISO_SQUASH_JOBS:-}" ]; then
     SQUASH_JOBS=(-processors "$OSMO_ISO_SQUASH_JOBS")
@@ -200,10 +152,9 @@ mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
     -no-progress
 echo -e "  ${GREEN}✓${NC} squashfs $(du -sh "$ISOROOT/live/filesystem.squashfs"|cut -f1)"
 
-# ── Passe 2 : le squashfs relu, contre les memes md5 dpkg ──────────────────
-# La passe 1 (avant mksquashfs) a dit que le rootfs etait sain ; ce qui
-# echoue ici n a donc pu etre altere que par la compression elle-meme, son
-# ecriture, ou cette relecture. Voir le pave de la passe 1 pour le filtre.
+# ── Pass 2: the squashfs read back, against the same dpkg md5sums ─────────
+# Pass 1 found the rootfs clean, so failures here come from compression,
+# writing or the read-back. See pass 1 for the filter.
 if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     _vfy_mnt="$WORK/sqfs-verify"
     mkdir -p "$_vfy_mnt"
@@ -235,30 +186,27 @@ fi
 cp "$VMLINUZ" "$ISOROOT/boot/vmlinuz"
 cp "$INITRD"  "$ISOROOT/boot/initrd.img"
 
-# ── Menu GRUB ────────────────────────────────────────────────────────────────
-# Les chiffres de RAM annonces sont CALCULES sur le squashfs qui vient d'etre
-# ecrit, pas recopies d'un ancien build. Les libelles en dur ("RAM ~6 Go")
-# etaient faux des que l'image maigrissait, et une consigne fausse coute plus
-# cher que pas de consigne : on dimensionne la VM sur elle.
+# ── GRUB menu ──────────────────────────────────────────────────────────────
+# RAM figures shown in the menu are computed from the squashfs just written.
 SQ_MB=$(( $(stat -Lc%s "$ISOROOT/live/filesystem.squashfs") / 1048576 ))
-# toram recopie le squashfs dans un tmpfs, puis le systeme tourne par-dessus :
-# la taille du fichier, plus 2 Go pour le reste, arrondi au Go superieur.
+# toram copies the squashfs to a tmpfs and the system runs on top of it:
+# file size plus 2 GB, rounded up to the next GB.
 RAM_TORAM_GB=$(( (SQ_MB + 2048 + 1023) / 1024 ))
 SQ_GB=$(awk -v m="$SQ_MB" 'BEGIN{printf "%.1f", m/1024}')
 
-# [2026-10-23] Theme « osmo » (tools/grub-theme-render.py), le meme que sur le
-# systeme installe. S il ne se charge pas (polices absentes, GRUB signe sans
-# gfxterm), le bloc « if loadfont » est saute et le menu reste en texte.
+# "osmo" theme (tools/grub-theme-render.py), same as on the installed system.
+# If it cannot load (missing fonts, signed GRUB without gfxterm), the
+# "if loadfont" block is skipped and the menu stays in text mode.
 python3 "$DIR/tools/grub-theme-render.py" --out "$ISOROOT/boot/grub/themes/osmo" >/dev/null 2>&1 \
     || echo -e "  ${YELLOW}!${NC} grub : rendu du theme echoue - menu du live en texte"
 
 cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
-# ATTENTION - ce fichier est GENERE par build-iso.sh. Le modifier dans l'ISO ne
-# survit pas au build suivant.
+# WARNING - this file is GENERATED by build-iso.sh. Changes made in the ISO
+# do not survive the next build.
 #
-# Sous VirtualBox, deux reglages evitent des minutes d'attente sur l'entree
-# "en RAM" : attacher l'ISO au controleur SATA plutot qu'IDE, et cocher
-# "Utiliser le cache E/S de l'hote" dessus.
+# Under VirtualBox, two settings avoid minutes of waiting on the "RAM" entry:
+# attach the ISO to the SATA controller rather than IDE, and enable
+# "Use Host I/O Cache" on it.
 
 set default=0
 set timeout=5
@@ -274,49 +222,40 @@ if loadfont /boot/grub/themes/osmo/osmo-18.pf2; then
     set theme=/boot/grub/themes/osmo/theme.txt
 fi
 
-# TROIS entrees, et le reste dans un sous-menu. Cinq lignes dont deux doublons
-# "verbose", c est un menu ou l on cherche - alors que le choix reel n en compte
-# que trois : lire depuis le medium, copier en RAM, ecrire sur le medium.
+# Three main entries (read from medium, copy to RAM, write to medium); the
+# rest is in a submenu.
 menuentry "osmo-operator" {
     linux  /boot/vmlinuz boot=live quiet
     initrd /boot/initrd.img
 }
 
-# "toram" tout court ferait recopier a live-boot le MEDIUM ENTIER dans un tmpfs
-# (lib/live/boot/9990-toram-todisk.sh) : le squashfs, mais AUSSI l initrd de
-# 82 Mo, le vmlinuz et efi.img. Et comme rsync n est pas dans l initrd, la copie
-# se fait par "cp -a", qui n affiche RIEN - avec "quiet" en plus, l ecran reste
-# fige plusieurs minutes sans le moindre signe de vie, et on croit a un
-# plantage. D ou "toram=filesystem.squashfs" (seul le squashfs est copie, et le
-# tmpfs est dimensionne sur lui) et l absence de "quiet" ici : la copie se voit.
+# Plain "toram" makes live-boot copy the WHOLE medium to a tmpfs
+# (lib/live/boot/9990-toram-todisk.sh) with a silent "cp -a".
+# "toram=filesystem.squashfs" copies only the squashfs (tmpfs sized on it),
+# and "quiet" is omitted so the copy progress is visible.
 menuentry "osmo-operator - en RAM (copie ${SQ_GB} Go - ${RAM_TORAM_GB} Go de RAM mini)" {
     linux  /boot/vmlinuz boot=live toram=filesystem.squashfs
     initrd /boot/initrd.img
 }
 
-# Sans persistance, la racine est un overlay tmpfs : tout ce qui s ecrit vit en
-# RAM et meurt au reboot - configs SS7 posees a la main, base HLR, journaux.
-# PAS de toram ici, et c est le point : avec toram le systeme est recopie en RAM
-# et l overlay y reste, ce qui annulerait l interet.
+# Without persistence the root is a tmpfs overlay: everything written is lost
+# at reboot. No toram here, since the overlay would then stay in RAM.
 #
-# Il faut un volume ETIQUETE "persistence" portant un persistence.conf dont la
-# seule ligne utile est "/ union" :
+# Requires a volume LABELLED "persistence" holding a persistence.conf with
+# the line "/ union":
 #   sudo mkfs.ext4 -L persistence /dev/sdX3
 #   sudo mount /dev/sdX3 /mnt && echo "/ union" | sudo tee /mnt/persistence.conf
-# En VM, un second disque suffit. Sans volume ainsi etiquete, cette entree
-# demarre comme un live ordinaire : rien ne casse, rien n est garde.
+# In a VM a second disk is enough. Without such a volume this entry boots
+# as a plain live system.
 menuentry "osmo-operator - persistant (ecrit sur le medium)" {
     linux  /boot/vmlinuz boot=live persistence persistence-encryption=none quiet
     initrd /boot/initrd.img
 }
 
-# Les variantes verbose ne servent qu au diagnostic : elles sont les memes
-# lignes de commande sans "quiet". Elles restent atteignables, mais elles ne
-# tiennent plus la moitie du menu.
-# [2026-09-08] SANS ACCELERATION GRAPHIQUE. Un GPU que le noyau 6.8 de l ISO
-# ne sait pas (AMD RDNA recent sans son firmware, NVIDIA sans nouveau) donne
-# un ecran noir ou un plantage a l amorcage : nomodeset laisse le framebuffer
-# du firmware, le bureau tourne en logiciel, et l on peut au moins installer.
+# Verbose variants (same command lines without "quiet") are for diagnostics.
+# No graphics acceleration: for GPUs the 6.8 kernel does not support (recent
+# AMD RDNA without firmware, NVIDIA without nouveau) that give a black screen
+# or a crash; nomodeset keeps the firmware framebuffer.
 menuentry "osmo-operator - sans acceleration graphique (nomodeset : ecran noir, plantage AMD/NVIDIA)" {
     linux  /boot/vmlinuz boot=live nomodeset quiet
     initrd /boot/initrd.img
@@ -339,10 +278,8 @@ submenu "Options (demarrage verbeux)" {
 GRUB
 echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; toram annonce ${CYAN}${RAM_TORAM_GB} Go${NC} de RAM"
 
-# ── /.disk/info : LE FICHIER SANS LEQUEL L'ISO S'ARRETE SUR "grub>" EN UEFI ──
-# Ce fichier vide d'apparence est ce que le GRUB signe d'Ubuntu CHERCHE pour se
-# reperer. gcdx64.efi.signed porte un disque memoire dont la configuration est,
-# mot pour mot :
+# ── /.disk/info: required for UEFI boot, otherwise GRUB stops at "grub>" ──
+# Ubuntu's signed GRUB (gcdx64.efi.signed) has an embedded config:
 #
 #     if [ -z "$prefix" -o ! -e "$prefix" ]; then
 #         if ! search --file --set=root /.disk/info; then
@@ -350,43 +287,30 @@ echo -e "  ${GREEN}✓${NC} menu GRUB : defaut = lecture depuis le medium ; tora
 #         fi
 #         set prefix=($root)/boot/grub
 #     fi
-#     ... source $prefix/grub.cfg ... sinon source $cmdpath/grub.cfg
+#     ... source $prefix/grub.cfg ... else source $cmdpath/grub.cfg
 #
-# Son prefixe compile vaut "/boot/grub" SANS peripherique : il se resout donc
-# sur le disque d'ou le firmware a charge le binaire, c'est-a-dire la partition
-# EFI (FAT) - qui ne contient pas /boot/grub. Le test "! -e $prefix" est vrai,
-# et tout repose alors sur la recherche de /.disk/info. Ce fichier n'existait
-# pas ici : la recherche echouait, $root restait sur la FAT, aucun grub.cfg
-# n'etait trouve, et GRUB rendait la main sur son invite "grub>".
-#
-# POURQUOI CA MARCHAIT EN MACHINE VIRTUELLE. VirtualBox demarre en BIOS par
-# defaut : c'est eltorito.img qui joue, construit ici avec -p /boot/grub sur
-# le lecteur de boot, et il trouve sa configuration sans rien chercher. Le
-# chemin UEFI - le seul qu'un portable recent emprunte - n'etait donc jamais
-# exerce. La panne n'etait pas "sur ce portable", elle etait sur TOUT UEFI.
-#
-# Les ISO Ubuntu et Debian posent ce meme fichier, pour cette meme raison.
+# Its compiled prefix "/boot/grub" has no device and resolves on the EFI
+# (FAT) partition, which has no /boot/grub, so it relies on finding
+# /.disk/info. BIOS boot (eltorito.img, built with -p /boot/grub) does not
+# need it. Ubuntu and Debian ISOs ship the same file for the same reason.
 mkdir -p "$ISOROOT/.disk"
 printf 'osmo-operator %s - live amd64 (%s)\n' "$VERSION" "$LABEL" > "$ISOROOT/.disk/info"
 cp "$ISOROOT/.disk/info" "$ISOROOT/.disk/mini-info"
 echo -e "  ${GREEN}✓${NC} ${CYAN}/.disk/info${NC} pose : le GRUB signe retrouve le medium en UEFI"
 
-# Les modules EFI, la ou $prefix les cherchera. Le menu genere plus haut n'use
-# que de commandes deja compilees dans le binaire signe (set, menuentry, linux,
-# initrd, submenu), mais grub-mkrescue les deposait, et leur absence transforme
-# le moindre "insmod" tape a l'invite en echec incomprehensible. 3 Mo.
+# EFI modules where $prefix will look for them. The generated menu only uses
+# commands built into the signed binary, but they make "insmod" work at the
+# prompt. 3 MB.
 if [ -d /usr/lib/grub/x86_64-efi ]; then
     mkdir -p "$ISOROOT/boot/grub/x86_64-efi"
     cp -a /usr/lib/grub/x86_64-efi/*.mod /usr/lib/grub/x86_64-efi/*.lst \
           "$ISOROOT/boot/grub/x86_64-efi/" 2>/dev/null || true
-    # ATTENTION : surtout PAS de grub.cfg dans ce repertoire. La configuration
-    # embarquee ci-dessus teste "$prefix/x86_64-efi/grub.cfg" AVANT
-    # "$prefix/grub.cfg" : un fichier ici detournerait le menu.
+    # No grub.cfg in this directory: the embedded config tries
+    # "$prefix/x86_64-efi/grub.cfg" BEFORE "$prefix/grub.cfg".
     rm -f "$ISOROOT/boot/grub/x86_64-efi/grub.cfg"
 fi
 
 
-# Fin de module : `. fichier` rend le statut de sa DERNIERE commande, et
-# build-iso.sh tourne sous set -e. Un module qui finirait par un test faux
-# ("[ ... ] && { ...; }") arreterait tout, sans un mot. Toujours 0 ici.
+# End of module: `. file` returns the status of its LAST command, and
+# build-iso.sh runs under set -e. Always return 0 here.
 true

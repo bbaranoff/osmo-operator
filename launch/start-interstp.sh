@@ -1,51 +1,51 @@
 #!/bin/bash
 # =============================================================================
-# start-interstp.sh - lance le NOEUD INTER-STP : le hub SS7 commun au WAN
+# start-interstp.sh - start the INTER-STP node: the SS7 hub shared over the WAN
 # =============================================================================
 #
-# Dans un lab a une seule machine, l'inter-STP est un conteneur parmi d'autres,
-# a 172.20.0.10, et il ne dessert que les operateurs de CETTE machine. Des qu'on
-# repartit les operateurs sur plusieurs noeuds, il devient ce qu'il est vraiment :
-# un equipement a part, avec sa propre adresse, auquel tous les noeuds
-# s'attachent. C'est lui - et lui seul - qui fait traverser le SS7 au WAN.
+# On a single machine the inter-STP is one container among others (172.20.0.10)
+# serving only that machine's operators. When operators are spread over several
+# nodes it becomes a separate device with its own address to which every node
+# attaches; it alone carries SS7 across the WAN. Nodes reach it over
+# M3UA/SCTP (port 2908 by default, see --port).
 #
-#   noeud 1 (1.11.2) ─┐
-#   noeud 2 (1.21.2) ─┼─ M3UA/SCTP 2908 ─► inter-STP 192.168.1.49    PC 0.0.0
-#   noeud 3 (1.31.2) ─┘
+#   node 1 (1.11.2) ─┐
+#   node 2 (1.21.2) ─┼─ M3UA/SCTP 2908 ─► inter-STP 192.168.1.49    PC 0.0.0
+#   node 3 (1.31.2) ─┘
 #
-# LE PLAN DE POINT CODES, ET POURQUOI IL CHANGE
-# Sur une machine isolee, chaque operateur N porte 1.N.2 - et cette formule se
-# recalcule a l'identique partout. Trois noeuds attaches au meme hub y
-# presenteraient donc trois fois le meme point code. Un point code est une
-# ADRESSE : deux equipements qui partagent la leur, ce n'est pas un conflit de
-# nom, c'est du routage faux. Le plan WAN encode donc le noeud dedans :
+# POINT CODE PLAN
+# On an isolated machine operator N uses 1.N.2, computed identically on every
+# machine, so nodes sharing a hub would present duplicate point codes (wrong
+# routing). The WAN plan therefore encodes the node number:
 #
-#     PC   = 1.<noeud><op>.<role>     role 1=MSC 2=STP 3=BSC
-#     RCTX = noeud*1000 + op*100 + 50
+#     PC   = 1.<node><op>.<role>     role 1=MSC 2=STP 3=BSC
+#     RCTX = node*1000 + op*100 + 50
 #
-# Usage :
+# -h / --help prints this header.
+#
+# Usage:
 #   sudo ./launch/start-interstp.sh [--nodes 3] [--ops 1] [--ip 192.168.1.49]
 #   sudo ./launch/start-interstp.sh --status | --stop
 #
-#   --nodes N     nombre de noeuds desservis (1-9, defaut : lu dans /etc/osmo-wan.conf)
-#   --ops K       operateurs par noeud (1-9, defaut 1)
-#   --ip ADRESSE  adresse du hub ; posee sur l'interface si elle manque
-#   --iface NOM   interface ou poser l'adresse (defaut : detectee)
-#   --port N      port M3UA (defaut 2908)
-#   --menu        pose les questions meme si une table existe deja
-#   --defaut      applique la table du banc, en ignorant celle deja posee
-#   --ips "a b c" les IP des noeuds operateurs, dans l'ordre (sans question) ;
-#                 « id:ip » garde le numero du noeud (table 1,3 -> noeuds 1 et 3)
-#   --no-save     ne reecrit pas /etc/osmo-wan.conf (appel depuis start-native.sh)
-#   --no-ip       ne touche pas a la configuration reseau
-#   --foreground  reste au premier plan (journal a l'ecran)
+#   --nodes N     number of nodes served (1-9, default: read from /etc/osmo-wan.conf)
+#   --ops K       operators per node (1-9, default 1)
+#   --ip ADDRESS  hub address; added to the interface if missing
+#   --iface NAME  interface to put the address on (default: auto-detected)
+#   --port N      M3UA port (default 2908)
+#   --menu        ask the questions even if a table already exists
+#   --defaut      apply the default lab table, ignoring the one already stored
+#   --ips "a b c" operator node IPs, in order (no questions);
+#                 "id:ip" keeps the node number (table 1,3 -> nodes 1 and 3)
+#   --no-save     do not rewrite /etc/osmo-wan.conf (used by start-native.sh)
+#   --no-ip       do not touch the network configuration
+#   --foreground  stay in the foreground (log on screen)
 # =============================================================================
 set -uo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-# Racine du depot : ce script vit dans launch/ depuis le 2026-10-18.
+# Repository root (this script lives in launch/).
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 CONF_DIR="${CONF_DIR:-/etc/osmocom}"
 CFG="${CONF_DIR}/osmo-stp-interop.cfg"
@@ -58,23 +58,20 @@ MENU=0
 USE_DEFAULTS=0
 IPS=""
 SAVE_TABLE=1
-# Le hub du banc : le conteneur osmo-inter-stp, sur le backbone docker
-# (INTER_STP_IP de start-docker.sh). L'ancien defaut (192.168.56.1, host-only
-# VirtualBox) n'existe sur aucun segment des que les VM sont pontees : le hub
-# s'y liait sans que personne ne puisse l'atteindre.
+# Default hub: the osmo-inter-stp container on the docker backbone
+# (INTER_STP_IP in start-docker.sh).
 HUB_IP="172.20.0.10"
-# ── La table du banc, defaut de tous les prompts ────────────────────────────
-# [2026-09-03] Table remise a jour - la meme que build-iso.sh : une table lue
-# ici doit ressembler a celle qu'il ecrit, sinon les point codes d'un cote ne
-# correspondent plus aux AS declares de l'autre.
-#   noeud 1  192.168.1.123  la VM              indicatif 11
-#   noeud 2  172.20.0.12  osmo-operator-2    indicatif 22   (conteneur)
-#   noeud 3  172.20.0.13  osmo-operator-3    indicatif 33   (conteneur)
-#   hub      172.20.0.10  osmo-inter-stp
-# MSISDN = <noeud>00<op><ms> (100101 = noeud 1, op 1, MS 1).
+# ── Default lab table, default for all prompts ──────────────────────────────
+# Must match the table written by build-iso.sh, otherwise point codes on one
+# side no longer match the AS declared on the other.
+#   node 1  192.168.1.123  the VM              prefix 11
+#   node 2  172.20.0.12  osmo-operator-2    prefix 22   (container)
+#   node 3  172.20.0.13  osmo-operator-3    prefix 33   (container)
+#   hub     172.20.0.10  osmo-inter-stp
+# MSISDN = <node>00<op><ms> (100101 = node 1, op 1, MS 1).
 WAN_NODES_DEFAULT="1:192.168.1.123:11 2:172.20.0.12:22 3:172.20.0.13:33"
 
-# L'adresse par defaut du noeud i, lue dans cette table.
+# Default address of node i, read from this table.
 _default_node_ip() {
     printf '%s' "$WAN_NODES_DEFAULT" | tr ' ' '\n' \
         | awk -F: -v n="$1" '$1==n{print $2; exit}'
@@ -127,9 +124,9 @@ stp_pid() {
     pgrep -f 'osmo-stp .*osmo-stp-interop\.cfg' | head -1
 }
 
-# Port VTY du hub. Le 4239 par defaut est celui du STP local du noeud : sur une
-# machine qui porte deja un osmo-stp, le hub ne peut pas le prendre. On lit le
-# port ecrit dans la config (bind 127.0.0.1 N), sinon 4239.
+# Hub VTY port. 4239 is the node's local STP default, so on a machine that
+# already runs osmo-stp the hub cannot use it. Read the port from the config
+# (bind 127.0.0.1 N), else 4239.
 vty_port() {
     local p
     p="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
@@ -146,13 +143,13 @@ if [ "$ACTION" = "status" ]; then
     echo -e "  ${GREEN}✓${NC} inter-STP actif (pid ${pid})"
     echo -e "  Ecoute : $(ss -lna 2>/dev/null | grep -E "[:.]${PORT}\b" | head -3 | tr -s ' ' | cut -d' ' -f1,5 | tr '\n' ' ')"
     echo ""
-    # Le VTY est la seule source de verite sur QUI est attache : un ASP peut
-    # avoir ouvert sa SCTP sans jamais passer ASP-ACTIVE, et rien d'autre ne le
-    # montre. Le port ouvert, lui, ne prouve que l'ecoute.
+    # The VTY is the only reliable source for WHO is attached: an ASP may have
+    # opened its SCTP association without ever reaching ASP-ACTIVE. An open port
+    # only proves the hub is listening.
     VTY_PORT="$(vty_port)"
     if command -v nc >/dev/null 2>&1; then
         echo -e "  ${BOLD}ASP attaches :${NC}"
-        # Pauses entre les commandes : le VTY ne lit pas un bloc d'un coup.
+        # Pause between commands: the VTY does not read a whole block at once.
         { sleep 1; printf 'enable\n'; sleep 0.5; printf 'show cs7 instance 0 asp\n'; sleep 0.5
           printf 'show cs7 instance 0 as all\n'; sleep 0.5; printf 'exit\n'; sleep 1; } \
             | nc -q2 127.0.0.1 "$VTY_PORT" 2>/dev/null | tr -d '\r' | sed 's/^/    /' | grep -vE '^\s*$' | tail -30 \
@@ -183,15 +180,15 @@ command -v osmo-stp >/dev/null 2>&1 || {
     echo -e "${RED}osmo-stp introuvable.${NC} Ce noeud doit porter la pile Osmocom." >&2; exit 1; }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Qui sont les noeuds ? - le menu
+# Who are the nodes? - the menu
 # ══════════════════════════════════════════════════════════════════════════════
-# Le hub n'a pas besoin des IP pour ROUTER : il ecoute, les ASP viennent a lui
-# (accept-asp-connections dynamic-permitted) et c'est le point code qui decide
-# du reste. Il en a besoin pour trois choses concretes :
-#   • ouvrir son pare-feu a ces adresses et a elles seules ;
-#   • ecrire /etc/osmo-wan.conf, la table que liront les noeuds et le diagnostic ;
-#   • dire, dans --status, QUI devrait etre attache - sans cette liste, un noeud
-#     absent est indiscernable d'un noeud qui n'existe pas.
+# The hub does not need the IPs to ROUTE: it listens, ASPs connect to it
+# (accept-asp-connections dynamic-permitted) and the point code decides the
+# rest. It needs them for:
+#   • opening its firewall to these addresses only;
+#   • writing /etc/osmo-wan.conf, read by the nodes and the diagnostics;
+#   • telling in --status WHO should be attached (otherwise a missing node
+#     cannot be told apart from a node that does not exist).
 # shellcheck source=network/wan-nodes.sh
 . "$HERE/network/wan-nodes.sh"
 
@@ -205,9 +202,8 @@ ask_ips() {
 
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
     for i in $(seq 1 "$n"); do
-        # Defaut : la table du banc. Le repli ".1N sur le segment du hub" ne
-        # vaut plus rien depuis que les deux premiers noeuds sont des
-        # conteneurs, sur le backbone docker et non sur le LAN.
+        # Default: the lab table (the first nodes are containers on the docker
+        # backbone, not on the hub's LAN segment).
         def="$(_default_node_ip "$i")"
         [ -n "$def" ] || def="${HUB_IP%.*}.$((10 + i))"
         ip=$(_wan_ask "Noeud $i/$n" "IP du noeud operateur $i :" "$def") || exit 1
@@ -216,18 +212,16 @@ ask_ips() {
         WAN_IP[$i]="$ip"; WAN_IND[$i]="$(wan_default_ind "$i")"; WAN_NODE_LIST+=("$i")
     done
     WAN_NODE_COUNT="$n"; NODES="$n"
-    # Le hub ne porte aucun operateur : il n'est pas un noeud de la table. On note
-    # 0, que wan_nodes_validate accepte, plutot qu'un numero qui le ferait
-    # ressembler a un noeud et lui volerait un point code.
+    # The hub carries no operator and is not a node of the table: record 0
+    # (accepted by wan_nodes_validate) so it does not take a node's point code.
     WAN_NODE_ID=0
     WAN_OPS="$OPS"
 }
 
-# --defaut : la table du banc, quoi qu'il y ait sur la machine.
-# Sans cette option, une table deja posee dans /etc/osmo-wan.conf est rechargee
-# telle quelle - c'est le bon comportement au quotidien, mais c'est aussi ce qui
-# fait qu'un hub garde indefiniment des adresses perimees apres un changement de
-# plan : le nouveau defaut du script n'est jamais consulte.
+# --defaut: use the lab table regardless of what is on the machine.
+# Without it, a table already stored in /etc/osmo-wan.conf is reloaded as is,
+# so after an addressing plan change the hub keeps stale addresses until
+# --defaut or --menu is used.
 if [ "$USE_DEFAULTS" = "1" ] && [ -z "$IPS" ]; then
     IPS="$(printf '%s' "$WAN_NODES_DEFAULT" | tr ' ' '\n' | awk -F: '{print $2}' | tr '\n' ' ')"
     [ -n "$NODES" ] || NODES="$(printf '%s' "$WAN_NODES_DEFAULT" | wc -w)"
@@ -235,10 +229,9 @@ if [ "$USE_DEFAULTS" = "1" ] && [ -z "$IPS" ]; then
 fi
 
 if [ -n "$IPS" ]; then
-    # Forme scriptable : --ips "10.0.0.11 10.0.0.12 10.0.0.13"
-    # [2026-10-15, revue] « id:ip » garde le numero du noeud : une table 1,3
-    # (permise par wan_nodes_validate) etait renumerotee 1,2 par position, et le
-    # noeud 3 s'attachait a un AS absent du hub. Une IP seule : numero = rang.
+    # Scriptable form: --ips "10.0.0.11 10.0.0.12 10.0.0.13"
+    # "id:ip" keeps the node number (non-contiguous tables such as 1,3 are
+    # allowed by wan_nodes_validate). A bare IP: number = position.
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=(); i=0
     for tok in $IPS; do
         i=$((i+1))
@@ -265,13 +258,13 @@ fi
 [[ "$NODES" =~ ^[1-9]$ ]] || { echo -e "${RED}--nodes : 1 a 9${NC}" >&2; exit 2; }
 [[ "$OPS"   =~ ^[1-9]$ ]] || { echo -e "${RED}--ops : 1 a 9${NC}" >&2; exit 2; }
 
-# Table connue : on la persiste et on ouvre le pare-feu pour ces adresses.
+# Known table: persist it and open the firewall for these addresses.
 if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[${WAN_NODE_LIST[0]}]:-}" ]; then
     echo ""
     wan_nodes_summary 2>/dev/null || true
-    # [2026-10-15, revue] --no-save : appele par start-native.sh, dont la table
-    # (WAN_AUTO=1, numero du noeud, indicatifs) vient d'etre ecrite - la
-    # reecrire ici en WAN_AUTO=0 / noeud 0 coupait le WAN au reboot suivant.
+    # --no-save: called by start-native.sh, which has just written the table
+    # (WAN_AUTO=1, node number, prefixes); rewriting it here with WAN_AUTO=0 /
+    # node 0 would disable the WAN on the next boot.
     if [ "$SAVE_TABLE" = 1 ]; then
         WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE" \
             && echo -e "  ${GREEN}✓${NC} table ecrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
@@ -286,16 +279,16 @@ if [ "${#WAN_NODE_LIST[@]}" -gt 0 ] && [ -n "${WAN_IP[${WAN_NODE_LIST[0]}]:-}" ]
     fi
 fi
 
-# ── L'adresse du hub ─────────────────────────────────────────────────────────
-# Elle est ecrite en dur dans la config de CHAQUE noeud : si elle manque au
-# demarrage, tous les ASP echouent a s'attacher et le seul symptome est un
-# "connection refused" cote noeuds, jamais cote hub.
+# ── Hub address ───────────────────────────────────────────────────────────
+# It is hard-coded in EVERY node's config: if it is missing at startup, all
+# ASPs fail to attach and the only symptom is "connection refused" on the
+# node side, never on the hub.
 if [ "$SET_IP" = "1" ]; then
     if ip -4 addr show 2>/dev/null | grep -q "inet ${HUB_IP}/"; then
         echo -e "  ${GREEN}✓${NC} ${CYAN}${HUB_IP}${NC} deja presente sur cette machine"
     else
         if [ -z "$IFACE" ]; then
-            # L'interface qui porte deja le meme /24 : c'est le segment du WAN.
+            # The interface already carrying the same /24 is the WAN segment.
             IFACE="$(ip -4 -o addr show scope global 2>/dev/null \
                 | awk -v pfx="${HUB_IP%.*}." '$4 ~ "^"pfx {print $2; exit}')"
             [ -z "$IFACE" ] && IFACE="$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1{print $2}')"
@@ -314,35 +307,33 @@ mkdir -p "$CONF_DIR" "$(dirname "$LOG")"
 if [ ! -x "$HERE/helpers/create_interop.sh" ] && [ ! -r "$HERE/helpers/create_interop.sh" ]; then
     echo -e "${RED}helpers/create_interop.sh introuvable${NC}" >&2; exit 1
 fi
-# [2026-10-15, revue] Le port VTY du hub precedent, relu AVANT la regeneration :
-# le nouveau hub reprend le meme (le scan d'un port libre, fait pendant que
-# l'ancien tournait encore, le faisait deriver de 1 a chaque relance).
+# Previous hub's VTY port, read BEFORE regeneration so the new hub reuses it
+# (scanning for a free port while the old hub still runs would drift by 1
+# on each restart).
 VTY_PREC="$(sed -n 's/^ *bind 127\.0\.0\.1 \([0-9]*\)$/\1/p' "$CFG" 2>/dev/null | head -1)"
-# --listen-ip : le hub se lie a SON adresse, pas a 0.0.0.0. Sans elle, SCTP
-# annonce toutes les adresses de la machine dans son INIT et les noeuds tentent
-# des chemins morts - l'ASP monte puis retombe, en boucle.
+# --listen-ip: the hub binds to ITS address, not 0.0.0.0. Otherwise SCTP
+# advertises every local address in its INIT, nodes try dead paths and the
+# ASP flaps up and down.
 WAN_NODE_IDS="${WAN_NODE_LIST[*]:-}" bash "$HERE/helpers/create_interop.sh" --listen-ip "$HUB_IP" \
      --wan "$NODES" "$OPS" "$CFG" || exit 1
 [ "$PORT" = "2908" ] || sed -i "s/^ listen m3ua 2908/ listen m3ua ${PORT}/" "$CFG"
-# VTY du hub. [2026-10-15, revue] 4239 tant qu'il est libre : c'est le port
-# que lisent checks/diag-interstp.sh et vty-debug-dump.sh, et sur un hub dedie
-# (pas d'osmo-stp local) rien ne le prend. Sinon le port du hub precedent,
-# sinon le premier libre de 4300 a 4399 (vty_port le relit dans la config).
+# Hub VTY: 4239 while free (the port read by checks/diag-interstp.sh and
+# vty-debug-dump.sh; nothing else uses it on a dedicated hub). Otherwise the
+# previous hub's port, else the first free one in 4300-4399 (vty_port reads
+# it back from the config).
 if ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CFG"; then
     VTY_PORT="${VTY_PORT:-}"
     hub_pid="$(stp_pid)"
-    _port_pris() {   # pris par un autre que le hub qu'on va remplacer
+    _port_pris() {  # taken by something other than the hub being replaced
         local who; who="$(ss -lntpH "( sport = :$1 )" 2>/dev/null)"
         [ -n "$who" ] && ! { [ -n "$hub_pid" ] && printf '%s' "$who" | grep -q "pid=$hub_pid,"; }
     }
-    # [2026-10-16] Hub co-localise avec un STP operateur. L'operateur prend le
-    # VTY 4239 (son defaut) quand run.sh le lance, APRES ce hub. Si le hub
-    # prenait 4239 maintenant - libre, l'operateur pas encore demarre - run.sh
-    # verrait 4239 ecouter, croirait OsmoSTP deja debout (run_modules/10-stp.sh,
-    # mod_stp_status teste core_vty_listen 4239) et sauterait le STP operateur :
-    # le MSC se retrouve sans STP (SCTP 2905 jamais ouvert), [FAIL] a chaque
-    # --wan sur le noeud 1. On reserve donc 4239 a l'operateur des qu'un
-    # osmo-stp.cfg operateur (VTY 4239 par defaut) est present ici.
+    # Hub co-located with an operator STP: the operator takes VTY 4239 (its
+    # default) when run.sh starts it, AFTER this hub. If the hub took 4239 now,
+    # run.sh (run_modules/10-stp.sh, mod_stp_status checks core_vty_listen 4239)
+    # would think OsmoSTP is already up and skip the operator STP, leaving the
+    # MSC without an STP. So 4239 is reserved for the operator whenever an
+    # operator osmo-stp.cfg is present here.
     _op_stp_4239=0
     if [ -r "$CONF_DIR/osmo-stp.cfg" ] && [ "$CONF_DIR/osmo-stp.cfg" != "$CFG" ] \
        && ! grep -q '^ *bind 127\.0\.0\.1 [0-9]' "$CONF_DIR/osmo-stp.cfg"; then

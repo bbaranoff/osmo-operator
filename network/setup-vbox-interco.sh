@@ -1,37 +1,37 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-vbox-interco.sh - interconnexion WAN entre CETTE machine et des
-# VM VirtualBox, sur un seul PC
+# network/setup-vbox-interco.sh - WAN interconnection between THIS machine and
+# VirtualBox VMs, on a single PC
 #
-# Le WAN d'osmo-operator relie des machines par leur IP publique. Pour l'eprouver
-# sans louer N serveurs, on remplace les pairs distants par des VM et le lien
-# public par un segment host-only : la maquette est la meme, les adresses sont
-# locales.
+# The osmo-operator WAN links machines by their public IP. To test it without
+# renting N servers, the remote peers are replaced by VMs and the public link
+# by a host-only segment: the model is the same, the addresses are local.
 #
-#   ┌─ cette machine ────────────┐        ┌─ VM osmo-wan-2 ─┐  ┌─ VM osmo-wan-3 ─┐
-#   │ lab docker ou natif        │        │ ISO osmo-operator  │  │ ISO osmo-operator  │
-#   │ noeud 1 · indicatif 11     │        │ noeud 2 · 22    │  │ noeud 3 · 33    │
+#
+#   ┌─ this machine ─────────────┐        ┌─ VM osmo-wan-2 ─┐  ┌─ VM osmo-wan-3 ─┐
+#   │ docker or native lab       │        │ ISO osmo-operator  │  │ ISO osmo-operator  │
+#   │ node 1 · prefix 11         │        │ node 2 · 22     │  │ node 3 · 33     │
 #   └──────────┬─────────────────┘        └────────┬────────┘  └────────┬────────┘
 #              │ vboxnet0 192.168.56.11            │ .12                │ .13
-#              └───────────────── segment host-only ───────────────────┘
+#              └───────────────── host-only segment ───────────────────┘
 #
-# POURQUOI HOST-ONLY ET PAS "RESEAU INTERNE"
-# Un reseau interne relie les VM ENTRE ELLES et laisse l'hote dehors. Or ici
-# l'hote est lui-meme un noeud : sans patte sur le segment, son lab ne peut pas
-# joindre ses pairs, et rien ne le signale - les trunks restent simplement
-# "Unavailable". Le host-only est le seul mode ou l'hote participe.
+# WHY HOST-ONLY AND NOT "INTERNAL NETWORK"
+# An internal network links the VMs TO EACH OTHER and leaves the host out.
+# Here the host is itself a node: without a leg on the segment its lab cannot
+# reach its peers, and nothing reports it - the trunks simply stay
+# "Unavailable". Host-only is the only mode where the host takes part.
 #
-# LA CONTRAINTE A CONNAITRE
-# VirtualBox refuse toute plage host-only hors 192.168.56.0/21 tant que
-# /etc/vbox/networks.conf ne l'autorise pas. D'ou ce prefixe par defaut.
+# THE CONSTRAINT TO KNOW
+# VirtualBox refuses any host-only range outside 192.168.56.0/21 as long as
+# /etc/vbox/networks.conf does not allow it. Hence this default prefix.
 #
-# Usage :
+# Usage:
 #   sudo network/setup-vbox-interco.sh [--nodes N] [--host-node 1]
 #                                      [--subnet 192.168.56] [--iso f.iso]
 #                                      [--build-iso] [--no-vms] [--indicatifs "11 22"]
 #
-# Ecrit la table dans /etc/osmo-wan.conf, prete pour --wan.
-# Appele automatiquement par : start-docker.sh --virtualbox  /  start-native.sh --virtualbox
+# Writes the table to /etc/osmo-wan.conf, ready for --wan.
+# Called automatically by: start-docker.sh --virtualbox  /  start-native.sh --virtualbox
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
         --conf)        WAN_CONF_FILE="${2:-}"; shift ;;
         --conf=*)      WAN_CONF_FILE="${1#*=}" ;;
         -h|--help)     sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) PASSTHRU+=("$1") ;;   # transmis tel quel au banc (--ram, --usb-filter...)
+        *) PASSTHRU+=("$1") ;;   # passed as is to the lab (--ram, --usb-filter...)
     esac
     shift
 done
@@ -80,12 +80,12 @@ echo "║   Interconnexion WAN - cette machine + VM VirtualBox             ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ── Garde-fous ───────────────────────────────────────────────────────────────
-# Lance DANS une VM, ce script ne peut rien faire d'utile et ses messages
-# d'erreur ne le diraient pas : VBoxManage y est simplement absent.
+# ── Guards ───────────────────────────────────────────────────────────────────
+# Run INSIDE a VM, this script can do nothing useful and its error messages
+# would not say so: VBoxManage is simply absent there.
 if command -v systemd-detect-virt >/dev/null 2>&1; then
-    # `|| echo none` produirait deux lignes quand la commande sort en 1 (cas
-    # "aucune virtualisation") : on ne garde que la premiere.
+    # `|| echo none` would produce two lines when the command exits 1 (the
+    # "no virtualisation" case): only the first is kept.
     _virt="$(systemd-detect-virt 2>/dev/null | head -1)" || true
     _virt="${_virt:-none}"
     case "$_virt" in
@@ -112,10 +112,10 @@ if ! grep -q '^vboxdrv ' /proc/modules 2>/dev/null; then
 fi
 [ "$(id -u)" -eq 0 ] || { echo -e "${RED}Root requis (interface reseau + /etc/osmo-wan.conf).${NC}" >&2; exit 1; }
 
-# ── Combien de noeuds ────────────────────────────────────────────────────────
+# ── How many nodes ───────────────────────────────────────────────────────────
 if [ -z "$NODES" ]; then
     if [ -t 0 ]; then
-        # Meme question que ./launch/start-docker.sh --wan, meme bornes.
+        # Same question as ./launch/start-docker.sh --wan, same bounds.
         NODES=$(_wan_ask "WAN VirtualBox" "Nombre de noeuds au total, cette machine comprise (1-9) :" "3") || exit 1
     else
         NODES=3
@@ -125,20 +125,20 @@ fi
 [[ "$HOST_NODE" =~ ^[1-9]$ ]] && [ "$HOST_NODE" -le "$NODES" ] \
     || { echo -e "${RED}--host-node doit designer un noeud de 1 a ${NODES}${NC}" >&2; exit 2; }
 
-# ── Plage autorisee ? ────────────────────────────────────────────────────────
+# ── Allowed range? ───────────────────────────────────────────────────────────
 if [ "$SUBNET" != "192.168.56" ] && ! grep -q "${SUBNET}" /etc/vbox/networks.conf 2>/dev/null; then
     echo -e "${YELLOW}Attention : VirtualBox n'autorise que 192.168.56.0/21 en host-only.${NC}"
     echo -e "  Pour ouvrir ${SUBNET}.0/24 : ${CYAN}echo '* ${SUBNET}.0/24' | sudo tee -a /etc/vbox/networks.conf${NC}"
     echo ""
 fi
 
-# ── Table des noeuds ─────────────────────────────────────────────────────────
+# ── Node table ───────────────────────────────────────────────────────────────
 declare -a ind_arr=()
 [ -n "$INDS" ] && read -r -a ind_arr <<< "$INDS"
 WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
 for i in $(seq 1 "$NODES"); do
-    # Noeud N → .1N, sans exception pour l'hote : la table se lit d'un coup
-    # d'oeil et le numero de noeud se retrouve dans l'adresse.
+    # Node N → .1N, no exception for the host: the table reads at a glance
+    # and the node number shows in the address.
     WAN_IP[$i]="${SUBNET}.$((10 + i))"
     WAN_IND[$i]="${ind_arr[$((i-1))]:-$(wan_default_ind "$i")}"
     WAN_NODE_LIST+=("$i")
@@ -152,7 +152,7 @@ echo -e "  Cette machine porte le ${BOLD}noeud ${HOST_NODE}${NC} ; les autres so
 wan_nodes_summary
 echo ""
 
-# ── Le banc de VM fait le reste : reseau host-only, DHCP fixe, materiel ──────
+# ── The VM lab does the rest: host-only network, fixed DHCP, hardware ────────
 if [ "$NO_VMS" -eq 1 ]; then
     echo -e "  ${YELLOW}--no-vms : ni reseau ni VM crees, seule la table est ecrite.${NC}"
 else
@@ -165,9 +165,10 @@ else
         echo -e "${RED}La creation du banc a echoue.${NC}" >&2; exit 1; }
 fi
 
-# ── Table persistee ──────────────────────────────────────────────────────────
-# WAN_AUTO=0 cote hote : ici c'est start-docker.sh / start-native.sh qui decide quand
-# monter le WAN. Les ISO des VM, elles, sont construites avec WAN_AUTO=1.
+# ── Persisted table ──────────────────────────────────────────────────────────
+# WAN_AUTO=0 on the host side: here start-docker.sh / start-native.sh decides
+# when to bring up the WAN. The VM ISOs are built with WAN_AUTO=1.
+
 WAN_AUTO=0 wan_nodes_save "$WAN_CONF_FILE"
 echo -e "  ${GREEN}✓${NC} table ecrite dans ${CYAN}${WAN_CONF_FILE}${NC}"
 echo ""

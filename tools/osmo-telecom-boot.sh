@@ -1,20 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# osmo-telecom-boot.sh - applique la politique « aucun service telecom au boot »
+# osmo-telecom-boot.sh - apply the "no telecom service at boot" policy
 #
-# [2026-10-23] Pose services/80-osmo-operator.preset dans
-# <racine>/usr/lib/systemd/system-preset/ puis desactive, parmi les unites
-# PRESENTES, celles que ce preset vise (systemctl --root pour un rootfs d ISO).
-# Rien n est arrete : un service en marche continue jusqu a son arret, il ne
-# repartira simplement plus au demarrage.
+# Installs services/80-osmo-operator.preset in
+# <root>/usr/lib/systemd/system-preset/ then disables, among the units
+# PRESENT, those targeted by this preset (systemctl --root for an ISO rootfs).
+# Nothing is stopped: a running service keeps running until it is stopped, it
+# simply no longer starts at boot.
 #
-#   tools/osmo-telecom-boot.sh                 cette machine
-#   tools/osmo-telecom-boot.sh --root DIR      un rootfs (chroot d ISO)
-#   tools/osmo-telecom-boot.sh --garder U...   unites a laisser activees
-#                                              (ex. osmo-interstp pour le role
-#                                              interstp, osmo-banc si
+#   tools/osmo-telecom-boot.sh                 this machine
+#   tools/osmo-telecom-boot.sh --root DIR      a rootfs (ISO chroot)
+#   tools/osmo-telecom-boot.sh --garder U...   units to leave enabled
+#                                              (e.g. osmo-interstp for the
+#                                              interstp role, osmo-banc if
 #                                              OSMO_ISO_BANC=1)
-#   tools/osmo-telecom-boot.sh --liste         dit seulement ce qui serait fait
+#   tools/osmo-telecom-boot.sh --liste         only print what would be done
 # =============================================================================
 set -uo pipefail
 DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -31,10 +31,10 @@ while [ $# -gt 0 ]; do
 done
 [ -f "$PRESET" ] || { echo "preset introuvable : $PRESET" >&2; exit 1; }
 
-# les motifs « disable » du preset
+# the "disable" patterns of the preset
 mapfile -t MOTIFS < <(awk '$1 == "disable" {print $2}' "$PRESET")
 
-# les unites presentes sur la cible, qui correspondent a un motif
+# the units present on the target that match a pattern
 unites=()
 for d in "$ROOT/etc/systemd/system" "$ROOT/lib/systemd/system" "$ROOT/usr/lib/systemd/system"; do
     [ -d "$d" ] || continue
@@ -55,7 +55,7 @@ n=0
 for u in "${unites[@]}"; do
     for g in "${GARDER[@]}"; do [ "${u%.service}" = "$g" ] && continue 2; done
     if [ -n "$ROOT" ]; then
-        # rootfs : active = un lien *.wants/ vers l unite (is-enabled hors systemd n est pas fiable)
+        # rootfs: enabled = a *.wants/ link to the unit (is-enabled is unreliable outside systemd)
         compgen -G "$ROOT/etc/systemd/system/*.wants/$u" >/dev/null || continue
         etat=enabled
     else
@@ -65,7 +65,7 @@ for u in "${unites[@]}"; do
     if [ "$LISTE" = 1 ]; then echo "  desactiverait : $u ($etat)"; n=$((n + 1)); continue; fi
     if "${sc[@]}" disable "$u" >/dev/null 2>&1; then echo "  boot : $u desactive"; n=$((n + 1))
     else
-        # chroot sans systemd : on retire les liens nous-memes (ce que fait disable)
+        # chroot without systemd: remove the links ourselves (what disable does)
         find "$ROOT/etc/systemd/system" -path "*.wants/$u" -delete 2>/dev/null && echo "  boot : $u desactive (liens)" && n=$((n + 1))
     fi
 done

@@ -1,17 +1,17 @@
 #!/bin/bash
-# osmo-start.sh - Demarrage sequence du Core Osmocom
+# osmo-start.sh - sequenced start of the Osmocom core
 #
-# Ordre de dependance :
+# Dependency order:
 #   STP (4239) → HLR (4258) → MGW (4243)
 #                    ↓
 #               MSC (4254) → BSC (4242)
 #                    ↓
 #          GGSN (4260) → SGSN (4245) → PCU (4239 bts)
 #
-# Chaque service attend le VTY du precedent avant de demarrer.
-# BTS-TRX et SIP-connector sont geres par run.sh (dependent de fake_trx / Asterisk).
+# Each service waits for the VTY of the previous one before starting.
+# BTS-TRX and SIP-connector are handled by run.sh (they depend on fake_trx / Asterisk).
 #
-# Appele par : run.sh (etape 3)
+# Called by: run.sh (step 3)
 
 set -e
 
@@ -20,7 +20,7 @@ CYAN='\033[0;36m'; NC='\033[0m'
 
 OPERATOR_ID="${OPERATOR_ID:-1}"
 
-# ── Helper : attendre qu'un port TCP soit ouvert ──────────────────────────────
+# ── Helper: wait for a TCP port to be open ───────────────────────────────────
 wait_port() {
     local host="$1" port="$2" label="$3" timeout="${4:-30}"
     local elapsed=0
@@ -36,20 +36,18 @@ wait_port() {
     echo -e " ${GREEN}OK${NC} (${elapsed}s)"
 }
 
-# ── Helper : demarrer un service et verifier ──────────────────────────────────
+# ── Helper: start a service and check it ────────────────────────────────────
 start_svc() {
     local svc="$1" vty_port="$2" label="$3" timeout="${4:-30}"
 
     echo -e "  ${CYAN}${label}${NC}"
-    # ── reset-failed AVANT start ────────────────────────────────────────────
-    # systemd abandonne un service apres StartLimitBurst redemarrages (compteur
-    # a 10 sur osmo-bsc). Une config refusee suffit a l'y amener en dix
-    # secondes. Ensuite - et c'est le piege - REPARER LA CONFIG NE SUFFIT PLUS :
-    # "systemctl start" rend "start request repeated too quickly" et le service
-    # reste mort, sans que rien ne le relie a l'erreur d'origine. C'est ce qui
-    # a laisse le BSC de l'operateur 1 eteint alors que son fichier etait
-    # redevenu valide. On efface donc le compteur a chaque lancement : ce script
-    # EST le geste de demarrage, il ne doit pas heriter des echecs d'hier.
+    # ── reset-failed before start ───────────────────────────────────────────
+    # systemd gives up on a service after StartLimitBurst restarts (10 on
+    # osmo-bsc); a rejected config gets there in ten seconds. Afterwards fixing
+    # the config is not enough: "systemctl start" answers "start request
+    # repeated too quickly" and the service stays dead. The counter is therefore
+    # cleared at each launch: this script is the start action, it must not
+    # inherit earlier failures.
     systemctl reset-failed "$svc" 2>/dev/null || true
     systemctl start "$svc" || {
         echo -e "    ${RED}✗ systemctl start ${svc} echoue${NC}"
@@ -71,7 +69,7 @@ start_svc() {
 echo -e "${GREEN}=== Core Osmocom - Op${OPERATOR_ID} ===${NC}"
 echo ""
 
-# ── 1. Reseau TUN (APN0 pour GGSN) ───────────────────────────────────────────
+# ── 1. TUN network (APN0 for GGSN) ───────────────────────────────────────────
 echo -e "${CYAN}[1/4] Interface TUN${NC}"
 if ip link show apn0 > /dev/null 2>&1; then
     ip link del dev apn0
@@ -81,11 +79,11 @@ ip addr add 176.16.32.0/24 dev apn0
 ip link set dev apn0 up
 echo -e "  ${GREEN}✓${NC} apn0 up"
 
-# ── 2. Signalisation (STP → HLR → MGW) ───────────────────────────────────────
+# ── 2. Signalling (STP → HLR → MGW) ──────────────────────────────────────────
 #
-# STP doit etre pret en premier : tout le SS7 passe par lui.
-# HLR doit etre pret avant MSC : MSC se connecte au HLR au demarrage.
-# MGW doit etre pret avant MSC : MSC ouvre un MGCP vers MGW.
+# STP must be ready first: all SS7 goes through it.
+# HLR must be ready before MSC: MSC connects to the HLR at startup.
+# MGW must be ready before MSC: MSC opens an MGCP connection to the MGW.
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "${CYAN}[2/4] Signalisation (STP → HLR → MGW)${NC}"
@@ -99,7 +97,7 @@ start_svc osmo-mgw  4243 "OsmoMGW"  20 || true
 
 # ── 3. Core Network (MSC → BSC) ──────────────────────────────────────────────
 #
-# MSC doit etre pret avant BSC : BSC se connecte au MSC via A-interface.
+# MSC must be ready before BSC: BSC connects to the MSC over the A interface.
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "${CYAN}[3/4] Core Network (MSC → BSC)${NC}"
@@ -118,12 +116,12 @@ start_svc osmo-sip-connector  ""   "OsmoSIPConnector"  0  || true
 sleep 0.5
 chmod 777 /tmp/pcu_bts 2>/dev/null || true
 
-# NOTE : osmo-bts-trx et osmo-sip-connector sont intentionnellement
-# absents ici. run.sh les demarre dans l'ordre correct :
-#   fake_trx → wait_udp 5700 → osmo-bts-trx  (evite la race condition TRX)
-#   Asterisk → osmo-sip-connector             (evite le MNCC connect avant SIP UP)
+# NOTE: osmo-bts-trx and osmo-sip-connector are intentionally absent here.
+# run.sh starts them in the right order:
+#   fake_trx → wait_udp 5700 → osmo-bts-trx  (avoids the TRX race condition)
+#   Asterisk → osmo-sip-connector             (avoids MNCC connect before SIP UP)
 
-# ── Resume ────────────────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}=== Verification ===${NC}"
 SERVICES="osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-ggsn osmo-sgsn osmo-pcu"
@@ -138,11 +136,10 @@ for svc in $SERVICES; do
 done
 
 echo ""
-# Chaque start_svc porte un "|| true" : c'est voulu, un GGSN absent ne doit pas
-# emporter le reste. Mais la ligne finale disait "Core Osmocom pret" meme avec
-# osmo-msc et osmo-bsc en croix juste au-dessus - et c'est cette ligne-la qu'on
-# lit. Un coeur sans MSC ne fait pas d'attachement : autant le dire ici plutot
-# que de le decouvrir une heure plus tard dans "show bts".
+# Each start_svc carries a "|| true": intended, a missing GGSN must not take
+# the rest down. The final line must still reflect dead services: a core
+# without MSC does no attach, so it is said here rather than discovered later
+# in "show bts".
 if [ -n "$MORTS" ]; then
     echo -e "${RED}Coeur INCOMPLET -${NC}${MORTS}"
     for svc in $MORTS; do

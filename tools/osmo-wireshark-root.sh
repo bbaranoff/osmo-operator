@@ -1,60 +1,57 @@
 #!/bin/bash
-# osmo-wireshark-root - Wireshark en root sur le banc : 2G, 4G et le telephone
-# (signalisation, appel, SMS, data) d un coup.
+# osmo-wireshark-root - Wireshark as root on the bench: 2G, 4G and the phone
+# (signalling, call, SMS, data) at once.
 #
-# [2026-09-08] UNE SEULE ICONE, ET ELLE ECOUTE DEJA LE BON TRAFIC. Wireshark
-# ouvert « a la main » demandait de choisir l interface, puis de taper le
-# filtre, puis de relancer en root parce que la capture etait refusee
-# (wireshark-common/install-setuid est a false, expres). Ici :
-#   - root par pkexec, donc l INVITE DE MOT DE PASSE GRAPHIQUE de l agent
-#     polkit de GNOME (--disable-internal-agent interdit l agent texte) ;
-#     xhost autorise root a ouvrir sa fenetre sur l affichage X11 de la
-#     session, QT_QPA_PLATFORM=xcb la force par X meme sous Wayland ;
-#   - capture immediate (-k) sur toutes les interfaces (-i any : la boucle
-#     locale ou vit tout le coeur, plus le reseau ou partent GSMTAP et
-#     l Abis d un vrai BTS) avec le filtre BPF du banc (-f, ce qui est
-#     ENREGISTRE) :
-#       SCTP en entier   M3UA d osmo-stp (2905), SGs (29118), S1AP (36412),
-#                        Diameter s il passe en SCTP - la signalisation A, Lb, S1 ;
-#       GSM              GSMTAP udp 4729 (l air, et les logs osmocom en gsmtap),
-#                        Abis/IPA tcp 3002-3003, Gb udp 23000-23001 (osmo-pcu),
-#                        GTP udp 2123/2152 (sgsn <-> ggsn), MGCP udp 2427-2428,
-#                        SIP 5060-5061, RTP d osmo-mgw (4002-16001) et
-#                        d asterisk (30000-30199) ;
-#       LTE              S1AP par le SCTP, GTP-C/U udp 2123/2152 (mme, sgwc,
-#                        smf, upf), PFCP udp 8805, Diameter tcp 3868 (S6a, Gx),
-#                        SBI http tcp 7777 (nrf <-> smf).
-#     Hors filtre, exprès : les VTY (tcp 42xx), le ZeroMQ radio de srsRAN
-#     (tcp 2000/2001 : des echantillons IQ, des Mo par seconde), Prometheus.
-#   - un FILTRE D AFFICHAGE (-Y, ce qui est MONTRE : tout reste dans la
-#     capture, on l enleve d un clic dans la barre) qui ne garde que le
-#     reseau 2G / 4G et la signalisation du telephone :
-#       2G   GSMTAP (Um : RR, MM, CC, SMS, GMM/SM du telephone), LAPDm,
+# ONE ICON, ALREADY LISTENING TO THE RIGHT TRAFFIC (wireshark-common/
+# install-setuid is false on purpose, so capture needs root). Here:
+#   - root through pkexec, hence the GRAPHICAL PASSWORD PROMPT of the GNOME
+#     polkit agent (--disable-internal-agent forbids the text agent);
+#     xhost lets root open its window on the X11 display of the session,
+#     QT_QPA_PLATFORM=xcb forces it through X even under Wayland;
+#   - immediate capture (-k) on all interfaces (-i any: the loopback where
+#     the whole core lives, plus the network where GSMTAP and the Abis of a
+#     real BTS go) with the bench BPF filter (-f, what is RECORDED):
+#       whole SCTP      M3UA of osmo-stp (2905), SGs (29118), S1AP (36412),
+#                       Diameter when it runs over SCTP - A, Lb, S1 signalling;
+#       GSM             GSMTAP udp 4729 (the air, and the osmocom logs in gsmtap),
+#                       Abis/IPA tcp 3002-3003, Gb udp 23000-23001 (osmo-pcu),
+#                       GTP udp 2123/2152 (sgsn <-> ggsn), MGCP udp 2427-2428,
+#                       SIP 5060-5061, RTP of osmo-mgw (4002-16001) and of
+#                       asterisk (30000-30199);
+#       LTE             S1AP through SCTP, GTP-C/U udp 2123/2152 (mme, sgwc,
+#                       smf, upf), PFCP udp 8805, Diameter tcp 3868 (S6a, Gx),
+#                       SBI http tcp 7777 (nrf <-> smf).
+#     Left out on purpose: the VTYs (tcp 42xx), the srsRAN ZeroMQ radio
+#     (tcp 2000/2001: IQ samples, MB per second), Prometheus.
+#   - a DISPLAY FILTER (-Y, what is SHOWN: everything stays in the capture,
+#     one click in the bar removes it) that only keeps the 2G / 4G network
+#     and the phone signalling:
+#       2G   GSMTAP (Um: RR, MM, CC, SMS, GMM/SM of the phone), LAPDm,
 #            Abis RSL/OML, A (SCTP/M3UA/SCCP/BSSAP/BSSMAP/DTAP), GSUP
-#            (osmo-hlr), Gb (NS/BSSGP/LLC/SNDCP), GTP, MGCP, SMPP ;
+#            (osmo-hlr), Gb (NS/BSSGP/LLC/SNDCP), GTP, MGCP, SMPP;
 #       4G   S1AP + NAS-EPS (EMM/ESM), GTPv2 (S11), GTP-U, PFCP, Diameter
-#            (S6a, Gx), SBI HTTP/2, SGs (CSFB et SMS over SGs), et LTE RRC /
-#            MAC / RLC / PDCP quand on ouvre un pcap de srsRAN ;
-#       appel   DTAP CC, MGCP, SIP, RTP / RTCP / DTMF (rtpevent) ;
-#       SMS     gsm_sms partout ou il passe (DTAP, SGs, NAS), SMPP.
-#     Sans le bruit qui noie tout ca : SACK / HEARTBEAT du SCTP, BEAT du
-#     M3UA, Device-Watchdog du Diameter, Echo GTP / GTPv2, Heartbeat PFCP,
-#     et sur l air les System Information et les Measurement Report.
-#   - des BOUTONS DE FILTRE dans la barre de Wireshark (Banc, 2G, 4G, Appel,
-#     SMS, Data, Attach) pour ne voir qu une chose : poses dans le profil de
-#     root (~root/.config/wireshark/dfilter_buttons) s il n y en a pas deja.
-#   - avec des arguments (un .pcap ouvert depuis le bureau, ou les options que
-#     passe launch.sh), on ne touche a rien : ils sont transmis tels quels.
-# /usr/local/bin/wireshark est un lien vers ce script : « wireshark » au
-# clavier comme a l icone, c est celui-ci. Le vrai binaire reste /usr/bin.
-# OSMO_WS_FILTRE (BPF), OSMO_WS_DFILTRE (affichage ; vide = tout montrer) et
-# OSMO_WS_IFACE pour changer le filtre, l affichage ou l interface.
+#            (S6a, Gx), SBI HTTP/2, SGs (CSFB and SMS over SGs), and LTE RRC /
+#            MAC / RLC / PDCP when opening an srsRAN pcap;
+#       call    DTAP CC, MGCP, SIP, RTP / RTCP / DTMF (rtpevent);
+#       SMS     gsm_sms wherever it goes (DTAP, SGs, NAS), SMPP.
+#     Without the noise that drowns all this: SCTP SACK / HEARTBEAT, M3UA
+#     BEAT, Diameter Device-Watchdog, GTP / GTPv2 Echo, PFCP Heartbeat, and
+#     on the air the System Information and Measurement Report messages.
+#   - FILTER BUTTONS in the Wireshark bar (Banc, 2G, 4G, Appel, SMS, Data,
+#     Attach) to see only one thing: installed in root's profile
+#     (~root/.config/wireshark/dfilter_buttons) if there are none yet.
+#   - with arguments (a .pcap opened from the desktop, or the options passed
+#     by launch.sh), nothing is touched: they are passed through unchanged.
+# /usr/local/bin/wireshark is a link to this script: "wireshark" typed at the
+# keyboard or from the icon is this one. The real binary stays in /usr/bin.
+# OSMO_WS_FILTRE (BPF), OSMO_WS_DFILTRE (display; empty = show everything) and
+# OSMO_WS_IFACE change the filter, the display or the interface.
 set -u
 WS=/usr/bin/wireshark
 [ -x "$WS" ] || { command -v zenity >/dev/null 2>&1 && \
     zenity --error --text="Wireshark introuvable (apt install wireshark)" 2>/dev/null; exit 1; }
 
-# Ce qui est enregistre (BPF).
+# What is recorded (BPF).
 FILTRE="${OSMO_WS_FILTRE:-sctp\
  or udp port 4729 or tcp port 3002 or tcp port 3003 or udp port 23000 or udp port 23001\
  or udp port 2123 or udp port 2152 or udp port 2427 or udp port 2428\
@@ -62,8 +59,8 @@ FILTRE="${OSMO_WS_FILTRE:-sctp\
  or udp port 8805 or tcp port 3868 or tcp port 7777}"
 IFACE="${OSMO_WS_IFACE:-any}"
 
-# Ce qui est montre (filtre d affichage Wireshark). Les parentheses : d abord
-# les protocoles du banc, puis, retranche, le bruit des battements de coeur.
+# What is shown (Wireshark display filter). The parentheses: first the bench
+# protocols, then, subtracted, the heartbeat noise.
 D_PROTOS="sctp || m3ua || sccp || bssap || gsm_a.bssmap || gsm_a.dtap || gsm_a.rr || gsm_a.ccch || gsm_a.sacch || gsm_a.gm || gsm_sms || gsm_map || tcap || gsup || sgsap || smpp\
  || gsmtap || lapdm || gsm_abis_rsl || gsm_abis_oml\
  || gprs-ns || bssgp || llcgprs || sndcp || gtp || gtpv2 || pfcp\
@@ -76,14 +73,14 @@ D_BRUIT="(sctp && !(sctp.chunk_type == 0) && sctp.chunk_type in {3, 4, 5})\
  || gsm_a.dtap.msg_rr_type in {0x00, 0x02, 0x03, 0x05, 0x06, 0x07, 0x15, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}"
 DFILTRE="${OSMO_WS_DFILTRE-($D_PROTOS) && !($D_BRUIT)}"
 
-# Les boutons de la barre de filtre, dans le profil de root (c est lui qui
-# capture). Un fichier deja la (l utilisateur a fait les siens) est respecte.
+# The filter bar buttons, in root's profile (root is the one capturing). An
+# existing file (the user made their own) is respected.
 osmo_ws_boutons() {
     local f="${HOME:-/root}/.config/wireshark/dfilter_buttons"
     [ -e "$f" ] && return 0
     mkdir -p "${f%/*}" 2>/dev/null || return 0
     cat > "$f" <<BTN
-# Boutons de filtre du banc osmo-operator (osmo-wireshark-root).
+# Filter buttons of the osmo-operator bench (osmo-wireshark-root).
 "TRUE","Banc","$DFILTRE","Reseau 2G + 4G et telephone, sans les battements de coeur"
 "TRUE","2G","(gsmtap || lapdm || gsm_abis_rsl || gsm_abis_oml || bssap || gsm_a.bssmap || gsm_a.dtap || gsup || gprs-ns || bssgp || llcgprs || sndcp || mgcp || smpp) && !($D_BRUIT)","Um, Abis, A, Gb, GSUP, MGCP"
 "TRUE","4G","(s1ap || nas-eps || gtpv2 || pfcp || diameter || http2 || sgsap || lte_rrc || mac-lte || pdcp-lte) && !($D_BRUIT)","S1, S11, Sx, S6a/Gx, SBI, SGs"
@@ -105,8 +102,8 @@ if [ "$(id -u)" -eq 0 ]; then
     exec "$WS" "$@"
 fi
 
-# Pas root : on se relance nous-memes en root (pour poser les boutons dans le
-# profil de root), puis Wireshark.
+# Not root: re-run ourselves as root (to install the buttons in root's
+# profile), then Wireshark.
 MOI="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 [ -x "$MOI" ] || MOI="$WS"
 command -v xhost >/dev/null 2>&1 && xhost +SI:localuser:root >/dev/null 2>&1

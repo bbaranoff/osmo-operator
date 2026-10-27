@@ -1,36 +1,35 @@
 #!/usr/bin/env python3
-# osmo-ril-atmodem.py - LE MODEM AT VIRTUEL QUI BRANCHE oFono SUR LE RIL.
+# osmo-ril-atmodem.py - THE VIRTUAL AT MODEM THAT PLUGS oFono ON THE RIL.
 #
-# LA CHAINE, ET LE TROU QU ON BOUCHE ICI.
+# THE CHAIN, AND THE GAP FILLED HERE.
 #
-#   Android → rild → libreference-ril.so → port serie AT → CE PROGRAMME → oFono → banc
+#   Android -> rild -> libreference-ril.so -> AT serial port -> THIS PROGRAM -> oFono -> bench
 #
-# UN RIL Android (libreference-ril.so) n ouvre qu un port serie et y envoie du
-# 3GPP 27.007 (AT+CFUN, AT+CREG?, ATD..., AT+CMGS...). oFono, lui, n est pas un
-# modem : c est un consommateur de modem, avec une API D-Bus. Les deux ne se
-# rencontrent donc jamais - sauf si quelqu un TIENT LE ROLE DU MODEM. C est ce
-# que fait ce programme : il ouvre un pseudo-terminal, se comporte comme un
-# modem 27.007 vu du port, et execute chaque commande sur oFono.
+# An Android RIL (libreference-ril.so) only opens a serial port and sends
+# 3GPP 27.007 on it (AT+CFUN, AT+CREG?, ATD..., AT+CMGS...). oFono is not a
+# modem: it is a modem consumer, with a D-Bus API. The two never meet -
+# unless someone PLAYS THE MODEM ROLE. That is what this program does: it
+# opens a pseudo-terminal, behaves like a 27.007 modem seen from the port,
+# and executes each command on oFono.
 #
-#   AT+CREG?        <- l etat d enregistrement lu sur org.ofono.NetworkRegistration
+#   AT+CREG?        <- the registration state read on org.ofono.NetworkRegistration
 #   ATD100102;      <- org.ofono.VoiceCallManager.Dial
 #   ATA / ATH       <- Answer / HangupAll
-#   AT+CLCC         <- la liste des appels en cours (GetCalls)
+#   AT+CLCC         <- the list of current calls (GetCalls)
 #   AT+CMGS         <- org.ofono.MessageManager.SendMessage
-#   +CMTI / RING    <- pousses vers le port quand oFono signale un SMS ou un appel
+#   +CMTI / RING    <- pushed to the port when oFono signals an SMS or a call
 #
-# A QUOI IL SERT AUJOURD HUI. [2026-09-07] Il a ete ecrit pour donner un modem
-# au RIL d un Android en conteneur (Waydroid) ; Android est abandonne, et le
-# telephone du banc - la VM postmarketOS - se branche, lui, DIRECTEMENT sur le
-# modem du banc (tools/osmo-phonesim-banc.py --connect). Ce programme-ci reste
-# le modem AT adosse a oFono : c est par lui qu on verifie a la main, avec
-# tools/at-cmd.py sur /run/osmo-ril/at-pty, ce qu oFono repond vraiment - et
-# c est le port qu on donnerait a n importe quel logiciel attendant un modem.
+# WHAT IT IS FOR. The phone of the bench - the postmarketOS VM - plugs
+# DIRECTLY on the modem of the bench (tools/osmo-phonesim-banc.py --connect).
+# This program is the AT modem backed by oFono: through it, with
+# tools/at-cmd.py on /run/osmo-ril/at-pty, what oFono really answers is
+# checked by hand - and it is the port to give to any software expecting
+# a modem.
 #
-# Reglages :
-#   OSMO_RIL_DIR      ou publier le lien vers le pty (defaut /run/osmo-ril)
-#   OSMO_OFONO_MODEM  le modem oFono a piloter (defaut : le premier trouve)
-#   OSMO_AT_ECHO      1 pour repondre en echo des le depart (ATE1)
+# Settings:
+#   OSMO_RIL_DIR      where to publish the link to the pty (default /run/osmo-ril)
+#   OSMO_OFONO_MODEM  the oFono modem to drive (default: the first found)
+#   OSMO_AT_ECHO      1 to echo from the start (ATE1)
 import os
 import pty
 import re
@@ -44,11 +43,10 @@ from gi.repository import Gio, GLib
 RUN = os.environ.get("OSMO_RIL_DIR", "/run/osmo-ril")
 LINK = os.path.join(RUN, "at-pty")
 MODEM = os.environ.get("OSMO_OFONO_MODEM", "")
-# [2026-09-06] LE JOURNAL DU PORT AT. Tout ce qui passe entre le RIL d Android
-# et ce modem, dans les deux sens, horodate a la milliseconde. C est l outil
-# pour voir OU une sequence s arrete - une commande a laquelle on repond mal
-# bloque tout le reste en silence. « tail -f /var/log/osmo-at.log » pendant qu on
-# manipule Android.
+# THE LOG OF THE AT PORT. Everything passing between the RIL and this modem,
+# in both directions, timestamped to the millisecond. It is the tool to see
+# WHERE a sequence stops - a command answered badly silently blocks all the
+# rest. "tail -f /var/log/osmo-at.log" while driving the client.
 AT_LOG = os.environ.get("OSMO_AT_LOG", "/var/log/osmo-at.log")
 
 OFONO = "org.ofono"
@@ -69,12 +67,12 @@ _atlog = None
 
 
 def atlog(sens, texte):
-    """sens : '<' ce que le RIL envoie, '>' ce que le modem repond."""
+    """sens: '<' what the RIL sends, '>' what the modem answers."""
     global _atlog
     if _atlog is None:
         try:
-            _atlog = open(AT_LOG, "a", buffering=1)   # ligne par ligne : direct
-            os.chmod(AT_LOG, 0o644)                   # lisible sans etre root
+            _atlog = open(AT_LOG, "a", buffering=1)   # line by line: direct
+            os.chmod(AT_LOG, 0o644)                   # readable without being root
         except OSError as e:
             print("[at] journal %s impossible : %s" % (AT_LOG, e), file=sys.stderr)
             _atlog = False
@@ -91,7 +89,7 @@ def atlog(sens, texte):
 
 # ── oFONO ───────────────────────────────────────────────────────────────────
 class Ofono:
-    """Le strict necessaire d oFono, en Gio (pas de dbus-python sur l image)."""
+    """The bare minimum of oFono, in Gio (no dbus-python on the image)."""
 
     def __init__(self):
         self.c = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
@@ -125,8 +123,8 @@ class Ofono:
                                        Gio.DBusSignalFlags.NONE, cb)
 
 
-# ── LE MODEM VU DU PORT SERIE ───────────────────────────────────────────────
-# Les etats 27.007 attendus par le RIL. On traduit ce que dit oFono.
+# ── THE MODEM SEEN FROM THE SERIAL PORT ─────────────────────────────────────
+# The 27.007 states expected by the RIL. What oFono says is translated.
 _CREG_STATE = {"unregistered": 0, "registered": 1, "searching": 2,
                "denied": 3, "unknown": 4, "roaming": 5}
 
@@ -138,11 +136,11 @@ class AtModem:
         self.buf = b""
         self.echo = os.environ.get("OSMO_AT_ECHO") == "1"
         self.cmee = 0
-        self.creg_mode = 0          # 0 = pas d URC, 1/2 = URC d enregistrement
-        self.cmgf = 0               # 0 = PDU (ce que veut le RIL), 1 = texte
-        self.sms_target = None      # numero en attente entre AT+CMGS et le ^Z
+        self.creg_mode = 0          # 0 = no URC, 1/2 = registration URC
+        self.cmgf = 0               # 0 = PDU (what the RIL wants), 1 = text
+        self.sms_target = None      # number pending between AT+CMGS and the ^Z
 
-    # -- ecriture vers le RIL
+    # -- writing to the RIL
     def send(self, text):
         atlog(">", text)
         try:
@@ -156,7 +154,7 @@ class AtModem:
     def err(self, code=100):
         self.send("+CME ERROR: %d" % code if self.cmee else "ERROR")
 
-    # -- lecture depuis le RIL
+    # -- reading from the RIL
     def feed(self, data):
         if self.echo:
             try:
@@ -178,10 +176,10 @@ class AtModem:
             elif text:
                 self.on_line(text)
 
-    # -- le corps d un SMS, entre AT+CMGS=... et Ctrl-Z
+    # -- the body of an SMS, between AT+CMGS=... and Ctrl-Z
     def on_sms_body(self, text, submitted):
         if not submitted:
-            return                      # on attend encore le Ctrl-Z
+            return                      # still waiting for the Ctrl-Z
         num, self.sms_target = self.sms_target, None
         if not num:
             self.err()
@@ -196,7 +194,7 @@ class AtModem:
             log("envoi refuse :", e.message.split(":")[-1].strip())
             self.err()
 
-    # -- une commande AT
+    # -- an AT command
     def on_line(self, line):
         cmd = line.upper()
         if not cmd.startswith("AT"):
@@ -204,7 +202,7 @@ class AtModem:
         body = line[2:]
         ub = cmd[2:]
 
-        # les basiques que le RIL envoie au demarrage
+        # the basics the RIL sends at startup
         if ub in ("", "&F", "Z", "E0", "E1", "+CMEE=1", "+CMEE=2", "V1", "Q0",
                   "S0=0", "+CSCS=\"UCS2\"", "+CSCS=\"IRA\"", "+CMGF=0",
                   "+CNMI=1,2,0,1,0", "+CGEREP=1,0", "+CLIP=1", "+COLP=0",
@@ -220,7 +218,7 @@ class AtModem:
             self.ok()
             return
 
-        # identite du modem : ce que le RIL affiche dans « a propos »
+        # modem identity: what the RIL shows in "about"
         if ub in ("+CGMI", "+GMI"):
             self.send("Osmocom"); self.ok(); return
         if ub in ("+CGMM", "+GMM"):
@@ -231,7 +229,7 @@ class AtModem:
             self.send(self.o.props(IF_MODEM).get("Serial", "000000000000000"))
             self.ok(); return
 
-        # la SIM
+        # the SIM
         if ub == "+CPIN?":
             sim = self.o.props(IF_SIM)
             self.send("+CPIN: READY" if sim.get("Present", True) else "+CME ERROR: 10")
@@ -240,9 +238,9 @@ class AtModem:
             self.send(self.o.props(IF_SIM).get("SubscriberIdentity", "001010000000000"))
             self.ok(); return
         if ub.startswith("+CRSM") or ub.startswith("+CCID") or ub.startswith("+CSIM"):
-            self.err(); return       # le RIL sait s en passer
+            self.err(); return       # the RIL can do without it
 
-        # la radio
+        # the radio
         if ub.startswith("+CFUN"):
             if ub.endswith("?"):
                 on = self.o.props(IF_MODEM).get("Online", False)
@@ -256,7 +254,7 @@ class AtModem:
                 log("CFUN refuse :", e.message.split(":")[-1].strip())
             self.ok(); return
 
-        # l enregistrement reseau
+        # network registration
         if ub.startswith("+CREG") or ub.startswith("+CGREG") or ub.startswith("+CEREG"):
             tag = "+CREG" if ub.startswith("+CREG") else ("+CGREG" if ub.startswith("+CGREG") else "+CEREG")
             if "=" in ub:
@@ -282,12 +280,12 @@ class AtModem:
             self.ok(); return
 
         if ub.startswith("+CSQ"):
-            # oFono donne une force en %, le 27.007 attend 0..31
+            # oFono gives a strength in %, 27.007 expects 0..31
             pct = int(net_strength(self.o))
             self.send("+CSQ: %d,99" % min(31, round(pct * 31 / 100)))
             self.ok(); return
 
-        # les appels
+        # calls
         if cmd.startswith("ATD") and (cmd.endswith(";") or ";" in cmd):
             num = re.sub(r"[^0-9+*#]", "", body.split(";")[0][1:])
             try:
@@ -322,11 +320,11 @@ class AtModem:
                 self.send("+CLCC: %d,%d,%d,0,0,\"%s\",129" % (i, direction, st, num))
             self.ok(); return
 
-        # les SMS
+        # SMS
         if ub.startswith("+CMGS="):
-            # En mode texte le numero est entre guillemets ; en PDU le RIL
-            # envoie une longueur, et le numero est dans le PDU - non gere ici
-            # (le pont oFono s en charge tant qu on n a pas de rild).
+            # In text mode the number is between quotes; in PDU the RIL sends a
+            # length, and the number is in the PDU - not handled here (the oFono
+            # bridge takes care of it as long as there is no rild).
             m = re.search(r'"([^"]+)"', body)
             if m:
                 self.sms_target = m.group(1)
@@ -342,19 +340,18 @@ class AtModem:
         if ub.startswith("+CSCA"):
             self.send("+CSCA: \"\",129"); self.ok(); return
 
-        # ── CE QUE LE RIL D ANDROID DEMANDE A L INITIALISATION ──────────
-        # [2026-09-06] Releve sur le banc, la premiere fois que osmo-rild a
-        # ouvert ce port : ATE0Q0V1, AT+CTEC?, AT+WNAM, AT+CCWA=1, AT+CMUT=0,
-        # AT+CSSN=0,1, AT+CSCS="HEX", AT+CUSD=1... Tant qu on refusait tout ca,
-        # libreference-ril restait bloquee au tout debut de sa sequence et ne
-        # publiait jamais son interface - le framework ne voyait donc aucun
-        # service radio.
+        # ── WHAT THE ANDROID RIL ASKS AT INITIALISATION ─────────────────
+        # Sequence sent by libreference-ril when it opens this port: ATE0Q0V1,
+        # AT+CTEC?, AT+WNAM, AT+CCWA=1, AT+CMUT=0, AT+CSSN=0,1, AT+CSCS="HEX",
+        # AT+CUSD=1... If these are refused, libreference-ril stays blocked at the
+        # very beginning of its sequence and never publishes its interface - the
+        # framework then sees no radio service.
         if ub in ("E0Q0V1", "E1Q0V1", "Q0V1", "E0V1"):
             self.echo = ub.startswith("E1")
             self.ok(); return
         if ub.startswith("+CTEC"):
-            # « current technology » du reference-ril : 0 = GSM, ce que le banc
-            # fait effectivement.
+            # "current technology" of the reference-ril: 0 = GSM, what the bench
+            # actually does.
             self.send("+CTEC: 0,1" if ub.endswith("?") else "+CTEC: 0")
             self.ok(); return
         if ub.startswith("+WNAM"):
@@ -367,11 +364,10 @@ class AtModem:
                 self.send('+CSCS: "HEX"')
             self.ok(); return
 
-        # Meme regle que le modem cote oFono (tools/osmo-phonesim-banc.py) :
-        # une AFFECTATION est acceptee - un modem qui accepte un reglage sans
-        # l appliquer ne raconte rien de faux ; une LECTURE inconnue est
-        # refusee, parce qu une reponse inventee ferait croire a une capacite
-        # qui n existe pas.
+        # Same rule as the modem on the oFono side (tools/osmo-phonesim-banc.py):
+        # an ASSIGNMENT is accepted - a modem that accepts a setting without
+        # applying it tells nothing false; an unknown READ is refused, because
+        # an invented answer would suggest a capability that does not exist.
         if "=" in ub and not ub.endswith("=?"):
             log("reglage accepte sans effet : %s" % line)
             self.ok(); return
@@ -379,7 +375,7 @@ class AtModem:
         log("lecture non geree (refusee) : %s" % line)
         self.err()
 
-    # ── les evenements d oFono pousses vers le RIL ───────────────────────────
+    # ── oFono events pushed to the RIL ──────────────────────────────────────
     def on_incoming_sms(self, _c, _s, _p, _i, _sig, params):
         info = params[1]
         log("SMS entrant de %s" % info.get("Sender", "?"))
@@ -399,14 +395,14 @@ class AtModem:
             self.send("+CREG: %d" % st)
 
 
-# ── LE MODEM D ESSAI ────────────────────────────────────────────────────────
-# Sans modem oFono (banc arrete, EC25 debranche), le programme n aurait rien a
-# piloter et sortirait aussitot - impossible de mettre au point le dialogue AT
-# ni de verifier ce que le RIL recevra. --essai remplace donc oFono par des
-# reponses par defaut : le modem repond comme un modem eteint mais poli
-# (CFUN 0, CREG 0, aucun appel), et TOUTE commande d action est journalisee au
-# lieu d etre executee. C est un banc d essai pour la mecanique, jamais un
-# substitut au vrai chemin.
+# ── THE TEST MODEM ──────────────────────────────────────────────────────────
+# Without an oFono modem (bench stopped, EC25 unplugged), the program would
+# have nothing to drive and would exit at once - impossible to tune the AT
+# dialogue or to check what the RIL will receive. --essai therefore replaces
+# oFono with default answers: the modem answers like a switched-off but polite
+# modem (CFUN 0, CREG 0, no call), and EVERY action command is logged instead
+# of being executed. It is a test bench for the mechanics, never a substitute
+# for the real path.
 class OfonoEssai:
     modem = "/essai/modem0"
 
@@ -456,7 +452,7 @@ def main():
     master, slave = pty.openpty()
     name = os.ttyname(slave)
     tty.setraw(master)
-    # Le RIL ouvrira le lien stable, pas le /dev/pts/N du jour.
+    # The RIL opens the stable link, not the /dev/pts/N of the day.
     os.makedirs(RUN, exist_ok=True)
     try:
         if os.path.islink(LINK) or os.path.exists(LINK):

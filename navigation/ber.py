@@ -1,9 +1,9 @@
-# ber.py - le strict minimum de BER (X.690) : de quoi ecrire et lire du TCAP
-# et du MAP sans dependance externe.
+# ber.py - the bare minimum of BER (X.690): enough to write and read TCAP
+# and MAP without an external dependency.
 #
-# On reste volontairement petit : tags courts ou longs, longueurs courtes,
-# longues et indefinies, primitifs et constructeurs. Rien de plus n'est
-# necessaire pour les operations MAP que la console emet.
+# Deliberately small: short or long tags, short, long and indefinite lengths,
+# primitive and constructed elements. Nothing more is needed for the MAP
+# operations the console sends.
 
 def enc_len(n):
     if n < 0x80:
@@ -16,7 +16,7 @@ def enc_len(n):
 
 
 def tlv(tag, value):
-    """tag : entier (0x30) ou sequence d'octets pour les tags longs."""
+    """tag: integer (0x30) or byte sequence for long tags."""
     if isinstance(tag, int):
         tag = bytes([tag])
     return bytes(tag) + enc_len(len(value)) + value
@@ -67,7 +67,7 @@ def enc_oid(dotted, tag=0x06):
 
 
 def ctx(num, value, constructed=True):
-    """Tag contexte [num], constructeur ou primitif."""
+    """Context tag [num], constructed or primitive."""
     tag = 0x80 | num | (0x20 if constructed else 0x00)
     return tlv(tag, value)
 
@@ -97,7 +97,7 @@ class Elem(object):
         return n
 
     def find(self, cls, num, deep=True):
-        """Premier element d'une classe/numero donnes."""
+        """First element of a given class/number."""
         for e in self.walk() if deep else self.children:
             if e.cls == cls and e.num == num:
                 return e
@@ -135,14 +135,14 @@ def _read_len(data, i):
     if b < 0x80:
         return b, i
     if b == 0x80:
-        return -1, i                      # longueur indefinie
+        return -1, i                      # indefinite length
     n = b & 0x7F
     val = int.from_bytes(data[i:i + n], "big")
     return val, i + n
 
 
 def decode(data, limit=None):
-    """Rend la liste des elements de premier niveau."""
+    """Return the list of top-level elements."""
     out = []
     i = 0
     end = len(data) if limit is None else min(limit, len(data))
@@ -152,7 +152,7 @@ def decode(data, limit=None):
             length, i = _read_len(data, i)
         except IndexError:
             break
-        if length < 0:                    # indefinie : jusqu'au 00 00
+        if length < 0:                    # indefinite: up to the 00 00
             j = data.find(b"\x00\x00", i)
             if j < 0:
                 j = end
@@ -169,7 +169,7 @@ def decode(data, limit=None):
 
 
 def dump(elems, indent=0, out=None):
-    """Arborescence lisible - utilisee pour montrer une reponse MAP brute."""
+    """Readable tree - used to show a raw MAP answer."""
     out = [] if out is None else out
     for e in elems:
         head = "%s%s len=%d" % ("  " * indent, e.tagstr(), len(e.value))
