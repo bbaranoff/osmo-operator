@@ -30,6 +30,7 @@ import glob
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -44,7 +45,8 @@ IGNORES = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 BINAIRES = set("png jpg jpeg gif bmp ico webp pdf zip gz tgz bz2 xz 7z tar bin elf o a so pyc pyo pyd "
                "wav mp3 ogg mp4 sqlite db img iso woff woff2 ttf otf".split())
 SAUVEGARDES = re.compile(r"(~|\.orig|\.rej|\.swp|\.bak(-\w+)?)$")
-TITRE_SORTIE = "title: \"Banc GSM émulé — dossier de run\"".encode()   # a previous output of this script
+TITRE_SORTIE = (b"generator: tout-en-un.py",                         # a previous output of this script
+                "title: \"Banc GSM émulé — dossier de run\"".encode())
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 TELNET = re.compile(rb"\xff[\xfb-\xfe].|\xff.")           # telnet (IAC) negotiation in VTY captures
 CONTROLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]")  # control characters, undecodable bytes
@@ -125,7 +127,7 @@ def texte_legitime(chemin, nom):
         return False
     if b"\0" in debut:                        # ELF, images, .pyc, archives...
         return False
-    if TITRE_SORTIE in debut:
+    if any(t in debut for t in TITRE_SORTIE):
         return False
     return True
 
@@ -241,7 +243,88 @@ def rendre_mmd(lignes):
     return "%s\n%s\n```" % (MERMAID_OUVRE, "\n".join(lignes))
 
 
-def rendre_md(lignes):
+_DEPOTS = {}
+
+
+def depot_git(chemin):
+    """(root, GitHub base URL, branch) of the git repository holding chemin, or None."""
+    d = os.path.abspath(chemin)
+    if not os.path.isdir(d):
+        d = os.path.dirname(d)
+    while not os.path.exists(os.path.join(d, ".git")):
+        if d == "/":
+            return None
+        d = os.path.dirname(d)
+    if d not in _DEPOTS:
+        def git(*a):
+            r = subprocess.run(["git", "-C", d] + list(a), capture_output=True, text=True)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        url = git("config", "--get", "remote.origin.url")
+        url = re.sub(r"^git@([^:]+):", r"https://\1/", url)
+        url = re.sub(r"\.git$", "", url).rstrip("/")
+        branche = git("rev-parse", "--abbrev-ref", "HEAD")
+        _DEPOTS[d] = (d, url, branche if branche and branche != "HEAD" else "main") if url else None
+    return _DEPOTS[d]
+
+
+def adresse(chemin):
+    """GitHub address of chemin (blob/<branch>/<path>), or the local path outside a repository."""
+    g = depot_git(chemin)
+    if not g:
+        return chemin
+    rel = os.path.relpath(os.path.abspath(chemin), g[0])
+    return "%s/blob/%s/%s" % (g[1], g[2], "" if rel == "." else rel)
+
+
+def reference(chemin):
+    """File reference used in titles: a GitHub link when the file lives in a repository."""
+    a = adresse(chemin)
+    if not a.startswith("http"):
+        return a
+    # Quarto opens external links in a new tab (link-external-newwindow);
+    # plain Markdown needs an HTML anchor for that
+    return "<%s>" % a if FORMAT == "qmd" else '<a href="%s" target="_blank">%s</a>' % (a, a)
+
+
+def nom_depot():
+    """Name of the repository this script belongs to (title of the bundle)."""
+    ici = os.path.dirname(os.path.realpath(__file__))
+    g = depot_git(ici)
+    return os.path.basename(g[0]) if g else os.path.basename(ici)
+
+
+LIEN = re.compile(r"(?<!!)(\[[^\]]*\]\()([^)\s]+)((?:\s+\"[^\"]*\")?\))")
+LIEN_REF = re.compile(r"^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$")
+
+
+def lien_github(cible, md):
+    """Rewrite a link target of the .md file md to its GitHub address; others stay as they are."""
+    if re.match(r"^([a-zA-Z][\w+.-]*:|#|<)", cible):
+        return cible
+    chemin, _, ancre = cible.partition("#")
+    if not chemin:
+        return cible
+    if not chemin.startswith("/"):
+        chemin = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(md)), chemin))
+    a = adresse(chemin)
+    if not a.startswith("http"):
+        return cible
+    return a + ("#" + ancre if ancre else "")
+
+
+def lien_md(m, md):
+    cible = lien_github(m.group(2), md)
+    if FORMAT != "qmd" and cible.startswith("http"):  # plain Markdown: new tab via an HTML anchor
+        return '<a href="%s" target="_blank">%s</a>' % (cible, m.group(1)[1:-2])
+    return m.group(1) + cible + m.group(3)
+
+
+def liens_github(l, md):
+    l = LIEN.sub(lambda m: lien_md(m, md), l)
+    return LIEN_REF.sub(lambda m: m.group(1) + lien_github(m.group(2), md) + m.group(3), l)
+
+
+def rendre_md(lignes, md):
     out, dans_bloc, cloture = [], False, ""
     i = 0
     if lignes and lignes[0].strip() == "---":           # YAML front matter: shown as a block, not interpreted
@@ -263,6 +346,7 @@ def rendre_md(lignes):
         if m and dans_bloc and m.group(2)[0] == cloture[0] and len(m.group(2)) >= len(cloture) and not m.group(3).strip():
             dans_bloc = False; out.append(l); continue
         if not dans_bloc:
+            l = liens_github(l, md)
             h = re.match(r"^(#{1,6})\s", l)
             if h:
                 l = "#" * min(6, len(h.group(1)) + 3) + l[len(h.group(1)):]
@@ -323,7 +407,7 @@ def main():
             h = hashlib.sha1(texte.encode()).hexdigest()
             total_in += len(brut)
             if h in vus:
-                sections.append("### %s\n\nidentique à %s\n" % (f, vus[h]))
+                sections.append("### %s\n\nidentique à %s\n" % (reference(f), reference(vus[h])))
                 continue
             vus[h] = f
             ext = extension(os.path.basename(f))
@@ -333,7 +417,7 @@ def main():
                 # rendered, {r}/{python} blocks neutralised). No compaction.
                 total_out += len(texte) + 1
                 sections.append("### %s\n\n%d octets, %d lignes\n\n%s\n"
-                                % (f, len(brut), len(lignes), rendre_md(lignes) if ext in ("md", "qmd") else rendre_mmd(lignes)))
+                                % (reference(f), len(brut), len(lignes), rendre_md(lignes, f) if ext in ("md", "qmd") else rendre_mmd(lignes)))
                 continue
             compact, groupes = compacter(lignes)
             total_out += sum(len(l) + 1 for l in compact)
@@ -343,12 +427,13 @@ def main():
             plus_long = max((len(m) for m in re.findall(r"`+", "\n".join(compact))), default=0)
             cloture = "`" * max(3, plus_long + 1)
             sections.append("### %s\n\n%d octets, %d lignes → %d lignes%s\n\n%s%s\n%s\n%s\n"
-                            % (f, len(brut), len(lignes), len(compact), (" (%s)" % note) if note else "",
+                            % (reference(f), len(brut), len(lignes), len(compact), (" (%s)" % note) if note else "",
                                cloture, langage(f), "\n".join(compact), cloture))
     runs = sorted({os.path.basename(os.path.dirname(f)) for f in tous if os.path.basename(f) == "verdict.txt"})
     with open(SORTIE, "w") as o:
         o.write("---\n")
-        o.write("title: \"Banc GSM émulé — dossier de run\"\n")
+        o.write("title: \"%s\"\n" % nom_depot())
+        o.write("generator: tout-en-un.py\n")
         o.write("subtitle: \"%s\"\n" % (", ".join(runs) if runs else ", ".join(dossiers)))
         o.write("author: \"%s\"\n" % AUTEUR)
         o.write("date: \"%s\"\n" % time.strftime("%Y-%m-%d %H:%M"))
@@ -358,6 +443,7 @@ def main():
             o.write("code-annotations: false\n")  # a "<100>" in a comment is not an annotation; engine markdown: pandoc only, no knitr on included ```{r}
         if FORMAT == "qmd":
             o.write("format:\n  html:\n    toc: true\n    toc-depth: 3\n    toc-location: left\n"
+                    "    link-external-newwindow: true\n"
                     "    number-sections: true\n    embed-resources: true\n    theme: cosmo\n"
                     "    code-overflow: wrap\n    fontsize: 0.9em\n")
             o.write("  pdf:\n    toc: true\n    toc-depth: 3\n    number-sections: true\n"
