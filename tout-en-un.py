@@ -32,6 +32,7 @@ import glob
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -123,6 +124,8 @@ def texte_legitime(chemin, nom):
     if extension(nom) in BINAIRES or SAUVEGARDES.search(nom) or DSP_DUMP.search(nom) or nom in ("LICENSE", "COPYING"):
         return False
     if nom.startswith("tout-en-un-"):
+        return False
+    if nom.endswith("-mermaid.html"):             # Mermaid include written next to a bundle
         return False
     try:
         with open(chemin, "rb") as f:
@@ -249,7 +252,45 @@ def synthese(tous):
     return [l for _, l in sorted(lignes, key=lambda x: x[0])]
 
 
-MERMAID_OUVRE = "```{mermaid}" if FORMAT == "qmd" else "```mermaid"
+# Diagrams are plain ```mermaid blocks, never {mermaid} cells: Quarto draws cells
+# with Chrome for pdf/docx, and Quarto 1.8 (RStudio) with an older Chromium fails
+# ("Couldn't find an svg element in svg string"). The pdf shows the diagram
+# source; the html draws it in the browser with the Mermaid library of the
+# installed Quarto, embedded through <output>-mermaid.html (see script_mermaid).
+MERMAID_OUVRE = "```mermaid"
+MERMAID_JS = ("/usr/lib/rstudio/resources/app/bin/quarto/share/formats/html/mermaid/mermaid.min.js",
+              "/opt/quarto/share/formats/html/mermaid/mermaid.min.js")
+MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+MERMAID_INIT = """<script>
+(function () {
+  if (!window.mermaid) return;
+  document.querySelectorAll("pre.mermaid, pre.sourceCode.mermaid").forEach(function (pre) {
+    var d = document.createElement("div");
+    d.className = "mermaid";
+    d.textContent = pre.textContent;
+    (pre.closest("div.sourceCode") || pre).replaceWith(d);
+  });
+  mermaid.initialize({ startOnLoad: false });
+  mermaid.run({ querySelector: "div.mermaid" });
+})();
+</script>
+"""
+
+
+def script_mermaid(sortie):
+    """Write <sortie>-mermaid.html (Mermaid library + init) next to the bundle and
+    return its file name, for include-after-body of the html format."""
+    nom = re.sub(r"\.[^.]+$", "", os.path.basename(sortie)) + "-mermaid.html"
+    quarto = [os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(q))), "share", "formats", "html",
+                           "mermaid", "mermaid.min.js") for q in filter(None, [shutil.which("quarto")])]
+    js = next((f for f in quarto + list(MERMAID_JS) if os.path.isfile(f)), None)
+    with open(os.path.join(os.path.dirname(os.path.abspath(sortie)), nom), "w") as o:
+        if js:                                   # embedded: works offline
+            o.write("<script>\n%s\n</script>\n" % open(js).read().replace("</script", "<\\/script"))
+        else:                                    # no local Quarto: loaded when the page is viewed
+            o.write('<script src="%s"></script>\n' % MERMAID_CDN)
+        o.write(MERMAID_INIT)
+    return nom
 
 
 def rendre_mmd(lignes):
@@ -344,8 +385,17 @@ def image_locale(cible, md):
     return os.path.relpath(chemin, os.path.dirname(os.path.abspath(SORTIE))) if os.path.exists(chemin) else cible
 
 
+def image_md(m, md):
+    img = m.group(1) + image_locale(m.group(2), md) + m.group(3)
+    # LaTeX cannot read SVG without rsvg-convert or inkscape (badges, icons):
+    # in Quarto, SVG images are kept for html only
+    if FORMAT == "qmd" and re.search(r"\.svg($|[?#])", m.group(2), re.I):
+        return '[%s]{.content-visible when-format="html"}' % img
+    return img
+
+
 def liens_github(l, md):
-    l = IMAGE.sub(lambda m: m.group(1) + image_locale(m.group(2), md) + m.group(3), l)
+    l = IMAGE.sub(lambda m: image_md(m, md), l)
     l = LIEN.sub(lambda m: lien_md(m, md), l)
     return LIEN_REF.sub(lambda m: m.group(1) + lien_github(m.group(2), md) + m.group(3), l)
 
@@ -491,7 +541,10 @@ def rapport(dossiers, tous, table, sortie, libelle):
             o.write("engine: markdown\n")
             o.write("code-annotations: false\n")  # a "<100>" in a comment is not an annotation; engine markdown: pandoc only, no knitr on included ```{r}
         if FORMAT == "qmd":
-            o.write("format:\n  html:\n    toc: true\n    toc-depth: 3\n    toc-location: left\n"
+            o.write("format:\n  html:\n    toc: true\n    toc-depth: 3\n    toc-location: left\n")
+            if any(MERMAID_OUVRE in x for x in sections):
+                o.write("    include-after-body: %s\n" % script_mermaid(sortie))
+            o.write(""
                     "    link-external-newwindow: true\n"
                     "    number-sections: true\n    embed-resources: true\n    theme: cosmo\n"
                     "    code-overflow: wrap\n    fontsize: 0.9em\n")
@@ -501,6 +554,7 @@ def rapport(dossiers, tous, table, sortie, libelle):
             if total_out > HTML_SANS_COULEUR:
                 o.write("    highlight-style: none\n")
             o.write("  pdf:\n    toc: true\n    toc-depth: 3\n    number-sections: true\n"
+                    "    from: markdown-raw_tex\n"         # a backslash-h in a doc is text, not a LaTeX command
                     "    shift-heading-level-by: -1\n"      # "## Synthèse" = section 1, not 0.1
                     "    papersize: a4\n    geometry: margin=2cm\n    fontsize: 10pt\n"
                     "    monofont: DejaVu Sans Mono\n"      # box drawing, ✓ ✗ ⟨⟩ ⚠ missing from Latin Modern Mono
