@@ -1,8 +1,8 @@
 #!/bin/bash
-# run.sh - Orchestrateur intra-container Osmocom
+# run.sh - Osmocom intra-container orchestrator
 #
-# PHY_MODE=faketrx (defaut) : fake_trx → trxcon → mobile
-# PHY_MODE=virtphy           : osmo-bts-virtual → virtphy → mobile
+# PHY_MODE=faketrx (default): fake_trx → trxcon → mobile
+# PHY_MODE=virtphy          : osmo-bts-virtual → virtphy → mobile
 #
 set -euo pipefail
 
@@ -14,16 +14,17 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
-# Ce fichier est DEPLOYE HORS DEPOT (/etc/osmocom/run.sh, /root/run.sh) et lance
-# par des scripts qui n'exportent pas forcement le manifeste : sous `set -u`, un
-# ${GSM_ROOT} nu tuerait le script ici. D'ou les valeurs de repli explicites.
+# This file is DEPLOYED OUTSIDE THE REPO (/etc/osmocom/run.sh, /root/run.sh) and
+# launched by scripts that do not necessarily export the manifest: under
+# `set -u`, a bare ${GSM_ROOT} would kill the script here. Hence the explicit
+# fallback values.
 FAKETRX_PY="${FAKETRX_PY:-${FAKE_TRX:-${OSMOCOM_BB:-${GSM_ROOT:-/opt/GSM}/osmocom-bb}/src/target/trx_toolkit/fake_trx.py}}"
 OPERATOR_ID="${OPERATOR_ID:-1}"; N_MS="${N_MS:-1}"; MOBILE_MODE="${MOBILE_MODE:-combined}"
 PHY_MODE="${PHY_MODE:-faketrx}"   # faketrx | virtphy
-# RUN_NO_PROCESS=1 : prepare/genere uniquement les configs (MS, TRX, handover)
-# et sort SANS lancer aucun process (ni osmo-start, ni fake_trx/trxcon, ni
-# mobile/asterisk/smsc). Utilise par le mode QEMU de start-docker.sh qui veut juste
-# les configs en place avant de lancer ${OQC_ROOT}/run.sh.
+# RUN_NO_PROCESS=1: only prepares/generates the configs (MS, TRX, handover) and
+# exits WITHOUT launching any process (neither osmo-start, nor fake_trx/trxcon,
+# nor mobile/asterisk/smsc). Used by the QEMU mode of start-docker.sh, which
+# just wants the configs in place before launching ${OQC_ROOT}/run.sh.
 RUN_NO_PROCESS="${RUN_NO_PROCESS:-0}"
 MAX_MS=64; MAX_MS_PER_MOBILE=8; MS_PER_TRX=16
 BB_PORT_BASE=6700; BB_PORT_STEP=3; BTS_PORT_BASE=5700
@@ -146,9 +147,9 @@ generate_ms_configs() {
         echo "$block" >> "$outfile"; echo "" >> "$outfile"
     }
 
-    # Si le fichier est bind-monte (docker -v file:file), rm renvoie EBUSY.
-    # Dans ce cas on ne peut pas le supprimer mais on peut le truncate puis
-    # re-ecrire dedans, ce qui est equivalent pour notre besoin.
+    # If the file is bind-mounted (docker -v file:file), rm returns EBUSY.
+    # In that case it cannot be deleted but it can be truncated and rewritten,
+    # which is equivalent for our purpose.
     for f in /root/.osmocom/bb/mobile_ms*.cfg /root/.osmocom/bb/mobile_group*.cfg; do
         [ -e "$f" ] || continue
         if ! rm -f "$f" 2>/dev/null; then
@@ -197,7 +198,7 @@ inject_extra_trx_virtual() {
     local bts="/etc/osmocom/osmo-bts-virtual.cfg"
     [ -f "$bts" ] || return 0
 
-    # Ajouter des instances phy supplementaires apres "instance 0"
+    # Add extra phy instances after "instance 0"
     local tmp; tmp=$(mktemp)
     local insert_done=0
     while IFS= read -r line; do
@@ -211,7 +212,7 @@ inject_extra_trx_virtual() {
     done < "$bts"
     cp "$tmp" "$bts"; rm -f "$tmp"
 
-    # Ajouter les TRX supplementaires en fin de fichier
+    # Append the extra TRX at the end of the file
     for t in $(seq 1 $(($1-1))); do
         printf ' trx %d\n  power-ramp max-initial 23000 mdBm\n  power-ramp step-size 2000 mdB\n  power-ramp step-interval 1\n  ms-power-control osmo\n  phy 0 instance %d\n' "$t" "$t" >> "$bts"
     done
@@ -228,13 +229,13 @@ inject_handover() {
     echo -e "  ${GREEN}✓ Handover algo 2${NC}"
 }
 
-# ── Sinks PulseAudio (gsm_audio + gsm_mic) ───────────────────────────────────
-# Docker : /scripts/  |  natif : /etc/osmocom/  (meme script, chemin different)
-# Idempotent et NON FATAL : sans PulseAudio l'audio gapk est indispo, mais on ne
-# doit jamais tuer run.sh (set -e) pour ca.
-# $1 = timeout d'attente de PulseAudio (defaut 30 s). Le demon n'est pas demarre
-# par ce script mais par lib/audio.sh (pipeline qemu) : sur l'appel PRECOCE [2d]
-# il peut ne pas etre encore la, d'ou un timeout court pour ne pas staller.
+# ── PulseAudio sinks (gsm_audio + gsm_mic) ───────────────────────────────────
+# Docker: /scripts/  |  native: /etc/osmocom/  (same script, different path)
+# Idempotent and NON FATAL: without PulseAudio the gapk audio is unavailable,
+# but run.sh must never be killed (set -e) for that.
+# $1 = PulseAudio wait timeout (default 30 s). The daemon is not started by
+# this script but by lib/audio.sh (qemu pipeline): on the EARLY call [2d] it
+# may not be there yet, hence a short timeout so as not to stall.
 setup_pulse_sinks() {
     local PULSE_SETUP=/scripts/pulse-gsm-setup.sh
     [ -f "$PULSE_SETUP" ] || PULSE_SETUP=/etc/osmocom/pulse-gsm-setup.sh
@@ -243,15 +244,14 @@ setup_pulse_sinks() {
         || echo -e "  ${YELLOW}[warn] pulse-gsm-setup.sh echoue (audio indispo) - on continue${NC}"
 }
 
-# ── Bridge audio UNIVERSEL ───────────────────────────────────────────────────
-# gapk (RTP reseau → sink gsm_audio) + sortie son. Appele en mode faketrx/virtphy
-# ET en mode no-process (qemu) - c'est CE bridge qui manquait en qemu (run.sh
-# sortait avant [6c] → gsm_audio muet → "pas d'audio en qemu").
+# ── UNIVERSAL audio bridge ───────────────────────────────────────────────────
+# gapk (network RTP → gsm_audio sink) + sound output. Called in faketrx/virtphy
+# mode AND in no-process mode (qemu), which needs it for gsm_audio to be heard.
 #
-# Sortie : si le pulse de l'HOTE est joignable en TCP (relai ouvert par start-docker.sh,
-# = WSLg→Windows en WSL, = pulse de session en Linux natif), on fait un pont
-# direct parec|paplay (1 seule horloge, pas de derive → pas de son "pete").
-# Sinon, fallback loopback local vers le sink par defaut du conteneur (carte).
+# Output: if the HOST pulse is reachable over TCP (relay opened by
+# start-docker.sh, = WSLg→Windows on WSL, = session pulse on native Linux), a
+# direct parec|paplay bridge is made (a single clock, no drift → no crackling).
+# Otherwise, fallback local loopback to the container's default sink (card).
 audio_bridge() {
     pactl info >/dev/null 2>&1 || { echo -e "  ${YELLOW}PulseAudio indisponible - bridge audio non lance${NC}"; return 0; }
 
@@ -264,38 +264,33 @@ audio_bridge() {
         echo -e "  ${YELLOW}gapk-start.sh absent - pas de bridge RTP${NC}"
     fi
 
-    # Sortie vers le pulse de l'hote si le relai TCP est ouvert (HOST_AUDIO_RELAY
-    # est positionne par start-docker.sh quand le relai a ete active : tcp:<gw>:4713).
+    # Output to the host pulse if the TCP relay is open (HOST_AUDIO_RELAY is
+    # set by start-docker.sh when the relay was enabled: tcp:<gw>:4713).
     local relay="${HOST_AUDIO_RELAY:-}"
     if [ -n "$relay" ] && pactl --server="$relay" info >/dev/null 2>&1; then
-        # ── UN SEUL PONT POUR TOUT LE BANC ──────────────────────────────
-        # [2026-08-31] Le pkill ci-dessous ne suffit pas des qu il y a
-        # PLUSIEURS conteneurs : il s execute DANS le conteneur, qui a son
-        # propre espace de PID, et ne voit donc jamais le pont du voisin.
-        # Chaque operateur demarrait le sien, et comme ils partagent tous le
-        # meme PulseAudio d hote, ils relisaient le MEME sink gsm_audio pour
-        # le rejouer sur la MEME sortie : le son etait entendu deux fois a
-        # deux operateurs, trois fois a trois. Constate le 31/08.
+        # ── A SINGLE BRIDGE FOR THE WHOLE BENCH ─────────────────────────
+        # The pkill below is not enough with SEVERAL containers: it runs
+        # INSIDE the container, which has its own PID namespace, and never
+        # sees the neighbour's bridge. Since all operators share the same
+        # host PulseAudio, each would read the SAME gsm_audio sink and replay
+        # it on the SAME output: the sound heard once per operator.
         #
-        # On interroge donc le SERVEUR partage, pas la table des processus
-        # locale : un client deja connecte sous ce nom signifie qu un pont
-        # tourne quelque part, peu importe dans quel conteneur.
+        # The shared SERVER is therefore queried, not the local process
+        # table: a client already connected under this name means a bridge
+        # runs somewhere, whatever the container.
         local _bridge_name="osmo-gsm-bridge"
         if pactl --server="$relay" list clients 2>/dev/null \
              | grep -q "application.name = \"${_bridge_name}\""; then
             echo -e "  ${GREEN}✓ pont audio deja actif sur l hote (${relay}) - on n en ajoute pas un second${NC}"
             return 0
         fi
-        # ── NI DOUBLON AVEC LE LOOPBACK DE L HOTE ───────────────────────────
-        # L hote charge deja, de son cote, un module-loopback
-        # gsm_audio.monitor -> carte son (lib/audio.sh, ensure_local_loopback).
-        # C est le MEME travail que ce pont : meme source, meme sortie. Les
-        # deux ensemble, on entend tout DEUX FOIS - et le symptome survit a
-        # l arret d un conteneur, ce qui fait chercher le doublon du mauvais
-        # cote. Constate le 31/08 : sink-input #0 "Loopback from Monitor of
-        # GSM_Audio" et #399 "paplay" sur la meme sortie.
-        # On garde le loopback : il est cote hote et bien plus court
-        # (20 ms contre 250 ms pour le pont TCP).
+        # ── NO DUPLICATE WITH THE HOST LOOPBACK EITHER ──────────────────────
+        # The host already loads, on its side, a module-loopback
+        # gsm_audio.monitor -> sound card (lib/audio.sh, ensure_local_loopback).
+        # It is the SAME job as this bridge: same source, same output. Both
+        # together, everything is heard TWICE - and the symptom survives a
+        # container stop. The loopback is kept: it is host-side and much
+        # shorter (20 ms against 250 ms for the TCP bridge).
         if pactl --server="$relay" list short modules 2>/dev/null \
              | grep -q 'source=gsm_audio.monitor'; then
             echo -e "  ${GREEN}✓ loopback gsm_audio deja en place sur l hote - pont TCP inutile${NC}"
@@ -312,7 +307,7 @@ audio_bridge() {
         echo $! > /run/host-audio.pid
         echo -e "  ${GREEN}✓ pont audio parec|paplay → hote (${relay})${NC}"
     else
-        # Fallback natif sans relai : loopback vers le sink par defaut (carte).
+        # Native fallback without relay: loopback to the default sink (card).
         if ! pactl list short modules 2>/dev/null | grep -q 'source=gsm_audio.monitor'; then
             pactl load-module module-loopback source=gsm_audio.monitor latency_msec=20 >/dev/null 2>&1 \
                 && echo -e "  ${GREEN}✓ loopback gsm_audio → sink par defaut (carte)${NC}" \
@@ -327,9 +322,9 @@ audio_bridge() {
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
-# RUN_NO_PROCESS=1 : on prepare tmux + configs + core Osmocom (osmo-start :
-# STP/HLR/MGW/MSC/BSC... → le HLR est up et peut etre alimente par start-docker.sh),
-# mais on NE lance PAS les process radio/mobile/asterisk/smsc dans le tmux.
+# RUN_NO_PROCESS=1: tmux + configs + Osmocom core are prepared (osmo-start:
+# STP/HLR/MGW/MSC/BSC... → the HLR is up and can be fed by start-docker.sh),
+# but the radio/mobile/asterisk/smsc processes are NOT launched in the tmux.
 [ "$RUN_NO_PROCESS" = "1" ] && echo -e "${YELLOW}=== RUN_NO_PROCESS=1 : core seul, PHY/mobile/asterisk/smsc NON lances ===${NC}"
 
 echo -e "${GREEN}=== [1/10] tmux ===${NC}"
@@ -351,16 +346,14 @@ echo -e "${GREEN}=== [2c] Handover ===${NC}"
 inject_handover
 echo ""
 
-# ── [2d] Audio PulseAudio - AVANT le coeur, volontairement ────────────────────
-# [2026-08-12] Ce bloc n'existait qu'en [6b], donc APRES osmo-start.sh. Or
-# osmo-start.sh fait `exit 1` si le HLR ne monte pas, et avec `set -euo pipefail`
-# (ligne 7) run.sh meurt la : pulse-gsm-setup.sh - le seul endroit qui cree le
-# null-sink gsm_mic - n'est alors JAMAIS execute. La capture gsm_in
-# (= gsm_mic.monitor) ne s'ouvre plus, gapk_io abandonne les DEUX sens, et tout
-# appel est muet, echo-test 600 compris. C'est exactement le "ca marche sur un
-# PC et pas sur l'autre" : ca depend de si le HLR est monte du premier coup.
-# L'audio n'a AUCUNE dependance sur le coeur - on le monte donc en premier.
-# L'appel en [6b] reste en place (idempotent) pour les relances partielles.
+# ── [2d] PulseAudio audio - BEFORE the core, deliberately ─────────────────────
+# osmo-start.sh does `exit 1` if the HLR does not come up, and with
+# `set -euo pipefail` (line 7) run.sh dies there: pulse-gsm-setup.sh - the only
+# place that creates the gsm_mic null-sink - must run before, otherwise the
+# gsm_in capture (= gsm_mic.monitor) never opens, gapk_io gives up BOTH
+# directions, and every call is mute, echo-test 600 included.
+# The audio has NO dependency on the core - so it is set up first.
+# The call in [6b] stays in place (idempotent) for partial restarts.
 echo -e "${GREEN}=== [2d] Audio PulseAudio (sinks) ===${NC}"
 setup_pulse_sinks 3
 echo ""
@@ -368,16 +361,16 @@ echo ""
 echo -e "${GREEN}=== [3/10] Core Osmocom ===${NC}"
 /etc/osmocom/osmo-start.sh
 
-# Mode no-process : le core tourne (HLR alimentable par start-docker.sh), on
-# s'arrete ici sans lancer PHY/mobile/asterisk/smsc dans le tmux. On
-# configure tout de meme PulseAudio (sink gsm_audio) car le pipeline lance
-# ensuite (ex. ${OQC_ROOT}/run.sh) en a besoin pour l'audio gapk.
+# No-process mode: the core runs (HLR can be fed by start-docker.sh), we stop
+# here without launching PHY/mobile/asterisk/smsc in the tmux. PulseAudio
+# (gsm_audio sink) is configured anyway, because the pipeline launched next
+# (e.g. ${OQC_ROOT}/run.sh) needs it for the gapk audio.
 if [ "$RUN_NO_PROCESS" = "1" ]; then
     echo ""
     echo -e "${GREEN}=== Audio PulseAudio (no-process) ===${NC}"
     setup_pulse_sinks
-    # Bridge audio AUSSI en no-process : sans ca, gapk n'est jamais lance et le
-    # pipeline qemu n'a aucun audio (bug "pas de son en qemu").
+    # Audio bridge ALSO in no-process: without it gapk is never launched and
+    # the qemu pipeline has no audio.
     echo -e "${GREEN}=== Bridge audio (no-process / qemu) ===${NC}"
     audio_bridge
     echo ""
@@ -387,7 +380,7 @@ if [ "$RUN_NO_PROCESS" = "1" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PHY : fake_trx (TRXD) OU virtphy (multicast)
+# PHY: fake_trx (TRXD) OR virtphy (multicast)
 # ══════════════════════════════════════════════════════════════════════════════
 
 if [ "$PHY_MODE" = "virtphy" ]; then
@@ -396,11 +389,11 @@ if [ "$PHY_MODE" = "virtphy" ]; then
     #
     #   mobile ↔ virtphy ↔ (multicast UDP) ↔ osmo-bts-virtual ↔ BSC
     #
-    # Pas de fake_trx, pas de trxcon.
+    # No fake_trx, no trxcon.
     # ─────────────────────────────────────────────────────────────────────────
 
     echo -e "${GREEN}=== [4/10] BTS Virtual ===${NC}"
-    # Arreter osmo-bts-trx s'il a ete demarre par systemd
+    # Stop osmo-bts-trx if it was started by systemd
     systemctl stop osmo-bts-trx 2>/dev/null || true
     systemctl disable osmo-bts-trx 2>/dev/null || true
 
@@ -424,10 +417,10 @@ if [ "$PHY_MODE" = "virtphy" ]; then
         fi
         [ $((ms % 8)) -eq 1 ] || [ "$ms" -eq "$N_MS" ] && echo -e "  ${CYAN}[ue${ms}]${NC} l2=${local_l2}"
     done
-    # Laisser virtphy creer les sockets avant de lancer mobile
+    # Let virtphy create the sockets before launching mobile
     sleep 2
 
-    # Pas de step 6 (trxcon) en mode virtphy
+    # No step 6 (trxcon) in virtphy mode
 
 else
     # ─────────────────────────────────────────────────────────────────────────
@@ -437,18 +430,18 @@ else
     # ─────────────────────────────────────────────────────────────────────────
 
     echo -e "${GREEN}=== [3b/10] osmo-bts-trx ===${NC}"
-    # BTS lance AVANT fake_trx : il poll le transceiver (POWERON) et se connecte
-    # des que fake_trx repond. On stoppe une eventuelle instance systemd pour
-    # eviter un double-BTS.
+    # BTS launched BEFORE fake_trx: it polls the transceiver (POWERON) and
+    # connects as soon as fake_trx answers. A possible systemd instance is
+    # stopped to avoid a double BTS.
     systemctl stop osmo-bts-trx 2>/dev/null || true
     run_in_tmux "bts" "osmo-bts-trx -c /etc/osmocom/osmo-bts-trx.cfg"
 
     echo -e "${GREEN}=== [4/10] FakeTRX ===${NC}"
-    # [2026-09-08] -s 20 : ordonnancement temps reel (SCHED_RR) pour le
-    # transceiver et son horloge TDMA. En ordonnancement normal, sur un hote
-    # charge (srsRAN, QEMU, le bureau), le tic de 4,615 ms arrivait en retard
-    # de 0,3 a 2 ms des dizaines de fois par minute ; la BTS compensait
-    # (« N FN slower/faster than TRX ») et la parole perdait des trames.
+    # -s 20: real-time scheduling (SCHED_RR) for the transceiver and its TDMA
+    # clock. Under normal scheduling, on a loaded host (srsRAN, QEMU, the
+    # desktop), the 4.615 ms tick arrives 0.3 to 2 ms late dozens of times a
+    # minute; the BTS compensates (« N FN slower/faster than TRX ») and the
+    # speech loses frames.
     FAKETRX_CMD="python3 ${FAKETRX_PY} -s ${FAKETRX_RR_PRIO:-20} -b 127.0.0.1 -R 127.0.0.1 -r 127.0.0.1 -P ${BTS_PORT_BASE} -p ${BB_PORT_BASE}"
     for t in $(seq 1 $((N_TRX-1))); do
         FAKETRX_CMD+=" --trx bts${t}@127.0.0.1:${BTS_PORT_BASE}/${t}"
@@ -480,7 +473,7 @@ else
 fi
 
 echo -e "${GREEN}=== [6b/10] Audio PulseAudio ===${NC}"
-setup_pulse_sinks   # deja fait en [2d] - idempotent, filet pour relance partielle
+setup_pulse_sinks   # already done in [2d] - idempotent, safety net for partial restart
 echo ""
 
 # ── [6c] Bridge audio : gapk (RTP → gsm_audio) + sortie vers l'hote ───────────
@@ -519,7 +512,7 @@ else
     run_in_tmux "smsc" "echo 'SMSC non disponible'"
 fi
 
-# ── Nettoyage : supprimer la fenetre main inutile ─────────────────────────────
+# ── Cleanup: remove the useless main window ───────────────────────────────────
 if [ "$TMUX_OK" = true ]; then
     sleep 1
     tmux -S "$TMUX_SOCKET" kill-window -t "${SESSION}:main" 2>/dev/null || true

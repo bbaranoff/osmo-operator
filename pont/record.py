@@ -40,12 +40,11 @@ class Direction:
         if self.off:
             return
         with self.lock:
-            # [2026-10-15] UN BURST EN RETARD VA A LA PROCHAINE TRAME ECRITE.
-            # Les bursts montants de la ROM (PONT_UL_RAW, pont/dsp/uplink.py)
-            # partent a SON fn, 12 a ~200 trames derriere l horloge du pont :
-            # ranges sous une trame deja ecrite, ils n etaient jamais relus
-            # (86 bursts enregistres sur 18 000 emis, spectre montant vide en
-            # data). Pour le spectre, l instant d arrivee compte, pas le fn.
+            # A LATE BURST GOES TO THE NEXT WRITTEN FRAME.
+            # The ROM's uplink bursts (PONT_UL_RAW, pont/dsp/uplink.py) leave
+            # at ITS fn, 12 to ~200 frames behind the bridge clock: filed under
+            # an already written frame they would never be read back. For the
+            # spectrum, the arrival time matters, not the fn.
             last = self.last_fn
             if last is not None and 0 <= (last - fn) % 2715648 < 1357824:
                 fn = (last + 1) % 2715648
@@ -106,13 +105,12 @@ class Direction:
             self.fifo_pending = b""
 
     def write_frame(self, fn, spf, step, blen, silence):
-        # LE FIFO FFT NE DEPEND PAS DU DISQUE. [2026-09-04] fh est None quand
-        # l'enregistrement fichier est coupe (moins de PONT_AIRREC_MINFREE_MB
-        # libres : le cas de toute cle live, dont l'overlay tient en RAM). Le
-        # FIFO n'etait alimente qu'ici, apres l'ecriture fichier : sans .cfile,
-        # plus de spectre I/Q dans le dashboard ni dans le Conky, et le bouton
-        # record du dashboard (qui lit CE fifo) restait muet. Le fichier reste
-        # coupe faute de place - c'est voulu - mais les trames passent au FIFO.
+        # THE FFT FIFO DOES NOT DEPEND ON THE DISK. fh is None when file
+        # recording is cut (less than PONT_AIRREC_MINFREE_MB free: the case of
+        # any live key, whose overlay lives in RAM). The FIFO feeds the I/Q
+        # spectrum of the dashboard and the Conky, and the dashboard record
+        # button reads THIS fifo: frames go to the FIFO even when the file stays
+        # cut for lack of space.
         if self.off or (self.fh is None and not self.fifo_path):
             return
         with self.lock:
@@ -136,7 +134,7 @@ class Direction:
         try:
             self.fh.write(octets)
         except OSError as e:
-            # Le fichier se coupe, pas le FIFO : voir l'en-tete de la methode.
+            # The file is cut, not the FIFO: see the method header.
             log.warning("enregistrement %s : ecriture echouee (%s), coupe", self.name, e)
             try:
                 self.fh.close()
@@ -189,8 +187,8 @@ class Recorder(threading.Thread):
         if osr % 4:
             log.warning("enregistrement refuse : OSR=%d doit etre multiple de 4", osr)
             return
-        # Un sens dont le fichier ne s'ouvre pas (place, droits) garde son FIFO :
-        # il ne s'eteint (off) que s'il n'a pas de FIFO a servir non plus.
+        # A direction whose file cannot be opened (space, permissions) keeps its
+        # FIFO: it is switched off only if it has no FIFO to serve either.
         if not self.dl.open() and not self.dl.fifo_path:
             self.dl.off = True
         if not self.ul.off and not self.ul.open() and not self.ul.fifo_path:

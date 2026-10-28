@@ -1,5 +1,6 @@
-# 13-adresses.sh - partie de start.sh (lignes 2944-3312 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 13-adresses.sh - part of start.sh (pre-start stop, PCU socket, APN NAT,
+# private addresses, dashboard, node sheet, oFono modem, SAP)
+# Sourced by start.sh in the main shell: same order, same variables.
 if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     say_begin "Arret de la pile avant demarrage"
     banc_dsp_arreter >/dev/null 2>&1 || true
@@ -9,17 +10,18 @@ if [ "$DRY" -eq 0 ] && [ "${CALYPSO_NO_AUTOSTOP:-0}" != 1 ]; then
     if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
         killall_python -TERM || true
     fi
-    # SAP : les serveurs softSIM (demo_server.rb) et leur socket. CALYPSO_STOP_KILL_SOFTSIM=0 le desactive.
+    # SAP: the softSIM servers (demo_server.rb) and their socket.
+    # CALYPSO_STOP_KILL_SOFTSIM=0 disables it.
     if [ "${CALYPSO_STOP_KILL_SOFTSIM:-1}" != 0 ]; then
         kill_softsim || true
     fi
     say_end " OK " "$C_OK" "Arret de la pile avant demarrage"
 fi
 
-# --- 7sexies. Socket PCU (BTS <-> osmo-pcu) ------------------------------------
-# Les sockets d'un run precedent restent sur le disque ; le PCU, lui, doit
-# trouver le socket du BTS principal (/tmp/pcu_bts). Le harnais supprime les
-# orphelins avant le lancement et affiche l'etat, pour qu'un GPRS muet se lise.
+# --- 7sexies. PCU socket (BTS <-> osmo-pcu) ------------------------------------
+# The sockets of a previous run stay on disk; the PCU must find the main
+# BTS socket (/tmp/pcu_bts). The harness removes the orphans before launch and
+# prints the state, so that a mute GPRS can be read.
 PCU_SOCK_SH="$HERE/network/pcu-socket.sh"
 if [ "$DRY" -eq 0 ] && [ -r "$PCU_SOCK_SH" ]; then
     say_begin "Socket PCU"
@@ -30,7 +32,7 @@ if [ "$DRY" -eq 0 ] && [ -r "$PCU_SOCK_SH" ]; then
     fi
 fi
 
-# --- 7septies. Sortie Internet de l'APN (NAT apn0 -> carte qui route) ----------
+# --- 7septies. APN Internet egress (NAT apn0 -> routing NIC) -------------------
 APN_NAT_SH="$HERE/network/apn-nat.sh"
 if [ "$DRY" -eq 0 ] && [ -r "$APN_NAT_SH" ]; then
     say_begin "Sortie Internet APN (NAT)"
@@ -41,22 +43,20 @@ if [ "$DRY" -eq 0 ] && [ -r "$APN_NAT_SH" ]; then
     fi
 fi
 
-# --- 8. lancement : exec run.sh -----------------------------------------------
-# ── LES ADRESSES QUE LES CONFIGS RECLAMENT DOIVENT EXISTER ──────────────────
-# Un demon qui se lie a une adresse absente ne demarre pas, et il le dit dans
-# SON journal, pas dans le notre :
-#     osmo-ggsn : « gtp bind-ip 192.168.2.10 » -> adresse introuvable localement
-#     osmo-sgsn : « listen 192.168.2.10 23000 » -> idem
-# Ces adresses viennent du generateur de gabarits (op_private_ip), pas du
-# reseau : rien ne les pose. Elles etaient figees dans 20-dhcp.network cote ISO,
-# donc absentes de toute machine montee autrement - et la panne se lisait comme
-# un defaut de coeur paquet.
+# --- 8. launch: exec run.sh ---------------------------------------------------
+# ── THE ADDRESSES THE CONFIGS REQUIRE MUST EXIST ────────────────────────────
+# A daemon that binds to an absent address does not start, and says so in ITS
+# log, not ours:
+#     osmo-ggsn: "gtp bind-ip 192.168.2.10" -> address not found locally
+#     osmo-sgsn: "listen 192.168.2.10 23000" -> same
+# These addresses come from the template generator (op_private_ip), not from
+# the network: nothing else sets them.
 #
-# osmo-ip-plan.sh les EXTRAIT des configs plutot que de les recalculer (le plan
-# peut venir d'un autre generateur que le notre), choisit la carte qui fournit
-# reellement Internet, et retombe sur la boucle locale quand aucune ne mene
-# nulle part. Il ne fait rien dans une image de ce depot (OSMO_IMAGE=1) : la,
-# c'est start-docker.sh / compose qui adresse. Un conteneur quelconque est traite en natif.
+# osmo-ip-plan.sh EXTRACTS them from the configs rather than recomputing them
+# (the plan may come from another generator), picks the NIC that really
+# provides Internet, and falls back to loopback when none leads anywhere. It
+# does nothing in an image of this repo (OSMO_IMAGE=1): there, start-docker.sh
+# / compose does the addressing. Any other container is treated as native.
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     IPPLAN="$HERE/network/osmo-ip-plan.sh"
     if [ -r "$IPPLAN" ]; then
@@ -69,22 +69,16 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     fi
 fi
 
-# ── LE TABLEAU DE BORD REDEMARRE AVEC LE BANC ────────────────────────────────
-# [2026-09-09] GESTE SYMETRIQUE DE CELUI DE `stop)` (voir plus haut, ~l.1455).
-# Depuis le 04/09 le chemin d arret coupe osmo-egprs-web.service, pour ne plus
-# laisser un :8080 qui repond devant une pile morte. Mais RIEN ne le rallumait :
-# l unite est PartOf=osmo-banc.service, or le lancement direct ne passe pas par
-# osmo-banc. Consequence mesuree le 09/09 : apres un --stop suivi d un
-# demarrage direct, le dashboard restait eteint pour de bon.
-# Ce n est pas qu un tableau de bord qui manque : c est LUI qui sert /psd, donc
-# tools/osmo-fft-snap.py interrogeait en boucle un port muet et la FFT du fond
-# d ecran ne se mettait plus a jour. Le symptome ne designait pas sa cause.
-# (fft-web/fft_web.py, lui, sert le 8081 : c est un autre serveur, il n est pas
-# concerne par ce bloc.)
-# --no-block, comme a l arret : on ne se bloque pas sur systemd. `restart` et
-# pas `start` : si une instance survit d un run precedent, on la reprend au lieu
-# de la laisser servir l etat d avant.
-# CALYPSO_NO_DASHBOARD=1 desactive ce demarrage.
+# ── THE DASHBOARD RESTARTS WITH THE BENCH ────────────────────────────────────
+# Symmetric to the `stop)` action: the unit is PartOf=osmo-banc.service, but a
+# direct launch does not go through osmo-banc, so it is restarted here. The
+# dashboard also serves /psd, which tools/osmo-fft-snap.py polls for the
+# wallpaper FFT. (fft-web/fft_web.py serves 8081: another server, not
+# concerned by this block.)
+# --no-block, as at stop: do not block on systemd. `restart` rather than
+# `start`: an instance surviving from a previous run is taken over instead
+# of serving the previous state.
+# CALYPSO_NO_DASHBOARD=1 disables this start.
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${CALYPSO_NO_DASHBOARD:-0}" != 1 ]; then
     say_begin "Tableau de bord (:8080)"
     if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
@@ -94,7 +88,7 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${CALYPSO_NO_DASHBOARD:-0}"
             say_end " -- " "$C_KO" "Tableau de bord (:8080)" "unite absente ou refusee"
         fi
     elif [ -r /opt/GSM/osmo-egprs-web/server.js ] && command -v node >/dev/null 2>&1; then
-        # Hors systemd (conteneur) : lancement direct, comme le fait osmo-launch.sh.
+        # Without systemd (container): direct launch, as osmo-launch.sh does.
         pkill -f "osmo-egprs-web/server.js" 2>/dev/null || true
         ( cd /opt/GSM/osmo-egprs-web && setsid node server.js \
             >>"${LOG_DIR:-/tmp}/web-dashboard.log" 2>&1 </dev/null & )
@@ -104,11 +98,11 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${CALYPSO_NO_DASHBOARD:-0}"
     fi
 fi
 
-# ── LA FICHE DU NOEUD : LE RESULTAT DU RUN ───────────────────────────────────
-# [2026-09-04] /etc/osmocom/mynode<N>.conf (network/node-conf.sh) : ce qu'un
-# autre noeud doit savoir pour joindre celui-ci (--wan mynode<N>.conf). Ecrite
-# ici, une fois l'identite SS7, l'adresse et l'indicatif definitivement poses.
-# start-multi.sh la reecrit quand les conteneurs sont montes (--gen-conf).
+# ── THE NODE SHEET: THE RESULT OF THE RUN ────────────────────────────────────
+# /etc/osmocom/mynode<N>.conf (network/node-conf.sh): what another node must
+# know to reach this one (--wan mynode<N>.conf). Written here, once the SS7
+# identity, the address and the prefix are definitively set.
+# start-multi.sh rewrites it once the containers are up (--gen-conf).
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     . "$HERE/network/wan-nodes.sh" 2>/dev/null
     . "$HERE/network/node-conf.sh" 2>/dev/null
@@ -122,39 +116,39 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ]; then
     fi
 fi
 
-# ── LE RACCORD MOBILE : oFONO = LE MODEM DU BANC ────────────────────────────
-# [2026-09-07] Le telephone du banc - la VM postmarketOS/Phosh - est le MEME
-# abonne que le mobile osmocom-bb : 100101. Son ModemManager ne parle qu a un
-# modem AT ; ce banc n a pas de dongle, le modem est donc ecrit ici. La VM se
-# branche directement sur osmo-phonesim-banc.py (mode --connect, cf.
-# tools/osmo-pmos.sh) ; oFono, lui, reste utile a l hote - il donne osmo-call
-# et osmo-sms-send, et un second modem AT pour la mise au point.
+# ── THE MOBILE LINK: oFONO = THE BENCH MODEM ────────────────────────────────
+# The bench phone - the postmarketOS/Phosh VM - is the SAME subscriber as the
+# osmocom-bb mobile: 100101. Its ModemManager only talks to an AT modem; this
+# bench has no dongle, so the modem is written here. The VM connects directly
+# to osmo-phonesim-banc.py (--connect mode, see tools/osmo-pmos.sh); oFono
+# remains useful to the host - it provides osmo-call and osmo-sms-send, and a
+# second AT modem for debugging.
 #
-#   tools/osmo-phonesim-banc.py   le modem AT du banc, cote oFono (TCP 12345,
-#                                 plugin phonesim). Il lit le reseau sur le VTY
-#                                 d osmo-bsc, envoie les SMS par le VTY
-#                                 d osmo-msc, passe les appels par Asterisk, et
-#                                 recoit les SMS en ESME SMPP (port 2775).
-#   tools/osmo-ril-atmodem.py     le modem AT que rild consommera, adosse a
-#                                 oFono. Il publie son pty dans
+#   tools/osmo-phonesim-banc.py   the bench AT modem, oFono side (TCP 12345,
+#                                 phonesim plugin). It reads the network on
+#                                 the osmo-bsc VTY, sends SMS through the
+#                                 osmo-msc VTY, places calls through Asterisk,
+#                                 and receives SMS as an SMPP ESME (port 2775).
+#   tools/osmo-ril-atmodem.py     the AT modem that rild consumes, backed by
+#                                 oFono. It publishes its pty in
 #                                 /run/osmo-ril/at-pty.
 #
-# Rien de tout ca n est indispensable au banc : si oFono manque, on le dit et on
-# continue. Le banc doit demarrer meme sans le telephone Android.
+# None of this is essential to the bench: if oFono is missing, say so and
+# continue. The bench must start even without the Android phone.
 if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" = "1" ]; then
     say_begin "Raccord mobile (oFono)"
     _rm_detail=""
     if ! command -v ofonod >/dev/null 2>&1; then
         say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "ofono absent - ignore"
     else
-        # 1. oFono doit savoir ou trouver le modem du banc.
+        # 1. oFono must know where to find the bench modem.
         if ! grep -q '^\[osmo\]' /etc/ofono/phonesim.conf 2>/dev/null; then
             printf '\n[osmo]\nAddress=127.0.0.1\nPort=12345\n' >> /etc/ofono/phonesim.conf
             _rm_detail="phonesim.conf pose"
         fi
-        # 2. le compte AMI : c est par lui que le modem fait naitre les appels
-        #    (la CLI d Asterisk n a pas « channel originate » ici, le module
-        #    res_clioriginate n est pas charge - modules.conf est en autoload=no).
+        # 2. the AMI account: the modem originates calls through it (the
+        #    Asterisk CLI has no "channel originate" here, the module
+        #    res_clioriginate is not loaded - modules.conf is autoload=no).
         if [ -d /etc/asterisk/manager.d ] && [ ! -f /etc/asterisk/manager.d/osmo.conf ]; then
             install -m640 "$HERE/configs/manager-osmo.conf" \
                 /etc/asterisk/manager.d/osmo.conf 2>/dev/null && \
@@ -162,34 +156,29 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
             asterisk -rx "manager reload" >/dev/null 2>&1 || true
             _rm_detail="${_rm_detail:+$_rm_detail, }compte AMI pose"
         fi
-        # 3. le modem du banc, PUIS oFono (l ordre compte : ofonod cherche le
-        #    modem au demarrage et n y revient pas de lui-meme).
+        # 3. the bench modem, THEN oFono (the order matters: ofonod looks for
+        #    the modem at startup and does not come back to it on its own).
         pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1 || \
-        # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
-        # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
-        # sa table et annoncait leur mort par un
-        #     ./start-native.sh: line NNNN: <pid> Killed setsid ...
-        # asynchrone, qui tombait par-dessus le prompt apres un --stop
-        # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
-        # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que
-        # LUI comme job, il rend la main tout de suite avec 0, et le petit-fils
-        # est adopte par init -- plus personne ne le surveille ni ne le signale.
-        # `</dev/null` en prime : aucune de ces aides ne lit le terminal, et
-        # sans cela elles restent rattachees a son entree.
-        # [2026-09-22] LA VTY DU MOBILE N'EST PAS TOUJOURS 4247.
-        # osmo-phonesim-banc.py retombe sur OSMO_MOB_VTY_PORT=4247, la valeur de
-        # /root/.osmocom/bb/mobile.cfg. En --dsp le mobile qui tourne est celui
-        # du banc (mobile_pont.cfg, VTY 4347) : le modem parlait a un port que
-        # personne n'ecoute, donc pas de reseau, pas d'appel, pas de SMS par
-        # oFono -- sans la moindre erreur, il se contentait de ne jamais voir le
-        # mobile. On lui passe le port reellement lie, lu dans le fichier.
+        # LAUNCHED OUTSIDE THE JOB TABLE.
+        # `setsid` detaches the SESSION, not the job: bash would keep these
+        # helpers in its table and report their death ("line NNNN: <pid>
+        # Killed setsid ...") over the prompt after a --stop. `disown` is not
+        # reliable in a non-interactive shell. The subshell is: bash sees only
+        # IT as a job, it returns immediately with 0, and the grandchild is
+        # adopted by init - nobody watches or signals it any more.
+        # `</dev/null` as well: none of these helpers reads the terminal.
+        # THE MOBILE VTY IS NOT ALWAYS 4247.
+        # osmo-phonesim-banc.py falls back to OSMO_MOB_VTY_PORT=4247, the value
+        # of /root/.osmocom/bb/mobile.cfg. In --dsp the running mobile is the
+        # bench's (mobile_pont.cfg, VTY 4347): pass it the port actually
+        # bound, read from the file.
             ( setsid env OSMO_MOB_VTY_PORT="${_ms1_vty:-4247}" \
                   "$HERE/tools/osmo-phonesim-banc.py" \
                   </dev/null >>/tmp/osmo-phonesim.log 2>&1 & )
         sleep 1
         systemctl restart ofono >/dev/null 2>&1 || true
         sleep 3
-        # 4. allumer le modem : oFono le laisse eteint tant qu on ne demande rien.
+        # 4. power the modem on: oFono leaves it off until asked.
         /usr/bin/python3 - <<'PYON' >/dev/null 2>&1 || true
 from gi.repository import Gio, GLib
 import time
@@ -203,32 +192,21 @@ for prop in ("Powered", "Online"):
         pass
     time.sleep(2)
 PYON
-        # 5. le modem AT virtuel (le pty que consomme un RIL, ou un modem de
-        #    mise au point pour tools/at-cmd.py).
-        #    /usr/bin/python3 EN DUR, et non le shebang « env python3 ».
-        #    [2026-09-07] Releve sur le banc : ce programme ne demarrait plus
-        #    du tout depuis des heures -
-        #        File ".../osmo-ril-atmodem.py", line 43, in <module>
-        #          from gi.repository import Gio, GLib
-        #        ModuleNotFoundError: No module named 'gi'
-        #    - et le seul endroit ou ca se voyait etait /tmp/osmo-ril.log, que
-        #    personne ne lit. La cause n est pas le paquet : PyGObject est bien
-        #    la, cote SYSTEME. C est le PATH du banc, qui place le venv
-        #    (/root/.env/bin) en tete : « env python3 » y trouve un interprete
-        #    qui n a pas les liaisons GObject, et jamais celui du systeme. Meme
-        #    raison que le bloc PYON ci-dessus, qui appelle deja /usr/bin/python3.
+        # 5. the virtual AT modem (the pty a RIL consumes, or a debugging
+        #    modem for tools/at-cmd.py).
+        #    /usr/bin/python3 HARD-CODED, not the "env python3" shebang: the
+        #    bench PATH puts the venv (/root/.env/bin) first, whose interpreter
+        #    has no GObject bindings; PyGObject is installed SYSTEM-side. Same
+        #    reason as the PYON block above.
         pgrep -f "$HERE/tools/osmo-ril-atmodem.py" >/dev/null 2>&1 || \
-        # [2026-09-22] LANCEMENT HORS TABLE DES JOBS.
-        # `setsid` detache la SESSION, pas le job : bash gardait ces aides dans
-        # sa table et annoncait leur mort par un
-        #     ./start-native.sh: line NNNN: <pid> Killed setsid ...
-        # asynchrone, qui tombait par-dessus le prompt apres un --stop
-        # (killall_python les tue). `disown` n'y suffit pas de facon fiable en
-        # shell non interactif. Le sous-shell, lui, est sur : bash ne voit que
-        # LUI comme job, il rend la main tout de suite avec 0, et le petit-fils
-        # est adopte par init -- plus personne ne le surveille ni ne le signale.
-        # `</dev/null` en prime : aucune de ces aides ne lit le terminal, et
-        # sans cela elles restent rattachees a son entree.
+        # LAUNCHED OUTSIDE THE JOB TABLE.
+        # `setsid` detaches the SESSION, not the job: bash would keep these
+        # helpers in its table and report their death ("line NNNN: <pid>
+        # Killed setsid ...") over the prompt after a --stop. `disown` is not
+        # reliable in a non-interactive shell. The subshell is: bash sees only
+        # IT as a job, it returns immediately with 0, and the grandchild is
+        # adopted by init - nobody watches or signals it any more.
+        # `</dev/null` as well: none of these helpers reads the terminal.
             ( setsid /usr/bin/python3 "$HERE/tools/osmo-ril-atmodem.py" \
                   </dev/null >>/tmp/osmo-ril.log 2>&1 & )
         sleep 1
@@ -241,35 +219,37 @@ PYON
     fi
 fi
 
-# ── LE BANC DSP : REGLAGES MESURES, PUIS PASSAGE DE MAIN ───────────────────
-# Les valeurs viennent du banc, pas d'un choix de style (c54x_exe/run_real.sh
-# les porte depuis le 2026-09-21, run.sh les documente une a une) :
-#   INSNS=200000             plafond d'instructions par trame (voir plus bas)
-#   LOCKSTEP=1               QEMU n'avance la trame que quand le DSP a fini la
-#                            precedente ; sans lui QEMU saute 3 trames sur 4
-#   IQ=none                  aucune cellule synthetique : les bursts viennent
-#                            de la vraie BTS, par pont.py
-#   CALYPSO_BSP_STREAM=1     un burst TS0 par trame, dans l'ordre des FN
-#   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie : pas de
-#                            SB, pas de BCCH, pas de SI
-# Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
+# ── THE DSP BENCH: MEASURED SETTINGS, THEN HAND-OFF ────────────────────────
+# The values come from the bench (c54x_exe/run_real.sh; run.sh documents them
+# one by one):
+#   INSNS                    instruction budget per frame (see 14-demarrage.sh)
+#   LOCKSTEP=1               QEMU only advances the frame once the DSP has
+#                            finished the previous one; otherwise QEMU skips
+#                            3 frames out of 4
+#   IQ=none                  no synthetic cell: the bursts come from the real
+#                            BTS, through pont.py
+#   CALYPSO_BSP_STREAM=1     one TS0 burst per frame, in FN order
+#   CALYPSO_RHEA_DMA_XFER=1  without it the API page is never filled: no SB,
+#                            no BCCH, no SI
+# Everything stays overridable: only what the operator did not set is set.
 
-# ── SAP : LA SIM SERVIE AU MOBILE SUR LE SOCKET SAP (--sap) ─────────────────
-# Serveur demo_server.rb du depot softSIM (/opt/GSM/softsim, shim Ruby 3.2+ :
-# File.exists?, Fixnum), lance AVANT la pile : le mobile (sim sap) s y connecte
-# au demarrage et y reste (patch 0002 : le serveur sert le client suivant apres
-# une deconnexion, donc un redemarrage de la baseband ne demande rien).
-#   type pcsc : la carte du lecteur PC/SC (HID Omnikey 6121, sysmoISIM-SJA5 ;
-#               gem smartcard). La carte doit porter l IMSI/Ki du MS#1 (ou son
-#               abonne doit etre dans le HLR) : tools/osmo-sim.sh verifier.
-#   type sim  : la SIM logicielle sim-op1.xml, regeneree a chaque lancement
-#               (IMSI du MS#1 ; COMP128v1 avec SOFTSIM_KI = Ki du MS#1, patch 0001).
-# En DSP, le MS#1 qui tourne est celui de c54x_exe (mobile_pont.cfg, sim test) :
-# on en derive $BB_DIR/mobile_pont_sap.cfg (sim sap, sap-socket) et le banc le
-# recoit par MOBILE_CFG (SAP_DSP_MOBILE_CFG, a lui seul). Variables :
+# ── SAP: THE SIM SERVED TO THE MOBILE OVER THE SAP SOCKET (--sap) ───────────
+# demo_server.rb server of the softSIM repo (/opt/GSM/softsim, Ruby 3.2+ shim:
+# File.exists?, Fixnum), launched BEFORE the stack: the mobile (sim sap)
+# connects to it at startup and stays (patch 0002: the server serves the next
+# client after a disconnection, so a baseband restart needs nothing).
+#   type pcsc : the card in the PC/SC reader (HID Omnikey 6121,
+#               sysmoISIM-SJA5; gem smartcard). The card must carry the
+#               IMSI/Ki of MS#1 (or its subscriber must be in the HLR):
+#               tools/osmo-sim.sh verifier.
+#   type sim  : the software SIM sim-op1.xml, regenerated at every launch
+#               (IMSI of MS#1; COMP128v1 with SOFTSIM_KI = Ki of MS#1, patch 0001).
+# In DSP, the running MS#1 is c54x_exe's (mobile_pont.cfg, sim test):
+# $BB_DIR/mobile_pont_sap.cfg (sim sap, sap-socket) is derived from it and
+# the bench receives it through MOBILE_CFG (SAP_DSP_MOBILE_CFG). Variables:
 # SOFTSIM_DIR, SAP_SOCK, SAP_TYPE, SAP_FILE, SAP_LOG, SAP_VERBOSITY, SOFTSIM_KI.
-# le python qui a pyscard : celui du venv pySim (le PATH de root commence par
-# /root/.env, le venv du pont, sans pyscard), sinon celui du systeme
+# The python that has pyscard: the pySim venv's (root's PATH starts with
+# /root/.env, the bridge venv, without pyscard), otherwise the system's.
 sap_python() {
     local p="${PYSIM_VENV:-/opt/GSM/pysim-venv}/bin/python3"
     [ -x "$p" ] || p=/usr/bin/python3
@@ -321,14 +301,14 @@ start_sap() {
             detail="carte du lecteur $(sap_lecteur)" ;;
         sim)
             file="${SAP_FILE:-$sdir/src/sim-op1.xml}"
-            # le Ki du MS#1, celui que 21-abonnes-hlr met dans le HLR (COMP128v1)
+            # the Ki of MS#1, the one 21-abonnes-hlr puts in the HLR (COMP128v1)
             export SOFTSIM_KI="${SOFTSIM_KI:-$(ms_ki 1 | tr -d ' ')}"
             detail="SIM logicielle $file (IMSI $(ms_imsi 1))" ;;
         *)
             say_end " KO " "$C_KO" "SIM via SAP" "SAP_TYPE=$type inconnu (pcsc, sim, auto)"
             return 1 ;;
     esac
-    # En DSP : la copie de mobile_pont.cfg en « sim sap », pour le banc seul.
+    # In DSP: the "sim sap" copy of mobile_pont.cfg, for the bench only.
     if [ "${DSP_BANC:-0}" = 1 ]; then
         local _src="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}" _dst="$BB_DIR/mobile_pont_sap.cfg"
         if [ -r "$_src" ]; then
@@ -349,8 +329,9 @@ start_sap() {
         say_end " -- " "$C_DIM" "SIM via SAP" "dry-run : type $type, ruby -r$shim demo_server.rb --unix $sock${file:+ --file $file} ($detail)"
         return 0
     fi
-    # sim-op1.xml est regenere a chaque lancement : le serveur le reecrit a chaque
-    # deconnexion du client, et un fichier ancien garderait l ICCID / le PLMN d avant.
+    # sim-op1.xml is regenerated at every launch: the server rewrites it at
+    # every client disconnection, and an old file would keep the previous
+    # ICCID / PLMN.
     if [ "$type" = sim ] && [ -z "${SAP_FILE:-}" ] && [ -f "$sdir/src/sim.xml" ] && [ -f "$HERE/tools/softsim/make_sim_op1.py" ]; then
         python3 "$HERE/tools/softsim/make_sim_op1.py" "$sdir/src/sim.xml" "$sdir/src/sim-op1.xml" \
             --imsi "$(ms_imsi 1)" >/dev/null 2>&1 || true

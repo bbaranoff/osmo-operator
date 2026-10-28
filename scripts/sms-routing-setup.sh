@@ -1,19 +1,19 @@
 #!/bin/bash
-# sms-routing-setup.sh - Gestion complete du routage SMS inter-operateur
+# sms-routing-setup.sh - Complete management of inter-operator SMS routing
 #
-# Fonctions exportables appelees depuis start-docker.sh :
+# Exportable functions called from start-docker.sh:
 #   sms_routing_generate  <op_id> <n_ops> <destdir> [op1_nms op2_nms ...]
 #   sms_routing_validate  <conf_file>
 #   sms_routing_summary   <n_ops>         [op1_nms op2_nms ...]
 #
-# Formules COMMUNES (identiques a run.sh, hlr-feed-subscribers.sh) :
-#   MSISDN  = <noeud>00<op_id><ms_idx>       (100101, 100102, 100201...)
+# COMMON formulas (identical to run.sh, hlr-feed-subscribers.sh):
+#   MSISDN  = <node>00<op_id><ms_idx>       (100101, 100102, 100201...)
 #   IMSI    = MCC(3) + MNC(2) + printf('%04d%06d', op_id, ms_idx)
 #   KI      = 00 11 22 33 44 55 66 77 88 99 aa bb cc dd <ms_hex> <op_hex>
 #
-# Architecture de routage :
+# Routing architecture:
 #   ┌─────────────────────────────────────────────────────────────────────┐
-#   │  MS (op1, ms1)  MSISDN=10001  envoie a  MSISDN=20002 (op2, ms2)   │
+#   │  MS (op1, ms1)  MSISDN=10001  sends to  MSISDN=20002 (op2, ms2)   │
 #   │    → proto-smsc-daemon (op1) → MO log                              │
 #   │    → sms-interop-relay.py (op1) : lookup prefix 20002 → op2       │
 #   │    → TCP 172.20.0.12:7890                                           │
@@ -21,7 +21,7 @@
 #   │    → proto-smsc-sendmt (op2) → HLR (op2) → MS (op2, ms2)          │
 #   └─────────────────────────────────────────────────────────────────────┘
 #
-# Usage autonome (test/debug) :
+# Standalone usage (test/debug):
 #   bash sms-routing-setup.sh generate 1 3 /tmp/sms-cfg 2 2 3
 #   bash sms-routing-setup.sh validate /tmp/sms-cfg/sms-routing-op1.conf
 #   bash sms-routing-setup.sh summary  3 2 2 3
@@ -32,13 +32,13 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Helpers internes
+# Internal helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _sms_op_backbone_ip() { echo "172.20.0.$((10 + $1))"; }
-# MSISDN = <noeud>00<operateur><rang sur 2 chiffres> : le premier chiffre est
-# l'adresse du noeud, c'est lui qui route. Le noeud vient du plan radio ecrit
-# par generate_configs.sh, de l'environnement, ou vaut 1.
+# MSISDN = <node>00<operator><2-digit rank>: the first digit is the node
+# address, it is what routes. The node comes from the radio plan written by
+# generate_configs.sh, from the environment, or is 1.
 _sms_node_id() {
     local n="${OSMO_WAN_NODE:-${WAN_NODE_ID:-}}"
     [ -n "$n" ] || n="$(sed -n 's/^PLAN_NODE=//p' /etc/osmocom/radio-plan.env 2>/dev/null | tail -1)"
@@ -59,14 +59,14 @@ _log_err()  { echo -e "  ${RED}✗${NC}  $*" >&2; }
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_generate
 #
-# Genere configs/sms-routing-op<N>.conf pour chaque operateur.
-# Le fichier de chaque operateur contient TOUTES les routes (locales + distantes)
-# et est monte dans /etc/osmocom/sms-routing.conf du container.
+# Generates configs/sms-routing-op<N>.conf for each operator.
+# Each operator's file contains ALL the routes (local + remote) and is mounted
+# as /etc/osmocom/sms-routing.conf in the container.
 #
-# Usage :
+# Usage:
 #   sms_routing_generate <op_id> <n_ops> <destdir> [ms_counts...]
-#   ms_counts : nombre de MS par operateur (1 valeur par operateur)
-#               ex: "2 3 1" → op1=2MS, op2=3MS, op3=1MS
+#   ms_counts: number of MS per operator (1 value per operator)
+#              ex: "2 3 1" → op1=2MS, op2=3MS, op3=1MS
 #
 # Sortie :
 #   <destdir>/sms-routing-op<op_id>.conf
@@ -82,18 +82,16 @@ sms_routing_generate() {
     mkdir -p "$destdir"
     local outfile="${destdir}/sms-routing-op${op_id}.conf"
 
-    # ── LES NUMEROS D OPERATEUR NE COMMENCENT PAS FORCEMENT A 1 ─────────────
-    # [2026-08-31] Tout ce fichier enumerait 1..n_ops. Sur le banc
-    # multi-operateur, les CONTENEURS portent les rangs 2 et 3 - le 1 est au
-    # natif (OP_ID_BASE=2). La table sortait donc "Op1 172.20.0.11 / Op2
-    # 172.20.0.12" pour ce qui est en realite op2 et op3 : de mauvais MSISDN
-    # (100101 au lieu de 100201), de mauvaises IMSI, et un relais annonce a une
-    # adresse qui n est celle de personne (172.20.0.11 est le natif, qui n est
-    # pas un conteneur).
+    # ── OPERATOR NUMBERS DO NOT NECESSARILY START AT 1 ──────────────────────
+    # On the multi-operator bench the CONTAINERS carry ranks 2 and 3 - rank 1
+    # is the native one (OP_ID_BASE=2). Enumerating 1..n_ops would give wrong
+    # MSISDNs (100101 instead of 100201), wrong IMSIs, and a relay announced
+    # at an address that is nobody's (172.20.0.11 is the native, not a
+    # container).
     #
-    # ⚠️ ms_counts reste une liste POSITIONNELLE 0-based : son premier element
-    # decrit le premier operateur enumere, quel que soit son rang. On decale
-    # donc la NUMEROTATION, pas l indexation - d ou le (i - _b).
+    # ⚠️ ms_counts stays a 0-based POSITIONAL list: its first element
+    # describes the first enumerated operator, whatever its rank. The
+    # NUMBERING is shifted, not the indexing - hence the (i - _b).
     local _b="${OP_ID_BASE:-1}"
     local _last=$(( _b + n_ops - 1 ))
     local -a nms
@@ -106,15 +104,15 @@ sms_routing_generate() {
     cat > "$outfile" << HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms-routing-op${op_id}.conf
-# Genere par sms-routing-setup.sh - $(date '+%Y-%m-%d %H:%M:%S')
+# Generated by sms-routing-setup.sh - $(date '+%Y-%m-%d %H:%M:%S')
 #
-# Operateur local  : ${op_id}
-# Nombre d'operat. : ${n_ops}
-# MS par operateur : $(for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
+# Local operator   : ${op_id}
+# Operator count   : ${n_ops}
+# MS per operator  : $(for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do printf 'Op%s=%s ' "$i" "${nms[$i]}"; done)
 #
-# Routage MSISDN :
-#   MSISDN = <noeud> × 100000 + op_id × 100 + ms_idx
-#   Regle longest-prefix match (prefixe le plus long l'emporte)
+# MSISDN routing:
+#   MSISDN = <node> × 100000 + op_id × 100 + ms_idx
+#   Longest-prefix match rule (the longest prefix wins)
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -127,7 +125,7 @@ sendmt_socket = /tmp/sendmt_socket
 mo_log = /var/log/osmocom/mo-sms-op${op_id}.log
 
 [operators]
-# operator_id = container_ip  (reseau backbone 172.20.0.0/24)
+# operator_id = container_ip  (backbone network 172.20.0.0/24)
 HEADER
 
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
@@ -137,16 +135,16 @@ HEADER
     cat >> "$outfile" << ROUTES_HEADER
 
 [routes]
-# Format : prefix = operator_id
-# Longest-prefix match : le prefixe le plus long l'emporte.
-# Strategie :
-#   1. MSISDN exact de chaque MS          → routage precis (priorite max)
-#   2. Prefixe court par operateur        → fallback pour MSISDN inconnus
-#   3. Prefixes E.164 (+336XX...)           → routage international
+# Format: prefix = operator_id
+# Longest-prefix match: the longest prefix wins.
+# Strategy:
+#   1. Exact MSISDN of each MS            → precise routing (max priority)
+#   2. Short prefix per operator          → fallback for unknown MSISDNs
+#   3. E.164 prefixes (+336XX...)           → international routing
 #
 ROUTES_HEADER
 
-    # ── Routes exactes par MS (priorite maximale) ─────────────────────────────
+    # ── Exact routes per MS (maximum priority) ────────────────────────────────
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
         local mnc; mnc=$(printf '%02d' "$i")
         printf '\n# ── Operateur %s (SC=%s) ──────────────────────────────────────\n' \
@@ -156,16 +154,16 @@ ROUTES_HEADER
         for ms in $(seq 1 "${nms[$i]}"); do
             local msisdn; msisdn=$(_sms_op_msisdn "$i" "$ms")
             local imsi; imsi=$(_sms_op_ms_imsi "$mcc" "$mnc" "$i" "$ms")
-            # Commentaire IMSI pour tracabilite
+            # IMSI comment for traceability
             printf '%-8s = %s   # IMSI=%s\n' "$msisdn" "$i" "$imsi" >> "$outfile"
         done
 
-        # Prefixe court de l'operateur (fallback MSISDN hors liste)
+        # Short operator prefix (fallback for MSISDN outside the list)
         local op_prefix="${i}0000"
         printf '# Fallback operateur %s (MSISDN inconnu)\n' "$i" >> "$outfile"
         printf '%-8s = %s\n' "$op_prefix" "$i" >> "$outfile"
 
-        # Prefixe E.164 fictif : +336<op>X... (format francais simule)
+        # Fictional E.164 prefix: +336<op>X... (simulated French format)
         local e164_prefix; e164_prefix=$(printf '336%02d' "$i")
         printf '%-8s = %s   # E.164 +33 6%02d...\n' "$e164_prefix" "$i" "$i" >> "$outfile"
     done
@@ -173,11 +171,11 @@ ROUTES_HEADER
     cat >> "$outfile" << ROUTES_FOOTER
 
 [relay]
-# Port TCP sur lequel ce relay ecoute les MT entrants d'autres operateurs.
+# TCP port on which this relay listens for incoming MT from other operators.
 port = 7890
-# Timeout connexion vers un relay distant (secondes)
+# Connection timeout toward a remote relay (seconds)
 connect_timeout = 10
-# Tentatives de reemission si le relay distant est indisponible
+# Resend attempts if the remote relay is unavailable
 retry_count = 3
 retry_delay = 5
 ROUTES_FOOTER
@@ -189,10 +187,10 @@ ROUTES_FOOTER
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_generate_all
 #
-# Genere les configs pour TOUS les operateurs en une seule passe.
-# Appele depuis start-docker.sh en mode bridge.
+# Generates the configs for ALL operators in a single pass.
+# Called from start-docker.sh in bridge mode.
 #
-# Usage :
+# Usage:
 #   sms_routing_generate_all <n_ops> <destdir> [ms_counts...]
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -215,16 +213,16 @@ sms_routing_generate_all() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_validate
 #
-# Verifie la coherence d'un fichier sms-routing.conf :
-#   • Section [local] presente
-#   • Section [operators] non vide
-#   • Section [routes] non vide
-#   • Aucune collision de prefixe exact entre deux operateurs differents
-#   • MSISDN locaux routes vers l'operateur local
+# Checks the consistency of an sms-routing.conf file:
+#   • [local] section present
+#   • [operators] section not empty
+#   • [routes] section not empty
+#   • No exact prefix collision between two different operators
+#   • Local MSISDNs routed to the local operator
 #
-# Retourne 0 si OK, 1 si erreurs.
+# Returns 0 if OK, 1 on errors.
 #
-# Usage :
+# Usage:
 #   sms_routing_validate <conf_file>
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -247,7 +245,7 @@ sms_routing_validate() {
         fi
     done
 
-    # ── operator_id dans [local] ──────────────────────────────────────────────
+    # ── operator_id in [local] ────────────────────────────────────────────────
     local local_op
     local_op=$(awk '/^\[local\]/,/^\[/' "$conf" \
                | grep -E '^\s*operator_id\s*=' \
@@ -259,7 +257,7 @@ sms_routing_validate() {
         _log_ok "[local] operator_id = ${local_op}"
     fi
 
-    # ── Au moins 1 operateur declare ─────────────────────────────────────────
+    # ── At least 1 operator declared ─────────────────────────────────────────
     local op_count
     op_count=$(awk '/^\[operators\]/,/^\[/' "$conf" \
                | grep -cE '^\s*[0-9]+\s*=' || echo 0)
@@ -270,7 +268,7 @@ sms_routing_validate() {
         _log_ok "[operators] : ${op_count} operateur(s)"
     fi
 
-    # ── Routes non vides ──────────────────────────────────────────────────────
+    # ── Routes not empty ──────────────────────────────────────────────────────
     local route_count
     route_count=$(awk '/^\[routes\]/,/^\[/' "$conf" \
                   | grep -cE '^\s*[0-9]+\s*=' || echo 0)
@@ -281,18 +279,18 @@ sms_routing_validate() {
         _log_ok "[routes] : ${route_count} entree(s)"
     fi
 
-    # ── Collision de prefixes : meme MSISDN → deux operateurs differents ─────
+    # ── Prefix collision: same MSISDN → two different operators ──────────────
     local collision_count=0
     while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue   # commentaire
-        [[ "$line" =~ ^[[:space:]]*$ ]] && continue   # vide
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue   # comment
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue   # empty
         [[ "$line" =~ ^\[ ]]           && continue   # section
 
         local prefix op
         prefix=$(echo "$line" | cut -d= -f1 | tr -d ' ')
         op=$(echo "$line" | cut -d= -f2 | cut -d'#' -f1 | tr -d ' ')
 
-        # Chercher si ce meme prefixe apparait avec un operateur different
+        # Look for the same prefix with a different operator
         local other_op
         other_op=$(awk -v p="$prefix" -v o="$op" '
             /^\[routes\]/,/^\[/ {
@@ -325,7 +323,7 @@ sms_routing_validate() {
             prefix=$(echo "$line" | cut -d= -f1 | tr -d ' ')
             op=$(echo "$line" | cut -d= -f2 | cut -d'#' -f1 | tr -d ' ')
 
-            # Un MSISDN commencant par op_id devrait router vers op_id
+            # An MSISDN starting with op_id should route to op_id
             if [[ "$prefix" =~ ^${local_op}[0-9]* ]] && [ "$op" != "$local_op" ]; then
                 _log_warn "MSISDN local ${prefix} route vers op${op} ≠ op${local_op}"
                 wrong_local=$(( wrong_local + 1 ))
@@ -349,10 +347,10 @@ sms_routing_validate() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_summary
 #
-# Affiche la table de routage complete en format lisible (debug / audit).
-# Montre tous les MSISDN enregistres et leur operateur cible.
+# Prints the full routing table in readable form (debug / audit).
+# Shows every registered MSISDN and its target operator.
 #
-# Usage :
+# Usage:
 #   sms_routing_summary <n_ops> [ms_counts...]
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -370,7 +368,7 @@ sms_routing_summary() {
     echo "╚══════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
-    # En-tete tableau
+    # Table header
     printf "${BOLD}%-12s %-8s %-20s %-18s %-15s${NC}\n" \
            "MSISDN" "Op→" "IMSI" "Container IP" "SC-address"
     printf "%-12s %-8s %-20s %-18s %-15s\n" \
@@ -378,12 +376,9 @@ sms_routing_summary() {
 
     local total_ms=0
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
-        # ms_counts est POSITIONNELLE (0-based) alors que i est un RANG
-        # d operateur, qui ne commence plus forcement a 1. Le (i-1)
-        # d origine lisait donc l element du VOISIN : avec les rangs 2 et
-        # 3, op2 heritait du compte d op3 et op3 tombait sur un element
-        # absent, donc sur le defaut de 1 MS. La table affichait "3 MS"
-        # pour quatre abonnes reellement provisionnes.
+        # ms_counts is POSITIONAL (0-based) whereas i is an operator RANK,
+        # which does not necessarily start at 1: index by (i - OP_ID_BASE),
+        # not (i - 1), otherwise the neighbour's count is read.
         local n_ms=${ms_counts[$((i - ${OP_ID_BASE:-1}))]:-1}
         local mnc; mnc=$(printf '%02d' "$i")
         local container_ip; container_ip=$(_sms_op_backbone_ip "$i")
@@ -397,7 +392,7 @@ sms_routing_summary() {
             total_ms=$(( total_ms + 1 ))
         done
 
-        # Ligne de separation entre operateurs
+        # Separator line between operators
         [ "$i" -lt "$n_ops" ] && \
             printf "${YELLOW}%-12s %-8s %-20s %-18s %-15s${NC}\n" \
                    "──────────" "↓ Op$((i+1))" "" "" ""
@@ -409,12 +404,8 @@ sms_routing_summary() {
     echo ""
     echo -e "${CYAN}── Reseau inter-operateurs ──${NC}"
     for i in $(seq "${OP_ID_BASE:-1}" "$(( ${OP_ID_BASE:-1} + n_ops - 1 ))"); do
-        # ms_counts est POSITIONNELLE (0-based) alors que i est un RANG
-        # d operateur, qui ne commence plus forcement a 1. Le (i-1)
-        # d origine lisait donc l element du VOISIN : avec les rangs 2 et
-        # 3, op2 heritait du compte d op3 et op3 tombait sur un element
-        # absent, donc sur le defaut de 1 MS. La table affichait "3 MS"
-        # pour quatre abonnes reellement provisionnes.
+        # ms_counts is POSITIONAL (0-based) whereas i is an operator RANK,
+        # which does not necessarily start at 1: index by (i - OP_ID_BASE).
         local n_ms=${ms_counts[$((i - ${OP_ID_BASE:-1}))]:-1}
         printf "  Op%-2s  %s  ← TCP 7890  (relay)  %d MS\n" \
                "$i" "$(_sms_op_backbone_ip "$i")" "$n_ms"
@@ -438,10 +429,10 @@ sms_routing_summary() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_mount_args
 #
-# Retourne les arguments -v Docker pour monter la config SMS du bon operateur.
-# Utilise dans start_operator() de start-docker.sh.
+# Returns the Docker -v arguments to mount the right operator's SMS config.
+# Used in start_operator() of start-docker.sh.
 #
-# Usage :
+# Usage:
 #   vol_args+=$(sms_routing_mount_args <op_id> <destdir>)
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -453,7 +444,7 @@ sms_routing_mount_args() {
     if [ -f "$conf" ]; then
         echo "-v ${conf}:/etc/osmocom/sms-routing.conf"
     else
-        echo "" # pas de volume si le fichier n'existe pas encore
+        echo "" # no volume if the file does not exist yet
     fi
 }
 
@@ -461,11 +452,11 @@ sms_routing_mount_args() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_wait_ready
 #
-# Attend que le relay SMS d'un operateur soit pret (port TCP 7890 en ecoute).
-# Appele optionnellement apres start_operator() pour s'assurer que le relay
-# est disponible avant d'injecter des SMS de test.
+# Waits for an operator's SMS relay to be ready (TCP port 7890 listening).
+# Optionally called after start_operator() to make sure the relay is
+# available before injecting test SMS.
 #
-# Usage :
+# Usage:
 #   sms_routing_wait_ready <container_name> [timeout_sec]
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -495,10 +486,10 @@ sms_routing_wait_ready() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # sms_routing_test_send
 #
-# Envoie un SMS de test entre deux MS de deux operateurs differents.
-# Necessite que les containers soient demarres et les HLR alimentes.
+# Sends a test SMS between two MS of two different operators.
+# Requires the containers to be started and the HLRs fed.
 #
-# Usage :
+# Usage:
 #   sms_routing_test_send <src_container> <src_imsi> <dst_msisdn> <message>
 #
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -527,7 +518,7 @@ sms_routing_test_send() {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Point d'entree CLI (appel direct en ligne de commande)
+# CLI entry point (direct call from the command line)
 # ═══════════════════════════════════════════════════════════════════════════════
 _usage() {
     cat << 'EOF'
@@ -564,7 +555,7 @@ EOF
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Execute directement (pas source)
+    # Executed directly (not sourced)
     CMD="${1:-help}"; shift 2>/dev/null || true
     case "$CMD" in
         generate)      sms_routing_generate    "$@" ;;

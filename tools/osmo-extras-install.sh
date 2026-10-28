@@ -1,59 +1,59 @@
 #!/bin/bash
 # =============================================================================
-# osmo-extras-install.sh - JEUX + MEDIA, poses une seule fois pour DEUX chemins.
+# osmo-extras-install.sh - GAMES + MEDIA, installed once for TWO paths.
 #
-# Meme logique que le reste du depot : ce qui doit exister a la fois dans le
-# SUPPLEMENT (addition.sh, sur une machine deja installee) et dans le NATIF
-# (l ISO, iso_modules/80-chroot.sh) est ecrit UNE fois ici, et les deux chemins
-# sourcent ce script et appellent osmo_extras_install. Rien n est fatal : un
-# paquet absent du miroir apt ne doit pas arreter le reste.
+# Same logic as the rest of the repo: what must exist both in the SUPPLEMENT
+# (addition.sh, on an already installed machine) and in the NATIVE image (the
+# ISO, iso_modules/80-chroot.sh) is written ONCE here, and both paths source
+# this script and call osmo_extras_install. Nothing is fatal: a package
+# missing from the apt mirror must not stop the rest.
 #
-# Ce qu il pose :
-#   - [addition.sh seulement, pas l ISO : OSMO_EXTRAS_JEUX=0 les saute, ~470 Mo]
-#     deux jeux LIBRES, donnees comprises, verifies sur Ubuntu noble (conteneur
-#     + Xvfb, 2026-09-25) :
-#       Doom  : freedoom (WAD libres) + chocolate-doom (moteur que le lanceur
-#               freedoom2 sait trouver ; dsda-doom, lui, n est pas reconnu) ;
-#       Quake : openarena (moteur ioquake3, Quake III, ~410 Mo de donnees).
-#     Retires : gzdoom et openra (absents de noble), quakespasm (sans le
-#     pak0.pak proprietaire il s arrete au demarrage), Unreal (aucune version
-#     libre) ;
-#   - kodi (mediacenter) ;
-#   - wmctrl : l encart (osmo-panel.py) en a besoin pour CALER la fenetre lancee
-#     sur le cadre FFT ;
-#   - le DINO jouable (osmo-dino-play, plein ecran ou cale) a partir du meme
-#     configs/conky/dino.html que l animation du bureau ;
-#   - YOUTUBE dans un vrai Firefox (connexion Google possible) avec uBlock
-#     Origin force par POLITIQUE d entreprise (policies.json) - pas un client
-#     tiers, pour garder le login Google ;
-#   - les .desktop qui manquent (youtube, dino) et deux DOSSIERS d applications
-#     GNOME : « Jeux » et « Media ».
+# What it installs:
+#   - [addition.sh only, not the ISO: OSMO_EXTRAS_JEUX=0 skips them, ~470 MB]
+#     two FREE games, data included, available on Ubuntu noble:
+#       Doom  : freedoom (free WADs) + chocolate-doom (the engine the
+#               freedoom2 launcher knows how to find; dsda-doom is not
+#               recognised);
+#       Quake : openarena (ioquake3 engine, Quake III, ~410 MB of data).
+#     Not installed: gzdoom and openra (absent from noble), quakespasm
+#     (stops at startup without the proprietary pak0.pak), Unreal (no free
+#     version);
+#   - kodi (mediacenter);
+#   - wmctrl: the panel (osmo-panel.py) needs it to DOCK the launched window
+#     onto the FFT frame;
+#   - the playable DINO (osmo-dino-play, fullscreen or docked) from the same
+#     configs/conky/dino.html as the desktop animation;
+#   - YOUTUBE in a real Firefox (Google login possible) with uBlock Origin
+#     forced by enterprise POLICY (policies.json) - not a third-party client,
+#     so the Google login is kept;
+#   - the missing .desktop files (youtube, dino) and two GNOME application
+#     FOLDERS: « Jeux » and « Media ».
 #
-# Idempotent : relancable sans degat. Utilisable en session (gsettings dispo) ET
-# en chroot ISO (pas de session : on passe alors par le gschema override, lu par
-# la session live au boot).
+# Idempotent: can be rerun without damage. Usable in a session (gsettings
+# available) AND in the ISO chroot (no session: the gschema override is used
+# instead, read by the live session at boot).
 # =============================================================================
 
-# Ces couleurs peuvent deja exister (addition.sh les definit) : on ne rale pas.
+# These colours may already exist (addition.sh defines them): no complaint.
 : "${GREEN:=}"; : "${YELLOW:=}"; : "${CYAN:=}"; : "${BOLD:=}"; : "${NC:=}"
 
-# Le depot, pour retrouver dino.html. addition.sh pose DIR ; l ISO pose REPO ou
-# rien (le depot est copie dans l image a un chemin fixe).
+# The repo, to find dino.html. addition.sh sets DIR; the ISO sets REPO or
+# nothing (the repo is copied into the image at a fixed path).
 OSMO_EXTRAS_REPO="${DIR:-${REPO:-/opt/GSM/osmo-operator}}"
 
 _ex_say()  { echo -e "  ${CYAN}\xe2\x86\x92${NC} $*"; }
 _ex_ok()   { echo -e "      ${GREEN}\xe2\x9c\x93${NC} $*"; }
 _ex_warn() { echo -e "      ${YELLOW}!${NC} $*"; }
 
-# ── LES PAQUETS ──────────────────────────────────────────────────────────────
-# Non fatal paquet par paquet : sur un miroir ou l un manque (universe pas
-# active, version), les autres passent quand meme.
+# ── THE PACKAGES ─────────────────────────────────────────────────────────────
+# Non-fatal package by package: on a mirror where one is missing (universe
+# not enabled, version), the others still go through.
 _osmo_extras_apt() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y >/dev/null 2>&1 || true
-    # wireshark demande en debconf s il faut autoriser la capture sans root : on
-    # tranche NON (l encart le lance en root de toute facon, cf. osmo-wireshark-
-    # root) pour que l install passe sans question.
+    # wireshark asks through debconf whether to allow capture without root:
+    # answer NO (the panel launches it as root anyway, see osmo-wireshark-root)
+    # so the install goes through without a question.
     echo "wireshark-common wireshark-common/install-setuid boolean false" \
         | debconf-set-selections 2>/dev/null || true
     local p
@@ -70,8 +70,8 @@ _osmo_extras_apt() {
             _ex_warn "$p indisponible (apt) - ignore"
         fi
     done
-    # linphone : le paquet a change de nom selon la version (linphone-desktop
-    # recent, linphone ancien). On prend le premier qui s installe.
+    # linphone: the package name depends on the version (linphone-desktop
+    # recent, linphone older). Take the first one that installs.
     if dpkg -s linphone-desktop >/dev/null 2>&1 || dpkg -s linphone >/dev/null 2>&1; then
         _ex_ok "linphone deja present"
     elif apt-get install -y --no-install-recommends linphone-desktop >/dev/null 2>&1 \
@@ -80,7 +80,7 @@ _osmo_extras_apt() {
     else
         _ex_warn "linphone indisponible (apt) - ignore"
     fi
-    # ofono : pile telephonie (daemon + outils de test)
+    # ofono: telephony stack (daemon + test tools)
     if dpkg -s ofono >/dev/null 2>&1; then
         _ex_ok "ofono deja present"
     elif apt-get install -y --no-install-recommends ofono >/dev/null 2>&1; then
@@ -90,9 +90,9 @@ _osmo_extras_apt() {
     fi
 }
 
-# ── LES JEUX : SUPPLEMENT SEULEMENT ──────────────────────────────────────────
-# [2026-09-25] Hors de l ISO : ~470 Mo pour deux jeux. addition.sh --extras les
-# pose (OSMO_EXTRAS_JEUX=1, le defaut) ; iso_modules/80-chroot.sh passe 0.
+# ── THE GAMES: SUPPLEMENT ONLY ───────────────────────────────────────────────
+# Kept out of the ISO: ~470 MB for two games. addition.sh --extras installs
+# them (OSMO_EXTRAS_JEUX=1, the default); iso_modules/80-chroot.sh passes 0.
 _osmo_extras_jeux() {
     export DEBIAN_FRONTEND=noninteractive
     local p
@@ -107,15 +107,16 @@ _osmo_extras_jeux() {
     done
 }
 
-# ── YOUTUBE : uBLOCK ORIGIN FORCE PAR POLITIQUE FIREFOX ──────────────────────
-# On ne veut PAS d un client tiers (il perdrait la connexion Google) : c est le
-# vrai Firefox, avec uBlock Origin installe d office pour TOUS les profils via la
-# politique d entreprise. `Install` pointe l XPI signe d AMO ; `installation_mode
-# force_installed` l impose sans clic. Le login Google reste celui de Firefox.
+# ── YOUTUBE: uBLOCK ORIGIN FORCED BY FIREFOX POLICY ──────────────────────────
+# NOT a third-party client (it would lose the Google login): the real Firefox,
+# with uBlock Origin installed by default for ALL profiles through the
+# enterprise policy. `install_url` points at the AMO-signed XPI;
+# `installation_mode force_installed` imposes it without a click. The Google
+# login stays Firefox's own.
 #
-# Firefox du .deb Mozilla lit /etc/firefox/policies/policies.json ET
-# <install>/distribution/policies.json - on pose les deux pour ne pas dependre du
-# chemin d installation.
+# The Mozilla .deb Firefox reads /etc/firefox/policies/policies.json AND
+# <install>/distribution/policies.json - both are written so as not to depend
+# on the install path.
 _osmo_extras_firefox_ublock() {
     local pol
     read -r -d '' pol <<'POLICIES'
@@ -136,8 +137,8 @@ POLICIES
              /usr/lib/firefox/distribution \
              /opt/firefox/distribution \
              /usr/lib/firefox-esr/distribution; do
-        # /etc/firefox : toujours ; les <install>/distribution : seulement si
-        # le repertoire parent (donc Firefox) existe.
+        # /etc/firefox: always; the <install>/distribution ones: only if the
+        # parent directory (hence Firefox) exists.
         case "$d" in
             /etc/firefox/policies) mkdir -p "$d" ;;
             *) [ -d "$(dirname "$d")" ] || continue; mkdir -p "$d" ;;
@@ -147,16 +148,16 @@ POLICIES
     _ex_ok "uBlock Origin force par politique Firefox (login Google conserve)"
 }
 
-# ── LES LANCEURS /usr/local/bin ──────────────────────────────────────────────
-# Chaque lanceur accepte --fullscreen. Sans lui : fenetre normale (l encart la
-# calera sur le cadre via wmctrl). Avec lui : plein ecran direct.
+# ── THE /usr/local/bin LAUNCHERS ─────────────────────────────────────────────
+# Each launcher accepts --fullscreen. Without it: normal window (the panel
+# docks it onto the frame via wmctrl). With it: straight to fullscreen.
 _osmo_extras_lanceurs() {
-    # YOUTUBE : Firefox, profil dedie, sur youtube.com. Login Google OK, uBlock
-    # deja force par la politique ci-dessus.
+    # YOUTUBE: Firefox, dedicated profile, on youtube.com. Google login OK,
+    # uBlock already forced by the policy above.
     cat > /usr/local/bin/osmo-youtube <<'YT'
 #!/bin/bash
-# osmo-youtube - Firefox (login Google possible) + uBlock Origin (politique),
-# sur YouTube. --fullscreen => kiosque plein ecran.
+# osmo-youtube - Firefox (Google login possible) + uBlock Origin (policy),
+# on YouTube. --fullscreen => fullscreen kiosk.
 set -u
 URL="https://www.youtube.com"
 PROFDIR="${HOME:-/root}/.mozilla/osmo-youtube"
@@ -172,12 +173,12 @@ fi
 YT
     chmod 755 /usr/local/bin/osmo-youtube
 
-    # DINO jouable : le meme dino.html, mais en fenetre WebKit interactive (et
-    # non l animation "attract" de osmo-dino.py). --fullscreen => plein ecran.
+    # Playable DINO: the same dino.html, but in an interactive WebKit window
+    # (not the "attract" animation of osmo-dino.py). --fullscreen => fullscreen.
     cat > /usr/local/bin/osmo-dino-play <<'DINO'
 #!/usr/bin/env python3
-# osmo-dino-play - le jeu du dino (configs/conky/dino.html) jouable.
-# Sans argument : fenetre 900x560. Avec --fullscreen : plein ecran.
+# osmo-dino-play - the dino game (configs/conky/dino.html), playable.
+# Without argument: 900x560 window. With --fullscreen: fullscreen.
 import os, sys, gi
 gi.require_version("Gtk", "3.0"); gi.require_version("WebKit2", "4.1")
 from gi.repository import Gtk, GLib, WebKit2
@@ -189,17 +190,17 @@ class W(Gtk.Window):
         super().__init__(title="Cavalier d'ombres")
         self.set_default_size(900, 560)
         self.connect("destroy", Gtk.main_quit)
-        # Le bouton plein ecran de la page nous parle par un message WebKit
-        # ({full:true|false}) : c est NOUS qui agrandissons la fenetre, ou
-        # la rendons - une page ne peut pas le faire seule.
+        # The page's fullscreen button talks to us through a WebKit message
+        # ({full:true|false}): WE enlarge or restore the window - a page
+        # cannot do it on its own.
         ucm = WebKit2.UserContentManager()
         ucm.connect("script-message-received::osmo", self.on_message)
         ucm.register_script_message_handler("osmo")
         self.view = WebKit2.WebView.new_with_user_content_manager(ucm)
         self.add(self.view)
         if os.path.exists(HTML):
-            # #full : la page part en plein ecran (le bouton de la page ramene
-            # dans la fenetre). Sans --fullscreen on est dans la fenetre, point.
+            # #full: the page starts fullscreen (its button brings it back
+            # into the window). Without --fullscreen it stays in the window.
             self.view.load_uri(GLib.filename_to_uri(HTML, None) + ("#full" if full else ""))
         else:
             self.view.load_html("<h2 style='font-family:sans-serif'>dino.html introuvable</h2>", None)
@@ -218,22 +219,22 @@ W(); Gtk.main()
 DINO
     chmod 755 /usr/local/bin/osmo-dino-play
 
-    # WIRESHARK EN ROOT : la capture demande les privileges (l install a mis
-    # setuid a false). [2026-09-08] Le lanceur est un fichier du depot,
-    # tools/osmo-wireshark-root.sh : root par pkexec (invite graphique), et
-    # capture immediate avec le filtre LTE + SCTP + GSM du banc, filtre d
-    # affichage 2G + 4G + telephone (appel, SMS, data) et boutons de filtre. Et
-    # /usr/local/bin/wireshark pointe dessus : « wireshark » au clavier, c est
-    # lui (le binaire reste /usr/bin/wireshark, qu il appelle).
+    # WIRESHARK AS ROOT: capture needs privileges (the install set setuid to
+    # false). The launcher is a repo file, tools/osmo-wireshark-root.sh: root
+    # via pkexec (graphical prompt), immediate capture with the bench
+    # LTE + SCTP + GSM filter, 2G + 4G + phone (call, SMS, data) display
+    # filter and filter buttons. /usr/local/bin/wireshark points at it:
+    # « wireshark » at the keyboard is this one (the binary stays
+    # /usr/bin/wireshark, which it calls).
     [ -f "$OSMO_EXTRAS_REPO/tools/osmo-wireshark-root.sh" ] \
         && install -m 755 "$OSMO_EXTRAS_REPO/tools/osmo-wireshark-root.sh" /usr/local/bin/osmo-wireshark-root
     ln -sfn /usr/local/bin/osmo-wireshark-root /usr/local/bin/wireshark
 
-    # OFONO : pile telephonie. Pas d IHM native ; on ouvre un terminal qui
-    # s assure que le daemon tourne (root) et liste les modems.
+    # OFONO: telephony stack. No native GUI; open a terminal that makes sure
+    # the daemon runs (root) and lists the modems.
     cat > /usr/local/bin/osmo-ofono <<'OF'
 #!/bin/bash
-# osmo-ofono - demarre ofonod si besoin et liste les modems (terminal).
+# osmo-ofono - starts ofonod if needed and lists the modems (terminal).
 set -u
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo -E"
 $SUDO systemctl start ofono 2>/dev/null || $SUDO ofonod 2>/dev/null &
@@ -248,37 +249,34 @@ echo; read -n1 -rsp 'ofono - une touche pour fermer...'
 OF
     chmod 755 /usr/local/bin/osmo-ofono
 
-    # LE TELEPHONE DU BANC : la VM postmarketOS / Phosh.
-    # [2026-09-07] C etait Android (Waydroid), abandonne : sans RIL, Android
-    # n avait pas de pile radio et tout passait par un pont qui posait des
-    # NOTIFICATIONS - une imitation d appel. postmarketOS arrive avec
-    # ModemManager, Calls et Chatty, et se branche sur le VRAI modem du banc
-    # (tools/osmo-phonesim-banc.py). tools/osmo-pmos.sh fait le reste.
+    # THE BENCH PHONE: the postmarketOS / Phosh VM. postmarketOS comes with
+    # ModemManager, Calls and Chatty, and plugs onto the REAL bench modem
+    # (tools/osmo-phonesim-banc.py). tools/osmo-pmos.sh does the rest.
     cat > /usr/local/bin/osmo-pmos <<'PM'
 #!/bin/bash
-# osmo-pmos - le telephone postmarketOS du banc (voir tools/osmo-pmos.sh).
+# osmo-pmos - the bench postmarketOS phone (see tools/osmo-pmos.sh).
 exec "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos.sh" "$@"
 PM
     chmod 755 /usr/local/bin/osmo-pmos
 
     cat > /usr/local/bin/osmo-sms-send <<'SM'
 #!/bin/bash
-# osmo-sms-send <numero> <texte...> - envoie un SMS par oFono via le pont.
+# osmo-sms-send <number> <text...> - sends an SMS through oFono via the bridge.
 set -u
 [ $# -ge 2 ] || { echo "usage: osmo-sms-send <numero> <texte...>"; exit 2; }
 NUM="$1"; shift
-# /usr/bin/python3 en dur : sous le PATH du banc, « env python3 » tombe sur
-# le venv, qui n a pas les liaisons GObject (cf. start-native.sh).
+# /usr/bin/python3 hard-coded: under the bench PATH, « env python3 » lands on
+# the venv, which has no GObject bindings (see start-native.sh).
 exec /usr/bin/python3 "${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py" --once "sms $NUM $*"
 SM
     chmod 755 /usr/local/bin/osmo-sms-send
 
     cat > /usr/local/bin/osmo-call <<'CA'
 #!/bin/bash
-# osmo-call <numero> | answer | hangup - les appels par oFono via le pont.
+# osmo-call <number> | answer | hangup - calls through oFono via the bridge.
 set -u
 B="${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-ofono-bridge.py"
-P=/usr/bin/python3        # et pas le venv : il n a pas les liaisons GObject
+P=/usr/bin/python3        # not the venv: it has no GObject bindings
 case "${1:-}" in
     answer) exec "$P" "$B" --once "answer" ;;
     hangup) exec "$P" "$B" --once "hangup" ;;
@@ -292,10 +290,10 @@ CA
     _ex_ok "                osmo-pmos, osmo-sms-send, osmo-call"
 }
 
-# ── LES .desktop QUI MANQUENT + LES DOSSIERS « Jeux » / « Media » ────────────
-# Les jeux et kodi posent DEJA leur .desktop (io.github.freedoom.Phase1/2,
-# openarena.desktop, kodi.desktop). On n ajoute que ceux qui
-# manquent (youtube, dino-jeu), puis on RANGE tout dans deux dossiers GNOME.
+# ── THE MISSING .desktop FILES + THE « Jeux » / « Media » FOLDERS ────────────
+# The games and kodi ALREADY ship their .desktop (io.github.freedoom.Phase1/2,
+# openarena.desktop, kodi.desktop). Only the missing ones are added (youtube,
+# dino-jeu), then everything is SORTED into GNOME folders.
 _osmo_extras_desktops() {
     install -d /usr/share/applications
 
@@ -370,20 +368,19 @@ Name=Arreter le telephone
 Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --close-on-exit --title "Arret du telephone" -- /usr/local/bin/osmo-pmos stop
 PMD
 
-    # [2026-09-07] Les deux lanceurs par pmbootstrap (voir update.sh,
-    # osmo_poser_pmos) : la VM et son format, puis le modem et la voix.
+    # The two pmbootstrap launchers (see update.sh, osmo_poser_pmos): the VM
+    # and its format, then the modem and the voice.
     local ps
     for ps in qemu setup; do
         [ -f "$OSMO_EXTRAS_REPO/tools/osmo-pmos-$ps.sh" ] \
             && install -m 755 "$OSMO_EXTRAS_REPO/tools/osmo-pmos-$ps.sh" "/usr/local/bin/osmo-pmos-$ps"
     done
-    # [2026-09-07] DEUX FORMATS, DEUX ICONES. Phosh se met en page d apres
-    # l ecran qu on lui donne : haut et etroit, c est un telephone ; large,
-    # c est une tablette - meme image, meme session. C est la carte graphique
-    # de QEMU qui porte cette taille (OSMO_PMOS_RES, lu par le patch
-    # pmbootstrap), et le systeme demarre dedans : le format se choisit donc
-    # AU LANCEMENT et ne change pas sous une session deja ouverte. D ou deux
-    # entrees plutot qu un reglage.
+    # TWO FORMATS, TWO ICONS. Phosh lays itself out after the screen it is
+    # given: tall and narrow is a phone; wide is a tablet - same image, same
+    # session. The QEMU graphics card carries that size (OSMO_PMOS_RES, read
+    # by the pmbootstrap patch) and the system boots inside it: the format
+    # is chosen AT LAUNCH and does not change under an open session. Hence
+    # two entries rather than a setting.
     local pf pn pr
     for pf in smartphone:720x1440 tablette:1280x800; do
         pn="${pf%%:*}"; pr="${pf#*:}"
@@ -416,11 +413,11 @@ PMD
               /usr/share/applications/osmo-ofono.desktop \
               /usr/share/applications/osmo-pmos.desktop
 
-    # ── DOSSIERS D APPLICATIONS GNOME : « Jeux » et « Media » ─────────────────
-    # Un gschema override est lu a la fois par la session live (ISO) et par une
-    # session installee ; c est le seul moyen qui marche AUSSI en chroot (pas de
-    # dbus). On liste les .desktop attendus - un absent est ignore par GNOME,
-    # comme pour les favoris du dock.
+    # ── GNOME APPLICATION FOLDERS: « Jeux » and « Media » ─────────────────────
+    # A gschema override is read both by the live session (ISO) and by an
+    # installed session; it is the only way that ALSO works in a chroot (no
+    # dbus). The expected .desktop files are listed - a missing one is ignored
+    # by GNOME, as for the dock favourites.
     local ov=/usr/share/glib-2.0/schemas/99-osmo-extras.gschema.override
     cat > "$ov" <<'OVR'
 [org.gnome.desktop.app-folders]
@@ -450,7 +447,7 @@ OVR
     _ex_ok "menus poses ; dossiers d applications « Jeux » et « Media »"
 }
 
-# ── L ENTREE ──────────────────────────────────────────────────────────────────
+# ── ENTRY POINT ───────────────────────────────────────────────────────────────
 osmo_extras_install() {
     [ "$(id -u)" -eq 0 ] || { _ex_warn "osmo_extras_install demande root"; return 0; }
     if [ "${OSMO_EXTRAS_JEUX:-1}" = "1" ]; then
@@ -467,7 +464,7 @@ osmo_extras_install() {
     return 0
 }
 
-# Lance directement (hors source) : ./osmo-extras-install.sh
+# Run directly (not sourced): ./osmo-extras-install.sh
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     osmo_extras_install
 fi

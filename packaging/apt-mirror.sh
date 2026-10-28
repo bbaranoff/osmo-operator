@@ -1,32 +1,32 @@
 #!/bin/bash
 # =============================================================================
-#  apt-mirror - LE miroir Ubuntu le plus rapide d ici, mesure, pas suppose
+#  apt-mirror - THE fastest Ubuntu mirror from here, measured, not assumed
 # =============================================================================
 #
-#  Affiche une URL de miroir (http://.../ubuntu) sur la sortie standard.
+#  Prints a mirror URL (http://.../ubuntu) on standard output.
 #
-#  [2026-09-04] archive.ubuntu.com repondait a 3 Ko/s depuis l hote de build
-#  (20 s et un timeout pour un InRelease de 250 Ko) quand fr.archive, ovh et
-#  ikoula servaient le meme fichier en 0,1 s. Le build docker restait muet a
-#  l etape 3/64 (apt-get update -qq) pendant dix minutes, sans rien dire.
-#  L adresse "archive.ubuntu.com" est un point d entree geo-equilibre, pas
-#  un engagement de debit : on MESURE.
+#  The "archive.ubuntu.com" address is a geo-balanced entry point, not a
+#  throughput commitment: it can answer at a few KB/s while a national or
+#  hosting-provider mirror serves the same file in a fraction of a second,
+#  leaving a docker build silent for minutes on `apt-get update`. So the
+#  candidates are MEASURED, and the fastest one is the one that is used
+#  everywhere a build talks to apt.
 #
-#  Candidats : $OSMO_UBUNTU_MIRRORS (liste separee par des espaces) si donne,
-#  sinon les miroirs que mirrors.ubuntu.com propose pour CE pays (GeoIP, les
-#  quatre premiers) plus archive.ubuntu.com. Chaque candidat telecharge
-#  dists/<suite>/InRelease avec 5 s au maximum ; le plus rapide gagne. Si rien
-#  ne repond, archive.ubuntu.com, comme avant.
+#  Candidates: $OSMO_UBUNTU_MIRRORS (space-separated list) if given, otherwise
+#  the mirrors mirrors.ubuntu.com proposes for THIS country (GeoIP, the first
+#  four) plus archive.ubuntu.com. Each candidate downloads
+#  dists/<suite>/InRelease with a 5 s maximum; the fastest wins. If nothing
+#  answers, archive.ubuntu.com.
 #
-#  OSMO_UBUNTU_MIRROR=http://... court-circuite tout : c est ce miroir, sans
-#  mesure (un miroir local, un proxy apt).
+#  OSMO_UBUNTU_MIRROR=http://... short-circuits everything: that mirror,
+#  with no measurement (a local mirror, an apt proxy).
 #
-#  Usage :  MIRROR="$(packaging/apt-mirror.sh [suite])"   (defaut : noble)
-#           Les mesures vont sur stderr, l URL seule sur stdout.
+#  Usage:   MIRROR="$(packaging/apt-mirror.sh [suite])"   (default: noble)
+#           The measurements go to stderr, the URL alone to stdout.
 #           packaging/apt-mirror.sh --list [suite]
-#           Tous les miroirs qui repondent, "<ms>\t<url>", du plus rapide au
-#           plus lent, sur stdout - c est ce que lit l installeur du live pour
-#           proposer le choix (osmo-install, page packagechooser@mirror).
+#           Every mirror that answers, "<ms>\t<url>", from the fastest to the
+#           slowest, on stdout - this is what the live installer reads to
+#           offer the choice (osmo-install, packagechooser@mirror page).
 # =============================================================================
 set -uo pipefail
 LIST=0
@@ -41,10 +41,10 @@ command -v curl >/dev/null 2>&1 || { [ "$LIST" = 1 ] && printf '0\t%s\n' "$DEFAU
 
 CANDIDATES="${OSMO_UBUNTU_MIRRORS:-}"
 if [ -z "$CANDIDATES" ]; then
-    # mirrors.txt (GeoIP) renvoie parfois... archive.ubuntu.com lui-meme. On
-    # y ajoute le miroir du pays de la locale (fr.archive, de.archive...), deux
-    # gros hebergeurs europeens et kernel.org : de quoi toujours avoir un
-    # miroir qui repond.
+    # mirrors.txt (GeoIP) sometimes returns... archive.ubuntu.com itself. The
+    # locale's country mirror (fr.archive, de.archive...), two large European
+    # hosting providers and kernel.org are added: enough to always have a
+    # mirror that answers.
     CANDIDATES="$(curl -fsSL -m 5 http://mirrors.ubuntu.com/mirrors.txt 2>/dev/null \
                   | grep -E '^https?://' | head -4 | tr '\n' ' ')"
     _cc="$(echo "${LC_ALL:-${LANG:-}}" | sed -nE 's/^[a-z]+_([A-Z]{2}).*/\1/p' | tr 'A-Z' 'a-z')"
@@ -52,14 +52,14 @@ if [ -z "$CANDIDATES" ]; then
     CANDIDATES="$CANDIDATES http://ubuntu.mirrors.ovh.net/ubuntu http://mirror.ubuntu.ikoula.com/ubuntu
                 http://mirrors.edge.kernel.org/ubuntu $DEFAULT"
 fi
-# Sans doublon, dans l ordre.
+# Without duplicates, in order.
 CANDIDATES="$(for m in $CANDIDATES; do echo "${m%/}"; done | awk '!seen[$0]++' | tr '\n' ' ')"
 
 best=""; best_t=999999; results=""
 for m in $CANDIDATES; do
     m="${m%/}"
-    # Un seul fichier, petit et toujours present ; 5 s max, et le temps est
-    # celui de curl lui-meme (ms), pas une horloge externe.
+    # A single file, small and always present; 5 s max, and the time is
+    # curl's own (ms), not an external clock.
     t="$(curl -s -m 5 -o /dev/null -w '%{http_code} %{time_total}' "$m/dists/$SUITE/InRelease" 2>/dev/null || true)"
     code="${t%% *}"; secs="${t##* }"
     if [ "$code" = "200" ]; then

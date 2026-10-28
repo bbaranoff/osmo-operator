@@ -1,54 +1,49 @@
 #!/bin/bash
 # =============================================================================
-# osmo-pmos.sh - LE TELEPHONE DU BANC : UNE VM postmarketOS / Phosh.
+# osmo-pmos.sh - THE BENCH PHONE: A postmarketOS / Phosh VM.
 #
-# CE QUI A CHANGE, ET POURQUOI. Le telephone du banc etait un Android en
-# conteneur (Waydroid). Android n a pas de pile radio dans ce cadre-la : il
-# aurait fallu un rild et un RIL proprietaire pour esperer une VRAIE telephonie,
-# et sans eux tout passait par un pont qui posait des NOTIFICATIONS - une
-# imitation d appel, pas un appel. postmarketOS, lui, arrive avec ModemManager,
-# Calls et Chatty : c est un vrai telephone Linux, et un vrai telephone se
-# branche sur un MODEM. Le banc en a un - tools/osmo-phonesim-banc.py, qui parle
-# 27.007 d un cote et pilote le banc de l autre (VTY d osmo-bsc, SMPP d osmo-msc,
-# AMI d Asterisk). Il ne restait donc qu a poser le fil entre les deux.
+# postmarketOS comes with ModemManager, Calls and Chatty: a real Linux phone,
+# and a real phone connects to a MODEM. The bench has one -
+# tools/osmo-phonesim-banc.py, which speaks 27.007 on one side and drives the
+# bench on the other (osmo-bsc VTY, osmo-msc SMPP, Asterisk AMI). This script
+# lays the wire between the two.
 #
 #   Phosh / Calls / Chatty
 #        ↕  D-Bus
-#   ModemManager (dans la VM)
-#        ↕  /dev/ttyS1  (port serie de la VM)
+#   ModemManager (in the VM)
+#        ↕  /dev/ttyS1  (serial port of the VM)
 #   QEMU  -serial tcp:127.0.0.1:12346,server=on,wait=off
 #        ↕  TCP
-#   osmo-phonesim-banc.py --connect 127.0.0.1:12346   (le modem du banc)
+#   osmo-phonesim-banc.py --connect 127.0.0.1:12346   (the bench modem)
 #        ↕  VTY / SMPP / AMI
-#   osmo-bsc · osmo-msc · Asterisk · le mobile osmocom-bb
+#   osmo-bsc · osmo-msc · Asterisk · the osmocom-bb mobile
 #
-# POURQUOI C EST NOUS QUI ALLONS VERS QEMU, et pas l inverse : le firmware UEFI
-# de la VM lit tout port serie comme une console. Un modem deja bavard pendant
-# le demarrage lui fait croire qu on interrompt le boot, et il s arrete sur son
-# menu. QEMU ECOUTE donc (server=on,wait=off) et le modem vient s y connecter
-# une fois le systeme leve - c est le mode --connect du modem, qui attend que le
-# port SSH de la VM reponde avant de se brancher.
+# WHY WE GO TOWARDS QEMU, and not the reverse: the VM's UEFI firmware reads
+# any serial port as a console. A modem already chatty during boot makes it
+# believe the boot is being interrupted, and it stops on its menu. So QEMU
+# LISTENS (server=on,wait=off) and the modem connects once the system is up -
+# the modem's --connect mode, which waits for the VM's SSH port to answer
+# before connecting.
 #
-#   osmo-pmos up         le geste de l icone : la VM pmbootstrap (osmo-pmos-qemu),
-#                        format smartphone|tablette en argument ; stop et status y vont aussi
-#   osmo-pmos install    paquets qemu + l image postmarketOS + la preparation
-#   osmo-pmos fetch      telecharge (ou reprend) l image et verifie son sha256
-#   osmo-pmos provision  mot de passe, sshd, et la regle ModemManager du port AT
-#   osmo-pmos start      demarre la VM ET le modem du banc qui va avec
-#   osmo-pmos toggle     bascule : eteint la VM si elle tourne, la lance sinon (l icone)
-#   osmo-pmos stop       arrete les deux
-#   osmo-pmos status     ou en est chaque morceau
-#   osmo-pmos shell      un shell dans la VM (ssh)
-#   osmo-pmos mm         ce que ModemManager voit du modem, DANS la VM
-#   osmo-pmos at         parler a la main au modem du banc (tools/at-cmd.py)
-#   osmo-pmos log        la trace AT de la VM, en direct
+#   osmo-pmos up         the icon's gesture: the pmbootstrap VM (osmo-pmos-qemu),
+#                        smartphone|tablette form factor as argument; stop and status go there too
+#   osmo-pmos install    qemu packages + the postmarketOS image + the preparation
+#   osmo-pmos fetch      downloads (or resumes) the image and checks its sha256
+#   osmo-pmos provision  password, sshd, and the ModemManager rule for the AT port
+#   osmo-pmos start      starts the VM AND the bench modem that goes with it
+#   osmo-pmos toggle     switch: shuts the VM down if running, starts it otherwise (the icon)
+#   osmo-pmos stop       stops both
+#   osmo-pmos status     where each piece stands
+#   osmo-pmos shell      a shell in the VM (ssh)
+#   osmo-pmos mm         what ModemManager sees of the modem, INSIDE the VM
+#   osmo-pmos at         talk to the bench modem by hand (tools/at-cmd.py)
+#   osmo-pmos log        the VM's AT trace, live
 #
-# LE MOT DE PASSE EST 147147. C est celui des images officielles
-# postmarketOS, et on le REPOSE a chaque provision pour que la cle live, le
-# systeme installe et une image re-telechargee repondent tous pareil - un banc
-# ou le mot de passe depend de l historique de la machine n est pas un banc.
-# Il ouvre la session Phosh (l ecran de verrouillage), le compte « user » et
-# le ssh. Ce n est pas un secret : c est un banc de demonstration.
+# THE PASSWORD IS 147147. It is the one of the official postmarketOS images,
+# and it is SET AGAIN at each provision so that the live key, the installed
+# system and a re-downloaded image all answer the same. It opens the Phosh
+# session (the lock screen), the "user" account and ssh. It is not a secret:
+# this is a demonstration bench.
 # =============================================================================
 set -u
 
@@ -59,21 +54,21 @@ RUNDIR="${OSMO_PMOS_RUN:-/run/osmo-pmos}"
 PIDF="$RUNDIR/qemu.pid"
 MDMPID="$RUNDIR/modem.pid"
 
-# Le mot de passe du telephone. 147147 partout : ecran de verrouillage, compte
-# « user », ssh. Modifiable pour une demonstration particuliere, mais ce n est
-# pas le cas d usage - voir l entete.
+# The phone password. 147147 everywhere: lock screen, "user" account, ssh.
+# Changeable for a particular demonstration, but that is not the use case -
+# see the header.
 PMOS_PASS="${OSMO_PMOS_PASSWORD:-147147}"
 PMOS_USER="${OSMO_PMOS_USER:-user}"
 
-# Le port serie de la VM (le modem), et le port SSH. Le second sert AUSSI de
-# temoin : le modem ne se branche qu une fois qu il repond (cf. l entete).
+# The VM serial port (the modem), and the SSH port. The second ALSO serves
+# as a witness: the modem only connects once it answers (see the header).
 AT_PORT="${OSMO_PMOS_AT_PORT:-12346}"
 SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 
-# L image. Les images officielles vivent dans des repertoires dates ; on
-# resout donc « le plus recent » a la volee, et tout est surchargeable :
-#   OSMO_PMOS_IMG_URL   l URL exacte d une image .img.xz
-#   OSMO_PMOS_IMG_FILE  une image DEJA telechargee (rien n est telecharge)
+# The image. The official images live in dated directories; "the most
+# recent" is resolved on the fly, and everything is overridable:
+#   OSMO_PMOS_IMG_URL   the exact URL of a .img.xz image
+#   OSMO_PMOS_IMG_FILE  an image ALREADY downloaded (nothing is downloaded)
 PMOS_BRANCHE="${OSMO_PMOS_BRANCHE:-v25.12}"
 PMOS_APPAREIL="${OSMO_PMOS_APPAREIL:-generic-x86_64}"
 PMOS_IHM="${OSMO_PMOS_IHM:-phosh}"
@@ -92,10 +87,11 @@ _root() {
     return 1
 }
 
-# ── LES PAQUETS ──────────────────────────────────────────────────────────────
-# qemu-system-x86 (la VM), ovmf (le firmware UEFI : l image postmarketOS
-# generic-x86_64 ne demarre pas en BIOS), xz-utils (l image est compressee),
-# et sshpass pour « osmo-pmos shell » sans taper le mot de passe a chaque fois.
+# ── THE PACKAGES ─────────────────────────────────────────────────────────────
+# qemu-system-x86 (the VM), ovmf (the UEFI firmware: the postmarketOS
+# generic-x86_64 image does not boot in BIOS), xz-utils (the image is
+# compressed), and sshpass for "osmo-pmos shell" without typing the password
+# every time.
 _pmos_paquets() {
     export DEBIAN_FRONTEND=noninteractive
     local p manque=()
@@ -120,10 +116,10 @@ _ovmf() {
     return 1
 }
 
-# ── L IMAGE ──────────────────────────────────────────────────────────────────
-# On resout le repertoire date le plus recent, on telecharge en reprenant
-# (curl -C -), et on VERIFIE le sha256 publie a cote. Une image tronquee par
-# une coupure de reseau donne une VM qui ne demarre pas, sans dire pourquoi.
+# ── THE IMAGE ────────────────────────────────────────────────────────────────
+# Resolve the most recent dated directory, download with resume (curl -C -),
+# and VERIFY the sha256 published next to it. An image truncated by a network
+# cut gives a VM that does not boot, without saying why.
 _pmos_url() {
     [ -n "${OSMO_PMOS_IMG_URL:-}" ] && { echo "$OSMO_PMOS_IMG_URL"; return 0; }
     local index date fichier
@@ -170,24 +166,24 @@ pmos_fetch() {
     fi
     _say "decompression (compter quelques minutes)..."
     xz -dc "$xzf" > "$IMG" || { _err "decompression impossible"; return 1; }
-    # L image sort a la taille juste ; un telephone a besoin d un peu de place
-    # pour ses journaux et ses messages. Le fichier est creux : ces 8 Gio ne
-    # coutent rien tant qu ils ne servent pas.
+    # The image comes out at the exact size; a phone needs some room for its
+    # logs and messages. The file is sparse: these 8 GiB cost nothing until
+    # used.
     qemu-img resize -f raw "$IMG" 8G >/dev/null 2>&1 || true
     _ok "image prete : $IMG"
     [ "${OSMO_PMOS_GARDER_XZ:-0}" = "1" ] || rm -f "$xzf" "$xzf.sha256"
 }
 
-# ── LA PREPARATION DE L IMAGE ────────────────────────────────────────────────
-# On monte la partition racine de l image sur l hote (losetup -P) et on y pose
-# trois choses. C est plus sur qu un premier demarrage interactif : la VM est
-# prete AVANT d etre allumee, et une image re-telechargee repasse par ici.
+# ── PREPARING THE IMAGE ──────────────────────────────────────────────────────
+# Mount the image's root partition on the host (losetup -P) and install three
+# things. Safer than an interactive first boot: the VM is ready BEFORE being
+# powered on, and a re-downloaded image goes through here again.
 pmos_provision() {
     _root provision || return 1
     [ -f "$IMG" ] || { _err "pas d image : osmo-pmos fetch d abord"; return 1; }
     local loop mnt="$VAR/mnt" part
     loop="$(losetup -f --show -P "$IMG")" || { _err "losetup impossible"; return 1; }
-    # La racine est la plus grosse partition de l image (la premiere est l ESP).
+    # The root is the largest partition of the image (the first is the ESP).
     part="$(lsblk -brno NAME,SIZE "$loop" | tail -n +2 | sort -k2 -n | tail -1 | cut -d' ' -f1)"
     [ -n "$part" ] || { losetup -d "$loop"; _err "aucune partition dans l image"; return 1; }
     install -d "$mnt"
@@ -201,17 +197,17 @@ pmos_provision() {
         _err "/dev/$part ne ressemble pas a la racine du systeme"
         rc=1
     else
-        # 1. LE MOT DE PASSE, pose dans /etc/shadow. On ne chroote pas : l image
-        #    est en musl/Alpine et son /bin/sh n a pas les memes bibliotheques
-        #    que l hote. openssl fabrique le condensat SHA-512 que attend shadow.
+        # 1. THE PASSWORD, written in /etc/shadow. No chroot: the image is
+        #    musl/Alpine and its /bin/sh does not have the same libraries as
+        #    the host. openssl builds the SHA-512 digest that shadow expects.
         local hash
         hash="$(openssl passwd -6 "$PMOS_PASS" 2>/dev/null)"
         if [ -n "$hash" ] && [ -f "$mnt/etc/shadow" ]; then
             local u
             for u in root "$PMOS_USER"; do
                 grep -q "^$u:" "$mnt/etc/shadow" || continue
-                # Le champ 2 est le condensat ; « | » comme separateur de sed
-                # parce qu un hash contient des « / ».
+                # Field 2 is the digest; awk rather than sed because a hash
+                # contains "/".
                 awk -F: -v u="$u" -v h="$hash" 'BEGIN{OFS=":"} $1==u{$2=h} {print}' \
                     "$mnt/etc/shadow" > "$mnt/etc/shadow.osmo" \
                     && mv "$mnt/etc/shadow.osmo" "$mnt/etc/shadow"
@@ -222,26 +218,26 @@ pmos_provision() {
             _warn "mot de passe non pose (openssl absent ou /etc/shadow introuvable)"
         fi
 
-        # 2. LE PORT AT VU PAR ModemManager. Sans cette regle, rien ne se
-        #    passe et c est SILENCIEUX : ModemManager ne sonde pas un ttyS au
-        #    hasard (sa politique par defaut est « strict » - il lui faut un
-        #    marqueur udev), et l ecran de Phosh reste sur « pas de modem ».
-        #    Le port serie qu ajoute QEMU est un pci-serial (vendeur 0x1b36,
-        #    « Red Hat, Inc. ») : les ttyS0-3 de la carte mere, eux, n ont pas
-        #    de parent PCI et ne sont donc pas touches par cette regle.
+        # 2. THE AT PORT AS SEEN BY ModemManager. Without this rule nothing
+        #    happens, SILENTLY: ModemManager does not probe a random ttyS (its
+        #    default policy is "strict" - it needs a udev marker), and the
+        #    Phosh screen stays on "no modem".
+        #    The serial port QEMU adds is a pci-serial (vendor 0x1b36, "Red
+        #    Hat, Inc."): the motherboard's ttyS0-3 have no PCI parent and
+        #    are therefore not touched by this rule.
         install -d "$mnt/etc/udev/rules.d"
         cat > "$mnt/etc/udev/rules.d/77-osmo-modem-at.rules" <<'UDEV'
-# Le modem du banc, presente a la VM comme un port serie PCI par QEMU.
-# ID_MM_DEVICE_PROCESS : « sonde ce port » (ModemManager ignore sinon).
-# ID_MM_PORT_TYPE_AT   : « c est un port de commandes », pas un port de donnees.
+# The bench modem, presented to the VM as a PCI serial port by QEMU.
+# ID_MM_DEVICE_PROCESS : "probe this port" (ModemManager ignores it otherwise).
+# ID_MM_PORT_TYPE_AT   : "this is a command port", not a data port.
 SUBSYSTEM=="tty", KERNEL=="ttyS*", ATTRS{vendor}=="0x1b36", \
     ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_AT}="1", \
     ENV{ID_MM_TTY_BAUDRATE}="115200"
 UDEV
         _ok "regle udev posee : ModemManager sondera le port AT du banc"
 
-        # 3. LE SSH. Il sert de temoin (« la VM est levee »), de shell de
-        #    depannage, et c est par lui que le modem sait quand se brancher.
+        # 3. SSH. It serves as a witness ("the VM is up"), as a debugging
+        #    shell, and it is how the modem knows when to connect.
         if [ -d "$mnt/etc/init.d" ] && [ -x "$mnt/etc/init.d/sshd" ]; then
             install -d "$mnt/etc/runlevels/default"
             ln -sf /etc/init.d/sshd "$mnt/etc/runlevels/default/sshd" 2>/dev/null || true
@@ -255,7 +251,7 @@ UDEV
     return $rc
 }
 
-# ── DEMARRER ─────────────────────────────────────────────────────────────────
+# ── START ────────────────────────────────────────────────────────────────────
 pmos_start() {
     echo "[2/3] machine virtuelle"
     _root start || return 1
@@ -266,11 +262,11 @@ pmos_start() {
         local accel=tcg
         [ -w /dev/kvm ] && accel=kvm
         [ "$accel" = tcg ] && _warn "pas de /dev/kvm : la VM tournera en emulation (lent mais fonctionnel)"
-        # -serial tcp:...,server=on,wait=off : QEMU ECOUTE et n attend
-        # personne. C est le modem qui viendra, une fois le systeme leve (voir
-        # l entete). wait=on bloquerait le demarrage de la VM elle-meme.
-        # Le format telephone (720x1440) n existe pas sur tous les QEMU : on
-        # retombe sur la definition par defaut si le reglage est refuse.
+        # -serial tcp:...,server=on,wait=off: QEMU LISTENS and waits for
+        # nobody. The modem comes once the system is up (see the header).
+        # wait=on would block the boot of the VM itself.
+        # The phone format (720x1440) does not exist on every QEMU: fall back
+        # to the default resolution if the setting is refused.
         local gpu="virtio-vga"
         local res="${OSMO_PMOS_RES:-720x1440}"
         local xr="${res%x*}" yr="${res#*x}"
@@ -300,17 +296,17 @@ pmos_start() {
     pmos_modem_start
 }
 
-# Le modem du banc, cote hote. Mode --connect : il attend que le SSH de la VM
-# reponde, puis se branche sur le port serie que QEMU tient ouvert.
+# The bench modem, host side. --connect mode: it waits for the VM's SSH to
+# answer, then connects to the serial port QEMU keeps open.
 pmos_modem_start() {
     echo "[3/3] modem du banc"
     if pgrep -f "osmo-phonesim-banc.py --connect 127.0.0.1:$AT_PORT" >/dev/null 2>&1; then
         _ok "le modem du banc est deja branche sur le port $AT_PORT"
         return 0
     fi
-    # /usr/bin/python3 et non le shebang : lance depuis le banc, le PATH place
-    # le venv en tete et l interprete qu on y trouve n a pas les liaisons dont
-    # ces outils ont besoin (meme piege que dans start-native.sh).
+    # /usr/bin/python3 and not the shebang: launched from the bench, the PATH
+    # puts the venv first and the interpreter found there lacks the bindings
+    # these tools need (same trap as in start-native.sh).
     OSMO_VM_READY_PORT="$SSH_PORT" setsid /usr/bin/python3 \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$AT_PORT" \
         >>/tmp/osmo-phonesim-vm.log 2>&1 &
@@ -369,8 +365,8 @@ pmos_shell() {
              -p "$SSH_PORT" "$PMOS_USER@127.0.0.1" "$@"
 }
 
-# Ce que ModemManager voit, vu de la VM : le seul endroit ou l on sait si le
-# modem du banc a ete reconnu, et sous quel numero.
+# What ModemManager sees, from the VM: the only place that tells whether the
+# bench modem was recognised, and under which number.
 pmos_mm() {
     pmos_shell "sudo mmcli -L; echo; sudo mmcli -m 0 2>/dev/null || true"
 }
@@ -386,15 +382,13 @@ pmos_install() {
     _say "mot de passe : ${BOLD}$PMOS_PASS${NC}"
 }
 
-# [2026-09-08] LE GESTE DE L ICONE VA A pmbootstrap. L icone du dock
-# (osmo-pmos.desktop) et osmo-launcher.py appellent « osmo-pmos up » ; or la
-# VM du banc est desormais celle de pmbootstrap (tools/osmo-pmos-qemu.sh :
-# modem sur port serie PCI, cartes son du pont voix, format d ecran), pas
-# l image telechargee ici dans /var/lib/osmo-pmos. « up » finissait donc sur
-# « il faut d abord poser l image... cette commande demande root », fenetre
-# fermee aussitot. up/start, stop/down et status vont au lanceur pmbootstrap
-# des qu il est la ; le reste (fetch, provision, shell, mm, at, log) garde
-# son sens ici.
+# THE ICON ACTION GOES TO pmbootstrap. The dock icon (osmo-pmos.desktop) and
+# osmo-launcher.py call "osmo-pmos up"; the bench VM is the pmbootstrap one
+# (tools/osmo-pmos-qemu.sh: modem on a PCI serial port, voice bridge sound
+# cards, screen format), not the image downloaded here into
+# /var/lib/osmo-pmos. up/start, stop/down and status go to the pmbootstrap
+# launcher as soon as it is present; the rest (fetch, provision, shell, mm,
+# at, log) keeps its meaning here.
 QEMU_LANCEUR="${OSMO_PMOS_QEMU:-/usr/local/bin/osmo-pmos-qemu}"
 [ -x "$QEMU_LANCEUR" ] || QEMU_LANCEUR="$REPO/tools/osmo-pmos-qemu.sh"
 if [ -x "$QEMU_LANCEUR" ]; then
@@ -407,14 +401,14 @@ if [ -x "$QEMU_LANCEUR" ]; then
 fi
 case "${1:-status}" in
     install)   pmos_install ;;
-    # « up » = le geste de l icone : on installe si l image manque, puis on
-    # allume. L image (1,5 Go a telecharger) n est PAS dans l ISO - elle
-    # tiendrait mal dans un squashfs qui doit vivre en RAM - et le premier
-    # lancement est donc long, une fois. Les paquets, eux, sont deja dans
-    # l image (tools/osmo-extras-install.sh les pose au build).
+    # "up" = the icon action: install if the image is missing, then power on.
+    # The image (1.5 GB to download) is NOT in the ISO - it would fit poorly
+    # in a squashfs that must live in RAM - so the first launch is long,
+    # once. The packages are already in the image
+    # (tools/osmo-extras-install.sh installs them at build).
     up)
-        # Les reperes « [n/3] » imprimes par les fonctions font la barre de
-        # progression de la fenetre de lancement (osmo-gtk-run.py --progress).
+        # The "[n/3]" markers printed by the functions make the progress bar
+        # of the launch window (osmo-gtk-run.py --progress).
         if [ ! -f "$IMG" ]; then
             _say "premier lancement : il faut d abord poser l image postmarketOS"
             pmos_install || exit 1

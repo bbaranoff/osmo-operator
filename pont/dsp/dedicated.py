@@ -1,19 +1,18 @@
-# pont/dsp/dedicated.py - calypso_dcch_cfg tel que l'ecrit le tap QEMU du
-# montage DSP (qosmo hw/arm/calypso/calypso_dcch_tap.c).
+# pont/dsp/dedicated.py - calypso_dcch_cfg as written by the QEMU tap of the
+# DSP setup (qosmo hw/arm/calypso/calypso_dcch_tap.c).
 #
-# [2026-09-23] Le tap annonce maintenant aussi le TCH : genre 2 = TCH/F,
-# 3 = TCH/H. Il ne connaissait que le SDCCH, et pendant tout un appel le
-# fichier disait encore SDCCH/8 TS1. Dedicated.read (pont/state.py) ne garde
-# que le bit 0 du genre : un genre 2 y deviendrait un SDCCH/4 sur le TS du TCH
-# -- le montant SDCCH d'une ASSIGNMENT FAILURE serait alors planifie sur TS2.
+# The tap also announces the TCH: kind 2 = TCH/F, 3 = TCH/H. Dedicated.read
+# (pont/state.py) keeps only bit 0 of the kind: a kind 2 would become there an
+# SDCCH/4 on the TCH's TS -- the uplink SDCCH of an ASSIGNMENT FAILURE would
+# then be scheduled on TS2.
 #
-# Ici le TCH est note a part et plan() continue de rendre le DERNIER SDCCH tant
-# que la connexion vit : c'est exactement ce que voyaient DownlinkDsp, TrxDsp et
-# UplinkDsp quand le tap ignorait le TCH (aucun changement de comportement), et
-# c'est le bon canal si le mobile y revient (ASSIGNMENT FAILURE). Seul 0xFF
-# (retour sur les voies communes) termine la connexion : UplinkDsp._poll_release
-# ne voit donc pas l'arrivee sur le TCH comme une liberation.
-# pont.py (grgsm) garde state.Dedicated : sa couche 1 n'ecrit jamais de genre 2.
+# Here the TCH is noted separately and plan() keeps returning the LAST SDCCH as
+# long as the connection lives: this is what DownlinkDsp, TrxDsp and UplinkDsp
+# expect, and it is the right channel if the mobile comes back to it
+# (ASSIGNMENT FAILURE). Only 0xFF (return to the common channels) ends the
+# connection: UplinkDsp._poll_release therefore does not see the arrival on
+# the TCH as a release.
+# pont.py (grgsm) keeps state.Dedicated: its layer 1 never writes a kind 2.
 import logging
 import os
 import struct
@@ -25,16 +24,16 @@ log = logging.getLogger("pont")
 
 DCCH_TCH_F = 2
 DCCH_TCH_H = 3
-# [2026-10-15] genre 4 = PDCH (GPRS) : le firmware l1gprs_fw.c est sur un PDCH ; le
-# tap QEMU (calypso_dcch_tap.c) le publie a partir des L1CTL_GPRS_DL_BLOCK_IND.
+# Kind 4 = PDCH (GPRS): the l1gprs_fw.c firmware is on a PDCH; the QEMU tap
+# (calypso_dcch_tap.c) publishes it from the L1CTL_GPRS_DL_BLOCK_IND.
 DCCH_PDCH = 4
 
 
 class DedicatedDsp(Dedicated):
     def __init__(self):
         super().__init__()
-        self._tch = None        # (genre, ss, tn) : le firmware est sur le TCH
-        self._pdch = None       # tn : le firmware est sur un PDCH (GPRS)
+        self._tch = None        # (kind, ss, tn): the firmware is on the TCH
+        self._pdch = None       # tn: the firmware is on a PDCH (GPRS)
 
     def read(self):
         now = time.monotonic()
@@ -84,19 +83,19 @@ class DedicatedDsp(Dedicated):
         return self._value
 
     def _pdch_quitte(self, quoi, tn):
-        # [2026-10-15] Le firmware ne peut pas etre sur un PDCH ET sur un SDCCH/TCH : _pdch
-        # n'etait efface qu'au DCCH_RELEASED, et tn_dedie() (dsp/uplink.py), qui teste le PDCH
-        # en premier, aurait envoye les bursts ROM du canal dedie sur le TS du PDCH.
+        # The firmware cannot be on a PDCH AND on an SDCCH/TCH: _pdch is cleared here,
+        # otherwise tn_dedie() (dsp/uplink.py), which tests the PDCH first, would send the
+        # ROM bursts of the dedicated channel on the PDCH's TS.
         if self._pdch is not None:
             log.info("canal dedie : le firmware a quitte le PDCH TS=%d pour un %s TS=%d", self._pdch, quoi, tn)
             self._pdch = None
 
     def tch(self):
-        """(genre, ss, tn) si le firmware est sur un TCH d'apres le tap, sinon None."""
+        """(kind, ss, tn) if the firmware is on a TCH according to the tap, else None."""
         self.read()
         return self._tch
 
     def pdch(self):
-        """tn si le firmware est sur un PDCH (GPRS) d'apres le tap, sinon None."""
+        """tn if the firmware is on a PDCH (GPRS) according to the tap, else None."""
         self.read()
         return self._pdch

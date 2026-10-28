@@ -1,8 +1,8 @@
-# pont/dsp/uplink.py - le montant du pont DSP.
+# pont/dsp/uplink.py - the uplink of the DSP bridge.
 #
-# Les bandes laterales sont celles de c54x_exe (src/montant.c), memes chemins
-# et meme format qu'en grgsm. Deux regles changent, parce qu'en DSP on sait
-# d'ou vient chaque bloc et que la liberation se lit a l'heure du DSP.
+# The side bands are those of c54x_exe (src/montant.c), same paths and same
+# format as in grgsm. Two rules differ, because in DSP mode the origin of each
+# block is known and the release is read at the DSP's time.
 import collections
 import logging
 import os
@@ -16,71 +16,68 @@ log = logging.getLogger("pont")
 
 RR_ASSIGNMENT_FAILURE = 0x2f
 
-# [2026-10-03] Bursts xCCH montants emis par la ROM DSP, publies par c54x_exe (src/pont.c,
-# tx_rom_publier) : la ROM copie chaque burst du tampon entrelace 0x4280 vers data[0x3f8a] a sa
-# trame d'emission. Anneau : en-tete w(u32, nombre ecrit) n(u32, cases) ; case de 1024 octets :
-# seq(u32) fn_burst0(u32) l2(23) .(1), 4 x 116 ubits (57 donnees, hl, hu, 57 donnees), puis 4 x 116
-# ubits du flux de cle A5 montant que la ROM XORe sur la rafale en mode chiffre (data[0x3f9b],
-# calypso_a5.c). La ROM chiffre a l'heure du DSP (12 a ~200 trames apres la BTS) : on defait son XOR et
-# le pont rechiffre au fn de l'air (Cipher.apply), comme pour un bloc code par l'hote.
+# Uplink xCCH bursts emitted by the DSP ROM, published by c54x_exe (src/pont.c,
+# tx_rom_publier): the ROM copies each burst from the interleaved buffer 0x4280 to data[0x3f8a]
+# at its transmit frame. Ring: header w(u32, number written) n(u32, slots); 1024-byte slot:
+# seq(u32) fn_burst0(u32) l2(23) .(1), 4 x 116 ubits (57 data, hl, hu, 57 data), then 4 x 116
+# ubits of the uplink A5 keystream the ROM XORs onto the burst in ciphered mode (data[0x3f9b],
+# calypso_a5.c). The ROM ciphers at the DSP's time (12 to ~200 frames after the BTS): its XOR is
+# undone and the bridge re-ciphers at the air fn (Cipher.apply), as for a host-coded block.
 SB_XCCH_UL_ROM = "/dev/shm/calypso_xcch_ul_rom"
 ROM_SLOT = 1024
-# Les bursts de la ROM sortent 1 a ~5 trames apres la publication du L2 par montant.c (codage
-# puis une trame par burst). Au-dela, le bloc part code par l'hote. PONT_UL_ROM=0 : toujours l'hote.
+# The ROM's bursts come out 1 to ~5 frames after montant.c publishes the L2 (coding, then one
+# frame per burst). Beyond that, the block leaves host-coded. PONT_UL_ROM=0: always the host.
 ROM_ATTENTE = float(os.environ.get("PONT_UL_ROM_ATTENTE", "0.12"))
 
-# [2026-10-04] LE TUYAU UNIQUE : LES BURSTS MONTANTS FINAUX DE LA ROM, TELS QUELS, A SON NUMERO DE TRAME.
+# THE SINGLE PIPE: THE ROM'S FINAL UPLINK BURSTS, AS IS, AT ITS FRAME NUMBER.
 #
-# c54x_exe (src/tsp_tx.c, pont.c tx_tsp_publier) publie dans calypso_tx_rom chaque burst que la ROM
-# a fini de construire dans son script TSP pour l'ABB : sequence d'apprentissage, queues, inversion
-# I/Q et chiffrement A5 deja appliques par la ROM, 148 bits, avec le numero de trame que l'ARM lui a
-# donne pour ce burst (= celui du chiffrement : dsp_tester tx-sdcch-a5, 24/24). Avec PONT_UL_RAW=1 le
-# pont les envoie a la BTS tels quels, a ce fn, sans codage ni A5 cote hote : RACH sur TS0, bursts
-# normaux sur le TN du canal dedie (TCH si ouvert, sinon le SDCCH annonce). La BTS accepte un burst
-# montant quel que soit son retard (osmo-bts trx_sched_ul_burst ne rejette pas sur le fn) ; le
-# chemin hote classique continue de tourner pour les journaux, les stats et l'etat (GSMTAP), mais
-# ses bursts vont dans un puits (Transmitter remplace par TransmitterPuits). PONT_UL_RAW_DECAL=<n>
-# ajoute n trames au fn de la ROM (0 par defaut : la ROM chiffre a ce fn, la BTS dechiffre a ce fn).
+# c54x_exe (src/tsp_tx.c, pont.c tx_tsp_publier) publishes in calypso_tx_rom each burst the ROM
+# has finished building in its TSP script for the ABB: training sequence, tails, I/Q inversion
+# and A5 ciphering already applied by the ROM, 148 bits, with the frame number the ARM gave it
+# for this burst (= the ciphering one: dsp_tester tx-sdcch-a5, 24/24). With PONT_UL_RAW=1 the
+# bridge sends them to the BTS as is, at that fn, without host-side coding or A5: RACH on TS0,
+# normal bursts on the TN of the dedicated channel (TCH if open, else the announced SDCCH). The
+# BTS accepts an uplink burst whatever its lateness (osmo-bts trx_sched_ul_burst does not reject
+# on fn); the classic host path keeps running for logs, stats and state (GSMTAP), but its bursts
+# go to a sink (Transmitter replaced by TransmitterPuits). PONT_UL_RAW_DECAL=<n> adds n frames
+# to the ROM's fn (0 by default: the ROM ciphers at this fn, the BTS deciphers at this fn).
 SB_TX_ROM = "/dev/shm/calypso_tx_rom"
 TX_ROM_SLOT = 160
 UL_RAW = os.environ.get("PONT_UL_RAW", "0") == "1"
 PDCH_FILTRE = os.environ.get("PONT_PDCH_FILTRE", "1") != "0"
-# [2026-10-15] B5 : SACCH/T montant par la ROM. 0 (defaut) = mesure seulement (retard fn,
-# blocs ROM disponibles) ; la bascule viendra une fois la gigue mesuree.
+# B5: uplink SACCH/T by the ROM. 0 (default) = measurement only (fn lateness,
+# available ROM blocks).
 UL_RAW_SACCH_T = os.environ.get("PONT_UL_RAW_SACCH_T", "0") == "1"
 UL_RAW_DECAL = int(os.environ.get("PONT_UL_RAW_DECAL", "0"))
-# [2026-10-04 soir] LE TCH RESTE A L'HOTE. Avec montant.c qui laisse B_BLUD a la ROM, la ROM emet bien
-# le SABM FACCH et la SACCH/T sur le TS2 (appel de 19:18 : SABM recu par la BTS, connect ack), mais
-# AUCUN burst de parole (rejeu : 1290 trames a_du consommees, zero burst hl=hu=0 ; le serialiseur
-# `cc 0x8900,tc` de 0x8726 n'est jamais appele pour la parole). Envoyer le TCH de la ROM, c'est donc
-# couper la voix montante ; melanger bursts ROM et hote sur le meme TCH casse la FACCH (osmo-bts
-# decode au bid 3 de chaque burst recu et decale son tampon a chaque bid 0). Tant que la ROM n'emet
-# pas la parole : RACH et SDCCH/SACCH par la ROM, le TCH entier (FACCH, SACCH/T, parole) par l'hote.
-# PONT_UL_RAW_TCH=1 : tout par la ROM (voix montante coupee).
+# THE TCH STAYS WITH THE HOST. With montant.c leaving B_BLUD to the ROM, the ROM does emit the
+# SABM FACCH and the SACCH/T on the TCH, but NO speech burst (the `cc 0x8900,tc` serialiser of
+# 0x8726 is never called for speech). Sending the ROM's TCH would therefore cut the uplink voice;
+# mixing ROM and host bursts on the same TCH breaks the FACCH (osmo-bts decodes at bid 3 of each
+# received burst and shifts its buffer at each bid 0). As long as the ROM does not emit speech:
+# RACH and SDCCH/SACCH by the ROM, the whole TCH (FACCH, SACCH/T, speech) by the host.
+# PONT_UL_RAW_TCH=1: everything by the ROM (uplink voice cut).
 UL_RAW_TCH = os.environ.get("PONT_UL_RAW_TCH", "0") == "1"
-# [2026-10-26] DELAI DE GRACE AVANT D'ABANDONNER LE TCH SUR UN BLOC SDCCH MONTANT (secondes).
-# Run du 26/10 09:42-09:45, BTS classique + Magnetite + gapk, appels MS#2 -> 100101 : trois echecs
-# (cause 47) et trois reussites avec la MEME sequence, le seul ecart etant, dans les echecs, un bloc
-# sur la voie SDCCH juste apres le SABM FACCH (« xCCH ROM seq=61 : CRC faux » x5 au meme instant) :
-# _route_sdcch retirait l'annonce (« TCH TN=2 abandonne (bloc montant du mobile sur le SDCCH) »), le
-# SABM n'etait plus code en FACCH (STATS : FACCH ul=0), le firmware TI sortait en « DL: >N200 of
-# SABM » -> RR ASSIGNMENT FAILURE -> MSC « Assignment Failure, releasing call ». Ce bloc est la queue
-# de la tache SDCCH du firmware (ABORT apres CAS_C), pas un retour sur le SDCCH : pendant ce delai on
-# l'ignore. Un vrai retour est annonce par une ASSIGNMENT FAILURE, traitee avant et sans delai.
+# GRACE DELAY BEFORE ABANDONING THE TCH ON AN UPLINK SDCCH BLOCK (seconds).
+# Right after the SABM FACCH, a block may still show up on the SDCCH path: it is the tail of
+# the firmware's SDCCH task (ABORT after CAS_C), not a return to the SDCCH. Abandoning the TCH
+# on it would leave the SABM uncoded in FACCH ("DL: >N200 of SABM" -> RR ASSIGNMENT FAILURE ->
+# MSC "Assignment Failure, releasing call"), so during this delay such a block is ignored. A
+# real return is announced by an ASSIGNMENT FAILURE, handled before and without delay.
 TCH_ABANDON_GRACE = float(os.environ.get("PONT_TCH_ABANDON_GRACE", "2.0"))
-# [2026-10-21] Magnetite (firmware TI) : la ROM n'emet pas ses bursts par le script TSP que lit calypso_tx_rom,
-# sauf le RACH que c54x_exe y publie lui-meme (tx_rach_vers_air). Le SABM et la SACCH, captures dans a_cu par
-# montant.c (calypso_sdcch_ul), partaient au puits (« DL: >N200 of SABM »). PONT_UL_RAW_DCCH_HOTE=1 : SDCCH et
-# SACCH codes par l'hote et envoyes a la BTS, le reste du tuyau ROM inchange.
+# Magnetite (TI firmware): the ROM does not emit its bursts through the TSP script read by
+# calypso_tx_rom, except the RACH that c54x_exe publishes there itself (tx_rach_vers_air). The SABM
+# and the SACCH, captured in a_cu by montant.c (calypso_sdcch_ul), would go to the sink.
+# PONT_UL_RAW_DCCH_HOTE=1: SDCCH and SACCH coded by the host and sent to the BTS, the rest of the
+# ROM pipe unchanged.
 UL_RAW_DCCH_HOTE = os.environ.get("PONT_UL_RAW_DCCH_HOTE", "0") == "1"
 UL_TN_DEFAUT = int(os.environ["PONT_UL_TN_DEFAUT"]) if os.environ.get("PONT_UL_TN_DEFAUT", "") != "" else None
 
 
 class RomTxRing:
-    """Lecteur de calypso_tx_rom : (seq, fn, type, tsc, bits[148]) dans l'ordre d'ecriture."""
+    """Reader of calypso_tx_rom: (seq, fn, type, tsc, bits[148]) in write order."""
     def __init__(self):
         self.fd = None
-        self.seq = 0            # dernier seq consomme
+        self.seq = 0            # last seq consumed
 
     def nouveaux(self):
         try:
@@ -104,16 +101,16 @@ class RomTxRing:
             if len(case) < TX_ROM_SLOT or struct.unpack_from("<I", case, 0)[0] != seq:
                 continue
             fn, typ, tsc, _off, drap = struct.unpack_from("<IBBBB", case, 4)
-            # drap bit 7 : burst chiffre par la ROM (c54x_exe pont.c tx_tsp_publier, 2026-10-15)
+            # flag bit 7: burst ciphered by the ROM (c54x_exe pont.c tx_tsp_publier)
             out.append((seq, fn, typ, tsc, bytes(case[12:12 + 148]), bool(drap & 0x80)))
         self.seq = w
         return out
 
 
 def classe_tch(fn, burst):
-    """[2026-10-15] Burst montant d'un TCH/F : 'S' SACCH/T (fn%26 = 12, ou 25 selon le TN),
-    'F' FACCH (un stealing flag leve : bits 60 / 87, de part et d'autre de la TSC -- meme
-    place dans les bursts de la ROM, verifie sur calypso_tx_rom), 'P' parole sinon."""
+    """Uplink burst of a TCH/F: 'S' SACCH/T (fn%26 = 12, or 25 depending on the TN),
+    'F' FACCH (a stealing flag set: bits 60 / 87, either side of the TSC -- same place
+    in the ROM's bursts), 'P' speech otherwise."""
     if fn % 26 in (12, 25):
         return "S"
     try:
@@ -125,8 +122,8 @@ def classe_tch(fn, burst):
 
 
 class TransmitterPuits:
-    """Puits pour les bursts codes par l'hote quand PONT_UL_RAW=1 : rien ne part, sauf ceux du TCH
-    (PONT_UL_RAW_TCH=0, voir UL_RAW_TCH), qui vont au vrai Transmitter."""
+    """Sink for host-coded bursts when PONT_UL_RAW=1: nothing leaves, except those of the TCH
+    (PONT_UL_RAW_TCH=0, see UL_RAW_TCH), which go to the real Transmitter."""
     def __init__(self, stats, vrai=None, tch=None):
         self.stats = stats
         self.vrai = vrai
@@ -149,11 +146,11 @@ class RomXcchRing:
     def __init__(self):
         self.fd = None
         self.vus = set()
-        self.dechiffres = 0     # blocs que la ROM avait chiffres (XOR defait ici)
+        self.dechiffres = 0     # blocks the ROM had ciphered (XOR undone here)
 
     def chercher(self, l2):
-        """Les 4 bursts (116 ubits chacun) du bloc le plus recent dont les bits REDECODES donnent
-        `l2` ; (None, n_ko) sinon. n_ko = blocs ROM recents qui ne redecodent pas (CRC faux)."""
+        """The 4 bursts (116 ubits each) of the most recent block whose RE-DECODED bits give
+        `l2`; (None, n_ko) otherwise. n_ko = recent ROM blocks that do not re-decode (bad CRC)."""
         try:
             if self.fd is None:
                 self.fd = os.open(SB_XCCH_UL_ROM, os.O_RDONLY)
@@ -202,12 +199,12 @@ class UplinkDsp(Uplink):
     rom_attente = None
 
     def _bursts_xcch(self, l2):
-        """[2026-10-03] LES BURSTS MONTANTS SDCCH/SACCH SONT CEUX DE LA ROM.
+        """THE UPLINK SDCCH/SACCH BURSTS ARE THE ROM'S.
 
-        La ROM du DSP fait le codage canal (FIRE, convolutif, entrelacement) ; c54x_exe publie les
-        bursts qu'elle emet (data[0x3f8a]) dans calypso_xcch_ul_rom. On les prend s'ils se
-        redecodent en ce L2 ; tant qu'ils ne sont pas sortis (ROM_ATTENTE), le bloc attend ; au-dela,
-        ou si PONT_UL_ROM=0, il est code par l'hote comme avant (compteur xCCH ul hote)."""
+        The DSP ROM does the channel coding (FIRE, convolutional, interleaving); c54x_exe publishes
+        the bursts it emits (data[0x3f8a]) in calypso_xcch_ul_rom. They are taken if they re-decode
+        to this L2; while they are not out yet (ROM_ATTENTE), the block waits; beyond that, or if
+        PONT_UL_ROM=0, it is coded by the host (counter xCCH ul hote)."""
         if os.environ.get("PONT_UL_ROM", "1") == "0":
             return Uplink._bursts_xcch(self, l2)
         if self.rom is None:
@@ -230,9 +227,9 @@ class UplinkDsp(Uplink):
         self.rom_attente = None
         self.stats.xcch_ul_rom_ko += ko
         if UL_RAW and not UL_RAW_DCCH_HOTE:
-            # [2026-10-15] B2 : sous PONT_UL_RAW=1 la copie hote finissait au puits ; on ne la
-            # code plus. Liste vide = _poll_sdcch garde ses effets (GSMTAP, sacch_ul, routage)
-            # sans rien programmer. Ce qui part a l'antenne reste le burst ROM de calypso_tx_rom.
+            # B2: under PONT_UL_RAW=1 the host copy would end in the sink, so it is not
+            # coded. Empty list = _poll_sdcch keeps its effects (GSMTAP, sacch_ul, routing)
+            # without scheduling anything. What goes on air is the ROM burst of calypso_tx_rom.
             self.stats.xcch_shadow_ko += 1
             if self.stats.xcch_shadow_ko <= 5:
                 log.info("xCCH montant : %s sans bursts 0x3f8a apres %.0f ms (%d bloc(s) sans CRC) -- "
@@ -245,23 +242,21 @@ class UplinkDsp(Uplink):
         return Uplink._bursts_xcch(self, l2)
 
     def _route_sdcch(self, l2):
-        """[2026-09-23] UN BLOC DE calypso_sdcch_ul N'EST JAMAIS UNE FACCH.
+        """A BLOCK FROM calypso_sdcch_ul IS NEVER A FACCH.
 
-        En DSP, montant.c ne publie sur cette voie que les blocs des taches
-        SDCCH (DUL/AUL, capture_sdcch_ul) ; ceux du TCH passent par
-        calypso_tch_facch_ul (capture_tch_ul, TCHT). Uplink._route_sdcch les
-        envoyait en FACCH des que tch.is_open() : l'ASSIGNMENT FAILURE de
-        l'appel 1 du run de 12:22, emise sur TS1, partait donc sur TS2 et la
-        BTS ne l'a jamais vue en SDCCH.
-        Un tel bloc prouve au contraire que le mobile est sur le SDCCH : si un
-        TCH est annonce et que c'est une ASSIGNMENT FAILURE, ou que le mobile
-        etait deja passe sur le TCH, l'annonce est retiree (TchDsp.abandon ;
-        c54x_exe rend TS1 au BSP s'il ne l'a pas deja fait sur la tache du
-        firmware). Le bloc part toujours en SDCCH/SACCH.
+        In DSP mode, montant.c publishes on this path only the blocks of the
+        SDCCH tasks (DUL/AUL, capture_sdcch_ul); those of the TCH go through
+        calypso_tch_facch_ul (capture_tch_ul, TCHT). Uplink._route_sdcch would
+        send them as FACCH as soon as tch.is_open(), on the TCH's TS.
+        Such a block proves on the contrary that the mobile is on the SDCCH: if
+        a TCH is announced and this is an ASSIGNMENT FAILURE, or the mobile had
+        already moved to the TCH, the announcement is withdrawn (TchDsp.abandon;
+        c54x_exe gives TS1 back to the BSP if it has not already done so on the
+        firmware task). The block always leaves as SDCCH/SACCH.
 
-        [2026-10-15] B1 : sur un PDCH, montant.c publie aussi les blocs a_cu du GPRS (tache DUL)
-        sur cette voie. Ils ne sont pas du SDCCH : on les jette (compteur pdtch_hote_jete).
-        PONT_PDCH_FILTRE=0 : ancien comportement."""
+        B1: on a PDCH, montant.c also publishes the GPRS a_cu blocks (DUL task)
+        on this path. They are not SDCCH: they are dropped (counter pdtch_hote_jete).
+        PONT_PDCH_FILTRE=0: keep them."""
         if PDCH_FILTRE and self.dedicated.pdch() is not None:
             self.stats.pdtch_ul_vu_hote += 1
             if self.stats.pdtch_ul_vu_hote == 1:
@@ -284,15 +279,14 @@ class UplinkDsp(Uplink):
         return False
 
     def _poll_release(self):
-        """[2026-09-23] LE Kc N'EST PLUS LACHE A LA LIBERATION.
+        """THE Kc IS NOT DROPPED AT RELEASE.
 
-        La liberation se lit dans calypso_dcch_cfg, publiee quand le firmware
-        relit la BCCH : a l'heure du DSP, en retard sur la BTS, qui chiffre
-        encore le SDCCH. Uplink._poll_release lachait le Kc (et dl_active) a
-        cet instant ; run de 12:22, apres la 4e session : blocs TS1/8
-        80/1793 et TS1/40 40/897 en echec cote pont jusqu'a 12:34. Le Kc et
-        dl_active tombent desormais a l'IMMEDIATE ASSIGNMENT suivante, decodee
-        a l'heure de la BTS (Downlink._signalling), ou avec un nouveau Kc."""
+        The release is read in calypso_dcch_cfg, published when the firmware
+        goes back to the BCCH: at the DSP's time, behind the BTS, which still
+        ciphers the SDCCH. Dropping the Kc (and dl_active) at that moment would
+        leave the following SDCCH blocks undecodable. The Kc and dl_active fall
+        at the next IMMEDIATE ASSIGNMENT, decoded at the BTS's time
+        (Downlink._signalling), or with a new Kc."""
         active = self.dedicated.plan() is not None
         if self.ded_active and not active:
             reason = "canal libere par le mobile"
@@ -306,14 +300,14 @@ class UplinkDsp(Uplink):
         log.info("%s : Kc garde jusqu'a la prochaine IMMEDIATE ASSIGNMENT (la BTS chiffre encore)", reason)
 
     def run(self):
-        """[2026-10-04] PONT_UL_RAW=1 : voir RomTxRing. Les _poll_* continuent (journaux, stats, etat),
-        leurs bursts vont au puits ; ceux de la ROM partent par self.tx_rom.trx.send_ul, TOUT DE SUITE :
-        leur fn est definitif (c'est celui du chiffrement de la ROM), la BTS les range par fn quel que
-        soit leur retard (osmo-bts trx_sched_ul_burst), et la fenetre du Transmitter (PONT_UL_RETARD_MAX,
-        26 trames) en jetait une partie des que l'avance BTS depassait ~23 trames (run de 17:36 : tard=702
-        sur 2000). Le canal dedie est relu de force (refresh) quand un burst normal arrive sans TN connu
-        -- le cache de 100 ms faisait perdre les premiers bursts du SDCCH, donc le SABM -- et les bursts
-        attendent jusqu'a 0,3 s que le TN soit connu."""
+        """PONT_UL_RAW=1: see RomTxRing. The _poll_* keep running (logs, stats, state), their
+        bursts go to the sink; the ROM's leave through self.tx_rom.trx.send_ul, IMMEDIATELY: their
+        fn is final (it is the ROM's ciphering fn), the BTS files them by fn whatever their lateness
+        (osmo-bts trx_sched_ul_burst), and the Transmitter window (PONT_UL_RETARD_MAX, 26 frames)
+        would drop part of them once the BTS advance exceeds ~23 frames. The dedicated channel is
+        force re-read (refresh) when a normal burst arrives without a known TN -- the 100 ms cache
+        would lose the first SDCCH bursts, hence the SABM -- and bursts wait up to 0.3 s for the
+        TN to be known."""
         if not UL_RAW:
             return Uplink.run(self)
         ring = RomTxRing()
@@ -324,13 +318,13 @@ class UplinkDsp(Uplink):
                  SB_TX_ROM, (" %+d" % UL_RAW_DECAL) if UL_RAW_DECAL else "")
 
         def tn_dedie():
-            # [2026-10-04, run de 18:19] Le TN est celui ou le FIRMWARE est, d'apres le tap QEMU
-            # (calypso_dcch_cfg) : des l'ASSIGNMENT COMMAND il passe sur le TCH et y envoie le SABM
-            # FACCH, l'ASSIGNMENT COMPLETE, la parole ; plan() garde le SDCCH « pour un retour » et
-            # tch.is_open() n'est vrai qu'apres la preuve cote pont -- les premiers bursts du TCH
-            # partaient donc sur le TS du SDCCH et l'assignation echouait (ASSIGNMENT FAILURE cause 1).
-            # [2026-10-15] PDCH (GPRS) d abord : les blocs PDTCH montants codes par la ROM
-            # (tache DUL du firmware l1gprs_fw.c) partent sur le TN du PDCH, a leur fn.
+            # The TN is the one where the FIRMWARE is, according to the QEMU tap
+            # (calypso_dcch_cfg): from the ASSIGNMENT COMMAND on it moves to the TCH and sends
+            # there the SABM FACCH, the ASSIGNMENT COMPLETE, the speech; plan() keeps the SDCCH
+            # "for a return" and tch.is_open() is only true once proven on the bridge side --
+            # the first TCH bursts would otherwise leave on the SDCCH's TS.
+            # PDCH (GPRS) first: the uplink PDTCH blocks coded by the ROM (DUL task of the
+            # l1gprs_fw.c firmware) leave on the PDCH's TN, at their fn.
             pdch = self.dedicated.pdch()
             if pdch is not None:
                 return pdch
@@ -349,9 +343,10 @@ class UplinkDsp(Uplink):
             if ded is None:
                 self.dedicated.refresh()
                 ded = self.dedicated.plan()
-            # [2026-10-21] Magnetite : pas de tap L1CTL, donc jamais de calypso_dcch_cfg. Ses bursts SDCCH
-            # (TSC 7, 4 trames de suite, deja dans calypso_tx_rom avec leur fn) partaient « aucun canal dedie
-            # connu, perdu ». PONT_UL_TN_DEFAUT=<tn> : l'intervalle a prendre faute d'annonce (TS0, SDCCH/4).
+            # Magnetite: no L1CTL tap, hence never a calypso_dcch_cfg. Its SDCCH bursts (TSC 7, 4
+            # frames in a row, already in calypso_tx_rom with their fn) would be lost with "no known
+            # dedicated channel". PONT_UL_TN_DEFAUT=<tn>: the timeslot to use without an
+            # announcement (TS0, SDCCH/4).
             if ded is None and UL_TN_DEFAUT is not None:
                 return UL_TN_DEFAUT
             return ded[2] if ded else None
@@ -360,7 +355,7 @@ class UplinkDsp(Uplink):
         tch_rom = [0]
 
         def tn_tch():
-            # TN du TCH tel que le firmware le voit (tap QEMU), sinon celui du pont
+            # TN of the TCH as the firmware sees it (QEMU tap), else the bridge's
             t = self.dedicated.tch()
             return t[2] if t is not None else self.tch.active_tn()
 
@@ -368,7 +363,7 @@ class UplinkDsp(Uplink):
             st = self.stats
             est_tch = typ != 1 and tn is not None and tn == tn_tch()
             if est_tch:
-                # B5 : retard du fn ROM sur l'horloge BTS (trames), et SACCH/T disponibles
+                # B5: lateness of the ROM fn against the BTS clock (frames), and available SACCH/T
                 r = (self.clock.fn() - fn) % gsm.HYPERFRAME
                 if r > gsm.HYPERFRAME // 2:
                     r -= gsm.HYPERFRAME
@@ -381,7 +376,7 @@ class UplinkDsp(Uplink):
                     st.sacch_t_rom_blocs = self._s_rom // 4
             if typ != 1 and not UL_RAW_TCH and tn == self.tch.active_tn():
                 st.tch_ul_rom_jete[classe_tch(fn, bits)] += 1
-                tch_rom[0] += 1          # voir UL_RAW_TCH : le TCH est code et emis par l'hote
+                tch_rom[0] += 1          # see UL_RAW_TCH: the TCH is coded and emitted by the host
                 if tch_rom[0] == 1:
                     log.info("bursts ROM du TCH TS%d non emis : FACCH, SACCH/T et parole restent codes par l'hote "
                              "(PONT_UL_RAW_TCH=0), la ROM n'emet pas encore la parole montante", tn)
@@ -389,7 +384,7 @@ class UplinkDsp(Uplink):
             self.tx_rom.trx.send_ul(tn, (fn + UL_RAW_DECAL) % gsm.HYPERFRAME, list(bits), False)
             if typ == 1:
                 st.air_rom_rach += 1
-                ra = gsm.rach_ra(bits, self.cfg.bsic)      # [2026-10-24] voir downlink._imm_ass_dcch
+                ra = gsm.rach_ra(bits, self.cfg.bsic)      # see downlink._imm_ass_dcch
                 if ra is not None:
                     from ..downlink import noter_rach
                     noter_rach(ra)
@@ -398,7 +393,7 @@ class UplinkDsp(Uplink):
             elif tn == self.dedicated.pdch():
                 st.air_rom_pdch += 1
             elif typ not in (1, 2):
-                st.air_rom_inconnu += 1      # B4 : emis quand meme (voisin du PDCH en GPRS)
+                st.air_rom_inconnu += 1      # B4: emitted anyway (neighbour of the PDCH in GPRS)
                 if st.air_rom_inconnu <= 5:
                     log.info("burst ROM #%d de type inconnu (%d) : TS%d fn=%u fn%%13=%d fn%%26=%d", seq, typ, tn,
                              fn, fn % 13, fn % 26)
@@ -424,7 +419,7 @@ class UplinkDsp(Uplink):
             self._poll_release()
             self._poll_rach()
             if UL_RAW_DCCH_HOTE:
-                # [2026-10-21] SDCCH et SACCH codes par l'hote, envoyes pour de vrai (le RACH reste a la ROM)
+                # SDCCH and SACCH coded by the host, really sent (the RACH stays with the ROM)
                 puits, self.tx = self.tx, self.tx_rom
                 try:
                     self._poll_sdcch()

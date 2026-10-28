@@ -1,10 +1,10 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-wan-interop.sh - Interconnexion WAN entre deux instances osmo-operator
+# network/setup-wan-interop.sh - WAN interconnection between two osmo-operator instances
 #
-# Permet aux MS d'un serveur d'appeler les MS de l'autre serveur via le
-# prefixe +66. Exemple : composer 6610001 depuis le serveur A appelle
-# le MS 10001 sur le serveur B.
+# Lets the MS of one server call the MS of the other server through the
+# +66 prefix. Example: dialing 6610001 from server A calls MS 10001 on
+# server B.
 #
 # Architecture :
 #
@@ -23,21 +23,21 @@
 #              └──────── SIP/RTP over WAN ────────────┘
 #                   82.66.231.141 ↔ 37.59.111.84
 #
-# Ports WAN par operateur :
+# WAN ports per operator:
 #   OpN SIP  : 5080 + (N-1)*2
 #   OpN RTP  : 20000 + (N-1)*500  →  20000 + N*500 - 1
 #
-# Prefixe d'appel :
-#   66 + numero_normal  →  route vers le serveur distant
-#   Ex: 6610001 = appeler MS 10001 sur le serveur distant
-#   Ex: 6620001 = appeler MS 20001 (op2) sur le serveur distant
+# Dialing prefix:
+#   66 + normal_number  →  routed to the remote server
+#   Ex: 6610001 = call MS 10001 on the remote server
+#   Ex: 6620001 = call MS 20001 (op2) on the remote server
 #
 # Usage :
 #   sudo ./network/setup-wan-interop.sh <local_public_ip> <remote_public_ip> [n_operators]
 #
-# Executer sur CHAQUE serveur avec les IPs inversees :
-#   Serveur A : sudo ./network/setup-wan-interop.sh 82.66.231.141 37.59.111.84 2
-#   Serveur B : sudo ./network/setup-wan-interop.sh 37.59.111.84 82.66.231.141 2
+# Run on EACH server with the IPs swapped:
+#   Server A: sudo ./network/setup-wan-interop.sh 82.66.231.141 37.59.111.84 2
+#   Server B: sudo ./network/setup-wan-interop.sh 37.59.111.84 82.66.231.141 2
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -45,16 +45,16 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-# ── Parametres ────────────────────────────────────────────────────────────────
+# ── Parameters ────────────────────────────────────────────────────────────────
 LOCAL_IP="${1:-}"
 REMOTE_IP="${2:-}"
 N_OPS="${3:-2}"
-WAN_PREFIX="66"                    # Prefixe pour les appels inter-serveur
-SIP_WAN_BASE=5080                  # Port SIP WAN de base
-RTP_WAN_BASE=20000                 # Port RTP WAN de base
-RTP_PER_OP=500                     # Ports RTP par operateur
+WAN_PREFIX="66"                    # Prefix for inter-server calls
+SIP_WAN_BASE=5080                  # Base WAN SIP port
+RTP_WAN_BASE=20000                 # Base WAN RTP port
+RTP_PER_OP=500                     # RTP ports per operator
 CONTAINER_PREFIX="osmo-operator-"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # pour appeler network/firewall-wan.sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # to call network/firewall-wan.sh
 
 if [ -z "$LOCAL_IP" ] || [ -z "$REMOTE_IP" ]; then
     echo -e "${RED}Usage: sudo $0 <local_public_ip> <remote_public_ip> [n_operators]${NC}"
@@ -75,8 +75,8 @@ op_rtp_start()   { echo $(( RTP_WAN_BASE + ($1 - 1) * RTP_PER_OP )); }
 op_rtp_end()     { echo $(( RTP_WAN_BASE + $1 * RTP_PER_OP - 1 )); }
 op_container()   { echo "${CONTAINER_PREFIX}$1"; }
 
-# NOTE : sed -i echoue sur les bind mounts Docker (rename() impossible).
-# Toutes les editions sed utilisent le pattern : cp file /tmp → sed -i /tmp → cp back
+# NOTE: sed -i fails on Docker bind mounts (rename() impossible).
+# Every sed edit uses the pattern: cp file /tmp → sed -i /tmp → cp back
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Banner
@@ -92,7 +92,7 @@ echo -e "  Operateurs  : ${CYAN}${N_OPS}${NC}"
 echo -e "  Prefixe WAN : ${CYAN}${WAN_PREFIX}${NC}"
 echo ""
 
-# ── Verification des containers ───────────────────────────────────────────────
+# ── Container check ───────────────────────────────────────────────────────────
 echo -e "${GREEN}[1/5] Verification des containers...${NC}"
 for i in $(seq 1 "$N_OPS"); do
     cname=$(op_container "$i")
@@ -106,19 +106,19 @@ done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [2/5] iptables - DNAT pour le trafic entrant depuis le serveur distant
+# [2/5] iptables - DNAT for the traffic coming in from the remote server
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[2/5] Configuration iptables (DNAT entrant)...${NC}"
 
-# Activer le forwarding IP
+# Enable IP forwarding
 sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1
 
-# Nettoyer les anciennes regles WAN interop (chaine personnalisee)
+# Clear the previous WAN interop rules (custom chain)
 iptables -t nat -D PREROUTING -j OSMO_WAN_INTEROP 2>/dev/null || true
 iptables -t nat -F OSMO_WAN_INTEROP 2>/dev/null || true
 iptables -t nat -X OSMO_WAN_INTEROP 2>/dev/null || true
 
-# Creer la chaine
+# Create the chain
 iptables -t nat -N OSMO_WAN_INTEROP
 
 for i in $(seq 1 "$N_OPS"); do
@@ -127,17 +127,17 @@ for i in $(seq 1 "$N_OPS"); do
     rtp_start=$(op_rtp_start "$i")
     rtp_end=$(op_rtp_end "$i")
 
-    # SIP signaling : port externe → container:5060
+    # SIP signaling: external port → container:5060
     iptables -t nat -A OSMO_WAN_INTEROP \
         -s "$REMOTE_IP" -p udp --dport "$sip_port" \
         -j DNAT --to-destination "${bb_ip}:5060"
 
-    # SIP TCP (au cas ou)
+    # SIP TCP (just in case)
     iptables -t nat -A OSMO_WAN_INTEROP \
         -s "$REMOTE_IP" -p tcp --dport "$sip_port" \
         -j DNAT --to-destination "${bb_ip}:5060"
 
-    # RTP : plage de ports → container (meme ports en interne)
+    # RTP: port range → container (same ports inside)
     iptables -t nat -A OSMO_WAN_INTEROP \
         -s "$REMOTE_IP" -p udp --dport "${rtp_start}:${rtp_end}" \
         -j DNAT --to-destination "${bb_ip}"
@@ -145,22 +145,22 @@ for i in $(seq 1 "$N_OPS"); do
     echo -e "  ${CYAN}Op${i}${NC} SIP :${sip_port} → ${bb_ip}:5060  RTP ${rtp_start}-${rtp_end} → ${bb_ip}"
 done
 
-# Inserer la chaine dans PREROUTING
+# Insert the chain into PREROUTING
 iptables -t nat -I PREROUTING -j OSMO_WAN_INTEROP
 
-# MASQUERADE pour le retour (le container voit le trafic comme venant du host)
-# --ctstate DNAT : sans restriction, ce masquage prenait AUSSI les flux du LAN
-# simplement routes vers un conteneur ; celui-ci repondait alors a l'hote et non
-# au client, qui n'a jamais vu la reponse. On ne masque que ce que le DNAT
-# ci-dessus a redirige. Restreindre plutot sur l'adresse de l'hote ne matcherait
-# rien : apres DNAT la source est celle du serveur distant, pas la notre.
-# L'ancienne regle large est retiree d'abord - le garde -C teste la spec exacte,
-# sans cela les deux resteraient en place et la large gagnerait.
+# MASQUERADE for the return path (the container sees the traffic as coming
+# from the host). --ctstate DNAT: without that restriction the masquerade would
+# ALSO catch LAN flows merely routed to a container, which would then answer
+# the host instead of the client. Only what the DNAT above redirected is
+# masqueraded. Restricting on the host address instead would match nothing:
+# after DNAT the source is the remote server's, not ours.
+# The broad rule is removed first - the -C guard tests the exact spec, otherwise
+# both would stay in place and the broad one would win.
 iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
 if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null; then
-    # Repli si le module conntrack d'iptables manque : sans lui le -A echoue et
-    # le script s'arretait la, la regle large ayant deja ete retiree - plus
-    # aucun masquage, donc plus aucun retour vers les conteneurs.
+    # Fallback when the iptables conntrack module is missing: without it the -A
+    # fails and, the broad rule being already removed, there would be no
+    # masquerade left and no return path to the containers.
     iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null || {
         echo -e "  ${YELLOW}! -m conntrack indisponible : masquage large 172.20.0.0/24 (moins precis)${NC}"
         iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null \
@@ -172,11 +172,11 @@ echo -e "  ${GREEN}✓ iptables configure${NC}"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [2bis/5] Firewall - ouverture automatique des ports entrants depuis le distant
-# Le DNAT ci-dessus redirige le trafic, mais si un firewall (ufw/firewalld/
-# iptables INPUT) filtre l'INPUT, SIP/RTP WAN sont droppes -> pas d'audio WAN.
-# On applique donc les regles a CHAQUE lancement du WAN (network/firewall-wan.sh est
-# idempotent : pas de doublon si relance).
+# [2bis/5] Firewall - automatic opening of the ports coming in from the remote
+# The DNAT above redirects the traffic, but if a firewall (ufw/firewalld/
+# iptables INPUT) filters INPUT, WAN SIP/RTP are dropped -> no WAN audio.
+# The rules are therefore applied at EVERY WAN start (network/firewall-wan.sh is
+# idempotent: no duplicates when rerun).
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[2bis/5] Firewall - ouverture des ports WAN (entrant ${REMOTE_IP})...${NC}"
 if [ -x "$SCRIPT_DIR/firewall-wan.sh" ] || [ -f "$SCRIPT_DIR/firewall-wan.sh" ]; then
@@ -191,7 +191,7 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [3/5] Configuration RTP - plage de ports WAN par operateur
+# [3/5] RTP configuration - WAN port range per operator
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[3/5] Configuration RTP WAN dans chaque container...${NC}"
 
@@ -200,9 +200,9 @@ for i in $(seq 1 "$N_OPS"); do
     rtp_start=$(op_rtp_start "$i")
     rtp_end=$(op_rtp_end "$i")
 
-    # Creer/modifier rtp.conf dans Asterisk pour utiliser la plage WAN
-    # On garde la plage originale pour les appels locaux, mais on ajoute
-    # la config dans le transport PJSIP (external_media_address)
+    # Create/modify rtp.conf in Asterisk to use the WAN range.
+    # The original range is kept for local calls, and the config is added
+    # to the PJSIP transport (external_media_address)
     docker exec "$cname" bash -c "cat > /etc/asterisk/rtp.conf << 'RTPEOF'
 [general]
 rtpstart=${rtp_start}
@@ -218,7 +218,7 @@ echo -e "  ${GREEN}✓ RTP configure${NC}"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [4/5] PJSIP + Dialplan - Trunks WAN et contexte interop distant
+# [4/5] PJSIP + Dialplan - WAN trunks and remote interop context
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[4/5] Injection PJSIP trunks + dialplan WAN...${NC}"
 
@@ -228,13 +228,13 @@ for i in $(seq 1 "$N_OPS"); do
     rtp_start=$(op_rtp_start "$i")
     rtp_end=$(op_rtp_end "$i")
 
-    # ── PJSIP : patch transport-udp + trunks vers chaque operateur distant ──
+    # ── PJSIP: patch transport-udp + trunks to each remote operator ──
 
-    # Generer les blocs PJSIP pour les trunks WAN
+    # Generate the PJSIP blocks for the WAN trunks
     pjsip_wan=""
 
-    # Pas de transport-wan separe - on patche transport-udp existant
-    # pour ajouter external_media_address (necessaire pour SDP corrects)
+    # No separate transport-wan - the existing transport-udp is patched
+    # to add external_media_address (needed for correct SDP)
     docker exec "$cname" bash -c "
         if ! grep -q 'external_media_address' /etc/asterisk/pjsip.conf; then
             cp /etc/asterisk/pjsip.conf /tmp/_pj.work
@@ -257,12 +257,12 @@ local_net=127.0.0.0/8
 ; ══════════════════════════════════════════════════════════════════════════════
 "
 
-    # Un identify par ADRESSE, hors de la boucle : identify ne regarde que
-    # l'adresse source, jamais le port. Un bloc par operateur distant en posait
-    # autant pour la meme adresse, et l'appel entrant etait attribue a l'un
-    # d'eux au hasard. Deux adresses seulement : la passerelle du bridge, par
-    # laquelle arrive le trafic WAN masque par l'hote, et le serveur distant
-    # lui-meme quand il n'est pas masque.
+    # One identify per ADDRESS, outside the loop: identify only looks at the
+    # source address, never the port, so one block per remote operator would
+    # declare several for the same address and an incoming call would be
+    # assigned to one of them at random. Two addresses only: the bridge
+    # gateway, through which the WAN traffic masqueraded by the host arrives,
+    # and the remote server itself when it is not masqueraded.
     pjsip_wan+="
 ; ── Identification des appels entrants du WAN ─────────────────────────────────
 [wan-identify-remote]
@@ -276,7 +276,7 @@ endpoint=wan_trunk_op1
 match=172.20.0.1
 "
 
-    # Un trunk par operateur distant
+    # One trunk per remote operator
     for j in $(seq 1 "$N_OPS"); do
         remote_sip_port=$(op_sip_port "$j")
 
@@ -305,8 +305,8 @@ qualify_timeout=5.0
 "
     done
 
-    # Injecter dans pjsip.conf
-    # D'abord retirer l'ancien bloc WAN s'il existe
+    # Inject into pjsip.conf
+    # First remove the previous WAN block if present
     docker exec "$cname" bash -c "
         cp /etc/asterisk/pjsip.conf /tmp/_pj.work
         sed -i '/; ══.*WAN INTEROP/,\$d' /tmp/_pj.work 2>/dev/null || true
@@ -314,25 +314,25 @@ qualify_timeout=5.0
         rm -f /tmp/_pj.work
     "
 
-    # Ajouter le nouveau bloc
+    # Append the new block
     docker exec "$cname" bash -c "cat >> /etc/asterisk/pjsip.conf << 'PJSIPEOF'
 ${pjsip_wan}
 PJSIPEOF"
 
     echo -e "  ${CYAN}Op${i}${NC} PJSIP: ${N_OPS} trunk(s) WAN ajoutes"
 
-    # ── Dialplan : contextes [wan_out] et [wan_in] ────────────────────────
+    # ── Dialplan: [wan_out] and [wan_in] contexts ─────────────────────────
 
-    # ── Softphones SIP : numero → endpoint, extraits DYNAMIQUEMENT de pjsip.conf ──
-    # Tout endpoint portant un "callerid=... <NNN>" (ex: linphone_A <100>) devient
-    # routable SIP→SIP over WAN dans les deux sens, sans hardcoder les numeros.
+    # ── SIP softphones: number → endpoint, extracted DYNAMICALLY from pjsip.conf ──
+    # Every endpoint carrying a "callerid=... <NNN>" (ex: linphone_A <100>) becomes
+    # routable SIP→SIP over WAN in both directions, without hardcoding numbers.
     softphones=$(docker exec "$cname" cat /etc/asterisk/pjsip.conf | awk '
         /^\[/                 { s=$0; gsub(/[][]/,"",s); ep=s }
         /callerid=.*<[0-9]+>/ { n=$0; sub(/.*</,"",n); sub(/>.*/,"",n); print n":"ep }
     ')
     echo -e "  ${CYAN}Op${i}${NC} Softphones SIP detectes: $(echo "$softphones" | tr '\n' ' ')"
 
-    # Generer le contexte wan_out (appels sortants vers le distant)
+    # Generate the wan_out context (outgoing calls to the remote)
     wan_dialplan="
 ; ══════════════════════════════════════════════════════════════════════════════
 ; WAN INTEROP - Routage appels inter-serveur (prefixe ${WAN_PREFIX})
@@ -347,7 +347,7 @@ PJSIPEOF"
 [wan_out]
 "
     for j in $(seq 1 "$N_OPS"); do
-        # Pattern pour prefixe 1 chiffre operateur (1-9)
+        # Pattern for a 1-digit operator prefix (1-9)
         if [ "$j" -lt 10 ]; then
             wan_dialplan+="
 ; → Operateur distant ${j} (4 chiffres)
@@ -375,10 +375,10 @@ exten => _${j}XXXX,1,NoOp(=== WAN OUT Op${j}: \${EXTEN} → ${REMOTE_IP} ===)
         fi
     done
 
-    # → Softphones SIP distants (SIP→SIP over WAN) - generes dynamiquement.
-    #   Un Linphone local compose ${WAN_PREFIX}<num> ; le ${WAN_PREFIX} est strippe
-    #   en amont (Goto wan_out,\${EXTEN:2}), on route donc <num> vers le softphone
-    #   homologue du meme operateur sur le serveur distant.
+    # → Remote SIP softphones (SIP→SIP over WAN) - generated dynamically.
+    #   A local Linphone dials ${WAN_PREFIX}<num>; the ${WAN_PREFIX} is stripped
+    #   upstream (Goto wan_out,\${EXTEN:2}), so <num> is routed to the matching
+    #   softphone of the same operator on the remote server.
     for sp in $softphones; do
         sp_num="${sp%%:*}"
         wan_dialplan+="
@@ -418,7 +418,7 @@ exten => _${i}XXXXX,1,NoOp(=== WAN IN → GSM local Op${i}: \${EXTEN} ===)
  same => n,Hangup()
 "
 
-    # Softphones SIP locaux (appels entrants depuis le serveur distant) - dynamiques
+    # Local SIP softphones (incoming calls from the remote server) - dynamic
     for sp in $softphones; do
         sp_num="${sp%%:*}"
         sp_ep="${sp#*:}"
@@ -447,7 +447,7 @@ exten => 600,1,NoOp(=== WAN ECHO TEST ===)
  same => n,Hangup()
 "
 
-    # Retirer l'ancien bloc WAN du dialplan
+    # Remove the previous WAN block from the dialplan
     docker exec "$cname" bash -c '
         cp /etc/asterisk/extensions.conf /tmp/_ext.work
         sed -i "/; ══.*WAN INTEROP.*Routage/,\$d" /tmp/_ext.work 2>/dev/null || true
@@ -455,12 +455,12 @@ exten => 600,1,NoOp(=== WAN ECHO TEST ===)
         rm -f /tmp/_ext.work
     '
 
-    # Ajouter au dialplan
+    # Append to the dialplan
     docker exec "$cname" bash -c "cat >> /etc/asterisk/extensions.conf << 'EXTEOF'
 ${wan_dialplan}
 EXTEOF"
 
-    # ── Injecter le pattern _66. directement dans [gsm_in] et [internal] ──
+    # ── Inject the _66. pattern directly into [gsm_in] and [internal] ──
     docker exec "$cname" bash -c '
         EXT="/etc/asterisk/extensions.conf"
         if ! grep -q "_'"${WAN_PREFIX}"'\." "$EXT"; then
@@ -571,11 +571,11 @@ echo -e "    # Logs Asterisk :"
 echo -e "    docker exec osmo-operator-1 asterisk -rx 'core set verbose 5'"
 echo ""
 
-# ── Sauvegarder la config pour persistence ────────────────────────────────────
+# ── Save the config for persistence ───────────────────────────────────────────
 CONFIG_SAVE="/etc/osmo-wan-interop.conf"
 cat > "$CONFIG_SAVE" << EOF
-# osmo-wan-interop.conf - sauvegarde config WAN
-# Genere le $(date)
+# osmo-wan-interop.conf - saved WAN config
+# Generated on $(date)
 LOCAL_IP=${LOCAL_IP}
 REMOTE_IP=${REMOTE_IP}
 N_OPS=${N_OPS}

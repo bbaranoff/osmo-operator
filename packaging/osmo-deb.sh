@@ -1,57 +1,57 @@
 #!/bin/bash
 # =============================================================================
-#  osmo-deb - un .deb par dossier compile, garde en cache, reinstalle au rebuild
+#  osmo-deb - one .deb per compiled folder, kept in cache, reinstalled at rebuild
 # =============================================================================
 #
-#  PRINCIPE. Tout ce qui se compile dans l image (libosmocore, osmo-*, gapk,
-#  QEMU, osmocom-bb, gr-gsm...) sort sous forme de paquet .deb, range dans
-#      /var/cache/osmo-debs/osmo-build-<nom>_<version>~<suite>_<arch>.deb
-#  Au rebuild suivant, si le paquet est la, on l installe (dpkg -i) au lieu de
-#  recloner et recompiler. Le cache vit SUR L HOTE (/var/cache/osmo-debs) :
-#  build.sh le recopie dans le contexte (.deb-cache/) avant `docker build`, et
-#  ramene les paquets produits par l image une fois le build fini.
+#  PRINCIPLE. Everything compiled in the image (libosmocore, osmo-*, gapk,
+#  QEMU, osmocom-bb, gr-gsm...) comes out as a .deb package, stored in
+#      /var/cache/osmo-debs/osmo-build-<name>_<version>~<suite>_<arch>.deb
+#  At the next rebuild, if the package is there, it is installed (dpkg -i)
+#  instead of re-cloning and recompiling. The cache lives ON THE HOST
+#  (/var/cache/osmo-debs): build.sh copies it into the context (.deb-cache/)
+#  before `docker build`, and brings back the packages the image produced.
 #
-#  Trois verbes :
+#  Three verbs:
 #
-#    osmo-deb install <nom> <version>
-#        Installe le .deb du cache s il existe. Sort en 0 dans ce cas, en 1
-#        sinon (= il faut compiler). Avec OSMO_DEB_REFRESH=1, sort toujours
-#        en 1 : le cache est ignore et sera reecrit (build.sh --no-cache).
+#    osmo-deb install <name> <version>
+#        Installs the cached .deb if it exists. Exits 0 in that case, 1
+#        otherwise (= compilation needed). With OSMO_DEB_REFRESH=1, always
+#        exits 1: the cache is ignored and will be rewritten (build.sh --no-cache).
 #
-#    osmo-deb pack <nom> <version> <commande...>
-#        Lance <commande> avec DESTDIR=<staging> dans l environnement -
-#        `make install`, `ninja install`, `cmake --install` l honorent tous -
-#        fabrique le .deb depuis le staging, l installe dans la racine et le
-#        range dans le cache. Usage type :
+#    osmo-deb pack <name> <version> <command...>
+#        Runs <command> with DESTDIR=<staging> in the environment -
+#        `make install`, `ninja install`, `cmake --install` all honour it -
+#        builds the .deb from the staging, installs it in the root and stores
+#        it in the cache. Typical usage:
 #            ./configure && make -j && osmo-deb pack libosmocore 1.12.1 make install
-#        L ARBRE DE SOURCES PART AVEC : le dossier courant, quand il est sous
-#        /opt/GSM, est ajoute tel quel au paquet (.git, objets compiles). Au
-#        rebuild depuis le cache, /opt/GSM/<nom> existe donc toujours - l image
-#        et l ISO restent un atelier ou l on peut relire, patcher et refaire
-#        `make`. Sans cela, un cache plein donnait une image SANS aucune source.
-#        OSMO_DEB_SRC=/chemin designe un autre arbre ; OSMO_DEB_NO_SRC=1 le retire.
+#        THE SOURCE TREE GOES WITH IT: the current folder, when under
+#        /opt/GSM, is added as is to the package (.git, compiled objects). At
+#        a rebuild from the cache, /opt/GSM/<name> thus always exists - the
+#        image and the ISO stay a workshop where one can reread, patch and
+#        run `make` again. Without it, a full cache would give an image
+#        WITHOUT any source. OSMO_DEB_SRC=/path names another tree; OSMO_DEB_NO_SRC=1 drops it.
 #
-#    osmo-deb snapshot <nom> <version> <chemin...>
-#        Pour ce qui n a pas d etape d installation (un arbre de sources qui
-#        sert tel quel au runtime : osmocom-bb, qosmo-grgsm, un venv) : le .deb
-#        est fabrique depuis des fichiers DEJA en place. Rien n est reinstalle.
+#    osmo-deb snapshot <name> <version> <path...>
+#        For what has no install step (a source tree used as is at runtime:
+#        osmocom-bb, qosmo-grgsm, a venv): the .deb is built from files
+#        ALREADY in place. Nothing is reinstalled.
 #
 #    osmo-deb list
 #
-#  La <version> est un choix de l appelant : la version amont quand elle est
-#  epinglee (1.12.1), `0.git` quand on suit une branche. Le nom de la suite
-#  Ubuntu (noble, jammy) est ajoute automatiquement : un paquet compile sur
-#  jammy ne sera jamais pose sur un rootfs noble.
+#  The <version> is the caller's choice: the upstream version when pinned
+#  (1.12.1), `0.git` when following a branch. The Ubuntu suite name (noble,
+#  jammy) is added automatically: a package compiled on jammy is never
+#  installed on a noble rootfs.
 #
-#  Variables : OSMO_DEB_CACHE (defaut /var/cache/osmo-debs)
-#              OSMO_DEB_REFRESH=1  ignore le cache, reconstruit et remplace
+#  Variables: OSMO_DEB_CACHE (default /var/cache/osmo-debs)
+#             OSMO_DEB_REFRESH=1  ignores the cache, rebuilds and replaces
 # =============================================================================
 set -euo pipefail
 
 CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 REFRESH="${OSMO_DEB_REFRESH:-0}"
 PREFIX="osmo-build-"
-SRC_ROOT="${OSMO_DEB_SRC_ROOT:-/opt/GSM}"   # les arbres de sources vivent la
+SRC_ROOT="${OSMO_DEB_SRC_ROOT:-/opt/GSM}"   # the source trees live there
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 SUITE="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-unknown}")"
 MAINT="osmo-operator <bastienbaranoff@gmail.com>"
@@ -68,7 +68,7 @@ check_name() {
 
 deb_path() { printf '%s/%s%s_%s~%s_%s.deb' "$CACHE" "$PREFIX" "$1" "$2" "$SUITE" "$ARCH"; }
 
-# Fabrique le .deb depuis un staging ($1) pour <nom> ($2) <version> ($3).
+# Builds the .deb from a staging ($1) for <name> ($2) <version> ($3).
 make_deb() {
     local stage="$1" name="$2" ver="$3" deb size
     deb="$(deb_path "$name" "$ver")"
@@ -87,8 +87,8 @@ Description: osmo-operator - ${name} ${ver}, compile dans l image (${SUITE})
  aucune dependance : les bibliotheques systeme viennent de la liste apt du
  Dockerfile, qui fait autorite.
 CTL
-    # zstd quand dpkg le sait (jammy et noble), xz sinon : sur un arbre QEMU de
-    # 1,5 Go la difference est de plusieurs minutes.
+    # zstd when dpkg supports it (jammy and noble), xz otherwise: on a 1.5 GB
+    # QEMU tree the difference is several minutes.
     rm -f "$deb.tmp"
     if ! dpkg-deb --build --root-owner-group -Zzstd "$stage" "$deb.tmp" >/dev/null 2>&1; then
         dpkg-deb --build --root-owner-group -Zxz "$stage" "$deb.tmp" >/dev/null
@@ -123,21 +123,17 @@ cmd_pack() {
         rm -rf "$stage"
         die "$name : rien n a ete installe dans DESTDIR - la commande l ignore-t-elle ?"
     fi
-    # L arbre de sources (le dossier courant, sous /opt/GSM) part dans le
-    # paquet : les sources restent dans /opt/GSM meme quand le cache dispense
-    # de cloner et de compiler. Voir l en-tete.
+    # The source tree (the current folder, under /opt/GSM) goes into the
+    # package: the sources stay in /opt/GSM even when the cache spares the
+    # cloning and compiling. See the header.
     local src="${OSMO_DEB_SRC:-$PWD}"
     if [ "${OSMO_DEB_NO_SRC:-0}" != "1" ] && [ -d "$src" ] \
        && case "$src" in "$SRC_ROOT"/?*) true ;; *) false ;; esac; then
         mkdir -p "$stage$(dirname "$src")"
-        # [2026-09-09] `cp -an`, et plus de `[ ! -e "$stage$src" ]` : le prefixe
-        # d installation peut vivre SOUS l arbre de sources (Open5GS :
-        # /opt/LTE/open5gs/install), auquel cas il est DEJA dans le staging.
-        # L ancien test sautait alors tout l arbre, et osmo-build-open5gs
-        # sortait sans une seule source (13 Mo : bin/ et lib/, rien d autre) -
-        # sur l ISO, /opt/LTE/open5gs n avait que install/, et un --build y
-        # reclonait. On complete autour de ce qui est deja la (-n : jamais
-        # par-dessus ce que la commande d installation vient de poser).
+        # `cp -an`: the install prefix may live UNDER the source tree (Open5GS:
+        # /opt/LTE/open5gs/install), in which case it is ALREADY in the
+        # staging. The copy completes around what is already there (-n: never
+        # over what the install command just put in place).
         cp -an "$src" "$stage$(dirname "$src")/"
         log "$name : arbre de sources $src inclus dans le paquet"
     fi

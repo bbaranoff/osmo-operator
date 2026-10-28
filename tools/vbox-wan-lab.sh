@@ -1,49 +1,49 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# tools/vbox-wan-lab.sh - N machines VirtualBox, un noeud de WAN chacune
+# tools/vbox-wan-lab.sh - N VirtualBox machines, one WAN node each
 #
-# Monte un WAN complet sur une seule machine : N VM (1 a 9, 3 par defaut)
-# bootent la MEME ISO osmo-operator, sur un reseau interne commun, et chacune se
-# reconnait comme le noeud dont l'IP est la sienne. Depuis un MS de la VM 2,
-# composer <indicatif de la VM 1> + le numero joint un MS de la VM 1.
+# Sets up a complete WAN on a single machine: N VMs (1 to 9, 3 by default)
+# boot the SAME osmo-operator ISO, on a shared internal network, and each one
+# recognises itself as the node whose IP is its own. From an MS of VM 2,
+# dialing <code of VM 1> + the number reaches an MS of VM 1.
 #
-# POURQUOI UNE SEULE ISO POUR N VM
-# Le numero du noeud n'est PAS fige dans l'image : la table l'est, et
-# wan_nodes_detect_self compare les IP locales a cette table au demarrage.
-# Une image par VM couterait N builds d'une heure pour une ligne de conf.
+# WHY A SINGLE ISO FOR N VMs
+# The node number is NOT frozen in the image: the table is, and
+# wan_nodes_detect_self compares the local IPs to that table at boot.
+# One image per VM would cost N one-hour builds for a single conf line.
 #
-# C'est le DHCP de VirtualBox qui rend l'IP previsible : une adresse fixe par
-# (VM, NIC), donc l'ISO retrouve toujours le meme numero de noeud. Sans ca, une
-# VM changerait d'identite au gre des baux.
+# VirtualBox's DHCP is what makes the IP predictable: a fixed address per
+# (VM, NIC), so the ISO always finds the same node number. Without it, a VM
+# would change identity with each lease.
 #
-# Usage :
-#   tools/vbox-wan-lab.sh check                 # l'hote est-il pret ? (a lancer en premier)
-#   tools/vbox-wan-lab.sh create   [--nodes 3] [--iso chemin.iso] [--build-iso]
+# Usage:
+#   tools/vbox-wan-lab.sh check                 # is the host ready? (run first)
+#   tools/vbox-wan-lab.sh create   [--nodes 3] [--iso path.iso] [--build-iso]
 #   tools/vbox-wan-lab.sh start | stop | status | destroy
-#   tools/vbox-wan-lab.sh usb                   # peripheriques branches + filtres
+#   tools/vbox-wan-lab.sh usb                   # plugged devices + filters
 #   tools/vbox-wan-lab.sh usb --vm 2 --add 0bda:2838:RTL-SDR
-#   tools/vbox-wan-lab.sh table                 # imprime la table sans rien creer
+#   tools/vbox-wan-lab.sh table                 # prints the table without creating anything
 #
-# Options de create :
-#   --nodes N        nombre de VM/noeuds, 1 a 9 (defaut 3)
-#   --iso FICHIER    ISO a demarrer (defaut : le plus recent du depot)
-#   --build-iso      construit l'ISO avec la table deja dedans (sudo, long)
-#   --subnet PREFIXE prefixe /24 du segment (defaut 192.168.56 - la seule plage
-#                    que VirtualBox accepte en host-only sans configuration)
-#   --ram Mo         memoire par VM (defaut 4096)
-#   --cpus N         vCPU par VM (defaut 2)
-#   --indicatifs "11 22 33"   indicatifs, un par noeud (defaut 11 22 33 ...)
-#   --no-nat         supprime la 2e carte (NAT) - pas d'acces Internet dans les VM
+# create options:
+#   --nodes N        number of VMs/nodes, 1 to 9 (default 3)
+#   --iso FILE       ISO to boot (default: the most recent in the repo)
+#   --build-iso      builds the ISO with the table already inside (sudo, long)
+#   --subnet PREFIX  /24 prefix of the segment (default 192.168.56 - the only
+#                    range VirtualBox accepts as host-only without configuration)
+#   --ram MB         memory per VM (default 4096)
+#   --cpus N         vCPU per VM (default 2)
+#   --indicatifs "11 22 33"   dialing codes, one per node (default 11 22 33 ...)
+#   --no-nat         removes the 2nd adapter (NAT) - no Internet access in the VMs
 #
-# Materiel passe aux VM (tout est actif par defaut) :
-#   --no-usb         pas de controleur USB du tout
-#   --usb-filter vid:pid[:nom]   capte ce peripherique (repetable, s'ajoute a la
-#                    liste connue : RTL-SDR, HackRF, bladeRF, LimeSDR, USRP B2xx,
-#                    cables Calypso FT232/CP210x/PL2303/CH340...)
-#   --no-audio       pas de carte son (la chaine audio GSM en a besoin)
-#   --audio-driver X pulse | alsa | none (defaut : detecte)
-#   --no-vrde        pas de console distante RDP
-#   --share CHEMIN   dossier partage (necessite les additions invite dans l'ISO)
+# Hardware passed to the VMs (everything enabled by default):
+#   --no-usb         no USB controller at all
+#   --usb-filter vid:pid[:name]  captures this device (repeatable, added to the
+#                    known list: RTL-SDR, HackRF, bladeRF, LimeSDR, USRP B2xx,
+#                    Calypso FT232/CP210x/PL2303/CH340 cables...)
+#   --no-audio       no sound card (the GSM audio chain needs one)
+#   --audio-driver X pulse | alsa | none (default: detected)
+#   --no-vrde        no RDP remote console
+#   --share PATH     shared folder (requires the guest additions in the ISO)
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -55,10 +55,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$DIR/network/wan-nodes.sh"
 
 NODES=3
-# 192.168.56 : c'est la plage que VirtualBox autorise d'office en host-only
-# (/etc/vbox/networks.conf est requis pour toute autre). On l'utilise aussi en
-# reseau interne, ou rien ne l'impose, pour que les deux modes se ressemblent -
-# passer de l'un a l'autre ne doit pas changer les adresses des noeuds.
+# 192.168.56: the range VirtualBox allows out of the box in host-only
+# (/etc/vbox/networks.conf is required for any other). It is also used for the
+# internal network, where nothing imposes it, so that both modes look alike -
+# switching from one to the other must not change the node addresses.
 SUBNET="192.168.56"
 RAM=4096
 CPUS=2
@@ -69,16 +69,15 @@ INDS=""
 NETNAME="osmowan"
 VM_PREFIX="osmo-wan-"
 
-# intnet  : les VM se parlent, l'hote NE VOIT RIEN du segment.
-# hostonly: l'hote a une patte dessus - indispensable quand l'hote est lui-meme
-#           un noeud du WAN (start-docker.sh --virtualbox). VirtualBox n'autorise alors
-#           que 192.168.56.0/21, sauf /etc/vbox/networks.conf.
-# Numero du noeud porte par l'HOTE lui-meme (vide = aucun, les N noeuds sont
-# des VM). Des qu'il est pose, le segment doit etre host-only : l'hote a besoin
-# d'une patte dessus pour parler a ses pairs.
-# ISO du hub SS7. Fournie → une VM de plus, a ${SUBNET}.1, qui ne fait QUE
-# router du M3UA entre les noeuds. Absente → pas de SS7 inter-noeud, seulement
-# la voix et les SMS (c'est le comportement d'origine).
+# intnet  : the VMs talk to each other, the host SEES NOTHING of the segment.
+# hostonly: the host has a leg on it - essential when the host is itself a
+#           WAN node (start-docker.sh --virtualbox). VirtualBox then only
+#           allows 192.168.56.0/21, unless /etc/vbox/networks.conf.
+# Node number carried by the HOST itself (empty = none, the N nodes are VMs).
+# Once set, the segment must be host-only: the host needs a leg on it to talk
+# to its peers.
+# SS7 hub ISO. Given → one more VM, at ${SUBNET}.1, which ONLY routes M3UA
+# between the nodes. Absent → no inter-node SS7, only voice and SMS.
 INTERSTP_ISO=""
 INTERSTP_VM="osmo-wan-interstp"
 HOST_NODE=""
@@ -94,15 +93,15 @@ USB_VM=""
 USB_ADD=""
 FIX=0
 
-# ── Peripheriques captes automatiquement ─────────────────────────────────────
-# Sans filtre, VirtualBox laisse TOUT a l'hote : brancher une cle SDR pendant
-# que la VM tourne ne fait rien du tout, et rien ne le signale. Un filtre par
-# modele regle ca une fois pour toutes - le peripherique bascule dans la VM des
-# qu'il est branche, meme a chaud.
+# ── Devices captured automatically ───────────────────────────────────────────
+# Without a filter, VirtualBox leaves EVERYTHING to the host: plugging an SDR
+# dongle while the VM runs does nothing at all, silently. One filter per model
+# settles it once and for all - the device switches to the VM as soon as it is
+# plugged, even hot.
 #
-# Liste indicative : c'est "vbox-wan-lab.sh usb" qui dit la VERITE sur ce qui
-# est branche et sous quel vid:pid. Tout ce qui manque s'ajoute avec
-# --usb-filter vid:pid:nom, sans toucher a ce fichier.
+# Indicative list: "vbox-wan-lab.sh usb" tells the TRUTH about what is plugged
+# and under which vid:pid. Anything missing is added with
+# --usb-filter vid:pid:name, without touching this file.
 USB_KNOWN=(
     "0bda:2838:RTL-SDR (RTL2838)"
     "0bda:2832:RTL-SDR (RTL2832U)"
@@ -174,16 +173,14 @@ VBM="$(command -v VBoxManage || command -v vboxmanage || true)"
 [ -n "$VBM" ] || { echo -e "${RED}VBoxManage introuvable - installez VirtualBox.${NC}" >&2; exit 1; }
 vbm() { "$VBM" "$@" 2>&1 | grep -v 'vboxdrv\|vboxconfig\|recompile the kernel\|You will not be able\|available for the current kernel\|load. Please\|^$' || true; }
 
-# ── Piege `pipefail` + `grep -q` ─────────────────────────────────────────────
-# `grep -q` sort des la PREMIERE correspondance ; le producteur du pipeline
-# recoit alors SIGPIPE et meurt en 141, et sous `set -o pipefail` c'est 141 que
-# le pipeline renvoie. Resultat : "trouve" se lit "pas trouve", de facon
-# intermittente - selon que la sortie tenait ou non dans le tampon du tube.
-# C'est exactement ce qui faisait dire a `check` que vboxdrv n'etait pas charge
-# alors qu'il l'etait. On lit donc toute l'entree, et on jette la sortie.
+# ── `pipefail` + `grep -q` trap ──────────────────────────────────────────────
+# `grep -q` exits at the FIRST match; the pipeline producer then gets SIGPIPE
+# and dies with 141, and under `set -o pipefail` the pipeline returns 141.
+# "Found" would read as "not found", intermittently - depending on whether the
+# output fitted in the pipe buffer. So read the whole input, discard the output.
 qgrep() { grep "$@" >/dev/null; }
 
-# Ce que l'hote sait faire - determine UNE fois, utilise partout.
+# What the host can do - determined ONCE, used everywhere.
 HAS_EXTPACK=0
 "$VBM" list extpacks 2>/dev/null | qgrep 'Usable:.*true' && HAS_EXTPACK=1
 if [ -z "$AUDIO_DRIVER" ]; then
@@ -196,7 +193,7 @@ USB_FILTER_COUNT=0
 vm_name() { echo "${VM_PREFIX}$1"; }
 node_ip()  { echo "${SUBNET}.$((10 + $1))"; }
 
-# ── Table des noeuds ─────────────────────────────────────────────────────────
+# ── Node table ───────────────────────────────────────────────────────────────
 build_table() {
     local i ind
     local -a ind_arr=()
@@ -204,9 +201,9 @@ build_table() {
     WAN_IP=(); WAN_IND=(); WAN_NODE_LIST=()
     for i in $(seq 1 "$NODES"); do
         ind="${ind_arr[$((i-1))]:-$(wan_default_ind "$i")}"
-        # Un plan d'adressage sans exception : noeud N → .1N, que ce soit une VM
-        # ou l'hote. L'hote recoit simplement la sienne sur l'interface
-        # host-only au lieu de la recevoir par DHCP.
+        # An addressing plan without exception: node N → .1N, VM or host. The
+        # host simply gets its own on the host-only interface instead of
+        # receiving it through DHCP.
         WAN_IP[$i]="$(node_ip "$i")"
         WAN_IND[$i]="$ind"; WAN_NODE_LIST+=("$i")
     done
@@ -221,10 +218,10 @@ find_iso() {
     return 1
 }
 
-# ── Reseau host-only : l'hote prend une patte sur le segment ────────────────
-# Necessaire des que l'hote est lui-meme un noeud du WAN. Avec un reseau
-# "interne", les VM se parlent mais l'hote ne voit RIEN - un lab docker sur
-# l'hote ne pourrait pas joindre ses pairs, et rien ne le dirait.
+# ── Host-only network: the host takes a leg on the segment ──────────────────
+# Needed as soon as the host is itself a WAN node. With an "internal" network
+# the VMs talk to each other but the host sees NOTHING - a docker lab on the
+# host could not reach its peers, silently.
 setup_hostonly() {
     local existing
     existing="$("$VBM" list hostonlyifs 2>/dev/null | awk -F': *' '/^Name:/{print $2; exit}')"
@@ -236,13 +233,13 @@ setup_hostonly() {
     fi
     [ -n "$HOSTONLY_IF" ] || { echo -e "${RED}creation de l'interface host-only impossible${NC}" >&2; return 1; }
 
-    # L'interface porte l'adresse du noeud hote (.1N), pas une adresse a part :
-    # ce que la table annonce est exactement ce que les pairs joindront.
+    # The interface carries the host node address (.1N), not a separate one:
+    # what the table announces is exactly what the peers will reach.
     local host_ip; host_ip="$(node_ip "${HOST_NODE:-1}")"
     if ! "$VBM" hostonlyif ipconfig "$HOSTONLY_IF" --ip "$host_ip" --netmask 255.255.255.0 >/dev/null 2>&1; then
-        # VirtualBox refuse toute plage hors 192.168.56.0/21 tant que
-        # /etc/vbox/networks.conf ne l'autorise pas. Message explicite : sinon on
-        # ne recolte qu'un "E_ACCESSDENIED" qui ne designe rien.
+        # VirtualBox refuses any range outside 192.168.56.0/21 as long as
+        # /etc/vbox/networks.conf does not allow it. Explicit message:
+        # otherwise only an "E_ACCESSDENIED" that points at nothing.
         echo -e "${RED}VirtualBox refuse ${host_ip} sur ${HOSTONLY_IF}.${NC}" >&2
         echo -e "  Les reseaux host-only sont limites a ${CYAN}192.168.56.0/21${NC} par defaut." >&2
         echo -e "  Soit : ${CYAN}--subnet 192.168.56${NC}" >&2
@@ -253,18 +250,19 @@ setup_hostonly() {
     echo -e "  ${GREEN}✓${NC} ${HOSTONLY_IF} @ ${CYAN}${host_ip}${NC} (l'hote sur le segment, noeud ${HOST_NODE:-1})"
 }
 
-# ── Materiel d'une VM : USB, son, presse-papier, console distante ───────────
-# Un noeud du lab est une maquette RADIO : sans cle SDR passee a la VM et sans
-# carte son, il ne reste qu'un coeur reseau. C'est pour ca que tout est actif par
-# defaut ici, contrairement a une VM de test ordinaire.
+# ── VM hardware: USB, sound, clipboard, remote console ──────────────────────
+# A lab node is a RADIO mock-up: without an SDR dongle passed to the VM and
+# without a sound card, only a network core remains. That is why everything
+# is enabled by default here, unlike an ordinary test VM.
 apply_hardware() {
     local vm="$1" idx="$2" f vid pid name i
 
     # ── USB ──────────────────────────────────────────────────────────────────
     if [ "$WITH_USB" -eq 1 ]; then
-        # xHCI (USB 3) demande l'Extension Pack ; sans lui on retombe sur OHCI
-        # (USB 1.1), suffisant pour un cable serie Calypso mais PAS pour une
-        # cle SDR - le debit ne suit pas et la capture decroche sans message clair.
+        # xHCI (USB 3) requires the Extension Pack; without it fall back to
+        # OHCI (USB 1.1), enough for a Calypso serial cable but NOT for an
+        # SDR dongle - the throughput does not keep up and the capture drops
+        # without a clear message.
         if [ "$HAS_EXTPACK" -eq 1 ]; then
             vbm modifyvm "$vm" --usb-xhci on
         else
@@ -280,10 +278,10 @@ apply_hardware() {
         USB_FILTER_COUNT="$i"
     fi
 
-    # ── Son ──────────────────────────────────────────────────────────────────
-    # ENTREE ET SORTIE : la chaine audio GSM (osmo-gapk) porte un appel dans les
-    # deux sens. Une VM avec la seule sortie donne un appel a sens unique, ce qui
-    # se diagnostique tres mal - on croit a un probleme de codec.
+    # ── Sound ────────────────────────────────────────────────────────────────
+    # INPUT AND OUTPUT: the GSM audio chain (osmo-gapk) carries a call both
+    # ways. A VM with output only gives a one-way call, which is very hard to
+    # diagnose - it looks like a codec problem.
     if [ "$WITH_AUDIO" -eq 1 ]; then
         vbm modifyvm "$vm" --audio-driver "$AUDIO_DRIVER" --audio-controller hda \
             --audio-enabled on --audio-in on --audio-out on
@@ -291,17 +289,17 @@ apply_hardware() {
         vbm modifyvm "$vm" --audio-enabled off
     fi
 
-    # ── Confort : presse-papier et glisser-deposer ──────────────────────────
+    # ── Comfort: clipboard and drag-and-drop ────────────────────────────────
     vbm modifyvm "$vm" --clipboard-mode bidirectional --drag-and-drop bidirectional
 
-    # ── Console distante ────────────────────────────────────────────────────
-    # Le lab demarre en headless : sans ca, aucun moyen de voir la console d'une
-    # VM qui refuse de booter.
+    # ── Remote console ──────────────────────────────────────────────────────
+    # The lab starts headless: without this, no way to see the console of a
+    # VM that refuses to boot.
     if [ "$WITH_VRDE" -eq 1 ] && [ "$HAS_EXTPACK" -eq 1 ]; then
         vbm modifyvm "$vm" --vrde on --vrde-address 127.0.0.1 --vrde-port "$((3900 + idx))"
     fi
 
-    # ── Dossier partage ─────────────────────────────────────────────────────
+    # ── Shared folder ───────────────────────────────────────────────────────
     if [ -n "$SHARE" ]; then
         vbm sharedfolder add "$vm" --name osmo --hostpath "$SHARE" --automount
     fi
@@ -335,7 +333,7 @@ do_create() {
     fi
     [ -r "$ISO" ] || { echo -e "${RED}ISO illisible : $ISO${NC}" >&2; exit 1; }
 
-    # ── Reseau + DHCP a adresses fixes ──────────────────────────────────────
+    # ── Network + fixed-address DHCP ────────────────────────────────────────
     if [ "$NET_MODE" = "hostonly" ]; then
         echo -e "${GREEN}[2/4] Reseau host-only (l'hote est un noeud) + DHCP...${NC}"
         setup_hostonly || exit 1
@@ -352,9 +350,9 @@ do_create() {
             --server-ip="${SUBNET}.254" --netmask=255.255.255.0 \
             --lower-ip="${SUBNET}.100" --upper-ip="${SUBNET}.200" --enable
     fi
-    # Le DHCP est en .254, PAS en .1 : .1 est reservee a l'inter-STP, le hub
-    # SS7 commun aux noeuds. C'est une adresse que toutes les configs des
-    # noeuds designent en dur - elle ne peut pas dependre d'un bail.
+    # The DHCP is at .254, NOT .1: .1 is reserved for the inter-STP, the SS7
+    # hub shared by the nodes. All node configs name that address literally
+    # - it cannot depend on a lease.
     echo -e "  ${GREEN}✓${NC} DHCP ${SUBNET}.254 · inter-STP reserve en ${CYAN}${SUBNET}.1${NC}"
 
     # ── VM ──────────────────────────────────────────────────────────────────
@@ -375,7 +373,7 @@ do_create() {
             --graphicscontroller vmsvga --vram 64 \
             --rtc-use-utc on --paravirt-provider kvm \
             --nested-hw-virt on
-        # NIC1 = le WAN. C'est CETTE carte que la table adresse.
+        # NIC1 = the WAN. THIS card is the one the table addresses.
         if [ "$NET_MODE" = "hostonly" ]; then
             vbm modifyvm "$vm" --nic1 hostonly --host-only-adapter1 "$HOSTONLY_IF" --nictype1 virtio
         else
@@ -383,26 +381,26 @@ do_create() {
         fi
         apply_hardware "$vm" "$i"
         if [ "$WITH_NAT" -eq 1 ]; then
-            # NIC2 = NAT : sortie Internet (apt, osmo-update) et redirection SSH
-            # depuis l'hote. Elle ne porte AUCUN trafic WAN - son 10.0.2.15
-            # n'est pas dans la table, donc la detection de noeud ne s'y trompe pas.
+            # NIC2 = NAT: Internet egress (apt, osmo-update) and SSH forwarding
+            # from the host. It carries NO WAN traffic - its 10.0.2.15 is not
+            # in the table, so the node detection is not fooled.
             vbm modifyvm "$vm" --nic2 nat --nictype2 virtio
             vbm modifyvm "$vm" --natpf2 "ssh${i},tcp,127.0.0.1,$((2220 + i)),,22"
-            # Tableau de bord et spectres du lab, atteignables depuis l'hote
-            # sans passer par le segment WAN (qui, lui, doit rester propre).
+            # Dashboard and spectra of the lab, reachable from the host without
+            # going through the WAN segment (which must stay clean).
             vbm modifyvm "$vm" --natpf2 "web${i},tcp,127.0.0.1,$((8080 + (i-1)*10)),,8080"
             vbm modifyvm "$vm" --natpf2 "fft${i},tcp,127.0.0.1,$((8081 + (i-1)*10)),,8081"
         fi
         vbm storagectl "$vm" --name IDE --add ide
         vbm storageattach "$vm" --storagectl IDE --port 0 --device 0 --type dvddrive --medium "$ISO"
-        # Adresse fixe : c'est elle qui donne son IDENTITE au noeud.
+        # Fixed address: it is what gives the node its IDENTITY.
         vbm dhcpserver modify --network="$NETNAME" --vm="$vm" --nic=1 \
             --fixed-address="$(node_ip "$i")" \
             || echo -e "  ${YELLOW}⚠${NC} adresse fixe refusee pour ${vm} - VirtualBox < 6.1 ?"
         echo -e "  ${GREEN}✓${NC} ${vm}  ${CYAN}$(node_ip "$i")${NC}  indicatif ${CYAN}${WAN_IND[$i]}${NC}$([ "$WITH_NAT" -eq 1 ] && echo "  ssh 127.0.0.1:$((2220 + i))")"
     done
 
-    # ── VM inter-STP : le hub SS7, a l'adresse .1 reservee ──────────────────
+    # ── Inter-STP VM: the SS7 hub, at the reserved .1 address ───────────────
     if [ -n "$INTERSTP_ISO" ]; then
         if "$VBM" list vms 2>/dev/null | qgrep "\"${INTERSTP_VM}\""; then
             echo -e "  ${YELLOW}⚠${NC} ${INTERSTP_VM} existe deja - ignoree"
@@ -410,8 +408,8 @@ do_create() {
             echo -e "  ${RED}✗${NC} ISO inter-STP illisible : ${INTERSTP_ISO}"
         else
             vbm createvm --name "$INTERSTP_VM" --ostype Ubuntu_64 --register
-            # Le hub ne porte ni radio ni audio : il route du M3UA. On ne lui
-            # donne donc ni son, ni USB, ni les 4 Go d'un noeud complet.
+            # The hub carries neither radio nor audio: it routes M3UA. So it
+            # gets no sound, no USB, nor the 4 GB of a full node.
             vbm modifyvm "$INTERSTP_VM" --memory 1536 --cpus 1 --ioapic on \
                 --boot1 dvd --boot2 disk --boot3 none --boot4 none \
                 --graphicscontroller vmsvga --vram 16 --rtc-use-utc on \
@@ -477,10 +475,10 @@ do_hint() {
     echo ""
 }
 
-do_each() {  # $1 = commande vboxmanage sur chaque VM existante
+do_each() {  # $1 = vboxmanage command on each existing VM
     local i vm found=0
-    # Le hub d'abord au demarrage : un noeud qui monte avant lui voit sa SCTP
-    # refusee et ne reessaie pas forcement.
+    # The hub first at start: a node coming up before it gets its SCTP
+    # refused and does not necessarily retry.
     for i in interstp $(seq 1 9); do
         if [ "$i" = "interstp" ]; then vm="$INTERSTP_VM"; else vm="$(vm_name "$i")"; fi
         "$VBM" list vms 2>/dev/null | qgrep "\"${vm}\"" || continue
@@ -502,10 +500,10 @@ do_each() {  # $1 = commande vboxmanage sur chaque VM existante
     [ "$found" = "1" ] || echo -e "  ${YELLOW}aucune VM ${VM_PREFIX}* - lancez "$0 create"${NC}"
 }
 
-# Les groupes REELS d'une session ouverte de $1 : on lit /proc/<pid>/status
-# d'un de ses processus. `id -nG` ne conviendrait pas - il interroge la base,
-# pas la session, et repondrait "oui" juste apres un usermod alors que rien
-# n'a change pour les programmes deja lances.
+# The REAL groups of an open session of $1: read /proc/<pid>/status of one of
+# its processes. `id -nG` would not do - it queries the database, not the
+# session, and would answer "yes" right after a usermod while nothing has
+# changed for the programs already running.
 session_has_group() {
     local user="$1" grp="$2" gid pid
     gid="$(getent group "$grp" | cut -d: -f3)"
@@ -518,7 +516,7 @@ session_has_group() {
     return 1
 }
 
-# ── check : l'hote est-il capable de faire tourner le banc ? ────────────────
+# ── check: can the host run the bench? ──────────────────────────────────────
 do_check() {
     local rc=0 u="${SUDO_USER:-$USER}"
     echo -e "${BOLD}Hote VirtualBox${NC}"
@@ -543,15 +541,15 @@ do_check() {
         echo -e "  ${YELLOW}⚠${NC} pas d'Extension Pack : USB 1.1 seulement (insuffisant pour une cle SDR), pas de RDP"
     fi
 
-    # Deux etats distincts, et c'est TOUTE la difficulte de ce point :
-    #   • le fichier /etc/group peut deja contenir l'utilisateur...
-    #   • ...alors que sa SESSION en cours tourne encore avec l'ancienne liste de
-    #     groupes. Les processus heritent de leurs groupes au login : `usermod`
-    #     ne les rejoint pas retroactivement. VirtualBox lance depuis cette
-    #     session-la ne peut toujours pas ouvrir /dev/vboxusb - et l'erreur
-    #     affichee parle d'un peripherique "occupe", jamais de groupes.
-    # On regarde donc les DEUX : la base, et les groupes reels d'un processus
-    # vivant de l'utilisateur.
+    # Two distinct states, and that is the WHOLE difficulty of this point:
+    #   • /etc/group may already contain the user...
+    #   • ...while the current SESSION still runs with the old group list.
+    #     Processes inherit their groups at login: `usermod` does not reach
+    #     them retroactively. VirtualBox launched from that session still
+    #     cannot open /dev/vboxusb - and the error shown speaks of a "busy"
+    #     device, never of groups.
+    # So look at BOTH: the database, and the real groups of a live process
+    # of the user.
     if id -nG "$u" 2>/dev/null | qgrep -w vboxusers; then
         if session_has_group "$u" vboxusers; then
             echo -e "  ${GREEN}✓${NC} ${u} est dans vboxusers, et sa session l'a bien pris"
@@ -590,7 +588,7 @@ do_check() {
     return $rc
 }
 
-# Liste les peripheriques de l'hote et dit lesquels un filtre du banc capterait.
+# Lists the host devices and says which ones a bench filter would capture.
 do_usb_list() {
     local out vid pid name known f kv kp
     out="$("$VBM" list usbhost 2>/dev/null)"

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-sms-interop-relay.py — Relay SMS inter-opérateur via proto-smsc-proto
+sms-interop-relay.py — Inter-operator SMS relay via proto-smsc-proto
 
-Fixes par rapport à la version précédente :
-  - Retry HLR VTY lookup avec backoff (race condition au démarrage)
-  - Retry TCP relay send (3 tentatives avec délai)
-  - Timeout TCP configurable (connect_timeout dans sms-routing.conf)
-  - Support N opérateurs distants (pas de limite hardcodée)
-  - Meilleure gestion des erreurs TPDU
-  - Log structuré avec contexte opérateur
+  - HLR VTY lookup with backoff retry (startup race condition)
+  - TCP relay send with retry (3 attempts with delay)
+  - Configurable TCP timeout (connect_timeout in sms-routing.conf)
+  - N remote operators supported (no hardcoded limit)
+  - TPDU error handling
+  - Structured log with operator context
 """
 
 import os
@@ -30,13 +29,13 @@ from typing import Optional, Dict, Tuple
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# [2026-09-07] PREVENIR LES MODEMS LOGICIELS. Ce MT part par GSUP vers la
-# radio : le mobile osmocom-bb le recoit, mais les modems logiciels du banc
-# (Android via oFono, la VM postmarketOS via son port serie PCI) ne le voient
-# jamais - « sms-over-gsup » court-circuite le chemin SMPP d osmo-msc, seul
-# endroit ou ils auraient pu l apprendre. Voir sms_notify.py.
-# sms_notify.py ne vit que dans le depot, et ce fichier-ci peut etre la copie
-# deployee dans /etc/osmocom : on cherche donc aux deux endroits.
+# NOTIFY THE SOFTWARE MODEMS. This MT leaves over GSUP toward the radio: the
+# osmocom-bb mobile receives it, but the bench's software modems (Android via
+# oFono, the postmarketOS VM via its PCI serial port) never see it -
+# « sms-over-gsup » bypasses osmo-msc's SMPP path, the only place where they
+# could have learnt about it. See sms_notify.py.
+# sms_notify.py only lives in the repo, and this file may be the copy deployed
+# in /etc/osmocom: both places are searched.
 for _rep in (str(Path(__file__).resolve().parent), "/opt/GSM/osmo-operator/scripts"):
     if _rep not in sys.path:
         sys.path.insert(0, _rep)
@@ -59,12 +58,13 @@ RELAY_SEND_RETRIES = 3
 RELAY_SEND_DELAY = 3.0
 RELAY_CONNECT_TIMEOUT = 10
 
-# ─── PAYLOAD ISM (option start-native.sh --payload-ism) ────────────────────────
-# Quand c'est actif, le TCP inter-noeud NE PORTE PLUS le texte du SMS : il porte
-# un JETON. Le texte part sur la liaison radio ISM (scripts/ism_payload.py),
-# estampille du meme jeton, et le noeud d'arrivee le recupere par la radio avant
-# d'injecter le MT. Tout le reste (adresses, MSISDN, IMSI, SC-address) reste IP.
-# Active par l'env PAYLOAD_ISM=1 ou la section [payload] de sms-routing.conf.
+# ─── ISM PAYLOAD (start-native.sh --payload-ism option) ────────────────────────
+# When active, the inter-node TCP DOES NOT CARRY the SMS text: it carries a
+# TOKEN. The text leaves over the ISM radio link (scripts/ism_payload.py),
+# stamped with the same token, and the receiving node fetches it from the radio
+# before injecting the MT. Everything else (addresses, MSISDN, IMSI, SC-address)
+# stays on IP. Enabled by the env PAYLOAD_ISM=1 or the [payload] section of
+# sms-routing.conf.
 PAYLOAD_ISM_RECV_TIMEOUT = float(os.environ.get("ISM_RECV_TIMEOUT", "30"))
 _PAYLOAD_LINK = None
 _PAYLOAD_LINK_LOCK = threading.Lock()
@@ -78,7 +78,7 @@ def payload_ism_enabled() -> bool:
 
 
 def get_payload_link():
-    """La liaison payload ISM, construite une seule fois (ou None si indisponible)."""
+    """The ISM payload link, built once (or None if unavailable)."""
     global _PAYLOAD_LINK
     if not payload_ism_enabled():
         return None
@@ -93,7 +93,7 @@ def get_payload_link():
                              or os.environ.get("ISM_LINK") or "loopback")
             except Exception as e:
                 logging.error("Payload ISM indisponible, repli sur IP : %s", e)
-                _PAYLOAD_LINK = False  # marqueur « echec », on ne retente pas
+                _PAYLOAD_LINK = False  # « failure » marker, no retry
     return _PAYLOAD_LINK or None
 
 
@@ -240,7 +240,7 @@ def parse_mo_log_block(lines: list) -> Optional[MOLogEntry]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Routing Table — support N opérateurs
+# Routing Table — N operators supported
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class RoutingTable:
@@ -268,14 +268,14 @@ class RoutingTable:
                     val = val.split('#')[0].strip()
 
                     if section == 'operators':
-                        # « ip » ou « ip:port ». Le port explicite sert au WAN :
-                        # sur un noeud distant, un seul port public par
-                        # opérateur peut atteindre le relais du bon container.
+                        # « ip » or « ip:port ». The explicit port serves the
+                        # WAN: on a remote node, a single public port per
+                        # operator can reach the right container's relay.
                         self.operators[key] = val
                     elif section == 'routes':
-                        # « op_id » ou « op_id strip=N ». strip = nombre de
-                        # chiffres d'INDICATIF a retirer avant de transmettre :
-                        # le HLR du noeud d'arrivee ne connait que le numero nu.
+                        # « op_id » or « op_id strip=N ». strip = number of
+                        # DIALING CODE digits to remove before forwarding: the
+                        # receiving node's HLR only knows the bare number.
                         parts = val.split()
                         op_id = parts[0] if parts else val
                         strip = 0
@@ -297,7 +297,7 @@ class RoutingTable:
                             self.retry_delay = int(val)
                     elif section == 'payload':
                         # [payload] mode=ism, link=fifo|serial|exec|loopback,
-                        # tx=/chemin, rx=/chemin, serial=/dev/ttyUSB0,
+                        # tx=/path, rx=/path, serial=/dev/ttyUSB0,
                         # tx_cmd=..., rx_cmd=..., recv_timeout=30
                         _PAYLOAD_CFG[key] = val
 
@@ -313,7 +313,7 @@ class RoutingTable:
         return None
 
     def lookup_strip(self, msisdn: str) -> int:
-        """Chiffres d'indicatif a retirer pour cette destination (0 = aucun)."""
+        """Dialing code digits to remove for this destination (0 = none)."""
         clean = msisdn.lstrip('+')
         for prefix, _op_id, strip in self.routes:
             if clean.startswith(prefix):
@@ -325,12 +325,12 @@ class RoutingTable:
         return op == self.local_operator_id or op is None
 
     def get_operator_ip(self, op_id: str) -> Optional[str]:
-        """IP seule (compatibilite : le port se lit avec get_operator_target)."""
+        """IP only (compatibility: the port is read with get_operator_target)."""
         target = self.operators.get(op_id)
         return target.split(':', 1)[0] if target else None
 
     def get_operator_target(self, op_id: str) -> Optional[Tuple[str, int]]:
-        """(ip, port) — port par defaut RELAY_TCP_PORT si non precise."""
+        """(ip, port) — default port RELAY_TCP_PORT if not given."""
         target = self.operators.get(op_id)
         if not target:
             return None
@@ -344,7 +344,7 @@ class RoutingTable:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HLR VTY — MSISDN → IMSI avec retry
+# HLR VTY — MSISDN → IMSI with retry
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def hlr_msisdn_to_imsi(msisdn: str,
@@ -518,8 +518,8 @@ class RelayServer(threading.Thread):
         from_number = msg.get("from_number", "")
         message_text = msg.get("message_text", "")
 
-        # Payload ISM : le texte n'etait pas dans le TCP, il arrive par la radio.
-        # On attend le jeton sur la liaison avant d'injecter le MT.
+        # ISM payload: the text was not in the TCP, it arrives over the radio.
+        # The token is awaited on the link before injecting the MT.
         if msg.get("payload_via") == "ism":
             token = msg.get("payload_token", "")
             link = get_payload_link()
@@ -563,7 +563,7 @@ class RelayServer(threading.Thread):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TCP Relay Client — avec retry
+# TCP Relay Client — with retry
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def send_interop_mt(target_ip: str, target_port: int, dest_msisdn: str,
@@ -582,7 +582,7 @@ def send_interop_mt(target_ip: str, target_port: int, dest_msisdn: str,
         "sender_imsi": sender_imsi,
     }
 
-    # Payload ISM : le texte part par la radio, le TCP ne garde qu'un jeton.
+    # ISM payload: the text leaves over the radio, the TCP only keeps a token.
     link = get_payload_link()
     if link is not None:
         try:
@@ -590,10 +590,10 @@ def send_interop_mt(target_ip: str, target_port: int, dest_msisdn: str,
             link.send(token, message_text.encode("utf-8"))
             msg["payload_via"] = "ism"
             msg["payload_token"] = token
-            msg["message_text"] = ""   # le texte ne passe pas par IP
+            msg["message_text"] = ""   # the text does not go over IP
             logging.info("Payload ISM : texte emis par radio (jeton %s)", token)
         except Exception as e:
-            # La radio a echoue : on ne laisse pas le SMS muet, on retombe sur IP.
+            # The radio failed: the SMS is not left mute, fall back to IP.
             logging.error("Payload ISM echoue, repli IP pour ce SMS : %s", e)
 
     for attempt in range(retries):
@@ -789,9 +789,9 @@ class MOLogWatcher(threading.Thread):
             return
         target_ip, target_port = target
 
-        # Indicatif WAN : on le retire ICI, cote emetteur. Le noeud d'arrivee
-        # recoit le numero nu, celui que son HLR connait ; sans ce retrait il
-        # cherche « 3310001 » et repond « MSISDN not found in HLR ».
+        # WAN dialing code: removed HERE, on the sending side. The receiving
+        # node gets the bare number, the one its HLR knows; without this it
+        # looks up « 3310001 » and answers « MSISDN not found in HLR ».
         strip = self.routing.lookup_strip(dest)
         dest_out = dest.lstrip('+')[strip:] if strip else dest
         if strip:
@@ -854,20 +854,17 @@ def main():
     parser.add_argument('--port', '-p', type=int, default=RELAY_TCP_PORT)
     parser.add_argument('--mo-log')
     parser.add_argument('--operator-id', default=os.environ.get('OPERATOR_ID', '1'))
-    # --node-id : LA CLE DE ROUTAGE, et elle n'est pas l'operateur.
+    # --node-id: THE ROUTING KEY, and it is not the operator.
     #
-    # local_operator_id etait ecrase par --operator-id juste apres la lecture du
-    # fichier, donc la cle du relais valait toujours le numero d'OPERATEUR. Avec
-    # des MSISDN qui commencent par le noeud (<noeud>00<op><ms>), sms-routing.conf
-    # est desormais indexe par NOEUD : l'operateur 1 du noeud 1 et celui du noeud
-    # 2 portaient sinon la meme cle "1", et chacun tenait les numeros de l'autre
-    # pour locaux - un SMS interop n'etait jamais emis, il etait injecte dans le
-    # HLR local qui ne connait pas l'abonne.
+    # With MSISDNs that start with the node (<node>00<op><ms>), sms-routing.conf
+    # is indexed by NODE: operator 1 of node 1 and the one of node 2 would
+    # otherwise carry the same key "1", and each would take the other's
+    # numbers for local ones - an interop SMS would never be sent, it would be
+    # injected into the local HLR which does not know the subscriber.
     #
-    # L'operateur, lui, garde ce qui le concerne : la SC-address (le numero du
-    # centre SMS, qu'un abonne voit) et le chemin du journal MO. Les changer
-    # renommerait un fichier que d'autres outils suivent, et un numero que des
-    # mobiles ont deja en memoire.
+    # The operator keeps what concerns it: the SC-address (the SMS centre
+    # number, which a subscriber sees) and the MO log path. Changing them would
+    # rename a file other tools follow, and a number mobiles already hold.
     parser.add_argument('--node-id',
                         default=os.environ.get('OSMO_WAN_NODE',
                                 os.environ.get('WAN_NODE_ID', '')))
@@ -899,8 +896,8 @@ def main():
     logging.info(f"  Routes     : {len(routing.routes)} entries")
     logging.info(f"  Retry      : {routing.retry_count}x, delay={routing.retry_delay}s, timeout={routing.connect_timeout}s")
 
-    # Payload ISM : si demande, on monte la liaison radio MAINTENANT pour que le
-    # recepteur (RX) tourne avant le premier SMS, et on le dit clairement.
+    # ISM payload: if requested, the radio link is brought up NOW so that the
+    # receiver (RX) runs before the first SMS, and it is stated clearly.
     if payload_ism_enabled():
         link = get_payload_link()
         if link is not None:

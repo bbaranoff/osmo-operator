@@ -20,19 +20,19 @@ RR_ASSIGNMENT_COMPLETE = 0x29
 RR_CHANNEL_RELEASE = 0x0d
 RR_IMMEDIATE_ASSIGNMENT = 0x3f
 RR_IMMEDIATE_ASSIGNMENT_EXT = 0x39
-# [2026-10-26] + SI13 (0x00), SI2bis (0x02), SI2ter (0x03), SI2quater (0x07).
-# Des que la BTS 0 a une voisine dans une autre bande (BTS 1 DCS1800, ARFCN 614),
-# osmo-bsc emet un SI2ter et l'annonce dans les rest octets de SI3 : le mobile
-# l'exige avant de choisir la cellule (gsm322.c) et bouclait sur « Cell selection
-# failed, sync timeout » tant que ce filtre le jetait. SI13 sert au GPRS.
+# Includes SI13 (0x00), SI2bis (0x02), SI2ter (0x03), SI2quater (0x07).
+# As soon as BTS 0 has a neighbour in another band (BTS 1 DCS1800, ARFCN 614),
+# osmo-bsc emits an SI2ter and announces it in the SI3 rest octets: the mobile
+# requires it before selecting the cell (gsm322.c), so this filter must let it
+# through. SI13 is needed for GPRS.
 SI_TYPES = frozenset((0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x00, 0x02, 0x03, 0x07))
 CCCH_TYPES = frozenset((0x3f, 0x39, 0x3a, 0x21, 0x22, 0x24))
 
 
 def is_empty_paging(l2):
-    """PAGING REQUEST TYPE 1 sans identite : le bloc de remplissage qu osmo-bts
-    emet sur chaque bloc PCH libre (Mobile Identity de longueur 1, type 0 =
-    « no identity »). Rien a en faire cote mobile."""
+    """PAGING REQUEST TYPE 1 without identity: the filler block osmo-bts emits
+    on every free PCH block (Mobile Identity of length 1, type 0 = "no
+    identity"). Nothing to do with it on the mobile side."""
     return (len(l2) >= 6 and l2[1] == 0x06 and l2[2] == 0x21
             and l2[4] == 0x01 and (l2[5] & 0x07) == 0x00)
 
@@ -142,8 +142,8 @@ def rach_burst(ra, bsic):
 
 
 def rach_ra(burst, bsic):
-    """[2026-10-24] RA d'un access burst (bits durs, 8 de queue + 41 de synchro + 36 codes), None si le CRC
-    (colore par le BSIC) ne colle pas."""
+    """RA of an access burst (hard bits, 8 tail + 41 sync + 36 coded), None if the CRC
+    (coloured by the BSIC) does not match."""
     d36 = burst[8 + 41:8 + 41 + 36]
     if len(d36) != 36:
         return None
@@ -206,7 +206,7 @@ def sacch_tf_frame(tn):
 
 
 def sacch_tf_block_base(tn):
-    # 45.002 table 5 : le bloc SACCH/TF du TN commence a la trame 12 + 13*TN de la 104-multitrame
+    # 45.002 table 5: the SACCH/TF block of TN starts at frame 12 + 13*TN of the 104-multiframe
     return (12 + 13 * tn) % 104
 
 

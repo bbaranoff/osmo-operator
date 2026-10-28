@@ -21,8 +21,8 @@ POLL = gsm.FRAME_DUR / 8
 TX_BURSTS = 24
 BPLEN = 116
 RELEASE_FALLBACK = 20.0
-# Combien de temps garder un bloc SDCCH montant en attendant de connaitre le
-# canal dedie (cf. _poll_sdcch).
+# How long to keep an uplink SDCCH block while waiting to know the dedicated
+# channel (see _poll_sdcch).
 SDCCH_ATTENTE = 1.0
 
 
@@ -130,26 +130,21 @@ class Uplink(threading.Thread):
         return start % gsm.HYPERFRAME
 
     def _queue_facch(self, l2, ouverture=False):
-        # [2026-09-23] UNE UI SAPI 0 SUR LE TCH : UN BLOC QUI N'EST PAS UNE FACCH.
-        # Le BSC signale « SAPI=0 UNIT DATA INDICATION: unimplemented » (RLL
-        # 0x0b) sur lchan TCH_F, a l'ouverture du TCH (19:12:08, 20:22:54,
-        # 20:32:29, 20:35:28, 21:00:40 -- avant meme le SABM du mobile). Ce
-        # n'est pas le bourrage 01 03 01 2b : lapd_core.c:1127 jette une UI de
-        # longueur 0. C'est lapdm.c:995 : un premier octet au bit EA a 0 n'est
-        # pas une adresse, la trame est prise pour un en-tete court (Bter) et
-        # remonte TELLE QUELLE en UNIT DATA IND. C'est la forme d'un bloc SACCH
-        # montant : en-tete L1 d'abord (puissance, TA) -- 08 00 01 03 49 ... a
-        # la puissance 8, alors qu'a la puissance 7 (07 ...) il passe pour du
-        # SAPI 1 et disparait sans bruit, d'ou l'intermittence.
-        # Une FACCH est toujours au format B et SAPI 0 : adresse 0x01 ou 0x03.
-        # Tout autre bloc est ecarte ici, octets journalises pour en trouver
-        # la source. PONT_FACCH_TOUT=1 retablit l'envoi sans tri.
+        # A SAPI 0 UI ON THE TCH IS A BLOCK THAT IS NOT A FACCH.
+        # A block whose first octet has the EA bit at 0 is not a LAPDm address:
+        # lapdm.c:995 takes the frame for a short header (Bter) and passes it
+        # up AS IS as UNIT DATA IND ("SAPI=0 UNIT DATA INDICATION:
+        # unimplemented" at the BSC). That is the shape of an uplink SACCH
+        # block: L1 header first (power, TA) -- 08 00 01 03 49 ... at power 8.
+        # A FACCH is always format B and SAPI 0: address 0x01 or 0x03.
+        # Any other block is discarded here, octets logged to find its source.
+        # PONT_FACCH_TOUT=1 restores unfiltered sending.
         if l2[0] not in (0x01, 0x03) and os.environ.get("PONT_FACCH_TOUT", "0") != "1":
             log.info("FACCH montante ECARTEE (pas une adresse SAPI 0) : %s",
                      bytes(l2[:gsm.MACBLOCK_LEN]).hex(" "))
             return
-        # Les trames non-I (SABM, RR, REJ, DISC...) sont rares : on les garde
-        # au journal, comme la premiere FACCH de chaque TCH.
+        # Non-I frames (SABM, RR, REJ, DISC...) are rare: they are logged, as
+        # is the first FACCH of each TCH.
         if (l2[1] & 0x01) or ouverture:
             log.info("FACCH montante %s : %s", "non-I" if l2[1] & 0x01 else "I (ouverture)",
                      bytes(l2[:gsm.MACBLOCK_LEN]).hex(" "))
@@ -168,10 +163,10 @@ class Uplink(threading.Thread):
         self.stats.rach += 1
 
     def _route_sdcch(self, l2):
-        """Vrai si le bloc SDCCH montant part en FACCH (consomme ici).
+        """True if the uplink SDCCH block leaves as FACCH (consumed here).
 
-        [2026-09-23] Extrait tel quel de _poll_sdcch pour que le pont DSP
-        (pont/dsp/uplink.py) le surcharge ; le montage grgsm garde ce code."""
+        Split out of _poll_sdcch so that the DSP bridge (pont/dsp/uplink.py)
+        can override it; the grgsm setup keeps this code."""
         tn_tch = self.tch.active_tn()
         if tn_tch is not None and not self.tch.is_open():
             if gsm.rr_message_type(l2)[1] == gsm.RR_ASSIGNMENT_COMPLETE:
@@ -189,13 +184,12 @@ class Uplink(threading.Thread):
             l2 = b[16:39]
             if self._route_sdcch(l2):
                 return
-            # [2026-09-21] Le bloc ATTEND que le canal soit connu, il n'est
-            # plus jete. La couche 1 publie le SABM au moment meme ou elle
-            # l'emet, et le canal dedie n'est lu ici qu'au plus toutes les
-            # DCCH_TTL secondes : le premier bloc d'une connexion tombait
-            # regulierement dans cette fenetre et disparaissait, le BTS
-            # attendait son SABM jusqu'au Timeout. On relit le canal tout de
-            # suite et on garde le bloc un instant s'il n'est pas encore arme.
+            # The block WAITS for the channel to be known, it is not dropped.
+            # Layer 1 publishes the SABM at the very moment it emits it, and
+            # the dedicated channel is read here at most every DCCH_TTL
+            # seconds: the first block of a connection would fall in that
+            # window. The channel is re-read right away and the block is kept
+            # for a moment if it is not armed yet.
             self.sdcch_attente = (l2, time.monotonic())
             self.dedicated.refresh()
         if self.sdcch_attente is None:
@@ -211,38 +205,36 @@ class Uplink(threading.Thread):
         plan, ss, tn = ded
         bursts = self._bursts_xcch(l2)
         if bursts is None:
-            return          # le montage DSP attend encore les bursts de la ROM (pont/dsp/uplink.py)
+            return          # the DSP setup is still waiting for the ROM's bursts (pont/dsp/uplink.py)
         self.sdcch_attente = None
 
-        # [2026-09-21] SDCCH ou SACCH ? La couche 1 ne peut pas le dire : le
-        # firmware pose les deux dans le MEME tampon a_cu avec le MEME mot de
-        # tache (prim_tx_nb.c:118, dsp_load_tx_task(DUL_DSP_TASK) dans les deux
-        # cas) ; seul son drapeau interne MF_F_SACCH les separe, et il ne sort
-        # jamais dans l'API RAM. C'est donc ici, sur la FORME du bloc, que ca se
-        # tranche : un bloc SDCCH commence par l'adresse LAPDm (0x01 ou 0x03),
-        # un bloc SACCH par ses deux octets d'en-tete L1 (puissance ordonnee,
-        # TA), l'adresse ne venant qu'en position 2.
+        # SDCCH or SACCH? Layer 1 cannot tell: the firmware puts both in the
+        # SAME a_cu buffer with the SAME task word (prim_tx_nb.c:118,
+        # dsp_load_tx_task(DUL_DSP_TASK) in both cases); only its internal
+        # MF_F_SACCH flag separates them, and it never reaches the RAM API. So
+        # it is decided here, on the SHAPE of the block: an SDCCH block starts
+        # with the LAPDm address (0x01 or 0x03), a SACCH block with its two L1
+        # header octets (ordered power, TA), the address only coming at
+        # position 2.
         #
-        # Releve du banc, les deux blocs qui alternaient sur la voie SDCCH :
+        # The two kinds of block seen on the SDCCH path:
         #   01 3f 49 05 08 70 ...  -> SABM + LOCATION UPDATING REQUEST
-        #   07 00 01 03 49 06 15   -> en-tete L1 (pwr 7, TA 0) + MEASUREMENT REPORT
-        # Le second partait sur les trames SDCCH montantes, et la SACCH
-        # montante restait vide : le BTS ne voyait plus rien sur sa liaison
-        # lente et lachait le canal quelques secondes apres l'etablissement.
+        #   07 00 01 03 49 06 15   -> L1 header (pwr 7, TA 0) + MEASUREMENT REPORT
+        # Sending the second on the uplink SDCCH frames would leave the uplink
+        # SACCH empty: the BTS would see nothing on its slow link and drop the
+        # channel a few seconds after establishment.
         #
-        # [2026-09-23] Et le SAPI 3 ? Son adresse LAPDm est 0x0d / 0x0f, et une
-        # trame SAPI 3 sans information (UA, SABM, RR, DISC) porte en position 2
-        # un indicateur de longueur L=0, soit 0x01 -- exactement ce que le test
-        # ci-dessus prenait pour l'adresse SAPI 0 d'un bloc SACCH. Releve du
-        # banc, MT SMS vers le mobile du pont :
-        #   0f 73 01 2b 2b ...     -> UA SAPI 3 (reponse au SABM du BTS)
-        # parti sur la SACCH montante : le BTS le decodait en « Unknown (SS) »,
-        # n'etablissait jamais le SAPI 3, et le CP-DATA du SMS ne partait pas
-        # (MSC : WAIT_CP_ACK puis abandon au bout de 7 s, a chaque essai).
-        # Octet 0 = 0x0d / 0x0f est ambigu (puissance 13 / 15 d'un en-tete
-        # SACCH) : on ne tranche SACCH que si la lecture SACCH tient debout --
-        # TA <= 63 (6 bits) et un vrai champ de controle LAPDm en position 3,
-        # pas le bourrage 0x2b qui suit une trame SAPI 3 vide.
+        # SAPI 3: its LAPDm address is 0x0d / 0x0f, and a SAPI 3 frame without
+        # information (UA, SABM, RR, DISC) carries at position 2 a length
+        # indicator L=0, i.e. 0x01 -- exactly what the test above would take
+        # for the SAPI 0 address of a SACCH block, e.g.
+        #   0f 73 01 2b 2b ...     -> UA SAPI 3 (answer to the BTS's SABM)
+        # Sent on the uplink SACCH, the BTS would decode it as "Unknown (SS)",
+        # never establish SAPI 3, and the SMS CP-DATA would not leave.
+        # Octet 0 = 0x0d / 0x0f is ambiguous (power 13 / 15 of a SACCH
+        # header): SACCH is chosen only if the SACCH reading holds up --
+        # TA <= 63 (6 bits) and a real LAPDm control field at position 3, not
+        # the 0x2b padding that follows an empty SAPI 3 frame.
         sacch = l2[0] not in (0x01, 0x03) and l2[2] in (0x01, 0x03)
         if sacch and l2[0] in (0x0d, 0x0f):
             sacch = l2[1] <= 63 and l2[3] != 0x2b
@@ -259,9 +251,9 @@ class Uplink(threading.Thread):
             self.tx.schedule(tn, (fn0 + j) % gsm.HYPERFRAME, burst, True)
 
     def _bursts_xcch(self, l2):
-        """Les 4 bursts d'un bloc SDCCH/SACCH montant. Ici codes par l'hote ; le pont DSP
-        (pont/dsp/uplink.py) prend ceux de la ROM. None = pas encore prets, le bloc reste
-        en attente et _poll_sdcch le represente au tour suivant."""
+        """The 4 bursts of an uplink SDCCH/SACCH block. Coded here by the host; the DSP bridge
+        (pont/dsp/uplink.py) takes the ROM's. None = not ready yet, the block stays pending
+        and _poll_sdcch presents it again on the next turn."""
         self.stats.xcch_ul_hote += 1
         return gsm.xcch_encode(l2)
 
@@ -271,29 +263,21 @@ class Uplink(threading.Thread):
             self.tch_epoch = -1
             return
         if self.tch_epoch != self.tch.seq:
-            # [2026-09-22] NE PLUS JETER LA PREMIERE FACCH APRES L'ARMEMENT.
+            # DO NOT DROP THE FIRST FACCH AFTER ARMING.
             #
-            # `skip_pending()` avance le curseur sur TOUT ce qui est deja ecrit
-            # dans la bande laterale, et le `return` sortait sans rien traiter.
-            # Or `tch.seq` est incremente par `tch.arm()`, appele quand le pont
-            # decode l'ASSIGNMENT COMMAND descendante -- et l'ASSIGNMENT
-            # COMPLETE est justement LA PREMIERE chose que le mobile emet sur le
-            # nouveau TCH. Elle tombait donc exactement dans cette fenetre et
-            # etait marquee « deja vue ».
+            # `skip_pending()` moves the cursor past EVERYTHING already written
+            # in the side band. `tch.seq` is incremented by `tch.arm()`, called
+            # when the bridge decodes the downlink ASSIGNMENT COMMAND -- and the
+            # ASSIGNMENT COMPLETE is precisely THE FIRST thing the mobile emits
+            # on the new TCH, so skipping the FACCH here would mark it "already
+            # seen" and the BSC would end in "Assignment failed in state
+            # WAIT_RR_ASS_COMPLETE, cause EQUIPMENT FAILURE: Timeout".
             #
-            # Mesure du 2026-09-22, appel vers 600 : le mobile emet bien
-            # « ASSIGNMENT COMPLETE (cause #0) » (gsm48_rr.c:4720, 18:55:47),
-            # le pont journalise « FACCH montante » SANS le suffixe
-            # « , ASSIGNMENT COMPLETE » -- donc ce n'etait pas elle -- et le BSC
-            # conclut « Assignment failed in state WAIT_RR_ASS_COMPLETE, cause
-            # EQUIPMENT FAILURE: Timeout » (assignment_fsm.c:1057).
-            #
-            # On garde le saut pour la SACCH (un rapport de mesure perime ne
-            # sert a rien) mais on TRAITE la FACCH en attente. Le risque
-            # residuel -- rejouer une FACCH de la session precedente -- est
-            # borne a un bloc et LAPDm le rejettera, la ou perdre l'ASSIGNMENT
-            # COMPLETE fait echouer l'appel a tous les coups.
-            # PONT_FACCH_SKIP=1 retablit l'ancien comportement.
+            # The skip is kept for the SACCH (a stale measurement report is
+            # useless) but the pending FACCH is PROCESSED. The residual risk --
+            # replaying a FACCH of the previous session -- is bounded to one
+            # block, which LAPDm rejects.
+            # PONT_FACCH_SKIP=1 skips the pending FACCH as well.
             self.tch_epoch = self.tch.seq
             self.sb_sacch.skip_pending()
             if os.environ.get("PONT_FACCH_SKIP", "0") == "1":
@@ -303,7 +287,7 @@ class Uplink(threading.Thread):
         if b is None:
             return
         l2 = b[16:39]
-        # Un bloc qui n'est pas une FACCH (voir _queue_facch) n'ouvre pas le TCH.
+        # A block that is not a FACCH (see _queue_facch) does not open the TCH.
         if l2[0] not in (0x01, 0x03) and os.environ.get("PONT_FACCH_TOUT", "0") != "1":
             self._queue_facch(l2)
             return

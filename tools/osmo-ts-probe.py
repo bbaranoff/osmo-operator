@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-# osmo-ts-probe.py - QUI PORTE DES BURSTS, MAINTENANT ? Ecrit l etat des 8
-# timeslots que la banniere LAB GSM (configs/conky/labgsm.html, via
-# osmo-topzone.py) fait clignoter en orange.
+# osmo-ts-probe.py - WHO CARRIES BURSTS RIGHT NOW? Writes the state of the 8
+# timeslots that the LAB GSM banner (configs/conky/labgsm.html, via
+# osmo-topzone.py) blinks in orange.
 #
-# Deux sources :
-#   1. LA CONF osmo-bsc : phys_chan_config de chaque timeslot (CCCH+SDCCH4,
-#      SDCCH8, TCH/F ...). Donne le TYPE, donc le libelle de chaque case et le
-#      fait qu un TCH puisse porter de la VOIX. Cherchee dans, au choix :
+# Two sources:
+#   1. THE osmo-bsc CONF: phys_chan_config of each timeslot (CCCH+SDCCH4,
+#      SDCCH8, TCH/F ...). Gives the TYPE, hence the label of each cell and
+#      whether a TCH can carry VOICE. Looked up in, whichever exists:
 #         $OSMO_BSC_CFG, /etc/osmocom/osmo-bsc.cfg, $OSMO_REPO/configs/osmo-bsc.cfg
-#   2. LE VTY osmo-bsc (telnet 127.0.0.1 4242, `show lchan summary`) : quels
-#      canaux logiques sont ETABLIS, sur quel timeslot, de quel type. Un TCH
-#      etabli = de la voix -> le timeslot clignote. Pas de VTY (banc arrete) ->
-#      bsc=false, la banniere passe en demonstration.
+#   2. THE osmo-bsc VTY (telnet 127.0.0.1 4242, `show lchan summary`): which
+#      logical channels are ESTABLISHED, on which timeslot, of which type. An
+#      established TCH = voice -> the timeslot blinks. No VTY (bench stopped) ->
+#      bsc=false, the banner switches to demonstration mode.
 #
-# Sortie : $OSMO_FFT_DIR/timeslots.json (defaut /run/osmo-fft, /tmp en repli
-# - voir run_dir(), la MEME regle que le lecteur), reecrit chaque
-# seconde, de forme :
+# Output: $OSMO_FFT_DIR/timeslots.json (default /run/osmo-fft, /tmp as
+# fallback - see run_dir(), the SAME rule as the reader), rewritten every
+# period, of the form:
 #   {"bsc":true,"arfcn":"ARFCN 514 · DCS 1800",
 #    "ts":[{"n":0,"type":"CCCH+SDCCH4","active":false,"voice":false}, ...]}
 import json
@@ -26,24 +26,20 @@ import sys
 import time
 
 REPO = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
-# ── OU ECRIRE : LA MEME REGLE QUE LE LECTEUR, ET RELUE A CHAQUE TOUR ────────
-# [2026-09-10] Le repli etait « $XDG_RUNTIME_DIR sinon /tmp », alors que le
-# lecteur (tools/osmo-topzone.py) ne regarde QUE $OSMO_FFT_DIR puis /tmp : sans
-# /run/osmo-fft, la sonde ecrivait dans /run/user/1001 un fichier que PERSONNE
-# n allait lire, et la banniere restait en demonstration sans qu aucune erreur
-# ne le dise. Deux chemins pour un seul fichier, c est un de trop : la regle
-# est ici et dans osmo-topzone.py, mot pour mot - le premier repertoire qui
-# EXISTE ET OU L ON PEUT ECRIRE, entre $OSMO_FFT_DIR et /tmp.
+# ── WHERE TO WRITE: THE SAME RULE AS THE READER, RE-EVALUATED EVERY TURN ────
+# The reader (tools/osmo-topzone.py) looks ONLY at $OSMO_FFT_DIR then /tmp, so
+# the rule is the same here, word for word: the first directory that EXISTS
+# AND IS WRITABLE, between $OSMO_FFT_DIR and /tmp.
 #
-# « ou l on peut ecrire » et pas seulement « qui existe » : /run/osmo-fft est
-# cree par osmo-fft-snap.service (RuntimeDirectory, 0775, groupe sudo) mais
-# tools/osmo-op.sh a longtemps pu le creer avant lui, en 0755 root:root - la
-# sonde de la session ne pouvait alors plus jamais y ecrire.
+# "writable" and not only "exists": /run/osmo-fft is created by
+# osmo-fft-snap.service (RuntimeDirectory, 0775, group sudo), but it may also
+# have been created earlier by another tool as 0755 root:root, in which case
+# the session probe cannot write there.
 #
-# Et la regle est REEVALUEE A CHAQUE ECRITURE : ce repertoire est un
-# RuntimeDirectory, il disparait quand l unite s arrete et revient quand elle
-# repart. Une sonde qui aurait resolu son chemin une fois pour toutes ecrirait
-# ensuite dans le vide jusqu au prochain redemarrage.
+# The rule is RE-EVALUATED AT EVERY WRITE: that directory is a
+# RuntimeDirectory, it disappears when the unit stops and comes back when it
+# restarts. A probe that resolved its path once would otherwise keep writing
+# into the void until the next restart.
 RUN_PREFERE = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 
 
@@ -54,12 +50,11 @@ def run_dir():
     return "/tmp"
 VTY_HOST = os.environ.get("OSMO_BSC_VTY_HOST", "127.0.0.1")
 VTY_PORT = int(os.environ.get("OSMO_BSC_VTY_PORT", "4242"))
-# [2026-09-06] LA BANNIERE SUIT UNE BTS PRECISE, ET UNE SEULE. Les huit cases
-# sont la trame TDMA d UN porteur : celle de la BTS 0, TRX 0 - la BTS du banc.
-# La lecture du VTY ne regardait que « Timeslot N » sans se soucier du reste de
-# la ligne : sur un banc multi-operateur (plusieurs BTS declarees dans le meme
-# osmo-bsc), un canal etabli sur la BTS 1 allumait la case de la BTS 0. Les
-# cases suivaient donc « une » BTS, pas LA BTS.
+# THE BANNER FOLLOWS ONE PRECISE BTS, AND ONLY ONE. The eight cells are the
+# TDMA frame of ONE carrier: BTS 0, TRX 0 - the bench BTS. On a multi-operator
+# bench (several BTS declared in the same osmo-bsc) the VTY lines of the other
+# BTS/TRX are ignored, so a channel established on BTS 1 never lights a cell
+# of BTS 0.
 BTS_NR = int(os.environ.get("OSMO_BTS_NR", "0"))
 TRX_NR = int(os.environ.get("OSMO_TRX_NR", "0"))
 
@@ -74,7 +69,7 @@ def cfg_path():
 
 
 def read_types():
-    """[(n, phys_chan_config)] du premier trx du premier bts de la conf."""
+    """[(n, phys_chan_config)] of the first trx of the followed bts in the conf."""
     p = cfg_path()
     types = {}
     arfcn = None
@@ -84,30 +79,29 @@ def read_types():
         txt = open(p, errors="replace").read()
     except OSError:
         return types, arfcn
-    # Le bloc de LA bts suivie (BTS_NR), pas « la premiere venue » : sur une
-    # conf multi-BTS les phys_chan_config different d une BTS a l autre, et les
-    # libelles des cases doivent etre ceux du porteur qu on affiche.
+    # The block of THE followed bts (BTS_NR), not "the first one found": on a
+    # multi-BTS conf the phys_chan_config differ from one BTS to another, and
+    # the cell labels must be those of the carrier being displayed.
     blocks = re.split(r'\n\s*bts\s+(\d+)', txt)
     block = txt
-    # re.split avec un groupe rend [avant, "0", bloc0, "1", bloc1, ...]
+    # re.split with a group yields [before, "0", block0, "1", block1, ...]
     for i in range(1, len(blocks) - 1, 2):
         if int(blocks[i]) == BTS_NR:
             block = blocks[i + 1]
             break
     else:
         if len(blocks) > 2:
-            block = blocks[2]                # pas de BTS_NR : la premiere
-    # arfcn de la premiere trx (on ignore un placeholder de template __ARFCN__)
+            block = blocks[2]                # no BTS_NR: the first one
+    # arfcn of the first trx (a template placeholder __ARFCN__ is ignored)
     m = re.search(r'\n\s*arfcn\s+(\d+)', block)
     if m:
         arfcn = m.group(1)
-    # premier trx uniquement
+    # first trx only
     trx0 = re.split(r'\n\s*trx\s+\d+', block)
     scope = trx0[1] if len(trx0) > 1 else block
-    # [2026-10-21] le phys_chan_config n est pas forcement la ligne qui SUIT
-    # « timeslot N » : un commentaire (« ! ... ») entre les deux laissait la
-    # case sans type (TS1 affiche « — » alors que la conf dit TCH/F). On prend
-    # le premier phys_chan_config du bloc du timeslot, jusqu au timeslot suivant.
+    # phys_chan_config is not necessarily the line that FOLLOWS "timeslot N":
+    # a comment ("! ...") may sit between the two. Take the first
+    # phys_chan_config of the timeslot block, up to the next timeslot.
     for tm in re.finditer(r'\n\s*timeslot\s+(\d+)((?:\n(?!\s*timeslot\s)[^\n]*)*)', scope):
         pm = re.search(r'\n\s*phys_chan_config\s+(\S+)', tm.group(2))
         if pm:
@@ -115,14 +109,11 @@ def read_types():
     return types, arfcn
 
 
-# ── LA CONNEXION VTY QUI RESTE OUVERTE ──────────────────────────────────────
-# [2026-09-06] POURQUOI LES TIMESLOTS AVAIENT UNE SECONDE DE RETARD. Chaque
-# tour de sonde OUVRAIT une connexion telnet, envoyait la commande, DORMAIT
-# 250 ms en esperant que la reponse soit arrivee, puis fermait. Avec la periode
-# d une seconde, un canal qui s etablit pouvait mettre plus d une seconde a
-# faire clignoter sa case. On garde donc la connexion, et on lit jusqu au
-# prompt du VTY au lieu de dormir : la reponse est traitee des qu elle est
-# complete, en general en quelques millisecondes.
+# ── THE VTY CONNECTION THAT STAYS OPEN ──────────────────────────────────────
+# The connection is kept across probe turns, and the reply is read up to the
+# VTY prompt instead of sleeping a fixed delay: the reply is processed as soon
+# as it is complete, usually within a few milliseconds, so a channel that gets
+# established blinks its cell without a visible lag.
 _PROMPT = re.compile(rb'[\r\n][A-Za-z0-9_.\-]+(?:\([^)]*\))?[>#]\s*$')
 
 
@@ -134,7 +125,7 @@ class Vty:
         try:
             self.s = socket.create_connection((VTY_HOST, VTY_PORT), timeout=1.0)
             self.s.settimeout(1.0)
-            self._read_until_prompt()          # la banniere d accueil
+            self._read_until_prompt()          # the welcome banner
             return True
         except OSError:
             self.s = None
@@ -154,7 +145,7 @@ class Vty:
             try:
                 chunk = self.s.recv(4096)
             except socket.timeout:
-                break                          # on rend ce qu on a
+                break                          # return what we have
             except OSError:
                 self.close()
                 return None
@@ -167,14 +158,14 @@ class Vty:
         return buf
 
     def cmd(self, text):
-        """Sortie d une commande, ou None si le VTY n est pas joignable."""
+        """Output of a command, or None if the VTY is not reachable."""
         if self.s is None and not self._connect():
             return None
         try:
             self.s.sendall(text.encode() + b"\r\n")
         except OSError:
             self.close()
-            if not self._connect():            # une seule reprise
+            if not self._connect():            # a single retry
                 return None
             try:
                 self.s.sendall(text.encode() + b"\r\n")
@@ -191,20 +182,20 @@ VTY = Vty()
 
 
 def vty_lchan():
-    """Renvoie (ok, {ts: {'active':bool,'voice':bool}}) depuis le VTY osmo-bsc."""
+    """Return (ok, {ts: {'active':bool,'voice':bool}}) from the osmo-bsc VTY."""
     act = {}
     text = VTY.cmd("show lchan summary")
     if text is None:
         return False, act
-    # lignes type : "BTS 0, TRX 0, Timeslot 2, ... Lchan 0, Type TCH/F, State ESTABLISHED ..."
+    # typical lines: "BTS 0, TRX 0, Timeslot 2, ... Lchan 0, Type TCH/F, State ESTABLISHED ..."
     for line in text.splitlines():
         m = re.search(r'Timeslot\s+(\d+)', line)
         if not m:
             continue
-        # La BTS et le TRX de la ligne : une ligne d une autre BTS (ou d un
-        # autre porteur) ne concerne pas cette banniere. Une ligne qui ne les
-        # nomme pas est gardee - vieux format de sortie, mieux vaut afficher
-        # que perdre l information.
+        # The BTS and TRX of the line: a line from another BTS (or another
+        # carrier) does not concern this banner. A line that does not name
+        # them is kept - old output format, better to show than to lose the
+        # information.
         mb = re.search(r'BTS\s+(\d+)', line)
         mx = re.search(r'TRX\s+(\d+)', line)
         if (mb and int(mb.group(1)) != BTS_NR) or (mx and int(mx.group(1)) != TRX_NR):
@@ -224,12 +215,12 @@ def vty_lchan():
 
 
 def vty_text(cmd):
-    """Sortie brute d une commande VTY osmo-bsc, ou None si injoignable."""
+    """Raw output of an osmo-bsc VTY command, or None if unreachable."""
     return VTY.cmd(cmd)
 
 
 def vty_identity():
-    """MCC/MNC, A5, arfcn, band LIVE depuis le VTY (le plus a jour). {} si rien."""
+    """MCC/MNC, A5, arfcn, band LIVE from the VTY (the most up to date). {} if none."""
     ident = {}
     net = vty_text("show network")
     if net:
@@ -251,7 +242,7 @@ def vty_identity():
 
 
 def net_from_cfg():
-    """Repli : MCC/MNC/A5/band depuis le fichier de conf, placeholders ignores."""
+    """Fallback: MCC/MNC/A5/band from the conf file, placeholders ignored."""
     p = cfg_path()
     out = {}
     if not p:
@@ -274,7 +265,7 @@ def net_from_cfg():
 def build():
     types, cfg_arfcn = read_types()
     if not types:
-        # defaut raisonnable si pas de conf : la topologie classique du banc
+        # reasonable default without a conf: the classic bench topology
         types = {0: "CCCH+SDCCH4", 1: "SDCCH8", 2: "TCH/F", 3: "TCH/F",
                  4: "TCH/F", 5: "TCH/F", 6: "TCH/F", 7: "TCH/F"}
     ok, act = vty_lchan()
@@ -285,15 +276,15 @@ def build():
                    "active": bool(a.get("active")), "voice": bool(a.get("voice"))})
     out = {"bsc": ok, "ts": ts}
 
-    # ── LES VALEURS LIVE : ARFCN / IMSI (MCC-MNC) / A5 / bande ───────────────
-    # Le VTY prime (etat reel du reseau qui tourne) ; le fichier de conf est le
-    # repli ; le template du depot ne compte pas (placeholders __MCC__ ignores).
+    # ── THE LIVE VALUES: ARFCN / IMSI (MCC-MNC) / A5 / band ──────────────────
+    # The VTY wins (real state of the running network); the conf file is the
+    # fallback; the repo template does not count (__MCC__ placeholders ignored).
     ident = {}
     if cfg_arfcn and "__" not in cfg_arfcn:
         ident["arfcn"] = cfg_arfcn
     ident.update(net_from_cfg())
     if ok:
-        ident.update(vty_identity())  # le live ecrase le fichier
+        ident.update(vty_identity())  # live overrides the file
 
     band = ident.get("band", "")
     band_txt = ""
@@ -310,15 +301,14 @@ def build():
     return out
 
 
-# ── LE BANC EN TEMPS REEL, POUR LA BANNIERE ─────────────────────────────────
-# [2026-10-01] La banniere ne montrait que les timeslots. Elle recoit
-# maintenant le banc entier - les demons du coeur, la radio, les abonnes du
-# HLR, les appels en cours, depuis quand la pile est debout - lus a bas cout
-# (/proc, la base sqlite du HLR en lecture seule) toutes les 2 s : le reste de
-# la sonde tourne quatre fois par seconde, et des demons qui vivent des heures
-# n ont pas besoin d etre recomptes a ce rythme. Les noms sont ceux que le
-# noyau garde (comm, 15 caracteres) - « osmo-sip-connector » s y lit
-# « osmo-sip-connec », comme dans tools/conky-osmo-status.sh.
+# ── THE BENCH IN REAL TIME, FOR THE BANNER ──────────────────────────────────
+# The banner receives the whole bench - the core daemons, the radio, the HLR
+# subscribers, the calls in progress, how long the stack has been up - read
+# cheaply (/proc, the HLR sqlite database read-only) every 2 s: the rest of
+# the probe runs four times per second, and daemons that live for hours do
+# not need to be recounted at that rate. Names are those the kernel keeps
+# (comm, 15 characters) - "osmo-sip-connector" reads "osmo-sip-connec" there,
+# as in tools/conky-osmo-status.sh.
 COEUR = (("HLR", "osmo-hlr"), ("MSC", "osmo-msc"), ("BSC", "osmo-bsc"), ("STP", "osmo-stp"),
          ("MGW", "osmo-mgw"), ("BTS", "osmo-bts-trx"), ("SIP", "osmo-sip-connector"),
          ("SMSC", "proto-smsc-daemon"), ("PBX", "asterisk"))
@@ -329,7 +319,7 @@ _live = {"quand": 0.0, "val": {}}
 
 
 def _procs():
-    """(noms comm, lignes de commande, {comm: pid}) de tous les processus."""
+    """(comm names, command lines, {comm: pid}) of all processes."""
     comms, cmds, pids = set(), [], {}
     for p in os.listdir("/proc"):
         if not p.isdigit():
@@ -347,7 +337,7 @@ def _procs():
 
 
 def _depuis(pid):
-    """Depuis combien de secondes ce processus tourne (0 si illisible)."""
+    """How many seconds this process has been running (0 if unreadable)."""
     try:
         with open("/proc/%d/stat" % pid) as f:
             champs = f.read().rsplit(")", 1)[1].split()
@@ -375,10 +365,10 @@ def live_info(ts):
             phy = "faketrx"
         if any(re.search(r"pont/pont(_dsp)?\.py", c) for c in cmds):
             phy = (phy + " + pont") if phy else "pont"
-        # Le banc de l ISO n a PAS d osmo-trx : le transceiver est faketrx
-        # (fake_trx.py) et pont (pont.py / pont_dsp.py) - on les montre tels
-        # quels. GAPK : le binaire osmo-gapk n existe que le temps d un appel ;
-        # hors appel le veilleur gapk-start.sh EST l etat nominal.
+        # The ISO bench has NO osmo-trx: the transceiver is faketrx
+        # (fake_trx.py) and pont (pont.py / pont_dsp.py) - shown as such.
+        # GAPK: the osmo-gapk binary only exists for the duration of a call;
+        # outside a call the gapk-start.sh watcher IS the nominal state.
         radio["FAKETRX"] = any("fake_trx.py" in c for c in cmds)
         radio["PONT"] = any(re.search(r"pont/pont(_dsp)?\.py", c) for c in cmds)
         radio["GAPK"] = radio.get("GAPK", False) or any("gapk-start.sh" in c for c in cmds)
@@ -392,7 +382,7 @@ def live_info(ts):
                                   "and vlr_number != ''").fetchone()[0]
                 con.close()
                 subs = {"total": tot, "attached": att}
-            except Exception:  # noqa: BLE001 - base verrouillee, illisible : pas d abonnes
+            except Exception:  # noqa: BLE001 - locked or unreadable db: no subscribers
                 subs = {}
         depuis = 0
         for c in ("osmo-bsc", "osmo-stp", "osmo-msc"):
@@ -401,52 +391,49 @@ def live_info(ts):
                 break
         val = {"core": core, "radio": radio, "phy": phy, "subs": subs,
                "calls": sum(1 for t in ts if t.get("voice")), "up": depuis}
-    except Exception as e:  # noqa: BLE001 - la banniere vit sans ces infos
+    except Exception as e:  # noqa: BLE001 - the banner lives without this info
         print("[ts-probe] infos banc : %s" % e, file=sys.stderr, flush=True)
     _live.update(quand=now, val=val)
     return val
 
 
 def main():
-    # 0.25 s : assez court pour que l allumage d un canal se voie « tout de
-    # suite » a l oeil, assez long pour ne pas marteler le VTY d osmo-bsc (4
-    # « show lchan summary » par seconde sur une connexion deja ouverte).
+    # 0.25 s: short enough for a channel lighting up to look "immediate" to
+    # the eye, long enough not to hammer the osmo-bsc VTY (4 "show lchan
+    # summary" per second on an already open connection).
     period = float(os.environ.get("OSMO_TS_PERIOD", "0.25"))
     try:
         os.makedirs(RUN_PREFERE, exist_ok=True)
     except OSError:
-        pass                                  # run_dir() se rabattra sur /tmp
+        pass                                  # run_dir() falls back to /tmp
     tmp = None
-    dernier = (None, 0.0)                     # (message, quand) - voir plus bas
+    dernier = (None, 0.0)                     # (message, when) - see below
     while True:
         try:
             out = build()
             dest = os.path.join(run_dir(), "timeslots.json")
-            # ── UN TEMPORAIRE PAR PROCESSUS ─────────────────────────────────
-            # [2026-09-10] Deux sondes ont tourne en meme temps - un widget
-            # rescape d une session X precedente, que le gardien du bureau
-            # comptait pour vivant (cf. osmo-desktop-panel, osmo_vivant) - et
-            # elles partageaient « timeslots.json.tmp » : chacune renommait le
-            # temporaire de l autre, d ou un journal rempli de
-            # « [Errno 2] ... .tmp -> ... .json » quatre fois par seconde. Le
-            # PID dans le nom rend l ecriture atomique meme a plusieurs.
+            # ── ONE TEMPORARY FILE PER PROCESS ──────────────────────────────
+            # Two probes may run at the same time (e.g. a widget surviving
+            # from a previous X session). The PID in the temporary name keeps
+            # the write atomic even with several writers: each one renames
+            # its own temporary file only.
             tmp = "%s.%d.tmp" % (dest, os.getpid())
             with open(tmp, "w") as f:
                 json.dump(out, f)
             os.replace(tmp, dest)
             tmp = None
-        except Exception as e:  # noqa: BLE001 - une sonde ne doit jamais mourir
-            # Un temporaire orphelin ne doit pas rester dans /run.
+        except Exception as e:  # noqa: BLE001 - a probe must never die
+            # An orphan temporary file must not stay in /run.
             if tmp:
                 try:
                     os.unlink(tmp)
                 except OSError:
                     pass
                 tmp = None
-            # ── LE MEME DEFAUT NE SE DIT PAS QUATRE FOIS PAR SECONDE ────────
-            # Une panne durable (repertoire non accessible) noyait le journal
-            # sous des milliers de lignes identiques. On dit la premiere, puis
-            # une par minute tant que rien ne change.
+            # ── THE SAME FAULT IS NOT LOGGED FOUR TIMES PER SECOND ──────────
+            # A lasting failure (directory not accessible) would flood the log
+            # with identical lines. Log the first one, then one per minute as
+            # long as nothing changes.
             msg = "%s (destination %s)" % (e, run_dir())
             now = time.time()
             if msg != dernier[0] or now - dernier[1] > 60:

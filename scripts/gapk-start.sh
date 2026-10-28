@@ -1,90 +1,78 @@
 #!/bin/bash
-# gapk-start.sh - Gestionnaire audio GSM (osmo-gapk ↔ ALSA/RTP)
+# gapk-start.sh - GSM audio manager (osmo-gapk ↔ ALSA/RTP)
 #
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE AUDIO DOUBLE CHEMIN (osmo-nitb-for-calypso v2)
+# DUAL-PATH AUDIO ARCHITECTURE (osmo-nitb-for-calypso v2)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# CHEMIN 1 - Baseband (mobile l1phy) :
+# PATH 1 - Baseband (mobile l1phy):
 #   mobile process ← TCH frames → trxcon → fake_trx → osmo-bts-trx
 #                  ↓ io-handler l1phy
-#                  ALSA device (decodage GSM-FR direct, zero latence reseau)
+#                  ALSA device (direct GSM-FR decoding, zero network latency)
 #
-#   → Active par tch-voice { io-handler l1phy } dans mobile.cfg
-#   → Pas besoin de gapk pour ce chemin
-#   → Simule un combine GSM physique
+#   → Enabled by tch-voice { io-handler l1phy } in mobile.cfg
+#   → No gapk needed for this path
+#   → Simulates a physical GSM handset
 #
-# CHEMIN 2 - Reseau (MGW RTP) :
+# PATH 2 - Network (MGW RTP):
 #   BTS → BSC → MSC → MNCC → Asterisk → SIP → Linphone
 #                           → MGCP → OsmoMGW → RTP
 #                                                ↓
 #                                           osmo-gapk (monitor/record/bridge)
 #
-#   → osmo-gapk se greffe sur les ports RTP du MGW
-#   → Utile pour : monitoring, enregistrement, injection audio, tests
-#   → Linphone recoit l'audio directement via SIP (pas besoin de gapk)
+#   → osmo-gapk hooks onto the MGW RTP ports
+#   → Useful for: monitoring, recording, audio injection, tests
+#   → Linphone receives the audio directly over SIP (no gapk needed)
 #
-# RESUME :
-#   • Appel MS → MS (meme operateur) : audio via l1phy ALSA (chemin 1)
-#   • Appel MS → Linphone            : audio via Asterisk SIP (chemin 2)
-#   • Monitoring reseau              : gapk mode auto/monitor (chemin 2)
-#   • Enregistrement appel           : gapk mode record (chemin 2)
+# SUMMARY:
+#   • MS → MS call (same operator)   : audio via l1phy ALSA (path 1)
+#   • MS → Linphone call             : audio via Asterisk SIP (path 2)
+#   • Network monitoring             : gapk auto/monitor mode (path 2)
+#   • Call recording                 : gapk record mode (path 2)
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONTRAT CLI D'osmo-gapk - RELIRE AVANT DE TOUCHER UNE INVOCATION
+# osmo-gapk CLI CONTRACT - REREAD BEFORE TOUCHING AN INVOCATION
 # ══════════════════════════════════════════════════════════════════════════════
-# [2026-08-10] Tout ce fichier parlait a un osmo-gapk QUI N'EXISTE PAS : un
-# format nomme "gsmfr" et une syntaxe d'URL "-i rtp://host:port/20".
-# Consequence mesuree : gapk-rx.log et gapk-tx.log ne contenaient QUE
-# "Unsupported format: gsmfr", en boucle depuis le demarrage - les deux
-# process mouraient a l'analyse des arguments, le superviseur les relancait,
-# et le pont RTP<->ALSA n'a JAMAIS transporte un seul echantillon. Le
-# superviseur, lui, restait vivant : la sonde `_audio_gapk_vivant` le voyait
-# et declarait le pont "en place". Sonde mensongere de bout en bout.
+# The contract (osmo-gapk --help, and src/app_osmo_gapk.c l.206-295):
 #
-# Le contrat REEL (osmo-gapk --help, et src/app_osmo_gapk.c l.206-295) :
+#   -i FILE           FILE input              -o FILE      FILE output
+#   -I HOST/PORT      RTP input               -O HOST/PORT RTP output
+#   -a DEVICE         ALSA input              -A DEVICE    ALSA output
+#   -f FORMAT         INPUT format            -g FORMAT    OUTPUT format
+#   -p PT             RTP payload type in     -P PT        RTP payload type out
+#   -t                throttle (one codec frame / 20 ms)
 #
-#   -i FICHIER        entree FICHIER          -o FICHIER   sortie FICHIER
-#   -I HOTE/PORT      entree RTP              -O HOTE/PORT sortie RTP
-#   -a PERIPH         entree ALSA             -A PERIPH    sortie ALSA
-#   -f FORMAT         format d'ENTREE         -g FORMAT    format de SORTIE
-#   -p PT             payload type RTP in     -P PT        payload type RTP out
-#   -t                throttle (une trame codec / 20 ms)
-#
-# Pieges :
-#   • `-i` n'est PAS `-I`. Une URL passee a `-i` devient un NOM DE FICHIER.
-#   • `-f` seul ne suffit pas : sans `-g`, aucun format de sortie n'est defini.
-#   • Le nom du format FR est "gsm" (fichier .gsm ET payload RTP RFC3551),
-#     PAS "gsmfr". `osmo-gapk --help` fait foi ; la liste complete est
+# Traps:
+#   • `-i` is NOT `-I`. A URL passed to `-i` becomes a FILE NAME.
+#   • `-f` alone is not enough: without `-g`, no output format is defined.
+#   • The FR format name is "gsm" (.gsm file AND RFC3551 RTP payload), NOT
+#     "gsmfr". `osmo-gapk --help` is authoritative; the full list is
 #     gsm | rawpcm-s16le | rtp-efr | rtp-hr-etsi | rtp-hr-ietf | amr-* | ti-* |
 #     racal-* | hr-ref-*.
-#   • Un seul codec est enc+dec dans ce build : `fr`. hr/efr/amr/pcm sont
-#     format-only (colonne "enc dec" vide dans --help). Le reseau est en
-#     payload type 3 = GSM FR (verifie : osmo-mgw "payload-types:3=GSM").
-#   • `-t` UNIQUEMENT sur une entree FICHIER. Sur RTP c'est le reseau qui
-#     cadence, sur ALSA c'est la carte : throttler en plus desynchronise.
+#   • Only one codec is enc+dec in this build: `fr`. hr/efr/amr/pcm are
+#     format-only (empty "enc dec" column in --help). The network uses
+#     payload type 3 = GSM FR (osmo-mgw "payload-types:3=GSM").
+#   • `-t` ONLY on a FILE input. On RTP the network paces, on ALSA the card
+#     does: throttling on top desynchronises.
 # ══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
 
 GAPK_DEFAULT_FORMAT="${GAPK_FORMAT:-gsm}"
 GAPK_DEFAULT_DEVICE="${GAPK_ALSA_DEV:-${ALSA_CARD:-default}}"
-# [2026-08-10] Peripherique de CAPTURE distinct de celui de LECTURE. Les deux
-# pattes utilisaient `$dev` (gsm_out) : cote TX cela demandait a ALSA de
-# CAPTURER sur un peripherique de lecture. Et surtout, capturer la ou les
-# mobiles ecrivent, c'est exactement la boucle fermee que le commentaire
-# d'/etc/asound.conf documente pour le 08/08 (RMS x11 en 10 s). La capture doit
-# viser gsm_in (= moniteur du null-sink gsm_mic, que personne n'alimente).
-# Ne JAMAIS faire retomber ce defaut sur $GAPK_DEFAULT_DEVICE.
+# CAPTURE device distinct from the PLAYBACK device. Capturing where the
+# mobiles write (gsm_out) is the closed loop documented in /etc/asound.conf.
+# The capture must target gsm_in (= monitor of the gsm_mic null-sink, which
+# nobody feeds). NEVER let this default fall back to $GAPK_DEFAULT_DEVICE.
 GAPK_DEFAULT_DEVICE_IN="${GAPK_ALSA_DEV_IN:-gsm_in}"
-# Payload type RTP du GSM FR (RFC3551). OsmoMGW negocie "3=GSM".
+# RTP payload type of GSM FR (RFC3551). OsmoMGW negotiates "3=GSM".
 GAPK_RTP_PT="${GAPK_RTP_PT:-3}"
 GAPK_LOG_DIR="${GAPK_LOG_DIR:-/var/log/osmocom}"
 GAPK_REC_DIR="${GAPK_REC_DIR:-/var/lib/gapk}"
-# Periode de trame GSM. osmo-gapk la porte en dur (option -t) : cette variable
-# ne sert plus qu'a documenter la cadence dans les messages.
+# GSM frame period. osmo-gapk hardcodes it (option -t): this variable only
+# documents the cadence in messages.
 GAPK_FRAME_MS=20
 MGW_VTY_HOST="127.0.0.1"
 MGW_VTY_PORT="4243"
@@ -103,10 +91,10 @@ log_info()  { echo -e "${GREEN}[gapk]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[gapk]${NC} $*"; }
 log_error() { echo -e "${RED}[gapk ERROR]${NC} $*" >&2; }
 log_auto()  { echo -e "${CYAN}[gapk-auto]${NC} $(date '+%H:%M:%S') $*"; }
-# [2026-09-23] La chaine audio lourde de l hote (annuleur d echo, boucles,
-# enregistrement) ne tourne que pendant un appel : posee sur « Endpoint actif »,
-# retiree sur « Endpoint disparu ». En tache de fond, pour ne pas retarder la
-# scrutation. Voir scripts/audio-chain.sh --appel.
+# The host's heavy audio chain (echo canceller, loops, recording) only runs
+# during a call: set up on « Endpoint actif », torn down on « Endpoint
+# disparu ». In the background, so as not to delay the polling. See
+# scripts/audio-chain.sh --appel.
 _audio_appel() {
     [ "${AUDIO_PENDANT_APPEL:-0}" = "1" ] || return 0
     local chaine="${OSMO_OPERATOR_DIR:-/opt/GSM/osmo-operator}/scripts/audio-chain.sh"
@@ -114,7 +102,7 @@ _audio_appel() {
     bash "$chaine" --appel "$1" 3 >>"${GAPK_LOG_DIR:-/tmp}/audio-appel.log" 2>&1 &
 }
 
-# ── Verifications ──────────────────────────────────────────────────────────────
+# ── Checks ─────────────────────────────────────────────────────────────────────
 check_gapk() {
     command -v osmo-gapk >/dev/null 2>&1 || {
         log_error "osmo-gapk introuvable."
@@ -123,15 +111,12 @@ check_gapk() {
     }
 }
 
-# [2026-08-12] Cette fonction jugeait sur la PRESENCE DE /dev/snd. Or aucun PCM
-# de cette chaine n'est une carte : gsm_out et gsm_in sont `type pulse`
-# (/etc/asound.conf) et sortent dans des null-sinks. Sur une machine sans carte
-# son - un serveur, exactement la cible du projet - start-docker.sh ne passe pas
-# `--device /dev/snd` (start-docker.sh:191), check_alsa echouait, et mode_loopback
-# faisait `exit 1 : ALSA requis` alors que toute la chaine pulse etait
-# fonctionnelle. On teste donc CE QU'ON VA UTILISER : le PCM s'ouvre-t-il ?
-# Meme geste que assert_audio_devices() de lib/audio.sh - une seconde de
-# silence, et un verdict qui porte sur le peripherique reel.
+# No PCM of this chain is a sound card: gsm_out and gsm_in are `type pulse`
+# (/etc/asound.conf) and end up in null-sinks, so the presence of /dev/snd
+# says nothing (a server without a sound card is the project's target, and
+# start-docker.sh does not pass `--device /dev/snd`). What WILL BE USED is
+# tested instead: does the PCM open? Same gesture as assert_audio_devices()
+# in lib/audio.sh - one second of silence, and a verdict on the real device.
 check_alsa() {
     local dev="${1:-default}"
     command -v aplay >/dev/null 2>&1 || {
@@ -149,16 +134,15 @@ check_alsa() {
     return 1
 }
 
-# ── Detection du mode audio mobile ────────────────────────────────────────────
+# ── Mobile audio mode detection ───────────────────────────────────────────────
 detect_audio_mode() {
-    # [2026-09-09] Le mobile porte SA PROPRE chaine audio des qu'un io-handler
-    # (gapk ou l1phy) est declare dans un de ses cfg : c'est lui qui lit gsm_in
-    # et ecrit gsm_out. Avant, seul /root/.osmocom/bb/mobile.cfg etait regarde -
-    # un fichier qui n'existe plus (mobile_group1.cfg, mobile_faketrx_bts1.cfg) -
-    # d'ou un "gapk" par defaut qui ne voulait rien dire.
-    #   mobile  : le process mobile fait l'audio (io-handler gapk|l1phy)
-    #   l1phy   : idem, conserve pour les appelants historiques
-    #   gapk    : aucun mobile n'a d'audio -> chemin 2 (bridge RTP<->ALSA)
+    # The mobile carries ITS OWN audio chain as soon as an io-handler (gapk or
+    # l1phy) is declared in one of its cfg files: it is the one reading gsm_in
+    # and writing gsm_out. Every mobile*.cfg is inspected (mobile_group1.cfg,
+    # mobile_faketrx_bts1.cfg...).
+    #   mobile  : the mobile process does the audio (io-handler gapk|l1phy)
+    #   l1phy   : same, kept for existing callers
+    #   gapk    : no mobile has audio -> path 2 (RTP<->ALSA bridge)
     local cfg
     for cfg in "${OSMOCOM_HOME:-/root/.osmocom}"/bb/mobile*.cfg /root/.osmocom/bb/mobile*.cfg; do
         [ -f "$cfg" ] || continue
@@ -168,22 +152,22 @@ detect_audio_mode() {
     echo "gapk"
 }
 
-# ── Adressage RTP ─────────────────────────────────────────────────────────────
-# osmo-gapk decoupe HOTE/PORT au SLASH (app_osmo_gapk.c:190, strtok(dup, "/")).
-# Un "127.0.0.1:16386" lui donne host="127.0.0.1:16386" puis strtok NULL ->
-# -EINVAL -> "Invalid port". Or tout ce script, sa CLI publique et la sortie
-# de mode_mgw_ports parlent en IP:PORT. On normalise ICI, une seule fois, pour
-# ne pas avoir a changer le contrat visible du script.
+# ── RTP addressing ────────────────────────────────────────────────────────────
+# osmo-gapk splits HOST/PORT at the SLASH (app_osmo_gapk.c:190, strtok(dup, "/")).
+# A "127.0.0.1:16386" gives it host="127.0.0.1:16386" then strtok NULL ->
+# -EINVAL -> "Invalid port". This whole script, its public CLI and the output
+# of mode_mgw_ports speak IP:PORT. Normalised HERE, once, so that the visible
+# contract of the script stays unchanged.
 rtp_hostport() {
     local hp="$1"
-    # deja en HOTE/PORT : on ne touche pas. Sinon dernier ':' -> '/'.
+    # already HOST/PORT: left alone. Otherwise last ':' -> '/'.
     case "$hp" in
         */*) echo "$hp" ;;
         *)   echo "${hp%:*}/${hp##*:}" ;;
     esac
 }
 
-# ── Cycle de vie background ────────────────────────────────────────────────────
+# ── Background lifecycle ───────────────────────────────────────────────────────
 run_bg() {
     local pid_file="$1"; shift
     local log_file="$1"; shift
@@ -208,7 +192,7 @@ is_running() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# info - affiche l'architecture audio actuelle
+# info - shows the current audio architecture
 # ══════════════════════════════════════════════════════════════════════════════
 mode_info() {
     local audio_mode
@@ -267,7 +251,7 @@ mode_mgw_ports() {
         return 1
     fi
 
-    # Format reel OsmoMGW :
+    # Actual OsmoMGW format:
     #   Virtual trunk 0 endpoint rtpbridge/1@mgw:
     #      CONN: (9/rtp C:51E1AF8F r=127.0.0.1:4072<->l=127.0.0.1:4068)
     #      CONN: (9/rtp C:96FA1465 r=127.0.0.1:30004<->l=127.0.0.1:4066)
@@ -289,24 +273,21 @@ mode_mgw_ports() {
                 echo -e "  ${GREEN}●${NC} local=${CYAN}${local_p}${NC}  remote=${CYAN}${remote}${NC}"
             fi
         done
-        # [2026-08-10] has_conn etait affecte DANS le sous-shell du pipeline
-            # (`echo | while`) : perdu a la sortie -> "aucune connexion active"
-            # s'imprimait en listant 4 connexions. Sonde mensongere.
+        # has_conn is assigned INSIDE the pipeline subshell (`echo | while`)
+            # and lost on exit: the verdict is taken from mgw_out directly.
             if ! echo "$mgw_out" | grep -q "CONN:.*r="; then
             echo "  (aucune connexion active)"
         fi
     else
-        # Mode machine : "LOCAL_PORT REMOTE_IP:REMOTE_PORT" par connexion active
+        # Machine mode: "LOCAL_PORT REMOTE_IP:REMOTE_PORT" per active connection
         echo "$mgw_out" | grep "CONN:.*r=" | while IFS= read -r line; do
             local remote local_p
             remote=$(echo "$line" | grep -oP 'r=\K[0-9.]+:[0-9]+')
-            # [2026-08-10] LE MOTIF EXIGEAIT 'l=PORT', OsmoMGW ecrit 'l=IP:PORT'. Sans le
-            # point dans la classe, grep bute sur le premier '.' et rend VIDE -> le test
-            # ci-dessous echoue -> le mode machine ne sort AUCUNE ligne -> mode_auto ne
-            # lance JAMAIS gapk, en silence, endpoints actifs ou non. La branche
-            # d'AFFICHAGE portait deja [0-9.]+ : seule celle qui pilote l'automate etait
-            # restee en arriere. ATTENTION : la SOURCE est ici (scripts/), /etc/osmocom en
-            # est une COPIE regeneree au demarrage - patcher la copie seule ne survit pas.
+            # OsmoMGW writes 'l=IP:PORT': the character class must include the
+            # dot, otherwise grep stops at the first '.' and returns EMPTY, the
+            # machine mode outputs NO line and mode_auto never launches gapk.
+            # CAUTION: the SOURCE is here (scripts/), /etc/osmocom holds a COPY
+            # regenerated at startup - patching the copy alone does not survive.
             local_p=$(echo "$line" | grep -oP 'l=\K[0-9.]+:[0-9]+' | cut -d: -f2)
             [ -n "$local_p" ] && [ -n "$remote" ] && echo "$local_p $remote"
         done
@@ -314,7 +295,7 @@ mode_mgw_ports() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# call - appel bidirectionnel ALSA ↔ RTP (chemin 2 uniquement)
+# call - bidirectional ALSA ↔ RTP call (path 2 only)
 # ══════════════════════════════════════════════════════════════════════════════
 mode_call() {
     local rx_port="${1:?RTP_RX_PORT requis (port MGW downlink)}"
@@ -353,7 +334,7 @@ mode_call() {
     local log_rx="${GAPK_LOG_DIR}/gapk-rx.log"
     local log_tx="${GAPK_LOG_DIR}/gapk-tx.log"
 
-    # RX : RTP (FR) → decodage codec fr → PCM → ALSA lecture
+    # RX: RTP (FR) → fr codec decoding → PCM → ALSA playback
     log_info "RX : rtp/${rx_port} → alsa:${dev}  [${fmt} → rawpcm-s16le]"
     run_bg "$GAPK_PID_RX" "$log_rx" \
         -I "0.0.0.0/${rx_port}" -f "$fmt" -p "$GAPK_RTP_PT" \
@@ -361,7 +342,7 @@ mode_call() {
 
     sleep 0.3
 
-    # TX : ALSA capture → PCM → encodage codec fr → RTP (FR)
+    # TX: ALSA capture → PCM → fr codec encoding → RTP (FR)
     log_info "TX : alsa:${dev_in} → rtp/${tx_dest}  [rawpcm-s16le → ${fmt}]"
     run_bg "$GAPK_PID_TX" "$log_tx" \
         -a "$dev_in"                     -f rawpcm-s16le \
@@ -372,7 +353,7 @@ mode_call() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# auto - surveille MGW, bridge gapk auto
+# auto - watches the MGW, automatic gapk bridge
 # ══════════════════════════════════════════════════════════════════════════════
 mode_auto() {
     local fmt="${1:-$GAPK_DEFAULT_FORMAT}"
@@ -435,45 +416,37 @@ mode_auto() {
                 local log_rx="${GAPK_LOG_DIR}/gapk-rx.log"
                 local log_tx="${GAPK_LOG_DIR}/gapk-tx.log"
 
-                # ── PATTE RX : ARCHITECTURALEMENT IMPOSSIBLE, ON NE LA LANCE PLUS ──
-                # [2026-08-10] `-I 0.0.0.0/$rx_port` echoue en
-                # "unable to bind socket:0.0.0.0:4006: Address already in use".
-                # Ce n'est pas un reglage a trouver : $rx_port est le port LOCAL
-                # d'OsmoMGW, il le detient deja. Deux process ne peuvent pas
-                # ecouter le meme port UDP, et surtout le MGW n'ENVOIE pas vers
-                # ce port - il envoie vers son pair distant. Recevoir la copie
-                # d'un flux MGW demande que le MGW nous l'adresse, donc une
-                # connexion MGCP supplementaire sur l'endpoint : ca se regle
-                # cote MGCP, jamais cote gapk.
-                # Avant ce correctif, la patte RX mourait a chaque tour et le
-                # superviseur la relancait indefiniment - une boucle muette qui
-                # donnait l'illusion d'un pont en place.
-                # POUR ECOUTER l'audio reseau : Asterisk enregistre deja chaque
-                # appel (MixMonitor, cf. sub-record dans extensions.conf), avec
-                # depuis le 10/08 un fichier par sens : *-ul.wav / *-dl.wav.
+                # ── RX LEG: ARCHITECTURALLY IMPOSSIBLE, NOT LAUNCHED ──
+                # `-I 0.0.0.0/$rx_port` fails with "Address already in use":
+                # $rx_port is OsmoMGW's LOCAL port, it already holds it. Two
+                # processes cannot listen on the same UDP port, and above all
+                # the MGW does not SEND to that port - it sends to its remote
+                # peer. Receiving a copy of an MGW stream requires the MGW to
+                # address it to us, i.e. an extra MGCP connection on the
+                # endpoint: that is settled on the MGCP side, never on gapk's.
+                # TO LISTEN to the network audio: Asterisk already records
+                # every call (MixMonitor, cf. sub-record in extensions.conf),
+                # one file per direction: *-ul.wav / *-dl.wav.
                 log_auto "RX non lancee : ${rx_port} appartient a OsmoMGW (voir le commentaire)"
                 log_auto "  ecoute reseau -> enregistrements MixMonitor (*-ul.wav / *-dl.wav)"
 
-                # ── PATTE TX : MEME VERDICT QUE LA RX, ON NE LA LANCE PLUS ──
-                # [2026-09-09] CAUSE DU « 600 qu'on entend mal ». $tx_dest est le
-                # PAIR DISTANT de la premiere connexion MGW - en pratique le port
-                # RTP d'osmo-bts (127.0.0.1:16384, cf. osmo-mgw.log « Got media
-                # info via SDP: port:16384 ... 3=GSM » sur rtpbridge/2). Cette
-                # patte encodait donc le micro (gsm_in) en GSM-FR et l'ENVOYAIT
-                # AU BTS, sur le meme port que le flux legitime du MGW (la voix
-                # qui revient d'Asterisk). Le BTS recevait DEUX flux RTP entre-
-                # meles - deux SSRC, deux horloges - dans un seul jitter-buffer
-                # de 100 ms : trames jetees, ordre casse, et en prime le micro
-                # renvoye en direct dans l'oreille du mobile. Son hache, double,
-                # inintelligible ; aucun compteur d'erreur ne bronchait puisque
-                # chaque paquet etait valide.
-                # Le mobile (io-handler gapk, alsa gsm_in/gsm_out) fait deja
-                # l'aller-retour micro <-> TCH par la radio : cette patte etait
-                # un DOUBLON par construction, pas un reglage a affiner.
-                # GAPK_AUTO_TX=1 la reactive pour le seul chemin 2 (aucun mobile
-                # avec audio) ; par defaut le superviseur ne fait qu'observer.
+                # ── TX LEG: SAME VERDICT AS THE RX, NOT LAUNCHED BY DEFAULT ──
+                # $tx_dest is the REMOTE PEER of the first MGW connection - in
+                # practice the RTP port of osmo-bts (127.0.0.1:16384, cf.
+                # osmo-mgw.log « Got media info via SDP: port:16384 ... 3=GSM »
+                # on rtpbridge/2). This leg would encode the mic (gsm_in) in
+                # GSM-FR and SEND it TO THE BTS, on the same port as the MGW's
+                # legitimate stream (the voice coming back from Asterisk): TWO
+                # interleaved RTP streams - two SSRC, two clocks - in a single
+                # 100 ms jitter buffer, with the mic fed straight into the
+                # mobile's ear.
+                # The mobile (io-handler gapk, alsa gsm_in/gsm_out) already
+                # does the mic <-> TCH round trip over the radio: this leg is a
+                # DUPLICATE by construction.
+                # GAPK_AUTO_TX=1 re-enables it for path 2 only (no mobile with
+                # audio); by default the supervisor only observes.
                 if [ "${GAPK_AUTO_TX:-0}" = "1" ] && [ "$audio_mode" = "gapk" ]; then
-                    # TX : ALSA capture → PCM → codec fr (encode) → RTP (FR)
+                    # TX: ALSA capture → PCM → fr codec (encode) → RTP (FR)
                     run_bg "$GAPK_PID_TX" "$log_tx" \
                         -a "$dev_in"                     -f rawpcm-s16le \
                         -O "$(rtp_hostport "$tx_dest")"  -g "$fmt" -P "$GAPK_RTP_PT"
@@ -486,9 +459,9 @@ mode_auto() {
                 prev_rx_port="$rx_port"
             fi
 
-            # On ne surveille QUE la patte TX, et seulement si elle a ete
-            # lancee : la RX n'est plus lancee (cf. ci-dessus). L'exiger
-            # relancait le couple sans fin.
+            # Only the TX leg is watched, and only if it was launched: the RX
+            # is not launched (see above), requiring it would restart the pair
+            # endlessly.
             if [ -f "$GAPK_PID_TX" ] && ! is_running "$GAPK_PID_TX"; then
                 log_warn "Processus gapk mort - restart"
                 stop_pid "$GAPK_PID_RX"; stop_pid "$GAPK_PID_TX"
@@ -507,7 +480,7 @@ mode_auto() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# monitor - ecoute passive RTP → ALSA
+# monitor - passive RTP → ALSA listening
 # ══════════════════════════════════════════════════════════════════════════════
 mode_monitor() {
     local rx_port="${1:?RTP_RX_PORT requis}"
@@ -524,7 +497,7 @@ mode_monitor() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# record - RTP → fichier .gsm
+# record - RTP → .gsm file
 # ══════════════════════════════════════════════════════════════════════════════
 mode_record() {
     local rx_port="${1:?RTP_RX_PORT requis}"
@@ -533,8 +506,8 @@ mode_record() {
 
     check_gapk; stop_pid "$GAPK_PID_RX"
 
-    # Sortie fichier au MEME format que l'entree : on archive les trames FR
-    # telles quelles (.gsm lisible par gapk playback et par grgsm_decode -d FR).
+    # File output in the SAME format as the input: the FR frames are archived
+    # as is (.gsm readable by gapk playback and by grgsm_decode -d FR).
     log_info "Record : rtp/${rx_port} → ${outfile}  [${fmt}]"
     exec osmo-gapk \
         -I "0.0.0.0/${rx_port}" -f "$fmt" -p "$GAPK_RTP_PT" \
@@ -542,7 +515,7 @@ mode_record() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# playback - fichier .gsm → RTP
+# playback - .gsm file → RTP
 # ══════════════════════════════════════════════════════════════════════════════
 mode_playback() {
     local infile="${1:?INPUT_FILE requis}"
@@ -552,9 +525,9 @@ mode_playback() {
     check_gapk
     [ -f "$infile" ] || { log_error "Fichier introuvable : $infile"; exit 1; }
 
-    # -t OBLIGATOIRE ici : l'entree est un FICHIER, rien ne cadence la lecture.
-    # Sans throttle gapk vide le fichier a pleine vitesse et noie le jitter
-    # buffer d'en face (des minutes d'audio expediees en quelques secondes).
+    # -t MANDATORY here: the input is a FILE, nothing paces the reading.
+    # Without throttle gapk drains the file at full speed and floods the
+    # jitter buffer on the other side (minutes of audio sent in seconds).
     log_info "Playback : ${infile} → rtp/${tx_dest}  [${fmt}]"
     exec osmo-gapk -t \
         -i "$infile"                     -f "$fmt" \
@@ -562,7 +535,7 @@ mode_playback() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# loopback - ALSA micro → codec → ALSA HP
+# loopback - ALSA mic → codec → ALSA speaker
 # ══════════════════════════════════════════════════════════════════════════════
 mode_loopback() {
     local fmt="${1:-$GAPK_DEFAULT_FORMAT}"
@@ -573,13 +546,13 @@ mode_loopback() {
     check_alsa "$dev" || { log_error "ALSA requis."; exit 1; }
 
     echo -e "${YELLOW}${BOLD}⚠  UTILISEZ DES ECOUTEURS - risque de larsen !${NC}"
-    # CE QUE CE MODE PROUVE, ET CE QU'IL NE PROUVE PAS.
-    # osmo-gapk construit UNE chaine "format d'entree -> canon -> format de
-    # sortie" : le codec n'apparait que du cote ou le format EST un format
-    # codec. PCM -> fr -> PCM n'est donc PAS exprimable en une invocation, et
-    # $fmt n'est volontairement pas utilise ici. Ce loopback valide le chemin
-    # ALSA (capture, cadence, peripheriques), PAS le vocodeur FR.
-    # Pour eprouver le vocodeur : `record` puis `playback` du .gsm obtenu.
+    # WHAT THIS MODE PROVES, AND WHAT IT DOES NOT.
+    # osmo-gapk builds ONE chain "input format -> canonical -> output format":
+    # the codec only appears on the side where the format IS a codec format.
+    # PCM -> fr -> PCM is therefore NOT expressible in one invocation, and
+    # $fmt is deliberately not used here. This loopback validates the ALSA
+    # path (capture, cadence, devices), NOT the FR vocoder.
+    # To test the vocoder: `record` then `playback` of the resulting .gsm.
     log_info "Loopback ALSA (sans vocodeur) : alsa:${dev_in} → alsa:${dev}"
     exec osmo-gapk \
         -a "$dev_in" -f rawpcm-s16le \
@@ -637,10 +610,8 @@ mode_status() {
 
 mode_list_codecs() {
     check_gapk
-    # `--list-codecs` n'existe pas dans osmo-gapk : l'option echouait, et seul
-    # le `||` de repli produisait la liste - en imprimant d'abord une erreur
-    # d'usage qui donnait l'air casse un mode qui marchait. On interroge
-    # directement --help, qui est la source de verite des noms.
+    # `--list-codecs` does not exist in osmo-gapk: --help is queried directly,
+    # it is the source of truth for the names.
     echo -e "${CYAN}Codecs et formats supportes (osmo-gapk --help) :${NC}"
     osmo-gapk --help 2>&1 | sed -n '/Supported codecs:/,$p'
 }

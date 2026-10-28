@@ -22,3 +22,7 @@ mynode*.conf
 *-[0-9]*.pdf
 osmo-operator-qmd/
 bundle-qmd/
+
+# notebook scratch output (wiki/)
+wiki/sms.db*
+wiki/Untitled*.ipynb

@@ -1,52 +1,50 @@
 #!/usr/bin/env python3
-# osmo-fft-snap.py - l ENCART VIVANT du bureau : le cadre du fond d ecran
-# (tools/wallpaper-render.py, boite 510,220-1410,1010 en 1920x1080), en DEUX
-# MOITIES, chacune FONDANT vers son banc une fois qu il est pret :
+# osmo-fft-snap.py - the LIVE PANEL of the desktop: the wallpaper frame
+# (tools/wallpaper-render.py, box 510,220-1410,1010 in 1920x1080), in TWO
+# HALVES, each FADING to its bench once it is ready:
 #
 #   +-----------------------------------------------------------+
-#   |  Spectre I/Q du UE srsRAN (montant) |  console srsUE      |   4G
-#   |  spectre + chute d eau (ZMQ 2001)   |  (tmux srsran:ue)   |
+#   |  I/Q spectrum of the srsRAN UE (UL) |  srsUE console      |   4G
+#   |  spectrum + waterfall (ZMQ 2001)    |  (tmux srsran:ue)   |
 #   +-----------------------------------------------------------+
-#   |  Spectre I/Q du mobile (montant)    |  mobile.log (QEMU)  |   2G
-#   |  spectre + chute d eau              |  dernieres lignes   |
+#   |  I/Q spectrum of the mobile (UL)    |  mobile.log (QEMU)  |   2G
+#   |  spectrum + waterfall               |  last lines         |
 #   +-----------------------------------------------------------+
 #
-# [2026-09-08] DEUX MOITIES, DEUX BANCS, DEUX IMAGES. Le cadre ne portait que
-# la 2G ; la 4G du banc (srsENB / srsUE par ZeroMQ) n avait aucune place a
-# l ecran. Le cadre a donc grandi vers le haut (410 -> 790 px) et s est coupe
-# en deux : le haut est a la 4G, le bas a la 2G. Chaque moitie a SON fondu :
-# tant que son banc n est pas la, elle montre la bande dessinee que le fond
-# d ecran porte a cet endroit (deux images : une BD geek au hasard en haut,
-# Calvin & Hobbes en bas - tools/osmo-wallpaper.sh). Un banc allume, une
-# moitie vivante ; les deux, tout l encart.
+# TWO HALVES, TWO BENCHES, TWO IMAGES. The frame is 790 px high and split in
+# two: the top belongs to the 4G, the bottom to the 2G. Each half has ITS
+# fade: as long as its bench is not there, it shows the comic strip the
+# wallpaper carries at that spot (two images: a random geek comic at the top,
+# Calvin & Hobbes at the bottom - tools/osmo-wallpaper.sh). One bench on, one
+# live half; both, the whole panel.
 #
-# LA 4G S ECOUTE SANS RIEN LUI PRENDRE. La radio virtuelle de srsRAN est du
-# ZeroMQ en REQ/REP : celui qui recoit DEMANDE des echantillons, et celui qui
-# emet les lui REPOND - une fois. Un troisieme qui viendrait demander sur le
-# port de l UE (2001) VOLERAIT des reponses a l eNB, qui n aurait plus l
-# uplink entier : attach rate, et avec fail_on_disconnect sa radio s arrete.
-# On n ouvre donc AUCUNE socket ZeroMQ. On lit le trafic TCP de l interface
-# de bouclage en prise brute (AF_PACKET, d ou l unite en root), on suit le
-# flux du port 2001 et on y decoupe les trames ZMTP : chaque reponse de l UE
-# est [trame vide][trame longue = N echantillons complex64]. Rien n est
-# renvoye, rien n est consomme : srsue et srsenb ne peuvent pas s en
-# apercevoir. Le UE n emet que par rafales (PRACH, PUSCH...), et 11,52 MS/s
-# font 92 Mo/s sur le bouclage : on ne lit qu une fenetre de 250 ms par image
-# et on garde la CRETE de chaque case du spectre sur cette fenetre, sinon on
-# ne verrait que du silence entre deux rafales.
+# THE 4G IS LISTENED TO WITHOUT TAKING ANYTHING FROM IT. The srsRAN virtual
+# radio is ZeroMQ in REQ/REP: the receiver ASKS for samples, and the
+# transmitter ANSWERS it - once. A third party asking on the UE port (2001)
+# would STEAL answers from the eNB, which would no longer have the whole
+# uplink: attach fails, and with fail_on_disconnect its radio stops. So NO
+# ZeroMQ socket is opened. The TCP traffic of the loopback interface is read
+# through a raw capture (AF_PACKET, hence the unit runs as root), the port
+# 2001 stream is followed and the ZMTP frames are cut out of it: each UE
+# answer is [empty frame][long frame = N complex64 samples]. Nothing is sent
+# back, nothing is consumed: srsue and srsenb cannot notice. The UE only
+# transmits in bursts (PRACH, PUSCH...), and 11.52 MS/s make 92 MB/s on the
+# loopback: only a 250 ms window is read per image and the PEAK of each
+# spectrum bin over that window is kept, otherwise only silence between two
+# bursts would be seen.
 #
-# Source FFT 2G : le dashboard, http://127.0.0.1:8080/psd?src=ms - le meme
-# JSON que l onglet FFT (vue fft1) : freqs, psd (dB), dr, arfcn. Le journal :
-# le mobile.log de la pile (QEMU MS#1), lu par la queue. Cote 4G, le journal
-# est la console de srsue, capturee dans le tmux « srsran » qui le porte
-# (tools/osmo-lte.sh), et /tmp/ue.log a defaut.
+# 2G FFT source: the dashboard, http://127.0.0.1:8080/psd?src=ms - the same
+# JSON as the FFT tab (fft1 view): freqs, psd (dB), dr, arfcn. The log: the
+# stack's mobile.log (QEMU MS#1), read from the tail. On the 4G side, the log
+# is the srsue console, captured in the « srsran » tmux that carries it
+# (tools/osmo-lte.sh), and /tmp/ue.log as fallback.
 #
-#   /run/osmo-fft/panel.png   900x790   (coordonnees du fond ; osmo-panel.py
-#                                        le met a l echelle de l ecran)
+#   /run/osmo-fft/panel.png   900x790   (wallpaper coordinates; osmo-panel.py
+#                                        scales it to the screen)
 #
-# Lance par osmo-fft-snap.service. Ne depend que de Pillow et des polices
-# DejaVu, presents sur l image comme sur l hote ; numpy pour la FFT 4G (sans
-# lui, la moitie haute le dit et reste sur sa bande dessinee).
+# Launched by osmo-fft-snap.service. Depends only on Pillow and the DejaVu
+# fonts, present on the image as on the host; numpy for the 4G FFT (without
+# it, the top half says so and stays on its comic strip).
 import glob
 import json
 import os
@@ -62,78 +60,73 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 
 URL = os.environ.get("OSMO_FFT_URL", "http://127.0.0.1:8080/psd")
-# [2026-09-23] LE DESCENDANT EN FOND, LE MONTANT PAR-DESSUS. Le montant seul
-# (src=ms) n a de signal que quand le mobile emet (RACH, canal dedie) : entre
-# deux, l encart montrait un plancher plat, et la FFT paraissait sporadique. Le
-# descendant (src=bts, /tmp/iq_fft.fifo que pont.py remplit) porte en continu
-# la BCCH, la CCCH et donc le paging. On le trace en permanence, et le montant
-# se superpose en orange des qu il porte une rafale.
-# OSMO_FFT_2G=ms retablit l ancien affichage (montant seul).
+# DOWNLINK AS BACKGROUND, UPLINK ON TOP. The uplink alone (src=ms) only has
+# signal when the mobile transmits (RACH, dedicated channel): in between the
+# panel would show a flat floor. The downlink (src=bts, /tmp/iq_fft.fifo
+# filled by pont.py) continuously carries the BCCH, the CCCH and hence the
+# paging. It is drawn permanently, and the uplink is overlaid in orange as
+# soon as it carries a burst.
+# OSMO_FFT_2G=ms shows the uplink alone.
 FFT_2G = os.environ.get("OSMO_FFT_2G", "bts+ms")
 UL_ACTIF_DB = float(os.environ.get("OSMO_FFT_UL_ACTIF_DB", "20"))
 OUT = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 PERIOD = float(os.environ.get("OSMO_FFT_PERIOD", "1"))
 FADE_S = float(os.environ.get("OSMO_FFT_FADE", "3"))
-# Opacite du banc PAR-DESSUS l image du fond, une fois le fondu termine.
+# Opacity of the bench OVER the background image, once the fade is done.
 #
-# [2026-09-04] ESSAYEE A 0.86, REMISE A 1.0. L idee etait de laisser l image du
-# jour transparaitre sous le spectre. A l ecran, la bande dessinee traversait le
-# journal et le spectre : les traits noirs du dessin passaient entre les lignes
-# de mobile.log, et le spectre se lisait sur un fond a motifs. On perdait les
-# deux - l image, hachee par le panneau, et le banc, illisible.
-# Le fondu, lui, reste : c est LUI qui fait passer de l image au banc et
-# retour (FADE_S), et pendant ces trois secondes les deux se superposent.
-# OSMO_FFT_OPACITY=0.86 rend l ancien comportement a qui veut l essayer.
+# 1.0: with a lower value the comic strip would show through the log and the
+# spectrum (the black strokes of the drawing between the mobile.log lines, the
+# spectrum on a patterned background) and both would be lost. The fade stays:
+# it is what moves from the image to the bench and back (FADE_S), and during
+# those three seconds the two overlap. OSMO_FFT_OPACITY=0.86 lets the image
+# show through for whoever wants to try.
 OPACITY = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_OPACITY", "1.0"))))
-# Etat ecrit par tools/osmo-wallpaper.sh : y a-t-il un strip dans le fond ?
-# Sans reseau, gocomics ne rend pas l image et le fond part SANS strip - le
-# cadre est alors vide, et composer le banc en transparence par-dessus du vide
-# ne fait que ternir le spectre et le journal. Dans ce cas l encart passe en
-# opacite pleine : pas de png, mais le mobile.log et la FFT restent nets.
+# State written by tools/osmo-wallpaper.sh: is there a strip in the wallpaper?
+# Without network, gocomics does not render the image and the wallpaper goes
+# out WITHOUT strip - the frame is then empty, and blending the bench over
+# nothing only dulls the spectrum and the log. In that case the panel goes to
+# full opacity: no png, but mobile.log and the FFT stay sharp.
 STRIP_STATE = os.environ.get("OSMO_WP_STATE", "/var/cache/osmo-wallpaper/strip.state")
 WALLPAPER = os.environ.get("OSMO_WP_FILE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
-# ── CE QU IL Y A SOUS L ENCART : L ILLUSTRATION ENTIERE ─────────────────────
-# [2026-10-01] L encart DECOUPAIT sa boite (510,220 .. 1410,1010) dans le fond
-# d ecran, parce que le fond ETAIT le rendu compose (tools/wallpaper-render.py)
-# avec ses deux cadres BD exactement la. Depuis le 2026-09-25 le fond par
-# defaut est une image sans cadre, et le bureau GNOME porte ce que l operateur
-# y met (configs/gsm-lab-fond.jpg) : decouper une boite dedans donnait un
-# morceau de ciel et de colline agrandi, sans aucun sens. L encart montre donc
-# l illustration du banc ENTIERE (pylones, soleil, colline), ajustee dans sa
-# boite - le haut et le bas que le format laisse libres sont remplis par la
-# meme image, floutee et assombrie, pour ne pas peindre deux bandes noires.
+# ── WHAT LIES UNDER THE PANEL: THE WHOLE ILLUSTRATION ───────────────────────
+# The default wallpaper is an image without frame, and the GNOME desktop
+# carries what the operator puts there (configs/gsm-lab-fond.jpg): cutting a
+# box out of it would give an enlarged piece of sky and hill, meaningless.
+# In « entier » mode the panel therefore shows the bench illustration WHOLE
+# (pylons, sun, hill), fitted into its box - the top and bottom left free by
+# the aspect ratio are filled with the same image, blurred and darkened,
+# rather than two black bands.
 #
-# Le rendu compose garde son chemin : quand osmo-wallpaper.sh a tourne et
-# ecrit FOND= dans strip.state, c est CE fichier qu on decoupe, comme avant -
-# ses cadres sont bien la ou la boite les attend. OSMO_FFT_FOND=decoupe force
-# l ancien comportement sur $OSMO_WP_FILE.
-# [2026-10-11] UNE SEULE SCENE. L illustration et le fond GNOME sortent du meme
-# dessin (tools/paysage-render.py) : le fond est le paysage nu, l illustration
-# est la decoupe de BOX dans ce paysage AVEC les pylones. Elle a donc deja le
-# format W x H (900/790) : « entier » l ajuste sans bande, et les antennes
-# semblent plantees dans le bureau par l encart. Les fichiers livres sont une
-# version retouchee de ce rendu, choisie sur le banc.
+# The composed render keeps its path: when osmo-wallpaper.sh has run and
+# written FOND= in strip.state, THAT file is cropped - its frames are exactly
+# where the box expects them. OSMO_FFT_FOND=decoupe forces the crop on
+# $OSMO_WP_FILE.
+# ONE SCENE. The illustration and the GNOME wallpaper come from the same
+# drawing (tools/paysage-render.py): the wallpaper is the bare landscape, the
+# illustration is the BOX crop of that landscape WITH the pylons. It thus
+# already has the W x H format (900/790): « entier » fits it without band,
+# and the antennas look planted into the desktop by the panel. The shipped
+# files are a retouched version of that render, chosen on the bench.
 ILLUSTRATION = os.environ.get("OSMO_FFT_IMAGE", "/usr/share/backgrounds/gsm-lab-wallpaper.jpg")
-# [2026-10-11] PLUS D IMAGE AU CENTRE. Par defaut (« aucun ») le fond de l encart
-# est TRANSPARENT : banc a l arret, on voit le bureau ; banc allume, les deux
-# panneaux (spectre, journal) se posent dessus, a PANEL_ALPHA d opacite - pas
-# moins, un spectre sur un paysage clair ne se lit pas. panel.png est en RGBA,
-# osmo-panel.py l affiche sur une fenetre elle-meme transparente.
-# OSMO_FFT_FOND=entier (l illustration) ou decoupe rendent les anciens fonds.
+# NO IMAGE IN THE CENTRE. By default (« aucun ») the panel background is
+# TRANSPARENT: bench down, the desktop shows; bench up, the two panes
+# (spectrum, log) sit on top at PANEL_ALPHA opacity - not less, a spectrum
+# over a light landscape is unreadable. panel.png is RGBA, osmo-panel.py
+# displays it on a window that is itself transparent.
+# OSMO_FFT_FOND=entier (the illustration) or decoupe give the image backgrounds.
 FOND_MODE = os.environ.get("OSMO_FFT_FOND", "aucun")
 PANEL_ALPHA = max(0.0, min(1.0, float(os.environ.get("OSMO_FFT_PANEL_ALPHA", "0.8"))))
 PANEL = (8, 10, 14, int(round(255 * PANEL_ALPHA)))
-# ── OU EST LE JOURNAL DU MOBILE ─────────────────────────────────────────────
-# [2026-10-19] UN SEUL CHEMIN, PUBLIE PAR start-native.sh. mobile.log vit sous
-# LOG_DIR (= RUN_DIR/logs : /run/user/<uid>/osmo-nitb/logs, ou /tmp/osmo-nitb
-# sans XDG_RUNTIME_DIR - environment/paths.env), et en --dsp sous le RUNDIR de
-# c54x_exe (/tmp/c54x-pont). L encart tapait /run/user/0 en dur : banc lance
-# par un autre uid, et le cadre restait sur « pas encore de journal ».
-# start-native.sh ecrit le chemin reel dans /run/osmo-banc/mobile-log (comme
-# ms1-vty pour le port VTY) et dans l environnement systemd (OSMO_MOBILE_LOG).
-# Ordre : OSMO_MOBILE_LOG force ; le fichier publie ; sinon le plus recent des
-# emplacements connus ; sinon l ancien defaut. Resolu a chaque rendu : le
-# journal apparait APRES le lancement de l encart.
+# ── WHERE THE MOBILE LOG IS ─────────────────────────────────────────────────
+# ONE PATH, PUBLISHED BY start-native.sh. mobile.log lives under LOG_DIR
+# (= RUN_DIR/logs: /run/user/<uid>/osmo-nitb/logs, or /tmp/osmo-nitb without
+# XDG_RUNTIME_DIR - environment/paths.env), and in --dsp under the c54x_exe
+# RUNDIR (/tmp/c54x-pont). start-native.sh writes the actual path to
+# /run/osmo-banc/mobile-log (like ms1-vty for the VTY port) and into the
+# systemd environment (OSMO_MOBILE_LOG).
+# Order: the published file; OSMO_MOBILE_LOG; else the most recent of the
+# known locations; else the default. Resolved at every render: the log
+# appears AFTER the panel is launched.
 MOBILE_LOG_CANDIDATS = ("/run/user/*/osmo-nitb/logs/mobile.log",
                         "/tmp/osmo-nitb/logs/mobile.log",
                         "/tmp/c54x-pont/mobile.log")
@@ -141,9 +134,9 @@ MOBILE_LOG_DEFAUT = "/run/user/0/osmo-nitb/logs/mobile.log"
 
 
 def mobile_log_path():
-    # [2026-10-24] LE FICHIER PUBLIE D ABORD. OSMO_MOBILE_LOG est fige au demarrage du service : lance
-    # pendant un --ms, l encart restait sur mobile.log (vide) apres un --ms-magnetite, alors que
-    # /run/osmo-banc/mobile-log, reecrit a chaque lancement, disait deja rvinterf.log.
+    # THE PUBLISHED FILE FIRST. OSMO_MOBILE_LOG is frozen at service start,
+    # while /run/osmo-banc/mobile-log is rewritten at every bench launch
+    # (e.g. rvinterf.log after a --ms-magnetite).
     try:
         with open("/run/osmo-banc/mobile-log") as f:
             publie = f.read().strip()
@@ -164,43 +157,36 @@ def mobile_log_path():
     return max(vus)[1] if vus else MOBILE_LOG_DEFAUT
 
 
-# L operateur choisi dans l encart (tools/osmo-panel.py, fleches) : OP=, MODE=,
-# IP=, NAME=, DASH=. Absent ou natif : le dashboard et le journal locaux.
+# The operator selected in the panel (tools/osmo-panel.py, arrows): OP=,
+# MODE=, IP=, NAME=, DASH=. Absent or native: the local dashboard and log.
 OP_FILE = os.path.join(OUT, "operator")
-# La boite de l encart dans le fond d ecran (wallpaper-render.py, main()) :
-# LES QUATRE FICHIERS QUI LA CONNAISSENT DOIVENT RESTER D ACCORD -
+# The panel box in the wallpaper (wallpaper-render.py, main()):
+# THE FOUR FILES THAT KNOW IT MUST STAY IN AGREEMENT -
 # wallpaper-render.py, osmo-fft-snap.py, osmo-panel.py, osmo-launcher.py.
 BOX = (510, 220, 1410, 1010)
 W, H = BOX[2] - BOX[0], BOX[3] - BOX[1]
-# Les deux moities, en coordonnees de l image : (y haut, y bas). Le fond
-# d ecran dessine deux cadres separes par ECART px (les deux images), et
-# chaque moitie vivante recouvre exactement le sien.
+# The two halves, in image coordinates: (top y, bottom y). The wallpaper
+# draws two frames separated by ECART px (the two images), and each live half
+# covers exactly its own.
 ECART = 8
 HH = (H - ECART) // 2
 HAUT = (0, HH)
 BAS = (H - HH, H)
 PAD = 18
-# [2026-09-04] FOOT = 0 : PLUS DE BANDE DE PIED.
-# Il y avait en bas de l encart un bandeau de 30 px portant « Operateur N ·
-# spectre I/Q du mobile (http://...) », et la barre de boutons se posait dessus.
-# C est le « rectangle » qu on voyait en travers du bas : une bande pleine
-# largeur, distincte du contenu, pour une ligne de texte qui ne disait rien que
-# les boutons ne disent deja (ils portent le numero de l operateur depuis
-# qu ils suivent la selection). Le contenu - spectre, chute d eau, journal -
-# prend donc toute la hauteur, et il ne reste QUE les boutons, poses par-dessus
-# dans le coin. FOOT reste nomme : la geometrie s exprime avec, et le remettre
-# a 30 rend l ancien pied.
+# FOOT = 0: NO FOOTER BAND. The content - spectrum, waterfall, log - takes
+# the whole height, and only the buttons remain, laid on top in the corner
+# (they carry the operator number, so a footer line would say nothing more).
+# FOOT stays named: the geometry is expressed with it, and setting it to 30
+# gives a footer band.
 FOOT = 0
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x07")
-# ── LES COULEURS DU JOURNAL SONT DEJA DANS LE JOURNAL ───────────────────────
-# mobile.log est ecrit AVEC ses codes ANSI (osmocom colorie par sous-systeme :
-# « \033[0;31m<0004> gsm322.c:... \033[0;m »). L encart les jetait et
-# repeignait les lignes au petit bonheur, sur des mots-cles (« error »,
-# « call »...) : deux lignes du meme sous-systeme sortaient de couleurs
-# differentes, et la lecture ne ressemblait plus du tout a celle du terminal.
-# On rend donc la couleur que le journal porte, avec la palette Tango - celle
-# du profil gnome-terminal de l image (85-installeur-bureau.sh).
+# ── THE LOG COLOURS ARE ALREADY IN THE LOG ──────────────────────────────────
+# mobile.log is written WITH its ANSI codes (osmocom colours by subsystem:
+# « \033[0;31m<0004> gsm322.c:... \033[0;m »). The colour the log carries is
+# rendered as is, with the Tango palette - the one of the image's
+# gnome-terminal profile (85-installeur-bureau.sh) - so the reading matches
+# the terminal.
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
 TANGO = {
     "30": (85, 87, 83),    "31": (204, 0, 0),     "32": (78, 154, 6),
@@ -216,17 +202,17 @@ LOG_DEFAUT = (200, 210, 225)
 
 
 def couleur_ansi(brut):
-    """La couleur que ce terminal donnerait a cette ligne. None si elle n en a pas."""
+    """The colour a terminal would give this line. None if it has none."""
     for m in SGR.finditer(brut):
         codes = [c for c in m.group(1).split(";") if c]
         if not codes or codes == ["0"]:
-            continue                      # remise a zero : pas une couleur
+            continue                      # reset: not a colour
         table = TANGO_VIF if "1" in codes else TANGO
         for c in codes:
             if c in table:
                 return table[c]
             if c.startswith("9") and len(c) == 2 and c[1] in "01234567":
-                return TANGO_VIF["3" + c[1]]   # 90-97 : les vifs d ECMA-48
+                return TANGO_VIF["3" + c[1]]   # 90-97: the ECMA-48 bright colours
     return None
 
 
@@ -243,8 +229,8 @@ F_LOG = font("DejaVuSansMono.ttf", 12)
 
 
 def palette_sdr(v):
-    """Palette SDR, 0..1 -> RGB : marine, bleu, cyan, vert, jaune, rouge (la meme que l onglet FFT, sdr).
-    [2026-10-24] remplace inferno."""
+    """SDR palette, 0..1 -> RGB: navy, blue, cyan, green, yellow, red (the same as the
+    FFT tab, sdr)."""
     ancres = [(0,0,40), (0,20,150), (0,90,255), (0,200,230), (0,210,80), (170,235,0), (255,230,0), (255,130,0), (230,0,0)]
     stops = [(i / (len(ancres) - 1), c) for i, c in enumerate(ancres)]
     v = 0.0 if v < 0 else 1.0 if v > 1 else v
@@ -258,7 +244,7 @@ def palette_sdr(v):
 
 
 def operator():
-    """{'OP','MODE','IP','NAME','DASH'} de l operateur choisi, natif par defaut."""
+    """{'OP','MODE','IP','NAME','DASH'} of the selected operator, native by default."""
     op = {"OP": "1", "MODE": "native", "IP": "", "NAME": "", "DASH": URL.rsplit("/", 1)[0]}
     try:
         with open(OP_FILE) as f:
@@ -288,7 +274,7 @@ def normalize(psd, dr):
 
 
 def resample(vals, n):
-    """Ramene une liste a n colonnes (max par groupe : un pic reste visible)."""
+    """Brings a list down to n columns (max per group: a peak stays visible)."""
     if len(vals) <= n:
         return vals + [vals[-1]] * (n - len(vals)) if vals else [0.0] * n
     out = []
@@ -303,7 +289,7 @@ _strip = {"mtime": None, "present": True, "fond": ""}
 
 
 def _lire_strip_state():
-    """Relit strip.state (osmo-wallpaper.sh) quand il change : STRIP= et FOND=."""
+    """Rereads strip.state (osmo-wallpaper.sh) when it changes: STRIP= and FOND=."""
     try:
         mt = os.stat(STRIP_STATE).st_mtime
     except OSError:
@@ -326,13 +312,13 @@ def _lire_strip_state():
 
 
 def strip_present():
-    """Le fond du jour porte-t-il un strip ? (defaut : oui, on ne devine pas)"""
+    """Does the wallpaper of the day carry a strip? (default: yes, no guessing)"""
     _lire_strip_state()
     return _strip["present"]
 
 
 def _source_fond():
-    """(fichier, mode) : le rendu compose a DECOUPER, ou l illustration a AJUSTER."""
+    """(file, mode): the composed render to CROP, or the illustration to FIT."""
     _lire_strip_state()
     f = _strip["fond"]
     if _strip["present"] and f and os.path.isfile(f):
@@ -345,10 +331,10 @@ def _source_fond():
 
 
 def _ajuster(im):
-    """L image ENTIERE dans W x H : ajustee et centree ; le reste de la boite est
-    la meme image qui la remplit, floutee et assombrie (pas de bandes noires)."""
+    """The WHOLE image in W x H: fitted and centred; the rest of the box is the
+    same image filling it, blurred and darkened (no black bands)."""
     from PIL import ImageEnhance, ImageFilter
-    im.thumbnail((2 * W, 2 * H), Image.LANCZOS)       # 1800x1580 (ou plus) -> de quoi travailler vite
+    im.thumbnail((2 * W, 2 * H), Image.LANCZOS)       # 1800x1580 (or more): fast enough
     sw, sh = im.size
     s = max(W / sw, H / sh)
     fond = im.resize((max(W, int(sw * s + 0.5)), max(H, int(sh * s + 0.5))), Image.LANCZOS)
@@ -361,9 +347,9 @@ def _ajuster(im):
     return fond
 
 
-# ── LE FOND DE L ENCART, RELU QUAND IL CHANGE ───────────────────────────────
-# On suit le mtime du fichier retenu (et le fichier lui-meme : osmo-wallpaper.sh
-# peut en changer le jour ou il tourne).
+# ── THE PANEL BACKGROUND, REREAD WHEN IT CHANGES ────────────────────────────
+# The mtime of the chosen file is followed (and the file itself:
+# osmo-wallpaper.sh may change it on the day it runs).
 _base = {"cle": None, "img": None}
 
 
@@ -386,13 +372,13 @@ def base_image():
                 else:
                     img = _ajuster(wp)
                 print(f"[fft-snap] fond de l encart : {src} ({mode})", flush=True)
-            except Exception as e:  # fond illisible : cadre sombre, sans strip
+            except Exception as e:  # unreadable background: dark frame, no strip
                 print(f"[fft-snap] fond {src} : {e}", file=sys.stderr, flush=True)
         if img is None and mode == "aucun":
-            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))     # rien : le bureau
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 0))     # nothing: the desktop
         elif img is None:
             img = Image.new("RGB", (W, H), (20, 24, 36))
-            for m in (HAUT, BAS):     # les deux cadres, comme le fond les dessine
+            for m in (HAUT, BAS):     # the two frames, as the wallpaper draws them
                 ImageDraw.Draw(img).rounded_rectangle((0, m[0], W - 1, m[1] - 1), radius=26,
                                                      outline=(200, 200, 210), width=2)
         _base.update(cle=cle, img=img.convert("RGBA"))
@@ -400,40 +386,31 @@ def base_image():
 
 
 def base_moitie(m):
-    """Le morceau de fond sous une moitie de l encart (HAUT ou BAS)."""
+    """The piece of background under one half of the panel (HAUT or BAS)."""
     return base_image().crop((0, m[0], W, m[1]))
 
 
-# ── LE JOURNAL DU MOBILE ────────────────────────────────────────────────────
-# Le nom du fichier lu dans chaque conteneur (mobile.log, rvinterf.log...),
-# rempli par tail_lines pour le titre de l encart.
+# ── THE MOBILE LOG ──────────────────────────────────────────────────────────
+# The name of the file read in each container (mobile.log, rvinterf.log...),
+# filled by tail_lines for the panel title.
 JOURNAL_DOCKER_NOM = {}
 
 
 def tail_lines(path, n, width):
     op = operator()
     if op["MODE"] == "docker":
-        # [2026-09-05] `docker logs` NE MONTRE RIEN D UN OPERATEUR, exactement
-        # comme pour le hub (voir HUB_LOGS plus bas, corrige le 2026-09-04) :
-        # la pile est lancee par `docker exec` dans un tmux et sa sortie part
-        # dans des FICHIERS, pas sur le flux standard du conteneur. Celui-ci ne
-        # porte que les deux lignes de l entrypoint ("Initialisation du
-        # peripherique TUN...", "Created symlink..."), et le cadre restait donc
-        # fige sur elles depuis le demarrage - sur un operateur dont la radio
-        # tournait parfaitement. On lit le fichier DANS le conteneur ; le chemin
-        # est celui du RUN_DIR de la pile, et `docker logs` reste en dernier
-        # recours pour une image qui lancerait l operateur autrement.
+        # `docker logs` SHOWS NOTHING OF AN OPERATOR, exactly as for the hub
+        # (see HUB_LOGS below): the stack is launched by `docker exec` in a
+        # tmux and its output goes to FILES, not to the container's standard
+        # stream, which only carries the two entrypoint lines. The file is
+        # read INSIDE the container; `docker logs` remains the last resort for
+        # an image that would launch the operator differently.
         data = ""
-        # [2026-10-26] LE CHEMIN PUBLIE DANS LE CONTENEUR, PAS CELUI DE L HOTE.
-        # On tapait `path` - le mobile.log de l HOTE, qui n existe pas dans le
-        # conteneur - puis /tmp/osmo-nitb/logs/mobile.log, VIDE (0 octet) des que
-        # l operateur tourne en DSP : son MS#1 ecrit /tmp/c54x-pont/mobile.log.
-        # On retombait sur `docker logs` et op2/op3 montraient deux lignes
-        # d entrypoint. Le conteneur publie lui aussi son journal dans
-        # /run/osmo-banc/mobile-log (start-native.sh) : on le lit la, et a defaut
-        # le plus recent NON VIDE des emplacements connus (DSP, instance 2,
-        # Magnetite, qosmo). La premiere ligne rendue porte le nom du fichier
-        # (@@chemin) pour le titre de l encart.
+        # THE PATH PUBLISHED IN THE CONTAINER, NOT THE HOST ONE. The container
+        # publishes its log in /run/osmo-banc/mobile-log too (start-native.sh):
+        # it is read there, and failing that the most recent NON-EMPTY of the
+        # known locations (DSP, instance 2, Magnetite, qosmo). The first line
+        # returned carries the file name (@@path) for the panel title.
         choix = (
             'p=$(cat /run/osmo-banc/mobile-log 2>/dev/null); '
             'if [ -n "$p" ] && [ -s "$p" ]; then f="$p"; else f=""; '
@@ -469,45 +446,42 @@ def tail_lines(path, n, width):
                 data = f.read().decode("utf-8", "replace")
         except OSError:
             return [(f"{os.path.basename(path)} : pas encore de journal", None)]
-    # On garde la ligne BRUTE le temps d en lire la couleur, puis on la nettoie.
+    # The RAW line is kept long enough to read its colour, then cleaned.
     brutes = [l for l in data.splitlines() if ANSI.sub("", l).strip()]
     out = []
     for brut in brutes[-n:]:
         col = couleur_ansi(brut)
         l = ANSI.sub("", brut).rstrip()
-        # L horodatage osmocom (20260904135215721) mange 17 colonnes pour rien.
+        # The osmocom timestamp (20260904135215721) eats 17 columns for nothing.
         l = re.sub(r"^\d{17}\s+", "", l)
         out.append((l[:width], col))
     return out or [("(journal vide)", None)]
 
 
-# ── LE BANC : SPECTRE A GAUCHE, JOURNAL A DROITE ────────────────────────────
+# ── THE BENCH: SPECTRUM ON THE LEFT, LOG ON THE RIGHT ───────────────────────
 history = []
 
 
-# ── LA VUE DU HUB : DU SS7, PAS UNE FFT ─────────────────────────────────────
-# [2026-09-04] Quand les fleches se posent sur l inter-STP, l encart affichait
-# le meme spectre I/Q qu un operateur - c est-a-dire RIEN, et pour une raison
-# de fond : un hub M3UA n a pas de radio. Il n a pas de /psd a interroger, pas
-# d ARFCN, pas de mobile.log. Une FFT vide sur le noeud central du banc, c est
-# l ecran le plus inutile qu on puisse afficher au moment ou l on cherche
-# justement pourquoi le SS7 ne passe pas.
+# ── THE HUB VIEW: SS7, NOT AN FFT ───────────────────────────────────────────
+# An M3UA hub has no radio: no /psd to query, no ARFCN, no mobile.log. An
+# empty FFT on the central node of the bench would be useless precisely when
+# one is looking for why SS7 does not pass.
 #
-# Ce qu un hub a, en revanche : une matrice de connectivite (qui parle a qui),
-# ses ASP, ses routes, et un journal. C est ce qu on montre.
+# What a hub does have: a connectivity matrix (who talks to whom), its ASPs,
+# its routes, and a log. That is what is shown.
 #
-# La matrice vient du CACHE que remplit tools/conky-osmo-status.sh
-# (--refresh-matrix, depuis checks/ss7_check.sh) : la mesure prend une minute,
-# elle n a rien a faire dans une boucle de rendu a 1 Hz. On lit le meme fichier
-# que le Conky - une mesure, deux affichages. Les balises ${colorN} du Conky
-# sont retirees ici et rendues en couleurs Pillow.
+# The matrix comes from the CACHE filled by tools/conky-osmo-status.sh
+# (--refresh-matrix, from checks/ss7_check.sh): the measurement takes a
+# minute, it has no place in a 1 Hz render loop. The same file as the Conky
+# is read - one measurement, two displays. The Conky ${colorN} tags are
+# stripped here and rendered as Pillow colours.
 MATRIX_FILE = os.path.join(OUT, "ss7-matrix")
 CONKY_TAG = re.compile(r"\$\{color[0-9]?\}")
 COUL_SS7 = {"self": (88, 166, 255), "via": (63, 185, 80), "FAIL": (248, 81, 73)}
 
 
 def matrice_lignes():
-    """Le cache de la matrice, sans les balises Conky. [] s il n existe pas."""
+    """The matrix cache, without the Conky tags. [] if it does not exist."""
     try:
         with open(MATRIX_FILE) as f:
             return [CONKY_TAG.sub("", l.rstrip("\n")) for l in f if l.strip()]
@@ -515,22 +489,21 @@ def matrice_lignes():
         return []
 
 
-# Les endroits ou le hub ecrit, dans l ordre ou on les essaie.
+# The places where the hub writes, in the order they are tried.
 #
-# [2026-09-04] `docker logs osmo-inter-stp` rend VIDE, et c est normal : le
-# conteneur a pour commande `sleep infinity`, et osmo-stp est lance APRES par
-# `docker exec` dans un tmux, sa sortie passant par un `tee` vers un fichier.
-# Rien de tout cela ne traverse le flux standard du conteneur - le cadre
-# « journal » restait donc desesperement vide sur un hub qui tournait tres bien.
-# On lit donc le fichier, DANS le conteneur ; docker logs reste en dernier
-# recours, pour une image qui lancerait le STP autrement.
+# `docker logs osmo-inter-stp` is EMPTY by design: the container's command is
+# `sleep infinity`, and osmo-stp is launched AFTERWARDS by `docker exec` in a
+# tmux, its output going through a `tee` to a file. None of that crosses the
+# container's standard stream. So the file is read INSIDE the container;
+# docker logs remains the last resort, for an image that would launch the
+# STP differently.
 HUB_LOGS = ("/tmp/osmo-stp.log", "/var/log/osmocom/osmo-stp.log")
 
 
 def hub_journal(nom, n, width):
-    """Les dernieres lignes du STP du hub. Sans docker (ou sans droit), on le
-    dit plutot que de laisser un cadre vide - un cadre vide se lit comme une
-    panne du hub, alors que c est la sonde qui n a pas le bras assez long."""
+    """The last lines of the hub STP. Without docker (or without permission),
+    say so rather than leaving an empty frame - an empty frame reads like a
+    hub failure, when it is the probe whose arm is not long enough."""
     for chemin in HUB_LOGS:
         try:
             out = subprocess.run(["docker", "exec", nom, "tail", "-n", str(n), chemin],
@@ -555,26 +528,22 @@ def hub_journal(nom, n, width):
 
 
 def render_interstp(op):
-    """L encart quand la selection est l inter-STP : matrice a gauche, journal
-    du hub a droite. Meme cadre, memes marges et meme pied que la vue radio -
-    seul le contenu change, pour que l oeil ne perde pas ses reperes en
-    passant d un operateur au hub."""
+    """The panel when the selection is the inter-STP: matrix on the left, hub
+    log on the right. Same frame, same margins and same footer as the radio
+    view - only the content changes, so the eye keeps its landmarks when
+    moving from an operator to the hub."""
     img = base_moitie(BAS).copy()
     d = ImageDraw.Draw(img)
-    # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
-    # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
-    # ces 18 px laissaient voir base_image() - c est-a-dire le morceau de fond
-    # d ecran, donc le `glass_panel` que wallpaper-render.py y a peint : un
-    # remplissage plus clair (20,24,36) et surtout une BORDURE (200,200,210).
-    # A l ecran, cela dessinait un cadre clair arrondi tout autour de l encart -
-    # « le rectangle ». Il ne venait ni de la barre GTK (dont le fond avait deja
-    # ete supprime) ni du pied (dont la couleur avait deja ete alignee) : il
-    # etait dans le fond d ecran, et l encart le laissait passer par ses marges.
+    # ── THE PANE COVERS THE WHOLE FRAME, BORDER INCLUDED ────────────────────
+    # The PAD margin would otherwise let base_image() show through - the piece
+    # of wallpaper, hence the `glass_panel` painted there by
+    # wallpaper-render.py: a lighter fill (20,24,36) and above all a BORDER
+    # (200,200,210), a light rounded frame all around the panel.
     #
-    # Quand le banc tourne, l encart est un panneau plein : il couvre TOUT le
-    # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
-    # Le cadre du fond reste visible quand le banc est a l arret - c est alors
-    # l image du jour qu il encadre, et la il a un sens.
+    # When the bench runs, the panel is a solid pane: it covers the WHOLE
+    # frame, same radius as the wallpaper one (26) to land exactly on it.
+    # The wallpaper frame stays visible when the bench is down - it then
+    # frames the image of the day, and there it makes sense.
     d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
     x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=PANEL)
@@ -591,7 +560,7 @@ def render_interstp(op):
                font=F_SMALL, fill=(139, 148, 158))
     for ligne in lignes:
         xx = x0
-        # Chaque mot est peint a sa couleur : self/via/FAIL portent le sens.
+        # Each word is painted in its colour: self/via/FAIL carry the meaning.
         for mot in re.split(r"(\s+)", ligne):
             if not mot:
                 continue
@@ -604,7 +573,7 @@ def render_interstp(op):
         if yy > y1 - 14:
             break
 
-    # Le journal du hub, a droite, exactement ou vit celui du mobile.
+    # The hub log, on the right, exactly where the mobile one lives.
     lx0 = split
     d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
     d.text((lx0, y0), f"journal  ·  {op['NAME']}", font=F_TITLE, fill=(88, 166, 255))
@@ -626,25 +595,15 @@ def render_interstp(op):
 def render_live(data, data_ul=None):
     img = base_moitie(BAS).copy()
     d = ImageDraw.Draw(img)
-    # ── LE PANNEAU COUVRE TOUT LE CADRE, BORDURE COMPRISE ───────────────────
-    # [2026-09-04] Le rendu peignait son contenu EN RETRAIT de PAD (18 px), et
-    # ces 18 px laissaient voir base_image() - c est-a-dire le morceau de fond
-    # d ecran, donc le `glass_panel` que wallpaper-render.py y a peint : un
-    # remplissage plus clair (20,24,36) et surtout une BORDURE (200,200,210).
-    # A l ecran, cela dessinait un cadre clair arrondi tout autour de l encart -
-    # « le rectangle ». Il ne venait ni de la barre GTK (dont le fond avait deja
-    # ete supprime) ni du pied (dont la couleur avait deja ete alignee) : il
-    # etait dans le fond d ecran, et l encart le laissait passer par ses marges.
-    #
-    # Quand le banc tourne, l encart est un panneau plein : il couvre TOUT le
-    # cadre, meme rayon que celui du fond (26) pour tomber exactement dessus.
-    # Le cadre du fond reste visible quand le banc est a l arret - c est alors
-    # l image du jour qu il encadre, et la il a un sens.
+    # ── THE PANE COVERS THE WHOLE FRAME, BORDER INCLUDED ────────────────────
+    # Same rule as render_interstp(): a solid pane over the whole frame, same
+    # radius as the wallpaper frame (26), so that nothing of the wallpaper
+    # `glass_panel` (fill and border) shows through the margins.
     d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
     x0, y0, x1, y1 = PAD, PAD, W - PAD, HH - PAD - FOOT
     d.rounded_rectangle((x0 - 6, y0 - 6, x1 + 6, y1 + 6), radius=8, fill=PANEL)
     split = x0 + int((x1 - x0) * 0.56)
-    # Spectre
+    # Spectrum
     titre = ("Spectre I/Q du mobile  ·  montant (UL)" if FFT_2G == "ms"
              else "Spectre I/Q  ·  DL + UL")
     d.text((x0, y0), titre, font=F_TITLE, fill=(88, 166, 255))
@@ -668,8 +627,8 @@ def render_live(data, data_ul=None):
         d.line(pts, fill=(88, 210, 255), width=1)
         ul = data_ul.get("psd") if data_ul else None
         if ul and max(ul) - min(ul) >= UL_ACTIF_DB:
-            # Rafale montante : sa courbe par-dessus, et dans la chute d eau le
-            # max des deux, pour qu un RACH ou un bloc SDCCH y laisse sa trace.
+            # Uplink burst: its curve on top, and in the waterfall the max of
+            # both, so that a RACH or an SDCCH block leaves its trace there.
             vul = resample(normalize(ul, data_ul.get("dr", 40)), sw)
             d.line([(sx0 + x, py1 - 1 - int(v * (psd_h - 4))) for x, v in enumerate(vul)],
                    fill=(255, 166, 60), width=1)
@@ -677,7 +636,7 @@ def render_live(data, data_ul=None):
         history.insert(0, vals)
     else:
         d.text((sx0 + 8, py0 + 8), "pas de flux", font=F_SMALL, fill=(248, 81, 73))
-    # Chute d eau : une ligne par image, la plus recente en haut
+    # Waterfall: one line per image, the most recent at the top
     wy0 = py1 + 4
     wf_h = y1 - wy0
     del history[wf_h:]
@@ -687,96 +646,77 @@ def render_live(data, data_ul=None):
         for x in range(min(sw, len(line))):
             px[x, row] = palette_sdr(line[x])
     img.paste(wf, (sx0, wy0))
-    # Journal
+    # Log
     d = ImageDraw.Draw(img)
     lx0 = split
     d.line((lx0 - 6, y0, lx0 - 6, y1), fill=(30, 36, 48))
     op = operator()
-    # [2026-10-23] le nom du fichier lu : rvinterf.log (traces TI) avec --ms-magnetite
+    # The title names the file read: rvinterf.log (TI traces) with --ms-magnetite
     line_h = 15
     n = max(1, (y1 - (y0 + 26)) // line_h)
     cols = max(10, int((x1 - lx0) / 7.3))
-    # Les lignes d abord : pour un conteneur, c est leur lecture qui dit quel
-    # fichier porte le journal (JOURNAL_DOCKER_NOM), et le titre le nomme.
+    # The lines first: for a container, reading them is what says which file
+    # carries the log (JOURNAL_DOCKER_NOM), and the title names it.
     lignes = tail_lines(mobile_log_path(), n, cols)
     d.text((lx0, y0), (f"{os.path.basename(mobile_log_path())}  ·  QEMU MS#1" if op["MODE"] != "docker"
                        else f"{JOURNAL_DOCKER_NOM.get(op['NAME'], 'journal')}  ·  {op['NAME']}  ·  MS#1"),
            font=F_TITLE, fill=(88, 166, 255))
     for i, (l, col) in enumerate(lignes):
         if col is None:
-            # Journal sans couleurs (docker logs, redirection qui les a
-            # mangees) : on retombe sur la lecture par mots-cles.
+            # Log without colours (docker logs, a redirection that ate them):
+            # fall back on keyword matching.
             col = LOG_DEFAUT
             if re.search(r"error|fail|reject|lost", l, re.I):
                 col = TANGO_VIF["31"]
             elif re.search(r"attach|answer|call|SMS|proceed", l, re.I):
                 col = TANGO_VIF["32"]
         d.text((lx0, y0 + 26 + i * line_h), l, font=F_LOG, fill=col)
-    # ── LE PIED COUVRE JUSQU AU BAS, SANS RIEN LAISSER DEPASSER ─────────────
-    # [2026-09-04] La barre s arretait a H - PAD + 4, et le commentaire d alors
-    # l assumait : « la legende du strip est dessous ». Elle l etait, et ELLE SE
-    # VOYAIT - une quinzaine de pixels de « NASA · Astronomy Picture of the Day
-    # · 2026-09-04 · apod.nasa.gov », coupee en deux par le bord de l encart,
-    # sous le spectre et le mobile.log. Une ligne orpheline en travers du
-    # bureau, que rien n expliquait.
-    #
-    # Le panneau est construit SUR une copie du fond d ecran (base_image) : tout
-    # ce que le rendu ne peint pas laisse voir le fond. On peint donc jusqu au
-    # bord. Le rayon reste, mais le bas du rectangle sort du cadre (H + 8) :
-    # l arrondi tombe hors de l image et le bas est franc, comme le bord de
-    # l encart lui-meme.
-    # [2026-09-04] LE PIED N EST PLUS D UNE AUTRE COULEUR QUE LE CORPS.
-    # Il etait peint en (20,24,36) sous un corps en (8,10,14) : mesure sur
-    # panel.png, c est une marche de douze niveaux, et elle dessinait une bande
-    # claire en travers du bas de l encart - le « rectangle » qu on voyait
-    # derriere les boutons, et qu on prenait pour un fond de la barre GTK. Ce
-    # n en etait pas un : le fond de la barre avait deja ete supprime, la marche
-    # etait dans l image. Meme couleur des deux cotes : un seul panneau.
-    # Plus de legende : elle vivait dans la bande de pied, supprimee (FOOT = 0).
-    # Ce qu elle disait - quel operateur, quel journal - est porte par les
-    # boutons eux-memes (« Dashboard op2 », « VTY 4247 op2 ») et par le titre
-    # de la colonne de droite.
+    # The pane is built ON a copy of the wallpaper (base_image): whatever the
+    # render does not paint lets the background show, so the pane is painted
+    # to the edge in a single colour (no footer band, FOOT = 0). What a
+    # footer caption would say - which operator, which log - is carried by
+    # the buttons themselves (« Dashboard op2 », « VTY 4247 op2 ») and by the
+    # title of the right column.
     return img
 
 
-# ── LA 4G : LE UE srsRAN, ECOUTE EN PRISE BRUTE SUR LE BOUCLAGE ─────────────
-# Voir l entete : pas de socket ZeroMQ, on lit le TCP du port de l UE tel
-# qu il passe sur lo et on y decoupe les trames ZMTP. Reglages :
-#   OSMO_LTE_TAP_PORT    le port ZMQ « tx » de srsue (2001 ; 2000 = l eNB,
-#                        donc le descendant, pour qui prefere le voir)
-#   OSMO_LTE_TAP_IFACE   l interface (lo)
-#   OSMO_LTE_TAP_WINDOW  la fenetre d ecoute par image, en s (0.25)
-#   OSMO_SRSRAN_UE_CONF  le ue.conf a lire pour l EARFCN et la cadence
-#   OSMO_SRSRAN_TMUX     le tmux (-L) qui porte srsue, fenetre « ue »
-#   OSMO_SRSRAN_UE_LOG   le journal de srsue, a defaut du tmux
+# ── THE 4G: THE srsRAN UE, RAW-CAPTURED ON THE LOOPBACK ─────────────────────
+# See the header: no ZeroMQ socket, the TCP of the UE port is read as it
+# passes on lo and the ZMTP frames are cut out of it. Settings:
+#   OSMO_LTE_TAP_PORT    the « tx » ZMQ port of srsue (2001; 2000 = the eNB,
+#                        hence the downlink, for whoever prefers to see it)
+#   OSMO_LTE_TAP_IFACE   the interface (lo)
+#   OSMO_LTE_TAP_WINDOW  the listening window per image, in s (0.25)
+#   OSMO_SRSRAN_UE_CONF  the ue.conf to read for the EARFCN and the rate
+#   OSMO_SRSRAN_TMUX     the tmux (-L) carrying srsue, window « ue »
+#   OSMO_SRSRAN_UE_LOG   the srsue log, failing the tmux
 LTE_PORT = int(os.environ.get("OSMO_LTE_TAP_PORT", "2001"))
 LTE_IFACE = os.environ.get("OSMO_LTE_TAP_IFACE", "lo")
 LTE_FENETRE = float(os.environ.get("OSMO_LTE_TAP_WINDOW", "0.25"))
 LTE_NFFT = 1024
 LTE_UE_CONF = os.environ.get("OSMO_SRSRAN_UE_CONF", "/root/.config/srsran/ue.conf")
 LTE_TMUX = os.environ.get("OSMO_SRSRAN_TMUX", "srsran")
-# [2026-09-09] tools/osmo-lte.sh lance srsue avec --log.filename=/tmp/osmo-lte-ue.log
-# (qui prime sur le « filename = /tmp/ue.log » du ue.conf) et sa SORTIE STANDARD
-# dans /tmp/osmo-lte-ue.console - c est la que sont « Found PLMN », « RRC
-# Connected », « Network attach successful ». Le tmux -L srsran n existe que
-# si on l a ouvert a la main. Chercher /tmp/ue.log donnait donc toujours
-# « console srsue introuvable » alors que le UE etait attache.
+# tools/osmo-lte.sh launches srsue with --log.filename=/tmp/osmo-lte-ue.log
+# (which overrides the « filename = /tmp/ue.log » of ue.conf) and its STANDARD
+# OUTPUT into /tmp/osmo-lte-ue.console - that is where « Found PLMN », « RRC
+# Connected », « Network attach successful » are. The tmux -L srsran only
+# exists if it was opened by hand.
 LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/tmp/osmo-lte-ue.log")
 LTE_UE_CONSOLE = os.environ.get("OSMO_SRSRAN_UE_CONSOLE", "/tmp/osmo-lte-ue.console")
 LTE_UE_SOURCES = [LTE_UE_CONSOLE, LTE_UE_LOG, "/tmp/ue.log"]
-# Le marqueur d une reponse ZMTP de l UE : la trame vide du REQ/REP (0x01 =
-# « il y en a une autre », taille 0), puis l en-tete d une trame longue (0x02,
-# taille sur 8 octets grand-boutiste, dont les cinq premiers sont nuls tant
-# qu elle fait moins de 2^24 octets - une trame d une seconde en ferait 92 M).
+# The marker of a ZMTP answer from the UE: the empty frame of the REQ/REP
+# (0x01 = « there is another one », size 0), then the header of a long frame
+# (0x02, 8-byte big-endian size, whose first five bytes are zero as long as
+# it is under 2^24 bytes - a one-second frame would be 92 M).
 ZMTP_MARQUE = b"\x01\x00\x02\x00\x00\x00\x00\x00"
 try:
     import numpy as np
-except ImportError:      # la moitie 4G le dira ; la 2G n en a pas besoin
+except ImportError:      # the 4G half will say so; the 2G does not need it
     np = None
 
 
 def _tcp_ecoute(port):
-    """Quelqu un ecoute-t-il ce port TCP ? (lecture de /proc/net/tcp, sans privilege)"""
+    """Does someone listen on this TCP port? (read of /proc/net/tcp, no privilege)"""
     for f in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
             with open(f) as fh:
@@ -791,7 +731,7 @@ def _tcp_ecoute(port):
 
 
 def srsran_ue_conf():
-    """{'earfcn', 'srate'} d apres ue.conf ; des defauts raisonnables sinon."""
+    """{'earfcn', 'srate'} from ue.conf; reasonable defaults otherwise."""
     conf = {"earfcn": "?", "srate": 11.52e6}
     try:
         section = ""
@@ -812,9 +752,9 @@ def srsran_ue_conf():
 
 
 class SondeLte(threading.Thread):
-    """Ecoute la moitie 4G : etat = {psd (dB, LTE_NFFT cases, centre au milieu),
-    crete (amplitude max vue), trames, erreur, t}. Ne tourne que si le port
-    de l UE est ouvert - sinon rien a ecouter, et rien a ouvrir."""
+    """Listens for the 4G half: etat = {psd (dB, LTE_NFFT bins, centre in the
+    middle), crete (max amplitude seen), trames, erreur, t}. Only runs when
+    the UE port is open - otherwise nothing to listen to, and nothing to open."""
 
     def __init__(self):
         super().__init__(daemon=True)
@@ -854,8 +794,8 @@ class SondeLte(threading.Thread):
                     pkt, adr = s.recvfrom(70000)
                 except socket.timeout:
                     continue
-                # Sur lo chaque paquet passe deux fois (sortant puis entrant) :
-                # on ne garde que l entrant (pkttype 4 = PACKET_OUTGOING).
+                # On lo each packet passes twice (outgoing then incoming):
+                # only the incoming one is kept (pkttype 4 = PACKET_OUTGOING).
                 if adr[2] == 4 or len(pkt) < 34 or pkt[12:14] != b"\x08\x00" or pkt[23] != 6:
                     continue
                 tcp = 14 + (pkt[14] & 0xF) * 4
@@ -866,7 +806,7 @@ class SondeLte(threading.Thread):
                 if not charge:
                     continue
                 if attendu is not None and seq != attendu:
-                    buf = b""            # trou dans le flux : on resynchronise
+                    buf = b""            # gap in the stream: resynchronise
                 attendu = (seq + len(charge)) & 0xFFFFFFFF
                 buf += charge
                 while True:
@@ -876,7 +816,7 @@ class SondeLte(threading.Thread):
                         break
                     taille = int.from_bytes(buf[i + 3:i + 11], "big")
                     if taille % 8 or taille > (64 << 20):
-                        buf = buf[i + 1:]            # faux marqueur dans les donnees
+                        buf = buf[i + 1:]            # false marker inside the data
                         continue
                     if len(buf) < i + 11 + taille:
                         buf = buf[i:]
@@ -902,8 +842,8 @@ class SondeLte(threading.Thread):
 
 
 def _queue_fichier(chemin, n):
-    """Les n dernieres lignes non vides d un fichier texte, sans couleurs ANSI ;
-    [] s il est absent ou vide."""
+    """The last n non-empty lines of a text file, without ANSI colours;
+    [] if it is absent or empty."""
     try:
         with open(chemin, "rb") as f:
             f.seek(0, 2)
@@ -911,21 +851,21 @@ def _queue_fichier(chemin, n):
             data = f.read().decode("utf-8", "replace")
     except OSError:
         return []
-    # Les mesures RRC (« MEAS: New measurement serving cell ») tombent toutes
-    # les 20 ms : elles noieraient l attach. On ne garde que les evenements.
-    # Derniere ligne encore en cours d ecriture : on ne la montre pas tronquee.
+    # RRC measurements (« MEAS: New measurement serving cell ») arrive every
+    # 20 ms: they would drown the attach. Only the events are kept.
+    # Last line still being written: it is not shown truncated.
     if data and not data.endswith("\n"):
         data = data[:data.rfind("\n") + 1]
-    # srsue ecrit ses barres de progression au \r : seul le dernier segment compte.
+    # srsue writes its progress bars with \r: only the last segment counts.
     lignes = [ANSI.sub("", l.split("\r")[-1]).rstrip() for l in data.splitlines()]
     return [l for l in lignes if l.strip() and " MEAS:" not in l][-n:]
 
 
 def srsran_journal(n, width):
-    """Les dernieres lignes de la console de srsue : la fenetre « ue » du tmux
-    qui le porte si elle existe, sinon sa sortie standard (osmo-lte-ue.console :
-    PLMN trouve, RRC, attach) COMPLETEE par son journal (osmo-lte-ue.log :
-    RRC/NAS au niveau info, cf. configs/srsran/ue.conf)."""
+    """The last lines of the srsue console: the « ue » window of the tmux
+    carrying it if it exists, otherwise its standard output
+    (osmo-lte-ue.console: PLMN found, RRC, attach) COMPLETED by its log
+    (osmo-lte-ue.log: RRC/NAS at info level, see configs/srsran/ue.conf)."""
     try:
         out = subprocess.run(["tmux", "-L", LTE_TMUX, "capture-pane", "-p", "-t", f"{LTE_TMUX}:ue"],
                              capture_output=True, text=True, timeout=2)
@@ -935,8 +875,8 @@ def srsran_journal(n, width):
             return [(l[:width], None) for l in lignes[-n:]]
     except Exception:
         pass
-    # Console d abord (l essentiel tient en quelques lignes), le journal prend
-    # le reste de la place : les deux tronques par le bas, les plus recents.
+    # Console first (the essentials fit in a few lines), the log takes the
+    # rest of the room: both truncated from the top, keeping the most recent.
     console = _queue_fichier(LTE_UE_CONSOLE, max(1, n // 3))
     journal = _queue_fichier(LTE_UE_LOG, n)
     if not console and not journal:
@@ -953,8 +893,9 @@ historique_lte = []
 
 
 def render_lte(etat):
-    """La moitie haute : le spectre montant du UE srsRAN a gauche, sa console a
-    droite. Meme cadre, memes marges que la 2G : un seul encart, deux bancs."""
+    """The top half: the uplink spectrum of the srsRAN UE on the left, its
+    console on the right. Same frame, same margins as the 2G: one panel, two
+    benches."""
     img = base_moitie(HAUT).copy()
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((0, 0, W - 1, HH - 1), radius=26, fill=PANEL)
@@ -974,7 +915,7 @@ def render_lte(etat):
     for gy in range(1, 4):
         yy = py0 + gy * psd_h // 4
         d.line((sx0, yy, sx1, yy), fill=(24, 30, 40))
-    # L axe : la cadence, de -srate/2 a +srate/2 autour de la porteuse.
+    # The axis: the sample rate, from -srate/2 to +srate/2 around the carrier.
     demi = conf["srate"] / 2e6
     for k, frac in ((f"-{demi:.2f}", 0.0), ("0", 0.5), (f"+{demi:.2f} MHz", 1.0)):
         tx = sx0 + int(frac * sw)
@@ -989,8 +930,8 @@ def render_lte(etat):
                fill=(248, 81, 73))
         vals = None
     else:
-        # Echelle : le haut suit la crete, jamais sous -60 dB - ainsi le
-        # silence entre deux rafales reste a plat au lieu d etre etire.
+        # Scale: the top follows the peak, never below -60 dB - so the
+        # silence between two bursts stays flat instead of being stretched.
         haut = max(max(psd), -60.0)
         vals = resample([min(1.0, max(0.0, (p - (haut - 50)) / 50)) for p in psd], sw)
         pts = [(sx0 + x, py1 - 1 - int(v * (psd_h - 4))) for x, v in enumerate(vals)]
@@ -1040,16 +981,16 @@ def main():
           f" -> {OUT}/panel.png toutes les {PERIOD}s (fondu {FADE_S}s depuis {WALLPAPER})", flush=True)
     sonde = SondeLte()
     sonde.start()
-    # Un fondu par moitie : « bas » suit la 2G (ou le hub), « haut » la 4G.
+    # One fade per half: « bas » follows the 2G (or the hub), « haut » the 4G.
     alpha = {"bas": 0.0, "haut": 0.0}
     step = PERIOD / FADE_S if FADE_S > 0 else 1.0
     last_state = {"bas": None, "haut": None}
     while True:
         t = time.time()
         op_courant = operator()
-        # Le hub n a pas de /psd : l interroger ne rendrait jamais rien et
-        # l encart resterait sur le strip. Sa vue est « prete » des qu il est
-        # selectionne - c est la matrice et son journal qui font le contenu.
+        # The hub has no /psd: querying it would never return anything and
+        # the panel would stay on the strip. Its view is « ready » as soon as
+        # it is selected - the matrix and its log make the content.
         if op_courant.get("MODE") == "interstp":
             data, data_ul, ready = None, None, True
         else:
@@ -1063,14 +1004,14 @@ def main():
                     data_ul = fetch("ms")
                 except Exception:
                     data_ul = None
-                # Pas de descendant (pont sans FIFO DL) : le montant seul, comme avant.
+                # No downlink (bridge without DL FIFO): the uplink alone.
                 if not (data and "psd" in data) and data_ul and "psd" in data_ul:
                     data, data_ul = data_ul, None
             ready = bool(data) and "psd" in data
-        # La 4G est « la » des que srsue tient son port ZMQ : le spectre peut
-        # etre vide (pas de rafale), mais l encart montre alors ce silence,
-        # avec la console de l UE a cote - ce qu on veut voir quand on attend
-        # l attach, justement.
+        # The 4G is « there » as soon as srsue holds its ZMQ port: the
+        # spectrum may be empty (no burst), but the panel then shows that
+        # silence, with the UE console next to it - precisely what one wants
+        # to see while waiting for the attach.
         prets = {"bas": ready, "haut": _tcp_ecoute(LTE_PORT)}
         for m, nom in (("bas", "banc 2G"), ("haut", "banc 4G (srsue)")):
             if prets[m] != last_state[m]:
@@ -1082,9 +1023,9 @@ def main():
                         else max(target, alpha[m] - step))
         try:
             img = base_image().copy()
-            # TOUJOURS un blend, meme a fondu termine : c est ce qui laisse
-            # le strip transparaitre sous le banc. Sans strip derriere, rien
-            # a laisser voir : opacite pleine.
+            # ALWAYS a blend, even once the fade is done: it is what lets the
+            # strip show through under the bench. Without a strip behind,
+            # nothing to show: full opacity.
             op = OPACITY if strip_present() else 1.0
             if alpha["bas"] <= 0.0:
                 history.clear()

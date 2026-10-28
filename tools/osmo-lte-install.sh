@@ -1,45 +1,42 @@
 #!/bin/bash
 # =============================================================================
-# osmo-lte-install.sh - LA 4G DU BANC, POSEE UNE FOIS POUR LES TROIS CHEMINS.
+# osmo-lte-install.sh - THE BENCH 4G, INSTALLED ONCE FOR THE THREE PATHS.
 #
-# [2026-09-08] srsRAN (ZeroMQ) et Open5GS vivaient HORS du depot : /opt/LTE
-# compile a la main, Open5GS dans /root/open5gs, les configs dans
-# ~/.config/srsran de root, open5gs-epc.sh dans /usr/local/bin. Rien de tout
-# cela n arrivait dans l ISO, ni sur une machine passee par addition.sh. Ce
-# script est l endroit UNIQUE ou la 4G est posee ; les trois chemins l appellent :
-#   - addition.sh            (une machine deja installee)      : --all
-#   - update.sh              (le rattrapage)                    : --configs --launchers
-#   - iso_modules/72-lte-pmos.sh (le build ISO, dans le chroot) : --deps --configs --launchers
-#     (les binaires y viennent des .deb du build docker : osmo-build-srsran,
-#      osmo-build-open5gs, poses par 50-injection-image.sh)
+# This script is the SINGLE place where the 4G (srsRAN over ZeroMQ, Open5GS)
+# is installed; the three paths call it:
+#   - addition.sh            (an already installed machine)     : --all
+#   - update.sh              (the catch-up)                      : --configs --launchers
+#   - iso_modules/72-lte-pmos.sh (the ISO build, in chroot)   : --deps --configs --launchers
+#     (the binaries there come from the docker build .deb files:
+#      osmo-build-srsran, osmo-build-open5gs, laid down by 50-injection-image.sh)
 #
-# OU VIVENT LES CHOSES :
-#   /opt/LTE/srsGUI             srsGUI (Qt5 + Qwt) : les traces temps reel de
-#                               srsenb / srsue. COMPILE AVANT srsRAN - son cmake
-#                               le cherche a sa configuration - et installe en
-#                               /usr/local/lib/libsrsgui
-#   /opt/LTE/srsRAN_4G          les sources et le build srsRAN (ZeroMQ, GUI),
-#                               binaires dans /usr/local/bin (srsenb, srsue, srsepc)
-#   /opt/LTE/open5gs            les sources Open5GS ; prefixe d installation
+# WHERE THINGS LIVE:
+#   /opt/LTE/srsGUI             srsGUI (Qt5 + Qwt): the real-time plots of
+#                               srsenb / srsue. BUILT BEFORE srsRAN - its cmake
+#                               looks for it at configure time - and installed
+#                               in /usr/local/lib/libsrsgui
+#   /opt/LTE/srsRAN_4G          srsRAN sources and build (ZeroMQ, GUI),
+#                               binaries in /usr/local/bin (srsenb, srsue, srsepc)
+#   /opt/LTE/open5gs            Open5GS sources; install prefix
 #                               /opt/LTE/open5gs/install (bin, etc/open5gs, var/log)
 #   /root/.config/srsran        enb.conf ue.conf sib.conf rr.conf rb.conf user_db.csv
-#                               = configs/srsran du depot (srs* lisent le HOME de root)
-#   /usr/local/bin/osmo-lte     le lanceur (tools/osmo-lte.sh)
-#   /usr/local/bin/osmo-epc     le coeur (tools/osmo-epc.sh), alias open5gs-epc.sh
+#                               = the repo's configs/srsran (srs* read root's HOME)
+#   /usr/local/bin/osmo-lte     the launcher (tools/osmo-lte.sh)
+#   /usr/local/bin/osmo-epc     the core (tools/osmo-epc.sh), alias open5gs-epc.sh
 #
 #   osmo-lte-install                 = --deps --debs --configs --launchers
-#   osmo-lte-install --all           idem, plus --build si les binaires manquent
-#   osmo-lte-install --build         compile srsRAN et Open5GS dans /opt/LTE
-#   osmo-lte-install --deps          les paquets apt (runtime + build), mongodb-org
-#   osmo-lte-install --debs          pose les .deb du cache (/var/cache/osmo-debs)
-#   osmo-lte-install --configs       pose les configs du depot
-#   osmo-lte-install --launchers     osmo-lte, osmo-epc dans /usr/local/bin
-#                                    (+ l unite open5gs-webui, activee)
-#   osmo-lte-install --webui         construit le WebUI Open5GS (console :9999)
-#   osmo-lte-install --force         (avec --configs) ecrase les configs existantes
+#   osmo-lte-install --all           same, plus --build if the binaries are missing
+#   osmo-lte-install --build         builds srsRAN and Open5GS in /opt/LTE
+#   osmo-lte-install --deps          the apt packages (runtime + build), mongodb-org
+#   osmo-lte-install --debs          installs the cached .deb files (/var/cache/osmo-debs)
+#   osmo-lte-install --configs       installs the repo configs
+#   osmo-lte-install --launchers     osmo-lte, osmo-epc in /usr/local/bin
+#                                    (+ the open5gs-webui unit, enabled)
+#   osmo-lte-install --webui         builds the Open5GS WebUI (console :9999)
+#   osmo-lte-install --force         (with --configs) overwrites existing configs
 #
-# Idempotent, non fatal paquet par paquet. Utilisable en session ET dans le
-# chroot de l ISO (pas de systemd : les systemctl y echouent sans arreter).
+# Idempotent, non-fatal package by package. Usable in a session AND in the ISO
+# chroot (no systemd: the systemctl calls fail there without stopping).
 # =============================================================================
 set -u
 
@@ -52,57 +49,42 @@ SRSGUI="$LTE/srsGUI"
 SRS_DIR="${OSMO_SRSRAN_DIR:-/root/.config/srsran}"
 DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 SRS_REF="${OSMO_SRSRAN_REF:-release_25_10}"
-# srsGUI n a ni tag ni release : c est master. La version du .deb est donc
-# nommee ici, une fois, et les trois chemins la reprennent (Dockerfile,
+# srsGUI has neither tag nor release: it is master. The .deb version is
+# therefore named here, once, and the three paths reuse it (Dockerfile,
 # packaging/snapshot-lte-debs.sh, lte_debs).
 SRSGUI_REF="${OSMO_SRSGUI_REF:-master}"
 SRSGUI_VER="${OSMO_SRSGUI_VER:-0.1+git}"
 O5GS_REF="${OSMO_OPEN5GS_REF:-v2.8.0}"
 JOBS="${JOBS:-$(nproc)}"
-# ── L ISA DE srsRAN : PORTABLE, PAS « native » ───────────────────────────────
-# [2026-09-14] LA PANNE : sur une machine autre que celle du build, le lanceur
-# mourait aussitot, deux fois de suite, sans un mot dans ses logs :
-#     /usr/local/bin/osmo-lte: line 204: 14521 Illegal instruction (core dumped) ... srsenb
-#     /usr/local/bin/osmo-lte: line 244: 14661 Illegal instruction (core dumped) ... srsue
-# Ce n est ni une config ni une dependance : c est le CPU. Le CMakeLists de
-# srsRAN_4G met GCC_ARCH a « native » par defaut (l.110-116), et son
-# cmake/modules/FindSSE.cmake decide de -mavx/-mavx2/-mfma/-mavx512 par des
-# check_c_source_runs - c est-a-dire en EXECUTANT le test sur la machine qui
-# compile. Les binaires sortent donc tailles pour ce processeur-la : le srsenb
-# de l ISO portait 19 353 instructions %ymm (AVX/AVX2) et 417 FMA. Sur un CPU
-# sans AVX2 - une VM qui n expose pas le jeu complet, un portable plus ancien,
-# un runner de CI different - la premiere de ces instructions fait SIGILL.
-# Une ISO se promene par definition d une machine a l autre : elle ne peut pas
-# etre compilee « pour la machine du build ».
-# On fige donc une base commune (SSE4.1/SSE4.2, tout x86_64 depuis 2009 - et
-# srsRAN exige de toute facon SSE4.1, cf. son « no SIMD instructions found »)
-# et on coupe les detections AVX/AVX2/FMA/AVX512, qui ne mesurent que l hote.
-# OSMO_SRSRAN_ARCH=native pour retrouver l ancien comportement (binaires plus
-# rapides, valables sur CETTE machine seulement) ; toute autre valeur est
-# passee telle quelle a -march= (x86-64, nehalem, haswell...). Un -march que
-# le gcc local ne connait pas est ignore par ADD_C_COMPILER_FLAG_IF_AVAILABLE :
-# on retombe alors sur la base x86-64 du compilateur, portable elle aussi.
+# ── THE srsRAN ISA: PORTABLE, NOT « native » ─────────────────────────────────
+# The srsRAN_4G CMakeLists sets GCC_ARCH to « native » by default, and its
+# cmake/modules/FindSSE.cmake decides on -mavx/-mavx2/-mfma/-mavx512 through
+# check_c_source_runs - that is, by RUNNING the test on the building machine.
+# The binaries thus come out tailored for that processor; on a CPU without
+# AVX2 (a VM that does not expose the full set, an older laptop, a different
+# CI runner) the first such instruction raises SIGILL. An ISO moves from one
+# machine to another by definition: it cannot be built « for the build
+# machine ».
+# A common baseline is therefore fixed (SSE4.1/SSE4.2, every x86_64 since
+# 2009 - and srsRAN requires SSE4.1 anyway, see its « no SIMD instructions
+# found ») and the AVX/AVX2/FMA/AVX512 detections, which only measure the
+# host, are switched off.
+# OSMO_SRSRAN_ARCH=native restores host-tuned binaries (faster, valid on THIS
+# machine only); any other value is passed as is to -march= (x86-64,
+# nehalem, haswell...). A -march the local gcc does not know is ignored by
+# ADD_C_COMPILER_FLAG_IF_AVAILABLE: the compiler's x86-64 baseline is then
+# used, portable as well.
 SRS_ARCH="${OSMO_SRSRAN_ARCH:-x86-64-v2}"
 
-# ── LA VERSION DU .deb srsRAN PORTE SON ISA ─────────────────────────────────
-# [2026-09-14] LE .deb EMPOISONNE QUI REVENAIT A CHAQUE BUILD. La version
-# etait « 25.10+zmq » : rien n y disait POUR QUEL PROCESSEUR le binaire avait
-# ete compile. Un osmo-build-srsran_25.10+zmq~noble_amd64.deb fabrique avant
-# le 14/09 (donc en -march=native, sur un runner de CI ou sur la machine de
-# reference) satisfaisait donc « osmo-deb install srsran 25.10+zmq », et
-# l image repartait avec un srsenb plein d AVX. L ISO ne s en apercevait qu au
-# controle objdump de iso_modules/88-lte-pmos.sh, qui l ecartait et relancait
-# une compilation d une heure dans le chroot - A CHAQUE BUILD, parce que le
-# .deb fautif revenait du cache (sur GitHub : restore-keys « osmo-debs-noble- »
-# de .github/workflows/build-iso.yml, qui repeche la derniere entree meme
-# quand la cle exacte a change).
-# L ISA fait maintenant partie de la version : un binaire natif ne peut plus
-# etre confondu avec un binaire portable, le cache garde les deux sans qu ils
-# se marchent dessus, et rien ne se recompile une fois le bon .deb la.
+# ── THE srsRAN .deb VERSION CARRIES ITS ISA ─────────────────────────────────
+# The ISA is part of the version: a native binary cannot be mistaken for a
+# portable one, the .deb cache (locally and in the GitHub workflow restore
+# keys) keeps both without one shadowing the other, and nothing is rebuilt
+# once the right .deb is there.
 srs_deb_version() {
     local v a
     v="${SRS_REF#release_}"; v="${v//_/.}"
-    a="$(printf '%s' "$SRS_ARCH" | tr -c 'A-Za-z0-9.' '-')"   # osmo-deb : ^[0-9][A-Za-z0-9.+~-]*$
+    a="$(printf '%s' "$SRS_ARCH" | tr -c 'A-Za-z0-9.' '-')"   # osmo-deb: [A-Za-z0-9.+~-]
     printf '%s+zmq+%s\n' "$v" "$a"
 }
 
@@ -112,16 +94,15 @@ _l_ok()   { echo -e "      ${GREEN}✓${NC} $*"; }
 _l_warn() { echo -e "      ${YELLOW}!${NC} $*"; }
 _l_err()  { echo -e "      ${RED}✗${NC} $*" >&2; }
 
-# ── CE srsenb-LA TOURNERA-T-IL AILLEURS QU ICI ? ─────────────────────────────
-# [2026-09-14] Un srsenb deja pose - compile avant aujourd hui, ou venu d un
-# .deb du cache fabrique sur une AUTRE machine - reste taille pour le CPU qui
-# l a compile, et rien ne le trahit : il existe, ses bibliotheques sont
-# resolues, --help repond. On ne l apprend qu au premier vrai lancement, par
-# un « Illegal instruction (core dumped) » sans une ligne de log (voir
-# SRS_ARCH en tete). On regarde donc ce que le binaire CONTIENT : une seule
-# instruction %ymm (AVX/AVX2) ou %zmm (AVX512) le condamne hors de sa machine
-# d origine. Sans objdump (binutils absent) on ne juge pas : on garde ce qui
-# est la, et on ne declenche pas une recompilation d une heure sur un doute.
+# ── WILL THIS srsenb RUN ANYWHERE BUT HERE? ──────────────────────────────────
+# An already installed srsenb - or one from a cached .deb built on ANOTHER
+# machine - may be tailored for the CPU that built it, and nothing betrays
+# it: it exists, its libraries resolve, --help answers. It only shows at the
+# first real launch, as an « Illegal instruction (core dumped) » without a
+# line of log (see SRS_ARCH above). So look at what the binary CONTAINS: a
+# single %ymm (AVX/AVX2) or %zmm (AVX512) instruction condemns it outside its
+# machine of origin. Without objdump (binutils absent) no verdict: what is
+# there is kept, and no hour-long rebuild is triggered on a doubt.
 _srs_isa_portable() {
     local b; b="$(command -v srsenb 2>/dev/null)" || return 0
     [ -n "$b" ] || return 0
@@ -129,11 +110,11 @@ _srs_isa_portable() {
     ! objdump -d "$b" 2>/dev/null | grep -qE '%[yz]mm[0-9]'
 }
 
-# ── LES PAQUETS ──────────────────────────────────────────────────────────────
-# Runtime (ce que ldd de srsenb et d open5gs-mmed reclame) ET build : l ISO
-# est un atelier, on doit pouvoir refaire « make » dans /opt/LTE. mongodb-org
-# vient du depot de MongoDB (noble/8.0) : la cle et la source sont posees si
-# elles manquent. Non fatal paquet par paquet.
+# ── THE PACKAGES ─────────────────────────────────────────────────────────────
+# Runtime (what ldd of srsenb and open5gs-mmed asks for) AND build: the ISO is
+# a workshop, « make » must be possible again in /opt/LTE. mongodb-org comes
+# from the MongoDB repository (noble/8.0): the key and the source are laid
+# down if missing. Non-fatal package by package.
 _lte_apt_mongo_source() {
     local k=/usr/share/keyrings/mongodb-server-8.0.gpg
     local s=/etc/apt/sources.list.d/mongodb-org-8.0.list
@@ -154,16 +135,13 @@ lte_deps() {
     _lte_apt_mongo_source || true
     apt-get update -y >/dev/null 2>&1 || true
     local p
-    # qtbase5/qwt/boost : srsGUI (les traces temps reel de srsenb et srsue).
-    # Sans eux le cmake de srsGUI echoue et srsRAN se compile sans traces - ca
-    # n arrete rien, mais on ne verrait jamais la constellation.
-    # [2026-09-10] libpcsclite-dev : srsUE lit une VRAIE carte SIM par PC/SC
-    # (srsue/hdr/stack/upper/pcsc_usim.h -> winscard.h). Il n etait dans aucune
-    # liste : la machine de reference l avait, l arbre srsRAN livre par
-    # osmo-build-srsran porte donc un CMakeCache ou PCSC est ACTIF, et toute
-    # recompilation ailleurs tombait net -
-    #     pcsc_usim.h:29:10: fatal error: winscard.h: No such file or directory
-    # C est exactement ce qui est arrive en recompilant pour srsGUI.
+    # qtbase5/qwt/boost: srsGUI (the real-time plots of srsenb and srsue).
+    # Without them the srsGUI cmake fails and srsRAN builds without plots -
+    # nothing stops, but the constellation would never be seen.
+    # libpcsclite-dev: srsUE reads a REAL SIM card through PC/SC
+    # (srsue/hdr/stack/upper/pcsc_usim.h -> winscard.h); the srsRAN tree
+    # shipped by osmo-build-srsran carries a CMakeCache where PCSC is ACTIVE,
+    # so any rebuild needs winscard.h.
     for p in libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev libfftw3-dev libsctp-dev lksctp-tools cmake \
              qtbase5-dev libqt5opengl5-dev libqwt-qt5-dev libboost-system-dev libboost-thread-dev libboost-test-dev \
              libpcsclite-dev \
@@ -174,20 +152,20 @@ lte_deps() {
         apt-get install -y --no-install-recommends "$p" >/dev/null 2>&1 \
             && _l_ok "$p" || _l_warn "$p indisponible (apt) - ignore"
     done
-    # mongod : ACTIVE au boot (osmo-epc le lance de toute facon s il dort).
-    # Dans un chroot sans systemd, enable pose le lien tout de meme.
+    # mongod: ENABLED at boot (osmo-epc starts it anyway if it sleeps).
+    # In a chroot without systemd, enable still creates the link.
     systemctl enable mongod >/dev/null 2>&1 && _l_ok "mongod active au demarrage" || true
 }
 
-# ── LES .deb DU BUILD DOCKER ─────────────────────────────────────────────────
-# osmo-build-libzmq, osmo-build-srsran, osmo-build-open5gs : produits par le
-# Dockerfile (osmo-deb pack) ou par un snapshot de la machine de reference
-# (packaging/snapshot-lte-debs.sh). Poses seulement si les binaires manquent.
+# ── THE DOCKER BUILD .deb FILES ──────────────────────────────────────────────
+# osmo-build-libzmq, osmo-build-srsran, osmo-build-open5gs: produced by the
+# Dockerfile (osmo-deb pack) or by a snapshot of the reference machine
+# (packaging/snapshot-lte-debs.sh). Installed only if the binaries are missing.
 lte_debs() {
     local n deb suite
     suite="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-noble}")"
-    # srsgui AVANT srsran : c est la bibliotheque des traces, et srsRAN la
-    # cherche a SA configuration (voir lte_build).
+    # srsgui BEFORE srsran: it is the plot library, and srsRAN looks for it at
+    # ITS configure time (see lte_build).
     for n in libzmq srsgui srsran open5gs; do
         case "$n" in
             libzmq)  [ -e /usr/local/lib/libzmq.so.5 ] || [ -e /usr/lib/x86_64-linux-gnu/libzmq.so.5 ] && continue ;;
@@ -202,46 +180,35 @@ lte_debs() {
     ldconfig 2>/dev/null || true
 }
 
-# ── LA COMPILATION, DANS /opt/LTE ────────────────────────────────────────────
-# srsRAN_4G avec ZeroMQ (libzmq3-dev d Ubuntu suffit : plus besoin de compiler
-# libzmq et czmq a la main), Open5GS par meson avec le prefixe /opt/LTE/open5gs/
-# install. Sous OSMO_DEB=1 (le Dockerfile), chaque etape sort en .deb via
-# osmo-deb pack ; sinon make/ninja install direct.
+# ── THE BUILD, IN /opt/LTE ───────────────────────────────────────────────────
+# srsRAN_4G with ZeroMQ (Ubuntu's libzmq3-dev is enough), Open5GS through
+# meson with the /opt/LTE/open5gs/install prefix. Under OSMO_DEB=1 (the
+# Dockerfile) each step is packed into a .deb via osmo-deb pack; otherwise
+# make/ninja install directly.
 lte_build() {
     mkdir -p "$LTE"
     local pack=""
     [ "${OSMO_DEB:-0}" = "1" ] && command -v osmo-deb >/dev/null 2>&1 && pack=1
-    # ── LES VERSIONS DES .deb : UNE SEULE ECRITURE, POUR TOUT LE MONDE ───────
-    # [2026-09-09] Elles etaient calculees a l arrache dans les deux appels a
-    # `osmo-deb pack` ci-dessous, et les deux etaient FAUSSES :
-    #   srsran  : "${SRS_REF#release_}+zmq" donnait 25_10+zmq - un souligne,
-    #             que osmo-deb refuse (^[0-9][A-Za-z0-9.+~-]*$) : « version
-    #             invalide : '25_10+zmq' ». Et comme `pack` meurt AVANT de
-    #             lancer la commande qu on lui confie, le `make install`
-    #             n avait jamais lieu : srsRAN compilait 3 minutes pour rien.
-    #   open5gs : "${O5GS_REF#v}" donnait 2.8.0, sans le +git - le .deb sortait
-    #             sous un nom que le `osmo-deb install open5gs 2.8.0+git` du
-    #             Dockerfile ne retrouvait jamais : recompilation a chaque build.
-    # Les noms qui font foi sont ceux du Dockerfile et de packaging/
-    # snapshot-lte-debs.sh : osmo-build-srsran_25.10+zmq, osmo-build-open5gs_
-    # 2.8.0+git. On les derive ici des memes refs git, en points.
+    # ── THE .deb VERSIONS: WRITTEN ONCE, FOR EVERYONE ────────────────────────
+    # The names that count are those of the Dockerfile and of
+    # packaging/snapshot-lte-debs.sh: osmo-build-srsran_25.10+zmq+<isa>,
+    # osmo-build-open5gs_2.8.0+git. They are derived here from the same git
+    # refs, with dots (osmo-deb refuses an underscore in a version).
     local srs_ver o5gs_ver
     srs_ver="$(srs_deb_version)"                                    # release_25_10 -> 25.10+zmq+x86-64-v2
     o5gs_ver="${O5GS_REF#v}+git"                                    # v2.8.0       -> 2.8.0+git
-    # ── srsGUI D ABORD : C EST srsRAN QUI LE CHERCHE ────────────────────────
-    # [2026-09-10] srsRAN_4G etait configure avec -DENABLE_GUI=OFF : ni srsenb
-    # ni srsue n avaient leurs traces temps reel (constellation, spectre,
-    # PDSCH), celles que montre la doc srsRAN. Elles viennent de srsGUI
-    # (github.com/srsran/srsGUI, Qt5 + Qwt), une bibliotheque A PART - et le
-    # cmake de srsRAN la cherche AU MOMENT DE SA PROPRE CONFIGURATION. Posee
-    # apres, elle n aurait servi a rien : elle se construit donc ICI, juste
-    # avant, et srsRAN passe a ENABLE_GUI=ON dessous.
+    # ── srsGUI FIRST: srsRAN IS THE ONE LOOKING FOR IT ──────────────────────
+    # The real-time plots of srsenb and srsue (constellation, spectrum, PDSCH)
+    # come from srsGUI (github.com/srsran/srsGUI, Qt5 + Qwt), a SEPARATE
+    # library - and the srsRAN cmake looks for it AT ITS OWN CONFIGURE TIME.
+    # Installed afterwards it would be useless: it is therefore built HERE,
+    # just before, and srsRAN is configured with ENABLE_GUI=ON below.
     #
-    # NON FATAL, ET C EST VOLONTAIRE : sans Qt, sans reseau, ou si le cmake de
-    # srsGUI tombe, on previent et on continue. ENABLE_GUI=ON ne casse alors
-    # rien - le cmake de srsRAN constate l absence et n arme pas les traces.
-    # Un banc sans fenetre de constellation reste un banc ; un banc qui ne
-    # compile plus, non.
+    # NON-FATAL, ON PURPOSE: without Qt, without network, or if the srsGUI
+    # cmake fails, a warning is printed and the build goes on. ENABLE_GUI=ON
+    # then breaks nothing - the srsRAN cmake notices the absence and does not
+    # enable the plots. A bench without a constellation window is still a
+    # bench; a bench that no longer builds is not.
     if [ ! -e /usr/local/lib/libsrsgui.so ] && [ ! -e /usr/local/lib/libsrsgui.a ]; then
         _l_say "srsGUI $SRSGUI_REF -> $SRSGUI (les traces de srsenb / srsue)"
         if [ ! -d "$SRSGUI/.git" ]; then
@@ -250,17 +217,15 @@ lte_build() {
               || _l_warn "srsGUI : clone impossible - srsRAN se compilera sans traces"
         fi
         if [ -d "$SRSGUI" ]; then
-            # ── -DBOOST_TIMER_ENABLE_DEPRECATED : SANS LUI, RIEN NE SORT ────
-            # [2026-09-10] srsGUI ne compile pas sur Boost 1.83 (noble) :
-            #     /usr/include/boost/progress.hpp:23:3: error: #error This
-            #     header is deprecated and will be removed.
-            # Ce sont ses TESTS (test/cxx/*_test.cpp) qui incluent
-            # boost/progress.hpp et boost/timer.hpp, pas la bibliotheque - mais
-            # `make install` passe par la cible `all`, tests compris : un test
-            # qui ne compile pas, et c est l installation entiere qui n a pas
-            # lieu. Boost dit lui-meme quoi faire (« You can define
-            # BOOST_TIMER_ENABLE_DEPRECATED to suppress this error ») : on le
-            # definit, plutot que de retirer des cibles du projet amont.
+            # ── -DBOOST_TIMER_ENABLE_DEPRECATED: WITHOUT IT, NOTHING COMES OUT
+            # srsGUI does not build on Boost 1.83 (noble): its TESTS
+            # (test/cxx/*_test.cpp) include boost/progress.hpp and
+            # boost/timer.hpp, which are deprecated and #error out - and
+            # `make install` goes through the `all` target, tests included, so
+            # one test that does not compile blocks the whole install. Boost
+            # itself says what to do (« You can define
+            # BOOST_TIMER_ENABLE_DEPRECATED to suppress this error »): it is
+            # defined, rather than removing targets from the upstream project.
             ( cd "$SRSGUI" && mkdir -p build && cd build \
               && cmake -DCMAKE_BUILD_TYPE=Release \
                        -DCMAKE_CXX_FLAGS=-DBOOST_TIMER_ENABLE_DEPRECATED .. >/dev/null 2>&1 \
@@ -273,13 +238,11 @@ lte_build() {
     else
         _l_ok "srsGUI deja la (/usr/local/lib/libsrsgui)"
     fi
-    # ── UN srsenb SANS TRACES NE SE CORRIGE PAS TOUT SEUL ───────────────────
-    # [2026-09-10] La condition etait « srsenb existe-t-il ? ». Une machine qui
-    # avait deja srsRAN - compile avant aujourd hui, ou pose par osmo-build-
-    # srsran - gardait donc pour toujours des binaires sans traces, meme avec
-    # libsrsgui fraichement installee dix lignes plus haut : on n en aurait rien
-    # vu, et la seule facon de s en sortir aurait ete d effacer srsenb a la
-    # main. On regarde ce a quoi le binaire est LIE, pas seulement s il existe.
+    # ── A srsenb WITHOUT PLOTS DOES NOT FIX ITSELF ──────────────────────────
+    # A machine that already has srsRAN - or got it from osmo-build-srsran -
+    # may carry binaries without plots even with libsrsgui freshly installed
+    # ten lines above. So check what the binary is LINKED against, not only
+    # whether it exists.
     _srs_lie_gui() {
         local b; b="$(command -v srsenb 2>/dev/null)" || return 1
         [ -n "$b" ] && ldd "$b" 2>/dev/null | grep -q libsrsgui
@@ -299,18 +262,18 @@ lte_build() {
         if [ ! -d "$SRS/.git" ]; then
             git clone --depth 1 -b "$SRS_REF" https://github.com/srsran/srsRAN_4G "$SRS" || { _l_err "clone srsRAN_4G"; return 1; }
         fi
-        # ── LE CACHE CMAKE MENT SUR L ISA ──────────────────────────────────
-        # HAVE_AVX2, HAVE_FMA, HAVE_AVX512 sont des variables de CACHE posees
-        # par les check_c_source_runs de FindSSE.cmake. -DENABLE_AVX2=OFF
-        # empeche le TEST de tourner, il n efface pas sa reponse d hier : sur
-        # un arbre deja configure, le `if (HAVE_AVX2)` du CMakeLists relirait
-        # le cache et remettrait -mavx2. On repart donc d un build vide - de
-        # toute facon les drapeaux changent, tous les objets sont a refaire.
+        # ── THE CMAKE CACHE LIES ABOUT THE ISA ─────────────────────────────
+        # HAVE_AVX2, HAVE_FMA, HAVE_AVX512 are CACHE variables set by the
+        # check_c_source_runs of FindSSE.cmake. -DENABLE_AVX2=OFF prevents the
+        # TEST from running, it does not erase a previous answer: on an
+        # already configured tree, the CMakeLists `if (HAVE_AVX2)` would reread
+        # the cache and put -mavx2 back. So start from an empty build - the
+        # flags change anyway, every object has to be rebuilt.
         rm -rf "$SRS/build"
-        # -DGCC_ARCH : la base commune (voir SRS_ARCH en tete). Les quatre
-        # ENABLE_* coupent les detections qui ne mesurent que l hote ; SSE4.1
-        # reste actif (ENABLE_SSE=ON par defaut), sans quoi le cmake s arrete
-        # sur « no SIMD instructions found » et srsRAN perd son -Ofast.
+        # -DGCC_ARCH: the common baseline (see SRS_ARCH above). The four
+        # ENABLE_* switch off the detections that only measure the host;
+        # SSE4.1 stays active (ENABLE_SSE=ON by default), otherwise cmake
+        # stops on « no SIMD instructions found » and srsRAN loses its -Ofast.
         _srs_isa=(-DGCC_ARCH="$SRS_ARCH" -DENABLE_AVX=OFF -DENABLE_AVX2=OFF -DENABLE_FMA=OFF -DENABLE_AVX512=OFF)
         [ "$SRS_ARCH" = native ] && _srs_isa=(-DGCC_ARCH=native)
         ( cd "$SRS" && mkdir -p build && cd build \
@@ -340,13 +303,12 @@ lte_build() {
     fi
 }
 
-# ── LES CERTIFICATS freeDiameter ─────────────────────────────────────────────
-# [2026-09-09] Les pairs Diameter du banc sont en No_TLS, mais freeDiameter
-# charge TLS_Cred / TLS_CA a l init et refuse de demarrer sans. Open5GS livre
-# les siens (configs/open5gs/tls de son depot) par le meme install_conf qui
-# ne fait rien sous DESTDIR (voir lte_configs) : on fabrique donc les notres,
-# une fois (CA auto-signee + un certificat par demon), sans toucher a ceux
-# qui existent.
+# ── THE freeDiameter CERTIFICATES ────────────────────────────────────────────
+# The bench Diameter peers are in No_TLS, but freeDiameter loads TLS_Cred /
+# TLS_CA at init and refuses to start without them. Open5GS ships its own
+# (configs/open5gs/tls of its repo) through the same install_conf that does
+# nothing under DESTDIR (see lte_configs): ours are therefore generated, once
+# (self-signed CA + one certificate per daemon), without touching existing ones.
 lte_tls() {
     local t="$O5GS_PREFIX/etc/open5gs/tls" n
     command -v openssl >/dev/null 2>&1 || { _l_warn "openssl absent : pas de certificats freeDiameter (apt install openssl)"; return 0; }
@@ -365,15 +327,15 @@ lte_tls() {
     chmod 600 "$t"/*.key 2>/dev/null || true
 }
 
-# ── LES CONFIGS ──────────────────────────────────────────────────────────────
-# Celles du depot, telles qu elles tournent sur le banc de reference :
+# ── THE CONFIGS ──────────────────────────────────────────────────────────────
+# The repo ones, as they run on the reference bench:
 #   configs/srsran/*   -> /root/.config/srsran   (eNB 0x19B, TAC 7, EARFCN 3350,
-#                         MME 127.0.0.2, ZeroMQ 2000/2001 a 11.52e6, SIB3+SIB7,
+#                         MME 127.0.0.2, ZeroMQ 2000/2001 at 11.52e6, SIB3+SIB7,
 #                         UE 001010001000001, APN srsapn, netns ue1)
-#   configs/open5gs/*.yaml -> $PREFIX/etc/open5gs (MME 127.0.0.2, SGs vers
+#   configs/open5gs/*.yaml -> $PREFIX/etc/open5gs (MME 127.0.0.2, SGs towards
 #                         OsmoMSC 127.0.0.1, TAC 7 / LAC 1, UE 10.45.0.0/16)
-# Une config existante n est pas ecrasee (les reglages vivants du banc), sauf
-# --force : on la garde en .bak-osmo a cote.
+# An existing config is not overwritten (the bench's live settings), except
+# with --force: it is kept as .bak-osmo next to it.
 lte_configs() {
     local force="${1:-0}" f dst
     mkdir -p "$SRS_DIR"
@@ -385,35 +347,29 @@ lte_configs() {
         install -m644 "$f" "$dst"
     done
     _l_ok "srsRAN : configs dans $SRS_DIR ($(ls "$SRS_DIR" | grep -c '\.conf$') .conf, user_db.csv)"
-    # [2026-09-09] LA CONDITION TESTAIT LE MAUVAIS OBJET. Elle demandait que
-    # $PREFIX/etc/open5gs EXISTE DEJA - c est a dire que le `ninja install`
-    # d Open5GS ait pose ses yaml d exemple. Un Open5GS venu du .deb du cache,
-    # ou une installation dont le etc/ a ete nettoye (l ISO lite fait le
-    # menage dans /opt/LTE), avait donc ses binaires mais jamais nos configs :
-    #     ! Open5GS pas installe (...) : ses configs seront posees apres --build
-    # alors qu open5gs-mmed etait la, juste a cote. On teste desormais LE
-    # BINAIRE - la seule chose qui dise si Open5GS est installe - et on cree
-    # le etc/ nous-memes (le mkdir juste en dessous le faisait deja).
+    # The BINARY is what says whether Open5GS is installed: an Open5GS from
+    # the cached .deb, or an install whose etc/ was cleaned (the lite ISO
+    # cleans /opt/LTE), has its binaries without the example yaml files. The
+    # etc/ directory is created here.
     if [ -x "$O5GS_PREFIX/bin/open5gs-mmed" ] || [ -d "$O5GS_PREFIX/etc/open5gs" ] || [ "$force" = "1" ]; then
         mkdir -p "$O5GS_PREFIX/etc/open5gs" "$O5GS_PREFIX/var/log/open5gs"
         for f in "$REPO"/configs/open5gs/*.yaml; do
             [ -f "$f" ] || continue
             dst="$O5GS_PREFIX/etc/open5gs/$(basename "$f")"
-            # Les yaml portent le prefixe /opt/LTE/open5gs/install : un autre
-            # prefixe (OPEN5GS_PREFIX) est substitue a la volee.
+            # The yaml files carry the /opt/LTE/open5gs/install prefix: another
+            # prefix (OPEN5GS_PREFIX) is substituted on the fly.
             if [ -f "$dst" ] && [ "$force" != "1" ] && grep -q 'osmo-operator' "$dst" 2>/dev/null; then continue; fi
             [ -f "$dst" ] && ! cmp -s "$f" "$dst" && cp -a "$dst" "$dst.bak-osmo"
             sed "s#/opt/LTE/open5gs/install#$O5GS_PREFIX#g" "$f" > "$dst"
         done
         _l_ok "Open5GS : configs dans $O5GS_PREFIX/etc/open5gs"
-        # [2026-09-09] freeDiameter ET les certificats TLS : ce que « ninja
-        # install » ne pose PAS sous DESTDIR (install_conf de meson.build :
-        # rien si DESTDIR est defini), donc jamais dans le .deb osmo-build-
-        # open5gs - et le MME, le HSS, le PCRF et le SMF mouraient a l init
-        # sur l ISO (« Unable to open configuration file … freeDiameter/
-        # mme.conf ») : pas de S1AP, ConnectionReject, pas d attach. Voir
-        # configs/open5gs/freeDiameter/mme.conf. Le dossier des .fdx depend
-        # du triplet (lib/x86_64-linux-gnu sur amd64) : substitue aussi.
+        # freeDiameter AND the TLS certificates: what « ninja install » does
+        # NOT lay down under DESTDIR (install_conf of meson.build: nothing if
+        # DESTDIR is defined), hence never in the osmo-build-open5gs .deb -
+        # without them the MME, HSS, PCRF and SMF die at init (« Unable to
+        # open configuration file … freeDiameter/mme.conf »). See
+        # configs/open5gs/freeDiameter/mme.conf. The .fdx directory depends on
+        # the triplet (lib/x86_64-linux-gnu on amd64): substituted as well.
         local fdd fdlib
         fdd="$O5GS_PREFIX/etc/freeDiameter"; mkdir -p "$fdd"
         fdlib="$(ls -d "$O5GS_PREFIX"/lib/*/freeDiameter "$O5GS_PREFIX"/lib/freeDiameter 2>/dev/null | head -1)"
@@ -431,7 +387,7 @@ lte_configs() {
     fi
 }
 
-# ── LES LANCEURS ─────────────────────────────────────────────────────────────
+# ── THE LAUNCHERS ────────────────────────────────────────────────────────────
 lte_launchers() {
     local t
     for t in osmo-lte osmo-epc; do
@@ -439,14 +395,14 @@ lte_launchers() {
         chmod 755 "$REPO/tools/$t.sh"
         ln -sfn "$REPO/tools/$t.sh" "/usr/local/bin/$t"
     done
-    # L ancien nom du coeur, garde : les habitudes et les notes du banc.
+    # The core's older name, kept: habits and the bench notes use it.
     ln -sfn "$REPO/tools/osmo-epc.sh" /usr/local/bin/open5gs-epc.sh
     _l_ok "lanceurs : /usr/local/bin/osmo-lte, osmo-epc (alias open5gs-epc.sh)"
-    # ── LA CONSOLE DES ABONNES 4G : POSEE ET ACTIVEE PAR DEFAUT ─────────────
-    # [2026-09-10] Comme le tableau de bord 2G (osmo-egprs-web). L unite ne
-    # demarre pas pour autant tant que le WebUI n est pas construit : son
-    # ConditionPathExists la saute, sans echec. « --webui » le construit.
-    # Une unite MASQUEE est laissee tranquille : c est le moyen de dire non.
+    # ── THE 4G SUBSCRIBER CONSOLE: INSTALLED AND ENABLED BY DEFAULT ─────────
+    # Like the 2G dashboard (osmo-egprs-web). The unit still does not start
+    # until the WebUI is built: its ConditionPathExists skips it, without
+    # failure. « --webui » builds it. A MASKED unit is left alone: that is the
+    # way to say no.
     if [ -f "$REPO/services/open5gs-webui.service" ]; then
         install -m644 "$REPO/services/open5gs-webui.service" \
                 /etc/systemd/system/open5gs-webui.service 2>/dev/null || true
@@ -458,15 +414,15 @@ lte_launchers() {
     fi
 }
 
-# ── LE WEBUI D OPEN5GS : LA CONSOLE DES ABONNES 4G ───────────────────────────
-# [2026-09-10] Provisionner un abonne LTE se faisait a la main dans MongoDB (ou
-# par « osmo-epc subscribers », qui rejoue le JSON du depot). Le WebUI est fait
-# pour ca et vit dans les SOURCES d Open5GS (webui/), pas dans le prefixe
-# d installation : une machine posee depuis les .deb du banc
-# (osmo-build-open5gs) ne l a donc PAS. On le recupere en sparse checkout - le
-# depot open5gs entier pour un repertoire de Next.js serait absurde - et on le
-# construit sur place. C est du npm : ca demande le reseau, et ca prend
-# quelques minutes. D ou une sous-commande a part, hors du chemin par defaut.
+# ── THE OPEN5GS WEBUI: THE 4G SUBSCRIBER CONSOLE ─────────────────────────────
+# The WebUI provisions LTE subscribers (otherwise done by hand in MongoDB or
+# with « osmo-epc subscribers », which replays the repo JSON). It lives in the
+# Open5GS SOURCES (webui/), not in the install prefix: a machine installed
+# from the bench .deb files (osmo-build-open5gs) does NOT have it. It is
+# fetched with a sparse checkout - the whole open5gs repo for one Next.js
+# directory would be absurd - and built in place. It is npm: it needs the
+# network and takes a few minutes. Hence a separate sub-command, outside the
+# default path.
 lte_webui() {
     local dir="$O5GS/webui" tmp="$LTE/.open5gs-webui-src"
     command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
@@ -474,7 +430,7 @@ lte_webui() {
     if [ ! -f "$dir/package.json" ]; then
         _l_say "WebUI Open5GS $O5GS_REF -> $dir"
         rm -rf "$tmp"
-        # sparse : on ne tire que webui/ (et les blobs a la demande).
+        # sparse: only webui/ is fetched (and blobs on demand).
         if git clone --depth 1 --filter=blob:none --sparse -b "$O5GS_REF" \
                https://github.com/open5gs/open5gs "$tmp" >/dev/null 2>&1 \
            && ( cd "$tmp" && git sparse-checkout set webui >/dev/null 2>&1 ) \
@@ -485,9 +441,9 @@ lte_webui() {
             rm -rf "$tmp"; _l_err "WebUI Open5GS : recuperation des sources echouee"; return 1
         fi
     fi
-    # `npm install` et pas `npm ci --omit=dev` : Next.js compile AVEC ses
-    # dependances de developpement, et le depot ne livre pas toujours un
-    # package-lock a jour.
+    # `npm install` and not `npm ci --omit=dev`: Next.js builds WITH its
+    # development dependencies, and the repo does not always ship an
+    # up-to-date package-lock.
     ( cd "$dir" && npm install --no-audit --no-fund >/dev/null 2>&1 \
       && npm run build >/dev/null 2>&1 ) \
         || { _l_err "WebUI Open5GS : npm install / build echoue (voir $dir)"; return 1; }
@@ -501,8 +457,8 @@ osmo_lte_install() {
     for a in "$@"; do case "$a" in
         --deps) deps=1 ;; --debs) debs=1 ;; --configs) configs=1 ;; --launchers) launchers=1 ;;
         --build) build=1 ;; --all) all=1 ;; --force) force=1 ;; --webui) webui=1 ;;
-        # Le Dockerfile demande le nom au lieu de le recopier : une seule
-        # ecriture, et changer OSMO_SRSRAN_ARCH suffit a changer les deux.
+        # The Dockerfile asks for the name instead of copying it: written
+        # once, and changing OSMO_SRSRAN_ARCH changes both.
         --srs-deb-version) srs_deb_version; return 0 ;;
         *) echo "osmo-lte-install : option inconnue $a" >&2; return 2 ;;
     esac; done
@@ -510,33 +466,28 @@ osmo_lte_install() {
     if [ "$all" = 1 ]; then deps=1; debs=1; configs=1; launchers=1; fi
     [ "$deps" = 1 ] && lte_deps
     [ "$debs" = 1 ] && lte_debs
-    # [2026-09-14] « ! command -v srsenb » ne suffit pas a decider de compiler :
-    # un srsenb PRESENT mais taille pour le CPU d une autre machine passait au
-    # travers de --all (donc d addition.sh et d update.sh), et la 4G mourait en
-    # « Illegal instruction » chez l operateur. La meme question qu ailleurs :
-    # ce binaire tournera-t-il ICI ?
+    # « ! command -v srsenb » is not enough to decide on a build: a srsenb
+    # that is PRESENT but tailored for another machine's CPU would get through
+    # --all (hence addition.sh and update.sh). Same question as elsewhere:
+    # will this binary run HERE?
     if [ "$build" = 1 ] || { [ "$all" = 1 ] && { ! command -v srsenb >/dev/null 2>&1 \
             || { [ "$SRS_ARCH" != native ] && ! _srs_isa_portable; } \
             || [ ! -x "$O5GS_PREFIX/bin/open5gs-mmed" ]; }; }; then
-        # [2026-09-09] Le `|| true` d ici MENTAIT au Dockerfile : la compilation
-        # tombait (MbedTLS absent), osmo-lte-install sortait 0, le « ECHEC build
-        # srsRAN » n etait jamais imprime et l image n echouait que 200 lignes
-        # plus bas sur le `test -x`. On garde la suite (configs, lanceurs : le
-        # banc doit rester utilisable sans la 4G) mais le code de retour dit
-        # desormais la verite. Les appelants encadrent deja (`|| true`,
-        # `|| inst_hint`) : addition.sh, update.sh, install_modules/50-build.sh.
+        # A failed build does not stop the rest (configs, launchers: the bench
+        # must stay usable without the 4G) but the return code reports it.
+        # The callers handle it (`|| true`, `|| inst_hint`): addition.sh,
+        # update.sh, install_modules/50-build.sh.
         lte_build || rc=1
     fi
     [ "$configs" = 1 ] && lte_configs "$force"
     [ "$launchers" = 1 ] && lte_launchers
-    # Le WebUI passe par npm et par le reseau : jamais dans le chemin par
-    # defaut, seulement quand on le demande (ou avec --all, qui est deja le
-    # chemin long).
+    # The WebUI goes through npm and the network: never in the default path,
+    # only on request (or with --all, which is already the long path).
     if [ "$webui" = 1 ] || [ "$all" = 1 ]; then lte_webui || rc=1; fi
     return $rc
 }
 
-# Source (addition.sh, update.sh) ou execute (ISO, ligne de commande).
+# Sourced (addition.sh, update.sh) or executed (ISO, command line).
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     [ "$(id -u)" -eq 0 ] || { echo "osmo-lte-install : root requis" >&2; exit 1; }
     osmo_lte_install "$@"

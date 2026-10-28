@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-# osmo-panel.py - l ENCART VIVANT du bureau, version cliquable.
+# osmo-panel.py - the LIVE PANEL of the desktop, clickable version.
 #
-# Une fenetre GTK de type BUREAU (le meme mecanisme que les icones DING
-# d Ubuntu : sous toutes les fenetres, au-dessus du fond, et elle recoit les
-# clics - ce que Conky ne sait pas faire), posee EXACTEMENT sur le cadre Calvin
-# & Hobbes du fond d ecran (tools/wallpaper-render.py : boite 510,220-1410,1010
-# en 1920x1080), a l echelle de l ecran. Elle affiche /run/osmo-fft/panel.png
-# (tools/osmo-fft-snap.py : le strip du jour qui fond vers « FFT du mobile +
-# mobile.log » quand le banc est pret) et, en pied, un petit menu :
+# A GTK window of type DESKTOP (the same mechanism as Ubuntu's DING icons:
+# below every window, above the background, and it receives clicks - which
+# Conky cannot do), placed EXACTLY on the Calvin & Hobbes frame of the
+# wallpaper (tools/wallpaper-render.py: box 510,220-1410,1010 in 1920x1080),
+# scaled to the screen. It shows /run/osmo-fft/panel.png
+# (tools/osmo-fft-snap.py: the strip of the day fading to « mobile FFT +
+# mobile.log » once the bench is ready) and, at the bottom, a small menu:
 #
-#   [ Dashboard ]  firefox http://<operateur>:8080
-#   [ tmux ]       un terminal attache a la session du banc
-#   [ VTY 4247 ]   un terminal sur telnet 127.0.0.1 4247 (console du mobile)
-#   [ ZMQ ]        l etat de la radio virtuelle srsRAN (ZeroMQ) : vert quand
-#                  les points d entree ecoutent, gris sinon. Un clic ouvre un
-#                  terminal sur qui ecoute et qui est connecte.
-#   IP 192.168.x.y l adresse de CETTE machine sur le reseau - celle qu il faut
-#                  ecrire dans un srsRAN qui tourne ailleurs, ou donner a un
-#                  autre noeud du banc. Un clic la copie dans le presse-papier.
-#   [ < ] op 2/3 [ > ]   SEULEMENT en multi-operateur : passe d un operateur a
-#                  l autre. Le choix est ecrit dans /run/osmo-fft/operator ; le
-#                  rendu FFT (osmo-fft-snap.py) et le Conky en haut a droite
-#                  (conky-osmo-status.sh) le lisent et suivent.
+#   [ Dashboard ]  firefox http://<operator>:8080
+#   [ tmux ]       a terminal attached to the bench session
+#   [ VTY 4247 ]   a terminal on telnet 127.0.0.1 4247 (mobile console)
+#   [ ZMQ ]        the state of the srsRAN virtual radio (ZeroMQ): green when
+#                  the entry points listen, grey otherwise. A click opens a
+#                  terminal showing who listens and who is connected.
+#   IP 192.168.x.y the address of THIS machine on the network - the one to
+#                  write into a srsRAN running elsewhere, or to give to
+#                  another bench node. A click copies it to the clipboard.
+#   [ < ] op 2/3 [ > ]   ONLY in multi-operator: moves from one operator to
+#                  the next. The choice is written to /run/osmo-fft/operator;
+#                  the FFT render (osmo-fft-snap.py) and the Conky at the top
+#                  right (conky-osmo-status.sh) read it and follow.
 #
-# Multi-operateur = /etc/osmocom/osmo-multi.conf (addition.sh) ET au moins un
-# conteneur osmo-operator-N en marche (docker ps). Sans ca : pas de fleches.
+# Multi-operator = /etc/osmocom/osmo-multi.conf (addition.sh) AND at least one
+# osmo-operator-N container running (docker ps). Without that: no arrows.
 #
-# Lance par l autostart osmo-conky.desktop (avec le Conky osmo-conky.conf).
+# Launched by the osmo-conky.desktop autostart (with the osmo-conky.conf Conky).
 #
-# [2026-10-12] L ENCART N EST LA QUE SI UN BANC TOURNE. Banc a l arret, la
-# fenetre est CACHEE (pas seulement transparente : la barre de boutons
-# restait posee au milieu d un bureau vide). Elle apparait des qu une 2G
-# (natif osmo-bsc, un conteneur osmo-operator-N, le hub) ou une 4G
-# (open5gs-mmed, srsenb, srsue) est debout, et repart quand tout s eteint.
-# Le processus, lui, reste : osmo-desktop-panel le compte pour vivant et ne
-# le double pas. OSMO_PANEL_TOUJOURS=1 la garde a l ecran quoi qu il arrive.
+# THE PANEL IS ONLY THERE WHEN A BENCH RUNS. Bench down, the window is HIDDEN
+# (not merely transparent: the button bar would sit in the middle of an empty
+# desktop). It appears as soon as a 2G (native osmo-bsc, an osmo-operator-N
+# container, the hub) or a 4G (open5gs-mmed, srsenb, srsue) is up, and goes
+# away when everything stops. The process itself stays: osmo-desktop-panel
+# counts it as alive and does not start a second one. OSMO_PANEL_TOUJOURS=1
+# keeps it on screen whatever happens.
 import os
 import re
 import shlex
@@ -47,15 +47,14 @@ import threading
 import time
 
 import cairo
-# [2026-09-06] LA FENETRE DE BUREAU EXIGE X11, PAS WAYLAND.
-# Sous Wayland, GTK3 ignore window.move() ET Gdk.WindowTypeHint.DESKTOP : le
-# compositeur place la fenetre ou il veut (au milieu, au premier plan) - d ou
-# l encart et le dino qui « demarrent n importe ou ». Le protocole ne donne au
-# client aucun moyen de se poser a des coordonnees absolues (il faudrait
-# gtk-layer-shell, absent sur mutter). On passe donc par XWayland, ou le
-# positionnement X11 est honore, exactement comme le Conky voisin (own_window
-# type desktop) qui, lui, se cale bien. On ne force que si un DISPLAY existe :
-# sans serveur X, mieux vaut le comportement par defaut qu un echec au demarrage.
+# THE DESKTOP WINDOW REQUIRES X11, NOT WAYLAND.
+# Under Wayland, GTK3 ignores window.move() AND Gdk.WindowTypeHint.DESKTOP:
+# the compositor places the window where it wants (centred, in front). The
+# protocol gives the client no way to sit at absolute coordinates (it would
+# take gtk-layer-shell, absent on mutter). So go through XWayland, where X11
+# positioning is honoured, exactly like the neighbouring Conky (own_window
+# type desktop). Only forced when a DISPLAY exists: without an X server, the
+# default behaviour is better than a failure at startup.
 X11_FORCE = os.environ.get("XDG_SESSION_TYPE") == "wayland" and bool(os.environ.get("DISPLAY"))
 if X11_FORCE:
     os.environ["GDK_BACKEND"] = "x11"
@@ -67,37 +66,32 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
-# [2026-09-06] ET ALORS LE TYPE BUREAU NE VA PLUS. Sur XWayland, une fenetre
-# _NET_WM_WINDOW_TYPE_DESKTOP est rangee par GNOME Shell dans la couche du
-# bureau, SOUS la fenetre plein ecran des icones (extension DING) - qui, elle,
-# avale tous les clics : l encart s affichait mais ses boutons ne repondaient
-# plus. On garde donc une fenetre NORMALE, simplement maintenue en dessous des
-# autres (keep_below + stick + hors barre des taches) : meme rendu, et les
-# clics arrivent. Sur X11 natif (la cle live) le type BUREAU marchait : on n y
-# touche pas.
+# AND THEN THE DESKTOP TYPE NO LONGER WORKS. On XWayland, a
+# _NET_WM_WINDOW_TYPE_DESKTOP window is put by GNOME Shell in the desktop
+# layer, BELOW the fullscreen icon window (DING extension) - which swallows
+# every click: the panel would show but its buttons would not respond. So a
+# NORMAL window is kept, simply held below the others (keep_below + stick +
+# out of the taskbar): same rendering, and the clicks arrive. On native X11
+# (the live key) the DESKTOP type works and is kept.
 TYPE_HINT = Gdk.WindowTypeHint.NORMAL if X11_FORCE else Gdk.WindowTypeHint.DESKTOP
-# [2026-09-06] ... ET « EN DESSOUS » NON PLUS. Deuxieme moitie du meme piege :
-# avec _NET_WM_STATE_BELOW, GNOME Shell range la fenetre XWayland sous sa
-# propre couche de bureau (native Wayland), qui est plein ecran et prend tous
-# les clics - la fenetre restait visible mais totalement inerte. Sous XWayland
-# on renonce donc a « toujours dessous » : fenetre ordinaire, collante et hors
-# barre des taches. Elle passera au premier plan quand on clique dedans, ce qui
-# est le prix a payer pour qu on puisse justement cliquer dedans. Mettre
-# OSMO_DESKTOP_BELOW=1 pour retrouver l ancien comportement (fenetre sous tout,
-# clics perdus) ; sur X11 natif rien ne change.
+# ... AND NEITHER DOES « BELOW ». Second half of the same trap: with
+# _NET_WM_STATE_BELOW, GNOME Shell puts the XWayland window under its own
+# desktop layer (native Wayland), which is fullscreen and takes every click -
+# the window stays visible but fully inert. Under XWayland « always below »
+# is therefore given up: ordinary window, sticky and out of the taskbar. It
+# comes to the front when clicked, which is the price for being clickable at
+# all. OSMO_DESKTOP_BELOW=1 restores the window-below-everything behaviour
+# (clicks lost); on native X11 nothing changes.
 KEEP_BELOW = (not X11_FORCE) or os.environ.get("OSMO_DESKTOP_BELOW") == "1"
 
 RUN = os.environ.get("OSMO_FFT_DIR", "/run/osmo-fft")
 IMG = os.path.join(RUN, "panel.png")
 OP_FILE = os.path.join(RUN, "operator")
-# [2026-09-04] LE VERROU D INSTANCE EST PAR SESSION, PAS PAR MACHINE. Il etait
-# dans /run/osmo-fft, que systemd cree root:root (RuntimeDirectory de
-# osmo-fft-snap.service). Sur la cle le bureau tourne en root et l ecriture
-# passait ; sur le systeme installe le bureau est celui du compte cree par
-# l installeur, et open(PID_FILE, "w") levait PermissionError - apport ouvrait
-# "osmo-operator a rencontre une erreur interne" a CHAQUE ouverture de session.
-# XDG_RUNTIME_DIR (/run/user/<uid>) appartient a l utilisateur, et un encart
-# par session est exactement ce qu on veut compter.
+# THE INSTANCE LOCK IS PER SESSION, NOT PER MACHINE. /run/osmo-fft is created
+# root:root by systemd (RuntimeDirectory of osmo-fft-snap.service) and is not
+# writable by the desktop user of an installed system. XDG_RUNTIME_DIR
+# (/run/user/<uid>) belongs to the user, and one panel per session is exactly
+# what is to be counted.
 _RUNDIR = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
 PID_FILE = os.path.join(_RUNDIR if os.path.isdir(_RUNDIR) else RUN, "osmo-panel.pid")
 ETAT_FILE = os.path.join(_RUNDIR if os.path.isdir(_RUNDIR) else RUN, "osmo-banc.etat")
@@ -105,10 +99,10 @@ REPO_DIR = os.environ.get("OSMO_REPO", "/opt/GSM/osmo-operator")
 MULTI_CONF = os.environ.get("MULTI_CONF", "/etc/osmocom/osmo-multi.conf")
 TMUX_SESSION = os.environ.get("TMUX_SESSION", "calypso")
 DASH_PORT = int(os.environ.get("DASH_PORT", "8080"))
-# Le VTY du client mobile (osmocom-bb « mobile »). 4247 pour MS#1 ; MS#2 est sur
-# 4248 - voir start-native.sh, qui les attribue.
-# [2026-10-12] 4247, ou 4347 en --dsp : start-native.sh publie le port reel dans
-# /run/osmo-banc/ms1-vty. MS_VTY_PORT force ; sinon le fichier ; sinon 4247.
+# The VTY of the mobile client (osmocom-bb « mobile »). 4247 for MS#1; MS#2 is
+# on 4248 - see start-native.sh, which assigns them.
+# 4247, or 4347 in --dsp: start-native.sh publishes the actual port in
+# /run/osmo-banc/ms1-vty. MS_VTY_PORT forces it; else the file; else 4247.
 def vty_port():
     if os.environ.get("MS_VTY_PORT"):
         return int(os.environ["MS_VTY_PORT"])
@@ -120,27 +114,25 @@ def vty_port():
 
 
 VTY_PORT = vty_port()
-# La boite de l encart dans le fond (1920x1080) : x, y, largeur, hauteur.
-# [2026-09-08] 790 de haut : deux moities (4G en haut, 2G en bas), voir
-# tools/osmo-fft-snap.py. Les quatre fichiers qui la connaissent doivent
-# rester d accord (liste dans tools/wallpaper-render.py).
+# The panel box in the wallpaper (1920x1080): x, y, width, height.
+# 790 high: two halves (4G on top, 2G at the bottom), see
+# tools/osmo-fft-snap.py. The four files that know it must stay in agreement
+# (list in tools/wallpaper-render.py).
 BOX = (510, 220, 900, 790)
 FW, FH = 1920, 1080
 
-# [2026-09-04] LA BARRE N A PLUS DE FOND. Elle posait un rectangle sombre
-# derriere les boutons, EN PLUS du pied deja peint par osmo-fft-snap.py : deux
-# fonds l un sur l autre, aux bords qui ne tombaient pas au meme endroit, et une
-# arete visible en travers du pied de l encart. Les boutons ont deja leur propre
-# fond (`.osmo-bar button`), ils se detachent tres bien seuls.
+# THE BAR HAS NO BACKGROUND. The footer is already painted by
+# osmo-fft-snap.py; a second background behind the buttons would show a
+# visible edge across the panel footer. The buttons have their own background
+# (`.osmo-bar button`) and stand out well enough on their own.
 CSS = b"""
-/* [2026-09-04] `background-color: transparent` NE SUFFIT PAS, et le rectangle
-   reapparaissait. Adwaita ne peint pas seulement une couleur sur une boite : il
-   y pose un `background-image` (un degrade), plus une bordure et une ombre.
-   Neutraliser la seule couleur laisse l image - d ou le bandeau plus clair qui
-   revenait derriere les boutons, par-dessus le pied deja peint par
-   osmo-fft-snap.py. On coupe les quatre.
-   `background: none` DOIT venir avant `background-color`, sinon la propriete
-   raccourcie remet la couleur par defaut apres coup. */
+/* `background-color: transparent` IS NOT ENOUGH. Adwaita does not only paint
+   a colour on a box: it sets a `background-image` (a gradient), plus a border
+   and a shadow. Neutralising the colour alone leaves the image - a lighter
+   band behind the buttons, over the footer painted by osmo-fft-snap.py. All
+   four are switched off.
+   `background: none` MUST come before `background-color`, otherwise the
+   shorthand property puts the default colour back afterwards. */
 .osmo-bar { background: none; background-image: none; background-color: transparent;
             border: none; box-shadow: none; padding: 0; margin: 0; }
 .osmo-bar button { background: #161b22; color: #e6edf3; border: 1px solid #30363d;
@@ -151,18 +143,18 @@ CSS = b"""
 .osmo-bar button.arrow:hover { border-color: #ff9a3c; color: #ff9a3c; }
 .osmo-bar label { color: #8b949e; font: 9pt "DejaVu Sans Mono"; }
 .osmo-bar label.op { color: #3fb950; font-weight: bold; font-size: 11pt; }
-/* La radio virtuelle : vert quand elle ecoute, gris quand elle est a terre.
-   La couleur EST l information - c est ce qu on regarde d un coup d oeil. */
+/* The virtual radio: green when it listens, grey when it is down.
+   The colour IS the information - it is what one reads at a glance. */
 .osmo-bar button.zmq-on  { color: #3fb950; border-color: #238636; }
 .osmo-bar button.zmq-off { color: #6e7681; }
 .osmo-bar label.ip { color: #58a6ff; font-weight: bold; }
 """
 
 
-# ── LA GEOMETRIE : OU EST LE CADRE SUR CET ECRAN ────────────────────────────
+# ── THE GEOMETRY: WHERE THE FRAME IS ON THIS SCREEN ─────────────────────────
 def geometry():
-    """(x, y, w, h) du cadre du strip sur l ecran, selon le mode d affichage
-    du fond (zoom = couvre et rogne, scaled = contient, stretched)."""
+    """(x, y, w, h) of the strip frame on screen, according to the wallpaper
+    display mode (zoom = cover and crop, scaled = contain, stretched)."""
     disp = Gdk.Display.get_default()
     mon = disp.get_primary_monitor() or disp.get_monitor(0)
     g = mon.get_geometry()
@@ -181,45 +173,40 @@ def geometry():
     return (g.x + int(bx * sx - ox), g.y + int(by * sy - oy), int(bw * sx), int(bh * sy)), (sw, sh, mode)
 
 
-# ── LES OPERATEURS ──────────────────────────────────────────────────────────
-# [2026-09-04] LES OPERATEURS ARRETES COMPTENT AUSSI.
-# Cette fonction ne rendait que les conteneurs EN MARCHE (docker ps), et
-# update_op() ne montrait les fleches qu a partir de deux entrees. Consequence :
-# sur un banc ou op2 et op3 n avaient pas demarre, l encart n avait AUCUNE
-# fleche - donc aucun moyen de regarder l operateur qu on voulait justement
-# diagnostiquer. C est l inverse du besoin : l ecran doit pouvoir se poser sur
-# un operateur eteint, c est meme la le seul moment ou on en a besoin.
-# On rend donc TOUTE la topologie, avec l etat (up) a cote, et le pied de
-# l encart ecrit "op 3/3 arrete" au lieu de faire disparaitre le bouton.
-# EN REVANCHE, PAS DE FLECHES HORS MULTI-OPERATEUR. Sans
-# /etc/osmocom/osmo-multi.conf - donc sur un banc a un seul operateur - il n y a
-# rien vers quoi naviguer : la liste rend le seul natif, et update_op() cache
-# les fleches. On n invente pas d operateurs 2 et 3 qui n existent pas.
-# Meme liste et meme regle que tools/osmo-op.sh, qui est la version en ligne
-# de commande (et la definition de reference).
+# ── THE OPERATORS ───────────────────────────────────────────────────────────
+# STOPPED OPERATORS COUNT TOO. The screen must be able to settle on a stopped
+# operator - that is precisely when it is needed for diagnosis. So the WHOLE
+# topology is returned, with the state (up) next to each entry, and the panel
+# footer reads "op 3/3 arrete" instead of hiding the button.
+# ON THE OTHER HAND, NO ARROWS OUTSIDE MULTI-OPERATOR. Without
+# /etc/osmocom/osmo-multi.conf - a single-operator bench - there is nothing
+# to navigate to: the list returns the native one only, and update_op() hides
+# the arrows. No operators 2 and 3 are invented.
+# Same list and same rule as tools/osmo-op.sh, the command-line version (and
+# the reference definition).
 
 
 M3UA_PORT = int(os.environ.get("MULTI_M3UA_PORT", "2908"))
 
-# ── LA RADIO VIRTUELLE srsRAN (ZeroMQ) ──────────────────────────────────────
-# srsRAN sans materiel : le pilote « zmq » remplace la carte radio par deux
-# sockets ZeroMQ - l un porte les echantillons de la station vers le mobile,
-# l autre du mobile vers la station (tcp://IP:2000 et :2001 par defaut). Le
-# banc s en sert pour donner une VRAIE couche radio au telephone : srsUE
-# s attache a la station, et le modem du telephone (postmarketOS, via
-# tools/osmo-pmos.sh) parle a ce mobile-la.
-# On ne devine RIEN de l etat : on regarde qui ecoute sur ces ports.
+# ── THE srsRAN VIRTUAL RADIO (ZeroMQ) ───────────────────────────────────────
+# srsRAN without hardware: the « zmq » driver replaces the radio card with two
+# ZeroMQ sockets - one carries the samples from the station to the mobile,
+# the other from the mobile to the station (tcp://IP:2000 and :2001 by
+# default). The bench uses it to give the phone a REAL radio layer: srsUE
+# attaches to the station, and the phone modem (postmarketOS, via
+# tools/osmo-pmos.sh) talks to that mobile.
+# NOTHING about the state is guessed: look at who listens on those ports.
 ZMQ_PORTS = [int(x) for x in os.environ.get("OSMO_ZMQ_PORTS", "2000,2001").split(",") if x.strip()]
 
 
 def _sctp_ecoute(port):
-    """Un socket SCTP ecoute-t-il sur ce port ? Lecture directe de
-    /proc/net/sctp/eps - aucun privilege, et `ss` peut ne pas etre installe."""
+    """Does an SCTP socket listen on this port? Direct read of
+    /proc/net/sctp/eps - no privilege, and `ss` may not be installed."""
     try:
         with open("/proc/net/sctp/eps") as f:
             for line in f.readlines()[1:]:
                 ch = line.split()
-                # colonne LPORT : la 4e dans le format du noyau.
+                # LPORT column: the 5th field in the kernel format.
                 if len(ch) > 4 and ch[4] == str(port):
                     return True
     except OSError:
@@ -232,9 +219,9 @@ def _sctp_ecoute(port):
 
 
 def _tcp_ecoute(port):
-    """Un socket TCP ecoute-t-il sur ce port ? On lit /proc/net/tcp{,6}
-    directement : aucun privilege, et `ss` peut manquer. La 4e colonne vaut
-    « 0A » (TCP_LISTEN) et l adresse locale est « HEX:PORT »."""
+    """Does a TCP socket listen on this port? /proc/net/tcp{,6} is read
+    directly: no privilege, and `ss` may be missing. The 4th column is
+    « 0A » (TCP_LISTEN) and the local address is « HEX:PORT »."""
     hexport = "%04X" % port
     for f in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
@@ -249,11 +236,11 @@ def _tcp_ecoute(port):
 
 
 def zmq_etat():
-    """(actif, detail) de la radio virtuelle srsRAN.
+    """(active, detail) of the srsRAN virtual radio.
 
-    Actif = au moins un des ports ZeroMQ ecoute. Le detail nomme ceux qui
-    ecoutent : sur un banc a moitie monte (la station lancee, le mobile pas
-    encore), c est la seule facon de voir lequel des deux manque.
+    Active = at least one of the ZeroMQ ports listens. The detail names those
+    that listen: on a half-started bench (station launched, mobile not yet),
+    it is the only way to see which of the two is missing.
     """
     ouverts = [p for p in ZMQ_PORTS if _tcp_ecoute(p)]
     if not ouverts:
@@ -266,11 +253,11 @@ def zmq_etat():
 
 
 def ip_locale():
-    """L adresse de cette machine sur le reseau - celle qu on donne aux autres.
+    """The address of this machine on the network - the one given to others.
 
-    « ip route get » designe l interface qui porte la route par defaut sans
-    envoyer le moindre paquet : c est la bonne reponse meme sans reseau au
-    bout, et elle ne depend pas d un nom d interface ecrit en dur.
+    « ip route get » names the interface carrying the default route without
+    sending a single packet: it is the right answer even with no network at
+    the other end, and it does not depend on a hard-coded interface name.
     """
     try:
         out = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"],
@@ -280,7 +267,7 @@ def ip_locale():
             return m.group(1)
     except Exception:
         pass
-    # Pas de route par defaut (banc isole) : la premiere adresse non locale.
+    # No default route (isolated bench): the first non-local address.
     try:
         out = subprocess.run(["ip", "-4", "-br", "addr"], capture_output=True,
                              text=True, timeout=2).stdout
@@ -294,9 +281,9 @@ def ip_locale():
 
 
 def ip_toutes():
-    """Toutes les adresses, pour l infobulle : sur un banc il y en a plusieurs
-    (le reseau, les ponts docker, apn0...) et celle qui compte depend de qui
-    demande."""
+    """All the addresses, for the tooltip: a bench has several (the network,
+    the docker bridges, apn0...) and the one that matters depends on who is
+    asking."""
     try:
         out = subprocess.run(["ip", "-4", "-br", "addr"], capture_output=True,
                              text=True, timeout=2).stdout.strip()
@@ -306,7 +293,7 @@ def ip_toutes():
 
 
 def operators():
-    """Liste [(idx, mode, ip, up)] : toute la topologie, marche ou pas."""
+    """List [(idx, mode, ip, up)]: the whole topology, running or not."""
     ops = []
     try:
         with open(MULTI_CONF) as f:
@@ -316,15 +303,14 @@ def operators():
     m = re.search(r'^MULTI_OPS="?([^"\n]*)"?', txt, re.M)
     specs = m.group(1).split() if m else []
     if not specs:
-        # Pas de topologie multi-operateur : un seul operateur, le natif.
-        # update_op() cachera les fleches - il n y a nulle part ou aller.
+        # No multi-operator topology: a single operator, the native one.
+        # update_op() will hide the arrows - there is nowhere to go.
         specs = ["1:native:"]
-    # [2026-09-04] `docker ps` ECHOUE SOUS LE COMPTE DE LA SESSION s il n est pas
-    # dans le groupe `docker` ("permission denied ... /var/run/docker.sock"), et
-    # l encart annoncait alors « op 3/3 arrete » avec les conteneurs bien en
-    # marche. On ne confond plus « absent » et « invisible » : quand docker ne
-    # nous repond pas, on sonde le tableau de bord de l operateur, qui ne
-    # demande aucun privilege. Meme regle que tools/osmo-op.sh.
+    # `docker ps` FAILS UNDER THE SESSION ACCOUNT if it is not in the `docker`
+    # group ("permission denied ... /var/run/docker.sock"). « absent » and
+    # « invisible » are not confused: when docker does not answer, the
+    # operator's dashboard is probed instead, which needs no privilege. Same
+    # rule as tools/osmo-op.sh.
     running = set()
     docker_ok = False
     try:
@@ -358,36 +344,34 @@ def operators():
         ops.append((idx, mode, ip, up))
     if not any(o[1] == "native" for o in ops):
         ops.insert(0, ("1", "native", "", False))
-    # ── LE HUB EST LE DERNIER ARRET DU CYCLE ────────────────────────────────
-    # [2026-09-04] On pouvait regarder les trois operateurs, jamais le noeud qui
-    # les relie - alors que c est lui qu on interroge quand le SS7 va mal.
-    # L encart le rend par une vue SS7 (matrice de connectivite + journal du
-    # hub) et non par un spectre : un hub M3UA n a pas de radio, une FFT n y
-    # voudrait rien dire. Voir tools/osmo-fft-snap.py, render_interstp().
-    # Meme regle que tools/osmo-op.sh, la definition de reference.
+    # ── THE HUB IS THE LAST STOP OF THE CYCLE ───────────────────────────────
+    # The node that links the operators is the one queried when SS7 goes
+    # wrong. The panel renders it as an SS7 view (connectivity matrix + hub
+    # log) and not as a spectrum: an M3UA hub has no radio, an FFT would mean
+    # nothing there. See tools/osmo-fft-snap.py, render_interstp().
+    # Same rule as tools/osmo-op.sh, the reference definition.
     if specs and any(o[1] == "docker" for o in ops):
         hub_ip = ""
         m = re.search(r'^MULTI_HUB_IP="?([^"\s#]*)', txt, re.M)
         if m:
             hub_ip = m.group(1)
         hub = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
-        # [2026-09-04] LE HUB N A PAS DE TABLEAU DE BORD. Le repli `reachable()`
-        # tapait sur 172.20.0.10:8080, que l inter-STP n ecoute pas - il ne
-        # route que du M3UA : l encart affichait « inter-STP arrete » sur un hub
-        # parfaitement vivant. Sans acces docker, on regarde donc ce qu il
-        # ecoute VRAIMENT, un socket SCTP sur le port M3UA. Une sonde TCP y est
-        # muette (c est du SCTP), d ou la lecture de /proc/net/sctp.
+        # THE HUB HAS NO DASHBOARD: the inter-STP only routes M3UA, so the
+        # `reachable()` fallback on :8080 would say nothing. Without docker
+        # access, look at what it REALLY listens on: an SCTP socket on the
+        # M3UA port. A TCP probe is mute there (it is SCTP), hence the read
+        # of /proc/net/sctp.
         up = hub in running if docker_ok else _sctp_ecoute(M3UA_PORT)
         ops.append(("hub", "interstp", hub_ip or "172.20.0.10", up))
     return ops
 
 
-# ── Y A-T-IL UN BANC A MONTRER ? ────────────────────────────────────────────
-# 2G : un operateur de la topologie en marche (natif, conteneur ou hub - la
-# liste de operators(), qui sait deja le dire). 4G : l un des demons que le
-# Conky regarde pour dire « 4G debout » (tools/conky-osmo-status.sh, lte) -
-# memes noms, meme regle. `pgrep -x` : le NOM exact, pas la ligne de commande
-# (un `tail -F srsue.log` ou cet encart lui-meme ne comptent pas).
+# ── IS THERE A BENCH TO SHOW? ───────────────────────────────────────────────
+# 2G: an operator of the topology running (native, container or hub - the
+# operators() list, which already knows). 4G: one of the daemons the Conky
+# looks at to say « 4G up » (tools/conky-osmo-status.sh, lte) - same names,
+# same rule. `pgrep -x`: the exact NAME, not the command line (a
+# `tail -F srsue.log` or this panel itself do not count).
 LTE_DEMONS = os.environ.get("OSMO_LTE_DEMONS", "open5gs-mmed|srsenb|srsue")
 PANEL_TOUJOURS = os.environ.get("OSMO_PANEL_TOUJOURS") == "1"
 
@@ -398,39 +382,31 @@ def lte_actif():
                              text=True, timeout=5).stdout.split()
     except Exception:
         return False
-    # pgrep liste aussi les ZOMBIES (un srsue plante, pas encore recolte par
-    # son parent) : un mort ne tient pas de banc, on ne le compte pas.
+    # pgrep also lists ZOMBIES (a crashed srsue not yet reaped by its parent):
+    # a dead process holds no bench, it is not counted.
     for pid in out:
         try:
             with open(f"/proc/{pid}/stat") as f:
                 if f.read().rsplit(")", 1)[1].split()[0] != "Z":
                     return True
         except (OSError, IndexError):
-            return True       # illisible : on le croit vivant plutot que de cacher un banc
+            return True       # unreadable: assume alive rather than hiding a bench
     return False
 
 
 def banc_actif(ops):
-    """Vrai si une 2G (un operateur ou le hub en marche) ou une 4G tourne."""
+    """True if a 2G (an operator or the hub running) or a 4G is running."""
     return PANEL_TOUJOURS or any(o[3] for o in ops) or lte_actif()
 
 
-# ── LE FICHIER EST LA SOURCE PARTAGEE, PAS UNE SORTIE ───────────────────────
-# [2026-09-04] Cet encart ECRIVAIT /run/osmo-fft/operator et ne le LISAIT
-# jamais. Trois consequences, toutes vues sur le banc :
-#   - Ctrl+Alt+O (raccourci) et `osmo-op --next` changeaient bien le fichier -
-#     le Conky suivait - mais l encart, lui, restait sur son operateur : ses
-#     boutons Dashboard / tmux / VTY continuaient de viser l ancien ;
-#   - pire, des qu un conteneur changeait d etat, refresh_ops() rappelait
-#     update_op(), qui REECRIVAIT le fichier avec la selection de l encart :
-#     le choix fait au clavier etait annule quelques secondes plus tard, sans
-#     que rien ne l explique. « ctrl alt O ne marche pas » - il marchait, il
-#     etait ecrase.
-#   - et deux encarts (deux sessions) se seraient disputes le fichier.
-# L encart LIT donc maintenant, et n ECRIT que sur un clic de ses fleches.
+# ── THE FILE IS THE SHARED SOURCE, NOT AN OUTPUT ────────────────────────────
+# The keyboard shortcut, `osmo-op --next` and other sessions change
+# /run/osmo-fft/operator too. The panel therefore READS it, and only WRITES
+# it on a click of its own arrows - rewriting it on every refresh would
+# cancel a choice made elsewhere.
 def read_operator():
-    """L operateur choisi, quel que soit celui qui l a choisi (fleches de
-    l encart, raccourci clavier, `osmo-op`). None si le fichier n existe pas."""
+    """The selected operator, whoever selected it (panel arrows, keyboard
+    shortcut, `osmo-op`). None if the file does not exist."""
     try:
         with open(OP_FILE) as f:
             for line in f:
@@ -443,10 +419,10 @@ def read_operator():
 
 def write_operator(op):
     idx, mode, ip = op[0], op[1], op[2]
-    # NAME est le nom du CONTENEUR : c est par lui que osmo-fft-snap.py et le
-    # Conky entrent (docker exec). Pour le hub ce n est pas
-    # « osmo-operator-hub » - ce conteneur n existe pas - mais osmo-inter-stp.
-    # Meme regle que tools/osmo-op.sh.
+    # NAME is the CONTAINER name: it is how osmo-fft-snap.py and the Conky get
+    # in (docker exec). For the hub it is not « osmo-operator-hub » - that
+    # container does not exist - but osmo-inter-stp. Same rule as
+    # tools/osmo-op.sh.
     nom = (os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp") if mode == "interstp"
            else f"osmo-operator-{idx}")
     os.makedirs(RUN, exist_ok=True)
@@ -463,9 +439,9 @@ def spawn(argv):
 
 
 def terminal(cmd, titre="osmo-panel"):
-    """Ouvre `cmd` (chaine shell) dans un terminal VTE pose DANS une fenetre GTK
-    du banc (tools/osmo-gtk-run.py --tty). [2026-10-01] Plus d emulateur de
-    terminal : aucune entree de l encart n en ouvre."""
+    """Opens `cmd` (shell string) in a VTE terminal placed INSIDE a bench GTK
+    window (tools/osmo-gtk-run.py --tty). No terminal emulator is involved:
+    no panel entry opens one."""
     root = "" if os.geteuid() == 0 else "sudo -E "
     gtk_run = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-gtk-run.py")
     spawn([sys.executable, gtk_run, "--tty", "--title", titre, "--", "bash", "-c", root + cmd])
@@ -516,22 +492,18 @@ class Panel(Gtk.Window):
         b_tmux = self.b_tmux = Gtk.Button(label="tmux")
         b_tmux.set_tooltip_text("terminal attache a la session du banc (Ctrl-b d pour detacher)")
         b_tmux.connect("clicked", self.on_tmux)
-        # Le VTY du mobile : la console ou l on tape « show ms », « call 100102 »
-        # ... C est le troisieme endroit qu on ouvre a la main dix fois par
-        # seance ; il n avait pas de bouton.
+        # The mobile VTY: the console where one types « show ms »,
+        # « call 100102 »... the third place opened by hand ten times a session.
         b_vty = self.b_vty = Gtk.Button(label=f"VTY {VTY_PORT}")
         b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} (console du mobile)")
         b_vty.connect("clicked", self.on_vty)
-        # La radio virtuelle srsRAN, et l adresse de la machine. Les deux
-        # repondent a la meme question - « ou est-ce que je branche le
-        # telephone ? » - et n avaient aucune place sur le bureau : il fallait
-        # un terminal et deux commandes pour savoir si la radio ecoutait, et
-        # une troisieme pour l adresse a mettre en face.
+        # The srsRAN virtual radio, and the machine address. Both answer the
+        # same question - « where do I plug the phone? ».
         b_zmq = self.b_zmq = Gtk.Button(label="ZMQ")
         b_zmq.connect("clicked", self.on_zmq)
         self.l_ip = Gtk.Label(label="IP —")
         self.l_ip.get_style_context().add_class("ip")
-        # Un label ne recoit pas les clics : on l habille d une boite d evenements.
+        # A label does not receive clicks: wrap it in an event box.
         ip_box = Gtk.EventBox()
         ip_box.add(self.l_ip)
         ip_box.connect("button-press-event", self.on_ip)
@@ -559,13 +531,13 @@ class Panel(Gtk.Window):
         self.mtime = None
         self._pos = (x, y)
         self.connect("map-event", self._pin)
-        # Les enfants sont montres, la FENETRE ne l est que si un banc tourne
-        # (refresh_ops, ci-dessous) : un show_all() ici l aurait fait passer
-        # a l ecran une seconde avant de la cacher.
+        # The children are shown, the WINDOW only if a bench runs
+        # (refresh_ops, below): a show_all() here would flash it on screen
+        # for a second before hiding it.
         overlay.show_all()
-        self.update_op()          # show_all vient de tout montrer : on recache les fleches hors multi
-        # None : etat inconnu - le premier refresh_ops ecrit l etat du banc
-        # (fond d ecran, fichier d etat) meme s il est « a l arret ».
+        self.update_op()          # show_all showed everything: re-hide the arrows outside multi
+        # None: unknown state - the first refresh_ops writes the bench state
+        # (wallpaper, state file) even when it is « stopped ».
         self._visible = None
         self.refresh_ops()
         self.refresh_image()
@@ -574,7 +546,7 @@ class Panel(Gtk.Window):
         self.refresh_zmq()
         GLib.timeout_add(3000, self.refresh_zmq)
 
-    # ── montrer / cacher selon le banc ─────────────────────────────────────
+    # ── show / hide according to the bench ─────────────────────────────────
     def montrer(self, actif):
         if actif == self._visible:
             return
@@ -589,13 +561,14 @@ class Panel(Gtk.Window):
             print("[panel] plus de banc : encart cache", flush=True)
             self.hide()
 
-    # [2026-10-12] LE BUREAU SUIT LE BANC, PAS SEULEMENT L ENCART. Au meme
-    # moment : (1) le fond d ecran passe en fondu de la ville seule a la ville
-    # avec l antenne (tools/osmo-fond.py), et retour a l arret ; (2) l etat est
-    # ecrit dans $XDG_RUNTIME_DIR/osmo-banc.etat ("1"/"0"), que osmo-topzone.py
-    # lit pour fondre le titre « Telecom Operator » vers la banniere LAB GSM.
-    # osmo-launcher.py lance aussi le fond des le CLIC sur un run (plus tot
-    # que la detection d ici) ; osmo-fond est idempotent, les deux cohabitent.
+    # THE DESKTOP FOLLOWS THE BENCH, NOT ONLY THE PANEL. At the same moment:
+    # (1) the wallpaper fades from the city alone to the city with the
+    # antenna (tools/osmo-fond.py), and back when stopped; (2) the state is
+    # written to $XDG_RUNTIME_DIR/osmo-banc.etat ("1"/"0"), which
+    # osmo-topzone.py reads to fade the « Telecom Operator » title to the LAB
+    # GSM banner. osmo-launcher.py also launches the wallpaper on the CLICK
+    # of a run (earlier than the detection here); osmo-fond is idempotent,
+    # both coexist.
     def _etat_banc(self, actif):
         try:
             with open(ETAT_FILE + ".tmp", "w") as f:
@@ -608,15 +581,15 @@ class Panel(Gtk.Window):
             spawn([sys.executable, fond, "antenne" if actif else "ville"])
         self._conky_fondu(actif)
 
-    # [2026-10-12] LE CONKY SUIT AUSSI, EN FONDU. Banc a l arret, le tableau de
-    # bord n a rien a dire (« banc a l arret - ./start-native.sh » deux fois) :
-    # on le fait disparaitre, et revenir avec le banc. Pas de kill : le gardien
-    # osmo-desktop-panel relancerait un conky dans les cinq secondes. On agit
-    # sur sa FENETRE X11 : opacite (_NET_WM_WINDOW_OPACITY, que mutter honore)
-    # qui descend en une douzaine de pas, puis unmap (xdotool) ; au retour, map
-    # puis l opacite remonte. Sans xdotool, l opacite 0 suffit a le cacher.
-    # Le conky peut etre relance entre-temps (nouvelle fenetre) : _conky_veille
-    # remet la fenetre dans l etat voulu a chaque tour de refresh_ops.
+    # THE CONKY FOLLOWS TOO, WITH A FADE. Bench down, the dashboard has
+    # nothing to say (« banc a l arret - ./start-native.sh » twice): it is
+    # faded out, and comes back with the bench. No kill: the osmo-desktop-panel
+    # guardian would restart a conky within five seconds. Its X11 WINDOW is
+    # acted on instead: opacity (_NET_WM_WINDOW_OPACITY, honoured by mutter)
+    # going down in a dozen steps, then unmap (xdotool); on return, map then
+    # the opacity goes back up. Without xdotool, opacity 0 is enough to hide
+    # it. The conky may be restarted meanwhile (new window): _conky_veille
+    # puts the window back in the wanted state on every refresh_ops round.
     def _conky_fenetre(self):
         try:
             out = subprocess.run(["xdotool", "search", "--classname", "^conky$"],
@@ -670,11 +643,10 @@ class Panel(Gtk.Window):
             self._conky_win = win
         threading.Thread(target=anim, daemon=True).start()
 
-    # [2026-10-12] UN FONDU TUE EN VOL (kill -9 : start-native.sh --stop, avant
-    # que osmo-fond.py soit dans sa liste d epargnes) laissait le fond sur une
-    # image intermediaire. Toutes les 10 s, on relit l URI du fond : si ce
-    # n est pas le fichier attendu pour l etat courant, on relance osmo-fond
-    # (idempotent, il repart de l image ou il en etait).
+    # A fade killed in flight would leave the wallpaper on an intermediate
+    # image. Every 10 s the wallpaper URI is reread: if it is not the file
+    # expected for the current state, osmo-fond is relaunched (idempotent, it
+    # resumes from the image it was at).
     def _fond_veille(self):
         if self._visible is None or os.environ.get("OSMO_FOND_TOUJOURS") == "1":
             return
@@ -689,23 +661,23 @@ class Panel(Gtk.Window):
         except (OSError, subprocess.TimeoutExpired):
             return
         if uri.endswith("/" + attendu) or "/osmo-fond/" not in uri and "gsm-lab-" not in uri:
-            return          # en place, ou un fond choisi par l utilisateur : on ne touche pas
+            return          # in place, or a wallpaper chosen by the user: left alone
         fond = os.path.join(REPO_DIR, "tools", "osmo-fond.py")
         if os.path.exists(fond):
             print("[panel] fond d ecran a reprendre : %s" % os.path.basename(uri), flush=True)
             spawn([sys.executable, fond, "antenne" if self._visible else "ville"])
 
     def _conky_veille(self):
-        # un conky relance (autre fenetre) alors que le banc est a l arret : on
-        # le cache aussitot ; et s il a disparu puis reparu au retour, on le montre
+        # a conky restarted (other window) while the bench is down: hide it at
+        # once; and if it vanished then reappeared on return, show it
         voulu = getattr(self, "_conky_voulu", None)
         if voulu is None or voulu or os.environ.get("OSMO_CONKY_TOUJOURS") == "1":
             return
         win = self._conky_fenetre()
         if not win:
             return
-        # l id X peut etre REUTILISE par un conky relance : on regarde l etat
-        # reel de la fenetre, pas seulement son numero
+        # the X id may be REUSED by a restarted conky: look at the actual
+        # window state, not only its number
         try:
             mappee = "IsViewable" in subprocess.run(["xwininfo", "-id", win], capture_output=True,
                                                    text=True, timeout=3).stdout
@@ -714,11 +686,10 @@ class Panel(Gtk.Window):
         if win != getattr(self, "_conky_win", None) or (mappee and shutil.which("xdotool")):
             self._conky_fondu(False, pas=1, duree=0)
 
-    # [2026-09-06] SE REPOSER APRES COUP. Meme sous X11, le gestionnaire de
-    # fenetres peut deplacer la fenetre au moment ou il la mappe (mutter le
-    # fait pour les fenetres non decorees qu il ne reconnait pas comme du
-    # bureau). Un seul move() avant show_all() ne tient donc pas : on recale
-    # au map-event, puis une derniere fois une demi-seconde plus tard.
+    # RE-PLACE AFTERWARDS. Even under X11, the window manager may move the
+    # window when it maps it (mutter does so for undecorated windows it does
+    # not recognise as desktop). A single move() before show_all() does not
+    # hold: re-place on map-event, then one last time half a second later.
     def _pin(self, *_a):
         self.move(*self._pos)
         return False
@@ -728,7 +699,7 @@ class Panel(Gtk.Window):
         cr.paint()
         return False
 
-    # ── l image ────────────────────────────────────────────────────────────
+    # ── the image ──────────────────────────────────────────────────────────
     def refresh_image(self):
         try:
             mt = os.stat(IMG).st_mtime
@@ -742,10 +713,10 @@ class Panel(Gtk.Window):
             pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(IMG, w, h, False)
             self.image.set_from_pixbuf(pb)
         except GLib.Error:
-            pass  # fichier en cours d ecriture : prochaine seconde
+            pass  # file being written: next second
         return True
 
-    # ── les operateurs ─────────────────────────────────────────────────────
+    # ── the operators ──────────────────────────────────────────────────────
     def refresh_ops(self):
         ops = operators()
         changed = ops != self.ops
@@ -753,8 +724,8 @@ class Panel(Gtk.Window):
             sel = self.ops[self.cur] if self.ops and self.cur < len(self.ops) else None
             self.ops = ops
             self.cur = next((i for i, o in enumerate(ops) if sel and o[0] == sel[0]), 0)
-        # Quelqu un d autre a-t-il choisi ? (raccourci clavier, `osmo-op`, une
-        # autre session). Si oui, on le suit - sans reecrire le fichier.
+        # Did someone else choose? (keyboard shortcut, `osmo-op`, another
+        # session). If so, follow it - without rewriting the file.
         want = read_operator()
         if want is not None:
             i = next((i for i, o in enumerate(self.ops) if o[0] == want), None)
@@ -770,9 +741,9 @@ class Panel(Gtk.Window):
 
     def update_op(self, write=True):
         global VTY_PORT
-        # Les fleches sont TOUJOURS la des qu il y a plus d un operateur dans la
-        # topologie - qu ils tournent ou non (voir operators()). Un operateur
-        # arrete se dit dans le libelle, il ne fait pas disparaitre le bouton.
+        # The arrows are ALWAYS there as soon as the topology has more than
+        # one operator - running or not (see operators()). A stopped operator
+        # is said in the label, it does not make the button disappear.
         multi = len(self.ops) > 1
         for wdg in (self.b_prev, self.b_next, self.l_op):
             wdg.set_visible(multi)
@@ -784,10 +755,9 @@ class Panel(Gtk.Window):
             self.l_op.set_tooltip_text(
                 "\n".join(f"op {o[0]} {o[1]} {o[2] or '(hote)'} "
                            f"{'actif' if o[3] else 'arrete'}" for o in self.ops))
-            # Les trois boutons visent l operateur choisi : ils le DISENT.
-            # Sans ca, "Dashboard / tmux / VTY 4247" ne changeait pas d aspect
-            # quand on poussait les fleches, et rien ne disait sur quel
-            # operateur on allait tomber.
+            # The three buttons target the selected operator: they SAY so in
+            # their label, so pushing the arrows shows which operator they
+            # will land on.
             hub = op[1] == "interstp"
             suff = (" hub" if hub else f" op{op[0]}") if len(self.ops) > 1 else ""
             if hub:
@@ -803,9 +773,9 @@ class Panel(Gtk.Window):
             VTY_PORT = vty_port()
             self.b_vty.set_label(f"VTY {VTY_PORT}" + suff)
             self.b_vty.set_tooltip_text(f"terminal : telnet 127.0.0.1 {VTY_PORT} dans {cible}")
-            # `write=False` quand on ne fait que SUIVRE le fichier : le
-            # reecrire a l identique est inutile, et le reecrire avec notre
-            # propre idee est ce qui annulait le choix fait au clavier.
+            # `write=False` when only FOLLOWING the file: rewriting it
+            # identically is useless, and rewriting it with our own idea would
+            # cancel a choice made at the keyboard.
             if write:
                 write_operator(op)
 
@@ -819,7 +789,7 @@ class Panel(Gtk.Window):
             self.cur = (self.cur + 1) % len(self.ops)
             self.update_op()
 
-    # ── la radio virtuelle et l adresse, rafraichies avec le reste ─────────
+    # ── the virtual radio and the address, refreshed with the rest ─────────
     def refresh_zmq(self):
         actif, detail = zmq_etat()
         ctx = self.b_zmq.get_style_context()
@@ -834,7 +804,7 @@ class Panel(Gtk.Window):
 
     def on_zmq(self, *_):
         ports = "|".join(str(p) for p in ZMQ_PORTS)
-        # ss d abord (il nomme le processus), netstat en repli.
+        # ss first (it names the process), netstat as fallback.
         cmd = (f"echo 'Radio virtuelle srsRAN (ZeroMQ) - ports {', '.join(str(p) for p in ZMQ_PORTS)}'; echo;"
                f" (ss -lntp 2>/dev/null || netstat -lntp 2>/dev/null) | grep -E ':({ports})\\b' || echo 'personne n ecoute';"
                f" echo; echo 'connexions etablies :';"
@@ -844,8 +814,8 @@ class Panel(Gtk.Window):
         terminal(cmd)
 
     def on_ip(self, *_):
-        """Copier l adresse : c est ce qu on en fait neuf fois sur dix - la
-        recopier dans un fichier de configuration srsRAN ou sur un autre poste."""
+        """Copy the address: that is what it is for nine times out of ten -
+        pasting it into a srsRAN configuration file or on another host."""
         ip = ip_locale()
         try:
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(ip, -1)
@@ -855,7 +825,7 @@ class Panel(Gtk.Window):
             pass
         return True
 
-    # ── les boutons ────────────────────────────────────────────────────────
+    # ── the buttons ────────────────────────────────────────────────────────
     def on_dash(self, *_):
         op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
         url = f"http://{op[2] or '127.0.0.1'}:{DASH_PORT}"
@@ -865,21 +835,18 @@ class Panel(Gtk.Window):
                 return
 
     def on_vty(self, *_):
-        # telnet, et pas nc : c est ce que la documentation Osmocom donne, et le
-        # VTY attend un vrai terminal ligne a ligne. Le `read` final garde la
-        # fenetre ouverte quand le port est ferme - sinon elle se refermerait
-        # avant qu on ait lu pourquoi.
+        # telnet, not nc: it is what the Osmocom documentation gives, and the
+        # VTY expects a real line-by-line terminal. The final `read` keeps the
+        # window open when the port is closed - otherwise it would close
+        # before the reason could be read.
         #
-        # [2026-09-04] LE VTY D UN CONTENEUR EST DANS LE CONTENEUR. On faisait
-        # « telnet <ip-du-conteneur> 4247 » : ce port n est PAS publie sur le
-        # reseau docker de l operateur (start-docker.sh ne publie que ce dont l hote a
-        # besoin), et le bouton rendait "Connection refused" sur un operateur
-        # parfaitement vivant. On entre donc dans le conteneur pour le natif du
-        # dedans, exactement comme pour tmux.
+        # A CONTAINER'S VTY IS INSIDE THE CONTAINER: the port is NOT published
+        # on the operator's docker network (start-docker.sh only publishes
+        # what the host needs). So enter the container, exactly as for tmux.
         VTY_PORT = vty_port()
         op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
         if op[1] == "interstp":
-            # Le hub n a ni mobile ni VTY 4247 : sa console, c est le STP (4239).
+            # The hub has neither mobile nor VTY 4247: its console is the STP (4239).
             c = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
             cmd = (f"docker exec -it {c} telnet 127.0.0.1 4239"
                    f" || {{ echo; echo 'VTY 4239 injoignable dans {c} (hub arrete ?)'; read -r _; }}")
@@ -894,13 +861,10 @@ class Panel(Gtk.Window):
         terminal(cmd)
 
     def on_tmux(self, *_):
-        # [2026-09-04] LE NOM DE LA SESSION N ETAIT PAS LE BON. On attachait
-        # « tmux -S /tmp/osmocom_tmux attach -t osmocom » dans le conteneur,
-        # alors que start-docker.sh y ouvre une session nommee « osmo » sur le socket
-        # PAR DEFAUT (voir son commentaire : "docker exec -ti osmo-operator-2
-        # tmux attach -t osmo"). Le bouton disait donc "pas de session tmux"
-        # sur un operateur qui en avait une. On essaie les deux, dans l ordre
-        # ou elles existent, avant de conclure.
+        # start-docker.sh opens a session named « osmo » on the DEFAULT socket
+        # in the container ("docker exec -ti osmo-operator-2 tmux attach -t
+        # osmo"); the « osmocom » session on /tmp/osmocom_tmux is the other
+        # layout. Both are tried, in order, before concluding.
         op = self.ops[self.cur] if self.ops else ("1", "native", "", False)
         if op[1] == "interstp":
             c = os.environ.get("MULTI_HUB_NAME", "osmo-inter-stp")
@@ -928,8 +892,8 @@ def single_instance():
             time.sleep(0.3)
     except (OSError, ValueError):
         pass
-    # Un verrou qu on ne peut pas ecrire n est pas une raison de ne pas afficher
-    # l encart : au pire deux fenetres, jamais une boite de crash.
+    # A lock that cannot be written is no reason not to show the panel: at
+    # worst two windows, never a crash dialog.
     try:
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))

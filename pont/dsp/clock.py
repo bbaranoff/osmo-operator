@@ -1,44 +1,38 @@
-# pont/dsp/clock.py - l'horloge du pont DSP : l'avance suit la BTS.
+# pont/dsp/clock.py - the DSP bridge clock: the advance follows the BTS.
 #
-# [2026-09-23] L'AVANCE DE LA BTS EST REPORTEE EN DYNAMIQUE SUR LE DSP.
+# THE BTS ADVANCE IS CARRIED DYNAMICALLY OVER TO THE DSP.
 #
-# Clock (pont/trx.py) asservit l'horloge du banc a « trame reclamee par le DSP
-# + PONT_HORLOGE_AVANCE (12) ». C'est la BTS qui emet, elle, et ses bursts
-# descendants partent `osmotrx fn-advance` trames AVANT cette horloge (2 par
-# defaut), plus ses a-coups : « We missed 6 timers », « 5 FN slower than
-# TRX », puis rattrapage d'un bloc. La marge vraiment utile au BSP -- derniere
-# trame recue de la BTS moins trame que le DSP reclame -- valait donc
-# 12 + fn-advance - gigue, et tombait sous zero : run de 13:41, 1000 trames
-# sans burst (« le DSP COURT DEVANT le BTS », ecarts +1 a +6), chacune jouee en
-# effacement. Tombee sur un UA ou une FACCH, c'est un bloc perdu : « I frame
-# ignored in state SABM_SENT » (l'UA manque, les I suivantes arrivent),
-# T200 sur la FACCH de l'assignation.
+# Clock (pont/trx.py) slaves the bench clock to "frame requested by the DSP
+# + PONT_HORLOGE_AVANCE (12)". The BTS is the one transmitting, and its downlink
+# bursts leave `osmotrx fn-advance` frames BEFORE that clock (2 by default),
+# plus its jolts: "We missed 6 timers", "5 FN slower than TRX", then a block of
+# catch-up. The margin actually useful to the BSP -- last frame received from
+# the BTS minus frame requested by the DSP -- is 12 + fn-advance - jitter, which
+# can fall below zero: frames without a burst are played as erasures, and a
+# lost UA or FACCH block means "I frame ignored in state SABM_SENT" (the UA is
+# missing, the following I frames arrive) or T200 on the assignment FACCH.
 #
-# ClockDsp mesure a chaque regulation l'avance reelle de la BTS sur l'horloge
-# (derniere trame descendante recue - trame de l'horloge), en garde le MINIMUM
-# sur une fenetre glissante (les calages de la BTS sont des creux), et pose
-#     avance = PONT_MARGE_DL - avance_BTS_min
-# pour que « derniere trame recue - trame reclamee » reste >= PONT_MARGE_DL.
-# Changer `osmotrx fn-advance` a chaud sur la BTS est suivi sans rien relancer.
-# L'avance est bornee [PONT_AVANCE_MIN, PONT_AVANCE_MAX] : au-dela, le montant
-# part d'autant plus en retard (Transmitter, PONT_UL_RETARD_MAX).
-# PONT_MARGE_DL=0 revient a l'avance fixe de Clock.
-# Defaut 16 : 8 a d'abord ete essaye (run de 13:48) et a DOUBLE les trames sans
-# burst (6 % contre 1,6 % avec l'avance fixe 12 + fn-advance 2, soit ~14) --
-# l'echantillonnage toutes les 50 ms ne voit pas les pires creux de la BTS.
+# ClockDsp measures at each regulation the real advance of the BTS over the
+# clock (last downlink frame received - clock frame), keeps its MINIMUM over a
+# sliding window (the BTS stalls are the dips), and sets
+#     advance = PONT_MARGE_DL - min_BTS_advance
+# so that "last frame received - frame requested" stays >= PONT_MARGE_DL.
+# Changing `osmotrx fn-advance` live on the BTS is followed without a restart.
+# The advance is bounded to [PONT_AVANCE_MIN, PONT_AVANCE_MAX]: beyond that the
+# uplink leaves correspondingly later (Transmitter, PONT_UL_RETARD_MAX).
+# PONT_MARGE_DL=0 falls back to Clock's fixed advance.
+# Default 16: a margin of 8 doubles the frames without a burst (the 50 ms
+# sampling does not see the worst BTS dips).
 #
-# [2026-09-23 19:06] L'AVANCE BTS SE MESURE SUR LE POINT VISE, PAS SUR L'HORLOGE.
-# Mesuree contre l'horloge reelle (derniere recue - horloge), elle supposait
-# horloge == DSP + avance. Faux des que le DSP attend la BTS
-# (CALYPSO_BSP_ATTENTE_MS) : le DSP colle alors a la derniere trame recue,
-# l'horloge traine ~15 trames derriere son but, l'« avance BTS » lue monte a
-# +12 et l'avance visee tombe au plancher (4). Marge reelle min -3 moy +1.2,
-# une attente de 40 ms echue sur six, trame du banc a 11,5 ms au lieu de 4,6,
-# SDCCH descendant troue : UA perdu, le mobile repete son SABM (« SABM frame
-# with information not allowed in this state » au BSC, « Dropping frame with
-# ~96 bit errors » au mobile). On mesure donc derniere recue - (DSP + avance) :
-# la marge reelle, moins l'avance deja demandee -- boucle fermee sur ce qu'on
-# veut tenir. Plancher releve a 10 (l'avance fixe 12 tenait a 1,6 %).
+# THE BTS ADVANCE IS MEASURED AGAINST THE TARGET POINT, NOT THE CLOCK.
+# Measured against the real clock (last received - clock), it would assume
+# clock == DSP + advance. That is false as soon as the DSP waits for the BTS
+# (CALYPSO_BSP_ATTENTE_MS): the DSP then sticks to the last received frame, the
+# clock trails ~15 frames behind its target, the "BTS advance" read goes up and
+# the target advance falls to the floor, leaving a holed downlink SDCCH (lost UA,
+# the mobile repeats its SABM). So the measure is last received - (DSP +
+# advance): the real margin, minus the advance already requested -- a closed
+# loop on what must be held. Floor at 10 (the fixed advance 12 held at 1.6 %).
 import collections
 import logging
 import os
@@ -58,24 +52,24 @@ FENETRE_S = float(os.environ.get("PONT_MARGE_FENETRE", "3.0"))
 class ClockDsp(Clock):
     def __init__(self):
         super().__init__()
-        self._fn_dl = None                  # derniere trame descendante recue de la BTS
-        self._mesures = collections.deque() # (instant, avance BTS sur l'horloge)
+        self._fn_dl = None                  # last downlink frame received from the BTS
+        self._mesures = collections.deque() # (time, BTS advance over the clock)
         self._avance_dite = None
 
     def note_dl(self, fn):
-        """Appele par le fil TRXD a chaque burst descendant (sans verrou :
-        une affectation d'entier)."""
+        """Called by the TRXD thread on each downlink burst (no lock: a single
+        integer assignment)."""
         prec = self._fn_dl
         if prec is None or 0 < (fn - prec) % gsm.HYPERFRAME < gsm.HYPERFRAME // 2:
             self._fn_dl = fn
 
     def _reguler(self, now):
         du = now >= self._echeance
-        super()._reguler(now)                   # rafraichit _dsp_prec (trame reclamee)
+        super()._reguler(now)                   # refreshes _dsp_prec (requested frame)
         dsp = self._dsp_prec
         if MARGE_DL > 0 and du and dsp is not None and self._fn_dl is not None:
-            # Avance de la BTS sur le point VISE (DSP + avance), pas sur
-            # l'horloge reelle -- voir l'en-tete, releve du 2026-09-23 19:06.
+            # BTS advance over the TARGET point (DSP + advance), not over the
+            # real clock -- see the file header.
             avance_bts = (self._fn_dl - dsp - self._avance) % gsm.HYPERFRAME
             if avance_bts > gsm.HYPERFRAME // 2:
                 avance_bts -= gsm.HYPERFRAME
@@ -95,9 +89,9 @@ class ClockDsp(Clock):
         self._mesurer_marge(now)
 
     def _mesurer_marge(self, now):
-        """Marge REELLE vue par le BSP : derniere trame recue - trame reclamee
-        par le DSP (calypso_horloge). Journalisee toutes les 10 s (min/moy) :
-        c'est elle qui doit rester > 0, pas l'avance visee."""
+        """REAL margin seen by the BSP: last frame received - frame requested
+        by the DSP (calypso_horloge). Logged every 10 s (min/mean): this is
+        what must stay > 0, not the target advance."""
         dsp = self._dsp_prec
         if dsp is None or self._fn_dl is None:
             return

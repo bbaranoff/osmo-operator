@@ -10,84 +10,70 @@ from . import gsm
 
 log = logging.getLogger("pont")
 
-# [2026-09-22] L'HORLOGE DU BANC SUIT LE DSP, PAS LE MUR.
+# THE BENCH CLOCK FOLLOWS THE DSP, NOT THE WALL.
 #
-# En montage DSP le C54x est emule : il coute ~5,8 ms par trame TDMA contre
-# 4,615 ms de temps reel. La BTS, elle, tourne sur l'horloge que ce fichier lui
-# envoie (IND CLOCK, run_clock). Avec une horloge murale elle emettait 1,25
-# trame pour chacune que le DSP consommait : le BSP rejouait un anneau de plus
-# en plus vieux (mesure du 2026-09-22 : pont a fn=99674 pendant que le BSP
-# jouait la trame BTS 80410, soit 87 s de retard au bout de huit minutes),
-# l'IMMEDIATE ASSIGNMENT arrivait apres T3126 et le canal dedie sortait des
-# blocs incomplets (« Dropping frame with 110 bit errors »).
+# In the DSP setup the C54x is emulated: it costs ~5.8 ms per TDMA frame
+# against 4.615 ms of real time. The BTS runs on the clock this file sends it
+# (IND CLOCK, run_clock). With a wall clock it would emit 1.25 frames for each
+# one the DSP consumes: the BSP would replay an ever older ring, the IMMEDIATE
+# ASSIGNMENT would arrive after T3126 and the dedicated channel would yield
+# incomplete blocks ("Dropping frame with 110 bit errors").
 #
-# c54x_exe publie la trame BTS que son BSP reclame (calypso_bsp.c,
-# bsp_horloge_publier). On s'y asservit EN FREQUENCE, pas par recalage : la
-# duree effective d'une trame (self.dur) suit la cadence mesuree du DSP, avec
-# une correction proportionnelle qui tient l'avance de phase a AVANCE trames.
+# c54x_exe publishes the BTS frame its BSP requests (calypso_bsp.c,
+# bsp_horloge_publier). The clock is slaved to it IN FREQUENCY, not by
+# re-alignment: the effective frame duration (self.dur) follows the measured
+# DSP rate, with a proportional correction holding the phase lead at AVANCE
+# frames.
 #
-# Pourquoi pas un simple recalage de t0 : essaye d'abord, mesure immediate --
-# « UL bursts=11 tard=232 ». Transmitter.run() jette tout burst dont la trame
-# s'ecarte de plus de window_tol (1 trame) de l'horloge au moment de l'envoi ;
-# une horloge qui avance par a-coups de quelques trames sort de cette fenetre a
-# chaque fois. Plus un seul SABM n'arrivait a la BTS, donc plus de UA, donc
-# « MDL-ERROR-IND cause 1 » et plus aucune mise a jour de localisation. Une
-# horloge asservie doit rester CONTINUE : on ne change que sa vitesse, et on
-# rebase t0 a chaque changement pour que fn() ne saute pas.
+# Why not a simple re-alignment of t0: Transmitter.run() drops any burst
+# whose frame is more than window_tol (1 frame) away from the clock at send
+# time; a clock stepping forward by a few frames leaves that window every
+# time, so no SABM reaches the BTS, hence no UA, hence "MDL-ERROR-IND cause 1"
+# and no location update. A slaved clock must stay CONTINUOUS: only its speed
+# changes, and t0 is rebased at each change so that fn() never jumps.
 #
-# PONT_HORLOGE=0 revient a l'horloge murale ; le fichier absent (montage sans
-# DSP, couche 1 gr-gsm) laisse aussi l'horloge libre, sans rien a configurer.
+# PONT_HORLOGE=0 falls back to the wall clock; a missing file (setup without
+# DSP, gr-gsm layer 1) also leaves the clock free, with nothing to configure.
 HORLOGE = "/dev/shm/calypso_horloge"
 #
-# [2026-09-22] REGLAGE DE LA BOUCLE. Les premieres valeurs (periode 0,25 s,
-# rattrapage en 400 trames) donnaient une boucle a ~0,07 Hz, SOUS la cadence a
-# laquelle la vitesse du DSP elle-meme bouge. L'asservissement n'arrivait plus
-# a suivre : la phase partait en cycle limite de +/- 100 trames, et a chaque
-# demi-tour ou l'ecart passait negatif le pont se retrouvait DERRIERE la trame
-# reclamee -- 12000 trames entierement sautees sur 120201 ticks, 10 %. Les
-# trames perdues ainsi ne sont comptees NULLE PART (ni « tard », ni
-# « manques » cote BSP) : c'est ce silence qui m'a fait accuser la
-# demodulation du DSP. Mesurer plus souvent et rattraper plus vite remonte la
-# boucle a ~1,3 Hz, au-dessus de la perturbation.
-# Ne PAS « corriger » ca en augmentant PONT_HORLOGE_AVANCE : ca masque le
-# cycle limite derriere une marge, sans le supprimer, et ca retarde tout le
-# montant d'autant.
-# [2026-09-22, 16:10] REGLABLES PAR L'ENVIRONNEMENT. J'ai change ces valeurs a
-# l'aveugle une fois de trop : la premiere mesure apres coup a donne
-# manques=2000 sur 10490 ticks (19 %), PIRE que les 10 % d'avant. On les sort
-# donc pour pouvoir balayer sans recompiler et choisir sur mesure.
+# LOOP TUNING. The loop must run faster (~1.3 Hz) than the rate at which the
+# DSP speed itself moves: a slower loop (~0.07 Hz) lets the phase enter a
+# limit cycle of +/- 100 frames, and each half-turn where the error goes
+# negative puts the bridge BEHIND the requested frame -- frames skipped that
+# way are counted NOWHERE (neither "tard" nor "manques" on the BSP side).
+# Do NOT "fix" that by raising PONT_HORLOGE_AVANCE: it hides the limit cycle
+# behind a margin without removing it, and delays the whole uplink as much.
+# The values are read from the environment so they can be swept without
+# editing the code.
 HORLOGE_PERIODE = float(os.environ.get("PONT_HORLOGE_PERIODE", "0.05"))
 HORLOGE_KP = float(os.environ.get("PONT_HORLOGE_KP", "1.0"))
 HORLOGE_PHASE_N = float(os.environ.get("PONT_HORLOGE_PHASE_N", "100.0"))
-# [2026-10-19] PLAFOND DE RALENTISSEMENT. L'horloge asservie ne descendait pas
-# sous le quart du temps reel (4 x FRAME_DUR). Avec la trace asm complete de
-# l'ARM (start-native.sh --assembly-logs, ASSEMBLY_LOGS_FLAGS=in_asm,exec,
-# nochain) le couple ARM+DSP en pas-a-pas tourne a 66 ms par trame, 14 fois le
-# temps reel : le pont prenait +1159 puis +3897 trames d'avance, le BSP ne
-# trouvait plus les bursts (« le burst a existe puis a disparu ») et mobile ne
-# voyait aucune cellule (FBSB result=255, run du 2026-10-19 02:06).
-# PONT_HORLOGE_MAX (defaut 4) borne le facteur ; c54x_exe/run.sh pose 20 quand
-# ASSEMBLY_LOGS=1. Le plafond reste bas en temps normal : apres un a-coup du
-# DSP, la cadence mesuree sur 50 ms explose et l'horloge ne doit pas s'affaler.
-# Au-dela de 4, run_clock raccourcit la periode des IND CLOCK, voir plus bas.
+# SLOWDOWN CEILING. PONT_HORLOGE_MAX (default 4) bounds the factor by which the
+# slaved clock may slow below real time. With the full ARM asm trace
+# (start-native.sh --assembly-logs, ASSEMBLY_LOGS_FLAGS=in_asm,exec,nochain)
+# the ARM+DSP pair runs at 66 ms per frame, 14 times real time, and the bridge
+# would otherwise run thousands of frames ahead, the BSP no longer finding the
+# bursts; c54x_exe/run.sh sets 20 when ASSEMBLY_LOGS=1. The ceiling stays low
+# in normal operation: after a DSP jolt the rate measured over 50 ms explodes
+# and the clock must not collapse.
+# Above 4, run_clock shortens the IND CLOCK period, see below.
 HORLOGE_MAX = float(os.environ.get("PONT_HORLOGE_MAX", "4.0"))
-# [2026-10-19] IND CLOCK en horloge lente, voir run_clock : avance maximale
-# laissee a la BTS avant l'IND (= pause demandee, limite BTS 50), fn-advance de
-# la BTS (osmotrx fn-advance), et garde-fou si la BTS ne livre plus rien
-# (osmo-bts-trx coupe apres TRX_LOSS_FRAMES = 400 trames sans IND).
+# IND CLOCK with a slow clock, see run_clock: maximum lead left to the BTS
+# before the IND (= requested pause, BTS limit 50), fn-advance of the BTS
+# (osmotrx fn-advance), and safeguard if the BTS stops delivering
+# (osmo-bts-trx cuts after TRX_LOSS_FRAMES = 400 frames without IND).
 CLCK_PAUSE_MAX = int(os.environ.get("PONT_CLCK_PAUSE_MAX", "20"))
 CLCK_BTS_FN_ADVANCE = int(os.environ.get("PONT_BTS_FN_ADVANCE", "2"))
 CLCK_SANS_IND_MAX = int(os.environ.get("PONT_CLCK_SANS_IND_MAX", "300"))
-# [2026-10-23] PLAFOND DE LA PAUSE DEMANDEE A LA BTS. osmo-bts-trx (scheduler_trx.c) met son timer en pause
-# de N+1 trames quand l'IND le dit N trames en avance (N <= MAX_FN_SKEW = 50 ; au-dela il se recale, « GSM
-# clock skew », sans dommage) ; si deux expirations s'ecartent alors de plus de 50 trames (230,75 ms), il
-# SORT (« PC clock skew too high »). Une pause de 46 a 50 trames plus une trame de gigue suffit : run du
-# 23/10 17:37 (Magnetite, DSP lent apres une liberation SDCCH), BTS0 sortie a 48 trames d'avance, reseau
-# perdu. Si l'avance de la BTS tombe dans la zone dangereuse (> PLAFOND et <= MAX_FN_SKEW + marge), l'IND
-# porte fn_bts - PLAFOND au lieu de fn_trx : la pause est bornee et l'avance restante se resorbe aux IND
-# suivants (les bursts arrivent seulement plus tot, l'anneau du BSP les garde). 0 = comportement d'avant.
+# CEILING OF THE PAUSE REQUESTED FROM THE BTS. osmo-bts-trx (scheduler_trx.c) pauses its timer for
+# N+1 frames when the IND says it is N frames ahead (N <= MAX_FN_SKEW = 50; beyond that it re-aligns,
+# "GSM clock skew", harmlessly); if two expirations are then more than 50 frames apart (230.75 ms),
+# it EXITS ("PC clock skew too high"). A pause of 46 to 50 frames plus one frame of jitter is enough
+# to kill it. If the BTS lead falls in the dangerous zone (> CEILING and <= MAX_FN_SKEW + margin), the
+# IND carries fn_bts - CEILING instead of fn_trx: the pause is bounded and the remaining lead is
+# absorbed by the following INDs (bursts only arrive earlier, the BSP ring keeps them). 0 = no ceiling.
 CLCK_PAUSE_PLAFOND = int(os.environ.get("PONT_CLCK_PAUSE_PLAFOND", "38"))
-CLCK_SKEW_ZONE = int(os.environ.get("PONT_CLCK_SKEW_ZONE", "60"))   # au-dela, la BTS se recale seule
+CLCK_SKEW_ZONE = int(os.environ.get("PONT_CLCK_SKEW_ZONE", "60"))   # beyond, the BTS re-aligns on its own
 
 
 class Clock:
@@ -104,7 +90,7 @@ class Clock:
         self._dit = False
 
     def _lire_dsp(self):
-        """Trame BTS que le DSP reclame, ou None s'il n'est pas encore cale."""
+        """BTS frame the DSP requests, or None if it is not synchronised yet."""
         try:
             if self._fd is None:
                 self._fd = os.open(HORLOGE, os.O_RDONLY)
@@ -120,7 +106,7 @@ class Clock:
         return fn_bts % gsm.HYPERFRAME if (seq and cale) else None
 
     def _reguler(self, now):
-        """Appele sous verrou, au plus une fois par HORLOGE_PERIODE."""
+        """Called under lock, at most once per HORLOGE_PERIODE."""
         if now < self._echeance:
             return
         self._echeance = now + HORLOGE_PERIODE
@@ -138,9 +124,9 @@ class Clock:
             return
         avancees = (dsp - dsp_prec) % gsm.HYPERFRAME
         if avancees <= 0 or avancees > gsm.HYPERFRAME // 2:
-            return                                   # DSP arrete ou recale : on garde la vitesse
-        dur_dsp = (now - t_prec) / avancees          # cadence mesuree du DSP
-        # Ecart de phase, en trames, signe : > 0 = l'horloge du banc devance.
+            return                                   # DSP stopped or re-aligned: keep the speed
+        dur_dsp = (now - t_prec) / avancees          # measured DSP rate
+        # Phase error, in frames, signed: > 0 = the bench clock is ahead.
         f = (now - self.t0) / self.dur
         ecart = (int(f) - (dsp + self._avance)) % gsm.HYPERFRAME
         if ecart > gsm.HYPERFRAME // 2:
@@ -148,7 +134,7 @@ class Clock:
         cible = dur_dsp * (1.0 + HORLOGE_KP * ecart / HORLOGE_PHASE_N)
         cible = min(max(cible, gsm.FRAME_DUR * 0.5), gsm.FRAME_DUR * HORLOGE_MAX)
         dur = 0.7 * self.dur + 0.3 * cible
-        self.t0 = now - f * dur                      # rebase : fn() reste continue
+        self.t0 = now - f * dur                      # rebase: fn() stays continuous
         self.dur = dur
 
     def fn(self):
@@ -199,15 +185,15 @@ class Trx:
         self.sk_data = _udp(cfg.trx_bind, cfg.trx_base + 2)
         self.bts_data = None
         self.bts_clck = None
-        self.fn_bts_vu = None          # fn du dernier burst descendant recu de la BTS (run_data)
-        self._clck_t = 0.0             # dernier IND CLOCK : instant, fn BTS vu, avance demandee
+        self.fn_bts_vu = None          # fn of the last downlink burst received from the BTS (run_data)
+        self._clck_t = 0.0             # last IND CLOCK: time, BTS fn seen, requested lead
         self._clck_vu = None
         self._clck_avance = 0
         self._clck_lent = False
-        # [2026-10-23] COPIES DU DESCENDANT vers d autres BSP (PONT_DSP_COPIES, ports UDP separes par
-        # des virgules) : un Calypso qui ecoute la cellule sans etre le mobile du pont, l appli rssi de
-        # l instance 4 (banc-rssi, BSP udp 6762) en BTS classique. Socket a part : un port sans
-        # ecouteur (rssi pas lance) ne doit rien changer au chemin du mobile.
+        # COPIES OF THE DOWNLINK to other BSPs (PONT_DSP_COPIES, comma-separated UDP ports): a
+        # Calypso listening to the cell without being the bridge's mobile, e.g. the rssi app of
+        # instance 4 (banc-rssi, BSP udp 6762) with a classic BTS. Separate socket: a port without
+        # a listener (rssi not started) must not change anything on the mobile's path.
         self.dsp_copies = [int(p) for p in os.environ.get("PONT_DSP_COPIES", "").replace(",", " ").split()
                            if p.isdigit() and int(p) != cfg.dsp_port]
         self.sk_copies = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.dsp_copies else None
@@ -230,33 +216,30 @@ class Trx:
                 log.info("CTRL %s%s", cmd, args)
 
     def run_clock(self):
-        # [2026-10-19] IND CLOCK QUAND L'HORLOGE EST LENTE : ATTENDRE LA REPRISE DE
-        # LA BTS. osmo-bts-trx (scheduler_trx.c) avance ses trames a sa propre
-        # cadence murale entre deux IND CLOCK. A chaque IND il mesure
-        # elapsed_fn = fn_trx - fn_bts ; negatif, il met son timer en PAUSE de
-        # -elapsed_fn trames (« We were N FN faster than TRX, compensating »), et
-        # cette pause est REARMEE DEPUIS MAINTENANT par tout IND recu pendant
-        # qu'elle court. Son timer tue la BTS si deux expirations sont separees
-        # de plus de MAX_FN_SKEW = 50 trames (« PC clock skew too high »).
-        # Run du 2026-10-19 02:20 (horloge a k=14, IND toutes les 28 trames) :
-        # pause de 31 trames, IND suivant arrive pendant la pause, rearmee a 25,
-        # elapsed_us=267403 > 230750, BTS arretee. Avec la periode fixe de 51
-        # trames et k <= 4 la pause valait 38 trames et finissait 13 trames
-        # avant l'IND suivant ; a k=14 elle vaudrait 47 trames, a 3 trames de
-        # l'IND suivant : intenable.
-        # Regle. Tant que la pause de la periode fixe, periode x (1 - 1/k),
-        # tient sous CLCK_PAUSE_MAX (k <= ~1,9), rien ne change : un IND toutes
-        # les 51 trames, la pause finit bien avant le suivant. Au-dela, un IND
-        # part seulement quand (1) la pause demandee par le precedent est
-        # ecoulee ET la BTS a recommence a livrer des bursts (fn vu par run_data
-        # avance), et (2) la BTS a repris CLCK_PAUSE_MAX trames d'avance sur
-        # l'horloge. Apres une pause N l'avance vaut encore N (1 - 1/k) : la BTS
-        # ne court que quelques trames avant l'IND suivant, la pause demandee
-        # reste ~CLCK_PAUSE_MAX quel que soit k et n'est jamais rearmee. Pas de
-        # retour a la periode fixe dans ce regime : c'est elle qui laissait
-        # l'avance monter a 40-100 trames (simulation, scratch sim_clck.py).
-        # Les bursts descendants portent fn_bts + clock_advance (osmotrx
-        # fn-advance, 2 par defaut : main.c).
+        # IND CLOCK WHEN THE CLOCK IS SLOW: WAIT FOR THE BTS TO RESUME.
+        # osmo-bts-trx (scheduler_trx.c) advances its frames at its own wall
+        # rate between two IND CLOCKs. At each IND it measures
+        # elapsed_fn = fn_trx - fn_bts; if negative, it PAUSES its timer for
+        # -elapsed_fn frames ("We were N FN faster than TRX, compensating"), and
+        # that pause is RE-ARMED FROM NOW by any IND received while it runs. Its
+        # timer kills the BTS if two expirations are more than MAX_FN_SKEW = 50
+        # frames apart ("PC clock skew too high"). With the fixed period of 51
+        # frames and k <= 4 the pause is 38 frames and ends 13 frames before
+        # the next IND; at k=14 it would be 47 frames, 3 frames from the next
+        # IND: untenable.
+        # Rule. As long as the fixed-period pause, period x (1 - 1/k), stays
+        # under CLCK_PAUSE_MAX (k <= ~1.9), nothing changes: one IND every 51
+        # frames, the pause ends well before the next. Beyond that, an IND is
+        # sent only when (1) the pause requested by the previous one has
+        # elapsed AND the BTS has started delivering bursts again (fn seen by
+        # run_data advances), and (2) the BTS is CLCK_PAUSE_MAX frames ahead of
+        # the clock again. After a pause N the lead is still N (1 - 1/k): the
+        # BTS only runs a few frames before the next IND, the requested pause
+        # stays ~CLCK_PAUSE_MAX whatever k and is never re-armed. No return to
+        # the fixed period in this regime: it would let the lead climb to
+        # 40-100 frames.
+        # Downlink bursts carry fn_bts + clock_advance (osmotrx fn-advance,
+        # 2 by default: main.c).
         periode = self.cfg.clock_period
         pause_max = CLCK_PAUSE_MAX
         fn_adv = CLCK_BTS_FN_ADVANCE
@@ -282,10 +265,10 @@ class Trx:
                     avance = 0
                 else:
                     avance = ((vu - fn_adv - fn_trx) + demi) % gsm.HYPERFRAME - demi
-                    # Reprise de la BTS : des bursts arrivent a nouveau. Un ou deux
-                    # peuvent etre en vol juste apres l'IND, d'ou la pause attendue
-                    # (ou 3 bursts, si la BTS s'est recalee sans pause : « GSM
-                    # clock skew », ou IND precedent envoye avant son premier burst).
+                    # BTS resumed: bursts arrive again. One or two may be in flight
+                    # right after the IND, hence the awaited pause (or 3 bursts, if
+                    # the BTS re-aligned without a pause: "GSM clock skew", or the
+                    # previous IND was sent before its first burst).
                     if self._clck_vu is None:
                         livre = 3
                     else:
@@ -307,19 +290,19 @@ class Trx:
                     self._clck_vu = vu
                     self._clck_avance = max(avance, 0)
                     self.stats_clck(avance)
-            # Horloge asservie (k > 1) : on scrute a chaque trame, sinon la premiere
-            # mesure d'avance apres la mise en route arrive 51 trames trop tard
-            # (avance 47 a k=14, pause > 50 : BTS arretee des le depart).
-            # En regime lent, a la demi-trame : la pause d'equilibre vaut r (k - 1),
-            # r etant le retard de detection de la reprise (simulation : r ~1,5
-            # trame a la trame, soit 30 trames a k=20 ; ~1 a la demi-trame).
+            # Slaved clock (k > 1): poll every frame, otherwise the first lead
+            # measurement after start-up comes 51 frames too late (lead 47 at
+            # k=14, pause > 50: BTS stopped from the start).
+            # In the slow regime, every half frame: the equilibrium pause is
+            # r (k - 1), r being the detection delay of the resume (~1.5 frame
+            # when polling per frame, i.e. 30 frames at k=20; ~1 per half frame).
             if lent:
                 time.sleep(gsm.FRAME_DUR / 2)
             else:
                 time.sleep(gsm.FRAME_DUR if self.clock.dur > gsm.FRAME_DUR else gsm.FRAME_DUR * periode)
 
     def stats_clck(self, avance):
-        """Compte les IND CLOCK envoyes horloge lente ; trace les pauses longues."""
+        """Count the IND CLOCKs sent with a slow clock; log the long pauses."""
         if not self._clck_lent:
             return
         self._clck_n = getattr(self, "_clck_n", 0) + 1
@@ -336,29 +319,22 @@ class Trx:
                 continue
             tn = data[0] & 0x07
             fn = struct.unpack_from(">L", data, 1)[0]
-            self.fn_bts_vu = fn            # ou en est la BTS (run_clock, horloge lente)
+            self.fn_bts_vu = fn            # where the BTS is (run_clock, slow clock)
             bits = gsm.normalize_bits(data[6:154])
             if self.cfg.dsp_port:
-                # [2026-09-17] Le meme burst, tel que le BSP du DSP l'attend
-                # (calypso_bsp.c bsp_trxd_readable) : 8 octets d'en-tete
-                # [tn, fn BE32, attenuation, 0, 0] puis 148 bits 0/1. Le BSP les
-                # convertit lui-meme en I/Q (table cos) et les depose en DARAM.
+                # The same burst, as the DSP's BSP expects it
+                # (calypso_bsp.c bsp_trxd_readable): 8 header bytes
+                # [tn, fn BE32, attenuation, 0, 0] then 148 bits 0/1. The BSP
+                # converts them itself to I/Q (cos table) and puts them in DARAM.
                 #
-                # [2026-09-22] LE DESCENDANT DU CANAL DEDIE EST DECHIFFRE ICI.
-                # Asymetrie constatee : send_ul() CHIFFRE le montant (le pont
-                # tient la place de la voie d'emission du DSP), mais le
-                # descendant partait brut vers le DSP. Or il n'y a aucun A5
-                # dans le modele Calypso -- `d_a5mode` n'existe que dans
-                # l1-grgsm/, rien dans l1-dsp/ : personne ne dechiffre.
-                # Mesure du 2026-09-22 (ENCRYPTION="a5 1") : la transaction
-                # allait plus loin que jamais -- SABM/UA, IDENTITY, puis
-                # AUTHENTICATION REQUEST/RESPONSE, tout en clair -- et la
-                # tempete de « Dropping frame with 96 bit errors » commencait
-                # a la ligne EXACTE du `CIPHERING MODE COMPLETE`, pour ne plus
-                # s'arreter. En « a5 0 » la meme transaction va au bout.
-                # A5 est symetrique : appliquer le flux descendant dechiffre.
-                # SEULEMENT sur l'intervalle dedie : la BCCH et la CCCH ne sont
-                # jamais chiffrees, les toucher detruirait le campement.
+                # THE DOWNLINK OF THE DEDICATED CHANNEL IS DECIPHERED HERE.
+                # send_ul() CIPHERS the uplink (the bridge stands in for the
+                # DSP's transmit path), and there is no A5 in the Calypso model
+                # -- `d_a5mode` only exists in l1-grgsm/, nothing in l1-dsp/ --
+                # so nobody else deciphers the downlink. A5 is symmetric:
+                # applying the stream to the downlink deciphers it.
+                # ONLY on the dedicated timeslot: the BCCH and the CCCH are
+                # never ciphered, touching them would destroy camping.
                 bits_dsp = bits
                 if self.dechiffre_dl and self.cipher.dl_active and self._burst_dedie(tn, fn):
                     bits_dsp = self.cipher.apply(bits, fn, False)
@@ -372,27 +348,25 @@ class Trx:
                         pass
             on_burst(tn, fn, bits)
 
-    # Dechiffrer le descendant avant de le passer au BSP : oui pour le shunt
-    # gr-gsm, non en montage DSP (TrxDsp) ou la ROM le fait elle-meme.
+    # Decipher the downlink before passing it to the BSP: yes for the gr-gsm
+    # shunt, no in the DSP setup (TrxDsp) where the ROM does it itself.
     dechiffre_dl = True
 
     def _burst_dedie(self, tn, fn):
-        """Vrai si CE burst appartient au canal dedie du mobile.
+        """True if THIS burst belongs to the mobile's dedicated channel.
 
-        [2026-09-22] Le test portait sur le seul intervalle (`tn == tn_dedie`).
-        En CCCH+SDCCH/4 le canal dedie vit sur TS0, celui qui porte AUSSI la
-        FCCH, la SCH, la BCCH et la CCCH -- jamais chiffrees, par definition :
-        le mobile doit pouvoir les lire avant d'avoir une cle. Des que A5
-        s'activait, tout TS0 partait donc XORe vers le DSP et le campement se
-        defaisait sous les pieds de la transaction en cours. En SDCCH/8 sur un
-        intervalle a lui le defaut ne se voyait pas, d'ou son age.
-        On refait ici le meme tri que Downlink._signalling : le bloc doit etre
-        celui du sous-canal `ss` du mobile, SDCCH ou SACCH.
-        Lecture mise en cache par Dedicated (DCCH_TTL), donc appelable a chaque
-        burst."""
+        Testing the timeslot alone (`tn == tn_dedie`) is not enough: in
+        CCCH+SDCCH/4 the dedicated channel lives on TS0, which ALSO carries the
+        FCCH, the SCH, the BCCH and the CCCH -- never ciphered, by definition:
+        the mobile must be able to read them before it has a key. XORing all
+        of TS0 towards the DSP would undo camping under the ongoing
+        transaction. The same sorting as Downlink._signalling is done here: the
+        block must be the one of the mobile's subchannel `ss`, SDCCH or SACCH.
+        The read is cached by Dedicated (DCCH_TTL), so this can be called on
+        every burst."""
         if self.tch is not None and self.tch.is_open():
-            # Sur un TCH assigne tout l'intervalle est a la transaction (trafic,
-            # FACCH et SACCH) : pas de sous-canal a trier.
+            # On an assigned TCH the whole timeslot belongs to the transaction
+            # (traffic, FACCH and SACCH): no subchannel to sort.
             if tn == self.tch.active_tn():
                 return True
         if self.dedicated is None:
@@ -420,9 +394,9 @@ class Trx:
         hdr = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([self.cfg.rssi & 0xFF]) + struct.pack(">h", 0)
         self.sk_data.sendto(hdr + bytes(255 if b else 0 for b in burst), self.bts_data)
         self.stats.ul_sent += 1
-        # [2026-10-23] le MONTANT aussi vers les copies (PONT_DSP_COPIES), marque 0xA5 a l octet 6 : le BSP
-        # (calypso_bsp.c, CALYPSO_AIR_NIVEAUX) le range a part et ne le joue qu a une fenetre accordee sur la
-        # frequence montante (rssi, vue UL). PONT_DSP_COPIES_UL=0 le coupe.
+        # The UPLINK also goes to the copies (PONT_DSP_COPIES), marked 0xA5 at byte 6: the BSP
+        # (calypso_bsp.c, CALYPSO_AIR_NIVEAUX) files it separately and only plays it in a window tuned
+        # to the uplink frequency (rssi, UL view). PONT_DSP_COPIES_UL=0 disables it.
         if self.dsp_copies and self.copies_ul:
             paquet = bytes([tn & 0x07]) + struct.pack(">L", fn) + bytes([0, 0xA5, 0]) + bytes(1 if b else 0 for b in burst)
             for port in self.dsp_copies:
@@ -465,20 +439,13 @@ class Transmitter(threading.Thread):
                 _, _, tn, fn_air, burst, cipher, essais = heapq.heappop(self.heap)
             cur = self.clock.fn()
             off = (fn_air - (cur + self.cfg.ul_fn_advance) + gsm.HYPERFRAME // 2) % gsm.HYPERFRAME - gsm.HYPERFRAME // 2
-            # [2026-09-22] TROP TOT N'EST PAS TROP TARD.
-            # `post` est calcule a la mise en file, a partir de la cadence de
-            # l'horloge A CE MOMENT-LA. Depuis que celle-ci suit le DSP (voir
-            # Clock plus haut), elle n'avance plus au rythme du mur : le DSP
-            # marque le pas, l'horloge avec lui, et le reveil tombe avant que la
-            # trame visee ne soit arrivee. Le burst etait alors compte « en
-            # retard » et JETE, alors qu'il etait en avance.
-            # Mesure du 2026-09-22 : « UL bursts=116 tard=18 », 13 % des bursts
-            # montants perdus. Un bloc en demande quatre : ~40 % des blocs
-            # montants n'arrivaient pas entiers a la BTS. C'est exactement ce
-            # qu'on voyait en bout de chaine -- TMSI REALLOCATION COMPLETE et
-            # CP-ACK jamais recus, SABM retransmis par T200.
-            # On re-attend donc, avec un `post` recalcule sur l'horloge
-            # courante ; seul un burst VRAIMENT en retard est perdu.
+            # TOO EARLY IS NOT TOO LATE.
+            # `post` is computed at queueing time, from the clock rate AT THAT
+            # MOMENT. Since the clock follows the DSP (see Clock above), it no
+            # longer advances at wall pace: the DSP stalls, the clock with it,
+            # and the wake-up comes before the target frame has arrived. Such a
+            # burst is early, not late: it is re-queued with a `post`
+            # recomputed on the current clock; only a REALLY late burst is lost.
             if off > self.cfg.window_tol:
                 if essais < self.cfg.window_essais:
                     self.schedule(tn, fn_air, burst, cipher, essais + 1)
@@ -486,19 +453,16 @@ class Transmitter(threading.Thread):
                     self.stats.ul_late += 1
                 continue
             if off < -self.cfg.window_tol:
-                # [2026-09-23] EN RETARD N'EST PAS PERDU. osmo-bts-trx range un
-                # burst montant par SON fn, compare au dernier fn traite du meme
-                # canal logique (scheduler.c, trx_sched_route_burst_ind) ; l'heure
-                # d'arrivee n'y entre pas -- un vrai transceiver livre toujours le
-                # montant apres coup. Le jeter ici ne protegeait donc rien, et
-                # coutait cher : 141 bursts emis pour 314 jetes (69 %) sur le run
-                # de 11:04, chaque trame LAPDm retransmise 2 a 5 fois par T200,
-                # le SMS MT a 12 s au lieu de 2. Le retard vient du reveil du
-                # thread (GIL partage avec l'enregistrement I/Q) et des variations
-                # de l'horloge asservie au DSP, pas du BTS.
-                # On l'envoie tant qu'il reste dans la multitrame (la BTS refuse
-                # au-dela de mf_period, « Too many contiguous TDMA frames »).
-                # PONT_UL_RETARD_MAX=0 retablit l'ancien comportement (jeter).
+                # LATE IS NOT LOST. osmo-bts-trx files an uplink burst by ITS
+                # fn, compared with the last fn processed on the same logical
+                # channel (scheduler.c, trx_sched_route_burst_ind); the arrival
+                # time plays no part -- a real transceiver always delivers the
+                # uplink after the fact. The lateness comes from the thread
+                # wake-up (GIL shared with the I/Q recording) and from the
+                # variations of the DSP-slaved clock, not from the BTS.
+                # The burst is sent as long as it stays within the multiframe
+                # (the BTS refuses beyond mf_period, "Too many contiguous TDMA
+                # frames"). PONT_UL_RETARD_MAX=0 drops late bursts.
                 self.stats.ul_late += 1
                 if -off > self.cfg.ul_retard_max:
                     continue

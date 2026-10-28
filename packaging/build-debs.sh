@@ -1,36 +1,36 @@
 #!/bin/bash
 # =============================================================================
-#  packaging/build-debs.sh - un paquet .deb par composant du banc
+#  packaging/build-debs.sh - one .deb package per bench component
 # =============================================================================
 #
-#      osmo-operator     ce depot, tel quel, en /opt/GSM/osmo-operator
-#                        (+ menu, icones, /usr/bin/osmo-start-direct)
-#      pont              pont/ - le transceiver Python (pont/pont.py)
-#      qemu-calypso      qosmo : qemu-system-arm (machine calypso),
-#                        run.sh + run_modules + environnement + cfgs +
-#                        tmux_modules + keymaps, en /opt/GSM/qosmo
+#      osmo-operator     this repo, as is, in /opt/GSM/osmo-operator
+#                        (+ menu, icons, /usr/bin/osmo-start-direct)
+#      pont              pont/ - the Python transceiver (pont/pont.py)
+#      qemu-calypso      qosmo: qemu-system-arm (calypso machine),
+#                        run.sh + run_modules + environment + cfgs +
+#                        tmux_modules + keymaps, in /opt/GSM/qosmo
 #      calypso-firmware  /opt/GSM/firmware/board/compal_e88/layer1.highram.*
 #
-#  Les chemins d installation sont CEUX du banc (/opt/GSM/...) : tout le depot
-#  les nomme en dur (bench.env, start-native.sh, les unites systemd), et c est
-#  ce qui permet a une machine installee par paquets de tourner exactement
-#  comme l ISO. Le prix : un paquet refuse de s installer par-dessus un clone
-#  git au meme endroit (preinst) - on ne melange pas un arbre gere par git et
-#  un arbre gere par dpkg.
+#  The install paths are THOSE of the bench (/opt/GSM/...): the whole repo
+#  hardcodes them (bench.env, start-native.sh, the systemd units), and this
+#  is what lets a machine installed from packages run exactly like the ISO.
+#  The price: a package refuses to install over a git clone at the same
+#  place (preinst) - a git-managed tree and a dpkg-managed tree are not
+#  mixed.
 #
-#      ./build-debs.sh                   les quatre, dans packaging/dist/
+#      ./build-debs.sh                   all four, into packaging/dist/
 #      ./build-debs.sh --only pont,calypso-firmware
 #      ./build-debs.sh --out /tmp/debs
-#      ./build-debs.sh --no-strip        garde les symboles de qemu-system-arm
+#      ./build-debs.sh --no-strip        keeps the qemu-system-arm symbols
 #
-#  Outils : dpkg-deb (dpkg), git, strip (binutils, sinon --no-strip), ldd.
-#  Pas de debhelper : chaque paquet est un arbre + DEBIAN/control construit a
-#  la main, avec --root-owner-group (pas besoin de fakeroot).
+#  Tools: dpkg-deb (dpkg), git, strip (binutils, otherwise --no-strip), ldd.
+#  No debhelper: each package is a tree + DEBIAN/control built by hand, with
+#  --root-owner-group (no fakeroot needed).
 #
-#  Sources, surchargeables par l environnement :
-#      OSMO_OPERATOR_SRC  (defaut : le depot qui contient ce script)
-#      QOSMO_SRC          (defaut : /opt/GSM/qosmo)
-#      FIRMWARE_SRC       (defaut : /opt/GSM/firmware)
+#  Sources, overridable from the environment:
+#      OSMO_OPERATOR_SRC  (default: the repo containing this script)
+#      QOSMO_SRC          (default: /opt/GSM/qosmo)
+#      FIRMWARE_SRC       (default: /opt/GSM/firmware)
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -65,8 +65,8 @@ ARCH_HOST="$(dpkg --print-architecture)"
 
 wanted() { [ -z "$ONLY" ] || case ",$ONLY," in *",$1,"*) return 0;; *) return 1;; esac; }
 
-# Version = 0.1+git<date du dernier commit>.<hash court> de l arbre source.
-# Deux constructions du meme commit donnent le meme numero : c est voulu.
+# Version = 0.1+git<last commit date>.<short hash> of the source tree.
+# Two builds of the same commit give the same number: this is intended.
 tree_version() {
     local d="$1"
     if git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -78,9 +78,9 @@ tree_version() {
     fi
 }
 
-# preinst commun : refuse un clone git au meme endroit (sauf mise a jour du
-# paquet lui-meme, ou dpkg passe "upgrade").
-write_preinst_guard() {   # $1=DEBIAN dir  $2=chemin installe
+# Shared preinst: refuses a git clone at the same place (except when upgrading
+# the package itself, where dpkg passes "upgrade").
+write_preinst_guard() {   # $1=DEBIAN dir  $2=installed path
     cat > "$1/preinst" <<PRE
 #!/bin/sh
 set -e
@@ -94,7 +94,7 @@ PRE
     chmod 755 "$1/preinst"
 }
 
-write_control() {   # $1=DEBIAN dir, puis champs sur stdin
+write_control() {   # $1=DEBIAN dir, then fields on stdin
     cat > "$1/control"
 }
 
@@ -107,14 +107,14 @@ build_pkg() {   # $1=staging  $2=nom  $3=version  $4=arch
     echo "  $OUT/${2}_${3}_${4}.deb  ($(du -h "$OUT/${2}_${3}_${4}.deb" | cut -f1))"
 }
 
-# Dependances runtime d un binaire, par ldd -> dpkg -S. Les bibliotheques que
-# dpkg ne connait pas (/usr/local/lib) sont ignorees : elles ne viennent d aucun
-# paquet, donc aucun paquet ne peut les garantir.
+# Runtime dependencies of a binary, via ldd -> dpkg -S. Libraries unknown to
+# dpkg (/usr/local/lib) are ignored: they come from no package, so no package
+# can guarantee them.
 shlib_depends() {
-    # ldd rend /lib/x86_64-linux-gnu/... ; sur un systeme a /usr fusionne dpkg
-    # ne connait souvent que /usr/lib/... : on tente les deux. Tout est en
-    # "|| true" : sous pipefail, une seule bibliotheque inconnue faisait
-    # echouer la substitution entiere, et set -e arretait le script.
+    # ldd returns /lib/x86_64-linux-gnu/...; on a merged-/usr system dpkg often
+    # only knows /usr/lib/...: both are tried. Everything is "|| true": under
+    # pipefail a single unknown library would fail the whole substitution and
+    # set -e would stop the script.
     local so
     { ldd "$1" 2>/dev/null | awk '/=> \//{print $3}' || true; } | while read -r so; do
         { dpkg -S "$so" 2>/dev/null || dpkg -S "/usr$so" 2>/dev/null || true; } | cut -d: -f1 | head -1
@@ -176,7 +176,7 @@ if wanted pont; then
     P="$WORK/pont"; D="$P/opt/GSM/osmo-operator/pont"
     mkdir -p "$D" "$P/DEBIAN"
     install -m644 "$OSMO_OPERATOR_SRC"/pont/*.py "$D/"
-    # [2026-09-23] Le pont DSP (pont_dsp.py -> pont.dsp.main).
+    # The DSP bridge (pont_dsp.py -> pont.dsp.main).
     mkdir -p "$D/dsp"
     install -m644 "$OSMO_OPERATOR_SRC"/pont/dsp/*.py "$D/dsp/"
     install -m644 "$OSMO_OPERATOR_SRC/pont/README.md" "$D/" 2>/dev/null || true
@@ -216,16 +216,16 @@ if wanted qemu-calypso; then
     done
     install -m755 "$QOSMO_SRC/run.sh" "$D/run.sh"
     for f in LICENSE COPYING; do [ -f "$QOSMO_SRC/$f" ] && install -m644 "$QOSMO_SRC/$f" "$D/$f"; done
-    # Le binaire reste en build/ : bench.env le nomme la (QEMU_BIN), et QEMU
-    # calcule son datadir PAR RAPPORT au binaire (build/../share/qemu) - d ou
-    # les keymaps en share/qemu/keymaps, sinon "could not read keymap file".
+    # The binary stays in build/: bench.env names it there (QEMU_BIN), and QEMU
+    # computes its datadir RELATIVE to the binary (build/../share/qemu) - hence
+    # the keymaps in share/qemu/keymaps, otherwise "could not read keymap file".
     install -m755 "$BIN" "$D/build/qemu-system-arm"
     if [ "$STRIP" = 1 ] && command -v strip >/dev/null 2>&1; then
         strip --strip-unneeded "$D/build/qemu-system-arm" || true
     fi
-    # Lanceur C qosmo (tools/qosmo-launch) : c'est lui que 40-qemu.sh
-    # appelle a la place de qemu-system-arm. Compile dans son dossier, livre
-    # dans /usr/local/bin/qosmo ; la source part avec l'arbre.
+    # qosmo C launcher (tools/qosmo-launch): the one 40-qemu.sh calls instead
+    # of qemu-system-arm. Compiled in its folder, shipped as
+    # /usr/local/bin/qosmo; the source goes with the tree.
     if [ -f "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" ]; then
         mkdir -p "$D/tools/qosmo-launch" "$P/usr/local/bin"
         install -m644 "$QOSMO_SRC/tools/qosmo-launch/qosmo-launch.c" "$QOSMO_SRC/tools/qosmo-launch/Makefile" "$D/tools/qosmo-launch/"
@@ -233,9 +233,9 @@ if wanted qemu-calypso; then
             || { echo "compilation du lanceur qosmo echouee ($QOSMO_SRC/tools/qosmo-launch)" >&2; exit 1; }
         install -m755 "$QOSMO_SRC/tools/qosmo-launch/qosmo" "$P/usr/local/bin/qosmo"
     fi
-    # Console gdb en telnet (run_modules/44-gdb-telnet.sh) : le serveur, le
-    # generateur du panneau et le panneau genere. gdb-multiarch et telnet
-    # passent en Depends : sans eux le module se declare en echec (non bloquant).
+    # gdb console over telnet (run_modules/44-gdb-telnet.sh): the server, the
+    # panel generator and the generated panel. gdb-multiarch and telnet go in
+    # Depends: without them the module reports failure (non-blocking).
     if [ -f "$QOSMO_SRC/tools/gdb-telnet.py" ]; then
         install -m755 "$QOSMO_SRC/tools/gdb-telnet.py" "$D/tools/gdb-telnet.py"
         install -m755 "$QOSMO_SRC/tools/gdb_cmd.sh" "$D/tools/gdb_cmd.sh"

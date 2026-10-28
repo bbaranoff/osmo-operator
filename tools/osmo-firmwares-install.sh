@@ -224,7 +224,7 @@ import os, sys
 boot, fw, img_path = sys.argv[1:4]
 f = open(fw, "rb").read()
 if os.path.exists(img_path) and os.path.getsize(img_path) == 4 << 20:
-    img = bytearray(open(img_path, "rb").read())              # bootloader + FFS du banc gardes
+    img = bytearray(open(img_path, "rb").read())              # bench bootloader + FFS kept
     img[0x10000:0x3C0000] = b"\xff" * (0x3C0000 - 0x10000)
 else:
     img = bytearray(b"\xff" * (4 << 20))
@@ -363,5 +363,5 @@ osmo_simcom_install() {
     git clone -q --depth 1 https://github.com/bbaranoff/simcom "$d" >>"$(_fw_log git)" 2>&1 \
         && _fw_ok "simcom clone dans $d ($(du -sh "$d" 2>/dev/null | cut -f1))" \
         || _fw_err "clone de bbaranoff/simcom en echec"
-    _fw_apt p7zip-full unrar 2>/dev/null || true   # les SDK sont en .rar / .7z
+    _fw_apt p7zip-full unrar 2>/dev/null || true   # the SDKs ship as .rar / .7z
 }

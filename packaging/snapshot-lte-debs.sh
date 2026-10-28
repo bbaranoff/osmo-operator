@@ -1,30 +1,30 @@
 #!/bin/bash
 # =============================================================================
-# snapshot-lte-debs.sh - LA 4G ET LE TELEPHONE DU BANC, EN .deb, DEPUIS LE
-# NATIF - le raccourci.
+# snapshot-lte-debs.sh - THE BENCH 4G AND PHONE, AS .deb, FROM THE NATIVE
+# INSTALL - the shortcut.
 #
-# [2026-09-08] Deux chemins menent aux memes paquets :
-#   1. LE RACCOURCI (ce script) : la machine de reference a DEJA srsRAN (ZeroMQ)
-#      compile dans /opt/LTE/srsRAN_4G, libzmq/czmq dans /opt/LTE, Open5GS dans
-#      /opt/LTE/open5gs (prefixe install/), et le noyau postmarketOS PPP dans
-#      le dossier de travail pmbootstrap du compte de session. On photographie
-#      tout cela en paquets, tels quels (osmo-deb snapshot : rien n est
-#      recompile, rien n est reinstalle) :
+# Two paths lead to the same packages:
+#   1. THE SHORTCUT (this script): the reference machine ALREADY has srsRAN
+#      (ZeroMQ) compiled in /opt/LTE/srsRAN_4G, libzmq/czmq in /opt/LTE,
+#      Open5GS in /opt/LTE/open5gs (install/ prefix), and the postmarketOS PPP
+#      kernel in the session account's pmbootstrap work folder. All of it is
+#      snapshotted into packages, as is (osmo-deb snapshot: nothing is
+#      recompiled, nothing is reinstalled):
 #          osmo-build-libzmq_4.3.5+git~noble_amd64.deb
-#          osmo-build-srsgui_0.1+git~noble_amd64.deb        (avant srsran : il s y lie)
-#          osmo-build-srsran_25.10+zmq+x86-64-v2~noble_amd64.deb  (ISA comprise)
+#          osmo-build-srsgui_0.1+git~noble_amd64.deb        (before srsran: it links to it)
+#          osmo-build-srsran_25.10+zmq+x86-64-v2~noble_amd64.deb  (ISA included)
 #          osmo-build-open5gs_2.8.0+git~noble_amd64.deb
 #          osmo-build-pmos-kernel_7.2.3.0+ppp~noble_amd64.deb   (packaging/build-pmos-kernel-deb.sh)
-#      dans /var/cache/osmo-debs : le build ISO (50-injection-image.sh) les
-#      pose dans le rootfs, et le Dockerfile (osmo-deb install) les prend au
-#      lieu de compiler.
-#   2. LES SOURCES : le Dockerfile et tools/osmo-lte-install.sh --build
-#      compilent srsRAN et Open5GS quand le cache n a pas ces paquets. Le
-#      noyau pmOS, lui, ne se construit que par osmo-pmos-build (pmbootstrap,
-#      sous le compte de session) : il n a PAS de chemin docker.
+#      into /var/cache/osmo-debs: the ISO build (50-injection-image.sh) puts
+#      them in the rootfs, and the Dockerfile (osmo-deb install) takes them
+#      instead of compiling.
+#   2. THE SOURCES: the Dockerfile and tools/osmo-lte-install.sh --build
+#      compile srsRAN and Open5GS when the cache lacks these packages. The
+#      pmOS kernel, however, is only built by osmo-pmos-build (pmbootstrap,
+#      under the session account): it has NO docker path.
 #
-#   sudo packaging/snapshot-lte-debs.sh            tout ce qui est la
-#   sudo packaging/snapshot-lte-debs.sh --no-pmos  sans le noyau du telephone
+#   sudo packaging/snapshot-lte-debs.sh            everything that is there
+#   sudo packaging/snapshot-lte-debs.sh --no-pmos  without the phone kernel
 # =============================================================================
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -38,7 +38,7 @@ say() { echo -e "${CYAN}→${NC} $*"; }; ok() { echo -e "${GREEN}✓${NC} $*"; }
 export OSMO_DEB_CACHE="$CACHE"
 mkdir -p "$CACHE"
 
-# ── libzmq + czmq (compiles a la main dans /opt/LTE, installes en /usr/local) ─
+# ── libzmq + czmq (compiled by hand in /opt/LTE, installed in /usr/local) ────
 if [ -e /usr/local/lib/libzmq.so.5 ]; then
     say "libzmq / czmq"
     _z=( /usr/local/lib/libzmq.so* /usr/local/lib/libzmq.la /usr/local/lib/pkgconfig/libzmq.pc /usr/local/include/zmq.h /usr/local/include/zmq_utils.h )
@@ -51,11 +51,11 @@ else
     warn "pas de /usr/local/lib/libzmq.so.5 : libzmq d Ubuntu (libzmq5) suffira"
 fi
 
-# ── srsGUI : les traces temps reel, AVANT srsRAN (qui s y lie) ───────────────
-# [2026-09-10] srsRAN_4G est desormais compile avec ENABLE_GUI=ON : srsenb et
-# srsue se LIENT a libsrsgui. Un .deb de srsRAN sans celui-la donnerait des
-# binaires qui ne demarrent pas (« libsrsgui.so: cannot open shared object
-# file »). Il passe donc avant, dans ce fichier comme dans le cache.
+# ── srsGUI: the real-time plots, BEFORE srsRAN (which links to it) ───────────
+# srsRAN_4G is compiled with ENABLE_GUI=ON: srsenb and srsue LINK to
+# libsrsgui. A srsRAN .deb without it would give binaries that do not start
+# (« libsrsgui.so: cannot open shared object file »). So it comes first, in
+# this file as in the cache.
 if [ -e /usr/local/lib/libsrsgui.so ] || [ -e /usr/local/lib/libsrsgui.a ]; then
     say "srsGUI (traces srsenb / srsue)"
     _g=( /usr/local/lib/libsrsgui.* )
@@ -67,21 +67,20 @@ else
     warn "pas de /usr/local/lib/libsrsgui : srsGUI non empaquete (srsRAN sera sans traces)"
 fi
 
-# ── srsRAN_4G : l arbre (sources + build) et ce que make install a pose ──────
+# ── srsRAN_4G: the tree (sources + build) and what make install put in place ─
 if [ -f "$LTE/srsRAN_4G/build/install_manifest.txt" ]; then
     say "srsRAN_4G (ZeroMQ)"
     mapfile -t _s < <(grep -v '^$' "$LTE/srsRAN_4G/build/install_manifest.txt" | while read -r f; do [ -e "$f" ] && echo "$f"; done)
     _sv="$(git -C "$LTE/srsRAN_4G" describe --tags 2>/dev/null | sed 's/^release_//; s/-.*//; s/_/./g')"
-    # ── L ISA VA DANS LA VERSION, ET ELLE EST CONSTATEE, PAS SUPPOSEE ───────
-    # [2026-09-14] Ce script PHOTOGRAPHIE des binaires deja compiles : rien ne
-    # dit ici avec quel -march ils l ont ete. Tant que le .deb s appelait
-    # « 25.10+zmq », un srsenb natif de la machine de reference satisfaisait le
-    # « osmo-deb install srsran » du Dockerfile, partait dans l image et dans
-    # l ISO, et faisait « Illegal instruction » chez l operateur (voir
-    # SRS_ARCH dans tools/osmo-lte-install.sh). On regarde donc ce que le
-    # binaire CONTIENT - une instruction %ymm/%zmm et il est natif - et on le
-    # dit dans son nom. Sans objdump on ne tranche pas : +inconnu, qui ne sera
-    # jamais confondu avec le portable non plus.
+    # ── THE ISA GOES INTO THE VERSION, AND IT IS OBSERVED, NOT ASSUMED ──────
+    # This script SNAPSHOTS already compiled binaries: nothing here says which
+    # -march they were built with. A srsenb built natively on the reference
+    # machine would satisfy the Dockerfile's « osmo-deb install srsran », go
+    # into the image and the ISO, and raise « Illegal instruction » on the
+    # operator's machine (see SRS_ARCH in tools/osmo-lte-install.sh). So what
+    # the binary CONTAINS is inspected - one %ymm/%zmm instruction and it is
+    # native - and stated in its name. Without objdump nothing is decided:
+    # +inconnu, which can never be confused with the portable one either.
     _sisa=inconnu
     if command -v objdump >/dev/null 2>&1 && [ -x /usr/local/bin/srsenb ]; then
         if objdump -d /usr/local/bin/srsenb 2>/dev/null | grep -qE '%[yz]mm[0-9]'; then _sisa=native
@@ -97,7 +96,7 @@ fi
 if [ -x "$LTE/open5gs/install/bin/open5gs-mmed" ]; then
     say "Open5GS ($LTE/open5gs)"
     _ov="$(git -C "$LTE/open5gs" describe --tags 2>/dev/null | sed 's/^v//; s/-.*//')"
-    # Les journaux et le .ctxt ne voyagent pas.
+    # The logs and the .ctxt do not travel.
     find "$LTE/open5gs/install/var/log" -type f -delete 2>/dev/null || true
     rm -f "$LTE/open5gs/.ctxt"
     bash "$OSMODEB" snapshot open5gs "${_ov:-2.8.0}+git" "$LTE/open5gs" && ok "open5gs"
@@ -105,7 +104,7 @@ else
     warn "pas de $LTE/open5gs/install/bin/open5gs-mmed : Open5GS non empaquete (il vit encore dans /root ?)"
 fi
 
-# ── Le noyau postmarketOS PPP ────────────────────────────────────────────────
+# ── The postmarketOS PPP kernel ──────────────────────────────────────────────
 if [ "$PMOS" = 1 ]; then
     say "noyau postmarketOS (PPP)"
     bash "$REPO/packaging/build-pmos-kernel-deb.sh" "${OSMO_PMB_WORK:-}" || warn "noyau pmOS non empaquete (voir ci-dessus)"

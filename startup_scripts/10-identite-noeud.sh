@@ -1,23 +1,24 @@
-# 10-identite-noeud.sh - partie de start.sh (lignes 1912-2122 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 10-identite-noeud.sh - part of start.sh (list/genconf/stop/status actions,
+# node identity prompt, point-code display)
+# Sourced by start.sh in the main shell: same order, same variables.
 case "$ACTION" in
     list)
         if [ "$DSP_BANC" = 1 ]; then
             printf '  %sbanc DSP%s   %s retire du plan : %s ; %s les reprend (5 etapes)\n' \
                 "$C_DIM" "$C_Z" "$RUN_SH" "$DSP_MODULES_RETIRES" "$BANC_DSP"
         fi
-        # [2026-10-18] Sans --restart : run.sh garde la DERNIERE action lue, et
-        # RUN_ARGS finit par --restart. `--list` arretait donc la pile en cours
-        # et la relancait au lieu d'afficher le plan.
+        # Without --restart: run.sh keeps the LAST action read, and RUN_ARGS
+        # ends with --restart, which would stop and relaunch the stack instead
+        # of printing the plan.
         _list_args=()
         for _a in "${RUN_ARGS[@]}"; do [ "$_a" = "--restart" ] || _list_args+=("$_a"); done
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --list "${_list_args[@]}"
         ;;
     genconf)
-        # ── LA FICHE DU NOEUD, SANS LANCER ──────────────────────────────
-        # [2026-09-04] La meme que celle ecrite par le run (juste avant run.sh) :
-        # identite resolue comme au lancement (--node, environnement,
-        # /etc/osmo-role, table WAN), table WAN relue si elle existe.
+        # ── THE NODE SHEET, WITHOUT LAUNCHING ───────────────────────────
+        # The same one the run writes (just before run.sh): identity resolved
+        # as at launch (--node, environment, /etc/osmo-role, WAN table), WAN
+        # table re-read if it exists.
         . "$HERE/network/wan-nodes.sh"; . "$HERE/network/node-conf.sh"
         _gc_node="$NODE_ID"
         if [ -z "$_gc_node" ]; then
@@ -39,27 +40,24 @@ case "$ACTION" in
         rm -f /run/osmo-banc/ms1-vty /run/osmo-banc/mobile-log 2>/dev/null
         command -v systemctl >/dev/null 2>&1 && systemctl unset-environment OSMO_BB1_VTY_PORT OSMO_MOBILE_LOG 2>/dev/null || true
         say_begin "Arret de la pile via run.sh"
-        banc_dsp_arreter          # QEMU, osmocon, mobile, pont : a lui
+        banc_dsp_arreter          # QEMU, osmocon, mobile, bridge: its job
         banc_dsp_arreter_instances
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
-        # les serveurs SAP de softSIM (--sap) et leur socket
+        # the softSIM SAP servers (--sap) and their socket
         for _p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do kill -TERM "$_p" 2>/dev/null || true; done
         rm -f "${SAP_SOCK:-/tmp/osmocom_sap}" 2>/dev/null; unset _p
         say_end " OK " "$C_OK" "Arret de la pile via run.sh"
         purge_sessions_tmux
-        # ── LE TABLEAU DE BORD S ARRETE AVEC LE BANC ──────────────────────
-        # [2026-09-04] Il survivait a tous les arrets : ni run.sh --stop ni la
-        # purge tmux ne le connaissent, son unite est WantedBy=multi-user.target
-        # et killall_python ne voit pas un serveur node. On se retrouvait avec
-        # :8080 qui repond DEVANT UNE PILE MORTE - l etat le plus trompeur qui
-        # soit, puisqu il se lit comme "le banc tourne".
-        # PartOf=osmo-banc.service couvre `systemctl stop|restart osmo-banc` ;
-        # ceci couvre le geste direct, par lequel passent le bouton « Arreter »
-        # du bureau, launch.sh --stop et start-multi.sh --stop.
-        # --no-block : on n attend pas systemd, et surtout on ne peut pas se
-        # bloquer quand cet arret est lui-meme l ExecStop de osmo-banc.
-        # [2026-10-22] PLUS PAR DEFAUT : le tableau de bord (:8080) reste en ligne banc arrete (demande
-        # explicite) ; CALYPSO_DASHBOARD_SUIT_BANC=1 retablit l'arret avec le banc.
+        # ── THE DASHBOARD, OPTIONALLY STOPPED WITH THE BENCH ─────────────
+        # Neither run.sh --stop nor the tmux purge know the dashboard (a node
+        # server, WantedBy=multi-user.target), and killall_python does not see
+        # it. PartOf=osmo-banc.service covers `systemctl stop|restart
+        # osmo-banc`; this covers the direct call, used by the desktop
+        # "Arreter" button, launch.sh --stop and start-multi.sh --stop.
+        # --no-block: do not wait for systemd, and never block when this stop
+        # is itself the ExecStop of osmo-banc.
+        # By default the dashboard (:8080) stays online with the bench
+        # stopped; CALYPSO_DASHBOARD_SUIT_BANC=1 stops it with the bench.
         if [ "${CALYPSO_DASHBOARD_SUIT_BANC:-0}" != 1 ]; then
             :
         elif [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
@@ -67,13 +65,13 @@ case "$ACTION" in
         else
             pkill -f "osmo-egprs-web/server.js" 2>/dev/null || true
         fi
-        # Filet identique a celui de run.sh, pose ici aussi : on peut arreter par
-        # ce script sans passer par l'autre, et un fake_trx.py orphelin suffit a
-        # faire echouer le run suivant sur « port UDP 5720 deja pris ».
-        # run.sh le fait deja de son cote ; le repeter ne coute rien et couvre le
-        # cas ou RUN_SH est introuvable ou sort en erreur.
-        # PORTEE : les python3 DU BANC seulement (voir killall_python).
-        # CALYPSO_STOP_KILL_PYTHON=0 le desactive.
+        # Same safety net as run.sh, applied here too: this script can stop
+        # the stack without going through the other, and an orphan
+        # fake_trx.py is enough to make the next run fail on "UDP port 5720
+        # already in use". Repeating it costs nothing and covers the case
+        # where RUN_SH is missing or exits with an error.
+        # SCOPE: the BENCH's python3 only (see killall_python).
+        # CALYPSO_STOP_KILL_PYTHON=0 disables it.
         if [ "${CALYPSO_STOP_KILL_PYTHON:-1}" != 0 ]; then
             if killall_python -9; then
                 say_end " OK " "$C_OK" "python3 du banc termines"
@@ -90,9 +88,9 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --status --profile "$CALYPSO_PROFILE"
         ;;
     checkpaths)
-        # Le banc DSP n'a pas de --check-paths : ses cinq etapes verifient
-        # chacune son binaire et sortent en nommant ce qui manque. On montre
-        # donc ce qu'elles vont chercher, plutot que d'inventer une reponse.
+        # The DSP bench has no --check-paths: each of its five steps checks
+        # its own binary and exits naming what is missing. So show what they
+        # will look for, rather than inventing an answer.
         if [ "$DSP_BANC" = 1 ]; then
             printf '  %sbanc DSP%s   %s\n' "$C_DIM" "$C_Z" "$BANC_DSP"
             for f in "$(dirname "$BANC_DSP")/c54x_exe" "$GSM_ROOT/qosmo/build/qemu-system-arm" \
@@ -106,23 +104,24 @@ case "$ACTION" in
         exec env CALYPSO_PROFILE="$CALYPSO_PROFILE" bash "$RUN_SH" --check-paths
         ;;
 esac
-# --- 7bis-menu. Ce qui manque, demande UNE fois, avec le cache en defaut ------
-# Les trois valeurs qui decident de l'identite SS7 - numero de noeud, operateur,
-# adresse du hub - se deduisent la plupart du temps : environnement transmis par
-# start-docker.sh, /etc/osmo-role fige dans l'image, table WAN. Quand la deduction ne
-# donne rien, la pile demarrait quand meme et gardait les point codes du
-# gabarit : 1.1.2 partout, ASP vers 127.0.0.1, interco morte sans un mot.
+# --- 7bis-menu. What is missing, asked ONCE, with the cache as default --------
+# The three values that decide the SS7 identity - node number, operator, hub
+# address - are deduced most of the time: environment passed by
+# start-docker.sh, /etc/osmo-role frozen in the image, WAN table. When the
+# deduction yields nothing, the stack would otherwise keep the template's point
+# codes (1.1.2 everywhere, ASP towards 127.0.0.1) and the interconnection
+# would be dead silently.
 #
-# On demande donc - mais seulement ce qui manque, et en proposant ce que le
-# cache sait deja. Sans terminal, rien n'est demande : les defauts s'appliquent,
-# une ISO qui demarre seule ne peut pas rester bloquee sur une question.
+# So ask - but only for what is missing, proposing what the cache already
+# knows. Without a terminal nothing is asked: the defaults apply, an ISO that
+# boots on its own cannot stay blocked on a question.
 ask_node_identity() {
-    # NO_MENU=1 est ce que start-docker.sh pose devant le lanceur quand les choix ont
-    # deja ete faits sur l'hote. Aujourd'hui la garde tty juste en dessous
-    # suffit (start-docker.sh lance par docker exec -d, sans terminal) : ce test ne
-    # repare donc aucune panne observable, il aligne l'identite SS7 sur la
-    # meme convention que les menus de pile de start-docker.sh, pour le jour ou le
-    # lanceur automatique aura un terminal.
+    # NO_MENU=1 is what start-docker.sh sets in front of the launcher when
+    # the choices were already made on the host. The tty guard just below
+    # covers it today (start-docker.sh launches via docker exec -d, without a
+    # terminal); this test aligns the SS7 identity on the same convention as
+    # the stack menus of start-docker.sh, for an automatic launcher that has
+    # a terminal.
     [ "${NO_MENU:-0}" = "1" ] && return 0
     [ -t 0 ] || return 0
     [ "$DRY" -eq 1 ] && return 0
@@ -130,17 +129,11 @@ ask_node_identity() {
     local cached_node cached_src cached_hub
     IFS='|' read -r cached_node cached_src <<< "$(detect_node_id)"
 
-    # L'ENVIRONNEMENT NE SE DEMANDE PAS. C'est ainsi que start-docker.sh transmet le
-    # noeud a un conteneur : la reponse est deja connue, et la question n'a pas
-    # de sens - pire, dans un conteneur ou personne ne lit le terminal, elle
-    # repart vide. L'identite n'etait alors PAS appliquee, la pile regenerait
-    # ses configs par defaut (point-code 1.1.2, ASP vers le hub docker, en
-    # shutdown) et ecrasait celle que start-docker.sh venait d'ecrire. Le fichier
-    # portait les bonnes valeurs juste avant, les mauvaises juste apres.
-    # Le rattrapage qui se trouvait ici ne servait plus a rien : il exigeait un
-    # NODE_ID vide, alors que la resolution du noeud, bien plus haut, l'a deja
-    # rempli depuis cette meme source. NODE_ID et HUB_IP sont donc repris de
-    # l'environnement la-bas, une fois, et pas ici.
+    # THE ENVIRONMENT IS NEVER ASKED FOR. That is how start-docker.sh passes
+    # the node to a container: the answer is already known, and in a container
+    # where nobody reads the terminal the question would come back empty.
+    # NODE_ID and HUB_IP are taken from the environment by the node
+    # resolution, much higher up, once - not here.
     cached_hub="$(awk -F= '/^OSMO_HUB_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' /etc/osmo-role 2>/dev/null)"
     [ -n "$cached_hub" ] || cached_hub="172.20.0.10"
 
@@ -169,49 +162,36 @@ ask_node_identity() {
 }
 ask_node_identity
 
-# ══ La regeneration des configurations, POUR DE VRAI ═══════════════════════
-# CE QUE --regen FAISAIT JUSQU'ICI : RIEN.
-# Il levait OSMO_NO_REGEN et comptait sur run_modules/08-gabarits.sh pour
-# rejouer apply_config_templates au demarrage. Ce module N'EXISTE PAS - il n'a
-# jamais existe dans run_modules/ - et run.sh ne genere aucune configuration.
-# Le message « regeneration demandee » s'affichait, la pile s'arretait, et pas
-# un octet de /etc/osmocom ne changeait. Le seul effet reel de l'option etait
-# d'arreter le banc.
+# ══ Configuration regeneration (--regen) ═══════════════════════════════════
+# --regen does the same thing as start-docker.sh on the docker side, and as
+# build-iso.sh at build time - that is, the full sequence:
 #
-# CE QU'IL FAIT MAINTENANT : la meme chose que start-docker.sh cote docker, et que
-# build-iso.sh a la construction - c'est-a-dire la sequence complete :
-#
-#   1. apply_config_templates      substitue configs/*.cfg et *.conf dans un
-#                                  repertoire NEUF (jamais en place : une
-#                                  substitution a moitie faite sur /etc/osmocom
-#                                  laisse un banc qui ne demarre plus) ;
-#   2. apply_native_post_patches   la recette NATIVE de l'ISO - sms-routing par
-#                                  MS reel, SGSN/MSC sur l'adresse locale du
-#                                  coeur, run.sh degraisse ;
-#   3. install_configs_native      pose le resultat dans /etc/osmocom et
+#   1. apply_config_templates      substitutes configs/*.cfg and *.conf into a
+#                                  NEW directory (never in place: a half-done
+#                                  substitution on /etc/osmocom leaves a bench
+#                                  that no longer starts);
+#   2. apply_native_post_patches   the NATIVE recipe of the ISO - sms-routing
+#                                  by real MS, SGSN/MSC on the core's local
+#                                  address, trimmed run.sh;
+#   3. install_configs_native      installs the result into /etc/osmocom and
 #                                  /etc/asterisk.
 #
-# EN SOUS-SHELL. lib/gabarits.sh charge globals.conf et pose une trentaine de
-# variables - MCC, ARFCN, HOST_IP, N_OPERATORS, KI... - qui portent ici un tout
-# autre sens (HOST_IP est l'adresse du banc pour le lanceur, l'adresse interne
-# du coeur pour les gabarits). Les laisser fuir, c'est changer le plan radio
-# d'un run parce qu'on a demande une regeneration.
+# IN A SUBSHELL. lib/gabarits.sh loads globals.conf and sets about thirty
+# variables - MCC, ARFCN, HOST_IP, N_OPERATORS, KI... - which carry a
+# different meaning here (HOST_IP is the bench address for the launcher, the
+# core's internal address for the templates). Letting them leak would change
+# the radio plan of a run because a regeneration was requested.
 #
-#   $1 numero de noeud   $2 numero d'operateur   $3 inter-STP (peut etre vide)
-# ── LE POINT CODE AFFICHE SUIT LE PLAN REELLEMENT APPLIQUE ──────────────────
-# [2026-08-31] Ces bandeaux calculaient toujours 1.<noeud><op>.x, la formule du
-# plan WAN, alors que set-node-id.sh recoit --local hors WAN et ecrit
-# 1.<op>.x. On lisait donc, dans la meme sortie :
-#     [ OK ] Identite SS7 (noeud 1 · PC 1.13.x · mode docker)
-#       SS7  point-code 1.3.2
-# deux valeurs contradictoires pour la meme chose - la premiere fausse. Sur un
-# banc ou le desaccord de plan a justement coute une demi-journee, un bandeau
-# qui annonce le mauvais plan est exactement ce qu il ne faut pas.
-_pc_affiche() {   # $1 = noeud, $2 = operateur
+#   $1 node number   $2 operator number   $3 inter-STP (may be empty)
+# ── THE DISPLAYED POINT CODE FOLLOWS THE PLAN ACTUALLY APPLIED ──────────────
+# set-node-id.sh receives --local outside WAN and writes 1.<op>.x; the WAN
+# plan between machines is 1.<node><op>.x. The banner uses the same rule so
+# that it never announces a plan other than the one applied.
+_pc_affiche() {   # $1 = node, $2 = operator
     if [ "${WAN_MESH:-0}" != "1" ] && [ -z "${WAN_NODES:-}" ]; then
-        printf '1.%s.x' "$2"          # plan local, celui qu on applique
+        printf '1.%s.x' "$2"          # local plan, the one applied
     else
-        printf '1.%s%s.x' "$1" "$2"   # plan WAN, entre machines
+        printf '1.%s%s.x' "$1" "$2"   # WAN plan, between machines
     fi
 }
 

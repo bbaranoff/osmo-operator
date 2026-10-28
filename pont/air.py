@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""air.py - l'air entre deux Calypsos emules : les bursts que l'un emet, l'autre les recoit.
+"""air.py - the air between two emulated Calypsos: the bursts one emits, the other receives.
 
-[2026-10-19] Montage a deux instances (c54x_exe/run.sh INSTANCE=2) : l'instance 1 est le
-TRX de la BTS#0 (firmware trx, start-native.sh --osmo-trx), l'instance 2 est le mobile.
-Chaque c54x_exe publie les bursts finaux que sa ROM emet dans un anneau
-/dev/shm/calypso_tx_rom (pont.c, tx_tsp_publier) : en-tete w(4) slots(4), puis des cases de
-160 octets : seq(4) fn(4) type(1) tsc(1) offset(1) src(1) bits(148). Chaque BSP (calypso_bsp.c)
-attend les bursts qu'il doit recevoir en TRXDv0 sur UDP (6702, CALYPSO_BSP_PORT) :
-tn(1) fn(4, gros-boutiste) rssi(1) toa(2) bits(148, un octet 0/1 par bit).
+Two-instance setup (c54x_exe/run.sh INSTANCE=2): instance 1 is the TRX of BTS#0 (trx
+firmware, start-native.sh --osmo-trx), instance 2 is the mobile.
+Each c54x_exe publishes the final bursts its ROM emits into a ring
+/dev/shm/calypso_tx_rom (pont.c, tx_tsp_publier): header w(4) slots(4), then 160-byte
+slots: seq(4) fn(4) type(1) tsc(1) offset(1) src(1) bits(148). Each BSP (calypso_bsp.c)
+expects the bursts it must receive as TRXDv0 over UDP (6702, CALYPSO_BSP_PORT):
+tn(1) fn(4, big-endian) rssi(1) toa(2) bits(148, one 0/1 byte per bit).
 
-Ce relais lit l'anneau de A et l'envoie au BSP de B, et l'anneau de B au BSP de A : le
-descendant (FB, SB, dummy, NB du TRX) va au mobile, le montant (RACH, NB du mobile) va au TRX.
-Il part de la fin des anneaux (pas de rejeu), et compte ce qui passe toutes les 5 s.
+This relay reads A's ring and sends it to B's BSP, and B's ring to A's BSP: the downlink
+(FB, SB, dummy, NB from the TRX) goes to the mobile, the uplink (RACH, NB from the mobile)
+goes to the TRX. It starts from the end of the rings (no replay) and counts what passes
+every 5 s.
 
   python3 air.py --a-ring /dev/shm/calypso_tx_rom --a-port 6702 \\
                  --b-ring /dev/shm/calypso2/calypso_tx_rom --b-port 6712
-Depuis l'instance 2 (run.sh, espace de montage prive) l'anneau de l'instance 1 se lit en
+From instance 2 (run.sh, private mount namespace) the ring of instance 1 is read at
 /run/calypso-shm-hote/calypso_tx_rom.
 
-[2026-10-20] Troisieme Calypso, le telephone 2 du TRX (TS1, instance 3 : --c-ring / --c-port) : ses bursts
-vont au mobile avec tn=1 ; les bursts du mobile vont au TRX du TS0 (A) tant qu'il est sur le SDCCH, au TRX
-du TS1 (C) une fois l'ASSIGNMENT COMMAND passe. L'air lit cet ASSIGNMENT COMMAND dans les blocs SDCCH/4 du
-TS0 (pont.gsm, libosmocoding) et l'annonce au c54x_exe du mobile par --tch-cfg (format de pont/state.py :
-seq, tn, tsc, arfcn), comme le faisait le pont ; un RACH du mobile rend le SDCCH (tn=0).
+Third Calypso, phone 2 of the TRX (TS1, instance 3: --c-ring / --c-port): its bursts go
+to the mobile with tn=1; the mobile's bursts go to the TS0 TRX (A) while it is on the SDCCH,
+to the TS1 TRX (C) once the ASSIGNMENT COMMAND has gone through. The air reads that
+ASSIGNMENT COMMAND in the SDCCH/4 blocks of TS0 (pont.gsm, libosmocoding) and announces it
+to the mobile's c54x_exe through --tch-cfg (pont/state.py format: seq, tn, tsc, arfcn);
+a RACH from the mobile gives the SDCCH back (tn=0).
 
-[2026-10-21] Le telephone 2 a son PROPRE compteur de trames (il part de 0 a son boot, comme le 1) : ses bursts
-sortent de son anneau avec son fn local, et son BSP attend les bursts montants dans sa numerotation. Le
-transceiver hote mesure D = fn1 - fn2 sur les DATA_IND des deux telephones et l'ecrit dans --fn-delta
-(/tmp/osmocom_fn_delta_2) ; l'air tague C->B avec fn + D et envoie B->C avec fn - D, en tn 0 (le BSP du
-telephone 2 range un burst tn=1 dans les « autres » intervalles, rx[2], que son firmware ne lit pas :
-pour lui le TS1 est SON intervalle). Tant que D est inconnu, rien ne passe par C.
+Phone 2 has its OWN frame counter (it starts from 0 at its boot, like phone 1): its bursts
+leave its ring with its local fn, and its BSP expects uplink bursts in its own numbering.
+The host transceiver measures D = fn1 - fn2 on the DATA_IND of both phones and writes it
+to --fn-delta (/tmp/osmocom_fn_delta_2); the air tags C->B with fn + D and sends B->C with
+fn - D, in tn 0 (phone 2's BSP files a tn=1 burst in the "other" slots, rx[2], which its
+firmware does not read: for it TS1 is ITS slot). While D is unknown, nothing goes through C.
 """
 import argparse
 import os
@@ -39,11 +41,11 @@ import struct
 import sys
 import time
 
-# [2026-10-20] le decodeur de blocs du pont (libosmocoding par ctypes) pour lire l'ASSIGNMENT COMMAND
+# The bridge's block decoder (libosmocoding via ctypes), to read the ASSIGNMENT COMMAND.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from pont import gsm
-except Exception as _e:   # pragma: no cover - sans libosmocoding l'air relaie quand meme, sans TCH
+except Exception as _e:   # pragma: no cover - without libosmocoding the air still relays, without TCH
     gsm = None
     print("air : pont.gsm indisponible (%s) : pas de detection de l'ASSIGNMENT COMMAND" % _e, flush=True)
 
@@ -53,20 +55,20 @@ TYPES = {0: "?", 1: "RACH", 2: "NB", 3: "SB", 4: "DUMMY", 5: "FB", 101: "TS1", 1
 
 
 class Anneau:
-    """Un anneau calypso_tx_rom ; on ne lit que ce qui est ecrit apres notre arrivee."""
+    """A calypso_tx_rom ring; only what is written after our arrival is read."""
 
     def __init__(self, path, nom):
         self.path, self.nom = path, nom
         self.fd = -1
-        self.seq = None          # derniere seq lue
+        self.seq = None          # last seq read
         self.slots = 256
         self.rate = 0
-        # [2026-10-20] CONTINUITE DU fn. En mode TRX le fn publie est le tick du c54x_exe emetteur
-        # (le firmware trx ne pose pas a_a5fn) : il repart de 0 quand on relance banc-trx, et le BSP
-        # du mobile (STREAM : un burst par trame, dans l'ordre des fn) attendait alors un fn de
-        # 357073 en voyant arriver 15000 (« le DSP court devant le BTS », 61200 manques). On relaie
-        # donc fn + decalage, le decalage etant recale a chaque recul du fn pour que la numerotation
-        # vue du recepteur reste monotone et continue (+1 par rapport au dernier fn relaye).
+        # fn CONTINUITY. In TRX mode the published fn is the tick of the emitting c54x_exe
+        # (the trx firmware does not set a_a5fn): it restarts from 0 when banc-trx is relaunched,
+        # while the mobile's BSP (STREAM: one burst per frame, in fn order) expects a monotonic
+        # sequence. We therefore relay fn + offset, the offset being realigned on every fn
+        # step back so that the numbering seen by the receiver stays monotonic and continuous
+        # (+1 from the last relayed fn).
         self.fn_dec = 0
         self.fn_dernier = None
         self.recalages = 0
@@ -75,7 +77,7 @@ class Anneau:
         out = (fn + self.fn_dec) % 2715648
         if self.fn_dernier is not None:
             d = (out - self.fn_dernier) % 2715648
-            if d > 100000:                  # recul (ou saut absurde) : on recale juste apres le dernier ; d == 0 = un autre slot de la meme trame
+            if d > 100000:                  # step back (or absurd jump): realign after the last; d == 0 = same frame
                 self.fn_dec = (self.fn_dernier + 1 - fn) % 2715648
                 out = (fn + self.fn_dec) % 2715648
                 self.recalages += 1
@@ -97,17 +99,17 @@ class Anneau:
             return False
         w, slots = struct.unpack("<II", hdr)
         self.slots = slots or 256
-        self.seq = w                        # on part de la fin
+        self.seq = w                        # start from the end
         print("air : anneau %s ouvert (%s), %d cases, seq=%d" % (self.nom, self.path, self.slots, w), flush=True)
         return True
 
     def nouveaux(self):
-        """Rend les cases (seq, fn, type, tsc, offset, src, bits) ecrites depuis le dernier appel."""
+        """Return the slots (seq, fn, type, tsc, offset, src, bits) written since the last call."""
         if not self._ouvrir():
             return []
-        # [2026-10-20 22:25] l'autre instance relancee (./start-native.sh --bts pendant que le mobile tourne) :
-        # son c54x_exe RECREE l'anneau (nouvel inode) et l'ancien descripteur lit un fichier supprime
-        # pour toujours (A->B fige, le mobile n'a plus de descendant). On compare l'inode a chaque tour.
+        # When the other instance is relaunched (./start-native.sh --bts while the mobile runs),
+        # its c54x_exe RECREATES the ring (new inode) and the old descriptor would read a deleted
+        # file forever (A->B frozen, no more downlink for the mobile). Compare the inode periodically.
         self.tours = getattr(self, "tours", 0) + 1
         if self.tours % 200 == 0:
             try:
@@ -128,11 +130,11 @@ class Anneau:
         w = struct.unpack("<I", hdr[:4])[0]
         if w == self.seq:
             return []
-        if w < self.seq:                     # anneau recree (nouveau run)
+        if w < self.seq:                     # ring recreated (new run)
             print("air : anneau %s remis a zero (seq %d -> %d)" % (self.nom, self.seq, w), flush=True)
             self.seq = 0
         debut = self.seq + 1
-        if w - debut >= self.slots:          # trop de retard : on saute au plus recent
+        if w - debut >= self.slots:          # too far behind: jump to the most recent
             self.rate += (w - debut) - (self.slots - 1)
             debut = w - (self.slots - 1)
         out = []
@@ -146,7 +148,7 @@ class Anneau:
                 break
             seq, fn = struct.unpack("<II", case[:8])
             typ, tsc, offset, src = case[8], case[9], case[10], case[11]
-            if seq != s:                     # case pas encore ecrite / ecrasee
+            if seq != s:                     # slot not written yet / overwritten
                 continue
             out.append((seq, fn, typ, tsc, offset, src, case[12:160]))
         self.seq = w
@@ -154,7 +156,7 @@ class Anneau:
 
 
 class Cible:
-    """Le BSP de l'autre instance, en TRXDv0 sur UDP."""
+    """The other instance's BSP, as TRXDv0 over UDP."""
 
     def __init__(self, host, port, nom, tn):
         self.addr, self.nom, self.tn = (host, port), nom, tn
@@ -163,8 +165,8 @@ class Cible:
         self.par_type = {}
 
     def envoyer(self, fn, typ, bits, tn=None):
-        """tn : l'intervalle annonce dans l'en-tete TRXD ; par defaut celui de la cible. [2026-10-20] les
-        anneaux portent maintenant le TS du burst (bits 4-6 de src) : on le relaie tel quel."""
+        """tn: the timeslot announced in the TRXD header; by default the target's. The rings
+        carry the burst's TS (bits 4-6 of src): it is relayed as is."""
         if tn is None:
             tn = self.tn
         pkt = bytes([tn & 7]) + struct.pack(">I", fn) + b"\x00\x00\x00" + bytes(b & 1 for b in bits)
@@ -176,11 +178,11 @@ class Cible:
         self.envoyes += 1
         self.par_type[typ] = self.par_type.get(typ, 0) + 1
         if tn:
-            self.par_type[100 + tn] = self.par_type.get(100 + tn, 0) + 1   # compte par intervalle (TS1..7)
+            self.par_type[100 + tn] = self.par_type.get(100 + tn, 0) + 1   # count per timeslot (TS1..7)
 
 
 class Decalage:
-    """D = fn1 - fn2, publie par le transceiver (--fn-delta-file) ; relu quand le fichier change."""
+    """D = fn1 - fn2, published by the transceiver (--fn-delta-file); re-read when the file changes."""
 
     def __init__(self, chemin):
         self.chemin, self.d, self.mtime, self.prochain = chemin, None, None, 0.0
@@ -213,11 +215,12 @@ SDCCH4_DL = {22: 0, 23: 0, 24: 0, 25: 0, 26: 1, 27: 1, 28: 1, 29: 1, 32: 2, 33: 
 
 
 class Dedie:
-    """L'ASSIGNMENT COMMAND lu sur le SDCCH/4 du TS0, et l'annonce du TCH au mobile (calypso_tch_cfg)."""
+    """The ASSIGNMENT COMMAND read on the SDCCH/4 of TS0, and the TCH announcement to the
+    mobile (calypso_tch_cfg)."""
 
     def __init__(self, chemin):
         self.chemin = chemin
-        self.blocs = {}          # sous-canal -> [(fn, bits)]
+        self.blocs = {}          # subchannel -> [(fn, bits)]
         self.tn = None
         self.tsc = 7
         self.seq = 0
@@ -240,7 +243,7 @@ class Dedie:
             os.close(fd)
 
     def descendant(self, fn, typ, bits):
-        """Un burst TS0 du TRX : accumule les blocs SDCCH/4 et cherche l'ASSIGNMENT COMMAND."""
+        """A TS0 burst from the TRX: accumulate SDCCH/4 blocks and look for the ASSIGNMENT COMMAND."""
         if gsm is None or typ != 2:
             return
         ss = SDCCH4_DL.get(fn % 51)
@@ -306,16 +309,17 @@ def main():
     sans = {noms[t.strip()] for t in args.sans.split(",") if t.strip() in noms}
 
     a_ring, b_ring = Anneau(args.a_ring, "A"), Anneau(args.b_ring, "B")
-    vers_b = Cible(args.host, args.b_port, "B", args.tn)   # ce que A emet -> B recoit (TS0)
-    vers_a = Cible(args.host, args.a_port, "A", args.tn)   # ce que B emet -> A recoit
+    vers_b = Cible(args.host, args.b_port, "B", args.tn)   # what A emits -> B receives (TS0)
+    vers_a = Cible(args.host, args.a_port, "A", args.tn)   # what B emits -> A receives
     c_ring = Anneau(args.c_ring, "C") if args.c_ring else None
-    vers_b1 = Cible(args.host, args.b_port, "B(TS1)", 1) if c_ring else None   # ce que C emet -> B recoit, tn 1
+    vers_b1 = Cible(args.host, args.b_port, "B(TS1)", 1) if c_ring else None   # what C emits -> B receives, tn 1
     vers_c = Cible(args.host, args.c_port, "C", 1) if (c_ring and args.c_port) else None
     dedie = Dedie(args.tch_cfg)
     decalage = Decalage(args.fn_delta if c_ring else None)
     c_sans_d = 0
-    mobile_tch = 0.0          # [2026-10-21] instant du dernier burst du mobile sur un TS dedie (tn_m != 0) : avec le
-                              # SDCCH chiffre l'air ne lit plus l'ASSIGNMENT COMMAND, c'est le mobile qui dit qu'il est sur le TCH
+    mobile_tch = 0.0          # time of the mobile's last burst on a dedicated TS (tn_m != 0):
+                              # with a ciphered SDCCH the air cannot read the ASSIGNMENT COMMAND,
+                              # the mobile itself tells it is on the TCH
     print("air : A %s -> udp %d (B) ; B %s -> udp %d (A) ; tn %d%s%s%s" %
           (args.a_ring, args.b_port, args.b_ring, args.a_port, args.tn,
            " ; C %s -> udp %d (B, tn 1) ; B -> udp %s (C) sur TCH" % (args.c_ring, args.b_port, args.c_port) if c_ring else "",
@@ -330,7 +334,7 @@ def main():
             if typ in sans or offset == 0xff and typ == 0:
                 continue
             fnc = a_ring.fn_continu(fn)
-            tn_b = (src >> 4) & 7                      # le TS du burst (TS0 : BCCH/CCCH/SDCCH, TS1 : le TCH)
+            tn_b = (src >> 4) & 7                      # the burst's TS (TS0: BCCH/CCCH/SDCCH, TS1: the TCH)
             vers_b.envoyer(fnc, typ, bits, tn_b)
             if tn_b == 0:
                 dedie.descendant(fnc, typ, bits)
@@ -349,8 +353,8 @@ def main():
             if typ in sans or offset == 0xff and typ == 0:
                 continue
             fnc = (b_ring.fn_continu(fn) + args.b_fn_delta) % 2715648
-            tn_m = (src >> 4) & 7                      # le TS sur lequel le mobile a emis (montant_tn_dedie)
-            if typ == 1:                                   # RACH : le mobile est (re)venu sur le TS0
+            tn_m = (src >> 4) & 7                      # the TS the mobile transmitted on (montant_tn_dedie)
+            if typ == 1:                                   # RACH: the mobile is (back) on TS0
                 if dedie.tn is not None:
                     dedie.liberer("RACH du mobile")
                 vers_a.envoyer(fnc, typ, bits, 0)
@@ -360,9 +364,9 @@ def main():
                 if d is None:
                     c_sans_d += 1
                     continue
-                vers_c.envoyer((fnc - d) % 2715648, typ, bits, args.c_tn)   # TCH du TS1 -> telephone 2 du TRX, dans SA numerotation
+                vers_c.envoyer((fnc - d) % 2715648, typ, bits, args.c_tn)   # TS1 TCH -> TRX phone 2, ITS numbering
             else:
-                vers_a.envoyer(fnc, typ, bits, tn_m)       # un seul telephone TRX : TS0 et TS1 par tn
+                vers_a.envoyer(fnc, typ, bits, tn_m)       # single TRX phone: TS0 and TS1 by tn
         if not bouge:
             time.sleep(args.periode)
         if time.monotonic() >= prochain:

@@ -1,52 +1,45 @@
 #!/usr/bin/env python3
-# wallpaper-render.py - compose le fond d ecran du banc (1920x1080).
+# wallpaper-render.py - composes the bench wallpaper (1920x1080).
 #
 #   python3 wallpaper-render.py --tower configs/wallpaper/tower.png \
 #           [--strip calvin.gif] [--date 2026-09-04] --out gsm-lab-wallpaper.png
 #
-# Disposition, pensee pour ne rien faire chevaucher sur l ecran :
+# Layout, designed so that nothing overlaps on the screen:
 #
 #   +--------+------------------------------------------+-------------------+
-#   | dock + | carte LAB GSM (x 320..1430, y 60..560)  | conky (400 px,    |
-#   | icones |                                          | gap 24, y 40..660)|
-#   | bureau | encart (x 510..1410, CENTRE, y 220..1010) |                   |
-#   | (haut  |   haut : BD geek au hasard / spectre 4G  |                   |
-#   | gauche)|   bas  : Calvin & Hobbes  / spectre 2G   |                   |
+#   | dock + | LAB GSM card (x 320..1430, y 60..560)    | conky (400 px,    |
+#   | desktop|                                          | gap 24, y 40..660)|
+#   | icons  | inset (x 510..1410, CENTRED, y 220..1010)|                   |
+#   | (top   |   top   : random geek comic / 4G spectrum|                   |
+#   | left)  |   bottom: Calvin & Hobbes / 2G spectrum  |                   |
 #   +--------+------------------------------------------+-------------------+
 #
-# Le pylone de la photo est au MILIEU (voir background/TOWER_X) : les deux
-# panneaux sont translucides et le laissent passer.
-# Les deux colonnes de cote ne recoivent que la photo. A gauche (x < 320) : le
-# dock GNOME (~70 px) puis les icones du bureau, en haut a gauche (DING,
-# start-corner top-left, cases de ~100 px). A droite (x >= 1440) : conky
-# (top_right, gap_x 24, 400 px de large, cf. configs/conky/osmo-conky.conf).
+# The pylon of the photo is in the MIDDLE (see background/TOWER_X): both
+# panels are translucent and let it show through.
+# The two side columns only receive the photo. On the left (x < 320): the
+# GNOME dock (~70 px) then the desktop icons, top left (DING, start-corner
+# top-left, ~100 px cells). On the right (x >= 1440): conky (top_right,
+# gap_x 24, 400 px wide, cf. configs/conky/osmo-conky.conf).
 #
-# Sans --strip (pas de reseau au build, ou au boot), la zone du strip reste
-# vide : le fond est complet sans lui. Le strip du jour est pose par
-# tools/osmo-wallpaper.sh (service + timer osmo-wallpaper).
+# Without --strip (no network at build time, or at boot), the strip area
+# stays empty: the wallpaper is complete without it. The strip of the day is
+# placed by tools/osmo-wallpaper.sh (osmo-wallpaper service + timer).
 #
-# Ne depend que de Pillow (python3-pil) et des polices DejaVu (fonts-dejavu),
-# presents sur l image comme sur l hote.
+# Depends only on Pillow (python3-pil) and the DejaVu fonts (fonts-dejavu),
+# present on the image as on the host.
 
-# [2026-09-04] L ENCART EST AU MILIEU BAS. Sa boite etait (320, 600, 1430, 1010) :
-# calee a gauche, sous la carte LAB GSM et sur la meme verticale qu elle. Depuis
-# que le pylone de la photo est recentre (tools/wallpaper-render.py, TOWER_X),
-# cet encart decale n avait plus de raison d etre - et il n a jamais ete au
-# milieu de l ecran, seulement au milieu de la bande laissee libre.
-# La nouvelle boite (510, 600, 1410, 1010) est CENTREE sur les 1920 px
-# (510 + 900/2 = 960) et s arrete avant x=1440, ou commence la colonne du conky.
-# [2026-09-08] L ENCART A GRANDI VERS LE HAUT ET S EST COUPE EN DEUX. La 4G du
-# banc (srsRAN) n avait pas de place a l ecran : la boite passe a
-# (510, 220, 1410, 1010), soit 900x790, en deux cadres de 391 px separes de
-# 8 px. Le haut porte une bande dessinee geek tiree au sort (et le spectre
-# du UE srsRAN quand il tourne), le bas Calvin & Hobbes (et le spectre 2G).
-# Elle empiete sur la zone haute LAB GSM (osmo-topzone.py, y 60..~400) :
-# c est assume, la banniere reste un decor derriere.
-# LES QUATRE FICHIERS QUI LA CONNAISSENT DOIVENT RESTER D ACCORD :
-#   tools/wallpaper-render.py  (les deux cadres dessines dans le fond)
-#   tools/osmo-fft-snap.py     (l image 900x790 qu on y peint)
-#   tools/osmo-panel.py        (la fenetre GTK cliquable posee dessus)
-#   tools/osmo-launcher.py     (ou se cale une appli lancee « dans le panel »)
+# THE INSET IS CENTRED, IN TWO FRAMES. The box (510, 220, 1410, 1010), i.e.
+# 900x790, is CENTRED on the 1920 px (510 + 900/2 = 960) and stops before
+# x=1440, where the conky column starts. It is split into two frames of 391 px
+# separated by 8 px: the top one carries a randomly drawn geek comic (and the
+# srsRAN UE spectrum when it runs), the bottom one Calvin & Hobbes (and the
+# 2G spectrum). It overlaps the LAB GSM top zone (osmo-topzone.py,
+# y 60..~400): intended, the banner stays a backdrop behind it.
+# THE FOUR FILES THAT KNOW THIS BOX MUST STAY IN AGREEMENT:
+#   tools/wallpaper-render.py  (the two frames drawn in the wallpaper)
+#   tools/osmo-fft-snap.py     (the 900x790 image painted into it)
+#   tools/osmo-panel.py        (the clickable GTK window placed on top)
+#   tools/osmo-launcher.py     (where an app launched "in the panel" docks)
 BOX_HAUT = (510, 220, 1410, 611)
 BOX_BAS = (510, 619, 1410, 1010)
 import argparse
@@ -72,7 +65,7 @@ def lerp(a, b, t):
 
 
 def gradient_h(w, h, stops):
-    """Bande horizontale w x h, degrade entre les couleurs `stops`."""
+    """Horizontal band w x h, gradient between the `stops` colours."""
     img = Image.new("RGB", (w, h))
     px = img.load()
     n = len(stops) - 1
@@ -89,58 +82,53 @@ def rounded(draw, box, r, fill=None, outline=None, width=1):
     draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=width)
 
 
-# ── GOMMER LES DEFAUTS DE LA PHOTO ──────────────────────────────────────────
-# [2026-09-04] La photo est prise EN CONTRE-JOUR, au telephone, et elle en porte
-# les trois marques. Elles ne se voyaient pas tant que le pylone etait un
-# lointain decor a gauche ; au milieu et agrandi x1.9, elles sautent aux yeux :
+# ── ERASING THE PHOTO'S DEFECTS ─────────────────────────────────────────────
+# A backlit phone photo carries three marks, obvious once the pylon is in the
+# middle and enlarged:
 #
-#   1. UN VOILE MAGENTA. Le soleil dans l objectif renvoie un halo diagonal
-#      violace en travers du ciel - un fantome de diaphragme. Sur un fond bleu
-#      nuit, il ressort comme une trainee sale que personne ne sait nommer.
-#   2. DU FRANGEAGE CHROMATIQUE. Les montants sombres sur ciel brule prennent
-#      un lisere violet (aberration laterale). L accentuation qui suit le
-#      RENFORCAIT : on accentuait le defaut avec le detail.
-#   3. DU BLOCKING JPEG. Le ciel est un degrade quasi uni : c est exactement ce
-#      que le JPEG rend le plus mal (carres de 8x8 et bandes). L agrandissement
-#      les etale en plaques visibles.
+#   1. A MAGENTA VEIL. The sun in the lens throws a purplish diagonal halo
+#      across the sky - a diaphragm ghost. On a night-blue background it reads
+#      as a dirty streak.
+#   2. CHROMATIC FRINGING. Dark uprights against a burnt sky take a purple
+#      edge (lateral aberration). The sharpening that follows would REINFORCE
+#      it: the defect gets sharpened along with the detail.
+#   3. JPEG BLOCKING. The sky is a nearly flat gradient: exactly what JPEG
+#      renders worst (8x8 squares and bands). Enlargement spreads them into
+#      visible plates.
 #
-# Trois corrections, ciblees, dans cet ordre - et AVANT l accentuation, sinon
-# on accentue ce qu on s apprete a gommer.
+# Three targeted corrections, in this order - and BEFORE sharpening, otherwise
+# what is about to be erased gets sharpened first.
 #
-# OSMO_WP_CLEAN=0 les neutralise (pour comparer, ou pour une autre photo).
+# OSMO_WP_CLEAN=1 enables them (off by default, see below).
 def nettoyer_photo(im):
-    """Defrangeage magenta + lissage du ciel, sans toucher au treillis."""
-    # [2026-09-04] PAR DEFAUT : NE RIEN FAIRE. Ce nettoyage a ete ecrit pour la
-    # photo PRECEDENTE - un contre-jour au telephone, avec son voile de flare,
-    # son frangeage et son blocking JPEG. La photo actuelle est propre, et
-    # surtout elle est ROSE : un ciel de couchant, ou le vert est legitimement
-    # sous la moyenne du rouge et du bleu sur la moitie de l image. La
-    # correction magenta y verrait un defaut partout et REPEINDRAIT LE CIEL en
-    # gris - elle detruirait exactement ce qui fait l image.
-    # Le code reste, documente : OSMO_WP_CLEAN=1 le rallume pour une photo qui
-    # en aurait besoin.
+    """Magenta defringing + sky smoothing, without touching the lattice."""
+    # DEFAULT: DO NOTHING. This cleanup suits a backlit phone photo with flare,
+    # fringing and JPEG blocking. The current photo is clean, and above all it
+    # is PINK: a sunset sky, where green legitimately sits below the mean of
+    # red and blue over half the image. The magenta correction would see a
+    # defect everywhere and REPAINT THE SKY grey. The code stays, documented:
+    # OSMO_WP_CLEAN=1 turns it on for a photo that needs it.
     if os.environ.get("OSMO_WP_CLEAN", "0") != "1":
         return im
 
-    # ── 1 et 2. LE MAGENTA, VOILE ET LISERES, D UN SEUL GESTE ───────────────
-    # Un ciel a R < G < B. Le halo de flare comme le frangeage ont la meme
-    # signature : le VERT tombe sous la moyenne du rouge et du bleu (c est la
-    # definition du magenta). On remonte donc le vert jusqu a cette moyenne, la
-    # ou il est dessous. Ce qui est reellement magenta dans la scene - rien,
-    # ici : du ciel et de l acier - n existe pas, donc rien de legitime n est
-    # touche. Une correction en une passe, sans masque a regler.
+    # ── 1 and 2. THE MAGENTA, VEIL AND FRINGES, IN ONE GESTURE ──────────────
+    # A sky has R < G < B. The flare halo and the fringing share the same
+    # signature: GREEN falls below the mean of red and blue (the definition
+    # of magenta). Green is therefore raised up to that mean wherever it sits
+    # below it. Nothing in the scene (sky and steel) is legitimately magenta,
+    # so nothing legitimate is touched. A one-pass correction, no mask to tune.
     r, g, b = im.split()
     moy = ImageChops.add(r.point(lambda v: v // 2), b.point(lambda v: v // 2))
     g = ImageChops.lighter(g, moy)
     im = Image.merge("RGB", (r, g, b))
 
-    # ── 3. LE CIEL LISSE, LE TREILLIS INTACT ────────────────────────────────
-    # On ne peut pas flouter toute l image : le pylone y perdrait ce que
-    # l accentuation lui rend juste apres. On construit donc un masque de
-    # DETAIL - l ecart entre l image et sa version floue, c est-a-dire les
-    # arretes - qu on elargit (MaxFilter) pour couvrir les bords, puis qu on
-    # adoucit pour que la transition ne se voie pas. Le flou n est applique que
-    # LA OU IL N Y A PAS DE DETAIL : le ciel, et lui seul.
+    # ── 3. THE SKY SMOOTHED, THE LATTICE INTACT ─────────────────────────────
+    # The whole image cannot be blurred: the pylon would lose what the
+    # sharpening gives it right after. So a DETAIL mask is built - the
+    # difference between the image and its blurred version, i.e. the edges -
+    # widened (MaxFilter) to cover the borders, then softened so that the
+    # transition does not show. The blur is applied only WHERE THERE IS NO
+    # DETAIL: the sky, and the sky alone.
     flou = im.filter(ImageFilter.GaussianBlur(2.2))
     gris = im.convert("L")
     ecart = ImageChops.difference(gris, gris.filter(ImageFilter.GaussianBlur(2.2)))
@@ -149,81 +137,62 @@ def nettoyer_photo(im):
     return Image.composite(im, flou, masque)
 
 
-# ── OU TOMBE LE PYLONE SUR L ECRAN ──────────────────────────────────────────
-# [2026-09-04] IL EST REVENU AU MILIEU. Il etait cale a GAUCHE : la photo etait
-# decalee pour poser le SOLEIL en bas a gauche du strip, et le pylone suivait -
-# il finissait derriere la colonne des icones du bureau, a moitie mange par le
-# dock. Sur l ecran, le sujet de l image passait derriere les objets qui ne
-# demandaient qu a etre lisibles.
+# ── WHERE THE PYLON LANDS ON THE SCREEN ─────────────────────────────────────
+# The photo is anchored on the PYLON, not on the sun: the mast column of the
+# source photo (TOWER_SRC) is brought to TOWER_X (0.62: between the LAB GSM
+# card and the conky column - the exact centre, 0.5, would enlarge the photo
+# too much and push the sun out of frame). The panels placed there are
+# translucent, so the pylon reads through them.
 #
-# On ancre donc sur le PYLONE et non sur le soleil. Le mat traverse la photo
-# d origine (1170x1123) autour de x = 658 : c est ce point qu on amene a
-# TOWER_X (0.62 : entre la carte LAB GSM et la colonne du conky - le plein
-# centre, 0.5, agrandissait trop la photo et noyait le soleil hors cadre),
-# qui sont translucides - le pylone se lit a travers).
-#
-# L ECHELLE SE DEDUIT DE LA POSITION VOULUE, elle n est plus le simple "couvrir
-# l ecran". Recadrer sans agrandir laissait un vide sur un cote, que la version
-# precedente comblait par un miroir du ciel. On calcule la plus petite echelle
-# qui met le pylone a sa place SANS vide d aucun cote - le miroir devient un
-# filet de securite au lieu d etre la regle.
-# x du mat, et taille de reference de configs/wallpaper/tower.jpg.
-# [2026-09-04] Nouvelle photo (pylone hertzien au couchant, 3840x2160) : le mat
-# y est a 34,2 % de la largeur, mesure en cherchant la colonne la plus
-# STRUCTUREE de la bande centrale (somme du detail image-flou, colonne par
-# colonne) - le pic est franc, sans ambiguite. L ancienne photo avait le sien a
-# 658/1170 ; le rapport est ce qui compte, background() le remet a l echelle du
-# fichier reel, donc remplacer l image ne demande que cette ligne.
-# [2026-09-04] La photo est prise TELLE QUELLE, en PNG, a sa definition
-# d origine (5824x3264) : la reduire ou la passer en JPEG pour alleger, c est
-# perdre de la qualite sur la seule image que l ecran montre en grand. Le rendu
-# la RE-DUIT de toute facon (echelle ~0.57 pour caler le mat), et reduire depuis
-# la pleine definition donne un meilleur resultat que reduire deux fois.
+# THE SCALE IS DERIVED FROM THE WANTED POSITION, not simply "cover the
+# screen": the smallest scale that puts the pylon in place WITHOUT a gap on
+# either side. The mirrored edge below is only a safety net for a photo with
+# a different framing.
+# x of the mast, and reference size of configs/wallpaper/tower.jpg.
+# The mast sits at 34.2 % of the width, measured by looking for the most
+# STRUCTURED column of the central band (sum of image-minus-blur detail,
+# column by column). The ratio is what matters: background() rescales it to
+# the real file size, so replacing the photo only requires this line.
+# The photo is used AS IS, in PNG, at its native resolution (5824x3264): the
+# render DOWNSCALES it anyway (scale ~0.57 to place the mast), and downscaling
+# from full resolution gives a better result than downscaling twice.
 TOWER_SRC = (1992, 5824, 3264)
 TOWER_X = float(os.environ.get("OSMO_WP_TOWER_X", "0.62"))
 
 
 def background(tower_path, tower_x=None, sun_y_at=984):
-    """La photo en fond : le pylone AU MILIEU (tower_x, fraction de la largeur
-    d ecran ; 0.5 par defaut). Assombrie au centre (les panneaux sont poses
-    dessus) et teintee bleu nuit."""
+    """The photo as background: the pylon IN THE MIDDLE (tower_x, fraction of
+    the screen width; TOWER_X by default). Darkened at the centre (the panels
+    sit on top) and tinted night blue."""
     tower = nettoyer_photo(Image.open(tower_path).convert("RGB"))
     tw, th = tower.size
     src_x, ref_w, _ref_h = TOWER_SRC
-    # Le repere du mat suit la taille reelle du fichier : une photo remplacee
-    # par une autre du meme cadrage reste correcte.
+    # The mast reference follows the real file size: a photo replaced by
+    # another of the same framing stays correct.
     src_x = src_x * tw / ref_w
     target = (TOWER_X if tower_x is None else tower_x) * W
-    # Trois contraintes : couvrir en hauteur, et ne deborder ni a gauche ni a
-    # droite une fois le mat amene sur `target`.
+    # Three constraints: cover the height, and overflow neither left nor
+    # right once the mast is brought to `target`.
     scale = max(H / th,
                 target / max(src_x, 1),
                 (W - target) / max(tw - src_x, 1))
     tower = tower.resize((int(tw * scale) + 1, int(th * scale) + 1), Image.LANCZOS)
-    # ── ACCENTUER LE PYLONE ─────────────────────────────────────────────────
-    # [2026-09-04] La photo est un CONTRE-JOUR : le soleil est derriere le mat,
-    # qui sort donc en silhouette sombre sur un ciel brule, et l agrandissement
-    # (x1.9 pour amener le pylone au milieu) etale ce peu de detail sur deux
-    # fois plus de pixels. A l ecran, le treillis devenait une bouillie grise -
-    # on voyait qu il y avait « quelque chose », pas une antenne.
+    # ── SHARPENING THE PYLON ────────────────────────────────────────────────
+    # The pylon is a dark silhouette against a bright sky; three gestures, in
+    # this order, and not one more:
+    #   1. a wide, soft unsharp mask: it gives back the edge of the uprights
+    #      and the braces without digging into the grain of the sky;
+    #   2. the contrast, slightly: the silhouette stands out from the halo;
+    #   3. the sharpness, a hair: the cables and the antenna panels.
+    # Applied BEFORE the tint and the darkening: sharpening afterwards would
+    # sharpen a blue veil, not the photo.
     #
-    # Trois gestes, dans cet ordre, et pas un de plus :
-    #   1. un masque flou (unsharp) large et doux : il redonne l arete des
-    #      montants et des croix sans creuser le grain du ciel ;
-    #   2. le contraste, legerement : la silhouette se detache du halo ;
-    #   3. la nettete, un cheveu : les cables et les panneaux d antenne.
-    # Applique AVANT la teinte et l assombrissement : accentuer apres, ce
-    # serait accentuer un voile bleu, pas la photo.
-    #
-    # Les trois valeurs sont reglables (OSMO_WP_SHARPEN=0 les neutralise) :
-    # sur une autre photo, ou un ecran tres dense, le bon dosage n est pas le
-    # meme, et une image sur-accentuee est pire qu une image molle.
-    # [2026-09-04] 1 -> 0.45. L ancienne photo faisait 1170 px de large et etait
-    # AGRANDIE x1.9 : il fallait beaucoup pour recoller les details etales. La
-    # nouvelle fait 3840 px et se retrouve REDUITE (echelle ~0.9) - or reduire
-    # affute deja. Garder 1 donnait des halos sur les haubans et un ciel
-    # granuleux. Un cheveu suffit maintenant, juste pour compenser le
-    # reechantillonnage.
+    # The three values scale with OSMO_WP_SHARPEN (0 disables them): on
+    # another photo, or a very dense screen, the right dose is not the same,
+    # and an over-sharpened image is worse than a soft one. The default 0.45
+    # is a light touch: the photo is DOWNSCALED by the render, and downscaling
+    # already sharpens; a stronger value gives halos on the guy wires and a
+    # grainy sky.
     _shp = float(os.environ.get("OSMO_WP_SHARPEN", "0.45"))
     if _shp > 0:
         tower = tower.filter(ImageFilter.UnsharpMask(radius=2.4 * _shp,
@@ -232,7 +201,7 @@ def background(tower_path, tower_x=None, sun_y_at=984):
         tower = ImageEnhance.Sharpness(tower).enhance(1 + 0.35 * _shp)
     x0 = int(round(src_x * scale - target))
     x0 = max(0, min(x0, tower.width - W))
-    # Verticalement, le soleil reste ou il etait : en bas a gauche du strip.
+    # Vertically, the sun stays where it was: bottom left of the strip.
     sun_y = int(600 * scale * th / _ref_h)
     y0 = max(0, min(sun_y - sun_y_at, tower.height - H))
     bg = Image.new("RGB", (W, H))
@@ -240,14 +209,14 @@ def background(tower_path, tower_x=None, sun_y_at=984):
     bg.paste(part, (0, 0))
     gap = W - part.width
     if gap > 0:
-        # Ne devrait plus arriver (l echelle est calculee pour), mais une photo
-        # d un autre cadrage pourrait l imposer : miroir du bord, ciel uni.
+        # Should not happen (the scale is computed for it), but a photo with
+        # another framing could force it: mirror of the edge, flat sky.
         edge = tower.crop((tower.width - gap, y0, tower.width, y0 + H)).transpose(Image.FLIP_LEFT_RIGHT)
         bg.paste(edge, (part.width, 0))
-    # Teinte bleu nuit + assombrissement : le pylone est au centre, donc SOUS
-    # les deux panneaux - ils sont translucides, il faut qu il transparaisse
-    # sans rendre le texte gris. D ou un assombrissement plus doux qu avant au
-    # centre (85 -> 70) et symetrique.
+    # Night-blue tint + darkening: the pylon is at the centre, hence UNDER
+    # both panels - they are translucent, it must show through without
+    # turning the text grey. Hence a soft (70), symmetric darkening at the
+    # centre.
     tint = Image.new("RGB", (W, H), (10, 18, 40))
     bg = Image.blend(bg, tint, 0.18)
     mask = gradient_h(W, 1, [(0, 0, 0), (70, 70, 70), (70, 70, 70), (0, 0, 0)]).resize((W, H))
@@ -257,7 +226,7 @@ def background(tower_path, tower_x=None, sun_y_at=984):
 
 
 def glass_panel(base, box, radius=26, alpha=185, fill=(13, 22, 44), border=(90, 120, 200), blur=14):
-    """Panneau translucide, fond legerement flou dessous (verre depoli)."""
+    """Translucent panel, slightly blurred background underneath (frosted glass)."""
     x0, y0, x1, y1 = box
     if blur > 0:
         region = base.crop(box).filter(ImageFilter.GaussianBlur(blur))
@@ -269,7 +238,7 @@ def glass_panel(base, box, radius=26, alpha=185, fill=(13, 22, 44), border=(90, 
 
 
 def gradient_text(base, xy, text, fnt, stops):
-    """Texte rempli d un degrade horizontal."""
+    """Text filled with a horizontal gradient."""
     x, y = xy
     l, t, r, b = fnt.getbbox(text)
     w, h = r - l, b - t
@@ -282,15 +251,16 @@ def gradient_text(base, xy, text, fnt, stops):
 
 def card(base, box, arfcn="514", band="DCS 1800"):
     x0, y0, x1, y1 = box
-    # Carte bien transparente : le pylone et le ciel restent visibles derriere
-    # le texte (le strip, lui, garde un fond opaque pour rester lisible).
+    # Very transparent card: the pylon and the sky stay visible behind the
+    # text (the strip, on the other hand, keeps an opaque background to stay
+    # readable).
     glass_panel(base, box, alpha=38, blur=0)
     d = ImageDraw.Draw(base)
     pad = 44
     x = x0 + pad
     y = y0 + 34
 
-    # En-tete
+    # Header
     d.ellipse((x, y + 4, x + 14, y + 18), fill=(63, 185, 160))
     d.text((x + 28, y), "SOFTWARE DEFINED RADIO  ·  UM INTERFACE  ·  GR-GSM",
            font=font("DejaVuSansMono.ttf", 15), fill=(150, 170, 210))
@@ -300,9 +270,9 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     rounded(d, (x1 - pad - tw - 28, y - 8, x1 - pad, y + 28), 10, outline=(63, 185, 160), width=2)
     d.text((x1 - pad - tw - 14, y), tag, font=tf, fill=(120, 230, 210))
 
-    # Titre
+    # Title
     y += 46
-    # Titre en violet uni (pas de degrade).
+    # Title in plain purple (no gradient).
     tw, th = gradient_text(base, (x - 4, y), "LAB GSM", font("DejaVuSans-Bold.ttf", 86),
                            [(150, 100, 245), (150, 100, 245)])
     d = ImageDraw.Draw(base)
@@ -320,7 +290,7 @@ def card(base, box, arfcn="514", band="DCS 1800"):
             cx += d.textlength(txt, font=f)
         y += 32
 
-    # Trame TDMA
+    # TDMA frame
     y += 14
     d.text((x, y), "TRAME TDMA  ·  8 TIMESLOTS  ·  4,615 MS", font=font("DejaVuSansMono.ttf", 14),
            fill=(150, 170, 210))
@@ -330,11 +300,10 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     inner = (x1 - pad) - x
     gap = 10
     sw = (inner - gap * 7) // 8
-    # [2026-09-10] EN HAUTEUR, PAS EN LARGEUR - meme geste que dans la banniere
-    # vivante (configs/conky/labgsm.html) : le chronogramme du normal burst est
-    # parti, et ce sont les huit cases qui reprennent ses ~100 px. La largeur
-    # (sw, calculee sur la carte) ne bouge pas ; seul sh grandit, et le texte
-    # garde sa taille, centre verticalement dans la case.
+    # TALL CELLS, NOT WIDE - same gesture as in the live banner
+    # (configs/conky/labgsm.html): the width (sw, computed from the card) is
+    # fixed; only sh is tall, and the text keeps its size, vertically centred
+    # in the cell.
     sh = 148
     for i, (name, use) in enumerate(slots):
         sx = x + i * (sw + gap)
@@ -357,14 +326,9 @@ def card(base, box, arfcn="514", band="DCS 1800"):
     d.text((x1 - pad - d.textlength(end, font=font("DejaVuSansMono.ttf", 12)), y), end,
            font=font("DejaVuSansMono.ttf", 12), fill=(120, 140, 180))
 
-    # [2026-09-10] Le chronogramme du normal burst (3 tail | 57 data | 26
-    # training | 57 data | 8,25 guard) etait dessine ici. Retire : c est un
-    # schema de cours, fixe, qui ne dit rien de l etat du banc - alors que les
-    # timeslots au-dessus, eux, montrent le plan de canaux reel. Sa hauteur est
-    # passee aux cases des timeslots (sh, plus haut).
     y += 22
 
-    # Puces en bas
+    # Chips at the bottom
     chips = [("IMSI 001-01", (150, 170, 210)), ("A5/1 ✓", (120, 230, 210)), ("COMP128v1 ✓", (120, 230, 210)),
              ("TCH/F · GAPK fr", (120, 230, 210)), ("gr-gsm · trxcon · osmo-bts-trx", (150, 170, 210))]
     cf = font("DejaVuSansMono-Bold.ttf", 13)
@@ -380,29 +344,22 @@ def card(base, box, arfcn="514", band="DCS 1800"):
 
 
 def strip_panel(base, box, strip_path, date_str, credit=None):
-    """L image du jour, dans un cadre blanc arrondi.
+    """The image of the day, in a rounded white frame.
 
-    `credit` est la ligne de pied : elle NOMME la source. Elle etait ecrite en
-    dur (« Calvin & Hobbes ... gocomics.com ») du temps ou il n y avait qu une
-    source ; depuis que osmo-wallpaper.sh en tire une au sort, une legende figee
-    aurait attribue a Bill Watterson un xkcd ou une photo de la NASA.
+    `credit` is the footer line: it NAMES the source. osmo-wallpaper.sh draws
+    the source at random, so the caption must come from the caller; the
+    Calvin & Hobbes caption is only the default.
     """
     x0, y0, x1, y1 = box
     glass_panel(base, box, fill=(20, 24, 36), alpha=210, border=(200, 200, 210))
     d = ImageDraw.Draw(base)
     pad = 18
-    # ── PLUS DE LIGNE DE SOURCE DANS LE CADRE ───────────────────────────────
-    # [2026-09-04] Ce pied portait « Bing · image du jour · Phare de
-    # Westerheversand a Westerhever, Schleswig-Holstein, Allemagne (© ...) ».
-    # Deux problemes, et le second suffit :
-    #   - il passait SOUS la barre de boutons de l encart (Dashboard / tmux /
-    #     VTY, plus les fleches), qui vit exactement la : on lisait une moitie
-    #     de phrase derriere « Dashboard op2 » ;
-    #   - il n a rien a faire la. Ce cadre est l ENCART DU BANC : des que la
-    #     pile monte, il porte un spectre et un journal, et la provenance d une
-    #     photo n y a aucun sens.
-    # La place rendue va a l image, qui remplit maintenant tout le cadre.
-    # OSMO_WP_CREDIT=1 remet la ligne pour qui la veut.
+    # ── NO SOURCE LINE IN THE FRAME BY DEFAULT ──────────────────────────────
+    # The footer would sit UNDER the inset's button bar (Dashboard / tmux /
+    # VTY, plus the arrows), which lives exactly there, and this frame is the
+    # BENCH INSET: as soon as the stack comes up it carries a spectrum and a
+    # log, where a photo credit makes no sense. The image therefore fills the
+    # whole frame. OSMO_WP_CREDIT=1 adds the line back.
     foot = 30 if os.environ.get("OSMO_WP_CREDIT") == "1" else 0
     strip = Image.open(strip_path)
     strip.seek(0)
@@ -413,7 +370,7 @@ def strip_panel(base, box, strip_path, date_str, credit=None):
     strip = strip.resize((int(sw * scale), int(sh * scale)), Image.LANCZOS)
     sx = x0 + pad + (aw - strip.width) // 2
     sy = y0 + pad
-    # Cadre blanc derriere le strip (les GIF ont des marges irregulieres).
+    # White frame behind the strip (GIFs have irregular margins).
     d.rounded_rectangle((sx - 6, sy - 6, sx + strip.width + 6, sy + strip.height + 6), radius=8,
                         fill=(255, 255, 255))
     base.paste(strip, (sx, sy))
@@ -422,19 +379,12 @@ def strip_panel(base, box, strip_path, date_str, credit=None):
     d = ImageDraw.Draw(base)
     cap = credit or f"Calvin & Hobbes  ·  Bill Watterson  ·  {date_str}  ·  gocomics.com"
     cf = font("DejaVuSansMono.ttf", 13)
-    # ── LA LEGENDE NE DOIT PAS SORTIR DU CADRE ──────────────────────────────
-    # [2026-09-04] Elle etait ecrite sans aucune limite de largeur. Tant que le
-    # cadre faisait 1110 px, les legendes tenaient ; a 900 px (l encart recentre
-    # au milieu bas), le credit Bing - « Phare de Westerheversand a Westerhever,
-    # Schleswig-Holstein, Allemagne (© bluejayphoto/Getty Images) » - DEBORDAIT
-    # sur le bureau, a droite du panneau. Et comme l encart vivant
-    # (osmo-fft-snap.py) recouvre exactement le cadre et rien de plus, ce qui
-    # depassait restait visible SOUS le spectre et le mobile.log : un bout de
-    # phrase orpheline en travers du fond, sans rien pour l expliquer.
-    #
-    # On coupe donc a la largeur utile, avec une ellipse. Mesurer puis tronquer,
-    # et non deviner un nombre de caracteres : la police est a chasse fixe ici,
-    # mais la legende peut contenir des accents et des symboles.
+    # ── THE CAPTION MUST NOT LEAVE THE FRAME ────────────────────────────────
+    # The live inset (osmo-fft-snap.py) covers exactly the frame and nothing
+    # more, so anything overflowing would stay visible beside the spectrum.
+    # Cut at the usable width, with an ellipsis. Measure then truncate, rather
+    # than guessing a number of characters: the font is monospaced here, but
+    # the caption may contain accents and symbols.
     avail = (x1 - x0) - 2 * pad
     if d.textlength(cap, font=cf) > avail:
         while cap and d.textlength(cap + "...", font=cf) > avail:
@@ -462,20 +412,15 @@ def main():
     a = ap.parse_args()
 
     base = background(a.tower, a.tower_x)
-    # [2026-09-06] LA CARTE LAB GSM N EST PLUS CUITE DANS LE FOND, POINT.
-    # C est tools/osmo-topzone.py (widget WebKit vivant) qui la rend, avec les
-    # timeslots qui clignotent et les valeurs ARFCN/IMSI/A5 live. La version
-    # dessinee ici etait la MEME carte, en plus grand et fixe : sur un bureau ou
-    # le widget tourne, on voyait les deux, la peinte en fond derriere la
-    # vivante. C etait pilote par OSMO_LIVE_BANNER=1, que seul le wrapper du
-    # bureau exportait - tout autre chemin de rendu (osmo-wallpaper.sh a la
-    # main, un service, une regeneration apres coup) ramenait le doublon. On
-    # inverse donc le defaut : plus rien de cuit, et OSMO_LEGACY_BANNER=1 pour
-    # qui voudrait l ancien fond autonome (un banc sans bureau vivant).
+    # THE LAB GSM CARD IS NOT BAKED INTO THE WALLPAPER BY DEFAULT.
+    # tools/osmo-topzone.py (live WebKit widget) renders it, with the blinking
+    # timeslots and the live ARFCN/IMSI/A5 values; a card painted here as well
+    # would show twice behind the live one. OSMO_LEGACY_BANNER=1 bakes the
+    # static card for a standalone wallpaper (a bench without the live desktop).
     if os.environ.get("OSMO_LEGACY_BANNER", "0") == "1":
         card(base, (320, 60, 1430, 560), a.arfcn, a.band)
-    # Deux cadres, deux images. Un cadre sans image reste dessine (vide) : le
-    # spectre viendra le couvrir, et vide il dit « rien a montrer ici ».
+    # Two frames, two images. A frame without an image is still drawn (empty):
+    # the spectrum will cover it, and empty it says "nothing to show here".
     poses = {}
     for nom, box, chemin, credit in (("bas", BOX_BAS, a.strip, a.credit),
                                      ("haut", BOX_HAUT, a.strip_haut, a.credit_haut)):
@@ -484,7 +429,7 @@ def main():
             try:
                 strip_panel(base, box, chemin, a.date, credit)
                 poses[nom] = True
-            except Exception as e:  # GIF corrompu, page HTML au lieu d une image...
+            except Exception as e:  # corrupt GIF, HTML page instead of an image...
                 print(f"[wallpaper] image du {nom} ignoree : {e}", file=sys.stderr)
         else:
             glass_panel(base, box, fill=(20, 24, 36), alpha=210, border=(200, 200, 210))

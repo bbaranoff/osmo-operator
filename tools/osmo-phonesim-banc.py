@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-# osmo-phonesim-banc.py - LE MODEM DU BANC, VU PAR oFONO.
+# osmo-phonesim-banc.py - THE BENCH MODEM, AS SEEN BY oFONO.
 #
-# LA CHAINE COMPLETE, ET LA PLACE DE CE FICHIER DEDANS :
+# THE COMPLETE CHAIN, AND WHERE THIS FILE SITS IN IT:
 #
 #   Android → rild → libreference-ril.so → pty AT → osmo-ril-atmodem.py → oFono
 #                                                                           ↑
-#                                                   CE PROGRAMME (AT sur TCP) ┘
+#                                                   THIS PROGRAM (AT over TCP) ┘
 #                                                            ↓
-#                                            le banc : VTY osmo-bsc / osmo-msc
+#                                            the bench: osmo-bsc / osmo-msc VTY
 #
-# oFono ne fabrique pas de modem : il en PILOTE un. Sur ce banc il n y a pas de
-# dongle - « l EC25, pour nous, c est oFono ». Il faut donc donner a oFono
-# quelque chose qui se comporte comme un modem : c est le role du plugin
-# phonesim, qui ouvre une connexion TCP et y parle AT tout court. Ce programme
-# tient l autre bout de cette connexion et repond en lisant LE BANC.
+# oFono does not make a modem: it DRIVES one. On this bench there is no
+# dongle, so oFono must be given something that behaves like a modem: that is
+# the role of the phonesim plugin, which opens a TCP connection and speaks
+# plain AT over it. This program holds the other end of that connection and
+# answers by reading THE BENCH.
 #
-# Mise en service :
-#   1. /etc/ofono/phonesim.conf :
+# Setting up:
+#   1. /etc/ofono/phonesim.conf:
 #          [osmo]
 #          Address=127.0.0.1
 #          Port=12345
-#   2. ce programme (il doit ecouter AVANT qu ofonod cherche le modem)
-#   3. systemctl restart ofono  ->  un modem apparait dans org.ofono.Manager
+#   2. this program (it must listen BEFORE ofonod looks for the modem)
+#   3. systemctl restart ofono  ->  a modem appears in org.ofono.Manager
 #
-# Ce que le modem raconte vient d osmo-bsc (VTY 4242) : le reseau (MCC/MNC,
-# nom), l ARFCN, l etat d enregistrement. Un banc arrete = un modem « pas
-# enregistre », ce qui est la verite, pas une panne.
+# What the modem reports comes from osmo-bsc (VTY 4242): the network (MCC/MNC,
+# name), the ARFCN, the registration state. A stopped bench = a modem "not
+# registered", which is the truth, not a failure.
 import json
 import os
 import re
@@ -43,110 +43,91 @@ BSC_VTY = (os.environ.get("OSMO_BSC_VTY_HOST", "127.0.0.1"),
            int(os.environ.get("OSMO_BSC_VTY_PORT", "4242")))
 MSC_VTY = (os.environ.get("OSMO_MSC_VTY_HOST", "127.0.0.1"),
            int(os.environ.get("OSMO_MSC_VTY_PORT", "4254")))
-# Le mobile osmocom-bb. C est LUI l abonne 100101, et c est son pont audio
-# (gsm_audio / gsm_mic) que la VM relaie : sans lui, pas de voix.
+# The osmocom-bb mobile. IT is subscriber 100101, and its audio bridge
+# (gsm_audio / gsm_mic) is what the VM relays: without it, no voice.
 #
-# [2026-09-23] LE PORT PAR DEFAUT N'EST PLUS UNE VALEUR, C'EST UNE LISTE.
-# Le mobile du fork QEMU (mobile.cfg) lie 4247, celui du banc DSP
-# (c54x_exe/mobile_pont.cfg) lie 4347. start-native.sh passe le bon port
-# depuis le 22/09, mais osmo-pmos-setup lance l'instance --connect (le modem de
-# la VM) sans OSMO_MOB_VTY_PORT : en --dsp elle parlait a 4247, ou personne
-# n'ecoute, et le telephone restait sans reseau et sans appel, sans une
-# erreur. Sans la variable, on essaie donc 4247 puis 4347 a chaque connexion ;
-# la variable, si elle est posee, reste la seule adresse essayee.
+# THE DEFAULT PORT IS A LIST, NOT A SINGLE VALUE. The QEMU fork mobile
+# (mobile.cfg) binds 4247, the DSP bench one (c54x_exe/mobile_pont.cfg) binds
+# 4347. Without OSMO_MOB_VTY_PORT, 4247 then 4347 are tried at every
+# connection; when the variable is set, it is the only address tried.
 _MOB_HOST = os.environ.get("OSMO_MOB_VTY_HOST", "127.0.0.1")
 if os.environ.get("OSMO_MOB_VTY_PORT"):
     MOB_VTY = (_MOB_HOST, int(os.environ["OSMO_MOB_VTY_PORT"]))
 else:
     MOB_VTY = [(_MOB_HOST, 4247), (_MOB_HOST, 4347)]
 MS = os.environ.get("OSMO_MS_NAME", "1")
-# L abonne que ce modem INCARNE : celui du telephone Android. Sur le banc c est
-# 100101 (IMSI 001010001000001), releve par « show subscriber msisdn 100101 »
-# sur le VTY d osmo-msc.
+# The subscriber this modem EMBODIES: the one of the Android phone. On the
+# bench it is 100101 (IMSI 001010001000001), as shown by "show subscriber
+# msisdn 100101" on the osmo-msc VTY.
 IMSI = os.environ.get("OSMO_MS_IMSI", "001010001000001")
 MSISDN = os.environ.get("OSMO_MS_MSISDN", "100101")
-# La reception des SMS passe par le serveur SMPP d osmo-msc (port 2775) : un
-# ESME est deja declare dans la conf du banc (esme msc_tester / osmocom1).
+# SMS reception goes through the osmo-msc SMPP server (port 2775): an ESME is
+# already declared in the bench conf (esme msc_tester / osmocom1).
 SMPP_HOST = os.environ.get("OSMO_SMPP_HOST", "127.0.0.1")
 SMPP_PORT = int(os.environ.get("OSMO_SMPP_PORT", "2775"))
 SMPP_ID = os.environ.get("OSMO_SMPP_ID", "msc_tester")
 SMPP_PW = os.environ.get("OSMO_SMPP_PASSWORD", "osmocom1")
 SMPP_ON = os.environ.get("OSMO_SMPP", "1") == "1"
-# Un SMS entrant va-t-il AUSSI au mobile osmocom-bb ? Oui par defaut : Android
-# et le mobile sont le meme abonne du banc, et on veut les deux en parallele.
+# Does an incoming SMS ALSO go to the osmocom-bb mobile? Yes by default:
+# Android and the mobile are the same bench subscriber, and both are wanted
+# in parallel.
 DUPLIQUE = os.environ.get("OSMO_SMS_DUPLIQUE", "1") == "1"
-# Les boites d entree des SMS remis par la passerelle du banc. Ce programme
-# tourne DEUX fois (le modem d Android en mode ecoute, celui de la VM en mode
-# --connect) : il leur faut donc un port chacun. C est scripts/sms_notify.py
-# qui les previent, et scripts/sms-interop-relay.py qui l appelle.
+# The inboxes for SMS delivered by the bench gateway. This program runs
+# TWICE (the Android modem in listen mode, the VM one in --connect mode): each
+# needs its own port. scripts/sms_notify.py notifies them, and
+# scripts/sms-interop-relay.py calls it.
 SMS_IN_HOST = os.environ.get("OSMO_SMS_IN_HOST", "127.0.0.1")
 SMS_IN_LISTEN = int(os.environ.get("OSMO_SMS_IN_PORT", "12348"))
 SMS_IN_CONNECT = int(os.environ.get("OSMO_SMS_IN_PORT_VM", "12349"))
-# Comment un appel demande par le telephone Android devient un appel du banc.
-# {num} = le numero compose, {msisdn} = notre numero. Le canal Local entre dans
-# le plan de numerotation d Asterisk (contexte « internal », celui qui porte
-# 100/500/600 et la passerelle GSM), puis rebascule sur notre propre numero :
-# le banc etablit donc un vrai appel entre le numero compose et le mobile.
+# How a call requested by the Android phone becomes a bench call.
+# {num} = the dialled number, {msisdn} = our number. The Local channel enters
+# the Asterisk dialplan ("internal" context, the one carrying 100/500/600 and
+# the GSM gateway), then switches back to our own number: the bench thus sets
+# up a real call between the dialled number and the mobile.
 CTX = os.environ.get("OSMO_CALL_CONTEXT", "internal")
-# Et le contexte par lequel le banc nous APPELLE. Releve sur le banc, sur un
-# appel de 100102 vers 100101 : « Event: DialBegin / Context: gsm_in /
-# DestExten: 100101 ». C est ce qui distingue un appel entrant de la seconde
-# jambe de nos propres appels sortants, qui compose aussi notre numero.
-# [2026-09-07] UN SEUL CONTEXTE NE SUFFISAIT PAS : LE TELEPHONE NE SONNAIT
-# QUE POUR LES APPELS DE SON PROPRE OPERATEUR. « gsm_in » est le contexte de
-# l endpoint gsm_msc, celui par lequel arrive un appel VENU DE LA RADIO
-# (100102 -> 100101). Un appel d un AUTRE operateur, lui, entre par le trunk
-# interop (endpoint interop_trunk_opN, context=interop_in) et un appel d un
-# Linphone par « internal » : dans les deux cas le DialBegin ne portait pas
-# « gsm_in », entrant() n etait jamais appele, et AUCUN RING ne partait vers
-# oFono. Le mobile osmocom-bb, lui, etait bien pagine par le MSC (la radio
-# s allume) - mais le combine, cote AT, ne sonnait pas ; personne ne decrochait
-# et le MSC finissait par relacher (MNCC cause DEST_OOO), ce qui remonte en
-# 503 chez l appelant. D ou « les appels op3 -> op1 ne passent pas ».
-# On accepte donc TOUS les contextes par lesquels un appel peut nous arriver.
-# Le filtre qui compte reste DestExten == notre MSISDN : la seconde jambe de
-# nos propres appels sortants compose le numero DISTANT, jamais le notre.
-# [2026-09-09] « zadarma_in » AJOUTE - SANS LUI, PAS D APPEL DE L EXTERIEUR SUR
-# LE TELEPHONE. Un appel venu de l operateur Zadarma entre par le trunk
-# [zadarma] / [zadarma_pbx] (pjsip.conf), dont le context est « zadarma_in » :
-# le DialBegin porte « Context: zadarma_in / DestExten: 100101 ». Ce contexte ne
-# figurait pas dans la liste, entrant() n etait donc jamais appele et AUCUN RING
-# ne partait vers ModemManager. Exactement le meme symptome que pour l inter-op
-# le 07/09 : le mobile osmocom-bb etait bien pagine (la radio s allume) mais le
-# combine restait muet, personne ne decrochait, et l appelant exterieur
-# entendait la tonalite jusqu au relachement du MSC.
+# And the contexts through which the bench CALLS us. An incoming call shows
+# up in the AMI as "Event: DialBegin / Context: <ctx> / DestExten: 100101".
+# ALL contexts through which a call can reach us are accepted:
+#   gsm_in      the gsm_msc endpoint, a call COMING FROM THE RADIO
+#               (100102 -> 100101);
+#   interop_in  the interop trunk (endpoint interop_trunk_opN), a call from
+#               ANOTHER operator;
+#   internal    a Linphone;
+#   zadarma_in  the [zadarma] / [zadarma_pbx] trunk (pjsip.conf), a call from
+#               the outside world via the Zadarma operator.
+# Without the right context entrant() is never called and NO RING goes to
+# oFono/ModemManager: the osmocom-bb mobile is paged by the MSC but the
+# handset stays silent and the MSC eventually releases (MNCC cause DEST_OOO).
+# The filter that matters remains DestExten == our MSISDN: the second leg of
+# our own outgoing calls dials the REMOTE number, never ours.
 IN_CTX = {c.strip() for c in os.environ.get(
     "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,zadarma_in").split(",") if c.strip()}
-# [2026-09-06] L APPEL PASSE PAR L AMI, PAS PAR LA CLI. « channel originate »
-# vient du module res_clioriginate, absent de cette installation (modules.conf
-# est en autoload = no) : la CLI repondait « No such command ». L AMI, lui, est
-# deja actif dans manager.conf ; il n y manquait qu un compte, pose par
-# start-native.sh depuis configs/manager-osmo.conf.
+# THE CALL GOES THROUGH THE AMI, NOT THE CLI. "channel originate" comes from
+# the res_clioriginate module, absent from this installation (modules.conf is
+# autoload = no). The AMI is active in manager.conf; its account is installed
+# by start-native.sh from configs/manager-osmo.conf.
 AMI_HOST = os.environ.get("OSMO_AMI_HOST", "127.0.0.1")
 AMI_PORT = int(os.environ.get("OSMO_AMI_PORT", "5038"))
 AMI_USER = os.environ.get("OSMO_AMI_USER", "osmo")
 AMI_PASS = os.environ.get("OSMO_AMI_PASSWORD", "osmocom1")
 
 def clip(num):
-    """Le numero de l appelant tel qu il doit etre PRESENTE, et son type 27.007.
+    """The caller number as it must be PRESENTED, and its 27.007 type.
 
-    [2026-09-09] LE NUMERO S AFFICHAIT SANS SON « + » SUR LE TELEPHONE. Un appel
-    venu de l exterieur par Zadarma arrive avec un appelant en E.164, mais le
-    dialplan retire le « + » avant de passer l appel au MSC ([zadarma_in] :
-    Set(CALLERID(num)=${FILTER(0-9,...)})), parce que la signalisation GSM ne
-    sait pas le porter jusqu au combine. L AMI nous donne donc « 33656678074 »,
-    et Phosh affichait ca tel quel : ni reconnu comme un numero francais, ni
-    rapproche d un contact du carnet d adresses.
+    A call from the outside via Zadarma arrives with an E.164 caller, but the
+    dialplan strips the "+" before handing the call to the MSC ([zadarma_in]:
+    Set(CALLERID(num)=${FILTER(0-9,...)})), because GSM signalling cannot
+    carry it to the handset. The AMI thus gives "33656678074".
 
-    Le « + » se REMET ici, au moment de la presentation, parce que 27.007 a un
-    champ pour ca : le type de numero. 145 = international (le « + » est
-    implicite et le telephone le reaffiche), 129 = inconnu/national. On rend
-    donc les deux, et l appelant retrouve sa forme +33656678074.
+    The "+" is PUT BACK here, at presentation time, because 27.007 has a field
+    for it: the number type. 145 = international (the "+" is implicit and the
+    phone displays it again), 129 = unknown/national. Both are returned, and
+    the caller gets back its +33656678074 form.
 
-    Regle : un numero deja prefixe d un « + » est international. Sinon, dix
-    chiffres ou plus SANS zero de tete l est aussi - les numeros du banc font
-    six chiffres (100101) et un national francais commence par 0, donc ni l un
-    ni l autre ne peut etre pris pour un international par erreur.
+    Rule: a number already prefixed with "+" is international. Otherwise, ten
+    digits or more WITHOUT a leading zero is international too - bench numbers
+    are six digits (100101) and a French national number starts with 0, so
+    neither can be mistaken for an international one.
     """
     n = (num or "").strip()
     if not n:
@@ -170,16 +151,15 @@ def log(*a):
 
 
 def atlog(sens, texte):
-    """Le journal de CE port-ci : ce qu oFono envoie au modem du banc et ce
-    qu il repond. Le pendant de /var/log/osmo-at.log, qui est l autre bout de
-    la chaine (le RIL d Android). Les deux ensemble racontent tout le trajet."""
+    """The log of THIS port: what oFono sends to the bench modem and what it
+    answers. The counterpart of /var/log/osmo-at.log, which is the other end
+    of the chain (the Android RIL). Together they tell the whole journey."""
     global _atlog
     if _atlog is None:
-        # [2026-09-07] SE RABATTRE SUR /tmp. L instance qui sert la VM tourne
-        # sous l utilisateur ordinaire et ne peut pas ecrire dans /var/log :
-        # elle perdait donc TOUTE sa trace AT, celle qui dit justement ce que
-        # ModemManager fait d un RING ou d un NO CARRIER. Sans trace, plus de
-        # diagnostic possible sur le seul bout de chaine qui compte ici.
+        # FALL BACK TO /tmp. The instance serving the VM runs as the ordinary
+        # user and cannot write to /var/log: without the fallback it would
+        # lose its whole AT trace, the one that says what ModemManager does
+        # with a RING or a NO CARRIER.
         for chemin in (AT_LOG, "/tmp/osmo-at-ofono-%s.log" % os.environ.get("USER", "x")):
             try:
                 _atlog = open(chemin, "a", buffering=1)
@@ -204,13 +184,13 @@ def atlog(sens, texte):
                 return
 
 
-# ── LE BANC, LU PAR SON VTY ─────────────────────────────────────────────────
+# ── THE BENCH, READ THROUGH ITS VTY ─────────────────────────────────────────
 class Vty:
-    """Une connexion VTY qu on garde ouverte (meme mecanique que
-    tools/osmo-ts-probe.py : on lit jusqu au prompt, on ne dort pas)."""
+    """A VTY connection kept open (same mechanics as tools/osmo-ts-probe.py:
+    read up to the prompt, never sleep)."""
 
     def __init__(self, addr):
-        # Une adresse, ou une liste essayee dans l'ordre (voir MOB_VTY).
+        # One address, or a list tried in order (see MOB_VTY).
         self.addrs = addr if isinstance(addr, list) else [addr]
         self.addr = self.addrs[0]
         self.s = None
@@ -271,43 +251,32 @@ MOB = Vty(MOB_VTY)
 
 
 def mobile(action, essais=1):
-    """Une commande d appel sur le mobile. Rend True si elle a ete acceptee.
+    """A call command on the mobile. Returns True if it was accepted.
 
-    [2026-09-07] POURQUOI LE MOBILE, ET PAS LA VM. Un ATD de la VM fait lancer
-    a Asterisk DEUX jambes : l une joue le service demande (l echo du 600),
-    l autre appelle le 100101 - c est-a-dire le MOBILE, pas la VM. Releve sur
-    le banc, quatorze canaux restes ouverts, tous par paires :
-        Local/600@internal-0000000b;2   Application: Echo
-        Local/600@internal-0000000b;1   Application: Congestion
-    La jambe qui doit joindre l abonne tombait sur Congestion(), faute de
-    decroche : l echo parlait dans le vide, gsm_audio restait a zero (crete 0,
-    mesuree) et on n entendait rien. Or c est ce pont-la que la VM relaie. Le
-    mobile doit donc repondre - et il n y a personne pour appuyer sur la
-    touche. On le fait par son VTY.
+    WHY THE MOBILE, AND NOT THE VM. An ATD from the VM makes Asterisk start
+    TWO legs: one plays the requested service (the echo of 600), the other
+    calls 100101 - that is the MOBILE, not the VM. Without an answer that leg
+    falls on Congestion(), gsm_audio stays at zero and nothing is heard - yet
+    that bridge is what the VM relays. The mobile must therefore answer, and
+    there is nobody to press the key: it is done through its VTY.
     """
-    # [2026-09-08] ON ATTEND QUE LA JAMBE ARRIVE AVANT DE DECROCHER. Tenter
-    # « call 1 answer » toutes les demi-secondes pendant que la jambe est
-    # encore en paging faisait ecrire « % No alerting call » une dizaine de
-    # fois sur TOUS les VTY du mobile - dont celui de l utilisateur. Le mobile
-    # dit ou il en est dans « show ms » : tant que sa couche RR est « idle »,
-    # rien n est encore arrive, on se tait.
+    # WAIT FOR THE LEG TO ARRIVE BEFORE ANSWERING. A "call 1 answer" sent
+    # while the leg is still in paging writes "% No alerting call" on ALL the
+    # mobile's VTYs - including the user's. The mobile says where it stands in
+    # "show ms": as long as its RR layer is "idle", nothing has arrived yet,
+    # so keep quiet.
     if action == "answer":
         for _ in range(essais * 2):
             out = MOB.cmd("show ms %s" % MS) or ""
             if "radio resource layer state: idle" not in out:
                 break
             time.sleep(0.5)
-        # Entre la reponse au paging et la sonnerie il reste une a trois
-        # secondes : on garde toutes les tentatives (essais), pas quatre -
-        # avec quatre, le mobile ne decrochait plus et la voix disparaissait.
-    # [2026-09-09] LE DECROCHE REUSSI ETAIT PRIS POUR UN ECHEC. Le mobile
-    # confirme par « % (MS 1) % Call is connected » - un message qui commence
-    # par « % », comme ses erreurs. Le test « pas de % » ne voyait donc jamais
-    # le succes : les 30 tentatives etaient jouees jusqu au bout, soit 29 x
-    # « % No alerting call » sur tous les VTY du mobile (dont celui de
-    # l utilisateur) pendant 15 s, a CHAQUE appel. Seul « No alerting call »
-    # (rien a decrocher encore) justifie de reessayer ; « connected » ou une
-    # reponse sans erreur, c est gagne.
+        # Between the paging response and the ringing there remain one to
+        # three seconds: all attempts (essais) are kept, not just a few.
+    # The mobile confirms with "% (MS 1) % Call is connected" - a message that
+    # starts with "%", like its errors. Only "No alerting call" / "No call"
+    # (nothing to answer yet) justifies a retry; "connected" or any other
+    # reply means success.
     for _ in range(essais):
         MOB.cmd("enable")
         out = MOB.cmd("call %s %s" % (MS, action))
@@ -318,8 +287,8 @@ def mobile(action, essais=1):
 
 
 def mobile_decroche():
-    """Le decroche, en insistant : la jambe vers l abonne met un instant a
-    faire sonner le mobile, et une seule tentative arrive trop tot."""
+    """The answer, insistently: the leg towards the subscriber takes a moment
+    to make the mobile ring, and a single attempt comes too early."""
     if mobile("answer", essais=30):
         log("mobile : decroche")
         return True
@@ -328,9 +297,9 @@ def mobile_decroche():
 
 
 class Banc:
-    """L etat du banc, rafraichi a la demande et garde une seconde en cache -
-    un modem est interroge en rafale au demarrage du RIL (CREG, COPS, CSQ...),
-    inutile de refaire quatre allers-retours VTY pour la meme reponse."""
+    """The bench state, refreshed on demand and cached for one second - a
+    modem is queried in bursts when the RIL starts (CREG, COPS, CSQ...), no
+    need to make four VTY round trips for the same answer."""
 
     def __init__(self):
         self._t = 0
@@ -344,11 +313,8 @@ class Banc:
         txt = BSC.cmd("show network")
         if txt:
             v["up"] = True
-            # [2026-09-06] LE FORMAT REEL D OsmoBSC, releve sur le banc :
-            #   « BSC is on MCC-MNC 001-01 and has 2 BTS »
-            # (et non les « Country Code: » / « Network Code: » que cherchait la
-            # premiere version - elle ne trouvait donc jamais rien et laissait
-            # le modem sur les valeurs par defaut).
+            # The actual OsmoBSC format, as seen on the bench:
+            #   "BSC is on MCC-MNC 001-01 and has 2 BTS"
             m = re.search(r'MCC-MNC\s+(\d+)-(\d+)', txt)
             if m:
                 v["mcc"], v["mnc"] = m.group(1), m.group(2)
@@ -357,8 +323,7 @@ class Banc:
                 v["name"] = m.group(1).strip()
         txt = BSC.cmd("show bts 0")
         if txt:
-            # « ARFCNs: 514 » sur ce banc (le « s » et les deux-points
-            # comptaient : « ARFCN\s+ » ne trouvait rien).
+            # "ARFCNs: 514" on this bench (the "s" and the colon matter).
             m = re.search(r'ARFCNs?:?\s+(\d+)', txt)
             if m:
                 v["arfcn"] = m.group(1)
@@ -375,48 +340,50 @@ class Banc:
 BANC = Banc()
 
 
-# ── LA 4G : srsRAN SUR LA RADIO VIRTUELLE ZEROMQ ────────────────────────────
-# [2026-09-07] LE TELEPHONE EST SUR LA 4G, ET REDESCEND EN 2G POUR PARLER.
-# Le banc a deux radios : la 2G d osmocom (osmo-bts-trx + le mobile
-# osmocom-bb, qui EST l abonne 100101) et une 4G srsRAN sans materiel
-# (srsENB <-> srsUE par ZeroMQ, ports 2000/2001, srsEPC derriere). L eNB
-# annonce la 2G a ses UE par le SIB7 de sib.conf (la liste GERAN, mappee dans
-# le SIB1 par si_mapping_info = [7]) : c est le CSFB, « CS fallback » - un UE
-# pose sur la LTE, qui n a pas de voix, redescend sur la GSM le temps d un
-# appel ou d un SMS, puis remonte.
+# ── THE 4G: srsRAN OVER THE ZEROMQ VIRTUAL RADIO ────────────────────────────
+# THE PHONE IS ON 4G, AND DROPS TO 2G TO TALK.
+# The bench has two radios: the osmocom 2G (osmo-bts-trx + the osmocom-bb
+# mobile, which IS subscriber 100101) and an srsRAN 4G without hardware
+# (srsENB <-> srsUE over ZeroMQ, ports 2000/2001, srsEPC behind). The eNB
+# announces the 2G to its UEs through the SIB7 of sib.conf (the GERAN list,
+# mapped into SIB1 by si_mapping_info = [7]): that is CSFB, "CS fallback" - a
+# UE camped on LTE, which has no voice, drops to GSM for the duration of a
+# call or an SMS, then climbs back.
 #
-# Ce modem fait ce que ferait la puce d un vrai telephone devant ces deux
-# reseaux : il campe sur la 4G tant qu elle est la (+CEREG enregistre, AcT 7,
-# TAC/ECI de l eNB), et des qu un service CS commence - un ATD, un RING, un
-# SMS dans un sens ou l autre - il annonce qu il est passe sur la 2G (URC
-# +CREG avec LAC/CI de la BTS et AcT 0) ; le service fini, il remonte. Phosh
-# affiche donc « 4G », puis « 2G » pendant l appel, puis « 4G ».
+# This modem does what the chip of a real phone would do in front of these
+# two networks: it camps on the 4G as long as it is there (+CEREG registered,
+# AcT 7, TAC/ECI of the eNB), and as soon as a CS service starts - an ATD, a
+# RING, an SMS either way - it announces it has moved to 2G (URC +CREG with
+# LAC/CI of the BTS and AcT 0); once the service ends, it climbs back. Phosh
+# therefore shows "4G", then "2G" during the call, then "4G".
 #
-# LA VERITE DE LA 4G, ELLE, VIENT DU BANC, comme celle de la 2G vient du VTY
-# d osmo-bsc :
-#   - l eNB est la si le port ZeroMQ de srsENB (2000) ecoute ;
-#   - l UE est ATTACHE si srsUE a monte son tun (tun_srsue) avec une adresse -
-#     il le fait dans son propre espace reseau (--gw.netns=ue1), c est la
-#     qu on regarde. Pas de droit d y regarder (pas root) : on s en tient a
-#     l eNB. OSMO_LTE_TEMOIN=enb pour ne regarder QUE l eNB, meme en root.
-# Les identites (MCC/MNC, TAC, ECI, APN, les ARFCN GERAN du SIB7) sont lues
-# dans les fichiers srsRAN eux-memes (OSMO_SRSRAN_DIR, sinon ~/.config/srsran
-# de root, sinon /etc/srsran) : ce que le modem raconte est ce que l eNB emet.
+# THE TRUTH OF THE 4G COMES FROM THE BENCH, as that of the 2G comes from the
+# osmo-bsc VTY:
+#   - the eNB is there if the srsENB ZeroMQ port (2000) listens;
+#   - the UE is ATTACHED if srsUE has brought up its tun (tun_srsue) with an
+#     address - it does so in its own network namespace (--gw.netns=ue1),
+#     which is where we look. No right to look there (not root): stick to
+#     the eNB. OSMO_LTE_TEMOIN=enb to look ONLY at the eNB, even as root.
+# The identities (MCC/MNC, TAC, ECI, APN, the GERAN ARFCNs of the SIB7) are
+# read from the srsRAN files themselves (OSMO_SRSRAN_DIR, else root's
+# ~/.config/srsran, else /etc/srsran): what the modem reports is what the
+# eNB transmits.
 ZMQ_PORT = int(os.environ.get("OSMO_ZMQ_PORT", "2000"))
 LTE_NETNS = os.environ.get("OSMO_LTE_NETNS", "ue1")
 LTE_TUN = os.environ.get("OSMO_LTE_TUN", "tun_srsue")
 LTE_TEMOIN = os.environ.get("OSMO_LTE_TEMOIN", "ue")          # ue | enb
 LTE_ON = os.environ.get("OSMO_LTE", "1") == "1"
-# Le nom sous lequel la 4G apparait au telephone. srsRAN n emet pas de nom de
-# reseau ; on en donne un, distinct de celui de la 2G (« Osmocom », lu sur
-# osmo-bsc), pour que la liste des reseaux montre bien DEUX entrees.
+# The name under which the 4G appears on the phone. srsRAN does not transmit
+# a network name; one is given, distinct from that of the 2G ("Osmocom", read
+# from osmo-bsc), so that the network list shows TWO entries.
 LTE_NAME = os.environ.get("OSMO_LTE_NAME", "Osmocom 4G")
-# [2026-10-15] LA DATA EN 2G : LE MODEM GPRS SUR LE CALYPSO (QEMU + ROM TI).
-# Sans 4G, la data du telephone sort par tun_modem, le tunnel du `modem`
-# osmocom-bb (contexte PDP, netns msgprs), NATe derriere son adresse ; le GGSN
-# rend le tout sur apn0, NATe vers Internet comme le SGi de la 4G. Le Calypso
-# n a qu UN client de couche 2 : scripts/calypso-mode.sh le donne au modem
-# (ATD*99, data) ou au mobile (appel, SMS : voix). OSMO_GPRS_DATA=0 : coupe.
+# DATA OVER 2G: THE GPRS MODEM ON THE CALYPSO (QEMU + TI ROM).
+# Without 4G, the phone's data goes out through tun_modem, the tunnel of the
+# osmocom-bb `modem` (PDP context, netns msgprs), NATed behind its address;
+# the GGSN delivers it all on apn0, NATed to the Internet like the 4G SGi.
+# The Calypso has only ONE layer-2 client: scripts/calypso-mode.sh gives it
+# to the modem (ATD*99, data) or to the mobile (call, SMS: voice).
+# OSMO_GPRS_DATA=0: disabled.
 GPRS_DATA = os.environ.get("OSMO_GPRS_DATA", "1") == "1"
 GPRS_NETNS = os.environ.get("OSMO_GPRS_NETNS", "msgprs")
 GPRS_TUN = os.environ.get("OSMO_GPRS_TUN", "tun_modem")
@@ -427,7 +394,7 @@ CALYPSO_MODE_F = "/run/osmo-banc/calypso-mode"
 
 
 def calypso_mode():
-    """voix | data : a qui est le Calypso (scripts/calypso-mode.sh)."""
+    """voix | data: who owns the Calypso (scripts/calypso-mode.sh)."""
     try:
         with open(CALYPSO_MODE_F) as f:
             return f.read().strip() or "voix"
@@ -436,8 +403,9 @@ def calypso_mode():
 
 
 def calypso(mode, attendre):
-    """Donne le Calypso au mobile (voix) ou au modem GPRS (data). attendre :
-    jusqu au mobile en service / au PDP actif (bloquant, 2 a 4 min max)."""
+    """Give the Calypso to the mobile (voix) or to the GPRS modem (data).
+    attendre: wait until the mobile is in service / the PDP is active
+    (blocking, 2 to 4 min max)."""
     if not os.path.exists(CALYPSO_MODE):
         log("calypso : %s absent, pas de bascule %s" % (CALYPSO_MODE, mode))
         return False
@@ -450,8 +418,8 @@ def calypso(mode, attendre):
     for l in (r.stdout or "").splitlines():
         log("calypso : %s" % l)
     return r.returncode == 0
-# Le constructeur annonce a AT+CGMI : il decide du greffon ModemManager, donc
-# de la facon de faire la data (voir la reponse a +CGMI et a +GTRNDIS).
+# The vendor announced to AT+CGMI: it decides the ModemManager plugin, hence
+# the way data is done (see the replies to +CGMI and +GTRNDIS).
 VENDOR = os.environ.get("OSMO_MODEM_VENDOR", "Fibocom")
 
 
@@ -465,7 +433,7 @@ def _tcp_ecoute(port, host="127.0.0.1"):
 
 
 class Lte:
-    """La 4G du banc : ce que srsRAN emet, et si notre UE y est."""
+    """The bench 4G: what srsRAN transmits, and whether our UE is on it."""
 
     def __init__(self):
         self.dir = self._repertoire()
@@ -495,7 +463,7 @@ class Lte:
 
     @staticmethod
     def _val(texte, cle, defaut):
-        """« cle = valeur » (ini ou libconfig, 0x accepte), ou le defaut."""
+        """"key = value" (ini or libconfig, 0x accepted), or the default."""
         m = re.search(r'^\s*%s\s*=\s*"?([0-9A-Za-z_.]+)' % re.escape(cle), texte, re.M)
         if not m:
             return defaut
@@ -516,14 +484,14 @@ class Lte:
              "cell_id": self._val(rr, "cell_id", 1),
              "apn": self._val(epc, "apn", "srsapn"),
              "geran": [], "sib7_annonce": False}
-        # Le SIB7 : la liste GERAN que l eNB donne a ses UE pour le CSFB, et
-        # le fait qu il soit bien programme dans le SIB1 (sinon il n est pas
-        # emis, et un vrai UE ne saurait pas qu il y a une 2G a cote).
+        # The SIB7: the GERAN list the eNB gives its UEs for CSFB, and
+        # whether it is scheduled in SIB1 (otherwise it is not transmitted,
+        # and a real UE would not know there is a 2G next door).
         m = re.search(r'sib7\s*=\s*\{(.*?)\n\}', sib, re.S)
         if m:
             bloc = m.group(1)
-            # Le groupe GERAN du SIB7, c est start_arfcn PLUS la liste qui
-            # suit (36.331, CarrierFreqsGERAN) : les deux sont annonces.
+            # The GERAN group of the SIB7 is start_arfcn PLUS the list that
+            # follows (36.331, CarrierFreqsGERAN): both are announced.
             deb = re.search(r'start_arfcn\s*=\s*(\d+)', bloc)
             if deb:
                 c["geran"].append(int(deb.group(1)))
@@ -535,11 +503,11 @@ class Lte:
         return c
 
     def _ue_attache(self):
-        """True/False si on a pu regarder le tun de srsUE, None sinon."""
-        # Le tun est dans l espace reseau si srsue a ete lance avec
-        # --gw.netns, sur l hote sinon (« srsue » tout court) : on regarde
-        # les DEUX. True des qu on le voit ; None si on n a pu regarder nulle
-        # part (pas root pour l espace, et pas de tun sur l hote).
+        """True/False if the srsUE tun could be inspected, None otherwise."""
+        # The tun is in the network namespace if srsue was started with
+        # --gw.netns, on the host otherwise (plain "srsue"): BOTH are checked.
+        # True as soon as it is seen; None if nowhere could be looked at (not
+        # root for the namespace, and no tun on the host).
         essais = []
         if LTE_NETNS:
             essais.append(["ip", "-n", LTE_NETNS, "-4", "-o", "addr", "show"])
@@ -552,10 +520,10 @@ class Lte:
             except (OSError, subprocess.TimeoutExpired):
                 continue
             if r.returncode != 0:
-                # [2026-09-08] « ip -n ue1 » refuse sans root (Operation not
-                # permitted) alors que l espace existe : le tun peut y etre
-                # sans qu on le voie. Ne pas conclure « pas attache » sur la
-                # seule vue de l hote.
+                # "ip -n ue1" is refused without root (Operation not
+                # permitted) while the namespace exists: the tun may be there
+                # unseen. Do not conclude "not attached" from the host view
+                # alone.
                 if "-n" in cmd and LTE_NETNS and os.path.exists("/run/netns/" + LTE_NETNS):
                     ns_ferme = True
                 continue
@@ -563,10 +531,11 @@ class Lte:
             if re.search(r'\b%s\b.*\binet\b' % re.escape(LTE_TUN), r.stdout):
                 return True
         if ns_ferme:
-            # Sans root, on regarde par les fils de srsue : le fil GW a fait
-            # setns() dans l espace, et /proc/<pid>/task/<tid>/net/ se lit
-            # par tout le monde. fib_trie y liste les adresses locales : le
-            # tun y est avec son adresse des que l attach a abouti.
+            # Without root, look through the srsue threads: the GW thread
+            # did setns() into the namespace, and /proc/<pid>/task/<tid>/net/
+            # is readable by everyone. fib_trie lists the local addresses
+            # there: the tun shows up with its address once the attach
+            # succeeded.
             vu = self._ue_attache_par_proc()
             if vu is not None:
                 return vu
@@ -574,8 +543,8 @@ class Lte:
         return False if vu_quelque_part else None
 
     def _ue_attache_par_proc(self):
-        """True/False d apres /proc/<pid srsue>/task/*/net, None si pas de
-        srsue ou rien de lisible."""
+        """True/False from /proc/<srsue pid>/task/*/net, None if no srsue
+        or nothing readable."""
         try:
             r = subprocess.run(["pgrep", "-x", "srsue"], capture_output=True, text=True, timeout=3)
         except (OSError, subprocess.TimeoutExpired):
@@ -604,8 +573,8 @@ class Lte:
                         trie = f.read()
                 except OSError:
                     continue
-                # Une adresse LOCAL autre que 127.x dans l espace du tun :
-                # srsue l a recue de l EPC.
+                # A LOCAL address other than 127.x in the tun's namespace:
+                # srsue received it from the EPC.
                 if re.search(r'^\s+\|--\s+(?!127\.)\d+\.\d+\.\d+\.\d+\n\s+/32 host LOCAL', trie, re.M):
                     return True
         return False if lu else None
@@ -653,7 +622,7 @@ class Lte:
             log("4G : pas de SIB7 (liste GERAN) dans sib.conf - pas de CSFB annonce aux UE")
 
     def verifier_geran(self, arfcn_bts):
-        """Une fois : la 2G que le SIB7 annonce est-elle celle du banc ?"""
+        """Once: is the 2G announced by the SIB7 the one of the bench?"""
         if self._geran_verifie or not arfcn_bts:
             return
         self._geran_verifie = True
@@ -670,16 +639,16 @@ class Lte:
 LTE = Lte()
 
 
-# ── ASTERISK, PAR L AMI ─────────────────────────────────────────────────────
+# ── ASTERISK, THROUGH THE AMI ───────────────────────────────────────────────
 def _ami(actions, wait=3.0):
-    """Ouvre une session AMI, joue les actions, rend la reponse brute."""
+    """Open an AMI session, play the actions, return the raw reply."""
     try:
         s = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
     except OSError as e:
         return None, "AMI injoignable (%s)" % e
     try:
         s.settimeout(wait)
-        s.recv(4096)                                  # la banniere
+        s.recv(4096)                                  # the banner
         s.sendall(("Action: Login\r\nUsername: %s\r\nSecret: %s\r\n\r\n"
                    % (AMI_USER, AMI_PASS)).encode())
         rep = s.recv(4096).decode(errors="replace")
@@ -711,18 +680,17 @@ def _ami(actions, wait=3.0):
 
 
 def ami_originate(num):
-    """Fait naitre l appel : le numero compose est appele dans le plan du banc,
-    et une fois decroche il est mis en relation avec notre propre numero - donc
-    avec le mobile de l abonne. Rend (ok, canal ou raison)."""
+    """Give birth to the call: the dialled number is called in the bench
+    dialplan, and once answered it is connected to our own number - hence to
+    the subscriber's mobile. Returns (ok, channel or reason)."""
     chan = "Local/%s@%s" % (num, CTX)
-    # [2026-09-09] ECHO_NO_PROMPT=1 : le 600 d Asterisk saute son annonce
-    # (demo-echotest) et passe droit a Echo. Avec l enregistrement de la
-    # jambe ;1 (sub-record), l enchainement Playback -> Echo faisait lacher a
-    # Asterisk une rafale de milliers de paquets RTP de silence en 60 ms vers
-    # le BTS - « une partie de l appel avec un sale son ». Voir le commentaire
-    # du 600 dans configs/extensions.conf ; sans effet sur les autres numeros.
-    # L annonce de l echo test est rejouee sur la patte du mobile (option A()
-    # du Dial, via DIAL_OPTS) : la, elle ne declenche pas la rafale.
+    # ECHO_NO_PROMPT=1: Asterisk's 600 skips its announcement (demo-echotest)
+    # and goes straight to Echo: with the recording of leg ;1 (sub-record),
+    # the Playback -> Echo sequence makes Asterisk send a burst of RTP
+    # silence packets towards the BTS. See the comment of 600 in
+    # configs/extensions.conf; no effect on the other numbers. The echo test
+    # announcement is played instead on the mobile leg (A() option of Dial,
+    # via DIAL_OPTS), where it does not trigger the burst.
     extra = "Variable: DIAL_OPTS=A(demo-echotest)\r\n" if num == "600" else ""
     act = ("Action: Originate\r\n"
            "Channel: %s\r\n"
@@ -749,7 +717,7 @@ def ami_hangup(channel):
 
 
 def _bloc(txt):
-    """Un bloc d evenement AMI (« Cle: valeur » par ligne) rendu en dict."""
+    """An AMI event block ("Key: value" per line) returned as a dict."""
     d = {}
     for ligne in txt.split("\r\n"):
         cle, sep, val = ligne.partition(":")
@@ -759,22 +727,20 @@ def _bloc(txt):
 
 
 class AmiEcoute(threading.Thread):
-    """L oreille sur Asterisk.
+    """The ear on Asterisk.
 
-    [2026-09-07] SANS ELLE, NI SONNERIE NI RACCROCHE. Ce modem ne savait que
-    COMPOSER. Il n emettait aucun RING : ModemManager n avait donc rien a
-    montrer et les appels entrants n existaient pas dans l interface. Et il
-    n apprenait jamais qu un appel s etait termine : quand le correspondant
-    raccrochait, l ecran d appel restait affiche. Les deux manques ont la meme
-    cause - personne n ecoutait Asterisk - et donc le meme remede.
+    WITHOUT IT, NEITHER RINGING NOR HANGUP. It is what emits the RING for an
+    incoming call (otherwise ModemManager has nothing to show) and what
+    learns that a call has ended (otherwise the call screen stays displayed
+    when the other party hangs up).
 
-    Ce qu on guette, releve sur le banc pour un appel de 100102 vers 100101 :
+    What is watched, as seen on the bench for a call from 100102 to 100101:
         Event: DialBegin      Context: gsm_in
         CallerIDNum: 100102   DestExten: 100101
         DestChannel: PJSIP/gsm_msc-0000000f
-    puis Hangup sur ce meme canal pour la fin. Le contexte compte : nos propres
-    appels sortants font eux aussi composer notre numero, mais depuis
-    « internal » - sans ce filtre le modem se sonnerait lui-meme.
+    then Hangup on that same channel for the end. Our own outgoing calls also
+    dial our number: without the est_notre_jambe() filter the modem would
+    ring itself.
     """
 
     daemon = True
@@ -791,7 +757,7 @@ class AmiEcoute(threading.Thread):
         s = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
         try:
             s.settimeout(None)
-            s.recv(4096)                                   # la banniere
+            s.recv(4096)                                   # the banner
             s.sendall(("Action: Login\r\nUsername: %s\r\nSecret: %s\r\n"
                        "Events: on\r\n\r\n" % (AMI_USER, AMI_PASS)).encode())
             log("AMI : a l ecoute des appels")
@@ -817,23 +783,19 @@ class AmiEcoute(threading.Thread):
         ev = e.get("Event")
         if ev == "DialBegin" and e.get("Context") in IN_CTX \
                 and e.get("DestExten") == MSISDN:
-            # La seconde jambe de nos propres appels compose NOTRE numero : sans
-            # ce test, le telephone sonne pour l appel qu il vient de passer.
+            # The second leg of our own calls dials OUR number: without this
+            # test, the phone rings for the call it has just placed.
             if modem.est_notre_jambe(e.get("Channel") or ""):
                 return
             modem.entrant(e.get("CallerIDNum") or "", e.get("DestChannel") or "")
         elif ev == "Newchannel":
-            # [2026-09-07] LE NOM QU ON GARDAIT N EN ETAIT PAS UN.
-            # ami_originate range « Local/600@internal », qui est la DEMANDE.
-            # Asterisk, lui, cree « Local/600@internal-0000000b;1 » : le
-            # Action: Hangup sur l ancien nom ne trouvait rien et ne raccrochait
-            # donc jamais - d ou les quatorze canaux empiles sur le banc. On
-            # note le vrai nom des qu il apparait.
-            # [2026-09-07] ON LATCHE LE PREMIER, PAS LE DERNIER. Un canal Local
-            # arrive par PAIRES (« ...;1 » et « ...;2 », les deux evenements a
-            # la meme milliseconde) : la boucle acceptait les deux et le nom
-            # retenu finissait sur « ;2 ». On ne remplace donc le nom que tant
-            # qu il vaut encore la DEMANDE (c["origine"]).
+            # ami_originate stores "Local/600@internal", which is the
+            # REQUEST. Asterisk creates "Local/600@internal-0000000b;1": an
+            # Action: Hangup needs that real name, noted as soon as it
+            # appears. LATCH THE FIRST, NOT THE LAST: a Local channel comes
+            # in PAIRS ("...;1" and "...;2", both events in the same
+            # millisecond), so the name is replaced only while it still
+            # equals the REQUEST (c["origine"]).
             chan = e.get("Channel") or ""
             for c in modem.calls:
                 ref = c.get("channel")
@@ -846,54 +808,53 @@ class AmiEcoute(threading.Thread):
                     modem.fin_appel(chan)
 
 
-# ── LA DATA : UN SERVEUR PPP AU BOUT DU PORT AT ─────────────────────────────
-# [2026-09-07] POURQUOI PPP, ET PAS AUTRE CHOSE. ModemManager, devant un modem
-# qui n a qu un port AT, ne connait qu une facon de faire la data : composer
-# ATD*99***1#, attendre CONNECT, et laisser NetworkManager lancer pppd sur le
-# port serie. Les greffons qui savent se passer de PPP (Fibocom +GTRNDIS,
-# Huawei ^NDISDUP, Cinterion ^SWWAN) exigent tous un port reseau USB - soit
-# pour reconnaitre le modem a son identifiant USB, soit pour numeroter le port
-# (bInterfaceNumber) ; sur un port serie PCI de QEMU, aucun ne s applique.
-# Verifie dans les sources de ModemManager le 2026-09-07. Il faut donc que le
-# telephone AIT du PPP (les modules ppp_generic/ppp_async, compiles pour son
-# noyau) et que ce modem parle PPP a l autre bout : c est ce bloc.
+# ── DATA: A PPP SERVER AT THE END OF THE AT PORT ────────────────────────────
+# WHY PPP, AND NOTHING ELSE. ModemManager, facing a modem that has only an AT
+# port, knows a single way to do data: dial ATD*99***1#, wait for CONNECT,
+# and let NetworkManager run pppd on the serial port. The plugins that can do
+# without PPP (Fibocom +GTRNDIS, Huawei ^NDISDUP, Cinterion ^SWWAN) all
+# require a USB network port - either to recognise the modem by its USB id,
+# or to number the port (bInterfaceNumber); on a QEMU PCI serial port, none
+# applies. So the phone must HAVE PPP (the ppp_generic/ppp_async modules,
+# built for its kernel) and this modem must speak PPP at the other end: that
+# is this block.
 #
-# Ce qu on fait, et rien de plus (RFC 1661, 1662, 1332) :
-#   - le cadrage HDLC asynchrone (0x7e, echappement 0x7d, FCS-16) ;
-#   - LCP : on accepte MRU, ACCM, nombre magique, PFC et ACFC, on rejette le
-#     reste (dont l authentification : le banc n en demande pas) ; on repond
-#     aux Echo-Request ; un Terminate-Request finit la session ;
-#   - IPCP : on DONNE au telephone son adresse et ses DNS par Configure-Nak
-#     (c est ainsi qu un operateur les attribue), on refuse la compression VJ ;
-#   - IPv6CP et CCP : Protocol-Reject, pppd s en passe ;
-#   - les paquets IP vont dans un tun, et ce tun est mis DANS L ESPACE RESEAU
-#     DE srsUE (--gw.netns) avec un NAT vers tun_srsue : chaque paquet du
-#     telephone traverse alors la radio 4G, l eNB, l EPC et le SGi. Si srsUE
-#     tourne sur l hote (sans netns), on route quand meme par tun_srsue, mais
-#     le retour, lui, prend le raccourci local - l UE et l EPC etant la meme
-#     machine, le noyau livre en interne ce qui est adresse a une adresse
-#     locale. On le dit dans le journal.
+# What is done, and nothing more (RFC 1661, 1662, 1332):
+#   - asynchronous HDLC framing (0x7e, 0x7d escape, FCS-16);
+#   - LCP: MRU, ACCM, magic number, PFC and ACFC are accepted, the rest is
+#     rejected (including authentication: the bench asks for none);
+#     Echo-Requests are answered; a Terminate-Request ends the session;
+#   - IPCP: the phone is GIVEN its address and DNS by Configure-Nak (this is
+#     how an operator assigns them), VJ compression is refused;
+#   - IPv6CP and CCP: Protocol-Reject, pppd does without;
+#   - IP packets go into a tun, and that tun is placed IN THE NETWORK
+#     NAMESPACE OF srsUE (--gw.netns) with a NAT towards tun_srsue: each
+#     packet of the phone then crosses the 4G radio, the eNB, the EPC and the
+#     SGi. If srsUE runs on the host (no netns), routing still goes through
+#     tun_srsue, but the return takes the local shortcut - the UE and the
+#     EPC being the same machine, the kernel delivers internally what is
+#     addressed to a local address. This is said in the log.
 import fcntl
 import random
 import struct
 
-# [2026-09-08] Les adresses du lien PPP ne doivent PAS etre celles que l EPC
-# donne a l UE. Avec open5gs, srsUE recoit 10.45.0.2 ; le lien PPP en
-# 10.45.0.1/.2 mettait alors l adresse du telephone en LOCAL sur tun_srsue,
-# dans le meme espace reseau : le retour du NAT etait livre a l hote au lieu
-# de repartir vers le telephone. Un /30 a part, que rien d autre n emploie.
-PPP_LOCAL = os.environ.get("OSMO_PPP_LOCAL", "10.99.0.1")      # nous, le reseau
-PPP_PEER = os.environ.get("OSMO_PPP_PEER", "10.99.0.2")        # le telephone
+# The PPP link addresses must NOT be those the EPC gives the UE (with
+# open5gs, srsUE receives 10.45.0.2): the phone's address would then be LOCAL
+# on tun_srsue in the same namespace, and the NAT return would be delivered
+# to the host instead of going back to the phone. A separate /30 that nothing
+# else uses.
+PPP_LOCAL = os.environ.get("OSMO_PPP_LOCAL", "10.99.0.1")      # us, the network
+PPP_PEER = os.environ.get("OSMO_PPP_PEER", "10.99.0.2")        # the phone
 PPP_DNS = [d.strip() for d in os.environ.get("OSMO_PPP_DNS", "8.8.8.8,8.8.4.4").split(",") if d.strip()]
 PPP_IF = os.environ.get("OSMO_PPP_IF", "ppp-pmos")
 
 
 def _sgi_net_defaut():
-    """Le sous-reseau des UE, pour la sortie SGi -> Internet de l hote :
-    celui de smf.yaml avec open5gs (10.45.0.0/16), 172.16.0.0/24 avec srsEPC."""
-    # [2026-09-16] Le prefixe du banc (/opt/LTE/open5gs/install, celui d
-    # osmo-epc.sh) manquait : on retombait sur 172.16.0.0/24 et la MASQUERADE
-    # posee ici ne couvrait pas les UE open5gs (10.45.0.0/16).
+    """The UE subnet, for the host's SGi -> Internet egress: the one of
+    smf.yaml with open5gs (10.45.0.0/16), 172.16.0.0/24 with srsEPC."""
+    # The bench prefix (/opt/LTE/open5gs/install, the one of osmo-epc.sh) is
+    # among the candidates: without it the MASQUERADE set here would not
+    # cover the open5gs UEs (10.45.0.0/16).
     for f in ([os.path.join(os.environ["OPEN5GS_PREFIX"], "etc/open5gs/smf.yaml")] if os.environ.get("OPEN5GS_PREFIX") else []) + [
             "/opt/LTE/open5gs/install/etc/open5gs/smf.yaml",
             "/root/open5gs/install/etc/open5gs/smf.yaml", "/etc/open5gs/smf.yaml"]:
@@ -923,7 +884,7 @@ def ppp_fcs(data, fcs=0xFFFF):
 
 
 def _sh(*cmd):
-    """Une commande systeme, sans lever : rend (rc, sortie)."""
+    """A system command, without raising: returns (rc, output)."""
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         return r.returncode, (r.stdout + r.stderr).strip()
@@ -942,7 +903,7 @@ class Ppp:
         self.buf = bytearray()
         self.in_frame = False
         self.esc = False
-        self.brut = bytearray()              # ce qui arrive HORS trame (un AT ?)
+        self.brut = bytearray()              # what arrives OUTSIDE a frame (an AT?)
         self.ident = 0
         self.lcp_ack_recu = self.lcp_ack_donne = self.lcp_ouvert = False
         self.ipcp_ack_recu = self.ipcp_ack_donne = self.ipcp_ouvert = False
@@ -950,14 +911,14 @@ class Ppp:
         self.ns = None
         self.fini = False
         self.lock = threading.Lock()
-        self.octets = [0, 0]                 # montant, descendant
-        self._motif_fin = None               # pose par terminer()
+        self.octets = [0, 0]                 # upstream, downstream
+        self._motif_fin = None               # set by terminer()
 
     def terminer(self, motif):
-        """C est NOUS qui fermons la session : Terminate-Request a pppd, qui
-        repond Terminate-Ack et s arrete ; s il ne repond pas dans la seconde,
-        on ferme quand meme. fin() dira NO CARRIER au port, ModemManager
-        reprend alors la main en mode commande."""
+        """WE close the session: Terminate-Request to pppd, which answers
+        Terminate-Ack and stops; if it does not answer within a second, close
+        anyway. fin() will say NO CARRIER on the port, and ModemManager takes
+        over again in command mode."""
         if self.fini or self._motif_fin:
             return
         self._motif_fin = motif
@@ -966,7 +927,7 @@ class Ppp:
         t.daemon = True
         t.start()
 
-    # -- la couche HDLC
+    # -- the HDLC layer
     def feed(self, data):
         for b in data:
             if b == 0x7E:
@@ -978,9 +939,9 @@ class Ppp:
                 self.brut.clear()
                 continue
             if not self.in_frame:
-                # Hors trame : le port a pu repasser en AT (ModemManager qui
-                # reprend la main apres la mort de pppd). « AT » suivi d une
-                # fin de ligne, et on rend le port.
+                # Outside a frame: the port may have switched back to AT
+                # (ModemManager taking over after pppd died). "AT" followed
+                # by an end of line, and the port is given back.
                 self.brut += bytes([b])
                 if b in (0x0D, 0x0A):
                     ligne = self.brut.decode(errors="replace").strip().upper()
@@ -1001,13 +962,13 @@ class Ppp:
 
     def _trame(self, f):
         if ppp_fcs(f) != 0xF0B8:
-            return                           # FCS faux : on jette
+            return                           # bad FCS: drop
         f = f[:-2]
         if f[:2] == b"\xff\x03":
             f = f[2:]
         if not f:
             return
-        if f[0] & 1:                         # protocole sur un octet (PFC)
+        if f[0] & 1:                         # one-byte protocol (PFC)
             proto, pkt = f[0], f[1:]
         else:
             proto, pkt = struct.unpack(">H", f[:2])[0], f[2:]
@@ -1038,7 +999,7 @@ class Ppp:
             except OSError:
                 self.fin("port ferme")
 
-    # -- les paquets de negociation
+    # -- the negotiation packets
     @staticmethod
     def _options(data):
         opts, i = [], 0
@@ -1077,7 +1038,7 @@ class Ppp:
         if code == self.CONF_REQ:
             rejet = b""
             for t, v in self._options(body):
-                if t not in (1, 2, 5, 7, 8):     # MRU, ACCM, magique, PFC, ACFC
+                if t not in (1, 2, 5, 7, 8):     # MRU, ACCM, magic, PFC, ACFC
                     rejet += self._opt(t, v)
             if rejet:
                 self._paquet(self.LCP, self.CONF_REJ, ident, rejet)
@@ -1089,7 +1050,7 @@ class Ppp:
         elif code == self.CONF_ACK:
             self.lcp_ack_recu = True
         elif code in (self.CONF_NAK, self.CONF_REJ):
-            # On n insiste pas sur l ACCM : le nombre magique suffit.
+            # Do not insist on the ACCM: the magic number is enough.
             self._paquet(self.LCP, self.CONF_REQ, self._prochain(), self._opt(5, self.magic))
         elif code == self.TERM_REQ:
             self._paquet(self.LCP, self.TERM_ACK, ident, body)
@@ -1123,16 +1084,16 @@ class Ppp:
             rejet, nak = b"", b""
             dns = PPP_DNS + PPP_DNS[:1]
             for t, v in self._options(body):
-                if t == 3:                    # l adresse du telephone
+                if t == 3:                    # the phone's address
                     if v != socket.inet_aton(PPP_PEER):
                         nak += self._opt(3, socket.inet_aton(PPP_PEER))
-                elif t == 129:                # DNS primaire
+                elif t == 129:                # primary DNS
                     if v != socket.inet_aton(dns[0]):
                         nak += self._opt(129, socket.inet_aton(dns[0]))
-                elif t == 131:                # DNS secondaire
+                elif t == 131:                # secondary DNS
                     if v != socket.inet_aton(dns[1]):
                         nak += self._opt(131, socket.inet_aton(dns[1]))
-                else:                         # compression VJ et le reste
+                else:                         # VJ compression and the rest
                     rejet += self._opt(t, v)
             if rejet:
                 self._paquet(self.IPCP, self.CONF_REJ, ident, rejet)
@@ -1153,7 +1114,7 @@ class Ppp:
             self.ipcp_ouvert = True
             self._tun_monter()
 
-    # -- le tun, et son branchement sur la radio
+    # -- the tun, and its hookup to the radio
     def _tun_monter(self):
         TUNSETIFF, IFF_TUN, IFF_NO_PI = 0x400454CA, 0x0001, 0x1000
         try:
@@ -1177,11 +1138,11 @@ class Ppp:
         threading.Thread(target=self._depuis_tun, daemon=True).start()
 
     def _raccourci_test(self):
-        """RACCOURCI DE TEST (sans radio, sans GGSN), OSMO_PPP_SHORTCUT=1 : le
-        telephone sort par la carte par defaut de l hote, en NAT derriere son
-        adresse, comme le SGi de srsEPC le ferait. Le vrai EGPRS passe par le
-        SGSN/GGSN ; ce chemin ne sert qu a valider DNS, NAT et pile IP du
-        telephone. (repris d origin/main, fusion du 2026-10-16)"""
+        """TEST SHORTCUT (no radio, no GGSN), OSMO_PPP_SHORTCUT=1: the phone
+        goes out through the host's default interface, NATed behind its
+        address, as the srsEPC SGi would do. Real EGPRS goes through the
+        SGSN/GGSN; this path only serves to validate DNS, NAT and the
+        phone's IP stack."""
         if os.environ.get("OSMO_PPP_SHORTCUT", "0") != "1":
             return False
         rc, up = _sh("sh", "-c", "ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1); exit}'")
@@ -1204,8 +1165,9 @@ class Ppp:
         return True
 
     def _radio_choix(self):
-        """(netns ou None, tun, reseau a NATer vers Internet) : la 4G si srsUE a
-        son tun, sinon le PDP GPRS du modem sur le Calypso, sinon None."""
+        """(netns or None, tun, network to NAT towards the Internet): the 4G
+        if srsUE has its tun, else the GPRS PDP of the modem on the Calypso,
+        else None."""
         if LTE_NETNS:
             rc, o = _sh("ip", "-n", LTE_NETNS, "-4", "-o", "addr", "show", LTE_TUN)
             if rc == 0 and "inet" in o:
@@ -1220,7 +1182,7 @@ class Ppp:
         return None
 
     def _radio_brancher(self):
-        """Branche PPP_IF sur la sortie radio disponible. False si aucune."""
+        """Hook PPP_IF onto the available radio egress. False if none."""
         choix = self._radio_choix()
         if choix is None or self.tun is None:
             return False
@@ -1245,7 +1207,7 @@ class Ppp:
         rc, _ = _sh(*ex, "iptables", "-w", "-t", "nat", "-C", "POSTROUTING", "-s", PPP_PEER, "-o", tun, "-j", "MASQUERADE")
         if rc != 0:
             _sh(*ex, "iptables", "-w", "-t", "nat", "-A", "POSTROUTING", "-s", PPP_PEER, "-o", tun, "-j", "MASQUERADE")
-        # La sortie vers Internet du reseau de l UE (SGi 4G ou pool du GGSN)
+        # The Internet egress of the UE network (4G SGi or GGSN pool)
         rc, up = _sh("sh", "-c", "ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1); exit}'")
         if up:
             _sh("sysctl", "-qw", "net.ipv4.ip_forward=1")
@@ -1266,8 +1228,8 @@ class Ppp:
         return True
 
     def _attendre_radio(self):
-        """Le PDP du modem GPRS arrive 30 a 120 s apres ATD*99 (bascule du
-        Calypso, attach, PDP) : on branche la sortie des qu il est la."""
+        """The GPRS modem's PDP arrives 30 to 120 s after ATD*99 (Calypso
+        switch, attach, PDP): the egress is hooked up as soon as it is there."""
         t0 = time.time()
         while not self.fini and self.tun is not None and time.time() - t0 < 300:
             if self._radio_brancher():
@@ -1319,11 +1281,11 @@ class Ppp:
         self.modem.ppp_fini()
 
 
-# ── LE MODEM AT ─────────────────────────────────────────────────────────────
+# ── THE AT MODEM ────────────────────────────────────────────────────────────
 class AtHandler(socketserver.StreamRequestHandler):
-    """Un modem par connexion : oFono en ouvre une seule."""
+    """One modem per connection: oFono opens a single one."""
 
-    role = "commande"             # « commande » (hvc0) ou « data » (hvc1, voir DATA)
+    role = "commande"             # "commande" (hvc0) or "data" (hvc1, see DATA)
 
     def setup(self):
         super().setup()
@@ -1331,49 +1293,47 @@ class AtHandler(socketserver.StreamRequestHandler):
         if self.role == "data":
             DATA = self
         else:
-            CURRENT = self        # oFono n ouvre qu une connexion : c est celle-ci
-        self.echo = True          # un vrai modem demarre en echo
+            CURRENT = self        # oFono opens a single connection: this one
+        self.echo = True          # a real modem starts with echo on
         self.cmee = 1
         self.creg_mode = 0
-        self.cops_format = 2          # 0 = nom long, 1 = nom court, 2 = MCC/MNC
-        self.calls = []               # les appels en cours, pour +CLCC
+        self.cops_format = 2          # 0 = long name, 1 = short name, 2 = MCC/MNC
+        self.calls = []               # the calls in progress, for +CLCC
         self.sms_target = None
-        # Comment ce systeme veut qu on lui annonce les SMS. mt=2 : le message
-        # pousse tel quel ; mt=1 : rangé, et on ne signale que l index. On
-        # part sur 2, et AT+CNMI= vient dire la verite.
+        # How this system wants SMS announced. mt=2: the message pushed as
+        # is; mt=1: stored, and only the index is signalled. Start with 2,
+        # and AT+CNMI= tells the truth.
         self.cnmi_mt = 2
-        self.cmgf = 0             # 0 = PDU (ce qu utilise ModemManager), 1 = texte
-        # La 4G et le CSFB (voir la classe Lte). Trois modes d URC, un par
-        # enregistrement (CS, GPRS, EPS) ; ws46 = les technologies que le
-        # systeme AUTORISE (27.007 § 5.9 : 12 GSM seule, 28 E-UTRAN seule,
-        # 31 les deux) - c est le reglage « reseau prefere » de Phosh ;
-        # _cs_hold tient la 2G le temps du service CS, _retour est le
-        # minuteur qui nous remonte sur la 4G ; _rat_annonce, la derniere
-        # technologie annoncee, pour ne signaler que les changements.
+        self.cmgf = 0             # 0 = PDU (what ModemManager uses), 1 = text
+        # The 4G and CSFB (see the Lte class). Three URC modes, one per
+        # registration (CS, GPRS, EPS); ws46 = the technologies the system
+        # ALLOWS (27.007 § 5.9: 12 GSM only, 28 E-UTRAN only, 31 both) - this
+        # is Phosh's "preferred network" setting; _cs_hold holds the 2G for
+        # the duration of the CS service, _retour is the timer that brings us
+        # back to 4G; _rat_annonce, the last technology announced, to signal
+        # only the changes.
         self.cgreg_mode = 0
         self.cereg_mode = 0
         self.ws46 = 31
         self._cs_hold = False
         self._retour = None
         self._rat_annonce = None
-        self.data_cid = 0           # le contexte PDP « connecte » par +GTRNDIS (0 = aucun)
-        self.ppp = None             # la session PPP en cours (ATD*99), voir la classe Ppp
-        self._urc_attente = []      # les URC retenus pendant la data (voir out)
+        self.data_cid = 0           # the PDP context "connected" by +GTRNDIS (0 = none)
+        self.ppp = None             # the PPP session in progress (ATD*99), see the Ppp class
+        self._urc_attente = []      # the URCs held back during data (see out)
         self._urc_lock = threading.Lock()
-        self.port_commande = True   # False entre NO CARRIER et la commande AT suivante
+        self.port_commande = True   # False between NO CARRIER and the next AT command
         log("oFono s est connecte depuis %s (port de %s)" % (self.client_address, self.role))
         if self.role != "data":
             threading.Thread(target=self._veille, daemon=True).start()
 
     def finish(self):
-        """Le lien est tombe : ce modem n est plus « le » modem.
+        """The link is down: this modem is no longer "the" modem.
 
-        [2026-09-07] CURRENT RESTAIT SUR UN MORT. Il etait pose dans setup() et
-        jamais repris : apres une deconnexion, on_passerelle_sms() croyait
-        avoir un correspondant, deliver_sms() ecrivait dans une douille fermee
-        (out() avale l OSError) et journalisait « SMS remis » - un message
-        annonce comme remis a personne. Meme piege pour les RING d AmiEcoute.
-        La boite, elle, garde le message : il ressortira au prochain AT+CMGL.
+        CURRENT is cleared here so that on_passerelle_sms() and the RINGs of
+        AmiEcoute do not write into a closed socket (out() swallows the
+        OSError). The inbox keeps the message: it comes out at the next
+        AT+CMGL.
         """
         global CURRENT, DATA
         if CURRENT is self:
@@ -1382,12 +1342,10 @@ class AtHandler(socketserver.StreamRequestHandler):
             DATA = None
         if self.ppp is not None:
             self.ppp.fin("lien AT ferme")
-        # [2026-09-08] LES APPELS MEURENT AVEC LE LIEN. Un appel arrive sur ce
-        # gestionnaire, la VM redemarre : le lien tombe, un nouveau
-        # gestionnaire nait, et l AMI ne parle qu a CURRENT - le raccroche
-        # n arrivait donc jamais ici. La boucle _sonne tournait pour toujours
-        # (RING toutes les 3 s dans le journal, vers une douille fermee) et le
-        # correspondant restait pendu. On raccroche cote Asterisk et on vide.
+        # THE CALLS DIE WITH THE LINK. The AMI only talks to CURRENT, so a
+        # hangup would never reach this handler once a new one is born:
+        # hang up on the Asterisk side and clear, otherwise the _sonne loop
+        # would run forever and the other party would stay hanging.
         for c in list(self.calls):
             log("lien ferme : appel %s abandonne, raccroche cote Asterisk"
                 % (c.get("channel") or c.get("num") or "?"))
@@ -1402,15 +1360,15 @@ class AtHandler(socketserver.StreamRequestHandler):
             pass
 
     def ppp_fini(self):
-        """La session PPP est finie : le port redevient un port AT, et on le
-        dit comme un modem (NO CARRIER) - ModemManager relance alors sa
-        sonde et le porteur passe « deconnecte »."""
+        """The PPP session is over: the port becomes an AT port again, and
+        says so like a modem (NO CARRIER) - ModemManager then restarts its
+        probe and the bearer becomes "disconnected"."""
         self.ppp = None
         self.data_cid = 0
-        # NO CARRIER part tel quel : c est lui qui rend le port. Ensuite, tant
-        # que le telephone n a pas envoye sa premiere commande AT, le port est
-        # encore a pppd qui s arrete : ce qu on emettrait partirait dans le
-        # vide (les +CREG du retour 4G, un +CMTI). On retient (voir out).
+        # NO CARRIER goes out as is: it is what gives the port back. Then, as
+        # long as the phone has not sent its first AT command, the port still
+        # belongs to the stopping pppd: anything emitted would go into the
+        # void (the +CREG of the 4G return, a +CMTI). Hold them (see out).
         self.port_commande = False
         atlog(">", "NO CARRIER")
         try:
@@ -1420,18 +1378,17 @@ class AtHandler(socketserver.StreamRequestHandler):
             pass
 
     def _tag(self, sens):
-        return sens if self.role != "data" else sens + "d"      # « >d » : port de donnees
+        return sens if self.role != "data" else sens + "d"      # ">d": data port
 
     def out(self, text):
-        # [2026-09-08] UN SEUL PORT, DONC PAS D URC PENDANT LE PPP. Le modem du
-        # banc n a qu un port serie : une fois ATD*99 passe, tout ce qu on y
-        # ecrit entre dans le flux PPP, et pppd jette RING, +CLIP, +CMTI comme
-        # du bruit. Le telephone ne voyait donc ni appel ni SMS entrant des
-        # que la data etait montee. Ce qui doit etre annonce pendant la data
-        # attend ici, et part des que le port est revenu en mode commande
-        # (voir _urc_liberer, appele apres la premiere commande AT qui suit).
-        # csfb_debut() coupe la data pour cela : sur un vrai reseau aussi, le
-        # CSFB suspend la data le temps du service CS.
+        # A SINGLE PORT, HENCE NO URC DURING PPP. The bench modem has only
+        # one serial port: once ATD*99 has gone through, everything written
+        # to it enters the PPP stream, and pppd drops RING, +CLIP, +CMTI as
+        # noise. What must be announced during data waits here, and goes out
+        # as soon as the port is back in command mode (see _urc_liberer,
+        # called after the first AT command that follows). csfb_debut() cuts
+        # the data for that: on a real network too, CSFB suspends data for
+        # the duration of the CS service.
         if self.ppp is not None or not self.port_commande:
             with self._urc_lock:
                 if text not in self._urc_attente:
@@ -1446,16 +1403,16 @@ class AtHandler(socketserver.StreamRequestHandler):
             pass
 
     def _urc_liberer(self):
-        """Le port est en mode commande : on emet ce qui attendait."""
+        """The port is in command mode: emit what was waiting."""
         with self._urc_lock:
             attente, self._urc_attente = self._urc_attente, []
         for text in attente:
             self.out(text)
 
-    # -- la technologie d acces : 4G au repos, 2G le temps d un service CS
+    # -- the access technology: 4G at rest, 2G for the duration of a CS service
     def _modem(self):
-        """L etat du telephone vit sur le port de commande : le port de
-        donnees s y reporte."""
+        """The phone state lives on the command port: the data port refers
+        to it."""
         if self.role == "data" and CURRENT is not None:
             return CURRENT
         return self
@@ -1468,31 +1425,31 @@ class AtHandler(socketserver.StreamRequestHandler):
         return bool(self._modem().calls)
 
     def rat(self):
-        """« lte » ou « gsm » : ou le telephone est pose en ce moment."""
+        """"lte" or "gsm": where the phone is camped right now."""
         if self.role == "data" and CURRENT is not None:
             return CURRENT.rat()
-        if self.ws46 == 12:                   # le systeme a demande GSM seule
+        if self.ws46 == 12:                   # the system asked for GSM only
             return "gsm"
         if not LTE.state()["ok"]:
             return "gsm"
         if self.cs_actif():
-            return "gsm"                      # CSFB : on est descendu
+            return "gsm"                      # CSFB: we went down
         return "lte"
 
     def _reg(self, tag):
-        """(stat, lac ou tac, ci ou eci, act) pour +CREG, +CGREG ou +CEREG
-        dans la technologie courante. act None = pas de position a donner."""
+        """(stat, lac or tac, ci or eci, act) for +CREG, +CGREG or +CEREG in
+        the current technology. act None = no position to give."""
         st = BANC.state()
         lte = LTE.state()
         if self.rat() == "lte":
-            # Rattachement combine (EPS + IMSI attach par SGs) : le CS est
-            # enregistre si la 2G est la, et tout se dit avec TAC/ECI, AcT 7.
+            # Combined attach (EPS + IMSI attach via SGs): CS is registered
+            # if the 2G is there, and everything is said with TAC/ECI, AcT 7.
             stat_cs = 1 if st["up"] else (2 if lte["ok"] else 0)
             stat = stat_cs if tag == "+CREG" else 1
             return stat, lte["tac"], lte["eci"], 7
         reg = 1 if st["up"] else 0
         if tag == "+CEREG":
-            # Sur la 2G, l EPS est suspendu (CSFB) ou absent : pas de position.
+            # On 2G, EPS is suspended (CSFB) or absent: no position.
             return (2 if lte["ok"] else 0), 0, 0, None
         return reg, st["lac"], st["cid"], 0
 
@@ -1504,12 +1461,12 @@ class AtHandler(socketserver.StreamRequestHandler):
         return "%s%d" % (tete, stat)
 
     def annonce_rat(self):
-        """Signale un changement de technologie par les URC d enregistrement
-        que le systeme a demandes (AT+CREG=2 etc.). L ordre compte : c est la
-        DERNIERE annonce qui donne l AcT que ModemManager retient, on finit
-        donc par celle qui porte la technologie du moment."""
+        """Signal a technology change through the registration URCs the
+        system asked for (AT+CREG=2 etc.). Order matters: the LAST
+        announcement gives the AcT that ModemManager keeps, so end with the
+        one carrying the current technology."""
         if self.role == "data":
-            return                            # les URC vont sur le port de commande
+            return                            # URCs go to the command port
         rat = self.rat()
         prev, self._rat_annonce = self._rat_annonce, rat
         if prev == rat:
@@ -1524,32 +1481,32 @@ class AtHandler(socketserver.StreamRequestHandler):
                 self.out(self._ligne_reg(tag, modes[tag], urc=True))
 
     def _veille(self):
-        """La 4G peut se lever ou tomber pendant que le telephone ne fait
-        rien : on regarde toutes les deux secondes, et on verifie une fois que
-        la 2G annoncee par le SIB7 est bien celle du banc."""
+        """The 4G may come up or go down while the phone does nothing: check
+        every two seconds, and verify once that the 2G announced by the SIB7
+        is indeed the one of the bench."""
         while CURRENT is self:
             try:
                 st = BANC.state()
                 if st["up"]:
                     LTE.verifier_geran(st["arfcn"])
                 self.annonce_rat()
-            except Exception as e:      # jamais au prix du modem lui-meme
+            except Exception as e:      # never at the cost of the modem itself
                 log("veille 4G : %s" % e)
             time.sleep(2)
 
     def csfb_debut(self, motif, couper_data=True):
-        """Un service CS commence : on descend sur la 2G, tout de suite, et on
-        annule un retour 4G qui serait en route. couper_data : la session PPP
-        est fermee (un appel : la 2G n a pas de data pendant la voix ; un SMS
-        en port unique : il faut rendre le port aux URC)."""
+        """A CS service starts: go down to 2G right away, and cancel a 4G
+        return that would be under way. couper_data: the PPP session is
+        closed (a call: 2G has no data during voice; an SMS on a single port:
+        the port must be given back to the URCs)."""
         t, self._retour = self._retour, None
         if t:
             t.cancel()
         self._cs_hold = True
         if GPRS_DATA and calypso_mode() == "data":
-            # [2026-10-15] Classe B : la data GPRS du Calypso laisse la place a
-            # la voix. Le mobile revient (meme ligne que c54x_exe/run.sh) et on
-            # attend qu il soit en service avant de laisser partir l appel.
+            # Class B: the Calypso's GPRS data gives way to voice. The mobile
+            # comes back (same line as c54x_exe/run.sh) and we wait for it to
+            # be in service before letting the call go.
             log("calypso : %s - le Calypso repasse au mobile (voix)" % motif)
             for m in (self, DATA):
                 if m is not None and m.ppp is not None:
@@ -1559,9 +1516,9 @@ class AtHandler(socketserver.StreamRequestHandler):
             st = BANC.state()
             log("CSFB : %s - on quitte la 4G pour la 2G (ARFCN %s, LAC %d, CI %d)"
                 % (motif, st["arfcn"] or "?", st["lac"], st["cid"]))
-        # La data est suspendue le temps du service CS - et c est surtout le
-        # seul moyen de rendre le port aux URC (voir out). NetworkManager
-        # relancera ATD*99 de lui-meme une fois l UE revenu sur la 4G.
+        # Data is suspended for the duration of the CS service - and above
+        # all it is the only way to give the port back to the URCs (see out).
+        # NetworkManager restarts ATD*99 by itself once the UE is back on 4G.
         if couper_data:
             for m in (self, DATA):
                 if m is not None and m.ppp is not None:
@@ -1570,9 +1527,9 @@ class AtHandler(socketserver.StreamRequestHandler):
         self.annonce_rat()
 
     def csfb_fin_apres(self, delai=2.0):
-        """Le service CS est fini : dans <delai> secondes, s il n en a pas
-        commence un autre, on remonte sur la 4G - le temps qu un vrai UE met
-        a reselectionner sa cellule LTE une fois l appel raccroche."""
+        """The CS service is over: in <delai> seconds, if another one has not
+        started, climb back to 4G - the time a real UE takes to reselect its
+        LTE cell once the call is hung up."""
         t, self._retour = self._retour, None
         if t:
             t.cancel()
@@ -1583,7 +1540,7 @@ class AtHandler(socketserver.StreamRequestHandler):
     def _retour_lte(self):
         self._retour = None
         if self.calls or self.sms_target is not None:
-            return                            # un autre service CS a pris le relais
+            return                            # another CS service took over
         self._cs_hold = False
         if self._rat_annonce == "gsm" and LTE.state()["ok"] and self.ws46 != 12:
             log("CSFB : service CS termine, retour sur la 4G")
@@ -1605,7 +1562,7 @@ class AtHandler(socketserver.StreamRequestHandler):
             if not data:
                 break
             if self.ppp is not None:
-                # Mode donnees : tout va au PPP, rien n est repete en echo.
+                # Data mode: everything goes to PPP, nothing is echoed.
                 self.ppp.feed(data)
                 buf = b""
                 continue
@@ -1625,11 +1582,11 @@ class AtHandler(socketserver.StreamRequestHandler):
                 if text:
                     atlog(self._tag("<"), text)
                 if text:
-                    self.port_commande = True     # le telephone parle AT : le port est a nous
-                    # Les URC retenus partent AVANT la commande : si c est
-                    # ATD*99, le port repasse en data juste apres, et un
-                    # +CEREG « retour 4G » retenu resterait enferme derriere
-                    # le PPP - Phosh gardait la 2G a l ecran.
+                    self.port_commande = True     # the phone speaks AT: the port is ours
+                    # The held URCs go out BEFORE the command: if it is
+                    # ATD*99, the port goes back to data right after, and a
+                    # held "back to 4G" +CEREG would stay locked behind the
+                    # PPP.
                     if self.ppp is None and self._urc_attente:
                         self._urc_liberer()
                 if self.sms_target is not None and m.group() == b"\x1a":
@@ -1638,33 +1595,21 @@ class AtHandler(socketserver.StreamRequestHandler):
                     self.command(text)
         log("oFono s est deconnecte")
 
-    # -- un SMS venu du banc, remis au modem
-    # -- les appels entrants, pousses par AmiEcoute
+    # -- the incoming calls, pushed by AmiEcoute
     def est_notre_jambe(self, chan):
-        """Ce canal est-il une jambe d un appel que NOUS avons lance ?
+        """Is this channel a leg of a call WE placed?
 
-        [2026-09-07] LE TELEPHONE SE SONNAIT LUI-MEME, ET RACCROCHAIT SEUL.
-        ami_originate() lance « Local/<num>@internal » d un cote et, de
-        l autre, fait composer NOTRE PROPRE numero (Exten: MSISDN) - c est
-        ainsi que le banc met le correspondant en relation avec l abonne. Cette
-        seconde jambe produit donc, pour chacun de nos appels sortants :
+        ami_originate() starts "Local/<num>@internal" on one side and, on
+        the other, dials OUR OWN number (Exten: MSISDN) - this is how the
+        bench connects the other party to the subscriber. That second leg
+        thus produces, for each of our outgoing calls:
             DialBegin  Context: internal  DestExten: 100101
-        soit exactement la signature d un appel entrant (« internal » fait
-        partie d IN_CTX depuis qu un appel Linphone doit pouvoir nous joindre).
-        Le filtre « DestExten == notre MSISDN » ne separait donc rien : la
-        remarque en tete d IN_CTX - « la seconde jambe compose le numero
-        DISTANT, jamais le notre » - est fausse pour CE code.
-
-        Consequence, reproduite sur le banc le 2026-09-07 (Originate vers 600,
-        evenements AMI horodates) : des le ATD, entrant() ajoutait un DEUXIEME
-        appel et envoyait RING - le telephone sonnait pour l appel qu il venait
-        de passer ; +CLCC en annoncait deux ; et a la fin de la jambe,
-        fin_appel() emettait NO CARRIER. ModemManager terminait alors l appel :
-        l ecran d appel de Phosh se fermait tout seul, quelques dixiemes de
-        seconde apres la numerotation. « Ca me disco quand je passe un appel ».
-        On reconnait donc nos jambes au canal QUI COMPOSE (le Local que nous
-        avons demande), et non au contexte - un vrai appel entrant, lui, arrive
-        toujours par un autre canal.
+        which is exactly the signature of an incoming call ("internal" is in
+        IN_CTX so that a Linphone call can reach us). Our legs are therefore
+        recognised by the channel THAT DIALS (the Local we requested), not by
+        the context - a real incoming call always arrives through another
+        channel. Without this filter the phone would ring for the call it has
+        just placed and hang up by itself when that leg ends.
         """
         if not chan:
             return False
@@ -1675,23 +1620,23 @@ class AtHandler(socketserver.StreamRequestHandler):
         return False
 
     def entrant(self, num, chan):
-        """Le banc nous appelle : on sonne jusqu a ce que ca cesse."""
+        """The bench calls us: ring until it stops."""
         if any(c.get("channel") == chan for c in self.calls):
             return
         c = {"num": num, "state": "incoming", "channel": chan}
-        # Le paging arrive par la 4G (SGs), la sonnerie se joue sur la 2G :
-        # on descend AVANT le premier RING. Avec un port de donnees a part, la
-        # data reste : refuser ATD*99 pendant la sonnerie faisait passer
-        # NetworkManager en repli (4 echecs, puis 5 min sans reessayer).
+        # The paging comes through the 4G (SGs), the ringing plays on the
+        # 2G: go down BEFORE the first RING. With a separate data port, data
+        # stays up: refusing ATD*99 during the ringing would push
+        # NetworkManager into backoff (4 failures, then 5 min without retry).
         self.csfb_debut("appel entrant de %s" % (num or "inconnu"), couper_data=(DATA is None))
         self.calls.append(c)
         log("appel entrant de %s (%s)" % (num or "inconnu", chan))
         threading.Thread(target=self._sonne, args=(c,), daemon=True).start()
 
     def _sonne(self, c):
-        """RING toutes les trois secondes, et +CLIP juste derriere pour donner
-        le numero - c est ce que ModemManager attend pour presenter l appel
-        (AT+CLIP=1 fait partie des reglages qu on accepte)."""
+        """RING every three seconds, and +CLIP right behind to give the
+        number - this is what ModemManager expects to present the call
+        (AT+CLIP=1 is among the settings accepted)."""
         while c in self.calls and c["state"] == "incoming" and CURRENT is self:
             self.out("RING")
             if c["num"]:
@@ -1700,13 +1645,13 @@ class AtHandler(socketserver.StreamRequestHandler):
             time.sleep(3)
 
     def fin_appel(self, chan):
-        """Asterisk a raccroche ce canal. Sans ce chemin, l ecran d appel de
-        Phosh restait affiche quand le correspondant raccrochait."""
+        """Asterisk hung up this channel. This path is what closes Phosh's
+        call screen when the other party hangs up."""
         for c in list(self.calls):
             ref = c.get("channel")
-            # Nos appels sortants gardent « Local/600@internal », qu Asterisk
-            # decline en « Local/600@internal-0000001a;1 » : on compare donc
-            # par le debut. Les entrants, eux, portent le nom exact.
+            # Our outgoing calls keep "Local/600@internal", which Asterisk
+            # expands to "Local/600@internal-0000001a;1": compare by prefix.
+            # Incoming ones carry the exact name.
             if ref and chan.startswith(ref):
                 self.calls.remove(c)
                 log("appel termine (%s)" % chan)
@@ -1715,39 +1660,39 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.csfb_fin_apres()
 
     def deliver_sms(self, sender, text):
-        """Remet un SMS entrant DE LA FACON QUE LE SYSTEME A DEMANDEE.
+        """Deliver an incoming SMS THE WAY THE SYSTEM ASKED FOR.
 
-        On range toujours le message : meme en mt=2 le systeme peut vouloir le
-        relire (AT+CMGL au demarrage). Ensuite seulement on choisit l URC.
+        The message is always stored: even in mt=2 the system may want to
+        read it again (AT+CMGL at startup). Only then is the URC chosen.
         """
         pdu = pdu_deliver(sender, text)
         idx = inbox_ranger(sender, text, pdu)
-        # Un SMS est un service CS sur ce banc (il vient du MSC) : on descend
-        # sur la 2G le temps de le recevoir, on remonte trois secondes apres.
-        # Avec un port de donnees a part, la data reste montee : les URC ont
-        # leur port. En port unique, il faut couper pour que +CMTI passe.
+        # An SMS is a CS service on this bench (it comes from the MSC): go
+        # down to 2G to receive it, climb back three seconds later. With a
+        # separate data port, data stays up: the URCs have their port. On a
+        # single port, data must be cut for +CMTI to get through.
         self.csfb_debut("SMS entrant de %s" % (sender or "inconnu"), couper_data=(DATA is None))
         self.csfb_fin_apres(3.0)
         if self.cnmi_mt == 2:
-            tpdu_len = len(pdu) // 2 - 1      # sans l octet de SMSC en tete
+            tpdu_len = len(pdu) // 2 - 1      # without the leading SMSC octet
             self.out("+CMT: ,%d\r\n%s" % (tpdu_len, pdu))
             log("SMS remis directement (+CMT) : %s" % text)
         else:
             self.out('+CMTI: "SM",%d' % idx)
             log("SMS range en SM[%d], index signale (+CMTI) : %s" % (idx, text))
 
-    # -- les trois commandes qui vont avec la boite
+    # -- the three commands that go with the inbox
     def _sms_ligne(self, m, entete):
-        """Une entree de CMGR/CMGL, dans le mode courant."""
-        if self.cmgf:                         # mode texte
+        """A CMGR/CMGL entry, in the current mode."""
+        if self.cmgf:                         # text mode
             stat = "REC READ" if m["lu"] else "REC UNREAD"
             return '%s"%s","%s",,"%s"\r\n%s' % (entete, stat, m["sender"],
                                                  m["ts"], m["text"])
-        stat = 1 if m["lu"] else 0            # mode PDU : 0 non lu, 1 lu
+        stat = 1 if m["lu"] else 0            # PDU mode: 0 unread, 1 read
         return "%s%d,,%d\r\n%s" % (entete, stat, len(m["pdu"]) // 2 - 1,
                                      m["pdu"])
 
-    # -- l envoi d un SMS par le banc
+    # -- sending an SMS through the bench
     def sms(self, text):
         num, self.sms_target = self.sms_target, None
         if num == "<pdu>":
@@ -1789,15 +1734,14 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.echo = True; self.ok(); return
 
         if ub in ("+CGMI", "+GMI"):
-            # [2026-09-07] « Fibocom », ET POURQUOI. ModemManager choisit son
-            # greffon d apres ce nom. Le greffon generique ne sait faire la
-            # data que par PPP sur le port AT - et le noyau de la VM n a pas
-            # de PPP. Le greffon Fibocom, lui, quand le modem a un PORT RESEAU
-            # a cote du port AT et repond a AT+GTRNDIS=?, monte un porteur
-            # ECM : +GTRNDIS=1,<cid> pour connecter, adresse par DHCP sur le
-            # port reseau. C est ce que fait ce banc : la seconde carte reseau
-            # de QEMU (tools/osmo-pmos-data.sh) est ce port, et elle debouche
-            # dans l espace reseau de srsUE - donc sur la radio 4G.
+            # "Fibocom", AND WHY. ModemManager picks its plugin from this
+            # name. The generic plugin can only do data through PPP on the
+            # AT port. The Fibocom plugin, when the modem has a NETWORK PORT
+            # beside the AT port and answers AT+GTRNDIS=?, brings up an ECM
+            # bearer: +GTRNDIS=1,<cid> to connect, address by DHCP on the
+            # network port. That is what this bench does: QEMU's second
+            # network card (tools/osmo-pmos-data.sh) is that port, and it
+            # leads into srsUE's network namespace - hence onto the 4G radio.
             self.out(VENDOR); self.ok(); return
         if ub in ("+CGMM", "+GMM"):
             self.out("osmo-banc"); self.ok(); return
@@ -1818,21 +1762,18 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith(("+CREG", "+CGREG", "+CEREG")):
-            # [2026-09-07] LES TROIS ENREGISTREMENTS, ET LA 4G. +CREG est le
-            # circuit (voix, SMS), +CGREG le paquet 2G/3G, +CEREG l EPS - la
-            # LTE. Ce modem repondait ERROR a +CEREG pour rester un modem 2G ;
-            # depuis que le banc a une 4G (srsRAN, voir la classe Lte), il
-            # dit la verite : enregistre sur l EPS quand srsUE est attache, et
-            # chaque reponse porte la technologie du moment (dernier champ :
-            # 0 = GSM, 7 = E-UTRAN). Pendant un appel ou un SMS, la reponse
-            # bascule sur la 2G (CSFB) et l EPS passe « en recherche ».
-            # [2026-09-06] LA FORME « TEST » N EST PAS UN REGLAGE. Le driver
-            # atmodem sonde d abord AT+CREG=? et attend la LISTE des modes
-            # supportes ; un simple OK lui fait conclure que le modem ne sait
-            # pas s enregistrer - oFono journalisait « Unable to initialize
-            # Network Registration » et n envoyait plus jamais AT+CREG?, donc
-            # pas d interface NetworkRegistration du tout. Meme piege pour
-            # +CGREG (la data), d ou « GPRS not supported on this device ».
+            # THE THREE REGISTRATIONS, AND THE 4G. +CREG is circuit (voice,
+            # SMS), +CGREG the 2G/3G packet, +CEREG the EPS - LTE. The modem
+            # tells the truth: registered on the EPS when srsUE is attached,
+            # and each reply carries the current technology (last field:
+            # 0 = GSM, 7 = E-UTRAN). During a call or an SMS, the reply
+            # switches to 2G (CSFB) and the EPS becomes "searching".
+            # THE "TEST" FORM IS NOT A SETTING. The atmodem driver first
+            # probes AT+CREG=? and expects the LIST of supported modes; a
+            # plain OK makes it conclude the modem cannot register (oFono:
+            # "Unable to initialize Network Registration", no
+            # NetworkRegistration interface at all). Same trap for +CGREG
+            # (data): "GPRS not supported on this device".
             tag = ub.split("=")[0].rstrip("?")
             if ub.endswith("=?"):
                 self.out("%s: (0-2)" % tag); self.ok(); return
@@ -1854,22 +1795,22 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith("+COPS"):
-            # oFono interroge l operateur DEUX FOIS, dans deux formats : il pose
-            # AT+COPS=3,2 puis AT+COPS? pour le code numerique (MCC/MNC), et
-            # AT+COPS=3,0 puis AT+COPS? pour le nom. Repondre toujours en
-            # numerique laissait le nom vide et MCC/MNC a None cote oFono - le
-            # format demande doit etre retenu.
-            # Le dernier champ est la technologie : 7 sur la 4G, 0 sur la 2G.
+            # oFono queries the operator TWICE, in two formats: it sets
+            # AT+COPS=3,2 then AT+COPS? for the numeric code (MCC/MNC), and
+            # AT+COPS=3,0 then AT+COPS? for the name. The requested format
+            # must be remembered, otherwise the name stays empty on the oFono
+            # side.
+            # The last field is the technology: 7 on 4G, 0 on 2G.
             rat = self.rat()
             act = 7 if rat == "lte" else 0
             nom = LTE_NAME if rat == "lte" else st["name"]
             if ub.endswith("=?"):
-                # LA RECHERCHE DE RESEAUX (« Selectionner un reseau » dans
-                # Phosh). Un vrai scan voit une cellule des qu elle EMET, pas
-                # seulement quand on y est attache : la 4G est donc listee des
-                # que l eNB est en ligne. Elle porte un nom distinct de la 2G
-                # (LTE_NAME) : deux entrees « Osmocom » n en feraient qu une
-                # a l ecran. stat : 2 = courant, 1 = disponible.
+                # THE NETWORK SCAN ("Select a network" in Phosh). A real
+                # scan sees a cell as soon as it TRANSMITS, not only when
+                # attached to it: the 4G is listed as soon as the eNB is
+                # online. It carries a name distinct from the 2G (LTE_NAME):
+                # two "Osmocom" entries would merge into one on screen.
+                # stat: 2 = current, 1 = available.
                 lte = LTE.state()
                 liste = []
                 if lte["enb"]:
@@ -1890,22 +1831,21 @@ class AtHandler(socketserver.StreamRequestHandler):
             if m:
                 self.cops_format = int(m.group(1))
                 self.ok(); return
-            # La SELECTION : AT+COPS=0 (automatique) ou AT+COPS=1,<fmt>,<oper>
-            # [,<act>]. Choisir l entree 4G de la liste, c est camper en LTE ;
-            # l entree 2G, en GSM ; l automatique rend les deux.
+            # The SELECTION: AT+COPS=0 (automatic) or AT+COPS=1,<fmt>,<oper>
+            # [,<act>]. Choosing the 4G entry of the list means camping on
+            # LTE; the 2G entry, on GSM; automatic gives both back.
             #
-            # [2026-09-07] C EST LE SEUL LEVIER QU A L UTILISATEUR. Le reglage
-            # « type de reseau » de Phosh passe par ModemManager, qui REFUSE de
-            # le poser sur un modem a commandes AT : « Setting allowed modes not
-            # supported » (MM 1.25.95 - il lit AT+WS46=? pour la liste, mais
-            # n emet jamais AT+WS46=<n>). Reste la selection manuelle d un
-            # reseau, et MM la fait toujours en NUMERIQUE, SANS technologie :
-            # « AT+COPS=1,2,"00101" ». Or nos deux radios portent le meme
-            # MCC/MNC - le numero ne dit donc pas laquelle on veut.
-            # On tranche par l usage : l automatique (+COPS=0), c est deja
-            # « la 4G tant qu elle est la » ; demander LA MAIN, ici, ne peut
-            # vouloir dire qu une chose - rester sur la 2G. Un nom (format 0
-            # ou 1) ou une technologie explicite, eux, sont pris au mot.
+            # THIS IS THE ONLY LEVER THE USER HAS. Phosh's "network type"
+            # setting goes through ModemManager, which REFUSES to set it on
+            # an AT-command modem ("Setting allowed modes not supported" -
+            # it reads AT+WS46=? for the list, but never emits AT+WS46=<n>).
+            # What remains is the manual network selection, and MM always
+            # does it NUMERICALLY, WITHOUT technology: 'AT+COPS=1,2,"00101"'.
+            # Both radios carry the same MCC/MNC, so the number does not say
+            # which one is wanted. Settled by usage: automatic (+COPS=0) is
+            # already "4G as long as it is there"; asking for MANUAL here can
+            # only mean one thing - stay on 2G. A name (format 0 or 1) or an
+            # explicit technology are taken at their word.
             m = re.match(r'\+COPS=(\d)(?:,(\d),"?([^",]*)"?(?:,(\d))?)?', ub)
             if m:
                 mode, fmt, oper, actsel = (int(m.group(1)), m.group(2),
@@ -1924,9 +1864,9 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith("+WS46"):
-            # 27.007 § 5.9 : la technologie AUTORISEE par le systeme - c est
-            # le reglage « type de reseau » de Phosh (2G / 4G / automatique).
-            # 12 = GSM seule, 28 = E-UTRAN seule, 31 = GERAN + E-UTRAN.
+            # 27.007 § 5.9: the technology ALLOWED by the system - this is
+            # Phosh's "network type" setting (2G / 4G / automatic).
+            # 12 = GSM only, 28 = E-UTRAN only, 31 = GERAN + E-UTRAN.
             if ub.endswith("=?"):
                 self.out("+WS46: (12,28,31)"); self.ok(); return
             if ub.endswith("?"):
@@ -1943,16 +1883,16 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith("+CSQ"):
-            # Banc en marche = signal franc ; banc arrete = pas de signal.
-            # La 4G virtuelle est « plus forte » que la 2G : ca se voit.
+            # Bench running = strong signal; bench stopped = no signal.
+            # The virtual 4G is "stronger" than the 2G: it shows.
             rat = self.rat()
             self.out("+CSQ: %d,99" % (28 if rat == "lte" else 24 if st["up"] else 99))
             self.ok(); return
 
         if ub.startswith("+CESQ"):
-            # La qualite etendue (27.007 § 8.69) : rxlev/ber pour la 2G,
-            # rsrq/rsrp pour la 4G, 255 = sans objet. Sur la 4G : rsrq 20
-            # (-9,5 dB), rsrp 70 (-71 dBm) ; sur la 2G : rxlev 24.
+            # Extended quality (27.007 § 8.69): rxlev/ber for 2G, rsrq/rsrp
+            # for 4G, 255 = not applicable. On 4G: rsrq 20 (-9.5 dB), rsrp 70
+            # (-71 dBm); on 2G: rxlev 24.
             if ub.endswith("=?"):
                 self.out("+CESQ: (0-63,99),(0-7,99),(0-96,255),(0-49,255),(0-34,255),(0-97,255)")
                 self.ok(); return
@@ -1963,12 +1903,13 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith("+GTRNDIS"):
-            # LE PORTEUR ECM DE FIBOCOM (voir +CGMI). ModemManager sonde
-            # AT+GTRNDIS=? a l initialisation ; si on repond, et qu il a un
-            # port reseau groupe avec ce port AT, la data ne passe plus par
-            # PPP : +GTRNDIS=1,<cid> « connecte », +GTRNDIS=0,<cid> coupe,
-            # +GTRNDIS? donne l etat, et l adresse vient par DHCP sur le port
-            # reseau (dnsmasq dans l espace de srsUE, tools/osmo-pmos-data.sh).
+            # FIBOCOM'S ECM BEARER (see +CGMI). ModemManager probes
+            # AT+GTRNDIS=? at initialisation; if answered, and it has a
+            # network port grouped with this AT port, data no longer goes
+            # through PPP: +GTRNDIS=1,<cid> "connects", +GTRNDIS=0,<cid>
+            # disconnects, +GTRNDIS? gives the state, and the address comes
+            # by DHCP on the network port (dnsmasq in srsUE's namespace,
+            # tools/osmo-pmos-data.sh).
             if ub.endswith("=?"):
                 self.out("+GTRNDIS: (0,1),(1-11)"); self.ok(); return
             if ub.endswith("?"):
@@ -1981,7 +1922,7 @@ class AtHandler(socketserver.StreamRequestHandler):
             if m.group(1) == "1":
                 if not LTE.state()["ok"] and not st["up"]:
                     log("data : +GTRNDIS refuse, aucun reseau")
-                    self.err(30)                 # 30 = pas de service reseau
+                    self.err(30)                 # 30 = no network service
                     return
                 self.data_cid = cid
                 log("data : porteur ECM connecte (cid %d, APN %s) - l adresse vient par DHCP "
@@ -1993,9 +1934,9 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub == "+CGDCONT?":
-            # Le contexte PDP : l APN est celui de srsEPC (epc.conf), la donnee
-            # du telephone est sur la 4G - meme si, sans PPP, le systeme ne
-            # peut pas l activer par ce port (voir ATD*99).
+            # The PDP context: the APN is that of srsEPC (epc.conf), the
+            # phone's data is on the 4G - even if, without PPP, the system
+            # cannot activate it through this port (see ATD*99).
             self.out('+CGDCONT: 1,"IP","%s","0.0.0.0",0,0' % LTE.state()["apn"])
             self.ok(); return
         if ub == "+CGATT?":
@@ -2006,75 +1947,70 @@ class AtHandler(socketserver.StreamRequestHandler):
         if ub == "+CGACT=?":
             self.out("+CGACT: (0,1)"); self.ok(); return
         if ub.startswith("+CEMODE"):
-            # Le mode d exploitation EPS (24.301 § 4.3) : 1 = « CS/PS mode 1,
-            # voice centric » - le telephone qui redescend en 2G pour parler.
-            # C est exactement ce banc.
+            # The EPS mode of operation (24.301 § 4.3): 1 = "CS/PS mode 1,
+            # voice centric" - the phone that drops to 2G to talk. Exactly
+            # this bench.
             if ub.endswith("=?"):
                 self.out("+CEMODE: (0-3)")
             elif ub.endswith("?"):
                 self.out("+CEMODE: 1")
             self.ok(); return
 
-        # ── CE QU oFONO DEMANDE A L INITIALISATION ──────────────────────
-        # [2026-09-06] Releve sur le banc : des qu on passe Powered=true, oFono
-        # deroule tout l inventaire d un vrai modem - jeux de caracteres,
-        # services SMS, et surtout une longue serie d AT+CRSM (la lecture des
-        # fichiers de la carte SIM). Repondre ERROR a tout ca fait abandonner
-        # oFono ; on repond donc comme un modem dont la SIM n a pas ces
-        # fichiers, ce qui est LA VERITE ici : il n y a pas de carte, l identite
-        # vient du banc (AT+CIMI) et non d une SIM physique.
+        # ── WHAT oFONO ASKS AT INITIALISATION ───────────────────────────
+        # As soon as Powered=true, oFono runs through the whole inventory of
+        # a real modem - character sets, SMS services, and above all a long
+        # series of AT+CRSM (reading the SIM card files). Answering ERROR to
+        # all that makes oFono give up; so answer like a modem whose SIM does
+        # not have these files, which is THE TRUTH here: there is no card,
+        # the identity comes from the bench (AT+CIMI), not from a physical
+        # SIM.
         if ub == "+CSCS=?":
             self.out('+CSCS: ("IRA","GSM","UCS2")'); self.ok(); return
         if ub.startswith("+CSMS"):
-            # 1,1,1 : SMS emis, recus et diffuses pris en charge.
+            # 1,1,1: sent, received and broadcast SMS supported.
             self.out("+CSMS: 1,1,1"); self.ok(); return
         if ub.startswith("+CSIM"):
-            # [2026-09-07] REFUSER FRANCHEMENT L ACCES APDU. ModemManager sonde
-            # la carte avec AT+CSIM (des commandes APDU brutes : selection de
-            # fichiers, lecture de l IMSI...). Repondre « OK » sans donnee le
-            # laisse attendre une reponse qui ne vient jamais et il n enregistre
-            # aucun modem. En annoncant que la commande n est pas geree, il se
-            # rabat sur les commandes ordinaires (+CIMI, +CPIN?), auxquelles on
-            # sait repondre - il n y a pas de vraie carte ici, l identite vient
-            # du banc.
-            self.err(4)          # 4 = operation non supportee
+            # FLATLY REFUSE APDU ACCESS. ModemManager probes the card with
+            # AT+CSIM (raw APDU commands: file selection, IMSI read...).
+            # Answering "OK" without data would leave it waiting for a reply
+            # that never comes, and it would register no modem. Announcing
+            # the command as unsupported makes it fall back to the ordinary
+            # commands (+CIMI, +CPIN?), which are answered - there is no real
+            # card here, the identity comes from the bench.
+            self.err(4)          # 4 = operation not supported
             return
         if ub.startswith("+CRSM"):
-            # 148,4 = SW1 0x94 / SW2 0x04, « fichier introuvable » : la reponse
-            # normale d une SIM qui ne porte pas le fichier demande.
+            # 148,4 = SW1 0x94 / SW2 0x04, "file not found": the normal reply
+            # of a SIM that does not carry the requested file.
             self.out("+CRSM: 148,4"); self.ok(); return
-        # Les lectures dont oFono a besoin pour monter MessageManager et la
-        # data : refusees, elles laissaient ces interfaces absentes.
-        # [2026-09-06] LA COMMANDE QUI DECIDE DE TOUT : AT+GCAP. C est par elle
-        # qu oFono demande au modem ce qu il sait faire ; sans « +CGSM » dans la
-        # reponse, il n active pas la couche reseau et n envoie meme JAMAIS
-        # AT+CREG - l interface NetworkRegistration reste alors absente, ce
-        # qu on a observe tel quel sur le banc (aucun CREG dans le journal).
+        # THE COMMAND THAT DECIDES EVERYTHING: AT+GCAP. Through it oFono
+        # asks the modem what it can do; without "+CGSM" in the reply, it
+        # does not enable the network layer and NEVER sends AT+CREG - the
+        # NetworkRegistration interface then stays absent.
         if ub in ("+GCAP", "+CGCAP"):
             self.out("+GCAP: +CGSM,+FCLASS,+DS,+ES"); self.ok(); return
 
-        # ── LA BOITE DE RECEPTION, VUE EN AT ────────────────────────────
-        # [2026-09-07] LA FORME TEST D ABORD. « AT+CMGF=? » commence par
-        # « +CMGF= » : le prefixe ci-dessous l attrapait, repondait OK tout nu
-        # et laissait la vraie reponse (plus bas dans cette fonction) en code
-        # mort - releve dans la trace AT, « < AT+CMGF=? » suivi d un « > OK ».
-        # Meme piege pour AT+CNMI=?, qui en prime remettait cnmi_mt a 2.
+        # ── THE INBOX, SEEN THROUGH AT ──────────────────────────────────
+        # THE TEST FORM FIRST. "AT+CMGF=?" starts with "+CMGF=": it must be
+        # matched before the prefix test below, which would answer a bare OK
+        # (and, for AT+CNMI=?, reset cnmi_mt to 2).
         if ub == "+CMGF=?":
             self.out("+CMGF: (0,1)"); self.ok(); return
         if ub == "+CNMI=?":
             self.out("+CNMI: (0-2),(0-3),(0,2),(0,1),(0,1)"); self.ok(); return
         if ub.startswith("+CMGF="):
-            # Retenir le mode : CMGR et CMGL ne repondent pas pareil en texte
-            # et en PDU, et repondre dans le mauvais mode fait jeter le message.
+            # Remember the mode: CMGR and CMGL do not answer the same way in
+            # text and in PDU, and answering in the wrong mode gets the
+            # message dropped.
             self.cmgf = 1 if ub[6:].strip().startswith("1") else 0
             self.ok(); return
         if ub == "+CMGF?":
             self.out("+CMGF: %d" % self.cmgf); self.ok(); return
 
         if ub.startswith("+CNMI="):
-            # LA COMMANDE QUI DECIDE DE TOUT POUR LES ENTRANTS. Le deuxieme
-            # champ (mt) dit si le systeme veut le message pousse (2) ou
-            # seulement son index (1). ModemManager demande 1.
+            # THE COMMAND THAT DECIDES EVERYTHING FOR INCOMING SMS. The
+            # second field (mt) says whether the system wants the message
+            # pushed (2) or only its index (1). ModemManager asks for 1.
             champs = ub[6:].split(",")
             try:
                 self.cnmi_mt = int(champs[1]) if len(champs) > 1 else 2
@@ -2088,9 +2024,10 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.out("+CNMI: 2,%d,2,1,0" % self.cnmi_mt); self.ok(); return
 
         if ub.startswith("+CNMA"):
-            # L accuse de reception d un « +CMT: ». Rien a faire : le message
-            # est deja parti du banc. Mais il FAUT repondre OK, sinon le
-            # systeme croit la remise ratee et coupe l annonce directe.
+            # The acknowledgement of a "+CMT:". Nothing to do: the message
+            # has already left the bench. But OK MUST be answered, otherwise
+            # the system believes delivery failed and turns off direct
+            # announcement.
             self.ok(); return
 
         if ub.startswith("+CMGR="):
@@ -2100,7 +2037,7 @@ class AtHandler(socketserver.StreamRequestHandler):
                 self.err(); return
             m = inbox_get(idx)
             if m is None:
-                self.err(321)            # 321 = index de memoire invalide
+                self.err(321)            # 321 = invalid memory index
                 return
             self.out(self._sms_ligne(m, "+CMGR: "))
             m["lu"] = True
@@ -2112,7 +2049,7 @@ class AtHandler(socketserver.StreamRequestHandler):
                          '+CMGL: ("REC UNREAD","REC READ","ALL")')
                 self.ok(); return
             arg = ub[6:].strip().strip('"').upper() if "=" in ub else "4"
-            # 0 / « REC UNREAD » : seulement les non lus. Tout le reste : tout.
+            # 0 / "REC UNREAD": only the unread ones. Anything else: all.
             que_non_lus = arg in ("0", "REC UNREAD")
             with INBOX_LOCK:
                 liste = [m for m in INBOX if not (que_non_lus and m["lu"])]
@@ -2135,7 +2072,7 @@ class AtHandler(socketserver.StreamRequestHandler):
             drapeau = champs[1].strip() if len(champs) > 1 else "0"
             with INBOX_LOCK:
                 if drapeau in ("1", "2", "3", "4"):
-                    INBOX[:] = []            # « efface tout », selon le drapeau
+                    INBOX[:] = []            # "delete all", per the flag
                 else:
                     INBOX[:] = [m for m in INBOX if m["idx"] != idx]
             self.ok(); return
@@ -2143,10 +2080,9 @@ class AtHandler(socketserver.StreamRequestHandler):
         if ub == "+CSCS?":
             self.out('+CSCS: "IRA"'); self.ok(); return
         if ub.startswith("+CPMS"):
-            # Trois memoires SMS : on n en tient aucune (les SMS passent par le
-            # banc), on annonce donc des boites vides mais existantes.
-            # Le compte doit etre VRAI : un systeme qui lit « 0 message »
-            # ne va pas chercher ce qu on vient de ranger.
+            # Three SMS memories, all reported as the same inbox. The count
+            # must be TRUE: a system that reads "0 messages" will not fetch
+            # what has just been stored.
             with INBOX_LOCK:
                 n = len(INBOX)
             if ub.endswith("=?"):
@@ -2174,20 +2110,18 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub == "+CLCC=?":
-            # [2026-09-07] LA COMMANDE QUI DECIDE DU RACCROCHAGE. Releve dans
-            # la trace AT de la VM : ModemManager n envoie JAMAIS AT+CLCC. Il
-            # commence par demander AT+CLCC=? et, sur ERROR, conclut que ce
-            # modem ne sait pas rendre sa liste d appels - il coupe alors la
-            # relecture periodique et ne lui reste plus rien pour apprendre
-            # qu un appel s est termine. Quand le correspondant raccrochait,
-            # l ecran d appel restait donc affiche. Un vrai modem repond OK.
+            # THE COMMAND THAT DECIDES THE HANGUP. ModemManager first asks
+            # AT+CLCC=? and, on ERROR, concludes that this modem cannot
+            # return its call list - it then stops the periodic re-read and
+            # has nothing left to learn that a call has ended. A real modem
+            # answers OK.
             self.ok(); return
 
         if ub == "+CLCC":
             for i, c in enumerate(self.calls, start=1):
-                # 27.007 : idx, direction, etat, mode, multipartie, numero,
-                # type. Direction 0 = sortant, 1 = entrant. Etat 0 = actif,
-                # 2 = en cours d appel, 4 = entrant qui sonne.
+                # 27.007: idx, direction, state, mode, multiparty, number,
+                # type. Direction 0 = outgoing, 1 = incoming. State 0 =
+                # active, 2 = dialling, 4 = incoming ringing.
                 sens = 1 if c["state"] == "incoming" else 0
                 etat = {"active": 0, "incoming": 4}.get(c["state"], 2)
                 _n, _t = clip(c["num"])
@@ -2196,9 +2130,9 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.ok(); return
 
         if ub.startswith("+CMGS="):
-            # Deux formes : mode texte (le numero entre guillemets, pour un
-            # essai a la main) et mode PDU (une longueur - c est ce qu envoie
-            # oFono). Dans les deux cas la suite arrive apres l invite « > ».
+            # Two forms: text mode (the number in quotes, for a manual test)
+            # and PDU mode (a length - what oFono sends). In both cases the
+            # rest arrives after the "> " prompt.
             m = re.search(r'"([^"]+)"', body)
             self.sms_target = m.group(1) if m else "<pdu>"
             try:
@@ -2209,11 +2143,11 @@ class AtHandler(socketserver.StreamRequestHandler):
             return
 
         if ub == "A":
-            # [2026-09-07] DECROCHER. L appel va DEJA vers l abonne du banc -
-            # la VM et le mobile sont le meme 100101, comme pour les SMS. On ne
-            # peut donc pas « prendre » la ligne : on note que l appel est en
-            # cours, et la voix arrive par le pont audio (gsm_audio), que la VM
-            # relaie deja.
+            # ANSWER. The call ALREADY goes to the bench subscriber - the VM
+            # and the mobile are the same 100101, as for SMS. The line cannot
+            # be "taken": note that the call is in progress, and the voice
+            # comes through the audio bridge (gsm_audio), which the VM
+            # already relays.
             for c in self.calls:
                 if c["state"] == "incoming":
                     c["state"] = "active"
@@ -2227,32 +2161,29 @@ class AtHandler(socketserver.StreamRequestHandler):
             if not num:
                 self.err(); return
             if not num.startswith("*99") and ("*" in num or "#" in num):
-                # [2026-09-08] UN CODE USSD N EST PAS UN APPEL. Le composeur
-                # de Phosh envoie « *#100# » en ATD : on le lancait dans
-                # Asterisk, on descendait en 2G, et on essayait de faire
-                # decrocher le mobile pour rien. Refuse (27.007 : operation
-                # non permise) ; l USSD passe par AT+CUSD, plus bas.
+                # A USSD CODE IS NOT A CALL. Phosh's dialler sends "*#100#"
+                # as ATD: refused (27.007: operation not allowed); USSD goes
+                # through AT+CUSD, below.
                 log("ATD%s : code USSD/SS, pas un appel - refuse" % num)
                 self.err(3); return
             if num.startswith("*99"):
-                # ATD*99***<cid># : la DATA, par PPP sur ce port (voir la
-                # classe Ppp). On repond CONNECT et le port passe en mode
-                # donnees : NetworkManager lance pppd dans le telephone, et
-                # c est nous qui tenons l autre bout. Le noyau du telephone
-                # doit avoir ppp_generic/ppp_async (compiles pour lui, voir
-                # tools/osmo-pmos.sh) - sans eux pppd meurt et le port
-                # revient en AT tout seul (Ppp.feed reconnait un « AT »).
+                # ATD*99***<cid>#: DATA, by PPP on this port (see the Ppp
+                # class). Answer CONNECT and the port switches to data mode:
+                # NetworkManager starts pppd in the phone, and we hold the
+                # other end. The phone's kernel must have
+                # ppp_generic/ppp_async (built for it, see tools/osmo-pmos.sh)
+                # - without them pppd dies and the port comes back to AT by
+                # itself (Ppp.feed recognises an "AT").
                 if not LTE.state()["ok"] and not st["up"]:
                     log("data : ATD%s refuse, aucun reseau" % num)
-                    self.err(30)                 # 30 = pas de service reseau
+                    self.err(30)                 # 30 = no network service
                     return
-                # [2026-09-08] PAS DE DATA PENDANT UN SERVICE CS. Sur la 2G,
-                # un mobile en appel n a pas de data (classe B) ; et ici, avec
-                # UN SEUL port, accepter ATD*99 en plein appel remettait le
-                # port en mode donnees : le NO CARRIER du correspondant qui
-                # raccroche et le +CEREG du retour sur la 4G restaient retenus
-                # derriere le PPP - ecran d appel fige, telephone bloque en
-                # 2G. NetworkManager reessaie de lui-meme apres le service.
+                # NO DATA DURING A CS SERVICE. On 2G, a mobile in a call has
+                # no data (class B); and here, with a SINGLE port, accepting
+                # ATD*99 in the middle of a call would put the port back in
+                # data mode: the NO CARRIER of the other party hanging up and
+                # the +CEREG of the return to 4G would stay held behind the
+                # PPP. NetworkManager retries by itself after the service.
                 if DATA is None and self.cs_actif():
                     log("data : ATD%s refuse le temps du service CS (CSFB)" % num)
                     self.out("NO CARRIER")
@@ -2262,12 +2193,11 @@ class AtHandler(socketserver.StreamRequestHandler):
                 log("data : ATD%s -> CONNECT, PPP sur le port AT (cid %d, APN %s), par %s"
                     % (num, self.data_cid, LTE.state()["apn"],
                        "la 4G (srsUE)" if self.rat() == "lte" else "la 2G"))
-                # [2026-10-15] CONNECT APRES LE PDP, comme un vrai modem. Repondre
-                # CONNECT tout de suite laissait la session PPP du telephone sans
-                # sortie pendant l attach + PDP (1 a 3 min sur le Calypso) : elle
-                # abandonnait (300 s) et il fallait relancer la data a la main.
-                # Ici le port de donnees attend la bascule et le PDP ; en cas
-                # d echec, NO CARRIER, et NetworkManager redemande de lui-meme.
+                # CONNECT AFTER THE PDP, like a real modem. Answering CONNECT
+                # right away would leave the phone's PPP session without an
+                # egress during attach + PDP (1 to 3 min on the Calypso).
+                # The data port waits for the switch and the PDP; on failure,
+                # NO CARRIER, and NetworkManager asks again by itself.
                 if GPRS_DATA and self.rat() == "gsm":
                     pdp = _sh("ip", "-n", GPRS_NETNS, "-4", "-o", "addr", "show", GPRS_TUN)
                     if not (pdp[0] == 0 and "inet" in pdp[1]):
@@ -2281,21 +2211,18 @@ class AtHandler(socketserver.StreamRequestHandler):
                 self.ppp = Ppp(self)
                 self.ppp.demarrer()
                 return
-            # CSFB : l appel se fait sur la 2G. On descend AVANT de composer,
-            # comme un vrai UE quitte la LTE sur l Extended Service Request.
+            # CSFB: the call is made on 2G. Go down BEFORE dialling, as a
+            # real UE leaves LTE on the Extended Service Request.
             self.csfb_debut("appel vers %s" % num, couper_data=(DATA is None))
-            # « origine » = le nom de DEMANDE du canal Local (« Local/600@internal »),
-            # qu Asterisk decline en « ...-0000000b;1 » et « ;2 ». C est par lui
-            # qu on reconnait nos propres jambes dans les evenements AMI
-            # (cf. est_notre_jambe) ; « channel » sera remplace par le vrai nom.
-            # [2026-09-07] NOTE AVANT DE COMPOSER, PAS APRES. L appel etait
-            # ajoute a la liste au retour d ami_originate ; or les evenements
-            # AMI arrivent sur une AUTRE connexion (AmiEcoute) et le DialBegin
-            # de notre seconde jambe (Exten 100101) peut precéder ce retour :
-            # est_notre_jambe ne trouvait rien, entrant() sonnait le telephone
-            # avec son propre numero, et le NO CARRIER qui suivait fermait
-            # l appel qu on venait de passer. Releve dans la trace AT :
-            # « ATD600; » puis RING +CLIP "100101" et NO CARRIER dans la ms.
+            # "origine" = the REQUEST name of the Local channel
+            # ("Local/600@internal"), which Asterisk expands to
+            # "...-0000000b;1" and ";2". It is how our own legs are
+            # recognised in the AMI events (cf. est_notre_jambe); "channel"
+            # will be replaced by the real name.
+            # RECORDED BEFORE DIALLING, NOT AFTER: the AMI events arrive on
+            # ANOTHER connection (AmiEcoute) and the DialBegin of our second
+            # leg (Exten 100101) can precede the return of ami_originate;
+            # est_notre_jambe must already find the call.
             chan = "Local/%s@%s" % (num, CTX)
             appel = {"num": num, "state": "active", "channel": chan, "origine": chan}
             self.calls.append(appel)
@@ -2312,49 +2239,37 @@ class AtHandler(socketserver.StreamRequestHandler):
             return
 
         if ub == "+CHLD=?":
-            # 0 rejeter/liberer, 1 liberer les actifs, 1x liberer l appel x.
+            # 0 reject/release, 1 release the active ones, 1x release call x.
             self.out('+CHLD: (0,1,1x)'); self.ok(); return
 
         if ub in ("H", "+CHUP") or ub.startswith("+CHLD="):
-            # [2026-09-07] ET C EST +CHLD QUI RACCROCHE, PAS ATH.
-            # Trace de la VM postmarketOS (/tmp/osmo-at-ofono-*.log) :
-            #     06:53:04.174 < AT+CHLD=11      ModemManager raccroche
-            #     06:53:04.207 > RING            ... et on sonnait toujours
-            #     06:53:04.824 < AT+CHUP         il en fallait une SECONDE
-            # +CHLD n etait traite nulle part ici (osmo-ril-atmodem.py, lui,
-            # l a toujours reconnu). Il tombait donc dans la regle generale
-            # « toute AFFECTATION est acceptee sans effet » : on repondait OK -
-            # ModemManager croyait avoir raccroche - et l appel continuait de
-            # sonner jusqu au +CHUP suivant. D ou le double raccrochage.
-            # 27.007 § 7.13 : 0 = rejeter l entrant, 1 = liberer les actifs,
-            # 1x = liberer l appel x. Sans mise en attente sur ce banc, les
-            # trois reviennent au meme - on raccroche.
+            # ModemManager hangs up with +CHLD (27.007 § 7.13: 0 = reject the
+            # incoming, 1 = release the active ones, 1x = release call x),
+            # not with ATH. Without call hold on this bench, all three come
+            # down to the same thing - hang up. +CHLD must be handled here
+            # and not fall into the general "any ASSIGNMENT is accepted
+            # without effect" rule below.
             #
-            # IL FALLAIT RACCROCHER DEUX FOIS DEPUIS pmOS (suite).
-            # On vidait self.calls ici meme : quand Asterisk demolissait
-            # ensuite le canal pour de bon, fin_appel() ne trouvait plus rien a
-            # retirer et n emettait donc JAMAIS le « NO CARRIER ». Cote VM,
-            # ModemManager n apprenait pas la fin de l appel - l ecran d appel
-            # restait, et il fallait un second ATH (que le premier avait deja
-            # rendu sans objet) pour que l interface se resigne.
-            # C est nous qui raccrochons : c est donc a nous de l annoncer,
-            # tout de suite, une fois par appel. fin_appel() reste en place
-            # pour l autre sens (le correspondant raccroche le premier) et ne
-            # fera pas doublon : la liste est vide quand son evenement arrive.
+            # WE hang up, so WE announce it, right away, once per call:
+            # self.calls is cleared here, so fin_appel() finds nothing to
+            # remove when Asterisk tears the channel down and would never
+            # emit the NO CARRIER. fin_appel() stays in place for the other
+            # direction (the other party hangs up first) and does not
+            # duplicate: the list is empty when its event arrives.
             for c in self.calls:
                 ami_hangup(c.get("channel", ""))
             n = len(self.calls)
             self.calls.clear()
-            mobile("hangup")            # l abonne, c est le mobile : lui aussi
+            mobile("hangup")            # the subscriber is the mobile: it too
             for _ in range(n):
                 self.out("NO CARRIER")
-            self.csfb_fin_apres()       # plus rien en CS : retour sur la 4G
+            self.csfb_fin_apres()       # nothing left in CS: back to 4G
             self.ok(); return
 
         if ub.startswith("+CUSD=1,"):
-            # USSD, un minimum : *#100# rend le numero de l abonne (comme sur
-            # le mobile osmocom-bb) ; tout autre code est « libere par le
-            # reseau » (+CUSD: 2), sans erreur ni descente en 2G.
+            # USSD, a minimum: *#100# returns the subscriber's number (as on
+            # the osmocom-bb mobile); any other code is "released by the
+            # network" (+CUSD: 2), without error nor drop to 2G.
             m = re.search(r'"([^"]*)"', body)
             code = m.group(1) if m else ""
             self.ok()
@@ -2365,19 +2280,19 @@ class AtHandler(socketserver.StreamRequestHandler):
                 self.out("+CUSD: 2")
             return
         if ub == "+CBC":
-            self.out("+CBC: 0,80"); self.ok(); return       # alimente, 80 %
+            self.out("+CBC: 0,80"); self.ok(); return       # powered, 80 %
         if ub == "+CLCK=?":
             self.out('+CLCK: ("SC","AO","OI","AI")'); self.ok(); return
 
-        # [2026-09-06] LA REGLE GENERALE, ET POURQUOI ELLE EST SURE. oFono
-        # deroule a l initialisation une trentaine de REGLAGES (AT+CRC=1,
-        # AT+CNAP=1, AT+CDIP=1, AT+CSCS="GSM"...) dont il ne lit jamais la
-        # reponse au-dela du OK : refuser ceux-la faisait abandonner
-        # l initialisation entiere. On accepte donc tout ce qui est une
-        # AFFECTATION - un modem qui accepte un reglage qu il n applique pas ne
-        # ment a personne, il n a rien a rapporter dessus. En revanche une
-        # LECTURE inconnue (AT+XXX? ou AT+XXX=?) reste refusee : la, une reponse
-        # inventee ferait croire a oFono a une capacite qui n existe pas.
+        # THE GENERAL RULE, AND WHY IT IS SAFE. At initialisation oFono runs
+        # through some thirty SETTINGS (AT+CRC=1, AT+CNAP=1, AT+CDIP=1,
+        # AT+CSCS="GSM"...) whose reply it never reads beyond the OK;
+        # refusing them makes it abandon the whole initialisation. So
+        # anything that is an ASSIGNMENT is accepted - a modem that accepts
+        # a setting it does not apply lies to nobody, it has nothing to
+        # report about it. An unknown READ (AT+XXX? or AT+XXX=?), on the
+        # other hand, stays refused: there, an invented reply would make
+        # oFono believe in a capability that does not exist.
         if "=" in ub and not ub.endswith("=?"):
             log("reglage accepte sans effet : %s" % line)
             self.ok(); return
@@ -2386,18 +2301,18 @@ class AtHandler(socketserver.StreamRequestHandler):
         self.err()
 
 
-# ── LA RECEPTION DES SMS : ESME SMPP SUR osmo-msc ───────────────────────────
-# Emettre un SMS se fait par le VTY (« subscriber ... sms ... send »), mais
-# RECEVOIR demande que le MSC nous pousse quelque chose : le VTY ne notifie
-# rien. osmo-msc expose pour cela un serveur SMPP (port 2775) auquel on se
-# connecte comme ESME. Chaque SMS route vers nous arrive en deliver_sm, et on
-# le presente au modem sous la forme que le monde AT attend : « +CMT: » avec le
-# message en PDU, precede de l URC.
+# ── SMS RECEPTION: SMPP ESME ON osmo-msc ────────────────────────────────────
+# Sending an SMS is done through the VTY ("subscriber ... sms ... send"), but
+# RECEIVING requires the MSC to push something to us: the VTY notifies
+# nothing. For that osmo-msc exposes an SMPP server (port 2775) to which we
+# connect as an ESME. Each SMS routed to us arrives as deliver_sm, and is
+# presented to the modem in the form the AT world expects: "+CMT:" with the
+# message as a PDU, preceded by the URC.
 #
-# Le protocole est binaire mais on n en utilise qu une poignee de messages :
-# bind_transceiver, enquire_link (le battement de coeur), deliver_sm et sa
-# reponse. Pas de bibliotheque : ce serait une dependance de plus sur l image
-# pour trois structures.
+# The protocol is binary but only a handful of messages are used:
+# bind_transceiver, enquire_link (the heartbeat), deliver_sm and its reply.
+# No library: it would be one more dependency on the image for three
+# structures.
 SMPP_BIND_TRANSCEIVER = 0x00000009
 SMPP_BIND_TRANSCEIVER_RESP = 0x80000009
 SMPP_DELIVER_SM = 0x00000005
@@ -2407,18 +2322,16 @@ SMPP_ENQUIRE_LINK_RESP = 0x80000015
 
 
 def _cstr(b, i):
-    """Une chaine terminee par zero, et l indice juste apres."""
+    """A zero-terminated string, and the index right after it."""
     j = b.index(b"\x00", i)
     return b[i:j].decode(errors="replace"), j + 1
 
 
 def gsm7_pack(text):
-    """L alphabet GSM 7 bits, tasse par paquets de sept octets pour huit
-    caracteres - l encodage par defaut d un SMS."""
-    # [2026-09-06] Le miroir EXACT de gsm7_unpack : on empile les septets dans
-    # un tampon de bits et on sort un octet des qu il y en a huit. La premiere
-    # version decalait a l envers et produisait un texte illisible - verifie en
-    # relisant son propre resultat, qui ne redonnait pas le message d origine.
+    """The GSM 7-bit alphabet, packed seven octets for eight characters -
+    the default encoding of an SMS."""
+    # The EXACT mirror of gsm7_unpack: septets are stacked into a bit buffer
+    # and an octet is output as soon as there are eight bits.
     septets = [ord(c) & 0x7F for c in text]
     out = bytearray()
     cur = bits = 0
@@ -2434,41 +2347,37 @@ def gsm7_pack(text):
     return bytes(out), len(septets)
 
 
-# ── LA BOITE DE RECEPTION ───────────────────────────────────────────────────
-# [2026-09-07] POURQUOI IL FAUT STOCKER LES SMS. Le modem ne decide pas seul
-# comment il annonce un SMS entrant : c est le systeme qui le lui dit par
-# AT+CNMI=<mode>,<mt>,... Deux mondes s y opposent :
-#   mt=2 : « pousse-moi le message tout de suite »   -> URC « +CMT: » + le PDU
-#   mt=1 : « range-le et dis-moi seulement ou »      -> URC « +CMTI: "SM",<i> »
-#          puis le systeme vient le lire par AT+CMGR=<i>.
-# ModemManager, celui de la VM postmarketOS, negocie mt=1 - releve tel quel
-# dans le journal : « AT+CNMI=2,1,2,1,0 ». Il liste meme la boite au demarrage
-# par AT+CMGL=4. Or ce programme n emettait QUE « +CMT: » et ne tenait aucune
-# boite : les SMS entrants partaient donc dans le vide, et rien n arrivait dans
-# la VM. D ou ce magasin, et les commandes qui vont avec (CMGR, CMGL, CMGD).
+# ── THE INBOX ───────────────────────────────────────────────────────────────
+# WHY SMS MUST BE STORED. The modem does not decide alone how it announces an
+# incoming SMS: the system tells it through AT+CNMI=<mode>,<mt>,... Two
+# worlds:
+#   mt=2: "push me the message right away"      -> URC "+CMT:" + the PDU
+#   mt=1: "store it and only tell me where"     -> URC '+CMTI: "SM",<i>'
+#         then the system reads it with AT+CMGR=<i>.
+# ModemManager (postmarketOS VM) negotiates mt=1 ("AT+CNMI=2,1,2,1,0") and
+# even lists the inbox at startup with AT+CMGL=4. Hence this store, and the
+# commands that go with it (CMGR, CMGL, CMGD).
 INBOX = []                     # [{idx, pdu, sender, text, lu, ts}]
 INBOX_LOCK = threading.Lock()
-INBOX_MAX = 20                 # ce que +CPMS annonce comme capacite
+INBOX_MAX = 20                 # what +CPMS announces as capacity
 
 
-INBOX_DERNIER = [0]            # le dernier index attribue (voir inbox_ranger)
+INBOX_DERNIER = [0]            # the last index assigned (see inbox_ranger)
 
 
 def inbox_ranger(sender, text, pdu):
-    """Range un SMS et rend son index, comme une memoire « SM ».
+    """Store an SMS and return its index, like an "SM" memory.
 
-    [2026-09-08] LES INDEX TOURNENT. On reprenait l index 1 des que le
-    telephone l avait efface (AT+CMGD=1) ; or ModemManager garde parfois ce
-    message dans SA liste - son effacement a echoue chez lui (« SMS storage
-    currently locked, try again later ») bien que le modem ait dit OK - et un
-    +CMTI sur un index qu il croit deja connu est ignore : le SMS suivant
-    passait a la trappe, une fois sur deux ou trois. On prend donc toujours
-    l index libre SUIVANT, en tournant sur les 20 : un index n est repris
-    qu apres 19 autres."""
+    THE INDEXES ROTATE. ModemManager sometimes keeps a deleted message in
+    ITS list (its deletion failed on its side, "SMS storage currently
+    locked, try again later", although the modem said OK), and a +CMTI on an
+    index it believes already known is ignored. So the NEXT free index is
+    always taken, rotating over the 20: an index is reused only after 19
+    others."""
     with INBOX_LOCK:
         pris = {m["idx"] for m in INBOX}
         if len(pris) >= INBOX_MAX:
-            INBOX.pop(0)       # boite pleine : le plus ancien cede la place
+            INBOX.pop(0)       # inbox full: the oldest gives way
             pris = {m["idx"] for m in INBOX}
         idx = INBOX_DERNIER[0]
         for _ in range(INBOX_MAX):
@@ -2491,7 +2400,7 @@ def inbox_get(idx):
 
 
 def semi_octets(num):
-    """Un numero en demi-octets inverses, comme dans un PDU."""
+    """A number in swapped nibbles, as in a PDU."""
     digits = re.sub(r"\D", "", num)
     if len(digits) % 2:
         digits += "F"
@@ -2499,13 +2408,12 @@ def semi_octets(num):
 
 
 def scts_maintenant():
-    """L horodatage d un SMS-DELIVER (23.040 § 9.2.3.11) : six paires de
-    chiffres en demi-octets inverses, puis le fuseau en quarts d heure.
+    """The timestamp of an SMS-DELIVER (23.040 § 9.2.3.11): six pairs of
+    digits in swapped nibbles, then the time zone in quarters of an hour.
 
-    [2026-09-07] POURQUOI PAS DES ZEROS. pdu_deliver posait « bytes(7) », soit
-    an 00 / mois 00 / jour 00 : une date qui n existe pas. ModemManager la
-    transmet telle quelle et Chatty peut jeter le message en la lisant. Un
-    modem donne l heure du reseau ; on donne celle du banc, qui est la meme.
+    A real modem gives the network time; the bench time is given, which is
+    the same. An all-zero timestamp (year 00 / month 00 / day 00) is not a
+    valid date and Chatty may drop the message when reading it.
     """
     t = time.localtime()
     out = bytearray(int(("%02d" % v)[::-1], 16) for v in
@@ -2514,15 +2422,15 @@ def scts_maintenant():
     quarts = -(time.altzone if t.tm_isdst else time.timezone) // 900
     octet = int(("%02d" % abs(quarts))[::-1], 16)
     if quarts < 0:
-        octet |= 0x08                  # le signe, bit 3 du premier demi-octet
+        octet |= 0x08                  # the sign, bit 3 of the first nibble
     out.append(octet)
     return bytes(out)
 
 
 def pdu_deliver(sender, text):
-    """Un SMS-DELIVER complet, tel qu un modem le rend sur « +CMT: »."""
+    """A complete SMS-DELIVER, as a modem returns it on "+CMT:"."""
     digits = re.sub(r"\D", "", sender)
-    oa = bytes([len(digits), 0x81]) + semi_octets(sender)   # 0x81 : numero national
+    oa = bytes([len(digits), 0x81]) + semi_octets(sender)   # 0x81: national number
     ud, n = gsm7_pack(text)
     scts = scts_maintenant()
     pdu = b"\x00" + b"\x04" + oa + b"\x00\x00" + scts + bytes([n]) + ud
@@ -2530,7 +2438,7 @@ def pdu_deliver(sender, text):
 
 
 def gsm7_unpack(data, n):
-    """L inverse de gsm7_pack : les septets tasses redeviennent des caracteres."""
+    """The inverse of gsm7_pack: the packed septets become characters again."""
     out, cur, bits = [], 0, 0
     for b in data:
         cur |= b << bits
@@ -2543,29 +2451,27 @@ def gsm7_unpack(data, n):
 
 
 def parse_submit(pdu_hex):
-    """Lit un SMS-SUBMIT et rend (numero, texte).
+    """Read an SMS-SUBMIT and return (number, text).
 
-    [2026-09-06] POURQUOI IL FAUT DECODER ICI. oFono n envoie PAS les SMS en
-    mode texte : il envoie « AT+CMGS=<longueur> » puis un PDU. La premiere
-    version cherchait un numero entre guillemets et refusait donc tout ce qui
-    venait d oFono - c est-a-dire tout ce qui vient d Android.
+    oFono does NOT send SMS in text mode: it sends "AT+CMGS=<length>" then
+    a PDU, so decoding is required here.
     """
     b = bytes.fromhex(pdu_hex)
     i = 0
-    i += 1 + b[0]                      # longueur du SMSC, puis on le saute
-    first = b[i]; i += 1               # octet de type
-    i += 1                             # reference du message
+    i += 1 + b[0]                      # SMSC length, then skip it
+    first = b[i]; i += 1               # type octet
+    i += 1                             # message reference
     ndigits = b[i]; i += 1
-    i += 1                             # type d adresse
+    i += 1                             # address type
     nbytes = (ndigits + 1) // 2
     num = ""
     for octet in b[i:i + nbytes]:
         num += "%d%d" % (octet & 0x0F, octet >> 4)
     num = num[:ndigits]
     i += nbytes
-    i += 1                             # protocole
+    i += 1                             # protocol
     dcs = b[i]; i += 1
-    if first & 0x10:                   # periode de validite presente
+    if first & 0x10:                   # validity period present
         i += 1
     udl = b[i]; i += 1
     ud = b[i:]
@@ -2577,7 +2483,7 @@ def parse_submit(pdu_hex):
 
 
 class Smpp(threading.Thread):
-    """L ESME : se lie au MSC, tient la liaison, et remet les SMS au modem."""
+    """The ESME: binds to the MSC, keeps the link, and delivers SMS to the modem."""
 
     daemon = True
 
@@ -2639,7 +2545,7 @@ class Smpp(threading.Thread):
                         self.s.close()
                 except OSError:
                     pass
-            time.sleep(5)          # le MSC redemarre, on repasse le voir
+            time.sleep(5)          # the MSC restarts, come back to it
 
     def _loop(self):
         while True:
@@ -2668,11 +2574,11 @@ class Smpp(threading.Thread):
     def _on_deliver(self, b):
         i = 0
         _svc, i = _cstr(b, i)
-        i += 2                                    # ton et npi de la source
+        i += 2                                    # source ton and npi
         src, i = _cstr(b, i)
-        i += 2                                    # ton et npi du destinataire
+        i += 2                                    # destination ton and npi
         dst, i = _cstr(b, i)
-        i += 3                                    # esm_class, protocole, priorite
+        i += 3                                    # esm_class, protocol, priority
         _sched, i = _cstr(b, i)
         _valid, i = _cstr(b, i)
         i += 3                                    # registered, replace, coding
@@ -2688,30 +2594,29 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-CURRENT = None                 # le modem actuellement ouvert par oFono
-# [2026-09-08] LE MODEM A DEUX PORTS. Sur un seul port, une fois ATD*99
-# passe, plus rien ne circule en AT : le telephone ne peut ni appeler ni
-# envoyer un SMS tant que la data est montee (« No AT port available »), et
-# les entrants n arrivent qu en coupant le PPP. Un vrai modem a un port de
-# commande et un port de donnees. Ici aussi, desormais : CURRENT tient le
-# port de commande (hvc0, URC, appels, SMS) ; DATA tient le port de donnees
-# (hvc1, celui que ModemManager marque ID_MM_PORT_TYPE_AT_PPP et sur lequel il
-# compose ATD*99). Les deux sont des AtHandler sur le meme etat du banc ; le
-# port de donnees renvoie sur CURRENT pour ce qui est l etat du telephone
-# (technologie, appel en cours). Sans --data, on reste en port unique.
-DATA = None                    # le port de donnees, s il y en a un
+CURRENT = None                 # the modem currently opened by oFono
+# THE MODEM HAS TWO PORTS. On a single port, once ATD*99 has gone through,
+# nothing flows in AT any more: the phone can neither call nor send an SMS
+# while data is up ("No AT port available"), and incoming ones only arrive
+# by cutting the PPP. A real modem has a command port and a data port. Here
+# too: CURRENT holds the command port (hvc0, URCs, calls, SMS); DATA holds
+# the data port (hvc1, the one ModemManager marks ID_MM_PORT_TYPE_AT_PPP and
+# on which it dials ATD*99). Both are AtHandlers on the same bench state; the
+# data port refers to CURRENT for the phone state (technology, call in
+# progress). Without --data, single port.
+DATA = None                    # the data port, if there is one
 
 
 def on_smpp_sms(sender, text):
-    """Un SMS arrive du banc. Deux destinataires, pas un :
+    """An SMS arrives from the bench. Two recipients, not one:
 
-    [2026-09-06] LE TELEPHONE ANDROID EST LE MEME ABONNE QUE LE MOBILE. Le banc
-    n a qu un 100101, et on veut qu il sonne des DEUX cotes - dans Android par
-    le RIL, et sur le mobile osmocom-bb comme avant. Or « smpp-first » detourne
-    le SMS vers nous AVANT la livraison interne : le mobile ne verrait plus
-    rien. On le lui remet donc nous-memes, par la commande VTY du MSC, qui elle
-    livre directement au mobile sans repasser par SMPP - pas de boucle
-    possible. OSMO_SMS_DUPLIQUE=0 pour n en garder qu un (Android seul).
+    THE ANDROID PHONE IS THE SAME SUBSCRIBER AS THE MOBILE. The bench has
+    only one 100101, and it must ring on BOTH sides - in Android through the
+    RIL, and on the osmocom-bb mobile. "smpp-first" diverts the SMS to us
+    BEFORE internal delivery, so the mobile would see nothing: it is handed
+    over by us, through the MSC VTY command, which delivers directly to the
+    mobile without going through SMPP again - no loop possible.
+    OSMO_SMS_DUPLIQUE=0 to keep only one (Android alone).
     """
     if CURRENT is not None:
         CURRENT.deliver_sms(sender, text)
@@ -2726,23 +2631,24 @@ def on_smpp_sms(sender, text):
             log("copie remise au mobile %s" % MSISDN)
 
 
-# ── LA BOITE D ENTREE : LES SMS QUE LA PASSERELLE NOUS REMET ────────────────
-# [2026-09-07] POURQUOI UNE SECONDE VOIE, A COTE DU SMPP. Le banc tourne avec
-# « sms-over-gsup » (osmo-msc.cfg). Dans ce mode, un SM-RP recu de la radio
-# part au HLR en gsm_04_11.c:742 SANS jamais passer par gsm340_rx_tpdu() :
-# sms_route_mt_sms() n est pas appele, donc smpp_try_deliver() non plus. Le
-# « smpp-first » et les quatre « route prefix ... 100101 » de la conf sont donc
-# de la configuration morte tant que sms-over-gsup est la - l ESME ci-dessus
-# est bien LIE au port 2775, et il ne recoit RIEN. Et le MT qui revient par
-# GSUP est pousse directement a l abonne par la voie radio : le mobile
-# osmocom-bb l a (on le lit dans mobile.log), les modems logiciels non.
+# ── THE INBOX: THE SMS THE GATEWAY HANDS TO US ──────────────────────────────
+# WHY A SECOND PATH, BESIDE SMPP. The bench runs with "sms-over-gsup"
+# (osmo-msc.cfg). In that mode, an SM-RP received from the radio goes to the
+# HLR WITHOUT ever passing through gsm340_rx_tpdu(): sms_route_mt_sms() is
+# not called, hence smpp_try_deliver() neither. "smpp-first" and the "route
+# prefix ... 100101" lines of the conf are dead configuration as long as
+# sms-over-gsup is there - the ESME above is BOUND to port 2775 and receives
+# NOTHING. And the MT that comes back through GSUP is pushed directly to the
+# subscriber over the radio: the osmocom-bb mobile gets it, the software
+# modems do not.
 #
-# La passerelle previent donc les modems la ou elle decide la remise locale
-# (scripts/sms-interop-relay.py, inject_mt_sms), par scripts/sms_notify.py.
-# On ne duplique RIEN ici, contrairement a la voie SMPP : le mobile a deja son
-# exemplaire par la radio, le lui renvoyer le ferait sonner deux fois.
+# The gateway therefore notifies the modems where it decides local delivery
+# (scripts/sms-interop-relay.py, inject_mt_sms), through
+# scripts/sms_notify.py. NOTHING is duplicated here, unlike the SMPP path:
+# the mobile already has its copy over the radio, sending it again would
+# make it ring twice.
 class SmsInHandler(socketserver.StreamRequestHandler):
-    """Une ligne JSON : {"imsi": ..., "from": ..., "text": ...}."""
+    """One JSON line: {"imsi": ..., "from": ..., "text": ...}."""
 
     def handle(self):
         try:
@@ -2756,7 +2662,7 @@ class SmsInHandler(socketserver.StreamRequestHandler):
             return
         imsi = str(msg.get("imsi") or "")
         if imsi and imsi != IMSI:
-            return                       # ce SMS-la est pour un autre abonne
+            return                       # that SMS is for another subscriber
         on_passerelle_sms(str(msg.get("from") or ""), str(msg.get("text") or ""))
         try:
             self.wfile.write(b'{"ok":true}\n')
@@ -2765,9 +2671,9 @@ class SmsInHandler(socketserver.StreamRequestHandler):
 
 
 def on_passerelle_sms(sender, text):
-    """Aucun systeme au bout du fil ? On range quand meme : la VM peut etre en
-    train de demarrer, et ModemManager liste la boite par AT+CMGL=4 des qu il
-    se branche. Un SMS n a pas a se perdre parce que le modem etait absent."""
+    """No system at the end of the line? Store anyway: the VM may be
+    booting, and ModemManager lists the inbox with AT+CMGL=4 as soon as it
+    connects. An SMS must not be lost because the modem was absent."""
     if CURRENT is not None:
         CURRENT.deliver_sms(sender, text)
         return
@@ -2777,8 +2683,8 @@ def on_passerelle_sms(sender, text):
 
 
 def boite_entree(port):
-    """Ouvre la boite. Port deja pris = c est l autre instance du modem qui l
-    a : on le dit et on continue, tout le reste du modem marche sans."""
+    """Open the inbox. Port already taken = the other modem instance has it:
+    say so and go on, everything else in the modem works without it."""
     try:
         srv = Server((SMS_IN_HOST, port), SmsInHandler)
     except OSError as e:
@@ -2789,20 +2695,19 @@ def boite_entree(port):
 
 
 class ClientHandler(AtHandler):
-    """Le meme modem, mais c est NOUS qui allons vers le port.
+    """The same modem, but WE go towards the port.
 
-    [2026-09-07] POURQUOI CE MODE. Quand le modem est branche sur un port serie
-    de machine virtuelle, le firmware UEFI de la VM traite ce port comme une
-    console : il lit les reponses du modem comme des touches pressees, croit
-    qu on interrompt le demarrage et ouvre son menu - la VM ne demarre jamais.
-    Le remede est qu il n y ait PERSONNE au bout du fil tant que le firmware
-    travaille : QEMU ecoute (server=on,wait=off), et on vient s y connecter
-    une fois le systeme charge.
+    WHY THIS MODE. When the modem is plugged into a virtual machine serial
+    port, the VM's UEFI firmware treats that port as a console: it reads the
+    modem's replies as key presses, believes the boot is being interrupted
+    and opens its menu - the VM never boots. The remedy is that NOBODY is at
+    the end of the line while the firmware works: QEMU listens
+    (server=on,wait=off), and we connect once the system is loaded.
     """
 
     def __init__(self, sock, addr, role="commande"):
-        # StreamRequestHandler.setup() attend self.request et fabrique lui-meme
-        # connection/rfile/wfile : on lui donne juste la douille.
+        # StreamRequestHandler.setup() expects self.request and builds
+        # connection/rfile/wfile itself: just give it the socket.
         self.role = role
         self.request = sock
         self.client_address = addr
@@ -2815,15 +2720,13 @@ class ClientHandler(AtHandler):
 
 
 def vm_prete(port):
-    """Le systeme de la VM repond-il ? On se sert d un port temoin (le SSH de
-    la machine virtuelle, 2222 par defaut).
+    """Does the VM's system answer? A witness port is used (the virtual
+    machine's SSH, 2222 by default).
 
-    [2026-09-07] POURQUOI ATTENDRE. Le firmware UEFI de la VM lit tout port
-    serie comme une console : si le modem se branche pendant qu il travaille,
-    ses reponses passent pour des touches et le demarrage s arrete sur le menu.
-    Le mode --connect rebouclant toutes les cinq secondes, il retombait dedans
-    a chaque redemarrage de la VM. On ne se branche donc QUE lorsque le systeme
-    est leve.
+    WHY WAIT. The VM's UEFI firmware reads any serial port as a console: if
+    the modem connects while it works, its replies pass for key presses and
+    the boot stops on the menu. The --connect mode loops every five seconds,
+    so it must connect ONLY once the system is up.
     """
     try:
         s = socket.create_connection(("127.0.0.1", port), timeout=2)
@@ -2834,7 +2737,7 @@ def vm_prete(port):
 
 
 def connect_to(dest, role="commande"):
-    """dest = « hote:port » : on se connecte et on tient le modem sur ce lien."""
+    """dest = "host:port": connect and hold the modem on that link."""
     host, _, port = dest.rpartition(":")
     temoin = int(os.environ.get("OSMO_VM_READY_PORT", "2222"))
     deja_dit = False
@@ -2854,14 +2757,12 @@ def connect_to(dest, role="commande"):
             time.sleep(5)
             continue
         deja_dit = False
-        # [2026-09-07] LE DELAI SERT A SE CONNECTER, PAS A TENIR LE LIEN.
-        # create_connection(timeout=10) laisse ce delai SUR la douille : la
-        # lecture suivante levait socket.timeout apres dix secondes de silence,
-        # handle() rendait la main et le modem se debranchait tout seul. Or un
-        # modem se tait la plupart du temps - ModemManager ne l interroge que
-        # par a-coups. D ou des appels qui marchent puis disparaissent, et la
-        # ronde « oFono s est deconnecte / lien ferme » dans ce journal. On
-        # repasse donc en bloquant, comme le lien SMPP plus haut.
+        # THE TIMEOUT IS FOR CONNECTING, NOT FOR HOLDING THE LINK.
+        # create_connection(timeout=10) leaves that timeout ON the socket:
+        # the next read would raise socket.timeout after ten seconds of
+        # silence and the modem would unplug itself. A modem is silent most
+        # of the time - ModemManager only queries it in bursts. So switch
+        # back to blocking, like the SMPP link above.
         s.settimeout(None)
         log("connecte a %s (port de %s)" % (dest, role))
         try:

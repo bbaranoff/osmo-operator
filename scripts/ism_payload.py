@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
 """
-ism_payload.py — le PAYLOAD des SMS sur une liaison radio ISM, le reste par IP.
+ism_payload.py — the SMS PAYLOAD over an ISM radio link, the rest over IP.
 
-Idee (option start-native.sh --payload-ism, cf. wiki/Payload-ISM.md) : entre deux
-noeuds osmo-operator, la SIGNALISATION (adresses, MSISDN, IMSI, SC-address, SS7,
-SIP) continue de passer par IP comme avec --wan. SEUL le contenu du message (le
-texte du SMS, extrait du TPDU) voyage sur une liaison radio en bande ISM (433 /
-868 / 915 MHz, 2,4 GHz — sans licence). Les deux relais se coordonnent par TCP ;
-le TCP ne porte plus le texte mais un JETON de correlation, et le texte arrive
-par la radio, estampille du meme jeton.
+Idea (start-native.sh --payload-ism option, cf. wiki/Payload-ISM.md): between
+two osmo-operator nodes, the SIGNALLING (addresses, MSISDN, IMSI, SC-address,
+SS7, SIP) keeps going over IP as with --wan. ONLY the message content (the SMS
+text, extracted from the TPDU) travels over a radio link in an ISM band (433 /
+868 / 915 MHz, 2.4 GHz — licence-free). The two relays coordinate over TCP;
+the TCP carries a correlation TOKEN instead of the text, and the text arrives
+over the radio, stamped with the same token.
 
-Ce module ne connait aucun materiel : il parle a l INTERFACE DE DONNEES de ta
-radio (un peripherique serie, une paire de tubes nommes, ou l entree/sortie d un
-programme que tu fournis — un montage SDR GNU Radio, rtl_433, un module LoRa/
-RFM69/CC1101 en UART...). On choisit le backend par variable d environnement ou
-par la section [payload] de sms-routing.conf.
+This module knows no hardware: it talks to the DATA INTERFACE of your radio (a
+serial device, a pair of named pipes, or the stdin/stdout of a program you
+provide — a GNU Radio SDR flowgraph, rtl_433, a LoRa/RFM69/CC1101 module over
+UART...). The backend is chosen by environment variable or by the [payload]
+section of sms-routing.conf.
 
-Trame (robuste sur un lien bruite, sans dependance hors stdlib) : une ligne JSON
-terminee par \\n, payload en hexa, CRC32 :
-    {"t":"<jeton>","p":"<hex>","c":"<crc32hex>"}\\n
-Une ligne tronquee ou un CRC faux est ignore (la radio peut perdre des octets).
+Frame (robust on a noisy link, no dependency outside stdlib): a JSON line
+terminated by \\n, payload in hex, CRC32:
+    {"t":"<token>","p":"<hex>","c":"<crc32hex>"}\\n
+A truncated line or a wrong CRC is ignored (the radio may lose bytes).
 
-BACKENDS (ISM_LINK / [payload] link=) :
-  loopback  tout en memoire, pour un essai sur une seule machine (pas de radio)
-  fifo      deux tubes nommes : ISM_TX (ecriture) et ISM_RX (lecture).
-            Branche n importe quel outil radio dessus (socat, un flowgraph SDR...)
-  serial    un /dev/tty* en lecture/ecriture brute (module ISM en UART).
-            Debit pose par le script de mise en place (stty), ISM_SERIAL=/dev/ttyUSB0
-  exec      lance une commande TX (trame sur son stdin) et une commande RX
-            (trames sur son stdout) : ISM_TX_CMD / ISM_RX_CMD. Le plus general.
+BACKENDS (ISM_LINK / [payload] link=):
+  loopback  all in memory, for a trial on a single machine (no radio)
+  fifo      two named pipes: ISM_TX (write) and ISM_RX (read).
+            Plug any radio tool onto them (socat, an SDR flowgraph...)
+  serial    a /dev/tty* in raw read/write (ISM module over UART).
+            Baud rate set by the setup script (stty), ISM_SERIAL=/dev/ttyUSB0
+  exec      runs a TX command (frame on its stdin) and an RX command (frames
+            on its stdout): ISM_TX_CMD / ISM_RX_CMD. The most general.
 
-Variables : ISM_LINK, ISM_TX, ISM_RX, ISM_SERIAL, ISM_TX_CMD, ISM_RX_CMD,
-ISM_PAYLOAD_TTL (secondes, defaut 120), ISM_RECV_TIMEOUT (defaut 30).
+Variables: ISM_LINK, ISM_TX, ISM_RX, ISM_SERIAL, ISM_TX_CMD, ISM_RX_CMD,
+ISM_PAYLOAD_TTL (seconds, default 120), ISM_RECV_TIMEOUT (default 30).
 
-Autotest (sans radio) :
+Self-test (no radio):
     python3 ism_payload.py --selftest
     python3 ism_payload.py --selftest --link fifo --tx /tmp/ism_a --rx /tmp/ism_b
 """
@@ -60,7 +60,7 @@ def _log(msg: str):
 
 
 def frame_encode(token: str, payload: bytes) -> bytes:
-    """(token, payload) -> une ligne de trame terminee par \\n."""
+    """(token, payload) -> a frame line terminated by \\n."""
     hexp = payload.hex()
     crc = "%08x" % (zlib.crc32(payload) & 0xFFFFFFFF)
     obj = {"t": token, "p": hexp, "c": crc}
@@ -68,7 +68,7 @@ def frame_encode(token: str, payload: bytes) -> bytes:
 
 
 def frame_decode(line: bytes) -> Optional[Tuple[str, bytes]]:
-    """Une ligne de trame -> (token, payload), ou None si invalide / CRC faux."""
+    """A frame line -> (token, payload), or None if invalid / wrong CRC."""
     try:
         obj = json.loads(line.decode("ascii", "replace").strip())
         token = obj["t"]
@@ -82,7 +82,7 @@ def frame_decode(line: bytes) -> Optional[Tuple[str, bytes]]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Backends : chacun expose write_frame(bytes) et un generateur read_frames()
+# Backends: each exposes write_frame(bytes) and a read_frames() generator
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class _Backend:
@@ -90,7 +90,7 @@ class _Backend:
         raise NotImplementedError
 
     def read_line(self, timeout: float) -> Optional[bytes]:
-        """Une ligne (sans le \\n), ou None si rien avant timeout."""
+        """One line (without the \\n), or None if nothing before timeout."""
         raise NotImplementedError
 
     def close(self) -> None:
@@ -98,7 +98,7 @@ class _Backend:
 
 
 class LoopbackBackend(_Backend):
-    """TX ecrit directement dans la file de RX : un essai sans radio."""
+    """TX writes directly into the RX queue: a trial without radio."""
     def __init__(self):
         self._q: "queue.Queue[bytes]" = queue.Queue()
 
@@ -115,15 +115,15 @@ class LoopbackBackend(_Backend):
 
 
 class FifoBackend(_Backend):
-    """Deux tubes nommes : tx (ecriture, vers la radio) et rx (lecture)."""
+    """Two named pipes: tx (write, toward the radio) and rx (read)."""
     def __init__(self, tx_path: str, rx_path: str):
         self.tx_path = tx_path
         self.rx_path = rx_path
         for p in (tx_path, rx_path):
             if p and not os.path.exists(p):
                 os.mkfifo(p, 0o600)
-        # Lecture non bloquante : on ouvre le rx en O_RDONLY|O_NONBLOCK et on
-        # garde un ecrivain fictif pour ne pas voir EOF a chaque vidage du tube.
+        # Non-blocking read: rx is opened O_RDONLY|O_NONBLOCK and a dummy
+        # writer is kept so as not to see EOF every time the pipe drains.
         self._rx_fd = os.open(rx_path, os.O_RDONLY | os.O_NONBLOCK)
         try:
             self._rx_keepalive = os.open(rx_path, os.O_WRONLY | os.O_NONBLOCK)
@@ -132,7 +132,7 @@ class FifoBackend(_Backend):
         self._buf = b""
 
     def write_frame(self, data: bytes) -> None:
-        # O_WRONLY peut bloquer si personne ne lit : ecriture best-effort.
+        # O_WRONLY may block if nobody reads: best-effort write.
         fd = os.open(self.tx_path, os.O_WRONLY | os.O_NONBLOCK)
         try:
             os.write(fd, data)
@@ -170,7 +170,7 @@ class FifoBackend(_Backend):
 
 
 class SerialBackend(_Backend):
-    """Un /dev/tty* en brut. Le debit est pose dehors (stty), on lit/ecrit les octets."""
+    """A raw /dev/tty*. The baud rate is set outside (stty); bytes are read/written."""
     def __init__(self, dev: str):
         self.dev = dev
         self._fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
@@ -212,7 +212,7 @@ class SerialBackend(_Backend):
 
 
 class ExecBackend(_Backend):
-    """Lance un TX (trame sur stdin) et un RX (trames sur stdout) : ton pipeline SDR."""
+    """Runs a TX (frame on stdin) and an RX (frames on stdout): your SDR pipeline."""
     def __init__(self, tx_cmd: str, rx_cmd: str):
         self.tx_cmd = tx_cmd
         self.rx_cmd = rx_cmd
@@ -220,7 +220,7 @@ class ExecBackend(_Backend):
                                     bufsize=0)
 
     def write_frame(self, data: bytes) -> None:
-        # Un TX par trame : simple et sans etat ; la commande emet puis rend la main.
+        # One TX per frame: simple and stateless; the command sends then returns.
         try:
             p = subprocess.Popen(shlex.split(self.tx_cmd), stdin=subprocess.PIPE)
             p.stdin.write(data)
@@ -266,11 +266,11 @@ def make_backend(cfg: Dict[str, str]) -> _Backend:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PayloadLink : send(jeton, payload) / recv(jeton, timeout), RX en tache de fond
+# PayloadLink: send(token, payload) / recv(token, timeout), RX in the background
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PayloadLink:
-    """La liaison payload ISM, vue par le relais SMS."""
+    """The ISM payload link, as seen by the SMS relay."""
     def __init__(self, cfg: Optional[Dict[str, str]] = None,
                  ttl: float = DEFAULT_TTL,
                  on_payload: Optional[Callable[[str, bytes], None]] = None):
@@ -314,11 +314,11 @@ class PayloadLink:
                 del self._store[t]
 
     def send(self, token: str, payload: bytes) -> None:
-        """Emet le payload sur la radio, estampille du jeton."""
+        """Sends the payload over the radio, stamped with the token."""
         self.backend.write_frame(frame_encode(token, payload))
 
     def recv(self, token: str, timeout: float = DEFAULT_RECV_TIMEOUT) -> Optional[bytes]:
-        """Attend le payload de ce jeton, recu par la radio (None si absent a temps)."""
+        """Waits for this token's payload, received over the radio (None if not in time)."""
         deadline = time.time() + timeout
         with self._cv:
             while token not in self._store:
@@ -335,7 +335,7 @@ class PayloadLink:
 
 
 def new_token() -> str:
-    """Un jeton de correlation court et unique (12 hexa)."""
+    """A short unique correlation token (12 hex digits)."""
     return os.urandom(6).hex()
 
 
@@ -347,8 +347,8 @@ def _selftest(cfg: Dict[str, str]) -> int:
     link = cfg.get("link") or os.environ.get("ISM_LINK") or "loopback"
     print("autotest liaison payload ISM — backend %s" % link)
     if link == "fifo":
-        # deux liens croises : A ecrit sur tx et lit sur rx ; un second lien
-        # miroir rejoue ce que A emet vers A lui-meme, pour boucler sans radio.
+        # two crossed links: A writes on tx and reads on rx; a second mirror
+        # link replays what A sends back to A itself, to loop without radio.
         a = PayloadLink(dict(cfg))
         mirror_cfg = dict(cfg)
         mirror_cfg["tx"], mirror_cfg["rx"] = cfg.get("rx"), cfg.get("tx")
@@ -370,7 +370,7 @@ def _selftest(cfg: Dict[str, str]) -> int:
         ok = ok and good
         print("  %s jeton=%s  %r" % ("OK " if good else "KO ", token,
                                      text[:30] + ("…" if len(text) > 30 else "")))
-    # CRC : une trame corrompue doit etre rejetee
+    # CRC: a corrupted frame must be rejected
     bad = frame_encode("deadbeef", b"hello")
     assert frame_decode(bad.replace(b'"c":"', b'"c":"00')) is None
     print("  OK  trame a CRC faux rejetee")

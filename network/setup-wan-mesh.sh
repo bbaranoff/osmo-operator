@@ -1,30 +1,30 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# network/setup-wan-mesh.sh - WAN a N noeuds, route par INDICATIF
+# network/setup-wan-mesh.sh - N-node WAN, routed by DIALING CODE
 #
-# Generalise network/setup-wan-interop.sh (qui ne connait que 2 serveurs) :
-# ici la topologie est une TABLE de noeuds (network/wan-nodes.sh), chacun avec
-# son indicatif, et TOUT est genere en un seul passage - donc relancable et
-# valable pour 2 noeuds comme pour 12.
+# Generalises network/setup-wan-interop.sh (which only knows 2 servers):
+# here the topology is a TABLE of nodes (network/wan-nodes.sh), each with its
+# dialing code, and EVERYTHING is generated in a single pass - so it can be
+# rerun and works for 2 nodes as well as for 12.
 #
-#   Composer <indicatif_cible><numero>  →  ce numero, sur le noeud cible.
-#   L'indicatif est retire a la SORTIE : le noeud d'arrivee recoit le numero nu,
-#   celui que son HLR et son dialplan connaissent deja.
+#   Dial <target_code><number>  →  that number, on the target node.
+#   The code is stripped on the WAY OUT: the receiving node gets the bare
+#   number, the one its HLR and its dialplan already know.
 #
-# Ce que ce script configure, sur CE noeud :
-#   • iptables : entree SIP/RTP/SMS depuis chaque pair (DNAT docker, REDIRECT natif)
-#   • firewall : ouverture des memes ports (network/firewall-wan.sh, idempotent)
-#   • Asterisk : rtp.conf, trunks PJSIP vers chaque (noeud, operateur) distant,
-#                dialplan [wan_out]/[wan_in] + entrees par indicatif
-#   • SMS      : sms-routing.conf - un operateur distant par (noeud, operateur),
-#                avec strip de l'indicatif (cf. scripts/sms-interop-relay.py)
+# What this script configures, on THIS node:
+#   • iptables: SIP/RTP/SMS ingress from each peer (docker DNAT, native REDIRECT)
+#   • firewall: opening of the same ports (network/firewall-wan.sh, idempotent)
+#   • Asterisk: rtp.conf, PJSIP trunks to each remote (node, operator),
+#               [wan_out]/[wan_in] dialplan + per-code entries
+#   • SMS     : sms-routing.conf - one remote operator per (node, operator),
+#               with code stripping (cf. scripts/sms-interop-relay.py)
 #
-# Usage :
+# Usage:
 #   sudo network/setup-wan-mesh.sh --nodes "1:1.2.3.4:33 2:5.6.7.8:44" --id 1 [--ops 2]
 #   sudo network/setup-wan-mesh.sh --config /etc/osmo-wan.conf
-#   options : --native | --docker (defaut : auto)  --no-restart  --dry-run
+#   options: --native | --docker (default: auto)  --no-restart  --dry-run
 #
-# A lancer sur CHAQUE noeud, avec la MEME table et son propre --id.
+# Run on EACH node, with the SAME table and its own --id.
 # ══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -36,11 +36,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/wan-nodes.sh"
 
 MODE=""
-# --op-is-node : l'operateur local i EST le noeud i, et non un operateur du
-# noeud --id. C'est le cas quand chaque conteneur porte sa propre adresse et
-# son propre indicatif : sans cette notion, un seul jeu de pairs etait calcule
-# pour toute la machine, et tous les conteneurs recevaient la meme vue - l'un
-# d'eux se retrouvait meme a se router vers lui-meme.
+# --op-is-node: local operator i IS node i, not an operator of node --id. This
+# is the case when each container carries its own address and its own dialing
+# code: without this notion a single peer set would be computed for the whole
+# machine and every container would get the same view - one of them even
+# routing to itself.
 OP_IS_NODE=0            # docker | native
 NO_RESTART=0
 CONFIG_ONLY=0
@@ -53,8 +53,8 @@ RTP_WAN_BASE=20000
 RTP_PER_OP=500
 SMS_RELAY_BASE=7890
 CONTAINER_PREFIX="osmo-operator-"
-# Prefixe de racine, mode natif seulement : permet de viser un arbre de test
-# (NATIVE_ROOT=/tmp/essai) au lieu du /etc de la machine. Vide en production.
+# Root prefix, native mode only: lets a test tree (NATIVE_ROOT=/tmp/essai) be
+# targeted instead of the machine's /etc. Empty in production.
 NATIVE_ROOT="${NATIVE_ROOT:-}"
 
 wan_sip_port()  { echo $(( SIP_WAN_BASE + ($1 - 1) * 2 )); }
@@ -64,60 +64,55 @@ wan_sms_port()  { echo $(( SMS_RELAY_BASE + $1 - 1 )); }
 op_backbone_ip(){ echo "172.20.0.$((10 + $1))"; }
 op_container()  { echo "${CONTAINER_PREFIX}$1"; }
 
-# Un pair dont l'adresse est celle du backbone est joint DANS le bridge : le
-# trafic n'y traverse pas la table nat de l'hote (br_netfilter n'est pas
-# charge), donc les ports PUBLIES sur l'hote - 5080/5082 pour SIP, 7891 pour le
-# relais SMS du second operateur - ne repondent a personne. Les contacts et les
-# routes visaient ces ports-la : le qualify restait KO et les SMS partaient dans
-# le vide. Vers un tel pair il faut viser ce que le conteneur ecoute vraiment,
-# 5060 et le port de base du relais.
+# A peer whose address is on the backbone is reached INSIDE the bridge: the
+# traffic does not cross the host's nat table there (br_netfilter is not
+# loaded), so the ports PUBLISHED on the host - 5080/5082 for SIP, 7891 for the
+# second operator's SMS relay - answer nobody. Toward such a peer the target
+# must be what the container really listens on: 5060 and the relay's base port.
 peer_is_backbone() { case "$1" in 172.20.0.*) return 0 ;; *) return 1 ;; esac; }
 
-# Sur quel port joindre l'operateur j du noeud r.
+# On which port to reach operator j of node r.
 #
-# Le plan 5080/5082/... n'existe QUE pour multiplexer plusieurs operateurs
-# derriere une seule adresse : c'est un hote docker qui republie les ports de
-# ses conteneurs, ou un noeud natif qui pose des REDIRECT vers 5060. Un noeud
-# qui ne porte QU'UN operateur n'a rien a multiplexer - son Asterisk ecoute
-# directement sur 5060.
+# The 5080/5082/... plan exists ONLY to multiplex several operators behind a
+# single address: a docker host republishing its containers' ports, or a
+# native node setting REDIRECTs to 5060. A node carrying ONLY ONE operator has
+# nothing to multiplex - its Asterisk listens directly on 5060.
 #
-# Le discriminant etait "l'adresse est-elle sur le backbone docker". C'etait
-# trop etroit : le noeud 3 du banc est une VM NATIVE, hors backbone, avec un
-# seul operateur. On visait donc 192.168.1.2:5080, ou rien n'ecoute, et le
-# trunk restait "Unavail" pendant que la VM repondait tranquillement sur 5060 :
+# "Is the address on the docker backbone" is not the right discriminant: a
+# NATIVE VM off the backbone with a single operator also listens on 5060 only:
 #     192.168.1.2:5060  -> SIP/2.0 401 Unauthorized
-#     192.168.1.2:5080  -> aucune reponse
-# (Elle repondrait sur 5080 si le maillage y avait tourne - il pose les
-#  REDIRECT - mais on ne peut pas en faire une hypothese depuis ici.)
-peer_sip_port() {          # $1 = id du noeud distant, $2 = operateur
+#     192.168.1.2:5080  -> no answer
+# (It would answer on 5080 if the mesh had run there - it sets the REDIRECTs -
+#  but that cannot be assumed from here.) The operator count of the remote
+#  node is the discriminant.
+peer_sip_port() {          # $1 = remote node id, $2 = operator
     if [ "$(node_nops "$1")" -eq 1 ]; then echo 5060; else wan_sip_port "$2"; fi
 }
-peer_sms_port() {          # $1 = id du noeud distant, $2 = operateur
+peer_sms_port() {          # $1 = remote node id, $2 = operator
     if [ "$(node_nops "$1")" -eq 1 ]; then echo "$SMS_RELAY_BASE"; else wan_sms_port "$2"; fi
 }
 
-# L'adresse que la TABLE annonce pour nous n'est pas toujours celle que porte le
-# paquet a l'arrivee : derriere un routeur, la table donne l'adresse publique et
-# l'hote ne voit jamais que sa privee. Un "-d" sur une adresse absente de la
-# machine ne matche alors PLUS RIEN, et le WAN meurt en silence - le cas de
-# l'en-tete de ce fichier, deux serveurs derriere leur box. On ne restreint donc
-# la destination que si l'adresse est bien a nous.
+# The address the TABLE announces for us is not always the one the packet
+# carries on arrival: behind a router the table gives the public address and
+# the host only ever sees its private one. A "-d" on an address absent from
+# the machine then matches NOTHING and the WAN dies silently - the case of two
+# servers behind their home routers. The destination is therefore only
+# restricted when the address really is ours.
 addr_is_local() {
     ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$1"
 }
 
-# Nombre d'operateurs portes par un noeud DISTANT. Le compteur local ne le dit
-# pas : avec un noeud par conteneur il vaut 2 et fabriquait un trunk vers un
-# operateur inexistant, un pattern _<indicatif>2XXXX et une route SMS que
-# personne ne sert. WAN_NOPS vient de la table.
+# Number of operators carried by a REMOTE node. The local count does not say:
+# with one node per container it is 2 and would build a trunk to a
+# non-existent operator, a _<code>2XXXX pattern and an SMS route nobody
+# serves. WAN_NOPS comes from the table.
 #
-# Aucun producteur n'ecrit encore le 4e champ : le repli est donc, aujourd'hui,
-# le cas general. Un repli fixe a 1 aurait supprime l'operateur 2 de tout
-# montage CLASSIQUE ("--wan-nodes 1:a:11 2:b:22 --ops 2", ou chaque noeud porte
-# les deux operateurs) - trunk absent, appels inter-noeuds morts pour lui. On
-# ne replie sur 1 que la ou c'est vrai par construction : --op-is-node, un
-# operateur par noeud. Sinon on garde l'hypothese d'origine, les pairs sont
-# montes comme nous.
+# When the table has no 4th field, the fallback is the general case. A fixed
+# fallback of 1 would drop operator 2 from every CLASSIC setup
+# ("--wan-nodes 1:a:11 2:b:22 --ops 2", where each node carries both
+# operators) - trunk missing, inter-node calls dead for it. The fallback is 1
+# only where it is true by construction: --op-is-node, one operator per node.
+# Otherwise the original assumption holds: the peers are set up like us.
 node_nops() {
     local n="${WAN_NOPS[$1]:-}"
     if ! [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
@@ -126,13 +121,12 @@ node_nops() {
     echo "$n"
 }
 
-# ── Piege `pipefail` + `grep -q` ─────────────────────────────────────────────
-# `grep -q` sort des la PREMIERE correspondance ; le producteur du pipeline
-# recoit alors SIGPIPE et meurt en 141, et sous `set -o pipefail` c'est 141 que
-# le pipeline renvoie. Resultat : "trouve" se lit "pas trouve", de facon
-# intermittente - selon que la sortie tenait ou non dans le tampon du tube.
-# C'est exactement ce qui faisait dire a `check` que vboxdrv n'etait pas charge
-# alors qu'il l'etait. On lit donc toute l'entree, et on jette la sortie.
+# ── `pipefail` + `grep -q` trap ──────────────────────────────────────────────
+# `grep -q` exits on the FIRST match; the pipeline producer then gets SIGPIPE
+# and dies with 141, and under `set -o pipefail` 141 is what the pipeline
+# returns. Result: "found" reads as "not found", intermittently - depending on
+# whether the output fit in the pipe buffer. The whole input is therefore read
+# and the output discarded.
 qgrep() { grep "$@" >/dev/null; }
 
 usage() { sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
@@ -159,9 +153,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# ── Table des noeuds ─────────────────────────────────────────────────────────
-# --config sert a la fois de source et de destination : on ne le lit que s'il
-# existe deja, et --nodes reste prioritaire (on decrit une nouvelle topologie).
+# ── Node table ───────────────────────────────────────────────────────────────
+# --config is both source and destination: it is only read if it already
+# exists, and --nodes takes precedence (a new topology is being described).
 if [ -n "${WAN_NODES:-}" ]; then
     wan_nodes_parse "$WAN_NODES" || exit 1
 elif [ -n "$CONF" ]; then
@@ -175,7 +169,7 @@ else
     exit 1
 fi
 
-# --id explicite > config > auto-detection par IP locale.
+# Explicit --id > config > auto-detection by local IP.
 if [ "${WAN_NODE_ID:-0}" = "0" ] || [ -z "${WAN_NODE_ID:-}" ]; then
     wan_nodes_detect_self || {
         echo -e "${RED}Impossible de determiner le noeud local : passez --id N${NC}" >&2; exit 1; }
@@ -184,8 +178,8 @@ fi
 wan_nodes_validate || exit 1
 
 # ── Mode ─────────────────────────────────────────────────────────────────────
-# L'ISO n'a pas de docker ; l'hote du lab en a un ET des containers osmo-operator-*.
-# On ne se fie donc pas a la presence du binaire mais a celle des containers.
+# The ISO has no docker; the lab host has one AND osmo-operator-* containers.
+# The presence of the containers is trusted, not that of the binary.
 if [ -z "$MODE" ]; then
     if command -v docker >/dev/null 2>&1 && \
        docker ps --format '{{.Names}}' 2>/dev/null | qgrep "^${CONTAINER_PREFIX}1$"; then
@@ -220,9 +214,9 @@ echo ""
 REMOTES=()
 for id in "${WAN_NODE_LIST[@]}"; do [ "$id" = "$WAN_NODE_ID" ] || REMOTES+=("$id"); done
 
-# Le contexte d'UN operateur : son noeud, son indicatif, son adresse et ses
-# pairs. Sans --op-is-node il ne change pas d'un operateur a l'autre (ils
-# partagent le noeud de la machine) ; avec, chacun a le sien.
+# The context of ONE operator: its node, its dialing code, its address and its
+# peers. Without --op-is-node it does not change from one operator to the
+# next (they share the machine's node); with it, each has its own.
 mesh_set_context() {
     local op="$1" node id
     if [ "${OP_IS_NODE:-0}" = "1" ]; then node="$op"; else node="$WAN_NODE_ID"; fi
@@ -235,10 +229,10 @@ mesh_set_context() {
 mesh_set_context "${OP_IDS[0]}"
 [ "${#REMOTES[@]}" -ge 1 ] || { echo -e "${RED}Aucun pair distant.${NC}" >&2; exit 1; }
 
-# Union des pairs de TOUS les operateurs locaux. mesh_set_context recalcule
-# REMOTES a chaque appel : ce qui ne depend pas d'un operateur - l'ouverture du
-# pare-feu, les compteurs affiches - lisait la liste du DERNIER operateur et
-# oubliait les pairs des autres.
+# Union of the peers of ALL local operators. mesh_set_context recomputes
+# REMOTES on every call: what does not depend on an operator - the firewall
+# opening, the displayed counters - needs the peers of every operator, not
+# only the LAST one's list.
 ALL_REMOTES=(); _seen=""
 for _i in "${OP_IDS[@]}"; do
     mesh_set_context "$_i"
@@ -253,21 +247,21 @@ mesh_set_context "${OP_IDS[0]}"
 
 run() { if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $*"; else "$@"; fi; }
 
-# ── Acces aux fichiers de conf, docker ou natif ──────────────────────────────
-# On tire le fichier sur l'hote, on le transforme avec awk/sed LOCALEMENT, on le
-# repousse. C'est ce qui permet au meme code de servir les deux modes - et ca
-# evite les sed multi-niveaux echappes dans un `docker exec bash -c` (l'endroit
-# ou network/setup-wan-interop.sh est le plus fragile).
-ast_pull() {  # $1=op  $2=chemin  → stdout
+# ── Access to the conf files, docker or native ───────────────────────────────
+# The file is pulled onto the host, transformed LOCALLY with awk/sed, and
+# pushed back. This lets the same code serve both modes - and avoids
+# multi-level escaped seds inside a `docker exec bash -c` (where
+# network/setup-wan-interop.sh is most fragile).
+ast_pull() {  # $1=op  $2=path  → stdout
     if [ "$MODE" = "docker" ]; then docker exec "$(op_container "$1")" cat "$2" 2>/dev/null || true
     else cat "${NATIVE_ROOT}$2" 2>/dev/null || true; fi
 }
-ast_push() {  # $1=op  $2=chemin  ← stdin
+ast_push() {  # $1=op  $2=path  ← stdin
     if [ "$DRY" -eq 1 ]; then cat >/dev/null; echo "  [dry-run] ecriture $2 (op $1)"; return 0; fi
     if [ "$MODE" = "docker" ]; then docker exec -i "$(op_container "$1")" bash -c "cat > '$2'"
     else mkdir -p "$(dirname "${NATIVE_ROOT}$2")"; cat > "${NATIVE_ROOT}$2"; fi
 }
-ast_cli() {   # $1=op  $2=commande CLI asterisk
+ast_cli() {   # $1=op  $2=asterisk CLI command
     if [ "$MODE" = "docker" ]; then docker exec "$(op_container "$1")" asterisk -rx "$2" 2>/dev/null || true
     else asterisk -rx "$2" 2>/dev/null || true; fi
 }
@@ -277,14 +271,14 @@ END_MARK="; ─── OSMO WAN MESH END ───"
 SMS_BEGIN="# ─── OSMO WAN MESH BEGIN ───"
 SMS_END="# ─── OSMO WAN MESH END ───"
 
-# Retire nos blocs ET l'ancien bloc "WAN INTEROP" (genere par
-# setup-wan-interop.sh, toujours ajoute en fin de fichier) : les deux decrivent
-# le meme trafic, les laisser cohabiter ferait dependre le routage de l'ordre
-# des patterns.
+# Removes our blocks AND the "WAN INTEROP" block (generated by
+# setup-wan-interop.sh, always appended at the end of the file): both describe
+# the same traffic, letting them coexist would make the routing depend on the
+# order of the patterns.
 strip_generated() { sed -e '/OSMO WAN MESH BEGIN/,/OSMO WAN MESH END/d' -e '/; ══.*WAN INTEROP/,$d'; }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [1/6] Verification des cibles
+# [1/6] Target check
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[1/6] Verification des cibles Asterisk...${NC}"
 for i in "${OP_IDS[@]}"; do
@@ -301,7 +295,7 @@ done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [2/6] iptables - entree depuis chaque pair
+# [2/6] iptables - ingress from each peer
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[2/6] iptables - ouverture entrante depuis ${#ALL_REMOTES[@]} pair(s)...${NC}"
 if [ "$CONFIG_ONLY" -eq 1 ]; then
@@ -317,35 +311,33 @@ if [ "$DRY" -eq 0 ]; then
     iptables -t nat -N "$CHAIN"
 fi
 
-# L'operateur local est la boucle EXTERIEURE : mesh_set_context recalcule
-# REMOTES, et prise dans l'autre sens la boucle des pairs lisait la liste laissee
-# par le dernier appel - une seule vue servait tous les operateurs, si bien que
-# les pairs des autres n'avaient aucune regle et que les seules sources presentes
-# dans la chaine etaient celles d'un seul operateur.
+# The local operator is the OUTER loop: mesh_set_context recomputes REMOTES,
+# and nested the other way round the peer loop would read the list left by
+# the last call - a single view for every operator, leaving the other
+# operators' peers without any rule in the chain.
 for i in "${OP_IDS[@]}"; do
     mesh_set_context "$i"
     lip="$LOCAL_IP"
     sip=$(wan_sip_port "$i"); rs=$(wan_rtp_start "$i"); re=$(wan_rtp_end "$i")
     sms=$(wan_sms_port "$i")
-    # Le filtre de destination, calcule une fois par operateur local.
+    # The destination filter, computed once per local operator.
     _dfil=()
     if addr_is_local "$lip"; then _dfil=(-d "$lip")
     else echo -e "  ${YELLOW}! ${lip} (table) n'est pas une adresse de cette machine : DNAT non restreint en destination${NC}"; fi
-    # ── LE SENS SORTANT : un port source PAR CONTENEUR ──────────────────────
-    # Tous les conteneurs font tourner Asterisk sur le meme port, 5060. Vers un
-    # pair du LAN ils sont masques derriere l'unique adresse de l'hote, et le
-    # masquage leur a donne LE MEME port traduit :
-    #     192.168.1.31.48057 > 192.168.1.2.5080   (venant de 172.20.0.11)
-    #     192.168.1.31.48057 > 192.168.1.2.5080   (venant de 172.20.0.12)
-    # Deux flux distincts, un seul tuple : les reponses du pair ne reviennent
-    # qu'a l'un des deux, et le trunk de l'autre reste "Unavail" pour toujours.
-    # Constate sur le banc, et invisible autrement - les deux conteneurs
-    # emettent bien, seul le retour manque.
+    # ── THE OUTGOING DIRECTION: one source port PER CONTAINER ───────────────
+    # Every container runs Asterisk on the same port, 5060. Toward a LAN peer
+    # they are masqueraded behind the host's single address, and the
+    # masquerade may give them THE SAME translated port:
+    #     192.168.1.31.48057 > 192.168.1.2.5080   (from 172.20.0.11)
+    #     192.168.1.31.48057 > 192.168.1.2.5080   (from 172.20.0.12)
+    # Two distinct flows, one tuple: the peer's replies only come back to one
+    # of the two, and the other's trunk stays "Unavail" forever - both
+    # containers do send, only the return is missing.
     #
-    # On epingle donc un port source stable et distinct par operateur. Stable
-    # aussi pour le pair : son identify voit toujours le meme couple
-    # adresse/port pour un noeud donne, au lieu d'un port tire au hasard a
-    # chaque expiration de conntrack.
+    # A stable and distinct source port is therefore pinned per operator.
+    # Stable for the peer too: its identify always sees the same address/port
+    # pair for a given node, instead of a port drawn at random at every
+    # conntrack expiry.
     if [ "$MODE" = "docker" ] && [ "${#REMOTES[@]}" -gt 0 ]; then
         _snat_port=$(( 5060 + i ))
         _lan_net="$(printf '%s' "$lip" | cut -d. -f1-3).0/24"
@@ -356,10 +348,10 @@ for i in "${OP_IDS[@]}"; do
                 -d "$_lan_net" -j SNAT --to-source "${lip}:${_snat_port}"
         done
         echo -e "  ${CYAN}Op${i}${NC} sort en SIP depuis ${CYAN}${lip}:${_snat_port}${NC} (port source epingle)"
-        # Les entrees conntrack deja etablies ignorent la regle neuve : Asterisk
-        # rafraichit son qualify toutes les 30 s, elles n'expirent jamais toutes
-        # seules. On les efface, sinon le correctif ne prend qu'au prochain
-        # redemarrage d'Asterisk - et l'on croit qu'il ne marche pas.
+        # Already established conntrack entries ignore the new rule: Asterisk
+        # refreshes its qualify every 30 s, so they never expire on their own.
+        # They are flushed, otherwise the rule only takes effect at the next
+        # Asterisk restart.
         if [ "$DRY" -eq 0 ] && command -v conntrack >/dev/null 2>&1; then
             conntrack -D -s "$(op_backbone_ip "$i")" -p udp >/dev/null 2>&1 || true
         fi
@@ -369,19 +361,19 @@ for i in "${OP_IDS[@]}"; do
         rip="${WAN_IP[$r]}"
         if [ "$MODE" = "docker" ]; then
             bb=$(op_backbone_ip "$i")
-            # -d "$lip" : filtrer la seule source attrapait aussi ce que CE noeud
-            # EMET vers le pair (meme source, meme port de destination). Le paquet
-            # ne quittait jamais l'hote, il repartait vers notre propre conteneur
-            # qui se repondait a lui-meme - le trunk affichait "Avail" alors que le
-            # pair n'avait rien recu.
+            # -d "$lip": filtering on the source alone would also catch what THIS
+            # node SENDS to the peer (same source, same destination port). The
+            # packet would never leave the host, it would go back to our own
+            # container answering itself - the trunk showing "Avail" while the
+            # peer received nothing.
             run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p udp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
             run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p tcp --dport "$sip" -j DNAT --to-destination "${bb}:5060"
             run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p udp --dport "${rs}:${re}" -j DNAT --to-destination "$bb"
             run iptables -t nat -A "$CHAIN" -s "$rip" ${_dfil[@]+"${_dfil[@]}"} -p tcp --dport "$sms" -j DNAT --to-destination "${bb}:${SMS_RELAY_BASE}"
         else
-            # Natif : Asterisk et le relais ecoutent deja sur l'hote. Seule la
-            # translation de port WAN → port de service est necessaire ; le RTP
-            # arrive directement dans la plage posee par rtp.conf.
+            # Native: Asterisk and the relay already listen on the host. Only the
+            # WAN port → service port translation is needed; RTP arrives
+            # directly in the range set by rtp.conf.
             run iptables -t nat -A "$CHAIN" -s "$rip" -p udp --dport "$sip" -j REDIRECT --to-ports 5060
             run iptables -t nat -A "$CHAIN" -s "$rip" -p tcp --dport "$sip" -j REDIRECT --to-ports 5060
             [ "$sms" = "$SMS_RELAY_BASE" ] || \
@@ -394,20 +386,20 @@ done
 if [ "$DRY" -eq 0 ]; then
     iptables -t nat -I PREROUTING -j "$CHAIN"
     if [ "$MODE" = "docker" ]; then
-        # --ctstate DNAT : sans restriction, ce masquage prenait AUSSI les flux du
-        # LAN simplement routes vers un conteneur ; celui-ci repondait alors a
-        # l'hote et non au client, qui n'a jamais vu la reponse. On ne masque donc
-        # que ce que notre propre DNAT a redirige. Restreindre plutot sur l'adresse
-        # de l'hote ne matcherait rien : apres DNAT la source est celle du pair.
-        # L'ancienne regle large est retiree d'abord - le garde -C teste la spec
-        # exacte, sans cela les deux resteraient en place et la large gagnerait.
+        # --ctstate DNAT: without that restriction the masquerade would ALSO
+        # catch LAN flows merely routed to a container, which would then answer
+        # the host instead of the client. Only what our own DNAT redirected is
+        # masqueraded. Restricting on the host address instead would match
+        # nothing: after DNAT the source is the peer's.
+        # The broad rule is removed first - the -C guard tests the exact spec,
+        # otherwise both would stay in place and the broad one would win.
         iptables -t nat -D POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null || true
         if ! iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null; then
-            # Sans le module conntrack d'iptables, le -A echoue et, sous set -e,
-            # le script mourait ICI : chaine deja inseree dans PREROUTING et
-            # regle large deja retiree, mais ni rtp.conf, ni pjsip, ni dialplan,
-            # ni routes SMS. On repose alors la regle large en le disant - moins
-            # precise, mais un maillage complet vaut mieux qu'un demi-maillage.
+            # Without the iptables conntrack module the -A fails and, under
+            # set -e, the script would die HERE: chain already inserted in
+            # PREROUTING and broad rule already removed, but no rtp.conf, pjsip,
+            # dialplan or SMS routes. The broad rule is then put back, with a
+            # notice - less precise, but a full mesh beats half a mesh.
             iptables -t nat -A POSTROUTING -d 172.20.0.0/24 -m conntrack --ctstate DNAT -j MASQUERADE 2>/dev/null || {
                 echo -e "  ${YELLOW}! -m conntrack indisponible : masquage large 172.20.0.0/24 (moins precis)${NC}"
                 iptables -t nat -C POSTROUTING -d 172.20.0.0/24 -j MASQUERADE 2>/dev/null \
@@ -417,7 +409,7 @@ if [ "$DRY" -eq 0 ]; then
     fi
 fi
 
-# Firewall INPUT - sans ca le DNAT redirige un trafic que l'INPUT jette.
+# Firewall INPUT - without it the DNAT redirects traffic that INPUT drops.
 for r in "${ALL_REMOTES[@]}"; do
     if [ -f "$SCRIPT_DIR/firewall-wan.sh" ]; then
         run bash "$SCRIPT_DIR/firewall-wan.sh" "${WAN_IP[$r]}" "$N_OPS" >/dev/null 2>&1 \
@@ -429,7 +421,7 @@ fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [3/6] rtp.conf - plage RTP WAN par operateur
+# [3/6] rtp.conf - WAN RTP range per operator
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[3/6] rtp.conf...${NC}"
 for i in "${OP_IDS[@]}"; do
@@ -442,7 +434,7 @@ done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [4/6] PJSIP - un trunk par (noeud distant, operateur distant)
+# [4/6] PJSIP - one trunk per (remote node, remote operator)
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[4/6] PJSIP - trunks WAN...${NC}"
 
@@ -450,13 +442,12 @@ for i in "${OP_IDS[@]}"; do
     mesh_set_context "$i"
     pj="$(mktemp)"; ast_pull "$i" /etc/asterisk/pjsip.conf | strip_generated > "$pj"
 
-    # external_media_address : l'IP que le SDP annonce a l'autre bout. Elle DOIT
-    # etre l'IP publique de CE noeud. Le gabarit configs/pjsip.conf en pose deja
-    # une (l'IP docker/hote) : on l'ECRASE, on ne se contente pas de l'ajouter
-    # quand elle manque - sinon le WAN annonce une adresse privee et l'audio
-    # part dans le vide alors que la signalisation, elle, passe. C'est ce que
-    # fait network/setup-wan-interop.sh ("if ! qgrep external_media_address"),
-    # et ca se voit seulement a l'oreille : appel decroche, silence.
+    # external_media_address: the IP the SDP announces to the other end. It
+    # MUST be the public IP of THIS node. The configs/pjsip.conf template
+    # already sets one (the docker/host IP): it is OVERWRITTEN, not merely
+    # added when missing - otherwise the WAN announces a private address and
+    # the audio goes nowhere while the signalling passes (call answered,
+    # silence).
     awk -v ip="$LOCAL_IP" '
         /^\[/ { if (intr && !done) { emit(); done=1 } ; intr = ($0 == "[transport-udp]") ; print ; next }
         intr && /^external_(media|signaling)_address=/ { next }
@@ -477,10 +468,10 @@ for i in "${OP_IDS[@]}"; do
         echo "; Noeud local ${WAN_NODE_ID} (${LOCAL_IP}, indicatif ${LOCAL_IND})"
         for r in "${REMOTES[@]}"; do
             rip="${WAN_IP[$r]}"; rind="${WAN_IND[$r]}"; rnops="$(node_nops "$r")"
-            # UN identify par adresse distante : identify ne regarde que l'adresse
-            # source, jamais le port. Un bloc par operateur distant en posait
-            # plusieurs pour la MEME adresse, et l'appel entrant etait attribue a
-            # l'un d'eux au hasard - donc parfois au mauvais contexte d'arrivee.
+            # ONE identify per remote address: identify only looks at the source
+            # address, never the port. One block per remote operator would set
+            # several for the SAME address, and the incoming call would be
+            # assigned to one of them at random - sometimes the wrong context.
             cat <<EOF
 
 ; ── node ${r} (indicatif ${rind}) · ${rip} · ${rnops} operateur(s) ──
@@ -491,8 +482,8 @@ match=${rip}
 EOF
             for j in $(seq 1 "$rnops"); do
                 rsip=$(peer_sip_port "$r" "$j")
-                # Pair sur le backbone : le port publie sur l'hote n'est pas
-                # traverse dans le bridge, c'est 5060 que le conteneur ecoute.
+                # Peer on the backbone: the port published on the host is not
+                # crossed inside the bridge, the container listens on 5060.
 
                 cat <<EOF
 
@@ -520,17 +511,15 @@ qualify_timeout=5.0
 EOF
             done
         done
-        # La passerelle du bridge une seule fois, hors de la boucle : le trafic
-        # WAN entrant est masque par l'hote et arrive donc avec 172.20.0.1 pour
-        # source. Repetee dans chaque bloc, elle donnait autant d'identify que de
-        # couples (noeud, operateur) pour cette unique adresse.
+        # The bridge gateway once, outside the loop: incoming WAN traffic is
+        # masqueraded by the host and thus arrives with 172.20.0.1 as source.
+        # Repeated in each block it would give as many identify entries as
+        # (node, operator) pairs for this single address.
         if [ "$MODE" = "docker" ]; then
-            # Le trafic qui arrive masque en 172.20.0.1 est celui que l'hote a
-            # route depuis le LAN : il ne peut donc venir QUE d'un pair hors du
-            # backbone. Prendre REMOTES[0] attribuait ce trafic au premier pair
-            # de la liste - souvent un conteneur voisin, qui n'arrive jamais
-            # masque : on passait d'une attribution au hasard a une attribution
-            # systematiquement fausse.
+            # Traffic arriving masqueraded as 172.20.0.1 is what the host routed
+            # from the LAN: it can ONLY come from a peer off the backbone. The
+            # first such peer is taken, not REMOTES[0] - often a neighbouring
+            # container, which never arrives masqueraded.
             _gwr=""
             for _g in "${REMOTES[@]}"; do
                 peer_is_backbone "${WAN_IP[$_g]}" || { _gwr="$_g"; break; }
@@ -558,7 +547,7 @@ done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [5/6] Dialplan - [wan_out] par indicatif, [wan_in], entrees gsm_in/internal
+# [5/6] Dialplan - [wan_out] per code, [wan_in], gsm_in/internal entries
 # ══════════════════════════════════════════════════════════════════════════════
 echo -e "${GREEN}[5/6] Dialplan - routage par indicatif...${NC}"
 
@@ -566,8 +555,8 @@ for i in "${OP_IDS[@]}"; do
     mesh_set_context "$i"
     ext="$(mktemp)"; ast_pull "$i" /etc/asterisk/extensions.conf | strip_generated > "$ext"
 
-    # Softphones : tout endpoint avec "callerid=... <NNN>" devient joignable
-    # par le WAN, sans coder aucun numero en dur.
+    # Softphones: every endpoint with "callerid=... <NNN>" becomes reachable
+    # over the WAN, without hardcoding any number.
     softphones=$(ast_pull "$i" /etc/asterisk/pjsip.conf | awk '
         /^\[/                 { s=$0; gsub(/[][]/,"",s); ep=s }
         /callerid=.*<[0-9]+>/ { n=$0; sub(/.*</,"",n); sub(/>.*/,"",n); print n":"ep }')
@@ -586,17 +575,14 @@ for i in "${OP_IDS[@]}"; do
             rind="${WAN_IND[$r]}"; off="${#rind}"
             echo ""
             echo "; ── node ${r} - indicatif ${rind} (strip ${off}) ───────────────────"
-            # Les operateurs du noeud DISTANT, pas les notres : compter les notres
-            # produisait un _<indicatif>2XXXX vers un operateur que ce noeud-la
-            # n'a pas - l'appel sortait et se perdait au lieu d'etre refuse ici.
-            # Le numero compose : <indicatif du noeud> + le MSISDN a SIX chiffres.
-            # Pour joindre l'operateur 1 du noeud 1 depuis ici : 11 100101.
-            # Le MSISDN commence par le numero du noeud DISTANT (<noeud>00<op>
-            # <rang>) : c'est "${r}00${j}" et non un "600" commun. Fige a 600,
-            # le motif n'accrochait plus aucun numero du pair - l'appel tombait
-            # dans le fourre-tout, Asterisk repondait "successful" a l'envoi SMS
-            # et le message n'allait nulle part.
-            # Un seul motif suffit, la longueur etant fixe.
+            # The operators of the REMOTE node, not ours: counting ours would
+            # produce a _<code>2XXXX toward an operator that node does not have
+            # - the call would leave and get lost instead of being refused here.
+            # The dialed number: <node code> + the SIX-digit MSISDN.
+            # To reach operator 1 of node 1 from here: 11 100101.
+            # The MSISDN starts with the REMOTE node number (<node>00<op>
+            # <rank>): it is "${r}00${j}", not a common "600".
+            # A single pattern is enough, the length being fixed.
             for j in $(seq 1 "$(node_nops "$r")"); do
                 cat <<EOF
 exten => _${rind}${r}00${j}XX,1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → ${WAN_IP[$r]} ===)
@@ -606,11 +592,11 @@ exten => _${rind}${r}00${j}XX,1,NoOp(=== WAN OUT node${r} op${j}: \${EXTEN} → 
  same => n,Hangup()
 EOF
             done
-            # L'operateur vise chez le pair, borne a ce qu'il porte reellement :
-            # cette ligne prenait l'indice de l'operateur LOCAL. Vers un noeud
-            # qui n'a qu'un operateur, elle appelait wan_n<r>_op2 - un endpoint
-            # qui n'est plus declare depuis que les trunks suivent node_nops :
-            # Asterisk journalise "endpoint not found" au lieu d'essayer.
+            # The operator targeted on the peer, bounded to what it really
+            # carries: using the LOCAL operator index toward a node with a
+            # single operator would call wan_n<r>_op2 - an endpoint that is not
+            # declared since the trunks follow node_nops: Asterisk would log
+            # "endpoint not found" instead of trying.
             _spop="$i"; [ "$_spop" -le "$(node_nops "$r")" ] || _spop=1
             for sp in $softphones; do
                 sp_num="${sp%%:*}"
@@ -638,9 +624,9 @@ exten => _X.,1,NoOp(=== WAN OUT: indicatif inconnu \${EXTEN} ===)
 ; Le noeud emetteur a deja retire l'indicatif : on recoit le numero nu.
 [wan_in]
 EOF
-        # L'indicatif a ete retire par le noeud appelant : ce qui arrive ici est
-        # le MSISDN nu, six chiffres. Ce sont NOS numeros, donc ils commencent
-        # par NOTRE numero de noeud : <WAN_NODE_ID>00<operateur><rang>.
+        # The code was stripped by the calling node: what arrives here is the
+        # bare six-digit MSISDN. These are OUR numbers, so they start with OUR
+        # node number: <WAN_NODE_ID>00<operator><rank>.
         for j in "${OP_IDS[@]}"; do
                 cat <<EOF
 exten => _${WAN_NODE_ID}00${j}XX,1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===)
@@ -683,8 +669,8 @@ EOF
         echo "$END_MARK"
     } > "$body"
 
-    # Entrees : un prefixe par indicatif distant, injecte dans [gsm_in] (appels
-    # venus du GSM) et [internal] (softphones SIP).
+    # Entries: one prefix per remote code, injected into [gsm_in] (calls coming
+    # from GSM) and [internal] (SIP softphones).
     entry="$(mktemp)"
     {
         echo "$BEGIN_MARK"
@@ -692,8 +678,8 @@ EOF
             printf 'exten => _%s.,1,NoOp(=== indicatif %s → node %s ===)\n' "${WAN_IND[$r]}" "${WAN_IND[$r]}" "$r"
             printf ' same => n,Goto(wan_out,${EXTEN},1)\n'
         done
-        # Notre PROPRE indicatif compose en entier : il doit aboutir ici, pas
-        # tomber dans le vide. wan_out le retire et rend la main au routage local.
+        # Our OWN code dialed in full: it must land here, not fall into the
+        # void. wan_out strips it and hands back to the local routing.
         printf 'exten => _%s.,1,NoOp(=== indicatif local %s ===)\n' "$LOCAL_IND" "$LOCAL_IND"
         printf ' same => n,Goto(wan_out,${EXTEN},1)\n'
         echo "$END_MARK"
@@ -716,12 +702,12 @@ done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [6/6] SMS - sms-routing.conf : un operateur distant par (noeud, operateur)
+# [6/6] SMS - sms-routing.conf: one remote operator per (node, operator)
 # ══════════════════════════════════════════════════════════════════════════════
-# Le relais (scripts/sms-interop-relay.py) route par LONGEST-PREFIX sur le
-# MSISDN compose. On lui donne donc les prefixes <indicatif><op>, la cible
-# ip:port du relais distant, et le nombre de chiffres d'indicatif a RETIRER
-# avant l'envoi : le HLR distant ne connait que le numero nu.
+# The relay (scripts/sms-interop-relay.py) routes by LONGEST-PREFIX on the
+# dialed MSISDN. It is given the <code><op> prefixes, the ip:port target of
+# the remote relay, and the number of code digits to STRIP before sending:
+# the remote HLR only knows the bare number.
 echo -e "${GREEN}[6/6] Routage SMS WAN...${NC}"
 for i in "${OP_IDS[@]}"; do
     mesh_set_context "$i"
@@ -736,27 +722,25 @@ for i in "${OP_IDS[@]}"; do
     {
         echo ""
         echo "$SMS_BEGIN"
-        echo "# Noeuds WAN distants. Cle = <w><node><op>, valeur = ip:port du relais."
+        echo "# Remote WAN nodes. Key = <w><node><op>, value = ip:port of the relay."
         echo "[operators]"
         for r in "${REMOTES[@]}"; do
             rip="${WAN_IP[$r]}"
             for j in $(seq 1 "$(node_nops "$r")"); do
-                # Vers un pair du backbone, le relais distant est joint dans le
-                # bridge : son port publie sur l'hote (7891 pour l'operateur 2)
-                # n'y mene pas, il ecoute le port de base.
+                # Toward a backbone peer the remote relay is reached inside the
+                # bridge: its port published on the host (7891 for operator 2)
+                # does not lead there, it listens on the base port.
                 rsms="$(peer_sms_port "$r" "$j")"
 
                 printf 'w%s%s = %s:%s\n' "$r" "$j" "$rip" "$rsms"
             done
         done
         echo ""
-        # La cle de routage est le PREFIXE compose :
-        # <indicatif><noeud distant>00<operateur>. Le "600" fixe qu'elle portait
-        # ne correspondait plus a aucun numero depuis que le MSISDN commence par
-        # le noeud : un SMS vers 11100101 ne matchait aucune route, le relais
-        # rendait un succes et le message n'allait nulle part.
-        # strip retire l'indicatif seul, ce qui laisse le MSISDN entier.
-        echo "# <indicatif><noeud>00<op> → noeud distant ; strip = chiffres d'indicatif a retirer."
+        # The routing key is the dialed PREFIX:
+        # <code><remote node>00<operator>, since the MSISDN starts with the
+        # node number (an SMS to 11100101 must match a route).
+        # strip removes the code only, which leaves the whole MSISDN.
+        echo "# <code><node>00<op> → remote node; strip = code digits to remove."
         echo "[routes]"
         for r in "${REMOTES[@]}"; do
             for j in $(seq 1 "$(node_nops "$r")"); do
@@ -773,10 +757,10 @@ for i in "${OP_IDS[@]}"; do
 done
 echo ""
 
-# ── Redemarrage Asterisk ─────────────────────────────────────────────────────
-# Le transport PJSIP a change : un "reload" ne suffit pas. En natif au moment
-# du bootstrap Asterisk n'est pas encore lance - on ne redemarre alors rien, la
-# conf sera lue a son demarrage.
+# ── Asterisk restart ─────────────────────────────────────────────────────────
+# The PJSIP transport changed: a "reload" is not enough. In native mode at
+# bootstrap time Asterisk is not yet running - nothing is restarted then, the
+# conf will be read at its start.
 if [ "$NO_RESTART" -eq 1 ]; then
     echo -e "${YELLOW}--no-restart : Asterisk gardera l'ancienne conf jusqu'a son prochain demarrage.${NC}"
 elif [ "$DRY" -eq 1 ]; then
@@ -801,23 +785,22 @@ else
     done
 fi
 
-# ── Sauvegarde + resume ──────────────────────────────────────────────────────
+# ── Save + summary ───────────────────────────────────────────────────────────
 if [ "$DRY" -eq 0 ]; then
-    # Defaut 0 : appliquer une table une fois ne doit pas la rendre permanente.
-    # Seule une ISO construite avec --wan fige WAN_AUTO=1 (iso_modules/70-scripts.sh).
+    # Default 0: applying a table once must not make it permanent.
+    # Only an ISO built with --wan freezes WAN_AUTO=1 (iso_modules/70-scripts.sh).
     WAN_AUTO="${WAN_AUTO:-0}" wan_nodes_save "${CONF:-$WAN_CONF_FILE}"
 fi
 
 echo ""
 echo -e "${GREEN}${BOLD}WAN mesh applique.${NC}"
 echo ""
-# Il faut composer l'indicatif du noeud SUIVI DU MSISDN entier, six chiffres :
-# <noeud>00<operateur><rang>. Un exemple faux dans le resume final vaut une
-# heure perdue a essayer un numero qui ne matche aucun motif - le resume a deja
-# annonce "<indicatif>10001" puis "<indicatif>600101", deux plans revolus.
-# LOCAL_IND et REMOTES gardent le contexte du DERNIER operateur boucle plus
-# haut ; on repose donc le notre avant d'afficher, sinon la ligne annonce un
-# indicatif qui n'est pas celui de ce noeud.
+# The node code must be dialed FOLLOWED BY the whole six-digit MSISDN:
+# <node>00<operator><rank>. The example in the final summary must match a
+# real pattern.
+# LOCAL_IND and REMOTES keep the context of the LAST operator looped above;
+# ours is set again before displaying, otherwise the line would announce a
+# code that is not this node's.
 mesh_set_context "${OP_IDS[0]}"
 echo -e "  ${BOLD}Depuis ce noeud (${WAN_NODE_ID}, indicatif ${LOCAL_IND}) :${NC}"
 for r in "${REMOTES[@]}"; do

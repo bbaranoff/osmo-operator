@@ -5,16 +5,16 @@ import struct
 
 from . import gsm
 
-_dcch_gen = [0]   # [2026-10-22] generation de calypso_dcch_cfg (IMM ASS), voir CHANNEL RELEASE
-# [2026-10-24] RA des derniers RACH du firmware TI (dsp/uplink.py, noter_rach) et instant de la derniere IMM ASS
-# retenue : voir _imm_ass_dcch.
+_dcch_gen = [0]   # generation of calypso_dcch_cfg (IMM ASS), see CHANNEL RELEASE
+# RA of the TI firmware's last RACHs (dsp/uplink.py, noter_rach) and time of the last IMM ASS
+# retained: see _imm_ass_dcch.
 _rach_ra = []
 _imm_ass_retenue = [0.0]
 IMM_ASS_GARDE_S = float(os.environ.get("PONT_IMM_ASS_GARDE", "2.0"))
 
 
 def noter_rach(ra):
-    """Un RACH du firmware TI : le mobile acceptera l'IMM ASS qui repond a l'un de ses 3 derniers (44.018 3.3.1.1.3)."""
+    """A RACH from the TI firmware: the mobile accepts the IMM ASS answering one of its last 3 (44.018 3.3.1.1.3)."""
     _rach_ra.append(ra)
     del _rach_ra[:-3]
 
@@ -162,16 +162,13 @@ class Downlink:
         if mt in gsm.SI_TYPES:
             self.feed.l2(fn0, gsm.GSMTAP_BCCH, l2, tn)
         elif mt in gsm.CCCH_TYPES:
-            # [2026-09-09] LES PAGINGS VIDES NE VONT PLUS AU L1 QEMU. Le L1
-            # (calypso_l1_grgsm.c, feed_agch) ne garde QU UN bloc CCCH - le
-            # dernier recu, 100 trames de validite. osmo-bts remplit chaque
-            # bloc PCH libre d un PAGING REQUEST 1 sans identite : le vrai
-            # paging (TMSI du mobile) etait ecrase ~50 ms plus tard, et le
-            # firmware ne le voyait que si sa lecture de son groupe de paging
-            # tombait dans la fenetre. Mesure sur le banc : 4 appels sur 5
-            # rejetes en DEST_OOO (paging expire au bout de 10 s, BSC ayant
-            # emis 19 tentatives), le mobile campe et n ayant journalise
-            # AUCUN « PAGING REQUEST 1 ». Le tap Wireshark, lui, garde tout.
+            # EMPTY PAGINGS DO NOT GO TO THE QEMU L1. The L1
+            # (calypso_l1_grgsm.c, feed_agch) keeps ONLY ONE CCCH block - the
+            # last received, valid for 100 frames. osmo-bts fills every free
+            # PCH block with a PAGING REQUEST 1 without identity: a real paging
+            # (the mobile's TMSI) would be overwritten ~50 ms later, and the
+            # firmware would only see it if its read of its paging group fell
+            # within the window. The Wireshark tap keeps everything.
             self.feed.l2(fn0, gsm.GSMTAP_CCCH, l2, tn,
                          to_qemu=not gsm.is_empty_paging(l2))
 
@@ -190,12 +187,12 @@ class Downlink:
         return out
 
     def _decode(self, bursts, dedicated):
-        # Comme dans un vrai reseau : clair, puis chiffre. La BTS n'active le
-        # chiffrement descendant qu'apres la premiere trame montante chiffree,
-        # donc SI5/SI6 et les premieres trames du SDCCH arrivent en clair meme
-        # quand le Kc est deja connu. On decode en clair tant que ca passe, et
-        # on verrouille l'etat global "descendant chiffre" des qu'un bloc ne
-        # decode qu'une fois dechiffre. Tous les canaux suivent cet etat.
+        # As in a real network: clear, then ciphered. The BTS enables downlink
+        # ciphering only after the first ciphered uplink frame, so SI5/SI6 and
+        # the first SDCCH frames arrive in clear even when the Kc is already
+        # known. Decode in clear as long as it works, and lock the global
+        # "downlink ciphered" state as soon as a block decodes only once
+        # deciphered. All channels follow that state.
         if not dedicated or self.cipher.current() is None:
             return gsm.xcch_decode(self._clear(bursts))
         if not self.cipher.dl_active:
@@ -208,8 +205,8 @@ class Downlink:
         return l2
 
     def _decode_tch(self, bursts):
-        # Meme regle pour le TCH : la parole suit l'etat global, une FACCH
-        # valide (CRC Fire) sert de preuve pour basculer l'etat.
+        # Same rule for the TCH: speech follows the global state, a valid
+        # FACCH (Fire CRC) serves as proof to switch the state.
         if self.cipher.current() is None:
             return gsm.tch_fr_decode(self._clear(bursts))
         if self.cipher.dl_active:
@@ -224,25 +221,22 @@ class Downlink:
         return rc, fr
 
     def _imm_ass_dcch(self, l2, fn):
-        """[2026-10-22] Firmware TI (Magnetite) : pas de tap QEMU pour dire au banc sur quel canal dedie le
-        mobile va. L'IMMEDIATE ASSIGNMENT (44.018 9.1.18) le dit : octet 1 pseudo-longueur, 2 PD, 3 type,
-        4 mode de page, 5 chan_nr. SDCCH/4 = 0b00100SST, SDCCH/8 = 0b01SSSTTT. Le dernier recu gagne : la BSC
-        repond aux RACH dans l'ordre, et celui que le mobile accepte (sa reference) arrive en dernier.
-        CALYPSO_PONT_IMM_DCCH=0 pour couper ; seulement avec MS_MAGNETITE (le firmware osmocom a son tap).
-        [2026-10-24] FAUX : le mobile prend la PREMIERE qui repond a l'un de ses RACH et ignore les suivantes. Appel du
-        24/10 18:59 : 5 IMM ASS (SS0..SS4), le C139 sur SS0 (SS1..4 tombes en T3101 a la BSC), le pont sur SS4 ;
-        l'ASSIGNMENT COMMAND passait sur SS0 sans etre lue, TCH jamais arme, pas de SABM sur la FACCH, « Assignment
-        Failure ». On garde donc la premiere dont la reference (octet 7, RA) est un RACH du mobile, puis on ignore
-        les autres pendant PONT_IMM_ASS_GARDE s (le pont lit le descendant ~30 trames avant le mobile, qui peut
-        encore emettre un RACH). Sans RA connu (decodage rate), l'ancienne regle."""
+        """TI firmware (Magnetite): no QEMU tap to tell the bench which dedicated channel the mobile
+        goes to. The IMMEDIATE ASSIGNMENT (44.018 9.1.18) says it: octet 1 pseudo-length, 2 PD, 3 type,
+        4 page mode, 5 chan_nr. SDCCH/4 = 0b00100SST, SDCCH/8 = 0b01SSSTTT.
+        CALYPSO_PONT_IMM_DCCH=0 to disable; only with MS_MAGNETITE (the osmocom firmware has its tap).
+        The mobile takes the FIRST one answering one of its RACHs and ignores the following ones. So the
+        first one whose reference (octet 7, RA) is a RACH of the mobile is kept, then the others are
+        ignored for PONT_IMM_ASS_GARDE s (the bridge reads the downlink ~30 frames before the mobile,
+        which may still emit a RACH). Without a known RA (decoding failed), the last received wins."""
         if not os.environ.get("MS_MAGNETITE") or os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") == "0":
             return
         if len(l2) < 5 or l2[1] != gsm.RR_PD:
             return
         cn = l2[4]
-        if (cn >> 5) == 0b001:                             # SDCCH/4 + SACCH : 0b001SSTTT, sous-canal 0..3
+        if (cn >> 5) == 0b001:                             # SDCCH/4 + SACCH: 0b001SSTTT, subchannel 0..3
             kind, ss = 0, (cn >> 3) & 3
-        elif (cn >> 6) == 0b01:                            # SDCCH/8 + SACCH, sous-canal 0..7
+        elif (cn >> 6) == 0b01:                            # SDCCH/8 + SACCH, subchannel 0..7
             kind, ss = 1, (cn >> 3) & 7
         else:
             return
@@ -256,7 +250,7 @@ class Downlink:
             _imm_ass_retenue[0] = time.monotonic()
             _rach_ra.clear()
         from .state import ecrire_dcch
-        _dcch_gen[0] += 1                                  # annule une liberation differee en attente
+        _dcch_gen[0] += 1                                  # cancels a pending deferred release
         ecrire_dcch(kind, ss, cn)
         log.info("IMMEDIATE ASSIGNMENT (fn=%u) : SDCCH/%d TS%d SS%d -> calypso_dcch_cfg (firmware TI)",
                  fn, 8 if kind else 4, cn & 7, ss)
@@ -274,18 +268,16 @@ class Downlink:
             self._liberer_dcch_ti(fn, "CHANNEL RELEASE")
 
     def _liberer_dcch_ti(self, fn, quoi):
-        """Firmware TI (Magnetite) : pas de tap QEMU pour dire que le mobile a quitte le dedie ; le pont libere
-        lui-meme calypso_dcch_cfg (et le TCH) apres le CHANNEL RELEASE."""
+        """TI firmware (Magnetite): no QEMU tap to say the mobile left the dedicated channel; the bridge
+        itself releases calypso_dcch_cfg (and the TCH) after the CHANNEL RELEASE."""
         if not os.environ.get("MS_MAGNETITE") or os.environ.get("CALYPSO_PONT_IMM_DCCH", "1") == "0":
             return
-        # [2026-10-22 14:10] DIFFEREE. Le pont lit le descendant ~30 trames AVANT le mobile (marge DL
-        # +28..+35) : liberer tout de suite coupait le SDCCH au BSP avant que le mobile ait recu ce
-        # CHANNEL RELEASE ; il restait sur un canal mort (SA_I en erreur) jusqu'a la perte du lien
-        # (~13 s, DDS_R), sourd au paging pendant ce temps (MT SMS, appels entrants perdus).
-        # PONT_DCCH_REL_DELAI (s, defaut 1.5) ; une IMM ASS entre-temps annule la liberation.
-        # [2026-10-22 20:55] AUSSI SUR LA FACCH. Le CHANNEL RELEASE d'un appel arrive sur le TCH : rien n'etait
-        # libere, TCH tenu 20 s (RELEASE_FALLBACK) et BSP route sur le dedie apres le raccroche (DESACCORD),
-        # NP_I en erreur, RECOVERY de la L1 TI, DSP relance en 2,4 s, 444 trames perdues : antenne perdue.
+        # DEFERRED. The bridge reads the downlink ~30 frames BEFORE the mobile (DL margin
+        # +28..+35): releasing immediately would cut the SDCCH at the BSP before the mobile has
+        # received this CHANNEL RELEASE, leaving it on a dead channel until link loss (~13 s),
+        # deaf to paging meanwhile.
+        # PONT_DCCH_REL_DELAI (s, default 1.5); an IMM ASS in the meantime cancels the release.
+        # Also called from the FACCH: the CHANNEL RELEASE of a call arrives on the TCH.
         import threading
         from .state import ecrire_dcch, DCCH_RELEASED
         gen = _dcch_gen[0]
@@ -320,11 +312,11 @@ class Downlink:
         if rc == gsm.FR_BYTES:
             self.stats.tch_dl += 1
             self.ring.publish(fr, fn)
-            # [2026-09-23] REFERENCE POUR LA PAROLE DU DSP. Chaque trame FR que
-            # le pont decode lui-meme des bursts de la BTS, avec son fn BTS :
-            # tools/comparer_parole.py la met en regard de ce que la ROM livre
-            # dans a_dd (/dev/shm/calypso_add_dl.bin, montant.c) pour compter
-            # les bits faux par classe. 4000 trames au plus par session.
+            # REFERENCE FOR THE DSP SPEECH. Each FR frame the bridge decodes
+            # itself from the BTS bursts, with its BTS fn: tools/comparer_parole.py
+            # compares it with what the ROM delivers in a_dd
+            # (/dev/shm/calypso_add_dl.bin, montant.c) to count the wrong bits
+            # per class. At most 4000 frames per session.
             self._noter_parole(fn, fr)
         elif rc == gsm.MACBLOCK_LEN:
             self.stats.tch_facch_dl += 1

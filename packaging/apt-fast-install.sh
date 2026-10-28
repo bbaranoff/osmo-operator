@@ -1,34 +1,34 @@
 #!/bin/bash
 # =============================================================================
-#  apt-fast-install - UNE seule facon d installer apt-fast, partout
+#  apt-fast-install - ONE single way to install apt-fast, everywhere
 # =============================================================================
 #
-#  Utilise par : Dockerfile, Dockerfile.stp (COPY puis RUN), build-iso.sh (dans
-#  le chroot du rootfs), build.sh et tools/make-docker-image.sh (sur l hote).
-#  Apres ce script, tout le monde parle a apt de la meme facon :
+#  Used by: Dockerfile, Dockerfile.stp (COPY then RUN), build-iso.sh (in the
+#  rootfs chroot), build.sh and tools/make-docker-image.sh (on the host).
+#  After this script, everyone talks to apt the same way:
 #
 #      apt-fast update
-#      apt-fast install -y --no-install-recommends <paquets>
-#      apt-fast build-dep -y <paquet>
+#      apt-fast install -y --no-install-recommends <packages>
+#      apt-fast build-dep -y <package>
 #
-#  apt-fast telecharge en parallele (aria2), dpkg installe ensuite comme
-#  d habitude : le gain porte sur le telechargement, et il est net des qu on
-#  pose plusieurs centaines de paquets. Si GitHub est injoignable, on pose un
-#  apt-fast qui appelle apt-get : la commande existe toujours, le build
-#  continue, plus lentement.
+#  apt-fast downloads in parallel (aria2), dpkg then installs as usual: the
+#  gain is on the download, and it is clear as soon as several hundred
+#  packages are installed. If GitHub is unreachable, an apt-fast that calls
+#  apt-get is installed: the command always exists, the build goes on, more
+#  slowly.
 #
-#  DLDIR = /var/cache/apt/archives : apt-fast telecharge la ou apt range ses
-#  paquets. C est ce qui permet a build-iso.sh de monter un cache PERSISTANT
-#  a cet endroit dans le chroot (les .deb du rootfs sont telecharges une fois,
-#  pour toutes les passes et toutes les reconstructions).
+#  DLDIR = /var/cache/apt/archives: apt-fast downloads where apt stores its
+#  packages. This is what lets build-iso.sh mount a PERSISTENT cache at that
+#  place in the chroot (the rootfs .deb are downloaded once, for every pass
+#  and every rebuild).
 #
-#  Il pose aussi /etc/apt/apt.conf.d/90osmo-operator - les reglages apt qui
-#  etaient repetes dans le chroot de l ISO et en ligne de commande sur l hote :
-#  pas de traductions, 3 essais, pipeline HTTP, dpkg sans pty. Ce sont des
-#  reglages de TELECHARGEMENT ; ils ne touchent ni aux recommends ni a la
-#  facon dont dpkg ecrit.
+#  It also installs /etc/apt/apt.conf.d/90osmo-operator - the apt settings
+#  shared by the ISO chroot and the host command line: no translations,
+#  3 retries, HTTP pipelining, dpkg without pty. These are DOWNLOAD
+#  settings; they touch neither the recommends nor the way dpkg writes
+#  its files.
 #
-#  Idempotent : deja installe -> ne refait que la conf.
+#  Idempotent: already installed -> only redoes the conf.
 # =============================================================================
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -36,11 +36,11 @@ export DEBIAN_FRONTEND=noninteractive
 APT_FAST_URL="${APT_FAST_URL:-https://raw.githubusercontent.com/ilikenwf/apt-fast/master/apt-fast}"
 BIN=/usr/local/sbin/apt-fast
 
-# Timeout 30 s et pas de pipelining : un miroir qui ne repond pas echoue en
-# 30 s et passe a l essai suivant, au lieu de bloquer 120 s (le defaut) fois
-# trois essais, en silence. Le pipelining HTTP n apporte rien ici (aria2
-# parallelise deja) et c est une source connue de connexions qui restent
-# pendues derriere certains equilibreurs.
+# 30 s timeout and no pipelining: a mirror that does not answer fails in
+# 30 s and moves on to the next retry, instead of blocking 120 s (the
+# default) times three retries, silently. HTTP pipelining brings nothing here
+# (aria2 already parallelises) and is a known source of connections left
+# hanging behind some load balancers.
 cat > /etc/apt/apt.conf.d/90osmo-operator <<'CONF'
 // osmo-operator : reglages apt communs (image docker, rootfs ISO, hote)
 Acquire::Languages "none";
@@ -56,27 +56,25 @@ DPkg::Pre-Install-Pkgs { "/usr/local/sbin/osmo-deb-check"; };
 DPkg::Tools::Options::/usr/local/sbin/osmo-deb-check::Version "1";
 CONF
 
-# ── Le cache apt est PERSISTANT partout ici : un .deb corrompu y reste ───────
-# [2026-09-04] "Corrupted block detected" a l installation de qemu-user-static
-# sur l hote : le fichier en cache avait la taille attendue et un mauvais
-# SHA256 - un telechargement altere sur un miroir capricieux. apt ne revérifie
-# pas un fichier deja present dans /var/cache/apt/archives, et ce cache ne
-# s efface jamais chez nous (Keep-Downloaded-Packages, montage cache du docker
-# build, cache persistant du chroot de l ISO) : le fichier pourri serait reste
-# la a chaque build. Deux pieces :
-#   osmo-deb-check   hook DPkg::Pre-Install-Pkgs : apt lui passe les chemins des
-#                    .deb qu il va installer ; chacun est decompresse en entier
-#                    (dpkg-deb --fsys-tarfile) ; les mauvais sont SUPPRIMES, un
-#                    marqueur est pose et apt s arrete avant dpkg. Le prochain
-#                    apt retelecharge ce qui manque, avec verification du hash.
-#   osmo-apt-get     le "apt-get" que lance apt-fast (_APTMGR) : si apt echoue
-#                    et que le marqueur est la, il relance une fois. Pour un
-#                    apt-get appele directement, le message dit de relancer.
+# ── The apt cache is PERSISTENT everywhere here: a corrupted .deb stays in it ─
+# apt does not re-verify a file already present in /var/cache/apt/archives,
+# and that cache is never cleared here (Keep-Downloaded-Packages, docker build
+# cache mount, persistent cache of the ISO chroot): a file with the expected
+# size but a bad SHA256 (altered download on a flaky mirror) would stay there
+# for every build. Two pieces:
+#   osmo-deb-check   DPkg::Pre-Install-Pkgs hook: apt passes it the paths of
+#                    the .deb it is about to install; each is fully
+#                    decompressed (dpkg-deb --fsys-tarfile); the bad ones are
+#                    DELETED, a marker is set and apt stops before dpkg. The
+#                    next apt re-downloads what is missing, with hash check.
+#   osmo-apt-get     the "apt-get" that apt-fast runs (_APTMGR): if apt fails
+#                    and the marker is there, it retries once. For an apt-get
+#                    called directly, the message says to rerun.
 cat > /usr/local/sbin/osmo-deb-check <<'CHK'
 #!/bin/sh
-# osmo-deb-check - hook apt (DPkg::Pre-Install-Pkgs, protocole 1 : un chemin
-# de .deb par ligne sur stdin). Supprime du cache les .deb dont l archive de
-# donnees ne se decompresse pas, et refuse l installation s il y en a eu.
+# osmo-deb-check - apt hook (DPkg::Pre-Install-Pkgs, protocol 1: one .deb path
+# per line on stdin). Deletes from the cache the .deb whose data archive does
+# not decompress, and refuses the installation if there were any.
 MARK=/run/osmo-deb-check.bad
 rm -f "$MARK"
 bad=0; n=0
@@ -99,8 +97,8 @@ CHK
 chmod 755 /usr/local/sbin/osmo-deb-check
 cat > /usr/local/sbin/osmo-apt-get <<'OAG'
 #!/bin/sh
-# osmo-apt-get - apt-get avec UNE relance quand osmo-deb-check a retire des
-# .deb corrompus du cache (marqueur /run/osmo-deb-check.bad).
+# osmo-apt-get - apt-get with ONE retry when osmo-deb-check removed corrupted
+# .deb from the cache (marker /run/osmo-deb-check.bad).
 MARK=/run/osmo-deb-check.bad
 rm -f "$MARK"
 apt-get "$@" && exit 0
@@ -114,24 +112,24 @@ exit "$rc"
 OAG
 chmod 755 /usr/local/sbin/osmo-apt-get
 
-# ── Le miroir Ubuntu : celui que l appelant a mesure (packaging/apt-mirror.sh)
-# OSMO_UBUNTU_MIRROR=http://... remplace archive.ubuntu.com dans les sources
-# du systeme ou l on est - l image docker (build-arg), le rootfs de l ISO.
-# Jamais sur l hote sans qu on le demande : build.sh ne l exporte pas.
+# ── The Ubuntu mirror: the one the caller measured (packaging/apt-mirror.sh)
+# OSMO_UBUNTU_MIRROR=http://... replaces archive.ubuntu.com in the sources of
+# the current system - the docker image (build-arg), the ISO rootfs.
+# Never on the host unless asked: build.sh does not export it.
 if [ -n "${OSMO_UBUNTU_MIRROR:-}" ]; then
     _m="${OSMO_UBUNTU_MIRROR%/}"
     for _f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
         [ -f "$_f" ] || continue
-        # archive ET security : security.ubuntu.com vit sur les memes adresses
-        # Canonical qu archive (91.189.9x, 185.125.190.x) - quand l un est
-        # injoignable, l autre aussi. Tout miroir Ubuntu sert noble-security.
+        # archive AND security: security.ubuntu.com lives on the same Canonical
+        # addresses as archive (91.189.9x, 185.125.190.x) - when one is
+        # unreachable, so is the other. Every Ubuntu mirror serves noble-security.
         sed -i -E "s#https?://(archive|[a-z]{2}\.archive|security)\.ubuntu\.com/ubuntu/?#${_m}#g" "$_f"
     done
     echo "[apt-fast] miroir Ubuntu : $_m"
 fi
 
-# aria2 et curl sont les seuls paquets que l on pose encore avec apt-get :
-# apt-fast n existe pas avant eux.
+# aria2 and curl are the only packages still installed with apt-get:
+# apt-fast does not exist before them.
 if ! command -v aria2c >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     apt-get update -qq
     apt-get install -y --no-install-recommends aria2 curl ca-certificates
@@ -149,9 +147,8 @@ if [ ! -x "$BIN" ] || ! grep -q 'aria2' "$BIN" 2>/dev/null; then
     chmod 755 "$BIN"
 fi
 
-# La conf d apt-fast : 16 connexions, aucune question. Ecrite a chaque fois,
-# elle est courte et c est ce qui garantit que tous les environnements se
-# ressemblent.
+# The apt-fast conf: 16 connections, no questions. Written every time, it is
+# short and this is what guarantees that all environments look alike.
 cat > /etc/apt-fast.conf <<'CONF'
 _APTMGR=/usr/local/sbin/osmo-apt-get
 DOWNLOADBEFORE=true
@@ -167,18 +164,18 @@ VERBOSE_OUTPUT=false
 CONF
 mkdir -p /var/cache/apt/archives/partial
 
-# Garder les .deb telecharges : c est le principe du cache. Les images docker
-# posent /etc/apt/apt.conf.d/docker-clean, qui les efface apres chaque
-# installation - il part. Keep-Downloaded-Packages vaut pour apt >= 1.2.
+# Keep the downloaded .deb: that is the point of the cache. Docker images ship
+# /etc/apt/apt.conf.d/docker-clean, which deletes them after every
+# installation - it is removed. Keep-Downloaded-Packages applies to apt >= 1.2.
 rm -f /etc/apt/apt.conf.d/docker-clean
 cat > /etc/apt/apt.conf.d/91osmo-keep-debs <<'CONF'
 // osmo-operator : les paquets telecharges restent dans /var/cache/apt/archives
 Binary::apt::APT::Keep-Downloaded-Packages "true";
 APT::Keep-Downloaded-Packages "true";
 CONF
-# Si /usr/local/sbin n est pas dans le PATH de l appelant (root sans sudo, PATH
-# perso), la commande resterait introuvable juste apres "pret" : un lien dans
-# /usr/local/bin, qui y est toujours, regle le cas sans toucher au PATH.
+# If /usr/local/sbin is not in the caller's PATH (root without sudo, custom
+# PATH), the command would be unreachable right after "ready": a link in
+# /usr/local/bin, which is always there, settles it without touching PATH.
 if ! command -v apt-fast >/dev/null 2>&1; then
     ln -sfn "$BIN" /usr/local/bin/apt-fast
     echo "[apt-fast] /usr/local/sbin absent du PATH - lien /usr/local/bin/apt-fast"

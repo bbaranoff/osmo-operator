@@ -90,7 +90,7 @@ PONT_CAN_SB=
 P
 }
 profil_doc() { cat <<'P'
-# ── profil « la ROM fait le maximum » (scripts/dsp-rom-max.sh) ──────────────
+# ── profile « the ROM does the maximum » (scripts/dsp-rom-max.sh) ───────────
 # MONTANT_EFFACE_TASK_RA=0  RACH: the ROM keeps the task and codes the access burst (1: the bridge codes it)
 # MONTANT_ROM_UL=1          uplink SDCCH/SACCH: bursts coded by the ROM (0: host coding)
 # MONTANT_ROM_TX=1          final ROM bursts published to the bridge (calypso_tx_rom)

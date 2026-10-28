@@ -1,61 +1,50 @@
-# 14-demarrage.sh - partie de start.sh (lignes 3313-3442 de start-native.sh d'origine)
-# Sourcee par start.sh dans le shell principal : meme ordre, memes variables.
+# 14-demarrage.sh - part of start.sh (hand-off to run.sh and the DSP bench)
+# Sourced by start.sh in the main shell: same order, same variables.
 if [ "$DSP_BANC" = 1 ]; then
-    # ── LE FORK MONTE TOUT, MOINS LA CHAINE CALYPSO ────────────────────────
-    # [2026-09-22] Deux versions ratees avant celle-ci, toutes deux pour la
-    # meme raison -- avoir voulu remplacer le pipeline au lieu de s'y inserer :
-    #   1. RUN_SH = c54x_exe/run.sh : la pile osmocom ne montait plus du tout
-    #      (coeur, BTS, side-car, tmux sont des run_modules du fork) ;
-    #   2. delegation a c54x_exe/run_real.sh : meme probleme, plus un verdict
-    #      « ECHEC : aucun SI lu » imprime apres zero seconde d'observation.
-    # Ici le fork joue son plan habituel, on lui retire seulement les quatre
-    # modules que c54x_exe assure (qemu, pty, osmocon, l2), et le banc DSP est
-    # lance ensuite avec ses cinq etapes. --no-attach est indispensable : sans
-    # lui le fork s'attache a tmux et on ne reprend jamais la main.
+    # ── THE FORK BRINGS UP EVERYTHING EXCEPT THE CALYPSO CHAIN ─────────────
+    # The fork runs its usual plan; only the four modules that c54x_exe
+    # provides (qemu, pty, osmocon, l2) are skipped, and the DSP bench is then
+    # launched with its five steps. --no-attach is mandatory: without it the
+    # fork attaches to tmux and control never comes back here.
     #
-    # Les reglages du banc viennent du banc, pas d'un choix de style
-    # (c54x_exe/run_real.sh les porte depuis le 2026-09-21) :
-    #   INSNS=200000             plafond d'instructions par trame (voir plus bas)
-    #   LOCKSTEP=1               QEMU n'avance la trame que quand le DSP a fini
-    #                            la precedente ; sans lui il saute 3 trames sur 4
-    #   IQ=none                  pas de cellule synthetique : les bursts
-    #                            viennent de la vraie BTS, par pont.py
-    #   CALYPSO_BSP_STREAM=1     un burst TS0 par trame, dans l'ordre des FN
-    #   CALYPSO_RHEA_DMA_XFER=1  sans lui la page API n'est jamais remplie :
-    #                            pas de SB, pas de BCCH, pas de SI
-    # Tout reste surchargeable : on ne pose que ce que l'operateur n'a pas dit.
+    # The bench settings come from the bench itself (c54x_exe/run_real.sh):
+    #   INSNS                    instruction budget per frame (see below)
+    #   LOCKSTEP=1               QEMU only advances the frame once the DSP has
+    #                            finished the previous one; otherwise it skips
+    #                            3 frames out of 4
+    #   IQ=none                  no synthetic cell: the bursts come from the
+    #                            real BTS, through pont.py
+    #   CALYPSO_BSP_STREAM=1     one TS0 burst per frame, in FN order
+    #   CALYPSO_RHEA_DMA_XFER=1  without it the API page is never filled:
+    #                            no SB, no BCCH, no SI
+    # Everything stays overridable: only what the operator did not set is set.
     export MODE=dsp PONT=1
-    # [2026-10-19] --osmo-trx : transceiver a la place de mobile, pas de pont
-    # (c54x_exe/run.sh force PONT=0 lui-meme ; on le dit ici pour le dry-run).
+    # --osmo-trx: transceiver instead of mobile, no bridge (c54x_exe/run.sh
+    # forces PONT=0 itself; it is set here for the dry-run).
     if [ "${OSMO_TRX:-0}" = 1 ]; then export OSMO_TRX PONT=0; fi
-    # [2026-09-23] Trace asm de l'ARM, lue par c54x_exe/run.sh (etape 2, QEMU -d).
+    # ARM asm trace, read by c54x_exe/run.sh (step 2, QEMU -d).
     export ASSEMBLY_LOGS="${ASSEMBLY_LOGS:-0}" ASSEMBLY_LOGS_FLAGS ASSEMBLY_LOGS_FILTRE
     : "${IQ:=none}";        export IQ
-    # [2026-09-23] 60000 -> 200000, puis 120000 (TCH mesure jusqu a 87000 insn/trame). Le budget n'est qu'un plafond (le DSP
-    # s'arrete a son IDLE, c54x_exe/src/pont.c jouer_trame) ; a 60000 le
-    # decodage TCH debordait sur la trame suivante (« insn=58524 occupe »), le
-    # Viterbi de la parole (0x9a7c, ST TRN,*AR6+ jusqu'a 0x2d23) passait sur
-    # data[0x2d0d] apres sa reinitialisation par 0xe68a, et le CALLD 0xea0c
-    # ecrasait SP (« SP-CORRUPT pc=0xeac9 »). Le vrai C54x a ~480000 cycles par
-    # trame. Capture gdb du 2026-09-23 15:07.
-    # [2026-10-22] Magnetite (--ms-magnetite) : 480000. Le firmware TI en TCH demande bien plus que
-    # l'osmocom : a 120000 la file des taches du DSP debordait (d_error_status 20h/28h), la L1 voyait
-    # ses resultats en retard (« > COM »), relancait le DSP et l'appel au 600 tombait (Assignment
-    # Failure). Rejeu tools/rejeu_banc de l'appel de 10:58 : 120000 -> ticks non finis des fn%26=10,
-    # 240000 -> 5, 480000 -> 0. Le vrai C54x a ~480000 cycles par trame.
+    # INSNS is only a ceiling (the DSP stops at its IDLE, c54x_exe/src/pont.c
+    # jouer_trame). TCH decoding needs up to ~87000 insn/frame with osmocom
+    # layer1; below that the decoding spills over the next frame and corrupts
+    # the speech Viterbi state. The real C54x has ~480000 cycles per frame.
+    # Magnetite (--ms-magnetite): the TI firmware needs far more than osmocom
+    # in TCH: at 120000 the DSP task queue overflows (d_error_status 20h/28h),
+    # L1 sees its results late, restarts the DSP and the call to 600 drops
+    # (Assignment Failure). 480000 leaves no unfinished tick.
     if [ -n "${MS_MAGNETITE:-}" ]; then : "${INSNS:=480000}"; fi
     : "${INSNS:=120000}";   export INSNS
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM
     : "${CALYPSO_RHEA_DMA_XFER:=1}"; export CALYPSO_RHEA_DMA_XFER
-    # [2026-10-18] TCH-VOICE EN l1phy, PLUS EN gapk. Le profil ROM de
-    # /etc/default/osmo-banc (scripts/dsp-rom-max.sh : BANC_VOCODEUR=rom,
-    # CALYPSO_VSP=1 et les drapeaux d'emulateur du vocodeur) n'etait lu que par
-    # osmo-banc.service. Lance a la main, start-native.sh passait run.sh sans
-    # BANC_VOCODEUR, et le mobile tournait sur mobile_pont.cfg brut, en gapk.
-    # On charge donc le profil ici - l'environnement gagne toujours - puis
-    # l1phy par defaut : run.sh en derive mobile_pont_rom.cfg (config_vocodeur_rom).
-    # BANC_VOCODEUR=hote pour revenir a gapk.
+    # TCH-VOICE in l1phy (ROM vocoder), not in gapk. The ROM profile of
+    # /etc/default/osmo-banc (scripts/dsp-rom-max.sh: BANC_VOCODEUR=rom,
+    # CALYPSO_VSP=1 and the vocoder emulator flags) is loaded here so that a
+    # manual launch gets the same profile as osmo-banc.service; the
+    # environment always wins. l1phy is the default: run.sh derives
+    # mobile_pont_rom.cfg from it (config_vocodeur_rom).
+    # BANC_VOCODEUR=hote switches back to gapk.
     if [ -r /etc/default/osmo-banc ]; then
         while IFS='=' read -r _k _v; do
             case "$_k" in ''|\#*|*[!A-Za-z0-9_]*) continue ;; esac
@@ -64,19 +53,18 @@ if [ "$DSP_BANC" = 1 ]; then
         unset _k _v
     fi
     : "${BANC_VOCODEUR:=rom}"; export BANC_VOCODEUR
-    # [2026-10-22] --gapk avec --ms-magnetite : pas de mobile L23 pour GAPK, la voix est codee par le pont
-    # (pont/voix_hote.py, libgsm) ; le DSP ne fait plus que le canal (CALYPSO_VSP=0).
+    # --gapk with --ms-magnetite: no L23 mobile for GAPK, the voice is coded by
+    # the bridge (pont/voix_hote.py, libgsm); the DSP only does the channel
+    # (CALYPSO_VSP=0).
     if [ "$BANC_VOCODEUR" = hote ] && [ -n "${MS_MAGNETITE:-}" ]; then
         : "${PONT_VOIX_HOTE:=1}"; export PONT_VOIX_HOTE
     fi
     : "${CALYPSO_VSP:=1}";     export CALYPSO_VSP
-    # [2026-10-18] ET LE RESTE DU PROFIL --vocodeur-rom, MEME SANS
-    # /etc/default/osmo-banc. Sur acer (10.99.0.2) le fichier n'existait pas :
-    # BANC_VOCODEUR=rom et CALYPSO_VSP=1 venaient d'ici, mais pas les drapeaux
-    # d'emulateur du codec FR ni PONT_UL_RAW_TCH. La ROM recevait bien le micro
-    # (crete UL 2200 sur le port VSP) et codait... la trame de silence
-    # (pont : « TCH ul rom P=0 »), l'echo test du 600 restait muet. Memes
-    # valeurs que scripts/dsp-rom-max.sh profile --vocodeur-rom (le defaut).
+    # The rest of the --vocodeur-rom profile, even without
+    # /etc/default/osmo-banc: the FR codec emulator flags and PONT_UL_RAW_TCH.
+    # Without them the ROM receives the microphone but codes the silence
+    # frame, and the 600 echo test stays mute. Same values as
+    # scripts/dsp-rom-max.sh profile --vocodeur-rom (the default).
     if [ "$BANC_VOCODEUR" = rom ]; then
         for _kv in CALYPSO_NORM_TC=0 CALYPSO_C54X_BCTC_NORM=1 PONT_UL_RAW_TCH=1 \
                    CALYPSO_C54X_BCD_CARRY=1 CALYPSO_C54X_OVM_LOGIQUE=1 CALYPSO_MAC=1 \
@@ -96,24 +84,24 @@ if [ "$DSP_BANC" = 1 ]; then
             "$([ "${ASSEMBLY_LOGS:-0}" = 1 ] && echo " ASSEMBLY_LOGS=1")" "$BANC_DSP"
         [ "${OSMO_TRX:-0}" = 1 ] && printf '     OSMO_TRX=1 : trx.highram.elf + transceiver --no-sync (pas de mobile, pas de pont) ; %s\n' "$(trx_ts_desc)"
         [ "${OSMO_TRX_TS1:-0}" = 1 ] && printf '     OSMO_TRX_TS1=1 : INSTANCE=3 OSMO_TRX_PHONE=2 bash %s   (le 2e Calypso TRX, TS1, avant le transceiver)\n' "$BANC_DSP"
-        # [2026-10-21] BTS classique (--bts-classic ou defaut) : le mobile est sur le pont, Magnetite par FIRMWARE_FLASH
+        # Classic BTS (--bts-classic or default): the mobile is on the bridge,
+        # Magnetite through FIRMWARE_FLASH.
         [ "${OSMO_TRX:-0}" != 1 ] && printf '     BTS classique : osmo-bts-trx <-> pont_dsp.py ; mobile %s\n' \
             "$([ -n "${MS_MAGNETITE:-}" ] && echo "Magnetite (FIRMWARE_FLASH=$MAGNETITE_FLASH)" || echo "osmocom-bb (mobile + layer1)")"
         [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ] && printf '  3. INSTANCE=2 AIR=1 MODE=dsp %sbash %s   (le mobile par l air, quand le firmware trx est en mode BTS)\n' "${MS_MAGNETITE:+FIRMWARE_FLASH=$MAGNETITE_FLASH }" "$BANC_DSP"
         exit 0
     fi
-    # [2026-10-24] Le mobile de l'instance 1 lit mobile_pont.cfg tel quel (run.sh ne
-    # reecrit le stick que pour les instances 2+) : gabarit a 514, cellule du plan a 1
-    # dans les conteneurs du multi -> FBSB result=255 en boucle. On l'aligne ici.
+    # The instance 1 mobile reads mobile_pont.cfg as is (run.sh only rewrites
+    # the stick for instances 2+): align its stick ARFCN with the plan's cell,
+    # otherwise FBSB fails in a loop in the multi-operator containers.
     _cfg_pont="$(dirname "$BANC_DSP")/mobile_pont.cfg"
     _arfcn_pont="${PLAN_ARFCN:-${MS_ARFCN1:-${ARFCN:-1}}}"
     if [ -w "$_cfg_pont" ] && [[ "$_arfcn_pont" =~ ^[0-9]+$ ]]; then
         sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${_arfcn_pont}|" "$_cfg_pont"
     fi
-    # [2026-10-24] Meme gabarit, meme trou pour la SIM : imsi/ki/rplmn restaient
-    # ceux de l'op1 (001010001000001, ki ..01 01). Dans le conteneur de l'op2,
-    # la HLR ne connait cette IMSI que sans donnees d'auth -> LU reject cause 2.
-    # On reprend la carte de mobile.cfg, celle que start-docker genere par operateur.
+    # Same template, same gap for the SIM: imsi/ki/rplmn are taken from
+    # mobile.cfg, the card that start-docker generates per operator, so the HLR
+    # of the operator's container knows the IMSI with its auth data.
     _sim_src="/root/.osmocom/bb/mobile.cfg"
     if [ -w "$_cfg_pont" ] && [ -r "$_sim_src" ]; then
         for _k in imsi "ki comp128" rplmn; do
@@ -132,13 +120,14 @@ if [ "$DSP_BANC" = 1 ]; then
     say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE, chaine Calypso laissee au banc DSP"
     say_begin "Banc DSP C54x"
     say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ$([ "${OSMO_TRX:-0}" = 1 ] && echo " OSMO_TRX=1 : trx.highram.elf + transceiver, $(trx_ts_desc)"))"
-    # Hand-off total : ce processus devient c54x_exe/run.sh (cinq etapes, puis
-    # il rend la main ; les journaux restent dans /tmp/c54x-pont). MODE=dsp est
-    # deja exporte juste au-dessus, il ecrase celui du profil.
-    # [2026-10-14] --sap : la copie « sim sap » de mobile_pont.cfg, au banc seul.
-    # [2026-10-20] --bts --ms : l'instance 1 (la radio de la BTS) d'abord, puis, quand le
-    # firmware trx est passe en mode BTS (osmo-bts-trx a envoye POWERON : « BTS MODE: 7 514 »
-    # dans osmocon.log), l'instance 2 (le mobile + l'air), qui prend la main.
+    # Full hand-off: this process becomes c54x_exe/run.sh (five steps, then it
+    # returns; the logs stay in /tmp/c54x-pont). MODE=dsp is exported just
+    # above and overrides the profile's.
+    # --sap: the "sim sap" copy of mobile_pont.cfg, for the bench only.
+    # --bts --ms: instance 1 (the BTS radio) first, then, once the trx
+    # firmware has switched to BTS mode (osmo-bts-trx sent POWERON:
+    # "BTS MODE: 7 514" in osmocon.log), instance 2 (the mobile + the air),
+    # which takes over.
     if [ "${OSMO_TRX:-0}" = 1 ] && [ "${MS_AIR:-0}" = 1 ]; then
         bash "$BANC_DSP" || exit 1
         say_begin "Mobile par l'air (instance 2)"
@@ -153,11 +142,13 @@ if [ "$DSP_BANC" = 1 ]; then
             say_end " !! " "$C_KO" "Mobile par l'air (instance 2)" "le firmware trx n'est pas en mode BTS (osmo-bts-trx absente ?) ; on lance quand meme"
         fi
         sleep 10
-        # [2026-10-20 21:20] OSMO_TRX=0 explicite : OSMO_TRX=1 est exporte (le TRX, c'est l'instance 1) et
-        # l'instance 2 en heritait -> firmware trx + second transceiver, « port UDP 5700 deja pris ».
-        # Le mobile par l'air est le layer1 d'origine (FIRMWARE_ELF du profil retire : c'est le
-        # layer1.highram.elf qui a fait le LU et l'appel du 20/10 21:08 ; FIRMWARE_SRC explicite garde la main).
-        # [2026-10-21] --ms-magnetite : FIRMWARE_FLASH (exporte au parsing) remplace le layer1 pour l'instance 2
+        # Explicit OSMO_TRX=0: OSMO_TRX=1 is exported (the TRX is instance 1)
+        # and instance 2 must not inherit it (it would start a second
+        # transceiver on the same UDP port). The over-the-air mobile runs the
+        # stock layer1 (the profile's FIRMWARE_ELF is dropped; an explicit
+        # FIRMWARE_SRC keeps precedence).
+        # --ms-magnetite: FIRMWARE_FLASH (exported at parsing) replaces layer1
+        # for instance 2.
         exec env -u FIRMWARE_ELF -u FIRMWARE_BIN ${FIRMWARE_SRC:+FIRMWARE_ELF="$FIRMWARE_ELF"} \
             ${MS_MAGNETITE:+FIRMWARE_FLASH="$MAGNETITE_FLASH"} \
             INSTANCE=2 AIR=1 OSMO_TRX=0 ${SAP_DSP_MOBILE_CFG:+MOBILE_CFG="$SAP_DSP_MOBILE_CFG"} bash "$BANC_DSP"

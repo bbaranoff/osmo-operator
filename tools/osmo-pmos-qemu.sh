@@ -1,75 +1,69 @@
 #!/bin/bash
-# osmo-pmos-qemu - postmarketOS en QEMU, avec le modem du banc et sa voix.
+# osmo-pmos-qemu - postmarketOS in QEMU, with the bench modem and its voice.
 #
-# [2026-09-07] ON NE RECONSTRUIT PLUS LA LIGNE DE COMMANDE QEMU. Ce script
-# refaisait a la main ce que fait « pmbootstrap qemu », et c est de la que
-# venait le bug graphique : la carte et l affichage choisis ici - virtio-vga
-# avec SDL force en rendu logiciel - couvraient l ecran de paves de couleur.
-# « pmbootstrap qemu » ne les a pas : il prend virtio-vga-gl et « gtk,gl=on ».
-# Repasser par le rendu OpenGL de SDL ne servait a rien non plus, le chroot
-# musl n a pas les pilotes de la NVIDIA de l hote (« libEGL warning: egl:
-# failed to create dri2 screen » en boucle). On appelle donc pmbootstrap.
+# The QEMU command line is NOT rebuilt here: "pmbootstrap qemu" is called,
+# with virtio-vga-gl and "gl=on" (a virtio-vga forced into software rendering
+# covers the screen with colour blocks).
 #
-# Ce que pmbootstrap ne savait pas faire est desormais DEDANS, dans
-# pmb/commands/qemu.py, fonction osmo_bench_args() :
-#   - le modem du banc sur un port serie PCI (ni ISA, ni USB : le firmware
-#     UEFI prend les reponses d un port ISA pour des touches et n amorce
-#     jamais, et ce noyau n a pas ftdi_sio pour l USB). 8250_pci est integre :
-#     le port apparait tout seul en /dev/ttyS1, ce que ModemManager sonde ;
-#   - la carte son cablee sur le pont voix du banc plutot que sur les
-#     peripheriques par defaut : gsm_audio porte le descendant (le RTP
-#     d osmo-mgw), son monitor alimente donc la CAPTURE de la VM ; gsm_mic
-#     porte le montant, il recoit donc ce que la VM JOUE.
+# What pmbootstrap does for the bench lives INSIDE it, in
+# pmb/commands/qemu.py, function osmo_bench_args():
+#   - the bench modem on a PCI serial port (neither ISA nor USB: the UEFI
+#     firmware takes the answers of an ISA port for keystrokes and never
+#     boots, and this kernel has no ftdi_sio for USB). 8250_pci is built in:
+#     the port appears on its own as /dev/ttyS1, which ModemManager probes;
+#   - the sound card wired to the bench voice bridge rather than to the
+#     default devices: gsm_audio carries the downlink (the osmo-mgw RTP), so
+#     its monitor feeds the VM CAPTURE; gsm_mic carries the uplink, so it
+#     receives what the VM PLAYS.
 #
-# QEMU ne fait qu ECOUTER sur le port du modem : c est osmo-phonesim-banc.py
-# qui vient s y brancher, et seulement une fois le firmware passe - sinon il
-# n amorce pas. C est le role d osmo-pmos-setup, a relancer apres chaque
-# redemarrage du banc : start-native.sh tue le modem de la VM au passage.
+# QEMU only LISTENS on the modem port: osmo-phonesim-banc.py connects to it,
+# and only once the firmware has passed - otherwise it does not boot. That
+# is the role of osmo-pmos-setup, to rerun after each bench restart:
+# start-native.sh kills the VM modem on the way.
 #
-# L affichage reste SDL, mais celui que pmbootstrap monte : virtio-vga-gl et
-# « sdl,gl=on ». Ce n est pas SDL qui donnait les paves, c est le virtio-vga
-# sans GL pousse dans un rendu logiciel force. OSMO_PMOS_DISPLAY=gtk pour
-# passer a GTK, =none pour une VM sans fenetre.
+# The display stays SDL, the one pmbootstrap sets up: virtio-vga-gl and
+# "sdl,gl=on". OSMO_PMOS_DISPLAY=gtk switches to GTK, =none for a VM without
+# a window.
 #
-# Reglages : OSMO_PMOS_AT_PORT (12346), OSMO_PMOS_SINK (gsm_mic),
+# Settings: OSMO_PMOS_AT_PORT (12346), OSMO_PMOS_SINK (gsm_mic),
 # OSMO_PMOS_SOURCE (gsm_audio.monitor), OSMO_PMOS_MEM (4096),
-# OSMO_PMOS_DISPLAY (sdl), OSMO_PMOS_DISK (16G), OSMO_PMOS_MODEM (1 : le modem et la voix sont
-# branches tout seuls des que la VM repond ; 0 : VM nue).
-# [2026-09-07] LE MOT DE PASSE, DEMANDE D ABORD. pmbootstrap a besoin de root
-# la ou l ancien script n en avait aucun besoin : il detache les boucles
-# (« sudo losetup --json --list »), monte le chroot, y installe OVMF. Lance
-# depuis l icone, personne n est la pour repondre a sudo : la commande echoue
-# aussitot et il ne se passe RIEN. On demande donc le mot de passe en premier,
-# avec un vrai terminal (d ou « Terminal=true » dans osmo-pmos.desktop), et on
-# garde la fenetre ouverte si ca casse - sinon l erreur disparait avec elle.
-# [2026-09-07] LE FORMAT, AU CHOIX ET AU LANCEMENT. Phosh se met en page
-# d apres l ecran : haut et etroit, c est un smartphone ; large, une
-# tablette. C est la carte virtio de QEMU qui porte cette taille (xres/yres,
-# poses par le patch pmbootstrap depuis OSMO_PMOS_RES), et le systeme demarre
-# dedans - on ne change pas de format sous une session ouverte. Le format
-# se dit en premier argument (les icones du bureau passent par la variable) :
-#   osmo-pmos-qemu smartphone      720x1440   (le defaut)
+# OSMO_PMOS_DISPLAY (sdl), OSMO_PMOS_DISK (16G), OSMO_PMOS_MODEM (1: the
+# modem and the voice are connected on their own as soon as the VM answers;
+# 0: bare VM).
+# THE PASSWORD, ASKED FIRST. pmbootstrap needs root: it detaches the loops
+# ("sudo losetup --json --list"), mounts the chroot, installs OVMF in it.
+# Launched from the icon, nobody is there to answer sudo. So the password is
+# asked first, with a real terminal (hence "Terminal=true" in
+# osmo-pmos.desktop), and the window is kept open on failure - otherwise the
+# error vanishes with it.
+# THE FORMAT, CHOSEN AT LAUNCH. Phosh lays itself out according to the
+# screen: tall and narrow is a smartphone; wide, a tablet. The QEMU virtio
+# card carries this size (xres/yres, set by the pmbootstrap patch from
+# OSMO_PMOS_RES), and the system boots in it - the format does not change
+# under an open session. The format is the first argument (the desktop icons
+# go through the variable):
+#   osmo-pmos-qemu smartphone      720x1440   (the default)
 #   osmo-pmos-qemu tablette        1280x800
-#   osmo-pmos-qemu 1024x768        n importe quelle taille <largeur>x<hauteur>
-# [2026-09-08] STOP, ET UNE SEULE VM A LA FOIS. Il n y avait pas de moyen
-# d arreter le telephone autrement qu en fermant sa fenetre, et relancer
-# l icone pendant qu il tourne finissait en « pmbootstrap a echoue (1) » :
-# QEMU refuse l image deja ouverte et les ports 2222 / 12346 deja pris, et
-# son message part sur la console, pas dans le journal. Donc :
-#   osmo-pmos-qemu stop     eteint proprement (poweroff par SSH, 30 s), sinon
-#                           SIGTERM puis SIGKILL sur QEMU ; debranche le modem
-#                           du banc (osmo-phonesim-banc.py --connect), que
-#                           osmo-pmos-setup rebranche au prochain demarrage.
-#   osmo-pmos-qemu status   dit si la VM tourne (pid) et si son SSH repond.
-# Et au lancement, si une VM tourne deja, on le dit et on s arrete la.
+#   osmo-pmos-qemu 1024x768        any <width>x<height> size
+# STOP, AND ONE VM AT A TIME. QEMU refuses an image already open and the
+# ports 2222 / 12346 already in use, and its message goes to the console,
+# not the log. So:
+#   osmo-pmos-qemu stop     clean shutdown (poweroff over SSH, 30 s),
+#                           otherwise SIGTERM then SIGKILL on QEMU;
+#                           disconnects the bench modem
+#                           (osmo-phonesim-banc.py --connect), which
+#                           osmo-pmos-setup reconnects at the next start.
+#   osmo-pmos-qemu status   says whether the VM runs (pid) and whether its
+#                           SSH answers.
+# And at launch, if a VM already runs, say so and stop there.
 PMOS_SSH_PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 PMOS_SSH="sshpass -p ${OSMO_PMOS_PASS:-147147} ssh -p $PMOS_SSH_PORT -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=4 -o PreferredAuthentications=password ${OSMO_PMOS_USER:-user}@127.0.0.1"
-# [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro (une
-# seule source de verite, voir « L AFFECTATION DES HAUT-PARLEURS » la-bas).
-# Ici : l annuleur d echo est charge AVANT QEMU, pour que la carte « combine »
-# de la VM naisse directement sur lui (OSMO_PMOS_HP / OSMO_PMOS_MIC, lus par
-# le patch pmbootstrap) ; les bouclages directs de l hote sont retires quand
-# la VM part (la voix passe par elle) et REPOSES quand elle s arrete.
+# lib/audio.sh: the assignment of the speakers and microphone (a single
+# source of truth, see "L AFFECTATION DES HAUT-PARLEURS" there).
+# Here: the echo canceller is loaded BEFORE QEMU, so that the VM "combine"
+# card is born directly on it (OSMO_PMOS_HP / OSMO_PMOS_MIC, read by the
+# pmbootstrap patch); the host direct loopbacks are removed when the VM
+# starts (if the voice goes through it) and RESTORED when it stops.
 AUDIO_LIB="${OSMO_REPO:-/opt/GSM/osmo-operator}/lib/audio.sh"
 if [ -f "$AUDIO_LIB" ]; then
     # shellcheck source=../lib/audio.sh
@@ -77,7 +71,7 @@ if [ -f "$AUDIO_LIB" ]; then
 else
     AUDIO_LIB=""
 fi
-# Le vrai QEMU (pas le « sh -c » qui l enveloppe) : celui qui tient l image.
+# The real QEMU (not the "sh -c" wrapping it): the one holding the image.
 pmos_qemu_pids() {
     pgrep -f '^[^ ]*ld-musl[^ ]* .*qemu-system-x86_64 .*rootfs/qemu-amd64\.img' 2>/dev/null
     pgrep -f '^[^ ]*qemu-system-x86_64 .*rootfs/qemu-amd64\.img' 2>/dev/null
@@ -122,30 +116,29 @@ pmos_stop() {
         [ -z "$(pmos_qemu_pids)" ] && echo "osmo-pmos-qemu: VM arretee" \
                                    || { echo "osmo-pmos-qemu: la VM tourne toujours (droits ? relancer en root)"; return 1; }
     fi
-    # Le modem du banc etait branche sur le port serie de CETTE VM : on le
-    # debranche, osmo-pmos-setup le rebranchera au prochain demarrage.
-    # Le banc tourne en root depuis osmo-pmos-setup (le tun PPP l exige) :
-    # sous le compte de session, pkill ne peut pas, sudo -n si le mot de
-    # passe est encore en cache.
+    # The bench modem was connected to the serial port of THIS VM:
+    # disconnect it, osmo-pmos-setup reconnects it at the next start.
+    # The bench runs as root since osmo-pmos-setup (the PPP tun requires
+    # it): under the session account pkill cannot, sudo -n can if the
+    # password is still cached.
     if pkill -f '[o]smo-phonesim-banc.py --connect' 2>/dev/null \
        || sudo -n pkill -f '[o]smo-phonesim-banc.py --connect' 2>/dev/null; then
         echo "osmo-pmos-qemu: modem du banc debranche"
     fi
-    # Un « pmbootstrap qemu » orphelin (VM tuee sous lui) ne sert plus a rien.
-    # Motif ancre sur l interpreteur : un « pkill -f » large tuerait aussi le
-    # terminal de quiconque a ces mots dans sa ligne de commande.
+    # An orphan "pmbootstrap qemu" (VM killed under it) is useless.
+    # Pattern anchored on the interpreter: a broad "pkill -f" would also
+    # kill the terminal of anyone with these words in their command line.
     pkill -f '^[^ ]*python[0-9.]* [^ ]*pmbootstrap qemu' 2>/dev/null || true
-    # La VM partie, l hote reprend son ecoute directe (gsm_audio -> ses HP).
+    # VM gone: the host resumes its direct listening (gsm_audio -> speakers).
     [ -n "$AUDIO_LIB" ] && { ensure_local_loopback; ensure_local_mic; }
     return 0
 }
-# Depuis une icone (Terminal=true), la fenetre se fermerait avant qu on ait
-# lu : on la garde quelques secondes quand on est sur un vrai terminal.
+# From an icon (Terminal=true), the window would close before one can read:
+# keep it a few seconds when on a real terminal.
 pmos_fin() { local rc=$1; [ -t 0 ] && read -r -t 8 -p "Entree pour fermer (8 s) " _; exit "$rc"; }
-# [2026-09-08] BASCULE : un seul geste sur l icone. VM en marche -> on l eteint
-# (pmos_stop) ; VM arretee -> on la lance, exactement comme sans argument.
-# C est ce que fait l icone (osmo-pmos toggle -> ici) : plus besoin du clic
-# droit, peu visible sous Phosh, pour arreter le telephone.
+# TOGGLE: a single action on the icon. VM running -> power it off
+# (pmos_stop); VM stopped -> launch it, exactly as without argument. This is
+# what the icon does (osmo-pmos toggle -> here).
 case "${1:-}" in
     stop|arret|arreter|off|down) pmos_stop; pmos_fin $? ;;
     status|etat)                 pmos_status; pmos_fin $? ;;
@@ -178,21 +171,17 @@ if ! sudo -v; then
     read -r -p "Entree pour fermer " _
     exit 1
 fi
-# [2026-09-09] EN ROOT AUSSI. La session de l ISO s ouvre sur root (gdm3,
-# iso_modules/84-comptes.sh) : l icone lancait « pmbootstrap qemu » en root,
-# qui repond « Do not run pmbootstrap as root! » et s arrete - l ISO avait le
-# telephone (pmbootstrap patche, noyau PPP, image de reference) et ne pouvait
-# pas l allumer. pmbootstrap accepte --as-root : on le passe quand on est
-# root, et le dossier de travail est alors celui de root.
+# AS ROOT TOO. The ISO session opens as root (gdm3,
+# iso_modules/84-comptes.sh), and pmbootstrap refuses to run as root unless
+# --as-root is passed: it is passed when root, and the work directory is
+# then root's.
 PMB_OPTS=(); [ "$(id -u)" -eq 0 ] && PMB_OPTS=(--as-root)
-# [2026-09-16] LA DATA DU TELEPHONE SORT VRAIMENT, A CHAQUE LANCEMENT. Le PPP
-# montait (10.99.0.2), la passerelle repondait, et rien au-dela : docker pose
-# la politique FORWARD a DROP sur l hote, et le paquet de l UE (ogstun, apres
-# NAT) etait jete sans trace - NetworkManager restait « connecte (local) ».
-# osmo-epc.sh (setup_forward) pose la regle au demarrage du coeur 4G ; on la
-# repose ici, avant la VM, pour le cas ou le coeur est parti avant ce script
-# ou ou docker a recree ses chaines entre-temps. DOCKER-USER : consultee
-# avant les regles de docker, jamais reecrite par lui.
+# THE PHONE DATA REALLY GETS OUT, AT EVERY LAUNCH. docker sets the FORWARD
+# policy to DROP on the host, which would silently drop the UE packets
+# (ogstun, after NAT). osmo-epc.sh (setup_forward) sets the rule when the 4G
+# core starts; it is set again here, before the VM, in case the core started
+# before this script or docker recreated its chains in between. DOCKER-USER:
+# consulted before the docker rules, never rewritten by it.
 pmos_forward() {
     local su=(); [ "$(id -u)" -eq 0 ] || su=(sudo -n)
     "${su[@]}" iptables -N DOCKER-USER 2>/dev/null || true
@@ -208,20 +197,18 @@ pmos_forward() {
     echo "osmo-pmos-qemu: FORWARD ogstun autorise (DOCKER-USER) - la data du telephone sort vers Internet"
 }
 pmos_forward
-# [2026-09-09] LE DOSSIER DE TRAVAIL EST CELUI DE LA CONFIG, plus ~/test en
-# dur (celui de la machine de reference) : sur l ISO c est
-# ~/.local/var/pmbootstrap (gabarit pose par 88-lte-pmos.sh dans /root et
-# /home/osmocom, instancie par osmo-pmos-build). ~/test reste accepte.
+# THE WORK DIRECTORY IS THE CONFIG'S: on the ISO it is
+# ~/.local/var/pmbootstrap (template installed by 88-lte-pmos.sh in /root and
+# /home/osmocom, instantiated by osmo-pmos-build). ~/test is still accepted.
 PMB_WORK="${OSMO_PMB_WORK:-$(sed -n 's/^work *= *//p' "$HOME/.config/pmbootstrap_v3.cfg" 2>/dev/null | head -1)}"
 [ -n "$PMB_WORK" ] || PMB_WORK="$HOME/.local/var/pmbootstrap"
 [ -d "$PMB_WORK/chroot_native" ] || [ ! -d "$HOME/test/chroot_native" ] || PMB_WORK="$HOME/test"
 IMG_PMB="$(ls -1 "$PMB_WORK"/chroot_native/home/pmos/rootfs/*.img 2>/dev/null | head -1)"
-# [2026-09-09] PAS D IMAGE : ON LA FABRIQUE, ICI. Le premier clic sur l icone
-# de l ISO tombait sur « pmbootstrap qemu » sans config, sans dossier de
-# travail, avec l image de reference encore en .zst dans /opt/user_interface/
-# pmos/image : echec, fenetre fermee. osmo-pmos-build fait tout cela (config
-# depuis le gabarit, pmaports, noyau PPP, image decompressee) puis REVIENT ici
-# (exec osmo-pmos-qemu, OSMO_PMOS_FROM_BUILD=1 pour ne pas boucler).
+# NO IMAGE: BUILD IT, HERE. On the first click on the ISO icon there is no
+# config, no work directory, and the reference image is still a .zst in
+# /opt/user_interface/pmos/image. osmo-pmos-build does all of that (config
+# from the template, pmaports, PPP kernel, decompressed image) then COMES
+# BACK here (exec osmo-pmos-qemu, OSMO_PMOS_FROM_BUILD=1 to avoid looping).
 if [ -z "$IMG_PMB" ] && [ "${OSMO_PMOS_FROM_BUILD:-0}" != 1 ]; then
     BUILD="$(command -v osmo-pmos-build 2>/dev/null || echo /opt/user_interface/pmos/bin/osmo-pmos-build.sh)"
     if [ -x "$BUILD" ]; then
@@ -231,32 +218,29 @@ if [ -z "$IMG_PMB" ] && [ "${OSMO_PMOS_FROM_BUILD:-0}" != 1 ]; then
     echo "osmo-pmos-qemu: pas d image postmarketOS dans $PMB_WORK, et pas d osmo-pmos-build : « pmbootstrap install » a la main" >&2
 fi
 
-# [2026-09-08] LE MODEM, PAR DEFAUT. Le telephone sans modem n est qu une VM :
-# pas d appel, pas de SMS, pas de data - et le noyau a ete rebati EXPRES pour
-# porter PPP sur ce modem (voir osmo-pmos-setup). On ne demande donc plus a
-# l utilisateur de penser a « Brancher le modem et la voix » apres coup : un
-# guetteur attend que le SSH de la VM reponde (donc que le firmware soit
-# passe, cf. l entete : brancher plus tot bloque l amorcage) et lance
-# osmo-pmos-setup - le modem du banc sur le port serie, puis la voix. Sa
-# trace complete va dans un fichier ; seules les lignes utiles remontent
-# ici, prefixees, au milieu de la console serie de la VM.
-# OSMO_PMOS_MODEM=0 pour une VM nue (l ancien comportement).
+# THE MODEM, BY DEFAULT. The phone without a modem is only a VM: no call,
+# no SMS, no data. A watcher waits for the VM SSH to answer (so that the
+# firmware has passed, see the header: connecting earlier blocks the boot)
+# and runs osmo-pmos-setup - the bench modem on the serial port, then the
+# voice. Its full trace goes to a file; only the useful lines come back
+# here, prefixed, in the middle of the VM serial console.
+# OSMO_PMOS_MODEM=0 for a bare VM.
 SETUP="${OSMO_PMOS_SETUP:-/usr/local/bin/osmo-pmos-setup}"
 [ -x "$SETUP" ] || SETUP="${OSMO_REPO:-/opt/GSM/osmo-operator}/tools/osmo-pmos-setup.sh"
 SETUP_LOG="${XDG_RUNTIME_DIR:-/tmp}/osmo-pmos-setup.log"
-# [2026-09-08] LA PLACE, VERIFIEE A CHAQUE LANCEMENT. Le guetteur tourne
-# toujours (modem ou pas) : une fois la VM levee il regarde si la racine
-# occupe bien tout le disque. Normalement l initramfs pmOS l a deja fait au
-# boot (pmos.force-partition-resize sur la ligne du noyau) ; sinon - image
-# refaite sans ce parametre - il etend lui-meme la partition 2 puis l ext4,
-# a chaud, par SSH. Puis le modem si OSMO_PMOS_MODEM=1.
+# DISK SPACE, CHECKED AT EVERY LAUNCH. The watcher always runs (modem or
+# not): once the VM is up it checks that the root fills the whole disk.
+# Normally the pmOS initramfs already did it at boot
+# (pmos.force-partition-resize on the kernel line); otherwise - image
+# rebuilt without that parameter - it extends partition 2 then the ext4
+# itself, online, over SSH. Then the modem if OSMO_PMOS_MODEM=1.
 pmos_place() {
-    # Le script cote VM voyage en base64 : trois niveaux de guillemets sinon.
+    # The VM-side script travels in base64: three levels of quoting otherwise.
     local b64; b64="$(base64 -w0 <<'PLACE'
 set -e
 d=$(blockdev --getsize64 /dev/vda); p=$(blockdev --getsize64 /dev/vda2)
 s=$(sfdisk -d /dev/vda 2>/dev/null | sed -n 's/^.*vda2 : start= *\([0-9]*\).*/\1/p')
-# de la place derriere la partition 2 (> 64 Mio) ? on l etend, a chaud
+# room behind partition 2 (> 64 MiB)? extend it, online
 if [ $((d - s*512 - p)) -gt 67108864 ]; then
     echo "partition 2 : $((p/1048576)) Mio sur un disque de $((d/1048576)) Mio - extension"
     parted -f -s /dev/vda resizepart 2 100% >/dev/null 2>&1 \
@@ -271,7 +255,7 @@ PLACE
 }
 GUETTEUR=""
 (
-    for _ in $(seq 1 120); do          # 10 min : l image peut etre a refaire
+    for _ in $(seq 1 120); do          # 10 min: the image may need rebuilding
         sleep 5
         pmos_ssh_ok || continue
         echo "osmo-pmos-qemu: VM levee - verification de la place sur le disque"
@@ -283,10 +267,10 @@ GUETTEUR=""
                 | sed 's/^/osmo-pmos-qemu: /'
             echo "osmo-pmos-qemu: trace complete dans $SETUP_LOG"
         elif [ -x "$SETUP" ]; then
-            # [2026-09-09] SANS MODEM, LE SON QUAND MEME. La VM nue sortait
-            # son audio sur la carte PONT (0x12 -> gsm_mic) : muette pour
-            # l operateur. --voix ne fait que la partie son (combine par
-            # defaut, bouclages, sourdines).
+            # WITHOUT A MODEM, THE SOUND ANYWAY. A bare VM would output its
+            # audio on the BRIDGE card (0x12 -> gsm_mic): mute for the
+            # operator. --voix only does the sound part (handset by default,
+            # loopbacks, mutes).
             echo "osmo-pmos-qemu: VM sans modem - le son seul ($SETUP --voix)"
             "$SETUP" --voix >"$SETUP_LOG" 2>&1
             grep -E 'ATTENTION|descendant|montant|sourdines' "$SETUP_LOG" | sed 's/^/osmo-pmos-qemu: /'
@@ -302,50 +286,42 @@ if [ "${OSMO_PMOS_MODEM:-1}" = "1" ] && [ -x "$SETUP" ]; then
 else
     echo "osmo-pmos-qemu: VM sans modem (OSMO_PMOS_MODEM=0 ou osmo-pmos-setup absent)"
 fi
-# La VM partie, le guetteur n a plus rien a attendre.
+# VM gone: the watcher has nothing left to wait for.
 trap '[ -n "$GUETTEUR" ] && kill "$GUETTEUR" 2>/dev/null' EXIT
 
-# [2026-09-08] LE DISQUE : 16 Go, pas 2. L image pmbootstrap fait 2 Go par
-# defaut et etait PLEINE (2,2 Go a 100 %) apres apk add/upgrade : plus rien
-# n ecrivait, ni dconf, ni NetworkManager, ni le journal. Un premier correctif
-# a 4 Go n avait jamais ete deploye (le lanceur de /usr/local/bin datait
-# d avant) : la VM tournait toujours sur 2,8 Go pleins. --image-size est
-# passe A CHAQUE LANCEMENT : pmbootstrap ne fait qu un truncate (fichier
-# creux, ne coute que ce qui est ecrit ; il refuse seulement de RETRECIR,
-# d ou le calcul ci-dessous qui garde la taille courante si elle est plus
-# grande), l initramfs pmOS etend la partition et l ext4 au demarrage, et le
-# guetteur ci-dessus verifie le resultat. OSMO_PMOS_DISK pour une autre taille.
+# THE DISK: 16 GB, not 2. The pmbootstrap image is 2 GB by default and fills
+# up after apk add/upgrade. --image-size is passed AT EVERY LAUNCH:
+# pmbootstrap only does a truncate (sparse file, costs only what is written;
+# it only refuses to SHRINK, hence the computation below which keeps the
+# current size if larger), the pmOS initramfs extends the partition and the
+# ext4 at boot, and the watcher above checks the result. OSMO_PMOS_DISK for
+# another size.
 DISK="${OSMO_PMOS_DISK:-16G}"
-# IMG_PMB : resolu plus haut, depuis le dossier de travail de la config.
+# IMG_PMB: resolved above, from the config's work directory.
 if [ -n "$IMG_PMB" ]; then
     cur_m=$(( ($(stat -c %s "$IMG_PMB") + 1048575) / 1048576 ))
     case "$DISK" in *G) want_m=$(( ${DISK%G} * 1024 )) ;; *M) want_m=${DISK%M} ;; *) want_m=$cur_m ;; esac
     [ "$want_m" -lt "$cur_m" ] && DISK="${cur_m}M"
     echo "osmo-pmos-qemu: disque de la VM $DISK ($IMG_PMB, ${cur_m} Mio avant)"
 fi
-# [2026-09-08] ROBUSTE AUX HOTES RECALCITRANTS (AMD en tete). Le patch
-# pmbootstrap coupe deja l OpenGL sur un GPU AMD et le KVM sans SVM ; mais
-# une VM qui MEURT AUSSITOT (moins de 25 s, code non nul) sur un hote qu on
-# n avait pas prevu, on ne la laisse pas mourir : on relance sans OpenGL,
-# puis sans KVM, puis en fenetre GTK (SDL + Wayland pur). Chaque essai est
-# annonce ; le dernier code d erreur est celui qu on garde. Une VM qui a
-# tourne plus de 25 s puis s est arretee n est pas relancee : c est un arret.
-# [2026-09-09] LES HAUT-PARLEURS DE LA VM, NOMMES AVANT SON DEPART. La carte
-# « combine » (osmo_bench_args) prenait « les peripheriques par defaut » de
-# l hote au moment ou QEMU se connectait - la carte brute, sans annuleur
-# d echo, puisque celui-ci n arrivait qu avec osmo-pmos-setup, 30 a 90 s plus
-# tard ; et le defaut memorise (osmo_hp_ec) n existait pas encore. Le flux
-# tournait donc d abord sur les HP bruts, puis etait deplace. On charge
-# l annuleur ICI, on retire les bouclages directs (la voix passe par la VM),
-# et on donne les noms au patch pmbootstrap : la carte nait au bon endroit.
+# ROBUST TO RELUCTANT HOSTS (AMD first). The pmbootstrap patch already
+# disables OpenGL on an AMD GPU and KVM without SVM; a VM that DIES AT ONCE
+# (less than 25 s, non-zero code) is relaunched with fallbacks (see below).
+# Each attempt is announced; the last error code is the one kept. A VM that
+# ran more than 25 s then stopped is not relaunched: that is a shutdown.
+# THE VM SPEAKERS, NAMED BEFORE IT STARTS. The "combine" card
+# (osmo_bench_args) takes the host default devices when QEMU connects. The
+# echo canceller is loaded HERE, the direct loopbacks are handled (removed
+# if the voice goes through the VM), and the names are given to the
+# pmbootstrap patch: the card is born in the right place.
 if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     ensure_echo_cancel 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
-    # [2026-09-09] ON NE COUPE PLUS L ECOUTE DE L HOTE AU LANCEMENT. La voix
-    # ne traverse plus la VM par defaut (cf. lib/audio.sh, « QUI PORTE LA
-    # VOIX ») : les bouclages directs SONT le trajet, et les retirer ici
-    # rendait le banc muet pendant tout le demarrage du telephone.
-    # OSMO_PMOS_VOIX_VM=1 : c est osmo-pmos-setup qui pose alors le marqueur
-    # et retire ces bouclages, une fois la VM prete a les remplacer.
+    # THE HOST LISTENING IS KEPT AT LAUNCH. The voice does not go through
+    # the VM by default (see lib/audio.sh, "QUI PORTE LA VOIX"): the direct
+    # loopbacks ARE the path, and removing them here would mute the bench
+    # during the whole phone boot.
+    # OSMO_PMOS_VOIX_VM=1: osmo-pmos-setup then writes the marker and removes
+    # these loopbacks, once the VM is ready to replace them.
     if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
         remove_direct_loopbacks 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
     else
@@ -356,13 +332,12 @@ if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
     echo "osmo-pmos-qemu: carte « combine » de la VM -> HP ${OSMO_PMOS_HP:-defaut}, micro ${OSMO_PMOS_MIC:-defaut}"
 fi
-# [2026-10-15] LE QEMU DE L HOTE, PAS CELUI DU CHROOT. Le QEMU de pmbootstrap
-# tourne dans un chroot musl qui n a pas les pilotes NVIDIA de la machine :
-# meme avec virtio-vga-gl et gl=on, son EGL echoue et le rendu retombe en
-# logiciel - l affichage casse. Celui de l hote (Ubuntu, glibc) charge
-# libEGL_nvidia : verifie le 15/10 (SDL + gl=on, aucune erreur EGL). Il lui
-# faut qemu-system-gui et qemu-system-modules-opengl (ui-sdl, ui-opengl,
-# virtio-vga-gl). OSMO_PMOS_HOST_QEMU=0 revient au QEMU du chroot.
+# THE HOST QEMU, NOT THE CHROOT'S. The pmbootstrap QEMU runs in a musl
+# chroot without the machine's NVIDIA drivers: even with virtio-vga-gl and
+# gl=on, its EGL fails and the rendering falls back to software - broken
+# display. The host's (Ubuntu, glibc) loads libEGL_nvidia. It needs
+# qemu-system-gui and qemu-system-modules-opengl (ui-sdl, ui-opengl,
+# virtio-vga-gl). OSMO_PMOS_HOST_QEMU=0 goes back to the chroot QEMU.
 QEMU_MODDIR=/usr/lib/x86_64-linux-gnu/qemu
 if [ -z "${OSMO_PMOS_HOST_QEMU:-}" ]; then
     if [ -e "$QEMU_MODDIR/ui-opengl.so" ] && [ -e "$QEMU_MODDIR/ui-sdl.so" ] && [ -e "$QEMU_MODDIR/hw-display-virtio-vga-gl.so" ]; then
@@ -382,13 +357,11 @@ _lance() {
         "$@"
 }
 _mort_tot() { [ "$1" -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 25 ]; }
-# [2026-10-15] L OPENGL D ABORD, ET JUSQU AU BOUT. Le premier repli etait
-# « sans OpenGL » (virtio-vga en rendu logiciel) : c est exactement l affichage
-# en paves, « tout moche », et il partait des que QEMU mourait dans les 25 s,
-# quelle qu en soit la cause (sudo, image verrouillee, port pris). On essaie
-# donc d abord GTK puis sans KVM, TOUJOURS avec OpenGL ; le rendu logiciel ne
-# vient qu en dernier, et il le dit. OSMO_PMOS_GL=1 est pose d office (hote
-# NVIDIA : pmbootstrap le couperait sinon dans certains cas).
+# OPENGL FIRST, ALL THE WAY. Software rendering (virtio-vga without GL) is
+# exactly the colour-block display, so the fallbacks try the chroot QEMU,
+# then GTK, then without KVM, ALWAYS with OpenGL; software rendering only
+# comes last, and says so. OSMO_PMOS_GL=1 is set by default (NVIDIA host:
+# pmbootstrap would otherwise disable it in some cases).
 export OSMO_PMOS_GL="${OSMO_PMOS_GL:-1}"
 t0=$(date +%s); _lance "$@"; rc=$?
 if _mort_tot "$rc" && [ "$OSMO_PMOS_HOST_QEMU" = 1 ]; then
@@ -407,8 +380,8 @@ if _mort_tot "$rc" && [ "$OSMO_PMOS_GL" != 0 ]; then
     echo "osmo-pmos-qemu: encore mort ($rc) - DERNIER RECOURS : sans OpenGL (OSMO_PMOS_GL=0) - l affichage sera en paves"
     export OSMO_PMOS_GL=0; t0=$(date +%s); _lance "$@"; rc=$?
 fi
-# La VM s est arretee (fenetre fermee, extinction depuis Phosh, echec) : le
-# bouclage direct de l hote revient - sans lui, plus personne n ecoute gsm_audio.
+# The VM stopped (window closed, poweroff from Phosh, failure): the host
+# direct loopback comes back - without it, nobody listens to gsm_audio.
 [ -n "$AUDIO_LIB" ] && { ensure_local_loopback; ensure_local_mic; } 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
 [ "$rc" -eq 0 ] || read -r -p "pmbootstrap a echoue ($rc). Entree pour fermer " _
 exit "$rc"

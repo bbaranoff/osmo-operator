@@ -1,34 +1,34 @@
 #!/bin/bash
 # =============================================================================
-# build-pmos-kernel-deb.sh - LE NOYAU postmarketOS AVEC PPP, EN .deb.
+# build-pmos-kernel-deb.sh - THE postmarketOS KERNEL WITH PPP, AS A .deb.
 #
-# [2026-09-08] Le noyau du telephone (linux-postmarketos-stable, rebati avec
-# CONFIG_PPP pour la data 4G du modem du banc) est un .apk signe par la cle
-# du build pmbootstrap. Il se construit en 15 a 40 minutes, sous un compte
-# NON root, avec des montages de boucle : impossible dans un `docker build`.
-# Ce script prend donc le noyau DEJA CONSTRUIT (le dossier de travail
-# pmbootstrap de la machine de reference) et en fait un paquet Debian :
+# The phone kernel (linux-postmarketos-stable, rebuilt with CONFIG_PPP for the
+# 4G data of the bench modem) is an .apk signed by the pmbootstrap build key.
+# It builds in 15 to 40 minutes, under a NON-root account, with loop mounts:
+# impossible inside a `docker build`. This script therefore takes the ALREADY
+# BUILT kernel (the pmbootstrap work folder of the reference machine) and
+# turns it into a Debian package:
 #
 #     osmo-build-pmos-kernel_<version>+ppp~<suite>_<arch>.deb
 #
-# qui pose, sous /opt/user_interface/kernel/pmos/ :
-#     linux-postmarketos-stable-<ver>.apk   le noyau (modules PPP signes dedans)
-#     APKINDEX.tar.gz                       l index du depot local pmbootstrap
-#     <cle>.rsa.pub                         la cle PUBLIQUE qui a signe l apk
-#     pmaports.commit                       le commit pmaports d ou il vient
-#     pmaports-linux-postmarketos-stable-ppp.patch   la config (CONFIG_PPP=m...)
+# which installs, under /opt/user_interface/kernel/pmos/:
+#     linux-postmarketos-stable-<ver>.apk   the kernel (signed PPP modules inside)
+#     APKINDEX.tar.gz                       the index of the local pmbootstrap repo
+#     <key>.rsa.pub                         the PUBLIC key that signed the apk
+#     pmaports.commit                       the pmaports commit it comes from
+#     pmaports-linux-postmarketos-stable-ppp.patch   the config (CONFIG_PPP=m...)
 #
-# tools/osmo-pmos-build.sh sait lire ce dossier : il copie l apk et l index
-# dans le depot local de pmbootstrap, la cle dans config_apk_keys, et
-# « pmbootstrap install » prend ce noyau-la sans rien recompiler.
+# tools/osmo-pmos-build.sh knows how to read this folder: it copies the apk
+# and the index into the local pmbootstrap repo, the key into config_apk_keys,
+# and « pmbootstrap install » takes that kernel without recompiling anything.
 #
-# Le .deb va dans /opt/user_interface/kernel/ (c est la qu on le range) ET
-# dans /var/cache/osmo-debs/ : iso_modules/50-injection-image.sh y prend tous
-# les osmo-build-*.deb de la suite, le noyau part donc dans l ISO tout seul.
+# The .deb goes into /opt/user_interface/kernel/ (where it is stored) AND into
+# /var/cache/osmo-debs/: iso_modules/50-injection-image.sh takes every
+# osmo-build-*.deb of the suite from there, so the kernel goes into the ISO by itself.
 #
-#   sudo packaging/build-pmos-kernel-deb.sh [dossier de travail pmbootstrap]
-#       defaut : le dossier « work » du pmbootstrap_v3.cfg du compte de session
-#                (SUDO_USER), sinon ~<user>/test, sinon $OSMO_PMB_WORK
+#   sudo packaging/build-pmos-kernel-deb.sh [pmbootstrap work folder]
+#       default: the « work » folder of the session account's pmbootstrap_v3.cfg
+#                (SUDO_USER), otherwise ~<user>/test, otherwise $OSMO_PMB_WORK
 # =============================================================================
 set -euo pipefail
 
@@ -43,7 +43,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC
 say() { echo -e "${CYAN}→${NC} $*"; }; ok() { echo -e "${GREEN}✓${NC} $*"; }
 die() { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
-# Le dossier de travail pmbootstrap : argument, sinon celui du compte de session.
+# The pmbootstrap work folder: argument, otherwise the session account's.
 _user="${SUDO_USER:-}"
 [ -z "$_user" ] && [ -n "${PKEXEC_UID:-}" ] && _user="$(getent passwd "$PKEXEC_UID" | cut -d: -f1)"
 _home="$(getent passwd "${_user:-root}" | cut -d: -f6)"
@@ -58,8 +58,8 @@ fi
 
 apk="$(find "$WORK/packages" -name 'linux-postmarketos-stable-[0-9]*.apk' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)"
 [ -n "$apk" ] || die "aucun linux-postmarketos-stable-*.apk dans $WORK/packages - le noyau n a pas ete construit (osmo-pmos-build)"
-# (grep -q ferme le tube avant la fin de tar : sous pipefail ce serait un
-# faux echec - d ou la substitution de processus.)
+# (grep -q closes the pipe before tar ends: under pipefail that would be a
+# false failure - hence the process substitution.)
 grep -q 'ppp_async\.ko' < <(tar tzf "$apk" 2>/dev/null) || die "$apk n a PAS ppp_async.ko : ce n est pas le noyau PPP"
 ver="$(basename "$apk" .apk | sed 's/^linux-postmarketos-stable-//')"          # 7.2.3-r0
 dver="$(echo "$ver" | sed 's/-r/./')+ppp"                                       # 7.2.3.0+ppp
@@ -118,5 +118,5 @@ dpkg-deb --build --root-owner-group -Zzstd "$stage" "$deb" >/dev/null 2>&1 \
     || dpkg-deb --build --root-owner-group -Zxz "$stage" "$deb" >/dev/null
 cp -f "$deb" "$CACHE/"
 ok "$deb ($(du -h "$deb" | cut -f1)) - copie dans $CACHE"
-# Et pose sur cette machine : /opt/user_interface/kernel/pmos rempli.
+# And installed on this machine: /opt/user_interface/kernel/pmos filled.
 dpkg -i --force-overwrite "$deb" >/dev/null 2>&1 && ok "pose : $KDIR/pmos/" || echo "  (dpkg -i a echoue : dpkg -i $deb)"

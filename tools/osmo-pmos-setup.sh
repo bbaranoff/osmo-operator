@@ -1,22 +1,24 @@
 #!/bin/bash
-# osmo-pmos-setup - prepare la VM postmarketOS pour le modem du banc.
+# osmo-pmos-setup - prepares the postmarketOS VM for the bench modem.
 #
-# A lancer depuis l hote, la VM demarree (SSH sur 2222). Il applique, de facon
-# PERSISTANTE :
-#   - le DNS : postmarketOS passe par systemd-resolved, qui n a aucun serveur
-#     en QEMU (d ou « pas de reseau » alors que l IP et la route sont bonnes) ;
-#   - le pilote ftdi_sio : le modem du banc arrive en USB serie (QEMU emule un
-#     FTDI 0403:6001) et sans ce module il n y a pas de /dev/ttyUSB0 ;
-#   - la regle udev qui dit a ModemManager de sonder ce port, sinon il l ignore.
+# Run from the host, with the VM started (SSH on 2222). It applies,
+# PERSISTENTLY:
+#   - the DNS: postmarketOS goes through systemd-resolved, which has no server
+#     under QEMU (hence "no network" while the IP and route are fine);
+#   - the udev rule that tells ModemManager to probe the modem port (a PCI
+#     serial port), otherwise it ignores it;
+#   - the wired link hidden from the phone, so that data goes through the
+#     mobile connection (PPP of the bench);
+#   - the voice wiring (--voix): host audio and the two sound cards of the VM.
 set -u
 PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 PASS="${OSMO_PMOS_PASS:-147147}"
 USER_VM="${OSMO_PMOS_USER:-user}"
 ssh_vm() { sshpass -p "$PASS" ssh -p "$PORT" -T -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     -o ConnectTimeout=8 -o PreferredAuthentications=password "$USER_VM@127.0.0.1" "$@"; }
-# [2026-09-09] lib/audio.sh : l affectation des haut-parleurs et du micro de
-# l hote (annuleur d echo, bouclages directs) - une seule source de verite,
-# partagee avec audio-chain.sh (boot), start-native et osmo-pmos-qemu.
+# lib/audio.sh: the assignment of the host speakers and microphone (echo
+# canceller, direct loopbacks) - a single source of truth, shared with
+# audio-chain.sh (boot), start-native and osmo-pmos-qemu.
 AUDIO_LIB="${OSMO_REPO:-/opt/GSM/osmo-operator}/lib/audio.sh"
 if [ -f "$AUDIO_LIB" ]; then
     # shellcheck source=../lib/audio.sh
@@ -24,47 +26,47 @@ if [ -f "$AUDIO_LIB" ]; then
 else
     AUDIO_LIB=""
 fi
-# [2026-09-09] LA VOIX EN FONCTION, ET SEULE SI ON VEUT (osmo-pmos-setup --voix).
-# Sans modem (OSMO_PMOS_MODEM=0) rien ne basculait la VM sur sa carte
-# « combine » : la sortie par defaut restait le PONT (0x12), dont la lecture
-# part dans gsm_mic - le telephone semblait muet. osmo-pmos-qemu appelle
-# --voix des que le SSH repond quand il ne branche pas le modem.
+# THE VOICE AS A FUNCTION, callable alone (osmo-pmos-setup --voix).
+# Without a modem (OSMO_PMOS_MODEM=0) the VM must still be switched to its
+# "combine" card, otherwise the default output stays the BRIDGE (0x12), whose
+# playback goes into gsm_mic. osmo-pmos-qemu calls --voix as soon as SSH
+# answers when it does not connect the modem.
 voix() {
-# [2026-09-07] LA VOIX, ET POURQUOI IL FAUT DEUX CARTES SON. QEMU ne sait pas
-# pousser du son dans le haut-parleur d un invite : d une carte emulee, la
-# LECTURE part vers un sink de l hote et la CAPTURE vient d une source de
-# l hote. Le descendant de l appel (gsm_audio) vit cote hote : il ne peut donc
-# entrer dans la VM que par sa capture, jamais par son haut-parleur. Avec une
-# seule carte la VM a le point de vue du RESEAU - elle entend le correspondant
-# dans son micro - et Calls reste muet.
+# THE VOICE, AND WHY TWO SOUND CARDS ARE NEEDED. QEMU cannot push sound into
+# a guest's speaker: from an emulated card, PLAYBACK goes to a host sink and
+# CAPTURE comes from a host source. The call downlink (gsm_audio) lives host
+# side: it can only enter the VM through its capture, never through its
+# speaker. With a single card the VM has the NETWORK's point of view - it
+# hears the peer in its microphone - and Calls stays mute.
 #
-# La VM a donc deux cartes, posees par pmbootstrap (osmo_bench_args) :
-#   0000:00:12.0  le PONT    : capture = gsm_audio.monitor (le descendant),
-#                              lecture = gsm_mic (le montant) ;
-#   0000:00:13.0  le COMBINE : les peripheriques par defaut de l hote, tes
-#                              vrais haut-parleurs et ton vrai micro.
-# On les croise DANS la VM : pont -> combine pour entendre, combine -> pont
-# pour parler. La VM est alors reellement dans le trajet de la voix.
+# So the VM has two cards, set by pmbootstrap (osmo_bench_args):
+#   0000:00:12.0  the BRIDGE  : capture = gsm_audio.monitor (the downlink),
+#                               playback = gsm_mic (the uplink);
+#   0000:00:13.0  the HANDSET : the host default devices, the real speakers
+#                               and the real microphone.
+# They are crossed INSIDE the VM: bridge -> handset to hear, handset ->
+# bridge to speak. The VM is then really in the voice path.
 #
-# Et on coupe les deux bouclages DIRECTS de l hote (gsm_audio.monitor vers les
-# haut-parleurs, micro vers gsm_mic) : sans ca la voix arrive DEUX fois, une
-# fois en direct et une fois par la VM avec sa latence en plus - un echo franc.
-# OSMO_PMOS_RELAI=0 pour ne pas toucher a l audio.
+# And the two DIRECT host loopbacks (gsm_audio.monitor to the speakers,
+# microphone to gsm_mic) are cut: otherwise the voice arrives TWICE, once
+# directly and once through the VM with its added latency - a plain echo.
+# OSMO_PMOS_RELAI=0 to leave the audio alone.
 if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     echo "--- voix"
-    # [2026-09-09] L AFFECTATION DES HP ET DU MICRO VIENT DE lib/audio.sh, seule
-    # source de verite (voir « L AFFECTATION DES HAUT-PARLEURS » la-bas) : les
-    # bouclages directs de l hote sont retires, l annuleur d echo pose (ou deja
-    # la, osmo-pmos-qemu le charge avant QEMU) et devient le defaut, et les flux
-    # QEMU « combine » vont sur lui - audio_hp_sink / audio_mic_source.
+    # THE SPEAKER AND MICROPHONE ASSIGNMENT COMES FROM lib/audio.sh, the
+    # single source of truth (see "L AFFECTATION DES HAUT-PARLEURS" there):
+    # the host direct loopbacks are removed, the echo canceller is loaded (or
+    # already there, osmo-pmos-qemu loads it before QEMU) and becomes the
+    # default, and the QEMU "combine" streams go to it - audio_hp_sink /
+    # audio_mic_source.
     HP_SINK=""; MIC_SRC=""
     if [ -n "$AUDIO_LIB" ]; then
         ensure_echo_cancel
         ensure_record_mix
-        # [2026-09-09] LA VOIX RESTE SUR L HOTE (cf. lib/audio.sh, « QUI PORTE
-        # LA VOIX »). OSMO_PMOS_VOIX_VM=1 la fait passer par la VM : on depose
-        # alors le marqueur AVANT d appeler les fonctions, pour qu elles
-        # retirent les bouclages directs au lieu de les reposer.
+        # THE VOICE STAYS ON THE HOST (see lib/audio.sh, "QUI PORTE LA
+        # VOIX"). OSMO_PMOS_VOIX_VM=1 routes it through the VM: the marker
+        # is then written BEFORE calling the functions, so that they remove
+        # the direct loopbacks instead of re-adding them.
         if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
             : > "$PMOS_VOIX_VM_MARQUEUR" 2>/dev/null
             remove_direct_loopbacks
@@ -81,13 +83,12 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         echo "  ATTENTION : lib/audio.sh introuvable (OSMO_REPO ?) - l audio de l hote n est pas regle"
     fi
 
-    # [2026-09-07] LES SOURDINES QUI REVIENNENT. Le descendant traverse quatre
-    # potentiometres, et il suffit d UN sur muet pour que la voix disparaisse
-    # sans qu aucun bouclage ne manque. Deux sont cote hote : le flux QEMU
-    # « combine » (la sortie de la VM vers tes haut-parleurs) et le sink des
-    # haut-parleurs. PulseAudio les MEMORISE par nom d application
-    # (module-stream-restore) : une fois coupe, le flux revient coupe a chaque
-    # lancement. On les rouvre donc a chaque mise en service.
+    # THE MUTES THAT COME BACK. The downlink crosses four volume controls,
+    # and ONE on mute is enough for the voice to vanish with no loopback
+    # missing. Two are host side: the QEMU "combine" stream (the VM output to
+    # the speakers) and the speaker sink. PulseAudio REMEMBERS them by
+    # application name (module-stream-restore): once muted, the stream comes
+    # back muted at every launch. So they are unmuted at every setup.
     for i in $(pactl list sink-inputs short 2>/dev/null | cut -f1); do
         pactl set-sink-input-mute "$i" 0 2>/dev/null
         pactl set-sink-input-volume "$i" 100% 2>/dev/null
@@ -95,9 +96,9 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     for o in $(pactl list source-outputs short 2>/dev/null | cut -f1); do
         pactl set-source-output-mute "$o" 0 2>/dev/null
     done
-    # Les flux QEMU de la carte « combine » (media.name=combine) sur les HP et
-    # le micro de l operateur - ils y sont deja quand osmo-pmos-qemu les a
-    # nommes au lancement (OSMO_PMOS_HP / OSMO_PMOS_MIC), sinon on les y met.
+    # The QEMU streams of the "combine" card (media.name=combine) on the
+    # operator's speakers and microphone - already there when osmo-pmos-qemu
+    # named them at launch (OSMO_PMOS_HP / OSMO_PMOS_MIC), otherwise moved.
     if [ -n "$MIC_SRC" ]; then
         for so in $(pactl list source-outputs 2>/dev/null | awk '/Source Output #/{id=$3} /media.name = "combine"/{print id}' | tr -d '#'); do
             pactl move-source-output "$so" "$MIC_SRC" 2>/dev/null
@@ -110,10 +111,10 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     fi
     pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null
     pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null && echo "  sourdines de l hote levees (haut-parleur et micro)"
-    # [2026-09-09] speech-dispatcher (module dummy) joue un message factice grave
-    # et fort dans les haut-parleurs quand une appli demande une synthese vocale :
-    # on l envoie dans le sink poubelle osmo_tts_off (cf. lib/audio.sh) ; stream-
-    # restore s en souviendra pour les flux suivants.
+    # speech-dispatcher (dummy module) plays a loud, low dummy message in the
+    # speakers when an application requests speech synthesis: it is sent to
+    # the osmo_tts_off trash sink (see lib/audio.sh); stream-restore remembers
+    # it for the following streams.
     pactl list short sinks 2>/dev/null | grep -qw osmo_tts_off \
         || pactl load-module module-null-sink sink_name=osmo_tts_off format=s16le rate=8000 channels=1 sink_properties=device.description=TTS_off >/dev/null 2>&1
     for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /application.name = "speech-dispatcher/{print id}' | tr -d '#'); do
@@ -128,13 +129,13 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
             pactl list sinks short 2>/dev/null
             exit 0
         fi
-        # Le combine devient le peripherique par defaut : sinon la sonnerie et
-        # les notifications de Phosh partiraient dans le montant de l appel.
+        # The handset becomes the default device: otherwise the Phosh ringtone
+        # and notifications would go into the call uplink.
         pactl set-default-sink "$COMB_OUT"
         pactl set-default-source "$COMB_IN"
-        # Les deux autres potentiometres du descendant sont ici : Phosh coupe
-        # volontiers le combine (touche volume, mode silencieux) et la voix
-        # meurt la, bouclages en place. On les rouvre.
+        # The two other downlink volume controls are here: Phosh readily
+        # mutes the handset (volume key, silent mode) and the voice dies
+        # there, loopbacks in place. Unmute them.
         for c in "$PONT_OUT" "$COMB_OUT"; do
             pactl set-sink-mute "$c" 0 2>/dev/null
             pactl set-sink-volume "$c" 100% 2>/dev/null
@@ -142,10 +143,9 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         for c in "$PONT_IN" "$COMB_IN"; do
             pactl set-source-mute "$c" 0 2>/dev/null
         done
-        # [2026-09-09] IDEMPOTENT POUR DE VRAI. On rechargeait les deux
-        # bouclages a chaque passage : relancer osmo-pmos-setup pendant un
-        # appel coupait la voix une demi-seconde. Si les deux sont deja la,
-        # epingles, avec les bons bouts, on n y touche pas.
+        # IDEMPOTENT. If both loopbacks are already there, pinned, with the
+        # right ends, they are left alone (reloading them during a call
+        # would cut the voice for half a second).
         deja=$(pactl list short modules 2>/dev/null | grep -c "module-loopback.*sink_dont_move=true")
         if [ "$deja" = "2" ] \
            && pactl list short modules 2>/dev/null | grep -q "source=$PONT_IN.*sink=$COMB_OUT" \
@@ -153,24 +153,20 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
             echo "  bouclages deja en place et epingles - inchanges"
             exit 0
         fi
-        # [2026-09-09] LE PULSE DE LA VM NE DOIT PLUS SUSPENDRE SES CARTES.
-        # module-suspend-on-idle endort un sink des que plus personne ne joue :
-        # QEMU FERME alors ses flux cote hote. Deux degats. Un, l hote ne voit
-        # plus le telephone (il le reconnait desormais a son processus, cf.
-        # lib/audio.sh) ; deux, chaque reveil renegocie la latence des deux
-        # cartes emulees, et c est la que la voix casse - « ca marche les deux
-        # premieres fois et apres non ». Nos bouclages tiennent les cartes
-        # eveillees, mais pas avant qu ils soient poses : on retire le module.
+        # THE VM PULSE MUST NOT SUSPEND ITS CARDS. module-suspend-on-idle
+        # puts a sink to sleep as soon as nobody plays: QEMU then CLOSES its
+        # host-side streams, and each wake-up renegotiates the latency of the
+        # two emulated cards, which breaks the voice. The loopbacks keep the
+        # cards awake, but not before they are loaded: the module is removed.
         for m in $(pactl list modules short 2>/dev/null | grep module-suspend-on-idle | cut -f1); do
             pactl unload-module "$m" 2>/dev/null && echo "  mise en veille des cartes desactivee (module-suspend-on-idle)"
         done
-        # [2026-09-09] LE CROISEMENT DES DEUX CARTES N EST PLUS LE DEFAUT.
-        # Sans lui, la VM ne porte plus la voix : elle garde ses cartes pour la
-        # sonnerie, les notifications et l application Appels, et l operateur
-        # entend l appel par l hote (40 ms au lieu de ~800). On RETIRE donc les
-        # bouclages qu une mise en service precedente aurait laisses, et on ne
-        # repose que si l hote l a demande (OSMO_PMOS_VOIX_VM=1, passe ici par
-        # la variable VOIX_VM).
+        # CROSSING THE TWO CARDS IS NOT THE DEFAULT. Without it, the VM does
+        # not carry the voice: it keeps its cards for the ringtone, the
+        # notifications and the Calls application, and the operator hears the
+        # call through the host (40 ms instead of ~800). So the loopbacks left
+        # by a previous setup are REMOVED, and only re-added if the host asked
+        # for it (OSMO_PMOS_VOIX_VM=1, passed here as the VOIX_VM variable).
         for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
             pactl unload-module "$m" 2>/dev/null
         done
@@ -178,26 +174,20 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
             echo "  cartes non croisees : la voix reste sur l hote"
             exit 0
         fi
-        # Idempotent : on retire les bouclages precedents avant de reposer.
-        # [2026-09-08] 200 ms et pas 40 : a 40 ms PulseAudio, dans la VM,
-        # notait « Too many underruns, increasing latency » et la voix
-        # craquait (echo du 600 brouille). Une VM n a pas la regularite d une
-        # carte son ; 200 ms restent imperceptibles sur un appel.
-        # [2026-09-09] adjust_time=0 ET 400 ms. Le mobile ecrit son audio par
-        # trames de 20 ms au rythme du L1 : avec l ajustement de cadence par
-        # defaut (adjust_time=10), module-loopback re-echantillonnait sans
-        # cesse pour tenir ses 200 ms - mesure sur l hote : sauts de retard de
-        # 46 ms en pleine parole, correlation de forme d onde 0,29 en appel
-        # contre 0,87 en injection directe ; a l oreille « deux flux qui se
-        # superposent », voix pourrie. Cadence fixe + 400 ms de tampon :
-        # correlation 1,00 sur tout l appel, retard stable a 497 ms.
+        # Idempotent: the previous loopbacks are removed before re-adding.
+        # adjust_time=0 AND 400 ms: the mobile writes its audio in 20 ms
+        # frames at the L1 pace; with the default rate adjustment
+        # (adjust_time=10), module-loopback resamples constantly and the
+        # voice breaks up. A VM lacks the regularity of a sound card: a
+        # fixed rate plus a 400 ms buffer gives a stable delay, imperceptible
+        # on a call.
         for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
             pactl unload-module "$m" 2>/dev/null
         done
-        # [2026-09-09] EPINGLES (dont_move) : callaudiod / Phosh changent le
-        # peripherique par defaut A CHAQUE APPEL (journal : « card has no voice
-        # profile and no usable sink ») et PulseAudio deplace alors tout flux
-        # non epingle - les deux bouclages partaient ailleurs des le decroche.
+        # PINNED (dont_move): callaudiod / Phosh change the default device AT
+        # EVERY CALL (journal: "card has no voice profile and no usable
+        # sink") and PulseAudio then moves every unpinned stream - the two
+        # loopbacks would go elsewhere as soon as the call is answered.
         pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
             && echo "  descendant : pont -> combine (on entend)"
         pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
@@ -206,8 +196,8 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
 fi
 }
 
-# [2026-09-08] ON ATTEND LE SSH. Lance a la main pendant que la VM demarre
-# encore, tout echouait (« n a pas acces ») : on patiente jusqu a 90 s.
+# WAIT FOR SSH. Launched by hand while the VM is still booting, everything
+# would fail: wait up to 90 s.
 for _ in $(seq 1 45); do
     ssh_vm 'echo ok' 2>/dev/null | grep -q ok && break
     [ "$_" -eq 1 ] && echo "  la VM ne repond pas encore en SSH (port $PORT), on attend..."
@@ -218,20 +208,20 @@ if [ "${1:-}" = "--voix" ] || [ "${1:-}" = "voix" ]; then voix; exit 0; fi
 
 ssh_vm "echo $PASS | sudo -S -p '' sh -c '
     mkdir -p /etc/systemd/resolved.conf.d
-    # DNSSEC=no : le DNS interne de QEMU (10.0.2.3) ne signe pas ses reponses,
-    # et resolved refusait tout - « DNSSEC validation failed: no-signature ».
+    # DNSSEC=no: the internal QEMU DNS (10.0.2.3) does not sign its answers,
+    # and resolved would refuse everything (DNSSEC validation failed).
     printf \"[Resolve]\nDNS=10.0.2.3 1.1.1.1\nFallbackDNS=8.8.8.8\nDNSSEC=no\nDNSOverTLS=no\n\" \
         > /etc/systemd/resolved.conf.d/osmo.conf
     systemctl restart systemd-resolved 2>/dev/null
 
-    # Le modem arrive sur un port serie PCI : 8250_pci est integre a ce noyau,
-    # il n y a donc aucun module a charger (ftdi_sio, lui, n existe pas ici).
+    # The modem arrives on a PCI serial port: 8250_pci is built into this
+    # kernel, so there is no module to load (ftdi_sio does not exist here).
 
     mkdir -p /etc/udev/rules.d
-    # [2026-09-08] DEUX PORTS, UN SEUL MODEM. hvc0 = commande, hvc1 = donnees
-    # (ID_MM_PORT_TYPE_AT_PPP : c est la que ModemManager compose ATD*99), et
-    # le meme ID_MM_PHYSDEV_UID pour que MM les regroupe en un modem au lieu
-    # d en voir deux. ttyS[1-9] : le 16550 de OSMO_PMOS_SERIAL=pci.
+    # TWO PORTS, ONE MODEM. hvc0 = command, hvc1 = data
+    # (ID_MM_PORT_TYPE_AT_PPP: where ModemManager dials ATD*99), and the same
+    # ID_MM_PHYSDEV_UID so that MM groups them into one modem instead of
+    # seeing two. ttyS[1-9]: the 16550 of OSMO_PMOS_SERIAL=pci.
     {
       printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"hvc0\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_PHYSDEV_UID}=\\\"osmo-banc\\\", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}=\\\"1\\\"\n\"
       printf \"ACTION==\\\"add|change\\\", SUBSYSTEM==\\\"tty\\\", KERNEL==\\\"hvc1\\\", ENV{ID_MM_DEVICE_PROCESS}=\\\"1\\\", ENV{ID_MM_PHYSDEV_UID}=\\\"osmo-banc\\\", ENV{ID_MM_PORT_TYPE_AT_PPP}=\\\"1\\\"\n\"
@@ -239,34 +229,31 @@ ssh_vm "echo $PASS | sudo -S -p '' sh -c '
     } > /etc/udev/rules.d/99-osmo-modem.rules
     udevadm control --reload 2>/dev/null
     udevadm trigger --subsystem-match=tty 2>/dev/null
-    # [2026-09-08] Le port modem est un virtconsole (/dev/hvc0) : le
-    # generateur getty de systemd ouvre une invite de login sur la premiere
-    # console de virtualisation, et c est elle qui repondait au modem
-    # (« pmos-gsm login: ATE0 »). On la masque, le port est au modem seul.
+    # The modem port is a virtconsole (/dev/hvc0): the systemd getty
+    # generator opens a login prompt on the first virtualisation console,
+    # which would answer the modem. It is masked, the port is the modem only.
     systemctl mask --now serial-getty@hvc0.service getty@hvc0.service serial-getty@hvc1.service getty@hvc1.service >/dev/null 2>&1
 
-    # [2026-09-07] LA DATA : pppd et le greffon PPP de NetworkManager. Sans
-    # eux, ATD*99 aboutit a CONNECT puis NO CARRIER une seconde plus tard
-    # (« PPP failed to start: libnm-ppp-plugin.so is not installed »). Le
-    # noyau doit avoir PPP (build-pm.sh) ; les modules se chargent au boot.
-    # [2026-09-08] Le filaire n a plus de route par defaut (voir le bloc
-    # suivant) : pour apk, on la lui rend le temps de ce bloc, avec le DNS
-    # de QEMU, et le service osmo-filaire la retire juste apres.
+    # DATA: pppd and the NetworkManager PPP plugin. Without them, ATD*99
+    # ends in CONNECT then NO CARRIER one second later (PPP failed to start:
+    # libnm-ppp-plugin.so is not installed). The kernel must have PPP
+    # (build-pm.sh); the modules load at boot.
+    # The wired link has no default route (see the next block): for apk it
+    # is restored for the duration of this block, with the QEMU DNS, and the
+    # osmo-filaire service removes it right after.
     ip route replace default via 10.0.2.2 dev eth0 2>/dev/null
     resolvectl dns eth0 10.0.2.3 2>/dev/null; resolvectl default-route eth0 yes 2>/dev/null
     apk info -e ppp networkmanager-ppp >/dev/null 2>&1 \
         || apk add ppp networkmanager-ppp 2>&1 | tail -n 1
-    # networkmanager et networkmanager-ppp DOIVENT etre de la meme version :
-    # NM cherche le greffon dans /usr/lib/NetworkManager/<sa version>/. apk add
-    # du greffon avait pris 1.58 sur le depot alors que l image portait NM
-    # 1.56 : « libnm-ppp-plugin.so is not installed », et pas de PPP.
+    # networkmanager and networkmanager-ppp MUST be the same version: NM
+    # looks for the plugin in /usr/lib/NetworkManager/<its version>/.
     NMV=\$(apk info -v 2>/dev/null | grep -oE \"^networkmanager-[0-9.]+\" | head -n1 | sed \"s/^networkmanager-//\")
     NMP=\$(apk info -v 2>/dev/null | grep -oE \"^networkmanager-ppp-[0-9.]+\" | head -n1 | sed \"s/^networkmanager-ppp-//\")
-    # TOUS les sous-paquets networkmanager-* (wwan, ppp, ...) : chacun pose son
-    # greffon dans le repertoire de SA version ; un seul en retard, et NM ne
-    # voit plus le modem (wwan) ou ne lance plus pppd (ppp).
+    # ALL the networkmanager-* sub-packages (wwan, ppp, ...): each installs
+    # its plugin in the directory of ITS version; a single one lagging, and
+    # NM no longer sees the modem (wwan) or no longer starts pppd (ppp).
     [ \"\$NMV\" = \"\$NMP\" ] || apk upgrade \$(apk info 2>/dev/null | grep -E \"^networkmanager\") ppp 2>&1 | tail -n 1
-    # Le journal bornait a rien : 168 Mo sur un disque de 2 Go, plein.
+    # The journal is bounded: unbounded it fills the 2 GB disk.
     mkdir -p /etc/systemd/journald.conf.d
     printf \"[Journal]\nSystemMaxUse=48M\n\" > /etc/systemd/journald.conf.d/osmo.conf
     journalctl --vacuum-size=40M >/dev/null 2>&1; rm -rf /var/cache/apk/*
@@ -278,19 +265,18 @@ ssh_vm "echo $PASS | sudo -S -p '' sh -c '
     mmcli --scan-modems 2>/dev/null | tail -n 1
 '" 2>&1 | tail -n 4
 
-# [2026-09-08] LA DATA PAR NOTRE 4G SEULEMENT. La carte virtio de QEMU (le
-# « filaire ») donnait au telephone une route par defaut et un DNS par le
-# NAT de QEMU : Phosh affichait une prise reseau et tout passait par la, la
-# 4G ne servait a rien. On ne peut pas retirer la carte de QEMU : c est par
-# elle (hostfwd 2222) que ce script parle a la VM. On la rend donc INVISIBLE
-# au telephone : NetworkManager ne la gere plus (driver virtio_net non gere),
-# un petit service lui laisse juste son adresse de gestion 10.0.2.15 sans
-# route par defaut ni DNS, resolved ne pointe plus sur le DNS de QEMU. Le
-# telephone n a plus qu une sortie : la connexion mobile (APN srsapn, creee
-# ici si elle manque, automatique), donc le PPP du banc, donc la radio.
-# OSMO_PMOS_FILAIRE=1 remet le filaire (gere par NM, DNS de QEMU).
-# Le basculement coupe une seconde l adresse par laquelle on est connecte :
-# il tourne detache dans la VM, et on attend le retour du SSH.
+# DATA THROUGH OUR 4G ONLY. The QEMU virtio card (the "wired" link) would
+# give the phone a default route and a DNS through the QEMU NAT, and
+# everything would go through it. The card cannot be removed from QEMU: it is
+# through it (hostfwd 2222) that this script talks to the VM. So it is made
+# INVISIBLE to the phone: NetworkManager no longer manages it (virtio_net
+# driver unmanaged), a small service leaves it only its management address
+# 10.0.2.15 without default route or DNS, resolved no longer points to the
+# QEMU DNS. The phone has only one way out: the mobile connection (APN
+# srsapn, created here if missing, automatic), hence the bench PPP, hence the
+# radio. OSMO_PMOS_FILAIRE=1 restores the wired link (managed by NM, QEMU
+# DNS). The switch cuts for a second the address we are connected through:
+# it runs detached in the VM, and we wait for SSH to come back.
 FILAIRE="${OSMO_PMOS_FILAIRE:-0}"
 { echo "$PASS"; echo "FILAIRE=$FILAIRE"; cat <<'GUEST'
 set -u
@@ -302,9 +288,9 @@ if [ "$FILAIRE" = 0 ]; then
     printf '[keyfile]\nunmanaged-devices=driver:virtio_net\n' > "$CONF"
     cat > "$BIN" <<'EOB'
 #!/bin/sh
-# osmo-filaire - la carte virtio de QEMU garde son adresse de gestion (SSH
-# depuis l hote par hostfwd), sans route par defaut ni DNS : la data du
-# telephone passe par la connexion mobile, donc par le PPP du banc.
+# osmo-filaire - the QEMU virtio card keeps its management address (SSH from
+# the host through hostfwd), without default route or DNS: the phone data
+# goes through the mobile connection, hence through the bench PPP.
 for d in /sys/class/net/*; do
     n=${d##*/}
     drv=$(basename "$(readlink "$d/device/driver" 2>/dev/null)" 2>/dev/null)
@@ -312,7 +298,7 @@ for d in /sys/class/net/*; do
     ip link set "$n" up
     ip addr replace 10.0.2.15/24 dev "$n"
     ip route del default dev "$n" 2>/dev/null
-    resolvectl revert "$n" 2>/dev/null     # plus de DNS de QEMU par ce lien
+    resolvectl revert "$n" 2>/dev/null     # no QEMU DNS through this link
 done
 exit 0
 EOB
@@ -330,21 +316,19 @@ WantedBy=multi-user.target
 EOS
     systemctl daemon-reload; systemctl enable osmo-filaire >/dev/null 2>&1
     printf '[Resolve]\nDNSSEC=no\nDNSOverTLS=no\n' > /etc/systemd/resolved.conf.d/osmo.conf
-    # Un seul profil mobile : celui que l utilisateur a deja cree (srsapn)
-    # sert tel quel, sinon on en cree un.
+    # A single mobile profile: the one the user already created (srsapn) is
+    # used as is, otherwise one is created.
     GSM=$(nmcli -t -f NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "gsm" {print $1; exit}')
     if [ -z "$GSM" ]; then
         nmcli con add type gsm ifname '*' con-name 'Osmocom 4G' apn srsapn \
             connection.autoconnect yes ipv4.route-metric 50 >/dev/null 2>&1 && GSM='Osmocom 4G'
     fi
-    # NetworkManager est REDEMARRE : apk vient parfois de le mettre a jour avec
-    # le greffon PPP, et le daemon encore en memoire cherche le greffon de SON
-    # numero de version (« libnm-ppp-plugin.so is not installed » alors qu il
-    # est la, dans le repertoire de la version neuve). Le fichier de
-    # configuration etant pose, il repart avec le filaire non gere.
-    # Detache par systemd-run : un simple « setsid ... & » meurt avec la
-    # session SSH (logind de la VM tue les processus de l utilisateur a la
-    # deconnexion), et rien ne se passait.
+    # NetworkManager is RESTARTED: apk may have just updated it with the PPP
+    # plugin, and the daemon still in memory looks for the plugin of ITS
+    # version number. The configuration file being in place, it restarts
+    # with the wired link unmanaged.
+    # Detached through systemd-run: a plain "setsid ... &" dies with the SSH
+    # session (the VM logind kills the user processes at disconnection).
     systemd-run --quiet --collect --unit "osmo-filaire-bascule-$$" sh -c "
         sleep 1
         systemctl restart NetworkManager
@@ -373,18 +357,16 @@ for _ in $(seq 1 20); do
 done
 ssh_vm 'echo ok' 2>/dev/null | grep -q ok || echo "  ATTENTION : la VM ne repond plus en SSH apres le basculement reseau"
 
-# Le modem du banc vient maintenant se brancher sur le port que QEMU tient
-# ouvert. On ne le fait qu ICI, systeme demarre : branche des le debut, le
-# firmware UEFI prend ses reponses pour des touches et n amorce jamais (voir
-# l entete de osmo-pmos-qemu).
+# The bench modem now connects to the port QEMU keeps open. Only HERE, with
+# the system booted: connected from the start, the UEFI firmware takes its
+# answers for keystrokes and never boots (see the osmo-pmos-qemu header).
 PORT_AT="${OSMO_PMOS_AT_PORT:-12346}"
 REPO="${OSMO_REPO:-/opt/GSM/osmo-operator}"
-# [2026-09-08] LE MODEM EN ROOT : la data du telephone est un lien PPP dont le
-# banc fait un tun (/dev/net/tun + TUNSETIFF), qu il pose dans l espace reseau
-# de srsUE avec un NAT vers tun_srsue. Tout cela exige root ; lance sous le
-# compte de session, le banc repondait CONNECT mais « la data n a pas de
-# sortie radio ». osmo-pmos-qemu a deja fait sudo -v dans ce terminal ; sinon
-# on demande si on a un terminal, et on se rabat sur l utilisateur en le disant.
+# THE MODEM AS ROOT: the phone data is a PPP link the bench turns into a tun
+# (/dev/net/tun + TUNSETIFF), placed in the srsUE network namespace with a
+# NAT towards tun_srsue. All of that requires root. osmo-pmos-qemu has
+# already done sudo -v in this terminal; otherwise ask if there is a
+# terminal, and fall back to the user, saying so.
 BANC_LOG="/tmp/osmo-phonesim-vm-$(id -un).log"
 BANC_SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -397,21 +379,18 @@ fi
 if pgrep -f "[o]smo-phonesim-banc.py --connect" >/dev/null 2>&1; then
     echo "  modem deja branche sur la VM"
 else
-    # La trace AT de CE modem dans son propre fichier : en root, les deux
-    # instances du banc ecrivaient dans /var/log/osmo-at-ofono.log et leurs
-    # dialogues se melangeaient (le sondage +CLCC de l hote au milieu des RING
-    # de la VM).
-    # sudo AVANT setsid : le cache du mot de passe est attache au terminal,
-    # et setsid s en detache - « sudo » lance sous setsid redemandait le mot
-    # de passe (« a terminal is required ») et le modem ne partait pas.
-    # --data : le port de donnees (hvc1, chardev QEMU sur PORT_AT+1), voir le
-    # modem a deux ports dans osmo-phonesim-banc.py.
-    # [2026-10-24] LA SORTIE RADIO, LE BANC LA CHOISIT (_radio_choix de
-    # osmo-phonesim-banc.py) : la 4G d abord (tun_srsue dans le netns ue1),
-    # sinon le PDP GPRS du modem osmocom-bb (tun_modem dans msgprs). On
-    # forcait ici OSMO_LTE_TUN=tun_modem OSMO_LTE_NETNS= : la branche 4G
-    # etait coupee, et tun_modem cherche sur l hote (il vit dans msgprs) -
-    # 4G attachee, telephone sans data. On ne redit plus rien.
+    # The AT trace of THIS modem in its own file: as root, the two bench
+    # instances would otherwise both write to /var/log/osmo-at-ofono.log and
+    # their dialogues would mix.
+    # sudo BEFORE setsid: the password cache is attached to the terminal,
+    # and setsid detaches from it - sudo launched under setsid would ask for
+    # the password again ("a terminal is required").
+    # --data: the data port (hvc1, QEMU chardev on PORT_AT+1), see the
+    # two-port modem in osmo-phonesim-banc.py.
+    # THE RADIO EGRESS IS CHOSEN BY THE BENCH (_radio_choix in
+    # osmo-phonesim-banc.py): 4G first (tun_srsue in the ue1 netns),
+    # otherwise the GPRS PDP of the osmocom-bb modem (tun_modem in msgprs).
+    # Nothing is forced here.
     $BANC_SUDO setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
         OSMO_PPP_DNS="${OSMO_PPP_DNS:-192.168.1.254,1.1.1.1}" \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$PORT_AT" --data "127.0.0.1:$((PORT_AT + 1))" \
@@ -421,15 +400,14 @@ else
         && echo "  modem du banc branche sur la VM (port $PORT_AT)" \
         || echo "  ATTENTION : le modem ne s est pas branche (cf. $BANC_LOG)"
 fi
-# [2026-09-08] MODEMMANAGER SONDE APRES LE BRANCHEMENT. Le redemarrage de MM
-# plus haut a lieu AVANT que le banc soit sur le port : la sonde de hvc0 tombe
-# dans le vide, MM raye le port et ne le ressonde plus (« No modems were
-# found » pour de bon). Un second redemarrage, le modem branche, et il le voit.
-# Et NetworkManager APRES ModemManager : relance (par la bascule reseau plus
-# haut) pendant que MM etait absent, NM notait « error creating ModemManager
-# client » et ne voyait jamais le modem ensuite - pas de device gsm, pas de
-# PPP, modem « disabled ». Detache par systemd-run : la relance de NM coupe
-# la session SSH qui la demande.
+# MODEMMANAGER PROBES AFTER THE CONNECTION. The MM restart above happens
+# BEFORE the bench is on the port: the hvc0 probe finds nothing, MM drops
+# the port and never probes it again. A second restart, with the modem
+# connected, and it sees it.
+# And NetworkManager AFTER ModemManager: restarted while MM is absent, NM
+# would log "error creating ModemManager client" and never see the modem
+# afterwards - no gsm device, no PPP. Detached through systemd-run: the NM
+# restart cuts the SSH session that requests it.
 ssh_vm "echo $PASS | sudo -S -p '' systemd-run --quiet --collect --unit osmo-mm-puis-nm sh -c 'systemctl restart ModemManager; sleep 6; systemctl restart NetworkManager'" >/dev/null 2>&1
 for _ in $(seq 1 20); do
     sleep 1
@@ -440,9 +418,9 @@ sleep 8
 voix
 
 echo "--- etat"
-# ModemManager vient d etre relance : il sonde le port pendant quelques
-# secondes, et « No modems were found » lu trop tot faisait croire a une
-# panne. On lui laisse jusqu a 40 s.
+# ModemManager has just been restarted: it probes the port for a few
+# seconds, and "No modems were found" read too early is misleading. Give it
+# up to 40 s.
 ssh_vm 'for i in $(seq 1 20); do mmcli -L 2>/dev/null | grep -q Modem/ && break; sleep 2; done
 ls /dev/hvc0 /dev/hvc1 /dev/ttyS[1-9] 2>/dev/null | head -n 4
 getent hosts alpinelinux.org >/dev/null 2>&1 && echo "DNS OK" || echo "DNS KO"
