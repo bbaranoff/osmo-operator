@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """tout-en-un.py - gathers every text file (sources, scripts, configs, docs,
-logs) of one or more directories into ONE Markdown/Quarto file, shortened
-WITHOUT LOSS:
+logs) of one or more directories into TWO Markdown/Quarto files, one for the
+code (scripts, sources, patches), one for docs, configs, results and logs,
+shortened WITHOUT LOSS:
 
   * identical files (same content): a single copy, the others refer to the first;
   * identical consecutive lines: "line  xN";
@@ -16,7 +17,8 @@ Usage:
     ./tout-en-un.py [directory...]   default: /opt/GSM/osmo-operator and the
                                      most recent /root/osmo-operator-*
 Environment:
-    SORTIE=/path.qmd    output file (default /root/osmo-operator-<date>.<FORMAT>)
+    SORTIE=/path.qmd    output base: writes /path-code.qmd and /path-docs.qmd
+                        (default /root/osmo-operator-<date>-{code,docs}.<FORMAT>)
     FORMAT=qmd|md       Quarto (default) or plain Markdown
     EXT="sh py c"       restrict to these extensions (default: every text file)
     SEUIL=3             minimum size of a compacted group
@@ -358,21 +360,44 @@ def rendre_md(lignes, md):
     return "\n".join(out)
 
 
+CODE = {"bash", "python", "c", "cpp", "makefile", "javascript", "css", "html", "diff", "dockerfile", "rust",
+        "sql", "lua", "perl"}                     # languages of the "code" bundle; the rest is docs and configs
+
+
+def partie(f):
+    """'code' or 'docs' (documentation, configs, results, logs)."""
+    if langage(f) in CODE or os.path.basename(f).startswith("Dockerfile"):
+        return "code"
+    return "docs"
+
+
+PARTIES = (("code", "code (scripts, sources, correctifs)"),
+           ("docs", "documentation, configs, résultats et logs"))
+
+
 def main():
     dossiers = sys.argv[1:] or dossiers_par_defaut()
-    vus, sections, table = {}, [], []
+    absents, tous = [], []
+    for d in dossiers:
+        if not os.path.isdir(d):
+            absents.append("| (absent) %s | | | | |" % d)
+            continue
+        tous.extend(fichiers(d))
+    base = SORTIE[:-len(FORMAT) - 1] if SORTIE.endswith("." + FORMAT) else SORTIE
+    for nom, libelle in PARTIES:
+        rapport(dossiers, [f for f in tous if partie(f) == nom], list(absents),
+                "%s-%s.%s" % (base, nom, FORMAT), libelle)
+
+
+def rapport(dossiers, tous, table, sortie, libelle):
+    """Write one bundle: the files tous, to sortie."""
+    vus, sections = {}, []
     total_in = total_out = 0
     # Order: test results first (.txt .md .mmd: verdicts, coverage, reports, grafcets),
     # then the bench files (sources, scripts, configs...), the .log files last
     CATEGORIES = (("Verdict et couverture", ()), ("Resultats des tests", ("txt", "md", "mmd", "tsv", "csv")),
                   ("Fichiers", None), ("Logs", ("log",)))          # Fichiers: everything else
     EN_TETE = ("verdict.txt", "couverture.txt")     # at the very top, in this order
-    tous = []
-    for d in dossiers:
-        if not os.path.isdir(d):
-            table.append("| (absent) %s | | | | |" % d)
-            continue
-        tous.extend(fichiers(d))
     def rang(f):
         if os.path.basename(f) in EN_TETE:
             return 0
@@ -430,11 +455,11 @@ def main():
                             % (reference(f), len(brut), len(lignes), len(compact), (" (%s)" % note) if note else "",
                                cloture, langage(f), "\n".join(compact), cloture))
     runs = sorted({os.path.basename(os.path.dirname(f)) for f in tous if os.path.basename(f) == "verdict.txt"})
-    with open(SORTIE, "w") as o:
+    with open(sortie, "w") as o:
         o.write("---\n")
         o.write("title: \"%s\"\n" % nom_depot())
         o.write("generator: tout-en-un.py\n")
-        o.write("subtitle: \"%s\"\n" % (", ".join(runs) if runs else ", ".join(dossiers)))
+        o.write("subtitle: \"%s — %s\"\n" % (libelle, ", ".join(runs) if runs else ", ".join(dossiers)))
         o.write("author: \"%s\"\n" % AUTEUR)
         o.write("date: \"%s\"\n" % time.strftime("%Y-%m-%d %H:%M"))
         o.write("lang: fr\n")
@@ -476,8 +501,8 @@ def main():
             o.write(t.strip("| ").split(" |")[0] + "\n")
         o.write("\n")
         o.write("\n".join(sections))
-    print("%s : %d fichiers (%d uniques), %d Ko -> %d Ko" % (SORTIE, len(tous), len(vus), total_in // 1024,
-                                                            os.path.getsize(SORTIE) // 1024))
+    print("%s : %d fichiers (%d uniques), %d Ko -> %d Ko" % (sortie, len(tous), len(vus), total_in // 1024,
+                                                            os.path.getsize(sortie) // 1024))
 
 
 if __name__ == "__main__":
