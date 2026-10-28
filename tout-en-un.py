@@ -46,9 +46,11 @@ IGNORES = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
            "osmo-operator-qmd"}                        # repository bundle made by another tool: everything twice
 BINAIRES = set("png jpg jpeg gif bmp ico webp pdf zip gz tgz bz2 xz 7z tar bin elf o a so pyc pyo pyd "
                "wav mp3 ogg mp4 sqlite db img iso woff woff2 ttf otf".split())
+DSP_DUMP = re.compile(r"(^calypso_dsp.*\.txt|^dsp-rom-.*\.txt|\.dis)$")   # DSP ROM dumps (not ours, megabytes of hex)
 SAUVEGARDES = re.compile(r"(~|\.orig|\.rej|\.swp|\.bak(-\w+)?)$")
 TITRE_SORTIE = (b"generator: tout-en-un.py",                         # a previous output of this script
                 "title: \"Banc GSM émulé — dossier de run\"".encode())
+HTML_SANS_COULEUR = 2_500_000                      # bytes: larger bundles get no syntax highlighting in html
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 TELNET = re.compile(rb"\xff[\xfb-\xfe].|\xff.")           # telnet (IAC) negotiation in VTY captures
 CONTROLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]")  # control characters, undecodable bytes
@@ -118,7 +120,7 @@ def langage(chemin):
 
 def texte_legitime(chemin, nom):
     """Text file of ours: not a binary, a backup, a licence or an output of this script."""
-    if extension(nom) in BINAIRES or SAUVEGARDES.search(nom) or nom in ("LICENSE", "COPYING"):
+    if extension(nom) in BINAIRES or SAUVEGARDES.search(nom) or DSP_DUMP.search(nom) or nom in ("LICENSE", "COPYING"):
         return False
     if nom.startswith("tout-en-un-"):
         return False
@@ -131,6 +133,8 @@ def texte_legitime(chemin, nom):
         return False
     if any(t in debut for t in TITRE_SORTIE):
         return False
+    if b'<meta name="generator" content="quarto-' in debut:   # page rendered by Quarto
+        return False
     return True
 
 
@@ -140,9 +144,16 @@ def dossiers_par_defaut():
     return ["/opt/GSM/osmo-operator"] + ([runs[-1]] if runs else [])
 
 
+
+
+def rendu_quarto(racine, d):
+    """d is the resource directory of a page rendered by Quarto (<name>_files next to <name>.html)."""
+    return d.endswith("_files") and os.path.exists(os.path.join(racine, d[:-len("_files")] + ".html"))
+
+
 def fichiers(dossier):
     for racine, dirs, noms in os.walk(dossier):
-        dirs[:] = sorted(d for d in dirs if d not in IGNORES)
+        dirs[:] = sorted(d for d in dirs if d not in IGNORES and not rendu_quarto(racine, d))
         for n in sorted(noms):
             chemin = os.path.join(racine, n)
             if EXT and extension(n) not in EXT:
@@ -321,7 +332,20 @@ def lien_md(m, md):
     return m.group(1) + cible + m.group(3)
 
 
+IMAGE = re.compile(r"(!\[[^\]]*\]\()([^)\s]+)((?:\s+\"[^\"]*\")?\))")
+
+
+def image_locale(cible, md):
+    """Relative image of the .md file md: path relative to the output file, so the page
+    embeds it offline (Quarto reads absolute paths as project-relative)."""
+    if re.match(r"^([a-zA-Z][\w+.-]*:|/|#)", cible):
+        return cible
+    chemin = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(md)), cible))
+    return os.path.relpath(chemin, os.path.dirname(os.path.abspath(SORTIE))) if os.path.exists(chemin) else cible
+
+
 def liens_github(l, md):
+    l = IMAGE.sub(lambda m: m.group(1) + image_locale(m.group(2), md) + m.group(3), l)
     l = LIEN.sub(lambda m: lien_md(m, md), l)
     return LIEN_REF.sub(lambda m: m.group(1) + lien_github(m.group(2), md) + m.group(3), l)
 
@@ -471,6 +495,11 @@ def rapport(dossiers, tous, table, sortie, libelle):
                     "    link-external-newwindow: true\n"
                     "    number-sections: true\n    embed-resources: true\n    theme: cosmo\n"
                     "    code-overflow: wrap\n    fontsize: 0.9em\n")
+            # Highlighting wraps every token in a <span>; past ~2.5 MB the DOM is
+            # too large for Quarto's HTML post-processing (RangeError: Maximum call
+            # stack size exceeded), so large bundles are rendered without it
+            if total_out > HTML_SANS_COULEUR:
+                o.write("    highlight-style: none\n")
             o.write("  pdf:\n    toc: true\n    toc-depth: 3\n    number-sections: true\n"
                     "    shift-heading-level-by: -1\n"      # "## Synthèse" = section 1, not 0.1
                     "    papersize: a4\n    geometry: margin=2cm\n    fontsize: 10pt\n"
