@@ -112,9 +112,6 @@ COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
 # image sources (archive.ubuntu.com), which may be unusably slow from the host
 # without apt saying so.
 ARG OSMO_UBUNTU_MIRROR=
-RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
-    && rm -rf /var/lib/apt/lists/*
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 1. System dependencies - ALL of them here. One list, one place to evolve it;
@@ -138,8 +135,15 @@ RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
         sed -nE 's|^deb (http\S+) (\S+) .*|deb-src \1 \2 main restricted universe multiverse|p' \
             /etc/apt/sources.list | sort -u > /etc/apt/sources.list.d/deb-src.list; \
     fi
+# THE apt step of this image: apt-fast-install, then the MongoDB repository (key
+# in armored form: apt reads it through signed-by, no gpg needed), then ONE
+# `apt-fast install` for the Osmocom stack AND the 4G stack (was osmo-lte-install
+# --deps, in the lte and osmocom-nitb stages). curl comes from apt-fast-install.
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    apt-fast update && apt-fast install -y --no-install-recommends \
+    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
+    && curl -fsSL --retry 3 -o /usr/share/keyrings/mongodb-server-8.0.asc https://www.mongodb.org/static/pgp/server-8.0.asc \
+    && echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.asc] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-8.0.list \
+    && apt-fast update && apt-fast install -y --no-install-recommends \
     # Build tools
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     # Osmocom core & network dependencies
@@ -181,6 +185,15 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     #   tshark/tcpdump/libcap2-bin -> capture; libcap2-bin provides the setcap below
     telnet nano whiptail xz-utils libasound2-plugins \
     tcpdump tshark libcap2-bin \
+    # 4G (srsRAN ZeroMQ + srsGUI, Open5GS, MongoDB): the list of
+    # tools/osmo-lte-install.sh (lte_deps), now installed here. Non-4G packages
+    # already above are not repeated.
+    libzmq5 libzmq3-dev libboost-program-options-dev libmbedtls-dev libconfig++-dev \
+    lksctp-tools qtbase5-dev libqt5opengl5-dev libqwt-qt5-dev libboost-system-dev \
+    libboost-thread-dev libboost-test-dev libgcrypt20-dev libidn-dev libmongoc-dev \
+    libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev \
+    libtins-dev meson flex bison libssl-dev \
+    mongodb-org mongodb-mongosh mongodb-database-tools \
     # GNU Radio 3.10 deps (gr-gsm, venv /root/.env below): same apt resolution as
     # the rest, no second RUN apt. (The && closes the list for the
     # install_modules/10-deps.sh extractor.)
@@ -190,6 +203,8 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
 # Non-root capture for the dashboard and tcpdump. Position is MANDATORY: dumpcap
 # only exists once wireshark-common is installed (pulled by tshark, above).
 RUN setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
+# mongod starts at boot (was enabled by lte_deps); non-fatal, as before.
+RUN systemctl enable mongod >/dev/null 2>&1 || true
 
 # ── The .deb cache: the tool, then the already-built packages ────────────────
 # .deb-cache/ is the build-context mirror of /var/cache/osmo-debs on the host
@@ -826,17 +841,12 @@ RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 # (configs/open5gs/dump, subscribers.json) are not installed at build time:
 # `osmo-epc start` restores them into MongoDB.
 #
-# `--deps` first, always (not only when compiling). The apt list at the top of
-# this file is the Osmocom stack's (also read by install_modules/10-deps.sh);
-# the 4G list lives in tools/osmo-lte-install.sh (lte_deps). These packages are
-# also the runtime: cached .debs carry only the binaries (osmo-deb pack is a
-# tar), not their dependencies (libmbedtls, libzmq5, libconfig++,
-# boost_program_options). `--deps` also pulls mongodb-org (HSS/PCRF subscriber
-# DB) and is not fatal on any package.
+# The 4G packages (runtime AND build) are in the top apt step of this file: the
+# .debs carry only the binaries, not their dependencies (libmbedtls, libzmq5,
+# libconfig++, boost_program_options, mongodb-org), so they stay installed.
 COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
     chmod 755 /usr/local/sbin/osmo-lte-install && \
-    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
     { osmo-deb install libzmq 4.3.5+git || true; } && \
     { osmo-deb install srsgui 0.1+git || true; } && \
     SRS_DEB_VER="$(osmo-lte-install --srs-deb-version)" && \
@@ -932,16 +942,14 @@ RUN chmod 755 /usr/local/sbin/osmo-lte-install
 # pack embeds no sources (SRC_ROOT). This keeps the source trees in the image.
 COPY --from=lte /opt/LTE /opt/LTE
 
-# `--deps` must run again here: these are also the runtime packages (libzmq5,
-# libmbedtls, libconfig++, boost_program_options, mongodb-org...) and osmo-deb
-# .debs declare no dependencies. The apt cache mount avoids re-downloading.
+# The runtime packages (libzmq5, libmbedtls, libconfig++, mongodb-org...) are
+# installed by the top apt step of this file: osmo-deb .debs declare no
+# dependencies, so nothing is installed here.
 #
-# Then `--configs --launchers`, same order as in the lte stage: the Open5GS
-# yaml, enb.conf and the two launchers are written outside any DESTDIR, so no
-# .deb carries them. They read /opt/GSM/osmo-operator, cloned above.
-RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --deps && \
-    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
+# `--configs --launchers`, same order as in the lte stage: the Open5GS yaml,
+# enb.conf and the two launchers are written outside any DESTDIR, so no .deb
+# carries them. They read /opt/GSM/osmo-operator, cloned above.
+RUN OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
     ldconfig && test -x /usr/local/bin/srsenb \
     && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed \
     && test -s /opt/LTE/open5gs/install/etc/open5gs/mme.yaml && grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml \

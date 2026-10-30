@@ -49,13 +49,12 @@ ARG DEBIAN_FRONTEND=noninteractive
 # BuildKit apt cache, the same as Dockerfile (id osmo-apt-archives).
 ARG OSMO_UBUNTU_MIRROR=
 COPY packaging/apt-fast-install.sh /usr/local/sbin/apt-fast-install
-RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install
-# apt is idempotent: on osmocom-nitb, where everything is already installed,
-# this step only confirms it, so the list is not duplicated for that case.
+# One apt step for the whole stage: installer, then the package list. apt is
+# idempotent, so on osmocom-nitb (everything already installed) it only confirms.
 # libasound2t64: noble name of libasound2 (64-bit time_t transition).
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
-    apt-fast update && apt-fast install -y --no-install-recommends \
+    chmod 755 /usr/local/sbin/apt-fast-install && apt-fast-install \
+    && apt-fast update && apt-fast install -y --no-install-recommends \
     build-essential git gcc g++ make cmake autoconf automake libtool pkg-config wget curl \
     libtalloc-dev libpcsclite-dev libsctp-dev libmnl-dev liburing-dev \
     libdbi-dev libdbd-sqlite3 libsqlite3-dev sqlite3 libc-ares-dev libgnutls28-dev \
