@@ -36,6 +36,7 @@
 #   TTCN_ZIP=/home/nirvana/ttcn.zip TTCN_BIN=/usr/bin (IUT binaries)
 #   TTCN_CFG=<glob> (which testenv*.cfg: default osmo* if any, else all)
 #   TTCN_IPL4_PORT=0 (IPL4asp default local port; its own default 9999 clashes)
+#   TTCN_LIBERER="open5gs-webui" (units holding a suite port: stopped, restarted)
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -56,6 +57,7 @@ TTCN_ZIP="${TTCN_ZIP:-/home/nirvana/ttcn.zip}"
 TTCN_BIN="${TTCN_BIN:-/usr/bin}"
 TTCN_CFG="${TTCN_CFG:-}"
 TTCN_IPL4_PORT="${TTCN_IPL4_PORT:-0}"
+TTCN_LIBERER="${TTCN_LIBERER:-}"; TTCN_RELANCER=""
 OBS_BASE="https://downloads.osmocom.org/packages/osmocom:/latest"
 
 ROOT=""
@@ -194,16 +196,25 @@ for f in sorted(glob.glob(os.path.join(out, "**", "junit-xml-*.log"), recursive=
             why = "  -- " + fe.text.strip().splitlines()[0][:140]
         rows.append("%-6s %-24s %s.%s%s" % (v.upper(), tag, tc.get("classname", ""), name, why))
 
+notrun = []
+for m in sorted(glob.glob(os.path.join(out, "*", "NOT_RUN"))):
+    cfg = os.path.basename(os.path.dirname(m))
+    for l in open(m, errors="replace").read().splitlines():
+        notrun.append("NOTRUN config %-10s %s" % (cfg, l))
+
 n = sum(tot.values())
 if n == 0:
     print("== %s : NOT RUN (aucun resultat JUnit : la suite n a pas demarre, voir les journaux)" % suite)
     print("#STATUS ko")
     sys.exit(0)
-print("== %s : %d pass, %d fail, %d error, %d skip  -> %d inattendu(s) / %d connus d Osmocom"
+print("== %s : %d pass, %d fail, %d error, %d skip  -> %d inattendu(s) / %d connus d Osmocom%s"
       % (suite, tot["pass"], tot["fail"], tot["error"], tot["skip"], unexpected,
-         tot["fail"] + tot["error"] - unexpected))
+         tot["fail"] + tot["error"] - unexpected,
+         ("  + %d config(s) NOT RUN" % len({l.split()[2] for l in notrun})) if notrun else ""))
+if notrun:
+    print("\n".join(notrun))
 print("\n".join(rows))
-print("#STATUS %s" % ("ko" if unexpected else "ok"))
+print("#STATUS %s" % ("ko" if unexpected or notrun else "ok"))
 PY
 }
 
@@ -229,9 +240,9 @@ verdicts_all() {
             printf '%s\n' "$v" | grep -q '^#STATUS ko' && echo "#KO $s"
             echo
         done
-        echo "# journaux TITAN, IUT-<nom>.log et pcaps (un .pcapng par test) :"
+        echo "# journaux TITAN, IUT-<nom>.log et pcaps (un par test) :"
         echo "#   $TTCN_OUT/<suite>/<config>/testsuite/"
-        echo "#   pcaps : $(find "$TTCN_OUT" -name '*.pcapng' | wc -l) fichier(s)"
+        echo "#   pcaps : $(find "$TTCN_OUT" \( -name '*.pcap.gz' -o -name '*.pcapng' \) | wc -l) fichier(s) (<Suite>.<TC>.pcap.gz)"
     } > "$TTCN_OUT/verdicts.txt"
     if grep -q '^#KO ' "$TTCN_OUT/verdicts.txt"; then
         sed -i "1a # BILAN : KO ($(grep '^#KO ' "$TTCN_OUT/verdicts.txt" | cut -d' ' -f2 | tr '\n' ' '))" "$TTCN_OUT/verdicts.txt"
@@ -292,7 +303,8 @@ run_cfg() {
                ( cd "$d/$s" && cp -a "$tcfg" $tcopy ./*.default "$td/testsuite/" 2>/dev/null ) ;;
             C) if [ -n "$g" ] && ss -ltn "sport = :$g" 2>/dev/null | grep -q LISTEN; then
                    say "  $a : port VTY $g deja pris : $(ss -ltnpH "sport = :$g" | grep -o 'users:.*')"
-                   say "  arreter le banc (./start.sh --stop) ou le processus ci-dessus"; rc=1; continue
+                   say "  arreter le banc (./start.sh --stop) ou le processus ci-dessus"; rc=1
+                   echo "$a : port VTY $g deja pris" >> "$td/NOT_RUN"; continue
                fi
                mkdir -p "$td/$a"
                # shellcheck disable=SC2086
@@ -306,6 +318,10 @@ run_cfg() {
                pids+=($!)
                if [ -n "$g" ] && ! wait_port "$g" 15; then
                    say "  $a : VTY $g muet apres 15 s (voir $td/$a/$a.log)"; rc=1
+                   # The reason, from the IUT log (config line refused, bind...).
+                   printf '%s : VTY %s muet ; %s\n' "$a" "$g" \
+                       "$(sed 's/\x1b\[[0-9;]*m//g' "$td/$a/$a.log" | grep -A1 -m1 -E 'Error occurred during reading|Address already in use|There is no such command' \
+                          | tr -s ' \t\n' ' ' | cut -c1-160)" >> "$td/NOT_RUN"
                fi ;;
         esac
     done < <(cfg_parse "$f")
@@ -321,8 +337,8 @@ run_cfg() {
         ( cd "$td/testsuite" && TTCN3_HACKS_PATH="$d" TTCN3_PCAP_PATH="$td/testsuite" \
               "$d/start-testsuite.sh" "$d/_build/$s/$tprog" "$tcfg" ) \
             > "$td/testsuite/console.log" 2>&1 || rc=1
-        grep -E '^(Overall|Verdict statistics|Test execution summary)|^ *(pass|fail|error|inconc|none)' \
-            "$td/testsuite/console.log" | tail -4 | sed 's/^/    /'
+        compgen -G "$td/testsuite/junit-xml-*.log" >/dev/null \
+            || echo "suite sans resultat JUnit (voir testsuite/console.log)" >> "$td/NOT_RUN"
     fi
     local p
     for p in "${pids[@]+"${pids[@]}"}"; do kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null; done
@@ -344,7 +360,9 @@ run_cfg() {
 # 5060, MNCC socket). Refuses with the holder of each port.
 precheck() {
     local d="$1"; shift
-    local s f ports="4222 2427 2905 5000 5060" busy="" p who
+    # 9999: local_port of several stp clients in the suite configs themselves
+    # (STP_Tests_M3UA_TCP.cfg, STP_Tests_IPA_M3UA.cfg), not changeable.
+    local s f ports="4222 2427 2905 5000 5060 9999" busy="" p who
     for s in "$@"; do
         for f in "$d/$s"/testenv*.cfg; do
             [ -f "$f" ] && ports="$ports $(sed -n 's/^vty_port=//p' "$f")"
@@ -361,7 +379,20 @@ precheck() {
                 | grep -o 'users:.*' | head -1)"
         [ -n "$who" ] && { say "port $p pris : $who"; busy=1; }
     done
-    [ -z "$busy" ] || die "campagne refusee : arreter le banc (sudo ./start.sh --stop) et les processus ci-dessus"
+    [ -z "$busy" ] || die "campagne refusee : arreter le banc (sudo ./start.sh --stop) et les processus ci-dessus (un service : TTCN_LIBERER=<unite>, ex. open5gs-webui)"
+}
+
+# TTCN_LIBERER="unit ...": systemd units stopped for the campaign (they hold a
+# suite port, e.g. open5gs-webui on 9999) and started again on exit.
+liberer() {
+    local u
+    for u in $TTCN_LIBERER; do
+        systemctl is-active -q "$u" || continue
+        say "arret temporaire de $u (relance en fin de campagne)"
+        systemctl stop "$u" && TTCN_RELANCER="$TTCN_RELANCER $u"
+    done
+    # shellcheck disable=SC2064
+    trap 'for u in $TTCN_RELANCER; do say "relance de $u"; systemctl start "$u"; done' EXIT
 }
 
 act_run() {
@@ -371,6 +402,7 @@ act_run() {
     mkdir -p "$TTCN_OUT"
     # shellcheck disable=SC2086
     [ $# -gt 0 ] || set -- $TTCN_SUITES
+    [ -z "${TTCN_LIBERER:-}" ] || liberer
     [ "${TTCN_NO_PRECHECK:-0}" = 1 ] || precheck "$d" "$@"
     : > "$TTCN_OUT/iut-versions.txt.new"
     [ -f "$TTCN_OUT/iut-versions.txt" ] && cp "$TTCN_OUT/iut-versions.txt" "$TTCN_OUT/iut-versions.txt.new"
