@@ -15,12 +15,15 @@
 #   sources          clone osmo-ttcn3-hacks into $GSM_ROOT and fetch its TITAN
 #                    protocol modules / test ports (make deps, pinned commits).
 #   build [SUITE..]  compile the suites (make <suite>), default $TTCN_SUITES.
-#   run   [SUITE..]  testenv.py run <suite>: builds the IUT from the sibling
-#                    sources of $GSM_ROOT (osmo-dev, installed in the testenv
-#                    cache, NOT in /usr) and runs it on the host. Logs, pcaps
-#                    and JUnit XML in $TTCN_OUT/<suite>/; verdicts summed up in
-#                    $TTCN_OUT/verdicts.txt. STOP THE BENCH FIRST: the suites
-#                    bind the same ports (GSUP 4222, M3UA 2905, VTY 42xx).
+#   run   [SUITE..]  run the suites against THE BENCH BINARIES ($TTCN_BIN,
+#                    /usr/bin/osmo-*), not osmo-dev builds: the suite is
+#                    compiled with TITAN (make <suite>), then for each of its
+#                    testenv*.cfg the IUT is started from $TTCN_BIN with the
+#                    config of the suite (copy=, prepare=), the suite runs
+#                    (start-testsuite.sh, compared with expected-results.xml)
+#                    and the IUT is stopped. Output in $TTCN_OUT/<suite>/<cfg>/,
+#                    verdicts in $TTCN_OUT/verdicts.txt. STOP THE BENCH FIRST:
+#                    the suites bind the same ports (GSUP 4222, M3UA 2905, VTY).
 #   pack  [ZIP]      zip $TTCN_OUT (default $TTCN_ZIP).
 #
 #   --root DIR       work on a rootfs (ISO build, iso_modules/80-ttcn.sh):
@@ -30,8 +33,9 @@
 # Environment:
 #   GSM_ROOT=/opt/GSM            TTCN3_HACKS_REF=<branch|tag|commit>
 #   TTCN_SUITES="hlr stp mgw sip"   TTCN_OUT=/var/tmp/ttcn-<date>
-#   TTCN_ZIP=/home/nirvana/ttcn.zip TTCN_ARGS="--fast" (extra testenv args)
-#   TESTENV_SRC_DIR=$GSM_ROOT/ttcn-src  (osmo-dev + clean IUT clones)
+#   TTCN_ZIP=/home/nirvana/ttcn.zip TTCN_BIN=/usr/bin (IUT binaries)
+#   TTCN_CFG=<glob> (which testenv*.cfg: default osmo* if any, else all)
+#   TTCN_IPL4_PORT=0 (IPL4asp default local port; its own default 9999 clashes)
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -41,8 +45,9 @@ TTCN3_HACKS_REF="${TTCN3_HACKS_REF:-}"
 TTCN_SUITES="${TTCN_SUITES:-hlr stp mgw sip}"
 TTCN_OUT="${TTCN_OUT:-/var/tmp/ttcn-$(date +%Y%m%d-%H%M%S)}"
 TTCN_ZIP="${TTCN_ZIP:-/home/nirvana/ttcn.zip}"
-TTCN_ARGS="${TTCN_ARGS:-}"
-TESTENV_SRC_DIR="${TESTENV_SRC_DIR:-$GSM_ROOT/ttcn-src}"
+TTCN_BIN="${TTCN_BIN:-/usr/bin}"
+TTCN_CFG="${TTCN_CFG:-}"
+TTCN_IPL4_PORT="${TTCN_IPL4_PORT:-0}"
 OBS_BASE="https://downloads.osmocom.org/packages/osmocom:/latest"
 
 ROOT=""
@@ -147,36 +152,117 @@ print("\n".join(rows) if rows else "   (aucun JUnit XML : voir les journaux)")
 PY
 }
 
+# testenv*.cfg -> shell lines: "T <program> <config> <copy...>" for the
+# testsuite, then "C <name>|<program>|<copy>|<prepare>|<vty_port>" per component.
+cfg_parse() {
+    python3 - "$1" <<'PY'
+import sys, configparser
+c = configparser.ConfigParser(interpolation=None)
+c.read(sys.argv[1])
+t = c["testsuite"]
+print("T|%s|%s|%s" % (t["program"], t["config"], t.get("copy", "")))
+for n in c.sections():
+    if n == "testsuite":
+        continue
+    k = c[n]
+    for unsup in ("setup", "clean"):
+        if unsup in k:
+            print("W|%s: %s= ignore" % (n, unsup))
+    print("C|%s|%s|%s|%s|%s" % (n, k["program"], k.get("copy", ""), k.get("prepare", ""), k.get("vty_port", "")))
+PY
+}
+
+wait_port() {   # wait_port PORT SECONDS
+    local i
+    for i in $(seq 1 $(( $2 * 2 ))); do
+        ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+# One testenv*.cfg of one suite, against the bench binaries.
+run_cfg() {
+    local d="$1" s="$2" f="$3" name td line kind a b c e g pids=() rc=0
+    name="$(basename "$f" .cfg)"; name="${name#testenv}"; name="${name#_}"; name="${name:-default}"
+    td="$TTCN_OUT/$s/$name"
+    rm -rf "$td"; mkdir -p "$td/testsuite"
+    cp -a "$d/Common.cfg" "$td/"
+    local tprog tcfg tcopy
+    while IFS='|' read -r kind a b c e g; do
+        case "$kind" in
+            W) say "  attention : $a" ;;
+            T) tprog="$a"; tcfg="$b"; tcopy="$c"
+               # The suite config includes <Suite>.default (and sometimes other
+               # *.cfg/*.default of its directory): copy them all, as testenv.
+               # shellcheck disable=SC2086
+               ( cd "$d/$s" && cp -a "$tcfg" $tcopy ./*.default "$td/testsuite/" 2>/dev/null ) ;;
+            C) if [ -n "$g" ] && ss -ltn "sport = :$g" 2>/dev/null | grep -q LISTEN; then
+                   say "  $a : port VTY $g deja pris : $(ss -ltnpH "sport = :$g" | grep -o 'users:.*')"
+                   say "  arreter le banc (./start.sh --stop) ou le processus ci-dessus"; rc=1; continue
+               fi
+               mkdir -p "$td/$a"
+               # shellcheck disable=SC2086
+               [ -n "$c" ] && ( cd "$d/$s" && cp -a $c "$td/$a/" )
+               ( cd "$td/$a" && PATH="$TTCN_BIN:$PATH" && { [ -z "$e" ] || bash -c "$e"; } ) \
+                   || say "  $a : prepare echoue ($e)"
+               say "  IUT $a : $TTCN_BIN/${b%% *} (${b#* })"
+               ( cd "$td/$a" && PATH="$TTCN_BIN:$PATH" exec setsid bash -c "exec $b" ) \
+                   > "$td/$a/$a.log" 2>&1 &
+               pids+=($!)
+               if [ -n "$g" ] && ! wait_port "$g" 15; then
+                   say "  $a : VTY $g muet apres 15 s (voir $td/$a/$a.log)"; rc=1
+               fi ;;
+        esac
+    done < <(cfg_parse "$f")
+    if [ "$rc" = 0 ]; then
+        # IPL4asp binds client sockets without a local port to 0.0.0.0:9999 by
+        # default, taken here by open5gs-webui: "bind failed: Address already in
+        # use" and every test fails before reaching the IUT. Ephemeral port.
+        printf '\n# scripts/ttcn.sh\n[TESTPORT_PARAMETERS]\n*.*.defaultListeningPort := "%s"\n' \
+            "$TTCN_IPL4_PORT" >> "$td/testsuite/$tcfg"
+        say "  suite $tprog ($tcfg)"
+        # Common.cfg: TCPDUMP_START/STOP from $TTCN3_HACKS_PATH, one pcap per test
+        # in $TTCN3_PCAP_PATH.
+        ( cd "$td/testsuite" && TTCN3_HACKS_PATH="$d" TTCN3_PCAP_PATH="$td/testsuite" \
+              "$d/start-testsuite.sh" "$d/_build/$s/$tprog" "$tcfg" ) \
+            > "$td/testsuite/console.log" 2>&1 || rc=1
+        grep -E '^(Overall|Verdict statistics|Test execution summary)|^ *(pass|fail|error|inconc|none)' \
+            "$td/testsuite/console.log" | tail -4 | sed 's/^/    /'
+    fi
+    local p
+    for p in "${pids[@]+"${pids[@]}"}"; do kill -TERM -- "-$p" 2>/dev/null || kill "$p" 2>/dev/null; done
+    sleep 1
+    for p in "${pids[@]+"${pids[@]}"}"; do kill -KILL -- "-$p" 2>/dev/null; done
+    wait 2>/dev/null
+    return $rc
+}
+
 act_run() {
     [ -z "$ROOT" ] || die "run refuse avec --root"
-    local d="$GSM_ROOT/osmo-ttcn3-hacks" s rc=0
+    local d="$GSM_ROOT/osmo-ttcn3-hacks" s f rc=0 cfgs
     command -v ttcn3_compiler >/dev/null || die "eclipse-titan absent : scripts/ttcn.sh titan"
     mkdir -p "$TTCN_OUT"
     : > "$TTCN_OUT/verdicts.txt"
     # shellcheck disable=SC2086
     [ $# -gt 0 ] || set -- $TTCN_SUITES
-    # The IUT (osmo-hlr, osmo-stp...) is built by osmo-dev from clean clones in
-    # TESTENV_SRC_DIR, NOT from the bench trees of $GSM_ROOT: those are patched
-    # and configured in-tree, which an out-of-tree osmo-dev build refuses.
-    export TESTENV_SRC_DIR
-    mkdir -p "$TESTENV_SRC_DIR"
-    if [ ! -d "$TESTENV_SRC_DIR/osmo-dev" ]; then
-        say "testenv init osmo-dev -> $TESTENV_SRC_DIR"
-        ( cd "$d" && ./testenv.py init osmo-dev ) || die "testenv init osmo-dev"
-    fi
-    local cfg
     for s in "$@"; do
-        # Several testenv*.cfg: the Osmocom one(s) if named so (hlr: osmo, not
+        [ -d "$d/$s" ] || { say "$s : suite inconnue"; rc=1; continue; }
+        rm -rf "${TTCN_OUT:?}/$s"; mkdir -p "$TTCN_OUT/$s"
+        say "== $s : compilation TITAN (make $s)"
+        make -C "$d" "$s" > "$TTCN_OUT/$s/build.log" 2>&1 \
+            || { say "$s : compilation echouee (voir $s/build.log)"; rc=1; continue; }
+        # Several testenv*.cfg: the Osmocom ones if named so (hlr: osmo, not
         # pyhss), otherwise all of them (stp: ipa, m3ua, tcap...).
-        cfg=()
-        if [ -n "$(ls "$d/$s"/testenv_osmo*.cfg 2>/dev/null)" ]; then cfg=(-c 'osmo*')
-        elif [ "$(ls "$d/$s"/testenv*.cfg 2>/dev/null | wc -l)" -gt 1 ]; then cfg=(-c all)
+        if [ -n "$TTCN_CFG" ]; then cfgs=("$d/$s"/testenv_$TTCN_CFG.cfg)
+        elif compgen -G "$d/$s/testenv_osmo*.cfg" >/dev/null; then cfgs=("$d/$s"/testenv_osmo*.cfg)
+        else cfgs=("$d/$s"/testenv*.cfg)
         fi
-        say "testenv run $s ${cfg[*]} -> $TTCN_OUT/$s"
-        rm -rf "${TTCN_OUT:?}/$s"
-        # shellcheck disable=SC2086
-        ( cd "$d" && ./testenv.py run "$s" "${cfg[@]+"${cfg[@]}"}" --log-dir "$TTCN_OUT/$s" --no-tee $TTCN_ARGS ) \
-            > "$TTCN_OUT/$s.console.log" 2>&1 || { say "$s : testenv rc=$? (voir $s.console.log)"; rc=1; }
+        for f in "${cfgs[@]}"; do
+            [ -f "$f" ] || continue
+            say "-- $s / $(basename "$f")"
+            run_cfg "$d" "$s" "$f" || rc=1
+        done
         verdicts "$TTCN_OUT/$s" "$s" | tee -a "$TTCN_OUT/verdicts.txt"
     done
     say "verdicts : $TTCN_OUT/verdicts.txt"
