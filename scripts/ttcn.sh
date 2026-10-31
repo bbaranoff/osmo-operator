@@ -129,27 +129,92 @@ act_build() {
     return $rc
 }
 
-# Verdicts of one suite: the JUnit XML written by start-testsuite.sh.
+# Verdicts of one suite, from the JUnit XML written by start-testsuite.sh,
+# each one compared with the Osmocom expected-results.xml of the suite:
+#   attendu    same verdict as Osmocom CI (a known failure is "FAIL attendu")
+#   INATTENDU  pass upstream, fail here: the finding
+#   nouveau    test absent from expected-results.xml
+# A suite with no JUnit at all is "NOT RUN": never shown as 0 fail.
+# Last line: "#STATUS ok|ko" (ko = NOT RUN or an unexpected fail/error).
 verdicts() {
     python3 - "$@" <<'PY'
 import sys, glob, os, xml.etree.ElementTree as ET
-out, suite = sys.argv[1], sys.argv[2]
+out, suite, expected = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def verdict(tc):
+    if tc.find("failure") is not None: return "fail"
+    if tc.find("error") is not None: return "error"
+    if tc.find("skipped") is not None: return "skip"
+    return "pass"
+
+exp = {}
+try:
+    for tc in ET.parse(expected).getroot().iter("testcase"):
+        exp[tc.get("name")] = verdict(tc)
+except (OSError, ET.ParseError):
+    pass
+
 rows, tot = [], {"pass": 0, "fail": 0, "error": 0, "skip": 0}
+unexpected = 0
 for f in sorted(glob.glob(os.path.join(out, "**", "junit-xml-*.log"), recursive=True)):
     try:
         root = ET.parse(f).getroot()
     except ET.ParseError:
         continue
     for tc in root.iter("testcase"):
-        v = "pass"
-        if tc.find("failure") is not None: v = "fail"
-        elif tc.find("error") is not None: v = "error"
-        elif tc.find("skipped") is not None: v = "skip"
+        v, name = verdict(tc), tc.get("name", "")
         tot[v] += 1
-        rows.append("%-6s %s.%s" % (v.upper(), tc.get("classname", ""), tc.get("name", "")))
-print("== %s : %d pass, %d fail, %d error, %d skip" % (suite, tot["pass"], tot["fail"], tot["error"], tot["skip"]))
-print("\n".join(rows) if rows else "   (aucun JUnit XML : voir les journaux)")
+        e = exp.get(name)
+        if e is None:
+            tag = "nouveau"
+        elif e == v or (v == "pass"):
+            tag = "attendu" if e == v else "mieux (%s en amont)" % e
+        else:
+            tag = "INATTENDU (%s en amont)" % e
+        if v in ("fail", "error") and not tag.startswith("attendu"):
+            unexpected += 1
+        why = ""
+        fe = tc.find("failure") if tc.find("failure") is not None else tc.find("error")
+        if v in ("fail", "error") and fe is not None and fe.text:
+            why = "  -- " + fe.text.strip().splitlines()[0][:140]
+        rows.append("%-6s %-24s %s.%s%s" % (v.upper(), tag, tc.get("classname", ""), name, why))
+
+n = sum(tot.values())
+if n == 0:
+    print("== %s : NOT RUN (aucun resultat JUnit : la suite n a pas demarre, voir les journaux)" % suite)
+    print("#STATUS ko")
+    sys.exit(0)
+print("== %s : %d pass, %d fail, %d error, %d skip  -> %d inattendu(s) / %d connus d Osmocom"
+      % (suite, tot["pass"], tot["fail"], tot["error"], tot["skip"], unexpected,
+         tot["fail"] + tot["error"] - unexpected))
+print("\n".join(rows))
+print("#STATUS %s" % ("ko" if unexpected else "ok"))
 PY
+}
+
+# verdicts.txt: rebuilt from every suite present in $TTCN_OUT, so that
+# re-running one suite (run stp) keeps the others. Returns 1 if any is ko.
+verdicts_all() {
+    local d="$GSM_ROOT/osmo-ttcn3-hacks" s v rc=0
+    : > "$TTCN_OUT/verdicts.txt"
+    {
+        echo "# osmo-ttcn3-hacks $(git -c safe.directory='*' -C "$d" describe --always 2>/dev/null)," \
+             "TITAN $(ttcn3_compiler -v 2>&1 | sed -n 's/.*Version: *//p' | head -1), IUT = $TTCN_BIN, $(date -R)"
+        for s in $(cd "$TTCN_OUT" && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
+            [ -d "$d/$s" ] || continue
+            v="$(verdicts "$TTCN_OUT/$s" "$s" "$d/$s/expected-results.xml")"
+            printf '%s\n' "$v" | grep -v '^#STATUS'
+            printf '%s\n' "$v" | grep -q '^#STATUS ko' && echo "#KO $s"
+            echo
+        done
+    } > "$TTCN_OUT/verdicts.txt"
+    if grep -q '^#KO ' "$TTCN_OUT/verdicts.txt"; then
+        sed -i "1a # BILAN : KO ($(grep '^#KO ' "$TTCN_OUT/verdicts.txt" | cut -d' ' -f2 | tr '\n' ' '))" "$TTCN_OUT/verdicts.txt"
+        rc=1
+    else
+        sed -i '1a # BILAN : OK (aucun echec inattendu, toutes les suites ont tourne)' "$TTCN_OUT/verdicts.txt"
+    fi
+    return $rc
 }
 
 # testenv*.cfg -> shell lines: "T <program> <config> <copy...>" for the
@@ -243,7 +308,6 @@ act_run() {
     local d="$GSM_ROOT/osmo-ttcn3-hacks" s f rc=0 cfgs
     command -v ttcn3_compiler >/dev/null || die "eclipse-titan absent : scripts/ttcn.sh titan"
     mkdir -p "$TTCN_OUT"
-    : > "$TTCN_OUT/verdicts.txt"
     # shellcheck disable=SC2086
     [ $# -gt 0 ] || set -- $TTCN_SUITES
     for s in "$@"; do
@@ -263,8 +327,10 @@ act_run() {
             say "-- $s / $(basename "$f")"
             run_cfg "$d" "$s" "$f" || rc=1
         done
-        verdicts "$TTCN_OUT/$s" "$s" | tee -a "$TTCN_OUT/verdicts.txt"
+        verdicts "$TTCN_OUT/$s" "$s" "$d/$s/expected-results.xml" | grep -v '^#STATUS'
     done
+    verdicts_all || rc=1
+    say "$(sed -n 2p "$TTCN_OUT/verdicts.txt")"
     say "verdicts : $TTCN_OUT/verdicts.txt"
     return $rc
 }
