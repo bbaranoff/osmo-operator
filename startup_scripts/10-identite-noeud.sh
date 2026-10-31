@@ -43,6 +43,35 @@ case "$ACTION" in
         banc_dsp_arreter          # QEMU, osmocon, mobile, bridge: its job
         banc_dsp_arreter_instances
         bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE"
+        # ── THE OTHER BENCH IDENTITIES ───────────────────────────────────
+        # RUN_DIR depends on how the bench was launched: with the desktop
+        # session XDG_RUNTIME_DIR it is /run/user/<uid>/osmo-nitb, as root
+        # without it (sudo -i, a unit) /run/user/0 is missing and it is
+        # /tmp/osmo-nitb. The run.sh --stop above only knows the CURRENT one:
+        # the watchdogs of the other one (BTS#1 sidecar, gardien bts) never
+        # see their stop marker and respawn osmo-bts-trx forever (VTY 4239
+        # still taken after --stop). Every identity holding pid files is
+        # stopped with its own RUN_DIR.
+        for _rd in /run/user/*/osmo-nitb /tmp/osmo-nitb "${XDG_RUNTIME_DIR:-/tmp}/calypso" /tmp/calypso; do
+            [ -d "$_rd" ] && [ "$_rd" != "$RUN_DIR" ] || continue
+            compgen -G "$_rd/*.pid" >/dev/null || continue
+            touch "$_rd/sidecar-bts.stop" 2>/dev/null || true
+            RUN_DIR="$_rd" LOG_DIR="$_rd/logs" bash "$RUN_SH" --stop --profile "$CALYPSO_PROFILE" >/dev/null 2>&1 || true
+            printf '  identite %s arretee aussi\n' "$_rd"
+        done
+        # Last resort: a watchdog loop is a subshell of run.sh (same command
+        # line) or the "gardien-bts" bash -c of 60-bts.sh. run.sh itself
+        # returns once the stack is up, so any run.sh process still alive
+        # here is such a loop. Loops first, then what they respawned.
+        _wd="$(pgrep -f "^bash ${RUN_SH}( |\$)" ; pgrep -f ' gardien-bts ')"
+        if [ -n "$_wd" ]; then
+            kill -TERM $_wd 2>/dev/null || true
+            sleep 1
+            kill -KILL $_wd 2>/dev/null || true
+            pkill -x osmo-bts-trx 2>/dev/null || true
+            printf '  chiens de garde residuels tues : %s\n' "$(echo $_wd)"
+        fi
+        unset _rd _wd
         # the softSIM SAP servers (--sap) and their socket
         for _p in $(ps -eo pid,args | awk '/[d]emo_server\.rb/ {print $1}'); do kill -TERM "$_p" 2>/dev/null || true; done
         rm -f "${SAP_SOCK:-/tmp/osmocom_sap}" 2>/dev/null; unset _p
