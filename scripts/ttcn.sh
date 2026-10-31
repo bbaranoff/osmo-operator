@@ -31,7 +31,7 @@
 #                    into DIR$GSM_ROOT from the host. build/run are refused.
 #
 # Environment:
-#   GSM_ROOT=/opt/GSM            TTCN3_HACKS_REF=<branch|tag|commit>
+#   GSM_ROOT=/opt/GSM   TTCN3_HACKS_REF=ba22c480 (OsmoCNI 202512, see below)
 #   TTCN_SUITES="hlr stp mgw sip"   TTCN_OUT=/var/tmp/ttcn-<date>
 #   TTCN_ZIP=/home/nirvana/ttcn.zip TTCN_BIN=/usr/bin (IUT binaries)
 #   TTCN_CFG=<glob> (which testenv*.cfg: default osmo* if any, else all)
@@ -41,7 +41,15 @@ set -uo pipefail
 
 GSM_ROOT="${GSM_ROOT:-/opt/GSM}"
 TTCN3_HACKS_URL="${TTCN3_HACKS_URL:-https://gitea.osmocom.org/ttcn3/osmo-ttcn3-hacks}"
-TTCN3_HACKS_REF="${TTCN3_HACKS_REF:-}"
+# The suites must match the IUT versions, not master: the bench binaries are the
+# OsmoCNI 202512 release round (osmo-hlr 1.9.2, osmo-mgw 1.15.0, libosmo-sigtran
+# 2.2.1, osmo-sip-connector 1.7.2, all tagged 2025-12-03/04). ba22c480
+# (2025-12-04) is the last osmo-ttcn3-hacks commit of that round ("Adapt
+# testsuite to new OsmoCNI 202512 release"). Against master, tests added later
+# fail on features the release does not have (e.g. 3eb57236, 2026-08-03:
+# "timer xua beat 0" -> "VTY: Unknown Command"). TTCN3_HACKS_REF=master to
+# test against master anyway.
+TTCN3_HACKS_REF="${TTCN3_HACKS_REF:-ba22c480}"
 TTCN_SUITES="${TTCN_SUITES:-hlr stp mgw sip}"
 TTCN_OUT="${TTCN_OUT:-/var/tmp/ttcn-$(date +%Y%m%d-%H%M%S)}"
 TTCN_ZIP="${TTCN_ZIP:-/home/nirvana/ttcn.zip}"
@@ -61,7 +69,7 @@ TTCN_PKGS="eclipse-titan build-essential autoconf automake libtool pkg-config
 git wget rsync file ccache bridge-utils wireshark-common libcap2-bin zip
 libusb-1.0-0-dev libjansson-dev libgnutls28-dev libtalloc-dev libmnl-dev
 libpcsclite-dev libsqlite3-dev libortp-dev libsofia-sip-ua-glib-dev
-libc-ares-dev libdbi-dev libdbd-sqlite3 libnl-route-3-dev python3"
+libc-ares-dev libdbi-dev libdbd-sqlite3 libnl-route-3-dev python3 tcpdump"
 
 act_titan() {
     local osrel="$ROOT/etc/os-release" id ver repo
@@ -106,8 +114,15 @@ act_sources() {
         git clone "$TTCN3_HACKS_URL" "$d" || die "clonage osmo-ttcn3-hacks"
     fi
     if [ -n "$TTCN3_HACKS_REF" ]; then
-        git -c safe.directory='*' -C "$d" fetch -q origin && \
-        git -c safe.directory='*' -C "$d" checkout -q "$TTCN3_HACKS_REF" || die "checkout $TTCN3_HACKS_REF"
+        local G="git -c safe.directory=* -C $d" avant apres
+        avant="$($G rev-parse HEAD)"
+        $G rev-parse -q --verify "$TTCN3_HACKS_REF^{commit}" >/dev/null || $G fetch -q origin \
+            || die "fetch osmo-ttcn3-hacks"
+        $G checkout -q "$TTCN3_HACKS_REF" || die "checkout $TTCN3_HACKS_REF"
+        apres="$($G rev-parse HEAD)"
+        say "osmo-ttcn3-hacks : $($G log -1 --format='%h %cs %s')"
+        # _build/ holds generated links and objects of the previous ref.
+        [ "$avant" = "$apres" ] || { say "reference changee : _build/ efface"; rm -rf "$d/_build"; }
     fi
     # deps/: ~45 eclipse-titan protocol modules and test ports, each at the
     # commit pinned in deps/Makefile. Plain git clones: runs on the host.
@@ -198,8 +213,15 @@ verdicts_all() {
     local d="$GSM_ROOT/osmo-ttcn3-hacks" s v rc=0
     : > "$TTCN_OUT/verdicts.txt"
     {
-        echo "# osmo-ttcn3-hacks $(git -c safe.directory='*' -C "$d" describe --always 2>/dev/null)," \
+        echo "# osmo-ttcn3-hacks $(git -c safe.directory='*' -C "$d" log -1 --format='%h (%cs)' 2>/dev/null)," \
              "TITAN $(ttcn3_compiler -v 2>&1 | sed -n 's/.*Version: *//p' | head -1), IUT = $TTCN_BIN, $(date -R)"
+        if [ -s "$TTCN_OUT/iut-versions.txt" ]; then
+            sort -u "$TTCN_OUT/iut-versions.txt" | while IFS=$'\t' read -r b v; do
+                printf '#   IUT %-20s %s\n' "$b" "$v"
+            done
+            echo "#   compiles par : $(dpkg-query -W -f='${Package} ${Version}  ' 'osmo-build-*' 2>/dev/null \
+                | tr -s ' ' '\n' | paste - - | grep -E 'hlr|mgw|sigtran|sip-connector' | tr '\t\n' '=' | sed 's/=$//; s/=osmo/  osmo/g')"
+        fi
         for s in $(cd "$TTCN_OUT" && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort); do
             [ -d "$d/$s" ] || continue
             v="$(verdicts "$TTCN_OUT/$s" "$s" "$d/$s/expected-results.xml")"
@@ -207,6 +229,9 @@ verdicts_all() {
             printf '%s\n' "$v" | grep -q '^#STATUS ko' && echo "#KO $s"
             echo
         done
+        echo "# journaux TITAN, IUT-<nom>.log et pcaps (un .pcapng par test) :"
+        echo "#   $TTCN_OUT/<suite>/<config>/testsuite/"
+        echo "#   pcaps : $(find "$TTCN_OUT" -name '*.pcapng' | wc -l) fichier(s)"
     } > "$TTCN_OUT/verdicts.txt"
     if grep -q '^#KO ' "$TTCN_OUT/verdicts.txt"; then
         sed -i "1a # BILAN : KO ($(grep '^#KO ' "$TTCN_OUT/verdicts.txt" | cut -d' ' -f2 | tr '\n' ' '))" "$TTCN_OUT/verdicts.txt"
@@ -252,7 +277,10 @@ run_cfg() {
     name="$(basename "$f" .cfg)"; name="${name#testenv}"; name="${name#_}"; name="${name:-default}"
     td="$TTCN_OUT/$s/$name"
     rm -rf "$td"; mkdir -p "$td/testsuite"
-    cp -a "$d/Common.cfg" "$td/"
+    # Common.cfg sets TTCN3_HACKS_PATH := ".." in [DEFINE]: from <td>/testsuite
+    # that is <td>, where ttcn3-tcpdump-start.sh does not exist (exit 127, no
+    # pcap). Pointed at the checkout, as testenv does.
+    sed "s#^TTCN3_HACKS_PATH := .*#TTCN3_HACKS_PATH := \"$d\"#" "$d/Common.cfg" > "$td/Common.cfg"
     local tprog tcfg tcopy
     while IFS='|' read -r kind a b c e g; do
         case "$kind" in
@@ -271,7 +299,8 @@ run_cfg() {
                [ -n "$c" ] && ( cd "$d/$s" && cp -a $c "$td/$a/" )
                ( cd "$td/$a" && PATH="$TTCN_BIN:$PATH" && { [ -z "$e" ] || bash -c "$e"; } ) \
                    || say "  $a : prepare echoue ($e)"
-               say "  IUT $a : $TTCN_BIN/${b%% *} (${b#* })"
+               say "  IUT $a : $TTCN_BIN/${b%% *} (${b#* }) : $("$TTCN_BIN/${b%% *}" --version 2>&1 | head -1)"
+               printf '%s\t%s\n' "${b%% *}" "$("$TTCN_BIN/${b%% *}" --version 2>&1 | head -1)" >> "$TTCN_OUT/iut-versions.txt"
                ( cd "$td/$a" && PATH="$TTCN_BIN:$PATH" exec setsid bash -c "exec $b" ) \
                    > "$td/$a/$a.log" 2>&1 &
                pids+=($!)
@@ -300,7 +329,39 @@ run_cfg() {
     sleep 1
     for p in "${pids[@]+"${pids[@]}"}"; do kill -KILL -- "-$p" 2>/dev/null; done
     wait 2>/dev/null
+    # The IUT log next to the TITAN logs of the run (same directory, IUT-<name>.log).
+    local comp
+    for comp in "$td"/*/; do
+        comp="$(basename "$comp")"; [ "$comp" = testsuite ] && continue
+        [ -f "$td/$comp/$comp.log" ] && cp -a "$td/$comp/$comp.log" "$td/testsuite/IUT-$comp.log"
+    done
     return $rc
+}
+
+# Before the campaign: the bench must be stopped and the ports of the selected
+# suites free. Ports: the vty_port of every testenv*.cfg, plus the IUT service
+# ports the suites connect to (GSUP 4222, MGCP 2427, M3UA 2905, IPA 5000, SIP
+# 5060, MNCC socket). Refuses with the holder of each port.
+precheck() {
+    local d="$1"; shift
+    local s f ports="4222 2427 2905 5000 5060" busy="" p who
+    for s in "$@"; do
+        for f in "$d/$s"/testenv*.cfg; do
+            [ -f "$f" ] && ports="$ports $(sed -n 's/^vty_port=//p' "$f")"
+        done
+    done
+    if pgrep -f 'qosmo/run.sh|osmo-bsc -c|osmo-msc -c|osmo-bts-trx|/etc/osmocom/osmo-(hlr|mgw|stp|sip-connector)\.cfg' >/dev/null; then
+        say "le banc tourne encore :"
+        pgrep -af 'qosmo/run.sh|osmo-bsc -c|osmo-msc -c|osmo-bts-trx|/etc/osmocom/osmo-(hlr|mgw|stp|sip-connector)\.cfg' \
+            | sed 's/^/[ttcn]   /' | cut -c1-140
+        busy=1
+    fi
+    for p in $(echo "$ports" | tr ' ' '\n' | sort -un); do
+        who="$( { ss -ltnpH "sport = :$p"; ss -lunpH "sport = :$p"; ss -lnpH -A sctp "sport = :$p"; } 2>/dev/null \
+                | grep -o 'users:.*' | head -1)"
+        [ -n "$who" ] && { say "port $p pris : $who"; busy=1; }
+    done
+    [ -z "$busy" ] || die "campagne refusee : arreter le banc (sudo ./start.sh --stop) et les processus ci-dessus"
 }
 
 act_run() {
@@ -310,6 +371,10 @@ act_run() {
     mkdir -p "$TTCN_OUT"
     # shellcheck disable=SC2086
     [ $# -gt 0 ] || set -- $TTCN_SUITES
+    [ "${TTCN_NO_PRECHECK:-0}" = 1 ] || precheck "$d" "$@"
+    : > "$TTCN_OUT/iut-versions.txt.new"
+    [ -f "$TTCN_OUT/iut-versions.txt" ] && cp "$TTCN_OUT/iut-versions.txt" "$TTCN_OUT/iut-versions.txt.new"
+    mv "$TTCN_OUT/iut-versions.txt.new" "$TTCN_OUT/iut-versions.txt"
     for s in "$@"; do
         [ -d "$d/$s" ] || { say "$s : suite inconnue"; rc=1; continue; }
         rm -rf "${TTCN_OUT:?}/$s"; mkdir -p "$TTCN_OUT/$s"
