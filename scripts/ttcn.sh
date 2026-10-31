@@ -113,7 +113,9 @@ act_sources() {
 act_build() {
     [ -z "$ROOT" ] || die "build refuse avec --root"
     local d="$GSM_ROOT/osmo-ttcn3-hacks" s rc=0
-    for s in "${@:-$TTCN_SUITES}"; do
+    # shellcheck disable=SC2086
+    [ $# -gt 0 ] || set -- $TTCN_SUITES
+    for s in "$@"; do
         say "compilation $s"
         make -C "$d" "$s" || { say "ECHEC compilation $s"; rc=1; }
     done
@@ -148,7 +150,10 @@ act_run() {
     local d="$GSM_ROOT/osmo-ttcn3-hacks" s rc=0
     command -v ttcn3_compiler >/dev/null || die "eclipse-titan absent : scripts/ttcn.sh titan"
     mkdir -p "$TTCN_OUT"
-    for s in "${@:-$TTCN_SUITES}"; do
+    : > "$TTCN_OUT/verdicts.txt"
+    # shellcheck disable=SC2086
+    [ $# -gt 0 ] || set -- $TTCN_SUITES
+    for s in "$@"; do
         say "testenv run $s -> $TTCN_OUT/$s"
         rm -rf "${TTCN_OUT:?}/$s"
         # shellcheck disable=SC2086
