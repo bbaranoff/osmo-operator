@@ -31,6 +31,7 @@
 #   GSM_ROOT=/opt/GSM            TTCN3_HACKS_REF=<branch|tag|commit>
 #   TTCN_SUITES="hlr stp mgw sip"   TTCN_OUT=/var/tmp/ttcn-<date>
 #   TTCN_ZIP=/home/nirvana/ttcn.zip TTCN_ARGS="--fast" (extra testenv args)
+#   TESTENV_SRC_DIR=$GSM_ROOT/ttcn-src  (osmo-dev + clean IUT clones)
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -41,6 +42,7 @@ TTCN_SUITES="${TTCN_SUITES:-hlr stp mgw sip}"
 TTCN_OUT="${TTCN_OUT:-/var/tmp/ttcn-$(date +%Y%m%d-%H%M%S)}"
 TTCN_ZIP="${TTCN_ZIP:-/home/nirvana/ttcn.zip}"
 TTCN_ARGS="${TTCN_ARGS:-}"
+TESTENV_SRC_DIR="${TESTENV_SRC_DIR:-$GSM_ROOT/ttcn-src}"
 OBS_BASE="https://downloads.osmocom.org/packages/osmocom:/latest"
 
 ROOT=""
@@ -153,11 +155,27 @@ act_run() {
     : > "$TTCN_OUT/verdicts.txt"
     # shellcheck disable=SC2086
     [ $# -gt 0 ] || set -- $TTCN_SUITES
+    # The IUT (osmo-hlr, osmo-stp...) is built by osmo-dev from clean clones in
+    # TESTENV_SRC_DIR, NOT from the bench trees of $GSM_ROOT: those are patched
+    # and configured in-tree, which an out-of-tree osmo-dev build refuses.
+    export TESTENV_SRC_DIR
+    mkdir -p "$TESTENV_SRC_DIR"
+    if [ ! -d "$TESTENV_SRC_DIR/osmo-dev" ]; then
+        say "testenv init osmo-dev -> $TESTENV_SRC_DIR"
+        ( cd "$d" && ./testenv.py init osmo-dev ) || die "testenv init osmo-dev"
+    fi
+    local cfg
     for s in "$@"; do
-        say "testenv run $s -> $TTCN_OUT/$s"
+        # Several testenv*.cfg: the Osmocom one(s) if named so (hlr: osmo, not
+        # pyhss), otherwise all of them (stp: ipa, m3ua, tcap...).
+        cfg=()
+        if [ -n "$(ls "$d/$s"/testenv_osmo*.cfg 2>/dev/null)" ]; then cfg=(-c 'osmo*')
+        elif [ "$(ls "$d/$s"/testenv*.cfg 2>/dev/null | wc -l)" -gt 1 ]; then cfg=(-c all)
+        fi
+        say "testenv run $s ${cfg[*]} -> $TTCN_OUT/$s"
         rm -rf "${TTCN_OUT:?}/$s"
         # shellcheck disable=SC2086
-        ( cd "$d" && ./testenv.py run "$s" --log-dir "$TTCN_OUT/$s" --no-tee $TTCN_ARGS ) \
+        ( cd "$d" && ./testenv.py run "$s" "${cfg[@]+"${cfg[@]}"}" --log-dir "$TTCN_OUT/$s" --no-tee $TTCN_ARGS ) \
             > "$TTCN_OUT/$s.console.log" 2>&1 || { say "$s : testenv rc=$? (voir $s.console.log)"; rc=1; }
         verdicts "$TTCN_OUT/$s" "$s" | tee -a "$TTCN_OUT/verdicts.txt"
     done
