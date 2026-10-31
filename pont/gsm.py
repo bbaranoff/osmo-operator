@@ -5,11 +5,13 @@ HYPERFRAME = 26 * 51 * 2048
 FRAME_DUR = 60.0 / 13000.0
 MACBLOCK_LEN = 23
 FR_BYTES = 33
+HR_BYTES = 14           # GSM-HR (TS 101 318), 112 bits, without the RFC 5993 ToC
 
 GSMTAP_BCCH = 0x01
 GSMTAP_CCCH = 0x04
 GSMTAP_SDCCH4 = 0x07
 GSMTAP_TCH_F = 0x09
+GSMTAP_TCH_H = 0x0a
 GSMTAP_ACCH = 0x80
 GSMTAP_SACCH = GSMTAP_SDCCH4 | GSMTAP_ACCH
 GSMTAP_TCH_ACCH = GSMTAP_TCH_F | GSMTAP_ACCH
@@ -63,6 +65,9 @@ _cod.gsm0503_sch_decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINT
 _cod.gsm0503_tch_fr_encode.argtypes = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int]
 _cod.gsm0503_tch_fr_decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit), ctypes.c_int,
                                        ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+_cod.gsm0503_tch_hr_encode.argtypes = [ctypes.POINTER(ubit), ctypes.POINTER(ctypes.c_uint8), ctypes.c_int]
+_cod.gsm0503_tch_hr_decode2.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(sbit), ctypes.c_int,
+                                        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
 _gsm = ctypes.CDLL("libosmogsm.so", use_errno=True)
 _gsm.osmo_a5.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
                          ctypes.POINTER(ubit), ctypes.POINTER(ubit)]
@@ -126,6 +131,29 @@ def tch_fr_encode_into(buf24, payload):
         _cod.gsm0503_tch_fr_encode(buf24, data, len(payload), 1)
     else:
         _cod.gsm0503_tch_fr_encode(buf24, None, 0, 1)
+
+
+def tch_hr_encode_into(buf, payload):
+    """gsm0503_tch_hr_encode on the first 6 bursts of `buf` (24 x 116 ubits, shifted by 2
+    bursts at each bid 0 by the caller, as trxcon's tx_tchh_fn does). payload: 14 bytes of
+    speech, 23 of FACCH/H, or None/empty for the dummy speech block (inverted CRC3, BFI on
+    the BTS side). Returns the libosmocoding rc (0 = OK)."""
+    if payload:
+        data = (ctypes.c_uint8 * len(payload))(*payload)
+        return _cod.gsm0503_tch_hr_encode(buf, data, len(payload))
+    return _cod.gsm0503_tch_hr_encode(buf, None, 0)
+
+
+def tch_hr_decode(bursts6, odd):
+    """The 6 most recent bursts of a TCH/H subchannel (oldest first, 116 hard bits each).
+    odd=0: burst 'f' of a FACCH/H position, FACCH tried first. Returns (rc, data):
+    rc = MACBLOCK_LEN (FACCH/H), HR_BYTES (speech) or < 0."""
+    buf = (sbit * (8 * 116)).from_buffer_copy(_soft(bursts6) + bytes(2 * 116))
+    out = (ctypes.c_uint8 * MACBLOCK_LEN)()
+    ne = ctypes.c_int()
+    nb = ctypes.c_int()
+    rc = _cod.gsm0503_tch_hr_decode2(out, buf, 1 if odd else 0, ctypes.byref(ne), ctypes.byref(nb))
+    return rc, bytes(out)
 
 
 def sch_decode(burst):
@@ -212,6 +240,86 @@ def sacch_tf_block_base(tn):
 
 def sacch_tf_block_start(fn, tn):
     return fn % 104 == sacch_tf_block_base(tn)
+
+
+# ── TCH/H (45.002 clause 7 table 1; osmo-bts scheduler_mframe.c frame_tchh_ts01..67) ──
+# In each half of the 26-multiframe the 12 traffic frames alternate subchannel 0 / 1 with
+# burst ids 0,0,1,1: frames 0,2,4,...,10,13,15,...,23 are TCH/H(0), the odd ones TCH/H(1);
+# frame 12 carries SACCH/TH(0), frame 25 SACCH/TH(1).
+# FACCH/H positions, fn%26 of the FIRST burst 'a' (trxcon sched_lchan_tchh.c).
+TCHH_UL_FACCH_A = frozenset((0, 1, 8, 9, 17, 18))
+TCHH_DL_FACCH_A = frozenset((4, 5, 13, 14, 21, 22))
+# fn%26 of the LAST burst 'f' of a downlink FACCH/H (odd=0 for the decoder there).
+TCHH_DL_FACCH_F = frozenset((15, 16, 23, 24, 6, 7))
+
+
+def tchh_sub_bid(fn):
+    """(subchannel, bid) of a TCH/H traffic frame, None on frames 12 / 25 (SACCH/TH)."""
+    m = fn % 26
+    if m in (12, 25):
+        return None
+    p = m if m < 12 else m - 13
+    return p % 2, (p // 2) % 2
+
+
+def next_tchh_frame(fn, ss):
+    """Next traffic frame of TCH/H subchannel ss after fn."""
+    n = (fn + 1) % HYPERFRAME
+    while True:
+        sb = tchh_sub_bid(n)
+        if sb is not None and sb[0] == ss:
+            return n
+        n = (n + 1) % HYPERFRAME
+
+
+def sacch_t_frame(tn, ss=None):
+    """fn%26 of the SACCH/T bursts: TCH/F by TN parity, TCH/H by subchannel."""
+    return sacch_tf_frame(tn) if ss is None else 12 + 13 * (ss & 1)
+
+
+def sacch_t_block_base(tn, ss=None):
+    """fn%104 of the first burst of the SACCH/T block (4 bursts, 26 frames apart).
+    TCH/H: (12 + 26*(TN//2) + 13*ss) % 104, osmo-bts frame_tchh_ts01/23/45/67."""
+    if ss is None:
+        return sacch_tf_block_base(tn)
+    return (12 + 26 * (tn // 2) + 13 * (ss & 1)) % 104
+
+
+def chan_nr_tch(b0):
+    """Channel type octet of a Channel Description (44.018 10.5.2.5): (half, ss, tn) for
+    TCH/F (00001TTT) and TCH/H (0001STTT), None for anything else."""
+    t = b0 >> 3
+    if t == 0b00001:
+        return False, 0, b0 & 7
+    if t >> 1 == 0b0001:
+        return True, t & 1, b0 & 7
+    return None
+
+
+CHAN_MODE_SIGN = 0x00
+
+
+def assignment_chan_mode(l2, off):
+    """Channel Mode (IE 0x63) of an ASSIGNMENT COMMAND whose PD is at l2[off], None if
+    absent. Mandatory part: Channel Description 2 (3) + Power Command (1); the optional
+    IEs are walked as TV / TLV (44.018 9.1.2)."""
+    i = off + 2 + 3 + 1
+    tv_len = {0x62: 17, 0x63: 2, 0x64: 4, 0x66: 2, 0x69: 3, 0x6b: 2, 0x6e: 2}
+    while i < len(l2):
+        tag = l2[i]
+        if tag == 0x2b:             # LAPDm padding: end of the message
+            return None
+        if tag == 0x63:
+            return l2[i + 1] if i + 1 < len(l2) else None
+        if tag & 0x80:              # type 1 / 2 (half-octet or single-octet IE)
+            i += 1
+        elif tag in tv_len:
+            i += tv_len[tag]
+        elif i + 1 < len(l2):
+            i += 2 + l2[i + 1]
+        else:
+            return None
+    return None
 
 
 class SlotPlan:
