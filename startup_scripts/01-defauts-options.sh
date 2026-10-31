@@ -79,6 +79,7 @@ MENU_MODE=0
 # rest. If c54x_exe is missing, the bench falls back to gr-gsm and says so
 # (below).
 : "${DSP_MODE:=1}"
+: "${MULTITHREADING:=1}"
 usage() {
     cat <<'USAGE'
 Usage : ./start-native.sh [options] [mode]
@@ -101,6 +102,11 @@ Usage : ./start-native.sh [options] [mode]
                         seuls les modules qemu,pty,osmocon,l2 sont retires et
                         repris par c54x_exe/run.sh. BANC_DSP=none pour n'avoir
                         que la pile.
+    --multithreading    (defaut) c54x_exe multi-coeur : --plan et balayage.sh
+                        lancent plusieurs DSP a la fois, un processus par coeur
+                        (tous les CPU, COEURS=N pour en fixer le nombre).
+                        Implique --dsp.
+    --no-multithreading une tache a la fois (COEURS=1)
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --bts-classic       [2026-10-21] (alias : --bts-classique) la BTS CLASSIQUE : osmo-bts-trx parle a pont/pont_dsp.py
@@ -312,6 +318,9 @@ while [ $# -gt 0 ]; do
         # grgsm_exe (--grgsm).
         --dsp)         DSP_MODE=1 ;;
         --grgsm)       DSP_MODE=0 ;;
+        # --multithreading (default): c54x_exe jobs on every core (05-run-sh.sh)
+        --multithreading|--multi) DSP_MODE=1; MULTITHREADING=1 ;;
+        --no-multithreading|--no-multi) MULTITHREADING=0 ;;
         # --osmo-trx: the DSP bench starts trx.highram.elf and the host
         # application transceiver (see c54x_exe/run.sh, OSMO_TRX=1); implies --dsp.
         --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; BTS_TRX_CHOISI="$1" ;;

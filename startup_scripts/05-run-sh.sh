@@ -17,6 +17,15 @@ say_begin "Resolution de run.sh"
 DSP_BANC=0
 DSP_MODULES_RETIRES="qemu,pty,osmocon,l2"
 : "${BANC_DSP:=$GSM_ROOT/c54x_exe/run.sh}"
+# Multithreading (default; --no-multithreading turns it off): c54x_exe --plan
+# runs its jobs one process per CPU core (src/multi.c). Off = COEURS=1, read by
+# c54x_exe --plan and balayage.sh. An explicit COEURS still wins.
+if [ "${MULTITHREADING:-1}" = 1 ]; then
+    : "${COEURS:=0}"
+else
+    : "${COEURS:=1}"
+fi
+export COEURS
 if [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ] && [ -x "$BANC_DSP" ]; then
     DSP_BANC=1
 elif [ "${DSP_MODE:-0}" = 1 ] && [ "$BANC_DSP" != none ]; then
