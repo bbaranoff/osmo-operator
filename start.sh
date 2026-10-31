@@ -56,7 +56,7 @@ done
 # inconnues : on ne lui passe que ce qui ne nous est pas destiné.
 set -- "${_args[@]+"${_args[@]}"}"
 
-# ── --lora [1|2]: aiguilleur payload LoRa + voix half-rate ───────────────────
+# ── --lora [1|2]: aiguilleur payload LoRa (half-rate radio : LORA_HALFRATE=1) ──
 # Nœud 1 : local 10.99.0.1 / 10.200.0.1, pair .2 ; nœud 2 : l'inverse.
 # Payload (RTP appel, relais SMS) -> tnc0 vers le pair LoRa, signalisation
 # (SS7/SIP) -> wg0, avec --wan --node N --hub-ip 10.99.0.1 ajoutés au lanceur
@@ -93,11 +93,19 @@ if [ "$_lora" = 1 ]; then
     [ "$_has_node" = 1 ] || set -- "$@" --node "$_lora_node"
     [ "$_has_hub" = 1 ]  || set -- "$@" --hub-ip "${LORA_HUB_IP:-10.99.0.1}"
     unset _has_wan _has_node _has_hub _a
-    echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0), voix half-rate"
+    echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0)$( [ "${LORA_HALFRATE:-0}" = 1 ] && echo ", voix half-rate")"
     echo "[start.sh]   options lanceur : $*"
     $_sudo env WAN_PEER="10.99.0.$_peer" LORA_PEER="10.200.0.$_peer" \
         bash "$HERE/network/setup-lora-payload.sh" up || echo "[start.sh] aiguilleur LoRa: echec (voir ci-dessus)"
-    $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] codec half-rate: echec (voir ci-dessus)"
+    # Half-rate radio en option seulement : le pont (pont/gsm.py) ne code que
+    # le TCH/F (FR 33 octets) ; un MS du pont assigné en TCH/H ne s'y accroche
+    # pas (rll_ready=no -> Assignment Failure, "No service"). Il ne change de
+    # toute façon rien au débit LoRa, qui ne porte que le RTP entre nœuds.
+    if [ "${LORA_HALFRATE:-0}" = 1 ]; then
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] codec half-rate: echec (voir ci-dessus)"
+    elif grep -qs 'TCH/H$' "$HERE/configs/osmo-bsc.cfg" "${OSMOCOM_CFG:-/etc/osmocom}/osmo-bsc.cfg"; then
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" --off
+    fi
     unset _tnc_ip _peer
 else
     if ip rule show 2>/dev/null | grep -q 'fwmark 0x10'; then
