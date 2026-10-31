@@ -59,7 +59,8 @@ set -- "${_args[@]+"${_args[@]}"}"
 # ── --lora [1|2]: aiguilleur payload LoRa + voix half-rate ───────────────────
 # Nœud 1 : local 10.99.0.1 / 10.200.0.1, pair .2 ; nœud 2 : l'inverse.
 # Payload (RTP appel, relais SMS) -> tnc0 vers le pair LoRa, signalisation
-# (SS7/SIP) -> wg0. Sans numéro, le nœud est déduit de l'adresse de tnc0.
+# (SS7/SIP) -> wg0, avec --wan --node N --hub-ip 10.99.0.1 ajoutés au lanceur
+# (LORA_HUB_IP pour un autre hub). Sans numéro, nœud déduit de tnc0.
 # Sans --lora, on revient à l'ancienne config (full-rate, pas d'aiguilleur)
 # si un --lora précédent l'a laissée.
 _sudo=""; [ "$(id -u)" = 0 ] || _sudo="sudo"
@@ -77,7 +78,23 @@ if [ "$_lora" = 1 ]; then
     if [ -n "$_tnc_ip" ] && [ "$_tnc_ip" != "10.200.0.$_lora_node" ]; then
         echo "[start.sh] attention : --lora $_lora_node mais tnc0 = $_tnc_ip (attendu 10.200.0.$_lora_node)" >&2
     fi
+    # Identité SS7/WAN toujours sur wg0, jamais sur le lien radio : plan WAN
+    # (PC 1.<nœud><op>.x), nœud imposé, hub inter-STP sur le nœud 1 (wg0).
+    # Une option donnée explicitement sur la ligne de commande garde la main.
+    _has_wan=0; _has_node=0; _has_hub=0
+    for _a in "$@"; do
+        case "$_a" in
+            --wan|--wan=*|--wan-nodes=*) _has_wan=1 ;;
+            --node|--node=*)             _has_node=1 ;;
+            --hub-ip|--hub-ip=*)         _has_hub=1 ;;
+        esac
+    done
+    [ "$_has_wan" = 1 ]  || set -- "$@" --wan
+    [ "$_has_node" = 1 ] || set -- "$@" --node "$_lora_node"
+    [ "$_has_hub" = 1 ]  || set -- "$@" --hub-ip "${LORA_HUB_IP:-10.99.0.1}"
+    unset _has_wan _has_node _has_hub _a
     echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0), voix half-rate"
+    echo "[start.sh]   options lanceur : $*"
     $_sudo env WAN_PEER="10.99.0.$_peer" LORA_PEER="10.200.0.$_peer" \
         bash "$HERE/network/setup-lora-payload.sh" up || echo "[start.sh] aiguilleur LoRa: echec (voir ci-dessus)"
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] codec half-rate: echec (voir ci-dessus)"
