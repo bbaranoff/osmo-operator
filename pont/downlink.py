@@ -4,6 +4,7 @@ import socket
 import struct
 
 from . import gsm
+from .tchh import TchHRecepteur
 
 _dcch_gen = [0]   # generation of calypso_dcch_cfg (IMM ASS), see CHANNEL RELEASE
 # RA of the TI firmware's last RACHs (dsp/uplink.py, noter_rach) and time of the last IMM ASS
@@ -77,6 +78,7 @@ class Downlink:
         self.tch_last_fn = None
         self.sacch_acc = {}
         self._deciphered = {}
+        self.rx_h = None        # TchHRecepteur of the current TCH/H, see _tch_h
         tch.on_close.append(self._tch_reset)
 
     def _tch_reset(self):
@@ -84,6 +86,7 @@ class Downlink:
         self.tch_last_fn = None
         self.sacch_acc = {}
         self._deciphered = {}
+        self.rx_h = None
 
     def dispatch(self, tn, fn, burst):
         if self.record:
@@ -262,7 +265,10 @@ class Downlink:
             if (b1 >> 4) & 1:
                 log.warning("ASSIGNMENT COMMAND avec saut de frequence : TCH non arme (fn=%u)", fn)
                 return
-            self.tch.arm(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2)
+            ct = gsm.chan_nr_tch(b0)
+            half, ss = (ct[0], ct[1]) if ct else (False, 0)
+            self.tch.arm(b0 & 0x07, (b1 >> 5) & 0x07, ((b1 & 0x03) << 8) | b2,
+                         half, ss, gsm.assignment_chan_mode(l2, off))
         elif mt == gsm.RR_CHANNEL_RELEASE:
             self.tch.release_requested("CHANNEL RELEASE")
             self._liberer_dcch_ti(fn, "CHANNEL RELEASE")
@@ -294,6 +300,9 @@ class Downlink:
     def _tch(self, tn, fn, burst):
         if gsm.is_dummy(burst):
             self.stats.dl_dummy += 1
+            return
+        if self.tch.half:
+            self._tch_h(tn, fn, burst)
             return
         if fn % 26 == gsm.sacch_tf_frame(tn):
             self._tch_sacch(tn, fn, burst)
@@ -328,6 +337,58 @@ class Downlink:
         else:
             self.stats.tch_crc += 1
 
+    def _decode_tch_h(self, items, odd):
+        """Decoder for TchHRecepteur: items are (fn, burst) or None. Same ciphering rule as
+        _decode_tch: global state first, a valid FACCH/H proves the downlink is ciphered."""
+        def coder(chiffre):
+            out = []
+            for it in items:
+                if it is None:
+                    out.append(bytes(116))
+                elif chiffre:
+                    out.append(self._ciphered([it])[0])
+                else:
+                    out.append(gsm.coded_from_burst(it[1]))
+            return out
+        if self.cipher.current() is None:
+            return gsm.tch_hr_decode(coder(False), odd)
+        if self.cipher.dl_active:
+            return gsm.tch_hr_decode(coder(True), odd)
+        rc, data = gsm.tch_hr_decode(coder(False), odd)
+        if rc == gsm.MACBLOCK_LEN:
+            return rc, data
+        rc2, data2 = gsm.tch_hr_decode(coder(True), odd)
+        if rc2 == gsm.MACBLOCK_LEN:
+            first = next(it for it in items if it is not None)
+            self.cipher.confirm_dl(first[0])
+            return rc2, data2
+        return rc, data
+
+    def _tch_h(self, tn, fn, burst):
+        """TCH/H(ss) downlink monitor: SACCH/TH of our subchannel, FACCH/H (CHANNEL RELEASE)
+        and GSM-HR speech counters. The speech itself is decoded by the DSP ROM."""
+        ss = self.tch.ss
+        if fn % 26 in (12, 25):
+            if fn % 26 == gsm.sacch_t_frame(tn, ss):
+                self._tch_sacch(tn, fn, burst)
+            return
+        if self.rx_h is None or self.rx_h.ss != ss:
+            self.rx_h = TchHRecepteur(ss)
+        res = self.rx_h.feed(fn, (fn, burst), self._decode_tch_h)
+        if res is None:
+            return
+        rc, data = res
+        if rc == gsm.HR_BYTES:
+            self.stats.tch_dl += 1
+        elif rc == gsm.MACBLOCK_LEN:
+            self.stats.tch_facch_dl += 1
+            self.feed.l2(fn, gsm.GSMTAP_TCH_H, data, tn)
+            if gsm.rr_message_type(data)[1] == gsm.RR_CHANNEL_RELEASE:
+                self.tch.release_requested("CHANNEL RELEASE (FACCH/H)")
+                self._liberer_dcch_ti(fn, "CHANNEL RELEASE (FACCH/H)")
+        else:
+            self.stats.tch_crc += 1
+
     def _noter_parole(self, fn, fr):
         n = getattr(self, "_parole_n", 0)
         if n >= 4000:
@@ -341,7 +402,7 @@ class Downlink:
         self._parole_n = n + 1
 
     def _tch_sacch(self, tn, fn, burst):
-        start = gsm.sacch_tf_block_base(tn)
+        start = gsm.sacch_t_block_base(tn, self.tch.ss if self.tch.half else None)
         block = fn - ((fn % 104 - start) % 104)
         acc = self.sacch_acc.setdefault(block, [])
         acc.append((fn, burst))

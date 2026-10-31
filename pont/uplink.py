@@ -7,6 +7,7 @@ import threading
 import time
 
 from . import gsm
+from .tchh import TchHEmetteur
 
 log = logging.getLogger("pont")
 
@@ -17,6 +18,11 @@ SB_SACCH_UL = "/dev/shm/calypso_tch_sacch_ul"
 SB_TCH_UL = "/dev/shm/calypso_tch_ul"
 TCH_UL_SLOT = 64
 TCH_UL_FR_OFS = 16
+# Byte 12 of a calypso_tch_ul slot: speech format written by c54x_exe (montant.c
+# publier_parole). 0 = FR (33 bytes, also what an older c54x_exe leaves), 2 = GSM-HR
+# (14 bytes, TS 101 318), both at TCH_UL_FR_OFS.
+TCH_UL_FMT_OFS = 12
+TCH_UL_FMT_HR = 2
 POLL = gsm.FRAME_DUR / 8
 TX_BURSTS = 24
 BPLEN = 116
@@ -90,8 +96,10 @@ class TchUplinkRing:
         while self.last < w:
             self.last += 1
             sl = os.pread(self.fd, TCH_UL_SLOT, 8 + ((self.last - 1) % n) * TCH_UL_SLOT)
-            if len(sl) >= TCH_UL_FR_OFS + gsm.FR_BYTES:
-                frames.append(sl[TCH_UL_FR_OFS:TCH_UL_FR_OFS + gsm.FR_BYTES])
+            if len(sl) < TCH_UL_FR_OFS + gsm.FR_BYTES:
+                continue
+            taille = gsm.HR_BYTES if sl[TCH_UL_FMT_OFS] == TCH_UL_FMT_HR else gsm.FR_BYTES
+            frames.append(sl[TCH_UL_FR_OFS:TCH_UL_FR_OFS + taille])
         return frames, lost
 
 
@@ -151,7 +159,8 @@ class Uplink(threading.Thread):
         with self.q_lock:
             self.q_facch.append(bytes(l2[:gsm.MACBLOCK_LEN]))
         self.stats.facch_ul += 1
-        self.feed.l2(self.clock.fn(), gsm.GSMTAP_TCH_F, l2[:gsm.MACBLOCK_LEN], self.tch.active_tn() or 0, True)
+        self.feed.l2(self.clock.fn(), gsm.GSMTAP_TCH_H if self.tch.half else gsm.GSMTAP_TCH_F,
+                     l2[:gsm.MACBLOCK_LEN], self.tch.active_tn() or 0, True)
 
     def _poll_rach(self):
         b = self.sb_rach.new_record()
@@ -350,12 +359,14 @@ class TchScheduler(threading.Thread):
         self.buf = (gsm.ubit * (TX_BURSTS * BPLEN))()
         self.mask = 0
         self.sent_sacch_block = None
+        self.hr = None          # TchHEmetteur of the current TCH/H, see _tchh
         tch.on_close.append(self._reset)
 
     def _reset(self):
         ctypes.memset(self.buf, 0, TX_BURSTS * BPLEN)
         self.mask = 0
         self.sent_sacch_block = None
+        self.hr = None
         with self.uplink.q_lock:
             self.uplink.q_facch.clear()
             self.uplink.q_voice.clear()
@@ -364,13 +375,36 @@ class TchScheduler(threading.Thread):
         ctypes.memmove(self.buf, ctypes.byref(self.buf, 4 * BPLEN), 20 * BPLEN)
         ctypes.memset(ctypes.byref(self.buf, 20 * BPLEN), 0, 4 * BPLEN)
         self.mask = (self.mask << 4) & 0xFFFFFFFF
-        with self.uplink.q_lock:
-            facch = self.uplink.q_facch.popleft() if self.uplink.q_facch else None
-            voice = self.uplink.q_voice.popleft() if self.uplink.q_voice else None
+        facch = self._pop_facch()
+        voice = self._pop_voice()
+        if voice is not None and len(voice) != gsm.FR_BYTES:
+            voice = None        # a GSM-HR frame left over from a TCH/H
         gsm.tch_fr_encode_into(self.buf, facch if facch is not None else voice)
 
+    def _pop_facch(self):
+        with self.uplink.q_lock:
+            return self.uplink.q_facch.popleft() if self.uplink.q_facch else None
+
+    def _pop_voice(self):
+        with self.uplink.q_lock:
+            return self.uplink.q_voice.popleft() if self.uplink.q_voice else None
+
+    def _tchh(self, tn, fn_air):
+        """TCH/H: one burst of our subchannel at fn_air, coded by TchHEmetteur (pont/tchh.py)."""
+        signalisation = self.tch.mode == gsm.CHAN_MODE_SIGN
+        if self.hr is None or self.hr.ss != self.tch.ss or self.hr.signalling != signalisation:
+            self.hr = TchHEmetteur(self.tch.ss, signalisation)
+            log.info("TCH/H(%d) TN=%d : montant code par le pont (FACCH/H, SACCH/TH, GSM-HR), mode %s",
+                     self.tch.ss, tn, "signalisation" if signalisation else "parole")
+        coded = self.hr.burst(fn_air, self._pop_voice, self._pop_facch)
+        if coded is None:
+            return
+        self.tx.schedule(tn, fn_air, gsm.burst_from_coded(coded), True)
+        self.stats.tch_ul_bursts += 1
+
     def _sacch(self, tn, fn_air):
-        if not gsm.sacch_tf_block_start(fn_air, tn):
+        ss = self.tch.ss if self.tch.half else None
+        if fn_air % 104 != gsm.sacch_t_block_base(tn, ss):
             return
         block = fn_air - (fn_air % 104)
         if self.uplink.sacch_l2 is None or self.sent_sacch_block == block:
@@ -393,6 +427,9 @@ class TchScheduler(threading.Thread):
                 fn_air = (fn_air + 1) % gsm.HYPERFRAME
             self.clock.sleep_until_fn((fn_air - self.cfg.ul_fn_advance) % gsm.HYPERFRAME)
             self._sacch(tn, fn_air)
+            if self.tch.half:
+                self._tchh(tn, fn_air)
+                continue
             if not gsm.is_tch_carrier(fn_air):
                 continue
             bid = gsm.tch_burst_index(fn_air) % 4

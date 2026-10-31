@@ -92,11 +92,17 @@ class TchHEmetteur:
         return out
 
 
+def _decodeur_brut(items, odd):
+    """Default decoder: items are 116-bit coded bursts, None for a missing one."""
+    return gsm.tch_hr_decode([b if b is not None else bytes(BPLEN) for b in items], odd)
+
+
 class TchHRecepteur:
-    """Downlink of TCH/H(ss): feed(fn, coded116) returns (rc, data) when a frame is decoded
+    """Downlink of TCH/H(ss): feed(fn, item) returns (rc, data) when a frame is decoded
     (rc = MACBLOCK_LEN for a FACCH/H, HR_BYTES for speech, < 0 for a bad frame), else None.
-    `coded` is the 116 data bits of the burst (gsm.coded_from_burst), deciphered or not:
-    the caller tries both while the ciphering state is unknown (see feed's decoder arg)."""
+    By default `item` is the 116 coded bits of the burst; with decoder(items, odd) the
+    caller may store anything (pont/downlink.py keeps (fn, burst) to try the burst in
+    clear then deciphered). Missing bursts are passed as None."""
 
     def __init__(self, ss):
         self.ss = ss & 1
@@ -130,8 +136,8 @@ class TchHRecepteur:
             return None             # a FACCH/H needs its 6 bursts
         # Always the last 6 bursts, oldest first (osmo-bts / trxcon BUFTAIL8): speech is
         # read from the 4 oldest (bursts 'a'..'d'), a FACCH/H from all 6 ('a'..'f').
-        bursts = [bytes(BPLEN)] * (6 - len(self.hist)) + [b for _, b in self.hist]
-        rc, data = (decoder or gsm.tch_hr_decode)(bursts, odd)
+        items = [None] * (6 - len(self.hist)) + [b for _, b in self.hist]
+        rc, data = (decoder or _decodeur_brut)(items, odd)
         if rc == gsm.MACBLOCK_LEN:
             self.ongoing_facch = True
             return rc, data[:gsm.MACBLOCK_LEN]

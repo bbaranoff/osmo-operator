@@ -20,15 +20,16 @@ log = logging.getLogger("pont")
 
 
 class TchDsp(Tch):
-    def arm(self, tn, tsc, arfcn):
+    def arm(self, tn, tsc, arfcn, half=False, ss=0, mode=None):
         with self.lock:
             self.seq += 1
             self.tn = tn
             self.tsc = tsc
+            self.half, self.ss, self.mode = bool(half), ss & 1, mode
             self.open = False
             self._write_cfg(tn, tsc, arfcn, self.seq)
-        log.info("ASSIGNMENT COMMAND : TCH TN=%d TSC=%d ARFCN=%d annonce au DSP, "
-                 "bascule du BSP a la premiere tache TCH du firmware", tn, tsc, arfcn)
+        log.info("ASSIGNMENT COMMAND : %s TN=%d TSC=%d ARFCN=%d annonce au DSP, "
+                 "bascule du BSP a la premiere tache TCH du firmware", self.nom(), tn, tsc, arfcn)
 
     def abandon(self, reason):
         """The mobile stayed (or came back) on the SDCCH: withdraw the announcement.

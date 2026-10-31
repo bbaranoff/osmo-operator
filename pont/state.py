@@ -85,6 +85,11 @@ class Tch:
         self.lock = threading.Lock()
         self.tn = None
         self.tsc = 0
+        # TCH/H: half=True and the subchannel ss; mode = Channel Mode of the
+        # ASSIGNMENT COMMAND (gsm.CHAN_MODE_SIGN = signalling only), None if absent.
+        self.half = False
+        self.ss = 0
+        self.mode = None
         self.open = False
         self.seq = 0
         self.on_close = []
@@ -98,14 +103,28 @@ class Tch:
         with self.lock:
             return None if self.open_since is None else time.monotonic() - self.open_since
 
-    def arm(self, tn, tsc, arfcn):
+    def arm(self, tn, tsc, arfcn, half=False, ss=0, mode=None):
         with self.lock:
             self.seq += 1
             self.tn = tn
             self.tsc = tsc
+            self.half, self.ss, self.mode = bool(half), ss & 1, mode
             self.open = False
             self._write_cfg(tn, tsc, arfcn, self.seq)
-        log.info("ASSIGNMENT COMMAND : TCH TN=%d TSC=%d ARFCN=%d arme, en attente du mobile", tn, tsc, arfcn)
+        log.info("ASSIGNMENT COMMAND : %s TN=%d TSC=%d ARFCN=%d arme, en attente du mobile",
+                 self.nom(), tn, tsc, arfcn)
+
+    def nom(self):
+        return ("TCH/H(%d)" % self.ss) if self.half else "TCH/F"
+
+    def suivre_firmware(self, kind_half, ss):
+        """The firmware's own view (DSP tap, kind 3 = TCH/H) wins over the decoded
+        ASSIGNMENT COMMAND: it is the channel it really transmits on."""
+        with self.lock:
+            if self.tn is None or (self.half, self.ss) == (bool(kind_half), ss & 1):
+                return
+            self.half, self.ss = bool(kind_half), ss & 1
+        log.info("TCH : le firmware est en %s, le pont suit", self.nom())
 
     def prove(self, source):
         with self.lock:

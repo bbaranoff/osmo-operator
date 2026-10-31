@@ -57,6 +57,13 @@ UL_RAW_DECAL = int(os.environ.get("PONT_UL_RAW_DECAL", "0"))
 # RACH and SDCCH/SACCH by the ROM, the whole TCH (FACCH, SACCH/T, speech) by the host.
 # PONT_UL_RAW_TCH=1: everything by the ROM (uplink voice cut).
 UL_RAW_TCH = os.environ.get("PONT_UL_RAW_TCH", "0") == "1"
+# TCHH_HOTE: ON A TCH/H THE HOST ALWAYS CODES THE TCH, whatever PONT_UL_RAW_TCH says.
+# The firmware posts TCHT (13) with a TX window on its subchannel frames and TCHD (28)
+# on the other ones (layer1/prim_tch.c), and montant.c captures its FACCH (a_fu), SACCH
+# (a_cu) and speech (a_du) as on a TCH/F; but the emulated ROM emits NO uplink burst on a
+# TCH/H (calypso_tx_rom stays silent: no SABM on air, BSC "rll_ready=no" -> Assignment
+# Failure). The bridge therefore codes FACCH/H, SACCH/TH and GSM-HR itself (pont/tchh.py)
+# as soon as the channel is a TCH/H (ASSIGNMENT COMMAND, confirmed by the firmware tap).
 # GRACE DELAY BEFORE ABANDONING THE TCH ON AN UPLINK SDCCH BLOCK (seconds).
 # Right after the SABM FACCH, a block may still show up on the SDCCH path: it is the tail of
 # the firmware's SDCCH task (ABORT after CAS_C), not a return to the SDCCH. Abandoning the TCH
@@ -108,9 +115,9 @@ class RomTxRing:
 
 
 def classe_tch(fn, burst):
-    """Uplink burst of a TCH/F: 'S' SACCH/T (fn%26 = 12, or 25 depending on the TN),
-    'F' FACCH (a stealing flag set: bits 60 / 87, either side of the TSC -- same place
-    in the ROM's bursts), 'P' speech otherwise."""
+    """Uplink burst of a TCH: 'S' SACCH/T (fn%26 = 12, or 25 depending on the TN; on a
+    TCH/H, 12 + 13*ss), 'F' FACCH (a stealing flag set: bits 60 / 87, either side of the
+    TSC -- same place in the ROM's bursts), 'P' speech otherwise."""
     if fn % 26 in (12, 25):
         return "S"
     try:
@@ -131,7 +138,8 @@ class TransmitterPuits:
         self.n = 0
 
     def schedule(self, tn, fn_air, burst, cipher, essais=0):
-        if not UL_RAW_TCH and self.vrai is not None and self.tch is not None and tn == self.tch.active_tn():
+        if (self.vrai is not None and self.tch is not None and tn == self.tch.active_tn()
+                and (not UL_RAW_TCH or self.tch.half)):
             self.stats.air_hote_tch += 1
             self.stats.tch_ul_hote[classe_tch(fn_air, burst)] += 1
             if cipher:
@@ -287,6 +295,9 @@ class UplinkDsp(Uplink):
         leave the following SDCCH blocks undecodable. The Kc and dl_active fall
         at the next IMMEDIATE ASSIGNMENT, decoded at the BTS's time
         (Downlink._signalling), or with a new Kc."""
+        t = self.dedicated.tch()
+        if t is not None and t[2] == self.tch.active_tn():
+            self.tch.suivre_firmware(t[0] == 3, t[1])      # kind 3 = TCH/H (dsp/dedicated.py)
         active = self.dedicated.plan() is not None
         if self.ded_active and not active:
             reason = "canal libere par le mobile"
@@ -374,12 +385,12 @@ class UplinkDsp(Uplink):
                 if classe_tch(fn, bits) == "S":
                     self._s_rom = getattr(self, "_s_rom", 0) + 1
                     st.sacch_t_rom_blocs = self._s_rom // 4
-            if typ != 1 and not UL_RAW_TCH and tn == self.tch.active_tn():
+            if typ != 1 and (not UL_RAW_TCH or self.tch.half) and tn == self.tch.active_tn():
                 st.tch_ul_rom_jete[classe_tch(fn, bits)] += 1
                 tch_rom[0] += 1          # see UL_RAW_TCH: the TCH is coded and emitted by the host
                 if tch_rom[0] == 1:
                     log.info("bursts ROM du TCH TS%d non emis : FACCH, SACCH/T et parole restent codes par l'hote "
-                             "(PONT_UL_RAW_TCH=0), la ROM n'emet pas encore la parole montante", tn)
+                             "(%s)", tn, "TCH/H, voir TCHH_HOTE" if self.tch.half else "PONT_UL_RAW_TCH=0")
                 return
             self.tx_rom.trx.send_ul(tn, (fn + UL_RAW_DECAL) % gsm.HYPERFRAME, list(bits), False)
             if typ == 1:
