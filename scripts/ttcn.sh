@@ -360,9 +360,9 @@ run_cfg() {
 # 5060, MNCC socket). Refuses with the holder of each port.
 precheck() {
     local d="$1"; shift
-    # 9999: local_port of several stp clients in the suite configs themselves
-    # (STP_Tests_M3UA_TCP.cfg, STP_Tests_IPA_M3UA.cfg), not changeable.
-    local s f ports="4222 2427 2905 5000 5060 9999" busy="" p who
+    # 9998, 9999: local ports of stp clients, set in the suites themselves
+    # (STP_Tests_M3UA_TCP.cfg, STP_Tests_IPA_M3UA.cfg, STP_Tests_IPA.ttcn:430), not changeable.
+    local s f ports="4222 2427 2905 5000 5060 9998 9999" busy="" p who
     for s in "$@"; do
         for f in "$d/$s"/testenv*.cfg; do
             [ -f "$f" ] && ports="$ports $(sed -n 's/^vty_port=//p' "$f")"

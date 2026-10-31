@@ -396,18 +396,18 @@ lte)
         # The subscriber console lives its own life: it only reads MongoDB and
         # is precisely used to provision with the core off. If it listens, say so.
         _w=""
-        ss -tanH state listening "( sport = :9998 )" 2>/dev/null | grep -q . \
-            && _w="  ${AR}${OK} console ${C1}:9998${C}"
+        ss -tanH state listening "( sport = :8999 )" 2>/dev/null | grep -q . \
+            && _w="  ${AR}${OK} console ${C1}:8999${C}"
         echo "${C1}4G a l arret${C} - ${C2}osmo-lte start${C}${_w}"; exit 0
     fi
     # The core: the eight daemons in osmo-epc.sh start order, mongod - the HSS
     # and the PCRF read the subscribers from it and DIE without it (the MME
     # then answers 3002 on S6a and rejects every attach) - and the subscriber
-    # console (open5gs-webui.service, :9998), which reads the same database.
+    # console (open5gs-webui.service, :8999), which reads the same database.
     i=0
     for e in MME:open5gs-mmed HSS:open5gs-hssd SGWC:open5gs-sgwcd SGWU:open5gs-sgwud \
              SMF:open5gs-smfd UPF:open5gs-upfd PCRF:open5gs-pcrfd NRF:open5gs-nrfd \
-             MONGO:mongod WEBUI:@9998; do
+             MONGO:mongod WEBUI:@8999; do
         IFS=: read -r name proc <<< "$e"
         # « @port »: a console, not a daemon - the Open5GS WebUI is a node
         # process, its name says nothing. Check what it LISTENS on instead.
