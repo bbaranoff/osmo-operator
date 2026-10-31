@@ -7,7 +7,7 @@
 # Usage:
 #   ./start.sh [options]            native launcher (startup_scripts/*.sh)
 #   ./start.sh --docker [options]   hands over to launch/start-docker.sh
-#   ./start.sh --lora 1|2 [options] payload LoRa + voix half-rate, nœud 1 ou 2
+#   ./start.sh --lora 1|2 [options] payload LoRa, nœud 1 ou 2 (codec : voir --hr)
 #                                   (sans numéro : déduit de l'adresse de tnc0)
 #   ./start.sh --hr [options]       voix half-rate (TCH/H) ; sans --hr : full-rate
 #   VAR=x ./start.sh                environment overrides always win
@@ -104,15 +104,15 @@ elif ip rule show 2>/dev/null | grep -q 'fwmark 0x10'; then
 fi
 
 # ── --hr: voix half-rate (TCH/H, GSM-HR) ─────────────────────────────────────
-# Canaux voix du BSC en TCH/H + codec-support fr hr, mobile en half-speed
-# prefer (network/setup-lora-codec.sh). Le pont suit tout seul le type de canal
-# de l'ASSIGNMENT COMMAND (TCH/F ou TCH/H + sous-canal). Sans --hr : full-rate
-# d'origine, rétabli si un --hr précédent l'avait laissé.
+# Canaux voix du BSC en TCH/H + codec-support fr hr, mobiles en half-speed
+# prefer (network/setup-lora-codec.sh). Sans --hr : full-rate d'origine,
+# réimposé à chaque lancement (idempotent) : ni un --hr précédent, ni un
+# gabarit tiré en TCH/H par un git pull ne doivent survivre.
 if [ "$_hr" = 1 ]; then
     echo "[start.sh] --hr : voix half-rate (TCH/H)"
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
-elif grep -qs 'TCH/H$' "$HERE/configs/osmo-bsc.cfg" "${OSMOCOM_CFG:-/etc/osmocom}/osmo-bsc.cfg"; then
-    $_sudo bash "$HERE/network/setup-lora-codec.sh" --off
+else
+    $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
 fi
 unset _sudo
 
