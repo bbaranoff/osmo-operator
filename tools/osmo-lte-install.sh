@@ -32,7 +32,7 @@
 #   osmo-lte-install --configs       installs the repo configs
 #   osmo-lte-install --launchers     osmo-lte, osmo-epc in /usr/local/bin
 #                                    (+ the open5gs-webui unit, enabled)
-#   osmo-lte-install --webui         builds the Open5GS WebUI (console :9999)
+#   osmo-lte-install --webui         builds the Open5GS WebUI (console :9998)
 #   osmo-lte-install --force         (with --configs) overwrites existing configs
 #
 # Idempotent, non-fatal package by package. Usable in a session AND in the ISO
@@ -410,7 +410,7 @@ lte_launchers() {
         if [ "$(systemctl is-enabled open5gs-webui 2>/dev/null)" != masked ]; then
             systemctl enable open5gs-webui >/dev/null 2>&1 || true
         fi
-        _l_ok "console 4G : open5gs-webui.service posee et activee (:9999)"
+        _l_ok "console 4G : open5gs-webui.service posee et activee (:9998)"
     fi
 }
 
@@ -448,7 +448,7 @@ lte_webui() {
       && npm run build >/dev/null 2>&1 ) \
         || { _l_err "WebUI Open5GS : npm install / build echoue (voir $dir)"; return 1; }
     [ -f "$dir/server/index.js" ] || { _l_err "WebUI Open5GS : pas de server/index.js apres build"; return 1; }
-    _l_ok "WebUI Open5GS construit ($dir) - console des abonnes sur :9999"
+    _l_ok "WebUI Open5GS construit ($dir) - console des abonnes sur :9998"
     systemctl restart open5gs-webui >/dev/null 2>&1 || true
 }
 

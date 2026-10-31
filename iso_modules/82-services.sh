@@ -101,7 +101,7 @@ fi
 # The hub has no operator VTY or radio to show: the dashboard is not enabled there.
 [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-egprs-web 2>/dev/null||true
 
-# ── 4G subscriber console (Open5GS WebUI, :9999) ───────────────────────────
+# ── 4G subscriber console (Open5GS WebUI, :9998) ───────────────────────────
 # Installed and enabled by default, like the 2G dashboard. On images without a
 # built WebUI its ConditionPathExists (services/open5gs-webui.service) skips
 # it cleanly. The hub has no 4G core: not enabled there.
@@ -113,7 +113,7 @@ if [ "$ISO_ROLE" != "interstp" ]; then
         chroot "$ROOTFS" systemctl enable open5gs-webui 2>/dev/null || \
             ln -sf /etc/systemd/system/open5gs-webui.service \
                    "$ROOTFS/etc/systemd/system/multi-user.target.wants/open5gs-webui.service"
-        echo -e "  ${GREEN}✓${NC} ${CYAN}open5gs-webui.service${NC} pose et active au boot (console abonnes 4G, :9999)"
+        echo -e "  ${GREEN}✓${NC} ${CYAN}open5gs-webui.service${NC} pose et active au boot (console abonnes 4G, :9998)"
     else
         echo -e "  ${RED}✗ services/open5gs-webui.service introuvable${NC}" >&2; exit 1
     fi

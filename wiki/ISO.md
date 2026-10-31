@@ -70,7 +70,7 @@ start it.
 | Build | `sudo ./build-iso.sh --desktop`, about 2 h 15 on 16 cores; Docker image pulled from ghcr.io, no recompilation; minimal debootstrap + the build's `.deb`s (about 41); about 1,650 packages in the chroot; dpkg integrity check before and after squashfs |
 | 2G | full bench (`launch.sh`, `osmo-banc`), 2 MS, A5/1, inter-operator SMS, MSC with SGs (CSFB) |
 | Emulated baseband | QEMU `qosmo` (ARM7 + C54x DSP), DSP ROMs, layer1 firmware for the compal boards, gdb/telnet, `c54x_exe`, `grgsm_exe` |
-| 4G | portable srsENB/srsUE + srsGUI, Open5GS, freeDiameter TLS, MME SGsAP, HSS console `:9999`, subscribers in Mongo |
+| 4G | portable srsENB/srsUE + srsGUI, Open5GS, freeDiameter TLS, MME SGsAP, HSS console `:9998`, subscribers in Mongo |
 | Phone | postmarketOS VM (about 1.7 GB compressed, PPP kernel), patched pmbootstrap |
 | Desktop | minimal GNOME, Firefox (Mozilla deb, uBlock), Wireshark, Linphone (extension 100), Kodi, dino, oFono, Conky, Plymouth `osmo-bts`, web dashboard + tutorial |
 | Audio | system-wide PulseAudio, PipeWire for screencast only, PCM `gsm_out`/`gsm_in` |
@@ -313,7 +313,7 @@ window) installs what is missing.
 ### 5.6 4G (srsRAN + Open5GS) and CSFB
 
 - Full **Open5GS** core on loopbacks (MME, SGW-C/U, SMF, UPF, PCRF, HSS, NRF...), MongoDB behind
-  the HSS, **freeDiameter** with TLS certificates installed, Prometheus :9090, **WebUI :9999**
+  the HSS, **freeDiameter** with TLS certificates installed, Prometheus :9090, **WebUI :9998**
   (`open5gs-webui.service`, Next.js) for subscribers.
 - **srsENB** radio (10 MHz, EARFCN 3350, band 7) and **srsUE** linked over **ZeroMQ**
   (:2000/:2001), portable binaries (no build-CPU AVX), **srsGUI** for real-time traces
@@ -423,7 +423,7 @@ built-in VTYs. `./start.sh --status` tells what is running.
 | 4239 | VTY osmo-stp | | 8080 | bench dashboard |
 | 4242 | VTY osmo-bsc | | 8081 | I/Q spectra (fft-web) |
 | 4243 | VTY osmo-mgw | | 9090 | Prometheus Open5GS |
-| 4245 | VTY osmo-sgsn | | 9999 | WebUI Open5GS (HSS) |
+| 4245 | VTY osmo-sgsn | | 9998 | WebUI Open5GS (HSS) |
 | 4254 | VTY osmo-msc | | 5060 | Asterisk SIP |
 | 4258 | VTY osmo-hlr | | 2775 | SMPP |
 | 4260 | VTY osmo-ggsn | | 7890 | inter-op SMS relay |

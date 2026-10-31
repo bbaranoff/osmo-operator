@@ -34,7 +34,7 @@ flowchart LR
 ## 4G / LTE
 
 - open5gs core (MME, SGW-C/U, SMF, UPF, PCRF, HSS) on dedicated loopbacks,
-  Prometheus :9090, WebUI :9999, MongoDB behind the HSS.
+  Prometheus :9090, WebUI :9998, MongoDB behind the HSS.
 - PLMN 001/01, TAC 7. NAS null ciphering (EIA2/EIA1 + EEA0) on purpose: this is
   an analysis bench, and NAS reads in clear in Wireshark.
 - srsENB (10 MHz, EARFCN 3350, band 7) and srsUE over ZMQ. Milenage test

@@ -1,6 +1,6 @@
 [Unit]
 # =============================================================================
-#  open5gs-webui.service - the 4G subscriber console (Open5GS WebUI), on :9999
+#  open5gs-webui.service - the 4G subscriber console (Open5GS WebUI), on :9998
 # =============================================================================
 #  The Open5GS WebUI lives in the sources (webui/ of the open5gs repository)
 #  and is a Next.js application: node server/index.js. It is the console used
@@ -18,7 +18,7 @@
 #  node_modules. Without server/index.js, systemd skips the unit instead of
 #  marking it failed (a red service on a healthy bench would be a false alarm,
 #  and the Conky counts them). « osmo-lte-install --webui » builds it.
-Description=Open5GS WebUI - console des abonnes 4G (:9999)
+Description=Open5GS WebUI - console des abonnes 4G (:9998)
 Documentation=https://open5gs.org/open5gs/docs/
 After=network.target mongod.service
 Wants=mongod.service
@@ -31,7 +31,7 @@ Environment=NODE_ENV=production
 # 0.0.0.0: the console is used from the operator's workstation, not only from
 # the bench machine.
 Environment=HOSTNAME=0.0.0.0
-Environment=PORT=9999
+Environment=PORT=9998
 # The same database as hss.yaml and pcrf.yaml (configs/open5gs/): a console
 # writing elsewhere would provision subscribers the HSS never sees.
 Environment=DB_URI=mongodb://localhost/open5gs
