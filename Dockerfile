@@ -410,14 +410,21 @@ RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
 # and add back:
 #   COPY patches/gapk-pq-alsa-output-probe.patch /tmp/gapk-pq-alsa-output-probe.patch
 # Check first with: git -C <gapk clone> apply --check patches/gapk-pq-alsa-output-probe.patch
-RUN if ! osmo-deb install osmo-gapk 0.git; then \
+# --enable-gsmhr: the GSM-HR codec (ETSI 06.06 reference code, downloaded from
+# 3gpp.org by libgsmhr/fetch_sources.py) for the HR <-> FR transcoder between
+# osmo-mgw and Asterisk (start.sh --hr). libgsmhr is built first and alone: a
+# parallel make compiles libgsmhr.c before the download has finished.
+# The deb version carries "+hr" so that a cached package built without the
+# codec is not reused.
+RUN if ! osmo-deb install osmo-gapk 0.git+hr; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
       cd osmo-gapk && \
       autoreconf -fi && \
-      ./configure --enable-alsa && \
+      ./configure --enable-alsa --enable-gsmhr && \
+      make -C libgsmhr && \
       make -j$(nproc) && \
-      osmo-deb pack osmo-gapk 0.git make install && \
+      osmo-deb pack osmo-gapk 0.git+hr make install && \
       ldconfig; \
     fi
 

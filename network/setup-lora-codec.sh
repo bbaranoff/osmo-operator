@@ -6,8 +6,13 @@
 #   --on   half-rate : BSC codec-support fr hr, canaux voix TCH/F -> TCH/H,
 #          mobiles "codec half-speed prefer"  => GSM-HR 5,6 kbit/s
 #          (osmo-msc garde default-codec tch-h hr : rien à y changer)
+#          + jambe SIP par le transcodeur HR <-> FR (tools/osmo-hr-transcodeur.py,
+#          127.0.0.1:5062) : osmo-sip-connector "remote ... 5062", Asterisk
+#          [gsm_msc] contact=sip:127.0.0.1:5062. Asterisk ne connaît pas le
+#          GSM-HR (488 Not Acceptable Here) ; start.sh --hr lance le transcodeur.
 #   --off  full-rate : BSC codec-support fr, canaux voix TCH/F, mobiles
-#          "codec full-speed prefer" — l'inverse exact
+#          "codec full-speed prefer", jambe SIP directe 5061 <-> 5060 —
+#          l'inverse exact
 #   --status
 #
 # Patche, pour que le mode soit le même avec ou sans --regen :
@@ -23,6 +28,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GSM_ROOT="$(dirname "$HERE")"
 DIRS=("$HERE/configs" "${OSMOCOM_CFG:-/etc/osmocom}")
 BB_DIR="${MOBILE_BB_DIR:-/root/.osmocom/bb}"
+SIPC_CFGS=("$HERE/configs/osmo-sip-connector.cfg" "${OSMOCOM_CFG:-/etc/osmocom}/osmo-sip-connector.cfg")
+PJSIP_CFGS=("$HERE/configs/pjsip.conf" "${ASTERISK_CFG:-/etc/asterisk}/pjsip.conf")
 
 # Toutes les configs de mobile qui portent une ligne " codec ...-speed".
 mobile_cfgs(){
@@ -45,7 +52,13 @@ on(){
             -e 's/^ codec full-speed prefer$/ codec half-speed prefer/' \
             -e 's/^ codec half-speed$/ codec full-speed/' "$f"
     done < <(mobile_cfgs)
-    echo "[lora-codec] half-rate (GSM-HR) actif"
+    for f in "${SIPC_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's/^\(  remote [^ ]*\) 5060$/\1 5062/' "$f"
+    done
+    for f in "${PJSIP_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's|^contact=sip:127\.0\.0\.1:5061$|contact=sip:127.0.0.1:5062|' "$f"
+    done
+    echo "[lora-codec] half-rate (GSM-HR) actif, jambe SIP par le transcodeur (:5062)"
 }
 
 off(){
@@ -60,6 +73,12 @@ off(){
             -e 's/^ codec half-speed prefer$/ codec full-speed prefer/' \
             -e 's/^ codec full-speed$/ codec half-speed/' "$f"
     done < <(mobile_cfgs)
+    for f in "${SIPC_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's/^\(  remote [^ ]*\) 5062$/\1 5060/' "$f"
+    done
+    for f in "${PJSIP_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's|^contact=sip:127\.0\.0\.1:5062$|contact=sip:127.0.0.1:5061|' "$f"
+    done
     echo "[lora-codec] full-rate (défaut)"
 }
 
@@ -75,6 +94,11 @@ status(){
         echo "── $f"
         grep -nE '^ codec (full|half)-speed' "$f"
     done < <(mobile_cfgs)
+    for f in "${SIPC_CFGS[@]}" "${PJSIP_CFGS[@]}"; do
+        [ -f "$f" ] || continue
+        echo "── $f"
+        grep -nE '^  remote |^contact=sip:127\.0\.0\.1:506' "$f"
+    done
 }
 
 case "${1:-}" in

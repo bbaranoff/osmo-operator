@@ -108,13 +108,27 @@ fi
 # prefer (network/setup-lora-codec.sh). Sans --hr : full-rate d'origine,
 # réimposé à chaque lancement (idempotent) : ni un --hr précédent, ni un
 # gabarit tiré en TCH/H par un git pull ne doivent survivre.
+#
+# Asterisk ne connaît pas le GSM-HR : en --hr la jambe SIP passe par le
+# transcodeur HR <-> FR (tools/osmo-hr-transcodeur.py, 127.0.0.1:5062, osmo-gapk
+# compilé avec --enable-gsmhr), que setup-lora-codec.sh --on intercale entre
+# osmo-sip-connector et Asterisk. Il est relancé à chaque start.sh --hr et
+# arrêté sans --hr (jambe directe).
+_hrx_pid=/run/osmo-hr-transcodeur.pid
+if [ -s "$_hrx_pid" ] && grep -qs osmo-hr-transcodeur "/proc/$(cat "$_hrx_pid")/cmdline"; then
+    $_sudo kill "$(cat "$_hrx_pid")" 2>/dev/null || true
+fi
+$_sudo rm -f "$_hrx_pid"
 if [ "$_hr" = 1 ]; then
-    echo "[start.sh] --hr : voix half-rate (TCH/H)"
+    echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
+    $_sudo mkdir -p /var/log/osmocom
+    $_sudo sh -c 'nohup python3 "$1" >> /var/log/osmocom/hr-transcodeur.log 2>&1 < /dev/null & echo $! > "$2"' \
+        sh "$HERE/tools/osmo-hr-transcodeur.py" "$_hrx_pid"
 else
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
 fi
-unset _sudo
+unset _sudo _hrx_pid
 
 if [ "$_docker" = 1 ]; then
     exec bash "$HERE/launch/start-docker.sh" "${_args[@]+"${_args[@]}"}"

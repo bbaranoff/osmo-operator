@@ -13,7 +13,13 @@ inst_build_run() {
         inst_say "=== $d ==="
         ( cd "$GSM_ROOT/$d" || exit 1
           [ -x ./configure ] || [ -f ./configure.ac ] && { autoreconf -fi || true; }
-          [ -x ./configure ] && ./configure
+          # osmo-gapk: ALSA and the GSM-HR codec (HR <-> FR transcoder, start.sh --hr);
+          # libgsmhr first and alone, it downloads the ETSI reference code.
+          case "$d" in
+              osmo-gapk) [ -x ./configure ] && ./configure --enable-alsa --enable-gsmhr
+                         make -C libgsmhr || exit 1 ;;
+              *)         [ -x ./configure ] && ./configure ;;
+          esac
           make -j"$(nproc)" ) || { inst_hint "detail dans le journal de cette etape"
                                    inst_fail "echec de compilation : $d"; return $INST_RC_FAIL; }
     done
