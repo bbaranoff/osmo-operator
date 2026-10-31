@@ -69,6 +69,7 @@ ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
 FROM base AS builder
 ARG LIBOSMOCORE_VERSION=1.12.1
 ARG LIBOSMO_NETIF_VERSION=1.7.0
+ARG LIBOSMO_ASN1_TCAP_VERSION=0.2.1
 ARG LIBOSMO_SIGTRAN_VERSION=2.2.1
 
 WORKDIR /build
@@ -96,18 +97,24 @@ RUN set -eux; \
     for repo in \
         "libosmocore:${LIBOSMOCORE_VERSION}:https://github.com/osmocom/libosmocore" \
         "libosmo-netif:${LIBOSMO_NETIF_VERSION}:https://gitea.osmocom.org/osmocom/libosmo-netif" \
+        "libosmo-asn1-tcap:${LIBOSMO_ASN1_TCAP_VERSION}:https://gitea.osmocom.org/ss7-in-c/libosmo-asn1-tcap" \
         "libosmo-sigtran:${LIBOSMO_SIGTRAN_VERSION}:https://gitea.osmocom.org/osmocom/libosmo-sigtran" \
     ; do \
         name="${repo%%:*}"; rest="${repo#*:}"; \
         version="${rest%%:*}"; url="${rest#*:}"; \
-        if osmo-deb install "$name" "$version"; then continue; fi; \
+        # Same packages as the main Dockerfile: libosmo-sigtran with TCAP
+        # routing (--enable-tcap-loadsharing), packaged as <tag>+tcap so that
+        # a cached .deb built without it is never reused.
+        pkgver="$version"; flags=""; \
+        if [ "$name" = libosmo-sigtran ]; then pkgver="${version}+tcap"; flags="--enable-tcap-loadsharing"; fi; \
+        if osmo-deb install "$name" "$pkgver"; then continue; fi; \
         git clone "$url" "$name"; \
         cd "/build/$name"; \
         git checkout "$version"; \
         autoreconf -fi; \
-        ./configure --prefix=/usr/local --disable-static; \
+        ./configure --prefix=/usr/local --disable-static $flags; \
         make -j"$(nproc)"; \
-        osmo-deb pack "$name" "$version" make install; \
+        osmo-deb pack "$name" "$pkgver" make install; \
         ldconfig; \
         cd /build; \
     done

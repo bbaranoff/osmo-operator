@@ -252,6 +252,7 @@ RUN for repo in \
     libosmocore:1.12.1 \
     libosmo-netif:1.7.0 \
     libosmo-abis:2.1.0 \
+    libosmo-asn1-tcap:0.2.1 \
     libosmo-sigtran:2.2.1 \
     libsmpp34:1.14.5 \
     libgtpnl:1.3.3 \
@@ -270,14 +271,22 @@ RUN for repo in \
     name=$(echo $repo | cut -d: -f1) && \
     version=$(echo $repo | cut -d: -f2) && \
     \
-    if [[ "$name" =~ ^libosmo ]]; then \
+    if [ "$name" = "libosmo-asn1-tcap" ]; then \
+        GIT_URL="https://gitea.osmocom.org/ss7-in-c/$name"; \
+    elif [[ "$name" =~ ^libosmo ]]; then \
         GIT_URL="https://gitea.osmocom.org/osmocom/$name"; \
     else \
         GIT_URL="https://gitea.osmocom.org/cellular-infrastructure/$name"; \
     fi && \
     \
+    # Package version: the git tag, plus a suffix when the build options change
+    # what the package contains, so that a cached .deb built without them is
+    # never reused. libosmo-sigtran +tcap: --enable-tcap-loadsharing.
+    pkgver="$version" && \
+    if [ "$name" = "libosmo-sigtran" ]; then pkgver="${version}+tcap"; fi && \
+    \
     # Cached package first: if present, neither clone nor compile.
-    if osmo-deb install "$name" "$version"; then continue; fi && \
+    if osmo-deb install "$name" "$pkgver"; then continue; fi && \
     \
     cd ${ROOT} && \
     git clone "$GIT_URL" && cd "$name" && \
@@ -286,6 +295,10 @@ RUN for repo in \
     autoreconf -fi && \
     EXTRA_FLAGS="" && \
     if [ "$name" = "libosmo-abis" ]; then EXTRA_FLAGS="--disable-dahdi"; fi && \
+    # TCAP-based routing/loadsharing in the STP ("tcap-routing" in an AS):
+    # off by default upstream, needed by the osmo-stp TTCN-3 suite (STP_Tests_TCAP,
+    # scripts/ttcn.sh) and by TCAP-aware SS7 routing. Requires libosmo-asn1-tcap.
+    if [ "$name" = "libosmo-sigtran" ]; then EXTRA_FLAGS="--enable-tcap-loadsharing"; fi && \
     if [ "$name" = "osmo-msc" ]; then EXTRA_FLAGS="--enable-smpp"; fi && \
     if [ "$name" = "osmo-mgw" ]; then EXTRA_FLAGS="--enable-alsa"; fi && \
     if [ "$name" = "osmo-trx" ]; then EXTRA_FLAGS="--with-ipc"; fi && \
@@ -295,7 +308,7 @@ RUN for repo in \
     ./configure $EXTRA_FLAGS && \
     make -j$(nproc) && \
     # make install under DESTDIR -> .deb in the cache -> dpkg -i into the root
-    osmo-deb pack "$name" "$version" make install && \
+    osmo-deb pack "$name" "$pkgver" make install && \
     ldconfig \
     || { echo "ECHEC build osmocom: $name"; exit 1; }; \
     done
