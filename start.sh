@@ -14,6 +14,7 @@
 #                                   sur tnc0 (sans numéro : déduit de tnc0)
 #   ./start.sh --lora 1 --lora-port=/dev/ttyUSB1   port série du RNode (Heltec V3)
 #   ./start.sh --hr [options]       voix half-rate (TCH/H) ; sans --hr : full-rate
+#   ./start.sh --no-sidecar         pas de BTS#1 fake_trx ni de MS#2 (implicite avec --lora)
 #   VAR=x ./start.sh                environment overrides always win
 #
 # This script starts no daemon itself. It:
@@ -46,11 +47,12 @@ cd "$HERE"
 # `./start.sh --docker [args]` hands over to start-docker.sh with the other
 # arguments untouched; the rest of this script (startup_scripts/) is the
 # NATIVE launcher and is not read.
-_args=(); _docker=0; _lora=0; _lora_node=""; _lora_port=""; _hr=0; _hrx_extra=()
+_args=(); _docker=0; _lora=0; _lora_node=""; _lora_port=""; _hr=0; _hrx_extra=(); _no_sidecar=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --docker) _docker=1 ;;
         --hr)     _hr=1 ;;                      # voix half-rate (TCH/H), voir plus bas
+        --no-sidecar) _no_sidecar=1 ;;          # pas de BTS#1 / MS#2 (startup_scripts/05-run-sh.sh)
         --lora=*) _lora=1; _lora_node="${1#*=}" ;;
         --lora-port=*) _lora_port="${1#*=}" ;;      # port serie du RNode (sinon auto)
         --lora)   _lora=1                       # --lora [1|2]
@@ -72,6 +74,14 @@ set -- "${_args[@]+"${_args[@]}"}"
 # s'il ne l'est pas déjà : network/setup-lora-link.sh. Sans --lora, on retire
 # l'aiguilleur si un --lora précédent l'a laissé ; tnc0 reste (lien radio).
 _sudo=""; [ "$(id -u)" = 0 ] || _sudo="sudo"
+# --lora : pas de side-car (BTS#1 fake_trx, MS#2, modem GPRS). Le second jeu
+# radio ne sert à rien sur un banc LoRa et coûte du CPU : avec lui le pont DSP
+# notait « horloge lente (x1.6) » et le MS#1 perdait la cellule.
+[ "$_lora" = 1 ] && _no_sidecar=1
+if [ "$_no_sidecar" = 1 ]; then
+    export NO_SIDECAR=1
+    echo "[start.sh] --no-sidecar : sans BTS#1 fake_trx, MS#2 ni modem GPRS (modules side-car sautés)"
+fi
 if [ "$_lora" = 1 ]; then
     _tnc_ip="$(ip -4 -o addr show tnc0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
     if [ -z "$_lora_node" ]; then

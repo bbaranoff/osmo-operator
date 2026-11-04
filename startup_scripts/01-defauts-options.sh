@@ -252,6 +252,9 @@ Usage : ./start-native.sh [options] [mode]
                         /dev/serial/by-id, sinon /dev/ttyUSB0)
     --hr                voix half-rate (TCH/H, GSM-HR), moins de debit sur LoRa ;
                         transcodeur HR <-> FR devant Asterisk. Sans --hr : full-rate.
+    --no-sidecar        pas de BTS#1 fake_trx, de MS#2 ni de modem GPRS (modules
+                        side-car sautes) ; implicite avec --lora : le second jeu
+                        radio coute du CPU et le pont DSP perdait le temps reel.
     --node N            numero de CE noeud, 1 a 9. DEDUIT AUTOMATIQUEMENT s'il
     --menu              demande les choix au lieu de les deviner : profil,
                         noeud, operateur, inter-STP, WAN, regeneration des

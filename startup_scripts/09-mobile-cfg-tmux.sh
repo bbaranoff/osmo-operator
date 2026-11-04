@@ -280,6 +280,9 @@ RUN_ARGS=()
 [ "$FORCE" -eq 1 ]   && RUN_ARGS+=(--force)
 [ "$VERBOSE" -eq 1 ] && RUN_ARGS+=(--verbose)
 RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
+# --no-sidecar: run.sh keeps the LAST --skip; the DSP bench (14-demarrage.sh)
+# adds its own later, with SIDECAR_MODULES merged in (05-run-sh.sh).
+[ "${NO_SIDECAR:-0}" = 1 ] && RUN_ARGS+=(--skip "$SIDECAR_MODULES")
 # --restart goes into RUN_ARGS, where it is visible in --dry-run and in the
 # line printed just before the exec.
 # CALYPSO_NO_RESTART=1 to start without resetting.

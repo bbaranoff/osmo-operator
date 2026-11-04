@@ -16,6 +16,11 @@ say_begin "Resolution de run.sh"
 # BANC_DSP=<path> to designate another one; BANC_DSP=none disables it.
 DSP_BANC=0
 DSP_MODULES_RETIRES="qemu,pty,osmocon,l2"
+# --no-sidecar (NO_SIDECAR=1, implied by --lora): no BTS#1 fake_trx, no MS#2,
+# no GPRS modem on it. On a LoRa bench the second radio set only costs CPU:
+# with it the DSP bridge logged "horloge lente (x1.6)" and MS#1 lost the cell.
+SIDECAR_MODULES="sidecar-cfg,sidecar-faketrx,sidecar-bts,sidecar-pcu,sidecar-trxcon,sidecar-mobile,modem-trxcon,modem-gprs"
+[ "${NO_SIDECAR:-0}" = 1 ] && DSP_MODULES_RETIRES="$DSP_MODULES_RETIRES,$SIDECAR_MODULES"
 : "${BANC_DSP:=$GSM_ROOT/c54x_exe/run.sh}"
 # Multithreading (default; --no-multithreading turns it off): c54x_exe --plan
 # runs its jobs one process per CPU core (src/multi.c). Off = COEURS=1, read by
