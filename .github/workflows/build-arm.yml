@@ -85,6 +85,9 @@ jobs:
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
       desktop: ${{ steps.m.outputs.desktop }}
+      kernels: ${{ steps.m.outputs.kernels }}
+      reps: ${{ steps.m.outputs.reps }}
+      armbian_ref: ${{ steps.m.outputs.armbian_ref }}
     steps:
       - id: m
         run: |
@@ -101,12 +104,84 @@ jobs:
           done
           M=$(echo $L | tr ' ' '\n' | awk 'NF && !vu[$0]++' | jq -R . | jq -cs .)
           echo "matrix=$M" >> "$GITHUB_OUTPUT"
+          # ── UN NOYAU PAR CLE famille/branche, pas par carte ──────────────
+          # Cinq Orange Pi 5 partagent rockchip-rk3588/current, orangepi5b n a
+          # pas de branche current (rockchip-rk3588/edge), la Pi 4 a bcm2711 :
+          # la cle vient des fichiers de cartes d Armbian (build-armbian.sh
+          # --kernel-keys, clone sparse de config/boards), jamais du nom. Le
+          # job `kernel` construit une fois par cle (carte representante =
+          # premiere carte de la cle) et la matrice recupere ses .deb.
+          # Le commit armbian/build du clone est celui de TOUT le run (kernel
+          # et matrice) : le hash de l artefact noyau en depend.
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/armbian/build "$RUNNER_TEMP/armbian"
+          git -C "$RUNNER_TEMP/armbian" sparse-checkout set --no-cone /config/boards /compile.sh >/dev/null
+          REF=$(git -C "$RUNNER_TEMP/armbian" rev-parse HEAD)
+          chmod +x armbian/build-armbian.sh
+          ./armbian/build-armbian.sh --kernel-keys --board=$(echo $L | tr ' ' ',') --armbian-dir="$RUNNER_TEMP/armbian" > keys.tsv
+          cat keys.tsv
+          KJ=$(awk -F'\t' '!vu[$2]++ {print $1}' keys.tsv | jq -R . | jq -cs .)
+          RJ=$(awk -F'\t' '{ if (!($2 in rep)) rep[$2]=$1; printf "%s\t%s\n", $1, rep[$2] }' keys.tsv \
+               | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -cs add)
+          echo "kernels=$KJ" >> "$GITHUB_OUTPUT"
+          echo "reps=$RJ" >> "$GITHUB_OUTPUT"
+          echo "armbian_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "cartes : $M ; noyaux (representantes) : $KJ ; representante par carte : $RJ ; armbian/build $REF ; bureau : ${D:-true}"
           D='${{ github.event.inputs.desktop }}'
           echo "desktop=${D:-true}" >> "$GITHUB_OUTPUT"
           echo "cartes : $M ; bureau : ${D:-true}"
 
+  # ── Le noyau, une fois par famille (~45 min) : .deb en artefact ───────────
+  # Avant ce job, chaque carte de la matrice recompilait le meme noyau
+  # rockchip-rk3588 (cinq fois 45 min pour les Orange Pi 5). compile.sh kernel
+  # ne fait que l artefact noyau ; la matrice le retrouve dans output/debs/ et
+  # Armbian, qui y voit l artefact deja construit, passe directement au rootfs.
+  kernel:
+    needs: boards
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: ${{ fromJSON(needs.boards.outputs.kernels) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - uses: ./.github/actions/docker-disk
+        with:
+          need: "20"
+
+      - name: Repertoire Armbian
+        run: |
+          pick() { df -P "$1" 2>/dev/null | awk 'NR==2{print $4}'; }
+          BASE=/; [ "$(pick /mnt || echo 0)" -gt "$(pick /)" ] 2>/dev/null && BASE=/mnt
+          sudo mkdir -p "$BASE/armbian-build"
+          echo "ARMBIAN_DIR=$BASE/armbian-build" >> "$GITHUB_ENV"
+
+      - name: Noyau ${{ matrix.rep }}
+        run: |
+          ( while true; do
+              echo "[temoin] $(date -u +%H:%M:%S)  / $(df -h --output=avail / | tail -1 | tr -d ' ')  mem dispo $(free -m | awk '/^Mem:/{print $7}') Mo"
+              sleep 120
+            done ) &
+          TEMOIN=$!; trap 'kill $TEMOIN 2>/dev/null || true' EXIT
+          chmod +x armbian/build-armbian.sh
+          sudo env ARMBIAN_DIR="$ARMBIAN_DIR" ARMBIAN_REF='${{ needs.boards.outputs.armbian_ref }}' \
+               ./armbian/build-armbian.sh --kernel-only --board=${{ matrix.rep }}
+          sudo tar -C "$ARMBIAN_DIR/output/debs" -cf "kernel-debs-${{ matrix.rep }}.tar" .
+          sudo chown "$(id -u)" "kernel-debs-${{ matrix.rep }}.tar"
+          tar -tf "kernel-debs-${{ matrix.rep }}.tar" | grep 'linux-' ; ls -lh "kernel-debs-${{ matrix.rep }}.tar"
+
+      - name: Upload kernel .deb
+        uses: actions/upload-artifact@v6
+        with:
+          name: kernel-debs-${{ matrix.rep }}
+          path: kernel-debs-${{ matrix.rep }}.tar
+          retention-days: 7
+          compression-level: 0
+
   build:
-    needs: [docker-arm, boards]
+    needs: [docker-arm, boards, kernel]
     runs-on: ${{ github.event.inputs.runner || 'ubuntu-24.04-arm' }}
     timeout-minutes: 360
     strategy:
@@ -181,8 +256,24 @@ jobs:
           echo "BASE_REF=$REF" >> "$GITHUB_ENV"
           echo "::notice::Base arm64 : $REF"
 
+      # Les .deb du noyau de la famille de cette carte (job kernel), extraits
+      # dans un dossier que build-armbian.sh copie dans output/debs/.
+      - name: Noyau prebuild (job kernel)
+        uses: actions/download-artifact@v6
+        with:
+          name: kernel-debs-${{ fromJSON(needs.boards.outputs.reps)[matrix.board] }}
+          path: ${{ runner.temp }}/kernel-tar
+      - name: Extraire les .deb du noyau
+        run: |
+          mkdir -p "$RUNNER_TEMP/kernel-debs"
+          tar -C "$RUNNER_TEMP/kernel-debs" -xf "$RUNNER_TEMP"/kernel-tar/kernel-debs-*.tar
+          echo "ARMBIAN_KERNEL_DEBS=$RUNNER_TEMP/kernel-debs" >> "$GITHUB_ENV"
+          find "$RUNNER_TEMP/kernel-debs" -name 'linux-*.deb' -printf '%f\n'
+
       # build-iso.sh --arm -> armbian/build-armbian.sh (iso_modules/00-options.sh).
       # --skip-build=REF : la pile vient de l'image tiree, rien n'est compile ici.
+      # ARMBIAN_REF / ARMBIAN_KERNEL_DEBS : meme framework que le job kernel, et
+      # ses .deb : Armbian ne recompile pas le noyau, seulement rootfs + image.
       # Temoin disque/memoire EN DIRECT dans le journal du build : compile.sh
       # (rootfs + bureau, ~30 Go) n'a encore jamais tourne en CI ; si le runner
       # tombe, ses dernieres mesures restent dans le journal envoye au fil de l'eau.
@@ -198,7 +289,8 @@ jobs:
           [ "${{ needs.boards.outputs.desktop }}" = "true" ] && ARGS="$ARGS --desktop"
           echo "::notice::build-iso.sh $ARGS"
           # sudo env ... : sudoers est en env_reset sans SETENV sur un runner.
-          sudo env ARMBIAN_DIR="$ARMBIAN_DIR" ./build-iso.sh $ARGS
+          sudo env ARMBIAN_DIR="$ARMBIAN_DIR" ARMBIAN_REF='${{ needs.boards.outputs.armbian_ref }}' \
+                   ARMBIAN_KERNEL_DEBS="$ARMBIAN_KERNEL_DEBS" ./build-iso.sh $ARGS
           df -h / /mnt || true
 
       # Le nom d'Armbian (Armbian-unofficial_<version>_<Carte>_noble_<branche>_<noyau>[_gnome_desktop].img)

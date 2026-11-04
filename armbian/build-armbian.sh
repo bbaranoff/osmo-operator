@@ -17,6 +17,11 @@
 # Usage:
 #   sudo ./build-armbian.sh                       rpi4b, branch current, noble: clone, overlay, compile
 #   sudo ./build-armbian.sh --prepare             everything except compile.sh (check userpatches/, overlay)
+#   sudo ./build-armbian.sh --kernel-only --board=opi5   kernel .deb only (one build per kernel
+#                                                 key family/branch: rockchip-rk3588/current,
+#                                                 bcm2711/current...), in output/debs/
+#        ./build-armbian.sh --kernel-keys --board=all   print "board<TAB>family/branch" per board
+#                                                 (no root, no build: the CI groups the boards by key)
 #   sudo ./build-armbian.sh --no-stack            plain Armbian (no overlay, no customize)
 #   sudo ./build-armbian.sh --board=orangepi5 --branch=edge --release=noble
 #   sudo ./build-armbian.sh --image=osmocom-nitb:arm64      Docker image providing the stack
@@ -41,7 +46,11 @@
 #   --install-deps        apt install qemu-user-static binfmt-support if aarch64 cannot be emulated
 #   --dry-run             print what would be done
 #
-# Env: ARMBIAN_DIR, ARMBIAN_GIT, OSMO_DEB_CACHE (/var/cache/osmo-debs), OSMO_ARM_GLAVA=1.
+# Env: ARMBIAN_DIR, ARMBIAN_GIT, OSMO_DEB_CACHE (/var/cache/osmo-debs), OSMO_ARM_GLAVA=1,
+#      ARMBIAN_REF (armbian/build commit to check out: every job of a CI run must use the
+#      SAME one, the kernel artifact hash depends on it), ARMBIAN_KERNEL_DEBS (a directory of
+#      kernel .deb from a previous --kernel-only, copied into output/debs/ before compile.sh:
+#      Armbian finds the artifact in its local cache and does not rebuild the kernel).
 # Host requirements: docker (compile.sh containerizes itself on non-Ubuntu/x86 hosts), git, and
 # aarch64 emulation (qemu-user-static + binfmt) so the chroot runs on x86 (not needed on arm64).
 set -euo pipefail
@@ -52,7 +61,9 @@ BOARD=rpi4b; BRANCH=current; RELEASE=noble
 ARMBIAN_DIR="${ARMBIAN_DIR:-/opt/GSM/armbian-build}"
 ARMBIAN_GIT="${ARMBIAN_GIT:-https://github.com/armbian/build}"
 IMAGE=""; PREPARE=0; NO_STACK=0; UPDATE=0; INSTALL_DEPS=0; DRY=0
-DESKTOP=0; BANC=0; MULTI=0; BUILD_IMAGE=0; BRANCH_GIVEN=0
+DESKTOP=0; BANC=0; MULTI=0; BUILD_IMAGE=0; BRANCH_GIVEN=0; KERNEL_ONLY=0; KERNEL_KEYS=0
+ARMBIAN_REF="${ARMBIAN_REF:-}"
+ARMBIAN_KERNEL_DEBS="${ARMBIAN_KERNEL_DEBS:-}"
 DEB_CACHE="${OSMO_DEB_CACHE:-/var/cache/osmo-debs}"
 for arg in "$@"; do
     case "$arg" in
@@ -65,6 +76,10 @@ for arg in "$@"; do
         --release=*)     RELEASE="${arg#*=}" ;;
         --image=*)       IMAGE="${arg#*=}" ;;
         --armbian-dir=*) ARMBIAN_DIR="${arg#*=}" ;;
+        --armbian-ref=*) ARMBIAN_REF="${arg#*=}" ;;
+        --kernel-debs=*) ARMBIAN_KERNEL_DEBS="${arg#*=}" ;;
+        --kernel-only)   KERNEL_ONLY=1; NO_STACK=1 ;;   # no overlay, no stack image needed
+        --kernel-keys)   KERNEL_KEYS=1; NO_STACK=1 ;;   # print the kernel key of each board, exit
         --prepare)       PREPARE=1 ;;
         --no-stack)      NO_STACK=1 ;;
         --update)        UPDATE=1 ;;
@@ -74,13 +89,15 @@ for arg in "$@"; do
         *) echo "option inconnue : $arg" >&2; sed -n '2,46p' "$0" >&2; exit 2 ;;
     esac
 done
+# --kernel-keys: stdout carries ONLY the keys (the CI parses it), messages go to stderr.
+exec 3>&1; [ "$KERNEL_KEYS" = 1 ] && exec 1>&2
 say()  { printf '\033[1;32m[armbian]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[armbian] !\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[armbian] ECHEC\033[0m %s\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then echo "  + $*"; else "$@"; fi; }
 
 # ── 1. Host checks ───────────────────────────────────────────────────────────
-[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || die "a lancer en root (compile.sh d Armbian l exige) : sudo $0 $*"
+[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || [ "$KERNEL_KEYS" = 1 ] || die "a lancer en root (compile.sh d Armbian l exige) : sudo $0 $*"
 command -v git >/dev/null    || die "git absent"
 command -v docker >/dev/null || warn "docker absent : compile.sh ne pourra pas se conteneuriser (il faut alors un hote Ubuntu avec ses dependances)"
 HOST_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
@@ -117,6 +134,25 @@ elif [ "$UPDATE" = 1 ]; then
     say "mise a jour du clone"
     run git -C "$ARMBIAN_DIR" pull --ff-only
 fi
+# Pinned commit: the kernel artifact hash depends on the framework revision,
+# so the --kernel-only pass and the image passes must share it (CI).
+if [ -n "$ARMBIAN_REF" ] && [ "$DRY" = 0 ]; then
+    if [ "$(git -C "$ARMBIAN_DIR" rev-parse HEAD 2>/dev/null)" != "$ARMBIAN_REF" ]; then
+        say "armbian/build : checkout du commit $ARMBIAN_REF"
+        git -C "$ARMBIAN_DIR" fetch -q --depth 1 origin "$ARMBIAN_REF" \
+            && git -C "$ARMBIAN_DIR" checkout -q FETCH_HEAD || die "commit $ARMBIAN_REF introuvable dans $ARMBIAN_GIT"
+    fi
+fi
+[ "$DRY" = 0 ] && say "armbian/build : $(git -C "$ARMBIAN_DIR" rev-parse --short HEAD 2>/dev/null || echo ?)"
+# Kernel .deb from a previous --kernel-only: dropped into output/debs/ so that
+# compile.sh finds the artifact in its local cache and skips the kernel build.
+if [ -n "$ARMBIAN_KERNEL_DEBS" ]; then
+    n=$(find "$ARMBIAN_KERNEL_DEBS" -name 'linux-*.deb' 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] || die "ARMBIAN_KERNEL_DEBS=$ARMBIAN_KERNEL_DEBS : aucun linux-*.deb"
+    run install -d "$ARMBIAN_DIR/output/debs"
+    run cp -a "$ARMBIAN_KERNEL_DEBS"/. "$ARMBIAN_DIR/output/debs/"
+    say "noyau prebuild : $n .deb copies dans output/debs/ ($(ls "$ARMBIAN_KERNEL_DEBS" | grep -m1 linux-image || true))"
+fi
 # board_file BOARD: Armbian board file (.conf supported, .csc community, .wip, ...)
 board_file() {
     local e
@@ -137,10 +173,32 @@ board_branch() {
         *) warn "$1 : pas de branche $BRANCH$([ "$BRANCH" = current ] || echo " ni current") ($targets), ${targets%%,*} a la place" >&2; echo "${targets%%,*}" ;;
     esac
 }
+# board_family BOARD: BOARDFAMILY of the board file (rockchip64, bcm2711...); the kernel
+# .deb are per (family, branch), not per board.
+board_family() {
+    local f; f=$(board_file "$1") || { echo "?"; return; }
+    sed -n 's/^BOARDFAMILY=["'"'"']\{0,1\}\([A-Za-z0-9_.-]*\).*/\1/p' "$f" | head -1
+}
 if [ "$DRY" = 0 ]; then
     for b in $BOARDS; do
         board_file "$b" >/dev/null || die "carte inconnue d Armbian : $b (voir $ARMBIAN_DIR/config/boards/)"
     done
+fi
+# --kernel-keys: "board<TAB>family/branch" per board, nothing else (the CI
+# groups the boards by key and builds one kernel per key).
+if [ "$KERNEL_KEYS" = 1 ]; then
+    for b in $BOARDS; do printf '%s\t%s/%s\n' "$b" "$(board_family "$b")" "$(board_branch "$b" 2>/dev/null)"; done >&3
+    exit 0
+fi
+# --kernel-only: one board per (family, branch), the others share its .deb.
+if [ "$KERNEL_ONLY" = 1 ] && [ "$DRY" = 0 ]; then
+    seen=""; K=""
+    for b in $BOARDS; do
+        key="$(board_family "$b")/$(board_branch "$b")"
+        case " $seen " in *" $key "*) say "[$b] noyau $key : deja couvert" ;; *) seen="$seen $key"; K="$K $b" ;; esac
+    done
+    BOARDS=$(echo $K)
+    say "--kernel-only : noyaux a construire : $BOARDS"
 fi
 
 # ── 3. userpatches: customization script and overlay ─────────────────────────
@@ -246,10 +304,19 @@ fi
 IMGS=()
 for b in $BOARDS; do
     br=$(board_branch "$b")
-    CMD=(./compile.sh build "BOARD=$b" "BRANCH=$br" "RELEASE=$RELEASE" BUILD_MINIMAL=no "${DESK[@]}" KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img)
+    if [ "$KERNEL_ONLY" = 1 ]; then
+        CMD=(./compile.sh kernel "BOARD=$b" "BRANCH=$br" "RELEASE=$RELEASE" KERNEL_CONFIGURE=no)
+    else
+        CMD=(./compile.sh build "BOARD=$b" "BRANCH=$br" "RELEASE=$RELEASE" BUILD_MINIMAL=no "${DESK[@]}" KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,img)
+    fi
     case "$(board_file "$b" 2>/dev/null)" in *.conf|"") ;; *) CMD+=(EXPERT=yes) ;; esac
     if [ "$PREPARE" = 1 ] || [ "$DRY" = 1 ]; then
         echo "  + (cd $ARMBIAN_DIR && ${CMD[*]})"
+        continue
+    fi
+    if [ "$KERNEL_ONLY" = 1 ]; then
+        say "[$b] compile.sh kernel ($(board_family "$b")/$br) : ${CMD[*]}"
+        (cd "$ARMBIAN_DIR" && "${CMD[@]}") || die "[$b] compile.sh kernel a echoue"
         continue
     fi
     say "[$b] compile.sh (long : noyau + rootfs + customize sous qemu-user) : ${CMD[*]}"
@@ -265,5 +332,10 @@ if [ "$PREPARE" = 1 ]; then
     exit 0
 fi
 [ "$DRY" = 1 ] && exit 0
+if [ "$KERNEL_ONLY" = 1 ]; then
+    say "noyaux (.deb dans $ARMBIAN_DIR/output/debs/) :"
+    find "$ARMBIAN_DIR/output/debs" -name 'linux-*.deb' -printf '    %f\n' | sort
+    exit 0
+fi
 say "images :"; for i in "${IMGS[@]}"; do echo "    $i"; done
 say "flash : sudo dd if=<image> of=/dev/sdX bs=4M status=progress conv=fsync   (comptes : root/osmo, osmocom/osmo)"
