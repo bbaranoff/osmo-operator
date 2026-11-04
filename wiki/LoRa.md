@@ -52,6 +52,24 @@ transcoder logs every transition (`canal : FREE -> MINE (parole, SEIZE envoye)`)
 Verified in loopback between two transcoders fed with real speech: while A speaks, B's 126
 frames are dropped and B receives all of A's; after A's RELEASE, B speaks and A receives.
 
+## What the stock RNode firmware allows: store-and-forward
+
+Measured A/B between the two Heltec (both directions, 10 s at 12.5 LoRa frames/s of 136
+bytes): **~2 LoRa frames/s get on the air**, whatever is written to the module, with the
+module reporting CSMA band 2. The RNode firmware widens its CSMA contention window with its
+own airtime (band 1 up to 7 %, then 15-29, 30-44, 45-59 slots of 24 ms before each packet),
+flushes its queue in bursts and silently drops what overflows. That is 2.2 kbit/s of goodput:
+no GSM codec fits live (FR 13.6 kbit/s, HR 6). The CSMA parameters are compile-time
+constants of the firmware.
+
+So the talkie is **store-and-forward** (`--ptt manual`, the default): `take` in the mobile's
+VTY records what the phone says (ROM vocoder frames, 60 s at most), `release` sends the
+recording as one message — SEIZE, then the LoRa frames at the pace the module accepts
+(`CMD_READY` polled before each one), then RELEASE — and the other node plays the whole
+message to its phone when the RELEASE arrives. 5 s of speech is 63 LoRa frames, about 30 s
+on the air. `--ptt live` keeps the frames going out in real time while the channel is held
+(choppy with the stock firmware); `--ptt auto` is the VOX.
+
 ## One command
 
 ```bash

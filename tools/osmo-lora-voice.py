@@ -42,6 +42,7 @@ FEND, FESC, TFEND, TFESC, CMD_DATA = 0xC0, 0xDB, 0xDC, 0xDD, 0x00
 # RNodeInterface): channel time, PHY parameters, CSMA contention window.
 CMD_STAT_CHTM, CMD_STAT_PHYPRM, CMD_STAT_CSMA = 0x25, 0x26, 0x28
 CMD_ST_ALOCK, CMD_LT_ALOCK = 0x0B, 0x0C
+CMD_READY = 0x0F   # host asks "room in your queue ?", firmware answers 1 (yes) / 0 (no)
 RSSI_OFFSET = 157
 
 
@@ -64,6 +65,8 @@ class KissParser:
         self.esc = False
         self.cmd = None
         self.radio = {}               # what the module says of itself (see _stat)
+        self.ready = None             # last CMD_READY answer (None = never answered)
+        self.ready_at = 0.0
 
     def _stat(self, cmd, b):
         r = self.radio
@@ -86,6 +89,9 @@ class KissParser:
                     out.append(bytes(self.buf))
                 elif self.in_frame and self.cmd in self.STATS and self.buf:
                     self._stat(self.cmd, bytes(self.buf))
+                elif self.in_frame and self.cmd == CMD_READY:
+                    self.ready = (self.buf[0] != 0) if self.buf else True
+                    self.ready_at = time.monotonic()
                 self.in_frame, self.esc, self.cmd = True, False, None
                 self.buf.clear()
                 continue
@@ -94,7 +100,7 @@ class KissParser:
             if self.cmd is None:
                 self.cmd = b
                 continue
-            if self.cmd != CMD_DATA and self.cmd not in self.STATS:
+            if self.cmd != CMD_DATA and self.cmd not in self.STATS and self.cmd != CMD_READY:
                 continue
             if self.esc:
                 self.buf.append(FEND if b == TFEND else FESC if b == TFESC else b)
@@ -204,6 +210,8 @@ class LoraLink:
         self.seq_tx = 0
         self.rx = deque()
         self.rx_last_seq = None
+        self.max_rx = 3 * frames      # jitter buffer bound (live); a whole message in store-and-forward
+        self.hold_playout = False     # store-and-forward: keep the frames until release_playout()
         self.playing = False
         self.next_play = 0.0
         self.t_rx_frame = 0.0         # last LoRa voice frame received
@@ -277,12 +285,36 @@ class LoraLink:
         self.t_rx_frame = time.monotonic()
         self.events.append(("voice", len(frames)))
         self.rx.extend(frames)
-        while len(self.rx) > 3 * self.frames:        # jitter buffer bound: 3 LoRa frames
+        while len(self.rx) > self.max_rx:
             self.rx.popleft()
             self.n["drop"] += 1
-        if not self.playing and len(self.rx) >= self.frames:
+        if not self.playing and not self.hold_playout and len(self.rx) >= self.frames:
             self.playing = True
             self.next_play = time.monotonic()
+
+    def release_playout(self):
+        """Store-and-forward: the message is complete, play it from the start."""
+        if self.rx and not self.playing:
+            self.playing = True
+            self.next_play = time.monotonic()
+        return len(self.rx)
+
+    # ── flow control toward the module (store-and-forward sender) ──
+    def query_ready(self):
+        if self.ser:
+            self.ser.write(bytes([FEND, CMD_READY, FEND]))
+            self.parser.ready = None
+        else:
+            self.parser.ready, self.parser.ready_at = True, time.monotonic()
+
+    def is_ready(self):
+        return self.parser.ready
+
+    def send_now(self, frames):
+        """One LoRa frame of `frames` speech frames, written at once."""
+        self._write(kiss_frame(pack_voice(self.seq_tx, list(frames))))
+        self.seq_tx += 1
+        self.n["tx"] += 1
 
     def read_serial(self):
         if self.ser:
@@ -305,7 +337,7 @@ class LoraLink:
             # Leftovers of a sentence (fewer than `frames`, so never started):
             # play them once nothing more comes, instead of keeping them for the
             # next sentence where they would be stale and add latency.
-            if self.rx and now - self.t_rx_frame >= 2 * STALE_S:
+            if self.rx and not self.hold_playout and now - self.t_rx_frame >= 2 * STALE_S:
                 self.playing = True
                 self.next_play = now
             else:

@@ -1,5 +1,5 @@
 diff --git a/src/host/layer23/src/mobile/vty_interface.c b/src/host/layer23/src/mobile/vty_interface.c
-index b5b31288..36b007ee 100644
+index b5b31288..85201506 100644
 --- a/src/host/layer23/src/mobile/vty_interface.c
 +++ b/src/host/layer23/src/mobile/vty_interface.c
 @@ -16,6 +16,7 @@
@@ -77,13 +77,13 @@ index b5b31288..36b007ee 100644
 +}
 +
 +DEFUN(lora_take, lora_take_cmd, "take",
-+      "LoRa talkie : prendre le canal radio (on parle, l'autre ecoute)\n")
++      "LoRa talkie : enregistrer ce qu'on dit (release l'envoie en un message)\n")
 +{
 +	return lora_ptt(vty, "take");
 +}
 +
 +DEFUN(lora_release, lora_release_cmd, "release",
-+      "LoRa talkie : rendre le canal radio (a l'autre de parler)\n")
++      "LoRa talkie : envoyer l'enregistrement sur l'air, puis rendre le canal\n")
 +{
 +	return lora_ptt(vty, "release");
 +}
