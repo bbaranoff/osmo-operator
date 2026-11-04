@@ -1,5 +1,7 @@
 # osmo-operator
 
+> **40C3:** this repository is part of the talk *Emulating the Baseband* (40th Chaos Communication Congress, Hamburg). Fahrplan link to come.
+
 A complete **GSM + LTE operator on one machine**: an Osmocom core network (BTS, BSC, MSC, HLR, MGW, SMSC,
 Asterisk) and **emulated Calypso phones**. The ARM runs under QEMU ([qosmo](https://github.com/bbaranoff/qosmo)) and the
 TI C54x DSP runs outside it, executing the real mask ROM ([c54x_exe](https://github.com/bbaranoff/c54x_exe)). The phone
