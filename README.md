@@ -164,6 +164,13 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | [bbaranoff.github.io](https://bbaranoff.github.io) · [pl4y.store](https://pl4y.store) · [github.com/bbaranoff](https://github.com/bbaranoff) | the author's resources and projects |
 | Upstream | [Osmocom](https://gitea.osmocom.org/) · [FreeCalypso](https://www.freecalypso.org/) · [Open5GS](https://open5gs.org/) · [srsRAN](https://www.srsran.com/) |
 
+**Provenance of the DSP ROM.** The TI mask ROM 3606 is the dump published by FreeCalypso
+(<https://www.freecalypso.org/pub/GSM/Calypso/dsp-rom-3606-dump.txt>, SHA-256 `e35798f5…`).
+Mirrors (a revision-pinned gist, fc-magnetite) serve the same file. `./verif_rom.sh` proves it:
+it downloads the original from freecalypso.org and every mirror, prints SHA-256 and SHA-512,
+compares each copy byte for byte (`cmp`) and gives a verdict (`--local FILE` checks a copy
+of your own, exit code 0 when everything is identical).
+
 ## Known issues
 
 - `--bts --ms --ts 2` (one Calypso per timeslot): the second TRX phone's frame number is not aligned, so the
