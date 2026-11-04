@@ -873,7 +873,7 @@ export OSMO_DEB_REFRESH=0
 
 #### ── GNU Radio + gr-osmosdr + gr-gsm, en UN paquet : le venv /root/.env
 
-On TÉLÉCHARGE et on exécute CE script (le gist, pinné au commit fcdb409). Il cree /root/.env et y installe les trois. Puis :
+On exécute `scripts/build_gnuradio.sh` du dépôt (l ancien gist, vendorisé : `-j` borné par la RAM, et sur aarch64 le `python3-pyqt5` d Ubuntu au lieu d un PyQt5 compilé). Il crée /root/.env et y installe les trois. Puis :
 
 Patch gr-gsm : le receiver poste le BSIC/FN du SCH (decode_sch) sur le port `measurements` ET sur stdout ("SCHBSIC <bsic> <fn>"). Le shunt DSP le recoit (si_bridge.py parse le stdout de grgsm_decode -> UDP 4731 -> feed_sb) et encode le VRAI BSIC dans dispatch_sb (remplace SHUNT_CANNED_BSIC 63). Applique APRES le gist (qui clone+build gr-gsm propre), puis recompile/reinstalle dans le venv. Patch maintenu dans patches/ (regenere a chaque changement gr-gsm).
 
@@ -887,7 +887,7 @@ mkdir -p "$(dirname /tmp/grgsm-receiver-publish-bsic-fn.patch)" && cp -r "$REPO"
 
 ```bash
 if ! osmo-deb install grgsm-venv 0.git; then \
-      curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
+      bash scripts/build_gnuradio.sh \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
       && make -j"$(nproc)" \

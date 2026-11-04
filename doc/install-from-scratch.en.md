@@ -618,7 +618,7 @@ mkdir -p "$(dirname /tmp/grgsm-receiver-publish-bsic-fn.patch)" && cp -r "$REPO"
 
 ```bash
 if ! osmo-deb install grgsm-venv 0.git; then \
-      curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
+      bash scripts/build_gnuradio.sh \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
       && make -j"$(nproc)" \

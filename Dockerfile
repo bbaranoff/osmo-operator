@@ -725,17 +725,19 @@ ARG OSMO_DEB_REFRESH=0
 # The GNU Radio deps (apt build-dep) are installed by the single apt block at
 # the top of the file, deb-src included: no apt here.
 #
-# The build downloads and runs the gist (pinned to commit fcdb409), which
-# creates /root/.env and installs the three. Then:
+# The build runs scripts/build_gnuradio.sh (vendored from the former gist
+# 3683811057933af0954b661821e950d1): it creates /root/.env and installs the
+# three, with -j bounded by the available RAM and, on aarch64, Ubuntu's
+# python3-pyqt5 instead of a PyQt5 compiled from source (OOM). Then:
 #
 # gr-gsm patch: the receiver publishes the SCH BSIC/FN (decode_sch) on the
 # `measurements` port AND on stdout ("SCHBSIC <bsic> <fn>"). The DSP shunt reads
 # it (si_bridge.py parses grgsm_decode's stdout -> UDP 4731 -> feed_sb) and
-# encodes the REAL BSIC in dispatch_sb. Applied AFTER the gist (which clones and
+# encodes the REAL BSIC in dispatch_sb. Applied AFTER build_gnuradio.sh (which clones and
 # builds gr-gsm), then rebuilt/reinstalled in the venv. Maintained in patches/.
 #
 # matplotlib is used by tools/fft_global.sh and tools/matrix.sh.
-# numpy STAYS at 1.x: the gist pins "numpy<2" (GNU Radio 3.10 is built against
+# numpy STAYS at 1.x: build_gnuradio.sh pins "numpy<2" (GNU Radio 3.10 is built against
 # it), but a bare `pip install matplotlib` would pull the latest
 # matplotlib/contourpy, which require numpy>=2. The same-line constraint makes
 # pip pick a numpy-1-compatible matplotlib. The cached package is 1.git (the
@@ -746,8 +748,9 @@ ARG OSMO_DEB_REFRESH=0
 # /opt/GSM/{gnuradio,gr-osmosdr,gr-gsm} trees are not in the package - nothing
 # reads them at runtime (the venv carries its .so with an RPATH on /root/.env).
 COPY patches/grgsm-receiver-publish-bsic-fn.patch /tmp/grgsm-receiver-publish-bsic-fn.patch
+COPY scripts/build_gnuradio.sh /tmp/build_gnuradio.sh
 RUN if ! osmo-deb install grgsm-venv 1.git; then \
-      curl -fsSL https://gist.githubusercontent.com/bbaranoff/3683811057933af0954b661821e950d1/raw/fcdb4092483ec383440b67fc002db0c158384bab/build.sh | bash \
+      bash /tmp/build_gnuradio.sh \
       && git -C /opt/GSM/gr-gsm apply /tmp/grgsm-receiver-publish-bsic-fn.patch \
       && cd /opt/GSM/gr-gsm/build \
       && make -j"$(nproc)" \
