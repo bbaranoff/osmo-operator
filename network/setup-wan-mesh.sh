@@ -620,6 +620,13 @@ exten => _X.,1,NoOp(=== WAN OUT: indicatif inconnu \${EXTEN} ===)
  same => n,Congestion()
  same => n,Hangup()
 
+; ── [wan-hdr] - pre-dial de [wan_in] : marque l'INVITE vers le MSC comme un
+; appel ARRIVE du WAN. tools/osmo-hr-transcodeur.py --lora (start.sh --lora)
+; le lit pour mettre la voix de cet appel en RF sur le LoRa.
+[wan-hdr]
+exten => s,1,Set(PJSIP_HEADER(add,X-Osmo-WAN)=in)
+ same => n,Return()
+
 ; ── [wan_in] - ce qui ARRIVE des autres noeuds ────────────────────────────
 ; Le noeud emetteur a deja retire l'indicatif : on recoit le numero nu.
 [wan_in]
@@ -633,7 +640,7 @@ exten => _${WAN_NODE_ID}00${j}XX,1,NoOp(=== WAN IN → GSM Op${j}: \${EXTEN} ===
  same => n,Set(CALLERID(all)=<\${CALLERID(num)}>)
  same => n,Gosub(sub-annuaire,\${CALLERID(num)},1)
  same => n,Gosub(sub-record,s,1(\${EXTEN}))
- same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rT)
+ same => n,Dial(PJSIP/\${EXTEN}@gsm_msc,,rTb(wan-hdr^s^1))
  same => n,Congestion()
  same => n,Hangup()
 EOF

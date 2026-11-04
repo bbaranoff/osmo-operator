@@ -240,11 +240,14 @@ Usage : ./start-native.sh [options] [mode]
                         section [payload] deja ecrite par network/setup-payload-ism.sh.
                         Peripherique/commandes par l'env : ISM_SERIAL, ISM_TX,
                         ISM_RX, ISM_TX_CMD, ISM_RX_CMD. Voir wiki/Payload-ISM.md.
-    --lora [1|2]        liaison LoRa entre deux noeuds : tnc0 montee depuis le
-                        RNode (Heltec V3, network/setup-lora-link.sh), payload
-                        (RTP, relais SMS) -> tnc0, signalisation -> wg0 ; --wan
-                        et --node N sont ajoutes. Sans numero : deduit de
-                        l'adresse de tnc0 (10.200.0.1 = 1, .2 = 2). wiki/LoRa.md.
+    --lora [1|2]        la VOIX des appels avec l'autre noeud part en RF sur le
+                        LoRa (RNode Heltec V3) : trames GSM-HR brutes du vocodeur
+                        ROM dans les trames KISS du RNode, sans IP ni codec
+                        (tools/osmo-hr-transcodeur.py --lora) ; --hr, --wan,
+                        --node N et la table 1:10.99.0.1 / 2:10.99.0.2 sont
+                        ajoutes, la signalisation reste sur wg0. LORA_MODE=ip :
+                        l'ancien plan, RTP + SMS en IP sur tnc0 (tncattach).
+                        wiki/LoRa.md.
     --lora-port=DEV     port serie du RNode (defaut : premier CP210x / CH9102 de
                         /dev/serial/by-id, sinon /dev/ttyUSB0)
     --hr                voix half-rate (TCH/H, GSM-HR), moins de debit sur LoRa ;

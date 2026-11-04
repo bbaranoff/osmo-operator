@@ -1,69 +1,93 @@
-# Call and SMS payload over a LoRa link (`--lora`)
+# The voice of inter-node calls on a LoRa radio link (`--lora`)
 
 Between two osmo-operator nodes, `--wan` carries the whole inter-node link over IP
 (WireGuard `wg0`, 10.99.0.1 ↔ 10.99.0.2). `--lora` keeps the **signalling** there (SS7 M3UA,
-SIP) and moves the **payload** — the RTP of calls and the SMS relay — onto a **LoRa radio
-link**: two Heltec LoRa32 v3 (SX1262) flashed with the RNode firmware, attached as the
-`tnc0` interface (10.200.0.1 ↔ 10.200.0.2).
+SIP) and sends the **voice** of the calls between the two nodes over a **LoRa radio link**
+— two Heltec LoRa32 v3 (SX1262) under the RNode firmware — as the **raw GSM-HR frames**
+coded by the ROM vocoder of the phone. No IP on the air, no codec in the network: like
+TrFO in a real network, osmo-mgw is in RTP passthrough and the network only transports.
+The frames are decoded by the ROM vocoder of the phone on the other node.
 
 ```
-            wg0 (WireGuard, IP): SS7, SIP — signalling, addresses
+            wg0 (WireGuard, IP): SS7, SIP — signalling, addresses, numbers
    +------------------------------------------------------------------+
 Node 1                                                               Node 2
-   |   RTP (calls), SMS relay -------- tnc0 : LoRa 868 MHz -------->   |
-   +------------------------------------------------------------------+
+MS1 ~Um~ BTS → MGW ─HR RTP─▶ transcoder ═══ LoRa 868 MHz ═══ transcoder ─HR RTP─▶ MGW → BTS ~Um~ MS2
+ (ROM vocoder codes)        (KISS frames of the RNode, 4 HR frames each)        (ROM vocoder decodes)
 ```
+
+## Why not RTP over IP on the link
+
+LoRa at SF7 / 500 kHz is **21.88 kbit/s on the air, half-duplex, shared by both nodes**.
+Measured with RTP over IP (`LORA_MODE=ip`, `tnc0`): GSM-FR is 50 packets/s × 73 bytes
+(33 of voice + 40 of IP/UDP/RTP) = 29 kbit/s per direction; our RNode monopolised the air
+(49 packets/s, ~30 ms each), the other node never got to transmit, Asterisk received 0
+packets. The headers weigh more than the voice.
+
+| On the air | per direction | both | fits in 21.88 kbit/s |
+|---|---|---|---|
+| RTP/IP full-rate | 29 kbit/s | 58 | no |
+| raw GSM-FR frames (33 B / 20 ms) | 13.2 kbit/s | 26.4 | no |
+| **raw GSM-HR frames (14 B / 20 ms), 4 per LoRa frame** | 5.9 kbit/s | 11.8 | **yes, ~68 % of the air** |
+| Um bursts (TRXD) | > 250 kbit/s | | no, and the GSM timing would not survive |
+
+A LoRa frame is `'V' | seq | n | n × 14 bytes` = 59 bytes every 80 ms per direction. The
+receiver plays the frames at 20 ms after a jitter buffer of one LoRa frame (3 at most).
+One call at a time on the link; a second inter-node call stays on IP (and is thus silent).
 
 ## One command
 
 ```bash
-sudo ./start.sh --lora 1 --bts-classique --ms      # node 1 (tnc0 = 10.200.0.1)
-sudo ./start.sh --lora 2 --bts-classique --ms      # node 2 (tnc0 = 10.200.0.2)
-sudo ./start.sh --lora 1 --hr ...                  # half-rate voice: less bitrate on the air
+sudo ./start.sh --lora 1 --bts-classique --ms      # node 1
+sudo ./start.sh --lora 2 --bts-classique --ms      # node 2
+sudo ./start.sh --lora 1 --lora-port=/dev/ttyUSB1  # serial port of the RNode (default: first CP210x / CH9102)
 ```
 
-`--lora N` does, in order:
+`--lora N` adds `--hr` (TCH/H, GSM-HR), `--wan --node N --hub-ip 10.99.0.1` and the WAN table
+`1:10.99.0.1:11 2:10.99.0.2:22` (`LORA_WAN_NODES` for another plan), then starts the HR
+transcoder (`tools/osmo-hr-transcodeur.py`) with `--lora PORT`. The transcoder sits on the SIP
+leg between osmo-sip-connector and Asterisk; for a call **with the other node** it puts the
+HR frames of the MGW on the air instead of transcoding them for Asterisk, and gives Asterisk
+a media-less FR leg (Asterisk still routes the call over the trunk, so the signalling is
+unchanged). A call is "with the other node" when:
 
-1. **The link**: `network/setup-lora-link.sh up --node N` attaches the RNode with `tncattach`
-   (KISS over USB at 115200, IPv6 filtered) as `tnc0 = 10.200.0.N/24`. Nothing happens if
-   `tnc0` is already up. `--lora-port=/dev/ttyUSBn` picks the serial port; by default the
-   first CP210x / CH9102 of `/dev/serial/by-id`, else `/dev/ttyUSB0`.
-2. **The switch**: `network/setup-lora-payload.sh up` marks the payload flows (RTP
-   20000-20999/udp, SMS relay 7890/tcp) with `fwmark 0x10`, routes them through `tnc0`
-   and DNATs the wg0 peer to the LoRa peer. Applications keep talking to 10.99.0.x.
-3. **The launcher** gets `--wan --node N --hub-ip 10.99.0.1` (unless given on the command
-   line; `LORA_HUB_IP` for another hub).
+- **outgoing**: the number dialled starts with the code of another node of `/etc/osmo-wan.conf`
+  (`22200101` from node 1);
+- **incoming**: the INVITE from Asterisk carries `X-Osmo-WAN`, set by the `[wan_in]` dialplan
+  (`network/setup-wan-mesh.sh`, pre-dial handler `[wan-hdr]`).
 
-Without a number, the node is deduced from the address of `tnc0`. Without `--lora`, a switch
-left by a previous run is removed; `tnc0` stays up (it is the radio link, not the switch).
+Local calls (same node, announcements) keep the HR ↔ FR transcoding by libosmogapk.
 
-## The link by hand
+The RNode must not be held by `tncattach`: `--lora` removes `tnc0` if present. The SMS relay
+stays on wg0.
+
+## The old plan: IP on the link (`LORA_MODE=ip`)
+
+`LORA_MODE=ip ./start.sh --lora N` attaches the RNode as `tnc0` (`network/setup-lora-link.sh`,
+`tncattach`, 10.200.0.N/24) and routes the payload flows (RTP, SMS relay) through it with
+`network/setup-lora-payload.sh` (fwmark 0x10, DNAT to the LoRa peer). It validates the IP
+path and carries SMS; voice does not fit, see above.
 
 ```bash
 ./network/setup-lora-link.sh --info               # rnodeconf -i: frequency, bandwidth, SF, power
 sudo ./network/setup-lora-link.sh up --node 1
 ./network/setup-lora-link.sh --status              # tnc0, route, TX/RX counters
 sudo ./network/setup-lora-link.sh --off
-sudo ./network/setup-lora-payload.sh --status      # the switch (rules, marks)
 ```
 
-Parameters of the verified module (set with `rnodeconf`, read with `--info`): 868.0 MHz,
-bandwidth 500 kHz, SF7, CR5, 17 dBm, **21.88 kbit/s on the air**. The firmware signature warning
-of `rnodeconf` only means the module was flashed with an autogenerated key on another machine.
+Parameters of the verified modules (set with `rnodeconf`): 868.0 MHz, bandwidth 500 kHz, SF7,
+CR5, 17 dBm, **21.88 kbit/s on the air** (SF7 is the fastest the RNode firmware offers).
 
-## Bitrate budget
+## Self-tests
 
-LoRa at SF7 / 500 kHz is a few tens of kbit/s shared by both directions, with the KISS framing
-and IP headers on top. GSM-FR RTP is 13 kbit/s of payload per direction, plus 40 bytes of
-IP/UDP/RTP per 20 ms frame: about 29 kbit/s per direction — **more than the link**. The
-path validates, the voice does not stay real time. `--hr` (GSM-HR, 5.6 kbit/s) and the
-HR ↔ FR transcoder in front of Asterisk halve the payload; the SMS relay passes without
-trouble. The MTU of `tnc0` is the default of `tncattach` (`LORA_MTU` to change it).
+```bash
+/root/.env/bin/python3 tools/osmo-lora-voice.py --loop     # KISS + framing + 20 ms playout, no radio
+/root/.env/bin/python3 tools/osmo-lora-voice.py --tx       # sends a test pattern on the air for 4 s
+```
 
 ## What gets installed
 
-`tncattach` (markqvist, tag 0.1.9) is compiled from source, `rns` 1.5.7 (`rnodeconf`,
-`rnsd`, `rnstatus`) goes into the venv `/root/.env` with symlinks in `/usr/local/bin`, and
-`wireguard-tools` is in the apt list: all three by the Dockerfile and by `install.sh`
-(`install_modules/50-build.sh`), so the ISO and the native install carry them. The two
-nodes also need `wg0` ([WAN](WAN.md)) for the signalling.
+`tncattach` (markqvist, tag 0.1.9) compiled from source, `rns` 1.5.7 (`rnodeconf`, `rnsd`,
+`rnstatus`, pyserial) in the venv `/root/.env` with symlinks in `/usr/local/bin`, and
+`wireguard-tools` in the apt list: by the Dockerfile and by `install.sh`
+(`install_modules/50-build.sh`). The two nodes also need `wg0` ([WAN](WAN.md)).

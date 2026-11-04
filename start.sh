@@ -7,8 +7,11 @@
 # Usage:
 #   ./start.sh [options]            native launcher (startup_scripts/*.sh)
 #   ./start.sh --docker [options]   hands over to launch/start-docker.sh
-#   ./start.sh --lora 1|2 [options] payload LoRa, nœud 1 ou 2 (codec : voir --hr)
-#                                   (sans numéro : déduit de l'adresse de tnc0)
+#   ./start.sh --lora 1|2 [options] la VOIX de l'appel inter-nœuds en RF sur le
+#                                   LoRa (trames GSM-HR brutes dans les trames du
+#                                   RNode, --hr implicite), signalisation sur wg0
+#                                   LORA_MODE=ip : l'ancien plan, RTP + SMS en IP
+#                                   sur tnc0 (sans numéro : déduit de tnc0)
 #   ./start.sh --lora 1 --lora-port=/dev/ttyUSB1   port série du RNode (Heltec V3)
 #   ./start.sh --hr [options]       voix half-rate (TCH/H) ; sans --hr : full-rate
 #   VAR=x ./start.sh                environment overrides always win
@@ -43,7 +46,7 @@ cd "$HERE"
 # `./start.sh --docker [args]` hands over to start-docker.sh with the other
 # arguments untouched; the rest of this script (startup_scripts/) is the
 # NATIVE launcher and is not read.
-_args=(); _docker=0; _lora=0; _lora_node=""; _lora_port=""; _hr=0
+_args=(); _docker=0; _lora=0; _lora_node=""; _lora_port=""; _hr=0; _hrx_extra=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --docker) _docker=1 ;;
@@ -83,12 +86,36 @@ if [ "$_lora" = 1 ]; then
     if [ -n "$_tnc_ip" ] && [ "$_tnc_ip" != "10.200.0.$_lora_node" ]; then
         echo "[start.sh] attention : --lora $_lora_node mais tnc0 = $_tnc_ip (attendu 10.200.0.$_lora_node)" >&2
     fi
-    # Lien radio : tnc0 depuis le RNode s'il n'est pas là. Sans lien, inutile
-    # d'aller plus loin : l'aiguilleur n'aurait pas d'interface où router.
-    if [ -z "$_tnc_ip" ]; then
-        $_sudo env LORA_PORT="$_lora_port" bash "$HERE/network/setup-lora-link.sh" up --node "$_lora_node" || {
-            echo "[start.sh] --lora : pas de lien radio (tnc0). Module branché ? network/setup-lora-link.sh --info" >&2
-            exit 2; }
+    _lora_mode="${LORA_MODE:-voice}"
+    if [ "$_lora_mode" = ip ]; then
+        # Lien radio : tnc0 depuis le RNode s'il n'est pas là. Sans lien, inutile
+        # d'aller plus loin : l'aiguilleur n'aurait pas d'interface où router.
+        if [ -z "$_tnc_ip" ]; then
+            $_sudo env LORA_PORT="$_lora_port" bash "$HERE/network/setup-lora-link.sh" up --node "$_lora_node" || {
+                echo "[start.sh] --lora : pas de lien radio (tnc0). Module branché ? network/setup-lora-link.sh --info" >&2
+                exit 2; }
+        fi
+    else
+        # Voix en RF : le transcodeur HR (--hr implicite) met les trames HR brutes
+        # du MGW, codées par le vocodeur ROM du téléphone, dans les trames KISS du
+        # RNode (tools/osmo-lora-voice.py) ; il tient le port série, tnc0 n'a pas
+        # sa place (même port). Rien n'est aiguillé en IP : la signalisation reste
+        # sur wg0, la jambe trunk d'Asterisk ne porte pas de média.
+        _hr=1
+        if [ -n "$_tnc_ip" ] || pgrep -x tncattach >/dev/null; then
+            echo "[start.sh] --lora (voix en RF) : tnc0 retirée, le transcodeur prend le port série (LORA_MODE=ip pour l'ancien plan)"
+            $_sudo bash "$HERE/network/setup-lora-link.sh" --off >/dev/null || true
+        fi
+        _lv_port="$_lora_port"
+        [ -n "$_lv_port" ] || _lv_port="$(ls /dev/serial/by-id/*CP210* /dev/serial/by-id/*CH9102* /dev/serial/by-id/*CH340* /dev/ttyUSB0 2>/dev/null | head -1)"
+        [ -n "$_lv_port" ] && _lv_port="$(readlink -f "$_lv_port")"
+        if [ -c "${_lv_port:-/nonexistent}" ]; then
+            _hrx_extra=(--lora "$_lv_port")
+            echo "[start.sh] --lora $_lora_node : voix inter-nœuds en RF, RNode $_lv_port (GSM-HR du vocodeur ROM, 4 trames / trame LoRa) ; signalisation -> 10.99.0.$_peer (wg0)"
+        else
+            echo "[start.sh] --lora : aucun port série de RNode (--lora-port=/dev/ttyUSBn) : l'appel inter-nœuds sera muet" >&2
+        fi
+        unset _lv_port
     fi
     # Identité SS7/WAN toujours sur wg0, jamais sur le lien radio : plan WAN
     # (PC 1.<nœud><op>.x), nœud imposé, hub inter-STP sur le nœud 1 (wg0).
@@ -113,14 +140,19 @@ if [ "$_lora" = 1 ]; then
     [ "$_has_node" = 1 ] || set -- "$@" --node "$_lora_node"
     [ "$_has_hub" = 1 ]  || set -- "$@" --hub-ip "${LORA_HUB_IP:-10.99.0.1}"
     unset _has_wan _has_node _has_hub _has_table _a
-    echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0)"
     echo "[start.sh]   options lanceur : $*"
-    $_sudo env WAN_PEER="10.99.0.$_peer" LORA_PEER="10.200.0.$_peer" \
-        bash "$HERE/network/setup-lora-payload.sh" up || echo "[start.sh] aiguilleur LoRa: echec (voir ci-dessus)"
+    if [ "$_lora_mode" = ip ]; then
+        echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0)"
+        $_sudo env WAN_PEER="10.99.0.$_peer" LORA_PEER="10.200.0.$_peer" \
+            bash "$HERE/network/setup-lora-payload.sh" up || echo "[start.sh] aiguilleur LoRa: echec (voir ci-dessus)"
+    elif ip rule show 2>/dev/null | grep -q 'fwmark 0x10'; then
+        $_sudo bash "$HERE/network/setup-lora-payload.sh" --off
+    fi
     unset _tnc_ip _peer
 elif ip rule show 2>/dev/null | grep -q 'fwmark 0x10'; then
     $_sudo bash "$HERE/network/setup-lora-payload.sh" --off
 fi
+
 
 # ── --hr: voix half-rate (TCH/H, GSM-HR) ─────────────────────────────────────
 # Canaux voix du BSC en TCH/H + codec-support fr hr, mobiles en half-speed
@@ -142,8 +174,12 @@ if [ "$_hr" = 1 ]; then
     echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
     $_sudo mkdir -p /var/log/osmocom
-    $_sudo sh -c 'nohup python3 "$1" >> /var/log/osmocom/hr-transcodeur.log 2>&1 < /dev/null & echo $! > "$2"' \
-        sh "$HERE/tools/osmo-hr-transcodeur.py" "$_hrx_pid"
+    # ${_hrx_extra[@]} : --lora PORT avec start.sh --lora (voix inter-nœuds en RF).
+    # /root/.env : le python qui a pyserial (rns) ; sinon le python du système.
+    _py=/root/.env/bin/python3; [ -x "$_py" ] || _py=python3
+    $_sudo sh -c 'p="$1"; s="$2"; pid="$3"; shift 3; nohup "$p" "$s" "$@" >> /var/log/osmocom/hr-transcodeur.log 2>&1 < /dev/null & echo $! > "$pid"' \
+        sh "$_py" "$HERE/tools/osmo-hr-transcodeur.py" "$_hrx_pid" "${_hrx_extra[@]+"${_hrx_extra[@]}"}"
+    unset _py
 else
     $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
 fi

@@ -21,6 +21,10 @@
 #   sudo ./network/setup-lora-payload.sh --off      # dépose tout (nettoie toutes les règles osmo-lora)
 #
 # Variables (surchargables) :
+# Cet aiguilleur est le plan « LoRa en IP » (start.sh --lora avec LORA_MODE=ip).
+# Par défaut, --lora met la VOIX en RF sans IP : trames GSM-HR brutes dans les
+# trames du RNode, par tools/osmo-hr-transcodeur.py --lora, et rien n'est
+# aiguillé ici (voir wiki/LoRa.md).
 #   WAN_PEER=10.99.0.2    pair signalisation (wg0)
 #   LORA_PEER=10.200.0.2  pair payload (tnc0)
 #   LORA_DEV=tnc0         interface radio
