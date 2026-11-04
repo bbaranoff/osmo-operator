@@ -265,6 +265,17 @@ wan_self_refresh() {
         return 1
     fi
 
+    # Another node carrying OUR address is a stale line (a table copied from
+    # another machine, or a previous run of this machine as that node): say
+    # so now, with the fix, rather than let wan_nodes_validate report a bare
+    # "share the IP" later.
+    local other
+    for other in "${WAN_NODE_LIST[@]:-}"; do
+        [ -n "$other" ] && [ "$other" != "$id" ] && [ "${WAN_IP[$other]:-}" = "$ip" ] || continue
+        _wan_err "noeud $other a aussi l'adresse $ip dans la table : ligne perimee (cette machine a tourne comme noeud $other ?)"
+        _wan_err "corrigez /etc/osmo-wan.conf, ou donnez la table : --wan-nodes \"1:10.99.0.1:11 2:10.99.0.2:22\" (--lora le fait seul)"
+        return 1
+    done
     ind="${WAN_IND[$id]:-$(wan_default_ind "$id")}"
     WAN_IP[$id]="$ip"
     WAN_IND[$id]="$ind"

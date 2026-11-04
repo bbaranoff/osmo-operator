@@ -93,18 +93,26 @@ if [ "$_lora" = 1 ]; then
     # Identité SS7/WAN toujours sur wg0, jamais sur le lien radio : plan WAN
     # (PC 1.<nœud><op>.x), nœud imposé, hub inter-STP sur le nœud 1 (wg0).
     # Une option donnée explicitement sur la ligne de commande garde la main.
-    _has_wan=0; _has_node=0; _has_hub=0
+    _has_wan=0; _has_node=0; _has_hub=0; _has_table=0
     for _a in "$@"; do
         case "$_a" in
-            --wan|--wan=*|--wan-nodes=*) _has_wan=1 ;;
+            --wan|--wan=*|--wan-nodes|--wan-nodes=*) _has_wan=1 ;;
             --node|--node=*)             _has_node=1 ;;
             --hub-ip|--hub-ip=*)         _has_hub=1 ;;
         esac
+        case "$_a" in --wan=*|--wan-nodes|--wan-nodes=*) _has_table=1 ;; esac
     done
+    # La table WAN du plan LoRa est connue d'avance (nœud 1 = 10.99.0.1, nœud 2
+    # = 10.99.0.2) : on la donne, au lieu de laisser wan_self_refresh ne
+    # réécrire que notre ligne dans /etc/osmo-wan.conf. Une table périmée sur
+    # la machine (un run précédent comme autre nœud) y laissait l'autre nœud à
+    # NOTRE adresse : « noeuds 1 et 2 partagent l'IP 10.99.0.2 ».
+    # LORA_WAN_NODES pour un autre plan ; --wan FICHIER / --wan-nodes gardent la main.
+    [ "$_has_table" = 1 ] || set -- "$@" --wan-nodes "${LORA_WAN_NODES:-1:10.99.0.1:11 2:10.99.0.2:22}"
     [ "$_has_wan" = 1 ]  || set -- "$@" --wan
     [ "$_has_node" = 1 ] || set -- "$@" --node "$_lora_node"
     [ "$_has_hub" = 1 ]  || set -- "$@" --hub-ip "${LORA_HUB_IP:-10.99.0.1}"
-    unset _has_wan _has_node _has_hub _a
+    unset _has_wan _has_node _has_hub _has_table _a
     echo "[start.sh] --lora $_lora_node : payload -> 10.200.0.$_peer (tnc0), signalisation -> 10.99.0.$_peer (wg0)"
     echo "[start.sh]   options lanceur : $*"
     $_sudo env WAN_PEER="10.99.0.$_peer" LORA_PEER="10.200.0.$_peer" \
