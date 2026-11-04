@@ -13,7 +13,9 @@ INST_DEPS[deps]="prereqs"
 _deps_list() {
     awk '
         /^RUN( --mount=[^ ]+)? *\\?$/ { pending = 1; next }
-        /^RUN( --mount=[^ ]+)? +apt-(get|fast) update && apt-(get|fast) install/ || (pending && /^ *apt-(get|fast) update && apt-(get|fast) install/) {
+        # [2026-11-04] The apt line may follow other commands of the same RUN
+        # (curl of the MongoDB key, echo of its source) and start with "&& ".
+        /^RUN( --mount=[^ ]+)? +apt-(get|fast) update && apt-(get|fast) install/ || (pending && /^ *(&& *)?apt-(get|fast) update && apt-(get|fast) install/) {
             pending = 0
             inblk = 1
             line = $0
@@ -24,7 +26,8 @@ _deps_list() {
             emit(line)
             next
         }
-        pending && !/^ *apt-(get|fast) update/ { pending = 0 }
+        # Still inside the RUN while the lines end with a backslash.
+        pending && !/\\[ \t]*$/ { pending = 0 }
         inblk { emit($0) }
 
         function emit(l,   n, a, i, cont) {
