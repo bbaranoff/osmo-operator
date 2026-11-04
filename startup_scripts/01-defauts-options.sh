@@ -241,13 +241,16 @@ Usage : ./start-native.sh [options] [mode]
                         Peripherique/commandes par l'env : ISM_SERIAL, ISM_TX,
                         ISM_RX, ISM_TX_CMD, ISM_RX_CMD. Voir wiki/Payload-ISM.md.
     --lora [1|2]        la VOIX des appels avec l'autre noeud part en RF sur le
-                        LoRa (RNode Heltec V3) : trames GSM-HR brutes du vocodeur
+                        LoRa (RNode Heltec V3) : trames GSM-FR brutes du vocodeur
                         ROM dans les trames KISS du RNode, sans IP ni codec
-                        (tools/osmo-hr-transcodeur.py --lora) ; --hr, --wan,
-                        --node N et la table 1:10.99.0.1 / 2:10.99.0.2 sont
-                        ajoutes, la signalisation reste sur wg0. LORA_MODE=ip :
-                        l'ancien plan, RTP + SMS en IP sur tnc0 (tncattach).
-                        wiki/LoRa.md.
+                        (tools/osmo-hr-transcodeur.py --lora). Seules les trames
+                        qui portent de la parole partent (VAD), et un SEMAPHORE
+                        fait parler un seul cote a la fois, comme une radio de
+                        train en tunnel (noeud 1 prioritaire). Avec --hr : trames
+                        HR, les deux cotes ensemble. --wan, --node N, --no-sidecar
+                        et la table 1:10.99.0.1 / 2:10.99.0.2 sont ajoutes, la
+                        signalisation reste sur wg0. LORA_MODE=ip : l'ancien plan,
+                        RTP + SMS en IP sur tnc0 (tncattach). wiki/LoRa.md.
     --lora-port=DEV     port serie du RNode (defaut : premier CP210x / CH9102 de
                         /dev/serial/by-id, sinon /dev/ttyUSB0)
     --hr                voix half-rate (TCH/H, GSM-HR), moins de debit sur LoRa ;

@@ -111,7 +111,6 @@ if [ "$_lora" = 1 ]; then
         # RNode (tools/osmo-lora-voice.py) ; il tient le port série, tnc0 n'a pas
         # sa place (même port). Rien n'est aiguillé en IP : la signalisation reste
         # sur wg0, la jambe trunk d'Asterisk ne porte pas de média.
-        _hr=1
         if [ -n "$_tnc_ip" ] || pgrep -x tncattach >/dev/null; then
             echo "[start.sh] --lora (voix en RF) : tnc0 retirée, le transcodeur prend le port série (LORA_MODE=ip pour l'ancien plan)"
             $_sudo bash "$HERE/network/setup-lora-link.sh" --off >/dev/null || true
@@ -120,8 +119,13 @@ if [ "$_lora" = 1 ]; then
         [ -n "$_lv_port" ] || _lv_port="$(ls /dev/serial/by-id/*CP210* /dev/serial/by-id/*CH9102* /dev/serial/by-id/*CH340* /dev/ttyUSB0 2>/dev/null | head -1)"
         [ -n "$_lv_port" ] && _lv_port="$(readlink -f "$_lv_port")"
         if [ -c "${_lv_port:-/nonexistent}" ]; then
+            # Full-rate par défaut (TCH/F, le mode éprouvé du banc) : seules les
+            # trames qui portent de la parole partent (VAD), et un sémaphore
+            # fait parler un seul côté à la fois, le nœud 1 prioritaire. --hr :
+            # trames HR, les deux côtés tiennent ensemble dans le lien.
             _hrx_extra=(--lora "$_lv_port")
-            echo "[start.sh] --lora $_lora_node : voix inter-nœuds en RF, RNode $_lv_port (GSM-HR du vocodeur ROM, 4 trames / trame LoRa) ; signalisation -> 10.99.0.$_peer (wg0)"
+            [ "$_lora_node" = 1 ] && _hrx_extra+=(--priority)
+            echo "[start.sh] --lora $_lora_node : voix inter-nœuds en RF, RNode $_lv_port ($([ "$_hr" = 1 ] && echo "GSM-HR" || echo "GSM-FR + VAD, talkie a semaphore$([ "$_lora_node" = 1 ] && echo ', prioritaire')") du vocodeur ROM) ; signalisation -> 10.99.0.$_peer (wg0)"
         else
             echo "[start.sh] --lora : aucun port série de RNode (--lora-port=/dev/ttyUSBn) : l'appel inter-nœuds sera muet" >&2
         fi
@@ -180,9 +184,15 @@ if [ -s "$_hrx_pid" ] && grep -qs osmo-hr-transcodeur "/proc/$(cat "$_hrx_pid")/
     $_sudo kill "$(cat "$_hrx_pid")" 2>/dev/null || true
 fi
 $_sudo rm -f "$_hrx_pid"
-if [ "$_hr" = 1 ]; then
-    echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
-    $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
+if [ "$_hr" = 1 ] || [ "${#_hrx_extra[@]}" -gt 0 ]; then
+    if [ "$_hr" = 1 ]; then
+        echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
+    else
+        # --lora sans --hr : le transcodeur ne sert qu'au LoRa (appels locaux non touches)
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
+    fi
+    _hrx_extra+=(--codec "$([ "$_hr" = 1 ] && echo hr || echo fr)")
     $_sudo mkdir -p /var/log/osmocom
     # ${_hrx_extra[@]} : --lora PORT avec start.sh --lora (voix inter-nœuds en RF).
     # /root/.env : le python qui a pyserial (rns) ; sinon le python du système.

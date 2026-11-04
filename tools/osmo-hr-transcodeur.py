@@ -30,17 +30,26 @@
 # without --hr it is stopped and the direct leg 5061 <-> 5060 comes back.
 #
 # --lora PORT : the VOICE of the calls with the other node goes on the LoRa radio,
-#   as the raw GSM-HR frames of the MGW (coded by the ROM vocoder of the phone), in
-#   the KISS frames of the RNode (tools/osmo-lora-voice.py). No codec on that path,
-#   nothing on the IP: Asterisk still signals the call (its trunk leg carries no
-#   media). A call is "with the other node" when the number dialled starts with the
-#   code of another node of /etc/osmo-wan.conf (MO), or when the INVITE from
+#   as the raw GSM speech frames of the MGW (coded by the ROM vocoder of the phone),
+#   in the KISS frames of the RNode (tools/osmo-lora-voice.py). No codec on that
+#   path, nothing on the IP: Asterisk still signals the call (its trunk leg carries
+#   no media). A call is "with the other node" when the number dialled starts with
+#   the code of another node of /etc/osmo-wan.conf (MO), or when the INVITE from
 #   Asterisk carries X-Osmo-WAN (MT, set by [wan_in] of network/setup-wan-mesh.sh).
 #   One such call at a time (the link cannot carry two). --lora loop: no radio,
 #   the frames come back (test).
+#   --codec fr (default): the call stays full-rate (TCH/F) and only the frames that
+#   carry speech go on the air (--vad, GSM 06.10 xmaxc); the link takes one talker
+#   at a time. --codec hr: --hr mode, HR frames (both sides at once fit).
+#   --alternat (default): walkie-talkie discipline with a SEMAPHORE, as on a train
+#   radio in a tunnel: the first to speak sends SEIZE and holds the channel, the
+#   other side drops its own frames and listens until RELEASE (end of speech) or
+#   a timeout; --priority (node 1) keeps the channel when both seize at once.
+#   Without --codec hr the transcoder leaves local calls untouched (no HR).
 #
 # Usage: osmo-hr-transcodeur.py [--port 5062] [--sc 127.0.0.1:5061] [--ast 127.0.0.1:5060]
-#                               [--rtp 21000-21999] [--lora /dev/ttyUSB0] [--wan-conf FILE] [-v]
+#                               [--rtp 21000-21999] [--lora /dev/ttyUSB0] [--codec fr|hr]
+#                               [--vad 8] [--no-alternat] [--priority] [--wan-conf FILE] [-v]
 import argparse
 import ctypes
 import hashlib
@@ -216,9 +225,10 @@ class Session:
     """One call: s_mgw faces osmo-mgw (HR), s_ast faces Asterisk (FR).
     lora=True: the HR frames go to / come from the LoRa link instead of Asterisk."""
 
-    def __init__(self, call_id, ports):
+    def __init__(self, call_id, ports, codec="hr"):
         self.call_id = call_id
         self.lora = False
+        self.codec = codec            # "hr" or "fr": what the MGW side carries
         self.s_mgw = ports.ouvrir()
         self.s_ast = ports.ouvrir()
         self.mgw_remote = None
@@ -236,6 +246,12 @@ class Session:
     def port_ast(self):
         return self.s_ast.getsockname()[1]
 
+    def pt_mgw(self):
+        return PT_GSM if self.codec == "fr" else self.hr_pt
+
+    def rtpmap_mgw(self):
+        return "GSM/8000" if self.codec == "fr" else "GSM-HR-08/8000"
+
     # Symmetric RTP: once a side has sent, its real source address wins over the SDP
     # c= line (Asterisk may announce its external_media_address there).
     def de_mgw(self, data, addr, lora=None):
@@ -245,10 +261,15 @@ class Session:
         if p is None:
             return
         if self.lora:
-            # RFC 5993 payload -> canonical 14 bytes on the air. FT 7 = no data.
-            if lora and len(p) >= HR_IETF and (p[0] >> 4) & 7 != 7:
+            # FR: the 33-byte frame as is. HR: RFC 5993 payload -> canonical 14
+            # bytes (FT 7 = no data). The transcoder decides (VAD, alternat).
+            if self.codec == "fr":
+                frame = p if len(p) == FR_LEN else None
+            else:
+                frame = p[1:1 + HR_CANON] if len(p) >= HR_IETF and (p[0] >> 4) & 7 != 7 else None
+            if frame is not None and lora:
                 self.n_hr += 1
-                lora.send(p[1:1 + HR_CANON])
+                lora(frame)
             return
         if not self.ast_remote:
             return
@@ -257,14 +278,15 @@ class Session:
             self.n_hr += 1
             self.s_ast.sendto(self.rtp_ast.paquet(fr), self.ast_remote)
 
-    def de_lora(self, hr14):
-        """A frame from the air -> RTP GSM-HR-08 to the MGW."""
+    def de_lora(self, frame):
+        """A frame from the air -> RTP (GSM FR, or GSM-HR-08) to the MGW."""
         if not self.mgw_remote:
             return
         if self.rtp_mgw is None:
-            self.rtp_mgw = RtpSortie(self.hr_pt)
+            self.rtp_mgw = RtpSortie(self.pt_mgw())
         self.n_fr += 1
-        self.s_mgw.sendto(self.rtp_mgw.paquet(b"\x00" + hr14), self.mgw_remote)
+        payload = frame if self.codec == "fr" else b"\x00" + frame
+        self.s_mgw.sendto(self.rtp_mgw.paquet(payload), self.mgw_remote)
 
     def de_ast(self, data, addr):
         self.vu = time.monotonic()
@@ -287,7 +309,8 @@ class Session:
         self.vers_ast.close()
         self.vers_mgw.close()
         if self.lora:
-            log.info("appel %s (LoRa) termine : %d trames HR vers l'air, %d de l'air", self.call_id, self.n_hr, self.n_fr)
+            log.info("appel %s (LoRa, %s) termine : %d trames vers l'air, %d de l'air", self.call_id,
+                     self.codec.upper(), self.n_hr, self.n_fr)
         else:
             log.info("appel %s termine : %d trames HR->FR, %d FR->HR", self.call_id, self.n_hr, self.n_fr)
 
@@ -397,20 +420,43 @@ def wan_codes_etrangers(path):
     return codes
 
 
-def lien_lora(spec, frames=4):
-    spec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-lora-voice.py")
-    sp = importlib.util.spec_from_file_location("lora_voice", spec_path)
-    mod = importlib.util.module_from_spec(sp)
-    sp.loader.exec_module(mod)
-    return mod.LoraLink(spec, frames=frames, loop=(spec == "loop"))
+_lora_mod = None
+
+
+def lora_module():
+    global _lora_mod
+    if _lora_mod is None:
+        spec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "osmo-lora-voice.py")
+        sp = importlib.util.spec_from_file_location("lora_voice", spec_path)
+        _lora_mod = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(_lora_mod)
+    return _lora_mod
+
+
+def lien_lora(spec, frames=4, codec="fr"):
+    mod = lora_module()
+    return mod.LoraLink(spec, frames=frames, loop=(spec == "loop"),
+                        frame_len=mod.FR if codec == "fr" else mod.HR)
 
 
 class Transcodeur:
-    def __init__(self, port, sc, ast, rtp_lo, rtp_hi, lora=None, codes=()):
+    def __init__(self, port, sc, ast, rtp_lo, rtp_hi, lora=None, codes=(), codec="hr",
+                 vad=8, alternat=True, priority=False, hold=0.4):
         self.lora = lora                # LoraLink or None
         self.codes = list(codes)        # WAN codes of the other nodes
+        self.codec = codec              # codec of the LoRa calls ("fr" / "hr")
+        self.hr = (codec == "hr")       # HR mode: local calls transcoded HR <-> FR
         self.lora_sess = None           # the one call on the air
         self.t_lora_stats = time.monotonic()
+        # Speech gate (FR only) and walkie-talkie discipline.
+        self.vad = lora_module().Vad(vad, 8) if (lora and codec == "fr" and vad > 0) else None
+        self.alternat, self.priority, self.hold = alternat, priority, hold
+        # The semaphore: FREE, MINE (we hold the channel), THEIRS (the other node does).
+        self.floor = "FREE"
+        self.t_rx_last = 0.0            # last frame heard from the other node
+        self.t_tx_last = 0.0            # last frame we put on the air
+        self.n_yield = 0                # frames dropped because the other side holds the channel
+        self.THEIRS_TIMEOUT = 1.5       # a lost RELEASE must not block us forever
         self.sip = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sip.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sip.bind(("127.0.0.1", port))
@@ -457,10 +503,55 @@ class Transcodeur:
         return None
 
     # SDP --------------------------------------------------------------------
-    def session(self, call_id, creer):
+    # ── the semaphore ──
+    def floor_set(self, state, why):
+        if state != self.floor:
+            log.info("canal : %s -> %s (%s)", self.floor, state, why)
+            self.floor = state
+
+    def floor_tick(self, now):
+        """Timeouts: we release after `hold` of silence, their seizure expires."""
+        if self.floor == "MINE" and now - self.t_tx_last >= self.hold:
+            self.lora.send_control(lora_module().RELEASE)
+            self.floor_set("FREE", "fin de parole, RELEASE envoye")
+        elif self.floor == "THEIRS" and now - self.t_rx_last >= self.THEIRS_TIMEOUT:
+            self.floor_set("FREE", "plus rien de l'autre depuis %.1f s" % self.THEIRS_TIMEOUT)
+
+    def floor_heard(self, now, cmd=None):
+        """The other node sent voice (cmd None), SEIZE or RELEASE."""
+        mod = lora_module()
+        self.t_rx_last = now
+        if cmd == mod.RELEASE:
+            if self.floor == "THEIRS":
+                self.floor_set("FREE", "RELEASE recu")
+            return
+        # voice or SEIZE: they hold the channel, unless we hold it with priority
+        if self.floor == "MINE" and self.priority:
+            return
+        if self.floor == "MINE":
+            self.floor_set("THEIRS", "collision, l'autre est prioritaire")
+        elif self.floor == "FREE":
+            self.floor_set("THEIRS", "SEIZE recu" if cmd else "voix recue")
+
+    # Our frame toward the air: speech gate, then the semaphore.
+    def vers_air(self, frame):
+        if self.vad and not self.vad.speech(frame):
+            return
+        now = time.monotonic()
+        if self.alternat:
+            if self.floor == "THEIRS":
+                self.n_yield += 1            # the other side holds the channel: we listen
+                return
+            if self.floor == "FREE":
+                self.lora.send_control(lora_module().SEIZE)
+                self.floor_set("MINE", "parole, SEIZE envoye")
+        self.t_tx_last = now
+        self.lora.send(frame)
+
+    def session(self, call_id, creer, codec=None):
         s = self.sessions.get(call_id)
         if s is None and creer:
-            s = self.sessions[call_id] = Session(call_id, self.ports)
+            s = self.sessions[call_id] = Session(call_id, self.ports, codec or ("hr" if self.hr else "fr"))
             self.rtp[s.s_mgw] = (s, "mgw")
             self.rtp[s.s_ast] = (s, "ast")
             log.info("appel %s : transcodage HR <-> FR (mgw:%d ast:%d)", call_id, s.port_mgw(), s.port_ast())
@@ -477,30 +568,37 @@ class Transcodeur:
             return
         if de == "sc":
             m = HR_RTPMAP.search(sdp)
-            s = self.session(call_id, bool(m))
-            if not s:
-                return                                  # no HR: untouched (full-rate call)
-            if m:
-                s.hr_pt = int(m.group(1))
-            s.mgw_remote = med
             # MO toward the WAN: the number dialled starts with another node's code.
-            if self.lora and msg.is_request and msg.method() == "INVITE" and not s.lora:
+            wan = None
+            if self.lora and msg.is_request and msg.method() == "INVITE":
                 user = re.match(r"INVITE sips?:(?:\+)?(\d+)", msg.start)
                 if user and any(user.group(1).startswith(c) and len(user.group(1)) > len(c)
                                 for c in self.codes):
-                    self.appel_lora(s, "vers %s" % user.group(1))
+                    wan = user.group(1)
+            # HR mode: every HR offer is a session (transcoded). FR mode: only the
+            # LoRa calls, with the codec the MGW offers (FR unless HR is offered).
+            s = self.session(call_id, (self.hr and bool(m)) or bool(wan), "hr" if m else "fr")
+            if not s:
+                return                                  # untouched (full-rate local call)
+            if m:
+                s.hr_pt = int(m.group(1))
+            s.mgw_remote = med
+            if wan and not s.lora:
+                self.appel_lora(s, "vers %s" % wan)
             msg.body = sdp_reecrire(sdp, s.port_ast(), PT_GSM, "GSM/8000").encode()
         else:
-            # Asterisk: answer to an HR offer, or an offer (MT call) -- with --hr the
-            # radio side only has TCH/H, it must be offered GSM-HR-08.
-            s = self.session(call_id, msg.is_request)
+            # Asterisk: answer to an offer, or an offer (MT call). MT from the WAN:
+            # [wan_in] marks the INVITE (network/setup-wan-mesh.sh). With --hr the
+            # radio side only has TCH/H, the MGW must be offered GSM-HR-08; in FR
+            # mode a LoRa MT call is offered GSM (FR) and local MT calls are left alone.
+            wan = bool(self.lora and msg.is_request and msg.get("X-Osmo-WAN"))
+            s = self.session(call_id, msg.is_request and (self.hr or wan))
             if not s:
                 return
             s.ast_remote = med
-            # MT from the WAN: [wan_in] marks the INVITE (network/setup-wan-mesh.sh).
-            if self.lora and msg.is_request and msg.get("X-Osmo-WAN") and not s.lora:
+            if wan and not s.lora:
                 self.appel_lora(s, "du WAN, de %s" % (msg.get("From", "f") or "?").split("<")[-1].rstrip(">"))
-            msg.body = sdp_reecrire(sdp, s.port_mgw(), s.hr_pt, "GSM-HR-08/8000").encode()
+            msg.body = sdp_reecrire(sdp, s.port_mgw(), s.pt_mgw(), s.rtpmap_mgw()).encode()
 
     def appel_lora(self, s, quoi):
         if self.lora_sess and self.lora_sess is not s and self.lora_sess.call_id in self.sessions:
@@ -509,7 +607,9 @@ class Transcodeur:
             return
         s.lora = True
         self.lora_sess = s
-        log.info("appel %s %s : voix en RF sur le LoRa (trames HR brutes, sans codec)", s.call_id, quoi)
+        log.info("appel %s %s : voix en RF sur le LoRa (trames %s brutes du vocodeur ROM, sans codec%s%s)",
+                 s.call_id, quoi, s.codec.upper(), ", VAD" if self.vad else "",
+                 ", alternat%s" % (" prioritaire" if self.priority else "") if self.alternat else "")
 
     def fin_appel(self, msg):
         call_id = msg.get("Call-ID", "i")
@@ -556,6 +656,9 @@ class Transcodeur:
                 self.rtp.pop(s.s_ast, None)
                 if self.lora_sess is s:
                     self.lora_sess = None
+                    if self.floor == "MINE":
+                        self.lora.send_control(lora_module().RELEASE)
+                        self.floor_set("FREE", "fin d'appel")
                     self.lora.flush()
                 s.close()
         for br, (_, t) in list(self.branches.items()):
@@ -567,8 +670,10 @@ class Transcodeur:
                  self.moi, *self.sc, *self.ast)
         self.dernier = time.monotonic()
         if self.lora:
-            log.info("voix des appels inter-noeuds en RF : %s ; indicatifs des autres noeuds : %s",
-                     self.lora.describe(), ", ".join(self.codes) or "aucun (voir --wan-conf)")
+            log.info("voix des appels inter-noeuds en RF : %s ; VAD %s ; alternat %s ; indicatifs des autres noeuds : %s",
+                     self.lora.describe(), "seuil %d" % self.vad.threshold if self.vad else "non",
+                     ("oui, prioritaire" if self.priority else "oui") if self.alternat else "non",
+                     ", ".join(self.codes) or "aucun (voir --wan-conf)")
         while True:
             self.step(1.0)
 
@@ -576,16 +681,32 @@ class Transcodeur:
         """Frames from the air -> the MGW of the LoRa call ; 5 s statistics."""
         if not self.lora:
             return
-        for hr14 in self.lora.poll():
-            if self.lora_sess:
-                self.lora_sess.de_lora(hr14)
+        frames = self.lora.poll()
         now = time.monotonic()
+        while self.lora.controls:
+            _, cmd = self.lora.controls.popleft()
+            self.floor_heard(now, cmd)
+        if frames:
+            self.floor_heard(now)
+            if self.lora_sess:
+                for fr in frames:
+                    self.lora_sess.de_lora(fr)
+        if self.alternat:
+            self.floor_tick(now)
         if now - self.t_lora_stats >= 5:
             self.t_lora_stats = now
             st = self.lora.stats()
-            if st["tx"] or st["rx"]:
-                log.info("LoRa 5 s : tx %d trames, rx %d (perdues %d, jetees %d), tampon %d",
-                         st["tx"], st["rx"], st["lost"], st["drop"], st["buffer"])
+            v = self.vad
+            if st["tx"] or st["rx"] or (v and (v.n_speech or v.n_silence)) or self.n_yield:
+                log.info("LoRa 5 s : tx %d trames LoRa, rx %d (perdues %d, jetees %d), tampon %d%s%s",
+                         st["tx"], st["rx"], st["lost"], st["drop"], st["buffer"],
+                         " ; VAD parole %d / silence %d" % (v.n_speech, v.n_silence) if v else "",
+                         " ; cedees a l'autre %d" % self.n_yield if self.n_yield else "")
+                if self.alternat:
+                    log.info("canal : %s" % {"FREE": "libre", "MINE": "a nous", "THEIRS": "a l'autre"}[self.floor])
+            if v:
+                v.n_speech = v.n_silence = 0
+            self.n_yield = 0
 
     def step(self, timeout):
         """One select() round: SIP, RTP, and the LoRa link."""
@@ -615,7 +736,7 @@ class Transcodeur:
                     sess, cote = ent
                     try:
                         if cote == "mgw":
-                            sess.de_mgw(data, addr, self.lora)
+                            sess.de_mgw(data, addr, self.vers_air if self.lora else None)
                         else:
                             sess.de_ast(data, addr)
                     except OSError as e:
@@ -637,7 +758,12 @@ def main():
     ap.add_argument("--ast", type=hote_port, default=("127.0.0.1", 5060))
     ap.add_argument("--rtp", default="21000-21999")
     ap.add_argument("--lora", help="port serie du RNode (voix inter-noeuds en RF), ou 'loop' (test)")
-    ap.add_argument("--lora-frames", type=int, default=4, help="trames HR par trame LoRa")
+    ap.add_argument("--lora-frames", type=int, default=4, help="trames parole par trame LoRa")
+    ap.add_argument("--codec", choices=["fr", "hr"], default="fr",
+                    help="fr : appels LoRa en full-rate, locaux non touches ; hr : mode --hr (transcodage local, LoRa en HR)")
+    ap.add_argument("--vad", type=int, default=8, help="seuil de parole (xmaxc GSM 06.10) des trames FR vers l'air, 0 = tout envoyer")
+    ap.add_argument("--no-alternat", action="store_true", help="pas de discipline talkie : chacun emet quand il parle")
+    ap.add_argument("--priority", action="store_true", help="alternat : ce noeud garde la parole si les deux parlent (noeud 1)")
     ap.add_argument("--wan-conf", default="/etc/osmo-wan.conf", help="table WAN (indicatifs des autres noeuds)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
@@ -645,9 +771,10 @@ def main():
                         format="%(asctime)s [hr-transcodeur] %(message)s", datefmt="%H:%M:%S")
     lo, hi = (int(x) for x in a.rtp.split("-"))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    lora = lien_lora(a.lora, a.lora_frames) if a.lora else None
+    lora = lien_lora(a.lora, a.lora_frames, a.codec) if a.lora else None
     codes = wan_codes_etrangers(a.wan_conf) if a.lora else []
-    Transcodeur(a.port, a.sc, a.ast, lo, hi, lora=lora, codes=codes).run()
+    Transcodeur(a.port, a.sc, a.ast, lo, hi, lora=lora, codes=codes, codec=a.codec, vad=a.vad,
+                alternat=not a.no_alternat, priority=a.priority).run()
 
 
 if __name__ == "__main__":

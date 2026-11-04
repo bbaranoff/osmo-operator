@@ -3,10 +3,12 @@
 Between two osmo-operator nodes, `--wan` carries the whole inter-node link over IP
 (WireGuard `wg0`, 10.99.0.1 ↔ 10.99.0.2). `--lora` keeps the **signalling** there (SS7 M3UA,
 SIP) and sends the **voice** of the calls between the two nodes over a **LoRa radio link**
-— two Heltec LoRa32 v3 (SX1262) under the RNode firmware — as the **raw GSM-HR frames**
-coded by the ROM vocoder of the phone. No IP on the air, no codec in the network: like
-TrFO in a real network, osmo-mgw is in RTP passthrough and the network only transports.
-The frames are decoded by the ROM vocoder of the phone on the other node.
+— two Heltec LoRa32 v3 (SX1262) under the RNode firmware — as the **raw GSM speech frames**
+coded by the ROM vocoder of the phone (full-rate by default). No IP on the air, no codec in
+the network: like TrFO in a real network, osmo-mgw is in RTP passthrough and the network
+only transports. The frames are decoded by the ROM vocoder of the phone on the other node.
+Two things make full-rate fit the link: only the frames that **carry speech** go on the air,
+and a **semaphore** lets one side speak at a time, like a train radio in a tunnel.
 
 ```
             wg0 (WireGuard, IP): SS7, SIP — signalling, addresses, numbers
@@ -27,13 +29,28 @@ packets. The headers weigh more than the voice.
 | On the air | per direction | both | fits in 21.88 kbit/s |
 |---|---|---|---|
 | RTP/IP full-rate | 29 kbit/s | 58 | no |
-| raw GSM-FR frames (33 B / 20 ms) | 13.2 kbit/s | 26.4 | no |
-| **raw GSM-HR frames (14 B / 20 ms), 4 per LoRa frame** | 5.9 kbit/s | 11.8 | **yes, ~68 % of the air** |
+| raw GSM-FR frames (33 B / 20 ms), both sides at once | 13.6 kbit/s | 27 | no |
+| **raw GSM-FR frames, speech only, one talker at a time (default)** | 13.6 kbit/s while speaking | one side | **yes** |
+| raw GSM-HR frames (14 B / 20 ms), 4 per LoRa frame (`--hr`) | 6 kbit/s | 12 | yes, ~68 % of the air, both at once |
 | Um bursts (TRXD) | > 250 kbit/s | | no, and the GSM timing would not survive |
 
-A LoRa frame is `'V' | seq | n | n × 14 bytes` = 59 bytes every 80 ms per direction. The
-receiver plays the frames at 20 ms after a jitter buffer of one LoRa frame (3 at most).
+A LoRa frame is `'V' | seq | n | len | n × len bytes` (4 frames of 33 = 136 bytes per 80 ms).
+The receiver plays the frames at 20 ms after a jitter buffer of one LoRa frame (3 at most).
 One call at a time on the link; a second inter-node call stays on IP (and is thus silent).
+
+**Speech gate (VAD).** A GSM 06.10 frame carries the quantised block maximum of its residual
+(`xmaxc`, four 6-bit fields) that can be read without decoding: 0-3 in the pauses, 12-40 in
+speech (measured on Asterisk's announcements). Frames under the threshold (`--vad 8`) are not
+sent, with a 160 ms hangover so word endings are not clipped; the last partial LoRa frame of a
+sentence is flushed after 100 ms. While one side listens it sends nothing at all.
+
+**Semaphore.** The first side with speech sends `SEIZE` (`'C' | seq | 1`) and holds the
+channel; the other side drops its own frames and listens until `RELEASE` (`'C' | seq | 2`,
+sent after 400 ms of silence) or 1.5 s without any frame (a lost RELEASE). If both seize at
+once, the node started with `--priority` (node 1) keeps the channel, the other yields. The
+transcoder logs every transition (`canal : FREE -> MINE (parole, SEIZE envoye)`).
+Verified in loopback between two transcoders fed with real speech: while A speaks, B's 126
+frames are dropped and B receives all of A's; after A's RELEASE, B speaks and A receives.
 
 ## One command
 
@@ -43,20 +60,21 @@ sudo ./start.sh --lora 2 --bts-classique --ms      # node 2
 sudo ./start.sh --lora 1 --lora-port=/dev/ttyUSB1  # serial port of the RNode (default: first CP210x / CH9102)
 ```
 
-`--lora N` adds `--hr` (TCH/H, GSM-HR), `--wan --node N --hub-ip 10.99.0.1` and the WAN table
-`1:10.99.0.1:11 2:10.99.0.2:22` (`LORA_WAN_NODES` for another plan), then starts the HR
-transcoder (`tools/osmo-hr-transcodeur.py`) with `--lora PORT`. The transcoder sits on the SIP
-leg between osmo-sip-connector and Asterisk; for a call **with the other node** it puts the
-HR frames of the MGW on the air instead of transcoding them for Asterisk, and gives Asterisk
-a media-less FR leg (Asterisk still routes the call over the trunk, so the signalling is
-unchanged). A call is "with the other node" when:
+`--lora N` adds `--no-sidecar`, `--wan --node N --hub-ip 10.99.0.1` and the WAN table
+`1:10.99.0.1:11 2:10.99.0.2:22` (`LORA_WAN_NODES` for another plan), then starts
+`tools/osmo-hr-transcodeur.py --lora PORT --codec fr` (`--priority` on node 1; `--codec hr`
+with `--hr`). The transcoder sits on the SIP leg between osmo-sip-connector and Asterisk; for
+a call **with the other node** it puts the speech frames of the MGW on the air instead of
+handing them to Asterisk, and gives Asterisk a media-less FR leg (Asterisk still routes the
+call over the trunk, so the signalling is unchanged). Without `--hr`, local calls are left
+untouched (no transcoding at all). A call is "with the other node" when:
 
 - **outgoing**: the number dialled starts with the code of another node of `/etc/osmo-wan.conf`
   (`22200101` from node 1);
 - **incoming**: the INVITE from Asterisk carries `X-Osmo-WAN`, set by the `[wan_in]` dialplan
   (`network/setup-wan-mesh.sh`, pre-dial handler `[wan-hdr]`).
 
-Local calls (same node, announcements) keep the HR ↔ FR transcoding by libosmogapk.
+With `--hr`, local calls keep the HR ↔ FR transcoding by libosmogapk (Asterisk knows no HR).
 
 The RNode must not be held by `tncattach`: `--lora` removes `tnc0` if present. The SMS relay
 stays on wg0.
