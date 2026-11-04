@@ -13,6 +13,12 @@
 #   --off  full-rate : BSC codec-support fr, canaux voix TCH/F, mobiles
 #          "codec full-speed prefer", jambe SIP directe 5061 <-> 5060 —
 #          l'inverse exact
+#   --fr-via-transcodeur  full-rate (comme --off) MAIS la jambe SIP passe par le
+#          transcodeur : c'est le mode de start.sh --lora sans --hr, où
+#          tools/osmo-hr-transcodeur.py --lora met la voix des appels inter-nœuds
+#          sur le LoRa en FR et laisse les appels locaux intacts (en 5062, il
+#          ne transcode rien). Sans ce mode l'INVITE va droit d'Asterisk à
+#          osmo-sip-connector et la voix part en RTP sur wg0, pas sur l'air.
 #   --status
 #
 # Patche, pour que le mode soit le même avec ou sans --regen :
@@ -40,7 +46,8 @@ mobile_cfgs(){
     for f in "$BB_DIR"/mobile*.cfg; do echo "$f"; done
 }
 
-on(){
+# ── le codec radio : HR (TCH/H) ou FR (TCH/F) ────────────────────────────
+codec_hr(){
     local d f
     for d in "${DIRS[@]}"; do
         [ -f "$d/osmo-bsc.cfg" ] && sed -i \
@@ -52,16 +59,9 @@ on(){
             -e 's/^ codec full-speed prefer$/ codec half-speed prefer/' \
             -e 's/^ codec half-speed$/ codec full-speed/' "$f"
     done < <(mobile_cfgs)
-    for f in "${SIPC_CFGS[@]}"; do
-        [ -f "$f" ] && sed -i 's/^\(  remote [^ ]*\) 5060$/\1 5062/' "$f"
-    done
-    for f in "${PJSIP_CFGS[@]}"; do
-        [ -f "$f" ] && sed -i 's|^contact=sip:127\.0\.0\.1:5061$|contact=sip:127.0.0.1:5062|' "$f"
-    done
-    echo "[lora-codec] half-rate (GSM-HR) actif, jambe SIP par le transcodeur (:5062)"
 }
 
-off(){
+codec_fr(){
     local d f
     for d in "${DIRS[@]}"; do
         [ -f "$d/osmo-bsc.cfg" ] && sed -i \
@@ -73,13 +73,42 @@ off(){
             -e 's/^ codec half-speed prefer$/ codec full-speed prefer/' \
             -e 's/^ codec full-speed$/ codec half-speed/' "$f"
     done < <(mobile_cfgs)
+}
+
+# ── la jambe SIP : par le transcodeur (5062) ou directe (5061 <-> 5060) ────
+leg_on(){
+    local f
+    for f in "${SIPC_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's/^\(  remote [^ ]*\) 5060$/\1 5062/' "$f"
+    done
+    for f in "${PJSIP_CFGS[@]}"; do
+        [ -f "$f" ] && sed -i 's|^contact=sip:127\.0\.0\.1:5061$|contact=sip:127.0.0.1:5062|' "$f"
+    done
+}
+
+leg_off(){
+    local f
     for f in "${SIPC_CFGS[@]}"; do
         [ -f "$f" ] && sed -i 's/^\(  remote [^ ]*\) 5062$/\1 5060/' "$f"
     done
     for f in "${PJSIP_CFGS[@]}"; do
         [ -f "$f" ] && sed -i 's|^contact=sip:127\.0\.0\.1:5062$|contact=sip:127.0.0.1:5061|' "$f"
     done
+}
+
+on(){
+    codec_hr; leg_on
+    echo "[lora-codec] half-rate (GSM-HR) actif, jambe SIP par le transcodeur (:5062)"
+}
+
+off(){
+    codec_fr; leg_off
     echo "[lora-codec] full-rate (défaut)"
+}
+
+fr_via_transcodeur(){
+    codec_fr; leg_on
+    echo "[lora-codec] full-rate, jambe SIP par le transcodeur (:5062) pour la voix LoRa"
 }
 
 status(){
@@ -104,6 +133,7 @@ status(){
 case "${1:-}" in
     --on|on)         on ;;
     --off|off)       off ;;
+    --fr-via-transcodeur) fr_via_transcodeur ;;
     --status|status) status ;;
-    *) echo "Usage: $0 --on|--off|--status"; exit 2 ;;
+    *) echo "Usage: $0 --on|--off|--fr-via-transcodeur|--status"; exit 2 ;;
 esac

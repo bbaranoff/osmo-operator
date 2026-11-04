@@ -189,8 +189,11 @@ if [ "$_hr" = 1 ] || [ "${#_hrx_extra[@]}" -gt 0 ]; then
         echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
         $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
     else
-        # --lora sans --hr : le transcodeur ne sert qu'au LoRa (appels locaux non touches)
-        $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
+        # --lora sans --hr : full-rate, mais la jambe SIP DOIT passer par le
+        # transcodeur (5062), sinon l'INVITE va droit d'Asterisk a osmo-sip-connector
+        # et la voix part en RTP sur wg0, pas sur l'air. En 5062 il ne transcode
+        # rien : les appels locaux sont intacts, les appels inter-noeuds vont au LoRa.
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" --fr-via-transcodeur || echo "[start.sh] jambe SIP via transcodeur: echec (voir ci-dessus)"
     fi
     _hrx_extra+=(--codec "$([ "$_hr" = 1 ] && echo hr || echo fr)")
     $_sudo mkdir -p /var/log/osmocom
