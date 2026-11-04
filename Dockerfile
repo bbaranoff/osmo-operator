@@ -516,6 +516,9 @@ ARG OSMO_DEB_REFRESH=0
 COPY patches/osmocom-bb-clck-gen-frame-tolerance.patch /tmp/osmocom-bb-clck-gen-frame-tolerance.patch
 COPY patches/osmocom-bb-plmn-a6-reinsert.patch /tmp/osmocom-bb-plmn-a6-reinsert.patch
 COPY patches/osmocom-bb-sim-plmn-from-bcd.patch /tmp/osmocom-bb-sim-plmn-from-bcd.patch
+#   - mobile-lora-ptt: "take" / "release" in the mobile's VTY, the walkie-talkie
+#     semaphore of the LoRa voice link (start.sh --lora, wiki/LoRa.md).
+COPY patches/osmocom-bb-mobile-lora-ptt.patch /tmp/osmocom-bb-mobile-lora-ptt.patch
 # OSMOCOM_BB_REF: osmocom-bb is PINNED. Upstream a0a315e2 "trxcon/trx_if: migrate
 # to libosmo-trx" removed trxcon from `make nofirmware` and made it require
 # libosmo-trx, so a clone of HEAD no longer produces src/host/trxcon/src/trxcon.
@@ -528,6 +531,7 @@ RUN if ! osmo-deb install osmocom-bb 0.git; then \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-clck-gen-frame-tolerance.patch && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-plmn-a6-reinsert.patch && \
       git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-sim-plmn-from-bcd.patch && \
+      git -C ${ROOT}/osmocom-bb apply /tmp/osmocom-bb-mobile-lora-ptt.patch && \
       cd osmocom-bb/src && \
       # Full build: firmware (layer1.bin/.elf for Calypso) + host tools (mobile,
       # trxcon, virtphy, ccch_scan). The firmware is needed for PHY_MODE=qemu,

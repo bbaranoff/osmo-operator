@@ -41,10 +41,14 @@
 #   --codec fr (default): the call stays full-rate (TCH/F) and only the frames that
 #   carry speech go on the air (--vad, GSM 06.10 xmaxc); the link takes one talker
 #   at a time. --codec hr: --hr mode, HR frames (both sides at once fit).
-#   --alternat (default): walkie-talkie discipline with a SEMAPHORE, as on a train
-#   radio in a tunnel: the first to speak sends SEIZE and holds the channel, the
-#   other side drops its own frames and listens until RELEASE (end of speech) or
-#   a timeout; --priority (node 1) keeps the channel when both seize at once.
+#   --ptt manual (default): walkie-talkie by hand. The channel is a SEMAPHORE on
+#   the air: "take" (SEIZE) from the mobile's VTY (patches/osmocom-bb-mobile-lora-
+#   ptt.patch) or tools/lora-ptt makes us send our frames, "release" (RELEASE)
+#   gives the channel back; the other side drops its own frames while we hold it.
+#   No speech detection, nothing automatic. --ptt auto: the old VOX, the first
+#   to speak seizes (VAD), RELEASE after --hold seconds of silence.
+#   --ptt-port 5063: the UDP command port (take / release / status, 127.0.0.1).
+#   --priority (node 1): "take" wins over a channel the other side holds.
 #   Without --codec hr the transcoder leaves local calls untouched (no HR).
 #
 # Usage: osmo-hr-transcodeur.py [--port 5062] [--sc 127.0.0.1:5061] [--ast 127.0.0.1:5060]
@@ -441,16 +445,23 @@ def lien_lora(spec, frames=4, codec="fr"):
 
 class Transcodeur:
     def __init__(self, port, sc, ast, rtp_lo, rtp_hi, lora=None, codes=(), codec="hr",
-                 vad=8, alternat=True, priority=False, hold=1.5, theirs_timeout=3.0):
+                 vad=8, alternat=True, priority=False, hold=1.5, theirs_timeout=3.0,
+                 ptt="manual", ptt_port=5063):
         self.lora = lora                # LoraLink or None
         self.codes = list(codes)        # WAN codes of the other nodes
         self.codec = codec              # codec of the LoRa calls ("fr" / "hr")
         self.hr = (codec == "hr")       # HR mode: local calls transcoded HR <-> FR
         self.lora_sess = None           # the one call on the air
         self.t_lora_stats = time.monotonic()
-        # Speech gate (FR only) and walkie-talkie discipline.
-        self.vad = lora_module().Vad(vad, 8) if (lora and codec == "fr" and vad > 0) else None
-        self.alternat, self.priority, self.hold = alternat, priority, hold
+        # Walkie-talkie: manual (take / release on the command port) or auto (VOX:
+        # speech gate on FR frames, the first to speak seizes).
+        self.ptt = ptt if lora else None
+        self.vad = lora_module().Vad(vad, 8) if (lora and codec == "fr" and vad > 0 and ptt == "auto") else None
+        self.alternat, self.priority, self.hold = alternat or ptt == "manual", priority, hold
+        self.ptt_sock = None
+        if lora and ptt == "manual":
+            self.ptt_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.ptt_sock.bind(("127.0.0.1", ptt_port))
         # The semaphore: FREE, MINE (we hold the channel), THEIRS (the other node does).
         self.floor = "FREE"
         self.t_rx_last = 0.0            # last frame heard from the other node
@@ -513,9 +524,43 @@ class Transcodeur:
             log.info("canal : %s -> %s (%s)", self.floor, state, why)
             self.floor = state
 
+    # ── manual PTT: "take" / "release" / "status" on the command port ──
+    def ptt_commande(self, data, addr):
+        mod = lora_module()
+        cmd = data.decode("utf-8", "replace").strip().lower()
+        etat = {"FREE": "canal libre", "MINE": "canal a nous", "THEIRS": "canal a l'autre"}
+        if cmd in ("take", "t", "prendre"):
+            if not self.lora_sess:
+                rep = "pas d'appel LoRa en cours, rien a prendre"
+            elif self.floor == "MINE":
+                rep = "deja a nous"
+            elif self.floor == "THEIRS" and not self.priority:
+                rep = "refuse : l'autre tient le canal (attendre son release)"
+            else:
+                self.lora.send_control(mod.SEIZE)
+                self.floor_set("MINE", "take" + (" prioritaire sur l'autre" if self.floor == "THEIRS" else ""))
+                self.t_tx_last = time.monotonic()
+                rep = "a nous : parlez"
+        elif cmd in ("release", "r", "lacher"):
+            if self.floor == "MINE":
+                self.lora.send_control(mod.RELEASE)
+                self.floor_set("FREE", "release")
+                rep = "rendu : a l'autre de parler"
+            else:
+                rep = "rien a rendre (%s)" % etat[self.floor]
+        elif cmd in ("status", "s", "etat", "?"):
+            rep = etat[self.floor] + ("" if self.lora_sess else " ; pas d'appel LoRa")
+        else:
+            rep = "commandes : take | release | status"
+        log.info("PTT %s de %s:%d -> %s", cmd, addr[0], addr[1], rep)
+        try:
+            self.ptt_sock.sendto(rep.encode(), addr)
+        except OSError:
+            pass
+
     def floor_tick(self, now):
-        """Timeouts: we release after `hold` of silence, their seizure expires."""
-        if self.floor == "MINE" and now - self.t_tx_last >= self.hold:
+        """Timeouts: auto mode releases after `hold` of silence; their seizure expires."""
+        if self.floor == "MINE" and self.ptt != "manual" and now - self.t_tx_last >= self.hold:
             self.lora.send_control(lora_module().RELEASE)
             self.floor_set("FREE", "fin de parole, RELEASE envoye")
         elif self.floor == "THEIRS" and now - self.t_rx_last >= self.THEIRS_TIMEOUT:
@@ -542,7 +587,11 @@ class Transcodeur:
         if self.vad and not self.vad.speech(frame):
             return
         now = time.monotonic()
-        if self.alternat:
+        if self.ptt == "manual":
+            if self.floor != "MINE":
+                self.n_yield += 1            # nothing goes out unless we took the channel
+                return
+        elif self.alternat:
             if self.floor == "THEIRS":
                 self.n_yield += 1            # the other side holds the channel: we listen
                 return
@@ -674,10 +723,13 @@ class Transcodeur:
                  self.moi, *self.sc, *self.ast)
         self.dernier = time.monotonic()
         if self.lora:
-            log.info("voix des appels inter-noeuds en RF : %s ; VAD %s ; alternat %s ; indicatifs des autres noeuds : %s",
-                     self.lora.describe(), "seuil %d" % self.vad.threshold if self.vad else "non",
-                     ("oui%s, RELEASE apres %.1f s de silence, l'autre expire apres %.1f s" % (
-                         ", prioritaire" if self.priority else "", self.hold, self.THEIRS_TIMEOUT)) if self.alternat else "non",
+            log.info("voix des appels inter-noeuds en RF : %s ; talkie %s ; indicatifs des autres noeuds : %s",
+                     self.lora.describe(),
+                     ("MANUEL : take / release sur 127.0.0.1:%d (VTY du mobile, tools/lora-ptt)%s, l'autre expire apres %.1f s" % (
+                         self.ptt_sock.getsockname()[1], ", prioritaire" if self.priority else "", self.THEIRS_TIMEOUT))
+                     if self.ptt == "manual" else
+                     ("auto (VOX seuil %s%s, RELEASE apres %.1f s de silence)" % (
+                         self.vad.threshold if self.vad else "-", ", prioritaire" if self.priority else "", self.hold)),
                      ", ".join(self.codes) or "aucun (voir --wan-conf)")
         while True:
             self.step(1.0)
@@ -688,14 +740,15 @@ class Transcodeur:
             return
         frames = self.lora.poll()
         now = time.monotonic()
-        while self.lora.controls:
-            _, cmd = self.lora.controls.popleft()
-            self.floor_heard(now, cmd)
-        if frames:
-            self.floor_heard(now)
-            if self.lora_sess:
-                for fr in frames:
-                    self.lora_sess.de_lora(fr)
+        # The semaphore follows the ORDER of arrival: "voice then RELEASE" frees
+        # the channel, "RELEASE then voice" is a new seizure.
+        self.lora.controls.clear()
+        while self.lora.events:
+            kind, val = self.lora.events.popleft()
+            self.floor_heard(now, val if kind == "ctl" else None)
+        if frames and self.lora_sess:
+            for fr in frames:
+                self.lora_sess.de_lora(fr)
         if self.alternat:
             self.floor_tick(now)
         if now - self.t_lora_stats >= 5:
@@ -720,9 +773,17 @@ class Transcodeur:
             timeout = min(timeout, self.lora.timeout())
             if self.lora.fileno() is not None:
                 fds.append(self.lora)
+            if self.ptt_sock:
+                fds.append(self.ptt_sock)
         rd, _, _ = select.select(fds, [], [], timeout)
         if self.lora and self.lora in rd:
             rd.remove(self.lora)
+        if self.ptt_sock and self.ptt_sock in rd:
+            rd.remove(self.ptt_sock)
+            try:
+                self.ptt_commande(*self.ptt_sock.recvfrom(256))
+            except OSError:
+                pass
         self.lora_tick()
         if True:
             for s in rd:
@@ -769,7 +830,10 @@ def main():
     ap.add_argument("--vad", type=int, default=8, help="seuil de parole (xmaxc GSM 06.10) des trames FR vers l'air, 0 = tout envoyer")
     ap.add_argument("--no-alternat", action="store_true", help="pas de discipline talkie : chacun emet quand il parle")
     ap.add_argument("--priority", action="store_true", help="alternat : ce noeud garde la parole si les deux parlent (noeud 1)")
-    ap.add_argument("--hold", type=float, default=1.5, help="alternat : secondes de silence avant de rendre le canal (RELEASE)")
+    ap.add_argument("--ptt", choices=["manual", "auto"], default="manual",
+                    help="manual : take / release a la main (VTY du mobile, tools/lora-ptt) ; auto : VOX, le premier qui parle prend")
+    ap.add_argument("--ptt-port", type=int, default=5063, help="port UDP des commandes take / release / status (127.0.0.1)")
+    ap.add_argument("--hold", type=float, default=1.5, help="auto : secondes de silence avant de rendre le canal (RELEASE)")
     ap.add_argument("--theirs-timeout", type=float, default=3.0, help="alternat : secondes sans trame de l'autre avant de le considerer parti")
     ap.add_argument("--wan-conf", default="/etc/osmo-wan.conf", help="table WAN (indicatifs des autres noeuds)")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -782,7 +846,7 @@ def main():
     codes = wan_codes_etrangers(a.wan_conf) if a.lora else []
     Transcodeur(a.port, a.sc, a.ast, lo, hi, lora=lora, codes=codes, codec=a.codec, vad=a.vad,
                 alternat=not a.no_alternat, priority=a.priority, hold=a.hold,
-                theirs_timeout=a.theirs_timeout).run()
+                theirs_timeout=a.theirs_timeout, ptt=a.ptt, ptt_port=a.ptt_port).run()
 
 
 if __name__ == "__main__":

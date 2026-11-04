@@ -1,0 +1,102 @@
+diff --git a/src/host/layer23/src/mobile/vty_interface.c b/src/host/layer23/src/mobile/vty_interface.c
+index b5b31288..36b007ee 100644
+--- a/src/host/layer23/src/mobile/vty_interface.c
++++ b/src/host/layer23/src/mobile/vty_interface.c
+@@ -16,6 +16,7 @@
+  */
+ 
+ #include <string.h>
++#include <errno.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <unistd.h>
+@@ -42,6 +43,9 @@
+ #include <osmocom/bb/mobile/gsm44068_gcc_bcc.h>
+ #include <osmocom/vty/telnet_interface.h>
+ #include <osmocom/vty/misc.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
+ 
+ struct cmd_node support_node = {
+ 	SUPPORT_NODE,
+@@ -552,6 +556,70 @@ DEFUN(call_num, call_num_cmd,
+ 	return CMD_SUCCESS;
+ }
+ 
++/* LoRa talkie (osmo-operator start.sh --lora): the channel of the radio link is
++ * a semaphore held by hand. "take" / "release" send a datagram to the voice
++ * relay (tools/osmo-hr-transcodeur.py --ptt-port, 127.0.0.1:5063 by default,
++ * OSMO_LORA_PTT=host:port to change it) and print its answer. */
++static int lora_ptt(struct vty *vty, const char *what)
++{
++	const char *spec = getenv("OSMO_LORA_PTT");
++	char host[64] = "127.0.0.1";
++	int port = 5063, fd, n;
++	struct sockaddr_in sa;
++	struct timeval tv = { .tv_sec = 0, .tv_usec = 300000 };
++	char buf[200];
++
++	if (spec && *spec) {
++		const char *c = strrchr(spec, ':');
++		if (c && c - spec < (int)sizeof(host)) {
++			memcpy(host, spec, c - spec);
++			host[c - spec] = '\0';
++			port = atoi(c + 1);
++		}
++	}
++	fd = socket(AF_INET, SOCK_DGRAM, 0);
++	if (fd < 0) {
++		vty_out(vty, "LoRa : socket : %s%s", strerror(errno), VTY_NEWLINE);
++		return CMD_WARNING;
++	}
++	memset(&sa, 0, sizeof(sa));
++	sa.sin_family = AF_INET;
++	sa.sin_port = htons(port);
++	if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
++		vty_out(vty, "LoRa : adresse invalide %s%s", host, VTY_NEWLINE);
++		close(fd);
++		return CMD_WARNING;
++	}
++	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++	if (sendto(fd, what, strlen(what), 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
++		vty_out(vty, "LoRa : envoi vers %s:%d : %s%s", host, port, strerror(errno), VTY_NEWLINE);
++		close(fd);
++		return CMD_WARNING;
++	}
++	n = recv(fd, buf, sizeof(buf) - 1, 0);
++	close(fd);
++	if (n <= 0) {
++		vty_out(vty, "LoRa : pas de reponse du relais voix (%s:%d) : start.sh --lora lance ?%s",
++			host, port, VTY_NEWLINE);
++		return CMD_WARNING;
++	}
++	buf[n] = '\0';
++	vty_out(vty, "LoRa : %s%s", buf, VTY_NEWLINE);
++	return CMD_SUCCESS;
++}
++
++DEFUN(lora_take, lora_take_cmd, "take",
++      "LoRa talkie : prendre le canal radio (on parle, l'autre ecoute)\n")
++{
++	return lora_ptt(vty, "take");
++}
++
++DEFUN(lora_release, lora_release_cmd, "release",
++      "LoRa talkie : rendre le canal radio (a l'autre de parler)\n")
++{
++	return lora_ptt(vty, "release");
++}
++
+ DEFUN(call, call_cmd,
+       CALL_CMD " (emergency|answer|hangup|hold)",
+       CALL_CMD_DESC
+@@ -3005,6 +3073,8 @@ int ms_vty_init(void)
+ 	install_element(ENABLE_NODE, &network_select_cmd);
+ 	install_element(ENABLE_NODE, &call_num_cmd);
+ 	install_element(ENABLE_NODE, &call_cmd);
++	install_element(ENABLE_NODE, &lora_take_cmd);
++	install_element(ENABLE_NODE, &lora_release_cmd);
+ 	install_element(ENABLE_NODE, &call_retr_cmd);
+ 	install_element(ENABLE_NODE, &call_dtmf_cmd);
+ 	install_element(ENABLE_NODE, &call_params_data_type_rate_cmd);

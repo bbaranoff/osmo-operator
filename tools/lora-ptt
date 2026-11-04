@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# tools/lora-ptt - le talkie LoRa depuis le shell : take | release | status
+# (les memes commandes existent dans le VTY du mobile, telnet 127.0.0.1 4247, apres "enable").
+# Parle au relais voix (tools/osmo-hr-transcodeur.py --ptt-port) en UDP ; LORA_PTT=host:port.
+set -u
+cmd="${1:-status}"
+case "$cmd" in take|t|release|r|status|s) ;; *) echo "usage: $0 take|release|status" >&2; exit 2 ;; esac
+spec="${LORA_PTT:-127.0.0.1:5063}"
+exec python3 - "$cmd" "${spec%:*}" "${spec##*:}" <<'EOF'
+import socket, sys
+cmd, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.5)
+s.sendto(cmd.encode(), (host, port))
+try:
+    print(s.recv(256).decode())
+except socket.timeout:
+    print("pas de reponse du relais voix (%s:%d) : start.sh --lora lance ?" % (host, port)); sys.exit(1)
+EOF

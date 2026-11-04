@@ -123,9 +123,9 @@ if [ "$_lora" = 1 ]; then
             # trames qui portent de la parole partent (VAD), et un sémaphore
             # fait parler un seul côté à la fois, le nœud 1 prioritaire. --hr :
             # trames HR, les deux côtés tiennent ensemble dans le lien.
-            _hrx_extra=(--lora "$_lv_port")
+            _hrx_extra=(--lora "$_lv_port" --ptt "${LORA_PTT:-manual}")
             [ "$_lora_node" = 1 ] && _hrx_extra+=(--priority)
-            echo "[start.sh] --lora $_lora_node : voix inter-nœuds en RF, RNode $_lv_port ($([ "$_hr" = 1 ] && echo "GSM-HR" || echo "GSM-FR + VAD, talkie a semaphore$([ "$_lora_node" = 1 ] && echo ', prioritaire')") du vocodeur ROM) ; signalisation -> 10.99.0.$_peer (wg0)"
+            echo "[start.sh] --lora $_lora_node : voix inter-nœuds en RF, RNode $_lv_port ($([ "$_hr" = 1 ] && echo "GSM-HR" || echo "GSM-FR") du vocodeur ROM, talkie $([ "${LORA_PTT:-manual}" = manual ] && echo "MANUEL : take / release dans le VTY du mobile" || echo "auto (VOX)")$([ "$_lora_node" = 1 ] && echo ', prioritaire')) ; signalisation -> 10.99.0.$_peer (wg0)"
         else
             echo "[start.sh] --lora : aucun port série de RNode (--lora-port=/dev/ttyUSBn) : l'appel inter-nœuds sera muet" >&2
         fi

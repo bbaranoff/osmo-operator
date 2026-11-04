@@ -187,6 +187,7 @@ class LoraLink:
         self.loop_q = deque()
         self.peer = None              # --loop: another LoraLink to feed instead of ourselves (2-party test)
         self.controls = deque()       # (seq, cmd) received, read by the transcoder
+        self.events = deque()         # arrival order: ("ctl", cmd) or ("voice", n) - the semaphore needs the ORDER
         self.n = dict(tx=0, rx=0, lost=0, drop=0, ctl_tx=0, ctl_rx=0)
 
     def fileno(self):
@@ -238,6 +239,7 @@ class LoraLink:
         if cmd is not None:
             self.n["ctl_rx"] += 1
             self.controls.append((cseq, cmd))
+            self.events.append(("ctl", cmd))
             self.rx_last_seq = cseq
             return
         seq, frames = unpack_voice(payload)
@@ -250,6 +252,7 @@ class LoraLink:
                 self.n["lost"] += lost
         self.rx_last_seq = seq
         self.t_rx_frame = time.monotonic()
+        self.events.append(("voice", len(frames)))
         self.rx.extend(frames)
         while len(self.rx) > 3 * self.frames:        # jitter buffer bound: 3 LoRa frames
             self.rx.popleft()
