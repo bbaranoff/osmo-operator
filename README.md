@@ -109,7 +109,7 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | `opt-gsm/` | gr-gsm side helpers: `si_bridge.py`, `grgsm_fft_live.py`, `record_drain.py` |
 | `scripts/` | run-time services and diagnostics: SMS relay (`sms-interop-relay.py`), audio (`gapk-start.sh`, `audio-diag.sh`), `call-diag.sh`, `banc-repro.sh`, `egprs-dsp.sh`, `magnetite-c139.sh`, the bench aliases, the Docker entrypoint and in-container `run.sh` |
 | `checks/` | read-only health checks of a running stack (`check_all.sh`, `ss7_check.sh`, `diag-*.sh`, `annuaire.sh`) |
-| `network/` | WAN table, mesh, firewall, VirtualBox interconnect, ISM payload, IP plan, loopbacks |
+| `network/` | WAN table, mesh, firewall, VirtualBox interconnect, ISM payload, LoRa link (`setup-lora-link.sh`) and payload switch (`setup-lora-payload.sh`), IP plan, loopbacks |
 | `navigation/`, `ss7-console.py` | the SS7 console (MAP/TCAP/SCCP/M3UA, TUI, diagnostics); `ss7-console.py` at the root is a shortcut ([QUICKSTART](navigation/QUICKSTART.md)) |
 | `helpers/`, `set_stp_ip.sh` | inter-STP config generator, host preparation, SS7 addressing of a VM |
 | `tools/` | user tools: phone screens (`osmo-c123-gtk.py`), FFT viewers, `osmo-info`, `osmo-launcher.py`, settings page (`osmo-reglages.py`), LTE/pmOS/SIM installers, `osmo-patches-apply.sh`, `osmo-firmwares-install.sh`, documentation generators (`full_qmd.sh`, `full_text.sh`, `dockerfile-to-install-md.sh`) |
@@ -143,7 +143,7 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | [Lancer-a-la-main](wiki/Lancer-a-la-main.md) | the phone started by hand, with proof at each step |
 | [Installer-qosmo](wiki/Installer-qosmo.md) · [Installer-c54x_exe](wiki/Installer-c54x_exe.md) · [Installer-grgsm_exe](wiki/Installer-grgsm_exe.md) | building the QEMU fork and the two external layer 1s |
 | [SIM](wiki/SIM.md) | a sysmoISIM in an Omnikey reader, or a softSIM, over SAP |
-| [WAN](wiki/WAN.md) · [Payload-ISM](wiki/Payload-ISM.md) | linking nodes; SMS text over an ISM radio link |
+| [WAN](wiki/WAN.md) · [Payload-ISM](wiki/Payload-ISM.md) · [LoRa](wiki/LoRa.md) | linking nodes; SMS text over an ISM radio link; call and SMS payload over a LoRa link (RNode / Heltec V3) |
 
 ## Other documents
 

@@ -9,6 +9,7 @@
 #   ./start.sh --docker [options]   hands over to launch/start-docker.sh
 #   ./start.sh --lora 1|2 [options] payload LoRa, nœud 1 ou 2 (codec : voir --hr)
 #                                   (sans numéro : déduit de l'adresse de tnc0)
+#   ./start.sh --lora 1 --lora-port=/dev/ttyUSB1   port série du RNode (Heltec V3)
 #   ./start.sh --hr [options]       voix half-rate (TCH/H) ; sans --hr : full-rate
 #   VAR=x ./start.sh                environment overrides always win
 #
@@ -42,12 +43,13 @@ cd "$HERE"
 # `./start.sh --docker [args]` hands over to start-docker.sh with the other
 # arguments untouched; the rest of this script (startup_scripts/) is the
 # NATIVE launcher and is not read.
-_args=(); _docker=0; _lora=0; _lora_node=""; _hr=0
+_args=(); _docker=0; _lora=0; _lora_node=""; _lora_port=""; _hr=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --docker) _docker=1 ;;
         --hr)     _hr=1 ;;                      # voix half-rate (TCH/H), voir plus bas
         --lora=*) _lora=1; _lora_node="${1#*=}" ;;
+        --lora-port=*) _lora_port="${1#*=}" ;;      # port serie du RNode (sinon auto)
         --lora)   _lora=1                       # --lora [1|2]
                   case "${2:-}" in ""|-*) ;; *) _lora_node="$2"; shift ;; esac ;;
         *)        _args+=("$1") ;;
@@ -63,7 +65,9 @@ set -- "${_args[@]+"${_args[@]}"}"
 # Payload (RTP appel, relais SMS) -> tnc0 vers le pair LoRa, signalisation
 # (SS7/SIP) -> wg0, avec --wan --node N --hub-ip 10.99.0.1 ajoutés au lanceur
 # (LORA_HUB_IP pour un autre hub). Sans numéro, nœud déduit de tnc0.
-# Sans --lora, on retire l'aiguilleur si un --lora précédent l'a laissé.
+# Le LIEN lui-même (tnc0 depuis le RNode Heltec V3, tncattach) est monté ici
+# s'il ne l'est pas déjà : network/setup-lora-link.sh. Sans --lora, on retire
+# l'aiguilleur si un --lora précédent l'a laissé ; tnc0 reste (lien radio).
 _sudo=""; [ "$(id -u)" = 0 ] || _sudo="sudo"
 if [ "$_lora" = 1 ]; then
     _tnc_ip="$(ip -4 -o addr show tnc0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
@@ -78,6 +82,13 @@ if [ "$_lora" = 1 ]; then
     esac
     if [ -n "$_tnc_ip" ] && [ "$_tnc_ip" != "10.200.0.$_lora_node" ]; then
         echo "[start.sh] attention : --lora $_lora_node mais tnc0 = $_tnc_ip (attendu 10.200.0.$_lora_node)" >&2
+    fi
+    # Lien radio : tnc0 depuis le RNode s'il n'est pas là. Sans lien, inutile
+    # d'aller plus loin : l'aiguilleur n'aurait pas d'interface où router.
+    if [ -z "$_tnc_ip" ]; then
+        $_sudo env LORA_PORT="$_lora_port" bash "$HERE/network/setup-lora-link.sh" up --node "$_lora_node" || {
+            echo "[start.sh] --lora : pas de lien radio (tnc0). Module branché ? network/setup-lora-link.sh --info" >&2
+            exit 2; }
     fi
     # Identité SS7/WAN toujours sur wg0, jamais sur le lien radio : plan WAN
     # (PC 1.<nœud><op>.x), nœud imposé, hub inter-STP sur le nœud 1 (wg0).

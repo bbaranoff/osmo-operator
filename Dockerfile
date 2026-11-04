@@ -160,7 +160,8 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     libasound2-dev libasound2t64 alsa-utils \
     # libgsm: native GSM-FR codec (speeds up gapk in gsmfr mode)
     libgsm1-dev libgsm1 \
-    iptables iproute2 asterisk ffmpeg \
+    # wireguard-tools: the wg0 signalling link of --wan / --lora (wiki/WAN.md)
+    iptables iproute2 wireguard-tools asterisk ffmpeg \
     # build-iso sync: psmisc (pkill/killall, cleanup) + pulseaudio (gapk/parec audio chain)
     psmisc pulseaudio pulseaudio-utils binutils-arm-none-eabi \
     # Alternative toolchains: osmocom-bb jolly/testing and fixeria/burst_ind only
@@ -936,6 +937,23 @@ RUN set -eux; \
         /var/cache/osmo-debs/osmo-build-osmo-hlr_1.9.2+rand~*.deb \
         /var/cache/osmo-debs/osmo-build-osmo-msc_1.15.0+rand~*.deb; \
     ldconfig
+
+# ── LoRa / Reticulum: the radio link of --lora ───────────────────────────────
+# tncattach (markqvist, tag 0.1.9) attaches the RNode (Heltec V3, KISS over USB)
+# as tnc0 (network/setup-lora-link.sh). rns brings rnodeconf / rnsd into the
+# venv /root/.env that the grgsm-venv .deb just installed (pyserial +
+# cryptography wheels exist for amd64 and arm64). wireguard-tools (wg0) comes
+# from the apt block at the top. Same pins in install_modules/50-build.sh.
+ARG TNCATTACH_REF=bb9ff10158c04a37cb3221152885a083e3059909
+ARG RNS_VERSION=1.5.7
+RUN git clone https://github.com/markqvist/tncattach /opt/GSM/tncattach \
+    && git -C /opt/GSM/tncattach checkout -q ${TNCATTACH_REF} \
+    && make -C /opt/GSM/tncattach \
+    && install -m755 /opt/GSM/tncattach/tncattach /usr/local/bin/tncattach \
+    && { [ -x /root/.env/bin/pip ] || python3 -m venv /root/.env; } \
+    && /root/.env/bin/pip install --no-cache-dir "rns==${RNS_VERSION}" \
+    && for b in rnodeconf rnsd rnstatus rnpath rnprobe; do ln -sf /root/.env/bin/$b /usr/local/bin/$b; done \
+    && tncattach -V && rnodeconf --version && wg --version
 
 # ── 2. What no .deb carries ─────────────────────────────────────────────────
 # Node (tarball in /opt/node) and the dashboard (git clone with node_modules);

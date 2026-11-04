@@ -13,6 +13,8 @@
 # routage dédiée (default via le pair LoRa, dev tnc0) et DNAT la destination vers
 # le pair LoRa — aucune config applicative à changer. Le nœud d'en face lance le
 # même script (miroir) pour accepter le payload arrivant par tnc0.
+# L'interface tnc0 elle-même (RNode Heltec V3 + tncattach) est montée par
+# network/setup-lora-link.sh ; start.sh --lora enchaîne les deux.
 #
 #   sudo ./network/setup-lora-payload.sh            # up (pose l'aiguilleur)
 #   sudo ./network/setup-lora-payload.sh --status   # état + compteurs

@@ -50,6 +50,28 @@ inst_build_run() {
             inst_hint "toast non compile (reseau ou quut.com injoignable) - suite sans lui"
         fi
     fi
+    # ── LoRa / Reticulum: tncattach (tnc0 from the RNode) + rns (rnodeconf) ──
+    # Same pins as the Dockerfile (tncattach tag 0.1.9, rns 1.5.7). Optional:
+    # without network we go on, start.sh --lora says what is missing.
+    # wireguard-tools comes with the apt list (10-deps, from the Dockerfile).
+    inst_say "=== tncattach + Reticulum (rns) ==="
+    if command -v tncattach >/dev/null 2>&1; then
+        inst_say "tncattach deja present ($(command -v tncattach))"
+    elif ( cd "$GSM_ROOT" \
+           && { [ -d tncattach/.git ] || git clone -q https://github.com/markqvist/tncattach; } \
+           && git -C tncattach checkout -q bb9ff10158c04a37cb3221152885a083e3059909 \
+           && make -C tncattach >/dev/null \
+           && install -m755 tncattach/tncattach /usr/local/bin/tncattach ); then
+        inst_say "tncattach installe dans /usr/local/bin (sources : $GSM_ROOT/tncattach)"
+    else
+        inst_hint "tncattach non compile (reseau ?) - start.sh --lora ne montera pas tnc0"
+    fi
+    { [ -x /root/.env/bin/pip ] || python3 -m venv /root/.env; } \
+        && /root/.env/bin/pip install -q --no-cache-dir "rns==1.5.7" \
+        && { for b in rnodeconf rnsd rnstatus rnpath rnprobe; do ln -sf "/root/.env/bin/$b" "/usr/local/bin/$b"; done
+             inst_say "rns installe dans /root/.env ($(rnodeconf --version 2>/dev/null | head -1))"; } \
+        || inst_hint "rns non installe (pip) - rnodeconf absent"
+
     # ── 4G: srsRAN (ZeroMQ) and Open5GS in /opt/LTE ──────────────────────
     # Same script as the Dockerfile and addition.sh (tools/osmo-lte-install.sh):
     # cached .deb packages if present, compilation otherwise. Non-fatal: 2G
