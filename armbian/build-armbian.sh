@@ -268,9 +268,9 @@ if [ "$NO_STACK" = 0 ]; then
         docker cp "$CID:/etc/osmocom" "$OV/rootfs/etc/" 2>/dev/null || true
         docker cp "$CID:/etc/asterisk" "$OV/rootfs/etc/" 2>/dev/null || true
         for svc in osmo-bts-trx osmo-bsc osmo-msc osmo-hlr osmo-mgw osmo-stp osmo-ggsn osmo-sgsn osmo-pcu osmo-sip-connector; do
-            docker cp "$CID:/lib/systemd/system/$svc.service" "$OV/rootfs/lib/systemd/system/" 2>/dev/null || true
+            docker cp "$CID:/lib/systemd/system/$svc.service" "$OV/rootfs/usr/lib/systemd/system/" 2>/dev/null || true
         done
-        cp -f "$REPO"/services/*.service "$OV/rootfs/lib/systemd/system/" 2>/dev/null || true
+        cp -f "$REPO"/services/*.service "$OV/rootfs/usr/lib/systemd/system/" 2>/dev/null || true
         docker rm "$CID" >/dev/null; trap - EXIT
         # /opt/GSM/osmo-operator is taken from this working tree (tracked + untracked, no .git or
         # ignored files), as for the ISO, so local fixes not yet in a published image are included.
