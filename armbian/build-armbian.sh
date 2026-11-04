@@ -177,7 +177,7 @@ board_branch() {
 # .deb are per (family, branch), not per board.
 board_family() {
     local f; f=$(board_file "$1") || { echo "?"; return; }
-    sed -n 's/^BOARDFAMILY=["'"'"']\{0,1\}\([A-Za-z0-9_.-]*\).*/\1/p' "$f" | head -1
+    sed -n 's/^\(declare -g \)\{0,1\}BOARDFAMILY=["'"'"']\{0,1\}\([A-Za-z0-9_.-]*\).*/\1/p' "$f" | head -1
 }
 if [ "$DRY" = 0 ]; then
     for b in $BOARDS; do
