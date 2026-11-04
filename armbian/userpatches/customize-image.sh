@@ -57,6 +57,17 @@ fi
 
 # ── 3. Docker image tree ────────────────────────────────────────────────────
 if [ -d "$OV/rootfs" ]; then
+    # merged-usr (noble): /lib, /bin, /sbin, /lib64 are symlinks to usr/. A
+    # directory of the same name in the overlay makes cp -a stop with "cannot
+    # overwrite non-directory '/./lib' with directory": its content is merged
+    # into the symlink's target instead, then the directory is left out.
+    for d in lib lib64 bin sbin; do
+        if [ -d "$OV/rootfs/$d" ] && [ -L "/$d" ]; then
+            cp -a "$OV/rootfs/$d/." "/$(readlink -f "/$d")/"
+            rm -rf "$OV/rootfs/$d"
+            log "overlay : $d/ fusionne dans /$(readlink /$d) (merged-usr)"
+        fi
+    done
     cp -a "$OV/rootfs/." /
     ldconfig
     log "arbre recopie : $(du -sh "$OV/rootfs" | cut -f1) (/usr/local, /opt/GSM, /etc/osmocom, unites)"

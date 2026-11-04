@@ -242,9 +242,9 @@ if [ "$NO_STACK" = 0 ]; then
     fi
     say "pile : image Docker $IMAGE -> overlay $OV"
     if [ "$DRY" = 1 ]; then
-        echo "  + docker create/cp -> $OV/debs/ et $OV/rootfs/ (usr/local, opt/GSM, opt/node, root/.env, etc/osmocom, etc/asterisk, lib/systemd/system)"
+        echo "  + docker create/cp -> $OV/debs/ et $OV/rootfs/ (usr/local, opt/GSM, opt/node, root/.env, etc/osmocom, etc/asterisk, usr/lib/systemd/system)"
     else
-        rm -rf "$OV"; install -d "$OV/debs" "$OV/rootfs/usr" "$OV/rootfs/opt" "$OV/rootfs/root" "$OV/rootfs/etc" "$OV/rootfs/lib/systemd/system"
+        rm -rf "$OV"; install -d "$OV/debs" "$OV/rootfs/usr" "$OV/rootfs/opt" "$OV/rootfs/root" "$OV/rootfs/etc" "$OV/rootfs/usr/lib/systemd/system"
         CID=$(docker create --platform linux/arm64 "$IMAGE" /bin/true)
         trap 'docker rm "$CID" >/dev/null 2>&1 || true' EXIT
         # Build .debs for the target suite: host cache first, else those shipped in the image
