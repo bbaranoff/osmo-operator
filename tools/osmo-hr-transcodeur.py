@@ -441,7 +441,7 @@ def lien_lora(spec, frames=4, codec="fr"):
 
 class Transcodeur:
     def __init__(self, port, sc, ast, rtp_lo, rtp_hi, lora=None, codes=(), codec="hr",
-                 vad=8, alternat=True, priority=False, hold=0.4):
+                 vad=8, alternat=True, priority=False, hold=1.5, theirs_timeout=3.0):
         self.lora = lora                # LoraLink or None
         self.codes = list(codes)        # WAN codes of the other nodes
         self.codec = codec              # codec of the LoRa calls ("fr" / "hr")
@@ -456,7 +456,11 @@ class Transcodeur:
         self.t_rx_last = 0.0            # last frame heard from the other node
         self.t_tx_last = 0.0            # last frame we put on the air
         self.n_yield = 0                # frames dropped because the other side holds the channel
-        self.THEIRS_TIMEOUT = 1.5       # a lost RELEASE must not block us forever
+        # hold: silence before we give the channel back (a pause between two
+        # sentences must NOT release it, or the other side grabs it on a breath
+        # and the talker gets cut: 0.4 s was far too short on the air).
+        # theirs_timeout: a lost RELEASE must not block us forever.
+        self.THEIRS_TIMEOUT = theirs_timeout
         self.sip = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sip.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sip.bind(("127.0.0.1", port))
@@ -672,7 +676,8 @@ class Transcodeur:
         if self.lora:
             log.info("voix des appels inter-noeuds en RF : %s ; VAD %s ; alternat %s ; indicatifs des autres noeuds : %s",
                      self.lora.describe(), "seuil %d" % self.vad.threshold if self.vad else "non",
-                     ("oui, prioritaire" if self.priority else "oui") if self.alternat else "non",
+                     ("oui%s, RELEASE apres %.1f s de silence, l'autre expire apres %.1f s" % (
+                         ", prioritaire" if self.priority else "", self.hold, self.THEIRS_TIMEOUT)) if self.alternat else "non",
                      ", ".join(self.codes) or "aucun (voir --wan-conf)")
         while True:
             self.step(1.0)
@@ -764,6 +769,8 @@ def main():
     ap.add_argument("--vad", type=int, default=8, help="seuil de parole (xmaxc GSM 06.10) des trames FR vers l'air, 0 = tout envoyer")
     ap.add_argument("--no-alternat", action="store_true", help="pas de discipline talkie : chacun emet quand il parle")
     ap.add_argument("--priority", action="store_true", help="alternat : ce noeud garde la parole si les deux parlent (noeud 1)")
+    ap.add_argument("--hold", type=float, default=1.5, help="alternat : secondes de silence avant de rendre le canal (RELEASE)")
+    ap.add_argument("--theirs-timeout", type=float, default=3.0, help="alternat : secondes sans trame de l'autre avant de le considerer parti")
     ap.add_argument("--wan-conf", default="/etc/osmo-wan.conf", help="table WAN (indicatifs des autres noeuds)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
@@ -774,7 +781,8 @@ def main():
     lora = lien_lora(a.lora, a.lora_frames, a.codec) if a.lora else None
     codes = wan_codes_etrangers(a.wan_conf) if a.lora else []
     Transcodeur(a.port, a.sc, a.ast, lo, hi, lora=lora, codes=codes, codec=a.codec, vad=a.vad,
-                alternat=not a.no_alternat, priority=a.priority).run()
+                alternat=not a.no_alternat, priority=a.priority, hold=a.hold,
+                theirs_timeout=a.theirs_timeout).run()
 
 
 if __name__ == "__main__":

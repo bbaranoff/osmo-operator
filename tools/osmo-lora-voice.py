@@ -183,6 +183,7 @@ class LoraLink:
         self.rx_last_seq = None
         self.playing = False
         self.next_play = 0.0
+        self.t_rx_frame = 0.0         # last LoRa voice frame received
         self.loop_q = deque()
         self.peer = None              # --loop: another LoraLink to feed instead of ourselves (2-party test)
         self.controls = deque()       # (seq, cmd) received, read by the transcoder
@@ -248,6 +249,7 @@ class LoraLink:
             if 0 < lost < 128:
                 self.n["lost"] += lost
         self.rx_last_seq = seq
+        self.t_rx_frame = time.monotonic()
         self.rx.extend(frames)
         while len(self.rx) > 3 * self.frames:        # jitter buffer bound: 3 LoRa frames
             self.rx.popleft()
@@ -272,9 +274,16 @@ class LoraLink:
         if self.tx_frames and time.monotonic() - self.tx_oldest >= STALE_S:
             self.flush()                     # end of a sentence: no 5th frame coming
         out = []
-        if not self.playing:
-            return out
         now = time.monotonic()
+        if not self.playing:
+            # Leftovers of a sentence (fewer than `frames`, so never started):
+            # play them once nothing more comes, instead of keeping them for the
+            # next sentence where they would be stale and add latency.
+            if self.rx and now - self.t_rx_frame >= 2 * STALE_S:
+                self.playing = True
+                self.next_play = now
+            else:
+                return out
         while now >= self.next_play:
             if not self.rx:
                 self.playing = False             # underrun: wait for a full LoRa frame
