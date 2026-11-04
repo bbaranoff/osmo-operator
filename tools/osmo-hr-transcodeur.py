@@ -762,6 +762,9 @@ class Transcodeur:
                          " ; cedees a l'autre %d" % self.n_yield if self.n_yield else "")
                 if self.alternat:
                     log.info("canal : %s" % {"FREE": "libre", "MINE": "a nous", "THEIRS": "a l'autre"}[self.floor])
+                rs = self.lora.radio_stats()
+                if rs:
+                    log.info("module : %s", rs)
             if v:
                 v.n_speech = v.n_silence = 0
             self.n_yield = 0

@@ -38,6 +38,11 @@ from collections import deque
 
 # ── KISS (RNode, TNC mode) ────────────────────────────────────────────────
 FEND, FESC, TFEND, TFESC, CMD_DATA = 0xC0, 0xDB, 0xDC, 0xDD, 0x00
+# Statistics the RNode firmware reports to the host (same encoding as RNS'
+# RNodeInterface): channel time, PHY parameters, CSMA contention window.
+CMD_STAT_CHTM, CMD_STAT_PHYPRM, CMD_STAT_CSMA = 0x25, 0x26, 0x28
+CMD_ST_ALOCK, CMD_LT_ALOCK = 0x0B, 0x0C
+RSSI_OFFSET = 157
 
 
 def kiss_escape(data):
@@ -51,11 +56,27 @@ def kiss_frame(data):
 class KissParser:
     """Feed raw serial bytes, get the payloads of the CMD_DATA frames."""
 
+    STATS = (CMD_STAT_CHTM, CMD_STAT_PHYPRM, CMD_STAT_CSMA)
+
     def __init__(self):
         self.buf = bytearray()
         self.in_frame = False
         self.esc = False
         self.cmd = None
+        self.radio = {}               # what the module says of itself (see _stat)
+
+    def _stat(self, cmd, b):
+        r = self.radio
+        if cmd == CMD_STAT_CHTM and len(b) == 11:
+            r.update(airtime_short=(b[0] << 8 | b[1]) / 100.0, airtime_long=(b[2] << 8 | b[3]) / 100.0,
+                     load_short=(b[4] << 8 | b[5]) / 100.0, load_long=(b[6] << 8 | b[7]) / 100.0,
+                     rssi=b[8] - RSSI_OFFSET, noise=b[9] - RSSI_OFFSET)
+        elif cmd == CMD_STAT_PHYPRM and len(b) == 12:
+            r.update(symbol_ms=(b[0] << 8 | b[1]) / 1000.0, baud=b[2] << 8 | b[3],
+                     preamble_symbols=b[4] << 8 | b[5], preamble_ms=b[6] << 8 | b[7],
+                     csma_slot_ms=b[8] << 8 | b[9], csma_difs_ms=b[10] << 8 | b[11])
+        elif cmd == CMD_STAT_CSMA and len(b) == 3:
+            r.update(cw_band=b[0], cw_min=b[1], cw_max=b[2])
 
     def feed(self, data):
         out = []
@@ -63,6 +84,8 @@ class KissParser:
             if b == FEND:
                 if self.in_frame and self.cmd == CMD_DATA and self.buf:
                     out.append(bytes(self.buf))
+                elif self.in_frame and self.cmd in self.STATS and self.buf:
+                    self._stat(self.cmd, bytes(self.buf))
                 self.in_frame, self.esc, self.cmd = True, False, None
                 self.buf.clear()
                 continue
@@ -71,7 +94,7 @@ class KissParser:
             if self.cmd is None:
                 self.cmd = b
                 continue
-            if self.cmd != CMD_DATA:
+            if self.cmd != CMD_DATA and self.cmd not in self.STATS:
                 continue
             if self.esc:
                 self.buf.append(FEND if b == TFEND else FESC if b == TFESC else b)
@@ -301,6 +324,29 @@ class LoraLink:
             return FRAME_MS
         return max(0.0, min(FRAME_MS, self.next_play - time.monotonic()))
 
+    def radio_stats(self):
+        """The module's own view: airtime %, channel load %, RSSI/noise, CSMA window."""
+        r = self.parser.radio
+        if not r:
+            return ""
+        parts = []
+        if "airtime_short" in r:
+            parts.append("antenne %.1f %% (long %.1f %%), charge canal %.1f %% (long %.1f %%), RSSI %d, bruit %d" % (
+                r["airtime_short"], r["airtime_long"], r["load_short"], r["load_long"], r["rssi"], r["noise"]))
+        if "cw_band" in r:
+            parts.append("CSMA cw %d (bande %d, %d..%d)%s" % (
+                r["cw_band"], r["cw_band"], r["cw_min"], r["cw_max"],
+                ", slot %d ms, DIFS %d ms" % (r["csma_slot_ms"], r["csma_difs_ms"]) if "csma_slot_ms" in r else ""))
+        return " ; ".join(parts)
+
+    def set_airtime_limits(self, short_pct, long_pct):
+        """CMD_ST_ALOCK / CMD_LT_ALOCK: the firmware's airtime limits, in percent."""
+        if not self.ser:
+            return
+        for cmd, pct in ((CMD_ST_ALOCK, short_pct), (CMD_LT_ALOCK, long_pct)):
+            at = int(pct * 100)
+            self.ser.write(bytes([FEND, cmd]) + kiss_escape(bytes([(at >> 8) & 0xFF, at & 0xFF])) + bytes([FEND]))
+
     def stats(self, reset=True):
         s = dict(self.n)
         s["buffer"] = len(self.rx)
@@ -323,7 +369,8 @@ def main():
     ap.add_argument("--frames", type=int, default=4)
     ap.add_argument("--codec", choices=["fr", "hr"], default="fr")
     ap.add_argument("--loop", action="store_true", help="sans radio : ce qu'on emet revient")
-    ap.add_argument("--tx", action="store_true", help="emet 50 trames HR/s de motif pendant --seconds")
+    ap.add_argument("--tx", action="store_true", help="emet 50 trames parole/s de motif pendant --seconds (12,5 trames LoRa/s)")
+    ap.add_argument("--rx", action="store_true", help="compte ce qui arrive de l'air, seconde par seconde, pendant --seconds")
     ap.add_argument("--seconds", type=float, default=4)
     a = ap.parse_args()
     # KISS round trip
@@ -334,8 +381,24 @@ def main():
     assert seq == 44 and fr == [bytes([i] * FL) for i in range(4)]
     print("KISS + trame voix : OK (%d octets par trame LoRa de %d trames %s)" % (4 + a.frames * FL, a.frames, a.codec.upper()))
     link = LoraLink(a.port, a.baud, a.frames, loop=a.loop, frame_len=FL)
+    if a.rx:
+        t0 = time.monotonic(); last = 0; per_s = []; n_frames = 0; seqs = []
+        while time.monotonic() - t0 < a.seconds:
+            link.read_serial()
+            while link.rx:
+                link.rx.popleft(); n_frames += 1
+            s = int(time.monotonic() - t0)
+            if s != last:
+                st = link.stats(); per_s.append(st["rx"]); seqs.append(st["lost"]); last = s
+            time.sleep(0.005)
+        print("recu par seconde (trames LoRa) : %s" % " ".join(str(x) for x in per_s))
+        print("perdues par seconde (trous de numeros) : %s" % " ".join(str(x) for x in seqs))
+        tot = sum(per_s); print("total : %d trames LoRa (%d trames parole) en %.0f s = %.1f LoRa/s ; perdues %d" % (
+            tot, n_frames, a.seconds, tot / a.seconds, sum(seqs)))
+        print("module : %s" % (link.radio_stats() or "pas de statistiques recues"))
+        link.close(); return
     if not (a.loop or a.tx):
-        print("lien %s : rien a faire (--loop ou --tx)" % link.describe())
+        print("lien %s : rien a faire (--loop, --tx ou --rx)" % link.describe())
         return
     t0 = time.monotonic()
     n_in = n_out = 0
@@ -367,8 +430,10 @@ def main():
         print("VERDICT :", "OK" if ok else "ECHEC")
         sys.exit(0 if ok else 1)
     else:
-        print("emis sur l'air : %d trames LoRa (%d trames HR) en %.0f s ; recu : %d trames LoRa" % (
-            s["tx"], n_in, a.seconds, s["rx"]))
+        print("emis sur l'air : %d trames LoRa (%d trames parole, %d octets chacune) en %.0f s ; recu : %d trames LoRa" % (
+            s["tx"], n_in, 4 + a.frames * FL, a.seconds, s["rx"]))
+        time.sleep(1.0); link.read_serial()
+        print("module : %s" % (link.radio_stats() or "pas de statistiques recues"))
     link.close()
 
 
