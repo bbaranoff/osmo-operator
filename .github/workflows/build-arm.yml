@@ -183,8 +183,16 @@ jobs:
 
       # build-iso.sh --arm -> armbian/build-armbian.sh (iso_modules/00-options.sh).
       # --skip-build=REF : la pile vient de l'image tiree, rien n'est compile ici.
+      # Temoin disque/memoire EN DIRECT dans le journal du build : compile.sh
+      # (rootfs + bureau, ~30 Go) n'a encore jamais tourne en CI ; si le runner
+      # tombe, ses dernieres mesures restent dans le journal envoye au fil de l'eau.
       - name: Build image Armbian (${{ matrix.board }})
         run: |
+          ( while true; do
+              echo "[temoin] $(date -u +%H:%M:%S)  / $(df -h --output=avail / | tail -1 | tr -d ' ')  mem dispo $(free -m | awk '/^Mem:/{print $7}') Mo  swap libre $(free -m | awk '/^Swap:/{print $4}') Mo"
+              sleep 60
+            done ) &
+          TEMOIN=$!; trap 'kill $TEMOIN 2>/dev/null || true' EXIT
           chmod +x build-iso.sh armbian/build-armbian.sh
           ARGS="--arm --board=${{ matrix.board }} --skip-build=$BASE_REF"
           [ "${{ needs.boards.outputs.desktop }}" = "true" ] && ARGS="$ARGS --desktop"
