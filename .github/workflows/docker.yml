@@ -216,6 +216,12 @@ jobs:
           CACHE: ${{ steps.key.outputs.cache }}
           PR: ${{ github.event_name == 'pull_request' }}
         run: |
+          # Temoin EN DIRECT dans ce journal : le fichier relu par l'etape
+          # if: always() disparait avec le runner quand il tombe (exit 143) ;
+          # le journal d'etape, lui, est envoye au fil de l'eau et garde les
+          # dernieres mesures avant la mort.
+          tail -n0 -F "$RUNNER_TEMP/watchdog.log" 2>/dev/null | sed -u 's/^/[temoin] /' &
+          TEMOIN=$!; trap 'kill $TEMOIN 2>/dev/null || true' EXIT
           # Semer le contexte avec les .deb du cache : chaque etape qui les
           # trouve pose le paquet au lieu de cloner et compiler.
           mkdir -p .deb-cache

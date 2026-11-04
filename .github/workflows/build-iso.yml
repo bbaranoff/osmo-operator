@@ -122,6 +122,9 @@ jobs:
       # docker : le rootfs et les ISO gardent / pour eux seuls.
       - name: Docker data-root sur /mnt
         run: |
+          if [ "$(stat -c %d /mnt 2>/dev/null)" = "$(stat -c %d /)" ]; then
+            echo "::warning::/mnt est sur la meme partition que / : deplacer docker n'y gagne aucune place ($(df -h --output=avail / | tail -1 | tr -d ' ') libres en tout)."
+          fi
           sudo systemctl stop docker docker.socket containerd || true
           # Deplacer, pas recopier : le store contient deja les images de base
           # tirees par le runner. Si /mnt/docker existe (re-run sur le meme
@@ -283,6 +286,12 @@ jobs:
       # decide si le job passe.
       - name: Build ISOs
         run: |
+          # Temoin EN DIRECT dans ce journal : le fichier relu par l'etape
+          # if: always() disparait avec le runner quand il tombe (exit 143) ;
+          # le journal d'etape, lui, est envoye au fil de l'eau et garde les
+          # dernieres mesures avant la mort.
+          tail -n0 -F "$RUNNER_TEMP/watchdog.log" 2>/dev/null | sed -u 's/^/[temoin] /' &
+          TEMOIN=$!; trap 'kill $TEMOIN 2>/dev/null || true' EXIT
           chmod +x build-iso.sh
           df -h /
           # ── QUELLES IMAGES ────────────────────────────────────────────

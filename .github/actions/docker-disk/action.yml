@@ -42,6 +42,9 @@ runs:
       env:
         NEED: ${{ inputs.need }}
       run: |
+        if [ "$(stat -c %d /mnt 2>/dev/null)" = "$(stat -c %d /)" ]; then
+          echo "::warning::/mnt est sur la meme partition que / : deplacer docker n'y gagne aucune place ($(df -h --output=avail / | tail -1 | tr -d ' ') libres en tout)."
+        fi
         AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
         ROOT_AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
         if [ "${AVAIL:-0}" -lt "$NEED" ]; then
