@@ -215,6 +215,10 @@ RUN systemctl enable mongod >/dev/null 2>&1 || true
 # OSMO_DEB_REFRESH=1 (build.sh --no-cache): the cache is ignored and rewritten.
 ARG OSMO_DEB_REFRESH=0
 COPY packaging/osmo-deb.sh /usr/local/sbin/osmo-deb
+# FreeCalypso downloads (sms-coding-utils, the DSP ROM dump): tools/freecalypso-fetch.sh,
+# official origins only, SHA256 checked, through the host cache .cache/freecalypso
+# bind-mounted into the RUN steps that need it (never copied into the image).
+COPY tools/freecalypso-fetch.sh /usr/local/sbin/freecalypso-fetch
 COPY .deb-cache/ /var/cache/osmo-debs/
 RUN chmod 755 /usr/local/sbin/osmo-deb && osmo-deb list || true
 
@@ -465,9 +469,13 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
 # The top-level Makefile sets DESTDIR= empty and passes it to sub-directories; a
 # variable given on make's COMMAND LINE wins and propagates, hence the explicit
 # `make install DESTDIR=...`. bindir is /usr/local/bin per configure.
-RUN if ! osmo-deb install sms-coding-utils 0.r1; then \
+# The tarball comes from www.freecalypso.org through .cache/freecalypso (filled by
+# build.sh before the build; an empty cache is filled inside the step, the rw
+# bind mount discards it afterwards, nothing lands in the image).
+RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalypso,rw \
+    if ! osmo-deb install sms-coding-utils 0.r1; then \
       cd ${ROOT} && \
-      wget -q https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env/sms-coding-utils-latest.tar.bz2 && \
+      freecalypso-fetch --cache /opt/GSM/.cache/freecalypso --dest ${ROOT} sms-coding-utils-latest.tar.bz2 && \
       tar xf sms-coding-utils-latest.tar.bz2 && \
       cd sms-coding-utils-r1 && \
       ./configure && \
@@ -689,15 +697,19 @@ RUN ldconfig
 # --rom-dir. The ROM is not in the c54x_exe repo: rom/fetch-rom.sh downloads the
 # FreeCalypso 3606 dump, converts it to .bin and verifies SHA256SUMS.3606;
 # calypso_dsp.txt (the raw dump) is downloaded separately.
-# dsp-rom-3606-dump.txt comes from the fc-magnetite repo (freecalypso-env/).
-ARG FREECALYPSO_URL=https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env
-RUN if ! osmo-deb install c54x-exe 0.git; then \
+# dsp-rom-3606-dump.txt comes from ftp.freecalypso.org (~18 KB/s) through
+# .cache/freecalypso (tools/freecalypso-fetch.sh: downloaded once, SHA256 checked,
+# bind-mounted here); fetch-rom.sh reads it through a file:// URL, so the dump is
+# never downloaded twice and never copied into the image.
+RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalypso,rw \
+    if ! osmo-deb install c54x-exe 0.git; then \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
       && cd /opt/GSM/c54x_exe \
       && make QOSMO=/opt/GSM/qosmo \
              CFLAGS="-O3 -g -Wall -Werror=format -Werror=format-extra-args -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare" \
-      && FREECALYPSO_URL="$FREECALYPSO_URL" bash rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom \
-      && curl -fsS --retry 2 -o /opt/GSM/calypso_dsp.txt "$FREECALYPSO_URL/dsp-rom-3606-dump.txt" \
+      && freecalypso-fetch --cache /opt/GSM/.cache/freecalypso dsp-rom-3606-dump.txt \
+      && FREECALYPSO_URL=file:///opt/GSM/.cache/freecalypso bash rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom \
+      && cp /opt/GSM/.cache/freecalypso/dsp-rom-3606-dump.txt /opt/GSM/calypso_dsp.txt \
       && cp /opt/GSM/calypso_dsp.txt rom/calypso_dsp.txt \
       && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
              /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \

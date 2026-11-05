@@ -26,3 +26,20 @@ bundle-qmd/
 # notebook scratch output (wiki/)
 wiki/sms.db*
 wiki/Untitled*.ipynb
+
+# FreeCalypso: local cache of the official downloads (tools/freecalypso-fetch.sh,
+# freecalypso.org + hg.themyscira.org). NEVER versioned: the TI TMS470 environment
+# (installed-env.tar.xz), the DSP ROM dumps and the Magnetite source are not
+# redistributable. Only .gitkeep is kept (the Docker build bind-mounts the folder).
+.cache/*
+!.cache/freecalypso/
+.cache/freecalypso/*
+!.cache/freecalypso/.gitkeep
+installed-env.tar.xz
+dsp-rom-*-dump.txt
+calypso_dsp.txt
+compal-flash-boot-for-fc.bin
+sms-coding-utils-*.tar.bz2
+fc-magnetite/
+freecalypso-env/
+freecalypso-tools/

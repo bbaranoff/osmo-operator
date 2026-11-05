@@ -12,7 +12,7 @@
 #                           into /root/gnuarm, and the libmpfr.so.4 -> libmpfr.so.6
 #                           link its cc1 requires
 #   osmo_magnetite_install  FreeCalypso Magnetite for the Motorola C139 (the real
-#                           TI firmware): Wine + TI TMS470 environment, pinned git
+#                           TI firmware): Wine + TI TMS470 environment, pinned hg
 #                           sources, bench patches, 4 MiB flash image
 #   osmo_calypso_fw_install the bench Calypso firmware (layer1 GPRS, rssi...)
 #                           rebuilt with gnuarm from osmocom-bb eac4eed1 + patches
@@ -131,41 +131,37 @@ osmo_gnuarm_install() {
 }
 
 # ── Magnetite (C139) ─────────────────────────────────────────────────────────
-# NOTHING FROM freecalypso.org: its FTP caps at ~18 KB/s (52 MB of TI
-# environment = 45 min). github.com/bbaranoff/fc-magnetite carries the converted
-# hg history (tip 9394305d4ff5, upstream under the bench patches) and, in
-# freecalypso-env/, the Wine environment, the Compal bootloader and freecalypso-tools.
-FC_MAGNETITE_GIT="${FC_MAGNETITE_GIT:-https://github.com/bbaranoff/fc-magnetite}"
-FC_ENV_URL="${FC_ENV_URL:-https://raw.githubusercontent.com/bbaranoff/fc-magnetite/main/freecalypso-env}"
+# Everything comes from the OFFICIAL FreeCalypso origins (ftp.freecalypso.org,
+# hg.themyscira.org) through tools/freecalypso-fetch.sh: a cache outside Git
+# (FREECALYPSO_CACHE, default $REPO/.cache/freecalypso), every file checked by
+# SHA256 and downloaded only once (the FTP caps at ~18 KB/s: 52 MB of TI
+# environment = up to 50 min, with resume). The TI environment, the DSP ROM
+# dumps and the Magnetite source are NOT redistributable: never in this Git.
+# Revisions: fc-magnetite 9394305d4ff5 (FC_MAGNETITE_REV, "tip" accepted),
+# freecalypso-tools 2fa31723e525 (FC_TOOLS_REV). An existing clone (hg, or an
+# old git one) is left as it is.
 osmo_magnetite_install() {
     echo -e "${BOLD}== FreeCalypso Magnetite (C139) : Wine + TI TMS470 ==${NC}"
-    local fcm="$GSM_ROOT/fc-magnetite" fht="$GSM_ROOT/fc-host-tools" wdl="$GSM_ROOT/fc-wine-dl" \
-          bdl="$GSM_ROOT/fc-dl" out="$GSM_ROOT/firmware/magnetite" log; log="$(_fw_log magnetite)"
+    local repo="${REPO:-/opt/GSM/osmo-operator}" fetch cache
+    fetch="$repo/tools/freecalypso-fetch.sh"; cache="${FREECALYPSO_CACHE:-$repo/.cache/freecalypso}"
+    local fcm="$GSM_ROOT/fc-magnetite" fht="$GSM_ROOT/fc-host-tools" wdl="$cache" \
+          out="$GSM_ROOT/firmware/magnetite" log; log="$(_fw_log magnetite)"
+    [ -x "$fetch" ] || { _fw_err "$fetch absent ou non executable"; return 1; }
     # 32-bit Wine: the TMS470 (cl470, asm470, lnk470) is a 32-bit Windows binary
     dpkg --print-foreign-architectures | grep -qx i386 || dpkg --add-architecture i386
     _FW_APT_UPDATE=""
-    _fw_apt git wine wine64 wine32:i386 xz-utils wget build-essential \
+    _fw_apt mercurial curl wine wine64 wine32:i386 xz-utils build-essential \
         || { _fw_err "installation de Wine en echec (voir $(_fw_log apt))"; return 1; }
     _fw_ok "wine $(wine --version 2>/dev/null)"
-    # the sources: Magnetite (the git repository, freecalypso-env/ included) and the
-    # FreeCalypso host tools (rvinterf, fc-shell, fc-fsio: run.sh needs them). An old
-    # hg clone stays as is: the environment is then taken from FC_ENV_URL.
-    if [ ! -d "$fcm/.hg" ] && [ ! -d "$fcm/.git" ]; then
-        git clone -q "$FC_MAGNETITE_GIT" "$fcm" >>"$log" 2>&1 \
-            || { _fw_err "git clone fc-magnetite en echec (voir $log)"; return 1; }
-        _fw_ok "fc-magnetite clone ($FC_MAGNETITE_GIT)"
-    fi
-    # _fc_env <file> <destination>: the copy from the clone, else the GitHub repository
-    _fc_env() {
-        [ -s "$2" ] && return 0
-        if [ -s "$fcm/freecalypso-env/$1" ]; then cp "$fcm/freecalypso-env/$1" "$2"
-        else wget -q -O "$2" "$FC_ENV_URL/$1" >>"$log" 2>&1 || { rm -f "$2"; return 1; }; fi
-    }
+    # the sources: Magnetite (hg, pinned revision) and the FreeCalypso host tools
+    # (rvinterf, fc-shell, fc-fsio: run.sh needs them)
+    bash "$fetch" --hg fc-magnetite "$fcm" >>"$log" 2>&1 \
+        || { _fw_err "hg clone fc-magnetite en echec (voir $log)"; return 1; }
+    _fw_ok "fc-magnetite : $fcm ($(cd "$fcm" && { hg id -i 2>/dev/null || git rev-parse --short HEAD 2>/dev/null; }))"
     if [ ! -f "$fht/Makefile" ]; then
-        mkdir -p "$fht" "$wdl"
-        _fc_env freecalypso-tools.tar.xz "$wdl/freecalypso-tools.tar.xz" \
-            && tar xJf "$wdl/freecalypso-tools.tar.xz" -C "$fht" --strip-components=1 >>"$log" 2>&1 \
-            || _fw_warn "freecalypso-tools : extraction en echec"
+        bash "$fetch" --hg freecalypso-tools "$fht" >>"$log" 2>&1 \
+            && _fw_ok "freecalypso-tools : $fht" \
+            || _fw_warn "freecalypso-tools : hg clone en echec (voir $log)"
     fi
     [ -x "$fht/rvinterf/lowlevel/rvinterf" ] || make -C "$fht" -j"$OSMO_FW_JOBS" >>"$log" 2>&1 \
         || _fw_warn "outils hote FreeCalypso : make en echec (voir $log)"
@@ -177,12 +173,15 @@ osmo_magnetite_install() {
         elif (cd "$fcm" && patch -p1 -s -f <"$p" >>"$log" 2>&1); then _fw_ok "patchs du banc appliques ($(basename "$p"))"
         else _fw_warn "$(basename "$p") ne s applique pas sur cet arbre (voir $log)"; fi
     fi
-    # the TI environment installed (compiler, cygwin, perl, java) in ~/.wine/drive_c
-    mkdir -p "$wdl" "$bdl" "$out"
-    local f
-    for f in installed-env.tar.xz nowhine.c winebuild.sh README; do
-        _fc_env "$f" "$wdl/$f" || _fw_warn "telechargement $f en echec"
-    done
+    # the official files, SHA256 checked, into the cache: the TI environment
+    # (compiler, cygwin, perl, java), nowhine, the Compal bootloader. Shown on the
+    # terminal: at ~18 KB/s installed-env.tar.xz takes up to 50 min.
+    mkdir -p "$out"
+    bash "$fetch" --cache "$cache" installed-env.tar.xz nowhine.c winebuild.sh README compal-flash-boot-for-fc.bin \
+        2>&1 | tee -a "$log" | sed 's/^/    /'
+    [ "${PIPESTATUS[0]}" = 0 ] \
+        || { _fw_err "fichiers FreeCalypso : telechargement en echec ou SHA256 different (voir $log)"; return 1; }
+    _fw_ok "fichiers FreeCalypso verifies dans $cache"
     if [ ! -d "$HOME/.wine/drive_c/Dvpt_tools" ]; then
         WINEDEBUG=-all wineboot -i >>"$log" 2>&1
         tar xJf "$wdl/installed-env.tar.xz" -C "$HOME/.wine/drive_c" >>"$log" 2>&1 \
@@ -215,10 +214,8 @@ osmo_magnetite_install() {
     # stay as they are (the bootloader area of the bench image differs by 4 bytes
     # from the FreeCalypso file, at vector 0x10; the bench boots with it). The old
     # image is copied to .avant-supplement.
-    _fc_env compal-flash-boot-for-fc.bin "$bdl/compal-flash-boot-for-fc.bin" \
-        || _fw_warn "bootloader Compal : telechargement en echec"
     [ -f "$out/c139-flash.img" ] && cp -p "$out/c139-flash.img" "$out/c139-flash.img.avant-supplement"
-    python3 - "$bdl/compal-flash-boot-for-fc.bin" "$b/fwimage.bin" "$out/c139-flash.img" <<'EOF' \
+    python3 - "$wdl/compal-flash-boot-for-fc.bin" "$b/fwimage.bin" "$out/c139-flash.img" <<'EOF' \
         && _fw_ok "image flash $out/c139-flash.img" || _fw_err "assemblage de l image flash en echec"
 import os, sys
 boot, fw, img_path = sys.argv[1:4]

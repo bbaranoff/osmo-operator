@@ -299,6 +299,28 @@ else
 fi
 export OSMO_DEB_REFRESH
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 6b. The FreeCalypso cache: official downloads, SHA256 checked, outside Git
+# ══════════════════════════════════════════════════════════════════════════════
+# .cache/freecalypso (ignored by Git) holds the files the Dockerfile takes from
+# freecalypso.org (sms-coding-utils, the DSP ROM 3606 dump). They are downloaded
+# once by tools/freecalypso-fetch.sh (with resume: the FTP caps at ~18 KB/s) and
+# bind-mounted into the build (RUN --mount=type=bind): never copied into the
+# image, never downloaded again on the next build. A file whose SHA256 does not
+# match is deleted and the build stops here.
+echo "[*] Cache FreeCalypso (.cache/freecalypso)..."
+mkdir -p "$DIR/.cache/freecalypso"
+if bash "$DIR/tools/freecalypso-fetch.sh" --cache "$DIR/.cache/freecalypso" \
+        sms-coding-utils-latest.tar.bz2 dsp-rom-3606-dump.txt; then
+    echo -e "${GREEN}[OK] cache FreeCalypso : fichiers presents et verifies (SHA256)${NC}"
+elif ls "$DIR/.deb-cache"/osmo-build-sms-coding-utils_*.deb "$DIR/.deb-cache"/osmo-build-c54x-exe_*.deb >/dev/null 2>&1; then
+    echo -e "${YELLOW}[WARN] cache FreeCalypso incomplet, mais sms-coding-utils et c54x-exe sont dans le cache .deb : on continue${NC}"
+else
+    echo -e "${RED}[ERREUR] cache FreeCalypso : telechargement impossible ou SHA256 different (voir ci-dessus)${NC}"
+    echo "          origines : ftp://ftp.freecalypso.org/pub/GSM/Calypso/ et https://www.freecalypso.org/pub/GSM/FreeCalypso/"
+    exit 1
+fi
+
 # Build one compose.yaml service (or its docker build equivalent).
 #   $1 = service (nitb|run|lite|stp)   $2 = image   $3 = Dockerfile   $4.. = build-args
 compose_build() {

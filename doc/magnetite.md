@@ -29,18 +29,28 @@ TMS470 1.22e compiler, a Windows binary run under Wine.
 
 | path | content |
 |---|---|
-| `/opt/GSM/fc-magnetite` | Magnetite source tree (`freecalypso-env/` included) |
-| `/opt/GSM/fc-host-tools` | FreeCalypso host tools: `rvinterf`, `fc-shell`, `fc-fsio` |
-| `/opt/GSM/fc-wine-dl` | the TI Wine environment archive (`installed-env.tar.xz`), `nowhine.c` |
-| `/opt/GSM/fc-dl` | the Compal boot loader `compal-flash-boot-for-fc.bin` |
+| `/opt/GSM/fc-magnetite` | Magnetite source tree: `hg clone https://hg.themyscira.org/fc-magnetite`, revision `9394305d4ff5` (`FC_MAGNETITE_REV`, `tip` accepted) |
+| `/opt/GSM/fc-host-tools` | FreeCalypso host tools (`rvinterf`, `fc-shell`, `fc-fsio`): `hg clone https://hg.themyscira.org/freecalypso-tools`, revision `2fa31723e525` (`FC_TOOLS_REV`) |
+| `osmo-operator/.cache/freecalypso` | the official downloads, SHA256 checked by `tools/freecalypso-fetch.sh`: the TI Wine environment (`installed-env.tar.xz`, `nowhine.c`, `winebuild.sh`, `README` from `ftp://ftp.freecalypso.org/pub/GSM/TI_src/wine/`), the Compal boot loader `compal-flash-boot-for-fc.bin` (`pub/GSM/FreeCalypso/`), the DSP ROM dumps (`pub/GSM/Calypso/`) |
 | `/opt/GSM/firmware/magnetite/c139-flash.img` | the 4 MiB flash image used by the bench |
+
+Everything comes from the official FreeCalypso origins; the GitHub mirror is no
+longer used (the FreeCalypso licence forbids redistributing the source and the TI
+environment). The cache is outside Git (`.gitignore`): `installed-env.tar.xz`,
+the DSP ROM dumps and the Magnetite source are never committed to osmo-operator.
+The FTP serves at ~18 KB/s (52 MB of TI environment: up to 50 min): the download
+resumes (`curl -C -`) and a file is fetched again only if it is missing or if its
+SHA256 differs. `tools/freecalypso-fetch.sh --list` prints the origins and hashes.
 
 Manual build, equivalent to what the installer does:
 
 ```bash
 dpkg --add-architecture i386 && apt-get update && apt-get install -y wine wine64 wine32:i386
-# TI environment (compiler, cygwin, perl, java): freecalypso-env/installed-env.tar.xz
-mkdir -p ~/.wine/drive_c && tar xJf installed-env.tar.xz -C ~/.wine/drive_c && wineboot -u
+cd /opt/GSM/osmo-operator && tools/freecalypso-fetch.sh all   # .cache/freecalypso, SHA256 checked
+tools/freecalypso-fetch.sh --hg fc-magnetite /opt/GSM/fc-magnetite
+tools/freecalypso-fetch.sh --hg freecalypso-tools /opt/GSM/fc-host-tools && make -C /opt/GSM/fc-host-tools
+# TI environment (compiler, cygwin, perl, java): installed-env.tar.xz
+cd .cache/freecalypso && mkdir -p ~/.wine/drive_c && tar xJf installed-env.tar.xz -C ~/.wine/drive_c && wineboot -u
 gcc -O2 -o /usr/local/bin/nowhine nowhine.c      # wrapper that silences Wine's warnings
 cd /opt/GSM/fc-magnetite && patch -p1 < /opt/GSM/osmo-operator/patches/fc-magnetite-banc.patch
 (cd helpers && make) && ./configure.sh c139 hybrid-ui-vo
