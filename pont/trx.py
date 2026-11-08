@@ -73,7 +73,17 @@ CLCK_SANS_IND_MAX = int(os.environ.get("PONT_CLCK_SANS_IND_MAX", "300"))
 # IND carries fn_bts - CEILING instead of fn_trx: the pause is bounded and the remaining lead is
 # absorbed by the following INDs (bursts only arrive earlier, the BSP ring keeps them). 0 = no ceiling.
 CLCK_PAUSE_PLAFOND = int(os.environ.get("PONT_CLCK_PAUSE_PLAFOND", "38"))
-CLCK_SKEW_ZONE = int(os.environ.get("PONT_CLCK_SKEW_ZONE", "60"))   # beyond, the BTS re-aligns on its own
+# osmo-bts-trx >= 1.12.0 (commit 0199c108, "shut down on stale clock indication from transceiver"): an IND
+# more than MAX_FN_SKEW = 50 frames BEHIND its timer, with more than 50 frames (230.75 ms) of wall-clock time
+# not accounted for by the FN advance since the previous IND, makes the BTS EXIT ("Stale CLCK.ind", "TRX clock
+# skew too high"); before 1.12 it re-aligned harmlessly. Seen on 2026-11-08 with 1.12.0 (osmo-minioperator):
+# the slow regime let the lead reach 60-113 frames, the raw IND killed the BTS, the cell vanished.
+# So: (1) the lead is bounded whatever its size (SKEW_ZONE 0 = no upper limit; the old value 60 relied on
+# the re-alignment); (2) in the slow regime an IND goes out at least every CLCK_IND_MAX frames of wall time,
+# so the time not accounted for stays under 40 x 4.615 ms = 185 ms whatever the slowdown.
+# This bench pins osmo-bts 1.10.0 (Dockerfile), which re-aligns: the fix keeps it valid after an upgrade.
+CLCK_SKEW_ZONE = int(os.environ.get("PONT_CLCK_SKEW_ZONE", "0"))
+CLCK_IND_MAX = int(os.environ.get("PONT_CLCK_IND_MAX", "40"))
 
 
 class Clock:
@@ -274,12 +284,12 @@ class Trx:
                     else:
                         livre = ((vu - self._clck_vu) + demi) % gsm.HYPERFRAME - demi
                     reprise = livre >= 3 or (livre >= 1 and attente >= self._clck_avance)
-                    envoyer = (reprise and avance >= pause_max) or attente >= CLCK_SANS_IND_MAX
+                    envoyer = (reprise and avance >= pause_max) or attente >= min(CLCK_SANS_IND_MAX, CLCK_IND_MAX or CLCK_SANS_IND_MAX)
                 if envoyer:
                     fn_ind = fn_trx
                     if CLCK_PAUSE_PLAFOND > 0 and vu is not None:
                         av_bts = ((vu - fn_adv - fn_trx) + demi) % gsm.HYPERFRAME - demi
-                        if CLCK_PAUSE_PLAFOND < av_bts <= CLCK_SKEW_ZONE:
+                        if CLCK_PAUSE_PLAFOND < av_bts and (CLCK_SKEW_ZONE <= 0 or av_bts <= CLCK_SKEW_ZONE):
                             fn_ind = (fn_trx + av_bts - CLCK_PAUSE_PLAFOND) % gsm.HYPERFRAME
                             self._clck_bornees = getattr(self, "_clck_bornees", 0) + 1
                             if self._clck_bornees <= 20 or self._clck_bornees % 100 == 0:
