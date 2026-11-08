@@ -143,8 +143,8 @@ etape_banc() {
     local dsplog=/tmp/c54x-pont/dsp.log
     if [ -r "$dsplog" ]; then
         local h; h="$(grep -ao 'hacks[^)]*' "$dsplog" | head -1)"
-        grep -aq 'laisse a la ROM : elle code l.access-burst' "$dsplog" && ok "RACH : tache laissee a la ROM" || warn "RACH : pas de trace « laisse a la ROM » dans $dsplog"
-        grep -aq 'rom-ul.*actif' "$dsplog" && ok "xCCH montant : bursts de la ROM publies" || warn "rom-ul : non actif dans $dsplog"
+        grep -aqE 'laisse a la ROM : elle code l.access-burst|left to the ROM: it encodes the access burst' "$dsplog" && ok "RACH : tache laissee a la ROM" || warn "RACH : pas de trace « laisse a la ROM » dans $dsplog"
+        grep -aqE 'rom-ul.*(actif|active)' "$dsplog" && ok "xCCH montant : bursts de la ROM publies" || warn "rom-ul : non actif dans $dsplog"
         grep -aq 'tx-rom.*actif\|calypso_tx_rom.*actif' "$dsplog" && ok "bursts finaux de la ROM : publies" || say "${C_DIM}(pas de ligne tx-rom actif lue)${C_Z}"
         [ -n "$h" ] && say "${C_DIM}$h${C_Z}"
     fi
