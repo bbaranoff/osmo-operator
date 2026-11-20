@@ -107,6 +107,10 @@ Usage : ./start-native.sh [options] [mode]
                         (tous les CPU, COEURS=N pour en fixer le nombre).
                         Implique --dsp.
     --no-multithreading une tache a la fois (COEURS=1)
+    --no-isolation      sans l'isolation des cpus (par defaut : c54x_exe/isoler.sh on, la
+                        chaine, qosmo, le pont et le coeur de reseau sur leurs coeurs
+                        reserves, le bureau sur le reste ; isoler.sh off pour la retirer).
+                        Les nice restent : NICE_RESEAU (-5), RT_NICE (-10), NICE_AUTRES (10).
     --grgsm             couche 1 gr-gsm dans QEMU (qosmo) + pont grgsm_exe
                         (l ancien defaut ; DSP_MODE=0 dans l environnement vaut pareil)
     --bts-classic       [2026-10-21] (alias : --bts-classique) la BTS CLASSIQUE : osmo-bts-trx parle a pont/pont_dsp.py
@@ -339,6 +343,7 @@ while [ $# -gt 0 ]; do
         # --multithreading (default): c54x_exe jobs on every core (05-run-sh.sh)
         --multithreading|--multi) DSP_MODE=1; MULTITHREADING=1 ;;
         --no-multithreading|--no-multi) MULTITHREADING=0 ;;
+        --no-isolation) ISOLATION=0 ;;      # startup_scripts/13-isolation.sh
         # --osmo-trx: the DSP bench starts trx.highram.elf and the host
         # application transceiver (see c54x_exe/run.sh, OSMO_TRX=1); implies --dsp.
         --osmo-trx|--bts) DSP_MODE=1; OSMO_TRX=1; export OSMO_TRX; BTS_TRX_CHOISI="$1" ;;

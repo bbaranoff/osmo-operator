@@ -118,6 +118,8 @@ if [ "$DSP_BANC" = 1 ]; then
         exit 1
     fi
     say_end " OK " "$C_OK" "Transmission a run.sh" "profil=$CALYPSO_PROFILE, chaine Calypso laissee au banc DSP"
+    # the BTS and what the fork launched outside systemd: their cpus and their nice (13-isolation.sh)
+    banc_apres_lancement
     say_begin "Banc DSP C54x"
     say_end " OK " "$C_OK" "Banc DSP C54x" "$BANC_DSP  (INSNS=$INSNS LOCKSTEP=$LOCKSTEP IQ=$IQ$([ "${OSMO_TRX:-0}" = 1 ] && echo " OSMO_TRX=1 : trx.highram.elf + transceiver, $(trx_ts_desc)"))"
     # Full hand-off: this process becomes c54x_exe/run.sh (five steps, then it

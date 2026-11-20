@@ -15,6 +15,9 @@
 #   ./start.sh --lora 1 --lora-port=/dev/ttyUSB1   port série du RNode (Heltec V3)
 #   ./start.sh --hr [options]       voix half-rate (TCH/H) ; sans --hr : full-rate
 #   ./start.sh --no-sidecar         pas de BTS#1 fake_trx ni de MS#2 (implicite avec --lora)
+#   ./start.sh --no-isolation       sans l'isolation des cpus, faite par défaut (c54x_exe/isoler.sh on :
+#                                   chaîne, qosmo, pont et cœur de réseau sur leurs cœurs réservés) ;
+#                                   les nice restent (startup_scripts/13-isolation.sh)
 #   VAR=x ./start.sh                environment overrides always win
 #
 # This script starts no daemon itself. It:
