@@ -9,7 +9,9 @@
 # It is done BEFORE the core starts (its units take their slice at start) and completed after the fork's
 # plan (banc_apres_lancement, called by 14-demarrage.sh) for what is launched outside systemd: the BTS, a
 # qosmo started by the fork. It stays in place after --stop: c54x_exe/isoler.sh off gives the cpus back
-# (nothing survives a reboot). CPUS / CPUS_RESEAU / FIFO: see isoler.sh.
+# (nothing survives a reboot). The layout follows the number of cores of the machine; the desktop keeps
+# BUREAU logical cpus (4 when the bench still has four cores then, 2 otherwise). BUREAU / CPUS / CPUS_RESEAU /
+# FIFO: see isoler.sh.
 #
 # NICE (always, isolation or not; an empty value = leave alone):
 #   NICE_RESEAU=-5   the core network: a runtime drop-in Nice= on its units, renice for the daemons
@@ -60,7 +62,7 @@ if [ "$ACTION" = start ] && [ "$DRY" -eq 0 ]; then
         say_end "WARN" "$C_SK" "Isolation des cpus" "$ISOLER_SH absent ; $_nice"
     elif _isol="$(banc_root env RESEAU_UNITES="$BANC_UNITES_RESEAU" bash "$ISOLER_SH" on 2>&1)"; then
         # shellcheck disable=SC1091
-        say_end " OK " "$C_OK" "Isolation des cpus" "$( . /run/c54x-isol.env; echo "dsp $ISOL_CPUS_DSP, qosmo $ISOL_CPUS_QEMU, reste de la chaine $ISOL_CPUS_RESTE, pont ${ISOL_CPUS_PONT:--}, coeur de reseau ${ISOL_CPUS_CN:--}, bureau $ISOL_AUTRES") ; $_nice"
+        say_end " OK " "$C_OK" "Isolation des cpus" "$( . /run/c54x-isol.env; [ -n "$ISOL_CPUS_DSP" ] && echo -n "dsp $ISOL_CPUS_DSP, qosmo $ISOL_CPUS_QEMU, reste de la chaine $ISOL_CPUS_RESTE" || echo -n "chaine $ISOL_CPUS"; echo ", pont ${ISOL_CPUS_PONT:--}, coeur de reseau ${ISOL_CPUS_CN:--}, bureau $ISOL_AUTRES") ; $_nice"
         printf '       %s-> %s status | off%s\n' "$C_DIM" "$ISOLER_SH" "$C_Z"
     else
         say_end "WARN" "$C_SK" "Isolation des cpus" "isoler.sh on a echoue, le banc demarre sans ; $_nice"
