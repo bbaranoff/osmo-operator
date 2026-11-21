@@ -222,6 +222,43 @@ COPY tools/freecalypso-fetch.sh /usr/local/sbin/freecalypso-fetch
 COPY .deb-cache/ /var/cache/osmo-debs/
 RUN chmod 755 /usr/local/sbin/osmo-deb && osmo-deb list || true
 
+# ── --fast (build.sh --fast, OSMO_FAST=1) ────────────────────────────────────
+# Nothing compiled for what has a package:
+#   - the Osmocom network stack and its libraries: the official Osmocom binary
+#     repository (OBS, osmocom:latest), as osmo-minioperator does, instead of
+#     the osmo-core loop and the four patched builds (osmo-trx +ipc,
+#     osmo-bts/hlr/msc +rand: NOT in the OBS packages, so RAND=... and the
+#     osmo-trx IPC/RACH patches are absent);
+#   - qosmo, c54x_exe (without the ROM), grgsm_exe, gnuradio + gr-gsm
+#     (grgsm-venv), the Calypso firmware: our .debs, from the osmo-operator
+#     release that build.sh --fast downloads into the .deb cache (SHA-256
+#     checked); `osmo-deb install` below then finds them.
+# The rest (osmocom-bb, gapk, LTE, node...) follows the usual path, against the
+# OBS libraries. The source-built stack packages are taken OUT of the .deb
+# cache, otherwise the final glob would lay them over the OBS ones.
+# amd64 only.
+ARG OSMO_FAST=0
+ARG OSMO_OBS=https://downloads.osmocom.org/packages/osmocom:/latest/xUbuntu_24.04
+ARG OSMO_ASC_URL=https://obs.osmocom.org/projects/osmocom/public_key
+RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    set -e; cd /var/cache/osmo-debs; \
+    if [ "$OSMO_FAST" = 1 ]; then \
+      for n in libosmocore libosmo-netif libosmo-abis libosmo-asn1-tcap libosmo-sigtran libsmpp34 libgtpnl osmo-hlr osmo-mgw osmo-ggsn osmo-sgsn osmo-msc osmo-bsc osmo-trx osmo-bts osmo-pcu osmo-sip-connector libosmo-gprs; do rm -f osmo-build-${n}_*.deb; done; \
+      install -d /usr/share/osmocom-keyring; \
+      curl -fsSL --retry 3 "$OSMO_ASC_URL" -o /usr/share/osmocom-keyring/osmocom.asc; \
+      echo "deb [signed-by=/usr/share/osmocom-keyring/osmocom.asc] $OSMO_OBS/ ./" \
+        > /etc/apt/sources.list.d/osmocom.list; \
+      apt-fast update; \
+      apt-fast install -y --no-install-recommends \
+        osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-bsc osmo-bts osmo-bts-trx osmo-bts-virtual osmo-pcu osmo-trx osmo-trx-ipc osmo-sgsn osmo-ggsn osmo-sip-connector \
+        libosmocore-dev libosmocore-utils libosmo-abis-dev libosmo-netif-dev libosmo-sigtran-dev libosmo-asn1-tcap-dev libsmpp34-dev libgtpnl-dev libosmo-gsup-client-dev libosmo-mgcp-client-dev libosmo-csn1-dev libosmo-gprs-rlcmac-dev libosmo-gprs-llc-dev libosmo-gprs-gmm-dev libosmo-gprs-sm-dev libosmo-gprs-sndcp-dev; \
+      # The OBS packages enable their units: the bench starts its daemons itself.
+      for u in /usr/lib/systemd/system/osmo-*.service; do \
+        [ -e "$u" ] && systemctl disable "$(basename "$u")" >/dev/null 2>&1 || true; \
+      done; \
+      ldconfig; \
+    fi
+
 # git: large postBuffer for big clones. GIT_TERMINAL_PROMPT=0 (ENV, above)
 # makes a clone that wants a login fail fast rather than hang with no terminal.
 RUN git config --global http.postBuffer 524288000
@@ -239,7 +276,9 @@ COPY configs/asound.conf /etc/asound.conf
 WORKDIR ${ROOT}
 
 # 2. Create the osmocom user
-RUN groupadd osmocom && useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom && \
+# --fast: the OBS packages already created the group and the user.
+RUN { getent group osmocom >/dev/null || groupadd osmocom; } && \
+    { id -u osmocom >/dev/null 2>&1 || useradd -r -g osmocom -s /sbin/nologin -d /var/lib/osmocom osmocom; } && \
     mkdir -p /var/lib/osmocom && chown osmocom:osmocom /var/lib/osmocom
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -251,9 +290,11 @@ FROM base AS osmo-core
 # (build.sh --no-cache) does not reach this far.
 ARG ROOT=/opt/GSM
 ARG OSMO_DEB_REFRESH=0
+ARG OSMO_FAST=0
 
-# 3. Build the Osmocom stack (order matters)
-RUN for repo in \
+# 3. Build the Osmocom stack (order matters). --fast: OBS packages (stage base).
+RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : pile Osmocom en paquets OBS, rien a compiler"; exit 0; fi; \
+    for repo in \
     libosmocore:1.12.1 \
     libosmo-netif:1.7.0 \
     libosmo-abis:2.1.0 \
@@ -335,7 +376,8 @@ COPY patches/osmo-trx-rach-per-ra-table.patch /tmp/osmo-trx-rach-per-ra-table.pa
 # Same package name as in the loop (osmo-trx), version 1.7.2+ipc: dpkg does an
 # upgrade. If the loop was served from the cache the source tree does not exist,
 # so it is re-cloned before applying the patches.
-RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
+RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : osmo-trx OBS, sans patch"; \
+    elif ! osmo-deb install osmo-trx 1.7.2+ipc; then \
       { [ -d ${ROOT}/osmo-trx ] || { cd ${ROOT} \
           && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-trx \
           && git -C osmo-trx checkout 1.7.2; }; } \
@@ -359,7 +401,8 @@ RUN if ! osmo-deb install osmo-trx 1.7.2+ipc; then \
 # because a re-cloned tree has no ./configure. Same package name (osmo-bts),
 # version 1.10.0+rand: dpkg upgrades. Maintained in patches/.
 COPY patches/osmo-bts-force-rand-toy.patch /tmp/osmo-bts-force-rand-toy.patch
-RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
+RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : osmo-bts OBS, sans patch"; \
+    elif ! osmo-deb install osmo-bts 1.10.0+rand; then \
       { [ -d ${ROOT}/osmo-bts ] || { cd ${ROOT} \
           && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-bts \
           && git -C osmo-bts checkout 1.10.0; }; } \
@@ -381,7 +424,8 @@ RUN if ! osmo-deb install osmo-bts 1.10.0+rand; then \
 # tree has no ./configure). Same package name (osmo-hlr), version 1.9.2+rand:
 # dpkg upgrades. Maintained in patches/.
 COPY patches/osmo-hlr-force-rand-toy.patch /tmp/osmo-hlr-force-rand-toy.patch
-RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
+RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : osmo-hlr OBS, sans patch"; \
+    elif ! osmo-deb install osmo-hlr 1.9.2+rand; then \
       { [ -d ${ROOT}/osmo-hlr ] || { cd ${ROOT} \
           && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-hlr \
           && git -C osmo-hlr checkout 1.9.2; }; } \
@@ -403,7 +447,8 @@ RUN if ! osmo-deb install osmo-hlr 1.9.2+rand; then \
 # package name (osmo-msc), version 1.15.0+rand: dpkg upgrades. Maintained in
 # patches/.
 COPY patches/osmo-msc-force-rand-toy.patch /tmp/osmo-msc-force-rand-toy.patch
-RUN if ! osmo-deb install osmo-msc 1.15.0+rand; then \
+RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : osmo-msc OBS, sans patch"; \
+    elif ! osmo-deb install osmo-msc 1.15.0+rand; then \
       { [ -d ${ROOT}/osmo-msc ] || { cd ${ROOT} \
           && git clone https://gitea.osmocom.org/cellular-infrastructure/osmo-msc \
           && git -C osmo-msc checkout 1.15.0; }; } \
@@ -701,8 +746,26 @@ RUN ldconfig
 # .cache/freecalypso (tools/freecalypso-fetch.sh: downloaded once, SHA256 checked,
 # bind-mounted here); fetch-rom.sh reads it through a file:// URL, so the dump is
 # never downloaded twice and never copied into the image.
+# c54x-exe without the ROM (build.sh --fast downloads it from the osmo-operator
+# release into .deb-cache/fast/, never installed by the final glob): the
+# prebuilt tree, then the ROM the usual way, the whole cached as c54x-exe 0.git
+# like a compiled one. The TI mask ROM is never published.
 RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalypso,rw \
-    if ! osmo-deb install c54x-exe 0.git; then \
+    norom=/var/cache/osmo-debs/fast/c54x-exe-norom_0.git~noble_amd64.deb; \
+    if osmo-deb install c54x-exe 0.git; then :; \
+    elif [ -s "$norom" ] && [ "${OSMO_DEB_REFRESH:-0}" != 1 ]; then \
+      dpkg-deb -x "$norom" / \
+      && cd /opt/GSM/c54x_exe \
+      && freecalypso-fetch --cache /opt/GSM/.cache/freecalypso dsp-rom-3606-dump.txt \
+      && FREECALYPSO_URL=file:///opt/GSM/.cache/freecalypso bash rom/fetch-rom.sh --dest /opt/GSM --dest /opt/GSM/c54x_exe/rom \
+      && cp /opt/GSM/.cache/freecalypso/dsp-rom-3606-dump.txt /opt/GSM/calypso_dsp.txt \
+      && cp /opt/GSM/calypso_dsp.txt rom/calypso_dsp.txt \
+      && osmo-deb snapshot c54x-exe 0.git /opt/GSM/c54x_exe \
+             /opt/GSM/calypso_dsp.PROM0.bin /opt/GSM/calypso_dsp.PROM1.bin /opt/GSM/calypso_dsp.PROM2.bin \
+             /opt/GSM/calypso_dsp.PROM3.bin /opt/GSM/calypso_dsp.DROM.bin /opt/GSM/calypso_dsp.PDROM.bin \
+             /opt/GSM/calypso_dsp.Registers.bin /opt/GSM/calypso_dsp.txt \
+      && osmo-deb install c54x-exe 0.git; \
+    else \
       git clone https://github.com/bbaranoff/c54x_exe /opt/GSM/c54x_exe \
       && cd /opt/GSM/c54x_exe \
       && make QOSMO=/opt/GSM/qosmo \
@@ -945,13 +1008,18 @@ COPY --from=lte        /var/cache/osmo-debs/ /var/cache/osmo-debs/
 # (e.g. osmo-trx 1.7.2 and 1.7.2+ipc). The glob installs in ASCII order, where
 # "+" sorts before "~", so the unpatched one would win; the patched four are
 # therefore reinstalled explicitly, last.
+# --fast: no patched package (OBS stack, stage base).
+ARG OSMO_FAST=0
 RUN set -eux; \
     dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb; \
+    if [ "$OSMO_FAST" != 1 ]; then \
     dpkg -i --force-overwrite \
         /var/cache/osmo-debs/osmo-build-osmo-trx_1.7.2+ipc~*.deb \
         /var/cache/osmo-debs/osmo-build-osmo-bts_1.10.0+rand~*.deb \
         /var/cache/osmo-debs/osmo-build-osmo-hlr_1.9.2+rand~*.deb \
         /var/cache/osmo-debs/osmo-build-osmo-msc_1.15.0+rand~*.deb; \
+    fi; \
+    rm -rf /var/cache/osmo-debs/fast; \
     ldconfig
 
 # ── LoRa / Reticulum: the radio link of --lora ───────────────────────────────

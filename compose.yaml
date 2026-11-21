@@ -48,6 +48,7 @@ services:
       args:
         OSMO_DEB_REFRESH: ${OSMO_DEB_REFRESH:-0}
         OSMO_UBUNTU_MIRROR: ${OSMO_UBUNTU_MIRROR:-}
+        OSMO_FAST: ${OSMO_FAST:-0}   # build.sh --fast
     profiles: [build]
 
   run:

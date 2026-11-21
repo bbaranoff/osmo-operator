@@ -55,10 +55,12 @@ for arg in "$@"; do
         --arm)      OSMO_ARCH=arm64 ;;
         -h|--help)
             echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]"
-            echo "  --fast       Construit SEULEMENT osmo-minioperator (osmo-minioperator/) : la pile"
-            echo "               Osmocom en .deb officiels + qosmo/c54x_exe en .deb de release"
-            echo "               (~2 min), puis s arrete. amd64 seulement. Lancement :"
-            echo "               sudo ./osmo-minioperator/docker-run.sh"
+            echo "  --fast       Build rapide d osmocom-nitb : ce que osmo-minioperator prend en .deb"
+            echo "               n est pas compile. Pile Osmocom = paquets officiels Osmocom (OBS"
+            echo "               latest, SANS les patches osmo-trx +ipc et bts/hlr/msc +rand) ;"
+            echo "               qosmo, c54x_exe (sans ROM), grgsm_exe, gnuradio + gr-gsm, firmware ="
+            echo "               nos .deb de la release osmo-operator debs-2026-11-21 (SHA-256"
+            echo "               verifies, mis dans le cache .deb). amd64 seulement."
             echo "  --arch=arm64 Construit les images pour arm64 (Raspberry Pi 4) sur cet hote,"
             echo "               par docker buildx --platform linux/arm64 sous qemu-user-static."
             echo "               Images taguees :arm64 (osmocom-nitb:arm64...). LENT au premier"
@@ -83,25 +85,15 @@ for arg in "$@"; do
     esac
 done
 
-# --fast: only osmo-minioperator (osmo-minioperator/, its own Dockerfile and
-# context): the reduced operator, built from .deb packages in a few minutes.
-# Nothing to prepare on the host, no osmocom-nitb image needed.
+# --fast: amd64 only (the release .debs are amd64).
 if [[ "$FAST" -eq 1 ]]; then
     case "$OSMO_ARCH" in
         amd64|x86_64) ;;
-        *) echo -e "${RED}[ERREUR] --fast : osmo-minioperator est amd64 seulement (arch : $OSMO_ARCH)${NC}"
+        *) echo -e "${RED}[ERREUR] --fast : les .deb de la release sont amd64 seulement (arch : $OSMO_ARCH)${NC}"
            exit 1 ;;
     esac
-    echo "--- Lancement du build de l'image osmo-minioperator (--fast) ---"
-    if docker build $NO_CACHE -t osmo-minioperator "$DIR/osmo-minioperator"; then
-        echo -e "${GREEN}[OK] Image osmo-minioperator construite.${NC}"
-        echo "    Lancement : sudo $DIR/osmo-minioperator/docker-run.sh"
-        echo "    puis, dans le conteneur : INSNS=120000 ./run-dsp.sh   (ou ./consoles.sh)"
-        exit 0
-    fi
-    echo -e "${RED}[ERREUR] Le build de l'image osmo-minioperator a echoue.${NC}"
-    exit 1
 fi
+export OSMO_FAST="$FAST"
 
 # --build-run: only the update layer (Dockerfile.run), on top of the local
 # osmocom-nitb image: nothing to prepare on the host.
@@ -326,6 +318,45 @@ fi
 export OSMO_DEB_REFRESH
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 6a. --fast: our prebuilt .debs, from the osmo-operator release
+# ══════════════════════════════════════════════════════════════════════════════
+# qosmo, grgsm_exe, gnuradio + gr-gsm (grgsm-venv), the Calypso firmware and
+# c54x_exe WITHOUT the TI mask ROM (the Dockerfile fetches the ROM from
+# freecalypso.org, as for a compiled c54x_exe). Downloaded once into the host
+# cache, SHA-256 checked; a package already in the cache is not replaced (a
+# local build wins). GitHub turns the "~" of the names into "." in the assets.
+# The Osmocom stack itself comes from the OBS packages (Dockerfile, stage base).
+FAST_TAG="debs-2026-11-21"
+FAST_URL="https://github.com/bbaranoff/osmo-operator/releases/download/${FAST_TAG}"
+FAST_DEBS=(
+    # local name (in the cache)                          sha256
+    "osmo-build-qosmo_0.git~noble_amd64.deb              750f0343e60e5f87957bdec6a973f7082b16202de0ce5d30ef773c1c20d49ba8"
+    "osmo-build-grgsm-exe_0.git~noble_amd64.deb          aecfa7ae43c2ee91a76b9cbf40a7df702fed2b69ba3038c922088d33305e4bb4"
+    "osmo-build-grgsm-venv_1.git~noble_amd64.deb         cb18fba52cf303c6a342f1ece5a08922f68c71fd232e52b6c43b2dd9bb7dc172"
+    "osmo-build-calypso-firmware_0.git~noble_amd64.deb   23ac39b60c596acf374bb0e676c7583d010ad547bbe0286c50fdf0f9330d9d35"
+    "fast/c54x-exe-norom_0.git~noble_amd64.deb           6807adcdded5e0bea9ee584e9e4054652beffec5db2c1ce74fc26b540ef65199"
+)
+rm -rf "$DIR/.deb-cache/fast"
+if [[ "$FAST" -eq 1 ]]; then
+    echo "[*] --fast : paquets .deb de la release ${FAST_TAG}..."
+    mkdir -p "$OSMO_DEB_CACHE/fast" "$DIR/.deb-cache/fast"
+    for _e in "${FAST_DEBS[@]}"; do
+        read -r _f _sum <<<"$_e"
+        _dst="$OSMO_DEB_CACHE/$_f"
+        if [ ! -s "$_dst" ]; then
+            _asset="$(basename "$_f" | tr '~' '.')"
+            echo "    $_asset"
+            curl -fL --progress-bar --retry 3 -o "$_dst.part" "$FAST_URL/$_asset" \
+                && echo "$_sum  $_dst.part" | sha256sum -c --quiet - \
+                && mv -f "$_dst.part" "$_dst" \
+                || { rm -f "$_dst.part"; echo -e "${RED}[ERREUR] --fast : $_asset (telechargement ou SHA-256)${NC}"; exit 1; }
+        fi
+        cp -f "$_dst" "$DIR/.deb-cache/$_f"
+    done
+    echo -e "${GREEN}[OK] --fast : ${#FAST_DEBS[@]} paquets prets (${OSMO_DEB_CACHE})${NC}"
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 6b. The FreeCalypso cache: official downloads, SHA256 checked, outside Git
 # ══════════════════════════════════════════════════════════════════════════════
 # .cache/freecalypso (ignored by Git) holds the files the Dockerfile takes from
@@ -392,7 +423,7 @@ debs_from_image() {
 
 # 7. Docker build
 echo "--- Lancement du build de l'image ${IMG_NITB} ---"
-if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR"; then
+if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR" "OSMO_FAST=$OSMO_FAST"; then
     echo -e "${GREEN}[OK] Image ${IMG_NITB} construite avec succes.${NC}"
     debs_from_image "$IMG_NITB"
 else
@@ -432,3 +463,4 @@ fi
 
 # The context does not keep the packages: they live in the host cache.
 find "$DIR/.deb-cache" -maxdepth 1 -name '*.deb' -delete
+rm -rf "$DIR/.deb-cache/fast"
