@@ -1,0 +1,12 @@
+# Versions des paquets de la verification du 2026-11-08 (dpkg-query ${Package} ${Version}).
+# Le Dockerfile compare l'image a cette liste ; STRICT_VERSIONS=1 fait echouer le build.
+asterisk 1:20.6.0~dfsg+~cs6.13.40431414-2build5
+libosmocore-dev 1.14.2
+osmo-bsc 1.15.0
+osmo-bts-trx 1.12.0
+osmo-hlr 1.9.5
+osmo-mgw 1.16.1
+osmo-msc 1.16.0
+osmo-pcu 1.5.3
+osmo-sip-connector 1.7.2
+osmo-stp 2.3.0

@@ -3,7 +3,7 @@
 #  build.sh - prepare the host and build the osmocom-nitb image
 # =============================================================================
 #
-#  Usage: sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run] [--arch=arm64|--arm]
+#  Usage: sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]
 #         (-h describes every option)
 #
 #  - apt-fast everywhere: packaging/apt-fast-install.sh installs apt-fast
@@ -42,6 +42,7 @@ NO_CACHE=""
 LITE=0
 STP=0
 BUILD_RUN=0
+FAST=0
 OSMO_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 for arg in "$@"; do
     case "$arg" in
@@ -49,10 +50,15 @@ for arg in "$@"; do
         --lite)     LITE=1 ;;
         --stp)      STP=1 ;;
         --build-run) BUILD_RUN=1 ;;
+        --fast)     FAST=1 ;;
         --arch=*)   OSMO_ARCH="${arg#*=}" ;;
         --arm)      OSMO_ARCH=arm64 ;;
         -h|--help)
-            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--arch=arm64|--arm]"
+            echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]"
+            echo "  --fast       Construit SEULEMENT osmo-minioperator (osmo-minioperator/) : la pile"
+            echo "               Osmocom en .deb officiels + qosmo/c54x_exe en .deb de release"
+            echo "               (~2 min), puis s arrete. amd64 seulement. Lancement :"
+            echo "               sudo ./osmo-minioperator/docker-run.sh"
             echo "  --arch=arm64 Construit les images pour arm64 (Raspberry Pi 4) sur cet hote,"
             echo "               par docker buildx --platform linux/arm64 sous qemu-user-static."
             echo "               Images taguees :arm64 (osmocom-nitb:arm64...). LENT au premier"
@@ -76,6 +82,26 @@ for arg in "$@"; do
         *) echo -e "${YELLOW}[WARN] Argument inconnu ignore : $arg${NC}" ;;
     esac
 done
+
+# --fast: only osmo-minioperator (osmo-minioperator/, its own Dockerfile and
+# context): the reduced operator, built from .deb packages in a few minutes.
+# Nothing to prepare on the host, no osmocom-nitb image needed.
+if [[ "$FAST" -eq 1 ]]; then
+    case "$OSMO_ARCH" in
+        amd64|x86_64) ;;
+        *) echo -e "${RED}[ERREUR] --fast : osmo-minioperator est amd64 seulement (arch : $OSMO_ARCH)${NC}"
+           exit 1 ;;
+    esac
+    echo "--- Lancement du build de l'image osmo-minioperator (--fast) ---"
+    if docker build $NO_CACHE -t osmo-minioperator "$DIR/osmo-minioperator"; then
+        echo -e "${GREEN}[OK] Image osmo-minioperator construite.${NC}"
+        echo "    Lancement : sudo $DIR/osmo-minioperator/docker-run.sh"
+        echo "    puis, dans le conteneur : INSNS=120000 ./run-dsp.sh   (ou ./consoles.sh)"
+        exit 0
+    fi
+    echo -e "${RED}[ERREUR] Le build de l'image osmo-minioperator a echoue.${NC}"
+    exit 1
+fi
 
 # --build-run: only the update layer (Dockerfile.run), on top of the local
 # osmocom-nitb image: nothing to prepare on the host.
