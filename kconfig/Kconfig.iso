@@ -1,0 +1,188 @@
+# kconfig/Kconfig.iso - cible ISO live / image SD (build-iso.sh)
+#
+# tools/menuconfig.sh lit ces symboles sous leur nom (CONFIG_ISO_IMAGE,
+# CONFIG_ISO_NODE, CONFIG_ISO_KB...) et les traduit en options de
+# build-iso.sh. Les modules facultatifs (ISO_MOD_<ID>) et obligatoires
+# (ISO_CORE_<ID>) viennent de tools/features.conf, par
+# kconfig/gen-features.sh -> kconfig/generated/Kconfig.modules.
+#
+# NB : ce fichier finit en .iso ; .gitignore l'excepte de "*.iso".
+
+comment "--- ISO live / image SD (build-iso.sh) ---"
+	depends on TARGET_ISO
+
+if TARGET_ISO
+
+# ── Quelle(s) image(s) ───────────────────────────────────────────────────────
+choice
+	prompt "Image"
+	default ISO_IMAGE_OPERATOR if ARCH_ARM64
+	default ISO_IMAGE_ALL
+	help
+	  build-iso.sh : --all, --role=operator, --lite, --desktop,
+	  --role=interstp. En arm64 (image SD Armbian) : operator ou desktop
+	  seulement.
+
+config ISO_IMAGE_ALL
+	bool "Les quatre (interstp, operator, lite, desktop) : --all"
+	depends on ARCH_AMD64
+
+config ISO_IMAGE_OPERATOR
+	bool "operator : le noeud complet (--role=operator)"
+
+config ISO_IMAGE_LITE
+	bool "lite : sans les arbres de sources de /opt/GSM (--lite)"
+	depends on ARCH_AMD64
+
+config ISO_IMAGE_DESKTOP
+	bool "desktop : bureau GNOME + installateur Calamares (--desktop)"
+
+config ISO_IMAGE_INTERSTP
+	bool "interstp : le hub SS7 seul (--role=interstp)"
+	depends on ARCH_AMD64
+
+endchoice
+
+config ISO_IMAGE
+	string
+	default "all" if ISO_IMAGE_ALL
+	default "lite" if ISO_IMAGE_LITE
+	default "desktop" if ISO_IMAGE_DESKTOP
+	default "interstp" if ISO_IMAGE_INTERSTP
+	default "operator"
+
+config ISO_NODE
+	int "Numero du noeud dans le plan de numerotation (--node, 0 = defaut)"
+	range 0 99
+	default 0
+	depends on ISO_IMAGE_OPERATOR || ISO_IMAGE_LITE || ISO_IMAGE_DESKTOP
+	help
+	  build-iso.sh --node=N. 0 : non passe, build-iso.sh prend 1.
+
+config ISO_OUTPUT
+	string "Fichier de sortie (--output, vide = osmo-operator-<version>.iso)"
+	default ""
+	depends on !ISO_IMAGE_ALL
+
+config ISO_BOARD
+	string "Cartes de l'image SD (--board : rpi4, opi5, all, noms Armbian)"
+	default "all"
+	depends on ARCH_ARM64
+	help
+	  armbian/build-armbian.sh : rpi4, opi5, all, ou des noms Armbian
+	  separes par des virgules (orangepi5-max,rpi4b...).
+
+# ── La base ──────────────────────────────────────────────────────────────────
+choice
+	prompt "Suite Ubuntu du rootfs (--version)"
+	default ISO_UBUNTU_2404
+
+config ISO_UBUNTU_2404
+	bool "24.04 noble"
+
+config ISO_UBUNTU_2204
+	bool "22.04 jammy"
+	depends on ARCH_AMD64
+
+endchoice
+
+config ISO_UBUNTU
+	string
+	default "22.04" if ISO_UBUNTU_2204
+	default "24.04"
+
+config ISO_KB
+	string "Disposition clavier (--kb)"
+	default "fr"
+
+# ── L'image docker source ────────────────────────────────────────────────────
+choice
+	prompt "Image docker source"
+	default ISO_SOURCE_BUILD if ARCH_ARM64
+	default ISO_SOURCE_PULL
+	help
+	  L'image osmocom-nitb dont l'ISO est tiree.
+
+config ISO_SOURCE_PULL
+	bool "Tiree (Docker Hub, puis GHCR), build.sh si rien ne repond"
+	help
+	  Le defaut en amd64 : bastienbaranoff/norf_gsm:latest, puis
+	  ghcr.io/<depot>/osmocom-nitb:base-<empreinte>, puis :latest ;
+	  build.sh en repli (1h23).
+
+config ISO_SOURCE_PULL_STRICT
+	bool "Tiree obligatoirement, sans repli (--skip-build)"
+
+config ISO_SOURCE_BUILD
+	bool "Construite ici par build.sh (--build-docker)"
+
+endchoice
+
+config ISO_SOURCE
+	string
+	default "pull-strict" if ISO_SOURCE_PULL_STRICT
+	default "build" if ISO_SOURCE_BUILD
+	default "pull"
+
+config ISO_PULL_IMAGE
+	string "Image a tirer (--skip-build=IMAGE, vide = deduite)"
+	default ""
+	depends on ISO_SOURCE_PULL_STRICT
+	help
+	  N'importe quel registre, par exemple
+	  ghcr.io/<depot>/osmocom-nitb:base-<empreinte>. Obligatoire en arm64 :
+	  rien n'y est publie.
+
+config ISO_WITH_DEBS
+	bool "Embarquer les .deb du banc dans /var/cache/osmo-debs (--with-debs)"
+	default y
+	help
+	  Decoche : --without-debs, aucun .deb ne reste dans l'image.
+
+# ── Au demarrage de l'image ──────────────────────────────────────────────────
+config ISO_BANC
+	bool "osmo-banc.service active au boot (--banc)"
+	depends on !ISO_IMAGE_INTERSTP
+
+config ISO_MULTI
+	bool "osmo-multi.service active au boot (--multi)"
+	depends on !ISO_IMAGE_INTERSTP
+
+config ISO_SOFTSIM
+	bool "softSIM, pySim, pcscd/CCID (--softsim)"
+	default y
+
+# ── Le lien entre noeuds (WAN) ───────────────────────────────────────────────
+config ISO_WAN
+	bool "Table WAN (--wan)"
+
+if ISO_WAN
+
+config ISO_WAN_NODES
+	string "Noeuds (--wan-nodes : <noeud>:<IP>:<indicatif> separes par des espaces)"
+	default ""
+
+config ISO_WAN_ID
+	int "Numero de CE noeud dans la table (--wan-id, 0 = non passe)"
+	range 0 99
+	default 0
+
+config ISO_WAN_OPS
+	int "Operateurs sur ce noeud (--wan-ops)"
+	range 1 16
+	default 1
+
+config ISO_HUB_IP
+	string "Adresse du hub SS7 (--hub-ip)"
+	default "172.20.0.10"
+
+endif
+
+# ── Les modules (tools/features.conf) ────────────────────────────────────────
+menu "Modules de l'ISO (iso_modules/)"
+
+source "kconfig/generated/Kconfig.modules"
+
+endmenu
+
+endif
