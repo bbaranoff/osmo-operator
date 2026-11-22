@@ -6,6 +6,10 @@
 #   - the bridge (pont_dsp.py / air.py) alone on its own core
 #   - the core network (osmo-stp/hlr/mgw/msc/bsc/ggsn/sgsn, sip-connector, asterisk, BTS, PCU) on its cpus
 #   - the desktop and every other service on what is left
+#   - the kernel's housekeeping (unbound workqueues, movable kernel threads) on the desktop's cpus
+#   - the guard c54x-garde keeps SCHED_FIFO without freezing the machine: a real-time thread that never
+#     sleeps (> 90 % of its cpu for 5 s) goes back to SCHED_OTHER nice -10, a kernel stall or Tctl > 95 °C
+#     puts all of them back (journalctl -t c54x-garde; GARDE=0 for none)
 # It is done BEFORE the core starts (its units take their slice at start) and completed after the fork's
 # plan (banc_apres_lancement, called by 14-demarrage.sh) for what is launched outside systemd: the BTS, a
 # qosmo started by the fork. It stays in place after --stop: c54x_exe/isoler.sh off gives the cpus back
