@@ -711,7 +711,7 @@ via `return` (that is how `--arm` skips a step).
 | `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icons, GTK launchers (`osmo-*-anim`), Info page |
 | `85-extensions-gnome.sh` | GNOME Shell extensions |
 | `85-glava.sh` | `--desktop`: GLava + NCS Spectrum compiled into the rootfs, `glava.service` (user), started only with `osmo.glava` on the kernel command line (GRUB entry) |
-| `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, screenfetch banner, Plymouth `osmo-bts` |
+| `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, terminal banner (`tools/osmo-banner.sh`: one of six telecom figlets at random, a sentence under it), Plymouth `osmo-bts` |
 | `87-lite.sh` | `--lite` pruning of `/opt/GSM` |
 | `88-lte-pmos.sh` | srsRAN + Open5GS (from the `.deb`s, otherwise compiled), freeDiameter, pmbootstrap, PPP kernel, VM image, final 2G + 4G + phone check |
 | `89-home-chiffre.sh` | crypthome tools, `unlock-home.service`, root keyring on the encrypted volume, launchers under `run-as-owner` |
