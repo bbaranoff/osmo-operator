@@ -51,6 +51,9 @@ ln -sf /opt/GSM/osmo-operator/tools/overlay-draw.py "$ROOTFS/usr/local/bin/overl
 # works everywhere else (Alt+F2, sudo, scripts).
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/c123" 2>/dev/null || true
 ln -sf /opt/GSM/osmo-operator/tools/osmo-c123-gtk.py "$ROOTFS/usr/local/bin/osmo-c123" 2>/dev/null || true
+# osmo-ms-pont: runs the mobile chain without the mobile (DSP, ARM, osmocon, bridge)
+# and shows its air (constellation, eye, TDMA grid). GTK3 + numpy, system python3.
+ln -sf /opt/GSM/osmo-operator/tools/osmo-ms-pont.py "$ROOTFS/usr/local/bin/osmo-ms-pont" 2>/dev/null || true
 # Bench aliases (banc-rssi, banc-trx, banc-mobile, c123-1...): the profile.d
 # file for login shells, and the same names as real commands (tools/osmo-banc-cmd.sh).
 install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"

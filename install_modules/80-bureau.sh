@@ -144,6 +144,8 @@ inst_bureau_run() {
     # from apt, not from pip.
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/c123
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
+    # osmo-ms-pont: the chain without the mobile + its air (tools/osmo-ms-pont.py)
+    ln -sf "$INST_TREE/tools/osmo-ms-pont.py" /usr/local/bin/osmo-ms-pont
     # banc-rssi, banc-trx, c123-1...: profile.d aliases AND real commands (tools/osmo-banc-cmd.sh)
     install -m644 "$INST_TREE/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
     OSMO_BANC_TREE="$INST_TREE" bash "$INST_TREE/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null

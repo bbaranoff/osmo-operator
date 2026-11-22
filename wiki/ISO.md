@@ -513,6 +513,18 @@ audio GLava*, which adds `osmo.glava` to the kernel command line (read by the us
 On an installed system, add `osmo.glava` to `GRUB_CMDLINE_LINUX_DEFAULT` or run
 `systemctl --user enable glava`.
 
+**osmo-ms-pont** (`tools/osmo-ms-pont.py`, in `/usr/local/bin`): the mobile chain WITHOUT the
+mobile, in one GTK window. *Demarrer la chaine* runs the steps 1, b, 2, 3 and 5 of
+`c54x_exe/run.sh` with `PONT=1` (DSP `c54x_exe --arm`, ARM qosmo, osmocon, bridge `pont_dsp.py`;
+through pkexec when not root), *Arreter* runs `run.sh --stop`, and a dot per process shows its
+state. The bridge it launches gets one more copy port (`PONT_DSP_COPIES="6762 6790"`): every
+downlink burst handed to the DSP and every uplink burst sent to the BTS reaches the window, which
+rebuilds the I/Q with the BSP's own modulator (GMSK BT 0.3, 1 sample per symbol at 0.5, widening
+0.3), adds the bench noise (`CALYPSO_BSP_SNR_DB`, else the slider), and shows the derotated
+constellation, the eye diagram, the burst I/Q, the training-sequence correlation (TOA), the TDMA
+grid (8 TS x 51 frames by burst type and TSC), SNR and EVM. The I/Q is modelled from the bridge's
+bits, not read from the DSP memory. `osmo-ms-pont --demo`: random bursts, no chain.
+
 ---
 
 ## 6. Installing to a disk
