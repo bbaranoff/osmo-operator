@@ -22,7 +22,9 @@ os.environ.setdefault("PONT_KC_RETENTION", "1")
 # a classic BTS, the rssi application has no other source (the air only relays
 # the TX ring of the instance 1 Calypso, here the mobile). Without rssi
 # running, the copy goes to an empty port. PONT_DSP_COPIES= (empty) cuts it.
-os.environ.setdefault("PONT_DSP_COPIES", "6762")
+# 6790: the air of tools/osmo-ms-pont.py (constellation, eye, TDMA grid),
+# so that the window shows the bench launched by start.sh / launch.sh too.
+os.environ.setdefault("PONT_DSP_COPIES", "6762 6790")
 
 sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from pont.dsp import main

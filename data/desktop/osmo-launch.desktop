@@ -18,7 +18,7 @@ Keywords=gsm;osmocom;banc;lancer;
 # GNOME/DING reads `Actions=` and adds one context-menu entry per action
 # (desktop AND dock). Group names must match the `Actions=` tokens EXACTLY,
 # case included: an entry that matches nothing is silently ignored.
-Actions=Service;Dashboard;Console;Vty;Grgsm;Stop;
+Actions=Service;Dashboard;Console;Vty;Constellation;Grgsm;Stop;
 
 # "As a service": systemctl, no terminal, the bench survives the end of the
 # session (launch.sh --service-suivi talks to systemd).
@@ -46,6 +46,13 @@ Name=Console du mobile (VTY 4247)
 Name[fr]=Console du mobile (VTY 4247)
 
 Exec=/opt/GSM/osmo-operator/launch.sh --vty
+
+# The air of the running 2G bench: constellation, eye, TSC correlation, TDMA
+# grid (tools/osmo-ms-pont.py; pont_dsp.py copies its bursts to udp 6790).
+[Desktop Action Constellation]
+Name=Constellation de l'air (osmo-ms-pont)
+Name[fr]=Constellation de l'air (osmo-ms-pont)
+Exec=/opt/GSM/osmo-operator/tools/osmo-ms-pont.py
 
 # The DSP (C54x) chain is the start.sh default (single click); this action
 # starts the OTHER chain, gr-gsm.
