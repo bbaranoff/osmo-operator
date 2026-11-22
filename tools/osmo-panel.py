@@ -580,6 +580,7 @@ class Panel(Gtk.Window):
         if os.path.exists(fond):
             spawn([sys.executable, fond, "antenne" if actif else "ville"])
         self._conky_fondu(actif)
+        self._glava_fondu(actif)
 
     # THE CONKY FOLLOWS TOO, WITH A FADE. Bench down, the dashboard has
     # nothing to say (« banc a l arret - ./start-native.sh » twice): it is
@@ -666,6 +667,81 @@ class Panel(Gtk.Window):
         if os.path.exists(fond):
             print("[panel] fond d ecran a reprendre : %s" % os.path.basename(uri), flush=True)
             spawn([sys.executable, fond, "antenne" if self._visible else "ville"])
+
+    # THE WAVES FOLLOW THE BENCH TOO. GLava (circle + bottom bars, user unit
+    # glava.service, tools/osmo-glava.sh) is started when a bench comes up and
+    # stopped when it goes down, with a fade: each GLava window (title
+    # "GLava", rc.glsl settitle) is set to opacity 0 as soon as it appears,
+    # then ramped up; on stop, ramped down, then the unit is stopped (its
+    # ExecStopPost removes the osmo_glava mixing). Left alone when GLava is
+    # wanted all the time: osmo.glava on the kernel command line (GRUB entry),
+    # "systemctl --user enable glava", or OSMO_GLAVA_TOUJOURS=1.
+    @staticmethod
+    def _glava_toujours():
+        if os.environ.get("OSMO_GLAVA_TOUJOURS") == "1":
+            return True
+        try:
+            if "osmo.glava" in open("/proc/cmdline").read().split():
+                return True
+        except OSError:
+            pass
+        try:
+            return subprocess.run(["systemctl", "--user", "is-enabled", "glava.service"], capture_output=True,
+                                  text=True, timeout=3).stdout.strip() == "enabled"
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    @staticmethod
+    def _glava_fenetres():
+        try:
+            return subprocess.run(["xdotool", "search", "--name", "^GLava$"], capture_output=True,
+                                  text=True, timeout=3).stdout.split()
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+
+    def _glava_fondu(self, actif, pas=15, duree=1.8):
+        if not shutil.which("glava") or not shutil.which("xdotool") or self._glava_toujours():
+            return
+        self._glava_gen = getattr(self, "_glava_gen", 0) + 1
+        gen = self._glava_gen          # a newer on/off cancels this one
+
+        def systemctl(verbe):
+            try:
+                subprocess.run(["systemctl", "--user", verbe, "glava.service"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+        def anim():
+            if actif:
+                systemctl("start")
+                vues = {}                       # window -> time it was caught
+                fin = time.monotonic() + 20     # osmo-glava waits ~6 s for the desktop
+                while time.monotonic() < fin and gen == self._glava_gen:
+                    for w in self._glava_fenetres():
+                        if w not in vues:
+                            self._conky_opacite(w, 0.0)
+                            vues[w] = time.monotonic()
+                    now = time.monotonic()
+                    for w, t0 in vues.items():
+                        self._conky_opacite(w, min(1.0, (now - t0) / duree))
+                    if len(vues) >= 2 and all(now - t0 >= duree for t0 in vues.values()):
+                        break                   # circle and bars both fully in
+                    time.sleep(0.04)
+                for w in vues:
+                    subprocess.run(["xprop", "-id", w, "-remove", "_NET_WM_WINDOW_OPACITY"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+            else:
+                wins = self._glava_fenetres()
+                for i in range(pas - 1, -1, -1):
+                    if gen != self._glava_gen:
+                        return
+                    for w in wins:
+                        self._conky_opacite(w, i / pas)
+                    time.sleep(duree / pas)
+                if gen == self._glava_gen:
+                    systemctl("stop")
+        threading.Thread(target=anim, daemon=True).start()
 
     def _conky_veille(self):
         # a conky restarted (other window) while the bench is down: hide it at

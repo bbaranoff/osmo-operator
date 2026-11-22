@@ -506,8 +506,10 @@ together**: a null sink `osmo_glava` fed by two loopbacks, the monitor of the ha
 (everything that plays, bench voice included) and the default source (`osmo_mic_ec`, the
 echo-cancelled mic). The mic goes only to that sink, never to the speakers: no feedback. A
 systemd user service: `systemctl --user start|stop|enable glava`. It needs OpenGL 4.2 or newer.
-**Not started by default**: pick the GRUB entry *osmo-operator - avec visualiseur audio GLava*,
-which adds `osmo.glava` to the kernel command line (read by the user unit `glava-boot.service`).
+**Only while a bench runs**: `osmo-panel.py` starts it with a fade when a bench comes up and fades
+it out when it stops. To keep it all the time, pick the GRUB entry *osmo-operator - avec visualiseur
+audio GLava*, which adds `osmo.glava` to the kernel command line (read by the user unit
+`glava-boot.service`).
 On an installed system, add `osmo.glava` to `GRUB_CMDLINE_LINUX_DEFAULT` or run
 `systemctl --user enable glava`.
 

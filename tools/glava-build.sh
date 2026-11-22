@@ -89,7 +89,9 @@ install -Dm755 "$DIR/tools/osmo-glava.sh" "$DEST/usr/local/bin/osmo-glava"
 #   systemctl --user stop glava      stops both (and removes the mixing)
 #   systemctl --user start glava     starts them
 #   systemctl --user enable glava    GLava at every login (this account)
-# NOT started by default: glava.service is not enabled. glava-boot.service,
+# NOT started at login: glava.service is not enabled. tools/osmo-panel.py
+# starts it, with a fade, while a bench runs, and fades it out on stop.
+# glava-boot.service,
 # enabled for all accounts (graphical-session.target.wants in
 # /etc/systemd/user), starts it only when the kernel command line carries
 # osmo.glava (GRUB entry "avec visualiseur audio GLava" of the live ISO; on an

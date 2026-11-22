@@ -5,8 +5,9 @@
 # GLava has no package in noble: tools/glava-build.sh builds it on the host
 # (same Ubuntu as the image) with the NCS module patch and installs it into the
 # rootfs via DESTDIR - binary, shaders in /etc/xdg/glava, launcher
-# /usr/local/bin/osmo-glava, user service glava.service. Not started by
-# default: only with osmo.glava on the kernel command line (GRUB entry
+# /usr/local/bin/osmo-glava, user service glava.service. Not started at
+# login: while a bench runs (osmo-panel.py, with a fade), or always with
+# osmo.glava on the kernel command line (GRUB entry
 # "avec visualiseur audio GLava", 90-iso.sh; glava-boot.service). Runtime libraries
 # (libpulse0, libx11-6, libxext6, libxrender1, libxcomposite1, libgl1) already
 # come with the GNOME desktop.
