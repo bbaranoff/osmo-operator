@@ -90,4 +90,4 @@ _q=(
   "Un LLM et un BTS ont ceci en commun : tous deux hallucinent hors couverture."
   "Ecrit par une machine, relu par une machine, debogue par vous. Bon courage."
 )
-printf '  \033[2;3m« %s »\033[0m\n\n' "${_q[$RANDOM % ${#_q[@]}]}"
+printf '\n  \033[2;3m« %s »\033[0m\n\n' "${_q[$RANDOM % ${#_q[@]}]}"
