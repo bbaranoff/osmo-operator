@@ -22,10 +22,10 @@
 #  added after it, and GNOME then silently shows a blank page. The cache is
 #  still rebuilt for the applications menu.
 #
-#  Shortcuts are copied to the desktop of root and of the user who ran sudo
-#  (SUDO_USER), in Bureau/ and Desktop/. The metadata::trusted attribute
-#  cannot be set here (it lives in the session's gvfs metadata): update.sh
-#  sets it at login; otherwise double-click + "Allow" is enough.
+#  NO SHORTCUTS ON THE DESKTOP, as on the ISO: the only desktop icon is the
+#  home folder (DING: show-home, no trash / volumes / drop place, schema
+#  default in 99-osmo-fond.gschema.override). The launchers live in the
+#  applications menu.
 #
 #  The background is a schema DEFAULT (99-osmo-fond.gschema.override), not a
 #  user setting: a user who chose another background keeps it.
@@ -66,6 +66,10 @@ _bureau_fond() {
     for sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do
         printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" \
             "$sec" "$_BUREAU_FOND" "$_BUREAU_FOND" >> "$_BUREAU_SCHEMA"
+    done
+    # Desktop icons: the home folder only (same values as the ISO)
+    for sec in "org.gnome.shell.extensions.ding" "org.gnome.shell.extensions.ding:ubuntu"; do
+        printf "\n[%s]\nstart-corner='top-left'\nshow-home=true\nshow-trash=false\nshow-volumes=false\nshow-network-volumes=false\nshow-drop-place=false\n" "$sec" >> "$_BUREAU_SCHEMA"
     done
     # Light mode by default, as on the ISO (iso_modules/80-chroot.sh):
     # Yaru-blue, color-scheme default. A 99-osmo-live override left by the ISO
@@ -160,15 +164,10 @@ inst_bureau_run() {
                gir1.2-gtk-3.0 gir1.2-gdkpixbuf-2.0 >/dev/null \
         || inst_hint "c123 : paquets GTK non installes (python3-gi python3-gi-cairo gir1.2-gtk-3.0)"
 
+    # Launchers copied to Bureau/Desktop by older versions: removed (home folder only).
     while read -r h; do
         for d in Bureau Desktop; do
-            [ -d "$h/$d" ] || continue
-            for e in $_BUREAU_ENTRIES; do
-                f="$h/$d/$e.desktop"
-                cp -f "/usr/share/applications/$e.desktop" "$f" && chmod +x "$f"
-                inst_say "bureau : $f"
-            done
-            [ "$h" != /root ] && chown "$SUDO_USER" "$h/$d"/osmo-*.desktop 2>/dev/null
+            for e in $_BUREAU_ENTRIES; do rm -f "$h/$d/$e.desktop"; done
         done
     done < <(_bureau_homes)
 

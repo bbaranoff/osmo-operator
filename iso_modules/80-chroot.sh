@@ -733,9 +733,11 @@ GDM
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec
-        # Desktop icons (DING) in the top-left corner, where the wallpaper leaves room.
+        # Desktop icons (DING): the home folder ONLY, in the top-left corner,
+        # where the wallpaper leaves room (no trash, volumes, network volumes,
+        # drop place; no launchers either, 85-installeur-bureau.sh).
         for _sec in "org.gnome.shell.extensions.ding" "org.gnome.shell.extensions.ding:ubuntu"; do
-            printf "\n[%s]\nstart-corner=\047top-left\047\nshow-trash=false\nshow-volumes=false\n" "$_sec" \
+            printf "\n[%s]\nstart-corner=\047top-left\047\nshow-home=true\nshow-trash=false\nshow-volumes=false\nshow-network-volumes=false\nshow-drop-place=false\n" "$_sec" \
                 >> /usr/share/glib-2.0/schemas/99-osmo-live.gschema.override
         done
         unset _sec

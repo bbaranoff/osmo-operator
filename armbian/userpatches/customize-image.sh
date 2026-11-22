@@ -143,6 +143,7 @@ if [ "$BUILD_DESKTOP" = yes ]; then
             printf "\n[%s]\npicture-uri='file://%s'\npicture-uri-dark='file://%s'\npicture-options='zoom'\nprimary-color='#0d1b2a'\n" "$sec" "$FOND" "$FOND" >> "$OVR"
         done
     fi
+    printf "\n[org.gnome.shell.extensions.ding]\nstart-corner='top-left'\nshow-home=true\nshow-trash=false\nshow-volumes=false\nshow-network-volumes=false\nshow-drop-place=false\n" >> "$OVR"
     printf "\n[org.gnome.shell]\nfavorite-apps=['osmo-info.desktop', 'org.gnome.Nautilus.desktop', 'osmo-launch.desktop', 'osmo-tutorial.desktop', 'osmo-addition.desktop', 'osmo-update.desktop', 'linphone.desktop', 'org.wireshark.Wireshark.desktop', 'org.gnome.Terminal.desktop']\n" >> "$OVR"
     printf "[org.gnome.settings-daemon.plugins.media-keys]\ncustom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/','/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/']\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-next/]\nname='osmo-operator : arret suivant (Conky)'\ncommand='/usr/local/bin/osmo-op --next'\nbinding='<Control><Mod5>Right'\n\n[org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/osmo-op-prev/]\nname='osmo-operator : arret precedent (Conky)'\ncommand='/usr/local/bin/osmo-op --prev'\nbinding='<Control><Mod5>Left'\n" \
         > /usr/share/glib-2.0/schemas/98-osmo-keys.gschema.override
