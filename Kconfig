@@ -1,0 +1,131 @@
+# Kconfig - osmo-operator, configuration du build facon noyau
+# =============================================================================
+#   make menuconfig        le menu (mconf du noyau, tools/kconfig/linux)
+#   make defconfig         .config depuis defconfigs/defconfig
+#   make <nom>_defconfig   .config depuis defconfigs/<nom>_defconfig
+#   make help              toutes les cibles
+#
+# Le .config est au format du noyau (CONFIG_X=y, "# CONFIG_X is not set",
+# CONFIG_S="texte", CONFIG_N=3). tools/menuconfig.sh le traduit en options
+# ordinaires de build.sh, build-iso.sh ou make.
+#
+# Les modules de l'ISO et les groupes de l'image docker viennent de
+# tools/features.conf (kconfig/gen-features.sh -> kconfig/generated/).
+# =============================================================================
+
+mainmenu "osmo-operator - configuration du build"
+
+source "kconfig/Kconfig.include"
+
+comment "Hote : $(HOST_ARCH)"
+
+# ── 1. Architecture ──────────────────────────────────────────────────────────
+choice
+	prompt "Architecture"
+	default ARCH_ARM64 if "$(HOST_ARCH)" = "arm64"
+	default ARCH_AMD64
+	help
+	  Architecture de ce qui est construit. Elle decide des cibles
+	  possibles : ISO live en amd64, image SD en arm64, Docker dans les
+	  deux, natif seulement si c'est celle de l'hote ($(HOST_ARCH)).
+	  arm64 sur un hote x86 passe par qemu-user-static (lent).
+
+config ARCH_AMD64
+	bool "amd64 (PC)"
+
+config ARCH_ARM64
+	bool "arm64 (Raspberry Pi 4 / Orange Pi 5)"
+
+endchoice
+
+config ARCH
+	string
+	default "arm64" if ARCH_ARM64
+	default "amd64"
+
+config HOST_IS_ARCH
+	def_bool (ARCH_AMD64 && "$(HOST_ARCH)" = "amd64") || (ARCH_ARM64 && "$(HOST_ARCH)" = "arm64")
+
+# ── 2. Cible (selon l'architecture) ──────────────────────────────────────────
+choice
+	prompt "Cible du build"
+	default TARGET_ISO_LIVE if ARCH_AMD64
+	default TARGET_DOCKER
+	help
+	  Ce que "make" (ou "make build") construit a partir de ce .config.
+	  Les modules proposes ensuite dependent de la cible.
+
+config TARGET_ISO_LIVE
+	bool "ISO live (build-iso.sh)"
+	depends on ARCH_AMD64
+	help
+	  Une ou plusieurs ISO live amd64 : interstp, operator, lite,
+	  desktop. Les modules : ceux de iso_modules/ et les composants de
+	  l'image docker source.
+
+config TARGET_SD
+	bool "Image SD Armbian (build-iso.sh --arm)"
+	depends on ARCH_ARM64
+	help
+	  Images SD arm64 (framework Armbian) : operator ou desktop.
+
+config TARGET_DOCKER
+	bool "Images Docker (build.sh, BuildKit bake)"
+	help
+	  osmocom-nitb (et osmocom-run), en option osmocom-nitb:lite et
+	  osmocom-stp. Les modules : les composants du Dockerfile.
+
+config TARGET_NATIVE
+	bool "Natif, sur cet hote (install.sh, c54x_exe, .deb)"
+	depends on HOST_IS_ARCH
+	help
+	  Sur l'hote lui-meme : l'installation native modulaire (install.sh,
+	  install_modules/), c54x_exe compile ici, les .deb du banc et leur
+	  publication. Seulement dans l'architecture de l'hote.
+
+endchoice
+
+config TARGET_ISO
+	def_bool TARGET_ISO_LIVE || TARGET_SD
+
+config TARGET
+	string
+	default "iso" if TARGET_ISO
+	default "docker" if TARGET_DOCKER
+	default "native" if TARGET_NATIVE
+
+# An image (docker or iso) is built: cache, components.
+config BUILDS_IMAGE
+	def_bool TARGET_DOCKER || TARGET_ISO
+
+config NO_CACHE
+	bool "Tout recompiler (--no-cache, .deb refaits)"
+	depends on BUILDS_IMAGE
+	help
+	  build.sh / build-iso.sh --no-cache : ni le cache BuildKit ni le
+	  cache .deb de l'hote ne sont reutilises.
+
+# ── 3. Modules (selon la cible) ──────────────────────────────────────────────
+source "kconfig/Kconfig.docker"
+source "kconfig/Kconfig.iso"
+source "kconfig/Kconfig.native"
+# ── 4. Le demarrage du banc dans la cible ────────────────────────────────────
+comment "--- Demarrage du banc (defauts de start.sh --configure dans la cible) ---"
+
+config START_DEFAULT_ISOLATION
+	bool "Isolation des cpus par defaut (c54x_exe/isoler.sh)"
+	default y
+	help
+	  Le defaut de "Isolation des cpus" dans start.sh --configure sur la
+	  cible (lu dans /etc/osmocom/build.config). start.sh l'applique aussi
+	  sans menu (--no-isolation pour s'en passer).
+
+config START_DEFAULT_MULTITHREADING
+	bool "c54x_exe multi-coeur par defaut"
+	default y
+
+# ── 5. Les parametres du banc (globals.conf) : defauts de la cible ──────────
+source "kconfig/generated/Kconfig.params"
+
+source "kconfig/Kconfig.advanced"
+source "kconfig/Kconfig.paths"

@@ -205,6 +205,12 @@ ${B}LA BASE${N}
                             Armbian (orangepi5-max,rpi4b...)       ${D}[${ISO_ARM_BOARD:-all}]${N}
   ${C}--arch=amd64${N}              le defaut.
 
+${B}MODULES ET GROUPES${N} ${D}(tools/features.conf ; make tree pour les arbres)${N}
+  ${C}--modules=a,b${N}             modules facultatifs a executer         ${D}[all]${N}
+  ${C}--skip=a,b${N}                modules a laisser de cote ; ce qui en depend suit
+  ${C}--without=lte,grgsm${N}       groupes de l'image docker laisses de cote (et les
+                            modules qui en dependent : lte -> lte-pmos)
+
   ${C}-h, --help${N}                ceci.
 
 ${B}Equivalents en variables${N} (pour la CI, ou un environnement sans ligne de commande) :
@@ -263,6 +269,14 @@ for arg in "$@"; do case "$arg" in
     --arm|--arch=arm64) ISO_ARCH=arm64 ;;
     --board=*)      ISO_ARM_BOARD="${arg#*=}" ;;
     --arch=amd64)   ISO_ARCH=amd64 ;;
+    # Optional modules and docker groups (tools/features.conf, build-iso.sh)
+    --modules=*)    export OSMO_ISO_MODULES="${arg#*=}" ;;
+    --skip=*)       export OSMO_ISO_SKIP="${OSMO_ISO_SKIP:+$OSMO_ISO_SKIP,}${arg#*=}" ;;
+    --without=*|--with=*)
+                    _v=1; [[ "$arg" == --without=* ]] && _v=0
+                    # components, aliases (grgsm, web, reticulum, 4g) or all
+                    _gl="$(. "$DIR/tools/features.sh"; feat_load; feat_expand "${arg#*=}")" || exit 2
+                    for _g in $_gl; do export "OSMO_WITH_${_g^^}=$_v"; done ;;
     --arch=*)       echo -e "${RED}--arch : amd64 ou arm64 (recu : ${arg#*=})${NC}" >&2; exit 2 ;;
 esac; done
 

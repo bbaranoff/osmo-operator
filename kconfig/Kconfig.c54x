@@ -1,0 +1,31 @@
+# kconfig/Kconfig.c54x - cible c54x_exe (make c54x_exe)
+
+config HAVE_LIBOSMOCODING
+	def_bool $(success,pkg-config --exists libosmocoding libosmocore)
+
+comment "*** libosmocoding absent : apt install libosmocore-dev ***"
+	depends on !HAVE_LIBOSMOCODING
+
+config C54X_ROM
+	bool "Recuperer les ROM DSP 3606 (FreeCalypso, SHA-256)"
+	default y
+	help
+	  make c54x_exe-rom : tools/freecalypso-fetch.sh puis
+	  rom/fetch-rom.sh, decoupee dans le repertoire des ROM (Chemins).
+
+config C54X_NATIVE
+	bool "-march=native (plus rapide, binaire NON portable)"
+	help
+	  Le binaire peut faire SIGILL sur un autre processeur.
+
+comment "--- Outils en plus ---"
+
+config C54X_TOOL_ISA_TEST
+	bool "isa_test"
+
+config C54X_TOOL_DSP_TESTER
+	bool "dsp_tester"
+
+config C54X_TOOL_LAYER1_TESTER
+	bool "layer1_tester"
+

@@ -96,6 +96,9 @@ if [ "$DSP_BANC" = 1 ]; then
     # otherwise FBSB fails in a loop in the multi-operator containers.
     _cfg_pont="$(dirname "$BANC_DSP")/mobile_pont.cfg"
     _arfcn_pont="${PLAN_ARFCN:-${MS_ARFCN1:-${ARFCN:-1}}}"
+    # Rewritten only by start.sh --configure (conf_ecrasable): a plain start
+    # leaves mobile_pont.cfg as it is.
+    conf_ecrasable "$_cfg_pont" || { conf_garde "$_cfg_pont" "stick et SIM du mobile du banc DSP"; _cfg_pont=/nonexistent; }
     if [ -w "$_cfg_pont" ] && [[ "$_arfcn_pont" =~ ^[0-9]+$ ]]; then
         sed -i "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${_arfcn_pont}|" "$_cfg_pont"
     fi

@@ -1,0 +1,44 @@
+# kconfig/Kconfig.advanced - options avancees
+
+menu "Options avancees"
+	depends on BUILDS_IMAGE
+
+choice
+	prompt "Moteur de build"
+	default BACKEND_BAKE
+
+config BACKEND_BAKE
+	bool "docker buildx bake : une session BuildKit, images en parallele"
+config BACKEND_COMPOSE
+	bool "docker compose build : une image apres l'autre"
+config BACKEND_DOCKER
+	bool "docker build : sans compose ni bake"
+
+endchoice
+
+config BACKEND
+	string
+	default "compose" if BACKEND_COMPOSE
+	default "docker" if BACKEND_DOCKER
+	default "bake"
+
+choice
+	prompt "Sortie BuildKit"
+	default PROGRESS_AUTO
+
+config PROGRESS_AUTO
+	bool "auto : repliee (tty)"
+config PROGRESS_PLAIN
+	bool "plain : tout le journal des etapes"
+
+endchoice
+
+config PROGRESS
+	string
+	default "plain" if PROGRESS_PLAIN
+	default "auto"
+
+config UBUNTU_MIRROR
+	string "Miroir Ubuntu (vide = le plus rapide, mesure)"
+
+endmenu

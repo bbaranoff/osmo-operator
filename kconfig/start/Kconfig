@@ -1,0 +1,472 @@
+# kconfig/start/Kconfig - start.sh --configure : le demarrage du banc
+# =============================================================================
+# Lu par le mconf du noyau (tools/kconfig/linux) depuis la racine du depot.
+# Les choix suivent ce qui a ete CONSTRUIT (le .config du build embarque :
+# /etc/osmocom/build.config) et ce qui est PRESENT sur cette machine :
+# kconfig/start/gen-start.sh -> kconfig/start/generated/.
+# tools/start-config.sh traduit le .config obtenu en options de start.sh.
+# =============================================================================
+
+mainmenu "osmo-operator - demarrage du banc (start.sh)"
+
+source "kconfig/Kconfig.include"
+source "kconfig/start/generated/Kconfig.build"
+
+# ── 1. Lanceur ───────────────────────────────────────────────────────────────
+choice
+	prompt "Lanceur"
+	default LAUNCH_NATIVE
+	help
+	  Natif : startup_scripts/ puis run.sh et le banc DSP, sur cette
+	  machine (ISO, installation native). Docker : le banc en conteneurs
+	  (launch/start-docker.sh), seulement les options qu'il comprend.
+
+config LAUNCH_NATIVE
+	bool "Natif (start.sh, run.sh, c54x_exe)"
+
+config LAUNCH_DOCKER
+	bool "Docker (start.sh --docker -> launch/start-docker.sh)"
+	depends on HAVE_DOCKER && HAVE_START_DOCKER
+
+endchoice
+
+# ── 2. Couche 1 et chaine Calypso ────────────────────────────────────────────
+comment "--- Couche 1 et chaine Calypso ---"
+	depends on LAUNCH_NATIVE
+
+if LAUNCH_NATIVE
+
+choice
+	prompt "Couche 1 du banc"
+	default L1_DSP
+
+config L1_DSP
+	bool "DSP C54x hors QEMU, mask-ROM TI (--dsp)"
+	depends on HAVE_C54X_EXE
+	help
+	  Le TMS320C54x tourne hors QEMU (c54x_exe) et decode lui-meme
+	  FCCH/SCH/BCCH. La chaine Calypso (qemu, pty, osmocon, mobile) est
+	  celle de c54x_exe/run.sh.
+
+config L1_GRGSM
+	bool "gr-gsm dans QEMU + pont grgsm_exe (--grgsm)"
+	depends on BUILT_GRGSM_EXE && HAVE_GRGSM_EXE
+	help
+	  N'existe que si grgsm_exe a ete construit (et donc GNU Radio).
+
+endchoice
+
+config DSP_MULTITHREADING
+	bool "c54x_exe multi-coeur (--multithreading)"
+	default BUILD_DEFAULT_MULTITHREADING
+	depends on L1_DSP
+
+config ISOLATION
+	bool "Isolation des cpus (c54x_exe/isoler.sh on)"
+	default BUILD_DEFAULT_ISOLATION
+	depends on HAVE_ISOLER
+	help
+	  La chaine, qosmo, le pont et le coeur de reseau sur leurs coeurs
+	  reserves, le bureau sur le reste. Decoche : --no-isolation (les
+	  nice restent). Par defaut : celui du build (START_DEFAULT_ISOLATION).
+
+choice
+	prompt "QEMU : -icount"
+	default ICOUNT_OFF
+
+config ICOUNT_OFF
+	bool "sans"
+config ICOUNT_AUTO
+	bool "--icount (auto)"
+config ICOUNT_CUSTOM
+	bool "--icount=SPEC"
+
+endchoice
+
+config ICOUNT_SPEC
+	string "SPEC de -icount"
+	default "shift=auto"
+	depends on ICOUNT_CUSTOM
+
+config ASSEMBLY_LOGS
+	bool "Trace asm de l'ARM emule (--assembly-logs)"
+
+config QOSMO_LAUNCHER
+	string "Lanceur C de QEMU (--launcher, vide = /usr/local/bin/qosmo)"
+
+endif
+
+# ── 3. BTS#0 ─────────────────────────────────────────────────────────────────
+comment "--- Station de base BTS#0 ---"
+	depends on LAUNCH_NATIVE && L1_DSP
+
+if LAUNCH_NATIVE && L1_DSP
+
+choice
+	prompt "BTS#0"
+	default BTS_CLASSIC
+
+config BTS_CLASSIC
+	bool "classique : osmo-bts-trx + pont_dsp.py (--bts-classic)"
+
+config BTS_CALYPSO_TRX
+	bool "le Calypso de QEMU est le TRX (--bts)"
+	depends on BUILT_TRANSCEIVER && HAVE_TRANSCEIVER && HAVE_TRX_FW
+	help
+	  Firmware trx.highram.elf + transceiver (osmocom-bb, composant
+	  transceiver du build) a la place du mobile et du pont.
+
+endchoice
+
+choice
+	prompt "Intervalles de temps du TRX Calypso (--ts)"
+	depends on BTS_CALYPSO_TRX
+	default TS_2_1
+
+config TS_2_1
+	bool "2/1 : TS0 + TS1 par un seul Calypso (appel audible)"
+config TS_1
+	bool "1 : TS0 seul (pas d'appel)"
+config TS_2
+	bool "2 : un Calypso par intervalle (appels KO, fn non aligne)"
+
+endchoice
+
+config MS_AIR
+	bool "Un mobile par l'air (2e Calypso, --ms)"
+	depends on BTS_CALYPSO_TRX
+	default y
+
+endif
+
+# ── 4. Le telephone emule (MS#1) ─────────────────────────────────────────────
+comment "--- Telephone emule (MS#1) ---"
+	depends on LAUNCH_NATIVE
+
+if LAUNCH_NATIVE
+
+source "kconfig/start/generated/Kconfig.firmware"
+
+choice
+	prompt "Client de couche 2 (a la place de mobile)"
+	depends on FW_LAYER1 && L1_DSP
+	default L2_MOBILE
+	help
+	  Un seul client sur la socket L1CTL (c54x_exe/run.sh, etape 4).
+
+config L2_MOBILE
+	bool "mobile : pile L2/L3 complete (--mobile)"
+config L2_CCCH_SCAN
+	bool "ccch_scan : ecoute du CCCH, GSMTAP (--ccch_scan)"
+	depends on BUILT_BURST_IND && HAVE_CCCH_SCAN
+config L2_BCCH_SCAN
+	bool "bcch_scan : releve des BCCH (--bcch_scan)"
+	depends on BUILT_BURST_IND && HAVE_BCCH_SCAN
+config L2_CELL_LOG
+	bool "cell_log : journal de cellules (--cell_log)"
+	depends on BUILT_BURST_IND && HAVE_CELL_LOG
+
+endchoice
+
+choice
+	prompt "Vocodeur"
+	depends on L1_DSP && !FW_APP_LIST
+	default VOC_ROM
+
+config VOC_ROM
+	bool "le codec FR de la mask-ROM du DSP (--vocoder-rom)"
+config VOC_GAPK
+	bool "osmo-gapk sur l'hote (--gapk)"
+	depends on BUILT_GAPK && HAVE_GAPK && FW_LAYER1
+
+endchoice
+
+choice
+	prompt "SIM"
+	default SIM_TEST
+
+config SIM_TEST
+	bool "la SIM de test du mobile (--no-sap)"
+config SIM_SAP_AUTO
+	bool "SAP : la carte du lecteur, sinon la SIM logicielle (--sap)"
+	depends on HAVE_SOFTSIM
+config SIM_SAP_PCSC
+	bool "SAP : la carte du lecteur PC/SC (--sap=pcsc)"
+	depends on HAVE_SOFTSIM
+config SIM_SAP_SIM
+	bool "SAP : la SIM logicielle sim-op1.xml (--sap=sim)"
+	depends on HAVE_SOFTSIM
+
+endchoice
+
+config C123_WINDOW
+	bool "Fenetre du telephone (tools/osmo-c123-gtk.py)"
+	depends on HAVE_GTK
+	help
+	  La photo du telephone avec son ecran et son clavier emules,
+	  ouverte quand le banc est monte (il faut un affichage).
+
+choice
+	prompt "Skin"
+	depends on C123_WINDOW
+	default C123_SKIN_AUTO
+
+config C123_SKIN_AUTO
+	bool "auto (c139 avec Magnetite, sinon c123)"
+config C123_SKIN_C123
+	bool "Motorola C123"
+config C123_SKIN_C139
+	bool "Motorola C139"
+
+endchoice
+
+endif
+
+# Hidden: an app alone on the ARM (no mobile, no vocoder).
+config FW_APP_LIST
+	def_bool FIRMWARE_APP != ""
+
+# ── 5. Side-car et MS supplementaires ────────────────────────────────────────
+comment "--- Side-car BTS#1 et MS supplementaires ---"
+	depends on LAUNCH_NATIVE
+
+if LAUNCH_NATIVE
+
+config SIDECAR
+	bool "Side-car : BTS#1 fake_trx + MS#2 (sinon --no-sidecar)"
+	default y
+	depends on !LORA && HAVE_FAKE_TRX
+
+config MODEM_GPRS
+	bool "Modem GPRS sur le side-car (--gprs-modem)"
+	depends on SIDECAR
+
+config FLOTTE_FAKETRX
+	int "MS faketrx en plus sur la BTS#1 (0-9)"
+	range 0 9
+	default 0
+	depends on SIDECAR && HAVE_TRXCON && HAVE_MOBILE
+	help
+	  Le premier MS de fake_trx est implicite (MS#2 du side-car) ;
+	  chacun de ceux-ci est un --trx de plus, avec son trxcon, son
+	  mobile et son abonne (scripts/ms-flotte.sh).
+
+config FLOTTE_VIRTPHY
+	int "MS virtphy (osmo-bts-virtual, BTS 2) (0-9)"
+	range 0 9
+	default 0
+	depends on HAVE_VIRTPHY && HAVE_BTS_VIRTUAL && HAVE_MOBILE
+	help
+	  Une cellule virtuelle (BTS 2 du BSC, GSMTAP multicast sur lo) et
+	  N mobiles sur virtphy, avec leurs abonnes (scripts/ms-flotte.sh).
+	  Se combine avec tout le reste.
+
+comment "MS QEMU : le MS#1 ; en --bts, + le mobile par l'air (pont/air.py relie 2 Calypso)"
+
+endif
+
+# ── 6. Les modules de run.sh ─────────────────────────────────────────────────
+comment "--- Modules du plan run.sh (run_modules) ---"
+	depends on LAUNCH_NATIVE
+
+if LAUNCH_NATIVE
+
+source "kconfig/start/generated/Kconfig.runmods"
+
+endif
+
+# ── 7. Voix ──────────────────────────────────────────────────────────────────
+config HR
+	bool "Voix half-rate TCH/H (--hr, transcodeur HR <-> FR)"
+	depends on LAUNCH_NATIVE && BUILT_GAPK && HAVE_GAPK
+	help
+	  Le transcodeur (tools/osmo-hr-transcodeur.py) utilise osmo-gapk
+	  compile avec --enable-gsmhr : composant gapk du build.
+
+# ── 8. LoRa ──────────────────────────────────────────────────────────────────
+config LORA
+	bool "LoRa : la voix inter-noeuds en RF (--lora)"
+	depends on LAUNCH_NATIVE && (BUILT_RNS || BUILT_TNCATTACH)
+	help
+	  RNode Heltec V3. Ajoute --wan, --node N, --no-sidecar et la table
+	  1:10.99.0.1 / 2:10.99.0.2 ; la signalisation reste sur wg0.
+	  wiki/LoRa.md.
+
+if LORA
+
+choice
+	prompt "Noeud LoRa"
+	default LORA_NODE_1
+config LORA_NODE_1
+	bool "1 (prioritaire)"
+config LORA_NODE_2
+	bool "2"
+endchoice
+
+config LORA_PORT
+	string "Port serie du RNode (vide = auto)"
+
+choice
+	prompt "Plan LoRa"
+	default LORA_MODE_VOICE
+config LORA_MODE_VOICE
+	bool "voix en RF : trames GSM brutes dans les trames du RNode"
+	depends on BUILT_RNS
+config LORA_MODE_IP
+	bool "ancien plan : RTP + SMS en IP sur tnc0 (LORA_MODE=ip)"
+	depends on BUILT_TNCATTACH && HAVE_TNCATTACH
+endchoice
+
+choice
+	prompt "Talkie"
+	depends on LORA_MODE_VOICE
+	default LORA_PTT_MANUAL
+config LORA_PTT_MANUAL
+	bool "manuel : take / release dans le VTY du mobile"
+config LORA_PTT_AUTO
+	bool "auto (VOX)"
+endchoice
+
+endif
+
+# ── 9. Noeud et WAN ──────────────────────────────────────────────────────────
+comment "--- Noeud, inter-STP et WAN ---"
+
+config NODE
+	int "Numero de CE noeud (0 = deduit)"
+	range 0 9
+	default 0
+	depends on !LORA
+
+config OP
+	int "Operateur porte par ce noeud (--op)"
+	range 1 9
+	default 1
+	depends on LAUNCH_NATIVE
+
+config HUB_IP
+	string "Inter-STP a joindre (--hub-ip, vide = defaut)"
+
+choice
+	prompt "Inter-STP sur ce noeud"
+	depends on LAUNCH_NATIVE
+	default INTERSTP_AUTO
+config INTERSTP_AUTO
+	bool "auto (avec --wan)"
+config INTERSTP_FORCE
+	bool "toujours (--interstp)"
+config INTERSTP_NO
+	bool "jamais (--no-interstp)"
+endchoice
+
+config WAN
+	bool "WAN entre noeuds (--wan)"
+	depends on !LORA
+
+if WAN
+
+choice
+	prompt "Table WAN"
+	default WAN_ASK
+config WAN_ASK
+	bool "questions au demarrage (--wan)"
+config WAN_TABLE
+	bool "donnee ici (--wan-nodes)"
+config WAN_FILES
+	bool "fiches des autres noeuds (--wan mynodeN.conf ...)"
+	depends on LAUNCH_NATIVE
+endchoice
+
+config WAN_NODES
+	string "Noeuds \"N:IP:IND ...\""
+	depends on WAN_TABLE
+
+config WAN_FILE_LIST
+	string "Fiches, separees par des espaces"
+	depends on WAN_FILES
+
+config WAN_ID
+	int "Numero du noeud local (0 = deduit des IP)"
+	range 0 9
+	default 0
+
+config WAN_CONF
+	string "Table a lire/ecrire (vide = /etc/osmo-wan.conf)"
+
+config WAN_REGEN
+	bool "Reconstruire la table de zero (--regen-conf)"
+	depends on LAUNCH_NATIVE
+
+choice
+	prompt "Texte des SMS par radio ISM (--payload-ism)"
+	depends on LAUNCH_NATIVE
+	default ISM_NONE
+config ISM_NONE
+	bool "non"
+config ISM_SECTION
+	bool "oui, section [payload] deja ecrite"
+config ISM_SERIAL
+	bool "serial"
+config ISM_EXEC
+	bool "exec"
+config ISM_FIFO
+	bool "fifo"
+config ISM_LOOPBACK
+	bool "loopback"
+endchoice
+
+config AIR_MESH
+	bool "Maillage des bursts entre noeuds (--air-mesh)"
+	depends on LAUNCH_NATIVE
+
+config AIR_MESH_PORT
+	int "Port (0 = defaut)"
+	default 0
+	depends on AIR_MESH
+
+endif
+
+config VIRTUALBOX
+	int "VM VirtualBox reliees en WAN (--virtualbox=N, 0 = non)"
+	range 0 9
+	default 0
+	depends on HAVE_VBOX && !LORA
+
+config VBOX_NODE
+	int "Noeud porte par cette machine (--vbox-node)"
+	range 1 9
+	default 1
+	depends on VIRTUALBOX != 0
+
+config OPERATORS
+	int "Operateurs en conteneurs (--operators, 0 = defaut)"
+	range 0 9
+	default 0
+	depends on LAUNCH_DOCKER
+
+
+# ── Les parametres du banc (globals.conf) ───────────────────────────────────
+# Defauts : ceux du build (build.config), sinon le globals.conf de cette
+# machine. A l'enregistrement de --configure, ils sont ecrits dans
+# globals.conf (tools/osmo-db.py globals-depuis-config) ; un start.sh normal
+# ne fait que le lire. osmo-egprs-web les modifie aussi (meme fichier).
+source "kconfig/start/generated/Kconfig.params"
+
+# ── 10. Divers ───────────────────────────────────────────────────────────────
+comment "--- Divers ---"
+	depends on LAUNCH_NATIVE
+
+if LAUNCH_NATIVE
+
+config REGEN
+	bool "Regenerer les configs depuis les gabarits (--regen)"
+config FORCE
+	bool "Relancer meme les modules deja demarres (--force)"
+config VERBOSE
+	bool "Sortie des modules (--verbose)"
+config NO_ATTACH
+	bool "Ne pas s'attacher a tmux (--no-attach)"
+config DRY_RUN
+	bool "Derouler sans effet de bord (--dry-run)"
+
+endif

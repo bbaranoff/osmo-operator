@@ -21,6 +21,8 @@ DSP_MODULES_RETIRES="qemu,pty,osmocon,l2"
 # with it the DSP bridge logged "horloge lente (x1.6)" and MS#1 lost the cell.
 SIDECAR_MODULES="sidecar-cfg,sidecar-faketrx,sidecar-bts,sidecar-pcu,sidecar-trxcon,sidecar-mobile,modem-trxcon,modem-gprs"
 [ "${NO_SIDECAR:-0}" = 1 ] && DSP_MODULES_RETIRES="$DSP_MODULES_RETIRES,$SIDECAR_MODULES"
+# RUN_SKIP (start.sh --config: the run.sh modules unchecked in the menu).
+[ -n "${RUN_SKIP:-}" ] && DSP_MODULES_RETIRES="$DSP_MODULES_RETIRES,$RUN_SKIP"
 : "${BANC_DSP:=$GSM_ROOT/c54x_exe/run.sh}"
 # Multithreading (default; --no-multithreading turns it off): c54x_exe --plan
 # runs its jobs one process per CPU core (src/multi.c). Off = COEURS=1, read by

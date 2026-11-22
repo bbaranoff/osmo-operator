@@ -282,7 +282,11 @@ RUN_ARGS=()
 RUN_ARGS+=(--profile "$CALYPSO_PROFILE")
 # --no-sidecar: run.sh keeps the LAST --skip; the DSP bench (14-demarrage.sh)
 # adds its own later, with SIDECAR_MODULES merged in (05-run-sh.sh).
-[ "${NO_SIDECAR:-0}" = 1 ] && RUN_ARGS+=(--skip "$SIDECAR_MODULES")
+# run.sh keeps only the LAST --skip: one list (side-car + RUN_SKIP of the menu).
+_run_skip="$([ "${NO_SIDECAR:-0}" = 1 ] && echo "$SIDECAR_MODULES")"
+[ -n "${RUN_SKIP:-}" ] && _run_skip="${_run_skip:+$_run_skip,}$RUN_SKIP"
+[ -n "$_run_skip" ] && RUN_ARGS+=(--skip "$_run_skip")
+unset _run_skip
 # --restart goes into RUN_ARGS, where it is visible in --dry-run and in the
 # line printed just before the exec.
 # CALYPSO_NO_RESTART=1 to start without resetting.

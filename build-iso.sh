@@ -72,4 +72,52 @@ MODDIR="$DIR/iso_modules"
 [ -d "$MODDIR" ] || { echo -e "${RED}iso_modules/ introuvable a cote de $0${NC}" >&2; exit 2; }
 shopt -s nullglob; _ISO_MODS=("$MODDIR"/[0-9][0-9]-*.sh); shopt -u nullglob
 [ "${#_ISO_MODS[@]}" -gt 0 ] || { echo -e "${RED}iso_modules/ est vide${NC}" >&2; exit 2; }
-for _m in "${_ISO_MODS[@]}"; do . "$_m"; done
+
+# ── Optional modules (tools/features.conf, the menu, --modules/--skip) ───────
+# OSMO_ISO_MODULES = all (default) or the list of optional modules to run;
+# OSMO_ISO_SKIP = modules to leave out. The docker groups switched off
+# (OSMO_WITH_LTE=0...) count as deselected too. Dependencies are closed over:
+# leaving out a module leaves out what depends on it (88-lte-pmos without
+# 82-services...). Mandatory modules (kind core) always run; a module absent
+# from the table (82-arm-natif, 92-rpi-image) is treated as mandatory.
+# Resolved once 00-options has parsed the command line; exported, so the
+# re-executed passes of --all inherit the same selection.
+. "$DIR/tools/features.sh"; feat_load
+iso_modules_resolve() {
+    local want="${OSMO_ISO_MODULES:-all}" g s
+    want="${want//,/ }"
+    # Requested modules pull in what they depend on (Kconfig "select")...
+    _ISO_SEL="$(feat_norm "$(feat_ids docker | xargs)")"
+    if [ "$want" = all ]; then _ISO_SEL="$(feat_norm all)"
+    else for g in $want; do _ISO_SEL="$(feat_on "$_ISO_SEL" "$g")"; done; fi
+    # ...then the docker groups switched off take their dependents with them.
+    local on; on="$(feat_docker_from_env)"
+    for g in $(feat_ids docker); do
+        feat_has "$on" "$g" || _ISO_SEL="$(feat_off "$_ISO_SEL" "$g")"
+    done
+    local skip="${OSMO_ISO_SKIP:-}"
+    for s in ${skip//,/ }; do _ISO_SEL="$(feat_off "$_ISO_SEL" "$s")"; done
+    local closed; closed="$(feat_close "$_ISO_SEL")"
+    local lost; lost="$(feat_dropped "$_ISO_SEL" "$closed" | xargs)"
+    [ -n "$lost" ] && echo -e "${YELLOW}modules retires (dependance absente) : ${lost}${NC}"
+    _ISO_SEL="$closed"
+    export OSMO_ISO_MODULES="$(for g in $_ISO_SEL; do [ "${FEAT_KIND[$g]}" = iso ] && echo "$g"; done | xargs)"
+    OSMO_ISO_SKIP=""; export OSMO_ISO_SKIP
+    local off; off="$(for g in $(feat_ids iso); do feat_has "$_ISO_SEL" "$g" || echo "$g"; done | xargs)"
+    [ -n "$off" ] && echo -e "  ${CYAN}modules laisses de cote :${NC} ${off}"
+    return 0
+}
+_ISO_SEL=""
+for _m in "${_ISO_MODS[@]}"; do
+    _slug="$(basename "$_m" .sh)"; _slug="${_slug#[0-9][0-9]-}"
+    if [ "$_slug" != options ]; then
+        [ -n "$_ISO_SEL" ] || iso_modules_resolve
+        if [ "${FEAT_KIND[$_slug]:-core}" = iso ] && ! feat_has "$_ISO_SEL" "$_slug"; then
+            # 10-clavier left out: 80-chroot and 83-espace-ram read OSMO_ISO_KB
+            # without a default (set -u).
+            [ "$_slug" = clavier ] && : "${OSMO_ISO_KB:=fr}" && export OSMO_ISO_KB
+            continue
+        fi
+    fi
+    . "$_m"
+done

@@ -1,0 +1,4 @@
+# images SD arm64 operator (Raspberry Pi 4 et Orange Pi 5)
+CONFIG_ARCH_ARM64=y
+CONFIG_TARGET_SD=y
+CONFIG_ISO_IMAGE_OPERATOR=y

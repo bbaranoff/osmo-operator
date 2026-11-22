@@ -311,7 +311,11 @@ start_sap() {
     # In DSP: the "sim sap" copy of mobile_pont.cfg, for the bench only.
     if [ "${DSP_BANC:-0}" = 1 ]; then
         local _src="${MOBILE_CFG:-$(dirname "$BANC_DSP")/mobile_pont.cfg}" _dst="$BB_DIR/mobile_pont_sap.cfg"
-        if [ -r "$_src" ]; then
+        if [ -r "$_dst" ] && ! conf_ecrasable "$_dst"; then
+            conf_garde "$_dst" "copie sim sap du MS#1"
+            SAP_DSP_MOBILE_CFG="$_dst"
+            detail="$detail ; MS#1 $_dst"
+        elif [ -r "$_src" ]; then
             sed -e "s#^\([[:space:]]*\)sim \(test\|reader\)\$#\1sim sap#" \
                 -e "s|^\([[:space:]]*\)sap-socket .*|\1sap-socket $sock|" \
                 -e "s|^\([[:space:]]*\)stick [0-9]*\$|\1stick ${PLAN_ARFCN:-${ARFCN:-1}}|" "$_src" > "$_dst.tmp" \

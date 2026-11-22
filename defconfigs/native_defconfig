@@ -1,0 +1,3 @@
+# installation native complete sur cet hote (install.sh)
+CONFIG_TARGET_NATIVE=y
+CONFIG_NATIVE_INSTALL=y

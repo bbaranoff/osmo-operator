@@ -1,0 +1,19 @@
+# kconfig/Kconfig.include - macros, as in the kernel's scripts/Kconfig.include
+# =============================================================================
+# Evaluated by kconfiglib when the Kconfig tree is parsed (menuconfig,
+# defconfig, olddefconfig...): they probe the HOST that configures, not the
+# one that will build. A missing tool only hides or flags an option; build.sh
+# installs most of them itself.
+
+# $(if-success,<command>,<then>,<else>)
+if-success = $(shell,{ $(1); } >/dev/null 2>&1 && echo "$(2)" || echo "$(3)")
+# $(success,<command>) -> y if the command succeeds, n otherwise
+success = $(if-success,$(1),y,n)
+# $(failure,<command>) -> the opposite
+failure = $(if-success,$(1),n,y)
+
+# Architecture of the host (dpkg), default of the "Architecture" choice.
+HOST_ARCH := $(shell,dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+
+# A literal $ in a string: $(dollar) (the preprocessor has no $$).
+dollar := $

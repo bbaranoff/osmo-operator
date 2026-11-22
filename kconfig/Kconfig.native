@@ -1,0 +1,57 @@
+# kconfig/Kconfig.native - cible native : install.sh, c54x_exe, .deb
+
+comment "--- Natif : ce qui est fait sur cet hote ---"
+	depends on TARGET_NATIVE
+
+if TARGET_NATIVE
+
+config NATIVE_INSTALL
+	bool "Installation native (install.sh, install_modules/)"
+	default y
+	help
+	  L'installation modulaire sur l'hote : paquets (extraits du
+	  Dockerfile), sources, correctifs, compilation, configs, bureau.
+	  Chaque etape est un module ; une etape decochee est passee a
+	  install.sh --skip, et ce qui en depend disparait du menu.
+
+if NATIVE_INSTALL
+
+config NATIVE_REINSTALL
+	bool "Tout rejouer, meme ce qui est deja installe (--reinstall)"
+
+source "kconfig/generated/Kconfig.native"
+
+endif
+
+config NATIVE_C54X
+	bool "c54x_exe : le DSP Calypso hors QEMU (make c54x_exe)"
+	help
+	  Compile c54x_exe sur l'hote (clone s'il manque). Il faut gcc,
+	  pkg-config et libosmocore-dev (libosmocoding) ; voir
+	  doc/c54x_exe-depuis-ubuntu-vierge.md.
+
+if NATIVE_C54X
+source "kconfig/Kconfig.c54x"
+endif
+
+config NATIVE_DEBS
+	bool ".deb du banc (make debs)"
+	help
+	  Les paquets du banc (packaging/build-debs.sh) et, en option, ceux
+	  de la pile (osmo-build-*) et leur publication en release GitHub,
+	  qui sert aussi de depot apt aux ISO.
+
+if NATIVE_DEBS
+source "kconfig/Kconfig.debs"
+endif
+
+endif
+
+# Used by Kconfig.debs outside this menu.
+config DEBS_RELEASE_TAG
+	string "Tag de la release GitHub (depot apt)"
+	default "debs-banc"
+	depends on DEBS_RELEASE || ISO_MOD_APT_RELEASE
+	help
+	  Tag roulant : la release est aussi le depot apt des ISO
+	  (iso_modules/89-apt-release.sh).

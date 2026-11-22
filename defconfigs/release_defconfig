@@ -1,0 +1,5 @@
+# natif : les .deb du banc + publication en release GitHub (depot apt)
+CONFIG_TARGET_NATIVE=y
+# CONFIG_NATIVE_INSTALL is not set
+CONFIG_NATIVE_DEBS=y
+CONFIG_DEBS_RELEASE=y

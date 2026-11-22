@@ -1,0 +1,4 @@
+# natif : les .deb du banc
+CONFIG_TARGET_NATIVE=y
+# CONFIG_NATIVE_INSTALL is not set
+CONFIG_NATIVE_DEBS=y

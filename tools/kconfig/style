@@ -1,0 +1,1 @@
+path=fg:white,bg:blue,bold separator=fg:yellow,bg:blue,bold list=fg:black,bg:white selection=fg:white,bg:blue,bold inv-list=fg:red,bg:white inv-selection=fg:yellow,bg:red,bold help=path show-help=fg:blue,bg:white frame=fg:yellow,bg:blue,bold body=fg:white,bg:blue edit=fg:white,bg:black jump-edit=edit text=list

@@ -1,0 +1,44 @@
+# kconfig/Kconfig.debs - cible debs (make debs / release)
+
+config HAVE_GH
+	def_bool $(success,command -v gh)
+
+config HAVE_DPKG_SCANPACKAGES
+	def_bool $(success,command -v dpkg-scanpackages)
+
+comment "--- Paquets du banc (packaging/build-debs.sh) ---"
+
+config DEBS_PKG_OSMO_OPERATOR
+	bool "osmo-operator"
+	default y
+
+config DEBS_PKG_PONT
+	bool "pont"
+	default y
+
+config DEBS_PKG_QEMU_CALYPSO
+	bool "qemu-calypso"
+	default y
+
+config DEBS_PKG_CALYPSO_FIRMWARE
+	bool "calypso-firmware"
+	default y
+
+
+config DEBS_IMAGE
+	bool "+ les .deb de la pile (osmo-build-*, bake debs, long)"
+
+comment "*** Publication : gh (GitHub CLI) absent ***"
+	depends on !HAVE_GH
+
+comment "*** Publication : dpkg-scanpackages absent (apt install dpkg-dev) ***"
+	depends on !HAVE_DPKG_SCANPACKAGES
+
+config DEBS_RELEASE
+	bool "Publier en release GitHub (depot apt)"
+	depends on HAVE_GH && HAVE_DPKG_SCANPACKAGES
+	help
+	  make release : les .deb du banc et ceux des groupes facultatifs
+	  (cache .deb de l'hote), index apt plat, SHA256SUMS ; refuse tout
+	  paquet contenant la ROM DSP TI.
+

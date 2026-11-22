@@ -1,0 +1,3 @@
+# les quatre ISO amd64 (interstp, operator, lite, desktop)
+CONFIG_TARGET_ISO_LIVE=y
+CONFIG_ISO_IMAGE_ALL=y

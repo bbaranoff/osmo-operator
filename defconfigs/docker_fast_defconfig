@@ -1,0 +1,3 @@
+# build rapide osmocom-nitb : les .deb de la release
+CONFIG_TARGET_DOCKER=y
+CONFIG_DOCKER_FAST=y

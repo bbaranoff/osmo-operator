@@ -360,6 +360,8 @@ ms_sim_mode() {
 }
 generate_mobile_cfg() {
     local dest="$1" vty_port="$2" l2sock="$3" sapsock="$4" arfcn="$5" imsi="$6" ki="$7"
+    # An existing mobile config is kept: only start.sh --configure rewrites it.
+    if ! conf_ecrasable "$dest"; then conf_garde "$dest" "config du mobile"; return 0; fi
     # ALSA devices PER MOBILE. The template carries gsm_out/gsm_in for
     # everybody; keeping that would put both mobiles on the same sink and the
     # same source, i.e. the audio loop (cf. /etc/asound.conf).

@@ -1,0 +1,4 @@
+# ISO desktop (GNOME, Calamares) avec osmo-banc au demarrage
+CONFIG_TARGET_ISO_LIVE=y
+CONFIG_ISO_IMAGE_DESKTOP=y
+CONFIG_ISO_BANC=y

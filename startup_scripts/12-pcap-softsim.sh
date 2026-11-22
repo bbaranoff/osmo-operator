@@ -386,7 +386,9 @@ if [ "$ACTION" = "start" ] && [ "$WAN_MESH" -ne 1 ]; then
             _nconf="${OSMOCOM_CFG:-/etc/osmocom}/mynode$(( _rctx / 1000 )).conf"
             [ -r "$_nconf" ] && STP_LOCAL_IP="$(awk -F= '/^OSMO_NODE_IP=/{gsub(/[ \r\t]/,"",$2);v=$2} END{print v}' "$_nconf" 2>/dev/null)"
         fi
-        if [ -n "$STP_LOCAL_IP" ] && [ "$STP_LOCAL_IP" != "$_lo_now" ]; then
+        if [ -n "$STP_LOCAL_IP" ] && [ "$STP_LOCAL_IP" != "$_lo_now" ] && ! conf_ecrasable "$_stp_cfg"; then
+            conf_garde "$_stp_cfg" "local-ip ${_lo_now:-?} et non $STP_LOCAL_IP"
+        elif [ -n "$STP_LOCAL_IP" ] && [ "$STP_LOCAL_IP" != "$_lo_now" ]; then
             if [ "$DRY" -eq 1 ]; then
                 printf '  [dry-run] osmo-stp.cfg local-ip %s -> %s\n' "${_lo_now:-?}" "$STP_LOCAL_IP"
             else

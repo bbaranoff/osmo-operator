@@ -266,6 +266,22 @@ osmo_node_id() {
 #  Writes DEST/osmocom, DEST/asterisk and DEST/bb from configs/ and scripts/,
 #  then DEST/osmocom/radio-plan.env (the decided radio plan and PLMN, read by
 #  start-native.sh for the mobiles and the side-car) and sms-routing.conf.
+# bande_de ARFCN [PREFEREE] -> the GSM band containing this ARFCN. DCS1800 and
+# PCS1900 overlap (512-810): PREFEREE (BAND of globals.conf) decides there.
+# Empty when the ARFCN is in no band.
+bande_de() {
+    local a="$1" p="${2:-}"
+    [[ "$a" =~ ^[0-9]+$ ]] || return 0
+    if   [ "$a" -le 124 ] || { [ "$a" -ge 955 ] && [ "$a" -le 1023 ]; }; then echo GSM900
+    elif [ "$a" -ge 128 ] && [ "$a" -le 251 ]; then echo GSM850
+    elif [ "$a" -ge 259 ] && [ "$a" -le 293 ]; then echo GSM450
+    elif [ "$a" -ge 306 ] && [ "$a" -le 340 ]; then echo GSM480
+    elif [ "$a" -ge 438 ] && [ "$a" -le 511 ]; then echo GSM750
+    elif [ "$a" -ge 512 ] && [ "$a" -le 810 ] && [ "$p" = PCS1900 ]; then echo PCS1900
+    elif [ "$a" -ge 512 ] && [ "$a" -le 885 ]; then echo DCS1800
+    fi
+}
+
 apply_config_templates() {
     local dest=$1 container_ip=$2 gateway_ip=$3 op_id=$4
 
@@ -347,6 +363,13 @@ apply_config_templates() {
     # 518...) and inside the DCS1800 band (512-885). In a virtual medium
     # fake_trx pairs by frequency, so two cells on one ARFCN mix their bursts.
     local arfcn_bts1="${ARFCN_BTS1:-$(( 612 + op_id * 2 ))}"
+    # The band FOLLOWS the ARFCN (a BTS whose band does not contain its ARFCN
+    # is refused): BTS 0 and BTS 1 each get the band of their channel. BAND
+    # only chooses between DCS1800 and PCS1900, which overlap.
+    local band0 band1
+    band0="$(bande_de "$arfcn" "$BAND")"; band1="$(bande_de "$arfcn_bts1" "$BAND")"
+    [ -n "$band0" ] || { echo "generate_configs : ARFCN $arfcn dans aucune bande GSM" >&2; return 1; }
+    [ -n "$band1" ] || { echo "generate_configs : ARFCN_BTS1 $arfcn_bts1 dans aucune bande GSM" >&2; return 1; }
     # +2 on the main BTS step of 10: 6010/6012, 6020/6022...
     local ipa_unit_id_bts1="${IPA_UNIT_ID_BTS1:-$(( 6000 + op_id * 10 + 2 ))}"
     local bsic="${BSIC:-$(( (op_id * 7) % 64 ))}"
@@ -448,7 +471,8 @@ apply_config_templates() {
             -e "s|__BVCI__|${bvci}|g" -e "s|__NSEI__|${nsei}|g" -e "s|__NSVCI__|${nsvci}|g" \
             -e "s|__IMSI__|${imsi}|g" -e "s|__IMEI__|${imei}|g" -e "s|__KI__|${ki}|g" \
             -e "s|__SMS_SC__|${sms_sc}|g" -e "s|__HOST_IP__|${HOST_IP}|g" \
-            -e "s|__BAND__|${BAND}|g" -e "s|__SIM_ALGO__|${SIM_ALGO}|g" \
+            -e "s|__BAND_BTS0__|${band0}|g" -e "s|__BAND_BTS1__|${band1}|g" \
+            -e "s|__BAND__|${band1}|g" -e "s|__SIM_ALGO__|${SIM_ALGO}|g" \
             -e "s|__MS_MAX_POWER__|${MS_MAX_POWER}|g" \
             -e "s|__RXLEV_ACCESS_MIN__|${RXLEV_ACCESS_MIN}|g" \
             -e "s|__CELL_RESEL_HYST__|${CELL_RESEL_HYST}|g" \

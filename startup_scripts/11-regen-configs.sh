@@ -219,6 +219,14 @@ elif [ "${RUNTIME_ENV:-native}" = "docker" ]; then
     # them with the template values, and the interconnection would die.
     export OSMO_NO_REGEN=1
 else
+    # The run.sh modules that write configurations do it at EVERY run
+    # (qosmo run_modules/08-gabarits: /etc/osmocom, /etc/asterisk;
+    # 20-mobile-cfg: the mobile config): switched off as soon as the files
+    # exist. Without them (first start) they still create them.
+    if [ -f "${OSMOCOM_CFG:-/etc/osmocom}/osmo-bsc.cfg" ] && [ -f "${OSMOCOM_CFG:-/etc/osmocom}/osmo-msc.cfg" ]; then
+        export NO_GABARITS=1
+    fi
+    [ -n "${MOBILE_CFG:-}" ] && [ -f "$MOBILE_CFG" ] && export CALYPSO_SYNC_MOBILE_CFG=0
     # ON A VM without --regen: KEEP what is in place. The ISO generated these
     # files at build time, with the same recipe as regen_configs_natif;
     # redoing them at every start would change nothing and would overwrite

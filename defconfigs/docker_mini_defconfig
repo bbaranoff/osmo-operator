@@ -1,0 +1,8 @@
+# image Docker minimale : sans grgsm_exe (ni GNU Radio), 4G, pmOS, web (ni Node), LoRa
+CONFIG_TARGET_DOCKER=y
+# CONFIG_FEAT_GRGSM_EXE is not set
+# CONFIG_FEAT_LTE is not set
+# CONFIG_FEAT_PMBOOTSTRAP is not set
+# CONFIG_FEAT_EGPRS_WEB is not set
+# CONFIG_FEAT_TNCATTACH is not set
+# CONFIG_FEAT_RNS is not set

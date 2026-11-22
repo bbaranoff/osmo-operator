@@ -1,0 +1,51 @@
+# kconfig/Kconfig.paths - chemins (relatifs : depuis la racine du depot)
+
+menu "Chemins"
+
+comment "Relatif = depuis la racine du depot"
+
+config DEB_CACHE
+	string "Cache .deb de l'hote (OSMO_DEB_CACHE)"
+	default "/var/cache/osmo-debs"
+	depends on BUILDS_IMAGE || NATIVE_DEBS
+
+config FREECALYPSO_CACHE
+	string "Cache FreeCalypso (FREECALYPSO_CACHE)"
+	default ".cache/freecalypso"
+
+config ISO_WORK
+	string "Travail de build-iso.sh (OSMO_ISO_WORK ; pas un tmpfs)"
+	default "/var/tmp"
+	depends on TARGET_ISO
+
+config OUTPUT_DIR
+	string "Sortie des ISO"
+	default "."
+	depends on TARGET_ISO
+
+config C54X_DIR
+	string "Sources de c54x_exe (clone s'il est absent)"
+	default "../c54x_exe"
+	depends on NATIVE_C54X
+
+config QOSMO_DIR
+	string "Sources de qosmo (clone s'il est absent)"
+	default "../qosmo"
+	depends on NATIVE_C54X || NATIVE_DEBS
+
+config FIRMWARE_DIR
+	string "Firmwares Calypso (osmocom-bb/firmware)"
+	default "../firmware"
+	depends on NATIVE_DEBS
+
+config ROM_DIR
+	string "ROM DSP decoupees (--rom-dir de c54x_exe)"
+	default ".."
+	depends on NATIVE_C54X
+
+config DEBS_OUT
+	string ".deb produits (make debs)"
+	default "packaging/dist"
+	depends on NATIVE_DEBS
+
+endmenu

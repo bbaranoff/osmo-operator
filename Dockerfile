@@ -74,6 +74,48 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional groups (build.sh --without=..., the menu, docker-bake.hcl)
+# ─────────────────────────────────────────────────────────────────────────────
+# 1 = built, 0 = left out (tools/features.conf, make menuconfig, build.sh
+# --without=...). A stage left out is not built at all: it is selected through
+# `FROM <stage>-${OSMO_WITH_X}` and BuildKit never reaches the unselected one;
+# inside a stage, a component left out is an `exit 0` RUN. Its .debs (taken
+# from the host cache) are not installed.
+#   GRGSM_EXE    grgsm_exe, the gr-gsm layer 1 outside QEMU (stage l1)
+#   GNURADIO     GNU Radio + gr-osmosdr + gr-gsm (/root/.env, stage grgsm-venv)
+#                - lib: build.sh sets it to GRGSM_EXE
+#   LTE          4G: srsRAN ZeroMQ + Open5GS, osmo-lte / osmo-epc (stage lte)
+#   PMBOOTSTRAP  postmarketOS phone: patched pmbootstrap (stage lte)
+#   EGPRS_WEB    the osmo-egprs-web dashboard (stage node)
+#   NODE         Node 22 - lib: build.sh sets it to EGPRS_WEB
+#   TNCATTACH    LoRa link: the RNode as tnc0
+#   RNS          Reticulum (rns, rnodeconf) in /root/.env
+# OSMO_STAGE_LTE = LTE || PMBOOTSTRAP (computed by build.sh / docker-bake.hcl).
+# Global ARGs (before the first FROM): they are only visible in FROM lines and
+# must be redeclared inside a stage to be used there.
+ARG OSMO_WITH_GRGSM_EXE=1
+ARG OSMO_WITH_GNURADIO=1
+ARG OSMO_WITH_LTE=1
+ARG OSMO_WITH_PMBOOTSTRAP=1
+ARG OSMO_WITH_EGPRS_WEB=1
+ARG OSMO_WITH_NODE=1
+ARG OSMO_WITH_TNCATTACH=1
+ARG OSMO_WITH_RNS=1
+ARG OSMO_STAGE_LTE=1
+#   GAPK         osmo-gapk +hr (vocoder on the host: --gapk, --hr transcoder)
+#   SMSC         gsup-smsc-proto (proto-SMSC over GSUP)
+#   SMS_CODING_UTILS  sms-coding-utils (SMS PDU tools, FreeCalypso)
+#   TRANSCEIVER  osmocom-bb transceiver (the Calypso TRX of start.sh --bts)
+#   BURST_IND    osmocom-bb burst_ind: ccch_scan, bcch_scan, cell_log
+#   LIBOSMO_DSP  lib: set by build.sh when TRANSCEIVER or BURST_IND is on
+ARG OSMO_WITH_GAPK=1
+ARG OSMO_WITH_SMSC=1
+ARG OSMO_WITH_SMS_CODING_UTILS=1
+ARG OSMO_WITH_TRANSCEIVER=1
+ARG OSMO_WITH_BURST_IND=1
+ARG OSMO_WITH_LIBOSMO_DSP=1
+
 FROM ubuntu:24.04 AS base
 
 # ROOT: where the sources live in the image. Fixed path; nothing to make
@@ -479,7 +521,12 @@ RUN if [ "$OSMO_FAST" = 1 ]; then echo "--fast : osmo-msc OBS, sans patch"; \
 # parallel make compiles libgsmhr.c before the download has finished.
 # The deb version carries "+hr" so that a cached package built without the
 # codec is not reused.
-RUN if ! osmo-deb install osmo-gapk 0.git+hr; then \
+ARG OSMO_WITH_GAPK=1
+ARG OSMO_WITH_SMSC=1
+ARG OSMO_WITH_SMS_CODING_UTILS=1
+ARG OSMO_WITH_LIBOSMO_DSP=1
+RUN if [ "$OSMO_WITH_GAPK" != 1 ]; then echo "osmo-gapk : composant desactive"; \
+    elif ! osmo-deb install osmo-gapk 0.git+hr; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/osmocom/gapk osmo-gapk && \
       cd osmo-gapk && \
@@ -498,7 +545,8 @@ RUN if ! osmo-deb install osmo-gapk 0.git+hr; then \
 # The top-level Makefile forces DESTDIR= empty, so the two sub-directories are
 # installed here directly with the DESTDIR that osmo-deb sets (their own
 # Makefiles honour it).
-RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
+RUN if [ "$OSMO_WITH_SMSC" != 1 ]; then echo "gsup-smsc-proto : composant desactive"; \
+    elif ! osmo-deb install gsup-smsc-proto 0.git; then \
       cd ${ROOT} && \
       git clone https://gitea.osmocom.org/themwi/gsup-smsc-proto && \
       cd gsup-smsc-proto && \
@@ -518,7 +566,8 @@ RUN if ! osmo-deb install gsup-smsc-proto 0.git; then \
 # build.sh before the build; an empty cache is filled inside the step, the rw
 # bind mount discards it afterwards, nothing lands in the image).
 RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalypso,rw \
-    if ! osmo-deb install sms-coding-utils 0.r1; then \
+    if [ "$OSMO_WITH_SMS_CODING_UTILS" != 1 ]; then echo "sms-coding-utils : composant desactive"; \
+    elif ! osmo-deb install sms-coding-utils 0.r1; then \
       cd ${ROOT} && \
       freecalypso-fetch --cache /opt/GSM/.cache/freecalypso --dest ${ROOT} sms-coding-utils-latest.tar.bz2 && \
       tar xf sms-coding-utils-latest.tar.bz2 && \
@@ -530,7 +579,8 @@ RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalyp
     fi
 
 # ── libosmo-dsp (transceiver/burst_ind dependency) ──────────────────────────
-RUN if ! osmo-deb install libosmo-dsp 0.git; then \
+RUN if [ "$OSMO_WITH_LIBOSMO_DSP" != 1 ]; then echo "libosmo-dsp : non selectionne (ni transceiver ni burst_ind)"; \
+    elif ! osmo-deb install libosmo-dsp 0.git; then \
       cd /opt/GSM \
       && git clone https://gitea.osmocom.org/sdr/libosmo-dsp.git \
       && cd libosmo-dsp \
@@ -630,7 +680,10 @@ RUN update-alternatives --set gcc /usr/bin/gcc-9
 # acknowledged (osmo-bts-trx >= 1.3 treats them as critical). Also applied
 # natively by install_modules/40-patches.sh.
 COPY patches/osmocom-bb-transceiver-qemu-bench.patch /tmp/osmocom-bb-transceiver-qemu-bench.patch
-RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
+ARG OSMO_WITH_TRANSCEIVER=1
+ARG OSMO_WITH_BURST_IND=1
+RUN if [ "$OSMO_WITH_TRANSCEIVER" != 1 ]; then echo "transceiver : composant desactive"; \
+    elif ! osmo-deb install osmocom-bb-transceiver 0.git; then \
       git clone --branch jolly/testing --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-transceiver \
@@ -644,7 +697,8 @@ RUN if ! osmo-deb install osmocom-bb-transceiver 0.git; then \
     fi
 
 # osmocom-bb fixeria/burst_ind -> ccch_scan / bcch_scan / cell_log
-RUN if ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
+RUN if [ "$OSMO_WITH_BURST_IND" != 1 ]; then echo "burst_ind : composant desactive"; \
+    elif ! osmo-deb install osmocom-bb-burst-ind 0.git; then \
       git clone --branch fixeria/burst_ind --depth 1 \
         https://gitea.osmocom.org/phone-side/osmocom-bb.git \
         /opt/GSM/osmocom-bb-burst_ind \
@@ -780,7 +834,9 @@ RUN --mount=type=bind,source=.cache/freecalypso,target=/opt/GSM/.cache/freecalyp
              /opt/GSM/calypso_dsp.Registers.bin /opt/GSM/calypso_dsp.txt; \
     fi
 
-RUN if ! osmo-deb install grgsm-exe 0.git; then \
+ARG OSMO_WITH_GRGSM_EXE=1
+RUN if [ "$OSMO_WITH_GRGSM_EXE" != 1 ]; then echo "grgsm_exe : composant desactive"; \
+    elif ! osmo-deb install grgsm-exe 0.git; then \
       git clone https://github.com/bbaranoff/grgsm_exE /opt/GSM/grgsm_exe \
       && cd /opt/GSM/grgsm_exe \
       && make QOSMO=/opt/GSM/qosmo \
@@ -948,7 +1004,11 @@ RUN git clone https://github.com/bbaranoff/osmo-operator /opt/GSM/osmo-operator
 # .debs carry only the binaries, not their dependencies (libmbedtls, libzmq5,
 # libconfig++, boost_program_options, mongodb-org), so they stay installed.
 COPY tools/osmo-lte-install.sh /usr/local/sbin/osmo-lte-install
+ARG OSMO_WITH_LTE=1
+ARG OSMO_WITH_PMBOOTSTRAP=1
 RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,sharing=locked \
+    mkdir -p /opt/LTE && \
+    if [ "$OSMO_WITH_LTE" != 1 ]; then echo "LTE : composant desactive"; exit 0; fi && \
     chmod 755 /usr/local/sbin/osmo-lte-install && \
     { osmo-deb install libzmq 4.3.5+git || true; } && \
     { osmo-deb install srsgui 0.1+git || true; } && \
@@ -975,7 +1035,8 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
 # osmo-build-pmos-kernel (packaging/build-pmos-kernel-deb.sh, or GitHub
 # bbaranoff/pmos_ppp_kernel), installed by 88-lte-pmos.sh.
 COPY patches/pmbootstrap-osmo-bench-qemu.patch /tmp/pmbootstrap-osmo-bench-qemu.patch
-RUN if ! osmo-deb install pmbootstrap 0.git; then \
+RUN if [ "$OSMO_WITH_PMBOOTSTRAP" != 1 ]; then echo "pmbootstrap : composant desactive"; exit 0; fi; \
+    if ! osmo-deb install pmbootstrap 0.git; then \
         mkdir -p /opt/user_interface/pmos && \
         git clone https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git /opt/user_interface/pmos/pmbootstrap && \
         cd /opt/user_interface/pmos/pmbootstrap && \
@@ -991,7 +1052,35 @@ RUN if ! osmo-deb install pmbootstrap 0.git; then \
 # then what no package carries is added (Node, the dashboard, the 4G, the repo,
 # the build-context configs). build.sh (compose_build) and compose.yaml pass
 # --target osmocom-nitb.
+# ── Group selection: <group>-1 = the real stage, <group>-0 = an empty stand-in
+# carrying the paths the assembly COPYs (so the COPY lines stay unconditional).
+FROM grgsm-venv AS grgsm-1
+FROM base AS grgsm-0
+FROM lte AS lte-1
+FROM base AS lte-0
+RUN mkdir -p /opt/LTE
+FROM node AS web-1
+FROM base AS web-0
+RUN mkdir -p /opt/node /opt/GSM/osmo-egprs-web && : >/etc/systemd/system/osmo-egprs-web.service
+FROM grgsm-${OSMO_WITH_GNURADIO} AS grgsm-sel
+FROM lte-${OSMO_STAGE_LTE} AS lte-sel
+FROM web-${OSMO_WITH_NODE} AS web-sel
+
 FROM base AS osmocom-nitb
+ARG OSMO_WITH_GRGSM_EXE=1
+ARG OSMO_WITH_GNURADIO=1
+ARG OSMO_WITH_LTE=1
+ARG OSMO_WITH_PMBOOTSTRAP=1
+ARG OSMO_WITH_EGPRS_WEB=1
+ARG OSMO_WITH_NODE=1
+ARG OSMO_WITH_TNCATTACH=1
+ARG OSMO_WITH_RNS=1
+ARG OSMO_WITH_GAPK=1
+ARG OSMO_WITH_SMSC=1
+ARG OSMO_WITH_SMS_CODING_UTILS=1
+ARG OSMO_WITH_TRANSCEIVER=1
+ARG OSMO_WITH_BURST_IND=1
+ARG OSMO_WITH_LIBOSMO_DSP=1
 ARG ROOT=/opt/GSM
 
 # ── 1. Packages from all stages ─────────────────────────────────────────────
@@ -999,8 +1088,8 @@ ARG ROOT=/opt/GSM
 # their parent's.
 COPY --from=bb         /var/cache/osmo-debs/ /var/cache/osmo-debs/
 COPY --from=l1         /var/cache/osmo-debs/ /var/cache/osmo-debs/
-COPY --from=grgsm-venv /var/cache/osmo-debs/ /var/cache/osmo-debs/
-COPY --from=lte        /var/cache/osmo-debs/ /var/cache/osmo-debs/
+COPY --from=grgsm-sel  /var/cache/osmo-debs/ /var/cache/osmo-debs/
+COPY --from=lte-sel    /var/cache/osmo-debs/ /var/cache/osmo-debs/
 # (No COPY from `node`: that stage never calls osmo-deb.)
 
 # Install order matters for the four patched packages. osmo-trx, osmo-bts,
@@ -1010,7 +1099,21 @@ COPY --from=lte        /var/cache/osmo-debs/ /var/cache/osmo-debs/
 # therefore reinstalled explicitly, last.
 # --fast: no patched package (OBS stack, stage base).
 ARG OSMO_FAST=0
+# A group left out: its packages (possibly in the host cache) are not installed.
 RUN set -eux; \
+    cd /var/cache/osmo-debs; \
+    [ "$OSMO_WITH_GRGSM_EXE" = 1 ]   || rm -f osmo-build-grgsm-exe_*.deb; \
+    [ "$OSMO_WITH_GNURADIO" = 1 ]    || rm -f osmo-build-grgsm-venv_*.deb; \
+    [ "$OSMO_WITH_LTE" = 1 ]         || rm -f osmo-build-srsran_*.deb osmo-build-open5gs_*.deb osmo-build-libzmq_*.deb \
+                                              osmo-build-srsgui_*.deb; \
+    [ "$OSMO_WITH_PMBOOTSTRAP" = 1 ] || rm -f osmo-build-pmbootstrap_*.deb osmo-build-pmos-kernel_*.deb; \
+    [ "$OSMO_WITH_GAPK" = 1 ]        || rm -f osmo-build-osmo-gapk_*.deb; \
+    [ "$OSMO_WITH_SMSC" = 1 ]        || rm -f osmo-build-gsup-smsc-proto_*.deb; \
+    [ "$OSMO_WITH_SMS_CODING_UTILS" = 1 ] || rm -f osmo-build-sms-coding-utils_*.deb; \
+    [ "$OSMO_WITH_TRANSCEIVER" = 1 ] || rm -f osmo-build-osmocom-bb-transceiver_*.deb; \
+    [ "$OSMO_WITH_BURST_IND" = 1 ]   || rm -f osmo-build-osmocom-bb-burst-ind_*.deb; \
+    [ "$OSMO_WITH_LIBOSMO_DSP" = 1 ] || rm -f osmo-build-libosmo-dsp_*.deb; \
+    cd /; \
     dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb; \
     if [ "$OSMO_FAST" != 1 ]; then \
     dpkg -i --force-overwrite \
@@ -1022,6 +1125,20 @@ RUN set -eux; \
     rm -rf /var/cache/osmo-debs/fast; \
     ldconfig
 
+# The components this image was built with, in the .config format
+# (/etc/osmocom/build.config, the /proc/config.gz of the bench): start.sh
+# --configure only offers what is there. An ISO overwrites it with the full
+# .config of make menuconfig (iso_modules/51-depot.sh).
+RUN mkdir -p /etc/osmocom && { \
+      echo "# osmocom-nitb - composants du build (Dockerfile, OSMO_WITH_*)"; \
+      for kv in GAPK=$OSMO_WITH_GAPK SMSC=$OSMO_WITH_SMSC SMS_CODING_UTILS=$OSMO_WITH_SMS_CODING_UTILS \
+                TRANSCEIVER=$OSMO_WITH_TRANSCEIVER BURST_IND=$OSMO_WITH_BURST_IND LIBOSMO_DSP=$OSMO_WITH_LIBOSMO_DSP \
+                GRGSM_EXE=$OSMO_WITH_GRGSM_EXE GNURADIO=$OSMO_WITH_GNURADIO LTE=$OSMO_WITH_LTE \
+                PMBOOTSTRAP=$OSMO_WITH_PMBOOTSTRAP EGPRS_WEB=$OSMO_WITH_EGPRS_WEB NODE=$OSMO_WITH_NODE \
+                TNCATTACH=$OSMO_WITH_TNCATTACH RNS=$OSMO_WITH_RNS; do \
+        if [ "${kv#*=}" = 1 ]; then echo "CONFIG_FEAT_${kv%%=*}=y"; else echo "# CONFIG_FEAT_${kv%%=*} is not set"; fi; \
+      done; } > /etc/osmocom/build.config
+
 # ── LoRa / Reticulum: the radio link of --lora ───────────────────────────────
 # tncattach (markqvist, tag 0.1.9) attaches the RNode (Heltec V3, KISS over USB)
 # as tnc0 (network/setup-lora-link.sh). rns brings rnodeconf / rnsd into the
@@ -1030,22 +1147,28 @@ RUN set -eux; \
 # from the apt block at the top. Same pins in install_modules/50-build.sh.
 ARG TNCATTACH_REF=bb9ff10158c04a37cb3221152885a083e3059909
 ARG RNS_VERSION=1.5.7
-RUN git clone https://github.com/markqvist/tncattach /opt/GSM/tncattach \
+RUN if [ "$OSMO_WITH_TNCATTACH" != 1 ]; then echo "tncattach : composant desactive"; exit 0; fi; \
+    git clone https://github.com/markqvist/tncattach /opt/GSM/tncattach \
     && git -C /opt/GSM/tncattach checkout -q ${TNCATTACH_REF} \
     && make -C /opt/GSM/tncattach \
     && install -m755 /opt/GSM/tncattach/tncattach /usr/local/bin/tncattach \
-    && { [ -x /root/.env/bin/pip ] || python3 -m venv /root/.env; } \
+    && tncattach -V && wg --version
+RUN if [ "$OSMO_WITH_RNS" != 1 ]; then echo "Reticulum (rns) : composant desactive"; exit 0; fi; \
+    { [ -x /root/.env/bin/pip ] || python3 -m venv /root/.env; } \
     && /root/.env/bin/pip install --no-cache-dir "rns==${RNS_VERSION}" \
     && for b in rnodeconf rnsd rnstatus rnpath rnprobe; do ln -sf /root/.env/bin/$b /usr/local/bin/$b; done \
-    && tncattach -V && rnodeconf --version && wg --version
+    && rnodeconf --version
 
 # ── 2. What no .deb carries ─────────────────────────────────────────────────
 # Node (tarball in /opt/node) and the dashboard (git clone with node_modules);
 # install-web-service.sh already ran in the node stage.
-COPY --from=node /opt/node                                      /opt/node
-COPY --from=node /opt/GSM/osmo-egprs-web                        /opt/GSM/osmo-egprs-web
-COPY --from=node /etc/systemd/system/osmo-egprs-web.service     /etc/systemd/system/osmo-egprs-web.service
-RUN ln -sf /opt/node/bin/node /usr/local/bin/node \
+COPY --from=web-sel /opt/node                                   /opt/node
+COPY --from=web-sel /opt/GSM/osmo-egprs-web                     /opt/GSM/osmo-egprs-web
+COPY --from=web-sel /etc/systemd/system/osmo-egprs-web.service  /etc/systemd/system/osmo-egprs-web.service
+RUN if [ "$OSMO_WITH_NODE" != 1 ] || [ "$OSMO_WITH_EGPRS_WEB" != 1 ]; then \
+      rm -rf /opt/node /opt/GSM/osmo-egprs-web /etc/systemd/system/osmo-egprs-web.service; \
+      echo "egprs_web / node : composant desactive"; exit 0; fi; \
+    ln -sf /opt/node/bin/node /usr/local/bin/node \
     && ln -sf /opt/node/bin/npm  /usr/local/bin/npm \
     && ln -sf /opt/node/bin/npx  /usr/local/bin/npx \
     && ln -sf /etc/systemd/system/osmo-egprs-web.service \
@@ -1065,7 +1188,7 @@ RUN chmod 755 /usr/local/sbin/osmo-lte-install
 # All of /opt/LTE, not only what the .debs carry: the Open5GS install prefix
 # lives under the source tree, and /opt/LTE is outside /opt/GSM so osmo-deb
 # pack embeds no sources (SRC_ROOT). This keeps the source trees in the image.
-COPY --from=lte /opt/LTE /opt/LTE
+COPY --from=lte-sel /opt/LTE /opt/LTE
 
 # The runtime packages (libzmq5, libmbedtls, libconfig++, mongodb-org...) are
 # installed by the top apt step of this file: osmo-deb .debs declare no
@@ -1074,7 +1197,8 @@ COPY --from=lte /opt/LTE /opt/LTE
 # `--configs --launchers`, same order as in the lte stage: the Open5GS yaml,
 # enb.conf and the two launchers are written outside any DESTDIR, so no .deb
 # carries them. They read /opt/GSM/osmo-operator, cloned above.
-RUN OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
+RUN if [ "$OSMO_WITH_LTE" != 1 ]; then echo "LTE : groupe desactive"; exit 0; fi; \
+    OSMO_REPO=/opt/GSM/osmo-operator osmo-lte-install --configs --launchers && \
     ldconfig && test -x /usr/local/bin/srsenb \
     && test -x /opt/LTE/open5gs/install/bin/open5gs-mmed \
     && test -s /opt/LTE/open5gs/install/etc/open5gs/mme.yaml && grep -q '^  sgsap:' /opt/LTE/open5gs/install/etc/open5gs/mme.yaml \

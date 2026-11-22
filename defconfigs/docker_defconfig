@@ -1,0 +1,2 @@
+# images Docker amd64, tous les groupes
+CONFIG_TARGET_DOCKER=y

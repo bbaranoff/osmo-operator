@@ -4,7 +4,14 @@
 # =============================================================================
 #
 #  Usage: sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]
+#         ./build.sh --menuconfig     menu facon noyau : cible docker OU iso, options
+#         ./build.sh --config[=FILE]  build depuis la config enregistree (.config)
 #         (-h describes every option)
+#
+#  - BuildKit bake: the images are described in docker-bake.hcl. With
+#    docker buildx, every requested image goes through ONE `docker buildx bake`
+#    (stp in parallel with nitb, lite chained to nitb). OSMO_BUILD_BACKEND=
+#    bake|compose|docker forces a backend (default: bake if buildx is there).
 #
 #  - apt-fast everywhere: packaging/apt-fast-install.sh installs apt-fast
 #    (aria2) and the common apt settings on the host, in the images and in the
@@ -23,7 +30,8 @@
 #    cache rewritten.
 #
 #  Env: OSMO_DEB_CACHE, OSMO_UBUNTU_MIRROR, OSMO_HOST_MIRROR (0|1|force),
-#       OSMO_HOST_DOCKER (0 = never ask apt for docker), BUILDKIT_PROGRESS.
+#       OSMO_HOST_DOCKER (0 = never ask apt for docker), BUILDKIT_PROGRESS,
+#       OSMO_BUILD_BACKEND, FREECALYPSO_CACHE (relative paths: from the repo).
 # =============================================================================
 set -euo pipefail
 
@@ -36,6 +44,32 @@ DIR="$(pwd)"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+# 0a. The menu: --menuconfig opens it, --config builds from the saved .config.
+#     Both go through tools/menuconfig.sh, which calls build.sh (docker) or
+#     build-iso.sh (iso) back with plain options - never --menuconfig again.
+for arg in "$@"; do
+    case "$arg" in
+        --menuconfig|menuconfig) exec bash "$DIR/tools/menuconfig.sh" ;;
+        --config)                exec bash "$DIR/tools/menuconfig.sh" --build ;;
+        --config=*)              exec bash "$DIR/tools/menuconfig.sh" --build --file="${arg#*=}" ;;
+    esac
+done
+
+# Optional components of the image (Dockerfile, OSMO_WITH_*): all built by
+# default. tools/features.conf: "docker" ids are chosen, "lib" ids are built
+# only for the chosen ones that need them (gnuradio for grgsm_exe, node for
+# egprs_web); the old group names (grgsm, web, reticulum, 4g) are aliases.
+#   --without=grgsm_exe,lte   --with=all   (env OSMO_WITH_LTE=0 ... works too)
+. "$DIR/tools/features.sh"; feat_load
+_FEAT_SEL="$(feat_docker_from_env)"
+_feat_set() {   # $1 = 0|1, $2 = comma list (components, aliases, all)
+    local f l; l="$(feat_expand "$2")" || exit 2
+    for f in $l; do
+        if [ "$1" = 1 ]; then feat_has "$_FEAT_SEL" "$f" || _FEAT_SEL="$_FEAT_SEL $f"
+        else _FEAT_SEL=" $_FEAT_SEL "; _FEAT_SEL="${_FEAT_SEL// $f / }"; fi
+    done
+}
 
 # 0. Argument parsing
 NO_CACHE=""
@@ -53,8 +87,12 @@ for arg in "$@"; do
         --fast)     FAST=1 ;;
         --arch=*)   OSMO_ARCH="${arg#*=}" ;;
         --arm)      OSMO_ARCH=arm64 ;;
+        --without=*) _feat_set 0 "${arg#*=}" ;;
+        --with=*)    _feat_set 1 "${arg#*=}" ;;
         -h|--help)
             echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]"
+            echo "       $0 --menuconfig      menu (cible docker ou iso, fonctionnalites, chemins)"
+            echo "       $0 --config[=FICH]   build depuis la config du menu (defaut .config)"
             echo "  --fast       Build rapide d osmocom-nitb : ce que osmo-minioperator prend en .deb"
             echo "               n est pas compile. Pile Osmocom = paquets officiels Osmocom (OBS"
             echo "               latest, SANS les patches osmo-trx +ipc et bts/hlr/msc +rand) ;"
@@ -69,6 +107,11 @@ for arg in "$@"; do
             echo "               qemu-user-static, binfmt-support, docker-buildx, debootstrap,"
             echo "               mtools, dosfstools, e2fsprogs, kpartx... (build-iso.sh --arm,"
             echo "               armbian/build-armbian.sh)."
+            echo "  --without=C[,C]  Composants laisses hors de l image (tools/features.conf) :"
+            echo "               $(feat_ids docker | xargs | sed 's/ /, /g'), ou all."
+            echo "               Alias : grgsm (grgsm_exe), web (egprs_web), reticulum (tncattach,"
+            echo "               rns), 4g (lte, pmbootstrap). GNU Radio n est construit que pour"
+            echo "               grgsm_exe, Node que pour egprs_web. --with=... inverse."
             echo "  --no-cache   Reconstruction complete : cache docker ignore, paquets .deb recompiles"
             echo "               et le cache /var/cache/osmo-debs reecrit."
             echo "  --lite       Construit EN PLUS osmocom-nitb:lite : la meme pile, sans les"
@@ -79,11 +122,19 @@ for arg in "$@"; do
             echo "               l hote, ni rebuild de la base. QEMU_CACHE_BUST force les git pull."
             echo ""
             echo "  OSMO_DEB_CACHE=/chemin   cache des .deb compiles (defaut /var/cache/osmo-debs)"
+            echo "  OSMO_BUILD_BACKEND=bake|compose|docker   moteur de build (defaut bake si buildx)"
+            echo "  FREECALYPSO_CACHE=chemin cache FreeCalypso (defaut .cache/freecalypso, relatif au depot)"
             exit 0
             ;;
         *) echo -e "${YELLOW}[WARN] Argument inconnu ignore : $arg${NC}" ;;
     esac
 done
+
+# The chosen components -> OSMO_WITH_<ID>=0|1 for every component, the libs
+# following the components that need them, + OSMO_STAGE_LTE.
+feat_export_build "$_FEAT_SEL"
+echo "[*] composants de l'image : ${FEAT_BUILD_SEL:-aucun}"
+mapfile -t OSMO_FEAT_BUILD_ARGS < <(feat_build_args)
 
 # --fast: amd64 only (the release .debs are amd64).
 if [[ "$FAST" -eq 1 ]]; then
@@ -103,8 +154,15 @@ if [[ "$BUILD_RUN" -eq 1 ]]; then
         exit 1
     fi
     echo "--- Lancement du build de l'image osmocom-run ---"
-    if docker build $NO_CACHE --build-arg QEMU_CACHE_BUST=$(date +%s) \
-           -f "$DIR/Dockerfile.run" -t osmocom-run "$DIR"; then
+    # bake when buildx is there (OSMO_BUILD_BACKEND=bake|compose|docker)
+    _be="${OSMO_BUILD_BACKEND:-}"
+    [ -z "$_be" ] && { docker buildx version >/dev/null 2>&1 && _be=bake || _be=docker; }
+    if [ "$_be" = bake ]; then
+        _run=(env QEMU_CACHE_BUST="$(date +%s)" docker buildx bake -f docker-bake.hcl --load $NO_CACHE run)
+    else
+        _run=(docker build $NO_CACHE --build-arg QEMU_CACHE_BUST="$(date +%s)" -f Dockerfile.run -t osmocom-run .)
+    fi
+    if "${_run[@]}"; then
         echo -e "${GREEN}[OK] Image osmocom-run construite.${NC}"
         exit 0
     fi
@@ -336,12 +394,24 @@ FAST_DEBS=(
     "osmo-build-calypso-firmware_0.git~noble_amd64.deb   23ac39b60c596acf374bb0e676c7583d010ad547bbe0286c50fdf0f9330d9d35"
     "fast/c54x-exe-norom_0.git~noble_amd64.deb           6807adcdded5e0bea9ee584e9e4054652beffec5db2c1ce74fc26b540ef65199"
 )
+# OSMO_FAST_DEBS: which of them to take (short names, space separated:
+# qosmo grgsm-exe grgsm-venv calypso-firmware c54x-exe-norom; default all).
+# The menu writes it from its checklist. A package left out is compiled by the
+# Dockerfile as without --fast (osmo-deb install fails -> clone + build).
+fast_deb_name() { local b; b="$(basename "$1")"; b="${b%%_*}"; echo "${b#osmo-build-}"; }
+OSMO_FAST_DEBS="${OSMO_FAST_DEBS:-all}"
 rm -rf "$DIR/.deb-cache/fast"
 if [[ "$FAST" -eq 1 ]]; then
-    echo "[*] --fast : paquets .deb de la release ${FAST_TAG}..."
+    echo "[*] --fast : paquets .deb de la release ${FAST_TAG} (${OSMO_FAST_DEBS})..."
     mkdir -p "$OSMO_DEB_CACHE/fast" "$DIR/.deb-cache/fast"
+    _nfast=0
     for _e in "${FAST_DEBS[@]}"; do
         read -r _f _sum <<<"$_e"
+        if [ "$OSMO_FAST_DEBS" != all ] && [[ " $OSMO_FAST_DEBS " != *" $(fast_deb_name "$_f") "* ]]; then
+            echo "    $(fast_deb_name "$_f") : non coche, sera compile"
+            continue
+        fi
+        _nfast=$((_nfast + 1))
         _dst="$OSMO_DEB_CACHE/$_f"
         if [ ! -s "$_dst" ]; then
             _asset="$(basename "$_f" | tr '~' '.')"
@@ -353,7 +423,7 @@ if [[ "$FAST" -eq 1 ]]; then
         fi
         cp -f "$_dst" "$DIR/.deb-cache/$_f"
     done
-    echo -e "${GREEN}[OK] --fast : ${#FAST_DEBS[@]} paquets prets (${OSMO_DEB_CACHE})${NC}"
+    echo -e "${GREEN}[OK] --fast : ${_nfast}/${#FAST_DEBS[@]} paquets prets (${OSMO_DEB_CACHE})${NC}"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -366,8 +436,11 @@ fi
 # image, never downloaded again on the next build. A file whose SHA256 does not
 # match is deleted and the build stops here.
 echo "[*] Cache FreeCalypso (.cache/freecalypso)..."
-mkdir -p "$DIR/.cache/freecalypso"
-if bash "$DIR/tools/freecalypso-fetch.sh" --cache "$DIR/.cache/freecalypso" \
+# The Dockerfile bind-mounts .cache/freecalypso (inside the context): a cache
+# elsewhere (FREECALYPSO_CACHE, the menu's Chemins) is synced into it.
+FREECALYPSO_CACHE="${FREECALYPSO_CACHE:-.cache/freecalypso}"
+mkdir -p "$DIR/.cache/freecalypso" "$FREECALYPSO_CACHE"
+if bash "$DIR/tools/freecalypso-fetch.sh" --cache "$FREECALYPSO_CACHE" \
         sms-coding-utils-latest.tar.bz2 dsp-rom-3606-dump.txt; then
     echo -e "${GREEN}[OK] cache FreeCalypso : fichiers presents et verifies (SHA256)${NC}"
 elif ls "$DIR/.deb-cache"/osmo-build-sms-coding-utils_*.deb "$DIR/.deb-cache"/osmo-build-c54x-exe_*.deb >/dev/null 2>&1; then
@@ -376,6 +449,10 @@ else
     echo -e "${RED}[ERREUR] cache FreeCalypso : telechargement impossible ou SHA256 different (voir ci-dessus)${NC}"
     echo "          origines : ftp://ftp.freecalypso.org/pub/GSM/Calypso/ et https://www.freecalypso.org/pub/GSM/FreeCalypso/"
     exit 1
+fi
+if [ "$(readlink -f "$FREECALYPSO_CACHE")" != "$(readlink -f "$DIR/.cache/freecalypso")" ]; then
+    cp -f "$FREECALYPSO_CACHE"/sms-coding-utils-latest.tar.bz2 "$FREECALYPSO_CACHE"/dsp-rom-3606-dump.txt \
+        "$DIR/.cache/freecalypso/" 2>/dev/null || true
 fi
 
 # Build one compose.yaml service (or its docker build equivalent).
@@ -422,8 +499,49 @@ debs_from_image() {
 }
 
 # 7. Docker build
+# ── BuildKit bake (default): every requested image in ONE session ──────────
+# docker-bake.hcl describes nitb, lite, stp; requested together, stp builds in
+# parallel with nitb and lite takes nitb as a named context. The variables
+# (OSMO_DEB_REFRESH, OSMO_UBUNTU_MIRROR, OSMO_FAST, OSMO_PLATFORM,
+# OSMO_IMG_TAG) are read from the environment by bake.
+if [ -z "${OSMO_BUILD_BACKEND:-}" ]; then
+    if docker buildx version >/dev/null 2>&1; then OSMO_BUILD_BACKEND=bake
+    elif [ "$HAVE_COMPOSE" = 1 ]; then OSMO_BUILD_BACKEND=compose
+    else OSMO_BUILD_BACKEND=docker; fi
+fi
+case "$OSMO_BUILD_BACKEND" in
+    bake)    docker buildx version >/dev/null 2>&1 \
+                 || { echo -e "${RED}[ERREUR] OSMO_BUILD_BACKEND=bake : docker buildx absent${NC}"; exit 1; } ;;
+    compose) [ "$HAVE_COMPOSE" = 1 ] \
+                 || { echo -e "${RED}[ERREUR] OSMO_BUILD_BACKEND=compose : docker compose absent${NC}"; exit 1; } ;;
+    docker)  HAVE_COMPOSE=0 ;;
+    *) echo -e "${RED}[ERREUR] OSMO_BUILD_BACKEND : bake, compose ou docker (recu : $OSMO_BUILD_BACKEND)${NC}"; exit 2 ;;
+esac
+echo -e "${GREEN}[OK] moteur de build : ${OSMO_BUILD_BACKEND}${NC}"
+
+if [ "$OSMO_BUILD_BACKEND" = bake ]; then
+    BAKE_TARGETS=(nitb)
+    [[ "$LITE" -eq 1 ]] && BAKE_TARGETS+=(lite)
+    [[ "$STP" -eq 1 ]]  && BAKE_TARGETS+=(stp)
+    echo "--- docker buildx bake : ${BAKE_TARGETS[*]} (${OSMO_FEAT_BUILD_ARGS[*]}) ---"
+    if OSMO_PLATFORM="$BUILD_PLATFORM" OSMO_IMG_TAG="${IMG_TAG#:}" \
+       docker buildx bake -f docker-bake.hcl --load $NO_CACHE "${BAKE_TARGETS[@]}"; then
+        echo -e "${GREEN}[OK] Images construites : ${IMG_NITB}$([[ $LITE -eq 1 ]] && echo " ${IMG_LITE}")$([[ $STP -eq 1 ]] && echo " ${IMG_STP}")${NC}"
+        debs_from_image "$IMG_NITB"
+        [[ "$STP" -eq 1 ]] && debs_from_image "$IMG_STP"
+    else
+        echo -e "${RED}[ERREUR] docker buildx bake a echoue.${NC}"
+        exit 1
+    fi
+    find "$DIR/.deb-cache" -maxdepth 1 -name '*.deb' -delete
+    rm -rf "$DIR/.deb-cache/fast"
+    exit 0
+fi
+
+# ── compose / docker build: one image after the other ─────────────────────
 echo "--- Lancement du build de l'image ${IMG_NITB} ---"
-if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR" "OSMO_FAST=$OSMO_FAST"; then
+if compose_build nitb "$IMG_NITB" Dockerfile "OSMO_DEB_REFRESH=$OSMO_DEB_REFRESH" "OSMO_UBUNTU_MIRROR=$OSMO_UBUNTU_MIRROR" "OSMO_FAST=$OSMO_FAST" \
+       "${OSMO_FEAT_BUILD_ARGS[@]}"; then
     echo -e "${GREEN}[OK] Image ${IMG_NITB} construite avec succes.${NC}"
     debs_from_image "$IMG_NITB"
 else

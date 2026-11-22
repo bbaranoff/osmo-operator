@@ -1,0 +1,81 @@
+# kconfig/Kconfig.docker - cible docker (build.sh)
+
+comment "--- Images Docker (build.sh) ---"
+	depends on TARGET_DOCKER
+
+if TARGET_DOCKER
+
+config DOCKER_RUN_ONLY
+	bool "Seulement osmocom-run (--build-run, sur l'image locale)"
+	help
+	  Ne reconstruit que l'image osmocom-run, au-dessus de l'image
+	  osmocom-nitb deja presente localement. Les autres options de ce
+	  menu (--fast, --lite, --stp, groupes) ne s'appliquent pas.
+
+config DOCKER_FAST
+	bool "Build rapide (--fast)"
+	depends on !DOCKER_RUN_ONLY
+	depends on ARCH_AMD64
+	help
+	  osmocom-nitb sans compiler ce qui existe en .deb dans la release
+	  osmo-operator (SHA-256 verifies). Les .deb de la release sont amd64 :
+	  l'option n'existe pas en arm64.
+
+comment "--- .deb de la release (--fast) ---"
+	depends on DOCKER_FAST
+
+if DOCKER_FAST
+
+comment "Coches : pris dans la release. Decoches : compiles dans l'image."
+
+config FAST_DEB_QOSMO
+	bool "qosmo : QEMU Calypso"
+	default y
+
+config FAST_DEB_GRGSM_EXE
+	bool "grgsm-exe : grgsm_exe"
+	default y
+	depends on FEAT_GRGSM_EXE
+	help
+	  N'a de sens qu'avec le composant grgsm_exe de l'image.
+
+config FAST_DEB_GRGSM_VENV
+	bool "grgsm-venv : GNU Radio + gr-gsm (/root/.env)"
+	default y
+	depends on FEAT_GNURADIO
+	help
+	  N'a de sens que si GNU Radio est construit (selectionne par
+	  grgsm_exe).
+
+config FAST_DEB_CALYPSO_FIRMWARE
+	bool "calypso-firmware : firmwares Calypso (osmocom-bb)"
+	default y
+
+config FAST_DEB_C54X_EXE_NOROM
+	bool "c54x-exe-norom : c54x_exe sans ROM (ROM prise a FreeCalypso)"
+	default y
+
+endif
+
+config DOCKER_LITE
+	bool "Image osmocom-nitb:lite en plus (sans les sources)"
+	depends on !DOCKER_RUN_ONLY
+
+config DOCKER_STP
+	bool "Image osmocom-stp en plus (hub SS7, en parallele)"
+	depends on !DOCKER_RUN_ONLY
+
+endif
+
+# Groups of the image: used by build.sh (--without) and by build-iso.sh.
+config USES_GROUPS
+	def_bool (TARGET_DOCKER && !DOCKER_RUN_ONLY) || TARGET_ISO
+
+comment "--- Composants de l'image docker (tools/features.conf) ---"
+	depends on USES_GROUPS
+
+if USES_GROUPS
+
+source "kconfig/generated/Kconfig.groups"
+
+endif

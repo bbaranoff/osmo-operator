@@ -1,0 +1,3 @@
+# ISO lite (sans les sources de /opt/GSM)
+CONFIG_TARGET_ISO_LIVE=y
+CONFIG_ISO_IMAGE_LITE=y

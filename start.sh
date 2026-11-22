@@ -5,6 +5,9 @@
 # =============================================================================
 #
 # Usage:
+#   ./start.sh --configure          menu facon noyau (Kconfig) selon ce qui a ete
+#                                   construit (/etc/osmocom/build.config) puis demarre
+#   ./start.sh --config[=FICHIER]   demarre depuis la config du menu
 #   ./start.sh [options]            native launcher (startup_scripts/*.sh)
 #   ./start.sh --docker [options]   hands over to launch/start-docker.sh
 #   ./start.sh --lora 1|2 [options] la VOIX de l'appel inter-nœuds en RF sur le
@@ -45,6 +48,59 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
+
+# ── --configure / --config: the start menu (Kconfig, like the build's) ───────
+# --configure      the menu (mconf of the kernel, tools/kconfig/linux), built
+#                  from what was BUILT (/etc/osmocom/build.config, the build's
+#                  .config embedded in the target) and what is THERE
+#                  (kconfig/start/gen-start.sh); saved in $START_CONFIG
+#                  (default /etc/osmocom/start.config), then offers to start.
+# --config[=FILE]  start from the saved menu (tools/start-config.sh): its
+#                  options first, the rest of the command line after them.
+# Found anywhere on the line (osmo-banc.service: start.sh --no-attach
+# $OSMO_BANC_ARGS); moved to the front, the other arguments kept in order.
+_pre=(); _cfgarg=""
+for _a in "$@"; do
+    case "$_a" in --configure|--config|--config=*) [ -z "$_cfgarg" ] && _cfgarg="$_a" || _pre+=("$_a") ;; *) _pre+=("$_a") ;; esac
+done
+[ -n "$_cfgarg" ] && set -- "$_cfgarg" "${_pre[@]+"${_pre[@]}"}"
+unset _pre _cfgarg _a
+case "${1:-}" in
+    --configure)
+        shift
+        _sc="$(bash "$HERE/tools/start-config.sh" --path)"
+        mkdir -p "$(dirname "$_sc")" 2>/dev/null
+        bash "$HERE/kconfig/start/gen-start.sh" || exit 1
+        if make -s -C "$HERE/tools/kconfig/linux" >/dev/null 2>&1; then
+            srctree="$HERE" KCONFIG_CONFIG="$_sc" MENUCONFIG_COLOR="${MENUCONFIG_COLOR:-osmo}" \
+            KCONFIG_AUTOCONFIG=kconfig/start/generated/auto.conf KCONFIG_AUTOHEADER=kconfig/start/generated/autoconf.h \
+            KCONFIG_RUSTCCFG=kconfig/start/generated/rustc_cfg \
+                "$HERE/tools/kconfig/linux/build/mconf" kconfig/start/Kconfig || exit 1
+        else
+            echo "[start.sh] mconf non compile (gcc, libncurses-dev) : menu kconfiglib" >&2
+            srctree="$HERE" KCONFIG_CONFIG="$_sc" MENUCONFIG_STYLE="$(cat "$HERE/tools/kconfig/style" 2>/dev/null)" \
+                python3 "$HERE/tools/kconfig/menuconfig.py" kconfig/start/Kconfig || exit 1
+        fi
+        [ -f "$_sc" ] || exit 0
+        echo; echo "[start.sh] configuration : $_sc"
+        echo "[start.sh] commande      : $(bash "$HERE/tools/start-config.sh" --print "$_sc")"
+        read -r -p "Demarrer le banc maintenant ? [o/N] " _r
+        # --configure is the only start allowed to rewrite the configurations:
+        # globals.conf from the menu's parameters now, the others at the start.
+        python3 "$HERE/tools/osmo-db.py" globals-depuis-config "$_sc" || exit 1
+        case "$_r" in o|O|y|Y|oui) exec env OSMO_CONFIGURE=1 bash "$0" --config="$_sc" "$@" ;; esac
+        exit 0 ;;
+    --config|--config=*)
+        _sc="${1#--config}"; _sc="${_sc#=}"; shift
+        [ -n "$_sc" ] || _sc="$(bash "$HERE/tools/start-config.sh" --path)"
+        mapfile -d '' _sca < <(bash "$HERE/tools/start-config.sh" --args "$_sc") || exit 1
+        [ "${#_sca[@]}" -gt 0 ] || exit 1
+        _env=(); _i=0
+        while [ "$_i" -lt "${#_sca[@]}" ] && [ "${_sca[$_i]}" != -- ]; do _env+=("${_sca[$_i]}"); _i=$((_i+1)); done
+        _opt=("${_sca[@]:$((_i+1))}")
+        echo "[start.sh] --config $_sc : ${_env[*]} ${_opt[*]}"
+        exec env "${_env[@]}" bash "$0" "${_opt[@]}" "$@" ;;
+esac
 
 # ── --docker: the bench in containers, through launch/start-docker.sh ────────
 # `./start.sh --docker [args]` hands over to start-docker.sh with the other
@@ -182,6 +238,26 @@ fi
 # compilé avec --enable-gsmhr), que setup-lora-codec.sh --on intercale entre
 # osmo-sip-connector et Asterisk. Il est relancé à chaque start.sh --hr et
 # arrêté sans --hr (jambe directe).
+# The codec of the CONFIGURATIONS (osmo-bsc.cfg channels, mobile half-speed,
+# SIP leg of osmo-sip-connector/pjsip) is only rewritten by start.sh
+# --configure (OSMO_CONFIGURE=1). A plain start keeps the files and says when
+# they do not match the requested codec; the transcoder (a process) is still
+# started or stopped below.
+_codec_conf() {   # --on | --off | --fr-via-transcodeur
+    if [ "${OSMO_CONFIGURE:-0}" = 1 ]; then
+        $_sudo bash "$HERE/network/setup-lora-codec.sh" "$1"; return
+    fi
+    local hr_cfg=0
+    grep -qE '^[[:space:]]*codec-support fr hr' "${OSMOCOM_CFG:-/etc/osmocom}/osmo-bsc.cfg" 2>/dev/null && hr_cfg=1
+    case "$1" in
+        --on)  [ "$hr_cfg" = 1 ] || echo "[start.sh] --hr demande mais osmo-bsc.cfg est en full-rate : start.sh --configure (avec HR) pour reecrire les configs" ;;
+        --fr-via-transcodeur)
+               grep -qE '^[[:space:]]*remote [^ ]+ 5062$' "${OSMOCOM_CFG:-/etc/osmocom}/osmo-sip-connector.cfg" 2>/dev/null \
+                   || echo "[start.sh] --lora : la jambe SIP ne passe pas par le transcodeur (5062) : start.sh --configure (LoRa) pour reecrire les configs" ;;
+        --off) [ "$hr_cfg" = 0 ] || echo "[start.sh] osmo-bsc.cfg est en half-rate (configure avec --hr) : conserve ; start.sh --configure pour revenir en full-rate" ;;
+    esac
+    return 0
+}
 _hrx_pid=/run/osmo-hr-transcodeur.pid
 if [ -s "$_hrx_pid" ] && grep -qs osmo-hr-transcodeur "/proc/$(cat "$_hrx_pid")/cmdline"; then
     $_sudo kill "$(cat "$_hrx_pid")" 2>/dev/null || true
@@ -190,13 +266,13 @@ $_sudo rm -f "$_hrx_pid"
 if [ "$_hr" = 1 ] || [ "${#_hrx_extra[@]}" -gt 0 ]; then
     if [ "$_hr" = 1 ]; then
         echo "[start.sh] --hr : voix half-rate (TCH/H), transcodeur HR <-> FR vers Asterisk"
-        $_sudo bash "$HERE/network/setup-lora-codec.sh" --on || echo "[start.sh] half-rate: echec (voir ci-dessus)"
+        _codec_conf --on || echo "[start.sh] codec --on : echec (voir ci-dessus)"
     else
         # --lora sans --hr : full-rate, mais la jambe SIP DOIT passer par le
         # transcodeur (5062), sinon l'INVITE va droit d'Asterisk a osmo-sip-connector
         # et la voix part en RTP sur wg0, pas sur l'air. En 5062 il ne transcode
         # rien : les appels locaux sont intacts, les appels inter-noeuds vont au LoRa.
-        $_sudo bash "$HERE/network/setup-lora-codec.sh" --fr-via-transcodeur || echo "[start.sh] jambe SIP via transcodeur: echec (voir ci-dessus)"
+        _codec_conf --fr-via-transcodeur || echo "[start.sh] codec --fr-via-transcodeur : echec (voir ci-dessus)"
     fi
     _hrx_extra+=(--codec "$([ "$_hr" = 1 ] && echo hr || echo fr)")
     $_sudo mkdir -p /var/log/osmocom
@@ -207,7 +283,7 @@ if [ "$_hr" = 1 ] || [ "${#_hrx_extra[@]}" -gt 0 ]; then
         sh "$_py" "$HERE/tools/osmo-hr-transcodeur.py" "$_hrx_pid" "${_hrx_extra[@]+"${_hrx_extra[@]}"}"
     unset _py
 else
-    $_sudo bash "$HERE/network/setup-lora-codec.sh" --off || echo "[start.sh] full-rate: echec (voir ci-dessus)"
+    _codec_conf --off || echo "[start.sh] codec --off : echec (voir ci-dessus)"
 fi
 unset _sudo _hrx_pid
 

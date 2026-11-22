@@ -44,3 +44,15 @@ sms-coding-utils-*.tar.bz2
 fc-magnetite/
 freecalypso-env/
 freecalypso-tools/
+
+# configuration du menu (make menuconfig)
+/.config
+
+# outils kconfig du noyau compiles (tools/kconfig/linux)
+/tools/kconfig/linux/build/
+/kconfig/generated/
+/defconfig
+/.config.old
+/kconfig/start/generated/
+/.start.config
+/.kconfig/

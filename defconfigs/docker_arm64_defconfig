@@ -1,0 +1,3 @@
+# images Docker arm64 (emulation qemu sur x86)
+CONFIG_TARGET_DOCKER=y
+CONFIG_ARCH_ARM64=y

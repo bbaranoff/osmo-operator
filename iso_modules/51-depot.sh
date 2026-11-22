@@ -75,6 +75,14 @@ cat > "$ROOTFS/etc/osmocom/coeur.env" <<COEUR
 COEUR
 echo -e "  ${GREEN}✓${NC} coeur.env : ${CYAN}N_MS=${ISO_N_MS}${NC} (/etc/osmocom)"
 
+# The build's .config (make menuconfig, OSMO_BUILD_CONFIG set by
+# tools/menuconfig.sh): /etc/osmocom/build.config in the image, read by
+# start.sh --configure (kconfig/start/gen-start.sh) to offer only what was
+# built - the /proc/config.gz of the bench.
+if [ -r "${OSMO_BUILD_CONFIG:-}" ]; then
+    install -D -m644 "$OSMO_BUILD_CONFIG" "$ROOTFS/etc/osmocom/build.config"
+fi
+
 # End of module: `. file` returns the status of its LAST command and
 # build-iso.sh runs under set -e. A module ending with a false test
 # ("[ ... ] && { ...; }") would abort everything silently. Always 0 here.

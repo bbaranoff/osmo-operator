@@ -68,6 +68,8 @@ HUB_IP=""
 # and erase the SS7 identity set just before. --regen regenerates them for
 # whoever wants to start again from the templates.
 REGEN_GABARITS=0
+# start.sh --configure: the configurations are rewritten (templates included).
+[ "${OSMO_CONFIGURE:-0}" = 1 ] && REGEN_GABARITS=1
 # --menu: asks for the choices instead of guessing them. See the "Menu" block below.
 MENU_MODE=0
 # ── THE DEFAULT LAYER 1: THE DSP ─────────────────────────────────────────────
