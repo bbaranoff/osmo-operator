@@ -2,9 +2,12 @@ import QtQuick 2.0;
 import calamares.slideshow 1.0;
 
 // show.qml - Calamares slideshow shown while the system is being copied.
-// Two screenshots of the running bench (slide-banc.png: desktop, dashboard
-// and tmux; slide-calypso-gdb.png: gdb attached to the emulated Calypso
-// firmware) between text slides that summarise the image release notes
+// Screenshots of the running bench (slide-banc.png: desktop, dashboard and
+// tmux; slide-calypso-gdb.png: gdb attached to the emulated Calypso firmware)
+// and the pictures of the talk (slide-c1xx.jpg, slide-magnetite-boot.png,
+// slide-qemu-boot.png, slide-appel.png, slide-iq-appel.png, slide-grgsm.png,
+// slide-dsp-rom.png: the demos, on a dark background with a caption) between
+// text slides that summarise the image release notes
 // (osmo-operator-desktop.iso v0.1-9, .github/release-notes.md): what the
 // machine is receiving, component by component. Update at every tag.
 // The "accounts" slide describes what the installation really does
@@ -28,6 +31,28 @@ Presentation {
         }
     }
     Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-c1xx.jpg"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "Un Motorola C1xx et osmocom-bb : le telephone que le banc emule, de l'ARM jusqu'au DSP"
+        }
+    }
+    Slide {
         Text {
             anchors.centerIn: parent
             horizontalAlignment: Text.AlignHCenter
@@ -41,6 +66,50 @@ Presentation {
                   "Base Ubuntu 24.04, noyau 6.8 generic\n" +
                   "ISO hybride (dd sur cle), Secure Boot shim > grub > noyau, option toram\n" +
                   "8 Go de RAM et 4 coeurs minimum"
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-magnetite-boot.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "Le C123 emule demarre le firmware TI (FreeCalypso Magnetite) sous QEMU"
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-qemu-boot.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "QEMU Calypso : loader, pont TRX, puis OsmocomBB Hello World"
         }
     }
     Slide {
@@ -74,6 +143,94 @@ Presentation {
                   "--bts : le Calypso devient la radio de la BTS ; --ts 1 | 2 | 2/1.\n" +
                   "banc-rssi : l'appli rssi d'osmocom-bb sur un quatrieme Calypso.\n" +
                   "Voix : --vocoder-rom (FR de la ROM, defaut) ou --gapk (hote)."
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-appel.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "SMS recu par le mobile, puis appel au 600 (echo Asterisk)"
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-iq-appel.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "I/Q en direct pendant l'appel : spectre, waterfalls montant et descendant, puissance par timeslot"
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-grgsm.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "gr-gsm decode la voie descendante enregistree par le pont"
+        }
+    }
+    Slide {
+        Rectangle { anchors.fill: parent; color: "#0d1b2a" }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 12
+            anchors.bottomMargin: 44
+            source: "slide-dsp-rom.png"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+        }
+        Text {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 12
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - 40
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.pixelSize: 15
+            color: "#e0f2ff"
+            text: "Le DSP C54x arrete dans la ROM TI : registres, vecteurs armes, desassemblage"
         }
     }
     Slide {

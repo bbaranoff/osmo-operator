@@ -130,7 +130,11 @@ if wanted osmo-operator; then
     tar -C "$OSMO_OPERATOR_SRC" \
         --exclude=.git --exclude=./pont --exclude=./packaging/dist \
         --exclude='__pycache__' --exclude='*.iso' --exclude='vty-debug-dump-*' \
+        --exclude=./.deb-cache --exclude=./.cache --exclude=./.config --exclude='*.deb' \
         -cf - . | tar -C "$D" -xf -
+    # .deb-cache (the build's packages, c54x-exe with the TI ROM among them) and
+    # .cache/freecalypso (the DSP ROM dump) are local, ignored by git, and
+    # never shipped: the ROM is not redistributable.
     ln -s /opt/GSM/osmo-operator/start-native.sh "$P/usr/bin/osmo-start-native"
     ln -s /opt/GSM/osmo-operator/start-native.sh "$P/usr/bin/osmo-start-direct"   # ancien nom
     for e in osmo-launch osmo-multi; do
