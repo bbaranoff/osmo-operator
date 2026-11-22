@@ -87,10 +87,13 @@ sed -i -e 's/^#request mod bars/#request mod ncs/' \
 install -Dm755 "$DIR/tools/osmo-glava.sh" "$DEST/usr/local/bin/osmo-glava"
 # A USER SERVICE. Circle AND bars are in the same cgroup:
 #   systemctl --user stop glava      stops both (and removes the mixing)
-#   systemctl --user start glava     restarts them
-#   systemctl --user disable glava   no more GLava at login (this account)
-# Enabled for all accounts (graphical-session.target.wants in
-# /etc/systemd/user): starts with the graphical session, which provides DISPLAY.
+#   systemctl --user start glava     starts them
+#   systemctl --user enable glava    GLava at every login (this account)
+# NOT started by default: glava.service is not enabled. glava-boot.service,
+# enabled for all accounts (graphical-session.target.wants in
+# /etc/systemd/user), starts it only when the kernel command line carries
+# osmo.glava (GRUB entry "avec visualiseur audio GLava" of the live ISO; on an
+# installed system, add osmo.glava to GRUB_CMDLINE_LINUX_DEFAULT).
 rm -f "$DEST/etc/xdg/autostart/osmo-glava.desktop"
 install -d "$DEST/etc/systemd/user/graphical-session.target.wants"
 cat > "$DEST/etc/systemd/user/glava.service" <<'UNIT'
@@ -109,7 +112,25 @@ RestartSec=5
 WantedBy=graphical-session.target
 UNIT
 chmod 644 "$DEST/etc/systemd/user/glava.service"
-ln -sfn ../glava.service "$DEST/etc/systemd/user/graphical-session.target.wants/glava.service"
+rm -f "$DEST/etc/systemd/user/graphical-session.target.wants/glava.service"
+# The condition is on a separate oneshot unit, not on glava.service itself:
+# a failed condition there would also refuse a manual "systemctl --user start".
+cat > "$DEST/etc/systemd/user/glava-boot.service" <<'UNIT'
+[Unit]
+Description=GLava au demarrage si osmo.glava est sur la ligne de commande du noyau
+ConditionKernelCommandLine=osmo.glava
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user --no-block start glava.service
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+chmod 644 "$DEST/etc/systemd/user/glava-boot.service"
+ln -sfn ../glava-boot.service "$DEST/etc/systemd/user/graphical-session.target.wants/glava-boot.service"
 
 if [ -n "$DEST" ]; then chroot "$DEST" ldconfig 2>/dev/null || true; else ldconfig; fi
 echo "GLava + NCS : $(git -C "$TMP/glava" rev-parse --short HEAD) / $(git -C "$TMP/ncs" rev-parse --short HEAD) -> ${DEST:-/}"

@@ -505,7 +505,11 @@ screen at login (`tools/osmo-glava.sh`). They listen to **the speakers and the m
 together**: a null sink `osmo_glava` fed by two loopbacks, the monitor of the hardware output
 (everything that plays, bench voice included) and the default source (`osmo_mic_ec`, the
 echo-cancelled mic). The mic goes only to that sink, never to the speakers: no feedback. A
-systemd user service: `systemctl --user stop|start|disable glava`. It needs OpenGL 4.2 or newer.
+systemd user service: `systemctl --user start|stop|enable glava`. It needs OpenGL 4.2 or newer.
+**Not started by default**: pick the GRUB entry *osmo-operator - avec visualiseur audio GLava*,
+which adds `osmo.glava` to the kernel command line (read by the user unit `glava-boot.service`).
+On an installed system, add `osmo.glava` to `GRUB_CMDLINE_LINUX_DEFAULT` or run
+`systemctl --user enable glava`.
 
 ---
 
@@ -706,7 +710,7 @@ via `return` (that is how `--arm` skips a step).
 | `84-comptes.sh` | root and osmocom, console and GDM autologin, Linphone account |
 | `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icons, GTK launchers (`osmo-*-anim`), Info page |
 | `85-extensions-gnome.sh` | GNOME Shell extensions |
-| `85-glava.sh` | `--desktop`: GLava + NCS Spectrum compiled into the rootfs, `glava.service` (user) |
+| `85-glava.sh` | `--desktop`: GLava + NCS Spectrum compiled into the rootfs, `glava.service` (user), started only with `osmo.glava` on the kernel command line (GRUB entry) |
 | `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, screenfetch banner, Plymouth `osmo-bts` |
 | `87-lite.sh` | `--lite` pruning of `/opt/GSM` |
 | `88-lte-pmos.sh` | srsRAN + Open5GS (from the `.deb`s, otherwise compiled), freeDiameter, pmbootstrap, PPP kernel, VM image, final 2G + 4G + phone check |
