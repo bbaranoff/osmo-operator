@@ -811,16 +811,17 @@ WantedBy=multi-user.target
 EOF
     [ "$ISO_ROLE" = "interstp" ] || chroot "$ROOTFS" systemctl enable osmo-fft-snap 2>/dev/null || true
 
-    # ── 3. The terminal: slightly transparent, amber on near-black ───────────
+    # ── 3. The terminal: grey-blue on dark teal, amber accents ───────────────
     # A gnome-terminal profile is a RELOCATABLE schema: impossible through
     # gschema.override. Hence a SYSTEM dconf database (/etc/dconf/db/local) read
     # by every session, root on the key as well as the Calamares user on disk,
     # which the user can still override ("user" database in front).
-    # AMBER TERMINAL: amber text (#FFB000) on a warm near-black background,
-    # blinking amber block cursor, light-yellow bold, palette in ambers/golds
-    # (red and green stay distinct for errors and checkmarks), Ubuntu Mono 12,
-    # 18 % transparency. Default on the ISO as on native (the same file is
-    # loaded into the user database by update.sh / by hand: dconf load).
+    # The profile in use on the native bench: grey-blue text rgb(131,148,150)
+    # on a dark teal background rgb(0,43,54), opaque, blinking amber block
+    # cursor, light-yellow bold, amber selection, palette in ambers/golds (red
+    # and green stay distinct for errors and checkmarks), Ubuntu Mono 12.
+    # Default on the ISO as on native (the same file is loaded into the user
+    # database by update.sh / by hand: dconf load).
     install -d "$ROOTFS/etc/dconf/profile" "$ROOTFS/etc/dconf/db/local.d"
     printf 'user-db:user\nsystem-db:local\n' > "$ROOTFS/etc/dconf/profile/user"
     cat > "$ROOTFS/etc/dconf/db/local.d/10-osmo-terminal" <<'EOF'
@@ -832,10 +833,10 @@ default='b1dcc9dd-5262-4d8d-a863-c897e6d979b9'
 visible-name='osmo-operator'
 use-theme-colors=false
 use-theme-transparency=false
-use-transparent-background=true
+use-transparent-background=false
 background-transparency-percent=18
-background-color='#0B0A05'
-foreground-color='#FFB000'
+background-color='rgb(0,43,54)'
+foreground-color='rgb(131,148,150)'
 bold-color-same-as-fg=false
 bold-color='#FFD75F'
 cursor-colors-set=true
@@ -859,7 +860,7 @@ EOF
     # scrollback on a tab following the bench logs can fill /tmp ("No space
     # left on device"). 50 000 lines = ~10 MB per tab, plenty to scroll back.
     chroot "$ROOTFS" dconf update 2>/dev/null \
-        && echo -e "  ${GREEN}✓${NC} gnome-terminal : profil ${CYAN}osmo-operator${NC} (noir, 18 % transparent) via dconf systeme" \
+        && echo -e "  ${GREEN}✓${NC} gnome-terminal : profil ${CYAN}osmo-operator${NC} (fond bleu-vert sombre, opaque) via dconf systeme" \
         || echo -e "  ${YELLOW}!${NC} dconf update a echoue - profil terminal non compile"
 
     # ── 4. DING restarted after login ────────────────────────────────────────
