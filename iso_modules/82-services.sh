@@ -135,8 +135,8 @@ fi
 # banc" icon) follows the same rule: OSMO_ISO_LTE=1 enables it at boot.
 # Without srsenb (interstp, arm64) its Condition skips it.
 if [ "$ISO_ROLE" != "interstp" ]; then
-    # osmo-supplements: installed, not enabled; the Calamares osmosupplements job
-    # enables it in the target when a box on the "Supplements" page is ticked.
+    # osmo-supplements: installed, not enabled (the installer has no
+    # « Supplements » page any more; addition.sh and its icon remain).
     for _u in osmo-banc osmo-multi osmo-lte osmo-supplements; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
