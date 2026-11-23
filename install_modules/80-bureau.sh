@@ -59,8 +59,17 @@ _bureau_fond() {
         [ -f "$INST_TREE/configs/$f" ] && install -Dm644 "$INST_TREE/configs/$f" "/usr/share/backgrounds/$f"
     done
     ln -sf "$INST_TREE/tools/osmo-fond.py" /usr/local/bin/osmo-fond
+    # The mast beacon (tools/osmo-balise.py): day picture at rest = the default
+    # wallpaper, evening + red/green beacon while the bench runs.
+    if [ -f "$INST_TREE/configs/osmo-balise-jour.png" ] \
+       && OSMO_REPO="$INST_TREE" OSMO_BALISE_LIEN="$INST_TREE/tools/osmo-balise.py" \
+            bash "$INST_TREE/tools/osmo-balise-pose.sh" / >/dev/null 2>&1; then
+        _BUREAU_FOND=/usr/share/backgrounds/osmo-balise/jour.png
+        inst_say "osmo-balise : fond jour au repos, soir + balise quand le banc tourne"
+        src="$_BUREAU_FOND"
+    fi
     [ -f "$src" ] || { inst_hint "configs/gsm-lab-ville.jpg absent : fond GNOME inchange"; return 0; }
-    install -Dm644 "$src" "$_BUREAU_FOND" || { inst_hint "fond non pose : $_BUREAU_FOND"; return 0; }
+    [ "$src" = "$_BUREAU_FOND" ] || install -Dm644 "$src" "$_BUREAU_FOND" || { inst_hint "fond non pose : $_BUREAU_FOND"; return 0; }
     [ -d /usr/share/glib-2.0/schemas ] || { inst_say "fond : $_BUREAU_FOND (pas de schemas GNOME ici)"; return 0; }
     : > "$_BUREAU_SCHEMA"
     for sec in "org.gnome.desktop.background" "org.gnome.desktop.background:ubuntu" "org.gnome.desktop.background:GNOME-Greeter"; do

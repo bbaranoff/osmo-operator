@@ -36,7 +36,10 @@ if [ "${ISO_DESKTOP:-0}" = "1" ] && [ -d "$_CAL_SRC" ]; then
     fi
     # Welcome screen and first slide: the "Telecom Operator / No RF"
     # background (gsm-lab-ville.jpg), the same as the live desktop.
-    _VILLE="$DIR/configs/gsm-lab-ville.jpg"
+    # The DAY picture of the mast beacon first (the default wallpaper of the
+    # installed system), the city otherwise.
+    _VILLE="$DIR/configs/osmo-balise-jour.png"
+    [ -f "$_VILLE" ] || _VILLE="$DIR/configs/gsm-lab-ville.jpg"
     if [ -f "$_VILLE" ]; then
         cp "$_VILLE" "$ROOTFS/etc/calamares/branding/osmo/welcome.jpg"
     else
@@ -696,6 +699,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # local files, installed from THIS repository like the five above.
     # osmo-extras-install.sh serves the native install (80).
     for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh osmo-fond.py \
+             osmo-balise.py osmo-balise-pose.sh osmo-ms-pont.py osmo-gtk-run.py \
              osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh osmo-wireshark-root.sh \
              osmo-ofono-bridge.py osmo-phonesim-banc.py \
              osmo-ril-atmodem.py at-cmd.py; do
@@ -735,6 +739,14 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     else
         echo -e "  ${YELLOW}!${NC} configs/gsm-lab-fond.jpg absent - le fond GNOME retombe sur l illustration"
         install -m644 "$DIR/configs/gsm-lab-wallpaper.jpg" "$ROOTFS/usr/share/backgrounds/gsm-lab-fond.jpg"
+    fi
+    # The mast beacon (tools/osmo-balise.py): the day and evening pictures,
+    # their 4 variants built here (host numpy), osmo-balise in /usr/local/bin
+    # and its GNOME autostart. The DAY picture is the default wallpaper
+    # (80-chroot.sh schema): the beacon turns it to the evening on a start.
+    install -m644 "$DIR/configs/osmo-balise-soir.png" "$DIR/configs/osmo-balise-jour.png" "$_rt/configs/" 2>/dev/null || true
+    if OSMO_REPO="$DIR" bash "$DIR/tools/osmo-balise-pose.sh" "$ROOTFS" 2>&1 | sed 's/^/  /'; then
+        echo -e "  ${GREEN}✓${NC} osmo-balise : fond jour au repos, soir + balise rouge/verte quand le banc tourne"
     fi
     unset _rt
     cat > "$ROOTFS/etc/systemd/system/osmo-wallpaper.service" <<'EOF'

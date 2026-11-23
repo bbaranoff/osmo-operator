@@ -216,7 +216,7 @@ RUN --mount=type=cache,id=osmo-apt-archives,target=/var/cache/apt/archives,shari
     # QEMU Calypso (bbaranoff/qosmO): venv + numpy/scipy for the DSP tooling,
     # glib/pixman/slirp for the arm-softmmu target, ninja for meson, socat for
     # the scripts/run.sh PTYs.
-    python3-venv python3-pip python3-numpy python3-scipy \
+    python3-venv python3-pip python3-numpy python3-scipy python3-pytest bash-completion \
     libglib2.0-dev libpixman-1-dev libslirp-dev socat ninja-build \
     # Container operation tooling:
     #   telnet   -> VTY fallback (run_modules/21-abonnes-hlr.sh) + dashboard transport

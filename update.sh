@@ -512,6 +512,38 @@ PY
 }
 osmo_poser_gtk
 
+# ── osmo-balise: the mast beacon follows the bench ──────────────────────────
+# Pictures + variants in /usr/share/backgrounds/osmo-balise, osmo-balise in
+# /usr/local/bin, GNOME autostart. Variants rebuilt only when the pictures
+# change (the helper skips a complete folder). The CURRENT wallpaper is not
+# touched: the daemon only acts on the beacon pictures.
+osmo_poser_balise() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local R=/opt/GSM/osmo-operator
+    [ -f "$R/tools/osmo-balise-pose.sh" ] && [ -f "$R/configs/osmo-balise-jour.png" ] || return 0
+    OSMO_REPO="$R" bash "$R/tools/osmo-balise-pose.sh" / 2>&1 | sed 's/^/  [bureau] /'
+    return 0
+}
+osmo_poser_balise
+
+# ── The bench prompt (configs/bash/osmo-invite.bash) ────────────────────────
+# /etc/osmo-invite.bash, sourced LAST by the .bashrc of root, of every human
+# account and of /etc/skel: host in orange, green telephone off the hook for
+# root, red one hung up for the others. One line appended, never rewritten.
+osmo_poser_invite() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local R=/opt/GSM/osmo-operator h
+    [ -f "$R/configs/bash/osmo-invite.bash" ] || return 0
+    install -m644 "$R/configs/bash/osmo-invite.bash" /etc/osmo-invite.bash
+    for h in /root /etc/skel $(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 {print $6}'); do
+        [ -f "$h/.bashrc" ] || continue
+        grep -q 'osmo-invite.bash' "$h/.bashrc" 2>/dev/null && continue
+        printf '\n# The bench prompt: green telephone off the hook for root, red hung up otherwise\n[ -f /etc/osmo-invite.bash ] && . /etc/osmo-invite.bash\n' >> "$h/.bashrc"
+    done
+    echo "  [bureau] invite du terminal : telephone vert decroche (root), rouge raccroche (utilisateurs)"
+}
+osmo_poser_invite
+
 # ── INTERACTIVE DESKTOP: CATCH-UP OF THE osmo-desktop-panel WRAPPER ──────────
 # The widget launcher (/usr/local/bin/osmo-desktop-panel) is baked into the
 # image by iso_modules/85-installeur-bureau.sh; the widgets (osmo-topzone.py,

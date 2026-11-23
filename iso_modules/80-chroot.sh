@@ -358,6 +358,15 @@ if /root/.env/bin/python3 -c "import tomli" 2>/dev/null; then
 else
     echo "WARN: /root/.env sans tomli utilisable"
 fi
+# numpy STAYS at 1.x in the venv: GNU Radio 3.10 and gr-gsm are built against
+# it (scripts/build_gnuradio.sh pins "numpy<2"). Any later unpinned pip install
+# (pyopencl, matplotlib...) pulls numpy 2 and gnuradio fails at import with
+# « initialization failed ». Put back to 1.x if the copied venv drifted.
+if /root/.env/bin/python3 -c "import numpy,sys; sys.exit(int(numpy.__version__[0]) < 2)" 2>/dev/null; then
+    /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check "numpy<2" "contourpy<1.4" \
+        && echo "  /root/.env : numpy ramene en 1.x (GNU Radio / gr-gsm)" \
+        || echo "WARN: /root/.env garde numpy 2 - gnuradio/gr-gsm ne s importeront pas"
+fi
 
 # Docker is NOT installed in the ISO: the lab runs via start-native.sh and the
 # web dashboard via native node. The host build uses the host docker only to
@@ -422,7 +431,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
         wmctrl x11-utils x11-xserver-utils xdotool zenity librsvg2-common \
         calamares squashfs-tools rsync dosfstools efibootmgr os-prober \
         cryptsetup cryptsetup-initramfs lvm2 pciutils ubuntu-drivers-common \
-        conky-all fonts-dejavu fonts-ubuntu screenfetch python3-pil python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0 gir1.2-vte-2.91 \
+        conky-all fonts-dejavu fonts-ubuntu screenfetch bash-completion python3-pil python3-numpy python3-pytest python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0 gir1.2-vte-2.91 \
         grub2-common grub-efi-amd64-bin grub-efi-amd64-signed shim-signed grub-pc-bin \
         qml-module-qtquick2 qml-module-qtquick-layouts \
         qml-module-qtquick-window2 qml-module-qtquick-controls
@@ -717,13 +726,23 @@ GDM
     elif [ -f "$_WP" ]; then
         install -Dm644 "$_WP" /usr/share/backgrounds/gsm-lab-fond.jpg
     fi
+    # The default is the DAY picture of the mast beacon (tools/osmo-balise.py,
+    # placed with its variants by 85-installeur-bureau.sh): the beacon daemon
+    # switches it to the evening while the bench runs.
+    _JOUR=/opt/GSM/osmo-operator/configs/osmo-balise-jour.png
     if [ -f "$_VILLE" ]; then
         install -Dm644 "$_VILLE" /usr/share/backgrounds/gsm-lab-ville.jpg
         _DEFAUT=/usr/share/backgrounds/gsm-lab-ville.jpg
+    fi
+    if [ -f "$_JOUR" ]; then
+        install -Dm644 "$_JOUR" /usr/share/backgrounds/osmo-balise/jour.png
+        _DEFAUT=/usr/share/backgrounds/osmo-balise/jour.png
+    elif [ -f "$_VILLE" ]; then
+        :
     else
         _DEFAUT=/usr/share/backgrounds/gsm-lab-fond.jpg
     fi
-    if [ -f "$_WP" ] || [ -f "$_FOND" ] || [ -f "$_VILLE" ]; then
+    if [ -f "$_WP" ] || [ -f "$_FOND" ] || [ -f "$_VILLE" ] || [ -f "$_JOUR" ]; then
         # Three sections: the plain value plus the [schema:ubuntu] and
         # [schema:GNOME-Greeter] desktop overrides from
         # 10_ubuntu-settings.gschema.override, which an ubuntu:GNOME session reads

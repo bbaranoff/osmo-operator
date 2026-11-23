@@ -776,10 +776,13 @@ def _tests():
             T.append(("banc-max : l'echelle", "sms-rafale.sh 5 : cinq SMS MO un par un", ["bash", "sms-rafale.sh", "5"], TESTS_DIR, True, "banc"))
     py = os.path.join(TESTS_DIR, "pytest")
     if os.path.isdir(py):
-        T.append(("pytest (pile vivante)", "pytest : toute la suite (run_tests.sh)", ["bash", "run_tests.sh"], py, True, "banc"))
+        # the SYSTEM python (apt python3-pytest), not the /root/.env venv that
+        # run_tests.sh takes by default: the venv has no pytest
+        T.append(("pytest (pile vivante)", "pytest : toute la suite (run_tests.sh)",
+                  ["env", "CALYPSO_PY=/usr/bin/python3", "bash", "run_tests.sh"], py, True, "banc"))
         for f in sorted(os.listdir(py)):
             if f.startswith("test_") and f.endswith(".py"):
-                T.append(("pytest (pile vivante)", "pytest %s" % f[:-3], ["python3", "-m", "pytest", "-v", f], py, True, "banc"))
+                T.append(("pytest (pile vivante)", "pytest %s" % f[:-3], ["/usr/bin/python3", "-m", "pytest", "-v", f], py, True, "banc"))
     if os.path.exists(os.path.join(REPO, "scripts", "ttcn.sh")):
         tt = ["bash", "scripts/ttcn.sh"]
         T += [

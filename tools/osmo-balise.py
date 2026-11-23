@@ -4,7 +4,8 @@
 #
 #   osmo-balise suivre          the session daemon: every 2 s, the bench state
 #                               -> the matching variant of the wallpaper
-#   osmo-balise generer         (re)builds the variants (once, cached)
+#   osmo-balise generer [IMAGE [JOUR]]
+#                               (re)builds the variants (once, cached)
 #   osmo-balise jour FICHIER    the DAY picture shown at rest (same scene, same
 #                               size), copied next to the variants
 #   osmo-balise etat            prints the bench state as seen here
@@ -33,6 +34,16 @@
 # the picture in place the first time (defaults tuned for the 1426x1103
 # "Coucher de soleil urbain et tour telecom").
 #
+# THE SYSTEM PICTURES (ISO, native install, update.sh): configs/osmo-balise-
+# soir.png and configs/osmo-balise-jour.png are installed as soir.png and
+# jour.png in /usr/share/backgrounds/osmo-balise/, with their variants already
+# built in <hash>/ (no numpy needed at session time). Without a personal
+# ~/.config/osmo-balise.json, those are the pictures; a personal variants
+# folder wins over the system one.
+#   OSMO_BALISE_SORTIE   where "generer" writes (the build writes the system
+#                        variants with it)
+#   OSMO_BALISE_CONF     the config file (default ~/.config/osmo-balise.json)
+#
 # THE WALLPAPER STAYS THE USER'S: the daemon only acts while the wallpaper is
 # that picture or one of its variants. Another wallpaper chosen in the
 # settings: nothing is touched (and "osmo-balise generer" adopts a new one).
@@ -46,8 +57,9 @@ import sys
 import time
 import urllib.parse
 
-CONF = os.path.expanduser("~/.config/osmo-balise.json")
-SORTIE = os.path.expanduser("~/.local/share/backgrounds/osmo-balise")
+CONF = os.environ.get("OSMO_BALISE_CONF") or os.path.expanduser("~/.config/osmo-balise.json")
+SORTIE = os.environ.get("OSMO_BALISE_SORTIE") or os.path.expanduser("~/.local/share/backgrounds/osmo-balise")
+SYS = os.environ.get("OSMO_BALISE_SYS") or "/usr/share/backgrounds/osmo-balise"
 ETATS = ("repos", "demarrage", "demarre", "echec")
 DEFAUT = {"balise": [1204, 219], "rayon_balise": 12,
           "zones": [[930, 190, 1123, 505], [1271, 190, 1426, 505]]}
@@ -70,10 +82,24 @@ def conf():
         with open(CONF) as f:
             return json.load(f)
     except (OSError, ValueError):
+        pass
+    # no personal config: the system pictures, if installed
+    soir, jour_ = os.path.join(SYS, "soir.png"), os.path.join(SYS, "jour.png")
+    if not os.path.exists(soir):
         return {}
+    c = dict(DEFAUT, image=soir)
+    if os.path.exists(jour_):
+        c["jour"] = jour_
+    try:
+        c["empreinte"] = empreinte(soir)
+    except OSError:
+        return {}
+    return c
 
 
 def ecrire_conf(c):
+    if os.environ.get("OSMO_BALISE_CONF") == "-":
+        return
     os.makedirs(os.path.dirname(CONF), exist_ok=True)
     with open(CONF, "w") as f:
         json.dump(c, f, indent=1)
@@ -87,23 +113,37 @@ def empreinte(chemin):
     return h.hexdigest()[:16]
 
 
-def dossier(c):
-    return os.path.join(SORTIE, c["empreinte"])
+def dossiers(c):
+    """The variant folders for this picture: the personal one, then the system one."""
+    return [os.path.join(d, c["empreinte"]) for d in dict.fromkeys((SORTIE, SYS))]
 
 
-def variantes(c):
-    return {e: os.path.join(dossier(c), e + ".png") for e in ETATS}
+def complet(d):
+    return all(os.path.exists(os.path.join(d, e + ".png")) for e in ETATS)
+
+
+def dossier(c, ecrire=False):
+    """The folder in use: the first complete one (the personal one to write)."""
+    ds = dossiers(c)
+    if not ecrire:
+        for d in ds:
+            if complet(d):
+                return d
+    return ds[0]
+
+
+def variantes(c, ecrire=False):
+    return {e: os.path.join(dossier(c, ecrire), e + ".png") for e in ETATS}
 
 
 # ── the picture work (Pillow + numpy) ────────────────────────────────────────
-def generer(image=None):
-    import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter
-
+def generer(image=None, jour_explicite=None):
     c = conf()
+    actuel = fond_actuel() if image is None else ""
+    explicite = image is not None
     image = image or c.get("image")
-    actuel = fond_actuel()
-    if not image or (actuel and os.path.exists(actuel) and SORTIE not in actuel and actuel != image):
+    if not explicite and (not image or (actuel and os.path.exists(actuel) and SORTIE not in actuel
+                                        and SYS not in actuel and actuel not in (image, c.get("jour")))):
         image = actuel                      # adopt the wallpaper in place
     if not image or not os.path.exists(image):
         sys.exit("osmo-balise : pas d'image de fond (%r)" % image)
@@ -111,12 +151,18 @@ def generer(image=None):
         c = dict(DEFAUT, image=image)
     for k, v in DEFAUT.items():
         c.setdefault(k, v)
+    if jour_explicite:
+        c["jour"] = jour_explicite
     c["empreinte"] = empreinte(image)
-    v = variantes(c)
-    if all(os.path.exists(p) for p in v.values()):
+    # an explicit picture is built where asked (OSMO_BALISE_SORTIE), even if
+    # the system folder already has it
+    if complet(dossier(c, ecrire=explicite)):
         poser_jour(c)
         ecrire_conf(c)
         return c
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+    v = variantes(c, ecrire=True)
     print("osmo-balise : variantes de %s ..." % image, flush=True)
     src = Image.open(image).convert("RGB")
     im = np.asarray(src).astype(np.float32)
@@ -172,7 +218,7 @@ def generer(image=None):
             d.ellipse((bx - 2, by - 3, bx, by - 1), fill=(255, 255, 255, 190))
         return Image.alpha_composite(base, cal).convert("RGB")
 
-    os.makedirs(dossier(c), exist_ok=True)
+    os.makedirs(dossier(c, ecrire=True), exist_ok=True)
     rouge, halo_r = (255, 70, 50), (255, 60, 40)
     vert, halo_v = (90, 255, 120), (70, 255, 110)
     lampe(sans, None, None, eteinte=True).save(v["repos"])
@@ -181,16 +227,22 @@ def generer(image=None):
     lampe(sans, rouge, halo_r).save(v["echec"])
     lampe(avec, vert, halo_v).save(v["demarre"])
     ecrire_conf(c)
-    print("osmo-balise : %s" % dossier(c), flush=True)
+    print("osmo-balise : %s" % dossier(c, ecrire=True), flush=True)
     return c
 
 
 def poser_jour(c):
     """The day picture (if any) becomes the "repos" variant: a copy, the original may move."""
     j = c.get("jour")
-    if j and os.path.exists(j):
-        os.makedirs(dossier(c), exist_ok=True)
-        shutil.copyfile(j, variantes(c)["repos"])
+    d = dossier(c)
+    if j and os.path.exists(j) and os.access(d if os.path.isdir(d) else os.path.dirname(d) or ".", os.W_OK):
+        dst = os.path.join(d, "repos.png")
+        if os.path.abspath(j) == os.path.abspath(dst):
+            return
+        if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(j) and empreinte(dst) == empreinte(j):
+            return
+        os.makedirs(d, exist_ok=True)
+        shutil.copyfile(j, dst)
 
 
 def jour(fichier):
@@ -249,7 +301,7 @@ def poser(e, c=None):
         return False
     v = variantes(c)
     actuel = fond_actuel()
-    if actuel not in (c.get("image"), c.get("jour")) and not actuel.startswith(dossier(c) + "/"):
+    if actuel not in (c.get("image"), c.get("jour")) and not any(actuel.startswith(d + "/") for d in dossiers(c)):
         return False                        # another wallpaper: the user's choice, left alone
     if actuel == v[e] or not os.path.exists(v[e]):
         return True
@@ -261,7 +313,7 @@ def poser(e, c=None):
 
 def suivre():
     c = conf()
-    if not c.get("empreinte") or not all(os.path.exists(p) for p in variantes(c).values()):
+    if not c.get("empreinte") or not complet(dossier(c)):
         try:
             c = generer()
         except SystemExit as e:
@@ -280,7 +332,7 @@ def suivre():
 def main():
     a = sys.argv[1:] or ["suivre"]
     if a[0] == "generer":
-        generer(a[1] if len(a) > 1 else None)
+        generer(a[1] if len(a) > 1 else None, a[2] if len(a) > 2 else None)
     elif a[0] == "jour" and len(a) > 1:
         jour(a[1])
     elif a[0] == "etat":
@@ -290,7 +342,7 @@ def main():
     elif a[0] == "suivre":
         sys.exit(suivre() or 0)
     else:
-        sys.exit("usage : osmo-balise suivre | generer [IMAGE] | jour FICHIER | etat | poser %s" % "|".join(ETATS))
+        sys.exit("usage : osmo-balise suivre | generer [IMAGE [JOUR]] | jour FICHIER | etat | poser %s" % "|".join(ETATS))
 
 
 if __name__ == "__main__":

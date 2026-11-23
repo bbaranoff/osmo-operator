@@ -241,7 +241,13 @@ if [[ $- == *i* ]]; then
     fi
 fi
 BASHRC
+    # The bench prompt, sourced LAST (configs/bash/osmo-invite.bash): host in
+    # orange, a green telephone off the hook for root (#), a red one hung up
+    # for the others ($).
+    grep -q 'osmo-invite.bash' "$_h/.bashrc" 2>/dev/null || \
+        printf '\n# The bench prompt: green telephone off the hook for root, red hung up otherwise\n[ -f /etc/osmo-invite.bash ] && . /etc/osmo-invite.bash\n' >> "$_h/.bashrc"
 done
+install -Dm644 "$DIR/configs/bash/osmo-invite.bash" "$ROOTFS/etc/osmo-invite.bash"
 chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} banniere de terminal : ${CYAN}screenfetch${NC} (logo pixel art du banc) + une phrase"
 

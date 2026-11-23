@@ -447,7 +447,11 @@ if [ "$DO_OPENCL" = "1" ]; then
     # pyopencl needs. Non-fatal.
     if [ -x /root/.env/bin/python3 ]; then
         echo -e "  ${CYAN}→${NC} pyopencl dans le venv ${BOLD}/root/.env${NC} ..."
-        if /root/.env/bin/python3 -m pip install --no-cache-dir --disable-pip-version-check pyopencl >/dev/null 2>&1; then
+        # "numpy<2" ON THE SAME LINE: a bare « pip install pyopencl » pulls
+        # numpy 2, and GNU Radio 3.10 / gr-gsm (built against numpy 1) then
+        # fail at import (« initialization failed »). Same rule as the
+        # Dockerfile (matplotlib) and scripts/build_gnuradio.sh.
+        if /root/.env/bin/python3 -m pip install --no-cache-dir --disable-pip-version-check pyopencl "numpy<2" >/dev/null 2>&1; then
             echo -e "      ${GREEN}✓${NC} pyopencl"
         else
             echo -e "      ${YELLOW}!${NC} pyopencl non installe (voir : /root/.env/bin/python3 -m pip install pyopencl)"

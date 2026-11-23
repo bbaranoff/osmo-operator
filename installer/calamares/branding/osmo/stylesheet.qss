@@ -1,0 +1,85 @@
+/* stylesheet.qss - the osmo-operator installer pages, Ubuntu style.
+ *
+ * Read by Calamares from the branding folder and applied to the widget pages
+ * (welcome, locale, keyboard, partition, users, package choosers, summary).
+ * The header and the buttons are QML (calamares-sidebar.qml,
+ * calamares-navigation.qml). Light background, Ubuntu font, rounded fields,
+ * Yaru-blue accent (#208fe9): the colours of the installed desktop.
+ */
+
+QWidget {
+    font-family: "Ubuntu", "Cantarell", sans-serif;
+    font-size: 11pt;
+    color: #2c2c2c;
+}
+
+#mainApp, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {
+    background-color: #fafafa;
+}
+
+/* titles of the pages */
+QLabel#title, QLabel#mainText, QLabel#headerLabel {
+    font-size: 16pt;
+    font-weight: bold;
+}
+
+/* the push buttons inside the pages (partition, users...) */
+QPushButton {
+    background-color: #f2f2f2;
+    border: 1px solid #cfcfcf;
+    border-radius: 6px;
+    padding: 6px 16px;
+    min-height: 22px;
+}
+QPushButton:hover   { background-color: #ececec; }
+QPushButton:pressed { background-color: #dcdcdc; }
+QPushButton:disabled { color: #9a9a9a; }
+QPushButton:default, QPushButton:checked {
+    background-color: #208fe9;
+    border: none;
+    color: #ffffff;
+}
+
+/* text fields, lists, combos */
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit, QListView, QTreeView {
+    background-color: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 6px;
+    padding: 5px 8px;
+    selection-background-color: #208fe9;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
+    border: 2px solid #208fe9;
+}
+QComboBox::drop-down { border: none; width: 24px; }
+QListView::item, QTreeView::item { padding: 6px; border-radius: 4px; }
+QListView::item:selected, QTreeView::item:selected {
+    background-color: #208fe9;
+    color: #ffffff;
+}
+
+/* the choice cards: « Effacer le disque », « Installation manuelle »... */
+QRadioButton, QCheckBox { spacing: 10px; padding: 4px 0; }
+QRadioButton::indicator, QCheckBox::indicator { width: 18px; height: 18px; }
+
+QProgressBar {
+    background-color: #e6e6e6;
+    border: none;
+    border-radius: 4px;
+    height: 8px;
+    text-align: center;
+    color: transparent;
+}
+QProgressBar::chunk { background-color: #208fe9; border-radius: 4px; }
+
+QScrollBar:vertical { background: transparent; width: 10px; }
+QScrollBar::handle:vertical { background: #c9c9c9; border-radius: 5px; min-height: 30px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+
+QToolTip {
+    background-color: #2c2c2c;
+    color: #ffffff;
+    border: none;
+    padding: 4px 8px;
+}

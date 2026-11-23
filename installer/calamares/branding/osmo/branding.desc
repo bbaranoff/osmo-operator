@@ -23,6 +23,17 @@ images:
     productIcon:   "logo.png"
     productWelcome: "welcome.jpg"
 
+# ── UBUNTU-STYLE WINDOW ────────────────────────────────────────────────────
+# The look of the Ubuntu desktop installer: no dark column of steps, a light
+# header ON TOP with the step name and progress dots (calamares-sidebar.qml),
+# flat buttons at the bottom (calamares-navigation.qml), the pages styled by
+# stylesheet.qss (light, Ubuntu font, Yaru-blue accent).
+windowExpanding: normal
+windowSize: 1024px,720px
+windowPlacement: center
+sidebar: qml,top
+navigation: qml,bottom
+
 slideshow: "show.qml"
 # show.qml is written for slideshow API 1 (a Timer running from start to
 # end). Without this key, Calamares logs "Invalid or missing *slideshowAPI*"
@@ -35,7 +46,7 @@ slideshowAPI: 1
 # entry" and the sidebar falls back to the Qt palette. "Current" = the step
 # in progress.
 style:
-    SidebarBackground:         "#0d1b2a"
-    SidebarText:               "#ffffff"
-    SidebarBackgroundCurrent:  "#1b98e0"
-    SidebarTextCurrent:        "#13293d"
+    SidebarBackground:         "#fafafa"
+    SidebarText:               "#2c2c2c"
+    SidebarBackgroundCurrent:  "#208fe9"
+    SidebarTextCurrent:        "#ffffff"

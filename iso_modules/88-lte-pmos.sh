@@ -14,6 +14,7 @@
 #   OSMO_PMOS_KERNEL_URL=URL  PPP kernel .deb to fetch when missing from the cache
 #   OSMO_ISO_PMAPORTS=0       do not embed pmaports at the kernel commit
 #   OSMO_ISO_LTE_REQUIRED=0   final check only reports, does not abort the build
+#   OSMO_ISO_WEBUI=0          no Open5GS WebUI (4G subscriber console, :8999)
 #   OSMO_SRSRAN_ARCH          ISA baseline for srsRAN builds (default x86-64-v2)
 #   OSMO_DEB_CACHE            host .deb cache (default /var/cache/osmo-debs)
 
@@ -184,6 +185,27 @@ chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --configs --launchers 2>&1 | sed 's/^/  /'
 chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
     bash /opt/GSM/osmo-operator/tools/osmo-pmos-install.sh 2>&1 | sed 's/^/  /'
+
+# ── The 4G subscriber console (Open5GS WebUI, :8999) ───────────────────────
+# open5gs-webui.service is enabled by 82-services.sh but only starts on a
+# BUILT WebUI (.next/BUILD_ID). The host's build is copied when it has one
+# (no network, no npm); otherwise it is fetched and built in the chroot
+# (« osmo-lte-install --webui »). Never fatal: without it the unit is skipped.
+if [ "${OSMO_ISO_WEBUI:-1}" != "0" ]; then
+    _wu=/opt/LTE/open5gs/webui
+    if [ -f "$_wu/.next/BUILD_ID" ] && [ -f "$_wu/server/index.js" ]; then
+        install -d "$ROOTFS$_wu"
+        # .env holds the host's session secrets: each machine makes its own.
+        rsync -a --delete --exclude=.env "$_wu/" "$ROOTFS$_wu/" \
+            && echo -e "  ${GREEN}✓${NC} WebUI Open5GS copiee de l'hote (console :8999)" \
+            || echo -e "  ${YELLOW}!${NC} WebUI Open5GS : copie echouee"
+    else
+        chroot "$ROOTFS" env OSMO_REPO=/opt/GSM/osmo-operator \
+            bash /opt/GSM/osmo-operator/tools/osmo-lte-install.sh --webui 2>&1 | sed 's/^/  /' \
+            || echo -e "  ${YELLOW}!${NC} WebUI Open5GS non construite - « osmo-lte-install --webui » plus tard"
+    fi
+    unset _wu
+fi
 
 # Default VM image: if OSMO_ISO_PMOS_IMAGE is unset, use the host's image
 # (where osmo-pmos-build looks for it). A ready .zst is preferred, otherwise
