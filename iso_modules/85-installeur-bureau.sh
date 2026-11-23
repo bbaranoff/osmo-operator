@@ -458,7 +458,7 @@ CONKY
     install -d "$ROOTFS/usr/share/icons/hicolor/scalable/apps" \
               "$ROOTFS/usr/share/osmo-operator/icons" \
               "$ROOTFS/usr/share/osmo-operator"
-    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte osmo-dino osmo-gtk; do
+    for _ic in osmo-launch osmo-multi osmo-tutorial claude osmo-paint osmo-lte osmo-dino osmo-gtk osmo-iso; do
         [ -f "$DIR/data/$_ic.svg" ] || continue
         cp -f "$DIR/data/$_ic.svg" \
               "$ROOTFS/usr/share/icons/hicolor/scalable/apps/$_ic.svg"
@@ -699,7 +699,7 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
     # local files, installed from THIS repository like the five above.
     # osmo-extras-install.sh serves the native install (80).
     for _f in osmo-launcher.py osmo-topzone.py osmo-ts-probe.py osmo-dino.py osmo-extras-install.sh osmo-fond.py \
-             osmo-balise.py osmo-balise-pose.sh osmo-ms-pont.py osmo-gtk-run.py \
+             osmo-balise.py osmo-balise-pose.sh osmo-ms-pont.py osmo-gtk-run.py osmo-iso-gtk.py \
              osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh osmo-wireshark-root.sh \
              osmo-ofono-bridge.py osmo-phonesim-banc.py \
              osmo-ril-atmodem.py at-cmd.py; do

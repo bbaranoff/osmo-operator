@@ -512,6 +512,19 @@ PY
 }
 osmo_poser_gtk
 
+# ── osmo-iso: the image builder in a GTK window (tools/osmo-iso-gtk.py) ─────
+osmo_poser_iso() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local R=/opt/GSM/osmo-operator
+    [ -f "$R/tools/osmo-iso-gtk.py" ] && [ -f "$R/data/desktop/osmo-iso.desktop" ] || return 0
+    ln -sf "$R/tools/osmo-iso-gtk.py" /usr/local/bin/osmo-iso
+    install -D -m644 "$R/data/osmo-iso.svg" /usr/share/osmo-operator/icons/osmo-iso.svg
+    install -m644 "$R/data/desktop/osmo-iso.desktop" /usr/share/applications/osmo-iso.desktop
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    echo "  [bureau] osmo-iso : construire une ISO ou une image ARM depuis une fenetre GTK"
+}
+osmo_poser_iso
+
 # ── osmo-balise: the mast beacon follows the bench ──────────────────────────
 # Pictures + variants in /usr/share/backgrounds/osmo-balise, osmo-balise in
 # /usr/local/bin, GNOME autostart. Variants rebuilt only when the pictures

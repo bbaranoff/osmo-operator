@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- osmo-iso: an optical disc with the bench mast, for the image builder -->
+  <defs>
+    <radialGradient id="d" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#e6edf3"/><stop offset="0.55" stop-color="#9fb3c8"/><stop offset="1" stop-color="#58a6ff"/>
+    </radialGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#0b0e14"/>
+  <circle cx="64" cy="64" r="46" fill="url(#d)"/>
+  <circle cx="64" cy="64" r="46" fill="none" stroke="#1f6feb" stroke-width="3"/>
+  <circle cx="64" cy="64" r="12" fill="#0b0e14"/>
+  <circle cx="64" cy="64" r="5" fill="#58a6ff"/>
+  <path d="M30 44 A40 40 0 0 1 52 24" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8"/>
+  <g transform="translate(86 70)">
+    <rect x="-4" y="0" width="34" height="44" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2.5"/>
+    <path d="M13 36 L13 10 M7 36 L13 10 L19 36 M9 26 L17 26" stroke="#3fb950" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    <circle cx="13" cy="8" r="3" fill="#ff8700"/>
+  </g>
+</svg>

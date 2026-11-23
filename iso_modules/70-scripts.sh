@@ -59,6 +59,9 @@ for _l in osmo-gtk constellation iq-visual; do
     ln -sf /opt/GSM/osmo-operator/tools/osmo-ms-pont.py "$ROOTFS/usr/local/bin/$_l" 2>/dev/null || true
 done
 unset _l
+# osmo-iso: build an ISO (amd64) or an ARM SD image from a GTK window
+# (tools/osmo-iso-gtk.py, data/desktop/osmo-iso.desktop)
+ln -sf /opt/GSM/osmo-operator/tools/osmo-iso-gtk.py "$ROOTFS/usr/local/bin/osmo-iso" 2>/dev/null || true
 # Bench aliases (banc-rssi, banc-trx, banc-mobile, c123-1...): the profile.d
 # file for login shells, and the same names as real commands (tools/osmo-banc-cmd.sh).
 install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"

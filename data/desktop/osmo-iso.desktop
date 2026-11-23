@@ -1,0 +1,16 @@
+# osmo-iso.desktop - the image builder (tools/osmo-iso-gtk.py, « osmo-iso »):
+# a GTK form in front of build-iso.sh - ISO for a PC (amd64) or SD image for
+# ARM boards (arm64) - built as root in a progress window (osmo-gtk-run).
+[Desktop Entry]
+Type=Application
+Name=osmo-iso : construire une image
+Name[fr]=osmo-iso : construire une image
+GenericName=Construction ISO / image ARM
+Comment=Construire une ISO du banc (PC) ou une image SD (Raspberry Pi, Orange Pi)
+Comment[fr]=Construire une ISO du banc (PC) ou une image SD (Raspberry Pi, Orange Pi)
+Exec=/usr/local/bin/osmo-iso
+Icon=/usr/share/osmo-operator/icons/osmo-iso.svg
+Terminal=false
+StartupWMClass=osmo-iso-gtk.py
+Categories=System;
+Keywords=iso;image;build;arm;raspberry;orangepi;armbian;usb;

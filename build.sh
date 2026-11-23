@@ -6,6 +6,8 @@
 #  Usage: sudo ./build.sh [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]
 #         ./build.sh --menuconfig     menu facon noyau : cible docker OU iso, options
 #         ./build.sh --config[=FILE]  build depuis la config enregistree (.config)
+#         ./build.sh --gtk            la fenetre osmo-iso : ISO (amd64) ou image
+#                                     SD arm64, construite en root (pkexec)
 #         (-h describes every option)
 #
 #  - BuildKit bake: the images are described in docker-bake.hcl. With
@@ -53,6 +55,15 @@ for arg in "$@"; do
         --menuconfig|menuconfig) exec bash "$DIR/tools/menuconfig.sh" ;;
         --config)                exec bash "$DIR/tools/menuconfig.sh" --build ;;
         --config=*)              exec bash "$DIR/tools/menuconfig.sh" --build --file="${arg#*=}" ;;
+        # The GTK window (tools/osmo-iso-gtk.py): an ISO or an ARM SD image,
+        # options in a form, build-iso.sh run as root in a progress window.
+        # The SYSTEM python3 (PyGObject comes from apt, not from the venv).
+        --gtk|gtk)
+            if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+                echo -e "${RED}--gtk : pas de bureau (DISPLAY vide). Depuis la session graphique : ./build.sh --gtk${NC}" >&2
+                exit 1
+            fi
+            exec /usr/bin/python3 "$DIR/tools/osmo-iso-gtk.py" ;;
     esac
 done
 
@@ -93,6 +104,7 @@ for arg in "$@"; do
             echo "Usage: sudo $0 [--no-cache] [--lite] [--stp] [--build-run] [--fast] [--arch=arm64|--arm]"
             echo "       $0 --menuconfig      menu (cible docker ou iso, fonctionnalites, chemins)"
             echo "       $0 --config[=FICH]   build depuis la config du menu (defaut .config)"
+            echo "       $0 --gtk             fenetre osmo-iso : construire une ISO ou une image SD arm64"
             echo "  --fast       Build rapide d osmocom-nitb : ce que osmo-minioperator prend en .deb"
             echo "               n est pas compile. Pile Osmocom = paquets officiels Osmocom (OBS"
             echo "               latest, SANS les patches osmo-trx +ipc et bts/hlr/msc +rand) ;"
