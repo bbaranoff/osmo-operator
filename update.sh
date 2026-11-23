@@ -544,6 +544,13 @@ osmo_poser_invite() {
 }
 osmo_poser_invite
 
+# ── Live root (osmo-racine-live): this update evaporates at reboot ───────────
+if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; then
+    echo "  ATTENTION : / est en RAM (osmo-racine-live) - cette mise a jour sera perdue au redemarrage."
+    echo "  Pour la garder : « osmo-racine-live persistant bash /opt/GSM/osmo-operator/update.sh »,"
+    echo "  ou redemarrer sur l'entree GRUB « osmo-operator - maintenance (racine persistante) »."
+fi
+
 # ── INTERACTIVE DESKTOP: CATCH-UP OF THE osmo-desktop-panel WRAPPER ──────────
 # The widget launcher (/usr/local/bin/osmo-desktop-panel) is baked into the
 # image by iso_modules/85-installeur-bureau.sh; the widgets (osmo-topzone.py,

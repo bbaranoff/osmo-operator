@@ -67,6 +67,10 @@ install -d "$ROOTFS/usr/local/sbin" "$ROOTFS/usr/local/bin" "$ROOTFS/root" \
            "$ROOTFS/etc/systemd/system" "$ROOTFS/etc/default" "$ROOTFS/usr/local/share/applications"
 install -m 0755 "$_CH_SRC/unlock-home"            "$ROOTFS/usr/local/sbin/unlock-home"
 install -m 0755 "$_CH_SRC/lock-home"              "$ROOTFS/usr/local/sbin/lock-home"
+# The system disk as a live key once installed: / read-only, writes in RAM,
+# the encrypted /home persistent (overlayroot, enabled by Calamares through
+# shellprocess-osmo.conf; the live key itself is not touched).
+install -m 0755 "$_CH_SRC/osmo-racine-live"       "$ROOTFS/usr/local/sbin/osmo-racine-live"
 install -m 0755 "$_CH_SRC/crypthome-fond"         "$ROOTFS/usr/local/sbin/crypthome-fond"  # background image for the LUKS prompt
 install -m 0755 "$_CH_SRC/refresh-owner-apps"     "$ROOTFS/usr/local/sbin/refresh-owner-apps"
 install -m 0755 "$_CH_SRC/run-as-owner"           "$ROOTFS/usr/local/bin/run-as-owner"

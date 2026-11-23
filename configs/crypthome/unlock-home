@@ -151,6 +151,20 @@ en_ram() {
 
 root_dans_tmp() {
     local lien d
+    # Installed bench with osmo-racine-live: / is ALREADY in RAM (overlayroot),
+    # /root and /opt/GSM included - a second overlay would add nothing. Only
+    # the keyring link (to the closed volume) is replaced by a directory, in
+    # RAM like everything else.
+    if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; then
+        for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
+            if [ -L "/root/$lien" ]; then
+                rm -f "/root/$lien"
+                install -d -m 0700 "/root/$lien"
+            fi
+        done
+        log "session root : / est deja en RAM (osmo-racine-live) - rien n'ira sur le disque."
+        return 0
+    fi
     if ! mountpoint -q "$RAM_ROOT"; then
         install -d -m 0700 "$RAM_ROOT" || return 0
         if ! mount -t tmpfs -o mode=0700,size=50% tmpfs "$RAM_ROOT"; then

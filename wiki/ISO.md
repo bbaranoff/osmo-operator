@@ -590,7 +590,19 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   with `noauto`, service enabled, the old `/home` set aside in
   `/var/backups/home-avant-chiffrement-*` at the next reboot).
 
+- **The system disk is a live key** (`osmo-racine-live`, enabled at installation): `/` is
+  read-only and every write to it - root's files, `/etc`, `/opt/GSM`, `/var` - goes to RAM
+  (overlayroot, tmpfs) and is gone at the next boot. Only `/` is covered (`recurse=0`): once
+  unlocked, the encrypted `/home` is the account's own disk, **read-write and persistent**.
+  `osmo-racine-live etat` says which mode this boot is in.
+
 ### 6.8 Updating an installed machine
+
+- **The root is live** (6.7): an update made in a normal boot is lost at reboot. To keep it,
+  either `osmo-racine-live persistant bash /opt/GSM/osmo-operator/update.sh` (overlayroot-chroot
+  on the real disk), or boot the GRUB entry **"osmo-operator - maintenance (racine
+  persistante)"** (`overlayroot=disabled`), update, reboot. `osmo-racine-live retirer`, from a
+  persistent boot, disables the live root for good.
 
 - `osmo-update` (at boot, or by hand): fast-forward `git fetch` of `/opt/GSM/osmo-operator` and
   the embedded repositories, then `tools/osmo-patches-apply.sh` re-applies `patches/*.patch`

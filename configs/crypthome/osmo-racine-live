@@ -1,0 +1,112 @@
+#!/bin/bash
+# osmo-racine-live - the system disk of an INSTALLED bench behaves like a live
+# key: / is read-only, and every write to it (root's files, /etc, /opt/GSM,
+# /var...) goes to RAM and is gone at the next boot. The encrypted /home -
+# the session account's home (unlock-home) - is NOT covered: once it is
+# unlocked, that account writes to its own disk, persistently.
+#
+#   osmo-racine-live poser          enable (Calamares, shellprocess-osmo.conf:
+#                                   at installation, in the target)
+#   osmo-racine-live etat           live (RAM) or persistent, this boot
+#   osmo-racine-live persistant [CMD...]
+#                                   run CMD (default: a shell) on the REAL
+#                                   disk, from a live boot: apt, update.sh,
+#                                   a config to keep (overlayroot-chroot)
+#   osmo-racine-live retirer        disable for good (from a persistent shell)
+#
+# THE MECHANISM: Ubuntu's overlayroot package. Its initramfs script mounts
+# the real root read-only on /media/root-ro and an overlay with a tmpfs upper
+# on /. recurse=0: only / is covered, every other fstab line (the encrypted
+# /home, /boot/efi) is mounted as it is, read-write.
+#
+# MAINTENANCE: the GRUB entry « osmo-operator - maintenance (racine
+# persistante) » (/etc/grub.d/42_osmo-maintenance) boots with
+# overlayroot=disabled: a normal, persistent system, for updates.
+set -u
+CONF=/etc/overlayroot.conf
+GRUBD=/etc/grub.d/42_osmo-maintenance
+
+live() {
+    [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null
+}
+
+poser_grub() {
+    cat > "$GRUBD" <<'GRUB'
+#!/bin/sh
+# 42_osmo-maintenance - written by osmo-racine-live. The same system, with
+# overlayroot disabled: / is persistent (updates, apt, configs to keep).
+set -e
+. "$pkgdatadir/grub-mkconfig_lib"
+K=/boot/vmlinuz
+I=/boot/initrd.img
+[ -e "$K" ] && [ -e "$I" ] || exit 0
+K="$(readlink -f "$K")"; I="$(readlink -f "$I")"
+dev="$(${grub_probe} --target=device "$K")"
+rk="$(make_system_path_relative_to_its_root "$K")"
+ri="$(make_system_path_relative_to_its_root "$I")"
+echo "osmo-operator : entree maintenance (racine persistante)" >&2
+cat <<EOF
+menuentry 'osmo-operator - maintenance (racine persistante)' --class ubuntu --class os {
+	load_video
+	insmod gzio
+$(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
+	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} overlayroot=disabled
+	initrd	$ri
+}
+EOF
+GRUB
+    chmod 755 "$GRUBD"
+}
+
+case "${1:-etat}" in
+    poser)
+        [ "$(id -u)" = 0 ] || { echo "osmo-racine-live : root requis" >&2; exit 1; }
+        command -v overlayroot-chroot >/dev/null 2>&1 \
+            || { echo "osmo-racine-live : paquet overlayroot absent - rien de pose" >&2; exit 1; }
+        cat > "$CONF" <<'EOF'
+# /etc/overlayroot.conf - written by osmo-racine-live.
+# / read-only, writes in RAM (tmpfs), lost at reboot: a live key. recurse=0:
+# the other mounts (the encrypted /home of the session account) stay as they
+# are, read-write. swap=1: a swap line is kept. Bypass: kernel parameter
+# overlayroot=disabled (GRUB entry « maintenance »).
+overlayroot_cfgdisk="disabled"
+overlayroot="tmpfs:swap=1,recurse=0"
+EOF
+        poser_grub
+        update-initramfs -u >/dev/null 2>&1 || echo "osmo-racine-live : update-initramfs a echoue" >&2
+        update-grub >/dev/null 2>&1 || echo "osmo-racine-live : update-grub a echoue" >&2
+        echo "osmo-racine-live : / en lecture seule (RAM) a partir du prochain demarrage ; /home chiffre en ecriture"
+        ;;
+    etat)
+        if live; then
+            echo "live : / en RAM, perdu au redemarrage (disque reel en lecture seule sur /media/root-ro)"
+        else
+            echo "persistant : / ecrit sur le disque"
+        fi
+        if mountpoint -q /home 2>/dev/null; then
+            echo "/home : $(findmnt -no SOURCE /home) (en ecriture, persistant)"
+        else
+            echo "/home : non monte (disque chiffre ferme)"
+        fi
+        ;;
+    persistant)
+        shift
+        live || { echo "osmo-racine-live : / est deja persistant - commande lancee telle quelle" >&2; exec "${@:-bash}"; }
+        exec overlayroot-chroot "${@:-bash}"
+        ;;
+    retirer)
+        if live; then
+            echo "osmo-racine-live : demarrage live - utiliser « osmo-racine-live persistant osmo-racine-live retirer »" >&2
+            exit 1
+        fi
+        sed -i 's/^overlayroot=.*/overlayroot=""/' "$CONF" 2>/dev/null
+        rm -f "$GRUBD"
+        update-initramfs -u >/dev/null 2>&1
+        update-grub >/dev/null 2>&1
+        echo "osmo-racine-live : / persistant a partir du prochain demarrage"
+        ;;
+    *)
+        echo "usage : osmo-racine-live poser | etat | persistant [CMD...] | retirer" >&2
+        exit 2
+        ;;
+esac
