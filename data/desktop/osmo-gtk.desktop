@@ -1,0 +1,48 @@
+# osmo-gtk.desktop - Constellation (tools/osmo-ms-pont.py, also "constellation",
+# "iq-visual", "osmo-gtk"): the bench in one GTK window - full start, air
+# (constellation, eye, I/Q, TDMA grid), core network, mobile L23, Kconfig menu,
+# tests, notebooks, wiki, infos, installation. Pinned in the dock.
+# Right-click: open the window on a given tab (--onglet).
+[Desktop Entry]
+Type=Application
+Name=osmo-gtk : Constellation
+Name[fr]=osmo-gtk : Constellation
+GenericName=Visuel I/Q du banc
+Comment=Le banc en une fenetre : demarrage, air I/Q, coeur, mobile L23, Kconfig, tests, notebooks, wiki
+Comment[fr]=Le banc en une fenetre : demarrage, air I/Q, coeur, mobile L23, Kconfig, tests, notebooks, wiki
+Exec=/usr/local/bin/osmo-gtk
+Icon=/usr/share/osmo-operator/icons/osmo-gtk.svg
+Terminal=false
+StartupWMClass=osmo-ms-pont.py
+Categories=System;Network;
+Keywords=constellation;iq;gmsk;dsp;calypso;kconfig;menuconfig;tests;notebook;wiki;l23;mobile;core;
+
+Actions=Journaux;Kconfig;Tests;Notebooks;Wiki;Infos;Installation;
+
+[Desktop Action Journaux]
+Name=Journaux (dsp, qemu, osmocon, mailbox, Osmocom)
+Exec=/usr/local/bin/osmo-gtk --onglet Journaux
+
+[Desktop Action Kconfig]
+Name=Kconfig (menu de demarrage et de build)
+Exec=/usr/local/bin/osmo-gtk --onglet Kconfig
+
+[Desktop Action Tests]
+Name=Tests
+Exec=/usr/local/bin/osmo-gtk --onglet Tests
+
+[Desktop Action Notebooks]
+Name=Notebooks
+Exec=/usr/local/bin/osmo-gtk --onglet Notebooks
+
+[Desktop Action Wiki]
+Name=Wiki
+Exec=/usr/local/bin/osmo-gtk --onglet Wiki
+
+[Desktop Action Infos]
+Name=Infos (machine, isolation, budget DSP, services)
+Exec=/usr/local/bin/osmo-gtk --onglet Infos
+
+[Desktop Action Installation]
+Name=Installation (install.sh)
+Exec=/usr/local/bin/osmo-gtk --onglet Installation

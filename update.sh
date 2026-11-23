@@ -480,6 +480,38 @@ PY
 }
 osmo_poser_aide
 
+# ── osmo-gtk: Constellation, the bench in one GTK window, pinned in the dock ──
+# tools/osmo-ms-pont.py under four names (osmo-gtk, constellation, iq-visual,
+# osmo-ms-pont), its icon, data/desktop/osmo-gtk.desktop, and the dock favorite
+# right after "Lancer le banc" in every open GNOME session.
+osmo_poser_gtk() {
+    [ "$(id -u)" -eq 0 ] || return 0
+    local R=/opt/GSM/osmo-operator l u uid bus
+    [ -f "$R/tools/osmo-ms-pont.py" ] && [ -f "$R/data/desktop/osmo-gtk.desktop" ] || return 0
+    for l in osmo-gtk constellation iq-visual osmo-ms-pont; do ln -sf "$R/tools/osmo-ms-pont.py" "/usr/local/bin/$l"; done
+    install -D -m644 "$R/data/osmo-gtk.svg" /usr/share/osmo-operator/icons/osmo-gtk.svg
+    install -D -m644 "$R/data/osmo-gtk.svg" /usr/share/icons/hicolor/scalable/apps/osmo-gtk.svg
+    install -m644 "$R/data/desktop/osmo-gtk.desktop" /usr/share/applications/osmo-gtk.desktop
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+        uid="$(id -u "$u" 2>/dev/null)" || continue
+        bus="/run/user/$uid/bus"; [ -S "$bus" ] || continue
+        sudo -u "$u" DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" python3 - <<'PY' 2>/dev/null || true
+import subprocess, ast
+g = ["gsettings", "get", "org.gnome.shell", "favorite-apps"]
+cur = ast.literal_eval(subprocess.run(g, capture_output=True, text=True).stdout.strip() or "[]")
+if "osmo-gtk.desktop" not in cur:
+    neu = list(cur)
+    i = neu.index("osmo-launch.desktop") + 1 if "osmo-launch.desktop" in neu else len(neu)
+    neu.insert(i, "osmo-gtk.desktop")
+    subprocess.run(["gsettings", "set", "org.gnome.shell", "favorite-apps", repr(neu)], check=False)
+PY
+    done
+    echo "  [bureau] osmo-gtk (Constellation) : commandes osmo-gtk / constellation / iq-visual, favori du dock"
+    return 0
+}
+osmo_poser_gtk
+
 # ── INTERACTIVE DESKTOP: CATCH-UP OF THE osmo-desktop-panel WRAPPER ──────────
 # The widget launcher (/usr/local/bin/osmo-desktop-panel) is baked into the
 # image by iso_modules/85-installeur-bureau.sh; the widgets (osmo-topzone.py,

@@ -40,7 +40,7 @@ INST_DEPS[bureau]="configs"
 INST_REQUIRED[bureau]=0
 
 _BUREAU_ICONS=/usr/share/osmo-operator/icons
-_BUREAU_ENTRIES="osmo-launch osmo-dino"
+_BUREAU_ENTRIES="osmo-launch osmo-dino osmo-gtk"
 # The idle background is the city WITHOUT antenna (gsm-lab-ville.jpg);
 # gsm-lab-antenne.jpg (same city, mast raised) is faded in by tools/osmo-fond.py
 # while a 2G/4G network runs. Both are copied, plus the low-poly landscape
@@ -146,6 +146,8 @@ inst_bureau_run() {
     ln -sf "$INST_TREE/tools/osmo-c123-gtk.py" /usr/local/bin/osmo-c123
     # osmo-ms-pont: the chain without the mobile + its air (tools/osmo-ms-pont.py)
     ln -sf "$INST_TREE/tools/osmo-ms-pont.py" /usr/local/bin/osmo-ms-pont
+    # osmo-gtk / constellation / iq-visual: the same window (menu entry osmo-gtk.desktop)
+    for e in osmo-gtk constellation iq-visual; do ln -sf "$INST_TREE/tools/osmo-ms-pont.py" "/usr/local/bin/$e"; done
     # banc-rssi, banc-trx, c123-1...: profile.d aliases AND real commands (tools/osmo-banc-cmd.sh)
     install -m644 "$INST_TREE/scripts/osmo-banc-aliases.sh" /etc/profile.d/98-osmo-banc-aliases.sh
     OSMO_BANC_TREE="$INST_TREE" bash "$INST_TREE/tools/osmo-banc-cmd.sh" --install /usr/local/bin >/dev/null
