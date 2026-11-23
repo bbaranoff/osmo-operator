@@ -1,0 +1,18 @@
+#!/bin/sh
+# hooks/osmo-porte - what the porte runs: tpm2-tools (one binary, the
+# tpm2_* names are links), its TCTI library (dlopen'ed, not seen by
+# copy_exec through ldd), cryptsetup, kexec, blkid. No oathtool: the TPM
+# computes the code (HMAC), the key never leaves it.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0;; esac
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /usr/bin/tpm2 /bin
+for t in hmac pcrread pcrextend hierarchycontrol; do ln -sf tpm2 "${DESTDIR}/bin/tpm2_$t"; done
+for l in /usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0 /usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so; do
+    [ -e "$l" ] && copy_exec "$l"
+done
+copy_exec /sbin/cryptsetup /sbin
+copy_exec /sbin/kexec /sbin
+copy_exec /sbin/blkid /sbin
+manual_add_modules tpm_crb tpm_tis tpm_tis_core dm_mod dm_crypt ext4 || true

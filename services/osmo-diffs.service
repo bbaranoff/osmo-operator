@@ -6,7 +6,10 @@ Documentation=file:/usr/local/sbin/osmo-diffs
 # /home (the session account's reference copy), the box partition and the
 # overlay of a root session are still mounted.
 RequiresMountsFor=/var/lib/osmo-diffs
-After=local-fs.target home.mount unlock-home.service
+After=local-fs.target home.mount unlock-home.service network-online.target
+# the remote copy (osmo-diffs copie-poser) is sent at shutdown: the network
+# must still be up - stopped before it, since started after it
+Wants=network-online.target
 ConditionPathExists=/var/lib/osmo-diffs/cle.pub
 
 [Service]

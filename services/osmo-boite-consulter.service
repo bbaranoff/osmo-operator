@@ -1,0 +1,16 @@
+[Unit]
+Description=osmo-operator - lecture de la boite noire sur tty1
+After=basic.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=oneshot
+Environment=TERM=linux
+ExecStart=/usr/local/sbin/osmo-diffs consulter
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes

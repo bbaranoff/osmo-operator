@@ -1,0 +1,131 @@
+#!/bin/bash
+# osmo-porte - the TPM code of the porte, from NIRVANA's system (sudo).
+#
+#   osmo-porte sceller   put the TOTP key in the TPM, bound to the PCR values
+#                        of the last porte boot (the one that led here); a new
+#                        key the first time - then « osmo-porte qr »
+#   osmo-porte qr        the key as a QR code (TOTP app: 6 digits, 30 s,
+#                        SHA-256 - Aegis, FreeOTP+, 2FAS...)
+#   osmo-porte etat      sealed or not, the PCR values used, their date
+#   osmo-porte nouvelle-cle  phone lost: destroy the key, seal a new one, show
+#                        its QR code (the old phone's codes are wrong from now)
+#   osmo-porte oublier   remove the key from the TPM
+#
+# HOW IT HOLDS. The key is an HMAC-SHA256 key IMPORTED into the TPM, usable
+# only under a PCR policy (0,2,4,7,8,9: firmware, Secure Boot, shim/GRUB,
+# GRUB's commands, the files GRUB loaded). The porte asks the TPM for the HMAC
+# of the 30 s counter - the key itself never leaves the TPM, nothing durable
+# is in RAM - and at its decision extends PCR 9: unusable until the next boot.
+# The key's copy lives only in nirvana's encrypted system (/etc/osmo-porte/
+# secret.bin), for resealing without a new QR code.
+#
+# THE TPM'S OWN AUTHORIZATIONS. With empty owner and lockout authorizations,
+# root's live session could evict the key or clear the TPM (no secret gained,
+# but nirvana's code is gone). The first sealing sets both to a random value
+# kept in /etc/osmo-porte/tpm-auth (nirvana's encrypted system). The platform
+# hierarchy - left enabled by some firmware - is disabled by the porte and by
+# root's session for the boot. Lost tpm-auth: clear the TPM in the BIOS.
+#
+# WHO RESEALS: only this command, by hand, from nirvana's system - reached
+# with the right passphrase. The porte only writes the PCR values of its boot
+# into the encrypted system, after the passphrase. Reseal after a GRUB/shim
+# update (held by the sealing: apt-mark hold), a firmware update, a new image
+# for root: boot through the porte once (wrong code: you know why), then
+# « sudo osmo-porte sceller ». Never after a wrong code you cannot explain.
+set -u
+HANDLE=0x81000420
+PCRS=sha256:0,2,4,7,8,9
+SECRET=/etc/osmo-porte/secret.bin
+AUTH=/etc/osmo-porte/tpm-auth
+PCR_FILE=/var/lib/osmo-porte/pcr-porte.bin
+PCR_DATE=/var/lib/osmo-porte/pcr-porte.date
+export TPM2TOOLS_TCTI="${TPM2TOOLS_TCTI:-device:/dev/tpmrm0}"
+log() { echo "osmo-porte : $*"; }
+
+root_requis() { [ "$(id -u)" = 0 ] || { log "root requis (sudo osmo-porte $1)"; exit 1; }; }
+
+auth_posee() { tpm2_getcap properties-variable 2>/dev/null | grep -q "$1AuthSet: *1"; }
+
+# the owner authorization, set the first time (owner and lockout)
+auth_owner() {
+    if [ -s "$AUTH" ]; then cat "$AUTH"; return 0; fi
+    if auth_posee owner || auth_posee lockout; then
+        log "le TPM a deja une autorisation owner/lockout inconnue ($AUTH absent) - efface le TPM dans le BIOS" >&2
+        return 1
+    fi
+    local a; a="hex:$(head -c 32 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
+    ( umask 077; install -d -m 0700 "$(dirname "$AUTH")"; printf '%s' "$a" > "$AUTH" )
+    tpm2_changeauth -c owner "$a" && tpm2_changeauth -c lockout "$a" \
+        || { log "autorisations du TPM non posees" >&2; rm -f "$AUTH"; return 1; }
+    log "autorisations owner + lockout du TPM posees ($AUTH)" >&2
+    cat "$AUTH"
+}
+
+case "${1:-etat}" in
+    sceller)
+        root_requis sceller
+        [ -e /dev/tpmrm0 ] || { log "pas de TPM (/dev/tpmrm0) - active-le dans le BIOS"; exit 1; }
+        [ -s "$PCR_FILE" ] || { log "pas de valeurs PCR : demarre une fois par la porte (entree par defaut du menu)"; exit 1; }
+        a="$(auth_owner)" || exit 1
+        nouveau=0
+        if [ ! -s "$SECRET" ]; then
+            install -d -m 0700 "$(dirname "$SECRET")"
+            ( umask 077; head -c 32 /dev/urandom > "$SECRET" )
+            nouveau=1
+        fi
+        t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
+        [ "$(stat -c %s "$SECRET")" = 32 ] || { log "cle illisible ($SECRET)"; exit 1; }
+        tpm2_createprimary -Q -C o -P "$a" -c "$t/prim.ctx" \
+            && tpm2_createpolicy -Q --policy-pcr -l "$PCRS" -f "$PCR_FILE" -L "$t/pol.dat" \
+            && tpm2_import -Q -C "$t/prim.ctx" -G hmac -g sha256 -L "$t/pol.dat" -a 'sign' \
+                   -i "$SECRET" -u "$t/k.pub" -r "$t/k.priv" \
+            && tpm2_load -Q -C "$t/prim.ctx" -u "$t/k.pub" -r "$t/k.priv" -c "$t/k.ctx" \
+            || { log "scellement impossible"; exit 1; }
+        tpm2_evictcontrol -Q -C o -P "$a" -c "$HANDLE" >/dev/null 2>&1 || true
+        tpm2_evictcontrol -Q -C o -P "$a" -c "$t/k.ctx" "$HANDLE" || { log "rangement dans le TPM impossible"; exit 1; }
+        log "cle TOTP dans le TPM, liee aux PCR de la porte du $(cat "$PCR_DATE" 2>/dev/null)"
+        # the boot path must not move behind nirvana's back
+        apt-mark hold shim-signed grub-efi-amd64-signed grub-efi-amd64-bin grub2-common >/dev/null 2>&1 || true
+        [ "$nouveau" = 1 ] && log "NOUVELLE cle : « sudo osmo-porte qr » et scanne-la avec ton telephone"
+        ;;
+    qr)
+        root_requis qr
+        [ -s "$SECRET" ] || { log "pas encore de cle (sudo osmo-porte sceller)"; exit 1; }
+        b32="$(base32 < "$SECRET" | tr -d '=\n')"
+        url="otpauth://totp/osmo-operator:porte?secret=$b32&issuer=osmo-operator&algorithm=SHA256&digits=6&period=30"
+        command -v qrencode >/dev/null && qrencode -t ansiutf8 "$url"
+        echo "cle (saisie manuelle, SHA-256, 6 chiffres, 30 s) : $b32"
+        command -v oathtool >/dev/null && echo "code actuel : $(oathtool --totp=sha256 -b "$b32")"
+        ;;
+    etat)
+        if tpm2_readpublic -c "$HANDLE" >/dev/null 2>&1; then echo "cle dans le TPM : oui ($HANDLE)"
+        else echo "cle dans le TPM : non"; fi
+        auth_posee owner && echo "autorisation owner : posee" || echo "autorisation owner : VIDE (posee au premier scellement)"
+        if [ -s "$PCR_FILE" ]; then
+            echo "PCR de la derniere porte ($(cat "$PCR_DATE" 2>/dev/null)) :"
+            od -An -tx1 -v -w32 "$PCR_FILE" | tr -d ' ' | paste -d' ' <(printf '  PCR %s\n' 0 2 4 7 8 9) -
+        else
+            echo "pas encore demarre par la porte"
+        fi
+        ;;
+    nouvelle-cle)
+        # phone lost or key exposed: a NEW key, sealed, then its QR code. The
+        # old phone (and any copy of the old key) shows wrong codes from now on.
+        root_requis nouvelle-cle
+        [ -s "$PCR_FILE" ] || { log "pas de valeurs PCR : demarre une fois par la porte"; exit 1; }
+        if [ -f "$SECRET" ]; then
+            shred -u "$SECRET" 2>/dev/null || rm -f "$SECRET"
+            log "ancienne cle detruite"
+        fi
+        "$0" sceller && "$0" qr
+        ;;
+    oublier)
+        root_requis oublier
+        a="$(cat "$AUTH" 2>/dev/null)"
+        tpm2_evictcontrol -Q -C o ${a:+-P "$a"} -c "$HANDLE" && log "cle retiree du TPM (copie gardee dans $SECRET)"
+        ;;
+    *)
+        echo "usage : osmo-porte sceller | qr | nouvelle-cle | etat | oublier" >&2
+        exit 2
+        ;;
+esac

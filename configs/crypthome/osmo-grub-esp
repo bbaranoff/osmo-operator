@@ -1,0 +1,227 @@
+#!/bin/bash
+# osmo-grub-esp - the FIRST menu of an installed bench, on the EFI partition
+# (/boot/efi/EFI/ubuntu/grub.cfg, read by the signed GRUB that shim starts).
+#
+# THE DISK (partition.conf):
+#   EFI            clear   this menu
+#   osmo-racine    clear   ROOT's system: the ISO's squashfs + its kernel and
+#                          live initrd, booted live (RAM) - « boot=live »
+#   osmo-diffs     clear   the black box (records encrypted one by one)
+#   /              LUKS1   NIRVANA's system: /, /boot and /home, read-write
+#
+# AT BOOT, two modes (« WHICH MODE » below):
+#   porte (active TPM 2.0): the default entry boots the porte - root's kernel
+#     with its own initrd (configs/porte) - which shows the TPM code, then asks
+#     nirvana's passphrase and kexecs nirvana's kernel from inside the volume;
+#     Enter: root's live system. GRUB asks nothing.
+#   grub (no TPM): the box's last record date, then GRUB asks the passphrase
+#     (cryptomount); right: GRUB loads the encrypted system's own grub.cfg;
+#     Enter or wrong: a short menu - root's system, live (default), the
+#     passphrase again, the black box read instead of booting.
+# Either way nirvana's kernel and initramfs come from inside the volume (its
+# initramfs opens it with /crypto_keyfile.bin, no second passphrase).
+#
+# Root can change ITS system (the osmo-racine partition, the GRUB line of its
+# entries) as it likes: nothing of it is part of nirvana's boot. What stays
+# reachable is this file and GRUB itself, in clear on the EFI partition: only
+# Secure Boot with our own keys closes that (not done).
+#
+# Run by Calamares (shellprocess-osmo.conf) and after every dpkg run (apt hook
+# /etc/apt/apt.conf.d/99osmo-grub-esp): a GRUB update rewrites Ubuntu's stub.
+# Reads /etc/fstab and /etc/crypttab, so it also works in the installer's
+# chroot (where findmnt would see the live system).
+set -u
+ESP="${OSMO_ESP:-/boot/efi}"
+D="$ESP/EFI/ubuntu"
+CFG="$D/grub.cfg"
+log() { echo "osmo-grub-esp : $*"; }
+
+[ -d "$D" ] || { log "$D absent (pas de demarrage UEFI) - rien"; exit 0; }
+
+# rerun after every dpkg run: a GRUB update puts Ubuntu's stub back
+HOOK_APT="${OSMO_HOOK_APT:-/etc/apt/apt.conf.d/99osmo-grub-esp}"
+if [ ! -f "$HOOK_APT" ] && [ -d "$(dirname "$HOOK_APT")" ]; then
+    cat > "$HOOK_APT" <<'APT'
+// osmo-grub-esp: a GRUB update rewrites the first menu of the EFI partition
+DPkg::Post-Invoke { "[ -x /usr/local/sbin/osmo-grub-esp ] && /usr/local/sbin/osmo-grub-esp >/dev/null 2>&1 || true"; };
+APT
+fi
+
+# nirvana's system: the filesystem UUID of / (fstab) and the LUKS UUID behind
+# it (crypttab line whose mapper holds /)
+racine_src="$(awk '$1 !~ /^#/ && $2 == "/" {print $1; exit}' ${OSMO_FSTAB:-/etc/fstab})"
+fs_uuid=""
+case "$racine_src" in
+    UUID=*) fs_uuid="${racine_src#UUID=}" ;;
+    /dev/mapper/*) fs_uuid="$(blkid -s UUID -o value "$racine_src" 2>/dev/null)" ;;
+esac
+luks_uuid=""
+if [ -f "${OSMO_CRYPTTAB:-/etc/crypttab}" ]; then
+    while read -r nom dev _; do
+        case "$nom" in ''|\#*) continue ;; esac
+        m="/dev/mapper/$nom"
+        if [ "$racine_src" = "$m" ] || { [ -e "$m" ] && [ "$(blkid -s UUID -o value "$m" 2>/dev/null)" = "$fs_uuid" ]; }; then
+            case "$dev" in UUID=*) luks_uuid="${dev#UUID=}" ;; *) luks_uuid="$(blkid -s UUID -o value "$dev" 2>/dev/null)" ;; esac
+            break
+        fi
+    done < "${OSMO_CRYPTTAB:-/etc/crypttab}"
+fi
+# one LUKS line only, holding / : Calamares' layout
+if [ -z "$luks_uuid" ] && [ -f "${OSMO_CRYPTTAB:-/etc/crypttab}" ]; then
+    n="$(grep -cv '^\s*\(#\|$\)' "${OSMO_CRYPTTAB:-/etc/crypttab}")"
+    [ "$n" = 1 ] && luks_uuid="$(awk '$1 !~ /^#/ && NF {sub(/^UUID=/,"",$2); print $2; exit}' "${OSMO_CRYPTTAB:-/etc/crypttab}")"
+fi
+[ -n "$luks_uuid" ] && [ -n "$fs_uuid" ] \
+    || { log "systeme non chiffre (pas de ligne crypttab pour /) - menu d Ubuntu laisse tel quel"; exit 0; }
+
+a_uuid="${OSMO_A_UUID:-}"; [ -n "$a_uuid" ] || a_uuid="$(blkid -s UUID -o value /dev/disk/by-partlabel/osmo-racine 2>/dev/null)"
+b_uuid="${OSMO_B_UUID:-}"; [ -n "$b_uuid" ] || b_uuid="$(blkid -s UUID -o value /dev/disk/by-partlabel/osmo-diffs 2>/dev/null)"
+[ -n "$a_uuid" ] || log "ATTENTION : partition osmo-racine introuvable - pas de repli root"
+
+# the theme of the menu, copied next to this file (the one of nirvana's
+# system is inside the encrypted volume)
+if [ -d /boot/grub/themes/osmo ]; then
+    if ! diff -qr /boot/grub/themes/osmo "$D/osmo-theme" >/dev/null 2>&1; then
+        rm -rf "$D/osmo-theme"; cp -r /boot/grub/themes/osmo "$D/osmo-theme" 2>/dev/null || true
+    fi
+fi
+
+# ── WHICH MODE ──────────────────────────────────────────────────────────────
+# PORTE: an active TPM 2.0 (enabled in the BIOS: fTPM / PTT) and the porte
+#   initrd on root's partition. GRUB asks NOTHING: its default entry boots the
+#   porte, which shows the TPM code BEFORE nirvana's passphrase (GRUB itself
+#   is what an attacker could replace; the TPM sees it, through PCR 4/8/9).
+# GRUB: no TPM. GRUB asks the passphrase itself (cryptomount, LUKS1).
+# The installer's « Demarrage » page (/etc/osmo-porte/mode) says porte or grub;
+# porte still needs the TPM and the porte initrd, otherwise grub.
+choix="$(cat /etc/osmo-porte/mode 2>/dev/null)"
+[ "$choix" = grub ] && [ "${OSMO_PORTE:-auto}" = auto ] && OSMO_PORTE=0
+mode=grub
+if [ "${OSMO_PORTE:-auto}" = 1 ] || { [ "${OSMO_PORTE:-auto}" = auto ] \
+        && [ "$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null)" = 2 ] \
+        && [ -f /var/lib/osmo-racine/osmo-porte.img ]; }; then
+    mode=porte
+fi
+log "mode $mode"
+# nirvana's kernel line, read by the porte (kexec) from inside the volume
+if [ "$mode" = porte ] && [ -d /etc ] && [ "${OSMO_ESP:-/boot/efi}" = /boot/efi ]; then
+    install -d /etc/osmo-porte
+    printf 'root=UUID=%s ro quiet splash\n' "$fs_uuid" > /etc/osmo-porte/cmdline
+fi
+
+entree_root() {   # entree_root TITLE EXTRA_ARGS
+    [ -n "$a_uuid" ] || return 0
+    cat <<EOF
+menuentry '$1' --class ubuntu --class os {
+	search --no-floppy --fs-uuid --set=root $a_uuid
+	linux /vmlinuz boot=live live-media=/dev/disk/by-uuid/$a_uuid live-media-path=/live osmo.racine $2
+	initrd /initrd.img
+}
+EOF
+}
+
+entree_nirvana_grub() {
+    cat <<EOF
+menuentry '$1' --class ubuntu --class os {
+	if cryptomount -u ${luks_uuid//-/}; then
+		search --no-floppy --fs-uuid --set=root $fs_uuid
+		set prefix=(\$root)/boot/grub
+		configfile \$prefix/grub.cfg
+	fi
+}
+EOF
+}
+
+theme() {
+    cat <<EOF
+if [ -f \$prefix/osmo-theme/theme.txt ]; then
+	insmod all_video
+	insmod gfxterm
+	insmod png
+	if loadfont \$prefix/osmo-theme/osmo-24.pf2; then
+		loadfont \$prefix/osmo-theme/osmom-22.pf2
+		loadfont \$prefix/osmo-theme/osmo-18.pf2
+		set gfxmode=auto
+		terminal_output gfxterm
+		set theme=\$prefix/osmo-theme/theme.txt
+	fi
+fi
+EOF
+}
+
+tmp="$(mktemp)"
+{
+if [ "$mode" = porte ]; then
+# Everything GRUB runs here is measured (PCR 8: commands, PCR 9: files): the
+# file must stay byte-identical between two sealings - no date, no branch
+# that depends on the disk content.
+cat <<EOF
+# GENERE par osmo-grub-esp (mode porte) - ne pas modifier a la main : chaque
+# commande et chaque fichier lu sont mesures dans le TPM (code de la porte).
+insmod part_gpt
+insmod ext2
+set timeout=5
+set default=0
+EOF
+theme
+cat <<EOF
+menuentry 'osmo-operator - nirvana (code TPM, puis phrase)' --class ubuntu --class os {
+	search --no-floppy --fs-uuid --set=root $a_uuid
+	linux /vmlinuz boot=osmo-porte osmo.luks=$luks_uuid osmo.a=$a_uuid osmo.diffs=$b_uuid panic=10
+	initrd /osmo-porte.img
+}
+EOF
+entree_root "osmo-operator - root (lecture seule)" "quiet splash"
+[ -n "$b_uuid" ] && entree_root "osmo-operator - consulter la boite noire (sans demarrer)" "systemd.unit=osmo-boite.target"
+entree_root "osmo-operator - root, sans acceleration graphique (nomodeset)" "nomodeset quiet"
+entree_nirvana_grub "osmo-operator - nirvana SANS code TPM (phrase dans GRUB)"
+else
+cat <<EOF
+# GENERE par osmo-grub-esp (mode grub, pas de TPM) - ne pas modifier a la main.
+insmod part_gpt
+insmod ext2
+insmod cryptodisk
+insmod luks
+insmod gcry_rijndael
+insmod gcry_sha256
+insmod gcry_sha1
+set timeout=5
+set default=0
+
+echo "osmo-operator"
+EOF
+if [ -n "$b_uuid" ]; then
+cat <<EOF
+if search --no-floppy --fs-uuid --set=boite $b_uuid; then
+	if [ -f (\$boite)/dernier.txt ]; then cat (\$boite)/dernier.txt; fi
+fi
+EOF
+fi
+cat <<EOF
+echo "Phrase de nirvana - Entree : root en lecture seule"
+if cryptomount -u ${luks_uuid//-/}; then
+	search --no-floppy --fs-uuid --set=root $fs_uuid
+	set prefix=(\$root)/boot/grub
+	configfile \$prefix/grub.cfg
+fi
+
+# ── no passphrase / wrong passphrase: the short menu ──
+EOF
+theme
+entree_root "osmo-operator - root (lecture seule)" "quiet splash"
+entree_nirvana_grub "osmo-operator - phrase de nirvana"
+[ -n "$b_uuid" ] && entree_root "osmo-operator - consulter la boite noire (sans demarrer)" "systemd.unit=osmo-boite.target"
+entree_root "osmo-operator - root, sans acceleration graphique (nomodeset)" "nomodeset quiet"
+fi
+cat <<EOF
+menuentry 'Parametres du firmware UEFI' {
+	fwsetup
+}
+EOF
+} > "$tmp"
+
+if command -v grub-script-check >/dev/null 2>&1 && ! grub-script-check "$tmp"; then
+    log "menu genere invalide - $CFG laisse tel quel"; rm -f "$tmp"; exit 1
+fi
+cmp -s "$tmp" "$CFG" 2>/dev/null || { cp "$tmp" "$CFG"; log "menu ecrit : $CFG"; }
+rm -f "$tmp"

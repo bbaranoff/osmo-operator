@@ -296,6 +296,29 @@ if [ -f "$_pc" ] && [ -f "$_cp" ]; then
         echo "NVIDIA : aucune carte detectee - la page le dira, sans effet"
     fi
 fi
+# ── TPM: the « Demarrage » page follows the BIOS ─────────────────────────────
+# Active TPM 2.0 (fTPM / PTT enabled): « porte » - the TPM code shown before
+# nirvana's passphrase - offered and preselected, « grub » as the other
+# choice. No TPM: only « grub », and the page says how to get the code.
+_pt=/etc/calamares/modules/packagechooser-tpm.conf
+if [ -f "$_pt" ]; then
+    if [ "$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null)" = 2 ]; then
+        printf '%s\n' "---" "mode: required" "method: legacy" "labels:" \
+            "    step: \"Demarrage\"" "default: porte" "items:" \
+            "    - id: porte" "      name: \"Code TPM, puis phrase de nirvana (recommande)\"" \
+            "      description: \"TPM 2.0 actif. Au demarrage, un code a 6 chiffres - le meme que ton telephone - prouve que GRUB, son menu et le noyau n ont pas change ; seulement alors tu tapes ta phrase. A sceller apres le premier demarrage : sudo osmo-porte sceller, puis sudo osmo-porte qr.\"" \
+            "    - id: grub" "      name: \"Phrase de nirvana demandee par GRUB\"" \
+            "      description: \"Sans code TPM : GRUB demande la phrase directement. Un GRUB remplace ne serait pas detecte.\"" > "$_pt"
+        echo "TPM : 2.0 actif - porte proposee"
+    else
+        printf '%s\n' "---" "mode: required" "method: legacy" "labels:" \
+            "    step: \"Demarrage\"" "default: grub" "items:" \
+            "    - id: grub" "      name: \"Phrase de nirvana demandee par GRUB\"" \
+            "      description: \"Aucun TPM actif : active fTPM (AMD) ou PTT (Intel) dans le BIOS, puis relance l installeur pour avoir le code TPM avant la phrase.\"" > "$_pt"
+        echo "TPM : absent - phrase dans GRUB"
+    fi
+    _yamlok "$_pt" || echo "TPM : page generee ILLISIBLE" >&2
+fi
 exec /usr/bin/calamares -d "$@"
 INSTALLER
     chmod +x "$ROOTFS/usr/local/bin/osmo-install"

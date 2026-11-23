@@ -1,0 +1,30 @@
+#!/bin/bash
+# osmo-diffs-recevoir - the RECEIVING end of the black box's remote copy, on
+# another machine. Forced command of the bench's ssh key (authorized_keys):
+#
+#   command="/usr/local/bin/osmo-diffs-recevoir",restrict ssh-ed25519 AAAA... osmo-diffs@poste
+#
+# The bench sends « ssh <key> user@host POSTE/NNNNNN_AAAA-MM-JJ_HHMMSS_mode.diff.age
+# < record ». This script only ADDS: a name that exists already is refused
+# (unless the content is identical - a retry), nothing is ever overwritten,
+# listed or deleted. The key on the bench (clear, root can take it) can
+# therefore append records, never erase the copy. The records are encrypted
+# (age, the box's public key): this machine cannot read them either.
+# Copies go to ~/osmo-diffs/POSTE/ (OSMO_DIFFS_RECUS to change).
+set -u
+DEST="${OSMO_DIFFS_RECUS:-$HOME/osmo-diffs}"
+nom="${SSH_ORIGINAL_COMMAND:-}"
+printf '%s' "$nom" | grep -Eq '^[A-Za-z0-9._-]{1,64}/[0-9]{6}_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}_[a-z]{1,16}\.diff\.age$' \
+    || { echo "osmo-diffs-recevoir : nom refuse" >&2; exit 2; }
+poste="${nom%%/*}"
+f="$DEST/$nom"
+mkdir -p "$DEST/$poste"
+t="$(mktemp "$DEST/$poste/.recu.XXXXXX")"
+head -c 64M > "$t"
+if [ -e "$f" ]; then
+    if cmp -s "$t" "$f"; then rm -f "$t"; exit 0; fi
+    rm -f "$t"; echo "osmo-diffs-recevoir : $nom existe deja, contenu different - refuse" >&2; exit 3
+fi
+mv -n "$t" "$f" && chmod 444 "$f"
+[ -e "$t" ] && { rm -f "$t"; exit 3; }
+exit 0

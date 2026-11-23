@@ -10,6 +10,8 @@
 #   osmo-diffs liste         the records (names, sizes): no passphrase
 #   osmo-diffs voir [N]      decrypt the N last records (default: all), checks
 #                            the chain, asks the passphrase
+#   osmo-diffs copie-poser user@host   send every record to another machine
+#   osmo-diffs envoyer       send the records not sent yet
 #
 # WRITE WITHOUT BEING ABLE TO READ. Each record is encrypted with age for a
 # PUBLIC key (cle.pub, on the box): the machine fills the box without ever
@@ -27,9 +29,12 @@
 #   session account (/home decrypted, / written to the disk): files changed
 #       since the last record (find -newer), plus the ones gone, against the
 #       reference copy kept in the encrypted /home (/home/.osmo-diffs/miroir);
-#   root (always live): what the session wrote - the overlay's RAM layer
-#       (/media/root-rw/overlay) against the disk (/media/root-ro). Lost from
-#       the system at shutdown, kept in the box.
+#   root (always live, its own system on the osmo-racine partition): what the
+#       session wrote - the RAM layer (live-boot: /run/live/overlay/rw) against
+#       the image under it. Lost from the system at shutdown, kept in the box.
+#
+# dernier.txt (in clear): the date of the last record, shown by the first GRUB
+# menu. « consulter »: the box read on tty1 instead of booting.
 #
 # THE CHAIN: each record starts with the SHA-256 of the previous record file:
 # « voir » reports a record removed or changed in the middle. Root can still
@@ -46,22 +51,31 @@ CLE_CLAIRE="$PRIVE/cle"
 [ -f /etc/default/osmo-diffs ] && . /etc/default/osmo-diffs
 DIRS="${OSMO_DIFFS_DIRS:-/etc /root /opt /usr/local /var/spool/cron}"
 MAX="${OSMO_DIFFS_MAX:-1024k}"
-HAUT="${OSMO_DIFFS_HAUT:-/media/root-rw/overlay}"
-BAS="${OSMO_DIFFS_BAS:-/media/root-ro}"
+# the RAM layer and the disk under it: live-boot (root's system, osmo-racine
+# partition) or overlayroot
+if [ -d /run/live/overlay/rw ]; then
+    HAUT="${OSMO_DIFFS_HAUT:-/run/live/overlay/rw}"; BAS="${OSMO_DIFFS_BAS:-/run/live/rootfs/filesystem.squashfs}"
+else
+    HAUT="${OSMO_DIFFS_HAUT:-/media/root-rw/overlay}"; BAS="${OSMO_DIFFS_BAS:-/media/root-ro}"
+fi
 TEST="${OSMO_DIFFS_SANS_MONTAGE:-0}"     # tests: no mount checks
 
 log() { echo "osmo-diffs : $*"; }
 
 live() {
     [ "$TEST" = 1 ] && { [ "${OSMO_DIFFS_LIVE:-0}" = 1 ]; return; }
-    [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null
+    [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ]
 }
 
+# nirvana's boot: / (encrypted system) or /home on dm-crypt
 home_chiffre_ouvert() {
     [ "$TEST" = 1 ] && { [ -d "$PRIVE" ]; return; }
-    local src; mountpoint -q /home 2>/dev/null || return 1
-    src="$(findmnt -fno SOURCE /home 2>/dev/null)"
-    case "$(readlink -f "$src")" in /dev/dm-*|/dev/mapper/*) return 0 ;; esac
+    local m src
+    for m in / /home; do
+        mountpoint -q "$m" 2>/dev/null || continue
+        src="$(findmnt -fno SOURCE "$m" 2>/dev/null)"
+        case "$(readlink -f "$src")" in /dev/dm-*|/dev/mapper/*) return 0 ;; esac
+    done
     return 1
 }
 
@@ -119,7 +133,40 @@ sceller() {
     nom="$JOURNAL/$(printf '%06d' "$n")_$(date +%F_%H%M%S)_${mode}.diff.age"
     { printf '# osmo-diffs %s : %s, demarrage du %s, enregistre le %s\n# precedent : %s\n' \
           "$n" "$mode" "$(uptime -s 2>/dev/null)" "$(date '+%F %T')" "$h"
-      cat; } | age -r "$(cat "$PUB")" -o "$nom" && echo "$nom"
+      cat; } | age -r "$(cat "$PUB")" -o "$nom" || return 1
+    # in clear, for the first GRUB menu (osmo-grub-esp): the date only
+    printf 'boite noire : dernier enregistrement le %s (%s, no %s)\n' "$(date '+%F a %H:%M')" "$mode" "$n" \
+        > "$BASE/dernier.txt"
+    echo "$nom"
+}
+
+# ── REMOTE COPY (optional) ───────────────────────────────────────────────────
+# Each record is also sent to another machine, so that deleting the box here
+# is not enough. Set up once from nirvana's system: « sudo osmo-diffs
+# copie-poser user@host » (an ssh key ON THE BOX, so that root's sessions send
+# too; the other end only accepts new files: osmo-diffs-recevoir as forced
+# command). Sent records are listed in .envoyes; the others are retried at
+# the next record (no network at shutdown, machine away...).
+COPIE_CONF="$BASE/copie.conf"
+COPIE_CLE="$BASE/copie.key"
+envoyer() {
+    [ -s "$COPIE_CONF" ] && [ -s "$COPIE_CLE" ] || return 0
+    local dest poste j n=0 e=0
+    dest="$(sed -n 's/^DEST=//p' "$COPIE_CONF")"; [ -n "$dest" ] || return 0
+    poste="$(sed -n 's/^POSTE=//p' "$COPIE_CONF")"; [ -n "$poste" ] || poste="$(hostname)"
+    touch "$BASE/.envoyes"
+    for j in $(find "$JOURNAL" -maxdepth 1 -name '*.age' | sort); do
+        grep -qxF "$(basename "$j")" "$BASE/.envoyes" && continue
+        if ${OSMO_DIFFS_SSH:-ssh} -i "$COPIE_CLE" -o BatchMode=yes -o ConnectTimeout=5 \
+               -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$BASE/copie.known_hosts" \
+               "$dest" "$poste/$(basename "$j")" < "$j" 2>/dev/null; then
+            basename "$j" >> "$BASE/.envoyes"; n=$((n + 1))
+        else
+            e=$((e + 1))
+        fi
+    done
+    if [ "$e" -gt 0 ]; then log "copie vers $dest : $n envoye(s), $e en attente (nouvel essai au prochain enregistrement)"
+    elif [ "$n" -gt 0 ]; then log "copie vers $dest : $n envoye(s)"; fi
 }
 
 identite() {   # the age identity on stdout (asks the passphrase if needed)
@@ -142,7 +189,8 @@ case "${1:-liste}" in
     init)
         boite
         command -v age >/dev/null || { log "age absent - pas de boite noire"; exit 0; }
-        home_chiffre_ouvert || { log "/home chiffre absent - pas de boite noire"; exit 0; }
+        # (no « is it encrypted » check: in the installer's chroot findmnt sees
+        # the live system; PRIVE is on nirvana's encrypted system anyway)
         install -d -m 0700 "$PRIVE"
         if [ ! -f "$PUB" ]; then
             ( umask 077; age-keygen -o "$CLE_CLAIRE" 2>/dev/null )
@@ -189,6 +237,7 @@ case "${1:-liste}" in
             log "$mode : aucun changement texte"
         fi
         rm -f "$tmp" "$debut"
+        envoyer
         ;;
     phrase)
         boite
@@ -233,8 +282,39 @@ case "${1:-liste}" in
         done | ${PAGER:-less -R}
         cle=""
         ;;
+    copie-poser)
+        # copie-poser user@host [POSTE]: the ssh key on the box + the line for
+        # the other machine's authorized_keys
+        boite
+        [ "$(id -u)" = 0 ] || { log "root requis (sudo osmo-diffs copie-poser user@host)"; exit 1; }
+        dest="${2:?usage : osmo-diffs copie-poser user@host [POSTE]}"
+        [ -s "$COPIE_CLE" ] || ssh-keygen -q -t ed25519 -N '' -C "osmo-diffs@$(hostname)" -f "$COPIE_CLE"
+        printf 'DEST=%s\nPOSTE=%s\n' "$dest" "${3:-$(hostname)}" > "$COPIE_CONF"
+        echo "Sur $dest, dans ~/.ssh/authorized_keys (et osmo-diffs-recevoir dans /usr/local/bin) :"
+        echo "command=\"/usr/local/bin/osmo-diffs-recevoir\",restrict $(cat "$COPIE_CLE.pub")"
+        echo "Puis : sudo osmo-diffs envoyer"
+        ;;
+    envoyer)
+        boite
+        [ -s "$COPIE_CONF" ] || { log "pas de copie distante (osmo-diffs copie-poser)"; exit 0; }
+        envoyer
+        ;;
+    consulter)
+        # GRUB entry « consulter la boite noire (sans demarrer) » : root's
+        # system booted on osmo-boite.target, this on tty1, then a restart
+        clear
+        echo "=== osmo-operator : consultation de la boite noire (pas de demarrage) ==="
+        if ! mountpoint -q "$BASE"; then
+            mkdir -p "$BASE"
+            mount -o ro /dev/disk/by-partlabel/osmo-diffs "$BASE" 2>/dev/null \
+                || { echo "partition osmo-diffs introuvable"; }
+        fi
+        mountpoint -q "$BASE" && PAGER=more "$0" voir
+        read -r -p "Entree pour redemarrer : " _ < /dev/tty
+        systemctl reboot
+        ;;
     *)
-        echo "usage : osmo-diffs init | enregistrer | phrase | liste | voir [N]" >&2
+        echo "usage : osmo-diffs init | enregistrer | phrase | liste | voir [N] | consulter | copie-poser user@host | envoyer" >&2
         exit 2
         ;;
 esac

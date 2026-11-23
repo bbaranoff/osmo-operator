@@ -75,6 +75,23 @@ install -m 0755 "$_CH_SRC/osmo-racine-live"       "$ROOTFS/usr/local/sbin/osmo-r
 # (5 GiB partition of partition.conf; keys, reference and unit set up by
 # shellprocess-osmo.conf). A login reminder until it has its own passphrase.
 install -m 0755 "$_CH_SRC/osmo-diffs"             "$ROOTFS/usr/local/sbin/osmo-diffs"
+# the receiving end of the box's remote copy: any osmo machine can keep the
+# copies of another (forced command, add-only)
+install -m 0755 "$_CH_SRC/osmo-diffs-recevoir"    "$ROOTFS/usr/local/bin/osmo-diffs-recevoir"
+# Two systems on the installed disk (partition.conf): the first GRUB menu on
+# the EFI partition (osmo-grub-esp), root's live system copied at
+# installation (osmo-racine-copier, from the live session), its session unit
+# and the « read the black box instead of booting » target. The units only
+# act on root's system (ConditionKernelCommandLine=osmo.racine, or
+# systemd.unit=osmo-boite.target on the kernel line).
+install -m 0755 "$_CH_SRC/osmo-grub-esp"          "$ROOTFS/usr/local/sbin/osmo-grub-esp"
+install -m 0755 "$_CH_SRC/osmo-racine-copier"     "$ROOTFS/usr/local/sbin/osmo-racine-copier"
+for _u in osmo-racine-session.service osmo-boite.target osmo-boite-consulter.service; do
+    install -m 0644 "$DIR/services/$_u" "$ROOTFS/etc/systemd/system/$_u"
+done
+install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/osmo-racine-session.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-racine-session.service"
 install -m 0644 "$DIR/services/osmo-diffs.service" "$ROOTFS/etc/systemd/system/osmo-diffs.service"
 install -d "$ROOTFS/etc/xdg/autostart"
 cat > "$ROOTFS/etc/xdg/autostart/osmo-diffs-rappel.desktop" <<'RAPPEL'
