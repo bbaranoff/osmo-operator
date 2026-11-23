@@ -207,16 +207,16 @@ if [ "$ISO_ALL" = "1" ] || { [ "${ISO_ARCH:-amd64}" = "amd64" ] && [ "$ISO_ROLE_
     # seconds of resolution, only the delta is downloaded.
     _KEEP="$WORK"; mkdir -p "$_KEEP"
     _all_fail() { echo -e "${RED}Echec de $1${NC}" >&2; rm -rf "$_KEEP"; exit 1; }
-    "$0" --role=interstp "$@" || _all_fail interstp.iso
+    "$DIR/build-iso.sh" --role=interstp "$@" || _all_fail interstp.iso
     OSMO_ISO_ROOTFS_KEEP="$_KEEP/rootfs-normal" \
-        "$0" --role=operator --output=osmo-operator.iso "$@" || _all_fail osmo-operator.iso
+        "$DIR/build-iso.sh" --role=operator --output=osmo-operator.iso "$@" || _all_fail osmo-operator.iso
     [ -d "$_KEEP/rootfs-normal" ] || _all_fail "osmo-operator.iso (rootfs non transmis)"
     OSMO_ISO_ROOTFS_FROM="$_KEEP/rootfs-normal" OSMO_ISO_ROOTFS_MODE=copy \
-        "$0" --role=operator --lite --output=osmo-operator-lite.iso "$@" || _all_fail osmo-operator-lite.iso
-    _ISOS=("$(pwd)/interstp.iso" "$(pwd)/osmo-operator.iso" "$(pwd)/osmo-operator-lite.iso")
+        "$DIR/build-iso.sh" --role=operator --lite --output=osmo-operator-lite.iso "$@" || _all_fail osmo-operator-lite.iso
+    _ISOS=("$OSMO_ISO_APPEL/interstp.iso" "$OSMO_ISO_APPEL/osmo-operator.iso" "$OSMO_ISO_APPEL/osmo-operator-lite.iso")
     OSMO_ISO_ROOTFS_FROM="$_KEEP/rootfs-normal" OSMO_ISO_ROOTFS_MODE=move \
-        "$0" --role=operator --desktop --output=osmo-operator-desktop.iso "$@" || _all_fail osmo-operator-desktop.iso
-    _ISOS+=("$(pwd)/osmo-operator-desktop.iso")
+        "$DIR/build-iso.sh" --role=operator --desktop --output=osmo-operator-desktop.iso "$@" || _all_fail osmo-operator-desktop.iso
+    _ISOS+=("$OSMO_ISO_APPEL/osmo-operator-desktop.iso")
     rm -rf "$_KEEP"
     echo -e "${GREEN}${BOLD}═══ Les ${_N} images sont pretes ═══${NC}"
     ls -lh "${_ISOS[@]}" 2>/dev/null | sed 's/^/  /'
@@ -262,7 +262,7 @@ esac
 if [ "${ISO_ARCH:-amd64}" = "arm64" ] && [ "$OUTPUT_SET" != "1" ]; then
     OUTPUT="${OUTPUT%.iso}-rpi4.img"
 fi
-case "$OUTPUT" in /*) ;; *) OUTPUT="$(pwd)/$OUTPUT" ;; esac
+case "$OUTPUT" in /*) ;; *) OUTPUT="$OSMO_ISO_APPEL/$OUTPUT" ;; esac
 
 
 # End of module: `. file` returns the status of its LAST command, and

@@ -57,6 +57,12 @@ ROOTFS="$WORK/rootfs"
 ISOROOT="$WORK/isoroot"
 LABEL="OSMO_EGPRS_V2"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# The steps read configs/, scripts/... by RELATIVE path (apply_config_templates):
+# run from the repo whatever the caller's directory (osmo-iso starts us in the
+# output folder). The caller's directory is kept for the output files.
+OSMO_ISO_APPEL="${OSMO_ISO_APPEL:-$PWD}"
+export OSMO_ISO_APPEL
+cd "$DIR"
 # /usr/local/sbin in PATH: apt-fast-install puts apt-fast there, on the host as
 # in the rootfs; the chroot below inherits this PATH (env ... bash -c).
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
