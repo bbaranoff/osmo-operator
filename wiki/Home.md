@@ -135,7 +135,7 @@ in Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 
 **4G / LTE — open5gs + srsRAN**
 
-- open5gs core (MME, SGW-C/U, SMF, UPF, PCRF, HSS…) on dedicated loopbacks; Prometheus :9090, WebUI :9999, MongoDB behind the HSS.
+- open5gs core (MME, SGW-C/U, SMF, UPF, PCRF, HSS…) on dedicated loopbacks; Prometheus :9090, WebUI :8999, MongoDB behind the HSS.
 - PLMN 001/01, TAC 7. NAS security with null ciphering (EIA2/EIA1 + EEA0), on purpose: the NAS reads in cleartext.
 - srsENB 10 MHz, EARFCN 3350, band 7; srsUE connected over ZMQ. Milenage subscriber IMSI 001010001000001. The UE has an IP in a netns and goes out through NAT.
 
@@ -159,7 +159,7 @@ in Wireshark (GSMTAP, cleartext NAS, SGs, M3UA).
 | 4242 | osmo-bsc VTY | | 8081 | I/Q spectra (fft-web) |
 | 4243 | osmo-mgw VTY | | 8090 | settings page (`osmo-reglages`) |
 | 4254 | osmo-msc VTY | | 9090 | open5gs Prometheus |
-| 4258 | osmo-hlr VTY | | 9999 | open5gs WebUI |
+| 4258 | osmo-hlr VTY | | 8999 | open5gs WebUI |
 | 4729 | GSMTAP (Wireshark) | | 5060 | Asterisk SIP |
 | 2905 | local M3UA | | 2775 | SMPP |
 | 2908 | inter-STP M3UA | | 7890 | inter-op SMS relay |

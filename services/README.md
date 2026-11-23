@@ -18,7 +18,7 @@ operator starts the bench (desktop icon, `launch.sh`, or `systemctl`).
 | `osmo-egprs-web-install.service` | installs/refreshes the dashboard runtime, unit and TLS certificate (`/opt/GSM/osmo-egprs-web/install-web-service.sh`) |
 | `osmo-reglages.service` | settings web page for the Osmocom stack (`tools/osmo-reglages.py`, http://127.0.0.1:8090/) |
 | `osmo-supplements.service` | first boot: installs the supplements chosen in the installer (`tools/osmo-supplements-firstboot.sh`) |
-| `open5gs-webui.service` | Open5GS WebUI, 4G subscriber console (port 9999, MongoDB) |
+| `open5gs-webui.service` | Open5GS WebUI, 4G subscriber console (port 8999, MongoDB) |
 | `80-osmo-operator.preset` | systemd preset: all project units disabled at boot |
 
 The units under `contrib/systemd/` belong to upstream QEMU and are not part of

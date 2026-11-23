@@ -441,15 +441,31 @@ lte_webui() {
             rm -rf "$tmp"; _l_err "WebUI Open5GS : recuperation des sources echouee"; return 1
         fi
     fi
+    # A .next that is not a build directory (an empty FILE was seen on a
+    # bench) makes « next build » fail or the server refuse to start: gone.
+    [ -d "$dir/.next" ] || rm -f "$dir/.next"
     # `npm install` and not `npm ci --omit=dev`: Next.js builds WITH its
     # development dependencies, and the repo does not always ship an
-    # up-to-date package-lock.
-    ( cd "$dir" && npm install --no-audit --no-fund >/dev/null 2>&1 \
-      && npm run build >/dev/null 2>&1 ) \
-        || { _l_err "WebUI Open5GS : npm install / build echoue (voir $dir)"; return 1; }
+    # up-to-date package-lock. The output goes to a log, not to /dev/null:
+    # a failed build must be readable.
+    local log="$LTE/open5gs-webui-build.log"
+    ( cd "$dir" && npm install --no-audit --no-fund \
+      && npm run build ) >"$log" 2>&1 \
+        || { _l_err "WebUI Open5GS : npm install / build echoue (voir $log)"; return 1; }
     [ -f "$dir/server/index.js" ] || { _l_err "WebUI Open5GS : pas de server/index.js apres build"; return 1; }
-    _l_ok "WebUI Open5GS construit ($dir) - console des abonnes sur :8999"
+    # The unit only starts on a real build (ConditionPathExists .next/BUILD_ID).
+    [ -f "$dir/.next/BUILD_ID" ] || { _l_err "WebUI Open5GS : pas de .next/BUILD_ID apres build (voir $log)"; return 1; }
+    # The unit of the repo (port, conditions), not an older copy left in
+    # /etc; the loop counter of a past failure is cleared.
+    if [ -f "$REPO/services/open5gs-webui.service" ] \
+       && [ "$(systemctl is-enabled open5gs-webui 2>/dev/null)" != masked ]; then
+        install -m644 "$REPO/services/open5gs-webui.service" \
+                /etc/systemd/system/open5gs-webui.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+    fi
+    systemctl reset-failed open5gs-webui >/dev/null 2>&1 || true
     systemctl restart open5gs-webui >/dev/null 2>&1 || true
+    _l_ok "WebUI Open5GS construit ($dir) - console des abonnes sur :8999"
 }
 
 osmo_lte_install() {

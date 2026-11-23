@@ -15,14 +15,23 @@
 #  Condition, not dependency. The unit is enabled by default (ISO and native),
 #  but the WebUI is not always built: the bench .deb packages
 #  (osmo-build-open5gs) only ship the install prefix, not the sources nor
-#  node_modules. Without server/index.js, systemd skips the unit instead of
+#  node_modules. Without a BUILT WebUI, systemd skips the unit instead of
 #  marking it failed (a red service on a healthy bench would be a false alarm,
 #  and the Conky counts them). « osmo-lte-install --webui » builds it.
+#
+#  The condition is the Next.js build (.next/BUILD_ID), not server/index.js:
+#  the sources alone (present, never built) passed the old condition and the
+#  unit looped forever on « Could not find a valid build in the '.next'
+#  directory » (19 000 restarts on a bench). And in case it fails anyway, the
+#  start limit below stops the loop after 5 tries in 5 minutes.
 Description=Open5GS WebUI - console des abonnes 4G (:8999)
 Documentation=https://open5gs.org/open5gs/docs/
 After=network.target mongod.service
 Wants=mongod.service
 ConditionPathExists=/opt/LTE/open5gs/webui/server/index.js
+ConditionPathExists=/opt/LTE/open5gs/webui/.next/BUILD_ID
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
