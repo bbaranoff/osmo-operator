@@ -590,18 +590,45 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   with `noauto`, service enabled, the old `/home` set aside in
   `/var/backups/home-avant-chiffrement-*` at the next reboot).
 
-- **The system disk is a live key** (`osmo-racine-live`, enabled at installation): `/` is
-  read-only and every write to it - root's files, `/etc`, `/opt/GSM`, `/var` - goes to RAM
-  (overlayroot, tmpfs) and is gone at the next boot. Only `/` is covered (`recurse=0`): once
-  unlocked, the encrypted `/home` is the account's own disk, **read-write and persistent**.
-  `osmo-racine-live etat` says which mode this boot is in.
+- **Who writes the system disk** (`osmo-racine-live`, enabled at installation): **root is
+  always live** - in a root session `/` is read-only and every write to it goes to RAM
+  (overlayroot, tmpfs) and is gone at the next boot; there is no persistent root. **Only the
+  session account writes**, everywhere and persistently: its encrypted `/home`, and `/`
+  through root's rights (sudo). To keep a change made as root: redo it from the session
+  account. `osmo-racine-live etat` says which mode this boot is in.
+- **The one question at boot**, asked by the initramfs: `decrypt /home -passphrase- or Enter`
+  (moved there from unlock-home because its answer decides who writes). A passphrase: the
+  account's session, `/` written to the disk (unlock-home reuses the answer from `/run`).
+  Enter, timeout or three refusals: root session, live. Just before it, the date of the
+  black box's last record.
+- **The black box** (`osmo-diffs`, 5 GiB partition `/var/lib/osmo-diffs`): one record per
+  boot, written by itself at shutdown - the TEXT changes (`/etc /root /opt /usr/local
+  /var/spool/cron`, no binaries, at most 1 MiB) of a session-account boot (against a
+  reference copy kept in the encrypted `/home`) or of a root session (its RAM layer against
+  the disk). Each record is encrypted with `age` for the box's public key: the machine fills
+  it without being able to read it. The private key is encrypted with **the box's own
+  passphrase** - set it once from the session account: `sudo osmo-diffs phrase` (a login
+  reminder until then). Read: `osmo-diffs voir [N]`, or the GRUB entry **« consulter la
+  boite noire (sans demarrer) »** (the initramfs asks the box passphrase, shows every record
+  with `more`, restarts). Each record carries the SHA-256 of the previous one: a record
+  removed or changed in the middle shows as `CHAINE ROMPUE`. `/home` is never recorded.
+- **Theft**: whoever takes the machine gets root (Enter at boot, a USB key, the disk
+  elsewhere), never `/home` nor the black box - provided the passphrases are strong and
+  distinct from the account's password (its hash is on the disk in clear), and the machine
+  is off. What the session account writes OUTSIDE `/home` (`/tmp`, `/var`, `/etc`, Wi-Fi keys
+  of NetworkManager...) is on the disk in clear.
+- **What this is not**: a barrier against a hostile root with the machine in hand. A root
+  session can remount `/media/root-ro` read-write or write the block device; someone at the
+  GRUB menu can add `overlayroot=disabled`; root can delete the box's last records (never
+  read them) and append records of its own (encrypted for the public key - they show as
+  `root` or `session` records nobody wrote). And a root that modifies what the session
+  account boots next can catch the `/home` passphrase when it is typed: protecting against
+  that needs a verified boot (Secure Boot with our own keys or the TPM) - not done.
 
 ### 6.8 Updating an installed machine
 
-- **The root is live** (6.7): an update made in a normal boot is lost at reboot. To keep it,
-  either `osmo-racine-live persistant bash /opt/GSM/osmo-operator/update.sh` (overlayroot-chroot
-  on the real disk), or boot the GRUB entry **"osmo-operator - maintenance (racine
-  persistante)"** (`overlayroot=disabled`), update, reboot. `osmo-racine-live retirer`, from a
+- **Root is live** (6.7): an update made in a root session is lost at reboot. Update from
+  the session account (`sudo /opt/GSM/osmo-operator/update.sh`). `osmo-racine-live retirer`, from a
   persistent boot, disables the live root for good.
 
 - `osmo-update` (at boot, or by hand): fast-forward `git fetch` of `/opt/GSM/osmo-operator` and

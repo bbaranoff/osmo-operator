@@ -200,6 +200,8 @@ root_dans_tmp() {
 
 # Every boot starts from the session account's configuration.
 [ "$BOOT" = 1 ] && session_normale
+# The initramfs answer (see below) never outlives this run, whatever exit.
+[ "$BOOT" = 1 ] && trap 'rm -f /run/crypthome.key /run/crypthome.skip' EXIT
 
 # Already mounted (2nd call, or manual decryption after a "no"): nothing to do.
 #
@@ -354,7 +356,29 @@ log "clavier de la console : $(clavier_console)."
 PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
 essai=0
-while [ "$essai" -lt "$TRIES" ]; do
+
+# ── ALREADY ANSWERED IN THE INITRAMFS ───────────────────────────────────────
+# On a machine with a live root (osmo-racine-live), the question is asked by
+# the initramfs, before the root password that only a root boot gets. Its
+# answer waits in /run (RAM, carried over by the initramfs): the passphrase in
+# /run/crypthome.key, or /run/crypthome.skip for Enter. Not asked twice.
+if [ "$BOOT" = 1 ] && [ -f /run/crypthome.skip ]; then
+    rm -f /run/crypthome.skip /run/crypthome.key
+    log "Entree deja donnee au demarrage (initramfs) - session root sans $MOUNT."
+    session_root
+    exit 0
+fi
+if [ "$BOOT" = 1 ] && [ -s /run/crypthome.key ]; then
+    if cryptsetup open --key-file=/run/crypthome.key "$DEV" "$MAPPER"; then
+        ouvert=1
+        log "phrase de passe donnee au demarrage (initramfs)."
+    else
+        log "phrase de passe de l initramfs refusee - la question est reposee."
+    fi
+    rm -f /run/crypthome.key
+fi
+
+while [ "$ouvert" != 1 ] && [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
     invite="decrypt $MOUNT -passphrase- or Enter"
     [ "$essai" -gt 1 ] && invite="$invite ($essai/$TRIES)"

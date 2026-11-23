@@ -11,6 +11,18 @@
 # --arm: no shim or xorriso on the Pi.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then return 0; fi
 
+# ── Room for the ISO file: xorriso only finds out at the end ────────────────
+# Needed: the isoroot (squashfs + boot files) plus 5 % and 200 MB of margin.
+_iso_dir="$(dirname "$OUTPUT")"
+_iso_besoin=$(( $(du -sk "$ISOROOT" | cut -f1) * 105 / 100 + 204800 ))
+_iso_libre=$(df -k --output=avail "$_iso_dir" | tail -1 | tr -d ' ')
+if [ "$_iso_libre" -lt "$_iso_besoin" ]; then
+    echo -e "${RED}Place insuffisante pour l ISO dans ${_iso_dir} : $(( _iso_besoin / 1048576 + 1 )) Go requis, $(( _iso_libre / 1048576 )) Go libres.${NC}" >&2
+    echo -e "${YELLOW}Liberer de la place (docker image prune, docker builder prune) ou --output=/autre/disque/osmo.iso${NC}" >&2
+    exit 1
+fi
+unset _iso_dir _iso_besoin _iso_libre
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECURE BOOT - why this step does not use grub-mkrescue
 # ══════════════════════════════════════════════════════════════════════════════

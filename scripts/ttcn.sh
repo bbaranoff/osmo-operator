@@ -128,10 +128,60 @@ act_sources() {
     fi
     # deps/: ~45 eclipse-titan protocol modules and test ports, each at the
     # commit pinned in deps/Makefile. Plain git clones: runs on the host.
+    # gitlab.eclipse.org rate-limits (HTTP 429 « You have reached the limit
+    # of requests ») when ~45 clones arrive at once: few parallel jobs, a
+    # retry after a pause, and a HOST cache of the clones (an ISO build
+    # starts from an empty rootfs; with the cache, only a changed pin
+    # touches the network - deps/Makefile skips a repo already at its commit).
+    local cache="${TTCN_DEPS_CACHE:-/var/cache/osmo-ttcn-deps}" r n essai=1
+    deps_depuis_cache "$cache" "$d/deps"
     say "make deps (modules de protocole et ports de test TITAN)"
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' \
-        make -C "$d/deps" -j"$(nproc)" >/dev/null || die "make deps"
+    until GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*' \
+            make -C "$d/deps" -j"${TTCN_DEPS_JOBS:-3}" >/dev/null; do
+        deps_vers_cache "$d/deps" "$cache"
+        [ "$essai" -lt "${TTCN_DEPS_ESSAIS:-4}" ] || die "make deps (gitlab.eclipse.org limite les requetes ? relancer plus tard : $0 sources)"
+        n=$(( essai * 90 ))
+        say "make deps : echec (essai $essai) - nouvel essai dans ${n} s"
+        sleep "$n"
+        essai=$(( essai + 1 ))
+    done
+    deps_vers_cache "$d/deps" "$cache"
     say "sources TTCN-3 pretes : $d"
+}
+
+# deps_ok DIR: a complete clone of its own (an interrupted clone has no valid
+# HEAD; without .git, git would answer for osmo-ttcn3-hacks above it).
+deps_ok() { [ -e "$1/.git" ] && git -c safe.directory='*' -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; }
+
+# deps_depuis_cache CACHE DEPS: seed deps/ with the cached clones it lacks;
+# a broken clone left by a failed run is replaced.
+deps_depuis_cache() {
+    local cache="$1" deps="$2" r b n=0
+    [ -d "$cache" ] || return 0
+    for r in "$cache"/*/; do
+        r="${r%/}"; b="$(basename "$r")"
+        deps_ok "$r" || continue
+        if [ -e "$deps/$b" ]; then
+            deps_ok "$deps/$b" && continue
+            rm -rf "${deps:?}/$b"
+        fi
+        cp -a "$r" "$deps/$b" && n=$(( n + 1 ))
+    done
+    [ "$n" = 0 ] || say "deps : $n depot(s) repris du cache $cache"
+}
+
+# deps_vers_cache DEPS CACHE: keep every complete clone for the next build.
+deps_vers_cache() {
+    local deps="$1" cache="$2" r b
+    mkdir -p "$cache" 2>/dev/null || return 0
+    for r in "$deps"/*/; do
+        r="${r%/}"; b="$(basename "$r")"
+        deps_ok "$r" || continue
+        [ "$(git -c safe.directory='*' -C "$r" rev-parse HEAD)" = \
+          "$(git -c safe.directory='*' -C "$cache/$b" rev-parse HEAD 2>/dev/null)" ] && continue
+        rm -rf "${cache:?}/$b"
+        cp -a "$r" "$cache/$b"
+    done
 }
 
 act_build() {

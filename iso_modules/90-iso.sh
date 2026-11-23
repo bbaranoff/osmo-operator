@@ -311,6 +311,22 @@ if [ -d /usr/lib/grub/x86_64-efi ]; then
 fi
 
 
+# ── The rootfs is no longer needed: free it BEFORE the ISO is assembled ─────
+# Everything the ISO needs is in $ISOROOT now (squashfs, kernel, initrd). The
+# ISO file (~7 GB) is written next to a rootfs of ~20 GB on the same disk:
+# keeping both made xorriso fail with « Image size ... exceeds free space on
+# media ». Kept only for --all (99-fin.sh hands it to the next pass).
+if [ -z "${OSMO_ISO_ROOTFS_KEEP:-}" ] && [ "${OSMO_ISO_KEEP_ROOTFS:-0}" != "1" ]; then
+    umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null || true
+    umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null || true
+    if findmnt -rno TARGET | grep -q "^$ROOTFS/"; then
+        echo -e "  ${YELLOW}!${NC} rootfs garde : un montage reste dessous"
+    else
+        rm -rf --one-file-system "$ROOTFS"
+        echo -e "  ${GREEN}✓${NC} rootfs libere avant l assemblage ($(df -h --output=avail "$WORK" | tail -1 | tr -d ' ') libres)"
+    fi
+fi
+
 # End of module: `. file` returns the status of its LAST command, and
 # build-iso.sh runs under set -e. Always return 0 here.
 true

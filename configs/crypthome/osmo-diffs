@@ -1,0 +1,240 @@
+#!/bin/bash
+# osmo-diffs - the BLACK BOX: every text change made to the system, one record
+# per boot, written by itself at shutdown, readable only with its own
+# passphrase. Partition of 5 GiB, /var/lib/osmo-diffs (partition.conf).
+#
+#   osmo-diffs init          keys + reference (Calamares, shellprocess-osmo.conf)
+#   osmo-diffs enregistrer   record this boot (osmo-diffs.service, at shutdown)
+#   osmo-diffs phrase        set / change the box passphrase (session account,
+#                            sudo, in a terminal)
+#   osmo-diffs liste         the records (names, sizes): no passphrase
+#   osmo-diffs voir [N]      decrypt the N last records (default: all), checks
+#                            the chain, asks the passphrase
+#
+# WRITE WITHOUT BEING ABLE TO READ. Each record is encrypted with age for a
+# PUBLIC key (cle.pub, on the box): the machine fills the box without ever
+# holding what opens it. The private key (age identity) is itself encrypted
+# with the box passphrase (cle.chiffree: openssl, AES-256, PBKDF2 600 000
+# rounds). Until « osmo-diffs phrase » has been run, the identity stays in the
+# session account's encrypted /home (/home/.osmo-diffs/cle), readable by
+# nobody else.
+#
+# WHAT: the text files (grep -I: no binary; at most 1 MiB) under
+# OSMO_DIFFS_DIRS (default /etc /root /opt /usr/local /var/spool/cron), minus
+# .git, node_modules, caches. Never /home.
+#
+# WHICH BOOTS:
+#   session account (/home decrypted, / written to the disk): files changed
+#       since the last record (find -newer), plus the ones gone, against the
+#       reference copy kept in the encrypted /home (/home/.osmo-diffs/miroir);
+#   root (always live): what the session wrote - the overlay's RAM layer
+#       (/media/root-rw/overlay) against the disk (/media/root-ro). Lost from
+#       the system at shutdown, kept in the box.
+#
+# THE CHAIN: each record starts with the SHA-256 of the previous record file:
+# « voir » reports a record removed or changed in the middle. Root can still
+# delete the LAST records or the whole box: it can destroy, never read.
+set -u
+BASE="${OSMO_DIFFS_BASE:-/var/lib/osmo-diffs}"
+PRIVE="${OSMO_DIFFS_PRIVE:-/home/.osmo-diffs}"
+MIROIR="$PRIVE/miroir"
+TAMPON="$PRIVE/.dernier"
+JOURNAL="$BASE/journal"
+PUB="$BASE/cle.pub"
+CLE_CHIFFREE="$BASE/cle.chiffree"
+CLE_CLAIRE="$PRIVE/cle"
+[ -f /etc/default/osmo-diffs ] && . /etc/default/osmo-diffs
+DIRS="${OSMO_DIFFS_DIRS:-/etc /root /opt /usr/local /var/spool/cron}"
+MAX="${OSMO_DIFFS_MAX:-1024k}"
+HAUT="${OSMO_DIFFS_HAUT:-/media/root-rw/overlay}"
+BAS="${OSMO_DIFFS_BAS:-/media/root-ro}"
+TEST="${OSMO_DIFFS_SANS_MONTAGE:-0}"     # tests: no mount checks
+
+log() { echo "osmo-diffs : $*"; }
+
+live() {
+    [ "$TEST" = 1 ] && { [ "${OSMO_DIFFS_LIVE:-0}" = 1 ]; return; }
+    [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null
+}
+
+home_chiffre_ouvert() {
+    [ "$TEST" = 1 ] && { [ -d "$PRIVE" ]; return; }
+    local src; mountpoint -q /home 2>/dev/null || return 1
+    src="$(findmnt -fno SOURCE /home 2>/dev/null)"
+    case "$(readlink -f "$src")" in /dev/dm-*|/dev/mapper/*) return 0 ;; esac
+    return 1
+}
+
+boite() {
+    [ "$TEST" = 1 ] || mountpoint -q "$BASE" \
+        || { log "$BASE n est pas monte (partition osmo-diffs absente)"; exit 0; }
+    mkdir -p "$JOURNAL"
+}
+
+trouver() {   # trouver DIR...: candidate files, null-separated, pruned
+    find "$@" -xdev \( -name .git -o -name node_modules -o -name __pycache__ -o -name .cache \
+                      -o -name .env -o -name .venv \) -prune -o -type f -size -"$MAX" -print0 2>/dev/null
+}
+
+dans_dirs() {
+    local d
+    for d in $DIRS; do case "$1" in "$d"/*) return 0 ;; esac; done
+    return 1
+}
+
+est_texte() { [ -f "$1" ] && [ "$(stat -c %s "$1")" -le $(( ${MAX%k} * 1024 )) ] && grep -Iq '' "$1" 2>/dev/null; }
+
+# trace_miroir FILE: diff against the reference copy, which is updated
+trace_miroir() {
+    local f="$1" m="$MIROIR$1"
+    if est_texte "$f"; then
+        cmp -s "$m" "$f" 2>/dev/null && return 0
+        diff -uN --label "a$f" --label "b$f" "$m" "$f"
+        mkdir -p "$(dirname "$m")"; cp -p "$f" "$m"
+    elif [ -f "$m" ]; then
+        if [ -e "$f" ]; then printf '=== %s : devenu binaire ou trop gros, plus suivi\n' "$f"
+        else diff -uN --label "a$f" --label "b$f" "$m" /dev/null; fi
+        rm -f "$m"
+    fi
+}
+
+# trace_overlay FILE: what the live session changed, against the disk
+trace_overlay() {
+    local f="$1" b="$BAS$1"
+    if [ -c "$HAUT$1" ]; then                       # whiteout: deleted
+        est_texte "$b" && diff -uN --label "a$f" --label "b$f" "$b" /dev/null
+    elif est_texte "$f"; then
+        cmp -s "$b" "$f" 2>/dev/null || diff -uN --label "a$f" --label "b$f" "$b" "$f"
+    fi
+}
+
+dernier() { find "$JOURNAL" -maxdepth 1 -name '*.age' 2>/dev/null | sort | tail -1; }
+
+# sceller MODE < diff: one encrypted, chained record
+sceller() {
+    local mode="$1" prec n nom h
+    prec="$(dernier)"
+    if [ -n "$prec" ]; then h="$(sha256sum "$prec" | cut -d' ' -f1) $(basename "$prec")"; else h="origine"; fi
+    n=$(( $(find "$JOURNAL" -maxdepth 1 -name '*.age' | wc -l) + 1 ))
+    nom="$JOURNAL/$(printf '%06d' "$n")_$(date +%F_%H%M%S)_${mode}.diff.age"
+    { printf '# osmo-diffs %s : %s, demarrage du %s, enregistre le %s\n# precedent : %s\n' \
+          "$n" "$mode" "$(uptime -s 2>/dev/null)" "$(date '+%F %T')" "$h"
+      cat; } | age -r "$(cat "$PUB")" -o "$nom" && echo "$nom"
+}
+
+identite() {   # the age identity on stdout (asks the passphrase if needed)
+    if [ -f "$CLE_CHIFFREE" ]; then
+        local pp
+        read -r -s -p "phrase de la boite noire : " pp < /dev/tty; echo >&2
+        # a wrong passphrase often « decrypts » to garbage: only a real age
+        # identity is accepted
+        printf '%s' "$pp" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+            -in "$CLE_CHIFFREE" -pass stdin 2>/dev/null | tr -d '\000' | grep -a '^AGE-SECRET-KEY-' \
+            || { log "phrase incorrecte" >&2; return 1; }
+    elif [ -f "$CLE_CLAIRE" ]; then
+        cat "$CLE_CLAIRE"
+    else
+        log "aucune cle lisible (boite fermee sans sa phrase)" >&2; return 1
+    fi
+}
+
+case "${1:-liste}" in
+    init)
+        boite
+        command -v age >/dev/null || { log "age absent - pas de boite noire"; exit 0; }
+        home_chiffre_ouvert || { log "/home chiffre absent - pas de boite noire"; exit 0; }
+        install -d -m 0700 "$PRIVE"
+        if [ ! -f "$PUB" ]; then
+            ( umask 077; age-keygen -o "$CLE_CLAIRE" 2>/dev/null )
+            age-keygen -y "$CLE_CLAIRE" > "$PUB"
+        fi
+        if [ -z "$(ls -A "$MIROIR" 2>/dev/null)" ]; then
+            log "reference du systeme installe ($DIRS)..."
+            mkdir -p "$MIROIR"; chmod 700 "$MIROIR"
+            # shellcheck disable=SC2086
+            trouver $DIRS | xargs -0 -r grep -IlZ '' 2>/dev/null | sed -z 's#^/##' \
+                | tar -C / --null -T - -cf - 2>/dev/null | tar -C "$MIROIR" -xpf -
+            touch "$TAMPON"
+            printf 'reference : %s fichiers texte\n' "$(find "$MIROIR" -type f | wc -l)" | sceller installation >/dev/null
+        fi
+        log "boite noire prete ($(du -sh "$MIROIR" | cut -f1) de reference, dans $PRIVE)"
+        ;;
+    enregistrer)
+        boite
+        [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
+        tmp="$(mktemp)"; debut="$(mktemp)"
+        if home_chiffre_ouvert && ! live; then
+            mode=session
+            [ -f "$TAMPON" ] || { log "pas de reference dans $PRIVE"; rm -f "$tmp" "$debut"; exit 0; }
+            {
+                # shellcheck disable=SC2086
+                find $DIRS -xdev \( -name .git -o -name node_modules -o -name __pycache__ -o -name .cache \
+                     -o -name .env -o -name .venv \) -prune -o -type f -newer "$TAMPON" -print0 2>/dev/null
+                ( cd "$MIROIR" && find . -type f -print0 ) | while IFS= read -r -d '' r; do
+                    [ -e "${r#.}" ] || printf '%s\0' "${r#.}"
+                done
+            } | while IFS= read -r -d '' f; do trace_miroir "$f"; done > "$tmp"
+            touch -r "$debut" "$TAMPON"
+        elif live; then
+            mode=root
+            ( cd "$HAUT" 2>/dev/null && find . \( -type f -o -type c \) -print0 ) \
+                | while IFS= read -r -d '' r; do p="${r#.}"; dans_dirs "$p" && trace_overlay "$p"; done > "$tmp"
+        else
+            log "ni session chiffree ni root live - rien"; rm -f "$tmp" "$debut"; exit 0
+        fi
+        if [ -s "$tmp" ]; then
+            nom="$(sceller "$mode" < "$tmp")"
+            log "$mode : $(grep -c '^+++ ' "$tmp") fichier(s) -> $nom"
+        else
+            log "$mode : aucun changement texte"
+        fi
+        rm -f "$tmp" "$debut"
+        ;;
+    phrase)
+        boite
+        [ "$(id -u)" = 0 ] || { log "root requis (sudo osmo-diffs phrase)"; exit 1; }
+        cle="$(identite)" || exit 1
+        read -r -s -p "nouvelle phrase de la boite noire : " a < /dev/tty; echo
+        read -r -s -p "encore une fois : " b < /dev/tty; echo
+        [ -n "$a" ] && [ "$a" = "$b" ] || { log "phrases vides ou differentes"; exit 1; }
+        printf '%s' "$cle" | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+            -out "$CLE_CHIFFREE.nouv" -pass fd:3 3< <(printf '%s' "$a") \
+            && mv "$CLE_CHIFFREE.nouv" "$CLE_CHIFFREE"
+        a=""; b=""; cle=""
+        [ -f "$CLE_CLAIRE" ] && { shred -u "$CLE_CLAIRE" 2>/dev/null || rm -f "$CLE_CLAIRE"; }
+        log "boite noire scellee : seule sa phrase la relit"
+        ;;
+    liste)
+        boite
+        for j in "$JOURNAL"/*.age; do
+            [ -f "$j" ] && printf '%-55s %8s\n' "$(basename "$j")" "$(stat -c %s "$j")"
+        done
+        echo "occupe : $(du -sh "$BASE" | cut -f1) / $(df -h --output=size "$BASE" | tail -1 | tr -d ' ')"
+        [ -f "$CLE_CHIFFREE" ] || echo "ATTENTION : pas encore de phrase - sudo osmo-diffs phrase"
+        ;;
+    voir)
+        boite
+        cle="$(identite)" || exit 1
+        mapfile -t tous < <(find "$JOURNAL" -maxdepth 1 -name '*.age' | sort)
+        n="${2:-0}"; debut=0
+        [ "$n" -gt 0 ] 2>/dev/null && [ "${#tous[@]}" -gt "$n" ] && debut=$(( ${#tous[@]} - n ))
+        prec=""
+        for i in "${!tous[@]}"; do
+            j="${tous[$i]}"
+            if ! clair="$(age -d -i <(printf '%s\n' "$cle") "$j" 2>/dev/null)"; then
+                echo "=== $(basename "$j") : indechiffrable"; prec="$j"; continue
+            fi
+            attendu="origine"
+            [ -n "$prec" ] && attendu="$(sha256sum "$prec" | cut -d' ' -f1) $(basename "$prec")"
+            vu="$(printf '%s\n' "$clair" | sed -n '2s/^# precedent : //p')"
+            [ "$vu" = "$attendu" ] || echo "=== CHAINE ROMPUE avant $(basename "$j") (attendu : $attendu)"
+            [ "$i" -ge "$debut" ] && printf '%s\n' "$clair"
+            prec="$j"
+        done | ${PAGER:-less -R}
+        cle=""
+        ;;
+    *)
+        echo "usage : osmo-diffs init | enregistrer | phrase | liste | voir [N]" >&2
+        exit 2
+        ;;
+esac
