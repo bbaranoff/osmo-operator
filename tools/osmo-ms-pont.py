@@ -915,7 +915,7 @@ MAILBOX = os.environ.get("CALYPSO_MAILBOX_FILE", os.path.join(os.environ.get("LO
 
 def sources_journaux():
     """group, name, kind (file | journal), target, hint when absent."""
-    S = []
+    S = [("Fenetre", "commandes lancees (demarrage, arret, chaine, mobile)", "fenetre", "", "")]
     for n, d in (("dsp", "c54x_exe : le DSP C54x"), ("qemu", "qemu-system-arm : l'ARM (qosmo)"),
                  ("osmocon", "osmocon : romload, relais L1CTL"), ("mobile", "mobile : osmocom-bb layer 2/3"),
                  ("pont", "pont : rafales BTS <-> DSP"), ("vsp", "vsp : la voix (VSP)"), ("gdb", "gdb : console de l'ARM"),
@@ -1073,6 +1073,7 @@ class Fenetre(Gtk.Window):
         self.debit = {"DL": 0.0, "UL": 0.0}
         self._cpt = (time.monotonic(), 0, 0)
         self.chaine = None
+        self.journal_txt = ""           # output of the commands the window runs (Journaux tab, "Fenetre")
 
         racine = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         racine.set_border_width(8)
@@ -1163,13 +1164,11 @@ class Fenetre(Gtk.Window):
         g.attach(self.z_iq, 1, 1, 2, 1)
         g.attach(self.z_grille, 0, 2, 3, 1)
 
-        # logs of the chain launch
-        self.journal = Gtk.TextView(editable=False, monospace=True)
-        self.journal.set_size_request(-1, 90)
-        sw = Gtk.ScrolledWindow()
-        sw.set_size_request(-1, 100)
-        sw.add(self.journal)
-        racine.pack_start(sw, False, False, 0)
+        # the output of the commands the window runs (full start, stop, chain, mobile...): no band at
+        # the bottom any more, it goes to the Journaux tab ("Fenetre") and its last line to the top bar
+        self.l_derniere = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=60)
+        self.l_derniere.set_tooltip_text("sortie complete : onglet Journaux, « Fenetre : commandes lancees »")
+        haut.pack_start(self.l_derniere, True, True, 6)
 
         threading.Thread(target=self.air.demo if demo else self.air.ecouter, daemon=True).start()
         GLib.timeout_add(100, self.tic)
@@ -2137,7 +2136,10 @@ class Fenetre(Gtk.Window):
         n = int(self.jx_n.get_value())
 
         def faire():
-            txt, ou = lire_journal(kind, cible, n)
+            if kind == "fenetre":
+                txt, ou = "\n".join(self.journal_txt.splitlines()[-n:]) + "\n", "commandes lancees par cette fenetre"
+            else:
+                txt, ou = lire_journal(kind, cible, n)
             if txt is None:
                 txt = "(%s absent%s)\n" % (cible, " : " + hint if hint else "")
             q = self.jx_filtre.get_text().strip()
@@ -2243,11 +2245,10 @@ class Fenetre(Gtk.Window):
 
     # ── the chain ──────────────────────────────────────────────────────────
     def ecrire(self, txt):
-        buf = self.journal.get_buffer()
-        buf.insert(buf.get_end_iter(), txt)
-        if buf.get_line_count() > 400:
-            buf.delete(buf.get_start_iter(), buf.get_iter_at_line(buf.get_line_count() - 400))
-        self.journal.scroll_to_iter(buf.get_end_iter(), 0, False, 0, 0)
+        self.journal_txt = (self.journal_txt + txt)[-400000:]
+        lignes = [l for l in txt.splitlines() if l.strip()]
+        if lignes:
+            self.l_derniere.set_text(lignes[-1].strip())
         return False
 
     def lancer(self, args, brut=None, argv=None, ecrire=None, apres=None, cwd=None, root=True, env=None):
