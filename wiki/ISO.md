@@ -27,9 +27,9 @@ start it.
 - **The phone can also *be* the base station**: `./start.sh --bts` turns the emulated Calypso
   into the transceiver of the BTS; `--bts --ms` adds a second Calypso that camps on it **over an
   emulated air interface**. A fourth one runs the RSSI app. One command each: `banc-trx`,
-  `banc-mobile`, `banc-rssi`. See [5.13](#513-the-calypso-bench-the-c123-window-and-glava).
+  `banc-mobile`, `banc-rssi`. See [5.13](#513-the-calypso-bench-and-the-c123-window).
 - **Hold the phone in your hand**: `c123` opens a photo of the Motorola C123 with its live LCD
-  inlaid and clickable keys (or the PC keyboard). See [5.13](#513-the-calypso-bench-the-c123-window-and-glava).
+  inlaid and clickable keys (or the PC keyboard). See [5.13](#513-the-calypso-bench-and-the-c123-window).
 - **4G next to it, with fallback to 2G**: Open5GS core, srsENB and srsUE over ZeroMQ, data out
   to the Internet, and **CSFB** over SGs back to the 2G MSC. See [5.6](#56-4g-srsran--open5gs-and-csfb).
 - **A smartphone on the network**: a postmarketOS/Phosh VM whose modem is the bench: SMS and
@@ -37,9 +37,8 @@ start it.
 - **Several operators, roaming between them**: SS7 with an inter-STP hub, 1 to 9 nodes across
   machines (`--node`, `--wan`), operators in Docker next to the native one.
   See [5.4](#54-startsh-profiles-and-options), [5.5](#55-ss7-multi-operator-docker-and-the-add-ons).
-- **A desktop made for the bench**: GNOME with a city wallpaper that **raises its antenna when a
-  network starts**, a live I/Q spectrum panel, a timeslot banner, a Conky status board, a
-  **GLava spectrum circle driven by the speakers and the microphone**, Wireshark as root with
+- **A desktop made for the bench**: GNOME with a live I/Q spectrum panel, a timeslot banner,
+  a Conky status board, Wireshark as root with
   ready-made filters, Linphone on extension 100, a web dashboard and a tutorial. Every launcher
   opens a progress window, never a bare terminal. See [5.8](#58-the-desktop).
 - **Tools to look inside**: gdb on the emulated baseband, VTYs for every daemon,
@@ -91,7 +90,7 @@ back with no option (`--all`); `--arm` hands over to the Armbian framework for t
 | Operator | `osmo-operator.iso` | `--role=operator` (default): the full bench, no desktop | 2G stack, emulated baseband, 4G, dashboard, tools; text console |
 | Lite | `osmo-operator-lite.iso` | `--lite`: the same minus the build workshops | `/opt/GSM` stripped of source trees (`iso_modules/87-lite.sh`, same rules as `Dockerfile.lite`) |
 | Desktop | `osmo-operator-desktop.iso` | `--desktop`: + GNOME, Wireshark, Linphone, VLC, Calamares, Conky, Firefox (about 2.5 GB more) | the image published in releases |
-| ARM boards | `Armbian-..._<Board>_noble_....img` (CI: `osmo-operator-<board>[-desktop].img`) | `--arm`: one arm64 SD image **per board**, built by [armbian/build](https://github.com/armbian/build) (`armbian/build-armbian.sh`): `rpi4b` and every Orange Pi 5 (`orangepi5`, `orangepi5b`, `orangepi5-plus`, `orangepi5pro`, `orangepi5-max`, `orangepi5-ultra`); `--board=rpi4\|opi5\|all\|<board>,...`, default `all` | Armbian builds kernel, BSP, u-boot/firmware, rootfs and image; the stack comes from the arm64 Docker image through `armbian/userpatches/customize-image.sh`. `--desktop`: GNOME (Armbian configng, tier minimal) + the bench desktop, without GLava (OpenGL 4.2 missing on these GPUs). No 4G, no `--lite`. The first Docker build is emulated: about ten hours |
+| ARM boards | `Armbian-..._<Board>_noble_....img` (CI: `osmo-operator-<board>[-desktop].img`) | `--arm`: one arm64 SD image **per board**, built by [armbian/build](https://github.com/armbian/build) (`armbian/build-armbian.sh`): `rpi4b` and every Orange Pi 5 (`orangepi5`, `orangepi5b`, `orangepi5-plus`, `orangepi5pro`, `orangepi5-max`, `orangepi5-ultra`); `--board=rpi4\|opi5\|all\|<board>,...`, default `all` | Armbian builds kernel, BSP, u-boot/firmware, rootfs and image; the stack comes from the arm64 Docker image through `armbian/userpatches/customize-image.sh`. `--desktop`: GNOME (Armbian configng, tier minimal) + the bench desktop. No 4G, no `--lite`. The first Docker build is emulated: about ten hours |
 
 With `--node=N` (1 to 9), the name becomes `osmo-operator-N[-lite][-desktop].iso` and the image
 carries the SS7 identity of node N. `--output=FILE` forces the name.
@@ -201,8 +200,8 @@ The bench runs as root. Icons elevate via `pkexec`, the command line via `sudo`.
   `/usr/local/lib` goes first in `ldconfig`. The runtime environment is the image's, not a
   different apt version.
 - Desktop: `ubuntu-desktop-minimal`, wireshark, linphone-desktop, vlc, calamares, conky,
-  `python3-gi`, `python3-gi-cairo`, `python3-cairo`, `gir1.2-gtk-3.0`, `gir1.2-vte-2.91`, GLava
-  (compiled, `85-glava.sh`), Firefox from packages.mozilla.org, GDM with root autologin, no
+  `python3-gi`, `python3-gi-cairo`, `python3-cairo`, `gir1.2-gtk-3.0`, `gir1.2-vte-2.91`,
+  Firefox from packages.mozilla.org, GDM with root autologin, no
   Wayland.
 - Integrity check: the rootfs is verified against dpkg **before** compression, then the
   squashfs is read back and re-verified (`90-iso.sh`).
@@ -387,16 +386,11 @@ window) installs what is missing.
   NVIDIA via `ubuntu-drivers`).
 - **Plymouth** `osmo-bts`: mast, handset and waves (preview: `wiki/plymouth-osmo-bts.gif`).
   Generated at build time by `tools/plymouth-render.py` (`86-finitions.sh`).
-- **Two-state** wallpaper (`tools/osmo-fond.py`, `osmo-fond ville|antenne`): at rest
-  `/usr/share/backgrounds/gsm-lab-ville.jpg` (the waterfront city, no antenna); as soon as a 2G
-  or 4G starts, a fade (about 2.4 s, Pillow intermediate frames + GNOME Shell cross-fade) to
-  `gsm-lab-antenne.jpg` (the same city, mast raised), and back on stop. Triggered by
-  `osmo-panel.py` when it sees the bench come up or go down, by `osmo-lte start` and, if the
-  bottom bar is active, on clicking *run standalone*. Likewise, the top zone carries only the
+- The wallpaper is the user's: the bench never changes it. The installed default is
+  `/usr/share/backgrounds/gsm-lab-ville.jpg`; `osmo-fond ville|antenne|<file>` (`tools/osmo-fond.py`)
+  remains available to change it by hand, with a fade. The top zone carries only the
   **Telecom Operator** title while nothing runs, and fades to the LAB GSM banner on launch
-  (`$XDG_RUNTIME_DIR/osmo-banc.etat`, read by `osmo-topzone.py`). The low-poly landscapes
-  `gsm-lab-fond.jpg` and `gsm-lab-wallpaper.jpg` (`tools/paysage-render.py`) are installed but
-  not the default.
+  (`$XDG_RUNTIME_DIR/osmo-banc.etat`, read by `osmo-topzone.py`).
 
 ### 5.9 Audio
 
@@ -449,7 +443,7 @@ private IP `192.168.<N+1>.10`; LTE `ogstun` 10.45.0.0/16. Numbering plan: `10010
 | `osmo-dsp` icon | DSP is the default; right-click on the bench icon offers gr-gsm | `85-installeur-bureau.sh` |
 | `osmo-trust-desktop` and the desktop icons | launchers are in the dock and the menu | `85-installeur-bureau.sh` |
 
-### 5.13 The Calypso bench, the C123 window and GLava
+### 5.13 The Calypso bench and the C123 window
 
 **The Calypso chains** (`/opt/GSM/c54x_exe/run.sh`, `MODE=dsp`): each chain is an *instance*
 of four processes: `c54x_exe` (the DSP), `qosmo` (the ARM), osmocon, and the host application.
@@ -497,21 +491,6 @@ would switch the BTS radio off.
 | `c123-tous` | one window per live instance, plus those that appear later |
 | `c123 --modele c139` | the colour C139 screen, for the Magnetite firmware (add-on) |
 | `c123 --calibrate` | redefine the key zones (`data/c123-zones.json`) with the mouse |
-
-**GLava** (`tools/glava-build.sh`, `iso_modules/85-glava.sh`, desktop ISO only): GLava with the
-*NCS Spectrum* module, compiled at build time (no noble package). A spectrum circle sits above
-the city of the wallpaper and a bar spectrum runs along the bottom edge, both sized from the
-screen at login (`tools/osmo-glava.sh`). They listen to **the speakers and the microphone
-together**: a null sink `osmo_glava` fed by two loopbacks, the monitor of the hardware output
-(everything that plays, bench voice included) and the default source (`osmo_mic_ec`, the
-echo-cancelled mic). The mic goes only to that sink, never to the speakers: no feedback. A
-systemd user service: `systemctl --user start|stop|enable glava`. It needs OpenGL 4.2 or newer.
-**Only while a bench runs**: `osmo-panel.py` starts it with a fade when a bench comes up and fades
-it out when it stops. To keep it all the time, pick the GRUB entry *osmo-operator - avec visualiseur
-audio GLava*, which adds `osmo.glava` to the kernel command line (read by the user unit
-`glava-boot.service`).
-On an installed system, add `osmo.glava` to `GRUB_CMDLINE_LINUX_DEFAULT` or run
-`systemctl --user enable glava`.
 
 **osmo-ms-pont** (`tools/osmo-ms-pont.py`, in `/usr/local/bin`): the mobile chain WITHOUT the
 mobile, in one GTK window. *Demarrer la chaine* runs the steps 1, b, 2, 3 and 5 of
@@ -724,7 +703,6 @@ via `return` (that is how `--arm` skips a step).
 | `84-comptes.sh` | root and osmocom, console and GDM autologin, Linphone account |
 | `85-installeur-bureau.sh` | Calamares (`/etc/calamares`), `osmo-install`, icons, GTK launchers (`osmo-*-anim`), Info page |
 | `85-extensions-gnome.sh` | GNOME Shell extensions |
-| `85-glava.sh` | `--desktop`: GLava + NCS Spectrum compiled into the rootfs, `glava.service` (user), started only with `osmo.glava` on the kernel command line (GRUB entry) |
 | `86-finitions.sh` | fixed live-boot `toram`, sssd masked, Chromium removed, Firefox microphone, terminal banner (`tools/osmo-banner.sh`: one of six telecom figlets at random, a sentence under it), Plymouth `osmo-bts` |
 | `87-lite.sh` | `--lite` pruning of `/opt/GSM` |
 | `88-lte-pmos.sh` | srsRAN + Open5GS (from the `.deb`s, otherwise compiled), freeDiameter, pmbootstrap, PPP kernel, VM image, final 2G + 4G + phone check |

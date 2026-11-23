@@ -909,7 +909,6 @@ osmo_poser_voix_forks
 #     gcc-13, the kernel compiler, for DKMS;
 #   - c123 / osmo-c123 and the bench commands (banc-rssi, banc-trx, c123-1...)
 #     in /usr/local/bin, 98-osmo-banc-aliases.sh in profile.d;
-#   - /usr/local/bin/osmo-glava (a copy, not a link) aligned on tools/osmo-glava.sh.
 osmo_poser_outils_banc() {
     [ "$(id -u)" -eq 0 ] || return 0
     local r=/opt/GSM/osmo-operator v
@@ -927,10 +926,6 @@ osmo_poser_outils_banc() {
         [ "$(readlink "/usr/local/bin/$v" 2>/dev/null)" = "$r/tools/osmo-c123-gtk.py" ] \
             || ln -sf "$r/tools/osmo-c123-gtk.py" "/usr/local/bin/$v"
     done
-    [ -f /usr/local/bin/osmo-glava ] && [ -f "$r/tools/osmo-glava.sh" ] \
-        && ! cmp -s "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
-        && install -m755 "$r/tools/osmo-glava.sh" /usr/local/bin/osmo-glava \
-        && echo "  [bureau] osmo-glava aligne sur le depot (systemctl --user restart glava)"
     # gcc-9 / gcc-11 / gcc-13 alternatives (single definition: tools/osmo-gcc-alternatives.sh)
     [ -x "$r/tools/osmo-gcc-alternatives.sh" ] && bash "$r/tools/osmo-gcc-alternatives.sh"
     return 0

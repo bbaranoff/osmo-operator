@@ -46,7 +46,7 @@
 #   --install-deps        apt install qemu-user-static binfmt-support if aarch64 cannot be emulated
 #   --dry-run             print what would be done
 #
-# Env: ARMBIAN_DIR, ARMBIAN_GIT, OSMO_DEB_CACHE (/var/cache/osmo-debs), OSMO_ARM_GLAVA=1,
+# Env: ARMBIAN_DIR, ARMBIAN_GIT, OSMO_DEB_CACHE (/var/cache/osmo-debs),
 #      ARMBIAN_REF (armbian/build commit to check out: every job of a CI run must use the
 #      SAME one, the kernel artifact hash depends on it), ARMBIAN_KERNEL_DEBS (a directory of
 #      kernel .deb from a previous --kernel-only, copied into output/debs/ before compile.sh:
@@ -288,7 +288,6 @@ fi
 # Marker files read by customize-image.sh from the overlay (services enabled at boot)
 if [ "$NO_STACK" = 0 ] && [ "$DRY" = 0 ]; then
     rm -f "$OV/OSMO_IMAGE_BANC" "$OV/OSMO_IMAGE_MULTI" "$OV/OSMO_ARM_GLAVA"
-    [ "${OSMO_ARM_GLAVA:-0}" = 1 ] && : > "$OV/OSMO_ARM_GLAVA"
     [ "$BANC" = 1 ]  && : > "$OV/OSMO_IMAGE_BANC"
     [ "$MULTI" = 1 ] && : > "$OV/OSMO_IMAGE_MULTI"
 fi

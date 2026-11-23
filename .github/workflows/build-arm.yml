@@ -26,8 +26,7 @@ name: Build images SD (arm64 / Armbian - Raspberry Pi 4, Orange Pi 5)
 # ── LE BUREAU ───────────────────────────────────────────────────────────────
 # desktop=true : GNOME (DESKTOP_ENVIRONMENT=gnome, DESKTOP_TIER=minimal, via
 # armbian/configng) + le bureau du banc (fond, Conky, encart, icones, c123).
-# GLava n'y est pas : le cercle NCS veut OpenGL >= 4.2, absent des GPU de ces
-# cartes sous Mesa. Pas de 4G non plus (srsRAN/Open5GS non compiles en aarch64).
+# Pas de 4G non plus (srsRAN/Open5GS non compiles en aarch64).
 
 on:
   push:
@@ -396,8 +395,8 @@ jobs:
 
             ### Ce que ces images n'ont pas
 
-            Pas de 4G (srsRAN et Open5GS ne sont pas compiles pour aarch64) ni de
-            GLava (OpenGL >= 4.2 requis). La 2G/EDGE est entiere.
+            Pas de 4G (srsRAN et Open5GS ne sont pas compiles pour aarch64).
+            La 2G/EDGE est entiere.
           files: |
             osmo-operator-*.img.zst*
             SHA256SUMS

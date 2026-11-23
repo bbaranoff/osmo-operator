@@ -267,10 +267,6 @@ lte_start() {
     done
     _configs || return 1
     _verifier_sib || return 1
-    # the desktop follows: the antenna rises in the wallpaper (tools/osmo-fond.py
-    # re-runs itself under the desktop user; the return to the city, at stop,
-    # is done by osmo-panel.py when nothing runs any more)
-    [ -x "$REPO/tools/osmo-fond.py" ] && ("$REPO/tools/osmo-fond.py" antenne >/dev/null 2>&1 &)
     ip netns list 2>/dev/null | grep -qw "$NETNS" || { ip netns add "$NETNS" && _ok "espace reseau $NETNS cree"; }
 
     # The "[n/4]" markers: the desktop launch window (tools/osmo-gtk-run.py

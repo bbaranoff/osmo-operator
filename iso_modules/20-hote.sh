@@ -29,9 +29,6 @@
 #   grub2-common     grub-install; grub-common alone only has grub-mkrescue.
 #   fonts-ubuntu     tools/grub-theme-render.py (86, 90): GRUB theme fonts,
 #                    converted by grub-mkfont (grub-common).
-#   meson ninja-build pkg-config libpulse-dev libx11-dev libxext-dev
-#   libxrender-dev libxcomposite-dev libgl-dev  GLava built on the host for the
-#                    rootfs (tools/glava-build.sh, 85-glava).
 # Ubuntu 24.04 already provides tar, gzip, dpkg-deb, coreutils, mount. aria2
 # and curl come with apt-fast-install.sh.
 #
@@ -47,7 +44,7 @@ zstd xz-utils cpio file gcc make python3 python3-pil python3-yaml \
 e2fsprogs fdisk util-linux dosfstools mtools kpartx"
 # amd64: the ISO itself - squashfs, grub (BIOS + EFI), xorriso, isohybrid.
 ISO_HOST_PKGS="$ISO_HOST_PKGS_COMMON squashfs-tools xorriso grub-common grub2-common grub-pc-bin grub-efi-amd64-bin shim-signed grub-efi-amd64-signed isolinux syslinux-common syslinux-utils \
-fonts-ubuntu meson ninja-build pkg-config libpulse-dev libx11-dev libxext-dev libxrender-dev libxcomposite-dev libgl-dev"
+fonts-ubuntu"
 # --arm: no grub, xorriso or squashfs. Needs emulation (qemu-user-static +
 # binfmt-support: chroot and docker run aarch64 code on the x86 host),
 # debootstrap, and tools to build the SD image without mounting anything:

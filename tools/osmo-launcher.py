@@ -469,13 +469,6 @@ class Launcher(Gtk.Window):
             b.show()
             r = self.runs[slug] = {"proc": None, "titre": slug, "log": log, "bouton": b}
         self._stop(r)
-        # 2G (standalone) or 4G (multi): the antenna rises in the wallpaper from
-        # the click on (tools/osmo-fond.py, fade) - osmo-panel.py does the same
-        # when it sees the bench up, without effect if it already is.
-        if slug in ("standalone", "multi"):
-            fond = os.path.join(REPO, "tools", "osmo-fond.py")
-            if os.path.exists(fond):
-                spawn([sys.executable, fond, "antenne"])
         argv = (_root_prefix() if action.root else []) + ["bash", "-lc", action.log_cmd]
         env = dict(os.environ, NO_COLOR="1", TERM="dumb")
         try:

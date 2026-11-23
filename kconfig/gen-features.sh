@@ -34,7 +34,6 @@ declare -A KCONFIG_EXTRA=(
     [lite]="depends on ISO_IMAGE_LITE || ISO_IMAGE_ALL"
     [ttcn]="depends on !ISO_IMAGE_LITE"
     [extensions-gnome]="depends on ISO_IMAGE_DESKTOP || ISO_IMAGE_ALL"
-    [glava]="depends on (ISO_IMAGE_DESKTOP || ISO_IMAGE_ALL) && ARCH_AMD64"
 )
 
 sym() {   # id -> Kconfig symbol

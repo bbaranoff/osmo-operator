@@ -104,9 +104,6 @@ fi
 # wallpaper, dark/Yaru blue theme, repository icons and dock, Conky and the panel
 # (osmo-desktop-panel, extracted by build-armbian.sh), c123 and its GTK packages.
 # No calamares, grub, secure boot, Mozilla firefox or GNOME extensions.
-# Known limitation: GLava is not installed by default; its NCS circle needs OpenGL >= 4.2
-# (imageLoad/Store), which neither the Pi 4 V3D nor the Orange Pi 5 Mali G610 provide under
-# Mesa (GL 3.1). Use OSMO_ARM_GLAVA=1 sudo ./build-armbian.sh ... to try anyway (overlay marker OSMO_ARM_GLAVA).
 if [ "$BUILD_DESKTOP" = yes ]; then
     REPO=/opt/GSM/osmo-operator
     DPKGS="conky-all fonts-dejavu python3-pil python3-gi python3-gi-cairo python3-cairo
@@ -177,12 +174,6 @@ if [ "$BUILD_DESKTOP" = yes ]; then
         log "bureau : Conky + encart a la connexion"
     fi
 
-    if [ -f "$OV/OSMO_ARM_GLAVA" ]; then
-        apt-get install -y --no-install-recommends git meson ninja-build gcc pkg-config patch \
-            libpulse-dev libx11-dev libxext-dev libxrender-dev libxcomposite-dev libgl-dev >/dev/null \
-            && bash "$REPO/tools/glava-build.sh" && log "GLava pose (OSMO_ARM_GLAVA)" \
-            || log "GLava non pose"
-    fi
     log "bureau du banc pose (fond $FOND)"
 fi
 
