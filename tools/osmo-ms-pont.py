@@ -551,15 +551,153 @@ def vty(port, commandes, delai=3.0):
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt)
 
 
-def queue(chemin, n=300):
+def queue(chemin, n=300, ansi=False):
+    """The last n lines of a file; ansi: keep the colour codes (the coloured log views read them)."""
     try:
         with open(chemin, "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 200000))
             lignes = f.read().decode("utf-8", "replace").splitlines()[-n:]
-        return re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lignes)) + "\n"
+        t = "\n".join(lignes) + "\n"
+        return t if ansi else re.sub(r"\x1b\[[0-9;]*m", "", t)
     except OSError:
         return None
+
+
+# ── LOG COLOURS ──────────────────────────────────────────────────────────────
+# The log views (Journaux, Core, L23, Tests) are dark, like a terminal. A line
+# that carries ANSI colour codes (the Osmocom log files) is shown with THEM;
+# the others (journalctl, the bench, the tests) are coloured from what they
+# say. colorer() runs in the worker thread: the GTK loop only inserts.
+C_GRIS, C_ATTENUE, C_TEXTE = "#7f849c", "#585b70", "#cdd6f4"
+C_ROUGE, C_JAUNE, C_VERT, C_ORANGE = "#f38ba8", "#f9e2af", "#a6e3a1", "#fab387"
+C_CYAN, C_BLEU, C_VIOLET, C_ROSE = "#89dceb", "#89b4fa", "#cba6f7", "#f5c2e7"
+_ANSI_BASE = ["#45475a", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de",
+              "#585b70", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#ffffff"]
+
+
+def _ansi256(n):
+    if n < 16:
+        return _ANSI_BASE[n]
+    if n < 232:
+        n -= 16
+        v = [0, 95, 135, 175, 215, 255]
+        r, g, b = v[n // 36], v[n // 6 % 6], v[n % 6]
+        # the dark cube colours (osmocom's 38;5;23) would vanish on a dark background: lightened
+        if r + g + b < 200:
+            r, g, b = (min(255, x + 90) for x in (r, g, b))
+        return "#%02x%02x%02x" % (r, g, b)
+    g = 8 + 10 * (n - 232)
+    return "#%02x%02x%02x" % ((max(g, 110),) * 3)
+
+
+def _ansi(ligne):
+    """[(text, colour, bold)] of a line with SGR codes."""
+    out, coul, gras = [], None, False
+    for i, morceau in enumerate(re.split(r"\x1b\[([0-9;]*)m", ligne)):
+        if i % 2 == 0:
+            if morceau:
+                out.append((morceau, coul, gras))
+            continue
+        codes = [int(c) for c in morceau.split(";") if c.isdigit()] or [0]
+        k = 0
+        while k < len(codes):
+            c = codes[k]
+            if c == 0:
+                coul, gras = None, False
+            elif c == 1:
+                gras = True
+            elif c == 22:
+                gras = False
+            elif 30 <= c <= 37:
+                coul = _ANSI_BASE[c - 30 + (8 if gras else 0)]
+            elif 90 <= c <= 97:
+                coul = _ANSI_BASE[c - 90 + 8]
+            elif c == 39:
+                coul = None
+            elif c == 38 and k + 2 < len(codes) and codes[k + 1] == 5:
+                coul = _ansi256(codes[k + 2])
+                k += 2
+            elif c == 38 and k + 4 < len(codes) and codes[k + 1] == 2:
+                coul = "#%02x%02x%02x" % tuple(codes[k + 2:k + 5])
+                k += 4
+            k += 1
+    return out
+
+
+# (regex, colour, bold), applied in order: a later rule wins on the characters it covers
+_REGLES = [
+    (re.compile(r"0x[0-9a-fA-F]+"), C_ATTENUE, False),
+    (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"), C_BLEU, False),
+    (re.compile(r"\b[\w./-]+\.(?:c|h|py|sh|cpp):\d+\b"), C_BLEU, False),
+    (re.compile(r"<[0-9a-f]{4}>"), C_VIOLET, False),
+    (re.compile(r"\b(?:IMSI|MSISDN|TMSI)[-=:][\w-]+|\b\d{15}\b"), C_ROSE, False),
+    (re.compile(r"\bDEBUG\b"), C_GRIS, False),
+    (re.compile(r"\bINFO\b"), C_VERT, False),
+    (re.compile(r"\b(?:NOTICE|WARNING|WARN|warning)\b"), C_JAUNE, True),
+    (re.compile(r"\b(?:Started|Starting|Reached|connected|accept\(\)ed|successful(?:ly)?|OK|ok|PASS(?:ED)?|DECODED)\b"), C_VERT, False),
+    (re.compile(r"\b(?:Stopping|Stopped|Deactivated|Terminating|Scheduled restart|restart counter is at \d+|signal=\d+)"), C_ORANGE, False),
+    (re.compile(r"\b(?:ERROR|FATAL|CRITICAL|Error|error|Failed|failed|FAILURE|FAILED|FAIL|Traceback|exit-code|"
+                r"refused|timeout|TIMEOUT|segfault|Aborted|KO)\b|status=[1-9]\d*"), C_ROUGE, True),
+    (re.compile(r"\[ OK \]|\[ +OK +\]|● ok|✓"), C_VERT, True),
+    (re.compile(r"\[SKIP\]|\[ \.\. \]"), C_GRIS, False),
+    (re.compile(r"\[FAIL\]|\[ KO \]|\[ECHEC\]|✗"), C_ROUGE, True),
+    (re.compile(r"^\[fin, code 0\]$"), C_VERT, True),
+    (re.compile(r"^\[fin, code [1-9]\d*\]$"), C_ROUGE, True),
+    (re.compile(r"^\$ .*"), C_CYAN, True),
+]
+# a journalctl line: "nov. 23 15:06:38.566241 acer osmo-hlr[3320910]: message"
+_JOURNAL = re.compile(r"^(\S+\.? \d+ \d\d:\d\d:\d\d(?:\.\d+)?) (\S+) ([^\s\[:]+)(\[\d+\])?: ")
+_HORO = re.compile(r"^(?:\d{17}|\d{4}-\d\d-\d\d[ T][\d:.]+|\d\d:\d\d:\d\d(?:\.\d+)?) ")
+_TALLOC = re.compile(r"full talloc report|contains +\d+ bytes in +\d+ blocks")
+
+
+def _heuristique(ligne):
+    n = len(ligne)
+    coul = [None] * n
+    gras = [False] * n
+
+    def poser(a, b, c, g=False):
+        for k in range(a, min(b, n)):
+            coul[k] = c
+            gras[k] = g
+    debut = 0
+    m = _JOURNAL.match(ligne)
+    if m:
+        poser(m.start(1), m.end(1), C_GRIS)
+        poser(m.start(2), m.end(2), C_ATTENUE)
+        poser(m.start(3), m.end(3), C_CYAN, True)
+        if m.group(4):
+            poser(m.start(4), m.end(4), C_ATTENUE)
+        debut = m.end()
+    h = _HORO.match(ligne[debut:])
+    if h:
+        poser(debut, debut + h.end(), C_GRIS)
+    if _TALLOC.search(ligne, debut):
+        poser(debut, n, C_ATTENUE)          # the memory report printed at every clean exit
+    else:
+        for rx, c, g in _REGLES:
+            for mm in rx.finditer(ligne, debut):
+                poser(mm.start(), mm.end(), c, g)
+    out, k = [], 0
+    while k < n:
+        j = k
+        while j < n and coul[j] == coul[k] and gras[j] == gras[k]:
+            j += 1
+        out.append((ligne[k:j], coul[k], gras[k]))
+        k = j
+    return out
+
+
+def colorer(txt):
+    """[(text, colour or None, bold)] for a whole text, line by line, newlines included."""
+    segs = []
+    for ligne in txt.split("\n"):
+        segs.extend(_ansi(ligne) if "\x1b[" in ligne else _heuristique(ligne))
+        segs.append(("\n", None, False))
+    if segs:
+        segs.pop()
+    return segs
 
 
 C54X = os.path.dirname(RUN_SH)
@@ -943,7 +1081,7 @@ def lire_journal(kind, cible, n=1000):
     if kind == "osmo":
         for f in (os.path.join(CORE_LOGS, cible + ".log"), os.path.join(NITB_LOGS, NITB_DE.get(cible, cible + ".log"))):
             if os.access(f, os.R_OK) and os.path.getsize(f) > 0:
-                return queue(f, n) or "", f
+                return queue(f, n, ansi=True) or "", f
         kind = "journal"
     if kind == "journal":
         try:
@@ -952,7 +1090,7 @@ def lire_journal(kind, cible, n=1000):
             return re.sub(r"\x1b\[[0-9;]*m", "", out.stdout + out.stderr), "journalctl -u " + cible
         except (OSError, subprocess.TimeoutExpired) as e:
             return "journalctl : %s\n" % e, "journalctl -u " + cible
-    t = queue(cible, n)
+    t = queue(cible, n, ansi=True)
     return t, cible
 
 
@@ -1075,6 +1213,9 @@ class Fenetre(Gtk.Window):
         self.chaine = None
         self.journal_txt = ""           # output of the commands the window runs (Journaux tab, "Fenetre")
 
+        css = Gtk.CssProvider()
+        css.load_from_data(b"textview.osmo-journal, textview.osmo-journal text { background-color: #1e1e2e; color: #cdd6f4; }")
+        Gtk.StyleContext.add_provider_for_screen(self.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         racine = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         racine.set_border_width(8)
         self.add(racine)
@@ -1185,9 +1326,11 @@ class Fenetre(Gtk.Window):
 
     # ── Core and L23 tabs ──────────────────────────────────────────────────
     @staticmethod
-    def _texte(h=-1):
+    def _texte(h=-1, sombre=False):
         t = Gtk.TextView(editable=False, monospace=True)
         t.set_wrap_mode(Gtk.WrapMode.NONE)
+        if sombre:
+            t.get_style_context().add_class("osmo-journal")
         sw = Gtk.ScrolledWindow()
         sw.set_vexpand(True)
         if h > 0:
@@ -1195,8 +1338,45 @@ class Fenetre(Gtk.Window):
         sw.add(t)
         return t, sw
 
+    def _tag(self, buf, coul, gras):
+        nom = "c%s%s" % (coul or "", "g" if gras else "")
+        tag = buf.get_tag_table().lookup(nom)
+        if tag is None:
+            kw = {"foreground": coul} if coul else {}
+            if gras:
+                kw["weight"] = Pango.Weight.BOLD
+            tag = buf.create_tag(nom, **kw)
+        return tag
+
+    def _inserer(self, t, segs):
+        buf = t.get_buffer()
+        for texte, coul, gras in segs:
+            if coul or gras:
+                buf.insert_with_tags(buf.get_end_iter(), texte, self._tag(buf, coul, gras))
+            else:
+                buf.insert(buf.get_end_iter(), texte)
+
+    def _remplir_couleur(self, t, txt, segs=None, bas=True):
+        """Like _remplir, in colour (segs: colorer(txt), computed in the worker thread)."""
+        if getattr(t, "_osmo_txt", None) == txt:
+            return False
+        t._osmo_txt = txt
+        t.get_buffer().set_text("")
+        self._inserer(t, segs if segs is not None else colorer(txt))
+        if bas:
+            t.scroll_to_iter(t.get_buffer().get_end_iter(), 0, False, 0, 0)
+        return False
+
+    def _ajouter_couleur(self, t, txt):
+        """Appends coloured text (streamed output: tests)."""
+        t._osmo_txt = None
+        self._inserer(t, colorer(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt) if "\x1b[" in txt and
+                                     not re.search(r"\x1b\[[0-9;]*m", txt) else txt))
+        t.scroll_to_iter(t.get_buffer().get_end_iter(), 0, False, 0, 0)
+
     @staticmethod
     def _remplir(t, txt, bas=True):
+        t._osmo_txt = None                  # the coloured fill must not believe it is still shown
         buf = t.get_buffer()
         if buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False) == txt:
             return False
@@ -1255,7 +1435,7 @@ class Fenetre(Gtk.Window):
                                                      "show cs7 instance 0 asp", "show uptime"]), True, False)
         bas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.core_titre = Gtk.Label(xalign=0)
-        self.core_log, sw = self._texte(160)
+        self.core_log, sw = self._texte(160, sombre=True)
         bas.pack_start(self.core_titre, False, False, 0)
         bas.pack_start(sw, True, True, 0)
         droite.pack2(bas, True, False)
@@ -1289,7 +1469,7 @@ class Fenetre(Gtk.Window):
         b.pack_start(p, True, True, 0)
         p.pack1(self._console(port_mobile, ["show ms", "show subscriber", "show cell", "show neighbour-cells",
                                             "show support"]), True, False)
-        self.l23_log, sw = self._texte(200)
+        self.l23_log, sw = self._texte(200, sombre=True)
         p.pack2(sw, True, False)
         return b
 
@@ -1324,7 +1504,7 @@ class Fenetre(Gtk.Window):
         sw.set_size_request(-1, 260)
         sw.add(vue)
         p.pack1(sw, False, False)
-        self.install_log, sw2 = self._texte(200)
+        self.install_log, sw2 = self._texte(200, sombre=True)
         p.pack2(sw2, True, False)
         return b
 
@@ -1379,9 +1559,7 @@ class Fenetre(Gtk.Window):
         return False
 
     def _ecrire_install(self, txt):
-        buf = self.install_log.get_buffer()
-        buf.insert(buf.get_end_iter(), txt)
-        self.install_log.scroll_to_iter(buf.get_end_iter(), 0, False, 0, 0)
+        self._ajouter_couleur(self.install_log, txt)
         return False
 
     def _install(self, args, root=True):
@@ -1688,7 +1866,7 @@ class Fenetre(Gtk.Window):
         sw.set_size_request(560, -1)
         sw.add(vue)
         p.pack1(sw, False, False)
-        self.test_log, sw2 = self._texte()
+        self.test_log, sw2 = self._texte(sombre=True)
         p.pack2(sw2, True, False)
         self.test_sorties = {}
         self.test_file = []
@@ -1717,7 +1895,7 @@ class Fenetre(Gtk.Window):
         if i is None:
             return
         if i in self.test_sorties:
-            self._remplir(self.test_log, self.test_sorties[i])
+            self._remplir_couleur(self.test_log, self.test_sorties[i])
             return
         _g, nom, argv, cwd, root, cond = TESTS[i]
         fichier = next((os.path.join(cwd, a) for a in argv if a.endswith((".sh", ".py")) and
@@ -1743,16 +1921,14 @@ class Fenetre(Gtk.Window):
         self._test_etat(i, '<span foreground="#F1FA8C">●</span>')
         self.test_sorties[i] = "$ (cd %s && %s)%s\n" % (cwd, " ".join(argv), "   [root]" if root else "")
         self.test_vue.get_selection().select_iter(self.test_iters[i])
-        self._remplir(self.test_log, self.test_sorties[i])
+        self._remplir_couleur(self.test_log, self.test_sorties[i])
 
         def ecrire(txt, i=i):
             self.test_sorties[i] += txt
             if len(self.test_sorties[i]) > 2000000:
                 self.test_sorties[i] = self.test_sorties[i][-1500000:]
             if self._test_choisi() == i:
-                buf = self.test_log.get_buffer()
-                buf.insert(buf.get_end_iter(), txt)
-                self.test_log.scroll_to_iter(buf.get_end_iter(), 0, False, 0, 0)
+                self._ajouter_couleur(self.test_log, txt)
             return False
 
         def fini(rc, i=i):
@@ -2105,7 +2281,7 @@ class Fenetre(Gtk.Window):
         haut.pack_start(self.jx_filtre, True, True, 0)
         self.jx_ou = Gtk.Label(xalign=0, selectable=True)
         d.pack_start(self.jx_ou, False, False, 0)
-        self.jx_texte, sw2 = self._texte()
+        self.jx_texte, sw2 = self._texte(sombre=True)
         d.pack_start(sw2, True, True, 0)
         p.pack2(d, True, False)
         vue.get_selection().select_iter(self.jx_iters[0])
@@ -2144,19 +2320,20 @@ class Fenetre(Gtk.Window):
                 txt = "(%s absent%s)\n" % (cible, " : " + hint if hint else "")
             q = self.jx_filtre.get_text().strip()
             if q:
+                nu = lambda l: re.sub(r"\x1b\[[0-9;]*m", "", l)
                 try:
                     r = re.compile(q, re.I)
-                    txt = "\n".join(l for l in txt.splitlines() if r.search(l)) + "\n"
+                    txt = "\n".join(l for l in txt.splitlines() if r.search(nu(l))) + "\n"
                 except re.error:
-                    txt = "\n".join(l for l in txt.splitlines() if q.lower() in l.lower()) + "\n"
-            GLib.idle_add(self._jx_montrer, txt, ou)
+                    txt = "\n".join(l for l in txt.splitlines() if q.lower() in nu(l).lower()) + "\n"
+            GLib.idle_add(self._jx_montrer, txt, ou, colorer(txt))
         self._jx_occupe = True
         threading.Thread(target=faire, daemon=True).start()
 
-    def _jx_montrer(self, txt, ou):
+    def _jx_montrer(self, txt, ou, segs):
         self._jx_occupe = False
         self.jx_ou.set_text(ou)
-        self._remplir(self.jx_texte, txt, bas=self.jx_suivre.get_active())
+        self._remplir_couleur(self.jx_texte, txt, segs, bas=self.jx_suivre.get_active())
         return False
 
     # ══ INFOS: the most the machine and the bench can say ══════════════════
@@ -2197,7 +2374,7 @@ class Fenetre(Gtk.Window):
 
             def lire():
                 txt, ou = lire_journal("osmo", proc, 300)
-                GLib.idle_add(self._jn_core, txt, ou)
+                GLib.idle_add(self._jn_core, txt, ou, colorer(txt or ""))
         else:
             p = pid_de("mobile")
             self.l23_etat.set_markup('<span foreground="%s">●</span> mobile%s  VTY %d' % (
@@ -2205,20 +2382,21 @@ class Fenetre(Gtk.Window):
 
             def lire():
                 f = os.path.join(RUNDIR, "mobile.log")
-                GLib.idle_add(self._jn_l23, queue(f) or "(pas de %s)\n" % f)
+                t = queue(f, ansi=True) or "(pas de %s)\n" % f
+                GLib.idle_add(self._jn_l23, t, colorer(t))
         self._jn_occupe = True
         threading.Thread(target=lire, daemon=True).start()
         return True
 
-    def _jn_core(self, txt, ou):
+    def _jn_core(self, txt, ou, segs):
         self._jn_occupe = False
         self.core_titre.set_text("journal : " + ou)
-        self._remplir(self.core_log, txt or "")
+        self._remplir_couleur(self.core_log, txt or "", segs)
         return False
 
-    def _jn_l23(self, txt):
+    def _jn_l23(self, txt, segs):
         self._jn_occupe = False
-        self._remplir(self.l23_log, txt)
+        self._remplir_couleur(self.l23_log, txt, segs)
         return False
 
     def _zone(self, f):
