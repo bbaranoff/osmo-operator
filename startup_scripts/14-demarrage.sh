@@ -33,8 +33,15 @@ if [ "$DSP_BANC" = 1 ]; then
     # in TCH: at 120000 the DSP task queue overflows (d_error_status 20h/28h),
     # L1 sees its results late, restarts the DSP and the call to 600 drops
     # (Assignment Failure). 480000 leaves no unfinished tick.
-    if [ -n "${MS_MAGNETITE:-}" ]; then : "${INSNS:=480000}"; fi
-    : "${INSNS:=120000}";   export INSNS
+    # DEFAULT: auto (c54x_exe/run.sh): max frequency of the DSP's reserved cpu
+    # / nproc x 4.615 ms, 1.3M on a Ryzen 7 5800U, never below 130000 (and
+    # 480000 for Magnetite). Being a ceiling, it costs nothing when unused.
+    if [ -n "${MS_MAGNETITE:-}" ] && [ -z "${INSNS:-}" ]; then
+        _ia="$(sed -n '/^insns_auto() {/,/^}/p' "${RUN_SH:-/opt/GSM/c54x_exe/run.sh}" 2>/dev/null)"
+        INSNS="$(eval "$_ia" 2>/dev/null; insns_auto 2>/dev/null)"; unset _ia
+        [ -n "$INSNS" ] && [ "$INSNS" -ge 480000 ] 2>/dev/null || INSNS=480000
+    fi
+    : "${INSNS:=auto}";     export INSNS
     : "${LOCKSTEP:=1}";     export LOCKSTEP
     : "${CALYPSO_BSP_STREAM:=1}";    export CALYPSO_BSP_STREAM
     : "${CALYPSO_RHEA_DMA_XFER:=1}"; export CALYPSO_RHEA_DMA_XFER
