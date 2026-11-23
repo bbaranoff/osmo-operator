@@ -79,10 +79,21 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC
 # `--stop` is never blocked: it is the gesture that takes back control when a
 # launch drags on.
 LOCK_FILE="${OSMO_LAUNCH_LOCK:-/run/lock/osmo-launch.lock}"
+# An EXISTING lock file is opened READ-ONLY: flock needs no write access, and
+# fs.protected_regular (2 on Ubuntu) forbids even root an O_CREAT/append open
+# of a file owned by another user in a sticky directory such as /run/lock -
+# the case when the desktop user created it and osmo-gtk's root helper (or
+# pkexec) launches next: "Permission denied" and no lock at all. Created by
+# whoever comes first, world-readable.
 verrou_pris() {
     command -v flock >/dev/null 2>&1 || return 0   # no flock: nothing is blocked
     mkdir -p "$(dirname "$LOCK_FILE")" 2>/dev/null || true
-    exec 9>>"$LOCK_FILE" 2>/dev/null || return 0
+    if [ -e "$LOCK_FILE" ]; then
+        { exec 9<"$LOCK_FILE"; } 2>/dev/null || return 0
+    else
+        { exec 9>>"$LOCK_FILE"; } 2>/dev/null || return 0
+        chmod 644 "$LOCK_FILE" 2>/dev/null || true
+    fi
     flock -n 9
 }
 banc_en_demarrage() {
