@@ -43,6 +43,15 @@ repository, `.git` included, is in `/opt/GSM/osmo-operator`.
 | Installed system | **two systems on the disk** (root live, nirvana encrypted), **TPM porte**, **black box**, several users |
 | Delivery | amd64 ISO, arm64 SD (rpi4, opi5; 2G only, no 4G), Docker, native install |
 
+**Constellation** (`osmo-gtk`): the bench in one window - constellation, eye diagram, training-sequence correlation,
+I/Q of the bursts, TDMA grid; tabs for the core, L23, logs, Kconfig, tests, notebooks, wiki and installation.
+
+![Constellation: the air of the bench, I/Q, eye diagram and TDMA grid](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/doc/images/constellation.png)
+
+**osmo-iso** (`./build.sh --gtk`): build an amd64 ISO or an arm64 SD image from a window.
+
+![osmo-iso: build an image of the bench from a GTK window](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/doc/images/osmo-iso-gtk.png)
+
 ### New in 0.2: the installed machine
 
 Installing (Calamares, « Encrypt system » ticked) puts **two systems** on the disk:
