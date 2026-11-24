@@ -557,6 +557,13 @@ osmo_poser_invite() {
 }
 osmo_poser_invite
 
+# ── The gr-gsm bridge scripts left the root of /opt/GSM ──────────────────────
+# They live in /opt/GSM/grgsm_exe/scripts (the grgsm_exe clone); the old copies
+# at the root are removed so that nothing runs a stale one.
+for _s in si_bridge.py si_bridge_loop.sh record_drain.py grgsm_fft_live.py; do
+    [ -f "/opt/GSM/$_s" ] && rm -f "/opt/GSM/$_s" && echo "  /opt/GSM/$_s retire (desormais dans grgsm_exe/scripts)"
+done
+
 # ── Live root (osmo-racine-live): this update evaporates at reboot ───────────
 if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; then
     printf '\033[1;31m%s\033[0m\n' "  ATTENTION : / est en RAM (osmo-racine-live) - cette mise a jour sera EFFACEE a l'extinction sans la phrase de /home."

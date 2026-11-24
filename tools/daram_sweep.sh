@@ -8,7 +8,7 @@
 # with & (that breaks the log pipe and qemu dies). qemu is checked to be alive
 # before measuring; otherwise it is reported.
 #
-# Usage (container): /opt/GSM/daram_sweep.sh
+# Usage (container): /opt/GSM/osmo-operator/tools/daram_sweep.sh
 # Env: ADDRS (default "0x0080 0x2a00 0x0060"), SETTLE (post-boot wait, 50s)
 set -u
 RUN=/opt/GSM/qosmo-grgsm/run.sh

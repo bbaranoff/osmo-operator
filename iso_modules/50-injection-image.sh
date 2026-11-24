@@ -73,6 +73,11 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     fi
     mkdir -p "$ROOTFS/opt"
     docker cp "$CID:/opt/GSM" - 2>/dev/null | tar -x -C "$ROOTFS/opt" "${_excl[@]+"${_excl[@]}"}" 2>/dev/null || true
+    # The gr-gsm bridge scripts live in /opt/GSM/grgsm_exe/scripts now: an
+    # image published before that move still carries them at the root of
+    # /opt/GSM - no script stays there.
+    rm -f "$ROOTFS/opt/GSM/si_bridge.py" "$ROOTFS/opt/GSM/si_bridge_loop.sh" \
+          "$ROOTFS/opt/GSM/record_drain.py" "$ROOTFS/opt/GSM/grgsm_fft_live.py"
 fi
 # Python venv (gr-gsm + bridges) expected by the bridge (grgsm_exe, pont/*.py)
 # - as a package (grgsm-venv) when the cache has it, from the image otherwise.
