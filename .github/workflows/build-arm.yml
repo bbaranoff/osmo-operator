@@ -361,8 +361,12 @@ jobs:
       - name: Fusionner les sommes
         run: |
           ls osmo-operator-*.img.zst* >/dev/null 2>&1 || { echo "::error::aucune image produite"; exit 1; }
-          cat SHA256SUMS-* > SHA256SUMS; cat MD5SUMS-* > MD5SUMS; cat PARTS-*.sha256 > PARTS.sha256 2>/dev/null || : > PARTS.sha256
-          cat SHA256SUMS
+          # Suffixe -arm64 : la release v0.2 est partagee avec build-iso.yml, dont
+          # le SHA256SUMS (des ISO) serait sinon ecrase par --clobber.
+          cat SHA256SUMS-* > s.tmp && mv s.tmp SHA256SUMS-arm64
+          cat MD5SUMS-* > m.tmp && mv m.tmp MD5SUMS-arm64
+          { cat PARTS-*.sha256 2>/dev/null || :; } > p.tmp && mv p.tmp PARTS-arm64.sha256
+          cat SHA256SUMS-arm64
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -370,7 +374,7 @@ jobs:
           # et l'action creerait un TAG main, ambigu avec la branche.
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
           name: "osmo_egprs — images SD arm64 (Armbian : Raspberry Pi 4, Orange Pi 5) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}"
-          draft: false
+          draft: true
           prerelease: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
           body: |
             ## osmo_egprs — images SD arm64 (Armbian)
@@ -401,15 +405,43 @@ jobs:
 
             ### Verifier
 
-            `SHA256SUMS` porte sur l'image **brute** : `zstd -d <image>.zst && sha256sum -c SHA256SUMS --ignore-missing`.
-            Ce qui depasse 2 Gio est decoupe (`PARTS.sha256`) : `cat <image>.zst.part-* > <image>.zst`.
+            `SHA256SUMS-arm64` porte sur l'image **brute** : `zstd -d <image>.zst && sha256sum -c SHA256SUMS-arm64 --ignore-missing`.
+            Ce qui depasse 2 Gio est decoupe (`PARTS-arm64.sha256`) : `cat <image>.zst.part-* > <image>.zst`.
 
             ### Ce que ces images n'ont pas
 
             Pas de 4G (srsRAN et Open5GS ne sont pas compiles pour aarch64).
             La 2G/EDGE est entiere.
-          files: |
-            osmo-operator-*.img.zst*
-            SHA256SUMS
-            MD5SUMS
-            PARTS.sha256
+
+      # [2026-11-24] Plus de « files: » ici : l'action envoyait les 24 parties
+      # (~1,9 Go chacune) EN MEME TEMPS, chacune lue en memoire - le runner a
+      # recu un signal d'arret une minute apres (run 45297830064). Comme dans
+      # build-iso.yml : la release en brouillon, puis un fichier a la fois,
+      # relance sur echec, puis publication.
+      - name: Upload release assets (one by one, retried)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+        run: |
+          set -u
+          shopt -s nullglob
+          files=(osmo-operator-*.img.zst* SHA256SUMS-arm64 MD5SUMS-arm64 PARTS-arm64.sha256)
+          for f in "${files[@]}"; do
+            [ -f "$f" ] || { echo "absent: $f"; continue; }
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              echo "== $f (tentative $attempt)"
+              if gh release upload "$TAG" "$f" --clobber; then ok=1; break; fi
+              sleep $((attempt * 20))
+            done
+            [ "$ok" = 1 ] || { echo "ECHEC definitif : $f"; exit 1; }
+          done
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          PRE: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
+        run: gh release edit "$TAG" --draft=false --prerelease="$PRE"

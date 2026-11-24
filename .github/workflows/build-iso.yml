@@ -135,6 +135,27 @@ jobs:
           docker info 2>/dev/null | grep -i 'docker root dir'
           df -h / /mnt
 
+      # [2026-11-24] Run 45297118936 : « The hosted runner lost communication
+      # with the server » a 1h44, en plein build Docker. Le cache .deb etait
+      # vide (empreinte nouvelle) : qemu, la pile Osmocom, srsRAN et gnuradio
+      # compilaient EN PARALLELE (etapes BuildKit independantes), chacune en
+      # make -j$(nproc), sur un runner sans swap - la memoire s'epuise et
+      # l'agent du runner meurt avec le reste. 16 Go de swap sur le disque
+      # (113 Go libres) : plus lent quand ca deborde, mais ca ne tombe pas.
+      - name: Swap 16 Go
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile >/dev/null
+          sudo swapon /mnt/swapfile
+          # l'agent du runner ne doit pas etre la victime de l'OOM killer
+          for p in $(pgrep -f 'Runner.Listener|Runner.Worker'); do
+            echo -1000 | sudo tee /proc/$p/oom_score_adj >/dev/null || true
+          done
+          free -h
+
       # Un exit 143 ne dit rien de ce qui manquait. Ce temoin ecrit disque et
       # memoire toutes les 30 s dans un fichier relu en fin de job (if: always),
       # y compris quand l'etape de build est tuee sans un mot.
@@ -145,7 +166,7 @@ jobs:
               "$(date -u +%H:%M:%S)" \
               "$(df -h --output=avail / | tail -1 | tr -d " ")" \
               "$(df -h --output=avail /mnt | tail -1 | tr -d " ")" \
-              "$(free -m | awk "/^Mem:/{print \$3\"/\"\$2\" Mo\"}")"
+              "$(free -m | awk "/^Mem:/{print \$3\"/\"\$2\" Mo\"} /^Swap:/{print \"swap \"\$3\" Mo\"}" | paste -sd" ")"
             sleep 30
           done' > "$RUNNER_TEMP/watchdog.log" 2>&1 &
           echo "temoin demarre -> $RUNNER_TEMP/watchdog.log"
