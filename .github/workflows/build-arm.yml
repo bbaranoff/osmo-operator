@@ -367,51 +367,24 @@ jobs:
           cat MD5SUMS-* > m.tmp && mv m.tmp MD5SUMS-arm64
           { cat PARTS-*.sha256 2>/dev/null || :; } > p.tmp && mv p.tmp PARTS-arm64.sha256
           cat SHA256SUMS-arm64
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+      # [2026-11-24] La release (v0.2...) est partagee avec build-iso.yml : ni
+      # titre ni texte propres ici (le dernier des deux effacait l'autre). On
+      # n'ecrit que la section « arm64 » du texte (.github/release-section.sh).
+      - name: Checkout (.github/)
+        uses: actions/checkout@v5
         with:
-          # Pas github.ref_name tout seul : sur un workflow_dispatch il vaut « main »
-          # et l'action creerait un TAG main, ambigu avec la branche.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
-          name: "osmo_egprs — images SD arm64 (Armbian : Raspberry Pi 4, Orange Pi 5) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}"
-          draft: true
-          prerelease: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
-          body: |
-            ## osmo_egprs — images SD arm64 (Armbian)
+          sparse-checkout: .github
+          path: depot
 
-            La meme pile que les ISO x86, construite pour aarch64 par le framework
-            [armbian/build](https://github.com/armbian/build) (Ubuntu 24.04 noble).
-            Une image **persistante** par carte, ${{ needs.boards.outputs.desktop == 'true' && 'avec le bureau GNOME du banc (fond GSM LAB, Conky, icones, `c123`)' || 'sans bureau (console et ssh)' }}.
-
-            | Image | Carte |
-            |---|---|
-            | `osmo-operator-rpi4b*.img.zst` | Raspberry Pi 4 |
-            | `osmo-operator-orangepi5*.img.zst` | Orange Pi 5 |
-            | `osmo-operator-orangepi5b*.img.zst` | Orange Pi 5B (noyau edge) |
-            | `osmo-operator-orangepi5-plus*.img.zst` | Orange Pi 5 Plus |
-            | `osmo-operator-orangepi5pro*.img.zst` | Orange Pi 5 Pro |
-            | `osmo-operator-orangepi5-max*.img.zst` | Orange Pi 5 Max |
-            | `osmo-operator-orangepi5-ultra*.img.zst` | Orange Pi 5 Ultra |
-
-            ### Graver
-
-            ```bash
-            zstd -dc osmo-operator-<carte>.img.zst \
-              | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
-            ```
-
-            Au premier demarrage Armbian etend la racine a la taille de la carte.
-            Comptes : `root:osmo`, `osmocom:osmo`.
-
-            ### Verifier
-
-            `SHA256SUMS-arm64` porte sur l'image **brute** : `zstd -d <image>.zst && sha256sum -c SHA256SUMS-arm64 --ignore-missing`.
-            Ce qui depasse 2 Gio est decoupe (`PARTS-arm64.sha256`) : `cat <image>.zst.part-* > <image>.zst`.
-
-            ### Ce que ces images n'ont pas
-
-            Pas de 4G (srsRAN et Open5GS ne sont pas compiles pour aarch64).
-            La 2G/EDGE est entiere.
+      - name: Section arm64 de la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          BUREAU: ${{ needs.boards.outputs.desktop == 'true' && 'avec le bureau GNOME du banc (fond GSM LAB, Conky, icones, `c123`)' || 'sans bureau (console et ssh)' }}
+        run: |
+          sed "s|@BUREAU@|$BUREAU|" depot/.github/release-notes-arm64.md > notes-arm64.md
+          bash depot/.github/release-section.sh "$TAG" arm64 notes-arm64.md
 
       # [2026-11-24] Plus de « files: » ici : l'action envoyait les 24 parties
       # (~1,9 Go chacune) EN MEME TEMPS, chacune lue en memoire - le runner a

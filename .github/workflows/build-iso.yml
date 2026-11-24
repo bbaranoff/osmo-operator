@@ -435,29 +435,18 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      # [2026-11-24] La release est partagee avec build-arm.yml : ce workflow
+      # n'ecrit que la section « iso » du texte (.github/release-notes.md), le
+      # titre est commun (« Osmo-Operator TAG »). Creee en brouillon si elle
+      # n'existe pas encore ; publiee par la derniere etape. Plus de softprops :
+      # son « body » remplacait le texte entier, section arm64 comprise.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
-        uses: softprops/action-gh-release@v3
-        with:
-          # [2026-09-14] PAS github.ref_name tout seul. Sur un workflow_dispatch
-          # depuis la branche, ref_name vaut « main » : l'action creait donc un
-          # TAG nomme « main », a cote de la branche du meme nom. D'ou le
-          # « warning: refname 'main' is ambiguous » que git sort ensuite a
-          # chaque commande - il ne sait plus si « main » designe la branche ou
-          # le tag - et un release qui ne disait pas quelle version il portait.
-          # Un push de tag garde son propre tag ; tout le reste sort sous la
-          # version saisie au lancement (entree version, defaut ci-dessous).
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
-          # [2026-09-25] Le nom et le texte sont ceux des releases publiees a la
-          # main (« Osmo-Operator v0.1-3 ») : le texte vit dans
-          # .github/release-notes.md, qui se modifie sans toucher au workflow.
-          name: "Osmo-Operator ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}"
-          # [2026-10-09] Brouillon le temps des envois : sans cela la release
-          # devient publique avec quelques fichiers seulement (un timeout d'upload
-          # laissait ainsi v0.1-7 a moitie complete). Publiee par l'etape suivante.
-          draft: true
-          prerelease: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
-          body_path: .github/release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+        run: bash .github/release-section.sh "$TAG" iso .github/release-notes.md
 
       # [2026-10-09] softprops envoyait tous les fichiers en parallele ; les
       # parties de 1 a 1,7 Go coupaient avec « Upload body timed out due to
