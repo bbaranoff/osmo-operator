@@ -13,38 +13,7 @@ radio is emulated end to end, down to the baseband.
 
 **Latest release: [v0.2](https://github.com/bbaranoff/osmo-operator/releases/tag/v0.2)**: live/installable amd64 ISO,
 arm64 SD images (Raspberry Pi 4, Orange Pi 5 family), Docker image. Illustrated guide to the ISO:
-[osmo-operator - ISO 0.2 on RPubs](https://rpubs.com/bbaranoff/iso-latest).
-
-## New in v0.2
-
-- **The installed machine**: Calamares with « Encrypt system » puts **two systems** on the disk: root's system,
-  the ISO booted live in RAM, and nirvana's system, encrypted (LUKS) and read-write.
-  - **TPM porte**: with an active TPM 2.0, a 6-digit TOTP code computed by the TPM proves the boot chain before you
-    type the passphrase.
-  - **Black box**: an `age`-encrypted record of each boot's changes.
-  - **Several users**: `osmo-utilisateur ajouter NOM`.
-  - **SSH**: a host key per machine.
-
-  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware: try it in a VM first
-  (`tools/osmo-vm-porte.sh`).
-- **Constellation** (`osmo-gtk`): the bench in one GTK window. It shows the constellation, eye diagram,
-  training-sequence correlation, burst I/Q and TDMA grid, with tabs for the core, L23, logs, Kconfig, tests,
-  notebooks and installation.
-- **osmo-ms-pont**: the mobile chain without a phone (DSP, ARM, osmocon, bridge), from a window.
-- **osmo-iso** (`./build.sh --gtk`): build an amd64 ISO or an arm64 SD image from a form.
-- **osmo-balise**: the mast beacon follows the bench (day wallpaper at rest; evening and a red/green beacon while
-  it runs).
-- **`--lora`**: voice between two nodes over LoRa (RNode Heltec V3) as raw GSM-HR frames, no IP.
-- **GSM-HR <-> GSM-FR transcoder** (`--hr`); libosmo-sigtran with TCAP routing; TTCN-3 suites (Eclipse TITAN) in
-  the ISO.
-- **arm64 SD images** built by the official armbian/build framework, one per board: Raspberry Pi 4 and Orange Pi 5,
-  5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra. They carry 2G/EDGE in full, but no 4G.
-- **CI**: the ISO starts from the GHCR base image of its own commit when one is published. Otherwise it falls
-  back to Docker Hub, with a warning, or compiles.
-
-| Constellation: the air of the bench | osmo-iso: build an image from a window |
-|---|---|
-| ![Constellation: constellation, eye diagram, burst I/Q, TDMA grid](doc/images/constellation.png) | ![osmo-iso: the image build form](doc/images/osmo-iso-gtk.png) |
+[osmo-operator - ISO 0.2 on RPubs](https://rpubs.com/bbaranoff/iso-latest). What changed: [New in v0.2](#new-in-v02).
 
 ## Start here
 
@@ -128,6 +97,37 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | `--firmwares` | all the firmware supplements above |
 | `--all` | Docker, image, multi, OpenCL, Claude, extras, SIM |
 | `--status` | show what is installed, install nothing |
+
+## New in v0.2
+
+- **The installed machine**: Calamares with « Encrypt system » puts **two systems** on the disk: root's system,
+  the ISO booted live in RAM, and nirvana's system, encrypted (LUKS) and read-write.
+  - **TPM porte**: with an active TPM 2.0, a 6-digit TOTP code computed by the TPM proves the boot chain before you
+    type the passphrase.
+  - **Black box**: an `age`-encrypted record of each boot's changes.
+  - **Several users**: `osmo-utilisateur ajouter NOM`.
+  - **SSH**: a host key per machine.
+
+  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware: try it in a VM first
+  (`tools/osmo-vm-porte.sh`).
+- **Constellation** (`osmo-gtk`): the bench in one GTK window. It shows the constellation, eye diagram,
+  training-sequence correlation, burst I/Q and TDMA grid, with tabs for the core, L23, logs, Kconfig, tests,
+  notebooks and installation.
+- **osmo-ms-pont**: the mobile chain without a phone (DSP, ARM, osmocon, bridge), from a window.
+- **osmo-iso** (`./build.sh --gtk`): build an amd64 ISO or an arm64 SD image from a form.
+- **osmo-balise**: the mast beacon follows the bench (day wallpaper at rest; evening and a red/green beacon while
+  it runs).
+- **`--lora`**: voice between two nodes over LoRa (RNode Heltec V3) as raw GSM-HR frames, no IP.
+- **GSM-HR <-> GSM-FR transcoder** (`--hr`); libosmo-sigtran with TCAP routing; TTCN-3 suites (Eclipse TITAN) in
+  the ISO.
+- **arm64 SD images** built by the official armbian/build framework, one per board: Raspberry Pi 4 and Orange Pi 5,
+  5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra. They carry 2G/EDGE in full, but no 4G.
+- **CI**: the ISO starts from the GHCR base image of its own commit when one is published. Otherwise it falls
+  back to Docker Hub, with a warning, or compiles.
+
+| Constellation: the air of the bench | osmo-iso: build an image from a window |
+|---|---|
+| ![Constellation: constellation, eye diagram, burst I/Q, TDMA grid](doc/images/constellation.png) | ![osmo-iso: the image build form](doc/images/osmo-iso-gtk.png) |
 
 ## Repository layout
 
