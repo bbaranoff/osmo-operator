@@ -40,7 +40,7 @@ repository, `.git` included, is in `/opt/GSM/osmo-operator`.
 | Non-IP transport | raw GSM-HR voice over LoRa (RNode), WAN between machines |
 | GTK interfaces | Constellation, ms-pont, osmo-iso, beacon, terminal-free launchers |
 | Tests | `check_all.sh`, TTCN-3 (Eclipse TITAN), pytest |
-| Installed system | **two systems on the disk** (root live, nirvana encrypted), **TPM porte**, **black box**, several users |
+| Installed system | `/home` encrypted (LUKS2) for nirvana, `/` read-only for root |
 | Delivery | amd64 ISO, arm64 SD (rpi4, opi5; 2G only, no 4G), Docker, native install |
 
 **Constellation** (`osmo-gtk`): the bench in one window - constellation, eye diagram, training-sequence correlation,
@@ -54,38 +54,18 @@ I/Q of the bursts, TDMA grid; tabs for the core, L23, logs, Kconfig, tests, note
 
 ### New in 0.2: the installed machine
 
-Installing (Calamares, « Encrypt system » ticked) puts **two systems** on the disk:
+Installing (Calamares, « Encrypt system » ticked):
 
 | Partition | Encrypted | Holds |
 |---|---|---|
-| EFI | no | the first GRUB menu (`osmo-grub-esp`) |
-| `osmo-racine` (16 GiB) | no | **root's system**: the ISO image, booted live (RAM) - everything gone at reboot |
-| `osmo-diffs` (5 GiB) | no (each record is) | the **black box** |
-| `/` (the rest) | LUKS1 | **nirvana's system**: `/`, `/boot`, `/home`, read-write |
+| EFI | no | GRUB |
+| `/` | no | the system - read-only for root, read-write for nirvana |
+| `/home` | LUKS2 | nirvana's home |
 
-- **Root** changes only its own system: editing the GRUB line or its partition never touches what nirvana boots.
-  Root has no network identity of nirvana's, and in root sessions SSH refuses passwords.
-- **The porte** (when the BIOS has an active TPM 2.0 - fTPM / PTT; installer page « Demarrage »): GRUB asks
-  nothing; a small initramfs shows a **6-digit TOTP code computed by the TPM**, which it only computes if firmware,
-  shim, GRUB, its menu, the kernel and the porte are exactly those of the sealing. Compare it with your phone (any
-  TOTP app doing SHA-256), then type the passphrase: the porte opens the volume and kexecs nirvana's kernel, which is
-  inside it. Esc, Enter or 60 s: root, read-only. The key never leaves the TPM and is locked at the decision.
-  Setting up after the first boot: `sudo osmo-porte sceller`, then `sudo osmo-porte qr`. Phone lost:
-  `sudo osmo-porte nouvelle-cle`. Without a TPM, GRUB asks the passphrase itself (a replaced GRUB is then not
-  detected).
-- **The black box** (`osmo-diffs`): one record per boot of the TEXT changes of the system (root sessions
-  included), written at shutdown, encrypted with `age` for a public key - the machine fills it without being able
-  to read it; only its own passphrase does (`sudo osmo-diffs phrase`, `osmo-diffs voir`, or the GRUB entry
-  « consulter la boite noire » instead of booting). Records are chained; a truncated end is caught at the next
-  nirvana boot; `sudo osmo-diffs copie-poser user@host` sends each record to another machine that only accepts
-  additions.
-- **Several people**: `sudo osmo-utilisateur ajouter NOM` - a LUKS passphrase of their own, an account without
-  sudo, a `/home/NOM` encrypted with fscrypt under their login password.
-- **SSH**: no host key in the image any more - each machine, and each system, gets its own.
-
-What this protects, what it does not, and the procedures (updates, TPM failure, lost phone):
-[wiki/ISO.md, 6.7](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/ISO.md). **Not yet validated on real
-hardware**: test it in a VM first with `tools/osmo-vm-porte.sh` (QEMU, Secure Boot, software TPM).
+At boot: `decrypt /home -passphrase- or Enter`. Right passphrase: nirvana's session, `/home` opened, `/`
+read-write. Enter or 60 s: root's session, no `/home`, `/` read-only (writes in RAM, gone at reboot).
+Details: [wiki/ISO.md, 6.7](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/ISO.md).
+- **SSH**: no host key in the image any more - each machine gets its own.
 
 ### Also new in 0.2
 
@@ -201,14 +181,13 @@ Magnetite, TRX firmware, Fernvale, SIMCom SDK).
 | Open5GS configs | `/opt/LTE/open5gs/install/etc/open5gs` (freeDiameter, `tls/`) |
 | Smartphone UI | `/opt/user_interface/pmos` |
 | Beacon wallpapers | `/usr/share/backgrounds/osmo-balise` |
-| Black box | `/var/lib/osmo-diffs` (installed machine) |
 
 Build packages (srsenb, Open5GS, pmOS PPP kernel, pmbootstrap) are also published outside the ISO:
 https://github.com/bbaranoff/osmo-operator/releases/download/debs-banc
 
 ### Known limits
 
-- The two-system install, the TPM porte and the black box are new and **not yet validated on real hardware**.
+- The encrypted `/home` with a read-only `/` for root is **not yet validated on real hardware**.
 - Magnetite: calls need A5/0. `--bts --ts 2`: camps and registers, no call yet; `--ts 2/1` calls.
 - The ROM vocoder costs real time on slow hosts: use `--gapk`. Do not compile while a bench runs.
 

@@ -15,14 +15,10 @@
 #   osmo-racine-live retirer  disable for good (from the session account's
 #                             boot, with sudo)
 #
-# THE BLACK BOX AT BOOT (osmo-diffs): the date of its last record is shown
-# before the question; the GRUB entry « consulter la boite noire » reads it
-# from the initramfs instead of booting (box passphrase, then restart).
-#
 # THE MECHANISM: Ubuntu's overlayroot package. Its initramfs script mounts the
 # real root read-only on /media/root-ro and an overlay with a tmpfs upper on /.
 # recurse=0: only / is covered, every other fstab line (the encrypted /home,
-# /boot/efi, the osmo-diffs partition) is mounted as it is.
+# /boot/efi) is mounted as it is.
 #
 # THE ONLY QUESTION AT BOOT, asked by the initramfs (local-bottom, BEFORE the
 # root is covered): « decrypt /home -passphrase- or Enter » - the question of
@@ -72,15 +68,6 @@ copy_exec /sbin/cryptsetup /sbin
 mkdir -p "${DESTDIR}/etc/default"
 cp /etc/default/crypthome "${DESTDIR}/etc/default/crypthome"
 manual_add_modules dm_mod dm_crypt || true
-# the black box (osmo-diffs): its partition, so that the boot can show the
-# date of its last record
-_b="$(findmnt -sno SOURCE /var/lib/osmo-diffs 2>/dev/null)"
-if [ -n "$_b" ]; then
-    echo "BOITE_SRC=\"$_b\"" > "${DESTDIR}/conf/osmo-boite"
-    # to read it INSTEAD OF BOOTING (GRUB entry « consulter la boite noire »)
-    [ -x /usr/bin/age ] && copy_exec /usr/bin/age /bin
-    copy_exec /usr/bin/openssl /bin
-fi
 HOOK
     chmod 755 "$HOOK"
 
@@ -128,91 +115,6 @@ lire() {   # lire PROMPT -> the answer on stdout, one * per key
     printf '%s' "$s"
 }
 
-# ── THE BLACK BOX (osmo-diffs) ───────────────────────────────────────────────
-# Its partition (BOITE_SRC, from fstab, written by the hook), mounted READ-ONLY
-# on /run/osmo-boite only as long as needed. Record names carry number, date
-# and mode: NNNNNN_AAAA-MM-JJ_HHMMSS_mode.diff.age.
-B=/run/osmo-boite
-boite_monter() {
-    BOITE_SRC=""; [ -f /conf/osmo-boite ] && . /conf/osmo-boite
-    [ -n "$BOITE_SRC" ] || return 1
-    case "$BOITE_SRC" in
-        UUID=*) bd="/dev/disk/by-uuid/${BOITE_SRC#UUID=}" ;;
-        PARTUUID=*) bd="/dev/disk/by-partuuid/${BOITE_SRC#PARTUUID=}" ;;
-        *) bd="$BOITE_SRC" ;;
-    esac
-    i=0; while [ ! -e "$bd" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
-    [ -e "$bd" ] || { echo "boite noire : partition absente" > "$CONSOLE"; return 1; }
-    mkdir -p "$B"
-    mount -o ro "$bd" "$B" 2>/dev/null || { echo "boite noire : illisible" > "$CONSOLE"; rmdir "$B"; return 1; }
-}
-boite_demonter() { umount "$B" 2>/dev/null; rmdir "$B" 2>/dev/null; }
-
-boite_date() {   # one line: the date of the last record
-    boite_monter || return 0
-    d="$(ls -1 "$B/journal" 2>/dev/null | grep '\.diff\.age$' | sort | tail -1)"
-    boite_demonter
-    if [ -z "$d" ]; then
-        echo "boite noire : vide" > "$CONSOLE"
-    else
-        n="${d%%_*}"; r="${d#*_}"; j="${r%%_*}"; r="${r#*_}"; h="${r%%_*}"; m="${r#*_}"; m="${m%.diff.age}"
-        echo "boite noire : dernier enregistrement le $j a $(echo "$h" | cut -c1-2):$(echo "$h" | cut -c3-4) ($m, no $((10#$n)))" > "$CONSOLE"
-    fi
-}
-
-# INSTEAD OF BOOTING (GRUB entry « consulter la boite noire », osmo.boite on
-# the kernel line): the box passphrase, every record decrypted in RAM, the
-# chain checked, read with « more », then the machine restarts. Nothing is
-# mounted read-write, nothing is booted.
-boite_consulter() {
-    console_texte
-    clear > "$CONSOLE" 2>/dev/null
-    echo "=== osmo-operator : consultation de la boite noire (pas de demarrage) ===" > "$CONSOLE"
-    if ! command -v age >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
-        echo "age / openssl absents de l initramfs" > "$CONSOLE"
-    elif boite_monter; then
-        if [ ! -f "$B/cle.chiffree" ]; then
-            echo "la boite n a pas encore de phrase (sudo osmo-diffs phrase) : illisible ici" > "$CONSOLE"
-        else
-            essai=1; ok=0
-            while [ "$essai" -le 3 ]; do
-                pp="$(lire "phrase de la boite noire : ")"
-                [ -n "$pp" ] || break
-                ( umask 077
-                  printf '%s' "$pp" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt \
-                      -in "$B/cle.chiffree" -pass stdin 2>/dev/null | tr -d '\000' \
-                      | grep -a '^AGE-SECRET-KEY-' > /run/osmo-cle )
-                if [ -s /run/osmo-cle ]; then ok=1; break; fi
-                echo "phrase incorrecte" > "$CONSOLE"; essai=$((essai + 1))
-            done
-            pp=""
-            if [ "$ok" = 1 ]; then
-                echo "dechiffrement..." > "$CONSOLE"
-                prec=""
-                for f in $(ls -1 "$B/journal" | grep '\.diff\.age$' | sort); do
-                    t="$(age -d -i /run/osmo-cle "$B/journal/$f" 2>/dev/null)" \
-                        || { echo "=== $f : indechiffrable"; prec="$f"; continue; }
-                    attendu="origine"
-                    [ -n "$prec" ] && attendu="$(openssl dgst -sha256 -r "$B/journal/$prec" | cut -d' ' -f1) $prec"
-                    vu="$(printf '%s\n' "$t" | sed -n '2s/^# precedent : //p')"
-                    [ "$vu" = "$attendu" ] || echo "=== CHAINE ROMPUE avant $f"
-                    printf '%s\n' "$t"
-                    prec="$f"
-                done > /run/osmo-boite.txt
-                rm -f /run/osmo-cle
-                more /run/osmo-boite.txt < "$CONSOLE" > "$CONSOLE" 2>&1
-                rm -f /run/osmo-boite.txt
-            fi
-            rm -f /run/osmo-cle
-        fi
-        boite_demonter
-    fi
-    lire "Entree pour redemarrer : " > /dev/null
-    reboot -f
-}
-
-grep -qw 'osmo.boite' /proc/cmdline && boite_consulter
-
 grep -q '^overlayroot="tmpfs' "$C" 2>/dev/null || exit 0
 [ -n "$CRYPTHOME_UUID" ] && command -v cryptsetup >/dev/null 2>&1 || exit 0
 dev="/dev/disk/by-uuid/$CRYPTHOME_UUID"
@@ -220,7 +122,6 @@ i=0; while [ ! -e "$dev" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
 [ -e "$dev" ] || exit 0          # no encrypted disk: root, live; unlock-home says why
 
 console_texte
-boite_date
 
 essai=1
 while [ "$essai" -le "${CRYPTHOME_TRIES:-3}" ]; do
@@ -244,38 +145,6 @@ echo "osmo-racine-rw : session root, / en lecture seule (RAM)" > "$CONSOLE"
 exit 0
 SCRIPT
     chmod 755 "$SCRIPT"
-}
-
-# GRUB entry « consulter la boite noire » : the same kernel and initramfs with
-# osmo.boite - the initramfs reads the box and restarts, nothing is booted.
-GRUB_BOITE=/etc/grub.d/43_osmo-boite
-poser_grub_boite() {
-    findmnt -sno SOURCE /var/lib/osmo-diffs >/dev/null 2>&1 || { rm -f "$GRUB_BOITE"; return 0; }
-    cat > "$GRUB_BOITE" <<'GRUB'
-#!/bin/sh
-# 43_osmo-boite - written by osmo-racine-live: read the black box (osmo-diffs)
-# from the initramfs, INSTEAD OF BOOTING; the machine restarts afterwards.
-set -e
-. "$pkgdatadir/grub-mkconfig_lib"
-K=/boot/vmlinuz
-I=/boot/initrd.img
-[ -e "$K" ] && [ -e "$I" ] || exit 0
-K="$(readlink -f "$K")"; I="$(readlink -f "$I")"
-dev="$(${grub_probe} --target=device "$K")"
-rk="$(make_system_path_relative_to_its_root "$K")"
-ri="$(make_system_path_relative_to_its_root "$I")"
-echo "osmo-operator : entree boite noire" >&2
-cat <<EOF
-menuentry 'osmo-operator - consulter la boite noire (sans demarrer)' --class ubuntu --class os {
-	load_video
-	insmod gzio
-$(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
-	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} osmo.boite
-	initrd	$ri
-}
-EOF
-GRUB
-    chmod 755 "$GRUB_BOITE"
 }
 
 actualiser() {
@@ -306,7 +175,6 @@ EOF
         # shellcheck disable=SC2086
         rm -f $ANCIENS
         poser_initramfs
-        poser_grub_boite
         actualiser
         echo "osmo-racine-live : root en lecture seule (RAM) ; le compte de session ecrit partout"
         ;;
@@ -329,7 +197,7 @@ EOF
         fi
         sed -i 's/^overlayroot=.*/overlayroot=""/' "$CONF" 2>/dev/null
         # shellcheck disable=SC2086
-        rm -f "$CONF_INITRD" "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
+        rm -f "$CONF_INITRD" "$HOOK" "$SCRIPT" $ANCIENS
         actualiser
         echo "osmo-racine-live : / persistant pour tous a partir du prochain demarrage"
         ;;
