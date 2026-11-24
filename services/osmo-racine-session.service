@@ -7,7 +7,7 @@ Documentation=file:/usr/local/sbin/osmo-grub-esp
 ConditionKernelCommandLine=osmo.racine
 After=local-fs.target systemd-udev-settle.service network-online.target
 Wants=systemd-udev-settle.service network-online.target
-Before=display-manager.service
+Before=display-manager.service ssh.service ssh.socket
 
 [Service]
 Type=oneshot
@@ -15,6 +15,11 @@ RemainAfterExit=yes
 # platform hierarchy off (root could otherwise clear the TPM) - the porte did
 # it already when the session comes through it
 ExecStart=-/bin/sh -c 'command -v tpm2_hierarchycontrol >/dev/null && TPM2TOOLS_TCTI=device:/dev/tpmrm0 tpm2_hierarchycontrol -C p phEnable clear'
+# root's system: no SSH login by password (the image's root password is
+# public). Root at the keyboard keeps everything; a key in
+# /root/.ssh/authorized_keys still works. sshd_config.d comes first in
+# sshd_config: these values win over its « PermitRootLogin yes ».
+ExecStart=/bin/sh -c 'mkdir -p /etc/ssh/sshd_config.d; printf "%%s\\n" "# osmo-racine-session : pas de mot de passe en ssh sur le systeme de root" "PasswordAuthentication no" "KbdInteractiveAuthentication no" "PermitRootLogin prohibit-password" > /etc/ssh/sshd_config.d/00-osmo-racine.conf'
 ExecStart=/bin/sh -c 'rm -f /usr/share/applications/osmo-install.desktop /usr/share/applications/calamares.desktop /root/Desktop/osmo-install.desktop /root/Bureau/osmo-install.desktop /etc/skel/Desktop/osmo-install.desktop /etc/skel/Bureau/osmo-install.desktop; mkdir -p /var/lib/osmo-diffs; mountpoint -q /var/lib/osmo-diffs || mount /dev/disk/by-partlabel/osmo-diffs /var/lib/osmo-diffs || true'
 ExecStop=-/usr/local/sbin/osmo-diffs enregistrer
 TimeoutStopSec=600

@@ -37,8 +37,11 @@
 # menu. « consulter »: the box read on tty1 instead of booting.
 #
 # THE CHAIN: each record starts with the SHA-256 of the previous record file:
-# « voir » reports a record removed or changed in the middle. Root can still
-# delete the LAST records or the whole box: it can destroy, never read.
+# « voir » reports a record removed or changed in the middle. A TRUNCATED end
+# leaves a valid chain: « verifier », at each nirvana boot, compares the box
+# with the last record nirvana saw (kept in its encrypted system) - records
+# made AND removed between two nirvana boots are only caught by the remote
+# copy. Root can destroy, never read.
 set -u
 BASE="${OSMO_DIFFS_BASE:-/var/lib/osmo-diffs}"
 PRIVE="${OSMO_DIFFS_PRIVE:-/home/.osmo-diffs}"
@@ -237,6 +240,10 @@ case "${1:-liste}" in
             log "$mode : aucun changement texte"
         fi
         rm -f "$tmp" "$debut"
+        if [ "$mode" = session ]; then
+            d="$(dernier)"
+            [ -n "$d" ] && printf '%s %s\n' "$(sha256sum "$d" | cut -d' ' -f1)" "$(basename "$d")" > "$PRIVE/.dernier-vu"
+        fi
         envoyer
         ;;
     phrase)
@@ -282,6 +289,34 @@ case "${1:-liste}" in
         done | ${PAGER:-less -R}
         cle=""
         ;;
+    verifier)
+        # At nirvana's boot (osmo-diffs.service, ExecStart): the box must still
+        # hold the last record nirvana saw (its name and SHA-256 kept in the
+        # encrypted system, $PRIVE/.dernier-vu). The chain cannot show a
+        # TRUNCATED end - this can, for everything nirvana has seen. Then the
+        # mark moves to the newest record present (root sessions included).
+        boite
+        home_chiffre_ouvert || exit 0
+        [ -f "$PUB" ] || exit 0
+        vu="$PRIVE/.dernier-vu"
+        if [ -s "$vu" ]; then
+            read -r h nom < "$vu"
+            if [ ! -f "$JOURNAL/$nom" ]; then
+                alerte="TRONCATURE : $nom (le dernier enregistrement vu par nirvana) a disparu de la boite"
+            elif [ "$(sha256sum "$JOURNAL/$nom" | cut -d' ' -f1)" != "$h" ]; then
+                alerte="ALTERATION : $nom a change depuis que nirvana l a vu"
+            else
+                alerte=""
+            fi
+            if [ -n "$alerte" ]; then
+                log "$alerte"
+                printf '%s\n' "$alerte" | sceller alerte >/dev/null
+                command -v wall >/dev/null && wall "osmo-diffs : $alerte" 2>/dev/null
+            fi
+        fi
+        d="$(dernier)"
+        [ -n "$d" ] && printf '%s %s\n' "$(sha256sum "$d" | cut -d' ' -f1)" "$(basename "$d")" > "$vu"
+        ;;
     copie-poser)
         # copie-poser user@host [POSTE]: the ssh key on the box + the line for
         # the other machine's authorized_keys
@@ -314,7 +349,7 @@ case "${1:-liste}" in
         systemctl reboot
         ;;
     *)
-        echo "usage : osmo-diffs init | enregistrer | phrase | liste | voir [N] | consulter | copie-poser user@host | envoyer" >&2
+        echo "usage : osmo-diffs init | enregistrer | verifier | phrase | liste | voir [N] | consulter | copie-poser user@host | envoyer" >&2
         exit 2
         ;;
 esac

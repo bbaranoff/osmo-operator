@@ -651,12 +651,17 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   reminder until then). Read: `osmo-diffs voir [N]`, or the first GRUB menu's entry
   **« consulter la boite noire (sans demarrer) »** (root's system on `osmo-boite.target`:
   the box passphrase on tty1, every record with `more`, then a restart). Each record carries the SHA-256 of the previous one: a record
-  removed or changed in the middle shows as `CHAINE ROMPUE`. `/home` is never recorded.
+  removed or changed in the middle shows as `CHAINE ROMPUE`. A truncated END leaves a valid
+  chain: at each nirvana boot `osmo-diffs verifier` checks that the last record nirvana saw
+  (its SHA-256 kept in the encrypted system) is still there, and seals a `TRONCATURE` /
+  `ALTERATION` alert otherwise; records made and removed between two nirvana boots are only
+  caught by the remote copy. `/home` is never recorded.
 - **Procedures** (porte mode):
 
   | Case | What to do |
   |---|---|
-  | GRUB / shim / firmware update, new root image (one machine or a fleet) | the sealing holds GRUB and shim (`apt-mark hold`); update on purpose, reboot through the porte (the code is wrong - expected), passphrase, `sudo osmo-porte sceller`. The phone keeps its key. |
+  | GRUB / shim / firmware update, new root image (one machine or a fleet) | the sealing holds GRUB and shim (`apt-mark hold`) so that they never change behind nirvana's back - NOT to freeze them: security fixes and SBAT revocations come through them. Plan a cadence (monthly, and at once for a security notice): `sudo apt-mark unhold shim-signed grub-efi-amd64-signed grub-efi-amd64-bin grub2-common && sudo apt upgrade`, then reboot through the porte (the code is wrong - expected), passphrase, `sudo osmo-porte sceller`. The phone keeps its key. |
+  | **Rule for « nirvana SANS code TPM »** | It is exactly what an attacker who trapped the machine wants nirvana to use. Only when you KNOW why the code is missing (TPM replaced or cleared, firmware updated by you, phone lost) - never after a wrong or missing code you cannot explain: then the machine is suspect, do not type the passphrase on it. |
   | TPM failure, new motherboard, TPM cleared | GRUB entry « nirvana SANS code TPM » (passphrase in GRUB), then once through the porte and `sudo osmo-porte sceller`: the key copy in `/etc/osmo-porte/secret.bin` is put into the new TPM - the phone keeps showing the right codes. |
   | Phone lost (or key exposed) | « nirvana SANS code TPM » if needed, then `sudo osmo-porte nouvelle-cle`: the old key is destroyed, a new one sealed, its QR code shown; the lost phone's codes are wrong from then on. Keep a second device or the QR code printed in a safe. |
   | Black box: keep a copy elsewhere | `sudo osmo-diffs copie-poser user@host` (nirvana's system): an ssh key on the box, the `authorized_keys` line to put on the other machine with `osmo-diffs-recevoir` as forced command - it only ADDS files (no overwrite, no delete, no listing). Every record is then sent at shutdown, the missed ones at the next. Deleting the box on the bench is no longer enough. |
@@ -667,6 +672,39 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   and looks for the TOTP key - raw, base32, hex - while root's session runs after the porte:
   expected « absente ». The script's header lists the checks in order (first boot, sealing,
   code vs phone, lockdown, a modified EFI menu giving « AUCUN », the black box).
+
+- **Several people** (`sudo osmo-utilisateur ajouter NOM | retirer NOM | liste`, from
+  nirvana's system): each one gets a LUKS passphrase of their own - a key slot; the porte
+  and GRUB try every slot, nothing to change there - an account (in neither `sudo` nor
+  `docker`), and `/home/NOM` encrypted with **fscrypt** under their login password
+  (pam_fscrypt opens it at their login; other accounts, and root while they are logged out,
+  see encrypted names and contents). Who holds which slot: `/etc/osmo-porte/utilisateurs`.
+  - LUKS1 (GRUB mode): 8 slots, one of them the initramfs key file (never touched) - 6
+    people besides the installation's passphrase. The last passphrase cannot be removed.
+  - Every slot opens the whole system: the weakest passphrase sets the resistance to
+    offline cracking - at least `OSMO_PHRASE_MIN` (14) characters.
+  - The TOTP code proves the machine, not the person: everyone scans the same QR code;
+    after `osmo-porte nouvelle-cle`, everyone again.
+  - fscrypt leaves sizes and permissions visible, and an administrator reads a home while
+    its owner is logged in. A password changed elsewhere (directory, AD) leaves the fscrypt
+    protector on the old one: then `fscrypt metadata change-passphrase`, or systemd-homed.
+  - The installation's account (nirvana) keeps its home as it is: protected by LUKS, not
+    by fscrypt.
+
+- **Root has no network identity** (802.1X, Wi-Fi, keytab, VPN): it is worth no more than a
+  Pi on the socket - provided that:
+  - the network trusts credentials kept in nirvana's encrypted system (802.1X certificate,
+    VPN keys), not this machine's MAC or IP (root shares the network card and can always
+    take its factory MAC back);
+  - no network key sits in the TPM without a PIN: root has the same TPM, and the porte caps
+    PCR 9 on both paths, so a PCR policy cannot tell nirvana from root;
+  - SSH: the image carries NO host key (removed before the squashfs; `ssh-keygen -A` when
+    sshd starts) - nirvana's system gets its own at the first start, root's live system new
+    ones in RAM at every boot: root cannot pose as nirvana's machine, and two machines from
+    the same ISO no longer share keys. In root's sessions SSH refuses passwords
+    (`/etc/ssh/sshd_config.d/00-osmo-racine.conf`): the image's root password is public;
+  - the only key root holds is the black box's remote-copy key, which can only ADD records
+    on the receiving machine.
 
 - **Theft**: whoever takes the machine gets root's live system, never nirvana's system nor
   the black box. **Conditions** - what this rests on, checked or not:
@@ -686,7 +724,8 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   5. the GRUB mode (no TPM) does not notice a replaced GRUB or menu on the EFI partition;
      the porte mode detects it (wrong code) but does not prevent it - preventing needs
      Secure Boot with our own keys and a firmware password (not done);
-  6. root can delete the black box's last records (never read them) and append records of
+  6. root can delete the black box's last records (never read them) - caught at the next
+     nirvana boot for what nirvana had seen, by the remote copy for the rest - and append records of
      its own (encrypted for the public key).
 
   None of this has run on a real installation yet: it is the design, not a result. First

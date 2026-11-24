@@ -280,6 +280,22 @@ if [ -f "$ROOTFS/etc/ssh/sshd_config" ]; then
 fi
 chroot "$ROOTFS" systemctl enable ssh 2>/dev/null || true
 
+# SSH host keys: NONE in the image (90-iso.sh removes them right before the
+# squashfs). Baked in, they would be the same on every machine installed
+# from this ISO - known to anyone holding the ISO - and the same for root's
+# live system and nirvana's system of one machine (root could pose as
+# nirvana's machine). They are made when sshd first starts: once for good on
+# nirvana's system (written to its disk at installation or first boot),
+# afresh in RAM at every boot of root's live system or of the live ISO.
+install -d "$ROOTFS/etc/systemd/system/ssh.service.d"
+cat > "$ROOTFS/etc/systemd/system/ssh.service.d/10-osmo-cles-hote.conf" <<'SSHKEYS'
+[Service]
+# the host keys are not in the image: made here when missing
+ExecStartPre=
+ExecStartPre=/usr/bin/ssh-keygen -A
+ExecStartPre=/usr/sbin/sshd -t
+SSHKEYS
+
 # ── Keyboard: fixed in the image, not asked at first boot ──────────────────
 # The layout is chosen at the start of the build (see "LES QUESTIONS");
 # it is only written here, so no machine blocks on a menu at login.

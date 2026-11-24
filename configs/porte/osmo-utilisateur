@@ -1,0 +1,137 @@
+#!/bin/bash
+# osmo-utilisateur - several people on nirvana's encrypted system (sudo, from
+# that system).
+#
+#   osmo-utilisateur ajouter NOM   a LUKS passphrase of their own (a key slot:
+#                                  the porte and GRUB try every slot), an
+#                                  account, and a /home/NOM encrypted with
+#                                  fscrypt under their login password
+#   osmo-utilisateur retirer NOM   their key slot destroyed, account and home
+#                                  removed
+#   osmo-utilisateur liste         key slots and who holds them
+#
+# WHAT EACH ONE GETS. Their passphrase opens the system (any slot does: the
+# porte's « cryptsetup open » tries them all). Their /home/NOM opens at their
+# login (pam_fscrypt) - the other accounts, and root while NOM is logged out,
+# see only encrypted names and contents. fscrypt leaves sizes and permissions
+# visible, and an administrator can read a home while its owner is logged in.
+# The new account is in neither sudo nor docker (adduser's default).
+#
+# LIMITS. LUKS1 (GRUB mode): 8 slots - one is the initramfs key file
+# (/crypto_keyfile.bin), never touched here. EVERY slot opens the whole
+# system: the weakest passphrase sets the resistance to offline cracking -
+# hence OSMO_PHRASE_MIN (default 14 characters). The TOTP code proves the
+# MACHINE, not the person: everyone scans the same QR code (osmo-porte qr);
+# after « osmo-porte nouvelle-cle » everyone scans again.
+#
+# Who holds which slot: /etc/osmo-porte/utilisateurs (encrypted system).
+set -u
+TABLE="${OSMO_UTIL_TABLE:-/etc/osmo-porte/utilisateurs}"
+CLEF_INTERNE="${OSMO_UTIL_KEYFILE:-/crypto_keyfile.bin}"
+MIN="${OSMO_PHRASE_MIN:-14}"
+log() { echo "osmo-utilisateur : $*"; }
+
+[ "$(id -u)" = 0 ] || { log "root requis (sudo osmo-utilisateur ...)"; exit 1; }
+
+# the LUKS partition holding / (crypttab line of the mapper that holds /)
+luks_dev() {
+    [ -n "${OSMO_UTIL_DEV:-}" ] && { echo "$OSMO_UTIL_DEV"; return; }
+    local src nom dev
+    src="$(findmnt -no SOURCE /)"
+    nom="$(basename "$src")"
+    dev="$(cryptsetup status "$nom" 2>/dev/null | awk '/device:/{print $2}')"
+    [ -b "$dev" ] && echo "$dev"
+}
+
+slots_occupes() { cryptsetup luksDump "$1" | awk '/^Key Slot [0-7]: ENABLED/{sub(":","",$3); print $3} /^  [0-9]+: luks2/{sub(":","",$1); print $1}'; }
+
+slot_interne() {   # the slot the initramfs key file opens (none: empty)
+    local d="$1" s
+    [ -r "$CLEF_INTERNE" ] || return 0
+    for s in $(slots_occupes "$d"); do
+        cryptsetup open --test-passphrase --key-file "$CLEF_INTERNE" --key-slot "$s" "$d" 2>/dev/null && { echo "$s"; return; }
+    done
+}
+
+lire_phrase() {   # lire_phrase PROMPT -> twice, length checked
+    local a b
+    read -r -s -p "$1 : " a < /dev/tty; echo >&2
+    [ "${#a}" -ge "$MIN" ] || { log "trop courte (${#a} < $MIN caracteres) : chaque phrase ouvre tout le systeme" >&2; return 1; }
+    read -r -s -p "encore une fois : " b < /dev/tty; echo >&2
+    [ "$a" = "$b" ] || { log "les deux saisies different" >&2; return 1; }
+    printf '%s' "$a"
+}
+
+fscrypt_pret() {
+    command -v fscrypt >/dev/null || { log "fscrypt absent (apt install fscrypt libpam-fscrypt)"; return 1; }
+    local fs; fs="$(findmnt -no SOURCE /)"
+    if ! tune2fs -l "$fs" 2>/dev/null | grep -qw encrypt; then
+        tune2fs -O encrypt "$fs" >/dev/null || { log "ext4 sans chiffrement par repertoire (tune2fs -O encrypt $fs)"; return 1; }
+    fi
+    [ -f /etc/fscrypt.conf ] || fscrypt setup --quiet --force >/dev/null
+    [ -d /.fscrypt ] || fscrypt setup / --quiet >/dev/null
+}
+
+case "${1:-liste}" in
+    ajouter)
+        nom="${2:?usage : osmo-utilisateur ajouter NOM}"
+        id "$nom" >/dev/null 2>&1 && { log "le compte $nom existe deja"; exit 1; }
+        d="$(luks_dev)" || true; [ -n "$d" ] || { log "/ n est pas sur un volume LUKS"; exit 1; }
+        [ "$(slots_occupes "$d" | wc -l)" -lt 8 ] || { log "plus d emplacement libre (8 en LUKS1)"; exit 1; }
+        [ -r "$CLEF_INTERNE" ] || { log "$CLEF_INTERNE absent : impossible d ajouter une phrase sans en connaitre une"; exit 1; }
+        p="$(lire_phrase "phrase LUKS de $nom (ouvre le systeme a la porte)")" || exit 1
+        avant="$(slots_occupes "$d")"
+        t="$(mktemp -p /run)"; printf '%s' "$p" > "$t"; p=""
+        cryptsetup luksAddKey --key-file "$CLEF_INTERNE" "$d" "$t"; rc=$?
+        shred -u "$t" 2>/dev/null || rm -f "$t"
+        [ "$rc" = 0 ] || { log "luksAddKey a echoue"; exit 1; }
+        slot="$(comm -13 <(echo "$avant" | sort) <(slots_occupes "$d" | sort) | head -1)"
+        install -d -m 0700 "$(dirname "$TABLE")"
+        printf '%s %s %s\n' "$slot" "$nom" "$(date +%F)" >> "$TABLE"
+        log "phrase de $nom : emplacement $slot"
+        # the account, its home EMPTY, then encrypted, then the skeleton
+        if [ "${OSMO_UTIL_SANS_COMPTE:-0}" != 1 ]; then
+            adduser --gecos "" --no-create-home "$nom" || { log "adduser a echoue (emplacement $slot garde)"; exit 1; }
+            install -d -m 0700 -o "$nom" -g "$nom" "/home/$nom"
+            if fscrypt_pret; then
+                echo "fscrypt : tape le mot de passe de session de $nom (celui qui ouvrira /home/$nom)"
+                fscrypt encrypt "/home/$nom" --user="$nom" --source=pam_passphrase \
+                    && log "/home/$nom chiffre (fscrypt, ouvert a la connexion de $nom)" \
+                    || log "ATTENTION : /home/$nom NON chiffre par fscrypt (seulement par LUKS)"
+            fi
+            cp -rT /etc/skel "/home/$nom" && chown -R "$nom:$nom" "/home/$nom"
+        fi
+        echo "Pour la porte : sudo osmo-porte qr - le meme QR code pour tous."
+        ;;
+    retirer)
+        nom="${2:?usage : osmo-utilisateur retirer NOM}"
+        d="$(luks_dev)" || true; [ -n "$d" ] || { log "/ n est pas sur un volume LUKS"; exit 1; }
+        slot="$(awk -v n="$nom" '$2 == n {print $1}' "$TABLE" 2>/dev/null | tail -1)"
+        [ -n "$slot" ] || { log "pas d emplacement connu pour $nom ($TABLE)"; exit 1; }
+        interne="$(slot_interne "$d")"
+        [ "$slot" != "$interne" ] || { log "l emplacement $slot est celui de la cle interne - refuse"; exit 1; }
+        k=0; [ -n "$interne" ] && k=1
+        n_phrases=$(( $(slots_occupes "$d" | wc -l) - k ))
+        [ "$n_phrases" -gt 1 ] || { log "c est la derniere phrase du systeme - refuse"; exit 1; }
+        cryptsetup luksKillSlot --key-file "$CLEF_INTERNE" "$d" "$slot" || { log "luksKillSlot a echoue"; exit 1; }
+        sed -i "/^$slot $nom /d" "$TABLE"
+        log "emplacement $slot de $nom detruit"
+        if [ "${OSMO_UTIL_SANS_COMPTE:-0}" != 1 ] && id "$nom" >/dev/null 2>&1; then
+            deluser --remove-home "$nom" && log "compte et /home/$nom supprimes"
+        fi
+        ;;
+    liste)
+        d="$(luks_dev)" || true; [ -n "$d" ] || { log "/ n est pas sur un volume LUKS"; exit 1; }
+        interne="$(slot_interne "$d")"
+        echo "volume : $d"
+        for s in $(slots_occupes "$d"); do
+            if [ "$s" = "$interne" ]; then qui="(cle interne de l initramfs)"
+            else qui="$(awk -v s="$s" '$1 == s {print $2" (depuis le "$3")"}' "$TABLE" 2>/dev/null | tail -1)"; [ -n "$qui" ] || qui="(phrase de l installation)"; fi
+            printf '  emplacement %s : %s\n' "$s" "$qui"
+        done
+        ;;
+    *)
+        echo "usage : osmo-utilisateur ajouter NOM | retirer NOM | liste" >&2
+        exit 2
+        ;;
+esac

@@ -26,6 +26,8 @@ rm -rf "$ROOTFS/etc/osmo-porte/initramfs"
 cp -r "$_PO_SRC/initramfs" "$ROOTFS/etc/osmo-porte/initramfs"
 chmod 755 "$ROOTFS/etc/osmo-porte/initramfs/hooks/"*
 install -m 0755 "$_PO_SRC/osmo-porte" "$ROOTFS/usr/local/sbin/osmo-porte"
+# several people on nirvana's system: a LUKS key slot and an fscrypt home each
+install -m 0755 "$_PO_SRC/osmo-utilisateur" "$ROOTFS/usr/local/sbin/osmo-utilisateur"
 
 # kexec-tools must not take over reboots (its debconf default may): the porte
 # uses kexec itself, the system reboots through the firmware

@@ -146,6 +146,9 @@ if [ -n "${OSMO_ISO_SQUASH_JOBS:-}" ]; then
     SQUASH_JOBS=(-processors "$OSMO_ISO_SQUASH_JOBS")
     echo -e "  ${CYAN}compression bridee a ${OSMO_ISO_SQUASH_JOBS} coeur(s) (OSMO_ISO_SQUASH_JOBS)${NC}"
 fi
+# no SSH host key in the image (83-espace-ram.sh: made at sshd's first start,
+# per machine and per system) - removed LAST, after every package install
+rm -f "$ROOTFS"/etc/ssh/ssh_host_*_key "$ROOTFS"/etc/ssh/ssh_host_*_key.pub
 mksquashfs "$ROOTFS" "$ISOROOT/live/filesystem.squashfs" \
     "${SQUASH_COMP[@]}" "${SQUASH_JOBS[@]}" -b 1M \
     -e 'var/cache/apt' -e 'var/lib/apt/lists' \

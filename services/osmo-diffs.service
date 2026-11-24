@@ -15,7 +15,8 @@ ConditionPathExists=/var/lib/osmo-diffs/cle.pub
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/true
+# at boot: the box still holds what nirvana saw last (truncation check)
+ExecStart=-/usr/local/sbin/osmo-diffs verifier
 ExecStop=/usr/local/sbin/osmo-diffs enregistrer
 TimeoutStopSec=600
 
