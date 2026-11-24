@@ -227,8 +227,25 @@ if mountpoint -q "$MOUNT"; then
     exit 0
 fi
 
+# ── ROOT'S LINKS TO A VOLUME THAT DOES NOT EXIST ────────────────────────────
+# /root/.local/share/keyrings is a link to the encrypted volume, set in the
+# image. With no volume configured (the live key, an install without
+# encryption) or no volume present, the link is dangling: gnome-keyring then
+# cannot create its directory and its pkcs11/secrets components fail at every
+# login. Replaced by a real directory - on the live key / is in RAM anyway.
+liens_root_sans_volume() {
+    local lien
+    for lien in ${CRYPTHOME_ROOT_LINKS:-.local/share/keyrings}; do
+        if [ -L "/root/$lien" ] && [ ! -e "/root/$lien" ]; then
+            rm -f "/root/$lien"
+            install -d -m 0700 "/root/$lien"
+        fi
+    done
+}
+
 if [ -z "${CRYPTHOME_UUID:-}" ]; then
     log "aucun disque chiffre configure (CRYPTHOME_UUID vide dans $CONF)."
+    [ "$BOOT" = 1 ] && liens_root_sans_volume
     exit 0
 fi
 

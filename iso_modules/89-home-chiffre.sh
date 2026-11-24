@@ -62,6 +62,27 @@ echo -e "${GREEN}[8i/9] Second disque chiffre sur /home (outils, rien n est chif
 # Account owning the encrypted home: osmocom (unprivileged), overridable.
 _CH_OWNER="${OSMO_ISO_CRYPTHOME_OWNER:-osmocom}"
 
+# ── What the old model left (inherited rootfs) ────────────────────────────
+# A rootfs inherited from a build before the simplification still carries the
+# TPM porte, the second system and their units. osmo-racine-session.service in
+# particular (Before=ssh.socket, After=network-online.target) puts dbus.service
+# in an ordering cycle at every boot: systemd then drops sockets.target.
+for _u in osmo-racine-session.service osmo-boite.target osmo-boite-consulter.service; do
+    rm -f "$ROOTFS/etc/systemd/system/$_u" \
+          "$ROOTFS/etc/systemd/system/multi-user.target.wants/$_u"
+done
+rm -f "$ROOTFS/usr/local/sbin/osmo-grub-esp" "$ROOTFS/usr/local/sbin/osmo-racine-copier" \
+      "$ROOTFS/usr/local/sbin/osmo-porte" "$ROOTFS/usr/local/sbin/osmo-utilisateur" \
+      "$ROOTFS/etc/apt/apt.conf.d/99osmo-grub-esp" "$ROOTFS/boot/osmo-porte.img" \
+      "$ROOTFS/etc/xdg/autostart/osmo-porte-rappel.desktop" \
+      "$ROOTFS/etc/initramfs-tools/hooks/osmo-racine-rw" \
+      "$ROOTFS/etc/initramfs-tools/scripts/local-bottom/osmo-racine-rw" \
+      "$ROOTFS/etc/initramfs-tools/conf.d/overlayroot"
+rm -rf "$ROOTFS/etc/osmo-porte"
+# the kexec preseed of the porte (LOAD_KEXEC=false): kexec-tools is gone too
+[ -f "$ROOTFS/etc/default/kexec" ] && ! chroot "$ROOTFS" dpkg -s kexec-tools >/dev/null 2>&1 \
+    && rm -f "$ROOTFS/etc/default/kexec"
+
 # ── Tools ──────────────────────────────────────────────────────────────────
 # unlock-home / lock-home in sbin (they mount/unmount), run-as-owner and
 # crypthome-session-setup in bin (called from the session).

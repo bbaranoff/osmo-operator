@@ -8,8 +8,11 @@ ConditionPathIsMountPoint=/media/root-ro
 # read-only volume, the black box, the network for its remote copy - and it
 # starts BEFORE the display manager, so it stops once GDM has released the
 # console: the question and the red warning are on the text console.
-After=local-fs.target unlock-home.service home.mount media-home\x2dro.mount var-lib-osmo\x2ddiffs.mount network-online.target
-Wants=network-online.target
+# network.target, NOT network-online.target: with Before=display-manager, the
+# latter would hold GDM until the network is up (or its timeout) at every
+# boot. network.target is enough for the stop order (stopped before the
+# network goes down); without network the remote copy waits for the next one.
+After=local-fs.target unlock-home.service home.mount media-home\x2dro.mount var-lib-osmo\x2ddiffs.mount network.target
 Before=display-manager.service systemd-user-sessions.service
 
 [Service]
