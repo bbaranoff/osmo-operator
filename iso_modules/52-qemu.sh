@@ -417,13 +417,20 @@ for _f in "$ROOTFS/usr/local/bin/"*; do
 done
 
 mkdir -p "$ROOTFS/root/.osmocom/bb"
-if [ -f "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
-elif [ -f "$ROOTFS/opt/GSM/osmo-operator/configs/mobile.cfg" ]; then
-    cp "$ROOTFS/opt/GSM/osmo-operator/configs/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
-elif [ -f "$ROOTFS/etc/osmocom/mobile.cfg" ]; then
-    cp "$ROOTFS/etc/osmocom/mobile.cfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
-fi
+# Only a FILLED mobile config goes to /root/.osmocom/bb. configs/mobile.cfg is
+# the raw template (__IMSI__, __KI__, __ARFCN__...): copied as is, start.sh
+# would "keep" it (it never rewrites an existing config), the mobile would have
+# no IMSI/Ki and the bench would fail at "Mobile configuration". With no file
+# there, the first start generates it from the filled template.
+for _mcfg in "$ROOTFS/opt/GSM/osmo-operator/mobile.cfg" "$ROOTFS/etc/osmocom/mobile.cfg"; do
+    [ -f "$_mcfg" ] || continue
+    if grep -v '^[[:space:]]*[#!]' "$_mcfg" | grep -qE '__[A-Z][A-Z0-9_]*__'; then
+        echo -e "  ${YELLOW}!${NC} $_mcfg contient des marqueurs non remplis - non copie"
+        continue
+    fi
+    cp "$_mcfg" "$ROOTFS/root/.osmocom/bb/mobile.cfg"
+    break
+done
 
 # ── NO osmocom user: root only ──────────────────────────────────────────────
 # The image had an "osmocom" account forced to UID 0 (usermod -o -u 0), which

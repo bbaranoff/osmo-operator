@@ -25,8 +25,18 @@ banner() {
 # exists: it starts with what is in place. Only start.sh --configure
 # (OSMO_CONFIGURE=1, exported by it) rewrites them, and --regen for the
 # templates. A missing file is always created (first start).
+#
+# A file that still carries unfilled template markers (__IMSI__, __KI__,
+# __ARFCN__...) is not a configuration, it is a raw template copied in place
+# (older ISO builds put configs/mobile.cfg in /root/.osmocom/bb as is): keeping
+# it would start a mobile without IMSI/Ki, the HLR could not be provisioned and
+# the bench would fail. It is rewritten like a missing file.
 conf_ecrasable() {   # conf_ecrasable FILE -> 0 if this start may write FILE
-    [ ! -e "$1" ] || [ "${OSMO_CONFIGURE:-0}" = 1 ]
+    [ ! -e "$1" ] || [ "${OSMO_CONFIGURE:-0}" = 1 ] || conf_gabarit_brut "$1"
+}
+conf_gabarit_brut() {  # conf_gabarit_brut FILE -> 0 if FILE has unfilled markers
+    # comment lines skipped: the template header lists the markers in prose
+    grep -v '^[[:space:]]*[#!]' "$1" 2>/dev/null | grep -qE '__[A-Z][A-Z0-9_]*__'
 }
 conf_garde() {       # conf_garde FILE WHAT -> says that FILE is kept
     printf '  %sconserve%s   %s (%s ; start.sh --configure pour la reecrire)\n' \

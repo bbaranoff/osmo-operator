@@ -689,6 +689,20 @@ def _heuristique(ligne):
     return out
 
 
+def _vers_la_fin_tv(t):
+    """Shows the end of the TextView t. scroll_to_iter (and even scroll_to_mark)
+    right after set_text does nothing: the line heights are not computed yet,
+    and the log stayed at the top. The scrollbar is put at the bottom once GTK
+    is idle, when the heights are known (measured: idle -> bottom,
+    scroll_to_iter/scroll_to_mark -> top)."""
+    def bas():
+        a = t.get_vadjustment()
+        if a is not None:
+            a.set_value(a.get_upper() - a.get_page_size())
+        return False
+    GLib.idle_add(bas, priority=GLib.PRIORITY_LOW)
+
+
 def colorer(txt):
     """[(text, colour or None, bold)] for a whole text, line by line, newlines included."""
     segs = []
@@ -1367,7 +1381,7 @@ class Fenetre(Gtk.Window):
         t.get_buffer().set_text("")
         self._inserer(t, segs if segs is not None else colorer(txt))
         if bas:
-            t.scroll_to_iter(t.get_buffer().get_end_iter(), 0, False, 0, 0)
+            _vers_la_fin_tv(t)
         return False
 
     def _ajouter_couleur(self, t, txt):
@@ -1375,7 +1389,7 @@ class Fenetre(Gtk.Window):
         t._osmo_txt = None
         self._inserer(t, colorer(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt) if "\x1b[" in txt and
                                      not re.search(r"\x1b\[[0-9;]*m", txt) else txt))
-        t.scroll_to_iter(t.get_buffer().get_end_iter(), 0, False, 0, 0)
+        _vers_la_fin_tv(t)
 
     @staticmethod
     def _remplir(t, txt, bas=True):
@@ -1385,7 +1399,7 @@ class Fenetre(Gtk.Window):
             return False
         buf.set_text(txt)
         if bas:
-            t.scroll_to_iter(buf.get_end_iter(), 0, False, 0, 0)
+            _vers_la_fin_tv(t)
         return False
 
     def _console(self, port_de, raccourcis):
