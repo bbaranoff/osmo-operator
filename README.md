@@ -9,21 +9,56 @@ is either the OsmocomBB `layer1` + `mobile`, or a Motorola C139 running the **or
 Magnetite). It camps, authenticates, ciphers, sends SMS and holds voice calls. No SDR and no physical phone: the
 radio is emulated end to end, down to the baseband.
 
-![The bench in action: CSFB call, I/Q spectra, srsUE, Wireshark, Linphone](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-ville.jpg)
+![osmo-operator: the GSM LAB desktop, the mast beacon over the city](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/osmo-balise-jour.png)
+
+**Latest release: [v0.2](https://github.com/bbaranoff/osmo-operator/releases/tag/v0.2)**: live/installable amd64 ISO,
+arm64 SD images (Raspberry Pi 4, Orange Pi 5 family), Docker image. Illustrated guide to the ISO:
+[osmo-operator - ISO 0.2 on RPubs](https://rpubs.com/bbaranoff/iso-latest).
+
+## New in v0.2
+
+- **The installed machine**: Calamares with « Encrypt system » puts **two systems** on the disk: root's system,
+  the ISO booted live in RAM, and nirvana's system, encrypted (LUKS) and read-write.
+  - **TPM porte**: with an active TPM 2.0, a 6-digit TOTP code computed by the TPM proves the boot chain before you
+    type the passphrase.
+  - **Black box**: an `age`-encrypted record of each boot's changes.
+  - **Several users**: `osmo-utilisateur ajouter NOM`.
+  - **SSH**: a host key per machine.
+
+  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware: try it in a VM first
+  (`tools/osmo-vm-porte.sh`).
+- **Constellation** (`osmo-gtk`): the bench in one GTK window. It shows the constellation, eye diagram,
+  training-sequence correlation, burst I/Q and TDMA grid, with tabs for the core, L23, logs, Kconfig, tests,
+  notebooks and installation.
+- **osmo-ms-pont**: the mobile chain without a phone (DSP, ARM, osmocon, bridge), from a window.
+- **osmo-iso** (`./build.sh --gtk`): build an amd64 ISO or an arm64 SD image from a form.
+- **osmo-balise**: the mast beacon follows the bench (day wallpaper at rest; evening and a red/green beacon while
+  it runs).
+- **`--lora`**: voice between two nodes over LoRa (RNode Heltec V3) as raw GSM-HR frames, no IP.
+- **GSM-HR <-> GSM-FR transcoder** (`--hr`); libosmo-sigtran with TCAP routing; TTCN-3 suites (Eclipse TITAN) in
+  the ISO.
+- **arm64 SD images** built by the official armbian/build framework, one per board: Raspberry Pi 4 and Orange Pi 5,
+  5B, 5 Plus, 5 Pro, 5 Max, 5 Ultra. They carry 2G/EDGE in full, but no 4G.
+- **CI**: the ISO starts from the GHCR base image of its own commit when one is published. Otherwise it falls
+  back to Docker Hub, with a warning, or compiles.
+
+| Constellation: the air of the bench | osmo-iso: build an image from a window |
+|---|---|
+| ![Constellation: constellation, eye diagram, burst I/Q, TDMA grid](doc/images/constellation.png) | ![osmo-iso: the image build form](doc/images/osmo-iso-gtk.png) |
 
 ## Start here
 
 | I want to… | Read |
 |---|---|
-| Boot a ready-made live image (fastest, nothing to build) | [iso](doc/README-iso.md) · [latest release](https://github.com/bbaranoff/osmo-operator/releases/latest) |
+| Boot a ready-made live image (fastest, nothing to build) | [iso](doc/README-iso.md) · [latest release](https://github.com/bbaranoff/osmo-operator/releases/latest) · [illustrated guide (RPubs)](https://rpubs.com/bbaranoff/iso-latest) |
 | Pick a mode and run it | [Modes](#modes) below · the **?** of the dock (`osmo-info`) · [lancer-les-modes.ipynb](wiki/lancer-les-modes.ipynb) |
 | Install on Ubuntu 24.04 without Docker | [native](doc/README-native.md) · [installer-osmo-jusquau-dsp.ipynb](wiki/installer-osmo-jusquau-dsp.ipynb) |
-| Run in Docker, or build the images | [docker](doc/README-docker.md) |
-| Run on a Raspberry Pi 4 / arm64 | [arm](doc/README-arm.md) |
+| Run in Docker, or build the images | [docker](doc/README-docker.md) · `docker pull bastienbaranoff/norf_gsm` (amd64) |
+| Run on a Raspberry Pi 4 / Orange Pi 5 (arm64 SD images, 2G only) | [arm](doc/README-arm.md) · [latest release](https://github.com/bbaranoff/osmo-operator/releases/latest) |
 | Study the real C54x DSP on the mask ROM | [dsp](doc/README-dsp.md) |
 | Run the original TI firmware (C139, Magnetite) | [magnetite](doc/magnetite.md) |
 | Use the gr-gsm layer 1 | [grgsm](doc/README-grgsm.md) |
-| Add 4G, CSFB and the postmarketOS phone | [lte](doc/README-lte.md) |
+| Add 4G, CSFB and the postmarketOS phone (amd64 only) | [lte](doc/README-lte.md) |
 | Several operators, SS7 interconnect, a WAN between machines | [ss7](doc/README-ss7.md) · [WAN](wiki/WAN.md) |
 | Drive the bench day to day: tmux, VTY, ports, Wireshark | [usage](doc/README-usage.md) |
 | Check that the bench is healthy, reproduce a fault | [tests](doc/README-tests.md) |
@@ -125,7 +160,7 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | `data/` | desktop entries, icons, phone photos and click zones (`c123*`, `c139*`), node/operator name tables |
 | `instances/` | per-Calypso-instance settings (`instance-N.env`, written by the settings page) |
 | `web/`, `fft-web/` | the settings web page and the two-spectrum FFT web server (port 8081) |
-| `doc/` | topic READMEs, `magnetite.md`, step-by-step install guides |
+| `doc/` | topic READMEs, `magnetite.md`, step-by-step install guides, screenshots (`doc/images/`) |
 | `wiki/` | the wiki pages and the notebooks |
 | `tout-en-un.py` | gathers the text files of a tree into one shortened Markdown report |
 
