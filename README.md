@@ -100,16 +100,11 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 
 ## New in v0.2
 
-- **The installed machine**: Calamares with « Encrypt system » puts **two systems** on the disk: root's system,
-  the ISO booted live in RAM, and nirvana's system, encrypted (LUKS) and read-write.
-  - **TPM porte**: with an active TPM 2.0, a 6-digit TOTP code computed by the TPM proves the boot chain before you
-    type the passphrase.
-  - **Black box**: an `age`-encrypted record of each boot's changes.
-  - **Several users**: `osmo-utilisateur ajouter NOM`.
+- **The installed machine**: Calamares with « Encrypt system » encrypts `/home` only (LUKS2). At boot, nirvana's
+  passphrase opens `/home` with `/` read-write; Enter gives root, without `/home`, with `/` read-only.
   - **SSH**: a host key per machine.
 
-  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware: try it in a VM first
-  (`tools/osmo-vm-porte.sh`).
+  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware.
 - **Constellation** (`osmo-gtk`): the bench in one GTK window. It shows the constellation, eye diagram,
   training-sequence correlation, burst I/Q and TDMA grid, with tabs for the core, L23, logs, Kconfig, tests,
   notebooks and installation.
