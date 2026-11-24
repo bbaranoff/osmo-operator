@@ -40,13 +40,23 @@ log() { echo "unlock-home: $*" >&2; }
 # that mount as the encrypted disk would write the secrets IN CLEAR under the
 # owner account while claiming otherwise. The mount source must therefore be
 # the decrypted mapping itself.
+#
+# On an installed bench (osmo-racine-live) the volume is mounted READ-ONLY on
+# $HOME_BAS and /home is a RAM overlay over it: that counts as the encrypted
+# volume too.
+HOME_BAS=/media/home-ro
+HOME_RW=/media/home-rw
 crypthome_monte() {
     local _src
     mountpoint -q "$MOUNT" || return 1
     _src="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
     [ -n "$_src" ] || return 1
+    if [ "$_src" = overlay ] && mountpoint -q "$HOME_BAS"; then
+        _src="$(findmnt -fno SOURCE "$HOME_BAS" 2>/dev/null)"
+    fi
     [ "$(readlink -f "$_src")" = "$(readlink -f "/dev/mapper/$MAPPER")" ]
 }
+racine_live() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; }
 
 # ── THE ROOT SESSION WHEN /home STAYS CLOSED ────────────────────────────────
 # GDM has no "for this boot" configuration: it reads custom.conf. It is thus
@@ -200,8 +210,6 @@ root_dans_tmp() {
 
 # Every boot starts from the session account's configuration.
 [ "$BOOT" = 1 ] && session_normale
-# The initramfs answer (see below) never outlives this run, whatever exit.
-[ "$BOOT" = 1 ] && trap 'rm -f /run/crypthome.key /run/crypthome.skip' EXIT
 
 # Already mounted (2nd call, or manual decryption after a "no"): nothing to do.
 #
@@ -357,27 +365,6 @@ PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
 essai=0
 
-# ── ALREADY ANSWERED IN THE INITRAMFS ───────────────────────────────────────
-# On a machine with a live root (osmo-racine-live), the question is asked by
-# the initramfs, before the root password that only a root boot gets. Its
-# answer waits in /run (RAM, carried over by the initramfs): the passphrase in
-# /run/crypthome.key, or /run/crypthome.skip for Enter. Not asked twice.
-if [ "$BOOT" = 1 ] && [ -f /run/crypthome.skip ]; then
-    rm -f /run/crypthome.skip /run/crypthome.key
-    log "Entree deja donnee au demarrage (initramfs) - session root sans $MOUNT."
-    session_root
-    exit 0
-fi
-if [ "$BOOT" = 1 ] && [ -s /run/crypthome.key ]; then
-    if cryptsetup open --key-file=/run/crypthome.key "$DEV" "$MAPPER"; then
-        ouvert=1
-        log "phrase de passe donnee au demarrage (initramfs)."
-    else
-        log "phrase de passe de l initramfs refusee - la question est reposee."
-    fi
-    rm -f /run/crypthome.key
-fi
-
 while [ "$ouvert" != 1 ] && [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
     invite="decrypt $MOUNT -passphrase- or Enter"
@@ -415,7 +402,43 @@ fi
 # The /home line of /etc/fstab has "noauto": this script mounts, and it alone.
 # If the mount fails the mapping is CLOSED again - an open, unmounted decrypted
 # volume would be the worst of both states.
-if ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; then
+#
+# INSTALLED BENCH (/ in RAM, osmo-racine-live): /home goes through the
+# end-of-session validation like the rest. The volume is mounted READ-ONLY
+# on $HOME_BAS, a tmpfs on $HOME_RW holds the session's writes, and /home is
+# the overlay of the two. osmo-racine-live writes it back at shutdown with
+# the /home passphrase, or drops it. Before that, a validation cut by a power
+# loss is finished (or thrown away) on the volume - osmo-valider-appliquer,
+# the same journal as for /.
+monter_home_live() {
+    install -d "$HOME_BAS" "$HOME_RW"
+    mount "/dev/mapper/$MAPPER" "$HOME_BAS" || return 1
+    if [ -d "$HOME_BAS/.osmo-valider" ] && [ -x /usr/local/sbin/osmo-valider-appliquer ]; then
+        log "reprise d une validation interrompue sur $MOUNT."
+        /usr/local/sbin/osmo-valider-appliquer "$HOME_BAS" 2>&1 | while read -r l; do log "$l"; done
+    fi
+    mount -o remount,ro "$HOME_BAS" || { umount "$HOME_BAS"; return 1; }
+    if ! mountpoint -q "$HOME_RW"; then
+        mount -t tmpfs -o mode=0755,size=50% tmpfs "$HOME_RW" || { umount "$HOME_BAS"; return 1; }
+    fi
+    install -d -m 0755 "$HOME_RW/overlay"
+    install -d -m 0700 "$HOME_RW/work"
+    # the overlay root takes the attributes of its upper: those of the volume
+    chmod "$(stat -c %a "$HOME_BAS")" "$HOME_RW/overlay"
+    chown "$(stat -c %u:%g "$HOME_BAS")" "$HOME_RW/overlay"
+    mount -t overlay overlay \
+        -o "lowerdir=$HOME_BAS,upperdir=$HOME_RW/overlay,workdir=$HOME_RW/work" "$MOUNT" \
+        || { umount "$HOME_RW" "$HOME_BAS"; return 1; }
+}
+
+if racine_live; then
+    if ! monter_home_live; then
+        log "montage de $MOUNT impossible - le volume est referme."
+        cryptsetup close "$MAPPER" 2>/dev/null || true
+        session_root
+        exit 0
+    fi
+elif ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; then
     log "montage de $MOUNT impossible - le volume est referme."
     cryptsetup close "$MAPPER" 2>/dev/null || true
     session_root

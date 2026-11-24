@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+# osmo-flash - the « forget everything » pseudo-neuralyzer at the end of a
+# session (osmo-valider-session --fin, answer « Yes »). Full screen:
+#   1. a home-made gadget, drawn here (silver body, dark grip rings, a bulb
+#      at the tip that charges up, « regardez la lumiere »);
+#   2. the bulb fires: a white flash fading to black.
+# About three seconds; any key or click closes it.
+# --blanc : the screen stays WHITE after the flash, and the window never
+# closes by itself - the machine is shut down underneath (osmo-valider-session
+# --fin, « Yes »). If
+# /usr/local/share/osmo-operator/flash.gif exists (OSMO_FLASH_GIF to choose
+# another file) that animation replaces step 1 - it is yours to provide.
+import math
+import os
+import sys
+
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+except (ImportError, ValueError):
+    sys.exit(0)
+
+GIF = os.environ.get("OSMO_FLASH_GIF", "/usr/local/share/osmo-operator/flash.gif")
+GIF_MS = int(os.environ.get("OSMO_FLASH_GIF_MS", "3000"))
+CHARGE_MS = 1400
+FONDU_MS = 1600
+PAS_MS = 30
+BLANC = "--blanc" in sys.argv[1:]
+
+
+def tube(cr, x, y, w, h, r1, g1, b1, r2, g2, b2):
+    """A horizontal-shaded cylinder: dark edges, light middle."""
+    import cairo
+    pat = cairo.LinearGradient(x, 0, x + w, 0)
+    pat.add_color_stop_rgb(0.0, r2, g2, b2)
+    pat.add_color_stop_rgb(0.45, r1, g1, b1)
+    pat.add_color_stop_rgb(1.0, r2 * 0.6, g2 * 0.6, b2 * 0.6)
+    cr.rectangle(x, y, w, h)
+    cr.set_source(pat)
+    cr.fill()
+
+
+class Flash(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="osmo-flash")
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.fullscreen()
+        self.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        if not BLANC:      # --blanc: nothing closes it, the shutdown does
+            self.connect("key-press-event", lambda *_: Gtk.main_quit())
+            self.connect("button-press-event", lambda *_: Gtk.main_quit())
+        self.zone = Gtk.DrawingArea()
+        self.zone.connect("draw", self.dessiner)
+        self.phase = "charge"      # charge -> flash
+        self.t = 0.0               # 0..1 within the phase
+        if os.path.isfile(GIF):
+            try:
+                anim = GdkPixbuf.PixbufAnimation.new_from_file(GIF)
+                fond = Gtk.EventBox()
+                fond.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0, 0, 0, 1))
+                fond.add(Gtk.Image.new_from_animation(anim))
+                self.add(fond)
+                GLib.timeout_add(GIF_MS, self.apres_gif)
+                return
+            except GLib.Error:
+                pass
+        self.add(self.zone)
+        GLib.timeout_add(PAS_MS, self.avancer)
+
+    def apres_gif(self):
+        self.remove(self.get_child())
+        self.add(self.zone)
+        self.zone.show()
+        self.phase, self.t = "flash", 0.0
+        GLib.timeout_add(PAS_MS, self.avancer)
+        return False
+
+    def avancer(self):
+        duree = CHARGE_MS if self.phase == "charge" else FONDU_MS
+        self.t += PAS_MS / duree
+        if self.t >= 1.0:
+            if self.phase == "charge":
+                self.phase, self.t = "flash", 0.0
+            elif BLANC:
+                self.phase = "blanc"       # white, until the machine is off
+                self.zone.queue_draw()
+                return False
+            else:
+                Gtk.main_quit()
+                return False
+        self.zone.queue_draw()
+        return True
+
+    def dessiner(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        if self.phase == "blanc" or (self.phase == "flash" and BLANC):
+            cr.set_source_rgb(1, 1, 1)
+            cr.paint()
+            return False
+        if self.phase == "flash":
+            v = max(0.0, 1.0 - self.t)          # white, fading to black
+            cr.set_source_rgb(v, v, v)
+            cr.paint()
+            return False
+        cr.set_source_rgb(0.02, 0.02, 0.03)
+        cr.paint()
+        # the gadget, upright in the middle
+        bw = min(W, H) * 0.07
+        bh = min(W, H) * 0.55
+        x = W / 2 - bw / 2
+        y = H / 2 - bh / 2 + bh * 0.08
+        tube(cr, x, y, bw, bh, 0.86, 0.87, 0.90, 0.45, 0.46, 0.50)          # body
+        for k in range(4):                                                 # grip rings
+            tube(cr, x - bw * 0.06, y + bh * (0.55 + k * 0.1), bw * 1.12, bh * 0.045,
+                 0.25, 0.25, 0.28, 0.08, 0.08, 0.10)
+        tube(cr, x + bw * 0.15, y - bh * 0.07, bw * 0.7, bh * 0.07,          # neck
+             0.75, 0.76, 0.80, 0.35, 0.36, 0.40)
+        # the bulb, charging: from dim amber to blinding white
+        c = self.t
+        bx, by, r = W / 2, y - bh * 0.07 - bw * 0.35, bw * 0.42
+        halo = r * (1.5 + 6 * c * c)
+        import cairo
+        g = cairo.RadialGradient(bx, by, r * 0.2, bx, by, halo)
+        g.add_color_stop_rgba(0, 1, 1, 0.95, 0.9 * c)
+        g.add_color_stop_rgba(1, 1, 0.9, 0.6, 0)
+        cr.set_source(g)
+        cr.arc(bx, by, halo, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgb(0.6 + 0.4 * c, 0.45 + 0.55 * c, 0.2 + 0.8 * c)
+        cr.arc(bx, by, r, 0, 2 * math.pi)
+        cr.fill()
+        # the caption
+        cr.set_source_rgb(0.85, 0.85, 0.85)
+        cr.select_font_face("DejaVu Sans", 0, 1)
+        cr.set_font_size(max(18, H * 0.035))
+        txt = "regardez la lumiere"
+        ext = cr.text_extents(txt)
+        cr.move_to(W / 2 - ext.width / 2, y + bh + H * 0.08)
+        cr.show_text(txt)
+        return False
+
+
+if __name__ == "__main__":
+    f = Flash()
+    f.show_all()
+    Gtk.main()

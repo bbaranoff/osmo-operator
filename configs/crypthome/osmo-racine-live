@@ -1,122 +1,290 @@
 #!/bin/bash
-# osmo-racine-live - who may write the system disk of an INSTALLED bench.
+# osmo-racine-live - the system disk of an INSTALLED bench is read-only; a
+# session's changes are written at shutdown only with the /home passphrase.
 #
-#   ROOT   : ALWAYS live. In a root session / is read-only, and every write to
-#            it (root's files, /etc, /opt/GSM, /var...) goes to RAM and is gone
-#            at the next boot. There is no persistent root: to keep a change,
-#            switch to the session account.
-#   THE SESSION ACCOUNT (the /home passphrase given at boot): writes
-#            everywhere, persistently - its encrypted /home, and / (through
-#            root's rights, sudo).
+# THE DISK (installer/calamares/modules/partition.conf):
+#   EFI          clear   Ubuntu's GRUB (Secure Boot: shim + grub signed)
+#   /            clear   READ-ONLY: overlayroot puts a RAM layer over it
+#   osmo-diffs   clear   the black box (each record encrypted, own passphrase)
+#   /home        LUKS2   nirvana's home (unlock-home asks at boot)
 #
-#   osmo-racine-live poser    enable (Calamares, shellprocess-osmo.conf: at
-#                             installation, in the target)
-#   osmo-racine-live etat     live (RAM) or written to the disk, this boot
-#   osmo-racine-live retirer  disable for good (from the session account's
-#                             boot, with sudo)
+# EVERY SESSION RUNS IN RAM. Everything written to / - /root, /opt/GSM, /etc,
+# /var... - goes to the overlay's tmpfs. At SHUTDOWN (osmo-fin-session.service
+# -> « fin »):
+#   the /home passphrase given (now or during the session, « valider »):
+#       the whole session is written to the disk, atomically (see « appliquer »);
+#   no passphrase (Enter, timeout, wrong three times):
+#       the RAM is dropped, NOTHING of the session survives - and a RED
+#       warning says so on the console, held a few seconds.
+# Either way the black box records what the session changed, marked
+# « valide » or « efface ». /home goes through the same validation: unlock-home
+# mounts the LUKS2 volume read-only on /media/home-ro and a RAM layer over it
+# on /home (/media/home-rw), written back with the rest. TWO PASSPHRASES:
+# the /home one opens /home AND validates; the black box has its own,
+# different one (osmo-diffs phrase), only to read it back - never asked at
+# shutdown.
 #
-# THE BLACK BOX AT BOOT (osmo-diffs): the date of its last record is shown
-# before the question; the GRUB entry « consulter la boite noire » reads it
-# from the initramfs instead of booting (box passphrase, then restart).
+#   osmo-racine-live poser        enable (Calamares, shellprocess-osmo.conf)
+#   osmo-racine-live etat         this boot: RAM or disk, validated or not
+#   osmo-racine-live changements  the session's changes (paths)
+#   osmo-racine-live valider      give the /home passphrase now: the session
+#                                 will be written at shutdown (--stdin: read
+#                                 one line, for osmo-valider-session)
+#   osmo-racine-live ecrire       write the session to the disk NOW, same
+#                                 passphrase (--stdin too): a power cut then
+#                                 loses only what came after
+#   osmo-racine-live annuler      forget the validation: wiped at shutdown
+#   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
+#                                 no question at shutdown
+#   osmo-racine-live fin          at shutdown (osmo-fin-session.service)
+#   osmo-racine-live retirer      back to an ordinary read-write / (from
+#                                 « sudo overlayroot-chroot osmo-racine-live retirer »)
 #
-# THE MECHANISM: Ubuntu's overlayroot package. Its initramfs script mounts the
-# real root read-only on /media/root-ro and an overlay with a tmpfs upper on /.
-# recurse=0: only / is covered, every other fstab line (the encrypted /home,
-# /boot/efi, the osmo-diffs partition) is mounted as it is.
+# ATOMIC WRITE. The RAM layer is first COPIED next to the root, on the same
+# disk (/.osmo-valider/files), with the list of deletions; then a PRET mark
+# is synced: that is the commit point. Only then are the files moved into
+# place, one rename each (osmo-valider-appliquer). A cut before PRET leaves
+# the disk as it was (the staging is thrown away at the next boot); a cut
+# after PRET is finished by the initramfs at the next boot, before anything
+# reads the root.
 #
-# THE ONLY QUESTION AT BOOT, asked by the initramfs (local-bottom, BEFORE the
-# root is covered): « decrypt /home -passphrase- or Enter » - the question of
-# unlock-home, moved here because its answer decides who writes. Right
-# passphrase: the overlay is turned off for this boot (/ written to the disk)
-# and the passphrase waits in /run/crypthome.key (RAM) for unlock-home, which
-# does not ask again. Enter, timeout, three refusals: root session, live
-# (/run/crypthome.skip). To make that possible, the overlayroot setting lives
-# in the INITRAMFS config (/etc/initramfs-tools/conf.d/overlayroot ->
-# /conf/conf.d/overlayroot, which the boot script may still rewrite), not in
-# /etc/overlayroot.conf, which would override it.
-#
-# LIMITS (wiki/ISO.md, 6.7): a root of a live boot can still remount
-# /media/root-ro read-write or write the block device; someone at the GRUB
-# menu can add overlayroot=disabled. This keeps root's sessions from leaving
-# anything behind; it is not a barrier against a hostile root with the
-# machine in hand. The encrypted /home stays out of reach in every case as
-# long as nobody types its passphrase into a system root has modified.
+# LIMITS: root can always remount /media/root-ro read-write, or write the
+# block device: this is about sessions leaving nothing behind without the
+# passphrase, not a barrier against a hostile root with the machine in hand.
+# The encrypted /home stays out of reach as long as nobody types its
+# passphrase into a system root has modified.
 set -u
 CONF=/etc/overlayroot.conf
-CONF_INITRD=/etc/initramfs-tools/conf.d/overlayroot
-HOOK=/etc/initramfs-tools/hooks/osmo-racine-rw
-SCRIPT=/etc/initramfs-tools/scripts/local-bottom/osmo-racine-rw
 REGLAGE='tmpfs:swap=1,recurse=0'
-# left by the previous version of this script: removed by poser and retirer
-ANCIENS="/etc/osmo-racine-rw.hash /etc/grub.d/42_osmo-maintenance"
+HAUT=/media/root-rw/overlay
+BAS=/media/root-ro
+ETAT=/run/osmo-racine
+MARQUE="$ETAT/valide"
+APPLIQUER=/usr/local/sbin/osmo-valider-appliquer
+HOOK=/etc/initramfs-tools/hooks/osmo-boite
+SCRIPT=/etc/initramfs-tools/scripts/local-bottom/osmo-boite
+GRUB_BOITE=/etc/grub.d/43_osmo-boite
+# left by previous versions: removed by poser and retirer
+ANCIENS="/etc/osmo-racine-rw.hash /etc/grub.d/42_osmo-maintenance
+         /etc/initramfs-tools/conf.d/overlayroot
+         /etc/initramfs-tools/hooks/osmo-racine-rw
+         /etc/initramfs-tools/scripts/local-bottom/osmo-racine-rw
+         /etc/apt/apt.conf.d/99osmo-grub-esp"
+CONSOLE=/dev/console
+[ -c "$CONSOLE" ] || CONSOLE=/dev/tty1
 
-live() {
-    [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null
+CRYPTHOME_UUID=""; CRYPTHOME_TRIES=3; CRYPTHOME_TIMEOUT=60; CRYPTHOME_ROOT_LINKS=".local/share/keyrings"
+# shellcheck disable=SC1091
+[ -r /etc/default/crypthome ] && . /etc/default/crypthome
+TIMEOUT="${CRYPTHOME_TIMEOUT:-60}"
+
+# Never written to the disk: the RAM itself, and what overlayroot or a root
+# session rewrites on purpose (fstab of the overlay, root's keyring replaced
+# by a directory in RAM when /home is closed - unlock-home).
+EXCLUS="/tmp /var/tmp /etc/fstab"
+for _l in $CRYPTHOME_ROOT_LINKS; do EXCLUS="$EXCLUS /root/$_l"; done
+
+log()   { echo "osmo-racine-live : $*"; }
+rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
+vert()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
+
+live() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q "$BAS" 2>/dev/null; }
+root_requis() { [ "$(id -u)" = 0 ] || { log "root requis" >&2; exit 1; }; }
+
+# phrase_home_ok < passphrase : the /home LUKS2 volume accepts it
+phrase_home_ok() {
+    [ -n "$CRYPTHOME_UUID" ] && [ -e "/dev/disk/by-uuid/$CRYPTHOME_UUID" ] || return 1
+    cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$CRYPTHOME_UUID" 2>/dev/null
 }
 
-poser_initramfs() {
-    install -d "$(dirname "$HOOK")" "$(dirname "$SCRIPT")" "$(dirname "$CONF_INITRD")"
-    printf '# written by osmo-racine-live: / in RAM for root; %s lifts it\n# for the session account (right /home passphrase)\noverlayroot="%s"\n' \
-        "$SCRIPT" "$REGLAGE" > "$CONF_INITRD"
+exclu() {
+    local e
+    for e in $EXCLUS; do case "$1" in "$e"|"$e"/*) return 0 ;; esac; done
+    return 1
+}
+whiteout() { [ -c "$1" ] && [ "$(stat -c '%t:%T' "$1")" = 0:0 ]; }
+opaque() {
+    command -v getfattr >/dev/null 2>&1 || return 1
+    [ "$(getfattr --only-values -n trusted.overlay.opaque "$1" 2>/dev/null)" = y ]
+}
 
+# The RAM layers of this boot, one line each: UPPER LOWER PREFIX.
+#   /     overlayroot (initramfs)
+#   /home unlock-home: the LUKS2 volume read-only on /media/home-ro, a RAM
+#         layer over it on /home - /home goes through the validation too
+HOME_HAUT=/media/home-rw/overlay
+HOME_BAS=/media/home-ro
+couches() {
+    echo "$HAUT $BAS /"
+    mountpoint -q "$HOME_BAS" 2>/dev/null && [ -d "$HOME_HAUT" ] && echo "$HOME_HAUT $HOME_BAS /home"
+}
+plein() { [ "$1" = / ] && printf '%s' "$2" || printf '%s%s' "$1" "$2"; }
+
+# changements_couche UPPER PREFIX : the paths of one layer, minus the exclusions
+changements_couche() {
+    local h="$1" pre="$2" r p
+    [ -d "$h" ] || return 0
+    ( cd "$h" && find . -mindepth 1 -print0 2>/dev/null ) | while IFS= read -r -d '' r; do
+        p="${r#.}"
+        case "$p" in *$'\n'*) continue ;; esac
+        exclu "$(plein "$pre" "$p")" || printf '%s\n' "$(plein "$pre" "$p")"
+    done
+}
+changements() {
+    local h b pre
+    couches | while read -r h b pre; do changements_couche "$h" "$pre"; done
+}
+
+# ── at shutdown, on the text console ─────────────────────────────────────────
+console_texte() {
+    if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
+        plymouth quit 2>/dev/null || true
+    fi
+    command -v chvt >/dev/null 2>&1 && chvt 1 2>/dev/null
+    printf '\033[2J\033[H' > "$CONSOLE" 2>/dev/null
+}
+# the console's « forget everything » flash: reverse video, three times
+flash_console() {
+    local i
+    for i in 1 2 3; do
+        printf '\033[?5h' > "$CONSOLE" 2>/dev/null; sleep 0.15
+        printf '\033[?5l' > "$CONSOLE" 2>/dev/null; sleep 0.1
+    done
+}
+dire() { printf '%s\n' "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
+dire_rouge() { rouge "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
+dire_vert()  { vert "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
+
+lire_console() {   # lire_console VAR PROMPT : one * per key, timeout = Enter
+    local _v="$1" _c _s="" _rc
+    printf '%s' "$2" > "$CONSOLE"
+    while :; do
+        IFS= read -r -s -n1 -t "$TIMEOUT" _c < "$CONSOLE"; _rc=$?
+        [ "$_rc" -gt 128 ] && { _s=""; break; }
+        [ "$_rc" -ne 0 ] && break
+        [ -z "$_c" ] && break
+        if [ "$_c" = $'\x7f' ] || [ "$_c" = $'\b' ]; then
+            [ -n "$_s" ] && { _s="${_s%?}"; printf '\b \b' > "$CONSOLE"; }
+            continue
+        fi
+        _s+="$_c"; printf '*' > "$CONSOLE"
+    done
+    echo > "$CONSOLE"
+    printf -v "$_v" '%s' "$_s"
+}
+
+# ── the commit: stage, mark, apply ───────────────────────────────────────────
+# appliquer_couche UPPER LOWER PREFIX : one layer onto its own file system.
+# The journal lives on that file system, so the final moves are renames.
+appliquer_couche() {
+    local h="$1" b="$2" pre="$3" src libre besoin j="$2/.osmo-valider" r p
+    [ -d "$h" ] && [ -n "$(ls -A "$h" 2>/dev/null)" ] || return 0
+    src="$(findmnt -no SOURCE "$b")"
+    [ -n "$src" ] && blockdev --setrw "$src" 2>/dev/null
+    mount -o remount,rw "$b" || { log "remontage en ecriture de $b impossible"; return 1; }
+    rm -rf "$j"
+    besoin=$(( $(du -sk -x "$h" 2>/dev/null | cut -f1) + 102400 ))
+    libre=$(df -k --output=avail "$b" | tail -1 | tr -d ' ')
+    if [ "$libre" -lt "$besoin" ]; then
+        log "$pre : place insuffisante ($((besoin / 1024)) Mo requis, $((libre / 1024)) libres)"
+        mount -o remount,ro "$b"; return 1
+    fi
+    install -d -m 0700 "$j/files"
+    : > "$j/suppr"
+    # deletions: whiteouts, and opaque directories (replaced as a whole)
+    ( cd "$h" && find . -mindepth 1 \( -type c -o -type d \) -print0 ) | while IFS= read -r -d '' r; do
+        p="${r#.}"
+        case "$p" in *$'\n'*) continue ;; esac
+        exclu "$(plein "$pre" "$p")" && continue
+        if whiteout "$h$p" || { [ -d "$h$p" ] && opaque "$h$p"; }; then
+            printf '%s\n' "$p" >> "$j/suppr"
+        fi
+    done
+    # the staged copy: everything else, attributes, ACLs, xattrs and hard
+    # links kept - except overlayfs' own xattrs (opaque, origin, impure...):
+    # no overlay mark may reach the real disk
+    ( cd "$h" && find . -mindepth 1 -print0 ) | while IFS= read -r -d '' r; do
+        p="${r#.}"
+        case "$p" in *$'\n'*) continue ;; esac
+        exclu "$(plein "$pre" "$p")" && continue
+        whiteout "$h$p" && continue
+        printf '%s\0' "${p#/}"
+    done | rsync -aHAX --filter='-x trusted.overlay.*' --from0 --files-from=- "$h/" "$j/files/" \
+        || { log "$pre : copie incomplete - rien n est change"; rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1; }
+    sync
+    : > "$j/PRET"
+    sync
+    "$APPLIQUER" "$b"
+    local rc=$?
+    mount -o remount,ro "$b" 2>/dev/null
+    return $rc
+}
+
+# appliquer : every layer. Each one is atomic on its own file system; / is
+# written first, /home last.
+appliquer() {
+    local h b pre rc=0
+    while read -r h b pre; do
+        appliquer_couche "$h" "$b" "$pre" || rc=1
+    done < <(couches)
+    return $rc
+}
+
+# ── black box: initramfs (read it instead of booting, finish a commit) ──────
+poser_initramfs() {
+    install -d "$(dirname "$HOOK")" "$(dirname "$SCRIPT")"
     cat > "$HOOK" <<'HOOK'
 #!/bin/sh
-# osmo-racine-rw (initramfs hook) - written by osmo-racine-live: carries the
-# crypthome settings and cryptsetup (the /home question is asked here).
+# osmo-boite (initramfs hook) - written by osmo-racine-live: the commit
+# finisher, and what reads the black box instead of booting.
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in prereqs) prereqs; exit 0;; esac
 . /usr/share/initramfs-tools/hook-functions
-[ -f /etc/default/crypthome ] || exit 0
-copy_exec /sbin/cryptsetup /sbin
-mkdir -p "${DESTDIR}/etc/default"
-cp /etc/default/crypthome "${DESTDIR}/etc/default/crypthome"
-manual_add_modules dm_mod dm_crypt || true
-# the black box (osmo-diffs): its partition, so that the boot can show the
-# date of its last record
+[ -x /usr/local/sbin/osmo-valider-appliquer ] && copy_file script /usr/local/sbin/osmo-valider-appliquer /bin/osmo-valider-appliquer
 _b="$(findmnt -sno SOURCE /var/lib/osmo-diffs 2>/dev/null)"
 if [ -n "$_b" ]; then
     echo "BOITE_SRC=\"$_b\"" > "${DESTDIR}/conf/osmo-boite"
-    # to read it INSTEAD OF BOOTING (GRUB entry « consulter la boite noire »)
     [ -x /usr/bin/age ] && copy_exec /usr/bin/age /bin
     copy_exec /usr/bin/openssl /bin
 fi
+exit 0
 HOOK
     chmod 755 "$HOOK"
 
     cat > "$SCRIPT" <<'SCRIPT'
 #!/bin/sh
-# osmo-racine-rw (initramfs, local-bottom) - written by osmo-racine-live.
-# Runs once the root is mounted and BEFORE init-bottom/overlayroot covers it.
-# « decrypt /home -passphrase- or Enter », on the text console:
-#   right passphrase : the session account's boot - / written to the disk;
-#                      the passphrase waits in /run/crypthome.key (RAM);
-#   Enter / timeout / three refusals : root session, / in RAM
-#                      (/run/crypthome.skip).
-# unlock-home (systemd) then reads one of the two instead of asking again.
+# osmo-boite (initramfs, local-bottom) - written by osmo-racine-live. Runs
+# once the root is mounted, BEFORE overlayroot covers it:
+#   1. a session commit cut by a power loss is finished (or thrown away when
+#      it never reached its commit point) - osmo-valider-appliquer;
+#   2. GRUB entry « consulter la boite noire » (osmo.boite on the kernel
+#      line): the box is read with its own passphrase, then the machine
+#      restarts - nothing is booted.
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in prereqs) prereqs; exit 0;; esac
 
-C=/conf/conf.d/overlayroot
 CONSOLE=/dev/console
-CRYPTHOME_UUID=""; CRYPTHOME_TIMEOUT=60; CRYPTHOME_TRIES=3; CRYPTHOME_MOUNT=/home
-[ -f /etc/default/crypthome ] && . /etc/default/crypthome
-TIMEOUT="${CRYPTHOME_TIMEOUT:-60}"
+TIMEOUT=120
 
-console_texte() {   # questions go to the text console, like unlock-home
-    if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
-        plymouth quit 2>/dev/null || true
+if [ -d "${rootmnt}/.osmo-valider" ] && [ -x /bin/osmo-valider-appliquer ]; then
+    echo "osmo-valider : reprise d une validation interrompue..." > "$CONSOLE"
+    if mount -o remount,rw "${rootmnt}"; then
+        /bin/osmo-valider-appliquer "${rootmnt}" > "$CONSOLE" 2>&1
+        mount -o remount,ro "${rootmnt}"
     fi
-}
+fi
 
-lire() {   # lire PROMPT -> the answer on stdout, one * per key
+grep -qw 'osmo.boite' /proc/cmdline || exit 0
+
+lire() {
     s=""
     printf '%s' "$1" > "$CONSOLE"
     while :; do
         c=""
-        IFS= read -r -s -n1 -t "$TIMEOUT" c < "$CONSOLE" || { s=""; break; }   # timeout
-        [ -z "$c" ] && break                                                    # Enter
+        IFS= read -r -s -n1 -t "$TIMEOUT" c < "$CONSOLE" || { s=""; break; }
+        [ -z "$c" ] && break
         case "$c" in
             "$(printf '\177')"|"$(printf '\b')")
                 [ -n "$s" ] && { s="${s%?}"; printf '\b \b' > "$CONSOLE"; }
@@ -128,127 +296,65 @@ lire() {   # lire PROMPT -> the answer on stdout, one * per key
     printf '%s' "$s"
 }
 
-# ── THE BLACK BOX (osmo-diffs) ───────────────────────────────────────────────
-# Its partition (BOITE_SRC, from fstab, written by the hook), mounted READ-ONLY
-# on /run/osmo-boite only as long as needed. Record names carry number, date
-# and mode: NNNNNN_AAAA-MM-JJ_HHMMSS_mode.diff.age.
 B=/run/osmo-boite
-boite_monter() {
-    BOITE_SRC=""; [ -f /conf/osmo-boite ] && . /conf/osmo-boite
-    [ -n "$BOITE_SRC" ] || return 1
-    case "$BOITE_SRC" in
-        UUID=*) bd="/dev/disk/by-uuid/${BOITE_SRC#UUID=}" ;;
-        PARTUUID=*) bd="/dev/disk/by-partuuid/${BOITE_SRC#PARTUUID=}" ;;
-        *) bd="$BOITE_SRC" ;;
-    esac
-    i=0; while [ ! -e "$bd" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
-    [ -e "$bd" ] || { echo "boite noire : partition absente" > "$CONSOLE"; return 1; }
-    mkdir -p "$B"
-    mount -o ro "$bd" "$B" 2>/dev/null || { echo "boite noire : illisible" > "$CONSOLE"; rmdir "$B"; return 1; }
-}
-boite_demonter() { umount "$B" 2>/dev/null; rmdir "$B" 2>/dev/null; }
-
-boite_date() {   # one line: the date of the last record
-    boite_monter || return 0
-    d="$(ls -1 "$B/journal" 2>/dev/null | grep '\.diff\.age$' | sort | tail -1)"
-    boite_demonter
-    if [ -z "$d" ]; then
-        echo "boite noire : vide" > "$CONSOLE"
-    else
-        n="${d%%_*}"; r="${d#*_}"; j="${r%%_*}"; r="${r#*_}"; h="${r%%_*}"; m="${r#*_}"; m="${m%.diff.age}"
-        echo "boite noire : dernier enregistrement le $j a $(echo "$h" | cut -c1-2):$(echo "$h" | cut -c3-4) ($m, no $((10#$n)))" > "$CONSOLE"
+if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then plymouth quit 2>/dev/null; fi
+clear > "$CONSOLE" 2>/dev/null
+echo "=== osmo-operator : consultation de la boite noire (pas de demarrage) ===" > "$CONSOLE"
+BOITE_SRC=""; [ -f /conf/osmo-boite ] && . /conf/osmo-boite
+case "$BOITE_SRC" in
+    UUID=*) bd="/dev/disk/by-uuid/${BOITE_SRC#UUID=}" ;;
+    PARTUUID=*) bd="/dev/disk/by-partuuid/${BOITE_SRC#PARTUUID=}" ;;
+    *) bd="$BOITE_SRC" ;;
+esac
+i=0; while [ -n "$bd" ] && [ ! -e "$bd" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+if ! command -v age >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+    echo "age / openssl absents de l initramfs" > "$CONSOLE"
+elif [ -z "$bd" ] || [ ! -e "$bd" ] || ! { mkdir -p "$B" && mount -o ro "$bd" "$B"; }; then
+    echo "boite noire : partition absente ou illisible" > "$CONSOLE"
+elif [ ! -f "$B/cle.chiffree" ]; then
+    echo "la boite n a pas encore de phrase (sudo osmo-diffs phrase) : illisible ici" > "$CONSOLE"
+    umount "$B"
+else
+    essai=1; ok=0
+    while [ "$essai" -le 3 ]; do
+        pp="$(lire "phrase de la boite noire : ")"
+        [ -n "$pp" ] || break
+        ( umask 077
+          printf '%s' "$pp" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+              -in "$B/cle.chiffree" -pass stdin 2>/dev/null | tr -d '\000' \
+              | grep -a '^AGE-SECRET-KEY-' > /run/osmo-cle )
+        if [ -s /run/osmo-cle ]; then ok=1; break; fi
+        echo "phrase incorrecte" > "$CONSOLE"; essai=$((essai + 1))
+    done
+    pp=""
+    if [ "$ok" = 1 ]; then
+        echo "dechiffrement..." > "$CONSOLE"
+        prec=""
+        for f in $(ls -1 "$B/journal" | grep '\.diff\.age$' | sort); do
+            t="$(age -d -i /run/osmo-cle "$B/journal/$f" 2>/dev/null)" \
+                || { echo "=== $f : indechiffrable"; prec="$f"; continue; }
+            attendu="origine"
+            [ -n "$prec" ] && attendu="$(openssl dgst -sha256 -r "$B/journal/$prec" | cut -d' ' -f1) $prec"
+            vu="$(printf '%s\n' "$t" | sed -n '2s/^# precedent : //p')"
+            [ "$vu" = "$attendu" ] || echo "=== CHAINE ROMPUE avant $f"
+            printf '%s\n' "$t"
+            prec="$f"
+        done > /run/osmo-boite.txt
+        rm -f /run/osmo-cle
+        more /run/osmo-boite.txt < "$CONSOLE" > "$CONSOLE" 2>&1
+        rm -f /run/osmo-boite.txt
     fi
-}
-
-# INSTEAD OF BOOTING (GRUB entry « consulter la boite noire », osmo.boite on
-# the kernel line): the box passphrase, every record decrypted in RAM, the
-# chain checked, read with « more », then the machine restarts. Nothing is
-# mounted read-write, nothing is booted.
-boite_consulter() {
-    console_texte
-    clear > "$CONSOLE" 2>/dev/null
-    echo "=== osmo-operator : consultation de la boite noire (pas de demarrage) ===" > "$CONSOLE"
-    if ! command -v age >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
-        echo "age / openssl absents de l initramfs" > "$CONSOLE"
-    elif boite_monter; then
-        if [ ! -f "$B/cle.chiffree" ]; then
-            echo "la boite n a pas encore de phrase (sudo osmo-diffs phrase) : illisible ici" > "$CONSOLE"
-        else
-            essai=1; ok=0
-            while [ "$essai" -le 3 ]; do
-                pp="$(lire "phrase de la boite noire : ")"
-                [ -n "$pp" ] || break
-                ( umask 077
-                  printf '%s' "$pp" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -salt \
-                      -in "$B/cle.chiffree" -pass stdin 2>/dev/null | tr -d '\000' \
-                      | grep -a '^AGE-SECRET-KEY-' > /run/osmo-cle )
-                if [ -s /run/osmo-cle ]; then ok=1; break; fi
-                echo "phrase incorrecte" > "$CONSOLE"; essai=$((essai + 1))
-            done
-            pp=""
-            if [ "$ok" = 1 ]; then
-                echo "dechiffrement..." > "$CONSOLE"
-                prec=""
-                for f in $(ls -1 "$B/journal" | grep '\.diff\.age$' | sort); do
-                    t="$(age -d -i /run/osmo-cle "$B/journal/$f" 2>/dev/null)" \
-                        || { echo "=== $f : indechiffrable"; prec="$f"; continue; }
-                    attendu="origine"
-                    [ -n "$prec" ] && attendu="$(openssl dgst -sha256 -r "$B/journal/$prec" | cut -d' ' -f1) $prec"
-                    vu="$(printf '%s\n' "$t" | sed -n '2s/^# precedent : //p')"
-                    [ "$vu" = "$attendu" ] || echo "=== CHAINE ROMPUE avant $f"
-                    printf '%s\n' "$t"
-                    prec="$f"
-                done > /run/osmo-boite.txt
-                rm -f /run/osmo-cle
-                more /run/osmo-boite.txt < "$CONSOLE" > "$CONSOLE" 2>&1
-                rm -f /run/osmo-boite.txt
-            fi
-            rm -f /run/osmo-cle
-        fi
-        boite_demonter
-    fi
-    lire "Entree pour redemarrer : " > /dev/null
-    reboot -f
-}
-
-grep -qw 'osmo.boite' /proc/cmdline && boite_consulter
-
-grep -q '^overlayroot="tmpfs' "$C" 2>/dev/null || exit 0
-[ -n "$CRYPTHOME_UUID" ] && command -v cryptsetup >/dev/null 2>&1 || exit 0
-dev="/dev/disk/by-uuid/$CRYPTHOME_UUID"
-i=0; while [ ! -e "$dev" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
-[ -e "$dev" ] || exit 0          # no encrypted disk: root, live; unlock-home says why
-
-console_texte
-boite_date
-
-essai=1
-while [ "$essai" -le "${CRYPTHOME_TRIES:-3}" ]; do
-    inv="decrypt $CRYPTHOME_MOUNT -passphrase- or Enter"
-    [ "$essai" -gt 1 ] && inv="$inv ($essai/${CRYPTHOME_TRIES:-3})"
-    p="$(lire "$inv : ")"
-    [ -n "$p" ] || break
-    if printf '%s' "$p" | cryptsetup open --test-passphrase --key-file=- "$dev" 2>/dev/null; then
-        ( umask 077; printf '%s' "$p" > /run/crypthome.key )
-        p=""
-        # the session account writes everywhere: / on the disk
-        echo 'overlayroot="disabled"' > "$C"
-        exit 0
-    fi
-    echo "phrase de passe refusee" > "$CONSOLE"
-    essai=$((essai + 1))
-done
-p=""
-: > /run/crypthome.skip
-echo "osmo-racine-rw : session root, / en lecture seule (RAM)" > "$CONSOLE"
-exit 0
+    rm -f /run/osmo-cle
+    umount "$B"
+fi
+lire "Entree pour redemarrer : " > /dev/null
+reboot -f
 SCRIPT
     chmod 755 "$SCRIPT"
 }
 
 # GRUB entry « consulter la boite noire » : the same kernel and initramfs with
 # osmo.boite - the initramfs reads the box and restarts, nothing is booted.
-GRUB_BOITE=/etc/grub.d/43_osmo-boite
 poser_grub_boite() {
     findmnt -sno SOURCE /var/lib/osmo-diffs >/dev/null 2>&1 || { rm -f "$GRUB_BOITE"; return 0; }
     cat > "$GRUB_BOITE" <<'GRUB'
@@ -279,62 +385,203 @@ GRUB
 }
 
 actualiser() {
-    update-initramfs -u >/dev/null 2>&1 || echo "osmo-racine-live : update-initramfs a echoue" >&2
-    update-grub >/dev/null 2>&1 || echo "osmo-racine-live : update-grub a echoue" >&2
+    update-initramfs -u -k all >/dev/null 2>&1 || log "update-initramfs a echoue" >&2
+    update-grub >/dev/null 2>&1 || log "update-grub a echoue" >&2
 }
 
 case "${1:-etat}" in
     poser)
-        [ "$(id -u)" = 0 ] || { echo "osmo-racine-live : root requis" >&2; exit 1; }
+        root_requis
         command -v overlayroot-chroot >/dev/null 2>&1 \
-            || { echo "osmo-racine-live : paquet overlayroot absent - rien de pose" >&2; exit 1; }
-        # Without an encrypted /home there is no session account to write: a
-        # root-only, always-live disk could never be updated. Left as it is.
-        _uuid="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
-        if [ -z "$_uuid" ]; then
-            echo "osmo-racine-live : pas de /home chiffre - / reste persistant (rien de pose)" >&2
+            || { log "paquet overlayroot absent - rien de pose" >&2; exit 1; }
+        # Without the encrypted /home there is no passphrase to validate with:
+        # every session would be wiped for ever. Left read-write, and said.
+        if [ -z "$CRYPTHOME_UUID" ]; then
+            rouge "osmo-racine-live : pas de /home chiffre (LUKS2) - / reste en lecture-ecriture, rien de pose" >&2
             exit 0
         fi
-        cat > "$CONF" <<'EOF'
+        cat > "$CONF" <<EOF
 # /etc/overlayroot.conf - written by osmo-racine-live.
-# The setting is in the INITRAMFS config, /etc/initramfs-tools/conf.d/overlayroot
-# (/ read-only for root, writes in RAM; recurse=0: the other mounts stay as
-# they are): a value here would override it, and the session account's
-# passphrase could no longer lift it.
-overlayroot_cfgdisk="disabled"
+# / read-only, every write of a session in RAM (recurse=0: the other mounts
+# are not covered here; /home gets its own RAM layer from unlock-home, /boot/efi
+# and the black box are written directly). The session is written to the disk
+# at shutdown only with the /home passphrase (osmo-fin-session.service).
+overlayroot="$REGLAGE"
 EOF
         # shellcheck disable=SC2086
         rm -f $ANCIENS
         poser_initramfs
         poser_grub_boite
+        systemctl enable osmo-fin-session.service >/dev/null 2>&1 \
+            || log "osmo-fin-session.service non active" >&2
         actualiser
-        echo "osmo-racine-live : root en lecture seule (RAM) ; le compte de session ecrit partout"
+        log "/ en lecture seule (RAM) ; a l extinction, la phrase de /home ecrit la session, sinon tout est efface"
         ;;
     etat)
         if live; then
-            echo "live : / en RAM, perdu au redemarrage (session root)"
+            echo "live : / en RAM ($(changements | wc -l) changement(s) dans la session)"
+            if [ -f "$MARQUE" ]; then vert "session validee : elle sera ecrite sur le disque a l extinction"
+            else rouge "session NON validee : tout sera efface a l extinction (osmo-racine-live valider)"; fi
         else
-            echo "persistant : / ecrit sur le disque"
+            echo "persistant : / ecrit directement sur le disque"
         fi
-        if mountpoint -q /home 2>/dev/null; then
-            echo "/home : $(findmnt -no SOURCE /home) (en ecriture, persistant)"
+        if mountpoint -q "$HOME_BAS" 2>/dev/null; then
+            echo "/home : $(findmnt -no SOURCE "$HOME_BAS") en lecture seule, ecritures en RAM (validees avec le reste)"
+        elif mountpoint -q /home 2>/dev/null; then
+            echo "/home : $(findmnt -no SOURCE /home) (ecrit directement)"
         else
-            echo "/home : non monte (disque chiffre ferme)"
+            echo "/home : non monte (volume chiffre ferme)"
         fi
         ;;
-    retirer)
-        if live; then
-            echo "osmo-racine-live : session root en lecture seule - a faire depuis le compte de session" >&2
+    changements)
+        live || { log "/ n est pas en RAM"; exit 0; }
+        changements
+        ;;
+    valider|ecrire)
+        # valider : the session will be written at shutdown.
+        # ecrire  : written NOW (and the session goes on): a power cut or a
+        #           forgotten passphrase then only loses what came after.
+        #           Same passphrase, same atomic write, recorded in the box
+        #           (« ecrit »). The RAM layer stays as it is: what was written
+        #           is only hidden behind identical copies, and is written
+        #           again (unchanged) if the session is validated later.
+        root_requis
+        live || { log "/ n est pas en RAM : rien a valider"; exit 0; }
+        [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : validation impossible" >&2; exit 1; }
+        if [ "${2:-}" = --stdin ]; then
+            IFS= read -r p || p=""
+        else
+            read -r -s -p "phrase de /home : " p < /dev/tty; echo
+        fi
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+            p=""
+            rouge "phrase de /home refusee : rien n est ecrit, la session sera EFFACEE a l extinction"
             exit 1
         fi
-        sed -i 's/^overlayroot=.*/overlayroot=""/' "$CONF" 2>/dev/null
+        p=""
+        if [ "$1" = valider ]; then
+            install -d -m 0700 "$ETAT"
+            rm -f "$ETAT/oublier"
+            date '+%F %T' > "$MARQUE"; chmod 600 "$MARQUE"
+            vert "session validee : elle sera ecrite sur le disque a l extinction"
+        else
+            n="$(changements | wc -l)"
+            [ "$n" -gt 0 ] || { log "aucun changement a ecrire"; exit 0; }
+            [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer ecrit
+            if appliquer; then
+                vert "session ecrite sur le disque ($n changement(s)) ; la suite sera validee ou effacee a l extinction"
+            else
+                rouge "ECHEC de l ecriture : le disque garde son etat precedent"
+                exit 1
+            fi
+        fi
+        ;;
+    annuler)
+        root_requis
+        rm -f "$MARQUE"
+        rouge "validation retiree : la session sera EFFACEE a l extinction"
+        ;;
+    oublier)
+        # « Tout oublier ? » Yes (osmo-valider-session --fin): the session is
+        # wiped, chosen - at shutdown no question and no banner, a white screen
+        root_requis
+        rm -f "$MARQUE"
+        install -d -m 0700 "$ETAT"
+        date '+%F %T' > "$ETAT/oublier"
+        ;;
+    fin)
+        # osmo-fin-session.service, ExecStop: the display manager is already
+        # stopped, /home and the black box are still mounted.
+        live || exit 0
+        n="$(changements | wc -l)"
+        decision=efface
+        if [ -f "$ETAT/oublier" ]; then
+            decision=oublie
+        elif [ -f "$MARQUE" ]; then
+            decision=valide
+        elif [ "$n" -gt 0 ] && [ -n "$CRYPTHOME_UUID" ] \
+                && [ -e "/dev/disk/by-uuid/$CRYPTHOME_UUID" ] && command -v cryptsetup >/dev/null 2>&1; then
+            console_texte
+            dire "osmo-operator : fin de session - $n changement(s) en RAM"
+            dire_rouge "!!! Sans la phrase de /home, TOUS les changements de la session seront EFFACES !!!"
+            # « Tout oublier ? » yes: flash, white screen, wiped;
+            # no: the passphrase is required (right: cmatrix « REC » while
+            # the session is written); nothing / timeout: wiped, red banner
+            printf 'Tout oublier ? (yes/no) : ' > "$CONSOLE"
+            r=""; IFS= read -r -t "$TIMEOUT" r < "$CONSOLE" || r=""
+            case "$r" in
+                n|N|non|Non|NON|no|No|NO)
+                    essai=1
+                    while [ "$essai" -le "${CRYPTHOME_TRIES:-3}" ]; do
+                        inv="phrase de /home (Entree : tout effacer)"
+                        [ "$essai" -gt 1 ] && inv="$inv ($essai/${CRYPTHOME_TRIES:-3})"
+                        lire_console p "$inv : "
+                        [ -n "$p" ] || break
+                        if printf '%s' "$p" | phrase_home_ok; then decision=valide; break; fi
+                        dire_rouge "phrase refusee"
+                        essai=$((essai + 1))
+                    done
+                    p=""
+                    ;;
+                y|Y|yes|Yes|YES|o|O|oui|Oui|OUI)
+                    flash_console; decision=oublie ;;
+            esac
+        fi
+        # the black box first: it reads the RAM layer against the disk (a
+        # session forgotten on purpose is recorded as « efface » too)
+        _b="$decision"; [ "$_b" = oublie ] && _b=efface
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer "$_b"
+        if [ "$decision" = oublie ]; then
+            # white screen (reverse video on a cleared console), no banner:
+            # the machine goes off on it
+            console_texte
+            printf '\033[?5h\033[2J' > "$CONSOLE" 2>/dev/null
+            sleep 2
+        elif [ "$decision" = valide ] && [ "$n" -gt 0 ]; then
+            console_texte
+            dire "osmo-operator : ecriture de la session sur le disque ($n changement(s))..."
+            # cmatrix « REC » on the console while the session is written
+            mpid=""
+            if command -v cmatrix >/dev/null 2>&1; then
+                TERM=linux cmatrix -b -u 4 -M REC < "$CONSOLE" > "$CONSOLE" 2>/dev/null &
+                mpid=$!
+            fi
+            appliquer; rc=$?
+            if [ -n "$mpid" ]; then sleep 2; kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; fi
+            printf '\033[0m\033[2J\033[H' > "$CONSOLE" 2>/dev/null
+            if [ "$rc" = 0 ]; then
+                dire_vert "REC : session ecrite sur le disque"
+            else
+                dire_rouge "!!! ECHEC de l ecriture : le disque garde son etat precedent, la session est PERDUE !!!"
+                sleep 10
+            fi
+        elif [ "$decision" = efface ]; then
+            # always shown, even with nothing lost: forced on tty1, plymouth
+            # quit, held 10 s
+            console_texte
+            dire_rouge "############################################################"
+            dire_rouge "  PHRASE DE /home NON DONNEE : SESSION EFFACEE"
+            dire_rouge "  $n changement(s) perdus (/, /root, /opt/GSM, /home)"
+            dire_rouge "############################################################"
+            sleep 10
+        fi
+        rm -f "$MARQUE" "$ETAT/oublier"
+        ;;
+    retirer)
+        root_requis
+        if live; then
+            log "a faire sur le disque lui-meme : sudo overlayroot-chroot osmo-racine-live retirer" >&2
+            exit 1
+        fi
+        printf '# /etc/overlayroot.conf - osmo-racine-live retire : / en lecture-ecriture\noverlayroot=""\n' > "$CONF"
+        systemctl disable osmo-fin-session.service >/dev/null 2>&1
         # shellcheck disable=SC2086
-        rm -f "$CONF_INITRD" "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
+        rm -f "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
         actualiser
-        echo "osmo-racine-live : / persistant pour tous a partir du prochain demarrage"
+        log "/ persistant pour tous a partir du prochain demarrage"
         ;;
     *)
-        echo "usage : osmo-racine-live poser | etat | retirer" >&2
+        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | ecrire [--stdin] | annuler | oublier | fin | retirer" >&2
         exit 2
         ;;
 esac

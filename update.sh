@@ -559,9 +559,9 @@ osmo_poser_invite
 
 # ── Live root (osmo-racine-live): this update evaporates at reboot ───────────
 if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; then
-    echo "  ATTENTION : / est en RAM (osmo-racine-live) - cette mise a jour sera perdue au redemarrage."
-    echo "  Pour la garder : « osmo-racine-live persistant bash /opt/GSM/osmo-operator/update.sh »,"
-    echo "  ou redemarrer sur l'entree GRUB « osmo-operator - maintenance (racine persistante) »."
+    printf '\033[1;31m%s\033[0m\n' "  ATTENTION : / est en RAM (osmo-racine-live) - cette mise a jour sera EFFACEE a l'extinction sans la phrase de /home."
+    echo "  Pour la garder : « sudo osmo-racine-live ecrire » (tout de suite) ou « osmo-valider-session »"
+    echo "  (a l'extinction) - la phrase de /home dans les deux cas."
 fi
 
 # ── INTERACTIVE DESKTOP: CATCH-UP OF THE osmo-desktop-panel WRAPPER ──────────

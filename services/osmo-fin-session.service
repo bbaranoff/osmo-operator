@@ -1,0 +1,29 @@
+[Unit]
+Description=osmo-operator - fin de session : la phrase de /home ecrit la session, sinon tout est efface
+Documentation=file:/usr/local/sbin/osmo-racine-live
+# Only on an installed bench whose / is in RAM (overlayroot).
+ConditionPathIsMountPoint=/media/root-ro
+# At SHUTDOWN (ExecStop). Stop order is the reverse of start order: this unit
+# starts AFTER the mounts it needs, so it stops BEFORE them - /home and its
+# read-only volume, the black box, the network for its remote copy - and it
+# starts BEFORE the display manager, so it stops once GDM has released the
+# console: the question and the red warning are on the text console.
+After=local-fs.target unlock-home.service home.mount media-home\x2dro.mount var-lib-osmo\x2ddiffs.mount network-online.target
+Wants=network-online.target
+Before=display-manager.service systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/osmo-racine-live fin
+# the question and the red warning go to /dev/console from the script itself
+# (plymouth quit, chvt 1); the journal keeps a copy of every line
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+# the passphrase question (60 s x 3) and the copy of the session to the disk
+TimeoutStopSec=1800
+
+[Install]
+WantedBy=multi-user.target

@@ -38,43 +38,35 @@ repository, `.git` included, is in `/opt/GSM/osmo-operator`.
 | Non-IP transport | raw GSM-HR voice over LoRa (RNode), WAN between machines |
 | GTK interfaces | Constellation, ms-pont, osmo-iso, beacon, terminal-free launchers |
 | Tests | `check_all.sh`, TTCN-3 (Eclipse TITAN), pytest |
-| Installed system | **two systems on the disk** (root live, nirvana encrypted), **TPM porte**, **black box**, several users |
+| Installed system | `/` read-only (sessions in RAM, kept with the `/home` passphrase), `/home` LUKS2, **black box** |
 | Delivery | amd64 ISO, arm64 SD (rpi4, opi5), Docker, native install |
 
 ### New in 0.2: the installed machine
 
-Installing (Calamares, « Encrypt system » ticked) puts **two systems** on the disk:
+Installing (Calamares, « Encrypt system » ticked; sizes and LVM through manual partitioning) gives a simple disk:
 
-| Partition | Encrypted | Holds |
+| Volume | Encrypted | Holds |
 |---|---|---|
-| EFI | no | the first GRUB menu (`osmo-grub-esp`) |
-| `osmo-racine` (16 GiB) | no | **root's system**: the ISO image, booted live (RAM) - everything gone at reboot |
+| EFI | no | Ubuntu's GRUB, Secure Boot (shim + grub signed) |
+| `/` | no | the system - **read-only**: every session runs in RAM |
 | `osmo-diffs` (5 GiB) | no (each record is) | the **black box** |
-| `/` (the rest) | LUKS1 | **nirvana's system**: `/`, `/boot`, `/home`, read-write |
+| `/home` | LUKS2 | nirvana's home |
 
-- **Root** changes only its own system: editing the GRUB line or its partition never touches what nirvana boots.
-  Root has no network identity of nirvana's, and in root sessions SSH refuses passwords.
-- **The porte** (when the BIOS has an active TPM 2.0 - fTPM / PTT; installer page « Demarrage »): GRUB asks
-  nothing; a small initramfs shows a **6-digit TOTP code computed by the TPM**, which it only computes if firmware,
-  shim, GRUB, its menu, the kernel and the porte are exactly those of the sealing. Compare it with your phone (any
-  TOTP app doing SHA-256), then type the passphrase: the porte opens the volume and kexecs nirvana's kernel, which is
-  inside it. Esc, Enter or 60 s: root, read-only. The key never leaves the TPM and is locked at the decision.
-  Setting up after the first boot: `sudo osmo-porte sceller`, then `sudo osmo-porte qr`. Phone lost:
-  `sudo osmo-porte nouvelle-cle`. Without a TPM, GRUB asks the passphrase itself (a replaced GRUB is then not
-  detected).
-- **The black box** (`osmo-diffs`): one record per boot of the TEXT changes of the system (root sessions
-  included), written at shutdown, encrypted with `age` for a public key - the machine fills it without being able
-  to read it; only its own passphrase does (`sudo osmo-diffs phrase`, `osmo-diffs voir`, or the GRUB entry
-  « consulter la boite noire » instead of booting). Records are chained; a truncated end is caught at the next
-  nirvana boot; `sudo osmo-diffs copie-poser user@host` sends each record to another machine that only accepts
-  additions.
-- **Several people**: `sudo osmo-utilisateur ajouter NOM` - a LUKS passphrase of their own, an account without
-  sudo, a `/home/NOM` encrypted with fscrypt under their login password.
-- **SSH**: no host key in the image any more - each machine, and each system, gets its own.
+- **Two passphrases**: the `/home` one opens `/home` at boot and **validates the session** at shutdown; the black
+  box has its own, different one, only to read it back.
+- **Every session runs in RAM** - `/`, `/root`, `/opt/GSM` and `/home`. At shutdown the `/home` passphrase writes
+  it to the disk **atomically** (staged copy, commit mark, then renames; a cut is finished at the next boot).
+  Without it everything is wiped and a **red warning** stays on the console. `osmo-valider-session --maintenant`
+  writes the session so far at any time, with the same passphrase.
+- **The black box** (`osmo-diffs`): one record per session, validated or wiped, encrypted with `age` for a public
+  key - the machine fills it without being able to read it; only its own passphrase does (`sudo osmo-diffs
+  phrase`, `osmo-diffs voir`, or the GRUB entry « consulter la boite noire » instead of booting). Records are
+  chained; `sudo osmo-diffs copie-poser user@host` sends each record to another machine that only accepts additions.
+- **SSH**: no host key in the image any more - each machine gets its own.
 
-What this protects, what it does not, and the procedures (updates, TPM failure, lost phone):
+What this protects, what it does not, and the procedures:
 [wiki/ISO.md, 6.7](https://github.com/bbaranoff/osmo-operator/blob/main/wiki/ISO.md). **Not yet validated on real
-hardware**: test it in a VM first with `tools/osmo-vm-porte.sh` (QEMU, Secure Boot, software TPM).
+hardware**: test it in a VM first.
 
 ### Also new in 0.2
 
@@ -197,7 +189,7 @@ https://github.com/bbaranoff/osmo-operator/releases/download/debs-banc
 
 ### Known limits
 
-- The two-system install, the TPM porte and the black box are new and **not yet validated on real hardware**.
+- The read-only installed system (sessions in RAM, written at shutdown with the `/home` passphrase) and the black box are new and **not yet validated on real hardware**.
 - Magnetite: calls need A5/0. `--bts --ts 2`: camps and registers, no call yet; `--ts 2/1` calls.
 - The ROM vocoder costs real time on slow hosts: use `--gapk`. Do not compile while a bench runs.
 

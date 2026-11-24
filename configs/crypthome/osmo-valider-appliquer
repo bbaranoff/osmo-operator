@@ -1,0 +1,67 @@
+#!/bin/sh
+# osmo-valider-appliquer RACINE - finish a validated session commit on the
+# system disk mounted read-write at RACINE. POSIX sh: the same file runs at
+# shutdown (osmo-racine-live fin) and from the initramfs (local-bottom
+# osmo-boite, BEFORE overlayroot covers the root) to finish a commit that a
+# power cut interrupted.
+#
+# THE JOURNAL, on the system disk itself (same file system, so every move is
+# a rename):
+#   RACINE/.osmo-valider/files/   the session's changes, staged (copy of the
+#                                 RAM layer, made by osmo-racine-live)
+#   RACINE/.osmo-valider/suppr    paths to delete (whiteouts, opaque dirs),
+#                                 one per line
+#   RACINE/.osmo-valider/PRET     the commit point: written, then synced,
+#                                 only once files/ and suppr are complete
+#
+# Without PRET the staging is incomplete: it is thrown away and the disk keeps
+# its previous state. With PRET the commit is applied; every step is
+# idempotent (deleting what is gone, moving what is still staged), so an
+# interrupted run is simply run again at the next boot. The disk is never
+# left with half a session: either the previous state, or the whole session.
+set -u
+R="${1:?usage : osmo-valider-appliquer RACINE}"
+R="${R%/}"
+J="$R/.osmo-valider"
+[ -d "$J" ] || exit 0
+
+if [ ! -f "$J/PRET" ]; then
+    rm -rf "$J"
+    sync
+    echo "osmo-valider : depot incomplet jete, le disque garde son etat precedent"
+    exit 0
+fi
+
+# 1. deletions (whiteouts, directories made opaque by the session)
+if [ -f "$J/suppr" ]; then
+    while IFS= read -r p; do
+        case "$p" in /*) ;; *) continue ;; esac
+        [ "$p" = / ] && continue
+        rm -rf "$R$p"
+    done < "$J/suppr"
+fi
+
+# 2. everything that is not a directory: one rename each
+if [ -d "$J/files" ]; then
+    ( cd "$J/files" && find . ! -type d ) | while IFS= read -r f; do
+        p="${f#.}"
+        d="$(dirname "$R$p")"
+        [ -d "$d" ] && [ ! -L "$d" ] || { rm -rf "$d"; mkdir -p "$d"; }
+        if [ -d "$R$p" ] && [ ! -L "$R$p" ]; then rm -rf "$R$p"; fi
+        mv -f "$J/files$p" "$R$p"
+    done
+    # 3. directories: created if new, mode and owner of the session's copy
+    ( cd "$J/files" && find . -mindepth 1 -type d ) | while IFS= read -r f; do
+        p="${f#.}"
+        [ -e "$R$p" ] && [ ! -d "$R$p" ] && rm -f "$R$p"
+        mkdir -p "$R$p"
+        chown "$(stat -c %u:%g "$J/files$p")" "$R$p" 2>/dev/null
+        chmod "$(stat -c %a "$J/files$p")" "$R$p" 2>/dev/null
+    done
+fi
+
+sync
+rm -rf "$J"
+sync
+echo "osmo-valider : changements de la session ecrits sur le disque"
+exit 0

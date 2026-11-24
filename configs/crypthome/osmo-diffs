@@ -1,10 +1,11 @@
 #!/bin/bash
-# osmo-diffs - the BLACK BOX: every text change made to the system, one record
-# per boot, written by itself at shutdown, readable only with its own
-# passphrase. Partition of 5 GiB, /var/lib/osmo-diffs (partition.conf).
+# osmo-diffs - the BLACK BOX: every change made to the system, one record per
+# session, written at shutdown, encrypted with age (public key in clear on the
+# box, private key under the box's OWN passphrase). Partition of 5 GiB,
+# /var/lib/osmo-diffs (partition.conf).
 #
 #   osmo-diffs init          keys + reference (Calamares, shellprocess-osmo.conf)
-#   osmo-diffs enregistrer   record this boot (osmo-diffs.service, at shutdown)
+#   osmo-diffs enregistrer [valide|efface|ecrit]  record this session (osmo-racine-live fin)
 #   osmo-diffs phrase        set / change the box passphrase (session account,
 #                            sudo, in a terminal)
 #   osmo-diffs liste         the records (names, sizes): no passphrase
@@ -21,20 +22,28 @@
 # session account's encrypted /home (/home/.osmo-diffs/cle), readable by
 # nobody else.
 #
-# WHAT: the text files (grep -I: no binary; at most 1 MiB) under
-# OSMO_DIFFS_DIRS (default /etc /root /opt /usr/local /var/spool/cron), minus
-# .git, node_modules, caches. Never /home.
+# WHAT: every change of the session under OSMO_DIFFS_DIRS (default: all of
+# /, minus OSMO_DIFFS_EXCLUS: /tmp /var/tmp /var/cache /var/log/journal),
+# .git, node_modules and caches pruned: text files as unified diffs (at most
+# 1 MiB), binaries and big files as one line each. /home is NOT recorded by
+# default (its diffs would be readable with the box passphrase): add it to
+# OSMO_DIFFS_DIRS in /etc/default/osmo-diffs to change that.
 #
-# WHICH BOOTS:
-#   session account (/home decrypted, / written to the disk): files changed
-#       since the last record (find -newer), plus the ones gone, against the
-#       reference copy kept in the encrypted /home (/home/.osmo-diffs/miroir);
-#   root (always live, its own system on the osmo-racine partition): what the
-#       session wrote - the RAM layer (live-boot: /run/live/overlay/rw) against
-#       the image under it. Lost from the system at shutdown, kept in the box.
+# WHICH SESSIONS: EVERY one. On an installed bench / is always in RAM
+# (osmo-racine-live): at shutdown « osmo-racine-live fin » runs
+# « osmo-diffs enregistrer valide|efface » BEFORE writing or dropping the
+# session - the RAM layer against the disk under it. A wiped session is
+# recorded all the same. Without the RAM root (osmo-racine-live not set), the
+# files changed since the last record are diffed against a reference copy
+# kept in the encrypted /home (/home/.osmo-diffs/miroir).
 #
-# dernier.txt (in clear): the date of the last record, shown by the first GRUB
-# menu. « consulter »: the box read on tty1 instead of booting.
+# TWO DIFFERENT PASSPHRASES: the /home one opens /home and validates a
+# session; the box's own (« osmo-diffs phrase », refused if it is the /home
+# one) only reads the box back. It is never asked at shutdown: the machine
+# writes with the public key. The partition is in clear, the records are not:
+# only their names (number, date, valide/efface) and sizes can be read.
+# « consulter » at boot: the GRUB entry « consulter la boite noire »
+# (osmo-racine-live, initramfs).
 #
 # THE CHAIN: each record starts with the SHA-256 of the previous record file:
 # « voir » reports a record removed or changed in the middle. A TRUNCATED end
@@ -52,10 +61,15 @@ PUB="$BASE/cle.pub"
 CLE_CHIFFREE="$BASE/cle.chiffree"
 CLE_CLAIRE="$PRIVE/cle"
 [ -f /etc/default/osmo-diffs ] && . /etc/default/osmo-diffs
-DIRS="${OSMO_DIFFS_DIRS:-/etc /root /opt /usr/local /var/spool/cron}"
+# RAM root: the whole session (the RAM layer is small, the disk is not read).
+DIRS="${OSMO_DIFFS_DIRS:-/}"
+EXCLUS="${OSMO_DIFFS_EXCLUS:-/tmp /var/tmp /var/cache /var/log/journal /home}"
+# Without the RAM root, a reference copy is needed: kept to these (copying
+# every text file of / into /home would take gigabytes).
+DIRS_MIROIR="${OSMO_DIFFS_DIRS:-/etc /root /opt /usr/local /var/spool/cron}"
 MAX="${OSMO_DIFFS_MAX:-1024k}"
-# the RAM layer and the disk under it: live-boot (root's system, osmo-racine
-# partition) or overlayroot
+# the RAM layer and the disk under it: live-boot (the live key)
+# or the installed bench (overlayroot)
 if [ -d /run/live/overlay/rw ]; then
     HAUT="${OSMO_DIFFS_HAUT:-/run/live/overlay/rw}"; BAS="${OSMO_DIFFS_BAS:-/run/live/rootfs/filesystem.squashfs}"
 else
@@ -70,11 +84,12 @@ live() {
     [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ]
 }
 
-# nirvana's boot: / (encrypted system) or /home on dm-crypt
+# the encrypted /home is open: on dm-crypt, directly or under the RAM overlay
+# of an installed bench (volume read-only on /media/home-ro)
 home_chiffre_ouvert() {
     [ "$TEST" = 1 ] && { [ -d "$PRIVE" ]; return; }
     local m src
-    for m in / /home; do
+    for m in /home /media/home-ro; do
         mountpoint -q "$m" 2>/dev/null || continue
         src="$(findmnt -fno SOURCE "$m" 2>/dev/null)"
         case "$(readlink -f "$src")" in /dev/dm-*|/dev/mapper/*) return 0 ;; esac
@@ -95,7 +110,12 @@ trouver() {   # trouver DIR...: candidate files, null-separated, pruned
 
 dans_dirs() {
     local d
-    for d in $DIRS; do case "$1" in "$d"/*) return 0 ;; esac; done
+    for d in $EXCLUS; do case "$1" in "$d"|"$d"/*) return 1 ;; esac; done
+    case "$1" in */.git/*|*/node_modules/*|*/__pycache__/*|*/.cache/*) return 1 ;; esac
+    for d in $DIRS; do
+        [ "$d" = / ] && return 0
+        case "$1" in "$d"/*) return 0 ;; esac
+    done
     return 1
 }
 
@@ -118,10 +138,18 @@ trace_miroir() {
 # trace_overlay FILE: what the live session changed, against the disk
 trace_overlay() {
     local f="$1" b="$BAS$1"
-    if [ -c "$HAUT$1" ]; then                       # whiteout: deleted
-        est_texte "$b" && diff -uN --label "a$f" --label "b$f" "$b" /dev/null
+    if [ -c "$HAUT$1" ] && [ "$(stat -c '%t:%T' "$HAUT$1")" = 0:0 ]; then   # whiteout: deleted
+        if est_texte "$b"; then diff -uN --label "a$f" --label "b$f" "$b" /dev/null
+        elif [ -e "$b" ] || [ -L "$b" ]; then printf '=== %s : supprime\n' "$f"; fi
+    elif [ -L "$f" ]; then
+        [ "$(readlink "$b" 2>/dev/null)" = "$(readlink "$f")" ] \
+            || printf '=== %s : lien -> %s\n' "$f" "$(readlink "$f")"
     elif est_texte "$f"; then
         cmp -s "$b" "$f" 2>/dev/null || diff -uN --label "a$f" --label "b$f" "$b" "$f"
+    elif [ -f "$f" ]; then
+        cmp -s "$b" "$f" 2>/dev/null \
+            || printf '=== %s : binaire ou > %s (%s octets, sha256 %s)\n' "$f" "$MAX" \
+                   "$(stat -c %s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"
     fi
 }
 
@@ -137,9 +165,7 @@ sceller() {
     { printf '# osmo-diffs %s : %s, demarrage du %s, enregistre le %s\n# precedent : %s\n' \
           "$n" "$mode" "$(uptime -s 2>/dev/null)" "$(date '+%F %T')" "$h"
       cat; } | age -r "$(cat "$PUB")" -o "$nom" || return 1
-    # in clear, for the first GRUB menu (osmo-grub-esp): the date only
-    printf 'boite noire : dernier enregistrement le %s (%s, no %s)\n' "$(date '+%F a %H:%M')" "$mode" "$n" \
-        > "$BASE/dernier.txt"
+    rm -f "$BASE/dernier.txt"     # left by an older version: nothing in clear
     echo "$nom"
 }
 
@@ -200,10 +226,10 @@ case "${1:-liste}" in
             age-keygen -y "$CLE_CLAIRE" > "$PUB"
         fi
         if [ -z "$(ls -A "$MIROIR" 2>/dev/null)" ]; then
-            log "reference du systeme installe ($DIRS)..."
+            log "reference du systeme installe ($DIRS_MIROIR)..."
             mkdir -p "$MIROIR"; chmod 700 "$MIROIR"
             # shellcheck disable=SC2086
-            trouver $DIRS | xargs -0 -r grep -IlZ '' 2>/dev/null | sed -z 's#^/##' \
+            trouver $DIRS_MIROIR | xargs -0 -r grep -IlZ '' 2>/dev/null | sed -z 's#^/##' \
                 | tar -C / --null -T - -cf - 2>/dev/null | tar -C "$MIROIR" -xpf -
             touch "$TAMPON"
             printf 'reference : %s fichiers texte\n' "$(find "$MIROIR" -type f | wc -l)" | sceller installation >/dev/null
@@ -213,13 +239,19 @@ case "${1:-liste}" in
     enregistrer)
         boite
         [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
+        # RAM root: recorded by « osmo-racine-live fin » with the decision
+        # (enregistrer valide|efface), BEFORE the session is written or
+        # dropped; the call without it (osmo-diffs.service) has nothing to do.
+        if live && [ -z "${2:-}" ]; then
+            log "racine en RAM : enregistrement fait par osmo-racine-live fin"; exit 0
+        fi
         tmp="$(mktemp)"; debut="$(mktemp)"
         if home_chiffre_ouvert && ! live; then
             mode=session
             [ -f "$TAMPON" ] || { log "pas de reference dans $PRIVE"; rm -f "$tmp" "$debut"; exit 0; }
             {
                 # shellcheck disable=SC2086
-                find $DIRS -xdev \( -name .git -o -name node_modules -o -name __pycache__ -o -name .cache \
+                find $DIRS_MIROIR -xdev \( -name .git -o -name node_modules -o -name __pycache__ -o -name .cache \
                      -o -name .env -o -name .venv \) -prune -o -type f -newer "$TAMPON" -print0 2>/dev/null
                 ( cd "$MIROIR" && find . -type f -print0 ) | while IFS= read -r -d '' r; do
                     [ -e "${r#.}" ] || printf '%s\0' "${r#.}"
@@ -227,15 +259,19 @@ case "${1:-liste}" in
             } | while IFS= read -r -d '' f; do trace_miroir "$f"; done > "$tmp"
             touch -r "$debut" "$TAMPON"
         elif live; then
-            mode=root
-            ( cd "$HAUT" 2>/dev/null && find . \( -type f -o -type c \) -print0 ) \
+            case "${2:-}" in valide|efface|ecrit) mode="$2" ;; *) mode=efface ;; esac
+            ( cd "$HAUT" 2>/dev/null && find . \( -type f -o -type c -o -type l \) -print0 ) \
                 | while IFS= read -r -d '' r; do p="${r#.}"; dans_dirs "$p" && trace_overlay "$p"; done > "$tmp"
         else
             log "ni session chiffree ni root live - rien"; rm -f "$tmp" "$debut"; exit 0
         fi
         if [ -s "$tmp" ]; then
             nom="$(sceller "$mode" < "$tmp")"
-            log "$mode : $(grep -c '^+++ ' "$tmp") fichier(s) -> $nom"
+            log "$mode : $(grep -c '^+++ \|^=== ' "$tmp") changement(s) -> $nom"
+        elif [ "$mode" != session ]; then
+            # every session leaves a record, even an empty one
+            nom="$(echo "aucun changement" | sceller "$mode")"
+            log "$mode : aucun changement -> $nom"
         else
             log "$mode : aucun changement texte"
         fi
@@ -253,6 +289,14 @@ case "${1:-liste}" in
         read -r -s -p "nouvelle phrase de la boite noire : " a < /dev/tty; echo
         read -r -s -p "encore une fois : " b < /dev/tty; echo
         [ -n "$a" ] && [ "$a" = "$b" ] || { log "phrases vides ou differentes"; exit 1; }
+        # never the /home (validation) passphrase: whoever validates sessions
+        # must not be able to read the box
+        _hu="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
+        if [ -n "$_hu" ] && [ -e "/dev/disk/by-uuid/$_hu" ] \
+                && printf '%s' "$a" | cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$_hu" 2>/dev/null; then
+            a=""; b=""; cle=""
+            log "refuse : c est la phrase de /home - la boite noire en veut une DIFFERENTE"; exit 1
+        fi
         printf '%s' "$cle" | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
             -out "$CLE_CHIFFREE.nouv" -pass fd:3 3< <(printf '%s' "$a") \
             && mv "$CLE_CHIFFREE.nouv" "$CLE_CHIFFREE"
@@ -334,22 +378,8 @@ case "${1:-liste}" in
         [ -s "$COPIE_CONF" ] || { log "pas de copie distante (osmo-diffs copie-poser)"; exit 0; }
         envoyer
         ;;
-    consulter)
-        # GRUB entry « consulter la boite noire (sans demarrer) » : root's
-        # system booted on osmo-boite.target, this on tty1, then a restart
-        clear
-        echo "=== osmo-operator : consultation de la boite noire (pas de demarrage) ==="
-        if ! mountpoint -q "$BASE"; then
-            mkdir -p "$BASE"
-            mount -o ro /dev/disk/by-partlabel/osmo-diffs "$BASE" 2>/dev/null \
-                || { echo "partition osmo-diffs introuvable"; }
-        fi
-        mountpoint -q "$BASE" && PAGER=more "$0" voir
-        read -r -p "Entree pour redemarrer : " _ < /dev/tty
-        systemctl reboot
-        ;;
     *)
-        echo "usage : osmo-diffs init | enregistrer | verifier | phrase | liste | voir [N] | consulter | copie-poser user@host | envoyer" >&2
+        echo "usage : osmo-diffs init | enregistrer [valide|efface|ecrit] | verifier | phrase | liste | voir [N] | copie-poser user@host | envoyer" >&2
         exit 2
         ;;
 esac

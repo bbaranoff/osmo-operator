@@ -25,8 +25,8 @@ on:
   workflow_dispatch:
     inputs:
       # [2026-10-18] Version de la release, en entree : on la choisit au lancement
-      # au lieu de modifier le workflow. [2026-11-24] Defaut : v0.2 (deux
-      # systemes sur le disque installe, porte TPM, boite noire).
+      # au lieu de modifier le workflow. [2026-11-24] Defaut : v0.2 (racine en
+      # lecture seule, /home LUKS2, validation a l extinction, boite noire).
       version:
         description: "Release tag (v0.2)"
         type: string

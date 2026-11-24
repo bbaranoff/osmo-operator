@@ -27,6 +27,10 @@ crypthome_monte() {
     mountpoint -q "$MOUNT" || return 1
     _src="$(findmnt -fno SOURCE "$MOUNT" 2>/dev/null)"
     [ -n "$_src" ] || return 1
+    # installed bench: /home is a RAM overlay over the volume on /media/home-ro
+    if [ "$_src" = overlay ] && mountpoint -q /media/home-ro; then
+        _src="$(findmnt -fno SOURCE /media/home-ro 2>/dev/null)"
+    fi
     [ "$(readlink -f "$_src")" = "$(readlink -f "/dev/mapper/$MAPPER")" ]
 }
 

@@ -1,9 +1,0 @@
-[Unit]
-Description=osmo-operator - consulter la boite noire, sans demarrer le systeme
-Documentation=file:/usr/local/sbin/osmo-diffs
-# Kernel line « systemd.unit=osmo-boite.target » (first GRUB menu): basic
-# system only, no display manager, no bench; the box is read on tty1, then
-# the machine restarts.
-Requires=basic.target osmo-boite-consulter.service
-After=basic.target
-AllowIsolate=yes

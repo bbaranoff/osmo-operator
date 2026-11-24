@@ -1,0 +1,112 @@
+#!/bin/bash
+# osmo-valider-session - from the desktop: give the /home passphrase so that
+# the session is written to the disk at shutdown (osmo-racine-live valider).
+#
+#   osmo-valider-session           ask the passphrase (zenity, or the terminal)
+#   osmo-valider-session --maintenant  write the session to the disk NOW
+#                                  (osmo-racine-live ecrire), same passphrase
+#   osmo-valider-session --fin [poweroff|reboot]  « Tout oublier ? » Yes: the
+#                                  flash, the session is wiped; No: the /home
+#                                  passphrase, the session is kept - then shutdown
+#   osmo-valider-session --rappel  at login (autostart): a RED warning as long
+#                                  as the session is not validated
+#
+# Without the passphrase at shutdown everything written during the session -
+# /, /root, /opt/GSM, /home - is wiped (except what --maintenant already wrote).
+set -u
+RL=/usr/local/sbin/osmo-racine-live
+ACTION=valider
+OK_TXT="Session validee : elle sera ecrite sur le disque a l extinction."
+if [ "${1:-}" = --maintenant ]; then
+    ACTION=ecrire
+    OK_TXT="Session ecrite sur le disque. La suite sera validee ou effacee a l extinction."
+fi
+live() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; }
+if ! live; then
+    # / written directly: nothing to forget or validate, --fin just shuts down
+    [ "${1:-}" = --fin ] && exec systemctl "${2:-poweroff}"
+    [ "${1:-}" = --rappel ] || echo "osmo-valider-session : / n est pas en RAM, rien a valider"
+    exit 0
+fi
+
+graphique() { [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; }
+
+# --fin [poweroff|reboot] : the end-of-session question, then shutdown.
+#   Yes (« tout oublier ») : the pseudo-neuralyzer (osmo-flash --blanc), the
+#        screen stays WHITE and the machine shuts down underneath; the session
+#        is wiped (osmo-racine-live oublier: no question, no banner at shutdown);
+#   No : the /home passphrase, asked until it is right (« Annuler » : back to
+#        the question). Right: a FULL-SCREEN cmatrix and the machine shuts
+#        down underneath; the session is written at shutdown.
+en_root() { if [ "$(id -u)" = 0 ]; then "$@"; else pkexec "$@"; fi; }
+matrice() {   # a full-screen cmatrix in its own terminal; prints its pid
+    local t
+    command -v cmatrix >/dev/null 2>&1 || return 0
+    for t in xterm gnome-terminal; do command -v "$t" >/dev/null 2>&1 && break; t=""; done
+    case "$t" in
+        xterm) xterm -fullscreen -bg black -fg green -e cmatrix -b -u 3 -M REC >/dev/null 2>&1 & echo $! ;;
+        gnome-terminal) gnome-terminal --full-screen --wait -- cmatrix -b -u 3 -M REC >/dev/null 2>&1 & echo $! ;;
+    esac
+}
+if [ "${1:-}" = --fin ]; then
+    quoi="${2:-poweroff}"
+    graphique || { echo "osmo-valider-session --fin : pas d affichage" >&2; exit 1; }
+    while :; do
+        if zenity --question --no-wrap --title "osmo-operator : fin de session" \
+                --ok-label "Yes" --cancel-label "No" \
+                --text '<span weight="bold" size="large">Tout oublier ?</span>
+
+<b>Yes</b> : flash - la session est effacee, plus aucun souvenir.
+<b>No</b> : tu dois donner la phrase de /home, et la session est gardee.'; then
+            en_root "$RL" oublier >/dev/null 2>&1 || continue
+            if command -v osmo-flash >/dev/null 2>&1; then
+                osmo-flash --blanc &
+                sleep 2          # charge + flash: the screen is white now
+            fi
+            exec systemctl "$quoi"
+        fi
+        p="$(zenity --password --title "Garder la session : phrase de /home")" || continue
+        printf '%s\n' "$p" | en_root "$RL" valider --stdin >/dev/null 2>&1; rc=$?
+        p=""
+        if [ "$rc" = 0 ]; then
+            # the passphrase is right: full-screen cmatrix, shutdown underneath
+            if [ -n "$(matrice)" ]; then sleep 3; fi
+            exec systemctl "$quoi"
+        fi
+        zenity --error --no-wrap --title "osmo-operator" \
+            --text '<span foreground="red" weight="bold">Phrase de /home refusee.</span>'
+    done
+fi
+
+if [ "${1:-}" = --rappel ]; then
+    [ -e /run/osmo-racine/valide ] && exit 0
+    graphique || exit 0
+    zenity --question --no-wrap --title "osmo-operator : session non validee" \
+        --ok-label "Donner la phrase de /home" --cancel-label "Plus tard" \
+        --text '<span foreground="red" weight="bold" size="large">ATTENTION : session NON validee</span>
+
+<span foreground="red">Sans la phrase de /home a l extinction, TOUT ce que la session
+ecrit (/, /root, /opt/GSM, /home) sera EFFACE.</span>
+
+Elle peut aussi etre donnee a l extinction, sur la console.' || exit 0
+fi
+
+if graphique; then
+    p="$(zenity --password --title "Garder la session : phrase de /home")" || exit 0
+    if [ "$(id -u)" = 0 ]; then
+        printf '%s\n' "$p" | "$RL" "$ACTION" --stdin >/dev/null 2>&1; rc=$?
+    else
+        printf '%s\n' "$p" | pkexec "$RL" "$ACTION" --stdin >/dev/null 2>&1; rc=$?
+    fi
+    p=""
+    if [ "$rc" = 0 ]; then
+        zenity --info --no-wrap --title "osmo-operator" \
+            --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>"
+    else
+        zenity --error --no-wrap --title "osmo-operator" \
+            --text '<span foreground="red" weight="bold">Phrase refusee (ou ecriture en echec) : rien n est garde, la session sera EFFACEE a l extinction.</span>'
+    fi
+    exit "$rc"
+fi
+
+if [ "$(id -u)" = 0 ]; then exec "$RL" "$ACTION"; else exec sudo "$RL" "$ACTION"; fi

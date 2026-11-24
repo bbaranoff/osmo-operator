@@ -16,7 +16,9 @@
 # The system disk is intentionally NOT encrypted: the bench is driven as root
 # (VTY, netns, tcpdump), the session logs in as root, and an operator must be
 # able to extract a trace, read a log or repair the machine from a live key
-# without decrypting anything.
+# without decrypting anything. Once INSTALLED it is read-only: every session
+# runs in RAM and is written back at shutdown only with the /home passphrase
+# (osmo-racine-live, below).
 #
 # Secrets (GNOME keyring, browser cookies and tokens, profiles) live on a
 # second LUKS2 disk mounted on /home. The unprivileged osmocom account has its
@@ -67,42 +69,89 @@ install -d "$ROOTFS/usr/local/sbin" "$ROOTFS/usr/local/bin" "$ROOTFS/root" \
            "$ROOTFS/etc/systemd/system" "$ROOTFS/etc/default" "$ROOTFS/usr/local/share/applications"
 install -m 0755 "$_CH_SRC/unlock-home"            "$ROOTFS/usr/local/sbin/unlock-home"
 install -m 0755 "$_CH_SRC/lock-home"              "$ROOTFS/usr/local/sbin/lock-home"
-# The system disk as a live key once installed: / read-only, writes in RAM,
-# the encrypted /home persistent (overlayroot, enabled by Calamares through
-# shellprocess-osmo.conf; the live key itself is not touched).
+# THE INSTALLED DISK (partition.conf): EFI, / in clear and READ-ONLY (every
+# write of a session in RAM, overlayroot), the black box partition, /home in
+# LUKS2. At shutdown the /home passphrase writes the whole session (/, /root,
+# /opt/GSM, /home) to the disk atomically; without it everything is wiped and
+# a red warning stays on the console. Enabled by Calamares
+# (shellprocess-osmo.conf: osmo-racine-live poser); the live key is not touched.
 install -m 0755 "$_CH_SRC/osmo-racine-live"       "$ROOTFS/usr/local/sbin/osmo-racine-live"
-# The black box: the text diffs of the system, one encrypted record per boot
-# (5 GiB partition of partition.conf; keys, reference and unit set up by
-# shellprocess-osmo.conf). A login reminder until it has its own passphrase.
+install -m 0755 "$_CH_SRC/osmo-valider-appliquer" "$ROOTFS/usr/local/sbin/osmo-valider-appliquer"
+install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
+# the « Tout oublier ? » pseudo-neuralyzer (Yes: flash, wiped; No: passphrase).
+# A flash.gif dropped in /usr/local/share/osmo-operator replaces the drawing.
+install -m 0755 "$_CH_SRC/osmo-flash"             "$ROOTFS/usr/local/bin/osmo-flash"
+install -d "$ROOTFS/usr/local/share/osmo-operator"
+install -m 0644 "$DIR/services/osmo-fin-session.service" "$ROOTFS/etc/systemd/system/osmo-fin-session.service"
+# The black box: every change of every session, validated or wiped, one
+# record encrypted with age (public key on the box, private key under the
+# box's own passphrase, different from /home's). A login reminder until it
+# has that passphrase.
 install -m 0755 "$_CH_SRC/osmo-diffs"             "$ROOTFS/usr/local/sbin/osmo-diffs"
 # the receiving end of the box's remote copy: any osmo machine can keep the
 # copies of another (forced command, add-only)
 install -m 0755 "$_CH_SRC/osmo-diffs-recevoir"    "$ROOTFS/usr/local/bin/osmo-diffs-recevoir"
-# Two systems on the installed disk (partition.conf): the first GRUB menu on
-# the EFI partition (osmo-grub-esp), root's live system copied at
-# installation (osmo-racine-copier, from the live session), its session unit
-# and the « read the black box instead of booting » target. The units only
-# act on root's system (ConditionKernelCommandLine=osmo.racine, or
-# systemd.unit=osmo-boite.target on the kernel line).
-install -m 0755 "$_CH_SRC/osmo-grub-esp"          "$ROOTFS/usr/local/sbin/osmo-grub-esp"
-install -m 0755 "$_CH_SRC/osmo-racine-copier"     "$ROOTFS/usr/local/sbin/osmo-racine-copier"
-for _u in osmo-racine-session.service osmo-boite.target osmo-boite-consulter.service; do
-    install -m 0644 "$DIR/services/$_u" "$ROOTFS/etc/systemd/system/$_u"
-done
-install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
-ln -sf /etc/systemd/system/osmo-racine-session.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/osmo-racine-session.service"
 install -m 0644 "$DIR/services/osmo-diffs.service" "$ROOTFS/etc/systemd/system/osmo-diffs.service"
-install -d "$ROOTFS/etc/xdg/autostart"
+install -d "$ROOTFS/etc/xdg/autostart" "$ROOTFS/etc/profile.d"
 cat > "$ROOTFS/etc/xdg/autostart/osmo-diffs-rappel.desktop" <<'RAPPEL'
 [Desktop Entry]
 Type=Application
 Name=osmo-diffs : phrase de la boite noire
-Exec=sh -c '[ ! -f /var/lib/osmo-diffs/cle.pub ] || [ -f /var/lib/osmo-diffs/cle.chiffree ] || [ "$(id -u)" = 0 ] || notify-send -u critical "Boite noire sans phrase" "Dans un terminal : sudo osmo-diffs phrase"'
+Exec=sh -c '[ ! -f /var/lib/osmo-diffs/cle.pub ] || [ -f /var/lib/osmo-diffs/cle.chiffree ] || notify-send -u critical "Boite noire sans phrase" "Dans un terminal : sudo osmo-diffs phrase (une phrase DIFFERENTE de celle de /home)"'
 OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 RAPPEL
+# the red warning at login, as long as the session is not validated
+cat > "$ROOTFS/etc/xdg/autostart/osmo-valider-rappel.desktop" <<'RAPPEL'
+[Desktop Entry]
+Type=Application
+Name=osmo-operator : session non validee
+Exec=/usr/local/bin/osmo-valider-session --rappel
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+RAPPEL
+# the launchers: validate for shutdown, or write now
+cat > "$ROOTFS/usr/local/share/applications/osmo-valider-session.desktop" <<'LANCEUR'
+[Desktop Entry]
+Type=Application
+Name=Garder la session (a l extinction)
+Comment=Phrase de /home : la session sera ecrite sur le disque a l extinction, sinon tout est efface
+Exec=/usr/local/bin/osmo-valider-session
+Icon=document-save
+Terminal=false
+Categories=System;
+LANCEUR
+cat > "$ROOTFS/usr/local/share/applications/osmo-ecrire-session.desktop" <<'LANCEUR'
+[Desktop Entry]
+Type=Application
+Name=Ecrire la session maintenant
+Comment=Phrase de /home : la session est ecrite sur le disque tout de suite (contre une coupure de courant)
+Exec=/usr/local/bin/osmo-valider-session --maintenant
+Icon=document-save-as
+Terminal=false
+Categories=System;
+LANCEUR
+cat > "$ROOTFS/usr/local/share/applications/osmo-fin-session.desktop" <<'LANCEUR'
+[Desktop Entry]
+Type=Application
+Name=Fin de session
+Comment=Tout oublier ? Yes : flash, la session est effacee. No : la phrase de /home, la session est gardee. Puis extinction.
+Exec=/usr/local/bin/osmo-valider-session --fin poweroff
+Icon=system-shutdown
+Terminal=false
+Categories=System;
+LANCEUR
+# and in every terminal, in red
+cat > "$ROOTFS/etc/profile.d/98-osmo-session.sh" <<'PROFIL'
+# osmo-operator: / in RAM and the session not validated -> red warning
+if [ -t 1 ] && [ ! -e /run/osmo-racine/valide ] && mountpoint -q /media/root-ro 2>/dev/null; then
+    printf '\033[1;31m%s\033[0m\n' "ATTENTION : session non validee - sans la phrase de /home a l extinction, tout est EFFACE." \
+        "  osmo-valider-session (a l extinction) | osmo-valider-session --maintenant (tout de suite)"
+fi
+PROFIL
+chmod 0644 "$ROOTFS/etc/profile.d/98-osmo-session.sh"
 install -m 0755 "$_CH_SRC/crypthome-fond"         "$ROOTFS/usr/local/sbin/crypthome-fond"  # background image for the LUKS prompt
 install -m 0755 "$_CH_SRC/refresh-owner-apps"     "$ROOTFS/usr/local/sbin/refresh-owner-apps"
 install -m 0755 "$_CH_SRC/run-as-owner"           "$ROOTFS/usr/local/bin/run-as-owner"
@@ -162,7 +211,7 @@ fi
 # ── Required in the rootfs ─────────────────────────────────────────────────
 # cryptsetup to open the volume, rsync for init-crypthome.sh, x11-xserver-utils
 # for xhost.
-for _p in cryptsetup rsync xhost; do
+for _p in cryptsetup rsync xhost overlayroot-chroot age getfattr zenity; do
     chroot "$ROOTFS" bash -c "command -v $_p >/dev/null 2>&1" || \
         echo -e "  ${YELLOW}!${NC} ${CYAN}$_p${NC} absent du rootfs - requis par le dispositif de chiffrement"
 done
@@ -170,6 +219,7 @@ done
 echo -e "  ${GREEN}✓${NC} outils poses : ${CYAN}unlock-home${NC}, ${CYAN}lock-home${NC}, ${CYAN}crypthome-postinstall${NC} (Calamares), ${CYAN}init-crypthome.sh${NC} (second disque)"
 echo -e "  ${GREEN}✓${NC} a l installation : cocher ${CYAN}« chiffrer »${NC} chiffre ${CYAN}/home${NC} seul, la racine reste lisible"
 echo -e "  ${GREEN}✓${NC} demarrage : ${CYAN}« decrypt /home -passphrase- or Enter »${NC} sur la console - le boot aboutit quelle que soit la reponse"
+echo -e "  ${GREEN}✓${NC} installe : ${CYAN}/${NC} en lecture seule (RAM) ; a l extinction la phrase de ${CYAN}/home${NC} ecrit la session, sinon ${RED}tout est efface${NC}"
 
 # End of module: `. file` returns the status of its LAST command, and
 # build-iso.sh runs under set -e. Always return 0 here.
