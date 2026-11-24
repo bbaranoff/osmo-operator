@@ -90,7 +90,7 @@ jobs:
         id: key
         run: |
           KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
-                                helpers opt-gsm tools patches \
+                                helpers tools patches \
                 | sort | xargs sha256sum | sha256sum | cut -c1-16)
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "Empreinte du contexte : $KEY"
@@ -246,7 +246,7 @@ jobs:
       # Le pull se fait ICI, sous le compte runner qui porte les identifiants
       # GHCR - build-iso.sh tourne sous sudo, et le ~/.docker de root n'en a
       # pas. L'image etant alors locale, le module ne retire rien.
-      - name: Image de base (Docker Hub, puis GHCR)
+      - name: Image de base (GHCR, puis Docker Hub)
         run: |
           if [ "${{ github.event.inputs.build_docker }}" = "true" ]; then
             echo "ISO_DOCKER_SRC=--build-docker" >> "$GITHUB_ENV"
@@ -255,18 +255,21 @@ jobs:
           fi
           KEY='${{ steps.key.outputs.key }}'
           REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
-          # [2026-10-10] ORDRE : Docker Hub (bastienbaranoff/norf_gsm:latest)
-          # d'abord, l'image GHCR de l'empreinte ensuite, la compilation en
-          # dernier. L'image retenue est taguee osmocom-nitb.
+          # [2026-11-24] ORDRE : l'image GHCR de l'empreinte d'abord (elle
+          # correspond exactement a ce commit), Docker Hub
+          # (bastienbaranoff/norf_gsm:latest, publie a la main) ensuite, la
+          # compilation en dernier. Avant, Docker Hub passait en premier et
+          # repondait toujours : l'ISO partait d'une pile qui ne suivait pas
+          # le commit. L'image retenue est taguee osmocom-nitb.
           HUB="bastienbaranoff/norf_gsm:latest"
           GHCR="ghcr.io/${REPO}/osmocom-nitb:base-${KEY}"
           REF=""
-          if docker pull "$HUB"; then
-            REF="$HUB"
-            echo "::notice::Base tiree de Docker Hub : $HUB - ne suit pas forcement ce commit."
-          elif docker manifest inspect "$GHCR" >/dev/null 2>&1 && docker pull "$GHCR"; then
+          if docker manifest inspect "$GHCR" >/dev/null 2>&1 && docker pull "$GHCR"; then
             REF="$GHCR"
-            echo "::notice::Docker Hub indisponible, base tiree de GHCR : $GHCR - pas de compilation."
+            echo "::notice::Base tiree de GHCR : $GHCR - celle de ce commit, pas de compilation."
+          elif docker pull "$HUB"; then
+            REF="$HUB"
+            echo "::warning::Pas de base GHCR pour l'empreinte $KEY : base tiree de Docker Hub ($HUB), qui ne suit pas forcement ce commit."
           fi
           if [ -n "$REF" ]; then
             docker tag "$REF" osmocom-nitb

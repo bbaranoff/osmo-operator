@@ -96,7 +96,7 @@ jobs:
 
       # L'EMPREINTE. Tout ce que Dockerfile prend dans le contexte de build -
       # lui-meme, packaging/, patches/, et les dossiers qu'il COPY (configs,
-      # scripts, services, helpers, opt-gsm, tools). Pas .deb-cache/ : c'est un
+      # scripts, services, helpers, tools). Pas .deb-cache/ : c'est un
       # cache, son contenu ne definit pas l'image.
       # `git ls-files` et non `find` : ce qui n'est pas versionne n'entre pas
       # dans l'image de toute facon, et l'ordre est stable.
@@ -104,7 +104,7 @@ jobs:
         id: key
         run: |
           KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
-                                helpers opt-gsm tools patches \
+                                helpers tools patches \
                 | sort | xargs sha256sum | sha256sum | cut -c1-16)
           REPO='${{ steps.img.outputs.repo }}'
           echo "key=$KEY"                                              >> "$GITHUB_OUTPUT"

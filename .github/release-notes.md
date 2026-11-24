@@ -4,6 +4,8 @@
 
 Live ISO password: **`osmo`** · postmarketOS phone password: **`147147`**
 
+**Full guide to this ISO:** [osmo-operator - ISO 0.2 on RPubs](https://rpubs.com/bbaranoff/iso-latest)
+
 A complete GSM + LTE operator on one image, live or installable, with a GNOME desktop, **without SDR or physical
 phone**: the radio is emulated end to end, down to the baseband. Ubuntu 24.04. The starting point: redo Karsten
 Nohl's demo (capture GSM, decode it, listen to a call) with no radio at all - phone, network and radio link
@@ -18,7 +20,7 @@ cat osmo-operator-desktop.iso.part-* > osmo-operator-desktop.iso
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-![osmo-operator: Open Source, No RF](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/gsm-lab-ville.jpg)
+![osmo-operator: the GSM LAB desktop wallpaper](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/configs/osmo-balise-jour.png)
 
 ### At a glance
 
@@ -32,14 +34,23 @@ repository, `.git` included, is in `/opt/GSM/osmo-operator`.
 | Radio bridge | `pont.py` / `pont_dsp.py`: bursts <-> osmo-bts-trx over TRXD |
 | I/Q spectrum | bursts remodulated in GMSK, DL + UL spectrum, waterfall, cfile replayable by gr-gsm |
 | 2G core | full Osmocom stack, Asterisk voice, SMSC, GPRS/EDGE, SS7 with TCAP |
-| 4G / CSFB | Open5GS + srsRAN over ZeroMQ, a real SGs interface MME <-> MSC, WebUI on :8999 |
+| 4G / CSFB | Open5GS + srsRAN over ZeroMQ, a real SGs interface MME <-> MSC, WebUI on :8999 - **amd64 only**, not in the arm64 SD images |
 | Smartphone | postmarketOS/Phosh VM, oFono, simulated AT modem |
 | Multi-operator | 1 to 9 operators over SS7/IP, inter-STP |
 | Non-IP transport | raw GSM-HR voice over LoRa (RNode), WAN between machines |
 | GTK interfaces | Constellation, ms-pont, osmo-iso, beacon, terminal-free launchers |
 | Tests | `check_all.sh`, TTCN-3 (Eclipse TITAN), pytest |
 | Installed system | `/` read-only (sessions in RAM, kept with the `/home` passphrase), `/home` LUKS2, **black box** |
-| Delivery | amd64 ISO, arm64 SD (rpi4, opi5), Docker, native install |
+| Delivery | amd64 ISO, arm64 SD (rpi4, opi5; 2G only, no 4G), Docker, native install |
+
+**Constellation** (`osmo-gtk`): the bench in one window - constellation, eye diagram, training-sequence correlation,
+I/Q of the bursts, TDMA grid; tabs for the core, L23, logs, Kconfig, tests, notebooks, wiki and installation.
+
+![Constellation: the air of the bench, I/Q, eye diagram and TDMA grid](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/doc/images/constellation.png)
+
+**osmo-iso** (`./build.sh --gtk`): build an amd64 ISO or an arm64 SD image from a window.
+
+![osmo-iso: build an image of the bench from a GTK window](https://raw.githubusercontent.com/bbaranoff/osmo-operator/main/doc/images/osmo-iso-gtk.png)
 
 ### New in 0.2: the installed machine
 
@@ -114,7 +125,7 @@ deterministic RAND (reproducible runs). **Voice**: osmo-sip-connector -> Asteris
 `globals.conf`). `osmo-msc.cfg` with **SGs** (CSFB). Remote SIM (SAP) only with `--sap` / `--softsim`. GSMTAP on
 :4729 for Wireshark.
 
-**4G - Open5GS + srsRAN.** MME, SGW-C/U, SMF, UPF, PCRF, HSS; MongoDB behind the HSS; freeDiameter TLS (S6a, Gx).
+**4G - Open5GS + srsRAN (amd64 only: srsRAN and Open5GS are not built for the arm64 SD images).** MME, SGW-C/U, SMF, UPF, PCRF, HSS; MongoDB behind the HSS; freeDiameter TLS (S6a, Gx).
 srsENB / srsUE over **ZeroMQ** (no SDR), portable binaries, srsGUI. Null NAS ciphering on purpose (readable in
 Wireshark). **CSFB** over a real SGs interface, 3GPP-compliant 4G -> 2G voice fallback. 4G does not depend on 2G.
 
@@ -182,7 +193,6 @@ Magnetite, TRX firmware, Fernvale, SIMCom SDK).
 | Open5GS configs | `/opt/LTE/open5gs/install/etc/open5gs` (freeDiameter, `tls/`) |
 | Smartphone UI | `/opt/user_interface/pmos` |
 | Beacon wallpapers | `/usr/share/backgrounds/osmo-balise` |
-| Black box | `/var/lib/osmo-diffs` (installed machine) |
 
 Build packages (srsenb, Open5GS, pmOS PPP kernel, pmbootstrap) are also published outside the ISO:
 https://github.com/bbaranoff/osmo-operator/releases/download/debs-banc

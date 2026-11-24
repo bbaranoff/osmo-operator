@@ -1342,13 +1342,9 @@ Dernier maillon de la chaine venv/gr-gsm (ex-Dockerfile.run) : le profil de root
 echo 'source ~/.env/bin/activate' >> ~/.bashrc
 ```
 
-#### ── scripts bridge camping -> /opt/GSM (sinon /opt/GSM/qosmo/run.sh casse)
+#### ── scripts bridge camping
 
-si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh, record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
-
-```bash
-mkdir -p /opt/GSM/ && cp -r "$REPO"/opt-gsm/. /opt/GSM/
-```
+si_bridge.py, si_bridge_loop.sh, record_drain.py, grgsm_fft_live.py : dans /opt/GSM/grgsm_exe/scripts (livres avec le clone grgsm_exe).
 
 #### Metadonnees de l'image
 

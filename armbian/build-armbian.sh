@@ -219,7 +219,7 @@ if [ "$NO_STACK" = 0 ]; then
         if docker image inspect osmocom-nitb:arm64 >/dev/null 2>&1; then
             IMAGE=osmocom-nitb:arm64
         else
-            KEY=$(cd "$REPO" && git ls-files -- Dockerfile packaging configs scripts services helpers opt-gsm tools patches | sort | xargs sha256sum | sha256sum | cut -c1-16)
+            KEY=$(cd "$REPO" && git ls-files -- Dockerfile packaging configs scripts services helpers tools patches | sort | xargs sha256sum | sha256sum | cut -c1-16)
             REMOTE=$(cd "$REPO" && git remote get-url origin 2>/dev/null | sed -E 's#.*github.com[:/]##; s#\.git$##' | tr '[:upper:]' '[:lower:]')
             GHCR="ghcr.io/${REMOTE:-bbaranoff/osmo-operator}/osmocom-nitb:base-arm64-$KEY"
             if [ "$DRY" = 0 ] && docker pull --platform linux/arm64 "$GHCR" >/dev/null 2>&1; then
