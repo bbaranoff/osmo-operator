@@ -34,9 +34,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag (v0.1-8 kept in reserve)"
+        description: "Release tag (v0.2)"
         type: string
-        default: "v0.1-9"
+        default: "v0.2"
       boards:
         description: "Cartes : all, rpi4, opi5, ou des noms Armbian separes par des virgules (orangepi5-max,rpi4b)"
         type: string
@@ -357,8 +357,8 @@ jobs:
         with:
           # Pas github.ref_name tout seul : sur un workflow_dispatch il vaut « main »
           # et l'action creerait un TAG main, ambigu avec la branche.
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.1-9' }}
-          name: "osmo_egprs — images SD arm64 (Armbian : Raspberry Pi 4, Orange Pi 5) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.1-9' }}"
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          name: "osmo_egprs — images SD arm64 (Armbian : Raspberry Pi 4, Orange Pi 5) — ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}"
           draft: false
           prerelease: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
           body: |
