@@ -32,14 +32,14 @@ repository, `.git` included, is in `/opt/GSM/osmo-operator`.
 | Radio bridge | `pont.py` / `pont_dsp.py`: bursts <-> osmo-bts-trx over TRXD |
 | I/Q spectrum | bursts remodulated in GMSK, DL + UL spectrum, waterfall, cfile replayable by gr-gsm |
 | 2G core | full Osmocom stack, Asterisk voice, SMSC, GPRS/EDGE, SS7 with TCAP |
-| 4G / CSFB | Open5GS + srsRAN over ZeroMQ, a real SGs interface MME <-> MSC, WebUI on :8999 |
+| 4G / CSFB | Open5GS + srsRAN over ZeroMQ, a real SGs interface MME <-> MSC, WebUI on :8999 - **amd64 only**, not in the arm64 SD images |
 | Smartphone | postmarketOS/Phosh VM, oFono, simulated AT modem |
 | Multi-operator | 1 to 9 operators over SS7/IP, inter-STP |
 | Non-IP transport | raw GSM-HR voice over LoRa (RNode), WAN between machines |
 | GTK interfaces | Constellation, ms-pont, osmo-iso, beacon, terminal-free launchers |
 | Tests | `check_all.sh`, TTCN-3 (Eclipse TITAN), pytest |
 | Installed system | **two systems on the disk** (root live, nirvana encrypted), **TPM porte**, **black box**, several users |
-| Delivery | amd64 ISO, arm64 SD (rpi4, opi5), Docker, native install |
+| Delivery | amd64 ISO, arm64 SD (rpi4, opi5; 2G only, no 4G), Docker, native install |
 
 ### New in 0.2: the installed machine
 
@@ -122,7 +122,7 @@ deterministic RAND (reproducible runs). **Voice**: osmo-sip-connector -> Asteris
 `globals.conf`). `osmo-msc.cfg` with **SGs** (CSFB). Remote SIM (SAP) only with `--sap` / `--softsim`. GSMTAP on
 :4729 for Wireshark.
 
-**4G - Open5GS + srsRAN.** MME, SGW-C/U, SMF, UPF, PCRF, HSS; MongoDB behind the HSS; freeDiameter TLS (S6a, Gx).
+**4G - Open5GS + srsRAN (amd64 only: srsRAN and Open5GS are not built for the arm64 SD images).** MME, SGW-C/U, SMF, UPF, PCRF, HSS; MongoDB behind the HSS; freeDiameter TLS (S6a, Gx).
 srsENB / srsUE over **ZeroMQ** (no SDR), portable binaries, srsGUI. Null NAS ciphering on purpose (readable in
 Wireshark). **CSFB** over a real SGs interface, 3GPP-compliant 4G -> 2G voice fallback. 4G does not depend on 2G.
 
