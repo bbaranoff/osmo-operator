@@ -88,6 +88,14 @@ jobs:
       reps: ${{ steps.m.outputs.reps }}
       armbian_ref: ${{ steps.m.outputs.armbian_ref }}
     steps:
+      # build-armbian.sh --kernel-keys lives in the repository: without a
+      # checkout, « chmod: cannot access 'armbian/build-armbian.sh' ». Only
+      # that folder is needed here.
+      - name: Checkout (armbian/)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: armbian
+
       - id: m
         run: |
           IN='${{ github.event.inputs.boards }}'; IN=${IN:-all}
