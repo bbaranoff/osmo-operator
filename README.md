@@ -141,7 +141,6 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 | `configs/` | configuration templates for every daemon (`osmo-*.cfg`, Asterisk, open5gs, `gprs/`, `conky/`), wallpapers and screenshots |
 | `lib/` | `gabarits.sh` (template substitution), `audio.sh` (PulseAudio + GAPK chain) |
 | `pont/` | the radio bridges between the emulated Calypso and `osmo-bts-trx`: `pont.py` (gr-gsm), `pont_dsp.py` (DSP), `air.py`/`airmesh.py` (over-the-air between Calypsos), `dsp/` ([README](pont/README.md)) |
-| `opt-gsm/` | gr-gsm side helpers: `si_bridge.py`, `grgsm_fft_live.py`, `record_drain.py` |
 | `scripts/` | run-time services and diagnostics: SMS relay (`sms-interop-relay.py`), audio (`gapk-start.sh`, `audio-diag.sh`), `call-diag.sh`, `banc-repro.sh`, `egprs-dsp.sh`, `magnetite-c139.sh`, the bench aliases, the Docker entrypoint and in-container `run.sh` |
 | `checks/` | read-only health checks of a running stack (`check_all.sh`, `ss7_check.sh`, `diag-*.sh`, `annuaire.sh`) |
 | `network/` | WAN table, mesh, firewall, VirtualBox interconnect, ISM payload, LoRa link (`setup-lora-link.sh`) and payload switch (`setup-lora-payload.sh`), IP plan, loopbacks |

@@ -38,7 +38,7 @@ iso_pull_refs() {
     # happen before redirections, so a trailing redirection would not cover the
     # command substitution.
     if ! _key="$(cd "$DIR" && git ls-files -- Dockerfile packaging configs scripts services \
-                              helpers opt-gsm tools patches 2>/dev/null \
+                              helpers tools patches 2>/dev/null \
                  | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -c1-16)"; then
         _key=""
     fi

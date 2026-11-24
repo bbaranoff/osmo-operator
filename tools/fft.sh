@@ -43,7 +43,7 @@ case "$FFT_SRC" in
      export FFT_SRC=tail ;;
 esac
 docker exec "$CONTAINER" test -f "$CFILE" \
-  || { echo "record absent $CONTAINER:$CFILE (lance ./run.sh d'abord ; record_drain.py alimente record.cfile)"; exit 1; }
+  || { echo "record absent $CONTAINER:$CFILE (lance ./run.sh d'abord ; /opt/GSM/grgsm_exe/scripts/record_drain.py alimente record.cfile)"; exit 1; }
 
 python3 - <<'PYEOF'
 import os, sys, subprocess, numpy as np

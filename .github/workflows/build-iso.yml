@@ -90,7 +90,7 @@ jobs:
         id: key
         run: |
           KEY=$(git ls-files -- Dockerfile packaging configs scripts services \
-                                helpers opt-gsm tools patches \
+                                helpers tools patches \
                 | sort | xargs sha256sum | sha256sum | cut -c1-16)
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "Empreinte du contexte : $KEY"

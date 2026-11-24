@@ -640,7 +640,7 @@ squashfs zstd -19 --> hybrid xorriso ISO + signed shim/grub (or arm64 SD image)
 
 - **The Docker image is not rebuilt by default** (amd64). Pull order:
   `ghcr.io/<repo>/osmocom-nitb:base-<fingerprint>` (the fingerprint is the sha256 of the
-  tracked files in Dockerfile, packaging, configs, scripts, services, helpers, opt-gsm, tools,
+  tracked files in Dockerfile, packaging, configs, scripts, services, helpers, tools,
   patches: when it matches, the published image was built from exactly this tree), then the
   repo's `:latest`, then the Docker Hub image. `build.sh` runs only if none responds, or with
   `--build-docker`.

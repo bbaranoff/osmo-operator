@@ -542,7 +542,7 @@ re-applies it.
 |---|---|
 | `5700-5702` UDP | TRXD, between `osmo-bts-trx` and the bridge |
 | `4729` UDP | GSMTAP, the Um interface |
-| `4730` UDP | full SI set into the shunt (`opt-gsm/si_bridge.py`) |
+| `4730` UDP | full SI set into the shunt (`grgsm_exe/scripts/si_bridge.py`) |
 | `4731` UDP | SCH BSIC/FN out of the gr-gsm receiver |
 | `6702` UDP | DL bursts into the DSP BSP (`--dsp`) |
 | `8080` TCP | the web dashboard (`osmo-egprs-web`) |

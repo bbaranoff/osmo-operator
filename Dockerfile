@@ -1300,10 +1300,8 @@ RUN set -eux; \
 # root's shell profile activates the gr-gsm venv.
 RUN echo 'source ~/.env/bin/activate' >> ~/.bashrc
 
-# ── Camping bridge scripts -> /opt/GSM (required by /opt/GSM/qosmo/run.sh):
-# si_bridge.py (full SI set -> 4730 -> shunt feed_si), si_bridge_loop.sh,
-# record_drain.py (iq_record.fifo -> record.cfile), grgsm_fft_live.py.
-COPY opt-gsm/. /opt/GSM/
+# Camping bridge scripts (si_bridge.py, si_bridge_loop.sh, record_drain.py,
+# grgsm_fft_live.py): in /opt/GSM/grgsm_exe/scripts, with the grgsm_exe clone.
 
 # --- Image metadata ----------------------------------------------------------
 # SIGRTMIN+3 is systemd's clean shutdown signal.

@@ -944,10 +944,6 @@ set -eux; \
 echo 'source ~/.env/bin/activate' >> ~/.bashrc
 ```
 
-```bash
-mkdir -p /opt/GSM/ && cp -r "$REPO"/opt-gsm/. /opt/GSM/
-```
-
 _Docker metadata, no equivalent on a machine: `STOPSIGNAL SIGRTMIN+3`._
 
 _Docker metadata, no equivalent on a machine: `ENTRYPOINT ["/etc/osmocom/entrypoint.sh"]`._
