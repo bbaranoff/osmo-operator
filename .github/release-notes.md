@@ -4,6 +4,8 @@
 
 Live ISO password: **`osmo`** · postmarketOS phone password: **`147147`**
 
+**Full guide to this ISO:** [osmo-operator - ISO 0.2 on RPubs](https://rpubs.com/bbaranoff/iso-latest)
+
 A complete GSM + LTE operator on one image, live or installable, with a GNOME desktop, **without SDR or physical
 phone**: the radio is emulated end to end, down to the baseband. Ubuntu 24.04. The starting point: redo Karsten
 Nohl's demo (capture GSM, decode it, listen to a call) with no radio at all - phone, network and radio link
