@@ -529,8 +529,16 @@ class Launcher(Gtk.Window):
             self._shown = data
             buf = self.tv.get_buffer()
             buf.set_text(data)
-            fin = buf.get_end_iter()
-            self.tv.scroll_to_iter(fin, 0.0, False, 0.0, 1.0)
+            # scroll_to_iter (and even scroll_to_mark) right after set_text
+            # does nothing: line heights are not computed yet and the log
+            # stayed at the top. The scrollbar goes to the bottom once GTK is
+            # idle, when the heights are known.
+            def bas():
+                a = self.tv.get_vadjustment()
+                if a is not None:
+                    a.set_value(a.get_upper() - a.get_page_size())
+                return False
+            GLib.idle_add(bas, priority=GLib.PRIORITY_LOW)
         return True
 
     # ── the buttons ────────────────────────────────────────────────────────

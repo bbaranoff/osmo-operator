@@ -292,6 +292,16 @@ class Run(Gtk.Window):
             self.tv.set_right_margin(6)
             sc.add(self.tv)
             self.sc = sc
+            # Follow the end by default. The old "already at the bottom?" test
+            # read an adjustment not yet updated after the insert (and of
+            # height 0 while the revealer is closed): it lost the end from the
+            # second line on and the log stayed at the top. Here only the
+            # user's scroll stops the follow; going back down resumes it.
+            self.suivi = True
+            adj = sc.get_vadjustment()
+            adj.connect("value-changed", lambda a: setattr(
+                self, "suivi", a.get_value() + a.get_page_size() >= a.get_upper() - 40))
+            adj.connect("changed", lambda a: self.suivi and a.set_value(a.get_upper() - a.get_page_size()))
             if self.progress:
                 self.rev.add(sc)
             else:
@@ -466,14 +476,12 @@ class Run(Gtk.Window):
             self.term.feed(text.replace("\n", "\r\n").encode())
             return False
         buf = self.tv.get_buffer()
-        adj = self.sc.get_vadjustment()
-        en_bas = adj.get_value() + adj.get_page_size() >= adj.get_upper() - 40
         buf.insert(buf.get_end_iter(), ANSI.sub("", text))
         n = buf.get_char_count()
         if n > MAX_CHARS:
             buf.delete(buf.get_start_iter(), buf.get_iter_at_offset(n - MAX_CHARS))
-        if en_bas:
-            self.tv.scroll_to_mark(buf.get_insert(), 0.0, True, 0.0, 1.0)
+        # no scroll here: the "changed" signal of the adjustment (see __init__)
+        # puts it at the bottom once the new height is known
         return False
 
     def _done(self, rc):
