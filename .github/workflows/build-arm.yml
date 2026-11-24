@@ -99,7 +99,10 @@ jobs:
       - id: m
         run: |
           IN='${{ github.event.inputs.boards }}'; IN=${IN:-all}
-          OPI5="orangepi5 orangepi5b orangepi5-plus orangepi5pro orangepi5-max orangepi5-ultra"
+          # orangepi5-max FIRST: it is the representative of rockchip-rk3588/
+          # current (the « Noyau orangepi5-max » job), the kernel the other
+          # Orange Pi 5 of that key reuse.
+          OPI5="orangepi5-max orangepi5 orangepi5b orangepi5-plus orangepi5pro orangepi5-ultra"
           L=""
           for b in ${IN//,/ }; do
             case "$b" in
