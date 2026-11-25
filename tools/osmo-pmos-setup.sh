@@ -270,6 +270,11 @@ EOS
         nmcli con add type gsm ifname '*' con-name 'Osmocom 4G' apn srsapn \
             connection.autoconnect yes ipv4.route-metric 50 >/dev/null 2>&1 && GSM='Osmocom 4G'
     fi
+    # A DEAD LINK IS NOTICED. When the bench modem restarts, the host end of
+    # the PPP session dies but the phone keeps ppp0 and its routes: everything
+    # goes into the void (SIP "hors ligne"). LCP echo every 10 s, 3 failures:
+    # the link drops in 30 s and the local-network fallback takes over.
+    [ -n "$GSM" ] && nmcli con mod "$GSM" ppp.lcp-echo-interval 10 ppp.lcp-echo-failure 3 >/dev/null 2>&1
     # NetworkManager is RESTARTED: apk may have just updated it with the PPP
     # plugin, and the daemon still in memory looks for the plugin of ITS
     # version number. The configuration file being in place, it restarts
