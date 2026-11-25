@@ -47,6 +47,12 @@ env:
 jobs:
   base-arm64:
     runs-on: ubuntu-24.04-arm
+    # Au niveau du JOB et avec un nom fixe : ce workflow est appele par
+    # build-arm.yml, et un groupe bati sur github.workflow serait celui de
+    # l'appelant - qui attendrait alors son propre appel (interblocage).
+    concurrency:
+      group: ghcr-osmocom-nitb-arm64-${{ github.ref }}
+      cancel-in-progress: false
     timeout-minutes: 360
     permissions:
       contents: read
@@ -177,6 +183,11 @@ jobs:
             --cache-to type=inline \
             -t "$IMAGE" -t "$CACHE" --push \
             -f Dockerfile .
+          # base-arm64-<empreinte> est la reference servie : la verifier.
+          if ! docker buildx imagetools inspect "$IMAGE" >/dev/null; then
+            echo "::error::$IMAGE absent du registre apres le push."
+            exit 1
+          fi
 
           # Recolte des .deb : seconde passe sur `debs`, tout en cache.
           rm -rf /tmp/debs-out && mkdir -p /tmp/debs-out
