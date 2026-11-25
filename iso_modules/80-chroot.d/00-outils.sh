@@ -13,6 +13,9 @@
 #   composant_absent <nom> <raison>      the component could not even start
 #       (script missing): recorded as « absent », same rule by class.
 #   osmo_statut <nom> <classe> <statut> <duree> <erreur>   raw status line.
+#   net_retry <commande...>   network command: 3 tries, 15 s then 45 s apart.
+#   osmo_cle <fichier> <url>  a repository signing key on stdout: the copy
+#       versioned in iso_modules/keys/ if there is one, else downloaded.
 # Fin de fragment : `true`.
 
 mkdir -p /var/log/osmo-build
@@ -75,6 +78,24 @@ composant() {
     _osmo_echec "$nom" "$classe" "echec (code $COMPOSANT_RC)" "$derniere"
 }
 run_optional() { composant "$@"; }
+
+net_retry() {
+    local essai=1 rc attente
+    while :; do
+        "$@" && return 0
+        rc=$?
+        [ "$essai" -ge 3 ] && { echo "  reseau : abandon apres 3 essais (code $rc) : $*" >&2; return "$rc"; }
+        attente=$(( essai == 1 ? 15 : 45 ))
+        echo "  reseau : echec (code $rc), essai $((essai + 1))/3 dans ${attente} s : $*" >&2
+        sleep "$attente"; essai=$((essai + 1))
+    done
+}
+osmo_cle() {
+    local f="/var/lib/osmo-build/keys/$1"
+    if [ -s "$f" ]; then cat "$f"; return 0; fi
+    echo "  cle $1 absente de iso_modules/keys : telechargement de $2" >&2
+    net_retry curl -fsSL "$2"
+}
 composant_absent() {
     local classe; classe="$(_osmo_classe "$1")"; COMPOSANT_RC=127
     osmo_statut "$1" "$classe" absent 0 "$2"

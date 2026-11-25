@@ -11,13 +11,14 @@
 # NodeSource fallback: only if the key could not be added before the update
 # (see NODE_VIA_APT above). The official script runs its own update.
 if ! command -v node >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y $APT_OPTS --no-install-recommends nodejs
+    net_retry curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
+    bash /tmp/nodesource_setup.sh
+    net_retry apt-get install -y $APT_OPTS --no-install-recommends nodejs
 fi
 
 if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
     # cd in THIS shell, as before: the next fragments start from there.
-    _web_npm() { cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null; }
+    _web_npm() { cd /opt/GSM/osmo-egprs-web && net_retry npm install --production 2>/dev/null; }
     composant web-npm _web_npm
 fi
 

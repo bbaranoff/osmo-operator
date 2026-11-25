@@ -9,7 +9,7 @@
 # apt-fast-install (/usr/local/sbin, same installer as the Dockerfile) installs
 # aria2 and curl with apt-get, then downloads in parallel; it falls back to
 # apt-get if GitHub is unreachable.
-apt-get update -qq
+net_retry apt-get update -qq
 /usr/local/sbin/apt-fast-install
 
 # ── Single apt-get install ──────────────────────────────────────────────────
@@ -139,6 +139,6 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     fi
 fi
 
-apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
+net_retry apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
 
 true

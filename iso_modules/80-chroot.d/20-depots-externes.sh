@@ -13,8 +13,8 @@ NODE_VIA_APT=0
 if ! command -v node >/dev/null 2>&1; then
     mkdir -p /etc/apt/keyrings
     _depot_nodesource() {
-        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-            -o /etc/apt/keyrings/nodesource.asc || return 1
+        osmo_cle nodesource.asc https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+            > /etc/apt/keyrings/nodesource.asc || return 1
         echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main" \
             > /etc/apt/sources.list.d/nodesource.list
     }
@@ -35,7 +35,7 @@ fi
 MONGO_VIA_APT=0
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
     _depot_mongodb() {
-        curl -fsSL --retry 3 https://www.mongodb.org/static/pgp/server-8.0.asc \
+        osmo_cle mongodb-server-8.0.asc https://www.mongodb.org/static/pgp/server-8.0.asc \
             | gpg --dearmor --yes -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null || return 1
         echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
             > /etc/apt/sources.list.d/mongodb-org-8.0.list

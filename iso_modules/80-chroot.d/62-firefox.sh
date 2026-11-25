@@ -17,20 +17,20 @@
     # The whole chain is ONE optional component: before, a failing
     # « apt-get update » here stopped the build although Firefox is optional.
     _firefox_deb() {
-        curl -fsSL --retry 3 https://packages.mozilla.org/apt/repo-signing-key.gpg \
-             -o /etc/apt/keyrings/packages.mozilla.org.asc || return 1
+        osmo_cle packages.mozilla.org.asc https://packages.mozilla.org/apt/repo-signing-key.gpg \
+             > /etc/apt/keyrings/packages.mozilla.org.asc || return 1
         echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
             > /etc/apt/sources.list.d/mozilla.list
         printf "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n" \
             > /etc/apt/preferences.d/mozilla
-        apt-get update -qq || return 1
-        apt-fast install -y $APT_OPTS firefox
+        net_retry apt-get update -qq || return 1
+        net_retry apt-fast install -y $APT_OPTS firefox
     }
     composant firefox _firefox_deb
     if [ "$COMPOSANT_RC" = 0 ]; then
         _ff_ok=1
         # The UI language follows the keyboard chosen at build time (--kb).
-        composant firefox-l10n apt-fast install -y $APT_OPTS "firefox-l10n-${OSMO_ISO_KB:-fr}"
+        composant firefox-l10n net_retry apt-fast install -y $APT_OPTS "firefox-l10n-${OSMO_ISO_KB:-fr}"
         [ "$COMPOSANT_RC" = 0 ] || echo "  [desktop] firefox-l10n-${OSMO_ISO_KB:-fr} indisponible - interface en anglais"
     fi
     # ── Start page ──────────────────────────────────────────────────────────
