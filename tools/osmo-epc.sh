@@ -111,6 +111,12 @@ setup_tun() {
     fi
     ip addr replace "$TUNADDR" dev ogstun
     ip link set ogstun up
+    # THE NODE ANSWERS FROM ITS OWN ADDRESS: the phones talk to the node by
+    # its LAN address (SIP, enrolment), Asterisk listens on 0.0.0.0 and its
+    # UDP replies would leave from 10.45.0.1, which the UE drops behind its
+    # NAT. Preferred source of the route to the UEs = the node's address.
+    _src="${OSMO_NODE_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')}"
+    [ -n "$_src" ] && ip route replace "$UESUBNET" dev ogstun scope link src "$_src" 2>/dev/null
     sysctl -q -w net.ipv4.ip_forward=1
     if [ -n "$WAN" ]; then
         iptables -t nat -C POSTROUTING -s "$UESUBNET" -o "$WAN" -j MASQUERADE 2>/dev/null \

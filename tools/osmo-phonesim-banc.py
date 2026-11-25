@@ -925,6 +925,20 @@ def ppp_fcs(data, fcs=0xFFFF):
     return fcs
 
 
+def node_ip():
+    """The node's own address (OSMO_NODE_IP, otherwise the source of the
+    default route): the one phones are given for SIP."""
+    ip = os.environ.get("OSMO_NODE_IP", "")
+    if ip:
+        return ip
+    try:
+        r = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3)
+        m = re.search(r"\bsrc (\d+\.\d+\.\d+\.\d+)", r.stdout)
+        return m.group(1) if m else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _sh(*cmd):
     """A system command, without raising: returns (rc, output)."""
     try:
@@ -1169,6 +1183,14 @@ class Ppp:
         self.ns = None
         _sh("ip", "addr", "replace", PPP_LOCAL, "peer", PPP_PEER + "/32", "dev", PPP_IF)
         _sh("ip", "link", "set", PPP_IF, "up", "mtu", "1500")
+        # THE NODE ANSWERS FROM ITS OWN ADDRESS. The phone talks to the node
+        # by its LAN address (SIP, enrolment); Asterisk listens on 0.0.0.0 and
+        # its UDP replies would leave from PPP_LOCAL, which the phone drops (it
+        # never registers, "hors ligne"). The preferred source of the route to
+        # the phone is the node's own address.
+        src = node_ip()
+        if src:
+            _sh("ip", "route", "replace", PPP_PEER, "dev", PPP_IF, "scope", "link", "src", src)
         if not self._radio_brancher():
             if GPRS_DATA:
                 log("PPP : IPCP ouvert, %s au telephone ; sortie radio en attente du PDP GPRS (%s dans %s)"
