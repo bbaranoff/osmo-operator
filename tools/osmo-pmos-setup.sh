@@ -100,6 +100,13 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         # La carte unique est le peripherique par defaut, sans sourdine.
         pactl set-default-sink "$CARTE_OUT"
         pactl set-sink-mute "$CARTE_OUT" 0; pactl set-sink-volume "$CARTE_OUT" 100%
+        # LE CURSEUR MATERIEL. Sous le volume de PipeWire, la carte a son propre
+        # « Master » : une VM neuve (ou redemarree sans etat ALSA) le laisse a
+        # 0 % (-74 dB) - tout joue, rien ne s entend. On le monte et on
+        # enregistre l etat pour les demarrages suivants (alsactl store, plus bas).
+        amixer -c 0 -q sset Master 100% unmute 2>/dev/null
+        amixer -c 0 -q sset PCM 100% 2>/dev/null
+        amixer -c 0 -q sset Capture 100% cap 2>/dev/null
         if [ -n "$CARTE_IN" ]; then
             pactl set-default-source "$CARTE_IN"; pactl set-source-mute "$CARTE_IN" 0
         fi
@@ -110,6 +117,7 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
         done
         echo "  VM : un haut-parleur ($CARTE_OUT), un micro (${CARTE_IN:-aucun})"
     ' 2>&1 | tail -n 6
+    ssh_vm "echo $PASS | sudo -S -p '' alsactl store" 2>/dev/null   # le curseur materiel, pour les demarrages suivants
 fi
 }
 
