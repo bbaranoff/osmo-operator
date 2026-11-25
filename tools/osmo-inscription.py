@@ -142,8 +142,15 @@ exten => _7X.,1,NoOp(=== POSTE INTERNE -> SMARTPHONE : ${EXTEN:1} ===)
 ; (--smartphone-vers NUM... pour n en faire sonner que certains).
 [smartphone_in]
 exten => s,1,NoOp(=== APPEL RECU PAR LA SIM : ${CALLERID(all)} ===)
+; Un appel DU BANC qui sonne sur le smartphone (appli Android, compte « Banc »)
+; est annonce lui aussi par le mains-libres, avec le numero du banc : ce n est
+; pas un appel de la SIM. Ne pas le faire sonner sur les postes (boucle), et
+; surtout ne pas raccrocher - raccrocher ici le refuserait sur le telephone.
+ same => n,GotoIf($[${REGEX("^(3[0-9][0-9][0-9]|1001[0-9][0-9]|[1-7]00)$" ${CALLERID(num)})}]?banc)
  same => n,Dial(%(t)s,45,rT)
  same => n,Hangup()
+ same => n(banc),NoOp(appel du banc sur le smartphone : laisse au telephone)
+ same => n,Wait(14400)
 """ % {"m": mobile, "t": tous or "PJSIP/aucun"}
     else:
         fermeture_fin = ""
