@@ -412,6 +412,137 @@ def ami_message(dest, de, texte):
     return (b"Message successfully" in data or data.count(b"Response: Success") >= 2), ""
 
 
+# ── LA LIGNE BLUETOOTH, PILOTEE PAR LES APPLIS ──────────────────────────────
+# Le smartphone devient une ligne du banc par le mains-libres Bluetooth
+# (chan_mobile). L onglet Proxy des applis fait tout d ici :
+#   GET  /proxy/bluetooth            l etat : adaptateur, telephones appaires, ligne
+#   POST /proxy/bluetooth/associer   ouvre une fenetre d appairage de 3 min : le
+#                                    noeud devient visible et accepte ; le premier
+#                                    telephone qui s associe devient LA ligne
+#                                    (chan_mobile.conf ecrit, module recharge)
+# Reserve a un compte du noeud (son mot de passe SIP sert de jeton).
+BT = {"fin": 0.0, "message": "", "fil": None}
+BT_DUREE = 180
+
+
+def _sh(*cmd, timeout=20):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def bt_adaptateur():
+    out = _sh("bluetoothctl", "show")
+    m = re.search(r"Controller ([0-9A-F:]{17})", out)
+    a = re.search(r"Alias: (.+)", out)
+    return {"adresse": m.group(1) if m else "", "nom": a.group(1).strip() if a else "",
+            "allume": "Powered: yes" in out}
+
+
+def bt_appaires():
+    return [{"adresse": mac, "nom": nom.strip()}
+            for mac, nom in re.findall(r"Device ([0-9A-F:]{17}) (.+)", _sh("bluetoothctl", "devices", "Paired"))]
+
+
+def bt_ligne():
+    """La ligne chan_mobile telle qu Asterisk la voit."""
+    for l in _sh("asterisk", "-rx", "mobile show devices").splitlines():
+        c = l.split()
+        if len(c) >= 6 and re.fullmatch(r"[0-9A-F:]{17}", c[1]):
+            return {"nom": c[0], "adresse": c[1], "connecte": c[4] == "Yes", "etat": c[5]}
+    return None
+
+
+def bt_etat():
+    a = bt_adaptateur()
+    reste = max(0, int(BT["fin"] - time.time()))
+    return {"ok": True, "adaptateur": a, "appaires": bt_appaires(), "ligne": bt_ligne(),
+            "fenetre": reste, "message": BT["message"]}
+
+
+def bt_configurer(mac, nom):
+    """Fait d un telephone appaire LA ligne du banc. -> message"""
+    a = bt_adaptateur()
+    _sh("bluetoothctl", "trust", mac)
+    if "0000111f" not in _sh("bluetoothctl", "info", mac).lower():
+        return "%s est associe, mais n offre pas le mains-libres (pas un telephone ?)" % nom
+    _sh("asterisk", "-rx", "module load chan_mobile.so")
+    port = None
+    for l in _sh("asterisk", "-rx", "mobile search", timeout=60).splitlines():
+        if l.startswith(mac):
+            c = l.split()
+            if c[-1].isdigit():
+                port = c[-1]
+    if not port:
+        return "%s est associe, mais son canal mains-libres est introuvable (Bluetooth du telephone allume ?)" % nom
+    with open(os.path.join(AST, "chan_mobile.conf"), "w") as f:
+        f.write("""; chan_mobile.conf - ecrit par osmo-inscription.py (onglet Proxy des applis)
+; Le smartphone comme ligne du banc, par Bluetooth (mains-libres).
+[general]
+interval=30
+
+[adapter]
+id=pc
+address=%s
+
+; %s
+[smartphone]
+address=%s
+port=%s
+context=smartphone_in
+adapter=pc
+group=1
+""" % (a["adresse"], nom, mac, port))
+    _sh("asterisk", "-rx", "module unload chan_mobile.so")
+    time.sleep(1)
+    _sh("asterisk", "-rx", "module load chan_mobile.so")
+    with VERROU:
+        ecrire_asterisk(charger())
+    return "%s est la ligne du banc (canal %s)" % (nom, port)
+
+
+def bt_fenetre():
+    """3 min pendant lesquelles le noeud est visible et accepte un appairage."""
+    avant = {d["adresse"] for d in bt_appaires()}
+    _sh("rfkill", "unblock", "bluetooth")
+    _sh("bluetoothctl", "power", "on")
+    try:
+        p = subprocess.Popen(["bluetoothctl"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, text=True)
+    except OSError as e:
+        BT["message"] = "bluetoothctl absent (%s)" % e
+        BT["fin"] = 0
+        return
+
+    def dire(x):
+        try:
+            p.stdin.write(x + "\n"); p.stdin.flush()
+        except OSError:
+            pass
+    for c in ("agent KeyboardDisplay", "default-agent", "pairable on", "discoverable on"):
+        dire(c); time.sleep(0.5)
+    BT["message"] = "le noeud est visible et accepte un telephone"
+    nouveau = None
+    while time.time() < BT["fin"] and nouveau is None:
+        dire("yes")                               # confirme le code affiche des deux cotes
+        time.sleep(2)
+        nouveau = next((d for d in bt_appaires() if d["adresse"] not in avant), None)
+    for c in ("discoverable off", "quit"):
+        dire(c); time.sleep(0.3)
+    try:
+        p.wait(timeout=5)
+    except subprocess.SubprocessError:
+        p.kill()
+    if nouveau is None:
+        BT["message"] = "aucun telephone ne s est associe"
+    else:
+        BT["message"] = "%s associe, mise en place de la ligne..." % nouveau["nom"]
+        BT["message"] = bt_configurer(nouveau["adresse"], nouveau["nom"])
+    BT["fin"] = 0
+    sys.stderr.write("bluetooth : %s\n" % BT["message"])
+
+
 class H(BaseHTTPRequestHandler):
     def _rep(self, st, obj):
         b = json.dumps(obj).encode()
@@ -434,6 +565,8 @@ class H(BaseHTTPRequestHandler):
                 PROXY["vu"] = time.time()
                 sms, PROXY["file"] = PROXY["file"], []
             return self._rep(200, {"ok": True, "sms": sms})
+        if u.path.rstrip("/") == "/proxy/bluetooth":
+            return self._rep(200, bt_etat())
         if u.path.rstrip("/") == "/proxy":
             return self._rep(200, {"ok": True, "actif": proxy_actif(), "user": PROXY["user"] if proxy_actif() else None,
                                    "dest": PROXY["dest"], "attente": len(PROXY["file"])})
@@ -456,6 +589,23 @@ class H(BaseHTTPRequestHandler):
             return self._rep(200, {"ok": True})
         if not proxy_compte(d.get("user"), d.get("mdp")):
             return self._rep(403, {"ok": False, "error": "compte inconnu"})
+        if chemin == "/proxy/bluetooth/associer":
+            with VERROU:
+                if BT["fin"] <= time.time():
+                    BT["fin"] = time.time() + BT_DUREE
+                    BT["message"] = "ouverture..."
+                    BT["fil"] = threading.Thread(target=bt_fenetre, daemon=True)
+                    BT["fil"].start()
+            sys.stderr.write("bluetooth : fenetre d appairage ouverte par %s\n" % d.get("user"))
+            return self._rep(200, bt_etat())
+        if chemin == "/proxy/bluetooth/ligne":
+            # refaire la ligne avec un telephone deja appaire
+            mac = str(d.get("adresse") or "").upper()
+            dev = next((x for x in bt_appaires() if x["adresse"] == mac), None)
+            if dev is None:
+                return self._rep(404, {"ok": False, "error": "ce telephone n est pas appaire au noeud"})
+            BT["message"] = bt_configurer(dev["adresse"], dev["nom"])
+            return self._rep(200, bt_etat())
         if chemin == "/proxy/etat":
             # l appli s annonce (actif) ou se retire ; dest = qui recoit sur le banc
             with VERROU:
