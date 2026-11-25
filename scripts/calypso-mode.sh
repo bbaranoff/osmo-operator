@@ -82,7 +82,7 @@ vers_data() {
     sed "s|layer2-socket .*|layer2-socket $SOCK|" "$HERE/configs/gprs/modem-gprs.cfg" > "$cfg"
     if ! systemctl is-active --quiet "$U_MODEM"; then
         systemctl reset-failed "$U_MODEM" >/dev/null 2>&1 || true
-        systemd-run --quiet --unit="$U_MODEM" --collect -p KillMode=control-group -p CPUAffinity="${RT_CPUS:-0-15}" -p Nice=-10 \
+        systemd-run --quiet --unit="$U_MODEM" --collect --slice=banc.slice -p KillMode=control-group -p Nice=-10 \
             -p SyslogIdentifier="$U_MODEM" "$MODEM_BIN" -c "$cfg" \
             || { log "systemd-run $U_MODEM a echoue"; return 1; }
         log "modem GPRS lance sur $SOCK ($cfg)"
@@ -110,8 +110,16 @@ vers_voix() {
         cwd="$(cat "$ETAT/calypso-mobile.cwd" 2>/dev/null || echo /)"
         jrn="$(cat "$ETAT/calypso-mobile.log" 2>/dev/null)"
         case "$jrn" in /*) ;; *) jrn=/tmp/c54x-pont/mobile.log ;; esac
-        # As c54x_exe/run.sh (step 4): chain priority, line-buffered output
-        ( cd "$cwd" && exec setsid taskset -c "${RT_CPUS:-0-15}" nice -n -10 stdbuf -oL "${cmd[@]}" >> "$jrn" 2>&1 < /dev/null ) &
+        # As c54x_exe/run.sh (step 4): chain priority, line-buffered output.
+        # [2026-11-25] In banc.slice, where the bench put it: a plain taskset
+        # 0-15 from a shell of system.slice / a terminal fails (cpuset of the
+        # isolation, « Invalid argument ») and the mobile never came back.
+        systemctl reset-failed osmo-mobile-100101 >/dev/null 2>&1 || true
+        systemd-run --quiet --collect --slice=banc.slice --unit=osmo-mobile-100101 \
+            -p WorkingDirectory="$cwd" -p Nice=-10 \
+            -p StandardOutput=append:"$jrn" -p StandardError=append:"$jrn" \
+            /usr/bin/stdbuf -oL "${cmd[@]}" \
+          || ( cd "$cwd" && exec setsid nice -n -10 stdbuf -oL "${cmd[@]}" >> "$jrn" 2>&1 < /dev/null ) &
         log "mobile relance : ${cmd[*]} (journal $jrn)"
     fi
     echo voix > "$MODE_F"

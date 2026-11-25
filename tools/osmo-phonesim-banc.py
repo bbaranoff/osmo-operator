@@ -422,8 +422,11 @@ LTE_NAME = os.environ.get("OSMO_LTE_NAME", "Osmocom 4G")
 # the GGSN delivers it all on apn0, NATed to the Internet like the 4G SGi.
 # The Calypso has only ONE layer-2 client: scripts/calypso-mode.sh gives it
 # to the modem (ATD*99, data) or to the mobile (call, SMS: voice).
-# OSMO_GPRS_DATA=0: disabled.
-GPRS_DATA = os.environ.get("OSMO_GPRS_DATA", "1") == "1"
+# [2026-11-25] DISABLED BY DEFAULT, OSMO_GPRS_DATA=1 to enable: each ATD*99
+# of the phone (NetworkManager retries every few minutes) took the Calypso
+# away from the mobile 100101 - the cell was lost for voice and SMS, and the
+# GPRS modem rarely held. Without it, the data goes through the 4G only.
+GPRS_DATA = os.environ.get("OSMO_GPRS_DATA", "0") == "1"
 GPRS_NETNS = os.environ.get("OSMO_GPRS_NETNS", "msgprs")
 GPRS_TUN = os.environ.get("OSMO_GPRS_TUN", "tun_modem")
 GPRS_NET = os.environ.get("OSMO_GPRS_NET", "176.16.32.0/24")
