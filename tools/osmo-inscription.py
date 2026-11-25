@@ -113,14 +113,21 @@ include => internal
             print("asterisk -rx %r : %s" % (cmd, (r.stderr or r.stdout).strip()), file=sys.stderr)
 
 
+def normaliser(code):
+    """Majuscules, espaces, tirets « − – » ou absents : on ne garde que l'hexa."""
+    h = re.sub(r"[^0-9a-f]", "", (code or "").lower())
+    return "%s-%s" % (h[:4], h[4:]) if len(h) == 8 else h
+
+
 def inscrire(code, pseudo):
-    code, pseudo = (code or "").strip(), (pseudo or "").strip()
+    code, pseudo = normaliser(code), (pseudo or "").strip()
     if not re.fullmatch(r"[\w .\-]{1,40}", pseudo):
         return 400, {"ok": False, "error": "pseudo : 1 à 40 lettres, chiffres, espace, . _ -"}
     with VERROU:
         e = charger()
         c = e["codes"].get(code)
         if not c or c["restant"] <= 0:
+            print("code refusé : %r (%s)" % (code, "épuisé" if c else "inconnu"), file=sys.stderr)
             return 403, {"ok": False, "error": "code d'invitation inconnu ou déjà utilisé"}
         libres = [str(n) for n in range(PREMIER, DERNIER + 1) if str(n) not in e["comptes"]]
         if not libres:
