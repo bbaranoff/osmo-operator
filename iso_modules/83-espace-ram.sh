@@ -50,6 +50,28 @@ Options=mode=1777,strictatime,nosuid,nodev,size=15%
 EOF
 chroot "$ROOTFS" systemctl enable tmp.mount 2>/dev/null || true
 
+# ── Docker storage off the overlay root ─────────────────────────────────────
+# The live root is overlay(squashfs + tmpfs): docker's overlayfs snapshotter
+# cannot stack on it, and ./build.sh (or any `docker build`) fails at its first
+# step with 'mount source: "overlay" ... invalid argument'. Before containerd
+# and docker start, /var/lib/{docker,containerd} are moved onto a tmpfs (a
+# no-op on an installed system whose root is ext4).
+install -m 755 "$DIR/packaging/docker-storage.sh" "$ROOTFS/usr/local/sbin/osmo-docker-storage"
+cat > "$ROOTFS/etc/systemd/system/osmo-docker-storage.service" <<'EOF'
+[Unit]
+Description=osmo-operator - stockage docker hors overlayfs (systeme live)
+DefaultDependencies=no
+After=local-fs.target
+Before=containerd.service docker.service docker.socket
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-docker-storage --boot
+[Install]
+WantedBy=multi-user.target containerd.service docker.service
+EOF
+chroot "$ROOTFS" systemctl enable osmo-docker-storage.service 2>/dev/null || true
+
 # ── Bounding the stack's writes ────────────────────────────────────────────
 # With 'toram' the root is a tmpfs overlay: everything written at runtime stays
 # in RAM. Three unbounded writers would fill it after hours ("No space left on
