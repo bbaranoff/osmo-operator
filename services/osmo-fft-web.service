@@ -1,0 +1,17 @@
+[Unit]
+Description=Spectres MS + BTS en direct (fft-web, http://<noeud>:8081/psd?src=ms|bts)
+After=network.target
+# Lit /tmp/iq_fft.fifo (DL, relais osmo-trx) et /tmp/iq_fft_ms.fifo (UL, pont.py)
+# sans jamais bloquer les producteurs. Reseau local ou WireGuard seulement.
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/GSM/osmo-operator
+Environment=GSM_ROOT=/opt/GSM
+ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/fft-web/fft_web.py
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=osmo-fft-web
+
+[Install]
+WantedBy=multi-user.target

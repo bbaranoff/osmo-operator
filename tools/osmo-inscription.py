@@ -17,7 +17,7 @@
 # Pas d'authentification au-delà du code : réseau local ou WireGuard seulement.
 # Bibliothèque standard uniquement.
 
-import argparse, json, os, re, secrets, subprocess, sys, threading
+import argparse, json, os, re, secrets, socket, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ETAT = os.environ.get("INSCRIPTION_ETAT", "/var/lib/osmo-inscription/etat.json")
@@ -141,6 +141,22 @@ def inscrire(code, pseudo):
                  "sip_port": 5060, "sip_transport": "udp"}
 
 
+def adresse_sip(client, defaut):
+    """L'adresse d'où Asterisk (bind 0.0.0.0) répondra à ce client : la source
+    que le noyau choisit pour aller vers lui. Ce n'est pas forcément celle que le
+    client a appelée : un téléphone en data LTE (10.45.0.x) qui vise
+    192.168.1.91 reçoit les réponses UDP de 10.45.0.1, et le NAT de son côté
+    les jette. En TCP (HTTP) le problème n'existe pas, d'où le piège."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((client, 5060))          # UDP : aucun paquet émis, juste la route
+        src = s.getsockname()[0]
+        s.close()
+        return defaut if src.startswith("127.") else src
+    except OSError:
+        return defaut
+
+
 class H(BaseHTTPRequestHandler):
     def _rep(self, st, obj):
         b = json.dumps(obj).encode()
@@ -163,8 +179,7 @@ class H(BaseHTTPRequestHandler):
             return self._rep(400, {"ok": False, "error": "JSON attendu"})
         st, rep = inscrire(d.get("code"), d.get("pseudo"))
         if rep.get("ok"):
-            # l'adresse par laquelle le téléphone nous a joints : c'est le domaine SIP
-            rep["sip_domain"] = self.connection.getsockname()[0]
+            rep["sip_domain"] = adresse_sip(self.client_address[0], self.connection.getsockname()[0])
         self._rep(st, rep)
 
     def log_message(self, fmt, *a):
