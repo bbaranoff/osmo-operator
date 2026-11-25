@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # sms-sip-vers-gsm.py - a SIP MESSAGE of a phone of the node, to a GSM number.
 #
-#   sms-sip-vers-gsm.py <dest msisdn> <from> <body in base64>
+#   sms-sip-vers-gsm.py <dest msisdn> <From header in base64> <body in base64>
 #
 # Called by Asterisk ([sms_inscrits] of extensions_inscrits.conf, written by
 # osmo-inscription.py). Asterisk runs as « asterisk » and cannot reach the
@@ -19,7 +19,16 @@ def main():
         print(__doc__ or "usage: dest from body_b64", file=sys.stderr)
         return 2
     dest = re.sub(r"\D", "", sys.argv[1])
-    src = re.sub(r"[^\d+]", "", sys.argv[2]) or "inconnu"
+    # the raw From header, in base64: « "x" <sip:3001@host>;tag=… »
+    try:
+        de = base64.b64decode(sys.argv[2]).decode("utf-8", "replace")
+    except ValueError:
+        de = sys.argv[2]
+    m = re.search(r"sips?:([^@>;]+)", de)
+    src = re.sub(r"[^\d+]", "", m.group(1) if m else de)
+    if not src:
+        syslog.syslog("sms-sip-vers-gsm: expediteur illisible (%r)" % de[:60])
+        return 1
     try:
         text = base64.b64decode(sys.argv[3]).decode("utf-8", "replace")
     except ValueError:

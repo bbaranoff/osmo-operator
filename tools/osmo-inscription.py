@@ -119,8 +119,11 @@ exten => _3XXX,1,NoOp(=== GSM -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} =
 exten => _3XXX,1,NoOp(=== SMS INSCRIT -> INSCRIT ${EXTEN} ===)
  same => n,MessageSend(pjsip:${EXTEN},${MESSAGE(from)})
  same => n,Hangup()
-exten => _X.,1,NoOp(=== SMS INSCRIT ${CALLERID(num)} -> GSM ${EXTEN} ===)
- same => n,System(/usr/bin/python3 %s ${FILTER(0-9,${EXTEN})} ${FILTER(0-9,${CALLERID(num)})} ${BASE64_ENCODE(${MESSAGE(body)})})
+exten => _X.,1,NoOp(=== SMS INSCRIT ${MESSAGE(from)} -> GSM ${EXTEN} ===)
+; L expediteur vient de l en-tete From (« "x" <sip:3001@...> »), passe brut en
+; base64 : CALLERID(num) est vide sur un SIP MESSAGE, et le script en tire le
+; numero. Guillemets : un argument vide ne decale rien.
+ same => n,System(/usr/bin/python3 %s "${FILTER(0-9,${EXTEN})}" "${BASE64_ENCODE(${MESSAGE(from)})}" "${BASE64_ENCODE(${MESSAGE(body)})}")
  same => n,Hangup()
 """ % SMS_GSM)
     assurer_include(os.path.join(AST, "pjsip.conf"), '#include "pjsip_inscrits.conf"')
