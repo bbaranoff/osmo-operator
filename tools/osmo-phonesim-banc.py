@@ -30,6 +30,7 @@ import json
 import os
 import re
 import socket
+import urllib.request
 import socketserver
 import subprocess
 import sys
@@ -99,6 +100,34 @@ def e164(num):
     if num.startswith("00"):
         return "+" + num[2:]
     return "+33" + num[1:]
+
+
+def sms_proxy(num, text):
+    """Hand an SMS for an outside number to the PROXY PHONE (the Android app,
+    tab Proxy, "Prêter la carte SIM au banc"): osmo-inscription queues it and
+    the phone sends it with its SIM. True = queued; False = no proxy phone
+    online (or no enrolment service), the caller then tries the dongle."""
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/proxy/sortant" % int(os.environ.get("OSMO_INSCRIPTION_PORT", "8088")),
+            method="POST", headers={"Content-Type": "application/json"},
+            data=json.dumps({"vers": num, "de": MSISDN, "texte": text}).encode())
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return bool(json.loads(r.read().decode() or "{}").get("ok"))
+    except (OSError, ValueError):                       # 503 : pas de proxy en ligne
+        return False
+
+
+def smartphone_ligne():
+    """The chan_mobile line (a phone paired over Bluetooth), or None."""
+    try:
+        txt = open("/etc/asterisk/chan_mobile.conf").read()
+    except OSError:
+        return None
+    for nom, corps in re.findall(r"^\[(\w+)\]([^\[]*)", txt, re.M):
+        if nom not in ("general", "adapter") and re.search(r"^\s*address\s*=", corps, re.M):
+            return nom
+    return None
 
 
 def sms_externe(num, text):
@@ -744,7 +773,12 @@ def ami_originate(num):
     """Give birth to the call: the dialled number is called in the bench
     dialplan, and once answered it is connected to our own number - hence to
     the subscriber's mobile. Returns (ok, channel or reason)."""
-    chan = "Local/%s@%s" % (num, CTX)
+    # THE NATIVE PHONE APP THROUGH THE PROXY: an outside number enters the
+    # dialplan by [sortie-smartphone] (written by osmo-inscription when a
+    # Bluetooth line exists) - the paired phone if it is there and free, the
+    # usual trunk otherwise.
+    ctx = "sortie-smartphone" if SMS_EXTERNE.match(num) and smartphone_ligne() else CTX
+    chan = "Local/%s@%s" % (num, ctx)
     # ECHO_NO_PROMPT=1: Asterisk's 600 skips its announcement (demo-echotest)
     # and goes straight to Echo: with the recording of leg ;1 (sub-record),
     # the Playback -> Echo sequence makes Asterisk send a burst of RTP
@@ -762,6 +796,8 @@ def ami_originate(num):
            "Variable: ECHO_NO_PROMPT=1\r\n"
            "%s"
            "Async: true\r\n\r\n" % (chan, CTX, MSISDN, MSISDN, extra))
+    if ctx != CTX:
+        log("appel vers %s : par la ligne du smartphone si elle est libre" % num)
     out, err = _ami([act], wait=5.0)
     if out is None:
         return False, err
@@ -1786,6 +1822,13 @@ class AtHandler(socketserver.StreamRequestHandler):
                 self.err()
                 return
         if SMS_EXTERNE.match(num):
+            # THE NATIVE MESSAGES APP THROUGH THE PROXY: the phone that lends its
+            # SIM first, the dongle gateway otherwise.
+            if sms_proxy(num, text):
+                log("SMS a %s confie au telephone proxy (sa SIM l envoie) : %s" % (num, text))
+                self.out("+CMGS: 1")
+                self.ok()
+                return
             motif = sms_externe(num, text)
             if motif:
                 log("SMS vers %s (reseau reel) non envoye : %s" % (num, motif))
