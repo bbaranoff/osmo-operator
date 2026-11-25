@@ -89,9 +89,6 @@ LOOPBACK_LATENCY_MSEC="${LOOPBACK_LATENCY_MSEC:-40}"
 #   ensure_echo_cancel                loads that canceller (without analog
 #                                     AGC, microphone at 25 %) and makes it
 #                                     the default, at boot as with the VM;
-#   pmos_vm_audio_present             the postmarketOS VM has its sound cards
-#                                     here (QEMU streams media.name=combine);
-#   remove_direct_loopbacks           removes the direct loopbacks;
 #   ensure_local_loopback / _mic      install the direct loopback ONLY without
 #                                     the VM, to audio_hp_sink / from
 #                                     audio_mic_source, and replace a loopback
@@ -149,45 +146,12 @@ audio_mic_source() {
     audio_hw_source
 }
 
-# ── Who carries the voice: the host, or the VM? ─────────────────────────────
-# BY DEFAULT, THE HOST. The postmarketOS phone is the bench INTERFACE (dial,
-# answer, SMS); it does not need to carry the samples. Doing so is expensive
-# and audible: microphone -> QEMU -> VM Pulse -> module-loopback 400 ms ->
-# QEMU -> gsm_mic, and as much on the way back, i.e. ~800 ms round trip, two
-# emulated clocks, and the resampling of two HDA cards at 44.1 kHz for an
-# 8 kHz telephone signal.
-#
-# So the voice stays on the host (gsm_audio -> speakers, microphone ->
-# gsm_mic, 40 ms), and the VM keeps its cards for its own use - ringtone,
-# notifications, the Calls application. It stays in the SIGNALLING path,
-# which is its real role.
-#
-# To put the voice INSIDE the VM (the crossed setup, to hear it go through the
-# phone): OSMO_PMOS_VOIX_VM=1 when starting osmo-pmos-setup. It then installs
-# the two loopbacks in the VM and drops this marker; the functions below then
-# remove the host's direct loopbacks, otherwise the voice would arrive TWICE -
-# direct, then through the VM 400 ms later.
-PMOS_VOIX_VM_MARQUEUR="${PMOS_VOIX_VM_MARQUEUR:-/run/osmo-pmos-voix-vm}"
-
-# True only if the VM REALLY carries the voice: the marker AND the process.
-# A marker left behind by a VM killed abruptly must not deprive the host of
-# its speakers.
-pmos_vm_audio_present() {
-    [ -f "$PMOS_VOIX_VM_MARQUEUR" ] || return 1
-    pgrep -f 'qemu-system.*hdac[o]mbine' >/dev/null 2>&1 && return 0
-    pactl list sink-inputs 2>/dev/null | grep -q 'media.name = "combine"'
-}
-
-
-remove_direct_loopbacks() {
-    local m n=0
-    for m in $(pactl list short modules 2>/dev/null \
-               | awk '/module-loopback/ && (/source=gsm_audio\.monitor/ || /sink=gsm_mic([ \t]|$)/) { print $1 }'); do
-        pactl unload-module "$m" >/dev/null 2>&1 && n=$(( n + 1 ))
-    done
-    [ "$n" -gt 0 ] && echo -e "  ${YELLOW}[audio] ${n} bouclage(s) direct(s) retire(s)${NC}"
-    return 0
-}
+# ── Who carries the voice: the host ─────────────────────────────────────────
+# ALWAYS THE HOST: gsm_audio -> speakers, microphone -> gsm_mic, 40 ms. The
+# postmarketOS phone is the bench INTERFACE (dial, answer, SMS); its single
+# sound card (osmo_bench_args) is for the ringtone, notifications and Calls.
+# [2026-11-25] The option of carrying the voice through the VM (two crossed
+# cards, ~800 ms round trip, OSMO_PMOS_VOIX_VM) is gone.
 
 # THE ECHO CANCELLER BETWEEN THE MICROPHONE AND THE SPEAKERS.
 # Internal microphone + speakers: the echo of the 600 feeds back into the
@@ -383,13 +347,6 @@ ensure_local_loopback() {
     pactl list short sources 2>/dev/null | grep -qw 'gsm_audio.monitor' || {
         echo -e "  ${YELLOW}[audio] gsm_audio.monitor absent - loopback local ignore${NC}"; return 0; }
 
-    # With the postmarketOS phone the voice goes through the VM: no direct loopback.
-    if pmos_vm_audio_present; then
-        echo -e "  ${GREEN}[audio] telephone postmarketOS en place - l ecoute passe par la VM, pas de bouclage direct${NC}"
-        remove_direct_loopbacks
-        return 0
-    fi
-
     local sink
     sink="$(audio_hp_sink)"
     [ -n "$sink" ] || {
@@ -454,13 +411,6 @@ ensure_local_mic() {
 
     pactl list short sinks 2>/dev/null | grep -qw 'gsm_mic' || {
         echo -e "  ${YELLOW}[audio] sink gsm_mic absent - micro local ignore${NC}"; return 0; }
-
-    # With the postmarketOS phone, the VM feeds gsm_mic.
-    if pmos_vm_audio_present; then
-        echo -e "  ${GREEN}[audio] telephone postmarketOS en place - le micro passe par la VM, pas de bouclage direct${NC}"
-        remove_direct_loopbacks
-        return 0
-    fi
 
     # Input = the operator's microphone (echo canceller if present, otherwise
     # the hardware) - never a .monitor (see the warning above).

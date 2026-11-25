@@ -9,7 +9,7 @@
 #     serial port), otherwise it ignores it;
 #   - the wired link hidden from the phone, so that data goes through the
 #     mobile connection (PPP of the bench);
-#   - the voice wiring (--voix): host audio and the two sound cards of the VM.
+#   - the voice wiring (--voix): host audio and the sound card of the VM.
 set -u
 PORT="${OSMO_PMOS_SSH_PORT:-2222}"
 PASS="${OSMO_PMOS_PASS:-147147}"
@@ -27,56 +27,25 @@ else
     AUDIO_LIB=""
 fi
 # THE VOICE AS A FUNCTION, callable alone (osmo-pmos-setup --voix).
-# Without a modem (OSMO_PMOS_MODEM=0) the VM must still be switched to its
-# "combine" card, otherwise the default output stays the BRIDGE (0x12), whose
-# playback goes into gsm_mic. osmo-pmos-qemu calls --voix as soon as SSH
-# answers when it does not connect the modem.
-voix() {
-# THE VOICE, AND WHY TWO SOUND CARDS ARE NEEDED. QEMU cannot push sound into
-# a guest's speaker: from an emulated card, PLAYBACK goes to a host sink and
-# CAPTURE comes from a host source. The call downlink (gsm_audio) lives host
-# side: it can only enter the VM through its capture, never through its
-# speaker. With a single card the VM has the NETWORK's point of view - it
-# hears the peer in its microphone - and Calls stays mute.
 #
-# So the VM has two cards, set by pmbootstrap (osmo_bench_args):
-#   0000:00:12.0  the BRIDGE  : capture = gsm_audio.monitor (the downlink),
-#                               playback = gsm_mic (the uplink);
-#   0000:00:13.0  the HANDSET : the host default devices, the real speakers
-#                               and the real microphone.
-# They are crossed INSIDE the VM: bridge -> handset to hear, handset ->
-# bridge to speak. The VM is then really in the voice path.
-#
-# And the two DIRECT host loopbacks (gsm_audio.monitor to the speakers,
-# microphone to gsm_mic) are cut: otherwise the voice arrives TWICE, once
-# directly and once through the VM with its added latency - a plain echo.
+# ONE MICROPHONE, ONE SPEAKER. The call voice stays on the host, 40 ms:
+#   downlink  gsm_audio -> speakers (through the echo canceller osmo_hp_ec)
+#   uplink    microphone (osmo_mic_ec) -> gsm_mic
+# The VM has ONE sound card (0000:00:13.0, pmbootstrap osmo_bench_args) on
+# those same speakers and microphone, for the ringtone, the notifications
+# and Calls. [2026-11-25] The second "bridge" card and the option of routing
+# the voice through the VM (OSMO_PMOS_VOIX_VM, ~800 ms) are gone.
 # OSMO_PMOS_RELAI=0 to leave the audio alone.
+voix() {
 if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     echo "--- voix"
-    # THE SPEAKER AND MICROPHONE ASSIGNMENT COMES FROM lib/audio.sh, the
-    # single source of truth (see "L AFFECTATION DES HAUT-PARLEURS" there):
-    # the host direct loopbacks are removed, the echo canceller is loaded (or
-    # already there, osmo-pmos-qemu loads it before QEMU) and becomes the
-    # default, and the QEMU "combine" streams go to it - audio_hp_sink /
-    # audio_mic_source.
     HP_SINK=""; MIC_SRC=""
     if [ -n "$AUDIO_LIB" ]; then
         ensure_echo_cancel
         ensure_record_mix
-        # THE VOICE STAYS ON THE HOST (see lib/audio.sh, "QUI PORTE LA
-        # VOIX"). OSMO_PMOS_VOIX_VM=1 routes it through the VM: the marker
-        # is then written BEFORE calling the functions, so that they remove
-        # the direct loopbacks instead of re-adding them.
-        if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
-            : > "$PMOS_VOIX_VM_MARQUEUR" 2>/dev/null
-            remove_direct_loopbacks
-            echo "  la voix passe PAR LA VM (OSMO_PMOS_VOIX_VM=1) - ~800 ms d aller-retour"
-        else
-            rm -f "$PMOS_VOIX_VM_MARQUEUR" 2>/dev/null
-            ensure_local_loopback
-            ensure_local_mic
-            echo "  la voix reste sur l hote (40 ms) - OSMO_PMOS_VOIX_VM=1 pour la faire passer par la VM"
-        fi
+        ensure_local_loopback
+        ensure_local_mic
+        echo "  la voix reste sur l hote (40 ms)"
         HP_SINK="$(audio_hp_sink)"; MIC_SRC="$(audio_mic_source)"
         echo "  haut-parleurs de l operateur : ${HP_SINK:-aucun} ; micro : ${MIC_SRC:-aucun}"
     else
@@ -120,78 +89,26 @@ if [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     for si in $(pactl list sink-inputs 2>/dev/null | awk '/Sink Input #/{id=$3} /application.name = "speech-dispatcher/{print id}' | tr -d '#'); do
         pactl move-sink-input "$si" osmo_tts_off 2>/dev/null && echo "  flux speech-dispatcher detourne des haut-parleurs (osmo_tts_off)"
     done
-    ssh_vm "VOIX_VM='${OSMO_PMOS_VOIX_VM:-0}'; "'
-        pci() { pactl list "$1" short 2>/dev/null | grep "pci-0000_00_$2\.0" | grep -v monitor | head -n1 | cut -f2; }
-        PONT_OUT=$(pci sinks 12);  PONT_IN=$(pci sources 12)
-        COMB_OUT=$(pci sinks 13);  COMB_IN=$(pci sources 13)
-        if [ -z "$PONT_IN" ] || [ -z "$COMB_OUT" ]; then
-            echo "  ATTENTION : les deux cartes son ne sont pas la - VM lancee avant le patch ?"
+    ssh_vm '
+        CARTE_OUT=$(pactl list sinks short 2>/dev/null | grep "pci-0000_00_13\.0" | head -n1 | cut -f2)
+        CARTE_IN=$(pactl list sources short 2>/dev/null | grep "pci-0000_00_13\.0" | grep -v monitor | head -n1 | cut -f2)
+        if [ -z "$CARTE_OUT" ]; then
+            echo "  ATTENTION : la VM ne voit pas sa carte son (0000:00:13.0)"
             pactl list sinks short 2>/dev/null
             exit 0
         fi
-        # The handset becomes the default device: otherwise the Phosh ringtone
-        # and notifications would go into the call uplink.
-        pactl set-default-sink "$COMB_OUT"
-        pactl set-default-source "$COMB_IN"
-        # The two other downlink volume controls are here: Phosh readily
-        # mutes the handset (volume key, silent mode) and the voice dies
-        # there, loopbacks in place. Unmute them.
-        for c in "$PONT_OUT" "$COMB_OUT"; do
-            pactl set-sink-mute "$c" 0 2>/dev/null
-            pactl set-sink-volume "$c" 100% 2>/dev/null
-        done
-        for c in "$PONT_IN" "$COMB_IN"; do
-            pactl set-source-mute "$c" 0 2>/dev/null
-        done
-        # IDEMPOTENT. If both loopbacks are already there, pinned, with the
-        # right ends, they are left alone (reloading them during a call
-        # would cut the voice for half a second).
-        deja=$(pactl list short modules 2>/dev/null | grep -c "module-loopback.*sink_dont_move=true")
-        if [ "$deja" = "2" ] \
-           && pactl list short modules 2>/dev/null | grep -q "source=$PONT_IN.*sink=$COMB_OUT" \
-           && pactl list short modules 2>/dev/null | grep -q "source=$COMB_IN.*sink=$PONT_OUT"; then
-            echo "  bouclages deja en place et epingles - inchanges"
-            exit 0
+        # La carte unique est le peripherique par defaut, sans sourdine.
+        pactl set-default-sink "$CARTE_OUT"
+        pactl set-sink-mute "$CARTE_OUT" 0; pactl set-sink-volume "$CARTE_OUT" 100%
+        if [ -n "$CARTE_IN" ]; then
+            pactl set-default-source "$CARTE_IN"; pactl set-source-mute "$CARTE_IN" 0
         fi
-        # THE VM PULSE MUST NOT SUSPEND ITS CARDS. module-suspend-on-idle
-        # puts a sink to sleep as soon as nobody plays: QEMU then CLOSES its
-        # host-side streams, and each wake-up renegotiates the latency of the
-        # two emulated cards, which breaks the voice. The loopbacks keep the
-        # cards awake, but not before they are loaded: the module is removed.
-        for m in $(pactl list modules short 2>/dev/null | grep module-suspend-on-idle | cut -f1); do
-            pactl unload-module "$m" 2>/dev/null && echo "  mise en veille des cartes desactivee (module-suspend-on-idle)"
-        done
-        # CROSSING THE TWO CARDS IS NOT THE DEFAULT. Without it, the VM does
-        # not carry the voice: it keeps its cards for the ringtone, the
-        # notifications and the Calls application, and the operator hears the
-        # call through the host (40 ms instead of ~800). So the loopbacks left
-        # by a previous setup are REMOVED, and only re-added if the host asked
-        # for it (OSMO_PMOS_VOIX_VM=1, passed here as the VOIX_VM variable).
+        # Plus de croisement de cartes : les bouclages d une ancienne
+        # installation sont retires.
         for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
             pactl unload-module "$m" 2>/dev/null
         done
-        if [ "${VOIX_VM:-0}" != "1" ]; then
-            echo "  cartes non croisees : la voix reste sur l hote"
-            exit 0
-        fi
-        # Idempotent: the previous loopbacks are removed before re-adding.
-        # adjust_time=0 AND 400 ms: the mobile writes its audio in 20 ms
-        # frames at the L1 pace; with the default rate adjustment
-        # (adjust_time=10), module-loopback resamples constantly and the
-        # voice breaks up. A VM lacks the regularity of a sound card: a
-        # fixed rate plus a 400 ms buffer gives a stable delay, imperceptible
-        # on a call.
-        for m in $(pactl list modules short 2>/dev/null | grep module-loopback | cut -f1); do
-            pactl unload-module "$m" 2>/dev/null
-        done
-        # PINNED (dont_move): callaudiod / Phosh change the default device AT
-        # EVERY CALL (journal: "card has no voice profile and no usable
-        # sink") and PulseAudio then moves every unpinned stream - the two
-        # loopbacks would go elsewhere as soon as the call is answered.
-        pactl load-module module-loopback source="$PONT_IN" sink="$COMB_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
-            && echo "  descendant : pont -> combine (on entend)"
-        pactl load-module module-loopback source="$COMB_IN" sink="$PONT_OUT" latency_msec=400 adjust_time=0 sink_dont_move=true source_dont_move=true >/dev/null \
-            && echo "  montant    : combine -> pont (on parle)"
+        echo "  VM : un haut-parleur ($CARTE_OUT), un micro (${CARTE_IN:-aucun})"
     ' 2>&1 | tail -n 6
 fi
 }

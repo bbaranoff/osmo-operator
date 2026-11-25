@@ -15,7 +15,7 @@ index b49aaf7f..a3e307b8 100644
  
  
 diff --git a/pmb/commands/qemu.py b/pmb/commands/qemu.py
-index 72b46c60..d2aadc99 100644
+index 72b46c60..5e558988 100644
 --- a/pmb/commands/qemu.py
 +++ b/pmb/commands/qemu.py
 @@ -61,6 +61,34 @@ def which_qemu(arch: Arch) -> str:
@@ -219,7 +219,7 @@ index 72b46c60..d2aadc99 100644
  
      # Separate -show-cursor option is deprecated. If your host qemu fails here,
      # it's old (#1995).
-@@ -264,9 +390,119 @@ def command_qemu(
+@@ -264,9 +390,97 @@ def command_qemu(
      if qemu_audio:
          command += ["-audio", f"{qemu_audio},model=hda"]
  
@@ -229,8 +229,8 @@ index 72b46c60..d2aadc99 100644
  
  
 +def osmo_bench_args(qemu_audio: str | None) -> list[str]:
-+    """Extra devices that put the VM on the osmocom bench: the modem, and the
-+    voice bridge.
++    """Extra devices that put the VM on the osmocom bench: the modem, and one
++    sound card.
 +
 +    The modem (tools/osmo-phonesim-banc.py) is a PCI serial port, not ISA and
 +    not USB. The UEFI firmware treats an ISA serial port as a console and
@@ -240,22 +240,15 @@ index 72b46c60..d2aadc99 100644
 +    probes. QEMU only listens here - the modem connects afterwards, once the
 +    firmware is done booting (see osmo-pmos-setup).
 +
-+    There are TWO sound cards, because QEMU cannot push audio into a guest's
-+    speaker: of an emulated card, playback goes out to a host sink and capture
-+    comes in from a host source. The call's downlink lives on the host, so it
-+    can only enter through the guest's capture side - never through its
-+    speaker. One card alone therefore gives the guest the network's point of
-+    view (it hears the far end on its microphone), not a handset's.
++    ONE sound card: the handset, on the host's speakers and microphone
++    (through the echo canceller, osmo_hp_ec / osmo_mic_ec, when the launcher
++    names them). The call voice stays on the host (gsm_audio -> speakers,
++    microphone -> gsm_mic, see lib/audio.sh): the VM only needs its card for
++    the ringtone, the notifications and Calls. [2026-11-25] The second
++    "bridge" card (gsm_mic / gsm_audio.monitor) is gone with the option of
++    routing the voice through the VM (~800 ms round trip, never the default).
 +
-+    So: the "bridge" card is wired to the bench's voice path - gsm_audio
-+    carries the downlink (RTP from osmo-mgw), so its monitor feeds that card's
-+    capture; gsm_mic carries the uplink, so it takes what that card plays. The
-+    "handset" card stays on the host's default devices, the real speakers and
-+    microphone. Crossing the two inside the guest (see osmo-pmos-setup) puts
-+    the VM in the middle of the voice path for real.
-+
-+    The slots are pinned so the guest can tell them apart by name alone:
-+    0000:00:12.0 is the bridge, 0000:00:13.0 the handset.
++    The slot is pinned (0000:00:13.0) so osmo-pmos-setup finds it by name.
 +
 +    Beware the pa backend: it looks for PulseAudio's pidfile, which doesn't
 +    exist when PipeWire provides the service - there is only the socket, so we
@@ -302,14 +295,6 @@ index 72b46c60..d2aadc99 100644
 +        logging.warning(f"WARNING: no PulseAudio socket ({sock}), VM without sound")
 +        return args
 +
-+    out = os.environ.get("OSMO_PMOS_SINK", "gsm_mic")
-+    src = os.environ.get("OSMO_PMOS_SOURCE", "gsm_audio.monitor")
-+    # [2026-09-09] The handset card is NAMED too, when the launcher says so:
-+    # left to "the host's defaults", it landed on whatever was default when
-+    # QEMU connected - the raw card, since the echo canceller (osmo_hp_ec /
-+    # osmo_mic_ec) only came later with osmo-pmos-setup - and then had to be
-+    # moved. osmo-pmos-qemu now loads the canceller first and passes its
-+    # names here (OSMO_PMOS_HP / OSMO_PMOS_MIC); unset, the defaults apply.
 +    combine = f"pa,id=combine,server={sock}"
 +    hp = os.environ.get("OSMO_PMOS_HP", "")
 +    mic = os.environ.get("OSMO_PMOS_MIC", "")
@@ -318,13 +303,6 @@ index 72b46c60..d2aadc99 100644
 +    if mic:
 +        combine += f",in.name={mic}"
 +    args += [
-+        # The bridge: the call itself.
-+        "-audiodev",
-+        f"pa,id=gsm,server={sock},out.name={out},in.name={src}",
-+        "-device",
-+        "intel-hda,id=hdagsm,addr=0x12",
-+        "-device",
-+        "hda-duplex,bus=hdagsm.0,audiodev=gsm",
 +        # The handset: the host's own speakers and microphone.
 +        "-audiodev",
 +        combine,

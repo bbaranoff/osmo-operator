@@ -96,10 +96,10 @@ for s in gsm_audio gsm_mic; do
 done
 
 # The echo canceller first: the operator's speakers are osmo_hp_ec from boot,
-# as with the VM (lib/audio.sh, speaker assignment). Without a VM the direct
-# loopback follows; with one it is removed.
+# as with the VM (lib/audio.sh, speaker assignment). The direct loopback
+# (the call voice, on the host) follows.
 alleger_audio
-if [ "${AUDIO_PENDANT_APPEL:-0}" = "1" ] && ! pmos_vm_audio_present; then
+if [ "${AUDIO_PENDANT_APPEL:-0}" = "1" ]; then
     case "$APPEL" in
     debut) ;;                                  # the chain is installed below
     fin)   reinit_audio; echo "[audio] fin d appel : chaine retiree"; exit 0 ;;

@@ -11,10 +11,9 @@
 #     firmware takes the answers of an ISA port for keystrokes and never
 #     boots, and this kernel has no ftdi_sio for USB). 8250_pci is built in:
 #     the port appears on its own as /dev/ttyS1, which ModemManager probes;
-#   - the sound card wired to the bench voice bridge rather than to the
-#     default devices: gsm_audio carries the downlink (the osmo-mgw RTP), so
-#     its monitor feeds the VM CAPTURE; gsm_mic carries the uplink, so it
-#     receives what the VM PLAYS.
+#   - ONE sound card, on the host speakers and microphone (echo canceller
+#     osmo_hp_ec / osmo_mic_ec): ringtone, notifications, Calls. The call
+#     voice itself stays on the host (gsm_audio -> speakers, mic -> gsm_mic).
 #
 # QEMU only LISTENS on the modem port: osmo-phonesim-banc.py connects to it,
 # and only once the firmware has passed - otherwise it does not boot. That
@@ -25,8 +24,7 @@
 # "sdl,gl=on". OSMO_PMOS_DISPLAY=gtk switches to GTK, =none for a VM without
 # a window.
 #
-# Settings: OSMO_PMOS_AT_PORT (12346), OSMO_PMOS_SINK (gsm_mic),
-# OSMO_PMOS_SOURCE (gsm_audio.monitor), OSMO_PMOS_MEM (4096),
+# Settings: OSMO_PMOS_AT_PORT (12346), OSMO_PMOS_MEM (4096),
 # OSMO_PMOS_DISPLAY (sdl), OSMO_PMOS_DISK (16G), OSMO_PMOS_MODEM (1: the
 # modem and the voice are connected on their own as soon as the VM answers;
 # 0: bare VM).
@@ -263,17 +261,15 @@ GUETTEUR=""
         if [ "${OSMO_PMOS_MODEM:-1}" = "1" ] && [ -x "$SETUP" ]; then
             echo "osmo-pmos-qemu: branchement du modem et de la voix ($SETUP)"
             "$SETUP" >"$SETUP_LOG" 2>&1
-            grep -E 'modem|ATTENTION|descendant|montant|Modem|DNS' "$SETUP_LOG" \
+            grep -E 'modem|ATTENTION|VM :|Modem|DNS' "$SETUP_LOG" \
                 | sed 's/^/osmo-pmos-qemu: /'
             echo "osmo-pmos-qemu: trace complete dans $SETUP_LOG"
         elif [ -x "$SETUP" ]; then
-            # WITHOUT A MODEM, THE SOUND ANYWAY. A bare VM would output its
-            # audio on the BRIDGE card (0x12 -> gsm_mic): mute for the
-            # operator. --voix only does the sound part (handset by default,
-            # loopbacks, mutes).
+            # WITHOUT A MODEM, THE SOUND ANYWAY: --voix only does the sound
+            # part (the VM card by default, mutes lifted).
             echo "osmo-pmos-qemu: VM sans modem - le son seul ($SETUP --voix)"
             "$SETUP" --voix >"$SETUP_LOG" 2>&1
-            grep -E 'ATTENTION|descendant|montant|sourdines' "$SETUP_LOG" | sed 's/^/osmo-pmos-qemu: /'
+            grep -E 'ATTENTION|VM :|sourdines' "$SETUP_LOG" | sed 's/^/osmo-pmos-qemu: /'
         fi
         exit 0
     done
@@ -311,22 +307,13 @@ fi
 # ran more than 25 s then stopped is not relaunched: that is a shutdown.
 # THE VM SPEAKERS, NAMED BEFORE IT STARTS. The "combine" card
 # (osmo_bench_args) takes the host default devices when QEMU connects. The
-# echo canceller is loaded HERE, the direct loopbacks are handled (removed
-# if the voice goes through the VM), and the names are given to the
-# pmbootstrap patch: the card is born in the right place.
+# echo canceller is loaded HERE, the direct loopbacks (the call voice, on the
+# host) are ensured, and the names are given to the pmbootstrap patch: the
+# VM's single card is born on the right speakers and microphone.
 if [ -n "$AUDIO_LIB" ] && [ "${OSMO_PMOS_RELAI:-1}" = "1" ]; then
     ensure_echo_cancel 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
-    # THE HOST LISTENING IS KEPT AT LAUNCH. The voice does not go through
-    # the VM by default (see lib/audio.sh, "QUI PORTE LA VOIX"): the direct
-    # loopbacks ARE the path, and removing them here would mute the bench
-    # during the whole phone boot.
-    # OSMO_PMOS_VOIX_VM=1: osmo-pmos-setup then writes the marker and removes
-    # these loopbacks, once the VM is ready to replace them.
-    if [ "${OSMO_PMOS_VOIX_VM:-0}" = "1" ]; then
-        remove_direct_loopbacks 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
-    else
-        { ensure_local_loopback; ensure_local_mic; } 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
-    fi
+    # The call voice stays on the host: the direct loopbacks ARE its path.
+    { ensure_local_loopback; ensure_local_mic; } 2>/dev/null | sed 's/^ *//; s/^/osmo-pmos-qemu: /'
     _hp="$(audio_hp_sink)"; _mic="$(audio_mic_source)"
     [ -n "$_hp" ]  && export OSMO_PMOS_HP="${OSMO_PMOS_HP:-$_hp}"
     [ -n "$_mic" ] && export OSMO_PMOS_MIC="${OSMO_PMOS_MIC:-$_mic}"
