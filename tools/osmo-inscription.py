@@ -104,6 +104,14 @@ exten => _3XXX,1,NoOp(=== INSCRIT -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all
  same => n,Hangup()
 include => internal
 
+; Les appels venant du GSM (osmo-sip-connector) vers un inscrit : _3XXX est
+; plus precis que le _X. (routage inter-operateurs) de [gsm_in], il passe
+; devant. Asterisk fusionne les deux [gsm_in].
+[gsm_in]
+exten => _3XXX,1,NoOp(=== GSM -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} ===)
+ same => n,Dial(PJSIP/${EXTEN},30,rT)
+ same => n,Hangup()
+
 ; Les SMS (SIP MESSAGE) des inscrits : vers un autre inscrit, en SIP ; vers
 ; un numero GSM, par le relais SMS (scripts/sms-sip-vers-gsm.py). Le texte
 ; passe en base64 : aucun caractere du SMS n atteint un shell.
