@@ -137,6 +137,18 @@ if [ "${OSMO_ISO_NO_VERIFY:-0}" != "1" ]; then
     fi
 fi
 
+# ── Shared base of --all (41-socle.sh) ──────────────────────────────────────
+# Normal pass (its rootfs goes on to lite and desktop): write the manifest of
+# what this squashfs will contain, OUTSIDE the rootfs. Lite / desktop pass:
+# the base must still be there before it is compressed.
+if [ -n "${OSMO_ISO_ROOTFS_KEEP:-}" ]; then
+    mkdir -p "$(dirname "$OSMO_ISO_ROOTFS_KEEP")"
+    socle_manifeste "$ROOTFS" > "${OSMO_ISO_ROOTFS_KEEP}.socle"
+    echo -e "  ${GREEN}✓${NC} manifeste du socle : $(grep -c '^paquet' "${OSMO_ISO_ROOTFS_KEEP}.socle") paquets, $(grep -c '^fichier' "${OSMO_ISO_ROOTFS_KEEP}.socle") fichiers osmo-build-* (${OSMO_ISO_ROOTFS_KEEP}.socle)"
+elif [ -n "${OSMO_ISO_SOCLE:-}" ]; then
+    socle_verifier "$ROOTFS" "$OSMO_ISO_SOCLE" variante
+fi
+
 # ── OSMO_ISO_SQUASH_JOBS: limit compression parallelism ───────────────────
 # mksquashfs uses all cores by default. Limiting it helps tell host
 # instability under full load from a build problem, and allows a correct
