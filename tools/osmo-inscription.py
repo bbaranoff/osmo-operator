@@ -668,6 +668,36 @@ class H(BaseHTTPRequestHandler):
                 sauver(e)
                 ecrire_asterisk(e)
             return self._rep(200, {"ok": True})
+        if chemin == "/admin/effacer":
+            # des postes (une liste, ceux qui sont hors ligne, ou tous) et/ou
+            # les invitations en attente ; leurs numeros redeviennent libres
+            with VERROU:
+                e = charger()
+                if d.get("tous"):
+                    cibles = set(e["comptes"])
+                elif d.get("hors_ligne"):
+                    en_ligne = {c["num"] for c in admin_etat()["comptes"] if c["en_ligne"]}
+                    cibles = set(e["comptes"]) - en_ligne
+                else:
+                    cibles = {str(n) for n in (d.get("nums") or [])} & set(e["comptes"])
+                for n in cibles:
+                    del e["comptes"][n]
+                if e.get("smartphone_vers"):
+                    e["smartphone_vers"] = [n for n in e["smartphone_vers"] if n not in cibles]
+                invits = 0
+                if d.get("invitations"):
+                    invits = sum(1 for v in e["codes"].values() if v["restant"] > 0)
+                    e["codes"] = {k: v for k, v in e["codes"].items() if v["restant"] <= 0}
+                sauver(e)
+                ecrire_asterisk(e)
+                if PROXY["user"] in cibles:
+                    PROXY["user"], PROXY["file"] = None, []
+            # les enregistrements des postes retires ne doivent pas survivre
+            for n in sorted(cibles):
+                subprocess.run(["asterisk", "-rx", "pjsip send unregister %s" % n], capture_output=True)
+            NUMEROS["quand"] = 0.0
+            sys.stderr.write("effaces (osmo-gtk) : postes %s, %d invitation(s)\n" % (" ".join(sorted(cibles)) or "aucun", invits))
+            return self._rep(200, {"ok": True, "postes": sorted(cibles), "invitations": invits})
         if chemin == "/admin/bluetooth/associer":
             with VERROU:
                 if BT["fin"] <= time.time():

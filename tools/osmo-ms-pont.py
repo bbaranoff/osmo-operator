@@ -2438,6 +2438,20 @@ class Fenetre(Gtk.Window):
         sw = Gtk.ScrolledWindow()
         sw.add(vue)
         d.pack_start(sw, True, True, 0)
+        self.tel_vue = vue
+        vue.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+        # the clean-up: selected phones, those that are off line, everything
+        menage = Gtk.Box(spacing=6)
+        for texte, quoi, aide in (
+                ("Effacer la selection", "selection", "Retire les postes selectionnes (Ctrl ou Maj pour plusieurs)."),
+                ("Effacer les hors ligne", "hors_ligne", "Retire tous les postes qui ne sont pas en ligne en ce moment."),
+                ("Tout effacer", "tous", "Retire TOUS les postes : chaque telephone devra etre reinvite."),
+                ("Effacer les invitations", "invitations", "Annule les invitations en attente, jamais utilisees.")):
+            bm = Gtk.Button(label=texte)
+            bm.set_tooltip_text(aide + " Les numeros redeviennent libres.")
+            bm.connect("clicked", self._tel_effacer, quoi)
+            menage.pack_start(bm, False, False, 0)
+        d.pack_start(menage, False, False, 0)
         self.tel_invits = Gtk.Label(xalign=0, wrap=True)
         d.pack_start(self.tel_invits, False, False, 0)
         self.tel_proxy = Gtk.Label(xalign=0, wrap=True)
@@ -2469,11 +2483,13 @@ class Fenetre(Gtk.Window):
             self.tel_heure.set_text(e.get("error", "erreur"))
             return False
         self.tel_heure.set_text("noeud %s - releve a %s" % (e.get("noeud") or "?", time.strftime("%H:%M:%S")))
-        self.tel_store.clear()
-        for c in e.get("comptes", []):
-            self.tel_store.append([c["num"], c["pseudo"],
-                                   '<span foreground="%s">●</span>' % ("#3fb950" if c["en_ligne"] else "#6e7681"),
-                                   c["sortie"]])
+        lignes = [[c["num"], c["pseudo"],
+                   '<span foreground="%s">●</span>' % ("#3fb950" if c["en_ligne"] else "#6e7681"),
+                   c["sortie"]] for c in e.get("comptes", [])]
+        if lignes != [list(r) for r in self.tel_store]:      # unchanged: the selection stays
+            self.tel_store.clear()
+            for li in lignes:
+                self.tel_store.append(li)
         inv = e.get("invitations", [])
         self.tel_invits.set_text("Invitations en attente : " + (", ".join(
             "%s… (%s)" % (i["debut"], i["pseudo"] or "sans pseudo") for i in inv) or "aucune"))
@@ -2492,6 +2508,36 @@ class Fenetre(Gtk.Window):
         else:
             txt = b.get("message") or "aucun telephone associe"
         self.tel_bt.set_text("Ligne Bluetooth (appels) : " + txt)
+        return False
+
+    def _tel_effacer(self, _b, quoi):
+        m, chemins = self.tel_vue.get_selection().get_selected_rows()
+        nums = [m[c][0] for c in chemins]
+        corps, question = {
+            "selection": ({"nums": nums}, "Effacer %s ?" % (", ".join(nums) or "(aucun poste selectionne)")),
+            "hors_ligne": ({"hors_ligne": True}, "Effacer tous les postes hors ligne ?"),
+            "tous": ({"tous": True}, "Effacer TOUS les postes du noeud ?"),
+            "invitations": ({"invitations": True}, "Annuler les invitations en attente ?"),
+        }[quoi]
+        if quoi == "selection" and not nums:
+            self.tel_heure.set_text("selectionnez d abord un ou plusieurs postes")
+            return
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.OK_CANCEL, text=question)
+        dlg.format_secondary_text("Un poste efface ne peut plus se connecter : son telephone devra scanner une "
+                                  "nouvelle invitation. Les numeros redeviennent libres.")
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        if ok:
+            self._tel_fil("/admin/effacer", corps, self._tel_efface)
+
+    def _tel_efface(self, r):
+        self.tel_actualiser()
+        if r.get("ok"):
+            self.tel_heure.set_text("effaces : %s, %d invitation(s)" % (" ".join(r.get("postes", [])) or "aucun poste",
+                                                                        r.get("invitations", 0)))
+        else:
+            self.tel_heure.set_text(r.get("error", "erreur"))
         return False
 
     def _tel_sortie(self, _r, chemin):
