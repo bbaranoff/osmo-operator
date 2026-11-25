@@ -9,7 +9,7 @@
 # indexes are already present (deb-src.list written before apt-get update).
 # The hub has no gr-gsm: no deb-src, no build-dep.
 if [ -s /etc/apt/sources.list.d/deb-src.list ]; then
-    apt-fast build-dep -y $APT_OPTS gnuradio || echo "WARN: apt build-dep gnuradio a echoue"
+    composant gnuradio-builddep apt-fast build-dep -y $APT_OPTS gnuradio
 fi
 
 echo "/usr/local/lib" > /etc/ld.so.conf.d/osmocom.conf

@@ -15,10 +15,10 @@
 if [ "$ISO_ROLE" != "interstp" ] && [ "${OSMO_ISO_SOFTSIM:-1}" = "1" ]; then
     _SIMI=/opt/GSM/osmo-operator/tools/osmo-sim-install.sh
     if [ -f "$_SIMI" ]; then
-        ( . "$_SIMI" && OSMO_SIM_SOFTSIM=0 REPO=/opt/GSM/osmo-operator osmo_sim_install ) \
-            || echo "  WARN: osmo_sim_install a echoue (SIM par lecteur / pySim non poses, non fatal)"
+        _sim() { ( . "$_SIMI" && OSMO_SIM_SOFTSIM=0 REPO=/opt/GSM/osmo-operator osmo_sim_install ); }
+        composant sim _sim
     else
-        echo "  WARN: $_SIMI absent -- pas de pcscd/pySim dans l image"
+        composant_absent sim "$_SIMI absent -- pas de pcscd/pySim dans l image"
     fi
 fi
 

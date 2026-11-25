@@ -16,7 +16,9 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 if [ -f /opt/GSM/osmo-egprs-web/package.json ]; then
-    cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null || true
+    # cd in THIS shell, as before: the next fragments start from there.
+    _web_npm() { cd /opt/GSM/osmo-egprs-web && npm install --production 2>/dev/null; }
+    composant web-npm _web_npm
 fi
 
 # ── Dashboard installed at build time ───────────────────────────────────────
@@ -33,10 +35,9 @@ fi
 #                  fail and the script is set -eu.
 if [ -x /opt/GSM/osmo-egprs-web/install-web-service.sh ]; then
     echo "  [web] install-web-service.sh (sans TLS ni demarrage : chroot)"
-    WEB_NO_TLS=1 WEB_NO_START=1 bash /opt/GSM/osmo-egprs-web/install-web-service.sh \
-        || echo "  [web] WARN: install-web-service.sh a echoue - le dashboard peut manquer dans l ISO"
+    composant dashboard env WEB_NO_TLS=1 WEB_NO_START=1 bash /opt/GSM/osmo-egprs-web/install-web-service.sh
 else
-    echo "  [web] WARN: install-web-service.sh absent de /opt/GSM/osmo-egprs-web"
+    composant_absent dashboard "install-web-service.sh absent de /opt/GSM/osmo-egprs-web"
 fi
 
 true
