@@ -644,7 +644,9 @@ class H(BaseHTTPRequestHandler):
         self._rep(st, rep)
 
     def log_message(self, fmt, *a):
-        sys.stderr.write("%s %s\n" % (self.client_address[0], fmt % a))
+        # jamais un mot de passe dans le journal : /proxy/sortants le porte dans son adresse
+        ligne = re.sub(r"(mdp|code)=[^&\s\"]+", r"\1=***", fmt % a)
+        sys.stderr.write("%s %s\n" % (self.client_address[0], ligne))
 
 
 def main():
