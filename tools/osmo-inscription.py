@@ -104,10 +104,38 @@ qualify_frequency=30
     # Les motifs ci-dessous passent AVANT ceux du contexte inclus ; seuls les
     # numeros de la liste blanche (--sortie NUM oui) sont renvoyes a [internal].
     permis = "|".join(sorted(n for n, c in e["comptes"].items() if c.get("sortie"))) or "aucun"
-    fermeture = "".join("""exten => %s,1,GotoIf($[${REGEX("^(%s)$" ${CALLERID(num)})}]?internal,${EXTEN},1)
+    # LE SMARTPHONE COMME LIGNE (chan_mobile, Bluetooth mains-libres). S il est
+    # declare dans chan_mobile.conf, un poste autorise sort par LUI quand il est
+    # connecte et libre (MobileStatus = 2), par le trunk habituel sinon.
+    mobile = smartphone_declare()
+    vers = "sortie-smartphone" if mobile else "internal"
+    fermeture = "".join("""exten => %s,1,GotoIf($[${REGEX("^(%s)$" ${CALLERID(num)})}]?%s,${EXTEN},1)
  same => n,NoOp(=== SORTIE REFUSEE a ${CALLERID(num)} : ${EXTEN} (osmo-inscription --sortie) ===)
  same => n,Hangup(21)
-""" % (motif, permis) for motif in ("_0[1-9]XXXXXXXX", "_00.", "_+."))
+""" % (motif, permis, vers) for motif in ("_0[1-9]XXXXXXXX", "_00.", "_+."))
+    if mobile:
+        tous = "&".join("PJSIP/%s" % n for n in sorted(e["comptes"]) if n in (e.get("smartphone_vers") or e["comptes"]))
+        fermeture_fin = """
+; Les numeros exterieurs d un poste autorise : par la SIM du smartphone s il est
+; la (Bluetooth), sinon par le trunk du noeud.
+[sortie-smartphone]
+exten => _[+0-9].,1,MobileStatus(%(m)s,ETAT_MOBILE)
+ same => n,GotoIf($["${ETAT_MOBILE}" = "2"]?mobile)
+ same => n,NoOp(=== smartphone absent ou occupe (${ETAT_MOBILE}) : trunk du noeud ===)
+ same => n,Goto(internal,${EXTEN},1)
+ same => n(mobile),NoOp(=== SORTIE PAR LE SMARTPHONE : ${EXTEN} - de ${CALLERID(num)} ===)
+ same => n,Dial(Mobile/%(m)s/${EXTEN},60,rT)
+ same => n,Hangup()
+
+; Un appel recu par la SIM du smartphone : il sonne sur les postes du banc
+; (--smartphone-vers NUM... pour n en faire sonner que certains).
+[smartphone_in]
+exten => s,1,NoOp(=== APPEL RECU PAR LA SIM : ${CALLERID(all)} ===)
+ same => n,Dial(%(t)s,45,rT)
+ same => n,Hangup()
+""" % {"m": mobile, "t": tous or "PJSIP/aucun"}
+    else:
+        fermeture_fin = ""
     with open(os.path.join(AST, "extensions_inscrits.conf"), "w") as f:
         f.write("""; extensions_inscrits.conf - écrit par osmo-inscription.py, ne pas éditer
 [inscrits]
@@ -124,6 +152,7 @@ exten => _3XXX,1,NoOp(=== GSM -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} =
  same => n,Dial(PJSIP/${EXTEN},30,rT)
  same => n,Hangup()
 
+""" + fermeture_fin + """
 ; Les SMS (SIP MESSAGE) des inscrits : vers un autre inscrit, en SIP ; vers
 ; un numero GSM, par le relais SMS (scripts/sms-sip-vers-gsm.py). Le texte
 ; passe en base64 : aucun caractere du SMS n atteint un shell.
@@ -163,6 +192,19 @@ LONGUEUR = 16
 
 def jeton():
     return "".join(secrets.choice(ALPHABET) for _ in range(LONGUEUR))
+
+
+def smartphone_declare():
+    """Le nom de la ligne chan_mobile (un telephone appaire en Bluetooth), ou None."""
+    try:
+        txt = open(os.path.join(AST, "chan_mobile.conf")).read()
+    except OSError:
+        return None
+    for nom, corps in re.findall(r"^\[(\w+)\]([^\[]*)", txt, re.M):
+        if nom not in ("general", "adapter") and re.search(r"^\s*address\s*=", corps, re.M) \
+                and re.search(r"^\s*port\s*=", corps, re.M):
+            return nom
+    return None
 
 
 def normaliser(code):
@@ -455,6 +497,8 @@ def main():
     ap.add_argument("--noeud", default="", help="adresse du noeud a mettre dans le QR code (defaut : celle de la route par defaut)")
     ap.add_argument("--png", default="", help="fichier PNG du QR code (defaut : a cote de l etat, qr-<pseudo>.png)")
     ap.add_argument("--liste", action="store_true")
+    ap.add_argument("--smartphone-vers", nargs="*", metavar="NUMERO",
+                    help="les postes qui sonnent quand la SIM du smartphone recoit un appel (aucun = tous)")
     ap.add_argument("--sortie", nargs=2, metavar=("NUMERO", "oui|non"),
                     help="autorise (oui) ou ferme (non) les appels vers l exterieur pour ce poste")
     a = ap.parse_args()
@@ -468,6 +512,17 @@ def main():
         return
     if a.nouveau_qrcode is not None:
         nouveau_qrcode(a.nouveau_qrcode, a.noeud, a.png, a.usages)
+        return
+    if a.smartphone_vers is not None:
+        with VERROU:
+            e = charger()
+            inconnus = [n for n in a.smartphone_vers if n not in e["comptes"]]
+            if inconnus:
+                sys.exit("poste inconnu : %s" % ", ".join(inconnus))
+            e["smartphone_vers"] = a.smartphone_vers
+            sauver(e)
+            ecrire_asterisk(e)
+        print("appels recus par la SIM -> %s" % (", ".join(a.smartphone_vers) or "tous les postes"))
         return
     if a.sortie:
         num, choix = a.sortie

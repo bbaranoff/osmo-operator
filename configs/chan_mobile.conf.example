@@ -1,0 +1,33 @@
+; chan_mobile.conf - un smartphone comme ligne du banc, par Bluetooth (mains-libres).
+;
+; Le PC se presente au telephone comme un kit mains-libres : la voix d un appel
+; GSM passe par le Bluetooth, Asterisk compose, decroche et raccroche. C est le
+; seul moyen de faire passer la VOIX d un appel de la SIM vers le banc sans
+; telephone roote : Android ne la donne a aucune appli.
+;
+; Mise en place (paquet asterisk-mobile, un adaptateur Bluetooth) :
+;   rfkill unblock bluetooth ; bluetoothctl power on
+;   bluetoothctl     -> agent on, default-agent, scan on, pair <MAC>, trust <MAC>
+;   asterisk -rx "module load chan_mobile.so"
+;   asterisk -rx "mobile search"        -> le canal (Port) du telephone
+;   copier ce fichier en /etc/asterisk/chan_mobile.conf, y mettre les adresses
+;   systemctl restart osmo-inscription  -> le plan d appel prend la ligne
+; Etat : asterisk -rx "mobile show devices"  (Connected Yes, State Free).
+;
+; Avec la ligne declaree, osmo-inscription.py envoie les numeros exterieurs des
+; postes autorises (--sortie NUM oui) par le smartphone quand il est connecte,
+; par le trunk du noeud sinon ; les appels recus par la SIM sonnent sur les
+; postes (--smartphone-vers NUM...).
+[general]
+interval=30
+
+[adapter]
+id=pc
+address=XX:XX:XX:XX:XX:XX       ; l adaptateur du PC : bluetoothctl show
+
+[smartphone]
+address=YY:YY:YY:YY:YY:YY       ; le telephone appaire
+port=3                          ; son canal mains-libres : mobile search
+context=smartphone_in
+adapter=pc
+group=1
