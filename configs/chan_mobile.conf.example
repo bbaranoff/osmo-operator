@@ -6,6 +6,11 @@
 ; telephone roote : Android ne la donne a aucune appli.
 ;
 ; Mise en place (paquet asterisk-mobile, un adaptateur Bluetooth) :
+;   BlueZ en mode compatible, sinon « sdp_register: Failed » et le telephone
+;   coupe la poignee de main (la ligne se connecte 10 s puis retombe) :
+;     install -D -m644 configs/bluetooth-chan-mobile.conf \
+;         /etc/systemd/system/bluetooth.service.d/osmo-chan-mobile.conf
+;     systemctl daemon-reload ; systemctl restart bluetooth
 ;   rfkill unblock bluetooth ; bluetoothctl power on
 ;   bluetoothctl     -> agent on, default-agent, scan on, pair <MAC>, trust <MAC>
 ;   asterisk -rx "module load chan_mobile.so"
