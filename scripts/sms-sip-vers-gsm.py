@@ -9,11 +9,58 @@
 # root, TCP 7890), which resolves the IMSI in the HLR and injects the MT.
 # The body comes in base64 so that no character of the SMS ever reaches a
 # shell. Standard library only.
-import base64, json, os, re, socket, sys, syslog, urllib.error, urllib.request
+import base64, json, os, re, socket, subprocess, sys, syslog, time, urllib.error, urllib.request
 
 RELAY = ("127.0.0.1", 7890)
 PORT_INSCRIPTION = int(os.environ.get("OSMO_INSCRIPTION_PORT", "8088"))
 EXTERIEUR = re.compile(os.environ.get("OSMO_SMS_EXTERIEUR", r"(\+|00)\d{6,15}|0[1-9]\d{8}"))
+
+
+SIP = re.compile(os.environ.get("OSMO_SMS_SIP_RE", r"3\d{3}"))
+AMI_CONF = "/etc/asterisk/manager.d/osmo.conf"
+
+
+def vers_sip(dest, src, text):
+    """Un autre telephone du noeud (3000-3999) : un SIP MESSAGE a CHACUN de ses
+    contacts enregistres (AMI MessageSend). « pjsip:3010 » seul ne vise que le
+    premier contact, souvent un ancien enregistrement mort."""
+    try:
+        out = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    contacts = re.findall(r"Contact:\s+%s/(sips?:\S+)" % re.escape(dest), out)
+    if not contacts:
+        return False, "%s n est pas en ligne" % dest
+    user, secret = "osmo", ""
+    try:
+        for line in open(AMI_CONF):
+            m = re.match(r"\s*\[(\w+)\]", line)
+            if m:
+                user = m.group(1)
+            m = re.match(r"\s*secret\s*=\s*(\S+)", line)
+            if m:
+                secret = m.group(1)
+    except OSError as e:
+        return False, "%s illisible (%s)" % (AMI_CONF, e)
+    body = text.replace("\r", " ").replace("\n", " ")
+    act = "Action: Login\r\nUsername: %s\r\nSecret: %s\r\nEvents: off\r\n\r\n" % (user, secret)
+    for n, c in enumerate(contacts):
+        act += ("Action: MessageSend\r\nActionID: sms%d\r\nTo: pjsip:%s/%s\r\n"
+                "From: \"%s\" <sip:%s@127.0.0.1>\r\nBody: %s\r\n\r\n" % (n, dest, c, src, src, body))
+    act += "Action: Logoff\r\n\r\n"
+    try:
+        with socket.create_connection(("127.0.0.1", int(os.environ.get("OSMO_AMI_PORT", "5038"))), timeout=5) as s:
+            s.sendall(act.encode())
+            data, fin = b"", time.time() + 5
+            while b"Goodbye" not in data and time.time() < fin:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+    except OSError as e:
+        return False, "AMI injoignable (%s)" % e
+    ok = data.decode("utf-8", "replace").count("Message successfully") or b"Response: Success\r\nActionID: sms" in data
+    return bool(ok), "%d contact(s)" % len(contacts)
 
 
 def main():
@@ -38,6 +85,10 @@ def main():
     if not dest or not text:
         syslog.syslog("sms-sip-vers-gsm: destinataire ou texte vide")
         return 1
+    if SIP.fullmatch(dest):
+        ok, quoi = vers_sip(dest, src, text)
+        syslog.syslog("sms-sip-vers-gsm: %s -> %s (SIP) : %s, %s" % (src, dest, "ok" if ok else "ECHEC", quoi))
+        return 0 if ok else 1
     # Un numero EXTERIEUR (06..., 00..., +...) : par la SIM du telephone proxy,
     # s il y en a un en ligne (osmo-inscription, /proxy/sortant).
     brut = re.sub(r"[^\d+]", "", sys.argv[1])

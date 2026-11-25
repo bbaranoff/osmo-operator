@@ -608,6 +608,14 @@ class RelayServer(threading.Thread):
 
         logging.info(f"Incoming interop MT: {from_number} → {dest_msisdn}")
 
+        # A SIP phone of the node (3000-3999) is not in the HLR: SIP MESSAGE
+        # to each of its contacts.
+        if SIP_SMS_RE.fullmatch(str(dest_msisdn).lstrip('+')):
+            ok, why = ami_message_send(str(dest_msisdn).lstrip('+'), from_number, message_text)
+            response = {"status": "ok"} if ok else {"status": "error", "reason": f"SIP {dest_msisdn} : {why}"}
+            conn.sendall((json.dumps(response) + '\n').encode())
+            return
+
         # Resolve with retries
         dest_imsi = hlr_msisdn_to_imsi(dest_msisdn)
         if not dest_imsi:

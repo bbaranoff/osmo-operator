@@ -175,9 +175,10 @@ exten => _3XXX,1,NoOp(=== GSM -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} =
 ; un numero GSM, par le relais SMS (scripts/sms-sip-vers-gsm.py). Le texte
 ; passe en base64 : aucun caractere du SMS n atteint un shell.
 [sms_inscrits]
-exten => _3XXX,1,NoOp(=== SMS INSCRIT -> INSCRIT ${EXTEN} ===)
- same => n,MessageSend(pjsip:${EXTEN},${MESSAGE(from)})
- same => n,Hangup()
+; Un inscrit ecrit a un autre inscrit : par le relais aussi, qui remet le
+; message a CHAQUE contact enregistre du destinataire. MessageSend(pjsip:3010)
+; ne visait que le premier contact, souvent un ancien enregistrement mort
+; (appli reinstallee) : le message partait dans le vide.
 exten => _X.,1,NoOp(=== SMS INSCRIT ${MESSAGE(from)} -> GSM ${EXTEN} ===)
 ; L expediteur vient de l en-tete From (« "x" <sip:3001@...> »), passe brut en
 ; base64 : CALLERID(num) est vide sur un SIP MESSAGE, et le script en tire le
