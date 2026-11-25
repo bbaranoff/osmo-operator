@@ -356,6 +356,16 @@ SIP_SMS_RE = re.compile(os.environ.get("OSMO_SMS_SIP_RE", r"3\d{3}"))
 AMI_CONF = "/etc/asterisk/manager.d/osmo.conf"
 
 
+def sip_contacts(dest: str) -> list:
+    """The registered contact URIs of a SIP number (asterisk CLI)."""
+    try:
+        out = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return re.findall(r"Contact:\s+%s/(sips?:\S+)" % re.escape(dest), out)
+
+
 def ami_message_send(dest: str, sender: str, text: str):
     """-> (ok, reason). MessageSend To=pjsip:<dest>, From=<sender>."""
     user, secret = "osmo", ""
@@ -370,10 +380,17 @@ def ami_message_send(dest: str, sender: str, text: str):
     except OSError as e:
         return False, f"{AMI_CONF} illisible ({e})"
     body = text.replace("\r", " ").replace("\n", " ")
-    act = (f"Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\nEvents: off\r\n\r\n"
-           f"Action: MessageSend\r\nActionID: sms1\r\nTo: pjsip:{dest}\r\n"
-           f"From: \"{sender}\" <sip:{sender}@127.0.0.1>\r\nBody: {body}\r\n\r\n"
-           f"Action: Logoff\r\n\r\n")
+    # EVERY DEVICE OF THE NUMBER. « pjsip:<endpoint> » only reaches one contact;
+    # a number registered on two phones (or an app opened twice) would see the
+    # SMS on one of them only. One MessageSend per registered contact; the
+    # last one carries the ActionID we wait for.
+    cibles = [f"pjsip:{dest}/{c}" for c in sip_contacts(dest)] or [f"pjsip:{dest}"]
+    act = f"Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\nEvents: off\r\n\r\n"
+    for n, cible in enumerate(cibles):
+        aid = "sms1" if n == len(cibles) - 1 else f"sms0{n}"
+        act += (f"Action: MessageSend\r\nActionID: {aid}\r\nTo: {cible}\r\n"
+                f"From: \"{sender}\" <sip:{sender}@127.0.0.1>\r\nBody: {body}\r\n\r\n")
+    act += "Action: Logoff\r\n\r\n"
     try:
         with socket.create_connection(("127.0.0.1", int(os.environ.get("OSMO_AMI_PORT", "5038"))), timeout=5) as s:
             s.sendall(act.encode("utf-8"))
