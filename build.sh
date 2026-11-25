@@ -259,6 +259,14 @@ else
              echo -e "${RED}        OSMO_HOST_DOCKER=0 pour sauter cette etape si docker est pose autrement.${NC}"; exit 1; }
 fi
 systemctl enable --now docker >/dev/null 2>&1 || true
+# Docker storage on overlayfs (live ISO, container host): the build would fail
+# at its first step with 'mount source: "overlay" ... invalid argument'.
+# packaging/docker-storage.sh moves /var/lib/docker and /var/lib/containerd
+# onto a tmpfs / loop ext4 / OSMO_DOCKER_STORAGE_DIR. No-op otherwise.
+if command -v docker >/dev/null 2>&1; then
+    bash "$DIR/packaging/docker-storage.sh" \
+        || { echo -e "${RED}[ERREUR] stockage docker sur overlay non corrige (voir plus haut).${NC}"; exit 1; }
+fi
 HAVE_COMPOSE=0
 docker compose version >/dev/null 2>&1 && HAVE_COMPOSE=1
 # BuildKit output stays the default (tty, folded). To read everything a step
