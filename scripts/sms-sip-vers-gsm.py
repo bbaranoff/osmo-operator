@@ -9,9 +9,11 @@
 # root, TCP 7890), which resolves the IMSI in the HLR and injects the MT.
 # The body comes in base64 so that no character of the SMS ever reaches a
 # shell. Standard library only.
-import base64, json, re, socket, sys, syslog
+import base64, json, os, re, socket, sys, syslog, urllib.error, urllib.request
 
 RELAY = ("127.0.0.1", 7890)
+PORT_INSCRIPTION = int(os.environ.get("OSMO_INSCRIPTION_PORT", "8088"))
+EXTERIEUR = re.compile(os.environ.get("OSMO_SMS_EXTERIEUR", r"(\+|00)\d{6,15}|0[1-9]\d{8}"))
 
 
 def main():
@@ -36,6 +38,25 @@ def main():
     if not dest or not text:
         syslog.syslog("sms-sip-vers-gsm: destinataire ou texte vide")
         return 1
+    # Un numero EXTERIEUR (06..., 00..., +...) : par la SIM du telephone proxy,
+    # s il y en a un en ligne (osmo-inscription, /proxy/sortant).
+    brut = re.sub(r"[^\d+]", "", sys.argv[1])
+    if EXTERIEUR.fullmatch(brut):
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/proxy/sortant" % PORT_INSCRIPTION, method="POST",
+                                         data=json.dumps({"vers": brut, "de": src, "texte": text}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                ok = json.loads(r.read().decode() or "{}").get("ok")
+        except urllib.error.HTTPError as e:
+            ok = False
+            syslog.syslog("sms-sip-vers-gsm: %s -> %s (exterieur) : %s" % (src, brut, e.read().decode()[:120]))
+        except (OSError, ValueError) as e:
+            ok = False
+            syslog.syslog("sms-sip-vers-gsm: service proxy injoignable (%s)" % e)
+        if ok:
+            syslog.syslog("sms-sip-vers-gsm: %s -> %s : en file pour le telephone proxy" % (src, brut))
+        return 0 if ok else 1
     msg = {"type": "mt_sms", "dest_msisdn": dest, "from_number": src, "message_text": text}
     try:
         with socket.create_connection(RELAY, timeout=10) as s:
