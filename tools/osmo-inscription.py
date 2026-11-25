@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ETAT = os.environ.get("INSCRIPTION_ETAT", "/var/lib/osmo-inscription/etat.json")
 AST = os.environ.get("INSCRIPTION_ASTERISK", "/etc/asterisk")
 PREMIER, DERNIER = 3000, 3999
+SMS_GSM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "sms-sip-vers-gsm.py")
 VERROU = threading.Lock()
 
 
@@ -78,7 +79,7 @@ rtp_symmetric=yes
 force_rport=yes
 rewrite_contact=yes
 media_encryption=no
-message_context=inscrits
+message_context=sms_inscrits
 callerid="{p}" <{n}>
 
 [{n}]
@@ -102,7 +103,18 @@ exten => _3XXX,1,NoOp(=== INSCRIT -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all
  same => n,Dial(PJSIP/${EXTEN},30,rT)
  same => n,Hangup()
 include => internal
-""")
+
+; Les SMS (SIP MESSAGE) des inscrits : vers un autre inscrit, en SIP ; vers
+; un numero GSM, par le relais SMS (scripts/sms-sip-vers-gsm.py). Le texte
+; passe en base64 : aucun caractere du SMS n atteint un shell.
+[sms_inscrits]
+exten => _3XXX,1,NoOp(=== SMS INSCRIT -> INSCRIT ${EXTEN} ===)
+ same => n,MessageSend(pjsip:${EXTEN},${MESSAGE(from)})
+ same => n,Hangup()
+exten => _X.,1,NoOp(=== SMS INSCRIT ${CALLERID(num)} -> GSM ${EXTEN} ===)
+ same => n,System(/usr/bin/python3 %s ${FILTER(0-9,${EXTEN})} ${FILTER(0-9,${CALLERID(num)})} ${BASE64_ENCODE(${MESSAGE(body)})})
+ same => n,Hangup()
+""" % SMS_GSM)
     assurer_include(os.path.join(AST, "pjsip.conf"), '#include "pjsip_inscrits.conf"')
     assurer_include(os.path.join(AST, "extensions.conf"), '#include "extensions_inscrits.conf"')
     # « pjsip reload » n'existe pas en Asterisk 20, et asterisk -rx rend 0 même
