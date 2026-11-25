@@ -696,7 +696,8 @@ if [ "${ISO_DESKTOP:-0}" = "1" ]; then
              osmo-balise.py osmo-balise-pose.sh osmo-ms-pont.py osmo-gtk-run.py osmo-iso-gtk.py \
              osmo-pmos.sh osmo-pmos-qemu.sh osmo-pmos-setup.sh osmo-wireshark-root.sh \
              osmo-ofono-bridge.py osmo-phonesim-banc.py \
-             osmo-ril-atmodem.py at-cmd.py; do
+             osmo-ril-atmodem.py at-cmd.py \
+             huawei_at.py osmo-dongle-passerelle.py osmo-dongle-sms.py osmo-dongle-call.py; do
         [ -f "$DIR/tools/$_f" ] && install -m755 "$DIR/tools/$_f" "$_rt/tools/"
     done
     unset _f

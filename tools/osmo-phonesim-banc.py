@@ -79,6 +79,44 @@ DUPLIQUE = os.environ.get("OSMO_SMS_DUPLIQUE", "1") == "1"
 SMS_IN_HOST = os.environ.get("OSMO_SMS_IN_HOST", "127.0.0.1")
 SMS_IN_LISTEN = int(os.environ.get("OSMO_SMS_IN_PORT", "12348"))
 SMS_IN_CONNECT = int(os.environ.get("OSMO_SMS_IN_PORT_VM", "12349"))
+# AN SMS TO A NUMBER OUTSIDE THE BENCH. The MSC only knows its own
+# subscribers: "subscriber msisdn 0612345678 ... send" comes back with an
+# error text, not with a dead link, and the phone was told +CMGS anyway.
+# Such a number now leaves through the real-network gateway
+# (tools/osmo-dongle-passerelle.py, a Huawei dongle on a public operator).
+# Same numbering rule as the Zadarma routes of extensions.conf: 00 + E.164,
+# French national 0[1-9]XXXXXXXX, or an explicit "+".
+DONGLE = (os.environ.get("OSMO_DONGLE_HOST", "127.0.0.1"),
+          int(os.environ.get("OSMO_DONGLE_PORT", "12350")))
+SMS_EXTERNE = re.compile(os.environ.get(
+    "OSMO_SMS_EXTERNE", r"^(\+|00)\d{6,15}$|^0[1-9]\d{8}$"))
+
+
+def e164(num):
+    """0612345678 -> +33612345678, 0033... -> +33..., +... unchanged."""
+    if num.startswith("+"):
+        return num
+    if num.startswith("00"):
+        return "+" + num[2:]
+    return "+33" + num[1:]
+
+
+def sms_externe(num, text):
+    """Hand an SMS to the dongle gateway. None = sent, else the reason."""
+    try:
+        s = socket.create_connection(DONGLE, timeout=5)
+    except OSError as e:
+        return "passerelle dongle injoignable (%s:%d) : %s" % (DONGLE + (e,))
+    try:
+        s.settimeout(90)
+        s.sendall((json.dumps({"to": e164(num), "text": text},
+                              ensure_ascii=False) + "\n").encode())
+        rep = json.loads(s.makefile().readline() or "{}")
+    except (OSError, ValueError) as e:
+        return "reponse de la passerelle illisible : %s" % e
+    finally:
+        s.close()
+    return None if rep.get("ok") else rep.get("error", "refus sans motif")
 # How a call requested by the Android phone becomes a bench call.
 # {num} = the dialled number, {msisdn} = our number. The Local channel enters
 # the Asterisk dialplan ("internal" context, the one carrying 100/500/600 and
@@ -1702,6 +1740,16 @@ class AtHandler(socketserver.StreamRequestHandler):
                 log("PDU illisible (%s) : %s" % (e, text[:60]))
                 self.err()
                 return
+        if SMS_EXTERNE.match(num):
+            motif = sms_externe(num, text)
+            if motif:
+                log("SMS vers %s (reseau reel) non envoye : %s" % (num, motif))
+                self.err()
+                return
+            log("SMS a %s par la passerelle dongle : %s" % (num, text))
+            self.out("+CMGS: 1")
+            self.ok()
+            return
         self.csfb_debut("SMS vers %s" % num, couper_data=(DATA is None))
         out = MSC.cmd('subscriber msisdn %s sms sender msisdn %s send %s'
                       % (num, MSISDN, text))
