@@ -389,6 +389,26 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$CACHE" 2>/dev/null || true
           echo "$(find "$CACHE" -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh "$CACHE" | cut -f1)"
 
+      # Journaux du chroot (un par fragment de iso_modules/80-chroot.d/) et etat
+      # des composants (status.json), par image, poses par 80-chroot.sh dans
+      # osmo-build-logs/<image>/. Publies a chaque run : c'est surtout quand le
+      # build echoue qu'on en a besoin. Les composants optionnels absents vont
+      # aussi dans le resume du job.
+      - name: Journaux du chroot
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: osmo-build-logs
+          path: osmo-build-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Composants optionnels absents (resume)
+        if: always()
+        run: |
+          [ -d osmo-build-logs ] || exit 0
+          python3 .github/composants-notes.py osmo-build-logs | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Apres le build, tue ou non : les dernieres mesures avant la fin.
       - name: Temoin - dernieres mesures
         if: always()
@@ -455,7 +475,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
-        run: bash .github/release-section.sh "$TAG" iso .github/release-notes.md
+        run: |
+          # Le texte commun, plus la liste des composants optionnels absents
+          # de ce build (vide si tout est la).
+          cp .github/release-notes.md "$RUNNER_TEMP/notes-iso.md"
+          [ -d osmo-build-logs ] && python3 .github/composants-notes.py osmo-build-logs >> "$RUNNER_TEMP/notes-iso.md"
+          bash .github/release-section.sh "$TAG" iso "$RUNNER_TEMP/notes-iso.md"
 
       # [2026-10-09] softprops envoyait tous les fichiers en parallele ; les
       # parties de 1 a 1,7 Go coupaient avec « Upload body timed out due to

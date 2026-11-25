@@ -14,7 +14,9 @@ else
     echo "  WARN: /etc/ssl/certs/ca-certificates.crt vide - le TLS echouera dans l image"
 fi
 
-setcap cap_net_raw,cap_net_admin+eip $(which dumpcap) 2>/dev/null || true
+if command -v dumpcap >/dev/null 2>&1; then
+    composant dumpcap-caps setcap cap_net_raw,cap_net_admin+eip "$(command -v dumpcap)"
+fi
 
 KERNEL=$(ls /boot/vmlinuz-* | sort -V | tail -1 | sed "s|/boot/vmlinuz-||")
 update-initramfs -u -k "$KERNEL"

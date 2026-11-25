@@ -16,13 +16,13 @@
         echo "  [desktop] jeux + media (natif) : $_EXTRAS"
         # Games (Doom/Quake III, ~470 MB) are excluded: they are installed only by
         # addition.sh --extras on an installed machine.
-        OSMO_EXTRAS_JEUX=0 REPO=/opt/GSM/osmo-operator . "$_EXTRAS" && OSMO_EXTRAS_JEUX=0 osmo_extras_install || \
-            echo "  [desktop] WARN: osmo_extras_install a echoue (non fatal)"
+        _extras() { OSMO_EXTRAS_JEUX=0 REPO=/opt/GSM/osmo-operator . "$_EXTRAS" && OSMO_EXTRAS_JEUX=0 osmo_extras_install; }
+        composant extras _extras
     else
-        echo "  [desktop] WARN: $_EXTRAS absent -- pas de jeux/media dans l image"
+        composant_absent extras "$_EXTRAS absent -- pas de jeux/media dans l image"
     fi
 
-    glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
+    composant schemas-gnome glib-compile-schemas /usr/share/glib-2.0/schemas
 
     echo "  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox deb Mozilla"
 

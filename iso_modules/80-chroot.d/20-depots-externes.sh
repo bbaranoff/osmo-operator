@@ -12,14 +12,18 @@
 NODE_VIA_APT=0
 if ! command -v node >/dev/null 2>&1; then
     mkdir -p /etc/apt/keyrings
-    if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-            -o /etc/apt/keyrings/nodesource.asc; then
+    _depot_nodesource() {
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+            -o /etc/apt/keyrings/nodesource.asc || return 1
         echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_22.x nodistro main" \
             > /etc/apt/sources.list.d/nodesource.list
+    }
+    composant depot-nodesource _depot_nodesource
+    if [ "$COMPOSANT_RC" = 0 ]; then
         NODE_VIA_APT=1
     else
-        echo "  WARN: cle NodeSource non telechargee - repli sur setup_22.x apres l install"
-        rm -f /etc/apt/keyrings/nodesource.asc
+        echo "  repli sur setup_22.x apres l install"
+        rm -f /etc/apt/keyrings/nodesource.asc /etc/apt/sources.list.d/nodesource.list
     fi
 fi
 
@@ -30,14 +34,18 @@ fi
 # on first start.
 MONGO_VIA_APT=0
 if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
-    if curl -fsSL --retry 3 https://www.mongodb.org/static/pgp/server-8.0.asc \
-            | gpg --dearmor --yes -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null; then
+    _depot_mongodb() {
+        curl -fsSL --retry 3 https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | gpg --dearmor --yes -o /usr/share/keyrings/mongodb-server-8.0.gpg 2>/dev/null || return 1
         echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
             > /etc/apt/sources.list.d/mongodb-org-8.0.list
+    }
+    composant depot-mongodb _depot_mongodb
+    if [ "$COMPOSANT_RC" = 0 ]; then
         MONGO_VIA_APT=1
     else
-        echo "  WARN: cle MongoDB non telechargee - Open5GS sans base d abonnes (osmo-lte-install --deps plus tard)"
-        rm -f /usr/share/keyrings/mongodb-server-8.0.gpg
+        echo "  Open5GS sans base d abonnes (osmo-lte-install --deps plus tard)"
+        rm -f /usr/share/keyrings/mongodb-server-8.0.gpg /etc/apt/sources.list.d/mongodb-org-8.0.list
     fi
 fi
 
