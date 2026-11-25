@@ -1,0 +1,15 @@
+iso_modules/keys/ - signing keys of the third-party apt repositories used by
+the chroot step (80-chroot.d/). Versioned here so the build does not depend on
+downloading them, and so a changed key shows up as a diff. 80-chroot.sh copies
+them into the rootfs (/var/lib/osmo-build/keys); osmo_cle (00-outils.sh) uses
+the copy and only downloads when a key is missing here.
+
+The pre-flight job of build-iso.yml fails when one of them expires within 30
+days. To refresh one: download it from its URL, check the fingerprint against
+the publisher's, commit.
+
+file                      fingerprint                                 source
+armbian.asc               8CFA83D13EB2181EEF5843E41EB30FAF236099FE   https://apt.armbian.com/armbian.key
+mongodb-server-8.0.asc    4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05   https://www.mongodb.org/static/pgp/server-8.0.asc
+nodesource.asc            6F71F525282841EEDAF851B42F59B5F99B1BE0B4   https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+packages.mozilla.org.asc  35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3   https://packages.mozilla.org/apt/repo-signing-key.gpg

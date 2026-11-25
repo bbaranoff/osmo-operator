@@ -60,7 +60,7 @@ update-ca-certificates --fresh >/dev/null 2>&1 || update-ca-certificates || true
 # certificates (https) and before the single apt-get update, deb822 format with
 # the dearmored key in /usr/share/keyrings, as Armbian does.
 if [ "${ISO_ARCH:-amd64}" = "arm64" ]; then
-    curl -fsSL --retry 3 https://apt.armbian.com/armbian.key | gpg --dearmor -o /usr/share/keyrings/armbian.gpg
+    osmo_cle armbian.asc https://apt.armbian.com/armbian.key | gpg --dearmor -o /usr/share/keyrings/armbian.gpg
     cat > /etc/apt/sources.list.d/armbian.sources <<EOF
 Types: deb
 URIs: https://apt.armbian.com

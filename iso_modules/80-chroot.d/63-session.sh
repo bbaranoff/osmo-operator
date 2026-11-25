@@ -27,7 +27,7 @@
     # iso_modules/82-services.sh.
     if [ "$_S" = "noble" ]; then
         _auto=$(apt-mark showauto)
-        composant pulseaudio apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils
+        composant pulseaudio net_retry apt-fast install -y $APT_OPTS pulseaudio pulseaudio-utils
         if [ -n "$_auto" ]; then apt-mark manual $_auto >/dev/null 2>&1 || true; fi
         # Explicit purge: installing pulseaudio does not remove it.
         apt-get purge -y pipewire-pulse pipewire-media-session >/dev/null 2>&1 || true

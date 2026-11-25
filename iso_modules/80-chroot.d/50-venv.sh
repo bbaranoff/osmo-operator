@@ -16,7 +16,7 @@
 #
 # tomli: the code imports tomli (not tomllib), so it is installed explicitly.
 python3 -m venv /root/.env
-composant venv-tomli /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli
+composant venv-tomli net_retry /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check tomli
 if /root/.env/bin/python3 -c "import tomli" 2>/dev/null; then
     echo "  /root/.env : venv pret, tomli importable"
 else
@@ -27,7 +27,7 @@ fi
 # (pyopencl, matplotlib...) pulls numpy 2 and gnuradio fails at import with
 # « initialization failed ». Put back to 1.x if the copied venv drifted.
 if /root/.env/bin/python3 -c "import numpy,sys; sys.exit(int(numpy.__version__[0]) < 2)" 2>/dev/null; then
-    composant venv-numpy /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check "numpy<2" "contourpy<1.4"
+    composant venv-numpy net_retry /root/.env/bin/python3 -m pip install -q --no-cache-dir --disable-pip-version-check "numpy<2" "contourpy<1.4"
     [ "$COMPOSANT_RC" = 0 ] && echo "  /root/.env : numpy ramene en 1.x (GNU Radio / gr-gsm)"
 fi
 

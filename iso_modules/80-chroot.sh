@@ -42,6 +42,10 @@ rm -rf "${ROOTFS:?}$_CHROOT_D"; install -d "$ROOTFS$_CHROOT_D"
 cp "$DIR"/iso_modules/80-chroot.d/[0-9][0-9]-*.sh "$ROOTFS$_CHROOT_D/"
 # CRITIQUE / OPTIONNEL table of the components (00-outils.sh reads it).
 install -m644 "$DIR/iso_modules/components.conf" "$ROOTFS/var/lib/osmo-build/components.conf"
+# Signing keys of the third-party repositories, versioned in iso_modules/keys/
+# (osmo_cle reads them; it downloads only a missing one).
+rm -rf "${ROOTFS:?}/var/lib/osmo-build/keys"; install -d "$ROOTFS/var/lib/osmo-build/keys"
+cp "$DIR"/iso_modules/keys/*.asc "$ROOTFS/var/lib/osmo-build/keys/" 2>/dev/null || true
 # ── Logs and status ─────────────────────────────────────────────────────────
 # One log per fragment, /var/log/osmo-build/<fragment>.log, and the status of
 # every component in /var/log/osmo-build/status.json - both IN the image (the
@@ -79,7 +83,7 @@ for _osmo_frag in /var/lib/osmo-build/chroot.d/[0-9][0-9]-*.sh; do
 done
 _osmo_frag_courant=""
 ' || _CHROOT_RC=$?
-rm -rf "${ROOTFS:?}$_CHROOT_D"
+rm -rf "${ROOTFS:?}$_CHROOT_D" "${ROOTFS:?}/var/lib/osmo-build/keys"
 _OB="$ROOTFS/var/log/osmo-build"
 if [ -f "$_OB/status.jsonl" ]; then
     { echo "["; sed '$!s/$/,/' "$_OB/status.jsonl"; echo "]"; } > "$_OB/status.json"

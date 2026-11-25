@@ -27,7 +27,7 @@
     # recommendation of ubuntu-desktop-minimal; see the snapd handling below.
     # x11-xserver-utils: xhost, used by run-as-owner (step 8i) to allow the
     # encrypted-home account on the root session X server.
-    apt-fast install -y $APT_OPTS \
+    net_retry apt-fast install -y $APT_OPTS \
         ubuntu-desktop-minimal wireshark linphone-desktop \
         vlc chrome-gnome-shell \
         wmctrl x11-utils x11-xserver-utils xdotool zenity librsvg2-common \
