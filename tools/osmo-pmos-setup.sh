@@ -195,7 +195,14 @@ ssh_vm "echo $PASS | sudo -S -p '' sh -c '
 # DNS). The switch cuts for a second the address we are connected through:
 # it runs detached in the VM, and we wait for SSH to come back.
 FILAIRE="${OSMO_PMOS_FILAIRE:-0}"
-{ echo "$PASS"; echo "FILAIRE=$FILAIRE"; cat <<'GUEST'
+# THE LOCAL NETWORK WITHOUT THE 4G. The host's LAN subnets (OSMO_PMOS_LAN to
+# force them, space separated) are reachable from the VM through the QEMU NAT
+# (10.0.2.2) as a FALLBACK route (metric 900); with the 4G up, a dispatcher
+# adds the same routes through it (metric 50), so the bench traffic keeps
+# going over the radio. Internet still goes through the 4G only.
+LAN="${OSMO_PMOS_LAN:-$(ip -4 route show scope link proto kernel 2>/dev/null \
+     | awk '$1 ~ /\// && $3 !~ /^(docker|br-|veth|ogstun|apn0|tun|virbr|lo)/ {print $1}' | sort -u | tr '\n' ' ')}"
+{ echo "$PASS"; echo "FILAIRE=$FILAIRE"; echo "LAN='$LAN'"; cat <<'GUEST'
 set -u
 CONF=/etc/NetworkManager/conf.d/90-osmo-filaire.conf
 SVC=/etc/systemd/system/osmo-filaire.service
@@ -216,9 +223,28 @@ for d in /sys/class/net/*; do
     ip addr replace 10.0.2.15/24 dev "$n"
     ip route del default dev "$n" 2>/dev/null
     resolvectl revert "$n" 2>/dev/null     # no QEMU DNS through this link
+    # the local network, as a fallback through the QEMU NAT (see /etc/osmo-lan)
+    for net in $(cat /etc/osmo-lan 2>/dev/null); do
+        ip route replace "$net" via 10.0.2.2 dev "$n" metric 900
+    done
 done
 exit 0
 EOB
+    echo "$LAN" > /etc/osmo-lan
+    # With the 4G up, the same subnets through it, ahead of the fallback.
+    mkdir -p /etc/NetworkManager/dispatcher.d
+    cat > /etc/NetworkManager/dispatcher.d/90-osmo-lan <<'EOD'
+#!/bin/sh
+# osmo-lan - the local network through the 4G when it is up (metric 50),
+# the wired fallback (metric 900, osmo-filaire) otherwise.
+IF="${DEVICE_IP_IFACE:-$1}"
+case "$IF" in ppp*|wwan*) ;; *) exit 0 ;; esac
+[ "$2" = up ] || exit 0
+for net in $(cat /etc/osmo-lan 2>/dev/null); do
+    ip route replace "$net" dev "$IF" metric 50
+done
+EOD
+    chmod 755 /etc/NetworkManager/dispatcher.d/90-osmo-lan
     chmod 755 "$BIN"
     cat > "$SVC" <<'EOS'
 [Unit]
