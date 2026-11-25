@@ -232,7 +232,11 @@ ExecStart=/usr/local/bin/osmo-filaire
 WantedBy=multi-user.target
 EOS
     systemctl daemon-reload; systemctl enable osmo-filaire >/dev/null 2>&1
-    printf '[Resolve]\nDNSSEC=no\nDNSOverTLS=no\n' > /etc/systemd/resolved.conf.d/osmo.conf
+    # THE DNS ANSWERS WITHOUT THE 4G. FallbackDNS is only used when no link
+    # brings a DNS server: with the 4G up, the PPP DNS answers; without it,
+    # the QEMU DNS (10.0.2.3) is still reachable on the wired link's subnet,
+    # with no default route. Names resolve, data still goes through the 4G.
+    printf '[Resolve]\nFallbackDNS=10.0.2.3\nDNSSEC=no\nDNSOverTLS=no\n' > /etc/systemd/resolved.conf.d/osmo.conf
     # A single mobile profile: the one the user already created (srsapn) is
     # used as is, otherwise one is created.
     GSM=$(nmcli -t -f NAME,TYPE con show 2>/dev/null | awk -F: '$2 == "gsm" {print $1; exit}')
