@@ -2,7 +2,8 @@
 # Inscription des téléphones (appli network_monitoring) : code d'invitation -> compte SIP.
 #
 #   python3 tools/osmo-inscription.py [--port 8088] [--bind 0.0.0.0]   le service
-#   python3 tools/osmo-inscription.py --nouveau-code [--usages N]       crée un code
+#   python3 tools/osmo-inscription.py --nouveau-qrcode PSEUDO           invitation + QR code pour CET utilisateur
+#   python3 tools/osmo-inscription.py --nouveau-code [--usages N]       invitation de 16 caracteres, sans QR code
 #   python3 tools/osmo-inscription.py --liste                           codes et comptes
 #
 # POST /inscription {"code": "...", "pseudo": "..."} ->
@@ -152,22 +153,92 @@ exten => _00X.,1,NoOp(=== SMS INSCRIT ${MESSAGE(from)} -> EXTERIEUR ${EXTEN} ===
             print("asterisk -rx %r : %s" % (cmd, (r.stderr or r.stdout).strip()), file=sys.stderr)
 
 
+# UNE INVITATION = 16 CARACTERES, sans 0/o ni 1/l/i : 30^16, soit ~78 bits.
+# Elle voyage dans un QR code (--nouveau-qrcode PSEUDO), avec l adresse du
+# noeud et le pseudo : rien a taper. Les anciens codes courts (xxxx-xxxx)
+# deja distribues restent reconnus tant qu ils n ont pas servi.
+ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+LONGUEUR = 16
+
+
+def jeton():
+    return "".join(secrets.choice(ALPHABET) for _ in range(LONGUEUR))
+
+
 def normaliser(code):
-    """Majuscules, espaces, tirets « − – » ou absents : on ne garde que l'hexa."""
-    h = re.sub(r"[^0-9a-f]", "", (code or "").lower())
-    return "%s-%s" % (h[:4], h[4:]) if len(h) == 8 else h
+    """Casse, espaces et tirets ignores. Un lien de QR code entier est accepte :
+    on en prend le parametre « code »."""
+    code = code or ""
+    m = re.search(r"[?&]code=([^&\s]+)", code)
+    if m:
+        code = m.group(1)
+    t = re.sub(r"[^0-9a-z]", "", code.lower())
+    if len(t) == 8 and re.fullmatch(r"[0-9a-f]{8}", t):       # ancien code court
+        return "%s-%s" % (t[:4], t[4:])
+    return t
+
+
+def noeud_ip():
+    """L adresse du noeud a mettre dans le QR code (OSMO_NODE_IP, sinon la
+    source de la route par defaut)."""
+    ip = os.environ.get("OSMO_NODE_IP", "")
+    if ip:
+        return ip
+    try:
+        r = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3)
+        m = re.search(r"\bsrc (\d+\.\d+\.\d+\.\d+)", r.stdout)
+        return m.group(1) if m else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+PSEUDO_RE = r"[\w .\-]{1,40}"
+
+
+def nouveau_qrcode(pseudo, noeud, png, usages=1):
+    """Une invitation pour UN utilisateur nomme, et son QR code : dans le
+    terminal, et en PNG. Rend le lien."""
+    from urllib.parse import quote
+    pseudo = (pseudo or "").strip()
+    if not re.fullmatch(PSEUDO_RE, pseudo):
+        sys.exit("pseudo : 1 a 40 lettres, chiffres, espace, . _ -  (obligatoire : pas d utilisateur au hasard)")
+    noeud = noeud or noeud_ip()
+    if not noeud:
+        sys.exit("adresse du noeud introuvable : --noeud <adresse>")
+    with VERROU:
+        e = charger()
+        code = jeton()
+        e["codes"][code] = {"restant": usages, "pseudo": pseudo}
+        sauver(e)
+    lien = "osmo://inscription?noeud=%s&pseudo=%s&code=%s" % (noeud, quote(pseudo), code)
+    png = png or os.path.join(os.path.dirname(ETAT), "qr-%s.png" % re.sub(r"[^\w.-]", "_", pseudo))
+    try:
+        subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", lien], check=True)
+        subprocess.run(["qrencode", "-o", png, "-s", "10", "-m", "4", lien], check=True)
+        os.chmod(png, 0o600)
+        print("QR code : %s" % png)
+    except FileNotFoundError:
+        print("qrencode absent (apt install qrencode) : pas de QR code, voici le lien a transmettre")
+    except subprocess.CalledProcessError as err:
+        print("qrencode a echoue (%s) : voici le lien" % err)
+    print("pour    : %s  (noeud %s, %d usage%s)" % (pseudo, noeud, usages, "s" if usages > 1 else ""))
+    print("lien    : %s" % lien)
+    return lien
 
 
 def inscrire(code, pseudo):
     code, pseudo = normaliser(code), (pseudo or "").strip()
-    if not re.fullmatch(r"[\w .\-]{1,40}", pseudo):
-        return 400, {"ok": False, "error": "pseudo : 1 à 40 lettres, chiffres, espace, . _ -"}
     with VERROU:
         e = charger()
         c = e["codes"].get(code)
         if not c or c["restant"] <= 0:
-            print("code refusé : %r (%s)" % (code, "épuisé" if c else "inconnu"), file=sys.stderr)
-            return 403, {"ok": False, "error": "code d'invitation inconnu ou déjà utilisé"}
+            # jamais l invitation entiere dans le journal : ses 4 premiers caracteres
+            print("invitation refusée : %s… (%s)" % (code[:4], "épuisée" if c else "inconnue"), file=sys.stderr)
+            return 403, {"ok": False, "error": "invitation inconnue ou déjà utilisée"}
+        # une invitation nominative (QR code) : c est SON pseudo, quoi que dise le téléphone
+        pseudo = c.get("pseudo") or pseudo
+        if not re.fullmatch(PSEUDO_RE, pseudo):
+            return 400, {"ok": False, "error": "pseudo : 1 à 40 lettres, chiffres, espace, . _ -"}
         libres = [str(n) for n in range(PREMIER, DERNIER + 1) if str(n) not in e["comptes"]]
         if not libres:
             return 503, {"ok": False, "error": "plus de numéro libre"}
@@ -176,7 +247,7 @@ def inscrire(code, pseudo):
         c["restant"] -= 1
         sauver(e)
         ecrire_asterisk(e)
-    return 200, {"ok": True, "msisdn": num, "sip_user": num, "sip_password": mdp,
+    return 200, {"ok": True, "msisdn": num, "sip_user": num, "sip_password": mdp, "pseudo": pseudo,
                  "sip_port": 5060, "sip_transport": "udp"}
 
 
@@ -379,6 +450,10 @@ def main():
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--nouveau-code", action="store_true")
     ap.add_argument("--usages", type=int, default=1)
+    ap.add_argument("--nouveau-qrcode", metavar="PSEUDO",
+                    help="une invitation de 16 caracteres pour CET utilisateur, en QR code (terminal + PNG)")
+    ap.add_argument("--noeud", default="", help="adresse du noeud a mettre dans le QR code (defaut : celle de la route par defaut)")
+    ap.add_argument("--png", default="", help="fichier PNG du QR code (defaut : a cote de l etat, qr-<pseudo>.png)")
     ap.add_argument("--liste", action="store_true")
     ap.add_argument("--sortie", nargs=2, metavar=("NUMERO", "oui|non"),
                     help="autorise (oui) ou ferme (non) les appels vers l exterieur pour ce poste")
@@ -386,10 +461,13 @@ def main():
     if a.nouveau_code:
         with VERROU:
             e = charger()
-            code = "%s-%s" % (secrets.token_hex(2), secrets.token_hex(2))
+            code = jeton()
             e["codes"][code] = {"restant": a.usages}
             sauver(e)
         print(code)
+        return
+    if a.nouveau_qrcode is not None:
+        nouveau_qrcode(a.nouveau_qrcode, a.noeud, a.png, a.usages)
         return
     if a.sortie:
         num, choix = a.sortie
@@ -405,7 +483,8 @@ def main():
     if a.liste:
         e = charger()
         for k, v in e["codes"].items():
-            print("code %s  restant %d" % (k, v["restant"]))
+            if v["restant"] > 0:                      # les 4 premiers caracteres suffisent a la reconnaitre
+                print("invitation %s…  restant %d%s" % (k[:4], v["restant"], "  pour %s" % v["pseudo"] if v.get("pseudo") else ""))
         for k, v in sorted(e["comptes"].items()):
             print("compte %s  %s%s" % (k, v["pseudo"], "  (sortie vers l exterieur)" if v.get("sortie") else ""))
         return
