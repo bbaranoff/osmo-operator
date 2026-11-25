@@ -42,11 +42,18 @@ runs:
       env:
         NEED: ${{ inputs.need }}
       run: |
-        if [ "$(stat -c %d /mnt 2>/dev/null)" = "$(stat -c %d /)" ]; then
-          echo "::warning::/mnt est sur la meme partition que / : deplacer docker n'y gagne aucune place ($(df -h --output=avail / | tail -1 | tr -d ' ') libres en tout)."
-        fi
         AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
         ROOT_AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+        # [2026-11-25] Les runners recents n'ont plus de second disque : /mnt
+        # est un simple dossier de /, qui offre a lui seul ~117 Go. Deplacer
+        # docker n'y gagne rien ; avec assez de place, ce n'est pas un probleme.
+        if [ "$(stat -c %d /mnt 2>/dev/null)" = "$(stat -c %d /)" ]; then
+          if [ "${ROOT_AVAIL:-0}" -ge "$NEED" ]; then
+            echo "::notice::/mnt est sur / (un seul disque, ${ROOT_AVAIL} Go libres) : docker reste sur /."
+            df -h /; exit 0
+          fi
+          echo "::warning::/mnt est sur la meme partition que / : deplacer docker n'y gagne aucune place (${ROOT_AVAIL:-0} Go libres en tout)."
+        fi
         if [ "${AVAIL:-0}" -lt "$NEED" ]; then
           if [ "${ROOT_AVAIL:-0}" -ge "$NEED" ]; then
             echo "::warning::/mnt inutilisable (${AVAIL:-0} Go) mais / offre ${ROOT_AVAIL} Go - on reste sur /."
