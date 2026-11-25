@@ -344,23 +344,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build interstp
-        run: |
-          docker build -f Dockerfile.stp -t interstp:ci .
-          docker images interstp:ci --format '  {{.Repository}}:{{.Tag}} {{.Size}}'
+      # [2026-11-25] buildx --push, comme les autres jobs. `docker build` puis
+      # `docker push` echouait en « unknown blob » sur certaines images de
+      # runner (store d'images containerd) : la couche ubuntu:24.04 n'etait pas
+      # gardee en local, le push ne la trouvait pas. Pousser depuis buildkit
+      # evite le store local.
+      - name: Buildx
+        uses: docker/setup-buildx-action@v4
 
-      - name: Push interstp
-        if: github.event_name != 'pull_request'
+      - name: Build et push interstp
         env:
           IMG: ${{ env.REGISTRY }}/${{ steps.img.outputs.repo }}/interstp
+          EVENT: ${{ github.event_name }}
         run: |
-          TAGS="sha-${GITHUB_SHA::7}"
-          [ "${GITHUB_REF_TYPE}" = "tag" ]    && TAGS="$TAGS ${GITHUB_REF_NAME}"
-          [ "${GITHUB_REF_NAME}" = "main" ]   && TAGS="$TAGS latest"
-          for t in $TAGS; do
-            docker tag interstp:ci "$IMG:$t"
-            docker push "$IMG:$t"
-          done
+          TAGS=(-t "$IMG:sha-${GITHUB_SHA::7}")
+          [ "${GITHUB_REF_TYPE}" = "tag" ]  && TAGS+=(-t "$IMG:${GITHUB_REF_NAME}")
+          [ "${GITHUB_REF_NAME}" = "main" ] && TAGS+=(-t "$IMG:latest")
+          if [ "$EVENT" = "pull_request" ]; then OUT=(--output type=cacheonly); else OUT=(--push); fi
+          docker buildx build -f Dockerfile.stp "${TAGS[@]}" "${OUT[@]}" .
 
   # ── Les deux derivees : en parallele, chacune sur un runner neuf ───────────
   # Quelques minutes chacune - elles ne compilent rien, elles rafraichissent des
