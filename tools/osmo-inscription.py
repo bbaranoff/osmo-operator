@@ -255,22 +255,51 @@ def noeud_ip():
 PSEUDO_RE = r"[\w .\-]{1,40}"
 
 
-def nouveau_qrcode(pseudo, noeud, png, usages=1):
-    """Une invitation pour UN utilisateur nomme, et son QR code : dans le
-    terminal, et en PNG. Rend le lien."""
+def creer_invitation(pseudo, noeud="", usages=1):
+    """Une invitation pour UN utilisateur nomme. Rend (lien, noeud) ; ValueError
+    si le pseudo ou l adresse du noeud manquent. Sert a --nouveau-qrcode et a
+    osmo-gtk (POST /admin/invitation)."""
     from urllib.parse import quote
     pseudo = (pseudo or "").strip()
     if not re.fullmatch(PSEUDO_RE, pseudo):
-        sys.exit("pseudo : 1 a 40 lettres, chiffres, espace, . _ -  (obligatoire : pas d utilisateur au hasard)")
+        raise ValueError("pseudo : 1 a 40 lettres, chiffres, espace, . _ -  (obligatoire : pas d utilisateur au hasard)")
     noeud = noeud or noeud_ip()
     if not noeud:
-        sys.exit("adresse du noeud introuvable : --noeud <adresse>")
+        raise ValueError("adresse du noeud introuvable : --noeud <adresse>")
     with VERROU:
         e = charger()
         code = jeton()
         e["codes"][code] = {"restant": usages, "pseudo": pseudo}
         sauver(e)
-    lien = "osmo://inscription?noeud=%s&pseudo=%s&code=%s" % (noeud, quote(pseudo), code)
+    return "osmo://inscription?noeud=%s&pseudo=%s&code=%s" % (noeud, quote(pseudo), code), noeud
+
+
+def admin_etat():
+    """Tout ce qu osmo-gtk montre dans son onglet Telephones."""
+    e = charger()
+    try:
+        out = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], capture_output=True, text=True, timeout=8).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    en_ligne = {m.group(1) for m in re.finditer(r"Contact:\s+(\d+)/\S+\s+\S+\s+Avail", out)}
+    return {"ok": True, "noeud": noeud_ip(),
+            "comptes": [{"num": k, "pseudo": v.get("pseudo", ""), "sortie": bool(v.get("sortie")),
+                         "en_ligne": k in en_ligne} for k, v in sorted(e["comptes"].items())],
+            "invitations": [{"debut": k[:4], "pseudo": v.get("pseudo", ""), "restant": v["restant"]}
+                            for k, v in e["codes"].items() if v["restant"] > 0],
+            "proxy": {"actif": proxy_actif(), "user": PROXY["user"] if proxy_actif() else None,
+                      "dest": PROXY["dest"], "attente": len(PROXY["file"])},
+            "bluetooth": bt_etat()}
+
+
+def nouveau_qrcode(pseudo, noeud, png, usages=1):
+    """Une invitation pour UN utilisateur nomme, et son QR code : dans le
+    terminal, et en PNG. Rend le lien."""
+    try:
+        lien, noeud = creer_invitation(pseudo, noeud, usages)
+    except ValueError as err:
+        sys.exit(str(err))
+    pseudo = pseudo.strip()
     png = png or os.path.join(os.path.dirname(ETAT), "qr-%s.png" % re.sub(r"[^\w.-]", "_", pseudo))
     try:
         subprocess.run(["qrencode", "-t", "ANSIUTF8", "-m", "2", lien], check=True)
@@ -606,12 +635,47 @@ class H(BaseHTTPRequestHandler):
                 PROXY["vu"] = time.time()
                 sms, PROXY["file"] = PROXY["file"], []
             return self._rep(200, {"ok": True, "sms": sms})
+        if u.path.rstrip("/") == "/admin/etat":
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                return self._rep(403, {"ok": False, "error": "local seulement"})
+            return self._rep(200, admin_etat())
         if u.path.rstrip("/") == "/proxy/bluetooth":
             return self._rep(200, bt_etat())
         if u.path.rstrip("/") == "/proxy":
             return self._rep(200, {"ok": True, "actif": proxy_actif(), "user": PROXY["user"] if proxy_actif() else None,
                                    "dest": PROXY["dest"], "attente": len(PROXY["file"])})
         self._rep(200 if u.path == "/" else 404, {"service": "osmo-inscription", "post": "/inscription"})
+
+    def _admin(self, chemin, d):
+        """L administration du noeud, pour osmo-gtk : cette machine seulement."""
+        if self.client_address[0] not in ("127.0.0.1", "::1"):
+            return self._rep(403, {"ok": False, "error": "local seulement"})
+        if chemin == "/admin/invitation":
+            try:
+                lien, noeud = creer_invitation(str(d.get("pseudo") or ""), str(d.get("noeud") or ""))
+            except ValueError as err:
+                return self._rep(400, {"ok": False, "error": str(err)})
+            sys.stderr.write("invitation creee pour %s (osmo-gtk)\n" % str(d.get("pseudo")).strip())
+            return self._rep(200, {"ok": True, "lien": lien, "noeud": noeud})
+        if chemin == "/admin/sortie":
+            num = str(d.get("num") or "")
+            with VERROU:
+                e = charger()
+                if num not in e["comptes"]:
+                    return self._rep(404, {"ok": False, "error": "poste inconnu"})
+                e["comptes"][num]["sortie"] = bool(d.get("oui"))
+                sauver(e)
+                ecrire_asterisk(e)
+            return self._rep(200, {"ok": True})
+        if chemin == "/admin/bluetooth/associer":
+            with VERROU:
+                if BT["fin"] <= time.time():
+                    BT["fin"] = time.time() + BT_DUREE
+                    BT["message"] = "ouverture..."
+                    BT["fil"] = threading.Thread(target=bt_fenetre, daemon=True)
+                    BT["fil"].start()
+            return self._rep(200, bt_etat())
+        return self._rep(404, {"ok": False, "error": "inconnu"})
 
     def _proxy(self, chemin, d):
         if chemin == "/proxy/sortant":
@@ -675,6 +739,8 @@ class H(BaseHTTPRequestHandler):
             d = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._rep(400, {"ok": False, "error": "JSON attendu"})
+        if chemin.startswith("/admin"):
+            return self._admin(chemin, d)
         if chemin.startswith("/proxy"):
             return self._proxy(chemin, d)
         if chemin != "/inscription":

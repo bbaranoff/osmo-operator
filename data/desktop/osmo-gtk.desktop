@@ -17,7 +17,7 @@ StartupWMClass=osmo-ms-pont.py
 Categories=System;Network;
 Keywords=constellation;iq;gmsk;dsp;calypso;kconfig;menuconfig;tests;notebook;wiki;l23;mobile;core;
 
-Actions=Journaux;Kconfig;Tests;Notebooks;Wiki;Infos;Installation;
+Actions=Journaux;Kconfig;Tests;Telephones;Notebooks;Wiki;Infos;Installation;
 
 [Desktop Action Journaux]
 Name=Journaux (dsp, qemu, osmocon, mailbox, Osmocom)
@@ -30,6 +30,10 @@ Exec=/usr/local/bin/osmo-gtk --onglet Kconfig
 [Desktop Action Tests]
 Name=Tests
 Exec=/usr/local/bin/osmo-gtk --onglet Tests
+
+[Desktop Action Telephones]
+Name=Telephones (invitation par QR code, comptes, proxy, Bluetooth)
+Exec=/usr/local/bin/osmo-gtk --onglet Telephones
 
 [Desktop Action Notebooks]
 Name=Notebooks

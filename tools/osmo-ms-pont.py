@@ -6,7 +6,7 @@
 #   osmo-gtk / constellation / iq-visual / osmo-ms-pont   the same window (links;
 #                                data/desktop/osmo-gtk.desktop, pinned in the dock)
 #   osmo-gtk --onglet Kconfig    opens on a tab (Air, Core, L23, Kconfig, Tests,
-#                                Notebooks, Wiki, Infos, Installation)
+#                                Telephones, Notebooks, Wiki, Infos, Installation)
 #   osmo-ms-pont                 the window; "Demarrage complet" starts the bench
 #   osmo-ms-pont --demo          the window fed with random bursts (no chain)
 #   OSMO_MS_PONT_PORT=6790       UDP port of the air (copy of the bridge)
@@ -92,7 +92,7 @@ import numpy as np
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 GSM_ROOT = os.environ.get("GSM_ROOT", "/opt/GSM")
 RUN_SH = os.environ.get("RUN_SH", os.path.join(GSM_ROOT, "c54x_exe", "run.sh"))
@@ -1286,6 +1286,7 @@ class Fenetre(Gtk.Window):
         self.jx_page = self._onglet_journaux()
         self.onglets.append_page(self.jx_page, Gtk.Label(label="Journaux"))
         for f, t in ((self._onglet_kconfig, "Kconfig"), (self._onglet_tests, "Tests"),
+                     (self._onglet_telephones, "Telephones"),
                      (self._onglet_notebooks, "Notebooks"), (self._onglet_wiki, "Wiki"), (self._onglet_infos, "Infos"),
                      (self._onglet_install, "Installation")):
             self.onglets.append_page(f(), Gtk.Label(label=t))
@@ -2354,6 +2355,178 @@ class Fenetre(Gtk.Window):
         return False
 
     # ══ INFOS: the most the machine and the bench can say ══════════════════
+    # ── Telephones: the phones of the node (Network Monitor, Android / postmarketOS) ──
+    # One tab for what was only in a terminal: the invitation of a NAMED user as
+    # a QR code (osmo-inscription --nouveau-qrcode), the accounts and who is on
+    # line, the way out to the outside, the phone that lends its SIM (proxy) and
+    # the Bluetooth line. Talks to the osmo-inscription service of THIS machine
+    # (http://127.0.0.1:8088/admin/..., local only).
+    TEL_API = "http://127.0.0.1:%s" % os.environ.get("OSMO_INSCRIPTION_PORT", "8088")
+
+    def _tel_http(self, chemin, corps=None):
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.TEL_API + chemin, data=None if corps is None else json.dumps(corps).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            try:
+                return json.loads(e.read().decode() or "{}")
+            except ValueError:
+                return {"ok": False, "error": "HTTP %d" % e.code}
+        except (OSError, ValueError) as e:
+            return {"ok": False, "error": "service osmo-inscription injoignable (%s)" % e}
+
+    def _tel_fil(self, chemin, corps, suite):
+        threading.Thread(target=lambda: GLib.idle_add(suite, self._tel_http(chemin, corps)), daemon=True).start()
+
+    def _onglet_telephones(self):
+        p = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        p.set_border_width(6)
+        # left: the invitation and its QR code
+        g = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        g.set_size_request(380, -1)
+        t = Gtk.Label(xalign=0)
+        t.set_markup("<b>Inviter un telephone</b>")
+        g.pack_start(t, False, False, 0)
+        aide = Gtk.Label(xalign=0, wrap=True)
+        aide.set_text("Un pseudo par personne (obligatoire), puis le QR code : dans Network Monitor "
+                      "(Android ou postmarketOS), « Demarrage rapide » puis « Scanner le QR code ». "
+                      "L invitation sert une fois.")
+        g.pack_start(aide, False, False, 0)
+        ligne = Gtk.Box(spacing=6)
+        self.tel_pseudo = Gtk.Entry(placeholder_text="pseudo de la personne")
+        self.tel_pseudo.connect("activate", lambda *_: self.tel_inviter())
+        ligne.pack_start(self.tel_pseudo, True, True, 0)
+        b = Gtk.Button(label="Creer le QR code")
+        b.connect("clicked", lambda *_: self.tel_inviter())
+        ligne.pack_start(b, False, False, 0)
+        g.pack_start(ligne, False, False, 0)
+        self.tel_qr = Gtk.Image()
+        g.pack_start(self.tel_qr, False, False, 6)
+        self.tel_lien = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self.tel_lien.set_line_wrap_mode(Pango.WrapMode.CHAR)
+        g.pack_start(self.tel_lien, False, False, 0)
+        self.tel_copier = Gtk.Button(label="Copier le lien")
+        self.tel_copier.set_sensitive(False)
+        self.tel_copier.connect("clicked", lambda *_: Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(
+            getattr(self, "_tel_lien", ""), -1))
+        g.pack_start(self.tel_copier, False, False, 0)
+        p.pack1(g, False, False)
+        # right: accounts, proxy, Bluetooth
+        d = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        haut = Gtk.Box(spacing=6)
+        bt = Gtk.Button(label="Actualiser")
+        bt.connect("clicked", lambda *_: self.tel_actualiser())
+        haut.pack_start(bt, False, False, 0)
+        self.tel_heure = Gtk.Label(xalign=0)
+        haut.pack_start(self.tel_heure, False, False, 0)
+        d.pack_start(haut, False, False, 0)
+        # number, pseudo, state markup, way out, on line
+        self.tel_store = Gtk.ListStore(str, str, str, bool)
+        vue = Gtk.TreeView(model=self.tel_store)
+        for i, titre in ((2, ""), (0, "poste"), (1, "pseudo")):
+            r = Gtk.CellRendererText()
+            vue.append_column(Gtk.TreeViewColumn(titre, r, **({"markup": i} if i == 2 else {"text": i})))
+        rt = Gtk.CellRendererToggle()
+        rt.connect("toggled", self._tel_sortie)
+        vue.append_column(Gtk.TreeViewColumn("sortie vers l exterieur", rt, active=3))
+        sw = Gtk.ScrolledWindow()
+        sw.add(vue)
+        d.pack_start(sw, True, True, 0)
+        self.tel_invits = Gtk.Label(xalign=0, wrap=True)
+        d.pack_start(self.tel_invits, False, False, 0)
+        self.tel_proxy = Gtk.Label(xalign=0, wrap=True)
+        d.pack_start(self.tel_proxy, False, False, 0)
+        bas = Gtk.Box(spacing=6)
+        self.tel_bt = Gtk.Label(xalign=0, wrap=True)
+        bas.pack_start(self.tel_bt, True, True, 0)
+        ba = Gtk.Button(label="Associer un telephone (Bluetooth)")
+        ba.set_tooltip_text("Le noeud devient visible 3 min ; associez-le depuis les reglages Bluetooth du "
+                            "telephone, ou depuis l onglet Proxy de l appli. La ligne se met en place seule.")
+        ba.connect("clicked", lambda *_: self._tel_fil("/admin/bluetooth/associer", {}, lambda r: self.tel_actualiser()))
+        bas.pack_start(ba, False, False, 0)
+        d.pack_start(bas, False, False, 0)
+        p.pack2(d, True, False)
+        GLib.timeout_add_seconds(5, self._tel_tic, p)
+        return p
+
+    def _tel_tic(self, page):
+        if self.onglets.get_nth_page(self.onglets.get_current_page()) is page:
+            self.tel_actualiser()
+        return True
+
+    def tel_actualiser(self):
+        self._tel_fil("/admin/etat", None, self._tel_montrer)
+        return False
+
+    def _tel_montrer(self, e):
+        if not e.get("ok"):
+            self.tel_heure.set_text(e.get("error", "erreur"))
+            return False
+        self.tel_heure.set_text("noeud %s - releve a %s" % (e.get("noeud") or "?", time.strftime("%H:%M:%S")))
+        self.tel_store.clear()
+        for c in e.get("comptes", []):
+            self.tel_store.append([c["num"], c["pseudo"],
+                                   '<span foreground="%s">●</span>' % ("#3fb950" if c["en_ligne"] else "#6e7681"),
+                                   c["sortie"]])
+        inv = e.get("invitations", [])
+        self.tel_invits.set_text("Invitations en attente : " + (", ".join(
+            "%s… (%s)" % (i["debut"], i["pseudo"] or "sans pseudo") for i in inv) or "aucune"))
+        px = e.get("proxy", {})
+        self.tel_proxy.set_text("Pret de SIM (SMS) : " + (
+            "poste %s, vers %s, %d SMS en attente" % (px.get("user"), px.get("dest") or "?", px.get("attente", 0))
+            if px.get("actif") else "aucun telephone ne prete sa SIM"))
+        b = e.get("bluetooth", {})
+        li = b.get("ligne")
+        if b.get("fenetre"):
+            txt = "le noeud « %s » attend un telephone (encore %d s)" % ((b.get("adaptateur") or {}).get("nom", "?"), b["fenetre"])
+        elif li:
+            nom = next((x["nom"] for x in b.get("appaires", []) if x["adresse"] == li["adresse"]), li["adresse"])
+            txt = "%s, %s" % (nom, ("connecte, ligne libre" if li.get("etat") == "Free" else "en appel")
+                              if li.get("connecte") else "hors de portee")
+        else:
+            txt = b.get("message") or "aucun telephone associe"
+        self.tel_bt.set_text("Ligne Bluetooth (appels) : " + txt)
+        return False
+
+    def _tel_sortie(self, _r, chemin):
+        it = self.tel_store.get_iter(chemin)
+        num, oui = self.tel_store[it][0], not self.tel_store[it][3]
+        self._tel_fil("/admin/sortie", {"num": num, "oui": oui}, lambda r: self.tel_actualiser())
+
+    def tel_inviter(self):
+        pseudo = self.tel_pseudo.get_text().strip()
+        if not pseudo:
+            self.tel_lien.set_text("Il faut un pseudo : pas d invitation sans nom.")
+            return
+        self._tel_fil("/admin/invitation", {"pseudo": pseudo}, self._tel_invite)
+
+    def _tel_invite(self, r):
+        if not r.get("ok"):
+            self.tel_qr.clear()
+            self.tel_copier.set_sensitive(False)
+            self.tel_lien.set_text(r.get("error", "erreur"))
+            return False
+        self._tel_lien = r["lien"]
+        self.tel_lien.set_text(r["lien"])
+        self.tel_copier.set_sensitive(True)
+        self.tel_pseudo.set_text("")
+        try:        # the PNG goes through a pipe: the secret never lands in a file
+            png = subprocess.run(["qrencode", "-o", "-", "-s", "7", "-m", "3", r["lien"]],
+                                 capture_output=True, check=True, timeout=10).stdout
+            ld = GdkPixbuf.PixbufLoader.new_with_type("png")
+            ld.write(png)
+            ld.close()
+            self.tel_qr.set_from_pixbuf(ld.get_pixbuf())
+        except (OSError, subprocess.SubprocessError, GLib.Error) as err:
+            self.tel_qr.clear()
+            self.tel_lien.set_text("%s\n(QR code impossible : %s - apt install qrencode)" % (r["lien"], err))
+        self.tel_actualiser()
+        return False
+
     def _onglet_infos(self):
         b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         b.set_border_width(6)
@@ -2472,7 +2645,8 @@ class Fenetre(Gtk.Window):
         if t in self._vus:
             return
         self._vus.add(t)
-        f = {"Kconfig": self.kc_charger, "Installation": self.install_lister, "Infos": self.infos_actualiser}.get(t)
+        f = {"Kconfig": self.kc_charger, "Installation": self.install_lister, "Infos": self.infos_actualiser,
+             "Telephones": self.tel_actualiser}.get(t)
         if f:
             GLib.idle_add(f)
 
@@ -2687,7 +2861,7 @@ class Fenetre(Gtk.Window):
 def main():
     ap = argparse.ArgumentParser(description="constellation : le banc (demarrage, air I/Q, coeur, mobile L23, installation)")
     ap.add_argument("--demo", action="store_true", help="rafales aleatoires, sans la chaine")
-    ap.add_argument("--onglet", help="onglet ouvert : Air, Core, L23, Journaux, Kconfig, Tests, Notebooks, Wiki, Infos, Installation")
+    ap.add_argument("--onglet", help="onglet ouvert : Air, Core, L23, Journaux, Kconfig, Tests, Telephones, Notebooks, Wiki, Infos, Installation")
     a = ap.parse_args()
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     GLib.set_prgname("osmo-ms-pont.py")
