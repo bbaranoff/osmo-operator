@@ -721,6 +721,25 @@ def _ami(actions, wait=3.0):
             pass
 
 
+# The SIP phones of the node (osmo-inscription, 3000-3999) are not in the
+# HLR: the MSC cannot deliver to them. Their SMS leave as SIP MESSAGE through
+# the AMI (account [osmo], "message" right). OSMO_SMS_SIP_RE for the range.
+SMS_SIP = re.compile(os.environ.get("OSMO_SMS_SIP_RE", r"3\d{3}"))
+
+
+def ami_message(num, text):
+    """SMS to a SIP phone of the node. Returns (ok, reason)."""
+    body = text.replace("\r", " ").replace("\n", " ")
+    out, err = _ami(["Action: MessageSend\r\nTo: pjsip:%s\r\nFrom: \"%s\" <sip:%s@127.0.0.1>\r\n"
+                     "Body: %s\r\n\r\n" % (num, MSISDN, MSISDN, body)])
+    if out is None:
+        return False, err
+    if "Response: Success" in out:
+        return True, ""
+    m = re.search(r"Message: ([^\r\n]*)", out)
+    return False, m.group(1) if m else "refus AMI"
+
+
 def ami_originate(num):
     """Give birth to the call: the dialled number is called in the bench
     dialplan, and once answered it is connected to our own number - hence to
@@ -1776,12 +1795,28 @@ class AtHandler(socketserver.StreamRequestHandler):
             self.out("+CMGS: 1")
             self.ok()
             return
+        if SMS_SIP.fullmatch(num):
+            ok, why = ami_message(num, text)
+            if not ok:
+                log("SMS a %s (SIP) non envoye : %s" % (num, why))
+                self.err()
+                return
+            log("SMS a %s (poste SIP, par Asterisk) : %s" % (num, text))
+            self.out("+CMGS: 1")
+            self.ok()
+            return
         self.csfb_debut("SMS vers %s" % num, couper_data=(DATA is None))
         out = MSC.cmd('subscriber msisdn %s sms sender msisdn %s send %s'
                       % (num, MSISDN, text))
         self.csfb_fin_apres(3.0)
         if out is None:
             log("SMS non envoye : osmo-msc injoignable")
+            self.err()
+            return
+        # The MSC answers its VTY even when it refuses (unknown subscriber):
+        # say it instead of « sent ».
+        if re.search(r"(?i)no subscriber|not found|unknown|% ", out or ""):
+            log("SMS a %s refuse par osmo-msc : %s" % (num, out.strip().splitlines()[-1:] or out))
             self.err()
             return
         log("SMS a %s : %s" % (num, text))
