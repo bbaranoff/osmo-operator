@@ -550,6 +550,37 @@ def bt_fenetre():
     sys.stderr.write("bluetooth : %s\n" % BT["message"])
 
 
+NUMEROS = {"quand": 0.0, "motif": ""}
+
+
+def numeros_banc():
+    """L expression reguliere des numeros que le noeud sert lui-meme : les
+    comptes inscrits, et ce que le plan d appel [internal] connait de court
+    (services 100, 600..., mobiles GSM _1001XX). Rien de fige dans les applis :
+    elles la relisent. Les motifs longs ou ouverts (06..., 00., 7X.) sont les
+    sorties vers l exterieur : ils n en font pas partie."""
+    if time.time() - NUMEROS["quand"] < 60 and NUMEROS["motif"]:
+        return NUMEROS["motif"]
+    parts = set(charger()["comptes"])
+    try:
+        out = subprocess.run(["asterisk", "-rx", "dialplan show internal"], capture_output=True,
+                             text=True, timeout=8).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    for ext in re.findall(r"^\s+'([^']+)' =>", out, re.M):
+        if re.fullmatch(r"\d{2,6}", ext):
+            parts.add(ext)
+        elif ext.startswith("_") and not re.search(r"[.!+*#]", ext):
+            motif, n = "", 0
+            for tok in re.findall(r"\[[^\]]+\]|.", ext[1:]):
+                n += 1
+                motif += {"X": r"\d", "Z": "[1-9]", "N": "[2-9]"}.get(tok, tok)
+            if 2 <= n <= 6:
+                parts.add(motif)
+    NUMEROS.update(quand=time.time(), motif="|".join(sorted(parts)))
+    return NUMEROS["motif"]
+
+
 class H(BaseHTTPRequestHandler):
     def _rep(self, st, obj):
         b = json.dumps(obj).encode()
@@ -561,6 +592,9 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path.rstrip("/") == "/numeros":
+            # les numeros du banc, pour le clavier natif des telephones
+            return self._rep(200, {"ok": True, "motif": numeros_banc()})
         if u.path.rstrip("/") == "/proxy/sortants":
             # l appli retire les SMS a envoyer par sa SIM (et donne signe de vie)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
