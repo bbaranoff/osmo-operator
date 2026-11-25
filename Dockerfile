@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile - osmocom-nitb base image (stable layer)
 # ─────────────────────────────────────────────────────────────────────────────
 # Everything long and rarely changed lives here: the full apt package list (one
