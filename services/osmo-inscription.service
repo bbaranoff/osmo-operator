@@ -1,0 +1,16 @@
+[Unit]
+Description=Inscription des telephones : code d'invitation -> compte SIP (http://<noeud>:8088/inscription)
+After=network.target asterisk.service
+# Ecoute sur toutes les interfaces : le telephone doit le joindre. Reseau local ou
+# WireGuard seulement, jamais une adresse publique (le code est la seule protection).
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/GSM/osmo-operator
+ExecStart=/usr/bin/python3 /opt/GSM/osmo-operator/tools/osmo-inscription.py --port 8088 --bind 0.0.0.0
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=osmo-inscription
+
+[Install]
+WantedBy=multi-user.target
