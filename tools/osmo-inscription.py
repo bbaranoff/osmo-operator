@@ -115,6 +115,9 @@ qualify_frequency=30
 """ % (motif, permis, vers) for motif in ("_0[1-9]XXXXXXXX", "_00.", "_+."))
     if mobile:
         tous = "&".join("PJSIP/%s" % n for n in sorted(e["comptes"]) if n in (e.get("smartphone_vers") or e["comptes"]))
+        # ... et sur les postes internes du PC (Linphone A et B), s ils existent
+        if not e.get("smartphone_vers"):
+            tous = "&".join(x for x in (tous, "PJSIP/linphone_A", "PJSIP/linphone_B") if x)
         fermeture_fin = """
 ; Les numeros exterieurs d un poste autorise : par la SIM du smartphone s il est
 ; la (Bluetooth), sinon par le trunk du noeud.
@@ -125,6 +128,14 @@ exten => _[+0-9].,1,MobileStatus(%(m)s,ETAT_MOBILE)
  same => n,Goto(internal,${EXTEN},1)
  same => n(mobile),NoOp(=== SORTIE PAR LE SMARTPHONE : ${EXTEN} - de ${CALLERID(num)} ===)
  same => n,Dial(Mobile/%(m)s/${EXTEN},60,rT)
+ same => n,Hangup()
+
+; Les postes internes du noeud (Linphone A et B, sur le PC) : 7 + numero sort
+; par le smartphone - 7123 pour la messagerie, 70612345678 pour un portable.
+; C est le moyen d entendre un appel de la SIM sur les haut-parleurs du PC.
+[internal]
+exten => _7X.,1,NoOp(=== POSTE INTERNE -> SMARTPHONE : ${EXTEN:1} ===)
+ same => n,Dial(Mobile/%(m)s/${EXTEN:1},60,rT)
  same => n,Hangup()
 
 ; Un appel recu par la SIM du smartphone : il sonne sur les postes du banc
