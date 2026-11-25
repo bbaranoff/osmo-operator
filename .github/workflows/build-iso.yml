@@ -58,6 +58,12 @@ on:
         type: boolean
         default: false
 
+# Un seul build d'ISO a la fois par ref : deux runs paralleles publieraient
+# sur la meme release. Pas d'annulation (un run fait plus d'une heure).
+concurrency:
+  group: build-iso-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-iso:
     # [2026-09-13] noble, PAS jammy. L'ISO et le Dockerfile sont en 24.04

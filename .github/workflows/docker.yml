@@ -71,6 +71,14 @@ on:
 env:
   REGISTRY: ghcr.io
 
+# Un seul run a la fois par branche : deux runs qui poussent en meme temps
+# sur les memes tags (latest, cache, sha-*) se marchent dessus sur GHCR. Pas
+# d'annulation : un build de base interrompu, c'est une heure perdue. (Un
+# seul run en attente : GitHub remplace l'attente par le run le plus recent.)
+concurrency:
+  group: ghcr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ── L'image de base : construite seulement si son contexte a bouge ─────────
   base:
@@ -272,20 +280,18 @@ jobs:
           cp -f /var/cache/osmo-debs/osmo-build-*_amd64.deb .deb-cache/ 2>/dev/null || true
           echo "cache .deb en entree : $(find .deb-cache -name 'osmo-build-*.deb' | wc -l) paquets"
 
-          # base-<empreinte> est ce que les jobs derives tirent ; :cache et
-          # :latest sont les deux commodites - l'un pour le --cache-from du
-          # prochain build, l'autre pour qui veut « la derniere ». Les trois
-          # noms sortent d'UN push : memes digests, les couches ne montent
-          # qu'une fois.
+          # base-<empreinte> est ce que les jobs derives tirent ; :cache sert
+          # au --cache-from du prochain build. Les deux noms sortent d'UN push :
+          # memes digests, les couches ne montent qu'une fois. :latest n'est
+          # PLUS pousse ici : il est pose a la fin (etape suivante), une fois
+          # base-<empreinte> verifie dans le registre.
           # Sur une pull_request rien n'est publie (le GITHUB_TOKEN d'un fork
           # n'a pas packages:write) : on batit pour valider le Dockerfile et on
           # garde le resultat dans le cache du builder, sans export ni nom.
           if [ "$PR" = true ]; then
             TAGS=(); OUT=(--output type=cacheonly)
           else
-            BASE_REPO="${CACHE%:cache}"
             TAGS=(-t "$IMAGE" -t "$CACHE")
-            [ "$GITHUB_REF_NAME" = "main" ] && TAGS+=(-t "$BASE_REPO:latest")
             OUT=(--push)
           fi
 
@@ -315,6 +321,26 @@ jobs:
           rm -rf /tmp/debs-out .deb-cache/*.deb
           echo "cache .deb en sortie : $(find /var/cache/osmo-debs -name 'osmo-build-*.deb' | wc -l) paquets, $(du -sh /var/cache/osmo-debs | cut -f1)"
           df -h / /mnt
+
+      # La reference servie est base-<empreinte> (immuable) : verifier qu'elle
+      # est bien dans le registre avant de declarer le succes, et seulement
+      # ensuite deplacer l'alias :latest dessus. imagetools create ne fait que
+      # recopier le manifeste dans le meme depot : aucune couche ne remonte.
+      - name: Verifier base-<empreinte>, puis poser latest
+        if: steps.probe.outputs.hit != 'true' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.key.outputs.image }}
+          CACHE: ${{ steps.key.outputs.cache }}
+        run: |
+          if ! docker buildx imagetools inspect "$IMAGE" >/dev/null; then
+            echo "::error::$IMAGE absent du registre apres le push."
+            exit 1
+          fi
+          echo "$IMAGE present dans le registre."
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            docker buildx imagetools create -t "${CACHE%:cache}:latest" "$IMAGE"
+            echo "latest -> $IMAGE"
+          fi
 
       - name: Temoin - dernieres mesures
         if: always()

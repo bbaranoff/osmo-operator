@@ -1,0 +1,138 @@
+# .github/workflows/ghcr-cleanup.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Menage des images de base sur GHCR (paquet osmocom-nitb).
+#
+# Chaque changement du contexte de base pousse une nouvelle
+# osmocom-nitb:base-<empreinte> (et base-arm64-<empreinte>), ~11 Go chacune.
+# Rien ne les supprimait. Ce workflow garde :
+#   - les KEEP plus recentes base-* et base-arm64-* (KEEP=10 par defaut) ;
+#   - toute base-*/base-arm64-* dont l'empreinte est celle d'un tag de release
+#     (v*, iso-*, rpi-*, arm-*, opi-* : les tags qui declenchent build-iso.yml
+#     et build-arm.yml) - une ISO publiee doit pouvoir etre rebatie ;
+#   - toute version qui porte un autre tag (latest, cache, cache-arm64...) ;
+#   - toutes les versions SANS tag : ce sont aussi les manifestes enfants des
+#     index multi-plateformes ; en supprimer un casserait l'image qui le
+#     reference.
+# Seules sont supprimees les versions dont TOUS les tags sont des base-* /
+# base-arm64-* hors de la liste a garder.
+#
+# PAR DEFAUT, RIEN N'EST SUPPRIME (simulation, la liste est affichee). Pour
+# supprimer pour de bon :
+#   - planifie : variable de depot GHCR_CLEANUP_APPLY = true ;
+#   - a la main : decocher dry_run.
+# Le GITHUB_TOKEN ne peut supprimer que si le depot a le role Admin sur le
+# paquet (Package settings > Manage Actions access).
+# ─────────────────────────────────────────────────────────────────────────────
+name: GHCR - menage des images de base
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # lundi 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Nombre de base-* (et de base-arm64-*) recentes a garder"
+        type: number
+        default: 10
+      dry_run:
+        description: "Simulation : lister sans supprimer"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout (tout l'historique et les tags)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # L'empreinte d'un tag, calculee EXACTEMENT comme docker.yml,
+      # docker-arm.yml et build-iso.yml la calculent : meme commande, dans un
+      # worktree extrait a ce tag.
+      - name: Empreintes des releases
+        id: keys
+        run: |
+          : > "$RUNNER_TEMP/release-keys"
+          for t in $(git tag -l 'v*' 'iso-*' 'rpi-*' 'arm-*' 'opi-*'); do
+            wt="$RUNNER_TEMP/wt"
+            git worktree add --detach -f "$wt" "$t" >/dev/null 2>&1 || continue
+            KEY=$(cd "$wt" && git ls-files -- Dockerfile packaging configs scripts services \
+                                             helpers tools patches \
+                  | sort | xargs sha256sum | sha256sum | cut -c1-16)
+            git worktree remove -f "$wt"
+            echo "$KEY" >> "$RUNNER_TEMP/release-keys"
+            echo "  $t -> $KEY"
+          done
+          sort -u -o "$RUNNER_TEMP/release-keys" "$RUNNER_TEMP/release-keys"
+          echo "$(wc -l < "$RUNNER_TEMP/release-keys") empreinte(s) de release protegee(s)"
+
+      - name: Menage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          KEEP: ${{ inputs.keep || 10 }}
+          # Planifie : simulation sauf GHCR_CLEANUP_APPLY=true. A la main :
+          # l'entree dry_run decide.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || (github.event_name == 'schedule' && vars.GHCR_CLEANUP_APPLY != 'true') }}
+        run: |
+          set -euo pipefail
+          PKG="${REPO_NAME,,}%2Fosmocom-nitb"
+          if [ "$OWNER_TYPE" = "Organization" ]; then BASE="/orgs/$OWNER"; else BASE="/users/$OWNER"; fi
+          API="$BASE/packages/container/$PKG/versions"
+
+          # id <TAB> date <TAB> tags separes par des virgules, plus recent d'abord
+          gh api --paginate "$API?per_page=100" \
+            --jq '.[] | [.id, .created_at, (.metadata.container.tags | join(","))] | @tsv' \
+            | sort -t$'\t' -k2,2r > "$RUNNER_TEMP/versions"
+          echo "$(wc -l < "$RUNNER_TEMP/versions") version(s) dans le paquet"
+
+          declare -A seen_amd seen_arm
+          n_amd=0; n_arm=0; doomed=()
+          while IFS=$'\t' read -r id created tags; do
+            [ -n "$tags" ] || continue                     # sans tag : jamais
+            keep=false; only_base=true
+            IFS=, read -ra tl <<< "$tags"
+            for t in "${tl[@]}"; do
+              if [[ "$t" =~ ^base-arm64-([0-9a-f]{16})$ ]]; then
+                k="${BASH_REMATCH[1]}"
+                grep -qx "$k" "$RUNNER_TEMP/release-keys" && keep=true
+                if [ -z "${seen_arm[$k]:-}" ]; then
+                  seen_arm[$k]=1; n_arm=$((n_arm+1))
+                  [ "$n_arm" -le "$KEEP" ] && keep=true
+                fi
+              elif [[ "$t" =~ ^base-([0-9a-f]{16})$ ]]; then
+                k="${BASH_REMATCH[1]}"
+                grep -qx "$k" "$RUNNER_TEMP/release-keys" && keep=true
+                if [ -z "${seen_amd[$k]:-}" ]; then
+                  seen_amd[$k]=1; n_amd=$((n_amd+1))
+                  [ "$n_amd" -le "$KEEP" ] && keep=true
+                fi
+              else
+                only_base=false                            # latest, cache, ...
+              fi
+            done
+            if [ "$only_base" = true ] && [ "$keep" = false ]; then
+              doomed+=("$id"); echo "a supprimer : $id ($created) $tags"
+            fi
+          done < "$RUNNER_TEMP/versions"
+
+          echo "${#doomed[@]} version(s) a supprimer (KEEP=$KEEP, DRY_RUN=$DRY_RUN)"
+          if [ "$DRY_RUN" = true ]; then
+            echo "::notice::Simulation : ${#doomed[@]} version(s) seraient supprimees. Rien n'a ete touche."
+            exit 0
+          fi
+          for id in "${doomed[@]}"; do
+            gh api -X DELETE "$API/$id" && echo "supprime : $id"
+          done
