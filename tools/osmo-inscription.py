@@ -97,10 +97,20 @@ qualify_frequency=30
 """.format(n=num, p=pseudo, pw=c["mdp"]))
     with open(os.path.join(AST, "pjsip_inscrits.conf"), "w") as f:
         f.write("".join(p))
+    # LA SORTIE VERS L EXTERIEUR EST FERMEE aux inscrits : [inscrits] inclut
+    # [internal], dont les numeros publics partent par le trunk (Zadarma,
+    # dongle) aux frais du noeud - un code d invitation ne doit pas donner ca.
+    # Les motifs ci-dessous passent AVANT ceux du contexte inclus ; seuls les
+    # numeros de la liste blanche (--sortie NUM oui) sont renvoyes a [internal].
+    permis = "|".join(sorted(n for n, c in e["comptes"].items() if c.get("sortie"))) or "aucun"
+    fermeture = "".join("""exten => %s,1,GotoIf($[${REGEX("^(%s)$" ${CALLERID(num)})}]?internal,${EXTEN},1)
+ same => n,NoOp(=== SORTIE REFUSEE a ${CALLERID(num)} : ${EXTEN} (osmo-inscription --sortie) ===)
+ same => n,Hangup(21)
+""" % (motif, permis) for motif in ("_0[1-9]XXXXXXXX", "_00.", "_+."))
     with open(os.path.join(AST, "extensions_inscrits.conf"), "w") as f:
         f.write("""; extensions_inscrits.conf - écrit par osmo-inscription.py, ne pas éditer
 [inscrits]
-exten => _3XXX,1,NoOp(=== INSCRIT -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} ===)
+""" + fermeture + """exten => _3XXX,1,NoOp(=== INSCRIT -> INSCRIT ${EXTEN} - CallerID: ${CALLERID(all)} ===)
  same => n,Dial(PJSIP/${EXTEN},30,rT)
  same => n,Hangup()
 include => internal
@@ -370,6 +380,8 @@ def main():
     ap.add_argument("--nouveau-code", action="store_true")
     ap.add_argument("--usages", type=int, default=1)
     ap.add_argument("--liste", action="store_true")
+    ap.add_argument("--sortie", nargs=2, metavar=("NUMERO", "oui|non"),
+                    help="autorise (oui) ou ferme (non) les appels vers l exterieur pour ce poste")
     a = ap.parse_args()
     if a.nouveau_code:
         with VERROU:
@@ -379,12 +391,23 @@ def main():
             sauver(e)
         print(code)
         return
+    if a.sortie:
+        num, choix = a.sortie
+        with VERROU:
+            e = charger()
+            if num not in e["comptes"]:
+                sys.exit("poste inconnu : %s" % num)
+            e["comptes"][num]["sortie"] = choix.lower() in ("oui", "o", "1", "yes", "on")
+            sauver(e)
+            ecrire_asterisk(e)
+        print("%s : sortie vers l exterieur %s" % (num, "autorisee" if e["comptes"][num]["sortie"] else "fermee"))
+        return
     if a.liste:
         e = charger()
         for k, v in e["codes"].items():
             print("code %s  restant %d" % (k, v["restant"]))
         for k, v in sorted(e["comptes"].items()):
-            print("compte %s  %s" % (k, v["pseudo"]))
+            print("compte %s  %s%s" % (k, v["pseudo"], "  (sortie vers l exterieur)" if v.get("sortie") else ""))
         return
     ecrire_asterisk(charger())
     print("osmo-inscription sur http://%s:%d/inscription" % (a.bind, a.port), file=sys.stderr)
