@@ -193,6 +193,42 @@ jobs:
           restore-keys: |
             osmo-debs-noble-amd64-
 
+      # Amorcage : sans aucune entree -amd64- (premier run apres le
+      # changement de cle), reprendre les .deb amd64 du cache de build-iso.yml
+      # (osmo-debs-noble-g2-, memes paquets osmo-deb sortis du meme
+      # Dockerfile) au lieu de tout recompiler pendant une heure. Ce cache-la
+      # est enregistre sous /mnt/osmo-debs : actions/cache ne restaure qu'au
+      # chemin d'origine. osmo-deb install verifie nom et version : un paquet
+      # perime est simplement recompile.
+      - name: Cache .deb vide ?
+        id: debvide
+        if: steps.probe.outputs.hit != 'true'
+        run: |
+          if ls /var/cache/osmo-debs/osmo-build-*_amd64.deb >/dev/null 2>&1; then
+            echo "vide=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "vide=true" >> "$GITHUB_OUTPUT"
+            sudo mkdir -p /mnt/osmo-debs
+            sudo chown -R "$(id -u):$(id -g)" /mnt/osmo-debs
+          fi
+
+      - name: Amorcer le cache .deb depuis celui de l'ISO
+        id: isodebs
+        if: steps.debvide.outputs.vide == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: /mnt/osmo-debs
+          key: osmo-debs-noble-g2-
+          restore-keys: |
+            osmo-debs-noble-g2-
+
+      - name: Recopier les .deb de l'ISO
+        if: steps.isodebs.outputs.cache-matched-key != ''
+        run: |
+          cp -f /mnt/osmo-debs/osmo-build-*_amd64.deb /var/cache/osmo-debs/ 2>/dev/null || true
+          sudo rm -rf /mnt/osmo-debs
+          echo "amorce depuis ${{ steps.isodebs.outputs.cache-matched-key }} : $(ls /var/cache/osmo-debs | wc -l) paquets"
+
       - name: Temoin disque
         if: steps.probe.outputs.hit != 'true'
         run: |
