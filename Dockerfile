@@ -1114,13 +1114,17 @@ RUN set -eux; \
     [ "$OSMO_WITH_BURST_IND" = 1 ]   || rm -f osmo-build-osmocom-bb-burst-ind_*.deb; \
     [ "$OSMO_WITH_LIBOSMO_DSP" = 1 ] || rm -f osmo-build-libosmo-dsp_*.deb; \
     cd /; \
-    dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*.deb; \
+    # Only this image's architecture: a cache restored from another arch's run
+    # (amd64 <-> arm64) would otherwise make dpkg fail with "package
+    # architecture (arm64) does not match system (amd64)".
+    arch="$(dpkg --print-architecture)"; \
+    dpkg -i --force-overwrite /var/cache/osmo-debs/osmo-build-*_"$arch".deb; \
     if [ "$OSMO_FAST" != 1 ]; then \
     dpkg -i --force-overwrite \
-        /var/cache/osmo-debs/osmo-build-osmo-trx_1.7.2+ipc~*.deb \
-        /var/cache/osmo-debs/osmo-build-osmo-bts_1.10.0+rand~*.deb \
-        /var/cache/osmo-debs/osmo-build-osmo-hlr_1.9.2+rand~*.deb \
-        /var/cache/osmo-debs/osmo-build-osmo-msc_1.15.0+rand~*.deb; \
+        /var/cache/osmo-debs/osmo-build-osmo-trx_1.7.2+ipc~*_"$arch".deb \
+        /var/cache/osmo-debs/osmo-build-osmo-bts_1.10.0+rand~*_"$arch".deb \
+        /var/cache/osmo-debs/osmo-build-osmo-hlr_1.9.2+rand~*_"$arch".deb \
+        /var/cache/osmo-debs/osmo-build-osmo-msc_1.15.0+rand~*_"$arch".deb; \
     fi; \
     rm -rf /var/cache/osmo-debs/fast; \
     ldconfig

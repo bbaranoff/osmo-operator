@@ -183,9 +183,15 @@ jobs:
           # les autres caches du depot avec. Avec l'empreinte : contexte
           # inchange, la cle est deja la, rien n'est reecrit ; contexte change,
           # une seule entree s'ajoute. Le prefixe reprend la plus recente.
-          key: osmo-debs-noble-${{ steps.key.outputs.key }}
+          # [2026-11-25] -amd64- : le prefixe nu `osmo-debs-noble-` englobait
+          # aussi `osmo-debs-noble-arm64-` (docker-arm.yml) et
+          # `osmo-debs-noble-g2-` (build-iso.yml). restore-keys reprenant la
+          # plus recente, ce job a restaure le cache arm64 et le dpkg -i final
+          # du Dockerfile a echoue (« package architecture (arm64) does not
+          # match system (amd64) »).
+          key: osmo-debs-noble-amd64-${{ steps.key.outputs.key }}
           restore-keys: |
-            osmo-debs-noble-
+            osmo-debs-noble-amd64-
 
       - name: Temoin disque
         if: steps.probe.outputs.hit != 'true'
@@ -225,7 +231,9 @@ jobs:
           # Semer le contexte avec les .deb du cache : chaque etape qui les
           # trouve pose le paquet au lieu de cloner et compiler.
           mkdir -p .deb-cache
-          cp -f /var/cache/osmo-debs/osmo-build-*.deb .deb-cache/ 2>/dev/null || true
+          # Seulement l'arch du runner : un cache d'une autre arch ne sert a rien.
+          rm -f /var/cache/osmo-debs/osmo-build-*_arm64.deb
+          cp -f /var/cache/osmo-debs/osmo-build-*_amd64.deb .deb-cache/ 2>/dev/null || true
           echo "cache .deb en entree : $(find .deb-cache -name 'osmo-build-*.deb' | wc -l) paquets"
 
           # base-<empreinte> est ce que les jobs derives tirent ; :cache et
