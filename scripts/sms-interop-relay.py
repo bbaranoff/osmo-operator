@@ -11,6 +11,7 @@ sms-interop-relay.py — Inter-operator SMS relay via proto-smsc-proto
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -346,6 +347,56 @@ class RoutingTable:
 # ═══════════════════════════════════════════════════════════════════════════════
 # HLR VTY — MSISDN → IMSI with retry
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ── SMS to the SIP phones of the node ───────────────────────────────────────
+# The numbers given by osmo-inscription (3000-3999) are not in the HLR: their
+# SMS leave as SIP MESSAGE through the Asterisk AMI (account [osmo] of
+# manager.d/osmo.conf, "message" write right). OSMO_SMS_SIP_RE to change it.
+SIP_SMS_RE = re.compile(os.environ.get("OSMO_SMS_SIP_RE", r"3\d{3}"))
+AMI_CONF = "/etc/asterisk/manager.d/osmo.conf"
+
+
+def ami_message_send(dest: str, sender: str, text: str):
+    """-> (ok, reason). MessageSend To=pjsip:<dest>, From=<sender>."""
+    user, secret = "osmo", ""
+    try:
+        for line in open(AMI_CONF):
+            m = re.match(r"\s*\[(\w+)\]", line)
+            if m:
+                user = m.group(1)
+            m = re.match(r"\s*secret\s*=\s*(\S+)", line)
+            if m:
+                secret = m.group(1)
+    except OSError as e:
+        return False, f"{AMI_CONF} illisible ({e})"
+    body = text.replace("\r", " ").replace("\n", " ")
+    act = (f"Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\nEvents: off\r\n\r\n"
+           f"Action: MessageSend\r\nActionID: sms1\r\nTo: pjsip:{dest}\r\n"
+           f"From: \"{sender}\" <sip:{sender}@127.0.0.1>\r\nBody: {body}\r\n\r\n"
+           f"Action: Logoff\r\n\r\n")
+    try:
+        with socket.create_connection(("127.0.0.1", int(os.environ.get("OSMO_AMI_PORT", "5038"))), timeout=5) as s:
+            s.sendall(act.encode("utf-8"))
+            data, deadline = b"", time.time() + 5
+            while b"ActionID: sms1" not in data and time.time() < deadline:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            time.sleep(0.2)
+            try:
+                data += s.recv(4096)
+            except OSError:
+                pass
+    except OSError as e:
+        return False, f"AMI injoignable ({e})"
+    txt = data.decode("utf-8", "replace")
+    m = re.search(r"Response: (\w+)\r\nActionID: sms1(?:\r\nMessage: ([^\r]*))?", txt) \
+        or re.search(r"Response: (\w+)\r\n(?:Message: ([^\r]*)\r\n)?ActionID: sms1", txt)
+    if m and m.group(1) == "Success":
+        return True, ""
+    return False, (m.group(2) if m and m.group(2) else txt.strip().splitlines()[-1:] or "pas de reponse")
+
 
 def hlr_msisdn_to_imsi(msisdn: str,
                        hlr_host: str = HLR_VTY_HOST,
@@ -772,6 +823,9 @@ class MOLogWatcher(threading.Thread):
             return
 
         logging.info(f"MO SMS: {sender} → {dest} (from IMSI {entry.imsi})")
+        if SIP_SMS_RE.fullmatch(dest.lstrip('+')):
+            self._deliver_sip(entry, dest)
+            return
         target_op = self.routing.lookup(dest)
 
         if target_op is None:
@@ -823,6 +877,16 @@ class MOLogWatcher(threading.Thread):
             logging.info(f"✓ Interop SMS: {sender} → {dest} (Op{target_op})")
         else:
             logging.error(f"✗ Interop SMS failed: {sender} → {dest} (Op{target_op})")
+
+    def _deliver_sip(self, entry: MOLogEntry, dest: str):
+        """A SIP phone of the node (osmo-inscription, 3000-3999): the SMS
+        becomes a SIP MESSAGE, sent by Asterisk (AMI MessageSend)."""
+        text = extract_text_via_sms_decode(entry.tpdu_hex) or extract_text_from_tpdu(entry.tpdu_hex) or "[undecoded]"
+        ok, why = ami_message_send(dest.lstrip('+'), entry.sender_number, text)
+        if ok:
+            logging.info(f"✓ SMS → SIP {dest} : {entry.sender_number} → {dest} ({len(text)} car.)")
+        else:
+            logging.error(f"✗ SMS → SIP {dest} : {why}")
 
     def _deliver_local(self, entry: MOLogEntry, dest_msisdn: str):
         dest_imsi = hlr_msisdn_to_imsi(dest_msisdn)

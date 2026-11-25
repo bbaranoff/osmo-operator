@@ -149,6 +149,10 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # 2. the AMI account: the modem originates calls through it (the
         #    Asterisk CLI has no "channel originate" here, the module
         #    res_clioriginate is not loaded - modules.conf is autoload=no).
+        # [2026-11-25] the SMS relay sends SIP MESSAGE through the AMI: an
+        # account installed before needs the "message" write right.
+        [ -f /etc/asterisk/manager.d/osmo.conf ] && ! grep -q '^write = .*message' /etc/asterisk/manager.d/osmo.conf \
+            && sed -i 's/^write = .*/&,message/' /etc/asterisk/manager.d/osmo.conf
         if [ -d /etc/asterisk/manager.d ] && [ ! -f /etc/asterisk/manager.d/osmo.conf ]; then
             install -m640 "$HERE/configs/manager-osmo.conf" \
                 /etc/asterisk/manager.d/osmo.conf 2>/dev/null && \
