@@ -132,14 +132,15 @@ CTX = os.environ.get("OSMO_CALL_CONTEXT", "internal")
 #               ANOTHER operator;
 #   internal    a Linphone;
 #   zadarma_in  the [zadarma] / [zadarma_pbx] trunk (pjsip.conf), a call from
-#               the outside world via the Zadarma operator.
+#               the outside world via the Zadarma operator;
+#   dongle_in   a Huawei dongle on a public operator (chan_dongle).
 # Without the right context entrant() is never called and NO RING goes to
 # oFono/ModemManager: the osmocom-bb mobile is paged by the MSC but the
 # handset stays silent and the MSC eventually releases (MNCC cause DEST_OOO).
 # The filter that matters remains DestExten == our MSISDN: the second leg of
 # our own outgoing calls dials the REMOTE number, never ours.
 IN_CTX = {c.strip() for c in os.environ.get(
-    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,zadarma_in").split(",") if c.strip()}
+    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,zadarma_in,dongle_in").split(",") if c.strip()}
 # THE CALL GOES THROUGH THE AMI, NOT THE CLI. "channel originate" comes from
 # the res_clioriginate module, absent from this installation (modules.conf is
 # autoload = no). The AMI is active in manager.conf; its account is installed

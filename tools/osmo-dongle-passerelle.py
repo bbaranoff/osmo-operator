@@ -23,7 +23,17 @@
 # answered by one JSON line
 #   {"ok": true, "mr": "12"}   or   {"ok": false, "error": "..."}
 #
+# TWO BACKENDS, ONE OWNER OF THE DONGLE.
+#   at        (default) this program holds the AT port: SMS only, no voice.
+#   asterisk  chan_dongle holds the dongle (voice + SMS, configs/dongle.conf):
+#             outbound SMS go through the AMI (DongleSendSMS), inbound SMS
+#             reach the modems through [dongle_in] of extensions.conf, so
+#             this program only serves the outbound port.
+#
 # Settings:
+#   OSMO_DONGLE_BACKEND  at | asterisk                   (default at)
+#   OSMO_DONGLE_DEV      chan_dongle device              (default dongle0)
+#   OSMO_AMI_HOST/PORT/USER/PASSWORD  as osmo-phonesim-banc.py
 #   OSMO_DONGLE_AT       AT (PCUI) port of the dongle    (default /dev/ttyUSB2)
 #   OSMO_DONGLE_PIN      SIM PIN, if any
 #   OSMO_DONGLE_SMSC     force the SMSC address (normally on the SIM)
@@ -38,6 +48,7 @@
 import json
 import os
 import re
+import socket
 import socketserver
 import sys
 import threading
@@ -69,11 +80,68 @@ class Essai:
         return ["+CMGS: 0"]
 
 
+BACKEND = os.environ.get("OSMO_DONGLE_BACKEND", "at")
+DONGLE_DEV = os.environ.get("OSMO_DONGLE_DEV", "dongle0")
+AMI = (os.environ.get("OSMO_AMI_HOST", "127.0.0.1"),
+       int(os.environ.get("OSMO_AMI_PORT", "5038")))
+AMI_USER = os.environ.get("OSMO_AMI_USER", "osmo")
+AMI_PASS = os.environ.get("OSMO_AMI_PASSWORD", "osmocom1")
+
+
+class Ami:
+    """chan_dongle owns the dongle: an SMS is one AMI action."""
+
+    def _bloc(self, f):
+        d = {}
+        while True:
+            l = f.readline()
+            if not l:
+                raise OSError("AMI ferme")
+            l = l.rstrip("\r\n")
+            if not l:
+                if d:
+                    return d
+                continue
+            k, _, v = l.partition(":")
+            d[k.strip()] = v.strip()
+
+    def _action(self, f, s, **kw):
+        s.sendall(("".join("%s: %s\r\n" % kv for kv in kw.items()) + "\r\n").encode())
+        while True:
+            b = self._bloc(f)
+            if b.get("ActionID") == kw.get("ActionID") and "Response" in b:
+                return b
+
+    def cmd_prompt(self, c, payload, timeout=60):
+        to = re.search(r'"([^"]+)"', c).group(1)
+        s = socket.create_connection(AMI, timeout=timeout)
+        try:
+            f = s.makefile("r", encoding="utf-8", errors="replace", newline="\r\n")
+            f.readline()                                   # banner
+            r = self._action(f, s, Action="Login", Username=AMI_USER,
+                             Secret=AMI_PASS, Events="off", ActionID="l")
+            if r["Response"] != "Success":
+                raise RuntimeError("AMI : %s" % r.get("Message"))
+            # an AMI header is one line: line breaks of the SMS become spaces
+            r = self._action(f, s, Action="DongleSendSMS", Device=DONGLE_DEV,
+                             Number=to, Message=re.sub(r"[\r\n]+", " ", payload),
+                             ActionID="sms")
+            self._action(f, s, Action="Logoff", ActionID="o")
+        finally:
+            s.close()
+        if r["Response"] != "Success":
+            raise RuntimeError("chan_dongle : %s" % r.get("Message"))
+        return ["+CMGS: %s" % r.get("ID", "?")]
+
+
 class Passerelle:
     def __init__(self, essai=False):
         self.essai = essai
         if essai:
             self.m = Essai()
+            return
+        if BACKEND == "asterisk":
+            self.m = Ami()
             return
         from huawei_at import Modem
         self.m = Modem(AT_PORT, verbose=os.environ.get("OSMO_DONGLE_VERBOSE") == "1")
@@ -163,8 +231,10 @@ def main():
     srv = Server(LISTEN, Sortant)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log("sortant : en ecoute sur %s:%d" % LISTEN)
-    if essai:
-        log("MODE ESSAI : aucun dongle, les SMS sortants sont seulement journalises")
+    if essai or BACKEND == "asterisk":
+        log("MODE ESSAI : aucun dongle, les SMS sortants sont seulement journalises"
+            if essai else "chan_dongle (%s) : SMS sortants par l'AMI, entrants par "
+            "[dongle_in]" % DONGLE_DEV)
         while True:
             time.sleep(3600)
     log("entrant : SMS du reseau reel -> modems du banc")

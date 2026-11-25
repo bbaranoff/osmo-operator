@@ -19,6 +19,8 @@ nothing is duplicated here.
 Two uses:
     import       : from sms_notify import notifier      (in the relay)
     command line : sms_notify.py <imsi> <from> <text>   (send-mt-sms.sh)
+                   sms_notify.py --b64 <imsi> <from> <base64 text>
+                                    (Asterisk [dongle_in], ${SMS_BASE64})
 """
 import json
 import os
@@ -71,6 +73,11 @@ def notifier(imsi, sender, text, log=None):
 
 
 if __name__ == "__main__":
+    b64 = len(sys.argv) > 1 and sys.argv[1] == "--b64"
+    if b64:
+        import base64
+        del sys.argv[1]
+        sys.argv[3:] = [base64.b64decode(" ".join(sys.argv[3:])).decode("utf-8", "replace")]
     if len(sys.argv) < 4:
         print("usage: sms_notify.py <imsi> <from> <texte>", file=sys.stderr)
         sys.exit(2)
