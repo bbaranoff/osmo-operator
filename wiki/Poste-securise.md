@@ -158,7 +158,8 @@ fait.
   RAM dans les deux cas et s'écrit à l'extinction avec la phrase.
 - **Persistant : rien n'est demandé pour oublier.** À l'extinction, pas de « Tout
   oublier ? » : la phrase est demandée pour écrire ce qui a changé dans le système
-  (Entrée : ne pas l'écrire), et `/home` est déjà sur le disque. Oublier la session est un
+  (Entrée : ne pas l'écrire — le neuralyseur passe alors avec une lumière verte, puis l'écran
+  blanc), et `/home` est déjà sur le disque. Oublier la session est un
   geste volontaire, l'icône **« Remettre à zéro »** (`osmo-reset demander`), le contraire
   d'« Enregistrer » : on tape `oui`, et à l'extinction `/home` revient à l'état du
   démarrage, le système est effacé. Annulable jusque-là (même icône).

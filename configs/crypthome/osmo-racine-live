@@ -341,8 +341,8 @@ console_texte() {
 }
 # the console's « forget everything »: the stick's red light blinks, faster
 # and faster, then the white flash (reverse video)
-flash_console() {
-    local i d l c t lig col
+flash_console() {   # flash_console [COLOUR] : the light's colour, 31 red (default), 32 green
+    local i d l c t lig col lum="${1:-31}"
     # centred on the console, whatever its size (80x25 when it does not say)
     t="$(stty size < "$CONSOLE" 2>/dev/null)"
     lig="${t%% *}"; col="${t##* }"
@@ -355,8 +355,8 @@ flash_console() {
     baton() {
         printf '\033[2J' > "$CONSOLE" 2>/dev/null
         if [ "$1" = ON ]; then
-            printf '\033[%d;%dH\033[1;31m ### \033[%d;%dH#####\033[%d;%dH ### \033[0m' \
-                "$l" "$c" "$((l + 1))" "$c" "$((l + 2))" "$c" > "$CONSOLE" 2>/dev/null
+            printf '\033[%d;%dH\033[1;%sm ### \033[%d;%dH#####\033[%d;%dH ### \033[0m' \
+                "$l" "$c" "$lum" "$((l + 1))" "$c" "$((l + 2))" "$c" > "$CONSOLE" 2>/dev/null
         fi
         printf '\033[%d;%dH | | \033[%d;%dH | | \033[%d;%dH |=| \033[%d;%dH |_| \033[%d;%dHregardez la lumiere' \
             "$((l + 3))" "$c" "$((l + 4))" "$c" "$((l + 5))" "$c" "$((l + 6))" "$c" "$((l + 8))" "$t" > "$CONSOLE" 2>/dev/null
@@ -1856,6 +1856,9 @@ EOF
         fi
         decision=efface
         remise=0
+        # persistent (/home written to directly): known now, /home may be
+        # unmounted before the end
+        persistant=0; home_direct && persistant=1
         if [ -f "$ETAT/reset" ] && home_direct; then
             # « Remettre a zero », ordered from the icon: / is dropped, and
             # /home goes back to what it was when the session began
@@ -1973,6 +1976,15 @@ EOF
                 dire_rouge "    (le detail : $JOURNAL_DISQUE au prochain demarrage)"
                 sleep 15
             fi
+        elif [ "$decision" = efface ] && [ "$persistant" = 1 ]; then
+            # PERSISTENT, and the passphrase was not given for the system:
+            # /home is on the disk already, only what changed outside it is
+            # dropped. No red banner - the neuralyser, with a GREEN light,
+            # then the white screen
+            console_texte
+            flash_console 32
+            printf '\033[?5h\033[2J' > "$CONSOLE" 2>/dev/null
+            sleep 2
         elif [ "$decision" = efface ]; then
             # always shown, even with nothing lost: forced on tty1, plymouth
             # quit, held 10 s
