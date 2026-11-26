@@ -266,7 +266,7 @@ journal_disque() {
             tail -n 2000 "$f" > "$f.nouv" 2>/dev/null && mv -f "$f.nouv" "$f"
         fi
         sync
-        mount -o remount,ro "$BAS" 2>/dev/null
+        remonter_ro "$BAS"
     fi
     journal_home
 }
@@ -375,6 +375,21 @@ remonter_rw() {
     done
     return 1
 }
+# remonter_ro DISK : read-only again. A file REPLACED on the disk (update-grub,
+# update-initramfs in « actualiser ») that the session has read through its
+# overlay stays referenced by the kernel's cache: the disk then holds an
+# unlinked inode and refuses to go read-only (« mount point is busy », seen
+# 2026-11-26 - the disk stayed WRITABLE). The cache is dropped and it is tried
+# again; a disk that stays writable is said in the log.
+remonter_ro() {
+    mount -o remount,ro "$1" 2>/dev/null && return 0
+    sync; echo 2 > /proc/sys/vm/drop_caches 2>/dev/null
+    mount -o remount,ro "$1" 2>/dev/null && return 0
+    sleep 1; sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    mount -o remount,ro "$1" 2>/dev/null && return 0
+    trace "$1 RESTE EN ECRITURE : remontage en lecture seule impossible (fichier remplace encore ouvert ?)"
+    return 1
+}
 appliquer_couche() {
     local h="$1" b="$2" pre="$3" id="$4" de="${5:-0}" a="${6:-100}" libre besoin j="$2/.osmo-valider" r p q rc nf ns mi l pc
     mi=$((de + (a - de) * PROGRES_COPIE / 100))   # the copy, then the application
@@ -387,7 +402,7 @@ appliquer_couche() {
     libre=$(df -k --output=avail "$b" | tail -1 | tr -d ' ')
     if [ "$libre" -lt "$besoin" ]; then
         trace "$pre : place insuffisante ($((besoin / 1024)) Mo requis, $((libre / 1024)) libres)"
-        mount -o remount,ro "$b"; return 1
+        remonter_ro "$b"; return 1
     fi
     install -d -m 0700 "$j/files"
     : > "$j/suppr"; : > "$j/crees"; : > "$j/dirs"
@@ -410,7 +425,7 @@ appliquer_couche() {
     done
     if [ "$ANNULE" = 1 ]; then
         trace "$pre : annule avant la copie - rien n est change"
-        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+        rm -rf "$j"; sync; remonter_ro "$b"; return 1
     fi
     # the staged copy: what differs from the disk - attributes, ACLs, xattrs
     # and hard links kept, except overlayfs' own xattrs (opaque, origin...):
@@ -434,7 +449,7 @@ appliquer_couche() {
     progres "$mi" "$pre : application"
     if { [ "$rc" != 0 ] && [ "$rc" != 24 ]; } || [ "$ANNULE" = 1 ]; then
         trace "$pre : copie $([ "$ANNULE" = 1 ] && echo "annulee (Ctrl-C)" || echo "incomplete") (rsync $rc) - rien n est change"
-        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+        rm -rf "$j"; sync; remonter_ro "$b"; return 1
     fi
     conclure_depot "$b" "$pre" "$id" "$mi" "$a"
 }
@@ -462,14 +477,14 @@ conclure_depot() {
     done
     nf=$(find "$j/files" -mindepth 1 ! -type d | wc -l); ns=$(wc -l < "$j/suppr")
     if [ "$nf" = 0 ] && [ "$ns" = 0 ] && [ ! -s "$j/crees" ] && [ ! -s "$j/dirs" ]; then
-        rm -rf "$j"; sync; mount -o remount,ro "$b" 2>/dev/null
+        rm -rf "$j"; sync; remonter_ro "$b"
         trace "$pre : rien de nouveau depuis la derniere ecriture"
         return 0
     fi
     sync
     if [ "$ANNULE" = 1 ]; then
         trace "$pre : annule avant l application - rien n est change"
-        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+        rm -rf "$j"; sync; remonter_ro "$b"; return 1
     fi
     : > "$j/PRET"
     sync
@@ -489,7 +504,7 @@ conclure_depot() {
         done
     fi
     sync
-    mount -o remount,ro "$b" 2>/dev/null
+    remonter_ro "$b"
     trace "$pre : $nf fichier(s) ecrit(s), $ns suppression(s) (commit $id, code $rc)"
     printf '%s\n' "$((nf + ns))" >> "$ETAT/nb"
     return $rc
@@ -525,7 +540,7 @@ annuler_commit() {
             else
                 trace "annule : $pre N A PAS PU etre defait (osmo-racine-live defaire)"
             fi
-            mount -o remount,ro "$b" 2>/dev/null
+            remonter_ro "$b"
         else
             trace "annule : remontage en ecriture de $b impossible - $pre reste ecrit"
         fi
@@ -705,7 +720,7 @@ fusionner() {
     remonter_rw "$HOME_BAS" || { rouge "remontage en ecriture de $HOME_BAS impossible"; rm -rf "$t"; return 1; }
     rm -f "$f"
     if ! /usr/local/sbin/osmo-diffs attente-lire "$nom" > "$f" || [ ! -s "$f" ]; then
-        rm -f "$f"; mount -o remount,ro "$HOME_BAS" 2>/dev/null; rm -rf "$t"
+        rm -f "$f"; remonter_ro "$HOME_BAS"; rm -rf "$t"
         rouge "session $nom illisible (phrase de la boite ?) : rien n est ecrit"; return 1
     fi
     zstd -dc "$f" 2>/dev/null | tar -xif - -C "$t" --wildcards meta 'c*/prefixe' 'c*/suppr' 'c*/base' 2>/dev/null
@@ -741,7 +756,7 @@ fusionner() {
     rm -f "$f"; sync
     if [ "$rc" != 0 ] || { [ "$nconf" -gt 0 ] && [ -z "$mode" ]; }; then
         while read -r b pre; do rm -rf "$b/.osmo-valider"; done < "$t/faire"
-        while read -r h b pre; do mount -o remount,ro "$b" 2>/dev/null; done < <(couches)
+        while read -r h b pre; do remonter_ro "$b"; done < <(couches)
         if [ "$nconf" -gt 0 ]; then
             rouge "CONFLIT : $nconf chemin(s) ont change sur le disque depuis cette session - rien n est ecrit :"
             head -n 40 "$t/conflits" | sed 's/^/    /'
@@ -760,7 +775,7 @@ fusionner() {
         : > "$j/crees"; : > "$j/dirs"; printf '%s\n' "$id" > "$j/id"
         conclure_depot "$b" "$pre" "$id" 40 95 < /dev/null || rc=1
     done < "$t/faire"
-    while read -r h b pre; do mount -o remount,ro "$b" 2>/dev/null; done < <(couches)
+    while read -r h b pre; do remonter_ro "$b"; done < <(couches)
     NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
     ID_ECRIT="$id"
     if [ "$rc" = 0 ]; then
@@ -858,7 +873,7 @@ poser_menu_sessions() {
         } > "$f.nouv" 2>/dev/null && mv -f "$f.nouv" "$f"
     fi
     sync
-    mount -o remount,ro "$BAS" 2>/dev/null
+    remonter_ro "$BAS"
 }
 # confirmation ID : what a write leaves to read - its date and time, and the
 # line of the GRUB menu « remonter session » that now undoes it. Also kept in
@@ -892,7 +907,7 @@ defaire_commit() {
         [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
         if remonter_rw "$b"; then
             sans_int "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null || rc=1
-            mount -o remount,ro "$b" 2>/dev/null
+            remonter_ro "$b"
             trace "defaire : $pre fait"
         else
             trace "defaire : remontage en ecriture de $b impossible"; rc=1
@@ -1748,6 +1763,7 @@ EOF
             if ! mountpoint -q "$BAS/dev"; then mount --bind /dev "$BAS/dev" && _dev=1; fi
             OSMO_PHRASE_DONNEE=1 overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser ${2:+"$2"}; rc=$?
             [ -n "$_dev" ] && umount "$BAS/dev" 2>/dev/null
+            remonter_ro "$BAS"
             [ "$rc" = 0 ] || trace "actualiser : ECHEC (code $rc) - initramfs ou grub PAS reconstruit"
             if [ -x /usr/local/sbin/osmo-diffs ]; then
                 echo "osmo-racine-live actualiser : initramfs et grub reconstruits sur le disque (code $rc)" \
@@ -1789,6 +1805,7 @@ EOF
             if ! mountpoint -q "$BAS/dev"; then mount --bind /dev "$BAS/dev" && _dev=1; fi
             OSMO_PHRASE_DONNEE=1 overlayroot-chroot /usr/local/sbin/osmo-racine-live retirer; rc=$?
             [ -n "$_dev" ] && umount "$BAS/dev" 2>/dev/null
+            remonter_ro "$BAS"
             echo "osmo-racine-live retirer : / en lecture-ecriture a partir du prochain demarrage (code $rc)" \
                 | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
             empreinte_prendre
