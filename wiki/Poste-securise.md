@@ -137,8 +137,22 @@ un nouveau, « défait », avec ce qui a été retiré.
 
 ### 3.6 Démarrage mesuré (option)
 
-Un code TOTP à 6 chiffres, à comparer au téléphone **avant** de taper la phrase
-(`sudo osmo-tpm poser`, appli enrôlée par QR code).
+**Deux facteurs** : un PIN, puis un code TOTP à 6 chiffres à comparer au téléphone, le
+tout **avant** de taper la phrase (`sudo osmo-tpm poser`, appli enrôlée par QR code).
+
+- **Pourquoi un PIN avec un code.** Le TPM calcule le code à partir de l'heure que lui
+  donne la machine, et il ne sait pas quelle heure il est vraiment. Sans PIN, quelqu'un qui
+  tient la machine intacte avance son horloge (un root invité le fait avec `hwclock`),
+  démarre, filme les codes de demain, puis piège le disque et les réaffiche au bon moment :
+  ils correspondent à ceux du téléphone. Avec le PIN — vérifié par le TPM lui-même avant
+  que quoi que ce soit soit calculé, et compté contre son verrouillage (31 essais) —
+  personne ne récolte de codes. `Entrée` à la question du PIN le refuse : déconseillé.
+- **Le téléphone entre dans le périmètre** : la graine y est en clair pour l'appli.
+  Prendre une appli locale (Aegis, FreeOTP+) plutôt qu'une qui synchronise dans le cloud,
+  et scanner le QR code d'enrôlement à l'abri des regards.
+- **Ce qui reste** à un attaquant, avec PIN, téléphone et contenu mesuré : le relais (une
+  machine jumelle qui retransmet l'écran de la vraie), l'ouverture de la machine, le
+  micrologiciel.
 
 - Firmware, GRUB, noyau et initramfs sont mesurés (PCR 0, 2, 4, 7, 8, 9).
 - L'initramfs, lui-même mesuré, calcule le total du disque — ce que le système de fichiers
@@ -188,7 +202,8 @@ la clé) ; le travail d'installation revérifie et ne pose jamais le poste sécu
 TPM. L'installeur ne peut pas sceller : les mesures sont celles du démarrage du système
 installé, pas de la clé live. Il prépare donc tout (initramfs compris), et la première
 ouverture de session affiche une fenêtre d'accueil qui demande la phrase de `/home`, puis
-enrôle le téléphone par QR code (seconde case, « code du TPM sur le téléphone », cochée
+demande un PIN et enrôle le téléphone par QR code (seconde case, « code du TPM sur le
+téléphone + PIN, deux facteurs », cochée
 par défaut, grisée elle aussi sans TPM) ou, case décochée, demande la phrase secrète et le
 PIN ; elle prend ensuite l'empreinte, ancre la signature et scelle (`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
 fait.
@@ -477,7 +492,8 @@ par son propriétaire.
 | Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
 | Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |
 | Contenu du disque relu avant la phrase | calcul vérifié sur le disque réel (même total que l'empreinte, 16,6 s à froid) ; **pas encore vu à un démarrage** |
-| Contenu mesuré par l'initramfs, PCR 13 étendu avec | le même calcul rejoué sous le shell de l'initramfs (busybox) sur le disque réel : même total ; prédiction du PCR vérifiée à la main ; **jamais démarré** |
+| Contenu mesuré par l'initramfs, PCR 13 étendu avec | le même calcul rejoué sous le shell de l'initramfs (busybox) sur le disque réel : même total ; scellement vérifié sur le **TPM réel** (objet jetable, PCR d'essai : métadonnées seules → refus, puis contenu → secret) ; **jamais démarré** |
+| Code du téléphone derrière un PIN | **TPM réel**, objet jetable : bon PIN → graine, PCR seuls sans PIN → refus ; **jamais démarré** dans ce mode |
 | Coupure du root invité sur alerte | écrite, **non vue** |
 | Détection d'une troncature, d'un retour en arrière de l'historique | bac à sable (compteur simulé) ; jamais provoquées en réel |
 | Coupure de courant pendant une remise à zéro | **non testée** — elle abîme `/home` |

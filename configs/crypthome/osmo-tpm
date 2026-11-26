@@ -34,7 +34,8 @@
 # gives the sentence away - AFTER ANY BOOT WITHOUT THE SENTENCE THAT YOU
 # CANNOT EXPLAIN, POSE AGAIN WITH A NEW SENTENCE AND A NEW PIN.
 #
-#   osmo-tpm poser        enable: a seed, its QR code, the initramfs rebuilt
+#   (the phone's code is given behind a PIN too: two factors - see demander_pin)
+#   osmo-tpm poser        enable: a seed, its QR code, a PIN, the initramfs rebuilt
 #                         (the NEXT boot shows no code / no sentence: the initramfs has just
 #                         changed - then « osmo-tpm sceller »)
 #   osmo-tpm premier      the first session of a secured bench set up by the
@@ -106,7 +107,15 @@ phrase_requise() {
 }
 
 # the private directory, read (RAM view or volume) and written (the volume itself)
-prive_lire() { local f; for f in "$HOME_DISQUE/$PRIVE/$1" "/home/$PRIVE/$1"; do [ -s "$f" ] && { cat "$f"; return 0; }; done; return 1; }
+# (a test never reads the real /home: only its own HOME_DISQUE)
+prive_lire() {
+    local f
+    for f in "$HOME_DISQUE/$PRIVE/$1" "/home/$PRIVE/$1"; do
+        [ "$TEST" = 1 ] && [ "$f" != "$HOME_DISQUE/$PRIVE/$1" ] && continue
+        [ -s "$f" ] && { cat "$f"; return 0; }
+    done
+    return 1
+}
 # volume : where the /home VOLUME itself is - its read-only mount under the
 # RAM layer, or /home when it is written to directly (the normal opening);
 # nothing when /home is closed
@@ -140,7 +149,10 @@ C_MODE=""; C_GRAINE=""; C_SECRET=""; C_PIN=""; C_PCRS=""
 coffre_ouvrir() {   # 0 read, 1 refused, 2 nothing posed
     local f="" c d l k v
     C_MODE=""; C_GRAINE=""; C_SECRET=""; C_PIN=""; C_PCRS=""
-    for c in "$HOME_DISQUE/$PRIVE/coffre" "/home/$PRIVE/coffre"; do [ -s "$c" ] && { f="$c"; break; }; done
+    for c in "$HOME_DISQUE/$PRIVE/coffre" "/home/$PRIVE/coffre"; do
+        [ "$TEST" = 1 ] && [ "$c" != "$HOME_DISQUE/$PRIVE/coffre" ] && continue   # a test never reads the real /home
+        [ -s "$c" ] && { f="$c"; break; }
+    done
     if [ -n "$f" ]; then
         d="$(printf '%s\n' "$PHRASE" | $EMP coffre-desceller "$f")" \
             || { log "le coffre du demarrage mesure ne s ouvre pas avec cette phrase" >&2; return 1; }
@@ -234,7 +246,7 @@ sceller_pour() {
         graine="S:$C_SECRET"; pin="$C_PIN"
     else
         [ -n "$C_GRAINE" ] || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
-        graine="$C_GRAINE"
+        graine="$C_GRAINE"; pin="$C_PIN"          # the phone's code behind a PIN too (demander_pin)
     fi
     pcrs="$C_PCRS"
     [ -n "$pcrs" ] || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
@@ -300,6 +312,28 @@ qr() {
 
 # demander_secret : the sentence the TPM will show and the PIN it will check,
 # asked on the terminal (s, n) - or nothing is posed
+# demander_pin : the PIN of the PHONE mode (the 2nd factor: the code is what
+# you compare, the PIN is what you know). WHY A PIN WITH A CODE: the TPM
+# computes the code from the time the MACHINE gives it. Without a PIN, whoever
+# holds the untouched machine puts its clock forward, boots, films tomorrow's
+# codes, then traps the disk and shows them back at the right time. With the
+# PIN - checked by the TPM itself, before anything is computed, and counted
+# against its lockout - nobody harvests codes.
+demander_pin() {
+    if [ "$TEST" = 1 ]; then n="${OSMO_TPM_PIN:-}"; n2="$n"
+    else
+        echo "Un PIN, demande au demarrage AVANT que le code soit calcule : des CHIFFRES, 6 au moins."
+        echo "(Entree = sans PIN : quelqu un qui tient la machine pourrait avancer son horloge et"
+        echo " recolter les codes de demain - deconseille.)"
+        read -r -s -p "PIN : " n < /dev/tty || n=""; echo
+        read -r -s -p "encore une fois : " n2 < /dev/tty || n2=""; echo
+    fi
+    [ "$n" = "$n2" ] || { rouge "les deux PIN different : rien de pose" >&2; exit 1; }
+    if [ -n "$n" ] && ! printf '%s' "$n" | grep -qE '^[0-9]{6,32}$'; then
+        rouge "PIN refuse (des chiffres, 6 au moins) : rien de pose" >&2; exit 1
+    fi
+    [ -n "$n" ] || rouge "SANS PIN : les codes peuvent etre recoltes a l avance par qui tient la machine."
+}
 demander_secret() {
     if [ "$TEST" = 1 ]; then s="${OSMO_TPM_SECRET:-}"; n="${OSMO_TPM_PIN:-}"; n2="$n"
     else
@@ -340,16 +374,17 @@ case "${1:-etat}" in
         mesure="${OSMO_TPM_MESURE:-$(sed -n 's/^mesure=//p' /etc/osmo-operator/options 2>/dev/null | tail -n1)}"
         if [ "$mesure" = totp ]; then
             echo "  - le TPM de cette machine va calculer UN CODE A 6 CHIFFRES, le meme que sur ton"
-            echo "    telephone. A chaque demarrage il s affiche a cote de la question de /home -"
+            echo "    telephone. A chaque demarrage, apres TON PIN, il s affiche a cote de la question de /home -"
             echo "    seulement si micrologiciel, GRUB, noyau, initramfs et disque systeme sont ceux"
             echo "    d aujourd hui. Pas de code, ou un autre que le telephone : ne tape RIEN."
             echo
             echo "Prends ton telephone et une appli de codes (Aegis, FreeOTP+, 2FAS, Google Authenticator) :"
             echo "un QR code va s afficher. (Pas de telephone : Ctrl-C, puis sudo osmo-tpm poser --secret.)"
             echo
-            phrase_requise "Une question : la phrase de /home."
+            phrase_requise "Deux questions : la phrase de /home, puis un PIN."
+            demander_pin
             coffre_ouvrir; [ "$?" = 1 ] && exit 1
-            C_MODE=totp; C_SECRET=""; C_PIN=""
+            C_MODE=totp; C_SECRET=""; C_PIN="$n"; n=""; n2=""
             [ -n "$C_GRAINE" ] || C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
         else
             echo "  - le TPM de cette machine va garder UNE PHRASE A TOI. A chaque demarrage il"
@@ -377,7 +412,7 @@ case "${1:-etat}" in
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
         if [ "$C_MODE" = totp ]; then
             qr
-            vert "TPM scelle. Au prochain demarrage : le code a cote de la question de /home, le meme que sur le telephone."
+            vert "TPM scelle. Au prochain demarrage : ton PIN, puis le code a cote de la question de /home, le meme que sur le telephone."
             echo "S il n apparait pas a ce tout premier redemarrage : sudo osmo-tpm sceller, une fois."
         else
             vert "TPM scelle. Au prochain demarrage : ton PIN, puis TA phrase a cote de la question de /home."
@@ -403,7 +438,8 @@ case "${1:-etat}" in
             C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
             s=""; n=""; n2=""
         else
-            C_MODE=totp; C_SECRET=""; C_PIN=""
+            demander_pin
+            C_MODE=totp; C_SECRET=""; C_PIN="$n"; n=""; n2=""
             C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
         fi
         coffre_fermer && sceller_pour "$(total_disque)" || { PHRASE=""; rouge "changement en echec" >&2; exit 1; }
@@ -411,7 +447,7 @@ case "${1:-etat}" in
         PHRASE=""
         if [ "$C_MODE" = totp ]; then
             qr
-            vert "nouveau code pose : supprime l ancienne entree de ton telephone."
+            vert "nouveau code et nouveau PIN poses : supprime l ancienne entree de ton telephone."
         else
             vert "nouvelle phrase secrete et nouveau PIN poses : ils serviront des le prochain demarrage."
         fi
@@ -450,8 +486,9 @@ case "${1:-etat}" in
             C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
             s=""; n=""; n2=""
         else
+            demander_pin
             coffre_ouvrir; [ "$?" = 1 ] && exit 1
-            C_MODE=totp; C_SECRET=""; C_PIN=""
+            C_MODE=totp; C_SECRET=""; C_PIN="$n"; n=""; n2=""
             # the seed already enrolled in a phone is kept
             [ -n "$C_GRAINE" ] || C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
         fi
@@ -526,7 +563,7 @@ case "${1:-etat}" in
         # what was ticked in the installer (Options page) and is still to do
         if [ -r /etc/osmo-operator/options ]; then
             [ -e "$ACTIF" ] || case "$(sed -n 's/^mesure=//p' /etc/osmo-operator/options | tail -n1)" in
-                totp)   echo "choisi a l installation : code sur le telephone - a poser : sudo osmo-tpm poser" ;;
+                totp)   echo "choisi a l installation : code sur le telephone, avec PIN - a poser : sudo osmo-tpm poser" ;;
                 secret) echo "choisi a l installation : phrase secrete et PIN - a poser : sudo osmo-tpm poser --secret" ;;
             esac
             if grep -qx 'ancre=1' /etc/osmo-operator/options && [ -x /usr/local/sbin/osmo-empreinte ] \
@@ -537,7 +574,8 @@ case "${1:-etat}" in
         if [ -e "$ACTIF" ] && [ "$(id -u)" = 0 ]; then
             if [ "$(mode)" = secret ]; then
                 if [ -e "$OBJ/pin" ]; then echo "mode : phrase secrete, avec PIN"; else echo "mode : phrase secrete, SANS PIN"; fi
-            else echo "mode : code sur le telephone (TOTP)"; fi
+            elif [ -e "$OBJ/pin" ]; then echo "mode : code sur le telephone (TOTP), avec PIN"
+            else echo "mode : code sur le telephone (TOTP), SANS PIN"; fi
         fi
         [ -s "$OBJ/scelle" ] && echo "scelle le $(cut -d' ' -f1,2 "$OBJ/scelle") pour le disque $(cut -d' ' -f3 "$OBJ/scelle" | cut -c1-16)..."
         if [ -e "$ACTIF" ]; then

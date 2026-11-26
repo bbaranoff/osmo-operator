@@ -111,7 +111,8 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
   - **Black box** (`osmo-diffs`, `osmo-boite`): every session recorded, encrypted with `age` for a key the machine
     does not hold, chained; its end is held by a TPM extend-only index, so a truncation shows.
   - **Integrity**: a fingerprint of the disk signed with a key only the passphrase unlocks, anchored in the TPM;
-    a measured boot that shows your secret sentence after a PIN only on the untouched machine.
+    a measured boot (the initramfs reads the disk's very content) that gives its proof only on the untouched
+    machine: a PIN, then a code to compare with your phone (two factors), or a secret sentence behind the PIN.
   - **The states of the system, like code**: every validated write is a commit, kept in `/home`, chained and
     signed; `osmo-etats` browses them like GitHub (commits, diffs, the tree at each state).
   - **The alarm**: checksums clean at boot and different at shutdown = red screen, beep at full volume, and the

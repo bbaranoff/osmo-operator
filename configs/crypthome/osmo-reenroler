@@ -33,9 +33,8 @@ etat() {
         rouge "  Elle ne surveille pas encore ce poste."
         return
     fi
-    if [ -e /var/lib/osmo-diffs/tpm/pin ]; then MODE="phrase secrete, avec PIN"
-    elif "$T" etat 2>/dev/null | grep -q "phrase secrete"; then MODE="phrase secrete, SANS PIN"
-    else MODE="code sur le telephone"; fi
+    MODE="$("$T" etat 2>/dev/null | sed -n 's/^mode : //p' | head -n1)"
+    case "$MODE" in *"SANS PIN"*) MODE="$MODE - un PIN est conseille (choix 2 ou 3)" ;; "") MODE="?" ;; esac
     echo "  Elle surveille ce poste. Preuve au demarrage : $MODE."
     if [ "$RECONNU" = 1 ]; then
         vert "  Ce demarrage : la puce a reconnu la machine. Tout va bien."
@@ -66,7 +65,7 @@ while :; do
     if [ "$RECONNU" = 0 ]; then echo "  1. La machine a change et JE SAIS POURQUOI : la reconnaitre telle qu elle est   <- ce qu il te faut"
     else echo "  1. Reconnaitre la machine telle qu elle est maintenant (inutile : elle est deja reconnue)"; fi
     echo "  2. Une nouvelle phrase secrete et un nouveau PIN"
-    echo "  3. Le code sur un telephone, a la place de la phrase (ou un nouveau telephone)"
+    echo "  3. Deux facteurs : un PIN, puis un code sur ton telephone (ou un nouveau telephone)"
     echo "  4. Tout refaire depuis zero (retirer la puce du demarrage, puis la remettre)"
     echo "  5. Remettre la signature du disque dans la puce"
     echo "  6. Faire tenir par la puce la fin de la boite noire et celle de l historique des etats"
@@ -85,8 +84,10 @@ while :; do
             echo "La machine ne redemarre pas. Ta phrase de /home est demandee d abord."
             "$T" changer --secret || rouge "Rien n a ete change." ;;
         3)
-            titre "Le code sur un telephone"
-            echo "Un QR code va s afficher : scanne-le avec une application de codes (Aegis, FreeOTP...)."
+            titre "Deux facteurs : un PIN, puis le code de ton telephone"
+            echo "Au demarrage : ton PIN, puis un code a 6 chiffres a comparer avec ton telephone."
+            echo "Un QR code va s afficher : scanne-le avec une appli de codes LOCALE (Aegis, FreeOTP+),"
+            echo "pas une qui synchronise dans le cloud, et a l abri des regards."
             "$T" changer --telephone || rouge "Rien n a ete change." ;;
         4)
             titre "Tout refaire depuis zero"
