@@ -648,6 +648,16 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+- **Validated or not: green or red, and a merge afterwards.** The black box is always written. A
+  session that is **not validated** leaves its record (`efface`, **red** in `osmo-diffs liste`,
+  `voir` and `sessions.log`) AND its whole content, encrypted like the records, « en attente »
+  (`osmo-racine-live attente`; at most 2 GiB each, otherwise only the record). A validated one is
+  **green**. GRUB's « remonter session » only lists validated writes. A session en attente is
+  validated afterwards **as a merge**: `sudo osmo-racine-live fusionner NAME` (the `/home`
+  passphrase to write, the box's to read it back) writes each path whose disk version has not
+  changed since that session; a path changed in between is a **conflict** - listed, nothing
+  written - settled for all with `--session` (take the session's) or `--disque` (keep the disk's).
+  The result is an ordinary commit (way back, GRUB menu, box record `fusionne`).
 - **The session log in the owner's home**: `/home/<owner>/sessions.log` is the owner's copy of
   `/var/log/osmo-session.log` (every validation, write, undo, end of session, with dates),
   refreshed at every boot, before and after every write.

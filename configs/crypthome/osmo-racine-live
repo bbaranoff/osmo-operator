@@ -53,6 +53,13 @@
 #                                 (arrows); the one chosen is undone at boot,
 #                                 once /home is open (osmo.retour=N), and the
 #                                 machine restarts on the older disk
+#   osmo-racine-live attente      the sessions that were NOT validated: their
+#                                 content is kept in the black box (red)
+#   osmo-racine-live fusionner NAME [--session|--disque]
+#                                 validate one AFTERWARDS, as a merge: written
+#                                 where the disk has not changed since;
+#                                 conflicts are listed and refused, or settled
+#                                 for the session / for the disk
 #   osmo-racine-live journal-home refresh /home/<owner>/sessions.log, the
 #                                 owner's copy of the session log (every
 #                                 validation, write, undo, end of session)
@@ -264,7 +271,11 @@ journal_home() {
     local o="${CRYPTHOME_OWNER:-}" f
     [ -n "$o" ] && mountpoint -q /home 2>/dev/null && [ -d "/home/$o" ] || return 0
     f="/home/$o/sessions.log"
-    { cat "$BAS$JOURNAL_DISQUE" 2>/dev/null; cat "$TRACE" 2>/dev/null; } > "$f.nouv" 2>/dev/null || { rm -f "$f.nouv"; return 0; }
+    # RED: not validated, wiped, failed. GREEN: validated, written. (less -R, cat)
+    { cat "$BAS$JOURNAL_DISQUE" 2>/dev/null; cat "$TRACE" 2>/dev/null; } | sed -E \
+        -e '/decision (efface|oublie)|NON VALIDEE|N EST PAS|n a PAS|NON |ECHEC|CONFLIT|conflit\(s\), rien|annule|incomplete|hors d atteinte|trop grosse|refusee/{s/^/\x1b[1;31m/;s/$/\x1b[0m/;b}' \
+        -e '/decision valide|ecrit\(s\)|ecriture du moment|ecriture de la session|changements ecrits|fusionnee|fusionner .* : commit|defait|empreinte prise/{s/^/\x1b[1;32m/;s/$/\x1b[0m/}' \
+        > "$f.nouv" 2>/dev/null || { rm -f "$f.nouv"; return 0; }
     chown "$o": "$f.nouv" 2>/dev/null; chmod 640 "$f.nouv" 2>/dev/null
     mv -f "$f.nouv" "$f" 2>/dev/null
 }
@@ -411,6 +422,14 @@ appliquer_couche() {
         trace "$pre : copie $([ "$ANNULE" = 1 ] && echo "annulee (Ctrl-C)" || echo "incomplete") (rsync $rc) - rien n est change"
         rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
     fi
+    conclure_depot "$b" "$pre" "$id" "$mi" "$a"
+}
+
+# conclure_depot DISK PREFIX ID FROM TO : a deposit staged on the disk itself
+# (DISK/.osmo-valider: files, suppr) becomes a commit - from a session's RAM
+# layer (appliquer_couche) or from a session merged afterwards (fusionner).
+conclure_depot() {
+    local b="$1" pre="$2" id="$3" mi="${4:-0}" a="${5:-100}" j="$1/.osmo-valider" r p q rc nf ns
     # directories: the old attributes of those that change, and the ones that
     # are only there as parents (same on the disk, empty here) are dropped
     ( cd "$j/files" && find . -mindepth 1 -depth -type d -print0 ) | while IFS= read -r -d '' r; do
@@ -538,6 +557,170 @@ appliquer() {
     progres 100 "termine"
     NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
     ID_ECRIT="$id"
+    return $rc
+}
+
+# ── NOT VALIDATED: kept in the black box, to be merged afterwards ───────────
+# A session that is wiped is not lost for ever: at shutdown its whole content
+# (what it changed and deleted since the last write, / and /home) goes to the
+# BLACK BOX, encrypted like its records (age, the box's own passphrase to read
+# it back) - « en attente ». The box is always written; the disk is not.
+# « osmo-racine-live fusionner » validates it AFTERWARDS, as a merge: for each
+# path the box also holds what the disk had under it (its base). At the merge
+#   disk still as the base     -> the session's version is written
+#   disk already as the session -> nothing to do
+#   disk changed since          -> CONFLICT: refused and listed, unless
+#                                  --session (take the session's) or --disque
+#                                  (keep the disk's) settles them all
+# and the result is an ordinary commit: way back, GRUB menu, fingerprint.
+ATTENTE_MAX_MO="${OSMO_ATTENTE_MAX_MO:-2048}"
+identite_de() {   # what a path is: - absent, d directory, l:target, f:sha256, o other
+    if [ -L "$1" ]; then printf 'l:%s' "$(readlink "$1")"
+    elif [ -d "$1" ]; then printf 'd'
+    elif [ -f "$1" ]; then printf 'f:%s' "$(sha256sum < "$1" 2>/dev/null | cut -d' ' -f1)"
+    elif [ -e "$1" ]; then printf 'o'
+    else printf '%s' '-'; fi
+}
+mettre_en_attente() {
+    local t h b pre k=0 d ref="" r p q mo libre nom
+    [ -x /usr/local/sbin/osmo-diffs ] && command -v zstd >/dev/null 2>&1 || return 0
+    [ -f "$ETAT/ecrit" ] && ref="$ETAT/ecrit"
+    t="$(mktemp -d /run/osmo-attente.XXXXXX)" || return 0
+    mkdir -p "$t/p"
+    printf 'date=%s\nsession=%s\n' "$(date '+%F %T')" "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" > "$t/p/meta"
+    while read -r h b pre; do
+        k=$((k + 1)); d="$t/p/c$k"; mkdir -p "$d"
+        printf '%s\n' "$h" > "$t/haut$k"
+        printf '%s\n' "$pre" > "$d/prefixe"; : > "$d/suppr"; : > "$d/base"; : > "$t/liste$k"
+        ( cd "$h" && find . -mindepth 1 ${ref:+-cnewer "$ref"} -print0 2>/dev/null ) | while IFS= read -r -d '' r; do
+            p="${r#.}"
+            case "$p" in *$'\n'*|*$'\t'*) continue ;; esac
+            exclu "$(plein "$pre" "$p")" && continue
+            if whiteout "$h$p"; then
+                if existe "$b$p"; then
+                    printf '%s\n' "$p" >> "$d/suppr"
+                    printf '%s\t%s\n' "$(identite_de "$b$p")" "$p" >> "$d/base"
+                fi
+                continue
+            fi
+            printf '%s\0' ".$p" >> "$t/liste$k"
+            if [ -d "$h$p" ] && [ ! -L "$h$p" ]; then
+                # a directory made opaque: what the disk has in it and the session has not
+                if opaque "$h$p" && [ -d "$b$p" ] && [ ! -L "$b$p" ]; then
+                    ( cd "$b$p" && find . -mindepth 1 -print0 ) | while IFS= read -r -d '' q; do
+                        q="${q#.}"
+                        case "$q" in *$'\n'*|*$'\t'*) continue ;; esac
+                        existe "$h$p$q" && continue
+                        printf '%s\n' "$p$q" >> "$d/suppr"
+                        printf '%s\t%s\n' "$(identite_de "$b$p$q")" "$p$q" >> "$d/base"
+                    done
+                fi
+            else
+                printf '%s\t%s\n' "$(identite_de "$b$p")" "$p" >> "$d/base"
+            fi
+        done
+    done < <(couches)
+    # too big for the box: said, and the session is then only its record
+    mo=0; q=1
+    while [ "$q" -le "$k" ]; do
+        r="$( cd "$(cat "$t/haut$q")" && xargs -0 -r stat -c '%s %F' < "$t/liste$q" 2>/dev/null \
+              | awk '$2 != "directory" { s += $1 } END { print int(s / 1048576) }' )"
+        mo=$((mo + ${r:-0})); q=$((q + 1))
+    done
+    libre=$(( $(df -k --output=avail /var/lib/osmo-diffs 2>/dev/null | tail -1 | tr -d ' ') / 1024 ))
+    if [ "$mo" -gt "$ATTENTE_MAX_MO" ] || [ $((mo + 512)) -gt "${libre:-0}" ]; then
+        trace "attente : session trop grosse pour la boite ($mo Mo, $libre Mo libres, limite $ATTENTE_MAX_MO) - NON rejouable, seul son enregistrement reste"
+        rm -rf "$t"; return 0
+    fi
+    nom="$( { ( cd "$t/p" && tar -cf - meta c*/prefixe c*/suppr c*/base )
+              q=1
+              while [ "$q" -le "$k" ]; do
+                  tar -cf - --no-recursion --xattrs --xattrs-exclude='trusted.overlay.*' --acls \
+                      --transform "s|^\\.|c$q/files|S" -C "$(cat "$t/haut$q")" --null -T "$t/liste$q" 2>/dev/null
+                  q=$((q + 1))
+              done
+            } | zstd -q -3 | /usr/local/sbin/osmo-diffs attente-poser 2>> "$TRACE" )"
+    rm -rf "$t"
+    if [ -n "$nom" ]; then trace "attente : session NON VALIDEE gardee dans la boite noire ($nom, $mo Mo) - osmo-racine-live fusionner"
+    else trace "attente : la session n a PAS pu etre gardee dans la boite noire"; fi
+}
+# fusionner NAME MODE : see above. The stream is decrypted ONCE (the box's
+# passphrase) to the /home volume - encrypted at rest - then staged on each
+# disk; nothing of /home ever touches the system disk.
+fusionner() {
+    local nom="$1" mode="$2" t f h b pre k d j base p cur leur id rc=0 nconf=0 n1=0
+    t="$(mktemp -d /run/osmo-fusion.XXXXXX)" || return 1
+    f="$HOME_BAS/.osmo-fusion.tar.zst"
+    remonter_rw "$HOME_BAS" || { rouge "remontage en ecriture de $HOME_BAS impossible"; rm -rf "$t"; return 1; }
+    rm -f "$f"
+    if ! /usr/local/sbin/osmo-diffs attente-lire "$nom" > "$f" || [ ! -s "$f" ]; then
+        rm -f "$f"; mount -o remount,ro "$HOME_BAS" 2>/dev/null; rm -rf "$t"
+        rouge "session $nom illisible (phrase de la boite ?) : rien n est ecrit"; return 1
+    fi
+    zstd -dc "$f" 2>/dev/null | tar -xif - -C "$t" --wildcards meta 'c*/prefixe' 'c*/suppr' 'c*/base' 2>/dev/null
+    : > "$t/conflits"; : > "$t/faire"
+    for d in "$t"/c*/; do
+        [ -f "$d/prefixe" ] || continue
+        k="$(basename "$d")"; pre="$(cat "$d/prefixe")"; b=""
+        while read -r h cur leur; do [ "$leur" = "$pre" ] && b="$cur"; done < <(couches)
+        if [ -z "$b" ]; then trace "fusionner : la couche $pre n existe pas ici - ignoree"; continue; fi
+        j="$b/.osmo-valider"
+        remonter_rw "$b" || { trace "fusionner : remontage en ecriture de $b impossible"; rc=1; break; }
+        rm -rf "$j" "$j.x"; install -d -m 0700 "$j" "$j.x"
+        zstd -dc "$f" | tar -xif - --xattrs --acls -C "$j.x" "$k/files" 2>>"$TRACE"
+        if [ -d "$j.x/$k/files" ]; then mv "$j.x/$k/files" "$j/files"; else install -d -m 0700 "$j/files"; fi
+        rm -rf "$j.x"
+        cp "$d/suppr" "$j/suppr"
+        while IFS=$'\t' read -r base p; do
+            [ -n "$p" ] || continue
+            cur="$(identite_de "$b$p")"
+            if grep -qxF -- "$p" "$d/suppr"; then leur="-"; else leur="$(identite_de "$j/files$p")"; fi
+            [ "$cur" = "$base" ] && { n1=$((n1 + 1)); continue; }
+            if [ "$cur" != "$leur" ]; then
+                nconf=$((nconf + 1))
+                printf '%s\n' "$(plein "$pre" "$p")" >> "$t/conflits"
+                [ "$mode" = session ] && continue
+            fi
+            # already as the session wants it, or the disk's version is kept
+            [ "$leur" = "-" ] || rm -rf "$j/files$p"
+            grep -vxF -- "$p" "$j/suppr" > "$j/suppr.n"; mv -f "$j/suppr.n" "$j/suppr"
+        done < "$d/base"
+        printf '%s %s\n' "$b" "$pre" >> "$t/faire"
+    done
+    rm -f "$f"; sync
+    if [ "$rc" != 0 ] || { [ "$nconf" -gt 0 ] && [ -z "$mode" ]; }; then
+        while read -r b pre; do rm -rf "$b/.osmo-valider"; done < "$t/faire"
+        while read -r h b pre; do mount -o remount,ro "$b" 2>/dev/null; done < <(couches)
+        if [ "$nconf" -gt 0 ]; then
+            rouge "CONFLIT : $nconf chemin(s) ont change sur le disque depuis cette session - rien n est ecrit :"
+            head -n 40 "$t/conflits" | sed 's/^/    /'
+            [ "$nconf" -gt 40 ] && echo "    ... et $((nconf - 40)) autre(s)"
+            echo "Trancher pour tous : osmo-racine-live fusionner $nom --session   (la version de la session)"
+            echo "                     osmo-racine-live fusionner $nom --disque    (garder celle du disque)"
+            trace "fusionner $nom : $nconf conflit(s), rien n est ecrit"
+        fi
+        rm -rf "$t"; return 2
+    fi
+    id="$(date '+%Y%m%d-%H%M%S')"
+    trace "fusionner $nom : commit $id ($n1 chemin(s) sans conflit, $nconf conflit(s)${mode:+ tranches cote $mode})"
+    install -d -m 0700 "$ETAT"; : > "$ETAT/nb"
+    while read -r b pre; do
+        j="$b/.osmo-valider"
+        : > "$j/crees"; : > "$j/dirs"; printf '%s\n' "$id" > "$j/id"
+        conclure_depot "$b" "$pre" "$id" 40 95 < /dev/null || rc=1
+    done < "$t/faire"
+    while read -r h b pre; do mount -o remount,ro "$b" 2>/dev/null; done < <(couches)
+    NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
+    ID_ECRIT="$id"
+    if [ "$rc" = 0 ]; then
+        printf 'session en attente %s fusionnee sur le disque : commit %s, %s chemin(s), %s conflit(s)%s\n' \
+            "$nom" "$id" "$NB_ECRITS" "$nconf" "${mode:+ tranches cote $mode}" \
+            | /usr/local/sbin/osmo-diffs noter fusionne >> "$TRACE" 2>&1
+        /usr/local/sbin/osmo-diffs attente-clore "$nom" "$id" >> "$TRACE" 2>&1
+    fi
+    rm -rf "$t"
+    poser_menu_sessions
+    empreinte_prendre
     return $rc
 }
 
@@ -942,7 +1125,7 @@ etat_montages() {   # one line: what is mounted of /home and its two layers
     echo "$o"
 }
 case "${1:-etat}" in
-    fin|valider|ecrire|defaire|remonter)
+    fin|valider|ecrire|defaire|remonter|fusionner)
         if [ "$(id -u)" = 0 ] && live && couches_manquantes; then
             trace "${1} : couches de /home hors d atteinte ici :$(etat_montages)"
             _g="$(garde_pid)"
@@ -1174,6 +1357,9 @@ EOF
         fi
         [ -x /usr/local/sbin/osmo-diffs ] \
             && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" /usr/local/sbin/osmo-diffs enregistrer "$_b"
+        # NOT VALIDATED: its content is kept in the box all the same, to be
+        # merged afterwards (osmo-racine-live fusionner)
+        if [ "$decision" != valide ] && [ "$n" -gt 0 ]; then mettre_en_attente; fi
         if [ "$decision" = oublie ]; then
             # white screen (reverse video on a cleared console), no banner:
             # the machine goes off on it
@@ -1251,6 +1437,38 @@ EOF
         else
             rouge "ECHEC : commit $id pas (entierement) defait - voir $JOURNAL_DISQUE"; exit 1
         fi
+        ;;
+    attente)
+        # the sessions that were NOT validated and can still be merged
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs attente-liste
+        ;;
+    fusionner)
+        # fusionner [NAME] [--session|--disque] : validate afterwards, as a merge
+        root_requis
+        live || { log "/ n est pas en RAM : rien a fusionner"; exit 0; }
+        nom="${2:-}"; mode=""
+        case "${3:-}" in --session) mode=session ;; --disque) mode=disque ;; "") ;; *) log "usage : osmo-racine-live fusionner NOM [--session|--disque]" >&2; exit 1 ;; esac
+        if [ -z "$nom" ]; then
+            /usr/local/sbin/osmo-diffs attente-liste
+            echo "fusionner : osmo-racine-live fusionner NOM [--session|--disque]"; exit 0
+        fi
+        if couches_manquantes; then rouge "/home hors d atteinte : rien n est ecrit" >&2; exit 1; fi
+        [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : ecriture impossible" >&2; exit 1; }
+        echo "fusionner $nom : la session non validee est ecrite sur le disque (deux phrases : /home pour ecrire, la boite pour la relire)"
+        read -r -s -p "phrase de /home : " p < /dev/tty || p=""; echo
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+            p=""; rouge "phrase de /home refusee : rien n est ecrit"; exit 1
+        fi
+        p=""
+        trap '' INT HUP QUIT
+        fusionner "$nom" "$mode"; rc=$?
+        journal_disque
+        case "$rc" in
+            0) vert "fusionnee : $NB_ECRITS changement(s) ecrits sur le disque (visible au prochain demarrage)"
+               vert "$(confirmation "$ID_ECRIT")" ;;
+            2) exit 2 ;;
+            *) rouge "ECHEC de la fusion - voir $JOURNAL_DISQUE"; exit 1 ;;
+        esac
         ;;
     journal-home)
         # unlock-home, /home just opened: the owner's copy of the session log

@@ -464,6 +464,65 @@ case "${1:-liste}" in
         fi
         envoyer
         ;;
+    noter)
+        # noter MODE < text : a record of that kind (osmo-racine-live: a
+        # session merged afterwards, « fusionne »)
+        boite
+        [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
+        case "${2:-}" in fusionne) ;; *) log "noter : mode refuse"; exit 1 ;; esac
+        nom="$(sceller "$2")" && log "$2 -> $nom"
+        envoyer
+        ;;
+    attente-poser)
+        # attente-poser < stream : a session that is NOT validated, kept whole
+        # (osmo-racine-live fin) - encrypted like a record, read back with the
+        # box's passphrase only. Its name on stdout.
+        boite
+        [ -f "$PUB" ] || { log "boite noire non initialisee" >&2; exit 0; }
+        ouvrir || exit 1
+        mkdir -p "$BASE/attente"
+        nom="$(date +%F_%H%M%S)"
+        if age -r "$(cat "$PUB")" -o "$BASE/attente/$nom.session.age"; then
+            chmod 0444 "$BASE/attente/$nom.session.age"; sync
+            echo "$nom"
+        else
+            rm -f "$BASE/attente/$nom.session.age"; exit 1
+        fi
+        ;;
+    attente-liste)
+        # RED: not validated, still to be merged. GREEN: merged since.
+        boite
+        n=0
+        for j in "$BASE"/attente/*.session.age "$BASE"/attente/*.fusionnee; do
+            [ -f "$j" ] || continue
+            n=$((n + 1)); b="$(basename "$j")"
+            case "$b" in
+                *.session.age) printf '\033[1;31m%-22s NON VALIDEE  %6s Mo   osmo-racine-live fusionner %s\033[0m\n' \
+                                   "${b%.session.age}" "$(( $(stat -c %s "$j") / 1048576 ))" "${b%.session.age}" ;;
+                *.fusionnee)   printf '\033[1;32m%-22s fusionnee    commit %s\033[0m\n' "${b%.fusionnee}" "$(cat "$j")" ;;
+            esac
+        done
+        [ "$n" -gt 0 ] || echo "aucune session en attente"
+        ;;
+    attente-lire)
+        # attente-lire NAME > stream (the box's passphrase)
+        boite
+        f="$BASE/attente/${2:?usage : osmo-diffs attente-lire NOM}.session.age"
+        [ -f "$f" ] || { log "pas de session en attente $2" >&2; exit 1; }
+        cle="$(identite)" || exit 1
+        age -d -i <(printf '%s\n' "$cle") "$f"; rc=$?
+        cle=""
+        exit $rc
+        ;;
+    attente-clore)
+        # attente-clore NAME COMMIT : merged - its content leaves the box, its mark stays
+        boite
+        f="$BASE/attente/${2:?usage : osmo-diffs attente-clore NOM COMMIT}"
+        [ -f "$f.session.age" ] || exit 0
+        ouvrir || exit 1
+        printf '%s\n' "${3:-?}" > "$f.fusionnee" && rm -f "$f.session.age"
+        sync
+        ;;
     alerte)
         # alerte < text : an « alerte » record (osmo-empreinte: the disk was
         # written to outside a session)
@@ -495,8 +554,15 @@ case "${1:-liste}" in
         ;;
     liste)
         boite
+        # GREEN: validated (written to the disk). RED: not validated (wiped).
         for j in "$JOURNAL"/*.age; do
-            [ -f "$j" ] && printf '%-55s %8s\n' "$(basename "$j")" "$(stat -c %s "$j")"
+            [ -f "$j" ] || continue
+            case "$j" in
+                *_valide.diff.age|*_ecrit.diff.age|*_fusionne.diff.age) c='\033[1;32m' ;;
+                *_efface.diff.age) c='\033[1;31m' ;;
+                *) c='' ;;
+            esac
+            printf "$c"'%-55s %8s\033[0m\n' "$(basename "$j")" "$(stat -c %s "$j")"
         done
         echo "occupe : $(du -sh "$BASE" | cut -f1) / $(df -h --output=size "$BASE" | tail -1 | tr -d ' ')"
         [ -f "$PUB" ] || echo "ATTENTION : boite noire non initialisee (premier demarrage, ou : sudo osmo-diffs init)"
@@ -518,7 +584,13 @@ case "${1:-liste}" in
             [ -n "$prec" ] && attendu="$(sha256sum "$prec" | cut -d' ' -f1) $(basename "$prec")"
             vu="$(printf '%s\n' "$clair" | sed -n '2s/^# precedent : //p')"
             [ "$vu" = "$attendu" ] || echo "=== CHAINE ROMPUE avant $(basename "$j") (attendu : $attendu)"
-            [ "$i" -ge "$debut" ] && printf '%s\n' "$clair"
+            # its first line GREEN (validated) or RED (not validated)
+            case "$j" in
+                *_valide.diff.age|*_ecrit.diff.age|*_fusionne.diff.age) c='\033[1;32m' ;;
+                *_efface.diff.age) c='\033[1;31m' ;;
+                *) c='' ;;
+            esac
+            [ "$i" -ge "$debut" ] && { printf "$c"'%s\033[0m\n' "$(printf '%s\n' "$clair" | head -n1)"; printf '%s\n' "$clair" | tail -n +2; }
             prec="$j"
         done | ${PAGER:-less -R}
         cle=""
