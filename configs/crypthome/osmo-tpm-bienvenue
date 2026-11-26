@@ -6,13 +6,22 @@
 # system's own boot, not of the live key. So the FIRST session finishes the
 # installation: a window of the bench asks the /home passphrase, the secret
 # sentence and the PIN, then takes the fingerprint, anchors its signature and
-# seals (sudo osmo-tpm premier). Shown at every login UNTIL it is done, then
+# seals (sudo osmo-tpm premier). FULL SCREEN, before anything else of the
+# session. Shown at every login UNTIL it is done, then
 # never again. Nothing on an ordinary Ubuntu, nothing in a guest root session.
 grep -qx 'premier=1' /etc/osmo-operator/options 2>/dev/null || exit 0
 [ -e /etc/osmo-tpm/actif ] || exit 0
 [ -s /var/lib/osmo-diffs/tpm/scelle ] && exit 0
 mountpoint -q /home 2>/dev/null || exit 0
 [ "$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null)" = 2 ] || exit 0
+# THE FIRST BOOT, FULL SCREEN (osmo-premier-ecran): « Merci d avoir installe
+# osmo-operator », and the sealing in it - like the first-run screen of a
+# freshly installed system. Without the terminal widget (gir1.2-vte-2.91):
+# the plain window below.
+if [ -x /usr/local/bin/osmo-premier-ecran ] \
+        && /usr/bin/python3 -c 'import gi; gi.require_version("Vte", "2.91"); gi.require_version("Gtk", "3.0")' 2>/dev/null; then
+    exec /usr/bin/python3 /usr/local/bin/osmo-premier-ecran
+fi
 R=/opt/GSM/osmo-operator
 [ -x "$R/tools/osmo-gtk-run.py" ] || exit 0
 exec python3 "$R/tools/osmo-gtk-run.py" --root --tty --keep-open --title "Bienvenue : le TPM de ce poste" \

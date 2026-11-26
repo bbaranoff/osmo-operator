@@ -136,6 +136,11 @@ chroot "$ROOTFS" bash -c 'command -v tpm2_unseal >/dev/null 2>&1 || DEBIAN_FRONT
 # ordinary Ubuntu.
 rm -f "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop"
 install -m 0755 "$_CH_SRC/osmo-tpm-bienvenue" "$ROOTFS/usr/local/bin/osmo-tpm-bienvenue"
+# the first boot as a full screen (« Merci d avoir installe osmo-operator »):
+# the sealing the installer could not do, in a terminal widget inside it
+install -m 0755 "$_CH_SRC/osmo-premier-ecran" "$ROOTFS/usr/local/bin/osmo-premier-ecran"
+chroot "$ROOTFS" bash -c 'python3 -c "import gi; gi.require_version(\"Vte\", \"2.91\")" 2>/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gir1.2-vte-2.91 >/dev/null 2>&1' \
+    || echo -e "  ${YELLOW}!${NC} gir1.2-vte-2.91 absent : le premier demarrage s affichera dans une fenetre ordinaire"
 # TWO ICONS of a secured bench: the floppy disk « Enregistrer » (write the
 # session to the disk now) and « Nouveaux secrets » (osmo-secrets: the TPM's
 # sentence and PIN or the phone, the /home passphrase with all that follows
@@ -185,7 +190,7 @@ Exec=/usr/local/bin/osmo-tpm-bienvenue
 OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
-X-GNOME-Autostart-Delay=8
+X-GNOME-Autostart-Delay=2
 BIENVENUE
 # the REC screen of a write at shutdown: cmatrix, and its red progress bar
 install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"

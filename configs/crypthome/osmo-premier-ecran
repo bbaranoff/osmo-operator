@@ -1,0 +1,135 @@
+#!/usr/bin/python3
+# osmo-premier-ecran - THE FIRST BOOT OF AN INSTALLED SECURED BENCH, as a full
+# screen: « Merci d avoir installe osmo-operator », and the one step the
+# installer could not do - sealing the TPM.
+#
+# The installer runs from the live key: what the TPM measures there is not the
+# installed system's boot, so nothing can be sealed from it. The installation
+# is therefore FINISHED HERE, at the first opening of a session, before
+# anything else: this screen takes the whole display and runs
+# « osmo-tpm premier » in it - the /home passphrase, the PIN, the phone's QR
+# code (or the secret sentence), the fingerprint, its anchor, the sealing.
+# Done: it says so and never comes back. Not done (closed, refused, failed):
+# it comes back at the next session (osmo-tpm-bienvenue, autostart).
+#
+#   osmo-premier-ecran [--essai]      --essai: the screen only, a harmless
+#                                     command in it (to look at it)
+import os
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Vte", "2.91")
+from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
+
+ESSAI = "--essai" in sys.argv[1:]
+SCELLE = "/var/lib/osmo-diffs/tpm/scelle"
+if ESSAI:
+    COMMANDE = ["/bin/sh", "-c",
+                "echo 'ESSAI : ici tournera « sudo osmo-tpm premier ».'; echo; "
+                "echo 'Il demandera : ton mot de passe, ta phrase de /home, un PIN,'; "
+                "echo 'puis affichera le QR code a scanner avec ton telephone.'; echo; "
+                "printf 'Entree pour terminer l essai : '; read x"]
+else:
+    COMMANDE = ["/usr/bin/sudo", "/usr/local/sbin/osmo-tpm", "premier"]
+
+css = Gtk.CssProvider()
+css.load_from_data(b"""
+window { background-color: #0b1018; }
+#titre { color: #ffffff; font-family: "Ubuntu", sans-serif; font-weight: 700; font-size: 44px; }
+#sous  { color: #ff8c28; font-family: "Ubuntu", sans-serif; font-size: 22px; }
+#texte { color: #b8c3d4; font-family: "Ubuntu", sans-serif; font-size: 16px; }
+#etat  { color: #b8c3d4; font-family: "Ubuntu", sans-serif; font-size: 18px; font-weight: 700; }
+#cadre { border: 1px solid #30363d; border-radius: 8px; padding: 10px; background-color: #010409; }
+button { font-size: 16px; padding: 10px 26px; }
+""")
+Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+w = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+w.set_title("Bienvenue")
+w.set_decorated(False)
+col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+col.set_halign(Gtk.Align.CENTER)
+col.set_valign(Gtk.Align.CENTER)
+
+
+def etiquette(nom, texte):
+    e = Gtk.Label(label=texte)
+    e.set_name(nom)
+    e.set_justify(Gtk.Justification.CENTER)
+    e.set_line_wrap(True)
+    col.pack_start(e, False, False, 0)
+    return e
+
+
+etiquette("titre", "Merci d'avoir installé osmo-operator")
+etiquette("sous", "Dernière étape : confier son secret à la puce de sécurité de cette machine")
+etiquette("texte",
+          "L'installeur ne pouvait pas le faire : la puce reconnaît le démarrage de CE système, pas celui de la clé.\n"
+          "Réponds aux questions ci-dessous. Rien ne s'affiche pendant que tu tapes un mot de passe ou une phrase.")
+
+terminal = Vte.Terminal()
+terminal.set_font(Pango.FontDescription("Ubuntu Mono 13"))
+terminal.set_size(110, 30)
+terminal.set_scrollback_lines(5000)
+fond = Gdk.RGBA()
+fond.parse("#010409")
+avant = Gdk.RGBA()
+avant.parse("#e6edf3")
+terminal.set_colors(avant, fond, None)
+cadre = Gtk.Box()
+cadre.set_name("cadre")
+cadre.pack_start(terminal, True, True, 0)
+col.pack_start(cadre, False, False, 6)
+
+etat = etiquette("etat", "")
+boutons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+boutons.set_halign(Gtk.Align.CENTER)
+col.pack_start(boutons, False, False, 0)
+w.add(col)
+
+
+def vider_boutons():
+    for b in boutons.get_children():
+        boutons.remove(b)
+
+
+def bouton(texte, action):
+    b = Gtk.Button(label=texte)
+    b.connect("clicked", action)
+    boutons.pack_start(b, False, False, 0)
+    b.show()
+    return b
+
+
+def lancer(*_a):
+    vider_boutons()
+    etat.set_markup("")
+    terminal.reset(True, True)
+    terminal.spawn_async(Vte.PtyFlags.DEFAULT, "/", COMMANDE, None, GLib.SpawnFlags.DEFAULT,
+                         None, None, -1, None, None)
+    terminal.grab_focus()
+
+
+def fini(_t, statut):
+    code = os.waitstatus_to_exitcode(statut) if hasattr(os, "waitstatus_to_exitcode") else statut
+    vider_boutons()
+    if ESSAI or (code == 0 and os.path.exists(SCELLE) and os.path.getsize(SCELLE) > 0):
+        etat.set_markup("<span foreground='#3fb950'>C'est fait : la puce de sécurité garde le secret de ce poste.</span>\n"
+                        "Au prochain démarrage : ton PIN, puis ta preuve, avant de taper la phrase de /home.")
+        bouton("Terminer", Gtk.main_quit).grab_focus()
+    else:
+        etat.set_markup("<span foreground='#f85149'>Ce n'est pas terminé.</span> "
+                        "Lis les messages au-dessus ; cet écran reviendra à la prochaine ouverture de session.")
+        bouton("Recommencer", lancer).grab_focus()
+        bouton("Plus tard", Gtk.main_quit)
+
+
+terminal.connect("child-exited", fini)
+w.connect("delete-event", lambda *a: False)
+w.connect("destroy", Gtk.main_quit)
+w.fullscreen()
+w.show_all()
+lancer()
+Gtk.main()

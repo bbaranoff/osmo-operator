@@ -200,8 +200,10 @@ directement, ni session en RAM, ni boîte noire, ni TPM). Sans TPM 2.0 vu par le
 case est décochée et grisée, avec la marche à suivre (l'activer dans le BIOS, redémarrer
 la clé) ; le travail d'installation revérifie et ne pose jamais le poste sécurisé sans
 TPM. L'installeur ne peut pas sceller : les mesures sont celles du démarrage du système
-installé, pas de la clé live. Il prépare donc tout (initramfs compris), et la première
-ouverture de session affiche une fenêtre d'accueil qui demande la phrase de `/home`, puis
+installé, pas de la clé live. Il prépare donc tout (initramfs compris), et **le premier
+démarrage du système installé termine l'installation** : à la première ouverture de
+session, avant toute autre chose, un écran plein écran « Merci d'avoir installé
+osmo-operator » (`osmo-premier-ecran`) fait tourner le scellement. Il demande la phrase de `/home`, puis
 demande un PIN et enrôle le téléphone par QR code (seconde case, « code du TPM sur le
 téléphone + PIN, deux facteurs », cochée
 par défaut, grisée elle aussi sans TPM) ou, case décochée, demande la phrase secrète et le
