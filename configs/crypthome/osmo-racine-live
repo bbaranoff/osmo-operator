@@ -833,7 +833,7 @@ confirmation() {
     t="$(titres_sessions | head -n1 | cut -d'|' -f2-)"
     {
         echo "Ecriture du $(date_commit "$1") : sur le disque."
-        if [ -s "$BAS/boot/grub/osmo-sessions.cfg" ] && grep -q "osmo.retour" /boot/grub/grub.cfg "$BAS/boot/grub/grub.cfg" 2>/dev/null; then
+        if [ -s "$BAS/boot/grub/osmo-sessions.cfg" ] && grep -q "osmo-sessions.cfg" "$BAS/boot/grub/grub.cfg" 2>/dev/null; then
             echo "Dans GRUB, « remonter session » : $t"
         else
             echo "Retour possible : $t"
