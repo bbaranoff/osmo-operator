@@ -165,7 +165,7 @@ phrase_de_home() {   # < passphrase : it opens the /home volume
     local _hu
     _hu="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
     [ -n "$_hu" ] && [ -e "/dev/disk/by-uuid/$_hu" ] \
-        && cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$_hu" 2>/dev/null
+        && cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$_hu" >/dev/null 2>&1
 }
 # sceller_cle PASSPHRASE < age identity : the identity under the box passphrase
 sceller_cle() {
