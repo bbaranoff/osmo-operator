@@ -136,6 +136,28 @@ le propriétaire au lieu d'une graine, et l'affiche à côté de la question de 
 démarrages mesurés sont trois cases, toutes facultatives ; rien n'est posé par
 l'installation, `osmo-tpm etat` dit ce qui reste à faire.
 
+### 3.7 Deux root
+
+Le disque système est en clair : l'état personnel de root (identifiants de l'assistant,
+jeton GitHub, historique, clés) ne doit pas s'y trouver.
+
+- **Root du propriétaire** : `/home` ouvert, `/root` est un répertoire du volume chiffré
+  (`/home/.root`), monté par-dessus celui du disque par `unlock-home`. La première fois,
+  c'est une copie du `/root` du disque.
+- **Root invité** : la session ouverte sans la phrase. Il a le `/root` du disque — les
+  outils du banc, rien de personnel — en RAM.
+- Plus rien de `/root` n'est écrit sur le disque système, ni par la session du
+  propriétaire ni par une session invitée validée après coup.
+- `sudo osmo-racine-live root-nettoyer` (une fois, phrase de `/home`) retire du `/root`
+  du disque et des retours arrière tout ce que l'image n'y a pas mis. Ce que la boîte
+  noire a déjà enregistré y reste, sous sa propre phrase ; les jetons déjà exposés sont à
+  renouveler.
+- Le root du propriétaire garde tous ses droits : c'est son état qui est enfermé dans le
+  chiffré, pas ses pouvoirs. `/etc`, `/var` et `/opt` restent en clair.
+
+Dans le terminal : root du propriétaire en rouge, root invité en vert, compte de session
+en bleu foncé gras, nom de machine en gras.
+
 ## 4. Modèle de menace
 
 | Menace | Réponse | Limite |

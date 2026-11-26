@@ -121,6 +121,14 @@ TIMEOUT="${CRYPTHOME_TIMEOUT:-60}"
 # by a directory in RAM when /home is closed - unlock-home).
 EXCLUS="/tmp /var/tmp /etc/fstab /var/log/osmo-session.log /.osmo-valider /.osmo-retour /home/.osmo-valider /home/.osmo-retour"
 for _l in $CRYPTHOME_ROOT_LINKS; do EXCLUS="$EXCLUS /root/$_l"; done
+# TWO ROOTS (unlock-home, root_chiffre): root's state lives in the encrypted
+# volume, bound over /root. From then on NOTHING of /root is written to the
+# system disk, in clear - neither by this session nor by a guest root session
+# somebody validates afterwards.
+if mountpoint -q /root 2>/dev/null || [ -d /media/home-ro/.root ]; then EXCLUS="$EXCLUS /root"; fi
+# what the IMAGE put in /root (the bench's tools: nothing personal) - all the
+# guest root finds there once « root-nettoyer » has run
+ROOT_IMAGE="${CRYPTHOME_ROOT_IMAGE:-.env .venv-qemu .npm .osmocom .bashrc .profile init-crypthome.sh .config/autostart .config/linphone .config/srsran .config/pmbootstrap_v3.cfg .config/gnome-initial-setup-done}"
 
 log()   { echo "osmo-racine-live : $*"; }
 rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
@@ -543,6 +551,25 @@ conclure_depot() {
     trace "$pre : $nf fichier(s) ecrit(s), $ns suppression(s) (commit $id, code $rc)"
     printf '%s\n' "$((nf + ns))" >> "$ETAT/nb"
     return $rc
+}
+
+# root_nettoie DIR [REL] : in DIR (a /root of the disk, or of one of its undo
+# snapshots) only what ROOT_IMAGE names stays; NB_OTES counts what went
+NB_OTES=0
+root_nettoie() {
+    local e rel g garder
+    for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$e" ] || [ -L "$e" ] || continue
+        rel="${2:+$2/}${e##*/}"; garder=0
+        for g in $ROOT_IMAGE; do
+            case "$g" in "$rel") garder=1; break ;; "$rel"/*) garder=2 ;; esac
+        done
+        case "$garder" in
+            1) ;;
+            2) if [ -d "$e" ] && [ ! -L "$e" ]; then root_nettoie "$e" "$rel"; fi ;;
+            *) rm -rf -- "$e" && NB_OTES=$((NB_OTES + 1)) ;;
+        esac
+    done
 }
 
 EMPREINTE=/usr/local/sbin/osmo-empreinte
@@ -1906,6 +1933,57 @@ EOF
         poser_grub_boite
         actualiser || { rouge "initramfs ou grub PAS reconstruit" >&2; exit 1; }
         log "initramfs et grub a jour"
+        ;;
+    root-nettoyer)
+        # ONCE, after root's state has reached the encrypted volume: what is
+        # personal in the /root OF THE DISK (in clear) is removed, and from
+        # the undo snapshots too. The black box keeps the diffs it already
+        # has, under its own passphrase.
+        root_requis
+        live || { log "/ n est pas en RAM : rien a nettoyer ici"; exit 0; }
+        if ! mountpoint -q /root; then
+            rouge "/root n est pas encore celui du volume chiffre (il le devient au demarrage, /home ouvert) : rien n est efface" >&2; exit 1
+        fi
+        if [ ! -d "$HOME_BAS/.root" ]; then
+            rouge "la copie de /root n est pas encore SUR le volume chiffre : valider d abord (osmo-valider-session --maintenant)" >&2; exit 1
+        fi
+        # nothing is removed that the volume does not hold
+        _manque=""
+        for _e in "$BAS"/root/* "$BAS"/root/.[!.]*; do
+            [ -e "$_e" ] || [ -L "$_e" ] || continue
+            [ -e "$HOME_BAS/.root/${_e##*/}" ] || [ -L "$HOME_BAS/.root/${_e##*/}" ] || _manque="$_manque ${_e##*/}"
+        done
+        if [ -n "$_manque" ]; then
+            rouge "absents de la copie chiffree :$_manque - rien n est efface (valider la session, puis recommencer)" >&2; exit 1
+        fi
+        [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : ecriture impossible" >&2; exit 1; }
+        echo "root-nettoyer : dans le /root DU DISQUE (en clair) ne reste que ce que l image y a mis :"
+        echo "  $ROOT_IMAGE"
+        echo "Le reste (assistant, jetons, historique...) y est efface ; il vit dans ${CRYPTHOME_MOUNT:-/home}/.root."
+        read -r -s -p "phrase de /home : " p < /dev/tty || p=""; echo
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+            p=""; rouge "phrase de /home refusee : rien n est efface"; exit 1
+        fi
+        PHRASE="$p"; p=""
+        trap '' INT HUP QUIT
+        remonter_rw "$BAS" || { rouge "remontage en ecriture de $BAS impossible" >&2; exit 1; }
+        NB_OTES=0
+        root_nettoie "$BAS/root" ""
+        for _r in "$BAS"/.osmo-retour/*/files/root; do
+            if [ -d "$_r" ]; then root_nettoie "$_r" ""; fi
+        done
+        sync
+        # the freed blocks handed back to the SSD: deleted is not erased
+        fstrim "$BAS" >/dev/null 2>&1
+        remonter_ro "$BAS"
+        trace "root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair"
+        if [ -x /usr/local/sbin/osmo-diffs ]; then
+            echo "osmo-racine-live root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair" \
+                | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
+        fi
+        empreinte_prendre
+        journal_disque
+        vert "$NB_OTES chemin(s) retires du /root du disque. Les jetons deja exposes restent a renouveler."
         ;;
     retirer)
         root_requis

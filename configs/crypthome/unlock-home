@@ -572,6 +572,35 @@ if racine_live && grep -qE '(^| )osmo\.retour(=[^ ]*)?( |$)' /proc/cmdline \
     /usr/local/sbin/osmo-racine-live remonter "${_n:-choisir}" --demarrage
 fi
 
+# TWO ROOTS. Root's own state (assistant credentials, GitHub token, shell
+# history, keys) must not sit on the system disk, which is in clear: once
+# /home is open, /root IS a directory of the encrypted volume ($MOUNT/.root),
+# bound over the one of the disk. Without the passphrase (session_root) root
+# is a GUEST: it gets the /root of the disk - the bench's tools, nothing
+# personal - in RAM. The first time, $MOUNT/.root is a copy of the disk's
+# /root; « osmo-racine-live root-nettoyer » then removes from the disk what
+# the image did not put there. CRYPTHOME_ROOT_CHIFFRE=0 turns this off.
+root_chiffre() {
+    local d="$MOUNT/.root"
+    [ "${CRYPTHOME_ROOT_CHIFFRE:-1}" = 1 ] || return 0
+    mountpoint -q /root && return 0
+    if [ ! -d "$d" ]; then
+        log "premiere fois : /root est copie dans le volume chiffre ($d)..."
+        rm -rf "$d.nouv"
+        rsync -aHAX --one-file-system /root/ "$d.nouv/" >/dev/null 2>&1
+        case "$?" in
+            0|23|24) mv "$d.nouv" "$d" ;;
+            *) rm -rf "$d.nouv"; log "ATTENTION : copie de /root impossible - root garde le /root du disque (en clair)."; return 0 ;;
+        esac
+    fi
+    if mount --bind "$d" /root; then
+        log "/root est celui du volume chiffre ($d)."
+    else
+        log "ATTENTION : $d ne se monte pas sur /root - root garde le /root du disque (en clair)."
+    fi
+}
+root_chiffre
+
 # The owner account can now have a user session: its home exists. Without
 # lingering, /run/user/<uid> and its bus are only created at first login - but
 # run-as-owner starts its applications from root's session without ever

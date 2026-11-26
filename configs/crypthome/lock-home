@@ -65,6 +65,9 @@ fi
 # the kept copy of the mounts (osmo-garde.service) holds the volume too
 systemctl stop osmo-garde.service >/dev/null 2>&1 || true
 
+# root's state lives in the volume ($MOUNT/.root bound over /root, unlock-home)
+if mountpoint -q /root && [ -d "$MOUNT/.root" ]; then umount /root 2>/dev/null || umount -l /root 2>/dev/null || true; fi
+
 if crypthome_monte && ! umount "$MOUNT"; then
     echo "lock-home: $MOUNT occupe - processus restants :" >&2
     fuser -vm "$MOUNT" 2>&1 | head -20 >&2
