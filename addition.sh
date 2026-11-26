@@ -729,9 +729,9 @@ fi
 # avoided below. The native installer drops a standalone binary (embedded node),
 # without touching the system: the safest path.
 #
-# It installs into ~/.local/bin (so /root/.local/bin when run via sudo). We link
-# that binary into /usr/local/bin so it is on everyone's PATH and the
-# `command -v claude` probe sees it.
+# It installs into ~/.local/bin (so /root/.local/bin when run via sudo). We copy
+# that binary to /usr/local/lib/claude and link it into /usr/local/bin so it is
+# on everyone's PATH and the `command -v claude` probe sees it.
 if [ "$DO_CLAUDE" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de Claude Code ..."
     export DEBIAN_FRONTEND=noninteractive
@@ -760,9 +760,20 @@ if [ "$DO_CLAUDE" = "1" ]; then
     for _c in "$_cc_home/.local/bin/claude" /root/.local/bin/claude "$_cc_home/.claude/bin/claude"; do
         [ -x "$_c" ] && { _cc_bin="$_c"; break; }
     done
-    if [ -n "$_cc_bin" ] && [ ! -e /usr/local/bin/claude ]; then
-        ln -sf "$_cc_bin" /usr/local/bin/claude
-        echo -e "      ${GREEN}✓${NC} lien /usr/local/bin/claude -> $_cc_bin"
+    # A COPY under /usr/local/lib/claude, not a link into the installer's home:
+    # run as root it drops into /root/.local/share, which is 0700 - the link
+    # then works for root only and the session account "has no claude" (seen
+    # 2026-11-26: the launcher kept asking to install it again).
+    if [ -n "$_cc_bin" ]; then
+        _cc_vrai="$(readlink -f "$_cc_bin")"
+        if [ -f "$_cc_vrai" ] && install -D -m 0755 "$_cc_vrai" /usr/local/lib/claude/claude.nouv \
+                && mv -f /usr/local/lib/claude/claude.nouv /usr/local/lib/claude/claude; then
+            ln -sfn /usr/local/lib/claude/claude /usr/local/bin/claude
+            echo -e "      ${GREEN}✓${NC} /usr/local/bin/claude -> /usr/local/lib/claude/claude (pour tous les comptes)"
+        else
+            rm -f /usr/local/lib/claude/claude.nouv
+            echo -e "      ${YELLOW}!${NC} copie vers /usr/local/lib/claude en echec - claude reste dans $_cc_bin"
+        fi
     fi
 
     # The only check that matters: does claude respond?

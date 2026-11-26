@@ -200,7 +200,8 @@ Icon=system-shutdown
 Terminal=false
 Categories=System;
 LANCEUR
-# and in every terminal, in red
+# and in every terminal, in red - ONLY what has a reason (an alert, the direct
+# mode): no « session non validee » reminder, the console asks at shutdown
 cat > "$ROOTFS/etc/profile.d/98-osmo-session.sh" <<'PROFIL'
 # osmo-operator: the disk was written to outside a session (osmo-empreinte)
 if [ -t 1 ] && [ -s /run/osmo-alerte ]; then
@@ -212,17 +213,6 @@ fi
 # osmo-operator: « nirvana normal » (GRUB): /home written to directly for this boot
 if [ -t 1 ] && grep -qE '(^| )osmo\.home=direct( |$)' /proc/cmdline 2>/dev/null && mountpoint -q /home 2>/dev/null; then
     printf '\033[1;31m%s\033[0m\n' "MODE DIRECT : /home est ecrit directement sur le volume chiffre (rien a valider, rien d efface). Le systeme, lui, reste en RAM."
-fi
-# osmo-operator: / in RAM -> red warning. A validation covers the moment it
-# was given; what follows needs another one, or the passphrase at shutdown.
-if [ -t 1 ] && [ ! -e /run/osmo-racine/valide ] && mountpoint -q /media/root-ro 2>/dev/null; then
-    if [ -e /run/osmo-racine/ecrit ]; then
-        printf '\033[1;31m%s\033[0m\n' "ATTENTION : session validee a $(date -r /run/osmo-racine/ecrit '+%H:%M') - ce qui a suivi sera EFFACE a l extinction sans la phrase de /home." \
-            "  osmo-valider-session : valider de nouveau, maintenant"
-    else
-        printf '\033[1;31m%s\033[0m\n' "ATTENTION : session non validee - sans la phrase de /home, tout est EFFACE a l extinction." \
-            "  osmo-valider-session : ecrit la session telle qu elle est maintenant (pas ce qui suit)"
-    fi
 fi
 PROFIL
 chmod 0644 "$ROOTFS/etc/profile.d/98-osmo-session.sh"
