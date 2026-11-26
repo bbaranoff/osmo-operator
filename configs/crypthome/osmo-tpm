@@ -467,6 +467,8 @@ case "${1:-etat}" in
         [ "$TEST" = 1 ] || printf '%s\n' "$PHRASE" | $EMP prendre --phrase-stdin >/dev/null 2>&1
         PHRASE=""
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
+        # the alert of this boot (« the TPM does not recognise it ») has its answer
+        [ "$TEST" = 1 ] || $EMP alerte-tpm-levee 2>/dev/null
         vert "scelle : ce demarrage est la reference (PCR $PCR_CHAINE), pour le disque tel qu il est."
         [ "$C_MODE" = secret ] || echo "code maintenant : $(totp "$C_GRAINE")"
         ;;

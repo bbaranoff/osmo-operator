@@ -2567,6 +2567,36 @@ def main():
         return tete_alerte() or rc
     if cmd == "boite-etendre" and len(sys.argv) > 2:
         return tete_etendre(sys.argv[2])
+    if cmd == "alerte-tpm-levee":
+        # osmo-tpm sceller, done by the owner with the passphrase: this boot
+        # is now the reference, so the alert « the TPM does not recognise this
+        # boot » has had its answer. Its block leaves the flag - and only it:
+        # any other alert of this boot stays. (Left there, it kept the
+        # shutdown's control and the alarm's test silent for the session.)
+        if not os.path.exists("/run/osmo-tpm/reconnu"):
+            return 1
+        try:
+            with open(ALERTE) as f:
+                blocs = [b for b in f.read().split("\n\n") if b.strip()]
+        except OSError:
+            return 0
+        reste = [b for b in blocs if "TPM NE RECONNAIT PAS" not in b.splitlines()[0]]
+        try:
+            if reste:
+                with open(ALERTE, "w") as f:
+                    f.write("\n\n".join(reste) + "\n\n")
+            else:
+                os.unlink(ALERTE)
+                try:
+                    os.unlink(SANS_HOME)
+                except OSError:
+                    pass
+        except OSError:
+            return 1
+        if len(reste) != len(blocs):
+            dire("alerte du TPM levee : ce demarrage est maintenant la reference%s" % (
+                "" if not reste else " (%d autre(s) alerte(s) restent)" % len(reste)))
+        return 0
     if cmd == "boite-tete":
         return tete_controler()
     if cmd == "boite-ancrer":
