@@ -88,16 +88,22 @@ FOND_FAIT = "/run/osmo-empreinte-complet"
 # taken - without the key it would be left UNSEALED, and the next boot would
 # cry that it is not the one this machine sealed
 CLE_RAM = os.environ.get("OSMO_EMPREINTE_CLE_RAM", "/run/osmo-empreinte-cle")
-# THE SIGNATURE. The totals are SIGNED (Ed25519). The private key is on the
-# box, ENCRYPTED WITH THE /home PASSPHRASE: it only exists, in memory, while
-# that passphrase is being typed for a write. Nothing a session holds - not
+# THE SIGNATURE. The totals are SIGNED (Ed25519). The private key is IN THE
+# /home VOLUME, ENCRYPTED WITH THE /home PASSPHRASE (scrypt, 1 GiB of memory
+# per try - the cost of the volume's own key slot): it only exists, in memory,
+# while that passphrase is being typed for a write. It is NOT on the box any
+# more: that partition is in clear, and a key encrypted there with PBKDF2 let
+# whoever holds the disk try /home passphrases far cheaper than through LUKS
+# (a key left on the box by an earlier version moves at the next signature). Nothing a session holds - not
 # root, not an open /home - can sign: a disk written to without the
 # passphrase cannot get a valid fingerprint, and the boot says so BEFORE the
 # passphrase is asked. The public key is also pinned in the encrypted /home
 # (and, option, in the TPM): a key pair swapped on the box is denounced.
 SIG = os.path.join(BOITE, "empreinte.sig")
 SIG_PUB = os.path.join(BOITE, "signature.pub")
-SIG_CLE = os.path.join(BOITE, "signature.cle")
+SIG_CLE = os.path.join(BOITE, "signature.cle")        # earlier versions only: PBKDF2, in clear partition
+SIG_CLE_HOME = ".osmo-diffs/signature.cle"            # in the /home volume
+MAGIE = b"OSMOSIG2"
 PUB_HOME = ".osmo-diffs/signature.pub"
 # THE ANCHOR (TPM 2.0, « osmo-empreinte ancrer »). The SHA-256 of the public
 # key is written in a TPM NV index anybody can READ but only the TPM's owner
@@ -381,12 +387,140 @@ def phrase_luks(phrase):
                           input=phrase, capture_output=True).returncode == 0
 
 
+def _crypthome(nom):
+    try:
+        with open("/etc/default/crypthome") as f:
+            for l in f:
+                if l.startswith(nom + "="):
+                    return l.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+def _volume(ecrire=False):
+    """(directory, done()) : the /home VOLUME itself (never its RAM layer),
+    read-only or read-write. Its usual mount; when that one is already gone
+    (a shutdown) the open LUKS mapping is mounted aside for the time needed.
+    (None, done) when the volume cannot be reached."""
+    rien = (None, lambda: None)
+    if TEST:
+        return HOME_DISQUE, (lambda: None)
+    if os.path.ismount(HOME_DISQUE):
+        if not ecrire:
+            return HOME_DISQUE, (lambda: None)
+        if subprocess.run(["mount", "-o", "remount,rw", HOME_DISQUE], capture_output=True).returncode != 0:
+            return rien
+
+        def ro():
+            os.sync()
+            for _ in range(5):
+                if subprocess.run(["mount", "-o", "remount,ro", HOME_DISQUE], capture_output=True).returncode == 0:
+                    break
+                time.sleep(1)
+        return HOME_DISQUE, ro
+    nom = _crypthome("CRYPTHOME_NAME")
+    dev = "/dev/mapper/" + nom
+    if not nom or not os.path.exists(dev):
+        return rien
+    import tempfile
+    d = tempfile.mkdtemp(prefix="osmo-empreinte-", dir="/run")
+    if subprocess.run(["mount", "-o", "rw" if ecrire else "ro", dev, d], capture_output=True).returncode != 0:
+        os.rmdir(d)
+        return rien
+
+    def demonter():
+        os.sync()
+        subprocess.run(["umount", d], capture_output=True)
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
+    return d, demonter
+
+
+def cle_volume_lire():
+    """The encrypted signing key as the /home volume holds it; None when there
+    is none there, or no volume at hand."""
+    d, fin = _volume()
+    if d is None:
+        return None
+    try:
+        with open(os.path.join(d, SIG_CLE_HOME), "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+    finally:
+        fin()
+
+
+def cle_volume_ecrire(blob):
+    d, fin = _volume(ecrire=True)
+    if d is None:
+        return False
+    try:
+        cible = os.path.join(d, SIG_CLE_HOME)
+        os.makedirs(os.path.dirname(cible), mode=0o700, exist_ok=True)
+        with open(os.open(cible + ".nouv", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
+            f.write(blob)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(cible + ".nouv", cible)
+        return True
+    except OSError:
+        return False
+    finally:
+        fin()
+
+
+def _kek(phrase, sel):
+    """The key that encrypts the signing key: scrypt, 1 GiB of memory a try
+    (what the LUKS2 key slot of /home costs with argon2id)."""
+    return hashlib.scrypt(phrase, salt=b"osmo-empreinte signature\0" + sel,
+                          n=2 ** (14 if TEST else 20), r=8, p=1, maxmem=2 ** 31 - 1, dklen=32)
+
+
+def sceller_cle(pem, phrase):
+    sel = os.urandom(16)
+    return MAGIE + sel + chiffrer_detail(pem, _kek(phrase, sel))
+
+
+def desceller_cle(blob, phrase):
+    try:
+        pem = dechiffrer_detail(blob[24:], _kek(phrase, blob[8:24]))
+    except (ValueError, OSError, MemoryError):
+        return None
+    return pem if pem.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+
+
+def oter_cle_boite():
+    """The key an earlier version left on the box (box read-write): written
+    over, then removed. On an SSD the old blocks may outlive this - changing
+    the /home passphrase is what really closes it."""
+    try:
+        n = os.path.getsize(SIG_CLE)
+        os.chmod(SIG_CLE, 0o600)
+        with open(SIG_CLE, "r+b") as f:
+            f.write(os.urandom(n))
+            f.flush()
+            os.fsync(f.fileno())
+        os.unlink(SIG_CLE)
+    except OSError:
+        pass
+
+
 def cle_privee(phrase):
-    """The signing key (PEM), from the /home passphrase; None when it is wrong.
-    No key pair yet: made now - only for a passphrase /home accepts."""
+    """The signing key (PEM), from the /home passphrase; None when it is wrong
+    or the key cannot be reached. No key pair yet: made now - only for a
+    passphrase /home accepts."""
+    blob = cle_volume_lire()
+    if blob and blob.startswith(MAGIE):
+        return desceller_cle(blob, phrase)
     if os.path.exists(SIG_CLE):
         r = _ossl(["enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-in", SIG_CLE, "-pass", "stdin"], phrase + b"\n")
         return r.stdout if r.returncode == 0 and r.stdout.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+    if os.path.exists(SIG_PUB):
+        return None                           # a key pair exists and its private half is out of reach: never a new one
     if not phrase_luks(phrase):
         return None
     r = _ossl(["genpkey", "-algorithm", "ed25519"])
@@ -406,20 +540,24 @@ def poser_signature(pem, phrase):
         with open(SIG + ".nouv", "wb") as f:
             f.write(r.stdout)
         os.replace(SIG + ".nouv", SIG)
-        if not os.path.exists(SIG_CLE):
+        nouvelle = not os.path.exists(SIG_PUB)
+        blob = cle_volume_lire()
+        if not (blob and blob.startswith(MAGIE)):
+            # the private key goes INTO the /home volume (a new pair, or one an
+            # earlier version kept on the box, which then leaves it)
+            if cle_volume_ecrire(sceller_cle(pem, phrase)):
+                if os.path.exists(SIG_CLE):
+                    oter_cle_boite()
+            elif nouvelle:
+                return False                  # nowhere to keep the key
+        if nouvelle:
             os.lseek(k, 0, os.SEEK_SET)
             pub = _ossl(["pkey", "-in", "/proc/self/fd/%d" % k, "-pubout"], fds=(k,))
-            os.lseek(k, 0, os.SEEK_SET)
-            enc = _ossl(["enc", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-salt", "-in", "/proc/self/fd/%d" % k,
-                         "-pass", "stdin"], phrase + b"\n", fds=(k,))
-            if pub.returncode != 0 or enc.returncode != 0:
+            if pub.returncode != 0:
                 return False
-            with open(os.open(SIG_CLE + ".nouv", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
-                f.write(enc.stdout)
             with open(SIG_PUB + ".nouv", "wb") as f:
                 f.write(pub.stdout)
             os.replace(SIG_PUB + ".nouv", SIG_PUB)
-            os.replace(SIG_CLE + ".nouv", SIG_CLE)
             epingler(pub.stdout)
         try:
             os.unlink(SCEAU)                  # the HMAC seal of earlier versions
@@ -555,7 +693,7 @@ def ancrer(phrase):
         dire("pas de TPM 2.0 utilisable (/dev/tpmrm0, tpm2-tools)")
         return 1
     val = pub_empreinte()
-    if val is None or not os.path.exists(SIG_CLE):
+    if val is None or not os.path.exists(SIG_PUB):
         dire("pas encore de signature : valider une session d abord (osmo-valider-session)")
         return 1
     if not phrase or cle_privee(phrase) is None:
@@ -593,22 +731,15 @@ def phrase_changee(ancienne, nouvelle):
         if r is None or r.returncode != 0:
             dire("le proprietaire du TPM n a pas pu changer de secret : rien n est change")
             return 1
-    k = _memfd(pem)
-    try:
-        enc = _ossl(["enc", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-salt", "-in", "/proc/self/fd/%d" % k,
-                     "-pass", "stdin"], nouvelle + b"\n", fds=(k,))
-    finally:
-        os.close(k)
-    if enc.returncode != 0 or not boite_rw(True):
-        dire("cle de signature NON rechiffree (le TPM, lui, suit deja la nouvelle phrase)")
+    if not cle_volume_ecrire(sceller_cle(pem, nouvelle)):
+        dire("cle de signature NON rechiffree : le volume /home est hors d atteinte (le TPM, lui, suit deja la nouvelle phrase)")
         return 1
-    try:
-        with open(os.open(SIG_CLE + ".nouv", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
-            f.write(enc.stdout)
-        os.replace(SIG_CLE + ".nouv", SIG_CLE)
-        os.sync()
-    finally:
-        boite_rw(False)
+    if os.path.exists(SIG_CLE) and boite_rw(True):
+        try:
+            oter_cle_boite()
+            os.sync()
+        finally:
+            boite_rw(False)
     dire("la signature et le TPM suivent la nouvelle phrase de /home")
     return 0
 

@@ -187,14 +187,14 @@ condition, cela se voit ici avant d'être écrit.
 | Changements de la session (`/`, `/home`) | RAM | root, session ouverte | idem ; perdus sans phrase home |
 | Les mêmes, points de contrôle et sessions non validées | boîte noire (`attente/`) | **phrase boîte** | personne |
 | État de root (assistant, jetons, historique) | `/home/.root` | phrase home | phrase home |
-| Le même, avant `root-nettoyer` | disque système, retours arrière | **rien** (disque en main) | phrase home |
+| Le même, avant le nettoyage (fait d'office à la première écriture validée) | disque système, retours arrière | **rien** (disque en main) | phrase home |
 | Le même, diffs déjà enregistrés | boîte noire (journal) | **phrase boîte** | personne |
 | Nos journaux | `/home/.log` (monté sur `/opt/log`) | phrase home | phrase home |
 | Journaux vivants d'une exécution | RAM (`$LOG_DIR`) | root, session ouverte | idem |
 | Journal des sessions (dates, comptes, totaux) | disque système | rien | phrase home |
 | Disque système (`/etc`, `/var`, `/opt`, `/boot`) | en clair | rien | phrase home, sinon détecté (empreinte signée) |
 | Secrets du banc (`hlr.db`, clé du webui open5gs) | disque système | **rien** | idem |
-| Clé privée de signature de l'empreinte | boîte, chiffrée (PBKDF2, 600 000) | phrase home | phrase home |
+| Clé privée de signature de l'empreinte | `/home` (LUKS2), chiffrée en plus par la phrase (scrypt, 1 Gio) | phrase home | phrase home |
 | Clé publique de signature | boîte ; ancre TPM (NV `0x1800A50`) ; `/home` | tous | phrase home (secret propriétaire du TPM) |
 | Empreinte : totaux et détail de `/` | boîte, en clair, signée | rien | phrase home |
 | Empreinte : détail de `/home` | boîte, chiffré | phrase home | phrase home |
@@ -206,17 +206,20 @@ condition, cela se voit ici avant d'être écrit.
 
 **Fuites de périmètre connues** (deux conditions pour une même donnée) :
 
-1. *La phrase home se devine hors ligne au coût de PBKDF2, pas d'argon2id.* La clé de
-   signature est chiffrée avec elle sur la partition de la boîte, en clair : qui a le
-   disque teste des phrases contre ce fichier (600 000 tours) sans passer par LUKS
-   (1 Gio de mémoire par essai). Le secret propriétaire du TPM en est dérivé aussi
-   (300 000 tours), mais ne se teste qu'en ligne.
+1. *La phrase home se devinait hors ligne au coût de PBKDF2, pas d'argon2id* : la clé de
+   signature était chiffrée avec elle sur la partition de la boîte, en clair. **Corrigé** :
+   la clé vit dans le volume `/home`, sous une dérivation à 1 Gio par essai ; celle de la
+   boîte est écrasée à la signature suivante. Sur un SSD l'ancien fichier peut survivre :
+   seul un changement de la phrase de `/home` ferme vraiment ce point. Reste le secret
+   propriétaire du TPM, dérivé de la phrase (PBKDF2, 300 000 tours) : il ne se teste
+   qu'en ligne, contre le TPM.
 2. *La boîte lit ce que LUKS protège.* Points de contrôle et sessions non validées
    contiennent la couche RAM de `/home` — donc aussi `/home/.root` et `/home/.log` —
    sous la seule phrase de la boîte.
 3. *Root, `/home` ouvert, a la graine du démarrage mesuré* (copie gardée pour resceller).
-4. *L'état de root d'avant le nettoyage* reste dans la boîte, et sur le disque jusqu'à
-   `root-nettoyer`.
+4. *L'état de root d'avant le nettoyage* reste dans la boîte ; sur le disque il est
+   retiré d'office (et des retours arrière) à la première écriture validée qui suit sa
+   copie dans le volume. Tout secret qui y a vécu est à tenir pour compromis et à changer.
 5. *Les secrets du banc sont en clair* dans `/opt` et `/etc`.
 
 ## 5. Mesures (un poste, NVMe, 4 cœurs, 18 Go de système)

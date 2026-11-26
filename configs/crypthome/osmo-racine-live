@@ -580,9 +580,58 @@ root_nettoie() {
     done
 }
 
+# root_manque : what the disk's /root holds that the copy in the volume lacks
+root_manque() {
+    local e m=""
+    for e in "$BAS"/root/* "$BAS"/root/.[!.]*; do
+        [ -e "$e" ] || [ -L "$e" ] || continue
+        [ -e "$HOME_BAS/.root/${e##*/}" ] || [ -L "$HOME_BAS/.root/${e##*/}" ] || m="$m ${e##*/}"
+    done
+    printf '%s' "$m"
+}
+# root_a_nettoyer : the disk's /root still holds something the image did not put
+root_a_nettoyer() {
+    local e g garder
+    for e in "$BAS"/root/* "$BAS"/root/.[!.]*; do
+        [ -e "$e" ] || [ -L "$e" ] || continue
+        garder=0
+        for g in $ROOT_IMAGE; do case "$g" in "${e##*/}"|"${e##*/}"/*) garder=1; break ;; esac; done
+        [ "$garder" = 1 ] || return 0
+    done
+    return 1
+}
+# root_nettoyer_faire : the disk's /root and the undo snapshots, cleaned (the
+# passphrase has been given: PHRASE). The fingerprint is the caller's.
+root_nettoyer_faire() {
+    remonter_rw "$BAS" || { trace "root-nettoyer : remontage en ecriture de $BAS impossible"; return 1; }
+    NB_OTES=0
+    root_nettoie "$BAS/root" ""
+    local r
+    for r in "$BAS"/.osmo-retour/*/files/root; do
+        if [ -d "$r" ]; then root_nettoie "$r" ""; fi
+    done
+    sync
+    # the freed blocks handed back to the SSD: deleted is not erased
+    fstrim "$BAS" >/dev/null 2>&1
+    remonter_ro "$BAS"
+    trace "root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair"
+    if [ -x /usr/local/sbin/osmo-diffs ]; then
+        echo "osmo-racine-live root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair" \
+            | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
+    fi
+    return 0
+}
+
 EMPREINTE=/usr/local/sbin/osmo-empreinte
 empreinte_prendre() {
     [ -x "$EMPREINTE" ] || return 0
+    # TWO ROOTS, the migration: as soon as a write made with the passphrase
+    # has put root's state INTO the volume, what the disk still holds of it in
+    # clear is removed - nobody has to think of it
+    if [ -n "$PHRASE" ] && mountpoint -q /root 2>/dev/null && [ -d "$HOME_BAS/.root" ] \
+            && root_a_nettoyer && [ -z "$(root_manque)" ]; then
+        root_nettoyer_faire
+    fi
     printf '%s\n' "$PHRASE" | sans_int "$EMPREINTE" prendre --phrase-stdin >> "$TRACE" 2>&1 \
         || trace "empreinte du disque NON prise : le prochain demarrage criera"
     # measured boot (option): the TPM's object, sealed again for this disk
@@ -1956,11 +2005,7 @@ EOF
             rouge "la copie de /root n est pas encore SUR le volume chiffre : valider d abord (osmo-valider-session --maintenant)" >&2; exit 1
         fi
         # nothing is removed that the volume does not hold
-        _manque=""
-        for _e in "$BAS"/root/* "$BAS"/root/.[!.]*; do
-            [ -e "$_e" ] || [ -L "$_e" ] || continue
-            [ -e "$HOME_BAS/.root/${_e##*/}" ] || [ -L "$HOME_BAS/.root/${_e##*/}" ] || _manque="$_manque ${_e##*/}"
-        done
+        _manque="$(root_manque)"
         if [ -n "$_manque" ]; then
             rouge "absents de la copie chiffree :$_manque - rien n est efface (valider la session, puis recommencer)" >&2; exit 1
         fi
@@ -1974,21 +2019,7 @@ EOF
         fi
         PHRASE="$p"; p=""
         trap '' INT HUP QUIT
-        remonter_rw "$BAS" || { rouge "remontage en ecriture de $BAS impossible" >&2; exit 1; }
-        NB_OTES=0
-        root_nettoie "$BAS/root" ""
-        for _r in "$BAS"/.osmo-retour/*/files/root; do
-            if [ -d "$_r" ]; then root_nettoie "$_r" ""; fi
-        done
-        sync
-        # the freed blocks handed back to the SSD: deleted is not erased
-        fstrim "$BAS" >/dev/null 2>&1
-        remonter_ro "$BAS"
-        trace "root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair"
-        if [ -x /usr/local/sbin/osmo-diffs ]; then
-            echo "osmo-racine-live root-nettoyer : $NB_OTES chemin(s) de /root retires du disque en clair" \
-                | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
-        fi
+        root_nettoyer_faire || { rouge "rien n est efface" >&2; exit 1; }
         empreinte_prendre
         journal_disque
         vert "$NB_OTES chemin(s) retires du /root du disque. Les jetons deja exposes restent a renouveler."
