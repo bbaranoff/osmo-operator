@@ -62,6 +62,9 @@ if [ -n "$OWNER" ] && id -u "$OWNER" >/dev/null 2>&1; then
     pkill -KILL -u "$OWNER" >/dev/null 2>&1 || true
 fi
 
+# the kept copy of the mounts (osmo-garde.service) holds the volume too
+systemctl stop osmo-garde.service >/dev/null 2>&1 || true
+
 if crypthome_monte && ! umount "$MOUNT"; then
     echo "lock-home: $MOUNT occupe - processus restants :" >&2
     fuser -vm "$MOUNT" 2>&1 | head -20 >&2

@@ -1,0 +1,104 @@
+#!/usr/bin/python3
+# osmo-fin-veille - desktop session (autostart): the RED WARNING « session NON
+# validee » is shown BEFORE A REBOOT OR A SHUTDOWN, not at login.
+#
+# On an installed bench (/ in RAM, osmo-racine-live) a session is kept only
+# with the /home passphrase. Two ways to switch the machine off, two holds:
+#
+#   systemctl reboot / poweroff, reboot, shutdown, the power key
+#       logind is asked to WAIT (a « delay » inhibitor, InhibitDelayMaxSec=300
+#       in /etc/systemd/logind.conf.d/osmo-fin.conf). When the shutdown is
+#       announced (PrepareForShutdown) the desktop is still there: the warning
+#       is shown (osmo-valider-session --avant-fin). « Valider maintenant »:
+#       the /home passphrase, and the session is written during the shutdown;
+#       otherwise the question comes once more on the text console.
+#
+#   the GNOME menu (« Eteindre », « Redemarrer »)
+#       GNOME closes the session BEFORE it asks logind: no dialog of ours can
+#       be shown at that point. The session manager is told instead that the
+#       session is not validated: GNOME's own confirmation lists it, in words,
+#       with « Annuler ». Then the question on the text console, as before.
+#
+# The launcher « Fin de session » (osmo-valider-session --fin) has already
+# asked: it leaves $XDG_RUNTIME_DIR/osmo-fin-decidee and nothing is shown.
+import os
+import subprocess
+import sys
+
+import gi
+from gi.repository import Gio, GLib
+
+VALIDER = "/usr/local/bin/osmo-valider-session"
+DECIDEE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid()), "osmo-fin-decidee")
+RAISON = "Session NON validee : sans la phrase de /home, tout ce qu elle a ecrit sera EFFACE"
+verrou = None          # the fd of logind's delay inhibitor
+
+
+def live():
+    return os.path.ismount("/media/root-ro")
+
+
+def prendre(systeme):
+    """logind waits for us before a shutdown (at most InhibitDelayMaxSec)."""
+    global verrou
+    if verrou is not None:
+        return
+    try:
+        ret, fds = systeme.call_with_unix_fd_list_sync(
+            "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", "Inhibit",
+            GLib.Variant("(ssss)", ("shutdown", "osmo-operator", RAISON, "delay")),
+            GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE, -1, None, None)
+        verrou = fds.get(ret.unpack()[0])
+    except GLib.Error as e:
+        print("osmo-fin-veille : logind :", e.message, file=sys.stderr)
+
+
+def lacher():
+    global verrou
+    if verrou is not None:
+        try:
+            os.close(verrou)
+        except OSError:
+            pass
+        verrou = None
+
+
+def extinction(systeme, _s, _p, _i, _n, params, _d):
+    if not params.unpack()[0]:
+        prendre(systeme)                     # a shutdown given up: hold again
+        return
+    try:
+        if not os.path.exists(DECIDEE):
+            # at most 280 s: logind does not wait longer than 300
+            subprocess.run([VALIDER, "--avant-fin"], timeout=280)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    lacher()
+
+
+def main():
+    if not live() or not os.access(VALIDER, os.X_OK):
+        return 0
+    try:
+        os.unlink(DECIDEE)
+    except OSError:
+        pass
+    systeme = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    prendre(systeme)
+    systeme.signal_subscribe("org.freedesktop.login1", "org.freedesktop.login1.Manager", "PrepareForShutdown",
+                             "/org/freedesktop/login1", None, Gio.DBusSignalFlags.NONE, extinction, None)
+    # the GNOME menu: said in GNOME's own confirmation (1 = logout / shutdown);
+    # the inhibitor lasts as long as this connection
+    try:
+        session = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        session.call_sync("org.gnome.SessionManager", "/org/gnome/SessionManager", "org.gnome.SessionManager",
+                          "Inhibit", GLib.Variant("(susu)", ("osmo-valider-session", 0, RAISON, 1)),
+                          GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, -1, None)
+    except GLib.Error as e:
+        print("osmo-fin-veille : gnome-session :", e.message, file=sys.stderr)
+    GLib.MainLoop().run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

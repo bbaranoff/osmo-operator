@@ -26,9 +26,12 @@
 #                                     priority: the complete control
 #   osmo-empreinte home               unlock-home, the volume just opened:
 #                                     /home against its total
-#   osmo-empreinte sceau              once /home is open: the totals on the
-#                                     box are the ones that were sealed
-#   osmo-empreinte rappel             desktop: the warning as a dialog
+#   osmo-empreinte sceau              unlock-home, the volume just opened: the
+#                                     totals on the box are the ones that were
+#                                     sealed (red on the console otherwise)
+#   osmo-empreinte rappel             desktop: only what the complete control
+#                                     found after boot (the rest is said at
+#                                     boot, on the console, never at login)
 #
 # TWO CONTROLS. The fast one (2-3 s, every boot, blocking) compares what the
 # file system says of each file: a file replaced or edited changes its inode
@@ -69,6 +72,11 @@ CLE = ".osmo-diffs/sceau"
 ALERTE = os.environ.get("OSMO_EMPREINTE_ALERTE", "/run/osmo-alerte")
 SANS_HOME = os.environ.get("OSMO_EMPREINTE_SANS_HOME", "/run/osmo-sans-home")
 FOND_FAIT = "/run/osmo-empreinte-complet"
+# the seal's key, kept in RAM (root only) from the moment /home is open: at
+# shutdown the mounts of /home may already be gone when the fingerprint is
+# taken - without the key it would be left UNSEALED, and the next boot would
+# cry that it is not the one this machine sealed
+CLE_RAM = os.environ.get("OSMO_EMPREINTE_CLE_RAM", "/run/osmo-empreinte-cle")
 TEST = os.environ.get("OSMO_DIFFS_SANS_MONTAGE") == "1"
 # never part of the fingerprint: the journal of a commit, the way back, the
 # session's own log (written to the disk outside a commit, on purpose)
@@ -195,11 +203,13 @@ def boite_rw(oui):
 
 def cle_sceau(creer=False):
     """The seal's key, from the encrypted /home (None when /home is closed)."""
-    for base in (HOME_DISQUE, "/home"):
+    for chemin in (os.path.join(HOME_DISQUE, CLE), os.path.join("/home", CLE), CLE_RAM):
         try:
-            with open(os.path.join(base, CLE), "rb") as f:
+            with open(chemin, "rb") as f:
                 k = f.read().strip()
             if len(k) >= 32:
+                if chemin != CLE_RAM:
+                    garder_cle(k)
                 return k
         except OSError:
             pass
@@ -216,12 +226,21 @@ def cle_sceau(creer=False):
             f.write(k + b"\n")
             f.flush()
             os.fsync(f.fileno())
+        garder_cle(k)
     except OSError:
         k = None
     finally:
         if rw and not TEST:
             subprocess.run(["mount", "-o", "remount,ro", HOME_DISQUE], capture_output=True)
     return k
+
+
+def garder_cle(k):
+    try:
+        with open(os.open(CLE_RAM, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+            f.write(k + b"\n")
+    except OSError:
+        pass
 
 
 def signer(cle):
@@ -338,6 +357,8 @@ def prendre():
         os.sync()
     finally:
         boite_rw(False)
+    if not cle:
+        dire("EMPREINTE NON SCELLEE : la cle du sceau (/home) est hors d atteinte - le prochain demarrage le dira")
     for nom in pris:
         dire("%-6s sha256 %s  (%d entrees)" % (nom, tot[nom]["meta"], tot[nom]["entrees"]))
     dire("empreinte prise : %d fichier(s) relu(s), %.0f s%s" % (
@@ -596,12 +617,28 @@ def sceau():
         attendu = ""
     if attendu and hmac.compare_digest(attendu, signer(cle)):
         return 0
+    try:
+        with open(ALERTE) as f:
+            if "N EST PAS CELLE QUE CETTE MACHINE A SCELLEE" in f.read():
+                return 3                      # already said at this boot
+    except OSError:
+        pass
     txt = alerter("L EMPREINTE DE LA BOITE NOIRE N EST PAS CELLE QUE CETTE MACHINE A SCELLEE",
                   [("MODIFIE", TOTAUX.lstrip("/"), "refaite hors session : le controle du demarrage a compare le disque a une empreinte qui n est pas la sienne")], {})
     dire(txt.splitlines()[0])
+    # on the console, at boot, before any session (unlock-home has just opened
+    # the volume: the key is one of its files, it cannot be said earlier)
     try:
-        subprocess.run(["wall"], input="osmo-empreinte : " + txt, text=True, timeout=10, capture_output=True)
-    except (OSError, subprocess.TimeoutExpired):
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+        l = ["", "\a" + ROUGE + "#" * 76, "   !!!  L EMPREINTE DE LA BOITE NOIRE N EST PAS CELLE QUE CETTE MACHINE A SCELLEE  !!!",
+             "   %s a ete refaite sans la cle de /home : hors session, ou a une" % TOTAUX,
+             "   extinction ou /home etait deja ferme (voir /var/log/osmo-session.log).",
+             "   Le controle du disque de ce demarrage a donc compare a une empreinte non prouvee.",
+             "   Si c est toi : sudo osmo-empreinte prendre   -   Detail : %s" % ALERTE, "#" * 76 + FIN, ""]
+        os.write(c, "\r\n".join(l).encode())
+        os.close(c)
+        time.sleep(12)
+    except OSError:
         pass
     return 3
 
@@ -620,11 +657,17 @@ def rappel():
                             + f.read().strip() + "\n\nNouvel essai des que le reseau repond ; a la main : sudo osmo-diffs envoyer"])
     except OSError:
         pass
+    # what the boot found was said at boot, on the console, before /home was
+    # opened: the desktop only shows what the complete control found since
     try:
         with open(ALERTE) as f:
             txt = f.read()
     except OSError:
         return 0
+    blocs = [b for b in txt.split("\n\n") if "(controle complet)" in b]
+    if not blocs:
+        return 0
+    txt = "\n\n".join(blocs)
     corps = ('<span foreground="red" weight="bold" size="x-large">DISQUE SYSTEME MODIFIE HORS SESSION</span>\n\n'
              '<span foreground="red">Le systeme n est pas celui que la derniere session a laisse.\n'
              'Quelqu un a pu ecrire sur le disque machine eteinte.</span>\n\n<tt>%s</tt>\n\n'

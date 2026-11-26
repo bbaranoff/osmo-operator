@@ -471,6 +471,9 @@ monter_home_live() {
     # the volume against its fingerprint (total SHA-256 on the black box):
     # written to outside a session? A red warning, and a record in the box.
     [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte home 2>&1 | while read -r l; do log "$l"; done
+    # and the fingerprint itself against its seal (the key is on this volume):
+    # here, on the console, before any session opens - not on the desktop
+    [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte sceau 2>&1 | while read -r l; do log "$l"; done
     if ! mountpoint -q "$HOME_RW"; then
         mount -t tmpfs -o mode=0755,size=50% tmpfs "$HOME_RW" || { umount "$HOME_BAS"; return 1; }
     fi
@@ -482,6 +485,9 @@ monter_home_live() {
     mount -t overlay overlay \
         -o "lowerdir=$HOME_BAS,upperdir=$HOME_RW/overlay,workdir=$HOME_RW/work" "$MOUNT" \
         || { umount "$HOME_RW" "$HOME_BAS"; return 1; }
+    # /home opened by hand after boot: the kept copy of the mounts must hold
+    # it too (at boot this unit is not started yet: nothing happens)
+    systemctl try-restart --no-block osmo-garde.service >/dev/null 2>&1 || true
 }
 
 if racine_live; then

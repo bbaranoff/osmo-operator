@@ -19,6 +19,7 @@ operator starts the bench (desktop icon, `launch.sh`, or `systemctl`).
 | `osmo-reglages.service` | settings web page for the Osmocom stack (`tools/osmo-reglages.py`, http://127.0.0.1:8090/) |
 | `osmo-inscription.service` | association of the phones (Network Monitor) with this node, port 8088: invitations and QR code, SIP accounts in Asterisk, Bluetooth line, the bench read from the phone (`tools/osmo-inscription.py`); driven from osmo-gtk, tab « Telephones » |
 | `osmo-fin-session.service` | installed bench: at shutdown the `/home` passphrase writes the session to the disk, otherwise it is wiped (`osmo-racine-live fin`) |
+| `osmo-garde.service` | installed bench: one process holding the mounts of `/home` in its own mount namespace, where `osmo-racine-live fin` runs again when they are gone from the system at shutdown |
 | `osmo-diffs.service` / `osmo-diffs-init.service` | the black box: read-only for everybody, keys and passphrase at the first boot of the installed system |
 | `osmo-empreinte.service` / `osmo-empreinte-fond.service` | the disk against its fingerprint: total SHA-256 of `/` compared at every boot before the `/home` passphrase (red warning when written to outside a session), then the complete control in the background |
 | `osmo-supplements.service` | first boot: installs the supplements chosen in the installer (`tools/osmo-supplements-firstboot.sh`) |

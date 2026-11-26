@@ -143,6 +143,9 @@ install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-va
 install -m 0755 "$_CH_SRC/osmo-flash"             "$ROOTFS/usr/local/bin/osmo-flash"
 install -d "$ROOTFS/usr/local/share/osmo-operator"
 install -m 0644 "$DIR/services/osmo-fin-session.service" "$ROOTFS/etc/systemd/system/osmo-fin-session.service"
+# the kept copy of the mounts of /home: its layers found gone at shutdown
+# (enabled with the rest by osmo-racine-live poser)
+install -m 0644 "$DIR/services/osmo-garde.service" "$ROOTFS/etc/systemd/system/osmo-garde.service"
 # The black box: every change of every session, validated or wiped, one
 # record encrypted with age (public key on the box, private key under the
 # box's own passphrase, different from /home's). A login reminder until it
@@ -165,12 +168,22 @@ OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 RAPPEL
-# the red warning at login, as long as the session is not validated
+# the red warning « session NON validee »: BEFORE A REBOOT OR A SHUTDOWN, not
+# at login. osmo-fin-veille stays in the desktop session and makes logind wait
+# (delay inhibitor, 300 s at most) while the warning is shown.
+install -m 0755 "$_CH_SRC/osmo-fin-veille"        "$ROOTFS/usr/local/bin/osmo-fin-veille"
+install -d "$ROOTFS/etc/systemd/logind.conf.d"
+cat > "$ROOTFS/etc/systemd/logind.conf.d/osmo-fin.conf" <<'LOGIND'
+# osmo-operator: the time logind waits for the « session NON validee » warning
+# (and the /home passphrase) before a reboot or a shutdown - osmo-fin-veille
+[Login]
+InhibitDelayMaxSec=300
+LOGIND
 cat > "$ROOTFS/etc/xdg/autostart/osmo-valider-rappel.desktop" <<'RAPPEL'
 [Desktop Entry]
 Type=Application
-Name=osmo-operator : session non validee
-Exec=/usr/local/bin/osmo-valider-session --rappel
+Name=osmo-operator : session non validee (avant l extinction)
+Exec=/usr/local/bin/osmo-fin-veille
 OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications

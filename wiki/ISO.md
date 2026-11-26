@@ -627,8 +627,18 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   disk, by content). Every step is appended to **`/var/log/osmo-session.log`** on the disk
   (journald is volatile): a write that failed says why at the next boot.
   **No passphrase** (Enter, 60 s, three refusals): the RAM is dropped and a **red warning** is
-  forced on tty1 (Plymouth quit) and held 10 s. A red reminder also shows at login and in
-  every terminal while the session is not validated.
+  forced on tty1 (Plymouth quit) and held 10 s. A red reminder shows in every terminal while
+  the session is not validated. The red dialog **« session NON validee »** is shown **before a
+  reboot or a shutdown, not at login**: `osmo-fin-veille` (desktop autostart) makes logind wait
+  (delay inhibitor, `InhibitDelayMaxSec=300`) when `systemctl reboot/poweroff`, `reboot` or the
+  power key is used - « Valider maintenant » takes the `/home` passphrase and the session is
+  written during the shutdown. From the GNOME menu the session is closed before logind is asked:
+  GNOME's own confirmation lists « session NON validee » instead, then the console question.
+- **The kept copy of the mounts** (`osmo-garde.service`): at shutdown the mounts under `/home`
+  (`/media/home-ro`, `/media/home-rw`) have been found gone before the write - `/home` was then
+  not written. One process keeps them in its own private mount namespace from boot; when the
+  layers are out of reach, `osmo-racine-live fin` (and `valider`, `defaire`) runs again inside
+  it. `/var/log/osmo-session.log` says which mount was missing and whether the copy was used.
 - **« Fin de session »** (launcher, `osmo-valider-session --fin`): « Tout oublier ? » -
   **Yes**: a home-made pseudo-neuralyzer (`osmo-flash --blanc`: a drawn gadget whose bulb
   charges, then the flash; a `flash.gif` in `/usr/local/share/osmo-operator` replaces the
@@ -689,7 +699,10 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   box gets an `alerte` record, and the passphrase is only asked after `OUI` (otherwise the machine
   boots without `/home`). `/home` is compared as soon as it is opened; after the boot a background
   control reads the content of every file again (dates and inodes forged). The totals are sealed
-  with a key kept in the encrypted `/home`. Limits: this runs from the disk it checks - an attacker
+  with a key kept in the encrypted `/home`; the seal is checked by `unlock-home` as soon as the
+  volume is open, in red on the console (never as a desktop dialog: the desktop only repeats what
+  the background control finds after boot). The key is also kept in RAM for the session, so that
+  the fingerprint taken at shutdown is sealed even when `/home` is already out of reach. Limits: this runs from the disk it checks - an attacker
   who also rewrites the checker silences it (only a measured boot closes that). A change you make
   yourself outside a session is such a difference: `sudo osmo-racine-live actualiser` records its
   own, otherwise `sudo osmo-empreinte prendre`.

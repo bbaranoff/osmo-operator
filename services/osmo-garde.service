@@ -1,0 +1,25 @@
+[Unit]
+Description=osmo-operator - copie gardee des montages de la session (/home et ses couches)
+Documentation=file:/usr/local/sbin/osmo-racine-live
+# Only on an installed bench whose / is in RAM (overlayroot).
+ConditionPathIsMountPoint=/media/root-ro
+# ONE PROCESS IN ITS OWN MOUNT NAMESPACE, private: what is unmounted on the
+# system after it started stays mounted for it. At shutdown the mounts under
+# /home (/media/home-ro, /media/home-rw) have been found gone before
+# osmo-fin-session wrote the session - /home was then NOT written. When that
+# happens, « osmo-racine-live fin » runs again inside this namespace (nsenter),
+# where the layers still are.
+# Started AFTER /home is open (it must be in the copy), BEFORE osmo-fin-session:
+# stop order is the reverse, so this process outlives the write.
+# lock-home stops it (the copy would keep the encrypted volume busy);
+# unlock-home run by hand restarts it.
+After=local-fs.target unlock-home.service var-lib-osmo\x2ddiffs.mount osmo-diffs-init.service
+Before=osmo-fin-session.service display-manager.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/unshare --mount --propagation private /usr/bin/sleep infinity
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

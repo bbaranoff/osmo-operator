@@ -691,7 +691,45 @@ actualiser() {
     update-grub >/dev/null 2>&1 || log "update-grub a echoue" >&2
 }
 
+# ── the kept copy of the mounts (osmo-garde.service) ────────────────────────
+# Seen on 2026-11-26: at shutdown the mounts under /home (/media/home-ro,
+# /media/home-rw) were gone BEFORE « fin » ran - /home was not written. Who
+# unmounts them is not known; osmo-garde.service therefore keeps, from boot, a
+# process in its OWN mount namespace (private: an unmount on the system does
+# not reach it). When the layers are out of reach here, the command is run
+# again in that namespace, where they still are.
+garde_pid() {
+    local p
+    p="$(systemctl show -p MainPID --value osmo-garde.service 2>/dev/null)"
+    [ -n "$p" ] && [ "$p" != 0 ] && [ -d "/proc/$p" ] && echo "$p"
+}
+etat_montages() {   # one line: what is mounted of /home and its two layers
+    local m o=""
+    for m in /home "$HOME_BAS" "${HOME_HAUT%/overlay}"; do
+        o="$o $m=$(findmnt -no FSTYPE "$m" 2>/dev/null | head -1 | grep . || echo ABSENT)"
+    done
+    echo "$o"
+}
 case "${1:-etat}" in
+    fin|valider|ecrire|defaire)
+        if [ "$(id -u)" = 0 ] && live && couches_manquantes; then
+            trace "${1} : couches de /home hors d atteinte ici :$(etat_montages)"
+            _g="$(garde_pid)"
+            if [ -z "${OSMO_DANS_GARDE:-}" ] && [ -n "$_g" ] \
+                    && OSMO_DANS_GARDE=1 nsenter -t "$_g" -m "$0" couches-ok 2>/dev/null; then
+                trace "${1} : reprise dans la copie gardee des montages (osmo-garde, pid $_g)"
+                OSMO_DANS_GARDE=1 exec nsenter -t "$_g" -m "$0" "$@"
+            fi
+            trace "${1} : pas de copie gardee utilisable (osmo-garde.service : ${_g:-arrete})"
+        fi
+        ;;
+esac
+
+case "${1:-etat}" in
+    couches-ok)
+        # (internal) are the layers of /home within reach in this namespace?
+        live && ! couches_manquantes
+        ;;
     poser)
         root_requis
         command -v overlayroot-chroot >/dev/null 2>&1 \
@@ -714,7 +752,7 @@ EOF
         rm -f $ANCIENS
         poser_initramfs
         poser_grub_boite
-        systemctl enable osmo-fin-session.service >/dev/null 2>&1 \
+        systemctl enable osmo-fin-session.service osmo-garde.service >/dev/null 2>&1 \
             || log "osmo-fin-session.service non active" >&2
         # the disk against its fingerprint at every boot (osmo-empreinte)
         systemctl enable osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1 \
@@ -1023,7 +1061,7 @@ EOF
             exit 1
         fi
         printf '# /etc/overlayroot.conf - osmo-racine-live retire : / en lecture-ecriture\noverlayroot=""\n' > "$CONF"
-        systemctl disable osmo-fin-session.service osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1
+        systemctl disable osmo-fin-session.service osmo-garde.service osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1
         # shellcheck disable=SC2086
         rm -f "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
         actualiser
