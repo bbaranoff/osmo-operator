@@ -441,9 +441,10 @@ code_tpm() {
 # that is what authorises the writes. THE RAM IS THE OPENING OF FAILURE: no
 # passphrase, a guest root with nothing personal and nothing kept. The system
 # (/) stays in RAM and under the passphrase at shutdown, as ever.
-# ONE QUESTION AFTER THE PASSPHRASE (the default, CRYPTHOME_HOME="demander"):
-#   1, Enter, or no answer   PERSISTANT - /home written to directly;
-#   2                        A ENREGISTRER - /home stays as it is under a RAM
+# ONE QUESTION AFTER THE PASSPHRASE (the default, CRYPTHOME_HOME="demander"),
+# « Persistant ? [oui/non] » :
+#   anything but a no        PERSISTANT - /home written to directly;
+#   n, N, no, No, NO, non    A ENREGISTRER - /home stays as it is under a RAM
 #                            layer; the session's work in it is kept only when
 #                            it is saved (« Enregistrer », or the passphrase at
 #                            shutdown), wiped otherwise.
@@ -464,16 +465,17 @@ choisir_home() {
     elif [ -t 0 ]; then ou=/dev/tty
     else return 0; fi
     {
-        printf '\n\033[1;32m  %s est ouvert.\033[0m Cette session :\n' "$MOUNT"
-        printf '    \033[1m1\033[0m (ou Entree)  PERSISTANT    : ce que tu fais dans %s est ecrit tout de suite sur le disque\n' "$MOUNT"
-        printf '    \033[1m2\033[0m              A ENREGISTRER : %s reste intact ; ton travail n est garde que si tu l enregistres\n' "$MOUNT"
-        printf '                                 (icone disquette, ou ta phrase a l extinction) - sinon il est efface\n'
-        printf '  Ton choix [1/2] (sans reponse dans 20 s : 1) : '
+        printf '\n\033[1;32m  %s est ouvert.\033[0m\n' "$MOUNT"
+        printf '    oui (ou Entree) : PERSISTANT - ce que tu fais dans %s est ecrit tout de suite sur le disque\n' "$MOUNT"
+        printf '    non             : %s reste intact ; ton travail n est garde que si tu l enregistres\n' "$MOUNT"
+        printf '                      (icone disquette, ou ta phrase a l extinction) - sinon il est efface\n'
+        printf '  \033[1mPersistant ? [oui/non]\033[0m (sans reponse dans 20 s : oui) : '
     } > "$ou" 2>/dev/null
-    IFS= read -r -n1 -t 20 c < "$ou" 2>/dev/null || c=""
+    IFS= read -r -t 20 c < "$ou" 2>/dev/null || c=""
     echo > "$ou" 2>/dev/null
+    # only a NO makes it « to be saved »: n, N, no, No, NO (and non)
     case "$c" in
-        2) DIRECT=0; log "choix : $MOUNT A ENREGISTRER (en RAM, ecrit avec la phrase)." ;;
+        n|N|no|No|NO|nO|non|Non|NON) DIRECT=0; log "choix : $MOUNT A ENREGISTRER (en RAM, ecrit avec la phrase)." ;;
         *) DIRECT=1; log "choix : $MOUNT PERSISTANT (ecrit directement)." ;;
     esac
 }

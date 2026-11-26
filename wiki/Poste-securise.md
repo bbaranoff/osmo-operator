@@ -150,8 +150,9 @@ fait.
 ### 3.6 bis L'ouverture normale et l'ouverture d'échec
 
 - **Normale** : la phrase tapée au démarrage ouvre le volume. Une question suit, sur la
-  console : **1 (ou Entrée, ou pas de réponse en 20 s) persistant** — `/home` est monté en
-  écriture directement sur le volume, rien à valider, rien d'effacé ; **2 à enregistrer** —
+  console, « Persistant ? [oui/non] » : **tout sauf un non (Entrée, ou pas de réponse en
+  20 s) : persistant** — `/home` est monté en écriture directement sur le volume, rien à
+  valider, rien d'effacé ; **non (n, N, no, No, NO) : à enregistrer** —
   `/home` reste intact sous une couche RAM, le travail de la session n'y est gardé que s'il
   est enregistré (icône disquette, ou la phrase à l'extinction). Le système (`/`) reste en
   RAM dans les deux cas et s'écrit à l'extinction avec la phrase.
