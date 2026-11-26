@@ -535,7 +535,7 @@ during the copy reproduces the image's spec sheet (`branding/osmo/show.qml`).
 - **Swap, by default** (a bench with none died when its memory filled): **zram**, in RAM and
   compressed (zstd), the size of the RAM, priority 100 - `osmo-zram.service`, on the live key
   too, never touches a disk; and **"osmo-swap"**, priority -10, the overflow:
-  `crypthome-postinstall` puts it in `/etc/crypttab` with `/dev/urandom` as key - a new key
+  `osmo-swap-raccorder`, run at EVERY install (secured bench ticked or not), puts it in `/etc/crypttab` with `/dev/urandom` as key - a new key
   at every boot, never written, `mkswap` redone each time: unreadable after a power cut,
   same perimeter as the RAM, and outside `/home` (swapping never eats the « Remettre à
   zéro » snapshot). Wired only if the partition is unique (GPT label) and empty (no file

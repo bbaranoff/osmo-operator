@@ -35,39 +35,11 @@ MOUNT=/home
 log() { echo "crypthome-postinstall: $*"; }
 
 # ── LE SWAP DE SECOURS, CHIFFRE A CLE JETABLE ───────────────────────────────
-# partition.conf cree « osmo-swap », non formatee. Elle devient un swap chiffre
-# avec une cle ALEATOIRE a chaque demarrage (/dev/urandom, jamais ecrite) :
-# mkswap refait a chaque fois, illisible apres une coupure - le meme perimetre
-# que la RAM. Priorite -10 : le zram (osmo-zram, priorite 100) sert d abord.
-# Fait avant tout le reste : un swap, meme sans /home chiffre.
-# GARDE-FOUS : une cle aleatoire et un mkswap a chaque demarrage EFFACENT la
-# partition visee. Elle doit donc etre UNIQUE (etiquette GPT osmo-swap) et
-# VIDE (aucune signature de systeme de fichiers, pas de LUKS) ; elle est
-# designee par son PARTUUID, qui ne peut pas glisser vers un autre disque.
-CRYPTTAB="${OSMO_SWAP_CRYPTTAB:-/etc/crypttab}"
-FSTAB="${OSMO_SWAP_FSTAB:-/etc/fstab}"
-raccorder_swap() {
-    local devs dev puuid type
-    mapfile -t devs < <(blkid -t PARTLABEL=osmo-swap -o device 2>/dev/null)
-    [ "${#devs[@]}" -gt 0 ] || { log "pas de partition osmo-swap : seul le zram servira"; return 0; }
-    [ "${#devs[@]}" -eq 1 ] || { log "PLUSIEURS partitions osmo-swap (${devs[*]}) : swap disque NON raccorde"; return 0; }
-    dev="${devs[0]}"
-    type="$(blkid -p -o value -s TYPE "$dev" 2>/dev/null)"
-    if [ -n "$type" ] && [ "$type" != swap ]; then
-        log "osmo-swap ($dev) porte un systeme de fichiers ($type) : swap disque NON raccorde, rien n est efface"
-        return 0
-    fi
-    puuid="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null)"
-    [ -n "$puuid" ] || { log "osmo-swap ($dev) sans PARTUUID : swap disque NON raccorde"; return 0; }
-    if ! grep -qE '^[[:space:]]*osmo-swap[[:space:]]' "$CRYPTTAB" 2>/dev/null; then
-        printf 'osmo-swap PARTUUID=%s /dev/urandom swap,plain,cipher=aes-xts-plain64,size=512\n' "$puuid" >> "$CRYPTTAB"
-    fi
-    if ! grep -qE '^[[:space:]]*/dev/mapper/osmo-swap[[:space:]]' "$FSTAB" 2>/dev/null; then
-        printf '/dev/mapper/osmo-swap none swap sw,pri=-10 0 0\n' >> "$FSTAB"
-    fi
-    log "swap disque : $dev (PARTUUID $puuid), chiffre a cle aleatoire a chaque demarrage, priorite -10"
-}
-raccorder_swap
+# Cable par osmo-swap-raccorder, que shellprocess-osmo.conf appelle aussi a
+# CHAQUE installation (poste securise coche ou non) ; relance ici, sans effet
+# s il est deja fait.
+[ -x /usr/local/sbin/osmo-swap-raccorder ] && /usr/local/sbin/osmo-swap-raccorder
+
 
 [ -r "$CONF" ] || { log "$CONF absent - rien a raccorder."; exit 0; }
 

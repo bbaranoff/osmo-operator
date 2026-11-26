@@ -107,6 +107,7 @@ install -m 0755 "$_CH_SRC/osmo-valider-appliquer" "$ROOTFS/usr/local/sbin/osmo-v
 # on the live key too. The installed disk adds the osmo-swap partition,
 # encrypted with a random key at every boot (crypthome-postinstall).
 install -m 0755 "$_CH_SRC/osmo-zram"              "$ROOTFS/usr/local/sbin/osmo-zram"
+install -m 0755 "$_CH_SRC/osmo-swap-raccorder"    "$ROOTFS/usr/local/sbin/osmo-swap-raccorder"
 install -m 0644 "$DIR/services/osmo-zram.service" "$ROOTFS/etc/systemd/system/osmo-zram.service"
 mkdir -p "$ROOTFS/etc/systemd/system/swap.target.wants"
 chroot "$ROOTFS" systemctl enable osmo-zram.service 2>/dev/null \
