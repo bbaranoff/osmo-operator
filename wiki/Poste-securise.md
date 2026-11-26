@@ -173,6 +173,52 @@ en bleu foncé gras, nom de machine en gras.
 **Hors périmètre** : un root hostile avec la machine en main et le temps de lire le code,
 en l'absence de démarrage mesuré.
 
+### 4.1 Tableau des périmètres
+
+Une ligne par donnée : où elle vit, ce qui doit être vrai pour la lire, pour la modifier.
+Deux usages. **Audit** : une donnée qui apparaît sur deux lignes avec des conditions
+différentes est une fuite de périmètre — c'est la plus faible des deux qui compte.
+**Règle** : toute nouvelle fonction ajoute ou modifie une ligne ; si elle abaisse une
+condition, cela se voit ici avant d'être écrit.
+
+| Donnée | Où elle vit | Pour la lire | Pour la modifier |
+|---|---|---|---|
+| Contenu de `/home` | LUKS2 (argon2id, 1 Gio) | phrase home | phrase home |
+| Changements de la session (`/`, `/home`) | RAM | root, session ouverte | idem ; perdus sans phrase home |
+| Les mêmes, points de contrôle et sessions non validées | boîte noire (`attente/`) | **phrase boîte** | personne |
+| État de root (assistant, jetons, historique) | `/home/.root` | phrase home | phrase home |
+| Le même, avant `root-nettoyer` | disque système, retours arrière | **rien** (disque en main) | phrase home |
+| Le même, diffs déjà enregistrés | boîte noire (journal) | **phrase boîte** | personne |
+| Nos journaux | `/home/.log` (monté sur `/opt/log`) | phrase home | phrase home |
+| Journaux vivants d'une exécution | RAM (`$LOG_DIR`) | root, session ouverte | idem |
+| Journal des sessions (dates, comptes, totaux) | disque système | rien | phrase home |
+| Disque système (`/etc`, `/var`, `/opt`, `/boot`) | en clair | rien | phrase home, sinon détecté (empreinte signée) |
+| Secrets du banc (`hlr.db`, clé du webui open5gs) | disque système | **rien** | idem |
+| Clé privée de signature de l'empreinte | boîte, chiffrée (PBKDF2, 600 000) | phrase home | phrase home |
+| Clé publique de signature | boîte ; ancre TPM (NV `0x1800A50`) ; `/home` | tous | phrase home (secret propriétaire du TPM) |
+| Empreinte : totaux et détail de `/` | boîte, en clair, signée | rien | phrase home |
+| Empreinte : détail de `/home` | boîte, chiffré | phrase home | phrase home |
+| Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
+| Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
+| Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |
+| Les mêmes, copie pour resceller | `/home/.osmo-diffs/tpm` | **phrase home** (root, `/home` ouvert) | phrase home |
+| Micrologiciel, GRUB, noyau, initramfs, ESP | en clair | rien | détecté si le démarrage mesuré est posé |
+
+**Fuites de périmètre connues** (deux conditions pour une même donnée) :
+
+1. *La phrase home se devine hors ligne au coût de PBKDF2, pas d'argon2id.* La clé de
+   signature est chiffrée avec elle sur la partition de la boîte, en clair : qui a le
+   disque teste des phrases contre ce fichier (600 000 tours) sans passer par LUKS
+   (1 Gio de mémoire par essai). Le secret propriétaire du TPM en est dérivé aussi
+   (300 000 tours), mais ne se teste qu'en ligne.
+2. *La boîte lit ce que LUKS protège.* Points de contrôle et sessions non validées
+   contiennent la couche RAM de `/home` — donc aussi `/home/.root` et `/home/.log` —
+   sous la seule phrase de la boîte.
+3. *Root, `/home` ouvert, a la graine du démarrage mesuré* (copie gardée pour resceller).
+4. *L'état de root d'avant le nettoyage* reste dans la boîte, et sur le disque jusqu'à
+   `root-nettoyer`.
+5. *Les secrets du banc sont en clair* dans `/opt` et `/etc`.
+
 ## 5. Mesures (un poste, NVMe, 4 cœurs, 18 Go de système)
 
 | Opération | Durée |
