@@ -1117,7 +1117,26 @@ actualiser() {
     local rc=0
     update-initramfs -u -k all >/dev/null 2>&1 || { log "update-initramfs a echoue" >&2; rc=1; }
     update-grub >/dev/null 2>&1 || { log "update-grub a echoue" >&2; rc=1; }
+    grub_sans_ecriture || rc=1
     return $rc
+}
+# NOTHING IS WRITTEN WITHOUT THE /home PASSPHRASE - THE BOOT LOADER INCLUDED.
+# Ubuntu's grub.cfg makes GRUB itself write /boot/grub/grubenv at every boot
+# (save_env recordfail, saved_entry...): a write to the system disk before
+# anything is asked, in place, dates and inode untouched - which the complete
+# control then reports, rightly, as content changed under intact dates (seen
+# 2026-11-26). Every save_env is taken out of the generated grub.cfg; GRUB
+# still reads its environment, it no longer writes it.
+grub_sans_ecriture() {
+    local g=/boot/grub/grub.cfg
+    [ -f "$g" ] || return 0
+    grep -q 'save_env' "$g" || return 0
+    sed -E 's/save_env( +[A-Za-z_]+)+/true/g' "$g" > "$g.osmo" || { rm -f "$g.osmo"; return 1; }
+    if command -v grub-script-check >/dev/null 2>&1 && ! grub-script-check "$g.osmo" >/dev/null 2>&1; then
+        rm -f "$g.osmo"; log "grub.cfg : save_env non retire (syntaxe)" >&2; return 1
+    fi
+    chmod --reference="$g" "$g.osmo" 2>/dev/null
+    mv -f "$g.osmo" "$g"
 }
 
 # ── the kept copy of the mounts (osmo-garde.service) ────────────────────────

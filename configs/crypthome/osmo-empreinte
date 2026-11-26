@@ -98,6 +98,7 @@ TEST = os.environ.get("OSMO_DIFFS_SANS_MONTAGE") == "1"
 # never part of the fingerprint: the journal of a commit, the way back, the
 # session's own log (written to the disk outside a commit, on purpose)
 EXCLUS = {".osmo-valider", ".osmo-retour", "lost+found", "var/log/osmo-session.log", "var/log/osmo-session.log.nouv"}
+TOUJOURS_RELUS = {"boot/grub/grubenv"}
 CONSOLE = "/dev/console"
 ROUGE, FIN = "\033[1;31m", "\033[0m"
 
@@ -539,7 +540,10 @@ def prendre(phrase=None, premiere=False):
             v = ancien.get(p) if ancien else None
             # unchanged since the last fingerprint (a commit is a trusted
             # moment): its hash is kept
-            if v and v[0] == "f" and v[4:8] == r[4:8] and v[8] and not v[8].startswith("illisible"):
+            # (GRUB's environment block is rewritten in place by the boot
+            # loader, dates and inode untouched: always read again)
+            if v and v[0] == "f" and v[4:8] == r[4:8] and v[8] and not v[8].startswith("illisible") \
+                    and p not in TOUJOURS_RELUS:
                 r[8] = v[8]
             else:
                 a_lire.append(p)
