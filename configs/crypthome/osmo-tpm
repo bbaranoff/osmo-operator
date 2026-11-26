@@ -194,8 +194,25 @@ total_disque() {   # the system disk's total, as the black box holds it
         | grep -oE '"racine": *\{[^}]*"meta": *"[0-9a-f]+"' | sed -E 's/.*"meta": *"([0-9a-f]+)"/\1/'
 }
 
-# PCR 13 after the initramfs has measured the disk: SHA-256(32 zero bytes || total)
-predit() { { head -c 32 /dev/zero; hexbin "$1"; } | sha256sum | cut -d' ' -f1; }
+# contenu_disque : the total of the disk's CONTENT (every file read), as the
+# box holds it - but ONLY when the initramfs of THIS boot measured the content
+# too (it then left $RUN/contenu). An initramfs of before does not: the object
+# must be sealed the way the next boot will measure, or it is never given back.
+contenu_disque() {
+    if [ "$TEST" = 1 ]; then printf '%s' "${OSMO_TPM_CONTENU:-}"; return 0; fi
+    [ -s "$RUN/contenu" ] || return 0
+    tr -d '\n' < "$BOITE/empreinte.json" 2>/dev/null \
+        | grep -oE '"racine": *\{[^}]*"octets": *"[0-9a-f]+"' | sed -E 's/.*"octets": *"([0-9a-f]+)"/\1/'
+}
+
+# PCR 13 after the initramfs has measured the disk: SHA-256(32 zero bytes ||
+# total), then, when the content is measured too, SHA-256(that || content)
+predit() {
+    local v
+    v="$({ head -c 32 /dev/zero; hexbin "$1"; } | sha256sum | cut -d' ' -f1)"
+    [ -n "${2:-}" ] && v="$({ hexbin "$v"; hexbin "$2"; } | sha256sum | cut -d' ' -f1)"
+    printf '%s\n' "$v"
+}
 
 benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot (kept by coffre_fermer)
     local n
@@ -222,6 +239,12 @@ sceller_pour() {
     pcrs="$C_PCRS"
     [ -n "$pcrs" ] || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
     [ -n "$total" ] || { log "pas d empreinte du disque sur la boite (osmo-empreinte prendre)" >&2; return 1; }
+    # the content, when this boot's initramfs measures it
+    local contenu; contenu="$(contenu_disque)"
+    if [ "$TEST" != 1 ] && [ -s "$RUN/contenu" ] && [ "${#contenu}" != 64 ]; then
+        log "l empreinte du disque n a pas encore le total du contenu : sudo osmo-empreinte prendre, puis recommence" >&2
+        return 1
+    fi
     t="$(mktemp -d)" || return 1
     : > "$t/pcrs.bin"
     for n in $PCR_CHAINE; do
@@ -229,7 +252,7 @@ sceller_pour() {
         [ "${#h}" = 64 ] || { log "PCR $n de reference illisible" >&2; rm -rf "$t"; return 1; }
         hexbin "$h" >> "$t/pcrs.bin"
     done
-    hexbin "$(predit "$total")" >> "$t/pcrs.bin"
+    hexbin "$(predit "$total" "$contenu")" >> "$t/pcrs.bin"
     ( umask 077; printf '%s' "$graine" > "$t/in"; printf '%s' "$pin" > "$t/pin" )
     if [ -n "$pin" ]; then
         tpm2_startauthsession -S "$t/s.ctx" \
@@ -244,7 +267,7 @@ sceller_pour() {
                    ${pin:+-p "file:$t/pin"} -i "$t/in" -u "$t/obj.pub" -r "$t/obj.priv"; then
         [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
         mkdir -p "$OBJ" && install -m 0444 "$t/obj.pub" "$OBJ/obj.pub" && install -m 0444 "$t/obj.priv" "$OBJ/obj.priv" \
-            && printf '%s %s\n' "$(date '+%F %T')" "$total" > "$OBJ/scelle" && rc=0
+            && printf '%s %s %s\n' "$(date '+%F %T')" "$total" "${contenu:+contenu}" > "$OBJ/scelle" && rc=0
         # the initramfs asks the PIN only when this mark is there (taken away:
         # no question, no sentence - it shows)
         if [ -n "$pin" ]; then : > "$OBJ/pin"; else rm -f "$OBJ/pin"; fi

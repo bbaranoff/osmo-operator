@@ -18,7 +18,7 @@ B="${OSMO_BIN:+$OSMO_BIN/}"
 # block is left out (the boot loader rewrites it in place before anything runs).
 if [ "$1" = --contenu ]; then
     cd "$2" 2>/dev/null || exit 1
-    n="$(nproc 2>/dev/null || echo 4)"
+    n="$("${B}nproc" 2>/dev/null || nproc 2>/dev/null || echo 4)"
     # one output file per worker: several sha256sum writing to ONE pipe cut
     # each other's lines (seen: thousands of records without their hash)
     t="$(mktemp -d /run/osmo-total.XXXXXX 2>/dev/null || mktemp -d)" || exit 1

@@ -121,13 +121,19 @@ un nouveau, « défait », avec ce qui a été retiré.
 - Les totaux sont **signés** (Ed25519) par une clé que seule la phrase de `/home`
   déverrouille, et dont la moitié publique est ancrée dans le TPM. (Le sceau HMAC des
   premières versions n'existe plus : il est retiré à la première signature.)
-- **Ce que cela ne ferme pas** : les deux contrôles tournent depuis le disque qu'ils
-  vérifient, et le démarrage mesuré n'étend le PCR 13 qu'avec le premier total (les
-  métadonnées). Quelqu'un qui maquille les dates **et** réécrit le contrôle lui-même passe
-  encore, et le TPM rend la phrase secrète. La parade est de faire lire le contenu par
-  l'initramfs, qui lui est mesuré, et d'étendre le PCR 13 avec ce total-là (le même
-  calcul, 15 s) ; à terme, une racine en lecture seule est le cas d'usage de dm-verity.
-  Voir les travaux restants.
+- **Le contenu est mesuré par le démarrage lui-même.** Les deux contrôles ci-dessus
+  tournent depuis le disque qu'ils vérifient : quelqu'un qui maquille les dates *et*
+  réécrit le contrôle passerait. Quand le démarrage mesuré est posé, c'est donc
+  l'**initramfs** — mesuré par GRUB, pas un programme du disque — qui relit chaque fichier
+  (`osmo-total --contenu`, une quinzaine de secondes) et étend le PCR 13 une seconde fois,
+  avec ce total-là. Le TPM ne rend alors la phrase secrète que pour le contenu exact du
+  disque ; le contrôle d'avant la phrase reprend le total de l'initramfs sans rien relire.
+  Un initramfs d'avant ce changement ne mesure que les métadonnées : l'objet est scellé
+  selon ce que le démarrage en cours a mesuré, si bien que le passage se fait sans casse
+  (`actualiser`, un démarrage non reconnu, « Réenrôler » choix 1).
+- **Ce que cela ne ferme pas** : la lecture a lieu une fois, au démarrage. À terme, une
+  racine en lecture seule est le cas d'usage de dm-verity, qui vérifie chaque bloc à
+  chaque lecture.
 
 ### 3.6 Démarrage mesuré (option)
 
@@ -135,7 +141,9 @@ Un code TOTP à 6 chiffres, à comparer au téléphone **avant** de taper la phr
 (`sudo osmo-tpm poser`, appli enrôlée par QR code).
 
 - Firmware, GRUB, noyau et initramfs sont mesurés (PCR 0, 2, 4, 7, 8, 9).
-- L'initramfs, lui-même mesuré, calcule le total du disque et l'ajoute au PCR 13.
+- L'initramfs, lui-même mesuré, calcule le total du disque — ce que le système de fichiers
+  dit de chaque entrée, puis le **contenu** de chaque fichier relu (3.5) — et étend le PCR 13
+  avec l'un puis l'autre.
 - Le TPM ne rend la graine du code que si les sept PCR sont ceux du scellement.
 - Le PCR 13 est ensuite étendu de nouveau : plus rien ne peut desceller pendant ce
   démarrage.
@@ -356,7 +364,7 @@ en bleu foncé gras, nom de machine en gras.
 | Destruction de la boîte | copie distante, ajout seul | réseau absent : copie différée, signalée |
 | Écriture ratée ou regrettée | atomicité, retour arrière | tout est sur le même disque : ce n'est pas une sauvegarde |
 | Persistance dans `/home` en mode persistant (dont `/home/.root`) | « remise à zéro » volontaire ; mode « à enregistrer » | par défaut rien ne l'empêche ni ne la signale |
-| Binaire modifié machine éteinte, dates et inodes maquillés | contenu relu avant la phrase | passe si le contrôle lui-même est réécrit : le PCR 13 ne mesure que les métadonnées |
+| Binaire modifié machine éteinte, dates et inodes maquillés | contenu relu avant la phrase ; avec le démarrage mesuré, relu par l'initramfs et étendu dans le PCR 13 | sans démarrage mesuré, passe si le contrôle lui-même est réécrit |
 | Perte ou corruption du volume `/home` | — | **aucune sauvegarde** : il porte la clé de signature, la clé de la boîte, les états passés, root et le coffre du TPM |
 
 **Hors périmètre** : un root hostile avec la machine en main et le temps de lire le code,
@@ -469,6 +477,7 @@ par son propriétaire.
 | Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
 | Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |
 | Contenu du disque relu avant la phrase | calcul vérifié sur le disque réel (même total que l'empreinte, 16,6 s à froid) ; **pas encore vu à un démarrage** |
+| Contenu mesuré par l'initramfs, PCR 13 étendu avec | le même calcul rejoué sous le shell de l'initramfs (busybox) sur le disque réel : même total ; prédiction du PCR vérifiée à la main ; **jamais démarré** |
 | Coupure du root invité sur alerte | écrite, **non vue** |
 | Détection d'une troncature, d'un retour en arrière de l'historique | bac à sable (compteur simulé) ; jamais provoquées en réel |
 | Coupure de courant pendant une remise à zéro | **non testée** — elle abîme `/home` |
@@ -486,9 +495,8 @@ n'a été défait sur le système.
 
 ## 7. Travaux restants
 
-- **Mesurer le contenu dans l'initramfs** et étendre le PCR 13 avec (15 s par démarrage,
-  un initramfs refait, un rescellement) : c'est ce qui ferme vraiment le maquillage des
-  dates quand le contrôle lui-même est réécrit. Puis dm-verity pour la racine.
+- dm-verity pour la racine (le contenu est mesuré une fois au démarrage, pas à chaque
+  lecture).
 - **Sauvegarder** : l'en-tête LUKS de `/home` (`cryptsetup luksHeaderBackup`, sur un
   support à part) et une copie du volume ailleurs. Aujourd'hui `/home` porte tout et
   n'existe qu'en un exemplaire.

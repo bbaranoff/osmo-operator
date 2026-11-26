@@ -1824,7 +1824,15 @@ def controle_contenu(ref):
         pass
     t0 = time.monotonic()
     diffs = None
-    if ref.get("octets") and octets_lus(RACINE) == ref["octets"]:
+    # the initramfs has just read every file (measured boot, PCR 13): its total
+    # is taken as it is, nothing is read twice
+    lu = ""
+    try:
+        with open("/run/osmo-tpm/contenu") as f:
+            lu = f.readline().strip()
+    except OSError:
+        pass
+    if ref.get("octets") and (lu if len(lu) == 64 and not TEST else octets_lus(RACINE)) == ref["octets"]:
         diffs = []
     if diffs is None:
         # no content total yet (a fingerprint of before), or a difference:

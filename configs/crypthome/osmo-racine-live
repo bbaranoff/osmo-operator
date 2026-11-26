@@ -1259,7 +1259,8 @@ if [ -e /etc/osmo-tpm/actif ] && [ -x /usr/bin/tpm2 ] && [ -n "$_b" ]; then
     # the directory FIRST: without it copy_exec makes /osmo-bin a FILE (the
     # first tool copied) and nothing else lands - no total, never a code
     mkdir -p "${DESTDIR}/osmo-bin"
-    for _x in find sort sha256sum cut od; do copy_exec "/usr/bin/$_x" /osmo-bin; done
+    # (xargs and nproc: « osmo-total --contenu » reads every file, on every core)
+    for _x in find sort sha256sum cut od xargs nproc; do copy_exec "/usr/bin/$_x" /osmo-bin; done
     copy_file script /usr/local/sbin/osmo-total /osmo-bin/osmo-total
     echo "OSMO_TPM=1" >> "${DESTDIR}/conf/osmo-boite"
 fi
@@ -1309,6 +1310,22 @@ if [ "$OSMO_TPM" = 1 ] && [ -x /bin/tpm2 ] && [ -c /dev/tpmrm0 ]; then
     T="$(OSMO_BIN=/osmo-bin /osmo-bin/osmo-total "${rootmnt}" 2>/dev/null)"
     printf '%s\n' "$T" > "$R/total"
     [ "${#T}" = 64 ] && tpm2 pcrextend "13:sha256=$T" >/dev/null 2>&1
+    # THE CONTENT TOO. The total above is what the file system SAYS of each
+    # file (dates, sizes, inodes): a binary rewritten in place with its dates
+    # put back does not change it. So every file is READ, here - by the code
+    # GRUB measured, not by a program of the disk being checked - and PCR 13
+    # is extended a second time with that total. About 15 s. The TPM then gives
+    # the secret back only for the disk's very content. (No total: PCR 13 is
+    # not extended, and an object sealed for the content is not given back.)
+    echo "osmo-operator : controle du disque systeme (chaque fichier est relu, environ 15 secondes)..." > "$CONSOLE"
+    command -v plymouth >/dev/null 2>&1 && plymouth display-message --text="Controle du disque systeme : chaque fichier est relu..." 2>/dev/null
+    C="$(OSMO_BIN=/osmo-bin /osmo-bin/osmo-total --contenu "${rootmnt}" 2>/dev/null)"
+    : > "$R/contenu"
+    if [ "${#C}" = 64 ]; then
+        printf '%s\n' "$C" > "$R/contenu"
+        tpm2 pcrextend "13:sha256=$C" >/dev/null 2>&1
+    fi
+    command -v plymouth >/dev/null 2>&1 && plymouth display-message --text="" 2>/dev/null
     case "$BOITE_SRC" in
         UUID=*) bd="/dev/disk/by-uuid/${BOITE_SRC#UUID=}" ;;
         PARTUUID=*) bd="/dev/disk/by-partuuid/${BOITE_SRC#PARTUUID=}" ;;
