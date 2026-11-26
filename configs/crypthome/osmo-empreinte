@@ -1349,6 +1349,45 @@ def bip(secondes=6):
     return 0
 
 
+# THE BIG RED SCREEN of the alarm: the whole console red, and in block letters
+GROS = {
+    "A": (" ### ", "#   #", "#####", "#   #", "#   #"), "D": ("#### ", "#   #", "#   #", "#   #", "#### "),
+    "E": ("#####", "#    ", "#### ", "#    ", "#####"), "G": (" ####", "#    ", "#  ##", "#   #", " ####"),
+    "H": ("#   #", "#   #", "#####", "#   #", "#   #"), "I": ("#####", "  #  ", "  #  ", "  #  ", "#####"),
+    "M": ("#   #", "## ##", "# # #", "#   #", "#   #"), "N": ("#   #", "##  #", "# # #", "#  ##", "#   #"),
+    "O": (" ### ", "#   #", "#   #", "#   #", " ### "), "S": (" ####", "#    ", " ### ", "    #", "#### "),
+    "T": ("#####", "  #  ", "  #  ", "  #  ", "  #  "), "U": ("#   #", "#   #", "#   #", "#   #", " ### "),
+    "V": ("#   #", "#   #", "#   #", " # # ", "  #  "), "Y": ("#   #", " # # ", "  #  ", "  #  ", "  #  "),
+    "!": ("  #  ", "  #  ", "  #  ", "     ", "  #  "), " ": ("     ",) * 5,
+}
+
+
+def ecran_alarme(lignes=()):
+    """« YOU HAVE DONE SOMETHING NASTY !!!! », white on a red screen, then
+    the lines given (what changed, what to do)."""
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+    except OSError:
+        return
+    try:
+        larg = os.get_terminal_size(c).columns
+    except OSError:
+        larg = 80
+    l = ["\033[0m\033[41;1;37m\033[2J\033[H", ""]
+    for mot in ("YOU HAVE DONE", "SOMETHING", "NASTY !!!!"):
+        for r in range(5):
+            t = " ".join(GROS[ch][r] for ch in mot)
+            # white cells on the red: no glyph needed, whatever the console font
+            l.append(" " * max(0, (larg - len(t)) // 2) + t.replace("#", "\033[47m \033[41m"))
+        l.append("")
+    l += ["   " + x for x in lignes]
+    try:
+        os.write(c, ("\r\n".join(l) + "\r\n").encode())
+    except OSError:
+        pass
+    os.close(c)
+
+
 def extinction():
     """osmo-racine-live fin, BEFORE the session is written or dropped: the
     disks against their fingerprint. Nothing at boot and a difference now:
@@ -1375,9 +1414,9 @@ def extinction():
             subprocess.run(cmd, capture_output=True, timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    l = ["\033[2J\033[H", "\033[5;1;31m" + "#" * 76 + FIN, ROUGE + "", "   !!!  " + titre + "  !!!", "",
-         "   Propre au demarrage, different a l extinction : quelque chose a ecrit sur le",
-         "   disque pendant cette session sans passer par une validation.", ""]
+    l = ["!!!  " + titre + "  !!!", "",
+         "Propre au demarrage, different a l extinction : quelque chose a ecrit sur le",
+         "disque pendant cette session sans passer par une validation.", ""]
     if boite_rw(True):
         try:
             with open(ALARME, "w") as f:
@@ -1393,20 +1432,16 @@ def extinction():
         alerter("%s : %s" % (titre, racine), diffs, tete)
         dire("%s : %s, %d difference(s)" % (titre, racine, len(diffs)))
         for k, p, d in diffs[:10]:
-            l.append(("     %-8s %s/%s%s" % (k, racine.rstrip("/"), p, ("  (%s)" % d) if d else ""))[:118])
+            l.append(("  %-8s %s/%s%s" % (k, racine.rstrip("/"), p, ("  (%s)" % d) if d else ""))[:112])
         if len(diffs) > 10:
-            l.append("     ... et %d autre(s)" % (len(diffs) - 10))
-    l += ["", "   C est note dans la boite noire. Le prochain demarrage le redira, et seul le",
-          "   proprietaire (phrase de /home) pourra ouvrir une session.", "#" * 76 + FIN, ""]
+            l.append("  ... et %d autre(s)" % (len(diffs) - 10))
+    l += ["", "C est note dans la boite noire. Le prochain demarrage le redira, et seul le",
+          "proprietaire (phrase de /home) pourra ouvrir une session.", "",
+          "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation."]
     if TEST:
         sys.stdout.write("\n".join(l) + "\n")
         return 3
-    try:
-        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
-        os.write(c, "\r\n".join(l).encode())
-        os.close(c)
-    except OSError:
-        pass
+    ecran_alarme(l)
     bip()
     time.sleep(6)
     return 3
@@ -1494,6 +1529,12 @@ def main():
     if cmd == "bip":
         # the alarm itself: it sets every volume to its maximum - not a toy
         return bip() if "--alarme" in sys.argv[2:] else 0
+    if cmd == "alarme":
+        # the same red screen and beep again, while the shutdown is held
+        ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
+                      "Rien n a ete ecrit ; la boite noire a tout note (detail : %s)." % ALERTE, "",
+                      "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation."])
+        return bip()
     if cmd == "extinction":
         return extinction()
     if cmd == "fond":

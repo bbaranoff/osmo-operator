@@ -179,6 +179,7 @@ fait.
 - **À l'extinction, les sommes sont recontrôlées** avant toute écriture
   (`osmo-empreinte extinction`). Propre au démarrage et différent à l'extinction : quelque
   chose a écrit sur le disque pendant la session sans la phrase — écran rouge,
+  (« YOU HAVE DONE SOMETHING NASTY !!!! » en grosses lettres sur tout l'écran),
   enregistrement dans la boîte noire et bip (tous les volumes de la carte son sont mis au
   maximum, haut-parleur du PC en plus). Une écriture validée reprend et signe l'empreinte :
   elle ne déclenche rien. **La machine ne s'éteint alors pas** : rien n'est écrit sur le
