@@ -196,10 +196,20 @@ signature. Chaque choix est la commande existante ; chacune demande la phrase de
   (`alarme`) : le démarrage suivant est une alerte quoi que montre le disque — donc sans
   root invité — jusqu'à une empreinte reprise avec la phrase (`sudo osmo-empreinte prendre`).
   **Le bouton de test**, comme sur un disjoncteur différentiel : l'icône « Test de
-  l'alarme » (`osmo-empreinte test-alarme`) la fait sonner pour vérifier qu'elle marche —
-  tout de suite sur le bureau (écran rouge et bip à fond, 10 secondes, impossible à
-  fermer), ou à la prochaine extinction sur la vraie console (15 secondes, puis
-  l'extinction continue). Rien n'est noté, rien n'est retenu.
+  l'alarme » (`osmo-empreinte test-alarme`) ne la montre pas, elle la déclenche. Elle
+  corrompt pour de vrai un **volume témoin** — un mini volume à part (image ext4 de 4 Mio
+  sur la partition de la boîte, monté en lecture seule sur `/run/osmo-temoin`), dont
+  l'empreinte est prise, signée et contrôlée exactement comme celle du disque système,
+  qui lui n'est jamais touché. Deux modes :
+  - **partiel** : tout de suite, dans la session. Le contrôle doit trouver la corruption,
+    l'alarme sonne 10 secondes puis s'arrête, et le volume est remis dans son état
+    d'origine (l'image gardée à sa création, octet pour octet : il correspond de nouveau à
+    son empreinte). Rien n'est retenu, rien ne reste.
+  - **complet** : comme un vrai intrus, lancé avec la phrase. À l'extinction la machine ne
+    s'éteint pas (bouton d'alimentation maintenu) ; au démarrage suivant, l'alerte et plus
+    de root invité. Seul le propriétaire l'arrête : `OUI`, sa phrase, puis la même icône
+    (sa phrase encore) — volume remis dans son état d'origine, alarme levée. Ce que la
+    session avait changé dans le système n'est pas écrit : enregistrer avant.
 - Pas de question quand le mode est fixé : `CRYPTHOME_HOME="direct"` ou `"ram"` dans
   `/etc/default/crypthome`, ou l'entrée GRUB « /home en RAM » pour un démarrage. En mode
   « à enregistrer » seulement, `/home` a une empreinte, des retours arrière et sa couche
@@ -322,6 +332,7 @@ condition, cela se voit ici avant d'être écrit.
 | Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
 | Les mêmes, copie de la boîte (`osmo-diffs sauvegarder`) | là où le propriétaire la pose (clé USB) | phrase boîte | qui tient la clé USB (la chaîne le montre) |
 | Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
+| Volume témoin (test de l'alarme) | boîte, en clair (`temoin.img`, et son état d'origine `temoin.origine`) | rien (il ne contient rien) | root (c'est le but : toute modification déclenche l'alarme) ; empreinte : phrase home |
 | États passés du système (ce que chaque écriture a remplacé) | `/home` (LUKS2), `.osmo-retour/systeme` | phrase home (page locale `osmo-etats`, clé par lancement, refusée `/home` fermé) | phrase home |
 | Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) ; retour à une chaîne plus ancienne non détecté |
 | Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |

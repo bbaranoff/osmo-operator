@@ -43,9 +43,13 @@
 #                                     osmo-racine-live, after each write
 #   osmo-empreinte etats-verifier     their chain: signature, links, and every
 #                                     state read again (no passphrase)
-#   osmo-empreinte test-alarme        THE TEST BUTTON: make the alarm ring to
-#                                     see that it works - now on the desktop,
-#                                     or at the next shutdown on the console
+#   osmo-empreinte test-alarme        THE TEST BUTTON: TRIP the alarm for real
+#                                     (the witness volume, a mini volume
+#                                     controlled like the disk, is corrupted).
+#                                     PARTIAL: now, 10 seconds, then the volume
+#                                     back to its original state. FULL: the
+#                                     shutdown held, no guest root at the next
+#                                     boot - only the owner ends it
 #   osmo-empreinte rappel             desktop: only what the complete control
 #                                     found after boot (the rest is said at
 #                                     boot, on the console, never at login)
@@ -89,7 +93,15 @@ SCEAU = os.path.join(BOITE, "empreinte.hmac")
 # boot is an alert whatever the disk looks like by then (no guest session);
 # only a fingerprint taken with the /home passphrase removes it
 ALARME = os.path.join(BOITE, "alarme")
-ESSAI_ARME = "/run/osmo-alarme-essai"          # « test-alarme »: the alarm shown at the next shutdown, as a test
+# THE WITNESS VOLUME (« test-alarme »). A mini volume of its own - a 4 MiB
+# ext4 image kept on the box partition, mounted read-only on /run/osmo-temoin -
+# whose fingerprint is taken, signed and controlled EXACTLY like the system
+# disk's. It holds nothing: it is there to be CORRUPTED by the test, so that
+# the alarm trips for real without the system disk being touched.
+TEMOIN_IMG = os.path.join(BOITE, "temoin.img")
+TEMOIN_MNT = os.environ.get("OSMO_EMPREINTE_TEMOIN", "/run/osmo-temoin")
+TEMOIN_ESSAI = os.path.join(BOITE, "temoin.essai")     # a test is in progress (when it was started)
+TEMOIN_ORIGINE = os.path.join(BOITE, "temoin.origine")  # the volume as it was created: put back after a test
 RACINE = os.environ.get("OSMO_EMPREINTE_RACINE") or ("/media/root-ro" if os.path.ismount("/media/root-ro") else "/")
 HOME_DISQUE = os.environ.get("OSMO_EMPREINTE_HOME", "/media/home-ro")
 CLE = ".osmo-diffs/sceau"
@@ -260,7 +272,117 @@ def couches():
     c = {"racine": RACINE}
     if TEST or os.path.ismount(HOME_DISQUE):
         c["home"] = HOME_DISQUE
+    if os.path.ismount(TEMOIN_MNT) or (TEST and os.path.isdir(TEMOIN_MNT)):
+        c["temoin"] = TEMOIN_MNT              # the witness volume of the alarm's test
     return c
+
+
+def temoin_monter():
+    """The witness volume, read-only, as soon as anything of this program runs
+    (the boot's control is the first)."""
+    if TEST or os.geteuid() != 0 or not os.path.exists(TEMOIN_IMG) or os.path.ismount(TEMOIN_MNT):
+        return
+    try:
+        os.makedirs(TEMOIN_MNT, mode=0o755, exist_ok=True)
+        subprocess.run(["mount", "-o", "loop,ro,noatime", TEMOIN_IMG, TEMOIN_MNT], capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def temoin_ecrire(faire):
+    """The witness volume remounted read-write for the time of faire(dir).
+    True when it went through."""
+    if TEST:
+        os.makedirs(TEMOIN_MNT, exist_ok=True)
+        faire(TEMOIN_MNT)
+        return True
+    subprocess.run(["umount", TEMOIN_MNT], capture_output=True)
+    if not boite_rw(True):
+        temoin_monter()
+        return False
+    ok = False
+    try:
+        os.makedirs(TEMOIN_MNT, mode=0o755, exist_ok=True)
+        if subprocess.run(["mount", "-o", "loop,rw,noatime", TEMOIN_IMG, TEMOIN_MNT], capture_output=True).returncode == 0:
+            try:
+                faire(TEMOIN_MNT)
+                ok = True
+            finally:
+                os.sync()
+                subprocess.run(["umount", TEMOIN_MNT], capture_output=True)
+    finally:
+        boite_rw(False)
+    temoin_monter()
+    return ok and (TEST or os.path.ismount(TEMOIN_MNT))
+
+
+def temoin_creer():
+    """A fresh witness volume (the old one, corrupted by a test, is thrown
+    away). Its fingerprint is taken by the caller, with the passphrase."""
+    if not TEST:
+        subprocess.run(["umount", TEMOIN_MNT], capture_output=True)
+        if not boite_rw(True):
+            return False
+        try:
+            with open(TEMOIN_IMG + ".nouv", "wb") as f:
+                f.truncate(4 << 20)
+            if subprocess.run(["mkfs.ext4", "-q", "-F", "-L", "osmo-temoin", "-m", "0", TEMOIN_IMG + ".nouv"],
+                              capture_output=True).returncode != 0:
+                os.unlink(TEMOIN_IMG + ".nouv")
+                return False
+            os.replace(TEMOIN_IMG + ".nouv", TEMOIN_IMG)
+            os.sync()
+        finally:
+            boite_rw(False)
+    else:
+        import shutil
+        shutil.rmtree(TEMOIN_MNT, ignore_errors=True)
+
+    def remplir(d):
+        with open(os.path.join(d, "LISEZ-MOI"), "w") as f:
+            f.write("Volume temoin du poste securise osmo-operator.\n"
+                    "Il ne contient rien d utile : le test de l alarme le corrompt expres,\n"
+                    "pour verifier que l alarme se declenche. Cree le %s.\n" % time.strftime("%F %T"))
+        with open(os.path.join(d, "temoin.bin"), "wb") as f:
+            f.write(secrets.token_bytes(65536))
+    if not temoin_ecrire(remplir):
+        return False
+    return temoin_copier(TEMOIN_IMG, TEMOIN_ORIGINE)
+
+
+def temoin_copier(de, vers):
+    """One image over the other, on the box (TEST: the directory itself)."""
+    import shutil
+    if TEST:
+        shutil.rmtree(vers if vers != TEMOIN_IMG else TEMOIN_MNT, ignore_errors=True)
+        shutil.copytree(de if de != TEMOIN_IMG else TEMOIN_MNT, vers if vers != TEMOIN_IMG else TEMOIN_MNT, symlinks=True)
+        return True                           # (a directory copy: new inodes and dates, unlike the image)
+    monte = vers == TEMOIN_IMG
+    if monte:
+        subprocess.run(["umount", TEMOIN_MNT], capture_output=True)
+    if not boite_rw(True):
+        temoin_monter()
+        return False
+    try:
+        shutil.copyfile(de, vers + ".nouv")
+        os.replace(vers + ".nouv", vers)
+        os.sync()
+        ok = True
+    except OSError:
+        ok = False
+    finally:
+        boite_rw(False)
+    temoin_monter()
+    return ok
+
+
+def temoin_restaurer():
+    """AFTER A TEST: the witness volume back to its ORIGINAL STATE - the image
+    kept when it was created, byte for byte. It then matches the fingerprint
+    it had before the test, without anything being taken again."""
+    if not (TEST or os.path.exists(TEMOIN_ORIGINE)):
+        return False
+    return temoin_copier(TEMOIN_ORIGINE, TEMOIN_IMG)
 
 
 # The total of a volume: osmo-total (find, sort, sha256sum - 4 seconds for
@@ -1263,6 +1385,8 @@ def alerter(titre, diffs, tete):
 
 def console_alerte(titre, diffs):
     """The red screen, and the one question. True: the /home passphrase may be asked."""
+    if TEST:
+        return False                          # a sandbox never takes the real console
     for cmd in (["plymouth", "quit"], ["chvt", "1"]):
         try:
             subprocess.run(cmd, capture_output=True, timeout=10)
@@ -1636,6 +1760,215 @@ def verrouiller():
         pass
 
 
+def temoin_corrompre():
+    """What an intruder leaves on a volume: a file altered, another slipped in,
+    and no fingerprint taken."""
+    def corrompre(d):
+        with open(os.path.join(d, "temoin.bin"), "r+b") as f:
+            f.seek(4096)
+            f.write(secrets.token_bytes(8192))
+        with open(os.path.join(d, "intrus"), "w") as f:
+            f.write("glisse ici par le test de l alarme, le %s\n" % time.strftime("%F %T"))
+    return temoin_ecrire(corrompre)
+
+
+def marque_essai(poser):
+    if not (TEST or boite_rw(True)):
+        return
+    try:
+        if poser:
+            with open(TEMOIN_ESSAI, "w") as f:
+                f.write(time.strftime("%F %T") + "\n")
+        else:
+            os.unlink(TEMOIN_ESSAI)
+        os.sync()
+    except OSError:
+        pass
+    finally:
+        boite_rw(False)
+
+
+def test_alarme():
+    """THE TEST BUTTON, as on a residual-current breaker: it does not show a
+    picture of the alarm, it TRIPS it. The witness volume - a mini volume
+    controlled exactly like the system disk - is corrupted for real, and the
+    control must find it. The system disk is never touched. TWO MODES:
+      PARTIAL  now, in this session: the control runs, the alarm rings for 10
+               seconds and stops, the volume goes back to its original state.
+               Nothing is held, nothing stays.
+      FULL     everything, as if it were an intruder: at shutdown the alarm
+               HOLDS the machine (power button, held); at the next boot the
+               alert, and NO GUEST ROOT SESSION. Only the owner ends it: OUI,
+               the /home passphrase, then this same command (the passphrase
+               again) - the volume back to its original state, the alarm
+               lifted."""
+    import getpass
+    print()
+    print("  TEST DE L ALARME")
+    print()
+    if os.path.exists(TEMOIN_ESSAI):
+        print("  UN TEST COMPLET EST EN COURS, lance le %s." % lire_court(TEMOIN_ESSAI))
+        print("  Toi seul peux l arreter, avec ta phrase de /home : le volume temoin est remis dans son")
+        print("  etat d origine et l alarme est levee.")
+        print()
+        try:
+            if input("  Arreter le test maintenant ? [Entree = oui, n = non] : ").strip().lower() in ("n", "non", "no"):
+                print("  Le test reste en cours : l alarme sonnera (encore) a la prochaine extinction.")
+                return 0
+            phrase = getpass.getpass("  Ta phrase de /home : ").encode()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+        return temoin_poser(phrase, fin=True)
+    if not (os.path.exists(TEMOIN_IMG) or TEST) or "temoin" not in totaux():
+        print("  Le volume temoin n existe pas encore sur ce poste : un mini volume a part, surveille")
+        print("  comme le disque systeme, que le test corrompt expres. Je le cree (ta phrase de /home")
+        print("  signe son empreinte) ; ensuite relance cette icone pour faire le test.")
+        print()
+        try:
+            if input("  Le creer maintenant ? [Entree = oui, n = non] : ").strip().lower() in ("n", "non", "no"):
+                return 0
+            phrase = getpass.getpass("  Ta phrase de /home : ").encode()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+        return temoin_poser(phrase, fin=False)
+    print("  Comme le bouton « test » d un disjoncteur : il ne montre pas l alarme, il la DECLENCHE.")
+    print("  Je corromps pour de vrai un mini volume temoin, surveille comme le disque systeme (qui,")
+    print("  lui, n est pas touche), et le controle doit le trouver.")
+    print()
+    print("    p   PARTIEL : tout de suite. L alarme sonne 10 secondes (ecran rouge, bip a fond),")
+    print("        s arrete, et le volume revient a son etat d origine. Rien n est bloque.")
+    print("    c   COMPLET : comme un vrai intrus. A l extinction la machine NE S ETEINT PAS (bouton")
+    print("        d alimentation maintenu) ; au demarrage suivant, alerte et PLUS DE ROOT INVITE.")
+    print("        Toi seul l arretes : OUI, ta phrase, puis cette icone.")
+    print("    n   ne rien faire")
+    print()
+    try:
+        rep = input("  Ton choix [p, c ou n] : ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        rep = "n"
+    if rep not in ("p", "c"):
+        print("  Rien n est fait.")
+        return 0
+    if os.path.exists(ALERTE):
+        print(ROUGE + "  Une alerte existe deja a ce demarrage : pas de test par-dessus." + FIN)
+        return 1
+    tete, diffs = comparer("temoin", TEMOIN_MNT)
+    if diffs:
+        print(ROUGE + "  Le volume temoin differe deja de son empreinte : pas de test par-dessus (sudo osmo-empreinte controler)." + FIN)
+        return 1
+    if rep == "c":
+        print()
+        print("  TEST COMPLET. Ce que cette session a change dans le systeme ne sera PAS ecrit a")
+        print("  l extinction (enregistre AVANT si tu veux le garder ; /home, en persistant, l est deja).")
+        try:
+            if input("  Pour le lancer, tape  test  (Entree seule : ne rien faire) : ").strip().lower() != "test":
+                print("  Rien n est fait.")
+                return 0
+            phrase = getpass.getpass("  Ta phrase de /home : ").encode()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+        if not phrase_luks(phrase):
+            print(ROUGE + "  Phrase refusee : rien n est fait." + FIN)
+            return 1
+        phrase = b""
+    if not temoin_corrompre():
+        print(ROUGE + "  Le volume temoin n a pas pu etre corrompu : rien n est fait." + FIN)
+        return 1
+    tete, diffs = comparer("temoin", TEMOIN_MNT)
+    if not diffs:
+        temoin_restaurer()
+        print(ROUGE + "  LE VOLUME EST CORROMPU MAIS LE CONTROLE NE VOIT RIEN : L ALARME EST EN PANNE." + FIN)
+        return 3
+    vu = ["%-8s %s/%s%s" % (k, TEMOIN_MNT, q, ("  (%s)" % d) if d else "") for k, q, d in diffs[:6]]
+    if rep == "c":
+        marque_essai(True)
+        print("\033[1;32m  Le test complet est lance : le volume temoin differe de son empreinte." + FIN)
+        for v in vu:
+            print("    " + v)
+        print("  Eteins la machine quand tu veux : l alarme doit sonner et la retenir. Si elle ne sonne")
+        print("  pas, elle est en panne.")
+        return 0
+    # PARTIAL: the alarm now, 10 seconds, then everything back
+    lignes = ["!!!  LE CONTROLE A TROUVE UN VOLUME MODIFIE SANS LA PHRASE  !!!", ""] + vu + [
+        "", "TEST PARTIEL de l alarme : c est le volume temoin, corrompu expres. L alarme marche.",
+        "Elle s arrete dans 10 secondes et le volume revient a son etat d origine."]
+    if TEST:
+        print("\n".join("    " + x for x in lignes))
+    else:
+        ecran = None
+        if os.environ.get("DISPLAY") and os.path.exists("/usr/local/sbin/osmo-alarme-ecran"):
+            try:
+                ecran = subprocess.Popen(["/usr/bin/python3", "/usr/local/sbin/osmo-alarme-ecran", "--secondes", "10"] + lignes)
+            except OSError:
+                ecran = None
+        if ecran is None:
+            global CONSOLE
+            CONSOLE = "/dev/tty"
+            ecran_alarme(lignes)
+        bip(10)
+        if ecran is not None:
+            ecran.wait()
+        else:
+            sys.stdout.write(FIN + "\033[?25h\033[2J\033[H")
+    remis = temoin_restaurer()
+    tete, diffs = comparer("temoin", TEMOIN_MNT)
+    print()
+    if remis and (diffs == [] or TEST):
+        print("\033[1;32m  TEST PARTIEL REUSSI : la corruption a ete trouvee, l alarme a sonne, et le volume temoin" + FIN)
+        print("\033[1;32m  est revenu a son etat d origine (il correspond de nouveau a son empreinte)." + FIN)
+        return 0
+    print(ROUGE + "  L alarme a sonne, mais le volume temoin n a pas pu etre remis dans son etat d origine :" + FIN)
+    print(ROUGE + "  relance cette icone, elle le refera avec ta phrase." + FIN)
+    marque_essai(True)
+    return 1
+
+
+def temoin_poser(phrase, fin):
+    """A fresh witness volume and its fingerprint (the passphrase signs it).
+    fin: the end of a test - its marks are removed."""
+    if cle_privee(phrase) is None:
+        print(ROUGE + "  Phrase refusee : rien n est change." + FIN)
+        return 1
+    if fin and temoin_restaurer():
+        # back to its original state: it must match its fingerprint of before
+        # the test again, as it is - said, because it is the proof
+        tete, diffs = comparer("temoin", TEMOIN_MNT)
+        if diffs == [] or TEST:
+            print("  Le volume temoin est revenu a son etat d origine : il correspond de nouveau a son empreinte.")
+        else:
+            print(ROUGE + "  Le volume temoin remis ne correspond pas a son empreinte : je le refais a neuf." + FIN)
+            if not temoin_creer():
+                return 1
+    elif not temoin_creer():
+        print(ROUGE + "  Le volume temoin n a pas pu etre (re)cree : rien n est change." + FIN)
+        return 1
+    rc = prendre(phrase)
+    if rc != 0:
+        print(ROUGE + "  Volume temoin refait, mais l empreinte n a pas pu etre reprise : sudo osmo-empreinte prendre" + FIN)
+        return rc
+    if fin:
+        marque_essai(False)
+        for f in (ALERTE, SANS_HOME):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        print("\033[1;32m  Test termine : volume temoin dans son etat d origine, empreinte signee, alarme levee." + FIN)
+        if os.path.exists("/etc/osmo-tpm/actif") and not os.path.exists("/run/osmo-tpm/reconnu"):
+            print("  La puce de securite n a pas reconnu ce demarrage : icone « Reenroler », choix 1.")
+    else:
+        print("\033[1;32m  Le volume temoin est en place et surveille. Relance cette icone pour faire le test." + FIN)
+    return 0
+
+
+def lire_court(chemin):
+    try:
+        with open(chemin, errors="replace") as f:
+            return f.readline().strip()[:80]
+    except OSError:
+        return "?"
+
+
 def extinction():
     """osmo-racine-live fin, BEFORE the session is written or dropped: the
     disks against their fingerprint. Nothing at boot and a difference now:
@@ -1644,33 +1977,6 @@ def extinction():
     nothing here). Red on the console, a record in the box, the beep."""
     if not TEST and not os.path.ismount(BOITE):
         return 0
-    # THE TEST BUTTON (« osmo-empreinte test-alarme », armed for this
-    # shutdown): the alarm as it really is here, on the console - the red
-    # screen and the beep, 15 seconds - then the shutdown goes on as usual.
-    # Nothing is recorded, nothing is held, no mark is left.
-    if os.path.exists(ESSAI_ARME):
-        try:
-            os.unlink(ESSAI_ARME)
-        except OSError:
-            pass
-        for cmd in (["plymouth", "quit"], ["chvt", "1"]):
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=10)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        ecran_alarme(["!!!  ESSAI DE L ALARME  !!!", "",
-                      "C est ce que tu verrais si le disque avait change pendant la session, sans la phrase.",
-                      "Dans le vrai cas la machine ne s eteindrait pas : seul le bouton d alimentation maintenu.", "",
-                      "Ceci est un essai, demande par l icone « Test de l alarme » : rien n est arrive,",
-                      "rien n est note. L extinction continue dans 15 secondes."])
-        bip(15)
-        try:
-            c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
-            os.write(c, (FIN + "\033[?25h\033[2J\033[H").encode())
-            os.close(c)
-        except OSError:
-            pass
-        dire("extinction : essai de l alarme fait (ecran et bip), a la demande")
     if os.path.exists(ALERTE):
         return 0                              # already said at boot: not twice
     trouve = []
@@ -1703,6 +2009,11 @@ def extinction():
             pass
         finally:
             boite_rw(False)
+    if trouve and all(r == TEMOIN_MNT for r, _t, _d in trouve):
+        l += ["(%s est le volume temoin : c est le TEST COMPLET DE L ALARME, lance le %s." % (
+              TEMOIN_MNT, lire_court(TEMOIN_ESSAI)),
+              " L alarme marche ; le disque systeme est conforme. Tout le reste est reel, et seul le",
+              " proprietaire l arrete : OUI et sa phrase au demarrage, puis l icone « Test de l alarme ».)", ""]
     for racine, tete, diffs in trouve:
         alerter("%s : %s" % (titre, racine), diffs, tete)
         dire("%s : %s, %d difference(s)" % (titre, racine, len(diffs)))
@@ -1761,6 +2072,7 @@ def main():
         return rappel()
     if os.geteuid() != 0 and not TEST:
         sys.exit("osmo-empreinte : root requis")
+    temoin_monter()
     if cmd in ("prendre", "ancrer", "phrase-changee", "resceller", "coffre-sceller") and not TEST:
         # what these leave in /home (signature key, pin, vault) must not come
         # back in time: the session can no longer be « remise a zero »
@@ -1878,37 +2190,7 @@ def main():
                 pass
         return 0
     if cmd == "test-alarme":
-        # THE TEST BUTTON, as on a residual-current breaker: press it to see
-        # that the alarm works. Now (the screen and the beep, 10 seconds, on
-        # this desktop), or at the next shutdown (the real console screen).
-        print()
-        print("  TEST DE L ALARME")
-        print()
-        print("  L alarme se declenche quand le disque change pendant une session sans ta phrase.")
-        print("  Ce bouton la fait sonner pour verifier qu elle marche. Rien n est note, rien n est bloque.")
-        print()
-        print("    Entree   maintenant : l ecran rouge et le bip A FOND, 10 secondes, impossible a fermer")
-        print("    e        a la prochaine extinction : le vrai ecran de la console, 15 secondes, puis")
-        print("             l extinction continue normalement")
-        print("    n        ne rien faire")
-        print()
-        try:
-            rep = input("  Ton choix : ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            rep = "n"
-        if rep in ("n", "non", "no"):
-            print("  Rien n est fait.")
-            return 0
-        if rep == "e":
-            try:
-                open(ESSAI_ARME, "w").close()
-            except OSError as e:
-                print("  Impossible d armer l essai : %s" % e)
-                return 1
-            print("  C est arme : a la prochaine extinction, l alarme sonnera 15 secondes, puis la machine")
-            print("  s eteindra comme d habitude. (Pour l annuler : sudo rm %s)" % ESSAI_ARME)
-            return 0
-        os.execv(sys.argv[0], [sys.argv[0], "alarme", "--essai", "--bip", "--secondes", "10"])
+        return test_alarme()
     if cmd == "alarme":
         # the same red screen and beep again, while the shutdown is held
         verrouiller()

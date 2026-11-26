@@ -343,7 +343,7 @@ fi
 # ── Required in the rootfs ─────────────────────────────────────────────────
 # cryptsetup to open the volume, rsync for init-crypthome.sh, x11-xserver-utils
 # for xhost.
-for _p in cryptsetup dmsetup fuser rsync xhost overlayroot-chroot age getfattr zenity; do
+for _p in cryptsetup dmsetup fuser mkfs.ext4 amixer speaker-test rsync xhost overlayroot-chroot age getfattr zenity; do
     chroot "$ROOTFS" bash -c "command -v $_p >/dev/null 2>&1" || \
         echo -e "  ${YELLOW}!${NC} ${CYAN}$_p${NC} absent du rootfs - requis par le dispositif de chiffrement"
 done

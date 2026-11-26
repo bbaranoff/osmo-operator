@@ -2,7 +2,7 @@
 Type=Application
 Name=Test de l alarme
 Name[fr]=Test de l'alarme
-Comment=Comme le bouton test d un disjoncteur : faire sonner l alarme pour verifier qu elle marche
+Comment=Comme le bouton test d un disjoncteur : declencher l alarme pour de vrai (partiel 10 s, ou complet)
 Exec=python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --tty --title "Test de l alarme" -- /usr/local/sbin/osmo-empreinte test-alarme
 Icon=dialog-warning
 Terminal=false
