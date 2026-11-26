@@ -18,6 +18,8 @@
 #   osmo-diffs sauvegarder DIR   the whole box in one file (still encrypted)
 #   osmo-diffs vider         every record removed: the /home passphrase; the
 #                            new chain opens with a record that says so
+#   osmo-diffs chaine        check the chain of the records, and only that
+#                            (nothing of their content is shown): passphrase
 #   osmo-diffs liste         the records (names, sizes): no passphrase
 #   osmo-diffs voir [N]      decrypt the N last records (default: all), checks
 #                            the chain, asks the passphrase
@@ -756,6 +758,36 @@ case "${1:-liste}" in
             prec="$j"
         done | ${PAGER:-less -R}
         cle=""
+        ;;
+    chaine)
+        # THE CHAIN ONLY, nothing of the content: each record must start with
+        # the SHA-256 of the record file before it. One line per fault, a
+        # verdict at the end. Exit 0: intact; 3: broken; 1: no key.
+        # (A box emptied with « vider » starts a new chain at « origine ».)
+        boite
+        cle="$(identite)" || exit 1
+        prec=""; n=0; mauvais=0
+        while IFS= read -r j; do
+            n=$((n + 1))
+            # only its second line is read: « # precedent : ... »
+            vu="$(age -d -i <(printf '%s\n' "$cle") "$j" 2>/dev/null | sed -n '2{s/^# precedent : //p;q}')"
+            attendu="origine"
+            [ -n "$prec" ] && attendu="$(sha256sum "$prec" | cut -d' ' -f1) $(basename "$prec")"
+            if [ -z "$vu" ]; then
+                printf '\033[1;31mINDECHIFFRABLE OU SANS EN-TETE : %s\033[0m\n' "$(basename "$j")"; mauvais=$((mauvais + 1))
+            elif [ "$vu" != "$attendu" ]; then
+                printf '\033[1;31mCHAINE ROMPUE avant %s\033[0m\n    attendu : %s\n    ecrit   : %s\n' "$(basename "$j")" "$attendu" "$vu"
+                mauvais=$((mauvais + 1))
+            fi
+            prec="$j"
+        done < <(find "$JOURNAL" -maxdepth 1 -name '*.age' | sort)
+        cle=""
+        if [ "$mauvais" = 0 ]; then
+            printf '\033[1;32mchaine de la boite intacte : %s enregistrement(s), du premier au dernier\033[0m\n' "$n"
+            exit 0
+        fi
+        printf '\033[1;31m%s defaut(s) sur %s enregistrement(s)\033[0m\n' "$mauvais" "$n"
+        exit 3
         ;;
     montrer)
         # montrer NAME|NUMBER|ID : ONE record, decrypted (the box passphrase).
