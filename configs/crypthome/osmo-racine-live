@@ -60,8 +60,10 @@
 #   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
 #                                 no question at shutdown
 #   osmo-racine-live fin          at shutdown (osmo-fin-session.service)
-#   osmo-racine-live actualiser   rebuild the initramfs after an update of
-#                                 these scripts (from overlayroot-chroot)
+#   osmo-racine-live actualiser   rebuild the initramfs and GRUB ON THE DISK
+#                                 after an update of these scripts: a write
+#                                 to the disk, hence the /home passphrase
+#                                 (--stdin: one line), recorded in the box
 #   osmo-racine-live retirer      back to an ordinary read-write / (from
 #                                 « sudo overlayroot-chroot osmo-racine-live retirer »)
 #
@@ -1349,6 +1351,23 @@ EOF
             # otherwise the next boot would (rightly) cry « modified outside a
             # session »
             command -v overlayroot-chroot >/dev/null 2>&1 || { log "overlayroot-chroot absent" >&2; exit 1; }
+            # A WRITE TO THE DISK, like any other: the /home passphrase
+            # (--stdin: one line, else asked on the terminal)
+            [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : ecriture impossible" >&2; exit 1; }
+            _opt=""; _stdin=0
+            shift
+            for _a in "$@"; do case "$_a" in --stdin) _stdin=1 ;; tpm=0|tpm=1) _opt="$_a" ;; esac; done
+            if [ "$_stdin" = 1 ]; then
+                IFS= read -r p || p=""
+            else
+                echo "actualiser : initramfs et GRUB reconstruits SUR LE DISQUE (hors de la session en RAM)"
+                read -r -s -p "phrase de /home : " p < /dev/tty || p=""; echo
+            fi
+            if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+                p=""; rouge "phrase de /home refusee : rien n est ecrit sur le disque"; exit 1
+            fi
+            p=""
+            set -- actualiser ${_opt:+"$_opt"}
             trace "actualiser : initramfs et grub, sur le disque"
             # overlayroot-chroot binds /proc, /run and /sys, NOT /dev: without
             # it grub-probe finds no device and update-grub fails (seen

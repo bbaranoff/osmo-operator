@@ -659,7 +659,7 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   rewritten after every commit and undo). The date chosen boots normally with `osmo.retour=N`;
   once `/home` is open, the list is shown again on the console, `OUI` confirms, the sessions down
   to that one are undone and the machine restarts on the older disk. The way back holds the last
-  20 commits. After an update of the scripts: `sudo osmo-racine-live actualiser` (rebuilds GRUB).
+  20 commits. After an update of the scripts: `sudo osmo-racine-live actualiser` (rebuilds the initramfs and GRUB on the disk itself; a write to the disk, so it asks the `/home` passphrase).
 - **Ctrl-C during a validation cancels it, cleanly**: the copy of a layer is stopped (nothing
   has changed yet), and a layer this write had already applied is **undone** (its own way back;
   the box gets a `defait` record) - never `/` written and `/home` not. The steps that must not be
