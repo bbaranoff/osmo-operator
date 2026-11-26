@@ -147,6 +147,13 @@ par défaut, grisée elle aussi sans TPM) ou, case décochée, demande la phrase
 PIN ; elle prend ensuite l'empreinte, ancre la signature et scelle (`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
 fait.
 
+**Réenrôler.** L'icône « Réenrôler » (`osmo-reenroler`) regroupe tout ce qui touche à la
+preuve du TPM : elle dit d'abord où on en est (en service ou non, machine reconnue ou non
+à ce démarrage, signature et ancre), puis propose — reconnaître la machine telle qu'elle
+est après un changement qu'on s'explique (`osmo-tpm sceller`), une nouvelle phrase secrète
+et un nouveau PIN, le code sur un téléphone, tout refaire depuis zéro, réancrer la
+signature. Chaque choix est la commande existante ; chacune demande la phrase de `/home`.
+
 ### 3.6 bis L'ouverture normale et l'ouverture d'échec
 
 - **Normale** : la phrase tapée au démarrage ouvre le volume. Une question suit, sur la

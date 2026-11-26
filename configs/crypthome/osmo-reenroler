@@ -1,0 +1,102 @@
+#!/bin/bash
+# osmo-reenroler - REENROLER LA PUCE DE SECURITE (icone « Reenroler »).
+#
+# Tout ce qui touche a la preuve que la puce (TPM) donne au demarrage, au meme
+# endroit, pour quelqu un qui ne connait pas la machine : on lit d abord ou on
+# en est, on dit quoi faire, et chaque choix lance la commande qui existe deja
+# (osmo-tpm, osmo-empreinte) - rien n est fait ici autrement qu elles.
+#
+#   1  la machine a change (mise a jour, GRUB) : la puce ne la reconnait plus
+#      -> ce demarrage devient la reference          osmo-tpm sceller
+#   2  une nouvelle phrase secrete et un nouveau PIN  osmo-tpm changer --secret
+#   3  le code sur un telephone (ou un autre telephone) osmo-tpm changer --telephone
+#   4  tout refaire depuis zero                       osmo-tpm oter, puis poser
+#   5  la signature du disque dans la puce            osmo-empreinte ancrer
+#
+# Chacune demande la phrase de /home : rien n est ecrit sans elle.
+set -u
+T=/usr/local/sbin/osmo-tpm; E=/usr/local/sbin/osmo-empreinte
+rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
+vert()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
+titre() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+[ -c /dev/tpmrm0 ] || { rouge "Cette machine n a pas de puce de securite (TPM) utilisable."; exit 1; }
+oui() { local c; read -r -p "$1 [Entree = oui, n = non] : " c < /dev/tty || c=n; case "$c" in n|N|non|Non|NON|no|No|NO) return 1 ;; esac; return 0; }
+
+etat() {
+    titre "Ou en est la puce de securite"
+    POSE=0; RECONNU=0; MODE="?"
+    if [ -e /etc/osmo-tpm/actif ]; then POSE=1; fi
+    [ -e /run/osmo-tpm/reconnu ] && RECONNU=1
+    if [ "$POSE" = 0 ]; then
+        rouge "  Elle ne surveille pas encore ce poste."
+        return
+    fi
+    if [ -e /var/lib/osmo-diffs/tpm/pin ]; then MODE="phrase secrete, avec PIN"
+    elif "$T" etat 2>/dev/null | grep -q "phrase secrete"; then MODE="phrase secrete, SANS PIN"
+    else MODE="code sur le telephone"; fi
+    echo "  Elle surveille ce poste. Preuve au demarrage : $MODE."
+    if [ "$RECONNU" = 1 ]; then
+        vert "  Ce demarrage : la puce a reconnu la machine. Tout va bien."
+    else
+        rouge "  Ce demarrage : la puce n a PAS reconnu la machine (ni phrase ni code affiches)."
+        echo "  C est normal UNE fois apres une mise a jour du noyau ou de GRUB, ou un changement"
+        echo "  que tu as fait toi-meme au demarrage. Si tu ne sais pas pourquoi : ne continue pas,"
+        echo "  quelqu un a peut-etre touche a la machine."
+    fi
+    "$E" signature 2>/dev/null | sed 's/^osmo-empreinte : /  /'
+}
+
+while :; do
+    etat
+    titre "Reenroler : que veux-tu faire ?"
+    if [ "$POSE" = 0 ]; then
+        echo "  1. Mettre la puce en service (une phrase secrete et un PIN)"
+        echo "  q. Rien, fermer"
+        read -r -p "Ton choix : " c < /dev/tty || c=q
+        case "$c" in
+            1) echo "Trois questions : ta phrase de /home, ta phrase secrete, ton PIN."
+               "$T" poser --secret || rouge "Rien n a ete change." ;;
+            q|Q|"") echo "A bientot."; exit 0 ;;
+        esac
+        continue
+    fi
+    if [ "$RECONNU" = 0 ]; then echo "  1. La machine a change et JE SAIS POURQUOI : la reconnaitre telle qu elle est   <- ce qu il te faut"
+    else echo "  1. Reconnaitre la machine telle qu elle est maintenant (inutile : elle est deja reconnue)"; fi
+    echo "  2. Une nouvelle phrase secrete et un nouveau PIN"
+    echo "  3. Le code sur un telephone, a la place de la phrase (ou un nouveau telephone)"
+    echo "  4. Tout refaire depuis zero (retirer la puce du demarrage, puis la remettre)"
+    echo "  5. Remettre la signature du disque dans la puce"
+    echo "  q. Rien, fermer"
+    read -r -p "Ton choix : " c < /dev/tty || c=q
+    case "$c" in
+        1)
+            titre "Reconnaitre la machine telle qu elle est"
+            echo "Ce demarrage devient la reference : la puce rendra ta preuve tant que rien ne change."
+            rouge "Ne le fais que si TU sais pourquoi la machine a change. Sinon, tu benis ce qu un autre a fait."
+            if oui "Je sais pourquoi, continuer ?"; then
+                "$T" sceller && vert "C est fait. Au prochain demarrage ta preuve doit revenir." || rouge "Rien n a ete change."
+            fi ;;
+        2)
+            titre "Nouvelle phrase secrete et nouveau PIN"
+            echo "La machine ne redemarre pas. Ta phrase de /home est demandee d abord."
+            "$T" changer --secret || rouge "Rien n a ete change." ;;
+        3)
+            titre "Le code sur un telephone"
+            echo "Un QR code va s afficher : scanne-le avec une application de codes (Aegis, FreeOTP...)."
+            "$T" changer --telephone || rouge "Rien n a ete change." ;;
+        4)
+            titre "Tout refaire depuis zero"
+            echo "La puce est retiree du demarrage, puis remise avec une nouvelle phrase et un nouveau PIN."
+            echo "Le PROCHAIN demarrage n affichera rien (c est attendu) : tu reviendras ici, choix 1."
+            if oui "Continuer ?"; then
+                "$T" oter && "$T" poser --secret || rouge "Cela ne s est pas termine : regarde les messages au-dessus."
+            fi ;;
+        5)
+            titre "La signature du disque dans la puce"
+            echo "La cle qui signe l empreinte du disque est ancree dans la puce : on ne peut pas la remplacer sans ta phrase."
+            "$E" ancrer || rouge "Rien n a ete change." ;;
+        q|Q|"") echo "A bientot."; exit 0 ;;
+        *) echo "Tape 1, 2, 3, 4, 5 ou q." ;;
+    esac
+done

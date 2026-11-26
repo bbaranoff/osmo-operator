@@ -141,6 +141,10 @@ install -m 0755 "$_CH_SRC/osmo-tpm-bienvenue" "$ROOTFS/usr/local/bin/osmo-tpm-bi
 # sentence and PIN or the phone, the /home passphrase with all that follows
 # it, the box's passphrase). In the menu and on the desktop of new accounts.
 install -m 0755 "$_CH_SRC/osmo-secrets" "$ROOTFS/usr/local/sbin/osmo-secrets"
+# « Reenroler » (osmo-reenroler): everything about the TPM's proof in one
+# place - recognise the machine after a change, new sentence and PIN, phone,
+# start again, anchor - each choice being the osmo-tpm command that exists
+install -m 0755 "$_CH_SRC/osmo-reenroler" "$ROOTFS/usr/local/sbin/osmo-reenroler"
 # « Remettre a zero » (osmo-reset), the opposite of « Enregistrer »: in
 # persistent mode /home goes back to what it was when the session began - a
 # device-mapper snapshot taken by unlock-home (dmsetup, dm-snapshot: the
@@ -167,7 +171,7 @@ NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 X-GNOME-Autostart-Delay=15
 PLEIN
-for _d in osmo-enregistrer osmo-reset osmo-etats osmo-test-alarme osmo-secrets; do
+for _d in osmo-enregistrer osmo-reset osmo-etats osmo-test-alarme osmo-reenroler osmo-secrets; do
     install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
     for _b in Desktop Bureau; do
         [ -d "$ROOTFS/etc/skel/$_b" ] && install -m 0755 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/etc/skel/$_b/$_d.desktop"

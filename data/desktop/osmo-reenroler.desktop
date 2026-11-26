@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Reenroler
+Name[fr]=Réenrôler
+Comment=La puce de securite (TPM) : reconnaitre la machine apres un changement, nouvelle phrase secrete et nouveau PIN, telephone
+Exec=python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --tty --keep-open --title "Reenroler la puce de securite" -- /usr/local/sbin/osmo-reenroler
+Icon=security-high
+Terminal=false
+Categories=System;
+Keywords=tpm;pin;enroler;reenroler;sceller;phrase;secret;
