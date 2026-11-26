@@ -192,6 +192,33 @@ fait.
   « à enregistrer » seulement, `/home` a une empreinte, des retours arrière et sa couche
   dans les points de contrôle.
 
+### 3.6 ter Les états du système, comme du code
+
+Chaque écriture validée du système est un commit : ce qu'elle a remplacé ou supprimé est
+gardé à côté de la racine (`/.osmo-retour/<commit>/`). Deux façons de s'en servir.
+
+- **Parcourir, comme sur GitHub** : l'icône « États du système » (`osmo-boite web`,
+  `osmo-etats`) ouvre une page locale en lecture seule — la liste des écritures par
+  session, pour chacune ses fichiers ajoutés, modifiés, supprimés avec leurs diffs,
+  l'arborescence du système telle qu'elle était à cet état, chaque fichier tel qu'il était,
+  et l'historique d'un fichier. La session en cours (en mémoire, pas encore enregistrée) y
+  figure en tête. Elle tourne en root, n'écoute que sur `127.0.0.1`, et chaque adresse
+  porte une clé tirée au lancement. `/home` n'y est pas.
+- **Les mots de git** (`osmo-boite`) : `log`, `show ID` (phrase de la boîte), `status`,
+  `diff [chemin]`, `commit` (= Enregistrer), `revert` (= défaire la dernière écriture),
+  `checkout N` (= remonter N sessions), `stash` et `merge NOM` (les sessions non validées),
+  `reset` (= Remettre à zéro), `fsck` (la chaîne), `bundle DOSSIER` et `gc` (copier, vider).
+  Ce n'est pas un dépôt git : la machine écrit la boîte sans pouvoir la lire, ce qu'un
+  dépôt ne permet pas ; ce sont les mêmes commandes qu'avant sous des noms connus.
+
+**La boîte à 80 %.** Une boîte pleine ne note plus rien. À partir de 80 % d'occupation, à
+l'ouverture de session, une fenêtre demande : en faire une copie (clé USB, autre disque)
+puis la vider, la vider sans copie, ou plus tard (`osmo-diffs plein`). La copie est un seul
+fichier, toujours chiffré, relu avec la phrase de la boîte. Vider demande la phrase de
+`/home` ; les sessions non validées en attente partent avec. La nouvelle chaîne commence
+par un enregistrement qui dit combien d'enregistrements sont partis, le nom et l'empreinte
+du dernier, et où est la copie.
+
 ### 3.7 Deux root
 
 Le disque système est en clair : l'état personnel de root (identifiants de l'assistant,
@@ -260,6 +287,9 @@ condition, cela se voit ici avant d'être écrit.
 | Empreinte : totaux et détail de `/` | boîte, en clair, signée | rien | phrase home |
 | Empreinte : détail de `/home` | boîte, chiffré | phrase home | phrase home |
 | Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
+| Les mêmes, copie de la boîte (`osmo-diffs sauvegarder`) | là où le propriétaire la pose (clé USB) | phrase boîte | qui tient la clé USB (la chaîne le montre) |
+| Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
+| États passés du système (`/.osmo-retour`) | disque système, en clair, à root | rien (disque en main) ; root en session (page locale `osmo-etats`, clé par lancement) | phrase home |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |
 | Les mêmes, copie pour resceller, et PCR de référence | `/home`, coffre chiffré par la phrase (scrypt, 1 Gio) | phrase home, saisie | phrase home, saisie |

@@ -12,6 +12,12 @@
 #   osmo-diffs enregistrer [valide|efface|ecrit]  record this session (osmo-racine-live fin)
 #   osmo-diffs phrase        change the box passphrase (session account,
 #                            sudo, in a terminal)
+#   osmo-diffs place         how full the box is (exit 3 from 80 %)
+#   osmo-diffs plein         from 80 %: the question - copy it elsewhere and
+#                            empty it, empty it without a copy, or later
+#   osmo-diffs sauvegarder DIR   the whole box in one file (still encrypted)
+#   osmo-diffs vider         every record removed: the /home passphrase; the
+#                            new chain opens with a record that says so
 #   osmo-diffs liste         the records (names, sizes): no passphrase
 #   osmo-diffs voir [N]      decrypt the N last records (default: all), checks
 #                            the chain, asks the passphrase
@@ -598,6 +604,116 @@ case "${1:-liste}" in
         [ -f "$CLE_CLAIRE" ] && { shred -u "$CLE_CLAIRE" 2>/dev/null || rm -f "$CLE_CLAIRE"; }
         log "boite noire scellee : seule sa phrase la relit"
         ;;
+    place)
+        # how full the box is; exit 3 from OSMO_DIFFS_SEUIL % (80) up. A FULL
+        # BOX RECORDS NOTHING ANY MORE: from that threshold the owner is asked
+        # (« plein ») to copy it elsewhere and empty it
+        boite
+        pc="$(df --output=pcent "$BASE" 2>/dev/null | tail -1 | tr -dc '0-9')"
+        echo "boite noire : ${pc:-?} % occupee ($(df -h --output=used "$BASE" | tail -1 | tr -d ' ') sur $(df -h --output=size "$BASE" | tail -1 | tr -d ' '))"
+        [ "${OSMO_DIFFS_PC:-${pc:-0}}" -ge "${OSMO_DIFFS_SEUIL:-80}" ] && exit 3
+        exit 0
+        ;;
+    sauvegarder)
+        # sauvegarder DIR : the whole box in ONE file, as it is - the records
+        # stay encrypted, the copy is read back with the box passphrase only
+        boite
+        dest="${2:-}"
+        [ -n "$dest" ] && [ -d "$dest" ] && [ -w "$dest" ] || { log "sauvegarder : donne un dossier ou l on peut ecrire (une cle USB, par exemple)"; exit 1; }
+        besoin=$(( $(du -sk --exclude=lost+found "$BASE" 2>/dev/null | cut -f1) + 1024 ))
+        libre="$(df -k --output=avail "$dest" | tail -1 | tr -d ' ')"
+        [ "${libre:-0}" -gt "$besoin" ] || { log "sauvegarder : pas assez de place dans $dest ($((besoin / 1024)) Mo necessaires, $((libre / 1024)) libres)"; exit 1; }
+        f="$dest/boite-noire-$(hostname)-$(date +%F_%H%M%S).tar"
+        if tar -C "$BASE" --exclude=./lost+found -cf "$f.partiel" . 2>/dev/null && sync "$f.partiel" && mv "$f.partiel" "$f"; then
+            log "copie de la boite : $f ($(du -h "$f" | cut -f1), sha256 $(sha256sum "$f" | cut -d' ' -f1))"
+            log "elle se relit avec la phrase de la boite, comme la boite elle-meme"
+            printf '%s\n' "$f"
+            exit 0
+        fi
+        rm -f "$f.partiel"; log "sauvegarder : la copie a echoue"; exit 1
+        ;;
+    vider)
+        # vider [--phrase-stdin] [NOTE] : EVERY RECORD REMOVED (and the sessions
+        # waiting to be merged) - destruction, hence the /home passphrase. The
+        # keys, the fingerprint and its signature, the TPM's objects stay. The
+        # new chain opens with a record that says so: how many records left,
+        # the name and SHA-256 of the last one, where the copy went.
+        boite
+        [ "$(id -u)" = 0 ] || { log "root requis"; exit 1; }
+        shift
+        if [ "${1:-}" = --phrase-stdin ]; then IFS= read -r a || a=""; shift; else lire_phrase a "phrase de /home (vider la boite noire) : "; fi
+        if ! { [ "$TEST" = 1 ] || printf '%s' "$a" | phrase_de_home; }; then a=""; log "phrase de /home refusee : la boite n est PAS videe"; exit 1; fi
+        a=""
+        note="${*:-aucune copie declaree}"
+        d="$(dernier)"; nb="$(find "$JOURNAL" -maxdepth 1 -name '*.age' 2>/dev/null | wc -l)"
+        fin_chaine="origine"; [ -n "$d" ] && fin_chaine="$(sha256sum "$d" | cut -d' ' -f1) $(basename "$d")"
+        ouvrir || exit 1
+        [ "$TEST" = 1 ] || chattr -R -i "$JOURNAL" "$BASE/attente" 2>/dev/null
+        find "$JOURNAL" -maxdepth 1 -type f -delete 2>/dev/null
+        [ -d "$BASE/attente" ] && find "$BASE/attente" -mindepth 1 -delete 2>/dev/null
+        : > "$BASE/.envoyes" 2>/dev/null
+        nouveau="$(printf 'BOITE NOIRE VIDEE le %s, avec la phrase de /home.\n%s enregistrement(s) retires ; le dernier : %s\ncopie : %s\n' \
+            "$(date '+%F %T')" "$nb" "$fin_chaine" "$note" | sceller videe)"
+        if [ -n "$nouveau" ] && home_chiffre_ouvert; then
+            install -d -m 0700 "$PRIVE" 2>/dev/null
+            printf '%s %s\n' "$(sha256sum "$nouveau" | cut -d' ' -f1)" "$(basename "$nouveau")" > "$PRIVE/.dernier-vu"
+        fi
+        log "boite videe : $nb enregistrement(s) retires ; la nouvelle chaine commence par $(basename "${nouveau:-?}")"
+        ;;
+    plein)
+        # THE QUESTION, from 80 %: copy the box elsewhere, empty it, or later.
+        # (autostart at login, in a terminal window; --toujours: asked below
+        # the threshold too)
+        boite
+        [ "$(id -u)" = 0 ] || { log "root requis"; exit 1; }
+        etat="$("$0" place)"; rc=$?
+        [ "$rc" = 3 ] || [ "${2:-}" = --toujours ] || { echo "$etat"; exit 0; }
+        echo
+        printf '\033[1;31m  LA BOITE NOIRE EST PRESQUE PLEINE.\033[0m\n'
+        echo "  ${etat#boite noire : }"
+        echo "  Quand elle sera pleine, plus rien ne pourra y etre note."
+        echo
+        echo "    1   en faire une copie (cle USB, autre disque), puis la vider"
+        echo "    2   la vider SANS copie : tout ce qu elle a note est perdu"
+        echo "    Entree   plus tard (la question reviendra a la prochaine ouverture de session)"
+        echo
+        printf '  Ton choix : '
+        IFS= read -r c || c=""
+        note=""
+        case "$c" in
+            1)
+                mapfile -t ou < <(findmnt -rno TARGET 2>/dev/null | grep -E '^(/media/[^/]+/[^/]+|/run/media/[^/]+/[^/]+|/mnt/[^/]+)$' | while IFS= read -r m; do
+                    m="$(printf '%b' "$m")"; [ -w "$m" ] && [ "$m" != /media/root-ro ] && [ "$m" != /media/root-rw ] && printf '%s\n' "$m"; done)
+                echo
+                if [ "${#ou[@]}" -gt 0 ]; then
+                    echo "  Ou mettre la copie ?"
+                    for i in "${!ou[@]}"; do echo "    $((i + 1))   ${ou[$i]}   ($(df -h --output=avail "${ou[$i]}" | tail -1 | tr -d ' ') libres)"; done
+                    printf '  Un numero, ou un dossier (Entree : abandonner) : '
+                else
+                    echo "  Aucune cle USB n est branchee. Branche-en une et recommence, ou donne un dossier."
+                    printf '  Dossier (Entree : abandonner) : '
+                fi
+                IFS= read -r d || d=""
+                case "$d" in ''|*[!0-9]*) ;; *) [ "$d" -ge 1 ] && [ "$d" -le "${#ou[@]}" ] && d="${ou[$((d - 1))]}" ;; esac
+                [ -n "$d" ] || { echo "  Rien n est change."; exit 0; }
+                f="$("$0" sauvegarder "$d" | tee /dev/stderr | tail -1)"
+                [ -f "$f" ] || { printf '\033[1;31m  La copie n a pas pu etre faite : la boite n est PAS videe.\033[0m\n'; exit 1; }
+                note="$f"
+                printf '\033[1;32m  Copie faite : %s\033[0m\n' "$f"
+                printf '  Vider la boite maintenant ? [Entree = oui, n = non] : '
+                IFS= read -r c || c=n
+                case "$c" in n|N|non|Non|NON|no|No|NO) echo "  La boite reste comme elle est (la copie est faite)."; exit 0 ;; esac
+                ;;
+            2)
+                printf '  Sans copie, rien ne pourra etre retrouve. Tape  effacer  pour confirmer : '
+                IFS= read -r c || c=""
+                [ "$c" = effacer ] || { echo "  Rien n est change."; exit 0; }
+                note="aucune copie (choix du proprietaire)"
+                ;;
+            *) echo "  Plus tard, donc."; exit 0 ;;
+        esac
+        "$0" vider "$note" && printf '\033[1;32m  La boite noire est videe ; elle recommence a noter.\033[0m\n'
+        ;;
     liste)
         boite
         # GREEN: validated (written to the disk). RED: not validated (wiped).
@@ -639,6 +755,23 @@ case "${1:-liste}" in
             [ "$i" -ge "$debut" ] && { printf "$c"'%s\033[0m\n' "$(printf '%s\n' "$clair" | head -n1)"; printf '%s\n' "$clair" | tail -n +2; }
             prec="$j"
         done | ${PAGER:-less -R}
+        cle=""
+        ;;
+    montrer)
+        # montrer NAME|NUMBER|ID : ONE record, decrypted (the box passphrase).
+        # ID: the first characters of its SHA-256, as « osmo-boite log » shows
+        boite
+        q="${2:-}"; j=""
+        [ -n "$q" ] || { log "montrer : quel enregistrement ? (osmo-boite log)"; exit 1; }
+        while IFS= read -r f; do
+            b="$(basename "$f")"
+            case "$q" in *[!0-9]*) ;; *) [ "$((10#${b%%_*}))" = "$((10#$q))" ] && { j="$f"; break; } ;; esac
+            [ "$b" = "$q" ] && { j="$f"; break; }
+            case "$(sha256sum "$f" | cut -d' ' -f1)" in "$q"*) [ "${#q}" -ge 6 ] && { j="$f"; break; } ;; esac
+        done < <(find "$JOURNAL" -maxdepth 1 -name '*.age' | sort)
+        [ -n "$j" ] || { log "montrer : pas d enregistrement « $q »"; exit 1; }
+        cle="$(identite)" || exit 1
+        age -d -i <(printf '%s\n' "$cle") "$j" 2>/dev/null | ${PAGER:-less -R} || log "indechiffrable"
         cle=""
         ;;
     verifier)

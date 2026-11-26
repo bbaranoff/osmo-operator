@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Etats du systeme
+Name[fr]=États du système
+Comment=Parcourir les etats du systeme comme du code : chaque ecriture, ses fichiers, ses diffs
+Exec=python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --tty --title "Etats du systeme" -- /usr/local/sbin/osmo-etats
+Icon=document-open-recent
+Terminal=false
+Categories=System;
+Keywords=git;historique;etat;diff;commit;session;

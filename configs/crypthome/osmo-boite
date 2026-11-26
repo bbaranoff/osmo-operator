@@ -1,0 +1,96 @@
+#!/bin/bash
+# osmo-boite - THE BLACK BOX AND THE SESSIONS, WITH git's WORDS.
+#
+# The black box is already a history: one encrypted record per session, each
+# carrying the SHA-256 of the one before (a chain of commits); a validated
+# session is a commit on the disk that can be undone; a session that was not
+# validated waits in the box and can be merged afterwards. This command only
+# gives all that the verbs everybody knows - it stores nothing itself, every
+# verb is one of osmo-diffs, osmo-racine-live or osmo-reset.
+#
+# NOT A git REPOSITORY, on purpose: the machine writes the box WITHOUT being
+# able to read it (each record is encrypted for a public key; reading takes
+# the box passphrase). A git repository would have to be readable by whoever
+# writes to it.
+#
+#   osmo-boite web            BROWSE THE STATES OF THE SYSTEM like code on
+#                             GitHub: commits, diffs, the tree and the files
+#                             as they were at each state (osmo-etats)
+#   osmo-boite log [N]        the records, newest last: id, number, date, kind
+#   osmo-boite show ID        one record, decrypted            (box passphrase)
+#   osmo-boite status         this session: what changed, what waits, the box
+#   osmo-boite diff [PATH]    what this session changed (PATH: its diff)
+#   osmo-boite commit         write the session to the disk  (/home passphrase)
+#   osmo-boite revert         undo the last commit           (/home passphrase)
+#   osmo-boite checkout N     go back N sessions             (/home passphrase)
+#   osmo-boite stash          the sessions that were NOT validated
+#   osmo-boite merge NAME [--session|--disque]   validate one afterwards
+#   osmo-boite reset          forget this session (« Remettre a zero »)
+#   osmo-boite fsck           check the chain                  (box passphrase)
+#   osmo-boite bundle DIR     the whole box in one file, still encrypted
+#   osmo-boite gc             copy the box elsewhere and/or empty it
+set -u
+BASE="${OSMO_DIFFS_BASE:-/var/lib/osmo-diffs}"
+D=/usr/local/sbin/osmo-diffs; R=/usr/local/sbin/osmo-racine-live; Z=/usr/local/sbin/osmo-reset
+root() { [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"; }
+aide() { sed -n '2,/^set -u/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
+
+case "${1:-status}" in
+    log)
+        n="${2:-0}"
+        find "$BASE/journal" -maxdepth 1 -name '*.age' 2>/dev/null | sort | { [ "$n" -gt 0 ] 2>/dev/null && tail -n "$n" || cat; } \
+        | while IFS= read -r f; do
+            b="$(basename "$f" .diff.age)"; num="${b%%_*}"; reste="${b#*_}"; genre="${reste##*_}"; quand="${reste%_*}"
+            case "$genre" in
+                valide|ecrit|fusionne) c='\033[1;32m' ;;
+                efface|coupe|alerte) c='\033[1;31m' ;;
+                *) c='\033[1;33m' ;;
+            esac
+            printf '\033[33m%s\033[0m  %s  %s %s:%s:%s  '"$c"'%-9s\033[0m %8s o\n' \
+                "$(sha256sum "$f" | cut -c1-8)" "$num" "${quand%_*}" "${quand:11:2}" "${quand:13:2}" "${quand:15:2}" \
+                "$genre" "$(stat -c %s "$f")"
+        done
+        ;;
+    show)
+        root "$@"; [ -n "${2:-}" ] || { echo "osmo-boite show ID   (osmo-boite log)" >&2; exit 2; }
+        exec "$D" montrer "$2"
+        ;;
+    status)
+        root "$@"
+        "$R" etat 2>&1
+        "$Z" etat 2>&1
+        a="$("$R" attente 2>/dev/null | grep -c 'NON VALIDEE')"
+        echo "sessions non validees en attente : ${a:-0}   (osmo-boite stash)"
+        "$D" place 2>&1
+        echo "dernier enregistrement : $("$0" log 1 | sed 's/\x1b\[[0-9;]*m//g')"
+        ;;
+    diff)
+        root "$@"
+        if [ -n "${2:-}" ]; then
+            p="$(readlink -m "$2")"
+            if [ -e "/media/root-ro$p" ] || [ -e "$p" ]; then
+                diff -uN --label "a$p (disque)" --label "b$p (session)" "/media/root-ro$p" "$p"
+            fi
+        else
+            "$R" changements
+        fi
+        ;;
+    commit)   root "$@"; exec "$R" valider ;;
+    revert)   root "$@"; exec "$R" defaire ;;
+    checkout) root "$@"; exec "$R" remonter "${2:-1}" ;;
+    stash)    root "$@"; exec "$R" attente ;;
+    merge)    root "$@"; shift; [ -n "${1:-}" ] || { echo "osmo-boite merge NOM [--session|--disque]   (osmo-boite stash)" >&2; exit 2; }; exec "$R" fusionner "$@" ;;
+    reset)    root "$@"; exec "$Z" demander ;;
+    fsck)
+        root "$@"
+        echo "La chaine est dans les enregistrements chiffres : il faut la phrase de la boite."
+        s="$(PAGER=cat "$D" voir 2>&1 | grep -aE 'CHAINE ROMPUE|indechiffrable|phrase|refus')"
+        if [ -z "$s" ]; then printf '\033[1;32mchaine intacte : %s enregistrement(s)\033[0m\n' "$(find "$BASE/journal" -maxdepth 1 -name '*.age' | wc -l)"
+        else printf '\033[1;31m%s\033[0m\n' "$s"; exit 3; fi
+        ;;
+    bundle)   root "$@"; exec "$D" sauvegarder "${2:-}" ;;
+    gc)       root "$@"; exec "$D" plein --toujours ;;
+    web)      root "$@"; shift; exec /usr/local/sbin/osmo-etats "$@" ;;
+    help|-h|--help) aide ;;
+    *) aide >&2; exit 2 ;;
+esac

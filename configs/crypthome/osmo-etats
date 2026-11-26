@@ -1,0 +1,518 @@
+#!/usr/bin/python3
+# osmo-etats - BROWSE THE STATES OF THE SYSTEM LIKE CODE ON GitHub.
+#
+# Every validated write to the system disk is a commit (osmo-racine-live):
+# what it replaced or removed is kept next to the root, in
+# /.osmo-retour/<commit>/files, with the list of what it created (crees). That
+# is enough to rebuild ANY of those states without touching the disk:
+#
+#   the content of a path AFTER commit C = what the first LATER commit that
+#   touched it has put aside; none did: what the disk holds now. (A later
+#   commit that CREATED it: it did not exist.)
+#
+# This serves it as pages, read-only, on this machine only:
+#
+#   /                 the commits, newest first, grouped by session - and, at
+#                     the top, the session in progress (the RAM layer)
+#   /commit/ID        what that commit changed: every file, with its diff
+#   /tree/ID/PATH     the directories of the system AS THEY WERE after ID
+#   /blob/ID/PATH     a file as it was after ID
+#
+#   osmo-etats [--port N] [--sans-navigateur]
+#
+# PERIMETER. It reads the system disk and its undo snapshots: what is in clear
+# on the disk already (to read it: nothing, disk in hand) - but the snapshots
+# are root's, so this runs as root, listens on 127.0.0.1 only, and every URL
+# carries a random key printed at start: no other account of the machine and
+# no web page can ask it anything. It writes nothing. /home is not shown (in
+# persistent mode it has no commits; its content never leaves the volume).
+import difflib
+import html
+import http.server
+import os
+import secrets
+import stat
+import subprocess
+import sys
+import urllib.parse
+
+BAS = os.environ.get("OSMO_ETATS_BAS", "/media/root-ro")
+HAUT = os.environ.get("OSMO_ETATS_HAUT", "/media/root-rw/overlay")
+RET = os.path.join(BAS, ".osmo-retour")
+CACHES = (".osmo-retour", ".osmo-valider")
+MAX_TEXTE = 400 * 1024
+MAX_DIFFS = 300
+EN_COURS = "en-cours"                       # the session in progress, as a pseudo-commit
+CLE = secrets.token_urlsafe(18)
+
+
+def commits():
+    """Finished commits, oldest first."""
+    try:
+        return sorted(c for c in os.listdir(RET) if os.path.exists(os.path.join(RET, c, "FAIT")))
+    except OSError:
+        return []
+
+
+def lire(chemin, n=4096):
+    try:
+        with open(chemin, errors="replace") as f:
+            return f.read(n)
+    except OSError:
+        return ""
+
+
+def date_de(c):
+    if len(c) == 15 and c[8] == "-":
+        return "%s-%s-%s %s:%s:%s" % (c[:4], c[4:6], c[6:8], c[9:11], c[11:13], c[13:15])
+    return c
+
+
+def crees(c):
+    return [p for p in lire(os.path.join(RET, c, "crees"), 1 << 24).split("\n") if p]
+
+
+def mis_de_cote(c):
+    """Paths (files and links) that commit c replaced or removed."""
+    base = os.path.join(RET, c, "files")
+    for d, _dirs, fichiers in os.walk(base):
+        for f in fichiers:
+            yield os.path.join(d, f)[len(base):]
+
+
+def existe(p):
+    return os.path.lexists(p)
+
+
+def whiteout(p):
+    try:
+        s = os.lstat(p)
+    except OSError:
+        return False
+    return stat.S_ISCHR(s.st_mode) and s.st_rdev == 0
+
+
+def source(c, chemin):
+    """Where the content of `chemin` AFTER commit c is to be read: a real path,
+    or None when it did not exist. c == EN_COURS: the running session."""
+    if c == EN_COURS:
+        h = HAUT + chemin
+        if whiteout(h):
+            return None
+        return h if existe(h) else (BAS + chemin if existe(BAS + chemin) else None)
+    tous = commits()
+    try:
+        apres = tous[tous.index(c) + 1:]
+    except ValueError:
+        apres = tous
+    for d in apres:
+        v = os.path.join(RET, d, "files") + chemin
+        if existe(v) and not os.path.isdir(v):
+            return v
+        if chemin in _crees_cache(d):
+            return None
+    r = BAS + chemin
+    return r if existe(r) else None
+
+
+_cc = {}
+
+
+def _crees_cache(c):
+    if c not in _cc:
+        _cc[c] = set(crees(c))
+    return _cc[c]
+
+
+def avant(c):
+    """The state BEFORE commit c: the commit before it, or '' (the oldest known)."""
+    if c == EN_COURS:
+        t = commits()
+        return t[-1] if t else ""
+    t = commits()
+    i = t.index(c)
+    return t[i - 1] if i > 0 else ""
+
+
+def source_avant(c, chemin):
+    """Content of `chemin` BEFORE commit c."""
+    if c == EN_COURS:
+        r = BAS + chemin
+        return r if existe(r) else None
+    v = os.path.join(RET, c, "files") + chemin
+    if existe(v) and not os.path.isdir(v):
+        return v
+    if chemin in _crees_cache(c):
+        return None
+    return source(c, chemin)                 # untouched by c
+
+
+def changes(c):
+    """[(kind, path)] for commit c: A added, M modified, D deleted."""
+    out = []
+    if c == EN_COURS:
+        for d, dirs, fichiers in os.walk(HAUT):
+            for f in fichiers + [x for x in dirs if os.path.islink(os.path.join(d, x))]:
+                p = os.path.join(d, f)[len(HAUT):]
+                if p.startswith(("/tmp/", "/var/tmp/", "/run/")):
+                    continue
+                if whiteout(HAUT + p):
+                    if existe(BAS + p):
+                        out.append(("D", p))
+                elif existe(BAS + p):
+                    out.append(("M", p))
+                else:
+                    out.append(("A", p))
+        return sorted(out, key=lambda x: x[1])
+    cr = _crees_cache(c)
+    for p in mis_de_cote(c):
+        out.append(("M" if source(c, p) is not None else "D", p))
+    vus = {p for _k, p in out}
+    for p in cr:
+        if p not in vus:
+            s = source(c, p)
+            if s is None or not os.path.isdir(s) or os.path.islink(s):
+                out.append(("A", p))
+    return sorted(out, key=lambda x: x[1])
+
+
+def contenu(p):
+    """('texte', lines) | ('lien', target) | ('binaire', size) | ('absent', 0) | ('rep', 0)"""
+    if p is None:
+        return "absent", 0
+    try:
+        s = os.lstat(p)
+    except OSError:
+        return "absent", 0
+    if stat.S_ISLNK(s.st_mode):
+        return "lien", os.readlink(p)
+    if stat.S_ISDIR(s.st_mode):
+        return "rep", 0
+    if not stat.S_ISREG(s.st_mode):
+        return "binaire", 0
+    if s.st_size > MAX_TEXTE:
+        return "binaire", s.st_size
+    try:
+        with open(p, "rb") as f:
+            b = f.read()
+    except OSError:
+        return "absent", 0
+    if b"\0" in b:
+        return "binaire", s.st_size
+    return "texte", b.decode("utf-8", "replace").splitlines()
+
+
+def octets(n):
+    for u in ("o", "Ko", "Mo", "Go"):
+        if n < 1024 or u == "Go":
+            return ("%d %s" % (n, u)) if u == "o" else ("%.1f %s" % (n, u))
+        n /= 1024.0
+
+
+def lister(c, chemin):
+    """Directory `chemin` as it was after commit c: {name: is_dir}."""
+    chemin = chemin.rstrip("/")
+    noms = {}
+    for racine in ([BAS] if c != EN_COURS else [BAS, HAUT]):
+        try:
+            for e in os.scandir(racine + (chemin or "/")):
+                if racine == BAS and not chemin and e.name in CACHES:
+                    continue
+                if whiteout(e.path):
+                    noms.pop(e.name, None)
+                else:
+                    noms[e.name] = e.is_dir(follow_symlinks=False)
+        except OSError:
+            pass
+    if c == EN_COURS:
+        return noms
+    tous = commits()
+    try:
+        apres = tous[tous.index(c) + 1:]
+    except ValueError:
+        apres = tous
+    for d in reversed(apres):                # undo the later commits, newest first
+        for p in _crees_cache(d):
+            if os.path.dirname(p) == (chemin or "/"):
+                noms.pop(os.path.basename(p), None)
+        v = os.path.join(RET, d, "files") + (chemin or "/")
+        try:
+            for e in os.scandir(v):
+                noms[e.name] = e.is_dir(follow_symlinks=False)
+        except OSError:
+            pass
+    return noms
+
+
+# ── pages ────────────────────────────────────────────────────────────────────
+CSS = """
+*{box-sizing:border-box}body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.5 -apple-system,"Segoe UI",Ubuntu,sans-serif}
+a{color:#4493f8;text-decoration:none}a:hover{text-decoration:underline}
+header{background:#010409;border-bottom:1px solid #30363d;padding:14px 24px;font-size:16px}
+header b{font-weight:600}header span{color:#8b949e;font-size:13px;margin-left:12px}
+main{max-width:1180px;margin:0 auto;padding:20px 24px 60px}
+h2{font-size:15px;font-weight:600;color:#8b949e;margin:26px 0 8px}
+.boite{border:1px solid #30363d;border-radius:6px;overflow:hidden;margin-bottom:16px;background:#0d1117}
+.ligne{display:flex;gap:12px;align-items:center;padding:9px 14px;border-top:1px solid #21262d}
+.ligne:first-child{border-top:0}.ligne:hover{background:#161b22}
+.titre{flex:1;min-width:0;font-weight:600}.gris{color:#8b949e;font-weight:400}
+.id{font-family:ui-monospace,"Ubuntu Mono",monospace;font-size:12px;border:1px solid #30363d;border-radius:6px;padding:2px 8px;color:#e6edf3}
+.b{font-family:ui-monospace,"Ubuntu Mono",monospace;font-size:12px;border-radius:10px;padding:1px 8px}
+.A{color:#3fb950;border:1px solid #238636}.M{color:#d29922;border:1px solid #9e6a03}.D{color:#f85149;border:1px solid #da3633}
+.cours{border-color:#9e6a03}.cours .titre{color:#d29922}
+.fichier{border:1px solid #30363d;border-radius:6px;margin:14px 0;overflow:hidden}
+.fichier>.tete{background:#161b22;border-bottom:1px solid #30363d;padding:7px 12px;font-family:ui-monospace,"Ubuntu Mono",monospace;font-size:12px;display:flex;gap:10px;align-items:center}
+.fichier>.tete a{color:#e6edf3}
+pre{margin:0;font:12px/1.45 ui-monospace,"Ubuntu Mono",monospace;overflow-x:auto}
+pre span{display:block;padding:0 12px;white-space:pre}
+.p{background:#12261e;color:#aff5b4}.m{background:#2d1517;color:#ffdcd7}.h{background:#131d2e;color:#8b949e}
+.note{padding:10px 14px;color:#8b949e;font-size:13px}
+.chemin{font-family:ui-monospace,"Ubuntu Mono",monospace;font-size:14px;margin:4px 0 14px}
+table{width:100%;border-collapse:collapse}td{padding:6px 14px;border-top:1px solid #21262d}tr:first-child td{border-top:0}
+td.n{color:#8b949e;text-align:right;font-size:12px;width:1%;white-space:nowrap}
+.num{color:#6e7681;user-select:none;display:inline-block;width:5ch;text-align:right;margin-right:14px}
+.sel{background:#1f6feb33;border:1px solid #1f6feb;border-radius:6px;padding:2px 10px;font-size:12px}
+"""
+
+
+def page(titre, corps, sous=""):
+    return ("<!doctype html><html lang=fr><meta charset=utf-8><title>%s - osmo-operator</title><style>%s</style>"
+            "<header><a href='%s'><b>osmo-operator</b> / états du système</a><span>%s</span></header><main>%s</main></html>"
+            % (html.escape(titre), CSS, url(""), html.escape(sous), corps)).encode()
+
+
+def url(reste):
+    return "/" + CLE + "/" + reste
+
+
+def q(p):
+    return urllib.parse.quote(p.lstrip("/"))
+
+
+def nom_etat(c):
+    return "session en cours" if c == EN_COURS else date_de(c)
+
+
+def page_accueil():
+    tous = commits()
+    o = []
+    try:
+        n = len(changes(EN_COURS))
+    except OSError:
+        n = 0
+    o.append("<div class='boite cours'><div class=ligne><div class=titre><a href='%s'>Session en cours</a> "
+             "<span class=gris>- pas encore enregistrée : %d fichier(s) changé(s), en mémoire</span></div>"
+             "<a class=id href='%s'>parcourir</a></div></div>"
+             % (url("commit/" + EN_COURS), n, url("tree/" + EN_COURS + "/")))
+    session, bloc = None, []
+
+    def vider():
+        if bloc:
+            o.append("<div class=boite>" + "".join(bloc) + "</div>")
+            del bloc[:]
+    for c in reversed(tous):
+        s = lire(os.path.join(RET, c, "session")).strip()
+        if s != session:
+            vider()
+            session = s
+            o.append("<h2>Session %s &nbsp;·&nbsp; démarrage %s</h2>" % (date_de(c)[:10], html.escape(s[:8] or "?")))
+        nf = sum(1 for _ in mis_de_cote(c))
+        nc = len(_crees_cache(c))
+        bloc.append("<div class=ligne><div class=titre><a href='%s'>Écriture du %s</a> "
+                    "<span class=gris>- %d remplacé(s) ou supprimé(s), %d créé(s)</span></div>"
+                    "<a class=id href='%s'>%s</a><a class=id href='%s'>parcourir</a></div>"
+                    % (url("commit/" + c), date_de(c), nf, nc, url("commit/" + c), c, url("tree/" + c + "/")))
+    vider()
+    if not tous:
+        o.append("<div class=note>Aucune écriture validée n'est gardée sur ce disque.</div>")
+    return page("États", "".join(o), "%d écriture(s) validée(s) que le disque peut encore montrer" % len(tous))
+
+
+def bloc_diff(c, k, p):
+    a, b = source_avant(c, p), source(c, p)
+    ta, va = contenu(a)
+    tb, vb = contenu(b)
+    tete = ("<div class=tete><span class='b %s'>%s</span><a href='%s'>%s</a></div>"
+            % (k, {"A": "ajouté", "M": "modifié", "D": "supprimé"}[k], url("blob/%s/%s" % (c, q(p))), html.escape(p)))
+    if "rep" in (ta, tb):
+        return ""
+    if ta == "texte" and tb == "texte" or (ta == "absent" and tb == "texte") or (ta == "texte" and tb == "absent"):
+        la = va if ta == "texte" else []
+        lb = vb if tb == "texte" else []
+        lignes = []
+        for l in difflib.unified_diff(la, lb, "a" + p, "b" + p, lineterm="", n=3):
+            if l.startswith(("---", "+++")):
+                continue
+            cl = "h" if l.startswith("@@") else "p" if l.startswith("+") else "m" if l.startswith("-") else ""
+            lignes.append("<span class='%s'>%s</span>" % (cl, html.escape(l) or " "))
+            if len(lignes) > 1500:
+                lignes.append("<span class=h>... diff coupé (trop long)</span>")
+                break
+        corps = "<pre>%s</pre>" % "".join(lignes) if lignes else "<div class=note>contenu identique (droits ou dates seulement)</div>"
+    else:
+        def dit(t, v):
+            return {"absent": "absent", "lien": "lien → %s" % v, "binaire": "binaire, %s" % octets(v or 0),
+                    "texte": "texte, %d ligne(s)" % (len(v) if isinstance(v, list) else 0)}.get(t, t)
+        corps = "<div class=note>avant : %s &nbsp;→&nbsp; après : %s</div>" % (html.escape(dit(ta, va)), html.escape(dit(tb, vb)))
+    return "<div class=fichier>%s%s</div>" % (tete, corps)
+
+
+def page_commit(c):
+    ch = changes(c)
+    o = ["<div class=chemin><span class=sel>%s</span> &nbsp; <a href='%s'>parcourir le système à cet état</a>"
+         % (html.escape(nom_etat(c)), url("tree/" + c + "/"))]
+    av = avant(c)
+    if av:
+        o.append(" &nbsp;·&nbsp; état d'avant : <a href='%s'>%s</a>" % (url("commit/" + av), date_de(av)))
+    o.append("</div><div class=boite>")
+    for k, p in ch[:2000]:
+        o.append("<div class=ligne><span class='b %s'>%s</span><a href='%s'>%s</a></div>"
+                 % (k, k, url("blob/%s/%s" % (c, q(p))), html.escape(p)))
+    if not ch:
+        o.append("<div class=note>aucun fichier changé</div>")
+    o.append("</div>")
+    for k, p in ch[:MAX_DIFFS]:
+        o.append(bloc_diff(c, k, p))
+    if len(ch) > MAX_DIFFS:
+        o.append("<div class=note>%d autres fichiers : ouvre-les depuis la liste.</div>" % (len(ch) - MAX_DIFFS))
+    return page(nom_etat(c), "".join(o), "%d fichier(s) changé(s)" % len(ch))
+
+
+def fil(c, chemin, genre):
+    parts = [x for x in chemin.split("/") if x]
+    o = ["<span class=sel>%s</span> &nbsp; <a href='%s'>/</a>" % (html.escape(nom_etat(c)), url("tree/%s/" % c))]
+    for i, x in enumerate(parts):
+        dernier = i == len(parts) - 1
+        cible = url("%s/%s/%s" % ("blob" if dernier and genre == "blob" else "tree", c, q("/".join(parts[:i + 1]))))
+        o.append(" <a href='%s'>%s</a>%s" % (cible, html.escape(x), "" if dernier and genre == "blob" else " /"))
+    return "<div class=chemin>%s</div>" % "".join(o)
+
+
+def page_tree(c, chemin):
+    noms = lister(c, chemin)
+    o = [fil(c, chemin, "tree"), "<div class=boite><table>"]
+    if chemin.strip("/"):
+        o.append("<tr><td><a href='%s'>..</a></td><td class=n></td></tr>" % url("tree/%s/%s" % (c, q(os.path.dirname(chemin.rstrip("/"))))))
+    for n in sorted(noms, key=lambda x: (not noms[x], x.lower())):
+        p = chemin.rstrip("/") + "/" + n
+        if noms[n]:
+            o.append("<tr><td>📁 <a href='%s'>%s</a></td><td class=n></td></tr>" % (url("tree/%s/%s" % (c, q(p))), html.escape(n)))
+        else:
+            s = source(c, p)
+            t = ""
+            try:
+                st = os.lstat(s) if s else None
+                t = "lien" if st and stat.S_ISLNK(st.st_mode) else octets(st.st_size) if st else ""
+            except OSError:
+                pass
+            o.append("<tr><td>📄 <a href='%s'>%s</a></td><td class=n>%s</td></tr>" % (url("blob/%s/%s" % (c, q(p))), html.escape(n), t))
+    o.append("</table></div>")
+    return page(chemin or "/", "".join(o), "le système tel qu'il était : " + nom_etat(c))
+
+
+def page_blob(c, chemin):
+    s = source(c, chemin)
+    t, v = contenu(s)
+    if t == "rep":
+        return page_tree(c, chemin)
+    o = [fil(c, chemin, "blob"), "<div class=fichier><div class=tete>%s</div>" % html.escape(chemin)]
+    if t == "texte":
+        o.append("<pre>%s</pre>" % "".join("<span><i class=num>%d</i>%s</span>" % (i + 1, html.escape(l)) for i, l in enumerate(v)))
+    elif t == "lien":
+        o.append("<div class=note>lien symbolique → %s</div>" % html.escape(str(v)))
+    elif t == "binaire":
+        o.append("<div class=note>fichier binaire ou trop gros pour être affiché (%s)</div>" % octets(v or 0))
+    else:
+        o.append("<div class=note>ce fichier n'existait pas à cet état</div>")
+    o.append("</div>")
+    # its history: every state that changed it
+    h = []
+    for d in [EN_COURS] + list(reversed(commits())):
+        try:
+            if d == EN_COURS:
+                touche = existe(HAUT + chemin)
+            else:
+                touche = existe(os.path.join(RET, d, "files") + chemin) or chemin in _crees_cache(d)
+        except OSError:
+            touche = False
+        if touche:
+            h.append("<div class=ligne><div class=titre><a href='%s'>%s</a></div><a class=id href='%s'>voir à cet état</a></div>"
+                     % (url("commit/" + d), html.escape(nom_etat(d)), url("blob/%s/%s" % (d, q(chemin)))))
+    if h:
+        o.append("<h2>Historique de ce fichier</h2><div class=boite>%s</div>" % "".join(h))
+    return page(chemin, "".join(o), nom_etat(c))
+
+
+class Page(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        chemin = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        hote = (self.headers.get("Host") or "").split(":")[0]
+        if hote not in ("127.0.0.1", "localhost") or not chemin.startswith("/" + CLE + "/"):
+            self.send_error(403)
+            return
+        reste = chemin[len(CLE) + 2:]
+        try:
+            genre, _, suite = reste.partition("/")
+            c, _, p = suite.partition("/")
+            p = os.path.normpath("/" + p)
+            if p == "/":
+                p = ""
+            if p.startswith("/.osmo-retour") or p.startswith("/.osmo-valider"):
+                raise KeyError
+            if genre == "":
+                corps = page_accueil()
+            elif c != EN_COURS and c not in commits():
+                raise KeyError
+            elif genre == "commit":
+                corps = page_commit(c)
+            elif genre == "tree":
+                corps = page_tree(c, p)
+            elif genre == "blob":
+                corps = page_blob(c, p)
+            else:
+                raise KeyError
+        except (KeyError, ValueError):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(corps)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(corps)
+
+
+def main():
+    if os.geteuid() != 0 and not os.environ.get("OSMO_ETATS_BAS"):
+        sys.exit("osmo-etats : root requis (sudo osmo-etats) - les etats gardes sur le disque sont a root")
+    port = 0
+    if "--port" in sys.argv:
+        port = int(sys.argv[sys.argv.index("--port") + 1])
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Page)
+    adresse = "http://127.0.0.1:%d%s" % (srv.server_address[1], url(""))
+    print("Les etats du systeme : %d ecriture(s) validee(s), et la session en cours." % len(commits()))
+    print("Ouvre cette adresse dans le navigateur de cette machine :\n\n  %s\n" % adresse)
+    print("(lecture seule, cette machine seulement ; Ctrl-C pour arreter)", flush=True)
+    if "--sans-navigateur" not in sys.argv:
+        qui = os.environ.get("SUDO_USER") or os.environ.get("PKEXEC_UID")
+        try:
+            if qui and os.environ.get("DISPLAY"):
+                if qui.isdigit():
+                    import pwd
+                    qui = pwd.getpwuid(int(qui)).pw_name
+                subprocess.Popen(["runuser", "-u", qui, "--", "xdg-open", adresse],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, KeyError):
+            pass
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

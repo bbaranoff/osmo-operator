@@ -149,7 +149,25 @@ install -m 0755 "$_CH_SRC/osmo-reset" "$ROOTFS/usr/local/sbin/osmo-reset"
 # the alarm's big red screen on a desktop (GTK, full screen, cannot be left);
 # at shutdown osmo-empreinte draws the same on the text console
 install -m 0755 "$_CH_SRC/osmo-alarme-ecran" "$ROOTFS/usr/local/sbin/osmo-alarme-ecran"
-for _d in osmo-enregistrer osmo-reset osmo-secrets; do
+# the box and the sessions with git's words (osmo-boite log / show / status /
+# commit / revert / merge...), and the states of the system browsed like code
+# on GitHub (osmo-etats: a read-only page on 127.0.0.1, icon « Etats du systeme »)
+install -m 0755 "$_CH_SRC/osmo-boite" "$ROOTFS/usr/local/bin/osmo-boite"
+install -m 0755 "$_CH_SRC/osmo-etats" "$ROOTFS/usr/local/sbin/osmo-etats"
+# THE BOX AT 80 %: asked at login, in a terminal window - copy it elsewhere
+# and empty it, empty it without a copy, or later (osmo-diffs plein). A full
+# box records nothing any more.
+cat > "$ROOTFS/etc/xdg/autostart/osmo-diffs-plein.desktop" <<'PLEIN'
+[Desktop Entry]
+Type=Application
+Name=Boite noire presque pleine
+Exec=sh -c '/usr/local/sbin/osmo-diffs place >/dev/null 2>&1; [ $? = 3 ] && exec python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --tty --keep-open --title "Boite noire presque pleine" -- /usr/local/sbin/osmo-diffs plein'
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-Autostart-Delay=15
+PLEIN
+for _d in osmo-enregistrer osmo-reset osmo-etats osmo-secrets; do
     install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
     for _b in Desktop Bureau; do
         [ -d "$ROOTFS/etc/skel/$_b" ] && install -m 0755 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/etc/skel/$_b/$_d.desktop"
