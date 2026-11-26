@@ -1983,6 +1983,38 @@ EOF
             p=""
             [ -n "$PHRASE" ] || decision=efface
         fi
+        # FIN PROPRE, /home PERSISTENT only (in RAM a power cut leaves
+        # nothing): the /home passphrase signs this session's start record
+        # (osmo-empreinte fin-propre) - NOT to write anything: so that a session
+        # ended WITHOUT it (power cut, button held, passphrase not given) is
+        # told at the next boot, on a blue screen. Asked here when nothing
+        # above asked it; it never changes the decision.
+        if [ "$persistant" = 1 ] && [ -x /usr/local/sbin/osmo-empreinte ] && [ -n "$CRYPTHOME_UUID" ]; then
+            pf="$PHRASE"
+            if [ -z "$pf" ]; then
+                console_texte
+                dire "osmo-operator : fin de session - la phrase de /home la signe (elle n ecrit rien)."
+                dire "Entree seule : le prochain demarrage dira que la session s est finie sans elle."
+                essai=1
+                while [ "$essai" -le "${CRYPTHOME_TRIES:-3}" ]; do
+                    inv="phrase de /home (Entree : sans)"
+                    [ "$essai" -gt 1 ] && inv="$inv ($essai/${CRYPTHOME_TRIES:-3})"
+                    lire_console p "$inv : "
+                    [ -n "$p" ] || break
+                    if printf '%s' "$p" | phrase_home_ok; then pf="$p"; break; fi
+                    dire_rouge "phrase refusee"
+                    essai=$((essai + 1))
+                done
+                p=""
+            fi
+            if [ -n "$pf" ]; then
+                printf '%s\n' "$pf" | /usr/local/sbin/osmo-empreinte fin-propre --phrase-stdin 2>&1 \
+                    | while IFS= read -r _l; do trace "$_l"; done
+            else
+                trace "fin : SANS la phrase de /home - le prochain demarrage le dira (ecran bleu)"
+            fi
+            pf=""
+        fi
         # the black box first: it reads the RAM layer against the disk (a
         # session forgotten on purpose is recorded as « efface » too)
         _b="$decision"; [ "$_b" = oublie ] && _b=efface

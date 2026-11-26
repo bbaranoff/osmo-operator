@@ -619,6 +619,10 @@ monter_home_direct() {
         /usr/local/sbin/osmo-empreinte home 2>&1 | while read -r l; do log "$l"; done
         /usr/local/sbin/osmo-empreinte sceau 2>&1 | while read -r l; do log "$l"; done
         printf '%s\n' "$phrase_directe" | /usr/local/sbin/osmo-empreinte home-direct --phrase-stdin 2>&1 | while read -r l; do log "$l"; done
+        # PERSISTENT: this session's start record, to be signed by the
+        # passphrase at shutdown - otherwise the next boot shows the blue
+        # screen « extinction non classique »
+        /usr/local/sbin/osmo-empreinte fin-debut 2>&1 | while read -r l; do log "$l"; done
     fi
     umount "$HOME_BAS" || return 1
     # « REMETTRE A ZERO » (osmo-reset): a snapshot of the volume as it is now,

@@ -31,6 +31,14 @@
 #                                     file again (about 30 s for 18 GB)
 #   osmo-empreinte demarrage          at boot, before unlock-home: fast
 #                                     control, the warning, the question
+#   osmo-empreinte fin-propre         at shutdown (osmo-racine-live fin), the
+#                                     /home passphrase on stdin: THIS session
+#                                     ended properly (its start record signed)
+#   osmo-empreinte fin-debut          unlock-home, /home opened PERSISTENT:
+#                                     this session's start record
+#   osmo-empreinte fin-controle       the last session: ended with the
+#                                     passphrase or not (no passphrase; also
+#                                     run by « demarrage », with the blue screen)
 #   osmo-empreinte fond               after boot, in the background, at idle
 #                                     priority: the complete control
 #   osmo-empreinte home               unlock-home, the volume just opened:
@@ -1321,6 +1329,207 @@ def boite_ancrer(phrase):
     return 0
 
 
+# ── A SESSION THAT ENDED WITHOUT THE PASSPHRASE ─────────────────────────────
+# Cutting the power, or holding the button, skips every control a shutdown
+# makes. ONLY FOR /home OPENED PERSISTENT (written to directly, no
+# fingerprint): in RAM a power cut leaves nothing, and what root may have
+# written to the disk before it is caught by the fingerprints. So the proof is
+# turned round: every PERSISTENT session writes a « demarrage »
+# record to the box (osmo-diffs noter demarrage - a chain record, its end held
+# by the TPM: it cannot be taken away), and a session that ends PROPERLY signs
+# that record with the key only the /home passphrase opens (FIN_SIG, on the
+# box). The next boot, before the /home question, looks at
+# the last « demarrage » record: not signed -> the session that followed it
+# ended without the passphrase. Power cut, held button, passphrase not given:
+# maintenance or attack - the boot says so, on a BLUE screen, and points to
+# the black box. Nothing is refused: it is a warning, not an alarm.
+FIN_SIG = os.path.join(BOITE, "fin-propre.sig")
+DEMARRAGE_RUN = os.environ.get("OSMO_EMPREINTE_DEMARRAGE", "/run/osmo-demarrage")
+FIN_SALE = os.environ.get("OSMO_EMPREINTE_FIN_SALE", "/run/osmo-fin-sans-phrase")
+
+
+def _demarrages():
+    return [f for f in _enregistrements() if f.endswith("_demarrage.diff.age")]
+
+
+def _fin_message(nom):
+    return b"osmo-fin-propre\0" + nom.encode() + b"\0" + _sha(os.path.join(JOURNAL_BOITE, nom)).encode()
+
+
+def fin_signee(nom):
+    """True: the session started by record NOM ended with the passphrase."""
+    if not os.path.exists(SIG_PUB) or not os.path.exists(FIN_SIG):
+        return False
+    try:
+        m = _memfd(_fin_message(nom))
+    except OSError:
+        return False
+    try:
+        return _ossl(["pkeyutl", "-verify", "-pubin", "-inkey", SIG_PUB, "-rawin", "-in", "/proc/self/fd/%d" % m,
+                      "-sigfile", FIN_SIG], fds=(m,)).returncode == 0
+    finally:
+        os.close(m)
+
+
+def fin_controle():
+    """No passphrase. None: nothing to say (no record yet, no key pair);
+    (nom, True|False): the last session, started by record nom, ended with
+    the passphrase or not."""
+    d = _demarrages()
+    if not d or not os.path.exists(SIG_PUB):
+        return None
+    return d[-1], fin_signee(d[-1])
+
+
+def fin_propre(phrase):
+    """At shutdown, the passphrase given: THIS session's start record signed."""
+    try:
+        with open(DEMARRAGE_RUN) as f:
+            nom = f.readline().strip()
+    except OSError:
+        nom = ""
+    if not nom:
+        d = _demarrages()
+        nom = d[-1] if d else ""
+    if not nom or not os.path.exists(os.path.join(JOURNAL_BOITE, nom)):
+        dire("fin propre : pas d enregistrement de demarrage pour cette session - rien a signer")
+        return 1
+    pem = cle_privee(phrase) if phrase else None
+    if pem is None:
+        dire("fin propre : phrase refusee ou cle hors d atteinte - le prochain demarrage dira « sans la phrase »")
+        return 1
+    k = _memfd(pem)
+    m = _memfd(_fin_message(nom))
+    try:
+        r = _ossl(["pkeyutl", "-sign", "-inkey", "/proc/self/fd/%d" % k, "-rawin", "-in", "/proc/self/fd/%d" % m], fds=(k, m))
+    finally:
+        os.close(k)
+        os.close(m)
+    if r.returncode != 0 or len(r.stdout) != 64:
+        dire("fin propre : signature impossible")
+        return 1
+    if not boite_rw(True):
+        return 1
+    try:
+        with open(FIN_SIG + ".nouv", "wb") as f:
+            f.write(r.stdout)
+        os.replace(FIN_SIG + ".nouv", FIN_SIG)
+        os.sync()
+    finally:
+        boite_rw(False)
+    dire("fin propre : session signee avec la phrase de /home (%s)" % nom)
+    return 0
+
+
+def _date_enregistrement(nom):
+    # 000066_2026-11-26_211522_demarrage.diff.age -> 2026-11-26 21:15:22
+    p = nom.split("_")
+    if len(p) >= 3 and len(p[2]) == 6:
+        return "%s %s:%s:%s" % (p[1], p[2][:2], p[2][2:4], p[2][4:])
+    return nom
+
+
+def ecran_bleu(lignes, secondes=90):
+    """The warning screen: blue, held until Enter (or the time is up)."""
+    if TEST:
+        return
+    for cmd in (["plymouth", "quit"], ["chvt", "1"]):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        c = os.open(CONSOLE, os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return
+    bleu = "\033[1;37;44m"
+    try:
+        os.write(c, (bleu + "\033[2J\033[H" + "\r\n".join(lignes) + "\r\n").encode())
+        fin = time.monotonic() + secondes
+        rep = b""
+        while time.monotonic() < fin and b"\n" not in rep and b"\r" not in rep:
+            r, _w, _e = select.select([c], [], [], 1.0)
+            if r:
+                try:
+                    d = os.read(c, 64)
+                except OSError:
+                    break
+                if not d:
+                    break
+                rep += d
+        os.write(c, b"\033[0m\033[2J\033[H")
+    except OSError:
+        pass
+    finally:
+        os.close(c)
+
+
+def fin_debut():
+    """unlock-home, /home just opened PERSISTENT: this session's start record
+    (no passphrase: the box's public key). Only persistent sessions write one -
+    a session in RAM leaves nothing behind when the power goes."""
+    try:
+        with open(FIN_SALE) as f:
+            precedente = "precedente %s : FINIE SANS LA PHRASE" % f.readline().strip()
+    except OSError:
+        precedente = "precedente : rien a signaler"
+    nom = ""
+    try:
+        bid = open("/proc/sys/kernel/random/boot_id").read().strip()
+    except OSError:
+        bid = "?"
+    try:
+        r = subprocess.run(["/usr/local/sbin/osmo-diffs", "noter", "demarrage"], text=True, timeout=120,
+                           input="demarrage persistant %s (boot_id %s) ; %s\n" % (time.strftime("%F %T"), bid, precedente),
+                           capture_output=True)
+        for l in (r.stdout + r.stderr).splitlines():
+            if "demarrage -> " in l:
+                nom = os.path.basename(l.split("demarrage -> ", 1)[1].strip())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not nom:
+        dire("fin propre : l enregistrement de demarrage n a pas pu etre ecrit (cette session ne pourra pas etre signee)")
+        return 1
+    try:
+        with open(DEMARRAGE_RUN, "w") as f:
+            f.write(nom + "\n")
+    except OSError:
+        pass
+    dire("session persistante : enregistrement de demarrage %s (la phrase de /home le signera a l extinction)" % nom)
+    return 0
+
+
+def fin_demarrage():
+    """At boot (« demarrage »), before the /home question and before anything
+    is written to the box: the last PERSISTENT session, ended with the
+    passphrase or not."""
+    v = fin_controle()
+    if v is None or v[1]:
+        if v is not None:
+            dire("derniere session : finie proprement, avec la phrase de /home")
+        return 0
+    quand = _date_enregistrement(v[0])
+    dire("EXTINCTION NON CLASSIQUE : derniere session (demarree le %s) finie sans la phrase de /home - verifier la boite noire" % quand)
+    try:
+        with open(FIN_SALE, "w") as f:
+            f.write("%s\n%s\n" % (v[0], quand))
+    except OSError:
+        pass
+    barre = "=" * 76
+    ecran_bleu(["", barre, "",
+                "   EXTINCTION NON CLASSIQUE",
+                "   (coupure de courant ou bouton power appuye)",
+                "", "   La phrase de /home n a pas ete donnee a la fin de la derniere session",
+                "   (demarree le %s)." % quand,
+                "", "   L integrite peut etre en cause : des fichiers ont pu etre ecrits.",
+                "   Priere de verifier la boite noire :",
+                "", "       osmo-boite log        les enregistrements",
+                "       osmo-boite web        les etats du systeme, comme sur GitHub",
+                "       osmo-boite stash      la session gardee (point de controle)",
+                "", barre, "", "   Entree pour continuer."])
+    return 2
+
+
 def tete_alerte():
     """unlock-home, /home just opened (with « sceau »): the box against the
     TPM. Different: red on the console, the flag every warning reads, a record."""
@@ -2555,9 +2764,22 @@ def main():
         return coffre("desceller", sys.argv[2])
     if cmd == "demarrage":
         copie_demarrage()
+        fin_demarrage()
         rc = demarrage()
         tpm_demarrage()
         return rc
+    if cmd == "fin-debut":
+        return fin_debut()
+    if cmd == "fin-propre":
+        return fin_propre(lire_phrase())
+    if cmd == "fin-controle":
+        v = fin_controle()
+        if v is None:
+            dire("pas encore d enregistrement de demarrage (ou pas de cle de signature)")
+            return 0
+        dire("derniere session (%s, demarree le %s) : %s" % (v[0], _date_enregistrement(v[0]),
+             "finie proprement, avec la phrase de /home" if v[1] else "FINIE SANS LA PHRASE DE /home"))
+        return 0 if v[1] else 2
     if cmd == "resceller":
         return resceller(lire_phrase())
     if cmd == "etats-signer":

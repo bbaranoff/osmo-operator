@@ -425,6 +425,7 @@ condition, cela se voit ici avant d'être écrit.
 | Le même, avant le nettoyage (fait d'office à la première écriture validée) | disque système, retours arrière | **rien** (disque en main) | phrase home |
 | Le même, diffs déjà enregistrés | boîte noire (journal) | **phrase boîte** | personne |
 | Nos journaux | `/home/.log` (monté sur `/opt/log`) | phrase home | phrase home |
+| Mémoire envoyée au swap pendant un build ISO (`build-iso.sh`) | fichier dans `/home` (ou à côté de `OSMO_ISO_WORK`), dm-crypt clé aléatoire tenue par le noyau seul | root, pendant le build (comme la RAM) ; **personne** après (clé perdue à la fin ou à la coupure) | idem |
 | Journaux vivants d'une exécution | RAM (`$LOG_DIR`) | root, session ouverte | idem |
 | Journal des sessions (dates, comptes, totaux) | disque système | rien | phrase home |
 | Disque système (`/etc`, `/var`, `/opt`, `/boot`) | en clair | rien | phrase home, sinon détecté (empreinte signée) |
@@ -442,6 +443,8 @@ condition, cela se voit ici avant d'être écrit.
 | Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) |
 | Tête de la chaîne des états | TPM, index NV à extension `0x1800A52` | tous | étendre : tous ; ramener en arrière : personne ; retirer : phrase home |
 | Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |
+| Preuve de fin de session propre, `/home` persistant seulement (`fin-propre.sig` : signature de l'enregistrement « demarrage » de la session) | boîte, en clair | tous | phrase home (clé de signature) ; sans elle → au démarrage suivant, écran bleu « extinction non classique » |
+| Enregistrements « demarrage » (un par session `/home` persistant) | boîte noire (journal, chaîne tenue par le TPM) | phrase boîte | personne |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Tête de la boîte (fin de la chaîne) | TPM, index NV à extension `0x1800A51` | tous | étendre : tous ; ramener en arrière : personne ; retirer : phrase home (secret propriétaire du TPM) |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |

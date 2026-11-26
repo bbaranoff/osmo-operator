@@ -497,7 +497,7 @@ case "${1:-liste}" in
         # session merged afterwards, « fusionne »)
         boite
         [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
-        case "${2:-}" in fusionne|root) ;; *) log "noter : mode refuse"; exit 1 ;; esac
+        case "${2:-}" in fusionne|root|demarrage) ;; *) log "noter : mode refuse"; exit 1 ;; esac
         nom="$(sceller "$2")" && log "$2 -> $nom"
         envoyer
         ;;
