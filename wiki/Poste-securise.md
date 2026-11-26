@@ -188,6 +188,11 @@ fait.
   seul le bouton d'alimentation maintenu l'éteint. Une marque reste sur la boîte
   (`alarme`) : le démarrage suivant est une alerte quoi que montre le disque — donc sans
   root invité — jusqu'à une empreinte reprise avec la phrase (`sudo osmo-empreinte prendre`).
+  **Le bouton de test**, comme sur un disjoncteur différentiel : l'icône « Test de
+  l'alarme » (`osmo-empreinte test-alarme`) la fait sonner pour vérifier qu'elle marche —
+  tout de suite sur le bureau (écran rouge et bip à fond, 10 secondes, impossible à
+  fermer), ou à la prochaine extinction sur la vraie console (15 secondes, puis
+  l'extinction continue). Rien n'est noté, rien n'est retenu.
 - Pas de question quand le mode est fixé : `CRYPTHOME_HOME="direct"` ou `"ram"` dans
   `/etc/default/crypthome`, ou l'entrée GRUB « /home en RAM » pour un démarrage. En mode
   « à enregistrer » seulement, `/home` a une empreinte, des retours arrière et sa couche

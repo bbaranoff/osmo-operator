@@ -43,6 +43,9 @@
 #                                     osmo-racine-live, after each write
 #   osmo-empreinte etats-verifier     their chain: signature, links, and every
 #                                     state read again (no passphrase)
+#   osmo-empreinte test-alarme        THE TEST BUTTON: make the alarm ring to
+#                                     see that it works - now on the desktop,
+#                                     or at the next shutdown on the console
 #   osmo-empreinte rappel             desktop: only what the complete control
 #                                     found after boot (the rest is said at
 #                                     boot, on the console, never at login)
@@ -86,6 +89,7 @@ SCEAU = os.path.join(BOITE, "empreinte.hmac")
 # boot is an alert whatever the disk looks like by then (no guest session);
 # only a fingerprint taken with the /home passphrase removes it
 ALARME = os.path.join(BOITE, "alarme")
+ESSAI_ARME = "/run/osmo-alarme-essai"          # « test-alarme »: the alarm shown at the next shutdown, as a test
 RACINE = os.environ.get("OSMO_EMPREINTE_RACINE") or ("/media/root-ro" if os.path.ismount("/media/root-ro") else "/")
 HOME_DISQUE = os.environ.get("OSMO_EMPREINTE_HOME", "/media/home-ro")
 CLE = ".osmo-diffs/sceau"
@@ -1640,6 +1644,33 @@ def extinction():
     nothing here). Red on the console, a record in the box, the beep."""
     if not TEST and not os.path.ismount(BOITE):
         return 0
+    # THE TEST BUTTON (« osmo-empreinte test-alarme », armed for this
+    # shutdown): the alarm as it really is here, on the console - the red
+    # screen and the beep, 15 seconds - then the shutdown goes on as usual.
+    # Nothing is recorded, nothing is held, no mark is left.
+    if os.path.exists(ESSAI_ARME):
+        try:
+            os.unlink(ESSAI_ARME)
+        except OSError:
+            pass
+        for cmd in (["plymouth", "quit"], ["chvt", "1"]):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        ecran_alarme(["!!!  ESSAI DE L ALARME  !!!", "",
+                      "C est ce que tu verrais si le disque avait change pendant la session, sans la phrase.",
+                      "Dans le vrai cas la machine ne s eteindrait pas : seul le bouton d alimentation maintenu.", "",
+                      "Ceci est un essai, demande par l icone « Test de l alarme » : rien n est arrive,",
+                      "rien n est note. L extinction continue dans 15 secondes."])
+        bip(15)
+        try:
+            c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+            os.write(c, (FIN + "\033[?25h\033[2J\033[H").encode())
+            os.close(c)
+        except OSError:
+            pass
+        dire("extinction : essai de l alarme fait (ecran et bip), a la demande")
     if os.path.exists(ALERTE):
         return 0                              # already said at boot: not twice
     trouve = []
@@ -1846,6 +1877,38 @@ def main():
             except (OSError, termios.error):
                 pass
         return 0
+    if cmd == "test-alarme":
+        # THE TEST BUTTON, as on a residual-current breaker: press it to see
+        # that the alarm works. Now (the screen and the beep, 10 seconds, on
+        # this desktop), or at the next shutdown (the real console screen).
+        print()
+        print("  TEST DE L ALARME")
+        print()
+        print("  L alarme se declenche quand le disque change pendant une session sans ta phrase.")
+        print("  Ce bouton la fait sonner pour verifier qu elle marche. Rien n est note, rien n est bloque.")
+        print()
+        print("    Entree   maintenant : l ecran rouge et le bip A FOND, 10 secondes, impossible a fermer")
+        print("    e        a la prochaine extinction : le vrai ecran de la console, 15 secondes, puis")
+        print("             l extinction continue normalement")
+        print("    n        ne rien faire")
+        print()
+        try:
+            rep = input("  Ton choix : ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            rep = "n"
+        if rep in ("n", "non", "no"):
+            print("  Rien n est fait.")
+            return 0
+        if rep == "e":
+            try:
+                open(ESSAI_ARME, "w").close()
+            except OSError as e:
+                print("  Impossible d armer l essai : %s" % e)
+                return 1
+            print("  C est arme : a la prochaine extinction, l alarme sonnera 15 secondes, puis la machine")
+            print("  s eteindra comme d habitude. (Pour l annuler : sudo rm %s)" % ESSAI_ARME)
+            return 0
+        os.execv(sys.argv[0], [sys.argv[0], "alarme", "--essai", "--bip", "--secondes", "10"])
     if cmd == "alarme":
         # the same red screen and beep again, while the shutdown is held
         verrouiller()

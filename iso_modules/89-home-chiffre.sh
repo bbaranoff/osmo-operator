@@ -167,7 +167,7 @@ NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 X-GNOME-Autostart-Delay=15
 PLEIN
-for _d in osmo-enregistrer osmo-reset osmo-etats osmo-secrets; do
+for _d in osmo-enregistrer osmo-reset osmo-etats osmo-test-alarme osmo-secrets; do
     install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
     for _b in Desktop Bureau; do
         [ -d "$ROOTFS/etc/skel/$_b" ] && install -m 0755 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/etc/skel/$_b/$_d.desktop"
