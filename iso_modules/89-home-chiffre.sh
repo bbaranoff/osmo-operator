@@ -87,7 +87,7 @@ rm -rf "$ROOTFS/etc/osmo-porte"
 # unlock-home / lock-home in sbin (they mount/unmount), run-as-owner and
 # crypthome-session-setup in bin (called from the session).
 install -d "$ROOTFS/usr/local/sbin" "$ROOTFS/usr/local/bin" "$ROOTFS/root" \
-           "$ROOTFS/etc/systemd/system" "$ROOTFS/etc/default" "$ROOTFS/usr/local/share/applications"
+           "$ROOTFS/etc/systemd/system" "$ROOTFS/etc/default" "$ROOTFS/usr/local/share/applications" "$ROOTFS/etc/xdg/autostart"
 install -m 0755 "$_CH_SRC/unlock-home"            "$ROOTFS/usr/local/sbin/unlock-home"
 install -m 0755 "$_CH_SRC/lock-home"              "$ROOTFS/usr/local/sbin/lock-home"
 # THE INSTALLED DISK (partition.conf): EFI, / in clear and READ-ONLY (every
