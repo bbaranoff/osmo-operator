@@ -1393,22 +1393,51 @@ def ecran_alarme(lignes=()):
     except OSError:
         return
     try:
-        larg = os.get_terminal_size(c).columns
+        larg, haut = os.get_terminal_size(c)
     except OSError:
-        larg = 80
-    l = ["\033[0m\033[41;1;37m\033[2J\033[H", ""]
+        larg, haut = 80, 25
+    l = []
     for mot in ("YOU HAVE DONE", "SOMETHING", "NASTY !!!!"):
         for r in range(5):
             t = " ".join(GROS[ch][r] for ch in mot)
             # white cells on the red: no glyph needed, whatever the console font
             l.append(" " * max(0, (larg - len(t)) // 2) + t.replace("#", "\033[47m \033[41m"))
         l.append("")
-    l += ["   " + x for x in lignes]
+    # CENTRED, both ways: every line of text in the middle of the width, the
+    # whole of it in the middle of the height
+    l += [" " * max(0, (larg - len(x[:larg - 2])) // 2) + x[:larg - 2] for x in lignes]
+    l = [""] * max(0, (haut - len(l)) // 2) + l
     try:
-        os.write(c, ("\r\n".join(l) + "\r\n").encode())
+        os.write(c, ("\033[0m\033[41;1;37m\033[2J\033[H\033[?25l" + "\r\n".join(l[:haut - 1])).encode())
     except OSError:
         pass
     os.close(c)
+
+
+def verrouiller():
+    """THE ALARM CANNOT BE LEFT: no signal stops it (Ctrl-C, Ctrl-\\, Ctrl-Z, a
+    closed terminal), the console cannot be switched (VT_LOCKSWITCH), the
+    magic SysRq keys are off. What remains is the power button, held."""
+    import fcntl
+    import signal
+    for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP, signal.SIGHUP, signal.SIGTERM):
+        try:
+            signal.signal(s, signal.SIG_IGN)
+        except (OSError, ValueError):
+            pass
+    if TEST:
+        return
+    try:
+        with open("/proc/sys/kernel/sysrq", "w") as f:
+            f.write("0\n")
+    except OSError:
+        pass
+    try:
+        c = os.open("/dev/tty0", os.O_RDWR | os.O_NOCTTY)
+        fcntl.ioctl(c, 0x560B)                # VT_LOCKSWITCH
+        os.close(c)
+    except OSError:
+        pass
 
 
 def extinction():
@@ -1464,6 +1493,7 @@ def extinction():
     if TEST:
         sys.stdout.write("\n".join(l) + "\n")
         return 3
+    verrouiller()
     ecran_alarme(l)
     bip()
     time.sleep(6)
@@ -1554,30 +1584,75 @@ def main():
         return bip() if "--alarme" in sys.argv[2:] else 0
     if cmd == "alarme" and "--essai" in sys.argv[2:]:
         # TO LOOK AT IT (a screenshot, a demonstration): the same screen on
-        # THIS terminal, with made-up differences - nothing recorded, nothing
-        # held. No beep and no volume touched, unless --bip: then THE beep,
-        # every volume at its maximum (and left there, as the real one does)
+        # THIS terminal for N seconds (--secondes N, 10 by default), with
+        # made-up differences. Nothing recorded, nothing held, the console and
+        # SysRq left alone - but, like the real one, Ctrl-C does not stop it.
+        # --bip: THE beep too, every volume at its maximum (and left there).
         global CONSOLE
+        import signal
+        import termios
+        duree = 10
+        if "--secondes" in sys.argv[2:]:
+            try:
+                duree = max(1, min(120, int(sys.argv[sys.argv.index("--secondes") + 1])))
+            except (IndexError, ValueError):
+                pass
+        for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP, signal.SIGHUP, signal.SIGTERM):
+            signal.signal(s, signal.SIG_IGN)
+        # on a desktop: a real window, full screen, centred, that cannot be
+        # left (osmo-alarme-ecran) - otherwise this terminal
+        if os.environ.get("DISPLAY") and os.path.exists("/usr/local/sbin/osmo-alarme-ecran"):
+            try:
+                e = subprocess.Popen(["/usr/bin/python3", "/usr/local/sbin/osmo-alarme-ecran", "--secondes", str(duree),
+                                      "!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
+                                      "AJOUTE   /media/root-ro/etc/systemd/system/exemple.service  (312 octets)",
+                                      "MODIFIE  /media/root-ro/usr/local/sbin/unlock-home  (fichier remplace ou reecrit)", "",
+                                      "C est note dans la boite noire. Seul le proprietaire pourra ouvrir une session.", "",
+                                      "LA MACHINE NE S ETEINT PAS.",
+                                      "Pour l eteindre : maintiens le bouton d alimentation.", "",
+                                      "(ESSAI de %d secondes : rien n est arrive.)" % duree])
+                if "--bip" in sys.argv[2:]:
+                    bip(duree)
+                e.wait()
+                return 0
+            except OSError:
+                pass
         CONSOLE = "/dev/tty"
+        avant = None
+        try:
+            t = os.open(CONSOLE, os.O_RDWR | os.O_NOCTTY)
+            avant = termios.tcgetattr(t)
+            brut = termios.tcgetattr(t)
+            brut[3] &= ~(termios.ISIG | termios.ICANON | termios.ECHO)   # keys do nothing, and show nothing
+            termios.tcsetattr(t, termios.TCSANOW, brut)
+        except (OSError, termios.error):
+            t = None
         ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
                       "Propre au demarrage, different a l extinction : quelque chose a ecrit sur le",
                       "disque pendant cette session sans passer par une validation.", "",
-                      "  AJOUTE   /media/root-ro/etc/systemd/system/exemple.service  (312 octets)",
-                      "  MODIFIE  /media/root-ro/usr/local/sbin/unlock-home  (fichier remplace ou reecrit (inode / date de changement))",
+                      "AJOUTE   /media/root-ro/etc/systemd/system/exemple.service  (312 octets)",
+                      "MODIFIE  /media/root-ro/usr/local/sbin/unlock-home  (fichier remplace ou reecrit)",
                       "", "C est note dans la boite noire. Le prochain demarrage le redira, et seul le",
                       "proprietaire (phrase de /home) pourra ouvrir une session.", "",
                       "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation.",
-                      "", "(ESSAI : rien n est arrive. Entree pour fermer.)"])
+                      "", "(ESSAI de %d secondes : rien n est arrive.)" % duree])
         if "--bip" in sys.argv[2:]:
-            bip()
-        try:
-            input()
-        except (EOFError, KeyboardInterrupt):
-            pass
-        sys.stdout.write(FIN + "\033[2J\033[H")
+            bip(duree)
+        else:
+            time.sleep(duree)
+        if t is not None:
+            try:
+                termios.tcflush(t, termios.TCIFLUSH)
+                if avant is not None:
+                    termios.tcsetattr(t, termios.TCSANOW, avant)
+                os.write(t, (FIN + "\033[?25h\033[2J\033[H").encode())
+                os.close(t)
+            except (OSError, termios.error):
+                pass
         return 0
     if cmd == "alarme":
         # the same red screen and beep again, while the shutdown is held
+        verrouiller()
         ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
                       "Rien n a ete ecrit ; la boite noire a tout note (detail : %s)." % ALERTE, "",
                       "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation."])

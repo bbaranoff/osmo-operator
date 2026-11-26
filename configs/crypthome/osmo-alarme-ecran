@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+# osmo-alarme-ecran - THE BIG RED SCREEN of the alarm, on a desktop: one GTK
+# window, full screen, above everything, « YOU HAVE DONE SOMETHING NASTY !!!! »
+# in the middle and the lines given under it.
+#
+#   osmo-alarme-ecran [--secondes N] [LINE ...]
+#
+# IT CANNOT BE LEFT: no decoration, the close request refused, the keyboard
+# and the pointer grabbed (no Alt-Tab, no Alt-F4, no Super), Ctrl-C and the
+# other signals ignored. --secondes N: it goes away by itself after N seconds
+# (« osmo-empreinte alarme --essai », to look at it); without it, it stays -
+# only the power button, held, ends it.
+# (At shutdown the display is already gone: there the same screen is drawn on
+# the text console by osmo-empreinte itself.)
+import signal
+import sys
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+args = sys.argv[1:]
+secondes = 0
+if "--secondes" in args:
+    i = args.index("--secondes")
+    try:
+        secondes = max(1, int(args[i + 1]))
+    except (IndexError, ValueError):
+        secondes = 10
+    del args[i:i + 2]
+for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP, signal.SIGHUP, signal.SIGTERM):
+    signal.signal(s, signal.SIG_IGN)
+
+css = Gtk.CssProvider()
+css.load_from_data(b"""
+window { background-color: #c00000; }
+#gros  { color: #ffffff; font-family: "Ubuntu", "DejaVu Sans", sans-serif; font-weight: 900; font-size: 120px; }
+#texte { color: #ffffff; font-family: "Ubuntu Mono", monospace; font-weight: bold; font-size: 22px; }
+""")
+Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+w = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+w.set_title("ALARME")
+w.set_decorated(False)
+w.set_keep_above(True)
+w.set_skip_taskbar_hint(True)
+w.stick()
+boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=40)
+boite.set_halign(Gtk.Align.CENTER)
+boite.set_valign(Gtk.Align.CENTER)
+gros = Gtk.Label(label="YOU HAVE DONE\nSOMETHING\nNASTY !!!!")
+gros.set_name("gros")
+gros.set_justify(Gtk.Justification.CENTER)
+boite.pack_start(gros, False, False, 0)
+if args:
+    texte = Gtk.Label(label="\n".join(args))
+    texte.set_name("texte")
+    texte.set_justify(Gtk.Justification.CENTER)
+    boite.pack_start(texte, False, False, 0)
+w.add(boite)
+w.connect("delete-event", lambda *a: True)            # the close request: refused
+w.connect("key-press-event", lambda *a: True)         # every key: swallowed
+
+
+def saisir(*_a):
+    # keyboard and pointer are this window's: nothing else gets a key or a click
+    fen = w.get_window()
+    if fen is not None:
+        Gdk.Display.get_default().get_default_seat().grab(
+            fen, Gdk.SeatCapabilities.ALL, False, None, None, None)
+    w.present()
+    return True
+
+
+w.connect("map-event", lambda *a: saisir() and False)
+w.fullscreen()
+w.show_all()
+GLib.timeout_add(500, saisir)                         # taken again, whatever tried to take it
+if secondes:
+    GLib.timeout_add_seconds(secondes, Gtk.main_quit)
+Gtk.main()

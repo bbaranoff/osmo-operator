@@ -146,6 +146,9 @@ install -m 0755 "$_CH_SRC/osmo-secrets" "$ROOTFS/usr/local/sbin/osmo-secrets"
 # device-mapper snapshot taken by unlock-home (dmsetup, dm-snapshot: the
 # kernel's own module), its old blocks kept in RAM. Ordered from the icon only.
 install -m 0755 "$_CH_SRC/osmo-reset" "$ROOTFS/usr/local/sbin/osmo-reset"
+# the alarm's big red screen on a desktop (GTK, full screen, cannot be left);
+# at shutdown osmo-empreinte draws the same on the text console
+install -m 0755 "$_CH_SRC/osmo-alarme-ecran" "$ROOTFS/usr/local/sbin/osmo-alarme-ecran"
 for _d in osmo-enregistrer osmo-reset osmo-secrets; do
     install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
     for _b in Desktop Bureau; do
