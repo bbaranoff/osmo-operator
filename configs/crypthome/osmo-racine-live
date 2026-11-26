@@ -1979,12 +1979,18 @@ EOF
         elif [ "$decision" = efface ] && [ "$persistant" = 1 ]; then
             # PERSISTENT, and the passphrase was not given for the system:
             # /home is on the disk already, only what changed outside it is
-            # dropped. No red banner - the neuralyser, with a GREEN light,
-            # then the white screen
+            # dropped. The neuralyser, with a GREEN light - then the warning
+            # all the same, as ever: what was not written, and where it is kept
             console_texte
             flash_console 32
-            printf '\033[?5h\033[2J' > "$CONSOLE" 2>/dev/null
-            sleep 2
+            printf '\033[2J\033[H' > "$CONSOLE" 2>/dev/null
+            dire_rouge "############################################################"
+            dire_rouge "  PHRASE DE /home NON DONNEE : SYSTEME NON ECRIT"
+            dire_rouge "  (garde dans la boite noire : osmo-racine-live fusionner)"
+            dire_rouge "  $n changement(s) du systeme perdus$([ -f "$ETAT/ecrit" ] && echo " depuis la validation de $(date -r "$ETAT/ecrit" '+%T')")"
+            dire_vert  "  /home, lui, est deja sur le disque : rien n y est perdu."
+            dire_rouge "############################################################"
+            sleep 10
         elif [ "$decision" = efface ]; then
             # always shown, even with nothing lost: forced on tty1, plymouth
             # quit, held 10 s
