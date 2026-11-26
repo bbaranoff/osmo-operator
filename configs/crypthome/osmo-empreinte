@@ -984,7 +984,7 @@ def tpm_demarrage():
     if os.path.exists(SANS_HOME):
         return                                # already refused at the disk's warning
     titre = "LE TPM NE RECONNAIT PAS CE DEMARRAGE"
-    diffs = [("TPM", "", "pas de code : micrologiciel, GRUB, noyau, initramfs ou disque systeme ne sont pas ceux qui ont ete scelles"),
+    diffs = [("TPM", "", "ni code ni phrase (ou PIN faux) : micrologiciel, GRUB, noyau, initramfs ou disque systeme ne sont pas ceux qui ont ete scelles"),
              ("TPM", "", "attendu UNE fois apres « osmo-tpm poser », ou apres une mise a jour du noyau / de GRUB dans la derniere session : alors OUI, puis sudo osmo-tpm sceller")]
     alerter(titre, diffs, {})
     dire(titre)

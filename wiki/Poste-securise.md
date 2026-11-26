@@ -117,6 +117,25 @@ Un code TOTP à 6 chiffres, à comparer au téléphone **avant** de taper la phr
 Un seul noyau, pas de second système, pas de `kexec`. LUKS n'est pas touché : `/home`
 reste en LUKS2, sa phrase reste la seule entrée.
 
+**Sans téléphone** : `sudo osmo-tpm poser --secret`. Le TPM garde une phrase choisie par
+le propriétaire au lieu d'une graine, et l'affiche à côté de la question de `/home`.
+
+- Un PIN (des chiffres, 6 au moins) est demandé par l'initramfs avant l'affichage. C'est
+  le TPM qui le vérifie, en même temps que les PCR : un PIN faux compte contre son
+  propre verrouillage (31 essais, puis un toutes les 10 minutes) ; sur une machine
+  modifiée, aucun PIN n'est même vérifié.
+- Sans PIN, quiconque allume la machine lit la phrase et peut la faire afficher par une
+  machine piégée : déconseillé.
+- Moins sûr que le code du téléphone, parce qu'une phrase ne change pas. Après un
+  démarrage sans phrase qu'on ne s'explique pas : poser de nouveau, phrase et PIN
+  nouveaux.
+- `poser` et `poser --secret` s'excluent ; reposer l'un remplace l'autre.
+
+`poser`, `sceller` et `oter` écrivent sur le disque : ils demandent d'abord la phrase de
+`/home`. Dans l'installeur (page Options), l'ancre TPM de la signature et les deux
+démarrages mesurés sont trois cases, toutes facultatives ; rien n'est posé par
+l'installation, `osmo-tpm etat` dit ce qui reste à faire.
+
 ## 4. Modèle de menace
 
 | Menace | Réponse | Limite |

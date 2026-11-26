@@ -9,10 +9,16 @@
 #                                (tools/osmo-supplements-firstboot.sh) runs at
 #                                the first boot, once the network answers;
 #                                OSMO_COMPTE: the account chosen in the installer
-#   /etc/osmo-operator/options   tpm=1 when the measured boot was ticked: it is
-#                                posed AFTER the first boot (sudo osmo-tpm
-#                                poser - a phone has to be enrolled), a
-#                                reminder says so at login
+#   /etc/osmo-operator/options   the TPM options ticked (all optional, none
+#                                posed by the installer - each needs the /home
+#                                passphrase on the installed machine):
+#                                  ancre=1        sudo osmo-empreinte ancrer
+#                                  mesure=totp    sudo osmo-tpm poser
+#                                  mesure=secret  sudo osmo-tpm poser --secret
+#                                (both measured boots ticked: the phone's, the
+#                                safer one). « osmo-tpm etat » reads this file
+#                                and says what is still to do; no reminder at
+#                                login.
 import os
 
 import libcalamares
@@ -81,8 +87,15 @@ def run():
             lien = os.path.join(wants, "osmo-supplements.service")
             if not os.path.lexists(lien):
                 os.symlink(unite, lien)
+    lignes = []
+    if "tpm-ancre" in choix:
+        lignes.append("ancre=1")
     if "tpm" in choix:
+        lignes.append("mesure=totp")
+    elif "tpm-secret" in choix:
+        lignes.append("mesure=secret")
+    if lignes:
         os.makedirs(os.path.join(racine, "etc/osmo-operator"), exist_ok=True)
         with open(os.path.join(racine, "etc/osmo-operator/options"), "a") as f:
-            f.write("tpm=1\n")
+            f.write("\n".join(lignes) + "\n")
     return None

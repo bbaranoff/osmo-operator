@@ -1042,17 +1042,64 @@ if [ "$OSMO_TPM" = 1 ] && [ -x /bin/tpm2 ] && [ -c /dev/tpmrm0 ]; then
     esac
     i=0; while [ -n "$bd" ] && [ ! -e "$bd" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
     G=""
+    # the PIN of « osmo-tpm poser --secret »: DIGITS, whatever the keyboard of
+    # this console is (the unshifted digit row of an AZERTY gives & e-acute "
+    # ' ( - e-grave _ c-cedilla a-grave: read as 1..0)
+    lire_pin() {
+        s=""
+        printf '%s' "$1" > "$CONSOLE"
+        while :; do
+            c=""
+            IFS= read -r -s -n1 -t "$TIMEOUT" c < "$CONSOLE" || { s=""; break; }
+            [ -z "$c" ] && break
+            case "$c" in
+                "$(printf '\177')"|"$(printf '\b')") [ -n "$s" ] && { s="${s%?}"; printf '\b \b' > "$CONSOLE"; }; continue ;;
+            esac
+            s="$s$c"; printf '*' > "$CONSOLE"
+        done
+        echo > "$CONSOLE"
+        printf '%s' "$s" | sed -e 's/&/1/g' -e 's/é/2/g' -e 's/"/3/g' -e "s/'/4/g" -e 's/(/5/g' \
+            -e 's/-/6/g' -e 's/è/7/g' -e 's/_/8/g' -e 's/ç/9/g' -e 's/à/0/g' | tr -cd '0-9'
+    }
     if [ -e "$bd" ] && mount -o ro "$bd" "$R/m" 2>/dev/null; then
         if [ -f "$R/m/tpm/obj.pub" ] \
                 && tpm2 createprimary -Q -C e -c "$R/p.ctx" 2>/dev/null \
                 && tpm2 load -Q -C "$R/p.ctx" -u "$R/m/tpm/obj.pub" -r "$R/m/tpm/obj.priv" -c "$R/o.ctx" 2>/dev/null; then
-            G="$(tpm2 unseal -c "$R/o.ctx" -p pcr:sha256:0,2,4,7,8,9,13 2>/dev/null)"
+            if [ -f "$R/m/tpm/pin" ]; then
+                # sealed for the PCRs AND a PIN: asked here, checked by the TPM
+                # (a wrong one counts against its lockout; on a modified
+                # machine the policy fails first and no PIN is ever checked)
+                if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then plymouth quit 2>/dev/null; fi
+                echo > "$CONSOLE"
+                echo "=== osmo-operator : demarrage mesure ===" > "$CONSOLE"
+                e=1
+                while [ "$e" -le 3 ]; do
+                    pin="$(lire_pin "PIN du demarrage mesure (Entree : passer) : ")"
+                    [ -n "$pin" ] || break
+                    tpm2 startauthsession --policy-session -S "$R/s.ctx" >/dev/null 2>&1 \
+                        && tpm2 policypcr -Q -S "$R/s.ctx" -l sha256:0,2,4,7,8,9,13 >/dev/null 2>&1 \
+                        && tpm2 policyauthvalue -Q -S "$R/s.ctx" >/dev/null 2>&1 \
+                        && G="$(tpm2 unseal -c "$R/o.ctx" -p "session:$R/s.ctx+$pin" 2>/dev/null)"
+                    tpm2 flushcontext "$R/s.ctx" >/dev/null 2>&1; rm -f "$R/s.ctx"
+                    [ -n "$G" ] && break
+                    echo "rien : PIN faux, ou machine modifiee" > "$CONSOLE"; e=$((e + 1))
+                done
+                pin=""
+            else
+                G="$(tpm2 unseal -c "$R/o.ctx" -p pcr:sha256:0,2,4,7,8,9,13 2>/dev/null)"
+            fi
         fi
         umount "$R/m" 2>/dev/null
     fi
     # the lock: whatever happened, PCR 13 moves on
     tpm2 pcrextend 13:sha256=c0c9d5d4f8a0b6f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899 >/dev/null 2>&1
     rm -f "$R/p.ctx" "$R/o.ctx"; rmdir "$R/m" 2>/dev/null
+    case "$G" in S:*)
+        # « poser --secret »: the owner's sentence, for unlock-home to show
+        # (root only; unlock-home reads it once and removes it)
+        ( umask 077; printf '%s\n' "${G#S:}" > "$R/secret" )
+        : > "$R/reconnu"; G="" ;;
+    esac
     if [ "${#G}" = 40 ]; then
         now="$(date +%s)"; k=0
         : > "$R/codes"; chmod 600 "$R/codes"

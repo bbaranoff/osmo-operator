@@ -22,9 +22,23 @@
 #   minutes, then extends PCR 13 again: nothing can unseal any more during
 #   this boot. unlock-home shows the code next to its question.
 #
+# WITHOUT A PHONE: « poser --secret ». The TPM holds a SENTENCE OF YOURS
+# instead of a seed, and shows it next to the /home question: no sentence, a
+# modified machine. A sentence never changes, so anybody who powers the
+# machine on would read it and could then make a trapped machine show it:
+# hence a PIN (digits), asked by the initramfs and checked BY THE TPM together
+# with the PCRs - a wrong PIN counts against the TPM's own lockout (31 tries,
+# then one every 10 minutes), a PIN typed into a modified machine unseals
+# nothing. Weaker than the phone all the same: a PIN caught by a trapped
+# machine (you typed it, no sentence came) plus the disk put back as it was
+# gives the sentence away - AFTER ANY BOOT WITHOUT THE SENTENCE THAT YOU
+# CANNOT EXPLAIN, POSE AGAIN WITH A NEW SENTENCE AND A NEW PIN.
+#
 #   osmo-tpm poser        enable: a seed, its QR code, the initramfs rebuilt
-#                         (the NEXT boot shows no code: the initramfs has just
+#                         (the NEXT boot shows no code / no sentence: the initramfs has just
 #                         changed - then « osmo-tpm sceller »)
+#   osmo-tpm poser --secret   the same without a phone: a sentence and a PIN
+#                         (poser again, either way, changes the mode)
 #   osmo-tpm sceller      BY HAND: this boot is the reference (PCR 0-9 as they
 #                         are now, the disk as it is). After a boot without
 #                         code THAT YOU CAN EXPLAIN (just enabled, kernel or
@@ -86,6 +100,15 @@ phrase_requise() {
 
 # the private directory, read (RAM view or volume) and written (the volume itself)
 prive_lire() { local f; for f in "$HOME_DISQUE/$PRIVE/$1" "/home/$PRIVE/$1"; do [ -s "$f" ] && { cat "$f"; return 0; }; done; return 1; }
+prive_oter() {     # prive_oter NAME... : gone from the /home volume
+    local d="$HOME_DISQUE/$PRIVE" rw=0 n
+    [ "$TEST" = 1 ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
+    for n in "$@"; do [ -e "$d/$n" ] && { shred -u "$d/$n" 2>/dev/null || rm -f "$d/$n"; }; done
+    sync
+    [ "$rw" = 1 ] && mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
+    return 0
+}
+mode() { local m; m="$(prive_lire mode 2>/dev/null)" || m=totp; echo "$m"; }
 prive_ecrire() {   # prive_ecrire NAME < content : on the /home volume, not in its RAM layer
     local d="$HOME_DISQUE/$PRIVE" rw=0
     [ "$TEST" = 1 ] || mountpoint -q "$HOME_DISQUE" || { rouge "/home n est pas ouvert : il garde la graine et les PCR de reference" >&2; return 1; }
@@ -111,10 +134,19 @@ benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot
     done | prive_ecrire pcrs
 }
 
-# sceller_pour TOTAL : the seed, sealed for the reference PCRs and that disk
+# sceller_pour TOTAL : the seed (or « S: » + the sentence), sealed for the
+# reference PCRs and that disk - and, with a PIN, for that PIN TOO: the policy
+# is then « these PCRs AND the PIN ». userwithauth is ALWAYS cleared: left
+# set, the PIN (or an empty one) alone would unseal, whatever the machine.
 sceller_pour() {
-    local total="$1" graine pcrs t n h rc=1
-    graine="$(prive_lire graine)" || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
+    local total="$1" graine pcrs t n h rc=1 pin="" pol=1
+    if [ "$(mode)" = secret ]; then
+        graine="$(prive_lire secret)" || { log "pas de phrase secrete (osmo-tpm poser --secret)" >&2; return 1; }
+        graine="S:$graine"
+        pin="$(prive_lire pin 2>/dev/null)" || pin=""
+    else
+        graine="$(prive_lire graine)" || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
+    fi
     pcrs="$(prive_lire pcrs)" || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
     [ -n "$total" ] || { log "pas d empreinte du disque sur la boite (osmo-empreinte prendre)" >&2; return 1; }
     t="$(mktemp -d)" || return 1
@@ -125,12 +157,24 @@ sceller_pour() {
         hexbin "$h" >> "$t/pcrs.bin"
     done
     hexbin "$(predit "$total")" >> "$t/pcrs.bin"
-    if tpm2_createpolicy -Q --policy-pcr -l "$LISTE" -f "$t/pcrs.bin" -L "$t/pol.dat" \
-            && tpm2_createprimary -Q -C e -c "$t/prim.ctx" \
-            && printf '%s' "$graine" | tpm2_create -Q -C "$t/prim.ctx" -L "$t/pol.dat" -i - -u "$t/obj.pub" -r "$t/obj.priv"; then
+    ( umask 077; printf '%s' "$graine" > "$t/in"; printf '%s' "$pin" > "$t/pin" )
+    if [ -n "$pin" ]; then
+        tpm2_startauthsession -S "$t/s.ctx" \
+            && tpm2_policypcr -Q -S "$t/s.ctx" -l "$LISTE" -f "$t/pcrs.bin" \
+            && tpm2_policyauthvalue -Q -S "$t/s.ctx" -L "$t/pol.dat" && pol=0
+        tpm2_flushcontext "$t/s.ctx" >/dev/null 2>&1
+    else
+        tpm2_createpolicy -Q --policy-pcr -l "$LISTE" -f "$t/pcrs.bin" -L "$t/pol.dat" && pol=0
+    fi
+    if [ "$pol" = 0 ] && tpm2_createprimary -Q -C e -c "$t/prim.ctx" \
+            && tpm2_create -Q -C "$t/prim.ctx" -L "$t/pol.dat" -a 'fixedtpm|fixedparent' \
+                   ${pin:+-p "file:$t/pin"} -i "$t/in" -u "$t/obj.pub" -r "$t/obj.priv"; then
         [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
         mkdir -p "$OBJ" && install -m 0444 "$t/obj.pub" "$OBJ/obj.pub" && install -m 0444 "$t/obj.priv" "$OBJ/obj.priv" \
             && printf '%s %s\n' "$(date '+%F %T')" "$total" > "$OBJ/scelle" && rc=0
+        # the initramfs asks the PIN only when this mark is there (taken away:
+        # no question, no sentence - it shows)
+        if [ -n "$pin" ]; then : > "$OBJ/pin"; else rm -f "$OBJ/pin"; fi
         sync
         [ "$TEST" = 1 ] || mount -o remount,ro "$BOITE" 2>/dev/null
     fi
@@ -162,8 +206,36 @@ case "${1:-etat}" in
         root_requis; outils
         [ -s "$BOITE/empreinte.json" ] || { rouge "pas d empreinte du disque : sudo osmo-empreinte prendre" >&2; exit 1; }
         phrase_requise "poser : une graine dans /home, l initramfs reconstruit SUR LE DISQUE, le scellement sur la boite"
-        if ! prive_lire graine >/dev/null; then
-            head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n' | prive_ecrire graine || exit 1
+        if [ "${2:-}" = --secret ]; then
+            # WITHOUT A PHONE: a sentence of yours, and a PIN the TPM checks
+            if [ "$TEST" = 1 ]; then s="${OSMO_TPM_SECRET:-}"; n="${OSMO_TPM_PIN:-}"; n2="$n"
+            else
+                echo "La phrase que le TPM affichera a chaque demarrage quand la machine est intacte"
+                echo "(100 caracteres au plus ; PAS la phrase de /home, PAS celle de la boite) :"
+                IFS= read -r -p "phrase secrete : " s < /dev/tty || s=""
+                echo "Le PIN demande avant de l afficher : des CHIFFRES, 6 au moins (Entree = sans PIN :"
+                echo "la phrase serait alors lue par quiconque allume la machine - deconseille)."
+                read -r -s -p "PIN : " n < /dev/tty || n=""; echo
+                read -r -s -p "encore une fois : " n2 < /dev/tty || n2=""; echo
+            fi
+            case "$s" in ""|*[[:cntrl:]]*) rouge "phrase vide ou illisible : rien de pose" >&2; exit 1 ;; esac
+            [ "$(printf '%s' "$s" | wc -c)" -le 100 ] || { rouge "phrase trop longue (100 octets au plus) : rien de pose" >&2; exit 1; }
+            [ "$n" = "$n2" ] || { rouge "les deux PIN different : rien de pose" >&2; exit 1; }
+            if [ -n "$n" ] && ! printf '%s' "$n" | grep -qE '^[0-9]{6,32}$'; then
+                rouge "PIN refuse (des chiffres, 6 au moins) : rien de pose" >&2; exit 1
+            fi
+            [ -n "$n" ] || rouge "SANS PIN : quiconque allume la machine lira la phrase."
+            printf '%s\n' "$s" | prive_ecrire secret || exit 1
+            if [ -n "$n" ]; then printf '%s\n' "$n" | prive_ecrire pin || exit 1; else prive_oter pin; fi
+            echo secret | prive_ecrire mode || exit 1
+            prive_oter graine
+            s=""; n=""; n2=""
+        else
+            echo totp | prive_ecrire mode || exit 1
+            prive_oter secret pin
+            if ! prive_lire graine >/dev/null; then
+                head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n' | prive_ecrire graine || exit 1
+            fi
         fi
         benir || exit 1
         # the initramfs measures the disk and asks the TPM: rebuilt on the disk
@@ -175,9 +247,15 @@ case "${1:-etat}" in
         PHRASE=""
         sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
-        qr
+        if [ "$(mode)" = secret ]; then
+            echo "Au demarrage : le PIN (s il y en a un), puis TA phrase a cote de la question de /home."
+            echo "Pas de phrase, ou une autre : ne tape RIEN. Apres un demarrage sans phrase que tu"
+            echo "n expliques pas : sudo osmo-tpm poser --secret, phrase et PIN NOUVEAUX."
+        else
+            qr
+        fi
         vert "demarrage mesure pose."
-        rouge "Le PROCHAIN demarrage n affichera PAS de code : l initramfs vient de changer."
+        rouge "Le PROCHAIN demarrage n affichera NI code NI phrase : l initramfs vient de changer."
         echo  "C est attendu, une fois : apres ce demarrage, « sudo osmo-tpm sceller »."
         ;;
     sceller)
@@ -190,7 +268,7 @@ case "${1:-etat}" in
         benir && sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
         vert "scelle : ce demarrage est la reference (PCR $PCR_CHAINE), pour le disque tel qu il est."
-        echo "code maintenant : $(totp "$(prive_lire graine)")"
+        [ "$(mode)" = secret ] || echo "code maintenant : $(totp "$(prive_lire graine)")"
         ;;
     commit)
         # after a write: the disk has changed, the object is sealed again for
@@ -205,10 +283,29 @@ case "${1:-etat}" in
         sceller_pour "$(total_disque)" && log "rescelle pour le disque $(total_disque | cut -c1-16)..." \
             || { log "RESCELLEMENT EN ECHEC : pas de code au prochain demarrage"; exit 1; }
         ;;
-    qr)   root_requis; qr ;;
-    code) root_requis; totp "$(prive_lire graine)" ;;
+    qr|code)
+        root_requis
+        if [ "$(mode)" = secret ]; then log "mode « phrase secrete » : ni QR code ni code (osmo-tpm poser pour le telephone)"; exit 1; fi
+        if [ "$1" = qr ]; then qr; else totp "$(prive_lire graine)"; fi
+        ;;
     etat)
         if [ -e "$ACTIF" ]; then echo "demarrage mesure : pose"; else echo "demarrage mesure : non pose (option : sudo osmo-tpm poser)"; fi
+        # what was ticked in the installer (Options page) and is still to do
+        if [ -r /etc/osmo-operator/options ]; then
+            [ -e "$ACTIF" ] || case "$(sed -n 's/^mesure=//p' /etc/osmo-operator/options | tail -n1)" in
+                totp)   echo "choisi a l installation : code sur le telephone - a poser : sudo osmo-tpm poser" ;;
+                secret) echo "choisi a l installation : phrase secrete et PIN - a poser : sudo osmo-tpm poser --secret" ;;
+            esac
+            if grep -qx 'ancre=1' /etc/osmo-operator/options && [ -x /usr/local/sbin/osmo-empreinte ] \
+                    && ! /usr/local/sbin/osmo-empreinte signature 2>/dev/null | grep -q 'celle du TPM'; then
+                echo "choisi a l installation : ancre TPM de la signature - a poser : sudo osmo-empreinte ancrer"
+            fi
+        fi
+        if [ -e "$ACTIF" ] && [ "$(id -u)" = 0 ]; then
+            if [ "$(mode)" = secret ]; then
+                if [ -e "$OBJ/pin" ]; then echo "mode : phrase secrete, avec PIN"; else echo "mode : phrase secrete, SANS PIN"; fi
+            else echo "mode : code sur le telephone (TOTP)"; fi
+        fi
         [ -s "$OBJ/scelle" ] && echo "scelle le $(cut -d' ' -f1,2 "$OBJ/scelle") pour le disque $(cut -d' ' -f3 "$OBJ/scelle" | cut -c1-16)..."
         if [ -e "$ACTIF" ]; then
             if [ -e "$RUN/reconnu" ]; then vert "ce demarrage : reconnu par le TPM"
@@ -233,7 +330,7 @@ case "${1:-etat}" in
         log "demarrage mesure retire (la graine est detruite : l appli du telephone ne sert plus)"
         ;;
     *)
-        echo "usage : osmo-tpm poser | sceller | qr | code | etat | oter" >&2
+        echo "usage : osmo-tpm poser [--secret] | sceller | qr | code | etat | oter" >&2
         exit 2
         ;;
 esac

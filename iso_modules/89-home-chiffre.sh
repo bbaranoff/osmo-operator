@@ -114,9 +114,13 @@ OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 RAPPEL
-# MEASURED BOOT, AN OPTION (sudo osmo-tpm poser): a TOTP code computed by the
-# TPM only when firmware, GRUB, kernel, initramfs and the system disk are the
-# sealed ones, shown next to the /home question. One kernel, no kexec.
+# MEASURED BOOT, AN OPTION (sudo osmo-tpm poser, or poser --secret without a
+# phone): a TOTP code - or a sentence of the owner's, behind a PIN - that the
+# TPM gives only when firmware, GRUB, kernel, initramfs and the system disk
+# are the sealed ones, shown next to the /home question. One kernel, no kexec.
+# The TPM anchor of the signature (osmo-empreinte ancrer) is an option too:
+# all three are checkboxes of the installer's Options page, none is posed by
+# the ISO.
 # osmo-total is the one text that computes a volume's total (system and
 # initramfs); osmo-qr draws the enrolment QR code without any library.
 install -m 0755 "$_CH_SRC/osmo-tpm"               "$ROOTFS/usr/local/sbin/osmo-tpm"
