@@ -100,15 +100,29 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 
 ## New in v0.2
 
-- **The installed machine**: Calamares with « Encrypt system » encrypts `/home` only (LUKS2); `/` is read-only and
-  every session runs in RAM - `/`, `/root`, `/opt/GSM` and `/home`. The `/home` passphrase opens `/home` at boot
-  and, at shutdown, writes the session to the disk atomically; without it everything is wiped (red warning).
-  « Fin de session »: « Tout oublier ? » Yes = flash, white screen, off; No = passphrase, `cmatrix` « REC », off.
-  - **Black box** (`osmo-diffs`): every session recorded, encrypted with `age`, readable only with its own
-    passphrase (different from `/home`'s).
+- **The installed machine** (the « secured bench », TPM 2.0 required): Calamares encrypts `/home` only (LUKS2);
+  `/` is in clear and read-only, and the system runs in RAM. Nothing reaches the disk without the `/home`
+  passphrase, and what reaches it is recorded and can be undone.
+  - **Two openings**: with the passphrase, « Persistant ? » - yes: `/home` is written straight to the encrypted
+    volume; no: it stays under a RAM layer and is written only when saved. Without the passphrase: a guest root,
+    all in RAM, nothing kept.
+  - **At shutdown** the passphrase writes what changed in the system, atomically. In persistent mode forgetting
+    is a voluntary gesture: the « Remettre à zéro » icon puts `/home` back as it was at boot.
+  - **Black box** (`osmo-diffs`, `osmo-boite`): every session recorded, encrypted with `age` for a key the machine
+    does not hold, chained; its end is held by a TPM extend-only index, so a truncation shows.
+  - **Integrity**: a fingerprint of the disk signed with a key only the passphrase unlocks, anchored in the TPM;
+    a measured boot that shows your secret sentence after a PIN only on the untouched machine.
+  - **The states of the system, like code**: every validated write is a commit, kept in `/home`, chained and
+    signed; `osmo-etats` browses them like GitHub (commits, diffs, the tree at each state).
+  - **The alarm**: checksums clean at boot and different at shutdown = red screen, beep at full volume, and the
+    machine refuses to go off. Any integrity alert: no guest root, only the owner goes on. A test button trips it
+    for real on a witness volume (partial, or full).
   - **SSH**: a host key per machine.
 
-  Details and limits: [wiki/ISO.md, 6.7](wiki/ISO.md). Not yet validated on real hardware.
+  Everything - design, the perimeter table (who can read and modify what), and what was actually run on a real
+  machine versus only in a sandbox: [wiki/Poste-securise.md](wiki/Poste-securise.md). Installation by the ISO
+  with the whole set is not tested yet. Not a barrier against a root in an open session: it makes sure that
+  leaves traces root cannot erase cleanly.
 - **Constellation** (`osmo-gtk`): the bench in one GTK window. It shows the constellation, eye diagram,
   training-sequence correlation, burst I/Q and TDMA grid, with tabs for the core, L23, logs, Kconfig, tests,
   notebooks and installation.

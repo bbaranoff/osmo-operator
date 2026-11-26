@@ -12,6 +12,7 @@ handset's CSFB, at the modem level. No SDR, no physical phone.
 | [Resultats](Resultats.md) | reference `check_all.sh` runs, 1 and 3 operators, and how to read the deviations |
 | [Build](Build.md) | `build.sh`, `build-iso.sh`, `.deb`, `install.sh` |
 | [ISO](ISO.md) | everything the desktop ISO contains, how it is built and installed |
+| [Poste-securise](Poste-securise.md) | the installed machine: system in RAM, nothing written without the `/home` passphrase, black box, signed fingerprint and TPM, states of the system browsed like code, the alarm and its test; the perimeter table and what was validated on a real machine |
 | [Environnement](Environnement.md) | which variable wins, what makes it all the way to QEMU |
 | [Reference](Reference.md) | full reference: multi-PLMN architecture, SS7, SMS, voice, diagnostics |
 | [Telephone-emule](Telephone-emule.md) | plug **only** the emulated phone (qosmo, c54x_exe, grgsm_exe) into **your own** Osmocom stack |

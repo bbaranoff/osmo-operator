@@ -8,6 +8,13 @@ Rien n'atteint le disque sans une phrase de passe. Tout ce qui l'atteint est
 chaque écriture est **réversible**. Un seul mécanisme — la couche RAM comparée au
 disque — sert à sécuriser, à tracer et à revenir en arrière.
 
+Depuis le 26 novembre 2026 : `/home` peut être **persistant** (écrit directement, avec
+une « remise à zéro » volontaire) ; les états passés du système vivent dans `/home`,
+**chaînés et signés**, et se parcourent comme du code ; la fin de la boîte noire et celle
+de cet historique sont **tenues par le TPM**, si bien qu'une troncature se voit ; une
+**alarme** retient l'extinction quand le disque a changé sans la phrase, et se teste pour
+de vrai. La section 6 dit ce qui a tourné sur une vraie machine et ce qui ne l'a pas fait.
+
 ## 1. Le problème
 
 Un poste de laboratoire doit rester **réparable** : sortir une trace, lire un journal,
