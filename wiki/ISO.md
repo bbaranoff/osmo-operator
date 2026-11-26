@@ -638,10 +638,13 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
-- **Writing during the session**: `osmo-valider-session --maintenant` (or
-  `sudo osmo-racine-live ecrire`), same passphrase - **that moment** is written: what changed
-  since the last write, not the whole session again (same atomic write, recorded in the box
-  as `ecrit`); a power cut or a forgotten passphrase then only loses what came after.
+- **Validating during the session writes that moment**: `osmo-valider-session` (launcher
+  « Valider la session (maintenant) ») or `sudo osmo-racine-live valider`, with the `/home`
+  passphrase - the session **as it is at that instant** goes to the disk (what changed since the
+  last write; same atomic write, recorded in the box as `ecrit`). **What follows is not covered**:
+  it is kept only by a new validation, or by the passphrase at shutdown - and **only the
+  passphrase at shutdown writes the complete session**. Without it, the shutdown drops what came
+  after the last validation and says how much. `osmo-racine-live etat` shows where things stand.
 - **Undoing writes, the last first**: a commit destroys nothing - what it replaces or deletes
   is moved to `/.osmo-retour/<date>` (and `/home/.osmo-retour/<date>`).
   `sudo osmo-racine-live retours` lists the commits, `sudo osmo-racine-live defaire`

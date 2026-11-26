@@ -136,27 +136,21 @@ OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 RAPPEL
-# the launchers: validate for shutdown, or write now
+# the launcher: validate NOW. The /home passphrase given during the session
+# writes the session as it is at that moment; what follows is kept only by a
+# new validation, or by the passphrase at shutdown (which writes it all).
 cat > "$ROOTFS/usr/local/share/applications/osmo-valider-session.desktop" <<'LANCEUR'
 [Desktop Entry]
 Type=Application
-Name=Garder la session (a l extinction)
-Comment=Phrase de /home : la session sera ecrite sur le disque a l extinction, sinon tout est efface
+Name=Valider la session (maintenant)
+Comment=Phrase de /home : la session telle qu elle est a cet instant est ecrite sur le disque ; ce qui suit ne l est pas
 Exec=/usr/local/bin/osmo-valider-session
 Icon=document-save
 Terminal=false
 Categories=System;
 LANCEUR
-cat > "$ROOTFS/usr/local/share/applications/osmo-ecrire-session.desktop" <<'LANCEUR'
-[Desktop Entry]
-Type=Application
-Name=Ecrire la session maintenant
-Comment=Phrase de /home : ce qui a change depuis la derniere ecriture est ecrit sur le disque tout de suite
-Exec=/usr/local/bin/osmo-valider-session --maintenant
-Icon=document-save-as
-Terminal=false
-Categories=System;
-LANCEUR
+# the former second launcher (« ecrire maintenant ») was the same gesture
+rm -f "$ROOTFS/usr/local/share/applications/osmo-ecrire-session.desktop"
 cat > "$ROOTFS/usr/local/share/applications/osmo-defaire-session.desktop" <<'LANCEUR'
 [Desktop Entry]
 Type=Application
@@ -179,10 +173,16 @@ Categories=System;
 LANCEUR
 # and in every terminal, in red
 cat > "$ROOTFS/etc/profile.d/98-osmo-session.sh" <<'PROFIL'
-# osmo-operator: / in RAM and the session not validated -> red warning
+# osmo-operator: / in RAM -> red warning. A validation covers the moment it
+# was given; what follows needs another one, or the passphrase at shutdown.
 if [ -t 1 ] && [ ! -e /run/osmo-racine/valide ] && mountpoint -q /media/root-ro 2>/dev/null; then
-    printf '\033[1;31m%s\033[0m\n' "ATTENTION : session non validee - sans la phrase de /home a l extinction, tout est EFFACE." \
-        "  osmo-valider-session (a l extinction) | osmo-valider-session --maintenant (tout de suite)"
+    if [ -e /run/osmo-racine/ecrit ]; then
+        printf '\033[1;31m%s\033[0m\n' "ATTENTION : session validee a $(date -r /run/osmo-racine/ecrit '+%H:%M') - ce qui a suivi sera EFFACE a l extinction sans la phrase de /home." \
+            "  osmo-valider-session : valider de nouveau, maintenant"
+    else
+        printf '\033[1;31m%s\033[0m\n' "ATTENTION : session non validee - sans la phrase de /home, tout est EFFACE a l extinction." \
+            "  osmo-valider-session : ecrit la session telle qu elle est maintenant (pas ce qui suit)"
+    fi
 fi
 PROFIL
 chmod 0644 "$ROOTFS/etc/profile.d/98-osmo-session.sh"

@@ -3,17 +3,17 @@
 # the session is written to the disk at shutdown (osmo-racine-live valider).
 #
 #   osmo-valider-session           ask the passphrase (zenity, or the terminal)
-#   osmo-valider-session --maintenant  write the session to the disk NOW
-#                                  (osmo-racine-live ecrire), same passphrase
-#                                  (what changed since the last write)
+#                                  and write THE MOMENT to the disk: the session
+#                                  as it is now, not what follows
+#                                  (osmo-racine-live valider)
+#   osmo-valider-session --maintenant  the same (its former name)
 #   osmo-valider-session --defaire undo the LAST write on the disk
 #                                  (osmo-racine-live defaire); again for the
 #                                  one before
 #   osmo-valider-session --fin [poweroff|reboot]  « Tout oublier ? » Yes: the
 #                                  flash, the session is wiped; No: the /home
 #                                  passphrase, the session is kept - then shutdown
-#   osmo-valider-session --rappel  at login (autostart): a RED warning as long
-#                                  as the session is not validated
+#   osmo-valider-session --rappel  at login (autostart): a RED warning
 #
 # Without the passphrase at shutdown everything written during the session -
 # /, /root, /opt/GSM, /home - is wiped (except what --maintenant already wrote).
@@ -21,12 +21,11 @@ set -u
 RL=/usr/local/sbin/osmo-racine-live
 ACTION=valider
 TITRE="Garder la session : phrase de /home"
-OK_TXT="Session validee : elle sera ecrite sur le disque a l extinction."
-KO_TXT="Phrase refusee (ou ecriture en echec) : rien n est garde, la session sera EFFACEE a l extinction."
-if [ "${1:-}" = --maintenant ]; then
-    ACTION=ecrire
-    OK_TXT="Ecrit sur le disque : ce qui a change depuis la derniere ecriture. La suite sera validee ou effacee a l extinction."
-elif [ "${1:-}" = --defaire ]; then
+# valider = THE MOMENT: the session as it is now goes to the disk; what follows
+# is not kept without a new validation (--maintenant: the former name)
+OK_TXT="Valide : la session jusqu a maintenant est ecrite sur le disque. Ce qui suit n est PAS garde sans une nouvelle validation (ou la phrase a l extinction)."
+KO_TXT="Phrase refusee (ou ecriture en echec) : rien n est ecrit."
+if [ "${1:-}" = --defaire ]; then
     ACTION=defaire
     TITRE="Defaire la derniere ecriture : phrase de /home"
     OK_TXT="Derniere ecriture defaite sur le disque (visible au prochain demarrage). Recommencer pour la precedente. La boite noire garde tout."
@@ -78,7 +77,7 @@ if [ "${1:-}" = --fin ]; then
             exec systemctl "$quoi"
         fi
         p="$(zenity --password --title "Garder la session : phrase de /home")" || continue
-        printf '%s\n' "$p" | en_root "$RL" valider --stdin >/dev/null 2>&1; rc=$?
+        printf '%s\n' "$p" | en_root "$RL" valider-fin >/dev/null 2>&1; rc=$?
         p=""
         if [ "$rc" = 0 ]; then
             # the passphrase is right: full-screen cmatrix, shutdown underneath
@@ -91,16 +90,16 @@ if [ "${1:-}" = --fin ]; then
 fi
 
 if [ "${1:-}" = --rappel ]; then
-    [ -e /run/osmo-racine/valide ] && exit 0
     graphique || exit 0
     zenity --question --no-wrap --title "osmo-operator : session non validee" \
-        --ok-label "Donner la phrase de /home" --cancel-label "Plus tard" \
+        --ok-label "Valider maintenant" --cancel-label "Plus tard" \
         --text '<span foreground="red" weight="bold" size="large">ATTENTION : session NON validee</span>
 
 <span foreground="red">Sans la phrase de /home a l extinction, TOUT ce que la session
 ecrit (/, /root, /opt/GSM, /home) sera EFFACE.</span>
 
-Elle peut aussi etre donnee a l extinction, sur la console.' || exit 0
+Valider ecrit la session TELLE QU ELLE EST A CET INSTANT : ce qui suit
+n est garde que par une nouvelle validation, ou la phrase a l extinction.' || exit 0
 fi
 
 if graphique; then

@@ -11,11 +11,13 @@
 # EVERY SESSION RUNS IN RAM. Everything written to / - /root, /opt/GSM, /etc,
 # /var... - goes to the overlay's tmpfs. At SHUTDOWN (osmo-fin-session.service
 # -> « fin »):
-#   the /home passphrase given (now or during the session, « valider »):
-#       the whole session is written to the disk, atomically (see « appliquer »);
+#   the /home passphrase given at shutdown:
+#       the session is written to the disk, atomically (see « appliquer »);
 #   no passphrase (Enter, timeout, wrong three times):
-#       the RAM is dropped, NOTHING of the session survives - and a RED
-#       warning says so on the console, held a few seconds.
+#       the RAM is dropped - and a RED warning says so on the console.
+# DURING the session, « valider » writes THE MOMENT: the session as it is at
+# that instant. What follows is not covered: without a new validation it is
+# what the shutdown drops (the validated moment stays on the disk).
 # Either way the black box records what the session changed, marked
 # « valide » or « efface ». /home goes through the same validation: unlock-home
 # mounts the LUKS2 volume read-only on /media/home-ro and a RAM layer over it
@@ -27,12 +29,12 @@
 #   osmo-racine-live poser        enable (Calamares, shellprocess-osmo.conf)
 #   osmo-racine-live etat         this boot: RAM or disk, validated or not
 #   osmo-racine-live changements  the session's changes (paths)
-#   osmo-racine-live valider      give the /home passphrase now: the session
-#                                 will be written at shutdown (--stdin: read
-#                                 one line, for osmo-valider-session)
-#   osmo-racine-live ecrire       write the session to the disk NOW, same
-#                                 passphrase (--stdin too): a power cut then
-#                                 loses only what came after
+#   osmo-racine-live valider      give the /home passphrase now: THE MOMENT is
+#                                 written to the disk - the session as it is
+#                                 now, not what follows (--stdin: read one
+#                                 line, for osmo-valider-session). What comes
+#                                 after is validated again, or wiped
+#   osmo-racine-live ecrire       the same gesture, its former name
 #                                 (only what changed since the last write
 #                                 is written: that moment, not the session)
 #   osmo-racine-live retours      the commits that can be undone
@@ -159,6 +161,22 @@ changements_couche() {
 changements() {
     local h b pre
     couches | while read -r h b pre; do changements_couche "$h" "$pre"; done
+}
+
+# changements_depuis : the paths changed SINCE THE LAST WRITE of this session
+# ($ETAT/ecrit, set by « valider »); without one, the whole session. By ctime:
+# a rename, a chmod or a deletion (its whiteout) counts.
+changements_depuis() {
+    local h b pre r p
+    if [ ! -f "$ETAT/ecrit" ]; then changements; return; fi
+    couches | while read -r h b pre; do
+        [ -d "$h" ] || continue
+        ( cd "$h" && find . -mindepth 1 -cnewer "$ETAT/ecrit" ! -type d -print0 2>/dev/null ) | while IFS= read -r -d '' r; do
+            p="${r#.}"
+            case "$p" in *$'\n'*) continue ;; esac
+            exclu "$(plein "$pre" "$p")" || printf '%s\n' "$(plein "$pre" "$p")"
+        done
+    done
 }
 
 # ── the session's own journal ────────────────────────────────────────────────
@@ -577,7 +595,10 @@ EOF
             echo "live : / en RAM ($(changements | wc -l) chemin(s) dans la couche RAM de la session)"
             couches_manquantes && rouge "/home : couche RAM HORS D ATTEINTE - /home ne pourra pas etre ecrit"
             echo "retours possibles : $(retours | wc -l) commit(s) (osmo-racine-live retours)"
-            if [ -f "$MARQUE" ]; then vert "session validee : elle sera ecrite sur le disque a l extinction"
+            if [ -f "$MARQUE" ]; then vert "fin de session validee : elle sera ecrite sur le disque a l extinction"
+            elif [ -f "$ETAT/ecrit" ]; then
+                vert "validee a $(date -r "$ETAT/ecrit" '+%T') : la session jusque-la est sur le disque"
+                rouge "$(changements_depuis | wc -l) changement(s) depuis : effaces a l extinction sans une nouvelle validation"
             else rouge "session NON validee : tout sera efface a l extinction (osmo-racine-live valider)"; fi
         else
             echo "persistant : / ecrit directement sur le disque"
@@ -595,13 +616,13 @@ EOF
         changements
         ;;
     valider|ecrire)
-        # valider : the session will be written at shutdown.
-        # ecrire  : written NOW (and the session goes on): a power cut or a
-        #           forgotten passphrase then only loses what came after.
-        #           Same passphrase, same atomic write, recorded in the box
-        #           (« ecrit »). The RAM layer stays as it is: what was written
-        #           is only hidden behind identical copies, and is written
-        #           again (unchanged) if the session is validated later.
+        # THE MOMENT OF THE SAVE. Giving the /home passphrase during the session
+        # writes the session AS IT IS NOW to the disk (what changed since the
+        # last write), and nothing more: what comes AFTER is not kept - it is
+        # validated again (here, or at shutdown), or wiped. « valider » and
+        # « ecrire » are the same gesture; the black box records it (« ecrit »).
+        # (The end-of-session choice, which keeps everything up to the shutdown,
+        # is « valider-fin ».)
         root_requis
         live || { log "/ n est pas en RAM : rien a valider"; exit 0; }
         [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : validation impossible" >&2; exit 1; }
@@ -612,31 +633,47 @@ EOF
         fi
         if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
             p=""
-            rouge "phrase de /home refusee : rien n est ecrit, la session sera EFFACEE a l extinction"
+            rouge "phrase de /home refusee : rien n est ecrit"
             exit 1
         fi
         p=""
-        if [ "$1" = valider ]; then
-            install -d -m 0700 "$ETAT"
-            rm -f "$ETAT/oublier"
-            date '+%F %T' > "$MARQUE"; chmod 600 "$MARQUE"
-            vert "session validee : elle sera ecrite sur le disque a l extinction"
+        n="$(changements_depuis | wc -l)"
+        [ "$n" -gt 0 ] || { log "rien de nouveau depuis la derniere ecriture"; exit 0; }
+        trace "valider : ecriture du moment ($n chemin(s) changes depuis la derniere ecriture)"
+        # the instant: taken BEFORE the copy, so that what changes during the
+        # write counts as « after »
+        install -d -m 0700 "$ETAT"
+        : > "$ETAT/ecrit.nouv"
+        # the box first: the RAM layer against the disk, i.e. this moment
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer ecrit
+        appliquer; rc=$?
+        journal_disque
+        if [ "$rc" = 0 ]; then
+            mv -f "$ETAT/ecrit.nouv" "$ETAT/ecrit"
+            rm -f "$MARQUE"
+            vert "ecrit sur le disque : la session jusqu a maintenant ($NB_ECRITS changement(s)). Ce qui suit n est PAS garde : revalider, ou la phrase a l extinction."
         else
-            n="$(changements | wc -l)"
-            [ "$n" -gt 0 ] || { log "aucun changement a ecrire"; exit 0; }
-            trace "ecrire : ecriture en cours de session"
-            # the box first: the RAM layer against the disk, i.e. what
-            # changed since the last write - this moment, not the session
-            [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer ecrit
-            appliquer; rc=$?
-            journal_disque
-            if [ "$rc" = 0 ]; then
-                vert "ecrit sur le disque : $NB_ECRITS changement(s) depuis la derniere ecriture ; la suite sera validee ou effacee a l extinction"
-            else
-                rouge "ECHEC de l ecriture (voir $JOURNAL_DISQUE) : ce qui n a pas pu etre ecrit garde son etat precedent"
-                exit 1
-            fi
+            rm -f "$ETAT/ecrit.nouv"
+            rouge "ECHEC de l ecriture (voir $JOURNAL_DISQUE) : ce qui n a pas pu etre ecrit garde son etat precedent"
+            exit 1
         fi
+        ;;
+    valider-fin)
+        # the END-OF-SESSION choice (osmo-valider-session --fin, answer « No »):
+        # the machine is about to shut down, and everything up to the shutdown
+        # is written there (osmo-racine-live fin), without another question
+        root_requis
+        live || exit 0
+        [ -n "$CRYPTHOME_UUID" ] || { rouge "pas de /home chiffre : validation impossible" >&2; exit 1; }
+        IFS= read -r p || p=""
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+            p=""; rouge "phrase de /home refusee"; exit 1
+        fi
+        p=""
+        install -d -m 0700 "$ETAT"
+        rm -f "$ETAT/oublier"
+        date '+%F %T' > "$MARQUE"; chmod 600 "$MARQUE"
+        vert "fin de session : elle sera ecrite sur le disque a l extinction"
         ;;
     annuler)
         root_requis
@@ -655,8 +692,9 @@ EOF
         # osmo-fin-session.service, ExecStop: the display manager is already
         # stopped, /home and the black box are still mounted.
         live || exit 0
-        n="$(changements | wc -l)"
-        trace "fin : $n chemin(s) en RAM ; couches : $(couches | tr '\n' ';')"
+        # what is at stake: what changed since the last save of the session
+        n="$(changements_depuis | wc -l)"
+        trace "fin : $n chemin(s) changes depuis $([ -f "$ETAT/ecrit" ] && echo "l ecriture de $(date -r "$ETAT/ecrit" '+%T')" || echo "le demarrage") ; couches : $(couches | tr '\n' ';')"
         couches_manquantes && trace "fin : /home est une couche RAM mais ses repertoires sont hors d atteinte"
         decision=efface
         if [ -f "$ETAT/oublier" ]; then
@@ -666,8 +704,13 @@ EOF
         elif [ "$n" -gt 0 ] && [ -n "$CRYPTHOME_UUID" ] \
                 && [ -e "/dev/disk/by-uuid/$CRYPTHOME_UUID" ] && command -v cryptsetup >/dev/null 2>&1; then
             console_texte
-            dire "osmo-operator : fin de session - $n changement(s) en RAM"
-            dire_rouge "!!! Sans la phrase de /home, TOUS les changements de la session seront EFFACES !!!"
+            if [ -f "$ETAT/ecrit" ]; then
+                dire "osmo-operator : fin de session - $n changement(s) depuis la validation de $(date -r "$ETAT/ecrit" '+%T')"
+                dire_rouge "!!! Sans la phrase de /home, ce qui a suivi cette validation sera EFFACE (le reste est sur le disque) !!!"
+            else
+                dire "osmo-operator : fin de session - $n changement(s) en RAM"
+                dire_rouge "!!! Sans la phrase de /home, TOUS les changements de la session seront EFFACES !!!"
+            fi
             # « Tout oublier ? » yes: flash, white screen, wiped;
             # no: the passphrase is required (right: cmatrix « REC » while
             # the session is written); nothing / timeout: wiped, red banner
@@ -731,7 +774,7 @@ EOF
             console_texte
             dire_rouge "############################################################"
             dire_rouge "  PHRASE DE /home NON DONNEE : SESSION EFFACEE"
-            dire_rouge "  $n changement(s) perdus (/, /root, /opt/GSM, /home)"
+            dire_rouge "  $n changement(s) perdus$([ -f "$ETAT/ecrit" ] && echo " depuis la validation de $(date -r "$ETAT/ecrit" '+%T')") (/, /root, /opt/GSM, /home)"
             dire_rouge "############################################################"
             sleep 10
         fi
@@ -822,7 +865,7 @@ EOF
         log "/ persistant pour tous a partir du prochain demarrage"
         ;;
     *)
-        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | ecrire [--stdin] | retours | defaire [--stdin] | annuler | oublier | fin | actualiser | retirer" >&2
+        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | valider-fin | retours | defaire [--stdin] | annuler | oublier | fin | actualiser | retirer" >&2
         exit 2
         ;;
 esac

@@ -402,9 +402,13 @@ def etat():
 
 # ── Sortie vers le reseau public ───────────────────────────
 # TRUNK_EXT of the Asterisk dialplan (configs/extensions.conf, [sub-sortie-ext]):
-# "zadarma" (SIP trunk) or "dongle" (chan_dongle). Changed live, and written in
-# the installed extensions.conf so that a "dialplan reload" keeps the choice.
-TRUNKS = ("zadarma", "dongle")
+# "sip" (the SIP trunk, written by osmo-gtk's tab « Trunk SIP ») or "dongle"
+# (chan_dongle). Changed live, and written in the installed extensions.conf so
+# that a "dialplan reload" keeps the choice. The SIP trunk used to carry the
+# name of one operator: applications installed before the rename still send
+# and expect that name - TRUNK_ALIAS maps it, both ways.
+TRUNKS = ("sip", "dongle")
+TRUNK_ALIAS = {"zadarma": "sip"}
 EXTENSIONS = os.environ.get("OSMO_EXTENSIONS_CONF", "/etc/asterisk/extensions.conf")
 
 
@@ -414,6 +418,8 @@ def trunk(choix=None):
         if r.returncode:
             raise RuntimeError((r.stderr or r.stdout).strip() or "asterisk injoignable")
         return r.stdout
+    ancien = choix in TRUNK_ALIAS             # an application from before the rename
+    choix = TRUNK_ALIAS.get(choix, choix)
     if choix is not None:
         if choix not in TRUNKS:
             raise ValueError("trunk inconnu : %r" % (choix,))
@@ -430,7 +436,11 @@ def trunk(choix=None):
     m = re.search(r"(?m)^\s*TRUNK_EXT=(\S+)", rx("dialplan show globals"))
     if not m:
         raise RuntimeError("TRUNK_EXT absent du dialplan (extensions.conf sans [sub-sortie-ext])")
-    return {"trunk": m.group(1), "choix": list(TRUNKS)}
+    actuel = TRUNK_ALIAS.get(m.group(1), m.group(1))      # a dialplan from before the rename
+    if ancien:
+        inverse = {v: k for k, v in TRUNK_ALIAS.items()}
+        return {"trunk": inverse.get(actuel, actuel), "choix": [inverse.get(t, t) for t in TRUNKS]}
+    return {"trunk": actuel, "choix": list(TRUNKS)}
 
 
 # ── HTTP ───────────────────────────────────────────────────

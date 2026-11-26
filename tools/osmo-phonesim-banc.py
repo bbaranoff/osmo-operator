@@ -85,7 +85,7 @@ SMS_IN_CONNECT = int(os.environ.get("OSMO_SMS_IN_PORT_VM", "12349"))
 # error text, not with a dead link, and the phone was told +CMGS anyway.
 # Such a number now leaves through the real-network gateway
 # (tools/osmo-dongle-passerelle.py, a Huawei dongle on a public operator).
-# Same numbering rule as the Zadarma routes of extensions.conf: 00 + E.164,
+# Same numbering rule as the SIP trunk routes of extensions.conf: 00 + E.164,
 # French national 0[1-9]XXXXXXXX, or an explicit "+".
 DONGLE = (os.environ.get("OSMO_DONGLE_HOST", "127.0.0.1"),
           int(os.environ.get("OSMO_DONGLE_PORT", "12350")))
@@ -160,8 +160,8 @@ CTX = os.environ.get("OSMO_CALL_CONTEXT", "internal")
 #   interop_in  the interop trunk (endpoint interop_trunk_opN), a call from
 #               ANOTHER operator;
 #   internal    a Linphone;
-#   zadarma_in  the [zadarma] / [zadarma_pbx] trunk (pjsip.conf), a call from
-#               the outside world via the Zadarma operator;
+#   trunk_in    the SIP trunk ([trunk_sip], pjsip_trunk.conf), a call from
+#               the outside world via the SIP operator;
 #   dongle_in   a Huawei dongle on a public operator (chan_dongle).
 # Without the right context entrant() is never called and NO RING goes to
 # oFono/ModemManager: the osmocom-bb mobile is paged by the MSC but the
@@ -169,7 +169,7 @@ CTX = os.environ.get("OSMO_CALL_CONTEXT", "internal")
 # The filter that matters remains DestExten == our MSISDN: the second leg of
 # our own outgoing calls dials the REMOTE number, never ours.
 IN_CTX = {c.strip() for c in os.environ.get(
-    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,zadarma_in,dongle_in").split(",") if c.strip()}
+    "OSMO_CALL_IN_CONTEXT", "gsm_in,interop_in,internal,trunk_in,dongle_in").split(",") if c.strip()}
 # THE CALL GOES THROUGH THE AMI, NOT THE CLI. "channel originate" comes from
 # the res_clioriginate module, absent from this installation (modules.conf is
 # autoload = no). The AMI is active in manager.conf; its account is installed
@@ -182,8 +182,8 @@ AMI_PASS = os.environ.get("OSMO_AMI_PASSWORD", "osmocom1")
 def clip(num):
     """The caller number as it must be PRESENTED, and its 27.007 type.
 
-    A call from the outside via Zadarma arrives with an E.164 caller, but the
-    dialplan strips the "+" before handing the call to the MSC ([zadarma_in]:
+    A call from the outside via the SIP trunk arrives with an E.164 caller, but the
+    dialplan strips the "+" before handing the call to the MSC ([trunk_in]:
     Set(CALLERID(num)=${FILTER(0-9,...)})), because GSM signalling cannot
     carry it to the handset. The AMI thus gives "33656678074".
 

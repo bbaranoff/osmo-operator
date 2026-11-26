@@ -99,7 +99,7 @@ qualify_frequency=30
     with open(os.path.join(AST, "pjsip_inscrits.conf"), "w") as f:
         f.write("".join(p))
     # LA SORTIE VERS L EXTERIEUR EST FERMEE aux inscrits : [inscrits] inclut
-    # [internal], dont les numeros publics partent par le trunk (Zadarma,
+    # [internal], dont les numeros publics partent par le trunk (SIP,
     # dongle) aux frais du noeud - un code d invitation ne doit pas donner ca.
     # Les motifs ci-dessous passent AVANT ceux du contexte inclus ; seuls les
     # numeros de la liste blanche (--sortie NUM oui) sont renvoyes a [internal].
