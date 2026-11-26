@@ -24,7 +24,7 @@ elif [ "$ACTION" = start ] && [ "$DRY" -eq 0 ]; then
     if [ -n "${C123_WINDOW:-}" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         setsid nohup bash -c 'for i in $(seq 1 300); do [ -e /dev/shm/calypso_lcd ] && break; sleep 2; done
             exec /usr/bin/python3 "$1/tools/osmo-c123-gtk.py" --modele "$2"' _ "$HERE" "$C123_WINDOW" \
-            >/tmp/osmo-c123-gtk.log 2>&1 </dev/null &
+            >/opt/log/osmo-c123-gtk.log 2>&1 </dev/null &
     fi
 fi
 unset _fl_sudo

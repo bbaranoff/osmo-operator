@@ -74,7 +74,7 @@ NETNS="${OSMO_LTE_NETNS:-ue1}"
 ZMQ_ENB="${OSMO_ZMQ_PORT:-2000}"
 ZMQ_UE="${OSMO_ZMQ_PORT_UE:-2001}"
 SRATE="${OSMO_LTE_SRATE:-}"           # vide = ce que disent enb.conf / ue.conf
-LOGDIR="${OSMO_LTE_LOGDIR:-/tmp}"
+LOGDIR="${OSMO_LTE_LOGDIR:-/opt/log}"
 BUILD="${OSMO_SRSRAN_BUILD:-/opt/LTE/srsRAN_4G/build}"
 EPC="${OSMO_EPC:-/usr/local/bin/osmo-epc}"
 [ -x "$EPC" ] || EPC="$REPO/tools/osmo-epc.sh"

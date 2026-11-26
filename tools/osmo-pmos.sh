@@ -309,10 +309,10 @@ pmos_modem_start() {
     # these tools need (same trap as in start-native.sh).
     OSMO_VM_READY_PORT="$SSH_PORT" setsid /usr/bin/python3 \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$AT_PORT" \
-        >>/tmp/osmo-phonesim-vm.log 2>&1 &
+        >>/opt/log/osmo-phonesim-vm.log 2>&1 &
     echo $! > "$MDMPID"
     _ok "modem du banc lance (il se branchera des que la VM repondra en ssh)"
-    _say "journal : /tmp/osmo-phonesim-vm.log ; trace AT : /var/log/osmo-at-ofono.log"
+    _say "journal : /opt/log/osmo-phonesim-vm.log ; trace AT : /opt/log/osmo-at-ofono.log"
 }
 
 pmos_tourne() {
@@ -351,9 +351,9 @@ pmos_status() {
     else
         _warn "ssh de la VM : ferme (la VM demarre encore ?)"
     fi
-    if grep -q . /var/log/osmo-at-ofono.log 2>/dev/null; then
+    if grep -q . /opt/log/osmo-at-ofono.log 2>/dev/null; then
         echo -e "  ${CYAN}dernieres lignes du dialogue AT :${NC}"
-        tail -6 /var/log/osmo-at-ofono.log | sed 's/^/      /'
+        tail -6 /opt/log/osmo-at-ofono.log | sed 's/^/      /'
     fi
 }
 
@@ -423,7 +423,7 @@ case "${1:-status}" in
     shell)     shift; pmos_shell "$@" ;;
     mm)        pmos_mm ;;
     at)        shift; exec /usr/bin/python3 "$REPO/tools/at-cmd.py" "$@" ;;
-    log)       exec tail -f /var/log/osmo-at-ofono.log ;;
+    log)       exec tail -f /opt/log/osmo-at-ofono.log ;;
     *)
         sed -n '/^#   osmo-pmos/,/^#   osmo-pmos log/p' "$0" | sed 's/^# \{0,2\}//'
         exit 2

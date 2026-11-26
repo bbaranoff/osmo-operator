@@ -178,7 +178,7 @@ if [ "$ACTION" = "start" ] && [ "$DRY" -ne 1 ] && [ "${OSMO_RACCORD_MOBILE:-1}" 
         # bound, read from the file.
             ( setsid env OSMO_MOB_VTY_PORT="${_ms1_vty:-4247}" \
                   "$HERE/tools/osmo-phonesim-banc.py" \
-                  </dev/null >>/tmp/osmo-phonesim.log 2>&1 & )
+                  </dev/null >>/opt/log/osmo-phonesim.log 2>&1 & )
         sleep 1
         systemctl restart ofono >/dev/null 2>&1 || true
         sleep 3
@@ -212,13 +212,13 @@ PYON
         # adopted by init - nobody watches or signals it any more.
         # `</dev/null` as well: none of these helpers reads the terminal.
             ( setsid /usr/bin/python3 "$HERE/tools/osmo-ril-atmodem.py" \
-                  </dev/null >>/tmp/osmo-ril.log 2>&1 & )
+                  </dev/null >>/opt/log/osmo-ril.log 2>&1 & )
         sleep 1
         if pgrep -f "$HERE/tools/osmo-phonesim-banc.py" >/dev/null 2>&1; then
             say_end " OK " "$C_OK" "Raccord mobile (oFono)" \
                 "modem /osmo${_rm_detail:+ - $_rm_detail} ; pty RIL : /run/osmo-ril/at-pty"
         else
-            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. /tmp/osmo-phonesim.log)"
+            say_end " -- " "$C_DIM" "Raccord mobile (oFono)" "modem du banc non demarre (cf. /opt/log/osmo-phonesim.log)"
         fi
     fi
 fi
@@ -281,7 +281,7 @@ SAP_DSP_MOBILE_CFG=""
 start_sap() {
     [ "${SAP_MODE:-0}" = 1 ] || return 0
     local sdir="${SOFTSIM_DIR:-/opt/GSM/softsim}" sock="${SAP_SOCK:-/tmp/osmocom_sap}"
-    local log="${SAP_LOG:-/tmp/osmo-sap.log}" type="${SAP_TYPE:-auto}" file="" detail=""
+    local log="${SAP_LOG:-/opt/log/osmo-sap.log}" type="${SAP_TYPE:-auto}" file="" detail=""
     local shim=/usr/local/share/softsim/ruby_compat.rb
     [ -f "$shim" ] || shim="$HERE/tools/softsim/ruby_compat.rb"
     say_begin "SIM via SAP"

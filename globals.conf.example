@@ -332,7 +332,7 @@ OSMO_RACCORD_MOBILE=""
 PYSIM_VENV=""
 # defaut : /opt/GSM/softsim   (13-adresses.sh:299)
 SOFTSIM_DIR=""
-# defaut : /tmp/osmo-sap.log   (13-adresses.sh:300)
+# defaut : /opt/log/osmo-sap.log   (13-adresses.sh:300)
 SAP_LOG=""
 # defaut : 0   (13-adresses.sh:332)
 # choix : 0 | 1

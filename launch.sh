@@ -45,7 +45,7 @@
 #     OSMO_LAUNCH_GTK=0 (no progress window, notifications only),
 #     OSMO_LAUNCH_NO_SERVICE=1 (never go through the systemd unit from an icon),
 #     OSMO_BANC_DIRECT=1 (run start.sh directly, bypassing the unit),
-#     OSMO_LAUNCH_LOG (/var/log/osmo-launch.log, detached fallback),
+#     OSMO_LAUNCH_LOG (/opt/log/osmo-launch.log, detached fallback),
 #     OSMO_MS_VTY_PORT, TMUX_SESSION (calypso), HOST_PULSE_USER.
 #     OSMO_LAUNCH_TERM / OSMO_TERM_TAKEN are internal re-exec flags.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -397,7 +397,7 @@ if [ "$_lt_besoin" = "1" ] && [ "${OSMO_LAUNCH_TERM:-0}" != "1" ]; then
     # NO window possible. The caller's terminal is not taken over (that is
     # the failure this guard prevents): detach, and send the output to a log
     # rather than into the void.
-    _lt_log="${OSMO_LAUNCH_LOG:-/var/log/osmo-launch.log}"
+    _lt_log="${OSMO_LAUNCH_LOG:-/opt/log/osmo-launch.log}"
     echo -e "${YELLOW}Aucun emulateur de terminal - lancement detache, journal : ${_lt_log}${NC}" >&2
     exec setsid "$0" "$@" </dev/null >>"$_lt_log" 2>&1
 fi

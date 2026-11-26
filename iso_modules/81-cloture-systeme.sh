@@ -246,7 +246,7 @@ done
 # At boot nobody reads the screen: output goes to the log, and the exit code
 # must never delay or block multi-user.target.
 if [ "$BOOT" = "1" ]; then
-    exec >>/var/log/osmo-update.log 2>&1
+    exec >>/opt/log/osmo-update.log 2>&1
     echo "===== osmo-update (boot) $(date '+%F %T') ====="
 fi
 

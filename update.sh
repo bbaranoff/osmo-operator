@@ -644,21 +644,21 @@ osmo_raccourci
 sleep 6
 while osmo_display_vivant; do
     osmo_vivant -f "$REPO/tools/osmo-panel.py" || \
-        "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
+        "$REPO/tools/osmo-panel.py" >>/opt/log/osmo-panel.log 2>&1 &
     osmo_vivant -f "$REPO/tools/osmo-dino.py" || \
-        "$REPO/tools/osmo-dino.py" >>/tmp/osmo-dino.log 2>&1 &
+        "$REPO/tools/osmo-dino.py" >>/opt/log/osmo-dino.log 2>&1 &
     # Timeslot activity probe (osmo-bsc conf + VTY) for the banner
     osmo_vivant -f "$REPO/tools/osmo-ts-probe.py" || \
-        "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
+        "$REPO/tools/osmo-ts-probe.py" >>/opt/log/osmo-ts-probe.log 2>&1 &
     # Live LAB GSM top zone (blinking timeslots + app welcome)
     osmo_vivant -f "$REPO/tools/osmo-topzone.py" || \
-        "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
+        "$REPO/tools/osmo-topzone.py" >>/opt/log/osmo-topzone.log 2>&1 &
     # The categorised launcher bar at the bottom
 
     osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
-        "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
+        "$REPO/tools/osmo-launcher.py" >>/opt/log/osmo-launcher.log 2>&1 &
     osmo_vivant -x conky || \
-        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
+        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/opt/log/osmo-conky.log 2>&1
     sleep 5
 done
 PANEL
@@ -880,11 +880,11 @@ osmo_poser_correctif_audio() {
     if [ -n "$bpid" ]; then
         local bargs; bargs="$(tr '\0' ' ' <"/proc/$bpid/cmdline" 2>/dev/null | sed 's/.*osmo-phonesim-banc.py //')"
         kill "$bpid" 2>/dev/null; sleep 1
-        setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
-            "$d/tools/osmo-phonesim-banc.py" $bargs >>/tmp/osmo-phonesim-vm-root.log 2>&1 </dev/null &
+        setsid nohup env OSMO_AT_LOG_OFONO=/opt/log/osmo-at-vm.log \
+            "$d/tools/osmo-phonesim-banc.py" $bargs >>/opt/log/osmo-phonesim-vm-root.log 2>&1 </dev/null &
         sleep 3
         pgrep -f '[o]smo-phonesim-banc.py --connect' >/dev/null 2>&1 \
-            && echo "[OK] modem du banc relance ($bargs) - journal /tmp/osmo-phonesim-vm-root.log" \
+            && echo "[OK] modem du banc relance ($bargs) - journal /opt/log/osmo-phonesim-vm-root.log" \
             || echo "[!!] le modem du banc ne s est pas relance : osmo-pmos-setup pour le rebrancher"
     fi
     # ── Saturated, bassy microphone: the echo canceller's analog AGC ──
@@ -932,7 +932,7 @@ osmo_poser_correctif_audio() {
 osmo_poser_correctif_audio
 
 # ── THE DESKTOP srsUE CONSOLE: 4G LOGS ──────────────────────────────────────
-# osmo-lte.sh sets --log.filename=/tmp/osmo-lte-ue.log and the console in
+# osmo-lte.sh sets --log.filename=/opt/log/osmo-lte-ue.log and the console in
 # /tmp/osmo-lte-ue.console. Set NAS to info (no hex dump) in an already
 # installed ue.conf (osmo-lte-install --configs does not overwrite it without
 # --force) and restart the osmo-fft-snap panel, which reads its paths at
@@ -946,7 +946,7 @@ osmo_poser_journaux_lte() {
         grep -q '^nas_hex_limit *= *0' "$f" && continue
         sed -i -e '/^rrc_level *= *info$/d' -e '/^nas_level *= *info$/d' \
                -e '/^\[log\]/,/^\[/{s/^\(all_level *= *warning\)$/\1\nnas_level = info\nnas_hex_limit = 0/}' \
-               -e 's|^filename *= */tmp/ue\.log$|filename = /tmp/osmo-lte-ue.log|' "$f" \
+               -e 's|^filename *= */tmp/ue\.log$|filename = /opt/log/osmo-lte-ue.log|' "$f" \
             && echo "[OK] $f : NAS en info (console srsUE du bureau)"
     done
     if systemctl is-active --quiet osmo-fft-snap 2>/dev/null; then

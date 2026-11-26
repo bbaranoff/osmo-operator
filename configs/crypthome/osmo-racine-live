@@ -126,6 +126,9 @@ for _l in $CRYPTHOME_ROOT_LINKS; do EXCLUS="$EXCLUS /root/$_l"; done
 # system disk, in clear - neither by this session nor by a guest root session
 # somebody validates afterwards.
 if mountpoint -q /root 2>/dev/null || [ -d /media/home-ro/.root ]; then EXCLUS="$EXCLUS /root"; fi
+# OUR LOGS (/opt/log, unlock-home): in the encrypted volume once /home is open,
+# in RAM otherwise - never on the system disk.
+EXCLUS="$EXCLUS /opt/log"
 # what the IMAGE put in /root (the bench's tools: nothing personal) - all the
 # guest root finds there once « root-nettoyer » has run
 ROOT_IMAGE="${CRYPTHOME_ROOT_IMAGE:-.env .venv-qemu .npm .osmocom .bashrc .profile init-crypthome.sh .config/autostart .config/linphone .config/srsran .config/pmbootstrap_v3.cfg .config/gnome-initial-setup-done}"
@@ -316,6 +319,11 @@ journal_home() {
         > "$f.nouv" 2>/dev/null || { rm -f "$f.nouv"; return 0; }
     chown "$o": "$f.nouv" 2>/dev/null; chmod 640 "$f.nouv" 2>/dev/null
     mv -f "$f.nouv" "$f" 2>/dev/null
+    # and with all our logs: /opt/log/osmo-session.log (in the volume too)
+    if mountpoint -q /opt/log 2>/dev/null; then
+        cp -f "$f" /opt/log/osmo-session.log.nouv 2>/dev/null && chmod 644 /opt/log/osmo-session.log.nouv \
+            && mv -f /opt/log/osmo-session.log.nouv /opt/log/osmo-session.log
+    fi
 }
 
 # ── at shutdown, on the text console ─────────────────────────────────────────

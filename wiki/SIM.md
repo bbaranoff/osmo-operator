@@ -103,7 +103,7 @@ tools/osmo-sim.sh hlr --creer --ki <card's Ki>     # subscriber created via the 
 ```
 
 `start_sap` runs **before** the stack: it launches `demo_server.rb` (softSIM)
-on `/tmp/osmocom_sap` (`SAP_SOCK`), with log `/tmp/osmo-sap.log` (`SAP_LOG`,
+on `/tmp/osmocom_sap` (`SAP_SOCK`), with log `/opt/log/osmo-sap.log` (`SAP_LOG`,
 `SAP_VERBOSITY=3`: connection, card ready, each timestamped APDU), and the
 mobile connects to it at startup. The server serves the next client after a
 disconnect, so a baseband restart requires nothing.

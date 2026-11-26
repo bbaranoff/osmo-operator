@@ -264,7 +264,7 @@ def catalogue():
     #                containers coming up - run in sequence, the log would only
     #                start at the end of the startup.
     #   deka       : deka-start.sh (installed by addition.sh --opencl), which
-    #                already tees into /var/log/deka.log.
+    #                already tees into /opt/log/deka.log.
     run_standalone = (f"{REPO}/launch.sh --service; echo; "
                       "exec journalctl -u osmo-banc -f -n 40 --no-pager -o cat")
     run_multi = (f"{REPO}/launch.sh --multi & "

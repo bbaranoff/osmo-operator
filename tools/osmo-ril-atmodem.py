@@ -46,8 +46,8 @@ MODEM = os.environ.get("OSMO_OFONO_MODEM", "")
 # THE LOG OF THE AT PORT. Everything passing between the RIL and this modem,
 # in both directions, timestamped to the millisecond. It is the tool to see
 # WHERE a sequence stops - a command answered badly silently blocks all the
-# rest. "tail -f /var/log/osmo-at.log" while driving the client.
-AT_LOG = os.environ.get("OSMO_AT_LOG", "/var/log/osmo-at.log")
+# rest. "tail -f /opt/log/osmo-at.log" while driving the client.
+AT_LOG = os.environ.get("OSMO_AT_LOG", "/opt/log/osmo-at.log")
 
 OFONO = "org.ofono"
 IF_MANAGER = "org.ofono.Manager"

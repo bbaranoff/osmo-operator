@@ -150,7 +150,7 @@ Without these packages on the build host, the ISO comes out unsigned and the bui
 - `osmo-ip-plan.service` derives the node's private addresses; `osmo-qemu-link` links
   `QEMU_BIN` and rebuilds the `qosmo` launcher if needed.
 - `osmo-update.service` does a fast-forward `git fetch` of the embedded repositories at every
-  boot (never a reclone, never apt), log in `/var/log/osmo-update.log`.
+  boot (never a reclone, never apt), log in `/opt/log/osmo-update.log`.
 - When an interactive shell opens, an "SMS delivered" animation runs once
   (`/usr/local/sbin/osmo-sms.sh`) and reinstalls the icons.
 

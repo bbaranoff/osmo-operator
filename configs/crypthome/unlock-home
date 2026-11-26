@@ -208,6 +208,21 @@ root_dans_tmp() {
     done
 }
 
+# /opt/log exists for everybody (the session account writes there too), and
+# /var/log/osmocom - where the Osmocom daemons and their configurations write -
+# is a link to it: one flat directory for all our logs.
+logs_centralises() {
+    local f
+    [ -d /opt/log ] || install -d -m 1777 /opt/log 2>/dev/null || return 0
+    if [ -d /var/log/osmocom ] && [ ! -L /var/log/osmocom ]; then
+        for f in /var/log/osmocom/*; do [ -e "$f" ] && mv -n "$f" /opt/log/ 2>/dev/null; done
+        rmdir /var/log/osmocom 2>/dev/null
+    fi
+    [ -e /var/log/osmocom ] || [ -L /var/log/osmocom ] || ln -s /opt/log /var/log/osmocom 2>/dev/null
+    return 0
+}
+[ "$BOOT" = 1 ] && logs_centralises
+
 # Every boot starts from the session account's configuration.
 [ "$BOOT" = 1 ] && session_normale
 
@@ -559,19 +574,6 @@ elif ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; the
     exit 0
 fi
 
-# the owner's copy of the session log: /home/<owner>/sessions.log
-racine_live && [ -x /usr/local/sbin/osmo-racine-live ] && /usr/local/sbin/osmo-racine-live journal-home >/dev/null 2>&1
-
-# GRUB entry « remonter le disque » (osmo.retour=N on the kernel line): /home
-# has just been opened with its passphrase - the last N sessions are undone
-# on / and on /home, then the machine restarts (osmo-racine-live remonter).
-# Nothing undone (no confirmation): the boot goes on.
-if racine_live && grep -qE '(^| )osmo\.retour(=[^ ]*)?( |$)' /proc/cmdline \
-        && [ -x /usr/local/sbin/osmo-racine-live ]; then
-    _n="$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^osmo\.retour=//p' | head -1)"
-    /usr/local/sbin/osmo-racine-live remonter "${_n:-choisir}" --demarrage
-fi
-
 # TWO ROOTS. Root's own state (assistant credentials, GitHub token, shell
 # history, keys) must not sit on the system disk, which is in clear: once
 # /home is open, /root IS a directory of the encrypted volume ($MOUNT/.root),
@@ -600,6 +602,48 @@ root_chiffre() {
     fi
 }
 root_chiffre
+
+# OUR LOGS, IN ONE PLACE: /opt/log (flat). The bench's logs name subscribers
+# and carry radio traces, and /opt is on the system disk, in clear: once /home
+# is open, /opt/log IS a directory of the encrypted volume ($MOUNT/.log),
+# bound over the one of the disk - kept by a validated write, never in clear.
+# The guest root has an empty /opt/log, in RAM. What a boot service wrote
+# there before this point is carried over. (/var/log/osmo-session.log stays
+# ON THE DISK: it has to exist before /home is open; /opt/log holds its copy.)
+log_chiffre() {
+    local d="$MOUNT/.log" f
+    logs_centralises
+    mountpoint -q /opt/log && return 0
+    install -d -m 1777 "$d" || return 0
+    for f in /opt/log/* /opt/log/.[!.]*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        case "${f##*/}" in osmo-session.log) rm -f "$f"; continue ;; esac
+        if [ -f "$f" ] && [ ! -L "$f" ]; then
+            cat "$f" >> "$d/${f##*/}" 2>/dev/null && rm -f "$f"
+        elif [ ! -e "$d/${f##*/}" ] && [ ! -L "$d/${f##*/}" ]; then
+            mv "$f" "$d/" 2>/dev/null
+        fi
+    done
+    if mount --bind "$d" /opt/log; then
+        log "/opt/log est celui du volume chiffre ($d)."
+    else
+        log "ATTENTION : $d ne se monte pas sur /opt/log - les journaux restent en RAM."
+    fi
+}
+log_chiffre
+
+# the owner's copy of the session log: /home/<owner>/sessions.log
+racine_live && [ -x /usr/local/sbin/osmo-racine-live ] && /usr/local/sbin/osmo-racine-live journal-home >/dev/null 2>&1
+
+# GRUB entry « remonter le disque » (osmo.retour=N on the kernel line): /home
+# has just been opened with its passphrase - the last N sessions are undone
+# on / and on /home, then the machine restarts (osmo-racine-live remonter).
+# Nothing undone (no confirmation): the boot goes on.
+if racine_live && grep -qE '(^| )osmo\.retour(=[^ ]*)?( |$)' /proc/cmdline \
+        && [ -x /usr/local/sbin/osmo-racine-live ]; then
+    _n="$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^osmo\.retour=//p' | head -1)"
+    /usr/local/sbin/osmo-racine-live remonter "${_n:-choisir}" --demarrage
+fi
 
 # The owner account can now have a user session: its home exists. Without
 # lingering, /run/user/<uid> and its bus are only created at first login - but

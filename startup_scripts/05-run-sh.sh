@@ -3,6 +3,10 @@
 : "${MS_COUNT:=2}"
 : "${HOST_IP:=127.0.0.1}"
 mkdir -p "$RUN_DIR" "$LOG_DIR" /root/.osmocom/bb 2>/dev/null || true
+# The live logs of a run stay on the tmpfs (inotify for tmux, and up to
+# 800 MB/h: see environment/paths.env) - /opt/log, where all our logs are,
+# gets a link to them.
+if [ -d /opt/log ] && [ "$LOG_DIR" != /opt/log ]; then ln -sfn "$LOG_DIR" /opt/log/banc 2>/dev/null || true; fi
 # --- 2. path / binary detection -----------------------------------------------
 say_begin "Resolution de run.sh"
 # Order: explicit RUN_SH > resolved OQC_ROOT > historical path, so that RUN_SH
@@ -79,10 +83,10 @@ RUN_ROOT="$(dirname "$RUN_SH")"
 audio_start() {
     [ -f "$HERE/scripts/audio-chain.sh" ] || return 0
     say_begin "Audio (PulseAudio allege)"
-    if bash "$HERE/scripts/audio-chain.sh" 5 >/tmp/osmo-audio-chain.log 2>&1; then
-        say_end " OK " "$C_OK" "Audio (PulseAudio allege)" "journal /tmp/osmo-audio-chain.log"
+    if bash "$HERE/scripts/audio-chain.sh" 5 >/opt/log/osmo-audio-chain.log 2>&1; then
+        say_end " OK " "$C_OK" "Audio (PulseAudio allege)" "journal /opt/log/osmo-audio-chain.log"
     else
-        say_end " !! " "$C_KO" "Audio (PulseAudio allege)" "voir /tmp/osmo-audio-chain.log"
+        say_end " !! " "$C_KO" "Audio (PulseAudio allege)" "voir /opt/log/osmo-audio-chain.log"
     fi
 }
 

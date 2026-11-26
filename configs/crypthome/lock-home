@@ -66,6 +66,7 @@ fi
 systemctl stop osmo-garde.service >/dev/null 2>&1 || true
 
 # root's state lives in the volume ($MOUNT/.root bound over /root, unlock-home)
+if mountpoint -q /opt/log && [ -d "$MOUNT/.log" ]; then umount /opt/log 2>/dev/null || umount -l /opt/log 2>/dev/null || true; fi
 if mountpoint -q /root && [ -d "$MOUNT/.root" ]; then umount /root 2>/dev/null || umount -l /root 2>/dev/null || true; fi
 
 if crypthome_monte && ! umount "$MOUNT"; then

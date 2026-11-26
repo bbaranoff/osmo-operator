@@ -401,7 +401,7 @@ if pgrep -f "[o]smo-phonesim-banc.py --connect" >/dev/null 2>&1; then
     echo "  modem deja branche sur la VM"
 else
     # The AT trace of THIS modem in its own file: as root, the two bench
-    # instances would otherwise both write to /var/log/osmo-at-ofono.log and
+    # instances would otherwise both write to /opt/log/osmo-at-ofono.log and
     # their dialogues would mix.
     # sudo BEFORE setsid: the password cache is attached to the terminal,
     # and setsid detaches from it - sudo launched under setsid would ask for
@@ -412,7 +412,7 @@ else
     # osmo-phonesim-banc.py): 4G first (tun_srsue in the ue1 netns),
     # otherwise the GPRS PDP of the osmocom-bb modem (tun_modem in msgprs).
     # Nothing is forced here.
-    $BANC_SUDO setsid nohup env OSMO_AT_LOG_OFONO=/tmp/osmo-at-vm.log \
+    $BANC_SUDO setsid nohup env OSMO_AT_LOG_OFONO=/opt/log/osmo-at-vm.log \
         OSMO_PPP_DNS="${OSMO_PPP_DNS:-192.168.1.254,1.1.1.1}" \
         "$REPO/tools/osmo-phonesim-banc.py" --connect "127.0.0.1:$PORT_AT" --data "127.0.0.1:$((PORT_AT + 1))" \
         >>"$BANC_LOG" 2>&1 </dev/null &

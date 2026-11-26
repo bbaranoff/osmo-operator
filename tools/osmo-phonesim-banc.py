@@ -210,7 +210,7 @@ def clip(num):
 _PROMPT = re.compile(rb'[\r\n][A-Za-z0-9_.\-]+(?:\([^)]*\))?[>#]\s*$')
 
 
-AT_LOG = os.environ.get("OSMO_AT_LOG_OFONO", "/var/log/osmo-at-ofono.log")
+AT_LOG = os.environ.get("OSMO_AT_LOG_OFONO", "/opt/log/osmo-at-ofono.log")
 _atlog = None
 
 
@@ -220,7 +220,7 @@ def log(*a):
 
 def atlog(sens, texte):
     """The log of THIS port: what oFono sends to the bench modem and what it
-    answers. The counterpart of /var/log/osmo-at.log, which is the other end
+    answers. The counterpart of /opt/log/osmo-at.log, which is the other end
     of the chain (the Android RIL). Together they tell the whole journey."""
     global _atlog
     if _atlog is None:

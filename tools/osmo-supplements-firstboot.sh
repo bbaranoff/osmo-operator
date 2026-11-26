@@ -9,11 +9,11 @@
 # file becomes /etc/osmo-supplements.fait and the unit disables itself. On failure it
 # is retried at the next boot, three times at most (/etc/osmo-supplements.essais), then
 # /etc/osmo-supplements.echec: "sudo addition.sh" remains available by hand.
-# Log: /var/log/osmo-supplements.log (and journalctl -u osmo-supplements).
+# Log: /opt/log/osmo-supplements.log (and journalctl -u osmo-supplements).
 set -u
 CONF=/etc/osmo-supplements
 ESSAIS=/etc/osmo-supplements.essais
-LOG=/var/log/osmo-supplements.log
+LOG=/opt/log/osmo-supplements.log
 REPO="${OSMO_REPO:-/opt/GSM/osmo-operator}"
 MAX="${OSMO_SUPPLEMENTS_ESSAIS:-3}"
 

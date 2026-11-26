@@ -696,12 +696,12 @@ LTE_FENETRE = float(os.environ.get("OSMO_LTE_TAP_WINDOW", "0.25"))
 LTE_NFFT = 1024
 LTE_UE_CONF = os.environ.get("OSMO_SRSRAN_UE_CONF", "/root/.config/srsran/ue.conf")
 LTE_TMUX = os.environ.get("OSMO_SRSRAN_TMUX", "srsran")
-# tools/osmo-lte.sh launches srsue with --log.filename=/tmp/osmo-lte-ue.log
+# tools/osmo-lte.sh launches srsue with --log.filename=/opt/log/osmo-lte-ue.log
 # (which overrides the « filename = /tmp/ue.log » of ue.conf) and its STANDARD
 # OUTPUT into /tmp/osmo-lte-ue.console - that is where « Found PLMN », « RRC
 # Connected », « Network attach successful » are. The tmux -L srsran only
 # exists if it was opened by hand.
-LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/tmp/osmo-lte-ue.log")
+LTE_UE_LOG = os.environ.get("OSMO_SRSRAN_UE_LOG", "/opt/log/osmo-lte-ue.log")
 LTE_UE_CONSOLE = os.environ.get("OSMO_SRSRAN_UE_CONSOLE", "/tmp/osmo-lte-ue.console")
 LTE_UE_SOURCES = [LTE_UE_CONSOLE, LTE_UE_LOG, "/tmp/ue.log"]
 # The marker of a ZMTP answer from the UE: the empty frame of the REQ/REP

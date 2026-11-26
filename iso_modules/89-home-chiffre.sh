@@ -230,6 +230,10 @@ install -m 0700 "$_CH_SRC/init-crypthome.sh"      "$ROOTFS/root/init-crypthome.s
 # /etc/default/crypthome.
 install -m 0755 "$_CH_SRC/crypthome-postinstall"  "$ROOTFS/usr/local/sbin/crypthome-postinstall"
 install -m 0644 "$_CH_SRC/unlock-home.service"    "$ROOTFS/etc/systemd/system/unlock-home.service"
+# /opt/log: all our logs in one flat directory, in the encrypted volume once
+# /home is open (unlock-home), never on the system disk
+install -D -m 0644 "$DIR/configs/tmpfiles/osmo-log.conf" "$ROOTFS/etc/tmpfiles.d/osmo-log.conf"
+rmdir "$ROOTFS/var/log/osmocom" 2>/dev/null || true
 
 # Configuration: __OWNER__ is the only per-image setting. CRYPTHOME_UUID stays
 # empty; it is written on the machine once the disk exists.

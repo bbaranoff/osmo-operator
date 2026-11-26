@@ -375,24 +375,24 @@ osmo_raccourci
 sleep 6
 while osmo_display_vivant; do
     osmo_vivant -f "$REPO/tools/osmo-panel.py" || \
-        "$REPO/tools/osmo-panel.py" >>/tmp/osmo-panel.log 2>&1 &
+        "$REPO/tools/osmo-panel.py" >>/opt/log/osmo-panel.log 2>&1 &
     # The dino is not on the desktop: it is an APPLICATION
     # (data/desktop/osmo-dino.desktop, osmo-dino.py --app).
     # Timeslot activity probe (osmo-bsc conf + VTY) for the banner
     osmo_vivant -f "$REPO/tools/osmo-ts-probe.py" || \
-        "$REPO/tools/osmo-ts-probe.py" >>/tmp/osmo-ts-probe.log 2>&1 &
+        "$REPO/tools/osmo-ts-probe.py" >>/opt/log/osmo-ts-probe.log 2>&1 &
     # Live LAB GSM top zone (blinking timeslots + app welcome)
     osmo_vivant -f "$REPO/tools/osmo-topzone.py" || \
-        "$REPO/tools/osmo-topzone.py" >>/tmp/osmo-topzone.log 2>&1 &
+        "$REPO/tools/osmo-topzone.py" >>/opt/log/osmo-topzone.log 2>&1 &
     # The bottom launcher bar is off the desktop by default: 2G/4G start from
     # the icons and launch.sh; OSMO_LAUNCHER=1 in the session environment
     # restores it.
     if [ "${OSMO_LAUNCHER:-0}" = 1 ]; then
         osmo_vivant -f "$REPO/tools/osmo-launcher.py" || \
-            "$REPO/tools/osmo-launcher.py" >>/tmp/osmo-launcher.log 2>&1 &
+            "$REPO/tools/osmo-launcher.py" >>/opt/log/osmo-launcher.log 2>&1 &
     fi
     osmo_vivant -x conky || \
-        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/tmp/osmo-conky.log 2>&1
+        conky --daemonize -c "$REPO/configs/conky/osmo-conky.conf" >>/opt/log/osmo-conky.log 2>&1
     sleep 5
 done
 PANEL

@@ -183,7 +183,7 @@ of skipping them.
 3. **oFono mobile hookup**: the physical phone (postmarketOS, PPP) or the
    Android QEMU sees the bench as a modem.
 4. **Audio (slimmed-down PulseAudio)**: runs `scripts/audio-chain.sh 5` (log
-   `/tmp/osmo-audio-chain.log`): stops speech-dispatcher, switches `osmo_rec`
+   `/opt/log/osmo-audio-chain.log`): stops speech-dispatcher, switches `osmo_rec`
    to 8 kHz mono, loads `module-stream-restore` without `restore_device`.
    `AUDIO_ALLEGER=0`: don't slim down (the chain is set up anyway).
    `AUDIO_AEC_METHOD`: `webrtc` by default (`speex` possible).

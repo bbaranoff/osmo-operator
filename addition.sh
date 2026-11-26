@@ -643,7 +643,7 @@ if [ "$DO_OPENCL" = "1" ]; then
 #   3. the 3 python workers, from /opt/additions/deka (where delta.pyc lives).
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-LOG=/var/log/deka.log
+LOG=/opt/log/deka.log
 # Output on screen + copy in the log (tee), to see mounts and worker PIDs.
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date -Is) deka-start ==="
