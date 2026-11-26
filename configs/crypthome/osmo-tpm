@@ -106,7 +106,7 @@ sceller_pour() {
     done
     hexbin "$(predit "$total")" >> "$t/pcrs.bin"
     if tpm2_createpolicy -Q --policy-pcr -l "$LISTE" -f "$t/pcrs.bin" -L "$t/pol.dat" \
-            && tpm2_createprimary -Q -C o -c "$t/prim.ctx" \
+            && tpm2_createprimary -Q -C e -c "$t/prim.ctx" \
             && printf '%s' "$graine" | tpm2_create -Q -C "$t/prim.ctx" -L "$t/pol.dat" -i - -u "$t/obj.pub" -r "$t/obj.priv"; then
         [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
         mkdir -p "$OBJ" && install -m 0444 "$t/obj.pub" "$OBJ/obj.pub" && install -m 0444 "$t/obj.priv" "$OBJ/obj.priv" \

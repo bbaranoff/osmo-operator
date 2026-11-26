@@ -659,6 +659,15 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   without it writes nothing to the disk, not even its log (kept in the box until the next
   validated write); `/boot/efi` is read-only from boot. The black box is the one thing always
   written.
+- **The TPM anchor** (`sudo osmo-empreinte ancrer`, once, TPM 2.0): the SHA-256 of the signature's
+  public key is written in a TPM NV index that anybody can read but only the TPM's owner can write
+  or remove - and the owner's secret is derived from the `/home` passphrase, never stored. A
+  session, even root with `/home` open, can then no longer swap the key pair on the box: the boot
+  reads the anchor **before** the passphrase and cries. `osmo-empreinte signature` says where things
+  stand; after a change of the `/home` passphrase, `sudo osmo-empreinte phrase-changee`. The TPM can
+  still be cleared from the firmware setup with the machine in hand (the pin in `/home` then
+  denounces a swapped key). The measured boot (`osmo-tpm`) uses the endorsement hierarchy, since
+  the owner's now has a secret: where it was already set, `sudo osmo-tpm poser` again.
 - **Validated or not: green or red, and a merge afterwards.** The black box is always written. A
   session that is **not validated** leaves its record (`efface`, **red** in `osmo-diffs liste`,
   `voir` and `sessions.log`) AND its whole content, encrypted like the records, « en attente »

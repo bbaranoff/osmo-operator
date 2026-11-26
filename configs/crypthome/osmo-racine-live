@@ -951,7 +951,7 @@ if [ "$OSMO_TPM" = 1 ] && [ -x /bin/tpm2 ] && [ -c /dev/tpmrm0 ]; then
     G=""
     if [ -e "$bd" ] && mount -o ro "$bd" "$R/m" 2>/dev/null; then
         if [ -f "$R/m/tpm/obj.pub" ] \
-                && tpm2 createprimary -Q -C o -c "$R/p.ctx" 2>/dev/null \
+                && tpm2 createprimary -Q -C e -c "$R/p.ctx" 2>/dev/null \
                 && tpm2 load -Q -C "$R/p.ctx" -u "$R/m/tpm/obj.pub" -r "$R/m/tpm/obj.priv" -c "$R/o.ctx" 2>/dev/null; then
             G="$(tpm2 unseal -c "$R/o.ctx" -p pcr:sha256:0,2,4,7,8,9,13 2>/dev/null)"
         fi

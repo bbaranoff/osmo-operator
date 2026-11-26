@@ -22,6 +22,11 @@
 #                                     only what changed is hashed again) AND
 #                                     SIGN it: the /home passphrase, asked on
 #                                     the terminal or --phrase-stdin
+#   osmo-empreinte signature          the signature and its TPM anchor, in words
+#   osmo-empreinte ancrer             anchor the signature's public key in the
+#                                     TPM (once; the /home passphrase becomes
+#                                     the TPM owner's secret)
+#   osmo-empreinte phrase-changee     after a change of the /home passphrase
 #   osmo-empreinte controler [--complet]   compare; --complet also reads every
 #                                     file again (about 30 s for 18 GB)
 #   osmo-empreinte demarrage          at boot, before unlock-home: fast
@@ -94,6 +99,17 @@ SIG = os.path.join(BOITE, "empreinte.sig")
 SIG_PUB = os.path.join(BOITE, "signature.pub")
 SIG_CLE = os.path.join(BOITE, "signature.cle")
 PUB_HOME = ".osmo-diffs/signature.pub"
+# THE ANCHOR (TPM 2.0, « osmo-empreinte ancrer »). The SHA-256 of the public
+# key is written in a TPM NV index anybody can READ but only the TPM's owner
+# can write or remove - and the owner's secret is derived from the /home
+# passphrase (PBKDF2, salt on the box): it is never stored. A session, even
+# root with /home open, cannot swap the key pair on the box AND the anchor.
+# The boot reads the anchor BEFORE the passphrase is asked. (The TPM can still
+# be cleared from the firmware setup, with the machine in hand: the anchor
+# then is gone, which the pin in /home denounces.)
+NV = os.environ.get("OSMO_EMPREINTE_NV", "0x1800A50")
+ANCRE_SEL = os.path.join(BOITE, "ancre.sel")
+TPM_ENV = dict(os.environ, TPM2TOOLS_TCTI="device:/dev/tpmrm0")
 TEST = os.environ.get("OSMO_DIFFS_SANS_MONTAGE") == "1"
 # never part of the fingerprint: the journal of a commit, the way back, the
 # session's own log (written to the disk outside a commit, on purpose)
@@ -450,6 +466,152 @@ def signature_ok():
         os.close(m)
 
 
+def tpm(args, secrets=()):
+    """A tpm2-tools command; secrets are handed over as file descriptors,
+    never on the command line."""
+    fds = [_memfd(x) for x in secrets]
+    try:
+        # « @N » : secret N as an authorisation (file:...) ; « =N » : as a plain input file
+        a = [("file:/proc/self/fd/%d" % fds[int(x[1:])]) if x[:1] == "@" and x[1:].isdigit()
+             else ("/proc/self/fd/%d" % fds[int(x[1:])]) if x[:1] == "=" and x[1:].isdigit() else x for x in args]
+        return subprocess.run(a, capture_output=True, env=TPM_ENV, pass_fds=tuple(fds))
+    except OSError:
+        return None
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def tpm_present():
+    return os.path.exists("/dev/tpmrm0") and subprocess.run(["sh", "-c", "command -v tpm2_nvread"], capture_output=True).returncode == 0
+
+
+def ancre_lue():
+    """The 32 bytes of the anchor; None when this machine has none."""
+    if not tpm_present():
+        return None
+    r = tpm(["tpm2_nvread", NV, "-C", NV, "-s", "32"])
+    return r.stdout if r is not None and r.returncode == 0 and len(r.stdout) == 32 else None
+
+
+def pub_empreinte():
+    try:
+        with open(SIG_PUB, "rb") as f:
+            return hashlib.sha256(f.read()).digest()
+    except OSError:
+        return None
+
+
+def secret_tpm(phrase, creer=False):
+    """The TPM owner's secret, from the /home passphrase (never stored)."""
+    try:
+        with open(ANCRE_SEL) as f:
+            sel = bytes.fromhex(f.read().strip())
+    except (OSError, ValueError):
+        if not creer:
+            return None
+        sel = secrets.token_bytes(16)
+        if not boite_rw(True):
+            return None
+        try:
+            with open(ANCRE_SEL + ".nouv", "w") as f:
+                f.write(sel.hex() + "\n")
+            os.replace(ANCRE_SEL + ".nouv", ANCRE_SEL)
+            os.sync()
+        finally:
+            boite_rw(False)
+    return hashlib.pbkdf2_hmac("sha256", phrase, b"osmo-empreinte ancre\0" + sel, 300000).hex().encode()
+
+
+def proprietaire_pose():
+    r = tpm(["tpm2_getcap", "properties-variable"])
+    return r is not None and b"ownerAuthSet:              1" in r.stdout
+
+
+def tpm_ancrer(secret, valeur):
+    """Owner's secret set (or checked), index defined, value written and read back. '' or the reason."""
+    if not proprietaire_pose():
+        r = tpm(["tpm2_changeauth", "-c", "owner", "@0"], (secret,))
+        if r is None or r.returncode != 0:
+            return "le secret du proprietaire du TPM n a pas pu etre pose"
+    else:
+        r = tpm(["tpm2_changeauth", "-c", "owner", "-p", "@0", "@1"], (secret, secret))
+        if r is None or r.returncode != 0:
+            return "le TPM a deja un proprietaire qui n est pas cette phrase (phrase changee : osmo-empreinte phrase-changee)"
+    if tpm(["tpm2_nvreadpublic", NV]).returncode != 0:
+        r = tpm(["tpm2_nvdefine", NV, "-C", "o", "-s", "32", "-a", "ownerwrite|authread|no_da", "-P", "@0"], (secret,))
+        if r.returncode != 0:
+            return "index du TPM non cree : " + r.stderr.decode(errors="replace").strip()[-120:]
+    r = tpm(["tpm2_nvwrite", NV, "-C", "o", "-P", "@0", "-i", "=1"], (secret, valeur))
+    if r.returncode != 0:
+        return "ancre non ecrite : " + r.stderr.decode(errors="replace").strip()[-120:]
+    return "" if ancre_lue() == valeur else "ancre relue differente de ce qui a ete ecrit"
+
+
+def ancrer(phrase):
+    """« osmo-empreinte ancrer » : the public key of the signature, anchored in the TPM."""
+    if not tpm_present():
+        dire("pas de TPM 2.0 utilisable (/dev/tpmrm0, tpm2-tools)")
+        return 1
+    val = pub_empreinte()
+    if val is None or not os.path.exists(SIG_CLE):
+        dire("pas encore de signature : valider une session d abord (osmo-valider-session)")
+        return 1
+    if not phrase or cle_privee(phrase) is None:
+        dire("phrase de /home refusee : rien n est ancre")
+        return 1
+    secret = secret_tpm(phrase, creer=True)
+    if secret is None:
+        dire("sel de l ancre illisible sur la boite")
+        return 1
+    err = tpm_ancrer(secret, val)
+    if err:
+        dire("ANCRAGE EN ECHEC : " + err)
+        return 1
+    dire("cle de signature ancree dans le TPM (index %s) : sha256 %s" % (NV, val.hex()))
+    dire("le TPM a maintenant un proprietaire : sa phrase est celle de /home")
+    return 0
+
+
+def phrase_changee(ancienne, nouvelle):
+    """The /home passphrase has changed: the signing key is encrypted again
+    with the new one, and the TPM owner's secret follows."""
+    pem = cle_privee(ancienne) if ancienne else None
+    if pem is None:
+        dire("ancienne phrase refusee : rien n est change")
+        return 1
+    if not nouvelle or not phrase_luks(nouvelle):
+        dire("la nouvelle phrase n ouvre pas /home : rien n est change")
+        return 1
+    if ancre_lue() is not None or proprietaire_pose():
+        a, n = secret_tpm(ancienne), secret_tpm(nouvelle)
+        if a is None or n is None:
+            dire("sel de l ancre illisible sur la boite : rien n est change")
+            return 1
+        r = tpm(["tpm2_changeauth", "-c", "owner", "-p", "@0", "@1"], (a, n))
+        if r is None or r.returncode != 0:
+            dire("le proprietaire du TPM n a pas pu changer de secret : rien n est change")
+            return 1
+    k = _memfd(pem)
+    try:
+        enc = _ossl(["enc", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-salt", "-in", "/proc/self/fd/%d" % k,
+                     "-pass", "stdin"], nouvelle + b"\n", fds=(k,))
+    finally:
+        os.close(k)
+    if enc.returncode != 0 or not boite_rw(True):
+        dire("cle de signature NON rechiffree (le TPM, lui, suit deja la nouvelle phrase)")
+        return 1
+    try:
+        with open(os.open(SIG_CLE + ".nouv", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
+            f.write(enc.stdout)
+        os.replace(SIG_CLE + ".nouv", SIG_CLE)
+        os.sync()
+    finally:
+        boite_rw(False)
+    dire("la signature et le TPM suivent la nouvelle phrase de /home")
+    return 0
+
+
 def lire_phrase():
     """The /home passphrase: one line of stdin (--phrase-stdin), else asked on the terminal."""
     if "--phrase-stdin" in sys.argv[2:]:
@@ -754,13 +916,18 @@ def demarrage():
         titre, tete = "L EMPREINTE DU SYSTEME A DISPARU DE LA BOITE NOIRE", {}
         diffs = [("SUPPRIME", TOTAUX.lstrip("/"), "plus rien ne prouve l etat du disque")]
     elif not diffs:
-        sig = signature_ok()
-        if sig is not False:
-            dire("disque systeme conforme : sha256 %s (%s)%s" % (
-                tete["meta"], tete.get("pris"), ", empreinte signee" if sig else ", empreinte pas encore signee"))
+        sig, anc = signature_ok(), ancre_lue()
+        if anc is not None and pub_empreinte() != anc:
+            titre = "LA CLE DE SIGNATURE N EST PAS CELLE ANCREE DANS LE TPM"
+            diffs = [("MODIFIE", SIG_PUB.lstrip("/"), "cle de signature remplacee ou retiree sur la boite : l empreinte du disque ne prouve plus rien")]
+        elif sig is False or (anc is not None and sig is not True):
+            titre = "L EMPREINTE DU DISQUE N EST PAS SIGNEE PAR LA PHRASE DE /home"
+            diffs = [("MODIFIE", TOTAUX.lstrip("/"), "refaite sans la phrase : le disque lui est conforme, mais rien ne prouve que c est celui que tu as valide")]
+        else:
+            dire("disque systeme conforme : sha256 %s (%s)%s%s" % (
+                tete["meta"], tete.get("pris"), ", empreinte signee" if sig else ", empreinte pas encore signee",
+                ", cle ancree dans le TPM" if anc is not None else ""))
             return 0
-        titre = "L EMPREINTE DU DISQUE N EST PAS SIGNEE PAR LA PHRASE DE /home"
-        diffs = [("MODIFIE", TOTAUX.lstrip("/"), "refaite sans la phrase : le disque lui est conforme, mais rien ne prouve que c est celui que tu as valide")]
     else:
         titre = "LE DISQUE SYSTEME A ETE MODIFIE HORS SESSION"
     alerter(titre, diffs, tete)
@@ -951,6 +1118,20 @@ def main():
         return rc
     if cmd == "resceller":
         return resceller(lire_phrase())
+    if cmd == "ancrer":
+        return ancrer(lire_phrase())
+    if cmd == "phrase-changee":
+        import getpass
+        return phrase_changee(getpass.getpass("ANCIENNE phrase de /home : ").encode(),
+                              getpass.getpass("NOUVELLE phrase de /home : ").encode())
+    if cmd == "signature":
+        sig, anc = signature_ok(), ancre_lue()
+        dire("signature de l empreinte : %s" % {True: "valide", False: "FAUSSE OU ABSENTE", None: "pas encore de signature"}[sig])
+        if anc is None:
+            dire("ancre TPM : aucune (sudo osmo-empreinte ancrer)")
+        else:
+            dire("ancre TPM : %s" % ("la cle de la boite est celle du TPM" if pub_empreinte() == anc else "LA CLE DE LA BOITE N EST PAS CELLE DU TPM"))
+        return 0 if sig and (anc is None or pub_empreinte() == anc) else 3
     if cmd == "fond":
         return fond()
     if cmd == "sceau":
@@ -971,7 +1152,7 @@ def main():
                 sys.stdout.write(ROUGE + texte_alerte("%s DIFFERE DE SON EMPREINTE" % racine, diffs, tete) + FIN)
                 rc = 3
         return rc
-    sys.exit("usage : osmo-empreinte prendre | controler [--complet] | demarrage | home | fond | sceau | rappel")
+    sys.exit("usage : osmo-empreinte prendre | controler [--complet] | signature | ancrer | phrase-changee | demarrage | home | fond | sceau | rappel")
 
 
 if __name__ == "__main__":
