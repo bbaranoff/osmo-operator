@@ -251,6 +251,56 @@ install -Dm644 "$DIR/configs/bash/osmo-invite.bash" "$ROOTFS/etc/osmo-invite.bas
 chroot "$ROOTFS" chown -R osmocom:osmocom /home/osmocom 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} banniere de terminal : ${CYAN}screenfetch${NC} (logo pixel art du banc) + une phrase"
 
+# ── The « Installation » tab of osmo-gtk must be all green at first boot ───
+# It shows ./install.sh --check. The image is built from its own package
+# list (80-chroot), not from the Dockerfile's, which is the one the « deps »
+# step checks: what is missing from it is installed here, while apt and the
+# network are still there; then the state of every step is printed, so a
+# step that would not be green on the installed system shows in the build.
+if [ -f "$ROOTFS/opt/GSM/osmo-operator/install.sh" ]; then
+    if ! chroot "$ROOTFS" bash -c 'cd /opt/GSM/osmo-operator && NO_COLOR=1 bash install.sh --check 2>/dev/null' \
+            | grep -q '^\[ OK \] Dependances'; then
+        chroot "$ROOTFS" bash -c 'cd /opt/GSM/osmo-operator && DEBIAN_FRONTEND=noninteractive bash install.sh --only deps' \
+            >/dev/null 2>&1 || echo -e "  ${YELLOW}!${NC} dependances du Dockerfile : installation incomplete dans l image"
+    fi
+    _chk="$(chroot "$ROOTFS" bash -c 'cd /opt/GSM/osmo-operator && NO_COLOR=1 bash install.sh --check 2>/dev/null' || true)"
+    if printf '%s\n' "$_chk" | grep -q '^\[\(----\| ?  \)\]'; then
+        echo -e "  ${YELLOW}!${NC} onglet Installation : des etapes ne sont pas vertes dans l image :"
+        printf '%s\n' "$_chk" | grep '^\[\(----\| ?  \)\]' | sed 's/^/      /'
+    else
+        echo -e "  ${GREEN}✓${NC} onglet Installation : toutes les etapes sont vertes"
+    fi
+fi
+
+# ── No « upgrade to Ubuntu NN.NN » offer ───────────────────────────────────
+# The bench is tied to its release (packages built for it, a read-only system
+# disk): the new-release dialog of update-manager / update-notifier and the
+# login message must never show. Prompt=never is what every one of them
+# reads; the GUI and its login check are removed when present, the motd
+# script is switched off.
+install -d "$ROOTFS/etc/update-manager"
+if [ -f "$ROOTFS/etc/update-manager/release-upgrades" ]; then
+    sed -i 's/^Prompt=.*/Prompt=never/' "$ROOTFS/etc/update-manager/release-upgrades"
+    grep -q '^Prompt=never' "$ROOTFS/etc/update-manager/release-upgrades" \
+        || printf '[DEFAULT]\nPrompt=never\n' > "$ROOTFS/etc/update-manager/release-upgrades"
+else
+    printf '[DEFAULT]\nPrompt=never\n' > "$ROOTFS/etc/update-manager/release-upgrades"
+fi
+chroot "$ROOTFS" bash -c 'DEBIAN_FRONTEND=noninteractive apt-get purge -y ubuntu-release-upgrader-gtk >/dev/null 2>&1' || true
+[ -f "$ROOTFS/etc/update-motd.d/91-release-upgrade" ] && chmod -x "$ROOTFS/etc/update-motd.d/91-release-upgrade"
+rm -f "$ROOTFS/var/lib/ubuntu-release-upgrader/release-upgrade-available" \
+      "$ROOTFS/var/lib/update-notifier/release-upgrade-available" 2>/dev/null
+install -d "$ROOTFS/usr/share/glib-2.0/schemas"
+cat > "$ROOTFS/usr/share/glib-2.0/schemas/91_osmo-no-release-upgrade.gschema.override" <<'GS'
+[com.ubuntu.update-manager]
+check-new-release-ignore='*'
+check-dist-upgrades=false
+[com.ubuntu.update-notifier]
+release-check-time=4102444800
+GS
+chroot "$ROOTFS" glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true
+echo -e "  ${GREEN}✓${NC} pas de proposition de mise a niveau vers une autre version d Ubuntu (Prompt=never)"
+
 umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true
 umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true
 

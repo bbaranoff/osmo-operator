@@ -129,6 +129,67 @@ for _ in $(seq 1 45); do
     sleep 2
 done
 ssh_vm 'echo ok' 2>/dev/null | grep -q ok || { echo "  ATTENTION : pas de SSH sur le port $PORT - la VM est-elle lancee ?"; exit 1; }
+
+# NETWORK MONITOR, the bench's phone application (/opt/GSM/network_monitoring):
+# its Alpine package is installed in the VM at its FIRST start - and again
+# when the package carried by the bench is a newer one. Done here, before the
+# wired link is hidden: apk fetches the dependencies (GTK4, libadwaita,
+# py3-pjsua...) from the postmarketOS repositories. No network: said, and
+# tried again at the next start.
+# WHICH PACKAGE: by default THE LAST ONE PUBLISHED - the Alpine package of the
+# latest release of the application's repository (GitHub), fetched by the HOST
+# and kept in its cache; without network, or with OSMO_PMOS_APK=local, the one
+# the bench carries (/opt/user_interface/pmos/apk, put there by the ISO build,
+# or /opt/GSM/network_monitoring/dist).
+APK_DIR="${OSMO_PMOS_APK_DIR:-/opt/user_interface/pmos/apk}"
+NETMON_GH="${OSMO_NETMON_GH:-bbaranoff/network_monitoring}"
+apk_publie() {
+    [ "${OSMO_PMOS_APK:-publie}" = local ] && return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    local cache="${XDG_CACHE_HOME:-$HOME/.cache}/osmo-operator/apk" j url nom k
+    mkdir -p "$cache" 2>/dev/null || return 1
+    j="$(curl -fsSL -m 12 "https://api.github.com/repos/$NETMON_GH/releases/latest" 2>/dev/null)" || return 1
+    # the release names it network-monitor-<version>-r<N>-postmarketos.apk
+    # (the Android one is ...-android.apk); kept here under its package name
+    url="$(printf '%s' "$j" | grep -oE '"browser_download_url": *"[^"]+/network-monitor-[0-9][^"/]*-r[0-9]+(-postmarketos)?\.apk"' \
+            | head -n1 | sed -E 's/.*"(https?:[^"]+)"/\1/')"
+    [ -n "$url" ] || return 1
+    nom="$(basename "$url" | sed 's/-postmarketos\.apk$/.apk/')"
+    if [ ! -s "$cache/$nom" ]; then
+        curl -fsSL -m 90 -o "$cache/$nom.part" "$url" 2>/dev/null && mv -f "$cache/$nom.part" "$cache/$nom" || return 1
+    fi
+    for k in $(printf '%s' "$j" | grep -oE '"browser_download_url": *"[^"]+\.rsa\.pub"' | sed -E 's/.*"(https?:[^"]+)"/\1/'); do
+        [ -s "$cache/$(basename "$k")" ] || curl -fsSL -m 30 -o "$cache/$(basename "$k")" "$k" 2>/dev/null
+    done
+    printf '%s\n' "$cache/$nom"
+}
+installer_network_monitor() {
+    local apk cles nom d ou="publie"
+    apk="$(apk_publie)" || apk=""
+    if [ -z "$apk" ]; then
+        ou="du banc"
+        apk="$(ls -t "$APK_DIR"/network-monitor-*.apk /opt/GSM/network_monitoring/dist/network-monitor-*.apk 2>/dev/null | head -n1)"
+    fi
+    [ -n "$apk" ] || return 0
+    nom="$(basename "$apk" .apk)"
+    ssh_vm "apk list -I network-monitor 2>/dev/null | grep -q '^$nom '" && return 0
+    d="$(dirname "$apk")"
+    cles="$(ls "$d"/*.rsa.pub 2>/dev/null)"
+    # shellcheck disable=SC2086
+    sshpass -p "$PASS" scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=8 -o PreferredAuthentications=password "$apk" $cles "$USER_VM@127.0.0.1:/tmp/" \
+        || { echo "  ATTENTION : network-monitor : copie vers la VM impossible"; return 0; }
+    if ssh_vm "echo $PASS | sudo -S -p '' sh -c '
+        for k in /tmp/*.rsa.pub; do [ -f \"\$k\" ] && install -m644 \"\$k\" /etc/apk/keys/; done
+        apk add -q /tmp/$nom.apk 2>/dev/null || apk add -q --allow-untrusted /tmp/$nom.apk; rc=\$?
+        rm -f /tmp/$nom.apk /tmp/*.rsa.pub
+        exit \$rc'"; then
+        echo "  network-monitor : $nom ($ou) installe dans la VM (icone « Network Monitor »)"
+    else
+        echo "  ATTENTION : network-monitor non installe (reseau de la VM ?) - nouvel essai au prochain demarrage"
+    fi
+}
+installer_network_monitor
 if [ "${1:-}" = "--voix" ] || [ "${1:-}" = "voix" ]; then voix; exit 0; fi
 
 ssh_vm "echo $PASS | sudo -S -p '' sh -c '

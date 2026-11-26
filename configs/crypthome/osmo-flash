@@ -1,18 +1,166 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 # osmo-flash - the « forget everything » pseudo-neuralyzer at the end of a
 # session (osmo-valider-session --fin, answer « Yes »). Full screen:
-#   1. a home-made gadget, drawn here (silver body, dark grip rings, a bulb
-#      at the tip that charges up, « regardez la lumiere »);
-#   2. the bulb fires: a white flash fading to black.
-# About three seconds; any key or click closes it.
+#   1. a home-made STICK, drawn here: slim brushed-metal body, grip rings, a
+#      small head with a RED light that blinks, faster and faster
+#      (« regardez la lumiere »);
+#   2. the light fires: a WHITE flash bursting from the tip, fading to black.
+# About four seconds; any key or click closes it.
 # --blanc : the screen stays WHITE after the flash, and the window never
 # closes by itself - the machine is shut down underneath (osmo-valider-session
 # --fin, « Yes »). If
 # /usr/local/share/osmo-operator/flash.gif exists (OSMO_FLASH_GIF to choose
 # another file) that animation replaces step 1 - it is yours to provide.
+# --png FILE PHASE T : draw one frame to a PNG (no display needed), to look at
+# the drawing: PHASE charge|flash, T in 0..1.
 import math
 import os
 import sys
+
+import cairo
+
+GIF = os.environ.get("OSMO_FLASH_GIF", "/usr/local/share/osmo-operator/flash.gif")
+GIF_MS = int(os.environ.get("OSMO_FLASH_GIF_MS", "3000"))
+CHARGE_MS = 2600
+FONDU_MS = 1600
+ECLAT = 0.12               # part of the flash phase spent bursting from the tip
+PAS_MS = 16
+BLANC = "--blanc" in sys.argv[1:]
+
+
+def tube(cr, x, y, w, h, clair, sombre, rayon=0.0):
+    """A cylinder seen from the side: dark edges, a light line off-centre."""
+    pat = cairo.LinearGradient(x, 0, x + w, 0)
+    pat.add_color_stop_rgb(0.00, *[v * 0.55 for v in sombre])
+    pat.add_color_stop_rgb(0.18, *sombre)
+    pat.add_color_stop_rgb(0.38, *clair)
+    pat.add_color_stop_rgb(0.50, *[min(1.0, v * 1.08) for v in clair])
+    pat.add_color_stop_rgb(0.80, *sombre)
+    pat.add_color_stop_rgb(1.00, *[v * 0.4 for v in sombre])
+    if rayon > 0:
+        r = min(rayon, w / 2, h / 2)
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+    else:
+        cr.rectangle(x, y, w, h)
+    cr.set_source(pat)
+    cr.fill()
+
+
+def clignote(t):
+    """The red light at time t (0..1): 0..1 brightness. It blinks faster and
+    faster (about 2 Hz, then 12), and stays on for the last instants."""
+    if t >= 0.93:
+        return 1.0
+    phase = 5.0 * t + 14.0 * t * t * t          # number of blinks so far
+    return 1.0 if (phase % 1.0) < 0.5 else 0.08
+
+
+def geometrie(W, H):
+    u = min(W, H)
+    bw = u * 0.042                               # the stick is slim
+    bh = u * 0.52
+    x = W / 2 - bw / 2
+    y = H / 2 - bh / 2 + u * 0.06
+    tete_h = bw * 1.5
+    lx, ly = W / 2, y - tete_h - bw * 0.42       # the light, on top
+    return u, bw, bh, x, y, tete_h, lx, ly
+
+
+def dessiner_baton(cr, W, H, t):
+    """The stick and its blinking red light, t in 0..1."""
+    u, bw, bh, x, y, tete_h, lx, ly = geometrie(W, H)
+    cr.set_source_rgb(0.015, 0.015, 0.02)
+    cr.paint()
+    on = clignote(t)
+    acier, ombre = (0.88, 0.89, 0.92), (0.42, 0.43, 0.47)
+    noir, noir2 = (0.20, 0.20, 0.23), (0.05, 0.05, 0.07)
+    # the red light bathes the room a little
+    if on > 0.5:
+        g = cairo.RadialGradient(lx, ly, 0, lx, ly, u * 0.75)
+        g.add_color_stop_rgba(0, 1, 0.05, 0.02, 0.22)
+        g.add_color_stop_rgba(1, 1, 0, 0, 0)
+        cr.set_source(g)
+        cr.paint()
+    # body, end cap, grip (black, ringed), collar, head
+    tube(cr, x, y, bw, bh, acier, ombre)
+    tube(cr, x - bw * 0.04, y + bh - bw * 0.5, bw * 1.08, bw * 0.7, acier, ombre, bw * 0.3)
+    tube(cr, x - bw * 0.07, y + bh * 0.52, bw * 1.14, bh * 0.36, noir, noir2, bw * 0.15)
+    for k in range(9):
+        yy = y + bh * 0.545 + k * bh * 0.037
+        cr.set_source_rgba(0, 0, 0, 0.55)
+        cr.rectangle(x - bw * 0.07, yy, bw * 1.14, bh * 0.006)
+        cr.fill()
+    tube(cr, x - bw * 0.10, y + bh * 0.20, bw * 1.20, bh * 0.018, acier, ombre)   # ring
+    cr.set_source_rgb(0.75, 0.05, 0.05)                                          # the button
+    cr.arc(W / 2, y + bh * 0.30, bw * 0.16, 0, 2 * math.pi)
+    cr.fill()
+    tube(cr, x - bw * 0.12, y - bw * 0.25, bw * 1.24, bw * 0.3, acier, ombre, bw * 0.08)   # collar
+    tube(cr, x + bw * 0.14, y - tete_h, bw * 0.72, tete_h - bw * 0.2, acier, ombre, bw * 0.1)  # head
+    # the lens: a red dome, dark when off
+    r = bw * 0.46
+    halo = r * (3.0 + 9.0 * t) * on
+    if halo > r:
+        g = cairo.RadialGradient(lx, ly, r * 0.3, lx, ly, halo)
+        g.add_color_stop_rgba(0.0, 1, 0.25, 0.2, 0.95)
+        g.add_color_stop_rgba(0.25, 1, 0.05, 0.03, 0.55)
+        g.add_color_stop_rgba(1.0, 1, 0, 0, 0)
+        cr.set_source(g)
+        cr.arc(lx, ly, halo, 0, 2 * math.pi)
+        cr.fill()
+    g = cairo.RadialGradient(lx - r * 0.3, ly - r * 0.35, r * 0.05, lx, ly, r)
+    g.add_color_stop_rgb(0.0, 0.35 + 0.65 * on, 0.10 + 0.75 * on, 0.10 + 0.70 * on)
+    g.add_color_stop_rgb(0.45, 0.25 + 0.75 * on, 0.02 + 0.08 * on, 0.02 + 0.05 * on)
+    g.add_color_stop_rgb(1.0, 0.12 + 0.55 * on, 0.0, 0.0)
+    cr.set_source(g)
+    cr.arc(lx, ly, r, 0, 2 * math.pi)
+    cr.fill()
+    # the caption
+    cr.set_source_rgb(0.85, 0.85, 0.85)
+    cr.select_font_face("DejaVu Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    cr.set_font_size(max(18, H * 0.035))
+    txt = "regardez la lumiere"
+    ext = cr.text_extents(txt)
+    cr.move_to(W / 2 - ext.width / 2, y + bh + H * 0.09)
+    cr.show_text(txt)
+
+
+def dessiner_flash(cr, W, H, t, blanc):
+    """The white flash: it bursts from the tip, then (unless blanc) fades."""
+    u, bw, bh, x, y, tete_h, lx, ly = geometrie(W, H)
+    if t < ECLAT:
+        dessiner_baton(cr, W, H, 1.0)
+        k = t / ECLAT
+        rayon = math.hypot(W, H) * k * k * 1.05 + bw
+        g = cairo.RadialGradient(lx, ly, rayon * 0.6, lx, ly, rayon)
+        g.add_color_stop_rgba(0, 1, 1, 1, 1)
+        g.add_color_stop_rgba(1, 1, 1, 1, 0)
+        cr.set_source(g)
+        cr.paint()
+        return
+    v = 1.0 if blanc else max(0.0, 1.0 - (t - ECLAT) / (1.0 - ECLAT)) ** 1.6
+    cr.set_source_rgb(v, v, v)
+    cr.paint()
+
+
+def image(fichier, phase, t, W=1280, H=720):
+    surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+    cr = cairo.Context(surf)
+    if phase == "flash":
+        dessiner_flash(cr, W, H, t, False)
+    else:
+        dessiner_baton(cr, W, H, t)
+    surf.write_to_png(fichier)
+
+
+if "--png" in sys.argv[1:]:
+    i = sys.argv.index("--png")
+    image(sys.argv[i + 1], sys.argv[i + 2], float(sys.argv[i + 3]))
+    sys.exit(0)
 
 try:
     import gi
@@ -21,25 +169,6 @@ try:
     from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 except (ImportError, ValueError):
     sys.exit(0)
-
-GIF = os.environ.get("OSMO_FLASH_GIF", "/usr/local/share/osmo-operator/flash.gif")
-GIF_MS = int(os.environ.get("OSMO_FLASH_GIF_MS", "3000"))
-CHARGE_MS = 1400
-FONDU_MS = 1600
-PAS_MS = 30
-BLANC = "--blanc" in sys.argv[1:]
-
-
-def tube(cr, x, y, w, h, r1, g1, b1, r2, g2, b2):
-    """A horizontal-shaded cylinder: dark edges, light middle."""
-    import cairo
-    pat = cairo.LinearGradient(x, 0, x + w, 0)
-    pat.add_color_stop_rgb(0.0, r2, g2, b2)
-    pat.add_color_stop_rgb(0.45, r1, g1, b1)
-    pat.add_color_stop_rgb(1.0, r2 * 0.6, g2 * 0.6, b2 * 0.6)
-    cr.rectangle(x, y, w, h)
-    cr.set_source(pat)
-    cr.fill()
 
 
 class Flash(Gtk.Window):
@@ -96,50 +225,13 @@ class Flash(Gtk.Window):
 
     def dessiner(self, w, cr):
         W, H = w.get_allocated_width(), w.get_allocated_height()
-        if self.phase == "blanc" or (self.phase == "flash" and BLANC):
+        if self.phase == "blanc":
             cr.set_source_rgb(1, 1, 1)
             cr.paint()
-            return False
-        if self.phase == "flash":
-            v = max(0.0, 1.0 - self.t)          # white, fading to black
-            cr.set_source_rgb(v, v, v)
-            cr.paint()
-            return False
-        cr.set_source_rgb(0.02, 0.02, 0.03)
-        cr.paint()
-        # the gadget, upright in the middle
-        bw = min(W, H) * 0.07
-        bh = min(W, H) * 0.55
-        x = W / 2 - bw / 2
-        y = H / 2 - bh / 2 + bh * 0.08
-        tube(cr, x, y, bw, bh, 0.86, 0.87, 0.90, 0.45, 0.46, 0.50)          # body
-        for k in range(4):                                                 # grip rings
-            tube(cr, x - bw * 0.06, y + bh * (0.55 + k * 0.1), bw * 1.12, bh * 0.045,
-                 0.25, 0.25, 0.28, 0.08, 0.08, 0.10)
-        tube(cr, x + bw * 0.15, y - bh * 0.07, bw * 0.7, bh * 0.07,          # neck
-             0.75, 0.76, 0.80, 0.35, 0.36, 0.40)
-        # the bulb, charging: from dim amber to blinding white
-        c = self.t
-        bx, by, r = W / 2, y - bh * 0.07 - bw * 0.35, bw * 0.42
-        halo = r * (1.5 + 6 * c * c)
-        import cairo
-        g = cairo.RadialGradient(bx, by, r * 0.2, bx, by, halo)
-        g.add_color_stop_rgba(0, 1, 1, 0.95, 0.9 * c)
-        g.add_color_stop_rgba(1, 1, 0.9, 0.6, 0)
-        cr.set_source(g)
-        cr.arc(bx, by, halo, 0, 2 * math.pi)
-        cr.fill()
-        cr.set_source_rgb(0.6 + 0.4 * c, 0.45 + 0.55 * c, 0.2 + 0.8 * c)
-        cr.arc(bx, by, r, 0, 2 * math.pi)
-        cr.fill()
-        # the caption
-        cr.set_source_rgb(0.85, 0.85, 0.85)
-        cr.select_font_face("DejaVu Sans", 0, 1)
-        cr.set_font_size(max(18, H * 0.035))
-        txt = "regardez la lumiere"
-        ext = cr.text_extents(txt)
-        cr.move_to(W / 2 - ext.width / 2, y + bh + H * 0.08)
-        cr.show_text(txt)
+        elif self.phase == "flash":
+            dessiner_flash(cr, W, H, self.t, BLANC)
+        else:
+            dessiner_baton(cr, W, H, self.t)
         return False
 
 

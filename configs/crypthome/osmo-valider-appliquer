@@ -1,28 +1,92 @@
 #!/bin/sh
-# osmo-valider-appliquer RACINE - finish a validated session commit on the
-# system disk mounted read-write at RACINE. POSIX sh: the same file runs at
-# shutdown (osmo-racine-live fin) and from the initramfs (local-bottom
-# osmo-boite, BEFORE overlayroot covers the root) to finish a commit that a
-# power cut interrupted.
+# osmo-valider-appliquer RACINE            finish a session commit
+# osmo-valider-appliquer RACINE --defaire ID   undo commit ID (the LAST one)
 #
-# THE JOURNAL, on the system disk itself (same file system, so every move is
-# a rename):
-#   RACINE/.osmo-valider/files/   the session's changes, staged (copy of the
-#                                 RAM layer, made by osmo-racine-live)
-#   RACINE/.osmo-valider/suppr    paths to delete (whiteouts, opaque dirs),
-#                                 one per line
-#   RACINE/.osmo-valider/PRET     the commit point: written, then synced,
-#                                 only once files/ and suppr are complete
+# On the disk mounted read-write at RACINE (the system disk, or the /home
+# volume). POSIX sh: the same file runs at shutdown (osmo-racine-live), from
+# the initramfs (local-bottom osmo-boite, BEFORE overlayroot covers the root)
+# and from unlock-home, to finish what a power cut interrupted.
 #
-# Without PRET the staging is incomplete: it is thrown away and the disk keeps
-# its previous state. With PRET the commit is applied; every step is
-# idempotent (deleting what is gone, moving what is still staged), so an
-# interrupted run is simply run again at the next boot. The disk is never
-# left with half a session: either the previous state, or the whole session.
+# THE JOURNAL, on the disk itself (same file system: every move is a rename):
+#   RACINE/.osmo-valider/files/   what the session changed SINCE THE LAST
+#                                 WRITE (staged by osmo-racine-live)
+#   RACINE/.osmo-valider/suppr    paths to delete, one per line
+#   RACINE/.osmo-valider/crees    paths that did not exist before
+#   RACINE/.osmo-valider/dirs     « mode uid:gid path » of directories whose
+#                                 attributes change
+#   RACINE/.osmo-valider/id       the commit's name (date)
+#   RACINE/.osmo-valider/PRET     the commit point: synced last
+#
+# Without PRET the staging is incomplete: thrown away, the disk keeps its
+# previous state. With PRET the commit is applied; every step is idempotent,
+# so an interrupted run is simply run again at the next boot.
+#
+# THE WAY BACK. Nothing is destroyed by a commit: what it replaces or deletes
+# is MOVED to RACINE/.osmo-retour/ID/files, with crees and dirs. « --defaire
+# ID » puts everything back - commits are undone from the last one upwards
+# (osmo-racine-live defaire). DEFAIRE is its commit point: an interrupted
+# undo is finished at the next run.
 set -u
-R="${1:?usage : osmo-valider-appliquer RACINE}"
+R="${1:?usage : osmo-valider-appliquer RACINE [--defaire ID]}"
 R="${R%/}"
 J="$R/.osmo-valider"
+RET="$R/.osmo-retour"
+
+existe() { [ -e "$1" ] || [ -L "$1" ]; }
+vrai_dir() { [ -d "$1" ] && [ ! -L "$1" ]; }
+
+# defaire ID : put back what commit ID replaced, remove what it created
+defaire() {
+    U="$RET/$1"
+    [ -d "$U" ] || return 0
+    : > "$U/DEFAIRE"; sync
+    # 1. what the commit created: deepest first
+    if [ -f "$U/crees" ]; then
+        sort -r "$U/crees" | while IFS= read -r p; do
+            case "$p" in /*) ;; *) continue ;; esac
+            [ "$p" = / ] && continue
+            if vrai_dir "$R$p"; then rmdir "$R$p" 2>/dev/null || rm -rf "$R$p"; else rm -f "$R$p"; fi
+        done
+    fi
+    # 2. what it replaced or deleted: moved back, parents first; a directory
+    #    that is gone comes back whole, with its attributes
+    if [ -d "$U/files" ]; then
+        ( cd "$U/files" && find . -mindepth 1 2>/dev/null ) | while IFS= read -r f; do
+            p="${f#.}"
+            existe "$U/files$p" || continue          # went back with its parent
+            if vrai_dir "$U/files$p" && vrai_dir "$R$p"; then continue; fi
+            existe "$R$p" && rm -rf "$R$p"
+            mkdir -p "$(dirname "$R$p")"
+            mv -f "$U/files$p" "$R$p"
+        done
+    fi
+    # 3. directory attributes
+    if [ -f "$U/dirs" ]; then
+        while read -r m o p; do
+            vrai_dir "$R$p" || continue
+            chown "$o" "$R$p" 2>/dev/null; chmod "$m" "$R$p" 2>/dev/null
+        done < "$U/dirs"
+    fi
+    sync
+    rm -rf "$U"
+    sync
+    echo "osmo-valider : commit $1 defait sur $R"
+}
+
+if [ "${2:-}" = --defaire ]; then
+    [ -n "${3:-}" ] && [ -d "$RET/$3" ] || { echo "osmo-valider : pas de commit ${3:-?} sur $R"; exit 1; }
+    defaire "$3"
+    exit 0
+fi
+
+# an undo cut by a power loss is finished first
+if [ -d "$RET" ]; then
+    for d in "$RET"/*/DEFAIRE; do
+        [ -f "$d" ] || continue
+        d="${d%/DEFAIRE}"; defaire "${d##*/}"
+    done
+fi
+
 [ -d "$J" ] || exit 0
 
 if [ ! -f "$J/PRET" ]; then
@@ -32,36 +96,67 @@ if [ ! -f "$J/PRET" ]; then
     exit 0
 fi
 
-# 1. deletions (whiteouts, directories made opaque by the session)
+# the way back: where this commit moves what it replaces
+U=""
+if [ -s "$J/id" ]; then
+    U="$RET/$(cat "$J/id")"
+    mkdir -p "$U/files"; chmod 700 "$RET" "$U"
+    [ -f "$U/crees" ] || { [ -f "$J/crees" ] && cp "$J/crees" "$U/crees"; }
+    [ -f "$U/dirs" ]  || { [ -f "$J/dirs" ]  && cp "$J/dirs"  "$U/dirs"; }
+    sync
+fi
+# ecarter P : P leaves the disk - kept in the way back (first version only)
+ecarter() {
+    existe "$R$1" || return 0
+    if [ -n "$U" ] && ! existe "$U/files$1"; then
+        mkdir -p "$(dirname "$U/files$1")"
+        mv -f "$R$1" "$U/files$1" && return 0
+    fi
+    rm -rf "$R$1"
+}
+
+# 1. deletions
 if [ -f "$J/suppr" ]; then
     while IFS= read -r p; do
         case "$p" in /*) ;; *) continue ;; esac
         [ "$p" = / ] && continue
-        rm -rf "$R$p"
+        ecarter "$p"
     done < "$J/suppr"
 fi
 
-# 2. everything that is not a directory: one rename each
 if [ -d "$J/files" ]; then
+    # 2. everything that is not a directory: one rename each
     ( cd "$J/files" && find . ! -type d ) | while IFS= read -r f; do
         p="${f#.}"
         d="$(dirname "$R$p")"
-        [ -d "$d" ] && [ ! -L "$d" ] || { rm -rf "$d"; mkdir -p "$d"; }
-        if [ -d "$R$p" ] && [ ! -L "$R$p" ]; then rm -rf "$R$p"; fi
+        if ! vrai_dir "$d"; then
+            # a parent that was a file or a link: found from the top
+            q=""; rest="${p%/*}"
+            oldifs="$IFS"; IFS=/
+            for e in $rest; do
+                [ -n "$e" ] || continue
+                q="$q/$e"
+                if existe "$R$q" && ! vrai_dir "$R$q"; then IFS="$oldifs"; ecarter "$q"; IFS=/; fi
+                [ -d "$R$q" ] || mkdir "$R$q"
+            done
+            IFS="$oldifs"
+        fi
+        existe "$R$p" && ecarter "$p"
         mv -f "$J/files$p" "$R$p"
     done
     # 3. directories: created if new, mode and owner of the session's copy
     ( cd "$J/files" && find . -mindepth 1 -type d ) | while IFS= read -r f; do
         p="${f#.}"
-        [ -e "$R$p" ] && [ ! -d "$R$p" ] && rm -f "$R$p"
+        if existe "$R$p" && ! vrai_dir "$R$p"; then ecarter "$p"; fi
         mkdir -p "$R$p"
         chown "$(stat -c %u:%g "$J/files$p")" "$R$p" 2>/dev/null
         chmod "$(stat -c %a "$J/files$p")" "$R$p" 2>/dev/null
     done
 fi
 
+[ -n "$U" ] && : > "$U/FAIT"
 sync
 rm -rf "$J"
 sync
-echo "osmo-valider : changements de la session ecrits sur le disque"
+echo "osmo-valider : changements ecrits sur $R${U:+ (retour : ${U##*/})}"
 exit 0

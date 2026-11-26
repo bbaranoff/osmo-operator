@@ -10,6 +10,8 @@
 #   osmo-patches-apply.sh [GSM_ROOT]        default: /opt/GSM
 #   OSMO_PATCHES_ONLY=osmocom-bb            only handle the patches of this tree
 #   OSMO_PATCHES_QUIET=1                    only print applications and failures
+#   OSMO_PATCHES_CHECK=1                    apply NOTHING: exit 1 if a patch is
+#                                           still to be applied (install.sh --check)
 #
 # Exit code: 0 if nothing failed, 1 if at least one patch does not apply.
 set -u
@@ -39,6 +41,14 @@ for p in "$REPO"/patches/*.patch; do
     t="$(osmo_patch_target "$p")"
     [ -n "$t" ] && [ -d "$t" ] || continue
     if [ -n "${OSMO_PATCHES_ONLY:-}" ] && [ "$(basename "$t")" != "$OSMO_PATCHES_ONLY" ]; then continue; fi
+    if [ "${OSMO_PATCHES_CHECK:-0}" = 1 ]; then
+        # pending = not there yet AND applicable; a patch that applies in
+        # neither direction (tree moved on) is not something to do
+        if ! git -C "$t" apply -R --check "$p" 2>/dev/null && git -C "$t" apply --check "$p" 2>/dev/null; then
+            echo "  a appliquer : $(basename "$p") -> $t"; rc=1
+        fi
+        continue
+    fi
     if git -C "$t" apply -R --check "$p" 2>/dev/null; then
         [ "${OSMO_PATCHES_QUIET:-0}" = 1 ] || echo "  deja applique : $(basename "$p")"
     elif git -C "$t" apply --check "$p" 2>/dev/null && git -C "$t" apply "$p" 2>/dev/null; then
@@ -47,5 +57,6 @@ for p in "$REPO"/patches/*.patch; do
         echo -e "  ${YELLOW}ne s applique pas${NC} : $(basename "$p") sur $t" >&2; rc=1
     fi
 done
+[ "${OSMO_PATCHES_CHECK:-0}" = 1 ] && exit $rc
 [ "${OSMO_PATCHES_QUIET:-0}" = 1 ] && [ $n = 0 ] || echo "  $n correctif(s) applique(s) ($GSM_ROOT)"
 exit $rc

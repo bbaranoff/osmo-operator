@@ -137,7 +137,9 @@ fi
 if [ "$ISO_ROLE" != "interstp" ]; then
     # osmo-supplements: installed, not enabled (the installer has no
     # « Supplements » page any more; addition.sh and its icon remain).
-    for _u in osmo-banc osmo-multi osmo-lte osmo-supplements; do
+    # osmo-inscription: the association of the phones (Network Monitor) with
+    # this node, port 8088 - installed, started from osmo-gtk (tab « Telephones »).
+    for _u in osmo-banc osmo-multi osmo-lte osmo-supplements osmo-inscription; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
         else

@@ -748,9 +748,47 @@ def _start_config():
 
 
 # title, Kconfig (relative to REPO), configuration written, generator run first
-KCONFIGS = (("Demarrage du banc (start.sh --configure)", "kconfig/start/Kconfig", _start_config,
-             ["bash", "kconfig/start/gen-start.sh"]),
-            ("Build et ISO (make menuconfig)", "Kconfig", os.path.join(REPO, ".config"), ["make", "-s", "kconfig-gen"]))
+KCONFIGS = (("Demarrage du banc (start.sh --configure)", "kconfig/start/Kconfig", _start_config, "start"),
+            ("Build et ISO (make menuconfig)", "Kconfig", os.path.join(REPO, ".config"), "build"))
+
+
+def kc_arbre():
+    """The tree the Kconfig files are read from ($srctree). The generators write
+    kconfig/generated and kconfig/start/generated INSIDE the repository: on an
+    installed bench the repository belongs to root and the window runs as the
+    session account - "mkdir: Permission denied", then Kconfig.build "not found".
+    The repository itself when it can be written; otherwise a tree of LINKS to it
+    in the user's cache, where only the two generated/ directories are real."""
+    if all(os.access(os.path.join(REPO, d), os.W_OK) for d in ("kconfig", "kconfig/start")):
+        return REPO
+    ombre = os.path.join(GLib.get_user_cache_dir(), "osmo-operator", "kconfig-src")
+
+    def lier(src, dst):
+        if os.path.islink(dst) and os.readlink(dst) == src:
+            return
+        if os.path.islink(dst) or os.path.isfile(dst):
+            os.unlink(dst)
+        if not os.path.exists(dst):
+            os.symlink(src, dst)
+
+    for d in ("kconfig/generated", "kconfig/start/generated"):
+        os.makedirs(os.path.join(ombre, d), exist_ok=True)
+    for rel, sauf in (("", ("kconfig",)), ("kconfig", ("start", "generated")), ("kconfig/start", ("generated",))):
+        for e in os.listdir(os.path.join(REPO, rel)):
+            if e not in sauf:
+                lier(os.path.join(REPO, rel, e), os.path.join(ombre, rel, e))
+    return ombre
+
+
+def kc_generateurs(quoi, arbre):
+    """The commands that write the generated Kconfig parts of `quoi` into `arbre`."""
+    if quoi == "start":
+        return [["bash", os.path.join(REPO, "kconfig/start/gen-start.sh"), os.path.join(arbre, "kconfig/start/generated")]]
+    if arbre == REPO:
+        return [["make", "-s", "kconfig-gen"]]
+    g = os.path.join(arbre, "kconfig/generated")
+    return [["bash", os.path.join(REPO, "kconfig/gen-features.sh"), g],
+            ["bash", os.path.join(REPO, "kconfig/gen-params.sh"), "build", os.path.join(g, "Kconfig.params")]]
 
 KC_VERROU = threading.Lock()
 TESTS_DIR = os.environ.get("OSMO_TESTS", os.path.join(GSM_ROOT, "tests"))
@@ -931,44 +969,357 @@ def md_pango(src):
     return "\n".join(out)
 
 
-def md_buffer(buf, texte):
-    """Markdown page -> TextBuffer with the tags of the Wiki tab."""
+NB_CSS = b"""
+.nb-fond { background-color: #eef1f5; }
+.nb-md, .nb-md text { background-color: transparent; color: #1f2328; }
+.nb-carte { background-color: #ffffff; border: 1px solid #d0d7de; border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(27,31,36,0.12); }
+.nb-carte.nb-encours { border-color: #d4a72c; box-shadow: 0 0 0 2px rgba(212,167,44,0.35); }
+.nb-carte.nb-ok { border-left: 4px solid #2da44e; }
+.nb-carte.nb-ko { border-left: 4px solid #cf222e; }
+.nb-entete { padding: 4px 8px; }
+.nb-num { font-family: "Ubuntu Mono", monospace; color: #6e7781; }
+button.nb-run { border-radius: 16px; min-width: 30px; min-height: 30px; padding: 0;
+                background-image: none; background-color: #1f6feb; color: #ffffff; border: none; }
+button.nb-run:hover { background-color: #388bfd; }
+.nb-code, .nb-code text { background-color: #1e1e2e; color: #cdd6f4; }
+.nb-code { border-radius: 6px; padding: 8px 10px; font-family: "Ubuntu Mono", monospace; }
+.nb-sortie, .nb-sortie text { background-color: #11111b; color: #cdd6f4; }
+.nb-sortie { border-radius: 6px; padding: 8px 10px; font-family: "Ubuntu Mono", monospace; }
+.nb-barre { padding: 6px; background-color: #ffffff; border-bottom: 1px solid #d0d7de; }
+.nb-pastille { border-radius: 10px; padding: 2px 10px; background-color: #ddf4ff; color: #0969da; }
+"""
+
+_PY_MOTS = (r"\b(?:False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|"
+            r"finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b")
+_Q3, _A3 = '"' * 3, "'" * 3
+_PY_JETONS = re.compile(
+    r"(?P<com>#[^\n]*)"
+    r"|(?P<chaine>[rbfRBF]{0,2}(?:" + _Q3 + r"[\s\S]*?" + _Q3 + "|" + _A3 + r"[\s\S]*?" + _A3
+    + r"|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'))"
+    r"|(?P<magie>^[ \t]*[!%][^\n]*)"
+    r"|(?P<mot>" + _PY_MOTS + r")"
+    r"|(?P<nombre>\b0[xX][0-9a-fA-F]+\b|\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)"
+    r"|(?P<appel>\b[A-Za-z_]\w*(?=\())", re.M)
+_PY_COUL = {"com": "#6c7086", "chaine": "#a6e3a1", "magie": "#f9e2af", "mot": "#cba6f7",
+            "nombre": "#fab387", "appel": "#89b4fa", "var": "#f5c2e7"}
+_SH_MOTS = (r"\b(?:if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function|return|exit|local|export|"
+            r"set|unset|source|cd|echo|printf|test|sudo|trap|shift|read|eval|exec)\b")
+_SH_JETONS = re.compile(
+    r"(?P<magie>^%%[^\n]*)"
+    r"|(?P<com>(?:^|(?<=\s))#[^\n]*)"
+    r"|(?P<chaine>\"(?:\\.|[^\"\\])*\"|'[^']*')"
+    r"|(?P<var>\$\{[^}]*\}|\$[A-Za-z_]\w*|\$[0-9@#?*!$-])"
+    r"|(?P<mot>" + _SH_MOTS + r")"
+    r"|(?P<nombre>(?<![\w.-])\d+(?![\w.-]))", re.M)
+
+
+def py_colorer(buf):
+    """Syntax colours of a code cell (Python; lines starting with ! or % as shell)."""
+    tt = buf.get_tag_table()
+    for nom, coul in _PY_COUL.items():
+        if not tt.lookup("py-" + nom):
+            buf.create_tag("py-" + nom, foreground=coul,
+                           **({"style": Pango.Style.ITALIC} if nom == "com" else {}))
+    a, z = buf.get_start_iter(), buf.get_end_iter()
+    for nom in _PY_COUL:
+        buf.remove_tag_by_name("py-" + nom, a, z)
+    txt = buf.get_text(a, z, False)
+    jetons = _SH_JETONS if re.match(r"\s*%%(bash|sh|script)", txt) else _PY_JETONS
+    for m in jetons.finditer(txt):
+        buf.apply_tag_by_name("py-" + m.lastgroup, buf.get_iter_at_offset(m.start()), buf.get_iter_at_offset(m.end()))
+
+
+_MD_EN_LIGNE = re.compile(
+    r"`([^`]+)`"                                   # 1 code
+    r"|!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)"   # 2,3 image
+    r"|\[((?:[^\]\[]|\[[^\]]*\])+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)"   # 4,5 link
+    r"|\*\*(.+?)\*\*|__(.+?)__"                    # 6,7 bold
+    r"|~~(.+?)~~"                                  # 8 strike
+    r"|(?<![\w*])\*([^*\s](?:[^*]*[^*\s])?)\*(?!\w)"   # 9 italic
+    r"|(?<![\w_])_([^_\s](?:[^_]*[^_\s])?)_(?!\w)"     # 10 italic
+    r"|<(https?://[^>\s]+)>"                       # 11 bare link
+    r"|<img\s[^>]*?src=\"([^\"]+)\"[^>]*>"         # 12 html image
+    r"|<br\s*/?>"                                  # line break
+    r"|</?[a-zA-Z][^>]*>")                         # any other html tag: dropped
+
+
+def md_segments(t, tags=()):
+    """One line of Markdown -> [(text, tags, link, image)]: the inline marks
+    interpreted, nested ones included (a link inside bold...)."""
+    out, pos = [], 0
+    for m in _MD_EN_LIGNE.finditer(t):
+        if m.start() > pos:
+            out.append((t[pos:m.start()], tags, None, None))
+        pos = m.end()
+        g = m.groups()
+        if g[0] is not None:
+            out.append((g[0], tags + ("code",), None, None))
+        elif g[2] is not None:
+            out.append((g[1] or "", tags, None, g[2]))
+        elif g[4] is not None:
+            out += [(x, tg + ("lien",), g[4], im) for x, tg, _l, im in md_segments(g[3], tags)]
+        elif g[5] is not None or g[6] is not None:
+            out += md_segments(g[5] if g[5] is not None else g[6], tags + ("gras",))
+        elif g[7] is not None:
+            out += md_segments(g[7], tags + ("barre",))
+        elif g[8] is not None or g[9] is not None:
+            out += md_segments(g[8] if g[8] is not None else g[9], tags + ("ital",))
+        elif g[10] is not None:
+            out.append((g[10], tags + ("lien",), g[10], None))
+        elif g[11] is not None:
+            out.append(("", tags, None, g[11]))
+        elif m.group(0).lower().startswith("<br"):
+            out.append(("\n", tags, None, None))
+    if pos < len(t):
+        out.append((t[pos:], tags, None, None))
+    return out
+
+
+def md_markup(t):
+    """One line of Markdown -> Pango markup for a Gtk.Label (table cells):
+    links are real <a href>."""
+    out = []
+    for txt, tags, lien, image in md_segments(t):
+        if image and not txt:
+            txt = "[image]"
+        x = GLib.markup_escape_text(txt)
+        if "code" in tags:
+            x = '<tt><span background="#ececec" foreground="#202020">%s</span></tt>' % x
+        if "gras" in tags:
+            x = "<b>%s</b>" % x
+        if "ital" in tags:
+            x = "<i>%s</i>" % x
+        if "barre" in tags:
+            x = "<s>%s</s>" % x
+        if lien:
+            x = '<a href="%s">%s</a>' % (GLib.markup_escape_text(lien), x)
+        out.append(x)
+    return "".join(out)
+
+
+def md_tags(buf):
+    """The tags md_buffer writes with (created once per buffer)."""
+    if buf.get_tag_table().lookup("h1"):
+        return
+    mono = "Ubuntu Mono"
+    buf.create_tag("h1", weight=Pango.Weight.BOLD, scale=1.7, pixels_above_lines=14, pixels_below_lines=8)
+    buf.create_tag("h2", weight=Pango.Weight.BOLD, scale=1.4, pixels_above_lines=14, pixels_below_lines=6)
+    buf.create_tag("h3", weight=Pango.Weight.BOLD, scale=1.18, pixels_above_lines=10, pixels_below_lines=4)
+    buf.create_tag("h4", weight=Pango.Weight.BOLD, pixels_above_lines=8, pixels_below_lines=2)
+    buf.create_tag("code", family=mono, background="#ececec", foreground="#202020")
+    buf.create_tag("bloc", family=mono, paragraph_background="#f2f2f2", foreground="#202020",
+                   wrap_mode=Gtk.WrapMode.NONE, left_margin=28, right_margin=16)
+    buf.create_tag("table", family=mono, wrap_mode=Gtk.WrapMode.NONE)
+    buf.create_tag("gras", weight=Pango.Weight.BOLD)
+    buf.create_tag("ital", style=Pango.Style.ITALIC)
+    buf.create_tag("barre", strikethrough=True)
+    buf.create_tag("lien", foreground="#1f6feb", underline=Pango.Underline.SINGLE)
+    buf.create_tag("cite", left_margin=34, style=Pango.Style.ITALIC, foreground="#4a5560",
+                   paragraph_background="#f3f6fa", pixels_above_lines=3, pixels_below_lines=3)
+    buf.create_tag("regle", foreground="#b8b8b8", justification=Gtk.Justification.CENTER)
+    buf.create_tag("para", pixels_below_lines=7)
+    for k in range(4):
+        buf.create_tag("puce%d" % k, left_margin=30 + 24 * k, indent=-14, pixels_below_lines=2)
+    buf.create_tag("trouve", background="#ffe066")
+
+
+def md_buffer(buf, texte, vue=None, base=None, ouvrir=None):
+    """Markdown page -> TextBuffer, INTERPRETED: headings, paragraphs (soft
+    line breaks joined), bold/italic/strike/code, links (clickable through
+    buf.md_liens: tag -> target), quotes, rules, nested and numbered lists,
+    task boxes, fenced code, images (local files, shown in the page) and
+    TABLES - real grids of cells when the view is given (child anchors),
+    aligned text otherwise. base: directory the page's relative paths start
+    from. ouvrir(target): called by a click on a link in a table cell."""
+    md_tags(buf)
     buf.set_text("")
+    buf.md_liens = {}
+    largeur = 900
+
+    def fin():
+        return buf.get_end_iter()
+
+    def image(src, alt):
+        if re.match(r"^[a-z]+://", src):
+            return False
+        f = os.path.normpath(os.path.join(base or "", src.split("#")[0]))
+        try:
+            from gi.repository import GdkPixbuf
+            pb = GdkPixbuf.Pixbuf.new_from_file(f)
+            if pb.get_width() > largeur:
+                pb = pb.scale_simple(largeur, int(pb.get_height() * largeur / pb.get_width()),
+                                     GdkPixbuf.InterpType.BILINEAR)
+            buf.insert_pixbuf(fin(), pb)
+            return True
+        except Exception:                                    # noqa: BLE001 - no image: its caption
+            return False
 
     def ecrire(t, *tags):
-        buf.insert_with_tags_by_name(buf.get_end_iter(), t, *tags) if tags else buf.insert(buf.get_end_iter(), t)
+        if tags:
+            buf.insert_with_tags_by_name(fin(), t, *tags)
+        else:
+            buf.insert(fin(), t)
 
     def en_ligne(t, *tags):
-        pos = 0
-        for m in re.finditer(r"`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\(([^)]+)\)", t):
-            ecrire(t[pos:m.start()], *tags)
-            if m.group(1) is not None:
-                ecrire(m.group(1), "code", *tags)
-            elif m.group(2) is not None:
-                ecrire(m.group(2), "gras", *tags)
+        for txt, tg, lien, img in md_segments(t):
+            if img is not None and image(img, txt):
+                continue
+            if img is not None:
+                txt, tg = "[%s]" % (txt or os.path.basename(img)), tg + ("ital",)
+                lien = lien or img
+            if not txt:
+                continue
+            noms = list(dict.fromkeys(tags + tg))
+            if lien:
+                tag = buf.create_tag(None)
+                buf.md_liens[tag] = lien
+                buf.insert_with_tags(fin(), txt, tag, *[buf.get_tag_table().lookup(n) for n in noms])
             else:
-                ecrire(m.group(3), "lien", *tags)
-            pos = m.end()
-        ecrire(t[pos:] + "\n", *tags)
+                ecrire(txt, *noms)
 
-    bloc = False
-    for l in texte.splitlines():
-        if l.strip().startswith("```"):
-            bloc = not bloc
+    def cellules(l):
+        l = l.strip()
+        l = l[1:] if l.startswith("|") else l
+        l = l[:-1] if l.endswith("|") and not l.endswith("\\|") else l
+        return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", l)]
+
+    def tableau(lignes):
+        def sep(l):
+            return re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$", l) is not None
+
+        rangs = [cellules(l) for l in lignes if not sep(l)]
+        entete = len(lignes) > 1 and sep(lignes[1])
+        if entete and rangs and not any(rangs[0]):          # « | | | » : a table without header
+            rangs, entete = rangs[1:], False
+        if not rangs:
+            return
+        ncol = max(len(r) for r in rangs)
+        if vue is None:
+            brut = [[re.sub(r"<[^>]+>", "", "".join(x for x, *_ in md_segments(c))) for c in r] for r in rangs]
+            larg = [max(len(r[i]) if i < len(r) else 0 for r in brut) for i in range(ncol)]
+            for k, r in enumerate(brut):
+                ecrire("  ".join((r[i] if i < len(r) else "").ljust(larg[i]) for i in range(ncol)).rstrip() + "\n",
+                       *(("table", "gras") if entete and k == 0 else ("table",)))
+            return
+        grille = Gtk.Grid(column_spacing=0, row_spacing=0)
+        grille.get_style_context().add_class("md-table")
+        # a wrapped label takes its MINIMUM width inside a text view: each
+        # column is given its width in characters - its longest cell, within
+        # a budget shared in proportion when the table is too wide
+        def large(c):          # code is set in a wider face than the text the widths are counted in
+            return int(sum(len(x) * (1.3 if "code" in tg else 1.0) for x, tg, *_ in md_segments(c)))
+
+        longs = [max([large(r[i]) if i < len(r) else 0 for r in rangs] + [3]) + 2 for i in range(ncol)]
+        budget = 118 - 2 * ncol
+        if sum(longs) > budget:
+            longs = [max(8, min(n, int(budget * n / sum(longs)))) for n in longs]
+        for k, r in enumerate(rangs):
+            for i in range(ncol):
+                c = r[i] if i < len(r) else ""
+                lab = Gtk.Label(xalign=0, yalign=0, wrap=True, selectable=True)
+                lab.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                lab.set_width_chars(longs[i])
+                lab.set_max_width_chars(longs[i])
+                lab.set_markup(("<b>%s</b>" % md_markup(c)) if entete and k == 0 else md_markup(c))
+                if ouvrir:
+                    lab.connect("activate-link", lambda _l, uri: (ouvrir(uri), True)[1])
+                cadre = Gtk.EventBox()
+                cadre.get_style_context().add_class("md-tete" if entete and k == 0 else
+                                                    ("md-pair" if k % 2 else "md-impair"))
+                lab.set_margin_start(8), lab.set_margin_end(8), lab.set_margin_top(5), lab.set_margin_bottom(5)
+                cadre.add(lab)
+                grille.attach(cadre, i, k, 1, 1)
+        ancre = buf.create_child_anchor(fin())
+        vue.add_child_at_anchor(grille, ancre)
+        grille.show_all()
+        ecrire("\n")
+
+    lignes = texte.replace("\r\n", "\n").split("\n")
+    para, n, i = [], len(lignes), 0
+
+    def vider():
+        if para:
+            en_ligne(" ".join(x.strip() for x in para), "para")
+            ecrire("\n", "para")
+            del para[:]
+
+    while i < n:
+        l = lignes[i]
+        nu = l.strip()
+        if nu.startswith("```") or nu.startswith("~~~"):
+            vider()
+            cloture = nu[:3]
+            i += 1
+            while i < n and not lignes[i].strip().startswith(cloture):
+                ecrire(lignes[i] + "\n", "bloc")
+                i += 1
+            i += 1
+            ecrire("\n")
             continue
-        if bloc:
-            ecrire(l + "\n", "bloc")
+        if nu.startswith("<!--"):
+            vider()
+            while i < n and "-->" not in lignes[i]:
+                i += 1
+            i += 1
             continue
-        m = re.match(r"^(#{1,6})\s+(.*)", l)
+        if not nu:
+            vider()
+            i += 1
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", l)
         if m:
-            ecrire(m.group(2) + "\n", {1: "h1", 2: "h2"}.get(len(m.group(1)), "h3"))
-        elif l.lstrip().startswith("|"):
-            if not re.match(r"^\s*\|[\s:|-]+\|\s*$", l):
-                ecrire(l + "\n", "table")
-        elif re.match(r"^\s*([-*]|\d+\.)\s+", l):
-            en_ligne("• " + re.sub(r"^\s*([-*]|\d+\.)\s+", "", l), "puce")
-        else:
-            en_ligne(l)
+            vider()
+            h = {1: "h1", 2: "h2", 3: "h3"}.get(len(m.group(1)), "h4")
+            en_ligne(m.group(2), h)
+            ecrire("\n", h)
+            i += 1
+            continue
+        if re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", l):
+            vider()
+            ecrire("─" * 60 + "\n", "regle")
+            i += 1
+            continue
+        if nu.startswith("|") or (i + 1 < n and "|" in l and re.match(r"^\s*\|?\s*:?-{2,}[\s:|-]*$", lignes[i + 1])):
+            vider()
+            bloc = []
+            while i < n and lignes[i].strip() and "|" in lignes[i]:
+                bloc.append(lignes[i])
+                i += 1
+            tableau(bloc)
+            continue
+        if nu.startswith(">"):
+            vider()
+            cit = []
+            while i < n and lignes[i].strip().startswith(">"):
+                cit.append(re.sub(r"^\s*>\s?", "", lignes[i]))
+                i += 1
+            en_ligne(" ".join(x.strip() for x in cit), "cite")
+            ecrire("\n", "cite")
+            ecrire("\n")
+            continue
+        m = re.match(r"^(\s*)([-*+]|\d+[.)])\s+(.*)", l)
+        if m:
+            vider()
+            niveau = min(3, len(m.group(1).replace("\t", "    ")) // 2)
+            corps = m.group(3)
+            # continuation lines of the item
+            while i + 1 < n and lignes[i + 1].strip() and re.match(r"^\s+\S", lignes[i + 1]) \
+                    and not re.match(r"^\s*([-*+]|\d+[.)])\s+", lignes[i + 1]) \
+                    and not lignes[i + 1].strip().startswith(("```", "|", ">")):
+                i += 1
+                corps += " " + lignes[i].strip()
+            marque = "•◦▪▫"[niveau] if m.group(2) in "-*+" else m.group(2)
+            c = re.match(r"^\[([ xX])\]\s+(.*)", corps)
+            if c:
+                marque, corps = ("☑" if c.group(1) != " " else "☐"), c.group(2)
+            en_ligne("%s %s" % (marque, corps), "puce%d" % niveau)
+            ecrire("\n", "puce%d" % niveau)
+            i += 1
+            continue
+        para.append(l)
+        i += 1
+    vider()
 
 
 def _cmd(argv, timeout=10):
@@ -1114,6 +1465,143 @@ def lire_journal(kind, cible, n=1000):
 
 
 # ── the air: UDP copies of the bridge ────────────────────────────────────────
+# THE SIP TRUNK (tab « Trunk SIP »): what is written to TRUNK_DIR/pjsip_trunk.conf from what is
+# typed in the tab. No operator, no login and no password in the repository.
+TRUNK_DIR = os.environ.get("OSMO_ASTERISK_DIR", "/etc/asterisk")
+TRUNK_MODELE = """; pjsip_trunk.conf - written by osmo-gtk (tab « Trunk SIP »), do not edit by hand.
+; The SIP trunk of the bench: PJSIP/<number>@trunk_sip goes out, its calls come in [trunk_in].
+
+[trunk_sip_auth]
+type=auth
+auth_type=userpass
+username=%(user)s
+password=%(mdp)s
+
+[trunk_sip]
+type=aor
+contact=sip:%(serveur)s
+qualify_frequency=60
+qualify_timeout=5.0
+
+[trunk_sip]
+type=endpoint
+transport=transport-udp
+context=trunk_in
+disallow=all
+allow=gsm
+allow=ulaw
+allow=alaw
+outbound_auth=trunk_sip_auth
+aors=trunk_sip
+from_user=%(numero)s
+from_domain=%(hote)s
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+media_encryption=no
+dtmf_mode=rfc4733
+
+[trunk_sip-identify]
+type=identify
+endpoint=trunk_sip
+match=%(hote)s
+"""
+TRUNK_REG = """
+[trunk_sip_reg]
+type=registration
+transport=transport-udp
+outbound_auth=trunk_sip_auth
+server_uri=sip:%(serveur)s
+client_uri=sip:%(user)s@%(serveur)s
+contact_user=%(user)s
+retry_interval=60
+forbidden_retry_interval=600
+expiration=300
+line=yes
+endpoint=trunk_sip
+"""
+
+# ILLUSTRATIONS: the bench's own, recent artwork (configs/osmo-balise-*.png, the
+# desktop of the current image) as a band on top of some tabs.
+BANNIERES = {"Telephones": ("osmo-balise-soir.png", "Telephones", "Network Monitor : invitation, QR code, comptes, ligne Bluetooth"),
+             "Installation": ("osmo-balise-jour.png", "Installation", "les etapes de install.sh et leur etat sur cette machine"),
+             "Infos": ("osmo-balise-soir.png", "Le banc", "machine, chaine, services, ports, plan radio")}
+
+
+def banniere(fichier, titre, sous_titre, hauteur=96):
+    """A band: the image covers it (cropped around its middle), darkened on the left
+    under the title. None when the image is not there."""
+    chemin = os.path.join(REPO, "configs", fichier)
+    try:
+        from gi.repository import Gdk, GdkPixbuf
+        import cairo
+        pb = GdkPixbuf.Pixbuf.new_from_file(chemin)
+    except Exception:                                        # noqa: BLE001 - no image: no band
+        return None
+    z = Gtk.DrawingArea()
+    z.set_size_request(-1, hauteur)
+    cache = {}
+
+    def dessin(w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        if cache.get("w") != W:
+            e = W / pb.get_width()
+            cache["pb"] = pb.scale_simple(W, max(H, int(pb.get_height() * e)), GdkPixbuf.InterpType.BILINEAR)
+            cache["w"] = W
+        img = cache["pb"]
+        Gdk.cairo_set_source_pixbuf(cr, img, 0, -(img.get_height() - H) * 0.42)
+        cr.paint()
+        g = cairo.LinearGradient(0, 0, W * 0.75, 0)
+        g.add_color_stop_rgba(0, 0.02, 0.05, 0.10, 0.82)
+        g.add_color_stop_rgba(1, 0.02, 0.05, 0.10, 0.0)
+        cr.set_source(g)
+        cr.paint()
+        cr.set_source_rgb(1, 1, 1)
+        cr.select_font_face("Ubuntu", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(26)
+        cr.move_to(22, H / 2 + 2)
+        cr.show_text(titre)
+        cr.select_font_face("Ubuntu", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(13)
+        cr.set_source_rgba(1, 1, 1, 0.85)
+        cr.move_to(23, H / 2 + 24)
+        cr.show_text(sous_titre)
+        return False
+    z.connect("draw", dessin)
+    return z
+
+
+# VTY shortcuts PER DAEMON: a command only exists on the daemon that defines
+# it ("show bts" on the BSC and the BTS, "show cs7 ..." on what speaks SS7,
+# "show subscribers all" on the HLR...). Every one below is in that daemon's
+# own "list". "{ms}" is replaced by the name of the mobile's first MS.
+RACCOURCIS_CORE = {
+    "HLR": ["show subscribers all", "show subscribers last-seen", "show gsup-connections", "show runtime"],
+    "MSC": ["show subscriber cache", "show connection", "show bsc", "show cs7 instance 0 asp",
+            "show sms-queue", "show runtime"],
+    "BSC": ["show bts", "show bts brief", "show trx", "show lchan summary", "show cs7 instance 0 asp",
+            "show mscs", "show runtime"],
+    "STP": ["show cs7 instance 0 asp", "show cs7 instance 0 as all", "show cs7 instance 0 route",
+            "show cs7 instance 0 users", "show runtime"],
+    "MGW": ["show mgcp", "show mgcp active", "show stats", "show runtime"],
+    "SGSN": ["show mm-context all", "show pdp-context all", "show ns entities", "show bssgp", "show runtime"],
+    "GGSN": ["show ggsn", "show stats", "show runtime"],
+    "PCU": ["show bts statistics", "show bts pdch", "show ms all", "show tbf all", "show runtime"],
+    "BTS": ["show bts", "show trx", "show lchan summary", "show transceiver", "show phy", "show runtime"],
+    "SIP": ["show calls", "show calls summary", "show mncc-connection", "show runtime"],
+}
+RACCOURCIS_DEFAUT = ["show version", "show runtime", "show stats"]
+CADENCE_RAPIDE_MS = 30          # "30 img/s" (the timer's period; the drawing takes the rest of the 33 ms)
+CADENCE_LENTE_MS = 100          # "lent": 10 images/s, the former rate
+OEIL_PAR_IMAGE = 2              # eye diagram: bursts added to the layer per image, at most
+OEIL_FONDU = 0.08               # ...and how much each one fades the older traces
+IQ_HZ = 10                      # the I/Q plot (one burst) is renewed at most 10 times a second
+RAFALES_PAR_S = 120             # bursts demodulated per second, at most, whatever the rate
+RACCOURCIS_MOBILE = ["show ms", "show subscriber {ms}", "show cell {ms}", "show neighbour-cells {ms}",
+                     "show support {ms}", "show ba {ms}"]
+
+
 class Air:
     def __init__(self):
         self.lock = threading.Lock()
@@ -1288,10 +1776,16 @@ class Fenetre(Gtk.Window):
         self.jx_page = self._onglet_journaux()
         self.onglets.append_page(self.jx_page, Gtk.Label(label="Journaux"))
         for f, t in ((self._onglet_kconfig, "Kconfig"), (self._onglet_tests, "Tests"),
-                     (self._onglet_telephones, "Telephones"),
+                     (self._onglet_telephones, "Telephones"), (self._onglet_trunk, "Trunk SIP"),
                      (self._onglet_notebooks, "Notebooks"), (self._onglet_wiki, "Wiki"), (self._onglet_infos, "Infos"),
                      (self._onglet_install, "Installation")):
-            self.onglets.append_page(f(), Gtk.Label(label=t))
+            page, bande = f(), banniere(*BANNIERES[t]) if t in BANNIERES else None
+            if bande is not None:                   # an illustration on top of the tab
+                boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+                boite.pack_start(bande, False, False, 0)
+                boite.pack_start(page, True, True, 0)
+                page = boite
+            self.onglets.append_page(page, Gtk.Label(label=t))
 
         # noise: the bench's, or the slider's
         bruit = Gtk.Box(spacing=8)
@@ -1305,6 +1799,13 @@ class Fenetre(Gtk.Window):
         bruit.pack_start(self.c_bruit, False, False, 0)
         bruit.pack_start(self.s_snr, False, False, 0)
         bruit.pack_start(self.l_bruit, False, False, 0)
+        # slow by default (it reads better); OSMO_GTK_RAPIDE=1 starts at 30 images/s
+        self.periode = CADENCE_RAPIDE_MS if os.environ.get("OSMO_GTK_RAPIDE", "0") == "1" else CADENCE_LENTE_MS
+        self.b_cadence = Gtk.ToggleButton(tooltip_text="cadence de l air : 30 images par seconde, ou lent (10)")
+        self.b_cadence.set_active(self.periode == CADENCE_RAPIDE_MS)
+        self._cadence(self.b_cadence)
+        self.b_cadence.connect("toggled", self._cadence)
+        bruit.pack_start(self.b_cadence, False, False, 0)
         self.l_info = Gtk.Label(xalign=0)
         attrs = Pango.AttrList()
         attrs.insert(Pango.attr_family_new("Ubuntu Mono"))
@@ -1332,7 +1833,11 @@ class Fenetre(Gtk.Window):
         haut.pack_start(self.l_derniere, True, True, 6)
 
         threading.Thread(target=self.air.demo if demo else self.air.ecouter, daemon=True).start()
-        GLib.timeout_add(100, self.tic)
+        # THE AIR, TWO SPEEDS (button of the Air tab): 30 images per second, or
+        # slow (10). The period is that of the timer, minus nothing: the real
+        # rate is measured and shown next to the measures.
+        self._cad_t, self._cad_n, self.cadence_reelle = time.monotonic(), 0, 0.0
+        GLib.timeout_add(self.periode, self._tic_cadence)
         GLib.timeout_add(1000, self.tic_etats)
         GLib.timeout_add(2000, self.tic_journaux)
         # Kconfig (gen-start.sh: 5 s), Installation and Infos load at their FIRST visit, in the background
@@ -1406,12 +1911,21 @@ class Fenetre(Gtk.Window):
         return False
 
     def _console(self, port_de, raccourcis):
-        """A VTY console: shortcut buttons, an entry, the output. port_de() gives the port."""
+        """A VTY console: shortcut buttons, an entry, the output. port_de() gives the port.
+        raccourcis: a list, or a function giving the list for what is selected now (the box's
+        raccourcis_maj() rebuilds the buttons). "{ms}" in a command is the mobile's first MS."""
         b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        ligne = Gtk.Box(spacing=4)
+        ligne = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=12,
+                            column_spacing=4, row_spacing=2, homogeneous=False)
         b.pack_start(ligne, False, False, 0)
-        e = Gtk.Entry(placeholder_text="commande VTY (Entree)")
+        e = Gtk.Entry(placeholder_text="commande VTY (Entree) - « list » donne celles de ce demon")
         sortie, sw = self._texte()
+
+        def executer(port, cmd):
+            if "{ms}" in cmd:
+                m = re.search(r"MS '([^']+)'", vty(port, ["show ms"]))
+                cmd = cmd.replace("{ms}", m.group(1) if m else "1")
+            return cmd, vty(port, [cmd])
 
         def envoyer(cmd):
             cmd = cmd.strip()
@@ -1421,13 +1935,23 @@ class Fenetre(Gtk.Window):
             if not port:
                 self._remplir(sortie, "pas de VTY pour ce demon\n")
                 return
-            self._remplir(sortie, "VTY %d > %s ...\n" % (port, cmd))
-            threading.Thread(target=lambda: GLib.idle_add(
-                self._remplir, sortie, "VTY %d > %s\n%s" % (port, cmd, vty(port, [cmd]))), daemon=True).start()
-        for r in raccourcis:
-            bt = Gtk.Button(label=r)
-            bt.connect("clicked", lambda _b, c=r: envoyer(c))
-            ligne.pack_start(bt, False, False, 0)
+            self._remplir(sortie, "VTY %d > %s ...\n" % (port, cmd.replace(" {ms}", "")))
+
+            def faire():
+                c, r = executer(port, cmd)
+                GLib.idle_add(self._remplir, sortie, "VTY %d > %s\n%s" % (port, c, r))
+            threading.Thread(target=faire, daemon=True).start()
+
+        def maj():
+            for w in ligne.get_children():
+                ligne.remove(w)
+            for r in (raccourcis() if callable(raccourcis) else raccourcis):
+                bt = Gtk.Button(label=r.replace(" {ms}", ""))
+                bt.connect("clicked", lambda _b, c=r: envoyer(c))
+                ligne.add(bt)
+            ligne.show_all()
+        maj()
+        b.raccourcis_maj = maj
         e.connect("activate", lambda w: (envoyer(w.get_text()), w.set_text("")))
         b.pack_start(e, False, False, 0)
         b.pack_start(sw, True, True, 0)
@@ -1444,15 +1968,16 @@ class Fenetre(Gtk.Window):
             r = Gtk.CellRendererText()
             vue.append_column(Gtk.TreeViewColumn(titre, r, **({"markup": 0} if i == 0 else {"text": i})))
         vue.get_selection().select_path(Gtk.TreePath.new_first())
-        vue.get_selection().connect("changed", lambda *_: self.tic_journaux())
+        vue.get_selection().connect("changed", lambda *_: (self.core_console.raccourcis_maj(), self.tic_journaux()))
         self.core_vue = vue
         g = Gtk.ScrolledWindow()
         g.set_size_request(300, -1)
         g.add(vue)
         p.pack1(g, False, False)
         droite = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
-        droite.pack1(self._console(self._core_port, ["show version", "show subscribers all", "show bts",
-                                                     "show cs7 instance 0 asp", "show uptime"]), True, False)
+        self.core_console = self._console(
+            self._core_port, lambda: RACCOURCIS_CORE.get(self._core_choisi()[0], RACCOURCIS_DEFAUT))
+        droite.pack1(self.core_console, True, False)
         bas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.core_titre = Gtk.Label(xalign=0)
         self.core_log, sw = self._texte(160, sombre=True)
@@ -1487,8 +2012,7 @@ class Fenetre(Gtk.Window):
         haut.pack_start(self.l23_etat, False, False, 6)
         p = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         b.pack_start(p, True, True, 0)
-        p.pack1(self._console(port_mobile, ["show ms", "show subscriber", "show cell", "show neighbour-cells",
-                                            "show support"]), True, False)
+        p.pack1(self._console(port_mobile, RACCOURCIS_MOBILE), True, False)
         self.l23_log, sw = self._texte(200, sombre=True)
         p.pack2(sw, True, False)
         return b
@@ -1622,25 +2146,38 @@ class Fenetre(Gtk.Window):
         b.pack_start(self.kc_fichier, False, False, 0)
         p = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         b.pack_start(p, True, True, 0)
-        # prompt, value, active, toggle visible, radio, editable, index, symbol
-        self.kc_store = Gtk.TreeStore(str, str, bool, bool, bool, bool, int, str)
+        # prompt, value, active, toggle visible, radio, editable, index, symbol, row background
+        self.kc_store = Gtk.TreeStore(str, str, bool, bool, bool, bool, int, str, str)
         vue = Gtk.TreeView(model=self.kc_store)
+        vue.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
         rt = Gtk.CellRendererToggle()
         rt.connect("toggled", self._kc_bascule)
-        c = Gtk.TreeViewColumn("", rt, active=2, visible=3, radio=4)
+        c = Gtk.TreeViewColumn("", rt, active=2, visible=3, radio=4, cell_background=8)
         vue.append_column(c)
-        vue.append_column(Gtk.TreeViewColumn("option", Gtk.CellRendererText(), markup=0))
-        re_ = Gtk.CellRendererText()
+        ro = Gtk.CellRendererText(ypad=4, ellipsize=Pango.EllipsizeMode.END)
+        co = Gtk.TreeViewColumn("option", ro, markup=0, cell_background=8)
+        co.set_expand(True)
+        co.set_resizable(True)
+        vue.append_column(co)
+        re_ = Gtk.CellRendererText(family="Ubuntu Mono", foreground="#0550ae")
         re_.connect("edited", self._kc_edite)
-        vue.append_column(Gtk.TreeViewColumn("valeur", re_, text=1, editable=5))
-        vue.append_column(Gtk.TreeViewColumn("symbole", Gtk.CellRendererText(foreground="#888"), text=7))
+        cv = Gtk.TreeViewColumn("valeur", re_, text=1, editable=5, cell_background=8)
+        cv.set_resizable(True)
+        cv.set_min_width(180)
+        vue.append_column(cv)
+        vue.append_column(Gtk.TreeViewColumn("symbole", Gtk.CellRendererText(foreground="#8c959f", scale=0.85,
+                                                                              family="Ubuntu Mono"),
+                                             text=7, cell_background=8))
         vue.get_selection().connect("changed", self._kc_aide)
         self.kc_vue = vue
         sw = Gtk.ScrolledWindow()
         sw.add(vue)
         p.pack1(sw, True, False)
-        self.kc_help, sw2 = self._texte(140)
+        self.kc_help, sw2 = self._texte(170)
         self.kc_help.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.kc_help.set_monospace(False)          # the help is INTERPRETED (md_buffer), like the Wiki
+        self.kc_help.set_left_margin(14)
+        self.kc_help.set_right_margin(14)
         p.pack2(sw2, False, False)
         self.kc = None
         self.kc_cfg = None
@@ -1664,19 +2201,23 @@ class Fenetre(Gtk.Window):
         def faire():
             c = cfg() if callable(cfg) else cfg
             msg = ""
-            if gen:
+            try:
+                arbre = kc_arbre()
+            except OSError as e:
+                arbre, msg = REPO, "arbre Kconfig : %s\n" % e
+            for cmd in kc_generateurs(gen, arbre):
                 try:
-                    r = subprocess.run(gen, cwd=REPO, capture_output=True, text=True, timeout=180)
+                    r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, timeout=180)
                     if r.returncode:
-                        msg = "%s : code %d\n%s" % (" ".join(gen), r.returncode, r.stdout[-2000:] + r.stderr[-2000:])
+                        msg += "%s : code %d\n%s" % (" ".join(cmd), r.returncode, r.stdout[-2000:] + r.stderr[-2000:])
                 except (OSError, subprocess.TimeoutExpired) as e:
-                    msg = "%s : %s" % (" ".join(gen), e)
+                    msg += "%s : %s" % (" ".join(cmd), e)
             kc = None
             try:
                 kl = self._kc_lib()
                 with KC_VERROU:
                     ancien = {k: os.environ.get(k) for k in ("srctree", "KCONFIG_CONFIG")}
-                    os.environ.update(srctree=REPO, KCONFIG_CONFIG=c)
+                    os.environ.update(srctree=arbre, KCONFIG_CONFIG=c)
                     try:
                         kc = kl.Kconfig(kfile, warn=False)
                         if os.path.exists(c):
@@ -1737,26 +2278,41 @@ class Fenetre(Gtk.Window):
         ajout(None, self.kc.top_node.list)
         self.kc_vue.expand_all()
 
+    @staticmethod
+    def _kc_prompt(texte):
+        """A prompt as markup. The generated ones read « NAME : defaut : VALUE  (file:line) »:
+        the name in bold, the default as code, where it comes from small and grey."""
+        m = re.match(r"^(\S+) : defaut : (.*?)\s+\(([^()\s]+:\S*)\)$", texte)
+        e = GLib.markup_escape_text
+        if not m:
+            return e(texte)
+        return ('<b>%s</b>   <span foreground="#57606a">defaut</span> '
+                '<tt><span background="#eef1f5" foreground="#24292f"> %s </span></tt>   '
+                '<span size="small" foreground="#8c959f">%s</span>' % (e(m.group(1)), e(m.group(2)), e(m.group(3))))
+
     def _kc_ligne(self, parent, node, kl):
         it = node.item
         idx = len(self.kc_noeuds)
         self.kc_noeuds.append(node)
-        p = GLib.markup_escape_text(node.prompt[0])
+        p = self._kc_prompt(node.prompt[0])
         if it == kl.MENU:
-            row = ["<b>%s</b>" % p, "", False, False, False, False, idx, ""]
+            row = ['<span size="large"><b>%s</b></span>' % p, "", False, False, False, False, idx, "", "#dde5ee"]
         elif it == kl.COMMENT:
-            row = ["<i>*** %s ***</i>" % p, "", False, False, False, False, idx, ""]
+            row = ['<span foreground="#57606a" size="small"><b>%s</b></span>' % GLib.markup_escape_text(
+                node.prompt[0].upper()), "", False, False, False, False, idx, "", "#f3f5f8"]
         elif isinstance(it, kl.Choice):
             sel = it.selection
-            row = ["<b>%s</b>" % p, sel.name if sel else "", False, False, False, False, idx, it.name or ""]
+            # the value of a choice: the TEXT of the option taken, not its symbol
+            val = (sel.nodes[0].prompt[0] if sel and sel.nodes and sel.nodes[0].prompt else sel.name) if sel else ""
+            row = [p if p.startswith("<b>") else "<b>%s</b>" % p, val, False, False, False, False, idx, it.name or "", None]
         else:
             t = it.orig_type
             if t in (kl.BOOL, kl.TRISTATE):
                 radio = it.choice is not None
                 val = kl.TRI_TO_STR[it.tri_value] if t == kl.TRISTATE else ""
-                row = [p, val, it.tri_value > 0, True, radio, False, idx, it.name]
+                row = [p, val, it.tri_value > 0, True, radio, False, idx, it.name, None]
             else:
-                row = [p, it.str_value, False, False, False, True, idx, it.name]
+                row = [p, it.str_value, False, False, False, True, idx, it.name, None]
         return self.kc_store.append(parent, row)
 
     def _kc_noeud(self, chemin):
@@ -1788,23 +2344,31 @@ class Fenetre(Gtk.Window):
         self.kc_remplir()
 
     def _kc_aide(self, sel):
+        """The help of the option selected, as a small Markdown page (md_buffer): its
+        facts in a table, then the help text of the Kconfig."""
         m, it = sel.get_selected()
         if not it or not self.kc:
             return
         kl = self._kc_lib()
         node = self.kc_noeuds[m[it][6]]
         item = node.item
-        l = [node.prompt[0] if node.prompt else ""]
+
+        def c(x):
+            return "`%s`" % str(x).replace("`", "'").replace("|", "\\|")
+
+        l = ["### %s" % (node.prompt[0] if node.prompt else ""), "", "| | |", "|---|---|"]
         if isinstance(item, (kl.Symbol, kl.Choice)):
-            l.append("symbole : CONFIG_%s   type : %s   valeur : %s" % (
-                item.name or "(choix)", kl.TYPE_TO_STR[item.orig_type], item.str_value))
-            l.append("depend de : %s" % kl.expr_str(node.dep))
+            l.append("| symbole | %s |" % c("CONFIG_%s" % (item.name or "(choix)")))
+            l.append("| type | %s |" % kl.TYPE_TO_STR[item.orig_type])
+            l.append("| valeur | %s |" % c(item.str_value if item.str_value != "" else "(vide)"))
+            l.append("| depend de | %s |" % c(kl.expr_str(node.dep)))
             if isinstance(item, kl.Symbol) and item.rev_dep is not self.kc.n:
-                l.append("selectionne par : %s" % kl.expr_str(item.rev_dep))
-        l.append("defini dans : %s:%d" % (node.filename, node.linenr))
-        l.append("")
-        l.append(node.help or "(pas d'aide)")
-        self._remplir(self.kc_help, "\n".join(l) + "\n", bas=False)
+                l.append("| selectionne par | %s |" % c(kl.expr_str(item.rev_dep)))
+        l.append("| defini dans | %s |" % c("%s:%d" % (node.filename, node.linenr)))
+        l += ["", getattr(node, "help", None) or "*(pas d'aide)*"]
+        for w in self.kc_help.get_children():
+            self.kc_help.remove(w)
+        md_buffer(self.kc_help.get_buffer(), "\n".join(l) + "\n", vue=self.kc_help, base=REPO)
 
     def kc_enregistrer(self, ensuite=None):
         if not self.kc:
@@ -1977,34 +2541,58 @@ class Fenetre(Gtk.Window):
     # %%bash cell runs in bash, the value of a last expression is printed,
     # as in Jupyter. "Interrompre" sends SIGINT to its process group.
     def _onglet_notebooks(self):
-        b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        b.set_border_width(6)
+        from gi.repository import Gdk
+        css = Gtk.CssProvider()
+        css.load_from_data(NB_CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         haut = Gtk.Box(spacing=6)
+        haut.get_style_context().add_class("nb-barre")
         b.pack_start(haut, False, False, 0)
         self.nb_combo = Gtk.ComboBoxText()
         for f in NOTEBOOKS:
             self.nb_combo.append_text(os.path.basename(f))
         self.nb_combo.connect("changed", lambda *_: self.nb_ouvrir())
         haut.pack_start(self.nb_combo, False, False, 0)
-        for lab, f in (("Tout executer", self.nb_tout), ("Interrompre", self.nb_interrompre),
-                       ("Redemarrer le noyau", self.nb_redemarrer), ("Enregistrer", self.nb_enregistrer)):
-            bt = Gtk.Button(label=lab)
+        for lab, icone, f in (("Tout executer", "media-playback-start-symbolic", self.nb_tout),
+                              ("Interrompre", "media-playback-stop-symbolic", self.nb_interrompre),
+                              ("Redemarrer le noyau", "view-refresh-symbolic", self.nb_redemarrer),
+                              ("Enregistrer", "document-save-symbolic", self.nb_enregistrer)):
+            bt = Gtk.Button(label=lab, image=Gtk.Image.new_from_icon_name(icone, Gtk.IconSize.BUTTON),
+                            always_show_image=True)
             bt.connect("clicked", lambda _b, f=f: f())
             haut.pack_start(bt, False, False, 0)
         self.nb_etat = Gtk.Label(xalign=0)
+        self.nb_etat.get_style_context().add_class("nb-pastille")
         haut.pack_end(self.nb_etat, False, False, 0)
-        self.nb_boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self.nb_boite.set_border_width(8)
-        self.nb_sw = Gtk.ScrolledWindow()
-        self.nb_sw.add(self.nb_boite)
+        self.nb_boite = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.nb_boite.set_border_width(18)
+        self.nb_boite.set_margin_start(40)
+        self.nb_boite.set_margin_end(40)
+        self.nb_sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                        vscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
+        fond = Gtk.EventBox()
+        fond.get_style_context().add_class("nb-fond")
+        fond.add(self.nb_boite)
+        self.nb_sw.add(fond)
         b.pack_start(self.nb_sw, True, True, 0)
         self.nb_noyau = None
         self.nb_cellules = []
         self.nb_file = []
         self.nb_courante = None
+        self.nb_compteur = 0
         if NOTEBOOKS:
             self.nb_combo.set_active(0)
         return b
+
+    def _nb_classe(self, k, classe):
+        """The look of a code cell: '', nb-encours, nb-ok or nb-ko."""
+        ctx = self.nb_cellules[k]["carte"].get_style_context()
+        for c in ("nb-encours", "nb-ok", "nb-ko"):
+            ctx.remove_class(c)
+        if classe:
+            ctx.add_class(classe)
 
     def nb_ouvrir(self):
         i = self.nb_combo.get_active()
@@ -2017,37 +2605,63 @@ class Fenetre(Gtk.Window):
         with open(self.nb_chemin) as f:
             self.nb_json = json.load(f)
         self.nb_cellules = []
+        self.nb_compteur = 0
+        base = os.path.dirname(self.nb_chemin)
+
+        def lien(u):
+            subprocess.Popen(["xdg-open", u], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         for n, c in enumerate(self.nb_json.get("cells", [])):
             src = "".join(c.get("source", []))
             if c.get("cell_type") == "markdown":
-                l = Gtk.Label(xalign=0, selectable=True, wrap=True)
-                l.set_markup(md_pango(src))
-                self.nb_boite.pack_start(l, False, False, 0)
+                # the same interpreter as the Wiki tab: headings, tables, images, links
+                t = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD,
+                                 left_margin=6, right_margin=6)
+                t.get_style_context().add_class("nb-md")
+                md_buffer(t.get_buffer(), src, vue=t, base=base, ouvrir=lien)
+                self.nb_boite.pack_start(t, False, False, 0)
                 continue
             if c.get("cell_type") != "code":
                 continue
-            cadre_ = Gtk.Frame()
-            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            v.set_border_width(4)
-            cadre_.add(v)
-            ligne = Gtk.Box(spacing=6)
-            bt = Gtk.Button(label="▶")
-            statut = Gtk.Label(xalign=0)
+            carte = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            carte.get_style_context().add_class("nb-carte")
+            ligne = Gtk.Box(spacing=8)
+            ligne.get_style_context().add_class("nb-entete")
+            bt = Gtk.Button(label="▶", tooltip_text="executer cette cellule")
+            bt.get_style_context().add_class("nb-run")
+            num = Gtk.Label(label="[ ]", xalign=0)
+            num.get_style_context().add_class("nb-num")
+            statut = Gtk.Label(xalign=1)
             ligne.pack_start(bt, False, False, 0)
-            ligne.pack_start(statut, False, False, 0)
-            v.pack_start(ligne, False, False, 0)
+            ligne.pack_start(num, False, False, 0)
+            ligne.pack_end(statut, False, False, 4)
+            carte.pack_start(ligne, False, False, 0)
             code = Gtk.TextView(monospace=True)
+            code.get_style_context().add_class("nb-code")
             code.get_buffer().set_text(src)
-            v.pack_start(code, False, False, 0)
-            sortie = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.CHAR)
-            sortie.override_background_color(Gtk.StateFlags.NORMAL, _rgba("#1e1e2e"))
-            sortie.override_color(Gtk.StateFlags.NORMAL, _rgba("#cdd6f4"))
+            py_colorer(code.get_buffer())
+            code.get_buffer().connect("changed", py_colorer)
+            # a long line scrolls inside its cell; the page itself never
+            # scrolls sideways, so the text of the Markdown cells wraps
+            sw_code = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                         vscrollbar_policy=Gtk.PolicyType.NEVER)
+            sw_code.set_margin_start(8)
+            sw_code.set_margin_end(8)
+            sw_code.set_margin_bottom(8)
+            sw_code.add(code)
+            carte.pack_start(sw_code, False, False, 0)
+            sortie = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.CHAR, cursor_visible=False)
+            sortie.get_style_context().add_class("nb-sortie")
+            sortie.set_margin_start(8)
+            sortie.set_margin_end(8)
+            sortie.set_margin_bottom(8)
             sortie.set_no_show_all(True)
-            v.pack_start(sortie, False, False, 0)
+            carte.pack_start(sortie, False, False, 0)
             k = len(self.nb_cellules)
-            self.nb_cellules.append({"code": code, "sortie": sortie, "statut": statut, "index": n})
+            self.nb_cellules.append({"code": code, "sortie": sortie, "statut": statut, "index": n,
+                                     "carte": carte, "num": num})
             bt.connect("clicked", lambda _b, k=k: self.nb_executer([k]))
-            self.nb_boite.pack_start(cadre_, False, False, 0)
+            self.nb_boite.pack_start(carte, False, False, 0)
         self.nb_boite.show_all()
         self.nb_etat.set_text("%d cellules de code" % len(self.nb_cellules))
 
@@ -2106,7 +2720,9 @@ class Fenetre(Gtk.Window):
         src = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         c["sortie"].get_buffer().set_text("")
         c["sortie"].show()
-        c["statut"].set_markup('<span foreground="#F1FA8C">● en cours</span>')
+        c["statut"].set_markup('<span foreground="#9a6700">● en cours</span>')
+        c["num"].set_text("[*]")
+        self._nb_classe(k, "nb-encours")
         self.nb_etat.set_text("cellule %d / %d" % (k + 1, len(self.nb_cellules)))
         def envoyer():
             try:
@@ -2149,7 +2765,10 @@ class Fenetre(Gtk.Window):
     def _nb_fin(self, k, rc):
         if k < len(self.nb_cellules):
             self.nb_cellules[k]["statut"].set_markup('<span foreground="%s">● %s</span>' % (
-                ("#50FA7B", "ok") if rc == 0 else ("#FF5555", "code %d" % rc)))
+                ("#1a7f37", "ok") if rc == 0 else ("#cf222e", "code %d" % rc)))
+            self.nb_compteur += 1
+            self.nb_cellules[k]["num"].set_text("[%d]" % self.nb_compteur)
+            self._nb_classe(k, "nb-ok" if rc == 0 else "nb-ko")
         if rc != 0:
             for j in self.nb_file:
                 self.nb_cellules[j]["statut"].set_text("")
@@ -2217,18 +2836,20 @@ class Fenetre(Gtk.Window):
         p.pack1(g, False, False)
         self.wiki_vue = Gtk.TextView(editable=False, wrap_mode=Gtk.WrapMode.WORD, left_margin=16, right_margin=16,
                                      top_margin=10, cursor_visible=False)
-        buf = self.wiki_vue.get_buffer()
-        buf.create_tag("h1", weight=Pango.Weight.BOLD, scale=1.7, pixels_above_lines=12, pixels_below_lines=6)
-        buf.create_tag("h2", weight=Pango.Weight.BOLD, scale=1.4, pixels_above_lines=10, pixels_below_lines=4)
-        buf.create_tag("h3", weight=Pango.Weight.BOLD, scale=1.15, pixels_above_lines=8, pixels_below_lines=2)
-        buf.create_tag("code", family="Ubuntu Mono", background="#ececec", foreground="#202020")
-        buf.create_tag("bloc", family="Ubuntu Mono", background="#ececec", foreground="#202020",
-                       wrap_mode=Gtk.WrapMode.NONE, left_margin=28)
-        buf.create_tag("table", family="Ubuntu Mono", wrap_mode=Gtk.WrapMode.NONE)
-        buf.create_tag("gras", weight=Pango.Weight.BOLD)
-        buf.create_tag("lien", foreground="#1f6feb", underline=Pango.Underline.SINGLE)
-        buf.create_tag("puce", left_margin=32)
-        buf.create_tag("trouve", background="#ffe066")
+        md_tags(self.wiki_vue.get_buffer())
+        css = Gtk.CssProvider()
+        css.load_from_data(b""".md-table { border: 1px solid #c9d1d9; margin: 6px 0 10px 0; }
+.md-tete { background-color: #e6ebf1; border: 1px solid #c9d1d9; }
+.md-pair { background-color: #f6f8fa; border: 1px solid #d8dee4; }
+.md-impair { background-color: #ffffff; border: 1px solid #d8dee4; }
+.md-tete label, .md-pair label, .md-impair label { color: #1f2328; }""")
+        from gi.repository import Gdk
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.wiki_vue.connect("button-release-event", self._wiki_clic)
+        self.wiki_vue.connect("motion-notify-event", self._wiki_survol)
+        self._wiki_vue_liste = vue
+        self._wiki_fichier = None
         sw2 = Gtk.ScrolledWindow()
         sw2.add(self.wiki_vue)
         p.pack2(sw2, True, False)
@@ -2240,13 +2861,71 @@ class Fenetre(Gtk.Window):
         m, it = sel.get_selected()
         if not it:
             return
+        self._wiki_charger(m[it][1])
+
+    def _wiki_charger(self, chemin):
         try:
-            with open(m[it][1], errors="replace") as f:
+            with open(chemin, errors="replace") as f:
                 texte = f.read()
         except OSError as e:
             texte = "%s\n" % e
-        md_buffer(self.wiki_vue.get_buffer(), texte)
+        self._wiki_fichier = chemin
+        # the tables of the previous page are widgets of the view
+        for w in self.wiki_vue.get_children():
+            self.wiki_vue.remove(w)
+        md_buffer(self.wiki_vue.get_buffer(), texte, vue=self.wiki_vue, base=os.path.dirname(chemin),
+                  ouvrir=self._wiki_lien)
         self.wiki_vue.scroll_to_iter(self.wiki_vue.get_buffer().get_start_iter(), 0, False, 0, 0)
+
+    def _wiki_lien_sous(self, ev):
+        x, y = self.wiki_vue.window_to_buffer_coords(Gtk.TextWindowType.WIDGET, int(ev.x), int(ev.y))
+        ok, it = self.wiki_vue.get_iter_at_location(x, y)
+        if not ok:
+            return None
+        liens = getattr(self.wiki_vue.get_buffer(), "md_liens", {})
+        for t in it.get_tags():
+            if t in liens:
+                return liens[t]
+        return None
+
+    def _wiki_survol(self, _w, ev):
+        from gi.repository import Gdk
+        win = self.wiki_vue.get_window(Gtk.TextWindowType.TEXT)
+        if win:
+            win.set_cursor(Gdk.Cursor.new_from_name(win.get_display(),
+                                                    "pointer" if self._wiki_lien_sous(ev) else "text"))
+        return False
+
+    def _wiki_clic(self, _w, ev):
+        if ev.button != 1 or self.wiki_vue.get_buffer().get_has_selection():
+            return False
+        cible = self._wiki_lien_sous(ev)
+        if cible:
+            self._wiki_lien(cible)
+        return False
+
+    def _wiki_lien(self, cible):
+        """A link of the page: another Markdown page opens here, a heading
+        (#...) is searched in the page, anything else goes to the desktop."""
+        if cible.startswith("#"):
+            mot = cible[1:].replace("-", " ")
+            buf = self.wiki_vue.get_buffer()
+            r = buf.get_start_iter().forward_search(mot, Gtk.TextSearchFlags.CASE_INSENSITIVE, None)
+            if r:
+                self.wiki_vue.scroll_to_iter(r[0], 0.0, True, 0, 0.05)
+            return
+        if re.match(r"^[a-z][a-z0-9+.-]*:", cible):
+            subprocess.Popen(["xdg-open", cible], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        f = os.path.normpath(os.path.join(os.path.dirname(self._wiki_fichier or REPO), cible.split("#")[0]))
+        if f.endswith(".md") and os.path.isfile(f):
+            for k, rang in enumerate(self.wiki_store):
+                if os.path.realpath(rang[1]) == os.path.realpath(f):
+                    self._wiki_vue_liste.get_selection().select_path(Gtk.TreePath.new_from_indices([k]))
+                    return
+            self._wiki_charger(f)
+        elif os.path.exists(f):
+            subprocess.Popen(["xdg-open", f], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def wiki_suivant(self, depuis_debut=False):
         buf = self.wiki_vue.get_buffer()
@@ -2263,6 +2942,103 @@ class Fenetre(Gtk.Window):
             buf.apply_tag_by_name("trouve", a, z)
             self._wiki_pos = z.get_offset()
             self.wiki_vue.scroll_to_iter(a, 0.1, True, 0, 0.3)
+
+    # ══ TRUNK SIP: the way out to the public network, typed here ════════════
+    def _onglet_trunk(self):
+        """The SIP trunk of the bench (an account at a SIP operator). NOTHING of it is in the
+        repository: server, SIP login and password are typed here and written to
+        /etc/asterisk/pjsip_trunk.conf (root, mode 640, included by pjsip.conf), then Asterisk
+        is reloaded. The dialplan reaches it as PJSIP/<number>@trunk_sip; its calls arrive in
+        [trunk_in]."""
+        b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        b.set_border_width(10)
+        g = Gtk.Grid(column_spacing=10, row_spacing=6)
+        b.pack_start(g, False, False, 0)
+        self.tk = {}
+        for i, (cle, lab, aide, secret) in enumerate((
+                ("serveur", "Serveur SIP", "le registrar de l operateur, par exemple sip.exemple.net (ou hote:port)", False),
+                ("user", "Identifiant SIP", "le login SIP du compte chez l operateur", False),
+                ("mdp", "Mot de passe SIP", "il n est ecrit que dans /etc/asterisk/pjsip_trunk.conf (root, 640)", True),
+                ("numero", "Numero presente", "facultatif : le numero montre a l appele (defaut : l identifiant)", False))):
+            l = Gtk.Label(label=lab, xalign=1)
+            e = Gtk.Entry(width_chars=42, placeholder_text=aide)
+            if secret:
+                e.set_visibility(False)
+                e.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+            g.attach(l, 0, i, 1, 1)
+            g.attach(e, 1, i, 1, 1)
+            self.tk[cle] = e
+        self.tk_reg = Gtk.CheckButton(label="s enregistrer aupres de l operateur (appels entrants)")
+        self.tk_reg.set_active(True)
+        g.attach(self.tk_reg, 1, 4, 1, 1)
+        ligne = Gtk.Box(spacing=6)
+        b.pack_start(ligne, False, False, 0)
+        for lab, cls, f in (("Ecrire le trunk et recharger Asterisk", "suggested-action", self.tk_ecrire),
+                            ("Etat", None, self.tk_etat), ("Retirer le trunk", "destructive-action", self.tk_retirer)):
+            bt = Gtk.Button(label=lab)
+            if cls:
+                bt.get_style_context().add_class(cls)
+            bt.connect("clicked", lambda _b, f=f: f())
+            ligne.pack_start(bt, False, False, 0)
+        self.tk_sortie, sw = self._texte(160)
+        b.pack_start(sw, True, True, 0)
+        self._remplir(self.tk_sortie, "Le trunk n est ecrit nulle part dans le depot : renseigner le compte, puis "
+                                      "« Ecrire le trunk ».\n« Etat » montre ce qu Asterisk en dit (sans le mot de passe).\n")
+        return b
+
+    def _tk_dire(self, txt):
+        buf = self.tk_sortie.get_buffer()
+        buf.insert(buf.get_end_iter(), txt)
+        _vers_la_fin_tv(self.tk_sortie)
+        return False
+
+    def tk_ecrire(self):
+        v = {k: e.get_text().strip() for k, e in self.tk.items()}
+        v["mdp"] = self.tk["mdp"].get_text()
+        err = []
+        if not re.match(r"^[A-Za-z0-9.-]+(:\d+)?$", v["serveur"]):
+            err.append("serveur : un nom d hote ou une adresse (hote ou hote:port)")
+        if not re.match(r"^[\w.@+-]+$", v["user"]):
+            err.append("identifiant : lettres, chiffres, . @ + - _")
+        if not v["mdp"] or re.search(r"[\r\n;]", v["mdp"]):
+            err.append("mot de passe : requis, sans retour a la ligne ni point-virgule (commentaire d Asterisk)")
+        if v["numero"] and not re.match(r"^[\w.+-]+$", v["numero"]):
+            err.append("numero presente : chiffres, +, lettres")
+        if err:
+            return self._remplir(self.tk_sortie, "Refuse :\n  " + "\n  ".join(err) + "\n")
+        v["numero"] = v["numero"] or v["user"]
+        v["hote"] = v["serveur"].split(":")[0]
+        conf = TRUNK_MODELE % v + ((TRUNK_REG % v) if self.tk_reg.get_active() else "")
+        # through a file of the user's own (0600), installed by root, then removed
+        fd, tmp = __import__("tempfile").mkstemp(prefix="trunk-", suffix=".conf")
+        with os.fdopen(fd, "w") as f:
+            f.write(conf)
+        cmd = ("install -m 640 -o asterisk -g asterisk '%(t)s' %(d)s/pjsip_trunk.conf 2>/dev/null "
+               "|| install -m 640 '%(t)s' %(d)s/pjsip_trunk.conf; rc=$?; rm -f '%(t)s'; [ $rc = 0 ] || exit $rc; "
+               "grep -q '^#tryinclude pjsip_trunk.conf' %(d)s/pjsip.conf "
+               "|| printf '\\n; the SIP trunk, written by osmo-gtk (tab Trunk SIP)\\n#tryinclude pjsip_trunk.conf\\n' >> %(d)s/pjsip.conf; "
+               "asterisk -rx 'module reload res_pjsip.so' >/dev/null 2>&1; sleep 3; "
+               "echo 'trunk ecrit : %(d)s/pjsip_trunk.conf'; asterisk -rx 'pjsip show registrations' 2>&1 | tail -n 6"
+               % {"t": tmp, "d": TRUNK_DIR})
+        self.tk["mdp"].set_text("")
+        self._remplir(self.tk_sortie, "ecriture du trunk %s@%s ...\n" % (v["user"], v["serveur"]))
+        self.lancer([], argv=["bash", "-c", cmd], cwd=REPO, ecrire=self._tk_dire)
+
+    def tk_etat(self):
+        self._remplir(self.tk_sortie, "")
+        self.lancer([], argv=["bash", "-c",
+                              "[ -f %(d)s/pjsip_trunk.conf ] && echo 'trunk : '$(sed -n 's/^client_uri=//p; s/^contact=//p' %(d)s/pjsip_trunk.conf | head -n 1) "
+                              "|| echo 'pas de trunk ecrit (%(d)s/pjsip_trunk.conf)'; "
+                              "asterisk -rx 'pjsip show registrations' 2>&1 | tail -n 8; "
+                              "asterisk -rx 'pjsip show endpoint trunk_sip' 2>&1 | grep -E 'Endpoint:|Contact:|Unable' | head -n 4"
+                              % {"d": TRUNK_DIR}], cwd=REPO, ecrire=self._tk_dire)
+
+    def tk_retirer(self):
+        self._remplir(self.tk_sortie, "")
+        self.lancer([], argv=["bash", "-c",
+                              "rm -f %(d)s/pjsip_trunk.conf && asterisk -rx 'module reload res_pjsip.so' >/dev/null 2>&1; "
+                              "echo 'trunk retire : plus de sortie SIP vers l exterieur'" % {"d": TRUNK_DIR}],
+                    cwd=REPO, ecrire=self._tk_dire)
 
     # ══ JOURNAUX: chain (dsp, qemu, osmocon, mobile, pont...), mailbox, Osmocom ══
     def _onglet_journaux(self):
@@ -2730,6 +3506,25 @@ class Fenetre(Gtk.Window):
         return True
 
     # ── processing ─────────────────────────────────────────────────────────
+    def _tic_cadence(self):
+        self.tic()
+        # the real rate, over the last second
+        t = time.monotonic()
+        self._cad_n += 1
+        if t - self._cad_t >= 1.0:
+            self.cadence_reelle = self._cad_n / (t - self._cad_t)
+            self._cad_t, self._cad_n = t, 0
+        # nothing is drawn outside the Air tab: no need to wake up 30 times a second
+        visible = self.onglets.get_current_page() == 0
+        GLib.timeout_add(self.periode if visible else CADENCE_LENTE_MS, self._tic_cadence)
+        return False
+
+    def _cadence(self, bouton):
+        """The button of the Air tab: 30 images per second, or the slow rate (10)."""
+        rapide = bouton.get_active()
+        self.periode = CADENCE_RAPIDE_MS if rapide else CADENCE_LENTE_MS
+        bouton.set_label("30 img/s" if rapide else "lent (10 img/s)")
+
     def tic(self):
         t = time.monotonic()
         with self.air.lock:
@@ -2758,13 +3553,15 @@ class Fenetre(Gtk.Window):
                         break
         if not self.gel:
             snr = self.s_snr.get_value() if self.c_bruit.get_active() else None
-            for fn, tn, bits in lot[-12:]:
+            # as many bursts per second at both speeds
+            for fn, tn, bits in lot[-max(2, int(RAFALES_PAR_S * self.periode / 1000)):]:
                 r = recevoir(bits, snr, self.rng)
                 r["fn"], r["tn"] = fn, tn
                 if "const" in r:
                     self.points.extend(r["const"])
                     self.mesures.append((r["snr"], r["evm"]))
                     self.yeux.append(r["os"].real / max(1e-9, np.max(np.abs(r["os"].real))))
+                    self.yeux_n = getattr(self, "yeux_n", 0) + 1
                     self.dernier = r
                 elif self.dernier is None:
                     self.dernier = r
@@ -2776,10 +3573,10 @@ class Fenetre(Gtk.Window):
         d = self.dernier
         snr_m = np.mean([m[0] for m in self.mesures]) if self.mesures else float("nan")
         evm_m = np.mean([m[1] for m in self.mesures]) if self.mesures else float("nan")
-        self.l_info.set_text("%s  fn %-7s tn %s  %s%s   SNR %5.1f dB  EVM %5.1f %%   DL %4.0f/s  UL %4.0f/s" % (
+        self.l_info.set_text("%s  fn %-7s tn %s  %s%s   SNR %5.1f dB  EVM %5.1f %%   DL %4.0f/s  UL %4.0f/s   %2.0f img/s" % (
             self.sens, d["fn"] if d else "-", d["tn"] if d else "-", d["type"] if d else "-",
             (" TSC%d" % d["tsc"]) if d and d["tsc"] is not None else "", snr_m, evm_m,
-            self.debit["DL"], self.debit["UL"]))
+            self.debit["DL"], self.debit["UL"], self.cadence_reelle))
         return True
 
     # ── plots ──────────────────────────────────────────────────────────────
@@ -2795,13 +3592,32 @@ class Fenetre(Gtk.Window):
         for x in (-1, 1):
             cr.arc(cx + x * e, cy, 3, 0, 2 * math.pi)
             cr.stroke()
-        pts = np.array(self.points) if self.points else np.zeros(0, complex)
-        n = len(pts)
-        for i, p in enumerate(pts):
-            a = 0.15 + 0.85 * (i / max(1, n))
-            cr.set_source_rgba(0.31, 0.98, 0.48, a) if p.real >= 0 else cr.set_source_rgba(0.34, 0.65, 1.0, a)
-            cr.rectangle(cx + p.real * e - 1, cy - p.imag * e - 1, 2, 2)
-            cr.fill()
+        n = len(self.points)
+        W, H = int(w), int(h)
+        if not n or W < 8 or H < 8:
+            return
+        # 3500 points: written into ONE image with numpy (a rectangle + a fill
+        # per point from Python is 20 ms). 2x2 pixels each, the newest brightest,
+        # written last (so it wins where points overlap).
+        import cairo
+        pts = np.fromiter(self.points, complex, n)
+        x = np.rint(cx + pts.real * e).astype(np.intp)
+        y = np.rint(cy - pts.imag * e).astype(np.intp)
+        ok = (x >= 1) & (x < W) & (y >= 1) & (y < H)
+        a = (0.15 + 0.85 * np.arange(n) / max(1, n))[:, None]
+        coul = np.where((pts.real >= 0)[:, None], (0.48, 0.98, 0.31), (1.0, 0.65, 0.34))    # B, G, R
+        px = np.empty((n, 4), np.uint8)
+        px[:, :3] = coul * a * 255                                    # premultiplied
+        px[:, 3:] = a * 255
+        img = np.zeros((H, W, 4), np.uint8)
+        x, y, px = x[ok], y[ok], px[ok]
+        for dx in (-1, 0):
+            for dy in (-1, 0):
+                img[y + dy, x + dx] = px
+        surf = cairo.ImageSurface.create_for_data(img, cairo.FORMAT_ARGB32, W, H, W * 4)
+        cr.set_source_surface(surf, 0, 0)
+        cr.paint()
+        surf.finish()
 
     def dessin_oeil(self, cr, w, h):
         cadre(cr, w, h, "diagramme de l'oeil (I, 2 symboles)")
@@ -2810,23 +3626,71 @@ class Fenetre(Gtk.Window):
         cr.move_to(x0, y0 + hh / 2); cr.line_to(x0 + ww, y0 + hh / 2)
         cr.move_to(x0 + ww / 2, y0); cr.line_to(x0 + ww / 2, y0 + hh)
         cr.stroke()
-        cr.set_line_width(1)
-        L = 2 * OS
-        for v in self.yeux:
-            cr.set_source_rgba(1.0, 0.69, 0.0, 0.18)
-            for k in range(OS // 2, len(v) - L, OS):
-                seg = v[k:k + L + 1]
-                for j, y in enumerate(seg):
-                    X = x0 + ww * j / L
-                    Y = y0 + hh / 2 - y * hh * 0.45
-                    cr.line_to(X, Y) if j else cr.move_to(X, Y)
-                cr.stroke()
+        # A PHOSPHOR LAYER. Redrawing the 30 bursts kept (146 traces of 17
+        # points each) at every image costs 0.6 s: the traces are drawn ONCE,
+        # into a layer that stays, and each new burst fades the older ones a
+        # little - as on an oscilloscope. An image then costs one paint, plus
+        # the bursts that arrived since the last one.
+        import cairo
+        W, H = int(w), int(h)
+        if W < 8 or H < 8:
+            return
+        vus = getattr(self, "yeux_n", len(self.yeux))
+        c = getattr(self, "_oeil", None)
+        if c is None or c["taille"] != (W, H):
+            c = self._oeil = {"taille": (W, H), "surf": cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H), "vus": vus}
+            nouveaux = list(self.yeux)                    # new size: everything again, once
+        else:
+            k = min(vus - c["vus"], len(self.yeux), OEIL_PAR_IMAGE)
+            nouveaux = list(self.yeux)[-k:] if k > 0 else []
+            c["vus"] = vus
+        if nouveaux:
+            L = 2 * OS
+            lc = cairo.Context(c["surf"])
+            lc.set_line_width(1)
+            xs = [x0 + ww * j / L for j in range(L + 1)]
+            for v in nouveaux:
+                lc.set_operator(cairo.OPERATOR_DEST_OUT)
+                lc.set_source_rgba(0, 0, 0, OEIL_FONDU)
+                lc.paint()
+                lc.set_operator(cairo.OPERATOR_OVER)
+                lc.set_source_rgba(1.0, 0.69, 0.0, 0.18)
+                ys = (y0 + hh / 2 - np.asarray(v) * hh * 0.45).tolist()
+                debuts = list(range(OS // 2, len(ys) - L, 2 * OS))       # one symbol out of two
+                # 6 strokes per burst: the traces of one stroke do not add up
+                # where they cross, those of different strokes do
+                for g in range(6):
+                    for k in debuts[g::6]:
+                        lc.move_to(xs[0], ys[k])
+                        for j in range(1, L + 1):
+                            lc.line_to(xs[j], ys[k + j])
+                    lc.stroke()
+        cr.set_source_surface(c["surf"], 0, 0)
+        cr.paint()
 
     def dessin_iq(self, cr, w, h):
         """The two directions at once, both from the MIDDLE line: the MS (uplink)
         above, drawn upwards, the BTS (downlink) below, drawn downwards (mirror).
         A sample in [-1, 1] becomes a height in [0, 1] of its half: -1 on the middle
-        line, +1 at the edge. Training sequence shaded in each half."""
+        line, +1 at the edge. Training sequence shaded in each half.
+        ONE burst per direction is shown: it is drawn into a layer, renewed at most
+        IQ_HZ times a second (nobody reads 30 different bursts a second, and 4700
+        line segments per image is what the plot costs)."""
+        import cairo
+        W, H = int(w), int(h)
+        if W < 8 or H < 8:
+            return
+        t = time.monotonic()
+        c = getattr(self, "_iq", None)
+        if c is None or c["taille"] != (W, H) or t - c["t"] >= 1.0 / IQ_HZ:
+            if c is None or c["taille"] != (W, H):
+                c = self._iq = {"taille": (W, H), "surf": cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)}
+            c["t"] = t
+            self._dessin_iq(cairo.Context(c["surf"]), w, h)
+        cr.set_source_surface(c["surf"], 0, 0)
+        cr.paint()
+
+    def _dessin_iq(self, cr, w, h):
         cadre(cr, w, h, "I/Q des rafales (8 ech./symbole) : MS en haut, BTS en bas, depuis le milieu")
         x0, y0, ww, hh = 10, 26, w - 20, h - 36
         mid = y0 + hh / 2
@@ -2852,14 +3716,16 @@ class Fenetre(Gtk.Window):
                 cr.fill()
             v = d["os"]
             m = max(1e-9, float(np.max(np.abs(np.concatenate((v.real, v.imag))))))
+            n = len(v)
+            pas = max(1, n // max(1, int(ww)))           # no more points than pixels
+            xs = (x0 + ww * np.arange(0, n, pas) / n).tolist()
             for comp, col in ((v.real, (0.31, 0.98, 0.48)), (v.imag, (0.34, 0.65, 1.0))):
                 cr.set_source_rgb(*col)
                 cr.set_line_width(1.2)
-                n = len(comp)
-                for j, y in enumerate(comp):
-                    X = x0 + ww * j / n
-                    Y = mid + sgn * demi * 0.95 * (y / m + 1) / 2
-                    cr.line_to(X, Y) if j else cr.move_to(X, Y)
+                ys = (mid + sgn * demi * 0.95 * (comp[::pas] / m + 1) / 2).tolist()
+                cr.move_to(xs[0], ys[0])
+                for X, Y in zip(xs[1:], ys[1:]):
+                    cr.line_to(X, Y)
                 cr.stroke()
 
     def dessin_corr(self, cr, w, h):
@@ -2892,24 +3758,26 @@ class Fenetre(Gtk.Window):
         with self.air.lock:
             gr = dict(self.air.grille[self.sens])
         cr.set_font_size(10)
+        par_couleur = {}                 # one fill per colour, not one per cell
         for tn in range(8):
             cr.set_source_rgb(*TEXTE)
             cr.move_to(8, y0 + tn * ch + ch * 0.7)
             cr.show_text("TS%d" % tn)
             for m in range(51):
                 e = gr.get((tn, m))
-                if e and now - e[2] < 2.0:
-                    cr.set_source_rgb(*couleur(e[0], e[1]))
-                else:
-                    cr.set_source_rgb(0.05, 0.22, 0.26)
-                cr.rectangle(x0 + m * cw + 1, y0 + tn * ch + 1, cw - 2, ch - 2)
-                cr.fill()
+                coul = couleur(e[0], e[1]) if e and now - e[2] < 2.0 else (0.05, 0.22, 0.26)
+                par_couleur.setdefault(coul, []).append((x0 + m * cw + 1, y0 + tn * ch + 1))
+        for coul, cases in par_couleur.items():
+            cr.set_source_rgb(*coul)
+            for X, Y in cases:
+                cr.rectangle(X, Y, cw - 2, ch - 2)
+            cr.fill()
 
 
 def main():
     ap = argparse.ArgumentParser(description="constellation : le banc (demarrage, air I/Q, coeur, mobile L23, installation)")
     ap.add_argument("--demo", action="store_true", help="rafales aleatoires, sans la chaine")
-    ap.add_argument("--onglet", help="onglet ouvert : Air, Core, L23, Journaux, Kconfig, Tests, Telephones, Notebooks, Wiki, Infos, Installation")
+    ap.add_argument("--onglet", help="onglet ouvert : Air, Core, L23, Journaux, Kconfig, Tests, Telephones, Trunk SIP, Notebooks, Wiki, Infos, Installation")
     a = ap.parse_args()
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     GLib.set_prgname("osmo-ms-pont.py")

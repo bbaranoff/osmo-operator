@@ -2,6 +2,8 @@
 INST_REGISTER prereqs "Prerequis du systeme"
 INST_ROOT[prereqs]=0
 
+# --check: the tools are there (the free space only matters before a build)
+inst_prereqs_done() { have_cmd apt-get && have_cmd git; }
 inst_prereqs_run() {
     have_cmd apt-get || { inst_hint "cette installation vise Debian/Ubuntu ; sur une autre distribution, utilisez Docker : ./tools/make-docker-image.sh"
                           inst_fail "apt-get introuvable"; return $INST_RC_FAIL; }

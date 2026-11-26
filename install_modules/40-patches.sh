@@ -4,6 +4,11 @@ INST_REGISTER patches "Application des correctifs"
 INST_DEPS[patches]="sources"
 INST_REQUIRED[patches]=0
 
+# --check: no patch left to apply (osmo-patches-apply.sh, read-only mode)
+inst_patches_done() {
+    OSMO_PATCHES_CHECK=1 GSM_ROOT="$GSM_ROOT" REPO="$INST_TREE" \
+        bash "$INST_TREE/tools/osmo-patches-apply.sh" "$GSM_ROOT" >/dev/null 2>&1
+}
 inst_patches_run() {
     local out l n
     out="$(GSM_ROOT="$GSM_ROOT" REPO="$INST_TREE" bash "$INST_TREE/tools/osmo-patches-apply.sh" "$GSM_ROOT" 2>&1)"

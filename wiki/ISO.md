@@ -555,7 +555,8 @@ during the copy reproduces the image's spec sheet (`branding/osmo/show.qml`).
 8. Removes the `osmo-install` and `calamares` icons from the menu.
 9. Generates `~/.config/pmbootstrap_v3.cfg` for the user.
 10. Purges `live-boot`, rebuilds the initramfs.
-11. `osmo-diffs init` (the black box's keys), then `osmo-racine-live poser`: `/` read-only,
+11. Enables `osmo-diffs-init.service` (the black box gets its keys **and its passphrase at
+    the first boot**, asked on the console), then `osmo-racine-live poser`: `/` read-only,
     sessions in RAM, written at shutdown with the `/home` passphrase (6.7).
 
 GRUB: `/EFI/ubuntu` (prefix compiled into the signed GRUB), `GRUB_TIMEOUT 5`, os-prober
@@ -606,8 +607,11 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
 - **Two passphrases:**
   - **`/home`** opens `/home` at boot (`unlock-home`) **and validates the session** at
     shutdown;
-  - **the black box's**, different (`sudo osmo-diffs phrase` refuses the `/home` one), only
-    reads the box back. It is never asked at shutdown: the machine writes with the public key.
+  - **the black box's**, different (the `/home` one is refused), **chosen at the first boot**
+    of the installed system (`osmo-diffs-init.service`, on the console, right after the
+    `/home` question; `sudo osmo-diffs phrase` changes it). It only reads the box back and is
+    never asked at shutdown: the machine writes with the public key. The private key is
+    never written in clear.
 - **Every session runs in RAM** (`osmo-racine-live`): `/` through overlayroot
   (`/media/root-ro` read-only, the writes in `/media/root-rw`), `/home` through `unlock-home`
   (the volume read-only on `/media/home-ro`, the writes in `/media/home-rw`). Everything the
@@ -619,6 +623,9 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   deletions, a `PRET` mark is synced (the commit point), then the files are moved into place
   one rename each (`osmo-valider-appliquer`). A cut before `PRET` leaves the disk as it was; a
   cut after is finished at the next boot (initramfs for `/`, `unlock-home` for `/home`).
+  **Only what changed since the last write is staged** (the RAM layer is compared with the
+  disk, by content). Every step is appended to **`/var/log/osmo-session.log`** on the disk
+  (journald is volatile): a write that failed says why at the next boot.
   **No passphrase** (Enter, 60 s, three refusals): the RAM is dropped and a **red warning** is
   forced on tty1 (Plymouth quit) and held 10 s. A red reminder also shows at login and in
   every terminal while the session is not validated.
@@ -627,13 +634,21 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   charges, then the flash; a `flash.gif` in `/usr/local/share/osmo-operator` replaces the
   drawing), the screen **stays white** and the machine shuts down underneath - the session is
   wiped, no question, no banner. **No**: the `/home` passphrase is required; right, a
-  **full-screen `cmatrix` « REC »** and the machine shuts down, the session being written (the
-  console shows the same `cmatrix -M REC` during the write). The console asks the same at
+  **full-screen `cmatrix`** and the machine shuts down, the session being written (the
+  console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
+  light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
 - **Writing during the session**: `osmo-valider-session --maintenant` (or
-  `sudo osmo-racine-live ecrire`), same passphrase - the session so far is written at once
-  (same atomic write, recorded in the box as `ecrit`); a power cut or a forgotten passphrase
-  then only loses what came after. `osmo-racine-live etat` / `changements` show where things
+  `sudo osmo-racine-live ecrire`), same passphrase - **that moment** is written: what changed
+  since the last write, not the whole session again (same atomic write, recorded in the box
+  as `ecrit`); a power cut or a forgotten passphrase then only loses what came after.
+- **Undoing writes, the last first**: a commit destroys nothing - what it replaces or deletes
+  is moved to `/.osmo-retour/<date>` (and `/home/.osmo-retour/<date>`).
+  `sudo osmo-racine-live retours` lists the commits, `sudo osmo-racine-live defaire`
+  (launcher « Defaire la derniere ecriture », `osmo-valider-session --defaire`, `/home`
+  passphrase) undoes the last one on the disk, again for the one before, and so on upwards
+  (`OSMO_RETOUR_MAX`, 20 by default). **The black box loses nothing**: the undone commit's
+  record stays, and a `defait` record is added with what was removed. `osmo-racine-live etat` / `changements` show where things
   stand. `lock-home` refuses while `/home` has unwritten changes (`--perdre` to drop them).
 - **Updating the system** goes through the session too (6.8): validate, or `ecrire`.
 - **The black box** (`osmo-diffs`, `/var/lib/osmo-diffs`): **one record per session,
@@ -642,14 +657,23 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   links one line each, `/tmp /var/tmp /var/cache /var/log/journal` left out, and `/home` left
   out by default (its diffs would be readable with the box's passphrase; `OSMO_DIFFS_DIRS` /
   `OSMO_DIFFS_EXCLUS` in `/etc/default/osmo-diffs`). Each record is encrypted with `age` for
-  the box's public key; the private key is encrypted with the box's passphrase (a login
-  reminder until it is set). Only the names (number, date, mode) and sizes are readable.
+  the box's public key; the private key is encrypted with the box's passphrase. Only the
+  names (number, date, mode) and sizes are readable. **Read-only for everybody**, the session
+  account included: the partition is mounted read-only, only `osmo-diffs` writes to it, one
+  record at a time (remount for the write), and a written record is immutable (`chattr +i`).
   Read: `osmo-diffs voir [N]`, or the GRUB entry **« consulter la boite noire (sans
   demarrer) »** (initramfs: the box's passphrase, every record with `more`, then a restart).
   Each record carries the SHA-256 of the previous one (`CHAINE ROMPUE`); `osmo-diffs verifier`
   at boot catches a truncated end for what a validated session had seen. Remote copy:
   `sudo osmo-diffs copie-poser user@host` (the other end only ADDS files,
   `osmo-diffs-recevoir`).
+- **Phones (Network Monitor)**: `/opt/GSM/network_monitoring` is in the image
+  (`iso_modules/51-network-monitoring.sh`), with the Alpine package of the application's **latest
+  release** in `/opt/user_interface/pmos/apk` - asked to GitHub at build time, never a version written
+  in the script. `osmo-pmos-setup` installs it in the postmarketOS VM at its first start, and takes a
+  newer release when there is one. On the node, osmo-gtk's tab **« Telephones »** (invitation by
+  QR code, accounts, proxy, Bluetooth line) drives the association service
+  (`tools/osmo-inscription.py`, port 8088).
 - **Without « Encrypt system »** there is no passphrase to validate with: `osmo-racine-live`
   leaves `/` read-write, and says so.
 - **Limits**: root can always remount `/media/root-ro` read-write or write the block device:

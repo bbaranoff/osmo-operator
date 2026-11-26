@@ -113,12 +113,15 @@ install -m 0755 "$_CH_SRC/osmo-diffs"             "$ROOTFS/usr/local/sbin/osmo-d
 # copies of another (forced command, add-only)
 install -m 0755 "$_CH_SRC/osmo-diffs-recevoir"    "$ROOTFS/usr/local/bin/osmo-diffs-recevoir"
 install -m 0644 "$DIR/services/osmo-diffs.service" "$ROOTFS/etc/systemd/system/osmo-diffs.service"
+# keys and passphrase of the box: at the first boot of the INSTALLED system
+# (enabled by Calamares, shellprocess-osmo.conf), never on the live key
+install -m 0644 "$DIR/services/osmo-diffs-init.service" "$ROOTFS/etc/systemd/system/osmo-diffs-init.service"
 install -d "$ROOTFS/etc/xdg/autostart" "$ROOTFS/etc/profile.d"
 cat > "$ROOTFS/etc/xdg/autostart/osmo-diffs-rappel.desktop" <<'RAPPEL'
 [Desktop Entry]
 Type=Application
 Name=osmo-diffs : phrase de la boite noire
-Exec=sh -c '[ ! -f /var/lib/osmo-diffs/cle.pub ] || [ -f /var/lib/osmo-diffs/cle.chiffree ] || notify-send -u critical "Boite noire sans phrase" "Dans un terminal : sudo osmo-diffs phrase (une phrase DIFFERENTE de celle de /home)"'
+Exec=sh -c '! mountpoint -q /var/lib/osmo-diffs || [ -f /var/lib/osmo-diffs/cle.pub ] || notify-send -u critical "Boite noire non initialisee" "Sa phrase est demandee au demarrage (ou : sudo osmo-diffs init), DIFFERENTE de celle de /home"'
 OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
@@ -148,9 +151,19 @@ cat > "$ROOTFS/usr/local/share/applications/osmo-ecrire-session.desktop" <<'LANC
 [Desktop Entry]
 Type=Application
 Name=Ecrire la session maintenant
-Comment=Phrase de /home : la session est ecrite sur le disque tout de suite (contre une coupure de courant)
+Comment=Phrase de /home : ce qui a change depuis la derniere ecriture est ecrit sur le disque tout de suite
 Exec=/usr/local/bin/osmo-valider-session --maintenant
 Icon=document-save-as
+Terminal=false
+Categories=System;
+LANCEUR
+cat > "$ROOTFS/usr/local/share/applications/osmo-defaire-session.desktop" <<'LANCEUR'
+[Desktop Entry]
+Type=Application
+Name=Defaire la derniere ecriture
+Comment=Phrase de /home : la derniere ecriture sur le disque est defaite (puis la precedente...). La boite noire garde tout.
+Exec=/usr/local/bin/osmo-valider-session --defaire
+Icon=edit-undo
 Terminal=false
 Categories=System;
 LANCEUR

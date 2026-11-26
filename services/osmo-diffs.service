@@ -6,7 +6,7 @@ Documentation=file:/usr/local/sbin/osmo-diffs
 # /home (the session account's reference copy), the box partition and the
 # overlay of a root session are still mounted.
 RequiresMountsFor=/var/lib/osmo-diffs
-After=local-fs.target home.mount unlock-home.service network-online.target
+After=local-fs.target home.mount unlock-home.service network-online.target osmo-diffs-init.service
 # the remote copy (osmo-diffs copie-poser) is sent at shutdown: the network
 # must still be up - stopped before it, since started after it
 Wants=network-online.target
@@ -17,6 +17,8 @@ Type=oneshot
 RemainAfterExit=yes
 # at boot: the box still holds what nirvana saw last (truncation check)
 ExecStart=-/usr/local/sbin/osmo-diffs verifier
+# read-only for everybody: only osmo-diffs writes, one record at a time
+ExecStart=-/usr/local/sbin/osmo-diffs fermer
 ExecStop=/usr/local/sbin/osmo-diffs enregistrer
 TimeoutStopSec=600
 

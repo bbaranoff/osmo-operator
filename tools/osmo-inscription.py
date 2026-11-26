@@ -611,6 +611,170 @@ def numeros_banc():
     return NUMEROS["motif"]
 
 
+# ── LE BANC, LU PAR UN TELEPHONE ASSOCIE (page « Banc » de l appli) ──────────
+# Une bonne partie de ce que montre osmo-gtk sur le noeud, pour l appli, par
+# le reseau : la chaine (dsp, qemu, osmocon, mobile, pont), le service du banc,
+# les demons du coeur, les abonnes du HLR, la fin d un journal, un « show » sur
+# un VTY, demarrer / arreter le banc. Il faut un compte (user + mdp, comme le
+# proxy) ; la console ne laisse passer que la lecture.
+#   GET  /banc/etat?user=&mdp=
+#   GET  /banc/journal?user=&mdp=&demon=mobile|pont|...|BTS|BSC|...&n=120
+#   POST /banc/vty     {user, mdp, demon, commande}      (show ... / list)
+#   POST /banc/action  {user, mdp, action: demarrer|arreter}   (osmo-banc.service)
+BANC_RUNDIR = os.environ.get("RUNDIR", "/tmp/c54x-pont")
+BANC_CHAINE = ("dsp", "qemu", "osmocon", "mobile", "pont")
+BANC_COEUR = (("HLR", "osmo-hlr", 4258), ("MSC", "osmo-msc", 4254), ("BSC", "osmo-bsc", 4242),
+              ("STP", "osmo-stp", 4239), ("MGW", "osmo-mgw", 4243), ("SGSN", "osmo-sgsn", 4245),
+              ("GGSN", "osmo-ggsn", 4260), ("PCU", "osmo-pcu", 4240), ("BTS", "osmo-bts-trx", 4241),
+              ("SIP", "osmo-sip-connector", 4256), ("SMSC", "proto-smsc-daemon", 0), ("PBX", "asterisk", 0))
+BANC_LOGS = os.environ.get("OSMO_CORE_LOGS", "/var/log/osmocom")
+
+
+def _banc_vivant(nom):
+    try:
+        with open(os.path.join(BANC_RUNDIR, nom + ".pid")) as f:
+            os.kill(int(f.read().strip()), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _banc_procs():
+    noms = set()
+    try:
+        for p in os.listdir("/proc"):
+            if p.isdigit():
+                try:
+                    with open("/proc/%s/comm" % p) as f:
+                        noms.add(f.read().strip())
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return noms
+
+
+def _banc_vty(port, commande, delai=3.0):
+    invite = re.compile(rb"\r?\n?[\w.-]+(\([\w-]+\))?[>#] $")
+
+    def lire(sk):
+        buf, fin = b"", time.monotonic() + delai
+        while time.monotonic() < fin:
+            try:
+                d = sk.recv(65536)
+            except socket.timeout:
+                continue
+            if not d:
+                break
+            buf += d
+            if invite.search(buf):
+                break
+        return buf
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=delai) as sk:
+            sk.settimeout(0.3)
+            lire(sk)
+            sk.sendall(commande.encode() + b"\n")
+            r = lire(sk)
+            sk.sendall(b"exit\n")
+    except OSError as e:
+        return "VTY %d : %s" % (port, e)
+    lignes = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", r.decode("utf-8", "replace").replace("\r", "")).split("\n")
+    if lignes and lignes[0].strip() == commande:                 # l echo de la commande
+        lignes = lignes[1:]
+    if lignes and re.match(r"^[\w.-]+(\([\w-]+\))?[>#] ?$", lignes[-1]):   # l invite qui suit
+        lignes = lignes[:-1]
+    return "\n".join(lignes)
+
+
+def banc_etat():
+    procs = _banc_procs()
+    coeur = [{"nom": n, "processus": p, "port": port, "actif": p[:15] in procs} for n, p, port in BANC_COEUR]
+    abonnes = []
+    if any(c["nom"] == "HLR" and c["actif"] for c in coeur):
+        for l in _banc_vty(4258, "show subscribers all").splitlines():
+            m = re.match(r"\s*(\d+)\s+(\S+)\s+(\d{6,15})\s+(\S+)", l)
+            if m:
+                abonnes.append({"id": m.group(1), "msisdn": m.group(2), "imsi": m.group(3), "imei": m.group(4)})
+    try:
+        actif = subprocess.run(["systemctl", "is-active", "osmo-banc.service"], capture_output=True, text=True,
+                               timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        actif = "?"
+    return {"ok": True, "noeud": socket.gethostname(), "banc": actif,
+            "chaine": {n: _banc_vivant(n) for n in BANC_CHAINE}, "coeur": coeur, "abonnes": abonnes}
+
+
+def banc_vty(demon, commande):
+    commande = " ".join(str(commande or "").split())
+    if not re.match(r"^(show|list)\b", commande) or len(commande) > 200:
+        return {"ok": False, "error": "seules les commandes « show ... » passent (lecture seule)"}
+    port = next((p for n, _x, p in BANC_COEUR if n == demon), 0)
+    if demon == "mobile":
+        port = int(os.environ.get("OSMO_MOBILE_VTY", "4247"))
+    if not port:
+        return {"ok": False, "error": "pas de VTY pour « %s »" % demon}
+    return {"ok": True, "demon": demon, "commande": commande, "sortie": _banc_vty(port, commande)}
+
+
+def banc_journal(demon, n):
+    proc = next((p for nom, p, _x in BANC_COEUR if nom == demon), None)
+    if demon in BANC_CHAINE:
+        chemin = os.path.join(BANC_RUNDIR, demon + ".log")
+    elif proc:
+        chemin = os.path.join(BANC_LOGS, proc + ".log")
+    else:
+        return {"ok": False, "error": "journal inconnu"}
+    try:
+        n = max(1, min(int(n or 200), 1000))
+    except ValueError:
+        n = 200
+    try:
+        with open(chemin, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 200 * n))
+            lignes = f.read().decode("utf-8", "replace").splitlines()[-n:]
+    except OSError:
+        lignes = []
+        if proc:
+            try:
+                lignes = subprocess.run(["journalctl", "-u", proc, "-n", str(n), "--no-pager", "-o", "cat"],
+                                        capture_output=True, text=True, timeout=10).stdout.splitlines()
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    return {"ok": True, "demon": demon, "lignes": [re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", l) for l in lignes]}
+
+
+def banc_action(action):
+    verbe = {"demarrer": "start", "arreter": "stop"}.get(action)
+    if not verbe:
+        return {"ok": False, "error": "action inconnue (demarrer | arreter)"}
+    try:
+        r = subprocess.run(["systemctl", "--no-block", verbe, "osmo-banc.service"], capture_output=True, text=True,
+                           timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": r.returncode == 0, "error": r.stderr.strip()}
+
+
+def banc_requete(chemin, d):
+    """(code HTTP, reponse) d une requete /banc/... ; d porte user et mdp."""
+    if not proxy_compte(d.get("user"), d.get("mdp")):
+        return 403, {"ok": False, "error": "compte inconnu : associez d abord ce telephone"}
+    if chemin == "/banc/etat":
+        return 200, banc_etat()
+    if chemin == "/banc/journal":
+        return 200, banc_journal(str(d.get("demon") or ""), d.get("n"))
+    if chemin == "/banc/vty":
+        return 200, banc_vty(str(d.get("demon") or ""), d.get("commande"))
+    if chemin == "/banc/action":
+        return 200, banc_action(str(d.get("action") or ""))
+    return 404, {"ok": False, "error": "inconnu"}
+
+
 class H(BaseHTTPRequestHandler):
     def _rep(self, st, obj):
         b = json.dumps(obj).encode()
@@ -622,6 +786,11 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path.startswith("/banc/"):
+            # le banc, lu par un telephone associe (etat, journal)
+            if u.path.rstrip("/") not in ("/banc/etat", "/banc/journal"):
+                return self._rep(404, {"ok": False, "error": "inconnu"})
+            return self._rep(*banc_requete(u.path.rstrip("/"), {k: v[0] for k, v in parse_qs(u.query).items()}))
         if u.path.rstrip("/") == "/numeros":
             # les numeros du banc, pour le clavier natif des telephones
             return self._rep(200, {"ok": True, "motif": numeros_banc()})
@@ -774,6 +943,8 @@ class H(BaseHTTPRequestHandler):
             return self._admin(chemin, d)
         if chemin.startswith("/proxy"):
             return self._proxy(chemin, d)
+        if chemin.startswith("/banc/"):
+            return self._rep(*banc_requete(chemin, d if isinstance(d, dict) else {}))
         if chemin != "/inscription":
             return self._rep(404, {"ok": False, "error": "inconnu"})
         st, rep = inscrire(d.get("code"), d.get("pseudo"))

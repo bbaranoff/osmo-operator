@@ -17,6 +17,9 @@ operator starts the bench (desktop icon, `launch.sh`, or `systemctl`).
 | `osmo-egprs-web.service` | web operations console (dashboard, port 8080) |
 | `osmo-egprs-web-install.service` | installs/refreshes the dashboard runtime, unit and TLS certificate (`/opt/GSM/osmo-egprs-web/install-web-service.sh`) |
 | `osmo-reglages.service` | settings web page for the Osmocom stack (`tools/osmo-reglages.py`, http://127.0.0.1:8090/) |
+| `osmo-inscription.service` | association of the phones (Network Monitor) with this node, port 8088: invitations and QR code, SIP accounts in Asterisk, Bluetooth line, the bench read from the phone (`tools/osmo-inscription.py`); driven from osmo-gtk, tab « Telephones » |
+| `osmo-fin-session.service` | installed bench: at shutdown the `/home` passphrase writes the session to the disk, otherwise it is wiped (`osmo-racine-live fin`) |
+| `osmo-diffs.service` / `osmo-diffs-init.service` | the black box: read-only for everybody, keys and passphrase at the first boot of the installed system |
 | `osmo-supplements.service` | first boot: installs the supplements chosen in the installer (`tools/osmo-supplements-firstboot.sh`) |
 | `open5gs-webui.service` | Open5GS WebUI, 4G subscriber console (port 8999, MongoDB) |
 | `80-osmo-operator.preset` | systemd preset: all project units disabled at boot |

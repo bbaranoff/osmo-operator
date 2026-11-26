@@ -5,6 +5,10 @@
 #   osmo-valider-session           ask the passphrase (zenity, or the terminal)
 #   osmo-valider-session --maintenant  write the session to the disk NOW
 #                                  (osmo-racine-live ecrire), same passphrase
+#                                  (what changed since the last write)
+#   osmo-valider-session --defaire undo the LAST write on the disk
+#                                  (osmo-racine-live defaire); again for the
+#                                  one before
 #   osmo-valider-session --fin [poweroff|reboot]  « Tout oublier ? » Yes: the
 #                                  flash, the session is wiped; No: the /home
 #                                  passphrase, the session is kept - then shutdown
@@ -16,10 +20,17 @@
 set -u
 RL=/usr/local/sbin/osmo-racine-live
 ACTION=valider
+TITRE="Garder la session : phrase de /home"
 OK_TXT="Session validee : elle sera ecrite sur le disque a l extinction."
+KO_TXT="Phrase refusee (ou ecriture en echec) : rien n est garde, la session sera EFFACEE a l extinction."
 if [ "${1:-}" = --maintenant ]; then
     ACTION=ecrire
-    OK_TXT="Session ecrite sur le disque. La suite sera validee ou effacee a l extinction."
+    OK_TXT="Ecrit sur le disque : ce qui a change depuis la derniere ecriture. La suite sera validee ou effacee a l extinction."
+elif [ "${1:-}" = --defaire ]; then
+    ACTION=defaire
+    TITRE="Defaire la derniere ecriture : phrase de /home"
+    OK_TXT="Derniere ecriture defaite sur le disque (visible au prochain demarrage). Recommencer pour la precedente. La boite noire garde tout."
+    KO_TXT="Phrase refusee, ou rien a defaire : le disque n a pas change."
 fi
 live() { [ "$(findmnt -no FSTYPE / 2>/dev/null)" = overlay ] && mountpoint -q /media/root-ro 2>/dev/null; }
 if ! live; then
@@ -44,8 +55,9 @@ matrice() {   # a full-screen cmatrix in its own terminal; prints its pid
     command -v cmatrix >/dev/null 2>&1 || return 0
     for t in xterm gnome-terminal; do command -v "$t" >/dev/null 2>&1 && break; t=""; done
     case "$t" in
-        xterm) xterm -fullscreen -bg black -fg green -e cmatrix -b -u 3 -M REC >/dev/null 2>&1 & echo $! ;;
-        gnome-terminal) gnome-terminal --full-screen --wait -- cmatrix -b -u 3 -M REC >/dev/null 2>&1 & echo $! ;;
+        # (no -M: cmatrix 2.0 does not have it, prints its usage and leaves)
+        xterm) xterm -fullscreen -T REC -bg black -fg green -fa Monospace -fs 14 +sb -e cmatrix -b -u 3 >/dev/null 2>&1 & echo $! ;;
+        gnome-terminal) gnome-terminal --full-screen --hide-menubar --wait -- cmatrix -b -u 3 >/dev/null 2>&1 & echo $! ;;
     esac
 }
 if [ "${1:-}" = --fin ]; then
@@ -92,7 +104,7 @@ Elle peut aussi etre donnee a l extinction, sur la console.' || exit 0
 fi
 
 if graphique; then
-    p="$(zenity --password --title "Garder la session : phrase de /home")" || exit 0
+    p="$(zenity --password --title "$TITRE")" || exit 0
     if [ "$(id -u)" = 0 ]; then
         printf '%s\n' "$p" | "$RL" "$ACTION" --stdin >/dev/null 2>&1; rc=$?
     else
@@ -104,7 +116,7 @@ if graphique; then
             --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>"
     else
         zenity --error --no-wrap --title "osmo-operator" \
-            --text '<span foreground="red" weight="bold">Phrase refusee (ou ecriture en echec) : rien n est garde, la session sera EFFACEE a l extinction.</span>'
+            --text "<span foreground=\"red\" weight=\"bold\">$KO_TXT</span>"
     fi
     exit "$rc"
 fi

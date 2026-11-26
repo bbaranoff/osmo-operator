@@ -1,0 +1,24 @@
+[Unit]
+Description=osmo-operator - boite noire : cles et phrase au premier demarrage
+Documentation=file:/usr/local/sbin/osmo-diffs
+# FIRST BOOT of the installed system: the box has no key yet. Its passphrase
+# is chosen here, on the text console, right after the /home one was asked
+# (unlock-home) and before any session opens; the age identity is written
+# encrypted with it, never in clear. Nothing given: asked again next boot.
+ConditionPathExists=!/var/lib/osmo-diffs/cle.pub
+# only on an installed bench (the live key has no box)
+ConditionPathIsMountPoint=/var/lib/osmo-diffs
+RequiresMountsFor=/var/lib/osmo-diffs
+After=local-fs.target unlock-home.service plymouth-start.service keyboard-setup.service console-setup.service
+Before=osmo-diffs.service osmo-fin-session.service systemd-user-sessions.service display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/osmo-diffs init --console
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

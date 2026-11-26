@@ -35,6 +35,30 @@ else
     fi
 fi
 
+# ── What the BUILDING tree has and origin does not (yet) ────────────────────
+# The image is built from this working tree (configs/, services/, iso_modules/
+# are read from it): the copy in /opt/GSM/osmo-operator must not be older than
+# it. Every file that differs from the clone - modified, new, or committed but
+# not pushed - is laid over it. OSMO_ISO_LOCAL_TREE=0 keeps the clone as is.
+# NOTE: on the installed machine osmo-update goes back to the branch
+# (reset --hard): what is not pushed lives until the first update.
+if [ "${OSMO_ISO_LOCAL_TREE:-1}" = "1" ] && [ -d "$EGPRS_TREE" ] && [ "${OSMO_ISO_INHERITED:-0}" != "1" ] \
+        && git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    _loc=0
+    while IFS= read -r -d '' _f; do
+        [ -e "$DIR/$_f" ] || [ -L "$DIR/$_f" ] || continue
+        [ -d "$DIR/$_f" ] && [ ! -L "$DIR/$_f" ] && continue
+        cmp -s "$DIR/$_f" "$EGPRS_TREE/$_f" 2>/dev/null && continue
+        mkdir -p "$(dirname "$EGPRS_TREE/$_f")"
+        cp -a --remove-destination "$DIR/$_f" "$EGPRS_TREE/$_f" && _loc=$((_loc + 1))
+    done < <(git -C "$DIR" ls-files -z -m -o --exclude-standard 2>/dev/null
+             git -C "$DIR" diff -z --name-only "origin/$EGPRS_BRANCH" 2>/dev/null)
+    if [ "$_loc" -gt 0 ]; then
+        echo -e "  ${GREEN}✓${NC} arbre de construction : ${CYAN}${_loc}${NC} fichier(s) en avance sur ${EGPRS_BRANCH} poses dans l image"
+        echo -e "  ${YELLOW}!${NC} a pousser sur ${EGPRS_BRANCH} : sinon osmo-update les remet a l etat du depot"
+    fi
+fi
+
 # ── tests: /opt/GSM/tests from GitHub (bbaranoff), WITH its .git ─────────────
 # Same logic as osmo-operator: clone next to the tree, then swap, so that a
 # missing network leaves the existing image tree in place.

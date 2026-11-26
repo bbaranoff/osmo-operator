@@ -4,6 +4,10 @@ INST_REGISTER verify "Verification de l'installation"
 INST_DEPS[verify]="binaires configs"
 INST_ROOT[verify]=0
 
+inst_verify_done() {
+    local b
+    for b in osmo-stp osmo-hlr osmo-msc osmo-mgw osmo-bsc; do have_cmd "$b" || return 1; done
+}
 inst_verify_run() {
     local missing="" b
     for b in osmo-stp osmo-hlr osmo-msc osmo-mgw osmo-bsc; do have_cmd "$b" || missing="$missing $b"; done

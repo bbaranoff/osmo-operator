@@ -33,10 +33,18 @@
 #   osmo-racine-live ecrire       write the session to the disk NOW, same
 #                                 passphrase (--stdin too): a power cut then
 #                                 loses only what came after
+#                                 (only what changed since the last write
+#                                 is written: that moment, not the session)
+#   osmo-racine-live retours      the commits that can be undone
+#   osmo-racine-live defaire      undo the LAST commit on the disk; again for
+#                                 the one before... The black box keeps
+#                                 everything and records what was removed
 #   osmo-racine-live annuler      forget the validation: wiped at shutdown
 #   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
 #                                 no question at shutdown
 #   osmo-racine-live fin          at shutdown (osmo-fin-session.service)
+#   osmo-racine-live actualiser   rebuild the initramfs after an update of
+#                                 these scripts (from overlayroot-chroot)
 #   osmo-racine-live retirer      back to an ordinary read-write / (from
 #                                 « sudo overlayroot-chroot osmo-racine-live retirer »)
 #
@@ -81,7 +89,7 @@ TIMEOUT="${CRYPTHOME_TIMEOUT:-60}"
 # Never written to the disk: the RAM itself, and what overlayroot or a root
 # session rewrites on purpose (fstab of the overlay, root's keyring replaced
 # by a directory in RAM when /home is closed - unlock-home).
-EXCLUS="/tmp /var/tmp /etc/fstab"
+EXCLUS="/tmp /var/tmp /etc/fstab /var/log/osmo-session.log /.osmo-valider /.osmo-retour /home/.osmo-valider /home/.osmo-retour"
 for _l in $CRYPTHOME_ROOT_LINKS; do EXCLUS="$EXCLUS /root/$_l"; done
 
 log()   { echo "osmo-racine-live : $*"; }
@@ -112,11 +120,29 @@ opaque() {
 #   /     overlayroot (initramfs)
 #   /home unlock-home: the LUKS2 volume read-only on /media/home-ro, a RAM
 #         layer over it on /home - /home goes through the validation too
+# The directories are read from the mounted overlay itself. An overlay keeps
+# working when the mounts under it are unmounted: the paths are then gone
+# and the layer CANNOT be written - said loudly (couches_manquantes), never
+# skipped in silence.
 HOME_HAUT=/media/home-rw/overlay
 HOME_BAS=/media/home-ro
+option_montage() {   # option_montage MOUNTPOINT KEY
+    findmnt -no OPTIONS "$1" 2>/dev/null | tr ',' '\n' | sed -n "s#^$2=##p" | head -1
+}
+home_overlay() { [ "$(findmnt -no FSTYPE /home 2>/dev/null)" = overlay ]; }
 couches() {
+    local h b
     echo "$HAUT $BAS /"
-    mountpoint -q "$HOME_BAS" 2>/dev/null && [ -d "$HOME_HAUT" ] && echo "$HOME_HAUT $HOME_BAS /home"
+    if home_overlay; then
+        h="$(option_montage /home upperdir)"; b="$(option_montage /home lowerdir)"
+        h="${h%/}"; b="${b%/}"
+        [ -n "$h" ] && [ -n "$b" ] && [ -d "$h" ] && mountpoint -q "$b" 2>/dev/null && echo "$h $b /home"
+    fi
+}
+# /home is a RAM layer but its directories are out of reach
+couches_manquantes() {
+    home_overlay || return 1
+    [ "$(couches | wc -l)" -lt 2 ]
 }
 plein() { [ "$1" = / ] && printf '%s' "$2" || printf '%s%s' "$1" "$2"; }
 
@@ -135,6 +161,31 @@ changements() {
     couches | while read -r h b pre; do changements_couche "$h" "$pre"; done
 }
 
+# ── the session's own journal ────────────────────────────────────────────────
+# journald is volatile on an installed bench: what a shutdown did would be
+# gone at the next boot. Every step is kept in /run, then appended to
+# /var/log/osmo-session.log ON THE DISK (journal_disque), whatever the outcome.
+TRACE="$ETAT/journal"
+JOURNAL_DISQUE=/var/log/osmo-session.log
+trace() {
+    install -d -m 0700 "$ETAT" 2>/dev/null
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$TRACE" 2>/dev/null
+    echo "osmo-racine-live : $*"
+}
+journal_disque() {
+    [ -s "$TRACE" ] || return 0
+    local f="$BAS$JOURNAL_DISQUE"
+    if mount -o remount,rw "$BAS" 2>/dev/null; then
+        cat "$TRACE" >> "$f" 2>/dev/null && : > "$TRACE"
+        # the last 2000 lines are enough
+        if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 4000 ]; then
+            tail -n 2000 "$f" > "$f.nouv" 2>/dev/null && mv -f "$f.nouv" "$f"
+        fi
+        sync
+        mount -o remount,ro "$BAS" 2>/dev/null
+    fi
+}
+
 # ── at shutdown, on the text console ─────────────────────────────────────────
 console_texte() {
     if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
@@ -143,13 +194,25 @@ console_texte() {
     command -v chvt >/dev/null 2>&1 && chvt 1 2>/dev/null
     printf '\033[2J\033[H' > "$CONSOLE" 2>/dev/null
 }
-# the console's « forget everything » flash: reverse video, three times
+# the console's « forget everything »: the stick's red light blinks, faster
+# and faster, then the white flash (reverse video)
 flash_console() {
-    local i
+    local i d
+    printf '\033[?25l' > "$CONSOLE" 2>/dev/null
+    for d in 0.30 0.26 0.22 0.18 0.14 0.11 0.08 0.06 0.05 0.04 0.04 0.03; do
+        printf '\033[2J\033[6;1H\033[1;31m%s\n%s\n%s\033[0m\n%s\n%s\n%s\n%s\n\n   regardez la lumiere' \
+            '        ###' '       #####' '        ###' '        | |' '        | |' '        |=|' '        |_|' > "$CONSOLE" 2>/dev/null
+        sleep "$d"
+        printf '\033[2J\033[6;1H\n\n\n%s\n%s\n%s\n%s\n\n   regardez la lumiere' \
+            '        | |' '        | |' '        |=|' '        |_|' > "$CONSOLE" 2>/dev/null
+        sleep "$d"
+    done
+    printf '\033[2J' > "$CONSOLE" 2>/dev/null
     for i in 1 2 3; do
         printf '\033[?5h' > "$CONSOLE" 2>/dev/null; sleep 0.15
         printf '\033[?5l' > "$CONSOLE" 2>/dev/null; sleep 0.1
     done
+    printf '\033[?25h' > "$CONSOLE" 2>/dev/null
 }
 dire() { printf '%s\n' "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
 dire_rouge() { rouge "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
@@ -174,60 +237,151 @@ lire_console() {   # lire_console VAR PROMPT : one * per key, timeout = Enter
 }
 
 # ── the commit: stage, mark, apply ───────────────────────────────────────────
-# appliquer_couche UPPER LOWER PREFIX : one layer onto its own file system.
+# appliquer_couche UPPER LOWER PREFIX ID : one layer onto its own file system.
 # The journal lives on that file system, so the final moves are renames.
-appliquer_couche() {
-    local h="$1" b="$2" pre="$3" src libre besoin j="$2/.osmo-valider" r p
-    [ -d "$h" ] && [ -n "$(ls -A "$h" 2>/dev/null)" ] || return 0
+#
+# ONLY WHAT CHANGED SINCE THE LAST WRITE is staged: the RAM layer is compared
+# with the disk under it (rsync --compare-dest), so « ecrire » during a
+# session writes that moment, and the next write - a second « ecrire », or
+# the shutdown - only what came after. What a commit replaces or deletes is
+# kept on the disk (.osmo-retour/ID): commits can be undone, the last first.
+RETOUR_MAX="${OSMO_RETOUR_MAX:-20}"
+NB_ECRITS=0
+existe() { [ -e "$1" ] || [ -L "$1" ]; }
+remonter_rw() {
+    local b="$1" src i
     src="$(findmnt -no SOURCE "$b")"
-    [ -n "$src" ] && blockdev --setrw "$src" 2>/dev/null
-    mount -o remount,rw "$b" || { log "remontage en ecriture de $b impossible"; return 1; }
+    for i in 1 2 3; do
+        [ -n "$src" ] && blockdev --setrw "$src" 2>/dev/null
+        mount -o remount,rw "$b" 2>>"$TRACE" && return 0
+        sleep 1
+    done
+    return 1
+}
+appliquer_couche() {
+    local h="$1" b="$2" pre="$3" id="$4" libre besoin j="$2/.osmo-valider" r p q rc nf ns
+    if [ ! -d "$h" ]; then trace "$pre : couche RAM $h introuvable - RIEN n est ecrit pour $pre"; return 1; fi
+    [ -n "$(ls -A "$h" 2>/dev/null)" ] || { trace "$pre : couche RAM vide"; return 0; }
+    remonter_rw "$b" || { trace "$pre : remontage en ecriture de $b impossible"; return 1; }
     rm -rf "$j"
     besoin=$(( $(du -sk -x "$h" 2>/dev/null | cut -f1) + 102400 ))
     libre=$(df -k --output=avail "$b" | tail -1 | tr -d ' ')
     if [ "$libre" -lt "$besoin" ]; then
-        log "$pre : place insuffisante ($((besoin / 1024)) Mo requis, $((libre / 1024)) libres)"
+        trace "$pre : place insuffisante ($((besoin / 1024)) Mo requis, $((libre / 1024)) libres)"
         mount -o remount,ro "$b"; return 1
     fi
     install -d -m 0700 "$j/files"
-    : > "$j/suppr"
-    # deletions: whiteouts, and opaque directories (replaced as a whole)
+    : > "$j/suppr"; : > "$j/crees"; : > "$j/dirs"
+    printf '%s\n' "$id" > "$j/id"
+    # deletions: whiteouts over something that is on the disk; and for a
+    # directory made opaque, what the disk has in it and the session has not
     ( cd "$h" && find . -mindepth 1 \( -type c -o -type d \) -print0 ) | while IFS= read -r -d '' r; do
         p="${r#.}"
         case "$p" in *$'\n'*) continue ;; esac
         exclu "$(plein "$pre" "$p")" && continue
-        if whiteout "$h$p" || { [ -d "$h$p" ] && opaque "$h$p"; }; then
-            printf '%s\n' "$p" >> "$j/suppr"
+        if whiteout "$h$p"; then
+            existe "$b$p" && printf '%s\n' "$p" >> "$j/suppr"
+        elif [ -d "$h$p" ] && opaque "$h$p" && [ -d "$b$p" ] && [ ! -L "$b$p" ]; then
+            ( cd "$b$p" && find . -mindepth 1 -print0 ) | while IFS= read -r -d '' q; do
+                q="${q#.}"
+                case "$q" in *$'\n'*) continue ;; esac
+                existe "$h$p$q" || printf '%s\n' "$p$q" >> "$j/suppr"
+            done
         fi
     done
-    # the staged copy: everything else, attributes, ACLs, xattrs and hard
-    # links kept - except overlayfs' own xattrs (opaque, origin, impure...):
-    # no overlay mark may reach the real disk
+    # the staged copy: what differs from the disk - attributes, ACLs, xattrs
+    # and hard links kept, except overlayfs' own xattrs (opaque, origin...):
+    # no overlay mark may reach the real disk. --checksum: same size and same
+    # second is not « unchanged ». rsync 24 = a file vanished
+    # while it was read (a service still stopping): not an error.
     ( cd "$h" && find . -mindepth 1 -print0 ) | while IFS= read -r -d '' r; do
         p="${r#.}"
         case "$p" in *$'\n'*) continue ;; esac
         exclu "$(plein "$pre" "$p")" && continue
         whiteout "$h$p" && continue
         printf '%s\0' "${p#/}"
-    done | rsync -aHAX --filter='-x trusted.overlay.*' --from0 --files-from=- "$h/" "$j/files/" \
-        || { log "$pre : copie incomplete - rien n est change"; rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1; }
+    done | rsync -aHAX --checksum --filter='-x trusted.overlay.*' --compare-dest="$b/" --from0 --files-from=- \
+               "$h/" "$j/files/" 2>>"$TRACE"
+    rc=$?
+    if [ "$rc" != 0 ] && [ "$rc" != 24 ]; then
+        trace "$pre : copie incomplete (rsync $rc) - rien n est change"
+        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+    fi
+    # directories: the old attributes of those that change, and the ones that
+    # are only there as parents (same on the disk, empty here) are dropped
+    ( cd "$j/files" && find . -mindepth 1 -depth -type d -print0 ) | while IFS= read -r -d '' r; do
+        p="${r#.}"
+        [ -d "$b$p" ] && [ ! -L "$b$p" ] || continue
+        if [ "$(stat -c '%a %u:%g' "$b$p")" = "$(stat -c '%a %u:%g' "$j/files$p")" ]; then
+            rmdir "$j/files$p" 2>/dev/null
+        else
+            printf '%s %s\n' "$(stat -c '%a %u:%g' "$b$p")" "$p" >> "$j/dirs"
+        fi
+    done
+    # what did not exist before: removed again by an undo
+    ( cd "$j/files" && find . -mindepth 1 -print0 ) | while IFS= read -r -d '' r; do
+        p="${r#.}"
+        existe "$b$p" || printf '%s\n' "$p" >> "$j/crees"
+    done
+    nf=$(find "$j/files" -mindepth 1 ! -type d | wc -l); ns=$(wc -l < "$j/suppr")
+    if [ "$nf" = 0 ] && [ "$ns" = 0 ] && [ ! -s "$j/crees" ] && [ ! -s "$j/dirs" ]; then
+        rm -rf "$j"; sync; mount -o remount,ro "$b" 2>/dev/null
+        trace "$pre : rien de nouveau depuis la derniere ecriture"
+        return 0
+    fi
     sync
     : > "$j/PRET"
     sync
-    "$APPLIQUER" "$b"
-    local rc=$?
+    "$APPLIQUER" "$b" >> "$TRACE" 2>&1
+    rc=$?
+    # the way back is bounded: the oldest commits can no longer be undone
+    if [ -d "$b/.osmo-retour" ]; then
+        ls -1 "$b/.osmo-retour" | sort | head -n -"$RETOUR_MAX" | while IFS= read -r q; do
+            rm -rf "$b/.osmo-retour/$q"
+        done
+    fi
+    sync
     mount -o remount,ro "$b" 2>/dev/null
+    trace "$pre : $nf fichier(s) ecrit(s), $ns suppression(s) (commit $id, code $rc)"
+    printf '%s\n' "$((nf + ns))" >> "$ETAT/nb"
     return $rc
 }
 
 # appliquer : every layer. Each one is atomic on its own file system; / is
-# written first, /home last.
+# written first, /home last. NB_ECRITS: what was really written.
 appliquer() {
-    local h b pre rc=0
+    local h b pre rc=0 id pris
+    # the commit's name: its date, never one already taken (two writes in
+    # the same second)
+    while :; do
+        id="$(date '+%Y%m%d-%H%M%S')"
+        pris=0
+        while read -r h b pre; do [ -e "$b/.osmo-retour/$id" ] && pris=1; done < <(couches)
+        [ "$pris" = 0 ] && break
+        sleep 1
+    done
+    install -d -m 0700 "$ETAT"; : > "$ETAT/nb"
+    if couches_manquantes; then
+        trace "/home : couche RAM hors d atteinte ($(option_montage /home upperdir)) - /home N EST PAS ecrit"
+        rc=1
+    fi
     while read -r h b pre; do
-        appliquer_couche "$h" "$b" "$pre" || rc=1
+        appliquer_couche "$h" "$b" "$pre" "$id" < /dev/null || rc=1
     done < <(couches)
+    NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
     return $rc
+}
+
+# ── the way back: commits, undone from the last one upwards ─────────────────
+# retours : ID LAYERS, oldest first
+retours() {
+    local h b pre d
+    couches | while read -r h b pre; do
+        for d in "$b"/.osmo-retour/*/FAIT; do
+            [ -f "$d" ] || continue
+            d="${d%/FAIT}"; printf '%s %s\n' "${d##*/}" "$pre"
+        done
+    done | sort | awk '{a[$1]=a[$1]" "$2} END{for(k in a) print k a[k]}' | sort
 }
 
 # ── black box: initramfs (read it instead of booting, finish a commit) ──────
@@ -268,8 +422,9 @@ case "$1" in prereqs) prereqs; exit 0;; esac
 CONSOLE=/dev/console
 TIMEOUT=120
 
-if [ -d "${rootmnt}/.osmo-valider" ] && [ -x /bin/osmo-valider-appliquer ]; then
-    echo "osmo-valider : reprise d une validation interrompue..." > "$CONSOLE"
+if { [ -d "${rootmnt}/.osmo-valider" ] || ls "${rootmnt}"/.osmo-retour/*/DEFAIRE >/dev/null 2>&1; } \
+        && [ -x /bin/osmo-valider-appliquer ]; then
+    echo "osmo-valider : reprise d une ecriture interrompue..." > "$CONSOLE"
     if mount -o remount,rw "${rootmnt}"; then
         /bin/osmo-valider-appliquer "${rootmnt}" > "$CONSOLE" 2>&1
         mount -o remount,ro "${rootmnt}"
@@ -419,7 +574,9 @@ EOF
         ;;
     etat)
         if live; then
-            echo "live : / en RAM ($(changements | wc -l) changement(s) dans la session)"
+            echo "live : / en RAM ($(changements | wc -l) chemin(s) dans la couche RAM de la session)"
+            couches_manquantes && rouge "/home : couche RAM HORS D ATTEINTE - /home ne pourra pas etre ecrit"
+            echo "retours possibles : $(retours | wc -l) commit(s) (osmo-racine-live retours)"
             if [ -f "$MARQUE" ]; then vert "session validee : elle sera ecrite sur le disque a l extinction"
             else rouge "session NON validee : tout sera efface a l extinction (osmo-racine-live valider)"; fi
         else
@@ -467,11 +624,16 @@ EOF
         else
             n="$(changements | wc -l)"
             [ "$n" -gt 0 ] || { log "aucun changement a ecrire"; exit 0; }
+            trace "ecrire : ecriture en cours de session"
+            # the box first: the RAM layer against the disk, i.e. what
+            # changed since the last write - this moment, not the session
             [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer ecrit
-            if appliquer; then
-                vert "session ecrite sur le disque ($n changement(s)) ; la suite sera validee ou effacee a l extinction"
+            appliquer; rc=$?
+            journal_disque
+            if [ "$rc" = 0 ]; then
+                vert "ecrit sur le disque : $NB_ECRITS changement(s) depuis la derniere ecriture ; la suite sera validee ou effacee a l extinction"
             else
-                rouge "ECHEC de l ecriture : le disque garde son etat precedent"
+                rouge "ECHEC de l ecriture (voir $JOURNAL_DISQUE) : ce qui n a pas pu etre ecrit garde son etat precedent"
                 exit 1
             fi
         fi
@@ -494,6 +656,8 @@ EOF
         # stopped, /home and the black box are still mounted.
         live || exit 0
         n="$(changements | wc -l)"
+        trace "fin : $n chemin(s) en RAM ; couches : $(couches | tr '\n' ';')"
+        couches_manquantes && trace "fin : /home est une couche RAM mais ses repertoires sont hors d atteinte"
         decision=efface
         if [ -f "$ETAT/oublier" ]; then
             decision=oublie
@@ -530,6 +694,7 @@ EOF
         # the black box first: it reads the RAM layer against the disk (a
         # session forgotten on purpose is recorded as « efface » too)
         _b="$decision"; [ "$_b" = oublie ] && _b=efface
+        trace "fin : decision $decision"
         [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer "$_b"
         if [ "$decision" = oublie ]; then
             # white screen (reverse video on a cleared console), no banner:
@@ -540,20 +705,25 @@ EOF
         elif [ "$decision" = valide ] && [ "$n" -gt 0 ]; then
             console_texte
             dire "osmo-operator : ecriture de la session sur le disque ($n changement(s))..."
-            # cmatrix « REC » on the console while the session is written
+            # cmatrix on the console while the session is written (no -M:
+            # cmatrix 2.0 does not have it, prints its usage and leaves)
             mpid=""
             if command -v cmatrix >/dev/null 2>&1; then
-                TERM=linux cmatrix -b -u 4 -M REC < "$CONSOLE" > "$CONSOLE" 2>/dev/null &
+                TERM=linux cmatrix -b -u 4 < "$CONSOLE" > "$CONSOLE" 2>/dev/null &
                 mpid=$!
             fi
             appliquer; rc=$?
             if [ -n "$mpid" ]; then sleep 2; kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; fi
-            printf '\033[0m\033[2J\033[H' > "$CONSOLE" 2>/dev/null
+            # out of curses: attributes, cursor, screen
+            printf '\033[0m\033[?25h\033[2J\033[H' > "$CONSOLE" 2>/dev/null
+            stty sane < "$CONSOLE" 2>/dev/null
             if [ "$rc" = 0 ]; then
-                dire_vert "REC : session ecrite sur le disque"
+                dire_vert "REC : session ecrite sur le disque ($NB_ECRITS changement(s))"
             else
-                dire_rouge "!!! ECHEC de l ecriture : le disque garde son etat precedent, la session est PERDUE !!!"
-                sleep 10
+                dire_rouge "!!! ECHEC de l ecriture : ce qui n a pas pu etre ecrit est PERDU !!!"
+                grep -a ' : ' "$TRACE" 2>/dev/null | tail -n 6 > "$CONSOLE" 2>/dev/null
+                dire_rouge "    (le detail : $JOURNAL_DISQUE au prochain demarrage)"
+                sleep 15
             fi
         elif [ "$decision" = efface ]; then
             # always shown, even with nothing lost: forced on tty1, plymouth
@@ -566,6 +736,77 @@ EOF
             sleep 10
         fi
         rm -f "$MARQUE" "$ETAT/oublier"
+        trace "fin : terminee"
+        journal_disque
+        ;;
+    retours)
+        # the commits that can still be undone, oldest first; the LAST line
+        # is the one « defaire » takes
+        live || { log "/ n est pas en RAM"; exit 0; }
+        root_requis
+        retours | while read -r id qui; do
+            printf '%s  %s\n' "$id" "$qui"
+        done
+        ;;
+    defaire)
+        # Undo the LAST commit on the disk (a shutdown's or an « ecrire »):
+        # what it replaced comes back, what it created goes. Run again for
+        # the one before, and so on upwards. Same passphrase as a write. The
+        # black box loses nothing: it keeps the commit's record AND gets a
+        # new one, « defait », with what was removed. The session in RAM is
+        # not touched: the disk shows its older state at the next boot.
+        root_requis
+        live || { log "/ n est pas en RAM : rien a defaire"; exit 0; }
+        id="$(retours | tail -1 | cut -d' ' -f1)"
+        [ -n "$id" ] || { log "aucun commit a defaire"; exit 0; }
+        if couches_manquantes; then rouge "/home hors d atteinte : rien n est defait" >&2; exit 1; fi
+        if [ "${2:-}" = --stdin ]; then
+            IFS= read -r p || p=""
+        else
+            echo "commit a defaire : $id ($(retours | tail -1 | cut -d' ' -f2-))"
+            read -r -s -p "phrase de /home : " p < /dev/tty; echo
+        fi
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+            p=""; rouge "phrase de /home refusee : rien n est defait"; exit 1
+        fi
+        p=""
+        trace "defaire : commit $id"
+        # the box first, while what is about to be removed is still there
+        if [ -x /usr/local/sbin/osmo-diffs ]; then
+            /usr/local/sbin/osmo-diffs defait "$id" $(couches | while read -r h b pre; do
+                [ -f "$b/.osmo-retour/$id/FAIT" ] && printf '%s=%s ' "$pre" "$b"; done)
+        fi
+        rc=0
+        while read -r h b pre; do
+            [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
+            if remonter_rw "$b"; then
+                "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null || rc=1
+                mount -o remount,ro "$b" 2>/dev/null
+                trace "defaire : $pre fait"
+            else
+                trace "defaire : remontage en ecriture de $b impossible"; rc=1
+            fi
+        done < <(couches)
+        journal_disque
+        if [ "$rc" = 0 ]; then
+            vert "commit $id defait sur le disque (visible au prochain demarrage ; reste : $(retours | wc -l))"
+        else
+            rouge "ECHEC : commit $id pas (entierement) defait - voir $JOURNAL_DISQUE"; exit 1
+        fi
+        ;;
+    actualiser)
+        # after an update of these scripts: the initramfs carries its own
+        # copy of osmo-valider-appliquer and of the boot script. On the disk
+        # itself: sudo overlayroot-chroot osmo-racine-live actualiser
+        root_requis
+        if live; then
+            log "a faire sur le disque lui-meme : sudo overlayroot-chroot osmo-racine-live actualiser" >&2
+            exit 1
+        fi
+        poser_initramfs
+        poser_grub_boite
+        actualiser
+        log "initramfs et grub a jour"
         ;;
     retirer)
         root_requis
@@ -581,7 +822,7 @@ EOF
         log "/ persistant pour tous a partir du prochain demarrage"
         ;;
     *)
-        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | ecrire [--stdin] | annuler | oublier | fin | retirer" >&2
+        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | ecrire [--stdin] | retours | defaire [--stdin] | annuler | oublier | fin | actualiser | retirer" >&2
         exit 2
         ;;
 esac
