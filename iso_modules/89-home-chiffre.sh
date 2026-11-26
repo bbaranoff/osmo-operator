@@ -114,6 +114,27 @@ OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 RAPPEL
+# MEASURED BOOT, AN OPTION (sudo osmo-tpm poser): a TOTP code computed by the
+# TPM only when firmware, GRUB, kernel, initramfs and the system disk are the
+# sealed ones, shown next to the /home question. One kernel, no kexec.
+# osmo-total is the one text that computes a volume's total (system and
+# initramfs); osmo-qr draws the enrolment QR code without any library.
+install -m 0755 "$_CH_SRC/osmo-tpm"               "$ROOTFS/usr/local/sbin/osmo-tpm"
+install -m 0755 "$_CH_SRC/osmo-total"             "$ROOTFS/usr/local/sbin/osmo-total"
+install -m 0755 "$_CH_SRC/osmo-qr"                "$ROOTFS/usr/local/sbin/osmo-qr"
+chroot "$ROOTFS" bash -c 'command -v tpm2_unseal >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tpm2-tools >/dev/null 2>&1' \
+    || echo -e "  ${YELLOW}!${NC} tpm2-tools non installe : l option « demarrage mesure » demandera de l installer"
+# the measured boot ticked in the installer (Options page): it is posed after
+# the first boot (a phone has to be enrolled) - a reminder at login until then
+cat > "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop" <<'RAPPEL'
+[Desktop Entry]
+Type=Application
+Name=osmo-operator : demarrage mesure a poser
+Exec=sh -c 'grep -qs "^tpm=1" /etc/osmo-operator/options && [ ! -e /etc/osmo-tpm/actif ] && notify-send -u critical "Demarrage mesure (TPM) a poser" "Coche a l installation. Dans un terminal : sudo osmo-tpm poser (un telephone avec une appli TOTP sous la main)"'
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+RAPPEL
 # the REC screen of a write at shutdown: cmatrix, and its red progress bar
 install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"
 install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
@@ -194,6 +215,9 @@ cat > "$ROOTFS/etc/profile.d/98-osmo-session.sh" <<'PROFIL'
 # osmo-operator: the disk was written to outside a session (osmo-empreinte)
 if [ -t 1 ] && [ -s /run/osmo-alerte ]; then
     printf '\033[5;1;31m%s\033[0m\n' "!!! DISQUE MODIFIE HORS SESSION : $(head -n1 /run/osmo-alerte) - voir /run/osmo-alerte !!!"
+fi
+if [ -t 1 ] && [ -s /run/osmo-alerte-copie ]; then
+    printf '\033[1;31m%s\033[0m\n' "!!! BOITE NOIRE NON COPIEE AILLEURS : $(cat /run/osmo-alerte-copie) (sudo osmo-diffs envoyer) !!!"
 fi
 # osmo-operator: / in RAM -> red warning. A validation covers the moment it
 # was given; what follows needs another one, or the passphrase at shutdown.

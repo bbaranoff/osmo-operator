@@ -1,0 +1,209 @@
+#!/bin/bash
+# osmo-tpm - MEASURED BOOT, AS AN OPTION: a 6-digit code, computed only when
+# the machine is the one you left, to compare with your phone BEFORE you type
+# the /home passphrase.
+#
+# WHY. / is in clear: with the machine in hand, somebody can rewrite the
+# system, the checker (osmo-empreinte) included, and wait for the passphrase.
+# The TPM closes that: it holds a secret it only gives back when the firmware,
+# GRUB, the kernel, the initramfs AND the system disk are the ones that were
+# sealed. That secret is the seed of a TOTP code (6 digits, 30 s), the same
+# seed as in an application of your phone (enrolled once, by QR code). A
+# modified machine cannot show the right code.
+#
+# HOW, IN ONE KERNEL (no second system, no kexec - the former « porte »
+# chained two kernels, and the second one inherited a screen it could not
+# drive):
+#   firmware and GRUB measure themselves, the kernel and the initramfs into
+#   PCR 0,2,4,7,8,9; the initramfs - measured, hence trusted - computes the
+#   total SHA-256 of the system disk (osmo-total, the one the black box holds)
+#   and extends PCR 13 with it; the TPM unseals the seed only if all seven
+#   PCRs are the sealed ones; the initramfs computes the codes of the next
+#   minutes, then extends PCR 13 again: nothing can unseal any more during
+#   this boot. unlock-home shows the code next to its question.
+#
+#   osmo-tpm poser        enable: a seed, its QR code, the initramfs rebuilt
+#                         (the NEXT boot shows no code: the initramfs has just
+#                         changed - then « osmo-tpm sceller »)
+#   osmo-tpm sceller      BY HAND: this boot is the reference (PCR 0-9 as they
+#                         are now, the disk as it is). After a boot without
+#                         code THAT YOU CAN EXPLAIN (just enabled, kernel or
+#                         GRUB updated in the last session). Never otherwise.
+#   osmo-tpm qr | code    the QR code again / the code now, to check a phone
+#   osmo-tpm etat         enabled or not, recognised or not, sealed when
+#   osmo-tpm oter         disable: seed, sealed object and initramfs part gone
+#   osmo-tpm commit       (osmo-racine-live, after each write) sealed again
+#                         for the disk as it is NOW - same reference PCRs, and
+#                         only when this boot was recognised
+#
+# WHAT IS WHERE. The sealed object: on the black box partition (in clear: it
+# is useless without this TPM in the sealed state). The seed's copy and the
+# reference PCR values: in the ENCRYPTED /home, for sealing again. Needs
+# tpm2-tools; LUKS is not touched (the /home volume stays LUKS2, its
+# passphrase stays the only way in).
+set -u
+BOITE="${OSMO_DIFFS_BASE:-/var/lib/osmo-diffs}"
+OBJ="$BOITE/tpm"
+HOME_DISQUE="${OSMO_EMPREINTE_HOME:-/media/home-ro}"
+PRIVE=".osmo-diffs/tpm"
+ACTIF=/etc/osmo-tpm/actif
+RUN=/run/osmo-tpm
+PCR_DISQUE="${OSMO_TPM_PCR:-13}"
+PCR_CHAINE="0 2 4 7 8 9"
+LISTE="sha256:0,2,4,7,8,9,$PCR_DISQUE"
+TEST="${OSMO_TPM_TEST:-0}"                # tests: no mount, no initramfs
+export TPM2TOOLS_TCTI="${TPM2TOOLS_TCTI:-device:/dev/tpmrm0}"
+
+log()   { echo "osmo-tpm : $*"; }
+rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
+vert()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
+hexbin() { printf "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
+root_requis() { [ "$(id -u)" = 0 ] || { log "root requis" >&2; exit 1; }; }
+outils() {
+    command -v tpm2_unseal >/dev/null 2>&1 || { rouge "tpm2-tools absent : sudo apt install tpm2-tools" >&2; exit 1; }
+    [ -c /dev/tpmrm0 ] || { rouge "pas de TPM 2.0 sur cette machine (/dev/tpmrm0)" >&2; exit 1; }
+}
+
+# the private directory, read (RAM view or volume) and written (the volume itself)
+prive_lire() { local f; for f in "$HOME_DISQUE/$PRIVE/$1" "/home/$PRIVE/$1"; do [ -s "$f" ] && { cat "$f"; return 0; }; done; return 1; }
+prive_ecrire() {   # prive_ecrire NAME < content : on the /home volume, not in its RAM layer
+    local d="$HOME_DISQUE/$PRIVE" rw=0
+    [ "$TEST" = 1 ] || mountpoint -q "$HOME_DISQUE" || { rouge "/home n est pas ouvert : il garde la graine et les PCR de reference" >&2; return 1; }
+    [ "$TEST" = 1 ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
+    ( umask 077; mkdir -p "$d" && cat > "$d/$1.nouv" && mv -f "$d/$1.nouv" "$d/$1" ); local rc=$?
+    sync
+    [ "$rw" = 1 ] && mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
+    return $rc
+}
+
+total_disque() {   # the system disk's total, as the black box holds it
+    tr -d '\n' < "$BOITE/empreinte.json" 2>/dev/null \
+        | grep -oE '"racine": *\{[^}]*"meta": *"[0-9a-f]+"' | sed -E 's/.*"meta": *"([0-9a-f]+)"/\1/'
+}
+
+# PCR 13 after the initramfs has measured the disk: SHA-256(32 zero bytes || total)
+predit() { { head -c 32 /dev/zero; hexbin "$1"; } | sha256sum | cut -d' ' -f1; }
+
+benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot
+    local n
+    for n in $PCR_CHAINE; do
+        printf '%s %s\n' "$n" "$(tr 'A-F' 'a-f' < "/sys/class/tpm/tpm0/pcr-sha256/$n")"
+    done | prive_ecrire pcrs
+}
+
+# sceller_pour TOTAL : the seed, sealed for the reference PCRs and that disk
+sceller_pour() {
+    local total="$1" graine pcrs t n h rc=1
+    graine="$(prive_lire graine)" || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
+    pcrs="$(prive_lire pcrs)" || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
+    [ -n "$total" ] || { log "pas d empreinte du disque sur la boite (osmo-empreinte prendre)" >&2; return 1; }
+    t="$(mktemp -d)" || return 1
+    : > "$t/pcrs.bin"
+    for n in $PCR_CHAINE; do
+        h="$(printf '%s\n' "$pcrs" | awk -v n="$n" '$1 == n {print $2}')"
+        [ "${#h}" = 64 ] || { log "PCR $n de reference illisible" >&2; rm -rf "$t"; return 1; }
+        hexbin "$h" >> "$t/pcrs.bin"
+    done
+    hexbin "$(predit "$total")" >> "$t/pcrs.bin"
+    if tpm2_createpolicy -Q --policy-pcr -l "$LISTE" -f "$t/pcrs.bin" -L "$t/pol.dat" \
+            && tpm2_createprimary -Q -C o -c "$t/prim.ctx" \
+            && printf '%s' "$graine" | tpm2_create -Q -C "$t/prim.ctx" -L "$t/pol.dat" -i - -u "$t/obj.pub" -r "$t/obj.priv"; then
+        [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
+        mkdir -p "$OBJ" && install -m 0444 "$t/obj.pub" "$OBJ/obj.pub" && install -m 0444 "$t/obj.priv" "$OBJ/obj.priv" \
+            && printf '%s %s\n' "$(date '+%F %T')" "$total" > "$OBJ/scelle" && rc=0
+        sync
+        [ "$TEST" = 1 ] || mount -o remount,ro "$BOITE" 2>/dev/null
+    fi
+    rm -rf "$t"
+    return $rc
+}
+
+# totp HEXSEED [EPOCH] : the 6 digits of that instant (RFC 6238, SHA-1, 30 s)
+totp() {
+    local mac off
+    mac="$(hexbin "$(printf '%016x' $(( ${2:-$(date +%s)} / 30 )))" | openssl dgst -sha1 -mac HMAC -macopt "hexkey:$1" -r | cut -d' ' -f1)"
+    off=$(( 0x${mac:39:1} * 2 ))
+    printf '%06d\n' $(( (0x${mac:$off:8} & 0x7fffffff) % 1000000 ))
+}
+
+qr() {
+    local graine uri
+    graine="$(prive_lire graine)" || { log "pas de graine" >&2; return 1; }
+    uri="otpauth://totp/osmo-operator:$(hostname)?secret=$(hexbin "$graine" | base32 | tr -d '=')&issuer=osmo-operator&algorithm=SHA1&digits=6&period=30"
+    if [ -x /usr/local/sbin/osmo-qr ]; then /usr/local/sbin/osmo-qr "$uri"
+    elif command -v qrencode >/dev/null 2>&1; then qrencode -t ANSIUTF8 "$uri"; fi
+    echo "A scanner dans une appli TOTP (Aegis, FreeOTP+, 2FAS, Google Authenticator...) ; ou a la main :"
+    echo "  cle : $(hexbin "$graine" | base32 | tr -d '=')   (TOTP, SHA-1, 6 chiffres, 30 s)"
+    echo "  code maintenant : $(totp "$graine")"
+}
+
+case "${1:-etat}" in
+    poser)
+        root_requis; outils
+        [ -s "$BOITE/empreinte.json" ] || { rouge "pas d empreinte du disque : sudo osmo-empreinte prendre" >&2; exit 1; }
+        if ! prive_lire graine >/dev/null; then
+            head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n' | prive_ecrire graine || exit 1
+        fi
+        benir || exit 1
+        # the initramfs measures the disk and asks the TPM: rebuilt on the disk
+        # itself, recorded in the box, the disk's fingerprint taken again
+        if [ "$TEST" != 1 ]; then
+            /usr/local/sbin/osmo-racine-live actualiser tpm=1 || { rouge "initramfs non reconstruit : rien de pose" >&2; exit 1; }
+        fi
+        sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
+        install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
+        qr
+        vert "demarrage mesure pose."
+        rouge "Le PROCHAIN demarrage n affichera PAS de code : l initramfs vient de changer."
+        echo  "C est attendu, une fois : apres ce demarrage, « sudo osmo-tpm sceller »."
+        ;;
+    sceller)
+        # BY HAND, from a session reached with the right passphrase: this boot
+        # becomes the reference
+        root_requis; outils
+        [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || { log "demarrage mesure non pose (osmo-tpm poser)"; exit 1; }
+        benir && sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
+        install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
+        vert "scelle : ce demarrage est la reference (PCR $PCR_CHAINE), pour le disque tel qu il est."
+        echo "code maintenant : $(totp "$(prive_lire graine)")"
+        ;;
+    commit)
+        # after a write: the disk has changed, the object is sealed again for
+        # it - with the REFERENCE PCRs, never those of a boot the TPM did not
+        # recognise (that would bless whatever started this session)
+        [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || exit 0
+        command -v tpm2_create >/dev/null 2>&1 || exit 0
+        if [ ! -e "$RUN/reconnu" ]; then
+            log "ce demarrage n a pas ete reconnu par le TPM : pas de rescellement (sudo osmo-tpm sceller si tu sais pourquoi)"
+            exit 0
+        fi
+        sceller_pour "$(total_disque)" && log "rescelle pour le disque $(total_disque | cut -c1-16)..." \
+            || { log "RESCELLEMENT EN ECHEC : pas de code au prochain demarrage"; exit 1; }
+        ;;
+    qr)   root_requis; qr ;;
+    code) root_requis; totp "$(prive_lire graine)" ;;
+    etat)
+        if [ -e "$ACTIF" ]; then echo "demarrage mesure : pose"; else echo "demarrage mesure : non pose (option : sudo osmo-tpm poser)"; fi
+        [ -s "$OBJ/scelle" ] && echo "scelle le $(cut -d' ' -f1,2 "$OBJ/scelle") pour le disque $(cut -d' ' -f3 "$OBJ/scelle" | cut -c1-16)..."
+        if [ -e "$ACTIF" ]; then
+            if [ -e "$RUN/reconnu" ]; then vert "ce demarrage : reconnu par le TPM"
+            else rouge "ce demarrage : NON reconnu par le TPM (pas de code)"; fi
+        fi
+        ;;
+    oter)
+        root_requis
+        [ "$TEST" = 1 ] || /usr/local/sbin/osmo-racine-live actualiser tpm=0
+        [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
+        rm -rf "$OBJ"
+        [ "$TEST" = 1 ] || mount -o remount,ro "$BOITE" 2>/dev/null
+        if [ "$TEST" = 1 ] || mount -o remount,rw "$HOME_DISQUE" 2>/dev/null; then
+            rm -rf "${HOME_DISQUE:?}/$PRIVE"
+            [ "$TEST" = 1 ] || mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
+        fi
+        log "demarrage mesure retire (la graine est detruite : l appli du telephone ne sert plus)"
+        ;;
+    *)
+        echo "usage : osmo-tpm poser | sceller | qr | code | etat | oter" >&2
+        exit 2
+        ;;
+esac

@@ -412,6 +412,9 @@ EMPREINTE=/usr/local/sbin/osmo-empreinte
 empreinte_prendre() {
     [ -x "$EMPREINTE" ] || return 0
     "$EMPREINTE" prendre >> "$TRACE" 2>&1 || trace "empreinte du disque NON prise : le prochain demarrage criera"
+    # measured boot (option): the TPM's object, sealed again for this disk
+    [ -x /usr/local/sbin/osmo-tpm ] && /usr/local/sbin/osmo-tpm commit >> "$TRACE" 2>&1
+    return 0
 }
 
 # appliquer : every layer. Each one is atomic on its own file system; / is
@@ -482,6 +485,19 @@ if [ -n "$_b" ]; then
     [ -x /usr/bin/age ] && copy_exec /usr/bin/age /bin
     copy_exec /usr/bin/openssl /bin
 fi
+# MEASURED BOOT (option, osmo-tpm poser): the initramfs measures the system
+# disk and asks the TPM for the seed of the code. The real find, sort,
+# sha256sum and cut (busybox's find has no -printf) go to /osmo-bin; the
+# TPM's device library is loaded by name, hence copied by hand.
+if [ -e /etc/osmo-tpm/actif ] && [ -x /usr/bin/tpm2 ] && [ -n "$_b" ]; then
+    copy_exec /usr/bin/tpm2 /bin
+    for _l in /usr/lib/*/libtss2-tcti-device.so.0*; do
+        [ -e "$_l" ] && copy_file library "$_l"
+    done
+    for _x in find sort sha256sum cut od; do copy_exec "/usr/bin/$_x" /osmo-bin; done
+    copy_file script /usr/local/sbin/osmo-total /osmo-bin/osmo-total
+    echo "OSMO_TPM=1" >> "${DESTDIR}/conf/osmo-boite"
+fi
 exit 0
 HOOK
     chmod 755 "$HOOK"
@@ -509,6 +525,57 @@ if { [ -d "${rootmnt}/.osmo-valider" ] || ls "${rootmnt}"/.osmo-retour/*/DEFAIRE
         /bin/osmo-valider-appliquer "${rootmnt}" > "$CONSOLE" 2>&1
         mount -o remount,ro "${rootmnt}"
     fi
+fi
+
+# 1b. MEASURED BOOT (option): this initramfs was measured by GRUB (PCR 9), so
+#     what it does can be trusted. It computes the total SHA-256 of the system
+#     disk (the one the black box holds) and extends PCR 13 with it; the TPM
+#     gives the seed back only if firmware, GRUB, kernel, initramfs AND disk
+#     are the sealed ones; the codes of the next five minutes are computed
+#     (unlock-home shows the current one next to its question), then PCR 13
+#     is extended again: nothing can unseal any more during this boot. Any
+#     failure: no code, the boot goes on - unlock-home says so in red.
+OSMO_TPM=""; BOITE_SRC=""
+[ -f /conf/osmo-boite ] && . /conf/osmo-boite
+if [ "$OSMO_TPM" = 1 ] && [ -x /bin/tpm2 ] && [ -c /dev/tpmrm0 ]; then
+    export TPM2TOOLS_TCTI=device:/dev/tpmrm0
+    R=/run/osmo-tpm
+    mkdir -p "$R/m"
+    T="$(PATH=/osmo-bin:$PATH /osmo-bin/osmo-total "${rootmnt}" 2>/dev/null)"
+    printf '%s\n' "$T" > "$R/total"
+    [ "${#T}" = 64 ] && tpm2 pcrextend "13:sha256=$T" >/dev/null 2>&1
+    case "$BOITE_SRC" in
+        UUID=*) bd="/dev/disk/by-uuid/${BOITE_SRC#UUID=}" ;;
+        PARTUUID=*) bd="/dev/disk/by-partuuid/${BOITE_SRC#PARTUUID=}" ;;
+        *) bd="$BOITE_SRC" ;;
+    esac
+    i=0; while [ -n "$bd" ] && [ ! -e "$bd" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+    G=""
+    if [ -e "$bd" ] && mount -o ro "$bd" "$R/m" 2>/dev/null; then
+        if [ -f "$R/m/tpm/obj.pub" ] \
+                && tpm2 createprimary -Q -C o -c "$R/p.ctx" 2>/dev/null \
+                && tpm2 load -Q -C "$R/p.ctx" -u "$R/m/tpm/obj.pub" -r "$R/m/tpm/obj.priv" -c "$R/o.ctx" 2>/dev/null; then
+            G="$(tpm2 unseal -c "$R/o.ctx" -p pcr:sha256:0,2,4,7,8,9,13 2>/dev/null)"
+        fi
+        umount "$R/m" 2>/dev/null
+    fi
+    # the lock: whatever happened, PCR 13 moves on
+    tpm2 pcrextend 13:sha256=c0c9d5d4f8a0b6f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899 >/dev/null 2>&1
+    rm -f "$R/p.ctx" "$R/o.ctx"; rmdir "$R/m" 2>/dev/null
+    if [ "${#G}" = 40 ]; then
+        now="$(date +%s)"; k=0
+        : > "$R/codes"; chmod 600 "$R/codes"
+        while [ "$k" -lt 10 ]; do
+            c=$(( now / 30 + k ))
+            mac="$(printf "$(printf '%016x' "$c" | sed 's/../\\x&/g')" | openssl dgst -sha1 -mac HMAC -macopt "hexkey:$G" -r | cut -d' ' -f1)"
+            off=$(( 0x$(printf '%s' "$mac" | cut -c40) * 2 + 1 ))
+            n=$(( (0x$(printf '%s' "$mac" | cut -c${off}-$((off + 7))) & 0x7fffffff) % 1000000 ))
+            printf '%s %06d\n' "$(( c * 30 ))" "$n" >> "$R/codes"
+            k=$((k + 1))
+        done
+        : > "$R/reconnu"
+    fi
+    G=""; mac=""
 fi
 
 grep -qw 'osmo.boite' /proc/cmdline || exit 0
@@ -930,7 +997,7 @@ EOF
             # session »
             command -v overlayroot-chroot >/dev/null 2>&1 || { log "overlayroot-chroot absent" >&2; exit 1; }
             trace "actualiser : initramfs et grub, sur le disque"
-            overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser; rc=$?
+            overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser ${2:+"$2"}; rc=$?
             if [ -x /usr/local/sbin/osmo-diffs ]; then
                 echo "osmo-racine-live actualiser : initramfs et grub reconstruits sur le disque (code $rc)" \
                     | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
@@ -939,6 +1006,11 @@ EOF
             journal_disque
             exit $rc
         fi
+        # the measured boot (osmo-tpm poser / oter): its mark on the disk
+        case "${2:-}" in
+            tpm=1) install -d -m 0755 /etc/osmo-tpm && : > /etc/osmo-tpm/actif ;;
+            tpm=0) rm -rf /etc/osmo-tpm ;;
+        esac
         poser_initramfs
         poser_grub_boite
         actualiser

@@ -1,0 +1,8 @@
+# osmo-options - what was ticked on the « Options » page (netinstall@options)
+# becomes /etc/osmo-supplements and /etc/osmo-operator/options in the target.
+---
+type:       "job"
+name:       "osmo-options"
+interface:  "python"
+script:     "main.py"
+noconfig:   true

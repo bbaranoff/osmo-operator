@@ -148,21 +148,15 @@ def couches():
     return c
 
 
-# The total of a volume, computed by find, sort and sha256sum (2 seconds for
-# 450 000 entries; the same walk in Python takes 8): one record per entry -
-# for a file its rights, owner, size, dates and inode; for a link its target;
-# for anything else its nature, rights and owner - sorted, then hashed.
-_TOTAL = r"""cd "$1" && find . -xdev \
-  \( -path ./.osmo-valider -o -path ./.osmo-retour -o -path ./lost+found \
-     -o -path ./var/log/osmo-session.log -o -path ./var/log/osmo-session.log.nouv \) -prune -o \
-  \( -type f -printf 'f %m %U %G %s %T@ %C@ %i %p\0' \) -o \
-  \( -type l -printf 'l %m %U %G %l\t%p\0' \) -o \
-  \( -printf '%y %m %U %G %p\0' \) 2>/dev/null | LC_ALL=C sort -z --parallel=4 -S 256M | sha256sum | cut -d' ' -f1"""
+# The total of a volume: osmo-total (find, sort, sha256sum - 4 seconds for
+# 450 000 entries; the same walk in Python takes 8). ONE text for it, which
+# the initramfs runs too when the boot is measured (osmo-tpm).
+TOTAL = os.environ.get("OSMO_TOTAL", "/usr/local/sbin/osmo-total")
 
 
 def total_meta(racine):
     """ONE SHA-256 for a whole volume, from what the file system says of every entry."""
-    r = subprocess.run(["bash", "-c", _TOTAL, "total", racine], capture_output=True, text=True)
+    r = subprocess.run([TOTAL, racine], capture_output=True, text=True)
     return r.stdout.strip()
 
 
@@ -231,8 +225,65 @@ def cle_sceau(creer=False):
 
 
 def signer(cle):
+    """The seal: the totals, and where the box is copied (osmo-diffs
+    copie-poser) - a destination changed by hand breaks it."""
     with open(TOTAUX, "rb") as f:
-        return hmac.new(cle, f.read(), hashlib.sha256).hexdigest()
+        h = hmac.new(cle, f.read(), hashlib.sha256)
+    try:
+        with open(os.path.join(BOITE, "copie.conf"), "rb") as f:
+            h.update(b"\0copie\0" + f.read())
+    except OSError:
+        pass
+    return h.hexdigest()
+
+
+def resceller():
+    """The seal again, after a change the box knows of (osmo-diffs copie-poser)."""
+    cle = cle_sceau()
+    if cle is None or not os.path.exists(TOTAUX):
+        return 0
+    if not boite_rw(True):
+        return 1
+    try:
+        with open(SCEAU + ".nouv", "w") as f:
+            f.write(signer(cle) + "\n")
+        os.replace(SCEAU + ".nouv", SCEAU)
+        os.sync()
+    finally:
+        boite_rw(False)
+    return 0
+
+
+def copie_demarrage():
+    """At boot: records of the box that were NOT copied to the other machine
+    (no network at shutdown, machine away, destination wrong). Never
+    blocking - but said, in red, before anything else."""
+    try:
+        r = subprocess.run(["/usr/local/sbin/osmo-diffs", "copie-etat"], capture_output=True, text=True, timeout=20).stdout.split()
+        dest, att, tot = r[0], int(r[1]), int(r[2])
+    except (OSError, subprocess.TimeoutExpired, IndexError, ValueError):
+        return
+    if att <= 0:
+        return
+    txt = "%d enregistrement(s) de la boite noire sur %d NE SONT PAS COPIES sur %s" % (att, tot, dest)
+    try:
+        with open(os.open("/run/osmo-alerte-copie", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644), "w") as f:
+            f.write(txt + "\n")
+    except OSError:
+        pass
+    dire(txt)
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+        b = "#" * 76
+        os.write(c, ("\r\n".join(["", "\a\033[5;1;31m" + b + FIN, ROUGE + "   !!!  LA BOITE NOIRE N EST PAS COPIEE AILLEURS  !!!",
+                                    "   " + txt + ".", "   La copie par ssh n a pas abouti (reseau absent a l extinction ?) :",
+                                    "   tant qu elle n est pas faite, effacer la boite ici ne laisse aucune trace.",
+                                    "   Nouvel essai des que le reseau repond ; a la main : sudo osmo-diffs envoyer",
+                                    b + FIN, ""])).encode())
+        os.close(c)
+        time.sleep(6)
+    except OSError:
+        pass
 
 
 def prendre():
@@ -451,6 +502,25 @@ def demarrage():
     return 0
 
 
+def tpm_demarrage():
+    """Measured boot (option, osmo-tpm): posed, and the TPM gave no code -
+    firmware, GRUB, kernel, initramfs or the disk are not the sealed ones."""
+    if not os.path.exists("/etc/osmo-tpm/actif") or os.path.exists("/run/osmo-tpm/reconnu"):
+        return
+    if os.path.exists(SANS_HOME):
+        return                                # already refused at the disk's warning
+    titre = "LE TPM NE RECONNAIT PAS CE DEMARRAGE"
+    diffs = [("TPM", "", "pas de code : micrologiciel, GRUB, noyau, initramfs ou disque systeme ne sont pas ceux qui ont ete scelles"),
+             ("TPM", "", "attendu UNE fois apres « osmo-tpm poser », ou apres une mise a jour du noyau / de GRUB dans la derniere session : alors OUI, puis sudo osmo-tpm sceller")]
+    alerter(titre, diffs, {})
+    dire(titre)
+    if not console_alerte(titre, diffs):
+        try:
+            open(SANS_HOME, "w").close()
+        except OSError:
+            pass
+
+
 def home():
     """unlock-home, the volume just opened and still read-only, before /home
     is put over it: the /home volume against its fingerprint. The passphrase
@@ -544,6 +614,13 @@ def rappel():
         time.sleep(2)
     time.sleep(1)
     try:
+        with open("/run/osmo-alerte-copie") as f:
+            subprocess.run(["zenity", "--warning", "--no-wrap", "--title", "osmo-operator : boite noire",
+                            "--text", '<span foreground="red" weight="bold" size="large">LA BOITE NOIRE N EST PAS COPIEE AILLEURS</span>\n\n'
+                            + f.read().strip() + "\n\nNouvel essai des que le reseau repond ; a la main : sudo osmo-diffs envoyer"])
+    except OSError:
+        pass
+    try:
         with open(ALERTE) as f:
             txt = f.read()
     except OSError:
@@ -569,7 +646,12 @@ def main():
     if cmd == "prendre":
         return prendre()
     if cmd == "demarrage":
-        return demarrage()
+        copie_demarrage()
+        rc = demarrage()
+        tpm_demarrage()
+        return rc
+    if cmd == "resceller":
+        return resceller()
     if cmd == "fond":
         return fond()
     if cmd == "sceau":

@@ -15,7 +15,11 @@
 #   osmo-diffs liste         the records (names, sizes): no passphrase
 #   osmo-diffs voir [N]      decrypt the N last records (default: all), checks
 #                            the chain, asks the passphrase
-#   osmo-diffs copie-poser user@host   send every record to another machine
+#   osmo-diffs copie-poser user@host   send every record to another machine, by
+#                            ssh, ENCRYPTED as on the box; the destination only
+#                            changes with the box passphrase. Never blocking:
+#                            unreachable, the records wait, and the next boot
+#                            warns in red (osmo-diffs copie-etat)
 #   osmo-diffs envoyer       send the records not sent yet
 #
 # WRITE WITHOUT BEING ABLE TO READ. Each record is encrypted with age for a
@@ -262,6 +266,10 @@ envoyer() {
     touch "$BASE/.envoyes"
     for j in $(find "$JOURNAL" -maxdepth 1 -name '*.age' | sort); do
         grep -qxF "$(basename "$j")" "$BASE/.envoyes" && continue
+        # NEVER BLOCKING: the other machine does not answer -> the first
+        # failure ends the round, the rest waits for the next one (a shutdown
+        # must not spend 5 s per record on a network that is gone)
+        [ "$e" -gt 0 ] && { e=$((e + 1)); continue; }
         if ${OSMO_DIFFS_SSH:-ssh} -i "$COPIE_CLE" -o BatchMode=yes -o ConnectTimeout=5 \
                -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$BASE/copie.known_hosts" \
                "$dest" "$poste/$(basename "$j")" < "$j" 2>/dev/null; then
@@ -270,7 +278,7 @@ envoyer() {
             e=$((e + 1))
         fi
     done
-    if [ "$e" -gt 0 ]; then log "copie vers $dest : $n envoye(s), $e en attente (nouvel essai au prochain enregistrement)"
+    if [ "$e" -gt 0 ]; then log "copie vers $dest : $n envoye(s), $e EN ATTENTE - averti au prochain demarrage, nouvel essai ensuite"
     elif [ "$n" -gt 0 ]; then log "copie vers $dest : $n envoye(s)"; fi
 }
 
@@ -545,17 +553,47 @@ case "${1:-liste}" in
         [ -n "$d" ] && printf '%s %s\n' "$(sha256sum "$d" | cut -d' ' -f1)" "$(basename "$d")" > "$vu"
         ;;
     copie-poser)
-        # copie-poser user@host [POSTE]: the ssh key on the box + the line for
-        # the other machine's authorized_keys
+        # copie-poser user@host [POSTE]: where every record is ALSO sent, by
+        # ssh - encrypted as it is on the box (*.diff.age), never in clear.
+        # THE DESTINATION ONLY CHANGES WITH THE BOX PASSPHRASE: whoever sits
+        # at a session must not be able to send the copies elsewhere, or
+        # nowhere. The change is itself a record of the box, the file is made
+        # immutable and is part of what the seal covers (osmo-empreinte): a
+        # destination changed by hand is denounced at the next boot.
         boite
         [ "$(id -u)" = 0 ] || { log "root requis (sudo osmo-diffs copie-poser user@host)"; exit 1; }
         dest="${2:?usage : osmo-diffs copie-poser user@host [POSTE]}"
+        case "$dest" in *[!A-Za-z0-9@._:-]*|-*) log "destination refusee : $dest"; exit 1 ;; esac
+        [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 1; }
+        cle="$(identite)" || { log "phrase de la boite requise pour changer la destination de la copie"; exit 1; }
+        cle=""
         ouvrir || exit 1
+        ancien="$(sed -n 's/^DEST=//p' "$COPIE_CONF" 2>/dev/null)"
         [ -s "$COPIE_CLE" ] || ssh-keygen -q -t ed25519 -N '' -C "osmo-diffs@$(hostname)" -f "$COPIE_CLE"
+        [ "$TEST" = 1 ] || chattr -i "$COPIE_CONF" 2>/dev/null
         printf 'DEST=%s\nPOSTE=%s\n' "$dest" "${3:-$(hostname)}" > "$COPIE_CONF"
+        chmod 0444 "$COPIE_CONF"
+        [ "$TEST" = 1 ] || chattr +i "$COPIE_CONF" 2>/dev/null
+        # the other machine has nothing yet: everything is to be sent again
+        [ "$ancien" = "$dest" ] || : > "$BASE/.envoyes"
+        printf 'copie de la boite : destination %s -> %s\n' "${ancien:-(aucune)}" "$dest" | sceller copie >/dev/null
+        [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte resceller >/dev/null 2>&1
         echo "Sur $dest, dans ~/.ssh/authorized_keys (et osmo-diffs-recevoir dans /usr/local/bin) :"
         echo "command=\"/usr/local/bin/osmo-diffs-recevoir\",restrict $(cat "$COPIE_CLE.pub")"
         echo "Puis : sudo osmo-diffs envoyer"
+        ;;
+    copie-etat)
+        # « DEST WAITING TOTAL » when a copy is set up (no network needed):
+        # what the boot warns about
+        boite
+        [ -s "$COPIE_CONF" ] || exit 0
+        tot=0; att=0
+        for j in "$JOURNAL"/*.age; do
+            [ -f "$j" ] || continue
+            tot=$((tot + 1))
+            grep -qxF "$(basename "$j")" "$BASE/.envoyes" 2>/dev/null || att=$((att + 1))
+        done
+        echo "$(sed -n 's/^DEST=//p' "$COPIE_CONF") $att $tot"
         ;;
     envoyer)
         boite
@@ -563,7 +601,7 @@ case "${1:-liste}" in
         envoyer
         ;;
     *)
-        echo "usage : osmo-diffs init [--console] | enregistrer [valide|efface|ecrit] | defait ID PREFIXE=DISQUE... | verifier | fermer | phrase | liste | voir [N] | copie-poser user@host | envoyer" >&2
+        echo "usage : osmo-diffs init [--console] | enregistrer [valide|efface|ecrit] | defait ID PREFIXE=DISQUE... | verifier | fermer | phrase | liste | voir [N] | copie-poser user@host | copie-etat | envoyer | alerte" >&2
         exit 2
         ;;
 esac

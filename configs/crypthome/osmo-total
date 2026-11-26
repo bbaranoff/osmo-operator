@@ -1,0 +1,17 @@
+#!/bin/sh
+# osmo-total RACINE - ONE SHA-256 for a whole volume, from what the file
+# system says of every entry: for a file its rights, owner, size, dates and
+# inode; for a link its target; for anything else its nature, rights and
+# owner - sorted, then hashed. About 4 s for 450 000 entries.
+#
+# The same text runs in the system (osmo-empreinte) and in the initramfs
+# (measured boot, osmo-tpm): what the TPM is asked to recognise is exactly
+# what the black box holds. It needs the real find, sort and sha256sum
+# (busybox's find has no -printf): the initramfs hook copies them.
+cd "$1" 2>/dev/null || exit 1
+find . -xdev \
+  \( -path ./.osmo-valider -o -path ./.osmo-retour -o -path ./lost+found \
+     -o -path ./var/log/osmo-session.log -o -path ./var/log/osmo-session.log.nouv \) -prune -o \
+  \( -type f -printf 'f %m %U %G %s %T@ %C@ %i %p\0' \) -o \
+  \( -type l -printf 'l %m %U %G %l\t%p\0' \) -o \
+  \( -printf '%y %m %U %G %p\0' \) 2>/dev/null | LC_ALL=C sort -z --parallel=4 -S 256M | sha256sum | cut -d' ' -f1

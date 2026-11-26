@@ -17,6 +17,8 @@ Type=oneshot
 RemainAfterExit=yes
 # at boot: the box still holds what nirvana saw last (truncation check)
 ExecStart=-/usr/local/sbin/osmo-diffs verifier
+# the network is up: the records that could not be copied at shutdown
+ExecStart=-/usr/local/sbin/osmo-diffs envoyer
 # /home is open by now: the fingerprint on the box is the one this machine sealed
 ExecStart=-/usr/local/sbin/osmo-empreinte sceau
 # read-only for everybody: only osmo-diffs writes, one record at a time

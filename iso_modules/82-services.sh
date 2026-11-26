@@ -135,8 +135,9 @@ fi
 # banc" icon) follows the same rule: OSMO_ISO_LTE=1 enables it at boot.
 # Without srsenb (interstp, arm64) its Condition skips it.
 if [ "$ISO_ROLE" != "interstp" ]; then
-    # osmo-supplements: installed, not enabled (the installer has no
-    # « Supplements » page any more; addition.sh and its icon remain).
+    # osmo-supplements: installed, not enabled - the installer's « Options »
+    # page (one checkbox per supplement, modules/netinstall-options.conf)
+    # enables it when something was ticked; addition.sh and its icon remain.
     # osmo-inscription: the association of the phones (Network Monitor) with
     # this node, port 8088 - installed, started from osmo-gtk (tab « Telephones »).
     for _u in osmo-banc osmo-multi osmo-lte osmo-supplements osmo-inscription; do
