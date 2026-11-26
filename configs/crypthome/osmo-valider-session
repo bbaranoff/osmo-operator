@@ -137,7 +137,7 @@ if graphique; then
     p=""
     if [ "$ACTION" = valider ]; then
         ( while [ ! -s "$rcf" ]; do
-              if read -r pc tx < /run/osmo-progres 2>/dev/null; then
+              if [ -r /run/osmo-progres ] && read -r pc tx 2>/dev/null < /run/osmo-progres; then
                   case "$pc" in ''|*[!0-9]*) ;; *) [ "$pc" -ge 100 ] && pc=99; echo "$pc"; echo "# REC : $tx" ;; esac
               fi
               sleep 0.4

@@ -817,6 +817,10 @@ EOF
         progres 0 "boite noire"
         ppid=""
         if [ -t 2 ]; then progres_terminal & ppid=$!; fi
+        # a write is not to be cut half-way: Ctrl-C (or the terminal closed)
+        # is ignored from here on - seen 2026-11-26, / written and the copy of
+        # /home interrupted by a Ctrl-C
+        trap '' INT HUP QUIT
         # the box first: the RAM layer against the disk, i.e. this moment
         [ -x /usr/local/sbin/osmo-diffs ] \
             && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
