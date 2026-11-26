@@ -18,6 +18,9 @@ Before=osmo-fin-session.service display-manager.service
 
 [Service]
 Type=exec
+# NOTHING IS WRITTEN WITHOUT THE /home PASSPHRASE: the EFI partition, the one
+# file system a session could still write to directly, is read-only from boot
+ExecStartPre=-/usr/bin/mount -o remount,ro /boot/efi
 ExecStart=/usr/bin/unshare --mount --propagation private /usr/bin/sleep infinity
 Restart=no
 

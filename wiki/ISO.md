@@ -648,6 +648,17 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+- **Nothing is accepted without the `/home` passphrase.** Root can always force a write to a disk
+  in clear; what it cannot do is have it accepted. The disk's fingerprint is **signed** (Ed25519):
+  the private key is on the box, encrypted with the `/home` passphrase, and only exists in memory
+  while that passphrase is typed for a write - no session, not even root with `/home` open, can
+  sign. The boot checks the signature **before** asking the passphrase; the public key is pinned
+  in the encrypted `/home`. Consequences: `osmo-empreinte prendre`, `actualiser`, `retirer`,
+  `defaire`, `remonter`, `fusionner` all ask it; at shutdown a validation given earlier is only an
+  intention - **the passphrase is asked again on the console at the moment of the write**; a run
+  without it writes nothing to the disk, not even its log (kept in the box until the next
+  validated write); `/boot/efi` is read-only from boot. The black box is the one thing always
+  written.
 - **Validated or not: green or red, and a merge afterwards.** The black box is always written. A
   session that is **not validated** leaves its record (`efface`, **red** in `osmo-diffs liste`,
   `voir` and `sessions.log`) AND its whole content, encrypted like the records, « en attente »

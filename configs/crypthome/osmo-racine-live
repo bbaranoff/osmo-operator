@@ -248,9 +248,18 @@ trace() {
     echo "osmo-racine-live : $*"
 }
 journal_disque() {
-    [ -s "$TRACE" ] || return 0
+    [ -s "$TRACE" ] || { journal_home; return 0; }
     local f="$BAS$JOURNAL_DISQUE"
+    if [ -z "$PHRASE" ]; then
+        # NO PASSPHRASE IN THIS RUN: nothing goes to the disk, not even these
+        # lines. They are kept in the black box (always written) and reach the
+        # disk's log with the next validated write.
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs journal-poser < "$TRACE" >/dev/null 2>&1 && : > "$TRACE"
+        journal_home
+        return 0
+    fi
     if mount -o remount,rw "$BAS" 2>/dev/null; then
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs journal-prendre >> "$f" 2>/dev/null
         cat "$TRACE" >> "$f" 2>/dev/null && : > "$TRACE"
         # the last 2000 lines are enough
         if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 4000 ]; then
@@ -272,7 +281,7 @@ journal_home() {
     [ -n "$o" ] && mountpoint -q /home 2>/dev/null && [ -d "/home/$o" ] || return 0
     f="/home/$o/sessions.log"
     # RED: not validated, wiped, failed. GREEN: validated, written. (less -R, cat)
-    { cat "$BAS$JOURNAL_DISQUE" 2>/dev/null; cat "$TRACE" 2>/dev/null; } | sed -E \
+    { cat "$BAS$JOURNAL_DISQUE" 2>/dev/null; cat /var/lib/osmo-diffs/session.log 2>/dev/null; cat "$TRACE" 2>/dev/null; } | sed -E \
         -e '/decision (efface|oublie)|NON VALIDEE|N EST PAS|n a PAS|NON |ECHEC|CONFLIT|conflit\(s\), rien|annule|incomplete|hors d atteinte|trop grosse|refusee/{s/^/\x1b[1;31m/;s/$/\x1b[0m/;b}' \
         -e '/decision valide|ecrit\(s\)|ecriture du moment|ecriture de la session|changements ecrits|fusionnee|fusionner .* : commit|defait|empreinte prise/{s/^/\x1b[1;32m/;s/$/\x1b[0m/}' \
         > "$f.nouv" 2>/dev/null || { rm -f "$f.nouv"; return 0; }
@@ -349,6 +358,11 @@ ID_ECRIT=""
 # layer already applied by this write is UNDONE (the way back of its commit),
 # so that the disk is as it was before. At shutdown there is no Ctrl-C.
 ANNULE=0
+# THE /home PASSPHRASE OF THIS RUN, kept in this process for the time of the
+# write it authorises: it unlocks the key that signs the disk's fingerprint
+# (osmo-empreinte) - no signature without it, hence no accepted write. Empty:
+# nothing of this run may touch the disk, not even its log.
+PHRASE=""
 sans_int() { ( trap '' INT; exec "$@" ); }
 existe() { [ -e "$1" ] || [ -L "$1" ]; }
 remonter_rw() {
@@ -484,7 +498,8 @@ conclure_depot() {
 EMPREINTE=/usr/local/sbin/osmo-empreinte
 empreinte_prendre() {
     [ -x "$EMPREINTE" ] || return 0
-    sans_int "$EMPREINTE" prendre >> "$TRACE" 2>&1 || trace "empreinte du disque NON prise : le prochain demarrage criera"
+    printf '%s\n' "$PHRASE" | sans_int "$EMPREINTE" prendre --phrase-stdin >> "$TRACE" 2>&1 \
+        || trace "empreinte du disque NON prise : le prochain demarrage criera"
     # measured boot (option): the TPM's object, sealed again for this disk
     [ -x /usr/local/sbin/osmo-tpm ] && sans_int /usr/local/sbin/osmo-tpm commit >> "$TRACE" 2>&1
     return 0
@@ -1220,7 +1235,7 @@ EOF
             rouge "phrase de /home refusee : rien n est ecrit"
             exit 1
         fi
-        p=""
+        PHRASE="$p"; p=""
         n="$(changements_depuis | wc -l)"
         [ "$n" -gt 0 ] || { log "rien de nouveau depuis la derniere ecriture"; exit 0; }
         trace "valider : ecriture du moment ($n chemin(s) changes depuis la derniere ecriture)"
@@ -1326,7 +1341,7 @@ EOF
                         [ "$essai" -gt 1 ] && inv="$inv ($essai/${CRYPTHOME_TRIES:-3})"
                         lire_console p "$inv : "
                         [ -n "$p" ] || break
-                        if printf '%s' "$p" | phrase_home_ok; then decision=valide; break; fi
+                        if printf '%s' "$p" | phrase_home_ok; then PHRASE="$p"; decision=valide; break; fi
                         dire_rouge "phrase refusee"
                         essai=$((essai + 1))
                     done
@@ -1335,6 +1350,27 @@ EOF
                 y|Y|yes|Yes|YES|o|O|oui|Oui|OUI)
                     flash_console; decision=oublie ;;
             esac
+        fi
+        # VALIDATED EARLIER (the desktop dialog, « Fin de session »): that was the
+        # intention. The passphrase is asked AGAIN HERE, at the moment of the
+        # write - nothing secret was kept in memory in between. Not given: the
+        # session is not written; it goes to the box, to be merged afterwards.
+        if [ "$decision" = valide ] && [ -z "$PHRASE" ] && [ "$n" -gt 0 ]; then
+            console_texte
+            dire "osmo-operator : fin de session - $n changement(s) a ecrire sur le disque"
+            dire "La phrase de /home est demandee AU MOMENT de l ecriture."
+            essai=1
+            while [ "$essai" -le "${CRYPTHOME_TRIES:-3}" ]; do
+                inv="phrase de /home (Entree : ne pas ecrire)"
+                [ "$essai" -gt 1 ] && inv="$inv ($essai/${CRYPTHOME_TRIES:-3})"
+                lire_console p "$inv : "
+                [ -n "$p" ] || break
+                if printf '%s' "$p" | phrase_home_ok; then PHRASE="$p"; break; fi
+                dire_rouge "phrase refusee"
+                essai=$((essai + 1))
+            done
+            p=""
+            [ -n "$PHRASE" ] || decision=efface
         fi
         # the black box first: it reads the RAM layer against the disk (a
         # session forgotten on purpose is recorded as « efface » too)
@@ -1388,7 +1424,8 @@ EOF
             # quit, held 10 s
             console_texte
             dire_rouge "############################################################"
-            dire_rouge "  PHRASE DE /home NON DONNEE : SESSION EFFACEE"
+            dire_rouge "  PHRASE DE /home NON DONNEE : SESSION NON ECRITE"
+            dire_rouge "  (gardee dans la boite noire : osmo-racine-live fusionner)"
             dire_rouge "  $n changement(s) perdus$([ -f "$ETAT/ecrit" ] && echo " depuis la validation de $(date -r "$ETAT/ecrit" '+%T')") (/, /root, /opt/GSM, /home)"
             dire_rouge "############################################################"
             sleep 10
@@ -1427,7 +1464,7 @@ EOF
         if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
             p=""; rouge "phrase de /home refusee : rien n est defait"; exit 1
         fi
-        p=""
+        PHRASE="$p"; p=""
         defaire_commit "$id"; rc=$?
         poser_menu_sessions
         empreinte_prendre
@@ -1459,7 +1496,7 @@ EOF
         if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
             p=""; rouge "phrase de /home refusee : rien n est ecrit"; exit 1
         fi
-        p=""
+        PHRASE="$p"; p=""
         trap '' INT HUP QUIT
         fusionner "$nom" "$mode"; rc=$?
         journal_disque
@@ -1515,6 +1552,12 @@ EOF
             printf 'Taper OUI pour remonter (autre chose : demarrage normal) : ' > "$CONSOLE"
             r=""; IFS= read -r -t 120 r < "$CONSOLE" || r=""
             [ "$r" = OUI ] || { dire "rien n est defait : demarrage normal."; sleep 3; exit 0; }
+            # the passphrase AT THE MOMENT of the write: it signs the disk that results
+            lire_console p "phrase de /home : "
+            if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+                p=""; dire_rouge "phrase refusee : rien n est defait, demarrage normal."; sleep 4; exit 0
+            fi
+            PHRASE="$p"; p=""
         else
             [ "$tot" -gt 0 ] || { log "aucune session a remonter"; exit 0; }
             case "$n" in ''|*[!0-9]*|0) log "usage : osmo-racine-live remonter [N]  (sessions : osmo-racine-live sessions)" >&2; exit 1 ;; esac
@@ -1528,7 +1571,7 @@ EOF
             if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
                 p=""; rouge "phrase de /home refusee : rien n est defait"; exit 1
             fi
-            p=""
+            PHRASE="$p"; p=""
         fi
         trace "remonter : $n session(s) sur $tot"
         rc=0; fait=0
@@ -1584,7 +1627,7 @@ EOF
             if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
                 p=""; rouge "phrase de /home refusee : rien n est ecrit sur le disque"; exit 1
             fi
-            p=""
+            PHRASE="$p"; p=""
             set -- actualiser ${_opt:+"$_opt"}
             trace "actualiser : initramfs et grub, sur le disque"
             # overlayroot-chroot binds /proc, /run and /sys, NOT /dev: without
@@ -1592,7 +1635,7 @@ EOF
             # 2026-11-26: grub.cfg never rebuilt since the installation)
             _dev=""
             if ! mountpoint -q "$BAS/dev"; then mount --bind /dev "$BAS/dev" && _dev=1; fi
-            overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser ${2:+"$2"}; rc=$?
+            OSMO_PHRASE_DONNEE=1 overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser ${2:+"$2"}; rc=$?
             [ -n "$_dev" ] && umount "$BAS/dev" 2>/dev/null
             [ "$rc" = 0 ] || trace "actualiser : ECHEC (code $rc) - initramfs ou grub PAS reconstruit"
             if [ -x /usr/local/sbin/osmo-diffs ]; then
@@ -1603,6 +1646,11 @@ EOF
             empreinte_prendre
             journal_disque
             exit $rc
+        fi
+        # on a bench that is set, this side only runs for the session that
+        # gave the passphrase (never by hand from overlayroot-chroot)
+        if grep -q '^overlayroot="tmpfs' "$CONF" 2>/dev/null && [ -z "${OSMO_PHRASE_DONNEE:-}" ]; then
+            rouge "a lancer depuis la session, avec la phrase de /home : sudo osmo-racine-live actualiser" >&2; exit 1
         fi
         # the measured boot (osmo-tpm poser / oter): its mark on the disk
         case "${2:-}" in
@@ -1617,8 +1665,27 @@ EOF
     retirer)
         root_requis
         if live; then
-            log "a faire sur le disque lui-meme : sudo overlayroot-chroot osmo-racine-live retirer" >&2
-            exit 1
+            # back to an ordinary read-write / : a write to the disk, hence the passphrase
+            command -v overlayroot-chroot >/dev/null 2>&1 || { log "overlayroot-chroot absent" >&2; exit 1; }
+            echo "retirer : / redevient en lecture-ecriture pour tous, au prochain demarrage"
+            read -r -s -p "phrase de /home : " p < /dev/tty || p=""; echo
+            if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+                p=""; rouge "phrase de /home refusee : rien n est ecrit sur le disque"; exit 1
+            fi
+            PHRASE="$p"; p=""
+            trace "retirer : / en lecture-ecriture, sur le disque"
+            _dev=""
+            if ! mountpoint -q "$BAS/dev"; then mount --bind /dev "$BAS/dev" && _dev=1; fi
+            OSMO_PHRASE_DONNEE=1 overlayroot-chroot /usr/local/sbin/osmo-racine-live retirer; rc=$?
+            [ -n "$_dev" ] && umount "$BAS/dev" 2>/dev/null
+            echo "osmo-racine-live retirer : / en lecture-ecriture a partir du prochain demarrage (code $rc)" \
+                | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
+            empreinte_prendre
+            journal_disque
+            exit $rc
+        fi
+        if grep -q '^overlayroot="tmpfs' "$CONF" 2>/dev/null && [ -z "${OSMO_PHRASE_DONNEE:-}" ]; then
+            rouge "a lancer depuis la session, avec la phrase de /home : sudo osmo-racine-live retirer" >&2; exit 1
         fi
         printf '# /etc/overlayroot.conf - osmo-racine-live retire : / en lecture-ecriture\noverlayroot=""\n' > "$CONF"
         systemctl disable osmo-fin-session.service osmo-garde.service osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1

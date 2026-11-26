@@ -464,6 +464,21 @@ case "${1:-liste}" in
         fi
         envoyer
         ;;
+    journal-poser)
+        # journal-poser < lines : the session log of a run that had NO /home
+        # passphrase (osmo-racine-live) - nothing of it may go to the disk
+        boite
+        ouvrir || exit 1
+        cat >> "$BASE/session.log"; chmod 0644 "$BASE/session.log"
+        ;;
+    journal-prendre)
+        # journal-prendre > lines : handed to the disk's log by the next
+        # validated write, and emptied here
+        boite
+        [ -s "$BASE/session.log" ] || exit 0
+        ouvrir || exit 1
+        cat "$BASE/session.log" && : > "$BASE/session.log"
+        ;;
     noter)
         # noter MODE < text : a record of that kind (osmo-racine-live: a
         # session merged afterwards, « fusionne »)
@@ -649,7 +664,11 @@ case "${1:-liste}" in
         # the other machine has nothing yet: everything is to be sent again
         [ "$ancien" = "$dest" ] || : > "$BASE/.envoyes"
         printf 'copie de la boite : destination %s -> %s\n' "${ancien:-(aucune)}" "$dest" | sceller copie >/dev/null
-        [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte resceller >/dev/null 2>&1
+        # the destination is part of what is signed: signed again, with the /home passphrase
+        if [ -x /usr/local/sbin/osmo-empreinte ]; then
+            echo "La destination de la copie fait partie de ce qui est signe :"
+            /usr/local/sbin/osmo-empreinte resceller || log "empreinte NON signee de nouveau : le prochain demarrage le dira"
+        fi
         echo "Sur $dest, dans ~/.ssh/authorized_keys (et osmo-diffs-recevoir dans /usr/local/bin) :"
         echo "command=\"/usr/local/bin/osmo-diffs-recevoir\",restrict $(cat "$COPIE_CLE.pub")"
         echo "Puis : sudo osmo-diffs envoyer"

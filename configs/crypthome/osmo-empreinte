@@ -19,7 +19,9 @@
 # passphrase is only asked after « OUI » has been typed.
 #
 #   osmo-empreinte prendre            take the fingerprint (after a commit;
-#                                     only what changed is hashed again)
+#                                     only what changed is hashed again) AND
+#                                     SIGN it: the /home passphrase, asked on
+#                                     the terminal or --phrase-stdin
 #   osmo-empreinte controler [--complet]   compare; --complet also reads every
 #                                     file again (about 30 s for 18 GB)
 #   osmo-empreinte demarrage          at boot, before unlock-home: fast
@@ -40,10 +42,12 @@
 # or its change time, which no ordinary tool can set. The complete one reads
 # every file: it catches a change made with the dates and inodes forged.
 #
-# THE SEAL. The fingerprint is in clear on the box partition: whoever rewrites
-# the disk can rewrite it too. It is therefore sealed (HMAC-SHA-256) with a
-# key kept in the ENCRYPTED /home; « sceau », once /home is open, says when
-# the fingerprint is not the one this machine sealed.
+# THE SIGNATURE. The fingerprint is in clear on the box partition: whoever
+# rewrites the disk can rewrite it too. It is therefore SIGNED (Ed25519) with
+# a key that is encrypted with the /home passphrase: no session, not even
+# root with /home open, can sign - only somebody typing the passphrase. The
+# boot checks the signature BEFORE asking the passphrase; « sceau », once
+# /home is open, checks that the public key is the one pinned in /home.
 #
 # LIMITS, plainly. This runs FROM the disk it checks: an attacker who also
 # rewrites this program (or unlock-home) silences it - only a measured boot
@@ -79,6 +83,17 @@ FOND_FAIT = "/run/osmo-empreinte-complet"
 # taken - without the key it would be left UNSEALED, and the next boot would
 # cry that it is not the one this machine sealed
 CLE_RAM = os.environ.get("OSMO_EMPREINTE_CLE_RAM", "/run/osmo-empreinte-cle")
+# THE SIGNATURE. The totals are SIGNED (Ed25519). The private key is on the
+# box, ENCRYPTED WITH THE /home PASSPHRASE: it only exists, in memory, while
+# that passphrase is being typed for a write. Nothing a session holds - not
+# root, not an open /home - can sign: a disk written to without the
+# passphrase cannot get a valid fingerprint, and the boot says so BEFORE the
+# passphrase is asked. The public key is also pinned in the encrypted /home
+# (and, option, in the TPM): a key pair swapped on the box is denounced.
+SIG = os.path.join(BOITE, "empreinte.sig")
+SIG_PUB = os.path.join(BOITE, "signature.pub")
+SIG_CLE = os.path.join(BOITE, "signature.cle")
+PUB_HOME = ".osmo-diffs/signature.pub"
 TEST = os.environ.get("OSMO_DIFFS_SANS_MONTAGE") == "1"
 # never part of the fingerprint: the journal of a commit, the way back, the
 # session's own log (written to the disk outside a commit, on purpose)
@@ -266,7 +281,7 @@ def boite_rw(oui):
 
 def cle_sceau(creer=False):
     """The seal's key, from the encrypted /home (None when /home is closed)."""
-    for chemin in (os.path.join(HOME_DISQUE, CLE), os.path.join("/home", CLE), CLE_RAM):
+    for chemin in (os.path.join(HOME_DISQUE, CLE), CLE_RAM if TEST else os.path.join("/home", CLE), CLE_RAM):
         try:
             with open(chemin, "rb") as f:
                 k = f.read().strip()
@@ -306,34 +321,161 @@ def garder_cle(k):
         pass
 
 
-def signer(cle):
-    """The seal: the totals, and where the box is copied (osmo-diffs
-    copie-poser) - a destination changed by hand breaks it."""
+def message():
+    """What is signed: the totals, and where the box is copied (osmo-diffs
+    copie-poser) - a destination changed by hand breaks the signature."""
     with open(TOTAUX, "rb") as f:
-        h = hmac.new(cle, f.read(), hashlib.sha256)
+        m = f.read()
     try:
         with open(os.path.join(BOITE, "copie.conf"), "rb") as f:
-            h.update(b"\0copie\0" + f.read())
+            m += b"\0copie\0" + f.read()
     except OSError:
         pass
-    return h.hexdigest()
+    return m
 
 
-def resceller():
-    """The seal again, after a change the box knows of (osmo-diffs copie-poser)."""
-    cle = cle_sceau()
-    if cle is None or not os.path.exists(TOTAUX):
+def _memfd(donnees):
+    fd = os.memfd_create("osmo-empreinte")
+    os.write(fd, donnees)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return fd
+
+
+def _ossl(args, entree=None, fds=()):
+    return subprocess.run(["openssl"] + args, input=entree, capture_output=True, pass_fds=fds)
+
+
+def phrase_luks(phrase):
+    """The /home LUKS2 volume accepts this passphrase."""
+    if TEST:
+        return True
+    uuid = ""
+    try:
+        with open("/etc/default/crypthome") as f:
+            for l in f:
+                if l.startswith("CRYPTHOME_UUID="):
+                    uuid = l.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    dev = "/dev/disk/by-uuid/" + uuid
+    if not uuid or not os.path.exists(dev):
+        return False
+    return subprocess.run(["cryptsetup", "open", "--test-passphrase", "--key-file=-", dev],
+                          input=phrase, capture_output=True).returncode == 0
+
+
+def cle_privee(phrase):
+    """The signing key (PEM), from the /home passphrase; None when it is wrong.
+    No key pair yet: made now - only for a passphrase /home accepts."""
+    if os.path.exists(SIG_CLE):
+        r = _ossl(["enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-in", SIG_CLE, "-pass", "stdin"], phrase + b"\n")
+        return r.stdout if r.returncode == 0 and r.stdout.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+    if not phrase_luks(phrase):
+        return None
+    r = _ossl(["genpkey", "-algorithm", "ed25519"])
+    return r.stdout if r.returncode == 0 and r.stdout.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+
+
+def poser_signature(pem, phrase):
+    """Box read-write: the signature of the totals; a new key pair is written
+    with it (private key encrypted with the passphrase), its public key pinned
+    in the /home volume."""
+    k = _memfd(pem)
+    m = _memfd(message())
+    try:
+        r = _ossl(["pkeyutl", "-sign", "-inkey", "/proc/self/fd/%d" % k, "-rawin", "-in", "/proc/self/fd/%d" % m], fds=(k, m))
+        if r.returncode != 0 or len(r.stdout) != 64:
+            return False
+        with open(SIG + ".nouv", "wb") as f:
+            f.write(r.stdout)
+        os.replace(SIG + ".nouv", SIG)
+        if not os.path.exists(SIG_CLE):
+            os.lseek(k, 0, os.SEEK_SET)
+            pub = _ossl(["pkey", "-in", "/proc/self/fd/%d" % k, "-pubout"], fds=(k,))
+            os.lseek(k, 0, os.SEEK_SET)
+            enc = _ossl(["enc", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-salt", "-in", "/proc/self/fd/%d" % k,
+                         "-pass", "stdin"], phrase + b"\n", fds=(k,))
+            if pub.returncode != 0 or enc.returncode != 0:
+                return False
+            with open(os.open(SIG_CLE + ".nouv", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
+                f.write(enc.stdout)
+            with open(SIG_PUB + ".nouv", "wb") as f:
+                f.write(pub.stdout)
+            os.replace(SIG_PUB + ".nouv", SIG_PUB)
+            os.replace(SIG_CLE + ".nouv", SIG_CLE)
+            epingler(pub.stdout)
+        try:
+            os.unlink(SCEAU)                  # the HMAC seal of earlier versions
+        except OSError:
+            pass
+        return True
+    finally:
+        os.close(k)
+        os.close(m)
+
+
+def epingler(pub):
+    """The public key, pinned in the /home volume (not in its RAM layer)."""
+    if not (TEST or os.path.ismount(HOME_DISQUE)):
+        return
+    cible = os.path.join(HOME_DISQUE, PUB_HOME)
+    if os.path.exists(cible):
+        return                                # never replaced here: a difference is an alert
+    rw = TEST or subprocess.run(["mount", "-o", "remount,rw", HOME_DISQUE], capture_output=True).returncode == 0
+    try:
+        os.makedirs(os.path.dirname(cible), mode=0o700, exist_ok=True)
+        with open(os.open(cible, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+            f.write(pub)
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass
+    finally:
+        if rw and not TEST:
+            subprocess.run(["mount", "-o", "remount,ro", HOME_DISQUE], capture_output=True)
+
+
+def signature_ok():
+    """True / False: the totals carry a valid signature. None: never signed yet."""
+    if not os.path.exists(SIG_PUB):
+        return None
+    if not os.path.exists(SIG) or not os.path.exists(TOTAUX):
+        return False
+    m = _memfd(message())
+    try:
+        r = _ossl(["pkeyutl", "-verify", "-pubin", "-inkey", SIG_PUB, "-rawin", "-in", "/proc/self/fd/%d" % m, "-sigfile", SIG], fds=(m,))
+        return r.returncode == 0
+    finally:
+        os.close(m)
+
+
+def lire_phrase():
+    """The /home passphrase: one line of stdin (--phrase-stdin), else asked on the terminal."""
+    if "--phrase-stdin" in sys.argv[2:]:
+        return sys.stdin.buffer.readline().rstrip(b"\r\n")
+    import getpass
+    try:
+        return getpass.getpass("phrase de /home : ").encode()
+    except (EOFError, OSError):
+        return b""
+
+
+def resceller(phrase):
+    """The signature again, after a change the box knows of (osmo-diffs copie-poser)."""
+    if not os.path.exists(TOTAUX):
         return 0
+    pem = cle_privee(phrase) if phrase else None
+    if pem is None:
+        dire("phrase de /home refusee : l empreinte n est PAS signee de nouveau")
+        return 1
     if not boite_rw(True):
         return 1
     try:
-        with open(SCEAU + ".nouv", "w") as f:
-            f.write(signer(cle) + "\n")
-        os.replace(SCEAU + ".nouv", SCEAU)
+        ok = poser_signature(pem, phrase)
         os.sync()
     finally:
         boite_rw(False)
-    return 0
+    return 0 if ok else 1
 
 
 def copie_demarrage():
@@ -368,13 +510,22 @@ def copie_demarrage():
         pass
 
 
-def prendre():
+def prendre(phrase=None, premiere=False):
     """The fingerprint of every volume, after a commit: its two totals in
     empreinte.json (what the boot compares), its detail next to it (what
-    explains a difference). Only what changed is read again."""
+    explains a difference). Only what changed is read again.
+    ONLY WITH THE /home PASSPHRASE: it unlocks the key that signs the totals.
+    (premiere: the first boot of an installation, nothing to compare with yet -
+    taken unsigned, signed at the first validated write.)"""
     if not TEST and not os.path.ismount(BOITE):
         dire("%s n est pas monte : pas d empreinte" % BOITE)
         return 0
+    pem = None
+    if not premiere:
+        pem = cle_privee(phrase) if phrase else None
+        if pem is None:
+            dire("phrase de /home refusee ou absente : l empreinte n est PAS prise (rien ne benit le disque sans elle)")
+            return 1
     t0 = time.monotonic()
     cle = cle_sceau(creer=True)            # before /home is walked: the key is one of its files
     tot, pris, relus = totaux(), {}, 0
@@ -401,6 +552,7 @@ def prendre():
     if not boite_rw(True):
         dire("boite en lecture seule : empreinte non ecrite")
         return 1
+    signee = False
     try:
         for nom, etat in pris.items():
             if nom in CHIFFRES:
@@ -432,19 +584,22 @@ def prendre():
             json.dump(tot, f, indent=1, sort_keys=True)
             f.write("\n")
         os.replace(TOTAUX + ".nouv", TOTAUX)
-        if cle:
-            with open(SCEAU + ".nouv", "w") as f:
-                f.write(signer(cle) + "\n")
-            os.replace(SCEAU + ".nouv", SCEAU)
+        if pem is not None:
+            signee = poser_signature(pem, phrase)
+        else:
+            try:
+                os.unlink(SIG)
+            except OSError:
+                pass
         os.sync()
     finally:
         boite_rw(False)
-    if not cle:
-        dire("EMPREINTE NON SCELLEE : la cle du sceau (/home) est hors d atteinte - le prochain demarrage le dira")
+    if not signee and not premiere:
+        dire("EMPREINTE NON SIGNEE : la signature a echoue - le prochain demarrage le dira")
     for nom in pris:
         dire("%-6s sha256 %s  (%d entrees)" % (nom, tot[nom]["meta"], tot[nom]["entrees"]))
     dire("empreinte prise : %d fichier(s) relu(s), %.0f s%s" % (
-        relus, time.monotonic() - t0, "" if cle else " (non scellee : /home ferme)"))
+        relus, time.monotonic() - t0, ", signee" if signee else " (NON signee)"))
     return 0
 
 
@@ -588,12 +743,17 @@ def demarrage():
         except OSError:
             n = 0
         if n == 0:
-            return prendre()
+            return prendre(premiere=True)
         titre, tete = "L EMPREINTE DU SYSTEME A DISPARU DE LA BOITE NOIRE", {}
         diffs = [("SUPPRIME", TOTAUX.lstrip("/"), "plus rien ne prouve l etat du disque")]
     elif not diffs:
-        dire("disque systeme conforme : sha256 %s (%s)" % (tete["meta"], tete.get("pris")))
-        return 0
+        sig = signature_ok()
+        if sig is not False:
+            dire("disque systeme conforme : sha256 %s (%s)%s" % (
+                tete["meta"], tete.get("pris"), ", empreinte signee" if sig else ", empreinte pas encore signee"))
+            return 0
+        titre = "L EMPREINTE DU DISQUE N EST PAS SIGNEE PAR LA PHRASE DE /home"
+        diffs = [("MODIFIE", TOTAUX.lstrip("/"), "refaite sans la phrase : le disque lui est conforme, mais rien ne prouve que c est celui que tu as valide")]
     else:
         titre = "LE DISQUE SYSTEME A ETE MODIFIE HORS SESSION"
     alerter(titre, diffs, tete)
@@ -687,37 +847,43 @@ def fond():
 
 
 def sceau():
-    """Once /home is open: the totals on the box are the ones this machine sealed."""
+    """unlock-home, the /home volume just opened: the signing key of the box
+    is the one /home knows, and the totals carry its signature."""
     if not os.path.exists(TOTAUX):
         return 0
-    cle = cle_sceau()
-    if cle is None:
-        return 0                              # /home closed, or never sealed yet
     try:
-        with open(SCEAU) as f:
-            attendu = f.read().strip()
+        with open(os.path.join(HOME_DISQUE, PUB_HOME), "rb") as f:
+            connue = f.read()
     except OSError:
-        attendu = ""
-    if attendu and hmac.compare_digest(attendu, signer(cle)):
+        connue = None
+    try:
+        with open(SIG_PUB, "rb") as f:
+            boite = f.read()
+    except OSError:
+        boite = None
+    if connue is None and boite is None:
+        return 0                              # never signed yet
+    if connue is None:
+        epingler(boite)                       # signed before the pin existed: pinned now
+        connue = boite
+    if connue == boite and signature_ok():
         return 0
     try:
         with open(ALERTE) as f:
-            if "N EST PAS CELLE QUE CETTE MACHINE A SCELLEE" in f.read():
+            if "CLE DE SIGNATURE" in f.read():
                 return 3                      # already said at this boot
     except OSError:
         pass
-    txt = alerter("L EMPREINTE DE LA BOITE NOIRE N EST PAS CELLE QUE CETTE MACHINE A SCELLEE",
-                  [("MODIFIE", TOTAUX.lstrip("/"), "refaite hors session : le controle du demarrage a compare le disque a une empreinte qui n est pas la sienne")], {})
+    titre = "LA CLE DE SIGNATURE DE LA BOITE N EST PAS CELLE QUE /home CONNAIT"
+    txt = alerter(titre, [("MODIFIE", SIG_PUB.lstrip("/"), "cle ou signature changee sur la boite : l empreinte du disque ne prouve plus rien")], {})
     dire(txt.splitlines()[0])
-    # on the console, at boot, before any session (unlock-home has just opened
-    # the volume: the key is one of its files, it cannot be said earlier)
     try:
         c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
-        l = ["", "\a" + ROUGE + "#" * 76, "   !!!  L EMPREINTE DE LA BOITE NOIRE N EST PAS CELLE QUE CETTE MACHINE A SCELLEE  !!!",
-             "   %s a ete refaite sans la cle de /home : hors session, ou a une" % TOTAUX,
-             "   extinction ou /home etait deja ferme (voir /var/log/osmo-session.log).",
-             "   Le controle du disque de ce demarrage a donc compare a une empreinte non prouvee.",
-             "   Si c est toi : sudo osmo-empreinte prendre   -   Detail : %s" % ALERTE, "#" * 76 + FIN, ""]
+        l = ["", "\a" + ROUGE + "#" * 76, "   !!!  " + titre + "  !!!",
+             "   La cle qui signe l empreinte du disque, ou la signature, a ete changee sur la",
+             "   boite noire : le controle de ce demarrage ne prouve rien.",
+             "   Si c est toi (phrase de /home) : sudo osmo-empreinte prendre   -   Detail : %s" % ALERTE,
+             "#" * 76 + FIN, ""]
         os.write(c, "\r\n".join(l).encode())
         os.close(c)
         time.sleep(12)
@@ -770,14 +936,14 @@ def main():
     if os.geteuid() != 0 and not TEST:
         sys.exit("osmo-empreinte : root requis")
     if cmd == "prendre":
-        return prendre()
+        return prendre(lire_phrase())
     if cmd == "demarrage":
         copie_demarrage()
         rc = demarrage()
         tpm_demarrage()
         return rc
     if cmd == "resceller":
-        return resceller()
+        return resceller(lire_phrase())
     if cmd == "fond":
         return fond()
     if cmd == "sceau":
