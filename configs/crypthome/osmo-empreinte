@@ -485,12 +485,42 @@ def sceller_cle(pem, phrase):
     return MAGIE + sel + chiffrer_detail(pem, _kek(phrase, sel))
 
 
-def desceller_cle(blob, phrase):
+def desceller(blob, phrase):
+    """Anything sealed by sceller_cle; None for a wrong passphrase or a file
+    that was altered."""
+    if not blob.startswith(MAGIE) or len(blob) < 72:
+        return None
     try:
-        pem = dechiffrer_detail(blob[24:], _kek(phrase, blob[8:24]))
+        return dechiffrer_detail(blob[24:], _kek(phrase, blob[8:24]))
     except (ValueError, OSError, MemoryError):
         return None
-    return pem if pem.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+
+
+def desceller_cle(blob, phrase):
+    pem = desceller(blob, phrase)
+    return pem if pem is not None and pem.startswith(b"-----BEGIN PRIVATE KEY-----") else None
+
+
+def coffre(sens, fichier=None):
+    """« coffre-sceller » / « coffre-desceller FILE » (osmo-tpm): what the
+    measured boot keeps for sealing again - seed or sentence, PIN, reference
+    PCRs - under the /home passphrase, like the signing key. Standard input:
+    the passphrase on the first line, then (sceller) the content."""
+    phrase = sys.stdin.buffer.readline().rstrip(b"\n")
+    if not phrase:
+        return 1
+    if sens == "sceller":
+        sys.stdout.buffer.write(sceller_cle(sys.stdin.buffer.read(), phrase))
+        return 0
+    try:
+        with open(fichier, "rb") as f:
+            clair = desceller(f.read(), phrase)
+    except OSError:
+        clair = None
+    if clair is None:
+        return 1
+    sys.stdout.buffer.write(clair)
+    return 0
 
 
 def oter_cle_boite():
@@ -1276,6 +1306,10 @@ def main():
         sys.exit("osmo-empreinte : root requis")
     if cmd == "prendre":
         return prendre(lire_phrase())
+    if cmd == "coffre-sceller":
+        return coffre("sceller")
+    if cmd == "coffre-desceller" and len(sys.argv) > 2:
+        return coffre("desceller", sys.argv[2])
     if cmd == "demarrage":
         copie_demarrage()
         rc = demarrage()

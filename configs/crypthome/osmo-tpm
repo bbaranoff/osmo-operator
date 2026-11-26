@@ -54,7 +54,8 @@
 #
 # WHAT IS WHERE. The sealed object: on the black box partition (in clear: it
 # is useless without this TPM in the sealed state). The seed's copy and the
-# reference PCR values: in the ENCRYPTED /home, for sealing again. Needs
+# reference PCR values: in the ENCRYPTED /home AND under the /home passphrase
+# (the « coffre »), for sealing again - asked by qr, code, sceller. Needs
 # tpm2-tools; LUKS is not touched (the /home volume stays LUKS2, its
 # passphrase stays the only way in).
 set -u
@@ -86,7 +87,7 @@ outils() {
 PHRASE=""
 phrase_requise() {
     local uuid dev
-    [ "$TEST" = 1 ] && return 0
+    if [ "$TEST" = 1 ]; then PHRASE="${OSMO_TPM_PHRASE:-essai}"; return 0; fi
     uuid="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
     dev="/dev/disk/by-uuid/$uuid"
     [ -n "$uuid" ] && [ -e "$dev" ] || { rouge "pas de /home chiffre : rien n est ecrit" >&2; exit 1; }
@@ -108,7 +109,59 @@ prive_oter() {     # prive_oter NAME... : gone from the /home volume
     [ "$rw" = 1 ] && mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
     return 0
 }
+# « mode » in clear is only what « etat » shows; what counts is in the coffre.
 mode() { local m; m="$(prive_lire mode 2>/dev/null)" || m=totp; echo "$m"; }
+
+# THE COFFRE. What sealing again needs - the seed or the sentence, the PIN,
+# the reference PCRs - is kept in the /home volume ENCRYPTED WITH THE /home
+# PASSPHRASE (osmo-empreinte coffre-*: 1 GiB of memory a try), not in clear:
+# root with /home open has nothing at rest, and cannot swap the reference
+# PCRs either (the coffre is authenticated). Every command that needs it asks
+# the passphrase. Clear files left by an earlier version are read once more,
+# and replaced by the coffre at the next « sceller » or « poser ».
+EMP="${OSMO_EMPREINTE_BIN:-/usr/local/sbin/osmo-empreinte}"
+C_MODE=""; C_GRAINE=""; C_SECRET=""; C_PIN=""; C_PCRS=""
+coffre_ouvrir() {   # 0 read, 1 refused, 2 nothing posed
+    local f="" c d l k v
+    C_MODE=""; C_GRAINE=""; C_SECRET=""; C_PIN=""; C_PCRS=""
+    for c in "$HOME_DISQUE/$PRIVE/coffre" "/home/$PRIVE/coffre"; do [ -s "$c" ] && { f="$c"; break; }; done
+    if [ -n "$f" ]; then
+        d="$(printf '%s\n' "$PHRASE" | $EMP coffre-desceller "$f")" \
+            || { log "le coffre du demarrage mesure ne s ouvre pas avec cette phrase" >&2; return 1; }
+        while IFS= read -r l; do
+            k="${l%% *}"; v="${l#* }"
+            case "$k" in
+                mode) C_MODE="$v" ;; graine) C_GRAINE="$v" ;; secret) C_SECRET="$v" ;; pin) C_PIN="$v" ;;
+                pcr) C_PCRS="$C_PCRS$v"$'\n' ;;
+            esac
+        done <<COFFRE
+$d
+COFFRE
+        return 0
+    fi
+    prive_lire pcrs >/dev/null 2>&1 || prive_lire graine >/dev/null 2>&1 || prive_lire secret >/dev/null 2>&1 || return 2
+    C_MODE="$(mode)"
+    C_GRAINE="$(prive_lire graine 2>/dev/null)"; C_SECRET="$(prive_lire secret 2>/dev/null)"
+    C_PIN="$(prive_lire pin 2>/dev/null)"; C_PCRS="$(prive_lire pcrs 2>/dev/null)"$'\n'
+    return 0
+}
+coffre_fermer() {   # written to the /home volume; the clear files of before are removed
+    local t l; t="$(mktemp)" || return 1
+    {
+        printf '%s\n' "$PHRASE"
+        printf 'mode %s\n' "${C_MODE:-totp}"
+        if [ -n "$C_GRAINE" ]; then printf 'graine %s\n' "$C_GRAINE"; fi
+        if [ -n "$C_SECRET" ]; then printf 'secret %s\n' "$C_SECRET"; fi
+        if [ -n "$C_PIN" ]; then printf 'pin %s\n' "$C_PIN"; fi
+        printf '%s' "$C_PCRS" | while IFS= read -r l; do if [ -n "$l" ]; then printf 'pcr %s\n' "$l"; fi; done
+    } | $EMP coffre-sceller > "$t"
+    if [ ! -s "$t" ]; then rm -f "$t"; rouge "coffre non ecrit" >&2; return 1; fi
+    prive_ecrire coffre < "$t" || { rm -f "$t"; return 1; }
+    rm -f "$t"
+    echo "${C_MODE:-totp}" | prive_ecrire mode
+    prive_oter graine secret pin pcrs
+    return 0
+}
 prive_ecrire() {   # prive_ecrire NAME < content : on the /home volume, not in its RAM layer
     local d="$HOME_DISQUE/$PRIVE" rw=0
     [ "$TEST" = 1 ] || mountpoint -q "$HOME_DISQUE" || { rouge "/home n est pas ouvert : il garde la graine et les PCR de reference" >&2; return 1; }
@@ -127,11 +180,13 @@ total_disque() {   # the system disk's total, as the black box holds it
 # PCR 13 after the initramfs has measured the disk: SHA-256(32 zero bytes || total)
 predit() { { head -c 32 /dev/zero; hexbin "$1"; } | sha256sum | cut -d' ' -f1; }
 
-benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot
+benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot (kept by coffre_fermer)
     local n
+    C_PCRS=""
     for n in $PCR_CHAINE; do
-        printf '%s %s\n' "$n" "$(tr 'A-F' 'a-f' < "/sys/class/tpm/tpm0/pcr-sha256/$n")"
-    done | prive_ecrire pcrs
+        C_PCRS="$C_PCRS$n $(tr 'A-F' 'a-f' < "/sys/class/tpm/tpm0/pcr-sha256/$n")"$'\n'
+    done
+    [ -n "$C_PCRS" ]
 }
 
 # sceller_pour TOTAL : the seed (or « S: » + the sentence), sealed for the
@@ -140,14 +195,15 @@ benir() {   # the reference: PCR 0,2,4,7,8,9 of THIS boot
 # set, the PIN (or an empty one) alone would unseal, whatever the machine.
 sceller_pour() {
     local total="$1" graine pcrs t n h rc=1 pin="" pol=1
-    if [ "$(mode)" = secret ]; then
-        graine="$(prive_lire secret)" || { log "pas de phrase secrete (osmo-tpm poser --secret)" >&2; return 1; }
-        graine="S:$graine"
-        pin="$(prive_lire pin 2>/dev/null)" || pin=""
+    if [ "$C_MODE" = secret ]; then
+        [ -n "$C_SECRET" ] || { log "pas de phrase secrete (osmo-tpm poser --secret)" >&2; return 1; }
+        graine="S:$C_SECRET"; pin="$C_PIN"
     else
-        graine="$(prive_lire graine)" || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
+        [ -n "$C_GRAINE" ] || { log "pas de graine (osmo-tpm poser)" >&2; return 1; }
+        graine="$C_GRAINE"
     fi
-    pcrs="$(prive_lire pcrs)" || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
+    pcrs="$C_PCRS"
+    [ -n "$pcrs" ] || { log "pas de PCR de reference (osmo-tpm sceller)" >&2; return 1; }
     [ -n "$total" ] || { log "pas d empreinte du disque sur la boite (osmo-empreinte prendre)" >&2; return 1; }
     t="$(mktemp -d)" || return 1
     : > "$t/pcrs.bin"
@@ -192,7 +248,8 @@ totp() {
 
 qr() {
     local graine uri
-    graine="$(prive_lire graine)" || { log "pas de graine" >&2; return 1; }
+    graine="$C_GRAINE"
+    [ -n "$graine" ] || { log "pas de graine" >&2; return 1; }
     uri="otpauth://totp/osmo-operator:$(hostname)?secret=$(hexbin "$graine" | base32 | tr -d '=')&issuer=osmo-operator&algorithm=SHA1&digits=6&period=30"
     if [ -x /usr/local/sbin/osmo-qr ]; then /usr/local/sbin/osmo-qr "$uri"
     elif command -v qrencode >/dev/null 2>&1; then qrencode -t ANSIUTF8 "$uri"; fi
@@ -225,19 +282,17 @@ case "${1:-etat}" in
                 rouge "PIN refuse (des chiffres, 6 au moins) : rien de pose" >&2; exit 1
             fi
             [ -n "$n" ] || rouge "SANS PIN : quiconque allume la machine lira la phrase."
-            printf '%s\n' "$s" | prive_ecrire secret || exit 1
-            if [ -n "$n" ]; then printf '%s\n' "$n" | prive_ecrire pin || exit 1; else prive_oter pin; fi
-            echo secret | prive_ecrire mode || exit 1
-            prive_oter graine
+            coffre_ouvrir; [ "$?" = 1 ] && exit 1
+            C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
             s=""; n=""; n2=""
         else
-            echo totp | prive_ecrire mode || exit 1
-            prive_oter secret pin
-            if ! prive_lire graine >/dev/null; then
-                head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n' | prive_ecrire graine || exit 1
-            fi
+            coffre_ouvrir; [ "$?" = 1 ] && exit 1
+            C_MODE=totp; C_SECRET=""; C_PIN=""
+            # the seed already enrolled in a phone is kept
+            [ -n "$C_GRAINE" ] || C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
         fi
         benir || exit 1
+        coffre_fermer || exit 1
         # the initramfs measures the disk and asks the TPM: rebuilt on the disk
         # itself, recorded in the box, the disk's fingerprint taken again
         if [ "$TEST" != 1 ]; then
@@ -247,7 +302,7 @@ case "${1:-etat}" in
         PHRASE=""
         sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
-        if [ "$(mode)" = secret ]; then
+        if [ "$C_MODE" = secret ]; then
             echo "Au demarrage : le PIN (s il y en a un), puis TA phrase a cote de la question de /home."
             echo "Pas de phrase, ou une autre : ne tape RIEN. Apres un demarrage sans phrase que tu"
             echo "n expliques pas : sudo osmo-tpm poser --secret, phrase et PIN NOUVEAUX."
@@ -264,11 +319,15 @@ case "${1:-etat}" in
         root_requis; outils
         [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || { log "demarrage mesure non pose (osmo-tpm poser)"; exit 1; }
         phrase_requise "sceller : CE demarrage devient la reference (PCR dans /home, scellement sur la boite)"
+        coffre_ouvrir || { PHRASE=""; rouge "rien a sceller (osmo-tpm poser)" >&2; exit 1; }
+        benir && coffre_fermer && sceller_pour "$(total_disque)" || { PHRASE=""; rouge "scellement en echec" >&2; exit 1; }
+        # the coffre has just been written INTO the /home volume: its
+        # fingerprint is taken again, or the next boot would cry
+        [ "$TEST" = 1 ] || printf '%s\n' "$PHRASE" | $EMP prendre --phrase-stdin >/dev/null 2>&1
         PHRASE=""
-        benir && sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
         vert "scelle : ce demarrage est la reference (PCR $PCR_CHAINE), pour le disque tel qu il est."
-        [ "$(mode)" = secret ] || echo "code maintenant : $(totp "$(prive_lire graine)")"
+        [ "$C_MODE" = secret ] || echo "code maintenant : $(totp "$C_GRAINE")"
         ;;
     commit)
         # after a write: the disk has changed, the object is sealed again for
@@ -280,13 +339,21 @@ case "${1:-etat}" in
             log "ce demarrage n a pas ete reconnu par le TPM : pas de rescellement (sudo osmo-tpm sceller si tu sais pourquoi)"
             exit 0
         fi
+        # the passphrase of the write that has just been made (osmo-racine-live)
+        if [ "${2:-}" = --phrase-stdin ]; then IFS= read -r PHRASE || PHRASE=""; fi
+        [ -n "$PHRASE" ] || { log "pas de phrase : pas de rescellement (pas de code au prochain demarrage - sudo osmo-tpm sceller)"; exit 0; }
+        coffre_ouvrir || { PHRASE=""; log "RESCELLEMENT EN ECHEC : coffre illisible"; exit 1; }
+        PHRASE=""
         sceller_pour "$(total_disque)" && log "rescelle pour le disque $(total_disque | cut -c1-16)..." \
             || { log "RESCELLEMENT EN ECHEC : pas de code au prochain demarrage"; exit 1; }
         ;;
     qr|code)
         root_requis
         if [ "$(mode)" = secret ]; then log "mode « phrase secrete » : ni QR code ni code (osmo-tpm poser pour le telephone)"; exit 1; fi
-        if [ "$1" = qr ]; then qr; else totp "$(prive_lire graine)"; fi
+        phrase_requise "$1 : la graine est gardee sous la phrase de /home"
+        coffre_ouvrir || { PHRASE=""; exit 1; }
+        PHRASE=""
+        if [ "$1" = qr ]; then qr; else totp "$C_GRAINE"; fi
         ;;
     etat)
         if [ -e "$ACTIF" ]; then echo "demarrage mesure : pose"; else echo "demarrage mesure : non pose (option : sudo osmo-tpm poser)"; fi

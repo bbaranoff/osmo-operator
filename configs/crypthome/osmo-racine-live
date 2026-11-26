@@ -175,6 +175,7 @@ opaque() {
 # skipped in silence.
 HOME_HAUT=/media/home-rw/overlay
 HOME_BAS=/media/home-ro
+HOME_RW=/media/home-rw
 option_montage() {   # option_montage MOUNTPOINT KEY
     findmnt -no OPTIONS "$1" 2>/dev/null | tr ',' '\n' | sed -n "s#^$2=##p" | head -1
 }
@@ -580,6 +581,32 @@ root_nettoie() {
     done
 }
 
+# THE /home LAYER IN THE BOX. A checkpoint or a session that is not validated
+# is kept in the black box, the one place written without the passphrase. The
+# box has its own passphrase: what LUKS protects must not be readable with it.
+# So the /home layer goes there encrypted for a KEY OF THE HOME: its public
+# half is enough to write, its private half lives IN the /home volume, with no
+# copy anywhere else - reading it back takes /home open, hence its passphrase.
+# Both halves are in the volume (nothing to swap on the box). Made by the
+# first write done with the passphrase; until then the /home layer of a
+# session that is not validated is simply NOT kept.
+ATT_CLE="$HOME_BAS/.osmo-diffs/attente.cle"
+ATT_PUB="$HOME_BAS/.osmo-diffs/attente.pub"
+cle_attente_poser() {
+    [ -s "$ATT_CLE" ] && [ -s "$ATT_PUB" ] && return 0
+    mountpoint -q "$HOME_BAS" 2>/dev/null && command -v age-keygen >/dev/null 2>&1 || return 0
+    remonter_rw "$HOME_BAS" || return 0
+    ( umask 077
+      mkdir -p "${ATT_CLE%/*}" && rm -f "$ATT_CLE.nouv" \
+          && age-keygen -o "$ATT_CLE.nouv" >/dev/null 2>&1 \
+          && age-keygen -y "$ATT_CLE.nouv" > "$ATT_PUB.nouv" 2>/dev/null \
+          && mv -f "$ATT_PUB.nouv" "$ATT_PUB" && mv -f "$ATT_CLE.nouv" "$ATT_CLE" )
+    sync
+    remonter_ro "$HOME_BAS"
+    [ -s "$ATT_CLE" ] && trace "cle du home pour la boite noire : posee dans le volume chiffre"
+    return 0
+}
+
 # root_manque : what the disk's /root holds that the copy in the volume lacks
 root_manque() {
     local e m=""
@@ -632,10 +659,11 @@ empreinte_prendre() {
             && root_a_nettoyer && [ -z "$(root_manque)" ]; then
         root_nettoyer_faire
     fi
+    [ -n "$PHRASE" ] && cle_attente_poser
     printf '%s\n' "$PHRASE" | sans_int "$EMPREINTE" prendre --phrase-stdin >> "$TRACE" 2>&1 \
         || trace "empreinte du disque NON prise : le prochain demarrage criera"
     # measured boot (option): the TPM's object, sealed again for this disk
-    [ -x /usr/local/sbin/osmo-tpm ] && sans_int /usr/local/sbin/osmo-tpm commit >> "$TRACE" 2>&1
+    [ -x /usr/local/sbin/osmo-tpm ] && printf '%s\n' "$PHRASE" | sans_int /usr/local/sbin/osmo-tpm commit --phrase-stdin >> "$TRACE" 2>&1
     return 0
 }
 
@@ -733,7 +761,7 @@ identite_de() {   # what a path is: - absent, d directory, l:target, f:sha256, o
 # mettre_en_attente [NAME] : with a NAME, a CHECKPOINT - the same stream,
 # written under that name, replacing the one before, and nothing said.
 mettre_en_attente() {
-    local t h b pre k=0 d ref="" r p q mo libre nom point="${1:-}"
+    local t h b pre k=0 d ref="" r p q mo libre nom point="${1:-}" kh=0 pub="" tmph="" clairs
     [ -x /usr/local/sbin/osmo-diffs ] && command -v zstd >/dev/null 2>&1 || return 0
     [ -f "$ETAT/ecrit" ] && ref="$ETAT/ecrit"
     t="$(mktemp -d /run/osmo-attente.XXXXXX)" || return 0
@@ -741,6 +769,7 @@ mettre_en_attente() {
     printf 'date=%s\nsession=%s\n' "$(date '+%F %T')" "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" > "$t/p/meta"
     while read -r h b pre; do
         k=$((k + 1)); d="$t/p/c$k"; mkdir -p "$d"
+        [ "$pre" = /home ] && kh=$k
         printf '%s\n' "$h" > "$t/haut$k"
         printf '%s\n' "$pre" > "$d/prefixe"; : > "$d/suppr"; : > "$d/base"; : > "$t/liste$k"
         ( cd "$h" && find . -mindepth 1 ${ref:+-cnewer "$ref"} -print0 2>/dev/null ) | while IFS= read -r -d '' r; do
@@ -783,9 +812,30 @@ mettre_en_attente() {
         [ -n "$point" ] || trace "attente : session trop grosse pour la boite ($mo Mo, $libre Mo libres, limite $ATTENTE_MAX_MO) - NON rejouable, seul son enregistrement reste"
         rm -rf "$t"; return 1
     fi
-    nom="$( { ( cd "$t/p" && tar -cf - meta c*/prefixe c*/suppr c*/base )
+    # THE /home LAYER: for the key of the home (cle_attente_poser), never for
+    # the box's own. No key yet, or no room to prepare it: not kept at all.
+    if [ "$kh" -gt 0 ]; then
+        pub="$(head -n1 "$ATT_PUB" 2>/dev/null)"
+        case "$pub" in age1*) ;; *) pub="" ;; esac
+        tmph="$t"; mountpoint -q "$HOME_RW" 2>/dev/null && tmph="$HOME_RW"
+        if [ -n "$pub" ] && { ( cd "$t/p" && tar -cf - "c$kh/suppr" "c$kh/base" )
+                 tar -cf - --no-recursion --xattrs --xattrs-exclude='trusted.overlay.*' --acls \
+                     --transform "s|^\\.|c$kh/files|S" -C "$(cat "$t/haut$kh")" --null -T "$t/liste$kh" 2>/dev/null
+               } | zstd -q -3 | age -r "$pub" -o "$tmph/.osmo-attente-home.age" 2>> "$TRACE" \
+                && mv -f "$tmph/.osmo-attente-home.age" "$t/p/c$kh.age" 2>/dev/null; then
+            :
+        else
+            rm -f "$tmph/.osmo-attente-home.age" "$t/p/c$kh.age"
+            : > "$t/p/c$kh/absente"
+            [ -n "$point" ] || trace "attente : la couche /home n est PAS gardee (pas encore de cle du home : elle est posee par la premiere ecriture validee)"
+        fi
+        rm -f "$t/p/c$kh/suppr" "$t/p/c$kh/base"
+    fi
+    clairs="$( cd "$t/p" && ls -d c*/suppr c*/base c*/absente c*.age 2>/dev/null | tr '\n' ' ' )"
+    nom="$( { ( cd "$t/p" && tar -cf - meta c*/prefixe $clairs )
               q=1
               while [ "$q" -le "$k" ]; do
+                  [ "$q" = "$kh" ] && { q=$((q + 1)); continue; }
                   tar -cf - --no-recursion --xattrs --xattrs-exclude='trusted.overlay.*' --acls \
                       --transform "s|^\\.|c$q/files|S" -C "$(cat "$t/haut$q")" --null -T "$t/liste$q" 2>/dev/null
                   q=$((q + 1))
@@ -842,17 +892,33 @@ fusionner() {
         rm -f "$f"; remonter_ro "$HOME_BAS"; rm -rf "$t"
         rouge "session $nom illisible (phrase de la boite ?) : rien n est ecrit"; return 1
     fi
-    zstd -dc "$f" 2>/dev/null | tar -xif - -C "$t" --wildcards meta 'c*/prefixe' 'c*/suppr' 'c*/base' 2>/dev/null
+    zstd -dc "$f" 2>/dev/null | tar -xif - -C "$t" --wildcards meta 'c*/prefixe' 'c*/suppr' 'c*/base' 'c*/absente' 'c*.age' 2>/dev/null
+    # the /home layer, kept for the key of the home (in the volume, open here)
+    for d in "$t"/c*.age; do
+        [ -f "$d" ] || continue
+        k="$(basename "$d" .age)"
+        if ! { age -d -i "$ATT_CLE" "$d" 2>/dev/null | zstd -dc 2>/dev/null | tar -xif - -C "$t" "$k/suppr" "$k/base" 2>/dev/null; } \
+                || [ ! -f "$t/$k/base" ]; then
+            trace "fusionner : la couche /home de cette session ne se relit pas (cle du home absente du volume ?) - ignoree"
+            rm -f "$d"
+        fi
+    done
     : > "$t/conflits"; : > "$t/faire"
     for d in "$t"/c*/; do
         [ -f "$d/prefixe" ] || continue
         k="$(basename "$d")"; pre="$(cat "$d/prefixe")"; b=""
+        if [ -e "$d/absente" ]; then trace "fusionner : la couche $pre de cette session n avait pas ete gardee"; continue; fi
+        [ -f "$d/suppr" ] && [ -f "$d/base" ] || continue
         while read -r h cur leur; do [ "$leur" = "$pre" ] && b="$cur"; done < <(couches)
         if [ -z "$b" ]; then trace "fusionner : la couche $pre n existe pas ici - ignoree"; continue; fi
         j="$b/.osmo-valider"
         remonter_rw "$b" || { trace "fusionner : remontage en ecriture de $b impossible"; rc=1; break; }
         rm -rf "$j" "$j.x"; install -d -m 0700 "$j" "$j.x"
-        zstd -dc "$f" | tar -xif - --xattrs --acls -C "$j.x" "$k/files" 2>>"$TRACE"
+        if [ -f "$t/$k.age" ]; then
+            age -d -i "$ATT_CLE" "$t/$k.age" 2>>"$TRACE" | zstd -dc | tar -xif - --xattrs --acls -C "$j.x" "$k/files" 2>>"$TRACE"
+        else
+            zstd -dc "$f" | tar -xif - --xattrs --acls -C "$j.x" "$k/files" 2>>"$TRACE"
+        fi
         if [ -d "$j.x/$k/files" ]; then mv "$j.x/$k/files" "$j/files"; else install -d -m 0700 "$j/files"; fi
         rm -rf "$j.x"
         cp "$d/suppr" "$j/suppr"

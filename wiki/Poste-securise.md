@@ -185,7 +185,9 @@ condition, cela se voit ici avant d'être écrit.
 |---|---|---|---|
 | Contenu de `/home` | LUKS2 (argon2id, 1 Gio) | phrase home | phrase home |
 | Changements de la session (`/`, `/home`) | RAM | root, session ouverte | idem ; perdus sans phrase home |
-| Les mêmes, points de contrôle et sessions non validées | boîte noire (`attente/`) | **phrase boîte** | personne |
+| Les mêmes dans la boîte (points de contrôle, sessions non validées) : couche `/` | boîte noire (`attente/`) | phrase boîte | personne |
+| Idem, couche `/home` | boîte noire, chiffrée pour la clé du home | phrase home (clé privée dans le volume) | personne |
+| Clé du home pour la boîte (privée) | `/home` (LUKS2), sans copie ailleurs | phrase home | phrase home |
 | État de root (assistant, jetons, historique) | `/home/.root` | phrase home | phrase home |
 | Le même, avant le nettoyage (fait d'office à la première écriture validée) | disque système, retours arrière | **rien** (disque en main) | phrase home |
 | Le même, diffs déjà enregistrés | boîte noire (journal) | **phrase boîte** | personne |
@@ -201,7 +203,7 @@ condition, cela se voit ici avant d'être écrit.
 | Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |
-| Les mêmes, copie pour resceller | `/home/.osmo-diffs/tpm` | **phrase home** (root, `/home` ouvert) | phrase home |
+| Les mêmes, copie pour resceller, et PCR de référence | `/home`, coffre chiffré par la phrase (scrypt, 1 Gio) | phrase home, saisie | phrase home, saisie |
 | Micrologiciel, GRUB, noyau, initramfs, ESP | en clair | rien | détecté si le démarrage mesuré est posé |
 
 **Fuites de périmètre connues** (deux conditions pour une même donnée) :
@@ -213,10 +215,16 @@ condition, cela se voit ici avant d'être écrit.
    seul un changement de la phrase de `/home` ferme vraiment ce point. Reste le secret
    propriétaire du TPM, dérivé de la phrase (PBKDF2, 300 000 tours) : il ne se teste
    qu'en ligne, contre le TPM.
-2. *La boîte lit ce que LUKS protège.* Points de contrôle et sessions non validées
-   contiennent la couche RAM de `/home` — donc aussi `/home/.root` et `/home/.log` —
-   sous la seule phrase de la boîte.
-3. *Root, `/home` ouvert, a la graine du démarrage mesuré* (copie gardée pour resceller).
+2. *La boîte lisait ce que LUKS protège* (couche RAM de `/home` dans les points de
+   contrôle, sous la seule phrase de la boîte). **Corrigé** : cette couche y est chiffrée
+   pour une clé dont la moitié privée ne sort pas du volume `/home` ; tant que la clé
+   n'existe pas (avant la première écriture validée), la couche n'est pas gardée. Ce que
+   la boîte contenait déjà sous l'ancien format y reste.
+3. *Root, `/home` ouvert, avait la graine du démarrage mesuré* et pouvait changer les PCR
+   de référence. **Corrigé** : graine ou phrase secrète, PIN et PCR de référence sont dans
+   un coffre chiffré par la phrase de `/home` ; `qr`, `code`, `sceller` et le
+   rescellement la demandent. Les fichiers en clair d'avant sont remplacés au prochain
+   `sceller`.
 4. *L'état de root d'avant le nettoyage* reste dans la boîte ; sur le disque il est
    retiré d'office (et des retours arrière) à la première écriture validée qui suit sa
    copie dans le volume. Tout secret qui y a vécu est à tenir pour compromis et à changer.
