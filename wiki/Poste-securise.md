@@ -201,7 +201,20 @@ disque en clair (`osmo-racine-live ranger` le fait tout de suite, avec la phrase
 le disque, ou une session root invitée, n'a donc plus l'historique des fichiers du
 système. Pour défaire une écriture, son état est ressorti sur le disque le temps du retour
 arrière. Une écriture validée depuis une session invitée (`/home` fermé) reste sur le
-disque jusqu'à la prochaine écriture du propriétaire. Deux façons de s'en servir.
+disque jusqu'à la prochaine écriture du propriétaire.
+
+**Chaînés et signés.** Chaque état reçoit, au moment où l'écriture qui l'a produit est
+validée, une empreinte calculée sur tout son contenu, et un maillon calculé sur celui de
+l'état précédent, comme un commit git. Le fichier `CHAINE` (une ligne par état) est signé
+avec la clé de l'empreinte, celle que seule la phrase de `/home` déverrouille. Un état
+modifié, remplacé ou glissé après coup ne correspond plus à sa ligne, et les lignes ne se
+refont pas sans la phrase : `osmo-empreinte etats-verifier` (ou `osmo-boite fsck`, et le
+bandeau en tête du navigateur) le dit, sans aucune phrase. Seuls les états que l'écriture
+en cours vient de ranger entrent dans la chaîne. *Non couvert* : revenir à une chaîne plus
+ancienne avec sa propre signature valide, en retirant les états plus récents — rien hors
+de `/home` ne garde la tête de la chaîne. Les dates sont celles de l'horloge de la machine.
+
+Deux façons de s'en servir.
 
 - **Parcourir, comme sur GitHub** : l'icône « États du système » (`osmo-boite web`,
   `osmo-etats`) ouvre une page locale en lecture seule — la liste des écritures par
@@ -297,6 +310,7 @@ condition, cela se voit ici avant d'être écrit.
 | Les mêmes, copie de la boîte (`osmo-diffs sauvegarder`) | là où le propriétaire la pose (clé USB) | phrase boîte | qui tient la clé USB (la chaîne le montre) |
 | Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
 | États passés du système (ce que chaque écriture a remplacé) | `/home` (LUKS2), `.osmo-retour/systeme` | phrase home (page locale `osmo-etats`, clé par lancement, refusée `/home` fermé) | phrase home |
+| Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) ; retour à une chaîne plus ancienne non détecté |
 | Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |

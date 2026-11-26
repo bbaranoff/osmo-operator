@@ -38,6 +38,11 @@
 #   osmo-empreinte sceau              unlock-home, the volume just opened: the
 #                                     totals on the box are the ones that were
 #                                     sealed (red on the console otherwise)
+#   osmo-empreinte etats-signer       the past states of the system (in the
+#                                     /home volume) chained and signed -
+#                                     osmo-racine-live, after each write
+#   osmo-empreinte etats-verifier     their chain: signature, links, and every
+#                                     state read again (no passphrase)
 #   osmo-empreinte rappel             desktop: only what the complete control
 #                                     found after boot (the rest is said at
 #                                     boot, on the console, never at login)
@@ -646,6 +651,193 @@ def signature_ok():
         return r.returncode == 0
     finally:
         os.close(m)
+
+
+# ── THE STATES OF THE SYSTEM, CHAINED AND SIGNED ────────────────────────────
+# What each write replaced (the past states, put away in the /home volume by
+# osmo-racine-live: .osmo-retour/systeme/ID) is a history anybody with /home
+# open and root could rewrite. So each state gets an identifier computed on
+# its CONTENT and on the state BEFORE it, like a git commit:
+#     empreinte = SHA-256 of the state's manifest (every path: nature, rights,
+#                 owner, size or target, SHA-256 of its content)
+#     maillon   = SHA-256( maillon of the previous state, ID, empreinte )
+# in the file CHAINE (one line per state: ID empreinte maillon), and the whole
+# file is SIGNED (CHAINE.sig) with the key of the fingerprint - the one only
+# the /home passphrase unlocks. A state is hashed ONCE, when the write that
+# made it is being validated; afterwards only read again and compared. A state
+# changed, replaced or slipped in afterwards no longer matches its line, and
+# the lines cannot be redone without the passphrase.
+# NOT covered: going back to an OLDER chain with its own valid signature, and
+# removing the newest states with it (nothing outside /home holds the head).
+ETATS = os.path.join(".osmo-retour", "systeme")
+
+
+def etats_rep():
+    force = os.environ.get("OSMO_EMPREINTE_ETATS")
+    if force:
+        return force
+    for base in (HOME_DISQUE, "/home"):
+        if os.path.ismount(base) and os.path.isdir(os.path.join(base, ".osmo-retour")):
+            return os.path.join(base, ETATS)
+    return None
+
+
+def etat_empreinte(d):
+    """SHA-256 of the manifest of one state (its whole directory)."""
+    lignes = []
+    for rep, dirs, fichiers in os.walk(d):
+        dirs.sort()
+        for n in sorted(dirs + fichiers):
+            p = os.path.join(rep, n)
+            rel = p[len(d):]
+            try:
+                s = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISLNK(s.st_mode):
+                quoi = "l %s" % os.readlink(p)
+            elif stat.S_ISDIR(s.st_mode):
+                quoi = "d"
+            elif stat.S_ISREG(s.st_mode):
+                quoi = "f %d %s" % (s.st_size, _sha(p))
+            else:
+                quoi = "o %o" % stat.S_IFMT(s.st_mode)
+            lignes.append("%o %d:%d %s\0%s" % (stat.S_IMODE(s.st_mode), s.st_uid, s.st_gid, quoi, rel))
+    return hashlib.sha256("\n".join(lignes).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def maillon(prec, ident, emp):
+    return hashlib.sha256(("%s %s %s" % (prec, ident, emp)).encode()).hexdigest()
+
+
+def chaine_lire(g):
+    """[(ID, empreinte, maillon)] and the raw bytes; ([], b'') when there is none."""
+    try:
+        with open(os.path.join(g, "CHAINE"), "rb") as f:
+            brut = f.read()
+    except OSError:
+        return [], b""
+    return [tuple(l.split()) for l in brut.decode("ascii", "replace").splitlines() if len(l.split()) == 3], brut
+
+
+def chaine_signee(g, brut):
+    """True / False: CHAINE carries a valid signature of the fingerprint's key."""
+    sig = os.path.join(g, "CHAINE.sig")
+    if not os.path.exists(SIG_PUB) or not os.path.exists(sig):
+        return False
+    m = _memfd(brut)
+    try:
+        return _ossl(["pkeyutl", "-verify", "-pubin", "-inkey", SIG_PUB, "-rawin", "-in", "/proc/self/fd/%d" % m,
+                      "-sigfile", sig], fds=(m,)).returncode == 0
+    finally:
+        os.close(m)
+
+
+def chaine_liens(lignes):
+    """The first line whose link does not follow from the one before, or None."""
+    prec = "origine"
+    for ident, emp, m in lignes:
+        if maillon(prec, ident, emp) != m:
+            return ident
+        prec = m
+    return None
+
+
+def etats_signer(phrase, ceux=()):
+    """osmo-racine-live ranger, the volume writable: the states NAMED (those
+    this very write has just put away) are hashed and added, and the chain is
+    signed again. A state found there that nobody named stays out of the
+    chain: slipped in without the passphrase, it must not get blessed by the
+    next signature."""
+    g = etats_rep()
+    if not g or not os.path.isdir(g):
+        return 0
+    pem = cle_privee(phrase) if phrase else None
+    if pem is None:
+        dire("etats du systeme : phrase de /home refusee ou absente - la chaine n est PAS signee")
+        return 1
+    lignes, brut = chaine_lire(g)
+    if lignes and (not chaine_signee(g, brut) or chaine_liens(lignes)):
+        dire("etats du systeme : LA CHAINE EXISTANTE N EST PAS VALIDE (signature ou maillon) - rien n y est ajoute ; "
+             "osmo-empreinte etats-verifier")
+        return 3
+    connus = {l[0] for l in lignes}
+    prec = lignes[-1][2] if lignes else "origine"
+    neufs = 0
+    for ident in sorted(os.listdir(g)):
+        d = os.path.join(g, ident)
+        if ident.startswith(".") or ident in connus or ident not in ceux or not os.path.exists(os.path.join(d, "FAIT")):
+            continue
+        emp = etat_empreinte(d)
+        prec = maillon(prec, ident, emp)
+        lignes.append((ident, emp, prec))
+        neufs += 1
+    brut = "".join("%s %s %s\n" % l for l in lignes).encode()
+    k, m = _memfd(pem), _memfd(brut)
+    try:
+        r = _ossl(["pkeyutl", "-sign", "-inkey", "/proc/self/fd/%d" % k, "-rawin", "-in", "/proc/self/fd/%d" % m], fds=(k, m))
+    finally:
+        os.close(k)
+        os.close(m)
+    if r.returncode != 0 or len(r.stdout) != 64:
+        dire("etats du systeme : signature en echec - la chaine n est PAS mise a jour")
+        return 1
+    try:
+        for nom, donnees in (("CHAINE", brut), ("CHAINE.sig", r.stdout)):
+            with open(os.open(os.path.join(g, "." + nom + ".nouv"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+                f.write(donnees)
+                f.flush()
+                os.fsync(f.fileno())
+        # the signature first: a cut between the two leaves an old chain with
+        # a newer signature - said « not signed », never silently accepted
+        os.replace(os.path.join(g, ".CHAINE.sig.nouv"), os.path.join(g, "CHAINE.sig"))
+        os.replace(os.path.join(g, ".CHAINE.nouv"), os.path.join(g, "CHAINE"))
+        os.sync()
+    except OSError as e:
+        dire("etats du systeme : chaine non ecrite (%s)" % e)
+        return 1
+    dire("etats du systeme : %d etat(s) ajoute(s) a la chaine, %d en tout, signee ; tete %s" % (
+        neufs, len(lignes), (lignes[-1][2][:16] if lignes else "-")))
+    return 0
+
+
+def etats_verifier():
+    """No passphrase: the signature of the chain, its links, and every state
+    still present read again and compared with its line. 0: intact."""
+    g = etats_rep()
+    if not g or not os.path.isdir(g):
+        dire("etats du systeme : aucun dans le volume de /home (ou /home ferme)")
+        return 0
+    lignes, brut = chaine_lire(g)
+    presents = sorted(i for i in os.listdir(g) if not i.startswith(".") and os.path.exists(os.path.join(g, i, "FAIT")))
+    if not lignes:
+        dire("etats du systeme : %d etat(s), PAS ENCORE de chaine (elle est faite a la prochaine ecriture validee)" % len(presents))
+        return 2 if presents else 0
+    rc = 0
+    if not chaine_signee(g, brut):
+        sys.stdout.write(ROUGE + "CHAINE NON SIGNEE par la phrase de /home (ou signature fausse)\n" + FIN)
+        rc = 3
+    casse = chaine_liens(lignes)
+    if casse:
+        sys.stdout.write(ROUGE + "MAILLON ROMPU a l etat %s\n" % casse + FIN)
+        rc = 3
+    connus = {l[0] for l in lignes}
+    for ident, emp, m in lignes:
+        d = os.path.join(g, ident)
+        if not os.path.isdir(d):
+            print("%s  %s  retire (defait, ou plus ancien que ce qui est garde)" % (ident, m[:12]))
+        elif etat_empreinte(d) == emp:
+            print("%s  %s  intact" % (ident, m[:12]))
+        else:
+            sys.stdout.write(ROUGE + "%s  %s  MODIFIE APRES COUP\n" % (ident, m[:12]) + FIN)
+            rc = 3
+    for ident in presents:
+        if ident not in connus:
+            sys.stdout.write(ROUGE + "%s  %s  HORS CHAINE (ajoute sans la phrase, ou pas encore signe)\n" % (ident, "-" * 12) + FIN)
+            rc = rc or 2
+    if rc == 0:
+        dire("etats du systeme : chaine signee et intacte, %d etat(s), tete %s" % (len(lignes), lignes[-1][2][:16]))
+    return rc
 
 
 def tpm(args, secrets=()):
@@ -1560,6 +1752,10 @@ def main():
         return rc
     if cmd == "resceller":
         return resceller(lire_phrase())
+    if cmd == "etats-signer":
+        return etats_signer(lire_phrase(), [a for a in sys.argv[2:] if not a.startswith("--")])
+    if cmd == "etats-verifier":
+        return etats_verifier()
     if cmd == "home-direct":
         return home_direct(lire_phrase())
     if cmd == "ancrer":

@@ -83,7 +83,11 @@ case "${1:-status}" in
     reset)    root "$@"; exec "$Z" demander ;;
     fsck)
         root "$@"
-        echo "La chaine est dans les enregistrements chiffres : il faut la phrase de la boite."
+        # the states of the system: chained and signed, checked without any passphrase
+        /usr/local/sbin/osmo-empreinte etats-verifier; e=$?
+        [ "$e" = 3 ] && exit 3
+        echo
+        echo "La chaine de la boite est dans ses enregistrements chiffres : il faut la phrase de la boite."
         s="$(PAGER=cat "$D" voir 2>&1 | grep -aE 'CHAINE ROMPUE|indechiffrable|phrase|refus')"
         if [ -z "$s" ]; then printf '\033[1;32mchaine intacte : %s enregistrement(s)\033[0m\n' "$(find "$BASE/journal" -maxdepth 1 -name '*.age' | wc -l)"
         else printf '\033[1;31m%s\033[0m\n' "$s"; exit 3; fi

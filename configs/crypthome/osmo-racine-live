@@ -629,6 +629,7 @@ vol_home() {
 # the undo (atomic, finished by the initramfs if cut) works as before.
 # /home closed (a guest root session that somebody validates): they stay on
 # the disk until the owner's next write puts them away.
+EMPREINTE=/usr/local/sbin/osmo-empreinte
 garage() { printf '%s/.osmo-retour/systeme' "$(vol_home)"; }
 garage_ouvert() { mountpoint -q "$HOME_BAS" 2>/dev/null || home_direct; }
 # volume_rw / volume_ro : the volume writable for the time of one of these
@@ -659,8 +660,18 @@ ranger() {
             trace "etats du systeme : $id N A PAS PU etre range dans le volume (place ?) - il reste sur le disque"
         fi
     done
-    # bounded, like the way back itself
-    ls -1 "$g" 2>/dev/null | sort | head -n -"$RETOUR_MAX" | while IFS= read -r d; do rm -rf "${g:?}/$d"; done
+    # CHAINED AND SIGNED (osmo-empreinte etats-signer): each new state gets an
+    # identifier computed on its content and on the state before it, and the
+    # chain is signed with the key the passphrase unlocks - a state changed
+    # afterwards shows (osmo-empreinte etats-verifier)
+    if [ -n "$PHRASE" ] && [ -x "$EMPREINTE" ]; then
+        # shellcheck disable=SC2086
+        printf '%s\n' "$PHRASE" | sans_int "$EMPREINTE" etats-signer --phrase-stdin $faits >> "$TRACE" 2>&1 \
+            || trace "etats du systeme : chaine NON signee (osmo-empreinte etats-verifier)"
+    fi
+    # bounded, like the way back itself (CHAINE and its signature are files:
+    # only the state directories count)
+    ls -1d "$g"/*/ 2>/dev/null | sort | head -n -"$RETOUR_MAX" | while IFS= read -r d; do rm -rf "${d%/}"; done
     sync
     volume_ro
     [ -n "$faits" ] || return 0
@@ -745,7 +756,6 @@ root_nettoyer_faire() {
     return 0
 }
 
-EMPREINTE=/usr/local/sbin/osmo-empreinte
 empreinte_prendre() {
     [ -x "$EMPREINTE" ] || return 0
     # TWO ROOTS, the migration: as soon as a write made with the passphrase

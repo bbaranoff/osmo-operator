@@ -65,6 +65,33 @@ VOLUME = volume_home()
 GARAGE = os.path.join(VOLUME, ".osmo-retour", "systeme") if VOLUME else None
 
 
+def chaine():
+    """{ID: link} from the signed chain of the states (osmo-empreinte etats-signer)."""
+    try:
+        with open(os.path.join(GARAGE, "CHAINE")) as f:
+            return {l.split()[0]: l.split()[2] for l in f if len(l.split()) == 3}
+    except (OSError, TypeError):
+        return {}
+
+
+VERDICT = ["", ""]                          # (class, text) of the chain, checked once at start
+
+
+def verifier_chaine():
+    try:
+        r = subprocess.run(["/usr/local/sbin/osmo-empreinte", "etats-verifier"], capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired):
+        VERDICT[:] = ["M", "chaîne des états : non vérifiée"]
+        return
+    mauvais = [l for l in r.stdout.splitlines() if "MODIFIE" in l or "HORS CHAINE" in l or "ROMPU" in l or "NON SIGNEE" in l]
+    if r.returncode == 0:
+        VERDICT[:] = ["A", "chaîne des états signée et intacte"]
+    elif r.returncode == 2 and not any("MODIFIE" in l or "ROMPU" in l for l in mauvais):
+        VERDICT[:] = ["M", "des états ne sont pas encore dans la chaîne signée (elle se fait à la prochaine écriture validée)"]
+    else:
+        VERDICT[:] = ["D", "CHAÎNE DES ÉTATS ALTÉRÉE : " + " ; ".join(x.strip() for x in mauvais[:4])]
+
+
 def rep(c):
     """Where commit c keeps what it replaced: the /home volume, or still the
     disk (a commit not put away yet)."""
@@ -339,6 +366,9 @@ def page_accueil():
              "<span class=gris>- pas encore enregistrée : %d fichier(s) changé(s), en mémoire</span></div>"
              "<a class=id href='%s'>parcourir</a></div></div>"
              % (url("commit/" + EN_COURS), n, url("tree/" + EN_COURS + "/")))
+    if VERDICT[1]:
+        o.append("<div class=boite><div class=ligne><span class='b %s'>%s</span></div></div>" % (VERDICT[0], html.escape(VERDICT[1])))
+    ch = chaine()
     session, bloc = None, []
 
     def vider():
@@ -355,8 +385,9 @@ def page_accueil():
         nc = len(_crees_cache(c))
         bloc.append("<div class=ligne><div class=titre><a href='%s'>Écriture du %s</a> "
                     "<span class=gris>- %d remplacé(s) ou supprimé(s), %d créé(s)</span></div>"
-                    "<a class=id href='%s'>%s</a><a class=id href='%s'>parcourir</a></div>"
-                    % (url("commit/" + c), date_de(c), nf, nc, url("commit/" + c), c, url("tree/" + c + "/")))
+                    "<a class=id href='%s' title='maillon de la chaîne signée'>%s</a><a class=id href='%s'>parcourir</a></div>"
+                    % (url("commit/" + c), date_de(c), nf, nc, url("commit/" + c),
+                       ch[c][:10] if c in ch else "hors chaîne", url("tree/" + c + "/")))
     vider()
     if not tous:
         o.append("<div class=note>Aucune écriture validée n'est gardée sur ce disque.</div>")
@@ -532,6 +563,9 @@ def main():
     port = 0
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
+    print("Verification de la chaine des etats...", flush=True)
+    verifier_chaine()
+    print(VERDICT[1])
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Page)
     adresse = "http://127.0.0.1:%d%s" % (srv.server_address[1], url(""))
     print("Les etats du systeme : %d ecriture(s) validee(s), et la session en cours." % len(commits()))
