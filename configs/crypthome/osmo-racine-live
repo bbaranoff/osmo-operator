@@ -596,8 +596,10 @@ identite_de() {   # what a path is: - absent, d directory, l:target, f:sha256, o
     elif [ -e "$1" ]; then printf 'o'
     else printf '%s' '-'; fi
 }
+# mettre_en_attente [NAME] : with a NAME, a CHECKPOINT - the same stream,
+# written under that name, replacing the one before, and nothing said.
 mettre_en_attente() {
-    local t h b pre k=0 d ref="" r p q mo libre nom
+    local t h b pre k=0 d ref="" r p q mo libre nom point="${1:-}"
     [ -x /usr/local/sbin/osmo-diffs ] && command -v zstd >/dev/null 2>&1 || return 0
     [ -f "$ETAT/ecrit" ] && ref="$ETAT/ecrit"
     t="$(mktemp -d /run/osmo-attente.XXXXXX)" || return 0
@@ -644,8 +646,8 @@ mettre_en_attente() {
     done
     libre=$(( $(df -k --output=avail /var/lib/osmo-diffs 2>/dev/null | tail -1 | tr -d ' ') / 1024 ))
     if [ "$mo" -gt "$ATTENTE_MAX_MO" ] || [ $((mo + 512)) -gt "${libre:-0}" ]; then
-        trace "attente : session trop grosse pour la boite ($mo Mo, $libre Mo libres, limite $ATTENTE_MAX_MO) - NON rejouable, seul son enregistrement reste"
-        rm -rf "$t"; return 0
+        [ -n "$point" ] || trace "attente : session trop grosse pour la boite ($mo Mo, $libre Mo libres, limite $ATTENTE_MAX_MO) - NON rejouable, seul son enregistrement reste"
+        rm -rf "$t"; return 1
     fi
     nom="$( { ( cd "$t/p" && tar -cf - meta c*/prefixe c*/suppr c*/base )
               q=1
@@ -654,11 +656,45 @@ mettre_en_attente() {
                       --transform "s|^\\.|c$q/files|S" -C "$(cat "$t/haut$q")" --null -T "$t/liste$q" 2>/dev/null
                   q=$((q + 1))
               done
-            } | zstd -q -3 | /usr/local/sbin/osmo-diffs attente-poser 2>> "$TRACE" )"
+            } | zstd -q -3 | /usr/local/sbin/osmo-diffs attente-poser ${point:+"$point"} 2>> "$TRACE" )"
     rm -rf "$t"
-    if [ -n "$nom" ]; then trace "attente : session NON VALIDEE gardee dans la boite noire ($nom, $mo Mo) - osmo-racine-live fusionner"
+    if [ -n "$point" ]; then
+        # RED in the logs until the session is validated (then: green, « ecrit »)
+        [ -n "$nom" ] && trace "point de controle : session NON VALIDEE gardee dans la boite noire ($mo Mo)"
+        [ -n "$nom" ]; return
+    elif [ -n "$nom" ]; then trace "attente : session NON VALIDEE gardee dans la boite noire ($nom, $mo Mo) - osmo-racine-live fusionner"
     else trace "attente : la session n a PAS pu etre gardee dans la boite noire"; fi
 }
+# THE CHECKPOINT. The box used to be written only by a validation or a clean
+# shutdown: a session cut short (power loss, crash, forced power-off) left
+# nothing. Every ten minutes (osmo-point.timer) the session so far goes to the
+# box as « point-<boot> », replacing the checkpoint before - encrypted to the
+# box's public key, so NO PASSPHRASE is involved. A clean end removes it (the
+# session's own record and content take over). One found at the next boot
+# belongs to a session that never ended: it is kept, « interrompue », with a
+# record in the chain, and can be merged like any session not validated.
+nom_point() { echo "point-$(cut -c1-8 /proc/sys/kernel/random/boot_id 2>/dev/null)"; }
+point_de_controle() {
+    local h b pre neuf=0
+    [ -x /usr/local/sbin/osmo-diffs ] || return 0
+    [ -e "$PROGRES" ] && return 0            # a write is running: not now
+    install -d -m 0700 "$ETAT"
+    if [ -f "$ETAT/point" ]; then
+        while read -r h b pre; do
+            [ -n "$(find "$h" -mindepth 1 -cnewer "$ETAT/point" -print -quit 2>/dev/null)" ] && neuf=1
+        done < <(couches)
+        [ "$neuf" = 1 ] || return 0          # nothing since the last checkpoint
+    fi
+    : > "$ETAT/point.nouv"
+    if mettre_en_attente "$(nom_point)"; then mv -f "$ETAT/point.nouv" "$ETAT/point"; else rm -f "$ETAT/point.nouv"; fi
+    journal_disque                           # no passphrase here: the line goes to the box
+}
+# what the checkpoints held is now validated (on the disk): they have done their time
+points_valides() {
+    [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs attente-oter "$(nom_point)" >/dev/null 2>&1
+    rm -f "$ETAT/point"
+}
+
 # fusionner NAME MODE : see above. The stream is decrypted ONCE (the box's
 # passphrase) to the /home volume - encrypted at rest - then staged on each
 # disk; nothing of /home ever touches the system disk.
@@ -1242,7 +1278,7 @@ EOF
         rm -f $ANCIENS
         poser_initramfs
         poser_grub_boite
-        systemctl enable osmo-fin-session.service osmo-garde.service >/dev/null 2>&1 \
+        systemctl enable osmo-fin-session.service osmo-garde.service osmo-point.timer >/dev/null 2>&1 \
             || log "osmo-fin-session.service non active" >&2
         # the disk against its fingerprint at every boot (osmo-empreinte)
         systemctl enable osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1 \
@@ -1323,6 +1359,7 @@ EOF
         journal_disque
         if [ "$rc" = 0 ]; then
             mv -f "$ETAT/ecrit.nouv" "$ETAT/ecrit"
+            points_valides
             rm -f "$MARQUE"
             vert "ecrit sur le disque : la session jusqu a maintenant ($NB_ECRITS changement(s)). Ce qui suit n est PAS garde : revalider, ou la phrase a l extinction."
             vert "$(confirmation "$ID_ECRIT")"
@@ -1457,6 +1494,8 @@ EOF
         # NOT VALIDATED: its content is kept in the box all the same, to be
         # merged afterwards (osmo-racine-live fusionner)
         if [ "$decision" != valide ] && [ "$n" -gt 0 ]; then mettre_en_attente; fi
+        # the session ends properly: its checkpoint has done its time
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs attente-oter "$(nom_point)" >/dev/null 2>&1
         if [ "$decision" = oublie ]; then
             # white screen (reverse video on a cleared console), no banner:
             # the machine goes off on it
@@ -1535,6 +1574,17 @@ EOF
         else
             rouge "ECHEC : commit $id pas (entierement) defait - voir $JOURNAL_DISQUE"; exit 1
         fi
+        ;;
+    point)
+        # (osmo-point.timer, every ten minutes) the session so far, to the box
+        root_requis
+        live || exit 0
+        point_de_controle
+        ;;
+    points-anciens)
+        # (osmo-garde.service, at boot) a checkpoint left by a session that never ended
+        root_requis
+        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs attente-interrompues "$(nom_point)"
         ;;
     attente)
         # the sessions that were NOT validated and can still be merged
@@ -1749,7 +1799,7 @@ EOF
             rouge "a lancer depuis la session, avec la phrase de /home : sudo osmo-racine-live retirer" >&2; exit 1
         fi
         printf '# /etc/overlayroot.conf - osmo-racine-live retire : / en lecture-ecriture\noverlayroot=""\n' > "$CONF"
-        systemctl disable osmo-fin-session.service osmo-garde.service osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1
+        systemctl disable osmo-fin-session.service osmo-garde.service osmo-point.timer osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1
         # shellcheck disable=SC2086
         rm -f "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
         actualiser

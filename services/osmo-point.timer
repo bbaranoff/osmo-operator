@@ -1,0 +1,15 @@
+[Unit]
+Description=osmo-operator - point de controle de la session vers la boite noire, toutes les dix minutes
+Documentation=file:/usr/local/sbin/osmo-racine-live
+ConditionPathIsMountPoint=/media/root-ro
+# A session cut short (power loss, crash, forced power-off) used to leave
+# NOTHING in the black box, which was only written by a validation or a clean
+# shutdown. At most ten minutes are lost now.
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

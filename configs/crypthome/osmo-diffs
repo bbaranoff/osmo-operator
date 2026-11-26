@@ -496,13 +496,42 @@ case "${1:-liste}" in
         [ -f "$PUB" ] || { log "boite noire non initialisee" >&2; exit 0; }
         ouvrir || exit 1
         mkdir -p "$BASE/attente"
-        nom="$(date +%F_%H%M%S)"
-        if age -r "$(cat "$PUB")" -o "$BASE/attente/$nom.session.age"; then
-            chmod 0444 "$BASE/attente/$nom.session.age"; sync
+        # a NAME given (a checkpoint, « point-<boot> ») replaces the one before
+        nom="${2:-$(date +%F_%H%M%S)}"
+        case "$nom" in *[!A-Za-z0-9_.-]*|.*) log "nom refuse" >&2; exit 1 ;; esac
+        if age -r "$(cat "$PUB")" -o "$BASE/attente/$nom.session.age.nouv"; then
+            chmod 0444 "$BASE/attente/$nom.session.age.nouv"
+            mv -f "$BASE/attente/$nom.session.age.nouv" "$BASE/attente/$nom.session.age"; sync
             echo "$nom"
         else
-            rm -f "$BASE/attente/$nom.session.age"; exit 1
+            rm -f "$BASE/attente/$nom.session.age.nouv"; exit 1
         fi
+        ;;
+    attente-oter)
+        # attente-oter point-<boot> : the checkpoint of a session that ended properly
+        boite
+        case "${2:-}" in point-*) ;; *) exit 0 ;; esac
+        [ -f "$BASE/attente/$2.session.age" ] || exit 0
+        ouvrir || exit 1
+        rm -f "$BASE/attente/$2.session.age"; sync
+        ;;
+    attente-interrompues)
+        # attente-interrompues point-<this boot> : every OTHER checkpoint is a
+        # session that never ended (power loss, crash): kept under its date,
+        # with a record in the chain. No passphrase: the public key.
+        boite
+        [ -f "$PUB" ] || exit 0
+        for j in "$BASE"/attente/point-*.session.age; do
+            [ -f "$j" ] || continue
+            [ "$(basename "$j")" = "${2:-}.session.age" ] && continue
+            ouvrir || exit 1
+            nom="$(date -r "$j" +%F_%H%M%S)"
+            mv -f "$j" "$BASE/attente/$nom.session.age"
+            printf 'session INTERROMPUE sans extinction propre (coupure, plantage) : dernier point de controle du %s, %s Mo - gardee en attente %s\n' \
+                "$(date -r "$BASE/attente/$nom.session.age" '+%F %T')" "$(( $(stat -c %s "$BASE/attente/$nom.session.age") / 1048576 ))" "$nom" \
+                | sceller coupe >/dev/null
+            log "session interrompue gardee en attente : $nom"
+        done
         ;;
     attente-liste)
         # RED: not validated, still to be merged. GREEN: merged since.
@@ -512,6 +541,8 @@ case "${1:-liste}" in
             [ -f "$j" ] || continue
             n=$((n + 1)); b="$(basename "$j")"
             case "$b" in
+                point-*.session.age) printf '\033[1;31m%-22s NON VALIDEE  %6s Mo   session en cours, point de controle de %s\033[0m\n' \
+                                   "${b%.session.age}" "$(( $(stat -c %s "$j") / 1048576 ))" "$(date -r "$j" '+%T')" ;;
                 *.session.age) printf '\033[1;31m%-22s NON VALIDEE  %6s Mo   osmo-racine-live fusionner %s\033[0m\n' \
                                    "${b%.session.age}" "$(( $(stat -c %s "$j") / 1048576 ))" "${b%.session.age}" ;;
                 *.fusionnee)   printf '\033[1;32m%-22s fusionnee    commit %s\033[0m\n' "${b%.fusionnee}" "$(cat "$j")" ;;
@@ -574,7 +605,7 @@ case "${1:-liste}" in
             [ -f "$j" ] || continue
             case "$j" in
                 *_valide.diff.age|*_ecrit.diff.age|*_fusionne.diff.age) c='\033[1;32m' ;;
-                *_efface.diff.age) c='\033[1;31m' ;;
+                *_efface.diff.age|*_coupe.diff.age) c='\033[1;31m' ;;
                 *) c='' ;;
             esac
             printf "$c"'%-55s %8s\033[0m\n' "$(basename "$j")" "$(stat -c %s "$j")"

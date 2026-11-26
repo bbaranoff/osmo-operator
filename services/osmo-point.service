@@ -1,0 +1,15 @@
+[Unit]
+Description=osmo-operator - point de controle : la session en cours, dans la boite noire
+Documentation=file:/usr/local/sbin/osmo-racine-live
+ConditionPathIsMountPoint=/media/root-ro
+RequiresMountsFor=/var/lib/osmo-diffs
+
+[Service]
+Type=oneshot
+# the whole session so far (what it changed and deleted since the last write),
+# encrypted to the box's PUBLIC key: no passphrase. Replaces the checkpoint
+# before. At idle priority: it must never be felt.
+ExecStart=/usr/local/sbin/osmo-racine-live point
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=540

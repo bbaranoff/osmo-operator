@@ -659,6 +659,13 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   without it writes nothing to the disk, not even its log (kept in the box until the next
   validated write); `/boot/efi` is read-only from boot. The black box is the one thing always
   written.
+- **The checkpoint, every ten minutes** (`osmo-point.timer`): the session so far (what it changed
+  and deleted since the last write) goes to the black box, replacing the checkpoint before -
+  encrypted to the box's public key, so no passphrase. It shows **red** (`osmo-racine-live
+  attente`, `sessions.log`) until the session is validated: a validation, during the session or at
+  its end, turns the session's reds into its green record and removes the checkpoint. A session
+  cut short (power loss, crash, forced power-off) no longer leaves nothing: its last checkpoint
+  is found at the next boot, kept as a session not validated (record `coupe`), and can be merged.
 - **The TPM anchor** (`sudo osmo-empreinte ancrer`, once, TPM 2.0): the SHA-256 of the signature's
   public key is written in a TPM NV index that anybody can read but only the TPM's owner can write
   or remove - and the owner's secret is derived from the `/home` passphrase, never stored. A

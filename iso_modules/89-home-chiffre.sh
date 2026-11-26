@@ -146,6 +146,10 @@ install -m 0644 "$DIR/services/osmo-fin-session.service" "$ROOTFS/etc/systemd/sy
 # the kept copy of the mounts of /home: its layers found gone at shutdown
 # (enabled with the rest by osmo-racine-live poser)
 install -m 0644 "$DIR/services/osmo-garde.service" "$ROOTFS/etc/systemd/system/osmo-garde.service"
+# the checkpoint: every ten minutes the session so far goes to the black box
+# (public key, no passphrase) - a session cut short no longer leaves nothing
+install -m 0644 "$DIR/services/osmo-point.service" "$ROOTFS/etc/systemd/system/osmo-point.service"
+install -m 0644 "$DIR/services/osmo-point.timer" "$ROOTFS/etc/systemd/system/osmo-point.timer"
 # The black box: every change of every session, validated or wiped, one
 # record encrypted with age (public key on the box, private key under the
 # box's own passphrase, different from /home's). A login reminder until it

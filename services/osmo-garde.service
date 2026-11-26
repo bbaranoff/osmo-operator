@@ -24,6 +24,9 @@ ExecStartPre=-/usr/bin/mount -o remount,ro /boot/efi
 # diagnostic: a kernel trace of every umount call, read at shutdown when the
 # layers of /home are found gone (who unmounts /media/home-ro ?)
 ExecStartPre=-/usr/local/sbin/osmo-racine-live tracer
+# a checkpoint left in the box by a session that never ended (power loss,
+# crash): kept under its date, with a record in the chain
+ExecStartPre=-/usr/local/sbin/osmo-racine-live points-anciens
 ExecStart=/usr/bin/unshare --mount --propagation private /usr/bin/sleep infinity
 Restart=no
 
