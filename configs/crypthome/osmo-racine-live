@@ -180,8 +180,8 @@ option_montage() {   # option_montage MOUNTPOINT KEY
     findmnt -no OPTIONS "$1" 2>/dev/null | tr ',' '\n' | sed -n "s#^$2=##p" | head -1
 }
 home_overlay() { [ "$(findmnt -no FSTYPE /home 2>/dev/null)" = overlay ]; }
-# « nirvana normal » (GRUB, osmo.home=direct): /home is the encrypted volume
-# itself for this boot - written to directly, outside validation. The way
+# THE NORMAL OPENING (unlock-home): /home is the encrypted volume itself,
+# written to directly once its passphrase has been typed at boot. The way
 # back and the merge work on / AND /home together: not in this mode.
 home_direct() { ! home_overlay && [ -n "$CRYPTHOME_UUID" ] && mountpoint -q /home 2>/dev/null && ! mountpoint -q "$HOME_BAS" 2>/dev/null; }
 pas_en_direct() {
@@ -607,12 +607,19 @@ cle_attente_poser() {
     return 0
 }
 
+# vol_home : where the /home VOLUME itself is - its read-only mount under the
+# RAM layer, or /home when it is written to directly (the normal opening)
+vol_home() {
+    if mountpoint -q "$HOME_BAS" 2>/dev/null; then printf '%s' "$HOME_BAS"
+    elif home_direct; then printf '%s' /home
+    else printf '%s' "$HOME_BAS"; fi
+}
 # root_manque : what the disk's /root holds that the copy in the volume lacks
 root_manque() {
-    local e m=""
+    local e m="" v; v="$(vol_home)"
     for e in "$BAS"/root/* "$BAS"/root/.[!.]*; do
         [ -e "$e" ] || [ -L "$e" ] || continue
-        [ -e "$HOME_BAS/.root/${e##*/}" ] || [ -L "$HOME_BAS/.root/${e##*/}" ] || m="$m ${e##*/}"
+        [ -e "$v/.root/${e##*/}" ] || [ -L "$v/.root/${e##*/}" ] || m="$m ${e##*/}"
     done
     printf '%s' "$m"
 }
@@ -655,7 +662,7 @@ empreinte_prendre() {
     # TWO ROOTS, the migration: as soon as a write made with the passphrase
     # has put root's state INTO the volume, what the disk still holds of it in
     # clear is removed - nobody has to think of it
-    if [ -n "$PHRASE" ] && mountpoint -q /root 2>/dev/null && [ -d "$HOME_BAS/.root" ] \
+    if [ -n "$PHRASE" ] && mountpoint -q /root 2>/dev/null && [ -d "$(vol_home)/.root" ] \
             && root_a_nettoyer && [ -z "$(root_manque)" ]; then
         root_nettoyer_faire
     fi
@@ -1373,16 +1380,16 @@ $(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
 	initrd	$ri
 }
 EOF
-# « nirvana normal » : A NORMAL BOOT WITH osmo.home=direct. For that boot only,
-# unlock-home mounts /home read-write straight on the encrypted volume: no RAM
-# layer over it, nothing to validate, nothing wiped. The system stays in RAM,
-# under the passphrase. The question at boot says the mode, in so many words.
+# « /home en RAM » : A BOOT WITH osmo.home=ram. The normal boot mounts /home
+# read-write straight on the encrypted volume (unlock-home). With this entry,
+# for that boot only, /home is under a RAM layer like the system: written at
+# shutdown with the passphrase, wiped otherwise. The question at boot says so.
 cat <<EOF
-menuentry 'osmo-operator - nirvana normal (/home ecrit directement, sans validation)' --class ubuntu --class os {
+menuentry 'osmo-operator - /home en RAM (ecrit a l extinction avec la phrase, sinon efface)' --class ubuntu --class os {
 	load_video
 	insmod gzio
 $(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
-	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} osmo.home=direct
+	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} osmo.home=ram
 	initrd	$ri
 }
 EOF
@@ -2067,7 +2074,7 @@ EOF
         if ! mountpoint -q /root; then
             rouge "/root n est pas encore celui du volume chiffre (il le devient au demarrage, /home ouvert) : rien n est efface" >&2; exit 1
         fi
-        if [ ! -d "$HOME_BAS/.root" ]; then
+        if [ ! -d "$(vol_home)/.root" ]; then
             rouge "la copie de /root n est pas encore SUR le volume chiffre : valider d abord (osmo-valider-session --maintenant)" >&2; exit 1
         fi
         # nothing is removed that the volume does not hold

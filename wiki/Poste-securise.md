@@ -147,6 +147,19 @@ par défaut, grisée elle aussi sans TPM) ou, case décochée, demande la phrase
 PIN ; elle prend ensuite l'empreinte, ancre la signature et scelle (`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
 fait.
 
+### 3.6 bis L'ouverture normale et l'ouverture d'échec
+
+- **Normale** : la phrase tapée au démarrage ouvre le volume et `/home` est monté en
+  écriture directement dessus. Rien à valider pour `/home`, rien d'effacé : la phrase a été
+  donnée, c'est elle qui autorise les écritures. Le système (`/`) reste en RAM et s'écrit
+  à l'extinction avec la phrase.
+- **D'échec** : pas de phrase. Un root invité, tout en RAM, rien de personnel, rien de
+  gardé.
+- L'ancien comportement — `/home` sous une couche RAM lui aussi, écrit à l'extinction —
+  reste disponible : `CRYPTHOME_HOME="ram"` dans `/etc/default/crypthome`, ou l'entrée
+  GRUB « /home en RAM » pour un démarrage. Dans ce mode seulement, `/home` a une
+  empreinte, des retours arrière et sa couche dans les points de contrôle.
+
 ### 3.7 Deux root
 
 Le disque système est en clair : l'état personnel de root (identifiants de l'assistant,
@@ -195,7 +208,8 @@ condition, cela se voit ici avant d'être écrit.
 | Donnée | Où elle vit | Pour la lire | Pour la modifier |
 |---|---|---|---|
 | Contenu de `/home` | LUKS2 (argon2id, 1 Gio) | phrase home | phrase home |
-| Changements de la session (`/`, `/home`) | RAM | root, session ouverte | idem ; perdus sans phrase home |
+| `/home` pendant la session (ouverture normale) | LUKS2, écrit directement | phrase home (tapée au démarrage) | idem |
+| Changements du système (`/`) pendant la session | RAM | root, session ouverte | idem ; perdus sans phrase home à l'extinction |
 | Les mêmes dans la boîte (points de contrôle, sessions non validées) : couche `/` | boîte noire (`attente/`) | phrase boîte | personne |
 | Idem, couche `/home` | boîte noire, chiffrée pour la clé du home | phrase home (clé privée dans le volume) | personne |
 | Clé du home pour la boîte (privée) | `/home` (LUKS2), sans copie ailleurs | phrase home | phrase home |

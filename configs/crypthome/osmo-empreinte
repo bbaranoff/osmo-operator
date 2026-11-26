@@ -423,9 +423,19 @@ def _volume(ecrire=False):
     dev = "/dev/mapper/" + nom
     if not nom or not os.path.exists(dev):
         return rien
+    # the normal opening: /home IS the volume, mounted read-write
+    monte = _crypthome("CRYPTHOME_MOUNT") or "/home"
+    r = subprocess.run(["findmnt", "-fno", "SOURCE", monte], capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip() and os.path.realpath(r.stdout.strip()) == os.path.realpath(dev):
+        return monte, (lambda: os.sync())
     import tempfile
     d = tempfile.mkdtemp(prefix="osmo-empreinte-", dir="/run")
-    if subprocess.run(["mount", "-o", "rw" if ecrire else "ro", dev, d], capture_output=True).returncode != 0:
+    # read-only when reading; but a volume still mounted read-write somewhere
+    # (the kept copy of the mounts, at shutdown) only accepts the same way
+    for opt in (("rw",) if ecrire else ("ro", "rw")):
+        if subprocess.run(["mount", "-o", opt, dev, d], capture_output=True).returncode == 0:
+            break
+    else:
         os.rmdir(d)
         return rien
 

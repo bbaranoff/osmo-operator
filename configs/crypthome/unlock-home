@@ -435,13 +435,21 @@ code_tpm() {
     fi
 }
 
-# « NIRVANA NORMAL » (GRUB entry, osmo.home=direct on the kernel line): for
-# THIS boot /home is mounted read-write, straight on the encrypted volume -
-# no RAM layer, nothing to validate, nothing wiped. The system (/) stays in
-# RAM and under the passphrase as ever. The GRUB menu is within anybody's
-# reach: the mode is SAID in the question itself, before the passphrase.
-DIRECT=0
-if racine_live && grep -qE '(^| )osmo\.home=direct( |$)' /proc/cmdline; then DIRECT=1; fi
+# /home ON THE DISK IS THE NORMAL OPENING. The passphrase typed here opens the
+# encrypted volume and /home is mounted read-write straight on it: no RAM
+# layer, nothing to validate, nothing wiped - the passphrase has been given,
+# that is what authorises the writes. THE RAM IS THE OPENING OF FAILURE: no
+# passphrase, a guest root with nothing personal and nothing kept. The system
+# (/) stays in RAM and under the passphrase at shutdown, as ever.
+# The former behaviour - /home under a RAM layer too, written at shutdown with
+# the passphrase - is still there: CRYPTHOME_HOME="ram" in /etc/default/crypthome,
+# or the GRUB entry « /home en RAM » (osmo.home=ram on the kernel line; the
+# question then says so). osmo.home=direct forces the direct mode.
+DIRECT=1
+[ "${CRYPTHOME_HOME:-direct}" = ram ] && DIRECT=0
+grep -qE '(^| )osmo\.home=ram( |$)' /proc/cmdline && DIRECT=0
+grep -qE '(^| )osmo\.home=direct( |$)' /proc/cmdline && DIRECT=1
+racine_live || DIRECT=0
 phrase_directe=""
 PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
@@ -450,7 +458,7 @@ essai=0
 while [ "$ouvert" != 1 ] && [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
     invite="decrypt $MOUNT -passphrase- or Enter"
-    [ "$DIRECT" = 1 ] && invite="!!! MODE DIRECT : $MOUNT ECRIT SANS VALIDATION !!! $invite"
+    racine_live && [ "$DIRECT" = 0 ] && invite="($MOUNT en RAM : ecrit a l extinction avec la phrase) $invite"
     [ "$essai" -gt 1 ] && invite="$invite ($essai/$TRIES)"
     if [ "$BOOT" = 1 ] && [ "$PROMPT_MODE" = plymouth ]; then
         passe="$(systemd-ask-password --timeout="$TIMEOUT" \
@@ -547,7 +555,7 @@ monter_home_direct() {
     fi
     umount "$HOME_BAS" || return 1
     mount "$MOUNT" 2>/dev/null || mount "/dev/mapper/$MAPPER" "$MOUNT" || return 1
-    log "MODE DIRECT : $MOUNT est ecrit directement sur le volume chiffre pour ce demarrage (rien a valider, rien d efface)."
+    log "$MOUNT est ecrit directement sur le volume chiffre (rien a valider, rien d efface) ; le systeme, lui, reste en RAM."
 }
 
 if racine_live && [ "$DIRECT" = 1 ]; then

@@ -79,23 +79,26 @@ scripts_en_retard() {      # un script de la session n est pas encore sur le dis
     done
     return 1
 }
-initramfs_en_retard() {    # il n embarque pas ce que les scripts du disque produiraient aujourd hui
-    local i="$R/boot/initrd.img-$(uname -r)" rl="$R/usr/local/sbin/osmo-racine-live" p n f
+initramfs_en_retard() {    # le demarrage (initramfs, menu GRUB) n est pas ce que les scripts du disque produiraient
+    local i="$R/boot/initrd.img-$(uname -r)" rl="$R/usr/local/sbin/osmo-racine-live" p n f v
     [ -e "$i" ] && [ -e "$rl" ] || return 1
-    for p in "HOOK:$R/etc/initramfs-tools/hooks/osmo-boite" "SCRIPT:$R/etc/initramfs-tools/scripts/local-bottom/osmo-boite"; do
-        n="${p%%:*}"; f="${p#*:}"
-        # le crochet et le script d initramfs tels que osmo-racine-live les ecrirait
-        sed -n "/cat > \"\$$n\" <<'$n'/,/^$n\$/p" "$rl" | sed '1d;$d' | cmp -s - "$f" || return 0
-        [ "$f" -nt "$i" ] && return 0
+    # VARIABLE:ETIQUETTE:fichier - ce que osmo-racine-live ecrirait, contre ce qui est sur le disque
+    for p in "HOOK:HOOK:$R/etc/initramfs-tools/hooks/osmo-boite" "SCRIPT:SCRIPT:$R/etc/initramfs-tools/scripts/local-bottom/osmo-boite" \
+             "GRUB_BOITE:GRUB:$R/etc/grub.d/43_osmo-boite"; do
+        v="${p%%:*}"; p="${p#*:}"; n="${p%%:*}"; f="${p#*:}"
+        sed -n "/cat > \"\$$v\" <<'$n'/,/^$n\$/p" "$rl" | sed '1d;$d' | cmp -s - "$f" || return 0
+        [ "$n" = GRUB ] || { [ "$f" -nt "$i" ] && return 0; }
     done
     for f in "$R/usr/local/sbin/osmo-total" "$R/usr/local/sbin/osmo-valider-appliquer"; do
         [ -e "$f" ] && [ "$f" -nt "$i" ] && return 0
     done
     return 1
 }
+# le volume de /home lui-meme : sous la couche RAM (ancien mode), ou /home quand il est ecrit directement
+VOL=/media/home-ro; mountpoint -q "$VOL" 2>/dev/null || VOL=/home
 tpm_pose()     { [ -e /etc/osmo-tpm/actif ]; }
 tpm_reconnu()  { [ -e /run/osmo-tpm/reconnu ]; }
-tpm_en_clair() { sudo sh -c 'ls /media/home-ro/.osmo-diffs/tpm/secret /media/home-ro/.osmo-diffs/tpm/graine /media/home-ro/.osmo-diffs/tpm/pcrs 2>/dev/null | grep -q .'; }
+tpm_en_clair() { sudo sh -c "ls $VOL/.osmo-diffs/tpm/secret $VOL/.osmo-diffs/tpm/graine $VOL/.osmo-diffs/tpm/pcrs 2>/dev/null | grep -q ."; }
 non_valide()   { sudo /usr/local/sbin/osmo-racine-live etat 2>/dev/null | grep -qE 'NON validee|changement\(s\) depuis'; }
 
 # une ligne par point : vert = bon, rouge = pas encore
@@ -108,7 +111,10 @@ etat() {
                                      "Les affaires de l administrateur seront a l abri apres un redemarrage."
     mountpoint -q /opt/log; point $? "Les journaux du banc sont a l abri (chiffres)." \
                                      "Les journaux du banc seront a l abri apres un redemarrage."
-    sudo sh -c 'test -e /media/home-ro/.osmo-diffs/signature.cle && ! test -e /var/lib/osmo-diffs/signature.cle'
+    [ "$(findmnt -fno FSTYPE /home 2>/dev/null)" != overlay ] && mountpoint -q /home
+    point $? "Ton dossier personnel (/home) est ecrit directement sur le disque chiffre." \
+             "Ton dossier personnel (/home) est encore en memoire (il sera sur le disque apres un redemarrage)."
+    sudo sh -c "test -e $VOL/.osmo-diffs/signature.cle && ! test -e /var/lib/osmo-diffs/signature.cle"
     point $? "La cle qui signe le disque est rangee dans la partie chiffree." \
              "La cle qui signe le disque sera rangee au prochain enregistrement."
     sudo sh -c 'ls -A /media/root-ro/root 2>/dev/null | grep -qE "^\.claude(\.json)?$|^\.bash_history$"'; c=$?

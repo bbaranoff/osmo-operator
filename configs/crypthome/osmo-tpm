@@ -107,9 +107,19 @@ phrase_requise() {
 
 # the private directory, read (RAM view or volume) and written (the volume itself)
 prive_lire() { local f; for f in "$HOME_DISQUE/$PRIVE/$1" "/home/$PRIVE/$1"; do [ -s "$f" ] && { cat "$f"; return 0; }; done; return 1; }
+# volume : where the /home VOLUME itself is - its read-only mount under the
+# RAM layer, or /home when it is written to directly (the normal opening);
+# nothing when /home is closed
+volume() {
+    if [ "$TEST" = 1 ] || mountpoint -q "$HOME_DISQUE" 2>/dev/null; then printf '%s' "$HOME_DISQUE"
+    else
+        case "$(findmnt -fno SOURCE /home 2>/dev/null)" in /dev/mapper/*) printf '%s' /home ;; esac
+    fi
+}
 prive_oter() {     # prive_oter NAME... : gone from the /home volume
-    local d="$HOME_DISQUE/$PRIVE" rw=0 n
-    [ "$TEST" = 1 ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
+    local v; v="$(volume)"; [ -n "$v" ] || return 0
+    local d="$v/$PRIVE" rw=0 n
+    [ "$TEST" = 1 ] || [ "$v" != "$HOME_DISQUE" ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
     for n in "$@"; do [ -e "$d/$n" ] && { shred -u "$d/$n" 2>/dev/null || rm -f "$d/$n"; }; done
     sync
     [ "$rw" = 1 ] && mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
@@ -169,9 +179,10 @@ coffre_fermer() {   # written to the /home volume; the clear files of before are
     return 0
 }
 prive_ecrire() {   # prive_ecrire NAME < content : on the /home volume, not in its RAM layer
-    local d="$HOME_DISQUE/$PRIVE" rw=0
-    [ "$TEST" = 1 ] || mountpoint -q "$HOME_DISQUE" || { rouge "/home n est pas ouvert : il garde la graine et les PCR de reference" >&2; return 1; }
-    [ "$TEST" = 1 ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
+    local v; v="$(volume)"
+    [ -n "$v" ] || { rouge "/home n est pas ouvert : il garde la graine et les PCR de reference" >&2; return 1; }
+    local d="$v/$PRIVE" rw=0
+    [ "$TEST" = 1 ] || [ "$v" != "$HOME_DISQUE" ] || { mount -o remount,rw "$HOME_DISQUE" 2>/dev/null && rw=1; }
     ( umask 077; mkdir -p "$d" && cat > "$d/$1.nouv" && mv -f "$d/$1.nouv" "$d/$1" ); local rc=$?
     sync
     [ "$rw" = 1 ] && mount -o remount,ro "$HOME_DISQUE" 2>/dev/null
