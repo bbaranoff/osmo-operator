@@ -452,6 +452,8 @@ condition, cela se voit ici avant d'être écrit.
 | Le même, avant le nettoyage (fait d'office à la première écriture validée) | disque système, retours arrière | **rien** (disque en main) | phrase home |
 | Le même, diffs déjà enregistrés | boîte noire (journal) | **phrase boîte** | personne |
 | Nos journaux | `/home/.log` (monté sur `/opt/log`) | phrase home | phrase home |
+| Mémoire envoyée au swap du système, zram (`osmo-zram`, priorité 100) | RAM, compressée | root, session ouverte (comme la RAM) ; **personne** après l'extinction | idem |
+| Mémoire envoyée au swap de secours, partition `osmo-swap` (priorité -10) | disque, dm-crypt **clé aléatoire à chaque démarrage** (`/etc/crypttab`, `/dev/urandom`), jamais écrite | root, session ouverte (comme la RAM) ; **personne** après une extinction ou une coupure | idem |
 | Mémoire envoyée au swap pendant un build ISO (`build-iso.sh`) | fichier dans `/home` (ou à côté de `OSMO_ISO_WORK`), dm-crypt clé aléatoire tenue par le noyau seul | root, pendant le build (comme la RAM) ; **personne** après (clé perdue à la fin ou à la coupure) | idem |
 | Journaux vivants d'une exécution | RAM (`$LOG_DIR`) | root, session ouverte | idem |
 | Journal des sessions (dates, comptes, totaux) | disque système | rien | phrase home |

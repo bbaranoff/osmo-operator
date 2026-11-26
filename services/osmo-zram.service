@@ -1,0 +1,16 @@
+[Unit]
+Description=osmo-operator - swap compresse en RAM (zram), priorite haute
+Documentation=file:/usr/local/sbin/osmo-zram
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=swap.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-zram start
+ExecStop=/usr/local/sbin/osmo-zram stop
+
+[Install]
+WantedBy=swap.target

@@ -71,6 +71,8 @@ candidates() {
         [ "$pk" = "$disque_racine" ] && continue
         findmnt -S "$p" >/dev/null 2>&1 && continue
         cryptsetup isLuks "$p" 2>/dev/null && continue
+        # the encrypted swap (random key at every boot): never a /home
+        [ "$(blkid -o value -s PARTLABEL "$p" 2>/dev/null)" = osmo-swap ] && continue
         case "$(blkid -o value -s TYPE "$p" 2>/dev/null)" in
             iso9660|swap|vfat) continue ;;
         esac

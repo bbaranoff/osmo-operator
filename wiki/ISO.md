@@ -526,10 +526,20 @@ during the copy reproduces the image's spec sheet (`branding/osmo/show.qml`).
 
 ### 6.3 Partitioning (`modules/partition.conf`)
 
-- **GPT** table, ext4, 300 MiB ESP on `/boot/efi`, no swap.
+- **GPT** table, ext4, 300 MiB ESP on `/boot/efi`. No swap from Calamares (it would be in
+  clear): the bench makes its own, by default - see below.
 - Automatic layout: **"osmo-egprs" on `/`** (60 %, 40 GiB minimum, **never encrypted**),
   **"osmo-diffs" on `/var/lib/osmo-diffs`** (5 GiB, the black box, never encrypted as a
-  partition: each record is) and **"osmo-home" on `/home`** (the rest, 10 GiB minimum).
+  partition: each record is), **"osmo-swap"** (8 GiB, left unformatted) and **"osmo-home"
+  on `/home`** (the rest, 10 GiB minimum).
+- **Swap, by default** (a bench with none died when its memory filled): **zram**, in RAM and
+  compressed (zstd), the size of the RAM, priority 100 - `osmo-zram.service`, on the live key
+  too, never touches a disk; and **"osmo-swap"**, priority -10, the overflow:
+  `crypthome-postinstall` puts it in `/etc/crypttab` with `/dev/urandom` as key - a new key
+  at every boot, never written, `mkswap` redone each time: unreadable after a power cut,
+  same perimeter as the RAM, and outside `/home` (swapping never eats the « Remettre à
+  zéro » snapshot). Wired only if the partition is unique (GPT label) and empty (no file
+  system), by PARTUUID. `ZRAM_PCT=0` in `/etc/default/osmo-zram` turns the zram off.
 - **Ticking "encrypt" encrypts `/home` only**, with **LUKS2**: the root stays readable, secrets
   (profiles, keyrings, cookies) live on the encrypted volume. Manual partitioning allowed.
 

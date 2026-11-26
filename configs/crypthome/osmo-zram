@@ -1,0 +1,60 @@
+#!/bin/bash
+# osmo-zram start|stop|etat - LE SWAP EN RAM, COMPRESSE (zram), PRIORITE HAUTE.
+#
+# Le banc n avait aucun swap : memoire pleine, la machine mourait sans
+# extinction (26 novembre, un build ISO). Deux swaps depuis, par defaut :
+#   - celui-ci, zram : un peripherique en RAM, compresse (zstd, environ x3),
+#     priorite 100 - utilise d abord. Il ne touche JAMAIS le disque : rien a
+#     chiffrer, perimetre inchange (perdu a l extinction comme la RAM) ;
+#   - la partition osmo-swap, chiffree avec une cle aleatoire a chaque
+#     demarrage (/etc/crypttab, crypthome-postinstall), priorite -10 : le
+#     secours pour les pics, illisible apres une coupure.
+#
+# Taille : la RAM (ZRAM_PCT=100 dans /etc/default/osmo-zram ; 0 = pas de zram).
+# Un zram0 deja utilise par autre chose (BSP Armbian...) est laisse tel quel.
+set -u
+
+ZRAM_PCT=100
+ZRAM_ALGO=zstd
+[ -r /etc/default/osmo-zram ] && . /etc/default/osmo-zram
+DEV=/dev/zram0
+SYS=/sys/block/zram0
+
+log() { echo "osmo-zram : $*"; }
+actif() { swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$DEV"; }
+
+case "${1:-}" in
+    start)
+        [ "$ZRAM_PCT" -gt 0 ] 2>/dev/null || { log "desactive (ZRAM_PCT=$ZRAM_PCT)"; exit 0; }
+        actif && { log "deja actif"; exit 0; }
+        [ -e "$SYS" ] || modprobe zram num_devices=1 2>/dev/null || { log "module zram absent : pas de swap en RAM"; exit 0; }
+        [ -e "$SYS" ] || { log "pas de $SYS : pas de swap en RAM"; exit 0; }
+        # deja configure par quelqu un d autre : on n y touche pas
+        if [ "$(cat "$SYS/disksize" 2>/dev/null || echo 0)" != 0 ]; then
+            log "$DEV deja configure par autre chose : laisse tel quel"; exit 0
+        fi
+        ko=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+        taille=$(( ko * ZRAM_PCT / 100 ))
+        # le premier algorithme que ce noyau connait
+        for a in "$ZRAM_ALGO" zstd lz4 lzo-rle lzo; do
+            grep -qw "$a" "$SYS/comp_algorithm" 2>/dev/null && { echo "$a" > "$SYS/comp_algorithm"; algo="$a"; break; }
+        done
+        echo "${taille}K" > "$SYS/disksize" || { log "taille refusee"; exit 1; }
+        mkswap -q "$DEV" >/dev/null && swapon -p 100 "$DEV" \
+            || { log "activation impossible"; echo 1 > "$SYS/reset" 2>/dev/null; exit 1; }
+        log "actif : $(( taille / 1048576 )) Go, ${algo:-?}, priorite 100"
+        ;;
+    stop)
+        actif || exit 0
+        swapoff "$DEV" 2>/dev/null
+        echo 1 > "$SYS/reset" 2>/dev/null
+        log "arrete"
+        ;;
+    etat)
+        swapon --show 2>/dev/null
+        [ -r "$SYS/mm_stat" ] && actif && awk '{printf "zram : %.0f Mo stockes, %.0f Mo de RAM utilises\n", $1/1048576, $3/1048576}' "$SYS/mm_stat"
+        ;;
+    *)
+        echo "usage : osmo-zram start|stop|etat" >&2; exit 2 ;;
+esac
+exit 0

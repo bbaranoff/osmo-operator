@@ -102,6 +102,15 @@ install -m 0755 "$_CH_SRC/osmo-valider-appliquer" "$ROOTFS/usr/local/sbin/osmo-v
 # black box after every commit, compared at every boot BEFORE the /home
 # passphrase is asked - a red warning when the disk was written to outside a
 # session (enabled with the rest by osmo-racine-live poser)
+# THE SWAP, BY DEFAULT (the bench had none: memory full, the machine died with
+# no shutdown). zram, in RAM and compressed, priority 100, from the boot -
+# on the live key too. The installed disk adds the osmo-swap partition,
+# encrypted with a random key at every boot (crypthome-postinstall).
+install -m 0755 "$_CH_SRC/osmo-zram"              "$ROOTFS/usr/local/sbin/osmo-zram"
+install -m 0644 "$DIR/services/osmo-zram.service" "$ROOTFS/etc/systemd/system/osmo-zram.service"
+mkdir -p "$ROOTFS/etc/systemd/system/swap.target.wants"
+chroot "$ROOTFS" systemctl enable osmo-zram.service 2>/dev/null \
+    || ln -sf /etc/systemd/system/osmo-zram.service "$ROOTFS/etc/systemd/system/swap.target.wants/osmo-zram.service"
 install -m 0755 "$_CH_SRC/osmo-empreinte"         "$ROOTFS/usr/local/sbin/osmo-empreinte"
 install -m 0644 "$DIR/services/osmo-empreinte.service" "$ROOTFS/etc/systemd/system/osmo-empreinte.service"
 install -m 0644 "$DIR/services/osmo-empreinte-fond.service" "$ROOTFS/etc/systemd/system/osmo-empreinte-fond.service"
