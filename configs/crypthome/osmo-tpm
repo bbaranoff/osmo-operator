@@ -298,16 +298,34 @@ case "${1:-etat}" in
         echo
         echo "  - le disque systeme est en lecture seule, la session tourne en memoire ;"
         echo "  - a l extinction, la phrase de /home ecrit la session - sinon tout est efface ;"
-        echo "  - le TPM de cette machine va garder UNE PHRASE A TOI. A chaque demarrage il"
-        echo "    demandera ton PIN, puis affichera cette phrase - seulement si micrologiciel,"
-        echo "    GRUB, noyau, initramfs et disque systeme sont ceux d aujourd hui."
-        echo "    Pas de phrase, ou une autre : la machine a ete modifiee, ne tape RIEN."
-        echo
-        phrase_requise "Trois questions : la phrase de /home, ta phrase secrete, ton PIN."
-        demander_secret
-        coffre_ouvrir; [ "$?" = 1 ] && exit 1
-        C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
-        s=""; n=""; n2=""
+        # what was chosen in the installer: the phone's code (the default) or
+        # a sentence behind a PIN
+        mesure="${OSMO_TPM_MESURE:-$(sed -n 's/^mesure=//p' /etc/osmo-operator/options 2>/dev/null | tail -n1)}"
+        if [ "$mesure" = totp ]; then
+            echo "  - le TPM de cette machine va calculer UN CODE A 6 CHIFFRES, le meme que sur ton"
+            echo "    telephone. A chaque demarrage il s affiche a cote de la question de /home -"
+            echo "    seulement si micrologiciel, GRUB, noyau, initramfs et disque systeme sont ceux"
+            echo "    d aujourd hui. Pas de code, ou un autre que le telephone : ne tape RIEN."
+            echo
+            echo "Prends ton telephone et une appli de codes (Aegis, FreeOTP+, 2FAS, Google Authenticator) :"
+            echo "un QR code va s afficher. (Pas de telephone : Ctrl-C, puis sudo osmo-tpm poser --secret.)"
+            echo
+            phrase_requise "Une question : la phrase de /home."
+            coffre_ouvrir; [ "$?" = 1 ] && exit 1
+            C_MODE=totp; C_SECRET=""; C_PIN=""
+            [ -n "$C_GRAINE" ] || C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
+        else
+            echo "  - le TPM de cette machine va garder UNE PHRASE A TOI. A chaque demarrage il"
+            echo "    demandera ton PIN, puis affichera cette phrase - seulement si micrologiciel,"
+            echo "    GRUB, noyau, initramfs et disque systeme sont ceux d aujourd hui."
+            echo "    Pas de phrase, ou une autre : la machine a ete modifiee, ne tape RIEN."
+            echo
+            phrase_requise "Trois questions : la phrase de /home, ta phrase secrete, ton PIN."
+            demander_secret
+            coffre_ouvrir; [ "$?" = 1 ] && exit 1
+            C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
+            s=""; n=""; n2=""
+        fi
         benir && coffre_fermer || { PHRASE=""; rouge "rien de pose" >&2; exit 1; }
         if [ "$TEST" != 1 ]; then
             echo "empreinte du disque et signature (une vingtaine de secondes)..."
@@ -320,8 +338,14 @@ case "${1:-etat}" in
         PHRASE=""
         sceller_pour "$(total_disque)" || { rouge "scellement en echec (osmo-tpm etat ; sudo osmo-tpm sceller)" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
-        vert "TPM scelle. Au prochain demarrage : ton PIN, puis TA phrase a cote de la question de /home."
-        echo "Si elle n apparait pas a ce tout premier redemarrage : sudo osmo-tpm sceller, une fois."
+        if [ "$C_MODE" = totp ]; then
+            qr
+            vert "TPM scelle. Au prochain demarrage : le code a cote de la question de /home, le meme que sur le telephone."
+            echo "S il n apparait pas a ce tout premier redemarrage : sudo osmo-tpm sceller, une fois."
+        else
+            vert "TPM scelle. Au prochain demarrage : ton PIN, puis TA phrase a cote de la question de /home."
+            echo "Si elle n apparait pas a ce tout premier redemarrage : sudo osmo-tpm sceller, une fois."
+        fi
         echo "Pense a valider la session a l extinction (la phrase de /home)."
         ;;
     poser)

@@ -141,9 +141,10 @@ case est décochée et grisée, avec la marche à suivre (l'activer dans le BIOS
 la clé) ; le travail d'installation revérifie et ne pose jamais le poste sécurisé sans
 TPM. L'installeur ne peut pas sceller : les mesures sont celles du démarrage du système
 installé, pas de la clé live. Il prépare donc tout (initramfs compris), et la première
-ouverture de session affiche une fenêtre d'accueil qui demande la phrase de `/home`, la
-phrase secrète et le PIN, puis prend l'empreinte, ancre la signature et scelle
-(`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
+ouverture de session affiche une fenêtre d'accueil qui demande la phrase de `/home`, puis
+enrôle le téléphone par QR code (seconde case, « code du TPM sur le téléphone », cochée
+par défaut, grisée elle aussi sans TPM) ou, case décochée, demande la phrase secrète et le
+PIN ; elle prend ensuite l'empreinte, ancre la signature et scelle (`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
 fait.
 
 ### 3.7 Deux root

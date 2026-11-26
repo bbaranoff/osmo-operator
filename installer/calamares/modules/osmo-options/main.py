@@ -17,9 +17,10 @@
 #               it), osmo-racine-live poser (/ in RAM, written at shutdown with
 #               the passphrase). The TPM itself cannot be sealed from here: the
 #               measures are those of the INSTALLED system's boot, not of this
-#               live key - the FIRST BOOT asks the secret sentence and the PIN
-#               right after the /home passphrase, then anchors and seals
-#               (osmo-tpm premier, called by unlock-home).
+#               live key - the welcome window of the FIRST SESSION enrols the
+#               phone (QR code; second box, ticked by default) or asks the
+#               secret sentence and the PIN, then anchors and seals
+#               (osmo-tpm premier).
 #     unticked, or NO TPM 2.0 on this machine: an ordinary Ubuntu - none of
 #               the above. Without a TPM the box is greyed out by osmo-install;
 #               this job checks again and never sets the secured bench up.
@@ -110,15 +111,16 @@ def run():
                   ["/bin/bash", "-c", "mkdir -p /etc/systemd/system/multi-user.target.wants && "
                    "ln -sf /etc/systemd/system/osmo-diffs.service /etc/systemd/system/multi-user.target.wants/osmo-diffs.service && "
                    "ln -sf /etc/systemd/system/osmo-diffs-init.service /etc/systemd/system/multi-user.target.wants/osmo-diffs-init.service"]]
-        if not telephone:
-            # the initramfs that « poser » builds next carries the measured boot
-            etapes.append(["/bin/bash", "-c", "install -d -m 0755 /etc/osmo-tpm && : > /etc/osmo-tpm/actif"])
+        # the initramfs that « poser » builds next carries the measured boot
+        etapes.append(["/bin/bash", "-c", "install -d -m 0755 /etc/osmo-tpm && : > /etc/osmo-tpm/actif"])
         etapes.append(["/usr/local/sbin/osmo-racine-live", "poser"])
         for e in etapes:
             rc = libcalamares.utils.target_env_call(e)
             libcalamares.utils.debug("osmo-options : %s -> %s" % (" ".join(e)[:80], rc))
         lignes += ["session=securise", "ancre=1"]
-        lignes += ["mesure=totp"] if telephone else ["mesure=secret", "premier=1"]
+        # the phone's code (second box, ticked by default) or a sentence and a
+        # PIN: either way the first session finishes it (osmo-tpm premier)
+        lignes += ["mesure=totp" if telephone else "mesure=secret", "premier=1"]
     else:
         lignes.append("session=ubuntu")
         if "securise" in choix:
