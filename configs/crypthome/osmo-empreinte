@@ -1529,6 +1529,27 @@ def main():
     if cmd == "bip":
         # the alarm itself: it sets every volume to its maximum - not a toy
         return bip() if "--alarme" in sys.argv[2:] else 0
+    if cmd == "alarme" and "--essai" in sys.argv[2:]:
+        # TO LOOK AT IT (a screenshot, a demonstration): the same screen on
+        # THIS terminal, with made-up differences - no beep, no volume touched,
+        # nothing recorded, nothing held
+        global CONSOLE
+        CONSOLE = "/dev/tty"
+        ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
+                      "Propre au demarrage, different a l extinction : quelque chose a ecrit sur le",
+                      "disque pendant cette session sans passer par une validation.", "",
+                      "  AJOUTE   /media/root-ro/etc/systemd/system/exemple.service  (312 octets)",
+                      "  MODIFIE  /media/root-ro/usr/local/sbin/unlock-home  (fichier remplace ou reecrit (inode / date de changement))",
+                      "", "C est note dans la boite noire. Le prochain demarrage le redira, et seul le",
+                      "proprietaire (phrase de /home) pourra ouvrir une session.", "",
+                      "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation.",
+                      "", "(ESSAI : rien n est arrive. Entree pour fermer.)"])
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+        sys.stdout.write(FIN + "\033[2J\033[H")
+        return 0
     if cmd == "alarme":
         # the same red screen and beep again, while the shutdown is held
         ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
