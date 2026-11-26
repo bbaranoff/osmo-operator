@@ -985,6 +985,9 @@ if [ -e /etc/osmo-tpm/actif ] && [ -x /usr/bin/tpm2 ] && [ -n "$_b" ]; then
     for _l in /usr/lib/*/libtss2-tcti-device.so.0*; do
         [ -e "$_l" ] && copy_file library "$_l"
     done
+    # the directory FIRST: without it copy_exec makes /osmo-bin a FILE (the
+    # first tool copied) and nothing else lands - no total, never a code
+    mkdir -p "${DESTDIR}/osmo-bin"
     for _x in find sort sha256sum cut od; do copy_exec "/usr/bin/$_x" /osmo-bin; done
     copy_file script /usr/local/sbin/osmo-total /osmo-bin/osmo-total
     echo "OSMO_TPM=1" >> "${DESTDIR}/conf/osmo-boite"
@@ -1032,7 +1035,7 @@ if [ "$OSMO_TPM" = 1 ] && [ -x /bin/tpm2 ] && [ -c /dev/tpmrm0 ]; then
     export TPM2TOOLS_TCTI=device:/dev/tpmrm0
     R=/run/osmo-tpm
     mkdir -p "$R/m"
-    T="$(PATH=/osmo-bin:$PATH /osmo-bin/osmo-total "${rootmnt}" 2>/dev/null)"
+    T="$(OSMO_BIN=/osmo-bin /osmo-bin/osmo-total "${rootmnt}" 2>/dev/null)"
     printf '%s\n' "$T" > "$R/total"
     [ "${#T}" = 64 ] && tpm2 pcrextend "13:sha256=$T" >/dev/null 2>&1
     case "$BOITE_SRC" in
