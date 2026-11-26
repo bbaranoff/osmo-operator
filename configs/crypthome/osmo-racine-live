@@ -41,6 +41,18 @@
 #   osmo-racine-live defaire      undo the LAST commit on the disk; again for
 #                                 the one before... The black box keeps
 #                                 everything and records what was removed
+#   osmo-racine-live sessions     the SESSIONS that can be undone, newest first
+#                                 (a session = every commit of one boot: its
+#                                 validations and its shutdown)
+#   osmo-racine-live remonter [N] go back N sessions (1 by default): every
+#                                 commit of the last N sessions is undone, on
+#                                 / and on /home, newest first; the black box
+#                                 records each one (« defait »). /home
+#                                 passphrase. From GRUB: « remonter session »
+#                                 is a menu of the sessions WITH THEIR DATES
+#                                 (arrows); the one chosen is undone at boot,
+#                                 once /home is open (osmo.retour=N), and the
+#                                 machine restarts on the older disk
 #   osmo-racine-live annuler      forget the validation: wiped at shutdown
 #   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
 #                                 no question at shutdown
@@ -412,6 +424,10 @@ appliquer_couche() {
         sans_int "$APPLIQUER" "$b" >> "$TRACE" 2>&1
     rc=$?
     progres "$a" "$pre : ecrit"
+    # the session this commit belongs to (one boot): « remonter » goes back by
+    # whole sessions
+    [ "$rc" = 0 ] && [ -d "$b/.osmo-retour/$id" ] \
+        && cat /proc/sys/kernel/random/boot_id > "$b/.osmo-retour/$id/session" 2>/dev/null
     # the way back is bounded: the oldest commits can no longer be undone
     if [ -d "$b/.osmo-retour" ]; then
         ls -1 "$b/.osmo-retour" | sort | head -n -"$RETOUR_MAX" | while IFS= read -r q; do
@@ -493,6 +509,7 @@ appliquer() {
     done < <(couches)
     # cancelled (Ctrl-C, « valider » only): back to the disk of before
     if [ "$ANNULE" = 1 ]; then annuler_commit "$id"; rc=2; fi
+    poser_menu_sessions
     # the disk has changed, by a commit the box knows: its fingerprint again
     # (total SHA-256 of / and of /home on the box - what the next boot compares)
     progres 97 "empreinte du disque"
@@ -512,6 +529,98 @@ retours() {
             d="${d%/FAIT}"; printf '%s %s\n' "${d##*/}" "$pre"
         done
     done | sort | awk '{a[$1]=a[$1]" "$2} END{for(k in a) print k a[k]}' | sort
+}
+
+# session_de ID : the session (boot) a commit belongs to; a commit of before
+# sessions were noted is a session on its own
+session_de() {
+    local h b pre s=""
+    while read -r h b pre; do
+        if [ -s "$b/.osmo-retour/$1/session" ]; then s="$(head -n1 "$b/.osmo-retour/$1/session")"; break; fi
+    done < <(couches)
+    echo "${s:-seul-$1}"
+}
+# sessions : one line per session that can be undone, NEWEST FIRST:
+#   SESSION ID ID...   (its commits, newest first)
+sessions() {
+    local id reste
+    retours | sort -r | while read -r id reste; do printf '%s %s\n' "$(session_de "$id")" "$id"; done \
+        | awk '{ if (!($1 in vu)) { vu[$1] = 1; ordre[++n] = $1 } ids[$1] = ids[$1] " " $2 }
+               END { for (i = 1; i <= n; i++) print ordre[i] ids[ordre[i]] }'
+}
+date_commit() {   # 20261126-124123 -> 2026-11-26 12:41:23
+    echo "$1" | sed -n 's/^\(....\)\(..\)\(..\)-\(..\)\(..\)\(..\)$/\1-\2-\3 \4:\5:\6/p' | grep . || echo "$1"
+}
+# sessions_lisibles : « 1. session du ... : N ecriture(s) ... »
+sessions_lisibles() {
+    local i=0 s ids n premier dernier
+    sessions | while read -r s ids; do
+        i=$((i + 1))
+        # shellcheck disable=SC2086
+        set -- $ids
+        n=$#; dernier="$1"; eval "premier=\${$#}"
+        if [ "$n" = 1 ]; then
+            printf '  %2d. session du %s : 1 ecriture\n' "$i" "$(date_commit "$dernier")"
+        else
+            printf '  %2d. session du %s : %d ecritures, de %s a %s\n' "$i" "$(date_commit "$dernier" | cut -d' ' -f1)" "$n" \
+                "$(date_commit "$premier" | cut -d' ' -f2)" "$(date_commit "$dernier" | cut -d' ' -f2)"
+        fi
+    done
+}
+# poser_menu_sessions : the GRUB menu « remonter session » - one entry per
+# session the disk can still undo, WITH ITS DATES, newest first. Entry N goes
+# back to BEFORE that session (the N last sessions are undone). Written on the
+# system disk after every commit and every undo, before the fingerprint is
+# taken (it is part of the disk); the model comes from update-grub
+# (43_osmo-boite).
+poser_menu_sessions() {
+    local m="$BAS/boot/grub/osmo-retour.modele" f="$BAS/boot/grub/osmo-sessions.cfg"
+    local i=0 cumul=0 s ids n premier dernier titre
+    [ -s "$m" ] || return 0
+    remonter_rw "$BAS" || return 0
+    if [ "$(sessions | wc -l)" = 0 ]; then
+        rm -f "$f"
+    else
+        {
+            echo "# osmo-sessions.cfg - written by osmo-racine-live (poser_menu_sessions)"
+            echo "set timeout=-1"
+            echo "set default=0"
+            sessions | while read -r s ids; do
+                i=$((i + 1))
+                # shellcheck disable=SC2086
+                set -- $ids
+                n=$#; dernier="$1"; eval "premier=\${$#}"; cumul=$((cumul + n))
+                titre="avant la session du $(date_commit "$premier" | cut -c1-16)"
+                [ "$n" -gt 1 ] && titre="$titre -> $(date_commit "$dernier" | cut -c12-16)"
+                titre="$titre   (defait $i session(s), $cumul ecriture(s))"
+                sed -e "s|@TITRE@|$titre|" -e "s|@N@|$i|" "$m"
+            done
+        } > "$f.nouv" 2>/dev/null && mv -f "$f.nouv" "$f"
+    fi
+    sync
+    mount -o remount,ro "$BAS" 2>/dev/null
+}
+# defaire_commit ID : one commit undone on every layer that has it; the box
+# first, while what is about to be removed is still there
+defaire_commit() {
+    local id="$1" h b pre rc=0 arg=""
+    trace "defaire : commit $id"
+    while read -r h b pre; do
+        [ -f "$b/.osmo-retour/$id/FAIT" ] && arg="$arg $pre=$b"
+    done < <(couches)
+    # shellcheck disable=SC2086
+    [ -x /usr/local/sbin/osmo-diffs ] && sans_int /usr/local/sbin/osmo-diffs defait "$id" $arg
+    while read -r h b pre; do
+        [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
+        if remonter_rw "$b"; then
+            sans_int "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null || rc=1
+            mount -o remount,ro "$b" 2>/dev/null
+            trace "defaire : $pre fait"
+        else
+            trace "defaire : remontage en ecriture de $b impossible"; rc=1
+        fi
+    done < <(couches)
+    return $rc
 }
 
 # ── black box: initramfs (read it instead of booting, finish a commit) ──────
@@ -729,13 +838,44 @@ $(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
 	initrd	$ri
 }
 EOF
+# « remonter session » : A MENU OF DATES. The sessions the disk can still undo
+# are listed, newest first, in $rg/osmo-sessions.cfg - rewritten by
+# osmo-racine-live after every commit and every undo, from the model written
+# here (the same kernel line as a normal boot, plus osmo.retour=N). Choosing a
+# date boots normally; once /home is open (its passphrase) unlock-home runs
+# « osmo-racine-live remonter N --demarrage »: the sessions down to that one
+# are undone on / and /home (confirmed on the console, recorded in the black
+# box), then the machine restarts on the older disk.
+rg="$(make_system_path_relative_to_its_root /boot/grub)"
+cat > /boot/grub/osmo-retour.modele <<EOF
+menuentry '@TITRE@' --class ubuntu --class os {
+	load_video
+	insmod gzio
+$(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
+	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} osmo.retour=@N@
+	initrd	$ri
+}
+EOF
+cat <<EOF
+menuentry 'osmo-operator - remonter session (boite noire : choisir la date)' --class ubuntu --class os {
+$(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
+	if [ -s $rg/osmo-sessions.cfg ]; then
+		configfile $rg/osmo-sessions.cfg
+	else
+		echo 'osmo-operator : aucune session a remonter'
+		sleep 4
+	fi
+}
+EOF
 GRUB
     chmod 755 "$GRUB_BOITE"
 }
 
 actualiser() {
-    update-initramfs -u -k all >/dev/null 2>&1 || log "update-initramfs a echoue" >&2
-    update-grub >/dev/null 2>&1 || log "update-grub a echoue" >&2
+    local rc=0
+    update-initramfs -u -k all >/dev/null 2>&1 || { log "update-initramfs a echoue" >&2; rc=1; }
+    update-grub >/dev/null 2>&1 || { log "update-grub a echoue" >&2; rc=1; }
+    return $rc
 }
 
 # ── the kept copy of the mounts (osmo-garde.service) ────────────────────────
@@ -758,7 +898,7 @@ etat_montages() {   # one line: what is mounted of /home and its two layers
     echo "$o"
 }
 case "${1:-etat}" in
-    fin|valider|ecrire|defaire)
+    fin|valider|ecrire|defaire|remonter)
         if [ "$(id -u)" = 0 ] && live && couches_manquantes; then
             trace "${1} : couches de /home hors d atteinte ici :$(etat_montages)"
             _g="$(garde_pid)"
@@ -1055,29 +1195,97 @@ EOF
             p=""; rouge "phrase de /home refusee : rien n est defait"; exit 1
         fi
         p=""
-        trace "defaire : commit $id"
-        # the box first, while what is about to be removed is still there
-        if [ -x /usr/local/sbin/osmo-diffs ]; then
-            /usr/local/sbin/osmo-diffs defait "$id" $(couches | while read -r h b pre; do
-                [ -f "$b/.osmo-retour/$id/FAIT" ] && printf '%s=%s ' "$pre" "$b"; done)
-        fi
-        rc=0
-        while read -r h b pre; do
-            [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
-            if remonter_rw "$b"; then
-                "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null || rc=1
-                mount -o remount,ro "$b" 2>/dev/null
-                trace "defaire : $pre fait"
-            else
-                trace "defaire : remontage en ecriture de $b impossible"; rc=1
-            fi
-        done < <(couches)
+        defaire_commit "$id"; rc=$?
+        poser_menu_sessions
         empreinte_prendre
         journal_disque
         if [ "$rc" = 0 ]; then
             vert "commit $id defait sur le disque (visible au prochain demarrage ; reste : $(retours | wc -l))"
         else
             rouge "ECHEC : commit $id pas (entierement) defait - voir $JOURNAL_DISQUE"; exit 1
+        fi
+        ;;
+    sessions)
+        live || { log "/ n est pas en RAM"; exit 0; }
+        sessions_lisibles
+        ;;
+    remonter)
+        # remonter [N|choisir] [--stdin|--demarrage] : go back N SESSIONS. Every
+        # commit of the last N sessions is undone, newest first, on / and on
+        # /home; the box records each one. The session in RAM is not touched:
+        # the older disk is what the next boot starts on.
+        # --demarrage (unlock-home, GRUB entry « remonter le disque »): /home
+        # has just been opened with its passphrase - it is not asked again;
+        # the choice is confirmed on the console, then the machine restarts.
+        root_requis
+        live || { log "/ n est pas en RAM : rien a remonter"; exit 0; }
+        n="${2:-1}"; mode="${3:-}"
+        case "$n" in --stdin|--demarrage) mode="$n"; n=1 ;; esac
+        if couches_manquantes; then rouge "/home hors d atteinte : rien n est defait" >&2; exit 1; fi
+        tot="$(sessions | wc -l)"
+        if [ "$mode" = --demarrage ]; then
+            console_texte
+            dire "=== osmo-operator : remonter le disque (sessions precedentes) ==="
+            if [ "$tot" = 0 ]; then
+                dire_rouge "aucune session a remonter : le disque n a pas de retour arriere."
+                sleep 8; exit 0
+            fi
+            dire "Sessions que le disque peut encore defaire, la plus recente d abord :"
+            sessions_lisibles > "$CONSOLE"
+            dire ""
+            case "$n" in ''|*[!0-9]*|0)
+                printf 'Remonter de combien de sessions ? (1-%s, Entree : aucune) : ' "$tot" > "$CONSOLE"
+                n=""; IFS= read -r -t 120 n < "$CONSOLE" || n=""
+                ;;
+            esac
+            case "$n" in ''|*[!0-9]*|0) dire "rien n est defait : demarrage normal."; sleep 3; exit 0 ;; esac
+            [ "$n" -gt "$tot" ] && n="$tot"
+            dire_rouge "Les $n derniere(s) session(s) vont etre DEFAITES sur le disque (/ et /home)."
+            dire "La boite noire garde tout et enregistre ce retour ; la machine redemarre ensuite."
+            printf 'Taper OUI pour remonter (autre chose : demarrage normal) : ' > "$CONSOLE"
+            r=""; IFS= read -r -t 120 r < "$CONSOLE" || r=""
+            [ "$r" = OUI ] || { dire "rien n est defait : demarrage normal."; sleep 3; exit 0; }
+        else
+            [ "$tot" -gt 0 ] || { log "aucune session a remonter"; exit 0; }
+            case "$n" in ''|*[!0-9]*|0) log "usage : osmo-racine-live remonter [N]  (sessions : osmo-racine-live sessions)" >&2; exit 1 ;; esac
+            [ "$n" -gt "$tot" ] && n="$tot"
+            if [ "$mode" = --stdin ]; then
+                IFS= read -r p || p=""
+            else
+                echo "sessions a defaire ($n sur $tot) :"; sessions_lisibles | head -n "$n"
+                read -r -s -p "phrase de /home : " p < /dev/tty; echo
+            fi
+            if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then
+                p=""; rouge "phrase de /home refusee : rien n est defait"; exit 1
+            fi
+            p=""
+        fi
+        trace "remonter : $n session(s) sur $tot"
+        rc=0; fait=0
+        for id in $(sessions | head -n "$n" | cut -d' ' -f2-); do
+            [ "$mode" = --demarrage ] && dire "  ecriture du $(date_commit "$id") ..."
+            # the order is the whole point: a commit that cannot be undone stops it
+            if defaire_commit "$id" >> "$TRACE" 2>&1; then fait=$((fait + 1)); else rc=1; break; fi
+        done
+        poser_menu_sessions
+        empreinte_prendre
+        trace "remonter : $fait commit(s) defait(s), code $rc ; reste $(sessions | wc -l) session(s)"
+        journal_disque
+        if [ "$mode" = --demarrage ]; then
+            if [ "$rc" = 0 ]; then dire_vert "disque remonte de $n session(s) ($fait ecriture(s) defaite(s)). Redemarrage..."
+            else dire_rouge "ECHEC apres $fait ecriture(s) defaite(s) - voir $JOURNAL_DISQUE. Redemarrage..."; sleep 10; fi
+            # this boot runs over a disk that has just changed under it: it is
+            # dropped, without a question at shutdown
+            install -d -m 0700 "$ETAT"; date '+%F %T' > "$ETAT/oublier"
+            sleep 4
+            systemctl --no-block reboot
+            sleep 600
+            exit 0
+        fi
+        if [ "$rc" = 0 ]; then
+            vert "disque remonte de $n session(s) ($fait ecriture(s) defaite(s)) - visible au prochain demarrage ; reste : $(sessions | wc -l) session(s)"
+        else
+            rouge "ECHEC apres $fait ecriture(s) defaite(s) - voir $JOURNAL_DISQUE"; exit 1
         fi
         ;;
     actualiser)
@@ -1092,11 +1300,19 @@ EOF
             # session »
             command -v overlayroot-chroot >/dev/null 2>&1 || { log "overlayroot-chroot absent" >&2; exit 1; }
             trace "actualiser : initramfs et grub, sur le disque"
+            # overlayroot-chroot binds /proc, /run and /sys, NOT /dev: without
+            # it grub-probe finds no device and update-grub fails (seen
+            # 2026-11-26: grub.cfg never rebuilt since the installation)
+            _dev=""
+            if ! mountpoint -q "$BAS/dev"; then mount --bind /dev "$BAS/dev" && _dev=1; fi
             overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser ${2:+"$2"}; rc=$?
+            [ -n "$_dev" ] && umount "$BAS/dev" 2>/dev/null
+            [ "$rc" = 0 ] || trace "actualiser : ECHEC (code $rc) - initramfs ou grub PAS reconstruit"
             if [ -x /usr/local/sbin/osmo-diffs ]; then
                 echo "osmo-racine-live actualiser : initramfs et grub reconstruits sur le disque (code $rc)" \
                     | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
             fi
+            poser_menu_sessions
             empreinte_prendre
             journal_disque
             exit $rc
@@ -1108,7 +1324,7 @@ EOF
         esac
         poser_initramfs
         poser_grub_boite
-        actualiser
+        actualiser || { rouge "initramfs ou grub PAS reconstruit" >&2; exit 1; }
         log "initramfs et grub a jour"
         ;;
     retirer)

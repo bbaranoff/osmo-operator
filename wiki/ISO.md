@@ -648,6 +648,15 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+- **Going back several sessions** (`osmo-racine-live sessions`, `remonter [N]`): every commit
+  carries the session (boot) it belongs to; `remonter N` undoes every commit of the last N
+  sessions, newest first, on `/` and on `/home` (`/home` passphrase; the box records each one,
+  `defait`). **From GRUB: « osmo-operator - remonter session »** opens a menu of the sessions the
+  disk can still undo, **with their dates** (arrows, newest first; `/boot/grub/osmo-sessions.cfg`,
+  rewritten after every commit and undo). The date chosen boots normally with `osmo.retour=N`;
+  once `/home` is open, the list is shown again on the console, `OUI` confirms, the sessions down
+  to that one are undone and the machine restarts on the older disk. The way back holds the last
+  20 commits. After an update of the scripts: `sudo osmo-racine-live actualiser` (rebuilds GRUB).
 - **Ctrl-C during a validation cancels it, cleanly**: the copy of a layer is stopped (nothing
   has changed yet), and a layer this write had already applied is **undone** (its own way back;
   the box gets a `defait` record) - never `/` written and `/home` not. The steps that must not be

@@ -504,6 +504,16 @@ elif ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; the
     exit 0
 fi
 
+# GRUB entry « remonter le disque » (osmo.retour=N on the kernel line): /home
+# has just been opened with its passphrase - the last N sessions are undone
+# on / and on /home, then the machine restarts (osmo-racine-live remonter).
+# Nothing undone (no confirmation): the boot goes on.
+if racine_live && grep -qE '(^| )osmo\.retour(=[^ ]*)?( |$)' /proc/cmdline \
+        && [ -x /usr/local/sbin/osmo-racine-live ]; then
+    _n="$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^osmo\.retour=//p' | head -1)"
+    /usr/local/sbin/osmo-racine-live remonter "${_n:-choisir}" --demarrage
+fi
+
 # The owner account can now have a user session: its home exists. Without
 # lingering, /run/user/<uid> and its bus are only created at first login - but
 # run-as-owner starts its applications from root's session without ever

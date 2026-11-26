@@ -129,7 +129,8 @@ Sinon : la question est posee une derniere fois sur la console.' || exit 0
 fi
 
 if graphique; then
-    p="$(zenity --password --title "$TITRE")" || exit 0
+    # (zenity's own Gtk warnings - no session bus under sudo - are not ours)
+    p="$(zenity --password --title "$TITRE" 2>/dev/null)" || exit 0
     # the write runs behind a progress dialog fed by /run/osmo-progres
     # (what osmo-racine-live updates: black box, copy, application)
     rcf="$(mktemp)"
@@ -150,9 +151,13 @@ if graphique; then
               [ "$pc" -ge 100 ] && pc=99
               echo "$pc"; echo "# REC : $tx"
               if [ -t 2 ]; then
-                  n=$((pc * 30 / 100))
-                  printf '\r\033[1;31m  REC [%s%s] %3d %%\033[0m  %-40.40s' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
-                      "$(printf '%*s' "$((30 - n))" '' | tr ' ' '-')" "$pc" "$tx  (Ctrl-C : annuler)" >&2
+                  # one line, rewritten in place: never wider than the terminal
+                  cols="$(stty size 2>/dev/null < /dev/tty | cut -d' ' -f2)"
+                  case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+                  n=$((pc * 20 / 100))
+                  l="$(printf '  REC [%s%s] %3d %%  %s  (Ctrl-C : annuler)' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
+                      "$(printf '%*s' "$((20 - n))" '' | tr ' ' '-')" "$pc" "$tx")"
+                  printf '\r\033[1;31m%s\033[0m\033[K' "$(printf '%s' "$l" | cut -c1-$((cols - 1)))" >&2
               fi
               sleep 0.4
           done; echo 100; [ -t 2 ] && printf '\r\033[K' >&2 ) | zenity --progress --no-cancel --auto-close --width 420 \
