@@ -191,6 +191,9 @@ GRUB_THEME=/boot/grub/themes/osmo/theme.txt
 GRUB_GFXMODE=auto
 GRUB_TIMEOUT_STYLE=menu
 GRUB_TIMEOUT=5
+# the picture also behind GRUB's terminal (shown while the kernel loads, full
+# screen and without border in the theme): the drawing stays, no black screen
+GRUB_BACKGROUND=/boot/grub/themes/osmo/background.png
 GRUBTHEME
     echo -e "  ${GREEN}✓${NC} grub : theme ${CYAN}osmo${NC} (systeme installe)"
 else
