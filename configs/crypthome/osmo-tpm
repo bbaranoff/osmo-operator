@@ -32,6 +32,8 @@
 #   osmo-tpm qr | code    the QR code again / the code now, to check a phone
 #   osmo-tpm etat         enabled or not, recognised or not, sealed when
 #   osmo-tpm oter         disable: seed, sealed object and initramfs part gone
+#   (poser, sceller and oter WRITE to the disk: the /home passphrase is asked
+#   first, and nothing is written when it is refused)
 #   osmo-tpm commit       (osmo-racine-live, after each write) sealed again
 #                         for the disk as it is NOW - same reference PCRs, and
 #                         only when this boot was recognised
@@ -62,6 +64,24 @@ root_requis() { [ "$(id -u)" = 0 ] || { log "root requis" >&2; exit 1; }; }
 outils() {
     command -v tpm2_unseal >/dev/null 2>&1 || { rouge "tpm2-tools absent : sudo apt install tpm2-tools" >&2; exit 1; }
     [ -c /dev/tpmrm0 ] || { rouge "pas de TPM 2.0 sur cette machine (/dev/tpmrm0)" >&2; exit 1; }
+}
+
+# A WRITE TO THE DISK, like any other: the /home passphrase FIRST (poser,
+# sceller, oter write to the /home volume and to the box). Asked on the
+# terminal, checked against the LUKS volume, kept in PHRASE for the caller.
+PHRASE=""
+phrase_requise() {
+    local uuid dev
+    [ "$TEST" = 1 ] && return 0
+    uuid="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
+    dev="/dev/disk/by-uuid/$uuid"
+    [ -n "$uuid" ] && [ -e "$dev" ] || { rouge "pas de /home chiffre : rien n est ecrit" >&2; exit 1; }
+    echo "$1"
+    read -r -s -p "phrase de /home : " PHRASE < /dev/tty || PHRASE=""; echo
+    # (cryptsetup's « keyslot operation could fail » warning goes to stdout)
+    if [ -z "$PHRASE" ] || ! printf '%s' "$PHRASE" | cryptsetup open --test-passphrase --key-file=- "$dev" >/dev/null 2>&1; then
+        PHRASE=""; rouge "phrase de /home refusee : rien n est ecrit" >&2; exit 1
+    fi
 }
 
 # the private directory, read (RAM view or volume) and written (the volume itself)
@@ -141,6 +161,7 @@ case "${1:-etat}" in
     poser)
         root_requis; outils
         [ -s "$BOITE/empreinte.json" ] || { rouge "pas d empreinte du disque : sudo osmo-empreinte prendre" >&2; exit 1; }
+        phrase_requise "poser : une graine dans /home, l initramfs reconstruit SUR LE DISQUE, le scellement sur la boite"
         if ! prive_lire graine >/dev/null; then
             head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n' | prive_ecrire graine || exit 1
         fi
@@ -148,8 +169,10 @@ case "${1:-etat}" in
         # the initramfs measures the disk and asks the TPM: rebuilt on the disk
         # itself, recorded in the box, the disk's fingerprint taken again
         if [ "$TEST" != 1 ]; then
-            /usr/local/sbin/osmo-racine-live actualiser tpm=1 || { rouge "initramfs non reconstruit : rien de pose" >&2; exit 1; }
+            printf '%s\n' "$PHRASE" | /usr/local/sbin/osmo-racine-live actualiser tpm=1 --stdin \
+                || { PHRASE=""; rouge "initramfs non reconstruit : rien de pose" >&2; exit 1; }
         fi
+        PHRASE=""
         sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
         qr
@@ -162,6 +185,8 @@ case "${1:-etat}" in
         # becomes the reference
         root_requis; outils
         [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || { log "demarrage mesure non pose (osmo-tpm poser)"; exit 1; }
+        phrase_requise "sceller : CE demarrage devient la reference (PCR dans /home, scellement sur la boite)"
+        PHRASE=""
         benir && sceller_pour "$(total_disque)" || { rouge "scellement en echec" >&2; exit 1; }
         install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
         vert "scelle : ce demarrage est la reference (PCR $PCR_CHAINE), pour le disque tel qu il est."
@@ -192,7 +217,12 @@ case "${1:-etat}" in
         ;;
     oter)
         root_requis
-        [ "$TEST" = 1 ] || /usr/local/sbin/osmo-racine-live actualiser tpm=0
+        phrase_requise "oter : la graine, le scellement et la partie TPM de l initramfs sont retires du disque"
+        if [ "$TEST" != 1 ]; then
+            printf '%s\n' "$PHRASE" | /usr/local/sbin/osmo-racine-live actualiser tpm=0 --stdin \
+                || { PHRASE=""; rouge "initramfs non reconstruit : rien de retire" >&2; exit 1; }
+        fi
+        PHRASE=""
         [ "$TEST" = 1 ] || mount -o remount,rw "$BOITE" 2>/dev/null
         rm -rf "$OBJ"
         [ "$TEST" = 1 ] || mount -o remount,ro "$BOITE" 2>/dev/null
