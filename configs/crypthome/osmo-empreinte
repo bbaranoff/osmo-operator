@@ -54,7 +54,7 @@
 #   osmo-empreinte test-alarme        THE TEST BUTTON: TRIP the alarm for real
 #                                     (the witness volume, a mini volume
 #                                     controlled like the disk, is corrupted).
-#                                     PARTIAL: now, 10 seconds, then the volume
+#                                     PARTIAL: now, 5 seconds, then the volume
 #                                     back to its original state. FULL: the
 #                                     shutdown held, no guest root at the next
 #                                     boot - only the owner ends it
@@ -2165,7 +2165,7 @@ def test_alarme():
     picture of the alarm, it TRIPS it. The witness volume - a mini volume
     controlled exactly like the system disk - is corrupted for real, and the
     control must find it. The system disk is never touched. TWO MODES:
-      PARTIAL  now, in this session: the control runs, the alarm rings for 10
+      PARTIAL  now, in this session: the control runs, the alarm rings for 5
                seconds and stops, the volume goes back to its original state.
                Nothing is held, nothing stays.
       FULL     everything, as if it were an intruder: at shutdown the alarm
@@ -2207,7 +2207,7 @@ def test_alarme():
     print("  Je corromps pour de vrai un mini volume temoin, surveille comme le disque systeme (qui,")
     print("  lui, n est pas touche), et le controle doit le trouver.")
     print()
-    print("    p   PARTIEL : tout de suite. L alarme sonne 10 secondes (ecran rouge, bip a fond),")
+    print("    p   PARTIEL : tout de suite. L alarme sonne 5 secondes (ecran rouge, bip a fond),")
     print("        s arrete, et le volume revient a son etat d origine. Rien n est bloque.")
     print("    c   COMPLET : comme un vrai intrus. A l extinction la machine NE S ETEINT PAS (bouton")
     print("        d alimentation maintenu) ; au demarrage suivant, alerte et PLUS DE ROOT INVITE.")
@@ -2263,21 +2263,21 @@ def test_alarme():
     # PARTIAL: the alarm now, 10 seconds, then everything back
     lignes = ["!!!  LE CONTROLE A TROUVE UN VOLUME MODIFIE SANS LA PHRASE  !!!", ""] + vu + [
         "", "TEST PARTIEL de l alarme : c est le volume temoin, corrompu expres. L alarme marche.",
-        "Elle s arrete dans 10 secondes et le volume revient a son etat d origine."]
+        "Elle s arrete dans 5 secondes et le volume revient a son etat d origine."]
     if TEST:
         print("\n".join("    " + x for x in lignes))
     else:
         ecran = None
         if os.environ.get("DISPLAY") and os.path.exists("/usr/local/sbin/osmo-alarme-ecran"):
             try:
-                ecran = subprocess.Popen(["/usr/bin/python3", "/usr/local/sbin/osmo-alarme-ecran", "--secondes", "10"] + lignes)
+                ecran = subprocess.Popen(["/usr/bin/python3", "/usr/local/sbin/osmo-alarme-ecran", "--secondes", "5"] + lignes)
             except OSError:
                 ecran = None
         if ecran is None:
             global CONSOLE
             CONSOLE = "/dev/tty"
             ecran_alarme(lignes)
-        bip(10)
+        bip(5)
         if ecran is not None:
             ecran.wait()
         else:

@@ -212,7 +212,7 @@ signature. Chaque choix est la commande existante ; chacune demande la phrase de
   l'empreinte est prise, signée et contrôlée exactement comme celle du disque système,
   qui lui n'est jamais touché. Deux modes :
   - **partiel** : tout de suite, dans la session. Le contrôle doit trouver la corruption,
-    l'alarme sonne 10 secondes puis s'arrête, et le volume est remis dans son état
+    l'alarme sonne 5 secondes puis s'arrête, et le volume est remis dans son état
     d'origine (l'image gardée à sa création, octet pour octet : il correspond de nouveau à
     son empreinte). Rien n'est retenu, rien ne reste.
   - **complet** : comme un vrai intrus, lancé avec la phrase. À l'extinction la machine ne
@@ -425,7 +425,7 @@ par son propriétaire.
 | Chaîne de la boîte noire, du premier au dernier enregistrement | **réel** : 60 enregistrements, phrase de la boîte |
 | Fin de la boîte et fin de l'historique tenues par le TPM (index à extension) | **réel** : posés, étendus à l'extinction, conformes |
 | `osmo-boite fsck` : « tout est vert » | **réel** |
-| Test partiel de l'alarme (volume témoin corrompu, trouvé, alarme 10 s, remis à l'origine) | **réel** |
+| Test partiel de l'alarme (volume témoin corrompu, trouvé, alarme, remis à l'origine) | **réel** |
 | Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
 | Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |
 | Coupure du root invité sur alerte | écrite, **non vue** |
