@@ -36,7 +36,7 @@ Exec=$MOI auto
 OnlyShowIn=GNOME;
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
-X-GNOME-Autostart-Delay=10
+X-GNOME-Autostart-Delay=2
 EOF
 }
 case "${1:-}" in
