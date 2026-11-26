@@ -19,6 +19,12 @@ ConditionPathIsMountPoint=/media/root-ro
 After=local-fs.target unlock-home.service home.mount media-home\x2dro.mount media-home\x2drw.mount
 After=media-root\x2dro.mount media-root\x2drw.mount var-lib-osmo\x2ddiffs.mount network.target
 After=cryptsetup.target osmo-diffs-init.service
+# blk-availability.service (lvm2) runs « blkdeactivate -u » when it stops: it
+# UNMOUNTS every device-mapper volume, /media/home-ro (LUKS) among them. It
+# has no default dependencies, so without this line it stopped at the very
+# start of the shutdown, before the write: the layer under /home was gone.
+# After= it here: it stops only once the session has been written.
+After=blk-availability.service
 Before=display-manager.service systemd-user-sessions.service
 
 [Service]

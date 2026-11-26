@@ -637,6 +637,10 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   not written. One process keeps them in its own private mount namespace from boot; when the
   layers are out of reach, `osmo-racine-live fin` (and `valider`, `defaire`) runs again inside
   it. `/var/log/osmo-session.log` says which mount was missing and whether the copy was used.
+  The cause found: `blk-availability.service` (lvm2) runs `blkdeactivate -u` when it stops,
+  which unmounts every device-mapper volume (`/media/home-ro` is LUKS), and it stopped at the
+  very start of the shutdown. `osmo-fin-session.service` is now ordered `After=` it, so it
+  stops only once the session is written; the kept copy stays as a safety net.
 - **« Fin de session »** (launcher, `osmo-valider-session --fin`): « Tout oublier ? » -
   **Yes**: a home-made pseudo-neuralyzer (`osmo-flash --blanc`: a drawn gadget whose bulb
   charges, then the flash; a `flash.gif` in `/usr/local/share/osmo-operator` replaces the
