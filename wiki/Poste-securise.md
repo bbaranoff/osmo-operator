@@ -411,6 +411,36 @@ jeton GitHub, historique, clés) ne doit pas s'y trouver.
 Dans le terminal : root du propriétaire en rouge, root invité en vert, compte de session
 en bleu foncé gras, nom de machine en gras.
 
+### 3.8 La clé de secours (`secours/`)
+
+Quand l'alarme a sonné, rien de ce qui est sur le disque n'est digne de confiance : ni son
+GRUB, ni son initramfs, ni ses outils. Taper une phrase dessus, c'est peut-être la donner.
+La procédure se fait donc depuis une **clé USB à part**, une mini ISO (~120 Mo) :
+
+- **démarrage signé d'Ubuntu** (shim, GRUB, noyau) : elle passe le Secure Boot du poste
+  sans toucher au BIOS ; **tout le reste est Alpine** (paquets vérifiés avec les clés
+  d'Alpine épinglées dans `secours/keys`) ;
+- **hors ligne par construction** : aucun pilote réseau dans l'image (`drivers/net` et
+  `net/` retirés) — même branchée, elle ne peut rien envoyer ;
+- **ses outils viennent du dépôt** (`osmo-empreinte`, `osmo-total`, `osmo-diffs` au commit
+  de sa construction), jamais du disque examiné ;
+- **étape 1, constater sans rien écrire** : partitions trouvées par leurs étiquettes GPT,
+  bloquées en lecture seule par le noyau (`blockdev --setro`), montées sans rejouer le
+  journal ; signature de l'empreinte, clé contre l'ancre du TPM, fin de la boîte contre le
+  TPM, marque d'alarme, dernière fin de session ; puis **tout le contenu** du disque
+  système relu et comparé à l'empreinte signée — la liste de la compromission ;
+- **étape 2, à venir** : copie dans `/home/<compte>/for_forensics/<date>/` (fichiers
+  compromis tels quels, SHA-256 attendus, sessions gardées, enregistrements de la boîte
+  rechiffrés pour une **nouvelle** clé), retour à l'état d'avant, puis nouvelles phrases
+  (session, `/home` avec rechiffrement complet du volume, boîte noire avec une nouvelle
+  paire de clés).
+
+Une partition de secours sur le disque lui-même, même en LUKS, ne vaut pas la clé : il
+faudrait la démarrer par la chaîne suspecte, et root en session peut la remplacer.
+
+Construire : `sudo secours/build-secours.sh --output=…` ; tester : `secours/test-demarrage.sh
+ISO [DISQUE]` (QEMU, Secure Boot actif) ; en CI : `.github/workflows/build-secours.yml`.
+
 ## 4. Modèle de menace
 
 | Menace | Réponse | Limite |
@@ -555,6 +585,7 @@ par son propriétaire.
 | Fin de session signée en persistant, écran bleu sinon | bac à sable (fausse boîte : premier démarrage muet, sans phrase → écran bleu, mauvaise phrase refusée, bonne phrase → rien, vieille signature refusée) ; **jamais vu à un démarrage** |
 | Verrou de la boîte (un écrivain à la fois, relecture de la lecture seule) | image ext4 en boucle : deux écrivains concurrents, enfant sous le verrou du parent, Python imbriqué, Python qui attend bash ; **pas encore à un démarrage** |
 | Swap chiffré du build ISO | **réel**, 2 Go dans `/home` : actif, `aes-xts`, retiré ; reste d'un build mort retiré |
+| Clé de secours, étape 1 | **QEMU, Secure Boot actif, clés Microsoft** : shim → GRUB → noyau acceptés ; sur le **vrai disque en lecture seule** : signature vérifiée, contenu relu en 55 s, « conforme » ; sur une **copie compromise** (surcouche qcow2) : exactement les 2 différences posées (`/usr/local/bin/intrus` ajouté, `/etc/hostname` modifié) ; **jamais démarrée sur le poste réel** (pas de TPM dans la VM) |
 
 Le point ouvert d'origine — `/home` jamais écrit à l'extinction — était
 `blk-availability.service` (lvm2), qui démontait le volume avant l'écriture ; corrigé par

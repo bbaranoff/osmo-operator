@@ -1,0 +1,107 @@
+name: Build cle de secours
+# LA CLE DE SECOURS DU POSTE SECURISE (secours/build-secours.sh) : une mini ISO
+# (~120 Mo), demarrage signe (shim, GRUB, noyau d Ubuntu) pour passer le
+# Secure Boot, tout le reste Alpine, AUCUN pilote reseau. Testee dans QEMU avec
+# Secure Boot actif et les cles Microsoft AVANT toute publication.
+#
+# Tag « secours-* » : sa propre release, publiee. Lancement a la main : la
+# release partagee (v0.2-1 par defaut) recoit l ISO dans sa section
+# « secours » ; elle reste en brouillon tant que build-iso.yml ne l a pas
+# publiee, sauf si « publier » est coche.
+on:
+  push:
+    tags: ["secours-*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (v0.2-1)"
+        type: string
+        default: "v0.2-1"
+      release:
+        description: "Joindre l ISO a la release"
+        type: boolean
+        default: true
+      publier:
+        description: "Publier la release (sinon : laissee a build-iso.yml)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-secours-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  secours:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Outils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cpio zstd mtools xorriso dosfstools kmod sbsigntool \
+            qemu-system-x86 ovmf socat
+
+      - name: Construire
+        run: |
+          mkdir -p out
+          sudo OSMO_SECOURS_WORK="$RUNNER_TEMP" secours/build-secours.sh \
+            --output="$PWD/out/osmo-secours-$VERSION.iso" --version="$VERSION"
+          sudo chown -R "$(id -u):$(id -g)" out
+          ls -lh out
+
+      # Secure Boot ACTIF, cles Microsoft : shim, GRUB et noyau doivent passer,
+      # et la procedure se lancer (sans disque : « pas de poste trouve »).
+      # Sans KVM sur le runner : emulation, quelques minutes.
+      - name: Test de demarrage (QEMU, Secure Boot)
+        run: |
+          [ -e /dev/kvm ] && sudo chmod 666 /dev/kvm || true
+          bash secours/test-demarrage.sh "out/osmo-secours-$VERSION.iso"
+
+      - name: Artefact
+        uses: actions/upload-artifact@v6
+        with:
+          name: osmo-secours-${{ env.VERSION }}
+          path: out/
+          retention-days: 14
+          compression-level: 0
+
+      - name: Release (section secours)
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > "$RUNNER_TEMP/notes-secours.md" <<NOTES
+          ## osmo-secours-$VERSION.iso · rescue key (secured bench)
+
+          Boot it from a USB stick when the bench's alarm has rung: **offline** (no network
+          driver in the image), Secure Boot passes (Ubuntu-signed chain), then it checks the
+          installed disk **read-only** against its signed fingerprint and lists what changed.
+          \`sudo dd if=osmo-secours-$VERSION.iso of=/dev/sdX bs=4M conv=fsync\` - UEFI only.
+          NOTES
+          bash .github/release-section.sh "$VERSION" secours "$RUNNER_TEMP/notes-secours.md"
+          for f in out/*; do
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              gh release upload "$VERSION" "$f" --clobber && { ok=1; break; }
+              sleep $((attempt * 20))
+            done
+            [ "$ok" = 1 ] || { echo "ECHEC definitif : $f"; exit 1; }
+          done
+
+      - name: Publier
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true' && github.event.inputs.publier == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$VERSION" --draft=false

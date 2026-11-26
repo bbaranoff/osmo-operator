@@ -1,0 +1,101 @@
+#!/bin/bash
+# osmo-secours - LA PROCEDURE DE SECOURS DU POSTE SECURISE, depuis la cle.
+#
+# Lancee seule au demarrage de la cle (secours/init), hors ligne. Elle ne fait
+# confiance a rien du disque examine : ses outils (osmo-empreinte, osmo-total,
+# osmo-diffs) sont ceux du depot, embarques a la construction.
+#
+# ETAPE 1 (celle-ci) : CONSTATER, sans rien ecrire.
+#   - trouver le poste (etiquettes GPT osmo-egprs, osmo-diffs, osmo-home) ;
+#   - le bloquer en lecture seule au niveau du noyau (blockdev --setro), monter
+#     sans rejouer le journal (noload) : rien n est ecrit sur le disque examine ;
+#   - la signature de l empreinte, la cle contre l ancre du TPM, la fin de la
+#     boite noire contre le TPM, la marque d alarme, la derniere fin de session ;
+#   - le CONTENU de tout le disque systeme relu et compare a l empreinte signee :
+#     la liste de la compromission.
+# ETAPE 2 (a venir) : copie for_forensics, retour a l etat d avant, nouvelles
+# phrases (session, /home, boite noire) et nouvelles cles.
+set -u
+
+ROUGE='\033[1;31m'; VERT='\033[1;32m'; JAUNE='\033[1;33m'; BLEU='\033[1;37;44m'; FIN='\033[0m'
+RAPPORT_DIR=/run/osmo-secours
+RAPPORT="$RAPPORT_DIR/rapport.txt"
+RACINE=/media/root-ro
+BOITE=/var/lib/osmo-diffs
+mkdir -p "$RAPPORT_DIR" "$RACINE" "$BOITE"
+: > "$RAPPORT"
+
+note() { echo -e "$*"; echo -e "$*" | sed 's/\x1b\[[0-9;]*m//g' >> "$RAPPORT"; }
+titre() { note ""; note "${BLEU}  $*  ${FIN}"; }
+vert() { note "${VERT}  ok${FIN}  $*"; }
+rouge() { note "${ROUGE}  !!${FIN}  $*"; }
+jaune() { note "${JAUNE}  ??${FIN}  $*"; }
+
+clear 2>/dev/null
+note "${BLEU}                                                                            ${FIN}"
+note "${BLEU}   OSMO-SECOURS - procedure de secours du poste securise (hors ligne)       ${FIN}"
+note "${BLEU}                                                                            ${FIN}"
+note "  $(head -1 /etc/osmo-secours/version 2>/dev/null) - $(sed -n 's/^depot //p' /etc/osmo-secours/version | cut -c1-12)"
+note "  Cette cle n a AUCUN pilote reseau : rien ne peut sortir d ici."
+note "  Etape 1 : constater. Rien n est ecrit sur le disque examine."
+
+# ── la machine ──────────────────────────────────────────────────────────────
+titre "La machine"
+sb="$(od -An -tu1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | tr -d ' ')"
+case "$sb" in 1) vert "Secure Boot actif" ;; 0) jaune "Secure Boot INACTIF" ;; *) jaune "Secure Boot : inconnu (pas d UEFI ?)" ;; esac
+if [ -e /dev/tpmrm0 ]; then vert "TPM 2.0 present"; else jaune "pas de TPM vu : l ancre et la fin de la boite ne pourront pas etre lues"; fi
+
+# ── le poste ────────────────────────────────────────────────────────────────
+titre "Le disque du poste"
+trouver() {   # trouver ETIQUETTE -> le peripherique (un seul, ou rien)
+    local l
+    mapfile -t l < <(blkid -t PARTLABEL="$1" -o device 2>/dev/null)
+    if [ "${#l[@]}" -gt 1 ]; then
+        rouge "PLUSIEURS partitions $1 : ${l[*]} - debranche les autres disques et recommence"; return 1
+    fi
+    [ "${#l[@]}" = 1 ] && echo "${l[0]}"
+    return 0                     # absente : vide, ce n est pas une erreur
+}
+attendre=0
+while :; do
+    P_RACINE="$(trouver osmo-egprs)" || exit 1
+    P_BOITE="$(trouver osmo-diffs)" || exit 1
+    P_HOME="$(trouver osmo-home)" || exit 1
+    [ -n "$P_RACINE" ] && [ -n "$P_BOITE" ] && break
+    attendre=$((attendre + 1))
+    [ "$attendre" -ge 15 ] && { rouge "pas de poste securise trouve (partitions osmo-egprs et osmo-diffs)"; lsblk -o NAME,SIZE,PARTLABEL,FSTYPE 2>/dev/null | tee -a "$RAPPORT"; exit 1; }
+    sleep 1
+done
+vert "systeme : $P_RACINE ; boite noire : $P_BOITE ; /home : ${P_HOME:-?}"
+
+# BLOQUE EN LECTURE SEULE PAR LE NOYAU, puis monte sans rejouer le journal
+for p in "$P_RACINE" "$P_BOITE" ${P_HOME:+"$P_HOME"}; do blockdev --setro "$p" 2>/dev/null; done
+d="$(lsblk -no PKNAME "$P_RACINE" 2>/dev/null | head -1)"; [ -n "$d" ] && blockdev --setro "/dev/$d" 2>/dev/null
+monter() {
+    mountpoint -q "$2" && return 0
+    mount -t ext4 -o ro,noload "$1" "$2" 2>/dev/null || mount -o ro "$1" "$2"
+}
+monter "$P_RACINE" "$RACINE" || { rouge "systeme non montable"; exit 1; }
+monter "$P_BOITE" "$BOITE" || { rouge "boite noire non montable"; exit 1; }
+vert "disques bloques en lecture seule (noyau) et montes sans journal : rien ne sera ecrit"
+
+# ── les controles (osmo-empreinte du DEPOT, applique au disque monte) ───────
+titre "Les preuves (signature, TPM, boite noire)"
+OSMO_EMPREINTE_RACINE="$RACINE" OSMO_TOTAL=/usr/local/sbin/osmo-total \
+python3 -I /usr/local/lib/osmo-secours-controle.py "$RAPPORT_DIR" 2>&1 | tee -a "$RAPPORT"
+titre "Verdict"
+verdict="$(cat "$RAPPORT_DIR/verdict" 2>/dev/null)"
+if [ "$verdict" != conforme ] && [ "$verdict" != compromis ]; then
+    note "${JAUNE}  CONTROLE INACHEVE : une erreur l a interrompu (voir ci-dessus). On ne sait rien.${FIN}"
+    note "  Rapport : $RAPPORT"
+elif [ "$verdict" = conforme ]; then
+    note "${VERT}  Rien d anormal : disque conforme, preuves intactes.${FIN}"
+    note "  Si l alarme a sonne quand meme, ce peut etre le test de l alarme (volume temoin)."
+else
+    note "${ROUGE}  Quelque chose a change sans la phrase : voir ci-dessus.${FIN}"
+    note "  Rapport complet : $RAPPORT ; liste : $RAPPORT_DIR/compromission.txt"
+fi
+note ""
+note "  Etape 2 (copie for_forensics, retour a l etat d avant, nouvelles phrases"
+note "  et nouvelles cles) : pas encore dans cette version de la cle."
+exit 0

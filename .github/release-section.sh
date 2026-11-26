@@ -12,7 +12,7 @@
 # Needs GH_TOKEN and GH_REPO.
 set -euo pipefail
 TAG="$1" SECTION="$2" NOTES="$3"
-ORDRE="iso arm64"   # order of the sections in the text
+ORDRE="iso arm64 secours"   # order of the sections in the text (secours: build-secours.yml)
 TITRE="Osmo-Operator $TAG"
 
 if ! gh release view "$TAG" >/dev/null 2>&1; then

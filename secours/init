@@ -1,0 +1,82 @@
+#!/bin/sh
+# /init de la cle de secours (osmo-secours). PID 1, depuis l initramfs : le
+# systeme entier est en RAM, rien n est monte de la cle elle-meme.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root TERM=linux LANG=C.UTF-8
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm /root
+mount -t devpts devpts /dev/pts
+# ce que bash attend sous /dev (process substitution, redirections)
+ln -sf /proc/self/fd /dev/fd
+ln -sf /proc/self/fd/0 /dev/stdin
+ln -sf /proc/self/fd/1 /dev/stdout
+ln -sf /proc/self/fd/2 /dev/stderr
+mount -t tmpfs -o mode=1777 tmpfs /dev/shm
+mount -t tmpfs -o mode=0755 tmpfs /run
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null
+
+param() { tr ' ' '\n' < /proc/cmdline | sed -n "s/^$1=//p" | tail -1; }
+SERIE="$(param osmo.serie)"
+CLAVIER="$(param osmo.clavier)"
+
+# HORS LIGNE. L image ne contient AUCUN pilote reseau (drivers/net et net/
+# retires a la construction) : le chargement par alias ci-dessous ne peut donc
+# reveiller aucune carte. Seule l interface locale existe.
+ip link set lo up 2>/dev/null
+
+# tout le materiel que l image sait piloter (stockage, USB, clavier, TPM,
+# chiffrement) - par les alias que le noyau annonce, puis une liste sure
+find /sys/devices -name modalias -exec cat {} + 2>/dev/null | sort -u \
+    | xargs -r -n 64 modprobe -qab 2>/dev/null
+for m in nvme ahci sd_mod usb_storage uas xhci_pci ehci_pci ohci_pci uhci_hcd \
+         hid_generic usbhid atkbd i8042 dm_mod dm_crypt tpm_crb tpm_tis \
+         virtio_pci virtio_blk virtio_scsi ext4 vfat nls_cp437 nls_iso8859_1 nls_utf8 loop; do
+    modprobe -q "$m" 2>/dev/null
+done
+# encore une passe : les controleurs viennent de faire apparaitre leurs disques
+sleep 1
+find /sys/devices -name modalias -exec cat {} + 2>/dev/null | sort -u \
+    | xargs -r -n 64 modprobe -qab 2>/dev/null
+
+# le clavier (pas en console serie)
+if [ -z "$SERIE" ]; then
+    case "${CLAVIER:-fr}" in
+        us) ;;
+        *)  f="$(ls /usr/share/bkeymaps/fr/fr.bmap* 2>/dev/null | head -1)"
+            if [ -n "$f" ]; then
+                case "$f" in *.gz) zcat "$f" | loadkmap ;; *) loadkmap < "$f" ;; esac
+            fi ;;
+    esac
+fi
+
+if [ -n "$SERIE" ]; then
+    TTY=/dev/console
+else
+    TTY=/dev/tty1
+fi
+
+# la procedure, puis un menu qui ne rend jamais la main au noyau (PID 1 ne
+# doit pas finir)
+while :; do
+    setsid -c sh -c "osmo-secours" <"$TTY" >"$TTY" 2>&1
+    {
+        echo
+        echo "  osmo-secours termine."
+        echo "    r   recommencer la procedure"
+        echo "    s   un shell (root, hors ligne)"
+        echo "    e   eteindre"
+        echo "    b   redemarrer"
+        printf "  Ton choix : "
+    } >"$TTY"
+    read -r c <"$TTY"
+    case "$c" in
+        r) ;;
+        s) setsid -c sh -c "exec bash -l" <"$TTY" >"$TTY" 2>&1 ;;
+        b) sync; reboot -f ;;
+        *) sync; poweroff -f ;;
+    esac
+done
