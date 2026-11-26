@@ -195,7 +195,13 @@ fait.
 ### 3.6 ter Les états du système, comme du code
 
 Chaque écriture validée du système est un commit : ce qu'elle a remplacé ou supprimé est
-gardé à côté de la racine (`/.osmo-retour/<commit>/`). Deux façons de s'en servir.
+gardé. **Ces états passés vivent dans le volume de `/home`** (`.osmo-retour/systeme/`),
+pas sur le disque système : dès qu'une écriture est faite, ils y sont rangés et retirés du
+disque en clair (`osmo-racine-live ranger` le fait tout de suite, avec la phrase). Qui tient
+le disque, ou une session root invitée, n'a donc plus l'historique des fichiers du
+système. Pour défaire une écriture, son état est ressorti sur le disque le temps du retour
+arrière. Une écriture validée depuis une session invitée (`/home` fermé) reste sur le
+disque jusqu'à la prochaine écriture du propriétaire. Deux façons de s'en servir.
 
 - **Parcourir, comme sur GitHub** : l'icône « États du système » (`osmo-boite web`,
   `osmo-etats`) ouvre une page locale en lecture seule — la liste des écritures par
@@ -203,7 +209,8 @@ gardé à côté de la racine (`/.osmo-retour/<commit>/`). Deux façons de s'en 
   l'arborescence du système telle qu'elle était à cet état, chaque fichier tel qu'il était,
   et l'historique d'un fichier. La session en cours (en mémoire, pas encore enregistrée) y
   figure en tête. Elle tourne en root, n'écoute que sur `127.0.0.1`, et chaque adresse
-  porte une clé tirée au lancement. `/home` n'y est pas.
+  porte une clé tirée au lancement. Elle refuse de démarrer quand `/home` est fermé
+  (session invitée). Les fichiers du propriétaire dans `/home` n'y sont pas.
 - **Les mots de git** (`osmo-boite`) : `log`, `show ID` (phrase de la boîte), `status`,
   `diff [chemin]`, `commit` (= Enregistrer), `revert` (= défaire la dernière écriture),
   `checkout N` (= remonter N sessions), `stash` et `merge NOM` (les sessions non validées),
@@ -289,7 +296,8 @@ condition, cela se voit ici avant d'être écrit.
 | Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
 | Les mêmes, copie de la boîte (`osmo-diffs sauvegarder`) | là où le propriétaire la pose (clé USB) | phrase boîte | qui tient la clé USB (la chaîne le montre) |
 | Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
-| États passés du système (`/.osmo-retour`) | disque système, en clair, à root | rien (disque en main) ; root en session (page locale `osmo-etats`, clé par lancement) | phrase home |
+| États passés du système (ce que chaque écriture a remplacé) | `/home` (LUKS2), `.osmo-retour/systeme` | phrase home (page locale `osmo-etats`, clé par lancement, refusée `/home` fermé) | phrase home |
+| Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |
 | Les mêmes, copie pour resceller, et PCR de référence | `/home`, coffre chiffré par la phrase (scrypt, 1 Gio) | phrase home, saisie | phrase home, saisie |

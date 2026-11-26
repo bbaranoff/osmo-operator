@@ -20,12 +20,13 @@
 #
 #   osmo-etats [--port N] [--sans-navigateur]
 #
-# PERIMETER. It reads the system disk and its undo snapshots: what is in clear
-# on the disk already (to read it: nothing, disk in hand) - but the snapshots
-# are root's, so this runs as root, listens on 127.0.0.1 only, and every URL
-# carries a random key printed at start: no other account of the machine and
-# no web page can ask it anything. It writes nothing. /home is not shown (in
-# persistent mode it has no commits; its content never leaves the volume).
+# PERIMETER. The past states are kept IN THE /home VOLUME
+# (.osmo-retour/systeme, put there by osmo-racine-live after each write): they
+# can only be read with /home open, i.e. by the owner. A guest root session
+# gets nothing - this refuses to start when /home is closed. It runs as root,
+# listens on 127.0.0.1 only, and every URL carries a random key printed at
+# start: no other account of the machine and no web page can ask it anything.
+# It writes nothing. The owner's own files in /home are not shown.
 import difflib
 import html
 import http.server
@@ -38,7 +39,38 @@ import urllib.parse
 
 BAS = os.environ.get("OSMO_ETATS_BAS", "/media/root-ro")
 HAUT = os.environ.get("OSMO_ETATS_HAUT", "/media/root-rw/overlay")
-RET = os.path.join(BAS, ".osmo-retour")
+RET_DISQUE = os.path.join(BAS, ".osmo-retour")
+
+
+def volume_home():
+    """The /home VOLUME, where the past states of the system are kept
+    (osmo-racine-live ranger): read-only under the RAM layer, or /home itself
+    when it is written to directly. None: /home is closed - a guest session."""
+    force = os.environ.get("OSMO_ETATS_VOLUME")
+    if force:
+        return force
+    for m in ("/media/home-ro", "/home"):
+        if not os.path.ismount(m):
+            continue
+        try:
+            src = subprocess.run(["findmnt", "-fno", "SOURCE", m], capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if os.path.realpath(src).startswith("/dev/dm-"):
+            return m
+    return None
+
+
+VOLUME = volume_home()
+GARAGE = os.path.join(VOLUME, ".osmo-retour", "systeme") if VOLUME else None
+
+
+def rep(c):
+    """Where commit c keeps what it replaced: the /home volume, or still the
+    disk (a commit not put away yet)."""
+    if GARAGE and os.path.exists(os.path.join(GARAGE, c, "FAIT")):
+        return os.path.join(GARAGE, c)
+    return os.path.join(RET_DISQUE, c)
 CACHES = (".osmo-retour", ".osmo-valider")
 MAX_TEXTE = 400 * 1024
 MAX_DIFFS = 300
@@ -48,10 +80,13 @@ CLE = secrets.token_urlsafe(18)
 
 def commits():
     """Finished commits, oldest first."""
-    try:
-        return sorted(c for c in os.listdir(RET) if os.path.exists(os.path.join(RET, c, "FAIT")))
-    except OSError:
-        return []
+    t = set()
+    for d in (GARAGE, RET_DISQUE):
+        try:
+            t.update(c for c in os.listdir(d) if not c.startswith(".") and os.path.exists(os.path.join(d, c, "FAIT")))
+        except (OSError, TypeError):
+            pass
+    return sorted(t)
 
 
 def lire(chemin, n=4096):
@@ -69,12 +104,12 @@ def date_de(c):
 
 
 def crees(c):
-    return [p for p in lire(os.path.join(RET, c, "crees"), 1 << 24).split("\n") if p]
+    return [p for p in lire(os.path.join(rep(c), "crees"), 1 << 24).split("\n") if p]
 
 
 def mis_de_cote(c):
     """Paths (files and links) that commit c replaced or removed."""
-    base = os.path.join(RET, c, "files")
+    base = os.path.join(rep(c), "files")
     for d, _dirs, fichiers in os.walk(base):
         for f in fichiers:
             yield os.path.join(d, f)[len(base):]
@@ -106,7 +141,7 @@ def source(c, chemin):
     except ValueError:
         apres = tous
     for d in apres:
-        v = os.path.join(RET, d, "files") + chemin
+        v = os.path.join(rep(d), "files") + chemin
         if existe(v) and not os.path.isdir(v):
             return v
         if chemin in _crees_cache(d):
@@ -139,7 +174,7 @@ def source_avant(c, chemin):
     if c == EN_COURS:
         r = BAS + chemin
         return r if existe(r) else None
-    v = os.path.join(RET, c, "files") + chemin
+    v = os.path.join(rep(c), "files") + chemin
     if existe(v) and not os.path.isdir(v):
         return v
     if chemin in _crees_cache(c):
@@ -235,7 +270,7 @@ def lister(c, chemin):
         for p in _crees_cache(d):
             if os.path.dirname(p) == (chemin or "/"):
                 noms.pop(os.path.basename(p), None)
-        v = os.path.join(RET, d, "files") + (chemin or "/")
+        v = os.path.join(rep(d), "files") + (chemin or "/")
         try:
             for e in os.scandir(v):
                 noms[e.name] = e.is_dir(follow_symlinks=False)
@@ -311,7 +346,7 @@ def page_accueil():
             o.append("<div class=boite>" + "".join(bloc) + "</div>")
             del bloc[:]
     for c in reversed(tous):
-        s = lire(os.path.join(RET, c, "session")).strip()
+        s = lire(os.path.join(rep(c), "session")).strip()
         if s != session:
             vider()
             session = s
@@ -432,7 +467,7 @@ def page_blob(c, chemin):
             if d == EN_COURS:
                 touche = existe(HAUT + chemin)
             else:
-                touche = existe(os.path.join(RET, d, "files") + chemin) or chemin in _crees_cache(d)
+                touche = existe(os.path.join(rep(d), "files") + chemin) or chemin in _crees_cache(d)
         except OSError:
             touche = False
         if touche:
@@ -488,7 +523,12 @@ class Page(http.server.BaseHTTPRequestHandler):
 
 def main():
     if os.geteuid() != 0 and not os.environ.get("OSMO_ETATS_BAS"):
-        sys.exit("osmo-etats : root requis (sudo osmo-etats) - les etats gardes sur le disque sont a root")
+        sys.exit("osmo-etats : root requis (sudo osmo-etats)")
+    if VOLUME is None:
+        # A GUEST SESSION HAS NO HISTORY TO BROWSE: the past states of the
+        # system are in the encrypted volume, and it is closed
+        sys.exit("osmo-etats : /home est ferme - les etats du systeme sont dans le volume chiffre, "
+                 "seul le proprietaire (phrase de /home) peut les parcourir")
     port = 0
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])

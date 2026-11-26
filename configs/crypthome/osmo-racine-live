@@ -37,6 +37,10 @@
 #   osmo-racine-live ecrire       the same gesture, its former name
 #                                 (only what changed since the last write
 #                                 is written: that moment, not the session)
+#   osmo-racine-live ranger       move the past states of the system (what
+#                                 each commit replaced) from the disk, in
+#                                 clear, into the /home volume - done by every
+#                                 write; this does it now (/home passphrase)
 #   osmo-racine-live retours      the commits that can be undone
 #   osmo-racine-live defaire      undo the LAST commit on the disk; again for
 #                                 the one before... The black box keeps
@@ -614,6 +618,91 @@ vol_home() {
     elif home_direct; then printf '%s' /home
     else printf '%s' "$HOME_BAS"; fi
 }
+# ── THE WAY BACK OF THE SYSTEM LIVES IN THE /home VOLUME ────────────────────
+# A commit keeps what it replaced or deleted (.osmo-retour/ID): the past
+# states of the system. Left on the system disk, in clear, they are read by
+# whoever holds the disk and by a guest root session - the history of every
+# file of /, without any passphrase. So they are PUT AWAY: as soon as a write
+# is done (the passphrase has been given, /home is open) each one is copied
+# into the encrypted volume, $VOLUME/.osmo-retour/systeme/ID, and removed from
+# the disk. To undo a commit it is first taken out again, onto the disk, where
+# the undo (atomic, finished by the initramfs if cut) works as before.
+# /home closed (a guest root session that somebody validates): they stay on
+# the disk until the owner's next write puts them away.
+garage() { printf '%s/.osmo-retour/systeme' "$(vol_home)"; }
+garage_ouvert() { mountpoint -q "$HOME_BAS" 2>/dev/null || home_direct; }
+# volume_rw / volume_ro : the volume writable for the time of one of these
+# (it is read-only under the RAM layer, already writable in direct mode)
+VOL_RW=0
+volume_rw() { VOL_RW=0; [ "$(vol_home)" = "$HOME_BAS" ] || return 0; remonter_rw "$HOME_BAS" && VOL_RW=1; }
+volume_ro() { [ "$VOL_RW" = 1 ] && remonter_ro "$HOME_BAS"; VOL_RW=0; return 0; }
+# ranger : every finished commit of / leaves the disk for the volume
+ranger() {
+    local g d id faits="" n=0
+    ls "$BAS"/.osmo-retour/*/FAIT >/dev/null 2>&1 || return 0
+    if ! garage_ouvert; then
+        trace "etats du systeme : /home est ferme - ils restent sur le disque jusqu a la prochaine ecriture du proprietaire"
+        return 1
+    fi
+    g="$(garage)"
+    volume_rw || { trace "etats du systeme : volume de /home non inscriptible - ils restent sur le disque"; return 1; }
+    install -d -m 0700 "${g%/systeme}" "$g"
+    for d in "$BAS"/.osmo-retour/*/FAIT; do
+        [ -f "$d" ] || continue
+        d="${d%/FAIT}"; id="${d##*/}"
+        [ -e "$d/DEFAIRE" ] && continue          # an undo in progress: not now
+        rm -rf "$g/.partiel-$id"
+        if cp -a "$d" "$g/.partiel-$id" 2>>"$TRACE" && sync && rm -rf "$g/$id" && mv "$g/.partiel-$id" "$g/$id"; then
+            faits="$faits $id"; n=$((n + 1))
+        else
+            rm -rf "$g/.partiel-$id"
+            trace "etats du systeme : $id N A PAS PU etre range dans le volume (place ?) - il reste sur le disque"
+        fi
+    done
+    # bounded, like the way back itself
+    ls -1 "$g" 2>/dev/null | sort | head -n -"$RETOUR_MAX" | while IFS= read -r d; do rm -rf "${g:?}/$d"; done
+    sync
+    volume_ro
+    [ -n "$faits" ] || return 0
+    if remonter_rw "$BAS"; then
+        for id in $faits; do rm -rf "$BAS/.osmo-retour/$id"; done
+        sync
+        # the freed blocks handed back to the SSD: deleted is not erased
+        fstrim "$BAS" >/dev/null 2>&1
+        remonter_ro "$BAS"
+        trace "etats du systeme : $n range(s) dans le volume de /home, retire(s) du disque en clair"
+    else
+        trace "etats du systeme : $n copie(s) dans le volume, mais le disque n a pas pu etre ouvert pour les en retirer"
+    fi
+}
+# sortir ID : back onto the disk, for its undo
+sortir() {
+    local g id="$1"
+    [ -d "$BAS/.osmo-retour/$id" ] && return 0
+    garage_ouvert || return 0
+    g="$(garage)"
+    [ -f "$g/$id/FAIT" ] || return 0
+    remonter_rw "$BAS" || { trace "defaire : remontage en ecriture de $BAS impossible"; return 1; }
+    install -d -m 0700 "$BAS/.osmo-retour"
+    rm -rf "$BAS/.osmo-retour/.partiel-$id"
+    if cp -a "$g/$id" "$BAS/.osmo-retour/.partiel-$id" 2>>"$TRACE" && sync && mv "$BAS/.osmo-retour/.partiel-$id" "$BAS/.osmo-retour/$id"; then
+        sync; remonter_ro "$BAS"; return 0
+    fi
+    rm -rf "$BAS/.osmo-retour/.partiel-$id"; sync; remonter_ro "$BAS"
+    trace "defaire : $id n a pas pu etre ressorti du volume de /home"
+    return 1
+}
+# garage_oter ID : undone - its copy in the volume has done its time
+garage_oter() {
+    local g
+    garage_ouvert || return 0
+    g="$(garage)"
+    [ -d "$g/$1" ] || return 0
+    volume_rw || return 0
+    rm -rf "${g:?}/$1"; sync
+    volume_ro
+}
+
 # root_manque : what the disk's /root holds that the copy in the volume lacks
 root_manque() {
     local e m="" v; v="$(vol_home)"
@@ -711,6 +800,7 @@ appliquer() {
         id="$(date '+%Y%m%d-%H%M%S')"
         pris=0
         while read -r h b pre; do [ -e "$b/.osmo-retour/$id" ] && pris=1; done < <(couches)
+        garage_ouvert && [ -e "$(garage)/$id" ] && pris=1
         [ "$pris" = 0 ] && break
         sleep 1
     done
@@ -733,6 +823,9 @@ appliquer() {
     done < <(couches)
     # cancelled (Ctrl-C, « valider » only): back to the disk of before
     if [ "$ANNULE" = 1 ]; then annuler_commit "$id"; rc=2; fi
+    # the past states of the system leave the disk for the encrypted volume
+    progres 96 "etats du systeme"
+    ranger
     poser_menu_sessions
     # the disk has changed, by a commit the box knows: its fingerprint again
     # (total SHA-256 of / and of /home on the box - what the next boot compares)
@@ -986,12 +1079,20 @@ fusionner() {
 # retours : ID LAYERS, oldest first
 retours() {
     local h b pre d
-    couches | while read -r h b pre; do
+    { couches | while read -r h b pre; do
         for d in "$b"/.osmo-retour/*/FAIT; do
             [ -f "$d" ] || continue
             d="${d%/FAIT}"; printf '%s %s\n' "${d##*/}" "$pre"
         done
-    done | sort | awk '{a[$1]=a[$1]" "$2} END{for(k in a) print k a[k]}' | sort
+      done
+      # those of / put away in the volume (ranger)
+      if garage_ouvert; then
+        for d in "$(garage)"/*/FAIT; do
+            [ -f "$d" ] || continue
+            d="${d%/FAIT}"; printf '%s %s\n' "${d##*/}" /
+        done
+      fi
+    } | sort -u | awk '{a[$1]=a[$1]" "$2} END{for(k in a) print k a[k]}' | sort
 }
 
 # session_de ID : the session (boot) a commit belongs to; a commit of before
@@ -1001,6 +1102,7 @@ session_de() {
     while read -r h b pre; do
         if [ -s "$b/.osmo-retour/$1/session" ]; then s="$(head -n1 "$b/.osmo-retour/$1/session")"; break; fi
     done < <(couches)
+    if [ -z "$s" ] && garage_ouvert && [ -s "$(garage)/$1/session" ]; then s="$(head -n1 "$(garage)/$1/session")"; fi
     echo "${s:-seul-$1}"
 }
 # sessions : one line per session that can be undone, NEWEST FIRST:
@@ -1095,6 +1197,7 @@ confirmation() {
 defaire_commit() {
     local id="$1" seule="${2:-}" h b pre rc=0 arg=""
     trace "defaire : commit $id${seule:+ (couche $seule seulement)}"
+    if [ -z "$seule" ] || [ "$seule" = / ]; then sortir "$id" || return 1; fi
     while read -r h b pre; do
         [ -z "$seule" ] || [ "$pre" = "$seule" ] || continue
         [ -f "$b/.osmo-retour/$id/FAIT" ] && arg="$arg $pre=$b"
@@ -1112,6 +1215,7 @@ defaire_commit() {
             trace "defaire : remontage en ecriture de $b impossible"; rc=1
         fi
     done < <(couches)
+    [ "$rc" = 0 ] && [ ! -d "$BAS/.osmo-retour/$id" ] && garage_oter "$id"
     return $rc
 }
 
@@ -1528,7 +1632,7 @@ esac
 # box then relies on (signature key, keys of the box): from that moment this
 # session can no longer be reset.
 case "${1:-etat}" in
-    valider|ecrire|defaire|remonter|fusionner|actualiser|root-nettoyer)
+    valider|ecrire|defaire|remonter|fusionner|actualiser|root-nettoyer|ranger)
         [ "$(id -u)" = 0 ] && [ -x /usr/local/sbin/osmo-reset ] \
             && /usr/local/sbin/osmo-reset interdire "tu as deja enregistre (ou defait) quelque chose pendant cette session" 2>/dev/null
         ;;
@@ -1877,6 +1981,22 @@ EOF
             journal_disque
             sleep 3
         fi
+        ;;
+    ranger)
+        # put the past states of the system away NOW (they are otherwise put
+        # away by the next write): from the disk, in clear, to the /home
+        # volume. It removes them from the disk: the /home passphrase.
+        root_requis
+        live || { log "/ n est pas en RAM"; exit 0; }
+        ls "$BAS"/.osmo-retour/*/FAIT >/dev/null 2>&1 || { vert "rien a ranger : aucun etat du systeme n est sur le disque en clair"; exit 0; }
+        garage_ouvert || { rouge "/home est ferme : les etats du systeme ne peuvent pas y etre ranges"; exit 1; }
+        if [ "${2:-}" = --stdin ]; then IFS= read -r p || p=""; else read -r -s -p "phrase de /home : " p < /dev/tty; echo; fi
+        if [ -z "$p" ] || ! printf '%s' "$p" | phrase_home_ok; then p=""; rouge "phrase de /home refusee : rien n est change"; exit 1; fi
+        PHRASE="$p"; p=""
+        ranger; rc=$?
+        journal_disque
+        if ls "$BAS"/.osmo-retour/*/FAIT >/dev/null 2>&1; then rouge "tout n a pas pu etre range : voir $JOURNAL_DISQUE"; exit 1; fi
+        vert "les etats du systeme sont dans le volume de /home ; plus rien sur le disque en clair"
         ;;
     retours)
         # the commits that can still be undone, oldest first; the LAST line
