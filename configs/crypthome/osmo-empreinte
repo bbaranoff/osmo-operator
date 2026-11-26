@@ -1310,10 +1310,33 @@ def bip(secondes=6):
                                capture_output=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         pass
+    # a desktop session still open holds the card through its sound server
+    # (pipewire / pulseaudio): the same there, as its user - every sink
+    # unmuted, at 100 %, and the tone played through it
+    bureau = []
+    try:
+        import glob
+        import pwd
+        for prise in glob.glob("/run/user/*/pulse/native"):
+            uid = int(prise.split("/")[3])
+            env = dict(os.environ, XDG_RUNTIME_DIR="/run/user/%d" % uid, PULSE_SERVER="unix:" + prise)
+            pre = [] if uid == os.geteuid() else ["runuser", "-u", pwd.getpwuid(uid).pw_name, "--"]
+            r = subprocess.run(pre + ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5)
+            for ligne in r.stdout.splitlines():
+                nom = ligne.split("\t")[1] if "\t" in ligne else ""
+                if nom:
+                    subprocess.run(pre + ["pactl", "set-sink-mute", nom, "0"], env=env, capture_output=True, timeout=5)
+                    subprocess.run(pre + ["pactl", "set-sink-volume", nom, "100%"], env=env, capture_output=True, timeout=5)
+            bureau.append(subprocess.Popen(pre + ["timeout", str(secondes), "speaker-test", "-D", "pulse", "-t", "sine",
+                                                  "-f", "1900", "-c", "2"], env=env,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        pass
     try:
         subprocess.run(["modprobe", "pcspkr"], capture_output=True, timeout=10)
-        son = subprocess.Popen(["timeout", str(secondes), "speaker-test", "-t", "sine", "-f", "1900", "-c", "2"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not bureau:
+            son = subprocess.Popen(["timeout", str(secondes), "speaker-test", "-t", "sine", "-f", "1900", "-c", "2"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         pass
     try:
@@ -1341,11 +1364,11 @@ def bip(secondes=6):
         except OSError:
             pass
         os.close(c)
-    if son is not None:
+    for s in bureau + ([son] if son is not None else []):
         try:
-            son.wait(timeout=3)
+            s.wait(timeout=3)
         except (OSError, subprocess.TimeoutExpired):
-            son.kill()
+            s.kill()
     return 0
 
 
@@ -1531,8 +1554,9 @@ def main():
         return bip() if "--alarme" in sys.argv[2:] else 0
     if cmd == "alarme" and "--essai" in sys.argv[2:]:
         # TO LOOK AT IT (a screenshot, a demonstration): the same screen on
-        # THIS terminal, with made-up differences - no beep, no volume touched,
-        # nothing recorded, nothing held
+        # THIS terminal, with made-up differences - nothing recorded, nothing
+        # held. No beep and no volume touched, unless --bip: then THE beep,
+        # every volume at its maximum (and left there, as the real one does)
         global CONSOLE
         CONSOLE = "/dev/tty"
         ecran_alarme(["!!!  LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE  !!!", "",
@@ -1544,6 +1568,8 @@ def main():
                       "proprietaire (phrase de /home) pourra ouvrir une session.", "",
                       "LA MACHINE NE S ETEINT PAS. Pour l eteindre : maintiens le bouton d alimentation.",
                       "", "(ESSAI : rien n est arrive. Entree pour fermer.)"])
+        if "--bip" in sys.argv[2:]:
+            bip()
         try:
             input()
         except (EOFError, KeyboardInterrupt):
