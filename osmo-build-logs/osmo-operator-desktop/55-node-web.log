@@ -1,0 +1,11 @@
+
+up to date, audited 2 packages in 675ms
+
+found 0 vulnerabilities
+  [web] install-web-service.sh (sans TLS ni demarrage : chroot)
+  [0;32m[node] présent : v22.23.2[0m
+  [1;33m[tls] ignore (WEB_NO_TLS=1) — la cle sera posee sur la machine[0m
+  [1;33m[firefox] pas de certificat — politique non ecrite[0m
+  [0;32m[unit] node résolu : /usr/local/bin/node[0m
+  [0;32m[unit] /etc/systemd/system/osmo-egprs-web.service installé[0m
+  [0;32m[ok] osmo-egprs-web installe et active au boot (pas demarre ici)[0m

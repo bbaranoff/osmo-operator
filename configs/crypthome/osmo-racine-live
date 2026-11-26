@@ -714,6 +714,42 @@ garage_oter() {
     volume_ro
 }
 
+# ── ROOT'S STATE IN THE BLACK BOX ───────────────────────────────────────────
+# The box records the system, never /home - except /home/.root, root's state:
+# in persistent mode a change there (a .bashrc, an autostart, the assistant's
+# hooks) persists at once, without any passphrase. osmo-journal-root gives
+# what changed since its last call (diffs for text, one line with a SHA-256
+# for the rest, caches and transcripts left out); it is ENCRYPTED FOR THE HOME
+# KEY (private half in the volume) inside a box record « root »: chained and
+# held by the TPM like the others, but the box passphrase alone does not read
+# it (osmo-boite root N: the box passphrase AND /home open). At every
+# checkpoint (ten minutes) and at shutdown, before anything is written.
+JOURNAL_ROOT=/usr/local/sbin/osmo-journal-root
+journal_root() {
+    [ -x "$JOURNAL_ROOT" ] && [ -x /usr/local/sbin/osmo-diffs ] && command -v age >/dev/null 2>&1 || return 0
+    mountpoint -q /home 2>/dev/null && [ -d /home/.root ] || return 0
+    local cle=/home/.osmo-diffs/attente.cle pub=/home/.osmo-diffs/attente.pub out n
+    # the home key: made in the volume in persistent mode (written to directly)
+    if [ ! -s "$pub" ] && home_direct && command -v age-keygen >/dev/null 2>&1; then
+        ( umask 077; mkdir -p /home/.osmo-diffs \
+            && age-keygen -o "$cle.nouv" >/dev/null 2>&1 && age-keygen -y "$cle.nouv" > "$pub.nouv" 2>/dev/null \
+            && mv -f "$pub.nouv" "$pub" && mv -f "$cle.nouv" "$cle" )
+        [ -s "$pub" ] && trace "cle du home pour la boite noire : posee dans le volume chiffre"
+    fi
+    case "$(head -n1 "$pub" 2>/dev/null)" in age1*) ;; *) trace "etat de root : pas de cle du home pour la boite - non journalise"; return 0 ;; esac
+    out="$(/usr/bin/python3 -I "$JOURNAL_ROOT" 2>>"$TRACE")" || { trace "etat de root : journal en echec"; return 0; }
+    [ -n "$out" ] || return 0
+    n="$(printf '%s\n' "$out" | grep -c '^+++ \|^=== ')"
+    if { printf 'etat de root (/home/.root) : %s changement(s) - chiffre pour la cle du home : osmo-boite root <numero>\n' "$n"
+         printf '%s\n' "$out" | zstd -q -3 | age -r "$(head -n1 "$pub")" -a
+       } | /usr/local/sbin/osmo-diffs noter root >> "$TRACE" 2>&1; then
+        trace "etat de root : $n changement(s) dans la boite noire"
+    else
+        trace "etat de root : $n changement(s) NON enregistres dans la boite noire"
+    fi
+    out=""
+}
+
 # root_manque : what the disk's /root holds that the copy in the volume lacks
 root_manque() {
     local e m="" v; v="$(vol_home)"
@@ -1854,6 +1890,9 @@ EOF
         # THE MACHINE THEN DOES NOT GO OFF: the session is recorded in the
         # box (always written), nothing is written to the disk, and the alarm
         # holds the screen - only the power button, held, switches it off.
+        # root's state first: what the session changed in /home/.root goes to
+        # the box whatever follows (alarm, write, reset)
+        journal_root
         alarme=0
         if [ -x /usr/local/sbin/osmo-empreinte ]; then
             /usr/local/sbin/osmo-empreinte extinction 2>&1 | while IFS= read -r _l; do trace "$_l"; done
@@ -2096,6 +2135,7 @@ EOF
         live || exit 0
         # « Remettre a zero »: a snapshot that overflowed gives its memory back
         [ -x /usr/local/sbin/osmo-reset ] && /usr/local/sbin/osmo-reset etat >/dev/null 2>&1
+        journal_root
         point_de_controle
         ;;
     points-anciens)

@@ -323,6 +323,22 @@ Deux façons de s'en servir.
   Ce n'est pas un dépôt git : la machine écrit la boîte sans pouvoir la lire, ce qu'un
   dépôt ne permet pas ; ce sont les mêmes commandes qu'avant sous des noms connus.
 
+**L'état de root, seul morceau de `/home` journalisé.** La boîte n'enregistre pas `/home` :
+ce qui y vit n'est protégé que par la phrase de `/home`, et les diffs de la boîte se lisent
+avec une autre. Mais `/home/.root` est l'état de root — fichiers de démarrage du shell,
+configuration, outils, réglages et crochets de l'assistant — et en mode persistant une
+modification y persiste aussitôt, sans phrase à l'extinction. C'est le seul endroit de
+`/home` où un changement touche à la sécurité du poste. `osmo-journal-root` donne ce qui y
+a changé depuis son dernier passage : le diff des fichiers texte, une ligne avec le
+SHA-256 pour le reste (dont les arbres de code installé : environnements Python, binaires
+de l'assistant), sans les caches ni les transcriptions. C'est **chiffré pour la clé du
+home** (sa moitié privée ne sort pas du volume) dans un enregistrement « root » de la
+boîte : chaîné et tenu par le TPM comme les autres, mais la phrase de la boîte seule ne le
+lit pas — `osmo-boite root N` demande la phrase de la boîte **et** `/home` ouvert. Fait à
+chaque point de contrôle (dix minutes) et à l'extinction, avant toute écriture, alarme ou
+remise à zéro. Une demi-seconde par passage ; la référence (copie des fichiers texte, état
+des autres) est dans le volume, `/home/.osmo-diffs/root`.
+
 **La fin de la boîte, tenue par le TPM.** La chaîne de la boîte montre un enregistrement
 changé ou retiré au milieu, jamais une fin tronquée. Rien sur un disque ne tient la tête
 contre root. Le TPM le peut : un index NV de type « extension » (`0x1800A51`), comme un
@@ -380,7 +396,7 @@ en bleu foncé gras, nom de machine en gras.
 | Attaquant qui réécrit aussi le contrôle | démarrage mesuré (option) | demande que l'utilisateur regarde le code |
 | Destruction de la boîte | copie distante, ajout seul | réseau absent : copie différée, signalée |
 | Écriture ratée ou regrettée | atomicité, retour arrière | tout est sur le même disque : ce n'est pas une sauvegarde |
-| Persistance dans `/home` en mode persistant (dont `/home/.root`) | « remise à zéro » volontaire ; mode « à enregistrer » | par défaut rien ne l'empêche ni ne la signale |
+| Persistance dans `/home` en mode persistant | « remise à zéro » volontaire ; mode « à enregistrer » ; **`/home/.root` journalisé** dans la boîte (pour la clé du home) | rien ne l'empêche ; le reste de `/home` n'est pas journalisé |
 | Binaire modifié machine éteinte, dates et inodes maquillés | contenu relu avant la phrase ; avec le démarrage mesuré, relu par l'initramfs et étendu dans le PCR 13 | sans démarrage mesuré, passe si le contrôle lui-même est réécrit |
 | Perte ou corruption du volume `/home` | — | **aucune sauvegarde** : il porte la clé de signature, la clé de la boîte, les états passés, root et le coffre du TPM |
 
@@ -417,7 +433,8 @@ condition, cela se voit ici avant d'être écrit.
 | Clé publique de signature | boîte ; ancre TPM (NV `0x1800A50`) ; `/home` | tous | phrase home (secret propriétaire du TPM) |
 | Empreinte : totaux et détail de `/` | boîte, en clair, signée | rien | phrase home |
 | Empreinte : détail de `/home` | boîte, chiffré | phrase home | phrase home |
-| Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tronquée vue depuis `/home`) |
+| Diffs de session | boîte noire (`age`) | phrase boîte | personne (chaîne ; fin tenue par le TPM) |
+| Diffs de l'état de root (`/home/.root`) | boîte noire, enregistrement « root », chiffré pour la clé du home | phrase boîte **et** phrase home | personne (même chaîne) |
 | Les mêmes, copie de la boîte (`osmo-diffs sauvegarder`) | là où le propriétaire la pose (clé USB) | phrase boîte | qui tient la clé USB (la chaîne le montre) |
 | Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
 | Volume témoin (test de l'alarme) | boîte, en clair (`temoin.img`, et son état d'origine `temoin.origine`) | rien (il ne contient rien) | root (c'est le but : toute modification déclenche l'alarme) ; empreinte : phrase home |
@@ -490,6 +507,7 @@ par son propriétaire.
 | Chaîne de la boîte noire, du premier au dernier enregistrement | **réel** : 60 enregistrements, phrase de la boîte |
 | Fin de la boîte et fin de l'historique tenues par le TPM (index à extension) | **réel** : posés, étendus à l'extinction, conformes |
 | `osmo-boite fsck` : « tout est vert » | **réel** |
+| État de root journalisé (`osmo-journal-root`) | bac à sable (diff, lignes SHA-256, bruit écarté, lecture : clé de la boîte seule → bloc chiffré, plus clé du home → diff) ; référence prise sur le vrai `/home/.root` (14 758 fichiers, 4,3 s puis 0,4 s) ; **pas encore vu à une extinction** |
 | Test partiel de l'alarme (volume témoin corrompu, trouvé, alarme, remis à l'origine) | **réel** |
 | Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
 | Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |

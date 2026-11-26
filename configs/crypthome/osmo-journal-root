@@ -1,0 +1,216 @@
+#!/usr/bin/python3
+# osmo-journal-root - WHAT CHANGED IN ROOT'S STATE (/home/.root), for the
+# black box.
+#
+# The box records the system (/), never /home: what lives there is protected
+# by the /home passphrase alone, and the box's diffs are read with ANOTHER
+# passphrase. But /home/.root is root's state - shell start files, its
+# configuration, its tools, the assistant's settings and hooks - and in
+# persistent mode a change there persists at once, without any passphrase at
+# shutdown. It is the one place of /home where a change touches the security
+# of the machine. So it is journaled - and only it:
+#
+#   - text files (1 MiB at most): a unified diff against a reference copy;
+#   - everything else, and the trees of installed code (virtual envs, npm,
+#     the assistant's own binaries): one line per file added, removed or
+#     changed, with its SHA-256;
+#   - noise left out: caches, the assistant's transcripts and history.
+#
+# The reference (copy of the text files, and the state of the others) lives
+# in the encrypted volume, /home/.osmo-diffs/root. What this prints is
+# encrypted by osmo-racine-live for the HOME key (its private half never
+# leaves the volume) and put in a box record: the box passphrase alone does not
+# read it.
+#
+#   osmo-journal-root            the changes since the last call, on stdout
+#                                (nothing when nothing changed); the reference
+#                                moves on. The first call takes the reference.
+#   osmo-journal-root --racine R --etat E    other places (tests)
+import difflib
+import hashlib
+import json
+import os
+import shutil
+import stat
+import sys
+import time
+
+RACINE = "/home/.root"
+ETAT = "/home/.osmo-diffs/root"
+if "--racine" in sys.argv:
+    RACINE = sys.argv[sys.argv.index("--racine") + 1]
+if "--etat" in sys.argv:
+    ETAT = sys.argv[sys.argv.index("--etat") + 1]
+MIROIR = os.path.join(ETAT, "miroir")
+FICHE = os.path.join(ETAT, "etat.json")
+MAX = 1 << 20
+
+# never journaled: caches and the assistant's working data (transcripts,
+# history, snapshots) - they change all the time and run nothing
+BRUIT = {".cache", ".npm", ".local/var", ".claude/projects", ".claude/file-history",
+         ".claude/paste-cache", ".claude/session-env", ".claude/sessions",
+         ".claude/shell-snapshots", ".claude/todos", ".claude/backups", ".claude/cache",
+         ".claude/downloads", ".claude/statsig", ".claude/telemetry", ".claude/ide",
+         ".claude/history.jsonl", ".wget-hsts", ".lesshst", ".bash_history", ".python_history",
+         ".viminfo", ".sudo_as_admin_successful"}
+# installed code: one line per changed file, never its diff (an upgrade would
+# fill the record with library sources)
+LIGNES = {".env", ".venv", ".venv-qemu", ".local/lib", ".local/share/claude", ".local/share/gem",
+          ".local/pipx", ".claude/plugins/cache", ".nvm", ".cargo", ".rustup", ".go"}
+ELAGUES = {".git", "node_modules", "__pycache__"}
+
+
+def dans(rel, ensemble):
+    return any(rel == p or rel.startswith(p + "/") for p in ensemble)
+
+
+def sha(chemin):
+    h = hashlib.sha256()
+    with open(chemin, "rb") as f:
+        while True:
+            b = f.read(1 << 20)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def texte(chemin, taille):
+    if taille > MAX:
+        return False
+    try:
+        with open(chemin, "rb") as f:
+            return b"\0" not in f.read(8192)
+    except OSError:
+        return False
+
+
+def parcourir():
+    """{rel: [kind, size, mtime_ns, ino, mode]} - kind t (text, diffed),
+    b (one line), l (link: its target in mode's place)."""
+    out = {}
+    pile = [""]
+    while pile:
+        rel = pile.pop()
+        try:
+            entrees = list(os.scandir(os.path.join(RACINE, rel) if rel else RACINE))
+        except OSError:
+            continue
+        for e in entrees:
+            r = (rel + "/" + e.name) if rel else e.name
+            if e.name in ELAGUES or dans(r, BRUIT):
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                pile.append(r)
+            elif stat.S_ISLNK(st.st_mode):
+                try:
+                    out[r] = ["l", 0, 0, 0, os.readlink(e.path)]
+                except OSError:
+                    pass
+            elif stat.S_ISREG(st.st_mode):
+                k = "b" if dans(r, LIGNES) or not texte(e.path, st.st_size) else "t"
+                out[r] = [k, st.st_size, st.st_mtime_ns, st.st_ino, "%o" % stat.S_IMODE(st.st_mode)]
+    return out
+
+
+def main():
+    try:
+        with open(FICHE) as f:
+            ancien = json.load(f)
+    except (OSError, ValueError):
+        ancien = None
+    neuf = parcourir()
+    lignes = []
+    hachages = (ancien or {}).get("sha", {})
+    sha_neuf = {}
+    for r, v in neuf.items():
+        if v[0] == "b":
+            a = (ancien or {}).get("fichiers", {}).get(r)
+            if a and a[:4] == v[:4] and r in hachages:
+                sha_neuf[r] = hachages[r]
+            else:
+                try:
+                    sha_neuf[r] = sha(os.path.join(RACINE, r))
+                except OSError:
+                    sha_neuf[r] = "illisible"
+    premiere = ancien is None
+    if not premiere:
+        af = ancien.get("fichiers", {})
+        for r in sorted(set(af) | set(neuf)):
+            a, n = af.get(r), neuf.get(r)
+            m = os.path.join(MIROIR, r)
+            chemin = "/root/" + r
+            if n is None:
+                if a[0] == "t" and os.path.exists(m):
+                    with open(m, errors="replace") as f:
+                        vieux = f.read().splitlines()
+                    lignes += list(difflib.unified_diff(vieux, [], "a" + chemin, "b" + chemin, lineterm=""))
+                else:
+                    lignes.append("=== %s : supprime" % chemin)
+                continue
+            if n[0] == "l":
+                if not a or a[0] != "l" or a[4] != n[4]:
+                    lignes.append("=== %s : lien -> %s" % (chemin, n[4]))
+                continue
+            if n[0] == "t":
+                if a and a[0] == "t" and a[:4] == n[:4]:
+                    continue
+                try:
+                    with open(os.path.join(RACINE, r), errors="replace") as f:
+                        courant = f.read().splitlines()
+                except OSError:
+                    continue
+                vieux = []
+                if os.path.exists(m):
+                    with open(m, errors="replace") as f:
+                        vieux = f.read().splitlines()
+                d = list(difflib.unified_diff(vieux, courant, "a" + chemin, "b" + chemin, lineterm=""))
+                if d:
+                    lignes += d
+                elif a is None:
+                    lignes.append("=== %s : ajoute (vide)" % chemin)
+                elif a[4] != n[4]:
+                    lignes.append("=== %s : droits %s -> %s" % (chemin, a[4], n[4]))
+                continue
+            # one line per file
+            if a is None:
+                lignes.append("=== %s : ajoute (%d octets, sha256 %s)" % (chemin, n[1], sha_neuf[r]))
+            elif hachages.get(r) != sha_neuf[r] or a[0] != "b":
+                lignes.append("=== %s : modifie (%d octets, sha256 %s)" % (chemin, n[1], sha_neuf[r]))
+            elif a[4] != n[4]:
+                lignes.append("=== %s : droits %s -> %s" % (chemin, a[4], n[4]))
+    # the reference moves on: the copy of the text files, the state of the others
+    os.makedirs(ETAT, mode=0o700, exist_ok=True)
+    for r, n in neuf.items():
+        m = os.path.join(MIROIR, r)
+        a = (ancien or {}).get("fichiers", {}).get(r)
+        if n[0] == "t":
+            if not (a and a[0] == "t" and a[:4] == n[:4] and os.path.exists(m)):
+                os.makedirs(os.path.dirname(m), mode=0o700, exist_ok=True)
+                try:
+                    shutil.copyfile(os.path.join(RACINE, r), m)
+                except OSError:
+                    pass
+        elif os.path.exists(m):
+            os.unlink(m)
+    for r in set((ancien or {}).get("fichiers", {})) - set(neuf):
+        try:
+            os.unlink(os.path.join(MIROIR, r))
+        except OSError:
+            pass
+    with open(FICHE + ".nouv", "w") as f:
+        json.dump({"pris": time.strftime("%F %T"), "fichiers": neuf, "sha": sha_neuf}, f)
+    os.replace(FICHE + ".nouv", FICHE)
+    if premiere:
+        print("=== reference de l etat de root prise : %d fichier(s) suivis (%s)" % (len(neuf), time.strftime("%F %T")))
+    elif lignes:
+        print("\n".join(lignes))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

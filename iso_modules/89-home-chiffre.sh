@@ -162,6 +162,8 @@ install -m 0755 "$_CH_SRC/osmo-alarme-ecran" "$ROOTFS/usr/local/sbin/osmo-alarme
 # commit / revert / merge...), and the states of the system browsed like code
 # on GitHub (osmo-etats: a read-only page on 127.0.0.1, icon « Etats du systeme »)
 install -m 0755 "$_CH_SRC/osmo-boite" "$ROOTFS/usr/local/bin/osmo-boite"
+# root's state (/home/.root) journaled in the box, for the home key
+install -m 0755 "$_CH_SRC/osmo-journal-root" "$ROOTFS/usr/local/sbin/osmo-journal-root"
 install -m 0755 "$_CH_SRC/osmo-etats" "$ROOTFS/usr/local/sbin/osmo-etats"
 # THE BOX AT 80 %: asked at login, in a terminal window - copy it elsewhere
 # and empty it, empty it without a copy, or later (osmo-diffs plein). A full

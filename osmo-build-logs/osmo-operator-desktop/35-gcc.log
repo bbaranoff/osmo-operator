@@ -1,0 +1,4 @@
+update-alternatives: using /usr/bin/gcc-9 to provide /usr/bin/gcc (gcc) in auto mode
+update-alternatives: using /usr/bin/gcc-11 to provide /usr/bin/gcc (gcc) in auto mode
+update-alternatives: using /usr/bin/gcc-13 to provide /usr/bin/gcc (gcc) in auto mode
+  [chroot] alternatives gcc : /usr/bin/gcc-11 /usr/bin/gcc-13 /usr/bin/gcc-9 (defaut /usr/bin/x86_64-linux-gnu-gcc-13)

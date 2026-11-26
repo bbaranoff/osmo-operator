@@ -1,0 +1,4 @@
+  certificats : 120 autorites dans /etc/ssl/certs
+update-initramfs: Generating /boot/initrd.img-6.8.0-151-generic
+cryptsetup: WARNING: Couldn't determine root device
+live-boot: core filesystems dm-verity devices utils udev blockdev dns.

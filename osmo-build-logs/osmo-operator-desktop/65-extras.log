@@ -1,0 +1,21 @@
+  [desktop] jeux + media (natif) : /opt/GSM/osmo-operator/tools/osmo-extras-install.sh
+  → media (Kodi, YouTube, dino) - jeux Doom/Quake sautes (OSMO_EXTRAS_JEUX=0) ...
+      ✓ wmctrl deja present
+      ✓ xdotool deja present
+      ✓ qemu-system-x86 installe
+      ✓ qemu-system-gui installe
+      ✓ qemu-system-modules-opengl deja present
+      ✓ ovmf installe
+      ✓ sshpass installe
+      ✓ kpartx deja present
+      ✓ kodi installe
+      ✓ wireshark deja present
+      ✓ gir1.2-webkit2-4.1 deja present
+      ✓ linphone deja present
+      ✓ ofono installe
+      ✓ uBlock Origin force par politique Firefox (login Google conserve)
+      ✓ lanceurs poses : osmo-youtube, osmo-dino-play, osmo-wireshark-root, osmo-ofono,
+      ✓                 osmo-pmos, osmo-sms-send, osmo-call
+      ✓ menus poses ; dossiers d applications « Jeux » et « Media »
+  ✓ jeux + media poses (dossiers Jeux / Media, et dans l encart du bureau)
+  [desktop] GNOME pret : autologin root, X11, NetworkManager actif, Firefox deb Mozilla

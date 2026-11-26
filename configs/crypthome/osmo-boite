@@ -18,6 +18,8 @@
 #                             as they were at each state (osmo-etats)
 #   osmo-boite log [N]        the records, newest last: id, number, date, kind
 #   osmo-boite show ID        one record, decrypted            (box passphrase)
+#   osmo-boite root [ID]      root's state (/home/.root): the « root » records,
+#                             or one of them   (box passphrase AND /home open)
 #   osmo-boite status         this session: what changed, what waits, the box
 #   osmo-boite diff [PATH]    what this session changed (PATH: its diff)
 #   osmo-boite commit         write the session to the disk  (/home passphrase)
@@ -54,6 +56,12 @@ case "${1:-status}" in
     show)
         root "$@"; [ -n "${2:-}" ] || { echo "osmo-boite show ID   (osmo-boite log)" >&2; exit 2; }
         exec "$D" montrer "$2"
+        ;;
+    root)
+        # what changed in root's state (/home/.root): the « root » records
+        root "$@"
+        if [ -z "${2:-}" ]; then "$0" log | grep -a ' root ' || echo "aucun enregistrement « root » encore"; exit 0; fi
+        exec "$D" montrer-root "$2"
         ;;
     status)
         root "$@"

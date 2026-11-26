@@ -18,6 +18,8 @@
 #   osmo-diffs sauvegarder DIR   the whole box in one file (still encrypted)
 #   osmo-diffs vider         every record removed: the /home passphrase; the
 #                            new chain opens with a record that says so
+#   osmo-diffs montrer-root ID   a « root » record (root's state, /home/.root):
+#                            the box passphrase AND the home key (/home open)
 #   osmo-diffs chaine        check the chain of the records, and only that
 #                            (nothing of their content is shown): passphrase
 #   osmo-diffs liste         the records (names, sizes): no passphrase
@@ -495,7 +497,7 @@ case "${1:-liste}" in
         # session merged afterwards, « fusionne »)
         boite
         [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
-        case "${2:-}" in fusionne) ;; *) log "noter : mode refuse"; exit 1 ;; esac
+        case "${2:-}" in fusionne|root) ;; *) log "noter : mode refuse"; exit 1 ;; esac
         nom="$(sceller "$2")" && log "$2 -> $nom"
         envoyer
         ;;
@@ -797,6 +799,16 @@ case "${1:-liste}" in
         fi
         printf '\033[1;31m%s defaut(s) sur %s enregistrement(s)\033[0m\n' "$mauvais" "$n"
         exit 3
+        ;;
+    montrer-root)
+        # montrer-root NAME|NUMBER|ID : a « root » record - the box passphrase
+        # opens the record, the HOME key (in the volume: /home open) its content
+        boite
+        k="${OSMO_DIFFS_CLE_HOME:-/home/.osmo-diffs/attente.cle}"
+        [ -s "$k" ] || { log "la cle du home n est pas lisible (/home ferme ?)"; exit 1; }
+        PAGER=cat "$0" montrer "${2:-}" | sed -n '/^-----BEGIN AGE ENCRYPTED FILE-----$/,/^-----END AGE ENCRYPTED FILE-----$/p' \
+            | age -d -i "$k" 2>/dev/null | zstd -dc 2>/dev/null | ${PAGER:-less -R} \
+            || log "contenu illisible (pas un enregistrement « root », ou cle du home differente)"
         ;;
     montrer)
         # montrer NAME|NUMBER|ID : ONE record, decrypted (the box passphrase).

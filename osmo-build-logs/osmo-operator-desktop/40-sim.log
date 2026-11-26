@@ -1,0 +1,6 @@
+SIM du banc : lecteur PC/SC (Omnikey), softSIM (SAP), pySim
+  ✓ paquets SIM : pcscd, libccid, pcsc-tools, opensc, pyscard, ruby
+  ✓ gem smartcard installe (softSIM en lecteur PC/SC)
+  ! pySim non installe (reseau ? swig/libpcsclite-dev ?)
+  ✓ sysmo-usim-tool (sysmo-isim-tool.sja5.py) : /opt/GSM/sysmo-usim-tool
+  suite : tools/osmo-sim.sh lecteur | lire | programmer | sap  (voir wiki/SIM.md)
