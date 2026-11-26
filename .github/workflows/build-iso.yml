@@ -27,10 +27,12 @@ on:
       # [2026-10-18] Version de la release, en entree : on la choisit au lancement
       # au lieu de modifier le workflow. [2026-11-24] Defaut : v0.2 (racine en
       # lecture seule, /home LUKS2, validation a l extinction, boite noire).
+      # [2026-11-26] Defaut : v0.2-1 (swap par defaut, ecran bleu en persistant,
+      # verrou de la boite, NTP facultatif, cle de secours).
       version:
-        description: "Release tag (v0.2)"
+        description: "Release tag (v0.2-1)"
         type: string
-        default: "v0.2"
+        default: "v0.2-1"
       release:
         description: "Create GitHub Release"
         type: boolean
@@ -571,7 +573,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
         run: |
           # Le texte commun, plus la liste des composants optionnels absents
           # de ce build (vide si tout est la).
@@ -586,7 +588,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
         run: |
           set -u
           shopt -s nullglob
@@ -606,7 +608,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
           PRE: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
         run: |
           gh release edit "$TAG" --draft=false --prerelease="$PRE"

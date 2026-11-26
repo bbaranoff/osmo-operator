@@ -34,9 +34,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag (v0.2)"
+        description: "Release tag (v0.2-1)"
         type: string
-        default: "v0.2"
+        default: "v0.2-1"
       boards:
         description: "Cartes : all, rpi4, opi5, ou des noms Armbian separes par des virgules (orangepi5-max,rpi4b)"
         type: string
@@ -380,7 +380,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
           BUREAU: ${{ needs.boards.outputs.desktop == 'true' && 'avec le bureau GNOME du banc (fond GSM LAB, Conky, icones, `c123`)' || 'sans bureau (console et ssh)' }}
         run: |
           sed "s|@BUREAU@|$BUREAU|" depot/.github/release-notes-arm64.md > notes-arm64.md
@@ -395,7 +395,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
         run: |
           set -u
           shopt -s nullglob
@@ -415,6 +415,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
           PRE: ${{ !(startsWith(github.ref, 'refs/tags/v') || startsWith(github.event.inputs.version, 'v')) }}
         run: gh release edit "$TAG" --draft=false --prerelease="$PRE"
