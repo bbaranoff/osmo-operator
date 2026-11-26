@@ -648,6 +648,11 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+- **Ctrl-C during a validation cancels it, cleanly**: the copy of a layer is stopped (nothing
+  has changed yet), and a layer this write had already applied is **undone** (its own way back;
+  the box gets a `defait` record) - never `/` written and `/home` not. The steps that must not be
+  cut (box record, application, undo, fingerprint) finish first. Run from a terminal,
+  `osmo-valider-session` shows the red REC bar there too, not only in its dialog.
 - **Validating during the session writes that moment**: `osmo-valider-session` (launcher
   « Valider la session (maintenant) ») or `sudo osmo-racine-live valider`, with the `/home`
   passphrase - the session **as it is at that instant** goes to the disk (what changed since the

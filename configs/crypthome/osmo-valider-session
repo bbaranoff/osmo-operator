@@ -133,19 +133,43 @@ if graphique; then
     # the write runs behind a progress dialog fed by /run/osmo-progres
     # (what osmo-racine-live updates: black box, copy, application)
     rcf="$(mktemp)"
-    ( printf '%s\n' "$p" | en_root "$RL" "$ACTION" --stdin >/dev/null 2>&1; echo $? > "$rcf.fin"; mv -f "$rcf.fin" "$rcf" ) &
+    # Ctrl-C in the terminal CANCELS the write (osmo-racine-live undoes what it
+    # had already put on the disk): caught here, so that its outcome is read
+    trap ':' INT
+    ( trap ':' INT
+      printf '%s\n' "$p" | en_root "$RL" "$ACTION" --stdin >/dev/null 2>&1; echo $? > "$rcf.fin"; mv -f "$rcf.fin" "$rcf" ) &
     p=""
     if [ "$ACTION" = valider ]; then
-        ( while [ ! -s "$rcf" ]; do
-              if [ -r /run/osmo-progres ] && read -r pc tx 2>/dev/null < /run/osmo-progres; then
-                  case "$pc" in ''|*[!0-9]*) ;; *) [ "$pc" -ge 100 ] && pc=99; echo "$pc"; echo "# REC : $tx" ;; esac
+        # the progress: in the dialog, and in the terminal when there is one
+        # (the same red REC bar as « osmo-racine-live valider »)
+        ( trap '' INT
+          while [ ! -s "$rcf" ]; do
+              pc=""; tx=""
+              [ -r /run/osmo-progres ] && read -r pc tx 2>/dev/null < /run/osmo-progres
+              case "$pc" in ''|*[!0-9]*) pc=0; tx="phrase de /home, compte des changements" ;; esac
+              [ "$pc" -ge 100 ] && pc=99
+              echo "$pc"; echo "# REC : $tx"
+              if [ -t 2 ]; then
+                  n=$((pc * 30 / 100))
+                  printf '\r\033[1;31m  REC [%s%s] %3d %%\033[0m  %-40.40s' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
+                      "$(printf '%*s' "$((30 - n))" '' | tr ' ' '-')" "$pc" "$tx  (Ctrl-C : annuler)" >&2
               fi
               sleep 0.4
-          done; echo 100 ) | zenity --progress --no-cancel --auto-close --width 420 \
+          done; echo 100; [ -t 2 ] && printf '\r\033[K' >&2 ) | zenity --progress --no-cancel --auto-close --width 420 \
               --title "osmo-operator : ecriture de la session" --text "REC : preparation" 2>/dev/null
     fi
+    # (a zenity killed by the Ctrl-C leaves the loop without a reader: wait
+    # for the write itself, which ends by its own cancel)
+    while [ ! -s "$rcf" ] && kill -0 $! 2>/dev/null; do wait $! 2>/dev/null; done
     wait
+    trap - INT
     rc="$(cat "$rcf" 2>/dev/null)"; rc="${rc:-1}"; rm -f "$rcf"
+    if [ "$rc" = 130 ]; then
+        echo "osmo-valider-session : ANNULE (Ctrl-C) - rien de cette ecriture n est garde, le disque est comme avant"
+        zenity --warning --no-wrap --title "osmo-operator" \
+            --text '<span foreground="red" weight="bold">Annule (Ctrl-C) : rien de cette ecriture n est garde, le disque est comme avant.</span>'
+        exit 130
+    fi
     if [ "$rc" = 0 ]; then
         zenity --info --no-wrap --title "osmo-operator" \
             --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>"

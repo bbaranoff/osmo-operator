@@ -298,6 +298,14 @@ lire_console() {   # lire_console VAR PROMPT : one * per key, timeout = Enter
 # kept on the disk (.osmo-retour/ID): commits can be undone, the last first.
 RETOUR_MAX="${OSMO_RETOUR_MAX:-20}"
 NB_ECRITS=0
+# Ctrl-C DURING « valider » CANCELS THE WRITE (ANNULE=1, set by its trap). The
+# copy of a layer is simply stopped (nothing has changed yet); the steps that
+# must not be cut - the box record, the application of a layer, its undo, the
+# fingerprint - run with SIGINT ignored and the cancel is taken after them: a
+# layer already applied by this write is UNDONE (the way back of its commit),
+# so that the disk is as it was before. At shutdown there is no Ctrl-C.
+ANNULE=0
+sans_int() { ( trap '' INT; exec "$@" ); }
 existe() { [ -e "$1" ] || [ -L "$1" ]; }
 remonter_rw() {
     local b="$1" src i
@@ -342,6 +350,10 @@ appliquer_couche() {
             done
         fi
     done
+    if [ "$ANNULE" = 1 ]; then
+        trace "$pre : annule avant la copie - rien n est change"
+        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+    fi
     # the staged copy: what differs from the disk - attributes, ACLs, xattrs
     # and hard links kept, except overlayfs' own xattrs (opaque, origin...):
     # no overlay mark may reach the real disk. --checksum: same size and same
@@ -362,8 +374,8 @@ appliquer_couche() {
     done
     rc=${PIPESTATUS[2]}
     progres "$mi" "$pre : application"
-    if [ "$rc" != 0 ] && [ "$rc" != 24 ]; then
-        trace "$pre : copie incomplete (rsync $rc) - rien n est change"
+    if { [ "$rc" != 0 ] && [ "$rc" != 24 ]; } || [ "$ANNULE" = 1 ]; then
+        trace "$pre : copie $([ "$ANNULE" = 1 ] && echo "annulee (Ctrl-C)" || echo "incomplete") (rsync $rc) - rien n est change"
         rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
     fi
     # directories: the old attributes of those that change, and the ones that
@@ -389,10 +401,15 @@ appliquer_couche() {
         return 0
     fi
     sync
+    if [ "$ANNULE" = 1 ]; then
+        trace "$pre : annule avant l application - rien n est change"
+        rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
+    fi
     : > "$j/PRET"
     sync
+    # from here the layer is applied to its end, Ctrl-C or not (then undone)
     OSMO_PROGRES="$PROGRES" OSMO_PROGRES_DE="$mi" OSMO_PROGRES_A="$a" OSMO_PROGRES_TEXTE="$pre : application" \
-        "$APPLIQUER" "$b" >> "$TRACE" 2>&1
+        sans_int "$APPLIQUER" "$b" >> "$TRACE" 2>&1
     rc=$?
     progres "$a" "$pre : ecrit"
     # the way back is bounded: the oldest commits can no longer be undone
@@ -411,10 +428,37 @@ appliquer_couche() {
 EMPREINTE=/usr/local/sbin/osmo-empreinte
 empreinte_prendre() {
     [ -x "$EMPREINTE" ] || return 0
-    "$EMPREINTE" prendre >> "$TRACE" 2>&1 || trace "empreinte du disque NON prise : le prochain demarrage criera"
+    sans_int "$EMPREINTE" prendre >> "$TRACE" 2>&1 || trace "empreinte du disque NON prise : le prochain demarrage criera"
     # measured boot (option): the TPM's object, sealed again for this disk
-    [ -x /usr/local/sbin/osmo-tpm ] && /usr/local/sbin/osmo-tpm commit >> "$TRACE" 2>&1
+    [ -x /usr/local/sbin/osmo-tpm ] && sans_int /usr/local/sbin/osmo-tpm commit >> "$TRACE" 2>&1
     return 0
+}
+
+# annuler_commit ID : « valider » cancelled by Ctrl-C - the layers this write
+# has already applied are undone, the box gets its « defait » record.
+annuler_commit() {
+    local id="$1" h b pre arg=""
+    progres 96 "annulation"
+    while read -r h b pre; do
+        [ -f "$b/.osmo-retour/$id/FAIT" ] && arg="$arg $pre=$b"
+    done < <(couches)
+    if [ -z "$arg" ]; then trace "annule (Ctrl-C) : rien n avait ete ecrit sur le disque"; return 0; fi
+    trace "annule (Ctrl-C) : ce que cette ecriture a deja pose est defait (commit $id :$arg)"
+    # shellcheck disable=SC2086
+    [ -x /usr/local/sbin/osmo-diffs ] && sans_int /usr/local/sbin/osmo-diffs defait "$id" $arg >> "$TRACE" 2>&1
+    while read -r h b pre; do
+        [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
+        if remonter_rw "$b"; then
+            if sans_int "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null; then
+                trace "annule : $pre revenu a son etat d avant"
+            else
+                trace "annule : $pre N A PAS PU etre defait (osmo-racine-live defaire)"
+            fi
+            mount -o remount,ro "$b" 2>/dev/null
+        else
+            trace "annule : remontage en ecriture de $b impossible - $pre reste ecrit"
+        fi
+    done < <(couches)
 }
 
 # appliquer : every layer. Each one is atomic on its own file system; / is
@@ -441,11 +485,14 @@ appliquer() {
         t=$(find "$h" -xdev 2>/dev/null | wc -l); tot=$((tot + ${t:-0} + 1))
     done < <(couches)
     while read -r h b pre; do
+        [ "$ANNULE" = 1 ] && break
         t=$(find "$h" -xdev 2>/dev/null | wc -l); t=$(( ${t:-0} + 1 ))
         de=$((PROGRES_BOITE + (100 - PROGRES_BOITE) * fait / tot)); fait=$((fait + t))
         a=$((PROGRES_BOITE + (100 - PROGRES_BOITE) * fait / tot))
         appliquer_couche "$h" "$b" "$pre" "$id" "$de" "$a" < /dev/null || rc=1
     done < <(couches)
+    # cancelled (Ctrl-C, « valider » only): back to the disk of before
+    if [ "$ANNULE" = 1 ]; then annuler_commit "$id"; rc=2; fi
     # the disk has changed, by a commit the box knows: its fingerprint again
     # (total SHA-256 of / and of /home on the box - what the next boot compares)
     progres 97 "empreinte du disque"
@@ -817,14 +864,16 @@ EOF
         progres 0 "boite noire"
         ppid=""
         if [ -t 2 ]; then progres_terminal & ppid=$!; fi
-        # a write is not to be cut half-way: Ctrl-C (or the terminal closed)
-        # is ignored from here on - seen 2026-11-26, / written and the copy of
-        # /home interrupted by a Ctrl-C
-        trap '' INT HUP QUIT
+        # Ctrl-C CANCELS the write, cleanly: never / written and /home not
+        # (seen 2026-11-26). What is already on the disk is undone (appliquer).
+        # The terminal closed does not cut it.
+        trap 'ANNULE=1' INT
+        trap '' HUP QUIT
         # the box first: the RAM layer against the disk, i.e. this moment
         [ -x /usr/local/sbin/osmo-diffs ] \
-            && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
+            && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" sans_int /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
         appliquer; rc=$?
+        trap '' INT
         rm -f "$PROGRES"
         [ -n "$ppid" ] && wait "$ppid" 2>/dev/null
         journal_disque
@@ -832,6 +881,10 @@ EOF
             mv -f "$ETAT/ecrit.nouv" "$ETAT/ecrit"
             rm -f "$MARQUE"
             vert "ecrit sur le disque : la session jusqu a maintenant ($NB_ECRITS changement(s)). Ce qui suit n est PAS garde : revalider, ou la phrase a l extinction."
+        elif [ "$rc" = 2 ]; then
+            rm -f "$ETAT/ecrit.nouv"
+            rouge "ANNULE (Ctrl-C) : rien de cette ecriture n est garde, le disque est comme avant (detail : $JOURNAL_DISQUE)"
+            exit 130
         else
             rm -f "$ETAT/ecrit.nouv"
             rouge "ECHEC de l ecriture (voir $JOURNAL_DISQUE) : ce qui n a pas pu etre ecrit garde son etat precedent"
