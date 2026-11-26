@@ -104,12 +104,22 @@ fi
 
 if graphique; then
     p="$(zenity --password --title "$TITRE")" || exit 0
-    if [ "$(id -u)" = 0 ]; then
-        printf '%s\n' "$p" | "$RL" "$ACTION" --stdin >/dev/null 2>&1; rc=$?
-    else
-        printf '%s\n' "$p" | pkexec "$RL" "$ACTION" --stdin >/dev/null 2>&1; rc=$?
-    fi
+    # the write runs behind a progress dialog fed by /run/osmo-progres
+    # (what osmo-racine-live updates: black box, copy, application)
+    rcf="$(mktemp)"
+    ( printf '%s\n' "$p" | en_root "$RL" "$ACTION" --stdin >/dev/null 2>&1; echo $? > "$rcf.fin"; mv -f "$rcf.fin" "$rcf" ) &
     p=""
+    if [ "$ACTION" = valider ]; then
+        ( while [ ! -s "$rcf" ]; do
+              if read -r pc tx < /run/osmo-progres 2>/dev/null; then
+                  case "$pc" in ''|*[!0-9]*) ;; *) [ "$pc" -ge 100 ] && pc=99; echo "$pc"; echo "# REC : $tx" ;; esac
+              fi
+              sleep 0.4
+          done; echo 100 ) | zenity --progress --no-cancel --auto-close --width 420 \
+              --title "osmo-operator : ecriture de la session" --text "REC : preparation" 2>/dev/null
+    fi
+    wait
+    rc="$(cat "$rcf" 2>/dev/null)"; rc="${rc:-1}"; rm -f "$rcf"
     if [ "$rc" = 0 ]; then
         zenity --info --no-wrap --title "osmo-operator" \
             --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>"

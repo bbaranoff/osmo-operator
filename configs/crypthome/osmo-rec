@@ -1,0 +1,119 @@
+#!/usr/bin/python3
+# osmo-rec CONSOLE FICHIER_DE_PROGRESSION - the « REC » screen while a session
+# is written to the disk at shutdown (osmo-racine-live fin): cmatrix on the
+# whole console but its last line, and on that line, IN RED, CENTRED, the
+# progress bar of the write.
+#
+# One writer for one screen: cmatrix runs on a pseudo-terminal one line
+# shorter than the console, this program copies what it draws to the console
+# as it is, and draws the bar itself, on the last line, between two images of
+# cmatrix (never in the middle of one of its escape sequences). Without
+# cmatrix, the bar alone.
+#
+# FICHIER_DE_PROGRESSION holds « PERCENT text » (osmo-racine-live progres); it
+# is read again several times a second. Ends on SIGTERM (osmo-racine-live,
+# once the session is written): the screen is cleared, the cursor shown.
+import fcntl
+import os
+import pty
+import select
+import shutil
+import signal
+import struct
+import sys
+import termios
+import time
+
+LARGEUR = 40
+
+
+def taille(fd):
+    try:
+        r, c, _x, _y = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+        if r > 2 and c > 20:
+            return r, c
+    except OSError:
+        pass
+    return 25, 80
+
+
+def lire(fichier):
+    try:
+        with open(fichier) as f:
+            p, _s, t = f.read().strip().partition(" ")
+        return max(0, min(100, int(p))), t
+    except (OSError, ValueError):
+        return None, ""
+
+
+def barre(pct, texte, rows, cols):
+    """The escape sequence that draws the bar on the last line, cursor kept."""
+    n = pct * LARGEUR // 100
+    clair = " REC  [%s%s] %3d %%  %s " % ("#" * n, "-" * (LARGEUR - n), pct, texte[:max(0, cols - LARGEUR - 20)])
+    x = max(1, (cols - len(clair)) // 2 + 1)
+    # the blocks only after the length is counted (bytes and columns differ)
+    dessin = clair.replace("#", "█").replace("-", "░")
+    return ("\0337\033[%d;1H\033[0m\033[K\033[%d;%dH\033[1;31m%s\033[0m\0338" % (rows, rows, x, dessin)).encode()
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit("usage : osmo-rec CONSOLE FICHIER_DE_PROGRESSION")
+    console, fichier = sys.argv[1], sys.argv[2]
+    out = os.open(console, os.O_RDWR | os.O_NOCTTY)
+    rows, cols = taille(out)
+    enfant = [0]
+
+    def fin(*_a):
+        if enfant[0]:
+            try:
+                os.kill(enfant[0], signal.SIGTERM)
+            except OSError:
+                pass
+        try:
+            os.write(out, b"\033[0m\033[?25h\033[2J\033[H")
+        except OSError:
+            pass
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, fin)
+    signal.signal(signal.SIGINT, fin)
+    os.write(out, b"\033[0m\033[2J\033[H\033[?25l")
+    maitre = None
+    if shutil.which("cmatrix"):
+        pid, maitre = pty.fork()
+        if pid == 0:
+            os.environ["TERM"] = "linux"
+            os.execvp("cmatrix", ["cmatrix", "-b", "-u", "4"])
+        enfant[0] = pid
+        fcntl.ioctl(maitre, termios.TIOCSWINSZ, struct.pack("HHHH", rows - 1, cols, 0, 0))
+        os.kill(pid, signal.SIGWINCH)
+    dernier, vu = None, 0.0
+    while True:
+        calme = True
+        if maitre is not None:
+            r, _w, _e = select.select([maitre], [], [], 0.02)
+            if r:
+                calme = False
+                try:
+                    d = os.read(maitre, 65536)
+                except OSError:
+                    d = b""
+                if not d:                         # cmatrix left: the bar alone
+                    maitre = None
+                else:
+                    os.write(out, d)
+        else:
+            time.sleep(0.1)
+        t = time.monotonic()
+        if calme and t - vu > 0.25:
+            vu = t
+            p, txt = lire(fichier)
+            if p is not None:
+                dernier = (p, txt)
+            if dernier:
+                os.write(out, barre(dernier[0], dernier[1], rows, cols))
+
+
+if __name__ == "__main__":
+    main()

@@ -645,6 +645,9 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   it is kept only by a new validation, or by the passphrase at shutdown - and **only the
   passphrase at shutdown writes the complete session**. Without it, the shutdown drops what came
   after the last validation and says how much. `osmo-racine-live etat` shows where things stand.
+  **A write shows its progress**: at shutdown the REC screen (`osmo-rec`: `cmatrix`, and at the
+  bottom, in red, centred, the bar), in a terminal a bar on the line, on the desktop a dialog - the
+  black box record first, then each layer's copy and application (`/run/osmo-progres`).
 - **Undoing writes, the last first**: a commit destroys nothing - what it replaces or deletes
   is moved to `/.osmo-retour/<date>` (and `/home/.osmo-retour/<date>`).
   `sudo osmo-racine-live retours` lists the commits, `sudo osmo-racine-live defaire`

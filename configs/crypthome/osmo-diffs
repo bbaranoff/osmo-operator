@@ -417,8 +417,20 @@ case "${1:-liste}" in
             touch -r "$debut" "$TAMPON"
         elif live; then
             case "${2:-}" in valide|efface|ecrit) mode="$2" ;; *) mode=efface ;; esac
+            # OSMO_PROGRES=file (osmo-racine-live): this record is the first
+            # OSMO_PROGRES_A percent of the bar of a write
+            tot=1; fait=0
+            [ -n "${OSMO_PROGRES:-}" ] \
+                && tot=$(( $(cd "$HAUT" 2>/dev/null && find . \( -type f -o -type c -o -type l \) | wc -l) + 1 ))
             ( cd "$HAUT" 2>/dev/null && find . \( -type f -o -type c -o -type l \) -print0 ) \
-                | while IFS= read -r -d '' r; do p="${r#.}"; dans_dirs "$p" && trace_overlay "$p"; done > "$tmp"
+                | while IFS= read -r -d '' r; do
+                    p="${r#.}"; dans_dirs "$p" && trace_overlay "$p"
+                    fait=$((fait + 1))
+                    if [ -n "${OSMO_PROGRES:-}" ] && [ $((fait % 150)) = 0 ]; then
+                        printf '%s boite noire\n' $(( ${OSMO_PROGRES_A:-25} * fait / tot )) > "$OSMO_PROGRES.b" 2>/dev/null \
+                            && mv -f "$OSMO_PROGRES.b" "$OSMO_PROGRES" 2>/dev/null
+                    fi
+                done > "$tmp"
         else
             log "ni session chiffree ni root live - rien"; rm -f "$tmp" "$debut"; exit 0
         fi

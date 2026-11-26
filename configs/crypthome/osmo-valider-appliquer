@@ -126,9 +126,17 @@ fi
 
 if [ -d "$J/files" ]; then
     # 2. everything that is not a directory: one rename each
+    # (OSMO_PROGRES=file, _DE, _A, _TEXTE: its share of the bar of a write)
+    TOT=1; N=0
+    [ -n "${OSMO_PROGRES:-}" ] && TOT=$(( $(cd "$J/files" && find . ! -type d | wc -l) + 1 ))
     ( cd "$J/files" && find . ! -type d ) | while IFS= read -r f; do
         p="${f#.}"
-        d="$(dirname "$R$p")"
+        N=$((N + 1))
+        if [ -n "${OSMO_PROGRES:-}" ] && [ $((N % 100)) = 0 ]; then
+            echo "$(( ${OSMO_PROGRES_DE:-0} + (${OSMO_PROGRES_A:-100} - ${OSMO_PROGRES_DE:-0}) * N / TOT )) ${OSMO_PROGRES_TEXTE:-application}" \
+                > "$OSMO_PROGRES.a" 2>/dev/null && mv -f "$OSMO_PROGRES.a" "$OSMO_PROGRES" 2>/dev/null
+        fi
+        d="$R${p%/*}"                # its directory, without a dirname per file
         if ! vrai_dir "$d"; then
             # a parent that was a file or a link: found from the top
             q=""; rest="${p%/*}"

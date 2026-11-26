@@ -98,6 +98,8 @@ install -m 0755 "$_CH_SRC/lock-home"              "$ROOTFS/usr/local/sbin/lock-h
 # (shellprocess-osmo.conf: osmo-racine-live poser); the live key is not touched.
 install -m 0755 "$_CH_SRC/osmo-racine-live"       "$ROOTFS/usr/local/sbin/osmo-racine-live"
 install -m 0755 "$_CH_SRC/osmo-valider-appliquer" "$ROOTFS/usr/local/sbin/osmo-valider-appliquer"
+# the REC screen of a write at shutdown: cmatrix, and its red progress bar
+install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"
 install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
 # the « Tout oublier ? » pseudo-neuralyzer (Yes: flash, wiped; No: passphrase).
 # A flash.gif dropped in /usr/local/share/osmo-operator replaces the drawing.

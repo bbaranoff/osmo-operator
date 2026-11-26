@@ -179,6 +179,39 @@ changements_depuis() {
     done
 }
 
+# ── progress of a write ──────────────────────────────────────────────────────
+# One small file, « PERCENT text », that every step of a write updates
+# (the black box record, then for each layer its copy and its application):
+# readable by all, it is what the REC screen of the shutdown (osmo-rec: red
+# bar, centred at the bottom of the cmatrix), the terminal of « valider » and
+# the desktop dialog (osmo-valider-session) show.
+PROGRES=/run/osmo-progres
+REC=/usr/local/sbin/osmo-rec
+progres() {
+    printf '%s %s\n' "$1" "$2" > "$PROGRES.nouv" 2>/dev/null && chmod 644 "$PROGRES.nouv" 2>/dev/null \
+        && mv -f "$PROGRES.nouv" "$PROGRES" 2>/dev/null
+}
+# the bar in a terminal (stderr), until the progress file goes
+progres_terminal() {
+    local p t n
+    while [ -e "$PROGRES" ]; do
+        if read -r p t < "$PROGRES" 2>/dev/null; then
+            case "$p" in ''|*[!0-9]*) p=0 ;; esac
+            n=$((p * 30 / 100))
+            printf '\r\033[1;31m  REC [%s%s] %3d %%\033[0m  %-28.28s' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
+                "$(printf '%*s' "$((30 - n))" '' | tr ' ' '-')" "$p" "$t" >&2
+        fi
+        sleep 0.3
+    done
+    printf '\r\033[K' >&2
+}
+# Shares of the bar, from a real write (2026-11-26, 15 600 files in RAM, 251 s):
+# the black box record 120 s, then the layers - 130 s, of which a fifth is the
+# copy and the rest the application (one rename per file). The time of a layer
+# follows its NUMBER OF FILES, not its size.
+PROGRES_BOITE=45
+PROGRES_COPIE=22                 # percent of a layer's share spent copying
+
 # ── the session's own journal ────────────────────────────────────────────────
 # journald is volatile on an installed bench: what a shutdown did would be
 # gone at the next boot. Every step is kept in /run, then appended to
@@ -277,7 +310,9 @@ remonter_rw() {
     return 1
 }
 appliquer_couche() {
-    local h="$1" b="$2" pre="$3" id="$4" libre besoin j="$2/.osmo-valider" r p q rc nf ns
+    local h="$1" b="$2" pre="$3" id="$4" de="${5:-0}" a="${6:-100}" libre besoin j="$2/.osmo-valider" r p q rc nf ns mi l pc
+    mi=$((de + (a - de) * PROGRES_COPIE / 100))   # the copy, then the application
+    progres "$de" "$pre : preparation"
     if [ ! -d "$h" ]; then trace "$pre : couche RAM $h introuvable - RIEN n est ecrit pour $pre"; return 1; fi
     [ -n "$(ls -A "$h" 2>/dev/null)" ] || { trace "$pre : couche RAM vide"; return 0; }
     remonter_rw "$b" || { trace "$pre : remontage en ecriture de $b impossible"; return 1; }
@@ -319,8 +354,14 @@ appliquer_couche() {
         whiteout "$h$p" && continue
         printf '%s\0' "${p#/}"
     done | rsync -aHAX --checksum --filter='-x trusted.overlay.*' --compare-dest="$b/" --from0 --files-from=- \
-               "$h/" "$j/files/" 2>>"$TRACE"
-    rc=$?
+               --info=progress2 "$h/" "$j/files/" 2>>"$TRACE" | tr '\r' '\n' | while IFS= read -r l; do
+        # « 104,857,600  23%  95.37MB/s  0:00:01 » : the percentage of the whole copy
+        pc="${l%%%*}"; pc="${pc##* }"
+        case "$pc" in ''|*[!0-9]*) continue ;; esac
+        progres $((de + (mi - de) * pc / 100)) "$pre : copie"
+    done
+    rc=${PIPESTATUS[2]}
+    progres "$mi" "$pre : application"
     if [ "$rc" != 0 ] && [ "$rc" != 24 ]; then
         trace "$pre : copie incomplete (rsync $rc) - rien n est change"
         rm -rf "$j"; sync; mount -o remount,ro "$b"; return 1
@@ -350,8 +391,10 @@ appliquer_couche() {
     sync
     : > "$j/PRET"
     sync
-    "$APPLIQUER" "$b" >> "$TRACE" 2>&1
+    OSMO_PROGRES="$PROGRES" OSMO_PROGRES_DE="$mi" OSMO_PROGRES_A="$a" OSMO_PROGRES_TEXTE="$pre : application" \
+        "$APPLIQUER" "$b" >> "$TRACE" 2>&1
     rc=$?
+    progres "$a" "$pre : ecrit"
     # the way back is bounded: the oldest commits can no longer be undone
     if [ -d "$b/.osmo-retour" ]; then
         ls -1 "$b/.osmo-retour" | sort | head -n -"$RETOUR_MAX" | while IFS= read -r q; do
@@ -383,9 +426,18 @@ appliquer() {
         trace "/home : couche RAM hors d atteinte ($(option_montage /home upperdir)) - /home N EST PAS ecrit"
         rc=1
     fi
+    # each layer's share of the bar: its number of files in RAM
+    local tot=0 fait=0 t de a
     while read -r h b pre; do
-        appliquer_couche "$h" "$b" "$pre" "$id" < /dev/null || rc=1
+        t=$(find "$h" -xdev 2>/dev/null | wc -l); tot=$((tot + ${t:-0} + 1))
     done < <(couches)
+    while read -r h b pre; do
+        t=$(find "$h" -xdev 2>/dev/null | wc -l); t=$(( ${t:-0} + 1 ))
+        de=$((PROGRES_BOITE + (100 - PROGRES_BOITE) * fait / tot)); fait=$((fait + t))
+        a=$((PROGRES_BOITE + (100 - PROGRES_BOITE) * fait / tot))
+        appliquer_couche "$h" "$b" "$pre" "$id" "$de" "$a" < /dev/null || rc=1
+    done < <(couches)
+    progres 100 "termine"
     NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
     return $rc
 }
@@ -644,9 +696,15 @@ EOF
         # write counts as « after »
         install -d -m 0700 "$ETAT"
         : > "$ETAT/ecrit.nouv"
+        progres 0 "boite noire"
+        ppid=""
+        if [ -t 2 ]; then progres_terminal & ppid=$!; fi
         # the box first: the RAM layer against the disk, i.e. this moment
-        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer ecrit
+        [ -x /usr/local/sbin/osmo-diffs ] \
+            && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
         appliquer; rc=$?
+        rm -f "$PROGRES"
+        [ -n "$ppid" ] && wait "$ppid" 2>/dev/null
         journal_disque
         if [ "$rc" = 0 ]; then
             mv -f "$ETAT/ecrit.nouv" "$ETAT/ecrit"
@@ -738,7 +796,23 @@ EOF
         # session forgotten on purpose is recorded as « efface » too)
         _b="$decision"; [ "$_b" = oublie ] && _b=efface
         trace "fin : decision $decision"
-        [ -x /usr/local/sbin/osmo-diffs ] && /usr/local/sbin/osmo-diffs enregistrer "$_b"
+        # kept: the REC screen from now on - cmatrix, and at the bottom, in
+        # red, centred, the progress of the write (osmo-rec); the black box
+        # record is its first quarter
+        mpid=""
+        if [ "$decision" = valide ] && [ "$n" -gt 0 ]; then
+            console_texte
+            progres 0 "boite noire"
+            if [ -x "$REC" ]; then
+                "$REC" "$CONSOLE" "$PROGRES" < /dev/null > /dev/null 2>&1 &
+                mpid=$!
+            elif command -v cmatrix >/dev/null 2>&1; then
+                TERM=linux cmatrix -b -u 4 < "$CONSOLE" > "$CONSOLE" 2>/dev/null &
+                mpid=$!
+            fi
+        fi
+        [ -x /usr/local/sbin/osmo-diffs ] \
+            && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" /usr/local/sbin/osmo-diffs enregistrer "$_b"
         if [ "$decision" = oublie ]; then
             # white screen (reverse video on a cleared console), no banner:
             # the machine goes off on it
@@ -746,17 +820,10 @@ EOF
             printf '\033[?5h\033[2J' > "$CONSOLE" 2>/dev/null
             sleep 2
         elif [ "$decision" = valide ] && [ "$n" -gt 0 ]; then
-            console_texte
-            dire "osmo-operator : ecriture de la session sur le disque ($n changement(s))..."
-            # cmatrix on the console while the session is written (no -M:
-            # cmatrix 2.0 does not have it, prints its usage and leaves)
-            mpid=""
-            if command -v cmatrix >/dev/null 2>&1; then
-                TERM=linux cmatrix -b -u 4 < "$CONSOLE" > "$CONSOLE" 2>/dev/null &
-                mpid=$!
-            fi
+            trace "fin : ecriture de la session sur le disque ($n changement(s))"
             appliquer; rc=$?
-            if [ -n "$mpid" ]; then sleep 2; kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; fi
+            if [ -n "$mpid" ]; then sleep 1; kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; fi
+            rm -f "$PROGRES"
             # out of curses: attributes, cursor, screen
             printf '\033[0m\033[?25h\033[2J\033[H' > "$CONSOLE" 2>/dev/null
             stty sane < "$CONSOLE" 2>/dev/null
