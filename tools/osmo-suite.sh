@@ -3,6 +3,14 @@
 #
 #   ~/suite          regarde ou en est la machine et fait l etape suivante
 #   ~/suite etat     dit seulement ou elle en est (ne fait rien)
+#   ~/suite stop     annule la reprise prevue au prochain demarrage
+#
+# S IL RESTE QUELQUE CHOSE APRES UN REDEMARRAGE, il se relance tout seul : a
+# l etape 1 il pose une entree de demarrage de session, qui ouvre une fenetre
+# avec la suite a la premiere ouverture de session qui suit - UNE fois : elle
+# se retire en se lancant. (Ce retrait est garde par la validation de cette
+# session-la ; une session non validee ne laisse aucune trace, donc la
+# fenetre reviendrait.)
 #
 # Chaque outil demande lui-meme la phrase de /home (rien ne s ecrit sans elle) :
 # ce script ne la voit pas et ne la garde pas. Il enchaine seulement :
@@ -15,6 +23,33 @@ rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
 vert()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
 titre() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 SEUL=0; [ "${1:-}" = etat ] && SEUL=1
+AUTO="$HOME/.config/autostart/osmo-suite.desktop"
+MOI="$(readlink -f "$0")"
+
+# la reprise au prochain demarrage : posee par l etape 1, retiree des qu elle a servi
+prevoir_reprise() {
+    mkdir -p "${AUTO%/*}" && cat > "$AUTO" <<EOF
+[Desktop Entry]
+Type=Application
+Name=La suite (poste securise)
+Exec=$MOI auto
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-Autostart-Delay=10
+EOF
+}
+case "${1:-}" in
+    stop) rm -f "$AUTO"; echo "Reprise au prochain demarrage : annulee."; exit 0 ;;
+    auto)
+        # la premiere ouverture de session apres l etape 1 : une fois, dans une fenetre
+        rm -f "$AUTO"
+        G=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py
+        if [ -x "$G" ]; then exec python3 "$G" --tty --keep-open --title "La suite (poste securise)" -- "$MOI"
+        elif command -v gnome-terminal >/dev/null 2>&1; then exec gnome-terminal -- bash -c "'$MOI'; echo; read -r -p 'Entree pour fermer' _"
+        fi
+        exit 0 ;;
+esac
 
 # ── ou en est la machine ─────────────────────────────────────────────────────
 scripts_en_retard() {      # un script de la session n est pas encore sur le disque
@@ -82,7 +117,10 @@ if [ "$SEUL" = 1 ]; then etat; exit 0; fi
 # ── etape 1 : le disque n a pas encore les scripts, ou l initramfs est en retard
 if r="$(scripts_en_retard)" || initramfs_en_retard; then
     titre "Etape 1 : mettre les scripts sur le disque${r:+ ($r...)}"
-    if scripts_en_retard >/dev/null; then valider; fi
+    # la suite reprendra toute seule apres le redemarrage (posee AVANT de valider,
+    # pour que la validation la garde)
+    prevoir_reprise && echo "Reprise prevue a la prochaine ouverture de session (une fois ; ~/suite stop pour l annuler)."
+    valider
     if initramfs_en_retard; then
         titre "Reconstruire l initramfs (phrase de /home)"
         sudo /usr/local/sbin/osmo-racine-live actualiser || { rouge "initramfs non reconstruit : on s arrete la"; exit 1; }
@@ -94,6 +132,7 @@ if r="$(scripts_en_retard)" || initramfs_en_retard; then
 fi
 
 # ── etape 2 : le TPM n a pas reconnu ce demarrage, ou garde encore ses secrets en clair
+rm -f "$AUTO"
 if tpm_pose && { ! tpm_reconnu || tpm_en_clair; }; then
     titre "Etape 2 : sceller le TPM sur ce demarrage (phrase de /home)"
     echo "A faire seulement si tu sais pourquoi ce demarrage n a pas montre ta phrase"
