@@ -1151,6 +1151,42 @@ garde_pid() {
     p="$(systemctl show -p MainPID --value osmo-garde.service 2>/dev/null)"
     [ -n "$p" ] && [ "$p" != 0 ] && [ -d "/proc/$p" ] && echo "$p"
 }
+# WHO UNMOUNTS THEM? (diagnostic) A kernel trace, set at boot by
+# osmo-garde.service (« tracer »): every umount call with its path, and every
+# fork/exec to follow the caller up to its parent. When the layers are found
+# gone, the calls that took them - and what systemd logged around - go to the
+# session log.
+TRACEUR=/sys/kernel/tracing/instances/osmo
+poser_traceur() {
+    [ -d /sys/kernel/tracing/instances ] || return 0
+    mkdir -p "$TRACEUR" 2>/dev/null || return 0
+    grep -q '^p:osmo/um ' /sys/kernel/tracing/kprobe_events 2>/dev/null \
+        || echo 'p:osmo/um __x64_sys_umount name=+0(+112(%di)):ustring' >> /sys/kernel/tracing/kprobe_events 2>/dev/null
+    echo 4096 > "$TRACEUR/buffer_size_kb" 2>/dev/null
+    for e in osmo/um sched/sched_process_fork sched/sched_process_exec; do
+        echo 1 > "$TRACEUR/events/$e/enable" 2>/dev/null
+    done
+    echo 1 > "$TRACEUR/tracing_on" 2>/dev/null
+}
+qui_demonte() {
+    local t="$TRACEUR/trace" l pid p e n
+    [ -r "$t" ] || { trace "demontage : pas de trace noyau (osmo-garde.service)"; return 0; }
+    grep -a 'um: .*name="\(/media/home-r[ow]\|/home\)"' "$t" | tail -n 6 | while IFS= read -r l; do
+        trace "demontage : $(printf '%s' "$l" | sed -E 's/^ +//; s/ +\[[0-9]+\] [^ ]+ +/ /; s/\(__x64_sys_umount[^)]*\) //' | cut -c1-150)"
+        pid="$(printf '%s' "$l" | sed -E 's/^ *.*-([0-9]+) +\[.*/\1/')"; n=0
+        while [ -n "$pid" ] && [ "$pid" != 1 ] && [ "$n" -lt 5 ]; do
+            p="$(grep -a "child_pid=$pid\$" "$t" | tail -1)"
+            e="$(grep -a "sched_process_exec: filename=[^ ]* pid=$pid " "$t" | tail -1 | sed -E 's/.*filename=([^ ]*).*/\1/')"
+            [ -n "$p" ] || { trace "demontage :   pid $pid${e:+ ($e)} : parent inconnu"; break; }
+            trace "demontage :   pid $pid${e:+ ($e)} lance par $(printf '%s' "$p" | sed -E 's/.*comm=([^ ]*) pid=([0-9]+) child.*/\1 (pid \2)/')"
+            pid="$(printf '%s' "$p" | sed -E 's/.*comm=[^ ]* pid=([0-9]+) child.*/\1/')"; n=$((n + 1))
+        done
+    done
+    # what systemd said of these units since the shutdown began
+    journalctl -b --no-pager -o short-monotonic -n 4000 2>/dev/null \
+        | grep -a 'home.x2dro\|home-ro\|luks\|cryptsetup\|home\.mount\|osmo-fin-session\|osmo-garde\|Reached target\|shutdown' \
+        | tail -n 25 | while IFS= read -r l; do trace "systemd : $(printf '%s' "$l" | cut -c1-170)"; done
+}
 etat_montages() {   # one line: what is mounted of /home and its two layers
     local m o=""
     for m in /home "$HOME_BAS" "${HOME_HAUT%/overlay}"; do
@@ -1162,6 +1198,7 @@ case "${1:-etat}" in
     fin|valider|ecrire|defaire|remonter|fusionner)
         if [ "$(id -u)" = 0 ] && live && couches_manquantes; then
             trace "${1} : couches de /home hors d atteinte ici :$(etat_montages)"
+            [ -z "${OSMO_DANS_GARDE:-}" ] && qui_demonte
             _g="$(garde_pid)"
             if [ -z "${OSMO_DANS_GARDE:-}" ] && [ -n "$_g" ] \
                     && OSMO_DANS_GARDE=1 nsenter -t "$_g" -m "$0" couches-ok 2>/dev/null; then
@@ -1174,6 +1211,11 @@ case "${1:-etat}" in
 esac
 
 case "${1:-etat}" in
+    tracer)
+        # (osmo-garde.service) the kernel trace of umount calls: who takes the layers of /home
+        root_requis
+        poser_traceur
+        ;;
     couches-ok)
         # (internal) are the layers of /home within reach in this namespace?
         live && ! couches_manquantes

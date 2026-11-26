@@ -647,7 +647,10 @@ def comparer(nom, racine, complet=False):
                 quoi.append("date de modification")
             elif v[6] != r[6] or v[7] != r[7]:
                 quoi.append("fichier remplace ou reecrit (inode / date de changement)")
-            if complet and not quoi:
+            # GRUB's environment block: written in place by the boot loader
+            # itself, before anything runs - its content is not ours to judge
+            # (its rights, owner, size and dates still are)
+            if complet and not quoi and p not in TOUJOURS_RELUS:
                 a_lire.append(p)
         if quoi:
             diffs.append(("MODIFIE", p, ", ".join(quoi)))

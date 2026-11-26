@@ -21,6 +21,9 @@ Type=exec
 # NOTHING IS WRITTEN WITHOUT THE /home PASSPHRASE: the EFI partition, the one
 # file system a session could still write to directly, is read-only from boot
 ExecStartPre=-/usr/bin/mount -o remount,ro /boot/efi
+# diagnostic: a kernel trace of every umount call, read at shutdown when the
+# layers of /home are found gone (who unmounts /media/home-ro ?)
+ExecStartPre=-/usr/local/sbin/osmo-racine-live tracer
 ExecStart=/usr/bin/unshare --mount --propagation private /usr/bin/sleep infinity
 Restart=no
 
