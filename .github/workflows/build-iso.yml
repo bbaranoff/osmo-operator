@@ -581,6 +581,18 @@ jobs:
           [ -d osmo-build-logs ] && python3 .github/composants-notes.py osmo-build-logs >> "$RUNNER_TEMP/notes-iso.md"
           bash .github/release-section.sh "$TAG" iso "$RUNNER_TEMP/notes-iso.md"
 
+      # [2026-11-26] Les sommes de CE build fusionnees avec celles deja
+      # publiees (un build « desktop » seul ecrasait SHA256SUMS : la v0.2 n
+      # avait plus que la somme de la desktop), et les fichiers perimes d une
+      # ISO refaite (entiere <-> morceaux) retires de la release.
+      - name: Sommes fusionnees avec la release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.version || 'v0.2-1' }}
+        run: bash .github/sommes-release.sh "$TAG"
+
       # [2026-10-09] softprops envoyait tous les fichiers en parallele ; les
       # parties de 1 a 1,7 Go coupaient avec « Upload body timed out due to
       # inactivity ». Ici : un fichier a la fois, relances sur echec.
