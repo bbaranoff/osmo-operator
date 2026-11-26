@@ -693,7 +693,11 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
 - **The disk against its fingerprint** (`osmo-empreinte`): `/` is in clear, so somebody with the
   machine in hand can write to it while it is off. After every commit the **total SHA-256 of `/`
   and of `/home`** is taken and kept on the black box (`empreinte.json`, with its detail per file;
-  every record of the box also carries the totals). **At every boot, before the `/home` passphrase
+  every record of the box also carries the totals). The box is in clear: of `/home` only the
+  **totals** are kept as they are - its detail (paths, sizes, SHA-256 of every file) is
+  **encrypted** with the seal's key, which lives in `/home` (`empreinte-home.detail`, AES-256 +
+  HMAC; without the key no detail is written). A detail left in clear by an earlier version is
+  overwritten and removed at the next fingerprint (on an SSD the old blocks may outlive it). **At every boot, before the `/home` passphrase
   is asked**, the total of `/` is computed again (a walk of the disk, about 2 s) and compared; only
   when it differs is the detail read, to say what changed: a **red warning** fills the console, the
   box gets an `alerte` record, and the passphrase is only asked after `OUI` (otherwise the machine

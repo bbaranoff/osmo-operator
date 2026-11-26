@@ -8,7 +8,9 @@
 # THE TOTAL SHA-256 of / and of /home is taken and kept on the box partition
 # (empreinte.json; each record of the box also carries the totals it found),
 # with its detail - one line per file: type, mode, owner, size, dates, inode,
-# SHA-256 of its content. At EVERY BOOT, BEFORE the /home passphrase is asked,
+# SHA-256 of its content. The detail of /home is ENCRYPTED there (the box is
+# in clear, what lives in /home is not to be read from it): only its totals
+# are kept as they are. At EVERY BOOT, BEFORE the /home passphrase is asked,
 # the total of / is computed again (a walk of the disk: 2 seconds) and
 # compared; only when it differs is the detail read, to say what changed.
 # /home is compared the same way as soon as it is opened. A difference means that somebody wrote to the disk with
@@ -148,6 +150,60 @@ def manifeste(nom):
     return os.path.join(BOITE, "empreinte-%s.json.gz" % nom)
 
 
+# THE DETAIL OF /home IS CONFIDENTIAL: the paths, sizes and SHA-256 of what
+# lives in the encrypted volume. The box partition is in clear: only the
+# TOTALS of /home are kept there as they are; its detail is ENCRYPTED
+# (AES-256, then HMAC-SHA-256) with the seal's key, which lives in /home.
+# Without /home open it cannot be read - and it is not needed: /home is only
+# compared once it is open. No key: no detail is written, the total alone.
+CHIFFRES = {"home"}
+
+
+def manifeste_chiffre(nom):
+    return os.path.join(BOITE, "empreinte-%s.detail" % nom)
+
+
+def _cles_detail(cle):
+    return (hashlib.sha256(b"osmo-empreinte detail chiffrement\0" + cle).hexdigest(),
+            hashlib.sha256(b"osmo-empreinte detail sceau\0" + cle).digest())
+
+
+def _openssl(sens, donnees, passe):
+    r = subprocess.run(["openssl", "enc", sens, "-aes-256-ctr", "-pbkdf2", "-iter", "1000", "-pass", "env:OSMO_DETAIL"],
+                       input=donnees, capture_output=True, env=dict(os.environ, OSMO_DETAIL=passe))
+    if r.returncode != 0:
+        raise OSError("openssl enc %s : %s" % (sens, r.stderr.decode(errors="replace").strip()[:200]))
+    return r.stdout
+
+
+def chiffrer_detail(clair, cle):
+    passe, mac = _cles_detail(cle)
+    c = _openssl("-e", clair, passe)
+    return hmac.new(mac, c, hashlib.sha256).digest() + c
+
+
+def dechiffrer_detail(brut, cle):
+    passe, mac = _cles_detail(cle)
+    if len(brut) < 48 or not hmac.compare_digest(brut[:32], hmac.new(mac, brut[32:], hashlib.sha256).digest()):
+        raise ValueError("detail chiffre : sceau faux")
+    return _openssl("-d", brut[32:], passe)
+
+
+def effacer_clair(nom):
+    """A detail left in clear by an earlier version: overwritten, then removed
+    (on an SSD the old blocks may outlive this - said in the documentation)."""
+    for f in (manifeste(nom), manifeste(nom) + ".nouv"):
+        if os.path.exists(f):
+            try:
+                subprocess.run(["shred", "-u", "-n", "1", f], capture_output=True, timeout=300)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+
 def couches():
     """The volumes that have a fingerprint: the system disk, and /home when it is open."""
     c = {"racine": RACINE}
@@ -187,6 +243,13 @@ def totaux():
 
 def charger(nom):
     try:
+        if nom in CHIFFRES:
+            cle = cle_sceau()
+            if cle is None:
+                return None
+            with open(manifeste_chiffre(nom), "rb") as f:
+                lignes = gzip.decompress(dechiffrer_detail(f.read(), cle)).decode("utf-8", "surrogateescape").split("\n")
+            return {r[0]: r[1:] for r in (json.loads(l) for l in lignes[1:] if l)}
         with gzip.open(manifeste(nom), "rt", encoding="utf-8", errors="surrogateescape") as f:
             json.loads(f.readline())
             return {r[0]: r[1:] for r in (json.loads(l) for l in f)}
@@ -340,6 +403,25 @@ def prendre():
         return 1
     try:
         for nom, etat in pris.items():
+            if nom in CHIFFRES:
+                # never in clear on the box; without the key, the total alone
+                effacer_clair(nom)
+                tmp = manifeste_chiffre(nom) + ".nouv"
+                try:
+                    if cle is None:
+                        raise OSError("cle du sceau hors d atteinte")
+                    clair = "\n".join([json.dumps(tot[nom])] + [json.dumps([p] + etat[p], ensure_ascii=True) for p in sorted(etat)]) + "\n"
+                    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+                        f.write(chiffrer_detail(gzip.compress(clair.encode("utf-8", "surrogateescape"), 1), cle))
+                    os.replace(tmp, manifeste_chiffre(nom))
+                except OSError as e:
+                    dire("detail de %s NON ecrit (%s) : son total seul est garde" % (nom, e))
+                    for f in (tmp, manifeste_chiffre(nom)):
+                        try:
+                            os.unlink(f)
+                        except OSError:
+                            pass
+                continue
             tmp = manifeste(nom) + ".nouv"
             with gzip.open(tmp, "wt", encoding="utf-8", errors="surrogateescape", compresslevel=1) as f:
                 f.write(json.dumps(tot[nom]) + "\n")
@@ -380,7 +462,8 @@ def comparer(nom, racine, complet=False):
     etat = parcourir(racine)
     ancien = charger(nom)
     if ancien is None:
-        return ref, [("MODIFIE", "", "empreinte totale differente, et le detail (%s) a disparu de la boite" % manifeste(nom))]
+        return ref, [("MODIFIE", "", "empreinte totale differente, et le detail (%s) n est pas lisible sur la boite" % (
+            manifeste_chiffre(nom) if nom in CHIFFRES else manifeste(nom)))]
     diffs = []
     for p in sorted(set(ancien) - set(etat)):
         diffs.append(("SUPPRIME", p, ""))
