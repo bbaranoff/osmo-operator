@@ -141,7 +141,12 @@ install -m 0755 "$_CH_SRC/osmo-tpm-bienvenue" "$ROOTFS/usr/local/bin/osmo-tpm-bi
 # sentence and PIN or the phone, the /home passphrase with all that follows
 # it, the box's passphrase). In the menu and on the desktop of new accounts.
 install -m 0755 "$_CH_SRC/osmo-secrets" "$ROOTFS/usr/local/sbin/osmo-secrets"
-for _d in osmo-enregistrer osmo-secrets; do
+# « Remettre a zero » (osmo-reset), the opposite of « Enregistrer »: in
+# persistent mode /home goes back to what it was when the session began - a
+# device-mapper snapshot taken by unlock-home (dmsetup, dm-snapshot: the
+# kernel's own module), its old blocks kept in RAM. Ordered from the icon only.
+install -m 0755 "$_CH_SRC/osmo-reset" "$ROOTFS/usr/local/sbin/osmo-reset"
+for _d in osmo-enregistrer osmo-reset osmo-secrets; do
     install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
     for _b in Desktop Bureau; do
         [ -d "$ROOTFS/etc/skel/$_b" ] && install -m 0755 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/etc/skel/$_b/$_d.desktop"
@@ -168,6 +173,16 @@ install -m 0644 "$DIR/services/osmo-fin-session.service" "$ROOTFS/etc/systemd/sy
 # the kept copy of the mounts of /home: its layers found gone at shutdown
 # (enabled with the rest by osmo-racine-live poser)
 install -m 0644 "$DIR/services/osmo-garde.service" "$ROOTFS/etc/systemd/system/osmo-garde.service"
+# THE ALARM AT SHUTDOWN HOLDS THE MACHINE ON (osmo-racine-live fin, when the
+# checksums differ from the boot's): systemd must not force the power-off
+# after its 30 minutes, nor Ctrl-Alt-Del pressed seven times reboot it. Only
+# the power button, held, switches it off.
+for _t in poweroff reboot halt kexec; do
+    install -d "$ROOTFS/etc/systemd/system/$_t.target.d"
+    printf '[Unit]\nJobTimeoutSec=infinity\n' > "$ROOTFS/etc/systemd/system/$_t.target.d/osmo-alarme.conf"
+done
+install -d "$ROOTFS/etc/systemd/system.conf.d"
+printf '[Manager]\nCtrlAltDelBurstAction=none\n' > "$ROOTFS/etc/systemd/system.conf.d/osmo-alarme.conf"
 # the checkpoint: every ten minutes the session so far goes to the black box
 # (public key, no passphrase) - a session cut short no longer leaves nothing
 install -m 0644 "$DIR/services/osmo-point.service" "$ROOTFS/etc/systemd/system/osmo-point.service"
@@ -303,7 +318,7 @@ fi
 # ── Required in the rootfs ─────────────────────────────────────────────────
 # cryptsetup to open the volume, rsync for init-crypthome.sh, x11-xserver-utils
 # for xhost.
-for _p in cryptsetup rsync xhost overlayroot-chroot age getfattr zenity; do
+for _p in cryptsetup dmsetup fuser rsync xhost overlayroot-chroot age getfattr zenity; do
     chroot "$ROOTFS" bash -c "command -v $_p >/dev/null 2>&1" || \
         echo -e "  ${YELLOW}!${NC} ${CYAN}$_p${NC} absent du rootfs - requis par le dispositif de chiffrement"
 done

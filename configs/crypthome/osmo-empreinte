@@ -77,6 +77,10 @@ from multiprocessing import Pool
 BOITE = os.environ.get("OSMO_DIFFS_BASE", "/var/lib/osmo-diffs")
 TOTAUX = os.path.join(BOITE, "empreinte.json")        # the totals: what the boot compares
 SCEAU = os.path.join(BOITE, "empreinte.hmac")
+# left by « extinction » when the checksums differed at shutdown: the next
+# boot is an alert whatever the disk looks like by then (no guest session);
+# only a fingerprint taken with the /home passphrase removes it
+ALARME = os.path.join(BOITE, "alarme")
 RACINE = os.environ.get("OSMO_EMPREINTE_RACINE") or ("/media/root-ro" if os.path.ismount("/media/root-ro") else "/")
 HOME_DISQUE = os.environ.get("OSMO_EMPREINTE_HOME", "/media/home-ro")
 CLE = ".osmo-diffs/sceau"
@@ -959,6 +963,11 @@ def prendre(phrase=None, premiere=False):
         os.replace(TOTAUX + ".nouv", TOTAUX)
         if pem is not None:
             signee = poser_signature(pem, phrase)
+            if signee:
+                try:
+                    os.unlink(ALARME)             # the owner has seen it and blesses the disk again
+                except OSError:
+                    pass
         else:
             try:
                 os.unlink(SIG)
@@ -1130,6 +1139,14 @@ def demarrage():
         elif sig is False or (anc is not None and sig is not True):
             titre = "L EMPREINTE DU DISQUE N EST PAS SIGNEE PAR LA PHRASE DE /home"
             diffs = [("MODIFIE", TOTAUX.lstrip("/"), "refaite sans la phrase : le disque lui est conforme, mais rien ne prouve que c est celui que tu as valide")]
+        elif os.path.exists(ALARME):
+            try:
+                with open(ALARME) as f:
+                    quand = f.readline().strip()
+            except OSError:
+                quand = "?"
+            titre = "ALARME A LA DERNIERE EXTINCTION : LE DISQUE AVAIT CHANGE SANS LA PHRASE"
+            diffs = [("MODIFIE", ALARME.lstrip("/"), "extinction du %s - le disque est de nouveau conforme, ce qui ne prouve rien : sudo osmo-empreinte prendre, apres avoir regarde la boite noire" % quand)]
         else:
             dire("disque systeme conforme : sha256 %s (%s)%s%s" % (
                 tete["meta"], tete.get("pris"), ", empreinte signee" if sig else ", empreinte pas encore signee",
@@ -1276,6 +1293,125 @@ def sceau():
     return 3
 
 
+def bip(secondes=6):
+    """THE NASTY BEEP: the PC speaker in two alternating tones (pcspkr, console
+    ioctl), the console bell, and the sound card when ALSA answers (at
+    shutdown the sound server is gone, the card is free). THE VOLUME IS NOT
+    THE LISTENER'S: every output of every card is unmuted and put to its
+    maximum first - a beep nobody hears, or turned down, is no warning."""
+    import fcntl
+    son = None
+    try:
+        for carte in sorted(os.listdir("/proc/asound")):
+            if not (carte.startswith("card") and carte[4:].isdigit()):
+                continue
+            for ctl in ("Master", "Speaker", "Headphone", "PCM", "Front", "Beep"):
+                subprocess.run(["amixer", "-q", "-c", carte[4:], "sset", ctl, "100%", "unmute"],
+                               capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        subprocess.run(["modprobe", "pcspkr"], capture_output=True, timeout=10)
+        son = subprocess.Popen(["timeout", str(secondes), "speaker-test", "-t", "sine", "-f", "1900", "-c", "2"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+    except OSError:
+        c = None
+    fin = time.monotonic() + secondes
+    k = 0
+    while time.monotonic() < fin:
+        if c is not None:
+            try:
+                fcntl.ioctl(c, 0x4B2F, 1193180 // (2600 if k % 2 else 1300))   # KIOCSOUND
+            except OSError:
+                pass
+            if k % 4 == 0:
+                try:
+                    os.write(c, b"\a")
+                except OSError:
+                    pass
+        k += 1
+        time.sleep(0.18)
+    if c is not None:
+        try:
+            fcntl.ioctl(c, 0x4B2F, 0)
+        except OSError:
+            pass
+        os.close(c)
+    if son is not None:
+        try:
+            son.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            son.kill()
+    return 0
+
+
+def extinction():
+    """osmo-racine-live fin, BEFORE the session is written or dropped: the
+    disks against their fingerprint. Nothing at boot and a difference now:
+    something wrote to the disk DURING this session without the passphrase
+    (a validated write takes and signs the fingerprint again - that one finds
+    nothing here). Red on the console, a record in the box, the beep."""
+    if not TEST and not os.path.ismount(BOITE):
+        return 0
+    if os.path.exists(ALERTE):
+        return 0                              # already said at boot: not twice
+    trouve = []
+    for nom, racine in couches().items():
+        tete, diffs = comparer(nom, racine)
+        if diffs:
+            trouve.append((racine, tete, diffs))
+    if not trouve and signature_ok() is False:
+        trouve.append((BOITE, {}, [("MODIFIE", TOTAUX.lstrip("/"), "l empreinte n est plus signee par la phrase de /home")]))
+    if not trouve:
+        dire("extinction : sommes de controle conformes, comme au demarrage")
+        return 0
+    titre = "LE DISQUE A CHANGE PENDANT LA SESSION, SANS LA PHRASE"
+    for cmd in () if TEST else (["plymouth", "quit"], ["chvt", "1"]):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    l = ["\033[2J\033[H", "\033[5;1;31m" + "#" * 76 + FIN, ROUGE + "", "   !!!  " + titre + "  !!!", "",
+         "   Propre au demarrage, different a l extinction : quelque chose a ecrit sur le",
+         "   disque pendant cette session sans passer par une validation.", ""]
+    if boite_rw(True):
+        try:
+            with open(ALARME, "w") as f:
+                f.write(time.strftime("%F %T") + "\n")
+                for racine, tete, diffs in trouve:
+                    f.write(texte_alerte(racine, diffs, tete))
+            os.sync()
+        except OSError:
+            pass
+        finally:
+            boite_rw(False)
+    for racine, tete, diffs in trouve:
+        alerter("%s : %s" % (titre, racine), diffs, tete)
+        dire("%s : %s, %d difference(s)" % (titre, racine, len(diffs)))
+        for k, p, d in diffs[:10]:
+            l.append(("     %-8s %s/%s%s" % (k, racine.rstrip("/"), p, ("  (%s)" % d) if d else ""))[:118])
+        if len(diffs) > 10:
+            l.append("     ... et %d autre(s)" % (len(diffs) - 10))
+    l += ["", "   C est note dans la boite noire. Le prochain demarrage le redira, et seul le",
+          "   proprietaire (phrase de /home) pourra ouvrir une session.", "#" * 76 + FIN, ""]
+    if TEST:
+        sys.stdout.write("\n".join(l) + "\n")
+        return 3
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+        os.write(c, "\r\n".join(l).encode())
+        os.close(c)
+    except OSError:
+        pass
+    bip()
+    time.sleep(6)
+    return 3
+
+
 def rappel():
     """Desktop: the INTEGRITY warning as a dialog, the only one at login, and
     only when the complete control found something (it waits for it). The
@@ -1314,6 +1450,15 @@ def main():
         return rappel()
     if os.geteuid() != 0 and not TEST:
         sys.exit("osmo-empreinte : root requis")
+    if cmd in ("prendre", "ancrer", "phrase-changee", "resceller", "coffre-sceller") and not TEST:
+        # what these leave in /home (signature key, pin, vault) must not come
+        # back in time: the session can no longer be « remise a zero »
+        try:
+            subprocess.run(["/usr/local/sbin/osmo-reset", "interdire",
+                            "des secrets ou l empreinte ont ete refaits pendant cette session"],
+                           capture_output=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     if cmd == "prendre":
         return prendre(lire_phrase())
     if cmd == "coffre-sceller":
@@ -1346,6 +1491,11 @@ def main():
         else:
             dire("ancre TPM : %s" % ("la cle de la boite est celle du TPM" if pub_empreinte() == anc else "LA CLE DE LA BOITE N EST PAS CELLE DU TPM"))
         return 0 if sig and (anc is None or pub_empreinte() == anc) else 3
+    if cmd == "bip":
+        # the alarm itself: it sets every volume to its maximum - not a toy
+        return bip() if "--alarme" in sys.argv[2:] else 0
+    if cmd == "extinction":
+        return extinction()
     if cmd == "fond":
         return fond()
     if cmd == "sceau":

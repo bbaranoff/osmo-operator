@@ -156,8 +156,36 @@ fait.
   `/home` reste intact sous une couche RAM, le travail de la session n'y est gardé que s'il
   est enregistré (icône disquette, ou la phrase à l'extinction). Le système (`/`) reste en
   RAM dans les deux cas et s'écrit à l'extinction avec la phrase.
+- **Persistant : rien n'est demandé pour oublier.** À l'extinction, pas de « Tout
+  oublier ? » : la phrase est demandée pour écrire ce qui a changé dans le système
+  (Entrée : ne pas l'écrire), et `/home` est déjà sur le disque. Oublier la session est un
+  geste volontaire, l'icône **« Remettre à zéro »** (`osmo-reset demander`), le contraire
+  d'« Enregistrer » : on tape `oui`, et à l'extinction `/home` revient à l'état du
+  démarrage, le système est effacé. Annulable jusque-là (même icône).
+  *Comment* : `unlock-home` prend un instantané du volume (device-mapper) avant de le
+  monter ; les anciens blocs que la session réécrit sont gardés **en RAM** (jamais sur un
+  disque), au plus `CRYPTHOME_RESET_MO` (défaut : un quart de la mémoire). *Limites* : une
+  session qui réécrit plus que cela ne peut plus être remise à zéro (l'icône le dit) ; une
+  session qui a enregistré, défait ou changé des secrets non plus (la clé de signature et
+  les clés de la boîte vivent dans `/home`) ; pendant la remise à zéro (quelques secondes
+  à une minute) il ne faut pas couper la machine — les anciens blocs sont en RAM, un
+  volume à moitié remis est un `/home` abîmé.
 - **D'échec** : pas de phrase, ou une phrase refusée (trois essais). Un root invité, le
   disque en lecture seule, tout en RAM, rien de personnel, rien de gardé.
+- **Une somme de contrôle diffère : pas de root invité.** Dès qu'une alerte d'intégrité
+  existe (disque modifié hors session, empreinte non signée, clé de signature changée),
+  seul le propriétaire peut continuer : `OUI` à l'alerte puis la phrase de `/home`. Sans
+  elle, la machine le dit en rouge, bipe et s'éteint.
+- **À l'extinction, les sommes sont recontrôlées** avant toute écriture
+  (`osmo-empreinte extinction`). Propre au démarrage et différent à l'extinction : quelque
+  chose a écrit sur le disque pendant la session sans la phrase — écran rouge,
+  enregistrement dans la boîte noire et bip (tous les volumes de la carte son sont mis au
+  maximum, haut-parleur du PC en plus). Une écriture validée reprend et signe l'empreinte :
+  elle ne déclenche rien. **La machine ne s'éteint alors pas** : rien n'est écrit sur le
+  disque, la session est gardée dans la boîte noire, l'alarme tient l'écran et rebipe ;
+  seul le bouton d'alimentation maintenu l'éteint. Une marque reste sur la boîte
+  (`alarme`) : le démarrage suivant est une alerte quoi que montre le disque — donc sans
+  root invité — jusqu'à une empreinte reprise avec la phrase (`sudo osmo-empreinte prendre`).
 - Pas de question quand le mode est fixé : `CRYPTHOME_HOME="direct"` ou `"ram"` dans
   `/etc/default/crypthome`, ou l'entrée GRUB « /home en RAM » pour un démarrage. En mode
   « à enregistrer » seulement, `/home` a une empreinte, des retours arrière et sa couche
@@ -212,6 +240,8 @@ condition, cela se voit ici avant d'être écrit.
 |---|---|---|---|
 | Contenu de `/home` | LUKS2 (argon2id, 1 Gio) | phrase home | phrase home |
 | `/home` pendant la session (ouverture normale) | LUKS2, écrit directement | phrase home (tapée au démarrage) | idem |
+| Anciens blocs de `/home` (pour « Remettre à zéro ») | RAM (tmpfs `/run/osmo-reset`), perdus à l'extinction | root, session ouverte (comme `/home` lui-même) | idem ; remis sur le volume seulement sur ordre (icône, `oui`) |
+| Session root invitée | RAM | personne si une somme de contrôle diffère (arrêt) ; sinon quiconque allume | — |
 | Changements du système (`/`) pendant la session | RAM | root, session ouverte | idem ; perdus sans phrase home à l'extinction |
 | Les mêmes dans la boîte (points de contrôle, sessions non validées) : couche `/` | boîte noire (`attente/`) | phrase boîte | personne |
 | Idem, couche `/home` | boîte noire, chiffrée pour la clé du home | phrase home (clé privée dans le volume) | personne |

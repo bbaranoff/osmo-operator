@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Remettre a zero
+Name[fr]=Remettre à zéro
+Comment=Le contraire d Enregistrer : oublier tout ce que la session a fait (/home revient comme au demarrage)
+Exec=python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --tty --keep-open --title "Remettre a zero" -- /usr/local/sbin/osmo-reset demander
+Icon=edit-undo
+Terminal=false
+Categories=System;
+Keywords=reset;oublier;effacer;zero;session;annuler;

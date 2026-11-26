@@ -1,0 +1,284 @@
+#!/bin/bash
+# osmo-reset - « REMETTRE A ZERO » : the opposite of « Enregistrer », for the
+# PERSISTENT /home.
+#
+# In persistent mode /home is written straight to the encrypted volume: by
+# default there is nothing to do and nothing is asked, it persists. Forgetting
+# the session is a VOLUNTARY gesture - this icon, never a question at shutdown.
+#
+# HOW /home CAN COME BACK. unlock-home, just before it mounts the volume
+# read-write, takes a SNAPSHOT of it (device-mapper): from then on, the first
+# time a block of the volume is overwritten, its old content is first copied
+# aside - IN RAM (a tmpfs, never a disk: these are blocks of the decrypted
+# /home). The volume itself always holds the present: a power cut, a crash,
+# an ordinary shutdown keep everything, as persistent means. Only when the
+# reset is ordered are the old blocks put back, at shutdown, once /home is
+# unmounted; the system (/), in RAM, is simply dropped as always.
+#
+#   $MAPPER-reel    the decrypted volume itself (the LUKS mapping, renamed)
+#   $MAPPER         « snapshot-origin » over it: what /home is mounted from -
+#                   the name every other tool already checks
+#   $MAPPER-avant   the snapshot: the volume as it was when the session began
+#
+#   osmo-reset poser      (unlock-home) take the snapshot
+#   osmo-reset etat       can this session still be reset ? (exit 0: yes)
+#   osmo-reset demander   THE ICON: explain, confirm, order it for the shutdown
+#   osmo-reset annuler    forget the order
+#   osmo-reset interdire REASON   this session wrote something that must not
+#                         come back (a validated write, new secrets): no reset
+#   osmo-reset faire      (osmo-racine-live fin) unmount /home, put the old
+#                         blocks back
+#   osmo-reset oter       drop the snapshot, keep the present (lock-home)
+#
+# LIMITS, plainly.
+# - The old blocks live in RAM, up to CRYPTHOME_RESET_MO (default: a quarter
+#   of the memory). A session that overwrites more than that can no longer be
+#   reset: « etat » and the icon say so; nothing else changes for it.
+# - While the old blocks are being put back (seconds, a minute for gigabytes)
+#   the machine MUST NOT be cut: they are in RAM, a volume half put back is a
+#   damaged /home. The screen says so in red.
+# - A session that validated a write to the system or changed secrets cannot
+#   be reset: the signature key, the box's keys and the TPM's vault live in
+#   /home, and the black box already holds what they signed.
+set -u
+CRYPTHOME_NAME=""; CRYPTHOME_MOUNT=""; CRYPTHOME_RESET_MO=""
+# shellcheck disable=SC1091
+[ -r /etc/default/crypthome ] && . /etc/default/crypthome
+MAPPER="${OSMO_RESET_NAME:-${CRYPTHOME_NAME:-crypthome}}"
+MOUNT="${OSMO_RESET_MOUNT:-${CRYPTHOME_MOUNT:-/home}}"
+R="${OSMO_RESET_DIR:-/run/osmo-reset}"
+ETAT="${OSMO_RESET_ETAT:-/run/osmo-racine}"
+ORDRE="$ETAT/reset"
+CONSOLE="${OSMO_RESET_CONSOLE:-/dev/console}"
+CHUNK=16                                   # sectors: 8 KiB
+REEL="$MAPPER-reel"; AVANT="$MAPPER-avant"
+
+rouge() { printf '\033[1;31m%s\033[0m\n' "$*"; }
+vert()  { printf '\033[1;32m%s\033[0m\n' "$*"; }
+gras()  { printf '\033[1m%s\033[0m\n' "$*"; }
+root_requis() { [ "$(id -u)" = 0 ] || { echo "osmo-reset : root requis" >&2; exit 1; }; }
+pose() { [ -e "/dev/mapper/$AVANT" ] && [ -e "/dev/mapper/$REEL" ]; }
+empile() { [ -e "/dev/mapper/$REEL" ]; }   # the origin is there, with or without its snapshot
+# usage : "USED TOTAL" in MiB of the room for old blocks; empty when the
+# snapshot is no longer valid (it overflowed)
+usage() {
+    local s a b
+    s="$(dmsetup status "$AVANT" 2>/dev/null)" || return 1
+    set -- $s
+    [ "${3:-}" = snapshot ] || return 1
+    case "${4:-}" in */*) ;; *) return 1 ;; esac
+    a="${4%/*}"; b="${4#*/}"
+    echo "$((a / 2048)) $((b / 2048))"
+}
+# possible : 0 when a reset can still be done; the reason is printed otherwise
+possible() {
+    local l
+    if [ -f "$R/deborde" ]; then echo "plus possible : cette session a trop ecrit dans /home (la place gardee pour revenir en arriere a deborde)"; return 1; fi
+    # overflowed: the snapshot is dead - dropped at once (the volume stays
+    # mounted on its origin), and the memory it held is given back
+    if pose && ! usage >/dev/null && [ "$(id -u)" = 0 ] && dmsetup remove "$AVANT" 2>/dev/null; then
+        : > "$R/deborde"
+        l="$(cat "$R/boucle" 2>/dev/null)"; [ -n "$l" ] && losetup -d "$l" 2>/dev/null
+        mountpoint -q "$R/ram" 2>/dev/null && umount "$R/ram" 2>/dev/null
+        rm -f "$R/boucle" "$ORDRE"
+        echo "plus possible : cette session a trop ecrit dans /home (la place gardee pour revenir en arriere a deborde)"; return 1
+    fi
+    pose || { echo "pas de remise a zero pour cette session (/home n est pas en mode persistant, ou l instantane n a pas pu etre pris)"; return 1; }
+    [ -f "$R/interdit" ] && { echo "plus possible : $(cat "$R/interdit")"; return 1; }
+    usage >/dev/null || { echo "plus possible : cette session a trop ecrit dans /home (la place gardee pour revenir en arriere a deborde)"; return 1; }
+    return 0
+}
+defaire_pile() {   # the stack removed, the present kept; the LUKS mapping gets its name back
+    local l
+    dmsetup remove "$MAPPER" 2>/dev/null
+    dmsetup remove "$AVANT" 2>/dev/null
+    [ -e "/dev/mapper/$REEL" ] && [ ! -e "/dev/mapper/$MAPPER" ] && dmsetup rename "$REEL" "$MAPPER"
+    l="$(cat "$R/boucle" 2>/dev/null)"
+    [ -n "$l" ] && losetup -d "$l" 2>/dev/null
+    mountpoint -q "$R/ram" 2>/dev/null && umount "$R/ram" 2>/dev/null
+    rm -f "$R/boucle" "$R/interdit" "$R/deborde" "$ORDRE"
+    [ -e "/dev/mapper/$MAPPER" ] && [ ! -e "/dev/mapper/$REEL" ]
+}
+
+case "${1:-etat}" in
+    poser)
+        root_requis
+        empile && { echo "instantane deja pris"; exit 0; }
+        rm -f "$R/deborde"
+        [ -e "/dev/mapper/$MAPPER" ] || { echo "volume ferme : pas d instantane"; exit 1; }
+        if awk -v d="$(lsblk -dno MAJ:MIN "/dev/mapper/$MAPPER" 2>/dev/null | tr -d ' ')" '$3 == d { f = 1 } END { exit !f }' /proc/self/mountinfo; then
+            echo "volume deja monte : pas d instantane"; exit 1
+        fi
+        modprobe dm-snapshot 2>/dev/null
+        mo="${OSMO_RESET_MO:-${CRYPTHOME_RESET_MO:-}}"
+        case "$mo" in ''|*[!0-9]*) mo=$(( $(awk '/^MemTotal:/ { print $2 }' /proc/meminfo) / 4096 )) ;; esac
+        [ "$mo" -ge 64 ] || mo=64
+        sz="$(blockdev --getsz "/dev/mapper/$MAPPER")" || exit 1
+        install -d -m 0700 "$R" "$R/ram" || exit 1
+        rm -f "$R/interdit"
+        mountpoint -q "$R/ram" || mount -t tmpfs -o "mode=0700,size=$((mo + 8))m" tmpfs "$R/ram" || exit 1
+        rm -f "$R/ram/cow"; truncate -s "${mo}M" "$R/ram/cow" || { umount "$R/ram"; exit 1; }
+        l="$(losetup -f --show "$R/ram/cow")" || { umount "$R/ram"; exit 1; }
+        echo "$l" > "$R/boucle"
+        if dmsetup rename "$MAPPER" "$REEL" \
+                && dmsetup create "$AVANT" --table "0 $sz snapshot /dev/mapper/$REEL $l P $CHUNK" \
+                && dmsetup create "$MAPPER" --table "0 $sz snapshot-origin /dev/mapper/$REEL"; then
+            command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=10 2>/dev/null
+            [ -e "/dev/mapper/$MAPPER" ] || dmsetup mknodes 2>/dev/null
+            echo "instantane de $MOUNT pris : la session pourra etre remise a zero (icone « Remettre a zero »), tant qu elle ne reecrit pas plus de $mo Mo"
+            exit 0
+        fi
+        echo "instantane impossible : $MOUNT reste persistant, sans remise a zero pour cette session"
+        defaire_pile
+        exit 1
+        ;;
+    etat)
+        if r="$(possible)"; then
+            set -- $(usage)
+            echo "remise a zero possible : $1 Mo gardes pour revenir en arriere, sur $2"
+            [ -f "$ORDRE" ] && echo "DEMANDEE : elle se fera a l extinction"
+            exit 0
+        fi
+        echo "$r"; exit 1
+        ;;
+    interdire)
+        [ "$(id -u)" = 0 ] && pose || exit 0
+        shift
+        [ -f "$R/interdit" ] || printf '%s\n' "${*:-cette session a ecrit quelque chose qui ne doit pas revenir en arriere}" > "$R/interdit"
+        rm -f "$ORDRE"
+        ;;
+    annuler)
+        root_requis
+        rm -f "$ORDRE" "$ETAT/oublier"
+        echo "La remise a zero est annulee : la session reste comme elle est."
+        ;;
+    demander)
+        root_requis
+        echo
+        gras "  REMETTRE A ZERO : le contraire d « Enregistrer »."
+        echo
+        if ! r="$(possible)"; then
+            rouge "  Ce n est pas possible : $r."
+            echo "  Rien n est change."
+            exit 1
+        fi
+        if [ -f "$ORDRE" ]; then
+            echo "  La remise a zero est DEJA demandee : elle se fera quand la machine s eteindra."
+            printf '  L annuler ? Tape  annuler  puis Entree (Entree seule : la garder) : '
+            IFS= read -r c || c=""
+            case "$c" in annuler|ANNULER|Annuler) exec "$0" annuler ;; esac
+            echo "  Elle reste demandee."
+            exit 0
+        fi
+        echo "  Tout ce que tu as fait depuis le demarrage de la machine sera oublie :"
+        echo "    - tes fichiers dans $MOUNT reviennent comme ils etaient au demarrage ;"
+        echo "    - ce qui a change dans le systeme est efface, comme d habitude."
+        echo "  Cela se fait quand la machine s eteint ou redemarre. Jusque-la tu peux annuler"
+        echo "  (cette meme icone)."
+        echo
+        rouge "  Ce qui est oublie ne peut PAS etre retrouve."
+        echo
+        printf '  Pour confirmer, tape  oui  puis Entree (Entree seule : ne rien faire) : '
+        IFS= read -r c || c=""
+        case "$c" in
+            oui|OUI|Oui) ;;
+            *) echo "  Rien n est change."; exit 0 ;;
+        esac
+        install -d -m 0700 "$ETAT"
+        rm -f "$ETAT/valide" "$ETAT/garder"
+        date '+%F %T' > "$ETAT/oublier"
+        date '+%F %T' > "$ORDRE"
+        vert "  C est note : la session sera remise a zero a l extinction."
+        echo
+        printf '  Redemarrer la machine maintenant ? [Entree = oui, n = plus tard] : '
+        IFS= read -r c || c=n
+        case "$c" in
+            n|N|non|Non|NON|no|No|NO) echo "  Plus tard, donc : a la prochaine extinction." ;;
+            *) echo "  Redemarrage..."; systemctl reboot ;;
+        esac
+        ;;
+    faire)
+        root_requis
+        cd / || exit 1
+        dire() { printf '%s\n' "$*" > "$CONSOLE" 2>/dev/null; echo "$*"; }
+        if ! r="$(possible)"; then dire "remise a zero de $MOUNT impossible : $r"; exit 1; fi
+        # the kept copy of the mounts (osmo-garde.service) holds the volume
+        # in its own namespace: at shutdown it is only waiting for us
+        g=""; [ -n "${OSMO_RESET_DIR:-}" ] || g="$(systemctl show -p MainPID --value osmo-garde.service 2>/dev/null)"
+        case "$g" in ''|0|*[!0-9]*) ;; *) kill "$g" 2>/dev/null; sleep 0.5 ;; esac
+        # everything mounted from the volume: /home, and what is bound out of
+        # it (/root, /opt/log) - deepest first
+        dev="$(lsblk -dno MAJ:MIN "/dev/mapper/$MAPPER" 2>/dev/null | tr -d ' ')"
+        montes() { awk -v d="$dev" '$3 == d { print $5 }' /proc/self/mountinfo | sort -ru; }
+        sync
+        for essai in 1 2 3; do
+            for m in $(montes); do
+                umount "$m" 2>/dev/null && continue
+                command -v fuser >/dev/null 2>&1 && fuser -km "$m" >/dev/null 2>&1
+                sleep 1
+                umount "$m" 2>/dev/null
+            done
+            [ -z "$(montes)" ] && break
+            sleep 1
+        done
+        if [ -n "$(montes)" ]; then
+            dire "remise a zero impossible : $MOUNT est encore utilise ($(montes | tr '\n' ' ')) - il reste comme il est"
+            exit 1
+        fi
+        l="$(cat "$R/boucle" 2>/dev/null)"
+        sz="$(blockdev --getsz "/dev/mapper/$REEL")"
+        if ! dmsetup remove "$MAPPER" 2>/dev/null; then
+            dire "remise a zero impossible : le volume est encore tenu - $MOUNT reste comme il est"
+            exit 1
+        fi
+        dmsetup remove "$AVANT" 2>/dev/null
+        if [ -e "/dev/mapper/$AVANT" ] || [ -z "$l" ] || [ -z "$sz" ]; then
+            dire "remise a zero impossible : l instantane n a pas pu etre repris - $MOUNT reste comme il est"
+            defaire_pile; exit 1
+        fi
+        printf '\033[1;31m  REMISE A ZERO DE %s : NE COUPE PAS LA MACHINE.\033[0m\n' "$MOUNT" > "$CONSOLE" 2>/dev/null
+        # « snapshot-merge »: the old blocks go back onto the volume
+        if ! dmsetup create "$MAPPER" --table "0 $sz snapshot-merge /dev/mapper/$REEL $l P $CHUNK"; then
+            dire "remise a zero impossible : $MOUNT reste comme il est"
+            defaire_pile; exit 1
+        fi
+        debut=""; i=0
+        while :; do
+            set -- $(dmsetup status "$MAPPER" 2>/dev/null)
+            a="${4%/*}"; meta="${5:-}"
+            case "$a$meta" in ''|*[!0-9]*) dire "remise a zero : etat illisible (${*:-rien})"; break ;; esac
+            [ -n "$debut" ] || debut="$a"
+            [ "$a" -le "$meta" ] && break
+            if [ "$debut" -gt "$meta" ]; then
+                printf '\r  remise a zero : %3d %%' $(( (debut - a) * 100 / (debut - meta) )) > "$CONSOLE" 2>/dev/null
+            fi
+            i=$((i + 1))
+            # 30 minutes without the end: something is wrong, said and left
+            [ "$i" -gt 9000 ] && { dire "remise a zero : toujours pas finie apres 30 minutes"; break; }
+            sleep 0.2
+        done
+        printf '\r  remise a zero : 100 %%\n' > "$CONSOLE" 2>/dev/null
+        sync
+        dmsetup remove "$MAPPER" 2>/dev/null || { sleep 2; dmsetup remove "$MAPPER" 2>/dev/null; }
+        dmsetup rename "$REEL" "$MAPPER" 2>/dev/null
+        [ -n "$l" ] && losetup -d "$l" 2>/dev/null
+        mountpoint -q "$R/ram" 2>/dev/null && umount "$R/ram" 2>/dev/null
+        rm -f "$R/boucle" "$ORDRE"
+        if [ "$a" -le "${meta:-0}" ] 2>/dev/null; then
+            dire "$MOUNT est revenu a l etat du demarrage de la session."
+            exit 0
+        fi
+        dire "!!! la remise a zero de $MOUNT ne s est PAS terminee : le volume est a verifier (e2fsck) !!!"
+        exit 2
+        ;;
+    oter)
+        root_requis
+        empile || exit 0
+        if defaire_pile; then echo "instantane retire : $MOUNT garde tout ce que la session y a ecrit"; exit 0; fi
+        echo "instantane encore tenu (volume monte ?)"; exit 1
+        ;;
+    *)
+        echo "usage : osmo-reset etat | demander | annuler | poser | faire | oter | interdire RAISON" >&2
+        exit 2
+        ;;
+esac

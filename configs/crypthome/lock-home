@@ -77,6 +77,9 @@ fi
 mountpoint -q "$HOME_RW" && umount "$HOME_RW"
 mountpoint -q "$HOME_BAS" && umount "$HOME_BAS"
 
+# the snapshot of « Remettre a zero » (osmo-reset) sits on the mapping: dropped,
+# the volume keeps everything the session wrote
+[ -x /usr/local/sbin/osmo-reset ] && /usr/local/sbin/osmo-reset oter >/dev/null 2>&1
 cryptsetup close "$MAPPER" 2>/dev/null || true
 echo "lock-home: $MOUNT demonte, volume referme."
 exit 0

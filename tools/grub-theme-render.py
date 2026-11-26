@@ -155,7 +155,9 @@ title-text: ""
 desktop-image: "background.png"
 desktop-color: "#0b1018"
 terminal-font: "Osmo Regular 18"
-terminal-box: "menu_*.png"
+# no frame around the terminal: once an entry is chosen GRUB shows its terminal
+# while the kernel loads - with the menu's frame that was an empty « window »
+terminal-box: "sans_*.png"
 
 + boot_menu {
     left = 27%

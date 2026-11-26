@@ -37,8 +37,12 @@ ExecStop=/usr/local/sbin/osmo-racine-live fin
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
-# the passphrase question (60 s x 3) and the copy of the session to the disk
-TimeoutStopSec=1800
+# the passphrase question (60 s x 3) and the copy of the session to the disk.
+# NO LIMIT: when the checksums differ at shutdown the alarm HOLDS the machine
+# on (osmo-racine-live fin) - only the power button, held, switches it off.
+# (poweroff/reboot/halt.target get JobTimeoutSec=infinity for the same reason:
+# 89-home-chiffre.sh)
+TimeoutStopSec=infinity
 
 [Install]
 WantedBy=multi-user.target
