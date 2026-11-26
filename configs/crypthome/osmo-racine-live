@@ -67,6 +67,9 @@
 #   osmo-racine-live annuler      forget the validation: wiped at shutdown
 #   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
 #                                 no question at shutdown
+#   osmo-racine-live garder       « Tout oublier ? » No: the session is to be
+#                                 kept - the passphrase is asked at shutdown,
+#                                 on the console, at the moment of the write
 #   osmo-racine-live fin          at shutdown (osmo-fin-session.service)
 #   osmo-racine-live actualiser   rebuild the initramfs and GRUB ON THE DISK
 #                                 after an update of these scripts: a write
@@ -318,15 +321,29 @@ console_texte() {
 # the console's « forget everything »: the stick's red light blinks, faster
 # and faster, then the white flash (reverse video)
 flash_console() {
-    local i d
+    local i d l c t lig col
+    # centred on the console, whatever its size (80x25 when it does not say)
+    t="$(stty size < "$CONSOLE" 2>/dev/null)"
+    lig="${t%% *}"; col="${t##* }"
+    case "$lig" in ''|*[!0-9]*) lig=25 ;; esac
+    case "$col" in ''|*[!0-9]*) col=80 ;; esac
+    l=$(( (lig - 9) / 2 + 1 )); [ "$l" -lt 1 ] && l=1
+    c=$(( (col - 5) / 2 + 1 )); [ "$c" -lt 1 ] && c=1
+    t=$(( (col - 19) / 2 + 1 )); [ "$t" -lt 1 ] && t=1
+    # baton ON|OFF : the stick (5 columns wide), its red light on or off
+    baton() {
+        printf '\033[2J' > "$CONSOLE" 2>/dev/null
+        if [ "$1" = ON ]; then
+            printf '\033[%d;%dH\033[1;31m ### \033[%d;%dH#####\033[%d;%dH ### \033[0m' \
+                "$l" "$c" "$((l + 1))" "$c" "$((l + 2))" "$c" > "$CONSOLE" 2>/dev/null
+        fi
+        printf '\033[%d;%dH | | \033[%d;%dH | | \033[%d;%dH |=| \033[%d;%dH |_| \033[%d;%dHregardez la lumiere' \
+            "$((l + 3))" "$c" "$((l + 4))" "$c" "$((l + 5))" "$c" "$((l + 6))" "$c" "$((l + 8))" "$t" > "$CONSOLE" 2>/dev/null
+    }
     printf '\033[?25l' > "$CONSOLE" 2>/dev/null
     for d in 0.30 0.26 0.22 0.18 0.14 0.11 0.08 0.06 0.05 0.04 0.04 0.03; do
-        printf '\033[2J\033[6;1H\033[1;31m%s\n%s\n%s\033[0m\n%s\n%s\n%s\n%s\n\n   regardez la lumiere' \
-            '        ###' '       #####' '        ###' '        | |' '        | |' '        |=|' '        |_|' > "$CONSOLE" 2>/dev/null
-        sleep "$d"
-        printf '\033[2J\033[6;1H\n\n\n%s\n%s\n%s\n%s\n\n   regardez la lumiere' \
-            '        | |' '        | |' '        |=|' '        |_|' > "$CONSOLE" 2>/dev/null
-        sleep "$d"
+        baton ON;  sleep "$d"
+        baton OFF; sleep "$d"
     done
     printf '\033[2J' > "$CONSOLE" 2>/dev/null
     for i in 1 2 3; do
@@ -1443,6 +1460,17 @@ EOF
         date '+%F %T' > "$MARQUE"; chmod 600 "$MARQUE"
         vert "fin de session : elle sera ecrite sur le disque a l extinction"
         ;;
+    garder)
+        # « Tout oublier ? » No (osmo-valider-session --fin): the session is to
+        # be KEPT - an intention only, nothing is validated here. The /home
+        # passphrase is asked on the console at shutdown, at the moment of the
+        # write (osmo-racine-live fin), without the yes/no question again
+        root_requis
+        live || exit 0
+        install -d -m 0700 "$ETAT"
+        rm -f "$ETAT/oublier"
+        date '+%F %T' > "$ETAT/garder"; chmod 600 "$ETAT/garder"
+        ;;
     annuler)
         root_requis
         rm -f "$MARQUE"
@@ -1452,7 +1480,7 @@ EOF
         # « Tout oublier ? » Yes (osmo-valider-session --fin): the session is
         # wiped, chosen - at shutdown no question and no banner, a white screen
         root_requis
-        rm -f "$MARQUE"
+        rm -f "$MARQUE" "$ETAT/garder"
         install -d -m 0700 "$ETAT"
         date '+%F %T' > "$ETAT/oublier"
         ;;
@@ -1467,7 +1495,7 @@ EOF
         decision=efface
         if [ -f "$ETAT/oublier" ]; then
             decision=oublie
-        elif [ -f "$MARQUE" ]; then
+        elif [ -f "$MARQUE" ] || [ -f "$ETAT/garder" ]; then
             decision=valide
         elif [ "$n" -gt 0 ] && [ -n "$CRYPTHOME_UUID" ] \
                 && [ -e "/dev/disk/by-uuid/$CRYPTHOME_UUID" ] && command -v cryptsetup >/dev/null 2>&1; then
@@ -1583,7 +1611,7 @@ EOF
             dire_rouge "############################################################"
             sleep 10
         fi
-        rm -f "$MARQUE" "$ETAT/oublier"
+        rm -f "$MARQUE" "$ETAT/oublier" "$ETAT/garder"
         trace "fin : terminee"
         journal_disque
         ;;
@@ -1863,7 +1891,7 @@ EOF
         log "/ persistant pour tous a partir du prochain demarrage"
         ;;
     *)
-        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | valider-fin | retours | defaire [--stdin] | annuler | oublier | fin | actualiser | retirer" >&2
+        echo "usage : osmo-racine-live poser | etat | changements | valider [--stdin] | valider-fin | garder | retours | defaire [--stdin] | annuler | oublier | fin | actualiser | retirer" >&2
         exit 2
         ;;
 esac

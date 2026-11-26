@@ -1106,19 +1106,14 @@ def sceau():
 
 
 def rappel():
-    """Desktop: the warning as a dialog (waits for the background control)."""
+    """Desktop: the INTEGRITY warning as a dialog, the only one at login, and
+    only when the complete control found something (it waits for it). The
+    box not copied elsewhere is said in red in every terminal, not here."""
     for _ in range(90):
         if os.path.exists(FOND_FAIT) or os.path.exists(ALERTE):
             break
         time.sleep(2)
     time.sleep(1)
-    try:
-        with open("/run/osmo-alerte-copie") as f:
-            subprocess.run(["zenity", "--warning", "--no-wrap", "--title", "osmo-operator : boite noire",
-                            "--text", '<span foreground="red" weight="bold" size="large">LA BOITE NOIRE N EST PAS COPIEE AILLEURS</span>\n\n'
-                            + f.read().strip() + "\n\nNouvel essai des que le reseau repond ; a la main : sudo osmo-diffs envoyer"])
-    except OSError:
-        pass
     # what the boot found was said at boot, on the console, before /home was
     # opened: the desktop only shows what the complete control found since
     try:

@@ -628,12 +628,10 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   (journald is volatile): a write that failed says why at the next boot.
   **No passphrase** (Enter, 60 s, three refusals): the RAM is dropped and a **red warning** is
   forced on tty1 (Plymouth quit) and held 10 s. A red reminder shows in every terminal while
-  the session is not validated. The red dialog **« session NON validee »** is shown **before a
-  reboot or a shutdown, not at login**: `osmo-fin-veille` (desktop autostart) makes logind wait
-  (delay inhibitor, `InhibitDelayMaxSec=300`) when `systemctl reboot/poweroff`, `reboot` or the
-  power key is used - « Valider maintenant » takes the `/home` passphrase and the session is
-  written during the shutdown. From the GNOME menu the session is closed before logind is asked:
-  GNOME's own confirmation lists « session NON validee » instead, then the console question.
+  the session is not validated. **No dialog before a reboot or a shutdown**: the question
+  and the `/home` passphrase are asked on the text console at shutdown, at the moment of the
+  write. At login the desktop shows one dialog only, the **integrity warning**, and only when
+  the complete control found the disk changed outside a session - otherwise nothing.
 - **The kept copy of the mounts** (`osmo-garde.service`): at shutdown the mounts under `/home`
   (`/media/home-ro`, `/media/home-rw`) have been found gone before the write - `/home` was then
   not written. One process keeps them in its own private mount namespace from boot; when the
@@ -643,11 +641,12 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   **Yes**: a home-made pseudo-neuralyzer (`osmo-flash --blanc`: a drawn gadget whose bulb
   charges, then the flash; a `flash.gif` in `/usr/local/share/osmo-operator` replaces the
   drawing), the screen **stays white** and the machine shuts down underneath - the session is
-  wiped, no question, no banner. **No**: the `/home` passphrase is required; right, a
-  **full-screen `cmatrix`** and the machine shuts down, the session being written (the
+  wiped, no question, no banner. **No**: the machine shuts down and the console asks the
+  `/home` passphrase at the moment of the write (no passphrase window on the desktop; the
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
-  shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+  shutdown when nothing was chosen, its own stick drawn in the centre of the screen
+  (`yes/no`; no answer: wiped, red banner).
 - **Nothing is accepted without the `/home` passphrase.** Root can always force a write to a disk
   in clear; what it cannot do is have it accepted. The disk's fingerprint is **signed** (Ed25519):
   the private key is on the box, encrypted with the `/home` passphrase, and only exists in memory

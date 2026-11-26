@@ -124,17 +124,11 @@ install -m 0755 "$_CH_SRC/osmo-total"             "$ROOTFS/usr/local/sbin/osmo-t
 install -m 0755 "$_CH_SRC/osmo-qr"                "$ROOTFS/usr/local/sbin/osmo-qr"
 chroot "$ROOTFS" bash -c 'command -v tpm2_unseal >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tpm2-tools >/dev/null 2>&1' \
     || echo -e "  ${YELLOW}!${NC} tpm2-tools non installe : l option « demarrage mesure » demandera de l installer"
-# the measured boot ticked in the installer (Options page): it is posed after
-# the first boot (a phone has to be enrolled) - a reminder at login until then
-cat > "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop" <<'RAPPEL'
-[Desktop Entry]
-Type=Application
-Name=osmo-operator : demarrage mesure a poser
-Exec=sh -c 'grep -qs "^tpm=1" /etc/osmo-operator/options && [ ! -e /etc/osmo-tpm/actif ] && notify-send -u critical "Demarrage mesure (TPM) a poser" "Coche a l installation. Dans un terminal : sudo osmo-tpm poser (un telephone avec une appli TOTP sous la main)"'
-OnlyShowIn=GNOME;
-NoDisplay=true
-X-GNOME-Autostart-Phase=Applications
-RAPPEL
+# the measured boot ticked in the installer (Options page) is posed after the
+# first boot (sudo osmo-tpm poser). No reminder at login: the desktop shows
+# ONE dialog there, the integrity warning, and only when it has a reason
+# (osmo-empreinte rappel) - otherwise nothing.
+rm -f "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop"
 # the REC screen of a write at shutdown: cmatrix, and its red progress bar
 install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"
 install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
@@ -152,7 +146,7 @@ install -m 0644 "$DIR/services/osmo-point.service" "$ROOTFS/etc/systemd/system/o
 install -m 0644 "$DIR/services/osmo-point.timer" "$ROOTFS/etc/systemd/system/osmo-point.timer"
 # The black box: every change of every session, validated or wiped, one
 # record encrypted with age (public key on the box, private key under the
-# box's own passphrase, different from /home's). A login reminder until it
+# box's own passphrase, different from /home's), asked at boot until it
 # has that passphrase.
 install -m 0755 "$_CH_SRC/osmo-diffs"             "$ROOTFS/usr/local/sbin/osmo-diffs"
 # the receiving end of the box's remote copy: any osmo machine can keep the
@@ -163,35 +157,14 @@ install -m 0644 "$DIR/services/osmo-diffs.service" "$ROOTFS/etc/systemd/system/o
 # (enabled by Calamares, shellprocess-osmo.conf), never on the live key
 install -m 0644 "$DIR/services/osmo-diffs-init.service" "$ROOTFS/etc/systemd/system/osmo-diffs-init.service"
 install -d "$ROOTFS/etc/xdg/autostart" "$ROOTFS/etc/profile.d"
-cat > "$ROOTFS/etc/xdg/autostart/osmo-diffs-rappel.desktop" <<'RAPPEL'
-[Desktop Entry]
-Type=Application
-Name=osmo-diffs : phrase de la boite noire
-Exec=sh -c '! mountpoint -q /var/lib/osmo-diffs || [ -f /var/lib/osmo-diffs/cle.pub ] || notify-send -u critical "Boite noire non initialisee" "Sa phrase est demandee au demarrage (ou : sudo osmo-diffs init), DIFFERENTE de celle de /home"'
-OnlyShowIn=GNOME;
-NoDisplay=true
-X-GNOME-Autostart-Phase=Applications
-RAPPEL
-# the red warning « session NON validee »: BEFORE A REBOOT OR A SHUTDOWN, not
-# at login. osmo-fin-veille stays in the desktop session and makes logind wait
-# (delay inhibitor, 300 s at most) while the warning is shown.
-install -m 0755 "$_CH_SRC/osmo-fin-veille"        "$ROOTFS/usr/local/bin/osmo-fin-veille"
-install -d "$ROOTFS/etc/systemd/logind.conf.d"
-cat > "$ROOTFS/etc/systemd/logind.conf.d/osmo-fin.conf" <<'LOGIND'
-# osmo-operator: the time logind waits for the « session NON validee » warning
-# (and the /home passphrase) before a reboot or a shutdown - osmo-fin-veille
-[Login]
-InhibitDelayMaxSec=300
-LOGIND
-cat > "$ROOTFS/etc/xdg/autostart/osmo-valider-rappel.desktop" <<'RAPPEL'
-[Desktop Entry]
-Type=Application
-Name=osmo-operator : session non validee (avant l extinction)
-Exec=/usr/local/bin/osmo-fin-veille
-OnlyShowIn=GNOME;
-NoDisplay=true
-X-GNOME-Autostart-Phase=Applications
-RAPPEL
+# (no login reminder for the box either: its passphrase is asked at boot)
+rm -f "$ROOTFS/etc/xdg/autostart/osmo-diffs-rappel.desktop"
+# no dialog before a reboot or a shutdown: the question (« Tout oublier ? »,
+# then the /home passphrase) is asked on the text console at shutdown, at the
+# moment of the write (osmo-racine-live fin). The former desktop warning
+# (osmo-fin-veille, which made logind wait) is removed.
+rm -f "$ROOTFS/usr/local/bin/osmo-fin-veille" "$ROOTFS/etc/systemd/logind.conf.d/osmo-fin.conf" \
+      "$ROOTFS/etc/xdg/autostart/osmo-valider-rappel.desktop"
 # the launcher: validate NOW. The /home passphrase given during the session
 # writes the session as it is at that moment; what follows is kept only by a
 # new validation, or by the passphrase at shutdown (which writes it all).
@@ -221,7 +194,7 @@ cat > "$ROOTFS/usr/local/share/applications/osmo-fin-session.desktop" <<'LANCEUR
 [Desktop Entry]
 Type=Application
 Name=Fin de session
-Comment=Tout oublier ? Yes : flash, la session est effacee. No : la phrase de /home, la session est gardee. Puis extinction.
+Comment=Tout oublier ? Yes : flash, la session est effacee. No : la session est gardee, la phrase de /home est demandee a l extinction.
 Exec=/usr/local/bin/osmo-valider-session --fin poweroff
 Icon=system-shutdown
 Terminal=false
