@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Enregistrer
+Name[fr]=Enregistrer
+Comment=Ecrire la session sur le disque (phrase de /home) : sans cela, tout est efface a l extinction
+Exec=python3 /opt/GSM/osmo-operator/tools/osmo-gtk-run.py --tty --title "Enregistrer la session" -- /usr/local/bin/osmo-valider-session --maintenant
+Icon=media-floppy
+Terminal=false
+Categories=System;
+Keywords=sauver;save;valider;session;disquette;

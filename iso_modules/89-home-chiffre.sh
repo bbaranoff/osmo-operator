@@ -136,6 +136,17 @@ chroot "$ROOTFS" bash -c 'command -v tpm2_unseal >/dev/null 2>&1 || DEBIAN_FRONT
 # ordinary Ubuntu.
 rm -f "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop"
 install -m 0755 "$_CH_SRC/osmo-tpm-bienvenue" "$ROOTFS/usr/local/bin/osmo-tpm-bienvenue"
+# TWO ICONS of a secured bench: the floppy disk « Enregistrer » (write the
+# session to the disk now) and « Nouveaux secrets » (osmo-secrets: the TPM's
+# sentence and PIN or the phone, the /home passphrase with all that follows
+# it, the box's passphrase). In the menu and on the desktop of new accounts.
+install -m 0755 "$_CH_SRC/osmo-secrets" "$ROOTFS/usr/local/sbin/osmo-secrets"
+for _d in osmo-enregistrer osmo-secrets; do
+    install -D -m 0644 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/usr/share/applications/$_d.desktop"
+    for _b in Desktop Bureau; do
+        [ -d "$ROOTFS/etc/skel/$_b" ] && install -m 0755 "$DIR/data/desktop/$_d.desktop" "$ROOTFS/etc/skel/$_b/$_d.desktop"
+    done
+done
 cat > "$ROOTFS/etc/xdg/autostart/osmo-tpm-bienvenue.desktop" <<'BIENVENUE'
 [Desktop Entry]
 Type=Application

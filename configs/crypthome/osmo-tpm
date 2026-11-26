@@ -42,6 +42,9 @@
 #                         sealing in one go (the welcome window runs it)
 #   osmo-tpm poser --secret   the same without a phone: a sentence and a PIN
 #                         (poser again, either way, changes the mode)
+#   osmo-tpm changer [--secret|--telephone]   new secrets (sentence and PIN,
+#                         or a new seed), nothing of the boot touched
+#   osmo-tpm phrase-changee   after a change of the /home passphrase
 #   osmo-tpm sceller      BY HAND: this boot is the reference (PCR 0-9 as they
 #                         are now, the disk as it is). After a boot without
 #                         code THAT YOU CAN EXPLAIN (just enabled, kernel or
@@ -348,6 +351,61 @@ case "${1:-etat}" in
         fi
         echo "Pense a valider la session a l extinction (la phrase de /home)."
         ;;
+    changer)
+        # NEW SECRETS, the machine being the same: another sentence and PIN
+        # (or another seed for the phone). Nothing of the boot changes - no
+        # initramfs rebuilt, no boot without proof afterwards. Only from a boot
+        # the TPM recognised: otherwise it would bless whatever started it.
+        root_requis; outils
+        [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || { log "demarrage mesure non pose (osmo-tpm poser)"; exit 1; }
+        if [ ! -e "$RUN/reconnu" ]; then
+            rouge "ce demarrage n a pas ete reconnu par le TPM : rien n est change (sudo osmo-tpm sceller d abord, si tu sais pourquoi)" >&2; exit 1
+        fi
+        phrase_requise "changer : la preuve que le TPM donne au demarrage (phrase de /home d abord)"
+        coffre_ouvrir || { PHRASE=""; rouge "rien a changer (osmo-tpm poser)" >&2; exit 1; }
+        case "${2:-}" in --secret) vers=secret ;; --telephone) vers=totp ;; *) vers="${C_MODE:-totp}" ;; esac
+        if [ "$vers" = secret ]; then
+            demander_secret
+            C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
+            s=""; n=""; n2=""
+        else
+            C_MODE=totp; C_SECRET=""; C_PIN=""
+            C_GRAINE="$(head -c 20 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
+        fi
+        coffre_fermer && sceller_pour "$(total_disque)" || { PHRASE=""; rouge "changement en echec" >&2; exit 1; }
+        [ "$TEST" = 1 ] || printf '%s\n' "$PHRASE" | $EMP prendre --phrase-stdin >/dev/null 2>&1
+        PHRASE=""
+        if [ "$C_MODE" = totp ]; then
+            qr
+            vert "nouveau code pose : supprime l ancienne entree de ton telephone."
+        else
+            vert "nouvelle phrase secrete et nouveau PIN poses : ils serviront des le prochain demarrage."
+        fi
+        ;;
+    phrase-changee)
+        # the /home passphrase has changed: the coffre follows (--stdin: the
+        # old one, then the new one; else asked)
+        root_requis
+        if [ "${2:-}" = --stdin ]; then IFS= read -r anc || anc=""; IFS= read -r nou || nou=""
+        else
+            read -r -s -p "ANCIENNE phrase de /home : " anc < /dev/tty || anc=""; echo
+            read -r -s -p "NOUVELLE phrase de /home : " nou < /dev/tty || nou=""; echo
+        fi
+        PHRASE="$anc"; anc=""
+        coffre_ouvrir; rc=$?
+        [ "$rc" = 2 ] && { PHRASE=""; nou=""; exit 0; }           # nothing posed: nothing to follow
+        [ "$rc" = 0 ] || { PHRASE=""; nou=""; rouge "coffre du TPM : ancienne phrase refusee, rien n est change" >&2; exit 1; }
+        if [ "$TEST" != 1 ]; then
+            _u="$(. /etc/default/crypthome 2>/dev/null; echo "${CRYPTHOME_UUID:-}")"
+            printf '%s' "$nou" | cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$_u" >/dev/null 2>&1 \
+                || { PHRASE=""; nou=""; rouge "la nouvelle phrase n ouvre pas /home : rien n est change" >&2; exit 1; }
+        fi
+        PHRASE="$nou"; nou=""
+        coffre_fermer || { PHRASE=""; exit 1; }
+        [ "$TEST" = 1 ] || printf '%s\n' "$PHRASE" | $EMP prendre --phrase-stdin >/dev/null 2>&1
+        PHRASE=""
+        log "le coffre du demarrage mesure suit la nouvelle phrase de /home"
+        ;;
     poser)
         root_requis; outils
         [ -s "$BOITE/empreinte.json" ] || { rouge "pas d empreinte du disque : sudo osmo-empreinte prendre" >&2; exit 1; }
@@ -469,7 +527,7 @@ case "${1:-etat}" in
         log "demarrage mesure retire (la graine est detruite : l appli du telephone ne sert plus)"
         ;;
     *)
-        echo "usage : osmo-tpm premier | poser [--secret] | sceller | qr | code | etat | oter" >&2
+        echo "usage : osmo-tpm premier | poser [--secret] | changer [--secret|--telephone] | phrase-changee | sceller | qr | code | etat | oter" >&2
         exit 2
         ;;
 esac

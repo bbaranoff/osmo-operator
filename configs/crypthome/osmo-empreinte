@@ -1321,6 +1321,9 @@ def main():
         return home_direct(lire_phrase())
     if cmd == "ancrer":
         return ancrer(lire_phrase())
+    if cmd == "phrase-changee" and "--stdin" in sys.argv[2:]:
+        # two lines: the old passphrase, the new one (osmo-secrets)
+        return phrase_changee(sys.stdin.buffer.readline().rstrip(b"\r\n"), sys.stdin.buffer.readline().rstrip(b"\r\n"))
     if cmd == "phrase-changee":
         import getpass
         return phrase_changee(getpass.getpass("ANCIENNE phrase de /home : ").encode(),
