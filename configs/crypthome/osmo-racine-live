@@ -310,6 +310,7 @@ lire_console() {   # lire_console VAR PROMPT : one * per key, timeout = Enter
 # kept on the disk (.osmo-retour/ID): commits can be undone, the last first.
 RETOUR_MAX="${OSMO_RETOUR_MAX:-20}"
 NB_ECRITS=0
+ID_ECRIT=""
 # Ctrl-C DURING « valider » CANCELS THE WRITE (ANNULE=1, set by its trap). The
 # copy of a layer is simply stopped (nothing has changed yet); the steps that
 # must not be cut - the box record, the application of a layer, its undo, the
@@ -516,6 +517,7 @@ appliquer() {
     empreinte_prendre
     progres 100 "termine"
     NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
+    ID_ECRIT="$id"
     return $rc
 }
 
@@ -573,9 +575,20 @@ sessions_lisibles() {
 # system disk after every commit and every undo, before the fingerprint is
 # taken (it is part of the disk); the model comes from update-grub
 # (43_osmo-boite).
-poser_menu_sessions() {
-    local m="$BAS/boot/grub/osmo-retour.modele" f="$BAS/boot/grub/osmo-sessions.cfg"
+titres_sessions() {   # N|TITLE, newest first: exactly what the GRUB menu shows
     local i=0 cumul=0 s ids n premier dernier titre
+    sessions | while read -r s ids; do
+        i=$((i + 1))
+        # shellcheck disable=SC2086
+        set -- $ids
+        n=$#; dernier="$1"; eval "premier=\${$#}"; cumul=$((cumul + n))
+        titre="avant la session du $(date_commit "$premier" | cut -c1-16)"
+        [ "$n" -gt 1 ] && titre="$titre -> $(date_commit "$dernier" | cut -c12-16)"
+        printf '%s|%s   (defait %s session(s), %s ecriture(s))\n' "$i" "$titre" "$i" "$cumul"
+    done
+}
+poser_menu_sessions() {
+    local m="$BAS/boot/grub/osmo-retour.modele" f="$BAS/boot/grub/osmo-sessions.cfg" i titre
     [ -s "$m" ] || return 0
     remonter_rw "$BAS" || return 0
     if [ "$(sessions | wc -l)" = 0 ]; then
@@ -585,20 +598,31 @@ poser_menu_sessions() {
             echo "# osmo-sessions.cfg - written by osmo-racine-live (poser_menu_sessions)"
             echo "set timeout=-1"
             echo "set default=0"
-            sessions | while read -r s ids; do
-                i=$((i + 1))
-                # shellcheck disable=SC2086
-                set -- $ids
-                n=$#; dernier="$1"; eval "premier=\${$#}"; cumul=$((cumul + n))
-                titre="avant la session du $(date_commit "$premier" | cut -c1-16)"
-                [ "$n" -gt 1 ] && titre="$titre -> $(date_commit "$dernier" | cut -c12-16)"
-                titre="$titre   (defait $i session(s), $cumul ecriture(s))"
+            titres_sessions | while IFS='|' read -r i titre; do
                 sed -e "s|@TITRE@|$titre|" -e "s|@N@|$i|" "$m"
             done
         } > "$f.nouv" 2>/dev/null && mv -f "$f.nouv" "$f"
     fi
     sync
     mount -o remount,ro "$BAS" 2>/dev/null
+}
+# confirmation ID : what a write leaves to read - its date and time, and the
+# line of the GRUB menu « remonter session » that now undoes it. Also kept in
+# /run/osmo-derniere-ecriture for the desktop dialog (osmo-valider-session).
+CONFIRMATION=/run/osmo-derniere-ecriture
+confirmation() {
+    local t
+    t="$(titres_sessions | head -n1 | cut -d'|' -f2-)"
+    {
+        echo "Ecriture du $(date_commit "$1") : sur le disque."
+        if [ -s "$BAS/boot/grub/osmo-sessions.cfg" ] && grep -q "osmo.retour" /boot/grub/grub.cfg "$BAS/boot/grub/grub.cfg" 2>/dev/null; then
+            echo "Dans GRUB, « remonter session » : $t"
+        else
+            echo "Retour possible : $t"
+            echo "(menu GRUB « remonter session » pas encore pose : sudo osmo-racine-live actualiser)"
+        fi
+    } > "$CONFIRMATION.nouv" 2>/dev/null && chmod 644 "$CONFIRMATION.nouv" && mv -f "$CONFIRMATION.nouv" "$CONFIRMATION"
+    cat "$CONFIRMATION" 2>/dev/null
 }
 # defaire_commit ID : one commit undone on every layer that has it; the box
 # first, while what is about to be removed is still there
@@ -1014,13 +1038,14 @@ EOF
             && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" sans_int /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
         appliquer; rc=$?
         trap '' INT
-        rm -f "$PROGRES"
+        rm -f "$PROGRES" "$CONFIRMATION"
         [ -n "$ppid" ] && wait "$ppid" 2>/dev/null
         journal_disque
         if [ "$rc" = 0 ]; then
             mv -f "$ETAT/ecrit.nouv" "$ETAT/ecrit"
             rm -f "$MARQUE"
             vert "ecrit sur le disque : la session jusqu a maintenant ($NB_ECRITS changement(s)). Ce qui suit n est PAS garde : revalider, ou la phrase a l extinction."
+            vert "$(confirmation "$ID_ECRIT")"
         elif [ "$rc" = 2 ]; then
             rm -f "$ETAT/ecrit.nouv"
             rouge "ANNULE (Ctrl-C) : rien de cette ecriture n est garde, le disque est comme avant (detail : $JOURNAL_DISQUE)"

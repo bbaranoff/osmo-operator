@@ -143,6 +143,7 @@ if graphique; then
     if [ "$ACTION" = valider ]; then
         # the progress: in the dialog, and in the terminal when there is one
         # (the same red REC bar as « osmo-racine-live valider »)
+        [ -t 2 ] && echo "  ecriture de la session - Ctrl-C : annuler" >&2
         ( trap '' INT
           while [ ! -s "$rcf" ]; do
               pc=""; tx=""
@@ -155,7 +156,7 @@ if graphique; then
                   cols="$(stty size 2>/dev/null < /dev/tty | cut -d' ' -f2)"
                   case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
                   n=$((pc * 20 / 100))
-                  l="$(printf '  REC [%s%s] %3d %%  %s  (Ctrl-C : annuler)' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
+                  l="$(printf '  REC [%s%s] %3d %%  %.24s' "$(printf '%*s' "$n" '' | tr ' ' '#')" \
                       "$(printf '%*s' "$((20 - n))" '' | tr ' ' '-')" "$pc" "$tx")"
                   printf '\r\033[1;31m%s\033[0m\033[K' "$(printf '%s' "$l" | cut -c1-$((cols - 1)))" >&2
               fi
@@ -172,15 +173,23 @@ if graphique; then
     if [ "$rc" = 130 ]; then
         echo "osmo-valider-session : ANNULE (Ctrl-C) - rien de cette ecriture n est garde, le disque est comme avant"
         zenity --warning --no-wrap --title "osmo-operator" \
-            --text '<span foreground="red" weight="bold">Annule (Ctrl-C) : rien de cette ecriture n est garde, le disque est comme avant.</span>'
+            --text '<span foreground="red" weight="bold">Annule (Ctrl-C) : rien de cette ecriture n est garde, le disque est comme avant.</span>' 2>/dev/null
         exit 130
     fi
     if [ "$rc" = 0 ]; then
+        # the confirmation: date and time of the write, and the line of the
+        # GRUB menu « remonter session » that undoes it (osmo-racine-live)
+        conf=""
+        [ "$ACTION" = valider ] && [ -r /run/osmo-derniere-ecriture ] && conf="$(cat /run/osmo-derniere-ecriture)"
+        printf '\033[1;32m%s\033[0m\n' "$OK_TXT" ${conf:+"$conf"}
         zenity --info --no-wrap --title "osmo-operator" \
-            --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>"
+            --text "<span foreground=\"green\" weight=\"bold\">$OK_TXT</span>${conf:+
+
+$(printf '%s' "$conf" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g')}" 2>/dev/null
     else
+        printf '\033[1;31m%s\033[0m\n' "$KO_TXT"
         zenity --error --no-wrap --title "osmo-operator" \
-            --text "<span foreground=\"red\" weight=\"bold\">$KO_TXT</span>"
+            --text "<span foreground=\"red\" weight=\"bold\">$KO_TXT</span>" 2>/dev/null
     fi
     exit "$rc"
 fi
