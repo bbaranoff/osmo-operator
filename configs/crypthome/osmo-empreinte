@@ -43,6 +43,9 @@
 #                                     box's last record (passphrase)
 #   osmo-empreinte boite-tete         the box against that index: nothing
 #                                     removed at its end (no passphrase)
+#   osmo-empreinte etats-ancrer       the same for the chain of the states
+#                                     (done by itself at the next write)
+#   osmo-empreinte etats-tete         that chain against its index
 #   osmo-empreinte etats-signer       the past states of the system (in the
 #                                     /home volume) chained and signed -
 #                                     osmo-racine-live, after each write
@@ -929,6 +932,7 @@ def etats_signer(phrase, ceux=()):
         return 1
     dire("etats du systeme : %d etat(s) ajoute(s) a la chaine, %d en tout, signee ; tete %s" % (
         neufs, len(lignes), (lignes[-1][2][:16] if lignes else "-")))
+    etats_tete_suivre(g, lignes, lignes[len(lignes) - neufs:] if neufs else [], phrase)
     return 0
 
 
@@ -966,8 +970,12 @@ def etats_verifier():
         if ident not in connus:
             sys.stdout.write(ROUGE + "%s  %s  HORS CHAINE (ajoute sans la phrase, ou pas encore signe)\n" % (ident, "-" * 12) + FIN)
             rc = rc or 2
+    t = etats_tete(g, lignes)
+    if t == 3:
+        rc = 3
     if rc == 0:
-        dire("etats du systeme : chaine signee et intacte, %d etat(s), tete %s" % (len(lignes), lignes[-1][2][:16]))
+        dire("etats du systeme : chaine signee et intacte, %d etat(s), tete %s%s" % (
+            len(lignes), lignes[-1][2][:16], "" if t == 0 else " (fin non tenue par le TPM)"))
     return rc
 
 
@@ -1015,6 +1023,139 @@ def ancre_lue():
 NV_BOITE = os.environ.get("OSMO_EMPREINTE_NV_BOITE", "0x1800A51")
 TETE_DEPUIS = os.path.join(BOITE, "tete.depuis")        # the first record the index was extended with
 JOURNAL_BOITE = os.path.join(BOITE, "journal")
+
+
+# THE SAME FOR THE CHAIN OF THE STATES (index 0x1800A52): each link added to
+# CHAINE extends it. Going back to an OLDER chain, with its own valid
+# signature, no longer gives the value the TPM holds.
+NV_ETATS = os.environ.get("OSMO_EMPREINTE_NV_ETATS", "0x1800A52")
+
+
+def nv_lire(nv, simul):
+    """32 bytes; b'' when the index was never extended; None when there is none."""
+    if TEST:
+        try:
+            with open(simul, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+    if not tpm_present():
+        return None
+    r = tpm(["tpm2_nvreadpublic", nv])
+    if r is None or r.returncode != 0:
+        return None
+    r = tpm(["tpm2_nvread", nv, "-C", nv, "-s", "32"])
+    return r.stdout if r is not None and r.returncode == 0 and len(r.stdout) == 32 else b""
+
+
+def nv_etendre(nv, simul, h):
+    if TEST:
+        with open(simul, "rb") as f:
+            v = f.read() or bytes(32)
+        with open(simul, "wb") as f:
+            f.write(hashlib.sha256(v + h).digest())
+        return True
+    r = tpm(["tpm2_nvextend", "-C", nv, nv, "-i", "=0"], (h,))
+    return r is not None and r.returncode == 0
+
+
+def nv_definir(nv, simul, phrase):
+    """The index (re)made, empty: the owner's secret is the passphrase. '' or the reason."""
+    if TEST:
+        if not phrase:
+            return "pas de phrase"
+        open(simul, "wb").close()
+        return ""
+    if not tpm_present():
+        return "pas de TPM utilisable"
+    secret = secret_tpm(phrase)
+    if secret is None or not proprietaire_pose():
+        return "le TPM n a pas encore de proprietaire lie a ta phrase (sudo osmo-empreinte ancrer)"
+    r = tpm(["tpm2_changeauth", "-c", "owner", "-p", "@0", "@1"], (secret, secret))
+    if r is None or r.returncode != 0:
+        return "phrase de /home refusee par le TPM (ce n est pas le secret de son proprietaire)"
+    if tpm(["tpm2_nvreadpublic", nv]).returncode == 0:
+        r = tpm(["tpm2_nvundefine", nv, "-C", "o", "-P", "@0"], (secret,))
+        if r.returncode != 0:
+            return "ancien index non retire : " + r.stderr.decode(errors="replace").strip()[-120:]
+    # type EXTEND (nt=0x4): written by anybody, read by anybody, only ever
+    # extended; removed by the owner alone
+    r = tpm(["tpm2_nvdefine", nv, "-C", "o", "-s", "32", "-g", "sha256",
+             "-a", "nt=0x4|authwrite|authread|ownerread|no_da", "-P", "@0"], (secret,))
+    return "" if r.returncode == 0 else "index du TPM non cree : " + r.stderr.decode(errors="replace").strip()[-160:]
+
+
+def nv_retirer(nv, simul, phrase):
+    if TEST:
+        try:
+            os.unlink(simul)
+        except OSError:
+            pass
+        return
+    secret = secret_tpm(phrase)
+    if secret is not None:
+        tpm(["tpm2_nvundefine", nv, "-C", "o", "-P", "@0"], (secret,))
+
+
+def rejouer(empreintes):
+    v = bytes(32)
+    for h in empreintes:
+        v = hashlib.sha256(v + h).digest()
+    return v
+
+
+def etats_tete(g, lignes, parle=True):
+    """The chain of the states against its index. 0 conform; 2 no index; 3 DIFFERENT."""
+    nv = nv_lire(NV_ETATS, os.path.join(BOITE, "etats.nv"))
+    if nv is None:
+        if parle:
+            dire("tete des etats : pas encore tenue par le TPM (elle le sera a la prochaine ecriture validee)")
+        return 2
+    try:
+        with open(os.path.join(g, "CHAINE.depuis")) as f:
+            depuis = f.readline().strip()
+    except OSError:
+        depuis = ""
+    ids = [l[0] for l in lignes]
+    suite = lignes[ids.index(depuis):] if depuis in ids else []
+    if suite and rejouer(bytes.fromhex(l[2]) for l in suite) == nv:
+        if parle:
+            dire("tete des etats : tenue par le TPM et conforme - %d maillon(s) depuis %s" % (len(suite), depuis))
+        return 0
+    if parle:
+        sys.stdout.write(ROUGE + "LA CHAINE DES ETATS N EST PAS CELLE QUE LE TPM A VUE : revenue en arriere ou reecrite "
+                         "(maillon ROMPU avec le TPM, depuis %s)\n" % (depuis or "?") + FIN)
+    return 3
+
+
+def etats_tete_suivre(g, lignes, neuves, phrase):
+    """etats_signer, CHAINE just written: the index made if there is none
+    (started at the head of the chain as it is), else extended with each new
+    link. Never blocking: said, and the control shows it."""
+    simul = os.path.join(BOITE, "etats.nv")
+    if not lignes:
+        return
+    if nv_lire(NV_ETATS, simul) is None:
+        pb = nv_definir(NV_ETATS, simul, phrase)
+        if pb:
+            dire("tete des etats : pas tenue par le TPM (%s)" % pb)
+            return
+        try:
+            with open(os.path.join(g, "CHAINE.depuis"), "w") as f:
+                f.write(lignes[-1][0] + "\n")
+            os.sync()
+        except OSError:
+            nv_retirer(NV_ETATS, simul, phrase)
+            return
+        neuves = [lignes[-1]]
+    for l in neuves:
+        if not nv_etendre(NV_ETATS, simul, bytes.fromhex(l[2])):
+            dire("LA TETE DES ETATS N A PAS PU ETRE ETENDUE DANS LE TPM (%s) : le prochain controle le dira" % l[0])
+            return
+    if etats_tete(g, lignes, parle=False) == 0:
+        dire("tete des etats : tenue par le TPM (%d maillon(s) ajoutes)" % len(neuves))
+    else:
+        dire("tete des etats : le TPM et la chaine different apres cette ecriture - osmo-empreinte etats-verifier")
 
 
 def _enregistrements():
@@ -2291,6 +2432,33 @@ def main():
         return etats_signer(lire_phrase(), [a for a in sys.argv[2:] if not a.startswith("--")])
     if cmd == "etats-verifier":
         return etats_verifier()
+    if cmd == "etats-tete":
+        g = etats_rep()
+        return etats_tete(g, chaine_lire(g)[0]) if g and os.path.isdir(g) else 2
+    if cmd == "etats-ancrer":
+        # now, without waiting for the next write: the index made and started
+        # at the head of the chain as it is (the passphrase)
+        g = etats_rep()
+        if not g or not os.path.isdir(g):
+            dire("etats du systeme : aucun dans le volume de /home")
+            return 1
+        lignes, brut = chaine_lire(g)
+        if not lignes or not chaine_signee(g, brut) or chaine_liens(lignes):
+            dire("etats du systeme : pas de chaine signee et valide a ancrer (osmo-empreinte etats-verifier)")
+            return 1
+        phrase = lire_phrase()
+        if cle_privee(phrase) is None:
+            dire("phrase de /home refusee : rien n est change")
+            return 1
+        nv_retirer(NV_ETATS, os.path.join(BOITE, "etats.nv"), phrase)
+        if not TEST and os.path.ismount(HOME_DISQUE):
+            subprocess.run(["mount", "-o", "remount,rw", HOME_DISQUE], capture_output=True)
+        try:
+            etats_tete_suivre(g, lignes, [], phrase)
+        finally:
+            if not TEST and os.path.ismount(HOME_DISQUE):
+                subprocess.run(["mount", "-o", "remount,ro", HOME_DISQUE], capture_output=True)
+        return 0 if etats_tete(g, lignes, parle=False) == 0 else 1
     if cmd == "home-direct":
         return home_direct(lire_phrase())
     if cmd == "ancrer":

@@ -69,7 +69,7 @@ while :; do
     echo "  3. Le code sur un telephone, a la place de la phrase (ou un nouveau telephone)"
     echo "  4. Tout refaire depuis zero (retirer la puce du demarrage, puis la remettre)"
     echo "  5. Remettre la signature du disque dans la puce"
-    echo "  6. Faire tenir la fin de la boite noire par la puce (une troncature se verra)"
+    echo "  6. Faire tenir par la puce la fin de la boite noire et celle de l historique des etats"
     echo "  q. Rien, fermer"
     read -r -p "Ton choix : " c < /dev/tty || c=q
     case "$c" in
@@ -104,7 +104,10 @@ while :; do
             echo "La puce garde un compteur qu on ne peut que faire avancer : chaque enregistrement de la"
             echo "boite l avance. Si quelqu un retire les derniers enregistrements, le compteur ne colle"
             echo "plus et la machine le dit. Ce que la boite contient aujourd hui est pris tel quel."
-            "$E" boite-ancrer || rouge "Rien n a ete change." ;;
+            "$E" boite-ancrer || rouge "Rien n a ete change pour la boite."
+            echo
+            echo "La meme chose pour l historique des etats du systeme (ta phrase est redemandee) :"
+            "$E" etats-ancrer || rouge "Rien n a ete change pour l historique." ;;
         q|Q|"") echo "A bientot."; exit 0 ;;
         *) echo "Tape 1, 2, 3, 4, 5, 6 ou q." ;;
     esac

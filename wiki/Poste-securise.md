@@ -233,9 +233,12 @@ avec la clé de l'empreinte, celle que seule la phrase de `/home` déverrouille.
 modifié, remplacé ou glissé après coup ne correspond plus à sa ligne, et les lignes ne se
 refont pas sans la phrase : `osmo-empreinte etats-verifier` (ou `osmo-boite fsck`, et le
 bandeau en tête du navigateur) le dit, sans aucune phrase. Seuls les états que l'écriture
-en cours vient de ranger entrent dans la chaîne. *Non couvert* : revenir à une chaîne plus
-ancienne avec sa propre signature valide, en retirant les états plus récents — rien hors
-de `/home` ne garde la tête de la chaîne. Les dates sont celles de l'horloge de la machine.
+en cours vient de ranger entrent dans la chaîne. **La tête de cette chaîne est tenue par
+le TPM** (index à extension `0x1800A52`, le même mécanisme que pour la boîte noire, posé de
+lui-même à la première écriture validée) : chaque maillon ajouté l'étend, et revenir à une
+chaîne plus ancienne, même correctement signée, ne donne plus la valeur que tient la puce.
+*Non couvert* : les dates, qui sont celles de l'horloge de la machine — seule une copie
+distante de la boîte (`osmo-diffs copie-poser`) leur donne un témoin extérieur.
 
 Deux façons de s'en servir.
 
@@ -350,7 +353,8 @@ condition, cela se voit ici avant d'être écrit.
 | Vider la boîte | — | — | phrase home ; noté en tête de la nouvelle chaîne |
 | Volume témoin (test de l'alarme) | boîte, en clair (`temoin.img`, et son état d'origine `temoin.origine`) | rien (il ne contient rien) | root (c'est le but : toute modification déclenche l'alarme) ; empreinte : phrase home |
 | États passés du système (ce que chaque écriture a remplacé) | `/home` (LUKS2), `.osmo-retour/systeme` | phrase home (page locale `osmo-etats`, clé par lancement, refusée `/home` fermé) | phrase home |
-| Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) ; retour à une chaîne plus ancienne non détecté |
+| Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) |
+| Tête de la chaîne des états | TPM, index NV à extension `0x1800A52` | tous | étendre : tous ; ramener en arrière : personne ; retirer : phrase home |
 | Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
 | Tête de la boîte (fin de la chaîne) | TPM, index NV à extension `0x1800A51` | tous | étendre : tous ; ramener en arrière : personne ; retirer : phrase home (secret propriétaire du TPM) |
