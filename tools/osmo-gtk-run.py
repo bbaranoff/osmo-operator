@@ -29,6 +29,11 @@
 #     the GTK, with the same status band; without gir1.2-vte-2.91, falls back
 #     to the log and says so.
 #
+# END: the window closes by itself (1.5 s after a success, 15 s countdown
+#   after a failure, "garder ouverte" stops it). With --keep-open it stays,
+#   says "Entree pour fermer", and ENTER closes it - as it does any finished
+#   window.
+#
 # --progress: THE PROGRESS BAR, NOT THE SHELL. For the launches (2G, multi,
 #   4G, pmOS phone) a scrolling shell is not wanted: a small window with a
 #   bar, the name of the current step, the last line - and a "console"
@@ -64,6 +69,7 @@ import subprocess
 import sys
 import termios
 import threading
+import time
 
 
 def _root_prefix(tty):
@@ -185,6 +191,8 @@ class Run(Gtk.Window):
             except Exception:
                 pass
         self.connect("destroy", self._quit)
+        self.connect("key-press-event", self._touche)
+        self.fini_a = 0.0           # when the command ended (monotonic)
         prov = Gtk.CssProvider()
         prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
@@ -488,6 +496,7 @@ class Run(Gtk.Window):
         if self.fini:
             return False
         self.fini = True
+        self.fini_a = time.monotonic()
         ctx = self.state.get_style_context()
         if rc == 0:
             self.state.set_text("termine")
@@ -515,7 +524,9 @@ class Run(Gtk.Window):
                     pass
                 self.master = None
         self.b_stop.set_sensitive(False)
-        if not self.a.keep_open:
+        if self.a.keep_open:
+            self._invite()
+        else:
             if rc == 0:
                 GLib.timeout_add(1500, lambda: (self.destroy(), False)[1])
             else:
@@ -541,6 +552,23 @@ class Run(Gtk.Window):
         self.rebours = None
         self.state.set_text(self.state.get_text().split(" - ")[0])
         self.b_garder.hide()
+        self._invite()
+
+    def _invite(self):
+        """The command is over and the window stays: say that Enter closes it."""
+        self.state.set_text(self.state.get_text().split(" - ")[0] + " - Entree pour fermer")
+        if self.tty and not self.progress:
+            self.term.feed("\r\n\033[1m  Termine. Entree pour fermer la fenetre.\033[0m\r\n".encode())
+
+    def _touche(self, _w, ev):
+        # Once the command is over, Enter closes the window (the terminal has
+        # nobody left to give the key to). Not in the first half second: an
+        # Enter meant for the command's last question must not close it.
+        if (self.fini and ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
+                and time.monotonic() - self.fini_a > 0.5):
+            self.destroy()
+            return True
+        return False
 
     def _copier(self, *_a):
         buf = self.tv.get_buffer()
