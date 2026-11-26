@@ -111,8 +111,15 @@ Un code TOTP à 6 chiffres, à comparer au téléphone **avant** de taper la phr
 - Après une écriture de session, l'objet est rescellé pour le nouveau disque — avec les
   PCR de référence, et seulement si le démarrage courant avait été reconnu.
 - Après une mise à jour du noyau, de l'initramfs ou de GRUB : un démarrage sans code,
-  attendu, puis `sudo osmo-tpm sceller` — à la main, jamais après un code absent
-  qu'on ne s'explique pas.
+  attendu, puis `sudo osmo-tpm sceller` (icône « Réenrôler », choix 1) — à la main, jamais
+  après un code absent qu'on ne s'explique pas. GRUB mesure tout ce qu'il lit, **thème
+  compris** : changer `theme.txt` ou `grub.cfg` suffit (vu le 26 novembre : seul PCR 9 a
+  bougé). Le rescellement lève l'alerte « le TPM ne reconnaît pas ce démarrage » — elle
+  seule ; laissée en place, elle rendait muets le contrôle d'extinction et le test de
+  l'alarme pour le reste de la session.
+- Le thème GRUB : le terminal de GRUB (affiché pendant que le noyau se charge) prend tout
+  l'écran, sans cadre, avec l'image du thème derrière (`GRUB_BACKGROUND`) — sinon il
+  restait une fenêtre vide, puis un rectangle noir, au milieu de l'image.
 
 Un seul noyau, pas de second système, pas de `kexec`. LUKS n'est pas touché : `/home`
 reste en LUKS2, sa phrase reste la seule entrée.
@@ -189,7 +196,10 @@ signature. Chaque choix est la commande existante ; chacune demande la phrase de
   chose a écrit sur le disque pendant la session sans la phrase — écran rouge,
   (« YOU HAVE DONE SOMETHING NASTY !!!! » en grosses lettres sur tout l'écran),
   enregistrement dans la boîte noire et bip (tous les volumes de la carte son sont mis au
-  maximum, haut-parleur du PC en plus). Une écriture validée reprend et signe l'empreinte :
+  maximum, haut-parleur du PC en plus). À l'extinction il n'y a plus de bureau pour le
+  faire entendre, mais les serveurs de son tiennent encore la carte sans rien jouer
+  (PulseAudio du banc, `osmo-pulse.service` ; pipewire d'un compte qui persiste) : ils sont
+  arrêtés et le son part directement sur chaque sortie analogique (ALSA). Une écriture validée reprend et signe l'empreinte :
   elle ne déclenche rien. **La machine ne s'éteint alors pas** : rien n'est écrit sur le
   disque, la session est gardée dans la boîte noire, l'alarme tient l'écran et rebipe ;
   seul le bouton d'alimentation maintenu l'éteint. Une marque reste sur la boîte
@@ -400,29 +410,59 @@ Coût observé : un enregistrement de 109 Mo pour cette session, sur une boîte 
 
 ## 6. État de validation
 
+Ce qui suit a tourné **sur le poste réel** le 26 novembre 2026, lu dans ses journaux ou vu
+par son propriétaire.
+
 | Élément | Vérifié comment |
 |---|---|
-| Écriture différentielle, retour arrière | bac à sable (overlay réel sur image ext4) |
-| Validation en cours de session, `/` et `/home` | **une fois en réel** sur le poste |
-| Empreinte, détection, sceau | bac à sable + disque réel (état conforme) |
-| Principe TPM (bon disque → secret ; modifié ou verrouillé → refus ; rescellement) | **TPM réel**, PCR d'essai |
-| Partie initramfs du TPM | syntaxe + calcul du code sous busybox (vecteur RFC 6238) ; **jamais démarrée** |
-| Copie SSH (injoignable : rien ne bloque ; joignable : du chiffré part) | bac à sable, faux `ssh` |
-| Page « Options » de l'installeur (cases à cocher) | le job seul, hors de Calamares |
-| Extinction réelle, alerte rouge réelle, `defaire` réel | **non testés** |
+| Extinction avec la phrase : session écrite, empreinte signée, TPM rescellé | **réel**, une dizaine de fois |
+| Extinction sans la phrase en persistant (système non écrit, `/home` gardé) | **réel**, une fois |
+| Contrôle des sommes à l'extinction, sans fausse alarme | **réel**, toutes les extinctions du jour |
+| Démarrage mesuré : PIN, phrase secrète affichée jusqu'à Entrée, démarrage reconnu | **réel** |
+| Démarrage non reconnu après un changement de GRUB (PCR 9 seul), alerte, `OUI`, rescellement | **réel**, deux fois |
+| Instantané de `/home` en persistant, « Remettre à zéro » à l'extinction | **réel**, deux fois ; volume sain ensuite (`e2fsck`) |
+| États du système rangés dans `/home`, chaînés et signés | **réel** : 24 états, relus intacts |
+| Chaîne de la boîte noire, du premier au dernier enregistrement | **réel** : 60 enregistrements, phrase de la boîte |
+| Fin de la boîte et fin de l'historique tenues par le TPM (index à extension) | **réel** : posés, étendus à l'extinction, conformes |
+| `osmo-boite fsck` : « tout est vert » | **réel** |
+| Test partiel de l'alarme (volume témoin corrompu, trouvé, alarme 10 s, remis à l'origine) | **réel** |
+| Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
+| Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |
+| Coupure du root invité sur alerte | écrite, **non vue** |
+| Détection d'une troncature, d'un retour en arrière de l'historique | bac à sable (compteur simulé) ; jamais provoquées en réel |
+| Coupure de courant pendant une remise à zéro | **non testée** — elle abîme `/home` |
+| Boîte à 80 % (copie, vidage), `defaire`, `fusionner` | bac à sable ; **non testés** en réel |
+| Copie SSH de la boîte | bac à sable, faux `ssh` ; non configurée sur le poste |
 | Installation par l'ISO avec l'ensemble | **non testée** |
 
-Point ouvert : avant ces travaux, `/home` n'était jamais écrit à l'extinction alors que
-`/` l'était ; la cause n'a pas été identifiée. Le chemin est maintenant journalisé sur
-le disque (`/var/log/osmo-session.log`).
+Le point ouvert d'origine — `/home` jamais écrit à l'extinction — était
+`blk-availability.service` (lvm2), qui démontait le volume avant l'écriture ; corrigé par
+l'ordre des unités, confirmé à une extinction réelle.
+
+Un artefact : l'enregistrement n° 000051 de la boîte du poste (« defait », commit fictif
+`20260101-000003`) vient d'un essai en bac à sable qui a appelé la vraie commande. Rien
+n'a été défait sur le système.
 
 ## 7. Travaux restants
 
-- Essais réels : extinction, alerte, retour arrière, démarrage mesuré, installation
-  complète en VM.
+- Voir en réel : la coupure du root invité, le bip du test complet à une extinction, la
+  question à 80 %, `defaire` et `fusionner`, une installation complète par l'ISO.
+- Une copie distante de la boîte : le seul témoin extérieur pour les dates (l'horloge est
+  celle de la machine) et contre la destruction.
+- La remise à zéro n'est pas protégée d'une coupure de courant (les anciens blocs sont en
+  RAM).
+- Une fausse alarme coûte cher (extinction retenue, session non écrite, root invité
+  coupé) : à surveiller sur la durée.
 - Taille des enregistrements : exclusions ou plafond.
 - Durée de l'application d'une écriture (un renommage par fichier, en shell) et de
   l'enregistrement dans la boîte.
+- Une relecture à tête reposée : beaucoup de code neuf est arrivé en une soirée dans des
+  scripts qui gèrent un disque chiffré.
+
+**Limite assumée, qui n'est pas un travail restant** : pendant qu'une session est ouverte
+avec `/home` déverrouillé, root peut tout faire. Le dispositif ne l'empêche pas — ce serait
+résoudre la sécurité informatique en général ; il garantit que cela laisse des traces que
+root ne peut ni effacer proprement, ni tronquer sans que cela se voie.
 
 ## 8. Ce qui est nouveau
 
