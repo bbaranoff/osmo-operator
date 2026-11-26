@@ -158,6 +158,15 @@ terminal-font: "Osmo Regular 18"
 # no frame around the terminal: once an entry is chosen GRUB shows its terminal
 # while the kernel loads - with the menu's frame that was an empty « window »
 terminal-box: "sans_*.png"
+# and the terminal takes the WHOLE screen, without border: left at its default
+# size it stayed as a black rectangle in the middle of the picture. A black
+# screen for the second the kernel loads - and an error, if there is one, can
+# still be read (a terminal made too small to be seen would hide it).
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
 
 + boot_menu {
     left = 27%
