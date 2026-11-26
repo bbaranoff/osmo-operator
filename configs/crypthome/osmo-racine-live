@@ -53,6 +53,9 @@
 #                                 (arrows); the one chosen is undone at boot,
 #                                 once /home is open (osmo.retour=N), and the
 #                                 machine restarts on the older disk
+#   osmo-racine-live journal-home refresh /home/<owner>/sessions.log, the
+#                                 owner's copy of the session log (every
+#                                 validation, write, undo, end of session)
 #   osmo-racine-live annuler      forget the validation: wiped at shutdown
 #   osmo-racine-live oublier      « Tout oublier ? » Yes: wiped, white screen,
 #                                 no question at shutdown
@@ -247,6 +250,21 @@ journal_disque() {
         sync
         mount -o remount,ro "$BAS" 2>/dev/null
     fi
+    journal_home
+}
+# journal_home : THE SAME LOG IN THE OWNER'S HOME - /home/<owner>/sessions.log,
+# every validation, write, undo and end of session (what is on the disk in
+# /var/log/osmo-session.log, plus the lines not yet put there). Written
+# through /home like any file of the session: it is refreshed at every boot
+# (unlock-home), before every write and after it, so it is complete whenever
+# it is read; a write keeps it on the volume up to its own first lines.
+journal_home() {
+    local o="${CRYPTHOME_OWNER:-}" f
+    [ -n "$o" ] && mountpoint -q /home 2>/dev/null && [ -d "/home/$o" ] || return 0
+    f="/home/$o/sessions.log"
+    { cat "$BAS$JOURNAL_DISQUE" 2>/dev/null; cat "$TRACE" 2>/dev/null; } > "$f.nouv" 2>/dev/null || { rm -f "$f.nouv"; return 0; }
+    chown "$o": "$f.nouv" 2>/dev/null; chmod 640 "$f.nouv" 2>/dev/null
+    mv -f "$f.nouv" "$f" 2>/dev/null
 }
 
 # ── at shutdown, on the text console ─────────────────────────────────────────
@@ -1033,6 +1051,7 @@ EOF
         # The terminal closed does not cut it.
         trap 'ANNULE=1' INT
         trap '' HUP QUIT
+        journal_home                 # in the write itself, up to this line
         # the box first: the RAM layer against the disk, i.e. this moment
         [ -x /usr/local/sbin/osmo-diffs ] \
             && OSMO_PROGRES="$PROGRES" OSMO_PROGRES_A="$PROGRES_BOITE" sans_int /usr/local/sbin/osmo-diffs enregistrer ecrit >> "$TRACE" 2>&1
@@ -1161,6 +1180,7 @@ EOF
             sleep 2
         elif [ "$decision" = valide ] && [ "$n" -gt 0 ]; then
             trace "fin : ecriture de la session sur le disque ($n changement(s))"
+            journal_home             # in the write itself, up to this line
             appliquer; rc=$?
             if [ -n "$mpid" ]; then sleep 1; kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; fi
             rm -f "$PROGRES"
@@ -1229,6 +1249,11 @@ EOF
         else
             rouge "ECHEC : commit $id pas (entierement) defait - voir $JOURNAL_DISQUE"; exit 1
         fi
+        ;;
+    journal-home)
+        # unlock-home, /home just opened: the owner's copy of the session log
+        root_requis
+        live && journal_home
         ;;
     sessions)
         live || { log "/ n est pas en RAM"; exit 0; }

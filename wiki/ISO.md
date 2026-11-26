@@ -648,6 +648,9 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   console shows `cmatrix` during the write). The neuralyzer is a slim stick whose **red
   light blinks faster and faster, then the white flash**. The console asks the same at
   shutdown when nothing was chosen (`yes/no`; no answer: wiped, red banner).
+- **The session log in the owner's home**: `/home/<owner>/sessions.log` is the owner's copy of
+  `/var/log/osmo-session.log` (every validation, write, undo, end of session, with dates),
+  refreshed at every boot, before and after every write.
 - **Going back several sessions** (`osmo-racine-live sessions`, `remonter [N]`): every commit
   carries the session (boot) it belongs to; `remonter N` undoes every commit of the last N
   sessions, newest first, on `/` and on `/home` (`/home` passphrase; the box records each one,

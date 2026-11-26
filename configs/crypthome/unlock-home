@@ -504,6 +504,9 @@ elif ! mount "$MOUNT" 2>/dev/null && ! mount "/dev/mapper/$MAPPER" "$MOUNT"; the
     exit 0
 fi
 
+# the owner's copy of the session log: /home/<owner>/sessions.log
+racine_live && [ -x /usr/local/sbin/osmo-racine-live ] && /usr/local/sbin/osmo-racine-live journal-home >/dev/null 2>&1
+
 # GRUB entry « remonter le disque » (osmo.retour=N on the kernel line): /home
 # has just been opened with its passphrase - the last N sessions are undone
 # on / and on /home, then the machine restarts (osmo-racine-live remonter).
