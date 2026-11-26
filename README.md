@@ -262,6 +262,11 @@ OSMO_DOCKER_STORAGE_DIR=/home/<you>/docker-data OSMO_ISO_WORK=/home/<you>/iso-bu
   a quarter of the RAM (`CRYPTHOME_RESET_MO`). A build overflows that at once: the snapshot is dropped, its memory is
   given back, and the icon answers « plus possible » until the next boot. Nothing else changes: `/home` keeps
   working and the build is not disturbed.
+- **A swap for the build, made by itself.** The bench has no swap: when the memory is full the machine dies, with no
+  shutdown and nothing written. `build-iso.sh` puts a swap file in `/home` (or next to `OSMO_ISO_WORK` when that is
+  on a disk) for the time of the build, the size of the RAM, encrypted with a random key that only the kernel holds:
+  unreadable once the build ends or the power goes. Removed at the end; one left by a build that died is removed
+  at the next. `OSMO_ISO_SWAP_GB=N` for another size, `0` for none; `OSMO_ISO_SWAP_DIR` for another place.
 - **A reboot kills a running build.** It does not resume: every run makes its own work directory. The old one stays
   in `/home` and takes room until it is removed (`sudo rm -rf /home/<you>/iso-build`). Docker's storage in
   `/home` stays too: at the next boot Docker is back in RAM; the next build moves it to the same directory again and

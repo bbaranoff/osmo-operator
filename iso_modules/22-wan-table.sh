@@ -32,7 +32,7 @@ fi
 export DOCKER_NO_CACHE="$NO_CACHE"
 
 
-cleanup() { umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true; umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$WORK"; }
+cleanup() { umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true; umount "$ROOTFS"/{dev/pts,proc,sys,dev} 2>/dev/null||true; rm -rf "$WORK"; declare -F iso_swap_retirer >/dev/null && iso_swap_retirer; true; }
 trap cleanup EXIT
 
 
