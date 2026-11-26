@@ -229,6 +229,38 @@ of your own, exit code 0 when everything is identical).
 - Magnetite calls only work with ciphering off (`ENCRYPTION="a5 0"`).
 - 4G, CSFB and the postmarketOS phone are amd64 only.
 
+## Building the ISO from a secured bench (with the TPM protection on)
+
+This is only for those who build **on a machine installed with the secured bench** - the TPM protection of
+[wiki/Poste-securise.md](wiki/Poste-securise.md). On an ordinary machine `./build-iso.sh` needs nothing special.
+
+On a secured bench the system runs in RAM: `/`, `/var/tmp` and this repository (`/opt/GSM/osmo-operator`) are a
+memory layer of a few gigabytes over a read-only disk. The build writes about 18 GB of work files and an ISO of
+several gigabytes: left to its defaults it fills the memory and fails, and whatever it did write is gone at the next
+boot. Send both to `/home`, which is the encrypted disk:
+
+```
+OSMO_ISO_WORK=/home/<you>/iso-build ./build-iso.sh --output=/home/<you>/osmo-operator.iso
+```
+
+- **`OSMO_ISO_WORK`**: where the work files go (default `/var/tmp`, in RAM here).
+- **`--output`**: where the ISO goes (default: this repository, in RAM here). If the ISO still lands in the
+  repository, move it to `/home` before switching off.
+- **Open `/home` as « Persistant »** at boot (the default answer): what the build writes is then on the disk at
+  once and survives a reboot. In the other mode (« à enregistrer ») `/home` is a RAM layer too, and the build does
+  not fit.
+- **« Remettre à zéro » is lost for that session.** In persistent mode the bench keeps, in memory, the old content
+  of every block of `/home` the session overwrites - that is what lets it put `/home` back as it was at boot - up to
+  a quarter of the RAM (`CRYPTHOME_RESET_MO`). A build overflows that at once: the snapshot is dropped, its memory is
+  given back, and the icon answers « plus possible » until the next boot. Nothing else changes: `/home` keeps
+  working and the build is not disturbed.
+- **A reboot kills a running build.** It does not resume: every run makes its own work directory. The old one stays
+  in `/home` and takes room until it is removed (`sudo rm -rf /home/<you>/iso-build`). After the reboot a new
+  snapshot is taken, so « Remettre à zéro » works again - for what happens from then on; what the build left in
+  `/home` is part of the starting point.
+- **Push before you build.** The repository is in RAM: a commit that is not pushed, on a session that is not saved
+  with the `/home` passphrase at shutdown, is lost.
+
 ---
 
 *osmo-operator is a teaching and research GSM bench: a full core network and emulated Calypso phones on one
