@@ -470,11 +470,66 @@ def charger(nom):
         return None
 
 
+# ONE WRITER AT A TIME: the lock shared with osmo-diffs and osmo-tpm (see
+# osmo-diffs, « ouvrir »). Taken by the outermost boite_rw(True) of this
+# process - unless a parent already holds it (OSMO_BOITE_TENU): then this
+# process writes under the parent's lock and never closes the box. Nested
+# calls (poser_signature inside home_direct...) only count.
+VERROU_BOITE = "/run/osmo-boite.verrou"
+_boite = {"fd": None, "prof": 0}
+
+
+def _boite_ro():
+    for _ in range(10):
+        if not os.path.ismount(BOITE):
+            return True
+        subprocess.run(["mount", "-o", "remount,ro", BOITE], capture_output=True)
+        r = subprocess.run(["findmnt", "-no", "OPTIONS", BOITE], capture_output=True, text=True)
+        if "ro" in r.stdout.strip().split(","):
+            return True
+        time.sleep(1)
+    dire("BOITE NOIRE RESTEE EN ECRITURE : remontage en lecture seule impossible (%s)" % BOITE)
+    return False
+
+
 def boite_rw(oui):
     if TEST:
         return True
-    return subprocess.run(["mount", "-o", "remount,%s" % ("rw" if oui else "ro"), BOITE],
-                          capture_output=True).returncode == 0
+    import fcntl
+    if oui:
+        if _boite["prof"] == 0 and not os.environ.get("OSMO_BOITE_TENU"):
+            fd = os.open(VERROU_BOITE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            fin = time.monotonic() + 300
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() > fin:
+                        os.close(fd)
+                        dire("boite : verrou non obtenu en 5 minutes - rien n est ecrit")
+                        return False
+                    time.sleep(0.2)
+            _boite["fd"] = fd
+            os.environ["OSMO_BOITE_TENU"] = str(os.getpid())
+        _boite["prof"] += 1
+        if subprocess.run(["mount", "-o", "remount,rw", BOITE], capture_output=True).returncode == 0:
+            return True
+        boite_rw(False)
+        return False
+    if _boite["prof"] > 0:
+        _boite["prof"] -= 1
+        if _boite["prof"] > 0:
+            return True
+    if _boite["fd"] is None:
+        if os.environ.get("OSMO_BOITE_TENU"):
+            return True                       # the parent holds the box: it closes it
+        return _boite_ro()
+    ok = _boite_ro()
+    os.close(_boite["fd"])                    # the lock goes with it
+    _boite["fd"] = None
+    os.environ.pop("OSMO_BOITE_TENU", None)
+    return ok
 
 
 def cle_sceau(creer=False):

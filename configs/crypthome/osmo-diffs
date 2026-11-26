@@ -127,21 +127,54 @@ boite() {
 # read-only again when the command ends (fermer, also on EXIT); each record
 # is then made immutable (chattr +i). Root can still force it - the chain,
 # « verifier » and the remote copy are what shows it.
-OUVERT=0
+# ONE WRITER AT A TIME (the lock /run/osmo-boite.verrou, shared with
+# osmo-empreinte and osmo-tpm): two writers used to remount the box each on
+# its own, and the first to finish put it back read-only under the other's
+# feet (26 November, boot of 21:15: osmo-diffs.service and osmo-garde.service
+# together, the « coupe » record lost). Whoever takes the lock exports
+# OSMO_BOITE_TENU: what it runs (osmo-empreinte boite-etendre...) writes
+# under ITS lock and never closes the box - only the holder does. And the
+# box is checked read-only again after closing: said loudly when it is not.
+VERROU_BOITE=/run/osmo-boite.verrou
+OUVERT=0                                 # 1: we hold the box; 2: a parent does
+boite_ro() {
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        mountpoint -q "$BASE" || return 0
+        mount -o remount,ro "$BASE" 2>/dev/null
+        case ",$(findmnt -no OPTIONS "$BASE" 2>/dev/null)," in *,ro,*) return 0 ;; esac
+        sleep 1
+    done
+    log "BOITE NOIRE RESTEE EN ECRITURE : remontage en lecture seule impossible ($BASE)"
+    return 1
+}
 ouvrir() {
     [ "$TEST" = 1 ] && { mkdir -p "$JOURNAL"; return 0; }
     [ "$(id -u)" = 0 ] || { log "root requis pour ecrire dans la boite"; exit 1; }
     if [ "$OUVERT" = 0 ]; then
-        mount -o remount,rw "$BASE" 2>/dev/null || { log "boite : remontage en ecriture impossible"; return 1; }
-        OUVERT=1
-        trap fermer EXIT
+        if [ -n "${OSMO_BOITE_TENU:-}" ]; then
+            OUVERT=2
+        else
+            exec 9>>"$VERROU_BOITE" && flock -w 300 9 \
+                || { exec 9>&- 2>/dev/null; log "boite : verrou non obtenu en 5 minutes - rien n est ecrit"; return 1; }
+            export OSMO_BOITE_TENU=$$
+            OUVERT=1
+            trap fermer EXIT
+        fi
+        mount -o remount,rw "$BASE" 2>/dev/null || { log "boite : remontage en ecriture impossible"; fermer; return 1; }
     fi
     mkdir -p "$JOURNAL"
 }
 fermer() {
     [ "$TEST" = 1 ] && return 0
+    if [ "$OUVERT" = 2 ]; then OUVERT=0; return 0; fi      # the holder closes it
+    if [ -n "${OSMO_BOITE_TENU:-}" ] && [ "$OUVERT" = 0 ]; then return 0; fi
     sync
-    mountpoint -q "$BASE" && mount -o remount,ro "$BASE" 2>/dev/null
+    boite_ro
+    if [ "$OUVERT" = 1 ]; then
+        flock -u 9 2>/dev/null; exec 9>&- 2>/dev/null
+        unset OSMO_BOITE_TENU
+    fi
     OUVERT=0
 }
 
@@ -376,7 +409,7 @@ case "${1:-liste}" in
         # at every boot (osmo-diffs.service): the box read-only for everybody
         boite
         [ "$(id -u)" = 0 ] || exit 0
-        if [ -d "$JOURNAL" ] && mount -o remount,rw "$BASE" 2>/dev/null; then
+        if [ -d "$JOURNAL" ] && ouvrir; then
             # records left writable by an older version
             find "$JOURNAL" -maxdepth 1 -name '*.age' -perm /222 -exec chmod 0444 {} + 2>/dev/null
             find "$JOURNAL" -maxdepth 1 -name '*.age' -exec chattr +i {} + 2>/dev/null
