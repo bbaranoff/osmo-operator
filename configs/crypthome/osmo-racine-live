@@ -1697,6 +1697,11 @@ EOF
             elif [ -f "$ETAT/ecrit" ]; then
                 vert "validee a $(date -r "$ETAT/ecrit" '+%T') : la session jusque-la est sur le disque"
                 rouge "$(changements_depuis | wc -l) changement(s) depuis : effaces a l extinction sans une nouvelle validation"
+            elif home_direct; then
+                # persistent: /home is already on the disk, and the shutdown
+                # asks the passphrase to write the system - nothing is wiped
+                # unless it is not given
+                echo "systeme pas encore enregistre : ta phrase sera demandee a l extinction pour l ecrire (sans elle, ces changements du systeme sont perdus ; /home, lui, est deja ecrit)"
             else rouge "session NON validee : tout sera efface a l extinction (osmo-racine-live valider)"; fi
         else
             echo "persistant : / ecrit directement sur le disque"
