@@ -230,8 +230,13 @@ sceller() {
     if [ -n "$prec" ]; then h="$(sha256sum "$prec" | cut -d' ' -f1) $(basename "$prec")"; else h="origine"; fi
     n=$(( $(find "$JOURNAL" -maxdepth 1 -name '*.age' | wc -l) + 1 ))
     nom="$JOURNAL/$(printf '%06d' "$n")_$(date +%F_%H%M%S)_${mode}.diff.age"
+    # each record also carries the total SHA-256 of / and of /home as the box
+    # holds them at that moment (osmo-empreinte): the disk this session found
     { printf '# osmo-diffs %s : %s, demarrage du %s, enregistre le %s\n# precedent : %s\n' \
           "$n" "$mode" "$(uptime -s 2>/dev/null)" "$(date '+%F %T')" "$h"
+      [ -r "$BASE/empreinte.json" ] && printf '# empreintes sha256 du disque : %s\n' \
+          "$(tr -d '\n' < "$BASE/empreinte.json" | grep -oE '"(home|racine)": *\{[^}]*"meta": *"[0-9a-f]+"' \
+              | sed -E 's/^"([a-z]+)".*"meta": *"([0-9a-f]+)"/\1 \2/' | tr '\n' ' ')"
       cat; } | age -r "$(cat "$PUB")" -o "$nom" || return 1
     chmod 0444 "$nom"; sync
     [ "$TEST" = 1 ] || chattr +i "$nom" 2>/dev/null
@@ -450,6 +455,13 @@ case "${1:-liste}" in
             [ -n "$d" ] && printf '%s %s\n' "$(sha256sum "$d" | cut -d' ' -f1)" "$(basename "$d")" > "$PRIVE/.dernier-vu"
         fi
         envoyer
+        ;;
+    alerte)
+        # alerte < text : an « alerte » record (osmo-empreinte: the disk was
+        # written to outside a session)
+        boite
+        [ -f "$PUB" ] || { log "boite noire non initialisee"; exit 0; }
+        nom="$(sceller alerte)" && log "alerte -> $nom"
         ;;
     phrase)
         # change the box passphrase (the current one is asked first)

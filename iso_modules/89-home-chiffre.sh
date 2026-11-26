@@ -98,6 +98,22 @@ install -m 0755 "$_CH_SRC/lock-home"              "$ROOTFS/usr/local/sbin/lock-h
 # (shellprocess-osmo.conf: osmo-racine-live poser); the live key is not touched.
 install -m 0755 "$_CH_SRC/osmo-racine-live"       "$ROOTFS/usr/local/sbin/osmo-racine-live"
 install -m 0755 "$_CH_SRC/osmo-valider-appliquer" "$ROOTFS/usr/local/sbin/osmo-valider-appliquer"
+# the disk against its fingerprint: total SHA-256 of / and of /home on the
+# black box after every commit, compared at every boot BEFORE the /home
+# passphrase is asked - a red warning when the disk was written to outside a
+# session (enabled with the rest by osmo-racine-live poser)
+install -m 0755 "$_CH_SRC/osmo-empreinte"         "$ROOTFS/usr/local/sbin/osmo-empreinte"
+install -m 0644 "$DIR/services/osmo-empreinte.service" "$ROOTFS/etc/systemd/system/osmo-empreinte.service"
+install -m 0644 "$DIR/services/osmo-empreinte-fond.service" "$ROOTFS/etc/systemd/system/osmo-empreinte-fond.service"
+cat > "$ROOTFS/etc/xdg/autostart/osmo-empreinte-rappel.desktop" <<'RAPPEL'
+[Desktop Entry]
+Type=Application
+Name=osmo-operator : disque modifie hors session
+Exec=/usr/local/sbin/osmo-empreinte rappel
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+RAPPEL
 # the REC screen of a write at shutdown: cmatrix, and its red progress bar
 install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"
 install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
@@ -175,6 +191,10 @@ Categories=System;
 LANCEUR
 # and in every terminal, in red
 cat > "$ROOTFS/etc/profile.d/98-osmo-session.sh" <<'PROFIL'
+# osmo-operator: the disk was written to outside a session (osmo-empreinte)
+if [ -t 1 ] && [ -s /run/osmo-alerte ]; then
+    printf '\033[5;1;31m%s\033[0m\n' "!!! DISQUE MODIFIE HORS SESSION : $(head -n1 /run/osmo-alerte) - voir /run/osmo-alerte !!!"
+fi
 # osmo-operator: / in RAM -> red warning. A validation covers the moment it
 # was given; what follows needs another one, or the passphrase at shutdown.
 if [ -t 1 ] && [ ! -e /run/osmo-racine/valide ] && mountpoint -q /media/root-ro 2>/dev/null; then

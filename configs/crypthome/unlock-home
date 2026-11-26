@@ -378,6 +378,15 @@ clavier_console() {
 }
 log "clavier de la console : $(clavier_console)."
 
+# THE SYSTEM DISK DIFFERS FROM ITS FINGERPRINT (osmo-empreinte demarrage, just
+# before this unit) and « OUI » was not typed at its warning: the passphrase
+# of /home is NOT asked on a system that may have been modified.
+if [ "$BOOT" = 1 ] && [ -e /run/osmo-sans-home ]; then
+    log "disque systeme modifie hors session : la phrase de $MOUNT n est pas demandee (voir /run/osmo-alerte)."
+    session_root
+    exit 0
+fi
+
 PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
 essai=0
@@ -436,6 +445,9 @@ monter_home_live() {
         /usr/local/sbin/osmo-valider-appliquer "$HOME_BAS" 2>&1 | while read -r l; do log "$l"; done
     fi
     mount -o remount,ro "$HOME_BAS" || { umount "$HOME_BAS"; return 1; }
+    # the volume against its fingerprint (total SHA-256 on the black box):
+    # written to outside a session? A red warning, and a record in the box.
+    [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte home 2>&1 | while read -r l; do log "$l"; done
     if ! mountpoint -q "$HOME_RW"; then
         mount -t tmpfs -o mode=0755,size=50% tmpfs "$HOME_RW" || { umount "$HOME_BAS"; return 1; }
     fi

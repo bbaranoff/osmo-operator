@@ -1,0 +1,19 @@
+[Unit]
+Description=osmo-operator - controle complet du disque (contenu relu), en tache de fond
+Documentation=file:/usr/local/sbin/osmo-empreinte
+ConditionPathIsMountPoint=/media/root-ro
+# After the boot, at idle priority: every file of / and of /home is read
+# again and compared with its SHA-256 - what catches a change made with the
+# dates and inodes forged, which the boot control cannot see. About 30 s for
+# 18 GB. A difference: every terminal (wall), the desktop, the black box.
+After=multi-user.target unlock-home.service osmo-diffs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/osmo-empreinte fond
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+[Install]
+WantedBy=graphical.target multi-user.target

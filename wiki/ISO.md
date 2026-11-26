@@ -680,6 +680,19 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   newer release when there is one. On the node, osmo-gtk's tab **« Telephones »** (invitation by
   QR code, accounts, proxy, Bluetooth line) drives the association service
   (`tools/osmo-inscription.py`, port 8088).
+- **The disk against its fingerprint** (`osmo-empreinte`): `/` is in clear, so somebody with the
+  machine in hand can write to it while it is off. After every commit the **total SHA-256 of `/`
+  and of `/home`** is taken and kept on the black box (`empreinte.json`, with its detail per file;
+  every record of the box also carries the totals). **At every boot, before the `/home` passphrase
+  is asked**, the total of `/` is computed again (a walk of the disk, about 2 s) and compared; only
+  when it differs is the detail read, to say what changed: a **red warning** fills the console, the
+  box gets an `alerte` record, and the passphrase is only asked after `OUI` (otherwise the machine
+  boots without `/home`). `/home` is compared as soon as it is opened; after the boot a background
+  control reads the content of every file again (dates and inodes forged). The totals are sealed
+  with a key kept in the encrypted `/home`. Limits: this runs from the disk it checks - an attacker
+  who also rewrites the checker silences it (only a measured boot closes that). A change you make
+  yourself outside a session is such a difference: `sudo osmo-racine-live actualiser` records its
+  own, otherwise `sudo osmo-empreinte prendre`.
 - **Without « Encrypt system »** there is no passphrase to validate with: `osmo-racine-live`
   leaves `/` read-write, and says so.
 - **Limits**: root can always remount `/media/root-ro` read-write or write the block device:

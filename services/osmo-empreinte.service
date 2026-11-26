@@ -1,0 +1,25 @@
+[Unit]
+Description=osmo-operator - le disque systeme contre son empreinte (ecrit hors session ?)
+Documentation=file:/usr/local/sbin/osmo-empreinte
+# Only on an installed bench whose / is in RAM (overlayroot).
+ConditionPathIsMountPoint=/media/root-ro
+# AT EVERY BOOT, BEFORE THE /home PASSPHRASE IS ASKED: the total SHA-256 of
+# the system disk is computed again (2 seconds) and compared with the one the
+# black box holds since the last commit. Different: a red warning fills the
+# console, the box gets an « alerte » record, and the passphrase is only
+# asked after « OUI » (otherwise: boot without /home).
+RequiresMountsFor=/var/lib/osmo-diffs
+After=local-fs.target plymouth-start.service keyboard-setup.service console-setup.service
+Before=unlock-home.service osmo-diffs-init.service systemd-user-sessions.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/osmo-empreinte demarrage
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,597 @@
+#!/usr/bin/python3
+# osmo-empreinte - THE SYSTEM DISK AGAINST ITS FINGERPRINT: has / been written
+# to OUTSIDE a session, i.e. without the black box knowing?
+#
+# The system disk of an installed bench is in clear and read-only: the only
+# writes it ever receives are the commits of validated sessions
+# (osmo-racine-live), each one recorded in the black box. After every commit
+# THE TOTAL SHA-256 of / and of /home is taken and kept on the box partition
+# (empreinte.json; each record of the box also carries the totals it found),
+# with its detail - one line per file: type, mode, owner, size, dates, inode,
+# SHA-256 of its content. At EVERY BOOT, BEFORE the /home passphrase is asked,
+# the total of / is computed again (a walk of the disk: 2 seconds) and
+# compared; only when it differs is the detail read, to say what changed.
+# /home is compared the same way as soon as it is opened. A difference means that somebody wrote to the disk with
+# the machine off (a live key, the disk in another machine): a RED WARNING
+# fills the console, the black box gets an « alerte » record, and the /home
+# passphrase is only asked after « OUI » has been typed.
+#
+#   osmo-empreinte prendre            take the fingerprint (after a commit;
+#                                     only what changed is hashed again)
+#   osmo-empreinte controler [--complet]   compare; --complet also reads every
+#                                     file again (about 30 s for 18 GB)
+#   osmo-empreinte demarrage          at boot, before unlock-home: fast
+#                                     control, the warning, the question
+#   osmo-empreinte fond               after boot, in the background, at idle
+#                                     priority: the complete control
+#   osmo-empreinte home               unlock-home, the volume just opened:
+#                                     /home against its total
+#   osmo-empreinte sceau              once /home is open: the totals on the
+#                                     box are the ones that were sealed
+#   osmo-empreinte rappel             desktop: the warning as a dialog
+#
+# TWO CONTROLS. The fast one (2-3 s, every boot, blocking) compares what the
+# file system says of each file: a file replaced or edited changes its inode
+# or its change time, which no ordinary tool can set. The complete one reads
+# every file: it catches a change made with the dates and inodes forged.
+#
+# THE SEAL. The fingerprint is in clear on the box partition: whoever rewrites
+# the disk can rewrite it too. It is therefore sealed (HMAC-SHA-256) with a
+# key kept in the ENCRYPTED /home; « sceau », once /home is open, says when
+# the fingerprint is not the one this machine sealed.
+#
+# LIMITS, plainly. This runs FROM the disk it checks: an attacker who also
+# rewrites this program (or unlock-home) silences it - only a measured boot
+# (TPM) closes that. It catches everything short of that: a file dropped or
+# edited from a live key, a package or a unit added, an initramfs rebuilt.
+# A change you make yourself to the disk outside a session (overlayroot-chroot)
+# is, rightly, such a difference: « osmo-racine-live actualiser » records it;
+# otherwise take the fingerprint again (sudo osmo-empreinte prendre).
+import gzip
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import select
+import stat
+import subprocess
+import sys
+import time
+from multiprocessing import Pool
+
+BOITE = os.environ.get("OSMO_DIFFS_BASE", "/var/lib/osmo-diffs")
+TOTAUX = os.path.join(BOITE, "empreinte.json")        # the totals: what the boot compares
+SCEAU = os.path.join(BOITE, "empreinte.hmac")
+RACINE = os.environ.get("OSMO_EMPREINTE_RACINE") or ("/media/root-ro" if os.path.ismount("/media/root-ro") else "/")
+HOME_DISQUE = os.environ.get("OSMO_EMPREINTE_HOME", "/media/home-ro")
+CLE = ".osmo-diffs/sceau"
+ALERTE = os.environ.get("OSMO_EMPREINTE_ALERTE", "/run/osmo-alerte")
+SANS_HOME = os.environ.get("OSMO_EMPREINTE_SANS_HOME", "/run/osmo-sans-home")
+FOND_FAIT = "/run/osmo-empreinte-complet"
+TEST = os.environ.get("OSMO_DIFFS_SANS_MONTAGE") == "1"
+# never part of the fingerprint: the journal of a commit, the way back, the
+# session's own log (written to the disk outside a commit, on purpose)
+EXCLUS = {".osmo-valider", ".osmo-retour", "lost+found", "var/log/osmo-session.log", "var/log/osmo-session.log.nouv"}
+CONSOLE = "/dev/console"
+ROUGE, FIN = "\033[1;31m", "\033[0m"
+
+
+def dire(*a):
+    print("osmo-empreinte :", *a, flush=True)
+
+
+def parcourir(racine):
+    """Every entry of the file system at racine (not what is mounted in it):
+    {path: [type, mode, uid, gid, size, mtime_ns, ctime_ns, inode, hash]}."""
+    dev = os.lstat(racine).st_dev
+    out, pile = {}, [""]
+    while pile:
+        rel = pile.pop()
+        try:
+            entrees = list(os.scandir(os.path.join(racine, rel) if rel else racine))
+        except OSError:
+            continue
+        for e in entrees:
+            p = (rel + "/" + e.name) if rel else e.name
+            if p in EXCLUS:
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            m = st.st_mode
+            t = ("d" if stat.S_ISDIR(m) else "f" if stat.S_ISREG(m) else "l" if stat.S_ISLNK(m) else "o")
+            h = ""
+            if t == "l":
+                try:
+                    h = os.readlink(os.path.join(racine, p))
+                except OSError:
+                    h = "?"
+            out[p] = [t, stat.S_IMODE(m), st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, h]
+            if t == "d" and st.st_dev == dev:
+                pile.append(p)
+    return out
+
+
+def _sha(chemin):
+    h = hashlib.sha256()
+    try:
+        with open(chemin, "rb", buffering=0) as f:
+            while True:
+                b = f.read(1 << 20)
+                if not b:
+                    break
+                h.update(b)
+        return h.hexdigest()
+    except OSError as e:
+        return "illisible:%s" % e.errno
+
+
+def hacher(racine, chemins):
+    """{path: sha256} of the regular files given, four at a time."""
+    if not chemins:
+        return {}
+    with Pool(min(4, os.cpu_count() or 1)) as pool:
+        return dict(zip(chemins, pool.imap(_sha, [os.path.join(racine, p) for p in chemins], chunksize=64)))
+
+
+def manifeste(nom):
+    return os.path.join(BOITE, "empreinte-%s.json.gz" % nom)
+
+
+def couches():
+    """The volumes that have a fingerprint: the system disk, and /home when it is open."""
+    c = {"racine": RACINE}
+    if TEST or os.path.ismount(HOME_DISQUE):
+        c["home"] = HOME_DISQUE
+    return c
+
+
+# The total of a volume, computed by find, sort and sha256sum (2 seconds for
+# 450 000 entries; the same walk in Python takes 8): one record per entry -
+# for a file its rights, owner, size, dates and inode; for a link its target;
+# for anything else its nature, rights and owner - sorted, then hashed.
+_TOTAL = r"""cd "$1" && find . -xdev \
+  \( -path ./.osmo-valider -o -path ./.osmo-retour -o -path ./lost+found \
+     -o -path ./var/log/osmo-session.log -o -path ./var/log/osmo-session.log.nouv \) -prune -o \
+  \( -type f -printf 'f %m %U %G %s %T@ %C@ %i %p\0' \) -o \
+  \( -type l -printf 'l %m %U %G %l\t%p\0' \) -o \
+  \( -printf '%y %m %U %G %p\0' \) 2>/dev/null | LC_ALL=C sort -z --parallel=4 -S 256M | sha256sum | cut -d' ' -f1"""
+
+
+def total_meta(racine):
+    """ONE SHA-256 for a whole volume, from what the file system says of every entry."""
+    r = subprocess.run(["bash", "-c", _TOTAL, "total", racine], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def total_contenu(etat):
+    """ONE SHA-256 for the CONTENT of a whole volume: every file's own SHA-256."""
+    h = hashlib.sha256()
+    for p in sorted(etat):
+        if etat[p][0] == "f":
+            h.update(json.dumps([p, etat[p][8]], ensure_ascii=True).encode() + b"\n")
+    return h.hexdigest()
+
+
+def totaux():
+    try:
+        with open(TOTAUX) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def charger(nom):
+    try:
+        with gzip.open(manifeste(nom), "rt", encoding="utf-8", errors="surrogateescape") as f:
+            json.loads(f.readline())
+            return {r[0]: r[1:] for r in (json.loads(l) for l in f)}
+    except (OSError, ValueError, EOFError):
+        return None
+
+
+def boite_rw(oui):
+    if TEST:
+        return True
+    return subprocess.run(["mount", "-o", "remount,%s" % ("rw" if oui else "ro"), BOITE],
+                          capture_output=True).returncode == 0
+
+
+def cle_sceau(creer=False):
+    """The seal's key, from the encrypted /home (None when /home is closed)."""
+    for base in (HOME_DISQUE, "/home"):
+        try:
+            with open(os.path.join(base, CLE), "rb") as f:
+                k = f.read().strip()
+            if len(k) >= 32:
+                return k
+        except OSError:
+            pass
+    if not creer or not (TEST or os.path.ismount(HOME_DISQUE)):
+        return None
+    # written on the volume itself (not in the RAM layer of /home, which a
+    # wiped session would take with it)
+    k = secrets.token_hex(32).encode()
+    rw = TEST or subprocess.run(["mount", "-o", "remount,rw", HOME_DISQUE], capture_output=True).returncode == 0
+    try:
+        d = os.path.join(HOME_DISQUE, os.path.dirname(CLE))
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        with open(os.open(os.path.join(HOME_DISQUE, CLE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+            f.write(k + b"\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        k = None
+    finally:
+        if rw and not TEST:
+            subprocess.run(["mount", "-o", "remount,ro", HOME_DISQUE], capture_output=True)
+    return k
+
+
+def signer(cle):
+    with open(TOTAUX, "rb") as f:
+        return hmac.new(cle, f.read(), hashlib.sha256).hexdigest()
+
+
+def prendre():
+    """The fingerprint of every volume, after a commit: its two totals in
+    empreinte.json (what the boot compares), its detail next to it (what
+    explains a difference). Only what changed is read again."""
+    if not TEST and not os.path.ismount(BOITE):
+        dire("%s n est pas monte : pas d empreinte" % BOITE)
+        return 0
+    t0 = time.monotonic()
+    cle = cle_sceau(creer=True)            # before /home is walked: the key is one of its files
+    tot, pris, relus = totaux(), {}, 0
+    for nom, racine in couches().items():
+        ancien = charger(nom)
+        etat = parcourir(racine)
+        a_lire = []
+        for p, r in etat.items():
+            if r[0] != "f":
+                continue
+            v = ancien.get(p) if ancien else None
+            # unchanged since the last fingerprint (a commit is a trusted
+            # moment): its hash is kept
+            if v and v[0] == "f" and v[4:8] == r[4:8] and v[8] and not v[8].startswith("illisible"):
+                r[8] = v[8]
+            else:
+                a_lire.append(p)
+        for p, h in hacher(racine, a_lire).items():
+            etat[p][8] = h
+        relus += len(a_lire)
+        pris[nom] = etat
+        tot[nom] = {"meta": total_meta(racine), "contenu": total_contenu(etat), "entrees": len(etat),
+                    "pris": time.strftime("%F %T"), "disque": racine}
+    if not boite_rw(True):
+        dire("boite en lecture seule : empreinte non ecrite")
+        return 1
+    try:
+        for nom, etat in pris.items():
+            tmp = manifeste(nom) + ".nouv"
+            with gzip.open(tmp, "wt", encoding="utf-8", errors="surrogateescape", compresslevel=1) as f:
+                f.write(json.dumps(tot[nom]) + "\n")
+                for p in sorted(etat):
+                    f.write(json.dumps([p] + etat[p], ensure_ascii=True) + "\n")
+            os.replace(tmp, manifeste(nom))
+        with open(TOTAUX + ".nouv", "w") as f:
+            json.dump(tot, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(TOTAUX + ".nouv", TOTAUX)
+        if cle:
+            with open(SCEAU + ".nouv", "w") as f:
+                f.write(signer(cle) + "\n")
+            os.replace(SCEAU + ".nouv", SCEAU)
+        os.sync()
+    finally:
+        boite_rw(False)
+    for nom in pris:
+        dire("%-6s sha256 %s  (%d entrees)" % (nom, tot[nom]["meta"], tot[nom]["entrees"]))
+    dire("empreinte prise : %d fichier(s) relu(s), %.0f s%s" % (
+        relus, time.monotonic() - t0, "" if cle else " (non scellee : /home ferme)"))
+    return 0
+
+
+def comparer(nom, racine, complet=False):
+    """(reference, differences) between a volume and its fingerprint.
+    FAST PATH: the volume's total is computed again from the 2-second walk and
+    compared with the one on the box - equal, nothing more is read. Different
+    (or complet): the detail is loaded and every difference listed.
+    reference is None when the volume has no fingerprint."""
+    ref = totaux().get(nom)
+    if not ref:
+        return None, None
+    if not complet and total_meta(racine) == ref["meta"]:
+        return ref, []
+    etat = parcourir(racine)
+    ancien = charger(nom)
+    if ancien is None:
+        return ref, [("MODIFIE", "", "empreinte totale differente, et le detail (%s) a disparu de la boite" % manifeste(nom))]
+    diffs = []
+    for p in sorted(set(ancien) - set(etat)):
+        diffs.append(("SUPPRIME", p, ""))
+    for p in sorted(set(etat) - set(ancien)):
+        diffs.append(("AJOUTE", p, {"d": "repertoire", "l": "lien -> " + str(etat[p][8]), "f": "%d octets" % etat[p][4]}.get(etat[p][0], "")))
+    a_lire = []
+    for p in sorted(set(etat) & set(ancien)):
+        v, r = ancien[p], etat[p]
+        quoi = []
+        if v[0] != r[0]:
+            quoi.append("nature")
+        if v[1] != r[1]:
+            quoi.append("droits %o -> %o" % (v[1], r[1]))
+        if v[2:4] != r[2:4]:
+            quoi.append("proprietaire %s:%s -> %s:%s" % (v[2], v[3], r[2], r[3]))
+        if r[0] == "l" and v[8] != r[8]:
+            quoi.append("lien -> %s" % r[8])
+        if r[0] == "f" and v[0] == "f":
+            if v[4] != r[4]:
+                quoi.append("taille %d -> %d" % (v[4], r[4]))
+            elif v[5] != r[5]:
+                quoi.append("date de modification")
+            elif v[6] != r[6] or v[7] != r[7]:
+                quoi.append("fichier remplace ou reecrit (inode / date de changement)")
+            if complet and not quoi:
+                a_lire.append(p)
+        if quoi:
+            diffs.append(("MODIFIE", p, ", ".join(quoi)))
+    if a_lire:
+        for p, h in hacher(racine, a_lire).items():
+            if h != ancien[p][8]:
+                diffs.append(("MODIFIE", p, "CONTENU different, dates et inode intacts (maquillage)"))
+    if not diffs and not complet:
+        diffs.append(("MODIFIE", "", "empreinte totale differente de celle de la boite, sans difference dans le detail : c est l empreinte de la boite qui a ete changee"))
+    return ref, diffs
+
+
+def texte_alerte(titre, diffs, tete):
+    l = [titre, "empreinte du %s, %d entrees ; disque : %s ; sha256 attendu %s" % (
+        (tete or {}).get("pris", "?"), (tete or {}).get("entrees", 0), (tete or {}).get("disque", "?"),
+        (tete or {}).get("meta", "?")), "%d difference(s) :" % len(diffs)]
+    l += ["  %-8s /%s%s" % (k, p, ("  (%s)" % d) if d else "") for k, p, d in diffs]
+    return "\n".join(l) + "\n"
+
+
+def alerter(titre, diffs, tete):
+    """The flag every warning reads, and the record in the black box."""
+    txt = texte_alerte(titre, diffs, tete)
+    try:
+        with open(os.open(ALERTE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), "a") as f:
+            f.write(txt + "\n")
+    except OSError:
+        pass
+    try:
+        subprocess.run(["/usr/local/sbin/osmo-diffs", "alerte"], input=txt, text=True, timeout=120,
+                       capture_output=True)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return txt
+
+
+def console_alerte(titre, diffs):
+    """The red screen, and the one question. True: the /home passphrase may be asked."""
+    for cmd in (["plymouth", "quit"], ["chvt", "1"]):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        c = os.open(CONSOLE, os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return False
+    barre = "#" * 76
+    l = ["\033[2J\033[H\a", "\033[5;1;31m" + barre + FIN, ROUGE + barre,
+         "", "   !!!  " + titre + "  !!!", "",
+         "   Le disque systeme n est PAS celui que la derniere session a laisse :",
+         "   %d difference(s) avec son empreinte (boite noire)." % len(diffs), ""]
+    for k, p, d in diffs[:14]:
+        l.append(("     %-8s /%s%s" % (k, p, ("  (%s)" % d) if d else ""))[:118])
+    if len(diffs) > 14:
+        l.append("     ... et %d autre(s) : %s, ou osmo-empreinte controler" % (len(diffs) - 14, ALERTE))
+    l += ["", "   Quelqu un a ecrit sur ce disque MACHINE ETEINTE (cle live, disque sorti),",
+          "   ou tu l as fait toi-meme hors session sans reprendre l empreinte,",
+          "   ou une ecriture coupee par une panne de courant vient d etre terminee.",
+          "   NE DONNE PAS la phrase de /home a ce systeme sans savoir d ou cela vient :",
+          "   un systeme modifie peut la retenir.",
+          "", barre + FIN, "\033[5;1;31m" + barre + FIN, "",
+          ROUGE + "   Taper OUI (en majuscules) pour demander quand meme la phrase de /home." + FIN,
+          "   Entree seule : demarrer SANS /home (session root, rien de chiffre n est ouvert).",
+          "   (2 minutes : sans reponse, sans /home)", "", "   > "]
+    os.write(c, ("\r\n".join(l)).encode())
+    rep = b""
+    fin = time.monotonic() + 120
+    while time.monotonic() < fin and not rep.endswith(b"\n"):
+        r, _w, _e = select.select([c], [], [], 1.0)
+        if r:
+            try:
+                d = os.read(c, 64)
+            except OSError:
+                break
+            if not d:
+                break
+            rep += d
+    ok = rep.strip() == b"OUI"
+    os.write(c, ("\r\n   %s\r\n" % ("la phrase de /home va etre demandee - a tes risques." if ok
+                                    else "demarrage SANS /home.")).encode())
+    os.close(c)
+    return ok
+
+
+def demarrage():
+    """At boot, BEFORE the /home passphrase: the system disk."""
+    if not TEST and not os.path.ismount(BOITE):
+        return 0
+    tete, diffs = comparer("racine", RACINE)
+    if diffs is None:
+        # no fingerprint. A fresh installation: taken now, quietly. A box that
+        # already holds session records: it was there, and it is gone
+        try:
+            n = len([f for f in os.listdir(os.path.join(BOITE, "journal"))
+                     if f.endswith(".age") and "_installation." not in f])
+        except OSError:
+            n = 0
+        if n == 0:
+            return prendre()
+        titre, tete = "L EMPREINTE DU SYSTEME A DISPARU DE LA BOITE NOIRE", {}
+        diffs = [("SUPPRIME", TOTAUX.lstrip("/"), "plus rien ne prouve l etat du disque")]
+    elif not diffs:
+        dire("disque systeme conforme : sha256 %s (%s)" % (tete["meta"], tete.get("pris")))
+        return 0
+    else:
+        titre = "LE DISQUE SYSTEME A ETE MODIFIE HORS SESSION"
+    alerter(titre, diffs, tete)
+    dire("%s : %d difference(s)" % (titre, len(diffs)))
+    if not console_alerte(titre, diffs):
+        try:
+            open(SANS_HOME, "w").close()
+        except OSError:
+            pass
+    return 0
+
+
+def home():
+    """unlock-home, the volume just opened and still read-only, before /home
+    is put over it: the /home volume against its fingerprint. The passphrase
+    has been typed by then - this says, it cannot prevent."""
+    if not (TEST or os.path.ismount(HOME_DISQUE)) or not (TEST or os.path.ismount(BOITE)):
+        return 0
+    tete, diffs = comparer("home", HOME_DISQUE)
+    if diffs is None:
+        return 0                          # never taken yet: it is at the next commit
+    if not diffs:
+        dire("volume /home conforme : sha256 %s (%s)" % (tete["meta"], tete.get("pris")))
+        return 0
+    titre = "LE VOLUME /home A ETE MODIFIE HORS SESSION"
+    alerter(titre, [(k, "home/" + p, d) for k, p, d in diffs], tete)
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+        l = ["", ROUGE + "#" * 76, "   !!!  " + titre + "  !!!",
+             "   %d difference(s) avec son empreinte (boite noire) :" % len(diffs)]
+        l += [("     %-8s /home/%s%s" % (k, p, ("  (%s)" % d) if d else ""))[:118] for k, p, d in diffs[:12]]
+        l += ["   Detail : %s" % ALERTE, "#" * 76 + FIN, ""]
+        os.write(c, "\r\n".join(l).encode())
+        os.close(c)
+        time.sleep(12)
+    except OSError:
+        pass
+    return 3
+
+
+def fond():
+    """The complete control, after boot: the CONTENT of every volume, read
+    again. Says so on every terminal and on the desktop."""
+    tout = []
+    for nom, racine in couches().items():
+        tete, diffs = comparer(nom, racine, complet=True)
+        if diffs:
+            pre = "" if nom == "racine" else "home/"
+            tout += [(k, pre + p, d) for k, p, d in diffs]
+            ref = tete
+    try:
+        open(FOND_FAIT, "w").close()
+    except OSError:
+        pass
+    if not tout:
+        return 0
+    # what the boot control already reported is not reported twice
+    deja = ""
+    try:
+        with open(ALERTE) as f:
+            deja = f.read()
+    except OSError:
+        pass
+    nouveaux = [d for d in tout if ("/%s" % d[1]) not in deja]
+    if nouveaux:
+        txt = alerter("CONTENU DU DISQUE MODIFIE HORS SESSION (controle complet)", nouveaux, ref)
+        try:
+            subprocess.run(["wall"], input="osmo-empreinte : " + txt[:3000], text=True, timeout=10, capture_output=True)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return 0
+
+
+def sceau():
+    """Once /home is open: the totals on the box are the ones this machine sealed."""
+    if not os.path.exists(TOTAUX):
+        return 0
+    cle = cle_sceau()
+    if cle is None:
+        return 0                              # /home closed, or never sealed yet
+    try:
+        with open(SCEAU) as f:
+            attendu = f.read().strip()
+    except OSError:
+        attendu = ""
+    if attendu and hmac.compare_digest(attendu, signer(cle)):
+        return 0
+    txt = alerter("L EMPREINTE DE LA BOITE NOIRE N EST PAS CELLE QUE CETTE MACHINE A SCELLEE",
+                  [("MODIFIE", TOTAUX.lstrip("/"), "refaite hors session : le controle du demarrage a compare le disque a une empreinte qui n est pas la sienne")], {})
+    dire(txt.splitlines()[0])
+    try:
+        subprocess.run(["wall"], input="osmo-empreinte : " + txt, text=True, timeout=10, capture_output=True)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return 3
+
+
+def rappel():
+    """Desktop: the warning as a dialog (waits for the background control)."""
+    for _ in range(90):
+        if os.path.exists(FOND_FAIT) or os.path.exists(ALERTE):
+            break
+        time.sleep(2)
+    time.sleep(1)
+    try:
+        with open(ALERTE) as f:
+            txt = f.read()
+    except OSError:
+        return 0
+    corps = ('<span foreground="red" weight="bold" size="x-large">DISQUE SYSTEME MODIFIE HORS SESSION</span>\n\n'
+             '<span foreground="red">Le systeme n est pas celui que la derniere session a laisse.\n'
+             'Quelqu un a pu ecrire sur le disque machine eteinte.</span>\n\n<tt>%s</tt>\n\n'
+             'Detail : %s   -   sudo osmo-empreinte controler --complet') % (
+                 txt[:1500].replace("&", "&amp;").replace("<", "&lt;"), ALERTE)
+    try:
+        subprocess.run(["zenity", "--error", "--no-wrap", "--title", "osmo-operator : ALERTE", "--text", corps])
+    except OSError:
+        pass
+    return 0
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "controler"
+    if cmd == "rappel":
+        return rappel()
+    if os.geteuid() != 0 and not TEST:
+        sys.exit("osmo-empreinte : root requis")
+    if cmd == "prendre":
+        return prendre()
+    if cmd == "demarrage":
+        return demarrage()
+    if cmd == "fond":
+        return fond()
+    if cmd == "sceau":
+        return sceau()
+    if cmd == "home":
+        return home()
+    if cmd == "controler":
+        complet, rc = "--complet" in sys.argv[2:], 0
+        for nom, racine in couches().items():
+            tete, diffs = comparer(nom, racine, complet=complet)
+            if diffs is None:
+                dire("%-6s pas d empreinte : osmo-empreinte prendre" % nom)
+                rc = rc or 2
+            elif not diffs:
+                dire("%-6s conforme : sha256 %s  (%s, %d entrees%s)" % (
+                    nom, tete["meta"], tete.get("pris"), tete.get("entrees", 0), ", contenu relu" if complet else ""))
+            else:
+                sys.stdout.write(ROUGE + texte_alerte("%s DIFFERE DE SON EMPREINTE" % racine, diffs, tete) + FIN)
+                rc = 3
+        return rc
+    sys.exit("usage : osmo-empreinte prendre | controler [--complet] | demarrage | home | fond | sceau | rappel")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -408,6 +408,12 @@ appliquer_couche() {
     return $rc
 }
 
+EMPREINTE=/usr/local/sbin/osmo-empreinte
+empreinte_prendre() {
+    [ -x "$EMPREINTE" ] || return 0
+    "$EMPREINTE" prendre >> "$TRACE" 2>&1 || trace "empreinte du disque NON prise : le prochain demarrage criera"
+}
+
 # appliquer : every layer. Each one is atomic on its own file system; / is
 # written first, /home last. NB_ECRITS: what was really written.
 appliquer() {
@@ -437,6 +443,10 @@ appliquer() {
         a=$((PROGRES_BOITE + (100 - PROGRES_BOITE) * fait / tot))
         appliquer_couche "$h" "$b" "$pre" "$id" "$de" "$a" < /dev/null || rc=1
     done < <(couches)
+    # the disk has changed, by a commit the box knows: its fingerprint again
+    # (total SHA-256 of / and of /home on the box - what the next boot compares)
+    progres 97 "empreinte du disque"
+    empreinte_prendre
     progres 100 "termine"
     NB_ECRITS=$(awk '{s+=$1} END{print s+0}' "$ETAT/nb" 2>/dev/null); rm -f "$ETAT/nb"
     return $rc
@@ -639,6 +649,9 @@ EOF
         poser_grub_boite
         systemctl enable osmo-fin-session.service >/dev/null 2>&1 \
             || log "osmo-fin-session.service non active" >&2
+        # the disk against its fingerprint at every boot (osmo-empreinte)
+        systemctl enable osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1 \
+            || log "osmo-empreinte.service non active" >&2
         actualiser
         log "/ en lecture seule (RAM) ; a l extinction, la phrase de /home ecrit la session, sinon tout est efface"
         ;;
@@ -897,6 +910,7 @@ EOF
                 trace "defaire : remontage en ecriture de $b impossible"; rc=1
             fi
         done < <(couches)
+        empreinte_prendre
         journal_disque
         if [ "$rc" = 0 ]; then
             vert "commit $id defait sur le disque (visible au prochain demarrage ; reste : $(retours | wc -l))"
@@ -910,8 +924,20 @@ EOF
         # itself: sudo overlayroot-chroot osmo-racine-live actualiser
         root_requis
         if live; then
-            log "a faire sur le disque lui-meme : sudo overlayroot-chroot osmo-racine-live actualiser" >&2
-            exit 1
+            # from the running session: done on the disk itself, then RECORDED -
+            # the box gets a record and the disk's fingerprint is taken again,
+            # otherwise the next boot would (rightly) cry « modified outside a
+            # session »
+            command -v overlayroot-chroot >/dev/null 2>&1 || { log "overlayroot-chroot absent" >&2; exit 1; }
+            trace "actualiser : initramfs et grub, sur le disque"
+            overlayroot-chroot /usr/local/sbin/osmo-racine-live actualiser; rc=$?
+            if [ -x /usr/local/sbin/osmo-diffs ]; then
+                echo "osmo-racine-live actualiser : initramfs et grub reconstruits sur le disque (code $rc)" \
+                    | /usr/local/sbin/osmo-diffs alerte >/dev/null 2>&1
+            fi
+            empreinte_prendre
+            journal_disque
+            exit $rc
         fi
         poser_initramfs
         poser_grub_boite
@@ -925,7 +951,7 @@ EOF
             exit 1
         fi
         printf '# /etc/overlayroot.conf - osmo-racine-live retire : / en lecture-ecriture\noverlayroot=""\n' > "$CONF"
-        systemctl disable osmo-fin-session.service >/dev/null 2>&1
+        systemctl disable osmo-fin-session.service osmo-empreinte.service osmo-empreinte-fond.service >/dev/null 2>&1
         # shellcheck disable=SC2086
         rm -f "$HOOK" "$SCRIPT" "$GRUB_BOITE" $ANCIENS
         actualiser

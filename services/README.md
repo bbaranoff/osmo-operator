@@ -20,6 +20,7 @@ operator starts the bench (desktop icon, `launch.sh`, or `systemctl`).
 | `osmo-inscription.service` | association of the phones (Network Monitor) with this node, port 8088: invitations and QR code, SIP accounts in Asterisk, Bluetooth line, the bench read from the phone (`tools/osmo-inscription.py`); driven from osmo-gtk, tab « Telephones » |
 | `osmo-fin-session.service` | installed bench: at shutdown the `/home` passphrase writes the session to the disk, otherwise it is wiped (`osmo-racine-live fin`) |
 | `osmo-diffs.service` / `osmo-diffs-init.service` | the black box: read-only for everybody, keys and passphrase at the first boot of the installed system |
+| `osmo-empreinte.service` / `osmo-empreinte-fond.service` | the disk against its fingerprint: total SHA-256 of `/` compared at every boot before the `/home` passphrase (red warning when written to outside a session), then the complete control in the background |
 | `osmo-supplements.service` | first boot: installs the supplements chosen in the installer (`tools/osmo-supplements-firstboot.sh`) |
 | `open5gs-webui.service` | Open5GS WebUI, 4G subscriber console (port 8999, MongoDB) |
 | `80-osmo-operator.preset` | systemd preset: all project units disabled at boot |
