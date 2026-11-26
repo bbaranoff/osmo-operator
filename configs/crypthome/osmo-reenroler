@@ -12,6 +12,7 @@
 #   3  le code sur un telephone (ou un autre telephone) osmo-tpm changer --telephone
 #   4  tout refaire depuis zero                       osmo-tpm oter, puis poser
 #   5  la signature du disque dans la puce            osmo-empreinte ancrer
+#   6  la fin de la boite noire tenue par la puce     osmo-empreinte boite-ancrer
 #
 # Chacune demande la phrase de /home : rien n est ecrit sans elle.
 set -u
@@ -45,6 +46,7 @@ etat() {
         echo "  quelqu un a peut-etre touche a la machine."
     fi
     "$E" signature 2>/dev/null | sed 's/^osmo-empreinte : /  /'
+    "$E" boite-tete 2>/dev/null | sed 's/^osmo-empreinte : /  /'
 }
 
 while :; do
@@ -67,6 +69,7 @@ while :; do
     echo "  3. Le code sur un telephone, a la place de la phrase (ou un nouveau telephone)"
     echo "  4. Tout refaire depuis zero (retirer la puce du demarrage, puis la remettre)"
     echo "  5. Remettre la signature du disque dans la puce"
+    echo "  6. Faire tenir la fin de la boite noire par la puce (une troncature se verra)"
     echo "  q. Rien, fermer"
     read -r -p "Ton choix : " c < /dev/tty || c=q
     case "$c" in
@@ -96,7 +99,13 @@ while :; do
             titre "La signature du disque dans la puce"
             echo "La cle qui signe l empreinte du disque est ancree dans la puce : on ne peut pas la remplacer sans ta phrase."
             "$E" ancrer || rouge "Rien n a ete change." ;;
+        6)
+            titre "La fin de la boite noire, tenue par la puce"
+            echo "La puce garde un compteur qu on ne peut que faire avancer : chaque enregistrement de la"
+            echo "boite l avance. Si quelqu un retire les derniers enregistrements, le compteur ne colle"
+            echo "plus et la machine le dit. Ce que la boite contient aujourd hui est pris tel quel."
+            "$E" boite-ancrer || rouge "Rien n a ete change." ;;
         q|Q|"") echo "A bientot."; exit 0 ;;
-        *) echo "Tape 1, 2, 3, 4, 5 ou q." ;;
+        *) echo "Tape 1, 2, 3, 4, 5, 6 ou q." ;;
     esac
 done

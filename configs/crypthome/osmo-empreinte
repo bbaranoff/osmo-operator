@@ -38,6 +38,11 @@
 #   osmo-empreinte sceau              unlock-home, the volume just opened: the
 #                                     totals on the box are the ones that were
 #                                     sealed (red on the console otherwise)
+#   osmo-empreinte boite-ancrer       THE END OF THE BLACK BOX HELD BY THE TPM:
+#                                     an extend-only index, started at the
+#                                     box's last record (passphrase)
+#   osmo-empreinte boite-tete         the box against that index: nothing
+#                                     removed at its end (no passphrase)
 #   osmo-empreinte etats-signer       the past states of the system (in the
 #                                     /home volume) chained and signed -
 #                                     osmo-racine-live, after each write
@@ -992,6 +997,193 @@ def ancre_lue():
         return None
     r = tpm(["tpm2_nvread", NV, "-C", NV, "-s", "32"])
     return r.stdout if r is not None and r.returncode == 0 and len(r.stdout) == 32 else None
+
+
+# ── THE HEAD OF THE BLACK BOX, IN THE TPM ───────────────────────────────────
+# The chain of the box shows a record changed or removed in the middle, never
+# a TRUNCATED END: the last records deleted leave a valid chain. Nothing on a
+# disk can hold the head against root - root rewrites it. The TPM can: an NV
+# index of type EXTEND behaves like a PCR that survives the reboots. Every
+# record written extends it with the SHA-256 of the record file
+#     valeur = SHA-256( valeur || SHA-256(enregistrement) )
+# Anybody may extend it (no secret: the machine records without one), nobody
+# can set it back or to a chosen value - only its owner can remove it, and
+# the owner's secret is the /home passphrase. Replaying the records of the
+# box from the one the index started at must give the value the TPM holds:
+# a record removed at the end, replaced, or written without passing by here
+# no longer does. Root can still DESTROY records - it can no longer hide it.
+NV_BOITE = os.environ.get("OSMO_EMPREINTE_NV_BOITE", "0x1800A51")
+TETE_DEPUIS = os.path.join(BOITE, "tete.depuis")        # the first record the index was extended with
+JOURNAL_BOITE = os.path.join(BOITE, "journal")
+
+
+def _enregistrements():
+    try:
+        return sorted(f for f in os.listdir(JOURNAL_BOITE) if f.endswith(".age"))
+    except OSError:
+        return []
+
+
+def _sha_fichier(chemin):
+    return bytes.fromhex(_sha(chemin))
+
+
+def tete_lue():
+    """The 32 bytes the TPM holds; b'' when the index exists but was never
+    extended; None when this machine has no such index."""
+    if TEST:
+        try:
+            with open(os.path.join(BOITE, "tete.nv"), "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+    if not tpm_present():
+        return None
+    r = tpm(["tpm2_nvreadpublic", NV_BOITE])
+    if r is None or r.returncode != 0:
+        return None
+    r = tpm(["tpm2_nvread", NV_BOITE, "-C", NV_BOITE, "-s", "32"])
+    return r.stdout if r is not None and r.returncode == 0 and len(r.stdout) == 32 else b""
+
+
+def tete_etendre(chemin):
+    """osmo-diffs, after EVERY record: the index extended with the record's
+    SHA-256. No secret. 0 done or no index; 1 the TPM refused (said loudly:
+    the next control will find the box and the TPM apart)."""
+    if tete_lue() is None:
+        return 0
+    try:
+        h = _sha_fichier(chemin)
+    except (OSError, ValueError):
+        return 1
+    if TEST:
+        with open(os.path.join(BOITE, "tete.nv"), "rb") as f:
+            v = f.read() or bytes(32)
+        with open(os.path.join(BOITE, "tete.nv"), "wb") as f:
+            f.write(hashlib.sha256(v + h).digest())
+        return 0
+    r = tpm(["tpm2_nvextend", "-C", NV_BOITE, NV_BOITE, "-i", "=0"], (h,))
+    if r is None or r.returncode != 0:
+        dire("LA TETE DE LA BOITE N A PAS PU ETRE ETENDUE DANS LE TPM pour %s : le prochain controle les trouvera differents" % os.path.basename(chemin))
+        return 1
+    return 0
+
+
+def tete_controler(parle=True):
+    """No passphrase. 0: the box is whole up to its last record; 2: no index
+    (the box's end is not held by the TPM); 3: THE BOX AND THE TPM DIFFER."""
+    nv = tete_lue()
+    if nv is None:
+        if parle:
+            dire("tete de la boite : pas tenue par le TPM (icone « Reenroler », ou : sudo osmo-empreinte boite-ancrer)")
+        return 2
+    tous = _enregistrements()
+    try:
+        with open(TETE_DEPUIS) as f:
+            depuis = f.readline().strip()
+    except OSError:
+        depuis = ""
+    v = bytes(32)
+    n = 0
+    if depuis in tous:
+        for nom in tous[tous.index(depuis):]:
+            v = hashlib.sha256(v + _sha_fichier(os.path.join(JOURNAL_BOITE, nom))).digest()
+            n += 1
+    if n and v == nv:
+        if parle:
+            dire("tete de la boite : tenue par le TPM et conforme - %d enregistrement(s) depuis %s, rien ne manque a la fin" % (n, depuis))
+        return 0
+    if parle:
+        sys.stdout.write(ROUGE + "LA BOITE NOIRE N EST PAS CELLE QUE LE TPM A VUE S ECRIRE : un enregistrement a ete retire a la fin,\n"
+                         "remplace, ou ecrit sans passer par le TPM (depuis %s ; TPM %s, boite %s)\n" % (
+                             depuis or "?", nv.hex()[:16] or "jamais etendu", v.hex()[:16]) + FIN)
+    return 3
+
+
+def boite_ancrer(phrase):
+    """With the passphrase (the TPM owner's secret): the index (re)made, and
+    started at the LAST record of the box as it is now - what is there today
+    is taken as it is found; from now on nothing can be removed unseen."""
+    if not tpm_present() and not TEST:
+        dire("pas de TPM utilisable : la tete de la boite ne peut pas y etre tenue")
+        return 1
+    tous = _enregistrements()
+    if not tous:
+        dire("la boite n a encore aucun enregistrement : rien a ancrer")
+        return 1
+    if TEST:
+        if not phrase:
+            return 1
+        open(os.path.join(BOITE, "tete.nv"), "wb").close()
+    else:
+        secret = secret_tpm(phrase)
+        if secret is None or not proprietaire_pose():
+            dire("le TPM n a pas encore de proprietaire lie a ta phrase : d abord sudo osmo-empreinte ancrer")
+            return 1
+        r = tpm(["tpm2_changeauth", "-c", "owner", "-p", "@0", "@1"], (secret, secret))
+        if r is None or r.returncode != 0:
+            dire("phrase de /home refusee par le TPM (ce n est pas le secret de son proprietaire) : rien n est change")
+            return 1
+        if tpm(["tpm2_nvreadpublic", NV_BOITE]).returncode == 0:
+            r = tpm(["tpm2_nvundefine", NV_BOITE, "-C", "o", "-P", "@0"], (secret,))
+            if r.returncode != 0:
+                dire("ancien index non retire : " + r.stderr.decode(errors="replace").strip()[-120:])
+                return 1
+        # type EXTEND (nt=0x4): written by anybody, read by anybody, only ever
+        # extended; removed by the owner alone
+        r = tpm(["tpm2_nvdefine", NV_BOITE, "-C", "o", "-s", "32", "-g", "sha256",
+                 "-a", "nt=0x4|authwrite|authread|ownerread|no_da", "-P", "@0"], (secret,))
+        if r.returncode != 0:
+            dire("index du TPM non cree : " + r.stderr.decode(errors="replace").strip()[-160:])
+            return 1
+    if not boite_rw(True):
+        return 1
+    try:
+        with open(TETE_DEPUIS + ".nouv", "w") as f:
+            f.write(tous[-1] + "\n")
+        os.replace(TETE_DEPUIS + ".nouv", TETE_DEPUIS)
+        os.sync()
+    finally:
+        boite_rw(False)
+    if tete_etendre(os.path.join(JOURNAL_BOITE, tous[-1])) != 0 or tete_controler(parle=False) != 0:
+        dire("LA TETE N A PAS PU ETRE POSEE DANS LE TPM (l index est retire) : la boite reste comme avant")
+        if not TEST:
+            tpm(["tpm2_nvundefine", NV_BOITE, "-C", "o", "-P", "@0"], (secret,))
+        else:
+            os.unlink(os.path.join(BOITE, "tete.nv"))
+        return 1
+    dire("tete de la boite ancree dans le TPM a partir de %s : un enregistrement retire a la fin se verra" % tous[-1])
+    return 0
+
+
+def tete_alerte():
+    """unlock-home, /home just opened (with « sceau »): the box against the
+    TPM. Different: red on the console, the flag every warning reads, a record."""
+    if tete_controler(parle=False) != 3:
+        return 0
+    titre = "LA BOITE NOIRE A ETE TRONQUEE OU REECRITE (ELLE N EST PAS CELLE QUE LE TPM A VUE)"
+    try:
+        with open(ALERTE) as f:
+            if "TRONQUEE OU REECRITE" in f.read():
+                return 3
+    except OSError:
+        pass
+    txt = alerter(titre, [("MODIFIE", "var/lib/osmo-diffs/journal", "des enregistrements manquent a la fin, ont ete remplaces, ou ont ete ecrits sans le TPM")], {})
+    dire(txt.splitlines()[0])
+    if TEST:
+        return 3
+    try:
+        c = os.open(CONSOLE, os.O_WRONLY | os.O_NOCTTY)
+        l = ["", "\a" + ROUGE + "#" * 76, "   !!!  LA BOITE NOIRE A ETE TRONQUEE OU REECRITE  !!!",
+             "   Ce qu elle contient n est pas ce que la puce de securite a vu s ecrire :",
+             "   des enregistrements ont ete retires a la fin, ou remplaces.",
+             "   Detail : sudo osmo-boite fsck", "#" * 76 + FIN, ""]
+        os.write(c, "\r\n".join(l).encode())
+        os.close(c)
+        time.sleep(12)
+    except OSError:
+        pass
+    return 3
 
 
 def pub_empreinte():
@@ -2203,7 +2395,14 @@ def main():
     if cmd == "fond":
         return fond()
     if cmd == "sceau":
-        return sceau()
+        rc = sceau()
+        return tete_alerte() or rc
+    if cmd == "boite-etendre" and len(sys.argv) > 2:
+        return tete_etendre(sys.argv[2])
+    if cmd == "boite-tete":
+        return tete_controler()
+    if cmd == "boite-ancrer":
+        return boite_ancrer(lire_phrase())
     if cmd == "home":
         return home()
     if cmd == "controler":

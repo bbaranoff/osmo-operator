@@ -252,6 +252,9 @@ sceller() {
       cat; } | age -r "$(cat "$PUB")" -o "$nom" || return 1
     chmod 0444 "$nom"; sync
     [ "$TEST" = 1 ] || chattr +i "$nom" 2>/dev/null
+    # THE HEAD IN THE TPM (osmo-empreinte boite-ancrer): its extend-only index
+    # takes this record - from now on it cannot be removed unseen
+    [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte boite-etendre "$nom" >&2
     rm -f "$BASE/dernier.txt"     # left by an older version: nothing in clear
     echo "$nom"
 }
@@ -645,7 +648,6 @@ case "${1:-liste}" in
         shift
         if [ "${1:-}" = --phrase-stdin ]; then IFS= read -r a || a=""; shift; else lire_phrase a "phrase de /home (vider la boite noire) : "; fi
         if ! { [ "$TEST" = 1 ] || printf '%s' "$a" | phrase_de_home; }; then a=""; log "phrase de /home refusee : la boite n est PAS videe"; exit 1; fi
-        a=""
         note="${*:-aucune copie declaree}"
         d="$(dernier)"; nb="$(find "$JOURNAL" -maxdepth 1 -name '*.age' 2>/dev/null | wc -l)"
         fin_chaine="origine"; [ -n "$d" ] && fin_chaine="$(sha256sum "$d" | cut -d' ' -f1) $(basename "$d")"
@@ -660,6 +662,13 @@ case "${1:-liste}" in
             install -d -m 0700 "$PRIVE" 2>/dev/null
             printf '%s %s\n' "$(sha256sum "$nouveau" | cut -d' ' -f1)" "$(basename "$nouveau")" > "$PRIVE/.dernier-vu"
         fi
+        # the TPM held the head of the old chain: its index starts again at the
+        # first record of the new one (the passphrase is the owner's secret)
+        if [ -x /usr/local/sbin/osmo-empreinte ] && /usr/local/sbin/osmo-empreinte boite-tete >/dev/null 2>&1; [ $? != 2 ]; then
+            fermer
+            printf '%s\n' "$a" | /usr/local/sbin/osmo-empreinte boite-ancrer --phrase-stdin
+        fi
+        a=""
         log "boite videe : $nb enregistrement(s) retires ; la nouvelle chaine commence par $(basename "${nouveau:-?}")"
         ;;
     plein)

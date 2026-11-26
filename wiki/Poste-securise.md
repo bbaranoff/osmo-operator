@@ -254,6 +254,22 @@ Deux façons de s'en servir.
   Ce n'est pas un dépôt git : la machine écrit la boîte sans pouvoir la lire, ce qu'un
   dépôt ne permet pas ; ce sont les mêmes commandes qu'avant sous des noms connus.
 
+**La fin de la boîte, tenue par le TPM.** La chaîne de la boîte montre un enregistrement
+changé ou retiré au milieu, jamais une fin tronquée. Rien sur un disque ne tient la tête
+contre root. Le TPM le peut : un index NV de type « extension » (`0x1800A51`), comme un
+registre de mesure qui survit aux redémarrages. Chaque enregistrement écrit l'étend avec
+son SHA-256 ; tout le monde peut l'étendre (la machine enregistre sans secret), personne
+ne peut le ramener en arrière — seul son propriétaire peut le retirer, et son secret est
+la phrase de `/home`. Rejouer les enregistrements depuis celui où l'index a commencé doit
+donner la valeur que tient le TPM (`osmo-empreinte boite-tete`, sans phrase) : retirer les
+derniers, en remplacer un, en écrire un sans passer par là ne le donne plus. Contrôlé à
+chaque ouverture de `/home` — différent : écran rouge, alerte (donc plus de root invité),
+enregistrement. Posé par l'icône « Réenrôler », choix 6 (`osmo-empreinte boite-ancrer`,
+avec la phrase) ; ce que la boîte contient ce jour-là est pris tel quel. `osmo-boite fsck`
+dit « TOUT EST VERT » ou liste en rouge ce qui ne l'est pas. *Root peut toujours détruire
+des enregistrements : il ne peut plus le cacher.* Un enregistrement que le TPM a refusé
+d'étendre (panne) donne la même alerte.
+
 **La boîte à 80 %.** Une boîte pleine ne note plus rien. À partir de 80 % d'occupation, à
 l'ouverture de session, une fenêtre demande : en faire une copie (clé USB, autre disque)
 puis la vider, la vider sans copie, ou plus tard (`osmo-diffs plein`). La copie est un seul
@@ -337,6 +353,7 @@ condition, cela se voit ici avant d'être écrit.
 | Chaîne des états (`CHAINE`, `CHAINE.sig`) | `/home` (LUKS2), à côté des états | phrase home | phrase home, saisie (signature) ; retour à une chaîne plus ancienne non détecté |
 | Les mêmes, entre l'écriture et le rangement, ou écrits depuis une session invitée | disque système, en clair | **rien** (disque en main) jusqu'au rangement | phrase home |
 | Clé de la boîte | boîte, chiffrée (PBKDF2, 600 000) | phrase boîte | phrase boîte |
+| Tête de la boîte (fin de la chaîne) | TPM, index NV à extension `0x1800A51` | tous | étendre : tous ; ramener en arrière : personne ; retirer : phrase home (secret propriétaire du TPM) |
 | Graine du code, ou phrase secrète et PIN | objet scellé du TPM | bonne machine, bon état (et PIN) | rescellement |
 | Les mêmes, copie pour resceller, et PCR de référence | `/home`, coffre chiffré par la phrase (scrypt, 1 Gio) | phrase home, saisie | phrase home, saisie |
 | Micrologiciel, GRUB, noyau, initramfs, ESP | en clair | rien | détecté si le démarrage mesuré est posé |
