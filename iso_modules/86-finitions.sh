@@ -299,6 +299,9 @@ check-dist-upgrades=false
 release-check-time=4102444800
 GS
 chroot "$ROOTFS" glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true
+# and the units that look for a new release, whatever package brings them back
+chroot "$ROOTFS" systemctl --global mask update-notifier-release.path update-notifier-release.service >/dev/null 2>&1 || true
+chroot "$ROOTFS" systemctl mask update-notifier-motd.timer >/dev/null 2>&1 || true
 echo -e "  ${GREEN}✓${NC} pas de proposition de mise a niveau vers une autre version d Ubuntu (Prompt=never)"
 
 umount "$ROOTFS/var/cache/apt/archives" 2>/dev/null||true

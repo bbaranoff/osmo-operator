@@ -1,0 +1,19 @@
+#!/bin/bash
+# osmo-tpm-bienvenue - THE WELCOME OF A SECURED BENCH (autostart of the desktop
+# session, /etc/xdg/autostart/osmo-tpm-bienvenue.desktop).
+#
+# The installer cannot seal the TPM: the measures are those of the installed
+# system's own boot, not of the live key. So the FIRST session finishes the
+# installation: a window of the bench asks the /home passphrase, the secret
+# sentence and the PIN, then takes the fingerprint, anchors its signature and
+# seals (sudo osmo-tpm premier). Shown at every login UNTIL it is done, then
+# never again. Nothing on an ordinary Ubuntu, nothing in a guest root session.
+grep -qx 'premier=1' /etc/osmo-operator/options 2>/dev/null || exit 0
+[ -e /etc/osmo-tpm/actif ] || exit 0
+[ -s /var/lib/osmo-diffs/tpm/scelle ] && exit 0
+mountpoint -q /home 2>/dev/null || exit 0
+[ "$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null)" = 2 ] || exit 0
+R=/opt/GSM/osmo-operator
+[ -x "$R/tools/osmo-gtk-run.py" ] || exit 0
+exec python3 "$R/tools/osmo-gtk-run.py" --root --tty --keep-open --title "Bienvenue : le TPM de ce poste" \
+    -- /usr/local/sbin/osmo-tpm premier

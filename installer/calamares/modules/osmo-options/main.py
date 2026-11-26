@@ -9,16 +9,22 @@
 #                                (tools/osmo-supplements-firstboot.sh) runs at
 #                                the first boot, once the network answers;
 #                                OSMO_COMPTE: the account chosen in the installer
-#   /etc/osmo-operator/options   the TPM options ticked (all optional, none
-#                                posed by the installer - each needs the /home
-#                                passphrase on the installed machine):
-#                                  ancre=1        sudo osmo-empreinte ancrer
-#                                  mesure=totp    sudo osmo-tpm poser
-#                                  mesure=secret  sudo osmo-tpm poser --secret
-#                                (both measured boots ticked: the phone's, the
-#                                safer one). « osmo-tpm etat » reads this file
-#                                and says what is still to do; no reminder at
-#                                login.
+#   the KIND OF MACHINE (first box of the page, ticked by default):
+#     ticked    the SECURED BENCH, which REQUIRES A TPM 2.0. In the target:
+#               crypthome-postinstall (unlock-home asks the /home passphrase,
+#               guest root without it), the black box services, the measured
+#               boot marked (so that the initramfs built next already carries
+#               it), osmo-racine-live poser (/ in RAM, written at shutdown with
+#               the passphrase). The TPM itself cannot be sealed from here: the
+#               measures are those of the INSTALLED system's boot, not of this
+#               live key - the FIRST BOOT asks the secret sentence and the PIN
+#               right after the /home passphrase, then anchors and seals
+#               (osmo-tpm premier, called by unlock-home).
+#     unticked, or NO TPM 2.0 on this machine: an ordinary Ubuntu - none of
+#               the above. Without a TPM the box is greyed out by osmo-install;
+#               this job checks again and never sets the secured bench up.
+#   /etc/osmo-operator/options   session=securise|ubuntu, and for the bench:
+#                                ancre=1, mesure=secret|totp, premier=1
 import os
 
 import libcalamares
@@ -28,6 +34,15 @@ DRAPEAUX = {"multi": "--multi", "opencl": "--opencl", "claude": "--claude", "ext
             "gnuarm": "--gnuarm", "magnetite": "--magnetite", "trx": "--trx",
             "calypso-fw": "--calypso-fw", "fernvale": "--fernvale", "simcom": "--simcom"}
 PREFIXE = "osmo-option-"
+
+
+def tpm2():
+    """A TPM 2.0 the kernel sees: what the secured bench requires."""
+    try:
+        with open("/sys/class/tpm/tpm0/tpm_version_major") as f:
+            return f.read().strip() == "2"
+    except OSError:
+        return False
 
 
 def pretty_name():
@@ -88,14 +103,28 @@ def run():
             if not os.path.lexists(lien):
                 os.symlink(unite, lien)
     lignes = []
-    if "tpm-ancre" in choix:
-        lignes.append("ancre=1")
-    if "tpm" in choix:
-        lignes.append("mesure=totp")
-    elif "tpm-secret" in choix:
-        lignes.append("mesure=secret")
-    if lignes:
-        os.makedirs(os.path.join(racine, "etc/osmo-operator"), exist_ok=True)
-        with open(os.path.join(racine, "etc/osmo-operator/options"), "a") as f:
-            f.write("\n".join(lignes) + "\n")
+    if "securise" in choix and tpm2():
+        compte = gs.value("username") or ""
+        telephone = "tpm" in choix
+        etapes = [["/usr/local/sbin/crypthome-postinstall", compte],
+                  ["/bin/bash", "-c", "mkdir -p /etc/systemd/system/multi-user.target.wants && "
+                   "ln -sf /etc/systemd/system/osmo-diffs.service /etc/systemd/system/multi-user.target.wants/osmo-diffs.service && "
+                   "ln -sf /etc/systemd/system/osmo-diffs-init.service /etc/systemd/system/multi-user.target.wants/osmo-diffs-init.service"]]
+        if not telephone:
+            # the initramfs that « poser » builds next carries the measured boot
+            etapes.append(["/bin/bash", "-c", "install -d -m 0755 /etc/osmo-tpm && : > /etc/osmo-tpm/actif"])
+        etapes.append(["/usr/local/sbin/osmo-racine-live", "poser"])
+        for e in etapes:
+            rc = libcalamares.utils.target_env_call(e)
+            libcalamares.utils.debug("osmo-options : %s -> %s" % (" ".join(e)[:80], rc))
+        lignes += ["session=securise", "ancre=1"]
+        lignes += ["mesure=totp"] if telephone else ["mesure=secret", "premier=1"]
+    else:
+        lignes.append("session=ubuntu")
+        if "securise" in choix:
+            lignes.append("securise-refuse=pas-de-tpm-2.0")
+            libcalamares.utils.warning("osmo-options : poste securise demande SANS TPM 2.0 - Ubuntu ordinaire installe")
+    os.makedirs(os.path.join(racine, "etc/osmo-operator"), exist_ok=True)
+    with open(os.path.join(racine, "etc/osmo-operator/options"), "a") as f:
+        f.write("\n".join(lignes) + "\n")
     return None

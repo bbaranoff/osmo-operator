@@ -37,6 +37,9 @@
 #   osmo-tpm poser        enable: a seed, its QR code, the initramfs rebuilt
 #                         (the NEXT boot shows no code / no sentence: the initramfs has just
 #                         changed - then « osmo-tpm sceller »)
+#   osmo-tpm premier      the first session of a secured bench set up by the
+#                         installer: sentence, PIN, fingerprint, anchor and
+#                         sealing in one go (the welcome window runs it)
 #   osmo-tpm poser --secret   the same without a phone: a sentence and a PIN
 #                         (poser again, either way, changes the mode)
 #   osmo-tpm sceller      BY HAND: this boot is the reference (PCR 0-9 as they
@@ -258,30 +261,75 @@ qr() {
     echo "  code maintenant : $(totp "$graine")"
 }
 
+# demander_secret : the sentence the TPM will show and the PIN it will check,
+# asked on the terminal (s, n) - or nothing is posed
+demander_secret() {
+    if [ "$TEST" = 1 ]; then s="${OSMO_TPM_SECRET:-}"; n="${OSMO_TPM_PIN:-}"; n2="$n"
+    else
+        echo "La phrase que le TPM affichera a chaque demarrage quand la machine est intacte"
+        echo "(100 caracteres au plus ; PAS la phrase de /home, PAS celle de la boite) :"
+        IFS= read -r -p "phrase secrete : " s < /dev/tty || s=""
+        echo "Le PIN demande avant de l afficher : des CHIFFRES, 6 au moins (Entree = sans PIN :"
+        echo "la phrase serait alors lue par quiconque allume la machine - deconseille)."
+        read -r -s -p "PIN : " n < /dev/tty || n=""; echo
+        read -r -s -p "encore une fois : " n2 < /dev/tty || n2=""; echo
+    fi
+    case "$s" in ""|*[[:cntrl:]]*) rouge "phrase vide ou illisible : rien de pose" >&2; exit 1 ;; esac
+    [ "$(printf '%s' "$s" | wc -c)" -le 100 ] || { rouge "phrase trop longue (100 octets au plus) : rien de pose" >&2; exit 1; }
+    [ "$n" = "$n2" ] || { rouge "les deux PIN different : rien de pose" >&2; exit 1; }
+    if [ -n "$n" ] && ! printf '%s' "$n" | grep -qE '^[0-9]{6,32}$'; then
+        rouge "PIN refuse (des chiffres, 6 au moins) : rien de pose" >&2; exit 1
+    fi
+    [ -n "$n" ] || rouge "SANS PIN : quiconque allume la machine lira la phrase."
+}
+
 case "${1:-etat}" in
+    premier)
+        # THE FIRST SESSION of a secured bench (the installer marked the
+        # measured boot, so the initramfs already carries it; the welcome
+        # window of the first login runs this). Nothing could be sealed from
+        # the live key: the measures are those of THIS system's own boot. In
+        # one go: the sentence and the PIN, the disk's fingerprint and its
+        # signature, the anchor of that signature in the TPM, the sealing.
+        root_requis; outils
+        [ -e "$ACTIF" ] || [ "$TEST" = 1 ] || { log "demarrage mesure non prepare sur ce poste : sudo osmo-tpm poser --secret"; exit 1; }
+        if [ -s "$OBJ/scelle" ]; then vert "deja fait : le TPM de ce poste est scelle (osmo-tpm etat)."; exit 0; fi
+        echo "BIENVENUE. Ce poste est un poste securise : il reste a lui confier SON secret."
+        echo
+        echo "  - le disque systeme est en lecture seule, la session tourne en memoire ;"
+        echo "  - a l extinction, la phrase de /home ecrit la session - sinon tout est efface ;"
+        echo "  - le TPM de cette machine va garder UNE PHRASE A TOI. A chaque demarrage il"
+        echo "    demandera ton PIN, puis affichera cette phrase - seulement si micrologiciel,"
+        echo "    GRUB, noyau, initramfs et disque systeme sont ceux d aujourd hui."
+        echo "    Pas de phrase, ou une autre : la machine a ete modifiee, ne tape RIEN."
+        echo
+        phrase_requise "Trois questions : la phrase de /home, ta phrase secrete, ton PIN."
+        demander_secret
+        coffre_ouvrir; [ "$?" = 1 ] && exit 1
+        C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
+        s=""; n=""; n2=""
+        benir && coffre_fermer || { PHRASE=""; rouge "rien de pose" >&2; exit 1; }
+        if [ "$TEST" != 1 ]; then
+            echo "empreinte du disque et signature (une vingtaine de secondes)..."
+            printf '%s\n' "$PHRASE" | $EMP prendre --phrase-stdin 2>&1 | tail -n 1
+            if ! $EMP signature 2>/dev/null | grep -q 'celle du TPM'; then
+                echo "ancre de la signature dans le TPM..."
+                printf '%s\n' "$PHRASE" | $EMP ancrer --phrase-stdin 2>&1 | tail -n 2
+            fi
+        fi
+        PHRASE=""
+        sceller_pour "$(total_disque)" || { rouge "scellement en echec (osmo-tpm etat ; sudo osmo-tpm sceller)" >&2; exit 1; }
+        install -d -m 0755 "$RUN"; : > "$RUN/reconnu"
+        vert "TPM scelle. Au prochain demarrage : ton PIN, puis TA phrase a cote de la question de /home."
+        echo "Si elle n apparait pas a ce tout premier redemarrage : sudo osmo-tpm sceller, une fois."
+        echo "Pense a valider la session a l extinction (la phrase de /home)."
+        ;;
     poser)
         root_requis; outils
         [ -s "$BOITE/empreinte.json" ] || { rouge "pas d empreinte du disque : sudo osmo-empreinte prendre" >&2; exit 1; }
         phrase_requise "poser : une graine dans /home, l initramfs reconstruit SUR LE DISQUE, le scellement sur la boite"
         if [ "${2:-}" = --secret ]; then
-            # WITHOUT A PHONE: a sentence of yours, and a PIN the TPM checks
-            if [ "$TEST" = 1 ]; then s="${OSMO_TPM_SECRET:-}"; n="${OSMO_TPM_PIN:-}"; n2="$n"
-            else
-                echo "La phrase que le TPM affichera a chaque demarrage quand la machine est intacte"
-                echo "(100 caracteres au plus ; PAS la phrase de /home, PAS celle de la boite) :"
-                IFS= read -r -p "phrase secrete : " s < /dev/tty || s=""
-                echo "Le PIN demande avant de l afficher : des CHIFFRES, 6 au moins (Entree = sans PIN :"
-                echo "la phrase serait alors lue par quiconque allume la machine - deconseille)."
-                read -r -s -p "PIN : " n < /dev/tty || n=""; echo
-                read -r -s -p "encore une fois : " n2 < /dev/tty || n2=""; echo
-            fi
-            case "$s" in ""|*[[:cntrl:]]*) rouge "phrase vide ou illisible : rien de pose" >&2; exit 1 ;; esac
-            [ "$(printf '%s' "$s" | wc -c)" -le 100 ] || { rouge "phrase trop longue (100 octets au plus) : rien de pose" >&2; exit 1; }
-            [ "$n" = "$n2" ] || { rouge "les deux PIN different : rien de pose" >&2; exit 1; }
-            if [ -n "$n" ] && ! printf '%s' "$n" | grep -qE '^[0-9]{6,32}$'; then
-                rouge "PIN refuse (des chiffres, 6 au moins) : rien de pose" >&2; exit 1
-            fi
-            [ -n "$n" ] || rouge "SANS PIN : quiconque allume la machine lira la phrase."
+            demander_secret
             coffre_ouvrir; [ "$?" = 1 ] && exit 1
             C_MODE=secret; C_SECRET="$s"; C_PIN="$n"; C_GRAINE=""
             s=""; n=""; n2=""
@@ -397,7 +445,7 @@ case "${1:-etat}" in
         log "demarrage mesure retire (la graine est detruite : l appli du telephone ne sert plus)"
         ;;
     *)
-        echo "usage : osmo-tpm poser [--secret] | sceller | qr | code | etat | oter" >&2
+        echo "usage : osmo-tpm premier | poser [--secret] | sceller | qr | code | etat | oter" >&2
         exit 2
         ;;
 esac

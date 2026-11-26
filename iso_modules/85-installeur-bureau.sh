@@ -228,6 +228,31 @@ if [ -f "$_pm" ] && [ -f "$_cm" ] && [ -f "$_am" ]; then
     fi
 fi
 
+# ── TPM: the secured bench REQUIRES a TPM 2.0 ───────────────────────────────
+# Calamares cannot grey out an entry by itself: the Options page is rewritten
+# here. No TPM 2.0 seen by the kernel -> the « poste securise » boxes are
+# UNTICKED and IMMUTABLE (greyed out), and say what to do: enable the TPM in
+# the firmware setup (fTPM / PTT / Security Device Support) and boot the key
+# again. The osmo-options job checks again in any case.
+_po=/etc/calamares/modules/netinstall-options.conf
+if [ -f "$_po" ] && [ "$(cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null)" != 2 ]; then
+    cp -f "$_po" "$_po.avant"
+    awk '
+        /^    - name: "Poste securise/ {
+            sub(/"$/, " - INDISPONIBLE : pas de TPM 2.0 (l activer dans le BIOS : fTPM / PTT / Security Device, puis redemarrer la cle)\"")
+            print; dans = 1; next
+        }
+        dans && /^      selected:/ { print "      selected: false"; print "      immutable: true"; next }
+        dans && /^      packages:/ { print; dans = 0; next }
+        { print }
+    ' "$_po.avant" > "$_po"
+    _yamlok "$_po" 2>/dev/null || cp -f "$_po.avant" "$_po"
+    rm -f "$_po.avant"
+    echo "TPM : aucun TPM 2.0 vu par le noyau - poste securise INDISPONIBLE (Ubuntu ordinaire seulement). L activer dans le BIOS puis redemarrer la cle."
+elif [ -f "$_po" ]; then
+    echo "TPM : TPM 2.0 present - poste securise disponible."
+fi
+
 # ── NVIDIA: the installer's "Pilotes graphiques" page follows the machine ───
 # Calamares cannot grey out an entry based on hardware: its chooser page and
 # the module that installs are WRITTEN at EVERY launch, from lspci:

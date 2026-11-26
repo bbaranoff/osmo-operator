@@ -132,9 +132,19 @@ le propriétaire au lieu d'une graine, et l'affiche à côté de la question de 
 - `poser` et `poser --secret` s'excluent ; reposer l'un remplace l'autre.
 
 `poser`, `sceller` et `oter` écrivent sur le disque : ils demandent d'abord la phrase de
-`/home`. Dans l'installeur (page Options), l'ancre TPM de la signature et les deux
-démarrages mesurés sont trois cases, toutes facultatives ; rien n'est posé par
-l'installation, `osmo-tpm etat` dit ce qui reste à faire.
+`/home`.
+
+**À l'installation.** La page Options de l'installeur a une case « Poste sécurisé », cochée
+par défaut, qui **exige un TPM 2.0** ; décochée, c'est une Ubuntu ordinaire (disque écrit
+directement, ni session en RAM, ni boîte noire, ni TPM). Sans TPM 2.0 vu par le noyau, la
+case est décochée et grisée, avec la marche à suivre (l'activer dans le BIOS, redémarrer
+la clé) ; le travail d'installation revérifie et ne pose jamais le poste sécurisé sans
+TPM. L'installeur ne peut pas sceller : les mesures sont celles du démarrage du système
+installé, pas de la clé live. Il prépare donc tout (initramfs compris), et la première
+ouverture de session affiche une fenêtre d'accueil qui demande la phrase de `/home`, la
+phrase secrète et le PIN, puis prend l'empreinte, ancre la signature et scelle
+(`osmo-tpm premier`). Elle revient à chaque ouverture de session tant que ce n'est pas
+fait.
 
 ### 3.7 Deux root
 

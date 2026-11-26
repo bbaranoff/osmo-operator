@@ -128,11 +128,24 @@ install -m 0755 "$_CH_SRC/osmo-total"             "$ROOTFS/usr/local/sbin/osmo-t
 install -m 0755 "$_CH_SRC/osmo-qr"                "$ROOTFS/usr/local/sbin/osmo-qr"
 chroot "$ROOTFS" bash -c 'command -v tpm2_unseal >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tpm2-tools >/dev/null 2>&1' \
     || echo -e "  ${YELLOW}!${NC} tpm2-tools non installe : l option « demarrage mesure » demandera de l installer"
-# the measured boot ticked in the installer (Options page) is posed after the
-# first boot (sudo osmo-tpm poser). No reminder at login: the desktop shows
-# ONE dialog there, the integrity warning, and only when it has a reason
-# (osmo-empreinte rappel) - otherwise nothing.
+# THE WELCOME OF A SECURED BENCH. The installer (Options page, « poste
+# securise ») cannot seal the TPM - the measures are those of the installed
+# system's own boot. The first session finishes the job: a window asks the
+# /home passphrase, the secret sentence and the PIN, then anchors and seals
+# (osmo-tpm premier). Until it is done, then never again; nothing on an
+# ordinary Ubuntu.
 rm -f "$ROOTFS/etc/xdg/autostart/osmo-tpm-rappel.desktop"
+install -m 0755 "$_CH_SRC/osmo-tpm-bienvenue" "$ROOTFS/usr/local/bin/osmo-tpm-bienvenue"
+cat > "$ROOTFS/etc/xdg/autostart/osmo-tpm-bienvenue.desktop" <<'BIENVENUE'
+[Desktop Entry]
+Type=Application
+Name=Bienvenue : le TPM de ce poste
+Exec=/usr/local/bin/osmo-tpm-bienvenue
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+X-GNOME-Autostart-Delay=8
+BIENVENUE
 # the REC screen of a write at shutdown: cmatrix, and its red progress bar
 install -m 0755 "$_CH_SRC/osmo-rec"               "$ROOTFS/usr/local/sbin/osmo-rec"
 install -m 0755 "$_CH_SRC/osmo-valider-session"   "$ROOTFS/usr/local/bin/osmo-valider-session"
