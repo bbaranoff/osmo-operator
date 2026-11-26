@@ -409,6 +409,14 @@ code_tpm() {
     fi
 }
 
+# « NIRVANA NORMAL » (GRUB entry, osmo.home=direct on the kernel line): for
+# THIS boot /home is mounted read-write, straight on the encrypted volume -
+# no RAM layer, nothing to validate, nothing wiped. The system (/) stays in
+# RAM and under the passphrase as ever. The GRUB menu is within anybody's
+# reach: the mode is SAID in the question itself, before the passphrase.
+DIRECT=0
+if racine_live && grep -qE '(^| )osmo\.home=direct( |$)' /proc/cmdline; then DIRECT=1; fi
+phrase_directe=""
 PROMPT_MODE="${CRYPTHOME_PROMPT:-console}"
 ouvert=0
 essai=0
@@ -416,6 +424,7 @@ essai=0
 while [ "$ouvert" != 1 ] && [ "$essai" -lt "$TRIES" ]; do
     essai=$((essai + 1))
     invite="decrypt $MOUNT -passphrase- or Enter"
+    [ "$DIRECT" = 1 ] && invite="!!! MODE DIRECT : $MOUNT ECRIT SANS VALIDATION !!! $invite"
     [ "$essai" -gt 1 ] && invite="$invite ($essai/$TRIES)"
     if [ "$BOOT" = 1 ] && [ "$PROMPT_MODE" = plymouth ]; then
         passe="$(systemd-ask-password --timeout="$TIMEOUT" \
@@ -433,6 +442,7 @@ while [ "$ouvert" != 1 ] && [ "$essai" -lt "$TRIES" ]; do
         exit 0
     fi
     if printf '%s' "$passe" | cryptsetup open --key-file=- "$DEV" "$MAPPER"; then
+        [ "$DIRECT" = 1 ] && phrase_directe="$passe"
         passe=""; unset passe
         ouvert=1
         break
@@ -490,7 +500,41 @@ monter_home_live() {
     systemctl try-restart --no-block osmo-garde.service >/dev/null 2>&1 || true
 }
 
-if racine_live; then
+# monter_home_direct : the volume straight on /home. First what the normal mode
+# does on it - an interrupted validation finished, the volume against its
+# fingerprint, the signing key against its pin. Then the fingerprint of /home
+# is WITHDRAWN (signed with the passphrase just given): it will be written to
+# freely, and the next normal boot must not cry « modified outside a session ».
+monter_home_direct() {
+    install -d "$HOME_BAS"
+    mount "/dev/mapper/$MAPPER" "$HOME_BAS" || return 1
+    if { [ -d "$HOME_BAS/.osmo-valider" ] || ls "$HOME_BAS"/.osmo-retour/*/DEFAIRE >/dev/null 2>&1; } \
+            && [ -x /usr/local/sbin/osmo-valider-appliquer ]; then
+        log "reprise d une validation interrompue sur $MOUNT."
+        /usr/local/sbin/osmo-valider-appliquer "$HOME_BAS" 2>&1 | while read -r l; do log "$l"; done
+    fi
+    mount -o remount,ro "$HOME_BAS" 2>/dev/null
+    if [ -x /usr/local/sbin/osmo-empreinte ]; then
+        /usr/local/sbin/osmo-empreinte home 2>&1 | while read -r l; do log "$l"; done
+        /usr/local/sbin/osmo-empreinte sceau 2>&1 | while read -r l; do log "$l"; done
+        printf '%s\n' "$phrase_directe" | /usr/local/sbin/osmo-empreinte home-direct --phrase-stdin 2>&1 | while read -r l; do log "$l"; done
+    fi
+    umount "$HOME_BAS" || return 1
+    mount "$MOUNT" 2>/dev/null || mount "/dev/mapper/$MAPPER" "$MOUNT" || return 1
+    log "MODE DIRECT : $MOUNT est ecrit directement sur le volume chiffre pour ce demarrage (rien a valider, rien d efface)."
+}
+
+if racine_live && [ "$DIRECT" = 1 ]; then
+    if ! monter_home_direct; then
+        phrase_directe=""
+        log "montage de $MOUNT impossible - le volume est referme."
+        umount "$HOME_BAS" 2>/dev/null
+        cryptsetup close "$MAPPER" 2>/dev/null || true
+        session_root
+        exit 0
+    fi
+    phrase_directe=""
+elif racine_live; then
     if ! monter_home_live; then
         log "montage de $MOUNT impossible - le volume est referme."
         cryptsetup close "$MAPPER" 2>/dev/null || true

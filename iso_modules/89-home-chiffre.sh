@@ -236,6 +236,10 @@ fi
 if [ -t 1 ] && [ -s /run/osmo-alerte-copie ]; then
     printf '\033[1;31m%s\033[0m\n' "!!! BOITE NOIRE NON COPIEE AILLEURS : $(cat /run/osmo-alerte-copie) (sudo osmo-diffs envoyer) !!!"
 fi
+# osmo-operator: « nirvana normal » (GRUB): /home written to directly for this boot
+if [ -t 1 ] && grep -qE '(^| )osmo\.home=direct( |$)' /proc/cmdline 2>/dev/null && mountpoint -q /home 2>/dev/null; then
+    printf '\033[1;31m%s\033[0m\n' "MODE DIRECT : /home est ecrit directement sur le volume chiffre (rien a valider, rien d efface). Le systeme, lui, reste en RAM."
+fi
 # osmo-operator: / in RAM -> red warning. A validation covers the moment it
 # was given; what follows needs another one, or the passphrase at shutdown.
 if [ -t 1 ] && [ ! -e /run/osmo-racine/valide ] && mountpoint -q /media/root-ro 2>/dev/null; then

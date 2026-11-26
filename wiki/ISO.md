@@ -659,6 +659,12 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   without it writes nothing to the disk, not even its log (kept in the box until the next
   validated write); `/boot/efi` is read-only from boot. The black box is the one thing always
   written.
+- **« nirvana normal »** (GRUB entry, `osmo.home=direct`): for that boot only, `/home` is mounted
+  read-write straight on the encrypted volume - no RAM layer, nothing to validate, nothing wiped;
+  the system stays in RAM and under the passphrase. The mode is said in the passphrase question
+  itself (the GRUB menu is within anybody's reach) and in every terminal. The fingerprint of
+  `/home` is withdrawn at that moment, signed with the passphrase just given, and taken again at
+  the next normal validation. `defaire` and `fusionner`, which work on `/` and `/home` together, are refused in this mode.
 - **The checkpoint, every ten minutes** (`osmo-point.timer`): the session so far (what it changed
   and deleted since the last write) goes to the black box, replacing the checkpoint before -
   encrypted to the box's public key, so no passphrase. It shows **red** (`osmo-racine-live
@@ -690,7 +696,7 @@ At build time: `--banc`, `--multi`, `OSMO_ISO_LTE=1`. On disk for multi:
   refreshed at every boot, before and after every write.
 - **Going back several sessions** (`osmo-racine-live sessions`, `remonter [N]`): every commit
   carries the session (boot) it belongs to; `remonter N` undoes every commit of the last N
-  sessions, newest first, on `/` and on `/home` (`/home` passphrase; the box records each one,
+  sessions, newest first, **on the system (`/`) only - `/home` is never rolled back** (`/home` passphrase; the box records each one,
   `defait`). **From GRUB: « osmo-operator - remonter session »** opens a menu of the sessions the
   disk can still undo, **with their dates** (arrows, newest first; `/boot/grub/osmo-sessions.cfg`,
   rewritten after every commit and undo). The date chosen boots normally with `osmo.retour=N`;

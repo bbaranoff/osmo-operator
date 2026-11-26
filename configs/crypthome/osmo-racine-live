@@ -45,8 +45,9 @@
 #                                 (a session = every commit of one boot: its
 #                                 validations and its shutdown)
 #   osmo-racine-live remonter [N] go back N sessions (1 by default): every
-#                                 commit of the last N sessions is undone, on
-#                                 / and on /home, newest first; the black box
+#                                 commit of the last N sessions is undone ON
+#                                 THE SYSTEM (/), newest first - /home is NOT
+#                                 rolled back; the black box
 #                                 records each one (« defait »). /home
 #                                 passphrase. From GRUB: « remonter session »
 #                                 is a menu of the sessions WITH THEIR DATES
@@ -164,6 +165,15 @@ option_montage() {   # option_montage MOUNTPOINT KEY
     findmnt -no OPTIONS "$1" 2>/dev/null | tr ',' '\n' | sed -n "s#^$2=##p" | head -1
 }
 home_overlay() { [ "$(findmnt -no FSTYPE /home 2>/dev/null)" = overlay ]; }
+# « nirvana normal » (GRUB, osmo.home=direct): /home is the encrypted volume
+# itself for this boot - written to directly, outside validation. The way
+# back and the merge work on / AND /home together: not in this mode.
+home_direct() { ! home_overlay && [ -n "$CRYPTHOME_UUID" ] && mountpoint -q /home 2>/dev/null && ! mountpoint -q "$HOME_BAS" 2>/dev/null; }
+pas_en_direct() {
+    home_direct || return 0
+    rouge "mode direct (/home ecrit directement) : $1 se fait depuis un demarrage normal" >&2
+    exit 1
+}
 couches() {
     local h b
     echo "$HAUT $BAS /"
@@ -823,7 +833,11 @@ session_de() {
 #   SESSION ID ID...   (its commits, newest first)
 sessions() {
     local id reste
-    retours | sort -r | while read -r id reste; do printf '%s %s\n' "$(session_de "$id")" "$id"; done \
+    # GOING BACK A SESSION IS ABOUT THE SYSTEM: only what a commit wrote to /
+    # is undone. /home is never rolled back by « remonter » (its files are the
+    # owner's work, not the machine's state): a commit that only touched /home
+    # is not listed.
+    retours | grep -E ' /( |$)' | sort -r | while read -r id reste; do printf '%s %s\n' "$(session_de "$id")" "$id"; done \
         | awk '{ if (!($1 in vu)) { vu[$1] = 1; ordre[++n] = $1 } ids[$1] = ids[$1] " " $2 }
                END { for (i = 1; i <= n; i++) print ordre[i] ids[ordre[i]] }'
 }
@@ -903,15 +917,18 @@ confirmation() {
 }
 # defaire_commit ID : one commit undone on every layer that has it; the box
 # first, while what is about to be removed is still there
+# (a second argument: only that layer - « remonter » gives /)
 defaire_commit() {
-    local id="$1" h b pre rc=0 arg=""
-    trace "defaire : commit $id"
+    local id="$1" seule="${2:-}" h b pre rc=0 arg=""
+    trace "defaire : commit $id${seule:+ (couche $seule seulement)}"
     while read -r h b pre; do
+        [ -z "$seule" ] || [ "$pre" = "$seule" ] || continue
         [ -f "$b/.osmo-retour/$id/FAIT" ] && arg="$arg $pre=$b"
     done < <(couches)
     # shellcheck disable=SC2086
     [ -x /usr/local/sbin/osmo-diffs ] && sans_int /usr/local/sbin/osmo-diffs defait "$id" $arg
     while read -r h b pre; do
+        [ -z "$seule" ] || [ "$pre" = "$seule" ] || continue
         [ -f "$b/.osmo-retour/$id/FAIT" ] || continue
         if remonter_rw "$b"; then
             sans_int "$APPLIQUER" "$b" --defaire "$id" >> "$TRACE" 2>&1 < /dev/null || rc=1
@@ -1136,6 +1153,19 @@ menuentry 'osmo-operator - consulter la boite noire (sans demarrer)' --class ubu
 	insmod gzio
 $(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
 	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} osmo.boite
+	initrd	$ri
+}
+EOF
+# « nirvana normal » : A NORMAL BOOT WITH osmo.home=direct. For that boot only,
+# unlock-home mounts /home read-write straight on the encrypted volume: no RAM
+# layer over it, nothing to validate, nothing wiped. The system stays in RAM,
+# under the passphrase. The question at boot says the mode, in so many words.
+cat <<EOF
+menuentry 'osmo-operator - nirvana normal (/home ecrit directement, sans validation)' --class ubuntu --class os {
+	load_video
+	insmod gzio
+$(prepare_grub_to_access_device "$dev" | sed 's/^/\t/')
+	linux	$rk root=UUID=${GRUB_DEVICE_UUID} ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} osmo.home=direct
 	initrd	$ri
 }
 EOF
@@ -1575,6 +1605,7 @@ EOF
         # not touched: the disk shows its older state at the next boot.
         root_requis
         live || { log "/ n est pas en RAM : rien a defaire"; exit 0; }
+        pas_en_direct "defaire"
         id="$(retours | tail -1 | cut -d' ' -f1)"
         [ -n "$id" ] || { log "aucun commit a defaire"; exit 0; }
         if couches_manquantes; then rouge "/home hors d atteinte : rien n est defait" >&2; exit 1; fi
@@ -1619,6 +1650,7 @@ EOF
         live || { log "/ n est pas en RAM : rien a fusionner"; exit 0; }
         nom="${2:-}"; mode=""
         case "${3:-}" in --session) mode=session ;; --disque) mode=disque ;; "") ;; *) log "usage : osmo-racine-live fusionner NOM [--session|--disque]" >&2; exit 1 ;; esac
+        pas_en_direct "fusionner"
         if [ -z "$nom" ]; then
             /usr/local/sbin/osmo-diffs attente-liste
             echo "fusionner : osmo-racine-live fusionner NOM [--session|--disque]"; exit 0
@@ -1652,8 +1684,8 @@ EOF
         ;;
     remonter)
         # remonter [N|choisir] [--stdin|--demarrage] : go back N SESSIONS. Every
-        # commit of the last N sessions is undone, newest first, on / and on
-        # /home; the box records each one. The session in RAM is not touched:
+        # commit of the last N sessions is undone, newest first, ON THE SYSTEM
+        # (/) - /home is left as it is; the box records each one. The session in RAM is not touched:
         # the older disk is what the next boot starts on.
         # --demarrage (unlock-home, GRUB entry « remonter le disque »): /home
         # has just been opened with its passphrase - it is not asked again;
@@ -1662,7 +1694,6 @@ EOF
         live || { log "/ n est pas en RAM : rien a remonter"; exit 0; }
         n="${2:-1}"; mode="${3:-}"
         case "$n" in --stdin|--demarrage) mode="$n"; n=1 ;; esac
-        if couches_manquantes; then rouge "/home hors d atteinte : rien n est defait" >&2; exit 1; fi
         tot="$(sessions | wc -l)"
         if [ "$mode" = --demarrage ]; then
             console_texte
@@ -1681,7 +1712,8 @@ EOF
             esac
             case "$n" in ''|*[!0-9]*|0) dire "rien n est defait : demarrage normal."; sleep 3; exit 0 ;; esac
             [ "$n" -gt "$tot" ] && n="$tot"
-            dire_rouge "Les $n derniere(s) session(s) vont etre DEFAITES sur le disque (/ et /home)."
+            dire_rouge "Les $n derniere(s) session(s) vont etre DEFAITES sur le disque systeme."
+            dire "/home n est pas touche : tes fichiers restent tels qu ils sont."
             dire "La boite noire garde tout et enregistre ce retour ; la machine redemarre ensuite."
             printf 'Taper OUI pour remonter (autre chose : demarrage normal) : ' > "$CONSOLE"
             r=""; IFS= read -r -t 120 r < "$CONSOLE" || r=""
@@ -1712,7 +1744,7 @@ EOF
         for id in $(sessions | head -n "$n" | cut -d' ' -f2-); do
             [ "$mode" = --demarrage ] && dire "  ecriture du $(date_commit "$id") ..."
             # the order is the whole point: a commit that cannot be undone stops it
-            if defaire_commit "$id" >> "$TRACE" 2>&1; then fait=$((fait + 1)); else rc=1; break; fi
+            if defaire_commit "$id" / >> "$TRACE" 2>&1; then fait=$((fait + 1)); else rc=1; break; fi
         done
         poser_menu_sessions
         empreinte_prendre

@@ -613,6 +613,41 @@ def phrase_changee(ancienne, nouvelle):
     return 0
 
 
+def home_direct(phrase):
+    """unlock-home, GRUB entry « nirvana normal »: for this boot /home is written
+    to directly. Its fingerprint is withdrawn from the box, and the totals
+    signed again - with the passphrase that has just opened the volume."""
+    tot = totaux()
+    if "home" not in tot:
+        return 0
+    pem = None
+    if os.path.exists(SIG_CLE) or os.path.exists(SIG_PUB):
+        pem = cle_privee(phrase) if phrase else None
+        if pem is None:
+            dire("phrase refusee : l empreinte de /home n est PAS retiree (le prochain demarrage normal criera)")
+            return 1
+    if not boite_rw(True):
+        return 1
+    try:
+        del tot["home"]
+        with open(TOTAUX + ".nouv", "w") as f:
+            json.dump(tot, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(TOTAUX + ".nouv", TOTAUX)
+        for f in (manifeste_chiffre("home"), manifeste("home")):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        if pem is not None:
+            poser_signature(pem, phrase)
+        os.sync()
+    finally:
+        boite_rw(False)
+    dire("mode direct : l empreinte de /home est retiree de la boite (reprise a la prochaine validation normale)")
+    return 0
+
+
 def lire_phrase():
     """The /home passphrase: one line of stdin (--phrase-stdin), else asked on the terminal."""
     if "--phrase-stdin" in sys.argv[2:]:
@@ -1026,11 +1061,14 @@ def sceau():
     is the one /home knows, and the totals carry its signature."""
     if not os.path.exists(TOTAUX):
         return 0
-    try:
-        with open(os.path.join(HOME_DISQUE, PUB_HOME), "rb") as f:
-            connue = f.read()
-    except OSError:
-        connue = None
+    connue = None
+    for base in (HOME_DISQUE,) if TEST else (HOME_DISQUE, "/home"):   # (/home: the direct mode)
+        try:
+            with open(os.path.join(base, PUB_HOME), "rb") as f:
+                connue = f.read()
+            break
+        except OSError:
+            pass
     try:
         with open(SIG_PUB, "rb") as f:
             boite = f.read()
@@ -1119,6 +1157,8 @@ def main():
         return rc
     if cmd == "resceller":
         return resceller(lire_phrase())
+    if cmd == "home-direct":
+        return home_direct(lire_phrase())
     if cmd == "ancrer":
         return ancrer(lire_phrase())
     if cmd == "phrase-changee":
