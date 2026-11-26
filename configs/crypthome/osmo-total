@@ -11,6 +11,27 @@
 # OSMO_BIN: where they are, BY FULL PATH - the initramfs shell is busybox, and
 # busybox runs its own find / sort / sha256sum whatever PATH says.
 B="${OSMO_BIN:+$OSMO_BIN/}"
+# osmo-total --contenu RACINE : ONE SHA-256 for the CONTENT of every regular
+# file - « sha256  ./path » for each (sha256sum -z: NUL-ended, names as they
+# are), sorted, hashed. It reads the whole volume: about 15 s for 18 GB on
+# every core. What forged dates and inodes cannot hide. GRUB's environment
+# block is left out (the boot loader rewrites it in place before anything runs).
+if [ "$1" = --contenu ]; then
+    cd "$2" 2>/dev/null || exit 1
+    n="$(nproc 2>/dev/null || echo 4)"
+    # one output file per worker: several sha256sum writing to ONE pipe cut
+    # each other's lines (seen: thousands of records without their hash)
+    t="$(mktemp -d /run/osmo-total.XXXXXX 2>/dev/null || mktemp -d)" || exit 1
+    export OSMO_TOTAL_T="$t" OSMO_TOTAL_SHA="${B}sha256sum"
+    "${B}find" . -xdev \
+      \( -path ./.osmo-valider -o -path ./.osmo-retour -o -path ./lost+found \
+         -o -path ./var/log/osmo-session.log -o -path ./var/log/osmo-session.log.nouv \
+         -o -path ./boot/grub/grubenv \) -prune -o -type f -print0 2>/dev/null \
+      | "${B}xargs" -0 -P "$n" -n 256 sh -c '"$OSMO_TOTAL_SHA" -z "$@" >> "$OSMO_TOTAL_T/$$" 2>/dev/null' _
+    cat "$t"/* 2>/dev/null | LC_ALL=C "${B}sort" -z -S 256M | "${B}sha256sum" | "${B}cut" -d' ' -f1
+    rm -rf "$t"
+    exit 0
+fi
 cd "$1" 2>/dev/null || exit 1
 "${B}find" . -xdev \
   \( -path ./.osmo-valider -o -path ./.osmo-retour -o -path ./lost+found \

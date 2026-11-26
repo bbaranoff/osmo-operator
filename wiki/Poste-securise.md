@@ -3,7 +3,7 @@
 ## Résumé
 
 Le système est **en clair et en lecture seule** ; chaque session tourne **en RAM**.
-Rien n'atteint le disque sans une phrase de passe. Tout ce qui l'atteint est
+Rien n'atteint le disque **système** sans une phrase de passe. Tout ce qui l'atteint est
 **journalisé dans une boîte noire que la machine remplit sans pouvoir la relire**, et
 chaque écriture est **réversible**. Un seul mécanisme — la couche RAM comparée au
 disque — sert à sécuriser, à tracer et à revenir en arrière.
@@ -14,6 +14,15 @@ une « remise à zéro » volontaire) ; les états passés du système vivent da
 de cet historique sont **tenues par le TPM**, si bien qu'une troncature se voit ; une
 **alarme** retient l'extinction quand le disque a changé sans la phrase, et se teste pour
 de vrai. La section 6 dit ce qui a tourné sur une vraie machine et ce qui ne l'a pas fait.
+
+**Ce que le mode persistant change à ce résumé.** C'est l'ouverture par défaut (sans
+réponse en 20 secondes) : la phrase tapée au démarrage autorise alors toutes les écritures
+dans `/home`, immédiates, sans empreinte ni retour arrière fichier par fichier — seulement
+la « remise à zéro » volontaire de toute la session. « Rien sans la phrase à l'extinction »
+et « chaque écriture est réversible » ne valent donc que pour le système (`/`). Et `/home`
+contient l'état de root (`/home/.root`) : ce qu'une session y dépose — un `.bashrc`
+modifié — persiste dès la première seconde. Répondre « non » à « Persistant ? » rend à
+`/home` la validation à l'extinction.
 
 ## 1. Le problème
 
@@ -97,13 +106,28 @@ un nouveau, « défait », avec ce qui a été retiré.
 
 - Après chaque écriture : **SHA-256 total de `/` et de `/home`**, posé sur la boîte, avec
   son détail par fichier. Chaque enregistrement porte aussi ces totaux.
-- **À chaque démarrage, avant de demander la phrase** : le total de `/` est recalculé et
-  comparé. S'il diffère, le détail est lu pour dire quoi, un avertissement rouge occupe
-  la console, la boîte reçoit une `alerte`, et la phrase n'est demandée qu'après un
-  `OUI` explicite (sinon : démarrage sans `/home`).
-- `/home` est comparé dès son ouverture.
-- En tâche de fond : relecture du contenu de chaque fichier (dates et inodes maquillés).
-- Les totaux sont scellés (HMAC) par une clé gardée dans le `/home` chiffré.
+- **À chaque démarrage, avant de demander la phrase**, deux contrôles de `/` :
+  1. *ce que le système de fichiers dit* de chaque entrée (droits, tailles, dates,
+     inodes) — 4 secondes ;
+  2. *le contenu* : **chaque fichier est relu** et le total comparé à celui de l'empreinte
+     (`osmo-total --contenu`, tous les cœurs, une quinzaine de secondes pour 18 Go). Sans
+     lui, un binaire réécrit en place avec ses dates remises passait le premier contrôle
+     et tournait en root, `/home` ouvert, avant que la relecture en tâche de fond ne crie.
+     `CRYPTHOME_CONTROLE="rapide"` dans `/etc/default/crypthome` le remet en tâche de fond.
+  Une différence : le détail est lu pour dire quoi, un avertissement rouge occupe la
+  console, la boîte reçoit une `alerte`, et la phrase n'est demandée qu'après un `OUI`
+  explicite (sinon : pas de session).
+- `/home` est comparé dès son ouverture (mode « à enregistrer » seulement).
+- Les totaux sont **signés** (Ed25519) par une clé que seule la phrase de `/home`
+  déverrouille, et dont la moitié publique est ancrée dans le TPM. (Le sceau HMAC des
+  premières versions n'existe plus : il est retiré à la première signature.)
+- **Ce que cela ne ferme pas** : les deux contrôles tournent depuis le disque qu'ils
+  vérifient, et le démarrage mesuré n'étend le PCR 13 qu'avec le premier total (les
+  métadonnées). Quelqu'un qui maquille les dates **et** réécrit le contrôle lui-même passe
+  encore, et le TPM rend la phrase secrète. La parade est de faire lire le contenu par
+  l'initramfs, qui lui est mesuré, et d'étendre le PCR 13 avec ce total-là (le même
+  calcul, 15 s) ; à terme, une racine en lecture seule est le cas d'usage de dm-verity.
+  Voir les travaux restants.
 
 ### 3.6 Démarrage mesuré (option)
 
@@ -331,6 +355,9 @@ en bleu foncé gras, nom de machine en gras.
 | Attaquant qui réécrit aussi le contrôle | démarrage mesuré (option) | demande que l'utilisateur regarde le code |
 | Destruction de la boîte | copie distante, ajout seul | réseau absent : copie différée, signalée |
 | Écriture ratée ou regrettée | atomicité, retour arrière | tout est sur le même disque : ce n'est pas une sauvegarde |
+| Persistance dans `/home` en mode persistant (dont `/home/.root`) | « remise à zéro » volontaire ; mode « à enregistrer » | par défaut rien ne l'empêche ni ne la signale |
+| Binaire modifié machine éteinte, dates et inodes maquillés | contenu relu avant la phrase | passe si le contrôle lui-même est réécrit : le PCR 13 ne mesure que les métadonnées |
+| Perte ou corruption du volume `/home` | — | **aucune sauvegarde** : il porte la clé de signature, la clé de la boîte, les états passés, root et le coffre du TPM |
 
 **Hors périmètre** : un root hostile avec la machine en main et le temps de lire le code,
 en l'absence de démarrage mesuré.
@@ -385,9 +412,15 @@ condition, cela se voit ici avant d'être écrit.
    signature était chiffrée avec elle sur la partition de la boîte, en clair. **Corrigé** :
    la clé vit dans le volume `/home`, sous une dérivation à 1 Gio par essai ; celle de la
    boîte est écrasée à la signature suivante. Sur un SSD l'ancien fichier peut survivre :
-   seul un changement de la phrase de `/home` ferme vraiment ce point. Reste le secret
-   propriétaire du TPM, dérivé de la phrase (PBKDF2, 300 000 tours) : il ne se teste
-   qu'en ligne, contre le TPM.
+   seul un changement de la phrase de `/home` ferme vraiment ce point. **Reste ouvert** :
+   le secret propriétaire du TPM est dérivé de la phrase (PBKDF2, 300 000 tours, sel en
+   clair sur la boîte). Il ne se teste qu'en ligne, contre le TPM — mais l'autorisation de
+   la hiérarchie propriétaire **n'est pas couverte par le verrouillage anti-dictionnaire**
+   de la puce (seule la hiérarchie de verrouillage l'est). Un root invité, ou une clé live
+   sur la machine, peut donc essayer des phrases contre la puce pour le prix d'un PBKDF2,
+   bien moins cher que LUKS (argon2id, 1 Gio). La parade : un secret propriétaire
+   aléatoire, rangé dans le coffre chiffré par la phrase. Non fait (cela touche à la
+   propriété du TPM : à faire posément).
 2. *La boîte lisait ce que LUKS protège* (couche RAM de `/home` dans les points de
    contrôle, sous la seule phrase de la boîte). **Corrigé** : cette couche y est chiffrée
    pour une clé dont la moitié privée ne sort pas du volume `/home` ; tant que la clé
@@ -435,6 +468,7 @@ par son propriétaire.
 | Test partiel de l'alarme (volume témoin corrompu, trouvé, alarme, remis à l'origine) | **réel** |
 | Test complet : écran rouge, extinction retenue, alerte au démarrage, arrêt par le propriétaire | **réel**, une fois — **sans le bip** (corrigé depuis : son direct vérifié 2 s, pas encore à une extinction) |
 | Navigateur d'états (`osmo-etats`) sur les vraies écritures | **réel** |
+| Contenu du disque relu avant la phrase | calcul vérifié sur le disque réel (même total que l'empreinte, 16,6 s à froid) ; **pas encore vu à un démarrage** |
 | Coupure du root invité sur alerte | écrite, **non vue** |
 | Détection d'une troncature, d'un retour en arrière de l'historique | bac à sable (compteur simulé) ; jamais provoquées en réel |
 | Coupure de courant pendant une remise à zéro | **non testée** — elle abîme `/home` |
@@ -452,6 +486,17 @@ n'a été défait sur le système.
 
 ## 7. Travaux restants
 
+- **Mesurer le contenu dans l'initramfs** et étendre le PCR 13 avec (15 s par démarrage,
+  un initramfs refait, un rescellement) : c'est ce qui ferme vraiment le maquillage des
+  dates quand le contrôle lui-même est réécrit. Puis dm-verity pour la racine.
+- **Sauvegarder** : l'en-tête LUKS de `/home` (`cryptsetup luksHeaderBackup`, sur un
+  support à part) et une copie du volume ailleurs. Aujourd'hui `/home` porte tout et
+  n'existe qu'en un exemplaire.
+- **Un secret propriétaire du TPM aléatoire** (fuite 1 du tableau).
+- **Resceller au moment d'une mise à jour**, pour les mesures attendues : sur une ISO
+  publique, chaque mise à jour du noyau donne aujourd'hui un démarrage non reconnu suivi
+  d'un `OUI` ; un utilisateur qui n'y comprend rien apprendra à le taper par réflexe, et la
+  détection ne vaudra plus rien. Un démarrage non reconnu doit toujours être anormal.
 - Voir en réel : la coupure du root invité, le bip du test complet à une extinction, la
   question à 80 %, `defaire` et `fusionner`, une installation complète par l'ISO.
 - Une copie distante de la boîte : le seul témoin extérieur pour les dates (l'horloge est

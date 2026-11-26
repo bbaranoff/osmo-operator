@@ -209,11 +209,16 @@ def _sha(chemin):
         return "illisible:%s" % e.errno
 
 
+HACHEURS = int(os.environ.get("OSMO_EMPREINTE_HACHEURS", "4"))
+
+
 def hacher(racine, chemins):
-    """{path: sha256} of the regular files given, four at a time."""
+    """{path: sha256} of the regular files given, HACHEURS at a time (four in a
+    session, so that it stays usable; every core at boot, where the machine
+    waits for nothing else)."""
     if not chemins:
         return {}
-    with Pool(min(4, os.cpu_count() or 1)) as pool:
+    with Pool(max(1, min(HACHEURS, os.cpu_count() or 1))) as pool:
         return dict(zip(chemins, pool.imap(_sha, [os.path.join(racine, p) for p in chemins], chunksize=64)))
 
 
@@ -412,6 +417,25 @@ def total_contenu(etat):
         if etat[p][0] == "f":
             h.update(json.dumps([p, etat[p][8]], ensure_ascii=True).encode() + b"\n")
     return h.hexdigest()
+
+
+def total_octets(etat):
+    """The same total as « osmo-total --contenu », from the hashes the
+    fingerprint already holds (nothing is read): what the boot compares with
+    what it reads from the disk."""
+    lignes = []
+    for p, r in etat.items():
+        if r[0] != "f" or p in TOUJOURS_RELUS or not r[8] or r[8].startswith("illisible"):
+            continue
+        lignes.append(r[8].encode() + b"  ./" + os.fsencode(p) + b"\0")
+    lignes.sort()
+    return hashlib.sha256(b"".join(lignes)).hexdigest()
+
+
+def octets_lus(racine):
+    """« osmo-total --contenu »: every file of the volume read again."""
+    r = subprocess.run([TOTAL, "--contenu", racine], capture_output=True, text=True)
+    return r.stdout.strip()
 
 
 def totaux():
@@ -1575,8 +1599,8 @@ def prendre(phrase=None, premiere=False):
             etat[p][8] = h
         relus += len(a_lire)
         pris[nom] = etat
-        tot[nom] = {"meta": total_meta(racine), "contenu": total_contenu(etat), "entrees": len(etat),
-                    "pris": time.strftime("%F %T"), "disque": racine}
+        tot[nom] = {"meta": total_meta(racine), "contenu": total_contenu(etat), "octets": total_octets(etat),
+                    "entrees": len(etat), "pris": time.strftime("%F %T"), "disque": racine}
     if not boite_rw(True):
         dire("boite en lecture seule : empreinte non ecrite")
         return 1
@@ -1767,6 +1791,62 @@ def console_alerte(titre, diffs):
     return ok
 
 
+CONTENU_FAIT = "/run/osmo-empreinte-contenu"
+
+
+def controle_rapide_seul():
+    """CRYPTHOME_CONTROLE="rapide" in /etc/default/crypthome: the content is
+    only read again in the background, after the passphrase (as before)."""
+    try:
+        with open("/etc/default/crypthome") as f:
+            for l in f:
+                if l.strip().startswith("CRYPTHOME_CONTROLE="):
+                    return l.split("=", 1)[1].strip().strip("\"'") == "rapide"
+    except OSError:
+        pass
+    return False
+
+
+def controle_contenu(ref):
+    """BEFORE THE PASSPHRASE: every file of the system disk READ AGAIN. The
+    fast control only compares what the file system says of each file; a
+    binary rewritten in place with its dates put back passes it - and would
+    run as root, /home open, before the background control cried. About 15 s
+    on every core. None: conform (or not done); else the differences."""
+    global HACHEURS
+    if controle_rapide_seul():
+        dire("controle du contenu : pas avant la phrase (CRYPTHOME_CONTROLE=rapide) - en tache de fond seulement")
+        return None
+    try:
+        subprocess.run(["plymouth", "display-message", "--text=Controle du disque systeme : chaque fichier est relu..."],
+                       capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    t0 = time.monotonic()
+    diffs = None
+    if ref.get("octets") and octets_lus(RACINE) == ref["octets"]:
+        diffs = []
+    if diffs is None:
+        # no content total yet (a fingerprint of before), or a difference:
+        # file by file, to say which
+        HACHEURS = os.cpu_count() or 4
+        _t, diffs = comparer("racine", RACINE, complet=True)
+        if not diffs and ref.get("octets"):
+            diffs = [("MODIFIE", "", "le total du contenu differe de celui de l empreinte, sans difference fichier par fichier")]
+    try:
+        subprocess.run(["plymouth", "display-message", "--text="], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not diffs:
+        try:
+            open(CONTENU_FAIT, "w").close()
+        except OSError:
+            pass
+        dire("contenu du disque systeme relu avant la phrase : conforme (%.0f s)" % (time.monotonic() - t0))
+        return None
+    return diffs
+
+
 def demarrage():
     """At boot, BEFORE the /home passphrase: the system disk."""
     if not TEST and not os.path.ismount(BOITE):
@@ -1804,7 +1884,10 @@ def demarrage():
             dire("disque systeme conforme : sha256 %s (%s)%s%s" % (
                 tete["meta"], tete.get("pris"), ", empreinte signee" if sig else ", empreinte pas encore signee",
                 ", cle ancree dans le TPM" if anc is not None else ""))
-            return 0
+            diffs = controle_contenu(tete)
+            if not diffs:
+                return 0
+            titre = "LE CONTENU DU DISQUE A ETE MODIFIE HORS SESSION, DATES ET INODES MAQUILLES"
     else:
         titre = "LE DISQUE SYSTEME A ETE MODIFIE HORS SESSION"
     alerter(titre, diffs, tete)
@@ -1869,6 +1952,8 @@ def fond():
     again. Says so on every terminal and on the desktop."""
     tout = []
     for nom, racine in couches().items():
+        if nom == "racine" and os.path.exists(CONTENU_FAIT):
+            continue                          # read again at boot, before the passphrase
         tete, diffs = comparer(nom, racine, complet=True)
         if diffs:
             pre = "" if nom == "racine" else "home/"
