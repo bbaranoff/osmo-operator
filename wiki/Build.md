@@ -187,7 +187,7 @@ enable** the systemd units. Launching is still `./start-native.sh`, which
 delegates to `/opt/GSM/qosmo/run.sh`.
 
 Optional components come from `addition.sh`: `--gnuarm` (ARM toolchain in
-`/root/gnuarm/install/bin`, needed to build osmocom-bb), `--calypso-fw`
+`/opt/additions/gnuarm/install/bin`, needed to build osmocom-bb), `--calypso-fw`
 (recompiles the Calypso `layer1`/`rssi` firmware; `OSMO_FW_INSTALLER=1` copies
 the highram elf+bin into `/opt/GSM/firmware/board/compal_e88`, layer1 also as
 `layer1.highram.gprs.*`), `--magnetite`, `--trx`, `--firmwares` (all of the

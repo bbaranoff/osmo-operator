@@ -66,7 +66,7 @@ ln -sf /opt/GSM/osmo-operator/tools/osmo-iso-gtk.py "$ROOTFS/usr/local/bin/osmo-
 # file for login shells, and the same names as real commands (tools/osmo-banc-cmd.sh).
 install -Dm644 "$P/scripts/osmo-banc-aliases.sh" "$ROOTFS/etc/profile.d/98-osmo-banc-aliases.sh"
 bash "$P/tools/osmo-banc-cmd.sh" --install "$ROOTFS/usr/local/bin" >/dev/null
-# Adds /root/gnuarm/install/bin to PATH when present (--gnuarm add-on);
+# Adds /opt/additions/gnuarm/install/bin to PATH when present (--gnuarm add-on);
 # inert while the toolchain is absent.
 install -Dm644 "$P/scripts/osmo-gnuarm-profile.sh" "$ROOTFS/etc/profile.d/97-osmo-gnuarm.sh"
 # Apply the repo patches (patches/, via tools/osmo-patches-apply.sh) to the

@@ -9,7 +9,7 @@
 #
 #   osmo_gnuarm_install     the historical osmocom-bb toolchain: arm-elf-gcc 4.5.2,
 #                           PULLED from the osmocom-bb-trx Docker image (not rebuilt)
-#                           into /root/gnuarm, and the libmpfr.so.4 -> libmpfr.so.6
+#                           into /opt/additions/gnuarm, and the libmpfr.so.4 -> libmpfr.so.6
 #                           link its cc1 requires
 #   osmo_magnetite_install  FreeCalypso Magnetite for the Motorola C139 (the real
 #                           TI firmware): Wine + TI TMS470 environment, pinned hg
@@ -87,7 +87,13 @@ _fw_bb_corriger() {   # racine/src/target/firmware
 # binaries come from Ubuntu 16.04: on noble they only lack libmpfr.so.4, the
 # link installed below. Tested: compiling and linking a .c with newlib
 # (-mcpu=arm7tdmi) with arm-elf-gcc 4.5.2.
-GNUARM_DIR="${GNUARM_DIR:-/root/gnuarm}"
+# /opt/additions, not /root: root's home lives in the encrypted volume (two
+# roots) and the guest root session would not find the toolchain there. An
+# older install in /root/gnuarm is still used as it is.
+if [ -z "${GNUARM_DIR:-}" ] && [ -x /root/gnuarm/install/bin/arm-elf-gcc ] && [ ! -e /opt/additions/gnuarm ]; then
+    GNUARM_DIR=/root/gnuarm
+fi
+GNUARM_DIR="${GNUARM_DIR:-/opt/additions/gnuarm}"
 OSMOCOM_BB_TRX_IMAGE="${OSMOCOM_BB_TRX_IMAGE:-ghcr.io/bbaranoff/osmocom-bb-trx:main}"
 osmo_gnuarm_install() {
     echo -e "${BOLD}== gnuarm (arm-elf-gcc 4.5.2, image $OSMOCOM_BB_TRX_IMAGE) ==${NC}"

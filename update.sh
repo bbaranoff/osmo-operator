@@ -314,7 +314,7 @@ Actions=Arreter;
 [Desktop Action Arreter]
 Name=Arreter deka
 Name[fr]=Arreter deka
-Exec=$gtk --root --title "Arret deka" -- /root/deka/deka-start.sh --stop
+Exec=$gtk --root --title "Arret deka" -- /opt/additions/deka/deka-start.sh --stop
 DEKADSK
     chmod 644 "$dsk" 2>/dev/null || true
     update-desktop-database /usr/share/applications 2>/dev/null || true
@@ -993,7 +993,7 @@ osmo_poser_voix_forks
 # What build-iso.sh (70-scripts, 80-chroot) and the native install set up,
 # replayed on an installed machine. No apt, no network: only compilers already
 # present enter the alternatives.
-#   - /etc/profile.d/97-osmo-gnuarm.sh: /root/gnuarm/install/bin in PATH
+#   - /etc/profile.d/97-osmo-gnuarm.sh: /opt/additions/gnuarm/install/bin in PATH
 #     (arm-elf-gcc 4.5.2 from addition.sh --gnuarm), no effect while absent;
 #   - update-alternatives gcc: gcc-9 (90), gcc-11 (110), gcc-13 (130). An
 #     existing choice (update-alternatives --config gcc) is kept; on creation,

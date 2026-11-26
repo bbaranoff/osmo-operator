@@ -303,7 +303,7 @@ window) installs what is missing.
 - **`--extras`**: Doom (freedoom), Quake III (OpenArena), Kodi, YouTube (Firefox + uBlock),
   Wireshark as root, Linphone.
 - Phone firmwares (`tools/osmo-firmwares-install.sh`): `--gnuarm` (arm-elf-gcc 4.5.2 toolchain
-  in `/root/gnuarm`), `--magnetite` (FreeCalypso Magnetite for the C139 under Wine + TI TMS470),
+  in `/opt/additions/gnuarm`), `--magnetite` (FreeCalypso Magnetite for the C139 under Wine + TI TMS470),
   `--trx` (osmocom-bb-trx image and `trx` firmware), `--calypso-fw` (recompiles the bench
   osmocom-bb firmware: GPRS layer1, rssi; `OSMO_FW_INSTALLER=1` installs them into
   `/opt/GSM/firmware/board/compal_e88`), `--fernvale` (MediaTek MT6260), `--simcom`

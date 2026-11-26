@@ -88,7 +88,7 @@ What is not in the ISO installs with `sudo ./addition.sh` (a checklist window, o
 |---|---|
 | `--multi` | Docker, the operator image, the SS7 multi-operator topology |
 | `--opencl` · `--claude` · `--extras` · `--sim` | GPU OpenCL and A5 tools · Claude Code · games and media · PC/SC SIM tools |
-| `--gnuarm` | the historic OsmocomBB toolchain, arm-elf-gcc 4.5.2 (`/root/gnuarm`, added to `PATH` by `/etc/profile.d/97-osmo-gnuarm.sh`) |
+| `--gnuarm` | the historic OsmocomBB toolchain, arm-elf-gcc 4.5.2 (`/opt/additions/gnuarm`, added to `PATH` by `/etc/profile.d/97-osmo-gnuarm.sh`) |
 | `--magnetite` | Wine + TI TMS470, FreeCalypso Magnetite for the C139, the bench patches, the flash image |
 | `--trx` | [osmocom-bb-trx](https://github.com/bbaranoff/osmocom-bb-trx): the Docker image and the `trx` firmware (TX) built with gnuarm |
 | `--calypso-fw` | the bench's Calypso firmware (`layer1`, `rssi`) rebuilt with gnuarm (prebuilt in [firmware](https://github.com/bbaranoff/firmware)) |

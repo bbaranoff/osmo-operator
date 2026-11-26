@@ -269,7 +269,7 @@ def catalogue():
                       "exec journalctl -u osmo-banc -f -n 40 --no-pager -o cat")
     run_multi = (f"{REPO}/launch.sh --multi & "
                  "journalctl -u osmo-multi -f -n 20 --no-pager -o cat & wait")
-    run_deka = ("if [ -x /root/deka/deka-start.sh ]; then exec /root/deka/deka-start.sh; "
+    run_deka = ("if [ -x /opt/additions/deka/deka-start.sh ]; then exec /opt/additions/deka/deka-start.sh; "
                 "else echo 'deka non installe : icone « Supplements » (addition.sh --opencl)'; fi")
     return [
         ("Banc", [

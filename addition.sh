@@ -41,7 +41,7 @@
 #   sudo ./addition.sh --claude   Claude Code (assistant CLI) only
 #   sudo ./addition.sh --extras   Games + media (Doom, Quake III, Kodi,
 #                                 YouTube+uBlock, Wireshark root, Linphone)
-#   sudo ./addition.sh --gnuarm   the legacy arm-elf-gcc 4.5.2 toolchain (/root/gnuarm),
+#   sudo ./addition.sh --gnuarm   the legacy arm-elf-gcc 4.5.2 toolchain (/opt/additions/gnuarm),
 #                                 copied from the osmocom-bb-trx Docker image
 #   sudo ./addition.sh --magnetite Wine + TI TMS470, FreeCalypso Magnetite C139
 #                                 (sources, bench patches, flash image)
@@ -112,6 +112,25 @@ _trust_desktop() {
             gio set -t string "$f" metadata::nautilus-icon-position "$pos" 2>/dev/null || true
     fi
     return 0
+}
+
+# ── /opt/additions : where every supplement lives ───────────────────────────
+# NOT in /root: root's home belongs to the owner and lives in the encrypted
+# volume once /home is open (two roots - unlock-home); a tool installed there
+# would be missing from the guest root session, and a personal file left on
+# the system disk would be in clear. /opt/additions is on the system disk,
+# readable by every account, and holds tools only.
+# _additions_migrer NAME : a supplement an older addition.sh put in /root moves
+# there (a link stays behind for what still names the old path).
+ADDITIONS=/opt/additions
+install -d -m 0755 "$ADDITIONS" 2>/dev/null || true
+_additions_migrer() {
+    local vieux="/root/$1" neuf="$ADDITIONS/$1"
+    [ -e "$vieux" ] && [ ! -L "$vieux" ] && [ ! -e "$neuf" ] || return 0
+    if mv "$vieux" "$neuf" 2>/dev/null; then
+        ln -s "$neuf" "$vieux" 2>/dev/null || true
+        echo -e "      ${GREEN}✓${NC} $1 deplace de /root vers $ADDITIONS"
+    fi
 }
 
 # ── Desktops to serve: /root AND the graphical session's ────────────────────
@@ -237,7 +256,7 @@ etat() {
     [ "$ok_cc" = "1" ] && echo -e "  Claude Code          : ${GREEN}operationnel${NC}" || echo -e "  Claude Code          : ${YELLOW}absent${NC}"
     # phone firmwares (tools/osmo-firmwares-install.sh)
     _fw_etat() { [ -e "$2" ] && echo -e "  $(printf '%-20s' "$1") : ${GREEN}present${NC}" || echo -e "  $(printf '%-20s' "$1") : ${YELLOW}absent${NC}"; }
-    _fw_etat "gnuarm"            /root/gnuarm/install/bin/arm-elf-gcc
+    _fw_etat "gnuarm"            /opt/additions/gnuarm/install/bin/arm-elf-gcc
     _fw_etat "Magnetite C139"    /opt/GSM/firmware/magnetite/c139-flash.img
     _fw_etat "firmware trx (TX)" /opt/GSM/osmocom-bb-trx/src/target/firmware/board/compal_e88/trx.highram.bin
     _fw_etat "layer1 GPRS (gnuarm)" /opt/GSM/osmocom-bb/src/target/firmware/board/compal_e88/layer1.highram.bin
@@ -556,10 +575,10 @@ if [ "$DO_OPENCL" = "1" ]; then
     # deka, a51_tools, dst80_reversing, tea1-cracker: four compute repositories
     # that use the GPU. They GO WITH OpenCL, so they are installed here with it,
     # not in the ISO: the image stays a GSM node, these are a compute supplement.
-    # Cloned into /root. Idempotent: if a repo is already there, update it (git
+    # Cloned into /opt/additions. Idempotent: if a repo is already there, update it (git
     # pull) instead of re-cloning. Non-fatal - an unreachable repo (private,
     # network) does not stop the rest.
-    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /root ..."
+    echo -e "  ${CYAN}→${NC} outils OpenCL (deka, a51_tools, dst80_reversing, tea1-cracker) dans /opt/additions ..."
     # Non-interactive, otherwise the window hangs. On a private or absent repo,
     # git asks for credentials on the terminal and waits INDEFINITELY - launched
     # by the icon, there is no one to answer. GIT_TERMINAL_PROMPT=0 makes it fail
@@ -569,7 +588,7 @@ if [ "$DO_OPENCL" = "1" ]; then
                "a51_tools=https://github.com/bbaranoff/a51_tools" \
                "dst80_reversing=https://github.com/bbaranoff/dst80_reversing" \
                "tea1-cracker=https://github.com/bbaranoff/tea1-cracker"; do
-        _name="${_rt%%=*}"; _url="${_rt#*=}"; _dst="/root/$_name"
+        _name="${_rt%%=*}"; _url="${_rt#*=}"; _dst="$ADDITIONS/$_name"; _additions_migrer "$_name"
         # Capture git's output and SHOW it on failure.
         GIT="git"
         if [ -d "$_dst/.git" ]; then
@@ -591,14 +610,14 @@ if [ "$DO_OPENCL" = "1" ]; then
     # delta.c / libvankus.c (see its Makefile). Without this make, the workers
     # import missing modules and deka computes nothing. Requires: swig4.1 and
     # the python3 headers. Non-fatal: a failure is reported without stopping.
-    if [ -f /root/deka/Makefile ]; then
+    if [ -f /opt/additions/deka/Makefile ]; then
         echo -e "  ${CYAN}→${NC} deka : compilation des modules natifs (make) ..."
         apt-get install -y --no-install-recommends swig4.1 python3-dev build-essential >/dev/null 2>&1 || true
-        if ( cd /root/deka && make >/dev/null 2>&1 ) \
-           && [ -e /root/deka/_delta.so ] && [ -e /root/deka/_libvankus.so ]; then
+        if ( cd /opt/additions/deka && make >/dev/null 2>&1 ) \
+           && [ -e /opt/additions/deka/_delta.so ] && [ -e /opt/additions/deka/_libvankus.so ]; then
             echo -e "      ${GREEN}✓${NC} _delta.so + _libvankus.so construits"
         else
-            echo -e "      ${YELLOW}!${NC} make deka a echoue (swig4.1 / python3-dev ?) - voir : cd /root/deka && make"
+            echo -e "      ${YELLOW}!${NC} make deka a echoue (swig4.1 / python3-dev ?) - voir : cd /opt/additions/deka && make"
         fi
     fi
 
@@ -608,20 +627,20 @@ if [ "$DO_OPENCL" = "1" ]; then
     # So we install an icon: the user clicks it when they want to start deka.
     # deka-start.sh remains the engine; the icon calls it with root rights
     # (pkexec) in a terminal, to see the output.
-    if [ -d /root/deka ]; then
+    if [ -d /opt/additions/deka ]; then
         echo -e "  ${CYAN}→${NC} deka : pose de l icone d application ..."
         # deka-start.sh lives in the repo: if it is there (up-to-date clone),
         # leave it alone. Write it only as a FALLBACK, for a clone that does not
         # have it yet.
-        if [ ! -f /root/deka/deka-start.sh ]; then
-        cat > /root/deka/deka-start.sh <<'DEKASTART'
+        if [ ! -f /opt/additions/deka/deka-start.sh ]; then
+        cat > /opt/additions/deka/deka-start.sh <<'DEKASTART'
 #!/bin/bash
 # deka-start.sh - mount the deka tables and start the workers.
 # Installed by addition.sh (OpenCL supplement). Started by the deka icon (pkexec) or
-# by hand: sudo /root/deka/deka-start.sh
+# by hand: sudo /opt/additions/deka/deka-start.sh
 #   1. vgchange -ay: activate the volume group (otherwise /dev/tables/* is missing).
 #   2. the 4 mount points, then the 4 volumes (1_10..31_40).
-#   3. the 3 python workers, from /root/deka (where delta.pyc lives).
+#   3. the 3 python workers, from /opt/additions/deka (where delta.pyc lives).
 set -u
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 LOG=/var/log/deka.log
@@ -652,7 +671,7 @@ for w in paplon.py oclvankus.py delta_client.py; do
 done
 echo "deka-start termine."
 DEKASTART
-        chmod 755 /root/deka/deka-start.sh
+        chmod 755 /opt/additions/deka/deka-start.sh
         fi
 
         # The launcher: deka-start.sh needs root (vgchange, mount). From an icon
@@ -663,7 +682,7 @@ DEKASTART
 set -u
 # osmo-deka-anim - deka in a GTK bench window (embedded VTE terminal),
 # as root through pkexec.
-SCRIPT=/root/deka/deka-start.sh
+SCRIPT=/opt/additions/deka/deka-start.sh
 if [ ! -x "$SCRIPT" ]; then
     command -v zenity >/dev/null 2>&1 && \
         zenity --error --text="deka-start.sh introuvable : $SCRIPT" 2>/dev/null
@@ -698,7 +717,7 @@ Actions=Arreter;
 [Desktop Action Arreter]
 Name=Arreter deka
 Name[fr]=Arreter deka
-Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Arret deka" -- /root/deka/deka-start.sh --stop
+Exec=/opt/GSM/osmo-operator/tools/osmo-gtk-run.py --root --title "Arret deka" -- /opt/additions/deka/deka-start.sh --stop
 DEKADSK
         chmod 644 "$_deka_desktop"
         command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
@@ -730,7 +749,7 @@ fi
 # without touching the system: the safest path.
 #
 # It installs into ~/.local/bin (so /root/.local/bin when run via sudo). We copy
-# that binary to /usr/local/lib/claude and link it into /usr/local/bin so it is
+# that binary to /opt/additions/claude and link it into /usr/local/bin so it is
 # on everyone's PATH and the `command -v claude` probe sees it.
 if [ "$DO_CLAUDE" = "1" ]; then
     echo -e "  ${CYAN}→${NC} installation de Claude Code ..."
@@ -760,19 +779,20 @@ if [ "$DO_CLAUDE" = "1" ]; then
     for _c in "$_cc_home/.local/bin/claude" /root/.local/bin/claude "$_cc_home/.claude/bin/claude"; do
         [ -x "$_c" ] && { _cc_bin="$_c"; break; }
     done
-    # A COPY under /usr/local/lib/claude, not a link into the installer's home:
+    # A COPY under /opt/additions/claude, not a link into the installer's home:
     # run as root it drops into /root/.local/share, which is 0700 - the link
     # then works for root only and the session account "has no claude" (seen
     # 2026-11-26: the launcher kept asking to install it again).
     if [ -n "$_cc_bin" ]; then
         _cc_vrai="$(readlink -f "$_cc_bin")"
-        if [ -f "$_cc_vrai" ] && install -D -m 0755 "$_cc_vrai" /usr/local/lib/claude/claude.nouv \
-                && mv -f /usr/local/lib/claude/claude.nouv /usr/local/lib/claude/claude; then
-            ln -sfn /usr/local/lib/claude/claude /usr/local/bin/claude
-            echo -e "      ${GREEN}✓${NC} /usr/local/bin/claude -> /usr/local/lib/claude/claude (pour tous les comptes)"
+        rm -rf /usr/local/lib/claude        # where a previous version of this script put it
+        if [ -f "$_cc_vrai" ] && install -D -m 0755 "$_cc_vrai" /opt/additions/claude/claude.nouv \
+                && mv -f /opt/additions/claude/claude.nouv /opt/additions/claude/claude; then
+            ln -sfn /opt/additions/claude/claude /usr/local/bin/claude
+            echo -e "      ${GREEN}✓${NC} /usr/local/bin/claude -> /opt/additions/claude/claude (pour tous les comptes)"
         else
-            rm -f /usr/local/lib/claude/claude.nouv
-            echo -e "      ${YELLOW}!${NC} copie vers /usr/local/lib/claude en echec - claude reste dans $_cc_bin"
+            rm -f /opt/additions/claude/claude.nouv
+            echo -e "      ${YELLOW}!${NC} copie vers /opt/additions/claude en echec - claude reste dans $_cc_bin"
         fi
     fi
 

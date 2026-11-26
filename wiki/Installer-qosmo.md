@@ -142,7 +142,7 @@ ls /opt/GSM/firmware/board/compal_e88/layer1.highram.{elf,bin}
 ```
 
 **Rebuilding the firmware** (optional): `sudo ./addition.sh --gnuarm` installs the gnuarm
-toolchain (arm-elf-gcc 4.5.2 in `/root/gnuarm/install/bin`, added to PATH by
+toolchain (arm-elf-gcc 4.5.2 in `/opt/additions/gnuarm/install/bin`, added to PATH by
 `/etc/profile.d/97-osmo-gnuarm.sh`); `sudo ./addition.sh --calypso-fw` then recompiles
 osmocom-bb (pinned `eac4eed1` + `patches/osmocom-bb-*.patch`) with `cd /opt/GSM/osmocom-bb/src && make`.
 With `OSMO_FW_INSTALLER=1`, the layer1 and rssi highram elf+bin are copied into
