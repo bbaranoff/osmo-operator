@@ -26,10 +26,16 @@ scripts_en_retard() {      # un script de la session n est pas encore sur le dis
     done
     return 1
 }
-initramfs_en_retard() {    # construit avant les scripts qu il embarque
-    local i="$R/boot/initrd.img-$(uname -r)" f
-    [ -e "$i" ] || return 1
-    for f in "$R/usr/local/sbin/osmo-racine-live" "$R/usr/local/sbin/osmo-total" "$R/usr/local/sbin/osmo-valider-appliquer"; do
+initramfs_en_retard() {    # il n embarque pas ce que les scripts du disque produiraient aujourd hui
+    local i="$R/boot/initrd.img-$(uname -r)" rl="$R/usr/local/sbin/osmo-racine-live" p n f
+    [ -e "$i" ] && [ -e "$rl" ] || return 1
+    for p in "HOOK:$R/etc/initramfs-tools/hooks/osmo-boite" "SCRIPT:$R/etc/initramfs-tools/scripts/local-bottom/osmo-boite"; do
+        n="${p%%:*}"; f="${p#*:}"
+        # le crochet et le script d initramfs tels que osmo-racine-live les ecrirait
+        sed -n "/cat > \"\$$n\" <<'$n'/,/^$n\$/p" "$rl" | sed '1d;$d' | cmp -s - "$f" || return 0
+        [ "$f" -nt "$i" ] && return 0
+    done
+    for f in "$R/usr/local/sbin/osmo-total" "$R/usr/local/sbin/osmo-valider-appliquer"; do
         [ -e "$f" ] && [ "$f" -nt "$i" ] && return 0
     done
     return 1
