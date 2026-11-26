@@ -128,7 +128,15 @@ root_requis() { [ "$(id -u)" = 0 ] || { log "root requis" >&2; exit 1; }; }
 # phrase_home_ok < passphrase : the /home LUKS2 volume accepts it
 phrase_home_ok() {
     [ -n "$CRYPTHOME_UUID" ] && [ -e "/dev/disk/by-uuid/$CRYPTHOME_UUID" ] || return 1
-    cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$CRYPTHOME_UUID" 2>/dev/null
+    # (cryptsetup warns « keyslot operation could fail as it requires more
+    # than available memory » as soon as FREE memory is under the passphrase's
+    # cost - 1 GiB here - although the page cache is reclaimable: not shown.
+    # When the check really fails for lack of memory, that is said.)
+    cryptsetup open --test-passphrase --key-file=- "/dev/disk/by-uuid/$CRYPTHOME_UUID" >/dev/null 2>&1 && return 0
+    if [ "$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null)" -lt 1200 ] 2>/dev/null; then
+        rouge "memoire insuffisante pour verifier la phrase (1 Go requis, la session en RAM en occupe trop) : fermer des applications" >&2
+    fi
+    return 1
 }
 
 exclu() {

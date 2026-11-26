@@ -520,7 +520,8 @@ def secret_tpm(phrase, creer=False):
             os.sync()
         finally:
             boite_rw(False)
-    return hashlib.pbkdf2_hmac("sha256", phrase, b"osmo-empreinte ancre\0" + sel, 300000).hex().encode()
+    # 32 characters: an authorisation value cannot be longer than the TPM's digest (32 bytes)
+    return hashlib.pbkdf2_hmac("sha256", phrase, b"osmo-empreinte ancre\0" + sel, 300000).hex()[:32].encode()
 
 
 def proprietaire_pose():
