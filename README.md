@@ -234,18 +234,26 @@ of your own, exit code 0 when everything is identical).
 This is only for those who build **on a machine installed with the secured bench** - the TPM protection of
 [wiki/Poste-securise.md](wiki/Poste-securise.md). On an ordinary machine `./build-iso.sh` needs nothing special.
 
-On a secured bench the system runs in RAM: `/`, `/var/tmp` and this repository (`/opt/GSM/osmo-operator`) are a
-memory layer of a few gigabytes over a read-only disk. The build writes about 18 GB of work files and an ISO of
-several gigabytes: left to its defaults it fills the memory and fails, and whatever it did write is gone at the next
-boot. Send both to `/home`, which is the encrypted disk:
+On a secured bench the system runs in RAM: `/`, `/var/tmp`, Docker's storage and this repository
+(`/opt/GSM/osmo-operator`) are memory of a few gigabytes over a read-only disk. The build pulls a base image of about
+15 GB, writes about 18 GB of work files and an ISO of several gigabytes: left to its defaults it fills the memory and
+fails, and whatever it did write is gone at the next boot. Send all three to `/home`, which is the encrypted disk -
+and build the **desktop** ISO, the only one that carries the installer (Calamares) and so the secured bench:
 
 ```
-OSMO_ISO_WORK=/home/<you>/iso-build ./build-iso.sh --output=/home/<you>/osmo-operator.iso
+OSMO_DOCKER_STORAGE_DIR=/home/<you>/docker-data OSMO_ISO_WORK=/home/<you>/iso-build \
+    ./build-iso.sh --desktop --output=/home/<you>/osmo-operator-desktop.iso
 ```
 
+- **`OSMO_DOCKER_STORAGE_DIR`**: where Docker keeps its images (default here: a tmpfs of half the RAM, made at
+  boot). The build moves Docker there - no container must be running - and leaves the RAM storage.
 - **`OSMO_ISO_WORK`**: where the work files go (default `/var/tmp`, in RAM here).
-- **`--output`**: where the ISO goes (default: this repository, in RAM here). If the ISO still lands in the
-  repository, move it to `/home` before switching off.
+- **`--output`**: where the ISO goes (default: this repository, in RAM here; a full path is accepted).
+- **The base image comes from GitHub** (GHCR: the image of the commit's fingerprint, then `:latest`). Docker Hub is
+  no longer tried by default; `OSMO_ISO_PULL_IMAGE=bastienbaranoff/norf_gsm:latest` puts it back first.
+- **The postmarketOS VM image** (~2 GB) is embedded in the desktop ISO only: `--no-pmos` leaves it out, `--pmos`
+  adds it to another variant. Our Alpine package (network_monitoring, the latest GitHub release) is injected in
+  every case and installed in the VM at its first start.
 - **Open `/home` as « Persistant »** at boot (the default answer): what the build writes is then on the disk at
   once and survives a reboot. In the other mode (« à enregistrer ») `/home` is a RAM layer too, and the build does
   not fit.
@@ -255,7 +263,9 @@ OSMO_ISO_WORK=/home/<you>/iso-build ./build-iso.sh --output=/home/<you>/osmo-ope
   given back, and the icon answers « plus possible » until the next boot. Nothing else changes: `/home` keeps
   working and the build is not disturbed.
 - **A reboot kills a running build.** It does not resume: every run makes its own work directory. The old one stays
-  in `/home` and takes room until it is removed (`sudo rm -rf /home/<you>/iso-build`). After the reboot a new
+  in `/home` and takes room until it is removed (`sudo rm -rf /home/<you>/iso-build`). Docker's storage in
+  `/home` stays too: at the next boot Docker is back in RAM; the next build moves it to the same directory again and
+  finds the image already pulled. After the reboot a new
   snapshot is taken, so « Remettre à zéro » works again - for what happens from then on; what the build left in
   `/home` is part of the starting point.
 - **Push before you build.** The repository is in RAM: a commit that is not pushed, on a session that is not saved

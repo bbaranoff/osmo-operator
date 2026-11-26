@@ -19,8 +19,8 @@
 #
 # Order:
 #   1. the EXPLICIT --skip-build=REF reference, used alone;
-#   1b. the Docker Hub image ($ISO_PULL_IMAGE, bastienbaranoff/norf_gsm:latest),
-#      tagged osmocom-nitb like the others;
+#   1b. an image asked for by name (OSMO_ISO_PULL_IMAGE, any registry - Docker
+#      Hub included); none by default: the image comes from GitHub;
 #   2. ghcr.io/<repo>/osmocom-nitb:base-<fingerprint> - matches the commit,
 #      published by docker.yml;
 #   3. ghcr.io/<repo>/osmocom-nitb:latest - latest image published by the same
@@ -28,7 +28,7 @@
 # Only 2 guarantees that the image matches the working tree; for 3,
 # iso_docker_build warns before using it.
 iso_pull_refs() {
-    if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ]; then echo "$ISO_PULL_IMAGE"; return 0; fi
+    if [ "${ISO_SKIP_BUILD_GIVEN:-0}" = "1" ] && [ -n "$ISO_PULL_IMAGE" ]; then echo "$ISO_PULL_IMAGE"; return 0; fi
     local _key _repo
     # Must be an `if` condition: build-iso.sh runs under `set -euo pipefail`,
     # and an assignment from a failing pipeline (outside a git repo, git ls-files
@@ -53,9 +53,9 @@ iso_pull_refs() {
     [ -n "$_repo" ] || _repo="bbaranoff/osmo-operator"
     # The fingerprint is empty outside a git repo: no fingerprint reference, but
     # the same repository's latest is still valid.
-    # Docker Hub FIRST: bastienbaranoff/norf_gsm:latest is the bench's reference
-    # stack; GHCR is the fallback.
-    echo "$ISO_PULL_IMAGE"
+    # GITHUB (GHCR) ONLY by default; an image asked for by name
+    # (OSMO_ISO_PULL_IMAGE, e.g. the Docker Hub one) comes first.
+    [ -n "$ISO_PULL_IMAGE" ] && echo "$ISO_PULL_IMAGE"
     [ -n "$_key" ] && echo "ghcr.io/${_repo,,}/osmocom-nitb:base-${_key}"
     echo "ghcr.io/${_repo,,}/osmocom-nitb:latest"
 }
@@ -112,7 +112,7 @@ iso_docker_build() {
             # Use `if`, not "[ ... ] && [ ... ] && echo": a && chain whose first test is
             # false returns 1, which stops the script under set -e.
             # Except the Docker Hub image: it is first BY CHOICE, so no warning.
-            if [ "${_got}" = "${_got#*:base-}" ] && [ "${_got}" != "${ISO_PULL_IMAGE}" ] \
+            if [ "${_got}" = "${_got#*:base-}" ] && { [ -z "${ISO_PULL_IMAGE}" ] || [ "${_got}" != "${ISO_PULL_IMAGE}" ]; } \
                && [ "${ISO_SKIP_BUILD_GIVEN:-0}" != "1" ]; then
                 echo -e "  ${YELLOW}!${NC} aucune image ne correspond a l'empreinte du depot : ${CYAN}${_got}${NC} ne suit pas ce commit (${CYAN}--build-docker${NC} pour compiler l'arbre de travail)"
             fi

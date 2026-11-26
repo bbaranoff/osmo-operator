@@ -46,6 +46,12 @@ ISO_LITE=0
 # captures in wireshark, placing SIP calls by hand, gr-gsm Qt tools
 # (grgsm_livemon). Adds about 2.5 GB to the rootfs, hence a separate variant.
 ISO_DESKTOP=0
+# ── THE postmarketOS VM IMAGE (~2 GB compressed) ─────────────────────────────
+#   --pmos      embed it (the default of --desktop)
+#   --no-pmos   do not (the default elsewhere); the phone's VM is then made on
+#               the machine (osmo-pmos-build). Our Alpine package
+#               (network_monitoring) is injected either way (51-network-monitoring).
+ISO_PMOS=""
 # --arm: boards for armbian/build-armbian.sh (--board=)
 ISO_ARM_BOARD="${OSMO_ISO_BOARD:-all}"
 # ── --all: ALL images in one pass ─────────────────────────────────────────
@@ -66,10 +72,11 @@ ISO_SKIP_BUILD="${OSMO_ISO_SKIP_BUILD:-1}"
 # Given on the command line, or only the default? Decides what happens when
 # the pull fails: requested -> fatal; default -> fall back to a local build.
 ISO_SKIP_BUILD_GIVEN=0
-# FIRST image tried: the Docker Hub image, tagged osmocom-nitb. It does NOT
-# track the commit (iso_docker_build says so before using it); GHCR
-# (fingerprint, then :latest) comes next.
-ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}"
+# The image comes from GITHUB (GHCR: the fingerprint image, then :latest).
+# Docker Hub is NOT tried by default any more; OSMO_ISO_PULL_IMAGE=REF (or
+# --skip-build=REF) puts an image of any registry first, Docker Hub included
+# (bastienbaranoff/norf_gsm:latest).
+ISO_PULL_IMAGE="${OSMO_ISO_PULL_IMAGE:-}"
 # --build-docker: the OPPOSITE of --skip-build, and it wins, wherever the
 # --skip-build comes from (CI, a leftover OSMO_ISO_PULL_IMAGE, an alias). The
 # image is built locally by build.sh. Env equivalent: OSMO_ISO_BUILD_DOCKER=1.
@@ -145,15 +152,17 @@ ${B}QUELLES IMAGES${N}
   ${C}--role=operator|interstp${N}  le noeud complet, ou le hub SS7 seul   ${D}[${ISO_ROLE:-operator}]${N}
   ${C}--lite${N}                    l'ISO allegee : sans les arbres de sources de /opt/GSM
   ${C}--desktop${N}                 l'ISO avec bureau GNOME et installateur (~2,5 Go de plus)
+  ${C}--pmos${N} / ${C}--no-pmos${N}        embarquer ou non l'image de la VM postmarketOS (~2 Go)
+                            ${D}[oui avec --desktop, non sinon ; notre paquet .apk est injecte dans tous les cas]${N}
   ${C}--all${N}                     les quatre d'un coup (operator + lite + desktop + interstp)
   ${C}--node=N${N}                  numero du noeud dans le plan de numerotation    ${D}[${ISO_NODE:-1}]${N}
   ${C}--output=FICHIER${N}          nom du fichier de sortie                        ${D}[${OUTPUT:-osmo-operator-<version>.iso}]${N}
 
 ${B}L'IMAGE DOCKER SOURCE${N}
   ${D}Par defaut, en amd64, l'image est TIREE et non construite, puis taguee
-  osmocom-nitb. Dans l'ordre : l'image Docker Hub (bastienbaranoff/norf_gsm:latest),
-  puis ghcr.io/<depot>/osmocom-nitb:base-<empreinte du depot>, puis le :latest
-  de GHCR. Seule l'image d'empreinte correspond a l'arbre de travail ; pour les
+  osmocom-nitb. Elle vient de GITHUB : ghcr.io/<depot>/osmocom-nitb:base-<empreinte
+  du depot>, puis le :latest de GHCR. Docker Hub n'est plus essaye par defaut
+  (OSMO_ISO_PULL_IMAGE=bastienbaranoff/norf_gsm:latest pour le remettre en tete). Seule l'image d'empreinte correspond a l'arbre de travail ; pour les
   autres le script previent avant de s'en servir.
   Si aucune ne repond, build.sh prend le relais (1h23). En arm64 rien n'est
   publie : la compilation reste le defaut.${N}
@@ -162,7 +171,7 @@ ${B}L'IMAGE DOCKER SOURCE${N}
                             la deduire de l'empreinte. N'importe quel registre :
                               --skip-build=ghcr.io/<depot>/osmocom-nitb:base-<empreinte>
                             Une image deja presente localement n'est pas retiree.
-                            ${D}[${ISO_PULL_IMAGE:-bastienbaranoff/norf_gsm:latest}]${N}
+                            ${D}[${ISO_PULL_IMAGE:-ghcr.io/<depot>/osmocom-nitb}]${N}
   ${C}--build-docker${N}            l'inverse, et il gagne sur --skip-build d'ou qu'il
                             vienne : l'image est construite ici par build.sh.
   ${C}--no-cache${N}                tout recompiler : cache docker ignore, .deb refaits.
@@ -260,6 +269,8 @@ for arg in "$@"; do case "$arg" in
     --no-softsim)   OSMO_ISO_SOFTSIM=0 ;;
     --lite)         ISO_LITE=1 ;;
     --desktop)      ISO_DESKTOP=1 ;;
+    --pmos)         ISO_PMOS=1 ;;
+    --no-pmos)      ISO_PMOS=0 ;;
     --all)          ISO_ALL=1 ;;
     --skip-build)   ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1 ;;
     --skip-build=*) ISO_SKIP_BUILD=1; ISO_SKIP_BUILD_GIVEN=1; ISO_PULL_IMAGE="${arg#*=}"; ISO_PULL_IMAGE_GIVEN=1 ;;

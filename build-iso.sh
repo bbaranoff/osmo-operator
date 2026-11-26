@@ -19,9 +19,9 @@
 #                         OSMO_ISO_BANC=1 / OSMO_ISO_MULTI=1.
 #    --version=24.04|22.04   --kb=fr   --output=file   --no-cache
 #    (default, amd64)     THE DOCKER IMAGE IS PULLED, NOT BUILT, and tagged
-#                         osmocom-nitb. Tried in order: bastienbaranoff/norf_gsm:latest
-#                         (Docker Hub), then ghcr.io/<repo>/osmocom-nitb:base-<fingerprint>,
-#                         then the GHCR :latest. build.sh runs only if none
+#                         osmocom-nitb, FROM GITHUB: ghcr.io/<repo>/osmocom-nitb:base-<fingerprint>,
+#                         then the GHCR :latest (Docker Hub only when asked:
+#                         OSMO_ISO_PULL_IMAGE=bastienbaranoff/norf_gsm:latest). build.sh runs only if none
 #                         answers. The fingerprint is the one of the workflows:
 #                         when it matches, the published image was built from
 #                         exactly this working tree; the two other references

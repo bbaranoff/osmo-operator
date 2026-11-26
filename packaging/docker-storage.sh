@@ -36,6 +36,22 @@ BOOT=0
 fstype() { findmnt -no FSTYPE -T "$1" 2>/dev/null | head -1; }
 
 mkdir -p /var/lib/docker /var/lib/containerd 2>/dev/null || true
+# A DIRECTORY GIVEN BY HAND wins over a storage already set up in RAM (the
+# tmpfs of a live system or of a secured bench, made at boot): a base image of
+# 15 GB does not fit in it. The RAM storage is left (its content is lost: it
+# would be at the next boot anyway) and the directory takes its place.
+if [ -n "${OSMO_DOCKER_STORAGE_DIR:-}" ] && [ "$(id -u)" = 0 ] \
+        && [ "$(findmnt -no SOURCE -T /var/lib/docker 2>/dev/null | head -1)" != "$(findmnt -no SOURCE -T "$OSMO_DOCKER_STORAGE_DIR" 2>/dev/null | head -1)" ] \
+        && [ "$(fstype /var/lib/docker)" = tmpfs ]; then
+    if [ -n "$(docker ps -q 2>/dev/null)" ]; then
+        echo -e "${RED}des conteneurs tournent : arretez-les avant de deplacer le stockage docker${NC}" >&2; exit 1
+    fi
+    echo -e "  ${CYAN}stockage docker en RAM : deplace vers $OSMO_DOCKER_STORAGE_DIR${NC}"
+    systemctl stop docker.socket docker containerd 2>/dev/null || true
+    for d in /var/lib/docker /var/lib/containerd; do
+        while mountpoint -q "$d"; do umount "$d" 2>/dev/null || umount -l "$d" || break; done
+    done
+fi
 if [ "$(fstype /var/lib/containerd)" != overlay ] && [ "$(fstype /var/lib/docker)" != overlay ]; then
     exit 0
 fi

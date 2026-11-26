@@ -9,7 +9,8 @@
 #   OSMO_ISO_LTE_BUILD=0      do not compile srsRAN/Open5GS in the chroot when
 #                             the .deb cache lacks them (ISO without 4G)
 #   OSMO_ISO_PMOS_IMAGE=PATH  pmOS VM image (.img or .img.zst) to embed;
-#                             'none' embeds nothing; default: look on the host
+#                             'none' embeds nothing; default: look on the host,
+#                             in the --desktop ISO only
 #   OSMO_PMOS_IMAGE_URL=URL   download the VM image (release asset) if none found
 #   OSMO_PMOS_KERNEL_URL=URL  PPP kernel .deb to fetch when missing from the cache
 #   OSMO_ISO_PMAPORTS=0       do not embed pmaports at the kernel commit
@@ -207,6 +208,20 @@ if [ "${OSMO_ISO_WEBUI:-1}" != "0" ]; then
     unset _wu
 fi
 
+# THE VM IMAGE ONLY IN THE DESKTOP ISO (--desktop): ~2 GB compressed, and the
+# phone is driven from the desktop. Elsewhere nothing is embedded unless
+# OSMO_ISO_PMOS_IMAGE names one; osmo-pmos-build makes it on the machine.
+# --pmos / --no-pmos choose; without either, the desktop ISO embeds it.
+_iso_pmos="${ISO_PMOS:-}"
+[ -n "$_iso_pmos" ] || { [ "${ISO_DESKTOP:-0}" = "1" ] && _iso_pmos=1 || _iso_pmos=0; }
+if [ "$_iso_pmos" = "0" ] && [ "${OSMO_ISO_PMOS_IMAGE:-}" != "" ] && [ "${ISO_PMOS:-}" != "0" ]; then
+    _iso_pmos=1          # an image named by hand is honoured
+fi
+if [ "$_iso_pmos" = "0" ]; then
+    OSMO_ISO_PMOS_IMAGE=none
+    echo -e "  ${CYAN}·${NC} image de la VM postmarketOS : non embarquee (${ISO_PMOS:+--no-pmos}${ISO_PMOS:-pas --desktop} ; --pmos pour l ajouter) - notre paquet .apk l est quand meme"
+fi
+unset _iso_pmos
 # Default VM image: if OSMO_ISO_PMOS_IMAGE is unset, use the host's image
 # (where osmo-pmos-build looks for it). A ready .zst is preferred, otherwise
 # the raw pmbootstrap image is compressed. OSMO_ISO_PMOS_IMAGE=none embeds nothing.
