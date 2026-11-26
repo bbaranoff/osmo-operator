@@ -87,12 +87,21 @@ un nouveau, « défait », avec ce qui a été retiré.
 ### 3.4 La boîte noire
 
 - Un enregistrement par événement : `valide`, `efface`, `ecrit`, `defait`, `alerte`,
-  `copie`.
+  `copie`, `coupe` (session interrompue sans extinction propre), `demarrage` (ouverture de
+  `/home` en persistant, voir 3.6 bis).
 - Diffs texte du système, une ligne par binaire ; `/home` exclu par défaut.
 - **Écrire sans pouvoir lire** : chiffrement `age` vers une clé publique ; la clé privée
   est sous la phrase de la boîte.
 - Partition montée en lecture seule pour tous ; seul le script y écrit, le temps d'un
   enregistrement, ensuite rendu immuable.
+- **Un seul écrivain à la fois** : `osmo-diffs`, `osmo-empreinte` et `osmo-tpm` prennent le
+  même verrou (`/run/osmo-boite.verrou`) avant de remonter la partition en écriture.
+  Celui qui le tient exporte `OSMO_BOITE_TENU` : ce qu'il lance écrit sous son verrou et
+  ne referme jamais la boîte, lui seul le fait. Après chaque fermeture, la lecture seule est
+  **relue** (10 essais) ; sinon « BOITE NOIRE RESTEE EN ECRITURE » dans le journal. Sans
+  verrou en 5 minutes, rien n'est écrit : on perd un enregistrement plutôt que de laisser
+  la boîte ouverte. (Avant : deux services au démarrage se la refermaient sous les pieds,
+  l'enregistrement `coupe` du 26 novembre 21:15 a été perdu.)
 - Enregistrements chaînés par SHA-256 ; une fin tronquée est détectée au démarrage.
 - **Copie distante par SSH, du chiffré uniquement**, vers une machine qui n'accepte que
   des ajouts. La destination ne change qu'avec la phrase de la boîte (le changement
@@ -226,6 +235,23 @@ signature. Chaque choix est la commande existante ; chacune demande la phrase de
   `/home` reste intact sous une couche RAM, le travail de la session n'y est gardé que s'il
   est enregistré (icône disquette, ou la phrase à l'extinction). Le système (`/`) reste en
   RAM dans les deux cas et s'écrit à l'extinction avec la phrase.
+- **Persistant : l'extinction non classique se voit.** Couper le courant ou tenir le bouton
+  power saute tous les contrôles d'une extinction, et en persistant ce qui a été écrit dans
+  `/home` est déjà sur le disque, sans empreinte. Alors la preuve est retournée : à
+  l'ouverture en persistant, `unlock-home` écrit un enregistrement `demarrage` dans la boîte
+  (`osmo-empreinte fin-debut` ; chaîne tenue par le TPM, il ne peut pas être retiré) ; à
+  l'extinction, la phrase de `/home` le **signe** (`fin-propre`, clé de l'empreinte) — elle
+  n'écrit rien, et elle est demandée exprès si rien d'autre ne l'a demandée (Entrée : sans).
+  Au démarrage suivant, avant la question de `/home`, une dernière session persistante non
+  signée donne un **écran bleu** (pas rouge : c'est un avertissement, rien n'est bloqué) :
+  « EXTINCTION NON CLASSIQUE (coupure de courant ou bouton power appuyé) … l'intégrité peut
+  être en cause : des fichiers ont pu être écrits. Prière de vérifier la boîte noire »
+  (`osmo-boite log`, `web`, `stash`) ; maintenance ou attaque, au propriétaire de juger. Le
+  prochain enregistrement `demarrage` le note aussi. Une vieille signature ne vaut pas pour
+  une session plus récente. Les sessions en RAM n'ont rien de tout cela : une coupure n'y
+  laisse rien, et ce que root aurait écrit sur le disque avant est trouvé par les
+  empreintes. L'écran revient à chaque démarrage jusqu'à ce qu'une session persistante
+  finisse avec la phrase (une marque « déjà vu » pourrait être posée par l'attaquant).
 - **Persistant : rien n'est demandé pour oublier.** À l'extinction, pas de « Tout
   oublier ? » : la phrase est demandée pour écrire ce qui a changé dans le système
   (Entrée : ne pas l'écrire — le neuralyseur passe alors avec une lumière verte, puis
@@ -397,6 +423,7 @@ en bleu foncé gras, nom de machine en gras.
 | Destruction de la boîte | copie distante, ajout seul | réseau absent : copie différée, signalée |
 | Écriture ratée ou regrettée | atomicité, retour arrière | tout est sur le même disque : ce n'est pas une sauvegarde |
 | Persistance dans `/home` en mode persistant | « remise à zéro » volontaire ; mode « à enregistrer » ; **`/home/.root` journalisé** dans la boîte (pour la clé du home) | rien ne l'empêche ; le reste de `/home` n'est pas journalisé |
+| Écrire dans `/home` persistant puis couper le courant | la fin de session doit être signée par la phrase ; sinon écran bleu au démarrage suivant | dit *qu'*il s'est passé quelque chose, pas *quoi* (`/home` est l'affaire du propriétaire, chiffré) |
 | Binaire modifié machine éteinte, dates et inodes maquillés | contenu relu avant la phrase ; avec le démarrage mesuré, relu par l'initramfs et étendu dans le PCR 13 | sans démarrage mesuré, passe si le contrôle lui-même est réécrit |
 | Perte ou corruption du volume `/home` | — | **aucune sauvegarde** : il porte la clé de signature, la clé de la boîte, les états passés, root et le coffre du TPM |
 
@@ -523,10 +550,18 @@ par son propriétaire.
 | Boîte à 80 % (copie, vidage), `defaire`, `fusionner` | bac à sable ; **non testés** en réel |
 | Copie SSH de la boîte | bac à sable, faux `ssh` ; non configurée sur le poste |
 | Installation par l'ISO avec l'ensemble | **non testée** |
+| Fin de session signée en persistant, écran bleu sinon | bac à sable (fausse boîte : premier démarrage muet, sans phrase → écran bleu, mauvaise phrase refusée, bonne phrase → rien, vieille signature refusée) ; **jamais vu à un démarrage** |
+| Verrou de la boîte (un écrivain à la fois, relecture de la lecture seule) | image ext4 en boucle : deux écrivains concurrents, enfant sous le verrou du parent, Python imbriqué, Python qui attend bash ; **pas encore à un démarrage** |
+| Swap chiffré du build ISO | **réel**, 2 Go dans `/home` : actif, `aes-xts`, retiré ; reste d'un build mort retiré |
 
 Le point ouvert d'origine — `/home` jamais écrit à l'extinction — était
 `blk-availability.service` (lvm2), qui démontait le volume avant l'écriture ; corrigé par
 l'ordre des unités, confirmé à une extinction réelle.
+
+Le « crash » du 26 novembre vers 21:10 : un build ISO sur le poste a rempli la mémoire
+(pas de swap) ; pas d'extinction, session gardée par son point de contrôle de 21:04. Depuis,
+`build-iso.sh` se donne un swap chiffré (voir le README). Le dépôt est sur `/`, en RAM : ce
+qui n'était pas poussé a été perdu — pousser avant de construire.
 
 Un artefact : l'enregistrement n° 000051 de la boîte du poste (« defait », commit fictif
 `20260101-000003`) vient d'un essai en bac à sable qui a appelé la vraie commande. Rien

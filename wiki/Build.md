@@ -137,6 +137,8 @@ deduced from the local IPs or passed with `start-native.sh --node N`.
 | Variable | Role |
 |---|---|
 | `OSMO_ISO_WORK` | working directory, **on disk** (not `/tmp`, often a tmpfs → « No space left on device ») |
+| `OSMO_ISO_SWAP_GB` | swap made for the time of the build (`iso_modules/20-swap.sh`): default the RAM size (at least 8), reduced to keep 30 GB free; `0` = none. A file on a disk (next to `OSMO_ISO_WORK`, else `/home`, never RAM), encrypted with a random key only the kernel holds, removed at the end (one left by a build that died is removed by the next) |
+| `OSMO_ISO_SWAP_DIR` | where that swap file goes instead |
 | `OSMO_ISO_VERSION` | = `--version` |
 
 The disk installed by Calamares: accounts from the « Utilisateurs » (Users)
