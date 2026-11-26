@@ -69,10 +69,16 @@ fi
 # minbase. Without it nothing answers on the 127.0.0.53 stub named in
 # /etc/resolv.conf (see the DNS block of 81-cloture-systeme.sh).
 #
+# systemd-timesyncd: the clock set from the network (ntp.ubuntu.com) at every
+# boot - OPTIONAL: no network, nothing waits (systemd-time-wait-sync stays
+# off, nothing orders itself after time-sync.target), the RTC is used. A
+# machine that ran Windows keeps its RTC in LOCAL time and, without it, the
+# bench ran one hour ahead (26 November): box records, session log, TOTP.
+#
 # cryptsetup and rsync are in the BASE list: the encrypted /home disk (step 8i)
 # also applies to images without a desktop (unlock-home opens the volume at
 # boot, init-crypthome.sh copies the home with rsync -aHAX).
-PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved
+PKGS="ca-certificates openssl netcat-openbsd socat tcpdump git logrotate systemd-resolved systemd-timesyncd
       $_KERNEL_PKG initramfs-tools dkms build-essential
       $_LIVE_PKGS
       libtalloc2 libtalloc-dev libpcsclite1 libsctp1 libsctp-dev $_CARES
@@ -140,5 +146,9 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
 fi
 
 net_retry apt-fast install -y $APT_OPTS --no-install-recommends $PKGS
+
+# the network clock, never mandatory: enabled, but nothing waits for it
+systemctl enable systemd-timesyncd.service >/dev/null 2>&1 || true
+systemctl disable systemd-time-wait-sync.service >/dev/null 2>&1 || true
 
 true
