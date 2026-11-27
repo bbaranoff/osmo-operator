@@ -68,7 +68,7 @@ if [ -d "$NETMON_TREE" ]; then
     if [ "${OSMO_NETMON_APK:-publie}" != local ]; then
         _nm_json="$(curl -fsSL -m 15 "https://api.github.com/repos/$_nm_gh/releases/latest" 2>/dev/null || true)"
         _nm_url="$(printf '%s' "$_nm_json" | grep -oE '"browser_download_url": *"[^"]+/network-monitor-[0-9][^"/]*-r[0-9]+(-postmarketos)?\.apk"' \
-                    | head -n1 | sed -E 's/.*"(https?:[^"]+)"/\1/')"
+                    | head -n1 | sed -E 's/.*"(https?:[^"]+)"/\1/' || true)"
         if [ -n "$_nm_url" ]; then
             _nm_nom="$(basename "$_nm_url" | sed 's/-postmarketos\.apk$/.apk/')"
             if curl -fsSL -m 120 -o "$WORK/$_nm_nom" "$_nm_url" 2>/dev/null && [ -s "$WORK/$_nm_nom" ]; then
@@ -82,7 +82,7 @@ if [ -d "$NETMON_TREE" ]; then
         fi
     fi
     if [ -z "$_nm_apk" ]; then
-        _nm_apk="$(ls -t "$NETMON_TREE"/dist/network-monitor-*.apk 2>/dev/null | head -n1)"
+        _nm_apk="$(ls -t "$NETMON_TREE"/dist/network-monitor-*.apk 2>/dev/null | head -n1 || true)"
         if [ -n "$_nm_apk" ]; then
             rm -f "$_nm_dst"/network-monitor-*.apk
             install -m 0644 "$_nm_apk" "$_nm_dst/"
