@@ -279,7 +279,7 @@ def admin_etat():
     """Tout ce qu osmo-gtk montre dans son onglet Telephones."""
     e = charger()
     try:
-        out = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], capture_output=True, text=True, timeout=8).stdout
+        out = subprocess.run(["asterisk", "-rx", "pjsip show contacts"], capture_output=True, text=True, timeout=1.5).stdout
     except (OSError, subprocess.SubprocessError):
         out = ""
     en_ligne = {m.group(1) for m in re.finditer(r"Contact:\s+(\d+)/\S+\s+\S+\s+Avail", out)}
@@ -470,7 +470,7 @@ def _sh(*cmd, timeout=20):
 
 
 def bt_adaptateur():
-    out = _sh("bluetoothctl", "show")
+    out = _sh("bluetoothctl", "show", timeout=1.5)
     m = re.search(r"Controller ([0-9A-F:]{17})", out)
     a = re.search(r"Alias: (.+)", out)
     return {"adresse": m.group(1) if m else "", "nom": a.group(1).strip() if a else "",
@@ -479,12 +479,12 @@ def bt_adaptateur():
 
 def bt_appaires():
     return [{"adresse": mac, "nom": nom.strip()}
-            for mac, nom in re.findall(r"Device ([0-9A-F:]{17}) (.+)", _sh("bluetoothctl", "devices", "Paired"))]
+            for mac, nom in re.findall(r"Device ([0-9A-F:]{17}) (.+)", _sh("bluetoothctl", "devices", "Paired", timeout=1.5))]
 
 
 def bt_ligne():
     """La ligne chan_mobile telle qu Asterisk la voit."""
-    for l in _sh("asterisk", "-rx", "mobile show devices").splitlines():
+    for l in _sh("asterisk", "-rx", "mobile show devices", timeout=1.5).splitlines():
         c = l.split()
         if len(c) >= 6 and re.fullmatch(r"[0-9A-F:]{17}", c[1]):
             return {"nom": c[0], "adresse": c[1], "connecte": c[4] == "Yes", "etat": c[5]}
@@ -494,8 +494,11 @@ def bt_ligne():
 def bt_etat():
     a = bt_adaptateur()
     reste = max(0, int(BT["fin"] - time.time()))
-    return {"ok": True, "adaptateur": a, "appaires": bt_appaires(), "ligne": bt_ligne(),
-            "fenetre": reste, "message": BT["message"]}
+    disponible = bool(a.get("adresse"))
+    return {"ok": True, "adaptateur": a,
+            "appaires": bt_appaires() if disponible else [],
+            "ligne": bt_ligne() if disponible else None,
+            "fenetre": reste, "message": BT["message"] or ("Bluetooth indisponible" if not disponible else "")}
 
 
 def bt_configurer(mac, nom):
@@ -778,11 +781,15 @@ def banc_requete(chemin, d):
 class H(BaseHTTPRequestHandler):
     def _rep(self, st, obj):
         b = json.dumps(obj).encode()
-        self.send_response(st)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        try:
+            self.send_response(st)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        except (BrokenPipeError, ConnectionResetError):
+            # Le client HTTP a ferme la connexion ; le service reste actif.
+            self.close_connection = True
 
     def do_GET(self):
         u = urlparse(self.path)
