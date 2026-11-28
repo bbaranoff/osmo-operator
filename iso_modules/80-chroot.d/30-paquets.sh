@@ -108,7 +108,7 @@ if [ "${ISO_ROLE:-operator}" != "interstp" ]; then
       libasound2-plugins pulseaudio pulseaudio-utils alsa-utils
       binutils-arm-none-eabi gdb-multiarch
       gcc-9 g++-9 gcc-11 g++-11
-      asterisk
+      asterisk qrencode
       ffmpeg"
     # ── LTE: srsRAN (ZeroMQ) and Open5GS runtime libraries ─────────────────
     # The binaries come from the build .deb files (osmo-build-srsran,

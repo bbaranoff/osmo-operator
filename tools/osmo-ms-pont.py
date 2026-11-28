@@ -3199,6 +3199,11 @@ class Fenetre(Gtk.Window):
         bt = Gtk.Button(label="Actualiser")
         bt.connect("clicked", lambda *_: self.tel_actualiser())
         haut.pack_start(bt, False, False, 0)
+        self.tel_demarrage = Gtk.Button(label="Demarrer le service")
+        self.tel_demarrage.set_tooltip_text("Demarre osmo-inscription (port 8088, reseau local de confiance uniquement).")
+        self.tel_demarrage.connect("clicked", self.tel_demarrer)
+        haut.pack_start(self.tel_demarrage, False, False, 0)
+        self._tel_demarrage_en_cours = False
         self.tel_heure = Gtk.Label(xalign=0)
         haut.pack_start(self.tel_heure, False, False, 0)
         d.pack_start(haut, False, False, 0)
@@ -3250,14 +3255,39 @@ class Fenetre(Gtk.Window):
             self.tel_actualiser()
         return True
 
+    def tel_demarrer(self, *_):
+        if self._tel_demarrage_en_cours:
+            return False
+        self._tel_demarrage_en_cours = True
+        self.tel_demarrage.set_sensitive(False)
+        self.tel_heure.set_text("Demarrage de osmo-inscription...")
+        self.lancer([], argv=["systemctl", "start", "osmo-inscription.service"],
+                    cwd=REPO, root=True, apres=self._tel_demarre)
+        return False
+
+    def _tel_demarre(self, rc):
+        self._tel_demarrage_en_cours = False
+        self.tel_demarrage.set_sensitive(True)
+        if rc != 0:
+            self.tel_heure.set_text("Demarrage refuse ou en echec (code %s) : journalctl -u osmo-inscription" % rc)
+            self.ecrire("osmo-inscription : journalctl -u osmo-inscription -n 50 --no-pager\n")
+        else:
+            self.tel_actualiser()
+        return False
+
     def tel_actualiser(self):
-        self._tel_fil("/admin/etat", None, self._tel_montrer)
+        if not self._tel_demarrage_en_cours:
+            self._tel_fil("/admin/etat", None, self._tel_montrer)
         return False
 
     def _tel_montrer(self, e):
+        if self._tel_demarrage_en_cours:
+            return False
         if not e.get("ok"):
+            self.tel_demarrage.show()
             self.tel_heure.set_text(e.get("error", "erreur"))
             return False
+        self.tel_demarrage.hide()
         self.tel_heure.set_text("noeud %s - releve a %s" % (e.get("noeud") or "?", time.strftime("%H:%M:%S")))
         lignes = [[c["num"], c["pseudo"],
                    '<span foreground="%s">●</span>' % ("#3fb950" if c["en_ligne"] else "#6e7681"),

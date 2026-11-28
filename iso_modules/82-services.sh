@@ -139,7 +139,8 @@ if [ "$ISO_ROLE" != "interstp" ]; then
     # page (one checkbox per supplement, modules/netinstall-options.conf)
     # enables it when something was ticked; addition.sh and its icon remain.
     # osmo-inscription: the association of the phones (Network Monitor) with
-    # this node, port 8088 - installed, started from osmo-gtk (tab « Telephones »).
+    # this node, port 8088 - installed, started explicitly from osmo-gtk
+    # (tab « Telephones », button « Demarrer le service »).
     for _u in osmo-banc osmo-multi osmo-lte osmo-supplements osmo-inscription; do
         if [ -f "$DIR/services/$_u.service" ]; then
             install -m644 "$DIR/services/$_u.service" "$ROOTFS/etc/systemd/system/$_u.service"
